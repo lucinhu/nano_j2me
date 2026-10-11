@@ -400,7 +400,6 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         &&L_slow,
         &&L_slow,
         &&L_slow,
-        &&L_slow,
         &&L_0x03,
         &&L_0x03,
         &&L_0x03,
@@ -652,7 +651,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         &&L_slow,
         &&L_slow,
         &&L_slow,
-        &&L_slow
+        &&L_slow,
+        &&L_slow,
     };
     (void)nj_dispatch;      /* referenced once any opcode is converted */
 #endif
