@@ -484,3 +484,70 @@ this title exercises and nothing else in the corpus does.
 **Convert an observed colour back through the screen's pixel format before
 looking for it in the source.**  On an RGB565 screen a source colour is not the
 colour you see, and the difference is not small: 162 became 160, 189 became 184.
+
+---
+
+# Reference: jelatine's threaded interpreter (and what else is worth reading)
+
+Studied <https://github.com/tekknolagi/jelatine> after the replicated-dispatch
+work stalled.  **It is GPL v3**, and this project's licence is not settled, so
+nothing may be COPIED from it - but the design is readable and the design is
+what was needed.
+
+## The one thing that unblocks the stalled optimisation
+
+jelatine runs the same handler source in both modes through two macros
+(`src/jelatine/interpreter.h`):
+
+    #if JEL_THREADED_INTERPRETER
+    #   define OPCODE(x)  x##_label:
+    #   define DISPATCH    goto *dispatch[*pc]
+    #else
+    #   define OPCODE(x)  case x:
+    #   define DISPATCH    goto dispatch
+    #endif
+
+    OPCODE(NOP)
+        pc++;
+        DISPATCH;
+
+**Every handler ends with `DISPATCH;`.  None of them ends with `break`.**
+
+That is the whole reason their transformation is clean and mine is not.  This
+project's handlers end with `break`, and `break` is overloaded: one inside an
+`if` still leaves the switch, one inside a `for` or a nested `switch` does not.
+Brace counting cannot separate them (it reported 61 candidates one way and 35
+the other, because the THROW/SAVE/CHECK_QUANTUM macros carry braces the counter
+cannot see).
+
+So the tractable path is NOT a 200-site big-bang rewrite.  It is:
+
+  1. introduce `OPCODE(x)` and `DISPATCH` macros over the existing switch, with
+     `DISPATCH` expanding to the current shared dispatch;
+  2. replace the terminating `break` of ONE case at a time with `DISPATCH;`,
+     compiling and checking that the benchmark still reports exactly
+     112,117,067 bytecodes after each;
+  3. flip the macro to the threaded form once every case is converted.
+
+Step 2 is incremental and verifiable at every point, which is what the big-bang
+version was not.  A case whose `break` was wrongly rewritten fails to compile
+(no enclosing loop) or changes the bytecode count, and both are caught
+immediately.
+
+## Also worth knowing
+
+* **`DISPATCH` has no bounds check** - `goto *dispatch[*pc]` over a 256-entry
+  table.  Measured here at 0.5%, so the bounds check was never the win; the
+  replication is.
+
+* **`JEL_FP_SUPPORT`** is a real compile-time floating-point switch, which is
+  exactly what `NJ_ENABLE_FLOAT` claims to be and is not (see
+  docs/FOOTPRINT.md).  Worth reading for how the natives are guarded rather
+  than for its code.
+
+* **`src/preverifier/` is 13,194 lines** (`check_code.c` alone is 4,009).  This
+  is the principled answer to a weakness this project has: with no verifier,
+  every array reference read from an untyped operand stack has to be
+  range-checked at run time, and the interpreter carries a per-instruction
+  bounds check.  Adopting a verifier is far too large to be a next step, but it
+  is the reason the defensive checks are there, and it is honest to say so.
