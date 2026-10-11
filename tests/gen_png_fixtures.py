@@ -210,6 +210,14 @@ def expected_argb(width, height, depth, colour_type, samples, palette=None,
 # --------------------------------------------------------------------------
 # Cross-check with Pillow / libpng
 # --------------------------------------------------------------------------
+def flat_pixels(im):
+    """Pixel access that works on Pillow 9..12 without deprecation noise."""
+    getter = getattr(im, "get_flattened_data", None)
+    if getter is not None:
+        return list(getter())
+    return list(im.getdata())
+
+
 def pil_pixels(path):
     """Decode with Pillow and return (mode, [ (r,g,b,a), ... ])."""
     im = Image.open(path)
@@ -218,9 +226,9 @@ def pil_pixels(path):
     if mode == "I;16":
         # Pillow hands 16-bit greyscale back as raw samples; the decoder must
         # keep the high byte.
-        return mode, [(v >> 8, v >> 8, v >> 8, 255) for v in im.getdata()]
+        return mode, [(v >> 8, v >> 8, v >> 8, 255) for v in flat_pixels(im)]
     rgba = im.convert("RGBA")
-    return mode, list(rgba.getdata())
+    return mode, list(flat_pixels(rgba))
 
 
 def cross_check(path, argb, quiet):

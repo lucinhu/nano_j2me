@@ -134,7 +134,7 @@ docs/              architecture, porting, compatibility
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the VM works and why
 - [docs/PORTING.md](docs/PORTING.md) — bringing it up on a new board
-- [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) — what is implemented, what is not
+- [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) — what is implemented, what is not, and the failure modes that name themselves
 
 ## Licence
 

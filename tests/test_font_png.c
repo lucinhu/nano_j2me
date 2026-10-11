@@ -726,6 +726,7 @@ static void test_png_api(const char *dir)
     }
     CHECK_EQ_INT(st.allocs, st.frees,
                  "every buffer must be released after nj_image_free");
+    free(png);
 
     /* Failure paths must not leak either. */
     {
