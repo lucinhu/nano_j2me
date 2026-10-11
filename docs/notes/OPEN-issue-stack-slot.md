@@ -424,3 +424,47 @@ is a deliberate, documented stub: `getRegistry()` returns a real Registry so a
 game's field is not null, `invoke()` throws ContentException naming the reason,
 and a game that wraps the share in try/catch - which every real one does - keeps
 playing.
+
+---
+
+# OPEN: Slime Volleyball's unpainted background is tan (0xB8A078)
+
+Status: **narrowed, not solved**.  Reported by the user as "the picture feels a
+bit odd", and it does.
+
+## What is established
+
+* The game paints ONLY the top half of its canvas.  `drawCourt()` fills blue
+  from 0 to 0.4H and grey from 0.4H to 0.5H, and there are exactly **7
+  fillRect calls in the whole game**.  Nothing paints below 0.5H - yet the game
+  draws its SCORES there.
+* The colour is `0xB8A078`.  **It appears nowhere in the game's source.**
+* The unpainted region is **perfectly uniform** (18160 pixels of that one
+  colour plus 144 of the black score text), so it is a deliberate write of a
+  single value, not uninitialised memory.
+* Other Canvas games in the corpus (`hello`, `maze`) have **zero** pixels of it,
+  so it is not a runtime-wide theme or UI-bar colour.
+* It is identical across runs and across screen sizes (176x208 and 240x320).
+
+## Ruled out, with evidence
+
+* **Not `gc_fill_white` overflowing.**  The image backing store is ARGB8888, so
+  writing `nj_u4` pixels into it is correct; RGB565 is the SCREEN format only.
+* **Not a theme colour.**  No such constant exists in `src/midp`, and the other
+  Canvas titles would show it.
+* **Not the Canvas constructor leaving the buffer uninitialised.**  It sets
+  `cBuffer` to NULL, so `gc_buffer()` creates it and `gc_fill_white()` runs.
+* **Not `fillArc` running away.**  The game's arcs are 24x32 (slime) and 8x8
+  (ball) with correct clipping.
+
+## The remaining suspect
+
+The game **never calls `flushGraphics()`** - the string does not occur anywhere
+in its source.  Its drawing is visible only because `GameCanvas.paint()` blits
+the off-screen buffer to the screen.  That is an unusual path to be exercised,
+and it is the one thing this title does that the others do not.
+
+Next step: write a fixture that gets `GameCanvas.getGraphics()`, draws one
+rectangle and never flushes, and see what the rest of the frame contains.  That
+separates "the buffer" from "what is presented" in one experiment, which is what
+the last several hypotheses each failed to do.
