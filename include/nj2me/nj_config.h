@@ -191,6 +191,22 @@
 #define NJ_PIXFMT_ARGB8888 2
 #ifndef NJ_PIXFMT
 #  define NJ_PIXFMT NJ_PIXFMT_RGB565
+
+/*
+ * Threaded (computed-goto) interpreter dispatch.
+ *
+ * GCC and Clang both support taking the address of a label; nothing else
+ * guaranteed to build this project does.  When it is 0 the interpreter uses
+ * the portable switch and loses speed, not correctness - see the note in
+ * nj_interp.c.  A caller may force it off to measure the difference.
+ */
+#if !defined(NJ_THREADED_DISPATCH)
+#  if defined(__GNUC__) || defined(__clang__)
+#    define NJ_THREADED_DISPATCH 1
+#  else
+#    define NJ_THREADED_DISPATCH 0
+#  endif
+#endif
 #endif
 
 /* Assertions (always compiled out unless explicitly enabled). */

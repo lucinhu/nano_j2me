@@ -357,22 +357,346 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         }                                                              \
     } while (0)
 
+    /*
+     * REPLICATED DISPATCH, converted one opcode at a time.
+     *
+     * A converted handler ends with DISPATCH(), which fetches the next opcode
+     * and branches through nj_dispatch[] itself, so the indirect branch is
+     * PREDICTED PER HANDLER rather than at one shared site.  That is the whole
+     * point of the technique; a shared `goto` after the switch would be one
+     * branch however many times the source repeats it.
+     *
+     * A handler that has NOT been converted has no L_ label, its entry in the
+     * table points at L_slow, and it runs through the switch exactly as before.
+     * The two kinds coexist, which is what makes this incremental: the
+     * benchmark must keep reproducing exactly 112117067 bytecodes after every
+     * single conversion, and a mistake shows up immediately as a wrong count
+     * rather than as a subtle wrong answer.
+     */
     for (;;) {
         nj_u1 op;
         nj_u4 op_pc;
 
-        if (pc >= code_len) {
-            THROW("java/lang/VerifyError", "code runs past the end of the method");
-        }
+    /*
+     * The fetch is written ONCE and used by both paths: the shared one at
+     * L_slow for opcodes that have not been converted, and DISPATCH() for the
+     * ones that have.  Two copies of this would be two chances to forget a
+     * counter, and the benchmark's exact bytecode total is what catches that.
+     */
+    /*
+     * Computed goto is a GCC/Clang extension, and this project builds for
+     * ESP32 (xtensa and riscv), Cortex-M and three Android ABIs as well as the
+     * host.  So the threaded dispatch is OPT-IN per compiler and the portable
+     * switch remains the fallback: with NJ_THREADED_DISPATCH 0, DISPATCH() is
+     * just `continue`, the table is not referenced, and the interpreter is
+     * exactly what it was.  A port to a compiler without the extension loses
+     * speed, not correctness.
+     *
+     * static const, so the table is placed in .data.rel.ro and read-only after
+     * relocation - the same rule every other table here follows.
+     */
+#if NJ_THREADED_DISPATCH
+    __extension__ static const void *const nj_dispatch[256] = {
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_0x10,
+        &&L_0x11,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_0x15,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_0x7e,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_0x82,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_0xa7,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow,
+        &&L_slow
+    };
+    (void)nj_dispatch;      /* referenced once any opcode is converted */
+#endif
+
+#define NJ_FETCH_OP() do {                                             \
+        if (pc >= code_len) {                                          \
+            THROW("java/lang/VerifyError",                            \
+                  "code runs past the end of the method");            \
+        }                                                              \
+        _Pragma("GCC diagnostic push")                                 \
+        _Pragma("GCC diagnostic ignored \"-Wpedantic\"")                \
+        op_pc = pc;                                                    \
+        op = code[pc++];                                               \
+        _Pragma("GCC diagnostic pop")                                  \
+        (void)op_pc;                                                   \
+        vm->insns++;                                                   \
+    } while (0)
+
+    /*
+     * A converted handler's exit.  It does everything the loop top did - the
+     * quantum check, the bounds check, the counter - and then branches through
+     * the table from ITS OWN site, which is the point of the exercise.
+     */
+#if NJ_THREADED_DISPATCH
+#define DISPATCH() do {                                                \
+        CHECK_QUANTUM();                                               \
+        NJ_FETCH_OP();                                                 \
+        _Pragma("GCC diagnostic push")                                 \
+        _Pragma("GCC diagnostic ignored \"-Wpedantic\"")                \
+        goto *nj_dispatch[op];                                         \
+        _Pragma("GCC diagnostic pop")                                  \
+    } while (0)
+#else
+/* Without the extension, a converted handler simply returns to the loop top. */
+#define DISPATCH() continue
+#endif
+
+    L_slow:
+        NJ_FETCH_OP();
 #if NJ_ENABLE_DEBUG
         if (vm->trace) {
             nj_trace_step(vm, m, pc, (nj_u4)(sp - stack), locals, stack, sp);
         }
 #endif
-        op_pc = pc;
-        op = code[pc++];
-        (void)op_pc;
-        vm->insns++;
 
         switch (op) {
 
@@ -390,8 +714,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         case 0x0d: sp->f = 2.0f; sp++; break;
         case 0x0e: PUSH_W(0); break;                       /* dconst_0 */
         case 0x0f: PUSH_W(1); break;                       /* dconst_1 */
-        case 0x10: sp->i = S1(); sp++; break;              /* bipush */
-        case 0x11: sp->i = S2(); sp++; break;              /* sipush */
+        L_0x10: case 0x10: sp->i = S1(); sp++; DISPATCH();  /* bipush */
+        L_0x11: case 0x11: sp->i = S2(); sp++; DISPATCH();  /* sipush */
         case 0x12: case 0x13: {                            /* ldc / ldc_w */
             nj_u2 idx = (op == 0x12) ? (nj_u2)U1() : U2();
             nj_value cst[2];
@@ -422,7 +746,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         }
 
         /* ================= loads ================= */
-        case 0x15: { nj_u2 i = (nj_u2)U1(); sp->bits = locals[i].bits; sp++; break; }
+        L_0x15: case 0x15: { nj_u2 i = (nj_u2)U1(); sp->bits = locals[i].bits; sp++; DISPATCH(); }
         case 0x16: { nj_u2 i = (nj_u2)U1(); sp[0] = locals[i]; sp[1].bits=0u; sp+=2; break; }
         case 0x17: { nj_u2 i = (nj_u2)U1(); sp->bits = locals[i].bits; sp++; break; }
         case 0x18: { nj_u2 i = (nj_u2)U1(); sp[0] = locals[i]; sp[1].bits=0u; sp+=2; break; }
@@ -671,13 +995,13 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         case 0x7d: { nj_s4 n = (--sp)->i; sp -= 2;
                      sp[0].j = (nj_s8)((nj_u8)sp[0].j >> ((nj_u4)n & 63u));
                      sp[1].bits = 0u; sp += 2; break; }
-        case 0x7e: { nj_s4 b = (--sp)->i, a = (--sp)->i; sp->i = a & b; sp++; break; }
+        L_0x7e: case 0x7e: { nj_s4 b = (--sp)->i, a = (--sp)->i; sp->i = a & b; sp++; DISPATCH(); }
         case 0x7f: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
                      sp[0].j = sp[0].j & b; sp[1].bits = 0u; sp += 2; break; }
         case 0x80: { nj_s4 b = (--sp)->i, a = (--sp)->i; sp->i = a | b; sp++; break; }
         case 0x81: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
                      sp[0].j = sp[0].j | b; sp[1].bits = 0u; sp += 2; break; }
-        case 0x82: { nj_s4 b = (--sp)->i, a = (--sp)->i; sp->i = a ^ b; sp++; break; }
+        L_0x82: case 0x82: { nj_s4 b = (--sp)->i, a = (--sp)->i; sp->i = a ^ b; sp++; DISPATCH(); }
         case 0x83: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
                      sp[0].j = sp[0].j ^ b; sp[1].bits = 0u; sp += 2; break; }
         case 0x84: {                                       /* iinc */
@@ -772,7 +1096,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             nj_s2 o = S2();
             if (a != b) JMP(o);
             break; }
-        case 0xa7: { nj_s2 o = S2(); JMP(o); break; }        /* goto */
+        L_0xa7: case 0xa7: { nj_s2 o = S2(); JMP(o); DISPATCH(); }  /* goto */
         case 0xa8: {                                        /* jsr */
             nj_s2 o = S2();
             sp->i = (nj_s4)pc;

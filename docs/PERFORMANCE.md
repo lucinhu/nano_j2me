@@ -140,6 +140,42 @@ unambiguous. Two independent sessions on the same binary measured 0.186 s and
 on this machine. (Higher than the 549-590 M/s quoted earlier, because CPU time
 excludes the interference that wall clock was charging for.)
 
+## Replicated dispatch: first batch converted, measured, kept
+
+**3.8% faster from converting 6 of 201 opcodes.**  Interleaved A/B, same session:
+
+    converted    0.176 / 0.180 s
+    unconverted  0.185 / 0.185 s
+
+The six are `bipush`, `sipush`, `iload`, `iand`, `ixor` and `goto` - chosen from
+a measured DYNAMIC histogram, not from reading the source.  They are **25.7% of
+the instructions the benchmark executes**:
+
+    iload_3  9.99%   iadd     7.14%   iand     7.14%   sipush   5.71%
+    istore_3 5.71%   bipush   4.28%   ireturn  4.28%   iload    4.28%
+    iload_0  2.86%   getstatic 2.86%  iload_2  2.85%   iload_1  2.85%
+    ixor     2.85%   lload_0  2.85%   iconst_1 2.85%   invokeinterface 2.85%
+    imul     2.85%   iconst_3 2.85%   iinc     1.52%   goto     1.43%
+    if_icmpge 1.43%  lcmp     1.43%
+
+**The top 20 opcodes are 80% of everything executed**, so the remaining work is
+bounded and its payoff is predictable: 6 opcodes bought 3.8%, and the same rate
+over the top 20 is worth roughly 10-12%.
+
+### How it is done, and why it is safe
+
+A converted handler carries an `L_0xNN:` label before its `case`, ends with
+`DISPATCH()` instead of `break`, and its entry in `nj_dispatch[256]` points at
+that label.  An unconverted handler has no label, its entry points at `L_slow`,
+and it runs through the switch exactly as before.  **The two kinds coexist**, so
+the conversion is one opcode at a time and after EVERY one the benchmark must
+still report exactly 112,117,067 bytecodes - a mistake shows up as a wrong count,
+not as a subtle wrong answer.
+
+`NJ_THREADED_DISPATCH` is 0 on any compiler without the label-address extension
+and `DISPATCH()` is then just `continue`.  ESP32 (xtensa and riscv), Cortex-M and
+three Android ABIs are built by this project; they lose speed, not correctness.
+
 ## The measurement was still wrong in one way, and it produced a false positive
 
 **Comparing against a baseline recorded EARLIER is not an A/B.**  Absolute speed
