@@ -255,6 +255,15 @@ extern const nj_codec nj_codec_png_software;
  */
 extern const nj_codec nj_codec_jpeg_software;
 
+/*
+ * The three entry points a software JPEG provider implements
+ * (src/gfx/nj_jpeg.c).  Declared here because nj_codec.c builds the descriptor
+ * from them and a provider's own tests need them too.
+ */
+int       nj_jpeg_accepts(const void *data, nj_u4 size);
+nj_status nj_jpeg_info(const void *data, nj_u4 size, nj_image_info *out);
+nj_image *nj_jpeg_decode(const nj_codec_req *req);
+
 /* A provider that recognises JPEG and always fails with a clear message.
  * Registered at the lowest priority so that Image.createImage of a JPEG on a
  * build without any JPEG decoder explains itself. */

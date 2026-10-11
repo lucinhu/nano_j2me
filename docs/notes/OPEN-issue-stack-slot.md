@@ -187,3 +187,45 @@ calls `flushGraphics()`).
 
 The fixture's report line is the discriminator: `drawn=76800` proves the game's
 own rendering is complete, so anything wrong after that is the final blit.
+
+---
+
+# DONE: the framebuffer disconnect
+
+Fixed in commit `290fe0f`.  `nj_midp_screen()` had two defects:
+
+1. it called `port->display_init()` as if it were a way to *ask for the screen
+   size*, then discarded the framebuffer the port had just published and
+   allocated a private one;
+2. its already-initialised guard tested `screen_pixels`, which is only non-NULL
+   when the runtime owns the buffer - so with a port-owned framebuffer the guard
+   never fired and the second caller allocated a private buffer *over* the
+   first, leaving the runtime and the port looking at different memory.
+
+Both are gone; the runtime now draws into the port's own framebuffer.
+
+# OPEN: Tumbleweed (tests/games/jump.jar) reports "Screen too small"
+
+The game loads, links, runs, and renders - its own error Alert appears with the
+title bar, the message text and the soft-key hint drawn by the built-in LCDUI
+renderer, which is a full-stack result in itself.  But it refuses at every size
+tried (176x208, 176x220, 240x320, 320x240), and 128x160 produced no frames
+within the timeout.
+
+Worth checking, in order:
+
+1. What the game actually compares.  `net.frog_parrot.jump` is published source
+   (tools/fetch_test_games.sh pulls it); read the check rather than guessing.
+   It may gate on a device property rather than on `getWidth()`.
+2. `Canvas.getWidth()`'s value at the moment the check runs.  It is lazily
+   initialised from the screen surface, so it needs the display to be up - which
+   it now is even before `startApp()`.
+3. Whether the game is reading an image resource whose decode failed, and
+   reporting the resulting zero size as a screen-size problem.  The fixture's
+   own PNG loading works, so this would be a JAR-path or resource-name issue.
+
+# OPEN: Alert text does not wrap
+
+The Alert above shows "java.lang.Except..." clipped at the right edge instead of
+wrapping onto the next line.  MIDP wraps Alert text.  `displayable_render()`'s
+Alert branch in src/midp/nj_lib_lcdui.c draws the string in one run.

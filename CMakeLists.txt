@@ -40,7 +40,7 @@ outside their own platform, so this costs a compile and nothing else)" ON)
 option(NJ_WERROR         "Treat warnings as errors"         OFF)
 option(NJ_SANITIZE       "Build with ASan + UBSan"          OFF)
 
-set(NJ_ENABLE_JPEG  0 CACHE STRING "Built-in baseline JPEG decoder")
+set(NJ_ENABLE_JPEG  1 CACHE STRING "Built-in baseline JPEG decoder")
 set(NJ_ENABLE_PNG   1 CACHE STRING "Built-in PNG decoder")
 set(NJ_ENABLE_RMS   1 CACHE STRING "RecordStore persistence")
 set(NJ_ENABLE_IO    1 CACHE STRING "java.io and javax.microedition.io")
@@ -311,11 +311,30 @@ if(NJ_BUILD_TESTS)
   nj_add_test(test_zip       tests/test_zip.c ${NJ_FIXTURES})
   nj_add_test(test_codec     tests/test_codec.c)
 
-  foreach(extra_test test_font_png test_gfx test_jpeg test_lcdui test_game test_lib)
+  foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${extra_test}.c)
       nj_add_test(${extra_test} tests/${extra_test}.c)
     endif()
   endforeach()
+
+  # The rasterizer test is deliberately standalone: it compiles nj_gfx.c with
+  # tests/stub_font.c rather than linking the library, so its text assertions
+  # are measured against a fixed, deterministic glyph set instead of the real
+  # bitmap font.  Linking the library instead would substitute the real
+  # renderer and make those assertions meaningless - which is exactly what
+  # happened before this rule existed.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gfx.c)
+    add_executable(test_gfx tests/test_gfx.c
+                   src/gfx/nj_gfx.c tests/stub_font.c)
+    target_include_directories(test_gfx PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/gfx)
+    target_link_libraries(test_gfx PRIVATE m)
+    add_test(NAME test_gfx COMMAND test_gfx)
+    set_tests_properties(test_gfx PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  endif()
 
   # ---- end to end: run a whole MIDlet and assert on what it rendered ----
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_play.c)

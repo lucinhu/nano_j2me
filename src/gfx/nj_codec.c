@@ -373,13 +373,6 @@ static nj_image *png_decode(const nj_codec_req *req)
 }
 #endif /* NJ_ENABLE_PNG */
 
-#if NJ_ENABLE_JPEG
-/* Provided by src/gfx/nj_jpeg.c, which is optional. */
-int  nj_jpeg_accepts(const void *data, nj_u4 size);
-nj_status nj_jpeg_info(const void *data, nj_u4 size, nj_image_info *out);
-nj_image *nj_jpeg_decode(const nj_codec_req *req);
-#endif
-
 static int jpeg_accepts_stub(const void *data, nj_u4 size)
 {
     const nj_u1 *p = (const nj_u1 *)data;
@@ -420,7 +413,11 @@ const nj_codec nj_codec_jpeg_unavailable = {
 #if NJ_ENABLE_JPEG
 const nj_codec nj_codec_jpeg_software = {
     "jpeg-software",
-    { NJ_CODEC_FMT_JPEG, NJ_CODEC_CAN_ARGB8888, NJ_CODEC_SCALE_1,
+    /* 1/2 and 1/4 are honoured in the DCT domain, which is both faster and
+     * better looking than decoding full size and resampling - so say so, and
+     * let a caller that wants a thumbnail ask for one. */
+    { NJ_CODEC_FMT_JPEG, NJ_CODEC_CAN_ARGB8888,
+      NJ_CODEC_SCALE_1 | NJ_CODEC_SCALE_2 | NJ_CODEC_SCALE_4,
       0u, 0, 0 },
     nj_jpeg_accepts, nj_jpeg_info, nj_jpeg_decode,
     NULL, NULL, NULL
