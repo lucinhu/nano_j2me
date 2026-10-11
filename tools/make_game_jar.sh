@@ -352,12 +352,17 @@ class DemoCanvas extends GameCanvas implements Runnable {
             frm = player.getFrame();
             trn = player.getTransform();
         }
-        System.out.println("GAMEDEMO frames=" + frame
+        System.out.println("GAMEDEMO canvas=" + getWidth() + "x" + getHeight()
+                           + " offscreen=" + offscreen.getWidth() + "x"
+                           + offscreen.getHeight()
+                           + " frames=" + frame
                            + " checksum=" + Integer.toHexString(sum)
                            + " drawn=" + nonBg
                            + " refsum=" + dist
                            + " frame=" + frm
                            + " transform=" + trn
+                           + " px0=" + Integer.toHexString(rgb[0])
+                           + " pxmid=" + Integer.toHexString(rgb[rgb.length / 2])
                            + " saved=" + saved
                            + " status=[" + status + "]");
         if (DemoGame.instance != null) {

@@ -429,24 +429,69 @@ nj_surface *nj_midp_screen(nj_vm *vm)
     if (!vm) {
         return NULL;
     }
-    if (vm->screen_pixels && vm->screen.pixels == vm->screen_pixels) {
+    /*
+     * Already up?  Ask the SURFACE, not the ownership flag.
+     *
+     * The original guard was `screen_pixels && screen.pixels == screen_pixels`,
+     * which is only true when the runtime allocated the buffer itself.  With a
+     * port-owned framebuffer screen_pixels is NULL, so the guard never fired:
+     * the second caller fell through, skipped the w<=0 block (screen_w was now
+     * set), and allocated a fresh private buffer over the top.  The first
+     * caller got the port's memory and everyone after got a private copy, so
+     * the runtime rendered into one buffer while the port presented the other -
+     * a permanently black screen with no error anywhere.
+     */
+    if (vm->screen.pixels && vm->screen_w > 0 && vm->screen_h > 0) {
         return &vm->screen;
     }
     w = (int)vm->screen_w;
     h = (int)vm->screen_h;
     if (w <= 0 || h <= 0) {
-        int pw = 0, ph = 0;
+        int pw = 0, ph = 0, pstride = 0;
+        void *ppixels = NULL;
         if (vm->port && vm->port->display_init) {
-            int stride = 0;
-            void *pixels = NULL;
-            int pf = vm->port->display_init(vm->port->ud, &pw, &ph, &stride,
-                                            &pixels);
+            int pf = vm->port->display_init(vm->port->ud, &pw, &ph, &pstride,
+                                            &ppixels);
             if (pf >= 0) {
                 fmt = pf;
             }
         }
         w = (pw > 0) ? pw : NJ_SCREEN_WIDTH;
         h = (ph > 0) ? ph : NJ_SCREEN_HEIGHT;
+
+        /*
+         * USE THE PORT'S BUFFER.
+         *
+         * display_init() is not a way to ask for the screen size - it is how a
+         * port publishes the framebuffer it wants drawn into, and the port
+         * presents from exactly that memory (the headless port writes its PPM
+         * frames from it, an ESP32 DMAs it to the panel, an Android port copies
+         * it into the window).
+         *
+         * Allocating a second, private buffer here looks harmless and is the
+         * worst possible failure: the runtime renders correctly into one
+         * buffer, the port faithfully presents the other, and the screen is
+         * black forever with no error anywhere.  It survived a long time
+         * because every unit test reads the framebuffer through this function
+         * rather than through the port.
+         *
+         * The port owns this memory and releases it in its shutdown hook, so
+         * screen_pixels stays NULL to mark it as "not ours to free".
+         */
+        if (ppixels && pstride > 0) {
+            int bpp0 = (fmt == NJ_PIXFMT_ARGB8888) ? 4
+                       : ((fmt == NJ_PIXFMT_RGB888) ? 3 : 2);
+            vm->screen_pixels = NULL;
+            vm->screen.pixels = ppixels;
+            vm->screen.width = w;
+            vm->screen.height = h;
+            vm->screen.stride = pstride;
+            vm->screen.format = fmt;
+            vm->screen.bpp = bpp0;
+            vm->screen_w = (nj_u2)w;
+            vm->screen_h = (nj_u2)h;
+            goto screen_ready;
+        }
     }
     if (vm->port) {
         if (vm->port->width > 0)  { w = vm->port->width; }
@@ -467,6 +512,7 @@ nj_surface *nj_midp_screen(nj_vm *vm)
     vm->screen_w = (nj_u2)w;
     vm->screen_h = (nj_u2)h;
 
+screen_ready:
     /*
      * What can this device do?  Ports describe themselves through the port
      * struct and the pixel format; Canvas.hasPointerEvents() and friends read
