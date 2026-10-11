@@ -70,6 +70,23 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
 /* Push a synthetic input event into a port that supports it (headless). */
 void nj_port_push_event(nj_port *port, const nj_event *ev);
 
+/*
+ * What the headless port did with SOUND.
+ *
+ * It records audio rather than playing it, so a test can assert that a MIDlet
+ * asked for the right notes in the right order, with the right durations,
+ * without a sound card anywhere in the picture.  A port that played them and
+ * said nothing would make every audio path untestable, which is the whole
+ * reason these exist.  All of them return -1 for a NULL or foreign port.
+ */
+int  nj_port_headless_tone_calls(const nj_port *port);  /* tone_play calls */
+int  nj_port_headless_tone_count(const nj_port *port);  /* tones offered, total */
+int  nj_port_headless_tone_stops(const nj_port *port);
+int  nj_port_headless_tone_first(const nj_port *port);  /* first freq, last seq */
+long nj_port_headless_pcm_frames(const nj_port *port);  /* frames accepted */
+int  nj_port_headless_pcm_opens(const nj_port *port);
+int  nj_port_headless_pcm_format(const nj_port *port, int *rate, int *channels);
+
 #ifdef __cplusplus
 }
 #endif

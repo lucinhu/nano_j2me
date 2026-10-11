@@ -213,9 +213,36 @@ typedef struct nj_port {
     void (*install_codecs)(void *ud, struct nj_vm *vm);
 
     /* ---- audio ---- */
-    /* Start/stop a tone.  `tones` is a NULL-terminated-by-count array. */
+    /*
+     * Start a tone sequence.  `tones` is an array of `count` entries, each a
+     * frequency and a duration; a frequency of 0 is a rest.  Returns 0 if the
+     * port took it, negative if it has no audio.
+     *
+     * A port with a real device queues all of them and returns; the runtime
+     * does not block either way.  Manager.playTone(TONE_BLOCKING) blocks the
+     * CALLING JAVA THREAD on an emulated timer, not on the port, so a port that
+     * returns early is not a port that is wrong.
+     */
     int   (*tone_play)(void *ud, const nj_audio_tone *tones, int count);
     void  (*tone_stop)(void *ud);
+
+    /*
+     * Streaming PCM, for sampled audio (WAV).  Open once with the format, push
+     * frames, close.  Samples are signed 16-bit little-endian, interleaved for
+     * stereo.
+     *
+     * pcm_write returns the number of FRAMES accepted, which may be fewer than
+     * offered when the device buffer is full - the runtime holds the rest and
+     * retries on the next frame, so a port that always returns 0 slows playback
+     * down instead of losing it.  A port without audio may leave all three NULL
+     * and sampled audio simply does not play.
+     */
+    int   (*pcm_open)(void *ud, int sample_rate, int channels);
+    int   (*pcm_write)(void *ud, const nj_s2 *samples, int frames);
+    void  (*pcm_close)(void *ud);
+    /* Frames the device can accept right now; 0 or NULL means "as many as you
+     * like".  Used to avoid holding a whole WAV in memory on a small part. */
+    int   (*pcm_free)(void *ud);
 
     /* ---- vibration ---- */
     void  (*vibrate)(void *ud, int ms);

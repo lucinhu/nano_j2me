@@ -52,6 +52,33 @@ typedef struct nj_headless_state {
     int    key_state[NJ_KEY_COUNT];
 
     int    auto_quit_frames; /* 0 = run until the app exits */
+
+    /*
+     * Audio, recorded rather than played.
+     *
+     * The headless port is the one the test suite drives, so what it has to do
+     * with sound is make it OBSERVABLE: a test can then assert that a MIDlet
+     * asked for the right notes, in the right order, for the right durations,
+     * without a sound card anywhere in the picture.  A port that played the
+     * tones and said nothing would make every audio path untestable.
+     *
+     * The counters live in the caller's state, not in the C file, so two
+     * headless ports in one process do not share a note count.
+     */
+    int    tone_calls;       /* how many times tone_play was called */
+    int    tone_count;       /* tones accepted, total */
+    int    tone_last_freq;   /* last call's arguments, for a quick assertion */
+    int    tone_last_ms;
+    int    tone_last_first;  /* first frequency of the last sequence */
+    int    tone_stops;
+    nj_audio_tone last_tones[8];
+    int    last_tones_n;
+
+    int    pcm_opens;
+    int    pcm_closes;
+    long   pcm_frames;       /* frames accepted, total */
+    int    pcm_rate;
+    int    pcm_channels;
 } nj_headless_state;
 
 #define HS(ud) ((nj_headless_state *)(ud))
@@ -117,6 +144,107 @@ static void hl_sleep_ms(void *ud, nj_u4 ms)
 static void hl_idle(void *ud)
 {
     (void)ud;
+}
+
+/* ------------------------------------------------------------------ */
+/* Audio: recorded, not played                                         */
+/* ------------------------------------------------------------------ */
+static int hl_tone_play(void *ud, const nj_audio_tone *tones, int count)
+{
+    nj_headless_state *s = HS(ud);
+    int i;
+
+    if (!s || !tones || count <= 0) {
+        return -1;
+    }
+    s->tone_calls++;
+    s->tone_count += count;
+    s->tone_last_freq = (int)tones[count - 1].freq_hz;
+    s->tone_last_ms = (int)tones[count - 1].duration_ms;
+    s->tone_last_first = (int)tones[0].freq_hz;
+    s->last_tones_n = (count < 8) ? count : 8;
+    for (i = 0; i < s->last_tones_n; i++) {
+        s->last_tones[i] = tones[i];
+    }
+    return 0;
+}
+
+static void hl_tone_stop(void *ud)
+{
+    nj_headless_state *s = HS(ud);
+    if (s) {
+        s->tone_stops++;
+    }
+}
+
+static int hl_pcm_open(void *ud, int sample_rate, int channels)
+{
+    nj_headless_state *s = HS(ud);
+    if (!s) {
+        return -1;
+    }
+    s->pcm_opens++;
+    s->pcm_rate = sample_rate;
+    s->pcm_channels = channels;
+    return 0;
+}
+
+static int hl_pcm_write(void *ud, const nj_s2 *samples, int frames)
+{
+    nj_headless_state *s = HS(ud);
+    if (!s || !samples || frames <= 0) {
+        return -1;
+    }
+    s->pcm_frames += frames;
+    return frames;          /* always accept: the counter is the point */
+}
+
+static void hl_pcm_close(void *ud)
+{
+    nj_headless_state *s = HS(ud);
+    if (s) {
+        s->pcm_closes++;
+    }
+}
+
+int nj_port_headless_tone_calls(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->tone_calls : -1;
+}
+
+int nj_port_headless_tone_count(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->tone_count : -1;
+}
+
+int nj_port_headless_tone_stops(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->tone_stops : -1;
+}
+
+int nj_port_headless_tone_first(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->tone_last_first : -1;
+}
+
+long nj_port_headless_pcm_frames(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->pcm_frames : -1;
+}
+
+int nj_port_headless_pcm_opens(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->pcm_opens : -1;
+}
+
+int nj_port_headless_pcm_format(const nj_port *p, int *rate, int *channels)
+{
+    if (!p || !p->ud) {
+        return -1;
+    }
+    if (rate) { *rate = HS(p->ud)->pcm_rate; }
+    if (channels) { *channels = HS(p->ud)->pcm_channels; }
+    return 0;
 }
 
 static void hl_log(void *ud, int level, const char *msg)
@@ -265,6 +393,11 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     out->millis = hl_millis;
     out->sleep_ms = hl_sleep_ms;
     out->idle = hl_idle;
+    out->tone_play = hl_tone_play;
+    out->tone_stop = hl_tone_stop;
+    out->pcm_open = hl_pcm_open;
+    out->pcm_write = hl_pcm_write;
+    out->pcm_close = hl_pcm_close;
     out->log = hl_log;
     out->display_init = hl_display_init;
     out->display_present = hl_display_present;
