@@ -17,7 +17,6 @@
 #  include <stdio.h>
 #endif
 
-#include <ctype.h>
 
 #define NJFN(name) NJ_NATIVE_FN(name)
 #define NJ_UNUSED(x) ((void)(x))

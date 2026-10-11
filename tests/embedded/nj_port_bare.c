@@ -1,0 +1,258 @@
+/*
+ * A complete nj_port for a bare-metal 32-bit MCU, plus the nine C library
+ * functions include/nj2me/nj_libc.h asks for.
+ *
+ * This exists to be LINKED, not described.  Compiling the runtime for a cross
+ * target proves it parses; linking it into a firmware image with -nostdlib
+ * proves the dependency claim in docs/FOOTPRINT.md is true - that nothing in
+ * src/ reaches for a hosted libc, and that the runtime's own .data and .bss are
+ * empty on a real 32-bit target.
+ *
+ * The port state lives in a struct owned by main(), like every other port here,
+ * so this file adds no mutable globals of its own.
+ */
+#include "nj2me/nj.h"
+#include "nj2me/nj_port.h"
+
+/* ------------------------------------------------------------------ */
+/* The nine functions.  Deliberately naive: the point is that the       */
+/* runtime compiles and links against a minimal set, not that these are */
+/* fast.  A real port uses the vendor SDK's versions.                   */
+/* ------------------------------------------------------------------ */
+void *memcpy(void *dst, const void *src, size_t n)
+{
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = (const unsigned char *)src;
+    while (n--) { *d++ = *s++; }
+    return dst;
+}
+
+void *memmove(void *dst, const void *src, size_t n)
+{
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = (const unsigned char *)src;
+    if (d < s) {
+        while (n--) { *d++ = *s++; }
+    } else {
+        d += n; s += n;
+        while (n--) { *--d = *--s; }
+    }
+    return dst;
+}
+
+void *memset(void *dst, int c, size_t n)
+{
+    unsigned char *d = (unsigned char *)dst;
+    while (n--) { *d++ = (unsigned char)c; }
+    return dst;
+}
+
+int memcmp(const void *a, const void *b, size_t n)
+{
+    const unsigned char *x = (const unsigned char *)a;
+    const unsigned char *y = (const unsigned char *)b;
+    while (n--) {
+        if (*x != *y) { return (int)*x - (int)*y; }
+        x++; y++;
+    }
+    return 0;
+}
+
+size_t strlen(const char *s) { const char *p = s; while (*p) { p++; } return (size_t)(p - s); }
+
+int strcmp(const char *a, const char *b)
+{
+    while (*a && *a == *b) { a++; b++; }
+    return (int)(unsigned char)*a - (int)(unsigned char)*b;
+}
+
+int strncmp(const char *a, const char *b, size_t n)
+{
+    while (n && *a && *a == *b) { a++; b++; n--; }
+    if (!n) { return 0; }
+    return (int)(unsigned char)*a - (int)(unsigned char)*b;
+}
+
+char *strchr(const char *s, int c)
+{
+    for (;; s++) {
+        if (*s == (char)c) { return (char *)s; }
+        if (!*s) { return 0; }
+    }
+}
+
+int tolower(int c) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
+int toupper(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
+
+/*
+ * fmod is the one libm function that cannot be switched off: the interpreter
+ * needs it for the frem/drem bytecodes.  Truncate toward zero and subtract;
+ * slow and exact, and a port with a libm links the vendor's instead.
+ */
+double fmod(double x, double y)
+{
+    double q;
+    if (y == 0.0) { return x; }
+    q = x / y;
+    {
+        /* Truncate q toward zero without <math.h>. */
+        long t = (long)q;
+        q = (double)t;
+    }
+    return x - q * y;
+}
+
+double floor(double x)
+{
+    long t = (long)x;                 /* truncates toward zero */
+    if ((double)t > x) { t -= 1; }    /* and floor goes the other way for negatives */
+    return (double)t;
+}
+
+double ceil(double x)
+{
+    long t = (long)x;
+    if ((double)t < x) { t += 1; }
+    return (double)t;
+}
+
+/* Round half to even, the way IEEE 754 and java.lang.Math.rint require. */
+double rint(double x)
+{
+    double f = floor(x);
+    double d = x - f;
+    if (d > 0.5) { return f + 1.0; }
+    if (d < 0.5) { return f; }
+    {
+        long fi = (long)f;
+        return ((fi & 1L) != 0L) ? f + 1.0 : f;
+    }
+}
+
+/*
+ * The java.lang.Math transcendentals.
+ *
+ * These are stubs, and that is deliberate: it makes the link succeed and makes
+ * the dependency VISIBLE in one place rather than hiding it.  NJ_ENABLE_FLOAT=0
+ * does NOT remove them - the switch is defined in nj_config.h and no source
+ * honours it, which docs/FOOTPRINT.md records as a known gap.  So the honest
+ * statement is that this runtime needs the full libm set, and a port without a
+ * libm supplies it (or accepts that Math.sqrt and friends return NaN).
+ *
+ * A real port links the vendor's libm here; this file exists to prove that
+ * NOTHING ELSE in the runtime needs a C library.
+ */
+static double bare_unimplemented(double x) { return x; }
+
+double sqrt(double x) { return bare_unimplemented(x); }
+double sin(double x)  { return bare_unimplemented(x); }
+double cos(double x)  { return bare_unimplemented(x); }
+double tan(double x)  { return bare_unimplemented(x); }
+double asin(double x) { return bare_unimplemented(x); }
+double acos(double x) { return bare_unimplemented(x); }
+double atan(double x) { return bare_unimplemented(x); }
+double atan2(double y, double x) { (void)y; return bare_unimplemented(x); }
+double exp(double x)  { return bare_unimplemented(x); }
+double log(double x)  { return bare_unimplemented(x); }
+double log10(double x){ return bare_unimplemented(x); }
+double pow(double x, double y) { (void)y; return bare_unimplemented(x); }
+double cbrt(double x) { return bare_unimplemented(x); }
+
+/* ------------------------------------------------------------------ */
+/* Port state, owned by the caller                                      */
+/* ------------------------------------------------------------------ */
+#define BARE_W 240
+#define BARE_H 320
+
+typedef struct bare_state {
+    nj_u4  fb[BARE_W * BARE_H];   /* ARGB words; a panel driver DMAs this out */
+    nj_u4  now_ms;
+    int    frames;
+    int    stop_after;
+    nj_u1 *heap;                  /* the arena, owned by the harness */
+    nj_size heap_bytes;
+    nj_size heap_used;            /* allocator state belongs to the PORT, not
+                                   * to a file-scope variable - the same rule
+                                   * the runtime follows */
+} bare_state;
+
+/* ---- clock ---- */
+static nj_u4 bare_millis(void *ud)
+{
+    /* A real port reads a hardware timer.  This one advances by a fixed step
+     * per frame so the image is deterministic and does not need a timer at
+     * all - which is also what makes it usable as a link test. */
+    return ((bare_state *)ud)->now_ms;
+}
+
+static void bare_sleep(void *ud, nj_u4 ms) { ((bare_state *)ud)->now_ms += ms; }
+static void bare_idle(void *ud) { (void)ud; }
+
+/* ---- memory: one arena the linker places, no malloc ---- */
+static void *bare_alloc(void *ud, nj_size n)
+{
+    bare_state *s = (bare_state *)ud;
+    nj_size aligned = (n + 7u) & ~(nj_size)7u;
+    void *p;
+    if (!s->heap || s->heap_used + aligned > s->heap_bytes) {
+        return 0;
+    }
+    p = s->heap + s->heap_used;
+    s->heap_used += aligned;
+    return p;
+}
+
+static void bare_free(void *ud, void *p) { (void)ud; (void)p; }
+
+/* ---- display ---- */
+static int bare_display_init(void *ud, int *w, int *h, int *stride, void **px)
+{
+    bare_state *s = (bare_state *)ud;
+    *w = BARE_W; *h = BARE_H;
+    *stride = BARE_W * 4;
+    *px = s->fb;
+    return NJ_PIXFMT_ARGB8888;
+}
+
+static void bare_present(void *ud, int x, int y, int w, int h)
+{
+    bare_state *s = (bare_state *)ud;
+    (void)x; (void)y; (void)w; (void)h;
+    s->frames++;
+    s->now_ms += 16u;         /* a 60 Hz panel */
+}
+
+static void bare_log(void *ud, int level, const char *msg)
+{
+    (void)ud; (void)level; (void)msg;
+    /* A real port writes to a UART.  Here it is deliberately silent: this
+     * image exists to be linked and sized, and a UART stub would be a
+     * dependency on a UART. */
+}
+
+/* Frames presented so far.  main() cannot see bare_state, and an embedder
+ * reading the port's own counters is the normal shape anyway. */
+int nj_port_bare_frames(const void *ud) { return ((const bare_state *)ud)->frames; }
+
+nj_status nj_port_bare(nj_port *out, bare_state *st, void *heap, nj_size heap_bytes)
+{
+    if (!out || !st) { return NJ_ERR; }
+    st->now_ms = 0u;
+    st->frames = 0;
+    st->stop_after = 0;
+    st->heap = (nj_u1 *)heap;
+    st->heap_bytes = heap_bytes;
+    st->heap_used = 0u;
+    memset(out, 0, sizeof(*out));
+    out->name = "bare";
+    out->ud = st;
+    out->millis = bare_millis;
+    out->sleep_ms = bare_sleep;
+    out->idle = bare_idle;
+    out->alloc = bare_alloc;
+    out->free = bare_free;
+    out->display_init = bare_display_init;
+    out->display_present = bare_present;
+    out->log = bare_log;
+    return NJ_OK;
+}

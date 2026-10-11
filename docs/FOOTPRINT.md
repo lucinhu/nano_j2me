@@ -60,6 +60,66 @@ JPEG (2.2 KB of tables) and PNG (1.8 KB) are both small because they are
 arithmetic rather than table-driven - the JPEG IDCT is one 8x8 kernel, not the
 usual four.
 
+## A real firmware image, linked, for a real 32-bit target
+
+The x86 numbers above are useful for comparing modules. The ones that matter for
+an MCU come from actually cross-compiling and linking:
+
+    tools/make_bare_firmware.sh          # needs arm-none-eabi-gcc
+
+This builds a complete firmware ELF for a **Cortex-M4** with `-nostdlib`: the
+whole runtime, a bare-metal `nj_port` (`tests/embedded/nj_port_bare.c`), a small
+implementation of the maths functions it needs, and `bench.jar` embedded as a C
+array. It links, which is the point - if anything in `src/` reached for a hosted
+C library, this is where it would fail.
+
+    text     data      bss
+  244550        0  2162688
+
+| | bytes | what it is |
+|---|---|---|
+| `.text` (incl. rodata) | 244,550 | flash, 239 KiB |
+| `.data` | **0** | nothing to initialise at startup |
+| `.bss` | 2,162,688 | **the application's**, not the runtime's |
+
+The `.bss` figure is 2 MB of Java heap plus 64 KB of port state, both declared by
+the application in `main.c`. **The runtime's own contribution to RAM is zero** -
+measured on a 32-bit target with a real linker, not asserted.
+
+Two things this image demonstrates that the x86 report cannot:
+
+* An embedded application uses the **public API only** - `nj_vm_create`,
+  `nj_app_open`, `nj_vm_new_midlet`, `nj_vm_start_app`, `nj_midp_frame`,
+  `nj_vm_destroy`. `src/runner/nj_run.c` is deliberately **not** in the image: it
+  is a desktop convenience that reads files and calls `malloc`.
+* `-nostdlib` is a real constraint, and satisfying it found two genuine bugs
+  (see below).
+
+## Known gap: NJ_ENABLE_FLOAT does nothing
+
+`nj_config.h` documents `NJ_ENABLE_FLOAT=0` as compiling `java.lang.Math` down to
+integer operations and removing the libm transcendentals. **It does not.** The
+macro is defined and nothing honours it: `src/core/nj_lib_math.c` calls `pow`,
+`log`, `exp`, `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`,
+`log10` and `cbrt` unconditionally.
+
+So the honest description of this runtime is *"freestanding except for a minimal
+libm subset"*, and the required subset is larger than the switch claims:
+
+* always required: `memcpy memmove memset memcmp strlen strcmp strncmp strchr`,
+  `tolower toupper`, `fmod floor ceil rint` (`fmod` for the `frem`/`drem`
+  bytecodes, the rounding ones for `java.lang.Math`'s integer paths)
+* required unless the MIDlet never calls those methods: the transcendentals
+
+`tests/embedded/nj_port_bare.c` supplies all of them - real implementations for
+the small ones, explicit stubs for the transcendentals - so the dependency is
+**visible in one file** rather than spread across a link error.
+
+Making `NJ_ENABLE_FLOAT=0` real is a contained job: guard the libm-using natives
+in `nj_lib_math.c` so they raise `ArithmeticException` (or return the integer
+approximation) when the switch is off. Until then, treat the switch as
+unimplemented.
+
 ## What is not in the report
 
 * `src/port/esp32/nj_port_esp32.c` compiles (34 bytes of code) but its real size
@@ -77,9 +137,10 @@ The complete list is in `include/nj2me/nj_libc.h` and it is:
 
 * `<string.h>`: `memcpy memmove memset memcmp strlen strcmp strncmp strchr`
 * `<ctype.h>`: `tolower toupper`
-* `<math.h>`: `fmod sqrt sin cos tan asin acos atan atan2 exp log log10 pow
-  ceil floor cbrt` - and `NJ_ENABLE_FLOAT=0` removes every one of them, by
-  compiling `java.lang.Math` down to its integer operations.
+* `<math.h>`: `fmod floor ceil rint` always, plus `sqrt sin cos tan asin acos
+  atan atan2 exp log log10 pow cbrt` for `java.lang.Math`. `NJ_ENABLE_FLOAT=0`
+  is documented as removing the second group and does not - see the known gap
+  above.
 
 Everything else goes through `nj_port`: allocation, the clock, sleeping, file
 access and logging. `tools/size_report.sh` compiles all 30 sources in that mode,

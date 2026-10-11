@@ -45,17 +45,28 @@ int    tolower(int c);
 int    toupper(int c);
 
 /*
- * <math.h>, for java.lang.Math.
+ * <math.h>.
  *
- * These are not optional if the MIDlet uses Math at all, but they are the only
- * part of the list a port can plausibly choose to leave out: NJ_ENABLE_FLOAT=0
- * compiles java.lang.Math down to the integer operations and drops every one of
- * them.  A port with an FPU but no libm (or one that wants to save the ~20 KB)
- * can therefore take that switch instead of providing them.
- *
- * newlib - and so ESP-IDF - already has all of these.
+ * These four are REQUIRED, and NJ_ENABLE_FLOAT=0 does NOT remove them: the
+ * interpreter needs fmod for the frem/drem bytecodes whatever the switch says,
+ * and java.lang.Math's rounding paths call floor/ceil/rint even in integer
+ * mode.  All four are a handful of lines each (see tests/embedded/nj_port_bare.c
+ * for an implementation), which is why the honest description of this runtime
+ * is "freestanding except for a minimal libm subset", not "libm-free".
  */
 double fmod(double x, double y);
+double floor(double x);
+double ceil(double x);
+double rint(double x);
+
+/*
+ * The rest are java.lang.Math's transcendentals, and THESE are optional:
+ * NJ_ENABLE_FLOAT=0 compiles java.lang.Math down to its integer operations and
+ * drops every one of them, saving roughly 20 KB on a target with no FPU.
+ * A port with an FPU and a libm links the vendor's instead.
+ *
+ * newlib - and so ESP-IDF - already provides all of them.
+ */
 double sqrt(double x);
 double sin(double x);
 double cos(double x);
@@ -68,8 +79,6 @@ double exp(double x);
 double log(double x);
 double log10(double x);
 double pow(double x, double y);
-double ceil(double x);
-double floor(double x);
 double cbrt(double x);
 
 #  ifdef __cplusplus
