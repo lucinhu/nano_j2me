@@ -582,9 +582,13 @@ CLASSES = {
             "void addPlayerListener(javax.microedition.media.PlayerListener)",
             "void removePlayerListener(javax.microedition.media.PlayerListener)",
             "int getState()", "long getDuration()", "long getMediaTime()",
+            "javax.microedition.media.Control getControl(String)",
+            "javax.microedition.media.Control[] getControls()",
         ],
     },
     "javax/microedition/media/Manager": {
+        "constants": {"TONE_STOP": "1", "TONE_BLOCKING": "2",
+                      "TONE_CONSTANT_DURATION": "4"},
         "methods": [
             "public static javax.microedition.media.Player createPlayer(java.io.InputStream, String)",
             "public static javax.microedition.media.Player createPlayer(String)",
@@ -592,6 +596,25 @@ CLASSES = {
             "public static String[] getSupportedProtocols(String)",
             "public static void playTone(int, int, int)",
         ],
+    },
+    "javax/microedition/media/Control": {
+        "interface": True,
+        "methods": ["javax.microedition.media.Control getControl(String)"],
+    },
+    "javax/microedition/media/control/ToneControl": {
+        "interface": True,
+        "methods": ["void setToneSequence(byte[])",
+                    "byte[] getToneSequence()",
+                    "void setSequence(byte[])"],
+    },
+    "javax/microedition/media/control/VolumeControl": {
+        "interface": True,
+        "methods": ["void setLevel(int)", "int getLevel()",
+                    "void setMute(boolean)", "boolean isMuted()"],
+    },
+    "javax/microedition/media/MediaException": {
+        "super": "java.lang.Exception",
+        "methods": ["MediaException()", "MediaException(String)"],
     },
     "javax/microedition/media/PlayerListener": {
         "interface": True,

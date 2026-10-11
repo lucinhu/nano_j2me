@@ -393,6 +393,9 @@ nj_status nj_lib_late_init(nj_vm *vm);
  * java.lang.System can still bring the UI up.
  */
 nj_status nj_lcdui_late_init(nj_vm *vm);
+/* The media package's constants (Player states, Manager's TONE_*), built after
+ * the classes exist for the same reason the LCDUI ones are. */
+nj_status nj_media_late_init(nj_vm *vm);
 
 #ifdef __cplusplus
 }

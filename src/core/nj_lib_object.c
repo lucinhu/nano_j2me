@@ -33,6 +33,7 @@ NJFN(obj_init)
 nj_s4 nj_identity_hash(nj_vm *vm, nj_ref o)
 {
     nj_size p;
+    (void)vm;   /* the arena address is the identity; the VM is not needed */
     if (!o) {
         return 0;
     }
@@ -204,6 +205,77 @@ NJFN(obj_wait_timeout)
 /* ------------------------------------------------------------------ */
 #define NJ_CLASS_OF(args) ((NJ_THIS(args) && NJ_THIS(args)->kind == NJ_OBJ_CLASS) \
                            ? NJ_THIS(args)->u.mirror : NULL)
+
+/*
+ * Class.getResourceAsStream().  The leading "/" form is absolute in the JAR and
+ * is what games use ("/res/hero.png"); the relative form resolves against the
+ * receiver's package, which needs the package name on the Class object, so it is
+ * resolved from the class name the object already carries.
+ *
+ * The resource is copied into a Java byte array and wrapped in a
+ * ByteArrayInputStream, because that is what the caller expects to close and
+ * skip around in, and because the port's memory for the resource is released
+ * here rather than held until the stream is collected.
+ */
+NJFN(class_getResourceAsStream)
+{
+    nj_ref cname = NJ_ARG_REF(args, 0);
+    nj_app *app = (nj_app *)vm->loader_ud;
+    char path[256];
+    void *data;
+    nj_u4 len = 0u;
+    nj_ref ba;
+    nj_ref in;
+    nj_value a[1];
+
+    if (!cname) {
+        return nj_throw(vm, "java/lang/NullPointerException", "name is null");
+    }
+    if (!app) {
+        return nj_throw(vm, "java/io/IOException", "no application is loaded");
+    }
+    if (nj_string_to_utf8(cname, path, (int)sizeof(path)) <= 0) {
+        return nj_throw(vm, "java/io/IOException", "bad resource name");
+    }
+    {
+        const char *p = path;
+        if (*p == '/') {
+            p++;                /* absolute: the JAR root */
+        }
+        data = nj_app_resource(vm, app, p, &len);
+    }
+    if (!data || len == 0u) {
+        /*
+         * Not found is NULL, not an exception - that is what
+         * getResourceAsStream() documents, and a game that probes for an
+         * optional file depends on it.
+         */
+        if (data) {
+            nj_host_free(vm, data);
+        }
+        ret->r = NULL;
+        return NJ_OK;
+    }
+    ba = nj_byte_array_new(vm, len);
+    if (!ba) {
+        nj_host_free(vm, data);
+        return NJ_ERR;
+    }
+    memcpy(ba->u.bytes, data, (size_t)len);
+    nj_host_free(vm, data);
+
+    in = nj_object_new(vm, "java/io/ByteArrayInputStream");
+    if (!in) {
+        return NJ_ERR;
+    }
+    a[0].r = ba;
+    if (nj_call_special(vm, in, "java/io/ByteArrayInputStream", "<init>",
+                        "([B)V", a, NULL) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = in;
+    return NJ_OK;
+}
 
 NJFN(class_getName)
 {
@@ -410,6 +482,8 @@ static const nj_builtin_method object_methods[] = {
 
 static const nj_builtin_method class_methods[] = {
     M("getName",        "()Ljava/lang/String;",                 0),
+    M("getResourceAsStream",
+      "(Ljava/lang/String;)Ljava/io/InputStream;",              0),
     M("isArray",        "()Z",                                  0),
     M("isInterface",    "()Z",                                  0),
     M("isInstance",     "(Ljava/lang/Object;)Z",                0),
@@ -512,6 +586,8 @@ const nj_native_entry nj_lib_object_table[] = {
     { "java/lang/Object",    "wait",              "(J)V",                  obj_wait_timeout },
 
     { "java/lang/Class",     "getName",           "()Ljava/lang/String;",  class_getName },
+    { "java/lang/Class",     "getResourceAsStream",
+      "(Ljava/lang/String;)Ljava/io/InputStream;", class_getResourceAsStream },
     { "java/lang/Class",     "isArray",           "()Z",                   class_isArray },
     { "java/lang/Class",     "isInterface",       "()Z",                   class_isInterface },
     { "java/lang/Class",     "isInstance",        "(Ljava/lang/Object;)Z", class_isInstance },

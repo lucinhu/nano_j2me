@@ -283,4 +283,19 @@ const nj_font *nj_midp_font_for(nj_vm *vm, nj_ref font_obj);
 #define NJ_MIDP_HAS_SOFTKEYS  0x0002
 #define NJ_MIDP_SUPPORTS_ALPHA 0x0004
 
+/*
+ * javax.microedition.media, pumped once per emulated frame.
+ *
+ * Sampled audio is pushed to the port a buffer at a time rather than all at
+ * once, because a small part has a small device buffer: pcm_write() says how
+ * many frames it took and the Player keeps the rest.  A port that accepts
+ * everything finishes on the first push and this does nothing afterwards.
+ */
+void nj_media_frame(nj_vm *vm);
+
+/* Write the media package's static final strings.  Called once when the VM is
+ * up, for the same reason LCDUI has a late init: a builtin class cannot carry a
+ * ConstantValue attribute. */
+nj_status nj_media_late_init(nj_vm *vm);
+
 #endif /* NJ_MIDP_H */

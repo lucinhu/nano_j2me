@@ -244,6 +244,11 @@ nj_status nj_midp_frame(nj_vm *vm)
         nj_clear_exception(vm);
     }
 
+    /* Top up any Player that is still feeding the audio device.  A port whose
+     * pcm_write() accepts everything finished on the first push and this costs
+     * one call. */
+    nj_media_frame(vm);
+
     /* ---- paint ---- */
     /*
      * An exception raised while painting must not survive the frame.
