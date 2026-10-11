@@ -34,6 +34,10 @@ typedef struct sdl_state {
 
     int  quit;
     int  have_scale_arg;
+    const nj_port *port;   /* the caller's struct: we read width/height from it */
+    const char *capture;   /* NJ_SDL2_CAPTURE: proof-of-presentation dump */
+    int  capture_n;
+    int  capture_every;
 } sdl_state;
 
 #define SS(ud) ((sdl_state *)(ud))
@@ -101,6 +105,21 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
     sdl_state *s = SS(ud);
     int bpp = sdl_bytes_per_pixel(NJ_PIXFMT);
 
+    /*
+     * Take the size from the caller's nj_port, which is where --size lands.
+     *
+     * The port used to ignore it entirely and always use the compile-time
+     * default, so the same command line produced a 176x208 screen headless and
+     * a 240x320 one here - and a title that gates itself on the screen
+     * dimensions ("Screen too small") then behaved differently on the two
+     * ports for no reason the user could see.
+     */
+    if (s->port && s->port->width > 0) {
+        s->width = s->port->width;
+    }
+    if (s->port && s->port->height > 0) {
+        s->height = s->port->height;
+    }
     if (s->width <= 0) {
         s->width = NJ_SCREEN_WIDTH;
     }
@@ -143,14 +162,35 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
     if (!s->window) {
         return -1;
     }
-    s->renderer = SDL_CreateRenderer(s->window, -1,
-                                     SDL_RENDERER_ACCELERATED |
-                                     SDL_RENDERER_PRESENTVSYNC);
-    if (!s->renderer) {
-        s->renderer = SDL_CreateRenderer(s->window, -1, SDL_RENDERER_SOFTWARE);
-    }
-    if (!s->renderer) {
-        return -1;
+    /*
+     * Prefer the SOFTWARE renderer, and make the accelerated one opt-in.
+     *
+     * This looks backwards and is not.  Asking SDL for an accelerated renderer
+     * on a display without usable GL does not return NULL - the X server
+     * raises BadValue on the GLX request and SDL's X11 error handler makes it
+     * fatal, so the process dies before the fallback below can ever run.  That
+     * is a headless X server, a remote X session and anything without DRI,
+     * which is a large fraction of the places a console emulator gets run.
+     *
+     * A blit of a 240x320 texture is not a workload that needs a GPU, and the
+     * software path behaves identically everywhere and is deterministic.
+     * NJ_SDL2_ACCEL=1 asks for the GPU for anyone who wants vsync.
+     */
+    {
+        const char *want_accel = SDL_getenv("NJ_SDL2_ACCEL");
+        Uint32 flags = SDL_RENDERER_SOFTWARE;
+
+        if (want_accel && *want_accel && *want_accel != '0') {
+            flags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC;
+        }
+        s->renderer = SDL_CreateRenderer(s->window, -1, flags);
+        if (!s->renderer && flags != SDL_RENDERER_SOFTWARE) {
+            s->renderer = SDL_CreateRenderer(s->window, -1,
+                                             SDL_RENDERER_SOFTWARE);
+        }
+        if (!s->renderer) {
+            return -1;
+        }
     }
     SDL_RenderSetLogicalSize(s->renderer, s->width, s->height);
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
@@ -251,6 +291,58 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
                       s->stride);
     SDL_RenderClear(s->renderer);
     SDL_RenderCopy(s->renderer, s->texture, NULL, NULL);
+
+    /*
+     * Optional proof-of-presentation capture.
+     *
+     * NJ_SDL2_CAPTURE=<prefix> reads the renderer's own backbuffer back after
+     * the copy and writes <prefix>N.ppm.  This is the ONLY way to verify the
+     * window path without a person looking at it: it covers the whole real
+     * chain - texture upload, renderer, backbuffer - rather than the software
+     * framebuffer the runtime already knows about, and it works headless, on
+     * Wayland, over SSH and inside CI, where grabbing the screen does not.
+     *
+     * It is a debugging and test facility, so it costs one getenv at startup
+     * and nothing at all when unset.
+     */
+    if (s->capture && s->capture[0]) {
+        int cw = 0, ch = 0;
+        SDL_GetRendererOutputSize(s->renderer, &cw, &ch);
+        if (cw > 0 && ch > 0) {
+            nj_u1 *shot = (nj_u1 *)SDL_malloc((size_t)cw * (size_t)ch * 3u);
+            if (shot) {
+                if (SDL_RenderReadPixels(s->renderer, NULL, SDL_PIXELFORMAT_RGB24,
+                                         shot, cw * 3) == 0) {
+                    char path[512];
+                    char name[600];
+                    int n = 0;
+                    const char *q = s->capture;
+                    while (*q && n < (int)sizeof(name) - 12) { name[n++] = *q++; }
+                    name[n] = '\0';
+                    SDL_snprintf(path, sizeof(path), "%s%05d.ppm", name,
+                                 s->capture_n++);
+                    {
+                        SDL_RWops *f = SDL_RWFromFile(path, "wb");
+                        if (f) {
+                            char hdr[64];
+                            int hn = SDL_snprintf(hdr, sizeof(hdr),
+                                                  "P6\n%d %d\n255\n", cw, ch);
+                            SDL_RWwrite(f, hdr, 1, (size_t)hn);
+                            SDL_RWwrite(f, shot, 1,
+                                        (size_t)cw * (size_t)ch * 3u);
+                            SDL_RWclose(f);
+                        }
+                    }
+                }
+                SDL_free(shot);
+            }
+        }
+        s->capture_every--;
+        if (s->capture_every <= 0) {
+            s->capture = NULL;   /* one frame is the proof; stop paying for it */
+        }
+    }
+
     SDL_RenderPresent(s->renderer);
 }
 
@@ -310,8 +402,21 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
         return NJ_ERR_NOMEM;
     }
     s->scale = 0;                 /* auto: largest integer fit */
+    s->capture = SDL_getenv("NJ_SDL2_CAPTURE");
+    s->capture_n = 0;
+    s->capture_every = 1;
+    if (s->capture && *s->capture) {
+        const char *every = SDL_getenv("NJ_SDL2_CAPTURE_AT");
+        if (every && *every) {
+            s->capture_every = SDL_atoi(every);
+            if (s->capture_every < 1) {
+                s->capture_every = 1;
+            }
+        }
+    }
 
     memset(out, 0, sizeof(*out));
+    s->port = out;
     out->name = "sdl2";
     out->ud = s;
     out->millis = sdl_millis;
