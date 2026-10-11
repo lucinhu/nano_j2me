@@ -373,6 +373,11 @@ extern const int nj_lib_media_count;
 extern const nj_builtin_class nj_lib_media_classes[];
 extern const int nj_lib_media_class_count;
 
+extern const nj_builtin_class nj_lib_content_classes[];
+extern const int nj_lib_content_class_count;
+extern const nj_native_entry nj_lib_content_table[];
+extern const int nj_lib_content_count;
+
 extern const nj_native_entry nj_lib_midlet_table[];
 extern const int nj_lib_midlet_count;
 extern const nj_builtin_class nj_lib_midlet_classes[];

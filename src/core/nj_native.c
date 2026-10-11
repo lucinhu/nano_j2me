@@ -42,7 +42,8 @@ static const nj_native_table nj_tables[] = {
     { nj_lib_game_table,    &nj_lib_game_count    },
     { nj_lib_rms_table,     &nj_lib_rms_count     },
     { nj_lib_midlet_table,  &nj_lib_midlet_count  },
-    { nj_lib_media_table,   &nj_lib_media_count   }
+    { nj_lib_media_table,   &nj_lib_media_count   },
+    { nj_lib_content_table, &nj_lib_content_count }
 };
 #define NJ_NTABLES ((int)(sizeof(nj_tables) / sizeof(nj_tables[0])))
 

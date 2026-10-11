@@ -36,13 +36,18 @@ import tempfile
 # "CONST type = value" form for constants.
 # ---------------------------------------------------------------------------
 CLASSES = {
+    "javax/microedition/midlet/MIDletStateChangeException": {
+        "super": "java.lang.Exception",
+        "methods": ["public MIDletStateChangeException()",
+                    "public MIDletStateChangeException(String)"],
+    },
     "javax/microedition/midlet/MIDlet": {
         "extends": "Object", "abstract": True,
         "methods": [
             "protected MIDlet()",
-            "protected abstract void startApp()",
+            "protected abstract void startApp() throws javax.microedition.midlet.MIDletStateChangeException",
             "protected abstract void pauseApp()",
-            "protected abstract void destroyApp(boolean)",
+            "protected abstract void destroyApp(boolean) throws javax.microedition.midlet.MIDletStateChangeException",
             "public final void notifyDestroyed()",
             "public final void notifyPaused()",
             "public final void resumeRequest()",
@@ -498,25 +503,33 @@ CLASSES = {
         ],
     },
     "javax/microedition/rms/RecordStore": {
+        # The throws clauses are not decoration: a game that catches
+        # RecordStoreFullException - which is what every game that saves a high
+        # score does - does not compile against a stub that omits it, because
+        # javac rejects a catch for an exception that cannot be thrown.  Found
+        # by building a real GPL game (tools/make_bubblet_jar.sh).
         "methods": [
-            "public static RecordStore openRecordStore(String, boolean)",
-            "public static RecordStore openRecordStore(String, boolean, boolean)",
-            "public static void deleteRecordStore(String)",
-            "public static String[] listRecordStores()",
-            "public String getName()",
-            "public int getNumRecords()", "public int getSize()",
-            "public int getSizeAvailable()", "public int getRecordSize(int)",
-            "public int getNextRecordID()", "public int getLastModified()",
-            "public int getVersion()",
-            "public int addRecord(byte[], int, int)",
-            "public int addRecord(byte[], int, int, int)",
-            "public byte[] getRecord(int)",
-            "public int getRecord(int, byte[], int)",
-            "public void setRecord(int, byte[], int, int)",
-            "public void deleteRecord(int)",
-            "public void closeRecordStore()",
-            "public void addRecordListener(javax.microedition.rms.RecordListener)",
-            "public void removeRecordListener(javax.microedition.rms.RecordListener)",
+            "public static RecordStore openRecordStore(String, boolean) throws javax.microedition.rms.RecordStoreException, javax.microedition.rms.RecordStoreFullException, javax.microedition.rms.RecordStoreNotFoundException",
+            "public static RecordStore openRecordStore(String, boolean, boolean) throws javax.microedition.rms.RecordStoreException, javax.microedition.rms.RecordStoreFullException, javax.microedition.rms.RecordStoreNotFoundException",
+            "public static void deleteRecordStore(String) throws javax.microedition.rms.RecordStoreException, javax.microedition.rms.RecordStoreNotFoundException",
+            "public static String[] listRecordStores() throws javax.microedition.rms.RecordStoreException",
+            "public String getName() throws javax.microedition.rms.RecordStoreNotOpenException",
+            "public int getNumRecords() throws javax.microedition.rms.RecordStoreNotOpenException",
+            "public int getSize() throws javax.microedition.rms.RecordStoreNotOpenException",
+            "public int getSizeAvailable() throws javax.microedition.rms.RecordStoreNotOpenException",
+            "public int getRecordSize(int) throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreException",
+            "public int getNextRecordID() throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreException",
+            "public int getLastModified() throws javax.microedition.rms.RecordStoreNotOpenException",
+            "public int getVersion() throws javax.microedition.rms.RecordStoreNotOpenException",
+            "public int addRecord(byte[], int, int) throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreFullException, javax.microedition.rms.RecordStoreException",
+            "public int addRecord(byte[], int, int, int) throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreFullException, javax.microedition.rms.RecordStoreException",
+            "public byte[] getRecord(int) throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreException",
+            "public int getRecord(int, byte[], int) throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreException",
+            "public void setRecord(int, byte[], int, int) throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreFullException, javax.microedition.rms.RecordStoreException",
+            "public void deleteRecord(int) throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreException",
+            "public void closeRecordStore() throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreException",
+            "public void addRecordListener(javax.microedition.rms.RecordListener) throws javax.microedition.rms.RecordStoreNotOpenException",
+            "public void removeRecordListener(javax.microedition.rms.RecordListener) throws javax.microedition.rms.RecordStoreNotOpenException"
         ],
     },
     "javax/microedition/rms/RecordListener": {
@@ -615,6 +628,26 @@ CLASSES = {
     "javax/microedition/media/MediaException": {
         "super": "java.lang.Exception",
         "methods": ["MediaException()", "MediaException(String)"],
+    },
+    "com/nokia/mid/ui/VirtualKeyboard": {
+        "methods": ["public static void hideOpenKeypadCommand(boolean)",
+                    "public static void showOpenKeypadCommand(boolean)",
+                    "public static void setVisibility(boolean)"],
+    },
+    "javax/microedition/content/ContentException": {
+        "super": "java.lang.Exception",
+        "methods": ["ContentException()", "ContentException(String)"],
+    },
+    "javax/microedition/content/Invocation": {
+        "methods": ["public Invocation(String, String, String)",
+                    "public void setAction(String)", "public String getAction()",
+                    "public void setArgs(String[])", "public String[] getArgs()",
+                    "public void setResponseRequired(boolean)",
+                    "public boolean getResponseRequired()"],
+    },
+    "javax/microedition/content/Registry": {
+        "methods": ["public static javax.microedition.content.Registry getRegistry(String)",
+                    "public void invoke(javax.microedition.content.Invocation)"],
     },
     "javax/microedition/media/PlayerListener": {
         "interface": True,

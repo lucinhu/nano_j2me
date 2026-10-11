@@ -366,3 +366,61 @@ Two things to reconcile before chasing it:
 
 `maze.jar` is the control: same publisher, same toolkit, same era, and its
 thread is scheduled normally.
+
+
+---
+
+# OPEN (next): the MIDP stub generator drops `throws`
+
+Status: diagnosed, not fixed.  Found by building a real third-party game from
+source for the first time (`tools/make_bubblet_jar.sh`).
+
+`tools/midp_stubs.py` takes a method declaration as free text and emits a stub.
+It parses out the modifiers, the return type, the name and the parameter list -
+and then drops everything after the closing parenthesis, which is where a
+`throws` clause lives:
+
+    input   "public static void deleteRecordStore(String) throws javax.microedition.rms.RecordStoreException"
+    output  public static void deleteRecordStore(String p0) { throw new RuntimeException("midp stub"); }
+
+That is not cosmetic.  A stub without the throws clause makes a real game
+uncompilable, because javac rejects a `catch` for an exception the try body
+cannot throw:
+
+    HighScoreManager.java:125: error: exception RecordStoreFullException is never
+    thrown in the corresponding try block
+
+and catching RecordStoreFullException is what every game that saves a high score
+does.  The stub file is the contract a game is compiled against, so a stub that
+is not faithful to the real API rejects working games - which is the opposite of
+what a compatibility test is for.
+
+The fix is in `emit()` in tools/midp_stubs.py, around line 695: keep the text
+between the closing paren and the end of the declaration and emit it after the
+parameter list.
+
+Three other stub-fidelity bugs were found by the same build and ARE fixed:
+MIDlet.startApp/pauseApp/destroyApp were missing their
+`throws MIDletStateChangeException` (real MIDP has it, and a MIDlet that
+declares it cannot then override them); `javax.microedition.midlet.
+MIDletStateChangeException` was not in the stub list at all; and JSR 211's
+members were emitted without `public`, so a game in another package could not
+call them.
+
+# What the Bubblet build is for
+
+`tools/make_bubblet_jar.sh` fetches Summeli/Bubblet-Asha (GPL v2, ~900 lines, a
+Nokia SDK 2.0 project) and builds it with these stubs as the compile classpath.
+
+A prebuilt JAR only proves the runtime agrees with whatever javac emitted years
+ago.  Compiling a game HERE proves something stronger: that the API surface this
+runtime implements is the one javac resolves against, so a missing or
+differently-described method is a compile error rather than a
+NoSuchMethodError found later by a player.
+
+The game also needs `com.nokia.mid.ui.VirtualKeyboard`, which is now stubbed,
+and `javax.microedition.content` (JSR 211), for which `src/midp/nj_lib_content.c`
+is a deliberate, documented stub: `getRegistry()` returns a real Registry so a
+game's field is not null, `invoke()` throws ContentException naming the reason,
+and a game that wraps the share in try/catch - which every real one does - keeps
+playing.
