@@ -662,6 +662,24 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             THROW("java/lang/VerifyError",                            \
                   "code runs past the end of the method");            \
         }                                                              \
+        /*
+         * The operand stack is bounded by THIS FRAME's max_stack, not just by
+         * the end of the thread stack.  A method that pushes past its own
+         * max_stack used to walk into the next frame's slots: bounded only by
+         * stack_end, a frame in the middle of the thread stack could overwrite
+         * its neighbour, and with a corrupted class file that is a pointer read
+         * out of class bytes and dereferenced - the fuzzer produced
+         * obj=0x4e4a484800010000, which is the ASCII "NJHH".
+         *
+         * The check sits next to the pc bound that was already here, so it is
+         * one more compare on a path that already had one.  Without a verifier
+         * this is what stands between a malformed JAR and memory corruption,
+         * and a loud VerifyError is the outcome this project wants.
+         */                                                             \
+        if (sp > fr->stack_limit) {                                    \
+            THROW("java/lang/VerifyError",                            \
+                  "operand stack overflow");                           \
+        }                                                              \
         _Pragma("GCC diagnostic push")                                 \
         _Pragma("GCC diagnostic ignored \"-Wpedantic\"")                \
         op_pc = pc;                                                    \

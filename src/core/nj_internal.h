@@ -165,6 +165,16 @@ typedef struct nj_frame {
     nj_value  *locals;   /* == stack_mem + base */
     nj_value  *stack;    /* operand stack base */
     nj_value  *sp;       /* next free operand slot */
+    /*
+     * The end of THIS frame's operand stack, i.e. stack + max_stack.
+     *
+     * Without it a frame was bounded only by the thread's stack_end, so a
+     * method that pushed more than its own max_stack walked into the NEXT
+     * frame's slots - and a malformed class file can make that happen, turning
+     * class bytes into a pointer that then gets dereferenced.  The interpreter
+     * checks sp against this once per instruction.
+     */
+    nj_value  *stack_limit;
     nj_value  *argbase;  /* where the caller's arguments start */
     nj_u2      total_slots; /* argument slots consumed from the caller */
     nj_ref     monitor;  /* monitor held by a synchronized method, else NULL */

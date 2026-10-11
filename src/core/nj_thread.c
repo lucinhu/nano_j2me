@@ -174,6 +174,12 @@ nj_status nj_frame_push(nj_vm *vm, nj_thread *th, nj_method *m,
     f->locals = argbase;
     f->stack = stk;
     f->sp = stk;
+    /* The operand stack this frame is allowed to use.  A frame in the MIDDLE of
+     * the thread stack used to be bounded only by the global stack_end, so a
+     * method that pushed more than its own max_stack walked into the NEXT
+     * frame's slots - and with a corrupted class file that is a pointer read
+     * from class bytes and dereferenced.  See nj_interp.c for the check. */
+    f->stack_limit = stk + m->max_stack;
     f->argbase = argbase;
     f->total_slots = total_slots;
     f->monitor = NULL;

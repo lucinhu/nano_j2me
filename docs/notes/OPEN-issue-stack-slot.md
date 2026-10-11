@@ -551,3 +551,64 @@ immediately.
   range-checked at run time, and the interpreter carries a per-instruction
   bounds check.  Adopting a verifier is far too large to be a next step, but it
   is the reason the defensive checks are there, and it is honest to say so.
+
+---
+
+# OPEN: half of all malformed class files make the runtime HANG
+
+Status: **one mechanism fixed, several remain.**  Found by
+`tools/fuzz_classfile.py`, which mutates the class the manifest names and
+watches what happens.
+
+## What the fuzzer does, and the first version that lied
+
+It mutates the MIDlet's OWN class - the one the runtime is guaranteed to load -
+and classifies each run as clean, crashed, or hung.  Timing out at six seconds
+counts as hung, because a malformed JAR that spins forever is a denial of
+service and "reports an error rather than crashing" also means "does not hang".
+
+The first version mutated a class the runtime never loaded: it wrote a JAR
+containing only the mutated file, so the MIDlet itself was missing and every run
+failed before reaching the mutation.  It reported **300 clean, 0 crashes** and
+was worth nothing.  The same mistake as the constant check that compared the
+stubs against themselves: a test that never reaches its subject agrees with
+itself.
+
+## The result
+
+    36 mutations:  18 clean,  0 crashed,  18 HUNG
+
+Half.  Every mutation kind is represented in the hangs - byte flips, method
+counts, attribute lengths, field counts, trailing bytes.
+
+## The one mechanism that is fixed
+
+Reproducing a hang as a SEGFAULT under a debug build gave a precise stack:
+
+    #0  nj_field_write_ref (obj=0x4e4a484800010000, ...)  nj_vm.c:785
+    #1  nj_exec ... nj_interp.c:1295      (a putfield)
+
+`0x4e4a484800010000` is ASCII "NJHH" - class-file bytes read as an object
+reference and dereferenced.
+
+The cause: a frame's operand stack was bounded only by the thread's `stack_end`,
+never by its own `max_stack`.  A method that pushed past its own limit walked
+into the NEXT frame's slots, and a corrupted Code attribute makes that happen
+easily.  `nj_frame` now carries `stack_limit = stack + max_stack` and the
+interpreter checks `sp` against it once per instruction, next to the `pc` bound
+that was already there.  The malformed class now raises VerifyError.
+
+Without a verifier this check IS the boundary between a malformed JAR and memory
+corruption.  Measured cost, interleaved A/B: **below the noise floor** - the two
+rounds disagreed about the sign, so it is free.
+
+## What is still open
+
+The other hangs.  They are not the operand stack - that one is fixed and the
+hang count did not move - so they are somewhere else in class loading or in the
+interpreter's handling of a Code attribute whose length disagrees with the
+bytecode it contains.
+
+Next step: take one hanging case, reproduce it under a debug build, and see
+whether it faults or genuinely loops.  A hang that is a loop and a hang that is
+a fault are different bugs and the backtrace tells them apart immediately.
