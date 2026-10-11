@@ -822,14 +822,72 @@ static void test_graphics(nj_vm *vm)
             OK(vm->exception == NULL);
             (void)before;
         }
-        /* drawImage is the same operation at the default anchor. */
-        a[0] = sref(img);
-        a[1] = iref(0);
-        a[2] = iref(0);
-        a[3] = iref(20);
-        a[4] = iref(0);
-        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawImage",
-                   "(L" NJ_C_IMAGE ";III)V", a, NULL) == NJ_OK);
+    }
+
+    /* ---- drawImage: a WHOLE-image blit with an anchor --------------------
+     * drawImage(Image, int x, int y, int anchor) has a different argument
+     * shape from drawRegion(); passing their argument lists to one shared
+     * helper reads past the end of the slots and rejects valid calls. */
+    {
+        nj_ref src = image_new(vm, 4, 3);
+        nj_ref dst = image_new(vm, 12, 8);
+        nj_ref sg = src ? call_ref(vm, src, NJ_C_IMAGE, "getGraphics",
+                                   "()L" NJ_C_GRAPHICS ";", NULL, &ok) : NULL;
+        nj_ref dg = dst ? call_ref(vm, dst, NJ_C_IMAGE, "getGraphics",
+                                   "()L" NJ_C_GRAPHICS ";", NULL, &ok) : NULL;
+        OK(src && dst && sg && dg);
+        if (src && dst && sg && dg) {
+            nj_value ia[4];
+            ia[0] = iref((nj_s4)0xFFCC2200u);
+            OK(nj_call(vm, sg, NJ_C_GRAPHICS, "setColor", "(I)V", ia,
+                       NULL) == NJ_OK);
+            ia[0] = iref(0);
+            ia[1] = iref(0);
+            ia[2] = iref(4);
+            ia[3] = iref(3);
+            OK(nj_call(vm, sg, NJ_C_GRAPHICS, "fillRect", "(IIII)V", ia,
+                       NULL) == NJ_OK);
+            /* top-left anchored at (5,4) */
+            ia[0] = sref(src);
+            ia[1] = iref(5);
+            ia[2] = iref(4);
+            ia[3] = iref(NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
+            OK(nj_call(vm, dg, NJ_C_GRAPHICS, "drawImage",
+                       "(L" NJ_C_IMAGE ";III)V", ia, NULL) == NJ_OK);
+            OK_MSG(img_pixel(vm, dst, 5, 4) == 0xFFCC2200u,
+                   "drawImage LEFT|TOP pixel = 0x%08X", img_pixel(vm, dst, 5, 4));
+            OK_MSG(img_pixel(vm, dst, 8, 6) == 0xFFCC2200u,
+                   "drawImage covered its whole 4x3 box");
+            OK_MSG(img_pixel(vm, dst, 9, 6) == 0u, "drawImage overran its box");
+            OK_MSG(img_pixel(vm, dst, 4, 4) == 0u, "drawImage started too early");
+            /* horizontally centred at (9,0): the 4-wide image starts at x=7 */
+            ia[0] = sref(src);
+            ia[1] = iref(9);
+            ia[2] = iref(0);
+            ia[3] = iref(NJ_ANCHOR_HCENTER | NJ_ANCHOR_TOP);
+            OK(nj_call(vm, dg, NJ_C_GRAPHICS, "drawImage",
+                       "(L" NJ_C_IMAGE ";III)V", ia, NULL) == NJ_OK);
+            OK_MSG(img_pixel(vm, dst, 7, 0) == 0xFFCC2200u,
+                   "HCENTER anchor put the image at the wrong x");
+        }
+    }
+
+    {
+        /* An anchor with no horizontal component is invalid in MIDP 2.0. */
+        nj_ref dst2 = image_new(vm, 4, 4);
+        nj_ref dg2 = dst2 ? call_ref(vm, dst2, NJ_C_IMAGE, "getGraphics",
+                                     "()L" NJ_C_GRAPHICS ";", NULL, &ok) : NULL;
+        if (dg2) {
+            nj_value ia[4];
+            ia[0] = sref(img);
+            ia[1] = iref(0);
+            ia[2] = iref(0);
+            ia[3] = iref(NJ_ANCHOR_TOP);   /* no LEFT/HCENTER/RIGHT */
+            (void)nj_call(vm, dg2, NJ_C_GRAPHICS, "drawImage",
+                          "(L" NJ_C_IMAGE ";III)V", ia, NULL);
+            OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
+                   "drawImage with an invalid anchor did not throw");
+        }
     }
 
     /* ---- copyArea ---- */

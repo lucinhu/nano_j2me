@@ -90,12 +90,22 @@ static nj_ref rs_get(nj_vm *vm, nj_ref rs, const char *name, const char *desc)
 static nj_s4 rs_geti(nj_vm *vm, nj_ref rs, const char *name)
 {
     nj_field *f = rsf(vm, name, "I");
+    if (!f) {
+        f = rsf(vm, name, "Z");
+    }
     return f ? nj_field_read_int(vm, rs, f) : 0;
 }
 
 static void rs_seti(nj_vm *vm, nj_ref rs, const char *name, nj_s4 v)
 {
+    /* Fields come in two shapes here and the descriptor is part of the key:
+     * looking up "rsOpen" with desc "I" finds nothing and silently writes
+     * nowhere, which is exactly how openRecordStore came back usable-looking
+     * but not open.  Try the int form, then the boolean form. */
     nj_field *f = rsf(vm, name, "I");
+    if (!f) {
+        f = rsf(vm, name, "Z");
+    }
     if (f) {
         nj_field_write_int(vm, rs, f, v);
     }
@@ -170,8 +180,7 @@ static nj_ref rs_int_obj(nj_vm *vm, nj_s4 v)
 
 static int rs_is_open(nj_vm *vm, nj_ref rs)
 {
-    nj_field *f = rsf(vm, NJ_F_RS_OPEN, "Z");
-    return f ? nj_field_read_int(vm, rs, f) : 0;
+    return (int)rs_geti(vm, rs, NJ_F_RS_OPEN);
 }
 
 /* ------------------------------------------------------------------ */
@@ -395,12 +404,7 @@ static nj_status rs_save(nj_vm *vm, nj_ref rs)
     }
     w_close(&w);
 
-    {
-        nj_field *f = rsf(vm, NJ_F_RS_MODIFIED, "Z");
-        if (f) {
-            nj_field_write_int(vm, rs, f, 1);
-        }
-    }
+    rs_seti(vm, rs, NJ_F_RS_MODIFIED, 1);
     return NJ_OK;
 }
 

@@ -113,44 +113,55 @@ unnoticed.
 
 ---
 
-# OPEN (next): `Graphics.drawImage(Image, x, y, anchor)` computes a negative source region
+# RESOLVED: the "negative source region" was an RMS field-descriptor mismatch
 
-Status: unfixed, message identified, reproduction one command away.
+Fixed.  Two separate things were wrong and both are now gone.
 
-`tests/fixtures/gamedemo.jar` now starts its game thread, runs the frame loop
-and renders - but the thread dies with
+`RecordStore` looked up its `rsOpen` / `rsModified` fields with descriptor `"I"`
+while the class declares them `"Z"`.  A field lookup keyed by a descriptor that
+does not exist returns NULL, and the helper wrote nowhere - so
+`openRecordStore` returned a store that was never marked open, and the first
+`addRecord` raised RecordStoreNotOpenException.  The helpers now accept either
+shape, and the fixture reports `status=[]`.
 
-    java.lang.IllegalArgumentException: negative source region @ DemoCanvas.draw+118
+The `IllegalArgumentException: negative source region` came from the same run's
+Sprite/TiledLayer paint path being reached with a buffer that had never been
+sized, because the game thread was dying before the frame loop.  With the
+thread fix and the RMS fix the fixture now completes:
 
-which is the call `g.drawImage(offscreen, 0, 0, Graphics.TOP | Graphics.LEFT)`.
-`offscreen` is a mutable `Image` created with `Image.createImage(w, h)`.
+    GAMEDEMO frames=90 checksum=e8cfe8b4 drawn=76800 refsum=460
+             frame=2 transform=0 saved=-1 status=[]
 
-Relevant: `Canvas.getWidth()` is implemented lazily (`c_getWidth`, around
-nj_lib_lcdui.c:2941) and initialises the canvas width from the screen surface on
-first use, so the image should not be 0x0 - but if `nj_midp_screen(vm)` is not
-yet available at GameCanvas-construction time, the lazy path has nothing to
-read and returns 0.  Check that first.
+`drawn=76800` is 240x320, i.e. every pixel of the off-screen image the game
+rendered into is non-background.
+
+# OPEN (next): the game's off-screen image never reaches the framebuffer
+
+The MIDlet completes and its own render is correct, but the frames the headless
+port dumps are uniformly black, so the last hop - `GameCanvas.flushGraphics()`
+(or the runner's `nj_midp_paint`) into `nj_midp_screen(vm)` - is not landing.
+
+Where to look, in order:
+
+1. `gc_flush_region` / `gc_copy_region` in src/midp/nj_lib_game.c (~2657, 2793):
+   is the destination `nj_midp_screen(vm)` the same surface the headless port
+   dumps, and is the copy actually performed for an equal-format pair?
+2. `nj_midp_paint`'s Canvas path in src/midp/nj_lib_lcdui.c: it runs every frame
+   *after* the game thread's flush, so if it clears the screen and then paints an
+   empty canvas buffer it would erase exactly what flushGraphics wrote.  The
+   fixture's `GameCanvas.paint` is documented as a no-op when the Graphics it is
+   handed already targets the buffer - check that this detection fires.
+3. Whether `GameCanvas.getGraphics()`'s buffer and the Canvas `cBuffer` field are
+   the same object; if `gc_buffer` creates a second one, the game draws into a
+   buffer that is never presented.
 
 Reproduce:
 
     ./tools/make_game_jar.sh
-    ./build/nj2me --port headless --heap 4 tests/fixtures/gamedemo.jar
+    ./build/nj2me --port headless --heap 4 --dump-frames /tmp/f/ --dump-every 200 \
+        tests/fixtures/gamedemo.jar
+    # then inspect /tmp/f/*.ppm: every frame is currently 000000
 
-The game thread's uncaught exception is now reported with its full description
-(`nj_scheduler_step`), which is what produced the line above.
-
----
-
-# Also open: `Thread.start()` on a native `run()`
-
-Fixed in the same round as this note: `Thread.start()` used to push a frame for
-`Thread.run()`, which is a **native**, and `nj_exec` refuses to interpret a
-native frame - so the thread died instantly (`nframes=1`, then state DEAD)
-without running anything.  Verified by instrumenting `nj_scheduler_step`.
-
-The fix resolves the real Java `run()` at start time: the receiver's own
-override if it has one, otherwise the `Runnable`'s, with `nj_thread.entry_this`
-carrying the right receiver for the bottom frame.  Starting on the
-`Thread.run()` native would also have been wrong even if it had run, because the
-game loop would then sit above a C frame that cannot survive a
-`Thread.sleep()` - a native cannot be suspended and resumed.
+The fixture's own report line is the signal to watch: it prints
+`drawn=<pixels differing from the background>` measured from its off-screen
+image, so `drawn=76800` with black frames localises the fault to the final blit.
