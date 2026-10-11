@@ -35,11 +35,21 @@ rather than corrupting C state.
 MIDP 2* (Apress, 2004), built by javac 1.4 targeting CLDC 1.0 - class file
 version 46, with the legacy jsr/ret finally blocks a 2004 toolchain emitted.
 
-| Title | Class | Result |
-|---|---|---|
-| Tumbleweed (`jump.jar`) | `net.frog_parrot.jump.Jump` | **plays** at 176x208 or larger: scrolling ground, an animated sprite, a live score and a countdown - [screenshot](images/tumbleweed.png) |
-| Maze (`maze.jar`) | `net.frog_parrot.maze.Maze` | **runs**: generates and draws a maze with the player marker - [screenshot](images/maze.png) |
-| Hello (`hello.jar`) | `net.frog_parrot.hello.Hello` | **runs**: draws "Hello World!" (a legitimately static screen) |
+Every title is run by `tools/run_game_corpus.sh`, which tries a list of screen
+sizes per title and records which one worked - the gates differ, and a title
+that rejects one size is not a broken title. Tumbleweed is the strict one:
+
+    if (DISP_WIDTH < 150 || DISP_HEIGHT < 170) throw new Exception("Screen too small");
+    if (DISP_WIDTH > 250 || DISP_HEIGHT > 250) throw new Exception("Screen too large");
+
+so it wants 176x208. It renders its own error Alert, correctly, at anything
+outside that - which is how the gate was found.
+
+| Title | Class | Size | Result |
+|---|---|---|---|
+| Tumbleweed (`jump.jar`) | `net.frog_parrot.jump.Jump` | 176x208 | **plays**: scrolling ground, an animated sprite, a live score and a countdown - [screenshot](images/tumbleweed.png) |
+| Maze (`maze.jar`) | `net.frog_parrot.maze.Maze` | 176x208 | **runs**: generates and draws a maze with the player marker - [screenshot](images/maze.png) |
+| Hello (`hello.jar`) | `net.frog_parrot.hello.Hello` | 176x208 | **runs**: draws "Hello World!" (a legitimately static screen) |
 
 `tools/run_game_corpus.sh` is the gate over all of them: it fails on "not a
 MIDlet suite", "could not start", an uncaught exception, "nothing ever

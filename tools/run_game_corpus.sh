@@ -27,7 +27,12 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="${NJ_BIN:-$ROOT/build/nj2me}"
 DIR="${NJ_GAMES:-$ROOT/tests/games}"
-SIZE="${NJ_SIZE:-176x208}"
+# Titles gate themselves on the screen size and the gates differ: Tumbleweed
+# refuses anything larger than 250 in either axis ("Screen too large") and
+# anything smaller than 150x170 ("Screen too small").  A single hard-coded size
+# therefore reports a perfectly good title as broken, so the corpus tries a
+# list and records which one worked.
+SIZES="${NJ_SIZES:-176x208 240x320 128x160 320x240}"
 SECS="${NJ_TIMEOUT:-20}"
 MIN_COLOURS="${NJ_MIN_COLOURS:-2}"
 FPS="${NJ_FPS:-0}"
@@ -65,17 +70,31 @@ fi
 
 pass=0
 fail=0
-printf '%-14s %-8s %-8s %-9s %s\n' TITLE FRAMES COLOURS CHANGED RESULT
-printf '%-14s %-8s %-8s %-9s %s\n' ----- ------ ------- ------- ------
+printf '%-14s %-9s %-8s %-8s %-9s %s\n' TITLE SIZE FRAMES COLOURS CHANGED RESULT
+printf '%-14s %-9s %-8s %-8s %-9s %s\n' ----- ---- ------ ------- ------- ------
 
 for jar in "${JARS[@]}"; do
     title="$(basename "$jar" .jar)"
     out="$(mktemp -d)"
     log="$out/log.txt"
 
-    timeout "$SECS" "$BIN" --port headless --heap 8 --size "$SIZE" \
-            --fps "$FPS" --dump-frames "$out/" --dump-every 40 \
-            "$jar" >"$log" 2>&1
+    used=""
+    for size in $SIZES; do
+        : > "$log"
+        timeout "$SECS" "$BIN" --port headless --heap 8 --size "$size" \
+                --fps "$FPS" --dump-frames "$out/" --dump-every 40 \
+                "$jar" >"$log" 2>&1
+        if grep -q "Screen too" "$log"; then
+            rm -f "$out"/*.ppm
+            continue        # this title rejects this size; try the next
+        fi
+        used="$size"
+        break
+    done
+    if [ -z "$used" ]; then
+        if [ -n "$SIZE" ]; then :; fi
+        used="(no size accepted)"
+    fi
 
     verdict="$(python3 - "$out" "$MIN_COLOURS" "$log" "$STRICT_MOTION" <<'PY'
 import glob, sys, hashlib
@@ -128,8 +147,8 @@ PY
     rm -rf "$out"
 
     IFS='|' read -r status nframes ncols nchanged note <<<"$verdict"
-    printf '%-14s %-8s %-8s %-9s %s\n' "$title" "$nframes" "$ncols" "$nchanged" \
-           "$status${note:+ ($note)}"
+    printf '%-14s %-9s %-8s %-8s %-9s %s\n' "$title" "$used" "$nframes" "$ncols" \
+           "$nchanged" "$status${note:+ ($note)}"
     if [ "$status" = "PASS" ] || [ "$status" = "SKIP" ]; then
         pass=$((pass + 1))
     else
