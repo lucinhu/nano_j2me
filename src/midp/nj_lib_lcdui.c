@@ -4503,7 +4503,21 @@ NJFN(disp_getCurrent)
 
 NJFN(disp_isColor)
 {
-    ret->i = (vm->screen.format == NJ_PIXFMT_RGB565) ? 0 : 1;
+    /*
+     * Every pixel format this runtime supports is a colour format.  RGB565 has
+     * 65536 of them; calling it "not colour" is exactly backwards, and it is
+     * the kind of backwards that only shows up when a game gates on it:
+     *
+     *     if (!myDisplay.isColor() || myDisplay.numColors() < 256)
+     *         throw new Exception("game requires full-color screen");
+     *
+     * which is how three of the corpus titles came to refuse to start on a
+     * 16-bit display that is perfectly capable of running them.
+     *
+     * There is no monochrome format to test for.  If one is ever added, this is
+     * where the test goes.
+     */
+    ret->i = 1;
     return NJ_OK;
 }
 

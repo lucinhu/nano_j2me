@@ -50,12 +50,15 @@ outside that - which is how the gate was found.
 | Tumbleweed (`jump.jar`) | `net.frog_parrot.jump.Jump` | 176x208 | **plays**: scrolling ground, an animated sprite, a live score and a countdown - [screenshot](images/tumbleweed.png) |
 | Maze (`maze.jar`) | `net.frog_parrot.maze.Maze` | 176x208 | **runs**: generates and draws a maze with the player marker - [screenshot](images/maze.png) |
 | Hello (`hello.jar`) | `net.frog_parrot.hello.Hello` | 176x208 | **runs**: draws "Hello World!" (a legitimately static screen) |
+| Dungeon (`book{5,6,7}.jar`) | `net.frog_parrot.dungeon.Dungeon` | 176x208 | **plays**: a platformer with tiled walls, keys, a door and a timer - [screenshot](images/dungeon.png) |
+| Platformer (`book4.jar`) | `net.frog_parrot.jump.Jump` | 176x208 | **plays**: the same Tumbleweed game at a later stage of the book |
 
 `tools/run_game_corpus.sh` is the gate over all of them: it fails on "not a
 MIDlet suite", "could not start", an uncaught exception, "nothing ever
 presented" or a single flat colour, and reports - without failing - whether the
-picture changes, because a title is allowed to be static. Current result: 3
-passed, 0 failed.
+picture changes, because a title is allowed to be static. Current result: 7
+passed, 0 failed.  The later chapters all build to `book.jar`, so they are
+stored by chapter.
 
 All three parse and link with zero failures. Tumbleweed is the demanding one: it
 uses `GameCanvas`, `LayerManager`, `Sprite` with frame animation, `TiledLayer`,

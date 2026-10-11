@@ -25,8 +25,17 @@ mkdir -p "$DEST"
 # ch02 maze  - Canvas, menus, persistence
 # ch03 jump  - the full MIDP 2 game API: Sprite, TiledLayer, LayerManager,
 #              GameCanvas, a background thread and key polling
-for g in ch01/bin/hello ch02/bin/maze ch03/bin/jump; do
+# ch04-07 book - four more from the later chapters; they all build to the name
+#              "book.jar" so they are stored as book4.jar .. book7.jar
+# The later chapters each build to "book.jar", so they are stored by chapter -
+# four more independent MIDlets for very little extra work, from the same 2004
+# toolchain and the same book.
+for g in ch01/bin/hello ch02/bin/maze ch03/bin/jump \
+         ch04/bin/book ch05/bin/book ch06/bin/book ch07/bin/book; do
     name="$(basename "$g")"
+    case "$g" in
+        ch0[4-7]/*) name="book$(printf '%s' "$g" | sed 's|^ch0*\([0-9]*\)/.*|\1|')" ;;
+    esac
     out="$DEST/$name.jar"
     if [ -s "$out" ]; then
         echo "have $out"

@@ -447,6 +447,7 @@ nj_ref    nj_new_instance(nj_vm *vm, nj_class *cls);
 nj_ref    nj_new_array(nj_vm *vm, nj_class *array_cls, nj_u4 length, int elem_kind);
 nj_status nj_gc_run(nj_vm *vm);
 void      nj_gc_mark_ref(nj_vm *vm, nj_ref r);
+int       nj_heap_owns(nj_vm *vm, const void *p);   /* range check for untyped slots */
 void      nj_gc_mark_value(nj_vm *vm, nj_value v);
 nj_size   nj_heap_free_bytes(nj_vm *vm);
 nj_size   nj_heap_used_bytes(nj_vm *vm);

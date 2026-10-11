@@ -494,7 +494,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             nj_s4 v_ = (--sp)->i;
             nj_s4 i_ = (--sp)->i;
             nj_ref a_ = (--sp)->r;
-            if (!a_) THROW("java/lang/NullPointerException", NULL);
+            if (!a_ || !nj_heap_owns(vm, a_)) THROW("java/lang/NullPointerException", NULL);
             if (a_->kind != NJ_OBJ_ARRAY || (nj_u4)i_ >= a_->length)
                 THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
             switch (op) {
@@ -510,7 +510,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             sp -= 2; v_ = sp[0].j;
             { nj_s4 i_ = (--sp)->i;
               nj_ref a_ = (--sp)->r;
-              if (!a_) THROW("java/lang/NullPointerException", NULL);
+              if (!a_ || !nj_heap_owns(vm, a_)) THROW("java/lang/NullPointerException", NULL);
               if (a_->kind != NJ_OBJ_ARRAY || (nj_u4)i_ >= a_->length)
                   THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
               ((nj_s8 *)a_->u.bytes)[i_] = v_; }
@@ -520,7 +520,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             sp -= 2; v_ = sp[0].j;
             { nj_s4 i_ = (--sp)->i;
               nj_ref a_ = (--sp)->r;
-              if (!a_) THROW("java/lang/NullPointerException", NULL);
+              if (!a_ || !nj_heap_owns(vm, a_)) THROW("java/lang/NullPointerException", NULL);
               if (a_->kind != NJ_OBJ_ARRAY || (nj_u4)i_ >= a_->length)
                   THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
               memcpy(&((double *)a_->u.bytes)[i_], &v_, 8u); }
@@ -529,10 +529,25 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             nj_ref v_ = (--sp)->r;
             nj_s4 i_ = (--sp)->i;
             nj_ref a_ = (--sp)->r;
-            if (!a_) THROW("java/lang/NullPointerException", NULL);
+            if (!a_ || !nj_heap_owns(vm, a_)) THROW("java/lang/NullPointerException", NULL);
             if (a_->kind != NJ_OBJ_ARRAY || a_->aflags != NJ_ARRAY_T_REF ||
                 (nj_u4)i_ >= a_->length)
                 THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
+            /*
+             * The type check has to be able to TRUST v_, and it cannot: the
+             * operand stack is untyped and there is no verifier, so a slot that
+             * was proved to be a reference at class-load time can hold any int
+             * by the time aastore reads it.  Dereferencing it unguarded is a
+             * wild read - which is exactly what one of the corpus titles did,
+             * with an address of 0x7bdb00000018.
+             *
+             * A value that is not in the arena cannot be stored into a
+             * reference array, so ArrayStoreException is both the safe answer
+             * and the correct one.
+             */
+            if (v_ && !nj_heap_owns(vm, v_)) {
+                THROW("java/lang/ArrayStoreException", NULL);
+            }
             if (v_ && v_->cls && a_->cls && a_->cls->component_cls &&
                 !nj_class_is_assignable(v_->cls, a_->cls->component_cls)) {
                 THROW("java/lang/ArrayStoreException", NULL);
@@ -995,6 +1010,19 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                     nj_method *dm = nj_method_lookup(recv->cls, target->name,
                                                      target->desc);
                     if (!dm) {
+                    /*
+                     * SAVE FIRST.  nj_class_init() can run a <clinit>, which
+                     * runs Java code through the C bridge - and that bridge
+                     * places the new frame at th->frames[nframes-1].sp, the
+                     * SAVED stack pointer.  Without this the saved value is
+                     * stale (the last invoke, or the frame's entry), so the
+                     * <clinit> frame lands inside the live operand stack and
+                     * overwrites it.  The symptom is not a crash near the
+                     * <clinit>: it is a wrong value two instructions later in
+                     * the method that triggered it, which is why this took a
+                     * while to find.
+                     */
+                    SAVE();
                         (void)nj_class_init(vm, recv->cls);
                         dm = nj_method_lookup(recv->cls, target->name,
                                               target->desc);
@@ -1075,7 +1103,11 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                     goto do_unwind;
                 }
             } else {
-                /* invokespecial / invokestatic: initialise the owner first */
+                /* invokespecial / invokestatic: initialise the owner first.
+                 * SAVE() first for the same reason as the `new` case below:
+                 * the init can run Java code, and the bridge needs a current
+                 * saved sp to place its frame above the live stack. */
+                SAVE();
                 if (nj_class_init(vm, target->owner) != NJ_OK) {
                     if (!vm->exception) {
                         (void)nj_throw(vm, "java/lang/NoClassDefFoundError",
@@ -1117,6 +1149,12 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             if (!cn) THROW("java/lang/NoClassDefFoundError", NULL);
             c = nj_class_lookup(vm, cn);
             if (!c) THROW("java/lang/NoClassDefFoundError", cn);
+            /* SAVE FIRST - see the note in the dispatch path above.  This is
+             * the site that was found by a corpus title: `new DoorKey` ran
+             * DoorKey.<clinit>, whose frame landed on top of the live operand
+             * stack of the calling method and destroyed the array reference
+             * and loop counter sitting there. */
+            SAVE();
             if (nj_class_init(vm, c) != NJ_OK) goto do_unwind;
             o = nj_new_instance(vm, c);
             if (!o) THROW("java/lang/OutOfMemoryError", NULL);

@@ -517,6 +517,20 @@ static void nj_gc_mark_object(nj_vm *vm, nj_object *o)
     nj_gc_mark_children(vm, o);
 }
 
+/*
+ * Is this pointer inside the Java arena?
+ *
+ * Exposed because the interpreter needs it, not just the collector.  The
+ * operand stack is untyped, so a slot that the verifier would have proved to be
+ * a reference can hold an arbitrary int at the moment an instruction reads it -
+ * and an interpreter without a verifier has to check before dereferencing
+ * rather than trust.  The collector learned this the hard way; so did aastore.
+ */
+int nj_heap_owns(nj_vm *vm, const void *p)
+{
+    return nj_is_heap_ptr(vm, p);
+}
+
 void nj_gc_mark_ref(nj_vm *vm, nj_ref r)
 {
     nj_gc_mark_object(vm, r);
