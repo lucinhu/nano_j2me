@@ -80,6 +80,7 @@ usually skip, and they are exactly the parts old games use.
 | Ports: SDL2 | **done** |
 | Ports: Android (NDK + JNI), ESP32-S3 (ESP-IDF) | **done**, compile-verified |
 | Test suite | **11/11 passing** (`ctest`) |
+| Sanitized suite | **11/11 passing** under ASan + UBSan + LSan (`tools/run_sanitized_tests.sh`) |
 
 Verified end to end: **Tumbleweed** (`net.frog_parrot.jump.Jump`, Apress 2004)
 plays on the headless port at 176x208 — scrolling ground, an animated sprite, a
