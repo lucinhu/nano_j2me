@@ -311,8 +311,18 @@ static void bare_present(void *ud, int x, int y, int w, int h)
  * output appears on the emulated serial line - which is what turns "it links
  * for the target" into "it runs on the target".
  */
+/*
+ * On by default ONLY where the address means something.  0x60000000 is UART0 on
+ * an ESP32, and on a host it is unmapped - so a build that runs this port's
+ * code on a desktop (tools/make_bare_firmware.sh does, to exercise the same
+ * main.c) must set NJ_BARE_UART=0 or the first log line segfaults.
+ */
 #ifndef NJ_BARE_UART
-#  define NJ_BARE_UART 1
+#  if defined(__XTENSA__) || defined(__riscv)
+#    define NJ_BARE_UART 1
+#  else
+#    define NJ_BARE_UART 0
+#  endif
 #endif
 
 #if NJ_BARE_UART
@@ -323,6 +333,12 @@ static void bare_putc(char c)
     BARE_UART0_FIFO = (unsigned int)(unsigned char)c;
     while (spin++ < 1000) { }        /* let the FIFO drain a little */
 }
+#elif defined(NJ_USE_LIBC) && NJ_USE_LIBC
+/* No UART, but there is a C library: this is the desktop build that runs the
+ * same main.c so the firmware's logic is exercised.  Without this the port goes
+ * silent exactly when it has something to say about why it failed. */
+#include <stdio.h>
+static void bare_putc(char c) { fputc(c, stderr); }
 #else
 static void bare_putc(char c) { (void)c; }
 #endif

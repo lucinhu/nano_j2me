@@ -135,7 +135,13 @@ static nj_status vm_setup(nj_vm *vm, const nj_port *port, nj_size heap_bytes)
 
     /* Materialise the C-implemented class library, then let it install its
      * static state (System.out, Math constants, ...). */
-    nj_builtins_register_all(vm);
+    if (nj_builtins_register_all(vm) != NJ_OK) {
+        /* A partially registered class table is not a VM.  Failing here means
+         * nj_vm_create() returns NULL with a reason, instead of the crash that
+         * a missing builtin causes the first time something looks it up. */
+        NJ_SETUP_FAIL("builtin class registration");
+        return NJ_ERR_NOMEM;
+    }
     if (nj_lib_late_init(vm) != NJ_OK) {
         NJ_SETUP_FAIL("class library late init");
         return NJ_ERR;

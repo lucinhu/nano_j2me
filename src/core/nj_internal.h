@@ -578,7 +578,13 @@ nj_native_fn nj_native_find(nj_vm *vm, const char *cls, const char *name,
 void nj_natives_collect(nj_vm *vm);
 
 /* Implemented in nj_builtins.c: materialises every C-implemented class. */
-void nj_builtins_register_all(nj_vm *vm);
+/*
+ * Register every builtin class.  Returns NJ_OK, or NJ_ERR_NOMEM if the host
+ * allocator ran out - which the caller MUST treat as fatal for the VM.  A
+ * half-registered class table does not fail where it broke: it fails later, in
+ * whatever first looks up a builtin that is missing, usually as a wild pointer.
+ */
+nj_status nj_builtins_register_all(nj_vm *vm);
 /* Create one builtin class from its descriptor (nj_class.c). */
 nj_class *nj_class_create_builtin(nj_vm *vm, const nj_builtin_class *bc);
 

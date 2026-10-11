@@ -30,13 +30,13 @@ static const nj_builtin_source nj_sources[] = {
 };
 #define NJ_NSOURCES ((int)(sizeof(nj_sources) / sizeof(nj_sources[0])))
 
-void nj_builtins_register_all(nj_vm *vm)
+nj_status nj_builtins_register_all(nj_vm *vm)
 {
     int s;
     int pass;
 
     if (!vm) {
-        return;
+        return NJ_ERR;
     }
 
     /* Pass 1: create every class record so that cross-references resolve. */
@@ -55,9 +55,14 @@ void nj_builtins_register_all(nj_vm *vm)
                 nj_class **nb = (nj_class **)nj_host_alloc(
                     vm, (nj_size)cap * sizeof(nj_class *));
                 if (!nb) {
+                    /* Fatal, and said so here rather than left for whatever
+                     * looks up a builtin class next.  A partially registered
+                     * table does not fail where it broke. */
                     nj_logf(vm, 0, "out of host memory registering builtin "
-                                   "classes (%d so far)", (int)vm->nbuiltins);
-                    return;
+                                   "classes (%d so far) - the pool is too "
+                                   "small for the VM itself, not just the Java "
+                                   "heap", (int)vm->nbuiltins);
+                    return NJ_ERR_NOMEM;
                 }
                 if (vm->builtins) {
                     nj_u4 k;
@@ -97,5 +102,7 @@ void nj_builtins_register_all(nj_vm *vm)
     /* Object must always exist: the interpreter and GC assume it. */
     if (!vm->cls_object) {
         nj_logf(vm, 0, "builtin class library is missing java/lang/Object");
+        return NJ_ERR;
     }
+    return NJ_OK;
 }

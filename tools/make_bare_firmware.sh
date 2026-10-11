@@ -100,9 +100,11 @@ cat > "$T/main.c" <<'C'
 #include "nj2me/nj.h"
 #include "nj2me/nj_port.h"
 #include "nj2me/nj_app.h"
+#include "nj2me/nj_vm.h"
 typedef struct bare_state bare_state;
 nj_status nj_port_bare(nj_port *out, bare_state *st, void *heap, nj_size heap_bytes);
-int nj_port_bare_frames(const void *ud);
+int  nj_port_bare_frames(const void *ud);
+nj_size nj_vm_sizeof(void);
 void nj_port_bare_report(int rc, int frames);
 extern const unsigned char nj_bare_jar[];
 extern const unsigned int  nj_bare_jar_len;
@@ -124,12 +126,26 @@ int main(void)
     if (nj_port_bare(&port, (bare_state *)g_port_state, g_heap, sizeof(g_heap)) != NJ_OK) {
         return 1;
     }
-    vm = nj_vm_create(&port, sizeof(g_heap));
+    /* The POOL covers three things: the VM instance, the Java arena, and the
+     * statics plus native registry plus builtin classes, which want about
+     * 300 KiB between them before a single Java object exists - the statics,
+     * the native registry and the builtin classes take about 250 KiB, and the
+     * main thread's operand-stack budget is another 64 KiB at the desktop
+     * default of NJ_MAX_STACK_SLOTS.  Passing sizeof(g_heap) as the arena
+     * leaves nothing for any of it, which used to show up as a crash and now
+     * shows up as nj_vm_create() returning NULL with the reason. */
+    vm = nj_vm_create(&port, sizeof(g_heap) - nj_vm_sizeof() - (384u * 1024u));
     if (!vm) { return 1; }
 
     app = nj_app_open(vm, nj_bare_jar, nj_bare_jar_len);
-    if (app && nj_vm_new_midlet(vm, 0, &midlet) == NJ_OK &&
-        nj_vm_start_app(vm, midlet) == NJ_OK) {
+
+    /* Two things this used to get wrong, and the second is the one that bites:
+     * nj_vm_new_midlet() takes a CLASS NAME - pass NULL and it returns NULL -
+     * and it returns a REF, so comparing that against NJ_OK (which is 0) reads
+     * a NULL as success.  Test the ref for NULL, and take the name from the
+     * manifest. */
+    midlet = app ? nj_vm_new_midlet(vm, nj_app_midlet_class(app, 0), NULL) : 0;
+    if (midlet && nj_vm_start_app(vm, midlet) == NJ_OK) {
         /* A real firmware would run this from its main loop forever; the image
          * stops after a fixed number of frames so it can be sized and, on
          * hardware, so a test can assert it finished. */
@@ -138,7 +154,7 @@ int main(void)
         }
         rc = (int)nj_vm_exit_code(vm);
     }
-    nj_app_close(vm, app);
+    if (app) { nj_app_close(vm, app); }
     (void)nj_vm_destroy(vm);
     nj_port_bare_report(rc, nj_port_bare_frames(port.ud));
     return rc;
@@ -178,7 +194,7 @@ fi
 if [ "${NJ_BARE_NO_HOST:-0}" != "1" ]; then
     host="${OUT%.elf}.host"
     if gcc -std=c99 -O1 -I"$ROOT/include" -I"$ROOT/src/core" -I"$ROOT/src/midp" \
-           -I"$ROOT/src/gfx" -I"$ROOT/src/zip" -DNJ_USE_LIBC=1 \
+           -I"$ROOT/src/gfx" -I"$ROOT/src/zip" -DNJ_USE_LIBC=1 -DNJ_BARE_UART=0 \
            -o "$host" "$T/main.c" "$T/jar.c" "$ROOT/tests/embedded/nj_port_bare.c" \
            "$ROOT"/src/core/*.c "$ROOT"/src/midp/*.c "$ROOT"/src/gfx/*.c \
            "$ROOT"/src/zip/*.c -lm 2>"$T/host.err"; then
