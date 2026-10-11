@@ -162,8 +162,16 @@ typedef struct nj_port {
 
     /* ================= OPTIONAL (may be NULL) ================= */
 
-    /* Host memory.  When NULL the runtime uses malloc/free (or its own
-     * static pools when NJ_USE_LIBC is 0). */
+    /*
+     * Host memory.  When NULL the runtime uses malloc/free (or its own
+     *
+     * ALIGNMENT IS PART OF THE CONTRACT: every block returned here must be
+     * aligned to NJ_OBJ_ALIGN (16).  The Java heap keeps long and double fields
+     * in the arena, so nj_heap_init() rejects an arena whose base is not
+     * 16-byte aligned - and because it can only reject, a port that aligns to 8
+     * fails with "nj_vm_create: heap failed" and no hint as to why.  A bump
+     * allocator over a static array must round each request up to 16, not 8.
+          * static pools when NJ_USE_LIBC is 0). */
     void *(*alloc)(void *ud, nj_size n);
     void  (*free)(void *ud, void *p);
 

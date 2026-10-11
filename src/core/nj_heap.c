@@ -56,7 +56,7 @@
 #define NJ_BLOCK_MAGIC   0x4E4A424Bu   /* 'NJBK' */
 #define NJ_BLOCK_FREE    0x00000000u
 #define NJ_BLOCK_HDR     16u           /* sizeof(nj_block), 16-byte aligned  */
-#define NJ_OBJ_ALIGN     16u           /* nj_value alignment for long/double */
+/* NJ_OBJ_ALIGN is public (nj_config.h): a port's allocator has to honour it. */
 
 #define NJ_BIN_STEP      16u
 #define NJ_MIN_SPLIT     32u           /* don't split below this            */
@@ -238,6 +238,11 @@ nj_status nj_heap_init(nj_vm *vm, void *block, nj_size size)
         nj_size misalign = (nj_size)((nj_u1 *)0 - (nj_u1 *)0); /* silence unused */
         (void)misalign;
         if (((nj_size)(uintptr_t)base & (NJ_OBJ_ALIGN - 1u)) != 0u) {
+            /* Say which of the two things is wrong: the port returned an
+             * unaligned block, or the runtime's header size is not a multiple
+             * of the alignment.  Both look identical from the outside. */
+            nj_logf(vm, 0, "nj_heap_init: arena base is not "
+                           "NJ_OBJ_ALIGN-aligned (port allocator contract)");
             return NJ_ERR;
         }
     }

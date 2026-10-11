@@ -42,10 +42,40 @@ static const char *TAG = "nj2me";
  * instruction set, so the framebuffer is 64x64 (16 KB) and both buffers are
  * sized to leave headroom in the 512 KB the part actually has.
  */
-#define NJ_QEMU_HEAP (224u * 1024u)
+/*
+ * The pool comes from IDF's allocator, in PSRAM, 16-byte aligned.
+ *
+ * three things at once, which is why it is not a static array:
+ *   - PSRAM, because internal SRAM cannot hold it (nj_port_esp32.c does the
+ *     same on real hardware, and this is the same fix);
+ *   - 16-byte alignment, which the Java arena requires for long/double fields
+ *     and which nj_heap_init() can only reject - heap_caps_aligned_alloc()
+ *     guarantees it rather than hoping the linker agreed;
+ *   - enough room for all three consumers, which a hand-sized array got wrong.
+ */
+#define NJ_QEMU_HEAP (300u * 1024u)
 
-static unsigned char g_heap[NJ_QEMU_HEAP];
 static unsigned char g_port_state[28u * 1024u];
+
+/* The port's allocator, backed by IDF with PSRAM preferred and internal RAM as
+ * the fallback for a board without it. */
+static void *idf_alloc(void *ud, nj_size n)
+{
+    void *p = heap_caps_aligned_alloc(NJ_OBJ_ALIGN, (size_t)n,
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!p) {
+        p = heap_caps_aligned_alloc(NJ_OBJ_ALIGN, (size_t)n,
+                                    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    (void)ud;
+    return p;
+}
+
+static void idf_free(void *ud, void *p)
+{
+    (void)ud;
+    heap_caps_free(p);
+}
 
 void app_main(void)
 {
@@ -54,38 +84,64 @@ void app_main(void)
     nj_app *app;
     nj_ref midlet = 0;
     int rc = 1;
+    int started = 0;
 
     ESP_LOGI(TAG, "nano_j2me on %s, heap %u KiB, free internal %u KiB",
              CONFIG_IDF_TARGET, (unsigned)(NJ_QEMU_HEAP / 1024u),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024u));
 
-    ESP_LOGI(TAG, "java heap %u KiB, port state %u KiB, free internal %u KiB",
+    ESP_LOGI(TAG, "pool %u KiB; free: psram %u KiB, internal %u KiB",
              (unsigned)(NJ_QEMU_HEAP / 1024u),
-             (unsigned)(sizeof(g_port_state) / 1024u),
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024u),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024u));
 
     if (nj_port_bare(&port, (bare_state *)g_port_state,
-                     g_heap, NJ_QEMU_HEAP) != NJ_OK) {
+                     NULL, 0u) != NJ_OK) {
         ESP_LOGE(TAG, "port init failed");
         return;
     }
+    /* Hand the runtime IDF's allocator instead of the port's static bump
+     * allocator: this build has a real heap manager, and nj_port_bare.c stays
+     * free of IDF dependencies for the bare-metal image. */
+    port.alloc = idf_alloc;
+    port.free = idf_free;
 
     /* The port needs slack beyond the arena it hands out. */
-    /* The arena covers the VM instance AND the Java heap, which is why
-     * nj_vm_sizeof() is public: an embedder sizing a static arena needs both
-     * numbers. */
+
+    ESP_LOGI(TAG, "port.alloc=%p port.ud=%p display_init=%p",
+             (void *)(size_t)port.alloc, port.ud,
+             (void *)(size_t)port.display_init);
+    /*
+     * The pool handed to nj_vm_create has to cover THREE things, not one:
+     * the VM instance (nj_vm_sizeof), the Java arena (this argument), and
+     * vm->statics - the interned-string and constant tables, which want about
+     * 32 KiB.  Sizing the pool as "sizeof(nj_vm) + java heap" leaves nothing
+     * for the third and fails with "statics failed", which is a puzzle the
+     * first time and obvious afterwards.
+     */
     ESP_LOGI(TAG, "sizeof(nj_vm)=%u, arena %u KiB", (unsigned)nj_vm_sizeof(),
-             (unsigned)((NJ_QEMU_HEAP - nj_vm_sizeof() - 8192u) / 1024u));
-    vm = nj_vm_create(&port, NJ_QEMU_HEAP - nj_vm_sizeof() - 8192u);
+             (unsigned)((NJ_QEMU_HEAP - nj_vm_sizeof() - 65536u) / 1024u));
+    vm = nj_vm_create(&port, NJ_QEMU_HEAP - nj_vm_sizeof() - 65536u);
     if (!vm) {
         ESP_LOGE(TAG, "nj_vm_create failed");
         return;
     }
 
     app = nj_app_open(vm, nj_bare_jar, nj_bare_jar_len);
-    if (app && nj_vm_new_midlet(vm, 0, &midlet) == NJ_OK &&
-        nj_vm_start_app(vm, midlet) == NJ_OK) {
-        nj_vm_stats st0, st1;
+    if (!app) {
+        ESP_LOGE(TAG, "nj_app_open failed: %s",
+                 nj_exception_describe(vm) ? nj_exception_describe(vm) : "?");
+    } else if (nj_vm_new_midlet(vm, 0, &midlet) != NJ_OK) {
+        ESP_LOGE(TAG, "nj_vm_new_midlet failed: %s",
+                 nj_exception_describe(vm) ? nj_exception_describe(vm) : "?");
+    } else if (nj_vm_start_app(vm, midlet) != NJ_OK) {
+        ESP_LOGE(TAG, "nj_vm_start_app failed: %s",
+                 nj_exception_describe(vm) ? nj_exception_describe(vm) : "?");
+    } else {
+        started = 1;
+    }
+    if (started) {
+        nj_vm_stats st0;
         while (nj_vm_running(vm) && nj_port_bare_frames(port.ud) < 600) {
             if (nj_midp_frame(vm) != NJ_OK) {
                 break;
@@ -93,15 +149,13 @@ void app_main(void)
         }
         nj_vm_get_stats(vm, &st0);
         rc = (int)nj_vm_exit_code(vm);
+        ESP_LOGI(TAG, "nb %lu", (unsigned long)st0.native_calls);
 
         /* The numbers that make this a measurement rather than a smoke test. */
         ESP_LOGI(TAG, "frames=%lu bytecodes=%lu natives=%lu heap=%lu/%lu",
                  (unsigned long)st0.frames, (unsigned long)st0.insns,
                  (unsigned long)st0.native_calls,
                  (unsigned long)st0.heap_used, (unsigned long)st0.heap_peak);
-        (void)st1;
-    } else {
-        ESP_LOGE(TAG, "could not start the MIDlet");
     }
 
     nj_app_close(vm, app);

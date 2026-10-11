@@ -12,6 +12,7 @@
  * so this file adds no mutable globals of its own.
  */
 #include "nj2me/nj.h"
+#include <stdint.h>
 #include "nj2me/nj_port.h"
 
 static void bare_puts(const char *s);   /* the allocator reports through it */
@@ -207,15 +208,36 @@ static void bare_idle(void *ud) { (void)ud; }
 static void *bare_alloc(void *ud, nj_size n)
 {
     bare_state *s = (bare_state *)ud;
-    nj_size aligned = (n + 7u) & ~(nj_size)7u;
-    void *p;
-    if (!s->heap || s->heap_used + aligned > s->heap_bytes) {
+    nj_size aligned = (n + (NJ_OBJ_ALIGN - 1u)) & ~(nj_size)(NJ_OBJ_ALIGN - 1u);
+    uintptr_t base;
+    uintptr_t at;
+    nj_size pos;
+
+    /*
+     * Align the POINTER, not the offset.
+     *
+     * The Java arena must be 16-byte aligned because it holds long and double
+     * fields, and nj_heap_init() can only REJECT an unaligned one - so a port
+     * that gets this wrong fails with "nj_vm_create: heap failed" and no hint
+     * as to why, which is exactly how this was found.  Rounding the offset is
+     * not enough: the base is whatever the linker chose, and a static array is
+     * not guaranteed to be 16-byte aligned in every linker script.
+     */
+    if (!s->heap) {
+        return 0;
+    }
+    base = (uintptr_t)s->heap;
+    at = (base + (uintptr_t)s->heap_used + (uintptr_t)(NJ_OBJ_ALIGN - 1u))
+         & ~(uintptr_t)(NJ_OBJ_ALIGN - 1u);
+    pos = (nj_size)(at - base);
+
+    if (pos + aligned > s->heap_bytes) {
         /* Say what was asked for and what is left.  A port that goes quiet on
          * allocation failure turns a sizing mistake into a mystery. */
         char b[96];
         unsigned k = 0;
-        const char *p = "nj2me: out of port memory: asked ";
-        while (*p && k < sizeof(b) - 24u) { b[k++] = *p++; }
+        const char *q = "nj2me: out of port memory: asked ";
+        while (*q) { b[k++] = *q++; }
         {
             char t[16]; int m = 0;
             unsigned long v = (unsigned long)aligned;
@@ -223,7 +245,7 @@ static void *bare_alloc(void *ud, nj_size n)
             if (!m) { t[m++] = '0'; }
             while (m) { b[k++] = t[--m]; }
         }
-        p = " used "; while (*p) { b[k++] = *p++; }
+        q = " used "; while (*q) { b[k++] = *q++; }
         {
             char t[16]; int m = 0;
             unsigned long v = (unsigned long)s->heap_used;
@@ -231,7 +253,7 @@ static void *bare_alloc(void *ud, nj_size n)
             if (!m) { t[m++] = '0'; }
             while (m) { b[k++] = t[--m]; }
         }
-        p = " of "; while (*p) { b[k++] = *p++; }
+        q = " of "; while (*q) { b[k++] = *q++; }
         {
             char t[16]; int m = 0;
             unsigned long v = (unsigned long)s->heap_bytes;
@@ -243,9 +265,8 @@ static void *bare_alloc(void *ud, nj_size n)
         bare_puts(b);
         return 0;
     }
-    p = s->heap + s->heap_used;
-    s->heap_used += aligned;
-    return p;
+    s->heap_used = pos + aligned;
+    return (void *)at;
 }
 
 static void bare_free(void *ud, void *p) { (void)ud; (void)p; }

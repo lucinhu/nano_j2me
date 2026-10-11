@@ -39,6 +39,15 @@
 /* Basic build switches                                                */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Alignment of a Java object in the arena, and therefore of every block a port
+ * hands back from nj_port.alloc: 16, so that long and double fields are
+ * naturally aligned.  Public because the port's allocator has to honour it.
+ */
+#ifndef NJ_OBJ_ALIGN
+#  define NJ_OBJ_ALIGN 16u
+#endif
+
 /* Use <string.h>, <stdio.h>, <stdlib.h> where convenient. */
 #ifndef NJ_USE_LIBC
 #  define NJ_USE_LIBC 1
