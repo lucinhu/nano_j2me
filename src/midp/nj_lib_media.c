@@ -1221,6 +1221,53 @@ nj_status nj_media_late_init(nj_vm *vm)
         return NJ_ERR;
     }
     nj_media_const_str(vm, NJ_C_MANAGER, "TONE_DEVICE_LOCATOR", "tone://");
+
+    /*
+     * The Player STATE constants.  They were declared as fields and never
+     * given values, so every one of them read 0 - which meant a MIDlet's
+     * `p.getState() == Player.STARTED` compared against 0 and a
+     * `p.getState() == Player.CLOSED` compared against 0 as well, i.e. the two
+     * were indistinguishable.  The runtime's own state machine used the
+     * numbers directly, so nothing failed until a MIDlet read the constant.
+     */
+    {
+        static const struct { const char *n; nj_s4 v; } k[] = {
+            { "CLOSED", 0 }, { "UNREALIZED", 100 }, { "REALIZED", 200 },
+            { "PREFETCHED", 300 }, { "STARTED", 400 }
+        };
+        unsigned i;
+        for (i = 0u; i < sizeof(k) / sizeof(k[0]); i++) {
+            nj_field *f = nj_field_lookup(vm, NJ_C_PLAYER, k[i].n, "I", 1);
+            if (f) {
+                nj_field_write_int(vm, NULL, f, k[i].v);
+            }
+        }
+        {
+            nj_field *f = nj_field_lookup(vm, NJ_C_PLAYER, "TIME_UNKNOWN",
+                                          "J", 1);
+            if (f) {
+                nj_field_write_long(vm, NULL, f, -1);
+            }
+        }
+    }
+    {
+        /* The TONE_* modes live on the PLAYER here, which is where this
+         * runtime reads them; the stubs declare them on Manager, so a MIDlet
+         * writes Manager.TONE_STOP.  Both are given values, because a field
+         * that reads 0 is a game taking the wrong branch quietly. */
+        static const struct { const char *cls; const char *n; nj_s4 v; } k[] = {
+            { NJ_C_MANAGER, "TONE_STOP", 1 },
+            { NJ_C_MANAGER, "TONE_BLOCKING", 2 },
+            { NJ_C_MANAGER, "TONE_CONSTANT_DURATION", 4 }
+        };
+        unsigned i;
+        for (i = 0u; i < sizeof(k) / sizeof(k[0]); i++) {
+            nj_field *f = nj_field_lookup(vm, k[i].cls, k[i].n, "I", 1);
+            if (f) {
+                nj_field_write_int(vm, NULL, f, k[i].v);
+            }
+        }
+    }
     return NJ_OK;
 }
 
@@ -1255,6 +1302,16 @@ static const nj_builtin_field player_fields[] = {
     FLD("PREFETCHED", "I", NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("STARTED",    "I", NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("TIME_UNKNOWN", "J", NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+/* Manager's own constants.  Declaring them on Player - which is what a first
+ * attempt did - leaves them missing from the class a MIDlet actually reads. */
+static const nj_builtin_field manager_fields[] = {
+    FLD("TONE_DEVICE_LOCATOR",    "Ljava/lang/String;",
+        NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TONE_STOP",              "I", NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TONE_BLOCKING",          "I", NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TONE_CONSTANT_DURATION", "I", NJ_ACC_STATIC | NJ_ACC_FINAL)
 };
 
 /* The methods javac will look for, exactly as the stubs declare them. */
@@ -1327,7 +1384,9 @@ const nj_builtin_class nj_lib_media_classes[] = {
       player_methods,
       (nj_u2)(sizeof(player_methods) / sizeof(player_methods[0])) },
     { NJ_C_MANAGER, "java/lang/Object", NJ_ACC_PUBLIC,
-      NULL, 0u, manager_methods,
+      manager_fields,
+      (nj_u2)(sizeof(manager_fields) / sizeof(manager_fields[0])),
+      manager_methods,
       (nj_u2)(sizeof(manager_methods) / sizeof(manager_methods[0])) },
     { NJ_C_PLISTEN, NULL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
       NULL, 0u, listener_methods,

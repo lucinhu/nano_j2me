@@ -415,6 +415,8 @@ nj_status nj_lcdui_late_init(nj_vm *vm);
 /* The media package's constants (Player states, Manager's TONE_*), built after
  * the classes exist for the same reason the LCDUI ones are. */
 nj_status nj_media_late_init(nj_vm *vm);
+nj_status nj_nokia_late_init(nj_vm *vm);
+nj_status nj_io_late_init(nj_vm *vm);
 
 #ifdef __cplusplus
 }

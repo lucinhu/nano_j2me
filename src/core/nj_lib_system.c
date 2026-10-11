@@ -332,6 +332,12 @@ nj_status nj_lib_late_init(nj_vm *vm)
     if (nj_media_late_init(vm) != NJ_OK) {
         return NJ_ERR;
     }
+    if (nj_nokia_late_init(vm) != NJ_OK) {
+        return NJ_ERR;
+    }
+    if (nj_io_late_init(vm) != NJ_OK) {
+        return NJ_ERR;
+    }
     f_out = nj_field_lookup(vm, "java/lang/System", "out",
                             "Ljava/io/PrintStream;", 1);
     f_err = nj_field_lookup(vm, "java/lang/System", "err",

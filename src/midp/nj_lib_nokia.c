@@ -57,6 +57,52 @@ NJFN(nokia_fselect_launch)
                     "dialog, which this runtime does not have");
 }
 
+/*
+ * Give the constants their values.  Runs once when the VM is up, for the same
+ * reason LCDUI has a late init: a builtin class cannot carry a ConstantValue,
+ * so a static final that is never written reads 0 - and a MIDlet comparing
+ * against 0 gets the wrong branch with nothing to show for it.
+ */
+static void nokia_const_int(nj_vm *vm, const char *cls, const char *name,
+                            nj_s4 value)
+{
+    nj_field *f = nj_field_lookup(vm, cls, name, "I", 1);
+    if (f) {
+        nj_field_write_int(vm, NULL, f, value);
+    }
+}
+
+nj_status nj_nokia_late_init(nj_vm *vm);
+
+nj_status nj_nokia_late_init(nj_vm *vm)
+{
+    if (!vm) {
+        return NJ_ERR;
+    }
+    nokia_const_int(vm, NJ_C_FSELECT, "FILE_SYSTEM_PHONE", 1);
+    nokia_const_int(vm, NJ_C_FSELECT, "FILE_SYSTEM_MMC", 2);
+    nokia_const_int(vm, NJ_C_FSELECT, "FILE_SYSTEM_ALL", 3);
+    nokia_const_int(vm, NJ_C_FSELECT, "MEDIA_TYPE_IMAGE", 1);
+    nokia_const_int(vm, NJ_C_FSELECT, "MEDIA_TYPE_VIDEO", 2);
+    nokia_const_int(vm, NJ_C_FSELECT, "MEDIA_TYPE_AUDIO", 4);
+    nokia_const_int(vm, NJ_C_FSELECT, "MEDIA_TYPE_APPLICATION", 8);
+    nokia_const_int(vm, NJ_C_FSELECT, "MEDIA_TYPE_ALL", 16);
+
+    {
+        const char *fc = "com/nokia/mid/ui/FullCanvas";
+        nokia_const_int(vm, fc, "SOFT_KEY_LEFT", -6);
+        nokia_const_int(vm, fc, "SOFT_KEY_MIDDLE", -7);
+        nokia_const_int(vm, fc, "SOFT_KEY_RIGHT", -8);
+        nokia_const_int(vm, fc, "SOFT_KEY1", -6);
+        nokia_const_int(vm, fc, "SOFT_KEY2", -7);
+        nokia_const_int(vm, fc, "SOFT_KEY3", -8);
+        nokia_const_int(vm, fc, "KEY_SOFTKEY1", -6);
+        nokia_const_int(vm, fc, "KEY_SOFTKEY2", -7);
+        nokia_const_int(vm, fc, "KEY_SOFTKEY3", -8);
+    }
+    return NJ_OK;
+}
+
 NJFN(nokia_fsd_init) { return NJ_OK; }
 NJFN(nokia_fsd_getUrl)  { ret->r = NULL; return NJ_OK; }
 NJFN(nokia_fsd_getName) { ret->r = NULL; return NJ_OK; }
@@ -83,6 +129,39 @@ static const nj_builtin_field fsdetail_fields[] = {
     { "name",     "Ljava/lang/String;", 0 },
     { "mimeType", "Ljava/lang/String;", 0 },
     { "size",     "J",                  0 }
+};
+
+/*
+ * The constants.  A builtin class has no ConstantValue attribute, so a static
+ * final has to be given its value when the VM comes up - and until it is, the
+ * field EXISTS and reads 0, which is worse than absent: a MIDlet compiles,
+ * runs, and silently compares against zero.
+ *
+ * These are declared and set here rather than in the stubs alone because
+ * tools/test_consts.c compares every constant the stubs promise against what
+ * the runtime actually holds, and it found ten of these missing.
+ */
+static const nj_builtin_field fselect_fields[] = {
+    { "FILE_SYSTEM_PHONE",     "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "FILE_SYSTEM_MMC",       "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "FILE_SYSTEM_ALL",       "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "MEDIA_TYPE_IMAGE",      "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "MEDIA_TYPE_VIDEO",      "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "MEDIA_TYPE_AUDIO",      "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "MEDIA_TYPE_APPLICATION","I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "MEDIA_TYPE_ALL",        "I", NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+
+static const nj_builtin_field fullcanvas_fields[] = {
+    { "SOFT_KEY_LEFT",   "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SOFT_KEY_MIDDLE", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SOFT_KEY_RIGHT",  "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SOFT_KEY1",       "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SOFT_KEY2",       "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SOFT_KEY3",       "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "KEY_SOFTKEY1",    "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "KEY_SOFTKEY2",    "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "KEY_SOFTKEY3",    "I", NJ_ACC_STATIC | NJ_ACC_FINAL }
 };
 
 static const nj_builtin_method fselect_methods[] = {
@@ -114,8 +193,15 @@ const nj_builtin_class nj_lib_nokia_classes[] = {
       NULL, 0u, mptouch_methods,
       (nj_u2)(sizeof(mptouch_methods) / sizeof(mptouch_methods[0])) },
     { NJ_C_FSELECT, "java/lang/Object", NJ_ACC_PUBLIC,
-      NULL, 0u, fselect_methods,
+      fselect_fields,
+      (nj_u2)(sizeof(fselect_fields) / sizeof(fselect_fields[0])),
+      fselect_methods,
       (nj_u2)(sizeof(fselect_methods) / sizeof(fselect_methods[0])) },
+    { "com/nokia/mid/ui/FullCanvas", "javax/microedition/lcdui/Canvas",
+      NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
+      fullcanvas_fields,
+      (nj_u2)(sizeof(fullcanvas_fields) / sizeof(fullcanvas_fields[0])),
+      NULL, 0u },
     { NJ_C_FSDETAIL, "java/lang/Object", NJ_ACC_PUBLIC,
       fsdetail_fields,
       (nj_u2)(sizeof(fsdetail_fields) / sizeof(fsdetail_fields[0])),

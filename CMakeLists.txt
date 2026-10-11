@@ -287,6 +287,9 @@ if(NJ_BUILD_TESTS)
   add_custom_command(TARGET nj_fixtures POST_BUILD
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_fs_jar.sh
     COMMENT "JSR 75 MIDlet fixture")
+  add_custom_command(TARGET nj_fixtures POST_BUILD
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_const_jar.sh
+    COMMENT "stub constant fixture")
 
   # ---- helper: one test executable, linked against the runtime ----
   function(nj_add_test name source)
@@ -319,6 +322,11 @@ if(NJ_BUILD_TESTS)
   # ---- the formats ----
   nj_add_test(test_zip       tests/test_zip.c ${NJ_FIXTURES})
   nj_add_test(test_codec     tests/test_codec.c)
+
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_consts.c)
+    nj_add_test(test_consts tests/test_consts.c
+                ${NJ_FIXTURES}/constdemo.expected)
+  endif()
 
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fs.c)
     nj_add_test(test_fs tests/test_fs.c ${NJ_FIXTURES}/fsdemo.jar)

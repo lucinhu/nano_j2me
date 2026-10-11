@@ -8626,8 +8626,25 @@ static const nj_builtin_field textfield_fields[] = {
     FLD("SENSITIVE",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("NON_PREDICTIVE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("INITIAL_CAPS_WORD", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
-    FLD("INITIAL_CAPS_SENTENCE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("INITIAL_CAPS_SENTENCE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+    /* Declared TWICE here until the constant test caught it.  The lookup
+     * returns the first match, so the second got its own static slot and was
+     * never written - a field that reads 0 and looks fine. */
+};
+
+/*
+ * javax.microedition.lcdui.Choice: an INTERFACE whose constants a MIDlet reads
+ * directly (Choice.IMPLICIT), which is why it has to exist as a class even
+ * though nothing implements it here - List and ChoiceGroup are separate
+ * builtins with their own copies of the same numbers.
+ */
+static const nj_builtin_field choice_fields[] = {
+    FLD("EXCLUSIVE",        D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("MULTIPLE",         D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("IMPLICIT",         D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TEXT_WRAP_DEFAULT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TEXT_WRAP_ON",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TEXT_WRAP_OFF",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
 };
 
 static const nj_builtin_method textfield_methods[] = {
@@ -8804,6 +8821,7 @@ static const nj_builtin_field alert_fields[] = {
     FLD("alIndicator", NJ_C_GAUGE, 0),
     FLD("alBuffer",   D_IMAGE, 0),
     FLD("sDefaultTimeout", D_INT, NJ_ACC_STATIC),
+    FLD("FOREVER", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("DISMISS_COMMAND", D_CMD, NJ_ACC_STATIC | NJ_ACC_FINAL)
 };
 
@@ -8921,6 +8939,11 @@ static const nj_builtin_method itemstatelistener_methods[] = {
 #define NJ_LCDUI_N(a) (nj_u2)(sizeof(a) / sizeof((a)[0]))
 
 const nj_builtin_class nj_lib_lcdui_classes[] = {
+    { "javax/microedition/lcdui/Choice", NULL,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      choice_fields,
+      (nj_u2)(sizeof(choice_fields) / sizeof(choice_fields[0])),
+      NULL, 0u },
     { NJ_C_DISPLAYABLE, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
       displayable_fields, NJ_LCDUI_N(displayable_fields),
       displayable_methods, NJ_LCDUI_N(displayable_methods) },
@@ -9550,6 +9573,13 @@ nj_status nj_lcdui_late_init(nj_vm *vm)
     lcdui_const_int(vm, NJ_C_CHOICEGROUP, "TEXT_WRAP_DEFAULT", 0);
     lcdui_const_int(vm, NJ_C_CHOICEGROUP, "TEXT_WRAP_ON",      1);
     lcdui_const_int(vm, NJ_C_CHOICEGROUP, "TEXT_WRAP_OFF",     2);
+    lcdui_const_int(vm, "javax/microedition/lcdui/Choice", "EXCLUSIVE", 1);
+    lcdui_const_int(vm, "javax/microedition/lcdui/Choice", "MULTIPLE", 2);
+    lcdui_const_int(vm, "javax/microedition/lcdui/Choice", "IMPLICIT", 3);
+    lcdui_const_int(vm, "javax/microedition/lcdui/Choice", "TEXT_WRAP_DEFAULT", 0);
+    lcdui_const_int(vm, "javax/microedition/lcdui/Choice", "TEXT_WRAP_ON", 1);
+    lcdui_const_int(vm, "javax/microedition/lcdui/Choice", "TEXT_WRAP_OFF", 2);
+    lcdui_const_int(vm, NJ_C_ALERT, "FOREVER", -2);
     lcdui_const_int(vm, NJ_C_LIST, "EXCLUSIVE", NJ_CHOICE_EXCLUSIVE);
     lcdui_const_int(vm, NJ_C_LIST, "MULTIPLE",  NJ_CHOICE_MULTIPLE);
     lcdui_const_int(vm, NJ_C_LIST, "IMPLICIT",  NJ_CHOICE_IMPLICIT);

@@ -226,7 +226,11 @@ CLASSES = {
     },
     "javax/microedition/lcdui/Alert": {
         "extends": "Screen",
-        "constants": {"FOREVER": "-2", "DISMISS_COMMAND": "null"},
+        # DISMISS_COMMAND is a Command in the runtime, not an Object, and the
+        # descriptor is part of the field's identity.
+        "constants": {"FOREVER": "-2",
+                      "DISMISS_COMMAND":
+                          "null:Ljavax/microedition/lcdui/Command;"},
         "methods": [
             "public Alert(String)",
             "public Alert(String, String, Image, AlertType)",
@@ -340,8 +344,7 @@ CLASSES = {
                       "PASSWORD": "65536", "UNEDITABLE": "131072",
                       "SENSITIVE": "262144", "NON_PREDICTIVE": "524288",
                       "INITIAL_CAPS_WORD": "1048576",
-                      "INITIAL_CAPS_SENTENCE": "2097152",
-                      "INITIAL_CAPS_SENTENCE_": "2097152"},
+                      "INITIAL_CAPS_SENTENCE": "2097152"},
         "methods": [
             "public TextField(String, String, int, int)",
             "public String getString()", "public void setString(String)",
@@ -391,7 +394,16 @@ CLASSES = {
         # that writes List.IMPLICIT does not compile without them - the same
         # class of gap as the dropped throws clause and the dropped interface
         # parent: the stub has to be faithful or it rejects working code.
-        "constants": {"IMPLICIT": "1", "EXCLUSIVE": "2", "MULTIPLE": "3"},
+        # The REAL MIDP values.  These were 1/2/3 in the wrong order, and it
+        # mattered: a `public static final int` is INLINED by javac at every use
+        # site, so a MIDlet compiled against the stub passed the stub's value
+        # while the runtime compared against its own.  List.IMPLICIT read as 1
+        # (EXCLUSIVE) in the bytecode and 3 in the runtime, so every MIDlet
+        # asking for an implicit list got an exclusive one.
+        #
+        # Any constant in this file is a promise about what the runtime will
+        # contain; the two must agree or the stub is worse than no stub.
+        "constants": {"EXCLUSIVE": "1", "MULTIPLE": "2", "IMPLICIT": "3"},
         "methods": [
             "public List(String, int)",
             "public List(String, int, String[], Image[])",
@@ -882,7 +894,14 @@ def emit(path, name, spec, out_root):
         lines.append("    public %s %s;\n" % (_java_type(fdesc), fname))
 
     for cname, cval in (spec.get("constants") or {}).items():
-        if cval == "null":
+        if cval.startswith("null:"):
+            # A TYPED null constant.  `public static final Object X = null` is
+            # not the same field as `public static final Command X = null`, and
+            # the runtime is entitled to the latter - a MIDlet then fails with
+            # NoSuchFieldError naming a descriptor it never wrote.
+            lines.append("    public static final %s %s = null;\n"
+                         % (_java_type(cval[5:]), cname))
+        elif cval == "null":
             lines.append("    public static final Object %s = null;\n" % cname)
         else:
             lines.append("    public static final int %s = %s;\n" % (cname, cval))

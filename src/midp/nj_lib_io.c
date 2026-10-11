@@ -1166,6 +1166,39 @@ static const nj_builtin_method osw_methods[] = {
     RM("close",  "()V", NJ_ACC_PUBLIC)
 };
 
+/*
+ * Connector.READ / WRITE / READ_WRITE.  A MIDlet writes Connector.READ when it
+ * opens a connection, so these are not decoration - and javac inlines the
+ * stub's value, which makes a missing runtime field a NoSuchFieldError at the
+ * moment the game opens a file.
+ */
+static const nj_builtin_field connector_fields[] = {
+    { "READ",       "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "WRITE",      "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "READ_WRITE", "I", NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+
+nj_status nj_io_late_init(nj_vm *vm);
+
+nj_status nj_io_late_init(nj_vm *vm)
+{
+    static const struct { const char *n; nj_s4 v; } k[] = {
+        { "READ", 1 }, { "WRITE", 2 }, { "READ_WRITE", 3 }
+    };
+    unsigned i;
+    if (!vm) {
+        return NJ_ERR;
+    }
+    for (i = 0u; i < sizeof(k) / sizeof(k[0]); i++) {
+        nj_field *f = nj_field_lookup(vm, "javax/microedition/io/Connector",
+                                      k[i].n, "I", 1);
+        if (f) {
+            nj_field_write_int(vm, NULL, f, k[i].v);
+        }
+    }
+    return NJ_OK;
+}
+
 const nj_builtin_class nj_lib_io_classes[] = {
     { NJ_C_READER, "java/lang/Object",
       NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
@@ -1210,7 +1243,9 @@ const nj_builtin_class nj_lib_io_classes[] = {
     NJ_IO_EXC("javax/microedition/io/ConnectionNotFoundException",
               "java/io/IOException")
     { "javax/microedition/io/Connector", "java/lang/Object", NJ_ACC_PUBLIC,
-      NULL, 0u, connector_methods,
+      connector_fields,
+      (nj_u2)(sizeof(connector_fields) / sizeof(connector_fields[0])),
+      connector_methods,
       (nj_u2)(sizeof(connector_methods) / sizeof(connector_methods[0])) },
     { "javax/microedition/io/Connection",
       NULL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
