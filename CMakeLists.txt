@@ -141,6 +141,10 @@ endif()
 # Developer tooling
 # ---------------------------------------------------------------------
 if(NJ_BUILD_TOOLS)
+  add_executable(nj_inspect tools/nj_inspect.c)
+  target_link_libraries(nj_inspect PRIVATE nj2me)
+  target_include_directories(nj_inspect PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+
   add_custom_target(no-statics
     COMMAND ${CMAKE_COMMAND} -E env
             OBJDIR=$<TARGET_OBJECTS:nj2me>

@@ -883,10 +883,14 @@ nj_status nj_class_link(nj_vm *vm, nj_class *c)
     if (c->super_cp != 0u) {
         const char *sn = nj_cp_class_name(c, c->super_cp);
         if (!sn) {
+            nj_logf(vm, 3, "link %s: malformed superclass reference", c->name);
             return NJ_ERR_FORMAT;
         }
         c->super = nj_class_resolve(vm, sn);
         if (!c->super) {
+            /* The most common bring-up failure: say exactly what is missing
+             * rather than leaving the caller to guess. */
+            nj_logf(vm, 3, "link %s: superclass not found: %s", c->name, sn);
             return NJ_ERR;
         }
         if (nj_class_link(vm, c->super) != NJ_OK) {
@@ -915,10 +919,13 @@ nj_status nj_class_link(nj_vm *vm, nj_class *c)
     for (i = 0u; i < c->ninterfaces; i++) {
         const char *in = nj_cp_class_name(c, c->iface_cp[i]);
         if (!in) {
+            nj_logf(vm, 3, "link %s: malformed interface reference", c->name);
             return NJ_ERR_FORMAT;
         }
         c->interfaces[i] = nj_class_resolve(vm, in);
         if (!c->interfaces[i]) {
+            nj_logf(vm, 3, "link %s: interface this runtime does not provide: "
+                          "%s", c->name, in);
             return NJ_ERR;
         }
         (void)nj_class_link(vm, c->interfaces[i]);

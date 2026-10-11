@@ -82,7 +82,7 @@ COVERAGE = tuple(range(0x20, 0x7F)) + tuple(range(0xA0, 0x100))
 # docstring of tools/gen_fonts.py in the repo history and the checks below.
 #
 #   MIDP size            px   cell      measured mono ink envelope
-#   SMALL  (8)            9   6 x 12    ascent 10, descent 2, ink width 6
+#   SMALL  (8)           10   6 x 13    ascent 10, descent 3, ink width 6
 #   MEDIUM (0)           13   8 x 16    ascent 12, descent 4, ink width 8
 #   LARGE  (16)          18  12 x 20    ascent 16, descent 4, ink width 11
 #
@@ -91,7 +91,7 @@ COVERAGE = tuple(range(0x20, 0x7F)) + tuple(range(0xA0, 0x100))
 # pixels above the cap line) and the deepest descenders both fit inside the
 # cell and nothing is ever clipped.
 SIZES = (
-    {"tag": "small", "macro": "SMALL", "size": 8, "px": 9, "cell_w": 6},
+    {"tag": "small", "macro": "SMALL", "size": 8, "px": 10, "cell_w": 6},
     {"tag": "medium", "macro": "MEDIUM", "size": 0, "px": 13, "cell_w": 8},
     {"tag": "large", "macro": "LARGE", "size": 16, "px": 18, "cell_w": 12},
 )

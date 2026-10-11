@@ -341,7 +341,7 @@ struct nj_vm {
     nj_u1      state;
     nj_u1      running;
     nj_u1      initialized;
-    nj_u1      verbose;
+    nj_u2      verbose;      /* log level: 0=error .. 3=debug */
     nj_s4      exit_code;
 
     /* native call depth */

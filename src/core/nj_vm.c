@@ -33,6 +33,9 @@ static const char *level_name(int level)
 void nj_logf(nj_vm *vm, int level, const char *fmt, ...)
 {
 #if NJ_USE_LIBC
+    if (vm && (nj_u4)level > (nj_u4)vm->verbose) {
+        return;
+    }
     char buf[320];
     va_list ap;
 
@@ -116,6 +119,7 @@ static nj_status vm_setup(nj_vm *vm, const nj_port *port, nj_size heap_bytes)
         return NJ_ERR_NOMEM;
     }
     vm->running = 1u;
+    vm->verbose = 2u;      /* error + warn + info; debug needs opting in */
 #if NJ_ENABLE_DEBUG
     vm->trace = (nj_u1)nj_trace_enabled(vm);
     vm->trace_filter = getenv("NJ_TRACE");

@@ -29,3 +29,6 @@ tests/out/
 .DS_Store
 .vscode/
 .idea/
+
+# Third-party test games fetched by tools/fetch_test_games.sh
+tests/games/
