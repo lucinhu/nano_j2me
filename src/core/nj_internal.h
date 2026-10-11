@@ -312,6 +312,17 @@ struct nj_vm {
     /* where class bytes come from (JAR loader, flash partition, test fixture) */
     nj_class_source *source;
 
+    /* ---- MIDP layer state ----
+     * Owning these here rather than in file-scope variables is what lets a
+     * MIDlet be started, stopped and restarted in one process. */
+    nj_fontset    fonts;          /* mutable font registry (see nj_gfx.h)  */
+    nj_surface    screen;         /* view of the UI framebuffer            */
+    nj_u1        *screen_pixels;  /* the framebuffer itself, host-allocated */
+    nj_u4         midp_flags;     /* NJ_MIDP_* capability bits             */
+    nj_u1         repaint_pending;
+    nj_u2         screen_w;
+    nj_u2         screen_h;
+
     /* native method registry (per-VM hash; no GlobalState) */
     nj_native_binding *natives;
     nj_u2              nnatives;
