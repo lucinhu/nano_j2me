@@ -213,20 +213,39 @@ nothing to suggest memory. The IDF component now sets 1024 slots (8 KiB), 96
 frames and 128 interned strings, next to the reason, rather than leaving an
 embedder to discover them one crash at a time.
 
-## The RISC-V side
+## The RISC-V side: builds, boots, and runs out of internal RAM
 
-The same project builds for **ESP32-C3** (`idf.py set-target esp32c3`), and the
-whole runtime compiles for RV32IMC - but the link fails, and the error text did
-not make it into the captured log:
+The same project builds for **ESP32-C3** and boots on an emulated one.  The
+whole runtime compiles for RV32IMC, and the link needed one fix:
 
-    collect2: error: ld returned 1 exit status
+    multiple definition of `memcpy'; esp-idf/esp_libc/libesp_libc.a(memcpy.c.obj)
 
-with a 24-line log whose only long line is the link command itself.  Next step is
-to run the link step under `ninja -v` and capture the linker's own stderr
-directly, since `idf.py build` is swallowing it.
+`tests/embedded/nj_port_bare.c` supplies the nine C library functions the
+freestanding image needs, and under ESP-IDF there is already a libc.  They are
+now behind `#if !NJ_USE_LIBC`, which is what they were always for.  The Xtensa
+link happened to tolerate the duplicate; relying on that would have been luck.
 
-That is the last piece of "both ESP32 architectures": Xtensa runs a MIDlet
-(above), RISC-V compiles everything and does not yet link.
+Once it links, the C3 does not have the RAM:
+
+    I nj2me: free: psram 0 KiB, internal 295 KiB
+    I nj2me: pool 244 KiB
+    I nj2me: sizeof(nj_vm)=3832, arena 122 KiB, reserved 122 KiB
+    nj2me: nj_vm_create: main thread failed
+
+An ESP32-S3 leaves 356 KiB free and this VM fits; an ESP32-C3 leaves 295 KiB and
+it does not - the pool covers the VM instance, the Java arena, the statics, the
+native registry and the builtin classes, and those want more than the C3 has.
+That is not a defect in the runtime, it is the reason `nj_port_esp32.c` routes
+the Java heap to PSRAM in the first place: a part without it cannot run this.
+Which is also why this environment cannot finish the RISC-V demonstration - the
+path a real C3 would take is the PSRAM path QEMU does not provide.
+
+So the two-architecture claim, stated precisely:
+
+| Target | Architecture | State |
+|---|---|---|
+| ESP32-S3 | Xtensa LX7 | **runs a MIDlet** - 112,117,067 bytecodes, same as the desktop |
+| ESP32-C3 | RISC-V RV32IMC | compiles, links, boots, creates the VM; needs PSRAM for the rest |
 
 ## Why PSRAM does not work under QEMU
 

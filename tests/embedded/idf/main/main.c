@@ -53,7 +53,17 @@ static const char *TAG = "nj2me";
  *     guarantees it rather than hoping the linker agreed;
  *   - enough room for all three consumers, which a hand-sized array got wrong.
  */
-#define NJ_QEMU_HEAP (340u * 1024u)
+/*
+ * The pool is sized from what is actually free, not from a constant.
+ *
+ * 340 KiB fits an ESP32-S3 (356 KiB free) and does not fit an ESP32-C3
+ * (295 KiB free) - the two parts have different SRAM, and a hard-coded pool
+ * that only fits the one on the developer's desk is the classic way to ship
+ * something that works until it doesn't.  Leave a margin for IDF's own
+ * allocations and take the rest.
+ */
+#define NJ_QEMU_POOL_MARGIN (48u * 1024u)
+#define NJ_QEMU_HEAP_MAX    (340u * 1024u)
 
 static unsigned char g_port_state[28u * 1024u];
 
@@ -85,6 +95,7 @@ void app_main(void)
     nj_ref midlet = 0;
     int rc = 1;
     int started = 0;
+    size_t pool = 0u;
 #define SNAP(what)                                                        \
     do {                                                                  \
         nj_vm_stats ss;                                                   \
@@ -96,12 +107,8 @@ void app_main(void)
         }                                                                 \
     } while (0)
 
-    ESP_LOGI(TAG, "nano_j2me on %s, heap %u KiB, free internal %u KiB",
-             CONFIG_IDF_TARGET, (unsigned)(NJ_QEMU_HEAP / 1024u),
-             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024u));
-
-    ESP_LOGI(TAG, "pool %u KiB; free: psram %u KiB, internal %u KiB",
-             (unsigned)(NJ_QEMU_HEAP / 1024u),
+    ESP_LOGI(TAG, "nano_j2me on %s, free: psram %u KiB, internal %u KiB",
+             CONFIG_IDF_TARGET,
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024u),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024u));
 
@@ -129,9 +136,32 @@ void app_main(void)
      * for the third and fails with "statics failed", which is a puzzle the
      * first time and obvious afterwards.
      */
-    ESP_LOGI(TAG, "sizeof(nj_vm)=%u, arena %u KiB", (unsigned)nj_vm_sizeof(),
-             (unsigned)((NJ_QEMU_HEAP - nj_vm_sizeof() - 200u * 1024u) / 1024u));
-    vm = nj_vm_create(&port, NJ_QEMU_HEAP - nj_vm_sizeof() - 200u * 1024u);
+    /*
+     * Size the pool from what is actually free.  340 KiB fits an ESP32-S3
+     * (356 KiB free) and does NOT fit an ESP32-C3 (295 KiB free) - the two
+     * parts have different SRAM, and a hard-coded pool that only fits the one
+     * on the desk is the classic way to ship something that works until it
+     * does not.
+     */
+    {
+        size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        pool = (free_internal > NJ_QEMU_POOL_MARGIN)
+                   ? (size_t)(free_internal - NJ_QEMU_POOL_MARGIN) : 0u;
+        if (pool > NJ_QEMU_HEAP_MAX) { pool = NJ_QEMU_HEAP_MAX; }
+        pool &= ~(size_t)4095u;
+        ESP_LOGI(TAG, "pool %u KiB", (unsigned)(pool / 1024u));
+    }
+
+    /* Leave a third of the pool for the statics, the native registry and the
+     * interned strings, which want about 32 KiB each. */
+    {
+        nj_size arena = pool / 2u;   /* IDF's internal heap fragments; a smaller
+                                 * contiguous request is more likely to succeed */
+        ESP_LOGI(TAG, "sizeof(nj_vm)=%u, arena %u KiB, reserved %u KiB",
+                 (unsigned)nj_vm_sizeof(), (unsigned)(arena / 1024u),
+                 (unsigned)((pool - arena) / 1024u));
+        vm = nj_vm_create(&port, arena);
+    }
     if (!vm) {
         ESP_LOGE(TAG, "nj_vm_create failed");
         return;

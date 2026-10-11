@@ -21,7 +21,14 @@ static void bare_puts(const char *s);   /* the allocator reports through it */
 /* The nine functions.  Deliberately naive: the point is that the       */
 /* runtime compiles and links against a minimal set, not that these are */
 /* fast.  A real port uses the vendor SDK's versions.                   */
+/*                                                                      */
+/* ONLY WHEN THERE IS NO C LIBRARY.  Under ESP-IDF there is one, and    */
+/* defining memcpy here as well is a multiple-definition error against  */
+/* esp_libc - which is what the RISC-V link failed on.  The Xtensa      */
+/* build happened to tolerate it; the fix is not to rely on that.       */
 /* ------------------------------------------------------------------ */
+#if !NJ_USE_LIBC
+
 void *memcpy(void *dst, const void *src, size_t n)
 {
     unsigned char *d = (unsigned char *)dst;
@@ -160,6 +167,8 @@ double log(double x)  { return bare_unimplemented(x); }
 double log10(double x){ return bare_unimplemented(x); }
 double pow(double x, double y) { (void)y; return bare_unimplemented(x); }
 double cbrt(double x) { return bare_unimplemented(x); }
+
+#endif /* !NJ_USE_LIBC */
 
 /* ------------------------------------------------------------------ */
 /* Port state, owned by the caller                                      */
