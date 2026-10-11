@@ -308,6 +308,12 @@ nj_status nj_lib_late_init(nj_vm *vm)
     if (!vm) {
         return NJ_ERR;
     }
+    /* The MIDP layer installs its own static state (the lcdui constants, the
+     * Font/AlertType singletons, the font registry).  One line, as agreed in
+     * the module contract; it is independent of System.out below. */
+    if (nj_lcdui_late_init(vm) != NJ_OK) {
+        return NJ_ERR;
+    }
     f_out = nj_field_lookup(vm, "java/lang/System", "out",
                             "Ljava/io/PrintStream;", 1);
     f_err = nj_field_lookup(vm, "java/lang/System", "err",

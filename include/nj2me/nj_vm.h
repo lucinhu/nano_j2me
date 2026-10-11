@@ -349,6 +349,15 @@ extern const int nj_lib_midlet_class_count;
  */
 nj_status nj_lib_late_init(nj_vm *vm);
 
+/*
+ * The LCDUI half of nj_lib_late_init(): the MIDP constants that a builtin
+ * class cannot carry as ConstantValue attributes (Canvas.KEY_*, Graphics.LEFT,
+ * Command.OK, ...), the Font/AlertType singletons and the font registry.
+ * nj_lib_late_init() calls it; it is exported so a build that trims
+ * java.lang.System can still bring the UI up.
+ */
+nj_status nj_lcdui_late_init(nj_vm *vm);
+
 #ifdef __cplusplus
 }
 #endif

@@ -117,9 +117,9 @@ public class HelloWorld {
 JAVA
 
 # --release 8 keeps the bytecode shape close to what a J2ME toolchain emits.
-javac -source 8 -target 8 -bootclasspath "$(javac -XshowSettings:properties -version 2>&1 >/dev/null | awk -F'= ' '/java.home/{print $2}')/lib/rt.jar" \
-      -d "$WORK/classes" "$WORK/src/HelloWorld.java" 2>/dev/null \
-  || javac --release 8 -nowarn -d "$WORK/classes" "$WORK/src/HelloWorld.java"
+# No stubs are needed here: this fixture only touches java.lang, exactly as a
+# CLDC-only MIDlet would.
+javac --release 8 -nowarn -d "$WORK/classes" "$WORK/src/HelloWorld.java"
 
 mkdir -p "$WORK/classes/META-INF"
 cat > "$WORK/classes/META-INF/MANIFEST.MF" <<'MANIFEST'

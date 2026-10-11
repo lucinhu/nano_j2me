@@ -618,11 +618,6 @@ static void gfx_store(nj_vm *vm, nj_ref g_obj, const nj_gfx *g)
     if (f) { nj_field_write_int(vm, g_obj, f, (nj_s4)g->xor_color); }
 }
 
-/* Font metrics for a Graphics, in its own coordinate space. */
-static const nj_font *gfx_font(nj_vm *vm, nj_ref g_obj)
-{
-    return gfx_font_of(vm, g_obj);
-}
 
 /* ---- construction ---- */
 NJFN(g_init)
@@ -1901,33 +1896,7 @@ static void text_draw(nj_gfx *g, nj_ref str, int x, int y, int anchor)
                      anchor);
 }
 
-/* Draw a Java char[] slice with a MIDP anchor. */
-static void text_draw_chars(nj_gfx *g, nj_ref chars, int off, int len,
-                            int x, int y, int anchor)
-{
-    if (!chars || len <= 0) {
-        return;
-    }
-    nj_gfx_draw_text(g, (const nj_u2 *)chars->u.bytes + off, len, x, y, anchor);
-}
 
-/* Copy up to `cap` characters of a String into a caller buffer. */
-static int text_to_chars(nj_ref str, nj_u2 *out, int cap)
-{
-    int n;
-
-    if (!str) {
-        return 0;
-    }
-    n = (int)nj_string_len(str);
-    if (n > cap) {
-        n = cap;
-    }
-    if (n > 0) {
-        memcpy(out, nj_string_chars(str), (nj_size)n * sizeof(nj_u2));
-    }
-    return n;
-}
 
 /* ================================================================== */
 /* Font                                                                */
@@ -3974,9 +3943,18 @@ nj_status nj_midp_paint(nj_vm *vm)
             nj_clear_exception(vm);
             return NJ_ERR;
         }
+        (void)canvas_visible(vm, d);
         if (nj_call(vm, d, NJ_C_CANVAS, "paint", "(L" NJ_C_GRAPHICS ";)V",
                     &(nj_value){ .r = g }, NULL) != NJ_OK) {
-            nj_clear_exception(vm);
+            /*
+             * Leave the exception pending: paint() is abstract on Canvas, so
+             * "method not implemented" is exactly what the caller must see.
+             * Nothing is blitted for this frame.
+             */
+            if (!vm->exception) {
+                (void)nj_throw(vm, "java/lang/AbstractMethodError", "paint");
+            }
+            return NJ_ERR;
         }
         if (nj_midp_surface(vm, buf, &buf_surf)) {
             nj_gfx blit;
@@ -4293,25 +4271,6 @@ static void display_drain_queue(nj_vm *vm)
 /* ================================================================== */
 /* Item and the widgets                                                */
 /* ================================================================== */
-/*
- * Item carries everything the UI needs to lay a widget out (label, layout,
- * preferred size, commands) plus two abstract hooks the renderer calls:
- *
- *     abstract String njText();               the text shown
- *     abstract int    njHeight(int width);    the height needed
- *     String njSelected(int row);             non-NULL when row is selected
- *
- * They are deliberately abstract: every concrete widget must answer, and a
- * future Item subclass that forgets gets AbstractMethodError instead of an
- * invisible row.
- */
-static nj_s4 item_layout(nj_s4 layout, nj_s4 prefer)
-{
-    if (layout == -1) {
-        return prefer;
-    }
-    return layout;
-}
 
 NJFN(item_init)
 {
@@ -6308,6 +6267,35 @@ NJFN(form_setItemStateListener)
 /* ------------------------------------------------------------------ */
 /* List                                                                */
 /* ------------------------------------------------------------------ */
+/*
+ * A List keeps StringItem objects in the Item[] it inherits from Form, so the
+ * inherited layout machinery works unchanged; the parallel String/Image arrays
+ * are views rebuilt after every mutation.  list_wrap() builds one element.
+ */
+static void list_sync(nj_vm *vm, nj_ref self);
+
+static nj_ref list_wrap(nj_vm *vm, nj_ref s, nj_ref img)
+{
+    nj_ref item = nj_object_new(vm, NJ_C_STRINGITEM);
+    nj_value a[3];
+
+    if (!item) {
+        return NULL;
+    }
+    a[0].r = NULL;
+    a[1].r = s;
+    a[2].i = 0;
+    if (nj_call_special(vm, item, NJ_C_STRINGITEM, "<init>",
+                        "(Ljava/lang/String;Ljava/lang/String;I)V", a,
+                        NULL) != NJ_OK) {
+        return NULL;
+    }
+    if (img) {
+        rput(vm, item, NJ_C_ITEM, "itImage", D_IMAGE, img);
+    }
+    return item;
+}
+
 NJFN(list_init)
 {
     nj_ref self = NJ_THIS(args);
@@ -6365,29 +6353,17 @@ NJFN(list_init_arrays)
     }
     for (i = 0u; i < strs->length; i++) {
         nj_ref s = nj_array_get_ref(strs, i);
+        nj_ref it;
         if (!s) {
             return nj_throw(vm, "java/lang/NullPointerException",
                             "list element is null");
         }
-        {
-            nj_ref item = nj_object_new(vm, NJ_C_STRINGITEM);
-            nj_value ia[3];
-            if (!item) {
-                return nj_throw_oom(vm);
-            }
-            ia[0].r = NULL;
-            ia[1].r = s;
-            ia[2].i = 0;
-            if (nj_call_special(vm, item, NJ_C_STRINGITEM, "<init>",
-                                "(Ljava/lang/String;Ljava/lang/String;I)V",
-                                ia, NULL) != NJ_OK) {
-                return NJ_ERR;
-            }
-            rput(vm, item, NJ_C_ITEM, "itImage", D_IMAGE,
-                 nj_array_get_ref(imgs, i));
-            if (form_add_item(vm, self, item, (nj_s4)i) != NJ_OK) {
-                return NJ_ERR;
-            }
+        it = list_wrap(vm, s, nj_array_get_ref(imgs, i));
+        if (!it) {
+            return vm->exception ? NJ_ERR : nj_throw_oom(vm);
+        }
+        if (form_add_item(vm, self, it, (nj_s4)i) != NJ_OK) {
+            return NJ_ERR;
         }
     }
     rput(vm, self, NJ_C_LIST, "lsStrings", D_STRARR, strs);
@@ -6403,29 +6379,69 @@ NJFN(list_getType)
     return NJ_OK;
 }
 
+/* Append or insert one element, keeping both representations in step. */
+static nj_status list_add(nj_vm *vm, nj_ref self, nj_ref s, nj_ref img,
+                          nj_s4 at)
+{
+    nj_ref item;
+
+    if (!s) {
+        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
+    }
+    item = list_wrap(vm, s, img);
+    if (!item) {
+        return vm->exception ? NJ_ERR : nj_throw_oom(vm);
+    }
+    return form_add_item(vm, self, item, at);
+}
+
 NJFN(list_append_str)
 {
     nj_ref self = NJ_THIS(args);
     nj_s4 at = fget(vm, self, NJ_C_LIST, "lsCount", D_INT);
-    nj_status st = form_add_item(vm, self, NJ_ARG_REF(args, 0), at);
-    NJ_UNUSED(at);
-    return st;
+    nj_status st = list_add(vm, self, NJ_ARG_REF(args, 0), NULL, at);
+    if (st != NJ_OK) {
+        return st;
+    }
+    list_sync(vm, self);
+    return NJ_OK;
 }
 
 NJFN(list_append_img)
 {
-    return list_append_str(vm, th, args, ret);
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = fget(vm, self, NJ_C_LIST, "lsCount", D_INT);
+    nj_status st = list_add(vm, self, NJ_ARG_REF(args, 0), NJ_ARG_REF(args, 1),
+                            at);
+    if (st != NJ_OK) {
+        return st;
+    }
+    list_sync(vm, self);
+    return NJ_OK;
 }
 
 NJFN(list_insert_str)
 {
-    return form_add_item(vm, NJ_THIS(args), NJ_ARG_REF(args, 1),
-                         NJ_ARG_INT(args, 0));
+    nj_ref self = NJ_THIS(args);
+    nj_status st = list_add(vm, self, NJ_ARG_REF(args, 1), NULL,
+                            NJ_ARG_INT(args, 0));
+    if (st != NJ_OK) {
+        return st;
+    }
+    list_sync(vm, self);
+    return NJ_OK;
 }
 
 NJFN(list_insert_img)
 {
-    return list_insert_str(vm, th, args, ret);
+    nj_ref self = NJ_THIS(args);
+    nj_status st = list_add(vm, self, NJ_ARG_REF(args, 1), NJ_ARG_REF(args, 2),
+                            NJ_ARG_INT(args, 0));
+    if (st != NJ_OK) {
+        return st;
+    }
+    list_sync(vm, self);
+    return NJ_OK;
 }
 
 /*
@@ -7186,4 +7202,1386 @@ NJFN(alerttype_playSound)
         tones[0].freq_hz = 1046; tones[0].duration_ms = 100;
         return (vm->port->tone_play(vm->port->ud, tones, 1) == 0) ? NJ_OK : NJ_OK;
     }
+}
+
+/* ================================================================== */
+/* Class tables                                                        */
+/* ================================================================== */
+#define M(name, desc, flags) { name, desc, flags }
+#define FLD(name, desc, flags) { name, desc, flags }
+
+/* ---- Image ---- */
+static const nj_builtin_field image_fields[] = {
+    FLD(F_IMG_W,    D_INT,    0),
+    FLD(F_IMG_H,    D_INT,    0),
+    FLD(F_IMG_PX,   D_INTARR, 0),
+    FLD(F_IMG_MUT,  D_BOOL,   0)
+};
+
+static const nj_builtin_method image_methods[] = {
+    M("createImage", "(II)L" NJ_C_IMAGE ";",                   NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("createImage", "([BII)L" NJ_C_IMAGE ";",                 NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("createImage", "([BII I)L" NJ_C_IMAGE ";",               NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("createImage", "(Ljava/lang/String;)L" NJ_C_IMAGE ";",   NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("createImage", "(L" NJ_C_IMAGE ";IIIII)L" NJ_C_IMAGE ";", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("createRGBImage", "([IIIZ)L" NJ_C_IMAGE ";",             NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("getWidth",  "()I",  0),
+    M("getHeight", "()I",  0),
+    M("isMutable", "()Z",  0),
+    M("getGraphics", "()L" NJ_C_GRAPHICS ";", 0),
+    M("getRGB", "([IIIIIII)V", 0)
+};
+
+/* ---- Font ---- */
+static const nj_builtin_field font_fields[] = {
+    FLD("sCache",   D_OBJARR, NJ_ACC_STATIC),
+    FLD("sDefault", D_FONT,   NJ_ACC_STATIC),
+    FLD(F_FONT_FACE,  D_INT,  0),
+    FLD(F_FONT_STYLE, D_INT,  0),
+    FLD(F_FONT_SIZE,  D_INT,  0),
+    /* The MIDP face/style/size constants are static finals, filled in by
+     * nj_lcdui_late_init() because a builtin class has no ConstantValue. */
+    FLD("FACE_SYSTEM",       D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("FACE_MONOSPACED",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("FACE_PROPORTIONAL", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("STYLE_PLAIN",       D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("STYLE_BOLD",        D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("STYLE_ITALIC",      D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("STYLE_UNDERLINED",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("SIZE_SMALL",        D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("SIZE_MEDIUM",       D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("SIZE_LARGE",        D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method font_methods[] = {
+    M("getFont",          "(I)L" NJ_C_FONT ";",         NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("getFont",          "(III)L" NJ_C_FONT ";",       NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("getDefaultFont",   "()L" NJ_C_FONT ";",          NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("getFace",          "()I", 0),
+    M("getStyle",         "()I", 0),
+    M("getSize",          "()I", 0),
+    M("isPlain",          "()Z", 0),
+    M("isBold",           "()Z", 0),
+    M("isItalic",         "()Z", 0),
+    M("isUnderlined",     "()Z", 0),
+    M("getHeight",        "()I", 0),
+    M("getBaselinePosition", "()I", 0),
+    M("getAscent",        "()I", 0),
+    M("getDescent",       "()I", 0),
+    M("charWidth",        "(C)I", 0),
+    M("charsWidth",       "([CII)I", 0),
+    M("stringWidth",      "(Ljava/lang/String;)I", 0),
+    M("substringWidth",   "(Ljava/lang/String;II)I", 0)
+};
+
+/* ---- Graphics ---- */
+static const nj_builtin_field graphics_fields[] = {
+    FLD(F_G_TGT,    D_IMAGE, 0),
+    FLD(F_G_TX,     D_INT, 0),
+    FLD(F_G_TY,     D_INT, 0),
+    FLD(F_G_CX,     D_INT, 0),
+    FLD(F_G_CY,     D_INT, 0),
+    FLD(F_G_CW,     D_INT, 0),
+    FLD(F_G_CH,     D_INT, 0),
+    FLD(F_G_COLOR,  D_INT, 0),
+    FLD(F_G_BLEND,  D_INT, 0),
+    FLD(F_G_STROKE, D_INT, 0),
+    FLD(F_G_FONT,   D_FONT, 0),
+    FLD(F_G_XOR,    D_INT, 0),
+    FLD(F_G_XORC,   D_INT, 0),
+    /* MIDP 2.0 constants. */
+    FLD("HCENTER",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("VCENTER",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LEFT",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("RIGHT",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TOP",      D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("BOTTOM",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("BASELINE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("SOLID",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("DOTTED",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method graphics_methods[] = {
+    M("<init>", "()V", 0),
+    M("translate",      "(II)V", 0),
+    M("getTranslateX",  "()I", 0),
+    M("getTranslateY",  "()I", 0),
+    M("setClip",        "(IIII)V", 0),
+    M("clipRect",       "(IIII)V", 0),
+    M("getClipX",       "()I", 0),
+    M("getClipY",       "()I", 0),
+    M("getClipWidth",   "()I", 0),
+    M("getClipHeight",  "()I", 0),
+    M("setColor",       "(I)V", 0),
+    M("setColor",       "(III)V", 0),
+    M("getColor",       "()I", 0),
+    M("getRedComponent",   "()I", 0),
+    M("getGreenComponent", "()I", 0),
+    M("getBlueComponent",  "()I", 0),
+    M("getAlphaComponent", "()I", 0),
+    M("setAlpha",       "(I)V", 0),
+    M("getAlpha",       "()I", 0),
+    M("setGrayScale",   "(I)V", 0),
+    M("setBlendMode",   "(I)V", 0),
+    M("getBlendMode",   "()I", 0),
+    M("setStrokeStyle", "(I)V", 0),
+    M("getStrokeStyle", "()I", 0),
+    M("setFont",        "(L" NJ_C_FONT ";)V", 0),
+    M("getFont",        "()L" NJ_C_FONT ";", 0),
+    M("setXORMode",     "(L" NJ_C_GRAPHICS ";)V", 0),
+    M("drawLine",       "(IIII)V", 0),
+    M("drawRect",       "(IIII)V", 0),
+    M("fillRect",       "(IIII)V", 0),
+    M("drawRoundRect",  "(IIIIII)V", 0),
+    M("fillRoundRect",  "(IIIIII)V", 0),
+    M("drawArc",        "(IIIIII)V", 0),
+    M("fillArc",        "(IIIIII)V", 0),
+    M("drawTriangle",   "(IIIIII)V", 0),
+    M("fillTriangle",   "(IIIIII)V", 0),
+    M("drawString",     "(Ljava/lang/String;III)V", 0),
+    M("drawString",     "(Ljava/lang/String;II)V", 0),
+    M("drawSubstring",  "(Ljava/lang/String;IIII I)V", 0),
+    M("drawChars",      "([CIIIII)V", 0),
+    M("drawChar",       "(CIII)V", 0),
+    M("drawImage",      "(L" NJ_C_IMAGE ";III)V", 0),
+    M("drawRegion",     "(L" NJ_C_IMAGE ";IIII)V", 0),
+    M("drawRegion",     "(L" NJ_C_IMAGE ";IIIIII I)V", 0),
+    M("drawRegion",     "(L" NJ_C_IMAGE ";IIIIII IL" NJ_C_IMAGE ";)V", 0),
+    M("drawRGB",        "([IIIIIIIZ)V", 0),
+    M("copyArea",       "(IIIIIII)V", 0)
+};
+
+/* ---- Displayable / Canvas ---- */
+static const nj_builtin_field displayable_fields[] = {
+    FLD(F_D_TITLE,    D_STR,    0),
+    FLD(F_D_TICKER,   D_TICKER, 0),
+    FLD(F_D_LISTENER, D_CL,     0),
+    FLD(F_D_COMMANDS, D_VECTOR, 0),
+    FLD(F_D_FULL,     D_BOOL,   0)
+};
+
+static const nj_builtin_method displayable_methods[] = {
+    M("<init>",           "()V", 0),
+    M("getWidth",         "()I", 0),
+    M("getHeight",        "()I", 0),
+    M("getTitle",         "()Ljava/lang/String;", 0),
+    M("setTitle",         "(Ljava/lang/String;)V", 0),
+    M("getTicker",        "()L" NJ_C_TICKER ";", 0),
+    M("setTicker",        "(L" NJ_C_TICKER ";)V", 0),
+    M("addCommand",       "(L" NJ_C_COMMAND ";)V", 0),
+    M("removeCommand",    "(L" NJ_C_COMMAND ";)V", 0),
+    M("setCommandListener", "(L" NJ_C_COMMANDLISTENER ";)V", 0),
+    M("getCommandListener", "()L" NJ_C_COMMANDLISTENER ";", 0),
+    M("isShown",          "()Z", 0),
+    M("sizeChanged",      "(II)V", 0),
+    M("getKeyName",       "(I)Ljava/lang/String;", 0),
+    M("setFullScreenMode", "(Z)V", 0),
+    M("isFullScreenMode", "()Z", 0)
+};
+
+static const nj_builtin_field canvas_fields[] = {
+    FLD(F_C_BUFFER,  D_IMAGE, 0),
+    FLD(F_C_WIDTH,   D_INT,   0),
+    FLD(F_C_HEIGHT,  D_INT,   0),
+    FLD(F_C_KEYS,    D_INT,   0),
+    FLD(F_C_VISIBLE, D_BOOL,  0),
+    FLD(F_C_PRESSED, D_BOOL,  0),
+    FLD("KEY_NUM0",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_NUM1",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_NUM2",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_NUM3",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_NUM4",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_NUM5",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_NUM6",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_NUM7",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_NUM8",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_NUM9",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_STAR",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_POUND",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_UP",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_DOWN",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_LEFT",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_RIGHT",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_FIRE",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_SOFTKEY1", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_SOFTKEY2", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_SOFTKEY3", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("UP",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("DOWN",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LEFT",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("RIGHT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("FIRE",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("GAME_A", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("GAME_B", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("GAME_C", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("GAME_D", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+/*
+ * Canvas declares the event methods ABSTRACT, exactly as MIDP specifies.  A
+ * game's subclass overrides them; a Canvas whose paint() is never overridden
+ * raises AbstractMethodError instead of quietly drawing nothing.
+ */
+static const nj_builtin_method canvas_methods[] = {
+    M("<init>",            "()V", 0),
+    M("paint",             "(L" NJ_C_GRAPHICS ";)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("keyPressed",        "(I)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("keyReleased",       "(I)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("keyRepeated",       "(I)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("pointerPressed",    "(II)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("pointerReleased",   "(II)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("pointerDragged",    "(II)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("showNotify",        "()V", 0),
+    M("hideNotify",        "()V", 0),
+    M("drawNotify",        "()V", 0),
+    M("getWidth",          "()I", 0),
+    M("getHeight",         "()I", 0),
+    M("isDoubleBuffered",  "()Z", 0),
+    M("hasPointerEvents",  "()Z", 0),
+    M("hasPointerMotionEvents", "()Z", 0),
+    M("hasRepeatEvents",   "()Z", 0),
+    M("getGameAction",     "(I)I", 0),
+    M("getKeyCode",        "(I)I", 0),
+    M("getKeyName",        "(I)Ljava/lang/String;", 0),
+    M("repaint",           "()V", 0),
+    M("repaint",           "(IIII)V", 0),
+    M("serviceRepaints",   "()V", 0),
+    M("setFullScreenMode", "(Z)V", 0)
+};
+
+/* ---- Command / Ticker ---- */
+static const nj_builtin_field command_fields[] = {
+    FLD("cmdType",     D_INT, 0),
+    FLD("cmdLabel",    D_STR, 0),
+    FLD("cmdPriority", D_INT, 0),
+    FLD("cmdLongLabel", D_INT, 0),
+    FLD("cmdLong",     D_STR, 0),
+    FLD("SCREEN", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("BACK",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("CANCEL", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("OK",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("HELP",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("STOP",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("EXIT",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("ITEM",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method command_methods[] = {
+    M("<init>", "(ILjava/lang/String;I)V", 0),
+    M("<init>", "(ILjava/lang/String;II)V", 0),
+    M("getCommandType", "()I", 0),
+    M("getLabel",       "()Ljava/lang/String;", 0),
+    M("getLongLabel",   "()Ljava/lang/String;", 0),
+    M("getPriority",    "()I", 0),
+    M("compareTo",      "(L" NJ_C_COMMAND ";)I", 0)
+};
+
+static const nj_builtin_field ticker_fields[] = {
+    FLD("tkString", D_STR, 0),
+    FLD("tkPhase",  D_INT, 0)
+};
+
+static const nj_builtin_method ticker_methods[] = {
+    M("<init>",    "(Ljava/lang/String;)V", 0),
+    M("getString", "()Ljava/lang/String;", 0),
+    M("setString", "(Ljava/lang/String;)V", 0)
+};
+
+/* ---- Item and friends ---- */
+static const nj_builtin_field item_fields[] = {
+    FLD("itLabel",       D_STR,   0),
+    FLD("itLayout",      D_INT,   0),
+    FLD("itPrefW",       D_INT,   0),
+    FLD("itPrefH",       D_INT,   0),
+    FLD("itCmdType",     D_INT,   0),
+    FLD("itDefaultCmd",  D_CMD,   0),
+    FLD("itCmdListener", D_ICL,   0),
+    FLD("itOwner",       D_FORM,  0),
+    FLD("itImage",       D_IMAGE, 0),
+    FLD("itGraphics",    D_GFX,   0),
+    FLD("LAYOUT_DEFAULT",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_LEFT",       D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_RIGHT",      D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_CENTER",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_TOP",        D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_BOTTOM",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_VCENTER",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_NEWLINE_BEFORE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_NEWLINE_AFTER",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_SHRINK",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_VSHRINK",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_EXPAND",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_VEXPAND",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_2",          D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method item_methods[] = {
+    M("<init>", "()V", 0),
+    M("getLabel",       "()Ljava/lang/String;", 0),
+    M("setLabel",       "(Ljava/lang/String;)V", 0),
+    M("getLayout",      "()I", 0),
+    M("setLayout",      "(I)V", 0),
+    M("addCommand",     "(L" NJ_C_COMMAND ";)V", 0),
+    M("removeCommand",  "(L" NJ_C_COMMAND ";)V", 0),
+    M("setItemCommandListener", "(L" NJ_C_ITEMCOMMANDLISTENER ";)V", 0),
+    M("setPreferredSize", "(II)V", 0),
+    M("getMinimumWidth",  "()I", 0),
+    M("getMinimumHeight", "()I", 0),
+    M("getPreferredWidth",  "()I", 0),
+    M("getPreferredHeight", "()I", 0),
+    M("notifyStateChanged", "()V", 0),
+    M("setDefaultCommand",  "(L" NJ_C_COMMAND ";)V", 0),
+    M("getDefaultCommand",  "()L" NJ_C_COMMAND ";", 0),
+    /* Rendering contract: abstract, so every Item answers. */
+    M("njText",   "()Ljava/lang/String;", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("njHeight", "(I)I",                 NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("njSelected", "(I)Ljava/lang/String;", 0)
+};
+
+static const nj_builtin_field stringitem_fields[] = {
+    FLD("siText", D_STR, 0),
+    FLD("siMode", D_INT, 0),
+    FLD("siCmd",  D_CMD, 0),
+    FLD("siCmdListener", D_ICL, 0),
+    FLD("PLAIN",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("HYPERLINK", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("BUTTON",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method stringitem_methods[] = {
+    M("<init>", "(Ljava/lang/String;Ljava/lang/String;I)V", 0),
+    M("getText", "()Ljava/lang/String;", 0),
+    M("setText", "(Ljava/lang/String;)V", 0),
+    M("getAppearanceMode", "()I", 0),
+    M("addCommand",    "(L" NJ_C_COMMAND ";)V", 0),
+    M("removeCommand", "(L" NJ_C_COMMAND ";)V", 0),
+    M("setItemCommandListener", "(L" NJ_C_ITEMCOMMANDLISTENER ";)V", 0),
+    M("njText",   "()Ljava/lang/String;", 0),
+    M("njHeight", "(I)I", 0)
+};
+
+static const nj_builtin_field imageitem_fields[] = {
+    FLD("iiImage",  D_IMAGE, 0),
+    FLD("iiAlt",    D_STR,   0),
+    FLD("iiAlt2",   D_STR,   0),
+    FLD("iiLayout", D_INT,   0),
+    FLD("LAYOUT_DEFAULT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_LEFT",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_RIGHT",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_CENTER",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_NEWLINE_BEFORE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("LAYOUT_NEWLINE_AFTER",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method imageitem_methods[] = {
+    M("<init>", "(L" NJ_C_IMAGE ";Ljava/lang/String;ILjava/lang/String;)V", 0),
+    M("getImage",   "()L" NJ_C_IMAGE ";", 0),
+    M("setImage",   "(L" NJ_C_IMAGE ";)V", 0),
+    M("getAltText", "()Ljava/lang/String;", 0),
+    M("setAltText", "(Ljava/lang/String;)V", 0),
+    M("setLayout",  "(I)V", 0),
+    M("getAppearanceMode", "()I", 0),
+    M("njText",   "()Ljava/lang/String;", 0),
+    M("njHeight", "(I)I", 0)
+};
+
+static const nj_builtin_field gauge_fields[] = {
+    FLD("gaLabel",       D_STR, 0),
+    FLD("gaValue",       D_INT, 0),
+    FLD("gaMax",         D_INT, 0),
+    FLD("gaInteractive", D_BOOL, 0),
+    FLD("INDEFINITE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("CONTINUOUS_IDLE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("INCREMENTAL_IDLE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("CONTINUOUS_RUNNING", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("INCREMENTAL_UPDATING", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method gauge_methods[] = {
+    M("<init>", "(Ljava/lang/String;ZII)V", 0),
+    M("setValue",    "(I)V", 0),
+    M("getValue",    "()I", 0),
+    M("setMaxValue", "(I)V", 0),
+    M("getMaxValue", "()I", 0),
+    M("isInteractive", "()Z", 0),
+    M("njText",   "()Ljava/lang/String;", 0),
+    M("njHeight", "(I)I", 0)
+};
+
+static const nj_builtin_field choicegroup_fields[] = {
+    FLD("cgLabel",    D_STR,    0),
+    FLD("cgType",     D_INT,    0),
+    FLD("cgStrings",  D_STRARR, 0),
+    FLD("cgImages",   D_IMGARR, 0),
+    FLD("cgSelected", "[Z",     0),
+    FLD("cgFont",     D_FONT,   0),
+    FLD("cgCount",    D_INT,    0),
+    FLD("cgIndex",    D_INT,    0),
+    FLD("cgFit",      D_INT,    0),
+    FLD("MULTIPLE",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("EXCLUSIVE",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("IMPLICIT",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TEXT_WRAP_ON",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TEXT_WRAP_OFF", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TEXT_WRAP_DEFAULT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method choicegroup_methods[] = {
+    M("<init>", "(ILjava/lang/String;)V", 0),
+    M("append", "(Ljava/lang/String;)I", 0),
+    M("append", "(Ljava/lang/String;L" NJ_C_IMAGE ";)I", 0),
+    M("insert", "(ILjava/lang/String;)V", 0),
+    M("insert", "(ILjava/lang/String;L" NJ_C_IMAGE ";)V", 0),
+    M("delete",    "(I)V", 0),
+    M("deleteAll", "()V", 0),
+    M("size",      "()I", 0),
+    M("getString", "(I)Ljava/lang/String;", 0),
+    M("setString", "(ILjava/lang/String;)V", 0),
+    M("getImage",  "(I)L" NJ_C_IMAGE ";", 0),
+    M("setImage",  "(IL" NJ_C_IMAGE ";)V", 0),
+    M("isSelected", "(I)Z", 0),
+    M("setSelectedIndex",  "(IZ)V", 0),
+    M("getSelectedIndex",  "()I", 0),
+    M("setSelectedFlags",  "([Z)V", 0),
+    M("getSelectedFlags",  "([Z)I", 0),
+    M("setFitPolicy", "()V", 0),
+    M("setFitPolicy", "(I)V", 0),
+    M("getFitPolicy", "()I", 0),
+    M("setFont", "(IL" NJ_C_FONT ";)V", 0),
+    M("getFont", "(I)L" NJ_C_FONT ";", 0),
+    M("njText",   "()Ljava/lang/String;", 0),
+    M("njHeight", "(I)I", 0)
+};
+
+static const nj_builtin_field textfield_fields[] = {
+    FLD("tfLabel",       D_STR,   0),
+    FLD("tfText",        D_STR,   0),
+    FLD("tfChars",       D_CHARR, 0),
+    FLD("tfMax",         D_INT,   0),
+    FLD("tfConstraints", D_INT,   0),
+    FLD("tfCursor",      D_INT,   0),
+    FLD("tfInputMode",   D_INT,   0),
+    FLD("tfInputModeName", D_STR, 0),
+    FLD("ANY",         D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("EMAILADDR",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("NUMERIC",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("PHONENUMBER", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("URL",         D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("DECIMAL",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("PASSWORD",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("UNEDITABLE",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("SENSITIVE",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("NON_PREDICTIVE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("INITIAL_CAPS_WORD", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("INITIAL_CAPS_SENTENCE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("INITIAL_CAPS_SENTENCE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method textfield_methods[] = {
+    M("<init>", "(Ljava/lang/String;Ljava/lang/String;II)V", 0),
+    M("getString",       "()Ljava/lang/String;", 0),
+    M("setString",       "(Ljava/lang/String;)V", 0),
+    M("getChars",        "([C)V", 0),
+    M("setChars",        "([CII)V", 0),
+    M("insert",          "([CIII)V", 0),
+    M("delete",          "(II)V", 0),
+    M("size",            "()I", 0),
+    M("getMaxSize",      "()I", 0),
+    M("setMaxSize",      "(I)V", 0),
+    M("getConstraints",  "()I", 0),
+    M("setConstraints",  "(I)V", 0),
+    M("setInitialInputMode", "(Ljava/lang/String;)V", 0),
+    M("getInitialInputMode", "()Ljava/lang/String;", 0),
+    M("njText",   "()Ljava/lang/String;", 0),
+    M("njHeight", "(I)I", 0)
+};
+
+static const nj_builtin_field datefield_fields[] = {
+    FLD("dfLabel",     D_STR, 0),
+    FLD("dfTime",      "J",   0),
+    FLD("dfMode",      D_INT, 0),
+    FLD("dfInputMode", D_INT, 0),
+    FLD("DATE",      D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TIME",      D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("DATE_TIME", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method datefield_methods[] = {
+    M("<init>", "(Ljava/lang/String;JI)V", 0),
+    M("getDate",  "()J", 0),
+    M("setDate",  "(J)V", 0),
+    M("setInputMode", "(I)V", 0),
+    M("getInputMode", "()I", 0),
+    M("njText",   "()Ljava/lang/String;", 0),
+    M("njHeight", "(I)I", 0)
+};
+
+static const nj_builtin_field spacer_fields[] = {
+    FLD("spW", D_INT, 0),
+    FLD("spH", D_INT, 0)
+};
+
+static const nj_builtin_method spacer_methods[] = {
+    M("<init>", "(II)V", 0),
+    M("setMinimumSize", "(II)V", 0),
+    M("njText",   "()Ljava/lang/String;", 0),
+    M("njHeight", "(I)I", 0)
+};
+
+/* ---- Form / List / TextBox ---- */
+static const nj_builtin_field form_fields[] = {
+    FLD("fmItems",   D_ITEMARR, 0),
+    FLD("fmCount",   D_INT,     0),
+    FLD("fmIndex",   D_INT,     0),
+    FLD("fmItemListener", D_ISL, 0),
+    FLD("fmBuffer",  D_IMAGE,   0)
+};
+
+static const nj_builtin_method form_methods[] = {
+    M("<init>", "(Ljava/lang/String;)V", 0),
+    M("append", "(Ljava/lang/String;)I", 0),
+    M("append", "(L" NJ_C_IMAGE ";)I", 0),
+    M("append", "(L" NJ_C_ITEM ";)I", 0),
+    M("insert", "(ILjava/lang/String;)V", 0),
+    M("insert", "(IL" NJ_C_IMAGE ";)V", 0),
+    M("insert", "(IL" NJ_C_ITEM ";)V", 0),
+    M("delete",    "(I)V", 0),
+    M("deleteAll", "()V", 0),
+    M("size",      "()I", 0),
+    M("get",       "(I)L" NJ_C_ITEM ";", 0),
+    M("set",       "(IL" NJ_C_ITEM ";)V", 0),
+    M("setItemStateListener", "(L" NJ_C_ITEMSTATELISTENER ";)V", 0)
+};
+
+static const nj_builtin_field list_fields[] = {
+    FLD("lsType",    D_INT,    0),
+    FLD("lsStrings", D_STRARR, 0),
+    FLD("lsImages",  D_IMGARR, 0),
+    FLD("lsCount",   D_INT,    0),
+    FLD("lsIndex",   D_INT,    0),
+    FLD("lsFit",     D_INT,    0),
+    FLD("lsFont",    D_FONT,   0),
+    FLD("lsSelect",  D_CMD,    0),
+    FLD("SELECT_COMMAND", D_CMD, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("IMPLICIT",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("EXCLUSIVE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("MULTIPLE",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TEXT_WRAP_ON",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TEXT_WRAP_OFF", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TEXT_WRAP_DEFAULT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method list_methods[] = {
+    M("<init>", "(Ljava/lang/String;I)V", 0),
+    M("<init>", "(Ljava/lang/String;I[Ljava/lang/String;[L" NJ_C_IMAGE ";)V", 0),
+    M("getType", "()I", 0),
+    M("append", "(Ljava/lang/String;)I", 0),
+    M("append", "(Ljava/lang/String;L" NJ_C_IMAGE ";)I", 0),
+    M("insert", "(ILjava/lang/String;)V", 0),
+    M("insert", "(ILjava/lang/String;L" NJ_C_IMAGE ";)V", 0),
+    M("delete",    "(I)V", 0),
+    M("deleteAll", "()V", 0),
+    M("size",      "()I", 0),
+    M("getString", "(I)Ljava/lang/String;", 0),
+    M("setString", "(ILjava/lang/String;)V", 0),
+    M("getImage",  "(I)L" NJ_C_IMAGE ";", 0),
+    M("setImage",  "(IL" NJ_C_IMAGE ";)V", 0),
+    M("getSelectedIndex", "()I", 0),
+    M("setSelectedIndex", "(I)V", 0),
+    M("isSelected",       "(I)Z", 0),
+    M("setSelectedFlags", "([Z)I", 0),
+    M("getSelectedFlags", "([Z)I", 0),
+    M("setFitPolicy", "(I)V", 0),
+    M("getFitPolicy", "()I", 0),
+    M("setFont", "(IL" NJ_C_FONT ";)V", 0),
+    M("getFont", "(I)L" NJ_C_FONT ";", 0),
+    M("getSelectCommand", "()L" NJ_C_COMMAND ";", 0)
+};
+
+static const nj_builtin_field textbox_fields[] = {
+    FLD("tbText",        D_STR,   0),
+    FLD("tbChars",       D_CHARR, 0),
+    FLD("tbMax",         D_INT,   0),
+    FLD("tbConstraints", D_INT,   0),
+    FLD("tbCursor",      D_INT,   0),
+    FLD("tbInputMode",   D_INT,   0),
+    FLD("tbInputModeName", D_STR, 0),
+    FLD("tbBuffer",      D_IMAGE, 0),
+    FLD("ANY",         D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("EMAILADDR",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("NUMERIC",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("PHONENUMBER", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("URL",         D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("DECIMAL",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("PASSWORD",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("UNEDITABLE",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("SENSITIVE",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("NON_PREDICTIVE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("INITIAL_CAPS_WORD", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("INITIAL_CAPS_SENTENCE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method textbox_methods[] = {
+    M("<init>", "(Ljava/lang/String;Ljava/lang/String;II)V", 0),
+    M("getString",       "()Ljava/lang/String;", 0),
+    M("setString",       "(Ljava/lang/String;)V", 0),
+    M("getChars",        "([C)V", 0),
+    M("setChars",        "([CII)V", 0),
+    M("insert",          "([CIII)V", 0),
+    M("delete",          "(II)V", 0),
+    M("size",            "()I", 0),
+    M("getMaxSize",      "()I", 0),
+    M("setMaxSize",      "(I)V", 0),
+    M("getConstraints",  "()I", 0),
+    M("setConstraints",  "(I)V", 0),
+    M("setInitialInputMode", "(Ljava/lang/String;)V", 0),
+    M("setTicker",       "(L" NJ_C_TICKER ";)V", 0),
+    M("getTicker",       "()L" NJ_C_TICKER ";", 0)
+};
+
+/* ---- Alert / AlertType ---- */
+static const nj_builtin_field alert_fields[] = {
+    FLD(F_AL_TYPE,    "L" NJ_C_ALERTTYPE ";", 0),
+    FLD(F_AL_STRING,  D_STR,   0),
+    FLD(F_AL_IMAGE,   D_IMAGE, 0),
+    FLD(F_AL_TIMEOUT, D_INT,   0),
+    FLD(F_AL_INDEF,   D_BOOL,  0),
+    FLD("alIndicator", NJ_C_GAUGE, 0),
+    FLD("alBuffer",   D_IMAGE, 0),
+    FLD("sDefaultTimeout", D_INT, NJ_ACC_STATIC),
+    FLD("DISMISS_COMMAND", D_CMD, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method alert_methods[] = {
+    M("<init>", "(Ljava/lang/String;)V", 0),
+    M("<init>", "(Ljava/lang/String;Ljava/lang/String;L" NJ_C_IMAGE ";L" NJ_C_ALERTTYPE ";)V", 0),
+    M("getType",   "()L" NJ_C_ALERTTYPE ";", 0),
+    M("setType",   "(L" NJ_C_ALERTTYPE ";)V", 0),
+    M("getString", "()Ljava/lang/String;", 0),
+    M("setString", "(Ljava/lang/String;)V", 0),
+    M("getImage",  "()L" NJ_C_IMAGE ";", 0),
+    M("setImage",  "(L" NJ_C_IMAGE ";)V", 0),
+    M("getTimeout", "()I", 0),
+    M("setTimeout", "(I)V", 0),
+    M("getDefaultTimeout", "()I", NJ_ACC_STATIC),
+    M("setDefaultTimeout", "(I)V", NJ_ACC_STATIC),
+    M("addCommand",    "(L" NJ_C_COMMAND ";)V", 0),
+    M("removeCommand", "(L" NJ_C_COMMAND ";)V", 0),
+    M("setCommandListener", "(L" NJ_C_COMMANDLISTENER ";)V", 0),
+    M("setIndicator", "(L" NJ_C_GAUGE ";)V", 0),
+    M("getIndicator", "()L" NJ_C_GAUGE ";", 0)
+};
+
+static const nj_builtin_field alerttype_fields[] = {
+    FLD("atType", D_INT, 0),
+    FLD("INFO",         "L" NJ_C_ALERTTYPE ";", NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("WARNING",      "L" NJ_C_ALERTTYPE ";", NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("ERROR",        "L" NJ_C_ALERTTYPE ";", NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("ALARM",        "L" NJ_C_ALERTTYPE ";", NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("CONFIRMATION", "L" NJ_C_ALERTTYPE ";", NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method alerttype_methods[] = {
+    M("<init>", "(I)V", 0),
+    M("playSound", "(L" NJ_C_DISPLAY ";)Z", 0),
+    M("getTypeName", "()Ljava/lang/String;", 0)
+};
+
+/* ---- Display ---- */
+static const nj_builtin_field display_fields[] = {
+    FLD(F_DISP_CUR,   D_DISPLAY,  0),
+    FLD(F_DISP_ALERT, D_DISPLAY,  0),
+    FLD("dpQueue",    D_VECTOR,   0),
+    FLD("sDisplay",   D_DISPLAYS, NJ_ACC_STATIC),
+    FLD("LIST_ELEMENT",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TEXT_ELEMENT",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("IMAGE_ELEMENT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method display_methods[] = {
+    M("getDisplay", "(Ljavax/microedition/midlet/MIDlet;)L" NJ_C_DISPLAY ";",
+      NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("setCurrent", "(L" NJ_C_DISPLAYABLE ";)V", 0),
+    M("setCurrent", "(L" NJ_C_ALERT ";L" NJ_C_DISPLAYABLE ";)V", 0),
+    M("getCurrent", "()L" NJ_C_DISPLAYABLE ";", 0),
+    M("callSerially", "(Ljava/lang/Runnable;)V", 0),
+    M("isColor",     "()Z", NJ_ACC_STATIC),
+    M("numColors",   "()I", NJ_ACC_STATIC),
+    M("numAlphaLevels", "()I", NJ_ACC_STATIC),
+    M("flashBacklight", "(I)Z", NJ_ACC_STATIC),
+    M("vibrate",     "(I)Z", NJ_ACC_STATIC),
+    M("getBestImageWidth",  "(I)I", NJ_ACC_STATIC),
+    M("getBestImageHeight", "(I)I", NJ_ACC_STATIC)
+};
+
+/* ---- interfaces: declared abstract, no natives ---- */
+static const nj_builtin_method commandlistener_methods[] = {
+    M("commandAction",
+      "(L" NJ_C_COMMAND ";L" NJ_C_DISPLAYABLE ";)V",
+      NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
+};
+
+static const nj_builtin_method itemcommandlistener_methods[] = {
+    M("commandAction", "(L" NJ_C_COMMAND ";L" NJ_C_ITEM ";)V",
+      NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
+};
+
+static const nj_builtin_method itemstatelistener_methods[] = {
+    M("itemStateChanged", "(L" NJ_C_ITEM ";)V",
+      NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
+};
+
+#define NJ_LCDUI_N(a) (nj_u2)(sizeof(a) / sizeof((a)[0]))
+
+const nj_builtin_class nj_lib_lcdui_classes[] = {
+    { NJ_C_DISPLAYABLE, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
+      displayable_fields, NJ_LCDUI_N(displayable_fields),
+      displayable_methods, NJ_LCDUI_N(displayable_methods) },
+    { NJ_C_CANVAS, NJ_C_DISPLAYABLE, NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
+      canvas_fields, NJ_LCDUI_N(canvas_fields),
+      canvas_methods, NJ_LCDUI_N(canvas_methods) },
+    { NJ_C_GRAPHICS, "java/lang/Object", NJ_ACC_PUBLIC,
+      graphics_fields, NJ_LCDUI_N(graphics_fields),
+      graphics_methods, NJ_LCDUI_N(graphics_methods) },
+    { NJ_C_IMAGE, "java/lang/Object", NJ_ACC_PUBLIC,
+      image_fields, NJ_LCDUI_N(image_fields),
+      image_methods, NJ_LCDUI_N(image_methods) },
+    { NJ_C_FONT, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_FINAL,
+      font_fields, NJ_LCDUI_N(font_fields),
+      font_methods, NJ_LCDUI_N(font_methods) },
+    { NJ_C_COMMAND, "java/lang/Object", NJ_ACC_PUBLIC,
+      command_fields, NJ_LCDUI_N(command_fields),
+      command_methods, NJ_LCDUI_N(command_methods) },
+    { NJ_C_TICKER, "java/lang/Object", NJ_ACC_PUBLIC,
+      ticker_fields, NJ_LCDUI_N(ticker_fields),
+      ticker_methods, NJ_LCDUI_N(ticker_methods) },
+    { NJ_C_ALERT, NJ_C_DISPLAYABLE, NJ_ACC_PUBLIC,
+      alert_fields, NJ_LCDUI_N(alert_fields),
+      alert_methods, NJ_LCDUI_N(alert_methods) },
+    { NJ_C_ALERTTYPE, "java/lang/Object", NJ_ACC_PUBLIC,
+      alerttype_fields, NJ_LCDUI_N(alerttype_fields),
+      alerttype_methods, NJ_LCDUI_N(alerttype_methods) },
+    { NJ_C_FORM, NJ_C_DISPLAYABLE, NJ_ACC_PUBLIC,
+      form_fields, NJ_LCDUI_N(form_fields),
+      form_methods, NJ_LCDUI_N(form_methods) },
+    { NJ_C_LIST, NJ_C_FORM, NJ_ACC_PUBLIC,
+      list_fields, NJ_LCDUI_N(list_fields),
+      list_methods, NJ_LCDUI_N(list_methods) },
+    { NJ_C_TEXTBOX, NJ_C_DISPLAYABLE, NJ_ACC_PUBLIC,
+      textbox_fields, NJ_LCDUI_N(textbox_fields),
+      textbox_methods, NJ_LCDUI_N(textbox_methods) },
+    { NJ_C_ITEM, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
+      item_fields, NJ_LCDUI_N(item_fields),
+      item_methods, NJ_LCDUI_N(item_methods) },
+    { NJ_C_STRINGITEM, NJ_C_ITEM, NJ_ACC_PUBLIC,
+      stringitem_fields, NJ_LCDUI_N(stringitem_fields),
+      stringitem_methods, NJ_LCDUI_N(stringitem_methods) },
+    { NJ_C_IMAGEITEM, NJ_C_ITEM, NJ_ACC_PUBLIC,
+      imageitem_fields, NJ_LCDUI_N(imageitem_fields),
+      imageitem_methods, NJ_LCDUI_N(imageitem_methods) },
+    { NJ_C_GAUGE, NJ_C_ITEM, NJ_ACC_PUBLIC,
+      gauge_fields, NJ_LCDUI_N(gauge_fields),
+      gauge_methods, NJ_LCDUI_N(gauge_methods) },
+    { NJ_C_CHOICEGROUP, NJ_C_ITEM, NJ_ACC_PUBLIC,
+      choicegroup_fields, NJ_LCDUI_N(choicegroup_fields),
+      choicegroup_methods, NJ_LCDUI_N(choicegroup_methods) },
+    { NJ_C_TEXTFIELD, NJ_C_ITEM, NJ_ACC_PUBLIC,
+      textfield_fields, NJ_LCDUI_N(textfield_fields),
+      textfield_methods, NJ_LCDUI_N(textfield_methods) },
+    { NJ_C_DATEFIELD, NJ_C_ITEM, NJ_ACC_PUBLIC,
+      datefield_fields, NJ_LCDUI_N(datefield_fields),
+      datefield_methods, NJ_LCDUI_N(datefield_methods) },
+    { NJ_C_SPACER, NJ_C_ITEM, NJ_ACC_PUBLIC,
+      spacer_fields, NJ_LCDUI_N(spacer_fields),
+      spacer_methods, NJ_LCDUI_N(spacer_methods) },
+    { NJ_C_DISPLAY, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_FINAL,
+      display_fields, NJ_LCDUI_N(display_fields),
+      display_methods, NJ_LCDUI_N(display_methods) },
+    { NJ_C_COMMANDLISTENER, NULL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, commandlistener_methods, NJ_LCDUI_N(commandlistener_methods) },
+    { NJ_C_ITEMCOMMANDLISTENER, NULL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, itemcommandlistener_methods, NJ_LCDUI_N(itemcommandlistener_methods) },
+    { NJ_C_ITEMSTATELISTENER, NULL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, itemstatelistener_methods, NJ_LCDUI_N(itemstatelistener_methods) }
+};
+const int nj_lib_lcdui_class_count =
+    (int)(sizeof(nj_lib_lcdui_classes) / sizeof(nj_lib_lcdui_classes[0]));
+
+const nj_native_entry nj_lib_lcdui_table[] = {
+    { NJ_C_IMAGE, "<init>", "()V", img_init_wh },
+    { NJ_C_IMAGE, "createImage", "(II)L" NJ_C_IMAGE ";", img_createImage_wh },
+    { NJ_C_IMAGE, "createImage", "(L" NJ_C_IMAGE ";IIIII)L" NJ_C_IMAGE ";", img_createImage_img },
+    { NJ_C_IMAGE, "createImage", "([BII)L" NJ_C_IMAGE ";", img_createImage_bytes3 },
+    { NJ_C_IMAGE, "createImage", "([BIII)L" NJ_C_IMAGE ";", img_createImage_bytes },
+    { NJ_C_IMAGE, "createImage", "(Ljava/lang/String;)L" NJ_C_IMAGE ";", img_createImage_name },
+    { NJ_C_IMAGE, "createRGBImage", "([IIIZ)L" NJ_C_IMAGE ";", img_createRGBImage },
+    { NJ_C_IMAGE, "getWidth", "()I", img_getWidth },
+    { NJ_C_IMAGE, "getHeight", "()I", img_getHeight },
+    { NJ_C_IMAGE, "isMutable", "()Z", img_isMutable },
+    { NJ_C_IMAGE, "getGraphics", "()L" NJ_C_GRAPHICS ";", img_getGraphics },
+    { NJ_C_IMAGE, "getRGB", "([IIIIIII)V", img_getRGB },
+
+    { NJ_C_FONT, "getFont", "(I)L" NJ_C_FONT ";", font_getFontStatic1 },
+    { NJ_C_FONT, "getFont", "(III)L" NJ_C_FONT ";", font_getFontStatic3 },
+    { NJ_C_FONT, "getDefaultFont", "()L" NJ_C_FONT ";", font_getDefaultFont },
+    { NJ_C_FONT, "getFace", "()I", font_getFace },
+    { NJ_C_FONT, "getStyle", "()I", font_getStyle },
+    { NJ_C_FONT, "getSize", "()I", font_getSize },
+    { NJ_C_FONT, "isPlain", "()Z", font_isPlain },
+    { NJ_C_FONT, "isBold", "()Z", font_isBold },
+    { NJ_C_FONT, "isItalic", "()Z", font_isItalic },
+    { NJ_C_FONT, "isUnderlined", "()Z", font_isUnderlined },
+    { NJ_C_FONT, "getHeight", "()I", font_getHeight },
+    { NJ_C_FONT, "getBaselinePosition", "()I", font_getBaselinePosition },
+    { NJ_C_FONT, "getAscent", "()I", font_getAscent },
+    { NJ_C_FONT, "getDescent", "()I", font_getDescent },
+    { NJ_C_FONT, "charWidth", "(C)I", font_charWidth },
+    { NJ_C_FONT, "charsWidth", "([CII)I", font_charsWidth },
+    { NJ_C_FONT, "stringWidth", "(Ljava/lang/String;)I", font_stringWidth },
+    { NJ_C_FONT, "substringWidth", "(Ljava/lang/String;II)I", font_substringWidth },
+
+    { NJ_C_GRAPHICS, "<init>", "(L" NJ_C_IMAGE ";)V", g_init },
+    { NJ_C_GRAPHICS, "translate", "(II)V", g_translate },
+    { NJ_C_GRAPHICS, "getTranslateX", "()I", g_getTranslateX },
+    { NJ_C_GRAPHICS, "getTranslateY", "()I", g_getTranslateY },
+    { NJ_C_GRAPHICS, "setClip", "(IIII)V", g_setClip },
+    { NJ_C_GRAPHICS, "clipRect", "(IIII)V", g_clipRect },
+    { NJ_C_GRAPHICS, "getClipX", "()I", g_getClipX },
+    { NJ_C_GRAPHICS, "getClipY", "()I", g_getClipY },
+    { NJ_C_GRAPHICS, "getClipWidth", "()I", g_getClipWidth },
+    { NJ_C_GRAPHICS, "getClipHeight", "()I", g_getClipHeight },
+    { NJ_C_GRAPHICS, "setColor", "(I)V", g_setColor },
+    { NJ_C_GRAPHICS, "setColor", "(III)V", g_setColorRGB },
+    { NJ_C_GRAPHICS, "getColor", "()I", g_getColor },
+    { NJ_C_GRAPHICS, "getRedComponent", "()I", g_getRedComponent },
+    { NJ_C_GRAPHICS, "getGreenComponent", "()I", g_getGreenComponent },
+    { NJ_C_GRAPHICS, "getBlueComponent", "()I", g_getBlueComponent },
+    { NJ_C_GRAPHICS, "getAlphaComponent", "()I", g_getAlphaComponent },
+    { NJ_C_GRAPHICS, "setAlpha", "(I)V", g_setAlpha },
+    { NJ_C_GRAPHICS, "getAlpha", "()I", g_getAlpha },
+    { NJ_C_GRAPHICS, "setGrayScale", "(I)V", g_setGrayScale },
+    { NJ_C_GRAPHICS, "setBlendMode", "(I)V", g_setBlendMode },
+    { NJ_C_GRAPHICS, "getBlendMode", "()I", g_getBlendMode },
+    { NJ_C_GRAPHICS, "setStrokeStyle", "(I)V", g_setStrokeStyle },
+    { NJ_C_GRAPHICS, "getStrokeStyle", "()I", g_getStrokeStyle },
+    { NJ_C_GRAPHICS, "setFont", "(L" NJ_C_FONT ";)V", g_setFont },
+    { NJ_C_GRAPHICS, "getFont", "()L" NJ_C_FONT ";", g_getFont },
+    { NJ_C_GRAPHICS, "setXORMode", "(L" NJ_C_GRAPHICS ";)V", g_setXORMode },
+    { NJ_C_GRAPHICS, "drawLine", "(IIII)V", g_drawLine },
+    { NJ_C_GRAPHICS, "drawRect", "(IIII)V", g_drawRect },
+    { NJ_C_GRAPHICS, "fillRect", "(IIII)V", g_fillRect },
+    { NJ_C_GRAPHICS, "drawRoundRect", "(IIIIII)V", g_drawRoundRect },
+    { NJ_C_GRAPHICS, "fillRoundRect", "(IIIIII)V", g_fillRoundRect },
+    { NJ_C_GRAPHICS, "drawArc", "(IIIIII)V", g_drawArc },
+    { NJ_C_GRAPHICS, "fillArc", "(IIIIII)V", g_fillArc },
+    { NJ_C_GRAPHICS, "drawTriangle", "(IIIIII)V", g_drawTriangle },
+    { NJ_C_GRAPHICS, "fillTriangle", "(IIIIII)V", g_fillTriangle },
+    { NJ_C_GRAPHICS, "drawString", "(Ljava/lang/String;III)V", g_drawString },
+    { NJ_C_GRAPHICS, "drawString", "(Ljava/lang/String;II)V", g_drawString3 },
+    { NJ_C_GRAPHICS, "drawSubstring", "(Ljava/lang/String;IIIII)V", g_drawSubstring },
+    { NJ_C_GRAPHICS, "drawChars", "([CIIIII)V", g_drawChars },
+    { NJ_C_GRAPHICS, "drawChar", "(CIII)V", g_drawChar },
+    { NJ_C_GRAPHICS, "drawImage", "(L" NJ_C_IMAGE ";III)V", g_drawImage },
+    { NJ_C_GRAPHICS, "drawRegion", "(L" NJ_C_IMAGE ";IIIII)V", g_drawRegion4 },
+    { NJ_C_GRAPHICS, "drawRegion", "(L" NJ_C_IMAGE ";IIIIIII)V", g_drawRegion8 },
+    { NJ_C_GRAPHICS, "drawRegion", "(L" NJ_C_IMAGE ";IIIIIIIL" NJ_C_IMAGE ";)V", g_drawRegion9 },
+    { NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", g_drawRGB },
+    { NJ_C_GRAPHICS, "copyArea", "(IIIIIII)V", g_copyArea },
+
+    { NJ_C_DISPLAYABLE, "<init>", "()V", d_init },
+    { NJ_C_DISPLAYABLE, "getWidth", "()I", d_getWidth },
+    { NJ_C_DISPLAYABLE, "getHeight", "()I", d_getHeight },
+    { NJ_C_DISPLAYABLE, "getTitle", "()Ljava/lang/String;", d_getTitle },
+    { NJ_C_DISPLAYABLE, "setTitle", "(Ljava/lang/String;)V", d_setTitle },
+    { NJ_C_DISPLAYABLE, "getTicker", "()L" NJ_C_TICKER ";", d_getTicker },
+    { NJ_C_DISPLAYABLE, "setTicker", "(L" NJ_C_TICKER ";)V", d_setTicker },
+    { NJ_C_DISPLAYABLE, "addCommand", "(L" NJ_C_COMMAND ";)V", d_addCommand },
+    { NJ_C_DISPLAYABLE, "removeCommand", "(L" NJ_C_COMMAND ";)V", d_removeCommand },
+    { NJ_C_DISPLAYABLE, "setCommandListener", "(L" NJ_C_COMMANDLISTENER ";)V", d_setCommandListener },
+    { NJ_C_DISPLAYABLE, "getCommandListener", "()L" NJ_C_COMMANDLISTENER ";", d_getCommandListener },
+    { NJ_C_DISPLAYABLE, "isShown", "()Z", d_isShown },
+    { NJ_C_DISPLAYABLE, "sizeChanged", "(II)V", d_sizeChanged },
+    { NJ_C_DISPLAYABLE, "getKeyName", "(I)Ljava/lang/String;", d_getKeyName },
+    { NJ_C_DISPLAYABLE, "setFullScreenMode", "(Z)V", d_setFullScreenMode },
+    { NJ_C_DISPLAYABLE, "isFullScreenMode", "()Z", d_isFullScreenMode },
+
+    { NJ_C_CANVAS, "<init>", "()V", c_init },
+    { NJ_C_CANVAS, "getWidth", "()I", c_getWidth },
+    { NJ_C_CANVAS, "getHeight", "()I", c_getHeight },
+    { NJ_C_CANVAS, "isDoubleBuffered", "()Z", c_isDoubleBuffered },
+    { NJ_C_CANVAS, "hasPointerEvents", "()Z", c_hasPointerEvents },
+    { NJ_C_CANVAS, "hasPointerMotionEvents", "()Z", c_hasPointerMotionEvents },
+    { NJ_C_CANVAS, "hasRepeatEvents", "()Z", c_hasRepeatEvents },
+    { NJ_C_CANVAS, "getGameAction", "(I)I", c_getGameAction },
+    { NJ_C_CANVAS, "getKeyCode", "(I)I", c_getKeyCode },
+    { NJ_C_CANVAS, "getKeyName", "(I)Ljava/lang/String;", c_getKeyName },
+    { NJ_C_CANVAS, "repaint", "()V", c_repaint_all },
+    { NJ_C_CANVAS, "repaint", "(IIII)V", c_repaint },
+    { NJ_C_CANVAS, "serviceRepaints", "()V", c_serviceRepaints },
+    { NJ_C_CANVAS, "setFullScreenMode", "(Z)V", c_setFullScreenMode },
+
+    { NJ_C_COMMAND, "<init>", "(ILjava/lang/String;I)V", cmd_init },
+    { NJ_C_COMMAND, "<init>", "(ILjava/lang/String;II)V", cmd_init_long },
+    { NJ_C_COMMAND, "getCommandType", "()I", cmd_getCommandType },
+    { NJ_C_COMMAND, "getLabel", "()Ljava/lang/String;", cmd_getLabel },
+    { NJ_C_COMMAND, "getLongLabel", "()Ljava/lang/String;", cmd_getLongLabel },
+    { NJ_C_COMMAND, "getPriority", "()I", cmd_getPriority },
+    { NJ_C_COMMAND, "compareTo", "(L" NJ_C_COMMAND ";)I", cmd_compareTo },
+
+    { NJ_C_TICKER, "<init>", "(Ljava/lang/String;)V", ticker_init },
+    { NJ_C_TICKER, "getString", "()Ljava/lang/String;", ticker_getString },
+    { NJ_C_TICKER, "setString", "(Ljava/lang/String;)V", ticker_setString },
+
+    { NJ_C_ITEM, "<init>", "()V", item_init },
+    { NJ_C_ITEM, "getLabel", "()Ljava/lang/String;", item_getLabel },
+    { NJ_C_ITEM, "setLabel", "(Ljava/lang/String;)V", item_setLabel },
+    { NJ_C_ITEM, "getLayout", "()I", item_getLayout },
+    { NJ_C_ITEM, "setLayout", "(I)V", item_setLayout },
+    { NJ_C_ITEM, "addCommand", "(L" NJ_C_COMMAND ";)V", item_addCommand },
+    { NJ_C_ITEM, "removeCommand", "(L" NJ_C_COMMAND ";)V", item_removeCommand },
+    { NJ_C_ITEM, "setItemCommandListener", "(L" NJ_C_ITEMCOMMANDLISTENER ";)V", item_setItemCommandListener },
+    { NJ_C_ITEM, "setPreferredSize", "(II)V", item_setPreferredSize },
+    { NJ_C_ITEM, "getMinimumWidth", "()I", item_getMinimumWidth },
+    { NJ_C_ITEM, "getMinimumHeight", "()I", item_getMinimumHeight },
+    { NJ_C_ITEM, "getPreferredWidth", "()I", item_getPreferredWidth },
+    { NJ_C_ITEM, "getPreferredHeight", "()I", item_getPreferredHeight },
+    { NJ_C_ITEM, "notifyStateChanged", "()V", item_notifyStateChanged },
+    { NJ_C_ITEM, "setDefaultCommand", "(L" NJ_C_COMMAND ";)V", item_setDefaultCommand },
+    { NJ_C_ITEM, "getDefaultCommand", "()L" NJ_C_COMMAND ";", item_getDefaultCommand },
+    { NJ_C_ITEM, "njText", "()Ljava/lang/String;", item_njText },
+    { NJ_C_ITEM, "njHeight", "(I)I", item_njHeight },
+    { NJ_C_ITEM, "njSelected", "(I)Ljava/lang/String;", item_njSelected },
+
+    { NJ_C_STRINGITEM, "<init>", "(Ljava/lang/String;Ljava/lang/String;I)V", si_init },
+    { NJ_C_STRINGITEM, "getText", "()Ljava/lang/String;", si_getText },
+    { NJ_C_STRINGITEM, "setText", "(Ljava/lang/String;)V", si_setText },
+    { NJ_C_STRINGITEM, "getAppearanceMode", "()I", si_getAppearanceMode },
+    { NJ_C_STRINGITEM, "addCommand", "(L" NJ_C_COMMAND ";)V", si_addCommand },
+    { NJ_C_STRINGITEM, "removeCommand", "(L" NJ_C_COMMAND ";)V", si_removeCommand },
+    { NJ_C_STRINGITEM, "setItemCommandListener", "(L" NJ_C_ITEMCOMMANDLISTENER ";)V", si_setItemCommandListener },
+    { NJ_C_STRINGITEM, "njText", "()Ljava/lang/String;", si_njText },
+    { NJ_C_STRINGITEM, "njHeight", "(I)I", si_njHeight },
+
+    { NJ_C_IMAGEITEM, "<init>", "(L" NJ_C_IMAGE ";Ljava/lang/String;ILjava/lang/String;)V", ii_init },
+    { NJ_C_IMAGEITEM, "getImage", "()L" NJ_C_IMAGE ";", ii_getImage },
+    { NJ_C_IMAGEITEM, "setImage", "(L" NJ_C_IMAGE ";)V", ii_setImage },
+    { NJ_C_IMAGEITEM, "getAltText", "()Ljava/lang/String;", ii_getAltText },
+    { NJ_C_IMAGEITEM, "setAltText", "(Ljava/lang/String;)V", ii_setAltText },
+    { NJ_C_IMAGEITEM, "setLayout", "(I)V", ii_setLayout },
+    { NJ_C_IMAGEITEM, "getAppearanceMode", "()I", ii_getAppearanceMode },
+    { NJ_C_IMAGEITEM, "njText", "()Ljava/lang/String;", ii_njText },
+    { NJ_C_IMAGEITEM, "njHeight", "(I)I", ii_njHeight },
+
+    { NJ_C_GAUGE, "<init>", "(Ljava/lang/String;ZII)V", gauge_init },
+    { NJ_C_GAUGE, "setValue", "(I)V", gauge_setValue },
+    { NJ_C_GAUGE, "getValue", "()I", gauge_getValue },
+    { NJ_C_GAUGE, "setMaxValue", "(I)V", gauge_setMaxValue },
+    { NJ_C_GAUGE, "getMaxValue", "()I", gauge_getMaxValue },
+    { NJ_C_GAUGE, "isInteractive", "()Z", gauge_isInteractive },
+    { NJ_C_GAUGE, "njText", "()Ljava/lang/String;", gauge_njText },
+    { NJ_C_GAUGE, "njHeight", "(I)I", gauge_njHeight },
+
+    { NJ_C_CHOICEGROUP, "<init>", "(ILjava/lang/String;)V", cg_init },
+    { NJ_C_CHOICEGROUP, "append", "(Ljava/lang/String;)I", cg_append },
+    { NJ_C_CHOICEGROUP, "append", "(Ljava/lang/String;L" NJ_C_IMAGE ";)I", cg_append_img },
+    { NJ_C_CHOICEGROUP, "insert", "(ILjava/lang/String;)V", cg_insert },
+    { NJ_C_CHOICEGROUP, "insert", "(ILjava/lang/String;L" NJ_C_IMAGE ";)V", cg_insert_img },
+    { NJ_C_CHOICEGROUP, "delete", "(I)V", cg_delete },
+    { NJ_C_CHOICEGROUP, "deleteAll", "()V", cg_deleteAll },
+    { NJ_C_CHOICEGROUP, "size", "()I", cg_size },
+    { NJ_C_CHOICEGROUP, "getString", "(I)Ljava/lang/String;", cg_getString },
+    { NJ_C_CHOICEGROUP, "setString", "(ILjava/lang/String;)V", cg_setString },
+    { NJ_C_CHOICEGROUP, "getImage", "(I)L" NJ_C_IMAGE ";", cg_getImage },
+    { NJ_C_CHOICEGROUP, "setImage", "(IL" NJ_C_IMAGE ";)V", cg_setImage },
+    { NJ_C_CHOICEGROUP, "isSelected", "(I)Z", cg_isSelected },
+    { NJ_C_CHOICEGROUP, "setSelectedIndex", "(I)V", cg_setSelectedIndex },
+    { NJ_C_CHOICEGROUP, "getSelectedIndex", "()I", cg_getSelectedIndex },
+    { NJ_C_CHOICEGROUP, "setSelectedFlags", "([Z)V", cg_setSelectedFlags },
+    { NJ_C_CHOICEGROUP, "getSelectedFlags", "([Z)I", cg_getSelectedFlags },
+    { NJ_C_CHOICEGROUP, "setFitPolicy", "(I)V", cg_setFitPolicy },
+    { NJ_C_CHOICEGROUP, "getFitPolicy", "()I", cg_getFitPolicy },
+    { NJ_C_CHOICEGROUP, "setFont", "(IL" NJ_C_FONT ";)V", cg_setFont },
+    { NJ_C_CHOICEGROUP, "getFont", "(I)L" NJ_C_FONT ";", cg_getFont },
+    { NJ_C_CHOICEGROUP, "njText", "()Ljava/lang/String;", cg_njText },
+    { NJ_C_CHOICEGROUP, "njHeight", "(I)I", cg_njHeight },
+
+    { NJ_C_TEXTFIELD, "<init>", "(Ljava/lang/String;Ljava/lang/String;II)V", tf_init },
+    { NJ_C_TEXTFIELD, "getString", "()Ljava/lang/String;", tf_getString },
+    { NJ_C_TEXTFIELD, "setString", "(Ljava/lang/String;)V", tf_setString },
+    { NJ_C_TEXTFIELD, "getChars", "([C)V", tf_getChars },
+    { NJ_C_TEXTFIELD, "setChars", "([CII)V", tf_setChars },
+    { NJ_C_TEXTFIELD, "insert", "([CIII)V", tf_insert },
+    { NJ_C_TEXTFIELD, "delete", "(II)V", tf_delete },
+    { NJ_C_TEXTFIELD, "size", "()I", tf_size },
+    { NJ_C_TEXTFIELD, "getMaxSize", "()I", tf_getMaxSize },
+    { NJ_C_TEXTFIELD, "setMaxSize", "(I)V", tf_setMaxSize },
+    { NJ_C_TEXTFIELD, "getConstraints", "()I", tf_getConstraints },
+    { NJ_C_TEXTFIELD, "setConstraints", "(I)V", tf_setConstraints },
+    { NJ_C_TEXTFIELD, "setInitialInputMode", "(Ljava/lang/String;)V", tf_setInitialInputMode },
+    { NJ_C_TEXTFIELD, "getInitialInputMode", "()Ljava/lang/String;", tf_getInitialInputMode },
+    { NJ_C_TEXTFIELD, "njText", "()Ljava/lang/String;", tf_njText },
+    { NJ_C_TEXTFIELD, "njHeight", "(I)I", tf_njHeight },
+
+    { NJ_C_DATEFIELD, "<init>", "(Ljava/lang/String;JI)V", df_init },
+    { NJ_C_DATEFIELD, "getDate", "()J", df_getDate },
+    { NJ_C_DATEFIELD, "setDate", "(J)V", df_setDate },
+    { NJ_C_DATEFIELD, "setInputMode", "(I)V", df_setInputMode },
+    { NJ_C_DATEFIELD, "getInputMode", "()I", df_getInputMode },
+    { NJ_C_DATEFIELD, "njText", "()Ljava/lang/String;", df_njText },
+    { NJ_C_DATEFIELD, "njHeight", "(I)I", df_njHeight },
+
+    { NJ_C_SPACER, "<init>", "(II)V", spacer_init },
+    { NJ_C_SPACER, "setMinimumSize", "(II)V", spacer_setMinimumSize },
+    { NJ_C_SPACER, "njText", "()Ljava/lang/String;", item_njText },
+    { NJ_C_SPACER, "njHeight", "(I)I", spacer_njHeight },
+
+    { NJ_C_FORM, "<init>", "(Ljava/lang/String;)V", form_init },
+    { NJ_C_FORM, "append", "(Ljava/lang/String;)I", form_append_str },
+    { NJ_C_FORM, "append", "(L" NJ_C_IMAGE ";)I", form_append_img },
+    { NJ_C_FORM, "append", "(L" NJ_C_ITEM ";)I", form_append_item },
+    { NJ_C_FORM, "insert", "(ILjava/lang/String;)V", form_insert_str },
+    { NJ_C_FORM, "insert", "(IL" NJ_C_IMAGE ";)V", form_insert_img },
+    { NJ_C_FORM, "insert", "(IL" NJ_C_ITEM ";)V", form_insert_item },
+    { NJ_C_FORM, "delete", "(I)V", form_delete },
+    { NJ_C_FORM, "deleteAll", "()V", form_deleteAll },
+    { NJ_C_FORM, "size", "()I", form_size },
+    { NJ_C_FORM, "get", "(I)L" NJ_C_ITEM ";", form_get },
+    { NJ_C_FORM, "set", "(IL" NJ_C_ITEM ";)V", form_set },
+    { NJ_C_FORM, "setItemStateListener", "(L" NJ_C_ITEMSTATELISTENER ";)V", form_setItemStateListener },
+
+    { NJ_C_LIST, "<init>", "(Ljava/lang/String;I)V", list_init },
+    { NJ_C_LIST, "<init>", "(Ljava/lang/String;I[Ljava/lang/String;[L" NJ_C_IMAGE ";)V", list_init_arrays },
+    { NJ_C_LIST, "getType", "()I", list_getType },
+    { NJ_C_LIST, "append", "(Ljava/lang/String;)I", list_append_str },
+    { NJ_C_LIST, "append", "(Ljava/lang/String;L" NJ_C_IMAGE ";)I", list_append_img },
+    { NJ_C_LIST, "insert", "(ILjava/lang/String;)V", list_insert_str },
+    { NJ_C_LIST, "insert", "(ILjava/lang/String;L" NJ_C_IMAGE ";)V", list_insert_img },
+    { NJ_C_LIST, "delete", "(I)V", list_delete },
+    { NJ_C_LIST, "deleteAll", "()V", list_deleteAll },
+    { NJ_C_LIST, "size", "()I", list_size },
+    { NJ_C_LIST, "getString", "(I)Ljava/lang/String;", list_getString },
+    { NJ_C_LIST, "setString", "(ILjava/lang/String;)V", list_setString },
+    { NJ_C_LIST, "getImage", "(I)L" NJ_C_IMAGE ";", list_getImage },
+    { NJ_C_LIST, "setImage", "(IL" NJ_C_IMAGE ";)V", list_setImage },
+    { NJ_C_LIST, "getSelectedIndex", "()I", list_getSelectedIndex },
+    { NJ_C_LIST, "setSelectedIndex", "(I)V", list_setSelectedIndex },
+    { NJ_C_LIST, "isSelected", "(I)Z", list_isSelected },
+    { NJ_C_LIST, "setSelectedFlags", "([Z)I", list_setSelectedFlags },
+    { NJ_C_LIST, "getSelectedFlags", "([Z)I", list_getSelectedFlags },
+    { NJ_C_LIST, "setFitPolicy", "(I)V", list_setFitPolicy },
+    { NJ_C_LIST, "getFitPolicy", "()I", list_getFitPolicy },
+    { NJ_C_LIST, "setFont", "(IL" NJ_C_FONT ";)V", list_setFont },
+    { NJ_C_LIST, "getFont", "(I)L" NJ_C_FONT ";", list_getFont },
+    { NJ_C_LIST, "getSelectCommand", "()L" NJ_C_COMMAND ";", list_getSelectCommand },
+
+    { NJ_C_TEXTBOX, "<init>", "(Ljava/lang/String;Ljava/lang/String;II)V", tb_init },
+    { NJ_C_TEXTBOX, "getString", "()Ljava/lang/String;", tb_getString },
+    { NJ_C_TEXTBOX, "setString", "(Ljava/lang/String;)V", tb_setString },
+    { NJ_C_TEXTBOX, "getChars", "([C)V", tb_getChars },
+    { NJ_C_TEXTBOX, "setChars", "([CII)V", tb_setChars },
+    { NJ_C_TEXTBOX, "insert", "([CIII)V", tb_insert },
+    { NJ_C_TEXTBOX, "delete", "(II)V", tb_delete },
+    { NJ_C_TEXTBOX, "size", "()I", tb_size },
+    { NJ_C_TEXTBOX, "getMaxSize", "()I", tb_getMaxSize },
+    { NJ_C_TEXTBOX, "setMaxSize", "(I)V", tb_setMaxSize },
+    { NJ_C_TEXTBOX, "getConstraints", "()I", tb_getConstraints },
+    { NJ_C_TEXTBOX, "setConstraints", "(I)V", tb_setConstraints },
+    { NJ_C_TEXTBOX, "setInitialInputMode", "(Ljava/lang/String;)V", tb_setInitialInputMode },
+    { NJ_C_TEXTBOX, "setTicker", "(L" NJ_C_TICKER ";)V", tb_setTicker },
+    { NJ_C_TEXTBOX, "getTicker", "()L" NJ_C_TICKER ";", tb_getTicker },
+
+    { NJ_C_ALERT, "<init>", "(Ljava/lang/String;)V", alert_init1 },
+    { NJ_C_ALERT, "<init>", "(Ljava/lang/String;Ljava/lang/String;L" NJ_C_IMAGE ";L" NJ_C_ALERTTYPE ";)V", alert_init4 },
+    { NJ_C_ALERT, "getType", "()L" NJ_C_ALERTTYPE ";", alert_getType },
+    { NJ_C_ALERT, "setType", "(L" NJ_C_ALERTTYPE ";)V", alert_setType },
+    { NJ_C_ALERT, "getString", "()Ljava/lang/String;", alert_getString },
+    { NJ_C_ALERT, "setString", "(Ljava/lang/String;)V", alert_setString },
+    { NJ_C_ALERT, "getImage", "()L" NJ_C_IMAGE ";", alert_getImage },
+    { NJ_C_ALERT, "setImage", "(L" NJ_C_IMAGE ";)V", alert_setImage },
+    { NJ_C_ALERT, "getTimeout", "()I", alert_getTimeout },
+    { NJ_C_ALERT, "setTimeout", "(I)V", alert_setTimeout },
+    { NJ_C_ALERT, "getDefaultTimeout", "()I", alert_getDefaultTimeout },
+    { NJ_C_ALERT, "setDefaultTimeout", "(I)V", alert_setDefaultTimeout },
+    { NJ_C_ALERT, "addCommand", "(L" NJ_C_COMMAND ";)V", d_addCommand },
+    { NJ_C_ALERT, "removeCommand", "(L" NJ_C_COMMAND ";)V", d_removeCommand },
+    { NJ_C_ALERT, "setCommandListener", "(L" NJ_C_COMMANDLISTENER ";)V", d_setCommandListener },
+    { NJ_C_ALERT, "setIndicator", "(L" NJ_C_GAUGE ";)V", alert_setIndicator },
+    { NJ_C_ALERT, "getIndicator", "()L" NJ_C_GAUGE ";", alert_getIndicator },
+
+    { NJ_C_ALERTTYPE, "<init>", "(I)V", alerttype_init },
+    { NJ_C_ALERTTYPE, "playSound", "(L" NJ_C_DISPLAY ";)Z", alerttype_playSound },
+    { NJ_C_ALERTTYPE, "getTypeName", "()Ljava/lang/String;", alerttype_getTypeName },
+
+    { NJ_C_DISPLAY, "getDisplay", "(Ljavax/microedition/midlet/MIDlet;)L" NJ_C_DISPLAY ";", disp_getDisplay },
+    { NJ_C_DISPLAY, "setCurrent", "(L" NJ_C_DISPLAYABLE ";)V", disp_setCurrent },
+    { NJ_C_DISPLAY, "setCurrent", "(L" NJ_C_ALERT ";L" NJ_C_DISPLAYABLE ";)V", disp_setCurrent_alert },
+    { NJ_C_DISPLAY, "getCurrent", "()L" NJ_C_DISPLAYABLE ";", disp_getCurrent },
+    { NJ_C_DISPLAY, "callSerially", "(Ljava/lang/Runnable;)V", disp_callSerially },
+    { NJ_C_DISPLAY, "isColor", "()Z", disp_isColor },
+    { NJ_C_DISPLAY, "numColors", "()I", disp_numColors },
+    { NJ_C_DISPLAY, "numAlphaLevels", "()I", disp_numAlphaLevels },
+    { NJ_C_DISPLAY, "flashBacklight", "(I)Z", disp_flashBacklight },
+    { NJ_C_DISPLAY, "vibrate", "(I)Z", disp_vibrate },
+    { NJ_C_DISPLAY, "getBestImageWidth", "(I)I", disp_getBestImageWidth },
+    { NJ_C_DISPLAY, "getBestImageHeight", "(I)I", disp_getBestImageHeight }
+};
+const int nj_lib_lcdui_count =
+    (int)(sizeof(nj_lib_lcdui_table) / sizeof(nj_lib_lcdui_table[0]));
+
+/* ================================================================== */
+/* Late static initialisation                                          */
+/* ================================================================== */
+/*
+ * A builtin class has no bytecode and therefore no <clinit> and no
+ * ConstantValue attributes, so everything that would be `static final int X = n`
+ * in Java is written into the static slot here.  This runs from
+ * nj_lib_late_init() once every builtin class has been created and linked, and
+ * because the slots live in vm->statics nothing survives nj_vm_destroy().
+ */
+static void lcdui_const_int(nj_vm *vm, const char *cls, const char *name,
+                            nj_s4 value)
+{
+    nj_field *f = nj_field_lookup(vm, cls, name, D_INT, 1);
+    if (f) {
+        nj_field_write_int(vm, NULL, f, value);
+    }
+}
+
+/* Build one AlertType singleton and store it in its static field. */
+static void lcdui_alert_type(nj_vm *vm, const char *field, nj_s4 kind)
+{
+    nj_ref t = nj_object_new(vm, NJ_C_ALERTTYPE);
+    nj_value a[1];
+
+    if (!t) {
+        nj_clear_exception(vm);
+        return;
+    }
+    a[0].i = kind;
+    if (nj_call_special(vm, t, NJ_C_ALERTTYPE, "<init>", "(I)V", a, NULL) != NJ_OK) {
+        nj_clear_exception(vm);
+        return;
+    }
+    rputs(vm, NJ_C_ALERTTYPE, field, "L" NJ_C_ALERTTYPE ";", t);
+}
+
+/* Build the List.SELECT_COMMAND singleton. */
+static void lcdui_select_command(nj_vm *vm)
+{
+    nj_ref c = nj_object_new(vm, NJ_C_COMMAND);
+    nj_ref label = nj_string_new(vm, "Select");
+    nj_value a[3];
+
+    if (!c || !label) {
+        nj_clear_exception(vm);
+        return;
+    }
+    a[0].i = 8;          /* Command.ITEM */
+    a[1].r = label;
+    a[2].i = 0;
+    if (nj_call_special(vm, c, NJ_C_COMMAND, "<init>",
+                        "(ILjava/lang/String;I)V", a, NULL) != NJ_OK) {
+        nj_clear_exception(vm);
+        return;
+    }
+    rputs(vm, NJ_C_LIST, "SELECT_COMMAND", D_CMD, c);
+}
+
+/*
+ * The LCDUI half of nj_lib_late_init().  Exported so nj_lib_system.c can call
+ * it with one line; it is deliberately idempotent and safe to call before any
+ * MIDlet exists.
+ */
+nj_status nj_lcdui_late_init(nj_vm *vm)
+{
+    if (!vm) {
+        return NJ_ERR;
+    }
+
+    /* ---- Font ---- */
+    lcdui_const_int(vm, NJ_C_FONT, "FACE_SYSTEM",       0);
+    lcdui_const_int(vm, NJ_C_FONT, "FACE_MONOSPACED",   32);
+    lcdui_const_int(vm, NJ_C_FONT, "FACE_PROPORTIONAL", 64);
+    lcdui_const_int(vm, NJ_C_FONT, "STYLE_PLAIN",       0);
+    lcdui_const_int(vm, NJ_C_FONT, "STYLE_BOLD",        1);
+    lcdui_const_int(vm, NJ_C_FONT, "STYLE_ITALIC",      2);
+    lcdui_const_int(vm, NJ_C_FONT, "STYLE_UNDERLINED",  4);
+    lcdui_const_int(vm, NJ_C_FONT, "SIZE_SMALL",        8);
+    lcdui_const_int(vm, NJ_C_FONT, "SIZE_MEDIUM",       0);
+    lcdui_const_int(vm, NJ_C_FONT, "SIZE_LARGE",        16);
+
+    /* ---- Graphics anchors and styles ---- */
+    lcdui_const_int(vm, NJ_C_GRAPHICS, "HCENTER",  1);
+    lcdui_const_int(vm, NJ_C_GRAPHICS, "VCENTER",  2);
+    lcdui_const_int(vm, NJ_C_GRAPHICS, "LEFT",     4);
+    lcdui_const_int(vm, NJ_C_GRAPHICS, "RIGHT",    8);
+    lcdui_const_int(vm, NJ_C_GRAPHICS, "TOP",      16);
+    lcdui_const_int(vm, NJ_C_GRAPHICS, "BOTTOM",   32);
+    lcdui_const_int(vm, NJ_C_GRAPHICS, "BASELINE", 64);
+    lcdui_const_int(vm, NJ_C_GRAPHICS, "SOLID",    0);
+    lcdui_const_int(vm, NJ_C_GRAPHICS, "DOTTED",   1);
+
+    /* ---- Canvas key codes and game actions ---- */
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_NUM0",  48);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_NUM1",  49);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_NUM2",  50);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_NUM3",  51);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_NUM4",  52);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_NUM5",  53);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_NUM6",  54);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_NUM7",  55);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_NUM8",  56);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_NUM9",  57);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_STAR",  42);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_POUND", 35);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_UP",    -1);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_DOWN",  -2);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_LEFT",  -3);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_RIGHT", -4);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_FIRE",  -5);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_SOFTKEY1", -6);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_SOFTKEY2", -7);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_SOFTKEY3", -21);
+    lcdui_const_int(vm, NJ_C_CANVAS, "UP",    1);
+    lcdui_const_int(vm, NJ_C_CANVAS, "DOWN",  6);
+    lcdui_const_int(vm, NJ_C_CANVAS, "LEFT",  2);
+    lcdui_const_int(vm, NJ_C_CANVAS, "RIGHT", 5);
+    lcdui_const_int(vm, NJ_C_CANVAS, "FIRE",  8);
+    lcdui_const_int(vm, NJ_C_CANVAS, "GAME_A", 9);
+    lcdui_const_int(vm, NJ_C_CANVAS, "GAME_B", 10);
+    lcdui_const_int(vm, NJ_C_CANVAS, "GAME_C", 11);
+    lcdui_const_int(vm, NJ_C_CANVAS, "GAME_D", 12);
+
+    /* ---- Command ---- */
+    lcdui_const_int(vm, NJ_C_COMMAND, "SCREEN", 1);
+    lcdui_const_int(vm, NJ_C_COMMAND, "BACK",   2);
+    lcdui_const_int(vm, NJ_C_COMMAND, "CANCEL", 3);
+    lcdui_const_int(vm, NJ_C_COMMAND, "OK",     4);
+    lcdui_const_int(vm, NJ_C_COMMAND, "HELP",   5);
+    lcdui_const_int(vm, NJ_C_COMMAND, "STOP",   6);
+    lcdui_const_int(vm, NJ_C_COMMAND, "EXIT",   7);
+    lcdui_const_int(vm, NJ_C_COMMAND, "ITEM",   8);
+
+    /* ---- Item layout ---- */
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_DEFAULT",         0);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_LEFT",            1);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_RIGHT",           2);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_CENTER",          3);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_TOP",             16);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_BOTTOM",          32);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_VCENTER",         48);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_NEWLINE_BEFORE",  256);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_NEWLINE_AFTER",   512);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_SHRINK",          1024);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_VSHRINK",         2048);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_EXPAND",          4096);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_VEXPAND",         8192);
+    lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_2",               16384);
+
+    /* ---- StringItem / ImageItem ---- */
+    lcdui_const_int(vm, NJ_C_STRINGITEM, "PLAIN",     0);
+    lcdui_const_int(vm, NJ_C_STRINGITEM, "HYPERLINK", 1);
+    lcdui_const_int(vm, NJ_C_STRINGITEM, "BUTTON",    2);
+    lcdui_const_int(vm, NJ_C_IMAGEITEM, "LAYOUT_DEFAULT", 0);
+    lcdui_const_int(vm, NJ_C_IMAGEITEM, "LAYOUT_LEFT",    1);
+    lcdui_const_int(vm, NJ_C_IMAGEITEM, "LAYOUT_RIGHT",   2);
+    lcdui_const_int(vm, NJ_C_IMAGEITEM, "LAYOUT_CENTER",  3);
+    lcdui_const_int(vm, NJ_C_IMAGEITEM, "LAYOUT_NEWLINE_BEFORE", 256);
+    lcdui_const_int(vm, NJ_C_IMAGEITEM, "LAYOUT_NEWLINE_AFTER",  512);
+
+    /* ---- Gauge ---- */
+    lcdui_const_int(vm, NJ_C_GAUGE, "INDEFINITE",             -1);
+    lcdui_const_int(vm, NJ_C_GAUGE, "CONTINUOUS_IDLE",         0);
+    lcdui_const_int(vm, NJ_C_GAUGE, "INCREMENTAL_IDLE",        1);
+    lcdui_const_int(vm, NJ_C_GAUGE, "CONTINUOUS_RUNNING",      2);
+    lcdui_const_int(vm, NJ_C_GAUGE, "INCREMENTAL_UPDATING",    3);
+
+    /* ---- ChoiceGroup / List ---- */
+    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "MULTIPLE",  1);
+    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "EXCLUSIVE", 2);
+    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "IMPLICIT",  3);
+    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "TEXT_WRAP_ON",      1);
+    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "TEXT_WRAP_OFF",     0);
+    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "TEXT_WRAP_DEFAULT", -1);
+    lcdui_const_int(vm, NJ_C_LIST, "IMPLICIT",  3);
+    lcdui_const_int(vm, NJ_C_LIST, "EXCLUSIVE", 2);
+    lcdui_const_int(vm, NJ_C_LIST, "MULTIPLE",  1);
+    lcdui_const_int(vm, NJ_C_LIST, "TEXT_WRAP_ON",      1);
+    lcdui_const_int(vm, NJ_C_LIST, "TEXT_WRAP_OFF",     0);
+    lcdui_const_int(vm, NJ_C_LIST, "TEXT_WRAP_DEFAULT", -1);
+
+    /* ---- TextField / TextBox ---- */
+    lcdui_const_int(vm, NJ_C_TEXTFIELD, "ANY",         0);
+    lcdui_const_int(vm, NJ_C_TEXTFIELD, "EMAILADDR",   1);
+    lcdui_const_int(vm, NJ_C_TEXTFIELD, "NUMERIC",     2);
+    lcdui_const_int(vm, NJ_C_TEXTFIELD, "PHONENUMBER", 3);
+    lcdui_const_int(vm, NJ_C_TEXTFIELD, "URL",         4);
+    lcdui_const_int(vm, NJ_C_TEXTFIELD, "DECIMAL",     5);
+    lcdui_const_int(vm, NJ_C_TEXTFIELD, "PASSWORD",    0x10000);
+    lcdui_const_int(vm, NJ_C_TEXTFIELD, "UNEDITABLE",  0x20000);
+    lcdui_const_int(vm, NJ_C_TEXTFIELD, "SENSITIVE",   0x40000);
+    lcdui_const_int(vm, NJ_C_TEXTFIELD, "NON_PREDICTIVE", 0x80000);
+    lcdui_const_int(vm, NJ_C_TEXTFIELD, "INITIAL_CAPS_WORD", 0x100000);
+    lcdui_const_int(vm, NJ_C_TEXTFIELD, "INITIAL_CAPS_SENTENCE", 0x200000);
+    lcdui_const_int(vm, NJ_C_TEXTBOX, "ANY",         0);
+    lcdui_const_int(vm, NJ_C_TEXTBOX, "EMAILADDR",   1);
+    lcdui_const_int(vm, NJ_C_TEXTBOX, "NUMERIC",     2);
+    lcdui_const_int(vm, NJ_C_TEXTBOX, "PHONENUMBER", 3);
+    lcdui_const_int(vm, NJ_C_TEXTBOX, "URL",         4);
+    lcdui_const_int(vm, NJ_C_TEXTBOX, "DECIMAL",     5);
+    lcdui_const_int(vm, NJ_C_TEXTBOX, "PASSWORD",    0x10000);
+    lcdui_const_int(vm, NJ_C_TEXTBOX, "UNEDITABLE",  0x20000);
+    lcdui_const_int(vm, NJ_C_TEXTBOX, "SENSITIVE",   0x40000);
+    lcdui_const_int(vm, NJ_C_TEXTBOX, "NON_PREDICTIVE", 0x80000);
+    lcdui_const_int(vm, NJ_C_TEXTBOX, "INITIAL_CAPS_WORD", 0x100000);
+    lcdui_const_int(vm, NJ_C_TEXTBOX, "INITIAL_CAPS_SENTENCE", 0x200000);
+
+    /* ---- DateField ---- */
+    lcdui_const_int(vm, NJ_C_DATEFIELD, "DATE",      1);
+    lcdui_const_int(vm, NJ_C_DATEFIELD, "TIME",      2);
+    lcdui_const_int(vm, NJ_C_DATEFIELD, "DATE_TIME", 3);
+
+    /* ---- Display ---- */
+    lcdui_const_int(vm, NJ_C_DISPLAY, "LIST_ELEMENT",  0);
+    lcdui_const_int(vm, NJ_C_DISPLAY, "TEXT_ELEMENT",  1);
+    lcdui_const_int(vm, NJ_C_DISPLAY, "IMAGE_ELEMENT", 2);
+
+    /* ---- the AlertType singletons and the List select command ---- */
+    lcdui_alert_type(vm, "INFO",         0);
+    lcdui_alert_type(vm, "WARNING",      1);
+    lcdui_alert_type(vm, "ERROR",        2);
+    lcdui_alert_type(vm, "ALARM",        3);
+    lcdui_alert_type(vm, "CONFIRMATION", 4);
+    lcdui_select_command(vm);
+    sput(vm, NJ_C_ALERT, "sDefaultTimeout", D_INT, 2000);
+
+    /* The default Alert type is INFO, and DISMISS_COMMAND is what an Alert
+     * with OK/BACK semantics delivers; both are singletons. */
+    {
+        nj_ref info = rgets(vm, NJ_C_ALERTTYPE, "INFO", "L" NJ_C_ALERTTYPE ";");
+        nj_ref dismiss = nj_object_new(vm, NJ_C_COMMAND);
+        nj_ref label = nj_string_new(vm, "Dismiss");
+        if (dismiss && label) {
+            nj_value a[3];
+            a[0].i = 4;      /* Command.OK */
+            a[1].r = label;
+            a[2].i = 0;
+            if (nj_call_special(vm, dismiss, NJ_C_COMMAND, "<init>",
+                                "(ILjava/lang/String;I)V", a, NULL) != NJ_OK) {
+                nj_clear_exception(vm);
+            }
+        } else {
+            nj_clear_exception(vm);
+        }
+        if (dismiss && dismiss->cls) {
+            rputs(vm, NJ_C_ALERT, "DISMISS_COMMAND", D_CMD, dismiss);
+        }
+        (void)info;   /* each Alert carries its own type object */
+    }
+
+    /* Make sure the font registry exists so the first paint has metrics. */
+    if (!vm->fonts.initialized) {
+        nj_fontset_init(&vm->fonts);
+    }
+    return NJ_OK;
 }

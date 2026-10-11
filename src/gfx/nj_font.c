@@ -218,8 +218,14 @@ static int char_width_depth(const nj_font *f, nj_u2 ch, int depth)
     int w = 0;
     int h = 0;
 
-    if (f == NULL || depth > NJ_FONT_FALLBACK_MAX_DEPTH) {
+    if (f == NULL) {
         return 0;
+    }
+    if (depth > NJ_FONT_FALLBACK_MAX_DEPTH) {
+        /* A cyclic fallback chain: a font that eventually falls back to
+         * itself.  Stop recursing and charge one cell so layout stays sane
+         * instead of collapsing the character to zero width. */
+        return (f->glyph_w > 0) ? f->glyph_w : 1;
     }
 
     if (ch >= f->first_char && ch <= f->last_char) {

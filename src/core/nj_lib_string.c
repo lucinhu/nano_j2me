@@ -1292,10 +1292,19 @@ static const nj_builtin_method stringbuffer_methods[] = {
     M("insert",           "(IC)Ljava/lang/StringBuffer;",        0)
 };
 
+/*
+ * java.lang.StringBuilder does not exist in CLDC, but every modern javac
+ * compiles `a + b` on Strings into a StringBuilder chain, so a JAR built with
+ * a recent toolchain needs it.  It declares no members at all: it inherits
+ * StringBuffer's fields and every method, which is exactly how the two relate
+ * in Java SE apart from synchronisation.  One entry, full compatibility.
+ */
 const nj_builtin_class nj_lib_string_classes[] = {
     { "java/lang/String", "java/lang/Object",
       NJ_ACC_PUBLIC | NJ_ACC_FINAL, NULL, 0u, string_methods,
       (nj_u2)(sizeof(string_methods) / sizeof(string_methods[0])) },
+    { "java/lang/StringBuilder", "java/lang/StringBuffer",
+      NJ_ACC_PUBLIC | NJ_ACC_FINAL, NULL, 0u, NULL, 0u },
     { "java/lang/StringBuffer", "java/lang/Object", NJ_ACC_PUBLIC,
       stringbuffer_fields,
       (nj_u2)(sizeof(stringbuffer_fields) / sizeof(stringbuffer_fields[0])),

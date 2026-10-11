@@ -365,7 +365,7 @@ void nj_gfx_blend_pixel(nj_surface *s, int x, int y, nj_u4 argb, int alpha)
 {
     int bpp, a;
     nj_u4 dst, out;
-    nj_u4 sr, sg, sb, sa;
+    nj_u4 sr, sg, sb;
     nj_u4 dr, dg, db, da;
     nj_u4 nr, ng, nb, na;
 
@@ -396,17 +396,19 @@ void nj_gfx_blend_pixel(nj_surface *s, int x, int y, nj_u4 argb, int alpha)
     sr = (argb >> 16) & 0xFFu;
     sg = (argb >> 8) & 0xFFu;
     sb = argb & 0xFFu;
-    sa = (argb >> 24) & 0xFFu;
     dr = (dst >> 16) & 0xFFu;
     dg = (dst >> 8) & 0xFFu;
     db = dst & 0xFFu;
     da = (dst >> 24) & 0xFFu;
 
-    /* Source over destination, 8 bits per channel, round to nearest. */
+    /* Source over destination, 8 bits per channel, round to nearest.  The
+     * alpha channel follows Porter-Duff exactly (a + da*(1-a)), which keeps
+     * an opaque destination opaque; the colour channels are the usual
+     * non-premultiplied lerp. */
     nr = (sr * (nj_u4)a + dr * (nj_u4)(255 - a) + 127u) / 255u;
     ng = (sg * (nj_u4)a + dg * (nj_u4)(255 - a) + 127u) / 255u;
     nb = (sb * (nj_u4)a + db * (nj_u4)(255 - a) + 127u) / 255u;
-    na = (sa * (nj_u4)a + da * (nj_u4)(255 - a) + 127u) / 255u;
+    na = ((nj_u4)a * 255u + da * (nj_u4)(255 - a) + 127u) / 255u;
 
     out = (na << 24) | (nr << 16) | (ng << 8) | nb;
     nj_raw_set(s, x, y, bpp, nj_surface_format_color(s->format, out));
@@ -679,7 +681,10 @@ static void nj_span(nj_gfx *g, int x0, int x1, int y, nj_u4 argb);
 static void nj_plot(nj_gfx *g, int x, int y, nj_u4 argb)
 {
     if (g->use_xor) {
-        nj_u4 v = nj_surface_format_color(g->surf->format, argb)
+        /* XOR mode: the destination is XORed with the configured colour and
+         * the drawing colour is ignored ("writes dst ^ xor_color"). */
+        nj_u4 dst = nj_surface_get(g->surf, x, y);
+        nj_u4 v = nj_surface_format_color(g->surf->format, dst)
                 ^ nj_surface_format_color(g->surf->format, g->xor_color);
         nj_raw_set(g->surf, x, y, nj_surface_bpp(g->surf), v);
         return;
@@ -930,7 +935,6 @@ static void nj_run(nj_gfx *g, nj_s8 x0, nj_s8 y0, nj_s8 x1, nj_s8 y1, int *phase
     nj_s8 steps, i, i0 = 0, i1;
     int p = phase ? (*phase & 1) : 0;
     int dotted = (g->stroke == NJ_STROKE_DOTTED);
-    nj_s8 climit0, climit1;
 
     if (dx != 0 && dy != 0) {
         return;                          /* runs are axis aligned */
@@ -943,20 +947,30 @@ static void nj_run(nj_gfx *g, nj_s8 x0, nj_s8 y0, nj_s8 x1, nj_s8 y1, int *phase
     if (g->clip_w <= 0 || g->clip_h <= 0) {
         return;
     }
-    if (dx > 0) {
-        climit0 = (nj_s8)g->clip_x - x0;
-        climit1 = (nj_s8)g->clip_x + g->clip_w - 1 - x0;
-        i0 = nj_max64(i0, climit0);
-        i1 = nj_min64(i1, climit1);
-    } else if (dx < 0) {
-        i0 = nj_max64(i0, x0 - ((nj_s8)g->clip_x + g->clip_w - 1));
-        i1 = nj_min64(i1, x0 - (nj_s8)g->clip_x);
-    } else if (dy > 0) {
-        i0 = nj_max64(i0, (nj_s8)g->clip_y - y0);
-        i1 = nj_min64(i1, (nj_s8)g->clip_y + g->clip_h - 1 - y0);
-    } else if (dy < 0) {
-        i0 = nj_max64(i0, y0 - ((nj_s8)g->clip_y + g->clip_h - 1));
-        i1 = nj_min64(i1, y0 - (nj_s8)g->clip_y);
+    if (dx != 0) {
+        /* Horizontal run: the fixed row must be inside the clip. */
+        if (y0 < g->clip_y || y0 > (nj_s8)g->clip_y + g->clip_h - 1) {
+            return;
+        }
+        if (dx > 0) {
+            i0 = nj_max64(i0, (nj_s8)g->clip_x - x0);
+            i1 = nj_min64(i1, (nj_s8)g->clip_x + g->clip_w - 1 - x0);
+        } else {
+            i0 = nj_max64(i0, x0 - ((nj_s8)g->clip_x + g->clip_w - 1));
+            i1 = nj_min64(i1, x0 - (nj_s8)g->clip_x);
+        }
+    } else if (dy != 0) {
+        /* Vertical run: the fixed column must be inside the clip. */
+        if (x0 < g->clip_x || x0 > (nj_s8)g->clip_x + g->clip_w - 1) {
+            return;
+        }
+        if (dy > 0) {
+            i0 = nj_max64(i0, (nj_s8)g->clip_y - y0);
+            i1 = nj_min64(i1, (nj_s8)g->clip_y + g->clip_h - 1 - y0);
+        } else {
+            i0 = nj_max64(i0, y0 - ((nj_s8)g->clip_y + g->clip_h - 1));
+            i1 = nj_min64(i1, y0 - (nj_s8)g->clip_y);
+        }
     } else {
         /* single pixel */
         if (!nj_in_clip(g, (int)x0, (int)y0)) {
@@ -1083,13 +1097,28 @@ typedef struct nj_ellipse {
 /* Pixel on the ellipse at `deg`, clamped into the shape's pixel box. */
 static void nj_ellipse_vertex(const nj_ellipse *e, int deg, int *px, int *py)
 {
-    nj_s8 x2 = e->c2x + ((e->a2 * (nj_s8)nj_cos_q14(deg)) / NJ_GFX_FP_ONE);
-    nj_s8 y2 = e->c2y - ((e->b2 * (nj_s8)nj_sin_q14(deg)) / NJ_GFX_FP_ONE);
-    nj_s8 x = nj_clamp64(nj_half(x2), e->x0, e->x1);
-    nj_s8 y = nj_clamp64(nj_half(y2), e->y0, e->y1);
+    nj_s8 x = nj_clamp64(nj_half(e->c2x
+                                 + nj_round_div(e->a2 * (nj_s8)nj_cos_q14(deg),
+                                                NJ_GFX_FP_ONE)),
+                         e->x0, e->x1);
+    nj_s8 y = nj_clamp64(nj_half(e->c2y
+                                 - nj_round_div(e->b2 * (nj_s8)nj_sin_q14(deg),
+                                                NJ_GFX_FP_ONE)),
+                         e->y0, e->y1);
 
     *px = (int)x;
     *py = (int)y;
+}
+
+/* a / b rounded to nearest, b > 0, symmetric about zero.  Truncating instead
+ * would shift the apex of a large ellipse by half a pixel and can make the
+ * outline miss its own extreme row. */
+static nj_s8 nj_round_div(nj_s8 a, nj_s8 b)
+{
+    if (a >= 0) {
+        return (a + b / 2) / b;
+    }
+    return -((-a + b / 2) / b);
 }
 
 /* Doubled horizontal half-width of the ellipse on a scanline whose doubled
@@ -1101,7 +1130,7 @@ static nj_s8 nj_ellipse_dx2(nj_s8 a2, nj_s8 b2, nj_s8 dy2)
     if (b2 <= 0 || ady > b2) {
         return -1;
     }
-    return (a2 * (nj_s8)nj_isqrt((nj_u8)(b2 * b2 - ady * ady))) / b2;
+    return nj_round_div(a2 * (nj_s8)nj_isqrt((nj_u8)(b2 * b2 - ady * ady)), b2);
 }
 
 /*
@@ -1127,12 +1156,14 @@ static void nj_arc_impl(nj_gfx *g, const nj_ellipse *e, int start, int extent,
     }
     dim = nj_max64(e->a2, e->b2) / 2;            /* boundary semi-axis */
     ae = nj_abs64(extent);
-    ns = (dim * ae) / 90 + 2;
+    /* Two vertices per pixel of arc length (~0.55 px chords), so the sampled
+     * outline hugs the true curve instead of flattening at the apexes. */
+    ns = (dim * ae) / 32 + 2;
     if (ns < 2) {
         ns = 2;
     }
-    if (ns > 720) {
-        ns = 720;
+    if (ns > 1024) {
+        ns = 1024;
     }
     n = (int)ns;
 
@@ -1198,7 +1229,15 @@ static void nj_wedge_init(nj_wedge *wd, const nj_ellipse *e, int start,
     wd->vey = -(e->b2 * (nj_s8)nj_sin_q14(start + extent)) / (NJ_GFX_FP_ONE >> NJ_GFX_VEC_SHIFT);
 }
 
-/* Is the pixel centre (doubled ux2, uy2 relative to the centre) in the wedge? */
+/*
+ * Is the pixel centre (doubled ux2, uy2 relative to the centre) in the wedge?
+ *
+ * Screen y grows downwards, so a NEGATIVE cross product means "b is
+ * counter-clockwise from a" in MIDP's angle convention.  A sweep of at most
+ * 180 degrees is therefore "at or CCW from the start radius, and not past the
+ * end radius"; a larger sweep is the complement of the small sweep that
+ * closes the circle.
+ */
 static int nj_wedge_inside(const nj_wedge *wd, nj_s8 ux2, nj_s8 uy2)
 {
     nj_s8 s1, s2;
@@ -1209,11 +1248,9 @@ static int nj_wedge_inside(const nj_wedge *wd, nj_s8 ux2, nj_s8 uy2)
     s1 = wd->vsx * uy2 - wd->vsy * ux2;      /* cross(start radius, u)  */
     s2 = ux2 * wd->vey - uy2 * wd->vex;      /* cross(u, end radius)    */
     if (wd->inverted) {
-        /* Sweep > 180: the complement wedge is the intersection of the two
-         * strict half planes, so the arc is everything else. */
-        return (s1 >= 0 || s2 >= 0);
+        return (s1 <= 0 || s2 <= 0);
     }
-    return (s1 >= 0 && s2 >= 0);
+    return (s1 <= 0 && s2 <= 0);
 }
 
 void nj_gfx_fill_arc(nj_gfx *g, int x, int y, int w, int h, int start,
@@ -1646,11 +1683,17 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, int src_stride,
             sa = (sa * alpha + 127) / 255;
 
             if (xor_on) {
-                nj_u4 val;
+                /* XOR blit: the destination is XORed with the source pixel,
+                 * with xor_argb as an extra mask (0 for a plain dst ^= src,
+                 * which is how the game package erases and restores a
+                 * sprite without knowing the background). */
+                nj_u4 dst, val;
                 if (rop != NJ_ROP_SET && sa == 0) {
                     continue;
                 }
-                val = nj_surface_format_color(g->surf->format, sp)
+                dst = nj_surface_get(g->surf, (int)X, (int)Y);
+                val = nj_surface_format_color(g->surf->format, dst)
+                    ^ nj_surface_format_color(g->surf->format, sp)
                     ^ nj_surface_format_color(g->surf->format, xor_argb);
                 nj_raw_set(g->surf, (int)X, (int)Y, bpp, val);
                 continue;
