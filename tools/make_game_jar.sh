@@ -139,8 +139,13 @@ public class DemoGame extends MIDlet implements CommandListener {
 class DemoCanvas extends GameCanvas implements Runnable {
 
     private static final int TILE = 16;
-    private static final int COLS = 8;
-    private static final int ROWS = 12;
+    /* The map must be LARGER than the screen, or the scroll offset below goes
+     * negative and LayerManager.setViewWindow rightly rejects it.  A map
+     * smaller than the display is the classic first mistake in a scrolling
+     * game and it fails with an exception rather than a wrong picture, which
+     * is the good outcome - but it is a fixture bug, not a runtime one. */
+    private static final int COLS = 16;
+    private static final int ROWS = 24;
 
     private final LayerManager manager;
     private final TiledLayer background;
@@ -291,8 +296,9 @@ class DemoCanvas extends GameCanvas implements Runnable {
         /* Scroll the tile map: the LayerManager view window is what makes
          * TiledLayer's clipping matter. */
         if (background != null) {
-            manager.setViewWindow(0, frame % (ROWS * TILE - getHeight() + 1),
-                                  getWidth(), getHeight());
+            int scrollable = ROWS * TILE - getHeight();
+            int oy = (scrollable > 0) ? (frame % scrollable) : 0;
+            manager.setViewWindow(0, oy, getWidth(), getHeight());
         }
         frame++;
     }

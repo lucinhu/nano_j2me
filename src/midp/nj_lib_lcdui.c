@@ -796,7 +796,12 @@ NJFN(g_setColor)
     if (!gfx_load(vm, self, &g, &sc)) {
         return NJ_ERR;
     }
-    nj_gfx_set_color(&g, (nj_u4)NJ_ARG_INT(args, 0));
+    /* MIDP defines setColor(int) as OPAQUE: only setAlpha may lower the alpha,
+         * so a game writing 0x00FF0000 must still get a visible red.  Passing
+         * the raw 0x00RRGGBB through leaves alpha at zero and makes every Java
+         * drawing call invisible - the single most confusing possible failure,
+         * because nothing errors and the screen is simply blank. */
+        nj_gfx_set_color(&g, (nj_u4)NJ_ARG_INT(args, 0) | 0xFF000000u);
     gfx_store(vm, self, &g);
     return NJ_OK;
 }
@@ -1290,76 +1295,55 @@ NJFN(g_drawChar)
 }
 
 /* ---- images ---- */
-static nj_status gfx_draw_image_common(nj_vm *vm, nj_value *args, int rop,
-                                       int transform, int has_clip)
+/*
+ * drawImage(Image img, int x, int y, int anchor)
+ *
+ * NOTE: this is NOT the same argument list as drawRegion().  drawImage blits
+ * the WHOLE image with an anchor; drawRegion blits a sub-rectangle with a
+ * transform and no anchor translation beyond the anchor itself.  Sharing one
+ * helper between them reads past the end of the argument slots and rejects
+ * perfectly ordinary calls with "negative source region".
+ */
+NJFN(g_drawImage)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref img = NJ_ARG_REF(args, 0);
-    nj_s4 sx = NJ_ARG_INT(args, 1);
-    nj_s4 sy = NJ_ARG_INT(args, 2);
-    nj_s4 sw = NJ_ARG_INT(args, 3);
-    nj_s4 sh = NJ_ARG_INT(args, 4);
-    nj_s4 tx = NJ_ARG_INT(args, 5);
-    nj_s4 ty = NJ_ARG_INT(args, 6);
-    nj_ref clip = NULL;
+    nj_s4 x = NJ_ARG_INT(args, 1);
+    nj_s4 y = NJ_ARG_INT(args, 2);
+    nj_s4 anchor = NJ_ARG_INT(args, 3);
     nj_image view;
     nj_gfx g;
     nj_surface sc;
 
-    if (has_clip) {
-        clip = NJ_ARG_REF(args, 7);
-        if (!clip) {
-            return nj_throw(vm, "java/lang/NullPointerException",
-                            "clip image is null");
-        }
-    }
     if (!img) {
         return nj_throw(vm, "java/lang/NullPointerException", "image is null");
     }
-    if (sw < 0 || sh < 0 || sx < 0 || sy < 0) {
+    if (anchor != -1 &&
+        (anchor & (NJ_ANCHOR_LEFT | NJ_ANCHOR_HCENTER | NJ_ANCHOR_RIGHT)) == 0) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "negative source region");
+                        "bad horizontal anchor");
     }
     if (!img_view(vm, img, &view)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "image has no pixels");
     }
-    if (sx + sw > view.width || sy + sh > view.height) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "source region outside the image");
+    if (anchor != -1) {
+        if (anchor & NJ_ANCHOR_HCENTER) { x -= view.width / 2; }
+        else if (anchor & NJ_ANCHOR_RIGHT) { x -= view.width; }
+        if (anchor & NJ_ANCHOR_VCENTER) { y -= view.height / 2; }
+        else if (anchor & NJ_ANCHOR_BOTTOM) { y -= view.height; }
+        else if (anchor & 64 /* BASELINE */) { y -= view.height; }
     }
     if (!gfx_load(vm, self, &g, &sc)) {
         return NJ_ERR;
     }
-    if (has_clip) {
-        nj_image cview;
-        if (!img_view(vm, clip, &cview)) {
-            return nj_throw(vm, "java/lang/IllegalArgumentException",
-                            "clip image has no pixels");
-        }
-        nj_gfx_draw_region(&g, &view, (int)sx, (int)sy, (int)sw, (int)sh,
-                           transform, g.use_xor, g.xor_color, &cview,
-                           (int)tx, (int)ty, rop);
-    } else {
-        nj_gfx_draw_region(&g, &view, (int)sx, (int)sy, (int)sw, (int)sh,
-                           transform, g.use_xor, g.xor_color, NULL,
-                           (int)tx, (int)ty, rop);
-    }
+    nj_gfx_draw_region(&g, &view, 0, 0, view.width, view.height,
+                       NJ_TRANS_NONE, g.use_xor, g.xor_color, NULL,
+                       (int)x, (int)y, NJ_ROP_PAINT);
     gfx_store(vm, self, &g);
     return NJ_OK;
 }
 
-NJFN(g_drawImage)
-{
-    return gfx_draw_image_common(vm, args, NJ_ROP_PAINT, NJ_TRANS_NONE, 0);
-}
-
-/*
- * drawRegion(Image src, int x_src, int y_src, int width, int height,
- *            int transform, int x_dest, int y_dest, int anchor)
- * The 10-argument form the compile stubs declare is accepted too; its trailing
- * argument carries no meaning here.
- */
 NJFN(g_drawRegion)
 {
     nj_ref self = NJ_THIS(args);
@@ -1587,12 +1571,19 @@ NJFN(g_copyArea)
 /* ================================================================== */
 /* Image natives                                                       */
 /* ================================================================== */
-NJFN(img_init_wh)
+/*
+ * Image has no public constructor in MIDP: every image comes from a
+ * createImage() factory, which fills the fields directly.  This exists only
+ * because the compile stubs synthesise a no-arg constructor, and it says so
+ * rather than failing with a link error.
+ */
+NJFN(no_public_constructor)
 {
-    (void)th;
+    (void)args;
     (void)ret;
-    NJ_UNUSED(args);
-    return NJ_OK;   /* the factory calls img_alloc directly */
+    return nj_throw(vm, "java/lang/UnsupportedOperationException",
+                    "use a factory method: Image.createImage(), "
+                    "Font.getFont() or Display.getDisplay()");
 }
 
 NJFN(img_createImage_wh)
@@ -3884,19 +3875,52 @@ static int displayable_key(nj_vm *vm, nj_ref d, int action, int down)
 /* ------------------------------------------------------------------ */
 /*
  * The Canvas event methods are ABSTRACT on Canvas, exactly as MIDP requires:
- * a subclass that forgets to override paint() gets AbstractMethodError instead
- * of a screen that silently stays blank.  The calls below therefore go through
- * invokevirtual (nj_call) and are expected to reach the MIDlet's override.
+ * a subclass that forgets to override paint() must fail loudly instead of
+ * leaving a blank screen.
+ *
+ * nj_call() runs the resolved method directly, so an abstract method with no
+ * implementation would surface as UnsatisfiedLinkError (there is no native to
+ * bind).  The receiver's own vtable is therefore checked first: if the method
+ * that would run is still abstract, that is an AbstractMethodError, which is
+ * what a device reports and what the MIDlet can actually catch.
  */
+static int canvas_call_abstract(nj_vm *vm, nj_ref canvas, const char *name,
+                                const char *desc, nj_value *a)
+{
+    nj_method *m;
+
+    if (!canvas || !canvas->cls) {
+        return 0;
+    }
+    m = nj_method_lookup(canvas->cls, name, desc);
+    if (m && !m->code && (m->flags & NJ_ACC_ABSTRACT) != 0u) {
+        (void)nj_throw(vm, "java/lang/AbstractMethodError", name);
+        return 0;
+    }
+    return nj_call(vm, canvas, NJ_C_CANVAS, name, desc, a, NULL) == NJ_OK;
+}
+
 static int canvas_call(nj_vm *vm, nj_ref canvas, const char *name, int argc,
                        nj_value *a)
 {
-    if (nj_call(vm, canvas, NJ_C_CANVAS, name,
-                argc == 1 ? "(I)V" : "()V", argc == 1 ? a : NULL,
-                NULL) != NJ_OK) {
-        return 0;
+    const char *desc;
+
+    switch (argc) {
+    case 1:  desc = "(I)V"; break;
+    case 2:  desc = "(II)V"; break;
+    case 0:  desc = "()V"; break;
+    default: return 0;
     }
-    return 1;
+    return canvas_call_abstract(vm, canvas, name, desc, a);
+}
+
+/* paint() takes a Graphics, so it needs its own descriptor. */
+static int canvas_call_paint(nj_vm *vm, nj_ref canvas, nj_ref g)
+{
+    nj_value a[1];
+    a[0].r = g;
+    return canvas_call_abstract(vm, canvas, "paint",
+                                "(L" NJ_C_GRAPHICS ";)V", a);
 }
 
 static int canvas_visible(nj_vm *vm, nj_ref canvas)
@@ -3978,15 +4002,27 @@ int nj_midp_key(nj_vm *vm, int key, int down)
             }
             consumed = 1;
         }
+        /*
+         * An exception raised by keyPressed()/keyReleased() - including the
+         * AbstractMethodError for an unimplemented hook - is left pending so
+         * the caller sees it.
+         */
         if (vm->exception) {
-            nj_clear_exception(vm);
+            return consumed;
         }
     }
-    if (!consumed && down) {
-        consumed = displayable_key(vm, d, code, down);
+    if (!consumed) {
+        /*
+         * A built-in screen owns the keyboard entirely: a MIDlet never sees a
+         * key while a Form/List/TextBox/Alert is showing, so the event counts
+         * as consumed whether or not it moved the selection.  Returning 0 here
+         * would invite the runner to act on a key the application is using as
+         * a menu.
+         */
+        (void)displayable_key(vm, d, code, down);
+        consumed = 1;
     }
     if (vm->exception) {
-        nj_clear_exception(vm);
         return consumed;
     }
     if (consumed) {
@@ -4026,7 +4062,7 @@ int nj_midp_pointer(nj_vm *vm, int x, int y, int down)
         (void)canvas_call(vm, d, down ? "pointerPressed" : "pointerReleased", 2,
                           a);
         if (vm->exception) {
-            nj_clear_exception(vm);
+            return 1;   /* the MIDlet's exception is the caller's to handle */
         }
         fput(vm, d, NJ_C_CANVAS, F_C_PRESSED, D_BOOL, down ? 1 : 0);
         nj_midp_repaint(vm);
@@ -4091,8 +4127,7 @@ nj_status nj_midp_paint(nj_vm *vm)
             return NJ_ERR;   /* names the class; not a silent blank frame */
         }
         (void)canvas_visible(vm, d);
-        if (nj_call(vm, d, NJ_C_CANVAS, "paint", "(L" NJ_C_GRAPHICS ";)V",
-                    &(nj_value){ .r = g }, NULL) != NJ_OK) {
+        if (!canvas_call_paint(vm, d, g)) {
             /*
              * Leave the exception pending: paint() is abstract on Canvas, so
              * "method not implemented" is exactly what the caller must see.
@@ -4121,9 +4156,7 @@ nj_status nj_midp_paint(nj_vm *vm)
         if (buf) {
             nj_ref g = gfx_new(vm, buf);
             if (g) {
-                (void)nj_call(vm, d, NJ_C_CANVAS, "paint",
-                              "(L" NJ_C_GRAPHICS ";)V",
-                              &(nj_value){ .r = g }, NULL);
+                (void)canvas_call_paint(vm, d, g);
                 nj_clear_exception(vm);
             }
             if (nj_midp_surface(vm, buf, &buf_surf)) {
@@ -5070,23 +5103,29 @@ NJFN(gauge_njHeight)
 /* ------------------------------------------------------------------ */
 /* TextField                                                           */
 /* ------------------------------------------------------------------ */
+/*
+ * The MIDP constraint *values* are not in the order the names are usually
+ * listed: ANY=0, EMAILADDR=1, NUMERIC=2, PHONENUMBER=3, URL=4, DECIMAL=5.
+ * Getting this order wrong silently swaps URL and PHONENUMBER, which rejects
+ * perfectly ordinary text.
+ */
 static int tf_is_valid_char(nj_s4 constraints, nj_u2 ch)
 {
     nj_s4 kind = constraints & 0xFFFF;
+    int ascii_printable = (ch >= 0x20u && ch < 0x7Fu);
 
     switch ((int)kind) {
+    case 1:   /* EMAILADDR */
+    case 4:   /* URL */
+        return ascii_printable && ch != ' ';
     case 2:   /* NUMERIC */
         return (ch >= '0' && ch <= '9');
-    case 5:   /* DECIMAL */
-        return (ch >= '0' && ch <= '9') || ch == '.' || ch == '-';
-    case 3:   /* EMAILADDR */
-        return (ch != ' ' && ch < 0x80u);
-    case 4:   /* PHONENUMBER */
+    case 3:   /* PHONENUMBER */
         return (ch >= '0' && ch <= '9') || ch == '+' || ch == '*' ||
                ch == '#' || ch == 'p' || ch == 'w' || ch == ' ';
-    case 6:   /* URL */
-        return (ch != ' ' && ch < 0x80u);
-    default:
+    case 5:   /* DECIMAL */
+        return (ch >= '0' && ch <= '9') || ch == '.' || ch == '-';
+    default:  /* ANY and the flag bits */
         return 1;
     }
 }
@@ -5144,7 +5183,7 @@ NJFN(tf_init)
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "maxSize must be positive");
     }
-    if ((constraints & 0xFFFF) > 6) {
+    if ((constraints & 0xFFFF) > 5) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "unknown constraints");
     }
@@ -5343,7 +5382,7 @@ NJFN(tf_setConstraints)
     nj_s4 c = NJ_ARG_INT(args, 0);
     nj_ref text = rget(vm, self, NJ_C_TEXTFIELD, "tfText", D_STR);
 
-    if ((c & 0xFFFF) > 6) {
+    if ((c & 0xFFFF) > 5) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "unknown constraints");
     }
@@ -7229,7 +7268,7 @@ NJFN(tb_init)
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "maxSize must be positive");
     }
-    if ((constraints & 0xFFFF) > 6) {
+    if ((constraints & 0xFFFF) > 5) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "unknown constraints");
     }
@@ -7424,7 +7463,7 @@ NJFN(tb_setConstraints)
     nj_s4 c = NJ_ARG_INT(args, 0);
     nj_ref text = rget(vm, self, NJ_C_TEXTBOX, "tbText", D_STR);
 
-    if ((c & 0xFFFF) > 6) {
+    if ((c & 0xFFFF) > 5) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "unknown constraints");
     }
@@ -7815,6 +7854,7 @@ static const nj_builtin_field image_fields[] = {
 };
 
 static const nj_builtin_method image_methods[] = {
+    M("<init>", "()V", 0),
     M("createImage", "(II)L" NJ_C_IMAGE ";",                   NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("createImage", "([BII)L" NJ_C_IMAGE ";",                 NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("createImage", "([BIII)L" NJ_C_IMAGE ";",                NJ_ACC_STATIC | NJ_ACC_PUBLIC),
@@ -7853,6 +7893,7 @@ static const nj_builtin_field font_fields[] = {
 };
 
 static const nj_builtin_method font_methods[] = {
+    M("<init>", "()V", 0),
     M("getFont",          "(I)L" NJ_C_FONT ";",         NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("getFont",          "(III)L" NJ_C_FONT ";",       NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("getDefaultFont",   "()L" NJ_C_FONT ";",          NJ_ACC_STATIC | NJ_ACC_PUBLIC),
@@ -8252,7 +8293,6 @@ static const nj_builtin_method choicegroup_methods[] = {
     M("insert", "(ILjava/lang/String;)V", 0),
     M("insert", "(ILjava/lang/String;L" NJ_C_IMAGE ";)V", 0),
     M("set",    "(ILjava/lang/String;L" NJ_C_IMAGE ";)V", 0),
-    M("setSelectedIndex", "(IZ)V", 0),
     M("delete",    "(I)V", 0),
     M("deleteAll", "()V", 0),
     M("size",      "()I", 0),
@@ -8261,6 +8301,7 @@ static const nj_builtin_method choicegroup_methods[] = {
     M("getImage",  "(I)L" NJ_C_IMAGE ";", 0),
     M("setImage",  "(IL" NJ_C_IMAGE ";)V", 0),
     M("isSelected", "(I)Z", 0),
+    M("setSelectedIndex",  "(I)V", 0),
     M("setSelectedIndex",  "(IZ)V", 0),
     M("getSelectedIndex",  "()I", 0),
     M("setSelectedFlags",  "([Z)V", 0),
@@ -8520,6 +8561,7 @@ static const nj_builtin_field display_fields[] = {
 };
 
 static const nj_builtin_method display_methods[] = {
+    M("<init>", "()V", 0),
     M("getDisplay", "(Ljavax/microedition/midlet/MIDlet;)L" NJ_C_DISPLAY ";",
       NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("setCurrent", "(L" NJ_C_DISPLAYABLE ";)V", 0),
@@ -8665,7 +8707,7 @@ const int nj_lib_lcdui_class_count =
 
 const nj_native_entry nj_lib_lcdui_table[] = {
     { "javax/microedition/lcdui/Screen", "<init>", "()V", screen_init },
-    { NJ_C_IMAGE, "<init>", "()V", img_init_wh },
+    { NJ_C_IMAGE, "<init>", "()V", no_public_constructor },
     { NJ_C_IMAGE, "createImage", "(II)L" NJ_C_IMAGE ";", img_createImage_wh },
     { NJ_C_IMAGE, "createImage", "(L" NJ_C_IMAGE ";)L" NJ_C_IMAGE ";", img_createImage_copy },
     { NJ_C_IMAGE, "createImage", "(IIIIII)L" NJ_C_IMAGE ";", img_createImage_sixints },
@@ -8680,6 +8722,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_IMAGE, "getGraphics", "()L" NJ_C_GRAPHICS ";", img_getGraphics },
     { NJ_C_IMAGE, "getRGB", "([IIIIIII)V", img_getRGB },
 
+    { NJ_C_FONT, "<init>", "()V", no_public_constructor },
     { NJ_C_FONT, "getFont", "(I)L" NJ_C_FONT ";", font_getFontStatic1 },
     { NJ_C_FONT, "getFont", "(III)L" NJ_C_FONT ";", font_getFontStatic3 },
     { NJ_C_FONT, "getDefaultFont", "()L" NJ_C_FONT ";", font_getDefaultFont },
@@ -8994,6 +9037,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_ALERTTYPE, "getTypeName", "(L" NJ_C_ALERTTYPE ";)Ljava/lang/String;", alerttype_getTypeName },
     { NJ_C_ALERTTYPE, "getTypeName", "()Ljava/lang/String;", alerttype_getTypeName },
 
+    { NJ_C_DISPLAY, "<init>", "()V", no_public_constructor },
     { NJ_C_DISPLAY, "getDisplay", "(Ljavax/microedition/midlet/MIDlet;)L" NJ_C_DISPLAY ";", disp_getDisplay },
     { NJ_C_DISPLAY, "setCurrent", "(L" NJ_C_DISPLAYABLE ";)V", disp_setCurrent },
     { NJ_C_DISPLAY, "setCurrent", "(L" NJ_C_ALERT ";L" NJ_C_DISPLAYABLE ";)V", disp_setCurrent_alert },
@@ -9035,44 +9079,58 @@ static void lcdui_const_int(nj_vm *vm, const char *cls, const char *name,
     }
 }
 
-/* Build one AlertType singleton and store it in its static field. */
+/*
+ * Build one AlertType singleton and store it in its static field.
+ *
+ * NOTE: late init runs before the VM is marked running, so nj_call() cannot be
+ * used here - it would return NJ_ERR_STATE and the singleton would silently stay
+ * null.  The objects are therefore filled in field by field, which is what the
+ * constructor native does anyway.
+ */
 static void lcdui_alert_type(nj_vm *vm, const char *field, nj_s4 kind)
 {
     nj_ref t = nj_object_new(vm, NJ_C_ALERTTYPE);
-    nj_value a[1];
 
     if (!t) {
         nj_clear_exception(vm);
         return;
     }
-    a[0].i = kind;
-    if (nj_call_special(vm, t, NJ_C_ALERTTYPE, "<init>", "(I)V", a, NULL) != NJ_OK) {
-        nj_clear_exception(vm);
-        return;
-    }
+    fput(vm, t, NJ_C_ALERTTYPE, "atType", D_INT, kind);
     rputs(vm, NJ_C_ALERTTYPE, field, "L" NJ_C_ALERTTYPE ";", t);
 }
 
 /* Build the List.SELECT_COMMAND singleton. */
-static void lcdui_select_command(nj_vm *vm)
+/* Fill in a Command directly (see the note on lcdui_alert_type). */
+static nj_ref lcdui_make_command(nj_vm *vm, const char *label_text, nj_s4 type,
+                                 nj_s4 priority)
 {
     nj_ref c = nj_object_new(vm, NJ_C_COMMAND);
-    nj_ref label = nj_string_new(vm, "Select");
-    nj_value a[3];
+    nj_ref label;
 
-    if (!c || !label) {
+    if (!c) {
         nj_clear_exception(vm);
-        return;
+        return NULL;
     }
-    a[0].r = label;      /* Command(String label, int type, int priority) */
-    a[1].i = 8;          /* Command.ITEM */
-    a[2].i = 0;
-    if (nj_call_special(vm, c, NJ_C_COMMAND, "<init>",
-                        "(Ljava/lang/String;II)V", a, NULL) != NJ_OK) {
+    label = nj_string_new(vm, label_text);
+    if (!label) {
         nj_clear_exception(vm);
-        return;
+        return NULL;
     }
-    rputs(vm, NJ_C_LIST, "SELECT_COMMAND", D_CMD, c);
+    fput(vm, c, NJ_C_COMMAND, "cmdType", D_INT, type);
+    rput(vm, c, NJ_C_COMMAND, "cmdLabel", D_STR, label);
+    fput(vm, c, NJ_C_COMMAND, "cmdPriority", D_INT, priority);
+    fput(vm, c, NJ_C_COMMAND, "cmdLongLabel", D_INT, 0);
+    rput(vm, c, NJ_C_COMMAND, "cmdLong", D_STR, NULL);
+    fput(vm, c, NJ_C_COMMAND, "cmdMnemonic", D_INT, 0);
+    return c;
+}
+
+static void lcdui_select_command(nj_vm *vm)
+{
+    nj_ref c = lcdui_make_command(vm, "Select", 8 /* Command.ITEM */, 0);
+    if (c) {
+        rputs(vm, NJ_C_LIST, "SELECT_COMMAND", D_CMD, c);
+    }
 }
 
 /*
@@ -9249,25 +9307,10 @@ nj_status nj_lcdui_late_init(nj_vm *vm)
     /* The default Alert type is INFO, and DISMISS_COMMAND is what an Alert
      * with OK/BACK semantics delivers; both are singletons. */
     {
-        nj_ref info = rgets(vm, NJ_C_ALERTTYPE, "INFO", "L" NJ_C_ALERTTYPE ";");
-        nj_ref dismiss = nj_object_new(vm, NJ_C_COMMAND);
-        nj_ref label = nj_string_new(vm, "Dismiss");
-        if (dismiss && label) {
-            nj_value a[3];
-            a[0].r = label;  /* Command(String label, int type, int priority) */
-            a[1].i = 4;      /* Command.OK */
-            a[2].i = 0;
-            if (nj_call_special(vm, dismiss, NJ_C_COMMAND, "<init>",
-                                "(Ljava/lang/String;II)V", a, NULL) != NJ_OK) {
-                nj_clear_exception(vm);
-            }
-        } else {
-            nj_clear_exception(vm);
-        }
-        if (dismiss && dismiss->cls) {
+        nj_ref dismiss = lcdui_make_command(vm, "Dismiss", 4 /* Command.OK */, 0);
+        if (dismiss) {
             rputs(vm, NJ_C_ALERT, "DISMISS_COMMAND", D_CMD, dismiss);
         }
-        (void)info;   /* each Alert carries its own type object */
     }
 
     /* Make sure the font registry exists so the first paint has metrics. */

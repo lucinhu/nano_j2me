@@ -215,7 +215,7 @@ nj_status nj_thread_start(nj_vm *vm, nj_thread *t, nj_method *run)
     if (run->max_locals < 1u) {
         return nj_throw(vm, "java/lang/VerifyError", run->name);
     }
-    base[0].r = t->obj;
+    base[0].r = t->entry_this ? t->entry_this : t->obj;
     st = nj_frame_push(vm, t, run, base, 1u);
     if (st != NJ_OK) {
         return st;
@@ -384,12 +384,17 @@ nj_status nj_scheduler_step(nj_vm *vm)
             t->state = NJ_THREAD_DEAD;
             /* An uncaught exception propagates out of the thread. */
             if (vm->exception) {
+                const char *desc = nj_exception_describe(vm);
                 nj_ref e = nj_take_exception(vm);
                 if (t->is_main) {
                     return NJ_ERR;
                 }
+                /* Full description, not just the class: an uncaught
+                 * IllegalArgumentException with no message is barely more
+                 * useful than a blank screen. */
                 nj_logf(vm, 1, "uncaught exception in thread %u: %s",
-                        (unsigned)t->id, e && e->cls ? e->cls->name : "?");
+                        (unsigned)t->id,
+                        desc ? desc : (e && e->cls ? e->cls->name : "?"));
             }
         } else if (st != NJ_OK && st != NJ_ERR_YIELD && st != NJ_ERR_TIMEOUT) {
             return st;

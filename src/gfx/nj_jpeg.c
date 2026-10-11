@@ -34,12 +34,15 @@
  *   matrix uses divisions by 65536 for the same reason.
  *
  *   The same routine computes the reduced (DCT-domain) output for 1/2 and 1/4
- *   scaling: keeping only the coefficients whose natural index is a multiple
- *   of 2 (or 4) and evaluating the transform at the first 4 (or 2) output
- *   positions of each axis yields exactly the N-point IDCT of the low NxN
- *   coefficients scaled by N/8, which preserves the DC level and so flat
- *   colours.  That is the standard "reduced IDCT" approximation, and it is
- *   both faster and better looking than decoding full size and resampling.
+ *   scaling: it evaluates the SxS box average of the block directly in the
+ *   coefficient domain, keeping every frequency and weighting it with the box
+ *   kernel W(u) = sin(S*theta)/(S*sin(theta)), theta = u*PI/16 (see
+ *   s_idct_kern).  The obvious first guess - drop the high frequencies and
+ *   sample the survivors at consecutive output positions - is NOT a downscale:
+ *   it returns the block's top-left corner low-passed, and a half-size splash
+ *   screen comes out visibly cropped.  Measured against libjpeg's own
+ *   reduced-size decode, the box form agrees to within one level and the naive
+ *   one is off by tens.  W(0) = 1 keeps the DC term, and flat colours, exact.
  *
  *   UPSAMPLING: plain replication.  Output pixel x takes chroma sample
  *   floor(x * h / h_max) - the sample whose 2x2/4x1 block contains the pixel.
@@ -526,6 +529,12 @@ static void jp_free(jp_dec *d)
  * scan can write every block it decodes without a bounds test.  The padding
  * is never sampled: the upsampler only reaches ceil(w*h/h_max) samples, and
  * every component is required to appear in a scan before the image is built.
+ *
+ * The planes are filled with 128 - the neutral level of the JPEG level shift,
+ * and therefore also exactly what the IDCT produces for a missing block.  It
+ * is one linear pass, negligible next to the transform, and it means a path
+ * that ever fails to write a sample yields a sane deterministic pixel instead
+ * of whatever malloc handed back.
  */
 static const char *jp_alloc_planes(jp_dec *d)
 {
@@ -542,6 +551,7 @@ static const char *jp_alloc_planes(jp_dec *d)
         if (c->plane == NULL) {
             return "out of memory for the JPEG component planes";
         }
+        memset(c->plane, 128, (size_t)bytes);
         c->pred = 0;
     }
     d->planes_ready = 1;
@@ -1107,6 +1117,7 @@ static const char *jp_decode_scan(jp_dec *d)
     nj_u4 cols, rows, total;
     int expected_rst = 0xD0;
 
+    d->truncated = 0;      /* per scan: each one ends with its own padding */
     if (!d->planes_ready) {
         const char *e = jp_alloc_planes(d);
         if (e != NULL) {
@@ -1133,15 +1144,17 @@ static const char *jp_decode_scan(jp_dec *d)
             int i;
 
             if (d->truncated) {
-                /* Only the last MCU of the image may be short; anything
-                 * earlier means the file was cut in half. */
+                /* Only the final MCU of the image may be short; anything
+                 * earlier means the file was cut in half.  The blocks the
+                 * missing bytes would have filled still go through the
+                 * decoder below - as zero blocks, which the IDCT turns into
+                 * neutral grey - so that every sample of the plane is written
+                 * and no uninitialised memory can reach the output. */
                 if (mcu + 1u < total) {
                     return "JPEG scan data ended early";
                 }
-                continue;
-            }
-            if (d->restart_interval > 0 &&
-                mcu > 0u && (mcu % (nj_u4)d->restart_interval) == 0u) {
+            } else if (d->restart_interval > 0 &&
+                       mcu > 0u && (mcu % (nj_u4)d->restart_interval) == 0u) {
                 int r = jp_restart(&b, &expected_rst);
 
                 if (r == -2) {
@@ -1239,12 +1252,14 @@ static void jp_emit(jp_dec *d, nj_image *img)
         int direct = 0;
 
         if (d->ncomp == 3) {
-            /* Adobe transform 0 means "no colour transform"; so do the
-             * component IDs R,G,B in a file without an APP14 marker. */
+            /* Adobe transform 0 means "no colour transform".  Without an
+             * APP14 marker the component IDs R,G,B are the other hint real
+             * files carry - but an APP0/JFIF marker wins, because JFIF
+             * mandates YCbCr whatever the IDs happen to be. */
             if (d->adobe == 0) {
                 direct = 1;
-            } else if (d->adobe < 0 && c0->id == 0x52 && c1->id == 0x47 &&
-                       c2->id == 0x42) {
+            } else if (d->adobe < 0 && !d->jfif && c0->id == 0x52 &&
+                       c1->id == 0x47 && c2->id == 0x42) {
                 direct = 1;
             }
         }

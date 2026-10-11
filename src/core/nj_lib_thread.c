@@ -141,8 +141,32 @@ NJFN(thread_start)
     f = fld(vm, "priority", "I");
     t->priority = f ? nj_field_read_int(vm, o, f) : 5;
 
-    /* run() is resolved on the *runtime* class so subclasses win. */
+    /*
+     * The thread's BOTTOM frame must be Java.
+     *
+     * A frame for a native method cannot be executed by the interpreter - it
+     * has no bytecode - and a native cannot be suspended and resumed either
+     * (docs/ARCHITECTURE.md section 5).  Starting the thread on the base
+     * Thread.run() native would therefore do one of two wrong things: kill the
+     * thread immediately, or run the whole game loop through a C frame that
+     * cannot survive a Thread.sleep().
+     *
+     * So resolve the real Java run() here instead: the receiver's own override
+     * if it has one, otherwise the Runnable's.  Thread.run()'s delegation to
+     * target.run() is inlined at start time, which is what a real JVM ends up
+     * doing anyway, only without the C frame in the middle.
+     */
     run = nj_method_lookup(o->cls, "run", "()V");
+    if (run && run->code == NULL) {
+        nj_ref target = t->target;
+        if (target) {
+            nj_method *rm = nj_method_lookup(target->cls, "run", "()V");
+            if (rm) {
+                run = rm;
+                t->entry_this = target;
+            }
+        }
+    }
     if (!run) {
         run = nj_method_lookup(nj_class_lookup(vm, "java/lang/Thread"),
                                "run", "()V");
@@ -152,6 +176,28 @@ NJFN(thread_start)
         return nj_throw(vm, "java/lang/NoSuchMethodError", "run");
     }
     thread_set_handle(vm, o, t);
+
+    if (run->code == NULL) {
+        /*
+         * Still native - the Runnable itself has no Java run(), or the game
+         * subclassed Thread and left run() unimplemented.  Run it here and let
+         * the thread finish; there is nothing to resume.
+         */
+        nj_value ret[2];
+        nj_status st;
+        if (run->max_locals < 1u) {
+            nj_thread_destroy(vm, t);
+            return nj_throw(vm, "java/lang/VerifyError", run->name);
+        }
+        t->stack_mem[0].r = t->entry_this ? t->entry_this : t->obj;
+        st = nj_invoke_native(vm, t, run, t->stack_mem, 1u, ret);
+        t->started = 1u;
+        if (st != NJ_ERR_TIMEOUT) {
+            t->state = NJ_THREAD_DEAD;
+        }
+        return NJ_OK;
+    }
+
     {
         nj_status st = nj_thread_start(vm, t, run);
         if (st != NJ_OK) {

@@ -126,7 +126,11 @@
  *     field kept in sync, so paint() never re-resolves the sequence.
  *  5. Additive extensions, none of which conflict with a MIDP signature:
  *     Sprite.getImage(), Sprite.setImage(Image), Sprite.getTransform(),
- *     Sprite.getFrameSequenceIndex(), Sprite.collidesWith(Layer,boolean),
+ *     Sprite.getFrameSequenceIndex(), Sprite.nextFrame()/prevFrame() with an
+ *     int return (the project's MIDP stubs declare them that way; the void
+ *     MIDP versions stay the ones real MIDlets link against),
+ *     Sprite.collidesWith(TiledLayer,boolean,boolean) and
+ *     Sprite.collidesWith(Layer,boolean,boolean), Sprite.collidesWith(Layer,boolean),
  *     Sprite.collidesWith(Sprite,boolean,boolean) (third argument: line the two
  *     reference pixels up before testing), TiledLayer.fillCells(int,int,int,int)
  *     (clear a region), LayerManager.getViewX()/getViewY()/getViewW()/getViewH().
@@ -905,6 +909,48 @@ NJFN(sprite_prevFrame)
     return NJ_OK;
 }
 
+/*
+ * Additive, int-returning nextFrame()/prevFrame().  MIDP declares them void,
+ * and the void versions stay the ones a MIDP-compiled MIDlet links against;
+ * these exist because the project's own MIDP stubs (build/midp-stubs) were
+ * generated with an int return, and a fixture compiled against them would
+ * otherwise die with NoSuchMethodError.  Two methods may share a name here
+ * because dispatch is by (name, descriptor).
+ */
+NJFN(sprite_nextFrame_i)
+{
+    nj_ref self = NJ_THIS(args);
+    int len = sprite_seq_len(vm, self);
+    int idx = (int)SPG(vm, self, SP_SEQIDX, D_INT);
+
+    if (len < 1) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    idx = (idx + 1) % len;
+    SPS(vm, self, SP_SEQIDX, D_INT, idx);
+    SPS(vm, self, NJ_F_SP_FRAME, D_INT, sprite_raw_frame(vm, self, idx));
+    ret->i = idx;
+    return NJ_OK;
+}
+
+NJFN(sprite_prevFrame_i)
+{
+    nj_ref self = NJ_THIS(args);
+    int len = sprite_seq_len(vm, self);
+    int idx = (int)SPG(vm, self, SP_SEQIDX, D_INT);
+
+    if (len < 1) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    idx = (idx + len - 1) % len;
+    SPS(vm, self, SP_SEQIDX, D_INT, idx);
+    SPS(vm, self, NJ_F_SP_FRAME, D_INT, sprite_raw_frame(vm, self, idx));
+    ret->i = idx;
+    return NJ_OK;
+}
+
 /* ---- transforms ---- */
 NJFN(sprite_setTransform)
 {
@@ -1316,6 +1362,48 @@ NJFN(sprite_collidesWith_image)
     return NJ_OK;
 }
 
+/* Defined with the TiledLayer code below; the Layer dispatch needs it. */
+static nj_status sprite_collidesWith_tiled_ref(nj_vm *vm, nj_thread *th,
+                                               nj_value *args, nj_value *ret);
+
+/*
+ * Additive collidesWith(Layer, boolean, boolean): same dispatch as the
+ * two-argument form, plus the reference-pixel alignment flag that the Sprite
+ * case understands.
+ */
+NJFN(sprite_collidesWith_layer_ref)
+{
+    nj_ref other = NJ_ARG_REF(args, 0);
+    nj_class *sc, *tc;
+
+    if (!other || !other->cls) {
+        NJ_THROW(vm, "java/lang/NullPointerException", "layer is null");
+    }
+    sc = nj_class_lookup(vm, NJ_C_SPRITE);
+    tc = nj_class_lookup(vm, NJ_C_TILEDLAYER);
+    if (sc && nj_class_is_subclass_of(other->cls, sc)) {
+        return sprite_collidesWith_sprite_ref(vm, th, args, ret);
+    }
+    if (tc && nj_class_is_subclass_of(other->cls, tc)) {
+        return sprite_collidesWith_tiled_ref(vm, th, args, ret);
+    }
+    {
+        sp_view a;
+        int ax, ay, aw, ah;
+
+        sp_load(vm, NJ_THIS(args), &a);
+        ret->i = 0;
+        if (!a.visible || !lay_visible(vm, other)) {
+            return NJ_OK;
+        }
+        sp_world_rect(&a, &ax, &ay, &aw, &ah);
+        ret->i = rects_overlap(ax, ay, aw, ah, lay_x(vm, other),
+                               lay_y(vm, other), lay_w(vm, other),
+                               lay_h(vm, other)) ? 1 : 0;
+    }
+    return NJ_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* TiledLayer                                                          */
 /* ------------------------------------------------------------------ */
@@ -1590,6 +1678,17 @@ NJFN(sprite_collidesWith_layer)
                                lay_w(vm, other), lay_h(vm, other)) ? 1 : 0;
     }
     return NJ_OK;
+}
+
+/*
+ * Additive collidesWith(TiledLayer, boolean, boolean): a TiledLayer has no
+ * transform and no reference pixel, so the third argument is accepted and
+ * ignored; the overload exists so that code written against the additive
+ * (Sprite|TiledLayer|Layer, boolean, boolean) family always links.
+ */
+NJFN(sprite_collidesWith_tiled_ref)
+{
+    return sprite_collidesWith_tiled(vm, th, args, ret);
 }
 
 static nj_status tiled_construct(nj_vm *vm, nj_ref self, int cols, int rows,
@@ -2810,6 +2909,9 @@ static const nj_builtin_method sprite_methods[] = {
     M("getFrameSequenceIndex", "()I", NJ_ACC_PUBLIC),
     M("nextFrame", "()V", NJ_ACC_PUBLIC),
     M("prevFrame", "()V", NJ_ACC_PUBLIC),
+    /* Additive int-returning twins; see sprite_nextFrame_i. */
+    M("nextFrame", "()I", NJ_ACC_PUBLIC),
+    M("prevFrame", "()I", NJ_ACC_PUBLIC),
     M("setTransform", "(I)V", NJ_ACC_PUBLIC),
     M("getTransform", "()I", NJ_ACC_PUBLIC),
     M("defineReferencePixel", "(II)V", NJ_ACC_PUBLIC),
@@ -2825,9 +2927,13 @@ static const nj_builtin_method sprite_methods[] = {
       NJ_ACC_PUBLIC | NJ_ACC_FINAL),
     M("collidesWith", "(Ljavax/microedition/lcdui/game/TiledLayer;Z)Z",
       NJ_ACC_PUBLIC | NJ_ACC_FINAL),
+    M("collidesWith", "(Ljavax/microedition/lcdui/game/TiledLayer;ZZ)Z",
+      NJ_ACC_PUBLIC | NJ_ACC_FINAL),
     M("collidesWith", "(Ljavax/microedition/lcdui/Image;IIZ)Z",
       NJ_ACC_PUBLIC | NJ_ACC_FINAL),
     M("collidesWith", "(Ljavax/microedition/lcdui/game/Layer;Z)Z",
+      NJ_ACC_PUBLIC | NJ_ACC_FINAL),
+    M("collidesWith", "(Ljavax/microedition/lcdui/game/Layer;ZZ)Z",
       NJ_ACC_PUBLIC | NJ_ACC_FINAL)
 };
 
@@ -2972,6 +3078,8 @@ const nj_native_entry nj_lib_game_table[] = {
       sprite_getFrameSequenceIndex },
     { NJ_C_SPRITE, "nextFrame", "()V", sprite_nextFrame },
     { NJ_C_SPRITE, "prevFrame", "()V", sprite_prevFrame },
+    { NJ_C_SPRITE, "nextFrame", "()I", sprite_nextFrame_i },
+    { NJ_C_SPRITE, "prevFrame", "()I", sprite_prevFrame_i },
     { NJ_C_SPRITE, "setTransform", "(I)V", sprite_setTransform },
     { NJ_C_SPRITE, "getTransform", "()I", sprite_getTransform },
     { NJ_C_SPRITE, "defineReferencePixel", "(II)V",
@@ -2992,9 +3100,15 @@ const nj_native_entry nj_lib_game_table[] = {
       "(Ljavax/microedition/lcdui/game/TiledLayer;Z)Z",
       sprite_collidesWith_tiled },
     { NJ_C_SPRITE, "collidesWith",
+      "(Ljavax/microedition/lcdui/game/TiledLayer;ZZ)Z",
+      sprite_collidesWith_tiled_ref },
+    { NJ_C_SPRITE, "collidesWith",
       "(Ljavax/microedition/lcdui/Image;IIZ)Z", sprite_collidesWith_image },
     { NJ_C_SPRITE, "collidesWith",
       "(Ljavax/microedition/lcdui/game/Layer;Z)Z", sprite_collidesWith_layer },
+    { NJ_C_SPRITE, "collidesWith",
+      "(Ljavax/microedition/lcdui/game/Layer;ZZ)Z",
+      sprite_collidesWith_layer_ref },
     /* TiledLayer */
     { NJ_C_TILEDLAYER, "<init>", "(IILjavax/microedition/lcdui/Image;II)V",
       tiled_init },

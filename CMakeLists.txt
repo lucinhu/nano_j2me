@@ -1,20 +1,57 @@
+# =====================================================================
+#  nano_j2me - build
+#
+#  One command, no options, should give you a working emulator and a
+#  green test suite:
+#
+#      cmake -S . -B build -G Ninja
+#      cmake --build build
+#      ctest --test-dir build --output-on-failure
+#
+#  Everything below is either that default or a documented opt-out.  The
+#  runtime has no dependencies; SDL2 is the only thing even looked for, and
+#  its absence only disables the desktop window (the headless port is always
+#  built and is what the tests use).
+# =====================================================================
 cmake_minimum_required(VERSION 3.16)
-project(nano_j2me C)
+project(nano_j2me VERSION 0.1.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
-if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+               Debug Release RelWithDebInfo MinSizeRel)
 endif()
 
-option(NJ_BUILD_TESTS   "Build the test suite"          ON)
-option(NJ_BUILD_SDL2    "Build the SDL2 desktop port"   ON)
-option(NJ_BUILD_HEADLESS "Build the headless port"      ON)
-option(NJ_BUILD_TOOLS   "Build developer tools"         ON)
-option(NJ_WERROR        "Treat warnings as errors"      OFF)
+include(GNUInstallDirs)
 
+# ---------------------------------------------------------------------
+# Options.  All default to "the useful thing".
+# ---------------------------------------------------------------------
+option(NJ_BUILD_TESTS    "Build the test suite"             ON)
+option(NJ_BUILD_CLI      "Build the command-line runner"    ON)
+option(NJ_BUILD_SDL2     "Build the SDL2 desktop port"      ON)
+option(NJ_BUILD_EMBEDDED_PORTS
+       "Also compile the Android and ESP32 port sources (they stub themselves \
+outside their own platform, so this costs a compile and nothing else)" ON)
+option(NJ_WERROR         "Treat warnings as errors"         OFF)
+option(NJ_SANITIZE       "Build with ASan + UBSan"          OFF)
+
+set(NJ_ENABLE_JPEG  0 CACHE STRING "Built-in baseline JPEG decoder")
+set(NJ_ENABLE_PNG   1 CACHE STRING "Built-in PNG decoder")
+set(NJ_ENABLE_RMS   1 CACHE STRING "RecordStore persistence")
+set(NJ_ENABLE_IO    1 CACHE STRING "java.io and javax.microedition.io")
+set(NJ_PIXFMT       "NJ_PIXFMT_RGB565" CACHE STRING
+    "Framebuffer pixel format: NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888 or NJ_PIXFMT_ARGB8888")
+
+# ---------------------------------------------------------------------
+# The runtime
+# ---------------------------------------------------------------------
 set(NJ_SOURCES
+  # ---- virtual machine ----
   src/core/nj_heap.c
   src/core/nj_string.c
   src/core/nj_class.c
@@ -24,12 +61,14 @@ set(NJ_SOURCES
   src/core/nj_interp.c
   src/core/nj_app.c
   src/core/nj_builtins.c
+  # ---- java.lang, in C ----
   src/core/nj_lib_object.c
   src/core/nj_lib_string.c
   src/core/nj_lib_system.c
   src/core/nj_lib_math.c
   src/core/nj_lib_thread.c
   src/core/nj_lib_boxing.c
+  # ---- the MIDP class library, in C ----
   src/midp/nj_lib_util.c
   src/midp/nj_lib_io.c
   src/midp/nj_lib_lcdui.c
@@ -37,42 +76,72 @@ set(NJ_SOURCES
   src/midp/nj_lib_rms.c
   src/midp/nj_lib_midlet.c
   src/midp/nj_lib_media.c
+  # ---- graphics ----
   src/gfx/nj_gfx.c
+  src/gfx/nj_text.c
   src/gfx/nj_font.c
   src/gfx/nj_png.c
+  src/gfx/nj_jpeg.c
   src/gfx/nj_codec.c
+  # ---- compression ----
   src/zip/nj_inflate.c
   src/zip/nj_zip.c
+  # ---- the runner ----
   src/runner/nj_run.c
 )
 
-set(NJ_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include)
-
-
 add_library(nj2me STATIC ${NJ_SOURCES})
-target_include_directories(nj2me PUBLIC ${NJ_INCLUDE_DIRS})
-target_include_directories(nj2me PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+add_library(nj2me::nj2me ALIAS nj2me)
+
+target_include_directories(nj2me
+  PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+
 target_compile_options(nj2me PRIVATE -Wall -Wextra)
 if(NJ_WERROR)
   target_compile_options(nj2me PRIVATE -Werror)
 endif()
+
+target_compile_definitions(nj2me PUBLIC
+  NJ_PIXFMT=${NJ_PIXFMT}
+  NJ_ENABLE_PNG=${NJ_ENABLE_PNG}
+  NJ_ENABLE_JPEG=${NJ_ENABLE_JPEG}
+  NJ_ENABLE_RMS=${NJ_ENABLE_RMS}
+  NJ_ENABLE_IO=${NJ_ENABLE_IO})
+
+if(NJ_SANITIZE)
+  target_compile_options(nj2me PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
+  target_link_options(nj2me PUBLIC -fsanitize=address,undefined)
+endif()
+
+# The interpreter is one function with a ~1200-case switch.  At -O3 GCC 16 has
+# been observed to die with an internal compiler error on it under parallel
+# build memory pressure, and the generated code is not measurably faster than
+# -O2 anyway - the dispatch is a jump table either way.  Pin this one file so a
+# release build is reproducible rather than occasionally flaky.
+set_source_files_properties(src/core/nj_interp.c PROPERTIES
+  COMPILE_OPTIONS "-O2")
+
 if(UNIX)
   target_link_libraries(nj2me PUBLIC m)
 endif()
 
 # ---------------------------------------------------------------------
 # Ports
+#
+# The headless port is always present: it is the reference implementation and
+# the one the test suite drives.  Everything else is conditional on the SDK
+# being available, and every port source compiles everywhere - outside its own
+# platform it provides stubs that report NJ_ERR_UNSUPPORTED, so one library can
+# contain all of them.
 # ---------------------------------------------------------------------
-if(NJ_BUILD_HEADLESS)
-  target_sources(nj2me PRIVATE src/port/posix/nj_port_headless.c)
-endif()
+target_sources(nj2me PRIVATE src/port/posix/nj_port_headless.c)
 
-# The embedded ports compile everywhere: outside their own platform they
-# provide stubs that report NJ_ERR_UNSUPPORTED, so a single library can contain
-# every port and the host build still links.
-target_sources(nj2me PRIVATE
-  src/port/android/nj_port_android.c
-  src/port/esp32/nj_port_esp32.c)
+if(NJ_BUILD_EMBEDDED_PORTS)
+  target_sources(nj2me PRIVATE
+    src/port/android/nj_port_android.c
+    src/port/esp32/nj_port_esp32.c)
+endif()
 
 if(NJ_BUILD_SDL2)
   find_package(PkgConfig QUIET)
@@ -86,79 +155,191 @@ if(NJ_BUILD_SDL2)
     target_compile_definitions(nj2me PUBLIC NJ_HAVE_SDL2=1)
     message(STATUS "SDL2 port: enabled (${SDL2_VERSION})")
   else()
-    message(STATUS "SDL2 port: disabled (libsdl2-dev not found)")
+    message(STATUS "SDL2 port: disabled - install libsdl2-dev for a window; "
+                   "the headless port still works")
   endif()
 endif()
 
 # ---------------------------------------------------------------------
-# Executable
+# Command-line runner
+#
+# NOTE the target name: the library already owns "nj2me", and CMake rejects a
+# duplicate target, so the executable is nj2me-cli with an output name of
+# nj2me.  Same binary, different target.
 # ---------------------------------------------------------------------
-# NOTE: the executable must not be called "nj2me" - that name is already the
-# library target, and CMake rejects the duplicate (CMP0002).
-add_executable(nj2me-cli apps/nj2me_main.c)
-target_link_libraries(nj2me-cli PRIVATE nj2me)
-set_target_properties(nj2me-cli PROPERTIES OUTPUT_NAME nj2me)
+if(NJ_BUILD_CLI)
+  add_executable(nj2me-cli apps/nj2me_main.c)
+  target_link_libraries(nj2me-cli PRIVATE nj2me)
+  set_target_properties(nj2me-cli PROPERTIES OUTPUT_NAME nj2me)
+  install(TARGETS nj2me-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
+
+install(TARGETS nj2me ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(DIRECTORY include/nj2me DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 # ---------------------------------------------------------------------
 # Tests
+#
+# Each test is a self-contained program with its own assertion count; ctest
+# just runs them.  They are added only when the file exists, so the tree stays
+# buildable while a module is being written.
 # ---------------------------------------------------------------------
 if(NJ_BUILD_TESTS)
   enable_testing()
-  add_executable(test_vm tests/test_vm.c)
-  target_link_libraries(test_vm PRIVATE nj2me)
-  add_test(NAME vm_core COMMAND test_vm
-           ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/hello.jar
-           HelloWorld "hello from j2me")
 
-  add_executable(test_lifecycle tests/test_lifecycle.c)
-  target_link_libraries(test_lifecycle PRIVATE nj2me)
-  add_test(NAME lifecycle COMMAND test_lifecycle)
+  # ---- fixtures the tests need, generated at build time ----
+  #
+  # PICK THE INTERPRETER THAT ACTUALLY HAS PILLOW, not merely the first one on
+  # PATH.  A pyenv/user python3 without Pillow is extremely common, and
+  # "pip install Pillow" is not something a build system gets to demand - while
+  # the system python usually already has it.  gen_fixtures.py needs nothing but
+  # the standard library, so it can always run; the PNG and JPEG fixture
+  # generators do need Pillow.
+  set(NJ_FIXTURES ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures)
 
-  add_executable(test_zip tests/test_zip.c)
-  target_link_libraries(test_zip PRIVATE nj2me)
-  target_include_directories(test_zip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
-  add_test(NAME zip_inflate COMMAND test_zip
-           ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures)
+  set(NJ_PYTHON_CANDIDATES "")
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    list(APPEND NJ_PYTHON_CANDIDATES ${Python3_EXECUTABLE})
+  endif()
+  list(APPEND NJ_PYTHON_CANDIDATES
+       /usr/bin/python3 /usr/local/bin/python3 python3)
 
-  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_lcdui.c)
-    add_executable(test_lcdui tests/test_lcdui.c)
-    target_link_libraries(test_lcdui PRIVATE nj2me)
-    target_include_directories(test_lcdui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
-    add_test(NAME lcdui COMMAND test_lcdui)
+  set(NJ_PYTHON "${Python3_EXECUTABLE}")
+  set(NJ_PYTHON_PIL "")
+  foreach(candidate IN LISTS NJ_PYTHON_CANDIDATES)
+    if(NOT candidate)
+      continue()
+    endif()
+    if(NOT NJ_PYTHON)
+      set(NJ_PYTHON "${candidate}")
+    endif()
+    execute_process(
+      COMMAND ${candidate} -c "import PIL"
+      RESULT_VARIABLE _pil_rc OUTPUT_QUIET ERROR_QUIET)
+    if(_pil_rc EQUAL 0)
+      set(NJ_PYTHON_PIL "${candidate}")
+      break()
+    endif()
+  endforeach()
+
+  if(NJ_PYTHON_PIL)
+    message(STATUS "fixture generator python: ${NJ_PYTHON_PIL} (Pillow found)")
+  else()
+    message(WARNING
+      "no python3 with Pillow was found; the PNG and JPEG fixture generators "
+      "will be skipped and their tests will fail.  Install Pillow, or run "
+      "those generators by hand into tests/fixtures/.")
   endif()
 
-  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_lib.c)
-    add_executable(test_lib tests/test_lib.c)
-    target_link_libraries(test_lib PRIVATE nj2me)
-    target_include_directories(test_lib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
-    add_test(NAME classlib COMMAND test_lib)
+  add_custom_target(nj_fixtures
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${NJ_FIXTURES}
+    COMMENT "Generating test fixtures")
+  if(NJ_PYTHON)
+    add_custom_command(TARGET nj_fixtures POST_BUILD
+      COMMAND ${NJ_PYTHON}
+              ${CMAKE_CURRENT_SOURCE_DIR}/tests/gen_fixtures.py
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      COMMENT "zip/deflate fixtures")
   endif()
+  # Every tests/gen_*.py is a fixture generator.  Globbing rather than listing
+  # them means a new test module that needs assets only has to add its
+  # generator, not edit the build.
+  file(GLOB NJ_FIXTURE_GENERATORS
+       ${CMAKE_CURRENT_SOURCE_DIR}/tests/gen_*.py)
+  foreach(gen IN LISTS NJ_FIXTURE_GENERATORS)
+    get_filename_component(gen_name ${gen} NAME_WE)
+    if(gen_name STREQUAL "gen_fixtures")
+      continue()   # already run above; needs no Pillow
+    endif()
+    if(NJ_PYTHON_PIL)
+      add_custom_command(TARGET nj_fixtures POST_BUILD
+        COMMAND ${NJ_PYTHON_PIL} ${gen}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "${gen_name}")
+    endif()
+  endforeach()
 
-  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codec.c)
-    add_executable(test_codec tests/test_codec.c)
-    target_link_libraries(test_codec PRIVATE nj2me)
-    target_include_directories(test_codec PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
-    add_test(NAME codecs COMMAND test_codec)
+  # Generators that need no third-party module can always run.
+  if(NJ_PYTHON)
+    foreach(gen IN LISTS NJ_FIXTURE_GENERATORS)
+      get_filename_component(gen_name ${gen} NAME_WE)
+      if(gen_name STREQUAL "gen_lcdui_fixture" AND NOT NJ_PYTHON_PIL)
+        add_custom_command(TARGET nj_fixtures POST_BUILD
+          COMMAND ${NJ_PYTHON} ${gen}
+          WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+          COMMENT "${gen_name}")
+      endif()
+    endforeach()
   endif()
+  add_custom_command(TARGET nj_fixtures POST_BUILD
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_hello_jar.sh
+    COMMENT "VM-core MIDlet fixture")
+  add_custom_command(TARGET nj_fixtures POST_BUILD
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_game_jar.sh
+    COMMENT "full-game MIDlet fixture")
 
-  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gfx.c)
-    add_executable(test_gfx tests/test_gfx.c src/gfx/nj_gfx.c)
-    target_link_libraries(test_gfx PRIVATE nj2me m)
-    add_test(NAME rasterizer COMMAND test_gfx)
+  # ---- helper: one test executable, linked against the runtime ----
+  function(nj_add_test name source)
+    add_executable(${name} ${source})
+    target_link_libraries(${name} PRIVATE nj2me)
+    # Tests are deliberately white-box: several of them drive the builtin
+    # class tables and the MIDP-internal contract directly, which is the only
+    # way to assert on things the public API does not expose.
+    target_include_directories(${name} PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/midp
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/gfx)
+    add_dependencies(${name} nj_fixtures)
+    if(ARGC GREATER 2)
+      add_test(NAME ${name} COMMAND ${name} ${ARGN})
+    else()
+      add_test(NAME ${name} COMMAND ${name})
+    endif()
+    # Tests reference tests/fixtures/... relatively, and ctest runs from the
+    # build directory by default.
+    set_tests_properties(${name} PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  endfunction()
+
+  # ---- the memory contract and the class library ----
+  nj_add_test(test_lifecycle tests/test_lifecycle.c)
+  nj_add_test(test_vm        tests/test_vm.c
+              ${NJ_FIXTURES}/hello.jar HelloWorld "hello from j2me")
+
+  # ---- the formats ----
+  nj_add_test(test_zip       tests/test_zip.c ${NJ_FIXTURES})
+  nj_add_test(test_codec     tests/test_codec.c)
+
+  foreach(extra_test test_font_png test_gfx test_jpeg test_lcdui test_game test_lib)
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${extra_test}.c)
+      nj_add_test(${extra_test} tests/${extra_test}.c)
+    endif()
+  endforeach()
+
+  # ---- end to end: run a whole MIDlet and assert on what it rendered ----
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_play.c)
+    nj_add_test(test_play tests/test_play.c ${NJ_FIXTURES}/gamedemo.jar)
+    set_tests_properties(test_play PROPERTIES TIMEOUT 120)
   endif()
 endif()
 
 # ---------------------------------------------------------------------
-# Developer tooling
+# The no-mutable-state gate, as a build target and a test.
 # ---------------------------------------------------------------------
-if(NJ_BUILD_TOOLS)
-  add_executable(nj_inspect tools/nj_inspect.c)
-  target_link_libraries(nj_inspect PRIVATE nj2me)
-  target_include_directories(nj_inspect PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
-
+find_program(NJ_BASH bash)
+if(NJ_BASH)
   add_custom_target(no-statics
-    COMMAND ${CMAKE_COMMAND} -E env
-            OBJDIR=$<TARGET_OBJECTS:nj2me>
-            ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_no_statics.sh
-    COMMENT "Verify the runtime keeps no mutable global state")
+    COMMAND ${NJ_BASH} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_no_statics.sh
+    COMMENT "Verifying the runtime keeps no mutable global state"
+    VERBATIM)
+  if(NJ_BUILD_TESTS)
+    add_test(NAME no_statics
+             COMMAND ${NJ_BASH}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_no_statics.sh)
+  endif()
 endif()
+
+message(STATUS "nano_j2me ${PROJECT_VERSION}: "
+               "JPEG=${NJ_ENABLE_JPEG} PNG=${NJ_ENABLE_PNG} "
+               "pixfmt=${NJ_PIXFMT} tests=${NJ_BUILD_TESTS}")

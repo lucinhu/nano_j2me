@@ -181,6 +181,7 @@ struct nj_thread {
 
     nj_ref     obj;         /* java.lang.Thread mirror OR NULL */
     nj_ref     target;      /* Runnable for Thread(Runnable) */
+    nj_ref     entry_this;  /* receiver for the BOTTOM frame; defaults to obj */
     nj_ref     name;
     nj_ref     pending_exc; /* exception being propagated into this thread */
 

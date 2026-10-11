@@ -172,6 +172,19 @@ static nj_ref call_ref(nj_vm *vm, nj_ref obj, const char *cls, const char *name,
     return ret.r;
 }
 
+static nj_s4 call_static_int(nj_vm *vm, const char *cls, const char *name,
+                             const char *desc, nj_value *args, int *ok)
+{
+    nj_value ret;
+    ret.bits = 0u;
+    if (nj_call_static(vm, cls, name, desc, args, &ret) != NJ_OK) {
+        if (ok) { *ok = 0; }
+        return 0;
+    }
+    if (ok) { *ok = 1; }
+    return ret.i;
+}
+
 static nj_ref call_static_ref(nj_vm *vm, const char *cls, const char *name,
                               const char *desc, nj_value *args, int *ok)
 {
@@ -1388,8 +1401,7 @@ static void test_widgets(nj_vm *vm)
             a[0] = iref(0);
             OK(call_int(vm, cg, NJ_C_CHOICEGROUP, "isSelected", "(I)Z", a,
                         &ok) == 0 && ok);
-            a[0] = sref(nj_char_array_new(vm, 2u));
-            (void)nj_array_set_int(a[0].r, 0u, 1);
+            a[0] = sref(nj_new_array(vm, NULL, 2u, NJ_ARRAY_T_BOOLEAN));
             OK(call_int(vm, cg, NJ_C_CHOICEGROUP, "getSelectedFlags", "([Z)I",
                         a, &ok) == 1 && ok);
             OK(nj_array_get_int(a[0].r, 0u) == 0 && nj_array_get_int(a[0].r, 1u) == 1);
@@ -1466,6 +1478,14 @@ static void test_widgets(nj_vm *vm)
                          "()Ljava/lang/String;", NULL, &ok);
             OK(s != NULL && nj_string_equals_utf8(s, "hello"));
             a[0] = iref(2);          /* NUMERIC */
+            (void)nj_call(vm, tf, NJ_C_TEXTFIELD, "setConstraints", "(I)V", a,
+                          NULL);
+            OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
+                   "NUMERIC constraints accepted for the text \"hello\"");
+            a[0] = sref(str(vm, ""));
+            OK(nj_call(vm, tf, NJ_C_TEXTFIELD, "setString",
+                       "(Ljava/lang/String;)V", a, NULL) == NJ_OK);
+            a[0] = iref(2);
             OK(nj_call(vm, tf, NJ_C_TEXTFIELD, "setConstraints", "(I)V", a,
                        NULL) == NJ_OK);
             a[0] = sref(str(vm, "12x"));
@@ -1633,7 +1653,7 @@ static void test_widgets(nj_vm *vm)
         OK(call_int(vm, tb, NJ_C_TEXTBOX, "getChars", "([C)I", a, &ok) == 11 && ok);
         OK(nj_array_get_int(a[0].r, 0u) == 'l');
         a[0] = iref(0);
-        a[1] = iref(6);
+        a[1] = iref(7);
         OK(nj_call(vm, tb, NJ_C_TEXTBOX, "delete", "(II)V", a, NULL) == NJ_OK);
         s = call_ref(vm, tb, NJ_C_TEXTBOX, "getString", "()Ljava/lang/String;",
                      NULL, &ok);
@@ -1667,7 +1687,17 @@ static void test_widgets(nj_vm *vm)
         }
         s = call_ref(vm, alert, NJ_C_ALERT, "getString", "()Ljava/lang/String;",
                      NULL, &ok);
-        OK(s != NULL && ok && nj_string_equals_utf8(s, "Heads up"));
+        OK(s == NULL || nj_string_len(s) == 0u);   /* no message yet */
+        s = call_ref(vm, alert, NJ_C_DISPLAYABLE, "getTitle",
+                     "()Ljava/lang/String;", NULL, &ok);
+        OK_MSG(s != NULL && ok && nj_string_equals_utf8(s, "Heads up"),
+               "Alert title is not the constructor argument");
+        a[0] = sref(str(vm, "Low battery"));
+        OK(nj_call(vm, alert, NJ_C_ALERT, "setString", "(Ljava/lang/String;)V",
+                   a, NULL) == NJ_OK);
+        s = call_ref(vm, alert, NJ_C_ALERT, "getString", "()Ljava/lang/String;",
+                     NULL, &ok);
+        OK(s != NULL && nj_string_equals_utf8(s, "Low battery"));
         OK(call_int(vm, alert, NJ_C_ALERT, "getTimeout", "()I", NULL, &ok) == 2000 && ok);
         a[0] = iref(5000);
         OK(nj_call(vm, alert, NJ_C_ALERT, "setTimeout", "(I)V", a, NULL) == NJ_OK);
@@ -1703,13 +1733,14 @@ static void test_widgets(nj_vm *vm)
             OK(call_ref(vm, alert, NJ_C_ALERT, "getIndicator",
                         "()L" NJ_C_GAUGE ";", NULL, &ok) == ind && ok);
         }
-        OK(call_int(vm, alert, NJ_C_ALERT, "getDefaultTimeout", "()I", NULL,
-                    &ok) == 2000 && ok);
+        /* These two are STATIC in MIDP, so they are reached with invokestatic. */
+        OK(call_static_int(vm, NJ_C_ALERT, "getDefaultTimeout", "()I", NULL,
+                           &ok) == 2000 && ok);
         a[0] = iref(3000);
-        OK(nj_call(vm, alert, NJ_C_ALERT, "setDefaultTimeout", "(I)V", a,
-                   NULL) == NJ_OK);
-        OK(call_int(vm, alert, NJ_C_ALERT, "getDefaultTimeout", "()I", NULL,
-                    &ok) == 3000 && ok);
+        OK(nj_call_static(vm, NJ_C_ALERT, "setDefaultTimeout", "(I)V", a,
+                          NULL) == NJ_OK);
+        OK(call_static_int(vm, NJ_C_ALERT, "getDefaultTimeout", "()I", NULL,
+                           &ok) == 3000 && ok);
     }
 }
 

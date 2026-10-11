@@ -718,6 +718,15 @@ static void test_sprite_frames(nj_vm *vm)
               "the default sequence starts at 0");
     }
 
+    /* The additive int-returning twins live next to the MIDP void versions. */
+    v1(vm, s, NJ_C_SPRITE, "setFrame", "(I)V", 0);
+    CHECK(i0(vm, s, NJ_C_SPRITE, "nextFrame", "()I") == 1,
+          "nextFrame()I returns the new sequence index");
+    CHECK(i0(vm, s, NJ_C_SPRITE, "prevFrame", "()I") == 0,
+          "prevFrame()I returns the new sequence index");
+    CHECK(i0(vm, s, NJ_C_SPRITE, "getFrame", "()I") == 0,
+          "the int twins leave the same state as the void ones");
+
     /* Out-of-range frame indices. */
     expect_throw(vm, nj_call(vm, s, NJ_C_SPRITE, "setFrame", "(I)V",
                              &(nj_value){ .i = 9 }, NULL),
@@ -1123,15 +1132,20 @@ static void test_collision(nj_vm *vm)
         CHECK(r.i == 0, "without alignment the sprites are far apart");
     }
 
-    /* The additive generic-Layer dispatch. */
+    /* The additive generic-Layer dispatch, in both arities. */
     {
-        nj_value la[2];
+        nj_value la[2], lz[3];
         la[0].r = b; la[1].i = 1;
         v2(vm, b, NJ_C_LAYER, "setPosition", "(II)V", -15, -15);
         r.i = 0;
         (void)nj_call(vm, a, NJ_C_SPRITE, "collidesWith", "(" D_LAYER "Z)Z",
                       la, &r);
         CHECK(r.i == 1, "collidesWith(Layer,true) dispatches to the Sprite test");
+        lz[0].r = b; lz[1].i = 1; lz[2].i = 0;
+        r.i = 0;
+        (void)nj_call(vm, a, NJ_C_SPRITE, "collidesWith", "(" D_LAYER "ZZ)Z",
+                      lz, &r);
+        CHECK(r.i == 1, "collidesWith(Layer,true,false) dispatches too");
     }
 }
 
@@ -1267,6 +1281,49 @@ static void test_tiledlayer(nj_vm *vm)
     tiled_paint(vm, t, g);
     CHECK(px_at(vm, target, 12, 4) == C_BLUE,
           "an animated cell paints its current static tile");
+
+    /* Sprite <-> TiledLayer collision, both arities (pixel and bounds). */
+    {
+        nj_ref dot = mk_dot_image(vm, 16, 16, 0, 0, C_GREEN);
+        nj_ref sp = mk_sprite_frames(vm, dot, 16, 16);
+        nj_value ta[2], tz[3], r;
+
+        v2(vm, t, NJ_C_LAYER, "setPosition", "(II)V", 0, 0);
+        v4(vm, t, NJ_C_TILEDLAYER, "fillCells", "(IIII)V", 0, 0, 3, 2);
+        {
+            nj_value fa[5];
+            fa[0].i = 1; fa[1].i = 1; fa[2].i = 1; fa[3].i = 1; fa[4].i = 1;
+            (void)nj_call(vm, t, NJ_C_TILEDLAYER, "fillCells", "(IIIII)V", fa,
+                          NULL);
+        }
+        v2(vm, sp, NJ_C_LAYER, "setPosition", "(II)V", 0, 0);
+        ta[0].r = t; ta[1].i = 0;
+        r.i = 0;
+        (void)nj_call(vm, sp, NJ_C_SPRITE, "collidesWith", "(" D_TILED "Z)Z",
+                      ta, &r);
+        CHECK(r.i == 1, "collidesWith(TiledLayer,false) over an empty cell");
+        ta[1].i = 1;
+        r.i = 0;
+        (void)nj_call(vm, sp, NJ_C_SPRITE, "collidesWith", "(" D_TILED "Z)Z",
+                      ta, &r);
+        CHECK(r.i == 0, "pixel collision misses the empty cell (0,0)");
+        v2(vm, sp, NJ_C_LAYER, "setPosition", "(II)V", 8, 8);
+        ta[1].i = 0;
+        r.i = 0;
+        (void)nj_call(vm, sp, NJ_C_SPRITE, "collidesWith", "(" D_TILED "Z)Z",
+                      ta, &r);
+        CHECK(r.i == 1, "bounds collision over the red cell");
+        ta[1].i = 1;
+        r.i = 0;
+        (void)nj_call(vm, sp, NJ_C_SPRITE, "collidesWith", "(" D_TILED "Z)Z",
+                      ta, &r);
+        CHECK(r.i == 1, "pixel collision inside the red cell");
+        tz[0].r = t; tz[1].i = 1; tz[2].i = 0;
+        r.i = 0;
+        (void)nj_call(vm, sp, NJ_C_SPRITE, "collidesWith", "(" D_TILED "ZZ)Z",
+                      tz, &r);
+        CHECK(r.i == 1, "collidesWith(TiledLayer,true,false) is accepted");
+    }
 
     /* setStaticTileSet with fewer tiles clears the grid and drops the anims. */
     {

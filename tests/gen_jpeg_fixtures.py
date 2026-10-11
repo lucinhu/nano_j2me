@@ -774,6 +774,13 @@ def negative_fixtures():
     d[off + 2], d[off + 3] = 0xFF, 0xF0
     add("len_past_eof", bytes(d), "DQT segment length runs past EOF")
 
+    # Cut inside the final MCU only: the last MCU of a 16x16 4:2:0 image is
+    # the whole image, so this is the "truncated final MCU" case the decoder
+    # has to complete with neutral grey rather than reject or leave unwritten.
+    one_mcu = FILES["mcu_16x16"]
+    add("trunc_last_mcu", one_mcu[:-6], "cut inside the final (only) MCU")
+    POSITIVE_EXTRA.append("trunc_last_mcu")
+
     # Zero dimension in the SOF.
     d = bytearray(base)
     off = find_segment(d, 0xC0)
@@ -828,6 +835,10 @@ def negative_fixtures():
 # ----------------------------------------------------------------------
 # main
 # ----------------------------------------------------------------------
+# Fixtures produced by negative_fixtures() that are nevertheless expected to
+# decode (the decoder completes a short final MCU with neutral grey).
+POSITIVE_EXTRA = []
+
 NEGATIVE = ("soi_only", "bad_huff_oversub", "bad_huff_allones", "len_past_eof",
             "zero_dim", "five_comp", "two_comp", "arith_sof9", "bad_restart",
             "no_sof", "trunc_mid")
@@ -848,8 +859,19 @@ def main():
         path = os.path.join(OUT, name + ".jpg")
         with open(path, "wb") as f:
             f.write(FILES[name])
-        if name in NEGATIVE:
+        if name in NEGATIVE and name not in POSITIVE_EXTRA:
             manifest.append((name, 0, 0, "negative", NOTES.get(name, "")))
+            continue
+        if name == "trunc_last_mcu":
+            # PIL refuses a truncated file, so the reference is PIL's decode
+            # of the complete one; the two images are identical up to the cut
+            # and the decoder under test must complete the final MCU as grey.
+            with Image.open(os.path.join(OUT, "mcu_16x16.jpg")) as im2:
+                NOTES[name] = ("cut inside the final MCU; reference is PIL's "
+                               "decode of the complete mcu_16x16")
+                with open(os.path.join(OUT, name + ".rgb"), "wb") as f:
+                    f.write(im2.convert("RGB").tobytes())
+            manifest.append((name, 16, 16, "positive", NOTES[name]))
             continue
         # Every positive fixture must be decodable by PIL as well: that is
         # what makes the .rgb dump a meaningful reference.  PIL's decode of

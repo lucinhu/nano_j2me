@@ -95,3 +95,62 @@ before any call that can run Java code (a `SAVE()` before `nj_class_init` in the
 
 Rebuild with `-DNJ_ENABLE_DEBUG=1` and run with `NJ_TRACE=startApp` to get the
 instruction trace back.
+
+---
+
+# RESOLVED: the extra slot was a void `return` pushing a value
+
+Fixed in commit `c512b53`.  `case 0xb1` reused `DO_RETURN` with a zero
+`nj_value`, and `DO_RETURN` always ends with `*sp++ = rv_`.  Every Java
+constructor therefore left one slot on the caller's stack.  The entry above
+correctly identified `nj_class_init` as the only asymmetry between the working
+(`new Command`, native) and failing (`new DemoCanvas`, Java) sequences, but the
+cause was one level down in the return path.
+
+The fixture now contains a nested class with a constructor, a static array
+initialiser, and two constructors in a row, so the bug cannot come back
+unnoticed.
+
+---
+
+# OPEN (next): `Graphics.drawImage(Image, x, y, anchor)` computes a negative source region
+
+Status: unfixed, message identified, reproduction one command away.
+
+`tests/fixtures/gamedemo.jar` now starts its game thread, runs the frame loop
+and renders - but the thread dies with
+
+    java.lang.IllegalArgumentException: negative source region @ DemoCanvas.draw+118
+
+which is the call `g.drawImage(offscreen, 0, 0, Graphics.TOP | Graphics.LEFT)`.
+`offscreen` is a mutable `Image` created with `Image.createImage(w, h)`.
+
+Relevant: `Canvas.getWidth()` is implemented lazily (`c_getWidth`, around
+nj_lib_lcdui.c:2941) and initialises the canvas width from the screen surface on
+first use, so the image should not be 0x0 - but if `nj_midp_screen(vm)` is not
+yet available at GameCanvas-construction time, the lazy path has nothing to
+read and returns 0.  Check that first.
+
+Reproduce:
+
+    ./tools/make_game_jar.sh
+    ./build/nj2me --port headless --heap 4 tests/fixtures/gamedemo.jar
+
+The game thread's uncaught exception is now reported with its full description
+(`nj_scheduler_step`), which is what produced the line above.
+
+---
+
+# Also open: `Thread.start()` on a native `run()`
+
+Fixed in the same round as this note: `Thread.start()` used to push a frame for
+`Thread.run()`, which is a **native**, and `nj_exec` refuses to interpret a
+native frame - so the thread died instantly (`nframes=1`, then state DEAD)
+without running anything.  Verified by instrumenting `nj_scheduler_step`.
+
+The fix resolves the real Java `run()` at start time: the receiver's own
+override if it has one, otherwise the `Runnable`'s, with `nj_thread.entry_this`
+carrying the right receiver for the bottom frame.  Starting on the
+`Thread.run()` native would also have been wrong even if it had run, because the
+game loop would then sit above a C frame that cannot survive a
+`Thread.sleep()` - a native cannot be suspended and resumed.

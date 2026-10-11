@@ -122,8 +122,14 @@ nj_status nj_invoke_native(nj_vm *vm, nj_thread *th, nj_method *target,
     nj_value *args;
     nj_status st;
 
-    ret[0].bits = 0u;
-    ret[1].bits = 0u;
+    /*
+     * Clear BOTH slots completely.  `ret[0].bits = 0` only writes four of the
+     * eight bytes of an nj_value, so a native that returns without setting
+     * `ret` (every void method) would hand the caller an nj_value whose upper
+     * half is whatever was on the stack - which is a wild pointer the moment
+     * anything reads it as a reference.
+     */
+    memset(ret, 0, 2u * sizeof(nj_value));
 
     st = nj_frame_push(vm, th, target, argbase, total);
     if (st != NJ_OK) {
