@@ -35,6 +35,17 @@ typedef struct sdl_state {
     int  quit;
     int  have_scale_arg;
     const nj_port *port;   /* the caller's struct: we read width/height from it */
+    /*
+     * Audio, the real kind: an SDL device opened on demand and fed with
+     * SDL_QueueAudio.  Opened lazily because a MIDlet that never plays a sound
+     * should not hold an audio device open - on a phone that is a battery
+     * conversation, and on a desktop it is a "why is this app in my mixer"
+     * conversation.
+     */
+    SDL_AudioDeviceID audio;
+    int  audio_rate;
+    int  audio_chans;
+
     const char *capture;   /* NJ_SDL2_CAPTURE: proof-of-presentation dump */
     int  capture_n;
     int  capture_every;
@@ -347,6 +358,178 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
 }
 
 /* ------------------------------------------------------------------ */
+/* Audio                                                               */
+/* ------------------------------------------------------------------ */
+/*
+ * Tones are SYNTHESISED here rather than handed to a MIDI device, because a
+ * J2ME tone sequence is a set of square-wave beeps and that is exactly what a
+ * 2004 phone did with it.  A square wave is what the format sounds like; a sine
+ * would be prettier and wrong.
+ *
+ * The output is queued, never blocking: SDL_QueueAudio takes a copy and returns,
+ * so a tone sequence that lasts a second does not stop the frame loop for a
+ * second.  pcm_free() reports the queue depth so the runtime can throttle a
+ * long WAV instead of growing an unbounded buffer.
+ */
+#define SDL_TONE_AMP 7000
+
+static int sdl_audio_ensure(sdl_state *s, int rate, int chans)
+{
+    SDL_AudioSpec want;
+    SDL_AudioSpec have;
+
+    if (s->audio && s->audio_rate == rate && s->audio_chans == chans) {
+        return 1;
+    }
+    if (s->audio) {
+        SDL_CloseAudioDevice(s->audio);
+        s->audio = 0;
+    }
+    SDL_zero(want);
+    want.freq = rate;
+    want.format = AUDIO_S16SYS;
+    want.channels = (Uint8)chans;
+    want.samples = 1024;
+    want.callback = NULL;              /* queued, not pulled */
+    s->audio = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+    if (!s->audio) {
+        return 0;
+    }
+    s->audio_rate = (int)have.freq;
+    s->audio_chans = (int)have.channels;
+    SDL_PauseAudioDevice(s->audio, 0);
+
+    /*
+     * Say so, ONCE per device.  "The game is silent" and "the audio device
+     * never opened" are indistinguishable from outside, and the difference is
+     * the whole of this section - so a port that opens a device announces it,
+     * with the format it actually got rather than the one it asked for.
+     */
+    {
+        char b[160];
+        SDL_snprintf(b, sizeof(b), "audio: %s opened, %d Hz, %d channel(s)",
+                     SDL_GetCurrentAudioDriver(), (int)have.freq,
+                     (int)have.channels);
+        if (s->port && s->port->log) {
+            s->port->log(s->port->user, 2, b);
+        }
+    }
+    return 1;
+}
+
+static int sdl_tone_play(void *ud, const nj_audio_tone *tones, int count)
+{
+    sdl_state *s = SS(ud);
+    int rate = 22050;
+    int i;
+    nj_u4 total = 0u;
+    nj_s2 *buf;
+    nj_u4 at = 0u;
+
+    if (!s || !tones || count <= 0) {
+        return -1;
+    }
+    if (!sdl_audio_ensure(s, rate, 1)) {
+        return -1;                     /* no device: not an error for the game */
+    }
+    for (i = 0; i < count; i++) {
+        total += (nj_u4)tones[i].duration_ms * (nj_u4)rate / 1000u;
+    }
+    if (total == 0u) {
+        return 0;
+    }
+    buf = (nj_s2 *)SDL_malloc((size_t)total * sizeof(nj_s2));
+    if (!buf) {
+        return -1;
+    }
+    for (i = 0; i < count; i++) {
+        nj_u4 n = (nj_u4)tones[i].duration_ms * (nj_u4)rate / 1000u;
+        nj_u4 k;
+        if (tones[i].freq_hz == 0u) {
+            for (k = 0; k < n; k++) {
+                buf[at++] = 0;         /* a rest is silence, not a low note */
+            }
+            continue;
+        }
+        for (k = 0; k < n; k++) {
+            /*
+             * Square, with the period in samples as a running phase rather than
+             * a float: a part with no FPU must be able to play a jingle, and an
+             * integer phase accumulator costs nothing to reason about.
+             */
+            nj_u4 half = (nj_u4)rate / ((nj_u4)tones[i].freq_hz * 2u);
+            if (half == 0u) {
+                half = 1u;
+            }
+            buf[at++] = (((k / half) & 1u) != 0u) ? SDL_TONE_AMP : -SDL_TONE_AMP;
+        }
+    }
+    SDL_QueueAudio(s->audio, buf, total * (nj_u4)sizeof(nj_s2));
+    SDL_free(buf);
+    return 0;
+}
+
+static void sdl_tone_stop(void *ud)
+{
+    sdl_state *s = SS(ud);
+    if (s && s->audio) {
+        SDL_ClearQueuedAudio(s->audio);
+    }
+}
+
+static int sdl_pcm_open(void *ud, int sample_rate, int channels)
+{
+    sdl_state *s = SS(ud);
+    if (!s || sample_rate <= 0 || channels <= 0) {
+        return -1;
+    }
+    return sdl_audio_ensure(s, sample_rate, channels) ? 0 : -1;
+}
+
+static int sdl_pcm_write(void *ud, const nj_s2 *samples, int frames)
+{
+    sdl_state *s = SS(ud);
+    if (!s || !s->audio || !samples || frames <= 0) {
+        return -1;
+    }
+    SDL_QueueAudio(s->audio, samples,
+                   (Uint32)frames * (Uint32)s->audio_chans
+                       * (Uint32)sizeof(nj_s2));
+    return frames;
+}
+
+static void sdl_pcm_close(void *ud)
+{
+    sdl_state *s = SS(ud);
+    if (s && s->audio) {
+        SDL_CloseAudioDevice(s->audio);
+        s->audio = 0;
+    }
+}
+
+/*
+ * Frames the device will take right now.  A quarter of a second of queue is
+ * plenty: less and the device underruns on a slow frame, more and a stop()
+ * leaves a second of sound playing after the game asked it to stop.
+ */
+static int sdl_pcm_free(void *ud)
+{
+    sdl_state *s = SS(ud);
+    nj_u4 queued;
+    nj_u4 cap;
+    if (!s || !s->audio || s->audio_chans <= 0) {
+        return 0;
+    }
+    queued = SDL_GetQueuedAudioSize(s->audio);
+    cap = (nj_u4)s->audio_rate * (nj_u4)s->audio_chans
+              * (nj_u4)sizeof(nj_s2) / 4u;
+    if (queued >= cap) {
+        return 0;
+    }
+    return (int)((cap - queued) / ((nj_u4)s->audio_chans * sizeof(nj_s2)));
+}
+
+/* ------------------------------------------------------------------ */
 /* Input                                                               */
 /* ------------------------------------------------------------------ */
 static int sdl_input_poll(void *ud, nj_event *ev)
@@ -393,7 +576,11 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
         return NJ_ERR;
     }
     (void)title;
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    /* SDL_INIT_AUDIO is requested but not required: a machine with no sound
+     * card must still get a window, and the port reports the failure by leaving
+     * the audio hooks to return -1. */
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0
+        && SDL_Init(SDL_INIT_VIDEO) != 0) {
         return NJ_ERR;
     }
     s = (sdl_state *)calloc(1u, sizeof(*s));
@@ -422,6 +609,12 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
     out->millis = sdl_millis;
     out->sleep_ms = sdl_sleep_ms;
     out->idle = sdl_idle;
+    out->tone_play = sdl_tone_play;
+    out->tone_stop = sdl_tone_stop;
+    out->pcm_open = sdl_pcm_open;
+    out->pcm_write = sdl_pcm_write;
+    out->pcm_close = sdl_pcm_close;
+    out->pcm_free = sdl_pcm_free;
     out->log = sdl_log;
     out->display_init = sdl_display_init;
     out->display_present = sdl_display_present;

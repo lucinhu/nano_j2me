@@ -200,6 +200,19 @@ that a MIDlet asked for the right notes in the right order without a sound card.
 A port with no audio leaves the hooks NULL and sound does not play, which is not
 an error.
 
+**The SDL2 port really plays it.** Tones are synthesised as square waves - which
+is what the format sounds like, a sine would be prettier and wrong - and queued
+with `SDL_QueueAudio`, so a one-second tone does not stop the frame loop for a
+second. `pcm_free()` reports the queue depth so a long WAV is throttled rather
+than buffered without bound. Verified headless with SDL's dummy driver, which is
+the one check that distinguishes "the game is silent" from "the device never
+opened":
+
+    SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+        build/nj2me --port sdl2 tests/fixtures/audiodemo.jar
+    INFO: audio: dummy opened, 22050 Hz, 1 channel(s)
+    INFO: AUDIO wav=200000 state=400
+
 ## Known behavioural differences
 
 | Area | Difference |
