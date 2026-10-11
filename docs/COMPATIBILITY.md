@@ -117,6 +117,11 @@ do not match what the player sees, which is the classic bug in this area).
 score survives a restart. `RecordEnumeration` is implemented; listeners are
 accepted and ignored.
 
+One file per store is written to `nj_port.rms_dir` (the working directory when
+it is `NULL`), named `<store>.rms`. These are the player's saves, not project
+files: point `--rms-dir` somewhere disposable while developing, and never commit
+them. `*.rms` is gitignored for that reason.
+
 ### javax.microedition.media
 
 `Manager.playTone` and tone `Player`s, routed through `nj_port.tone_play`. No

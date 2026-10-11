@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static int checks;
 static int failures;
@@ -107,6 +108,7 @@ int main(int argc, char **argv)
     const char *jar;
     const char *report;
     const char *dump;
+    const char *rms_dir;
     int rc;
 
     if (argc < 2) {
@@ -119,7 +121,12 @@ int main(int argc, char **argv)
     printf("== nano_j2me end-to-end playability ==\n");
     printf("jar: %s\n", jar);
 
-    if (nj_port_headless_ex(&port, 240, 320, 0, NULL) != NJ_OK) {
+    dump = getenv("NANO_J2ME_DUMP");
+    if (dump && !*dump) {
+        dump = NULL;
+    }
+    if (nj_port_headless_ex(&port, 240, 320,
+                            dump ? 30 : 0, dump) != NJ_OK) {
         fprintf(stderr, "cannot create the headless port\n");
         return 2;
     }
@@ -128,10 +135,22 @@ int main(int argc, char **argv)
     port.user = &cap;
     port.fps_cap = 0;   /* as fast as the host allows; the fixture is bounded */
 
-    dump = getenv("NANO_J2ME_DUMP");
-    if (dump && *dump) {
-        nj_port_headless_set_dump(port.ud, dump, 30);
+    /*
+     * Keep RecordStore out of the source tree.
+     *
+     * RMS writes one file per store into nj_port.rms_dir, and the default is
+     * the working directory - which for a test run means the repository root
+     * collects a demo.rms per execution.  Those are the player's saves, not
+     * part of the project, so they go to a scratch directory that is already
+     * gitignored.  NANO_J2ME_RMS overrides it.
+     */
+    rms_dir = getenv("NANO_J2ME_RMS");
+    if (!rms_dir || !*rms_dir) {
+        rms_dir = "tests/out/rms";
     }
+    mkdir("tests/out", 0777);          /* EEXIST is fine */
+    mkdir(rms_dir, 0777);
+    port.rms_dir = rms_dir;
 
     memset(&opts, 0, sizeof(opts));
     opts.jar_path = jar;

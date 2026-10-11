@@ -23,6 +23,14 @@ tests/fixtures/
 !tests/fixtures/.gitkeep
 tests/out/
 
+# ------------------------------------------------- runtime user data
+# RecordStore writes one file per store, named <rms_dir>/<store>.rms, and the
+# default rms_dir is the working directory - so a test run used to drop
+# demo.rms into the repository root.  These are the player's saves, not source:
+# never commit them, and point --rms-dir somewhere disposable when developing.
+*.rms
+*.rms.tmp
+
 # ------------------------------------------------------- editor / OS noise
 *.swp
 *~

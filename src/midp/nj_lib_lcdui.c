@@ -6828,6 +6828,7 @@ static nj_status list_add(nj_vm *vm, nj_ref self, nj_ref s, nj_ref img,
     return form_add_item(vm, self, item, at);
 }
 
+/* List.append(String) returns the index of the new element (MIDP 2.0). */
 NJFN(list_append_str)
 {
     nj_ref self = NJ_THIS(args);
@@ -6837,6 +6838,7 @@ NJFN(list_append_str)
         return st;
     }
     list_sync(vm, self);
+    ret->i = fget(vm, self, NJ_C_LIST, "lsCount", D_INT) - 1;
     return NJ_OK;
 }
 
@@ -6850,6 +6852,7 @@ NJFN(list_append_img)
         return st;
     }
     list_sync(vm, self);
+    ret->i = fget(vm, self, NJ_C_LIST, "lsCount", D_INT) - 1;
     return NJ_OK;
 }
 
