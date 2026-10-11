@@ -116,6 +116,32 @@ frames: `jump.jar` ~235 bytecodes, `maze.jar` ~378.  At 11 M/s that is 30,000 an
 47,000 frames per second.  The interpreter is not the constraint at these
 resolutions; the panel is.
 
+## An optimisation attempt that did nothing, and what it taught
+
+Measured on the benchmark above: **557-590 M bytecodes/s**, run to run.
+
+**Attempt 1: hoist the instruction counter into a register.**  `vm->insns++` runs
+on every bytecode and is a read-modify-write to memory, which the compiler cannot
+hoist because it may alias the operand stack.  The counter was moved into a local
+and flushed at each of `nj_exec`'s exits.
+
+Result: **566-584 M/s, i.e. no change** - inside the run-to-run spread of 557-590.
+Reverted, because the change touches every exit path of the hottest function in
+the program and buys nothing measurable.
+
+**Why the classic next step is expensive here.** `objdump` shows GCC already
+turns the dispatch switch into a jump table (`cmp $0xc9` / `ja` / indirect jump),
+so the textbook computed-goto win is mostly already taken.  What remains is
+REPLICATED dispatch - ending every one of the 170 opcode handlers with its own
+`goto *dispatch[next]` so the indirect branch is predicted per site rather than
+at one shared site.  That is 170 edits in a function whose `break` means two
+different things depending on nesting, verified by 12 tests and a benchmark that
+must keep reproducing exactly 112,117,067 bytecodes.
+
+That is a real win of uncertain size bought with a real risk of a subtle
+breakage, and it is not obviously the best next thing to spend effort on.  It is
+recorded rather than guessed at.
+
 ## A measurement mistake worth recording
 
 An earlier revision reported `jump.jar` at 147 bytecodes over 600 frames against
