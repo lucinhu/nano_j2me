@@ -387,6 +387,11 @@ CLASSES = {
     },
     "javax/microedition/lcdui/List": {
         "extends": "Screen",
+        # The three selection-mode constants.  Real MIDP has them, and a game
+        # that writes List.IMPLICIT does not compile without them - the same
+        # class of gap as the dropped throws clause and the dropped interface
+        # parent: the stub has to be faithful or it rejects working code.
+        "constants": {"IMPLICIT": "1", "EXCLUSIVE": "2", "MULTIPLE": "3"},
         "methods": [
             "public List(String, int)",
             "public List(String, int, String[], Image[])",
@@ -575,6 +580,12 @@ CLASSES = {
         "methods": ["public InvalidRecordIDException()",
                     "public InvalidRecordIDException(String)"],
     },
+    # java.io.Reader/Writer/InputStreamReader/OutputStreamWriter are NOT stubbed
+    # here, and cannot be: javac refuses to compile classes into the java.io
+    # package because it belongs to the java.base module ("package exists in
+    # another module").  They come from the JDK, which is correct - all four are
+    # in CLDC 1.1 - and this is exactly why tools/check_cldc_api.py audits the
+    # compiled OUTPUT rather than trusting the classpath.
     "javax/microedition/io/Connector": {
         "constants": {"READ": "1", "WRITE": "2", "READ_WRITE": "3"},
         "methods": [
@@ -654,6 +665,44 @@ CLASSES = {
                       "KEY_SOFTKEY3": "-8"},
         "methods": ["protected FullCanvas()",
                     "protected FullCanvas(boolean)"],
+    },
+    # The Nokia multipoint-touch extension.  One listener interface with two
+    # callbacks: a device either has a multitouch panel or it does not, and a
+    # Canvas that implements this and never receives a callback behaves exactly
+    # like one on a single-touch phone.
+    "com/nokia/mid/ui/multipointtouch/MultipointTouchListener": {
+        "interface": True,
+        # ONE method taking the array of active pointer ids - not three
+        # pointer callback methods, which is what a first guess here produced
+        # and which made a MIDlet that implements the interface fail to compile
+        # for not overriding methods the real one does not have.
+        "methods": ["void pointersChanged(int[])"],
+    },
+    "com/nokia/mid/ui/multipointtouch/MultipointTouch": {
+        "methods": ["public static void setMultipointTouchListener(com.nokia.mid.ui.multipointtouch.MultipointTouchListener)",
+                    "public static void setMultipointTouchListener(com.nokia.mid.ui.multipointtouch.MultipointTouchListener, int)"],
+    },
+    # The Nokia Series 40 file picker.  A UI service rather than an API the
+    # runtime can satisfy: it opens a device dialog over the MIDlet.  Stubbed so
+    # code that calls it compiles, and the runtime REFUSES it by name rather
+    # than returning an empty selection that looks like an empty directory.
+    "com/nokia/mid/ui/FileSelect": {
+        "constants": {"FILE_SYSTEM_PHONE": "1", "FILE_SYSTEM_MMC": "2",
+                      "FILE_SYSTEM_ALL": "3",
+                      "MEDIA_TYPE_IMAGE": "1", "MEDIA_TYPE_VIDEO": "2",
+                      "MEDIA_TYPE_AUDIO": "4", "MEDIA_TYPE_APPLICATION": "8",
+                      "MEDIA_TYPE_ALL": "16"},
+        # launch returns FileSelectDetail[], and FileSelectDetail exposes its
+        # data as PUBLIC FIELDS (the caller writes `selected[0].url`), which is
+        # read from the usage rather than guessed.
+        "methods": ["public static com.nokia.mid.ui.FileSelectDetail[] launch(int, int, boolean)"],
+    },
+    "com/nokia/mid/ui/FileSelectDetail": {
+        "methods": ["public FileSelectDetail()"],
+        "fields": [["url", "Ljava/lang/String;"],
+                   ["name", "Ljava/lang/String;"],
+                   ["mimeType", "Ljava/lang/String;"],
+                   ["size", "J"]],
     },
     "com/nokia/mid/ui/VirtualKeyboard": {
         "methods": ["public static void hideOpenKeypadCommand(boolean)",
@@ -787,6 +836,17 @@ def _split_sig(sig):
     return sig[:i] + "(", sig[i + 1:j], sig[j + 1:]
 
 
+def _java_type(desc):
+    """A JVM type descriptor as it is written in Java source."""
+    if desc.startswith("L") and desc.endswith(";"):
+        return desc[1:-1].replace("/", ".").split(".")[-1]
+    if desc.startswith("["):
+        return _java_type(desc[1:]) + "[]"
+    return {"I": "int", "J": "long", "Z": "boolean", "B": "byte",
+            "C": "char", "S": "short", "F": "float", "D": "double",
+            "V": "void"}.get(desc, "int")
+
+
 def emit(path, name, spec, out_root):
     pkg = os.path.dirname(path).replace("/", ".")
     cls = os.path.basename(path)
@@ -812,6 +872,14 @@ def emit(path, name, spec, out_root):
     if spec.get("extends"):
         ext = " extends " + spec["extends"]
     lines.append("public %s %s%s {\n" % (kind, cls, ext))
+
+    # Public FIELDS.  A stub that only declares methods cannot express a class
+    # whose data is read directly - Nokia's FileSelectDetail is one, and the
+    # caller writes `selected[0].url`.  The declaration is written with a JVM
+    # descriptor because that is what the rest of this table uses, so it is
+    # translated here rather than making the caller write Java.
+    for fname, fdesc in (spec.get("fields") or []):
+        lines.append("    public %s %s;\n" % (_java_type(fdesc), fname))
 
     for cname, cval in (spec.get("constants") or {}).items():
         if cval == "null":

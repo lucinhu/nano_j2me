@@ -9553,6 +9553,7 @@ nj_status nj_lcdui_late_init(nj_vm *vm)
     lcdui_const_int(vm, NJ_C_LIST, "EXCLUSIVE", NJ_CHOICE_EXCLUSIVE);
     lcdui_const_int(vm, NJ_C_LIST, "MULTIPLE",  NJ_CHOICE_MULTIPLE);
     lcdui_const_int(vm, NJ_C_LIST, "IMPLICIT",  NJ_CHOICE_IMPLICIT);
+
     lcdui_const_int(vm, NJ_C_LIST, "TEXT_WRAP_DEFAULT", 0);
     lcdui_const_int(vm, NJ_C_LIST, "TEXT_WRAP_ON",      1);
     lcdui_const_int(vm, NJ_C_LIST, "TEXT_WRAP_OFF",     2);

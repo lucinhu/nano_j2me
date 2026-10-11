@@ -35,6 +35,15 @@
 
 #define NJ_C_ISTREAM  "java/io/InputStream"
 #define NJ_C_OSTREAM  "java/io/OutputStream"
+#define NJ_C_READER   "java/io/Reader"
+#define NJ_C_WRITER   "java/io/Writer"
+#define NJ_C_ISR      "java/io/InputStreamReader"
+#define NJ_C_OSW      "java/io/OutputStreamWriter"
+
+/* Defined further down, next to the other stream helpers; the tables are
+ * emitted before them. */
+NJFN(isr_init); NJFN(isr_read); NJFN(isr_ready); NJFN(isr_close);
+NJFN(osw_init); NJFN(osw_write); NJFN(osw_flush);
 
 /* ------------------------------------------------------------------ */
 /* java.io.InputStream                                                 */
@@ -989,7 +998,193 @@ static const nj_builtin_method connection_methods[] = {
 #define NJ_IO_EXC(name, super)                                                \
     { name, super, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
 
+/* ------------------------------------------------------------------ */
+/* Reader / Writer                                                     */
+/* ------------------------------------------------------------------ */
+/*
+ * The character streams CLDC 1.1 has and this runtime did not: a real MIDlet
+ * (vNes, loading a palette file) died with NoClassDefFoundError on
+ * java/io/InputStreamReader.  They cannot be stubbed - javac refuses to compile
+ * into the java.io package, which belongs to the java.base module - so they
+ * have to exist HERE, and tools/check_cldc_api.py cannot see the gap either,
+ * because the JDK supplies the class happily at compile time.
+ *
+ * THE ENCODING IS ISO-8859-1, and that is not a shortcut: this runtime already
+ * advertises microedition.encoding as ISO-8859-1 through System.getProperty, so
+ * a MIDlet reading a character stream gets exactly the encoding the platform
+ * told it to expect.  Decoding UTF-8 here would make that property a lie.
+ */
+static nj_ref strm_field(nj_vm *vm, nj_ref o, const char *cls, const char *name,
+                         const char *desc)
+{
+    nj_field *f = nj_field_lookup(vm, cls, name, desc, 0);
+    return f ? nj_field_read_ref(vm, o, f) : NULL;
+}
+
+NJFN(isr_init)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_field *f = nj_field_lookup(vm, NJ_C_ISR, "isrIn",
+                                  "Ljava/io/InputStream;", 0);
+    nj_ref in = NJ_ARG_REF(args, 0);
+    if (!in) {
+        return nj_throw(vm, "java/lang/NullPointerException", "in is null");
+    }
+    if (f) {
+        nj_field_write_ref(vm, self, f, in);
+    }
+    return NJ_OK;
+}
+
+NJFN(isr_read)
+{
+    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_ISR, "isrIn",
+                           "Ljava/io/InputStream;");
+    nj_value r;
+    if (!in) {
+        return nj_throw(vm, "java/io/IOException", "stream is closed");
+    }
+    r.i = 0;
+    if (nj_call(vm, in, NJ_C_ISTREAM, "read", "()I", NULL, &r) != NJ_OK) {
+        return NJ_ERR;
+    }
+    /* One byte, widened.  For ISO-8859-1 that is the identity, which is the
+     * whole reason this encoding is the honest one to implement. */
+    ret->i = r.i;
+    return NJ_OK;
+}
+
+NJFN(isr_ready)
+{
+    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_ISR, "isrIn",
+                           "Ljava/io/InputStream;");
+    nj_value r;
+    if (!in) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    r.i = 0;
+    if (nj_call(vm, in, NJ_C_ISTREAM, "available", "()I", NULL, &r) != NJ_OK) {
+        nj_clear_exception(vm);
+        ret->i = 0;
+        return NJ_OK;
+    }
+    ret->i = (r.i > 0) ? 1 : 0;
+    return NJ_OK;
+}
+
+NJFN(isr_close)
+{
+    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_ISR, "isrIn",
+                           "Ljava/io/InputStream;");
+    if (in) {
+        nj_value a[1];
+        a[0].bits = 0u;
+        (void)nj_call(vm, in, NJ_C_ISTREAM, "close", "()V", a, NULL);
+    }
+    return NJ_OK;
+}
+
+NJFN(osw_init)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_field *f = nj_field_lookup(vm, NJ_C_OSW, "oswOut",
+                                  "Ljava/io/OutputStream;", 0);
+    nj_ref out = NJ_ARG_REF(args, 0);
+    if (!out) {
+        return nj_throw(vm, "java/lang/NullPointerException", "out is null");
+    }
+    if (f) {
+        nj_field_write_ref(vm, self, f, out);
+    }
+    return NJ_OK;
+}
+
+NJFN(osw_write)
+{
+    nj_ref out = strm_field(vm, NJ_THIS(args), NJ_C_OSW, "oswOut",
+                            "Ljava/io/OutputStream;");
+    nj_value a[1];
+    if (!out) {
+        return nj_throw(vm, "java/io/IOException", "stream is closed");
+    }
+    a[0].i = NJ_ARG_INT(args, 0) & 0xFF;   /* ISO-8859-1: the low byte */
+    return nj_call(vm, out, NJ_C_OSTREAM, "write", "(I)V", a, NULL);
+}
+
+NJFN(osw_flush)
+{
+    nj_ref out = strm_field(vm, NJ_THIS(args), NJ_C_OSW, "oswOut",
+                            "Ljava/io/OutputStream;");
+    if (out) {
+        nj_value a[1];
+        a[0].bits = 0u;
+        (void)nj_call(vm, out, NJ_C_OSTREAM, "flush", "()V", a, NULL);
+    }
+    return NJ_OK;
+}
+
+#define RM(name, desc, flags) { name, desc, flags }
+
+static const nj_builtin_field isr_fields[] = {
+    { "isrIn", "Ljava/io/InputStream;", 0 }
+};
+static const nj_builtin_field osw_fields[] = {
+    { "oswOut", "Ljava/io/OutputStream;", 0 }
+};
+
+static const nj_builtin_method reader_methods[] = {
+    RM("close",  "()V", NJ_ACC_PUBLIC),
+    RM("read",   "()I", NJ_ACC_PUBLIC),
+    RM("read",   "([C)I", NJ_ACC_PUBLIC),
+    RM("read",   "([CII)I", NJ_ACC_PUBLIC),
+    RM("ready",  "()Z", NJ_ACC_PUBLIC),
+    RM("skip",   "(J)J", NJ_ACC_PUBLIC)
+};
+static const nj_builtin_method writer_methods[] = {
+    RM("close",  "()V", NJ_ACC_PUBLIC),
+    RM("flush",  "()V", NJ_ACC_PUBLIC),
+    RM("write",  "(I)V", NJ_ACC_PUBLIC),
+    RM("write",  "([C)V", NJ_ACC_PUBLIC),
+    RM("write",  "([CII)V", NJ_ACC_PUBLIC),
+    RM("write",  "(Ljava/lang/String;)V", NJ_ACC_PUBLIC)
+};
+static const nj_builtin_method isr_methods[] = {
+    RM("<init>", "(L" NJ_C_ISTREAM ";)V", NJ_ACC_PUBLIC),
+    RM("<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V",
+       NJ_ACC_PUBLIC),
+    RM("read",   "()I", NJ_ACC_PUBLIC),
+    RM("ready",  "()Z", NJ_ACC_PUBLIC),
+    RM("close",  "()V", NJ_ACC_PUBLIC)
+};
+static const nj_builtin_method osw_methods[] = {
+    RM("<init>", "(L" NJ_C_OSTREAM ";)V", NJ_ACC_PUBLIC),
+    RM("<init>", "(L" NJ_C_OSTREAM ";Ljava/lang/String;)V",
+       NJ_ACC_PUBLIC),
+    RM("write",  "(I)V", NJ_ACC_PUBLIC),
+    RM("flush",  "()V", NJ_ACC_PUBLIC),
+    RM("close",  "()V", NJ_ACC_PUBLIC)
+};
+
 const nj_builtin_class nj_lib_io_classes[] = {
+    { NJ_C_READER, "java/lang/Object",
+      NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
+      NULL, 0u, reader_methods,
+      (nj_u2)(sizeof(reader_methods) / sizeof(reader_methods[0])) },
+    { NJ_C_WRITER, "java/lang/Object",
+      NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
+      NULL, 0u, writer_methods,
+      (nj_u2)(sizeof(writer_methods) / sizeof(writer_methods[0])) },
+    { NJ_C_ISR, NJ_C_READER, NJ_ACC_PUBLIC,
+      isr_fields,
+      (nj_u2)(sizeof(isr_fields) / sizeof(isr_fields[0])),
+      isr_methods,
+      (nj_u2)(sizeof(isr_methods) / sizeof(isr_methods[0])) },
+    { NJ_C_OSW, NJ_C_WRITER, NJ_ACC_PUBLIC,
+      osw_fields,
+      (nj_u2)(sizeof(osw_fields) / sizeof(osw_fields[0])),
+      osw_methods,
+      (nj_u2)(sizeof(osw_methods) / sizeof(osw_methods[0])) },
     { "java/io/InputStream", "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
       NULL, 0u, inputstream_methods,
       (nj_u2)(sizeof(inputstream_methods) / sizeof(inputstream_methods[0])) },
@@ -1095,7 +1290,27 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/DataOutputStream", "close",        "()V", dos_flush },
     { "java/io/DataOutputStream", "size",         "()I", dos_size },
 
+    { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";)V", isr_init },
+    { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V", isr_init },
+    { NJ_C_ISR, "read",  "()I", isr_read },
+    { NJ_C_ISR, "ready", "()Z", isr_ready },
+    { NJ_C_ISR, "close", "()V", isr_close },
+    { NJ_C_OSW, "<init>", "(L" NJ_C_OSTREAM ";)V", osw_init },
+    { NJ_C_OSW, "<init>", "(L" NJ_C_OSTREAM ";Ljava/lang/String;)V", osw_init },
+    { NJ_C_OSW, "write", "(I)V", osw_write },
+    { NJ_C_OSW, "flush", "()V", osw_flush },
+    { NJ_C_OSW, "close", "()V", osw_flush },
     { "javax/microedition/io/Connector", "open", "(Ljava/lang/String;)Ljavax/microedition/io/Connection;", connector_open },
+    { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";)V", isr_init },
+    { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V", isr_init },
+    { NJ_C_ISR, "read",  "()I", isr_read },
+    { NJ_C_ISR, "ready", "()Z", isr_ready },
+    { NJ_C_ISR, "close", "()V", isr_close },
+    { NJ_C_OSW, "<init>", "(L" NJ_C_OSTREAM ";)V", osw_init },
+    { NJ_C_OSW, "<init>", "(L" NJ_C_OSTREAM ";Ljava/lang/String;)V", osw_init },
+    { NJ_C_OSW, "write", "(I)V", osw_write },
+    { NJ_C_OSW, "flush", "()V", osw_flush },
+    { NJ_C_OSW, "close", "()V", osw_flush },
     { "javax/microedition/io/Connector", "open", "(Ljava/lang/String;I)Ljavax/microedition/io/Connection;", connector_open_stream },
     { "javax/microedition/io/Connector", "openInputStream", "(Ljava/lang/String;)Ljava/io/InputStream;", connector_open },
     { "javax/microedition/io/Connector", "openOutputStream", "(Ljava/lang/String;)Ljava/io/OutputStream;", connector_open },
