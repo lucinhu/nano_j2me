@@ -235,6 +235,10 @@ nj_s4 nj_vm_exit_code(nj_vm *vm);
  * The runner needs this to drive the frame loop itself (see --run-frames). */
 int   nj_vm_running(nj_vm *vm);
 
+/* The size of one VM instance.  An embedder sizing a static arena needs it:
+ * the arena the port hands out has to hold this AND the Java heap. */
+nj_size nj_vm_sizeof(void);
+
 /* Stop the frame loop (the same thing System.exit does). */
 void nj_vm_request_stop(nj_vm *vm, nj_s4 code);
 

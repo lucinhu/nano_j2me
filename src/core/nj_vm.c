@@ -237,6 +237,11 @@ nj_u4 nj_vm_destroy(nj_vm *vm)
     return released;
 }
 
+nj_size nj_vm_sizeof(void)
+{
+    return (nj_size)sizeof(nj_vm);
+}
+
 int nj_vm_running(nj_vm *vm)
 {
     if (!vm) {

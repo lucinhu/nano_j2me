@@ -161,8 +161,21 @@ double cbrt(double x) { return bare_unimplemented(x); }
 /* ------------------------------------------------------------------ */
 /* Port state, owned by the caller                                      */
 /* ------------------------------------------------------------------ */
-#define BARE_W 240
-#define BARE_H 320
+/*
+ * Framebuffer size, overridable at compile time.
+ *
+ * 240x320x4 is 300 KB, which does not fit in an ESP32-S3's internal SRAM next
+ * to a Java heap and the IDF runtime - the real port (nj_port_esp32.c) draws
+ * into a panel and keeps the Java heap in PSRAM for exactly this reason.  The
+ * QEMU image shrinks both so it fits in internal RAM, because what it is there
+ * to prove is that the RUNTIME executes, not that a 240x320 framebuffer fits.
+ */
+#ifndef BARE_W
+#  define BARE_W 128
+#endif
+#ifndef BARE_H
+#  define BARE_H 128
+#endif
 
 typedef struct bare_state {
     nj_u4  fb[BARE_W * BARE_H];   /* ARGB words; a panel driver DMAs this out */

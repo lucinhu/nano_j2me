@@ -120,21 +120,57 @@ rather than depending on a debugger:
 
     NJ2ME DONE rc=0 frames=600
 
-**Status: not yet running under QEMU.** `-kernel fw.elf` loads the image and the
-machine starts, but an ESP32 does not begin at the ELF entry point: the mask ROM
-runs first and expects a bootloader at the start of flash, so `main` is never
-reached and nothing is printed. Two ways forward, both contained:
+### Under ESP-IDF, on the real target
 
-1. Build a flash image (bootloader + partition table + app) and boot it with
-   `-drive file=flash.bin,if=mtd,format=raw`. ESP-IDF's `idf.py qemu` does
-   exactly this, and the IDF tree at `~/.espressif/v5.5.4/esp-idf` is present, so
-   this is a matter of wrapping the runtime as an IDF component.
-2. Use QEMU's `boot=` machine option, which the esp32s3 machine exposes, to skip
-   the ROM.
+`tests/embedded/idf/` is a complete ESP-IDF project with the runtime as a
+component (`components/nj2me`). It builds, and it boots:
 
-Until one of those is done, the claim this project can make is **"builds, links
-and is sized for the real architecture"**, not "runs on it". The image is one
-step away, and the step is a bootloader - not a gap in the runtime.
+    . ~/.espressif/v6.0.1/esp-idf/export.sh      # v6.0.1 matches the 15.2.0 toolchain
+    cd tests/embedded/idf && idf.py set-target esp32s3 build
+    idf.py merge-bin -o flash.bin && truncate -s 2M flash.bin
+    qemu-system-xtensa -machine esp32s3 -nographic \
+        -drive file=flash.bin,if=mtd,format=raw \
+        -global driver=timer.esp32s3.timg,property=wdt_disable,value=true
+
+Everything compiles against real IDF headers - including `nj_port_esp32.c`,
+which is a stronger check than any stub-header compile - and QEMU runs the
+result on an emulated ESP32-S3:
+
+    ESP-ROM:esp32s3-20210327
+    rst:0x1 (POWERON),boot:0x4 (SPI_FLASH_BOOT)
+    I (12) boot: ESP-IDF v6.0.1 2nd stage bootloader
+    I (18) boot: Partition Table:
+    I (18) esp_image: segment 0: paddr=00010020 vaddr=3c040020 size=2126ch (135788) map
+    ...
+    I (64) app_init: Project name:     nj2me_esp32
+    I (67) main_task: Calling app_main()
+    I (70) nj2me: nano_j2me on esp32s3, heap 120 KiB, free internal 193 KiB
+    I (70) nj2me: sizeof(nj_vm)=5368, arena budget 65536
+    E (70) nj2me: nj_vm_create failed
+
+So the ROM boots, the second-stage bootloader reads the partition table, the
+application image is loaded and `app_main` runs. **The runtime does not come up
+yet**: `nj_vm_create()` returns NULL with a 64 KiB arena on the 193 KiB of
+internal SRAM IDF leaves free.
+
+Two things to try next, in order:
+
+1. Diagnose the NULL. `vm_setup` has six failure points (`nj_heap_init`,
+   `vm->statics`, `nj_cp_cache_init`, `nj_natives_init`, `nj_lib_late_init`,
+   `vm->cur`) and the log does not say which; a one-line error path per return
+   would settle it.
+2. **Put the Java heap in PSRAM, as `nj_port_esp32.c` does on real hardware.**
+   193 KiB of internal SRAM cannot hold a useful Java heap next to a
+   framebuffer, and that is not a QEMU limitation - it is the ESP32-S3's actual
+   memory map. QEMU models PSRAM (`-global driver=ssi_psram,property=is_octal,
+   value=true`, which is in ESP-IDF's own `qemu_ext.py`), and the port already
+   has the `heap_caps_malloc(MALLOC_CAP_SPIRAM)` path. This is the same fix the
+   real board needs, which is the useful kind of fix.
+
+Until that is done the claim this project makes is **"the runtime compiles
+against ESP-IDF, links into a bootable ESP32-S3 image, and that image boots to
+app_main on an emulated ESP32-S3"** - not "runs a MIDlet on it". The remaining
+gap is arena placement, which is a port configuration question.
 
 ## Known gap: NJ_ENABLE_FLOAT does nothing
 
