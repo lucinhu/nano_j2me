@@ -1,0 +1,195 @@
+/*
+ * nano_j2me - nj_config.h
+ *
+ * Compile-time configuration for the nano_j2me J2ME (CLDC 1.1 / MIDP 2.0) runtime.
+ *
+ * Everything here can be overridden from the build system with -DNJ_xxx=...
+ * The defaults target a hosted desktop build; embedded ports (ESP32-S3, STM32)
+ * are expected to override NJ_MAX_HEAP, NJ_ENABLE_FLOAT and the feature flags.
+ *
+ * The whole runtime is C99, freestanding-friendly: when NJ_USE_LIBC is 0 the
+ * only external symbols required are memcpy/memset/memmove and the nj_port
+ * callbacks.
+ */
+#ifndef NJ_CONFIG_H
+#define NJ_CONFIG_H
+
+/* ------------------------------------------------------------------ */
+/* Platform detection (only used to pick sane defaults)                */
+/* ------------------------------------------------------------------ */
+#if defined(__unix__) || defined(__APPLE__) || defined(_WIN32)
+#  define NJ_PLATFORM_HOSTED 1
+#else
+#  define NJ_PLATFORM_HOSTED 0
+#endif
+
+/* ------------------------------------------------------------------ */
+/* Basic build switches                                                */
+/* ------------------------------------------------------------------ */
+
+/* Use <string.h>, <stdio.h>, <stdlib.h> where convenient. */
+#ifndef NJ_USE_LIBC
+#  define NJ_USE_LIBC 1
+#endif
+
+/* 64-bit arithmetic. CLDC 1.1 mandates long/double support: leave at 1 for a
+ * compliant runtime.  Set to 0 only for a CLDC-1.0-only, footprint-first build
+ * (long/double opcodes then raise a class-load error instead of misbehaving). */
+#ifndef NJ_ENABLE_LONG
+#  define NJ_ENABLE_LONG 1
+#endif
+
+/* Floating point (CLDC 1.1 mandatory).  Set 0 on FPU-less MCUs; float/double
+ * natives are then stubbed and Float/Double classes are omitted. */
+#ifndef NJ_ENABLE_FLOAT
+#  define NJ_ENABLE_FLOAT 1
+#endif
+
+/* Backwards-compat / debugging helpers: Disassembler, class dumps, trace. */
+#ifndef NJ_ENABLE_DEBUG
+#  define NJ_ENABLE_DEBUG 0
+#endif
+
+/* Exception message objects and stack traces. */
+#ifndef NJ_ENABLE_EXCEPTION_MESSAGES
+#  define NJ_ENABLE_EXCEPTION_MESSAGES 1
+#endif
+
+/* Pure-C class library features.  Turning one off makes the corresponding
+ * MIDP API raise UnsupportedOperationException instead of linking. */
+#ifndef NJ_ENABLE_LC_DUPLI
+#  define NJ_ENABLE_LC_DUPLI 1
+#endif
+#ifndef NJ_ENABLE_GAME_PACKAGE   /* javax.microedition.lcdui.game */
+#  define NJ_ENABLE_GAME_PACKAGE 1
+#endif
+#ifndef NJ_ENABLE_RMS           /* javax.microedition.rms */
+#  define NJ_ENABLE_RMS 1
+#endif
+#ifndef NJ_ENABLE_IO            /* javax.microedition.io + java.io */
+#  define NJ_ENABLE_IO 1
+#endif
+#ifndef NJ_ENABLE_MEDIA         /* javax.microedition.media (tone only) */
+#  define NJ_ENABLE_MEDIA 0
+#endif
+#ifndef NJ_ENABLE_PNG
+#  define NJ_ENABLE_PNG 1
+#endif
+#ifndef NJ_ENABLE_JPEG
+#  define NJ_ENABLE_JPEG 0
+#endif
+#ifndef NJ_ENABLE_FONT_CJK      /* built-in CJK glyph provider hook */
+#  define NJ_ENABLE_FONT_CJK 0
+#endif
+
+/* ------------------------------------------------------------------ */
+/* Sizing                                                              */
+/* ------------------------------------------------------------------ */
+
+/* Java heap size in bytes.  Overridden by the port at runtime when the port
+ * supplies its own heap block (nj_port.heap_block). */
+#ifndef NJ_MAX_HEAP
+#  define NJ_MAX_HEAP (8u * 1024u * 1024u)
+#endif
+
+/* Maximum java.lang.Thread stack depth (number of frames), and the operand +
+ * local slot budget of one thread, in nj_value units (8 bytes each). */
+#ifndef NJ_MAX_FRAMES
+#  define NJ_MAX_FRAMES 256
+#endif
+#ifndef NJ_MAX_STACK_SLOTS
+#  define NJ_MAX_STACK_SLOTS 8192
+#endif
+
+/* Interned system strings + constant string cache. */
+#ifndef NJ_MAX_INTERNED
+#  define NJ_MAX_INTERNED 512
+#endif
+
+/* Maximum number of simultaneously resident classes. */
+#ifndef NJ_MAX_CLASSES
+#  define NJ_MAX_CLASSES 512
+#endif
+
+/* Maximum number of static fields across all classes (single flat block). */
+#ifndef NJ_MAX_STATICS
+#  define NJ_MAX_STATICS 4096
+#endif
+
+/* Maximum number of registered native methods. */
+#ifndef NJ_MAX_NATIVES
+#  define NJ_MAX_NATIVES 1024
+#endif
+
+/* Native call recursion guard. */
+#ifndef NJ_MAX_NATIVE_DEPTH
+#  define NJ_MAX_NATIVE_DEPTH 64
+#endif
+
+/* Open files / record stores. */
+#ifndef NJ_MAX_RECORD_STORES
+#  define NJ_MAX_RECORD_STORES 8
+#endif
+
+/* Cooperative thread scheduler. */
+#ifndef NJ_MAX_THREADS
+#  define NJ_MAX_THREADS 16
+#endif
+
+/* JAR entries held in the loaded app (per-MIDlet-class count). */
+#ifndef NJ_MAX_APP_ENTRIES
+#  define NJ_MAX_APP_ENTRIES 512
+#endif
+
+/* Maximum size of one decompressed class file. */
+#ifndef NJ_MAX_CLASS_BYTES
+#  define NJ_MAX_CLASS_BYTES (192u * 1024u)
+#endif
+
+/* Screen geometry used when the port does not override it. */
+#ifndef NJ_SCREEN_WIDTH
+#  define NJ_SCREEN_WIDTH 240
+#endif
+#ifndef NJ_SCREEN_HEIGHT
+#  define NJ_SCREEN_HEIGHT 320
+#endif
+
+/* ------------------------------------------------------------------ */
+/* Feature knobs                                                       */
+/* ------------------------------------------------------------------ */
+
+/* Cooperative scheduling quantum: java bytecodes executed between scheduler
+ * polls.  Smaller = smoother threading, larger = faster. */
+#ifndef NJ_SCHED_QUANTUM
+#  define NJ_SCHED_QUANTUM 20000
+#endif
+
+/* Pixel format produced by the internal rasterizer. */
+#define NJ_PIXFMT_RGB565 0
+#define NJ_PIXFMT_RGB888 1
+#define NJ_PIXFMT_ARGB8888 2
+#ifndef NJ_PIXFMT
+#  define NJ_PIXFMT NJ_PIXFMT_RGB565
+#endif
+
+/* Assertions (always compiled out unless explicitly enabled). */
+#ifndef NJ_ASSERT_ENABLED
+#  define NJ_ASSERT_ENABLED 0
+#endif
+
+/* ------------------------------------------------------------------ */
+/* Derived                                                             */
+/* ------------------------------------------------------------------ */
+#if NJ_ENABLE_FLOAT
+#  define NJ_HAS_FLOAT 1
+#else
+#  define NJ_HAS_FLOAT 0
+#endif
+
+#if NJ_ENABLE_LONG
+#  define NJ_HAS_LONG 1
+#else
+#  define NJ_HAS_LONG 0
+#endif
+
+#endif /* NJ_CONFIG_H */

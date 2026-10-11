@@ -1,0 +1,259 @@
+/*
+ * nano_j2me - nj_gfx.h
+ *
+ * Software rasterizer.  Everything MIDP Graphics needs, implemented over a
+ * plain linear pixel buffer, with a translate + clip state exactly like
+ * javax.microedition.lcdui.Graphics.
+ *
+ * Pixel formats: NJ_PIXFMT_RGB565 (default, embedded panels),
+ *                NJ_PIXFMT_RGB888, NJ_PIXFMT_ARGB8888.
+ *
+ * All drawing honours: color (ARGB8888 with alpha), translate, clip,
+ * blend mode (SRC_OVER / NONE) and the stroke style for drawRect/drawArc/
+ * drawRoundRect.
+ */
+#ifndef NJ_GFX_H
+#define NJ_GFX_H
+
+#include "nj_types.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ------------------------------------------------------------------ */
+/* Surface                                                             */
+/* ------------------------------------------------------------------ */
+typedef struct nj_surface {
+    void *pixels;     /* linear buffer, stride bytes per row */
+    int   width;
+    int   height;
+    int   stride;     /* bytes per row; may be != width*bpp */
+    int   format;     /* NJ_PIXFMT_* */
+    int   bpp;        /* bytes per pixel, cached */
+} nj_surface;
+
+/* ------------------------------------------------------------------ */
+/* Stroke / blend styles                                               */
+/* ------------------------------------------------------------------ */
+#define NJ_STROKE_SOLID  0
+#define NJ_STROKE_DOTTED 1
+
+#define NJ_BLEND_NONE    0   /* opaque copy  */
+#define NJ_BLEND_SRC_OVER 1  /* alpha blend  */
+
+/* ------------------------------------------------------------------ */
+/* Font                                                                */
+/* ------------------------------------------------------------------ */
+/*
+ * A bitmap font.  Glyphs are 1 bit per pixel, row-major, MSB first, one byte
+ * per 8 horizontal pixels:  row_bytes = (glyph_w + 7) / 8.
+ *
+ * `glyph_lookup` optionally overrides the fixed-pitch bitmap for characters
+ * outside [first_char, last_char] - this is how the CJK provider hooks in.
+ */
+typedef struct nj_font {
+    const char *name;
+    int   height;        /* line height = ascent + descent (+ leading) */
+    int   ascent;
+    int   descent;
+    int   leading;
+    int   style;         /* NJ_FONT_STYLE_*  */
+    int   size;          /* NJ_FONT_SIZE_*   */
+    int   proportional;
+    nj_u2 first_char;
+    nj_u2 last_char;
+    int   glyph_w;       /* fixed cell width  */
+    int   glyph_h;
+    const nj_u1 *bitmap; /* (last-first+1) * glyph_h * row_bytes */
+
+    /* Optional wide-glyph provider: returns 1bpp rows for `ch`, sets w/h. */
+    const nj_u1 *(*glyph_lookup)(void *ud, nj_u2 ch, int *w, int *h);
+    void *glyph_ud;
+    /* Optional advance metric override (proportional wide glyphs). */
+    int (*glyph_advance)(void *ud, nj_u2 ch);
+
+    /* Font consulted for characters outside [first_char, last_char] and for
+     * glyphs the fixed cell cannot represent (CJK).  Chainable: the fallback
+     * may itself have a fallback.  NULL = no fallback. */
+    const struct nj_font *fallback;
+} nj_font;
+
+#define NJ_FONT_STYLE_PLAIN  0
+#define NJ_FONT_STYLE_BOLD   1
+#define NJ_FONT_STYLE_ITALIC 2
+#define NJ_FONT_STYLE_UNDERLINED 4
+
+#define NJ_FONT_SIZE_SMALL   8
+#define NJ_FONT_SIZE_MEDIUM  0
+#define NJ_FONT_SIZE_LARGE   16
+
+/*
+ * Font registry.
+ *
+ * The runtime holds no mutable global font state, so the *caller* (the VM)
+ * owns an nj_fontset.  It contains mutable nj_font instances built from the
+ * immutable bitmap tables in .rodata; the fallback pointer can therefore be
+ * installed per-instance without touching shared data.
+ *
+ *   nj_fontset fs;
+ *   nj_fontset_init(&fs);
+ *   nj_fontset_set_fallback(&fs, my_cjk_font);
+ *   const nj_font *f = nj_fontset_get(&fs, NJ_FONT_SIZE_MEDIUM, NJ_FONT_STYLE_PLAIN);
+ */
+#define NJ_FONTSET_SLOTS 6
+
+typedef struct nj_fontset {
+    nj_font fonts[NJ_FONTSET_SLOTS];
+    int     initialized;
+    int     count;
+} nj_fontset;
+
+void          nj_fontset_init(nj_fontset *fs);
+const nj_font *nj_fontset_get(nj_fontset *fs, int size, int style);
+void          nj_fontset_set_fallback(nj_fontset *fs, const nj_font *fb);
+
+/* The immutable bitmap table behind a given (size, style) pair.  Exposed so a
+ * port can build its own nj_font if it wants a different registry lifetime.
+ * Never NULL. */
+const nj_font *nj_font_builtin(int size, int style);
+
+/* Metrics. */
+int nj_font_char_width(const nj_font *f, nj_u2 ch);
+int nj_font_string_width(const nj_font *f, const nj_u2 *s, int len);
+int nj_font_chars_that_fit(const nj_font *f, const nj_u2 *s, int len, int avail);
+
+/* ------------------------------------------------------------------ */
+/* Graphics state                                                      */
+/* ------------------------------------------------------------------ */
+typedef struct nj_gfx {
+    nj_surface *surf;
+    nj_u4 color;       /* current color, 0xAARRGGBB */
+    int   translate_x;
+    int   translate_y;
+    int   clip_x, clip_y, clip_w, clip_h;  /* in surface space */
+    int   stroke;
+    int   blend;
+    const nj_font *font;
+    nj_u4 xor_color;   /* setXORMode target */
+    int   use_xor;
+} nj_gfx;
+
+/* Initialize `g` for `surf`; clip becomes the whole surface, color black,
+ * font = MEDIUM PLAIN. */
+void nj_gfx_init(nj_gfx *g, nj_surface *surf);
+
+/* Coordinate helpers: user -> device. */
+int nj_gfx_dev_x(const nj_gfx *g, int x);
+int nj_gfx_dev_y(const nj_gfx *g, int y);
+
+/* ------------------------------------------------------------------ */
+/* Clipping / transform                                                */
+/* ------------------------------------------------------------------ */
+void nj_gfx_set_clip(nj_gfx *g, int x, int y, int w, int h);
+void nj_gfx_clip_rect(nj_gfx *g, int x, int y, int w, int h);
+void nj_gfx_translate(nj_gfx *g, int dx, int dy);
+void nj_gfx_get_translate(const nj_gfx *g, int *dx, int *dy);
+int  nj_gfx_get_clip_x(const nj_gfx *g);
+int  nj_gfx_get_clip_y(const nj_gfx *g);
+int  nj_gfx_get_clip_w(const nj_gfx *g);
+int  nj_gfx_get_clip_h(const nj_gfx *g);
+
+/* ------------------------------------------------------------------ */
+/* Color / style                                                       */
+/* ------------------------------------------------------------------ */
+void nj_gfx_set_color(nj_gfx *g, nj_u4 argb);
+nj_u4 nj_gfx_get_color(const nj_gfx *g);
+void nj_gfx_set_color_rgb(nj_gfx *g, int r, int g_, int b);
+void nj_gfx_set_alpha(nj_gfx *g, int alpha0_255);
+int  nj_gfx_get_alpha(const nj_gfx *g);
+void nj_gfx_set_blend(nj_gfx *g, int mode);
+void nj_gfx_set_stroke(nj_gfx *g, int stroke);
+void nj_gfx_set_font(nj_gfx *g, const nj_font *f);
+void nj_gfx_set_xor(nj_gfx *g, nj_u4 argb);
+void nj_gfx_clear_xor(nj_gfx *g);
+
+/* ------------------------------------------------------------------ */
+/* Drawing                                                             */
+/* ------------------------------------------------------------------ */
+void nj_gfx_clear(nj_gfx *g, nj_u4 argb);
+void nj_gfx_pixel(nj_gfx *g, int x, int y);
+void nj_gfx_line(nj_gfx *g, int x1, int y1, int x2, int y2);
+void nj_gfx_rect(nj_gfx *g, int x, int y, int w, int h);           /* outline */
+void nj_gfx_fill_rect(nj_gfx *g, int x, int y, int w, int h);
+void nj_gfx_round_rect(nj_gfx *g, int x, int y, int w, int h, int rw, int rh);
+void nj_gfx_fill_round_rect(nj_gfx *g, int x, int y, int w, int h, int rw, int rh);
+void nj_gfx_arc(nj_gfx *g, int x, int y, int w, int h, int start, int extent);
+void nj_gfx_fill_arc(nj_gfx *g, int x, int y, int w, int h, int start, int extent);
+void nj_gfx_triangle(nj_gfx *g, int x1, int y1, int x2, int y2, int x3, int y3, int filled);
+
+/* Text.  `s` is UTF-16. */
+void nj_gfx_draw_text(nj_gfx *g, const nj_u2 *s, int len, int x, int y, int anchor);
+void nj_gfx_draw_char(nj_gfx *g, nj_u2 ch, int x, int y);
+
+/* ------------------------------------------------------------------ */
+/* Images / blitting                                                   */
+/* ------------------------------------------------------------------ */
+/* An image is an ARGB8888 (or RGB565) buffer with optional per-pixel alpha. */
+typedef struct nj_image {
+    int   width;
+    int   height;
+    int   format;      /* NJ_PIXFMT_ARGB8888 always for decoded images */
+    nj_u4 *pixels;     /* row-major ARGB8888, stride == width */
+    int   has_alpha;
+} nj_image;
+
+void nj_gfx_draw_image(nj_gfx *g, const nj_image *img,
+                       int dx, int dy, int sx, int sy, int sw, int sh);
+void nj_gfx_draw_image_rop(nj_gfx *g, const nj_image *img, int dx, int dy,
+                           int sx, int sy, int sw, int sh, int rop,
+                           int transform);
+void nj_gfx_draw_rgb(nj_gfx *g, const nj_u1 *rgb, int scanlen, int alpha,
+                     int dx, int dy, int sx, int sy, int sw, int sh,
+                     int rop, int transform);
+void nj_gfx_draw_region(nj_gfx *g, const nj_image *src,
+                        int sx, int sy, int sw, int sh,
+                        int transform, int is_xor, nj_u4 xor_argb,
+                        const nj_image *clip_src,
+                        int dx, int dy, int rop);
+
+/* Alpha-blended fill of an arbitrary region with coverage 0..255. */
+void nj_gfx_blend_pixel(nj_surface *s, int x, int y, nj_u4 argb, int alpha);
+
+/* ------------------------------------------------------------------ */
+/* Surface helpers                                                     */
+/* ------------------------------------------------------------------ */
+void  nj_surface_fill(nj_surface *s, nj_u4 argb);
+nj_u4 nj_surface_get(const nj_surface *s, int x, int y);
+void  nj_surface_set(nj_surface *s, int x, int y, nj_u4 argb);
+nj_u4 nj_surface_format_color(int format, nj_u4 argb);
+
+/* ------------------------------------------------------------------ */
+/* Anchor constants (mirror javax.microedition.lcdui.Graphics)         */
+/* ------------------------------------------------------------------ */
+#define NJ_ANCHOR_HCENTER 1
+#define NJ_ANCHOR_RIGHT   8
+#define NJ_ANCHOR_LEFT    4
+#define NJ_ANCHOR_VCENTER 2
+#define NJ_ANCHOR_BOTTOM  32
+#define NJ_ANCHOR_TOP     16
+
+/* ROP constants, mirroring Graphics SET/PAINT. */
+#define NJ_ROP_SET   0
+#define NJ_ROP_PAINT 1
+
+/* Sprite transforms, mirroring javax.microedition.lcdui.game.Sprite. */
+#define NJ_TRANS_NONE 0
+#define NJ_TRANS_ROT90 5
+#define NJ_TRANS_ROT180 3
+#define NJ_TRANS_ROT270 6
+#define NJ_TRANS_MIRROR 2
+#define NJ_TRANS_MIRROR_ROT90 7
+#define NJ_TRANS_MIRROR_ROT180 1
+#define NJ_TRANS_MIRROR_ROT270 4
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* NJ_GFX_H */

@@ -1,0 +1,117 @@
+cmake_minimum_required(VERSION 3.16)
+project(nano_j2me C)
+
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
+
+option(NJ_BUILD_TESTS   "Build the test suite"          ON)
+option(NJ_BUILD_SDL2    "Build the SDL2 desktop port"   ON)
+option(NJ_BUILD_HEADLESS "Build the headless port"      ON)
+option(NJ_BUILD_TOOLS   "Build developer tools"         ON)
+option(NJ_WERROR        "Treat warnings as errors"      OFF)
+
+set(NJ_SOURCES
+  src/core/nj_heap.c
+  src/core/nj_string.c
+  src/core/nj_class.c
+  src/core/nj_native.c
+  src/core/nj_vm.c
+  src/core/nj_thread.c
+  src/core/nj_interp.c
+  src/core/nj_app.c
+  src/core/nj_builtins.c
+  src/core/nj_lib_object.c
+  src/core/nj_lib_string.c
+  src/core/nj_lib_system.c
+  src/core/nj_lib_math.c
+  src/core/nj_lib_thread.c
+  src/core/nj_lib_boxing.c
+  src/midp/nj_lib_util.c
+  src/midp/nj_lib_io.c
+  src/midp/nj_lib_lcdui.c
+  src/midp/nj_lib_game.c
+  src/midp/nj_lib_rms.c
+  src/midp/nj_lib_midlet.c
+  src/midp/nj_lib_media.c
+  src/gfx/nj_gfx.c
+  src/gfx/nj_font.c
+  src/gfx/nj_png.c
+  src/zip/nj_inflate.c
+  src/zip/nj_zip.c
+  src/runner/nj_run.c
+)
+
+set(NJ_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/gfx/nj_gfx.c)
+  message(FATAL_ERROR
+    "src/gfx/nj_gfx.c is missing. It provides the software rasterizer that "
+    "the LCDUI layer draws through.")
+endif()
+
+add_library(nj2me STATIC ${NJ_SOURCES})
+target_include_directories(nj2me PUBLIC ${NJ_INCLUDE_DIRS})
+target_include_directories(nj2me PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+target_compile_options(nj2me PRIVATE -Wall -Wextra)
+if(NJ_WERROR)
+  target_compile_options(nj2me PRIVATE -Werror)
+endif()
+if(UNIX)
+  target_link_libraries(nj2me PUBLIC m)
+endif()
+
+# ---------------------------------------------------------------------
+# Ports
+# ---------------------------------------------------------------------
+if(NJ_BUILD_HEADLESS)
+  target_sources(nj2me PRIVATE src/port/posix/nj_port_headless.c)
+endif()
+
+if(NJ_BUILD_SDL2)
+  find_package(PkgConfig QUIET)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(SDL2 QUIET sdl2)
+  endif()
+  if(SDL2_FOUND)
+    target_sources(nj2me PRIVATE src/port/posix/nj_port_sdl2.c)
+    target_include_directories(nj2me PRIVATE ${SDL2_INCLUDE_DIRS})
+    target_link_libraries(nj2me PUBLIC ${SDL2_LIBRARIES})
+    target_compile_definitions(nj2me PUBLIC NJ_HAVE_SDL2=1)
+    message(STATUS "SDL2 port: enabled (${SDL2_VERSION})")
+  else()
+    message(STATUS "SDL2 port: disabled (libsdl2-dev not found)")
+  endif()
+endif()
+
+# ---------------------------------------------------------------------
+# Executable
+# ---------------------------------------------------------------------
+add_executable(nj2me apps/nj2me_main.c)
+target_link_libraries(nj2me PRIVATE nj2me)
+
+# ---------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------
+if(NJ_BUILD_TESTS)
+  enable_testing()
+  add_executable(test_vm tests/test_vm.c)
+  target_link_libraries(test_vm PRIVATE nj2me)
+  add_test(NAME vm_core COMMAND test_vm
+           ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/hello.jar
+           HelloWorld "hello from j2me")
+endif()
+
+# ---------------------------------------------------------------------
+# Developer tooling
+# ---------------------------------------------------------------------
+if(NJ_BUILD_TOOLS)
+  add_custom_target(no-statics
+    COMMAND ${CMAKE_COMMAND} -E env
+            OBJDIR=$<TARGET_OBJECTS:nj2me>
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_no_statics.sh
+    COMMENT "Verify the runtime keeps no mutable global state")
+endif()

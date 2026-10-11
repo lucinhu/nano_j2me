@@ -1,0 +1,31 @@
+# ---------------------------------------------------------------- build output
+build/
+build-*/
+cmake-build-*/
+out/
+*.o
+*.a
+*.so
+*.dylib
+*.elf
+*.bin
+*.hex
+*.map
+sdkconfig
+sdkconfig.old
+compile_commands.json
+
+# ------------------------------------------------- generated test fixtures
+# tests/fixtures/ is ~1 MB of regenerable data.  Rebuild it with:
+#   python3 tests/gen_fixtures.py       (zip/inflate fixtures)
+#   tools/make_hello_jar.sh             (the VM-core MIDlet fixture)
+tests/fixtures/
+!tests/fixtures/.gitkeep
+tests/out/
+
+# ------------------------------------------------------- editor / OS noise
+*.swp
+*~
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,418 @@
+/*
+ * nano_j2me - nj_lib_system.c
+ *
+ * java.lang.System, java.lang.Runtime, java.io.PrintStream and the
+ * java.lang.System.arraycopy workhorse.
+ */
+#include "nj_internal.h"
+
+#if NJ_USE_LIBC
+#  include <string.h>
+#  include <stdio.h>
+#endif
+
+#define NJFN(name) NJ_NATIVE_FN(name)
+#define NJ_UNUSED(x) ((void)(x))
+#define NJ_CALL(name, vm, th, args, ret) name((vm), (th), (args), (ret))
+
+/* ------------------------------------------------------------------ */
+/* System                                                              */
+/* ------------------------------------------------------------------ */
+NJFN(sys_currentTimeMillis)
+{
+    ret->j = nj_now_ms(vm);
+    return NJ_OK;
+}
+
+NJFN(sys_nanoTime)
+{
+    ret->j = nj_now_ms(vm) * 1000000;
+    return NJ_OK;
+}
+
+/*
+ * System.arraycopy is one of the hottest methods in a J2ME game (sprite and
+ * tile blitting both go through it), so the copy loop is type-specialised
+ * rather than going through per-element helpers.
+ */
+NJFN(sys_arraycopy)
+{
+    nj_ref src = NJ_ARG_REF(args, 0);
+    nj_s4 src_pos = NJ_ARG_INT(args, 1);
+    nj_ref dst = NJ_ARG_REF(args, 2);
+    nj_s4 dst_pos = NJ_ARG_INT(args, 3);
+    nj_s4 len = NJ_ARG_INT(args, 4);
+    nj_u4 esz = 0u;
+
+    if (!src || !dst) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (src->kind != NJ_OBJ_ARRAY || dst->kind != NJ_OBJ_ARRAY) {
+        return nj_throw(vm, "java/lang/ArrayStoreException", NULL);
+    }
+    if (src->aflags != dst->aflags) {
+        return nj_throw(vm, "java/lang/ArrayStoreException", NULL);
+    }
+    if (len < 0 || src_pos < 0 || dst_pos < 0 ||
+        (nj_u4)(src_pos + len) > src->length ||
+        (nj_u4)(dst_pos + len) > dst->length) {
+        return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
+    }
+    if (len == 0) {
+        return NJ_OK;
+    }
+    switch (src->aflags) {
+    case NJ_ARRAY_T_BOOLEAN:
+    case NJ_ARRAY_T_BYTE:   esz = 1u; break;
+    case NJ_ARRAY_T_CHAR:
+    case NJ_ARRAY_T_SHORT:  esz = 2u; break;
+    case NJ_ARRAY_T_INT:
+    case NJ_ARRAY_T_FLOAT:  esz = 4u; break;
+    case NJ_ARRAY_T_LONG:
+    case NJ_ARRAY_T_DOUBLE: esz = 8u; break;
+    default:                esz = 0u; break;   /* reference array */
+    }
+
+    if (esz != 0u) {
+        memmove((nj_u1 *)dst->u.bytes + (nj_size)dst_pos * esz,
+                (const nj_u1 *)src->u.bytes + (nj_size)src_pos * esz,
+                (nj_size)len * esz);
+    } else {
+        nj_ref *d = dst->u.refs;
+        nj_ref *s = src->u.refs;
+        nj_class *comp = dst->cls ? dst->cls->component_cls : NULL;
+        nj_s4 i;
+        if (d > s) {
+            for (i = len - 1; i >= 0; i--) {
+                d[dst_pos + i] = s[src_pos + i];
+            }
+        } else {
+            for (i = 0; i < len; i++) {
+                d[dst_pos + i] = s[src_pos + i];
+            }
+        }
+        if (comp) {
+            for (i = 0; i < len; i++) {
+                nj_ref v = d[dst_pos + i];
+                if (v && v->cls && !nj_class_is_assignable(v->cls, comp)) {
+                    return nj_throw(vm, "java/lang/ArrayStoreException", NULL);
+                }
+            }
+        }
+    }
+    return NJ_OK;
+}
+
+NJFN(sys_identityHashCode)
+{
+    ret->i = nj_identity_hash(vm, NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+NJFN(sys_gc)
+{
+    (void)nj_gc_run(vm);
+    return NJ_OK;
+}
+
+NJFN(sys_exit)
+{
+    nj_s4 code = NJ_ARG_INT(args, 0);
+    /* Run finalisation is not modelled; stop the VM cleanly instead. */
+    nj_vm_stop(vm, code);
+    return NJ_OK;
+}
+
+NJFN(sys_getProperty)
+{
+    nj_ref key = NJ_ARG_REF(args, 0);
+    char k[64];
+
+    if (!key) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (nj_string_to_utf8(key, k, (int)sizeof(k)) <= 0) {
+        ret->r = NULL;
+        return NJ_OK;
+    }
+    if (strcmp(k, "microedition.platform") == 0) {
+        ret->r = nj_string_new(vm, "nano_j2me");
+    } else if (strcmp(k, "microedition.encoding") == 0) {
+        ret->r = nj_string_new(vm, "ISO-8859-1");
+    } else if (strcmp(k, "microedition.configuration") == 0) {
+        ret->r = nj_string_new(vm, "CLDC-1.1");
+    } else if (strcmp(k, "microedition.profiles") == 0) {
+        ret->r = nj_string_new(vm, "MIDP-2.0");
+    } else if (strcmp(k, "microedition.locale") == 0) {
+        ret->r = nj_string_new(vm, "en-US");
+    } else if (strcmp(k, "line.separator") == 0) {
+        ret->r = nj_string_new(vm, "\n");
+    } else if (strcmp(k, "file.separator") == 0) {
+        ret->r = nj_string_new(vm, "/");
+    } else if (strcmp(k, "java.version") == 0) {
+        ret->r = nj_string_new(vm, "1.4.2");
+    } else if (strcmp(k, "os.name") == 0) {
+        ret->r = nj_string_new(vm, "nano_j2me");
+    } else {
+        ret->r = NULL;
+    }
+    if (vm->exception) {
+        return NJ_ERR;
+    }
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* java.io.PrintStream                                                 */
+/* ------------------------------------------------------------------ */
+/*
+ * Output is routed through the port's log callback, so on a microcontroller a
+ * MIDlet's System.out.println lands on the serial console and on the desktop it
+ * lands on stderr.  Nothing is buffered, so a crash cannot swallow output.
+ */
+static void ps_write_chars(nj_vm *vm, const nj_u2 *s, nj_u4 n)
+{
+    char buf[256];
+    nj_u4 i = 0u;
+    nj_u4 out = 0u;
+
+    while (i < n) {
+        if (s[i] < 0x80u) {
+            buf[out++] = (char)s[i];
+        } else {
+            buf[out++] = '?';
+        }
+        i++;
+        if (out + 2u >= sizeof(buf) || i == n) {
+            buf[out] = '\0';
+            if (vm->port && vm->port->log) {
+                vm->port->log(vm->port->user, 2, buf);
+            } else {
+#if NJ_USE_LIBC
+                fputs(buf, stderr);
+#endif
+            }
+            out = 0u;
+        }
+    }
+}
+
+NJFN(ps_println)
+{
+    ps_write_chars(vm, NULL, 0);
+    if (vm->port && vm->port->log) {
+        vm->port->log(vm->port->user, 2, "");
+    }
+    return NJ_OK;
+}
+
+NJFN(ps_println_str)
+{
+    nj_ref s = NJ_ARG_REF(args, 0);
+    if (s) {
+        ps_write_chars(vm, nj_string_chars(s), nj_string_len(s));
+    } else {
+        static const nj_u2 null_s[] = { 'n', 'u', 'l', 'l' };
+        ps_write_chars(vm, null_s, 4u);
+    }
+    NJ_CALL(ps_println, vm, th, args, ret);
+    return NJ_OK;
+}
+
+NJFN(ps_print_str)
+{
+    nj_ref s = NJ_ARG_REF(args, 0);
+    if (s) {
+        ps_write_chars(vm, nj_string_chars(s), nj_string_len(s));
+    }
+    return NJ_OK;
+}
+
+NJFN(ps_println_int)
+{
+    nj_ref s = nj_string_new_from_int(vm, NJ_ARG_INT(args, 0));
+    nj_value a1[1];
+    if (!s) {
+        return nj_throw_oom(vm);
+    }
+    a1[0].r = s;
+    return NJ_CALL(ps_println_str, vm, th, a1, ret);
+}
+
+NJFN(ps_print_int)
+{
+    nj_ref s = nj_string_new_from_int(vm, NJ_ARG_INT(args, 0));
+    if (!s) {
+        return nj_throw_oom(vm);
+    }
+    ps_write_chars(vm, nj_string_chars(s), nj_string_len(s));
+    return NJ_OK;
+}
+
+NJFN(ps_print_char)
+{
+    nj_u2 c = (nj_u2)NJ_ARG_INT(args, 0);
+    ps_write_chars(vm, &c, 1u);
+    return NJ_OK;
+}
+
+NJFN(ps_write_int)
+{
+    nj_u2 c = (nj_u2)(NJ_ARG_INT(args, 0) & 0xFF);
+    ps_write_chars(vm, &c, 1u);
+    return NJ_OK;
+}
+
+NJFN(ps_flush)
+{
+    return NJ_OK;
+}
+
+NJFN(ps_close)
+{
+    return NJ_OK;
+}
+
+NJFN(runtime_gc)
+{
+    (void)nj_gc_run(vm);
+    return NJ_OK;
+}
+
+NJFN(runtime_freeMemory)
+{
+    ret->j = (nj_s8)nj_heap_free_bytes(vm);
+    return NJ_OK;
+}
+
+NJFN(runtime_totalMemory)
+{
+    ret->j = (nj_s8)vm->heap.size;
+    return NJ_OK;
+}
+
+NJFN(runtime_exit)
+{
+    nj_vm_stop(vm, NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Late static initialisation                                          */
+/* ------------------------------------------------------------------ */
+nj_status nj_lib_late_init(nj_vm *vm)
+{
+    nj_field *f_out, *f_err;
+    nj_ref out;
+
+    if (!vm) {
+        return NJ_ERR;
+    }
+    f_out = nj_field_lookup(vm, "java/lang/System", "out",
+                            "Ljava/io/PrintStream;", 1);
+    f_err = nj_field_lookup(vm, "java/lang/System", "err",
+                            "Ljava/io/PrintStream;", 1);
+    if (!f_out) {
+        return NJ_OK;   /* the System class was compiled out */
+    }
+    out = nj_object_new(vm, "java/io/PrintStream");
+    if (!out) {
+        nj_clear_exception(vm);
+        return NJ_OK;
+    }
+    nj_field_write_ref(vm, NULL, f_out, out);
+    if (f_err) {
+        nj_field_write_ref(vm, NULL, f_err, out);
+    }
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tables                                                              */
+/* ------------------------------------------------------------------ */
+#define M(name, desc, flags) { name, desc, flags }
+
+static const nj_builtin_field system_fields[] = {
+    { "out", "Ljava/io/PrintStream;", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "err", "Ljava/io/PrintStream;", NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+
+static const nj_builtin_method system_methods[] = {
+    M("currentTimeMillis", "()J",   NJ_ACC_STATIC),
+    M("nanoTime",          "()J",   NJ_ACC_STATIC),
+    M("arraycopy",         "(Ljava/lang/Object;ILjava/lang/Object;II)V", NJ_ACC_STATIC),
+    M("identityHashCode",  "(Ljava/lang/Object;)I", NJ_ACC_STATIC),
+    M("gc",                "()V",   NJ_ACC_STATIC),
+    M("exit",              "(I)V",  NJ_ACC_STATIC),
+    M("getProperty",       "(Ljava/lang/String;)Ljava/lang/String;", NJ_ACC_STATIC)
+};
+
+static const nj_builtin_method printstream_methods[] = {
+    M("println",  "()V",                    0),
+    M("println",  "(Ljava/lang/String;)V",  0),
+    M("println",  "(I)V",                   0),
+    M("print",    "(Ljava/lang/String;)V",  0),
+    M("print",    "(C)V",                   0),
+    M("print",    "(I)V",                   0),
+    M("write",    "(I)V",                   0),
+    M("flush",    "()V",                    0),
+    M("close",    "()V",                    0)
+};
+
+static const nj_builtin_method runtime_methods[] = {
+    M("gc",           "()V", 0),
+    M("freeMemory",   "()J", 0),
+    M("totalMemory",  "()J", 0),
+    M("exit",         "(I)V", 0),
+    M("getRuntime",   "()Ljava/lang/Runtime;", NJ_ACC_STATIC)
+};
+
+const nj_builtin_class nj_lib_system_classes[] = {
+    { "java/lang/System", "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_FINAL,
+      system_fields,
+      (nj_u2)(sizeof(system_fields) / sizeof(system_fields[0])),
+      system_methods,
+      (nj_u2)(sizeof(system_methods) / sizeof(system_methods[0])) },
+    { "java/io/PrintStream", "java/lang/Object", NJ_ACC_PUBLIC,
+      NULL, 0u, printstream_methods,
+      (nj_u2)(sizeof(printstream_methods) / sizeof(printstream_methods[0])) },
+    { "java/lang/Runtime", "java/lang/Object", NJ_ACC_PUBLIC,
+      NULL, 0u, runtime_methods,
+      (nj_u2)(sizeof(runtime_methods) / sizeof(runtime_methods[0])) }
+};
+const int nj_lib_system_class_count =
+    (int)(sizeof(nj_lib_system_classes) / sizeof(nj_lib_system_classes[0]));
+
+NJFN(runtime_getRuntime)
+{
+    ret->r = nj_object_new(vm, "java/lang/Runtime");
+    return ret->r ? NJ_OK : NJ_ERR;
+}
+
+const nj_native_entry nj_lib_system_table[] = {
+    { "java/lang/System", "currentTimeMillis", "()J",   sys_currentTimeMillis },
+    { "java/lang/System", "nanoTime",          "()J",   sys_nanoTime },
+    { "java/lang/System", "arraycopy",         "(Ljava/lang/Object;ILjava/lang/Object;II)V", sys_arraycopy },
+    { "java/lang/System", "identityHashCode",  "(Ljava/lang/Object;)I", sys_identityHashCode },
+    { "java/lang/System", "gc",                "()V",   sys_gc },
+    { "java/lang/System", "exit",              "(I)V",  sys_exit },
+    { "java/lang/System", "getProperty",       "(Ljava/lang/String;)Ljava/lang/String;", sys_getProperty },
+
+    { "java/io/PrintStream", "println", "()V",                    ps_println },
+    { "java/io/PrintStream", "println", "(Ljava/lang/String;)V",  ps_println_str },
+    { "java/io/PrintStream", "println", "(I)V",                   ps_println_int },
+    { "java/io/PrintStream", "print",   "(Ljava/lang/String;)V",  ps_print_str },
+    { "java/io/PrintStream", "print",   "(C)V",                   ps_print_char },
+    { "java/io/PrintStream", "print",   "(I)V",                   ps_print_int },
+    { "java/io/PrintStream", "write",   "(I)V",                   ps_write_int },
+    { "java/io/PrintStream", "flush",   "()V",                    ps_flush },
+    { "java/io/PrintStream", "close",   "()V",                    ps_close },
+
+    { "java/lang/Runtime", "gc",          "()V",  runtime_gc },
+    { "java/lang/Runtime", "freeMemory",  "()J",  runtime_freeMemory },
+    { "java/lang/Runtime", "totalMemory", "()J",  runtime_totalMemory },
+    { "java/lang/Runtime", "exit",        "(I)V", runtime_exit },
+    { "java/lang/Runtime", "getRuntime",  "()Ljava/lang/Runtime;", runtime_getRuntime }
+};
+const int nj_lib_system_count =
+    (int)(sizeof(nj_lib_system_table) / sizeof(nj_lib_system_table[0]));
