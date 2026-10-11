@@ -140,6 +140,21 @@ unambiguous. Two independent sessions on the same binary measured 0.186 s and
 on this machine. (Higher than the 549-590 M/s quoted earlier, because CPU time
 excludes the interference that wall clock was charging for.)
 
+## Replicated dispatch: 13 opcodes, about 10%
+
+    converted    0.189 / 0.183 s      (interleaved A/B, same session)
+    unconverted  0.204 / 0.205 s
+    gain         ~10%
+
+The baseline reads 0.204 s here and 0.185 s three rounds ago for the SAME code.
+That drift is the reason the A/B is interleaved and the reason an old number is
+not a baseline.
+
+Converted so far: `bipush sipush iload iand ixor goto` (6) plus
+`iconst_0..5 iload_0..3 lload_0..3 istore_0..3` (4 groups covering 7 more) and
+`iadd imul lcmp`.  That is **55% of the instructions the benchmark executes**,
+and the bytecode total has stayed exactly 112,117,067 after every one.
+
 ## Replicated dispatch: first batch converted, measured, kept
 
 **3.8% faster from converting 6 of 201 opcodes.**  Interleaved A/B, same session:

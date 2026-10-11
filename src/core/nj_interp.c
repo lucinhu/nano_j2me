@@ -401,12 +401,12 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         &&L_slow,
         &&L_slow,
         &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
+        &&L_0x03,
+        &&L_0x03,
+        &&L_0x03,
+        &&L_0x03,
+        &&L_0x03,
+        &&L_0x03,
         &&L_slow,
         &&L_slow,
         &&L_slow,
@@ -424,6 +424,14 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         &&L_slow,
         &&L_slow,
         &&L_slow,
+        &&L_0x1a,
+        &&L_0x1a,
+        &&L_0x1a,
+        &&L_0x1a,
+        &&L_0x1e,
+        &&L_0x1e,
+        &&L_0x1e,
+        &&L_0x1e,
         &&L_slow,
         &&L_slow,
         &&L_slow,
@@ -449,6 +457,10 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         &&L_slow,
         &&L_slow,
         &&L_slow,
+        &&L_0x3b,
+        &&L_0x3b,
+        &&L_0x3b,
+        &&L_0x3b,
         &&L_slow,
         &&L_slow,
         &&L_slow,
@@ -482,6 +494,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         &&L_slow,
         &&L_slow,
         &&L_slow,
+        &&L_0x60,
         &&L_slow,
         &&L_slow,
         &&L_slow,
@@ -489,20 +502,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         &&L_slow,
         &&L_slow,
         &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
+        &&L_0x68,
         &&L_slow,
         &&L_slow,
         &&L_slow,
@@ -546,7 +546,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         &&L_slow,
         &&L_slow,
         &&L_slow,
-        &&L_slow,
+        &&L_0x94,
         &&L_slow,
         &&L_slow,
         &&L_slow,
@@ -704,9 +704,9 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         case 0x00: break;                                  /* nop */
         case 0x01: sp->r = NULL; sp++; break;              /* aconst_null */
         case 0x02: sp->i = -1; sp++; break;                /* iconst_m1 */
-        case 0x03: case 0x04: case 0x05:
+        L_0x03: case 0x03: case 0x04: case 0x05:
         case 0x06: case 0x07: case 0x08:                   /* iconst_0..5 */
-            sp->i = (nj_s4)op - 3; sp++; break;
+            sp->i = (nj_s4)op - 3; sp++; DISPATCH();
         case 0x09: PUSH_W(0); break;                       /* lconst_0 */
         case 0x0a: PUSH_W(1); break;                       /* lconst_1 */
         case 0x0b: sp->f = 0.0f; sp++; break;
@@ -751,10 +751,10 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         case 0x17: { nj_u2 i = (nj_u2)U1(); sp->bits = locals[i].bits; sp++; break; }
         case 0x18: { nj_u2 i = (nj_u2)U1(); sp[0] = locals[i]; sp[1].bits=0u; sp+=2; break; }
         case 0x19: { nj_u2 i = (nj_u2)U1(); sp->r = locals[i].r; sp++; break; }
-        case 0x1a: case 0x1b: case 0x1c: case 0x1d:        /* iload_0..3 */
-            sp->bits = locals[op - 0x1a].bits; sp++; break;
-        case 0x1e: case 0x1f: case 0x20: case 0x21:        /* lload_0..3 */
-            sp[0] = locals[op - 0x1e]; sp[1].bits = 0u; sp += 2; break;
+        L_0x1a: case 0x1a: case 0x1b: case 0x1c: case 0x1d:  /* iload_0..3 */
+            sp->bits = locals[op - 0x1a].bits; sp++; DISPATCH();
+        L_0x1e: case 0x1e: case 0x1f: case 0x20: case 0x21:  /* lload_0..3 */
+            sp[0] = locals[op - 0x1e]; sp[1].bits = 0u; sp += 2; DISPATCH();
         case 0x22: case 0x23: case 0x24: case 0x25:        /* fload_0..3 */
             sp->bits = locals[op - 0x22].bits; sp++; break;
         case 0x26: case 0x27: case 0x28: case 0x29:        /* dload_0..3 */
@@ -800,8 +800,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         case 0x39: { nj_u2 i = (nj_u2)U1(); sp -= 2; locals[i] = sp[0];
                      locals[i + 1u].bits = 0u; break; }
         case 0x3a: { nj_u2 i = (nj_u2)U1(); locals[i].r = (--sp)->r; break; }
-        case 0x3b: case 0x3c: case 0x3d: case 0x3e:        /* istore_0..3 */
-            locals[op - 0x3b].bits = (--sp)->bits; break;
+        L_0x3b: case 0x3b: case 0x3c: case 0x3d: case 0x3e:  /* istore_0..3 */
+            locals[op - 0x3b].bits = (--sp)->bits; DISPATCH();
         case 0x3f: case 0x40: case 0x41: case 0x42: {      /* lstore_0..3 */
             nj_u2 i = (nj_u2)(op - 0x3f);
             sp -= 2; locals[i] = sp[0]; locals[i + 1u].bits = 0u; break; }
@@ -905,8 +905,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         case 0x5f: { nj_value t = sp[-1]; sp[-1] = sp[-2]; sp[-2] = t; break; }
 
         /* ================= arithmetic ================= */
-        case 0x60: { nj_s4 b = (--sp)->i, a = (--sp)->i;
-                     sp->i = (nj_s4)((nj_u4)a + (nj_u4)b); sp++; break; }
+        L_0x60: case 0x60: { nj_s4 b = (--sp)->i, a = (--sp)->i;
+                     sp->i = (nj_s4)((nj_u4)a + (nj_u4)b); sp++; DISPATCH(); }
         case 0x61: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
                      sp[0].j = (nj_s8)((nj_u8)sp[0].j + (nj_u8)b);
                      sp[1].bits = 0u; sp += 2; break; }
@@ -929,8 +929,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                      memcpy(&a, &sp[0].j, 8u);
                      a -= b; memcpy(&sp[0].j, &a, 8u);
                      sp[1].bits = 0u; sp += 2; break; }
-        case 0x68: { nj_s4 b = (--sp)->i, a = (--sp)->i;
-                     sp->i = (nj_s4)((nj_u4)a * (nj_u4)b); sp++; break; }
+        L_0x68: case 0x68: { nj_s4 b = (--sp)->i, a = (--sp)->i;
+                     sp->i = (nj_s4)((nj_u4)a * (nj_u4)b); sp++; DISPATCH(); }
         case 0x69: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
                      sp[0].j = (nj_s8)((nj_u8)sp[0].j * (nj_u8)b);
                      sp[1].bits = 0u; sp += 2; break; }
@@ -1043,8 +1043,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         case 0x93: sp[-1].i = (nj_s4)(nj_s2)sp[-1].i; break;   /* i2s */
 
         /* ================= comparisons ================= */
-        case 0x94: { nj_s8 b, a; sp -= 2; b = sp[0].j; sp -= 2; a = sp[0].j;
-                     sp->i = (a > b) ? 1 : ((a == b) ? 0 : -1); sp++; break; }
+        L_0x94: case 0x94: { nj_s8 b, a; sp -= 2; b = sp[0].j; sp -= 2; a = sp[0].j;
+                     sp->i = (a > b) ? 1 : ((a == b) ? 0 : -1); sp++; DISPATCH(); }
         case 0x95: case 0x96: {                            /* fcmpl / fcmpg */
             float b = (--sp)->f, a = (--sp)->f;
             if (a > b) sp->i = 1;
