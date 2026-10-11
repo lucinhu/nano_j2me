@@ -150,10 +150,38 @@ static void w_r(nj_vm *vm, nj_ref o, const char *name, const char *desc,
     }
 }
 
+/*
+ * Control fields are looked up on the CONTROL's class, not on Player.
+ *
+ * The r_r/w_r helpers above are hardcoded to NJ_C_PLAYER because almost every
+ * field here belongs to a Player - but cOwner does not, and using them for it
+ * found nothing and wrote nowhere.  The symptom was a setToneSequence() that
+ * appeared to succeed and a getToneSequence() that returned null, which reads
+ * like a broken control rather than a wrong field lookup.
+ */
+static nj_ref ctl_get(nj_vm *vm, nj_ref ctl, const char *name, const char *desc)
+{
+    nj_field *f;
+    if (!ctl || !ctl->cls) {
+        return NULL;
+    }
+    f = nj_field_lookup(vm, ctl->cls->name, name, desc, 0);
+    return f ? nj_field_read_ref(vm, ctl, f) : NULL;
+}
+
+static void ctl_put(nj_vm *vm, nj_ref ctl, const char *cls, const char *name,
+                    const char *desc, nj_ref v)
+{
+    nj_field *f = nj_field_lookup(vm, cls, name, desc, 0);
+    if (f) {
+        nj_field_write_ref(vm, ctl, f, v);
+    }
+}
+
 /* The Player a Control acts on. */
 static nj_ref ctl_owner(nj_vm *vm, nj_ref ctl)
 {
-    return r_r(vm, ctl, F_C_OWNER, "L" NJ_C_PLAYER ";");
+    return ctl_get(vm, ctl, F_C_OWNER, "L" NJ_C_PLAYER ";");
 }
 
 /* java.util.Vector, through the usual virtual dispatch. */
@@ -640,7 +668,25 @@ NJFN(media_createPlayer_stream)
         return nj_throw(vm, NJ_C_MEXC,
                         "not a PCM WAV" NJ_MEXC_DATA);
     }
-    w_r(vm, p, F_P_DATA, "[B", data);
+    /*
+     * Copy out JUST the data chunk.
+     *
+     * Storing the whole file and pushing from offset 0 plays the RIFF header as
+     * audio: 8864 bytes at 16-bit mono is 4432 frames where the file holds
+     * 4410, i.e. 22 frames of header noise, and the reported duration is wrong
+     * by the same amount.  Slicing here means pcm_push() needs no idea what a
+     * chunk is.
+     */
+    {
+        nj_u4 off = (nj_u4)(wi.data - barray_bytes(data));
+        nj_u4 want = wi.frames * (nj_u4)wi.channels * (nj_u4)(wi.bits / 8);
+        nj_ref pcm = nj_byte_array_new(vm, want);
+        if (!pcm) {
+            return NJ_ERR;
+        }
+        memcpy(pcm->u.bytes, barray_bytes(data) + off, (size_t)want);
+        w_r(vm, p, F_P_DATA, "[B", pcm);
+    }
     w_i(vm, p, F_P_RATE, wi.rate);
     w_i(vm, p, F_P_CHAN, wi.channels);
     w_i(vm, p, F_P_FRAMES, (nj_s4)wi.frames);
@@ -990,7 +1036,7 @@ NJFN(player_getControl)
         if (!ctl) {
             return NJ_ERR;
         }
-        w_r(vm, ctl, F_C_OWNER, "L" NJ_C_PLAYER ";", self);
+        ctl_put(vm, ctl, cls, F_C_OWNER, "L" NJ_C_PLAYER ";", self);
         ret->r = ctl;
     }
     return NJ_OK;

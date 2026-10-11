@@ -375,6 +375,14 @@ done:
         vm = NULL;
     }
     blob_free(&blob);
-    nj_port_shutdown(&port);
+    /*
+     * The port is NOT shut down here.
+     *
+     * nj_run() copies the caller's nj_port and does not own it, so tearing it
+     * down means the caller's state is freed the moment the run ends - which
+     * makes it impossible to ask a port what it observed during the run, and
+     * shows up as a use-after-free for anyone who tries.  The caller created
+     * the port; the caller shuts it down.
+     */
     return rc;
 }

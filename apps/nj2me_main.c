@@ -186,6 +186,9 @@ int main(int argc, char **argv)
 
     st = (nj_status)nj_run(&port, &opts);
 
+    /* nj_run() does not own the port, so shutting it down is the caller's job. */
+    nj_port_shutdown(&port);
+
     if (c.stats) {
         /* nj_run() printed the counters before tearing the VM down; say what
          * the host is being told so a script can check it without parsing. */

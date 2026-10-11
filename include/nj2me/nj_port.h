@@ -279,7 +279,9 @@ typedef struct nj_run_opts {
 /*
  * Run the emulator with the given port until the MIDlet exits.
  * Returns 0 on a clean MIDlet exit, negative nj_status on failure.
- * `port` is copied; it must stay valid for the duration of the call.
+ * `port` is COPIED and is not owned by this call: it is not shut down on the
+ * way out, so the caller can still ask it what it observed (an input queue, a
+ * frame count, a PCM device) and is responsible for nj_port_shutdown() itself.
  */
 int nj_run(const nj_port *port, const nj_run_opts *opts);
 

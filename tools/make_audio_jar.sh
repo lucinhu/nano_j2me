@@ -112,8 +112,10 @@ public class AudioDemo extends MIDlet implements PlayerListener {
                 w.realize();
                 w.prefetch();
                 w.start();
-                System.out.println("AUDIO wav=" + w.getDuration()
-                                   + " state=" + w.getState());
+                /* One value per line: the test's parser reads to end of line,
+                 * and a line with two facts in it silently yields one. */
+                System.out.println("AUDIO wav=" + w.getDuration());
+                System.out.println("AUDIO wavstate=" + w.getState());
                 w.deallocate();
                 w.close();
                 in.close();

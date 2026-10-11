@@ -278,6 +278,9 @@ if(NJ_BUILD_TESTS)
   add_custom_command(TARGET nj_fixtures POST_BUILD
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_game_jar.sh
     COMMENT "full-game MIDlet fixture")
+  add_custom_command(TARGET nj_fixtures POST_BUILD
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_audio_jar.sh
+    COMMENT "audio MIDlet fixture")
 
   # ---- helper: one test executable, linked against the runtime ----
   function(nj_add_test name source)
@@ -334,6 +337,11 @@ if(NJ_BUILD_TESTS)
     add_test(NAME test_gfx COMMAND test_gfx)
     set_tests_properties(test_gfx PROPERTIES
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  endif()
+
+  # ---- audio: what the MIDlet asked for AND what the port received ----
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audio.c)
+    nj_add_test(test_audio tests/test_audio.c ${NJ_FIXTURES}/audiodemo.jar)
   endif()
 
   # ---- end to end: run a whole MIDlet and assert on what it rendered ----

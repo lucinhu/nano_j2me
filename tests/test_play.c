@@ -157,6 +157,7 @@ int main(int argc, char **argv)
     opts.heap_bytes = 4u * 1024u * 1024u;
 
     rc = nj_run(&port, &opts);
+    nj_port_shutdown(&port);
 
     {
         /* Everything except the GAMEDEMO line is the runtime talking to
