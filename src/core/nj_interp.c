@@ -997,10 +997,43 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                                               target->desc);
                     }
                     if (!dm) {
-                        if ((target->flags & NJ_ACC_ABSTRACT) != 0u) {
-                            THROW("java/lang/AbstractMethodError", target->name);
+                        /*
+                         * Name the receiver class as well as the method.
+                         * "AbstractMethodError: paint" tells you nothing: the
+                         * declaration is on some superclass, the receiver is
+                         * the class that failed to override it, and which is
+                         * which is the whole diagnosis.
+                         */
+                        if (!vm->exception) {
+                            char mbuf[256];
+                            nj_u4 mn = 0u;
+                            const char *q = recv->cls->name;
+                            const char *w = " does not implement ";
+                            while (q && *q && mn + 1u < sizeof(mbuf)) {
+                                mbuf[mn++] = *q++;
+                            }
+                            while (*w && mn + 1u < sizeof(mbuf)) {
+                                mbuf[mn++] = *w++;
+                            }
+                            q = target->owner ? target->owner->name : "?";
+                            while (*q && *q && mn + 1u < sizeof(mbuf)) {
+                                mbuf[mn++] = *q++;
+                            }
+                            if (mn + 1u < sizeof(mbuf)) { mbuf[mn++] = '.'; }
+                            q = target->name;
+                            while (q && *q && mn + 1u < sizeof(mbuf)) {
+                                mbuf[mn++] = *q++;
+                            }
+                            mbuf[mn] = '\0';
+                            vm->exception_method = m;
+                            vm->exception_pc = op_pc;
+                            (void)nj_throw(vm,
+                                ((target->flags & NJ_ACC_ABSTRACT) != 0u)
+                                    ? "java/lang/AbstractMethodError"
+                                    : "java/lang/NoSuchMethodError",
+                                mbuf);
                         }
-                        THROW("java/lang/NoSuchMethodError", target->name);
+                        goto do_unwind;
                     }
                     e->recv_cls = recv->cls;
                     e->ic_target = dm;
@@ -1010,7 +1043,33 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                  * native has code == NULL too, but interp_invoke binds and
                  * runs it (and reports UnsatisfiedLinkError if unbound). */
                 if (!target->code && (target->flags & NJ_ACC_ABSTRACT) != 0u) {
-                    THROW("java/lang/AbstractMethodError", target->name);
+                    if (!vm->exception) {
+                        char mbuf[256];
+                        nj_u4 mn = 0u;
+                        const char *q = recv->cls->name;
+                        while (q && *q && mn + 1u < sizeof(mbuf)) {
+                            mbuf[mn++] = *q++;
+                        }
+                        q = " resolved to the abstract ";
+                        while (*q && mn + 1u < sizeof(mbuf)) {
+                            mbuf[mn++] = *q++;
+                        }
+                        q = target->owner ? target->owner->name : "?";
+                        while (*q && mn + 1u < sizeof(mbuf)) {
+                            mbuf[mn++] = *q++;
+                        }
+                        if (mn + 1u < sizeof(mbuf)) { mbuf[mn++] = '.'; }
+                        q = target->name;
+                        while (q && *q && mn + 1u < sizeof(mbuf)) {
+                            mbuf[mn++] = *q++;
+                        }
+                        mbuf[mn] = '\0';
+                        vm->exception_method = m;
+                        vm->exception_pc = op_pc;
+                        (void)nj_throw(vm, "java/lang/AbstractMethodError",
+                                       mbuf);
+                    }
+                    goto do_unwind;
                 }
             } else {
                 /* invokespecial / invokestatic: initialise the owner first */

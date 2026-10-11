@@ -1092,7 +1092,37 @@ static nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
         return st;
     }
 
-    st = nj_exec(vm, th, saved_frames);
+    /*
+     * Run to completion, absorbing scheduling quanta.
+     *
+     * nj_exec() returns NJ_ERR_YIELD when the thread has executed its quantum;
+     * that is normal, not a failure - and a C caller cannot be suspended and
+     * resumed the way a Java frame can, so the bridge has to keep going.  The
+     * frame was saved before the yield, so the next call resumes it exactly
+     * where it stopped.
+     *
+     * Treating NJ_ERR_YIELD as an error makes any Java method called from C
+     * that is longer than NJ_SCHED_QUANTUM bytecodes look like it failed.  A
+     * graphics-heavy Canvas.paint() is the obvious victim: the painter reports
+     * "paint() failed" and the screen never updates, with no exception set
+     * anywhere.
+     *
+     * NJ_ERR_TIMEOUT is different: it means a native blocked (Thread.sleep and
+     * friends) and the thread is no longer runnable, so spinning would hang.
+     */
+    for (;;) {
+        st = nj_exec(vm, th, saved_frames);
+        if (st == NJ_ERR_YIELD && th->state == NJ_THREAD_RUNNING &&
+            th->nframes > saved_frames) {
+            continue;   /* quantum expired mid-call: resume it */
+        }
+        break;
+    }
+    if (st == NJ_ERR_YIELD) {
+        /* The thread blocked inside the call.  Report it as such rather than
+         * as a generic failure. */
+        st = NJ_ERR_TIMEOUT;
+    }
 
     if (st == NJ_OK && ret) {
         *ret = th->ret_value;

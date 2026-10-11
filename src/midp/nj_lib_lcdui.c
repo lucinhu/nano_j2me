@@ -3942,19 +3942,29 @@ static int displayable_key(nj_vm *vm, nj_ref d, int action, int down)
  * what a device reports and what the MIDlet can actually catch.
  */
 static int canvas_call_abstract(nj_vm *vm, nj_ref canvas, const char *name,
-                                const char *desc, nj_value *a)
+                                const char *desc, nj_value *a, int *why)
 {
     nj_method *m;
+    nj_status st;
 
+    if (why) {
+        *why = 0;
+    }
     if (!canvas || !canvas->cls) {
+        if (why) { *why = 1; }
         return 0;
     }
     m = nj_method_lookup(canvas->cls, name, desc);
     if (m && !m->code && (m->flags & NJ_ACC_ABSTRACT) != 0u) {
         (void)nj_throw(vm, "java/lang/AbstractMethodError", name);
+        if (why) { *why = 2; }
         return 0;
     }
-    return nj_call(vm, canvas, NJ_C_CANVAS, name, desc, a, NULL) == NJ_OK;
+    st = nj_call(vm, canvas, NJ_C_CANVAS, name, desc, a, NULL);
+    if (why) {
+        *why = (st == NJ_OK) ? 0 : (int)st;
+    }
+    return st == NJ_OK;
 }
 
 static int canvas_call(nj_vm *vm, nj_ref canvas, const char *name, int argc,
@@ -3968,7 +3978,7 @@ static int canvas_call(nj_vm *vm, nj_ref canvas, const char *name, int argc,
     case 0:  desc = "()V"; break;
     default: return 0;
     }
-    return canvas_call_abstract(vm, canvas, name, desc, a);
+    return canvas_call_abstract(vm, canvas, name, desc, a, NULL);
 }
 
 /* paint() takes a Graphics, so it needs its own descriptor. */
@@ -3976,8 +3986,9 @@ static int canvas_call_paint(nj_vm *vm, nj_ref canvas, nj_ref g)
 {
     nj_value a[1];
     a[0].r = g;
+    int why = 0;
     return canvas_call_abstract(vm, canvas, "paint",
-                                "(L" NJ_C_GRAPHICS ";)V", a);
+                                "(L" NJ_C_GRAPHICS ";)V", a, &why);
 }
 
 static int canvas_visible(nj_vm *vm, nj_ref canvas)
@@ -4186,12 +4197,27 @@ nj_status nj_midp_paint(nj_vm *vm)
         (void)canvas_visible(vm, d);
         if (!canvas_call_paint(vm, d, g)) {
             /*
-             * Leave the exception pending: paint() is abstract on Canvas, so
-             * "method not implemented" is exactly what the caller must see.
-             * Nothing is blitted for this frame.
+             * Leave a real exception pending if there is one: paint() is
+             * abstract on Canvas, so "method not implemented" is exactly what
+             * the caller must see.
+             *
+             * If there is NO exception, do not invent one.  The old code
+             * fabricated "AbstractMethodError: paint" here for any failure,
+             * including ones that have nothing to do with abstractness - which
+             * sent a whole debugging session after the wrong bug.  Say what is
+             * actually known instead.
              */
             if (!vm->exception) {
-                (void)nj_throw(vm, "java/lang/AbstractMethodError", "paint");
+                char mbuf[160];
+                nj_u4 n = 0u;
+                const char *q = "paint() on ";
+                const char *c = (d && d->cls) ? d->cls->name : "?";
+                const char *t = " failed without raising an exception";
+                while (*q && n + 1u < sizeof(mbuf)) { mbuf[n++] = *q++; }
+                while (*c && n + 1u < sizeof(mbuf)) { mbuf[n++] = *c++; }
+                while (*t && n + 1u < sizeof(mbuf)) { mbuf[n++] = *t++; }
+                mbuf[n] = '\0';
+                (void)nj_throw(vm, "java/lang/RuntimeException", mbuf);
             }
             return NJ_ERR;
         }

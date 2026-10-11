@@ -37,9 +37,15 @@ version 46, with the legacy jsr/ret finally blocks a 2004 toolchain emitted.
 
 | Title | Class | Result |
 |---|---|---|
-| Tumbleweed (`jump.jar`) | `net.frog_parrot.jump.Jump` | **plays** at 176x208 or larger: scrolling ground, an animated sprite, a live score and countdown (see [docs/images/tumbleweed.png](images/tumbleweed.png)) |
-| Maze (`maze.jar`) | 4 classes | parses, links, starts |
-| Hello (`hello.jar`) | 2 classes | parses, links, starts |
+| Tumbleweed (`jump.jar`) | `net.frog_parrot.jump.Jump` | **plays** at 176x208 or larger: scrolling ground, an animated sprite, a live score and a countdown - [screenshot](images/tumbleweed.png) |
+| Maze (`maze.jar`) | `net.frog_parrot.maze.Maze` | **runs**: generates and draws a maze with the player marker - [screenshot](images/maze.png) |
+| Hello (`hello.jar`) | `net.frog_parrot.hello.Hello` | **runs**: draws "Hello World!" (a legitimately static screen) |
+
+`tools/run_game_corpus.sh` is the gate over all of them: it fails on "not a
+MIDlet suite", "could not start", an uncaught exception, "nothing ever
+presented" or a single flat colour, and reports - without failing - whether the
+picture changes, because a title is allowed to be static. Current result: 3
+passed, 0 failed.
 
 All three parse and link with zero failures. Tumbleweed is the demanding one: it
 uses `GameCanvas`, `LayerManager`, `Sprite` with frame animation, `TiledLayer`,
