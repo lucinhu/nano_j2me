@@ -222,17 +222,81 @@ static void bare_present(void *ud, int x, int y, int w, int h)
     s->now_ms += 16u;         /* a 60 Hz panel */
 }
 
+/*
+ * UART output, so the image can be RUN and not merely linked.
+ *
+ * Both ESP32-S3 (Xtensa) and ESP32-C3 (RISC-V) put UART0 at 0x60000000 with the
+ * transmit FIFO in the first word, which is all this needs - no driver, no
+ * header, no SDK.  Define NJ_BARE_UART=0 to compile it out for a target whose
+ * console is somewhere else (SWO, semihosting, a memory ring the debugger
+ * reads).
+ *
+ * QEMU's esp32s3 and esp32c3 machines model this FIFO, so the firmware's own
+ * output appears on the emulated serial line - which is what turns "it links
+ * for the target" into "it runs on the target".
+ */
+#ifndef NJ_BARE_UART
+#  define NJ_BARE_UART 1
+#endif
+
+#if NJ_BARE_UART
+#  define BARE_UART0_FIFO (*(volatile unsigned int *)0x60000000u)
+static void bare_putc(char c)
+{
+    int spin = 0;
+    BARE_UART0_FIFO = (unsigned int)(unsigned char)c;
+    while (spin++ < 1000) { }        /* let the FIFO drain a little */
+}
+#else
+static void bare_putc(char c) { (void)c; }
+#endif
+
+static void bare_puts(const char *s)
+{
+    while (*s) {
+        if (*s == '\n') { bare_putc('\r'); }
+        bare_putc(*s++);
+    }
+}
+
 static void bare_log(void *ud, int level, const char *msg)
 {
-    (void)ud; (void)level; (void)msg;
-    /* A real port writes to a UART.  Here it is deliberately silent: this
-     * image exists to be linked and sized, and a UART stub would be a
-     * dependency on a UART. */
+    (void)ud;
+    if (level <= 1) { bare_puts("nj2me: "); }
+    bare_puts(msg);
+    bare_putc('\n');
 }
 
 /* Frames presented so far.  main() cannot see bare_state, and an embedder
  * reading the port's own counters is the normal shape anyway. */
 int nj_port_bare_frames(const void *ud) { return ((const bare_state *)ud)->frames; }
+
+/*
+ * One line saying what happened, on the console.  A firmware test with no
+ * output is indistinguishable from a firmware that hung, and "did it finish"
+ * is the only question QEMU can answer for us.
+ */
+void nj_port_bare_report(int rc, int frames)
+{
+    char buf[64];
+    int n = 0;
+    const char *p = "NJ2ME DONE rc=";
+    const char *q;
+    while (*p) { buf[n++] = *p++; }
+    buf[n++] = (char)('0' + (rc < 0 ? 0 : rc % 10));
+    p = " frames=";
+    while (*p) { buf[n++] = *p++; }
+    {
+        char tmp[12];
+        int k = 0;
+        if (frames == 0) { tmp[k++] = '0'; }
+        while (frames > 0) { tmp[k++] = (char)('0' + frames % 10); frames /= 10; }
+        while (k > 0) { buf[n++] = tmp[--k]; }
+    }
+    q = "\n";
+    while (*q) { buf[n++] = *q++; }
+    bare_puts(buf);
+}
 
 nj_status nj_port_bare(nj_port *out, bare_state *st, void *heap, nj_size heap_bytes)
 {

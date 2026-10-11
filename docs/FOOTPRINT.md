@@ -60,27 +60,38 @@ JPEG (2.2 KB of tables) and PNG (1.8 KB) are both small because they are
 arithmetic rather than table-driven - the JPEG IDCT is one 8x8 kernel, not the
 usual four.
 
-## A real firmware image, linked, for a real 32-bit target
+## A real firmware image, linked, for the real targets
 
 The x86 numbers above are useful for comparing modules. The ones that matter for
-an MCU come from actually cross-compiling and linking:
+an MCU come from cross-compiling and linking for the actual part:
 
-    tools/make_bare_firmware.sh          # needs arm-none-eabi-gcc
+    tools/make_bare_firmware.sh --target xtensa     # ESP32-S3 (Xtensa LX7)
+    tools/make_bare_firmware.sh --target riscv32    # ESP32-C3/C6/H2 (RV32IMC)
 
-This builds a complete firmware ELF for a **Cortex-M4** with `-nostdlib`: the
-whole runtime, a bare-metal `nj_port` (`tests/embedded/nj_port_bare.c`), a small
-implementation of the maths functions it needs, and `bench.jar` embedded as a C
-array. It links, which is the point - if anything in `src/` reached for a hosted
-C library, this is where it would fail.
+The two ESP32 families are **different architectures** and need different
+toolchains; the script finds the ESP-IDF ones under `~/.espressif/tools`
+automatically.
 
-    text     data      bss
-  244550        0  2162688
+Each run builds a complete firmware ELF with `-nostdlib`: the whole runtime, a
+bare-metal `nj_port` (`tests/embedded/nj_port_bare.c`), a small implementation of
+the maths functions it needs, and `bench.jar` embedded as a C array. It links,
+which is the point - if anything in `src/` reached for a hosted C library, this
+is where it would fail.
 
-| | bytes | what it is |
-|---|---|---|
-| `.text` (incl. rodata) | 244,550 | flash, 239 KiB |
-| `.data` | **0** | nothing to initialise at startup |
-| `.bss` | 2,162,688 | **the application's**, not the runtime's |
+| Target | Architecture | `.text` | `.data` | `.bss` |
+|---|---|---|---|---|
+| **ESP32-S3** | Xtensa LX7 | 251,413 | **0** | 2,162,688 |
+| **ESP32-C3/C6** | RISC-V RV32IMC | 303,582 | **0** | 2,162,688 |
+| Cortex-M4 | ARMv7E-M | 244,550 | **0** | 2,162,688 |
+
+`.text` includes `.rodata`, and is flash. The `.bss` figure is identical in all
+three because it is **the application's**, not the runtime's: 2 MB of Java heap
+plus 64 KB of port state, declared in the generated `main.c`. **The runtime's own
+contribution to RAM is zero on every one of them** - measured by a real linker
+for a real architecture, not asserted.
+
+The RISC-V build is 21% larger than the Xtensa one; both are the same C at -Os,
+so that is the compilers, not the code.
 
 The `.bss` figure is 2 MB of Java heap plus 64 KB of port state, both declared by
 the application in `main.c`. **The runtime's own contribution to RAM is zero** -
@@ -94,6 +105,36 @@ Two things this image demonstrates that the x86 report cannot:
   is a desktop convenience that reads files and calls `malloc`.
 * `-nostdlib` is a real constraint, and satisfying it found two genuine bugs
   (see below).
+
+## Running it, not just linking it
+
+`~/.espressif/tools` also provides the ESP-IDF QEMU builds, which model both
+parts:
+
+    qemu-system-xtensa  -machine esp32s3  ...   # Espressif ESP32S3 machine
+    qemu-system-riscv32 -machine esp32c3  ...   # Espressif ESP32-C3 machine
+
+`tests/embedded/nj_port_bare.c` writes its log to the UART0 FIFO at
+`0x60000000` - the same address on both parts - so the image reports for itself
+rather than depending on a debugger:
+
+    NJ2ME DONE rc=0 frames=600
+
+**Status: not yet running under QEMU.** `-kernel fw.elf` loads the image and the
+machine starts, but an ESP32 does not begin at the ELF entry point: the mask ROM
+runs first and expects a bootloader at the start of flash, so `main` is never
+reached and nothing is printed. Two ways forward, both contained:
+
+1. Build a flash image (bootloader + partition table + app) and boot it with
+   `-drive file=flash.bin,if=mtd,format=raw`. ESP-IDF's `idf.py qemu` does
+   exactly this, and the IDF tree at `~/.espressif/v5.5.4/esp-idf` is present, so
+   this is a matter of wrapping the runtime as an IDF component.
+2. Use QEMU's `boot=` machine option, which the esp32s3 machine exposes, to skip
+   the ROM.
+
+Until one of those is done, the claim this project can make is **"builds, links
+and is sized for the real architecture"**, not "runs on it". The image is one
+step away, and the step is a bootloader - not a gap in the runtime.
 
 ## Known gap: NJ_ENABLE_FLOAT does nothing
 

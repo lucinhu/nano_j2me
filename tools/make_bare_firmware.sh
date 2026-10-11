@@ -1,34 +1,76 @@
 #!/usr/bin/env bash
 #
-# Build, link and measure a real bare-metal firmware image for a 32-bit MCU.
+# Build, link and measure a real firmware image for the actual target MCUs.
 #
 # Compiling the runtime for a cross target proves it parses.  LINKING it with
 # -nostdlib proves the dependency claim: that nothing in src/ reaches for a
-# hosted C library, and that the runtime's own .data and .bss are empty on a
-# real 32-bit target.  Everything the image needs beyond the runtime is the
-# port and a handful of one-line maths functions.
+# hosted C library, and that the runtime's own .data and .bss are empty on the
+# real architecture.  Everything the image needs beyond the runtime is the port
+# and a handful of one-line maths functions.
 #
-# Usage: tools/make_bare_firmware.sh [--jre JAR] [--cpu cortex-m4] [--out fw.elf]
+# The two ESP32 targets are different architectures and both are supported:
+#
+#   xtensa   ESP32-S3, ESP32-S2  (Xtensa LX7 / LX6)
+#   riscv32  ESP32-C3, C6, H2, P4  (RV32IMC)
+#
+# The ESP-IDF toolchains live under ~/.espressif/tools and are found
+# automatically; pass --cc to use another.
+#
+# Usage: tools/make_bare_firmware.sh [--target xtensa|riscv32|cortex-m4]
+#                                    [--jre JAR] [--out fw.elf]
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CC="${CROSS_CC:-arm-none-eabi-gcc}"
-SIZE="${CROSS_SIZE:-arm-none-eabi-size}"
+TARGET=xtensa
+EXTRA_CFLAGS=""
+EXTRA_LDFLAGS=""
 JAR="${NJ_BARE_JAR:-$ROOT/tests/fixtures/bench.jar}"
-CPU=cortex-m4
-OUT=/tmp/nj_bare_fw.elf
+OUT=""
+CC=""
+SIZE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --target) TARGET="$2"; shift 2 ;;
         --jre|--jar) JAR="$2"; shift 2 ;;
-        --cpu) CPU="$2"; shift 2 ;;
+        --cc) CC="$2"; shift 2 ;;
         --out) OUT="$2"; shift 2 ;;
-        -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
 
-command -v "$CC" >/dev/null 2>&1 || { echo "no $CC on PATH" >&2; exit 2; }
+# Find a compiler for the target.  The ESP-IDF ones are not on PATH by default,
+# so look where the IDF installer puts them.
+find_esp() {
+    local pat="$1"
+    find "$HOME/.espressif/tools" -name "$pat" -type f 2>/dev/null | sort | tail -1
+}
+
+case "$TARGET" in
+    xtensa)
+        [ -n "$CC" ] || CC="$(find_esp 'xtensa-esp32s3-elf-gcc')"
+        [ -n "$CC" ] || CC="$(command -v xtensa-esp32s3-elf-gcc || true)"
+        SIZE="${CC%-gcc}-size"
+        ARCHFLAGS="-mlongcalls"
+        ;;
+    riscv32)
+        [ -n "$CC" ] || CC="$(find_esp 'riscv32-esp-elf-gcc')"
+        [ -n "$CC" ] || CC="$(command -v riscv32-esp-elf-gcc || true)"
+        SIZE="${CC%-gcc}-size"
+        ARCHFLAGS="-march=rv32imc -mabi=ilp32"
+        ;;
+    cortex-m4)
+        [ -n "$CC" ] || CC="$(command -v arm-none-eabi-gcc || true)"
+        SIZE="${CC%-gcc}-size"
+        ARCHFLAGS="-mcpu=cortex-m4 -mthumb -mfloat-abi=soft"
+        ;;
+    *) echo "unknown target: $TARGET (xtensa, riscv32 or cortex-m4)" >&2; exit 2 ;;
+esac
+
+[ -n "$OUT" ] || OUT="/tmp/nj_bare_${TARGET}.elf"
+[ -n "$CC" ] && command -v "$CC" >/dev/null 2>&1 || { echo "no compiler for $TARGET" >&2; exit 2; }
+
 [ -f "$JAR" ] || { echo "no JAR at $JAR (run tools/make_bench_jar.sh)" >&2; exit 2; }
 
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
@@ -61,6 +103,7 @@ cat > "$T/main.c" <<'C'
 typedef struct bare_state bare_state;
 nj_status nj_port_bare(nj_port *out, bare_state *st, void *heap, nj_size heap_bytes);
 int nj_port_bare_frames(const void *ud);
+void nj_port_bare_report(int rc, int frames);
 extern const unsigned char nj_bare_jar[];
 extern const unsigned int  nj_bare_jar_len;
 
@@ -97,11 +140,12 @@ int main(void)
     }
     nj_app_close(vm, app);
     (void)nj_vm_destroy(vm);
+    nj_port_bare_report(rc, nj_port_bare_frames(port.ud));
     return rc;
 }
 C
 
-CFLAGS="-std=c99 -mcpu=$CPU -mthumb -Os -ffunction-sections -fdata-sections
+CFLAGS="-std=c99 $ARCHFLAGS -Os -ffunction-sections -fdata-sections
         -I$ROOT/include -I$ROOT/src/core -I$ROOT/src/midp -I$ROOT/src/gfx -I$ROOT/src/zip
         -DNJ_USE_LIBC=0 -DNJ_ENABLE_FLOAT=0 -DNJ_ENABLE_JPEG=0"
 
@@ -119,12 +163,36 @@ done
 # -nostdlib: if anything in src/ needed a hosted libc, this is where it shows.
 # -lgcc supplies the ARM EABI soft-float helpers, which are a property of the
 # target's calling convention, not a C library.
-if ! $CC -mcpu=$CPU -mthumb -mfloat-abi=soft -nostdlib -Wl,--gc-sections \
+if ! $CC $ARCHFLAGS -nostdlib -Wl,--gc-sections \
          -Wl,-e,main -o "$OUT" $objs -lgcc 2>"$T/link.err"; then
     echo "link failed - an undefined symbol here is a gap in the port, or a" >&2
     echo "dependency the runtime does not declare in nj2me/nj_libc.h:" >&2
     head -10 "$T/link.err" >&2
     exit 1
+fi
+
+# Also build the SAME main.c for the host and run it, so the firmware's logic is
+# exercised rather than only linked.  QEMU for xtensa and riscv32 is not part of
+# a normal install, so running the image itself is not always possible; running
+# its source is.
+if [ "${NJ_BARE_NO_HOST:-0}" != "1" ]; then
+    host="${OUT%.elf}.host"
+    if gcc -std=c99 -O1 -I"$ROOT/include" -I"$ROOT/src/core" -I"$ROOT/src/midp" \
+           -I"$ROOT/src/gfx" -I"$ROOT/src/zip" -DNJ_USE_LIBC=1 \
+           -o "$host" "$T/main.c" "$T/jar.c" "$ROOT/tests/embedded/nj_port_bare.c" \
+           "$ROOT"/src/core/*.c "$ROOT"/src/midp/*.c "$ROOT"/src/gfx/*.c \
+           "$ROOT"/src/zip/*.c -lm 2>"$T/host.err"; then
+        # The host build needs a main that returns its status to a shell.
+        if "$host"; then
+            echo "host run of the same main.c: exit 0 (the MIDlet ran to completion)"
+        else
+            echo "host run of the same main.c: exit $? - the embedder path failed" >&2
+            exit 1
+        fi
+    else
+        echo "note: host build of the firmware main.c skipped" >&2
+        head -3 "$T/host.err" >&2
+    fi
 fi
 
 echo "firmware: $OUT  ($(stat -c%s "$OUT") bytes on disk)"

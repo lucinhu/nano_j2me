@@ -25,6 +25,7 @@
 #  include <stdlib.h>
 #  include <stdio.h>
 #  include <math.h>
+#  include <ctype.h>
 #else
 #  include <stddef.h>   /* size_t, and nothing else */
 
