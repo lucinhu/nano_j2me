@@ -732,8 +732,40 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         case 0x0d: sp->f = 2.0f; sp++; break;
         case 0x0e: PUSH_W(0); break;                       /* dconst_0 */
         case 0x0f: PUSH_W(1); break;                       /* dconst_1 */
-        L_0x10: case 0x10: sp->i = S1(); sp++; DISPATCH();  /* bipush */
-        L_0x11: case 0x11: sp->i = S2(); sp++; DISPATCH();  /* sipush */
+        /* SUPERINSTRUCTION: push-constant followed by iand.  The benchmark's
+         * inner loop does it four times per iteration (sipush 255, sipush 511,
+         * bipush 127, ldc 65535 - every one followed by iand), and it is what a
+         * mask does in any game: clamp to a power of two minus one.
+         *
+         * FUSED AT DISPATCH TIME, NOT BY REWRITING THE BYTECODE.  Rewriting
+         * needs every branch target checked, because a jump landing on the
+         * second half of a pair would run it without the first - a small
+         * verifier's worth of work and a real hazard.  Peeking here has neither
+         * problem: pc advances normally, a branch onto either instruction still
+         * does the right thing, and the fused path's peak stack depth is the
+         * same as the unfused one, so stack_limit stays valid. */
+        L_0x10: case 0x10: {                               /* bipush [+ iand] */
+            nj_s4 v = S1();
+            if (pc < code_len && code[pc] == 0x7e) {
+                nj_s4 a;
+                pc++;
+                a = (--sp)->i;
+                sp->i = a & v;
+                sp++;
+                DISPATCH();
+            }
+            sp->i = v; sp++; DISPATCH(); }
+        L_0x11: case 0x11: {                               /* sipush [+ iand] */
+            nj_s4 v = S2();
+            if (pc < code_len && code[pc] == 0x7e) {
+                nj_s4 a;
+                pc++;
+                a = (--sp)->i;
+                sp->i = a & v;
+                sp++;
+                DISPATCH();
+            }
+            sp->i = v; sp++; DISPATCH(); }
         case 0x12: case 0x13: {                            /* ldc / ldc_w */
             nj_u2 idx = (op == 0x12) ? (nj_u2)U1() : U2();
             nj_value cst[2];

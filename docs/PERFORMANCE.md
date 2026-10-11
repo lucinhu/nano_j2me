@@ -140,6 +140,32 @@ unambiguous. Two independent sessions on the same binary measured 0.186 s and
 on this machine. (Higher than the 549-590 M/s quoted earlier, because CPU time
 excludes the interference that wall clock was charging for.)
 
+## Superinstruction: push-constant + iand, about 2.5-3%
+
+     fused      0.165 / 0.167 / 0.166 s     (min, three interleaved rounds)
+     unfused    0.169 / 0.172 / 0.170 s
+     gain       ~2.5-3%, and A won every round on both statistics
+
+The benchmark's inner loop masks four times per iteration - `sipush 255`,
+`sipush 511`, `bipush 127`, `ldc 65535`, every one followed by `iand` - and that
+is what a mask does in any game: clamp to a power of two minus one.  Fusing the
+pair saves one dispatch for about 5.7% of executed instructions, which is
+6,400,000 of the 112,117,067 in a run.
+
+**FUSED AT DISPATCH TIME, NOT BY REWRITING THE BYTECODE.**  Rewriting is the
+textbook version and it needs every branch target checked: a jump landing on the
+second half of a fused pair would run it without the first.  That is a small
+verifier's worth of work and a real correctness hazard.  Peeking at `code[pc]` in
+the handler has neither problem - pc advances normally, a branch onto either
+instruction still does the right thing, and the fused path's peak stack depth is
+the same as the unfused one, so `stack_limit` stays valid.
+
+**THE BYTECODE TOTAL IS NO LONGER A CORRECTNESS CHECK FOR THIS.**  It drops to
+105,717,067, because a fused pair executes two instructions and counts one.
+`BENCH sum=-136042548 s=5` is now the only instrument that proves behaviour on
+this benchmark, which is exactly the instrument whose absence let the shifted
+dispatch table survive several rounds.
+
 ## Replicated dispatch: measured again properly, about 8%
 
 The earlier "~10%" was measured with a dispatch table that turned out to be
