@@ -135,33 +135,55 @@ thread fix and the RMS fix the fixture now completes:
 `drawn=76800` is 240x320, i.e. every pixel of the off-screen image the game
 rendered into is non-background.
 
-# OPEN (next): the game's off-screen image never reaches the framebuffer
+# OPEN (next): the game's frame never reaches the framebuffer
 
-The MIDlet completes and its own render is correct, but the frames the headless
-port dumps are uniformly black, so the last hop - `GameCanvas.flushGraphics()`
-(or the runner's `nj_midp_paint`) into `nj_midp_screen(vm)` - is not landing.
+Status: unfixed, and narrowed.  The MIDlet itself is now correct - it runs all
+90 frames and reports `drawn=76800` (every pixel of its off-screen image
+differs from the background) - but the frames the headless port dumps are
+uniformly black, so the last hop into `nj_midp_screen(vm)` loses the picture.
 
-Where to look, in order:
+## Ruled out
 
-1. `gc_flush_region` / `gc_copy_region` in src/midp/nj_lib_game.c (~2657, 2793):
-   is the destination `nj_midp_screen(vm)` the same surface the headless port
-   dumps, and is the copy actually performed for an equal-format pair?
-2. `nj_midp_paint`'s Canvas path in src/midp/nj_lib_lcdui.c: it runs every frame
-   *after* the game thread's flush, so if it clears the screen and then paints an
-   empty canvas buffer it would erase exactly what flushGraphics wrote.  The
-   fixture's `GameCanvas.paint` is documented as a no-op when the Graphics it is
-   handed already targets the buffer - check that this detection fires.
-3. Whether `GameCanvas.getGraphics()`'s buffer and the Canvas `cBuffer` field are
-   the same object; if `gc_buffer` creates a second one, the game draws into a
-   buffer that is never presented.
+- **The two buffer accessors agree.**  `canvas_ensure_buffer()` in
+  nj_lib_lcdui.c:2897 and `gc_buffer()` in nj_lib_game.c:2473 both read and
+  write `NJ_F_C_BUFFER` on `NJ_C_CANVAS`, and both size the buffer from
+  `nj_midp_screen(vm)` when the Canvas does not know its size yet.  They are
+  looking at the same Image, so "the game draws into an orphaned buffer" is not
+  the explanation.
+- **`nj_midp_paint()` is not obviously at fault.**  Its Form/List/TextBox/Alert
+  path is covered by tests/test_lcdui.c, which asserts the framebuffer ends up
+  with >= 3 distinct colours and a drawn title bar.  Only the GameCanvas branch
+  differs, and that branch does blit `buf -> scr`.
+- **`Graphics.drawImage` is fixed.**  The "negative source region" that used to
+  kill the game thread was `drawImage()` reading `drawRegion()`'s argument
+  list; the LCDUI module now has a separate native for it.
 
-Reproduce:
+## Where to look next
+
+The frame order per tick is: runner calls `nj_midp_paint()` (blits cBuffer to the
+screen), then the scheduler runs the game thread (which draws into cBuffer and
+calls `flushGraphics()`).
+
+1. Verify `gc_getGraphics()` really targets cBuffer: print the `nj_ref` returned
+   by `gc_buffer()` and the value of the `cBuffer` field at the moment
+   `nj_midp_paint()` runs.  If they differ, the game is drawing into a second
+   Image and the flush is the only thing that ever writes the screen.
+2. Check `flushGraphics()`'s `gc_flush_region()` destination.  If it copies into
+   a *stale* `nj_surface` captured before the display was initialised, it would
+   write somewhere harmless and the next `nj_midp_paint()` would overwrite the
+   screen with an empty buffer - which matches the observation exactly, and is
+   the single most likely cause.
+3. Confirm the Canvas `cWidth`/`cHeight` seen by `gc_flushGraphics()` are the
+   screen size (240x320) rather than 0, in which case the fallback path in
+   `gc_flushGraphics` is what runs.
+
+## Reproducer
 
     ./tools/make_game_jar.sh
     ./build/nj2me --port headless --heap 4 --dump-frames /tmp/f/ --dump-every 200 \
         tests/fixtures/gamedemo.jar
-    # then inspect /tmp/f/*.ppm: every frame is currently 000000
+    # expect: GAMEDEMO frames=90 checksum=... drawn=76800 status=[]
+    # actual: /tmp/f/*.ppm are all 000000
 
-The fixture's own report line is the signal to watch: it prints
-`drawn=<pixels differing from the background>` measured from its off-screen
-image, so `drawn=76800` with black frames localises the fault to the final blit.
+The fixture's report line is the discriminator: `drawn=76800` proves the game's
+own rendering is complete, so anything wrong after that is the final blit.
