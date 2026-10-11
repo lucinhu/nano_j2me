@@ -16,6 +16,7 @@ Default output: tests/fixtures/lcdui_rgb.png
 """
 import os
 import sys
+import zipfile
 
 try:
     from PIL import Image
@@ -60,7 +61,37 @@ def main():
                   for y in range(HEIGHT) for x in range(WIDTH)])
     aimg.save(alpha_out, "PNG", optimize=False)
 
+    # ------------------------------------------------------------------
+    # The resource JAR the LCDUI test opens as an application.
+    # ------------------------------------------------------------------
+    # test_lcdui.c does nj_app_open() on this and then exercises
+    # Image.createImage("/lcdui_rgb.png"), i.e. the resource-loading path.  It
+    # never instantiates a MIDlet - it drives the VM directly - so the JAR needs
+    # a parseable manifest and the resources, and no compiled class at all.
+    #
+    # It is built HERE, by the script the test's own error message names,
+    # because for a while it was not built by anything: the fixtures directory
+    # is generated and gitignored, so the JAR survived only as long as nobody
+    # cleaned it, and the test then failed with a message telling the reader to
+    # run this script - which did not produce the file.
+    jar_out = os.path.join(os.path.dirname(out), "lcdui_res.jar")
+    manifest = (
+        "Manifest-Version: 1.0\r\n"
+        "MIDlet-Name: lcdui fixture\r\n"
+        "MIDlet-Version: 1.0.0\r\n"
+        "MIDlet-Vendor: nano_j2me\r\n"
+        "MIDlet-1: LcduiFixture, /lcdui_rgb.png, LcduiFixture\r\n"
+        "\r\n"
+    )
+    with zipfile.ZipFile(jar_out, "w", zipfile.ZIP_DEFLATED) as z:
+        # The manifest must be the first entry for a reader that looks for it
+        # there rather than walking the central directory.
+        z.writestr("META-INF/MANIFEST.MF", manifest)
+        z.write(out, "lcdui_rgb.png")
+        z.write(alpha_out, "lcdui_rgb_alpha.png")
+
     print("wrote %s (%dx%d) and %s" % (out, WIDTH, HEIGHT, alpha_out))
+    print("wrote %s (%d bytes)" % (jar_out, os.path.getsize(jar_out)))
 
 
 if __name__ == "__main__":

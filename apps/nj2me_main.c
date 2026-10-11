@@ -57,6 +57,7 @@ typedef struct cli {
     unsigned    heap_mb;
     int         stats;
     int         run_frames;
+    const char *keys;
 } cli;
 
 static int parse_size(const char *s, int *w, int *h)
@@ -123,6 +124,8 @@ int main(int argc, char **argv)
             if (c.dump_every < 1) {
                 c.dump_every = 1;
             }
+        } else if (strcmp(a, "--keys") == 0 && i + 1 < argc) {
+            c.keys = argv[++i];
         } else if (strcmp(a, "--stats") == 0) {
             c.stats = 1;
         } else if (strcmp(a, "--run-frames") == 0 && i + 1 < argc) {
@@ -183,6 +186,7 @@ int main(int argc, char **argv)
     opts.argc = argc;
     opts.stats = c.stats;
     opts.run_frames = (nj_u4)(c.run_frames > 0 ? c.run_frames : 0);
+    opts.keys = c.keys;
 
     st = (nj_status)nj_run(&port, &opts);
 

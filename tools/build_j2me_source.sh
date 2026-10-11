@@ -35,12 +35,29 @@ fi
 
 DESC="$SRC/Application Descriptor"
 [ -f "$DESC" ] || DESC="$SRC/application descriptor"
-[ -f "$DESC" ] || { echo "no Application Descriptor under $SRC" >&2; exit 1; }
-MIDLET="$(sed -n 's/^MIDlet-1:[[:space:]]*//p' "$DESC" | head -1)"
-NAME="$(printf '%s' "$MIDLET" | cut -d, -f1 | tr -d ' ')"
-CLS="$(printf '%s' "$MIDLET" | cut -d, -f3 | tr -d ' ')"
-ICON="$(printf '%s' "$MIDLET" | cut -d, -f2 | tr -d ' ')"
-[ -n "$CLS" ] || { echo "no MIDlet-1 in $DESC" >&2; exit 1; }
+[ -f "$DESC" ] || DESC="$(find "$SRC" -maxdepth 2 -name '*.jad' 2>/dev/null | head -1)"
+
+if [ -n "$DESC" ] && [ -f "$DESC" ]; then
+    # The project states its own entry point; read it rather than guess.
+    MIDLET="$(sed -n 's/^MIDlet-1:[[:space:]]*//p' "$DESC" | head -1)"
+    NAME="$(printf '%s' "$MIDLET" | cut -d, -f1 | tr -d ' ')"
+    CLS="$(printf '%s' "$MIDLET" | cut -d, -f3 | tr -d ' ')"
+    ICON="$(printf '%s' "$MIDLET" | cut -d, -f2 | tr -d ' ')"
+else
+    # No descriptor.  Most small homebrew games have none, and refusing them
+    # would exclude exactly the projects that are easiest to check - so the
+    # entry point is DERIVED from the source instead: the one class that
+    # extends MIDlet, with its package read from its own declaration.
+    HOST="$(grep -rl 'extends MIDlet' "$SRC" --include=*.java 2>/dev/null | head -1)"
+    [ -n "$HOST" ] || { echo "no MIDlet class under $SRC" >&2; exit 1; }
+    PKG="$(sed -n 's/^[[:space:]]*package[[:space:]]\+\([A-Za-z0-9_.]*\)[[:space:]]*;.*/\1/p' "$HOST" | head -1)"
+    BASE="$(basename "$HOST" .java)"
+    CLS="${PKG:+$PKG.}$BASE"
+    NAME="$BASE"
+    ICON=""
+    echo "   no descriptor; derived $CLS from $HOST"
+fi
+[ -n "$CLS" ] || { echo "cannot determine the MIDlet class" >&2; exit 1; }
 echo "   $NAME ($CLS)"
 
 echo "== compiling"

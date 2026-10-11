@@ -73,8 +73,28 @@ fail=0
 printf '%-14s %-9s %-8s %-8s %-9s %s\n' TITLE SIZE FRAMES COLOURS CHANGED RESULT
 printf '%-14s %-9s %-8s %-8s %-9s %s\n' ----- ---- ------ ------- ------- ------
 
+# Keys a title needs to get past its splash screen, as "frame:key" pairs.
+#
+# A corpus that only watches can prove a title screen draws and nothing more,
+# which is a weak claim about a game whose first screen is a logo.  Each entry
+# here is a fact about that game, discovered by reading its source, not a
+# guess - most of these titles show nothing until something is pressed.
+#
+#   slimevolley  Command on the RIGHT SOFT KEY (StartCanvas.commandAction)
+#   bubblet      no splash screen: the grid is the first frame
+#   book4-7      single screen, no input needed
+declare -A KEYS=(
+    [slimevolley]="15:soft1,70:left,140:right"
+)
+keys_for() {
+    printf '%s' "${KEYS[$1]:-}"
+}
+
 for jar in "${JARS[@]}"; do
     title="$(basename "$jar" .jar)"
+    KARGS=()
+    KS="$(keys_for "$title")"
+    [ -n "$KS" ] && KARGS=(--keys "$KS")
     out="$(mktemp -d)"
     log="$out/log.txt"
 
@@ -83,6 +103,7 @@ for jar in "${JARS[@]}"; do
         : > "$log"
         timeout "$SECS" "$BIN" --port headless --heap 8 --size "$size" \
                 --fps "$FPS" --dump-frames "$out/" --dump-every 40 \
+                "${KARGS[@]}" \
                 "$jar" >"$log" 2>&1
         if grep -q "Screen too" "$log"; then
             rm -f "$out"/*.ppm

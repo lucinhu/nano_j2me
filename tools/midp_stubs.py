@@ -128,6 +128,8 @@ CLASSES = {
             "public static int getKeyCode(int)",
             "public static String getKeyName(int)",
             "public final boolean isDoubleBuffered()",
+            "public int getWidth()",
+            "public int getHeight()",
         ],
     },
     "javax/microedition/lcdui/Graphics": {
@@ -628,6 +630,20 @@ CLASSES = {
     "javax/microedition/media/MediaException": {
         "extends": "Exception",
         "methods": ["MediaException()", "MediaException(String)"],
+    },
+    # The Nokia full-screen Canvas: GameCanvas's predecessor, and what almost
+    # every pre-MIDP2 Series 40 game extends.  Without it the whole superclass
+    # chain breaks and every INHERITED method reports as missing, which reads
+    # like twenty missing APIs instead of one.
+    "com/nokia/mid/ui/FullCanvas": {
+        "extends": "javax.microedition.lcdui.Canvas", "abstract": True,
+        "constants": {"SOFT_KEY_LEFT": "-6", "SOFT_KEY_MIDDLE": "-7",
+                      "SOFT_KEY_RIGHT": "-8", "SOFT_KEY1": "-6",
+                      "SOFT_KEY2": "-7", "SOFT_KEY3": "-8",
+                      "KEY_SOFTKEY1": "-6", "KEY_SOFTKEY2": "-7",
+                      "KEY_SOFTKEY3": "-8"},
+        "methods": ["protected FullCanvas()",
+                    "protected FullCanvas(boolean)"],
     },
     "com/nokia/mid/ui/VirtualKeyboard": {
         "methods": ["public static void hideOpenKeypadCommand(boolean)",

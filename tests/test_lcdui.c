@@ -1975,10 +1975,22 @@ static void test_screen(nj_vm *vm)
                 OK(nj_midp_image_size(vm, buf, &bw, &bh) && bw == scr->width &&
                    bh == scr->height);
             }
-            /* Key events are dispatched to the abstract methods as well. */
+            /*
+             * Key events reach a bare Canvas and do NOTHING.
+             *
+             * This assertion used to require AbstractMethodError, on the belief
+             * that the input callbacks are abstract like paint().  They are
+             * not: MIDP declares only paint() abstract on Canvas, and the
+             * input callbacks are concrete with empty bodies.  The old
+             * expectation was not merely wrong in theory - it made two real
+             * third-party games fail with AbstractMethodError the first time a
+             * key was pressed, because a game is entitled to handle only the
+             * events it cares about and ignore the rest.
+             */
             OK(nj_midp_key(vm, NJ_KEY_UP, 1) == 1);
-            OK_MSG(exc_is(vm, "java/lang/AbstractMethodError"),
-                   "keyPressed on a bare Canvas should be abstract");
+            OK_MSG(pending_exc(vm) == NULL,
+                   "keyPressed on a bare Canvas should do nothing, got %s",
+                   pending_exc(vm) ? pending_exc(vm) : "(none)");
         }
     }
 

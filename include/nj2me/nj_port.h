@@ -160,6 +160,16 @@ typedef struct nj_port {
     /* Non-blocking input poll.  Returns 1 and fills `ev`, or 0 if empty. */
     int   (*input_poll)(void *ud, nj_event *ev);
 
+    /*
+     * Inject a synthetic event.  Returns 1 if taken, 0 if the port has no way
+     * to accept one (leave it NULL then).
+     *
+     * This is what lets a harness DRIVE a game instead of only watching it.
+     * Without it a corpus can prove a title screen draws and nothing more,
+     * which is a weak claim about a game whose first frame is a splash.
+     */
+    int   (*input_push)(void *ud, const nj_event *ev);
+
     /* ================= OPTIONAL (may be NULL) ================= */
 
     /*
@@ -291,6 +301,18 @@ typedef struct nj_run_opts {
     nj_size     heap_bytes;    /* 0 => NJ_MAX_HEAP                        */
     int         stats;         /* print execution counters before teardown */
     nj_u4       run_frames;    /* 0 => run until the MIDlet exits */
+
+    /*
+     * Keys to press, as "frame:keycode" pairs separated by commas - for
+     * example "20:53,40:53" presses key 53 at frame 20 and again at 40.
+     *
+     * A game that opens on a splash screen needs one of these before it will
+     * show anything worth looking at, and "the splash screen renders" is not
+     * evidence that a game runs.  A press is a key-down followed by a key-up
+     * one frame later, which is what a human does and what most games require:
+     * a key that goes down and never comes up leaves many of them stuck.
+     */
+    const char *keys;
 } nj_run_opts;
 
 /*

@@ -190,6 +190,130 @@ static const char *exc_message(nj_vm *vm, nj_ref exc, char *buf, nj_size cap)
     return buf;
 }
 
+/* ------------------------------------------------------------------ */
+/* Scripted keys                                                       */
+/* ------------------------------------------------------------------ */
+/*
+ * "frame:key,frame:key" with key names rather than numeric codes, because a
+ * script is meant to be read: "20:fire,40:fire" says what it does and "20:37"
+ * does not.
+ */
+#define NJ_KEY_SCRIPT_MAX 32
+
+typedef struct key_script {
+    nj_u8 frame[NJ_KEY_SCRIPT_MAX];
+    nj_u1 key[NJ_KEY_SCRIPT_MAX];
+    int   n;
+    int   next_down;      /* index of the next press to send   */
+    int   next_up;        /* index of the next release to send */
+} key_script;
+
+static int key_from_name(const char *p, int len, nj_u1 *out)
+{
+    static const struct { const char *name; nj_u1 k; } names[] = {
+        { "up", NJ_KEY_UP }, { "down", NJ_KEY_DOWN },
+        { "left", NJ_KEY_LEFT }, { "right", NJ_KEY_RIGHT },
+        { "fire", NJ_KEY_FIRE }, { "soft1", NJ_KEY_SOFT_LEFT },
+        { "soft2", NJ_KEY_SOFT_RIGHT }, { "soft3", NJ_KEY_SOFT_RIGHT },
+        { "clear", NJ_KEY_CLEAR },
+        { "a", NJ_KEY_GAME_A }, { "b", NJ_KEY_GAME_B },
+        { "c", NJ_KEY_GAME_C }, { "d", NJ_KEY_GAME_D },
+        { "star", NJ_KEY_STAR }, { "pound", NJ_KEY_POUND },
+        { "*", NJ_KEY_STAR }, { "#", NJ_KEY_POUND },
+        { NULL, 0 }
+    };
+    int i;
+
+    if (len == 1 && p[0] >= '0' && p[0] <= '9') {
+        *out = (nj_u1)(NJ_KEY_0 + (p[0] - '0'));
+        return 1;
+    }
+    for (i = 0; names[i].name; i++) {
+        int j = 0;
+        while (names[i].name[j] && j < len && names[i].name[j] == p[j]) {
+            j++;
+        }
+        if (j == len && names[i].name[j] == '\0') {
+            *out = names[i].k;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int key_script_parse(const char *spec, key_script *ks)
+{
+    const char *p = spec;
+
+    ks->n = 0;
+    ks->next_down = 0;
+    ks->next_up = 0;
+    if (!spec) {
+        return 0;
+    }
+    while (*p && ks->n < NJ_KEY_SCRIPT_MAX) {
+        nj_u8 frame = 0u;
+        int len = 0;
+        nj_u1 key = 0;
+
+        while (*p >= '0' && *p <= '9') {
+            frame = frame * 10u + (nj_u8)(*p - '0');
+            p++;
+        }
+        if (*p != ':') {
+            return -1;
+        }
+        p++;
+        while (p[len] && p[len] != ',') {
+            len++;
+        }
+        if (!key_from_name(p, len, &key)) {
+            return -1;
+        }
+        ks->frame[ks->n] = frame;
+        ks->key[ks->n] = key;
+        ks->n++;
+        p += len;
+        if (*p == ',') {
+            p++;
+        }
+    }
+    return ks->n;
+}
+
+/*
+ * Send whatever this frame is due.  A press is a key-down now and a key-up one
+ * frame later: a key that goes down and never comes up leaves many games stuck
+ * on it, and a press and release in the same frame is a key most of them never
+ * see at all.
+ */
+static void key_script_tick(const nj_port *port, key_script *ks, nj_u8 frame)
+{
+    nj_event ev;
+
+    if (!port->input_push || ks->n == 0) {
+        return;
+    }
+    while (ks->next_down < ks->n && ks->frame[ks->next_down] <= frame) {
+        memset(&ev, 0, sizeof(ev));
+        ev.type = (nj_u1)NJ_EV_KEY_DOWN;
+        ev.key = ks->key[ks->next_down];
+        (void)port->input_push(port->ud, &ev);
+        ks->next_down++;
+    }
+    while (ks->next_up < ks->next_down) {
+        /* Release one frame after the matching press. */
+        if (ks->frame[ks->next_up] + 1u > frame) {
+            break;
+        }
+        memset(&ev, 0, sizeof(ev));
+        ev.type = (nj_u1)NJ_EV_KEY_UP;
+        ev.key = ks->key[ks->next_up];
+        (void)port->input_push(port->ud, &ev);
+        ks->next_up++;
+    }
+}
+
 int nj_run(const nj_port *port_in, const nj_run_opts *opts)
 {
     nj_port port;
@@ -328,7 +452,27 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     /* ---- the frame loop ---- */
     {
         nj_status st;
-        if (opts->run_frames > 0u) {
+        key_script keys;
+    {
+        int bad = key_script_parse(opts->keys, &keys);
+        if (bad < 0 && port.log) {
+            port.log(port.user, 0,
+                     "--keys: expected frame:key pairs, e.g. \"20:fire,60:left\"");
+        }
+    }
+
+    /*
+     * The explicit frame loop is used when a frame limit was asked for, and
+     * ALWAYS when keys were scripted.
+     *
+     * A scripted press is delivered between two frames, and nj_midp_run() is a
+     * single call that does not return until the MIDlet exits, so there is
+     * nowhere to put it on that path.  Without this the keys were silently
+     * ignored unless --run-frames happened to be given as well - which is
+     * exactly the combination a corpus run does not use, so a title that needs
+     * a key to get past its splash screen appeared to have no gameplay.
+     */
+    if (opts->run_frames > 0u || (opts->keys && opts->keys[0])) {
             /*
              * Run a fixed number of frames and stop.
              *
@@ -345,9 +489,11 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
                     break;
                 }
                 nj_vm_get_stats(vm, &s);
-                if (s.frames >= (nj_u8)opts->run_frames) {
+                if (opts->run_frames > 0u &&
+                    s.frames >= (nj_u8)opts->run_frames) {
                     break;
                 }
+                key_script_tick(&port, &keys, s.frames);
                 st = nj_midp_frame(vm);
                 if (st != NJ_OK) {
                     break;

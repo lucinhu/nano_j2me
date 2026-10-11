@@ -2553,6 +2553,53 @@ static int command_dispatch(nj_vm *vm, nj_ref displayable, nj_ref command)
 }
 
 /* Activate the default command, if there is one. */
+/*
+ * Activate a Canvas's command from a soft key.
+ *
+ * A Canvas may carry Commands and a CommandListener - it is legal MIDP, and
+ * the second third-party game in the corpus does exactly that for its start
+ * screen.  Delivering the soft keys to keyPressed() instead leaves the game's
+ * own menu unreachable by ANY key, which is what happened: the title screen
+ * drew and nothing could get past it.
+ *
+ * SOFT_LEFT takes the default command.  SOFT_RIGHT takes the SECOND one when
+ * there is one, because that is the convention a device with two soft keys
+ * uses; when there is only one command, either soft key activates it, because
+ * a lone command that no key can reach is strictly worse than one reachable
+ * from two.
+ */
+static int canvas_command_activate(nj_vm *vm, nj_ref d, int key)
+{
+    int n = 0;
+    nj_ref arr = cmd_snapshot(vm, d, &n);
+    nj_ref c = NULL;
+
+    if (!arr || n <= 0) {
+        return 0;
+    }
+    if (key == NJ_KEY_SOFT_RIGHT && n > 1) {
+        int def = -1;
+        (void)cmd_default(vm, d, &def);
+        /* The first command that is not the default one. */
+        {
+            int i;
+            for (i = 0; i < n; i++) {
+                if (i != def) {
+                    c = nj_array_get_ref(arr, (nj_u4)i);
+                    break;
+                }
+            }
+        }
+    }
+    if (!c) {
+        c = cmd_default(vm, d, NULL);
+    }
+    if (!c) {
+        return 0;
+    }
+    return command_dispatch(vm, d, c);
+}
+
 static int command_default_activate(nj_vm *vm, nj_ref displayable)
 {
     nj_ref c = cmd_default(vm, displayable, NULL);
@@ -2983,6 +3030,10 @@ NJFN(c_visibility_notify)
     NJ_UNUSED(ret);
     return NJ_OK;
 }
+
+/* The default input callbacks do nothing, which is what MIDP specifies. */
+NJFN(canvas_noop_i)  { (void)args; (void)ret; return NJ_OK; }
+NJFN(canvas_noop_ii) { (void)args; (void)ret; return NJ_OK; }
 
 NJFN(c_getWidth)
 {
@@ -4118,6 +4169,20 @@ int nj_midp_key(nj_vm *vm, int key, int down)
         int suppressed = isa(vm, d, NJ_C_GAMECANVAS) &&
                          fget(vm, d, NJ_C_GAMECANVAS, F_GC_SUPPRESS, D_BOOL);
         canvas_keys_update(vm, d, code, down);
+
+        /*
+         * A soft key belongs to the COMMANDS when the Canvas has any.  The
+         * check is on key-down only: a soft key that fired on release as well
+         * would run the command twice for one press.
+         */
+        if (down && (key == NJ_KEY_SOFT_LEFT || key == NJ_KEY_SOFT_RIGHT)
+            && cmd_count(vm, d) > 0) {
+            (void)canvas_visible(vm, d);
+            if (canvas_command_activate(vm, d, key)) {
+                return 1;
+            }
+        }
+
         if (code != 0) {
             a[0].i = code;
             if (!suppressed) {
@@ -8195,7 +8260,7 @@ static const nj_builtin_method displayable_methods[] = {
     M("getCommandListener", "()L" NJ_C_COMMANDLISTENER ";", 0),
     M("isShown",          "()Z", 0),
     M("sizeChanged",      "(II)V", 0),
-    M("getKeyName",       "(I)Ljava/lang/String;", 0),
+    M("getKeyName",       "(I)Ljava/lang/String;", NJ_ACC_STATIC),
     M("setFullScreenMode", "(Z)V", 0),
     M("isFullScreenMode", "()Z", 0)
 };
@@ -8243,12 +8308,21 @@ static const nj_builtin_field canvas_fields[] = {
 static const nj_builtin_method canvas_methods[] = {
     M("<init>",            "()V", 0),
     M("paint",             "(L" NJ_C_GRAPHICS ";)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
-    M("keyPressed",        "(I)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
-    M("keyReleased",       "(I)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
-    M("keyRepeated",       "(I)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
-    M("pointerPressed",    "(II)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
-    M("pointerReleased",   "(II)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
-    M("pointerDragged",    "(II)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    /*
+     * The input callbacks are CONCRETE and empty in MIDP, not abstract.
+     *
+     * Only paint() is abstract on Canvas.  Declaring these abstract makes a
+     * game that handles only, say, keyPressed fail with AbstractMethodError the
+     * first time the user presses a key - which is what happened to the second
+     * third-party game in the corpus.  A game overriding none of them is
+     * perfectly legal and simply ignores input.
+     */
+    M("keyPressed",        "(I)V", NJ_ACC_PUBLIC),
+    M("keyReleased",       "(I)V", NJ_ACC_PUBLIC),
+    M("keyRepeated",       "(I)V", NJ_ACC_PUBLIC),
+    M("pointerPressed",    "(II)V", NJ_ACC_PUBLIC),
+    M("pointerReleased",   "(II)V", NJ_ACC_PUBLIC),
+    M("pointerDragged",    "(II)V", NJ_ACC_PUBLIC),
     M("showNotify",        "()V", 0),
     M("hideNotify",        "()V", 0),
     M("drawNotify",        "()V", 0),
@@ -8258,9 +8332,16 @@ static const nj_builtin_method canvas_methods[] = {
     M("hasPointerEvents",  "()Z", 0),
     M("hasPointerMotionEvents", "()Z", 0),
     M("hasRepeatEvents",   "()Z", 0),
-    M("getGameAction",     "(I)I", 0),
-    M("getKeyCode",        "(I)I", 0),
-    M("getKeyName",        "(I)Ljava/lang/String;", 0),
+    /*
+     * STATIC, as MIDP declares them, and the flag is not decoration:
+     * nj_invoke_native() decides where a method's arguments start from it, so
+     * a static call to a method marked instance reads them from one slot above
+     * the stack top.  The symptom was a VerifyError about operand stack
+     * underflow inside the CALLER, several instructions after the call.
+     */
+    M("getGameAction",     "(I)I", NJ_ACC_STATIC),
+    M("getKeyCode",        "(I)I", NJ_ACC_STATIC),
+    M("getKeyName",        "(I)Ljava/lang/String;", NJ_ACC_STATIC),
     M("repaint",           "()V", 0),
     M("repaint",           "(IIII)V", 0),
     M("serviceRepaints",   "()V", 0),
@@ -8980,6 +9061,12 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_CANVAS, "showNotify", "()V", c_visibility_notify },
     { NJ_C_CANVAS, "hideNotify", "()V", c_visibility_notify },
     { NJ_C_CANVAS, "drawNotify", "()V", c_visibility_notify },
+    { NJ_C_CANVAS, "keyPressed",      "(I)V",  canvas_noop_i },
+    { NJ_C_CANVAS, "keyReleased",     "(I)V",  canvas_noop_i },
+    { NJ_C_CANVAS, "keyRepeated",     "(I)V",  canvas_noop_i },
+    { NJ_C_CANVAS, "pointerPressed",  "(II)V", canvas_noop_ii },
+    { NJ_C_CANVAS, "pointerReleased", "(II)V", canvas_noop_ii },
+    { NJ_C_CANVAS, "pointerDragged",  "(II)V", canvas_noop_ii },
     { NJ_C_CANVAS, "getWidth", "()I", c_getWidth },
     { NJ_C_CANVAS, "getHeight", "()I", c_getHeight },
     { NJ_C_CANVAS, "isDoubleBuffered", "()Z", c_isDoubleBuffered },

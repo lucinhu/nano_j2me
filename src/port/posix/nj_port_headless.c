@@ -146,6 +146,8 @@ static void hl_idle(void *ud)
     (void)ud;
 }
 
+static int hl_input_push(void *ud, const nj_event *ev);
+
 /*
  * Device properties.  These are facts about the MACHINE, which is why they live
  * in the port and not in the runtime.
@@ -424,6 +426,7 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     out->sleep_ms = hl_sleep_ms;
     out->idle = hl_idle;
     out->device_property = hl_device_property;
+    out->input_push = hl_input_push;
     out->tone_play = hl_tone_play;
     out->tone_stop = hl_tone_stop;
     out->pcm_open = hl_pcm_open;
@@ -467,6 +470,15 @@ void nj_port_headless_push(void *ud, const nj_event *ev)
 }
 
 /* Public wrapper: append events to whichever port supports it. */
+static int hl_input_push(void *ud, const nj_event *ev)
+{
+    if (!ud || !ev) {
+        return 0;
+    }
+    nj_port_headless_push(ud, ev);
+    return 1;
+}
+
 void nj_port_push_event(nj_port *port, const nj_event *ev)
 {
     if (!port || !ev) {
