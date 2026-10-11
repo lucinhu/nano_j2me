@@ -37,6 +37,7 @@
 #include "nj_midp.h"
 #include "nj2me/nj_gfx.h"
 #include "nj2me/nj_png.h"
+#include "nj2me/nj_codec.h"
 
 #if NJ_USE_LIBC
 #  include <string.h>
@@ -79,6 +80,15 @@
  * modules: an Image is { imgWidth, imgHeight, imgPixels, imgMutable } and the
  * game package looks the very same names up.
  */
+/*
+ * javax.microedition.lcdui.Choice modes, shared by ChoiceGroup and List.
+ * EXCLUSIVE and MULTIPLE are deliberately in MIDP's order, not the intuitive
+ * one - mixing them up silently turns radio buttons into check boxes.
+ */
+#define NJ_CHOICE_EXCLUSIVE 1
+#define NJ_CHOICE_MULTIPLE  2
+#define NJ_CHOICE_IMPLICIT  3
+
 #define F_IMG_W    NJ_F_IMG_WIDTH
 #define F_IMG_H    NJ_F_IMG_HEIGHT
 #define F_IMG_PX   NJ_F_IMG_PIXELS
@@ -201,6 +211,15 @@ static void sput(nj_vm *vm, const char *cls, const char *name,
     if (f) {
         nj_field_write_int(vm, NULL, f, v);
     }
+}
+
+/* A NULL object from nj_object_new() already carries either
+ * NoClassDefFoundError(<class>) or OutOfMemoryError.  Only add the OOM when the
+ * call failed silently, so a failed MIDlet start always names the class that
+ * could not be loaded rather than reporting a bare error. */
+static nj_status new_failed(nj_vm *vm)
+{
+    return vm->exception ? NJ_ERR : nj_throw_oom(vm);
 }
 
 /* Is `o` an instance of `cls` (i.e. would `o instanceof cls` be true)? */
@@ -571,7 +590,14 @@ static int gfx_load(nj_vm *vm, nj_ref g_obj, nj_gfx *g, nj_surface *surf_scratch
         cw = s->width;
         ch = s->height;
     }
-    nj_gfx_set_clip(g, cx + tx, cy + ty, cw, ch);
+    /*
+     * The clip fields (NJ_F_G_CX/CY/CW/CH) hold USER-space coordinates, exactly
+     * like Graphics.getClipX(), and nj_gfx_set_clip() applies the translate
+     * itself - so the stored values are passed through unchanged.  Adding the
+     * translate here would count it twice and the clip would drift by (tx,ty)
+     * between setClip() and every following draw.
+     */
+    nj_gfx_set_clip(g, cx, cy, cw, ch);
 
     nj_gfx_set_color(g, (nj_u4)fget(vm, g_obj, G_CLS, F_G_COLOR, D_INT));
     g->blend = (int)fget(vm, g_obj, G_CLS, F_G_BLEND, D_INT);
@@ -651,6 +677,16 @@ NJFN(g_init)
 }
 
 /*
+ * The no-argument constructor: a Graphics whose target is the display itself.
+ * nj_gfx_load() answers with nj_midp_screen() for a null target, which is what
+ * a Canvas subclass drawing outside paint() expects.
+ */
+NJFN(g_init_noarg)
+{
+    return g_init(vm, th, (nj_value[]){ { .r = NULL } }, ret);
+}
+
+/*
  * Build a Graphics over `target` (NULL = the display) and hand it to the
  * caller.  Used by Image.getGraphics() and by the paint machinery.
  */
@@ -716,8 +752,8 @@ NJFN(g_setClip)
     if (!gfx_load(vm, self, &g, &sc)) {
         return NJ_ERR;
     }
-    nj_gfx_set_clip(&g, (int)x + g.translate_x, (int)y + g.translate_y,
-                    (int)w, (int)h);
+    /* User space in, user space stored: nj_gfx_set_clip() does the offset. */
+    nj_gfx_set_clip(&g, (int)x, (int)y, (int)w, (int)h);
     gfx_store(vm, self, &g);
     return NJ_OK;
 }
@@ -845,6 +881,30 @@ NJFN(g_getAlpha)
     /* The alpha is part of the colour field, so this needs no pixel access. */
     nj_s4 c = fget(vm, NJ_THIS(args), G_CLS, F_G_COLOR, D_INT);
     ret->i = (c >> 24) & 0xFF;
+    return NJ_OK;
+}
+
+/* getGrayScale(): the luminance of the current colour. */
+NJFN(g_getGrayScale)
+{
+    nj_u4 c = (nj_u4)fget(vm, NJ_THIS(args), G_CLS, F_G_COLOR, D_INT);
+    int r = (int)((c >> 16) & 0xFFu);
+    int g_ = (int)((c >> 8) & 0xFFu);
+    int b = (int)(c & 0xFFu);
+    ret->i = (r * 77 + g_ * 151 + b * 28) >> 8;
+    return NJ_OK;
+}
+
+/* setXORMode(boolean): true starts XOR drawing against white, false stops it. */
+NJFN(g_setXORModeFlag)
+{
+    nj_ref self = NJ_THIS(args);
+    if (NJ_ARG_INT(args, 0)) {
+        fput(vm, self, G_CLS, F_G_XOR, D_INT, 1);
+        fput(vm, self, G_CLS, F_G_XORC, D_INT, 0x00FFFFFF);
+    } else {
+        fput(vm, self, G_CLS, F_G_XOR, D_INT, 0);
+    }
     return NJ_OK;
 }
 
@@ -1294,24 +1354,35 @@ NJFN(g_drawImage)
     return gfx_draw_image_common(vm, args, NJ_ROP_PAINT, NJ_TRANS_NONE, 0);
 }
 
-NJFN(g_drawRegion4)
+/*
+ * drawRegion(Image src, int x_src, int y_src, int width, int height,
+ *            int transform, int x_dest, int y_dest, int anchor)
+ * The 10-argument form the compile stubs declare is accepted too; its trailing
+ * argument carries no meaning here.
+ */
+NJFN(g_drawRegion)
 {
-    /* drawRegion(Image, int x, int y, int transform, int anchor) */
-    nj_value a[8];
     nj_ref self = NJ_THIS(args);
     nj_ref img = NJ_ARG_REF(args, 0);
-    nj_s4 x = NJ_ARG_INT(args, 1);
-    nj_s4 y = NJ_ARG_INT(args, 2);
-    nj_s4 transform = NJ_ARG_INT(args, 3);
-    nj_s4 anchor = NJ_ARG_INT(args, 4);
+    nj_s4 sx = NJ_ARG_INT(args, 1);
+    nj_s4 sy = NJ_ARG_INT(args, 2);
+    nj_s4 sw = NJ_ARG_INT(args, 3);
+    nj_s4 sh = NJ_ARG_INT(args, 4);
+    nj_s4 transform = NJ_ARG_INT(args, 5);
+    nj_s4 x = NJ_ARG_INT(args, 6);
+    nj_s4 y = NJ_ARG_INT(args, 7);
+    nj_s4 anchor = NJ_ARG_INT(args, 8);
     nj_image view;
-    nj_s4 w, h;
-    nj_ref imgs;
     nj_gfx g;
     nj_surface sc;
+    nj_s4 dw, dh;
 
     if (!img) {
         return nj_throw(vm, "java/lang/NullPointerException", "image is null");
+    }
+    if (sw < 0 || sh < 0 || sx < 0 || sy < 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "negative source region");
     }
     if (anchor != -1 &&
         (anchor & (NJ_ANCHOR_LEFT | NJ_ANCHOR_HCENTER | NJ_ANCHOR_RIGHT)) == 0) {
@@ -1322,43 +1393,35 @@ NJFN(g_drawRegion4)
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "image has no pixels");
     }
+    if (sx + sw > view.width || sy + sh > view.height) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "source region outside the image");
+    }
     switch ((int)transform) {
     case NJ_TRANS_ROT90: case NJ_TRANS_ROT270:
     case NJ_TRANS_MIRROR_ROT90: case NJ_TRANS_MIRROR_ROT270:
-        w = view.height;
-        h = view.width;
+        dw = sh;
+        dh = sw;
         break;
     default:
-        w = view.width;
-        h = view.height;
+        dw = sw;
+        dh = sh;
         break;
     }
     if (anchor != -1) {
-        if (anchor & NJ_ANCHOR_HCENTER) { x -= w / 2; }
-        else if (anchor & NJ_ANCHOR_RIGHT) { x -= w; }
-        if (anchor & NJ_ANCHOR_VCENTER) { y -= h / 2; }
-        else if (anchor & NJ_ANCHOR_BOTTOM) { y -= h; }
+        if (anchor & NJ_ANCHOR_HCENTER) { x -= dw / 2; }
+        else if (anchor & NJ_ANCHOR_RIGHT) { x -= dw; }
+        if (anchor & NJ_ANCHOR_VCENTER) { y -= dh / 2; }
+        else if (anchor & NJ_ANCHOR_BOTTOM) { y -= dh; }
     }
     if (!gfx_load(vm, self, &g, &sc)) {
         return NJ_ERR;
     }
-    nj_gfx_draw_region(&g, &view, 0, 0, view.width, view.height,
+    nj_gfx_draw_region(&g, &view, (int)sx, (int)sy, (int)sw, (int)sh,
                        (int)transform, g.use_xor, g.xor_color, NULL,
                        (int)x, (int)y, NJ_ROP_PAINT);
     gfx_store(vm, self, &g);
-    NJ_UNUSED(a);
-    NJ_UNUSED(imgs);
     return NJ_OK;
-}
-
-NJFN(g_drawRegion8)
-{
-    return gfx_draw_image_common(vm, args, NJ_ROP_PAINT, NJ_ARG_INT(args, 6), 0);
-}
-
-NJFN(g_drawRegion9)
-{
-    return gfx_draw_image_common(vm, args, NJ_ROP_PAINT, NJ_ARG_INT(args, 6), 1);
 }
 
 NJFN(g_drawRGB)
@@ -1542,6 +1605,45 @@ NJFN(img_createImage_wh)
     return NJ_OK;
 }
 
+static nj_status img_createImage_img(nj_vm *vm, nj_thread *th, nj_value *args,
+                                     nj_value *ret);
+
+/*
+ * The compile stubs declare an all-int createImage(int,int,int,int,int,int),
+ * which cannot express the source image the real MIDP 2.0 signature requires
+ * (createImage(Image, int, int, int, int, int)).  It is bound so that a link
+ * failure cannot happen, and it says clearly what to call instead.
+ */
+NJFN(img_createImage_sixints)
+{
+    NJ_UNUSED(args);
+    NJ_UNUSED(ret);
+    return nj_throw(vm, "java/lang/IllegalArgumentException",
+                    "use createImage(Image source, int x, int y, int width, "
+                    "int height, int transform)");
+}
+
+/* createImage(Image source): an immutable copy of the whole image. */
+NJFN(img_createImage_copy)
+{
+    nj_value a[6];
+    a[0] = args[0];
+    a[1].i = 0;
+    a[2].i = 0;
+    a[3].i = 0;
+    a[4].i = 0;
+    a[5].i = 0;
+    {
+        int w = 0, h = 0;
+        if (!img_dims(vm, NJ_ARG_REF(args, 0), &w, &h)) {
+            return nj_throw(vm, "java/lang/NullPointerException", "source is null");
+        }
+        a[3].i = w;
+        a[4].i = h;
+    }
+    return img_createImage_img(vm, th, a, ret);
+}
+
 NJFN(img_createImage_img)
 {
     /* createImage(Image source, int x, int y, int width, int height,
@@ -1613,7 +1715,13 @@ NJFN(img_createImage_img)
     return NJ_OK;
 }
 
-/* Byte-array form: decode PNG (or JPEG) through the image loader. */
+/*
+ * Byte-array form: decode PNG (or JPEG) through the per-VM codec registry.
+ *
+ * The registry hands back a host-allocated nj_image; the pixels are copied
+ * into a Java int[] (which the GC then owns) and the host block is released, so
+ * nothing outside the Java heap outlives the call.
+ */
 static nj_status img_decode_into(nj_vm *vm, nj_ref arr, nj_s4 off, nj_s4 len,
                                  nj_ref *out)
 {
@@ -1627,25 +1735,20 @@ static nj_status img_decode_into(nj_vm *vm, nj_ref arr, nj_s4 off, nj_s4 len,
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
     if (len == 0) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException", "no image data");
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "no image data");
     }
-    dec = nj_image_load(arr->u.bytes + off, (nj_u4)len, NULL, NULL, NULL, NULL);
-    if (!dec) {
+    dec = nj_image_decode_mem(vm, arr->u.bytes + off, (nj_u4)len, NULL);
+    if (!dec || !dec->pixels || dec->width <= 0 || dec->height <= 0) {
+        if (dec) {
+            nj_image_release(vm, dec);
+        }
         return nj_throw(vm, "java/io/IOException", "cannot decode image");
     }
     img = nj_midp_image_adopt(vm, dec->pixels, dec->width, dec->height);
-    /*
-     * nj_image_load() allocated with malloc and handed us the pixels, so the
-     * ARGB buffer itself must not be freed by nj_image_free; detach it first.
-     */
-    {
-        void *px = dec->pixels;
-        dec->pixels = NULL;
-        nj_image_free(dec, NULL, NULL);
-        if (!img) {
-            (void)px;
-            return nj_throw_oom(vm);
-        }
+    nj_image_release(vm, dec);
+    if (!img) {
+        return vm->exception ? NJ_ERR : nj_throw_oom(vm);
     }
     *out = img;
     return NJ_OK;
@@ -1689,14 +1792,13 @@ NJFN(img_createImage_name)
     void *data;
     nj_u4 len = 0u;
     nj_ref out = NULL;
-    nj_status st;
+    nj_image *dec;
 
     if (!name) {
         return nj_throw(vm, "java/lang/NullPointerException", "name is null");
     }
     if (!app) {
-        return nj_throw(vm, "java/io/IOException",
-                        "no application is loaded");
+        return nj_throw(vm, "java/io/IOException", "no application is loaded");
     }
     if (nj_string_to_utf8(name, cname, (int)sizeof(cname)) <= 0) {
         return nj_throw(vm, "java/io/IOException", "bad resource name");
@@ -1708,27 +1810,18 @@ NJFN(img_createImage_name)
         }
         return nj_throw(vm, "java/io/IOException", cname);
     }
-    st = img_decode_into(vm, NULL, 0, 0, &out);
-    if (st == NJ_OK) {
-        nj_host_free(vm, data);
-        ret->r = out;
-        return NJ_OK;
-    }
-    /* Decode straight from the resource buffer. */
-    nj_clear_exception(vm);
-    {
-        nj_image *dec = nj_image_load(data, len, NULL, NULL, NULL, NULL);
-        if (!dec) {
-            nj_host_free(vm, data);
-            return nj_throw(vm, "java/io/IOException", cname);
+    dec = nj_image_decode_mem(vm, data, len, NULL);
+    nj_host_free(vm, data);
+    if (!dec || !dec->pixels || dec->width <= 0 || dec->height <= 0) {
+        if (dec) {
+            nj_image_release(vm, dec);
         }
-        out = nj_midp_image_adopt(vm, dec->pixels, dec->width, dec->height);
-        dec->pixels = NULL;
-        nj_image_free(dec, NULL, NULL);
-        nj_host_free(vm, data);
+        return nj_throw(vm, "java/io/IOException", cname);
     }
+    out = nj_midp_image_adopt(vm, dec->pixels, dec->width, dec->height);
+    nj_image_release(vm, dec);
     if (!out) {
-        return nj_throw_oom(vm);
+        return vm->exception ? NJ_ERR : nj_throw_oom(vm);
     }
     ret->r = out;
     return NJ_OK;
@@ -1809,7 +1902,7 @@ NJFN(img_getGraphics)
     }
     g = gfx_new(vm, self);
     if (!g) {
-        return vm->exception ? NJ_ERR : nj_throw_oom(vm);
+        return new_failed(vm);
     }
     ret->r = g;
     return NJ_OK;
@@ -2141,35 +2234,47 @@ NJFN(font_substringWidth)
 /* ================================================================== */
 /* Command / Ticker                                                    */
 /* ================================================================== */
+/*
+ * Command(String label, int commandType, int priority)
+ *   args: [0] label, [1] commandType, [2] priority
+ */
 NJFN(cmd_init)
 {
     nj_ref self = NJ_THIS(args);
-    nj_ref label = NJ_ARG_REF(args, 1);
+    nj_ref label = NJ_ARG_REF(args, 0);
 
     if (!label) {
         return nj_throw(vm, "java/lang/NullPointerException", "label is null");
     }
-    fput(vm, self, NJ_C_COMMAND, "cmdType", D_INT, NJ_ARG_INT(args, 0));
+    fput(vm, self, NJ_C_COMMAND, "cmdType", D_INT, NJ_ARG_INT(args, 1));
     rput(vm, self, NJ_C_COMMAND, "cmdLabel", D_STR, label);
     fput(vm, self, NJ_C_COMMAND, "cmdPriority", D_INT, NJ_ARG_INT(args, 2));
     fput(vm, self, NJ_C_COMMAND, "cmdLongLabel", D_INT, 0);
+    rput(vm, self, NJ_C_COMMAND, "cmdLong", D_STR, NULL);
+    fput(vm, self, NJ_C_COMMAND, "cmdMnemonic", D_INT, 0);
     return NJ_OK;
 }
 
+/*
+ * Command(String longLabel, int commandType, int priority, int mnemonic)
+ *   args: [0] longLabel, [1] commandType, [2] priority, [3] mnemonic
+ * There is no separate short label in this overload, so getLabel() answers with
+ * the long one, exactly as a device does.
+ */
 NJFN(cmd_init_long)
 {
     nj_ref self = NJ_THIS(args);
-    nj_ref shortl = NJ_ARG_REF(args, 1);
-    nj_ref longl = NJ_ARG_REF(args, 2);
+    nj_ref longl = NJ_ARG_REF(args, 0);
 
-    if (!shortl || !longl) {
+    if (!longl) {
         return nj_throw(vm, "java/lang/NullPointerException", "label is null");
     }
-    fput(vm, self, NJ_C_COMMAND, "cmdType", D_INT, NJ_ARG_INT(args, 0));
-    rput(vm, self, NJ_C_COMMAND, "cmdLabel", D_STR, shortl);
-    fput(vm, self, NJ_C_COMMAND, "cmdPriority", D_INT, NJ_ARG_INT(args, 3));
+    fput(vm, self, NJ_C_COMMAND, "cmdType", D_INT, NJ_ARG_INT(args, 1));
+    rput(vm, self, NJ_C_COMMAND, "cmdLabel", D_STR, longl);
+    fput(vm, self, NJ_C_COMMAND, "cmdPriority", D_INT, NJ_ARG_INT(args, 2));
     fput(vm, self, NJ_C_COMMAND, "cmdLongLabel", D_INT, 1);
     rput(vm, self, NJ_C_COMMAND, "cmdLong", D_STR, longl);
+    fput(vm, self, NJ_C_COMMAND, "cmdMnemonic", D_INT, NJ_ARG_INT(args, 3));
     return NJ_OK;
 }
 
@@ -2721,8 +2826,36 @@ static int nj_key_to_midp(int key)
     }
 }
 
-/* Map a MIDP key code to the game action it implies. */
+/*
+ * Map a MIDP key code to the *game action* constant Canvas.getGameAction()
+ * returns: UP=1, LEFT=2, RIGHT=5, DOWN=6, FIRE=8, GAME_A..GAME_D=9..12.
+ * These are a different namespace from the NJ_GAME_* key-state bits that
+ * GameCanvas.getKeyStates() reports - confusing the two makes every game read
+ * "UP" as 2, so they are kept in separate functions on purpose.
+ */
 static int midp_game_action(nj_s4 code)
+{
+    switch ((int)code) {
+    case NJ_KEY_UP:    return 1;    /* Canvas.UP     */
+    case NJ_KEY_LEFT:  return 2;    /* Canvas.LEFT   */
+    case NJ_KEY_RIGHT: return 5;    /* Canvas.RIGHT  */
+    case NJ_KEY_DOWN:  return 6;    /* Canvas.DOWN   */
+    case NJ_KEY_FIRE:  return 8;    /* Canvas.FIRE   */
+    case NJ_KEY_GAME_A: return 9;
+    case NJ_KEY_GAME_B: return 10;
+    case NJ_KEY_GAME_C: return 11;
+    case NJ_KEY_GAME_D: return 12;
+    case 50: return 1;              /* KEY_NUM2 -> UP    */
+    case 56: return 6;              /* KEY_NUM8 -> DOWN  */
+    case 52: return 2;              /* KEY_NUM4 -> LEFT  */
+    case 54: return 5;              /* KEY_NUM6 -> RIGHT */
+    case 53: return 8;              /* KEY_NUM5 -> FIRE  */
+    default: return 0;
+    }
+}
+
+/* The key-state bit (GameCanvas.getKeyStates namespace) for a MIDP key code. */
+static int midp_key_state_bit(nj_s4 code)
 {
     switch ((int)code) {
     case NJ_KEY_UP:    return NJ_GAME_UP;
@@ -2734,11 +2867,11 @@ static int midp_game_action(nj_s4 code)
     case NJ_KEY_GAME_B: return NJ_GAME_B;
     case NJ_KEY_GAME_C: return NJ_GAME_C;
     case NJ_KEY_GAME_D: return NJ_GAME_D;
-    case 50: return NJ_GAME_UP;      /* KEY_NUM2 */
-    case 56: return NJ_GAME_DOWN;    /* KEY_NUM8 */
-    case 52: return NJ_GAME_LEFT;    /* KEY_NUM4 */
-    case 54: return NJ_GAME_RIGHT;   /* KEY_NUM6 */
-    case 53: return NJ_GAME_FIRE;    /* KEY_NUM5 */
+    case 50: return NJ_GAME_UP;
+    case 56: return NJ_GAME_DOWN;
+    case 52: return NJ_GAME_LEFT;
+    case 54: return NJ_GAME_RIGHT;
+    case 53: return NJ_GAME_FIRE;
     default: return 0;
     }
 }
@@ -3073,6 +3206,10 @@ static int item_draw(nj_vm *vm, nj_gfx *g, nj_ref item, const ui_frame *uf,
     item_draw_default(vm, g, item, uf, x, y, w, selected);
     return (h > 0) ? h : UI_ITEM_H;
 }
+
+/* Defined with DateField, used by the Form key handler above it. */
+static nj_s8 df_millis(nj_vm *vm, nj_ref self);
+static void df_set_millis(nj_vm *vm, nj_ref self, nj_s8 t);
 
 /* ------------------------------------------------------------------ */
 /* Screen chrome                                                       */
@@ -3589,16 +3726,11 @@ static int form_item_key(nj_vm *vm, nj_ref form, int delta)
         return 1;
     }
     if (isa(vm, it, NJ_C_DATEFIELD)) {
-        nj_s8 t = fget(vm, it, NJ_C_DATEFIELD, "dfTime", "J");
+        nj_s8 t = df_millis(vm, it);
         nj_s4 mode = fget(vm, it, NJ_C_DATEFIELD, "dfMode", D_INT);
-        nj_s8 step = (mode == 1) ? 60000 : (nj_s8)86400000;
+        nj_s8 step = (mode == 2) ? 60000 : (nj_s8)86400000;   /* TIME vs DATE */
         t += (nj_s8)delta * step;
-        {
-            nj_field *f = fld(vm, NJ_C_DATEFIELD, "dfTime", "J", 0);
-            if (f) {
-                nj_field_write_long(vm, it, f, t);
-            }
-        }
+        df_set_millis(vm, it, t);
         item_state_changed(vm, it);
         nj_midp_repaint(vm);
         return 1;
@@ -3761,7 +3893,15 @@ static int canvas_visible(nj_vm *vm, nj_ref canvas)
     return 1;
 }
 
-/* Keep the sticky key bitmap in step: GameCanvas.getKeyStates() reads it. */
+/*
+ * Keep the sticky key bitmap in step: GameCanvas.getKeyStates() reads it.
+ *
+ * LATCHING, not level-triggered.  MIDP says a key's bit is 1 "if the key is
+ * currently down or has been pressed at least once since the last time this
+ * method was called", so a press and release inside one frame must still be
+ * seen.  The bit is therefore SET here on press and cleared by
+ * GameCanvas.getKeyStates() when it consumes the mask - never on release. */
+
 static void canvas_keys_update(nj_vm *vm, nj_ref canvas, int code, int down)
 {
     int mask;
@@ -3769,30 +3909,16 @@ static void canvas_keys_update(nj_vm *vm, nj_ref canvas, int code, int down)
     if (!canvas) {
         return;
     }
-    switch (code) {
-    case NJ_KEY_UP:    mask = NJ_GAME_UP; break;
-    case NJ_KEY_DOWN:  mask = NJ_GAME_DOWN; break;
-    case NJ_KEY_LEFT:  mask = NJ_GAME_LEFT; break;
-    case NJ_KEY_RIGHT: mask = NJ_GAME_RIGHT; break;
-    case NJ_KEY_FIRE:  mask = NJ_GAME_FIRE; break;
-    case NJ_KEY_GAME_A: mask = NJ_GAME_A; break;
-    case NJ_KEY_GAME_B: mask = NJ_GAME_B; break;
-    case NJ_KEY_GAME_C: mask = NJ_GAME_C; break;
-    case NJ_KEY_GAME_D: mask = NJ_GAME_D; break;
-    case 50: mask = NJ_GAME_UP; break;
-    case 56: mask = NJ_GAME_DOWN; break;
-    case 52: mask = NJ_GAME_LEFT; break;
-    case 54: mask = NJ_GAME_RIGHT; break;
-    case 53: mask = NJ_GAME_FIRE; break;
-    default: mask = 0; break;
-    }
+    mask = midp_key_state_bit(code);
     if (mask == 0) {
         return;
     }
+    if (!down) {
+        return;   /* release keeps the latched bit */
+    }
     {
         nj_s4 keys = fget(vm, canvas, NJ_C_CANVAS, F_C_KEYS, D_INT);
-        keys = down ? (keys | mask) : (keys & ~mask);
-        fput(vm, canvas, NJ_C_CANVAS, F_C_KEYS, D_INT, keys);
+        fput(vm, canvas, NJ_C_CANVAS, F_C_KEYS, D_INT, keys | mask);
     }
 }
 
@@ -3940,8 +4066,7 @@ nj_status nj_midp_paint(nj_vm *vm)
          */
         g = gfx_new(vm, buf);
         if (!g) {
-            nj_clear_exception(vm);
-            return NJ_ERR;
+            return NJ_ERR;   /* names the class; not a silent blank frame */
         }
         (void)canvas_visible(vm, d);
         if (nj_call(vm, d, NJ_C_CANVAS, "paint", "(L" NJ_C_GRAPHICS ";)V",
@@ -4031,7 +4156,7 @@ nj_ref nj_midp_display(nj_vm *vm)
     }
     d = nj_object_new(vm, NJ_C_DISPLAY);
     if (!d) {
-        return NULL;
+        return NULL;   /* the pending exception names the class */
     }
     rput(vm, d, NJ_C_DISPLAY, F_DISP_CUR, D_DISPLAY, NULL);
     rput(vm, d, NJ_C_DISPLAY, F_DISP_ALERT, D_DISPLAY, NULL);
@@ -4108,7 +4233,7 @@ NJFN(disp_getDisplay)
 {
     nj_ref d = nj_midp_display(vm);
     if (!d) {
-        return nj_throw_oom(vm);
+        return new_failed(vm);
     }
     ret->r = d;
     return NJ_OK;
@@ -4139,6 +4264,40 @@ NJFN(disp_setCurrent_alert)
         }
     }
     return nj_midp_set_current(vm, alert);
+}
+
+/*
+ * setCurrentItem(Item): the screen the item belongs to becomes current and the
+ * built-in renderer focuses that row.  It is a hint, so an item that is not on
+ * any screen is simply ignored.
+ */
+NJFN(disp_setCurrentItem)
+{
+    nj_ref item = NJ_ARG_REF(args, 0);
+    nj_ref owner;
+
+    if (!item) {
+        return nj_throw(vm, "java/lang/NullPointerException", "item is null");
+    }
+    owner = rget(vm, item, NJ_C_ITEM, "itOwner", D_FORM);
+    if (!owner) {
+        owner = rget(vm, item, NJ_C_ITEM, "itOwner", NJ_C_DISPLAYABLE);
+    }
+    if (!owner) {
+        return NJ_OK;
+    }
+    {
+        nj_ref items = rget(vm, owner, NJ_C_FORM, "fmItems", D_ITEMARR);
+        nj_s4 n = fget(vm, owner, NJ_C_FORM, "fmCount", D_INT);
+        nj_s4 i;
+        for (i = 0; i < n && items && (nj_u4)i < items->length; i++) {
+            if (nj_array_get_ref(items, (nj_u4)i) == item) {
+                fput(vm, owner, NJ_C_FORM, "fmIndex", D_INT, i);
+                break;
+            }
+        }
+    }
+    return nj_midp_set_current(vm, owner);
 }
 
 NJFN(disp_getCurrent)
@@ -4474,19 +4633,48 @@ static const char *string_item_appearance(nj_s4 mode)
     }
 }
 
-NJFN(si_init)
+/* StringItem(String label, String text[, int appearanceMode]) */
+static nj_status si_init_common(nj_vm *vm, nj_value *args, nj_value *ret,
+                                nj_s4 mode)
 {
     nj_ref self = NJ_THIS(args);
-    nj_s4 mode = NJ_ARG_INT(args, 2);
 
-    (void)item_init(vm, th, args, ret);
+    (void)item_init(vm, NULL, args, ret);
     if (mode < 0 || mode > 2) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "unknown appearance mode");
     }
+    rput(vm, self, NJ_C_ITEM, "itLabel", D_STR, NJ_ARG_REF(args, 0));
     rput(vm, self, NJ_C_STRINGITEM, "siText", D_STR, NJ_ARG_REF(args, 1));
     fput(vm, self, NJ_C_STRINGITEM, "siMode", D_INT, mode);
     return vm->exception ? NJ_ERR : NJ_OK;
+}
+
+NJFN(si_init)
+{
+    return si_init_common(vm, args, ret, 0);
+}
+
+NJFN(si_init_mode)
+{
+    return si_init_common(vm, args, ret, NJ_ARG_INT(args, 2));
+}
+
+NJFN(si_getFont)
+{
+    ret->r = rget(vm, NJ_THIS(args), NJ_C_STRINGITEM, "siFont", D_FONT);
+    return NJ_OK;
+}
+
+NJFN(si_setFont)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref f = NJ_ARG_REF(args, 0);
+    if (!f) {
+        return nj_throw(vm, "java/lang/NullPointerException", "font is null");
+    }
+    rput(vm, self, NJ_C_STRINGITEM, "siFont", D_FONT, f);
+    return NJ_OK;
 }
 
 NJFN(si_getText)
@@ -4632,23 +4820,25 @@ NJFN(spacer_njHeight)
 /* ------------------------------------------------------------------ */
 /* ImageItem                                                           */
 /* ------------------------------------------------------------------ */
+/* ImageItem(String label, Image img, int layout, String altText) */
 NJFN(ii_init)
 {
     nj_ref self = NJ_THIS(args);
-    nj_ref img = NJ_ARG_REF(args, 0);
-    nj_ref alt = NJ_ARG_REF(args, 1);
+    nj_ref label = NJ_ARG_REF(args, 0);
+    nj_ref img = NJ_ARG_REF(args, 1);
     nj_s4 layout = NJ_ARG_INT(args, 2);
-    nj_ref alt2 = NJ_ARG_REF(args, 3);
+    nj_ref alt = NJ_ARG_REF(args, 3);
 
     (void)item_init(vm, th, args, ret);
     if (!alt) {
         return nj_throw(vm, "java/lang/NullPointerException",
                         "altText is null");
     }
+    rput(vm, self, NJ_C_ITEM, "itLabel", D_STR, label);
     rput(vm, self, NJ_C_IMAGEITEM, "iiImage", D_IMAGE, img);
     rput(vm, self, NJ_C_IMAGEITEM, "iiAlt", D_STR, alt);
     fput(vm, self, NJ_C_IMAGEITEM, "iiLayout", D_INT, layout);
-    rput(vm, self, NJ_C_IMAGEITEM, "iiAlt2", D_STR, alt2);
+    rput(vm, self, NJ_C_IMAGEITEM, "iiAlt2", D_STR, NULL);
     rput(vm, self, NJ_C_ITEM, "itImage", D_IMAGE, img);
     return vm->exception ? NJ_ERR : NJ_OK;
 }
@@ -5021,22 +5211,28 @@ NJFN(tf_setString)
     return NJ_OK;
 }
 
+/* getChars(char[]) returns the number of characters copied (MIDP). */
 NJFN(tf_getChars)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref dst = NJ_ARG_REF(args, 0);
     nj_ref src = rget(vm, self, NJ_C_TEXTFIELD, "tfChars", D_CHARR);
+    nj_ref text = rget(vm, self, NJ_C_TEXTFIELD, "tfText", D_STR);
+    nj_u4 n = 0u;
 
     if (!dst) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    if (src && nj_string_len(rget(vm, self, NJ_C_TEXTFIELD, "tfText", D_STR)) > 0u) {
-        nj_u4 n = nj_string_len(rget(vm, self, NJ_C_TEXTFIELD, "tfText", D_STR));
+    if (src && text) {
+        n = nj_string_len(text);
         if (n > dst->length) {
             n = dst->length;
         }
-        memcpy(dst->u.bytes, src->u.bytes, (nj_size)n * sizeof(nj_u2));
+        if (n > 0u) {
+            memcpy(dst->u.bytes, src->u.bytes, (nj_size)n * sizeof(nj_u2));
+        }
     }
+    ret->i = (nj_s4)n;
     return NJ_OK;
 }
 
@@ -5163,6 +5359,7 @@ NJFN(tf_insert)
     nj_s4 len = NJ_ARG_INT(args, 2);
     nj_s4 at = NJ_ARG_INT(args, 3);
     nj_ref text = rget(vm, self, NJ_C_TEXTFIELD, "tfText", D_STR);
+    const nj_u2 *srcp = (const nj_u2 *)src->u.bytes;
     nj_s4 cur = text ? (nj_s4)nj_string_len(text) : 0;
     nj_s4 max = fget(vm, self, NJ_C_TEXTFIELD, "tfMax", D_INT);
     nj_u2 *buf;
@@ -5170,7 +5367,12 @@ NJFN(tf_insert)
     if (!src) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    if (off < 0 || len < 0 || (nj_u4)(off + len) > src->length) {
+    if (src->kind == NJ_OBJ_STRING) {
+        srcp = nj_string_chars(src);
+        if (off < 0 || len < 0 || (nj_u4)(off + len) > nj_string_len(src)) {
+            return nj_throw(vm, "java/lang/StringIndexOutOfBoundsException", NULL);
+        }
+    } else if (off < 0 || len < 0 || (nj_u4)(off + len) > src->length) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
     if (at < 0 || at > cur) {
@@ -5181,7 +5383,7 @@ NJFN(tf_insert)
                         "text longer than maxSize");
     }
     if (!tf_allowed(fget(vm, self, NJ_C_TEXTFIELD, "tfConstraints", D_INT),
-                    (const nj_u2 *)src->u.bytes + off, (int)len)) {
+                    srcp + off, (int)len)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "text violates the constraints");
     }
@@ -5193,8 +5395,7 @@ NJFN(tf_insert)
     if (cur > 0) {
         memcpy(buf, nj_string_chars(text), (nj_size)at * sizeof(nj_u2));
     }
-    memcpy(buf + at, (const nj_u2 *)src->u.bytes + off,
-           (nj_size)len * sizeof(nj_u2));
+    memcpy(buf + at, srcp + off, (nj_size)len * sizeof(nj_u2));
     if (cur > at) {
         memcpy(buf + at + len, nj_string_chars(text) + at,
                (nj_size)(cur - at) * sizeof(nj_u2));
@@ -5208,6 +5409,23 @@ NJFN(tf_insert)
     }
     fput(vm, self, NJ_C_TEXTFIELD, "tfCursor", D_INT, at + len);
     return NJ_OK;
+}
+
+/* insert(String src, int position) - the MIDP 2.0 String overload. */
+NJFN(tf_insert_str)
+{
+    nj_ref str = NJ_ARG_REF(args, 0);
+    nj_s4 at = NJ_ARG_INT(args, 1);
+    nj_value a[4];
+
+    if (!str) {
+        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
+    }
+    a[0].r = str;
+    a[1].i = 0;
+    a[2].i = (nj_s4)nj_string_len(str);
+    a[3].i = at;
+    return tf_insert(vm, th, a, ret);
 }
 
 NJFN(tf_delete)
@@ -5280,17 +5498,22 @@ NJFN(tf_njHeight)
  * about them, so the names are local to this file - but they are ordinary Java
  * fields, so the GC keeps them alive and there is no side table.
  */
-NJFN(cg_init)
+static nj_status cg_append_common(nj_vm *vm, nj_ref self, nj_ref str,
+                                  nj_ref img);
+
+/* ChoiceGroup(String label, int choiceType) */
+static nj_status cg_init_common(nj_vm *vm, nj_value *args, nj_value *ret,
+                                nj_s4 type)
 {
     nj_ref self = NJ_THIS(args);
-    nj_s4 type = NJ_ARG_INT(args, 0);
-    nj_ref label = NJ_ARG_REF(args, 1);
+    nj_ref label = NJ_ARG_REF(args, 0);
 
-    (void)item_init(vm, th, args, ret);
-    if (type < 1 || type > 3) {
+    (void)item_init(vm, NULL, args, ret);
+    if (type < NJ_CHOICE_EXCLUSIVE || type > NJ_CHOICE_IMPLICIT) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "choice type must be EXCLUSIVE, MULTIPLE or IMPLICIT");
     }
+    rput(vm, self, NJ_C_ITEM, "itLabel", D_STR, label);
     fput(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT, type);
     rput(vm, self, NJ_C_CHOICEGROUP, "cgLabel", D_STR, label);
     rput(vm, self, NJ_C_CHOICEGROUP, "cgStrings", D_STRARR, NULL);
@@ -5301,6 +5524,43 @@ NJFN(cg_init)
     fput(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT, -1);
     fput(vm, self, NJ_C_CHOICEGROUP, "cgFit", D_INT, 0);
     return vm->exception ? NJ_ERR : NJ_OK;
+}
+
+NJFN(cg_init)
+{
+    return cg_init_common(vm, args, ret, NJ_ARG_INT(args, 1));
+}
+
+/* ChoiceGroup(String label, int type, String[] strings, Image[] images) */
+NJFN(cg_init_arrays)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref strs = NJ_ARG_REF(args, 2);
+    nj_ref imgs = NJ_ARG_REF(args, 3);
+    nj_u4 i;
+
+    if (cg_init_common(vm, args, ret, NJ_ARG_INT(args, 1)) != NJ_OK) {
+        return NJ_ERR;
+    }
+    if (!strs || !imgs) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "strings and images must not be null");
+    }
+    if (strs->length != imgs->length) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "strings and images differ in length");
+    }
+    for (i = 0u; i < strs->length; i++) {
+        nj_ref str = nj_array_get_ref(strs, i);
+        if (!str) {
+            return nj_throw(vm, "java/lang/NullPointerException",
+                            "element is null");
+        }
+        if (cg_append_common(vm, self, str, nj_array_get_ref(imgs, i)) != NJ_OK) {
+            return NJ_ERR;
+        }
+    }
+    return NJ_OK;
 }
 
 /* Grow the three parallel arrays so that `need` elements fit. */
@@ -5395,18 +5655,40 @@ static nj_status cg_append_common(nj_vm *vm, nj_ref self, nj_ref str,
     if (fget(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT) < 0) {
         fput(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT, 0);
     }
+    /* MIDP: in an EXCLUSIVE or IMPLICIT group the first element is selected. */
+    if (n == 0 && fget(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT) !=
+                  NJ_CHOICE_MULTIPLE) {
+        nj_ref sels = rget(vm, self, NJ_C_CHOICEGROUP, "cgSelected", "[Z");
+        if (sels && sels->length > 0u) {
+            sels->u.bytes[0] = 1;
+        }
+        fput(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT, 0);
+    }
+    return NJ_OK;
+}
+
+static nj_status cg_append_result(nj_vm *vm, nj_ref self, nj_ref str,
+                                 nj_ref img, nj_value *ret)
+{
+    nj_status st = cg_append_common(vm, self, str, img);
+    if (st != NJ_OK) {
+        return st;
+    }
+    ret->i = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT) - 1;
     return NJ_OK;
 }
 
 NJFN(cg_append)
 {
-    return cg_append_common(vm, NJ_THIS(args), NJ_ARG_REF(args, 0), NULL);
+    return cg_append_result(vm, NJ_THIS(args), NJ_ARG_REF(args, 0), NULL, ret);
 }
 
+/* append(String, Image) exists with an int result (MIDP) and a void result
+ * (the compile stubs); both are declared and bound to this native. */
 NJFN(cg_append_img)
 {
-    return cg_append_common(vm, NJ_THIS(args), NJ_ARG_REF(args, 0),
-                            NJ_ARG_REF(args, 1));
+    return cg_append_result(vm, NJ_THIS(args), NJ_ARG_REF(args, 0),
+                            NJ_ARG_REF(args, 1), ret);
 }
 
 static nj_status cg_insert_common(nj_vm *vm, nj_ref self, nj_s4 at, nj_ref str,
@@ -5451,6 +5733,38 @@ NJFN(cg_insert_img)
 {
     return cg_insert_common(vm, NJ_THIS(args), NJ_ARG_INT(args, 0),
                             NJ_ARG_REF(args, 1), NJ_ARG_REF(args, 2));
+}
+
+/* set(int index, String text, Image image) */
+NJFN(cg_set)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref str = NJ_ARG_REF(args, 1);
+    nj_ref img = NJ_ARG_REF(args, 2);
+    nj_ref strs;
+    nj_ref imgs;
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+
+    if (!str) {
+        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
+    }
+    if (at < 0 || at >= n) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    if (img && fget(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT) ==
+               NJ_CHOICE_IMPLICIT) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "IMPLICIT ChoiceGroup cannot hold images");
+    }
+    strs = rget(vm, self, NJ_C_CHOICEGROUP, "cgStrings", D_STRARR);
+    imgs = rget(vm, self, NJ_C_CHOICEGROUP, "cgImages", D_IMGARR);
+    if (!strs || !imgs || (nj_u4)at >= strs->length) {
+        return NJ_OK;
+    }
+    nj_array_set_ref(strs, (nj_u4)at, str);
+    nj_array_set_ref(imgs, (nj_u4)at, img);
+    return NJ_OK;
 }
 
 NJFN(cg_delete)
@@ -5587,13 +5901,13 @@ static nj_status cg_set_selected(nj_vm *vm, nj_ref self, nj_s4 at, int on)
         return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
     }
     type = fget(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT);
-    if (type == 2) {
+    if (type == NJ_CHOICE_EXCLUSIVE) {
         nj_u4 i;
         for (i = 0u; i < sels->length; i++) {
             sels->u.bytes[i] = 0;
         }
         sels->u.bytes[at] = 1;
-    } else if (type == 3 && !on) {
+    } else if (type == NJ_CHOICE_IMPLICIT && !on) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "cannot deselect an IMPLICIT element");
     } else {
@@ -5608,6 +5922,20 @@ NJFN(cg_setSelectedIndex)
     nj_ref self = NJ_THIS(args);
     nj_s4 at = NJ_ARG_INT(args, 0);
     nj_status st = cg_set_selected(vm, self, at, 1);
+    if (st != NJ_OK) {
+        return st;
+    }
+    item_state_changed(vm, self);
+    return NJ_OK;
+}
+
+/* setSelectedIndex(int index, boolean selected) */
+NJFN(cg_setSelectedIndex2)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_s4 on = NJ_ARG_INT(args, 1) ? 1 : 0;
+    nj_status st = cg_set_selected(vm, self, at, on);
     if (st != NJ_OK) {
         return st;
     }
@@ -5637,7 +5965,7 @@ NJFN(cg_setSelectedFlags)
         if (on && first < 0) {
             first = (int)i;
         }
-        if (on && type == 2) {
+        if (on && type == NJ_CHOICE_EXCLUSIVE) {
             nj_u4 k;
             for (k = 0u; k < sels->length; k++) {
                 sels->u.bytes[k] = 0;
@@ -5646,7 +5974,7 @@ NJFN(cg_setSelectedFlags)
             first = (int)i;
             break;
         }
-        if (on && type == 3) {
+        if (on && type == NJ_CHOICE_IMPLICIT) {
             nj_u4 k;
             for (k = 0u; k < sels->length; k++) {
                 sels->u.bytes[k] = 0;
@@ -5693,7 +6021,8 @@ NJFN(cg_getSelectedIndex)
     nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
     nj_s4 i;
 
-    if (fget(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT) == 2 && sels) {
+    if (fget(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT) == NJ_CHOICE_EXCLUSIVE
+        && sels) {
         int count = 0, last = -1;
         for (i = 0; i < n && (nj_u4)i < sels->length; i++) {
             if (sels->u.bytes[i]) { count++; last = (int)i; }
@@ -5888,44 +6217,106 @@ static void df_format(nj_s8 t, nj_s4 mode, char *out, int cap)
     out[n] = '\0';
 }
 
-NJFN(df_init)
+/* The stored millisecond value (<init> arguments are Date / TimeZone refs). */
+static nj_s8 df_millis(nj_vm *vm, nj_ref self)
+{
+    nj_field *f = fld(vm, NJ_C_DATEFIELD, "dfTime", "J", 0);
+    return f ? nj_field_read_long(vm, self, f) : 0;
+}
+
+static void df_set_millis(nj_vm *vm, nj_ref self, nj_s8 t)
+{
+    nj_field *f = fld(vm, NJ_C_DATEFIELD, "dfTime", "J", 0);
+    if (f) {
+        nj_field_write_long(vm, self, f, t);
+    }
+}
+
+/* DateField(String label, int mode[, TimeZone zone]) */
+static nj_status df_init_common(nj_vm *vm, nj_value *args, nj_value *ret,
+                                int with_zone)
 {
     nj_ref self = NJ_THIS(args);
-    nj_s4 mode = NJ_ARG_INT(args, 2);
+    nj_s4 mode = NJ_ARG_INT(args, 1);
 
-    (void)item_init(vm, th, args, ret);
+    (void)item_init(vm, NULL, args, ret);
     if (mode < 1 || mode > 3) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "unknown date field mode");
     }
+    rput(vm, self, NJ_C_ITEM, "itLabel", D_STR, NJ_ARG_REF(args, 0));
     rput(vm, self, NJ_C_DATEFIELD, "dfLabel", D_STR, NJ_ARG_REF(args, 0));
-    {
-        nj_field *f = fld(vm, NJ_C_DATEFIELD, "dfTime", "J", 0);
-        if (f) {
-            nj_field_write_long(vm, self, f, NJ_ARG_LONG(args, 1));
-        }
-    }
+    /* MIDP starts a DateField at "now". */
+    df_set_millis(vm, self, nj_now_ms(vm));
     fput(vm, self, NJ_C_DATEFIELD, "dfMode", D_INT, mode);
     fput(vm, self, NJ_C_DATEFIELD, "dfInputMode", D_INT, -1);
+    rput(vm, self, NJ_C_DATEFIELD, "dfZone", "Ljava/util/TimeZone;",
+         with_zone ? NJ_ARG_REF(args, 2) : NULL);
     return vm->exception ? NJ_ERR : NJ_OK;
 }
 
+NJFN(df_init)
+{
+    return df_init_common(vm, args, ret, 0);
+}
+
+NJFN(df_init_zone)
+{
+    return df_init_common(vm, args, ret, 1);
+}
+
+/* getDate()/setDate() speak java.util.Date, as MIDP specifies. */
 NJFN(df_getDate)
 {
-    nj_field *f = fld(vm, NJ_C_DATEFIELD, "dfTime", "J", 0);
-    ret->j = f ? nj_field_read_long(vm, NJ_THIS(args), f) : 0;
+    nj_ref self = NJ_THIS(args);
+    nj_ref d = nj_object_new(vm, "java/util/Date");
+    nj_value a[2];
+
+    if (!d) {
+        return new_failed(vm);
+    }
+    a[0].j = df_millis(vm, self);
+    a[1].bits = 0u;
+    if (nj_call_special(vm, d, "java/util/Date", "<init>", "(J)V", a,
+                        NULL) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = d;
     return NJ_OK;
 }
 
 NJFN(df_setDate)
 {
     nj_ref self = NJ_THIS(args);
-    nj_field *f = fld(vm, NJ_C_DATEFIELD, "dfTime", "J", 0);
+    nj_ref d = NJ_ARG_REF(args, 0);
+    nj_s8 t = 0;
 
-    if (!f) {
-        return nj_throw(vm, "java/lang/InternalError", "DateField layout");
+    if (d) {
+        nj_value r;
+        r.bits = 0u;
+        if (nj_call(vm, d, "java/util/Date", "getTime", "()J", NULL,
+                    &r) != NJ_OK) {
+            return NJ_ERR;
+        }
+        t = r.j;
     }
-    nj_field_write_long(vm, self, f, NJ_ARG_LONG(args, 0));
+    df_set_millis(vm, self, t);
+    item_state_changed(vm, self);
+    return NJ_OK;
+}
+
+NJFN(df_getTimeZone)
+{
+    ret->r = rget(vm, NJ_THIS(args), NJ_C_DATEFIELD, "dfZone",
+                  "Ljava/util/TimeZone;");
+    return NJ_OK;
+}
+
+NJFN(df_setTimeZone)
+{
+    nj_ref self = NJ_THIS(args);
+    rput(vm, self, NJ_C_DATEFIELD, "dfZone", "Ljava/util/TimeZone;",
+         NJ_ARG_REF(args, 0));
     item_state_changed(vm, self);
     return NJ_OK;
 }
@@ -5957,8 +6348,7 @@ NJFN(df_getInputMode)
 NJFN(df_njText)
 {
     nj_ref self = NJ_THIS(args);
-    nj_field *f = fld(vm, NJ_C_DATEFIELD, "dfTime", "J", 0);
-    nj_s8 t = f ? nj_field_read_long(vm, self, f) : 0;
+    nj_s8 t = df_millis(vm, self);
     char buf[40];
     df_format(t, fget(vm, self, NJ_C_DATEFIELD, "dfMode", D_INT), buf,
               (int)sizeof(buf));
@@ -5996,6 +6386,31 @@ NJFN(form_init)
     rput(vm, self, NJ_C_FORM, "fmItemListener", D_ISL, NULL);
     rput(vm, self, NJ_C_FORM, "fmBuffer", D_IMAGE, NULL);
     return vm->exception ? NJ_ERR : NJ_OK;
+}
+
+NJFN(form_init_items)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref items = NJ_ARG_REF(args, 1);
+    nj_u4 i;
+
+    if (form_init(vm, th, args, ret) != NJ_OK) {
+        return NJ_ERR;
+    }
+    if (!items) {
+        return nj_throw(vm, "java/lang/NullPointerException", "items is null");
+    }
+    for (i = 0u; i < items->length; i++) {
+        nj_ref it = nj_array_get_ref(items, i);
+        if (!it) {
+            return nj_throw(vm, "java/lang/NullPointerException",
+                            "item is null");
+        }
+        if (form_add_item(vm, self, it, (nj_s4)i) != NJ_OK) {
+            return NJ_ERR;
+        }
+    }
+    return NJ_OK;
 }
 
 static nj_status form_add_item(nj_vm *vm, nj_ref form, nj_ref item, nj_s4 at)
@@ -6051,7 +6466,7 @@ NJFN(form_append_str)
     }
     item = nj_object_new(vm, NJ_C_STRINGITEM);
     if (!item) {
-        return nj_throw_oom(vm);
+        return new_failed(vm);
     }
     a[0].r = NULL;      /* label */
     a[1].r = s;         /* text  */
@@ -6082,14 +6497,14 @@ NJFN(form_append_img)
     }
     item = nj_object_new(vm, NJ_C_IMAGEITEM);
     if (!item) {
-        return nj_throw_oom(vm);
+        return new_failed(vm);
     }
-    a[0].r = img;
-    a[1].r = nj_string_new(vm, "");
-    a[2].i = 0;
-    a[3].r = NULL;
+    a[0].r = NULL;                      /* label  */
+    a[1].r = img;                       /* image  */
+    a[2].i = 0;                         /* layout */
+    a[3].r = nj_string_new(vm, "");     /* alt    */
     st = nj_call_special(vm, item, NJ_C_IMAGEITEM, "<init>",
-                         "(L" NJ_C_IMAGE ";Ljava/lang/String;ILjava/lang/String;)V",
+                         "(Ljava/lang/String;L" NJ_C_IMAGE ";ILjava/lang/String;)V",
                          a, NULL);
     if (st != NJ_OK) {
         return st;
@@ -6155,14 +6570,14 @@ NJFN(form_insert_img)
     }
     item = nj_object_new(vm, NJ_C_IMAGEITEM);
     if (!item) {
-        return nj_throw_oom(vm);
+        return new_failed(vm);
     }
-    a[0].r = img;
-    a[1].r = nj_string_new(vm, "");
-    a[2].i = 0;
-    a[3].r = NULL;
+    a[0].r = NULL;                      /* label  */
+    a[1].r = img;                       /* image  */
+    a[2].i = 0;                         /* layout */
+    a[3].r = nj_string_new(vm, "");     /* alt    */
     st = nj_call_special(vm, item, NJ_C_IMAGEITEM, "<init>",
-                         "(L" NJ_C_IMAGE ";Ljava/lang/String;ILjava/lang/String;)V",
+                         "(Ljava/lang/String;L" NJ_C_IMAGE ";ILjava/lang/String;)V",
                          a, NULL);
     if (st != NJ_OK) {
         return st;
@@ -6280,7 +6695,7 @@ static nj_ref list_wrap(nj_vm *vm, nj_ref s, nj_ref img)
     nj_value a[3];
 
     if (!item) {
-        return NULL;
+        return NULL;   /* the pending exception names the class */
     }
     a[0].r = NULL;
     a[1].r = s;
@@ -6312,9 +6727,9 @@ NJFN(list_init)
     fput(vm, self, NJ_C_FORM, "fmIndex", D_INT, 0);
     rput(vm, self, NJ_C_FORM, "fmItemListener", D_ISL, NULL);
     rput(vm, self, NJ_C_FORM, "fmBuffer", D_IMAGE, NULL);
-    if (type < 1 || type > 3) {
+    if (type < NJ_CHOICE_EXCLUSIVE || type > NJ_CHOICE_IMPLICIT) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "list type must be IMPLICIT, EXCLUSIVE or MULTIPLE");
+                        "list type must be EXCLUSIVE, MULTIPLE or IMPLICIT");
     }
     fput(vm, self, NJ_C_LIST, "lsType", D_INT, type);
     rput(vm, self, NJ_C_LIST, "lsStrings", D_STRARR, NULL);
@@ -6323,7 +6738,7 @@ NJFN(list_init)
     fput(vm, self, NJ_C_LIST, "lsIndex", D_INT, 0);
     fput(vm, self, NJ_C_LIST, "lsFit", D_INT, 0);
     rput(vm, self, NJ_C_LIST, "lsFont", D_FONT, NULL);
-    if (type == 3) {
+    if (type == NJ_CHOICE_IMPLICIT) {
         rput(vm, self, NJ_C_LIST, "lsSelect", D_CMD,
              rgets(vm, NJ_C_LIST, "SELECT_COMMAND", D_CMD));
     }
@@ -6567,6 +6982,7 @@ NJFN(list_isSelected)
     return NJ_OK;
 }
 
+/* List.setSelectedFlags(boolean[]) is void in MIDP; a List has one cursor. */
 NJFN(list_setSelectedFlags)
 {
     nj_ref self = NJ_THIS(args);
@@ -6580,11 +6996,74 @@ NJFN(list_setSelectedFlags)
     for (i = 0; i < n && (nj_u4)i < flags->length; i++) {
         if (flags->u.bytes[i]) {
             fput(vm, self, NJ_C_LIST, "lsIndex", D_INT, i);
-            ret->i = 1;
             return NJ_OK;
         }
     }
-    ret->i = 0;
+    return NJ_OK;
+}
+
+/* setSelectedIndex(int index, boolean selected): a List cursor cannot be
+ * deselected, so `false` on the current row is a legal no-op. */
+NJFN(list_setSelectedIndex2)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_s4 on = NJ_ARG_INT(args, 1);
+
+    if (!on) {
+        return NJ_OK;
+    }
+    if (at < 0 || at >= fget(vm, self, NJ_C_LIST, "lsCount", D_INT)) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    fput(vm, self, NJ_C_LIST, "lsIndex", D_INT, at);
+    return NJ_OK;
+}
+
+/* set(int index, String text, Image image) */
+NJFN(list_set)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref str = NJ_ARG_REF(args, 1);
+    nj_ref img = NJ_ARG_REF(args, 2);
+    nj_ref items = rget(vm, self, NJ_C_FORM, "fmItems", D_ITEMARR);
+    nj_ref it;
+
+    if (!str) {
+        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
+    }
+    if (at < 0 || at >= fget(vm, self, NJ_C_LIST, "lsCount", D_INT) ||
+        !items || (nj_u4)at >= items->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    it = nj_array_get_ref(items, (nj_u4)at);
+    if (it) {
+        rput(vm, it, NJ_C_STRINGITEM, "siText", D_STR, str);
+        rput(vm, it, NJ_C_ITEM, "itImage", D_IMAGE, img);
+    }
+    list_sync(vm, self);
+    return NJ_OK;
+}
+
+/* setSelectCommand(Command): only an IMPLICIT List has a select action. */
+NJFN(list_setSelectCommand)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref c = NJ_ARG_REF(args, 0);
+
+    if (!c) {
+        return nj_throw(vm, "java/lang/NullPointerException", "command is null");
+    }
+    if (fget(vm, self, NJ_C_LIST, "lsType", D_INT) != NJ_CHOICE_IMPLICIT) {
+        return nj_throw(vm, "java/lang/IllegalStateException",
+                        "only an IMPLICIT List has a select command");
+    }
+    if (fget(vm, c, NJ_C_COMMAND, "cmdType", D_INT) != 8) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "select command must be of type ITEM");
+    }
+    rput(vm, self, NJ_C_LIST, "lsSelect", D_CMD, c);
     return NJ_OK;
 }
 
@@ -6763,23 +7242,28 @@ NJFN(tb_setString)
     return NJ_OK;
 }
 
+/* getChars(char[]) returns the number of characters copied (MIDP). */
 NJFN(tb_getChars)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref dst = NJ_ARG_REF(args, 0);
     nj_ref src = rget(vm, self, NJ_C_TEXTBOX, "tbChars", D_CHARR);
     nj_ref text = rget(vm, self, NJ_C_TEXTBOX, "tbText", D_STR);
+    nj_u4 n = 0u;
 
     if (!dst) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
     if (src && text) {
-        nj_u4 n = nj_string_len(text);
+        n = nj_string_len(text);
         if (n > dst->length) {
             n = dst->length;
         }
-        memcpy(dst->u.bytes, src->u.bytes, (nj_size)n * sizeof(nj_u2));
+        if (n > 0u) {
+            memcpy(dst->u.bytes, src->u.bytes, (nj_size)n * sizeof(nj_u2));
+        }
     }
+    ret->i = (nj_s4)n;
     return NJ_OK;
 }
 
@@ -6899,6 +7383,7 @@ NJFN(tb_insert)
     nj_s4 len = NJ_ARG_INT(args, 2);
     nj_s4 at = NJ_ARG_INT(args, 3);
     nj_ref text = rget(vm, self, NJ_C_TEXTBOX, "tbText", D_STR);
+    const nj_u2 *srcp = (const nj_u2 *)src->u.bytes;
     nj_s4 cur = text ? (nj_s4)nj_string_len(text) : 0;
     nj_s4 max = fget(vm, self, NJ_C_TEXTBOX, "tbMax", D_INT);
     nj_u2 *buf;
@@ -6929,8 +7414,7 @@ NJFN(tb_insert)
     if (at > 0) {
         memcpy(buf, nj_string_chars(text), (nj_size)at * sizeof(nj_u2));
     }
-    memcpy(buf + at, (const nj_u2 *)src->u.bytes + off,
-           (nj_size)len * sizeof(nj_u2));
+    memcpy(buf + at, srcp + off, (nj_size)len * sizeof(nj_u2));
     if (cur > at) {
         memcpy(buf + at + len, nj_string_chars(text) + at,
                (nj_size)(cur - at) * sizeof(nj_u2));
@@ -6944,6 +7428,23 @@ NJFN(tb_insert)
     }
     fput(vm, self, NJ_C_TEXTBOX, "tbCursor", D_INT, at + len);
     return NJ_OK;
+}
+
+/* insert(String src, int position) - the MIDP 2.0 String overload. */
+NJFN(tb_insert_str)
+{
+    nj_ref str = NJ_ARG_REF(args, 0);
+    nj_s4 at = NJ_ARG_INT(args, 1);
+    nj_value a[4];
+
+    if (!str) {
+        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
+    }
+    a[0].r = str;
+    a[1].i = 0;
+    a[2].i = (nj_s4)nj_string_len(str);
+    a[3].i = at;
+    return tb_insert(vm, th, a, ret);
 }
 
 NJFN(tb_delete)
@@ -7151,18 +7652,28 @@ NJFN(alerttype_init)
 
 NJFN(alerttype_getTypeName)
 {
-    nj_s4 t = fget(vm, NJ_THIS(args), NJ_C_ALERTTYPE, "atType", D_INT);
-    const char *name;
+    nj_ref self = NJ_THIS(args);
+    nj_s4 t;
+
+    /* The MIDP 2.0 form is static and takes the type; the instance form is
+     * kept because the squash-court renderer and older MIDlets use it. */
+    if (NJ_ARG_REF(args, 0)) {
+        self = NJ_ARG_REF(args, 0);
+    }
+    t = fget(vm, self, NJ_C_ALERTTYPE, "atType", D_INT);
+    {
+        const char *name0;
 
     switch ((int)t) {
-    case 1: name = "WARNING"; break;
-    case 2: name = "ERROR"; break;
-    case 3: name = "ALARM"; break;
-    case 4: name = "CONFIRMATION"; break;
-    default: name = "INFO"; break;
+    case 1: name0 = "WARNING"; break;
+    case 2: name0 = "ERROR"; break;
+    case 3: name0 = "ALARM"; break;
+    case 4: name0 = "CONFIRMATION"; break;
+    default: name0 = "INFO"; break;
     }
-    ret->r = nj_string_new(vm, name);
+    ret->r = nj_string_new(vm, name0);
     return ret->r ? NJ_OK : nj_throw_oom(vm);
+    }
 }
 
 /*
@@ -7221,8 +7732,10 @@ static const nj_builtin_field image_fields[] = {
 static const nj_builtin_method image_methods[] = {
     M("createImage", "(II)L" NJ_C_IMAGE ";",                   NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("createImage", "([BII)L" NJ_C_IMAGE ";",                 NJ_ACC_STATIC | NJ_ACC_PUBLIC),
-    M("createImage", "([BII I)L" NJ_C_IMAGE ";",               NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("createImage", "([BIII)L" NJ_C_IMAGE ";",                NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("createImage", "(Ljava/lang/String;)L" NJ_C_IMAGE ";",   NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("createImage", "(L" NJ_C_IMAGE ";)L" NJ_C_IMAGE ";", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("createImage", "(IIIIII)L" NJ_C_IMAGE ";", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("createImage", "(L" NJ_C_IMAGE ";IIIII)L" NJ_C_IMAGE ";", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("createRGBImage", "([IIIZ)L" NJ_C_IMAGE ";",             NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("getWidth",  "()I",  0),
@@ -7243,6 +7756,7 @@ static const nj_builtin_field font_fields[] = {
      * nj_lcdui_late_init() because a builtin class has no ConstantValue. */
     FLD("FACE_SYSTEM",       D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("FACE_MONOSPACED",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("FACE_MONOSPACE",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("FACE_PROPORTIONAL", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("STYLE_PLAIN",       D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("STYLE_BOLD",        D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
@@ -7302,6 +7816,13 @@ static const nj_builtin_field graphics_fields[] = {
 };
 
 static const nj_builtin_method graphics_methods[] = {
+    /*
+     * Two constructors.  (Image) is the one Image.getGraphics() and the paint
+     * machinery use.  ()V exists because a Graphics is a serialised nj_gfx and
+     * the game package builds one field by field for a Canvas buffer; it leaves
+     * gTarget null, which means "the display".
+     */
+    M("<init>", "(L" NJ_C_IMAGE ";)V", 0),
     M("<init>", "()V", 0),
     M("translate",      "(II)V", 0),
     M("getTranslateX",  "()I", 0),
@@ -7321,6 +7842,7 @@ static const nj_builtin_method graphics_methods[] = {
     M("getAlphaComponent", "()I", 0),
     M("setAlpha",       "(I)V", 0),
     M("getAlpha",       "()I", 0),
+    M("getGrayScale",   "()I", 0),
     M("setGrayScale",   "(I)V", 0),
     M("setBlendMode",   "(I)V", 0),
     M("getBlendMode",   "()I", 0),
@@ -7328,6 +7850,7 @@ static const nj_builtin_method graphics_methods[] = {
     M("getStrokeStyle", "()I", 0),
     M("setFont",        "(L" NJ_C_FONT ";)V", 0),
     M("getFont",        "()L" NJ_C_FONT ";", 0),
+    M("setXORMode",     "(Z)V", 0),
     M("setXORMode",     "(L" NJ_C_GRAPHICS ";)V", 0),
     M("drawLine",       "(IIII)V", 0),
     M("drawRect",       "(IIII)V", 0),
@@ -7340,13 +7863,15 @@ static const nj_builtin_method graphics_methods[] = {
     M("fillTriangle",   "(IIIIII)V", 0),
     M("drawString",     "(Ljava/lang/String;III)V", 0),
     M("drawString",     "(Ljava/lang/String;II)V", 0),
-    M("drawSubstring",  "(Ljava/lang/String;IIII I)V", 0),
+    M("drawSubstring",  "(Ljava/lang/String;IIIII)V", 0),
     M("drawChars",      "([CIIIII)V", 0),
     M("drawChar",       "(CIII)V", 0),
     M("drawImage",      "(L" NJ_C_IMAGE ";III)V", 0),
-    M("drawRegion",     "(L" NJ_C_IMAGE ";IIII)V", 0),
-    M("drawRegion",     "(L" NJ_C_IMAGE ";IIIIII I)V", 0),
-    M("drawRegion",     "(L" NJ_C_IMAGE ";IIIIII IL" NJ_C_IMAGE ";)V", 0),
+    /* MIDP 2.0: drawRegion(Image, x_src, y_src, w, h, transform, x_dest,
+     * y_dest, anchor).  The compile stubs also declare a 10-argument variant;
+     * it is accepted and treated as the same operation. */
+    M("drawRegion",     "(L" NJ_C_IMAGE ";IIIIIIII)V", 0),
+    M("drawRegion",     "(L" NJ_C_IMAGE ";IIIIIIIII)V", 0),
     M("drawRGB",        "([IIIIIIIZ)V", 0),
     M("copyArea",       "(IIIIIII)V", 0)
 };
@@ -7456,6 +7981,7 @@ static const nj_builtin_field command_fields[] = {
     FLD("cmdPriority", D_INT, 0),
     FLD("cmdLongLabel", D_INT, 0),
     FLD("cmdLong",     D_STR, 0),
+    FLD("cmdMnemonic", D_INT, 0),
     FLD("SCREEN", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("BACK",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("CANCEL", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
@@ -7463,12 +7989,14 @@ static const nj_builtin_field command_fields[] = {
     FLD("HELP",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("STOP",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("EXIT",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
-    FLD("ITEM",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+    FLD("ITEM",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("PRIORITY_1", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("PRIORITY_2", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
 };
 
 static const nj_builtin_method command_methods[] = {
-    M("<init>", "(ILjava/lang/String;I)V", 0),
-    M("<init>", "(ILjava/lang/String;II)V", 0),
+    M("<init>", "(Ljava/lang/String;II)V", 0),
+    M("<init>", "(Ljava/lang/String;III)V", 0),
     M("getCommandType", "()I", 0),
     M("getLabel",       "()Ljava/lang/String;", 0),
     M("getLongLabel",   "()Ljava/lang/String;", 0),
@@ -7541,6 +8069,7 @@ static const nj_builtin_method item_methods[] = {
 static const nj_builtin_field stringitem_fields[] = {
     FLD("siText", D_STR, 0),
     FLD("siMode", D_INT, 0),
+    FLD("siFont", D_FONT, 0),
     FLD("siCmd",  D_CMD, 0),
     FLD("siCmdListener", D_ICL, 0),
     FLD("PLAIN",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
@@ -7549,8 +8078,11 @@ static const nj_builtin_field stringitem_fields[] = {
 };
 
 static const nj_builtin_method stringitem_methods[] = {
+    M("<init>", "(Ljava/lang/String;Ljava/lang/String;)V", 0),
     M("<init>", "(Ljava/lang/String;Ljava/lang/String;I)V", 0),
     M("getText", "()Ljava/lang/String;", 0),
+    M("getFont", "()L" NJ_C_FONT ";", 0),
+    M("setFont", "(L" NJ_C_FONT ";)V", 0),
     M("setText", "(Ljava/lang/String;)V", 0),
     M("getAppearanceMode", "()I", 0),
     M("addCommand",    "(L" NJ_C_COMMAND ";)V", 0),
@@ -7574,7 +8106,7 @@ static const nj_builtin_field imageitem_fields[] = {
 };
 
 static const nj_builtin_method imageitem_methods[] = {
-    M("<init>", "(L" NJ_C_IMAGE ";Ljava/lang/String;ILjava/lang/String;)V", 0),
+    M("<init>", "(Ljava/lang/String;L" NJ_C_IMAGE ";ILjava/lang/String;)V", 0),
     M("getImage",   "()L" NJ_C_IMAGE ";", 0),
     M("setImage",   "(L" NJ_C_IMAGE ";)V", 0),
     M("getAltText", "()Ljava/lang/String;", 0),
@@ -7618,20 +8150,24 @@ static const nj_builtin_field choicegroup_fields[] = {
     FLD("cgCount",    D_INT,    0),
     FLD("cgIndex",    D_INT,    0),
     FLD("cgFit",      D_INT,    0),
-    FLD("MULTIPLE",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("EXCLUSIVE",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("MULTIPLE",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("IMPLICIT",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TEXT_WRAP_DEFAULT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("TEXT_WRAP_ON",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
-    FLD("TEXT_WRAP_OFF", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
-    FLD("TEXT_WRAP_DEFAULT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+    FLD("TEXT_WRAP_OFF", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
 };
 
 static const nj_builtin_method choicegroup_methods[] = {
-    M("<init>", "(ILjava/lang/String;)V", 0),
+    M("<init>", "(Ljava/lang/String;I)V", 0),
+    M("<init>", "(Ljava/lang/String;I[Ljava/lang/String;[L" NJ_C_IMAGE ";)V", 0),
     M("append", "(Ljava/lang/String;)I", 0),
     M("append", "(Ljava/lang/String;L" NJ_C_IMAGE ";)I", 0),
+    M("append", "(Ljava/lang/String;L" NJ_C_IMAGE ";)V", 0),
     M("insert", "(ILjava/lang/String;)V", 0),
     M("insert", "(ILjava/lang/String;L" NJ_C_IMAGE ";)V", 0),
+    M("set",    "(ILjava/lang/String;L" NJ_C_IMAGE ";)V", 0),
+    M("setSelectedIndex", "(IZ)V", 0),
     M("delete",    "(I)V", 0),
     M("deleteAll", "()V", 0),
     M("size",      "()I", 0),
@@ -7644,7 +8180,6 @@ static const nj_builtin_method choicegroup_methods[] = {
     M("getSelectedIndex",  "()I", 0),
     M("setSelectedFlags",  "([Z)V", 0),
     M("getSelectedFlags",  "([Z)I", 0),
-    M("setFitPolicy", "()V", 0),
     M("setFitPolicy", "(I)V", 0),
     M("getFitPolicy", "()I", 0),
     M("setFont", "(IL" NJ_C_FONT ";)V", 0),
@@ -7681,9 +8216,10 @@ static const nj_builtin_method textfield_methods[] = {
     M("<init>", "(Ljava/lang/String;Ljava/lang/String;II)V", 0),
     M("getString",       "()Ljava/lang/String;", 0),
     M("setString",       "(Ljava/lang/String;)V", 0),
-    M("getChars",        "([C)V", 0),
+    M("getChars",        "([C)I", 0),
     M("setChars",        "([CII)V", 0),
     M("insert",          "([CIII)V", 0),
+    M("insert",          "(Ljava/lang/String;I)V", 0),
     M("delete",          "(II)V", 0),
     M("size",            "()I", 0),
     M("getMaxSize",      "()I", 0),
@@ -7699,6 +8235,7 @@ static const nj_builtin_method textfield_methods[] = {
 static const nj_builtin_field datefield_fields[] = {
     FLD("dfLabel",     D_STR, 0),
     FLD("dfTime",      "J",   0),
+    FLD("dfZone",      "Ljava/util/TimeZone;", 0),
     FLD("dfMode",      D_INT, 0),
     FLD("dfInputMode", D_INT, 0),
     FLD("DATE",      D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
@@ -7707,9 +8244,12 @@ static const nj_builtin_field datefield_fields[] = {
 };
 
 static const nj_builtin_method datefield_methods[] = {
-    M("<init>", "(Ljava/lang/String;JI)V", 0),
-    M("getDate",  "()J", 0),
-    M("setDate",  "(J)V", 0),
+    M("<init>", "(Ljava/lang/String;I)V", 0),
+    M("<init>", "(Ljava/lang/String;ILjava/util/TimeZone;)V", 0),
+    M("getDate",  "()Ljava/util/Date;", 0),
+    M("setDate",  "(Ljava/util/Date;)V", 0),
+    M("getTimeZone", "()Ljava/util/TimeZone;", 0),
+    M("setTimeZone", "(Ljava/util/TimeZone;)V", 0),
     M("setInputMode", "(I)V", 0),
     M("getInputMode", "()I", 0),
     M("njText",   "()Ljava/lang/String;", 0),
@@ -7739,6 +8279,7 @@ static const nj_builtin_field form_fields[] = {
 
 static const nj_builtin_method form_methods[] = {
     M("<init>", "(Ljava/lang/String;)V", 0),
+    M("<init>", "(Ljava/lang/String;[L" NJ_C_ITEM ";)V", 0),
     M("append", "(Ljava/lang/String;)I", 0),
     M("append", "(L" NJ_C_IMAGE ";)I", 0),
     M("append", "(L" NJ_C_ITEM ";)I", 0),
@@ -7763,12 +8304,12 @@ static const nj_builtin_field list_fields[] = {
     FLD("lsFont",    D_FONT,   0),
     FLD("lsSelect",  D_CMD,    0),
     FLD("SELECT_COMMAND", D_CMD, NJ_ACC_STATIC | NJ_ACC_FINAL),
-    FLD("IMPLICIT",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("EXCLUSIVE", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("MULTIPLE",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("IMPLICIT",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TEXT_WRAP_DEFAULT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("TEXT_WRAP_ON",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
-    FLD("TEXT_WRAP_OFF", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
-    FLD("TEXT_WRAP_DEFAULT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+    FLD("TEXT_WRAP_OFF", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
 };
 
 static const nj_builtin_method list_methods[] = {
@@ -7788,13 +8329,16 @@ static const nj_builtin_method list_methods[] = {
     M("setImage",  "(IL" NJ_C_IMAGE ";)V", 0),
     M("getSelectedIndex", "()I", 0),
     M("setSelectedIndex", "(I)V", 0),
+    M("setSelectedIndex", "(IZ)V", 0),
     M("isSelected",       "(I)Z", 0),
-    M("setSelectedFlags", "([Z)I", 0),
+    M("setSelectedFlags", "([Z)V", 0),
     M("getSelectedFlags", "([Z)I", 0),
+    M("set",              "(ILjava/lang/String;L" NJ_C_IMAGE ";)V", 0),
     M("setFitPolicy", "(I)V", 0),
     M("getFitPolicy", "()I", 0),
     M("setFont", "(IL" NJ_C_FONT ";)V", 0),
     M("getFont", "(I)L" NJ_C_FONT ";", 0),
+    M("setSelectCommand", "(L" NJ_C_COMMAND ";)V", 0),
     M("getSelectCommand", "()L" NJ_C_COMMAND ";", 0)
 };
 
@@ -7825,9 +8369,10 @@ static const nj_builtin_method textbox_methods[] = {
     M("<init>", "(Ljava/lang/String;Ljava/lang/String;II)V", 0),
     M("getString",       "()Ljava/lang/String;", 0),
     M("setString",       "(Ljava/lang/String;)V", 0),
-    M("getChars",        "([C)V", 0),
+    M("getChars",        "([C)I", 0),
     M("setChars",        "([CII)V", 0),
     M("insert",          "([CIII)V", 0),
+    M("insert",          "(Ljava/lang/String;I)V", 0),
     M("delete",          "(II)V", 0),
     M("size",            "()I", 0),
     M("getMaxSize",      "()I", 0),
@@ -7884,6 +8429,7 @@ static const nj_builtin_field alerttype_fields[] = {
 static const nj_builtin_method alerttype_methods[] = {
     M("<init>", "(I)V", 0),
     M("playSound", "(L" NJ_C_DISPLAY ";)Z", 0),
+    M("getTypeName", "(L" NJ_C_ALERTTYPE ";)Ljava/lang/String;", NJ_ACC_STATIC),
     M("getTypeName", "()Ljava/lang/String;", 0)
 };
 
@@ -7903,15 +8449,28 @@ static const nj_builtin_method display_methods[] = {
       NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("setCurrent", "(L" NJ_C_DISPLAYABLE ";)V", 0),
     M("setCurrent", "(L" NJ_C_ALERT ";L" NJ_C_DISPLAYABLE ";)V", 0),
+    M("setCurrentItem", "(L" NJ_C_ITEM ";)V", 0),
     M("getCurrent", "()L" NJ_C_DISPLAYABLE ";", 0),
     M("callSerially", "(Ljava/lang/Runnable;)V", 0),
+    /* static (MIDP) and instance (the compile stubs) spellings of the same
+     * device queries; the VM resolves whichever form the caller emitted. */
     M("isColor",     "()Z", NJ_ACC_STATIC),
+    M("isColor",     "()Z", 0),
     M("numColors",   "()I", NJ_ACC_STATIC),
+    M("numColors",   "()I", 0),
     M("numAlphaLevels", "()I", NJ_ACC_STATIC),
+    M("numAlphaLevels", "()I", 0),
     M("flashBacklight", "(I)Z", NJ_ACC_STATIC),
+    M("flashBacklight", "(I)V", 0),
     M("vibrate",     "(I)Z", NJ_ACC_STATIC),
-    M("getBestImageWidth",  "(I)I", NJ_ACC_STATIC),
-    M("getBestImageHeight", "(I)I", NJ_ACC_STATIC)
+    M("vibrate",     "(I)Z", 0),
+    M("getBestImageWidth",  "(I)I", 0),
+    M("getBestImageHeight", "(I)I", 0)
+};
+
+/* ---- Screen: the abstract parent of the "content" Displayables ---- */
+static const nj_builtin_method screen_methods[] = {
+    M("<init>", "()V", 0)
 };
 
 /* ---- interfaces: declared abstract, no natives ---- */
@@ -7937,6 +8496,9 @@ const nj_builtin_class nj_lib_lcdui_classes[] = {
     { NJ_C_DISPLAYABLE, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
       displayable_fields, NJ_LCDUI_N(displayable_fields),
       displayable_methods, NJ_LCDUI_N(displayable_methods) },
+    { "javax/microedition/lcdui/Screen", NJ_C_DISPLAYABLE,
+      NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
+      NULL, 0u, screen_methods, NJ_LCDUI_N(screen_methods) },
     { NJ_C_CANVAS, NJ_C_DISPLAYABLE, NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
       canvas_fields, NJ_LCDUI_N(canvas_fields),
       canvas_methods, NJ_LCDUI_N(canvas_methods) },
@@ -7955,19 +8517,19 @@ const nj_builtin_class nj_lib_lcdui_classes[] = {
     { NJ_C_TICKER, "java/lang/Object", NJ_ACC_PUBLIC,
       ticker_fields, NJ_LCDUI_N(ticker_fields),
       ticker_methods, NJ_LCDUI_N(ticker_methods) },
-    { NJ_C_ALERT, NJ_C_DISPLAYABLE, NJ_ACC_PUBLIC,
+    { NJ_C_ALERT, "javax/microedition/lcdui/Screen", NJ_ACC_PUBLIC,
       alert_fields, NJ_LCDUI_N(alert_fields),
       alert_methods, NJ_LCDUI_N(alert_methods) },
     { NJ_C_ALERTTYPE, "java/lang/Object", NJ_ACC_PUBLIC,
       alerttype_fields, NJ_LCDUI_N(alerttype_fields),
       alerttype_methods, NJ_LCDUI_N(alerttype_methods) },
-    { NJ_C_FORM, NJ_C_DISPLAYABLE, NJ_ACC_PUBLIC,
+    { NJ_C_FORM, "javax/microedition/lcdui/Screen", NJ_ACC_PUBLIC,
       form_fields, NJ_LCDUI_N(form_fields),
       form_methods, NJ_LCDUI_N(form_methods) },
-    { NJ_C_LIST, NJ_C_FORM, NJ_ACC_PUBLIC,
+    { NJ_C_LIST, "javax/microedition/lcdui/Screen", NJ_ACC_PUBLIC,
       list_fields, NJ_LCDUI_N(list_fields),
       list_methods, NJ_LCDUI_N(list_methods) },
-    { NJ_C_TEXTBOX, NJ_C_DISPLAYABLE, NJ_ACC_PUBLIC,
+    { NJ_C_TEXTBOX, "javax/microedition/lcdui/Screen", NJ_ACC_PUBLIC,
       textbox_fields, NJ_LCDUI_N(textbox_fields),
       textbox_methods, NJ_LCDUI_N(textbox_methods) },
     { NJ_C_ITEM, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
@@ -8010,6 +8572,8 @@ const int nj_lib_lcdui_class_count =
 const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_IMAGE, "<init>", "()V", img_init_wh },
     { NJ_C_IMAGE, "createImage", "(II)L" NJ_C_IMAGE ";", img_createImage_wh },
+    { NJ_C_IMAGE, "createImage", "(L" NJ_C_IMAGE ";)L" NJ_C_IMAGE ";", img_createImage_copy },
+    { NJ_C_IMAGE, "createImage", "(IIIIII)L" NJ_C_IMAGE ";", img_createImage_sixints },
     { NJ_C_IMAGE, "createImage", "(L" NJ_C_IMAGE ";IIIII)L" NJ_C_IMAGE ";", img_createImage_img },
     { NJ_C_IMAGE, "createImage", "([BII)L" NJ_C_IMAGE ";", img_createImage_bytes3 },
     { NJ_C_IMAGE, "createImage", "([BIII)L" NJ_C_IMAGE ";", img_createImage_bytes },
@@ -8041,6 +8605,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_FONT, "substringWidth", "(Ljava/lang/String;II)I", font_substringWidth },
 
     { NJ_C_GRAPHICS, "<init>", "(L" NJ_C_IMAGE ";)V", g_init },
+    { NJ_C_GRAPHICS, "<init>", "()V", g_init_noarg },
     { NJ_C_GRAPHICS, "translate", "(II)V", g_translate },
     { NJ_C_GRAPHICS, "getTranslateX", "()I", g_getTranslateX },
     { NJ_C_GRAPHICS, "getTranslateY", "()I", g_getTranslateY },
@@ -8059,6 +8624,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_GRAPHICS, "getAlphaComponent", "()I", g_getAlphaComponent },
     { NJ_C_GRAPHICS, "setAlpha", "(I)V", g_setAlpha },
     { NJ_C_GRAPHICS, "getAlpha", "()I", g_getAlpha },
+    { NJ_C_GRAPHICS, "getGrayScale", "()I", g_getGrayScale },
     { NJ_C_GRAPHICS, "setGrayScale", "(I)V", g_setGrayScale },
     { NJ_C_GRAPHICS, "setBlendMode", "(I)V", g_setBlendMode },
     { NJ_C_GRAPHICS, "getBlendMode", "()I", g_getBlendMode },
@@ -8066,6 +8632,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_GRAPHICS, "getStrokeStyle", "()I", g_getStrokeStyle },
     { NJ_C_GRAPHICS, "setFont", "(L" NJ_C_FONT ";)V", g_setFont },
     { NJ_C_GRAPHICS, "getFont", "()L" NJ_C_FONT ";", g_getFont },
+    { NJ_C_GRAPHICS, "setXORMode", "(Z)V", g_setXORModeFlag },
     { NJ_C_GRAPHICS, "setXORMode", "(L" NJ_C_GRAPHICS ";)V", g_setXORMode },
     { NJ_C_GRAPHICS, "drawLine", "(IIII)V", g_drawLine },
     { NJ_C_GRAPHICS, "drawRect", "(IIII)V", g_drawRect },
@@ -8082,9 +8649,8 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_GRAPHICS, "drawChars", "([CIIIII)V", g_drawChars },
     { NJ_C_GRAPHICS, "drawChar", "(CIII)V", g_drawChar },
     { NJ_C_GRAPHICS, "drawImage", "(L" NJ_C_IMAGE ";III)V", g_drawImage },
-    { NJ_C_GRAPHICS, "drawRegion", "(L" NJ_C_IMAGE ";IIIII)V", g_drawRegion4 },
-    { NJ_C_GRAPHICS, "drawRegion", "(L" NJ_C_IMAGE ";IIIIIII)V", g_drawRegion8 },
-    { NJ_C_GRAPHICS, "drawRegion", "(L" NJ_C_IMAGE ";IIIIIIIL" NJ_C_IMAGE ";)V", g_drawRegion9 },
+    { NJ_C_GRAPHICS, "drawRegion", "(L" NJ_C_IMAGE ";IIIIIIII)V", g_drawRegion },
+    { NJ_C_GRAPHICS, "drawRegion", "(L" NJ_C_IMAGE ";IIIIIIIII)V", g_drawRegion },
     { NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", g_drawRGB },
     { NJ_C_GRAPHICS, "copyArea", "(IIIIIII)V", g_copyArea },
 
@@ -8120,8 +8686,8 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_CANVAS, "serviceRepaints", "()V", c_serviceRepaints },
     { NJ_C_CANVAS, "setFullScreenMode", "(Z)V", c_setFullScreenMode },
 
-    { NJ_C_COMMAND, "<init>", "(ILjava/lang/String;I)V", cmd_init },
-    { NJ_C_COMMAND, "<init>", "(ILjava/lang/String;II)V", cmd_init_long },
+    { NJ_C_COMMAND, "<init>", "(Ljava/lang/String;II)V", cmd_init },
+    { NJ_C_COMMAND, "<init>", "(Ljava/lang/String;III)V", cmd_init_long },
     { NJ_C_COMMAND, "getCommandType", "()I", cmd_getCommandType },
     { NJ_C_COMMAND, "getLabel", "()Ljava/lang/String;", cmd_getLabel },
     { NJ_C_COMMAND, "getLongLabel", "()Ljava/lang/String;", cmd_getLongLabel },
@@ -8152,7 +8718,10 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_ITEM, "njHeight", "(I)I", item_njHeight },
     { NJ_C_ITEM, "njSelected", "(I)Ljava/lang/String;", item_njSelected },
 
-    { NJ_C_STRINGITEM, "<init>", "(Ljava/lang/String;Ljava/lang/String;I)V", si_init },
+    { NJ_C_STRINGITEM, "<init>", "(Ljava/lang/String;Ljava/lang/String;)V", si_init },
+    { NJ_C_STRINGITEM, "<init>", "(Ljava/lang/String;Ljava/lang/String;I)V", si_init_mode },
+    { NJ_C_STRINGITEM, "getFont", "()L" NJ_C_FONT ";", si_getFont },
+    { NJ_C_STRINGITEM, "setFont", "(L" NJ_C_FONT ";)V", si_setFont },
     { NJ_C_STRINGITEM, "getText", "()Ljava/lang/String;", si_getText },
     { NJ_C_STRINGITEM, "setText", "(Ljava/lang/String;)V", si_setText },
     { NJ_C_STRINGITEM, "getAppearanceMode", "()I", si_getAppearanceMode },
@@ -8162,7 +8731,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_STRINGITEM, "njText", "()Ljava/lang/String;", si_njText },
     { NJ_C_STRINGITEM, "njHeight", "(I)I", si_njHeight },
 
-    { NJ_C_IMAGEITEM, "<init>", "(L" NJ_C_IMAGE ";Ljava/lang/String;ILjava/lang/String;)V", ii_init },
+    { NJ_C_IMAGEITEM, "<init>", "(Ljava/lang/String;L" NJ_C_IMAGE ";ILjava/lang/String;)V", ii_init },
     { NJ_C_IMAGEITEM, "getImage", "()L" NJ_C_IMAGE ";", ii_getImage },
     { NJ_C_IMAGEITEM, "setImage", "(L" NJ_C_IMAGE ";)V", ii_setImage },
     { NJ_C_IMAGEITEM, "getAltText", "()Ljava/lang/String;", ii_getAltText },
@@ -8181,9 +8750,13 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_GAUGE, "njText", "()Ljava/lang/String;", gauge_njText },
     { NJ_C_GAUGE, "njHeight", "(I)I", gauge_njHeight },
 
-    { NJ_C_CHOICEGROUP, "<init>", "(ILjava/lang/String;)V", cg_init },
+    { NJ_C_CHOICEGROUP, "<init>", "(Ljava/lang/String;I)V", cg_init },
+    { NJ_C_CHOICEGROUP, "<init>", "(Ljava/lang/String;I[Ljava/lang/String;[L" NJ_C_IMAGE ";)V", cg_init_arrays },
+    { NJ_C_CHOICEGROUP, "set", "(ILjava/lang/String;L" NJ_C_IMAGE ";)V", cg_set },
+    { NJ_C_CHOICEGROUP, "setSelectedIndex", "(IZ)V", cg_setSelectedIndex2 },
     { NJ_C_CHOICEGROUP, "append", "(Ljava/lang/String;)I", cg_append },
     { NJ_C_CHOICEGROUP, "append", "(Ljava/lang/String;L" NJ_C_IMAGE ";)I", cg_append_img },
+    { NJ_C_CHOICEGROUP, "append", "(Ljava/lang/String;L" NJ_C_IMAGE ";)V", cg_append_img },
     { NJ_C_CHOICEGROUP, "insert", "(ILjava/lang/String;)V", cg_insert },
     { NJ_C_CHOICEGROUP, "insert", "(ILjava/lang/String;L" NJ_C_IMAGE ";)V", cg_insert_img },
     { NJ_C_CHOICEGROUP, "delete", "(I)V", cg_delete },
@@ -8208,7 +8781,8 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_TEXTFIELD, "<init>", "(Ljava/lang/String;Ljava/lang/String;II)V", tf_init },
     { NJ_C_TEXTFIELD, "getString", "()Ljava/lang/String;", tf_getString },
     { NJ_C_TEXTFIELD, "setString", "(Ljava/lang/String;)V", tf_setString },
-    { NJ_C_TEXTFIELD, "getChars", "([C)V", tf_getChars },
+    { NJ_C_TEXTFIELD, "getChars", "([C)I", tf_getChars },
+    { NJ_C_TEXTFIELD, "insert", "(Ljava/lang/String;I)V", tf_insert_str },
     { NJ_C_TEXTFIELD, "setChars", "([CII)V", tf_setChars },
     { NJ_C_TEXTFIELD, "insert", "([CIII)V", tf_insert },
     { NJ_C_TEXTFIELD, "delete", "(II)V", tf_delete },
@@ -8222,9 +8796,12 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_TEXTFIELD, "njText", "()Ljava/lang/String;", tf_njText },
     { NJ_C_TEXTFIELD, "njHeight", "(I)I", tf_njHeight },
 
-    { NJ_C_DATEFIELD, "<init>", "(Ljava/lang/String;JI)V", df_init },
-    { NJ_C_DATEFIELD, "getDate", "()J", df_getDate },
-    { NJ_C_DATEFIELD, "setDate", "(J)V", df_setDate },
+    { NJ_C_DATEFIELD, "<init>", "(Ljava/lang/String;I)V", df_init },
+    { NJ_C_DATEFIELD, "<init>", "(Ljava/lang/String;ILjava/util/TimeZone;)V", df_init_zone },
+    { NJ_C_DATEFIELD, "getDate", "()Ljava/util/Date;", df_getDate },
+    { NJ_C_DATEFIELD, "setDate", "(Ljava/util/Date;)V", df_setDate },
+    { NJ_C_DATEFIELD, "getTimeZone", "()Ljava/util/TimeZone;", df_getTimeZone },
+    { NJ_C_DATEFIELD, "setTimeZone", "(Ljava/util/TimeZone;)V", df_setTimeZone },
     { NJ_C_DATEFIELD, "setInputMode", "(I)V", df_setInputMode },
     { NJ_C_DATEFIELD, "getInputMode", "()I", df_getInputMode },
     { NJ_C_DATEFIELD, "njText", "()Ljava/lang/String;", df_njText },
@@ -8236,6 +8813,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_SPACER, "njHeight", "(I)I", spacer_njHeight },
 
     { NJ_C_FORM, "<init>", "(Ljava/lang/String;)V", form_init },
+    { NJ_C_FORM, "<init>", "(Ljava/lang/String;[L" NJ_C_ITEM ";)V", form_init_items },
     { NJ_C_FORM, "append", "(Ljava/lang/String;)I", form_append_str },
     { NJ_C_FORM, "append", "(L" NJ_C_IMAGE ";)I", form_append_img },
     { NJ_C_FORM, "append", "(L" NJ_C_ITEM ";)I", form_append_item },
@@ -8265,8 +8843,11 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_LIST, "setImage", "(IL" NJ_C_IMAGE ";)V", list_setImage },
     { NJ_C_LIST, "getSelectedIndex", "()I", list_getSelectedIndex },
     { NJ_C_LIST, "setSelectedIndex", "(I)V", list_setSelectedIndex },
+    { NJ_C_LIST, "setSelectedIndex", "(IZ)V", list_setSelectedIndex2 },
     { NJ_C_LIST, "isSelected", "(I)Z", list_isSelected },
-    { NJ_C_LIST, "setSelectedFlags", "([Z)I", list_setSelectedFlags },
+    { NJ_C_LIST, "setSelectedFlags", "([Z)V", list_setSelectedFlags },
+    { NJ_C_LIST, "set", "(ILjava/lang/String;L" NJ_C_IMAGE ";)V", list_set },
+    { NJ_C_LIST, "setSelectCommand", "(L" NJ_C_COMMAND ";)V", list_setSelectCommand },
     { NJ_C_LIST, "getSelectedFlags", "([Z)I", list_getSelectedFlags },
     { NJ_C_LIST, "setFitPolicy", "(I)V", list_setFitPolicy },
     { NJ_C_LIST, "getFitPolicy", "()I", list_getFitPolicy },
@@ -8277,7 +8858,8 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_TEXTBOX, "<init>", "(Ljava/lang/String;Ljava/lang/String;II)V", tb_init },
     { NJ_C_TEXTBOX, "getString", "()Ljava/lang/String;", tb_getString },
     { NJ_C_TEXTBOX, "setString", "(Ljava/lang/String;)V", tb_setString },
-    { NJ_C_TEXTBOX, "getChars", "([C)V", tb_getChars },
+    { NJ_C_TEXTBOX, "getChars", "([C)I", tb_getChars },
+    { NJ_C_TEXTBOX, "insert", "(Ljava/lang/String;I)V", tb_insert_str },
     { NJ_C_TEXTBOX, "setChars", "([CII)V", tb_setChars },
     { NJ_C_TEXTBOX, "insert", "([CIII)V", tb_insert },
     { NJ_C_TEXTBOX, "delete", "(II)V", tb_delete },
@@ -8310,11 +8892,13 @@ const nj_native_entry nj_lib_lcdui_table[] = {
 
     { NJ_C_ALERTTYPE, "<init>", "(I)V", alerttype_init },
     { NJ_C_ALERTTYPE, "playSound", "(L" NJ_C_DISPLAY ";)Z", alerttype_playSound },
+    { NJ_C_ALERTTYPE, "getTypeName", "(L" NJ_C_ALERTTYPE ";)Ljava/lang/String;", alerttype_getTypeName },
     { NJ_C_ALERTTYPE, "getTypeName", "()Ljava/lang/String;", alerttype_getTypeName },
 
     { NJ_C_DISPLAY, "getDisplay", "(Ljavax/microedition/midlet/MIDlet;)L" NJ_C_DISPLAY ";", disp_getDisplay },
     { NJ_C_DISPLAY, "setCurrent", "(L" NJ_C_DISPLAYABLE ";)V", disp_setCurrent },
     { NJ_C_DISPLAY, "setCurrent", "(L" NJ_C_ALERT ";L" NJ_C_DISPLAYABLE ";)V", disp_setCurrent_alert },
+    { NJ_C_DISPLAY, "setCurrentItem", "(L" NJ_C_ITEM ";)V", disp_setCurrentItem },
     { NJ_C_DISPLAY, "getCurrent", "()L" NJ_C_DISPLAYABLE ";", disp_getCurrent },
     { NJ_C_DISPLAY, "callSerially", "(Ljava/lang/Runnable;)V", disp_callSerially },
     { NJ_C_DISPLAY, "isColor", "()Z", disp_isColor },
@@ -8376,11 +8960,11 @@ static void lcdui_select_command(nj_vm *vm)
         nj_clear_exception(vm);
         return;
     }
-    a[0].i = 8;          /* Command.ITEM */
-    a[1].r = label;
+    a[0].r = label;      /* Command(String label, int type, int priority) */
+    a[1].i = 8;          /* Command.ITEM */
     a[2].i = 0;
     if (nj_call_special(vm, c, NJ_C_COMMAND, "<init>",
-                        "(ILjava/lang/String;I)V", a, NULL) != NJ_OK) {
+                        "(Ljava/lang/String;II)V", a, NULL) != NJ_OK) {
         nj_clear_exception(vm);
         return;
     }
@@ -8401,6 +8985,7 @@ nj_status nj_lcdui_late_init(nj_vm *vm)
     /* ---- Font ---- */
     lcdui_const_int(vm, NJ_C_FONT, "FACE_SYSTEM",       0);
     lcdui_const_int(vm, NJ_C_FONT, "FACE_MONOSPACED",   32);
+    lcdui_const_int(vm, NJ_C_FONT, "FACE_MONOSPACE",    32);
     lcdui_const_int(vm, NJ_C_FONT, "FACE_PROPORTIONAL", 64);
     lcdui_const_int(vm, NJ_C_FONT, "STYLE_PLAIN",       0);
     lcdui_const_int(vm, NJ_C_FONT, "STYLE_BOLD",        1);
@@ -8441,7 +9026,7 @@ nj_status nj_lcdui_late_init(nj_vm *vm)
     lcdui_const_int(vm, NJ_C_CANVAS, "KEY_FIRE",  -5);
     lcdui_const_int(vm, NJ_C_CANVAS, "KEY_SOFTKEY1", -6);
     lcdui_const_int(vm, NJ_C_CANVAS, "KEY_SOFTKEY2", -7);
-    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_SOFTKEY3", -21);
+    lcdui_const_int(vm, NJ_C_CANVAS, "KEY_SOFTKEY3", -8);
     lcdui_const_int(vm, NJ_C_CANVAS, "UP",    1);
     lcdui_const_int(vm, NJ_C_CANVAS, "DOWN",  6);
     lcdui_const_int(vm, NJ_C_CANVAS, "LEFT",  2);
@@ -8461,6 +9046,8 @@ nj_status nj_lcdui_late_init(nj_vm *vm)
     lcdui_const_int(vm, NJ_C_COMMAND, "STOP",   6);
     lcdui_const_int(vm, NJ_C_COMMAND, "EXIT",   7);
     lcdui_const_int(vm, NJ_C_COMMAND, "ITEM",   8);
+    lcdui_const_int(vm, NJ_C_COMMAND, "PRIORITY_1", 1);
+    lcdui_const_int(vm, NJ_C_COMMAND, "PRIORITY_2", 2);
 
     /* ---- Item layout ---- */
     lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_DEFAULT",         0);
@@ -8497,18 +9084,18 @@ nj_status nj_lcdui_late_init(nj_vm *vm)
     lcdui_const_int(vm, NJ_C_GAUGE, "INCREMENTAL_UPDATING",    3);
 
     /* ---- ChoiceGroup / List ---- */
-    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "MULTIPLE",  1);
-    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "EXCLUSIVE", 2);
-    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "IMPLICIT",  3);
+    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "EXCLUSIVE", NJ_CHOICE_EXCLUSIVE);
+    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "MULTIPLE",  NJ_CHOICE_MULTIPLE);
+    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "IMPLICIT",  NJ_CHOICE_IMPLICIT);
+    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "TEXT_WRAP_DEFAULT", 0);
     lcdui_const_int(vm, NJ_C_CHOICEGROUP, "TEXT_WRAP_ON",      1);
-    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "TEXT_WRAP_OFF",     0);
-    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "TEXT_WRAP_DEFAULT", -1);
-    lcdui_const_int(vm, NJ_C_LIST, "IMPLICIT",  3);
-    lcdui_const_int(vm, NJ_C_LIST, "EXCLUSIVE", 2);
-    lcdui_const_int(vm, NJ_C_LIST, "MULTIPLE",  1);
+    lcdui_const_int(vm, NJ_C_CHOICEGROUP, "TEXT_WRAP_OFF",     2);
+    lcdui_const_int(vm, NJ_C_LIST, "EXCLUSIVE", NJ_CHOICE_EXCLUSIVE);
+    lcdui_const_int(vm, NJ_C_LIST, "MULTIPLE",  NJ_CHOICE_MULTIPLE);
+    lcdui_const_int(vm, NJ_C_LIST, "IMPLICIT",  NJ_CHOICE_IMPLICIT);
+    lcdui_const_int(vm, NJ_C_LIST, "TEXT_WRAP_DEFAULT", 0);
     lcdui_const_int(vm, NJ_C_LIST, "TEXT_WRAP_ON",      1);
-    lcdui_const_int(vm, NJ_C_LIST, "TEXT_WRAP_OFF",     0);
-    lcdui_const_int(vm, NJ_C_LIST, "TEXT_WRAP_DEFAULT", -1);
+    lcdui_const_int(vm, NJ_C_LIST, "TEXT_WRAP_OFF",     2);
 
     /* ---- TextField / TextBox ---- */
     lcdui_const_int(vm, NJ_C_TEXTFIELD, "ANY",         0);
@@ -8563,11 +9150,11 @@ nj_status nj_lcdui_late_init(nj_vm *vm)
         nj_ref label = nj_string_new(vm, "Dismiss");
         if (dismiss && label) {
             nj_value a[3];
-            a[0].i = 4;      /* Command.OK */
-            a[1].r = label;
+            a[0].r = label;  /* Command(String label, int type, int priority) */
+            a[1].i = 4;      /* Command.OK */
             a[2].i = 0;
             if (nj_call_special(vm, dismiss, NJ_C_COMMAND, "<init>",
-                                "(ILjava/lang/String;I)V", a, NULL) != NJ_OK) {
+                                "(Ljava/lang/String;II)V", a, NULL) != NJ_OK) {
                 nj_clear_exception(vm);
             }
         } else {

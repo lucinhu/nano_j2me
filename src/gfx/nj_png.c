@@ -43,38 +43,8 @@
 #endif
 
 /* ------------------------------------------------------------------ */
-/* Limits                                                              */
-/* ------------------------------------------------------------------ */
-
-/* One dimension cap, as requested by the Image API contract. */
-#define NJ_PNG_MAX_DIM 4096
-
-/* Worst case inflate target: 16-bit RGBA scanlines plus the filter byte. */
-#define NJ_PNG_MAX_RAW \
-    ((nj_u8)NJ_PNG_MAX_DIM * (((nj_u8)NJ_PNG_MAX_DIM * 8u) + 1u))
-
-/* Initial inflate guess: 8x the compressed size plus a floor, clamped to the
- * exact size the image needs.  A stream that expands further (solid colour
- * images do) reports NJ_ERR_OOM and is retried with the exact requirement, so
- * the common case costs one inflate and the pathological one still works. */
-#define NJ_PNG_GUESS_SLACK 8u
-#define NJ_PNG_GUESS_FLOOR 65536u
-
-#define NJ_PNG_SIG_LEN 8
-
-/* Adam7: x origin, y origin, x step, y step. */
-static const nj_u1 s_adam7[7][4] = {
-    { 0, 0, 8, 8 },
-    { 4, 0, 8, 8 },
-    { 0, 4, 4, 8 },
-    { 2, 0, 4, 4 },
-    { 0, 2, 2, 4 },
-    { 1, 0, 2, 2 },
-    { 0, 1, 1, 2 }
-};
-
-/* ------------------------------------------------------------------ */
-/* Allocator plumbing                                                  */
+/* Allocator plumbing (compiled even when PNG support is off, because      */
+/* nj_image_load/nj_image_free/nj_image_create still allocate)            */
 /* ------------------------------------------------------------------ */
 
 typedef struct png_alloc {
@@ -121,6 +91,42 @@ static void png_mem_free(png_alloc *a, void *p)
     (void)a;
 #endif
 }
+
+/* ------------------------------------------------------------------ */
+/* Limits visible even when PNG support is compiled out                */
+/* ------------------------------------------------------------------ */
+
+/* One dimension cap, as requested by the Image API contract. */
+#define NJ_PNG_MAX_DIM 4096
+#define NJ_PNG_SIG_LEN 8
+
+#if NJ_ENABLE_PNG
+
+/* ------------------------------------------------------------------ */
+/* PNG-only limits                                                     */
+/* ------------------------------------------------------------------ */
+
+/* Worst case inflate target: 16-bit RGBA scanlines plus the filter byte. */
+#define NJ_PNG_MAX_RAW \
+    ((nj_u8)NJ_PNG_MAX_DIM * (((nj_u8)NJ_PNG_MAX_DIM * 8u) + 1u))
+
+/* Initial inflate guess: 8x the compressed size plus a floor, clamped to the
+ * exact size the image needs.  A stream that expands further (solid colour
+ * images do) reports NJ_ERR_OOM and is retried with the exact requirement, so
+ * the common case costs one inflate and the pathological one still works. */
+#define NJ_PNG_GUESS_SLACK 8u
+#define NJ_PNG_GUESS_FLOOR 65536u
+
+/* Adam7: x origin, y origin, x step, y step. */
+static const nj_u1 s_adam7[7][4] = {
+    { 0, 0, 8, 8 },
+    { 4, 0, 8, 8 },
+    { 0, 4, 4, 8 },
+    { 2, 0, 4, 4 },
+    { 0, 2, 2, 4 },
+    { 1, 0, 2, 2 },
+    { 0, 1, 1, 2 }
+};
 
 /* ------------------------------------------------------------------ */
 /* Byte helpers                                                        */
@@ -728,6 +734,8 @@ static const char *png_reconstruct(const png_info *info, nj_u1 *raw,
     return NULL;
 }
 
+#endif /* NJ_ENABLE_PNG */
+
 /* ------------------------------------------------------------------ */
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
@@ -737,6 +745,16 @@ nj_image *nj_png_decode(const void *data, nj_u4 size,
                         void  (*dealloc)(void *, void *),
                         const char **err)
 {
+#if !NJ_ENABLE_PNG
+    if (err != NULL) {
+        *err = "PNG support not built";
+    }
+    (void)data; (void)size; (void)alloc; (void)ud; (void)dealloc;
+    return NULL;
+#else
+    static const nj_u1 sig[NJ_PNG_SIG_LEN] = {
+        0x89u, 0x50u, 0x4Eu, 0x47u, 0x0Du, 0x0Au, 0x1Au, 0x0Au
+    };
     png_alloc mem;
     png_info info;
     nj_u1 *idat = NULL;
@@ -750,17 +768,6 @@ nj_image *nj_png_decode(const void *data, nj_u4 size,
     if (err != NULL) {
         *err = NULL;
     }
-
-#if !NJ_ENABLE_PNG
-    if (err != NULL) {
-        *err = "PNG support not built";
-    }
-    (void)data; (void)size; (void)alloc; (void)ud; (void)dealloc;
-    return NULL;
-#else
-    static const nj_u1 sig[NJ_PNG_SIG_LEN] = {
-        0x89u, 0x50u, 0x4Eu, 0x47u, 0x0Du, 0x0Au, 0x1Au, 0x0Au
-    };
     png_alloc_init(&mem, alloc, ud, dealloc);
 
     if (data == NULL || size < NJ_PNG_SIG_LEN) {
@@ -792,6 +799,18 @@ nj_image *nj_png_decode(const void *data, nj_u4 size,
         expected > 0xFFFFFFFFu) {
         if (err != NULL) {
             *err = "PNG image data size is out of range";
+        }
+        return NULL;
+    }
+    /*
+     * A DEFLATE stream cannot expand by more than 1032:1 (measured: a uniform
+     * 4096x4096 RGBA image compresses 1028.7:1).  Refusing impossible ratios
+     * here means a 20-byte file can never talk us into a 128 MB allocation
+     * before the stream has proven itself.
+     */
+    if (expected > (nj_u8)idat_len * 1100u + 65536u) {
+        if (err != NULL) {
+            *err = "PNG image data is too small for its header";
         }
         return NULL;
     }

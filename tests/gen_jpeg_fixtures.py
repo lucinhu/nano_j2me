@@ -517,31 +517,26 @@ def make_rgb_components(width, height, rgb, ids=(ord('R'), ord('G'), ord('B'))):
 # ----------------------------------------------------------------------
 # Fixture installation
 # ----------------------------------------------------------------------
-MANIFEST = []
+FILES = {}
+NOTES = {}
+# Fixtures whose `.rgb` reference is NOT Pillow's decode:
+#  * the 4-component ones, whose source is the RGB the encoder started from.
+#    Pillow converts CMYK with a multiplicative ink model
+#    (R = (255-C)*(255-K)/255) while the decoder under test implements the
+#    additive one (R = 255 - min(255, C+K)), which is the exact inverse of the
+#    generator's CMYK encoder; comparing against Pillow there would test the
+#    ink model, not the decoder.  Pillow's own CMYK decode is still checked
+#    for plausibility by hand in the generator's output.
+SOURCE_REF = {}
 
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def write_reference(name, pil_image, note=""):
-    """Dump PIL's decode of `name`.jpg as RGB and register the manifest line."""
-    path = os.path.join(OUT, name + ".jpg")
-    with open(path, "wb") as f:
-        f.write(FILES[name])
-    with Image.open(path) as im:
-        rgb = im.convert("RGB").tobytes()
-    with open(os.path.join(OUT, name + ".rgb"), "wb") as f:
-        f.write(rgb)
-    w, h = Image.open(path).size
-    MANIFEST.append((name, w, h, note))
-
-
-FILES = {}
-
-
 def add(name, data, note=""):
     FILES[name] = data
+    NOTES[name] = note
     return name
 
 
@@ -597,6 +592,10 @@ def positive_fixtures():
     im = Image.frombytes("RGB", (64, 48), pattern_rgb(64, 48))
     add("pattern_64x48", _pil(im, quality=85),
         "structured 64x48: MAE + 1/2 and 1/4 DCT-domain downscale")
+    # References for the scaled decode: Pillow's draft() mode drives libjpeg's
+    # own reduced-size IDCT, so it is a like-for-like reference (a box
+    # downsample of the full decode is not: the reduced IDCT is a low-pass of
+    # the block, not a 2x2 average).
 
     # --- hand-built -----------------------------------------------------
     rgb = pattern_rgb(35, 23)
@@ -643,6 +642,7 @@ def positive_fixtures():
         JpegEncoder(32, 32, comps, {0: STD_LUM_QUANT, 1: STD_CHR_QUANT},
                     adobe_transform=0, jfif=False).encode(),
         "4 components, APP14 transform=0 (inverted CMYK)")
+    SOURCE_REF["cmyk_32x32"] = rgb
 
     # 4-component Adobe YCCK (transform=2).
     planes = []
@@ -665,6 +665,7 @@ def positive_fixtures():
         JpegEncoder(32, 32, comps, {0: STD_LUM_QUANT, 1: STD_CHR_QUANT},
                     adobe_transform=2, jfif=False).encode(),
         "4 components, APP14 transform=2 (YCCK)")
+    SOURCE_REF["ycck_32x32"] = rgb
 
     # Non-interleaved sequential: one scan per component.
     rgb = pattern_rgb(24, 16)
@@ -721,6 +722,23 @@ def scan_offset(data):
     return find_segment(data, 0xDA)
 
 
+def craft_dht(table_class, table_id, bits, vals):
+    """A DHT segment built by hand (bits[1..16], one value per code)."""
+    payload = bytes([(table_class << 4) | table_id]) + bytes(bits[1:17]) + bytes(vals)
+    return b"\xff\xc4" + struct.pack(">H", len(payload) + 2) + payload
+
+
+def replace_segment(data, marker, occurrence, new_segment):
+    for n, (m, off) in enumerate(segments(data)):
+        if m == marker:
+            if occurrence:
+                occurrence -= 1
+                continue
+            ln = (data[off + 2] << 8) | data[off + 3]
+            return bytes(data[:off]) + new_segment + bytes(data[off + 2 + ln:])
+    raise AssertionError("segment FF%02X not found" % marker)
+
+
 def negative_fixtures():
     base = FILES["ycbcr420_35x23"]
 
@@ -732,24 +750,23 @@ def negative_fixtures():
 
     add("soi_only", b"\xff\xd8\xff\xd9", "SOI + EOI, nothing else")
 
-    # Over-subscribed Huffman table: three codes of length 1 (Kraft sum < 0).
+    # Over-subscribed Huffman table: three codes of length 1 (Kraft sum > 1).
     d = bytearray(base)
     off = find_segment(d, 0xC4)
-    ln = (d[off + 2] << 8) | d[off + 3]
     d[off + 4] = 0x00                     # DC table 0
     for k in range(16):                   # bits[1..16]
         d[off + 5 + k] = 0x00
     d[off + 5] = 0x03                     # three 1-bit codes: over-subscribed
     add("bad_huff_oversub", bytes(d), "Huffman table: three 1-bit codes")
 
-    # A table whose longest code is the all-ones code, which T.81 reserves as
-    # padding: 16 codes of length 1..16 (see B.2.4.2 / Annex C).
-    d = bytearray(base)
-    off = find_segment(d, 0xC4)
-    d[off + 4] = 0x00
-    for k in range(16):
-        d[off + 5 + k] = 0x01
-    add("bad_huff_allones", bytes(d), "Huffman table ends on the all-ones code")
+    # "All 1s code lengths": sixteen codes of length 1..16, in a well-formed
+    # segment.  Legal per Annex C but it leaves the all-ones code as the only
+    # 16-bit code word, so the entropy stream decodes to nonsense and the
+    # decoder must fail cleanly rather than run away.
+    d = bytes(base)
+    d = replace_segment(d, 0xC4, 0,
+                        craft_dht(0, 0, [0] + [1] * 16, list(range(16))))
+    add("bad_huff_allones", d, "Huffman table with all-1s code lengths")
 
     # Marker length that runs past EOF.
     d = bytearray(base)
@@ -811,6 +828,11 @@ def negative_fixtures():
 # ----------------------------------------------------------------------
 # main
 # ----------------------------------------------------------------------
+NEGATIVE = ("soi_only", "bad_huff_oversub", "bad_huff_allones", "len_past_eof",
+            "zero_dim", "five_comp", "two_comp", "arith_sof9", "bad_restart",
+            "no_sof", "trunc_mid")
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     for f in os.listdir(OUT):
@@ -820,18 +842,18 @@ def main():
     negative_fixtures()
 
     failures = []
+    manifest = []
     names = sorted(FILES)
     for name in names:
         path = os.path.join(OUT, name + ".jpg")
         with open(path, "wb") as f:
             f.write(FILES[name])
-        if name in ("soi_only", "bad_huff_oversub", "bad_huff_allones",
-                    "len_past_eof", "zero_dim", "five_comp", "two_comp",
-                    "arith_sof9", "bad_restart", "no_sof", "trunc_mid"):
-            MANIFEST.append((name, 0, 0, "negative"))
+        if name in NEGATIVE:
+            manifest.append((name, 0, 0, "negative", NOTES.get(name, "")))
             continue
         # Every positive fixture must be decodable by PIL as well: that is
-        # what makes the .rgb dump a meaningful reference.
+        # what makes the .rgb dump a meaningful reference.  PIL's decode of
+        # the very same file is the `.rgb` the C test compares against.
         try:
             with Image.open(path) as im:
                 w, h = im.size
@@ -839,20 +861,30 @@ def main():
         except Exception as exc:                       # pragma: no cover
             failures.append("%s: PIL cannot open it: %s" % (name, exc))
             continue
+        if name in SOURCE_REF:
+            rgb = SOURCE_REF[name]
+            NOTES[name] += " [reference is the source RGB: see the header]"
         with open(os.path.join(OUT, name + ".rgb"), "wb") as f:
             f.write(rgb)
-        # The manifest entry was already appended by positive_fixtures(); fix
-        # its size to what PIL reports so the C test and the generator agree.
-        MANIFEST[:] = [m for m in MANIFEST if m[0] != name]
-        MANIFEST.append((name, w, h, MANIFEST_NOTE.get(name, "")))
+        if name == "pattern_64x48":
+            for factor in (2, 4):
+                with Image.open(path) as im:
+                    im.draft("RGB", (w // factor, h // factor))
+                    scaled = im.convert("RGB")
+                if scaled.size != (w // factor, h // factor):
+                    failures.append("%s: draft %d gave %r" %
+                                    (name, factor, scaled.size))
+                with open(os.path.join(OUT, "%s.draft%d.rgb" % (name, factor)),
+                          "wb") as f:
+                    f.write(scaled.tobytes())
+        manifest.append((name, w, h, "positive", NOTES.get(name, "")))
 
     with open(os.path.join(OUT, "manifest.txt"), "w") as f:
         f.write("# name width height kind\n")
-        for name, w, h, note in sorted(MANIFEST):
-            kind = "negative" if note == "negative" else "positive"
+        for name, w, h, kind, note in manifest:
             f.write("%s %d %d %s\n" % (name, w, h, kind))
         f.write("# notes:\n")
-        for name, w, h, note in sorted(MANIFEST):
+        for name, w, h, kind, note in manifest:
             f.write("#   %s: %s\n" % (name, note))
 
     with open(os.path.join(OUT, "checksums.txt"), "w") as f:
@@ -860,8 +892,9 @@ def main():
             f.write("%s  %s.jpg\n" % (sha256(FILES[name]), name))
 
     print("wrote %d fixtures to %s" % (len(names), OUT))
-    for name in names:
-        print("  %-24s %6d bytes" % (name + ".jpg", len(FILES[name])))
+    for name, w, h, kind, note in manifest:
+        print("  %-24s %5dx%-4d %-9s %6d bytes  %s"
+              % (name + ".jpg", w, h, kind, len(FILES[name]), note))
     if failures:
         for x in failures:
             print("FAIL", x, file=sys.stderr)
@@ -869,15 +902,5 @@ def main():
     return 0
 
 
-MANIFEST_NOTE = {}
-
-
 if __name__ == "__main__":
-    # populate notes from the producers (they call add() with a note)
-    _orig_add = add
-
-    def add(name, data, note=""):       # noqa: F811 - intentional rebind
-        MANIFEST_NOTE[name] = note
-        return _orig_add(name, data, note)
-
     sys.exit(main())

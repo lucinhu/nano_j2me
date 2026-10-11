@@ -69,6 +69,14 @@
  *     nothing.  NJ_ROP_SET replaces the destination (even for fully
  *     transparent source pixels), NJ_ROP_PAINT skips fully transparent pixels
  *     and alpha blends the rest.
+ *   - An nj_image is a PACKED byte buffer whose layout follows nj_image.format
+ *     (RGB565: 2 bytes/pixel, RGB888: 3, ARGB8888: 4; stride = width * bpp),
+ *     exactly what nj_codec_image_new() allocates.  RGB565/RGB888 sources are
+ *     opaque and expanded to 8 bits per channel while blitting, so a decoder
+ *     may hand the rasterizer a half-size RGB565 frame.
+ *   - XOR: colour primitives write dst ^ xor_color; an image blit writes
+ *     dst ^ source ^ xor_argb, so a sprite can be erased and restored with a
+ *     bare dst ^= source.
  */
 
 #include "nj2me/nj_gfx.h"
@@ -1094,6 +1102,17 @@ typedef struct nj_ellipse {
     nj_s8 x0, y0, x1, y1; /* pixel box the shape may touch (inclusive) */
 } nj_ellipse;
 
+/* a / b rounded to nearest, b > 0, symmetric about zero.  Truncating instead
+ * would shift the apex of a large ellipse by half a pixel and can make the
+ * outline miss its own extreme row. */
+static nj_s8 nj_round_div(nj_s8 a, nj_s8 b)
+{
+    if (a >= 0) {
+        return (a + b / 2) / b;
+    }
+    return -((-a + b / 2) / b);
+}
+
 /* Pixel on the ellipse at `deg`, clamped into the shape's pixel box. */
 static void nj_ellipse_vertex(const nj_ellipse *e, int deg, int *px, int *py)
 {
@@ -1108,17 +1127,6 @@ static void nj_ellipse_vertex(const nj_ellipse *e, int deg, int *px, int *py)
 
     *px = (int)x;
     *py = (int)y;
-}
-
-/* a / b rounded to nearest, b > 0, symmetric about zero.  Truncating instead
- * would shift the apex of a large ellipse by half a pixel and can make the
- * outline miss its own extreme row. */
-static nj_s8 nj_round_div(nj_s8 a, nj_s8 b)
-{
-    if (a >= 0) {
-        return (a + b / 2) / b;
-    }
-    return -((-a + b / 2) / b);
 }
 
 /* Doubled horizontal half-width of the ellipse on a scanline whose doubled
@@ -1340,8 +1348,8 @@ void nj_gfx_round_rect(nj_gfx *g, int x, int y, int w, int h, int rw, int rh)
     /* Doubled centres of the four corner arcs; the draw box is (w+1)x(h+1). */
     tl.c2x = 2 * X + rw + 1;
     tl.c2y = 2 * Y + rh + 1;
-    tl.a2 = rw + 1;
-    tl.b2 = rh + 1;
+    tl.a2 = (nj_s8)rw + 1;
+    tl.b2 = (nj_s8)rh + 1;
     tl.x0 = X;      tl.y0 = Y;
     tl.x1 = X + rw; tl.y1 = Y + rh;
 
@@ -1530,22 +1538,48 @@ static nj_u4 nj_word_get(const nj_u1 *base, nj_s8 index)
     return v;
 }
 
-/* Source pixel -> 0xAARRGGBB, whatever the source format is. */
-static nj_u4 nj_src_pixel(const nj_u1 *base, nj_s8 index, int format)
+/* Bytes per pixel of a source image, or 0 when the format is unknown. */
+static int nj_image_bpp(int format)
 {
-    nj_u4 v = nj_word_get(base, index);
+    switch (format) {
+    case NJ_PIXFMT_RGB565:   return 2;
+    case NJ_PIXFMT_RGB888:   return 3;
+    case NJ_PIXFMT_ARGB8888: return 4;
+    default:                 return 0;
+    }
+}
 
+/*
+ * Source pixel at byte offset `off` -> 0xAARRGGBB.
+ *
+ * An nj_image is a packed byte buffer: RGB565 is two bytes per pixel (native
+ * 16-bit order), RGB888 three, ARGB8888 four (native 32-bit order).  That is
+ * what nj_codec_image_new() allocates (w * h * nj_codec_pixel_bytes(fmt)
+ * bytes), so a decoder can hand the rasterizer an RGB565 frame to halve the
+ * memory a full-screen background costs.
+ */
+static nj_u4 nj_src_pixel(const nj_u1 *base, nj_s8 off, int format)
+{
     if (format == NJ_PIXFMT_RGB565) {
-        nj_u4 r = (v >> 11) & 0x1Fu;
-        nj_u4 g = (v >> 5) & 0x3Fu;
-        nj_u4 b = v & 0x1Fu;
+        nj_u2 v;
+        nj_u4 r, g, b;
 
+        memcpy(&v, base + off, sizeof v);
+        r = ((nj_u4)v >> 11) & 0x1Fu;
+        g = ((nj_u4)v >> 5) & 0x3Fu;
+        b = (nj_u4)v & 0x1Fu;
         r = (r << 3) | (r >> 2);
         g = (g << 2) | (g >> 4);
         b = (b << 3) | (b >> 2);
         return 0xFF000000u | (r << 16) | (g << 8) | b;
     }
-    return v;
+    if (format == NJ_PIXFMT_RGB888) {
+        return 0xFF000000u
+             | ((nj_u4)base[off] << 16)
+             | ((nj_u4)base[off + 1] << 8)
+             | (nj_u4)base[off + 2];
+    }
+    return nj_word_get(base, off / 4);
 }
 
 /* Destination size of a transformed region: 90/270 swap width and height. */
@@ -1606,8 +1640,9 @@ static void nj_trans_inverse(int transform, int i, int j, int sw, int sh,
 /*
  * Shared blit for drawImage / drawImageROP / drawRGB / drawRegion.
  *
- * `src` points at the first pixel of the source buffer; row pitch is
- * src_stride pixels and the region [sx, sy, sw, sh] lives inside it.  The
+ * `src` points at the first pixel of the packed source buffer, whose row
+ * pitch is src_stride_bytes; the region [sx, sy, sw, sh] is given in PIXELS
+ * and lives inside it.  The
  * transform is applied by iterating the DESTINATION rectangle and inverse
  * mapping, so clipping is just an intersection with the clip rectangle and no
  * rotated copy is ever allocated.
@@ -1621,19 +1656,21 @@ static void nj_trans_inverse(int transform, int i, int j, int sw, int sh,
  * transformed source, indexed by destination-local coordinates; a destination
  * pixel is written only where the mask pixel is not fully transparent.
  */
-static void nj_region_draw(nj_gfx *g, const nj_u1 *src, int src_stride,
+static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                            int src_format, const nj_u1 *mask,
                            int mask_stride, int sx, int sy, int sw, int sh,
                            int transform, int rop, int xor_on, nj_u4 xor_argb,
                            int dx, int dy, int alpha)
 {
-    int tw, th, bpp;
+    int tw, th, bpp, src_bpp;
     nj_s8 X0, Y0, cx0, cy0, cx1, cy1, X, Y;
 
     if (!g || !nj_surface_ok(g->surf) || !src) {
         return;
     }
-    if (sw <= 0 || sh <= 0 || src_stride < sw) {
+    src_bpp = nj_image_bpp(src_format);
+    if (sw <= 0 || sh <= 0 || src_bpp == 0
+        || src_stride_bytes < (nj_s8)sw * src_bpp) {
         return;
     }
     if (g->clip_w <= 0 || g->clip_h <= 0) {
@@ -1668,7 +1705,8 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, int src_stride,
             nj_u4 sp;
 
             nj_trans_inverse(transform, i, j, sw, sh, &u, &v);
-            sp = nj_src_pixel(src, ((nj_s8)(sy + v)) * src_stride + (sx + u),
+            sp = nj_src_pixel(src, ((nj_s8)(sy + v)) * src_stride_bytes
+                                   + (nj_s8)(sx + u) * src_bpp,
                               src_format);
 
             if (mask) {
@@ -1678,8 +1716,8 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, int src_stride,
                 }
             }
 
-            sa = (src_format == NJ_PIXFMT_RGB565)
-               ? 255 : (int)((sp >> 24) & 0xFFu);
+            sa = (src_format == NJ_PIXFMT_ARGB8888)
+               ? (int)((sp >> 24) & 0xFFu) : 255;
             sa = (sa * alpha + 127) / 255;
 
             if (xor_on) {
@@ -1743,21 +1781,30 @@ static int nj_image_region(const nj_image *img, int *sx, int *sy, int *sw,
     return (*sw > 0 && *sh > 0) ? 1 : 0;
 }
 
+/* Effective source format of an nj_image; unknown values mean ARGB8888. */
+static int nj_image_format(const nj_image *img)
+{
+    if (img->format == NJ_PIXFMT_RGB565 || img->format == NJ_PIXFMT_RGB888) {
+        return img->format;
+    }
+    return NJ_PIXFMT_ARGB8888;
+}
+
 void nj_gfx_draw_image(nj_gfx *g, const nj_image *img, int dx, int dy,
                        int sx, int sy, int sw, int sh)
 {
-    int rop;
+    int rop, fmt;
 
     if (!g || !nj_image_region(img, &sx, &sy, &sw, &sh)) {
         return;
     }
+    fmt = nj_image_format(img);
     /* No ROP parameter: the blend mode decides.  SRC_OVER (the default) is
      * the MIDP drawImage rule — transparent pixels leave the destination
      * alone, partially transparent pixels are composited. */
     rop = (g->blend == NJ_BLEND_SRC_OVER) ? NJ_ROP_PAINT : NJ_ROP_SET;
-    nj_region_draw(g, (const nj_u1 *)img->pixels, img->width,
-                   img->format == NJ_PIXFMT_RGB565 ? NJ_PIXFMT_RGB565
-                                                   : NJ_PIXFMT_ARGB8888,
+    nj_region_draw(g, (const nj_u1 *)img->pixels,
+                   (nj_s8)img->width * nj_image_bpp(fmt), fmt,
                    NULL, 0, sx, sy, sw, sh, NJ_TRANS_NONE, rop,
                    g->use_xor, g->xor_color, dx, dy, 255);
 }
@@ -1766,12 +1813,14 @@ void nj_gfx_draw_image_rop(nj_gfx *g, const nj_image *img, int dx, int dy,
                            int sx, int sy, int sw, int sh, int rop,
                            int transform)
 {
+    int fmt;
+
     if (!g || !nj_image_region(img, &sx, &sy, &sw, &sh)) {
         return;
     }
-    nj_region_draw(g, (const nj_u1 *)img->pixels, img->width,
-                   img->format == NJ_PIXFMT_RGB565 ? NJ_PIXFMT_RGB565
-                                                   : NJ_PIXFMT_ARGB8888,
+    fmt = nj_image_format(img);
+    nj_region_draw(g, (const nj_u1 *)img->pixels,
+                   (nj_s8)img->width * nj_image_bpp(fmt), fmt,
                    NULL, 0, sx, sy, sw, sh, transform, rop,
                    g->use_xor, g->xor_color, dx, dy, 255);
 }
@@ -1780,19 +1829,15 @@ void nj_gfx_draw_rgb(nj_gfx *g, const nj_u1 *rgb, int scanlen, int alpha,
                      int dx, int dy, int sx, int sy, int sw, int sh,
                      int rop, int transform)
 {
-    /* `rgb` is a 0xAARRGGBB word stream (MIDP drawRGB / Image.getRGB
-     * layout); `scanlen` is the row pitch in BYTES and (sx, sy) is the region
-     * origin in PIXELS.  `alpha` scales every source pixel's own alpha. */
-    int stride_px;
-
+    /* `rgb` is a tightly packed 3-byte-per-pixel RGB stream (what the MIDP
+     * drawRGB path repacks its int[] into); `scanlen` is the row pitch in
+     * BYTES, (sx, sy) is the region origin in PIXELS, and `alpha` is the
+     * global opacity (255 = opaque) because this layout carries no per-pixel
+     * alpha. */
     if (!g || !rgb || sw <= 0 || sh <= 0 || scanlen <= 0) {
         return;
     }
-    stride_px = scanlen / 4;
-    if (stride_px < sw) {
-        return;
-    }
-    nj_region_draw(g, rgb, stride_px, NJ_PIXFMT_ARGB8888, NULL, 0,
+    nj_region_draw(g, rgb, scanlen, NJ_PIXFMT_RGB888, NULL, 0,
                    sx, sy, sw, sh, transform, rop,
                    g->use_xor, g->xor_color, dx, dy, alpha);
 }
@@ -1803,7 +1848,7 @@ void nj_gfx_draw_region(nj_gfx *g, const nj_image *src, int sx, int sy, int sw,
 {
     const nj_u1 *mask = NULL;
     int mask_stride = 0;
-    int xor_on;
+    int xor_on, fmt;
 
     if (!g || !nj_image_region(src, &sx, &sy, &sw, &sh)) {
         return;
@@ -1816,9 +1861,9 @@ void nj_gfx_draw_region(nj_gfx *g, const nj_image *src, int sx, int sy, int sw,
     /* The caller's is_xor/xor_argb pair drives sprite drawing; the graphics
      * context's own XOR mode also applies. */
     xor_on = is_xor || g->use_xor;
-    nj_region_draw(g, (const nj_u1 *)src->pixels, src->width,
-                   src->format == NJ_PIXFMT_RGB565 ? NJ_PIXFMT_RGB565
-                                                   : NJ_PIXFMT_ARGB8888,
+    fmt = nj_image_format(src);
+    nj_region_draw(g, (const nj_u1 *)src->pixels,
+                   (nj_s8)src->width * nj_image_bpp(fmt), fmt,
                    mask, mask_stride, sx, sy, sw, sh, transform, rop,
                    xor_on, is_xor ? xor_argb : g->xor_color, dx, dy, 255);
 }

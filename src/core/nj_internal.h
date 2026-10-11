@@ -259,6 +259,13 @@ typedef struct nj_codec_reg {
 /* ------------------------------------------------------------------ */
 #define NJ_CLASS_HASH 64
 
+/* Reasons a constant-pool entry failed to resolve. */
+#define NJ_RESOLVE_OK     0u
+#define NJ_RESOLVE_CLASS  1u
+#define NJ_RESOLVE_FIELD  2u
+#define NJ_RESOLVE_METHOD 3u
+#define NJ_RESOLVE_FORMAT 4u
+
 struct nj_vm {
     nj_heap heap;
 
@@ -298,6 +305,20 @@ struct nj_vm {
     nj_ref     exception;
     nj_u4      exception_pc;
     nj_method *exception_method;
+
+    /* Why the last constant-pool resolution failed.
+     *
+     * "it threw NoClassDefFoundError" is the least useful message a JVM can
+     * produce, and the most common real cause is not a missing class at all:
+     * it is a method or field that exists with a different descriptor.  A
+     * version of a library built against a slightly different API produces
+     * exactly that, and without the descriptor in the message it takes hours
+     * to spot.  Recording the reason here lets the interpreter raise
+     * NoSuchMethodError / NoSuchFieldError with the full signature instead. */
+    nj_u1       resolve_fail;      /* NJ_RESOLVE_* */
+    const char *resolve_cls;
+    const char *resolve_name;
+    const char *resolve_desc;
 
     /* interned strings */
     nj_ref     interned[NJ_MAX_INTERNED];
@@ -448,6 +469,9 @@ nj_status nj_class_ensure_refs(nj_vm *vm, nj_class *c);
 /* accessors used by the interpreter */
 const char *nj_cp_utf8(nj_class *c, nj_u2 index);
 nj_status   nj_cp_resolve(nj_vm *vm, nj_class *c, nj_u2 index, nj_cpentry **out);
+/* Raise the Java error matching the recorded resolution failure, with the
+ * full signature in the message.  Call after nj_cp_resolve returns non-NJ_OK. */
+nj_status   nj_resolve_error(nj_vm *vm);
 nj_method  *nj_method_lookup(nj_class *c, const char *name, const char *desc);
 const char *nj_cp_class_name(nj_class *c, nj_u2 class_index);
 nj_ref      nj_array_new_of(nj_vm *vm, const char *array_desc, nj_u4 len);

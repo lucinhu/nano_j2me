@@ -1261,6 +1261,37 @@ static const nj_builtin_method string_methods[] = {
     M("valueOf",           "(F)Ljava/lang/String;",            NJ_ACC_STATIC)
 };
 
+/*
+ * StringBuilder: the same operations as StringBuffer with the covariant
+ * return type javac actually calls.  Declared as its own table so the two
+ * descriptor sets can drift independently if they ever need to.
+ */
+static const nj_builtin_method stringbuilder_methods[] = {
+    M("<init>",           "()V",                                 0),
+    M("<init>",           "(I)V",                                0),
+    M("<init>",           "(Ljava/lang/String;)V",               0),
+    M("toString",         "()Ljava/lang/String;",                0),
+    M("length",           "()I",                                 0),
+    M("capacity",         "()I",                                 0),
+    M("ensureCapacity",   "(I)V",                                0),
+    M("charAt",           "(I)C",                                0),
+    M("setCharAt",        "(IC)V",                               0),
+    M("setLength",        "(I)V",                                0),
+    M("append",           "(Ljava/lang/Object;)Ljava/lang/StringBuilder;", 0),
+    M("append",           "(Ljava/lang/String;)Ljava/lang/StringBuilder;", 0),
+    M("append",           "(I)Ljava/lang/StringBuilder;",         0),
+    M("append",           "(J)Ljava/lang/StringBuilder;",         0),
+    M("append",           "(C)Ljava/lang/StringBuilder;",         0),
+    M("append",           "(Z)Ljava/lang/StringBuilder;",         0),
+    M("append",           "(F)Ljava/lang/StringBuilder;",         0),
+    M("append",           "([CII)Ljava/lang/StringBuilder;",      0),
+    M("reverse",          "()Ljava/lang/StringBuilder;",          0),
+    M("delete",           "(II)Ljava/lang/StringBuilder;",        0),
+    M("deleteCharAt",     "(I)Ljava/lang/StringBuilder;",         0),
+    M("insert",           "(ILjava/lang/String;)Ljava/lang/StringBuilder;", 0),
+    M("insert",           "(IC)Ljava/lang/StringBuilder;",        0)
+};
+
 static const nj_builtin_field stringbuffer_fields[] = {
     { "value", "[C", 0 },
     { "count", "I",  0 }
@@ -1295,16 +1326,32 @@ static const nj_builtin_method stringbuffer_methods[] = {
 /*
  * java.lang.StringBuilder does not exist in CLDC, but every modern javac
  * compiles `a + b` on Strings into a StringBuilder chain, so a JAR built with
- * a recent toolchain needs it.  It declares no members at all: it inherits
- * StringBuffer's fields and every method, which is exactly how the two relate
- * in Java SE apart from synchronisation.  One entry, full compatibility.
+ * a recent toolchain needs it.
+ *
+ * It inherits StringBuffer's FIELDS, but it cannot simply inherit its methods.
+ * In Java SE, StringBuilder declares its own append/insert/delete/reverse with
+ * a covariant return type (StringBuilder rather than StringBuffer), and javac
+ * emits that descriptor at the call site:
+ *
+ *     invokevirtual java/lang/StringBuilder.append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+ *
+ * whereas StringBuffer declares
+ *
+ *     invokevirtual java/lang/StringBuffer.append(Ljava/lang/String;)Ljava/lang/StringBuffer;
+ *
+ * A JVM distinguishes methods by name AND descriptor, so the covariant
+ * override appears as a distinct method that has to exist.  The descriptors
+ * therefore have to be duplicated here even though the C implementations are
+ * shared - `ret_ptype` is OBJECT either way, so the same native can serve both
+ * without knowing which it was reached through.
  */
 const nj_builtin_class nj_lib_string_classes[] = {
     { "java/lang/String", "java/lang/Object",
       NJ_ACC_PUBLIC | NJ_ACC_FINAL, NULL, 0u, string_methods,
       (nj_u2)(sizeof(string_methods) / sizeof(string_methods[0])) },
     { "java/lang/StringBuilder", "java/lang/StringBuffer",
-      NJ_ACC_PUBLIC | NJ_ACC_FINAL, NULL, 0u, NULL, 0u },
+      NJ_ACC_PUBLIC | NJ_ACC_FINAL, NULL, 0u, stringbuilder_methods,
+      (nj_u2)(sizeof(stringbuilder_methods) / sizeof(stringbuilder_methods[0])) },
     { "java/lang/StringBuffer", "java/lang/Object", NJ_ACC_PUBLIC,
       stringbuffer_fields,
       (nj_u2)(sizeof(stringbuffer_fields) / sizeof(stringbuffer_fields[0])),
@@ -1374,7 +1421,33 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/StringBuffer", "delete",         "(II)Ljava/lang/StringBuffer;", sb_delete },
     { "java/lang/StringBuffer", "deleteCharAt",   "(I)Ljava/lang/StringBuffer;", sb_deleteCharAt },
     { "java/lang/StringBuffer", "insert",         "(ILjava/lang/String;)Ljava/lang/StringBuffer;", sb_insert_str },
-    { "java/lang/StringBuffer", "insert",         "(IC)Ljava/lang/StringBuffer;", sb_insert_char }
+    { "java/lang/StringBuffer", "insert",         "(IC)Ljava/lang/StringBuffer;", sb_insert_char },
+
+    /* StringBuilder: the covariant descriptors javac emits.  Same natives as
+     * StringBuffer - the return type is OBJECT either way. */
+    { "java/lang/StringBuilder", "<init>",       "()V",                    sb_init },
+    { "java/lang/StringBuilder", "<init>",       "(I)V",                   sb_init_int },
+    { "java/lang/StringBuilder", "<init>",       "(Ljava/lang/String;)V",  sb_init_str },
+    { "java/lang/StringBuilder", "toString",     "()Ljava/lang/String;",   sb_toString },
+    { "java/lang/StringBuilder", "length",       "()I",                    sb_length },
+    { "java/lang/StringBuilder", "capacity",     "()I",                    sb_capacity },
+    { "java/lang/StringBuilder", "ensureCapacity","(I)V",                  sb_ensureCapacity },
+    { "java/lang/StringBuilder", "charAt",       "(I)C",                   sb_charAt },
+    { "java/lang/StringBuilder", "setCharAt",    "(IC)V",                  sb_setCharAt },
+    { "java/lang/StringBuilder", "setLength",    "(I)V",                   sb_setLength },
+    { "java/lang/StringBuilder", "append",       "(Ljava/lang/Object;)Ljava/lang/StringBuilder;", sb_append_obj },
+    { "java/lang/StringBuilder", "append",       "(Ljava/lang/String;)Ljava/lang/StringBuilder;", sb_append_str },
+    { "java/lang/StringBuilder", "append",       "(I)Ljava/lang/StringBuilder;", sb_append_int },
+    { "java/lang/StringBuilder", "append",       "(J)Ljava/lang/StringBuilder;", sb_append_long },
+    { "java/lang/StringBuilder", "append",       "(C)Ljava/lang/StringBuilder;", sb_append_char },
+    { "java/lang/StringBuilder", "append",       "(Z)Ljava/lang/StringBuilder;", sb_append_bool },
+    { "java/lang/StringBuilder", "append",       "(F)Ljava/lang/StringBuilder;", sb_append_float },
+    { "java/lang/StringBuilder", "append",       "([CII)Ljava/lang/StringBuilder;", sb_append_chars_range },
+    { "java/lang/StringBuilder", "reverse",      "()Ljava/lang/StringBuilder;", sb_reverse },
+    { "java/lang/StringBuilder", "delete",       "(II)Ljava/lang/StringBuilder;", sb_delete },
+    { "java/lang/StringBuilder", "deleteCharAt", "(I)Ljava/lang/StringBuilder;", sb_deleteCharAt },
+    { "java/lang/StringBuilder", "insert",       "(ILjava/lang/String;)Ljava/lang/StringBuilder;", sb_insert_str },
+    { "java/lang/StringBuilder", "insert",       "(IC)Ljava/lang/StringBuilder;", sb_insert_char },
 };
 const int nj_lib_string_count =
     (int)(sizeof(nj_lib_string_table) / sizeof(nj_lib_string_table[0]));

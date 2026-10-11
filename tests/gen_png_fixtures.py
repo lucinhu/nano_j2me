@@ -418,6 +418,19 @@ def build_all(out_dir, quiet):
     emit(out_dir, "filters_rgb8", build_png(w, h, 8, 2, raw),
          w, h, argb, 0, quiet=quiet)
 
+    # ---------------- 11b. wide rows, every filter ----------------
+    # 900-byte scanlines: exercises the Sub/Average/Paeth predictors across
+    # byte distances far larger than one pixel.
+    w, h = 300, 200
+    samples = {(x, y): ((x * 3 + y * 5) % 256, (x ^ y) % 256,
+                        (x * y) % 256)
+               for y in range(h) for x in range(w)}
+    raw = raw_stream(w, h, 8, 3, samples, 0, filters=[1, 2, 3, 4, 0])
+    argb = expected_argb(w, h, 8, 2, samples)
+    log("  filters_wide_rgb8 (300x200, 900-byte rows)")
+    emit(out_dir, "filters_wide_rgb8", build_png(w, h, 8, 2, raw),
+         w, h, argb, 0, quiet=quiet)
+
     # ---------------- 12. Adam7 interlaced ----------------
     w, h = 21, 17
     samples = {(x, y): ((x * 9 + y) % 256, (y * 5 + x * 2) % 256,

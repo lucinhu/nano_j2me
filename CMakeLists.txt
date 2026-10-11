@@ -93,8 +93,11 @@ endif()
 # ---------------------------------------------------------------------
 # Executable
 # ---------------------------------------------------------------------
-add_executable(nj2me apps/nj2me_main.c)
-target_link_libraries(nj2me PRIVATE nj2me)
+# NOTE: the executable must not be called "nj2me" - that name is already the
+# library target, and CMake rejects the duplicate (CMP0002).
+add_executable(nj2me-cli apps/nj2me_main.c)
+target_link_libraries(nj2me-cli PRIVATE nj2me)
+set_target_properties(nj2me-cli PROPERTIES OUTPUT_NAME nj2me)
 
 # ---------------------------------------------------------------------
 # Tests

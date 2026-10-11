@@ -306,11 +306,14 @@ static void test_fill_rect(tctx *t)
     /* The clip is device space and is not moved by translate(). */
     nj_gfx_translate(&g, 5, 5);
     CHECK(t, nj_gfx_get_clip_x(&g) == 3 && nj_gfx_get_clip_y(&g) == 2);
-    PX(t, &ts, 3, 2, C_WHITE, "translate does not repaint");
+    ts_clear(&ts, C_WHITE);
+    nj_gfx_fill_rect(&g, -100, -100, 300, 300);
+    PX(t, &ts, 3, 2, C_RED, "clip still applies after translate");
+    PX(t, &ts, 5, 2, C_WHITE, "clip still stops at x=5");
 
     /* clipRect intersects in user space. */
     nj_gfx_translate(&g, -5, -5);            /* back to (3,2) */
-    nj_gfx_clip_rect(&g, 1, 0, 10, 10);      /* device (4,2) .. */
+    nj_gfx_clip_rect(&g, 1, 0, 10, 10);      /* user (1,0) -> device (4,2) */
     CHECK(t, nj_gfx_get_clip_x(&g) == 4 && nj_gfx_get_clip_y(&g) == 2);
     CHECK(t, nj_gfx_get_clip_w(&g) == 1 && nj_gfx_get_clip_h(&g) == 2);
     nj_gfx_clip_rect(&g, 0, 0, 0, 5);        /* empty intersection */
@@ -320,6 +323,8 @@ static void test_fill_rect(tctx *t)
     PX(t, &ts, 4, 2, C_WHITE, "empty clip draws nothing");
 
     /* setClip beyond the surface is intersected with the surface. */
+    nj_gfx_translate(&g, -3, -2);            /* back to the surface origin */
+    CHECK(t, nj_gfx_dev_x(&g, 0) == 0 && nj_gfx_dev_y(&g, 0) == 0);
     nj_gfx_set_clip(&g, -1000, -1000, 5000, 5000);
     CHECK(t, nj_gfx_get_clip_x(&g) == 0 && nj_gfx_get_clip_y(&g) == 0);
     CHECK(t, nj_gfx_get_clip_w(&g) == 16 && nj_gfx_get_clip_h(&g) == 8);
@@ -494,7 +499,7 @@ static void test_rect(tctx *t)
     PX(t, &ts, 1, 1, C_BLACK, "clipped outline corner");
     PX(t, &ts, 6, 1, C_BLACK, "clipped outline top edge");
     PX(t, &ts, 1, 6, C_BLACK, "clipped outline left edge");
-    PX(t, &ts, 6, 6, C_BLACK, "clipped outline bottom-right corner");
+    PX(t, &ts, 6, 6, C_WHITE, "clipped outline: interior stays clear");
     PX(t, &ts, 7, 7, C_WHITE, "outline clipped away");
     PX(t, &ts, 0, 0, C_WHITE, "outline clipped away (before translate)");
     CHECK(t, ts_pad_ok(&ts));
@@ -523,7 +528,8 @@ static void test_arcs(tctx *t)
     PX(t, &ts, 0, 12, C_WHITE, "9 o'clock not in a 0..90 arc");
     PX(t, &ts, 12, 23, C_WHITE, "6 o'clock not in a 0..90 arc");
     PX(t, &ts, 12, 12, C_WHITE, "arc is an outline, not a fill");
-    PX(t, &ts, 17, 4, C_BLACK, "arc passes through the upper right");
+    PX(t, &ts, 20, 3, C_BLACK, "arc passes through the upper right");
+    PX(t, &ts, 17, 1, C_BLACK, "arc hugs the curve near 12 o'clock");
     PX(t, &ts, 4, 17, C_WHITE, "arc does not reach the lower left");
 
     ink = 0;
@@ -867,7 +873,8 @@ static void test_blend_xor(tctx *t)
     nj_gfx_init(&g, &ts.s);
     nj_gfx_set_color(&g, 0x80FF0000u);
     nj_gfx_fill_rect(&g, 0, 0, 4, 4);
-    PX(t, &ts, 0, 0, 0xFF800000u, "50% red over black (565)");
+    /* 128 -> r5 = 16 -> expanded back to (16<<3)|(16>>2) = 132 = 0x84. */
+    PX(t, &ts, 0, 0, 0xFF840000u, "50% red over black (565)");
 
     /* Fully transparent source paints nothing. */
     ts_clear(&ts, C_WHITE);
@@ -892,10 +899,11 @@ static void test_blend_xor(tctx *t)
     ts_clear(&ts, C_WHITE);
     nj_gfx_set_xor(&g, C_RED);
     nj_gfx_fill_rect(&g, 1, 1, 2, 2);
-    PX(t, &ts, 1, 1, 0xFF07FFFFu, "XOR white ^ red");
+    PX(t, &ts, 1, 1, 0xFF00FFFFu, "XOR white ^ red565 = 0x07FF");
     nj_gfx_fill_rect(&g, 1, 1, 2, 2);
     PX(t, &ts, 1, 1, C_WHITE, "XOR twice restores");
     nj_gfx_clear_xor(&g);
+    nj_gfx_set_color(&g, C_RED);
     nj_gfx_fill_rect(&g, 1, 1, 2, 2);
     PX(t, &ts, 1, 1, C_RED, "clear_xor restores normal painting");
 
@@ -959,7 +967,7 @@ static void test_images(tctx *t)
     ts_clear(&ts, C_WHITE);
     nj_gfx_draw_image_rop(&g, &img, 0, 0, 0, 0, 4, 1, NJ_ROP_SET,
                           NJ_TRANS_NONE);
-    PX(t, &ts, 1, 0, C_BLACK, "ROP_SET writes transparent source pixels");
+    PX(t, &ts, 1, 0, 0x00000000u, "ROP_SET writes transparent source pixels");
 
     /* ROP PAINT skips them. */
     ts_clear(&ts, C_WHITE);
@@ -995,9 +1003,9 @@ static void test_images(tctx *t)
         ts_clear(&ts, C_WHITE);
         nj_gfx_draw_region(&g, &img, 0, 0, 3, 1, NJ_TRANS_NONE, 0, 0u,
                            &mask, 1, 1, NJ_ROP_SET);
-        PX(t, &ts, 1, 1, buf[0], "masked region: column 0 blocked");
+        PX(t, &ts, 1, 1, C_WHITE, "masked region: column 0 blocked");
         PX(t, &ts, 2, 1, buf[1], "masked region: column 1 written");
-        PX(t, &ts, 3, 1, buf[2], "masked region: column 2 blocked");
+        PX(t, &ts, 3, 1, C_WHITE, "masked region: column 2 blocked");
         PX(t, &ts, 0, 1, C_WHITE, "masked region outside");
 
         /* 90 degree rotation swaps the destination extent, so the mask has
@@ -1021,37 +1029,98 @@ static void test_images(tctx *t)
     ts_clear(&ts, C_BLACK);
     nj_gfx_draw_region(&g, &img, 0, 0, 4, 1, NJ_TRANS_NONE, 1, C_GREEN,
                        NULL, 0, 0, NJ_ROP_PAINT);
-    PX(t, &ts, 0, 0, C_GREEN, "drawRegion XOR with a zero destination");
+    /* dst ^ source ^ xor_argb, over a 0xFF000000 destination. */
+    PX(t, &ts, 0, 0, 0xFF01FE01u, "drawRegion XOR of src 0xFF010101");
     PX(t, &ts, 1, 0, C_BLACK, "drawRegion XOR skips transparent (PAINT)");
-    PX(t, &ts, 2, 0, 0xFF00FF80u, "drawRegion XOR of 50% green");
+    PX(t, &ts, 2, 0, 0x80007F00u, "drawRegion XOR of 50% green");
     ts_clear(&ts, C_BLACK);
     nj_gfx_draw_region(&g, &img, 0, 0, 4, 1, NJ_TRANS_NONE, 1, C_GREEN,
                        NULL, 0, 0, NJ_ROP_SET);
-    PX(t, &ts, 1, 0, C_GREEN, "drawRegion XOR writes transparent (SET)");
+    PX(t, &ts, 1, 0, 0x0000FF00u, "drawRegion XOR writes transparent (SET)");
 
-    /* drawRGB: ARGB8888 byte stream, byte scan length, pixel source offset. */
+    /* drawRGB: tightly packed 3-byte RGB, byte scan length (with padding),
+     * pixel source offset and a global alpha. */
     {
-        nj_u1 rgb[2 * 6 * 4];
+        nj_u1 rgb[2 * 6 * 3];
         int k;
 
         memset(rgb, 0xEE, sizeof rgb);
-        /* Row 0 pixels 0..3 = 0xFF111111.. then 2 padding pixels. */
-        for (k = 0; k < 6; k++) {
-            nj_u4 v = (k < 4) ? (0xFF101010u * (nj_u4)(k + 1)) : 0xEEEEEEEEu;
-            memcpy(rgb + (size_t)k * 4, &v, 4);
-        }
-        for (k = 0; k < 6; k++) {
-            nj_u4 v = (k < 4) ? (0xFF202020u * (nj_u4)(k + 1)) : 0xEEEEEEEEu;
-            memcpy(rgb + 24 + (size_t)k * 4, &v, 4);
+        for (k = 0; k < 4; k++) {
+            rgb[k * 3 + 0] = (nj_u1)(0x10 * (k + 1));
+            rgb[k * 3 + 1] = 0x00;
+            rgb[k * 3 + 2] = 0x00;
+            rgb[18 + k * 3 + 0] = (nj_u1)(0x20 * (k + 1));
+            rgb[18 + k * 3 + 1] = 0x00;
+            rgb[18 + k * 3 + 2] = 0x00;
         }
         ts_clear(&ts, C_WHITE);
-        nj_gfx_draw_rgb(&g, rgb, 24, 255, 1, 1, 1, 0, 2, 2, NJ_ROP_SET,
+        nj_gfx_draw_rgb(&g, rgb, 18, 255, 1, 1, 1, 0, 2, 2, NJ_ROP_SET,
                         NJ_TRANS_NONE);
-        PX(t, &ts, 1, 1, 0xFF202020u, "drawRGB src(1,0)");
-        PX(t, &ts, 2, 1, 0xFF303030u, "drawRGB src(2,0)");
-        PX(t, &ts, 1, 2, 0xFF404040u, "drawRGB src(1,1) with row padding");
-        PX(t, &ts, 2, 2, 0xFF606060u, "drawRGB src(2,1) with row padding");
+        PX(t, &ts, 1, 1, 0xFF200000u, "drawRGB src(1,0)");
+        PX(t, &ts, 2, 1, 0xFF300000u, "drawRGB src(2,0)");
+        PX(t, &ts, 1, 2, 0xFF400000u, "drawRGB src(1,1) with row padding");
+        PX(t, &ts, 2, 2, 0xFF600000u, "drawRGB src(2,1) with row padding");
         PX(t, &ts, 0, 1, C_WHITE, "drawRGB honours the source offset");
+
+        /* The global alpha scales the whole source (RGB has no alpha of its
+         * own).  src (2,0) is #200000, so over white:
+         *   r = (0x20*128 + 255*127 + 127)/255 = 143, g = b = 127. */
+        ts_clear(&ts, C_WHITE);
+        nj_gfx_draw_rgb(&g, rgb, 18, 128, 2, 1, 1, 0, 1, 1, NJ_ROP_PAINT,
+                        NJ_TRANS_NONE);
+        PX(t, &ts, 2, 1, 0xFF8F7F7Fu, "drawRGB global alpha 128 over white");
+        ts_clear(&ts, C_WHITE);
+        nj_gfx_draw_rgb(&g, rgb, 18, 0, 2, 1, 1, 0, 1, 1, NJ_ROP_PAINT,
+                        NJ_TRANS_NONE);
+        PX(t, &ts, 2, 1, C_WHITE, "drawRGB alpha 0 paints nothing");
+    }
+
+    /* A decoder may hand back a PACKED RGB565 or RGB888 frame
+     * (nj_codec_image_new() allocates w*h*bytes(fmt)), so the source stride
+     * is width*2 or width*3 and there is no alpha to composite. */
+    {
+        static const nj_u4 want565[6] = { C_RED, C_GREEN, C_BLUE,
+                                          C_WHITE, C_BLACK, 0xFF848208u };
+        nj_u2 frame[6];
+        nj_u1 frame888[6 * 3];
+        nj_image rgbimg;
+        int k;
+
+        frame[0] = 0xF800u;                  /* red   */
+        frame[1] = 0x07E0u;                  /* green */
+        frame[2] = 0x001Fu;                  /* blue  */
+        frame[3] = 0xFFFFu;                  /* white */
+        frame[4] = 0x0000u;                  /* black */
+        frame[5] = 0x8401u;     /* r5=16 g6=32 b5=1 -> 0x84,0x82,0x08 */
+        rgbimg.width = 3;
+        rgbimg.height = 2;
+        rgbimg.format = NJ_PIXFMT_RGB565;
+        rgbimg.pixels = (nj_u4 *)frame;
+        rgbimg.has_alpha = 0;
+
+        ts_clear(&ts, 0xFF404040u);
+        nj_gfx_draw_image(&g, &rgbimg, 0, 0, 0, 0, 3, 2);
+        for (k = 0; k < 6; k++) {
+            PX(t, &ts, k % 3, k / 3, want565[k],
+               "packed RGB565 source image");
+        }
+        PX(t, &ts, 3, 0, 0xFF404040u, "RGB565 blit stops at the image edge");
+
+        for (k = 0; k < 6; k++) {
+            nj_u4 v = want565[k];
+
+            frame888[k * 3 + 0] = (nj_u1)((v >> 16) & 0xFFu);
+            frame888[k * 3 + 1] = (nj_u1)((v >> 8) & 0xFFu);
+            frame888[k * 3 + 2] = (nj_u1)(v & 0xFFu);
+        }
+        rgbimg.format = NJ_PIXFMT_RGB888;
+        rgbimg.pixels = (nj_u4 *)frame888;
+        ts_clear(&ts, 0xFF404040u);
+        nj_gfx_draw_image(&g, &rgbimg, 0, 0, 0, 0, 3, 2);
+        for (k = 0; k < 6; k++) {
+            PX(t, &ts, k % 3, k / 3, want565[k],
+               "packed RGB888 source image");
+        }
     }
 
     /* Whole-surface guard band after all that. */
@@ -1184,7 +1253,7 @@ static void wild_batch(nj_gfx *g, const nj_image *img, const nj_u1 *rgb)
                           NJ_TRANS_MIRROR_ROT90);
     nj_gfx_draw_image_rop(g, img, big, big, 0, 0, 8, 8, NJ_ROP_PAINT,
                           NJ_TRANS_ROT270);
-    nj_gfx_draw_rgb(g, rgb, 32, 128, neg, neg, 0, 0, 8, 8, NJ_ROP_PAINT,
+    nj_gfx_draw_rgb(g, rgb, 8 * 3, 128, neg, neg, 0, 0, 8, 8, NJ_ROP_PAINT,
                     NJ_TRANS_ROT90);
     nj_gfx_draw_region(g, img, 0, 0, 8, 8, NJ_TRANS_ROT180, 1, C_GREEN,
                        NULL, neg, big, NJ_ROP_SET);
@@ -1272,7 +1341,8 @@ static void test_text_anchors(tctx *t)
     ts_clear(&ts, C_WHITE);
     nj_gfx_draw_text(&g, two, 2, 20, 20, NJ_ANCHOR_TOP | NJ_ANCHOR_RIGHT);
     PX(t, &ts, 8, 20, C_BLACK, "TOP|RIGHT starts at x - width");
-    PX(t, &ts, 19, 20, C_BLACK, "RIGHT text reaches the anchor - 1");
+    PX(t, &ts, 18, 20, C_BLACK, "RIGHT text reaches the anchor - 1");
+    PX(t, &ts, 19, 20, C_WHITE, "RIGHT text stops before the anchor");
 
     ts_clear(&ts, C_WHITE);
     nj_gfx_draw_text(&g, two, 2, 20, 20, NJ_ANCHOR_BOTTOM | NJ_ANCHOR_LEFT);
@@ -1293,7 +1363,8 @@ static void test_text_anchors(tctx *t)
     nj_gfx_set_clip(&g, 0, 0, 7, 7);
     nj_gfx_draw_text(&g, two, 2, 0, 0, NJ_ANCHOR_TOP | NJ_ANCHOR_LEFT);
     PX(t, &ts, 2, 3, C_BLACK, "translated text origin");
-    PX(t, &ts, 8, 3, C_WHITE, "text clipped on the right");
+    PX(t, &ts, 8, 3, C_BLACK, "text fills the clip's last column");
+    PX(t, &ts, 9, 3, C_WHITE, "text clipped on the right");
     nj_gfx_translate(&g, -2, -3);
     nj_gfx_set_clip(&g, 0, 0, 48, 32);
 

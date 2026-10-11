@@ -777,12 +777,263 @@ static void test_png_api(const char *dir)
     }
 }
 
+
 /* ------------------------------------------------------------------ */
+/* Mutation fuzzing: the decoder eats untrusted game assets, so it must  */
+/* never crash, hang or read out of bounds whatever the bytes say.       */
+/* ------------------------------------------------------------------ */
+static nj_u4 rd32(const unsigned char *p)
+{
+    return ((nj_u4)p[0] << 24) | ((nj_u4)p[1] << 16) |
+           ((nj_u4)p[2] << 8) | (nj_u4)p[3];
+}
+
+static void wr32(unsigned char *p, nj_u4 v)
+{
+    p[0] = (unsigned char)(v >> 24);
+    p[1] = (unsigned char)(v >> 16);
+    p[2] = (unsigned char)(v >> 8);
+    p[3] = (unsigned char)v;
+}
+
+static nj_u4 fuzz_next(nj_u4 *state)
+{
+    nj_u4 x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    return x;
+}
+
+/* Recompute the CRC of the chunk that contains `at`. */
+static int fix_chunk_crc(unsigned char *buf, size_t size, size_t at)
+{
+    size_t pos = 8;
+
+    while (pos + 12u <= size) {
+        nj_u4 len = rd32(buf + pos);
+        if (pos + 12u + (size_t)len > size) {
+            return 0;
+        }
+        if (at >= pos + 4u && at < pos + 8u + (size_t)len) {
+            nj_u4 crc = 0;   /* nj_crc32 is not exported to the test; use the
+                              * decoder's own by re-inflating? No: compute it
+                              * with a local table-free implementation. */
+            size_t i;
+            nj_u4 c = 0xFFFFFFFFu;
+            for (i = pos + 4u; i < pos + 8u + (size_t)len; i++) {
+                int k;
+                c ^= buf[i];
+                for (k = 0; k < 8; k++) {
+                    c = (c & 1u) ? ((c >> 1) ^ 0xEDB88320u) : (c >> 1);
+                }
+            }
+            crc = c ^ 0xFFFFFFFFu;
+            wr32(buf + pos + 8u + (size_t)len, crc);
+            return 1;
+        }
+        pos += 12u + (size_t)len;
+    }
+    return 0;
+}
+
+/* An allocator that fails on demand: exercises every cleanup path. */
+typedef struct fail_alloc {
+    int budget;
+    int allocs;
+    int frees;
+} fail_alloc;
+
+static void *budget_alloc(void *ud, nj_size size)
+{
+    fail_alloc *f = (fail_alloc *)ud;
+
+    if (f->allocs >= f->budget) {
+        return NULL;
+    }
+    f->allocs++;
+    return malloc((size_t)size);
+}
+
+static void budget_free(void *ud, void *p)
+{
+    fail_alloc *f = (fail_alloc *)ud;
+
+    if (p != NULL) {
+        f->frees++;
+        free(p);
+    }
+}
+
+static void test_png_out_of_memory(const char *dir)
+{
+    static const char *cases[3] = { "rgba8", "interlace_rgb8",
+                                    "palette256_trns" };
+    int c;
+
+    for (c = 0; c < 3; c++) {
+        char path[1024];
+        size_t size = 0;
+        unsigned char *png;
+        int budget;
+
+        snprintf(path, sizeof(path), "%s/%s.png", dir, cases[c]);
+        png = (unsigned char *)xread(path, &size);
+        CHECK(png != NULL, "cannot read %s", path);
+        if (png == NULL) {
+            continue;
+        }
+        /* Let the decoder have 0..6 buffers; every step must either succeed
+         * or fail cleanly without leaking what it already took. */
+        for (budget = 0; budget <= 6; budget++) {
+            fail_alloc fa;
+            const char *err = NULL;
+            nj_image *img;
+
+            fa.budget = budget;
+            fa.allocs = 0;
+            fa.frees = 0;
+            img = nj_png_decode(png, (nj_u4)size, budget_alloc, &fa,
+                                budget_free, &err);
+            if (img == NULL) {
+                CHECK(err != NULL, "%s: OOM failure without a message",
+                      cases[c]);
+            } else {
+                nj_image_free(img, budget_free, &fa);
+            }
+            CHECK_EQ_INT(fa.allocs, fa.frees,
+                         "allocator failure must not leak");
+        }
+        free(png);
+    }
+    printf("  allocator-failure paths released every partial allocation\n");
+}
+
+static void test_png_fuzz(const char *dir)
+{
+    static const char *bases[] = {
+        "rgb8", "rgba8", "palette8_trns", "grey1", "grey4", "grey16",
+        "interlace_rgb8", "multi_idat",
+    };
+    nj_u4 state = 0x12345678u;
+    int rounds = 0;
+    int b;
+    int accepted = 0;
+
+    for (b = 0; b < (int)(sizeof(bases) / sizeof(bases[0])); b++) {
+        char path[1024];
+        size_t size = 0;
+        unsigned char *base = NULL;
+        int iteration;
+
+        snprintf(path, sizeof(path), "%s/%s.png", dir, bases[b]);
+        base = (unsigned char *)xread(path, &size);
+        if (base == NULL || size < 32u) {
+            CHECK(0, "fuzz: cannot read %s", path);
+            free(base);
+            continue;
+        }
+
+        for (iteration = 0; iteration < 300; iteration++) {
+            unsigned char *buf = (unsigned char *)malloc(size);
+            size_t len = size;
+            nj_u4 r = fuzz_next(&state);
+            nj_image *img;
+            const char *err = NULL;
+
+            if (buf == NULL) {
+                CHECK(0, "fuzz: out of memory");
+                break;
+            }
+            memcpy(buf, base, size);
+
+            switch (r % 5u) {
+            case 0:   /* single bit flip anywhere */
+                buf[fuzz_next(&state) % size] ^=
+                    (unsigned char)(1u << (fuzz_next(&state) % 8u));
+                break;
+            case 1: { /* flip a payload byte and repair that chunk's CRC */
+                size_t at = (size_t)(fuzz_next(&state) % size);
+                buf[at] ^= 0xFFu;
+                (void)fix_chunk_crc(buf, size, at);
+                break;
+            }
+            case 2:   /* truncate */
+                len = (size_t)(fuzz_next(&state) % size);
+                break;
+            case 3: { /* random IHDR geometry with a valid CRC */
+                size_t i;
+                for (i = 8u; i < 8u + 4u + 25u && i < size; i++) {
+                    buf[i] = (unsigned char)(fuzz_next(&state) & 0xFFu);
+                }
+                (void)fix_chunk_crc(buf, size, 8u + 8u);
+                break;
+            }
+            default:  /* random byte in the IDAT payload */
+                buf[size / 2u] = (unsigned char)(fuzz_next(&state) & 0xFFu);
+                (void)fix_chunk_crc(buf, size, size / 2u);
+                break;
+            }
+
+            img = nj_png_decode(buf, (nj_u4)len, NULL, NULL, NULL, &err);
+            rounds++;
+            if (img != NULL) {
+                accepted++;
+                CHECK(img->width > 0 && img->height > 0,
+                      "fuzz produced a degenerate image");
+                nj_image_free(img, NULL, NULL);
+            } else {
+                CHECK(err != NULL, "fuzz failure without an error message");
+            }
+            free(buf);
+        }
+        free(base);
+    }
+    printf("  %d mutated inputs decoded without a crash (%d accepted)\n",
+           rounds, accepted);
+    CHECK(rounds >= 2000, "fuzz did not run enough rounds");
+}
+
+/* ------------------------------------------------------------------ */
+static int manifest_present(const char *dir)
+{
+    char path[1024];
+    FILE *fh;
+
+    snprintf(path, sizeof(path), "%s/positive.txt", dir);
+    fh = fopen(path, "r");
+    if (fh == NULL) {
+        return 0;
+    }
+    fclose(fh);
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
-    const char *dir = (argc > 1) ? argv[1] : "tests/fixtures/png";
+    static const char *candidates[] = {
+        "tests/fixtures/png", "../tests/fixtures/png",
+        "../../tests/fixtures/png"
+    };
+    const char *dir = (argc > 1) ? argv[1] : candidates[0];
+    size_t c;
+
+    if (argc <= 1) {
+        for (c = 0; c < sizeof(candidates) / sizeof(candidates[0]); c++) {
+            if (manifest_present(candidates[c])) {
+                dir = candidates[c];
+                break;
+            }
+        }
+    }
 
     printf("nano_j2me font + PNG tests (fixtures: %s)\n", dir);
+    if (!manifest_present(dir)) {
+        printf("cannot find positive.txt in %s - run "
+               "python3 tests/gen_png_fixtures.py first\n", dir);
+        return 2;
+    }
 
     printf("[fonts]\n");
     test_font_builtin_table();
@@ -794,6 +1045,8 @@ int main(int argc, char **argv)
     test_png_positives(dir);
     test_png_negatives(dir);
     test_png_api(dir);
+    test_png_out_of_memory(dir);
+    test_png_fuzz(dir);
 
     printf("%d checks, %d failures\n", g_checks, g_failures);
     return (g_failures == 0) ? 0 : 1;

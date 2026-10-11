@@ -55,6 +55,10 @@ void nj_port_shutdown(nj_port *port);
  * nj_midp_run itself, or pump it one frame at a time with nj_midp_frame().
  */
 nj_status nj_midp_run(nj_vm *vm);
+/* The Displayable currently on screen, or NULL when the MIDlet never set
+ * one.  A runner uses this to distinguish "the app is running" from "the app
+ * has no UI and the frame loop would spin forever". */
+nj_ref    nj_midp_current(nj_vm *vm);
 nj_status nj_midp_frame(nj_vm *vm);
 nj_status nj_midp_destroy_app(nj_vm *vm, int unconditional);
 

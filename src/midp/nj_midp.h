@@ -159,10 +159,11 @@
 #define NJ_F_AL_IMAGE    "alImage"     /* Image */
 #define NJ_F_AL_INDEF    "alIndefinite"/* Z */
 
-/* RecordStore */
+/* RecordStore: two parallel java.util.Vectors, so insert and delete are O(1)
+ * and the record ids can have gaps exactly as the API allows. */
 #define NJ_F_RS_NAME     "rsName"      /* String */
 #define NJ_F_RS_RECORDS  "rsRecords"   /* Vector of byte[] */
-#define NJ_F_RS_IDS      "rsIds"       /* [I  parallel array of record ids */
+#define NJ_F_RS_IDS      "rsIds"       /* Vector of java/lang/Integer */
 #define NJ_F_RS_NEXTID   "rsNextId"    /* I */
 #define NJ_F_RS_OPEN     "rsOpen"      /* Z */
 #define NJ_F_RS_MODIFIED "rsModified"  /* Z */

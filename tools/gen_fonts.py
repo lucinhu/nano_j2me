@@ -157,7 +157,7 @@ def render_glyph(font, ch):
     The canvas is bilevel, which makes ImageDraw ask FreeType for a
     FT_LOAD_TARGET_MONO bitmap: the hinted, 1 bit per pixel rasterisation the
     panel actually wants.  A greyscale render plus a coverage threshold does
-    NOT work here - at 9..13 px a hinted-away stem covers two columns at ~50%
+    NOT work here - at 10..18 px a hinted-away stem covers two columns at ~50%
     each and a 128 threshold deletes it outright ('1' and 'l' lose their stem,
     the accented capitals lose the accent).
     """
@@ -199,7 +199,7 @@ def glyph_bitmap(font, ch, ascent, descent, cell_w):
 
     The widest glyphs of the face (Y, _, Y-diaeresis, yen, macron and the
     vulgar fractions) are designed with a negative left side bearing so that
-    they fill the em box; hinted at 9..18 px that puts their first column one
+    they fill the em box; hinted at 10..18 px that puts their first column one
     pixel left of the pen origin.  Such a glyph is nudged right by the minimum
     amount that brings it inside the cell - which also centres it better on the
     advance box - and is never clipped.  Ordinary glyphs start one pixel in

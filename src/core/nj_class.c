@@ -1283,9 +1283,17 @@ nj_status nj_cp_resolve(nj_vm *vm, nj_class *c, nj_u2 index, nj_cpentry **out)
 
     owner = nj_class_resolve(vm, cls_name);
     if (!owner) {
+        vm->resolve_fail = NJ_RESOLVE_CLASS;
+        vm->resolve_cls = cls_name;
+        vm->resolve_name = mname;
+        vm->resolve_desc = mdesc;
         return NJ_ERR;
     }
     if (nj_class_link(vm, owner) != NJ_OK) {
+        vm->resolve_fail = NJ_RESOLVE_CLASS;
+        vm->resolve_cls = cls_name;
+        vm->resolve_name = mname;
+        vm->resolve_desc = mdesc;
         return NJ_ERR;
     }
 
@@ -1302,6 +1310,10 @@ nj_status nj_cp_resolve(nj_vm *vm, nj_class *c, nj_u2 index, nj_cpentry **out)
             /* Try the static variant: some obfuscators emit both. */
             f = nj_field_lookup_in(owner, mname, mdesc, 1);
             if (!f) {
+                vm->resolve_fail = NJ_RESOLVE_FIELD;
+                vm->resolve_cls = cls_name;
+                vm->resolve_name = mname;
+                vm->resolve_desc = mdesc;
                 return NJ_ERR;
             }
             e->kind = NJ_LINK_FIELD_STATIC;
@@ -1320,6 +1332,10 @@ nj_status nj_cp_resolve(nj_vm *vm, nj_class *c, nj_u2 index, nj_cpentry **out)
             want_static = 1;
         }
         if (!m) {
+            vm->resolve_fail = NJ_RESOLVE_METHOD;
+            vm->resolve_cls = cls_name;
+            vm->resolve_name = mname;
+            vm->resolve_desc = mdesc;
             return NJ_ERR;
         }
         e->target = m;
@@ -1329,6 +1345,10 @@ nj_status nj_cp_resolve(nj_vm *vm, nj_class *c, nj_u2 index, nj_cpentry **out)
         if (!m) {
             m = method_lookup_any(owner, mname, mdesc, 1);
             if (!m) {
+                vm->resolve_fail = NJ_RESOLVE_METHOD;
+                vm->resolve_cls = cls_name;
+                vm->resolve_name = mname;
+                vm->resolve_desc = mdesc;
                 return NJ_ERR;
             }
             e->kind = NJ_LINK_METHOD_STATIC;

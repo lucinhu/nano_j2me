@@ -253,13 +253,30 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
      * frame loop below takes over afterwards.
      */
     if (nj_vm_start_app(vm, midlet) != NJ_OK && nj_has_exception(vm)) {
-        nj_ref e = nj_take_exception(vm);
         if (port.log) {
-            char buf[256];
+            char buf[320];
+            /* nj_exception_describe includes the class, the message and the
+             * method+pc it was raised at, which is what turns "it threw" into
+             * a one-line diagnosis. */
             snprintf(buf, sizeof(buf), "startApp() threw %s",
-                     nj_ref_class_name(e));
+                     nj_exception_describe(vm));
             port.log(port.user, 0, buf);
         }
+        nj_clear_exception(vm);
+    }
+
+    /*
+     * A MIDlet that threw out of startApp() has not installed a Displayable,
+     * so the frame loop would sit there drawing nothing until the user
+     * intervened.  Report and leave instead: an emulator that appears to hang
+     * is far worse to debug than one that exits and says why.
+     */
+    if (!nj_midp_current(vm)) {
+        if (port.log) {
+            port.log(port.user, 0,
+                     "the MIDlet installed no Displayable; nothing to show");
+        }
+        goto done;
     }
 
     /* ---- the frame loop ---- */

@@ -194,12 +194,27 @@ void nj_gfx_draw_char(nj_gfx *g, nj_u2 ch, int x, int y);
 /* ------------------------------------------------------------------ */
 /* Images / blitting                                                   */
 /* ------------------------------------------------------------------ */
-/* An image is an ARGB8888 (or RGB565) buffer with optional per-pixel alpha. */
+/*
+ * An image is a PACKED byte buffer with optional per-pixel alpha.
+ *
+ *   format      an NJ_PIXFMT_* value -- NOT an NJ_CODEC_CAN() capability
+ *               bitmask.  RGB565 = 2 bytes/pixel, RGB888 = 3, ARGB8888 = 4;
+ *               the row pitch is exactly width * bytes-per-pixel.
+ *   pixels      the first pixel; the layout above is what
+ *               nj_codec_image_new() allocates (w * h * bpp bytes), so a
+ *               decoder may hand over a half-size RGB565 frame instead of
+ *               expanding it to ARGB8888 first.
+ *   has_alpha   1 when ARGB8888 alpha values in the data vary; RGB565 and
+ *               RGB888 have no alpha channel and always blit as opaque.
+ *
+ * Transparent ARGB8888 pixels leave the destination untouched (ROP PAINT) and
+ * partially transparent ones are composited; see nj_gfx_draw_image_rop().
+ */
 typedef struct nj_image {
     int   width;
     int   height;
-    int   format;      /* NJ_PIXFMT_ARGB8888 always for decoded images */
-    nj_u4 *pixels;     /* row-major ARGB8888, stride == width */
+    int   format;      /* NJ_PIXFMT_* : packed layout, see above */
+    nj_u4 *pixels;     /* row-major, bpp bytes per pixel, stride == width */
     int   has_alpha;
 } nj_image;
 

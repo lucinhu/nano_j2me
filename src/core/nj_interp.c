@@ -857,7 +857,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             if (nj_cp_resolve(vm, m->owner, idx, &e) != NJ_OK || !e ||
                 !e->target) {
                 if (!vm->exception) {
-                    (void)nj_throw(vm, "java/lang/NoSuchFieldError", NULL);
+                    (void)nj_resolve_error(vm);
                 }
                 goto do_unwind;
             }
@@ -883,7 +883,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             if (nj_cp_resolve(vm, m->owner, idx, &e) != NJ_OK || !e ||
                 !e->target) {
                 if (!vm->exception) {
-                    (void)nj_throw(vm, "java/lang/NoSuchFieldError", NULL);
+                    (void)nj_resolve_error(vm);
                 }
                 goto do_unwind;
             }
@@ -939,7 +939,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             }
             if (nj_cp_resolve(vm, m->owner, idx, &e) != NJ_OK || !e) {
                 if (!vm->exception) {
-                    (void)nj_throw(vm, "java/lang/NoClassDefFoundError", NULL);
+                    (void)nj_resolve_error(vm);
                 }
                 goto do_unwind;
             }

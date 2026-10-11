@@ -1,0 +1,1822 @@
+/*
+ * nano_j2me - tests/test_lcdui.c
+ *
+ * The LCDUI module's own test.  It builds a headless VM *without a MIDlet* and
+ * drives javax.microedition.lcdui entirely through the C API the class library
+ * exposes to other modules (nj_object_new / nj_call / nj_call_static /
+ * nj_field_*), which is the same surface the game package, the MIDlet
+ * lifecycle and the runner use.
+ *
+ * What it proves, in order:
+ *
+ *   1. Image      - createImage(w,h) is mutable and round-trips RGB;
+ *                   createImage(byte[],0,len) decodes a real PNG; sub-image
+ *                   copies and createRGBImage obey their contracts.
+ *   2. Graphics   - every transform field is exercised: setColor/fillRect and
+ *                   read-back of the exact ARGB value, clipping, translate,
+ *                   drawString advance == Font.stringWidth, drawRegion,
+ *                   copyArea, XOR, blending, drawRGB.
+ *   3. Font       - interning (same object for equal parameters), metric
+ *                   consistency between charWidth/charsWidth/stringWidth/
+ *                   substringWidth, ascent+descent == height.
+ *   4. Widgets    - Command ordering, List/Form/TextBox/Alert/ChoiceGroup/
+ *                   Gauge/DateField/Spinner accessors round-trip.
+ *   5. The screen - Display.setCurrent() + nj_midp_paint() renders through the
+ *                   built-in widget renderer into the VM framebuffer, and a
+ *                   Graphics bound to a real Image produces the exact pixels a
+ *                   paint() override would have produced.
+ *   6. Errors     - the right exception classes come out.
+ *   7. Lifecycle  - create/run/destroy three times, same host-block count every
+ *                   round: the project's core memory guarantee.
+ *
+ * Usage:  test_lcdui [fixtures-dir]
+ * Exit code 0 on PASS, non-zero otherwise.
+ */
+#include "nj2me/nj.h"
+#include "nj2me/nj_gfx.h"
+#include "nj2me/nj_png.h"
+#include "nj2me/nj_codec.h"
+#include "../src/midp/nj_midp.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* Descriptors the widgets are addressed by. */
+#define D_CMD     "Ljavax/microedition/lcdui/Command;"
+#define D_IMAGE   "Ljavax/microedition/lcdui/Image;"
+#define D_ALERTTYPE "Ljavax/microedition/lcdui/AlertType;"
+#define D_DISPLAY "Ljavax/microedition/lcdui/Display;"
+
+/* Read a static reference field (SELECT_COMMAND, AlertType.WARNING, ...). */
+static nj_ref static_ref(nj_vm *vm, const char *cls, const char *name,
+                         const char *desc)
+{
+    nj_field *f = nj_field_lookup(vm, cls, name, desc, 1);
+    return f ? nj_field_read_ref(vm, NULL, f) : NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Assertion machinery                                                 */
+/* ------------------------------------------------------------------ */
+static int g_pass;
+static int g_fail;
+static const char *g_fixtures = "tests/fixtures";
+
+#define OK(cond)                                                              \
+    do {                                                                      \
+        if (cond) {                                                           \
+            g_pass++;                                                         \
+        } else {                                                              \
+            g_fail++;                                                         \
+            fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);   \
+        }                                                                     \
+    } while (0)
+
+#define OK_MSG(cond, ...)                                                     \
+    do {                                                                      \
+        if (cond) {                                                           \
+            g_pass++;                                                         \
+        } else {                                                              \
+            g_fail++;                                                         \
+            fprintf(stderr, "FAIL %s:%d: %s: ", __FILE__, __LINE__, #cond);   \
+            fprintf(stderr, __VA_ARGS__);                                     \
+            fputc('\n', stderr);                                              \
+        }                                                                     \
+    } while (0)
+
+/* ------------------------------------------------------------------ */
+/* Small helpers                                                       */
+/* ------------------------------------------------------------------ */
+typedef struct blob {
+    unsigned char *data;
+    unsigned len;
+} blob;
+
+static int read_file(const char *path, blob *out)
+{
+    FILE *f = fopen(path, "rb");
+    long n;
+
+    out->data = NULL;
+    out->len = 0u;
+    if (!f) {
+        return 0;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return 0;
+    }
+    n = ftell(f);
+    if (n <= 0) {
+        fclose(f);
+        return 0;
+    }
+    rewind(f);
+    out->data = (unsigned char *)malloc((size_t)n);
+    if (!out->data) {
+        fclose(f);
+        return 0;
+    }
+    if (fread(out->data, 1u, (size_t)n, f) != (size_t)n) {
+        free(out->data);
+        out->data = NULL;
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+    out->len = (unsigned)n;
+    return 1;
+}
+
+/* Build a String argument value. */
+static nj_value sref(nj_ref s)
+{
+    nj_value v;
+    v.r = s;
+    return v;
+}
+
+static nj_value iref(nj_s4 i)
+{
+    nj_value v;
+    v.bits = 0u;
+    v.i = i;
+    return v;
+}
+
+/* Call a public API method and return its int result. */
+static nj_s4 call_int(nj_vm *vm, nj_ref obj, const char *cls, const char *name,
+                      const char *desc, nj_value *args, int *ok)
+{
+    nj_value ret;
+    ret.bits = 0u;
+    if (nj_call(vm, obj, cls, name, desc, args, &ret) != NJ_OK) {
+        if (ok) { *ok = 0; }
+        return 0;
+    }
+    if (ok) { *ok = 1; }
+    return ret.i;
+}
+
+static nj_ref call_ref(nj_vm *vm, nj_ref obj, const char *cls, const char *name,
+                       const char *desc, nj_value *args, int *ok)
+{
+    nj_value ret;
+    ret.bits = 0u;
+    if (nj_call(vm, obj, cls, name, desc, args, &ret) != NJ_OK) {
+        if (ok) { *ok = 0; }
+        return NULL;
+    }
+    if (ok) { *ok = 1; }
+    return ret.r;
+}
+
+static nj_ref call_static_ref(nj_vm *vm, const char *cls, const char *name,
+                              const char *desc, nj_value *args, int *ok)
+{
+    nj_value ret;
+    ret.bits = 0u;
+    if (nj_call_static(vm, cls, name, desc, args, &ret) != NJ_OK) {
+        if (ok) { *ok = 0; }
+        return NULL;
+    }
+    if (ok) { *ok = 1; }
+    return ret.r;
+}
+
+/* A String from a C literal. */
+static nj_ref str(nj_vm *vm, const char *s)
+{
+    return nj_string_new(vm, s);
+}
+
+/* Construct an object through its <init>, returning NULL on failure. */
+static nj_ref construct(nj_vm *vm, const char *cls, const char *desc,
+                        nj_value *args)
+{
+    nj_ref o = nj_object_new(vm, cls);
+    if (!o) {
+        return NULL;
+    }
+    if (nj_call_special(vm, o, cls, "<init>", desc, args, NULL) != NJ_OK) {
+        return NULL;
+    }
+    return o;
+}
+
+/* The exception class name currently pending, or NULL. */
+static const char *pending_exc(nj_vm *vm)
+{
+    nj_ref e = vm->exception;
+    if (!e || !e->cls) {
+        return NULL;
+    }
+    return e->cls->name;
+}
+
+static int exc_is(nj_vm *vm, const char *cls)
+{
+    const char *n = pending_exc(vm);
+    if (!n) {
+        return 0;
+    }
+    nj_clear_exception(vm);
+    return strcmp(n, cls) == 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Image                                                               */
+/* ------------------------------------------------------------------ */
+static nj_ref image_new(nj_vm *vm, nj_s4 w, nj_s4 h)
+{
+    nj_value a[2];
+    a[0] = iref(w);
+    a[1] = iref(h);
+    return call_static_ref(vm, NJ_C_IMAGE, "createImage", "(II)L" NJ_C_IMAGE ";",
+                           a, NULL);
+}
+
+static void test_image(nj_vm *vm, const blob *png, const blob *png_alpha)
+{
+    nj_ref img;
+    nj_ref g;
+    nj_value a[8];
+    int ok = 0;
+
+    /* ---- createImage(w,h) ---- */
+    img = image_new(vm, 16, 8);
+    OK(img != NULL);
+    if (!img) {
+        return;
+    }
+    OK(call_int(vm, img, NJ_C_IMAGE, "getWidth", "()I", NULL, &ok) == 16 && ok);
+    OK(call_int(vm, img, NJ_C_IMAGE, "getHeight", "()I", NULL, &ok) == 8 && ok);
+    OK(call_int(vm, img, NJ_C_IMAGE, "isMutable", "()Z", NULL, &ok) == 1 && ok);
+
+    /* A fresh image is transparent black. */
+    {
+        nj_ref rgb = nj_int_array_new(vm, 16u * 8u);
+        nj_u4 first;
+        OK(rgb != NULL);
+        a[0] = sref(rgb);
+        a[1] = iref(0);
+        a[2] = iref(16);
+        a[3] = iref(0);
+        a[4] = iref(0);
+        a[5] = iref(16);
+        a[6] = iref(8);
+        OK(nj_call(vm, img, NJ_C_IMAGE, "getRGB", "([IIIIIII)V", a, NULL) == NJ_OK);
+        first = (nj_u4)nj_array_get_int(rgb, 0u);
+        OK_MSG(first == 0u, "expected 0x00000000, got 0x%08X", first);
+    }
+
+    /* ---- getGraphics + getRGB round-trip ---- */
+    g = call_ref(vm, img, NJ_C_IMAGE, "getGraphics", "()L" NJ_C_GRAPHICS ";",
+                 NULL, &ok);
+    OK(g != NULL && ok);
+    if (g) {
+        /* setColor(int) then fillRect: the exact ARGB value must come back. */
+        a[0] = iref((nj_s4)0xFF3366CCu);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+        OK(call_int(vm, g, NJ_C_GRAPHICS, "getColor", "()I", NULL, &ok) ==
+           (nj_s4)0x003366CCu && ok);
+        a[0] = iref(2);
+        a[1] = iref(1);
+        a[2] = iref(5);
+        a[3] = iref(3);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
+        {
+            nj_ref px = nj_int_array_new(vm, 1u);
+            nj_value ga[7];
+            ga[0] = sref(px);
+            ga[1] = iref(0);
+            ga[2] = iref(1);
+            ga[3] = iref(3);
+            ga[4] = iref(2);
+            ga[5] = iref(1);
+            ga[6] = iref(1);
+            OK(nj_call(vm, img, NJ_C_IMAGE, "getRGB", "([IIIIIII)V", ga,
+                       NULL) == NJ_OK);
+            OK_MSG((nj_u4)nj_array_get_int(px, 0u) == 0xFF3366CCu,
+                   "fillRect pixel = 0x%08X",
+                   (unsigned)nj_array_get_int(px, 0u));
+        }
+    }
+
+    /* ---- immutable images have no Graphics ---- */
+    {
+        nj_value ba[3];
+        nj_ref barr = nj_byte_array_new(vm, (nj_u4)png->len);
+        nj_ref dec;
+        OK(barr != NULL);
+        memcpy(barr->u.bytes, png->data, png->len);
+        ba[0] = sref(barr);
+        ba[1] = iref(0);
+        ba[2] = iref((nj_s4)png->len);
+        dec = call_static_ref(vm, NJ_C_IMAGE, "createImage",
+                              "([BII)L" NJ_C_IMAGE ";", ba, &ok);
+        OK(dec != NULL && ok);
+        if (dec) {
+            OK(call_int(vm, dec, NJ_C_IMAGE, "isMutable", "()Z", NULL, &ok) == 0 && ok);
+            OK(call_int(vm, dec, NJ_C_IMAGE, "getWidth", "()I", NULL, &ok) == 13 && ok);
+            OK(call_int(vm, dec, NJ_C_IMAGE, "getHeight", "()I", NULL, &ok) == 7 && ok);
+            (void)call_ref(vm, dec, NJ_C_IMAGE, "getGraphics",
+                           "()L" NJ_C_GRAPHICS ";", NULL, NULL);
+            OK_MSG(exc_is(vm, "java/lang/IllegalStateException"),
+                   "expected IllegalStateException, got %s",
+                   pending_exc(vm) ? pending_exc(vm) : "(none)");
+        }
+    }
+
+    /* ---- PNG decode: the pixels must match what PIL wrote ---- */
+    {
+        nj_value ba[3];
+        nj_ref barr = nj_byte_array_new(vm, (nj_u4)png->len);
+        nj_ref dec;
+        nj_ref px;
+        nj_value ga[7];
+        static const nj_u4 expect[7] = {
+            0xFFFF0000u,   /* (0,0) red       */
+            0xFF00FF00u,   /* (12,0) green    */
+            0xFF0000FFu,   /* (0,6) blue      */
+            0xFFFFFFFFu,   /* (12,6) white    */
+            0xFF000000u,   /* (3,3) diagonal  */
+            0xFFFF0000u,   /* (6,2) red       */
+            0xFF00FF00u    /* (6,5) green     */
+        };
+        static const int px_x[7] = { 0, 12, 0, 12, 3, 6, 6 };
+        static const int px_y[7] = { 0, 0, 6, 6, 3, 2, 5 };
+        int i;
+
+        memcpy(barr->u.bytes, png->data, png->len);
+        ba[0] = sref(barr);
+        ba[1] = iref(0);
+        ba[2] = iref((nj_s4)png->len);
+        dec = call_static_ref(vm, NJ_C_IMAGE, "createImage",
+                              "([BII)L" NJ_C_IMAGE ";", ba, &ok);
+        OK_MSG(dec != NULL && ok, "PNG decode failed: %s",
+               pending_exc(vm) ? pending_exc(vm) : "(no exception)");
+        if (!dec) {
+            return;
+        }
+        px = nj_int_array_new(vm, 13u * 7u);
+        ga[0] = sref(px);
+        ga[1] = iref(0);
+        ga[2] = iref(13);
+        ga[3] = iref(0);
+        ga[4] = iref(0);
+        ga[5] = iref(13);
+        ga[6] = iref(7);
+        OK(nj_call(vm, dec, NJ_C_IMAGE, "getRGB", "([IIIIIII)V", ga, NULL) == NJ_OK);
+        for (i = 0; i < 7; i++) {
+            nj_u4 got = (nj_u4)nj_array_get_int(px, (nj_u4)(px_y[i] * 13 + px_x[i]));
+            OK_MSG(got == expect[i],
+                   "PNG pixel (%d,%d) = 0x%08X, expected 0x%08X",
+                   px_x[i], px_y[i], got, expect[i]);
+        }
+    }
+
+    /* ---- PNG with alpha keeps its alpha channel ---- */
+    if (png_alpha && png_alpha->len > 0u) {
+        nj_value ba[3];
+        nj_ref barr = nj_byte_array_new(vm, (nj_u4)png_alpha->len);
+        nj_ref dec;
+        memcpy(barr->u.bytes, png_alpha->data, png_alpha->len);
+        ba[0] = sref(barr);
+        ba[1] = iref(0);
+        ba[2] = iref((nj_s4)png_alpha->len);
+        dec = call_static_ref(vm, NJ_C_IMAGE, "createImage",
+                              "([BII)L" NJ_C_IMAGE ";", ba, &ok);
+        OK_MSG(dec != NULL && ok, "alpha PNG decode failed");
+        if (dec) {
+            nj_ref px = nj_int_array_new(vm, 4u);
+            nj_value ga[7];
+            ga[0] = sref(px);
+            ga[1] = iref(0);
+            ga[2] = iref(4);
+            ga[3] = iref(0);
+            ga[4] = iref(0);
+            ga[5] = iref(4);
+            ga[6] = iref(1);
+            OK(nj_call(vm, dec, NJ_C_IMAGE, "getRGB", "([IIIIIII)V", ga,
+                       NULL) == NJ_OK);
+            /* Even pixels are 50% red, odd pixels fully transparent. */
+            OK_MSG((((nj_u4)nj_array_get_int(px, 0u)) >> 24) < 255u,
+                   "expected partial alpha, got 0x%08X",
+                   (unsigned)nj_array_get_int(px, 0u));
+            OK_MSG((((nj_u4)nj_array_get_int(px, 1u)) >> 24) == 0u,
+                   "expected transparent, got 0x%08X",
+                   (unsigned)nj_array_get_int(px, 1u));
+        }
+    }
+
+    /* ---- createImage(Image, x, y, w, h, transform) ---- */
+    {
+        nj_value ca[6];
+        nj_ref sub;
+        nj_ref px = nj_int_array_new(vm, 4u);
+        nj_value ga[7];
+        ca[0] = sref(img);
+        ca[1] = iref(2);
+        ca[2] = iref(1);
+        ca[3] = iref(3);
+        ca[4] = iref(2);
+        ca[5] = iref(0);
+        sub = call_static_ref(vm, NJ_C_IMAGE, "createImage",
+                              "(L" NJ_C_IMAGE ";IIIII)L" NJ_C_IMAGE ";",
+                              ca, &ok);
+        OK(sub != NULL && ok);
+        if (sub) {
+            OK(call_int(vm, sub, NJ_C_IMAGE, "getWidth", "()I", NULL, &ok) == 3 && ok);
+            OK(call_int(vm, sub, NJ_C_IMAGE, "getHeight", "()I", NULL, &ok) == 2 && ok);
+            ga[0] = sref(px);
+            ga[1] = iref(0);
+            ga[2] = iref(3);
+            ga[3] = iref(0);
+            ga[4] = iref(0);
+            ga[5] = iref(3);
+            ga[6] = iref(2);
+            OK(nj_call(vm, sub, NJ_C_IMAGE, "getRGB", "([IIIIIII)V", ga,
+                       NULL) == NJ_OK);
+            OK_MSG((nj_u4)nj_array_get_int(px, 0u) == 0xFF3366CCu,
+                   "sub-image pixel = 0x%08X",
+                   (unsigned)nj_array_get_int(px, 0u));
+        }
+    }
+
+    /* ---- createRGBImage: 0x00RRGGBB in, opaque ARGB out ---- */
+    {
+        nj_value ca[4];
+        nj_ref rgb = nj_int_array_new(vm, 4u);
+        nj_ref out;
+        nj_ref px = nj_int_array_new(vm, 4u);
+        nj_value ga[7];
+        nj_array_set_int(rgb, 0u, (nj_s4)0x00010203u);
+        nj_array_set_int(rgb, 1u, (nj_s4)0x00AABBCCu);
+        nj_array_set_int(rgb, 2u, (nj_s4)0x00FFFFFFu);
+        nj_array_set_int(rgb, 3u, (nj_s4)0x00000000u);
+        ca[0] = sref(rgb);
+        ca[1] = iref(2);
+        ca[2] = iref(2);
+        ca[3] = iref(0);
+        out = call_static_ref(vm, NJ_C_IMAGE, "createRGBImage", "([IIIZ)L" NJ_C_IMAGE ";",
+                              ca, &ok);
+        OK(out != NULL && ok);
+        if (out) {
+            ga[0] = sref(px);
+            ga[1] = iref(0);
+            ga[2] = iref(2);
+            ga[3] = iref(0);
+            ga[4] = iref(0);
+            ga[5] = iref(2);
+            ga[6] = iref(2);
+            OK(nj_call(vm, out, NJ_C_IMAGE, "getRGB", "([IIIIIII)V", ga,
+                       NULL) == NJ_OK);
+            OK_MSG((nj_u4)nj_array_get_int(px, 0u) == 0xFF010203u,
+                   "rgb[0] = 0x%08X", (unsigned)nj_array_get_int(px, 0u));
+            OK_MSG((nj_u4)nj_array_get_int(px, 3u) == 0xFF000000u,
+                   "rgb[3] = 0x%08X", (unsigned)nj_array_get_int(px, 3u));
+        }
+    }
+
+    /* ---- error cases ---- */
+    (void)image_new(vm, 0, 4);
+    OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
+           "createImage(0,4) did not throw");
+    (void)image_new(vm, -3, 4);
+    OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
+           "createImage(-3,4) did not throw");
+}
+
+/* ------------------------------------------------------------------ */
+/* Graphics                                                            */
+/* ------------------------------------------------------------------ */
+static nj_u4 img_pixel(nj_vm *vm, nj_ref img, int x, int y)
+{
+    nj_ref px = nj_int_array_new(vm, 1u);
+    nj_value ga[7];
+    nj_u4 v;
+
+    ga[0] = sref(px);
+    ga[1] = iref(0);
+    ga[2] = iref(1);
+    ga[3] = iref(x);
+    ga[4] = iref(y);
+    ga[5] = iref(1);
+    ga[6] = iref(1);
+    if (nj_call(vm, img, NJ_C_IMAGE, "getRGB", "([IIIIIII)V", ga, NULL) != NJ_OK) {
+        return 0xDEADBEEFu;
+    }
+    v = (nj_u4)nj_array_get_int(px, 0u);
+    return v;
+}
+
+static void test_graphics(nj_vm *vm)
+{
+    nj_ref img = image_new(vm, 24, 16);
+    nj_ref g;
+    nj_value a[8];
+    int ok = 0;
+
+    OK(img != NULL);
+    if (!img) {
+        return;
+    }
+    g = call_ref(vm, img, NJ_C_IMAGE, "getGraphics", "()L" NJ_C_GRAPHICS ";",
+                 NULL, &ok);
+    OK(g != NULL && ok);
+    if (!g) {
+        return;
+    }
+
+    /* ---- default clip covers the whole target ---- */
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getClipX", "()I", NULL, &ok) == 0 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getClipY", "()I", NULL, &ok) == 0 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getClipWidth", "()I", NULL, &ok) == 24 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getClipHeight", "()I", NULL, &ok) == 16 && ok);
+
+    /* ---- translate ---- */
+    a[0] = iref(4);
+    a[1] = iref(3);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "translate", "(II)V", a, NULL) == NJ_OK);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getTranslateX", "()I", NULL, &ok) == 4 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getTranslateY", "()I", NULL, &ok) == 3 && ok);
+    a[0] = iref((nj_s4)0xFFFF0000u);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+    a[0] = iref(0);
+    a[1] = iref(0);
+    a[2] = iref(1);
+    a[3] = iref(1);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
+    OK_MSG(img_pixel(vm, img, 4, 3) == 0xFFFF0000u,
+           "translate: (4,3) = 0x%08X", img_pixel(vm, img, 4, 3));
+    OK_MSG(img_pixel(vm, img, 0, 0) != 0xFFFF0000u,
+           "translate: (0,0) must stay untouched");
+    a[0] = iref(-4);
+    a[1] = iref(-3);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "translate", "(II)V", a, NULL) == NJ_OK);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getTranslateX", "()I", NULL, &ok) == 0 && ok);
+
+    /* ---- setClip really clips ---- */
+    a[0] = iref(5);
+    a[1] = iref(5);
+    a[2] = iref(4);
+    a[3] = iref(4);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setClip", "(IIII)V", a, NULL) == NJ_OK);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getClipX", "()I", NULL, &ok) == 5 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getClipWidth", "()I", NULL, &ok) == 4 && ok);
+    a[0] = iref((nj_s4)0xFF00FF00u);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+    a[0] = iref(0);
+    a[1] = iref(0);
+    a[2] = iref(24);
+    a[3] = iref(16);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
+    OK_MSG(img_pixel(vm, img, 6, 6) == 0xFF00FF00u,
+           "clipped fill inside = 0x%08X", img_pixel(vm, img, 6, 6));
+    OK_MSG(img_pixel(vm, img, 10, 6) != 0xFF00FF00u,
+           "clipped fill leaked at x=10");
+    OK_MSG(img_pixel(vm, img, 6, 10) != 0xFF00FF00u,
+           "clipped fill leaked at y=10");
+    OK_MSG(img_pixel(vm, img, 3, 3) != 0xFF00FF00u,
+           "clipped fill leaked at (3,3)");
+
+    /* ---- clipRect intersects instead of replacing ---- */
+    a[0] = iref(6);
+    a[1] = iref(6);
+    a[2] = iref(2);
+    a[3] = iref(2);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "clipRect", "(IIII)V", a, NULL) == NJ_OK);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getClipX", "()I", NULL, &ok) == 6 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getClipWidth", "()I", NULL, &ok) == 2 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getClipHeight", "()I", NULL, &ok) == 2 && ok);
+
+    /* ---- colour components ---- */
+    a[0] = iref(0x11);
+    a[1] = iref(0x22);
+    a[2] = iref(0x33);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(III)V", a, NULL) == NJ_OK);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getRedComponent", "()I", NULL, &ok) == 0x11 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getGreenComponent", "()I", NULL, &ok) == 0x22 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getBlueComponent", "()I", NULL, &ok) == 0x33 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getAlphaComponent", "()I", NULL, &ok) == 255 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getAlpha", "()I", NULL, &ok) == 255 && ok);
+    a[0] = iref(128);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setAlpha", "(I)V", a, NULL) == NJ_OK);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getAlpha", "()I", NULL, &ok) == 128 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getAlphaComponent", "()I", NULL, &ok) == 128 && ok);
+    a[0] = iref(200);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setGrayScale", "(I)V", a, NULL) == NJ_OK);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getRedComponent", "()I", NULL, &ok) == 200 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getGreenComponent", "()I", NULL, &ok) == 200 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getBlueComponent", "()I", NULL, &ok) == 200 && ok);
+
+    /* ---- stroke / blend / xor state ---- */
+    a[0] = iref(0);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setBlendMode", "(I)V", a, NULL) == NJ_OK);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getBlendMode", "()I", NULL, &ok) == 0 && ok);
+    a[0] = iref(1);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setBlendMode", "(I)V", a, NULL) == NJ_OK);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getBlendMode", "()I", NULL, &ok) == 1 && ok);
+    a[0] = iref(1);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setStrokeStyle", "(I)V", a, NULL) == NJ_OK);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getStrokeStyle", "()I", NULL, &ok) == 1 && ok);
+    a[0] = iref(0);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setStrokeStyle", "(I)V", a, NULL) == NJ_OK);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getStrokeStyle", "()I", NULL, &ok) == 0 && ok);
+    a[0] = iref(7);
+    (void)nj_call(vm, g, NJ_C_GRAPHICS, "setStrokeStyle", "(I)V", a, NULL);
+    OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
+           "setStrokeStyle(7) did not throw");
+
+    /* Restore an unclipped target for the drawing tests. */
+    a[0] = iref(0);
+    a[1] = iref(0);
+    a[2] = iref(24);
+    a[3] = iref(16);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setClip", "(IIII)V", a, NULL) == NJ_OK);
+    a[0] = iref(0);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setBlendMode", "(I)V", a, NULL) == NJ_OK);
+
+    /* ---- drawLine / drawRect ---- */
+    a[0] = iref((nj_s4)0xFF0000FFu);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+    a[0] = iref(0);
+    a[1] = iref(0);
+    a[2] = iref(5);
+    a[3] = iref(0);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawLine", "(IIII)V", a, NULL) == NJ_OK);
+    OK(img_pixel(vm, img, 3, 0) == 0xFF0000FFu);
+    a[0] = iref(10);
+    a[1] = iref(10);
+    a[2] = iref(6);
+    a[3] = iref(5);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRect", "(IIII)V", a, NULL) == NJ_OK);
+    OK_MSG(img_pixel(vm, img, 10, 10) == 0xFF0000FFu, "drawRect outline");
+    OK_MSG(img_pixel(vm, img, 12, 12) != 0xFF0000FFu, "drawRect must not fill");
+
+    /* ---- drawRoundRect / arcs / triangles ---- */
+    a[0] = iref(0);
+    a[1] = iref(0);
+    a[2] = iref(8);
+    a[3] = iref(6);
+    a[4] = iref(2);
+    a[5] = iref(2);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRoundRect", "(IIIIII)V", a, NULL) == NJ_OK);
+    a[0] = iref((nj_s4)0xFF00FFFFu);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRoundRect", "(IIIIII)V", a, NULL) == NJ_OK);
+    OK_MSG(img_pixel(vm, img, 4, 3) == 0xFF00FFFFu, "fillRoundRect");
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawArc", "(IIIIII)V", a, NULL) == NJ_OK);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillArc", "(IIIIII)V", a, NULL) == NJ_OK);
+    a[0] = iref((nj_s4)0xFFFF00FFu);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+    a[0] = iref(14);
+    a[1] = iref(12);
+    a[2] = iref(20);
+    a[3] = iref(12);
+    a[4] = iref(17);
+    a[5] = iref(15);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawTriangle", "(IIIIII)V", a, NULL) == NJ_OK);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillTriangle", "(IIIIII)V", a, NULL) == NJ_OK);
+    OK_MSG(img_pixel(vm, img, 17, 14) == 0xFFFF00FFu,
+           "fillTriangle centroid = 0x%08X", img_pixel(vm, img, 17, 14));
+
+    /* ---- drawString advances by Font.stringWidth ---- */
+    {
+        nj_ref f = call_static_ref(vm, NJ_C_FONT, "getFont",
+                                   "(III)L" NJ_C_FONT ";",
+                                   (nj_value[]){ iref(0), iref(0), iref(0) },
+                                   &ok);
+        nj_ref s = str(vm, "Hello");
+        nj_s4 w;
+        OK(f != NULL && ok);
+        if (f) {
+            a[0] = sref(f);
+            OK(nj_call(vm, g, NJ_C_GRAPHICS, "setFont", "(L" NJ_C_FONT ";)V",
+                       a, NULL) == NJ_OK);
+            OK(call_ref(vm, g, NJ_C_GRAPHICS, "getFont", "()L" NJ_C_FONT ";",
+                        NULL, &ok) == f && ok);
+        }
+        a[0] = sref(s);
+        w = call_int(vm, f, NJ_C_FONT, "stringWidth", "(Ljava/lang/String;)I",
+                     a, &ok);
+        OK(w > 0 && ok);
+        /* Clear a strip, draw the string, then measure where the ink stopped. */
+        a[0] = iref(0);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+        a[0] = iref(0);
+        a[1] = iref(0);
+        a[2] = iref(24);
+        a[3] = iref(8);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
+        a[0] = iref((nj_s4)0xFFFFFFFFu);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+        a[0] = sref(s);
+        a[1] = iref(0);
+        a[2] = iref(0);
+        a[3] = iref(NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawString",
+                   "(Ljava/lang/String;III)V", a, NULL) == NJ_OK);
+        {
+            int x, last = -1;
+            for (x = 0; x < 24; x++) {
+                int y;
+                for (y = 0; y < 8; y++) {
+                    if (img_pixel(vm, img, x, y) == 0xFFFFFFFFu) {
+                        last = x;
+                        break;
+                    }
+                }
+            }
+            /* Ink must stay inside the advance the Font reports. */
+            OK_MSG(last >= 0, "drawString drew nothing");
+            OK_MSG(last < w, "drawString ink reached %d, advance is %d", last, w);
+        }
+        /* drawChar must produce the same ink as a one-character string. */
+        a[0] = iref(0);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+        a[0] = iref(0);
+        a[1] = iref(0);
+        a[2] = iref(24);
+        a[3] = iref(8);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
+        a[0] = iref((nj_s4)0xFFFFFFFFu);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+        a[0] = iref('A');
+        a[1] = iref(1);
+        a[2] = iref(0);
+        a[3] = iref(NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawChar", "(CIII)V", a, NULL) == NJ_OK);
+        {
+            int x, ink = 0;
+            for (x = 0; x < 24; x++) {
+                int y;
+                for (y = 0; y < 8; y++) {
+                    if (img_pixel(vm, img, x, y) == 0xFFFFFFFFu) {
+                        ink++;
+                        break;
+                    }
+                }
+            }
+            OK_MSG(ink > 0, "drawChar drew nothing");
+        }
+    }
+
+    /* ---- drawRegion with a transform ---- */
+    {
+        nj_value ra[6];
+        ra[0] = sref(img);
+        ra[1] = iref(0);
+        ra[2] = iref(0);
+        ra[3] = iref(4);
+        ra[4] = iref(4);
+        ra[5] = iref(NJ_TRANS_NONE);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRegion",
+                   "(L" NJ_C_IMAGE ";IIII)V", ra, NULL) == NJ_OK);
+        ra[5] = iref(NJ_TRANS_ROT90);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRegion",
+                   "(L" NJ_C_IMAGE ";IIII)V", ra, NULL) == NJ_OK);
+        /* The 7-argument form blits a source rectangle. */
+        ra[1] = iref(0);
+        ra[2] = iref(0);
+        ra[3] = iref(2);
+        ra[4] = iref(2);
+        ra[5] = iref(NJ_TRANS_NONE);
+        a[0] = sref(img);
+        a[1] = iref(0);
+        a[2] = iref(0);
+        a[3] = iref(2);
+        a[4] = iref(2);
+        a[5] = iref(20);
+        a[6] = iref(2);
+        a[7] = iref(NJ_TRANS_NONE);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRegion",
+                   "(L" NJ_C_IMAGE ";IIIIIII)V", a, NULL) == NJ_OK);
+        /* drawImage is the same operation at the default anchor. */
+        a[0] = sref(img);
+        a[1] = iref(0);
+        a[2] = iref(0);
+        a[3] = iref(20);
+        a[4] = iref(0);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawImage",
+                   "(L" NJ_C_IMAGE ";III)V", a, NULL) == NJ_OK);
+    }
+
+    /* ---- copyArea ---- */
+    {
+        nj_value ca[7];
+        ca[0] = iref(0);
+        ca[1] = iref(0);
+        ca[2] = iref(3);
+        ca[3] = iref(3);
+        ca[4] = iref(20);
+        ca[5] = iref(5);
+        ca[6] = iref(NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "copyArea", "(IIIIIII)V", ca,
+                   NULL) == NJ_OK);
+        /* Overlapping copy: source and destination share rows. */
+        ca[0] = iref(10);
+        ca[1] = iref(5);
+        ca[2] = iref(6);
+        ca[3] = iref(6);
+        ca[4] = iref(11);
+        ca[5] = iref(6);
+        ca[6] = iref(NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "copyArea", "(IIIIIII)V", ca,
+                   NULL) == NJ_OK);
+    }
+
+    /* ---- drawRGB ---- */
+    {
+        nj_ref rgb = nj_int_array_new(vm, 4u);
+        nj_value ra[8];
+        nj_array_set_int(rgb, 0u, (nj_s4)0x00FF8000u);
+        nj_array_set_int(rgb, 1u, (nj_s4)0x0000FF80u);
+        nj_array_set_int(rgb, 2u, (nj_s4)0x008000FFu);
+        nj_array_set_int(rgb, 3u, (nj_s4)0x00FFFFFFu);
+        ra[0] = sref(rgb);
+        ra[1] = iref(0);
+        ra[2] = iref(2);
+        ra[3] = iref(15);
+        ra[4] = iref(12);
+        ra[5] = iref(2);
+        ra[6] = iref(2);
+        ra[7] = iref(1);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", ra,
+                   NULL) == NJ_OK);
+        OK_MSG(img_pixel(vm, img, 15, 12) == 0xFFFF8000u,
+               "drawRGB = 0x%08X", img_pixel(vm, img, 15, 12));
+    }
+
+    /* ---- XOR mode ---- */
+    {
+        nj_value xa[1];
+        nj_u4 before, after;
+        /* Start from a known pixel. */
+        a[0] = iref((nj_s4)0xFF102030u);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+        a[0] = iref(1);
+        a[1] = iref(1);
+        a[2] = iref(1);
+        a[3] = iref(1);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
+        before = img_pixel(vm, img, 1, 1);
+        xa[0] = sref(NULL);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setXORMode",
+                   "(L" NJ_C_GRAPHICS ";)V", xa, NULL) == NJ_OK);
+        a[0] = iref((nj_s4)0xFFFFFFFFu);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
+        after = img_pixel(vm, img, 1, 1);
+        OK_MSG(after != before, "XOR mode produced no change");
+        /* Back to normal mode: a plain fill must overwrite again. */
+        a[0] = iref((nj_s4)0xFF445566u);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
+        OK_MSG(img_pixel(vm, img, 1, 1) == 0xFF445566u,
+               "after XOR clear = 0x%08X", img_pixel(vm, img, 1, 1));
+    }
+
+    /* ---- error cases ---- */
+    a[0] = iref(-1);
+    a[1] = iref(0);
+    a[2] = iref(4);
+    a[3] = iref(4);
+    (void)nj_call(vm, g, NJ_C_GRAPHICS, "setClip", "(IIII)V", a, NULL);
+    OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
+           "setClip(-1,..) did not throw");
+    a[0] = iref(1);
+    a[1] = iref(1);
+    a[2] = iref(1);
+    a[3] = iref(1);
+    (void)nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL);
+    OK(vm->exception == NULL);
+}
+
+/* ------------------------------------------------------------------ */
+/* Font                                                                */
+/* ------------------------------------------------------------------ */
+static void test_font(nj_vm *vm)
+{
+    nj_value a[3];
+    int ok = 0;
+    nj_ref f1, f2, f3, def;
+    nj_ref s = str(vm, "Hello, world");
+    nj_ref chars;
+    nj_s4 w_all, w_sub, w_mid;
+
+    a[0] = iref(0);
+    a[1] = iref(0);
+    a[2] = iref(0);
+    f1 = call_static_ref(vm, NJ_C_FONT, "getFont", "(III)L" NJ_C_FONT ";", a, &ok);
+    OK(f1 != NULL && ok);
+    f2 = call_static_ref(vm, NJ_C_FONT, "getFont", "(III)L" NJ_C_FONT ";", a, &ok);
+    /* Interning: the SAME object, not merely an equal one. */
+    OK_MSG(f1 == f2, "getFont is not interned");
+    def = call_static_ref(vm, NJ_C_FONT, "getDefaultFont", "()L" NJ_C_FONT ";",
+                          NULL, &ok);
+    OK(def != NULL && ok);
+    OK_MSG(def == f1, "getDefaultFont differs from getFont(MEDIUM,PLAIN)");
+
+    a[0] = iref(1);         /* STYLE_BOLD */
+    f3 = call_static_ref(vm, NJ_C_FONT, "getFont", "(I)L" NJ_C_FONT ";", a, &ok);
+    OK(f3 != NULL && ok);
+    OK_MSG(f3 != f1, "bold font must not be the plain one");
+    a[0] = iref(1);
+    OK(call_static_ref(vm, NJ_C_FONT, "getFont", "(I)L" NJ_C_FONT ";", a, &ok) == f3);
+    OK(call_int(vm, f3, NJ_C_FONT, "isBold", "()Z", NULL, &ok) == 1 && ok);
+    OK(call_int(vm, f3, NJ_C_FONT, "isPlain", "()Z", NULL, &ok) == 0 && ok);
+    OK(call_int(vm, f1, NJ_C_FONT, "isPlain", "()Z", NULL, &ok) == 1 && ok);
+    OK(call_int(vm, f1, NJ_C_FONT, "getStyle", "()I", NULL, &ok) == 0 && ok);
+    OK(call_int(vm, f1, NJ_C_FONT, "getSize", "()I", NULL, &ok) == 0 && ok);
+
+    {
+        nj_s4 h = call_int(vm, f1, NJ_C_FONT, "getHeight", "()I", NULL, &ok);
+        nj_s4 asc = call_int(vm, f1, NJ_C_FONT, "getAscent", "()I", NULL, &ok);
+        nj_s4 desc = call_int(vm, f1, NJ_C_FONT, "getDescent", "()I", NULL, &ok);
+        nj_s4 base = call_int(vm, f1, NJ_C_FONT, "getBaselinePosition", "()I",
+                              NULL, &ok);
+        OK_MSG(h > 0, "font height = %d", h);
+        OK_MSG(asc > 0, "font ascent = %d", asc);
+        OK_MSG(asc + desc == h, "ascent %d + descent %d != height %d",
+               asc, desc, h);
+        OK_MSG(base == asc, "baseline %d != ascent %d", base, asc);
+    }
+
+    /* charWidth / stringWidth / substringWidth / charsWidth agree. */
+    {
+        nj_s4 cw_a, cw_l;
+        a[0] = iref('a');
+        cw_a = call_int(vm, f1, NJ_C_FONT, "charWidth", "(C)I", a, &ok);
+        a[0] = iref('l');
+        cw_l = call_int(vm, f1, NJ_C_FONT, "charWidth", "(C)I", a, &ok);
+        OK(cw_a > 0 && cw_l > 0);
+        a[0] = sref(s);
+        w_all = call_int(vm, f1, NJ_C_FONT, "stringWidth",
+                         "(Ljava/lang/String;)I", a, &ok);
+        OK(w_all > 0 && ok);
+        a[0] = sref(s);
+        a[1] = iref(0);
+        a[2] = iref(5);
+        w_sub = call_int(vm, f1, NJ_C_FONT, "substringWidth",
+                         "(Ljava/lang/String;II)I", a, &ok);
+        OK(w_sub > 0 && ok);
+        a[0] = sref(s);
+        a[1] = iref(5);
+        a[2] = iref(7);
+        w_mid = call_int(vm, f1, NJ_C_FONT, "substringWidth",
+                         "(Ljava/lang/String;II)I", a, &ok);
+        OK_MSG(w_sub + w_mid == w_all,
+               "substring widths %d + %d != full %d", w_sub, w_mid, w_all);
+        /* charsWidth over the same characters as the first substring. */
+        chars = nj_char_array_new(vm, 5u);
+        OK(chars != NULL);
+        memcpy(chars->u.bytes, nj_string_chars(s), 5u * sizeof(nj_u2));
+        a[0] = sref(chars);
+        a[1] = iref(0);
+        a[2] = iref(5);
+        OK_MSG(call_int(vm, f1, NJ_C_FONT, "charsWidth", "([CII)I", a, &ok) == w_sub,
+               "charsWidth != substringWidth");
+    }
+
+    /* Every style/size combination must be reachable and distinct where it
+     * should be. */
+    {
+        nj_ref big = call_static_ref(vm, NJ_C_FONT, "getFont",
+                                     "(III)L" NJ_C_FONT ";",
+                                     (nj_value[]){ iref(64), iref(0), iref(16) },
+                                     &ok);
+        nj_s4 h = call_int(vm, f1, NJ_C_FONT, "getHeight", "()I", NULL, &ok);
+        nj_s4 hb = call_int(vm, big, NJ_C_FONT, "getHeight", "()I", NULL, &ok);
+        OK(big != NULL);
+        OK_MSG(hb >= h, "large font height %d < medium %d", hb, h);
+        OK(call_int(vm, big, NJ_C_FONT, "getSize", "()I", NULL, &ok) == 16 && ok);
+    }
+
+    /* Error cases. */
+    a[0] = iref(1);
+    a[1] = iref(99);        /* an unknown style bit */
+    a[2] = iref(0);
+    (void)call_static_ref(vm, NJ_C_FONT, "getFont", "(III)L" NJ_C_FONT ";", a,
+                          NULL);
+    OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
+           "getFont with a bad style did not throw");
+    a[0] = sref(NULL);
+    (void)call_int(vm, f1, NJ_C_FONT, "stringWidth", "(Ljava/lang/String;)I", a,
+                   NULL);
+    OK_MSG(exc_is(vm, "java/lang/NullPointerException"),
+           "stringWidth(null) did not throw");
+    a[0] = sref(s);
+    a[1] = iref(0);
+    a[2] = iref(999);
+    (void)call_int(vm, f1, NJ_C_FONT, "substringWidth",
+                   "(Ljava/lang/String;II)I", a, NULL);
+    OK_MSG(exc_is(vm, "java/lang/StringIndexOutOfBoundsException"),
+           "substringWidth out of range did not throw");
+}
+
+/* ------------------------------------------------------------------ */
+/* Command / Ticker                                                    */
+/* ------------------------------------------------------------------ */
+static void test_command(nj_vm *vm)
+{
+    nj_value a[4];
+    int ok = 0;
+    nj_ref c1, c2, c3, c4;
+
+    c1 = construct(vm, NJ_C_COMMAND, "(ILjava/lang/String;I)V",
+                   (nj_value[]){ iref(1), sref(str(vm, "B")), iref(10) });
+    c2 = construct(vm, NJ_C_COMMAND, "(ILjava/lang/String;I)V",
+                   (nj_value[]){ iref(4), sref(str(vm, "A")), iref(1) });
+    c3 = construct(vm, NJ_C_COMMAND, "(ILjava/lang/String;I)V",
+                   (nj_value[]){ iref(1), sref(str(vm, "C")), iref(10) });
+    c4 = construct(vm, NJ_C_COMMAND, "(ILjava/lang/String;II)V",
+                   (nj_value[]){ iref(4), sref(str(vm, "OK")), iref(2),
+                                 sref(str(vm, "Okay then")) });
+    OK(c1 && c2 && c3 && c4);
+    if (!c1 || !c2 || !c3 || !c4) {
+        return;
+    }
+    OK(call_int(vm, c1, NJ_C_COMMAND, "getCommandType", "()I", NULL, &ok) == 1 && ok);
+    OK(call_int(vm, c1, NJ_C_COMMAND, "getPriority", "()I", NULL, &ok) == 10 && ok);
+    {
+        nj_ref l = call_ref(vm, c1, NJ_C_COMMAND, "getLabel",
+                            "()Ljava/lang/String;", NULL, &ok);
+        OK(l != NULL && ok && nj_string_equals_utf8(l, "B"));
+    }
+    {
+        nj_ref l = call_ref(vm, c4, NJ_C_COMMAND, "getLongLabel",
+                            "()Ljava/lang/String;", NULL, &ok);
+        OK(l != NULL && ok && nj_string_equals_utf8(l, "Okay then"));
+        l = call_ref(vm, c4, NJ_C_COMMAND, "getLabel",
+                     "()Ljava/lang/String;", NULL, &ok);
+        OK(l != NULL && nj_string_equals_utf8(l, "OK"));
+    }
+
+    /* Priority ordering, then type, then equality. */
+    a[0] = sref(c2);
+    OK_MSG(call_int(vm, c1, NJ_C_COMMAND, "compareTo",
+                    "(L" NJ_C_COMMAND ";)I", a, &ok) > 0,
+           "priority 10 must sort after priority 1");
+    a[0] = sref(c4);
+    {
+        nj_s4 d = call_int(vm, c2, NJ_C_COMMAND, "compareTo",
+                           "(L" NJ_C_COMMAND ";)I", a, &ok);
+        OK_MSG(d < 0, "type OK(4) must sort before SCREEN(1) at equal priority");
+    }
+    a[0] = sref(c3);
+    OK_MSG(call_int(vm, c1, NJ_C_COMMAND, "compareTo", "(L" NJ_C_COMMAND ";)I",
+                    a, &ok) == 0, "equal commands must compare equal");
+
+    /* Ticker round-trip. */
+    {
+        nj_ref t = construct(vm, NJ_C_TICKER, "(Ljava/lang/String;)V",
+                             (nj_value[]){ sref(str(vm, "breaking news")) });
+        nj_ref l;
+        OK(t != NULL);
+        if (t) {
+            l = call_ref(vm, t, NJ_C_TICKER, "getString", "()Ljava/lang/String;",
+                         NULL, &ok);
+            OK(l != NULL && ok && nj_string_equals_utf8(l, "breaking news"));
+            a[0] = sref(str(vm, "later"));
+            OK(nj_call(vm, t, NJ_C_TICKER, "setString", "(Ljava/lang/String;)V",
+                       a, NULL) == NJ_OK);
+            l = call_ref(vm, t, NJ_C_TICKER, "getString", "()Ljava/lang/String;",
+                         NULL, &ok);
+            OK(l != NULL && nj_string_equals_utf8(l, "later"));
+        }
+        /* A null ticker text must be rejected. */
+        (void)construct(vm, NJ_C_TICKER, "(Ljava/lang/String;)V",
+                        (nj_value[]){ sref(NULL) });
+        OK_MSG(exc_is(vm, "java/lang/NullPointerException"),
+               "Ticker(null) did not throw");
+        a[0] = sref(NULL);
+        (void)construct(vm, NJ_C_COMMAND, "(ILjava/lang/String;I)V",
+                        (nj_value[]){ iref(1), sref(NULL), iref(1) });
+        OK_MSG(exc_is(vm, "java/lang/NullPointerException"),
+               "Command with a null label did not throw");
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Widgets                                                             */
+/* ------------------------------------------------------------------ */
+static void test_widgets(nj_vm *vm)
+{
+    nj_value a[8];
+    int ok = 0;
+
+    /* ---- List ---- */
+    {
+        nj_ref list = construct(vm, NJ_C_LIST, "(Ljava/lang/String;I)V",
+                                (nj_value[]){ sref(str(vm, "Menu")), iref(3) });
+        nj_ref s2 = str(vm, "two");
+        nj_ref res;
+        OK(list != NULL);
+        if (!list) {
+            return;
+        }
+        OK(call_int(vm, list, NJ_C_LIST, "getType", "()I", NULL, &ok) == 3 && ok);
+        a[0] = sref(str(vm, "one"));
+        OK(call_int(vm, list, NJ_C_LIST, "append", "(Ljava/lang/String;)I",
+                    a, &ok) == 0 && ok);
+        a[0] = sref(s2);
+        OK(call_int(vm, list, NJ_C_LIST, "append", "(Ljava/lang/String;)I",
+                    a, &ok) == 1 && ok);
+        OK(call_int(vm, list, NJ_C_LIST, "size", "()I", NULL, &ok) == 2 && ok);
+        a[0] = iref(1);
+        res = call_ref(vm, list, NJ_C_LIST, "getString",
+                       "(I)Ljava/lang/String;", a, &ok);
+        OK(res == s2 && ok);
+        a[0] = iref(0);
+        a[1] = sref(str(vm, "ONE"));
+        OK(nj_call(vm, list, NJ_C_LIST, "setString", "(ILjava/lang/String;)V",
+                   a, NULL) == NJ_OK);
+        res = call_ref(vm, list, NJ_C_LIST, "getString",
+                       "(I)Ljava/lang/String;", a, &ok);
+        OK(res != NULL && nj_string_equals_utf8(res, "ONE"));
+        a[0] = iref(1);
+        OK(nj_call(vm, list, NJ_C_LIST, "setSelectedIndex", "(I)V", a, NULL) == NJ_OK);
+        OK(call_int(vm, list, NJ_C_LIST, "getSelectedIndex", "()I", NULL, &ok) == 1 && ok);
+        a[0] = iref(1);
+        OK(call_int(vm, list, NJ_C_LIST, "isSelected", "(I)Z", a, &ok) == 1 && ok);
+        OK(nj_call(vm, list, NJ_C_LIST, "delete", "(I)V", a, NULL) == NJ_OK);
+        OK(call_int(vm, list, NJ_C_LIST, "size", "()I", NULL, &ok) == 1 && ok);
+        a[0] = iref(-1);
+        (void)nj_call(vm, list, NJ_C_LIST, "setSelectedIndex", "(I)V", a, NULL);
+        OK_MSG(exc_is(vm, "java/lang/IndexOutOfBoundsException"),
+               "List.setSelectedIndex(-1) did not throw");
+        OK(nj_call(vm, list, NJ_C_LIST, "deleteAll", "()V", NULL, NULL) == NJ_OK);
+        OK(call_int(vm, list, NJ_C_LIST, "size", "()I", NULL, &ok) == 0 && ok);
+        /* The IMPLICIT constructor must have produced a select command. */
+        {
+            nj_ref sel = static_ref(vm, NJ_C_LIST, "SELECT_COMMAND", D_CMD);
+            OK(sel != NULL);
+        }
+    }
+
+    /* ---- Form + items ---- */
+    {
+        nj_ref form = construct(vm, NJ_C_FORM, "(Ljava/lang/String;)V",
+                                (nj_value[]){ sref(str(vm, "Settings")) });
+        nj_ref gauge, cg, tf, df, spacer, si;
+        OK(form != NULL);
+        if (!form) {
+            return;
+        }
+        a[0] = sref(str(vm, "plain text"));
+        OK(call_int(vm, form, NJ_C_FORM, "append", "(Ljava/lang/String;)I",
+                    a, &ok) == 0 && ok);
+
+        gauge = construct(vm, NJ_C_GAUGE, "(Ljava/lang/String;ZII)V",
+                          (nj_value[]){ sref(str(vm, "Volume")), iref(1),
+                                        iref(10), iref(3) });
+        OK(gauge != NULL);
+        OK(call_int(vm, gauge, NJ_C_GAUGE, "isInteractive", "()Z", NULL, &ok) == 1 && ok);
+        OK(call_int(vm, gauge, NJ_C_GAUGE, "getMaxValue", "()I", NULL, &ok) == 10 && ok);
+        OK(call_int(vm, gauge, NJ_C_GAUGE, "getValue", "()I", NULL, &ok) == 0 && ok);
+        a[0] = iref(7);
+        OK(nj_call(vm, gauge, NJ_C_GAUGE, "setValue", "(I)V", a, NULL) == NJ_OK);
+        OK(call_int(vm, gauge, NJ_C_GAUGE, "getValue", "()I", NULL, &ok) == 7 && ok);
+        a[0] = iref(4);
+        (void)nj_call(vm, gauge, NJ_C_GAUGE, "setValue", "(I)V", a, NULL);
+        OK(vm->exception == NULL);
+        a[0] = iref(99);
+        (void)nj_call(vm, gauge, NJ_C_GAUGE, "setValue", "(I)V", a, NULL);
+        OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
+               "Gauge.setValue(out of range) did not throw");
+
+        cg = construct(vm, NJ_C_CHOICEGROUP, "(ILjava/lang/String;)V",
+                       (nj_value[]){ iref(2), sref(str(vm, "Pick one")) });
+        OK(cg != NULL);
+        if (cg) {
+            a[0] = sref(str(vm, "alpha"));
+            OK(call_int(vm, cg, NJ_C_CHOICEGROUP, "append",
+                        "(Ljava/lang/String;)I", a, &ok) == 0 && ok);
+            a[0] = sref(str(vm, "beta"));
+            OK(call_int(vm, cg, NJ_C_CHOICEGROUP, "append",
+                        "(Ljava/lang/String;)I", a, &ok) == 1 && ok);
+            OK(call_int(vm, cg, NJ_C_CHOICEGROUP, "size", "()I", NULL, &ok) == 2 && ok);
+            a[0] = iref(1);
+            OK(nj_call(vm, cg, NJ_C_CHOICEGROUP, "setSelectedIndex", "(I)V",
+                       a, NULL) == NJ_OK);
+            OK(call_int(vm, cg, NJ_C_CHOICEGROUP, "getSelectedIndex", "()I",
+                        NULL, &ok) == 1 && ok);
+            a[0] = iref(0);
+            OK(call_int(vm, cg, NJ_C_CHOICEGROUP, "isSelected", "(I)Z", a,
+                        &ok) == 0 && ok);
+            a[0] = sref(nj_char_array_new(vm, 2u));
+            (void)nj_array_set_int(a[0].r, 0u, 1);
+            OK(call_int(vm, cg, NJ_C_CHOICEGROUP, "getSelectedFlags", "([Z)I",
+                        a, &ok) == 1 && ok);
+            OK(nj_array_get_int(a[0].r, 0u) == 0 && nj_array_get_int(a[0].r, 1u) == 1);
+        }
+
+        tf = construct(vm, NJ_C_TEXTFIELD, "(Ljava/lang/String;Ljava/lang/String;II)V",
+                       (nj_value[]){ sref(str(vm, "Name")), sref(str(vm, "abc")),
+                                     iref(8), iref(0) });
+        OK(tf != NULL);
+        if (tf) {
+            nj_ref s;
+            OK(call_int(vm, tf, NJ_C_TEXTFIELD, "size", "()I", NULL, &ok) == 3 && ok);
+            OK(call_int(vm, tf, NJ_C_TEXTFIELD, "getMaxSize", "()I", NULL, &ok) == 8 && ok);
+            s = call_ref(vm, tf, NJ_C_TEXTFIELD, "getString",
+                         "()Ljava/lang/String;", NULL, &ok);
+            OK(s != NULL && ok && nj_string_equals_utf8(s, "abc"));
+            a[0] = sref(str(vm, "hello"));
+            OK(nj_call(vm, tf, NJ_C_TEXTFIELD, "setString", "(Ljava/lang/String;)V",
+                       a, NULL) == NJ_OK);
+            s = call_ref(vm, tf, NJ_C_TEXTFIELD, "getString",
+                         "()Ljava/lang/String;", NULL, &ok);
+            OK(s != NULL && nj_string_equals_utf8(s, "hello"));
+            a[0] = sref(nj_char_array_new(vm, 4u));
+            OK(nj_call(vm, tf, NJ_C_TEXTFIELD, "getChars", "([C)V", a, NULL) == NJ_OK);
+            OK(nj_array_get_int(a[0].r, 0u) == 'h');
+            OK(nj_array_get_int(a[0].r, 4u) == 0);
+            /* insert([CII I) */
+            {
+                nj_ref ins = nj_char_array_new(vm, 2u);
+                nj_array_set_int(ins, 0u, 'X');
+                nj_array_set_int(ins, 1u, 'Y');
+                a[0] = sref(ins);
+                a[1] = iref(0);
+                a[2] = iref(2);
+                a[3] = iref(5);
+                OK(nj_call(vm, tf, NJ_C_TEXTFIELD, "insert", "([CIII)V", a,
+                           NULL) == NJ_OK);
+                s = call_ref(vm, tf, NJ_C_TEXTFIELD, "getString",
+                             "()Ljava/lang/String;", NULL, &ok);
+                OK_MSG(s && nj_string_equals_utf8(s, "helloXY"), "insert -> %s",
+                       s ? "(string)" : "(null)");
+            }
+            a[0] = iref(5);
+            a[1] = iref(2);
+            OK(nj_call(vm, tf, NJ_C_TEXTFIELD, "delete", "(II)V", a, NULL) == NJ_OK);
+            s = call_ref(vm, tf, NJ_C_TEXTFIELD, "getString",
+                         "()Ljava/lang/String;", NULL, &ok);
+            OK(s != NULL && nj_string_equals_utf8(s, "hello"));
+            a[0] = iref(2);          /* NUMERIC */
+            OK(nj_call(vm, tf, NJ_C_TEXTFIELD, "setConstraints", "(I)V", a,
+                       NULL) == NJ_OK);
+            a[0] = sref(str(vm, "12x"));
+            (void)nj_call(vm, tf, NJ_C_TEXTFIELD, "setString",
+                          "(Ljava/lang/String;)V", a, NULL);
+            OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
+                   "NUMERIC TextField accepted '12x'");
+            a[0] = sref(str(vm, "too long for the field"));
+            (void)nj_call(vm, tf, NJ_C_TEXTFIELD, "setString",
+                          "(Ljava/lang/String;)V", a, NULL);
+            OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
+                   "TextField accepted text longer than maxSize");
+        }
+
+        df = construct(vm, NJ_C_DATEFIELD, "(Ljava/lang/String;JI)V",
+                       (nj_value[]){ sref(str(vm, "When")),
+                                     (nj_value){ .j = 0 }, iref(3) });
+        OK(df != NULL);
+        if (df) {
+            nj_value da[1];
+            da[0].j = 86400000;
+            da[1].bits = 0u;
+            OK(nj_call(vm, df, NJ_C_DATEFIELD, "setDate", "(J)V", da,
+                       NULL) == NJ_OK);
+            {
+                nj_value r;
+                r.bits = 0u;
+                OK(nj_call(vm, df, NJ_C_DATEFIELD, "getDate", "()J", NULL,
+                           &r) == NJ_OK);
+                OK_MSG(r.j == 86400000, "DateField date = %ld", (long)r.j);
+            }
+            OK(call_int(vm, df, NJ_C_DATEFIELD, "getInputMode", "()I", NULL,
+                        &ok) == -1 && ok);
+            da[0].i = 5;
+            OK(nj_call(vm, df, NJ_C_DATEFIELD, "setInputMode", "(I)V", da,
+                       NULL) == NJ_OK);
+            OK(call_int(vm, df, NJ_C_DATEFIELD, "getInputMode", "()I", NULL,
+                        &ok) == 5 && ok);
+        }
+
+        spacer = construct(vm, NJ_C_SPACER, "(II)V",
+                           (nj_value[]){ iref(10), iref(4) });
+        OK(spacer != NULL);
+        si = construct(vm, NJ_C_STRINGITEM,
+                       "(Ljava/lang/String;Ljava/lang/String;I)V",
+                       (nj_value[]){ sref(str(vm, "lbl")), sref(str(vm, "txt")),
+                                     iref(1) });
+        OK(si != NULL);
+
+        /* Form.append(Item) for each widget, then traverse the form. */
+        a[0] = sref(gauge);
+        OK(call_int(vm, form, NJ_C_FORM, "append", "(L" NJ_C_ITEM ";)I", a,
+                    &ok) == 1 && ok);
+        a[0] = sref(cg);
+        OK(call_int(vm, form, NJ_C_FORM, "append", "(L" NJ_C_ITEM ";)I", a,
+                    &ok) == 2 && ok);
+        a[0] = sref(tf);
+        OK(call_int(vm, form, NJ_C_FORM, "append", "(L" NJ_C_ITEM ";)I", a,
+                    &ok) == 3 && ok);
+        a[0] = sref(df);
+        OK(call_int(vm, form, NJ_C_FORM, "append", "(L" NJ_C_ITEM ";)I", a,
+                    &ok) == 4 && ok);
+        a[0] = sref(spacer);
+        OK(call_int(vm, form, NJ_C_FORM, "append", "(L" NJ_C_ITEM ";)I", a,
+                    &ok) == 5 && ok);
+        a[0] = sref(si);
+        OK(call_int(vm, form, NJ_C_FORM, "append", "(L" NJ_C_ITEM ";)I", a,
+                    &ok) == 6 && ok);
+        OK(call_int(vm, form, NJ_C_FORM, "size", "()I", NULL, &ok) == 7 && ok);
+        a[0] = iref(2);
+        OK(call_ref(vm, form, NJ_C_FORM, "get", "(I)L" NJ_C_ITEM ";", a,
+                    &ok) == cg && ok);
+
+        /* Item accessors. */
+        a[0] = sref(str(vm, "renamed"));
+        OK(nj_call(vm, si, NJ_C_ITEM, "setLabel", "(Ljava/lang/String;)V", a,
+                   NULL) == NJ_OK);
+        {
+            nj_ref l = call_ref(vm, si, NJ_C_ITEM, "getLabel",
+                                "()Ljava/lang/String;", NULL, &ok);
+            OK(l != NULL && ok && nj_string_equals_utf8(l, "renamed"));
+        }
+        a[0] = iref(24);
+        OK(nj_call(vm, si, NJ_C_ITEM, "setPreferredSize", "(II)V", a, NULL) == NJ_OK);
+        OK(call_int(vm, si, NJ_C_ITEM, "getMinimumWidth", "()I", NULL, &ok) == 24 && ok);
+        a[0] = iref(-5);
+        (void)nj_call(vm, si, NJ_C_ITEM, "setPreferredSize", "(II)V", a, NULL);
+        OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
+               "setPreferredSize(-5,..) did not throw");
+
+        /* delete / insert keep the list coherent. */
+        a[0] = iref(0);
+        OK(nj_call(vm, form, NJ_C_FORM, "delete", "(I)V", a, NULL) == NJ_OK);
+        OK(call_int(vm, form, NJ_C_FORM, "size", "()I", NULL, &ok) == 6 && ok);
+        a[0] = iref(0);
+        a[1] = sref(si);
+        OK(nj_call(vm, form, NJ_C_FORM, "insert", "(IL" NJ_C_ITEM ";)V", a,
+                   NULL) == NJ_OK);
+        OK(call_int(vm, form, NJ_C_FORM, "size", "()I", NULL, &ok) == 7 && ok);
+        a[0] = iref(0);
+        OK(call_ref(vm, form, NJ_C_FORM, "get", "(I)L" NJ_C_ITEM ";", a,
+                    &ok) == si && ok);
+    }
+
+    /* ---- TextBox ---- */
+    {
+        nj_ref tb = construct(vm, NJ_C_TEXTBOX, "(Ljava/lang/String;Ljava/lang/String;II)V",
+                              (nj_value[]){ sref(str(vm, "Compose")),
+                                            sref(str(vm, "hi")), iref(16),
+                                            iref(0) });
+        nj_ref s;
+        OK(tb != NULL);
+        if (!tb) {
+            return;
+        }
+        OK(call_int(vm, tb, NJ_C_TEXTBOX, "size", "()I", NULL, &ok) == 2 && ok);
+        OK(call_int(vm, tb, NJ_C_TEXTBOX, "getMaxSize", "()I", NULL, &ok) == 16 && ok);
+        OK(call_int(vm, tb, NJ_C_TEXTBOX, "getConstraints", "()I", NULL, &ok) == 0 && ok);
+        a[0] = sref(str(vm, "longer text"));
+        OK(nj_call(vm, tb, NJ_C_TEXTBOX, "setString", "(Ljava/lang/String;)V",
+                   a, NULL) == NJ_OK);
+        s = call_ref(vm, tb, NJ_C_TEXTBOX, "getString", "()Ljava/lang/String;",
+                     NULL, &ok);
+        OK(s != NULL && ok && nj_string_equals_utf8(s, "longer text"));
+        a[0] = sref(nj_char_array_new(vm, 11u));
+        OK(nj_call(vm, tb, NJ_C_TEXTBOX, "getChars", "([C)V", a, NULL) == NJ_OK);
+        OK(nj_array_get_int(a[0].r, 0u) == 'l');
+        a[0] = iref(0);
+        a[1] = iref(6);
+        OK(nj_call(vm, tb, NJ_C_TEXTBOX, "delete", "(II)V", a, NULL) == NJ_OK);
+        s = call_ref(vm, tb, NJ_C_TEXTBOX, "getString", "()Ljava/lang/String;",
+                     NULL, &ok);
+        OK(s != NULL && nj_string_equals_utf8(s, "text"));
+        a[0] = iref(4);       /* URL */
+        OK(nj_call(vm, tb, NJ_C_TEXTBOX, "setConstraints", "(I)V", a, NULL) == NJ_OK);
+        a[0] = sref(str(vm, "http://x"));
+        OK(nj_call(vm, tb, NJ_C_TEXTBOX, "setString", "(Ljava/lang/String;)V",
+                   a, NULL) == NJ_OK);
+        /* An uneditable TextBox keeps its text but refuses a PASSWORD flag
+         * combination that violates the constraints. */
+        a[0] = sref(str(vm, "with space"));
+        (void)nj_call(vm, tb, NJ_C_TEXTBOX, "setString", "(Ljava/lang/String;)V",
+                      a, NULL);
+        OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
+               "URL TextBox accepted a space");
+        a[0] = iref(32);
+        (void)nj_call(vm, tb, NJ_C_TEXTBOX, "setMaxSize", "(I)V", a, NULL);
+        OK(call_int(vm, tb, NJ_C_TEXTBOX, "getMaxSize", "()I", NULL, &ok) == 32 && ok);
+    }
+
+    /* ---- Alert ---- */
+    {
+        nj_ref alert = construct(vm, NJ_C_ALERT, "(Ljava/lang/String;)V",
+                                 (nj_value[]){ sref(str(vm, "Heads up")) });
+        nj_ref type;
+        nj_ref s;
+        OK(alert != NULL);
+        if (!alert) {
+            return;
+        }
+        s = call_ref(vm, alert, NJ_C_ALERT, "getString", "()Ljava/lang/String;",
+                     NULL, &ok);
+        OK(s != NULL && ok && nj_string_equals_utf8(s, "Heads up"));
+        OK(call_int(vm, alert, NJ_C_ALERT, "getTimeout", "()I", NULL, &ok) == 2000 && ok);
+        a[0] = iref(5000);
+        OK(nj_call(vm, alert, NJ_C_ALERT, "setTimeout", "(I)V", a, NULL) == NJ_OK);
+        OK(call_int(vm, alert, NJ_C_ALERT, "getTimeout", "()I", NULL, &ok) == 5000 && ok);
+        type = static_ref(vm, NJ_C_ALERTTYPE, "WARNING", D_ALERTTYPE);
+        OK(type != NULL);
+        a[0] = sref(type);
+        OK(nj_call(vm, alert, NJ_C_ALERT, "setType",
+                   "(L" NJ_C_ALERTTYPE ";)V", a, NULL) == NJ_OK);
+        OK(call_ref(vm, alert, NJ_C_ALERT, "getType",
+                    "()L" NJ_C_ALERTTYPE ";", NULL, &ok) == type && ok);
+        {
+            nj_ref name = call_ref(vm, type, NJ_C_ALERTTYPE, "getTypeName",
+                                   "()Ljava/lang/String;", NULL, &ok);
+            OK(name != NULL && ok && nj_string_equals_utf8(name, "WARNING"));
+        }
+        /* playSound must be safe with and without a port tone player. */
+        {
+            nj_value pa[1];
+            pa[0].r = nj_midp_display(vm);
+            OK(nj_call(vm, type, NJ_C_ALERTTYPE, "playSound",
+                       "(L" NJ_C_DISPLAY ";)Z", pa, NULL) == NJ_OK);
+            OK(vm->exception == NULL);
+        }
+        /* A non-interactive Gauge is the only legal indicator. */
+        {
+            nj_ref ind = construct(vm, NJ_C_GAUGE, "(Ljava/lang/String;ZII)V",
+                                   (nj_value[]){ sref(str(vm, "Wait")), iref(0),
+                                                 iref(100), iref(30) });
+            a[0] = sref(ind);
+            OK(nj_call(vm, alert, NJ_C_ALERT, "setIndicator",
+                       "(L" NJ_C_GAUGE ";)V", a, NULL) == NJ_OK);
+            OK(call_ref(vm, alert, NJ_C_ALERT, "getIndicator",
+                        "()L" NJ_C_GAUGE ";", NULL, &ok) == ind && ok);
+        }
+        OK(call_int(vm, alert, NJ_C_ALERT, "getDefaultTimeout", "()I", NULL,
+                    &ok) == 2000 && ok);
+        a[0] = iref(3000);
+        OK(nj_call(vm, alert, NJ_C_ALERT, "setDefaultTimeout", "(I)V", a,
+                   NULL) == NJ_OK);
+        OK(call_int(vm, alert, NJ_C_ALERT, "getDefaultTimeout", "()I", NULL,
+                    &ok) == 3000 && ok);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* The screen: Display + nj_midp_paint                                 */
+/* ------------------------------------------------------------------ */
+/* Count how many distinct colours a surface contains. */
+static int surface_colours(const nj_surface *s, nj_u4 *first_out)
+{
+    nj_u4 seen[16];
+    int n = 0;
+    int x, y;
+
+    for (y = 0; y < s->height && n < 16; y++) {
+        for (x = 0; x < s->width && n < 16; x++) {
+            nj_u4 c = nj_surface_get(s, x, y);
+            int i, found = 0;
+            for (i = 0; i < n; i++) {
+                if (seen[i] == c) {
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) {
+                seen[n++] = c;
+            }
+        }
+    }
+    if (first_out) {
+        *first_out = (n > 0) ? seen[0] : 0u;
+    }
+    return n;
+}
+
+static void test_screen(nj_vm *vm)
+{
+    nj_surface *scr;
+    nj_ref form;
+    nj_ref list;
+    nj_ref alert;
+    nj_ref display;
+    int ok = 0;
+
+    display = nj_midp_display(vm);
+    OK(display != NULL);
+    OK(nj_midp_current(vm) == NULL);
+
+    /* ---- the blank frame ---- */
+    OK(nj_midp_paint(vm) == NJ_OK);
+    scr = nj_midp_screen(vm);
+    OK(scr != NULL);
+    OK(scr->width > 0 && scr->height > 0);
+    OK(scr->stride >= scr->width * scr->bpp);
+
+    /* ---- a Form renders a legible built-in UI ---- */
+    form = construct(vm, NJ_C_FORM, "(Ljava/lang/String;)V",
+                     (nj_value[]){ sref(str(vm, "Form title")) });
+    OK(form != NULL);
+    if (form) {
+        nj_value a[2];
+        a[0] = sref(str(vm, "first line"));
+        OK(call_int(vm, form, NJ_C_FORM, "append", "(Ljava/lang/String;)I",
+                    a, &ok) == 0 && ok);
+        a[0] = sref(str(vm, "second line"));
+        OK(call_int(vm, form, NJ_C_FORM, "append", "(Ljava/lang/String;)I",
+                    a, &ok) == 1 && ok);
+        OK(nj_midp_set_current(vm, form) == NJ_OK);
+        OK(nj_midp_current(vm) == form);
+        OK(nj_midp_paint(vm) == NJ_OK);
+        OK_MSG(surface_colours(scr, NULL) >= 3,
+               "a Form frame has only %d colours", surface_colours(scr, NULL));
+        /* The title bar occupies the top rows and must not be the page
+         * background. */
+        OK_MSG(nj_surface_get(scr, 1, 1) != nj_surface_get(scr, 1, scr->height / 2),
+               "title bar not drawn");
+    }
+
+    /* ---- a List renders rows, and a key moves the selection ---- */
+    list = construct(vm, NJ_C_LIST, "(Ljava/lang/String;I)V",
+                     (nj_value[]){ sref(str(vm, "Channels")), iref(3) });
+    OK(list != NULL);
+    if (list) {
+        nj_value a[2];
+        int i;
+        for (i = 0; i < 12; i++) {
+            char buf[24];
+            snprintf(buf, sizeof(buf), "channel %d", i);
+            a[0] = sref(str(vm, buf));
+            (void)call_int(vm, list, NJ_C_LIST, "append",
+                           "(Ljava/lang/String;)I", a, &ok);
+        }
+        OK(call_int(vm, list, NJ_C_LIST, "size", "()I", NULL, &ok) == 12 && ok);
+        OK(nj_midp_set_current(vm, list) == NJ_OK);
+        vm->repaint_pending = 0u;
+        OK(nj_midp_paint(vm) == NJ_OK);
+        OK_MSG(surface_colours(scr, NULL) >= 3, "a List frame is too uniform");
+        /* Scrolling: select the last element and make sure it is on screen. */
+        a[0] = iref(11);
+        OK(nj_call(vm, list, NJ_C_LIST, "setSelectedIndex", "(I)V", a,
+                   NULL) == NJ_OK);
+        OK(nj_midp_paint(vm) == NJ_OK);
+        OK(call_int(vm, list, NJ_C_LIST, "getSelectedIndex", "()I", NULL,
+                    &ok) == 11 && ok);
+        /* A key event must reach the screen and be consumed. */
+        OK_MSG(nj_midp_key(vm, NJ_KEY_UP, 1) == 1, "keyUp not consumed by a List");
+        OK(call_int(vm, list, NJ_C_LIST, "getSelectedIndex", "()I", NULL,
+                    &ok) == 10 && ok);
+        OK(nj_midp_key(vm, NJ_KEY_UP, 0) == 1);
+        OK(nj_midp_paint(vm) == NJ_OK);
+        /* An unmapped key still reaches the screen without breaking it. */
+        OK(nj_midp_key(vm, NJ_KEY_1, 1) == 1);
+        OK(vm->exception == NULL);
+    }
+
+    /* ---- TextBox ---- */
+    {
+        nj_ref tb = construct(vm, NJ_C_TEXTBOX,
+                              "(Ljava/lang/String;Ljava/lang/String;II)V",
+                              (nj_value[]){ sref(str(vm, "Note")),
+                                            sref(str(vm, "some editable text")),
+                                            iref(64), iref(0) });
+        OK(tb != NULL);
+        if (tb) {
+            OK(nj_midp_set_current(vm, tb) == NJ_OK);
+            OK(nj_midp_paint(vm) == NJ_OK);
+            OK_MSG(surface_colours(scr, NULL) >= 3, "a TextBox frame is uniform");
+        }
+    }
+
+    /* ---- Alert ---- */
+    alert = construct(vm, NJ_C_ALERT, "(Ljava/lang/String;)V",
+                      (nj_value[]){ sref(str(vm, "Low battery")) });
+    OK(alert != NULL);
+    if (alert) {
+        OK(nj_midp_set_current(vm, alert) == NJ_OK);
+        OK(nj_midp_paint(vm) == NJ_OK);
+        OK_MSG(surface_colours(scr, NULL) >= 3, "an Alert frame is uniform");
+    }
+
+    /* ---- back to a Canvas-free Form is still fine ---- */
+    OK(nj_midp_set_current(vm, form) == NJ_OK);
+    OK(nj_midp_paint(vm) == NJ_OK);
+
+    /* ---- a Canvas subclass would be called; the bare Canvas is abstract ---- */
+    {
+        nj_ref canvas = nj_object_new(vm, NJ_C_CANVAS);
+        OK(canvas != NULL);
+        if (canvas) {
+            OK(nj_call_special(vm, canvas, NJ_C_CANVAS, "<init>", "()V",
+                               NULL, NULL) == NJ_OK);
+            OK(call_int(vm, canvas, NJ_C_CANVAS, "getWidth", "()I", NULL,
+                        &ok) == (nj_s4)scr->width && ok);
+            OK(call_int(vm, canvas, NJ_C_CANVAS, "getHeight", "()I", NULL,
+                        &ok) == (nj_s4)scr->height && ok);
+            OK(call_int(vm, canvas, NJ_C_CANVAS, "isDoubleBuffered", "()Z",
+                        NULL, &ok) == 1 && ok);
+            OK(call_int(vm, canvas, NJ_C_CANVAS, "hasPointerEvents", "()Z",
+                        NULL, &ok) == ((vm->midp_flags & NJ_MIDP_HAS_POINTER) ? 1 : 0) && ok);
+            OK(nj_midp_set_current(vm, canvas) == NJ_OK);
+            /* paint() is abstract on Canvas: a subclass that never overrides it
+             * must fail loudly rather than draw a blank frame. */
+            OK_MSG(nj_midp_paint(vm) != NJ_OK,
+                   "painting a bare Canvas should fail (paint() is abstract)");
+            OK_MSG(exc_is(vm, "java/lang/AbstractMethodError"),
+                   "expected AbstractMethodError, got %s",
+                   pending_exc(vm) ? pending_exc(vm) : "(none)");
+            /* The canvas keeps an offscreen buffer at screen size. */
+            {
+                nj_field *fb = nj_field_lookup(vm, NJ_C_CANVAS,
+                                               NJ_F_C_BUFFER, D_IMAGE, 0);
+                nj_ref buf = fb ? nj_field_read_ref(vm, canvas, fb) : NULL;
+                int bw = 0, bh = 0;
+                OK(buf != NULL);
+                OK(nj_midp_image_size(vm, buf, &bw, &bh) && bw == scr->width &&
+                   bh == scr->height);
+            }
+            /* Key events are dispatched to the abstract methods as well. */
+            OK(nj_midp_key(vm, NJ_KEY_UP, 1) == 1);
+            OK_MSG(exc_is(vm, "java/lang/AbstractMethodError"),
+                   "keyPressed on a bare Canvas should be abstract");
+        }
+    }
+
+    /* ---- the Graphics path a real paint() override would use ---- */
+    {
+        nj_ref img = image_new(vm, 32, 24);
+        nj_ref g;
+        nj_value a[4];
+        OK(img != NULL);
+        g = img ? call_ref(vm, img, NJ_C_IMAGE, "getGraphics",
+                           "()L" NJ_C_GRAPHICS ";", NULL, &ok) : NULL;
+        OK(g != NULL && ok);
+        if (g) {
+            /* Fill a known rectangle exactly the way a game would. */
+            a[0] = iref((nj_s4)0xFF00A000u);
+            OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+            a[0] = iref(8);
+            a[1] = iref(4);
+            a[2] = iref(10);
+            a[3] = iref(6);
+            OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
+            OK_MSG(img_pixel(vm, img, 9, 5) == 0xFF00A000u,
+                   "paint-path pixel = 0x%08X", img_pixel(vm, img, 9, 5));
+            OK_MSG(img_pixel(vm, img, 7, 5) == 0u,
+                   "paint-path fill leaked left");
+            OK_MSG(img_pixel(vm, img, 18, 5) == 0u,
+                   "paint-path fill leaked right");
+            OK_MSG(img_pixel(vm, img, 9, 10) == 0u,
+                   "paint-path fill leaked below");
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* main                                                                */
+/* ------------------------------------------------------------------ */
+static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
+                      nj_u4 *released, nj_u4 *peak, nj_u4 *classes)
+{
+    nj_port port;
+    nj_vm *vm;
+    nj_app *app = NULL;
+    nj_vm_stats stats;
+    int rc = 0;
+
+    memset(&port, 0, sizeof(port));
+    if (nj_port_headless(&port) != NJ_OK) {
+        return 1;
+    }
+    vm = nj_vm_create(&port, 4u * 1024u * 1024u);
+    if (!vm) {
+        nj_port_shutdown(&port);
+        return 1;
+    }
+    if (jar && jar->data) {
+        app = nj_app_open(vm, jar->data, jar->len);
+        if (!app) {
+            nj_vm_destroy(vm);
+            nj_port_shutdown(&port);
+            return 1;
+        }
+    }
+
+    test_image(vm, png, png_alpha);
+    test_graphics(vm);
+    test_font(vm);
+    test_command(vm);
+    test_widgets(vm);
+    test_screen(vm);
+
+    /* createImage(String) needs a loaded application. */
+    if (app) {
+        nj_value a[1];
+        int ok = 0;
+        nj_ref img;
+        a[0] = sref(str(vm, "/lcdui_rgb.png"));
+        img = call_static_ref(vm, NJ_C_IMAGE, "createImage",
+                              "(Ljava/lang/String;)L" NJ_C_IMAGE ";", a, &ok);
+        OK_MSG(img != NULL && ok, "createImage(String) failed: %s",
+               pending_exc(vm) ? pending_exc(vm) : "(no exception)");
+        if (img) {
+            int w = 0, h = 0;
+            OK(nj_midp_image_size(vm, img, &w, &h) && w == 13 && h == 7);
+        }
+        /* A missing resource is an IOException, not a crash. */
+        a[0] = sref(str(vm, "/nope.png"));
+        (void)call_static_ref(vm, NJ_C_IMAGE, "createImage",
+                              "(Ljava/lang/String;)L" NJ_C_IMAGE ";", a, NULL);
+        OK_MSG(exc_is(vm, "java/io/IOException"),
+               "createImage(missing) did not throw IOException");
+    }
+
+    nj_vm_get_stats(vm, &stats);
+    if (peak) { *peak = stats.host_peak; }
+    if (classes) { *classes = stats.classes; }
+    if (app) {
+        nj_app_close(vm, app);
+    }
+    *released = nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+    return rc;
+}
+
+int main(int argc, char **argv)
+{
+    blob jar, png, png_alpha;
+    char path[512];
+    nj_u4 rel[3], peak[3], classes[3];
+    int i;
+
+    if (argc > 1) {
+        g_fixtures = argv[1];
+    }
+    memset(&jar, 0, sizeof(jar));
+    memset(&png, 0, sizeof(png));
+    memset(&png_alpha, 0, sizeof(png_alpha));
+
+    snprintf(path, sizeof(path), "%s/lcdui_res.jar", g_fixtures);
+    if (!read_file(path, &jar)) {
+        fprintf(stderr, "cannot read %s (run tests/gen_lcdui_fixture.py)\n", path);
+        return 2;
+    }
+    snprintf(path, sizeof(path), "%s/lcdui_rgb.png", g_fixtures);
+    if (!read_file(path, &png)) {
+        fprintf(stderr, "cannot read %s (run tests/gen_lcdui_fixture.py)\n", path);
+        return 2;
+    }
+    snprintf(path, sizeof(path), "%s/lcdui_rgb_alpha.png", g_fixtures);
+    (void)read_file(path, &png_alpha);
+
+    printf("== nano_j2me LCDUI test ==\n");
+    printf("fixtures : %s\n", g_fixtures);
+    printf("resource jar: %u bytes, png: %u bytes\n", jar.len, png.len);
+
+    for (i = 0; i < 3; i++) {
+        if (round_full(&jar, &png, &png_alpha, &rel[i], &peak[i], &classes[i]) != 0) {
+            printf("round %d: FAILED to run\n", i + 1);
+            free(jar.data);
+            free(png.data);
+            free(png_alpha.data);
+            return 1;
+        }
+        printf("round %d: %d assertions so far (%d failures), "
+               "nj_vm_destroy released %u host blocks\n",
+               i + 1, g_pass + g_fail, g_fail, rel[i]);
+        /*
+         * Every round must start from the same place.  A drift means state
+         * survived the teardown - the one thing this runtime must never do.
+         */
+        if (i > 0 && (rel[i] != rel[0] || classes[i] != classes[0])) {
+            printf("FAIL: round %d released %u blocks / %u classes, "
+                   "round 1 released %u / %u\n",
+                   i + 1, rel[i], classes[i], rel[0], classes[0]);
+            g_fail++;
+        }
+    }
+    /* The first round must release something: the accounting has to be real. */
+    if (rel[0] == 0u) {
+        printf("FAIL: nj_vm_destroy released nothing at all\n");
+        g_fail++;
+    }
+
+    free(jar.data);
+    free(png.data);
+    free(png_alpha.data);
+
+    printf("\nassertions: %d passed, %d failed\n", g_pass, g_fail);
+    printf("host blocks released: %u / %u / %u (classes %u / %u / %u)\n",
+           rel[0], rel[1], rel[2], classes[0], classes[1], classes[2]);
+    if (g_fail == 0) {
+        printf("PASS: LCDUI (Image, Graphics, Font, widgets, frame) - "
+               "3 create/run/destroy rounds, identical teardown\n");
+        return 0;
+    }
+    printf("FAIL: %d assertion(s) failed\n", g_fail);
+    return 1;
+}

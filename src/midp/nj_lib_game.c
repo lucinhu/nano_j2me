@@ -341,10 +341,15 @@ static void trans_rect(int t, int fw, int fh, int x, int y, int w, int h,
  * primitives, so a Sprite drawn from here and a line drawn from Java land in
  * the same place.
  *
- * The clip is kept (by the LCDUI module) in surface coordinates, which is what
- * nj_gfx_set_clip wants: MIDP's setClip() is not affected by translate().  A
- * clip of exactly 0,0,0,0 means "never initialised" - that would silently draw
- * nothing - so it is read as "the whole surface" instead.
+ * THE CLIP.  nj_gfx_set_clip() takes USER coordinates and applies g->translate
+ * itself (src/gfx/nj_gfx.c: "USER coordinates: offset by the translate"), and
+ * the LCDUI module stores the Graphics clip fields in exactly that user space
+ * (its gfx_store writes `clip_x - translate_x`).  So the fields are handed to
+ * nj_gfx_set_clip unchanged and a Graphics with translate (tx,ty) and clip
+ * (cx,cy,cw,ch) clips at device (cx+tx, cy+ty, cw, ch) - consistent with the
+ * LayerManager, which stores its narrowed clip back in the same convention.
+ * A clip of exactly 0,0,0,0 means "never initialised", which would silently
+ * draw nothing, so it is read as "the whole surface" instead.
  */
 typedef struct njg_bind {
     nj_surface  scratch;   /* storage when the target is an Image */
@@ -2262,15 +2267,21 @@ NJFN(lm_paint)
     ocw = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CW, D_INT);
     och = fgi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CH, D_INT);
 
-    fsi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_TX, D_INT, otx + x - vx);
-    fsi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_TY, D_INT, oty + y - vy);
-
-    /* Clip to the view-window rectangle in surface coordinates, keeping the
-     * caller's clip as the outer bound.  nj_s8 throughout because the default
-     * view window is Integer.MAX_VALUE. */
     {
-        nj_s8 x0 = ocx, y0 = ocy;
-        nj_s8 x1 = (nj_s8)ocx + ocw, y1 = (nj_s8)ocy + och;
+        /* The new translation: manager point (viewX,viewY) -> user (x,y). */
+        nj_s4 ntx = otx + x - vx;
+        nj_s4 nty = oty + y - vy;
+
+        /*
+         * Clip to the view-window rectangle, keeping the caller's clip as the
+         * outer bound.  The stored clip is user space (see njg_bind), so it is
+         * brought into device space with the OLD translate, intersected with
+         * the view window's device rectangle, and written back relative to the
+         * NEW translate - exactly the convention the LCDUI module uses.
+         * nj_s8 throughout because the default view window is MAX_VALUE.
+         */
+        nj_s8 x0 = (nj_s8)ocx + otx, y0 = (nj_s8)ocy + oty;
+        nj_s8 x1 = x0 + ocw, y1 = y0 + och;
         nj_s8 wx0 = (nj_s8)x + otx, wy0 = (nj_s8)y + oty;
         nj_s8 wx1 = wx0 + vw, wy1 = wy0 + vh;
 
@@ -2285,8 +2296,11 @@ NJFN(lm_paint)
         }
         if (x1 < x0) { x1 = x0; }
         if (y1 < y0) { y1 = y0; }
-        fsi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CX, D_INT, (nj_s4)x0);
-        fsi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CY, D_INT, (nj_s4)y0);
+
+        fsi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_TX, D_INT, ntx);
+        fsi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_TY, D_INT, nty);
+        fsi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CX, D_INT, (nj_s4)(x0 - ntx));
+        fsi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CY, D_INT, (nj_s4)(y0 - nty));
         fsi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CW, D_INT, (nj_s4)(x1 - x0));
         fsi(vm, gobj, NJ_C_GRAPHICS, NJ_F_G_CH, D_INT, (nj_s4)(y1 - y0));
     }
@@ -2368,6 +2382,17 @@ static nj_ref gc_buffer(nj_vm *vm, nj_ref self, int create)
     }
     w = (int)fgi(vm, self, NJ_C_CANVAS, NJ_F_C_WIDTH, D_INT);
     h = (int)fgi(vm, self, NJ_C_CANVAS, NJ_F_C_HEIGHT, D_INT);
+    if (w <= 0 || h <= 0) {
+        /*
+         * The Canvas constructor does not know its size yet.  Ask the display
+         * instead of using the compile-time default: the LCDUI frame painter
+         * re-creates a Canvas buffer whose size differs from the screen, and a
+         * game that fetched its Graphics before the first frame would then be
+         * drawing into an orphaned Image.
+         */
+        nj_surface *s = nj_midp_screen(vm);
+        if (s) { w = s->width; h = s->height; }
+    }
     if (w <= 0) { w = (int)vm->screen_w; }
     if (h <= 0) { h = (int)vm->screen_h; }
     if (w <= 0) { w = NJ_SCREEN_WIDTH; }

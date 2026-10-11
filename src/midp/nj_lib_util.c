@@ -1588,13 +1588,18 @@ NJFN(rnd_nextFloat)
     return NJ_OK;
 }
 
-NJFN(rnd_nextDouble)
+/* nextDouble(): 26 bits then 27 bits, exactly as java.util.Random does. */
+static double rnd_next_double(nj_vm *vm, nj_ref r)
 {
-    nj_ref r = NJ_THIS(args);
     nj_s8 hi = (nj_s8)rnd_next_seed(vm, r, 26);
     nj_s8 lo = (nj_s8)rnd_next_seed(vm, r, 27);
 
-    ret->d = (double)((hi << 27) + lo) / (double)(1LL << 53);
+    return (double)((hi << 27) + lo) / (double)(1LL << 53);
+}
+
+NJFN(rnd_nextDouble)
+{
+    ret->d = rnd_next_double(vm, NJ_THIS(args));
     return NJ_OK;
 }
 
@@ -1610,10 +1615,10 @@ NJFN(rnd_nextGaussian)
         return NJ_OK;
     }
     for (;;) {
-        double v1 = 2.0 * (double)rnd_next_seed(vm, r, 53) /
-                    (double)(1LL << 53) - 1.0;
-        double v2 = 2.0 * (double)rnd_next_seed(vm, r, 53) /
-                    (double)(1LL << 53) - 1.0;
+        /* The polar method of java.util.Random: two uniform doubles in
+         * (-1,1), rejected outside the unit circle. */
+        double v1 = 2.0 * rnd_next_double(vm, r) - 1.0;
+        double v2 = 2.0 * rnd_next_double(vm, r) - 1.0;
         double s = v1 * v1 + v2 * v2;
         if (s >= 1.0 || s == 0.0) {
             continue;
@@ -2494,16 +2499,14 @@ NJFN(cal_set)
         break;
     }
     if (recompute) {
+        /*
+         * Lenient, like java.util.Calendar: months are normalised and an
+         * out-of-range day rolls into the next or previous month (the
+         * epoch-day arithmetic is linear in the day number), so
+         * set(2001, FEBRUARY, 29) lands on 2001-03-01.  add() clamps instead,
+         * which is also what java.util does.
+         */
         cal_norm_month(&y, &mo);
-        {
-            nj_s8 ml = cal_month_len(y, mo);
-            if (d < 1) {
-                d = 1;
-            }
-            if (d > ml) {
-                d = ml;
-            }
-        }
         cal_set_millis(vm, c, join_millis(y, mo, d, h, mi, s, ms) -
                               (nj_s8)cal_offset(vm, c));
     }

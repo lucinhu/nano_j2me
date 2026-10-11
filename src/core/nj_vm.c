@@ -819,6 +819,7 @@ nj_status nj_vm_throw_ref(nj_vm *vm, nj_ref exc)
     }
     vm->exception_method = NULL;
     vm->exception_pc = 0u;
+    vm->resolve_fail = NJ_RESOLVE_OK;
     if (!exc) {
         exc = nj_exception_new(vm, "java/lang/NullPointerException", NULL);
     }
@@ -880,7 +881,56 @@ void nj_clear_exception(nj_vm *vm)
         vm->exception = NULL;
         vm->exception_method = NULL;
         vm->exception_pc = 0u;
+        vm->resolve_fail = NJ_RESOLVE_OK;
     }
+}
+
+/*
+ * Turn a recorded resolution failure into the Java error a real JVM would
+ * raise, with the signature spelled out.
+ *
+ * The signature is the whole point.  "NoSuchMethodError: append" sends you
+ * looking for a missing method; "NoSuchMethodError:
+ * javax/microedition/lcdui/Command.<init>(Ljava/lang/String;II)V" tells you
+ * immediately that the constructor exists with a different descriptor - which
+ * is what actually happens when a class library is written against a slightly
+ * different API than the one the compiler saw.
+ */
+nj_status nj_resolve_error(nj_vm *vm)
+{
+    char buf[320];
+    nj_u4 n = 0u;
+    const char *cls = vm->resolve_cls ? vm->resolve_cls : "?";
+    const char *name = vm->resolve_name;
+    const char *desc = vm->resolve_desc;
+    const char *err;
+
+    switch (vm->resolve_fail) {
+    case NJ_RESOLVE_METHOD: err = "java/lang/NoSuchMethodError"; break;
+    case NJ_RESOLVE_FIELD:  err = "java/lang/NoSuchFieldError";  break;
+    default:                err = "java/lang/NoClassDefFoundError"; break;
+    }
+
+    while (*cls && n + 1u < sizeof(buf)) {
+        buf[n++] = *cls++;
+    }
+    if (name && vm->resolve_fail != NJ_RESOLVE_CLASS) {
+        if (n + 1u < sizeof(buf)) {
+            buf[n++] = '.';
+        }
+        while (*name && n + 1u < sizeof(buf)) {
+            buf[n++] = *name++;
+        }
+        if (desc) {
+            while (*desc && n + 1u < sizeof(buf)) {
+                buf[n++] = *desc++;
+            }
+        }
+    }
+    buf[n] = '\0';
+
+    /* Keep the first, most specific exception; nj_throw honours that. */
+    return nj_throw(vm, err, buf);
 }
 
 /* ------------------------------------------------------------------ */

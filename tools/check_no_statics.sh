@@ -40,6 +40,18 @@ done
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+SKIPPED=()
+
+# Extra include flags for ports whose SDK is present.  Without these the SDL2
+# port would be skipped and its statics never checked, which is exactly the gap
+# this gate exists to close.
+EXTRA_CFLAGS=()
+if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists sdl2 2>/dev/null; then
+    while IFS= read -r flag; do
+        [ -n "$flag" ] && EXTRA_CFLAGS+=("$flag")
+    done < <(pkg-config --cflags sdl2 | tr ' ' '\n')
+fi
+
 if [ "$#" -gt 0 ]; then
     OBJS=("$@")
 else
@@ -48,10 +60,21 @@ else
         find "$ROOT/src" -name '*.c' 2>/dev/null | sort)
     OBJS=()
     for s in "${SRCS[@]}"; do
-        o="$TMP/$(echo "${s#"$ROOT"/}" | tr '/' '_').o"
-        if ! "$CC" -std=c99 -O2 -I"$ROOT/include" -I"$ROOT/src/core" \
+        rel="${s#"$ROOT"/}"
+        o="$TMP/$(echo "$rel" | tr '/' '_').o"
+        # LC_ALL=C so the diagnostic we match on below is not localised.
+        if ! LC_ALL=C "$CC" -std=c99 -O2 -I"$ROOT/include" -I"$ROOT/src/core" \
+                   "${EXTRA_CFLAGS[@]}" \
                    -c "$s" -o "$o" 2>"$TMP/err"; then
-            echo "FAIL: cannot compile ${s#"$ROOT"/}" >&2
+            # A port's own source legitimately needs its platform SDK
+            # (SDL.h, esp_log.h, jni.h).  The gate is about the runtime, so
+            # skip those rather than failing on a header this machine does not
+            # have - but say so, so a genuine compile error cannot hide here.
+            if grep -qE "No such file or directory|fatal error: .*\.h:" "$TMP/err"; then
+                SKIPPED+=("$rel (needs its platform SDK)")
+                continue
+            fi
+            echo "FAIL: cannot compile $rel" >&2
             cat "$TMP/err" >&2
             exit 2
         fi
@@ -94,6 +117,13 @@ if [ -n "$BAD" ]; then
     echo "Read-only tables must be declared 'const' so they land in .rodata" >&2
     echo "(or .data.rel.ro, which is read-only after relocation)." >&2
     exit 1
+fi
+
+if [ "${#SKIPPED[@]}" -gt 0 ]; then
+    echo "note: skipped ${#SKIPPED[@]} port source(s) that need a platform SDK:"
+    for s in "${SKIPPED[@]}"; do
+        echo "  $s"
+    done
 fi
 
 echo "OK: no writable statics across $TOTAL object files" \
