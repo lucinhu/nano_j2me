@@ -1208,6 +1208,24 @@ const char *nj_exception_describe(nj_vm *vm)
     }
 }
 
+const char *nj_ref_class_name(nj_ref o)
+{
+    if (!o || !o->cls || !o->cls->name) {
+        return NULL;
+    }
+    return o->cls->name;
+}
+
+nj_s4 nj_vm_exit_code(nj_vm *vm)
+{
+    return vm ? vm->exit_code : 0;
+}
+
+void nj_vm_request_stop(nj_vm *vm, nj_s4 code)
+{
+    nj_vm_stop(vm, code);
+}
+
 nj_status nj_run_pending(nj_vm *vm, nj_u4 budget_ms)
 {
     return nj_scheduler_run_until_idle(vm, budget_ms);

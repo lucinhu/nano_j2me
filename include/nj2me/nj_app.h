@@ -37,6 +37,11 @@ typedef struct nj_app {
     char configuration[64];
 
     int  midlet_count;
+
+    /* The raw manifest text is kept so MIDlet.getAppProperty() can answer for
+     * any attribute, not just the handful parsed above. */
+    char *manifest;
+    nj_u4 manifest_len;
 } nj_app;
 
 /*
@@ -55,6 +60,20 @@ void *nj_app_resource(nj_vm *vm, nj_app *app, const char *name, nj_u4 *out_len);
 
 /* Does the archive contain this entry? */
 int nj_app_has_resource(nj_app *app, const char *name);
+
+/*
+ * Look up one manifest attribute in the MAIN section (case-insensitive name,
+ * continuation lines honoured).  Writes a NUL-terminated value into `out`.
+ * Returns NJ_OK, or NJ_ERR when the attribute is absent.
+ */
+nj_status nj_app_get_property(nj_app *app, const char *attr,
+                              char *out, nj_u4 out_size);
+
+/* The number of MIDlet-N entries found in the manifest. */
+int nj_app_midlet_count(const nj_app *app);
+
+/* The class name of MIDlet `index` (0-based), or NULL. */
+const char *nj_app_midlet_class(const nj_app *app, int index);
 
 #ifdef __cplusplus
 }

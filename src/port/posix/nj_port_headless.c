@@ -13,6 +13,7 @@
  */
 #include "nj2me/nj_port.h"
 #include "nj2me/nj_types.h"
+#include "nj2me/nj.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -188,6 +189,12 @@ static void hl_shutdown(void *ud)
 /* ------------------------------------------------------------------ */
 nj_status nj_port_headless(nj_port *out)
 {
+    return nj_port_headless_ex(out, 0, 0, 0, NULL);
+}
+
+nj_status nj_port_headless_ex(nj_port *out, int width, int height,
+                              int dump_every, const char *dump_prefix)
+{
     nj_headless_state *s;
 
     if (!out) {
@@ -197,8 +204,10 @@ nj_status nj_port_headless(nj_port *out)
     if (!s) {
         return NJ_ERR_NOMEM;
     }
-    s->width = 0;             /* let the runtime apply NJ_SCREEN_* */
-    s->height = 0;
+    s->width = width;         /* 0 lets the runtime apply NJ_SCREEN_* */
+    s->height = height;
+    s->dump_every = dump_every;
+    s->dump_prefix = dump_prefix;
     s->auto_quit_frames = 0;
 
     memset(out, 0, sizeof(*out));
@@ -216,7 +225,9 @@ nj_status nj_port_headless(nj_port *out)
     return NJ_OK;
 }
 
-/* ---- helpers used by the test harness ---- */
+/* ------------------------------------------------------------------ */
+/* Helpers used by the test harness and by embedders with their own loop */
+/* ------------------------------------------------------------------ */
 void nj_port_headless_set_dump(void *ud, const char *prefix, int every)
 {
     nj_headless_state *s = HS(ud);
@@ -240,6 +251,17 @@ void nj_port_headless_push(void *ud, const nj_event *ev)
     }
     s->queue[s->qt] = *ev;
     s->qt = next;
+}
+
+/* Public wrapper: append events to whichever port supports it. */
+void nj_port_push_event(nj_port *port, const nj_event *ev)
+{
+    if (!port || !ev) {
+        return;
+    }
+    if (port->name && strcmp(port->name, "headless") == 0) {
+        nj_port_headless_push(port->ud, ev);
+    }
 }
 
 int nj_port_headless_frames(void *ud)

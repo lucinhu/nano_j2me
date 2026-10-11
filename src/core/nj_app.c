@@ -210,6 +210,9 @@ nj_app *nj_app_open(nj_vm *vm, const void *data, nj_u4 size)
                 if (got >= 0) {
                     char v[NJ_APP_CLASS_MAX * 2];
                     mf[got] = '\0';
+                    /* Keep the text so getAppProperty() can answer later. */
+                    app->manifest = mf;
+                    app->manifest_len = (nj_u4)got;
                     if (nj_manifest_get(mf, (nj_u4)got, "MIDlet-1", v,
                                         (nj_u4)sizeof(v)) == NJ_OK) {
                         parse_midlet_attr(app, v, 0);
@@ -239,8 +242,26 @@ nj_app *nj_app_open(nj_vm *vm, const void *data, nj_u4 size)
                         trim_in_place(v);
                         copy_str(app->configuration, sizeof(app->configuration), v);
                     }
+                    /* MIDlet-2 .. MIDlet-5 */
+                    {
+                        int k;
+                        for (k = 2; k <= 5; k++) {
+                            char key[16];
+                            key[0] = 'M'; key[1] = 'I'; key[2] = 'D';
+                            key[3] = 'l'; key[4] = 'e'; key[5] = 't';
+                            key[6] = '-';
+                            key[7] = (char)('0' + k);
+                            key[8] = '\0';
+                            if (nj_manifest_get(mf, (nj_u4)got, key, v,
+                                                (nj_u4)sizeof(v)) == NJ_OK) {
+                                parse_midlet_attr(app, v, k - 1);
+                            }
+                        }
+                    }
                 }
-                nj_host_free(vm, mf);
+                if (!app->manifest) {
+                    nj_host_free(vm, mf);
+                }
             }
         }
     }
@@ -277,6 +298,8 @@ void nj_app_close(nj_vm *vm, nj_app *app)
         nj_zip_close(app->zip);
         app->zip = NULL;
     }
+    nj_host_free(vm, app->manifest);
+    app->manifest = NULL;
     nj_host_free(vm, app);
 }
 
@@ -336,4 +359,41 @@ void *nj_app_resource(nj_vm *vm, nj_app *app, const char *name, nj_u4 *out_len)
         *out_len = want;
     }
     return buf;
+}
+
+/* ------------------------------------------------------------------ */
+/* Manifest properties                                                 */
+/* ------------------------------------------------------------------ */
+nj_status nj_app_get_property(nj_app *app, const char *attr,
+                              char *out, nj_u4 out_size)
+{
+    if (!app || !attr || !out || out_size == 0u) {
+        return NJ_ERR;
+    }
+    out[0] = '\0';
+    if (!app->manifest) {
+        return NJ_ERR;
+    }
+    return nj_manifest_get(app->manifest, app->manifest_len, attr,
+                           out, out_size);
+}
+
+int nj_app_midlet_count(const nj_app *app)
+{
+    return app ? app->midlet_count : 0;
+}
+
+const char *nj_app_midlet_class(const nj_app *app, int index)
+{
+    if (!app || index < 0) {
+        return NULL;
+    }
+    if (index == 0) {
+        return app->midlet_class[0] ? app->midlet_class : NULL;
+    }
+    if (index < 5) {
+        return app->midlet_extra[index - 1][0] ? app->midlet_extra[index - 1]
+                                               : NULL;
+    }
+    return NULL;
 }

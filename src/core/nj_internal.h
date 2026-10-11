@@ -15,6 +15,7 @@
 #include "nj2me/nj_vm.h"
 #include "nj2me/nj_app.h"
 #include "nj2me/nj_zip.h"
+#include "nj2me/nj_gfx.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -320,6 +321,7 @@ struct nj_vm {
     nj_u1        *screen_pixels;  /* the framebuffer itself, host-allocated */
     nj_u4         midp_flags;     /* NJ_MIDP_* capability bits             */
     nj_u1         repaint_pending;
+    nj_u4         frames_presented;
     nj_u2         screen_w;
     nj_u2         screen_h;
 

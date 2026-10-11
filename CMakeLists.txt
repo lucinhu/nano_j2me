@@ -47,11 +47,6 @@ set(NJ_SOURCES
 
 set(NJ_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/src/gfx/nj_gfx.c)
-  message(FATAL_ERROR
-    "src/gfx/nj_gfx.c is missing. It provides the software rasterizer that "
-    "the LCDUI layer draws through.")
-endif()
 
 add_library(nj2me STATIC ${NJ_SOURCES})
 target_include_directories(nj2me PUBLIC ${NJ_INCLUDE_DIRS})
@@ -103,6 +98,32 @@ if(NJ_BUILD_TESTS)
   add_test(NAME vm_core COMMAND test_vm
            ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/hello.jar
            HelloWorld "hello from j2me")
+
+  add_executable(test_zip tests/test_zip.c)
+  target_link_libraries(test_zip PRIVATE nj2me)
+  target_include_directories(test_zip PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+  add_test(NAME zip_inflate COMMAND test_zip
+           ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures)
+
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_lcdui.c)
+    add_executable(test_lcdui tests/test_lcdui.c)
+    target_link_libraries(test_lcdui PRIVATE nj2me)
+    target_include_directories(test_lcdui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+    add_test(NAME lcdui COMMAND test_lcdui)
+  endif()
+
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_lib.c)
+    add_executable(test_lib tests/test_lib.c)
+    target_link_libraries(test_lib PRIVATE nj2me)
+    target_include_directories(test_lib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+    add_test(NAME classlib COMMAND test_lib)
+  endif()
+
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gfx.c)
+    add_executable(test_gfx tests/test_gfx.c src/gfx/nj_gfx.c)
+    target_link_libraries(test_gfx PRIVATE nj2me m)
+    add_test(NAME rasterizer COMMAND test_gfx)
+  endif()
 endif()
 
 # ---------------------------------------------------------------------

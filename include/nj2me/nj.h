@@ -48,6 +48,15 @@ nj_status nj_port_sdl2(nj_port *out, const char *title);
 /* Release a port created by the functions above.  Safe to call twice. */
 void nj_port_shutdown(nj_port *port);
 
+/*
+ * MIDP application loop.  nj_run() drives it; an embedder with its own event
+ * loop (a game engine, an Android Activity, a FreeRTOS task) can call
+ * nj_midp_run itself, or pump it one frame at a time with nj_midp_frame().
+ */
+nj_status nj_midp_run(nj_vm *vm);
+nj_status nj_midp_frame(nj_vm *vm);
+nj_status nj_midp_destroy_app(nj_vm *vm, int unconditional);
+
 /* Convenience: start the headless port with an optional frame dump.
  * Pass dump_prefix == NULL to keep frames in memory only. */
 nj_status nj_port_headless_ex(nj_port *out, int width, int height,
