@@ -171,6 +171,35 @@ them. `*.rms` is gitignored for that reason.
 sampled audio, no video. A game with music will be silent; a game with beeps
 will not.
 
+## javax.microedition.media
+
+Implemented, and tested end to end by `tests/test_audio.c` (24 assertions)
+driving `tests/fixtures/audiodemo.jar`, built by `tools/make_audio_jar.sh`.
+
+| | |
+|---|---|
+| `Manager` | `createPlayer(InputStream,String)`, `createPlayer(String)`, `getSupportedContentTypes/Protocols`, `playTone`, `TONE_STOP`/`TONE_BLOCKING`/`TONE_CONSTANT_DURATION`, `TONE_DEVICE_LOCATOR` |
+| `Player` | the full state machine, `realize`/`prefetch`/`start`/`stop`/`deallocate`/`close`, `setLoopCount`, `getState`/`getDuration`/`getMediaTime`, `add`/`removePlayerListener`, `getControl(s)` |
+| `PlayerListener` | `started`, `stopped`, `closed`, with the event strings interned so the reference comparison the javadoc recommends actually works |
+| `ToneControl` | real JSR-135 parsing: big-endian length, note/duration triples, malformed input refused at `realize()` rather than mid-frame |
+| `VolumeControl` | `setLevel`/`getLevel`/`setMute`/`isMuted` |
+| WAV | RIFF/WAVE PCM, 8- and 16-bit, mono and stereo, from a stream or a JAR resource |
+
+`TONE_BLOCKING` blocks the CALLING JAVA THREAD cooperatively: it returns
+`NJ_ERR_TIMEOUT` and the interpreter suspends that thread, exactly as
+`Thread.sleep()` does. Sleeping the C thread instead would freeze every other
+thread in the VM, which for a game means the picture stops.
+
+**Not implemented, and refused by name rather than silently:** `http://` and
+`rtsp://` raise `MediaException` naming the protocol. There is no MIDI, no video,
+no audio capture, and no custom controls beyond the two above.
+
+**The headless port records sound instead of playing it** - tone calls, tones
+offered, stops, PCM opens, frames accepted, device format - so a test can assert
+that a MIDlet asked for the right notes in the right order without a sound card.
+A port with no audio leaves the hooks NULL and sound does not play, which is not
+an error.
+
 ## Known behavioural differences
 
 | Area | Difference |
