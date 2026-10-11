@@ -7,12 +7,24 @@
  * The defaults target a hosted desktop build; embedded ports (ESP32-S3, STM32)
  * are expected to override NJ_MAX_HEAP, NJ_ENABLE_FLOAT and the feature flags.
  *
- * The whole runtime is C99, freestanding-friendly: when NJ_USE_LIBC is 0 the
- * only external symbols required are memcpy/memset/memmove and the nj_port
- * callbacks.
+ * The whole runtime is C99 and freestanding-friendly, but "freestanding" has a
+ * precise meaning here: with NJ_USE_LIBC=0 the external symbols required are
+ * exactly those declared in nj2me/nj_libc.h - the string and memory primitives,
+ * a couple of ctype helpers, and the libm transcendentals java.lang.Math needs
+ * (which NJ_ENABLE_FLOAT=0 removes) - plus the nj_port callbacks.  Nothing else:
+ * allocation, time and file access all go through the port.
+ *
+ * This used to claim three functions and was wrong in both directions: half the
+ * sources did not compile with NJ_USE_LIBC=0 at all, and the set is larger than
+ * three.  tools/size_report.sh compiles every file in that mode, so the claim
+ * is checked rather than asserted.
  */
 #ifndef NJ_CONFIG_H
 #define NJ_CONFIG_H
+
+/* The C library surface, in both modes.  Included here so that no source file
+ * has to know whether it is being built hosted or freestanding. */
+#include "nj2me/nj_libc.h"
 
 /* ------------------------------------------------------------------ */
 /* Platform detection (only used to pick sane defaults)                */

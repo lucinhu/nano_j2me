@@ -190,7 +190,9 @@ typedef struct rs_writer {
     nj_vm   *vm;
     nj_file  f;
     int      use_port;
-    FILE    *fp;
+#if NJ_USE_LIBC
+    FILE    *fp;        /* hosted fallback; the port's hooks win when present */
+#endif
     nj_u4    written;
 } rs_writer;
 
@@ -198,7 +200,9 @@ typedef struct rs_reader {
     nj_vm   *vm;
     nj_file  f;
     int      use_port;
-    FILE    *fp;
+#if NJ_USE_LIBC
+    FILE    *fp;        /* hosted fallback; the port's hooks win when present */
+#endif
     nj_u4    read;
 } rs_reader;
 

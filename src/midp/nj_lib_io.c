@@ -810,7 +810,9 @@ typedef struct j2me_file {
     nj_vm  *vm;
     nj_file f;
     int     use_port;
-    FILE   *fp;
+#if NJ_USE_LIBC
+    FILE   *fp;         /* hosted fallback; the port's hooks win when present */
+#endif
     int     readable;
     int     writable;
 } j2me_file;
