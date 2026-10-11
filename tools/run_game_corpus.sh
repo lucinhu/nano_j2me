@@ -82,6 +82,7 @@ printf '%-14s %-9s %-8s %-8s %-9s %s\n' ----- ---- ------ ------- ------- ------
 #
 #   slimevolley  Command on the RIGHT SOFT KEY (StartCanvas.commandAction)
 #   bubblet      no splash screen: the grid is the first frame
+#   game15       static puzzle: a grid drawn once, no animation until a key
 #   book4-7      single screen, no input needed
 declare -A KEYS=(
     [slimevolley]="15:soft1,70:left,140:right"

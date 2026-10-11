@@ -4101,6 +4101,50 @@ static int canvas_call_paint(nj_vm *vm, nj_ref canvas, nj_ref g)
 
 static int canvas_visible(nj_vm *vm, nj_ref canvas)
 {
+    /*
+     * sizeChanged(w, h) first, then showNotify() - the order MIDP specifies.
+     *
+     * This was never called at all, and a game that computes its layout there
+     * drew nothing: Game15MIDlet's paint() uses offsetX/offsetY/cellSize, all
+     * set in sizeChanged(), so every grid line was drawn at (0,0) and the whole
+     * puzzle came out as one black dot in the corner.
+     *
+     * Delivered when the canvas has no buffer yet or the buffer no longer
+     * matches the screen, which covers both the first show and a resize
+     * without needing a field to remember the last size delivered.
+     */
+    if (isa(vm, canvas, NJ_C_CANVAS)) {
+        nj_ref buf = rget(vm, canvas, NJ_C_CANVAS, F_C_BUFFER, D_IMAGE);
+        nj_surface *scr = nj_midp_screen(vm);
+        int bw = 0, bh = 0;
+        int need = 0;
+
+        if (scr) {
+            /*
+             * On the FIRST show as well as on a resize.  Testing only "is
+             * there a buffer of the right size" is not enough: the frame
+             * painter creates the buffer at screen size before the canvas is
+             * ever shown, so that test is false exactly when sizeChanged()
+             * matters most.
+             */
+            if (!fget(vm, canvas, NJ_C_CANVAS, F_C_VISIBLE, D_BOOL)) {
+                need = 1;
+            } else if (!buf) {
+                need = 1;
+            } else if (nj_midp_image_size(vm, buf, &bw, &bh)) {
+                need = (bw != scr->width || bh != scr->height);
+            }
+            if (need) {
+                nj_value a[2];
+                a[0].i = scr->width;
+                a[1].i = scr->height;
+                (void)canvas_call(vm, canvas, "sizeChanged", 2, a);
+                if (vm->exception) {
+                    return 0;
+                }
+            }
+        }
+    }
     if (!fget(vm, canvas, NJ_C_CANVAS, F_C_VISIBLE, D_BOOL)) {
         (void)canvas_call(vm, canvas, "showNotify", 0, NULL);
         fput(vm, canvas, NJ_C_CANVAS, F_C_VISIBLE, D_BOOL, 1);

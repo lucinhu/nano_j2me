@@ -93,7 +93,11 @@ CLASSES = {
             "public boolean isShown()",
             "public int getWidth()",
             "public int getHeight()",
-            "public void sizeChanged(int, int)",
+            # PROTECTED in MIDP, not public: a subclass that declares it
+            # protected - which is what every MIDlet does, because that is the
+            # signature the API documents - cannot narrow a public method, and
+            # javac rejects the override.  Found building Game15MIDlet.
+            "protected void sizeChanged(int, int)",
         ],
     },
     "javax/microedition/lcdui/Canvas": {
@@ -442,7 +446,13 @@ CLASSES = {
             "public int getRefPixelX()", "public int getRefPixelY()",
             "public void setPosition(int, int)", "public void move(int, int)",
             "public final void paint(Graphics)",
+            # The 2-argument forms are what MIDP actually documents and what
+            # games call; only the Image form takes x, y and pixelLevel.
+            # Found building FlappyPlaneJM, which calls collidesWith(s, true).
             "public final boolean collidesWith(Image, int, int, boolean)",
+            "public final boolean collidesWith(Sprite, boolean)",
+            "public final boolean collidesWith(TiledLayer, boolean)",
+            "public final boolean collidesWith(Layer, boolean)",
             "public final boolean collidesWith(Sprite, boolean, boolean)",
             "public final boolean collidesWith(TiledLayer, boolean, boolean)",
             "public final boolean collidesWith(Layer, boolean, boolean)",

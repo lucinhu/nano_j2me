@@ -93,10 +93,24 @@ mkdir -p "$WORK/classes/META-INF"
     printf '\r\n'
 } > "$WORK/classes/META-INF/MANIFEST.MF"
 
-# Resources the MIDlet asks for by name.  A project may keep them in res/ or
-# beside the sources; both layouts are copied so /res/x and /x both resolve.
-[ -d "$SRC/res" ] && cp -r "$SRC/res" "$WORK/classes/res"
-[ -d "$SRC/resources" ] && cp -r "$SRC/resources" "$WORK/classes/resources"
+# Resources the MIDlet asks for BY NAME, so the path inside the JAR has to match
+# what the game's createImage("/...") says.
+#
+# There is no single convention: a project may keep them in res/, in resources/,
+# or - NetBeans-style, which is what FlappyPlaneJM does - in src/Resources/ with
+# a capital R.  So every directory whose NAME is one of those is copied to the
+# JAR root under that same name, wherever it sits in the tree.  Looking only for
+# a lowercase res/ next to the sources found none of FlappyPlane's, and the game
+# died on its first createImage with "Error initializing the canvas".
+copied=""
+while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    base="$(basename "$d")"
+    [ -e "$WORK/classes/$base" ] && continue
+    cp -r "$d" "$WORK/classes/$base"
+    copied="$copied $base"
+done < <(find "$SRC" -maxdepth 3 -type d \( -iname res -o -iname resources \) 2>/dev/null)
+[ -n "$copied" ] && echo "   resources:$copied"
 
 mkdir -p "$(dirname "$OUT")"
 ( cd "$WORK/classes" && jar cfm "$OUT" META-INF/MANIFEST.MF . )

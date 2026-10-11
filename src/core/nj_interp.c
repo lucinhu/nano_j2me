@@ -786,7 +786,20 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         case 0xaa: {                                        /* tableswitch */
             nj_u4 base = op_pc;
             nj_s4 def, lo, hi, idx;
-            while (((pc - base) & 3u) != 0u) { pc++; }
+            /*
+             * The padding aligns `default` to a multiple of four FROM THE
+             * START OF THE METHOD, not from the opcode.
+             *
+             * The spec says the padding makes defaultbyte1 "begin at an address
+             * that is a multiple of four bytes from the start of the current
+             * method", and the code array is the method, so the test is on the
+             * ABSOLUTE offset.  This used to test (pc - op_pc), which lands one
+             * to three bytes late whenever the opcode is not itself 4-aligned:
+             * every operand is then read shifted, the jump offsets are garbage,
+             * and pc leaves the method.  A game with a dense switch hit it as
+             * "code runs past the end of the method @ Game15Canvas.move+26880".
+             */
+            while ((pc & 3u) != 0u) { pc++; }
             def = S4(); lo = S4(); hi = S4();
             idx = (--sp)->i;
             if (idx < lo || idx > hi) {
@@ -801,7 +814,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         case 0xab: {                                        /* lookupswitch */
             nj_u4 base = op_pc;
             nj_s4 def, npairs, idx, i;
-            while (((pc - base) & 3u) != 0u) { pc++; }
+            /* Absolute alignment, for the same reason as tableswitch above. */
+            while ((pc & 3u) != 0u) { pc++; }
             def = S4();
             npairs = S4();
             idx = (--sp)->i;
