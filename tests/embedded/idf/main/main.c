@@ -134,9 +134,21 @@ void app_main(void)
     } else if (nj_vm_new_midlet(vm, 0, &midlet) != NJ_OK) {
         ESP_LOGE(TAG, "nj_vm_new_midlet failed: %s",
                  nj_exception_describe(vm) ? nj_exception_describe(vm) : "?");
-    } else if (nj_vm_start_app(vm, midlet) != NJ_OK) {
-        ESP_LOGE(TAG, "nj_vm_start_app failed: %s",
-                 nj_exception_describe(vm) ? nj_exception_describe(vm) : "?");
+    } else {
+        nj_status st = nj_vm_start_app(vm, midlet);
+        if (st != NJ_OK) {
+            /* The STATUS, not just "failed": a call that returns an error
+             * without an exception is a different bug from one that throws, and
+             * the number is the only thing that distinguishes them. */
+            ESP_LOGE(TAG, "nj_vm_start_app failed: status %d, exception %s",
+                     (int)st,
+                     nj_exception_describe(vm) ? nj_exception_describe(vm)
+                                               : "(none)");
+        } else {
+            started = 1;
+        }
+    }
+    if (0) {
     } else {
         started = 1;
     }

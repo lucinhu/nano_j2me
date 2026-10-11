@@ -160,9 +160,33 @@ with no exception set, so the MIDlet's `startApp()` never runs:
     E (82) nj2me: nj_vm_start_app failed: (no exception)
     NJ2ME DONE rc=1 frames=0
 
-That is where it stands. `(no exception)` is the thing to chase: a status
-without a throw, on a path that works on the desktop, which means the difference
-is in what the runner sets up that this image does not.
+With the status printed rather than just "failed", the picture is precise:
+
+    I (70) nj2me: sizeof(nj_vm)=3832, arena 136 KiB
+    E (80) nj2me: nj_vm_start_app failed: status -1, exception (no exception)
+    I (190) nj2me: frames=300 bytecodes=0 natives=0 heap=720/720
+    NJ2ME DONE rc=0 frames=600
+
+Three facts together, and the third is the one that matters:
+
+* the status is `NJ_ERR`, the generic failure, and there is no exception;
+* **zero bytecodes were executed** - the interpreter loop never ran once, so
+  `nj_vm_start_app` returned before reaching `nj_exec`;
+* **`heap=720` bytes**.  A desktop run of the same fixture ends with about
+  1.1 MB live.  The VM is essentially empty, so this is not "the MIDlet failed
+  to start" - it is that almost nothing was loaded in the first place.
+
+`vm_invoke` has exactly two ways to return `NJ_ERR` without an exception, and
+both are in the path taken before `nj_exec`: `!vm->running` (which returns
+`NJ_ERR_STATE`, -8, so not this one) and `nj_class_init()` failing with an
+exception already pending that is then not visible.  The 720-byte heap points
+at the same place from the other side: whatever should have loaded the MIDlet
+class did not.
+
+Next: log the class count and the interned-string count right after
+`nj_app_open()`, and check `nj_class_init()`'s failure paths for one that can
+return without leaving a visible exception.  A `nj_vm_get_stats()` call there
+would say in one line whether the app opened at all.
 
 ## Three bugs the ESP32 bring-up found, all fixed
 

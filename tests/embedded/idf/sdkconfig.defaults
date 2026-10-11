@@ -1,16 +1,10 @@
-# No SPIRAM in the QEMU image.
+# No SPIRAM: QEMU's esp32s3 PSRAM model does not answer IDF's chip-ID probe
+# (espressif/qemu#129 - still open, and NOT fixed by esp-develop 20260417 as
+# tested).  With SPIRAM on, IDF aborts at startup with "Failed to init external
+# RAM".  With it off, IDF leaves 356 KiB of internal RAM rather than 133 KiB,
+# because the PSRAM init itself is what consumes the difference.
 #
-# The code path is there and is what a real board uses: idf_alloc() asks for
-# MALLOC_CAP_SPIRAM first and falls back to internal RAM.  QEMU's esp32s3
-# machine has an ssi_psram device, but neither quad nor octal mode came up in
-# testing ("PSRAM chip is not connected"), so this image is sized for the
-# internal RAM that is actually available and proves the RUNTIME executes.
-#
-# On hardware the same source runs with CONFIG_SPIRAM=y and a much larger pool.
+# The code keeps the PSRAM path - heap_caps_aligned_alloc(MALLOC_CAP_SPIRAM)
+# with an internal-RAM fallback - which is what a real board takes.
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
-
-# PSRAM, with the esp_develop build from 20260417: the 20250817 build has an
-# open PSRAM bug for esp32s3 (espressif/qemu#129).
-CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_QUAD=y
