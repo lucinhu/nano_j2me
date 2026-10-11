@@ -378,6 +378,15 @@ extern const int nj_lib_content_class_count;
 extern const nj_native_entry nj_lib_content_table[];
 extern const int nj_lib_content_count;
 
+extern const nj_builtin_class nj_lib_fc_classes[];
+extern const int nj_lib_fc_class_count;
+extern const nj_native_entry nj_lib_fc_table[];
+extern const int nj_lib_fc_count;
+
+/* Built by nj_lib_fc.c, used by Connector.open() in nj_lib_io.c.  Returns a new
+ * FileConnection, or NULL with an exception pending. */
+nj_ref nj_fc_new(nj_vm *vm, const char *url);
+
 extern const nj_builtin_class nj_lib_nokia_classes[];
 extern const int nj_lib_nokia_class_count;
 extern const nj_native_entry nj_lib_nokia_table[];

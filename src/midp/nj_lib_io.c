@@ -840,6 +840,18 @@ NJFN(connector_open)
     }
     u[0] = '\0';
     (void)nj_string_to_utf8(url, u, (int)sizeof(u));
+
+    /*
+     * file:// is the one scheme this runtime can honour, and it is a real one:
+     * JSR 75 is how a MIDlet reads a ROM, a level pack or its own save data.
+     * Everything else is refused BY NAME - a bare-metal target has no socket
+     * stack, and a game handed a silently empty stream from an http:// URL is
+     * far harder to diagnose than one that throws where it asked.
+     */
+    if (strncmp(u, "file://", 7u) == 0) {
+        ret->r = nj_fc_new(vm, u);
+        return ret->r ? NJ_OK : NJ_ERR;
+    }
     return nj_throw(vm, "javax/microedition/io/ConnectionNotFoundException", u);
 }
 

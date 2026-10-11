@@ -701,6 +701,7 @@ CLASSES = {
     },
     "javax/microedition/io/file/FileConnection": {
         "interface": True,
+        "extends": "javax.microedition.io.Connection",
         "methods": [
             "public long availableSize() throws java.io.IOException",
             "public boolean canRead()",
@@ -801,7 +802,14 @@ def emit(path, name, spec, out_root):
     kind = "interface" if spec.get("interface") else (
         "abstract class" if spec.get("abstract") else "class")
     ext = ""
-    if not spec.get("interface") and spec.get("extends"):
+    # Interfaces extend interfaces with the SAME keyword in Java, and this used
+    # to skip them: `if not spec.get("interface")` meant an interface's parent
+    # was silently dropped.  JSR 75's FileConnection extends Connection, so
+    # close() - and every other inherited method - was missing from the stub,
+    # and a MIDlet that called it did not compile.  Same class of bug as the
+    # dropped throws clause: the stub has to be faithful or it rejects working
+    # code.
+    if spec.get("extends"):
         ext = " extends " + spec["extends"]
     lines.append("public %s %s%s {\n" % (kind, cls, ext))
 

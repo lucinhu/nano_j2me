@@ -78,6 +78,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_media.c
   src/midp/nj_lib_content.c
   src/midp/nj_lib_nokia.c
+  src/midp/nj_lib_fc.c
   # ---- graphics ----
   src/gfx/nj_gfx.c
   src/gfx/nj_text.c
@@ -283,6 +284,9 @@ if(NJ_BUILD_TESTS)
   add_custom_command(TARGET nj_fixtures POST_BUILD
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_audio_jar.sh
     COMMENT "audio MIDlet fixture")
+  add_custom_command(TARGET nj_fixtures POST_BUILD
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_fs_jar.sh
+    COMMENT "JSR 75 MIDlet fixture")
 
   # ---- helper: one test executable, linked against the runtime ----
   function(nj_add_test name source)
@@ -315,6 +319,10 @@ if(NJ_BUILD_TESTS)
   # ---- the formats ----
   nj_add_test(test_zip       tests/test_zip.c ${NJ_FIXTURES})
   nj_add_test(test_codec     tests/test_codec.c)
+
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fs.c)
+    nj_add_test(test_fs tests/test_fs.c ${NJ_FIXTURES}/fsdemo.jar)
+  endif()
 
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_port_code.c)
     nj_add_test(test_port_code tests/test_port_code.c)

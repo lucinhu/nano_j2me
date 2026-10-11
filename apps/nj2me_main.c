@@ -26,10 +26,10 @@ static void usage(const char *argv0)
 "  --rms-dir <path>     where RecordStore files are kept\n"
 "  --fps <n>            frame rate cap (default: 30; 0 = uncapped)\n"
 "  --run-frames <n>     stop after n presented frames (for benchmarks)\n"
+        "  --fs-dir <path>      root for file:// (JSR 75); no filesystem by default\n"
 "  --stats              print bytecode and frame counters at the end\n"
 "  --dump-frames <dir>  write a PPM per frame (headless)\n"
 "  --dump-every <n>     write every n-th frame (headless, default: 1)\n"
-"  --stats              print VM statistics on exit\n"
 "  --version            print the version and exit\n"
 "  --help               this text\n"
 "\n"
@@ -48,6 +48,7 @@ typedef struct cli {
     const char *jar;
     const char *midlet;
     const char *rms_dir;
+    const char *fs_dir;
     const char *dump_dir;
     int         dump_every;
     int         scale;
@@ -124,6 +125,8 @@ int main(int argc, char **argv)
             if (c.dump_every < 1) {
                 c.dump_every = 1;
             }
+        } else if (strcmp(a, "--fs-dir") == 0 && i + 1 < argc) {
+            c.fs_dir = argv[++i];
         } else if (strcmp(a, "--keys") == 0 && i + 1 < argc) {
             c.keys = argv[++i];
         } else if (strcmp(a, "--stats") == 0) {
@@ -175,6 +178,13 @@ int main(int argc, char **argv)
     port.height = c.height;
     port.fps_cap = c.fps;
     port.rms_dir = c.rms_dir;
+    /*
+     * No filesystem unless asked for.  JSR 75 exposes the host's directories to
+     * untrusted code, and a default that hands a MIDlet the working directory
+     * is a default nobody thought about.  --fs-dir names the root a MIDlet is
+     * confined to.
+     */
+    port.fs_dir = c.fs_dir;
     if (use_sdl2 && c.scale > 0) {
         port.scale = c.scale;
     }

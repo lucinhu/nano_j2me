@@ -29,7 +29,8 @@ static const nj_builtin_source nj_sources[] = {
     { nj_lib_midlet_classes, &nj_lib_midlet_class_count },
     { nj_lib_media_classes,  &nj_lib_media_class_count  },
     { nj_lib_content_classes, &nj_lib_content_class_count },
-    { nj_lib_nokia_classes,  &nj_lib_nokia_class_count  }
+    { nj_lib_nokia_classes,  &nj_lib_nokia_class_count  },
+    { nj_lib_fc_classes,     &nj_lib_fc_class_count     }
 };
 #define NJ_NSOURCES ((int)(sizeof(nj_sources) / sizeof(nj_sources[0])))
 
