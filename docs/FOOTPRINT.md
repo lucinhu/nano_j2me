@@ -149,23 +149,39 @@ result on an emulated ESP32-S3:
     E (70) nj2me: nj_vm_create failed
 
 So the ROM boots, the second-stage bootloader reads the partition table, the
-application image is loaded and `app_main` runs. **The runtime does not come up
-yet**: `nj_vm_create()` returns NULL with a 64 KiB arena on the 193 KiB of
-internal SRAM IDF leaves free.
+application image is loaded and `app_main` runs.
 
-Two things to try next, in order:
+**The runtime does not come up yet.** `nj_vm_create()` returns NULL, and after
+adding a message to every failure path in `vm_setup()` - an API that returns
+NULL without saying why is unusable on a target with no debugger, which is
+exactly where it gets called - the answer is precise:
 
-1. Diagnose the NULL. `vm_setup` has six failure points (`nj_heap_init`,
-   `vm->statics`, `nj_cp_cache_init`, `nj_natives_init`, `nj_lib_late_init`,
-   `vm->cur`) and the log does not say which; a one-line error path per return
-   would settle it.
-2. **Put the Java heap in PSRAM, as `nj_port_esp32.c` does on real hardware.**
-   193 KiB of internal SRAM cannot hold a useful Java heap next to a
-   framebuffer, and that is not a QEMU limitation - it is the ESP32-S3's actual
-   memory map. QEMU models PSRAM (`-global driver=ssi_psram,property=is_octal,
-   value=true`, which is in ESP-IDF's own `qemu_ext.py`), and the port already
-   has the `heap_caps_malloc(MALLOC_CAP_SPIRAM)` path. This is the same fix the
-   real board needs, which is the useful kind of fix.
+    nj2me: nj_vm_create: heap failed
+
+so `nj_heap_init()` is what fails. `nj_heap_init` calls
+`nj_host_alloc(vm, size)`, which uses `vm->port->alloc` when the port provides
+one and `malloc` otherwise. `vm->port` **is** assigned before the call, and the
+port's allocator reports its own exhaustion through the log (it did not), so the
+allocation is not reaching the port allocator at all - it is going to `malloc`,
+which fails because ESP-IDF has 133 KiB of internal RAM free at that point and
+the arena is 210 KiB.
+
+That is the thing to check next: whether `vm->port->alloc` is really non-NULL at
+that point in an IDF build, and if it is, why `nj_host_alloc` is not using it.
+The two diagnostics added this round make it a five-minute question rather than
+a session:
+
+* `vm_setup()` names the step that failed, through the port's log.
+* the bare port's allocator logs what it was asked for, what it has used and what
+  it has, instead of going quiet.
+
+DECISION: the framebuffer is 64x64 and the heap comes from internal SRAM.  The
+real port puts the heap in PSRAM and draws to a panel; this image exists to prove
+the runtime executes on the real instruction set, and QEMU's `esp32s3` machine
+did not bring quad PSRAM up in testing (`quad_psram: PSRAM chip is not
+connected`).  QEMU does model it - ESP-IDF's own `qemu_ext.py` passes
+`-global driver=ssi_psram,property=is_octal,value=true` when `CONFIG_SPIRAM_MODE_OCT`
+is set - so that is worth revisiting once the heap question above is answered.
 
 Until that is done the claim this project makes is **"the runtime compiles
 against ESP-IDF, links into a bootable ESP32-S3 image, and that image boots to

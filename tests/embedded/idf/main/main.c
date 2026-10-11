@@ -33,14 +33,19 @@ extern const unsigned int  nj_bare_jar_len;
 
 static const char *TAG = "nj2me";
 
-/* Internal SRAM, not PSRAM: on a real board the Java heap belongs in PSRAM
- * (nj_port_esp32.c routes it there), but QEMU's ESP32-S3 model has none and
- * 512 KB of internal SRAM is not enough for a 2 MB arena.  A quarter of a
- * megabyte is plenty to prove the runtime executes. */
-#define NJ_QEMU_HEAP (120u * 1024u)
+/*
+ * Everything from internal SRAM, and small.
+ *
+ * On a real board the Java heap belongs in PSRAM and the framebuffer belongs in
+ * a panel that DMAs from internal RAM - nj_port_esp32.c does both.  This image
+ * is not that: it is here to prove the RUNTIME executes on the ESP32-S3's real
+ * instruction set, so the framebuffer is 64x64 (16 KB) and both buffers are
+ * sized to leave headroom in the 512 KB the part actually has.
+ */
+#define NJ_QEMU_HEAP (224u * 1024u)
 
 static unsigned char g_heap[NJ_QEMU_HEAP];
-static unsigned char g_port_state[76u * 1024u];
+static unsigned char g_port_state[28u * 1024u];
 
 void app_main(void)
 {
@@ -54,16 +59,24 @@ void app_main(void)
              CONFIG_IDF_TARGET, (unsigned)(NJ_QEMU_HEAP / 1024u),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024u));
 
+    ESP_LOGI(TAG, "java heap %u KiB, port state %u KiB, free internal %u KiB",
+             (unsigned)(NJ_QEMU_HEAP / 1024u),
+             (unsigned)(sizeof(g_port_state) / 1024u),
+             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024u));
+
     if (nj_port_bare(&port, (bare_state *)g_port_state,
-                     g_heap, sizeof(g_heap)) != NJ_OK) {
+                     g_heap, NJ_QEMU_HEAP) != NJ_OK) {
         ESP_LOGE(TAG, "port init failed");
         return;
     }
 
     /* The port needs slack beyond the arena it hands out. */
-    ESP_LOGI(TAG, "sizeof(nj_vm)=%u, arena budget %u",
-             (unsigned)nj_vm_sizeof(), (unsigned)(64u * 1024u));
-    vm = nj_vm_create(&port, 64u * 1024u);
+    /* The arena covers the VM instance AND the Java heap, which is why
+     * nj_vm_sizeof() is public: an embedder sizing a static arena needs both
+     * numbers. */
+    ESP_LOGI(TAG, "sizeof(nj_vm)=%u, arena %u KiB", (unsigned)nj_vm_sizeof(),
+             (unsigned)((NJ_QEMU_HEAP - nj_vm_sizeof() - 8192u) / 1024u));
+    vm = nj_vm_create(&port, NJ_QEMU_HEAP - nj_vm_sizeof() - 8192u);
     if (!vm) {
         ESP_LOGE(TAG, "nj_vm_create failed");
         return;

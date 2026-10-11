@@ -1,0 +1,8 @@
+# Console over UART0, which is what QEMU is attached to.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# PSRAM stays off.  The real port (nj_port_esp32.c) puts the Java heap in PSRAM
+# and draws to a panel; this image exists to prove the RUNTIME executes on the
+# real instruction set, and QEMU's esp32s3 model does not bring quad PSRAM up.
+# So the framebuffer is small and the heap comes from internal SRAM.

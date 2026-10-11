@@ -14,6 +14,8 @@
 #include "nj2me/nj.h"
 #include "nj2me/nj_port.h"
 
+static void bare_puts(const char *s);   /* the allocator reports through it */
+
 /* ------------------------------------------------------------------ */
 /* The nine functions.  Deliberately naive: the point is that the       */
 /* runtime compiles and links against a minimal set, not that these are */
@@ -171,10 +173,10 @@ double cbrt(double x) { return bare_unimplemented(x); }
  * to prove is that the RUNTIME executes, not that a 240x320 framebuffer fits.
  */
 #ifndef BARE_W
-#  define BARE_W 128
+#  define BARE_W 64
 #endif
 #ifndef BARE_H
-#  define BARE_H 128
+#  define BARE_H 64
 #endif
 
 typedef struct bare_state {
@@ -208,6 +210,37 @@ static void *bare_alloc(void *ud, nj_size n)
     nj_size aligned = (n + 7u) & ~(nj_size)7u;
     void *p;
     if (!s->heap || s->heap_used + aligned > s->heap_bytes) {
+        /* Say what was asked for and what is left.  A port that goes quiet on
+         * allocation failure turns a sizing mistake into a mystery. */
+        char b[96];
+        unsigned k = 0;
+        const char *p = "nj2me: out of port memory: asked ";
+        while (*p && k < sizeof(b) - 24u) { b[k++] = *p++; }
+        {
+            char t[16]; int m = 0;
+            unsigned long v = (unsigned long)aligned;
+            while (v) { t[m++] = (char)('0' + v % 10u); v /= 10u; }
+            if (!m) { t[m++] = '0'; }
+            while (m) { b[k++] = t[--m]; }
+        }
+        p = " used "; while (*p) { b[k++] = *p++; }
+        {
+            char t[16]; int m = 0;
+            unsigned long v = (unsigned long)s->heap_used;
+            while (v) { t[m++] = (char)('0' + v % 10u); v /= 10u; }
+            if (!m) { t[m++] = '0'; }
+            while (m) { b[k++] = t[--m]; }
+        }
+        p = " of "; while (*p) { b[k++] = *p++; }
+        {
+            char t[16]; int m = 0;
+            unsigned long v = (unsigned long)s->heap_bytes;
+            while (v) { t[m++] = (char)('0' + v % 10u); v /= 10u; }
+            if (!m) { t[m++] = '0'; }
+            while (m) { b[k++] = t[--m]; }
+        }
+        b[k++] = '\n'; b[k] = 0;
+        bare_puts(b);
         return 0;
     }
     p = s->heap + s->heap_used;

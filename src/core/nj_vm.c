@@ -79,6 +79,18 @@ void nj_fatal(nj_vm *vm, const char *fmt, ...)
 /* ------------------------------------------------------------------ */
 /* Lifecycle                                                           */
 /* ------------------------------------------------------------------ */
+/*
+ * Every failure path in vm_setup() names itself.
+ *
+ * nj_vm_create() returning NULL with no explanation is close to undebuggable on
+ * a target with no debugger - which is exactly where it gets called.  The
+ * message goes through the port's log, so it costs nothing when there is none.
+ */
+#define NJ_SETUP_FAIL(what)                                            \
+    do {                                                               \
+        nj_logf(vm, 0, "nj_vm_create: " what " failed");               \
+    } while (0)
+
 static nj_status vm_setup(nj_vm *vm, const nj_port *port, nj_size heap_bytes)
 {
     nj_size hs;
@@ -89,19 +101,23 @@ static nj_status vm_setup(nj_vm *vm, const nj_port *port, nj_size heap_bytes)
 
     hs = heap_bytes ? heap_bytes : (nj_size)NJ_MAX_HEAP;
     if (nj_heap_init(vm, NULL, hs) != NJ_OK) {
+        NJ_SETUP_FAIL("heap");
         return NJ_ERR_NOMEM;
     }
     vm->statics = (nj_value *)nj_host_alloc(
         vm, (nj_size)NJ_MAX_STATICS * sizeof(nj_value));
     if (!vm->statics) {
+        NJ_SETUP_FAIL("statics");
         return NJ_ERR_NOMEM;
     }
     vm->nstatics = 0u;
 
     if (nj_cp_cache_init(vm, 512u) != NJ_OK) {
+        NJ_SETUP_FAIL("cp cache");
         return NJ_ERR_NOMEM;
     }
     if (nj_natives_init(vm) != NJ_OK) {
+        NJ_SETUP_FAIL("native registry");
         return NJ_ERR_NOMEM;
     }
 
@@ -121,6 +137,7 @@ static nj_status vm_setup(nj_vm *vm, const nj_port *port, nj_size heap_bytes)
      * static state (System.out, Math constants, ...). */
     nj_builtins_register_all(vm);
     if (nj_lib_late_init(vm) != NJ_OK) {
+        NJ_SETUP_FAIL("class library late init");
         return NJ_ERR;
     }
 
@@ -128,6 +145,7 @@ static nj_status vm_setup(nj_vm *vm, const nj_port *port, nj_size heap_bytes)
      * even before any MIDlet starts. */
     vm->cur = nj_thread_create(vm, NULL, 1);
     if (!vm->cur) {
+        NJ_SETUP_FAIL("main thread");
         return NJ_ERR_NOMEM;
     }
     vm->running = 1u;
