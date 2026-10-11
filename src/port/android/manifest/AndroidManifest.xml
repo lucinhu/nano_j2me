@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The whole manifest.  No permissions: the runtime reads a JAR from assets and
+  draws into a Surface, and RecordStore writes to the app's own private
+  directory, so there is nothing here that needs one.  A port that adds
+  networking would add INTERNET here and nowhere else.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.nj2me">
+
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+    <application android:label="nano_j2me"
+                 android:hasCode="true"
+                 android:allowBackup="false">
+        <activity android:name=".Nj2meActivity"
+                  android:exported="true"
+                  android:screenOrientation="portrait"
+                  android:configChanges="orientation|keyboardHidden|screenSize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

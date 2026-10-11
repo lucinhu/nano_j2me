@@ -308,6 +308,59 @@ in `nj_lib_math.c` so they raise `ArithmeticException` (or return the integer
 approximation) when the switch is off. Until then, treat the switch as
 unimplemented.
 
+## Android: built with the real NDK, and run on an emulator
+
+    tools/build_android.sh          # libnj2me.so for arm64-v8a, armeabi-v7a, x86_64
+    tools/build_android_apk.sh      # a signed, installable APK
+    tools/build_android_apk.sh --install    # ...and launch it
+
+Both are real cross-builds with NDK r28b, not stub-header compiles:
+`nj_port_android.c` includes `<jni.h>`, exports
+`Java_com_example_nj2me_Nj2meActivity_native*`, and links against liblog and
+libandroid. The shared library passes the same zero-writable-state gate as
+everything else, by section name:
+
+| ABI | libnj2me.so | `.data` + `.bss` | `.data.rel.ro` |
+|---|---|---|---|
+| arm64-v8a | 758,952 | **0** | 67,216 |
+| armeabi-v7a | 572,768 | **0** | 34,204 |
+| x86_64 | 684,536 | **0** | 67,840 |
+
+The APK is assembled by hand from aapt2, d8, zipalign and apksigner rather than
+Gradle - this repository has no Gradle wrapper and nothing to download, and what
+the hand-built APK is for is proving the native side is complete: a valid
+manifest, dexed Java, the `.so` in `lib/<abi>/`, the game in `assets/`.
+
+**It runs.** Installed on an API 26 x86_64 emulator, the activity starts, the
+library loads, the surface is created and a real MIDlet draws through the
+built-in LCDUI - [screenshot](images/android-maze.png), `maze.jar` at 320x640.
+[images/android-alert.png](images/android-alert.png) is the same port rendering
+an Alert, which is what the size-gated titles do (below).
+
+### The bug that only running found
+
+The first APK installed, started, and died:
+
+    java.lang.UnsatisfiedLinkError: dlopen failed: cannot locate symbol "nj_run"
+      referenced by libnj2me.so
+
+The source list did not include `src/runner/nj_run.c`. A shared library is
+allowed to have undefined symbols, so it built, signed, installed and then could
+never load. Two fixes, and the second is the one that matters:
+
+* add the missing source;
+* **link with `-Wl,--no-undefined`**, so the next missing file is a link error
+  instead of a crash on someone's phone.
+
+### Known gap: the port uses the whole Android surface
+
+A J2ME game was written for a fixed device screen. This port hands the game the
+full Android surface - 320x640 on the test emulator - so titles that gate on the
+screen size refuse it, correctly, with their own "Screen too large" Alert. The
+right behaviour is to present a configured MIDlet resolution (176x208, 240x320)
+letterboxed and centred in the surface, with input coordinates scaled to match.
+That is a contained change in `nj_port_android.c` and is not done.
+
 ## What is not in the report
 
 * `src/port/esp32/nj_port_esp32.c` compiles (34 bytes of code) but its real size
