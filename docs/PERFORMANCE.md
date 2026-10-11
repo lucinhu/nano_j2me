@@ -140,7 +140,26 @@ unambiguous. Two independent sessions on the same binary measured 0.186 s and
 on this machine. (Higher than the 549-590 M/s quoted earlier, because CPU time
 excludes the interference that wall clock was charging for.)
 
-## Replicated dispatch: 13 opcodes, about 10%
+## Replicated dispatch: measured again properly, about 8%
+
+The earlier "~10%" was measured with a dispatch table that turned out to be
+shifted by one and therefore mostly inert, so it did not describe the mechanism.
+Re-measured after the table was rebuilt from the source labels, against a
+**plain switch** rather than against the half-optimised intermediate:
+
+    plain switch        0.184 / 0.186 s      (min, interleaved)
+    replicated dispatch 0.170 / 0.170 s
+    gain                ~8%
+
+**The control matters more than the number.**  The first attempt at this
+re-measurement compared against `NJ_THREADED_DISPATCH=0` - a build that turns
+the TABLE off but keeps the restructured fetch, so it was already most of the
+optimisation.  That comparison returned "no difference", and acting on it meant
+reverting a real 8% win.  Reverting is one command, but the lesson is that
+"which two things am I comparing" is the whole experiment; the benchmark's own
+quality cannot save a wrong control.
+
+## Replicated dispatch: 13 opcodes (superseded)
 
     converted    0.189 / 0.183 s      (interleaved A/B, same session)
     unconverted  0.204 / 0.205 s
