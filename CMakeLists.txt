@@ -66,6 +66,13 @@ if(NJ_BUILD_HEADLESS)
   target_sources(nj2me PRIVATE src/port/posix/nj_port_headless.c)
 endif()
 
+# The embedded ports compile everywhere: outside their own platform they
+# provide stubs that report NJ_ERR_UNSUPPORTED, so a single library can contain
+# every port and the host build still links.
+target_sources(nj2me PRIVATE
+  src/port/android/nj_port_android.c
+  src/port/esp32/nj_port_esp32.c)
+
 if(NJ_BUILD_SDL2)
   find_package(PkgConfig QUIET)
   if(PkgConfig_FOUND)
@@ -98,6 +105,10 @@ if(NJ_BUILD_TESTS)
   add_test(NAME vm_core COMMAND test_vm
            ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/hello.jar
            HelloWorld "hello from j2me")
+
+  add_executable(test_lifecycle tests/test_lifecycle.c)
+  target_link_libraries(test_lifecycle PRIVATE nj2me)
+  add_test(NAME lifecycle COMMAND test_lifecycle)
 
   add_executable(test_zip tests/test_zip.c)
   target_link_libraries(test_zip PRIVATE nj2me)

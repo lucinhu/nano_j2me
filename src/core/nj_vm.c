@@ -1231,6 +1231,15 @@ nj_status nj_run_pending(nj_vm *vm, nj_u4 budget_ms)
     return nj_scheduler_run_until_idle(vm, budget_ms);
 }
 
+nj_size nj_gc_collect(nj_vm *vm)
+{
+    if (!vm) {
+        return 0u;
+    }
+    (void)nj_gc_run(vm);
+    return nj_heap_used_bytes(vm);
+}
+
 void nj_port_shutdown(nj_port *port)
 {
     if (!port) {

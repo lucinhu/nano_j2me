@@ -1,0 +1,43 @@
+menu "nano_j2me"
+
+    choice NJ2ME_HEAP_PROFILE
+        prompt "Java heap profile"
+        default NJ2ME_HEAP_PSRAM
+
+        config NJ2ME_HEAP_TINY
+            bool "Tiny - 256 KB (no PSRAM, simple MIDlets)"
+        config NJ2ME_HEAP_SMALL
+            bool "Small - 512 KB (no PSRAM, most MIDlets)"
+        config NJ2ME_HEAP_PSRAM
+            bool "PSRAM - 6 MB (recommended on ESP32-S3 with PSRAM)"
+    endchoice
+
+    config NJ2ME_HEAP_BYTES
+        int "Java heap size in bytes (0 = derive from the profile above)"
+        default 0
+        help
+            The arena is allocated with the port's alloc hook, which prefers
+            PSRAM.  On a module without PSRAM this is what limits how large a
+            game can run; 320-448 KB is a realistic ceiling in internal SRAM.
+
+    config NJ2ME_SCREEN_WIDTH
+        int "Panel width"
+        default 240
+    config NJ2ME_SCREEN_HEIGHT
+        int "Panel height"
+        default 320
+
+    config NJ2ME_FPS
+        int "Frame rate cap"
+        default 30
+        range 10 60
+
+    config NJ2ME_TRACE
+        bool "Enable the bytecode tracer (NJ_ENABLE_DEBUG)"
+        default n
+        help
+            Adds an instruction-level trace selectable at runtime with the
+            NJ_TRACE environment variable.  Costs flash and a branch per
+            instruction; keep it off for release builds.
+
+endmenu

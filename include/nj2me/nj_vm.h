@@ -226,6 +226,14 @@ void nj_vm_request_stop(nj_vm *vm, nj_s4 code);
 /* Run queued background threads for at most `budget_ms` of virtual time. */
 nj_status nj_run_pending(nj_vm *vm, nj_u4 budget_ms);
 
+/*
+ * Force a garbage collection and return the bytes still in use afterwards.
+ * The runtime collects on demand; this exists for embedders that want to
+ * collect at a quiet moment (between games, or before deep-sleeping) and for
+ * tests that need the heap to settle before measuring it.
+ */
+nj_size nj_gc_collect(nj_vm *vm);
+
 /* ------------------------------------------------------------------ */
 /* Native registration table                                           */
 /* ------------------------------------------------------------------ */

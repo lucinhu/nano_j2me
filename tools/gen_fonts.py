@@ -81,10 +81,15 @@ COVERAGE = tuple(range(0x20, 0x7F)) + tuple(range(0xA0, 0x100))
 # of every covered glyph (both styles) at each candidate size; see the module
 # docstring of tools/gen_fonts.py in the repo history and the checks below.
 #
-#   MIDP size            px   cell      measured envelope
-#   SMALL  (8)            9   6 x 12    ascent 10, descent 2, ink width 5
+#   MIDP size            px   cell      measured mono ink envelope
+#   SMALL  (8)            9   6 x 12    ascent 10, descent 2, ink width 6
 #   MEDIUM (0)           13   8 x 16    ascent 12, descent 4, ink width 8
 #   LARGE  (16)          18  12 x 20    ascent 16, descent 4, ink width 11
+#
+# ascent/descent are not the face's hhea metrics: they are where the ink
+# actually is, so the accented capitals of Latin-1 (which reach a couple of
+# pixels above the cap line) and the deepest descenders both fit inside the
+# cell and nothing is ever clipped.
 SIZES = (
     {"tag": "small", "macro": "SMALL", "size": 8, "px": 9, "cell_w": 6},
     {"tag": "medium", "macro": "MEDIUM", "size": 0, "px": 13, "cell_w": 8},
@@ -92,12 +97,6 @@ SIZES = (
 )
 
 STYLES = (("p", "plain", 0), ("b", "bold", 1))
-
-# A glyph is inked when the antialiased coverage reaches this level (0..255).
-# 128 is the midpoint: high enough that the grey fringe around a stem does not
-# bleed into a neighbouring pixel, low enough that the 1px stems of '!', '|',
-# 'l' and '_' survive at every size (checked per style below).
-THRESHOLD = 128
 
 # Rendering canvas padding around the pen origin.
 PAD = 48
@@ -152,74 +151,85 @@ def sha256_file(path):
 # --------------------------------------------------------------------------
 # Rasterisation
 # --------------------------------------------------------------------------
-def render_glyph(font, ch, ascender):
-    """Rasterise one character with the baseline at y = PAD + ascender."""
-    canvas = Image.new("L", (PAD * 2 + 96, PAD * 2 + 96), 0)
-    ImageDraw.Draw(canvas).text((PAD, PAD + ascender), ch, font=font,
-                                fill=255, anchor="ls")
+def render_glyph(font, ch):
+    """Rasterise one character with the baseline at y = PAD.
+
+    The canvas is bilevel, which makes ImageDraw ask FreeType for a
+    FT_LOAD_TARGET_MONO bitmap: the hinted, 1 bit per pixel rasterisation the
+    panel actually wants.  A greyscale render plus a coverage threshold does
+    NOT work here - at 9..13 px a hinted-away stem covers two columns at ~50%
+    each and a 128 threshold deletes it outright ('1' and 'l' lose their stem,
+    the accented capitals lose the accent).
+    """
+    canvas = Image.new("1", (PAD * 2 + 96, PAD * 2 + 96), 0)
+    ImageDraw.Draw(canvas).text((PAD, PAD), ch, font=font, fill=1,
+                                anchor="ls")
     return canvas
 
 
 def inked_bbox(canvas):
-    """Bounding box of pixels >= THRESHOLD, in canvas coordinates."""
-    return canvas.point(lambda v: 255 if v >= THRESHOLD else 0).getbbox()
+    """Bounding box of the inked pixels, in canvas coordinates (baseline PAD)."""
+    return canvas.getbbox()
 
 
-def measure_envelope(font, ascender):
-    """Ink envelope of the whole coverage set, relative to the baseline.
+def measure_envelope(font):
+    """Ink envelope of the whole coverage set, in pixels from the pen origin.
 
-    Returns (ascent, descent, ink_right, per_char) where per_char maps a
-    codepoint to (x0, y0, x1, y1) relative to the pen origin / baseline, or
-    None for a blank glyph.
+    Returns (ascent, descent, left, right): the tallest reach above the
+    baseline, the deepest reach below it, and the leftmost/rightmost ink
+    column relative to the pen position with the baseline at y = PAD.
     """
     top = 0
     bottom = 0
+    left = 0
     right = 0
-    per_char = {}
     for cp in COVERAGE:
-        ch = chr(cp)
-        canvas = render_glyph(font, ch, ascender)
-        box = inked_bbox(canvas)
+        box = inked_bbox(render_glyph(font, chr(cp)))
         if box is None:
-            per_char[cp] = None
             continue
-        x0 = box[0] - PAD
-        x1 = box[2] - PAD
-        y0 = box[1] - PAD - ascender
-        y1 = box[3] - PAD - ascender
-        per_char[cp] = (x0, y0, x1, y1)
-        top = max(top, -y0)
-        bottom = max(bottom, y1)
-        right = max(right, x1)
-    return top, bottom, right, per_char
+        top = max(top, PAD - box[1])
+        bottom = max(bottom, box[3] - PAD)
+        left = min(left, box[0] - PAD)
+        right = max(right, box[2] - PAD)
+    return top, bottom, left, right
 
 
-def glyph_bitmap(font, ch, ascender, ascent, descent, cell_w):
-    """Thresholded rows of one glyph, clipped to the cell.
+def glyph_bitmap(font, ch, ascent, descent, cell_w):
+    """One glyph as `ascent + descent` rows of `cell_w` 0/1 ints.
 
-    Returns a list of `ascent + descent` lists of `cell_w` 0/1 ints.
-    Raises RuntimeError if the ink does not fit - that means the metrics in
-    SIZES are wrong and the table would silently clip glyphs.
+    The widest glyphs of the face (Y, _, Y-diaeresis, yen, macron and the
+    vulgar fractions) are designed with a negative left side bearing so that
+    they fill the em box; hinted at 9..18 px that puts their first column one
+    pixel left of the pen origin.  Such a glyph is nudged right by the minimum
+    amount that brings it inside the cell - which also centres it better on the
+    advance box - and is never clipped.  Ordinary glyphs start one pixel in
+    from the origin and are left exactly where the face puts them, so the
+    fixed pitch of the face is preserved.
+
+    Raises RuntimeError when the ink still leaves the cell: that means the
+    metrics in SIZES are wrong and the table would silently clip glyphs.
     """
     height = ascent + descent
-    canvas = render_glyph(font, ch, ascender)
+    canvas = render_glyph(font, ch)
     box = inked_bbox(canvas)
     rows = [[0] * cell_w for _ in range(height)]
     if box is None:
         return rows
-    x0 = box[0] - PAD
-    y0 = box[1] - PAD - ascender + ascent
-    if x0 < 0 or (box[2] - PAD) > cell_w or y0 < 0 or (box[3] - PAD - ascender + ascent) > height:
+    x_off = max(0, PAD - box[0])
+    x0 = box[0] - PAD + x_off
+    x1 = box[2] - PAD + x_off
+    if x0 < 0 or x1 > cell_w \
+            or (PAD - box[1]) > ascent or (box[3] - PAD) > descent:
         raise RuntimeError(
-            "glyph U+%04X does not fit the %dx%d cell "
-            "(ink x[%d,%d) y[%d,%d))" % (
-                ord(ch), cell_w, height, x0, box[2] - PAD, y0,
-                box[3] - PAD - ascender + ascent))
+            "glyph U+%04X does not fit the %dx%d cell (ink x[%d,%d) "
+            "y[%d,%d) vs ascent %d descent %d)" % (
+                ord(ch), cell_w, height, x0, x1,
+                PAD - box[1], box[3] - PAD, ascent, descent))
     pixels = canvas.load()
     for y in range(box[1], box[3]):
         for x in range(box[0], box[2]):
-            if pixels[x, y] >= THRESHOLD:
-                rows[y - PAD - ascender + ascent][x - PAD] = 1
+            if pixels[x, y]:
+                rows[y - PAD + ascent][x - PAD + x_off] = 1
     return rows
 
 
@@ -243,7 +253,7 @@ def pack_glyph(rows, cell_w):
 # --------------------------------------------------------------------------
 # Glyphs that must keep ink at every size/style: the thin-stroke canaries,
 # plus enough of the alphabet to catch a badly placed baseline.
-NEVER_BLANK = ("!", "|", "l", "1", "_", "M", "W", "i", "g", "@", "#", "%")
+NEVER_BLANK = ("!", "|", "l", "1", "_", "M", "W", "i", "g", "@", "#", "%", "j", "t")
 BLANK_OK = (0x20, 0xA0, 0xAD)   # space, no-break space, soft hyphen
 
 
@@ -251,14 +261,22 @@ def check_glyphs(tag, style, glyphs):
     for ch in NEVER_BLANK:
         if not any(any(row) for row in glyphs[ord(ch)]):
             raise RuntimeError(
-                "%s/%s: glyph %r lost its ink at threshold %d - lower "
-                "THRESHOLD or pick a larger pixel size" %
-                (tag, style, ch, THRESHOLD))
+                "%s/%s: glyph %r rasterised blank - the size is too small or "
+                "the mono rasteriser dropped a stem" % (tag, style, ch))
+    # '|' is a bare vertical stem: every inked row must be the same 1..2 px
+    # wide run.  Anything else means the rasteriser is splitting a stroke
+    # across two columns (which is what makes a stem disappear at 1bpp).
+    stem = {sum(row) for row in glyphs[ord("|")] if any(row)}
+    if len(stem) != 1 or not stem <= {1, 2, 3}:
+        raise RuntimeError(
+            "%s/%s: '|' stroke widths are %s px, expected one uniform 1..3 px "
+            "run" % (tag, style, sorted(stem)))
     for cp in BLANK_OK:
         if any(any(row) for row in glyphs[cp]):
             raise RuntimeError(
                 "%s/%s: U+%04X should be blank" % (tag, style, cp))
-    blank = [cp for cp in COVERAGE if glyphs[cp] and not any(any(r) for r in glyphs[cp])]
+    blank = [cp for cp in COVERAGE
+             if cp not in BLANK_OK and not any(any(r) for r in glyphs[cp])]
     if blank:
         raise RuntimeError("%s/%s: unexpected blank glyphs %s" %
                            (tag, style, [hex(c) for c in blank]))
@@ -280,22 +298,21 @@ def build_size(family, paths, spec):
     px = spec["px"]
     cell_w = spec["cell_w"]
     faces = {}
-    ascenders = {}
     envelopes = {}
     for suffix, style, _bit in STYLES:
         font = ImageFont.truetype(paths[suffix], px)
         faces[suffix] = font
-        ascenders[suffix] = font.getmetrics()[0]
-        envelopes[suffix] = measure_envelope(font, ascenders[suffix])
+        envelopes[suffix] = measure_envelope(font)
 
     ascent = max(envelopes[s][0] for s, _, _ in STYLES)
     descent = max(envelopes[s][1] for s, _, _ in STYLES)
-    ink_right = max(envelopes[s][2] for s, _, _ in STYLES)
+    ink_left = min(envelopes[s][2] for s, _, _ in STYLES)
+    ink_right = max(envelopes[s][3] for s, _, _ in STYLES)
     height = ascent + descent
-    if ink_right > cell_w:
+    if max(0, ink_right) > cell_w:
         raise RuntimeError(
-            "%s: ink is %d px wide but the cell is only %d px - widen cell_w"
-            % (spec["tag"], ink_right, cell_w))
+            "%s: ink reaches column %d but the cell is only %d px wide - "
+            "widen cell_w" % (spec["tag"], ink_right, cell_w))
 
     tables = {}
     for suffix, style, _bit in STYLES:
@@ -303,7 +320,6 @@ def build_size(family, paths, spec):
         for cp in range(FIRST_CHAR, LAST_CHAR + 1):
             if cp in COVERAGE:
                 glyphs[cp] = glyph_bitmap(faces[suffix], chr(cp),
-                                          ascenders[suffix],
                                           ascent, descent, cell_w)
             else:
                 glyphs[cp] = [[0] * cell_w for _ in range(height)]
@@ -352,8 +368,10 @@ def emit_header(family, font_info, sizes, path):
     w(" * array index.")
     w(" *")
     w(" * Regenerate with:   python3 tools/gen_fonts.py")
-    w(" * (optimisation threshold %d/255, cell metrics measured from the ink" % THRESHOLD)
-    w(" *  envelope of every covered glyph in both styles).")
+    w(" * Glyphs come from FreeType's monochrome (FT_LOAD_TARGET_MONO)")
+    w(" * rasteriser, so stems are hinted onto the pixel grid; the cell")
+    w(" * metrics are the measured ink envelope of every covered glyph in")
+    w(" * both styles, which is what makes the faces clip-free.")
     w(" */")
     w("#ifndef NJ_FONT_DATA_H")
     w("#define NJ_FONT_DATA_H")
