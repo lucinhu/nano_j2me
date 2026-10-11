@@ -261,6 +261,7 @@ nj_status nj_midp_frame(nj_vm *vm)
         nj_clear_exception(vm);
     }
     if (nj_midp_paint(vm) == NJ_OK) {
+        vm->frames++;
         nj_surface *s = nj_midp_screen(vm);
         if (s && vm->port && vm->port->display_present) {
             vm->port->display_present(vm->port->ud, 0, 0, s->width, s->height);

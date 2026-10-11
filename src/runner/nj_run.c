@@ -162,11 +162,16 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     nj_ref exc = NULL;
     const char *class_name = NULL;
     int rc = 1;
+    int stats = 0;
+    nj_s8 nj_start_ms = 0;
+    nj_s8 nj_end_ms = 0;
 
     if (!port_in || !opts) {
         return 2;
     }
     port = *port_in;
+    stats = opts->stats;
+    nj_start_ms = (nj_s8)(port.millis ? port.millis(port.ud) : 0u);
     port.user = port_in->user;
 
     memset(&blob, 0, sizeof(blob));
@@ -281,7 +286,36 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
 
     /* ---- the frame loop ---- */
     {
-        nj_status st = nj_midp_run(vm);
+        nj_status st;
+        if (opts->run_frames > 0u) {
+            /*
+             * Run a fixed number of frames and stop.
+             *
+             * Most MIDlets never exit on their own, so without this a
+             * benchmark has to be killed from outside - which loses the
+             * counters (they are printed before teardown) and makes the frame
+             * count depend on how loaded the machine was.  A fixed frame count
+             * gives the same work every time, which is what a performance
+             * comparison needs.
+             */
+            for (;;) {
+                nj_vm_stats s;
+                if (!nj_vm_running(vm)) {
+                    break;
+                }
+                nj_vm_get_stats(vm, &s);
+                if (s.frames >= (nj_u8)opts->run_frames) {
+                    break;
+                }
+                st = nj_midp_frame(vm);
+                if (st != NJ_OK) {
+                    break;
+                }
+            }
+            st = NJ_OK;
+        } else {
+            st = nj_midp_run(vm);
+        }
         if (st != NJ_OK) {
             if (port.log) {
                 port.log(port.user, 0, "the display loop failed");
@@ -293,6 +327,35 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     rc = (int)nj_vm_exit_code(vm);
 
 done:
+    nj_end_ms = (nj_s8)(port.millis ? port.millis(port.ud) : 0u);
+    /*
+     * --stats: the numbers behind docs/PERFORMANCE.md.
+     *
+     * Printed before teardown so they describe the run that just happened, not
+     * a torn-down VM.  The definitions are the ones in nj_vm.h, so an embedder
+     * measuring its own target gets comparable figures.
+     */
+    if (stats && vm) {
+        nj_vm_stats s;
+        double secs = (nj_end_ms > nj_start_ms)
+                          ? (double)(nj_end_ms - nj_start_ms) / 1000.0
+                          : 0.0;
+        nj_vm_get_stats(vm, &s);
+        if (port.log) {
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                     "stats: frames=%lu time=%.3fs fps=%.1f "
+                     "bytecodes=%lu (%.2f M/s) natives=%lu "
+                     "heap=%lu/%lu bytes",
+                     (unsigned long)s.frames, secs,
+                     secs > 0.0 ? (double)s.frames / secs : 0.0,
+                     (unsigned long)s.insns,
+                     secs > 0.0 ? (double)s.insns / secs / 1.0e6 : 0.0,
+                     (unsigned long)s.native_calls,
+                     (unsigned long)s.heap_used, (unsigned long)s.heap_peak);
+            port.log(port.user, 2, buf);
+        }
+    }
     if (vm) {
         (void)nj_midp_destroy_app(vm, 0);
         if (app) {

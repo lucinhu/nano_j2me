@@ -24,7 +24,9 @@ static void usage(const char *argv0)
 "  --scale <n>          integer upscale for the window (sdl2, default: auto)\n"
 "  --size <WxH>         screen size, e.g. 240x320 (default: %dx%d)\n"
 "  --rms-dir <path>     where RecordStore files are kept\n"
-"  --fps <n>            frame rate cap (default: 30)\n"
+"  --fps <n>            frame rate cap (default: 30; 0 = uncapped)\n"
+"  --run-frames <n>     stop after n presented frames (for benchmarks)\n"
+"  --stats              print bytecode and frame counters at the end\n"
 "  --dump-frames <dir>  write a PPM per frame (headless)\n"
 "  --dump-every <n>     write every n-th frame (headless, default: 1)\n"
 "  --stats              print VM statistics on exit\n"
@@ -54,6 +56,7 @@ typedef struct cli {
     int         height;
     unsigned    heap_mb;
     int         stats;
+    int         run_frames;
 } cli;
 
 static int parse_size(const char *s, int *w, int *h)
@@ -122,6 +125,8 @@ int main(int argc, char **argv)
             }
         } else if (strcmp(a, "--stats") == 0) {
             c.stats = 1;
+        } else if (strcmp(a, "--run-frames") == 0 && i + 1 < argc) {
+            c.run_frames = atoi(argv[++i]);
         } else if (a[0] == '-') {
             fprintf(stderr, "unknown option: %s\n", a);
             usage(argv[0]);
@@ -176,13 +181,15 @@ int main(int argc, char **argv)
     opts.heap_bytes = (nj_size)c.heap_mb * 1024u * 1024u;
     opts.argv = (const char *const *)argv;
     opts.argc = argc;
+    opts.stats = c.stats;
+    opts.run_frames = (nj_u4)(c.run_frames > 0 ? c.run_frames : 0);
 
     st = (nj_status)nj_run(&port, &opts);
 
     if (c.stats) {
-        /* The VM is already gone by design; nj_run() reported the teardown
-         * figures through the port log when it had something to say. */
-        fprintf(stderr, "nano_j2me: exited with status %d\n", (int)st);
+        /* nj_run() printed the counters before tearing the VM down; say what
+         * the host is being told so a script can check it without parsing. */
+        fprintf(stderr, "nano_j2me: exit status %d\n", (int)st);
     }
     return st == NJ_OK ? 0 : 1;
 }

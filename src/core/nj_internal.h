@@ -411,6 +411,19 @@ struct nj_vm {
     const char *trace_filter;   /* only methods whose name contains this */
 #endif
 
+    /*
+     * Execution counters.
+     *
+     * Per-VM, like everything else, so two VMs never share a total and nothing
+     * lives in .bss.  They are the only way to say anything quantitative about
+     * the interpreter ("N million bytecodes per second") and they make a
+     * regression visible without a profiler.
+     */
+    nj_u8      insns;           /* bytecodes dispatched */
+    nj_u8      insns_peak;      /* not used for now; reserved, keeps 16B aligned */
+    nj_u8      native_calls;
+    nj_u8      frames;          /* frames presented to the port */
+
     /* scratch: reusable buffers owned by the VM */
     nj_u2     *scratch_u2;
     nj_u4      scratch_u2_len;

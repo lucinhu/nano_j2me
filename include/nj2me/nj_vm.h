@@ -44,6 +44,8 @@ nj_vm  *nj_vm_create(const nj_port *port, nj_size heap_bytes);
  * return value as a leak assertion in a test or a boot self-check.
  */
 nj_u4   nj_vm_destroy(nj_vm *vm);
+
+
 nj_status nj_vm_start_app(nj_vm *vm, nj_ref midlet);  /* calls MIDlet.startApp() */
 nj_ref  nj_vm_new_midlet(nj_vm *vm, const char *class_name, nj_ref *out_exc);
 
@@ -204,6 +206,15 @@ typedef struct nj_vm_stats {
     nj_u4   host_live;
     nj_u4   host_peak;
     nj_size host_bytes;
+    /*
+     * Execution counters.  These are the numbers behind the performance table
+     * in docs/PERFORMANCE.md; they are public so an embedder can measure its
+     * own target with the same definitions rather than an approximation of
+     * them.
+     */
+    nj_u8   insns;          /* bytecodes dispatched */
+    nj_u8   native_calls;   /* natives invoked from Java */
+    nj_u8   frames;         /* frames presented to the port */
 } nj_vm_stats;
 
 void nj_vm_get_stats(nj_vm *vm, nj_vm_stats *out);
@@ -219,6 +230,10 @@ const char *nj_ref_class_name(nj_ref o);
 
 /* The value passed to System.exit()/MIDlet.notifyDestroyed(), or 0. */
 nj_s4 nj_vm_exit_code(nj_vm *vm);
+
+/* Is the VM still running?  0 once the MIDlet has exited or asked to stop.
+ * The runner needs this to drive the frame loop itself (see --run-frames). */
+int   nj_vm_running(nj_vm *vm);
 
 /* Stop the frame loop (the same thing System.exit does). */
 void nj_vm_request_stop(nj_vm *vm, nj_s4 code);

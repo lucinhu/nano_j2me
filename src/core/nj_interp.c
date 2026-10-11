@@ -122,6 +122,8 @@ nj_status nj_invoke_native(nj_vm *vm, nj_thread *th, nj_method *target,
     nj_value *args;
     nj_status st;
 
+    vm->native_calls++;
+
     /*
      * Clear BOTH slots completely.  `ret[0].bits = 0` only writes four of the
      * eight bytes of an nj_value, so a native that returns without setting
@@ -370,6 +372,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         op_pc = pc;
         op = code[pc++];
         (void)op_pc;
+        vm->insns++;
 
         switch (op) {
 

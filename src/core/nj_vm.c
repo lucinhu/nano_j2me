@@ -237,6 +237,14 @@ nj_u4 nj_vm_destroy(nj_vm *vm)
     return released;
 }
 
+int nj_vm_running(nj_vm *vm)
+{
+    if (!vm) {
+        return 0;
+    }
+    return (vm->running && vm->state != NJ_VM_STOPPING) ? 1 : 0;
+}
+
 void nj_vm_get_stats(nj_vm *vm, nj_vm_stats *out)
 {
     if (!out) {
@@ -261,6 +269,9 @@ void nj_vm_get_stats(nj_vm *vm, nj_vm_stats *out)
     out->native_misses = vm->native_misses;
     out->codecs = vm->ncodecs;
     out->host_live = vm->host_count;
+    out->insns = vm->insns;
+    out->native_calls = vm->native_calls;
+    out->frames = vm->frames;
     out->host_peak = vm->host_peak;
     out->host_bytes = (nj_size)vm->host_bytes;
 }
