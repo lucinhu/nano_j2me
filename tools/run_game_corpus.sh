@@ -36,6 +36,14 @@ SIZES="${NJ_SIZES:-176x208 240x320 128x160 320x240}"
 SECS="${NJ_TIMEOUT:-20}"
 MIN_COLOURS="${NJ_MIN_COLOURS:-2}"
 FPS="${NJ_FPS:-0}"
+# A frame COUNT bounds each run, not a wall-clock timeout.
+#
+# --fps 0 means uncapped, so 600 frames of a light title is well under a second
+# - where the old wall-clock bound spent the whole timeout asleep in the frame
+# pacer and managed about 300 frames in TEN seconds.  A fixed frame count also
+# makes a run identical on a loaded machine and an idle one, which a timeout
+# never is.
+FRAMES="${NJ_FRAMES:-8000}"
 STRICT_MOTION="${NJ_STRICT_MOTION:-0}"
 
 while [ $# -gt 0 ]; do
@@ -103,7 +111,8 @@ for jar in "${JARS[@]}"; do
     for size in $SIZES; do
         : > "$log"
         timeout "$SECS" "$BIN" --port headless --heap 8 --size "$size" \
-                --fps "$FPS" --dump-frames "$out/" --dump-every 40 \
+                --fps "$FPS" --run-frames "$FRAMES" \
+                --dump-frames "$out/" --dump-every 40 \
                 "${KARGS[@]}" \
                 "$jar" >"$log" 2>&1
         if grep -q "Screen too" "$log"; then

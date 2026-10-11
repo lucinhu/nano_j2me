@@ -170,17 +170,31 @@ nj_status nj_midp_destroy_app(nj_vm *vm, int unconditional)
 /*
  * Frame pacing.  A MIDlet that just paints as fast as it can will starve the
  * event pump on a slow panel, and one that sleeps too long feels laggy; this
- * targets the port's fps_cap (or 30 fps) by measuring elapsed time between
- * frames rather than assuming a fixed cost.
+ * targets the port's fps_cap by measuring elapsed time between frames rather
+ * than assuming a fixed cost.
+ *
+ * fps_cap == 0 means UNCAPPED, which is what nj_port.h has always documented -
+ * and what this did not do.  It read `> 0` and left the default at 30, so a
+ * caller that asked for no cap silently got 30 fps.  Every real-game timing in
+ * this project's notes was taken through that, which is why they all read
+ * exactly 30.2 fps whatever the game did.
+ *
+ * A negative cap is treated as uncapped too: there is no such thing as a
+ * negative frame rate, and spinning is a better failure than dividing by it.
  */
 static void frame_pace(nj_vm *vm, nj_s8 frame_start)
 {
-    int cap = 30;
+    int cap = vm->port ? vm->port->fps_cap : 0;
     nj_s8 budget;
     nj_s8 elapsed;
 
-    if (vm->port && vm->port->fps_cap > 0) {
-        cap = vm->port->fps_cap;
+    if (cap <= 0) {
+        /* Uncapped: no sleep at all, but still give the RTOS a chance to run
+         * so a busy-wait does not starve everything else on the device. */
+        if (vm->port && vm->port->idle) {
+            vm->port->idle(vm->port->ud);
+        }
+        return;
     }
     budget = 1000 / cap;
     elapsed = nj_now_ms(vm) - frame_start;
