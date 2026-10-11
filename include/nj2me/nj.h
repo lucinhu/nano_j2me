@@ -86,6 +86,7 @@ int  nj_port_headless_tone_first(const nj_port *port);  /* first freq, last seq 
 long nj_port_headless_pcm_frames(const nj_port *port);  /* frames accepted */
 int  nj_port_headless_pcm_opens(const nj_port *port);
 int  nj_port_headless_pcm_format(const nj_port *port, int *rate, int *channels);
+int  nj_port_headless_pcm_closes(const nj_port *port);
 
 #ifdef __cplusplus
 }

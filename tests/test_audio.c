@@ -79,6 +79,36 @@ static int contains(const char *buf, const char *s)
     return strstr(buf, s) != NULL;
 }
 
+/* ------------------------------------------------------------------ */
+/* A device with a small buffer                                        */
+/* ------------------------------------------------------------------ */
+/*
+ * The pump in nj_media_frame() exists for exactly one case: a WAV longer than
+ * the device's buffer, on a port that can only take a little at a time.  The
+ * headless port accepts everything, so testing with it proves nothing about
+ * that path - it would pass with the pump removed.
+ *
+ * These wrappers make the device bounded: pcm_write takes at most 256 frames
+ * per call and pcm_free reports the same.  The full 4410-frame file can then
+ * only arrive if someone keeps pushing across frames.
+ */
+#define BOUNDED_LIMIT 256
+static int (*g_orig_write)(void *, const nj_s2 *, int);
+
+static int bounded_write(void *ud, const nj_s2 *samples, int frames)
+{
+    if (frames > BOUNDED_LIMIT) {
+        frames = BOUNDED_LIMIT;
+    }
+    return g_orig_write(ud, samples, frames);
+}
+
+static int bounded_free(void *ud)
+{
+    (void)ud;
+    return BOUNDED_LIMIT;
+}
+
 int main(int argc, char **argv)
 {
     nj_port port;
@@ -187,6 +217,54 @@ int main(int argc, char **argv)
         if (fails > 0) {
             break;
         }
+    }
+
+    /*
+     * ---- a device that can only take a little at a time ----
+     *
+     * The same MIDlet, on a port whose pcm_write accepts 256 frames per call.
+     * The file is 4410 frames, so it can only be delivered if the runtime keeps
+     * pushing once per emulated frame.
+     */
+    {
+        long frames;
+
+        memset(&cap, 0, sizeof(cap));
+        if (nj_port_headless_ex(&port, 176, 208, 0, NULL) != NJ_OK) {
+            fprintf(stderr, "cannot create the headless port\n");
+            return 2;
+        }
+        port.log = cap_log;
+        port.user = &cap;
+        port.fps_cap = 0;
+
+        /* Wrap the port's own writer rather than replacing it, so the counters
+         * it keeps are still the evidence. */
+        g_orig_write = port.pcm_write;
+        port.pcm_write = bounded_write;
+        port.pcm_free = bounded_free;
+
+        memset(&opts, 0, sizeof(opts));
+        opts.jar_path = jar;
+        /* The OTHER MIDlet in the fixture: AudioDemo calls notifyDestroyed()
+         * when startApp() returns, so the frame loop would end at once and
+         * nothing would pump.  This one stays alive and is bounded by
+         * --run-frames instead. */
+        opts.midlet_class = "snd.AudioLoop";
+        opts.heap_bytes = 4u * 1024u * 1024u;
+        opts.run_frames = 60u;      /* 60 * 256 = 15360 frames of room */
+        (void)nj_run(&port, &opts);
+
+        frames = nj_port_headless_pcm_frames(&port);
+        printf("--- bounded device (256 frames per call) ---\n");
+        printf("frames the device accepted: %ld of 4410\n", frames);
+        ok(contains(cap.buf, "AUDIO playing=1"),
+           "the MIDlet left a WAV playing");
+        ok(frames == 4410,
+           "the whole file is delivered across frames, not just the first push");
+        ok(nj_port_headless_pcm_closes(&port) >= 1,
+           "the device is closed once the file ends");
+        nj_port_shutdown(&port);
     }
 
     printf("\n%d checks, %d failures\n", checks, fails);

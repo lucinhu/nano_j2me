@@ -332,6 +332,20 @@ struct nj_vm {
     nj_ref     current_displayable;
     nj_ref     thread_group;
 
+    /*
+     * Players currently feeding the audio device, as a java.util.Vector of
+     * javax.microedition.media.Player.
+     *
+     * nj_media_frame() tops these up once per emulated frame, which is how a
+     * WAV longer than the device's buffer keeps playing on a port whose
+     * pcm_write() accepts only so much at a time.  It lives on the VM for the
+     * usual reason: two VMs in one process must not be able to see each
+     * other's audio, and a file-scope list would do exactly that.
+     *
+     * NULL until something plays, so a MIDlet with no sound never pays for it.
+     */
+    nj_ref     media_players;
+
     /* seeded identity hash */
     nj_u4      hash_seed;
 

@@ -454,6 +454,11 @@ int nj_port_headless_pcm_opens(const nj_port *p)
     return (p && p->ud) ? HS(p->ud)->pcm_opens : -1;
 }
 
+int nj_port_headless_pcm_closes(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->pcm_closes : -1;
+}
+
 int nj_port_headless_pcm_format(const nj_port *p, int *rate, int *channels)
 {
     if (!p || !p->ud) {

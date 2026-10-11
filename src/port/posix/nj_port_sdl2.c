@@ -562,6 +562,31 @@ static int sdl_pcm_free(void *ud)
 /* ------------------------------------------------------------------ */
 /* Input                                                               */
 /* ------------------------------------------------------------------ */
+/*
+ * Inject a synthetic event, so --keys works here as it does headless.
+ *
+ * The queue and the polling side already existed; only the way IN was missing,
+ * which meant a scripted run against this port silently ignored every key.  A
+ * port that draws a window is the one a person actually watches, so that is
+ * exactly where "the keys did nothing" is hardest to diagnose.
+ */
+static int sdl_input_push(void *ud, const nj_event *ev)
+{
+    sdl_state *s = SS(ud);
+    int next;
+
+    if (!s || !ev) {
+        return 0;
+    }
+    next = (s->qt + 1) % (int)(sizeof(s->queue) / sizeof(s->queue[0]));
+    if (next == s->qh) {
+        return 0;               /* full: drop rather than overwrite a real key */
+    }
+    s->queue[s->qt] = *ev;
+    s->qt = next;
+    return 1;
+}
+
 static int sdl_input_poll(void *ud, nj_event *ev)
 {
     sdl_state *s = SS(ud);
@@ -650,6 +675,7 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
     out->display_init = sdl_display_init;
     out->display_present = sdl_display_present;
     out->input_poll = sdl_input_poll;
+    out->input_push = sdl_input_push;
     out->shutdown = sdl_shutdown;
     out->fps_cap = 30;
     return NJ_OK;

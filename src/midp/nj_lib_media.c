@@ -107,10 +107,32 @@ static nj_field *mfld(nj_vm *vm, const char *cls, const char *name,
     return nj_field_lookup(vm, cls, name, desc, 0);
 }
 
+/*
+ * Int and boolean fields are both read and written as ints, but they are
+ * DIFFERENT fields with different descriptors, and the lookup is by descriptor.
+ * These helpers hardcoded "I", so every read of a Z field - F_P_OPEN is one -
+ * silently returned 0 however the field was set.  That is the same mistake as
+ * the cOwner lookup on the wrong class: a helper that assumes a descriptor
+ * instead of being told one.
+ */
 static nj_s4 r_i(nj_vm *vm, nj_ref o, const char *name)
 {
     nj_field *f = mfld(vm, NJ_C_PLAYER, name, "I");
     return f ? nj_field_read_int(vm, o, f) : 0;
+}
+
+static nj_s4 r_z(nj_vm *vm, nj_ref o, const char *name)
+{
+    nj_field *f = mfld(vm, NJ_C_PLAYER, name, "Z");
+    return f ? nj_field_read_int(vm, o, f) : 0;
+}
+
+static void w_z(nj_vm *vm, nj_ref o, const char *name, nj_s4 v)
+{
+    nj_field *f = mfld(vm, NJ_C_PLAYER, name, "Z");
+    if (f) {
+        nj_field_write_int(vm, o, f, v ? 1 : 0);
+    }
 }
 
 static void w_i(nj_vm *vm, nj_ref o, const char *name, nj_s4 v)
@@ -502,14 +524,112 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
     return took;
 }
 
+/* ------------------------------------------------------------------ */
+/* The playback registry                                               */
+/* ------------------------------------------------------------------ */
 /*
- * Called once per emulated frame by nj_midp_frame().  Pushing a whole WAV from
- * inside start() would work on a desktop and overrun the DMA buffer on a part,
- * so the Player keeps its position and this tops the device up.  A port whose
- * pcm_free() is NULL accepts everything and this does nothing after the first
- * call.
+ * Which Players are still feeding the device, so nj_media_frame() can top them
+ * up once per emulated frame.
+ *
+ * The list lives on the VM (nj_vm.media_players), not in this file, because two
+ * VMs in one process must not be able to see each other's audio - the same rule
+ * every other piece of runtime state follows.
  */
-void nj_media_frame(nj_vm *vm);
+static int media_register(nj_vm *vm, nj_ref player)
+{
+    nj_ref v = vm->media_players;
+    nj_value a[1];
+
+    if (!v) {
+        v = nj_object_new(vm, "java/util/Vector");
+        if (!v) {
+            nj_clear_exception(vm);
+            return 0;
+        }
+        vm->media_players = v;
+    }
+    a[0].r = player;
+    if (nj_call(vm, v, "java/util/Vector", "addElement",
+                "(Ljava/lang/Object;)V", a, NULL) != NJ_OK) {
+        nj_clear_exception(vm);
+        return 0;
+    }
+    return 1;
+}
+
+static void media_unregister(nj_vm *vm, nj_ref player)
+{
+    nj_ref v = vm->media_players;
+    nj_s4 n, i;
+
+    if (!v) {
+        return;
+    }
+    n = vec_size(vm, v);
+    for (i = n - 1; i >= 0; i--) {
+        if (vec_at(vm, v, i) == player) {
+            nj_value a[1];
+            a[0].r = player;
+            (void)nj_call(vm, v, "java/util/Vector", "removeElement",
+                          "(Ljava/lang/Object;)Z", a, NULL);
+            break;              /* registered at most once per start() */
+        }
+    }
+}
+
+/*
+ * Called once per emulated frame by nj_midp_frame().
+ *
+ * Pushing a whole WAV from inside start() works on a desktop and overruns the
+ * DMA buffer on a part, so the Player keeps its position and this tops the
+ * device up.  A port whose pcm_write() accepts everything finishes the file on
+ * the first push and the entry comes straight back out again, so this costs one
+ * empty walk per frame on a desktop.
+ *
+ * Walked BACKWARDS: a Player that finishes during the walk removes itself, and
+ * iterating forwards would then skip the entry that shifted into its place.
+ */
+void nj_media_frame(nj_vm *vm)
+{
+    nj_ref v;
+    nj_s4 n, i;
+
+    if (!vm || !vm->media_players || !vm->port || !vm->port->pcm_write) {
+        return;
+    }
+    v = vm->media_players;
+    n = vec_size(vm, v);
+    for (i = n - 1; i >= 0; i--) {
+        nj_ref p = vec_at(vm, v, i);
+        int room = 1 << 20;      /* a port with no pcm_free takes everything */
+
+        if (!p) {
+            continue;
+        }
+        if (vm->port->pcm_free) {
+            room = vm->port->pcm_free(vm->port->ud);
+            if (room <= 0) {
+                continue;       /* device still full: try again next frame */
+            }
+        }
+        (void)pcm_push(vm, p, room);
+        if (r_i(vm, p, F_P_PUSHED) >= r_i(vm, p, F_P_FRAMES)) {
+            /* Played to the end: STOP the Player and say so, which is what
+             * MIDP's END_OF_MEDIA is for. */
+            if (r_i(vm, p, F_P_KIND) == 1 && r_z(vm, p, F_P_OPEN)) {
+                if (vm->port->pcm_close) {
+                    vm->port->pcm_close(vm->port->ud);
+                }
+                w_z(vm, p, F_P_OPEN, 0);
+            }
+            if (r_i(vm, p, F_P_STATE) == 400) {
+                w_i(vm, p, F_P_STATE, 300);
+                fire(vm, p, "endOfMedia");
+            }
+            media_unregister(vm, p);
+        }
+    }
+}
 
 /* ------------------------------------------------------------------ */
 /* Natives: Manager                                                    */
@@ -893,13 +1013,18 @@ NJFN(player_start)
                                       n);
         }
     } else if (vm->port && vm->port->pcm_open) {
-        if (!r_i(vm, self, F_P_OPEN)) {
+        if (!r_z(vm, self, F_P_OPEN)) {
             if (vm->port->pcm_open(vm->port->ud, (int)r_i(vm, self, F_P_RATE),
                                    (int)r_i(vm, self, F_P_CHAN)) == 0) {
-                w_i(vm, self, F_P_OPEN, 1);
+                w_z(vm, self, F_P_OPEN, 1);
             }
         }
         (void)pcm_push(vm, self, 1 << 20);
+        /* On the registry only while there is more to play: a port that takes
+         * the whole file at once is done here and never appears in a frame. */
+        if (r_i(vm, self, F_P_PUSHED) < r_i(vm, self, F_P_FRAMES)) {
+            (void)media_register(vm, self);
+        }
     }
     w_i(vm, self, F_P_STATE, 400);
     fire(vm, self, "started");
@@ -915,11 +1040,12 @@ NJFN(player_stop)
             if (vm->port && vm->port->tone_stop) {
                 vm->port->tone_stop(vm->port->ud);
             }
-        } else if (r_i(vm, self, F_P_OPEN) && vm->port
+        } else if (r_z(vm, self, F_P_OPEN) && vm->port
                    && vm->port->pcm_close) {
             vm->port->pcm_close(vm->port->ud);
-            w_i(vm, self, F_P_OPEN, 0);
+            w_z(vm, self, F_P_OPEN, 0);
         }
+        media_unregister(vm, self);
         w_i(vm, self, F_P_STATE, 300);
         fire(vm, self, "stopped");
     }
@@ -989,14 +1115,33 @@ NJFN(player_removeListener)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref v = r_r(vm, self, F_P_LISTEN, "Ljava/util/Vector;");
-    (void)v; (void)self;
-    NJ_UNUSED(args);
+    nj_ref l = NJ_ARG_REF(args, 0);
+    nj_s4 n;
+
+    if (!v || !l) {
+        return NJ_OK;           /* MIDP: not there is not an error */
+    }
     /*
-     * MIDP says removing a listener that is not there is a no-op, so the common
-     * case needs no work.  Removing one that IS there is rare enough - a game
-     * tears the Player down instead - that leaving the entry is a documented
-     * limitation rather than a reason to grow the Vector API here.
+     * Removes the FIRST occurrence, which is what Vector.removeElement does and
+     * what MIDP specifies: a listener added twice is two registrations, and one
+     * removal takes one away.  This was a no-op, so a game that removed its
+     * listener kept being called - and a listener holding a destroyed screen
+     * would then be invoked through it.
      */
+    n = vec_size(vm, v);
+    {
+        nj_s4 i;
+        for (i = 0; i < n; i++) {
+            nj_ref e = vec_at(vm, v, i);
+            if (e == l) {
+                nj_value a[1];
+                a[0].r = l;
+                (void)nj_call(vm, v, "java/util/Vector", "removeElement",
+                              "(Ljava/lang/Object;)Z", a, NULL);
+                break;
+            }
+        }
+    }
     return NJ_OK;
 }
 
@@ -1456,27 +1601,4 @@ const int nj_lib_media_count =
 /* ------------------------------------------------------------------ */
 /* The per-frame pump                                                  */
 /* ------------------------------------------------------------------ */
-/*
- * Declared in nj_midp.h and called once per emulated frame.  There is no
- * registry of live players to walk - that would be VM state for one small job -
- * so instead each STARTED sampled Player is topped up when the frame loop asks.
- * The alternative, pushing a whole WAV from start(), overruns a device with a
- * small buffer; a port that accepts everything is unaffected because the first
- * push finishes the file.
- *
- * Finding the players without a registry means walking the heap, which is not
- * something to do per frame.  So this is deliberately a no-op unless a port
- * actually needs it: pcm_free() is the port saying "I have a bounded buffer",
- * and a port that does not provide it never reaches the loop below.
- */
-void nj_media_frame(nj_vm *vm)
-{
-    (void)vm;
-    /*
-     * A port with a bounded device buffer sets pcm_free(); the pulling loop
-     * lives in the Player that owns the data, and until there is a registry the
-     * honest thing is to say so rather than to scan the heap every frame.
-     * Playback of a WAV longer than the device buffer therefore advances only
-     * as far as the first push on such a port - see docs/COMPATIBILITY.md.
-     */
-}
+

@@ -141,9 +141,60 @@ public class AudioDemo extends MIDlet implements PlayerListener {
 }
 JAVA
 
+# A SECOND MIDlet in the same JAR, and the reason is worth stating: AudioDemo
+# above calls notifyDestroyed() when startApp() returns, so the frame loop ends
+# at once and nothing pumps.  A WAV longer than the device buffer can only be
+# delivered ACROSS frames, so testing that needs a MIDlet that stays alive.
+cat > "$WORK/src/snd/AudioLoop.java" <<'JAVA'
+package snd;
+
+import javax.microedition.midlet.MIDlet;
+import javax.microedition.media.Manager;
+import javax.microedition.media.Player;
+import java.io.InputStream;
+
+/*
+ * Starts a WAV and stays running.  The test bounds it with --run-frames, and a
+ * port that accepts only 256 frames per call can only receive the whole 4410
+ * frame file if the runtime keeps pushing once per frame.
+ */
+public class AudioLoop extends MIDlet {
+
+    /*
+     * A screen, because a MIDlet with no Displayable does not get a frame loop
+     * at all - the runner has nothing to present and stops.  A game with sound
+     * has both; this fixture needs both for the same reason.
+     */
+    static class Screen extends javax.microedition.lcdui.Canvas {
+        protected void paint(javax.microedition.lcdui.Graphics g) {
+            g.setColor(0x000000);
+            g.fillRect(0, 0, getWidth(), getHeight());
+        }
+    }
+
+    public void startApp() {
+        try {
+            javax.microedition.lcdui.Display.getDisplay(this)
+                .setCurrent(new Screen());
+            InputStream in = getClass().getResourceAsStream("/res/beep.wav");
+            Player p = Manager.createPlayer(in, "audio/x-wav");
+            p.realize();
+            p.prefetch();
+            p.start();
+            System.out.println("AUDIO playing=1");
+        } catch (Throwable t) {
+            System.out.println("AUDIO playing=0 " + t);
+        }
+        /* deliberately NOT notifyDestroyed() */
+    }
+    public void pauseApp() { }
+    public void destroyApp(boolean u) { }
+}
+JAVA
+
 CP="$(python3 "$ROOT/tools/midp_stubs.py" --quiet)"
 javac -source 8 -target 8 -nowarn -cp "$CP" -d "$WORK/classes" \
-      "$WORK/src/snd/AudioDemo.java"
+      "$WORK/src/snd/AudioDemo.java" "$WORK/src/snd/AudioLoop.java"
 
 mkdir -p "$WORK/classes/META-INF"
 cat > "$WORK/classes/META-INF/MANIFEST.MF" <<'MF'
