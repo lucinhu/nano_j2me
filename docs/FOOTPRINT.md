@@ -151,29 +151,66 @@ result on an emulated ESP32-S3:
 So the ROM boots, the second-stage bootloader reads the partition table, the
 application image is loaded and `app_main` runs.
 
-**The runtime does not come up yet.** `nj_vm_create()` returns NULL, and after
-adding a message to every failure path in `vm_setup()` - an API that returns
-NULL without saying why is unusable on a target with no debugger, which is
-exactly where it gets called - the answer is precise:
+**The runtime now comes up on emulated ESP32-S3.** `nj_vm_create()` succeeds,
+`nj_app_open()` succeeds, `nj_vm_new_midlet()` succeeds - the whole VM with every
+builtin class registered - and then `nj_vm_start_app()` returns a failure status
+with no exception set, so the MIDlet's `startApp()` never runs:
 
-    nj2me: nj_vm_create: heap failed
+    I (72) nj2me: sizeof(nj_vm)=3832, arena 136 KiB
+    E (82) nj2me: nj_vm_start_app failed: (no exception)
+    NJ2ME DONE rc=1 frames=0
 
-so `nj_heap_init()` is what fails. `nj_heap_init` calls
-`nj_host_alloc(vm, size)`, which uses `vm->port->alloc` when the port provides
-one and `malloc` otherwise. `vm->port` **is** assigned before the call, and the
-port's allocator reports its own exhaustion through the log (it did not), so the
-allocation is not reaching the port allocator at all - it is going to `malloc`,
-which fails because ESP-IDF has 133 KiB of internal RAM free at that point and
-the arena is 210 KiB.
+That is where it stands. `(no exception)` is the thing to chase: a status
+without a throw, on a path that works on the desktop, which means the difference
+is in what the runner sets up that this image does not.
 
-That is the thing to check next: whether `vm->port->alloc` is really non-NULL at
-that point in an IDF build, and if it is, why `nj_host_alloc` is not using it.
-The two diagnostics added this round make it a five-minute question rather than
-a session:
+## Three bugs the ESP32 bring-up found, all fixed
 
-* `vm_setup()` names the step that failed, through the port's log.
-* the bare port's allocator logs what it was asked for, what it has used and what
-  it has, instead of going quiet.
+**The port allocator contract was undocumented and unmet.** `nj_heap_init()`
+rejects an arena whose base is not `NJ_OBJ_ALIGN` (16) aligned, because the arena
+holds long and double fields - and it can only reject, so a port that aligns to 8
+fails with "nj_vm_create: heap failed" and nothing else. The desktop `malloc`
+happened to satisfy it; a bump allocator over a static array did not.
+`NJ_OBJ_ALIGN` is now public in `nj_config.h`, the contract is written in
+`nj_port.h`, and `nj_heap_init()` says which of the two possibilities failed.
+The IDF image now uses `heap_caps_aligned_alloc(NJ_OBJ_ALIGN, n,
+MALLOC_CAP_SPIRAM)` and gets both PSRAM and alignment from the SDK, which is also
+what `nj_port_esp32.c` does on real hardware.
+
+**The pool handed to `nj_vm_create()` covers three things, not one:** the VM
+instance, the Java arena, and the interned-string/constant tables plus the native
+registry, which want about 32 KiB each. Sizing it as "sizeof(nj_vm) + java heap"
+fails with "statics failed".
+
+**`NJ_MAX_STACK_SLOTS` defaults to 64 KiB of slots per Java thread** (8192 slots
+x 8-byte `nj_value`), which is a desktop number - with 16 threads it is a
+megabyte of stacks, and the symptom is "nj_vm_create: main thread failed" with
+nothing to suggest memory. The IDF component now sets 1024 slots (8 KiB), 96
+frames and 128 interned strings, next to the reason, rather than leaving an
+embedder to discover them one crash at a time.
+
+## Why PSRAM does not work under QEMU
+
+Not a configuration mistake, and not a branch problem. QEMU's `esp32s3` machine
+does create an `ssi_psram` device (asking for another one reports "CS index 0x0
+in use"), but IDF's PSRAM init reads the chip's ID over SPI and gets nothing
+back, so it reports:
+
+    E (59) quad_psram: PSRAM chip is not connected, or wrong PSRAM line mode
+
+and retries until it gives up. That is [espressif/qemu#129][psram], still open.
+It is **not** fixed by the `esp-develop` branch as installed: this was tested
+against `esp_develop_9.2.2_20260417`, the newest release, downloaded and run for
+the purpose, and it fails identically to `20250817`.
+
+[psram]: https://github.com/espressif/qemu/issues/129
+
+So the QEMU image runs with `CONFIG_SPIRAM=n`. That is not a workaround that
+hides anything: with SPIRAM off IDF leaves **356 KiB** free rather than 133 KiB,
+because the PSRAM init itself is what consumes the difference - so the emulated
+run has more usable RAM without it. The code keeps the PSRAM path
+(`MALLOC_CAP_SPIRAM` first, internal RAM as fallback), so a real board takes the
+path this environment cannot exercise.
 
 DECISION: the framebuffer is 64x64 and the heap comes from internal SRAM.  The
 real port puts the heap in PSRAM and draws to a panel; this image exists to prove

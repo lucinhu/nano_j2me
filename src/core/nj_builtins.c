@@ -55,6 +55,8 @@ void nj_builtins_register_all(nj_vm *vm)
                 nj_class **nb = (nj_class **)nj_host_alloc(
                     vm, (nj_size)cap * sizeof(nj_class *));
                 if (!nb) {
+                    nj_logf(vm, 0, "out of host memory registering builtin "
+                                   "classes (%d so far)", (int)vm->nbuiltins);
                     return;
                 }
                 if (vm->builtins) {

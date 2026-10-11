@@ -53,7 +53,7 @@ static const char *TAG = "nj2me";
  *     guarantees it rather than hoping the linker agreed;
  *   - enough room for all three consumers, which a hand-sized array got wrong.
  */
-#define NJ_QEMU_HEAP (300u * 1024u)
+#define NJ_QEMU_HEAP (340u * 1024u)
 
 static unsigned char g_port_state[28u * 1024u];
 
@@ -120,8 +120,8 @@ void app_main(void)
      * first time and obvious afterwards.
      */
     ESP_LOGI(TAG, "sizeof(nj_vm)=%u, arena %u KiB", (unsigned)nj_vm_sizeof(),
-             (unsigned)((NJ_QEMU_HEAP - nj_vm_sizeof() - 65536u) / 1024u));
-    vm = nj_vm_create(&port, NJ_QEMU_HEAP - nj_vm_sizeof() - 65536u);
+             (unsigned)((NJ_QEMU_HEAP - nj_vm_sizeof() - 200u * 1024u) / 1024u));
+    vm = nj_vm_create(&port, NJ_QEMU_HEAP - nj_vm_sizeof() - 200u * 1024u);
     if (!vm) {
         ESP_LOGE(TAG, "nj_vm_create failed");
         return;
