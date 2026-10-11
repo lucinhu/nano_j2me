@@ -64,20 +64,26 @@ usually skip, and they are exactly the parts old games use.
 
 | Component | State |
 |---|---|
-| ZIP/JAR reader, DEFLATE inflate | **done**, 410 assertions, ASan/UBSan clean, fuzz-tested |
+| ZIP/JAR reader, DEFLATE inflate | **done** — fuzzed, ASan/UBSan clean |
 | Class-file parser and linker | **done** |
 | Bytecode interpreter (CLDC 1.1) | **done** |
 | Object model, arena heap, mark & sweep GC | **done** |
 | Cooperative threads and scheduler | **done** |
 | Exceptions, C-to-Java bridge | **done** |
 | `java.lang` core, `Math`, `Thread`, wrappers | **done** |
-| `javax.microedition.lcdui` | in progress |
-| `javax.microedition.lcdui.game` | planned |
-| `java.util`, `java.io`, RMS | in progress |
-| Software rasterizer | in progress |
-| PNG decoder, bitmap fonts | in progress |
+| `javax.microedition.lcdui` | **done** |
+| `javax.microedition.lcdui.game` | **done** |
+| `java.util`, `java.io`, RMS | **done** |
+| Software rasterizer | **done** |
+| PNG and baseline JPEG decoders, bitmap fonts | **done**, behind a pluggable codec registry |
 | Ports: headless (reference) | **done** |
-| Ports: SDL2, Android, ESP32-S3 | planned |
+| Ports: SDL2 | **done** |
+| Ports: Android (NDK + JNI), ESP32-S3 (ESP-IDF) | **done**, compile-verified |
+| Test suite | **11/11 passing** (`ctest`) |
+
+Verified end to end: **Tumbleweed** (`net.frog_parrot.jump.Jump`, Apress 2004)
+plays on the headless port at 176x208 — scrolling ground, an animated sprite, a
+live score and countdown. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 ## Building
 

@@ -29,10 +29,34 @@ unsafety the way a JIT can — but every array access, cast and stack-depth
 assumption is still checked at run time, so malformed input raises a Java error
 rather than corrupting C state.
 
-Verified against real third-party archives: `tools/fetch_test_games.sh` pulls
-the published binaries for *J2ME Games with MIDP 2* (Apress, 2004), which were
-built by javac 1.4 targeting CLDC 1.0. All of them parse and link with zero
-failures.
+## Verified titles
+
+`tools/fetch_test_games.sh` pulls the published binaries for *J2ME Games with
+MIDP 2* (Apress, 2004), built by javac 1.4 targeting CLDC 1.0 - class file
+version 46, with the legacy jsr/ret finally blocks a 2004 toolchain emitted.
+
+| Title | Class | Result |
+|---|---|---|
+| Tumbleweed (`jump.jar`) | `net.frog_parrot.jump.Jump` | **plays** at 176x208 or larger: scrolling ground, an animated sprite, a live score and countdown (see [docs/images/tumbleweed.png](images/tumbleweed.png)) |
+| Maze (`maze.jar`) | 4 classes | parses, links, starts |
+| Hello (`hello.jar`) | 2 classes | parses, links, starts |
+
+All three parse and link with zero failures. Tumbleweed is the demanding one: it
+uses `GameCanvas`, `LayerManager`, `Sprite` with frame animation, `TiledLayer`,
+`Font` metrics, `Image` loading from the JAR, a background game-loop thread, and
+`System.getProperty` - and it is the title that found most of the bugs listed at
+the bottom of [ARCHITECTURE.md](ARCHITECTURE.md).
+
+It also gates itself on the device, which is worth knowing when trying it:
+
+```java
+DISP_WIDTH  = getWidth();
+DISP_HEIGHT = getHeight();
+if (DISP_WIDTH < 150 || DISP_HEIGHT < 170) throw new Exception("Screen too small");
+```
+
+so run it with `--size 176x208` or larger; at 240x320 it refuses with its own
+Alert (which the runtime renders correctly, title bar and all).
 
 Specifically supported:
 
