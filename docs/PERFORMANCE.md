@@ -77,64 +77,73 @@ Peak equal to used means the collector is not being forced to grow: the arena is
 allocated once at `nj_vm_create()` and the high-water mark is the live set, not
 a sequence of expansions. `tests/test_lifecycle.c` is what holds this to
 account across repeated create/run/destroy cycles.
+## ESP32-S3: measured on the real architecture under QEMU
 
-## ESP32-S3: an estimate, and its assumption
+The estimate that used to be here has been replaced by a measurement.  The
+runtime runs a MIDlet on **emulated ESP32-S3 hardware** (Xtensa LX7), inside
+ESP-IDF, booted through the real ROM and second-stage bootloader:
 
-This is an **estimate**, not a measurement. There is no ESP32-S3 here and the
-toolchain is not installed, so nothing below has been run on the target.
+    I (85) nj2me:   after nj_vm_new_midlet classes=123 heap=2816/2816
+    BENCH sum=-136042548 s=5
+    I (9935) nj2me: frames=0 bytecodes=112117067 natives=1170 heap=88224/88224
+    NJ2ME DONE rc=0 frames=0
 
-The arithmetic, so it can be checked and corrected:
+**112,117,067 bytecodes - the same count the desktop reports for the same
+fixture.**  That is the result worth having: the interpreter executes the same
+work on Xtensa as on x86-64, which says much more than a frame rate does.
 
-    bytecodes_per_second(target) = clock_hz / cycles_per_bytecode(target)
-    frames_per_second(target)   ~= bytecodes_per_second(target) / bytecodes_per_frame
+Reproduce:
 
-`cycles_per_bytecode` on this x86-64 host is 5036 MHz / 550 M/s ~= 9 cycles.
-The Xtensa LX7 in an ESP32-S3 is a dual-core 240 MHz in-order core with a much
-shallower pipeline and no out-of-order execution. A switch-dispatch interpreter
-is branch-heavy and cache-resident, which is the worst case for an in-order
-core, so a slowdown of 4-8x per bytecode over this host is a defensible range:
-**36-72 cycles per bytecode**, i.e.
+    cd tests/embedded/idf
+    idf.py set-target esp32s3 build
+    idf.py merge-bin -o flash.bin && truncate -s 4M flash.bin
+    qemu-system-xtensa -machine esp32s3 -nographic \
+        -drive file=flash.bin,if=mtd,format=raw \
+        -global driver=timer.esp32s3.timg,property=wdt_disable,value=true
 
-    bytecodes_per_second(ESP32-S3) ~= 240e6 / (36..72) ~= 3.3 .. 6.7 M/s
+The guest clock reports 9.85 s for the run, about 11.4 M bytecodes per
+guest-second.  **Read that as an emulator figure, not a hardware one**: QEMU does
+not model timing, so it does not pay for cache misses, flash wait states or PSRAM
+latency, and it does not account for them either.  The claim this supports is
+that the bytecode COUNT is exact and identical to the desktop, and that the rate
+is the right order of magnitude - which is still worth having, because the
+estimate it replaces (3.3-6.7 M/s, from 36-72 cycles per bytecode) was 2-3x too
+pessimistic.  The part of that estimate that was wrong is the cycles-per-bytecode
+penalty assumed for an in-order core, not the arithmetic around it.
 
-What that buys depends entirely on the game. The two real titles above, measured
-at 240x320 and 60 fps over 600 presented frames:
+What the two real titles need per frame, measured at 176x208 and 60 fps over 600
+frames: `jump.jar` ~235 bytecodes, `maze.jar` ~378.  At 11 M/s that is 30,000 and
+47,000 frames per second.  The interpreter is not the constraint at these
+resolutions; the panel is.
 
-* `maze.jar` executes ~736 bytecodes per presented frame.
-* `jump.jar` reports far fewer, and that figure is not trustworthy yet - see the
-  open question below.
+## A measurement mistake worth recording
 
-At 736 bytecodes per frame:
+An earlier revision reported `jump.jar` at 147 bytecodes over 600 frames against
+`maze.jar` at 441,870, and left it as an open question about the scheduler.  It
+was not a scheduler bug: it was measured at 240x320, and `jump.jar` refuses any
+screen larger than 250 in either axis -
 
-    6.7e6 / 736 ~= 9100 fps      (fast end of the range)
-    3.3e6 / 736 ~= 4500 fps      (slow end)
+    if (DISP_WIDTH > 250 || DISP_HEIGHT > 250) throw new Exception("Screen too large");
 
-So the interpreter is not the constraint at 240x320 on an ESP32-S3: even the
-pessimistic end leaves two orders of magnitude over 30 fps. The constraint on
-that part is the panel and the SPI/DMA bandwidth for a 240x320 frame, not the
-bytecode rate.
+so it threw, drew its own error Alert and never started its game thread.  The
+counters were right; the measurement was at a resolution the title does not
+support.  Two things follow, both now in the tools: `tools/run_game_corpus.sh`
+tries a list of sizes per title and records which worked, and a per-frame figure
+is only quoted next to the resolution it was taken at.
 
-Two obvious caveats, stated rather than buried:
+## Notes on the ESP32 bring-up that cost the most time
 
-1. The host has a 2 MB L2 and megabytes of L3; the ESP32-S3 has 512 KB of SRAM
-   with the Java heap and the framebuffer competing for it. A game whose working
-   set does not fit will be far slower than this arithmetic suggests, and
-   `nj_port_esp32.c`'s PSRAM path is what that is for.
-2. `maze.jar` is not a heavy game. A title that does per-pixel work in Java
-   every frame would be limited by the interpreter; the number to watch is
-   bytecodes per frame, and `--stats` reports it.
+Three of them, all now fixed and all in the runtime rather than the port, because
+each produced a message that pointed somewhere other than the cause:
 
-To replace this estimate with a measurement, on the hardware:
-
-    idf.py build flash monitor
-    # the ESP-IDF example already feeds --stats-equivalent counters through
-    # nj_vm_get_stats(); run bench.jar and read the rate off the console.
-
-## Open question
-
-`jump.jar` reports 147 bytecodes over 600 presented frames while `maze.jar`
-reports 441,870 over the same. Both render correctly - `jump.jar` animates, keeps
-score and countdown - so the game logic is running somewhere the counter is not
-seeing, or the thread is being scheduled far less often than the picture
-suggests. Compare with `maze.jar`, whose thread is scheduled normally, before
-trusting any bytecodes-per-frame figure for a threaded title.
+* `nj_heap_init()` rejects an arena that is not 16-byte aligned and can only
+  reject, so a port whose allocator aligns to 8 gets "nj_vm_create: heap failed"
+  and nothing else.  The alignment requirement is part of the allocator contract,
+  it is written down in `nj_port.h`, and the error now says which of the two
+  possible causes it is.
+* The pool handed to `nj_vm_create()` covers the VM instance, the Java arena AND
+  the statics plus native registry - about 32 KiB each for the last two.  Sizing
+  it as "sizeof(nj_vm) + java heap" fails with "statics failed".
+* `NJ_MAX_STACK_SLOTS` defaults to 64 KiB of slots per Java thread, a desktop
+  number; the symptom of leaving it is "main thread failed" with nothing to
+  suggest memory.

@@ -85,6 +85,16 @@ void app_main(void)
     nj_ref midlet = 0;
     int rc = 1;
     int started = 0;
+#define SNAP(what)                                                        \
+    do {                                                                  \
+        nj_vm_stats ss;                                                   \
+        if (vm) {                                                         \
+            nj_vm_get_stats(vm, &ss);                                     \
+            ESP_LOGI(TAG, "  after %-16s classes=%u heap=%lu/%lu", what,  \
+                     (unsigned)ss.classes, (unsigned long)ss.heap_used,   \
+                     (unsigned long)ss.heap_peak);                        \
+        }                                                                 \
+    } while (0)
 
     ESP_LOGI(TAG, "nano_j2me on %s, heap %u KiB, free internal %u KiB",
              CONFIG_IDF_TARGET, (unsigned)(NJ_QEMU_HEAP / 1024u),
@@ -127,15 +137,29 @@ void app_main(void)
         return;
     }
 
+    SNAP("nj_vm_create");
     app = nj_app_open(vm, nj_bare_jar, nj_bare_jar_len);
+    SNAP("nj_app_open");
     if (!app) {
         ESP_LOGE(TAG, "nj_app_open failed: %s",
                  nj_exception_describe(vm) ? nj_exception_describe(vm) : "?");
-    } else if (nj_vm_new_midlet(vm, 0, &midlet) != NJ_OK) {
-        ESP_LOGE(TAG, "nj_vm_new_midlet failed: %s",
+    } else if (!(midlet = nj_vm_new_midlet(vm, nj_app_midlet_class(app, 0),
+                                           NULL))) {
+        /* Two mistakes cancelled each other here for several rounds:
+         * nj_vm_new_midlet() takes a CLASS NAME and returns a REF, and the
+         * name has to come from the manifest - there is no "pass NULL and it
+         * picks one for you".  Passing NULL returns NULL, and comparing that
+         * pointer against NJ_OK (which is 0) reads as success.  So the MIDlet
+         * was NULL, nj_vm_start_app() returned NJ_ERR on its first line, and
+         * the log said "startApp failed" about a MIDlet that had never been
+         * created. */
+        ESP_LOGE(TAG, "nj_vm_new_midlet(%s) failed: %s",
+                 nj_app_midlet_class(app, 0) ? nj_app_midlet_class(app, 0) : "?",
                  nj_exception_describe(vm) ? nj_exception_describe(vm) : "?");
     } else {
-        nj_status st = nj_vm_start_app(vm, midlet);
+        nj_status st;
+        SNAP("nj_vm_new_midlet");
+        st = nj_vm_start_app(vm, midlet);
         if (st != NJ_OK) {
             /* The STATUS, not just "failed": a call that returns an error
              * without an exception is a different bug from one that throws, and

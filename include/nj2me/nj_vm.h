@@ -47,6 +47,23 @@ nj_u4   nj_vm_destroy(nj_vm *vm);
 
 
 nj_status nj_vm_start_app(nj_vm *vm, nj_ref midlet);  /* calls MIDlet.startApp() */
+/*
+ * Create a MIDlet instance.
+ *
+ * `class_name` IS REQUIRED - there is no "pass NULL and it picks one from the
+ * manifest".  The name comes from the manifest, via nj_app_midlet_class():
+ *
+ *     nj_ref m = nj_vm_new_midlet(vm, nj_app_midlet_class(app, 0), NULL);
+ *     if (!m) { ... }                    // NULL on failure
+ *     nj_vm_start_app(vm, m);
+ *
+ * Two things about this are easy to get wrong and both cost time here: passing
+ * NULL returns NULL immediately, and the return is a REF, so comparing it
+ * against NJ_OK (which is 0) reads a NULL as success.  Test it for NULL.
+ *
+ * On failure the reason is returned through out_exc when it is non-NULL, and is
+ * NOT left on the VM.
+ */
 nj_ref  nj_vm_new_midlet(nj_vm *vm, const char *class_name, nj_ref *out_exc);
 
 nj_thread *nj_thread_self(nj_vm *vm);
