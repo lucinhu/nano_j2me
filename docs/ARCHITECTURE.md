@@ -243,3 +243,78 @@ entirely, and a future change could reintroduce any of them.
 | `src/midp/nj_midp.h` | the contract between MIDP modules |
 | `src/gfx/` | rasterizer, fonts, PNG |
 | `src/zip/` | DEFLATE and ZIP |
+
+---
+
+## Is a JIT possible? What was left open, and what was not
+
+Asked directly, and the answer is yes - so this section records which doors are
+open, which are shut, and what was deliberately NOT built.
+
+### Already in this design's favour
+
+* **The collector does not move objects.**  `src/core/nj_heap.c` is a non-moving
+  mark & sweep over a contiguous arena.  This removes the hardest problem in
+  JIT-ing a Java VM: a compiled method can hold raw object pointers in registers
+  and on the stack, because nothing will ever relocate what they point at.  A
+  moving collector would force either handles, or read/write barriers, or a
+  pinning protocol on every compiled frame.
+
+* **There is exactly one execution seam.**  `nj_exec()` has two callers,
+  `nj_thread_start()` in `nj_thread.c` and the C bridge in `nj_vm.c`.  A JIT is
+  an alternative to that function, chosen at those two sites - not a change
+  spread through the runtime.
+
+* **Methods are the unit of dispatch.**  A call resolves once to an `nj_method *`
+  and every call site goes through it, so "this method has compiled code" is one
+  pointer to add to a structure that is already mutable runtime state.
+
+* **All state belongs to `nj_vm`.**  The project's rule already says where a JIT
+  context, a code cache and a compilation queue would live.  Nothing needs to be
+  invented; the rule covers it.
+
+### The real blocker, stated plainly
+
+**There is no verifier.**  The operand stack is untyped at run time, which is why
+every reference read from it is range-checked before use and why the interpreter
+carries a per-instruction bounds check.  A JIT that wants to emit good code needs
+to know the types on the stack - and this runtime has never computed them.
+
+That does not make a JIT impossible; it makes *a good one* impossible without
+more work.  A **template or baseline JIT** - compile each method's basic blocks
+to a fixed sequence of calls into the existing helpers, with no type
+specialisation and no register allocation across operations - needs no verifier
+at all, because every operation stays dynamic.  It would be a real speedup on
+call-heavy code and it is the honest first step.  Anything cleverer needs the
+verifier first, and jelatine's is 13,194 lines.
+
+### What was added, and what was refused
+
+**Added: executable memory as a port capability.**  `nj_port.code_alloc` /
+`code_commit` / `code_free`.  This is not the same request as the existing
+`alloc()`: that returns memory the CPU may read and write, and on every platform
+this project targets such memory may not be EXECUTED.  A port that cannot supply
+it leaves all three NULL and the runtime falls back to the interpreter.
+
+`code_commit` is where the two details that break naive JITs live: the
+instruction cache must be synchronised after writing (ARM, Xtensa and RISC-V all
+require it; x86 does it in hardware) and a W^X platform must flip the pages from
+write to execute there.
+
+It was added NOW rather than when needed because a port is a published contract -
+a capability added later means revisiting every port and breaking every
+out-of-tree one.  It cost one line per port and one NULL check in a caller that
+does not exist yet.  `tests/test_port_code.c` is that caller: it allocates, writes
+machine code, commits, **jumps into it**, and checks the answer, because
+compiling an API proves nothing about whether the pages are executable.
+
+**Refused: a speculative `jit` field on `nj_vm`, and an engine wrapper around
+`nj_exec`.**  Both would be dead code today.  The first is already implied by the
+rule that all state lives on `nj_vm`; the second would add an indirection to the
+hottest path in the program to serve a caller that does not exist.  The seam is
+the two call sites, and a comment there names them as such - which is worth more
+than a function that forwards its arguments.
+
+**Also refused: writing any part of a JIT.**  Not one line.  A half-built JIT is
+a second execution engine to keep correct, and this project's value is that its
+one engine is right.

@@ -316,6 +316,10 @@ if(NJ_BUILD_TESTS)
   nj_add_test(test_zip       tests/test_zip.c ${NJ_FIXTURES})
   nj_add_test(test_codec     tests/test_codec.c)
 
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_port_code.c)
+    nj_add_test(test_port_code tests/test_port_code.c)
+  endif()
+
   foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${extra_test}.c)
       nj_add_test(${extra_test} tests/${extra_test}.c)

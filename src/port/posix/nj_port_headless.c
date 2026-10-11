@@ -29,6 +29,8 @@
 #include "nj2me/nj_types.h"
 #include "nj2me/nj.h"
 
+#include <sys/mman.h>
+
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -147,6 +149,84 @@ static void hl_idle(void *ud)
 }
 
 static int hl_input_push(void *ud, const nj_event *ev);
+
+/* ------------------------------------------------------------------ */
+/* Executable memory                                                   */
+/* ------------------------------------------------------------------ */
+/*
+ * The reference implementation of the code_alloc/code_commit contract, and it
+ * is worth having one: an API with no implementation is an API that has never
+ * been checked, and the three platform details it hides are easy to get wrong.
+ *
+ *   - mmap gives writable pages that are NOT executable.  Handing those back
+ *     and calling it done is the classic mistake: the JIT writes code and the
+ *     first jump faults.
+ *   - so code_commit flips them to read+execute, which is also what a W^X
+ *     policy requires - the pages are writable while being written and never
+ *     executable at the same time.
+ *   - and the instruction cache has to be synchronised afterwards.  x86 does
+ *     this in hardware and __builtin___clear_cache is a no-op there; on ARM,
+ *     Xtensa and RISC-V it is not, and skipping it produces code that runs the
+ *     first time and executes stale bytes afterwards.
+ *
+ * We record the length in a header word so code_free can munmap the same range
+ * without the caller having to remember it.
+ */
+typedef struct hl_code_block {
+    nj_size len;                /* total, header included */
+} hl_code_block;
+
+static void *hl_code_alloc(void *ud, nj_size n)
+{
+    void *p;
+    nj_size total;
+    (void)ud;
+
+    if (n == 0u) {
+        return NULL;
+    }
+    total = n + sizeof(hl_code_block);
+    p = mmap(NULL, (size_t)total, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        return NULL;
+    }
+    ((hl_code_block *)p)->len = total;
+    return (unsigned char *)p + sizeof(hl_code_block);
+}
+
+static int hl_code_commit(void *ud, void *p, nj_size n)
+{
+    unsigned char *base;
+    nj_size total;
+    (void)ud;
+
+    if (!p) {
+        return -1;
+    }
+    base = (unsigned char *)p - sizeof(hl_code_block);
+    total = ((hl_code_block *)base)->len;
+    if (n + sizeof(hl_code_block) > total) {
+        return -1;              /* the caller is describing someone else's block */
+    }
+    __builtin___clear_cache((char *)p, (char *)p + n);
+    if (mprotect(base, (size_t)total, PROT_READ | PROT_EXEC) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static void hl_code_free(void *ud, void *p, nj_size n)
+{
+    nj_size total;
+    (void)ud;
+    (void)n;
+    if (!p) {
+        return;
+    }
+    total = ((hl_code_block *)((unsigned char *)p - sizeof(hl_code_block)))->len;
+    (void)munmap((unsigned char *)p - sizeof(hl_code_block), (size_t)total);
+}
 
 /*
  * Device properties.  These are facts about the MACHINE, which is why they live
@@ -426,6 +506,9 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     out->sleep_ms = hl_sleep_ms;
     out->idle = hl_idle;
     out->device_property = hl_device_property;
+    out->code_alloc = hl_code_alloc;
+    out->code_commit = hl_code_commit;
+    out->code_free = hl_code_free;
     out->input_push = hl_input_push;
     out->tone_play = hl_tone_play;
     out->tone_stop = hl_tone_stop;

@@ -254,6 +254,39 @@ typedef struct nj_port {
      * like".  Used to avoid holding a whole WAV in memory on a small part. */
     int   (*pcm_free)(void *ud);
 
+    /* ---- executable memory (for a JIT; unused by the interpreter) ---- */
+    /*
+     * These are NOT the same request as alloc() above.
+     *
+     * alloc() gives memory the CPU may read and write.  On every platform this
+     * project targets that memory may NOT be executed: it is NX, or it lives in
+     * a region the instruction fetcher cannot reach.  A JIT therefore cannot
+     * put generated code in it, and there is no way to express "give me memory
+     * I can execute" through the existing hooks.
+     *
+     * NOTHING CALLS THESE YET, and that is the point of adding them now.  A
+     * port is a published contract: a capability added later means every port
+     * - desktop, Android, ESP32, Cortex-M - has to be revisited and every
+     * out-of-tree port breaks.  Adding it now costs one line per port and a
+     * NULL check in a caller that does not exist yet.
+     *
+     * A port that cannot supply executable memory leaves all three NULL, and a
+     * JIT would fall back to the interpreter.  That is an honest answer, not a
+     * failure: some parts (and some locked-down operating systems) genuinely
+     * cannot do this, and the runtime must not assume otherwise.
+     *
+     * `code_commit` is where the two hard platform details live:
+     *   - the INSTRUCTION CACHE must be synchronised after writing (ARM, Xtensa
+     *     and RISC-V all need this; x86 does not, so its implementation is
+     *     empty);
+     *   - a W^X platform must flip the pages from write to execute here, having
+     *     handed out writable memory from code_alloc.
+     * Returns 0 on success, negative if the memory cannot be made executable.
+     */
+    void *(*code_alloc)(void *ud, nj_size n);
+    void  (*code_free)(void *ud, void *p, nj_size n);
+    int   (*code_commit)(void *ud, void *p, nj_size n);
+
     /* ---- device properties ---- */
     /*
      * A property this DEVICE reports, or NULL.
