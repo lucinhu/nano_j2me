@@ -238,8 +238,28 @@ nj_status nj_midp_frame(nj_vm *vm)
             return st;
         }
     }
+    if (nj_has_exception(vm)) {
+        nj_logf(vm, 1, "exception escaped into the frame loop: %s",
+                nj_exception_describe(vm));
+        nj_clear_exception(vm);
+    }
 
     /* ---- paint ---- */
+    /*
+     * An exception raised while painting must not survive the frame.
+     *
+     * Nothing else clears vm->exception outside the interpreter, so one throw
+     * in a paint path stays pending forever: the next frame's field lookups
+     * fail, nj_midp_screen() returns NULL, paint bails out before presenting
+     * anything, and the screen freezes on its last image with no error printed
+     * anywhere.  Report it once, per frame, and carry on - a game that throws
+     * in paint() every frame is broken, but it is broken *visibly*.
+     */
+    if (nj_has_exception(vm)) {
+        nj_logf(vm, 1, "exception while painting the displayable: %s",
+                nj_exception_describe(vm));
+        nj_clear_exception(vm);
+    }
     if (nj_midp_paint(vm) == NJ_OK) {
         nj_surface *s = nj_midp_screen(vm);
         if (s && vm->port && vm->port->display_present) {

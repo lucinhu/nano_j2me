@@ -1513,11 +1513,31 @@ NJFN(rnd_setSeed)
 
 NJFN(rnd_init)
 {
-    /* new Random() seeds from the wall clock, like a device with no RTC has to. */
-    nj_value a[1];
+    /*
+     * new Random() seeds from the wall clock, like a device with no RTC.
+     *
+     * This writes the seed itself rather than delegating to rnd_setSeed():
+     * a native reads its receiver through NJ_THIS(args), i.e. args[-1], and
+     * "delegating" would mean calling rnd_setSeed with a locally built
+     * argument array - which has no receiver below it.  That read past the end
+     * of an automatic array is a stack underflow that only faults when the
+     * compiler lays the stack out badly, so it showed up as an intermittent
+     * SIGSEGV in an -O3 build and nowhere else.  A no-argument constructor also
+     * has no args[0] to read a seed from in the first place.
+     */
+    nj_ref r = NJ_THIS(args);
+    nj_field *f = rnd_fseed(vm);
+    nj_field *fh = rnd_fhave(vm);
 
-    a[0].j = nj_now_ms(vm);
-    return rnd_setSeed(vm, th, a, ret);
+    if (!f) {
+        return nj_throw(vm, "java/lang/InternalError", "Random layout");
+    }
+    nj_field_write_long(vm, r, f,
+                        ((nj_s8)nj_now_ms(vm) ^ RND_MULT) & RND_MASK);
+    if (fh) {
+        nj_field_write_int(vm, r, fh, 0);
+    }
+    return NJ_OK;
 }
 
 NJFN(rnd_init_seed)

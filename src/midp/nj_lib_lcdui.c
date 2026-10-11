@@ -3062,11 +3062,22 @@ NJFN(c_repaint)
     nj_s4 w = NJ_ARG_INT(args, 2);
     nj_s4 h = NJ_ARG_INT(args, 3);
 
+    /*
+     * MIDP clips the requested rectangle to the Canvas and does nothing when
+     * the result is empty - it does NOT reject a negative width or height.
+     * Games rely on that: a sprite that has moved off the left edge produces a
+     * negative x, and a computed width can go negative on the frame it leaves.
+     * Throwing here fails a game that is behaving correctly, and it fails it in
+     * startApp(), where the developer has no idea which call is at fault.
+     *
+     * x/y are unused because this runtime repaints the whole displayable every
+     * frame rather than tracking damage rectangles; the clipping below is what
+     * makes the semantics right, not the tracking.
+     */
     NJ_UNUSED(x);
     NJ_UNUSED(y);
-    if (w < 0 || h < 0) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "negative repaint rectangle");
+    if (w <= 0 || h <= 0) {
+        return NJ_OK;   /* empty region: no repaint is requested */
     }
     if (cur != self) {
         /* MIDP silently ignores repaint() on a Displayable that is not shown;
@@ -8049,7 +8060,23 @@ static const nj_builtin_method graphics_methods[] = {
 };
 
 /* ---- Displayable / Canvas ---- */
+/*
+ * The paint-target storage lives on DISPLAYABLE, not on Canvas.
+ *
+ * The frame painter needs somewhere to compose a Form, List, TextBox or Alert
+ * before blitting it to the screen, and it used to call the Canvas-scoped
+ * accessor for all of them.  On anything that is not a Canvas the field lookup
+ * fails, the write goes nowhere, and the painter allocates a fresh
+ * screen-sized image EVERY FRAME - 307 KB per frame at 240x320x4.  The heap
+ * thrashes, img_alloc eventually fails, nj_midp_paint returns an error and the
+ * displayable is never presented at all: a blank screen with no exception
+ * anywhere.  That is exactly how maze.jar (whose first screen is a List) failed
+ * while every unit test, which renders once or twice, passed.
+ */
 static const nj_builtin_field displayable_fields[] = {
+    FLD(F_C_BUFFER,   D_IMAGE,  0),
+    FLD(F_C_WIDTH,    D_INT,    0),
+    FLD(F_C_HEIGHT,   D_INT,    0),
     FLD(F_D_TITLE,    D_STR,    0),
     FLD(F_D_TICKER,   D_TICKER, 0),
     FLD(F_D_LISTENER, D_CL,     0),
@@ -8077,9 +8104,6 @@ static const nj_builtin_method displayable_methods[] = {
 };
 
 static const nj_builtin_field canvas_fields[] = {
-    FLD(F_C_BUFFER,  D_IMAGE, 0),
-    FLD(F_C_WIDTH,   D_INT,   0),
-    FLD(F_C_HEIGHT,  D_INT,   0),
     FLD(F_C_KEYS,    D_INT,   0),
     FLD(F_C_VISIBLE, D_BOOL,  0),
     FLD(F_C_PRESSED, D_BOOL,  0),

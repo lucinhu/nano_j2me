@@ -229,3 +229,81 @@ Worth checking, in order:
 The Alert above shows "java.lang.Except..." clipped at the right edge instead of
 wrapping onto the next line.  MIDP wraps Alert text.  `displayable_render()`'s
 Alert branch in src/midp/nj_lib_lcdui.c draws the string in one run.
+
+---
+
+# Round 9: four bugs fixed, one narrowed; game corpus added
+
+## Fixed
+
+**`Canvas.repaint(x,y,w,h)` threw on a negative width or height.**  MIDP clips
+the rectangle and does nothing when the result is empty; it does not reject it.
+Games rely on that - a sprite that has left the left edge produces a negative x
+- and throwing fails a game that is behaving correctly, in `startApp()`, where
+the developer has no idea which call is at fault.  hello.jar and maze.jar both
+died on this.
+
+**`java.util.Random`'s no-argument constructor read below its own argument
+array.**  `rnd_init` built a local `nj_value[1]` and passed it to
+`rnd_setSeed`, which reads its receiver through `NJ_THIS(args)` == `args[-1]`.
+A local array has nothing below it, so this is a stack-buffer-underflow - ASan
+named it exactly, and it appeared in the wild as an intermittent SIGSEGV in the
+-O3 build and nowhere else.  `rnd_init` now writes the seed itself, which is
+also correct because a no-argument constructor has no `args[0]` to read a seed
+from.
+
+**The paint-target storage was on `Canvas`, so nothing that is not a Canvas
+could be composed.**  The frame painter called the Canvas-scoped accessor for
+Form, List, TextBox and Alert too.  On those the field lookup fails, the write
+goes nowhere, and the painter allocates a fresh screen-sized image *every
+frame* - 307 KB per frame at 240x320x4.  The heap thrashes, `img_alloc`
+eventually fails, `nj_midp_paint` returns an error and the displayable is never
+presented: a blank screen with no exception anywhere.  The three fields now live
+on `Displayable`, which Canvas, Form, List and TextBox all inherit.  Every unit
+test rendered once or twice and so passed throughout.
+
+**A pending exception was never cleared between frames.**  Nothing outside the
+interpreter resets `vm->exception`, so one throw in a paint path stayed pending
+forever: the next frame's field lookups failed, `nj_midp_screen()` returned
+NULL, paint bailed out before presenting, and the screen froze on its last image
+with nothing printed.  `nj_midp_frame` now reports it once per frame and clears
+it, so a game that throws in `paint()` is broken *visibly*.  This is what turned
+maze.jar's silent freeze into a message.
+
+## Added
+
+`tools/run_game_corpus.sh` - a compatibility gate over a directory of JARs.  It
+runs each headless, dumps frames and fails on: not a MIDlet suite, could not
+start, an uncaught exception, nothing ever presented, or a single flat colour.
+It *reports* whether the picture changes; that is not a failure on its own
+because a title may be legitimately static (hello.jar draws "Hello World!" and
+never changes a pixel), so `--strict-motion` makes it fatal when the corpus is
+known to be animated.  Current result: hello PASS (static), jump PASS,
+maze FAIL.
+
+## OPEN: maze.jar throws AbstractMethodError from a virtual `paint` dispatch
+
+`maze.jar` starts, and the first frame reaches its canvas, but
+`MazeCanvas.paint` is then reported as abstract:
+
+    exception escaped into the frame loop: java.lang.AbstractMethodError: paint
+
+Narrowed already:
+
+- `MazeCanvas` **does** declare `protected void paint(Graphics)`, and
+  `nj_method_lookup(MazeCanvas, "paint", "(Ljavax/microedition/lcdui/Graphics;)V")`
+  returns it correctly:
+  `owner=net/frog_parrot/maze/MazeCanvas code=<non-NULL> flags=0004 nmeth=11`
+  (flag 0004 is ACC_PROTECTED, not ACC_ABSTRACT).
+- So the throw does not come from `canvas_call_abstract` (whose own check is
+  satisfied); it comes from the interpreter's `invokevirtual`/`invokeinterface`
+  path, which raises the same error when the *inline cache* hands it a method
+  with no code and ACC_ABSTRACT set.
+
+Next step: make the interpreter's abstract-method error carry the call site.
+`exception_method`/`exception_pc` are only set in `do_unwind`, and this
+exception is raised from the dispatch itself, so the message has no location.
+Setting them there (`vm->exception_method = m; vm->exception_pc = op_pc;`) would
+name the calling method and instruction, which is the missing half of the
+diagnosis.  The likely cause is a stale `ic_target` on a call site that
+dispatched `paint` against a different receiver class earlier.
