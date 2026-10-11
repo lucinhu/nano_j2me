@@ -307,3 +307,62 @@ Setting them there (`vm->exception_method = m; vm->exception_pc = op_pc;`) would
 name the calling method and instruction, which is the missing half of the
 diagnosis.  The likely cause is a stale `ic_target` on a call site that
 dispatched `paint` against a different receiver class earlier.
+
+---
+
+# Round 4: the reference port had a no-op sleep and the wrong clock
+
+Both were in `src/port/posix/nj_port_headless.c`, both invisible until
+`--stats` and `--run-frames` made a run measurable.
+
+**`hl_sleep_ms` did nothing.**  `(void)ms;` and return.  That silently
+disabled the frame limiter on the reference port: `--fps 60` was parsed,
+stored, passed to the VM, and then ignored, so a "60 fps" run presented 1739
+frames a second.  The visible symptom was not the frame rate at all - it was a
+game whose background thread never got scheduled.  `jump.jar` sleeps 50
+emulated milliseconds between updates; the wall clock reached the end of a run
+before the thread woke twice, so the picture never changed while every counter
+said the game was running.  It now calls `nanosleep`.
+
+**`hl_millis` used `clock()`, which is CPU time, not wall time.**  For an
+emulated device that is the wrong clock in a way that breaks everything
+downstream: a guest thread inside `Thread.sleep()` consumes no CPU time, so the
+guest's clock barely advanced while it slept, and `System.currentTimeMillis()`,
+the frame pacer and every timeout in the runtime were measured against a clock
+that stops when the emulator is idle.  A game's own countdown ran at whatever
+rate the host happened to be busy.  It now uses `CLOCK_MONOTONIC`, with
+`_POSIX_C_SOURCE` defined unconditionally at the top of the file - guarding that
+macro on `NJ_USE_LIBC` does not work, because `NJ_USE_LIBC` comes from a header
+included further down.
+
+After both fixes the limiter is honest:
+
+    --fps 60   frames=60  time=0.988s  fps=60.7
+
+# OPEN: jump.jar's game thread does not exist at all under the headless port
+
+Instrumenting `nj_scheduler_step` shows **one** thread in the table for the
+whole run:
+
+    SCHED t=31589640 n=1: [0 st=1 wake=0 fr=0]
+
+`maze.jar` has two (main plus its game thread) and animates.  So
+`JumpCanvas.start()`'s thread is either never created or is destroyed
+immediately, and the frames are identical from the first to the last - the game
+is a still image under this port.
+
+Two things to reconcile before chasing it:
+
+1. Under the SDL2 port with the capture facility, `jump.jar` **did** animate
+   (score, countdown and enemies all visibly changed) - but that run was before
+   the clock fix, so the two are not comparable yet.  Re-run the SDL2 capture
+   first; if it still animates, the difference is in the port, not the game.
+2. A game thread that is never created is silent.  `Thread.start()` used to
+   kill the thread instantly when `run()` resolved to a native (fixed in an
+   earlier round) and that produced exactly this symptom - a permanently blank
+   or frozen screen with nothing logged.  Check whether a constructible failure
+   in that path is still unlogged: `thread_start` should never return without
+   either a live thread or a pending exception.
+
+`maze.jar` is the control: same publisher, same toolkit, same era, and its
+thread is scheduled normally.

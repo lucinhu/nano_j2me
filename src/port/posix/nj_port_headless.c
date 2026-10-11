@@ -1,4 +1,18 @@
 /*
+ * clock_gettime/nanosleep need the POSIX feature macro under -std=c99, which
+ * defines __STRICT_ANSI__ and hides them otherwise.  It has to come before any
+ * system header.
+ */
+/*
+ * Unconditional: NJ_USE_LIBC is defined by nj_config.h, which is included
+ * further down, so guarding on it here would always be false and the macro
+ * would never take effect.
+ */
+#if !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
+/*
  * nano_j2me - nj_port_headless.c
  *
  * The reference port, and the one the test suite uses.
@@ -48,21 +62,56 @@ typedef struct nj_headless_state {
 static nj_u4 hl_millis(void *ud)
 {
     (void)ud;
+    /*
+     * WALL time, not CPU time.
+     *
+     * This used clock(), which measures processor time consumed by this
+     * process.  That is the wrong clock for an emulated device in a way that
+     * breaks everything downstream: a guest thread inside Thread.sleep()
+     * consumes no CPU time, so the guest's clock barely advanced while it
+     * slept, and System.currentTimeMillis(), the frame pacer and every timeout
+     * in the runtime were all measured against a clock that stops when the
+     * emulator is idle.  A game's own countdown ran at whatever rate the host
+     * happened to be busy.
+     */
+#if defined(NJ_USE_LIBC) && NJ_USE_LIBC
     {
-        /* A monotonic-enough clock without <time.h> portability games: the
-         * frame counter plus a real clock when the C library is available. */
-#if defined(CLOCKS_PER_SEC)
+        struct timespec ts;
+        if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+            return (nj_u4)((nj_u8)ts.tv_sec * 1000u
+                           + (nj_u8)(ts.tv_nsec / 1000000));
+        }
         return (nj_u4)((double)clock() * 1000.0 / (double)CLOCKS_PER_SEC);
-#else
-        return 0u;
-#endif
     }
+#elif defined(CLOCKS_PER_SEC)
+    return (nj_u4)((double)clock() * 1000.0 / (double)CLOCKS_PER_SEC);
+#else
+    return 0u;
+#endif
 }
 
 static void hl_sleep_ms(void *ud, nj_u4 ms)
 {
     (void)ud;
+    /*
+     * Actually sleep.  This was a no-op, which quietly disabled the frame
+     * limiter on the reference port: --fps was accepted, stored, and then
+     * ignored, so a "60 fps" run presented 1750 frames a second.  The visible
+     * symptom was a game whose background thread never got scheduled - it
+     * sleeps 50 emulated milliseconds between updates, and the wall clock
+     * reached the end of the run first - so the picture never changed while
+     * every counter said the game was running.
+     */
+#if defined(NJ_USE_LIBC) && NJ_USE_LIBC
+    if (ms > 0u) {
+        struct timespec ts;
+        ts.tv_sec = (time_t)(ms / 1000u);
+        ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
+        nanosleep(&ts, NULL);
+    }
+#else
     (void)ms;
+#endif
 }
 
 static void hl_idle(void *ud)
