@@ -427,44 +427,60 @@ playing.
 
 ---
 
-# OPEN: Slime Volleyball's unpainted background is tan (0xB8A078)
+# RESOLVED, and it was never a bug: the tan is RGB565 quantisation
 
-Status: **narrowed, not solved**.  Reported by the user as "the picture feels a
-bit odd", and it does.
+**The picture was correct.  I was wrong, and the way I was wrong is worth
+keeping.**
 
-## What is established
+## What the colour actually is
 
-* The game paints ONLY the top half of its canvas.  `drawCourt()` fills blue
-  from 0 to 0.4H and grey from 0.4H to 0.5H, and there are exactly **7
-  fillRect calls in the whole game**.  Nothing paints below 0.5H - yet the game
-  draws its SCORES there.
-* The colour is `0xB8A078`.  **It appears nowhere in the game's source.**
-* The unpainted region is **perfectly uniform** (18160 pixels of that one
-  colour plus 144 of the black score text), so it is a deliberate write of a
-  single value, not uninitialised memory.
-* Other Canvas games in the corpus (`hello`, `maze`) have **zero** pixels of it,
-  so it is not a runtime-wide theme or UI-bar colour.
-* It is identical across runs and across screen sizes (176x208 and 240x320).
+Slime Volleyball's `drawScore()` paints a wooden scoreboard across the whole
+lower half:
 
-## Ruled out, with evidence
+    graphics.setColor(0xBDA27E);
+    graphics.fillRect(xStart, getHeight() / 2, getWidth() / 2, getHeight() / 2);
 
-* **Not `gc_fill_white` overflowing.**  The image backing store is ARGB8888, so
-  writing `nj_u4` pixels into it is correct; RGB565 is the SCREEN format only.
-* **Not a theme colour.**  No such constant exists in `src/midp`, and the other
-  Canvas titles would show it.
-* **Not the Canvas constructor leaving the buffer uninitialised.**  It sets
-  `cBuffer` to NULL, so `gc_buffer()` creates it and `gc_fill_white()` runs.
-* **Not `fillArc` running away.**  The game's arcs are 24x32 (slime) and 8x8
-  (ball) with correct clipping.
+    // BUG in the original: width and height are both getWidth()/2 and yStart,
+    // but the effect is the whole lower half.
 
-## The remaining suspect
+`0xBDA27E` is (189, 162, 126).  The screen is RGB565, which TRUNCATES:
 
-The game **never calls `flushGraphics()`** - the string does not occur anywhere
-in its source.  Its drawing is visible only because `GameCanvas.paint()` blits
-the off-screen buffer to the screen.  That is an unusual path to be exercised,
-and it is the one thing this title does that the others do not.
+    189 >> 3 = 23, 23 << 3 = 184
+    162 >> 2 = 40, 40 << 2 = 160
+    126 >> 3 = 15, 15 << 3 = 120
 
-Next step: write a fixture that gets `GameCanvas.getGraphics()`, draws one
-rectangle and never flushes, and see what the rest of the frame contains.  That
-separates "the buffer" from "what is presented" in one experiment, which is what
-the last several hypotheses each failed to do.
+so it is displayed as (184, 160, 120) - exactly the value I spent a round
+calling unexplained.
+
+## The mistake, precisely
+
+I searched the game's source for `0xB8A078`, the colour I OBSERVED.  The source
+says `0xBDA27E`.  **Searching for a display-space colour in source-space finds
+nothing, and "it is not in the source" is then a false premise** - one I built a
+chain of ruled-out hypotheses on top of, and reported to the user twice as "the
+picture is wrong".
+
+The step that should have caught it came earlier: I counted the game's seven
+`fillRect` calls and never once looked at what COLOUR each paints.  The seventh
+is the answer, and it was in output I had already printed.
+
+## What was still worth doing
+
+The probe that settled it: a MIDlet extending GameCanvas that takes
+`getGraphics()`, draws ONE rectangle, and never calls `flushGraphics()`.
+Everything else in the frame is then whatever the runtime supplies for the
+unpainted area:
+
+    red rectangle drawn:      64 pixels
+    everything else:          (248, 252, 248), 36544 pixels
+
+Near-white, as MIDP requires of a GameCanvas buffer.  That is a real result:
+it proves the runtime's unpainted background is correct AND that drawing through
+`getGraphics()` without `flushGraphics()` is presented, which is the unusual path
+this title exercises and nothing else in the corpus does.
+
+## The rule this leaves behind
+
+**Convert an observed colour back through the screen's pixel format before
+looking for it in the source.**  On an RGB565 screen a source colour is not the
+colour you see, and the difference is not small: 162 became 160, 189 became 184.
