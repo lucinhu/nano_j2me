@@ -294,6 +294,17 @@ if(NJ_BUILD_TESTS)
   add_custom_command(TARGET nj_fixtures POST_BUILD
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_fs_jar.sh
     COMMENT "JSR 75 MIDlet fixture")
+  # Two real third-party titles, built into the FIXTURE directory as well as the
+  # corpus one, because test_poke drives them and a test cannot depend on a
+  # gitignored directory that may not exist.
+  add_custom_command(TARGET nj_fixtures POST_BUILD
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_slimevolley_jar.sh
+            ${NJ_FIXTURES}/slimevolley.jar
+    COMMENT "Slime Volleyball fixture (for automated operation)")
+  add_custom_command(TARGET nj_fixtures POST_BUILD
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_game15_jar.sh
+            ${NJ_FIXTURES}/game15.jar
+    COMMENT "15-puzzle fixture (for automated operation)")
   add_custom_command(TARGET nj_fixtures POST_BUILD
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_const_jar.sh
     COMMENT "stub constant fixture")
@@ -344,6 +355,11 @@ if(NJ_BUILD_TESTS)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_consts.c)
     nj_add_test(test_consts tests/test_consts.c
                 ${NJ_FIXTURES}/constdemo.expected)
+  endif()
+
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_poke.c)
+    nj_add_test(test_poke tests/test_poke.c
+                ${NJ_FIXTURES}/slimevolley.jar ${NJ_FIXTURES}/game15.jar)
   endif()
 
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fs.c)
