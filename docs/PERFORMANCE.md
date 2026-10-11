@@ -140,6 +140,30 @@ unambiguous. Two independent sessions on the same binary measured 0.186 s and
 on this machine. (Higher than the 549-590 M/s quoted earlier, because CPU time
 excludes the interference that wall clock was charging for.)
 
+## The measurement was still wrong in one way, and it produced a false positive
+
+**Comparing against a baseline recorded EARLIER is not an A/B.**  Absolute speed
+drifts between sessions on this machine by more than the effect being measured,
+so a number from a previous round is not a control - it is a different
+measurement of a different machine state.
+
+That is exactly how a false positive got through:
+
+                                 recorded then    re-measured in the same session
+    original dispatch            0.186 s          0.182 / 0.184 s
+    256-label dispatch           0.180 s          0.181 / 0.183 s
+    apparent gain                3.3%             0.5%
+
+3.3% looked like a real win.  0.5% is inside the noise.  Both pairs of the
+interleaved A/B favour the new version by the same 0.001 s, which is suggestive
+and not evidence, so the change was REVERTED - 54 lines of explicit opcode labels
+in the hottest function in the program do not earn their place on a 0.5% that
+cannot be distinguished from zero.
+
+**The rule**: measure both variants in the same session, interleaved, and compare
+their minima.  `tools/bench.sh` makes each measurement cheap enough that there is
+no excuse for reusing an old number.
+
 ## Two attempts, now with falsifiable numbers
 
 **Attempt 1: hoist the instruction counter into a register.** `vm->insns++` runs
@@ -162,6 +186,30 @@ on the benchmark, rebuilt `-fprofile-use -fprofile-correction`.
 
 Reverted, because the build system does not need a two-stage configuration to
 buy nothing.
+
+**Replicated dispatch: measured for feasibility, not attempted.**
+
+The remaining classic win is to end every handler with its OWN indirect branch,
+so the branch predictor keys on the handler rather than on one shared dispatch
+site.  That needs each opcode's terminating `break` to become a dispatch to the
+next opcode, and the numbers say it is not a mechanical edit:
+
+    case labels in the dispatch switch   201
+    lines in its body                    958
+    `break` statements                   ~120
+
+**`break` is overloaded.**  One inside an `if` still leaves the switch and must be
+rewritten; one inside a `for` or a nested `switch` must not be.  Brace counting
+cannot tell them apart - it reports 61 candidates one way and 35 the other,
+because the `THROW`/`SAVE`/`CHECK_QUANTUM` macros carry braces of their own that
+the counter cannot see.  A correct transformation needs a real C parser scoped to
+this function, not a regular expression.
+
+The verification would be strong (the benchmark must keep reproducing exactly
+112,117,067 bytecodes, and 12 tests plus a 10-title corpus must pass), but the
+EDIT is the fragile part, and a subtly wrong interpreter is the worst outcome
+available to this project.  Recorded as a real, quantified next step rather than
+attempted badly.
 
 **Why the classic next step is expensive here.** `objdump` shows GCC already
 turns the dispatch switch into a jump table (`cmp $0xc9` / `ja` / indirect jump),
