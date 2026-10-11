@@ -218,14 +218,18 @@ static void v4(nj_vm *vm, nj_ref o, const char *cls, const char *name,
 static nj_ref ctor_ref1(nj_vm *vm, nj_ref obj, const char *cls,
                         const char *desc, nj_ref arg)
 {
-    nj_value a[1], r;
+    nj_value a[1];
     a[0].r = arg;
-    r.r = NULL;
-    if (nj_call_special(vm, obj, cls, "<init>", desc, a, &r) != NJ_OK) {
+    /*
+     * A constructor returns void: the VM does not hand `this` back, so the
+     * object the caller created is what comes out.  (Reading the return slot
+     * here would be reading a union whose upper half the VM does not clear.)
+     */
+    if (nj_call_special(vm, obj, cls, "<init>", desc, a, NULL) != NJ_OK) {
         report_call(vm, "<init>");
         return NULL;
     }
-    return r.r;
+    return obj;
 }
 
 /* Expect a Java exception whose description mentions `cls_part`. */
@@ -1383,25 +1387,42 @@ static void test_layermanager(nj_vm *vm)
     v2(vm, b, NJ_C_LAYER, "setPosition", "(II)V", 0, 0);
     v2(vm, c, NJ_C_LAYER, "setPosition", "(II)V", 0, 0);
     {
-        int i;
+        /* Two SOLID sprites make the whole overlap comparable pixel by pixel. */
+        nj_ref solid_red = mk_sprite_frames(vm, mk_image_fill(vm, 16, 16, C_RED),
+                                            16, 16);
+        nj_ref solid_blue = mk_sprite_frames(vm,
+                                             mk_image_fill(vm, 16, 16, C_BLUE),
+                                             16, 16);
         nj_ref arr[2];
-        arr[0] = a; arr[1] = b;
+        int i;
+
+        /* start from an empty manager */
+        arr[0] = a;
+        arr[1] = b;
+        for (i = 0; i < 2; i++) {
+            nj_value la[1];
+            la[0].r = arr[i];
+            (void)nj_call(vm, m, NJ_C_LAYERMANAGER, "remove",
+                          "(" D_LAYER ")V", la, NULL);
+        }
+        v2(vm, solid_red, NJ_C_LAYER, "setPosition", "(II)V", 0, 0);
+        v2(vm, solid_blue, NJ_C_LAYER, "setPosition", "(II)V", 0, 0);
+        arr[0] = solid_red;
+        arr[1] = solid_blue;
         for (i = 0; i < 2; i++) {
             nj_value la[1];
             la[0].r = arr[i];
             (void)nj_call(vm, m, NJ_C_LAYERMANAGER, "append",
                           "(" D_LAYER ")V", la, NULL);
         }
+        img_wipe(vm, target, C_SENT);
         lm_paint_at(vm, m, g, 0, 0);
-    }
-    CHECK(px_at(vm, target, 0, 0) == C_RED,
-          "the layer at index 0 is painted last (on top)");
-    CHECK(px_at(vm, target, 5, 5) == C_RED,
-          "the whole overlapping area belongs to the top layer");
-    {
-        int i;
-        nj_ref arr[2];
-        arr[0] = a; arr[1] = b;
+        CHECK(px_at(vm, target, 0, 0) == C_RED,
+              "the layer at index 0 is painted last (on top)");
+        CHECK(px_at(vm, target, 5, 5) == C_RED,
+              "the whole overlapping area belongs to the top layer");
+        CHECK(px_at(vm, target, 15, 15) == C_RED,
+              "the top layer covers its full bounds");
         for (i = 0; i < 2; i++) {
             nj_value la[1];
             la[0].r = arr[i];
@@ -1470,6 +1491,7 @@ static void test_gamecanvas(nj_vm *vm)
     nj_ref c = mk_gamecanvas(vm, 0);
     nj_ref buf, g1, g2;
     nj_surface *scr;
+    nj_u4 q_sent = 0u, q_green = 0u, q_blue = 0u, q_red = 0u;
 
     if (!c) {
         CHECK(0, "GameCanvas fixture");
@@ -1527,11 +1549,23 @@ static void test_gamecanvas(nj_vm *vm)
     px_set(vm, buf, 2, 3, C_GREEN);
     px_set(vm, buf, 10, 10, C_BLUE);
 
+    /*
+     * A device panel is usually RGB565, so a colour written to the screen and
+     * read back is quantised.  Ask the surface what each colour becomes and
+     * compare against that, so the assertions hold for any pixel format.
+     */
+    {
+        nj_surface_set(scr, 0, 0, C_SENT);  q_sent = nj_surface_get(scr, 0, 0);
+        nj_surface_set(scr, 0, 0, C_GREEN); q_green = nj_surface_get(scr, 0, 0);
+        nj_surface_set(scr, 0, 0, C_BLUE);  q_blue = nj_surface_get(scr, 0, 0);
+        nj_surface_set(scr, 0, 0, C_RED);   q_red = nj_surface_get(scr, 0, 0);
+    }
+
     nj_surface_fill(scr, C_SENT);
     v0(vm, c, NJ_C_GAMECANVAS, "flushGraphics", "()V");
-    CHECK(nj_surface_get(scr, 2, 3) == C_GREEN,
+    CHECK(nj_surface_get(scr, 2, 3) == q_green,
           "flushGraphics() copies the buffer to the display");
-    CHECK(nj_surface_get(scr, 10, 10) == C_BLUE,
+    CHECK(nj_surface_get(scr, 10, 10) == q_blue,
           "flushGraphics() copies all of it");
     CHECK(px_at(vm, buf, 2, 3) == C_GREEN,
           "flushing does not clear the buffer");
@@ -1541,21 +1575,21 @@ static void test_gamecanvas(nj_vm *vm)
     /* The sub-rectangle form. */
     nj_surface_fill(scr, C_SENT);
     v4(vm, c, NJ_C_GAMECANVAS, "flushGraphics", "(IIII)V", 2, 3, 1, 1);
-    CHECK(nj_surface_get(scr, 2, 3) == C_GREEN,
+    CHECK(nj_surface_get(scr, 2, 3) == q_green,
           "flushGraphics(2,3,1,1) copies that pixel");
-    CHECK(nj_surface_get(scr, 10, 10) == C_SENT,
+    CHECK(nj_surface_get(scr, 10, 10) == q_sent,
           "flushGraphics(2,3,1,1) leaves the rest alone");
 
     /* Zero-sized requests flush nothing. */
     nj_surface_fill(scr, C_SENT);
     v4(vm, c, NJ_C_GAMECANVAS, "flushGraphics", "(IIII)V", 0, 0, 0, 0);
-    CHECK(nj_surface_get(scr, 2, 3) == C_SENT, "a 0x0 flush does nothing");
+    CHECK(nj_surface_get(scr, 2, 3) == q_sent, "a 0x0 flush does nothing");
 
     /* A region that starts outside the canvas is clipped to it. */
     px_set(vm, buf, 1, 1, C_RED);
     nj_surface_fill(scr, C_SENT);
     v4(vm, c, NJ_C_GAMECANVAS, "flushGraphics", "(IIII)V", -5, -5, 10, 10);
-    CHECK(nj_surface_get(scr, 1, 1) == C_RED,
+    CHECK(nj_surface_get(scr, 1, 1) == q_red,
           "a negative flush origin is clipped, not wrapped");
 
     /* paint(Graphics): MIDP's GameCanvas.paint renders the buffer at (0,0). */
@@ -1570,7 +1604,7 @@ static void test_gamecanvas(nj_vm *vm)
             report_call(vm, "GameCanvas.paint");
         }
     }
-    CHECK(nj_surface_get(scr, 2, 3) == C_GREEN,
+    CHECK(nj_surface_get(scr, 2, 3) == q_green,
           "paint(Graphics) renders the off-screen buffer at (0,0)");
     expect_throw(vm, nj_call(vm, c, NJ_C_GAMECANVAS, "paint", "(" D_GFX ")V",
                              &(nj_value){ .r = NULL }, NULL),

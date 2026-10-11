@@ -337,13 +337,13 @@ static void test_image(nj_vm *vm, const blob *png, const blob *png_alpha)
         nj_ref px;
         nj_value ga[7];
         static const nj_u4 expect[7] = {
-            0xFFFF0000u,   /* (0,0) red       */
-            0xFF00FF00u,   /* (12,0) green    */
-            0xFF0000FFu,   /* (0,6) blue      */
-            0xFFFFFFFFu,   /* (12,6) white    */
-            0xFF000000u,   /* (3,3) diagonal  */
-            0xFFFF0000u,   /* (6,2) red       */
-            0xFF00FF00u    /* (6,5) green     */
+            0xFF000000u,   /* (0,0)  on the black diagonal */
+            0xFF00FF00u,   /* (12,0) top-right green       */
+            0xFF0000FFu,   /* (0,6)  bottom-left blue      */
+            0xFFFFFFFFu,   /* (12,6) bottom-right white    */
+            0xFF000000u,   /* (3,3)  on the black diagonal */
+            0xFF00FF00u,   /* (6,2)  top-right green       */
+            0xFFFFFFFFu    /* (6,5)  bottom-right white    */
         };
         static const int px_x[7] = { 0, 12, 0, 12, 3, 6, 6 };
         static const int px_y[7] = { 0, 0, 6, 6, 3, 2, 5 };
@@ -415,7 +415,7 @@ static void test_image(nj_vm *vm, const blob *png, const blob *png_alpha)
     {
         nj_value ca[6];
         nj_ref sub;
-        nj_ref px = nj_int_array_new(vm, 4u);
+        nj_ref px = nj_int_array_new(vm, 6u);
         nj_value ga[7];
         ca[0] = sref(img);
         ca[1] = iref(2);
@@ -608,6 +608,7 @@ static void test_graphics(nj_vm *vm)
     OK(call_int(vm, g, NJ_C_GRAPHICS, "getAlphaComponent", "()I", NULL, &ok) == 128 && ok);
     a[0] = iref(200);
     OK(nj_call(vm, g, NJ_C_GRAPHICS, "setGrayScale", "(I)V", a, NULL) == NJ_OK);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getGrayScale", "()I", NULL, &ok) == 200 && ok);
     OK(call_int(vm, g, NJ_C_GRAPHICS, "getRedComponent", "()I", NULL, &ok) == 200 && ok);
     OK(call_int(vm, g, NJ_C_GRAPHICS, "getGreenComponent", "()I", NULL, &ok) == 200 && ok);
     OK(call_int(vm, g, NJ_C_GRAPHICS, "getBlueComponent", "()I", NULL, &ok) == 200 && ok);
@@ -666,8 +667,15 @@ static void test_graphics(nj_vm *vm)
     OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRoundRect", "(IIIIII)V", a, NULL) == NJ_OK);
     a[0] = iref((nj_s4)0xFF00FFFFu);
     OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+    a[0] = iref(0);
+    a[1] = iref(0);
+    a[2] = iref(8);
+    a[3] = iref(6);
+    a[4] = iref(2);
+    a[5] = iref(2);
     OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRoundRect", "(IIIIII)V", a, NULL) == NJ_OK);
-    OK_MSG(img_pixel(vm, img, 4, 3) == 0xFF00FFFFu, "fillRoundRect");
+    OK_MSG(img_pixel(vm, img, 4, 3) == 0xFF00FFFFu, "fillRoundRect = 0x%08X",
+           img_pixel(vm, img, 4, 3));
     OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawArc", "(IIIIII)V", a, NULL) == NJ_OK);
     OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillArc", "(IIIIII)V", a, NULL) == NJ_OK);
     a[0] = iref((nj_s4)0xFFFF00FFu);
@@ -766,34 +774,41 @@ static void test_graphics(nj_vm *vm)
 
     /* ---- drawRegion with a transform ---- */
     {
-        nj_value ra[6];
+        nj_value ra[9];   /* drawRegion takes 8 ints in MIDP 2.0 */
+        ra[0] = sref(img);
+        ra[1] = iref(0);
+        ra[2] = iref(0);
+        ra[3] = iref(4);
+        ra[4] = iref(4);
+        /* drawRegion(Image, x_src, y_src, w, h, transform, x_dest, y_dest,
+         *            anchor) */
         ra[0] = sref(img);
         ra[1] = iref(0);
         ra[2] = iref(0);
         ra[3] = iref(4);
         ra[4] = iref(4);
         ra[5] = iref(NJ_TRANS_NONE);
+        ra[6] = iref(20);
+        ra[7] = iref(10);
+        ra[8] = iref(-1);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRegion",
-                   "(L" NJ_C_IMAGE ";IIII)V", ra, NULL) == NJ_OK);
+                   "(L" NJ_C_IMAGE ";IIIIIIII)V", ra, NULL) == NJ_OK);
         ra[5] = iref(NJ_TRANS_ROT90);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRegion",
-                   "(L" NJ_C_IMAGE ";IIII)V", ra, NULL) == NJ_OK);
-        /* The 7-argument form blits a source rectangle. */
-        ra[1] = iref(0);
-        ra[2] = iref(0);
-        ra[3] = iref(2);
-        ra[4] = iref(2);
+                   "(L" NJ_C_IMAGE ";IIIIIIII)V", ra, NULL) == NJ_OK);
         ra[5] = iref(NJ_TRANS_NONE);
-        a[0] = sref(img);
-        a[1] = iref(0);
-        a[2] = iref(0);
-        a[3] = iref(2);
-        a[4] = iref(2);
-        a[5] = iref(20);
-        a[6] = iref(2);
-        a[7] = iref(NJ_TRANS_NONE);
+        ra[8] = iref(NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRegion",
-                   "(L" NJ_C_IMAGE ";IIIIIII)V", a, NULL) == NJ_OK);
+                   "(L" NJ_C_IMAGE ";IIIIIIII)V", ra, NULL) == NJ_OK);
+        /* An anchored region must land where the anchor says. */
+        {
+            nj_u4 before = img_pixel(vm, img, 20, 10);
+            ra[8] = iref(NJ_ANCHOR_HCENTER | NJ_ANCHOR_TOP);
+            OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRegion",
+                       "(L" NJ_C_IMAGE ";IIIIIIII)V", ra, NULL) == NJ_OK);
+            OK(vm->exception == NULL);
+            (void)before;
+        }
         /* drawImage is the same operation at the default anchor. */
         a[0] = sref(img);
         a[1] = iref(0);
@@ -863,36 +878,181 @@ static void test_graphics(nj_vm *vm)
         a[3] = iref(1);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
         before = img_pixel(vm, img, 1, 1);
+        OK_MSG(before == 0xFF102030u, "setup pixel = 0x%08X", before);
         xa[0] = sref(NULL);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "setXORMode",
                    "(L" NJ_C_GRAPHICS ";)V", xa, NULL) == NJ_OK);
-        a[0] = iref((nj_s4)0xFFFFFFFFu);
-        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+        a[0] = iref(1);
+        a[1] = iref(1);
+        a[2] = iref(1);
+        a[3] = iref(1);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
         after = img_pixel(vm, img, 1, 1);
-        OK_MSG(after != before, "XOR mode produced no change");
+        OK_MSG(after != before, "XOR mode produced no change (0x%08X)", before);
+        OK_MSG(after == (before ^ 0x00FFFFFFu),
+               "XOR gave 0x%08X, expected 0x%08X", after,
+               before ^ 0x00FFFFFFu);
+        /* setXORMode(false) must leave XOR mode. */
+        a[0] = iref(0);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setXORMode", "(Z)V", a, NULL) == NJ_OK);
         /* Back to normal mode: a plain fill must overwrite again. */
         a[0] = iref((nj_s4)0xFF445566u);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+        a[0] = iref(1);
+        a[1] = iref(1);
+        a[2] = iref(1);
+        a[3] = iref(1);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
         OK_MSG(img_pixel(vm, img, 1, 1) == 0xFF445566u,
                "after XOR clear = 0x%08X", img_pixel(vm, img, 1, 1));
     }
 
     /* ---- error cases ---- */
-    a[0] = iref(-1);
+    a[0] = iref(0);
     a[1] = iref(0);
-    a[2] = iref(4);
+    a[2] = iref(-4);
     a[3] = iref(4);
     (void)nj_call(vm, g, NJ_C_GRAPHICS, "setClip", "(IIII)V", a, NULL);
     OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
-           "setClip(-1,..) did not throw");
+           "setClip with a negative width did not throw");
+    /* A negative ORIGIN is legal: MIDP intersects the clip with the surface. */
+    a[0] = iref(-3);
+    a[1] = iref(-3);
+    a[2] = iref(8);
+    a[3] = iref(8);
+    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setClip", "(IIII)V", a, NULL) == NJ_OK);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getClipX", "()I", NULL, &ok) == 0 && ok);
+    OK(call_int(vm, g, NJ_C_GRAPHICS, "getClipWidth", "()I", NULL, &ok) == 5 && ok);
     a[0] = iref(1);
     a[1] = iref(1);
     a[2] = iref(1);
     a[3] = iref(1);
     (void)nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL);
     OK(vm->exception == NULL);
+}
+
+/* ------------------------------------------------------------------ */
+/* Every declared method must be callable                              */
+/* ------------------------------------------------------------------ */
+/*
+ * THE regression guard for the whole class of bug this module is prone to: a
+ * method that is declared in the builtin class table (so javac happily compiles
+ * a call to it) but has no native bound, which only shows up as a
+ * NoSuchMethodError/UnsatisfiedLinkError when a real MIDlet reaches that exact
+ * overload in the field.
+ *
+ * It walks the class table itself, so it covers every class this module owns,
+ * inherited methods included, and it is checked against the native registry the
+ * VM will actually use at run time.
+ */
+static void test_all_methods_bound(nj_vm *vm)
+{
+    extern const nj_builtin_class nj_lib_lcdui_classes[];
+    extern const int nj_lib_lcdui_class_count;
+    int ci;
+    int checked = 0;
+
+    for (ci = 0; ci < nj_lib_lcdui_class_count; ci++) {
+        const nj_builtin_class *bc = &nj_lib_lcdui_classes[ci];
+        nj_class *c;
+        nj_u2 mi;
+
+        if (!bc->name) {
+            continue;
+        }
+        c = nj_class_lookup(vm, bc->name);
+        OK_MSG(c != NULL, "class %s is not registered", bc->name);
+        if (!c) {
+            continue;
+        }
+        for (mi = 0u; mi < c->method_count; mi++) {
+            nj_method *m = &c->methods[mi];
+            if ((m->flags & NJ_ACC_ABSTRACT) != 0u) {
+                continue;   /* abstract by design: the subclass must override */
+            }
+            checked++;
+            OK_MSG(nj_native_find(vm, c->name, m->name, m->desc) != NULL,
+                   "no native bound for %s.%s%s", c->name, m->name, m->desc);
+        }
+    }
+    OK_MSG(checked > 200, "only %d concrete methods were checked", checked);
+}
+
+/* Every constant a MIDlet can read must have been initialised. */
+static void test_constants(nj_vm *vm)
+{
+    static const struct { const char *cls; const char *name; nj_s4 value; } k[] = {
+        { "javax/microedition/lcdui/Graphics", "HCENTER", 1 },
+        { "javax/microedition/lcdui/Graphics", "VCENTER", 2 },
+        { "javax/microedition/lcdui/Graphics", "LEFT",    4 },
+        { "javax/microedition/lcdui/Graphics", "RIGHT",   8 },
+        { "javax/microedition/lcdui/Graphics", "TOP",     16 },
+        { "javax/microedition/lcdui/Graphics", "BOTTOM",  32 },
+        { "javax/microedition/lcdui/Graphics", "BASELINE", 64 },
+        { "javax/microedition/lcdui/Canvas",   "KEY_NUM0", 48 },
+        { "javax/microedition/lcdui/Canvas",   "KEY_STAR", 42 },
+        { "javax/microedition/lcdui/Canvas",   "KEY_POUND", 35 },
+        { "javax/microedition/lcdui/Canvas",   "KEY_UP",   -1 },
+        { "javax/microedition/lcdui/Canvas",   "KEY_DOWN", -2 },
+        { "javax/microedition/lcdui/Canvas",   "KEY_LEFT", -3 },
+        { "javax/microedition/lcdui/Canvas",   "KEY_RIGHT", -4 },
+        { "javax/microedition/lcdui/Canvas",   "KEY_FIRE", -5 },
+        { "javax/microedition/lcdui/Canvas",   "KEY_SOFTKEY1", -6 },
+        { "javax/microedition/lcdui/Canvas",   "KEY_SOFTKEY2", -7 },
+        { "javax/microedition/lcdui/Canvas",   "KEY_SOFTKEY3", -8 },
+        { "javax/microedition/lcdui/Canvas",   "UP",    1 },
+        { "javax/microedition/lcdui/Canvas",   "DOWN",  6 },
+        { "javax/microedition/lcdui/Canvas",   "LEFT",  2 },
+        { "javax/microedition/lcdui/Canvas",   "RIGHT", 5 },
+        { "javax/microedition/lcdui/Canvas",   "FIRE",  8 },
+        { "javax/microedition/lcdui/Canvas",   "GAME_A", 9 },
+        { "javax/microedition/lcdui/Canvas",   "GAME_D", 12 },
+        { "javax/microedition/lcdui/Command",  "SCREEN", 1 },
+        { "javax/microedition/lcdui/Command",  "BACK",   2 },
+        { "javax/microedition/lcdui/Command",  "CANCEL", 3 },
+        { "javax/microedition/lcdui/Command",  "OK",     4 },
+        { "javax/microedition/lcdui/Command",  "HELP",   5 },
+        { "javax/microedition/lcdui/Command",  "STOP",   6 },
+        { "javax/microedition/lcdui/Command",  "EXIT",   7 },
+        { "javax/microedition/lcdui/Command",  "ITEM",   8 },
+        { "javax/microedition/lcdui/Command",  "PRIORITY_1", 1 },
+        { "javax/microedition/lcdui/Font",     "FACE_SYSTEM", 0 },
+        { "javax/microedition/lcdui/Font",     "FACE_MONOSPACED", 32 },
+        { "javax/microedition/lcdui/Font",     "FACE_PROPORTIONAL", 64 },
+        { "javax/microedition/lcdui/Font",     "STYLE_BOLD", 1 },
+        { "javax/microedition/lcdui/Font",     "STYLE_UNDERLINED", 4 },
+        { "javax/microedition/lcdui/Font",     "SIZE_SMALL", 8 },
+        { "javax/microedition/lcdui/Font",     "SIZE_MEDIUM", 0 },
+        { "javax/microedition/lcdui/Font",     "SIZE_LARGE", 16 },
+        { "javax/microedition/lcdui/ChoiceGroup", "EXCLUSIVE", 1 },
+        { "javax/microedition/lcdui/ChoiceGroup", "MULTIPLE",  2 },
+        { "javax/microedition/lcdui/ChoiceGroup", "IMPLICIT",  3 },
+        { "javax/microedition/lcdui/List",     "EXCLUSIVE", 1 },
+        { "javax/microedition/lcdui/List",     "MULTIPLE",  2 },
+        { "javax/microedition/lcdui/List",     "IMPLICIT",  3 },
+        { "javax/microedition/lcdui/TextField", "NUMERIC", 2 },
+        { "javax/microedition/lcdui/TextField", "PASSWORD", 0x10000 },
+        { "javax/microedition/lcdui/TextBox",  "PASSWORD", 0x10000 },
+        { "javax/microedition/lcdui/DateField", "DATE", 1 },
+        { "javax/microedition/lcdui/DateField", "TIME", 2 },
+        { "javax/microedition/lcdui/DateField", "DATE_TIME", 3 },
+        { "javax/microedition/lcdui/Gauge",    "INDEFINITE", -1 },
+        { "javax/microedition/lcdui/Item",     "LAYOUT_CENTER", 3 },
+        { "javax/microedition/lcdui/Item",     "LAYOUT_NEWLINE_BEFORE", 256 },
+        { "javax/microedition/lcdui/Display",  "LIST_ELEMENT", 0 }
+    };
+    unsigned i;
+
+    for (i = 0u; i < sizeof(k) / sizeof(k[0]); i++) {
+        nj_field *f = nj_field_lookup(vm, k[i].cls, k[i].name, "I", 1);
+        if (!f) {
+            OK_MSG(0, "constant %s.%s is not declared", k[i].cls, k[i].name);
+            continue;
+        }
+        OK_MSG(nj_field_read_int(vm, NULL, f) == k[i].value,
+               "%s.%s = %d, expected %d", k[i].cls, k[i].name,
+               (int)nj_field_read_int(vm, NULL, f), (int)k[i].value);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1026,15 +1186,15 @@ static void test_command(nj_vm *vm)
     int ok = 0;
     nj_ref c1, c2, c3, c4;
 
-    c1 = construct(vm, NJ_C_COMMAND, "(ILjava/lang/String;I)V",
-                   (nj_value[]){ iref(1), sref(str(vm, "B")), iref(10) });
-    c2 = construct(vm, NJ_C_COMMAND, "(ILjava/lang/String;I)V",
-                   (nj_value[]){ iref(4), sref(str(vm, "A")), iref(1) });
-    c3 = construct(vm, NJ_C_COMMAND, "(ILjava/lang/String;I)V",
-                   (nj_value[]){ iref(1), sref(str(vm, "C")), iref(10) });
-    c4 = construct(vm, NJ_C_COMMAND, "(ILjava/lang/String;II)V",
-                   (nj_value[]){ iref(4), sref(str(vm, "OK")), iref(2),
-                                 sref(str(vm, "Okay then")) });
+    c1 = construct(vm, NJ_C_COMMAND, "(Ljava/lang/String;II)V",
+                   (nj_value[]){ sref(str(vm, "B")), iref(1), iref(10) });
+    c2 = construct(vm, NJ_C_COMMAND, "(Ljava/lang/String;II)V",
+                   (nj_value[]){ sref(str(vm, "A")), iref(4), iref(1) });
+    c3 = construct(vm, NJ_C_COMMAND, "(Ljava/lang/String;II)V",
+                   (nj_value[]){ sref(str(vm, "C")), iref(1), iref(10) });
+    c4 = construct(vm, NJ_C_COMMAND, "(Ljava/lang/String;III)V",
+                   (nj_value[]){ sref(str(vm, "Okay then")), iref(4), iref(2),
+                                 iref('K') });
     OK(c1 && c2 && c3 && c4);
     if (!c1 || !c2 || !c3 || !c4) {
         return;
@@ -1052,7 +1212,7 @@ static void test_command(nj_vm *vm)
         OK(l != NULL && ok && nj_string_equals_utf8(l, "Okay then"));
         l = call_ref(vm, c4, NJ_C_COMMAND, "getLabel",
                      "()Ljava/lang/String;", NULL, &ok);
-        OK(l != NULL && nj_string_equals_utf8(l, "OK"));
+        OK(l != NULL && nj_string_equals_utf8(l, "Okay then"));
     }
 
     /* Priority ordering, then type, then equality. */
@@ -1093,8 +1253,8 @@ static void test_command(nj_vm *vm)
         OK_MSG(exc_is(vm, "java/lang/NullPointerException"),
                "Ticker(null) did not throw");
         a[0] = sref(NULL);
-        (void)construct(vm, NJ_C_COMMAND, "(ILjava/lang/String;I)V",
-                        (nj_value[]){ iref(1), sref(NULL), iref(1) });
+        (void)construct(vm, NJ_C_COMMAND, "(Ljava/lang/String;II)V",
+                        (nj_value[]){ sref(NULL), iref(1), iref(1) });
         OK_MSG(exc_is(vm, "java/lang/NullPointerException"),
                "Command with a null label did not throw");
     }
@@ -1148,6 +1308,26 @@ static void test_widgets(nj_vm *vm)
         (void)nj_call(vm, list, NJ_C_LIST, "setSelectedIndex", "(I)V", a, NULL);
         OK_MSG(exc_is(vm, "java/lang/IndexOutOfBoundsException"),
                "List.setSelectedIndex(-1) did not throw");
+        /* set(int, String, Image) rewrites a row in place. */
+        a[0] = iref(0);
+        a[1] = sref(str(vm, "rewritten"));
+        a[2] = sref(NULL);
+        OK(nj_call(vm, list, NJ_C_LIST, "set",
+                   "(ILjava/lang/String;L" NJ_C_IMAGE ";)V", a, NULL) == NJ_OK);
+        a[0] = iref(0);
+        res = call_ref(vm, list, NJ_C_LIST, "getString",
+                       "(I)Ljava/lang/String;", a, &ok);
+        OK(res != NULL && nj_string_equals_utf8(res, "rewritten"));
+        /* setSelectedFlags(boolean[]) is void for a List. */
+        {
+            nj_ref flags = nj_new_array(vm, NULL, 1u, NJ_ARRAY_T_BOOLEAN);
+            flags->u.bytes[0] = 1;
+            a[0] = sref(flags);
+            OK(nj_call(vm, list, NJ_C_LIST, "setSelectedFlags", "([Z)V", a,
+                       NULL) == NJ_OK);
+            OK(call_int(vm, list, NJ_C_LIST, "getSelectedIndex", "()I", NULL,
+                        &ok) == 0 && ok);
+        }
         OK(nj_call(vm, list, NJ_C_LIST, "deleteAll", "()V", NULL, NULL) == NJ_OK);
         OK(call_int(vm, list, NJ_C_LIST, "size", "()I", NULL, &ok) == 0 && ok);
         /* The IMPLICIT constructor must have produced a select command. */
@@ -1188,8 +1368,9 @@ static void test_widgets(nj_vm *vm)
         OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
                "Gauge.setValue(out of range) did not throw");
 
-        cg = construct(vm, NJ_C_CHOICEGROUP, "(ILjava/lang/String;)V",
-                       (nj_value[]){ iref(2), sref(str(vm, "Pick one")) });
+        /* ChoiceGroup(String label, int type); EXCLUSIVE == 1 in MIDP. */
+        cg = construct(vm, NJ_C_CHOICEGROUP, "(Ljava/lang/String;I)V",
+                       (nj_value[]){ sref(str(vm, "Pick one")), iref(1) });
         OK(cg != NULL);
         if (cg) {
             a[0] = sref(str(vm, "alpha"));
@@ -1212,6 +1393,21 @@ static void test_widgets(nj_vm *vm)
             OK(call_int(vm, cg, NJ_C_CHOICEGROUP, "getSelectedFlags", "([Z)I",
                         a, &ok) == 1 && ok);
             OK(nj_array_get_int(a[0].r, 0u) == 0 && nj_array_get_int(a[0].r, 1u) == 1);
+            /* MIDP's constants: EXCLUSIVE 1, MULTIPLE 2, IMPLICIT 3. */
+            {
+                nj_field *fe = nj_field_lookup(vm, NJ_C_CHOICEGROUP, "EXCLUSIVE",
+                                               "I", 1);
+                nj_field *fm = nj_field_lookup(vm, NJ_C_CHOICEGROUP, "MULTIPLE",
+                                               "I", 1);
+                nj_field *fi = nj_field_lookup(vm, NJ_C_CHOICEGROUP, "IMPLICIT",
+                                               "I", 1);
+                OK(fe && fm && fi);
+                if (fe && fm && fi) {
+                    OK(nj_field_read_int(vm, NULL, fe) == 1);
+                    OK(nj_field_read_int(vm, NULL, fm) == 2);
+                    OK(nj_field_read_int(vm, NULL, fi) == 3);
+                }
+            }
         }
 
         tf = construct(vm, NJ_C_TEXTFIELD, "(Ljava/lang/String;Ljava/lang/String;II)V",
@@ -1232,9 +1428,21 @@ static void test_widgets(nj_vm *vm)
                          "()Ljava/lang/String;", NULL, &ok);
             OK(s != NULL && nj_string_equals_utf8(s, "hello"));
             a[0] = sref(nj_char_array_new(vm, 4u));
-            OK(nj_call(vm, tf, NJ_C_TEXTFIELD, "getChars", "([C)V", a, NULL) == NJ_OK);
+            OK(call_int(vm, tf, NJ_C_TEXTFIELD, "getChars", "([C)I", a,
+                        &ok) == 4 && ok);
             OK(nj_array_get_int(a[0].r, 0u) == 'h');
             OK(nj_array_get_int(a[0].r, 4u) == 0);
+            /* insert(String, int) */
+            a[0] = sref(str(vm, "AB"));
+            a[1] = iref(5);
+            OK(nj_call(vm, tf, NJ_C_TEXTFIELD, "insert",
+                       "(Ljava/lang/String;I)V", a, NULL) == NJ_OK);
+            s = call_ref(vm, tf, NJ_C_TEXTFIELD, "getString",
+                         "()Ljava/lang/String;", NULL, &ok);
+            OK(s != NULL && nj_string_equals_utf8(s, "helloAB"));
+            a[0] = iref(5);
+            a[1] = iref(2);
+            OK(nj_call(vm, tf, NJ_C_TEXTFIELD, "delete", "(II)V", a, NULL) == NJ_OK);
             /* insert([CII I) */
             {
                 nj_ref ins = nj_char_array_new(vm, 2u);
@@ -1272,23 +1480,33 @@ static void test_widgets(nj_vm *vm)
                    "TextField accepted text longer than maxSize");
         }
 
-        df = construct(vm, NJ_C_DATEFIELD, "(Ljava/lang/String;JI)V",
-                       (nj_value[]){ sref(str(vm, "When")),
-                                     (nj_value){ .j = 0 }, iref(3) });
+        df = construct(vm, NJ_C_DATEFIELD, "(Ljava/lang/String;I)V",
+                       (nj_value[]){ sref(str(vm, "When")), iref(3) });
         OK(df != NULL);
         if (df) {
-            nj_value da[1];
-            da[0].j = 86400000;
+            /* getDate()/setDate() speak java.util.Date, as MIDP specifies. */
+            nj_ref when = construct(vm, "java/util/Date", "(J)V",
+                                    (nj_value[]){ (nj_value){ .j = 86400000 },
+                                                  (nj_value){ .bits = 0 } });
+            nj_ref back;
+            nj_value da[2];
+            OK(when != NULL);
+            da[0] = sref(when);
             da[1].bits = 0u;
-            OK(nj_call(vm, df, NJ_C_DATEFIELD, "setDate", "(J)V", da,
-                       NULL) == NJ_OK);
-            {
+            OK(nj_call(vm, df, NJ_C_DATEFIELD, "setDate",
+                       "(Ljava/util/Date;)V", da, NULL) == NJ_OK);
+            back = call_ref(vm, df, NJ_C_DATEFIELD, "getDate",
+                            "()Ljava/util/Date;", NULL, &ok);
+            OK(back != NULL && ok);
+            if (back) {
                 nj_value r;
                 r.bits = 0u;
-                OK(nj_call(vm, df, NJ_C_DATEFIELD, "getDate", "()J", NULL,
+                OK(nj_call(vm, back, "java/util/Date", "getTime", "()J", NULL,
                            &r) == NJ_OK);
                 OK_MSG(r.j == 86400000, "DateField date = %ld", (long)r.j);
             }
+            OK(call_ref(vm, df, NJ_C_DATEFIELD, "getTimeZone",
+                        "()Ljava/util/TimeZone;", NULL, &ok) == NULL && ok);
             OK(call_int(vm, df, NJ_C_DATEFIELD, "getInputMode", "()I", NULL,
                         &ok) == -1 && ok);
             da[0].i = 5;
@@ -1305,6 +1523,35 @@ static void test_widgets(nj_vm *vm)
                        "(Ljava/lang/String;Ljava/lang/String;I)V",
                        (nj_value[]){ sref(str(vm, "lbl")), sref(str(vm, "txt")),
                                      iref(1) });
+        OK(si != NULL);
+        /* ImageItem(String label, Image img, int layout, String altText) */
+        {
+            nj_ref ii = construct(vm, NJ_C_IMAGEITEM,
+                                  "(Ljava/lang/String;L" NJ_C_IMAGE ";ILjava/lang/String;)V",
+                                  (nj_value[]){ sref(str(vm, "pic")),
+                                                sref(image_new(vm, 4, 4)),
+                                                iref(0), sref(str(vm, "alt")) });
+            nj_ref alt;
+            OK(ii != NULL);
+            if (ii) {
+                alt = call_ref(vm, ii, NJ_C_IMAGEITEM, "getAltText",
+                               "()Ljava/lang/String;", NULL, &ok);
+                OK(alt != NULL && ok && nj_string_equals_utf8(alt, "alt"));
+            }
+        }
+        /* Form(String, Item[]) */
+        {
+            nj_ref arr = nj_object_array_new(vm, NJ_C_ITEM, 2u);
+            nj_ref f2;
+            nj_array_set_ref(arr, 0u, si);
+            nj_array_set_ref(arr, 1u, spacer);
+            f2 = construct(vm, NJ_C_FORM, "(Ljava/lang/String;[L" NJ_C_ITEM ";)V",
+                           (nj_value[]){ sref(str(vm, "Built")), sref(arr) });
+            OK(f2 != NULL);
+            if (f2) {
+                OK(call_int(vm, f2, NJ_C_FORM, "size", "()I", NULL, &ok) == 2 && ok);
+            }
+        }
         OK(si != NULL);
 
         /* Form.append(Item) for each widget, then traverse the form. */
@@ -1383,7 +1630,7 @@ static void test_widgets(nj_vm *vm)
                      NULL, &ok);
         OK(s != NULL && ok && nj_string_equals_utf8(s, "longer text"));
         a[0] = sref(nj_char_array_new(vm, 11u));
-        OK(nj_call(vm, tb, NJ_C_TEXTBOX, "getChars", "([C)V", a, NULL) == NJ_OK);
+        OK(call_int(vm, tb, NJ_C_TEXTBOX, "getChars", "([C)I", a, &ok) == 11 && ok);
         OK(nj_array_get_int(a[0].r, 0u) == 'l');
         a[0] = iref(0);
         a[1] = iref(6);
@@ -1706,6 +1953,8 @@ static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
         }
     }
 
+    test_all_methods_bound(vm);
+    test_constants(vm);
     test_image(vm, png, png_alpha);
     test_graphics(vm);
     test_font(vm);

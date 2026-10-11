@@ -125,21 +125,55 @@ static const nj_u1 s_zigzag[64] = {
 };
 
 /*
- * s_idct_cos[u][x] = round(C(u) * cos((2x+1) * u * PI / 16) * 4096), Q12,
- * with C(0) = 1/sqrt(2) and C(u>0) = 1 folded in.  Indexed by the natural
- * coefficient row/column u and the output position x; for a reduced transform
- * only u = 0, step, 2*step, ... and x < 8/step are used, which is the
- * standard reduced IDCT described in the file header.
+ * IDCT kernels, Q12, with the normalisation and the reduced-size (box)
+ * weights already folded in:
+ *
+ *     s_idct_kern[k][u][i] = round(C(u) * W(u) * cos((2i+1)u*PI/(2N)) * 4096)
+ *
+ * for the output size N (k = 0 -> 8 (1/1), 1 -> 4 (1/2), 2 -> 2 (1/4)),
+ * C(0) = 1/sqrt(2), C(u>0) = 1, and the box weight
+ *
+ *     W(u) = sin(S*theta) / (S*sin(theta)),  theta = u*PI/16, S = 8/N
+ *
+ * which is 1 at u = 0 (so flat colours survive, see jp_idct_store()) and is
+ * what turns "keep the low-frequency coefficients" into an exact SxS box
+ * average of the block rather than a crop of its top-left corner.  Only the
+ * first N columns of each row are used.
  */
-static const nj_s2 s_idct_cos[8][8] = {
-    {  2896,  2896,  2896,  2896,  2896,  2896,  2896,  2896 },
-    {  4017,  3406,  2276,   799,  -799, -2276, -3406, -4017 },
-    {  3784,  1567, -1567, -3784, -3784, -1567,  1567,  3784 },
-    {  3406,  -799, -4017, -2276,  2276,  4017,   799, -3406 },
-    {  2896, -2896, -2896,  2896,  2896, -2896, -2896,  2896 },
-    {  2276, -4017,   799,  3406, -3406,  -799,  4017, -2276 },
-    {  1567, -3784,  3784, -1567, -1567,  3784, -3784,  1567 },
-    {   799, -2276,  3406, -4017,  4017, -3406,  2276,  -799 }
+static const nj_s2 s_idct_kern[3][8][8] = {
+    /* 1/1 */
+    {
+        {  2896,  2896,  2896,  2896,  2896,  2896,  2896,  2896 },
+        {  4017,  3406,  2276,   799,  -799, -2276, -3406, -4017 },
+        {  3784,  1567, -1567, -3784, -3784, -1567,  1567,  3784 },
+        {  3406,  -799, -4017, -2276,  2276,  4017,   799, -3406 },
+        {  2896, -2896, -2896,  2896,  2896, -2896, -2896,  2896 },
+        {  2276, -4017,   799,  3406, -3406,  -799,  4017, -2276 },
+        {  1567, -3784,  3784, -1567, -1567,  3784, -3784,  1567 },
+        {   799, -2276,  3406, -4017,  4017, -3406,  2276,  -799 }
+    },
+    /* 1/2 */
+    {
+        {  2896,  2896,  2896,  2896,     0,     0,     0,     0 },
+        {  3711,  1537, -1537, -3711,     0,     0,     0,     0 },
+        {  2676, -2676, -2676,  2676,     0,     0,     0,     0 },
+        {  1303, -3146,  3146, -1303,     0,     0,     0,     0 },
+        {     0,     0,     0,     0,     0,     0,     0,     0 },
+        {  -871,  2102, -2102,   871,     0,     0,     0,     0 },
+        { -1108,  1108,  1108, -1108,     0,     0,     0,     0 },
+        {  -738,  -306,   306,   738,     0,     0,     0,     0 }
+    },
+    /* 1/4 */
+    {
+        {  2896,  2896,     0,     0,     0,     0,     0,     0 },
+        {  2624, -2624,     0,     0,     0,     0,     0,     0 },
+        {     0,     0,     0,     0,     0,     0,     0,     0 },
+        {  -922,   922,     0,     0,     0,     0,     0,     0 },
+        {     0,     0,     0,     0,     0,     0,     0,     0 },
+        {   616,  -616,     0,     0,     0,     0,     0,     0 },
+        {     0,     0,     0,     0,     0,     0,     0,     0 },
+        {  -522,   522,     0,     0,     0,     0,     0,     0 }
+    }
 };
 
 /* ------------------------------------------------------------------ */
@@ -202,7 +236,7 @@ typedef struct jp_dec {
     int w, h, prec, ncomp;
     int hmax, vmax;
     int out_w, out_h;
-    int scale, nkeep, step;      /* 1/2/4, 8/4/2, 1/2/4 */
+    int scale, nkeep;            /* 1/2/4 and 8/4/2 */
     int adobe;                   /* APP14 transform, or -1                  */
     int jfif;
     int restart_interval;
@@ -584,7 +618,6 @@ static const char *jp_parse_sof(jp_dec *d, const nj_u1 *seg, nj_u4 len)
 
     d->scale = jp_choose_scale(d->w, d->h, d->want_w, d->want_h);
     d->nkeep = 8 / d->scale;
-    d->step = d->scale;
     d->out_w = (d->w + d->scale - 1) / d->scale;
     d->out_h = (d->h + d->scale - 1) / d->scale;
     d->mcus_x = jp_ceil_div((nj_u4)d->w, (nj_u4)(8 * d->hmax));
@@ -892,88 +925,96 @@ static int jp_restart(jp_bits *b, int *expected)
 
 /*
  * Dequantise and inverse-transform one block into the component plane.
- * `coef` is in natural order and already restricted to the coefficients the
- * current scale keeps.
+ *
+ * At full size this is the plain separable 8x8 IDCT.  At 1/2 and 1/4 it is
+ * the same transform evaluated for 4 (2) output positions per axis with every
+ * input frequency kept and weighted by the box factor W(u) built into
+ * s_idct_kern: that produces the exact SxS average of the block, which is what
+ * "decode at half size" has to mean (a transform that merely dropped the
+ * higher frequencies and sampled the survivors at consecutive positions would
+ * return the block's top-left corner smoothed, and a game's half-size splash
+ * screen would come out visibly cropped and wrong - measured against libjpeg's
+ * own reduced decode, this version agrees to within one level, that one did
+ * not).  W(0) = 1 keeps the DC term, and therefore flat colours, exact.
  */
 static void jp_idct_store(jp_dec *d, const nj_s4 *coef, jp_comp *c,
                           int bx, int by)
 {
     const int n = d->nkeep;
-    const int step = d->step;
+    const int k = (d->scale == 1) ? 0 : ((d->scale == 2) ? 1 : 2);
+    const nj_s2 (*K)[8] = s_idct_kern[k];
     const nj_u2 *q = d->quant[c->tq];
     nj_s4 blk[64];
     nj_s4 tmp[64];
     nj_u1 out[64];
     nj_u1 *dst;
-    int x, y, u, v, flat;
+    int i, j, u, v, flat;
 
     /* Dequantise (clamped: a hostile 16-bit table must not overflow). */
     flat = 1;
-    memset(blk, 0, sizeof(blk));
-    for (v = 0; v < n; v++) {
-        for (u = 0; u < n; u++) {
-            int idx = (v * step) * 8 + (u * step);
-            nj_s4 cv = coef[idx];
+    for (v = 0; v < 8; v++) {
+        for (u = 0; u < 8; u++) {
+            nj_s4 cv = coef[v * 8 + u];
+            nj_s4 val = 0;
 
             if (cv != 0) {
-                nj_s4 val;
-
                 if (cv > 32767) {
                     cv = 32767;
                 } else if (cv < -32767) {
                     cv = -32767;
                 }
-                val = cv * (nj_s4)q[idx];
+                val = cv * (nj_s4)q[v * 8 + u];
                 /* Clamped, not wrapped: an extreme (or hostile) 16-bit
                  * quantisation value must not overflow the transform. */
-                blk[idx] = (val > 16384) ? 16384
-                         : ((val < -16384) ? -16384 : val);
-                if (idx != 0) {
+                val = (val > 16384) ? 16384 : ((val < -16384) ? -16384 : val);
+                if (v != 0 || u != 0) {
                     flat = 0;
                 }
             }
+            blk[v * 8 + u] = val;
         }
     }
 
     if (flat) {
         /* DC only: the whole block is one level, which is what most of a
-         * game's background art consists of. */
-        nj_s4 dc = jp_descale(blk[0] * (nj_s4)s_idct_cos[0][0], 14);
+         * game's background art consists of.  Exactly the same fixed-point
+         * path as below, with only u = v = 0 surviving. */
+        nj_s4 dc = jp_descale(blk[0] * (nj_s4)K[0][0], 14);
 
-        dc = jp_descale(dc * (nj_s4)s_idct_cos[0][0], 12) + 128;
-        y = jp_clamp((int)dc, 0, 255);
-        memset(out, y, (size_t)(n * n));
+        dc = jp_descale(dc * (nj_s4)K[0][0], 12) + 128;
+        v = jp_clamp((int)dc, 0, 255);
+        memset(out, v, (size_t)(n * n));
     } else {
-        /* Pass 1: transform along the horizontal (u) axis. */
-        for (v = 0; v < n; v++) {
-            const nj_s4 *row = &blk[v * step * 8];
+        /* Pass 1: horizontal, every u, n output positions per frequency row. */
+        for (v = 0; v < 8; v++) {
+            const nj_s4 *row = &blk[v * 8];
 
-            for (x = 0; x < n; x++) {
+            for (i = 0; i < n; i++) {
                 nj_s4 acc = 0;
 
-                for (u = 0; u < n; u++) {
-                    nj_s4 cv = row[u * step];
+                for (u = 0; u < 8; u++) {
+                    nj_s4 cv = row[u];
 
                     if (cv != 0) {
-                        acc += cv * (nj_s4)s_idct_cos[u * step][x];
+                        acc += cv * (nj_s4)K[u][i];
                     }
                 }
-                tmp[v * n + x] = jp_descale(acc, 14);
+                tmp[v * n + i] = jp_descale(acc, 14);
             }
         }
-        /* Pass 2: transform along the vertical (v) axis and level shift. */
-        for (x = 0; x < n; x++) {
-            for (y = 0; y < n; y++) {
+        /* Pass 2: vertical, then the level shift. */
+        for (i = 0; i < n; i++) {
+            for (j = 0; j < n; j++) {
                 nj_s4 acc = 0;
 
-                for (v = 0; v < n; v++) {
-                    nj_s4 cv = tmp[v * n + x];
+                for (v = 0; v < 8; v++) {
+                    nj_s4 cv = tmp[v * n + i];
 
                     if (cv != 0) {
-                        acc += cv * (nj_s4)s_idct_cos[v * step][y];
+                        acc += cv * (nj_s4)K[v][j];
                     }
                 }
-                out[y * n + x] = (nj_u1)jp_clamp(jp_descale(acc, 12) + 128,
+                out[j * n + i] = (nj_u1)jp_clamp(jp_descale(acc, 12) + 128,
                                                  0, 255);
             }
         }
@@ -981,8 +1022,8 @@ static void jp_idct_store(jp_dec *d, const nj_s4 *coef, jp_comp *c,
 
     dst = c->plane + (nj_size)by * (nj_size)n * (nj_size)c->pw +
           (nj_size)bx * (nj_size)n;
-    for (y = 0; y < n; y++) {
-        memcpy(dst + (nj_size)y * (nj_size)c->pw, out + y * n, (size_t)n);
+    for (j = 0; j < n; j++) {
+        memcpy(dst + (nj_size)j * (nj_size)c->pw, out + j * n, (size_t)n);
     }
 }
 
@@ -1051,16 +1092,7 @@ static int jp_decode_block(jp_dec *d, jp_bits *b, jp_comp *c, int bx, int by)
             return -1;
         }
         v = jp_receive_extend(b, s);
-        {
-            int idx = (int)s_zigzag[k];
-
-            /* With DCT-domain scaling only the low-frequency lattice
-             * survives; everything else is decoded but discarded. */
-            if (d->step == 1 || (((idx >> 3) % d->step) == 0 &&
-                                 ((idx & 7) % d->step) == 0)) {
-                coef[idx] = (nj_s4)v;
-            }
-        }
+        coef[(int)s_zigzag[k]] = (nj_s4)v;
         k++;
     }
 
@@ -1413,7 +1445,6 @@ nj_image *nj_jpeg_decode(const nj_codec_req *req)
     d.adobe = -1;
     d.scale = 1;
     d.nkeep = 8;
-    d.step = 1;
 
     d.tabs = (jp_tables *)req->alloc(req->ud, (nj_size)sizeof(jp_tables));
     if (d.tabs == NULL) {

@@ -311,6 +311,13 @@ nj_status nj_lib_late_init(nj_vm *vm)
     /* The MIDP layer installs its own static state (the lcdui constants, the
      * Font/AlertType singletons, the font registry).  One line, as agreed in
      * the module contract; it is independent of System.out below. */
+    /*
+     * The LCDUI module owns its own late initialisation (the Display
+     * singleton and the font registry).  It is a separate translation unit so
+     * that a build with LCDUI compiled out still links; the call is therefore
+     * declared here rather than included, and a NULL-returning no-op in a
+     * build without LCDUI is fine.
+     */
     if (nj_lcdui_late_init(vm) != NJ_OK) {
         return NJ_ERR;
     }

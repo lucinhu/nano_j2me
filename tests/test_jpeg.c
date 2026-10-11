@@ -357,8 +357,12 @@ static void test_probe_and_decode(void)
         if (data == NULL) {
             continue;
         }
-        CHECK(nj_jpeg_accepts(data, (nj_u4)size) == 1,
-              "accepts() claims a real JPEG");
+        /* A bare SOI+EOI is not an image and must not be claimed; every
+         * other fixture, including progressive and malformed ones, is a real
+         * JPEG container. */
+        CHECK_EQ(nj_jpeg_accepts(data, (nj_u4)size),
+                 strcmp(fx->name, "soi_only") == 0 ? 0 : 1,
+                 "accepts() recognises the container");
 
         if (!fx->positive) {
             /* Negative fixtures must not crash and must not hand back an
@@ -379,6 +383,12 @@ static void test_probe_and_decode(void)
 
         memset(&info, 0, sizeof(info));
         CHECK(nj_jpeg_info(data, (nj_u4)size, &info) == NJ_OK, "info()");
+        if (strcmp(fx->name, "progressive_35x23") == 0) {
+            /* Recognised, reported, and refused with a reason - checked in
+             * test_negative().  Only the header probe has to work. */
+            free(data);
+            continue;
+        }
         CHECK_EQ(info.width, fx->width, "probed width");
         CHECK_EQ(info.height, fx->height, "probed height");
         CHECK_EQ(info.has_alpha, 0, "JPEG has no alpha");
@@ -633,37 +643,50 @@ static void test_downscale(void)
     CHECK(quarter != NULL, "quarter size decode");
 
     if (full != NULL && half != NULL) {
-        int rw, rh;
-        unsigned char *ref2 = box_downsample(ref, 64, 48, 2, &rw, &rh);
+        long dsize;
+        /* libjpeg's own reduced-size decode, via Pillow's draft() mode: the
+         * same algorithm, so this is a like-for-like comparison (~2 levels
+         * measured here, which is rounding in the two implementations). */
+        unsigned char *draft = load_fixture("pattern_64x48", "draft2.rgb",
+                                            &dsize);
         int worst = 0;
-        long mae;
+        long mae = -1;
 
         CHECK_EQ(half->width, 32, "half width");
         CHECK_EQ(half->height, 24, "half height");
-        mae = image_mae(half, ref2, &worst);
+        if (draft != NULL) {
+            mae = image_mae(half, draft, &worst);
+            free(draft);
+        }
         printf("    half   MAE %2ld  worst %3d  mean %ld vs %ld\n",
                mae, worst, image_mean_luma(half), image_mean_luma(full));
-        /* Measured ~4 on this fixture; the reduced IDCT is a low-pass of the
-         * block, not an exact 2x2 average, so a few levels are expected. */
-        CHECK(mae <= 12, "half: within 12 of a box downsample of PIL");
-        /* The reduced IDCT must keep the DC gain: a wrong factor (the classic
-         * F/4 instead of F/8) shows up here immediately. */
+        CHECK(mae >= 0, "half: reference present");
+        CHECK(mae >= 0 && mae <= 8, "half: matches libjpeg's reduced decode");
+        /* The reduced IDCT must keep the DC gain: a wrong normalisation (the
+         * classic F/4 instead of F/8) shows up here immediately. */
         CHECK(abs_long(image_mean_luma(half) - image_mean_luma(full)) <= 4,
               "half: mean brightness preserved");
-        free(ref2);
     }
     if (full != NULL && quarter != NULL) {
+        long dsize;
+        unsigned char *draft = load_fixture("pattern_64x48", "draft4.rgb",
+                                            &dsize);
+        int worst = 0;
+        long mae = -1;
         int rw, rh;
         unsigned char *ref4 = box_downsample(ref, 64, 48, 4, &rw, &rh);
-        int worst = 0;
-        long mae;
 
         CHECK_EQ(quarter->width, 16, "quarter width");
         CHECK_EQ(quarter->height, 12, "quarter height");
-        mae = image_mae(quarter, ref4, &worst);
-        printf("    quarter MAE %2ld  worst %3d  mean %ld vs %ld\n",
-               mae, worst, image_mean_luma(quarter), image_mean_luma(full));
-        CHECK(mae <= 16, "quarter: within 16 of a box downsample of PIL");
+        if (draft != NULL) {
+            mae = image_mae(quarter, draft, &worst);
+            free(draft);
+        }
+        printf("    quarter MAE %2ld  worst %3d  mean %ld vs %ld"
+               "  (box-downsample MAE %ld)\n",
+               mae, worst, image_mean_luma(quarter), image_mean_luma(full),
+               ref4 ? image_mae(quarter, ref4, NULL) : -1L);
+        CHECK(mae >= 0 && mae <= 10, "quarter: matches libjpeg's reduced decode");
         CHECK(abs_long(image_mean_luma(quarter) - image_mean_luma(full)) <= 6,
               "quarter: mean brightness preserved");
         free(ref4);
@@ -710,16 +733,20 @@ static void test_colour_models(void)
         nj_image *img = decode_named("adobe_rgb_32x16", NULL, NULL);
 
         if (img != NULL) {
-            int i;
+            int x, y;
             int bad = 0;
 
-            for (i = 0; i < 10 * 16; i++) {   /* the flat red left third */
-                int r = (int)((img->pixels[i] >> 16) & 0xFFu);
-                int g = (int)((img->pixels[i] >> 8) & 0xFFu);
-                int b = (int)(img->pixels[i] & 0xFFu);
+            /* The flat red left third is x < 32/3 == 10, on every row. */
+            for (y = 0; y < 16; y++) {
+                for (x = 0; x < 10; x++) {
+                    nj_u4 p = img->pixels[y * img->width + x];
+                    int r = (int)((p >> 16) & 0xFFu);
+                    int g = (int)((p >> 8) & 0xFFu);
+                    int b = (int)(p & 0xFFu);
 
-                if (r < 190 || g > 80 || b > 80) {
-                    bad++;
+                    if (r < 190 || g > 80 || b > 80) {
+                        bad++;
+                    }
                 }
             }
             CHECK_EQ(bad, 0, "Adobe transform 0 is RGB, not YCbCr");

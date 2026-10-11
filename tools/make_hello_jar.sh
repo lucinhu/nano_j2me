@@ -50,6 +50,26 @@ public class HelloWorld {
         return fib(n - 1) + fib(n - 2);
     }
 
+    /*
+     * A nested class with a constructor, plus a static initialiser below.
+     *
+     * These two exist for one specific regression: a `return` (void) used to
+     * leave a spurious slot on the caller's operand stack, so every `new X()`
+     * where X is Java - i.e. every constructor - shifted the caller's stack by
+     * one.  main() itself never showed it because a method called from C
+     * leaves through a different path; a fixture with no Java constructor at
+     * all therefore passed while the bug was present.
+     */
+    static final class Box {
+        int value;
+        String tag;
+        Box(int v) { value = v; tag = "box"; }
+        int doubled() { return value * 2; }
+    }
+
+    /* Forces a <clinit>, which runs Java code from inside the `new` opcode. */
+    static final int[] TABLE = { 3, 1, 4, 1, 5 };
+
     static String describe(int[] values) {
         StringBuffer sb = new StringBuffer();
         int i;
@@ -111,6 +131,19 @@ public class HelloWorld {
         System.arraycopy(squares, 0, copy, 0, 8);
         System.out.println(describe(copy));
 
+        // Constructors: the void-return path, plus a <clinit> triggered from
+        // inside `new`.
+        Box box = new Box(21);
+        System.out.println(String.valueOf(box.value));
+        System.out.println(String.valueOf(box.doubled()));
+        System.out.println(box.tag);
+        System.out.println(String.valueOf(TABLE[4]));
+
+        // Two constructors in a row, so a leaked slot cannot be absorbed.
+        Box a = new Box(1);
+        Box b2 = new Box(2);
+        System.out.println(String.valueOf(a.value + b2.value));
+
         System.out.println("done");
     }
 }
@@ -132,7 +165,10 @@ MicroEdition-Profile: MIDP-2.0
 MicroEdition-Configuration: CLDC-1.1
 MANIFEST
 
-( cd "$WORK/classes" && jar cfm "$OUT" META-INF/MANIFEST.MF HelloWorld.class )
+# Package EVERY class file, not just the top-level one.  A nested class is a
+# separate HelloWorld$Box.class entry, and a game that references one gets
+# NoClassDefFoundError if the packer only listed the outer file.
+( cd "$WORK/classes" && jar cfm "$OUT" META-INF/MANIFEST.MF . )
 
 echo "wrote $OUT"
 unzip -l "$OUT"

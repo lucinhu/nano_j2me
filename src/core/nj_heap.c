@@ -490,11 +490,20 @@ static int nj_is_heap_ptr(nj_vm *vm, const void *p)
 
 static void nj_gc_mark_object(nj_vm *vm, nj_object *o)
 {
-    if (!o || o->mark) {
-        return;
-    }
+    /*
+     * ORDER MATTERS: the range check has to come FIRST.
+     *
+     * The operand stack is untyped, so a Java `int` slot is routinely passed
+     * here as if it were a pointer.  Reading o->mark before establishing that
+     * the address is inside the arena is a wild read, and it is the one place
+     * in the collector where a conservative scan can fault - which it did, on
+     * a slot holding 0x30.
+     */
     if (!nj_is_heap_ptr(vm, o)) {
         return;   /* untyped slot holding a non-reference value */
+    }
+    if (o->mark) {
+        return;
     }
     if (o->kind > NJ_OBJ_THROW || o->size < sizeof(nj_object)) {
         return;   /* not a real object header */

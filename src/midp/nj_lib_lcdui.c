@@ -1498,14 +1498,14 @@ NJFN(g_drawRGB)
     }
     st = NJ_OK;
     {
-        int rop = NJ_ROP_SET;
-        if (g.blend == NJ_BLEND_SRC_OVER || alpha) {
-            rop = NJ_ROP_PAINT;
-        }
-        nj_gfx_draw_rgb(&g, rgb, (int)w * 3, alpha ? 0xFF : 0xFF,
-                        0, 0, 0, 0, (int)w, (int)h, rop, NJ_TRANS_NONE);
-        (void)x;
-        (void)y;
+        /*
+         * NJ_ROP_SET copies the pixels (processAlpha == false); PAINT blends
+         * them, which is what processAlpha == true asks for.
+         */
+        int rop = alpha ? NJ_ROP_PAINT : NJ_ROP_SET;
+        nj_gfx_draw_rgb(&g, rgb, (int)w * 3, 0xFF,
+                        (int)x, (int)y, 0, 0, (int)w, (int)h, rop,
+                        NJ_TRANS_NONE);
     }
     gfx_store(vm, self, &g);
     nj_host_free(vm, rgb);
@@ -2072,7 +2072,8 @@ static nj_ref font_intern(nj_vm *vm, nj_s4 face, nj_s4 style, nj_s4 size)
 
 NJFN(font_getFontStatic1)
 {
-    nj_ref f = font_intern(vm, 0, 0, 0);
+    /* getFont(int style) - the face and size default to SYSTEM / MEDIUM. */
+    nj_ref f = font_intern(vm, 0, NJ_ARG_INT(args, 0), 0);
     if (!f) {
         return vm->exception ? NJ_ERR : nj_throw_oom(vm);
     }
@@ -2573,15 +2574,24 @@ static void item_state_changed(nj_vm *vm, nj_ref item)
 /* ================================================================== */
 /* Displayable                                                         */
 /* ================================================================== */
-NJFN(d_init)
+/*
+ * The core takes the receiver explicitly.  A native reads its receiver as
+ * args[-1], which only exists for a call the VM made; code that builds a
+ * synthetic argument array on the stack must NOT go through the native form,
+ * or args[-1] reads off the end of that array.
+ */
+static void d_init_on(nj_vm *vm, nj_ref self)
 {
-    nj_ref self = NJ_THIS(args);
-
     rput(vm, self, NJ_C_DISPLAYABLE, F_D_TITLE, D_STR, NULL);
     rput(vm, self, NJ_C_DISPLAYABLE, F_D_TICKER, D_TICKER, NULL);
     rput(vm, self, NJ_C_DISPLAYABLE, F_D_LISTENER, D_CL, NULL);
     rput(vm, self, NJ_C_DISPLAYABLE, F_D_COMMANDS, D_VECTOR, NULL);
     fput(vm, self, NJ_C_DISPLAYABLE, F_D_FULL, D_BOOL, 0);
+}
+
+NJFN(d_init)
+{
+    d_init_on(vm, NJ_THIS(args));
     return NJ_OK;
 }
 
@@ -2923,6 +2933,18 @@ NJFN(c_init)
     fput(vm, self, NJ_C_CANVAS, F_C_VISIBLE, D_BOOL, 0);
     fput(vm, self, NJ_C_CANVAS, F_C_PRESSED, D_BOOL, 0);
     return vm->exception ? NJ_ERR : NJ_OK;
+}
+
+/*
+ * Canvas.showNotify()/hideNotify()/drawNotify() are plain hooks a subclass may
+ * override; the default implementations do nothing.  They must be callable, so
+ * they are bound rather than left to a missing native.
+ */
+NJFN(c_visibility_notify)
+{
+    NJ_UNUSED(args);
+    NJ_UNUSED(ret);
+    return NJ_OK;
 }
 
 NJFN(c_getWidth)
@@ -4431,10 +4453,8 @@ static void display_drain_queue(nj_vm *vm)
 /* Item and the widgets                                                */
 /* ================================================================== */
 
-NJFN(item_init)
+static void item_init_on(nj_vm *vm, nj_ref self)
 {
-    nj_ref self = NJ_THIS(args);
-
     rput(vm, self, NJ_C_ITEM, "itLabel", D_STR, NULL);
     fput(vm, self, NJ_C_ITEM, "itLayout", D_INT, -1);
     fput(vm, self, NJ_C_ITEM, "itPrefW", D_INT, -1);
@@ -4444,6 +4464,11 @@ NJFN(item_init)
     rput(vm, self, NJ_C_ITEM, "itCmdListener", D_ICL, NULL);
     rput(vm, self, NJ_C_ITEM, "itOwner", NULL, NULL);
     rput(vm, self, NJ_C_ITEM, "itImage", D_IMAGE, NULL);
+}
+
+NJFN(item_init)
+{
+    item_init_on(vm, NJ_THIS(args));
     return NJ_OK;
 }
 
@@ -4634,12 +4659,10 @@ static const char *string_item_appearance(nj_s4 mode)
 }
 
 /* StringItem(String label, String text[, int appearanceMode]) */
-static nj_status si_init_common(nj_vm *vm, nj_value *args, nj_value *ret,
+static nj_status si_init_common(nj_vm *vm, nj_ref self, nj_value *args,
                                 nj_s4 mode)
 {
-    nj_ref self = NJ_THIS(args);
-
-    (void)item_init(vm, NULL, args, ret);
+    item_init_on(vm, self);
     if (mode < 0 || mode > 2) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "unknown appearance mode");
@@ -4652,12 +4675,12 @@ static nj_status si_init_common(nj_vm *vm, nj_value *args, nj_value *ret,
 
 NJFN(si_init)
 {
-    return si_init_common(vm, args, ret, 0);
+    return si_init_common(vm, NJ_THIS(args), args, 0);
 }
 
 NJFN(si_init_mode)
 {
-    return si_init_common(vm, args, ret, NJ_ARG_INT(args, 2));
+    return si_init_common(vm, NJ_THIS(args), args, NJ_ARG_INT(args, 2));
 }
 
 NJFN(si_getFont)
@@ -5351,9 +5374,8 @@ NJFN(tf_getInitialInputMode)
     return NJ_OK;
 }
 
-NJFN(tf_insert)
+static nj_status tf_insert_on(nj_vm *vm, nj_ref self, nj_value *args)
 {
-    nj_ref self = NJ_THIS(args);
     nj_ref src = NJ_ARG_REF(args, 0);
     nj_s4 off = NJ_ARG_INT(args, 1);
     nj_s4 len = NJ_ARG_INT(args, 2);
@@ -5411,6 +5433,11 @@ NJFN(tf_insert)
     return NJ_OK;
 }
 
+NJFN(tf_insert)
+{
+    return tf_insert_on(vm, NJ_THIS(args), args);
+}
+
 /* insert(String src, int position) - the MIDP 2.0 String overload. */
 NJFN(tf_insert_str)
 {
@@ -5425,7 +5452,7 @@ NJFN(tf_insert_str)
     a[1].i = 0;
     a[2].i = (nj_s4)nj_string_len(str);
     a[3].i = at;
-    return tf_insert(vm, th, a, ret);
+    return tf_insert_on(vm, NJ_THIS(args), a);
 }
 
 NJFN(tf_delete)
@@ -5502,13 +5529,12 @@ static nj_status cg_append_common(nj_vm *vm, nj_ref self, nj_ref str,
                                   nj_ref img);
 
 /* ChoiceGroup(String label, int choiceType) */
-static nj_status cg_init_common(nj_vm *vm, nj_value *args, nj_value *ret,
+static nj_status cg_init_common(nj_vm *vm, nj_ref self, nj_value *args,
                                 nj_s4 type)
 {
-    nj_ref self = NJ_THIS(args);
     nj_ref label = NJ_ARG_REF(args, 0);
 
-    (void)item_init(vm, NULL, args, ret);
+    item_init_on(vm, self);
     if (type < NJ_CHOICE_EXCLUSIVE || type > NJ_CHOICE_IMPLICIT) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "choice type must be EXCLUSIVE, MULTIPLE or IMPLICIT");
@@ -5528,7 +5554,7 @@ static nj_status cg_init_common(nj_vm *vm, nj_value *args, nj_value *ret,
 
 NJFN(cg_init)
 {
-    return cg_init_common(vm, args, ret, NJ_ARG_INT(args, 1));
+    return cg_init_common(vm, NJ_THIS(args), args, NJ_ARG_INT(args, 1));
 }
 
 /* ChoiceGroup(String label, int type, String[] strings, Image[] images) */
@@ -5539,7 +5565,7 @@ NJFN(cg_init_arrays)
     nj_ref imgs = NJ_ARG_REF(args, 3);
     nj_u4 i;
 
-    if (cg_init_common(vm, args, ret, NJ_ARG_INT(args, 1)) != NJ_OK) {
+    if (cg_init_common(vm, self, args, NJ_ARG_INT(args, 1)) != NJ_OK) {
         return NJ_ERR;
     }
     if (!strs || !imgs) {
@@ -6233,13 +6259,12 @@ static void df_set_millis(nj_vm *vm, nj_ref self, nj_s8 t)
 }
 
 /* DateField(String label, int mode[, TimeZone zone]) */
-static nj_status df_init_common(nj_vm *vm, nj_value *args, nj_value *ret,
+static nj_status df_init_common(nj_vm *vm, nj_ref self, nj_value *args,
                                 int with_zone)
 {
-    nj_ref self = NJ_THIS(args);
     nj_s4 mode = NJ_ARG_INT(args, 1);
 
-    (void)item_init(vm, NULL, args, ret);
+    item_init_on(vm, self);
     if (mode < 1 || mode > 3) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "unknown date field mode");
@@ -6257,12 +6282,12 @@ static nj_status df_init_common(nj_vm *vm, nj_value *args, nj_value *ret,
 
 NJFN(df_init)
 {
-    return df_init_common(vm, args, ret, 0);
+    return df_init_common(vm, NJ_THIS(args), args, 0);
 }
 
 NJFN(df_init_zone)
 {
-    return df_init_common(vm, args, ret, 1);
+    return df_init_common(vm, NJ_THIS(args), args, 1);
 }
 
 /* getDate()/setDate() speak java.util.Date, as MIDP specifies. */
@@ -6378,7 +6403,7 @@ NJFN(form_init)
 {
     nj_ref self = NJ_THIS(args);
 
-    (void)d_init(vm, th, args, ret);
+    d_init_on(vm, self);
     rput(vm, self, NJ_C_DISPLAYABLE, F_D_TITLE, D_STR, NJ_ARG_REF(args, 0));
     rput(vm, self, NJ_C_FORM, "fmItems", D_ITEMARR, NULL);
     fput(vm, self, NJ_C_FORM, "fmCount", D_INT, 0);
@@ -6715,12 +6740,8 @@ NJFN(list_init)
 {
     nj_ref self = NJ_THIS(args);
     nj_s4 type = NJ_ARG_INT(args, 1);
-    nj_value a[1];
 
-    a[0].r = NJ_ARG_REF(args, 0);
-    if (d_init(vm, th, a, ret) != NJ_OK) {
-        return NJ_ERR;
-    }
+    d_init_on(vm, self);
     rput(vm, self, NJ_C_DISPLAYABLE, F_D_TITLE, D_STR, NJ_ARG_REF(args, 0));
     rput(vm, self, NJ_C_FORM, "fmItems", D_ITEMARR, NULL);
     fput(vm, self, NJ_C_FORM, "fmCount", D_INT, 0);
@@ -6750,12 +6771,9 @@ NJFN(list_init_arrays)
     nj_ref self = NJ_THIS(args);
     nj_ref strs = NJ_ARG_REF(args, 2);
     nj_ref imgs = NJ_ARG_REF(args, 3);
-    nj_value a[2];
     nj_u4 i;
 
-    a[0].r = NJ_ARG_REF(args, 0);
-    a[1].i = NJ_ARG_INT(args, 1);
-    if (list_init(vm, th, a, ret) != NJ_OK) {
+    if (list_init(vm, th, args, ret) != NJ_OK) {
         return NJ_ERR;
     }
     if (!strs || !imgs) {
@@ -6923,29 +6941,82 @@ NJFN(list_size)
     return NJ_OK;
 }
 
+/*
+ * List keeps its elements as StringItems in the Screen item array, and
+ * list_sync() maintains lsStrings/lsImages as views of those.  These four
+ * accessors therefore work on the List's own arrays: forwarding to the
+ * ChoiceGroup ones would look up ChoiceGroup's fields on a List object, which
+ * is a different class with a different layout.
+ */
 NJFN(list_getString)
 {
-    return cg_getString(vm, th, args, ret);
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref strs = rget(vm, self, NJ_C_LIST, "lsStrings", D_STRARR);
+    nj_s4 n = fget(vm, self, NJ_C_LIST, "lsCount", D_INT);
+
+    if (at < 0 || at >= n || !strs || (nj_u4)at >= strs->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    ret->r = nj_array_get_ref(strs, (nj_u4)at);
+    return NJ_OK;
 }
 
 NJFN(list_setString)
 {
-    nj_status st = cg_setString(vm, th, args, ret);
-    if (st != NJ_OK) {
-        return st;
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref str = NJ_ARG_REF(args, 1);
+    nj_ref items = rget(vm, self, NJ_C_FORM, "fmItems", D_ITEMARR);
+    nj_s4 n = fget(vm, self, NJ_C_LIST, "lsCount", D_INT);
+    nj_ref it;
+
+    if (!str) {
+        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
     }
-    list_sync(vm, NJ_THIS(args));
+    if (at < 0 || at >= n || !items || (nj_u4)at >= items->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    it = nj_array_get_ref(items, (nj_u4)at);
+    if (it) {
+        rput(vm, it, NJ_C_STRINGITEM, "siText", D_STR, str);
+    }
+    list_sync(vm, self);
     return NJ_OK;
 }
 
 NJFN(list_getImage)
 {
-    return cg_getImage(vm, th, args, ret);
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref imgs = rget(vm, self, NJ_C_LIST, "lsImages", D_IMGARR);
+    nj_s4 n = fget(vm, self, NJ_C_LIST, "lsCount", D_INT);
+
+    if (at < 0 || at >= n || !imgs || (nj_u4)at >= imgs->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    ret->r = nj_array_get_ref(imgs, (nj_u4)at);
+    return NJ_OK;
 }
 
 NJFN(list_setImage)
 {
-    return cg_setImage(vm, th, args, ret);
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref img = NJ_ARG_REF(args, 1);
+    nj_ref items = rget(vm, self, NJ_C_FORM, "fmItems", D_ITEMARR);
+    nj_s4 n = fget(vm, self, NJ_C_LIST, "lsCount", D_INT);
+    nj_ref it;
+
+    if (at < 0 || at >= n || !items || (nj_u4)at >= items->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    it = nj_array_get_ref(items, (nj_u4)at);
+    if (it) {
+        rput(vm, it, NJ_C_ITEM, "itImage", D_IMAGE, img);
+    }
+    list_sync(vm, self);
+    return NJ_OK;
 }
 
 NJFN(list_getSelectedIndex)
@@ -7375,9 +7446,8 @@ NJFN(tb_setInitialInputMode)
     return NJ_OK;
 }
 
-NJFN(tb_insert)
+static nj_status tb_insert_on(nj_vm *vm, nj_ref self, nj_value *args)
 {
-    nj_ref self = NJ_THIS(args);
     nj_ref src = NJ_ARG_REF(args, 0);
     nj_s4 off = NJ_ARG_INT(args, 1);
     nj_s4 len = NJ_ARG_INT(args, 2);
@@ -7430,6 +7500,11 @@ NJFN(tb_insert)
     return NJ_OK;
 }
 
+NJFN(tb_insert)
+{
+    return tb_insert_on(vm, NJ_THIS(args), args);
+}
+
 /* insert(String src, int position) - the MIDP 2.0 String overload. */
 NJFN(tb_insert_str)
 {
@@ -7444,7 +7519,7 @@ NJFN(tb_insert_str)
     a[1].i = 0;
     a[2].i = (nj_s4)nj_string_len(str);
     a[3].i = at;
-    return tb_insert(vm, th, a, ret);
+    return tb_insert_on(vm, NJ_THIS(args), a);
 }
 
 NJFN(tb_delete)
@@ -7499,15 +7574,14 @@ NJFN(tb_getTicker)
 /* ------------------------------------------------------------------ */
 /* Alert and AlertType                                                 */
 /* ------------------------------------------------------------------ */
-NJFN(alert_init)
+static nj_status alert_init_on(nj_vm *vm, nj_ref self, nj_value *args)
 {
-    nj_ref self = NJ_THIS(args);
     nj_ref title = NJ_ARG_REF(args, 0);
     nj_ref text = NJ_ARG_REF(args, 1);
     nj_ref img = NJ_ARG_REF(args, 2);
     nj_ref type = NJ_ARG_REF(args, 3);
 
-    (void)d_init(vm, th, args, ret);
+    d_init_on(vm, self);
     rput(vm, self, NJ_C_DISPLAYABLE, F_D_TITLE, D_STR, title);
     rput(vm, self, NJ_C_ALERT, F_AL_STRING, D_STR, text);
     rput(vm, self, NJ_C_ALERT, F_AL_IMAGE, D_IMAGE, img);
@@ -7526,12 +7600,12 @@ NJFN(alert_init1)
     a[1].r = NULL;
     a[2].r = NULL;
     a[3].r = NULL;
-    return alert_init(vm, th, a, ret);
+    return alert_init_on(vm, NJ_THIS(args), a);
 }
 
 NJFN(alert_init4)
 {
-    return alert_init(vm, th, args, ret);
+    return alert_init_on(vm, NJ_THIS(args), args);
 }
 
 NJFN(alert_getType)
@@ -7647,6 +7721,14 @@ NJFN(alerttype_init)
 {
     nj_ref self = NJ_THIS(args);
     fput(vm, self, NJ_C_ALERTTYPE, "atType", D_INT, NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
+
+/* The no-argument form the compile stubs synthesise: an INFO alert type. */
+NJFN(alerttype_init0)
+{
+    nj_ref self = NJ_THIS(args);
+    fput(vm, self, NJ_C_ALERTTYPE, "atType", D_INT, 0);
     return NJ_OK;
 }
 
@@ -8269,14 +8351,6 @@ static const nj_builtin_method spacer_methods[] = {
 };
 
 /* ---- Form / List / TextBox ---- */
-static const nj_builtin_field form_fields[] = {
-    FLD("fmItems",   D_ITEMARR, 0),
-    FLD("fmCount",   D_INT,     0),
-    FLD("fmIndex",   D_INT,     0),
-    FLD("fmItemListener", D_ISL, 0),
-    FLD("fmBuffer",  D_IMAGE,   0)
-};
-
 static const nj_builtin_method form_methods[] = {
     M("<init>", "(Ljava/lang/String;)V", 0),
     M("<init>", "(Ljava/lang/String;[L" NJ_C_ITEM ";)V", 0),
@@ -8410,9 +8484,6 @@ static const nj_builtin_method alert_methods[] = {
     M("setTimeout", "(I)V", 0),
     M("getDefaultTimeout", "()I", NJ_ACC_STATIC),
     M("setDefaultTimeout", "(I)V", NJ_ACC_STATIC),
-    M("addCommand",    "(L" NJ_C_COMMAND ";)V", 0),
-    M("removeCommand", "(L" NJ_C_COMMAND ";)V", 0),
-    M("setCommandListener", "(L" NJ_C_COMMANDLISTENER ";)V", 0),
     M("setIndicator", "(L" NJ_C_GAUGE ";)V", 0),
     M("getIndicator", "()L" NJ_C_GAUGE ";", 0)
 };
@@ -8427,6 +8498,7 @@ static const nj_builtin_field alerttype_fields[] = {
 };
 
 static const nj_builtin_method alerttype_methods[] = {
+    M("<init>", "()V", 0),
     M("<init>", "(I)V", 0),
     M("playSound", "(L" NJ_C_DISPLAY ";)Z", 0),
     M("getTypeName", "(L" NJ_C_ALERTTYPE ";)Ljava/lang/String;", NJ_ACC_STATIC),
@@ -8469,9 +8541,28 @@ static const nj_builtin_method display_methods[] = {
 };
 
 /* ---- Screen: the abstract parent of the "content" Displayables ---- */
+/*
+ * The item storage lives on Screen rather than on Form, because Form, List and
+ * TextBox all need it and List is NOT a Form in MIDP.  Declaring it here means
+ * one field object, one offset, and a Form-relative lookup that finds the same
+ * slot for every kind of screen.
+ */
+static const nj_builtin_field screen_fields[] = {
+    FLD("fmItems",   D_ITEMARR, 0),
+    FLD("fmCount",   D_INT,     0),
+    FLD("fmIndex",   D_INT,     0),
+    FLD("fmItemListener", D_ISL, 0),
+    FLD("fmBuffer",  D_IMAGE,   0)
+};
+
 static const nj_builtin_method screen_methods[] = {
     M("<init>", "()V", 0)
 };
+
+NJFN(screen_init)
+{
+    return d_init(vm, th, args, ret);
+}
 
 /* ---- interfaces: declared abstract, no natives ---- */
 static const nj_builtin_method commandlistener_methods[] = {
@@ -8498,7 +8589,8 @@ const nj_builtin_class nj_lib_lcdui_classes[] = {
       displayable_methods, NJ_LCDUI_N(displayable_methods) },
     { "javax/microedition/lcdui/Screen", NJ_C_DISPLAYABLE,
       NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
-      NULL, 0u, screen_methods, NJ_LCDUI_N(screen_methods) },
+      screen_fields, NJ_LCDUI_N(screen_fields),
+      screen_methods, NJ_LCDUI_N(screen_methods) },
     { NJ_C_CANVAS, NJ_C_DISPLAYABLE, NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
       canvas_fields, NJ_LCDUI_N(canvas_fields),
       canvas_methods, NJ_LCDUI_N(canvas_methods) },
@@ -8524,8 +8616,7 @@ const nj_builtin_class nj_lib_lcdui_classes[] = {
       alerttype_fields, NJ_LCDUI_N(alerttype_fields),
       alerttype_methods, NJ_LCDUI_N(alerttype_methods) },
     { NJ_C_FORM, "javax/microedition/lcdui/Screen", NJ_ACC_PUBLIC,
-      form_fields, NJ_LCDUI_N(form_fields),
-      form_methods, NJ_LCDUI_N(form_methods) },
+      NULL, 0u, form_methods, NJ_LCDUI_N(form_methods) },
     { NJ_C_LIST, "javax/microedition/lcdui/Screen", NJ_ACC_PUBLIC,
       list_fields, NJ_LCDUI_N(list_fields),
       list_methods, NJ_LCDUI_N(list_methods) },
@@ -8570,6 +8661,7 @@ const int nj_lib_lcdui_class_count =
     (int)(sizeof(nj_lib_lcdui_classes) / sizeof(nj_lib_lcdui_classes[0]));
 
 const nj_native_entry nj_lib_lcdui_table[] = {
+    { "javax/microedition/lcdui/Screen", "<init>", "()V", screen_init },
     { NJ_C_IMAGE, "<init>", "()V", img_init_wh },
     { NJ_C_IMAGE, "createImage", "(II)L" NJ_C_IMAGE ";", img_createImage_wh },
     { NJ_C_IMAGE, "createImage", "(L" NJ_C_IMAGE ";)L" NJ_C_IMAGE ";", img_createImage_copy },
@@ -8672,6 +8764,9 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_DISPLAYABLE, "isFullScreenMode", "()Z", d_isFullScreenMode },
 
     { NJ_C_CANVAS, "<init>", "()V", c_init },
+    { NJ_C_CANVAS, "showNotify", "()V", c_visibility_notify },
+    { NJ_C_CANVAS, "hideNotify", "()V", c_visibility_notify },
+    { NJ_C_CANVAS, "drawNotify", "()V", c_visibility_notify },
     { NJ_C_CANVAS, "getWidth", "()I", c_getWidth },
     { NJ_C_CANVAS, "getHeight", "()I", c_getHeight },
     { NJ_C_CANVAS, "isDoubleBuffered", "()Z", c_isDoubleBuffered },
@@ -8890,6 +8985,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_ALERT, "setIndicator", "(L" NJ_C_GAUGE ";)V", alert_setIndicator },
     { NJ_C_ALERT, "getIndicator", "()L" NJ_C_GAUGE ";", alert_getIndicator },
 
+    { NJ_C_ALERTTYPE, "<init>", "()V", alerttype_init0 },
     { NJ_C_ALERTTYPE, "<init>", "(I)V", alerttype_init },
     { NJ_C_ALERTTYPE, "playSound", "(L" NJ_C_DISPLAY ";)Z", alerttype_playSound },
     { NJ_C_ALERTTYPE, "getTypeName", "(L" NJ_C_ALERTTYPE ";)Ljava/lang/String;", alerttype_getTypeName },
@@ -8905,6 +9001,11 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_DISPLAY, "numColors", "()I", disp_numColors },
     { NJ_C_DISPLAY, "numAlphaLevels", "()I", disp_numAlphaLevels },
     { NJ_C_DISPLAY, "flashBacklight", "(I)Z", disp_flashBacklight },
+    { NJ_C_DISPLAY, "flashBacklight", "(I)V", disp_flashBacklight },
+    { NJ_C_DISPLAY, "isColor", "()Z", disp_isColor },
+    { NJ_C_DISPLAY, "numColors", "()I", disp_numColors },
+    { NJ_C_DISPLAY, "numAlphaLevels", "()I", disp_numAlphaLevels },
+    { NJ_C_DISPLAY, "vibrate", "(I)Z", disp_vibrate },
     { NJ_C_DISPLAY, "vibrate", "(I)Z", disp_vibrate },
     { NJ_C_DISPLAY, "getBestImageWidth", "(I)I", disp_getBestImageWidth },
     { NJ_C_DISPLAY, "getBestImageHeight", "(I)I", disp_getBestImageHeight }

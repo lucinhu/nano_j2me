@@ -840,8 +840,30 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         case 0xb0:                                         /* areturn */
             DO_RETURN(*(--sp), 0);
             break;
-        case 0xb1:                                         /* return */
-            DO_RETURN(((nj_value){0}), 0);
+        case 0xb1:                                         /* return (void) */
+            /*
+             * A void return must NOT push anything.  Reusing DO_RETURN with a
+             * zero value looks harmless and is not: it leaves a spurious slot
+             * on the caller's operand stack, so every `new X()` where X is
+             * Java - i.e. every constructor call - shifts the caller's stack
+             * by one.  The next instruction then reads the wrong slot, which
+             * shows up as a null receiver in a putfield two instructions
+             * later, nowhere near the actual cause.
+             *
+             * main() and every method called from C never exposed this: they
+             * leave through the stop_depth path below, before the push.
+             */
+            {
+                nj_value *rsp_ = fr->locals;
+                SAVE();
+                nj_frame_pop(vm, th);
+                if (th->nframes <= stop_depth) {
+                    th->ret_value.bits = 0u;
+                    return NJ_OK;
+                }
+                RELOAD();
+                sp = rsp_;
+            }
             break;
 
         /* ================= fields ================= */
