@@ -62,6 +62,26 @@ NJFN(math_max_d)  { double a = NJ_ARG_DOUBLE(args,0), b = NJ_ARG_DOUBLE(args,1);
 NJFN(math_min_d)  { double a = NJ_ARG_DOUBLE(args,0), b = NJ_ARG_DOUBLE(args,1);
                     ret->d = (a <= b) ? a : b; return NJ_OK; }
 
+/*
+ * THE TRANSCENDENTALS ARE OPTIONAL, AND THIS SWITCH REALLY REMOVES THEM.
+ *
+ * nj_config.h has always documented NJ_ENABLE_FLOAT=0 as dropping the libm
+ * transcendentals from the external-symbol set - and nothing read the switch,
+ * so a build with it off still linked pow, log, sin and the rest.  That is a
+ * configuration option that lies, which is worse than one that is missing: it
+ * is the difference between "this target cannot do trigonometry" and "this
+ * target cannot LINK".
+ *
+ * With it off these raise ArithmeticException, which is the loud failure the
+ * rest of this project prefers - a game that needs Math.sin finds out where it
+ * called it, rather than the image failing to link with no clue which method
+ * wanted it.
+ *
+ * ceil, floor and rint are NOT in this group: the numeric bytecodes need them,
+ * so they are always required and stay outside the guard.  So is fmod, which
+ * lives with the interpreter.
+ */
+#if NJ_ENABLE_FLOAT
 NJFN(math_sqrt)  { double x = NJ_ARG_DOUBLE(args,0);
                    ret->d = (x < 0.0) ? (0.0/0.0) : sqrt(x); return NJ_OK; }
 NJFN(math_cbrt)  { ret->d = cbrt(NJ_ARG_DOUBLE(args,0)); return NJ_OK; }
@@ -77,6 +97,32 @@ NJFN(math_exp)   { ret->d = exp(NJ_ARG_DOUBLE(args,0)); return NJ_OK; }
 NJFN(math_log)   { ret->d = log(NJ_ARG_DOUBLE(args,0)); return NJ_OK; }
 NJFN(math_pow)   { ret->d = pow(NJ_ARG_DOUBLE(args,0), NJ_ARG_DOUBLE(args,1));
                    return NJ_OK; }
+#else
+#define NJ_MATH_OFF(jname, jtext)                                      \
+    NJFN(jname)                                                        \
+    {                                                                  \
+        NJ_UNUSED(args);                                               \
+        NJ_UNUSED(ret);                                                \
+        return nj_throw(vm, "java/lang/ArithmeticException",           \
+                        "java.lang.Math." jtext " is not available: "  \
+                        "NJ_ENABLE_FLOAT=0 removes the libm "          \
+                        "transcendentals from this build");            \
+    }
+
+NJ_MATH_OFF(math_sqrt, "sqrt")
+NJ_MATH_OFF(math_cbrt, "cbrt")
+NJ_MATH_OFF(math_sin, "sin")
+NJ_MATH_OFF(math_cos, "cos")
+NJ_MATH_OFF(math_tan, "tan")
+NJ_MATH_OFF(math_asin, "asin")
+NJ_MATH_OFF(math_acos, "acos")
+NJ_MATH_OFF(math_atan, "atan")
+NJ_MATH_OFF(math_atan2, "atan2")
+NJ_MATH_OFF(math_exp, "exp")
+NJ_MATH_OFF(math_log, "log")
+NJ_MATH_OFF(math_pow, "pow")
+#endif /* NJ_ENABLE_FLOAT */
+
 NJFN(math_ceil)  { ret->d = ceil(NJ_ARG_DOUBLE(args,0)); return NJ_OK; }
 NJFN(math_floor) { ret->d = floor(NJ_ARG_DOUBLE(args,0)); return NJ_OK; }
 NJFN(math_rint)  { ret->d = rint(NJ_ARG_DOUBLE(args,0)); return NJ_OK; }

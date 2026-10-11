@@ -283,13 +283,17 @@ against ESP-IDF, links into a bootable ESP32-S3 image, and that image boots to
 app_main on an emulated ESP32-S3"** - not "runs a MIDlet on it". The remaining
 gap is arena placement, which is a port configuration question.
 
-## Known gap: NJ_ENABLE_FLOAT does nothing
+## NJ_ENABLE_FLOAT now does what it says (it used to do nothing)
 
-`nj_config.h` documents `NJ_ENABLE_FLOAT=0` as compiling `java.lang.Math` down to
-integer operations and removing the libm transcendentals. **It does not.** The
-macro is defined and nothing honours it: `src/core/nj_lib_math.c` calls `pow`,
-`log`, `exp`, `sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`,
-`log10` and `cbrt` unconditionally.
+`nj_config.h` documents `NJ_ENABLE_FLOAT=0` as removing the libm transcendentals
+from the external-symbol set.  It was broken in **two independent ways at once**:
+nothing in `src/` read the switch, and CMake never passed it to the compiler - so
+`-DNJ_ENABLE_FLOAT=0` built a runtime that still linked every one of them.
+
+Both ends are fixed.  With the switch off the twelve transcendental natives
+raise `ArithmeticException` naming the method and the reason, and the object file
+contains **zero** references to them; `ceil`, `floor`, `rint` and `fmod` stay,
+because the numeric bytecodes need them.
 
 So the honest description of this runtime is *"freestanding except for a minimal
 libm subset"*, and the required subset is larger than the switch claims:
@@ -303,10 +307,20 @@ libm subset"*, and the required subset is larger than the switch claims:
 the small ones, explicit stubs for the transcendentals - so the dependency is
 **visible in one file** rather than spread across a link error.
 
-Making `NJ_ENABLE_FLOAT=0` real is a contained job: guard the libm-using natives
-in `nj_lib_math.c` so they raise `ArithmeticException` (or return the integer
-approximation) when the switch is off. Until then, treat the switch as
-unimplemented.
+`tools/check_no_float.sh` keeps it honest: it compiles `nj_lib_math.c` both ways
+and counts the symbols, so the switch cannot rot back into a no-op.
+
+     NJ_ENABLE_FLOAT=1: 12 libm transcendentals
+     NJ_ENABLE_FLOAT=0:  0 libm transcendentals
+
+A full build with the switch off reproduces the benchmark byte for byte
+(112,117,067), and a MIDlet that calls `Math.sin` gets
+
+     java.lang.ArithmeticException: java.lang.Math.sin is not available:
+     NJ_ENABLE_FLOAT=0 removes the libm transcendentals from this build
+
+which is the loud failure this project prefers to a link error that names a
+symbol and not the code that wanted it.
 
 ## Android: built with the real NDK, and run on an emulator
 

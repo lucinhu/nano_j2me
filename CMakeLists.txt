@@ -44,6 +44,12 @@ set(NJ_ENABLE_JPEG  1 CACHE STRING "Built-in baseline JPEG decoder")
 set(NJ_ENABLE_PNG   1 CACHE STRING "Built-in PNG decoder")
 set(NJ_ENABLE_RMS   1 CACHE STRING "RecordStore persistence")
 set(NJ_ENABLE_IO    1 CACHE STRING "java.io and javax.microedition.io")
+# Floating point.  This switch was documented in nj_config.h from the start and
+# broken in TWO independent ways: nothing in src/ read it, and CMake never
+# passed it to the compiler at all - so -DNJ_ENABLE_FLOAT=0 built a runtime that
+# still linked every libm transcendental.  A configuration option that lies is
+# worse than one that is missing.
+set(NJ_ENABLE_FLOAT 1 CACHE STRING "libm transcendentals for java.lang.Math")
 set(NJ_PIXFMT       "NJ_PIXFMT_RGB565" CACHE STRING
     "Framebuffer pixel format: NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888 or NJ_PIXFMT_ARGB8888")
 
@@ -110,7 +116,8 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_PNG=${NJ_ENABLE_PNG}
   NJ_ENABLE_JPEG=${NJ_ENABLE_JPEG}
   NJ_ENABLE_RMS=${NJ_ENABLE_RMS}
-  NJ_ENABLE_IO=${NJ_ENABLE_IO})
+  NJ_ENABLE_IO=${NJ_ENABLE_IO}
+  NJ_ENABLE_FLOAT=${NJ_ENABLE_FLOAT})
 
 if(NJ_SANITIZE)
   target_compile_options(nj2me PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
