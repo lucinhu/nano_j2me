@@ -675,6 +675,63 @@ CLASSES = {
         "methods": ["public static javax.microedition.content.Registry getRegistry(String)",
                     "public void invoke(javax.microedition.content.Invocation)"],
     },
+    # JSR 75.  FileConnection is an INTERFACE in MIDP and the runtime supplies
+    # a builtin class of the same name, which works because invokeinterface
+    # resolves on the receiver's class - the same arrangement as Player.
+    "javax/microedition/io/file/ConnectionClosedException": {
+        "extends": "java.io.IOException",
+        "methods": ["public ConnectionClosedException()",
+                    "public ConnectionClosedException(String)"],
+    },
+    "javax/microedition/io/file/IllegalModeException": {
+        "extends": "RuntimeException",
+        "methods": ["public IllegalModeException()",
+                    "public IllegalModeException(String)"],
+    },
+    "javax/microedition/io/file/FileSystemListener": {
+        "interface": True,
+        "methods": ["void rootChanged(int, String)"],
+    },
+    "javax/microedition/io/file/FileSystemRegistry": {
+        "methods": [
+            "public static boolean addFileSystemListener(javax.microedition.io.file.FileSystemListener)",
+            "public static boolean removeFileSystemListener(javax.microedition.io.file.FileSystemListener)",
+            "public static java.util.Enumeration listRoots()",
+        ],
+    },
+    "javax/microedition/io/file/FileConnection": {
+        "interface": True,
+        "methods": [
+            "public long availableSize() throws java.io.IOException",
+            "public boolean canRead()",
+            "public boolean canWrite()",
+            "public void create() throws java.io.IOException",
+            "public void delete() throws java.io.IOException",
+            "public boolean exists()",
+            "public long fileSize() throws java.io.IOException",
+            "public String getName()",
+            "public String getPath()",
+            "public String getURL()",
+            "public boolean isDirectory()",
+            "public boolean isHidden()",
+            "public long lastModified() throws java.io.IOException",
+            # list() returns directory entries WITH A TRAILING SLASH and file
+            # entries without one - that is how a game tells them apart, since
+            # the filter matches both.
+            "public java.util.Enumeration list() throws java.io.IOException",
+            "public java.util.Enumeration list(String, boolean) throws java.io.IOException",
+            "public void mkdir() throws java.io.IOException",
+            "public java.io.DataInputStream openDataInputStream() throws java.io.IOException",
+            "public java.io.DataOutputStream openDataOutputStream() throws java.io.IOException",
+            "public java.io.InputStream openInputStream() throws java.io.IOException",
+            "public java.io.OutputStream openOutputStream() throws java.io.IOException",
+            "public void setFileConnection(String) throws java.io.IOException",
+            "public void setHidden(boolean) throws java.io.IOException",
+            "public void setReadable(boolean) throws java.io.IOException",
+            "public void setWritable(boolean) throws java.io.IOException",
+            "public void truncate(int) throws java.io.IOException",
+        ],
+    },
     "javax/microedition/media/PlayerListener": {
         "interface": True,
         "methods": ["void playerUpdate(javax.microedition.media.Player, String, Object)"],

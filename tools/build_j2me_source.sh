@@ -114,4 +114,13 @@ done < <(find "$SRC" -maxdepth 3 -type d \( -iname res -o -iname resources \) 2>
 
 mkdir -p "$(dirname "$OUT")"
 ( cd "$WORK/classes" && jar cfm "$OUT" META-INF/MANIFEST.MF . )
+
+# Compiling is not the same as compiling AGAINST A DEVICE'S API.  javac resolves
+# java.* from the desktop JDK, so a game using java.util.ArrayList builds here
+# and dies on a handset with NoClassDefFoundError - the exact bug this whole
+# approach exists to catch.  Audit the output before calling it a success.
+if ! python3 "$ROOT/tools/check_cldc_api.py" "$OUT"; then
+    echo "   REFUSING: the JAR uses classes a CLDC device does not have" >&2
+    exit 1
+fi
 echo "wrote $OUT"

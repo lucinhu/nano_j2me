@@ -207,6 +207,23 @@ typedef struct nj_port {
     int   (*file_remove)(void *ud, const char *name);
     int   (*file_exists)(void *ud, const char *name);
 
+    /* ---- directory iteration (javax.microedition.io.file) ---- */
+    /*
+     * Opening, walking and closing a directory.  A port that has no notion of
+     * directories leaves all three NULL and FileConnection.list() throws
+     * instead of pretending the directory is empty - an empty list and a
+     * filesystem that cannot be read are different answers and a game that
+     * shows a file picker needs to tell them apart.
+     *
+     * `path` is host-relative, already resolved against fs_dir by the runtime.
+     * dir_next fills `name` with the entry's BASE NAME, not its path, and sets
+     * *is_dir; it returns 1 for an entry, 0 at the end, negative on error.
+     */
+    int   (*dir_open)(void *ud, const char *path, void **out_handle);
+    int   (*dir_next)(void *ud, void *handle, char *name, nj_size cap,
+                      int *is_dir);
+    void  (*dir_close)(void *ud, void *handle);
+
     /* ---- optional inline JAR payload (ESP32: JAR flashed into a partition
      * or embedded as a C array).  When this returns non-NULL the runtime
      * loads the MIDlet directly from memory and ignores `jar_path`. ---- */
@@ -319,6 +336,17 @@ typedef struct nj_port {
     int   scale;          /* integer upscale hint for desktop windows (>=1) */
     int   fps_cap;        /* 0 => uncapped */
     const char *rms_dir;  /* where RecordStore files live (hosted ports) */
+
+    /*
+     * Where "file:///root/" points on the host, for javax.microedition.io.file.
+     *
+     * A MIDlet gets NO access outside this directory: the runtime rejects any
+     * path that escapes it, including through "..".  On a real handset JSR 75
+     * is sandboxed the same way, and a file API that can be talked into reading
+     * /etc/passwd is not a compatibility feature.  NULL means no filesystem,
+     * and FileConnection then refuses to open anything.
+     */
+    const char *fs_dir;
 } nj_port;
 
 /* ------------------------------------------------------------------ */
