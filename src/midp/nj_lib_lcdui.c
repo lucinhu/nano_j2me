@@ -3153,16 +3153,73 @@ typedef struct ui_frame {
  * simply run under the next widget rather than corrupting the frame; callers
  * pass the width they reserved.
  */
+/*
+ * Draw a Java string, WRAPPING it at maxw.
+ *
+ * This used to take maxw and ignore it - the text was not clipped at the panel
+ * edge, it was drawn straight past it, which is why a real game's error Alert
+ * showed "java.lang.Except..." and stopped.  MIDP wraps.
+ *
+ * Every built-in renderer goes through here (Alert, Form, List, TextBox), so
+ * the wrap belongs here too rather than in each of them.
+ *
+ * The break is at the last space that fits, falling back to a hard break inside
+ * a word that is longer than the line - a URL or a class name has no spaces, and
+ * running it off the edge is the behaviour being fixed.
+ */
 static void ui_text(nj_vm *vm, nj_gfx *g, nj_ref font, nj_ref s, int x, int y,
                     int maxw)
 {
+    const nj_u2 *ch;
+    const nj_font *f;
+    int len;
+    int i, start, last_space, w, line_h, cy;
+
     NJ_UNUSED(vm);
     NJ_UNUSED(font);
-    NJ_UNUSED(maxw);
-    if (!s) {
+    if (!s || !g) {
         return;
     }
-    text_draw(g, s, x, y, NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
+    ch = nj_string_chars(s);
+    len = (int)nj_string_len(s);
+    if (!ch || len <= 0) {
+        return;
+    }
+    f = g->font;
+    if (maxw <= 0 || !f || f->height <= 0) {
+        nj_gfx_draw_text(g, ch, len, x, y, NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
+        return;
+    }
+
+    line_h = f->height;
+    cy = y;
+    start = 0;
+    last_space = -1;
+    w = 0;
+
+    for (i = 0; i < len; i++) {
+        int cw = nj_font_char_width(f, ch[i]);
+
+        if (ch[i] == (nj_u2)' ') {
+            last_space = i;
+        }
+        if (w + cw > maxw && i > start) {
+            int brk = (last_space > start) ? last_space : i;
+            nj_gfx_draw_text(g, ch + start, brk - start, x, cy,
+                             NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
+            cy += line_h;
+            start = (ch[brk] == (nj_u2)' ') ? brk + 1 : brk;
+            i = start - 1;
+            last_space = -1;
+            w = 0;
+            continue;
+        }
+        w += cw;
+    }
+    if (start < len) {
+        nj_gfx_draw_text(g, ch + start, len - start, x, cy,
+                         NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
+    }
 }
 
 /* Standard "row" background: a highlight when selected. */
