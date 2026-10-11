@@ -13,6 +13,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ABI=arm64-v8a
+SCREEN=""
 JAR="${NJ_ANDROID_JAR:-$ROOT/tests/games/jump.jar}"
 INSTALL=0
 OUT="$ROOT/build/android"
@@ -21,6 +22,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --jar) JAR="$2"; shift 2 ;;
         --abi) ABI="$2"; shift 2 ;;
+        --screen) SCREEN="$2"; shift 2 ;;
         --install) INSTALL=1; shift ;;
         -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -40,7 +42,11 @@ done
 
 # 1. The native side, for one ABI.
 echo "== native ($ABI)"
-"$ROOT/tools/build_android.sh" --abi "$ABI" --out "$OUT" || exit 1
+if [ -n "$SCREEN" ]; then
+    "$ROOT/tools/build_android.sh" --abi "$ABI" --out "$OUT" --screen "$SCREEN" || exit 1
+else
+    "$ROOT/tools/build_android.sh" --abi "$ABI" --out "$OUT" || exit 1
+fi
 SO="$OUT/$ABI/libnj2me.so"
 
 W="$OUT/apk"; rm -rf "$W"; mkdir -p "$W/classes" "$W/dex" "$W/assets" "$W/lib/$ABI" "$W/gen"

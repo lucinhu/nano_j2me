@@ -352,14 +352,35 @@ never load. Two fixes, and the second is the one that matters:
 * **link with `-Wl,--no-undefined`**, so the next missing file is a link error
   instead of a crash on someone's phone.
 
-### Known gap: the port uses the whole Android surface
+### The MIDlet gets a device-sized screen, letterboxed into the Surface
 
-A J2ME game was written for a fixed device screen. This port hands the game the
-full Android surface - 320x640 on the test emulator - so titles that gate on the
-screen size refuse it, correctly, with their own "Screen too large" Alert. The
-right behaviour is to present a configured MIDlet resolution (176x208, 240x320)
-letterboxed and centred in the surface, with input coordinates scaled to match.
-That is a contained change in `nj_port_android.c` and is not done.
+A J2ME game was written for a fixed device screen and many check it: Tumbleweed
+throws "Screen too large" above 250 in either axis.  A modern phone reports
+640x1280, so handing the game the Surface meant every such title refused to
+start - which is what happened the first time this port ran a real one.
+
+The port now keeps a LOGICAL screen (240x320 by default, `--screen WxH` at build
+time) and scales it into the Surface:
+
+* the runtime sees the logical size, so a title's own screen-size gate passes;
+* `display_present()` scales by the largest INTEGER factor that fits, centred,
+  with black bars - integer because J2ME art is pixel art and a fractional scale
+  blurs every sprite edge;
+* input is forwarded in logical coordinates.
+
+[screenshot](images/android-tumbleweed.png) is Tumbleweed playing on an emulated
+Pixel-class device: 176x208, letterboxed, with the cowboy, an enemy, the grass,
+a countdown and a score.
+
+**The bug this exposed is worth recording.**  `nj_port_android_set_window()`
+overwrote the logical size with the window size - a leftover from when the
+window *was* the screen - so `nj_port_android_ex(out, 176, 208)` had no effect
+and the port kept reporting 640x1280.  From outside, "it started and shows an
+Alert" and "it started with the wrong screen" are the same observation.  What
+told them apart was one log line:
+
+    display_init: logical 640x1280, window 640x1280    <- before
+    display_init: logical 176x208, window 640x1280     <- after
 
 ## What is not in the report
 

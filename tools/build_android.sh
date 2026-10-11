@@ -17,12 +17,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 API=21
 OUT="${NJ_ANDROID_OUT:-$ROOT/build/android}"
 ABIS="arm64-v8a armeabi-v7a x86_64"
+SCREEN=""     # e.g. 176x208; empty leaves the runtime's default (240x320)
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --abi)  ABIS="$2"; shift 2 ;;
         --api)  API="$2"; shift 2 ;;
         --out)  OUT="$2"; shift 2 ;;
+        --screen) SCREEN="$2"; shift 2 ;;
         -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
@@ -50,6 +52,15 @@ SOURCES="$SOURCES src/runner/nj_run.c src/port/android/nj_port_android.c"
 
 echo "NDK  $NDK"
 echo "API  $API"
+[ -n "$SCREEN" ] && echo "MIDlet screen $SCREEN"
+
+# The MIDlet's logical screen.  A title that gates on the screen size - "Screen
+# too large" - needs one it will accept, and the Surface is scaled to fit, so
+# this is a build-time choice rather than a hardware constraint.
+SCREEN_DEFS=""
+if [ -n "$SCREEN" ]; then
+    SCREEN_DEFS="-DNJ_SCREEN_WIDTH=${SCREEN%x*} -DNJ_SCREEN_HEIGHT=${SCREEN#*x}"
+fi
 
 fail=0
 for abi in $ABIS; do
@@ -73,7 +84,7 @@ for abi in $ABIS; do
     for f in $SOURCES; do
         o="$dir/$(echo "$f" | tr / _).o"
         if ! "$cc" -std=c99 -Os -fPIC -ffunction-sections -fdata-sections \
-                -Wall -I"$ROOT/include" -I"$ROOT/src/core" -I"$ROOT/src/midp" \
+                -Wall $SCREEN_DEFS -I"$ROOT/include" -I"$ROOT/src/core" -I"$ROOT/src/midp" \
                 -I"$ROOT/src/gfx" -I"$ROOT/src/zip" \
                 -c "$ROOT/$f" -o "$o" 2>"$dir/err"; then
             echo "  $abi: compile failed in $f"

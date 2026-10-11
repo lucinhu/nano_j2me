@@ -44,9 +44,10 @@ typedef struct android_state {
     ANativeWindow *window;
     pthread_mutex_t lock;
 
-    int   width, height, stride;
+    int   width, height, stride;   /* the LOGICAL screen: what the MIDlet sees */
+    int   win_w, win_h;            /* the Surface: usually much larger */
     int   format;
-    nj_u1 *shadow;        /* our own buffer; copied into the window per frame */
+    nj_u1 *shadow;        /* the logical screen; scaled into the window */
 
     nj_event queue[256];
     int   qh, qt;
@@ -106,10 +107,23 @@ static int android_display_init(void *ud, int *w, int *h, int *stride, void **px
     android_state *s = AS(ud);
     int bpp = android_bytes_per_pixel(NJ_PIXFMT);
 
+    /*
+     * The MIDlet gets a FIXED screen, not the Surface.
+     *
+     * A J2ME game was written for a specific device screen and many of them
+     * check: Tumbleweed throws "Screen too large" above 250 in either axis.  A
+     * modern phone reports 1080x2400, so handing the game the window means every
+     * such title refuses to start - which is exactly what happened the first
+     * time this port ran a real one.
+     *
+     * So the runtime sees s->width x s->height (240x320 by default, set by the
+     * caller through nj_port_android_ex) and display_present() scales that into
+     * whatever the Surface happens to be.
+     */
     if (s->window) {
-        s->width = ANativeWindow_getWidth(s->window);
-        s->height = ANativeWindow_getHeight(s->window);
-        ANativeWindow_setBuffersGeometry(s->window, s->width, s->height,
+        s->win_w = ANativeWindow_getWidth(s->window);
+        s->win_h = ANativeWindow_getHeight(s->window);
+        ANativeWindow_setBuffersGeometry(s->window, s->win_w, s->win_h,
                                          WINDOW_FORMAT_RGBA_8888);
     }
     if (s->width <= 0) {
@@ -117,6 +131,18 @@ static int android_display_init(void *ud, int *w, int *h, int *stride, void **px
     }
     if (s->height <= 0) {
         s->height = NJ_SCREEN_HEIGHT;
+    }
+    /*
+     * Say what the game will actually see.  "It started and shows an Alert"
+     * and "it started with a 640x1280 screen" look identical from outside, and
+     * the difference cost an hour: the port was handing the MIDlet the Surface
+     * because nj_port_android_set_window() overwrote the logical size.
+     */
+    {
+        char b[128];
+        snprintf(b, sizeof(b), "display_init: logical %dx%d, window %dx%d",
+                 s->width, s->height, s->win_w, s->win_h);
+        __android_log_write(ANDROID_LOG_INFO, "nj2me", b);
     }
     s->format = NJ_PIXFMT;
     s->stride = s->width * bpp;
@@ -146,29 +172,62 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
         return;
     }
     /*
-     * Copy row by row using the WINDOW's stride, never its width: the
-     * compositor is free to hand back a wider buffer than the visible area.
+     * Blit the logical screen into the window, scaled by the largest INTEGER
+     * factor that fits and centred, with the leftover as black bars.
+     *
+     * Integer, because a J2ME game's art is pixel art and a fractional scale
+     * turns every sprite edge into a blur; nearest-neighbour at 3x or 4x looks
+     * like a phone from the era, which is the point.  Centred and letterboxed,
+     * because stretching to the aspect ratio would distort the game.
      */
     {
-        int row;
-        int rows = s->height < buf.height ? s->height : buf.height;
-        int cols = s->width < buf.width ? s->width : buf.width;
-        for (row = 0; row < rows; row++) {
+        int scale = 1;
+        int ox, oy, row, col;
+        if (s->win_w > 0 && s->win_h > 0 && s->width > 0 && s->height > 0) {
+            int sx = s->win_w / s->width;
+            int sy = s->win_h / s->height;
+            scale = (sx < sy) ? sx : sy;
+            if (scale < 1) {
+                scale = 1;      /* smaller than the game: show the top-left */
+            }
+        }
+        ox = (buf.width - s->width * scale) / 2;
+        oy = (buf.height - s->height * scale) / 2;
+        if (ox < 0) { ox = 0; }
+        if (oy < 0) { oy = 0; }
+
+        /* Black bars first, so the areas the game does not cover are not
+         * whatever the compositor last left there. */
+        for (row = 0; row < buf.height; row++) {
+            memset((nj_u1 *)buf.bits + (size_t)row * (size_t)buf.stride * 4u,
+                   0, (size_t)buf.width * 4u);
+        }
+        for (row = 0; row < s->height; row++) {
             const nj_u1 *src = s->shadow + (size_t)row * (size_t)s->stride;
-            nj_u1 *dst = (nj_u1 *)buf.bits
-                         + (size_t)row * (size_t)buf.stride * 4u;
-            if (s->format == NJ_PIXFMT_ARGB8888) {
-                memcpy(dst, src, (size_t)cols * 4u);
-            } else {
-                /* Expand RGB565 to the RGBA_8888 the window expects. */
-                int cx;
-                nj_u4 *d32 = (nj_u4 *)dst;
-                for (cx = 0; cx < cols; cx++) {
-                    nj_u4 v = (nj_u4)src[cx * 2] | ((nj_u4)src[cx * 2 + 1] << 8);
-                    nj_u4 r = ((v >> 11) & 0x1Fu) << 3;
-                    nj_u4 g = ((v >> 5) & 0x3Fu) << 2;
-                    nj_u4 b = (v & 0x1Fu) << 3;
-                    d32[cx] = 0xFF000000u | (r << 16) | (g << 8) | b;
+            for (col = 0; col < s->width; col++) {
+                nj_u4 px = 0u;
+                int dy;
+                if (s->format == NJ_PIXFMT_ARGB8888) {
+                    const nj_u4 *p4 = (const nj_u4 *)src;
+                    px = p4[col];
+                } else {
+                    const nj_u2 *p2 = (const nj_u2 *)src;
+                    nj_u2 c = p2[col];
+                    nj_u4 r = (nj_u4)((c >> 11) & 0x1fu);
+                    nj_u4 g = (nj_u4)((c >> 5) & 0x3fu);
+                    nj_u4 b = (nj_u4)(c & 0x1fu);
+                    px = 0xff000000u | ((r << 3) | (r >> 2)) << 16
+                         | ((g << 2) | (g >> 4)) << 8 | ((b << 3) | (b >> 2));
+                }
+                for (dy = 0; dy < scale; dy++) {
+                    nj_u4 *dst = (nj_u4 *)((nj_u1 *)buf.bits
+                                 + (size_t)(oy + row * scale + dy)
+                                       * (size_t)buf.stride * 4u)
+                                 + ox + col * scale;
+                    int dx;
+                    for (dx = 0; dx < scale; dx++) {
+                        dst[dx] = px;
+                    }
                 }
             }
         }
@@ -223,7 +282,19 @@ static void android_shutdown(void *ud)
 /* ------------------------------------------------------------------ */
 /* Construction and the public configuration entry points              */
 /* ------------------------------------------------------------------ */
+/*
+ * nj_port_android(): the default 240x320 MIDlet screen.
+ * nj_port_android_ex(): pick the logical screen - a title that gates on the
+ * screen size needs one it will accept, and the Surface is scaled to fit.
+ */
+nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h);
+
 nj_status nj_port_android(nj_port *out)
+{
+    return nj_port_android_ex(out, 0, 0);
+}
+
+nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
 {
     android_state *s;
 
@@ -235,6 +306,12 @@ nj_status nj_port_android(nj_port *out)
         return NJ_ERR_NOMEM;
     }
     pthread_mutex_init(&s->lock, NULL);
+
+    /* The logical screen.  display_init() keeps this and scales it into the
+     * Surface, so a title that refuses anything above 250 in either axis gets a
+     * screen it accepts instead of a 1080x2400 phone. */
+    s->width = (screen_w > 0) ? screen_w : NJ_SCREEN_WIDTH;
+    s->height = (screen_h > 0) ? screen_h : NJ_SCREEN_HEIGHT;
 
     memset(out, 0, sizeof(*out));
     out->name = "android";
@@ -261,8 +338,12 @@ void nj_port_android_set_window(nj_port *port, void *native_window)
     s->window = (ANativeWindow *)native_window;
     if (s->window) {
         ANativeWindow_acquire(s->window);
-        s->width = ANativeWindow_getWidth(s->window);
-        s->height = ANativeWindow_getHeight(s->window);
+        /* The WINDOW size, not the screen size.  Overwriting s->width here is
+         * what kept this port handing the MIDlet a 640x1280 screen after
+         * nj_port_android_ex() had set it to 176x208 - the window used to be
+         * the screen, and this line is what was left of that. */
+        s->win_w = ANativeWindow_getWidth(s->window);
+        s->win_h = ANativeWindow_getHeight(s->window);
     }
 }
 
@@ -471,9 +552,14 @@ Java_com_example_nj2me_Nj2meActivity_nativeDestroy(JNIEnv *env, jobject thiz,
  * instead of pretending, so every port source file can be compiled
  * unconditionally into one library.
  */
-nj_status nj_port_android(nj_port *out)
+/*
+ * nj_port_android(): the default 240x320 MIDlet screen.
+ * nj_port_android_ex(): pick the logical screen - a title that gates on the
+ * screen size needs one it will accept, and the Surface is scaled to fit.
+ */
+nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
 {
-    (void)out;
+    (void)out; (void)screen_w; (void)screen_h;
     return NJ_ERR_UNSUPPORTED;
 }
 
