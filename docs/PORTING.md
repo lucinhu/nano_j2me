@@ -261,6 +261,111 @@ The class-file parser keeps each class's bytes alive so the constant pool can be
 resolved lazily. If a title's JAR is large, `NJ_MAX_CLASS_BYTES` and the number
 of simultaneously resident classes are the two knobs that matter.
 
+
+## Image codecs: plugging in the platform's decoder
+
+Portable C PNG and JPEG are the right default, but they are rarely the right
+answer on a specific board. An ESP32-S3 has a hardware JPEG block; Android has
+`BitmapFactory`, which usually reaches hardware; a product with a fixed asset
+pipeline may not want a JPEG decoder linked in at all.
+
+Decoding therefore goes through a registry of providers
+([`include/nj2me/nj_codec.h`](../include/nj2me/nj_codec.h)). The runtime ships
+software PNG (and optionally software JPEG) as ordinary providers; a port
+installs its own ahead of them and wins.
+
+### Installing one
+
+Fill in a provider and hand it to the VM. `nj_port.install_codecs` is called
+once, right after the VM exists and *before* the built-ins are registered, so
+anything installed there takes precedence:
+
+```c
+static nj_image *hw_jpeg_decode(const nj_codec_req *req)
+{
+    nj_image *img = nj_codec_image_new(req, w, h, NJ_CODEC_OUT_RGB565, 0);
+    if (!img) return NULL;
+    if (!esp_jpeg_run(req->data, req->size, img->pixels, &w, &h)) {
+        req->dealloc(req->ud, img->pixels);
+        req->dealloc(req->ud, img);
+        if (req->err) *req->err = "the hardware JPEG block rejected the image";
+        return NULL;
+    }
+    img->width = w; img->height = h;
+    return img;
+}
+
+static const nj_codec hw_jpeg = {
+    "jpeg-hw",
+    { NJ_CODEC_FMT_JPEG, NJ_CODEC_OUT_RGB565, NJ_CODEC_SCALE_1 | NJ_CODEC_SCALE_2,
+      4096u * 4096u, 0, 1 },
+    jpeg_accepts, jpeg_info, hw_jpeg_decode,
+    NULL, NULL, NULL
+};
+
+static void my_install_codecs(void *ud, struct nj_vm *vm)
+{
+    (void)ud;
+    nj_codec_register(vm, &hw_jpeg, NJ_CODEC_PRIO_PLATFORM);
+}
+```
+
+Then `port.install_codecs = my_install_codecs;`.
+
+### The rules a provider must keep
+
+| Rule | Why |
+|---|---|
+| `accepts()` only looks at a magic number | it runs for every provider on every decode |
+| all memory comes from `req->alloc` / `req->dealloc` | teardown stays complete and the buffer can live in PSRAM |
+| `info()` answers without decoding | `Image.createImage` bounds-checks with it; without it, probing a 2000×2000 image decodes it |
+| bounds-check every read | a game JAR is untrusted input; a decoder that can be made to write outside its output is remote code execution |
+| no mutable globals | same reason as everywhere else: games must start and stop cleanly |
+| `attach` / `detach` for per-run state | that is the only sanctioned place for a hardware handle |
+
+### Priorities
+
+```
+NJ_CODEC_PRIO_PLATFORM    200   what the port installs
+NJ_CODEC_PRIO_PREFERRED   100
+NJ_CODEC_PRIO_BUILTIN       0   software PNG / JPEG
+NJ_CODEC_PRIO_FALLBACK   -100   provider that reports "no decoder for this"
+```
+
+Registering the same descriptor twice replaces the entry rather than
+accumulating, so a port can be re-initialised safely.
+
+### Why there is a "unavailable" provider
+
+On a build with `NJ_ENABLE_JPEG=0`, a JPEG is still *recognised* — by a
+fallback provider whose `decode` always fails with
+
+> this build has no JPEG decoder; install one with `nj_codec_register()`
+
+so a game fails with an actionable message instead of "unrecognised image
+format". That distinction is worth a few hundred bytes of descriptor.
+
+### Output formats
+
+A provider may return `NJ_CODEC_OUT_ARGB8888` or `NJ_CODEC_OUT_RGB565`. The
+latter halves the memory for a full-screen background — 150 KB instead of
+300 KB at 240×320, which is the difference between running and not running on a
+part without PSRAM. Consumers check `nj_image.format`; the blitter handles both.
+
+### Verifying an adapter
+
+`tests/test_codec.c` is the contract test: it installs a fake platform provider
+that deliberately also claims PNG and proves that
+
+- the platform provider wins, and unregistering restores the built-in;
+- the registry is **per VM** — installing into one leaves another untouched,
+  which is what lets a device run two games without interference;
+- `attach`/`detach` run exactly once per VM and in the right order;
+- teardown releases the registry and is identical on every create/destroy round.
+
+Copy its shape when you add a codec: a provider that is only tested through the
+built-in path has not been tested at all.
+
 ## Bring-up checklist
 
 1. Implement `millis`, `display_init`, `display_present`, `input_poll`, `log`.

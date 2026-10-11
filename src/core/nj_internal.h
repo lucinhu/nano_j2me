@@ -16,6 +16,7 @@
 #include "nj2me/nj_app.h"
 #include "nj2me/nj_zip.h"
 #include "nj2me/nj_gfx.h"
+#include "nj2me/nj_codec.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -248,6 +249,11 @@ typedef struct nj_native_binding {
     nj_native_fn fn;
 } nj_native_binding;
 
+typedef struct nj_codec_reg {
+    nj_codec codec;      /* a per-VM COPY, so attach() can set codec.ud */
+    int      priority;
+} nj_codec_reg;
+
 /* ------------------------------------------------------------------ */
 /* The VM                                                              */
 /* ------------------------------------------------------------------ */
@@ -324,6 +330,13 @@ struct nj_vm {
     nj_u4         frames_presented;
     nj_u2         screen_w;
     nj_u2         screen_h;
+
+    /* image codec registry: the list of providers this VM will use.
+     * Per-VM, so a port can install a hardware decoder for one VM and not
+     * another, and so nothing survives nj_vm_destroy(). */
+    nj_codec_reg *codecs;
+    nj_u2         ncodecs;
+    nj_u2         codec_cap;
 
     /* native method registry (per-VM hash; no GlobalState) */
     nj_native_binding *natives;

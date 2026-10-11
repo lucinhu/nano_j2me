@@ -40,6 +40,7 @@ set(NJ_SOURCES
   src/gfx/nj_gfx.c
   src/gfx/nj_font.c
   src/gfx/nj_png.c
+  src/gfx/nj_codec.c
   src/zip/nj_inflate.c
   src/zip/nj_zip.c
   src/runner/nj_run.c
@@ -128,6 +129,13 @@ if(NJ_BUILD_TESTS)
     target_link_libraries(test_lib PRIVATE nj2me)
     target_include_directories(test_lib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
     add_test(NAME classlib COMMAND test_lib)
+  endif()
+
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_codec.c)
+    add_executable(test_codec tests/test_codec.c)
+    target_link_libraries(test_codec PRIVATE nj2me)
+    target_include_directories(test_codec PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+    add_test(NAME codecs COMMAND test_codec)
   endif()
 
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gfx.c)

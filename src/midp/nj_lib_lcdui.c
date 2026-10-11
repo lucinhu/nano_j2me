@@ -4935,6 +4935,7 @@ static int tf_allowed(nj_s4 constraints, const nj_u2 *s, int n)
 static int text_height_for(nj_vm *vm, nj_ref str, int width, const nj_font *f)
 {
     int lh = f ? f->height + 2 : UI_ITEM_H;
+    NJ_UNUSED(vm);
     if (!str || width <= 0) {
         return lh;
     }
@@ -5309,4 +5310,1880 @@ NJFN(tf_njHeight)
     }
     ret->i = text_height_for(vm, text, (int)w, f);
     return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* ChoiceGroup                                                         */
+/* ------------------------------------------------------------------ */
+/*
+ * A ChoiceGroup keeps three parallel arrays (text, image, selected flag) plus
+ * the element count and the cursor.  The contract of nj_midp.h says nothing
+ * about them, so the names are local to this file - but they are ordinary Java
+ * fields, so the GC keeps them alive and there is no side table.
+ */
+NJFN(cg_init)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 type = NJ_ARG_INT(args, 0);
+    nj_ref label = NJ_ARG_REF(args, 1);
+
+    (void)item_init(vm, th, args, ret);
+    if (type < 1 || type > 3) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "choice type must be EXCLUSIVE, MULTIPLE or IMPLICIT");
+    }
+    fput(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT, type);
+    rput(vm, self, NJ_C_CHOICEGROUP, "cgLabel", D_STR, label);
+    rput(vm, self, NJ_C_CHOICEGROUP, "cgStrings", D_STRARR, NULL);
+    rput(vm, self, NJ_C_CHOICEGROUP, "cgImages", D_IMGARR, NULL);
+    rput(vm, self, NJ_C_CHOICEGROUP, "cgSelected", "[Z", NULL);
+    rput(vm, self, NJ_C_CHOICEGROUP, "cgFont", D_FONT, NULL);
+    fput(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT, 0);
+    fput(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT, -1);
+    fput(vm, self, NJ_C_CHOICEGROUP, "cgFit", D_INT, 0);
+    return vm->exception ? NJ_ERR : NJ_OK;
+}
+
+/* Grow the three parallel arrays so that `need` elements fit. */
+static nj_status cg_ensure(nj_vm *vm, nj_ref self, int need)
+{
+    nj_ref strs = rget(vm, self, NJ_C_CHOICEGROUP, "cgStrings", D_STRARR);
+    nj_ref imgs = rget(vm, self, NJ_C_CHOICEGROUP, "cgImages", D_IMGARR);
+    nj_ref sels = rget(vm, self, NJ_C_CHOICEGROUP, "cgSelected", "[Z");
+    nj_u4 cur = strs ? strs->length : 0u;
+
+    if ((nj_u4)need <= cur && strs && imgs && sels) {
+        return NJ_OK;
+    }
+    {
+        nj_u4 cap = cur ? cur : 4u;
+        nj_ref ns, ni, nf;
+        nj_u4 i;
+        while (cap < (nj_u4)need) {
+            cap *= 2u;
+        }
+        ns = nj_object_array_new(vm, "java/lang/String", cap);
+        ni = nj_object_array_new(vm, NJ_C_IMAGE, cap);
+        nf = nj_new_array(vm, NULL, cap, NJ_ARRAY_T_BOOLEAN);
+        if (!ns || !ni || !nf) {
+            return nj_throw_oom(vm);
+        }
+        for (i = 0u; i < cur; i++) {
+            if (strs) { nj_array_set_ref(ns, i, nj_array_get_ref(strs, i)); }
+            if (imgs) { nj_array_set_ref(ni, i, nj_array_get_ref(imgs, i)); }
+            if (sels) { nf->u.bytes[i] = sels->u.bytes[i]; }
+        }
+        rput(vm, self, NJ_C_CHOICEGROUP, "cgStrings", D_STRARR, ns);
+        rput(vm, self, NJ_C_CHOICEGROUP, "cgImages", D_IMGARR, ni);
+        rput(vm, self, NJ_C_CHOICEGROUP, "cgSelected", "[Z", nf);
+    }
+    return NJ_OK;
+}
+
+/* Move every element from `from` to the end one slot right (or left). */
+static void cg_shift(nj_vm *vm, nj_ref self, int from, int to)
+{
+    nj_ref strs = rget(vm, self, NJ_C_CHOICEGROUP, "cgStrings", D_STRARR);
+    nj_ref imgs = rget(vm, self, NJ_C_CHOICEGROUP, "cgImages", D_IMGARR);
+    nj_ref sels = rget(vm, self, NJ_C_CHOICEGROUP, "cgSelected", "[Z");
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+    int i;
+
+    if (!strs || !imgs || !sels || from == to) {
+        return;
+    }
+    if (to > from) {
+        for (i = n - 1; i >= from; i--) {
+            nj_array_set_ref(strs, (nj_u4)(i + 1), nj_array_get_ref(strs, (nj_u4)i));
+            nj_array_set_ref(imgs, (nj_u4)(i + 1), nj_array_get_ref(imgs, (nj_u4)i));
+            sels->u.bytes[i + 1] = sels->u.bytes[i];
+        }
+    } else {
+        for (i = from; i < n; i++) {
+            nj_array_set_ref(strs, (nj_u4)(i - 1), nj_array_get_ref(strs, (nj_u4)i));
+            nj_array_set_ref(imgs, (nj_u4)(i - 1), nj_array_get_ref(imgs, (nj_u4)i));
+            sels->u.bytes[i - 1] = sels->u.bytes[i];
+        }
+        sels->u.bytes[n - 1] = 0;
+    }
+}
+
+static nj_status cg_append_common(nj_vm *vm, nj_ref self, nj_ref str,
+                                  nj_ref img)
+{
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+    nj_ref strs;
+    nj_ref imgs;
+
+    if (!str) {
+        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
+    }
+    if (img && !fget(vm, self, NJ_C_CHOICEGROUP, "cgSelected", "[Z")) {
+        /* nothing: ensure() allocates below */
+    }
+    if (img && fget(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT) == 3) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "IMPLICIT ChoiceGroup cannot hold images");
+    }
+    if (cg_ensure(vm, self, (int)n + 1) != NJ_OK) {
+        return NJ_ERR;
+    }
+    strs = rget(vm, self, NJ_C_CHOICEGROUP, "cgStrings", D_STRARR);
+    imgs = rget(vm, self, NJ_C_CHOICEGROUP, "cgImages", D_IMGARR);
+    nj_array_set_ref(strs, (nj_u4)n, str);
+    nj_array_set_ref(imgs, (nj_u4)n, img);
+    fput(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT, n + 1);
+    if (fget(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT) < 0) {
+        fput(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT, 0);
+    }
+    return NJ_OK;
+}
+
+NJFN(cg_append)
+{
+    return cg_append_common(vm, NJ_THIS(args), NJ_ARG_REF(args, 0), NULL);
+}
+
+NJFN(cg_append_img)
+{
+    return cg_append_common(vm, NJ_THIS(args), NJ_ARG_REF(args, 0),
+                            NJ_ARG_REF(args, 1));
+}
+
+static nj_status cg_insert_common(nj_vm *vm, nj_ref self, nj_s4 at, nj_ref str,
+                                  nj_ref img)
+{
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+    nj_ref strs;
+    nj_ref imgs;
+
+    if (!str) {
+        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
+    }
+    if (at < 0 || at > n) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    if (img && fget(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT) == 3) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "IMPLICIT ChoiceGroup cannot hold images");
+    }
+    if (cg_ensure(vm, self, (int)n + 1) != NJ_OK) {
+        return NJ_ERR;
+    }
+    cg_shift(vm, self, (int)at, (int)at + 1);
+    strs = rget(vm, self, NJ_C_CHOICEGROUP, "cgStrings", D_STRARR);
+    imgs = rget(vm, self, NJ_C_CHOICEGROUP, "cgImages", D_IMGARR);
+    nj_array_set_ref(strs, (nj_u4)at, str);
+    nj_array_set_ref(imgs, (nj_u4)at, img);
+    fput(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT, n + 1);
+    if (fget(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT) < 0) {
+        fput(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT, 0);
+    }
+    return NJ_OK;
+}
+
+NJFN(cg_insert)
+{
+    return cg_insert_common(vm, NJ_THIS(args), NJ_ARG_INT(args, 0),
+                            NJ_ARG_REF(args, 1), NULL);
+}
+
+NJFN(cg_insert_img)
+{
+    return cg_insert_common(vm, NJ_THIS(args), NJ_ARG_INT(args, 0),
+                            NJ_ARG_REF(args, 1), NJ_ARG_REF(args, 2));
+}
+
+NJFN(cg_delete)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+
+    if (at < 0 || at >= n) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    cg_shift(vm, self, (int)at + 1, (int)at);
+    fput(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT, n - 1);
+    if (fget(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT) >= n - 1) {
+        fput(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT, n - 2);
+    }
+    return NJ_OK;
+}
+
+NJFN(cg_deleteAll)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref strs = rget(vm, self, NJ_C_CHOICEGROUP, "cgStrings", D_STRARR);
+    nj_ref imgs = rget(vm, self, NJ_C_CHOICEGROUP, "cgImages", D_IMGARR);
+    nj_ref sels = rget(vm, self, NJ_C_CHOICEGROUP, "cgSelected", "[Z");
+    nj_u4 i;
+
+    if (strs) {
+        for (i = 0u; i < strs->length; i++) {
+            nj_array_set_ref(strs, i, NULL);
+        }
+    }
+    if (imgs) {
+        for (i = 0u; i < imgs->length; i++) {
+            nj_array_set_ref(imgs, i, NULL);
+        }
+    }
+    if (sels) {
+        memset(sels->u.bytes, 0, sels->length);
+    }
+    fput(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT, 0);
+    fput(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT, -1);
+    return NJ_OK;
+}
+
+NJFN(cg_size)
+{
+    ret->i = fget(vm, NJ_THIS(args), NJ_C_CHOICEGROUP, "cgCount", D_INT);
+    return NJ_OK;
+}
+
+NJFN(cg_getString)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref strs = rget(vm, self, NJ_C_CHOICEGROUP, "cgStrings", D_STRARR);
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+
+    if (at < 0 || at >= n || !strs || (nj_u4)at >= strs->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    ret->r = nj_array_get_ref(strs, (nj_u4)at);
+    return NJ_OK;
+}
+
+NJFN(cg_setString)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref s = NJ_ARG_REF(args, 1);
+    nj_ref strs = rget(vm, self, NJ_C_CHOICEGROUP, "cgStrings", D_STRARR);
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+
+    if (!s) {
+        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
+    }
+    if (at < 0 || at >= n || !strs || (nj_u4)at >= strs->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    nj_array_set_ref(strs, (nj_u4)at, s);
+    return NJ_OK;
+}
+
+NJFN(cg_getImage)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref imgs = rget(vm, self, NJ_C_CHOICEGROUP, "cgImages", D_IMGARR);
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+
+    if (at < 0 || at >= n || !imgs || (nj_u4)at >= imgs->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    ret->r = nj_array_get_ref(imgs, (nj_u4)at);
+    return NJ_OK;
+}
+
+NJFN(cg_setImage)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref img = NJ_ARG_REF(args, 1);
+    nj_ref imgs = rget(vm, self, NJ_C_CHOICEGROUP, "cgImages", D_IMGARR);
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+
+    if (at < 0 || at >= n || !imgs || (nj_u4)at >= imgs->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    nj_array_set_ref(imgs, (nj_u4)at, img);
+    return NJ_OK;
+}
+
+NJFN(cg_isSelected)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref sels = rget(vm, self, NJ_C_CHOICEGROUP, "cgSelected", "[Z");
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+
+    if (at < 0 || at >= n || !sels || (nj_u4)at >= sels->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    ret->i = sels->u.bytes[at] ? 1 : 0;
+    return NJ_OK;
+}
+
+static nj_status cg_set_selected(nj_vm *vm, nj_ref self, nj_s4 at, int on)
+{
+    nj_ref sels = rget(vm, self, NJ_C_CHOICEGROUP, "cgSelected", "[Z");
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+    nj_s4 type;
+
+    if (at < 0 || at >= n || !sels || (nj_u4)at >= sels->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    type = fget(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT);
+    if (type == 2) {
+        nj_u4 i;
+        for (i = 0u; i < sels->length; i++) {
+            sels->u.bytes[i] = 0;
+        }
+        sels->u.bytes[at] = 1;
+    } else if (type == 3 && !on) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "cannot deselect an IMPLICIT element");
+    } else {
+        sels->u.bytes[at] = on ? 1 : 0;
+    }
+    fput(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT, at);
+    return NJ_OK;
+}
+
+NJFN(cg_setSelectedIndex)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_status st = cg_set_selected(vm, self, at, 1);
+    if (st != NJ_OK) {
+        return st;
+    }
+    item_state_changed(vm, self);
+    return NJ_OK;
+}
+
+NJFN(cg_setSelectedFlags)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref flags = NJ_ARG_REF(args, 0);
+    nj_ref sels = rget(vm, self, NJ_C_CHOICEGROUP, "cgSelected", "[Z");
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+    nj_s4 type = fget(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT);
+    nj_u4 i;
+    int first = -1;
+
+    if (!flags) {
+        return nj_throw(vm, "java/lang/NullPointerException", "flags is null");
+    }
+    if (!sels) {
+        return NJ_OK;
+    }
+    for (i = 0u; i < (nj_u4)n && i < sels->length; i++) {
+        int on = (i < flags->length) ? (flags->u.bytes[i] ? 1 : 0) : 0;
+        sels->u.bytes[i] = (nj_u1)on;
+        if (on && first < 0) {
+            first = (int)i;
+        }
+        if (on && type == 2) {
+            nj_u4 k;
+            for (k = 0u; k < sels->length; k++) {
+                sels->u.bytes[k] = 0;
+            }
+            sels->u.bytes[i] = 1;
+            first = (int)i;
+            break;
+        }
+        if (on && type == 3) {
+            nj_u4 k;
+            for (k = 0u; k < sels->length; k++) {
+                sels->u.bytes[k] = 0;
+            }
+            sels->u.bytes[i] = 1;
+            first = (int)i;
+            break;
+        }
+    }
+    fput(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT, first);
+    return NJ_OK;
+}
+
+NJFN(cg_getSelectedFlags)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref flags = NJ_ARG_REF(args, 0);
+    nj_ref sels = rget(vm, self, NJ_C_CHOICEGROUP, "cgSelected", "[Z");
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+    nj_s4 i;
+    int count = 0;
+
+    if (!flags) {
+        return nj_throw(vm, "java/lang/NullPointerException", "flags is null");
+    }
+    for (i = 0; i < n; i++) {
+        int on = 0;
+        if (sels && (nj_u4)i < sels->length) {
+            on = sels->u.bytes[i] ? 1 : 0;
+        }
+        if ((nj_u4)i < flags->length) {
+            flags->u.bytes[i] = (nj_u1)on;
+        }
+        count += on;
+    }
+    ret->i = count;
+    return NJ_OK;
+}
+
+NJFN(cg_getSelectedIndex)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref sels = rget(vm, self, NJ_C_CHOICEGROUP, "cgSelected", "[Z");
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+    nj_s4 i;
+
+    if (fget(vm, self, NJ_C_CHOICEGROUP, "cgType", D_INT) == 2 && sels) {
+        int count = 0, last = -1;
+        for (i = 0; i < n && (nj_u4)i < sels->length; i++) {
+            if (sels->u.bytes[i]) { count++; last = (int)i; }
+        }
+        ret->i = (count == 1) ? last : -1;
+        return NJ_OK;
+    }
+    ret->i = fget(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT);
+    return NJ_OK;
+}
+
+NJFN(cg_getFitPolicy)
+{
+    ret->i = fget(vm, NJ_THIS(args), NJ_C_CHOICEGROUP, "cgFit", D_INT);
+    return NJ_OK;
+}
+
+NJFN(cg_setFitPolicy)
+{
+    fput(vm, NJ_THIS(args), NJ_C_CHOICEGROUP, "cgFit", D_INT,
+         NJ_ARG_INT(args, 0) ? 1 : 0);
+    return NJ_OK;
+}
+
+NJFN(cg_setFont)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref f = NJ_ARG_REF(args, 1);
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+
+    if (!f) {
+        return nj_throw(vm, "java/lang/NullPointerException", "font is null");
+    }
+    if (at < -1 || at >= n) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    rput(vm, self, NJ_C_CHOICEGROUP, "cgFont", D_FONT, f);
+    return NJ_OK;
+}
+
+NJFN(cg_getFont)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+
+    if (at < -1 || at >= n) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    ret->r = rget(vm, self, NJ_C_CHOICEGROUP, "cgFont", D_FONT);
+    return NJ_OK;
+}
+
+NJFN(cg_njText)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 n = fget(vm, self, NJ_C_CHOICEGROUP, "cgCount", D_INT);
+    nj_ref strs = rget(vm, self, NJ_C_CHOICEGROUP, "cgStrings", D_STRARR);
+    nj_ref sels = rget(vm, self, NJ_C_CHOICEGROUP, "cgSelected", "[Z");
+    nj_s4 idx = fget(vm, self, NJ_C_CHOICEGROUP, "cgIndex", D_INT);
+    nj_ref out;
+    nj_u2 buf[96];
+    int k = 0;
+    nj_s4 i;
+
+    if (n <= 0 || !strs) {
+        ret->r = NULL;
+        return NJ_OK;
+    }
+    for (i = 0; i < n && k < 80; i++) {
+        nj_ref s;
+        int mark = 0;
+        if ((nj_u4)i >= strs->length) {
+            break;
+        }
+        if (sels && (nj_u4)i < sels->length && sels->u.bytes[i]) {
+            mark = 1;
+        }
+        if (i == idx) {
+            buf[k++] = '[';
+            buf[k++] = '>';
+        } else {
+            buf[k++] = ' ';
+        }
+        buf[k++] = mark ? 'x' : 'o';
+        buf[k++] = ' ';
+        s = nj_array_get_ref(strs, (nj_u4)i);
+        if (s) {
+            nj_u4 j;
+            nj_u4 sn = nj_string_len(s);
+            for (j = 0u; j < sn && k < 80; j++) {
+                buf[k++] = nj_string_chars(s)[j];
+            }
+        }
+        if (i != n - 1 && k < 79) {
+            buf[k++] = ' ';
+            buf[k++] = '|';
+            buf[k++] = ' ';
+        }
+    }
+    out = nj_new_string_utf16(vm, buf, k);
+    if (!out) {
+        return nj_throw_oom(vm);
+    }
+    ret->r = out;
+    return NJ_OK;
+}
+
+NJFN(cg_njHeight)
+{
+    const nj_font *f = nj_midp_font_for(vm, NULL);
+    NJ_UNUSED(args);
+    ret->i = (f ? f->height : 11) + 2;
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* DateField                                                           */
+/* ------------------------------------------------------------------ */
+/*
+ * Fields of a DateField:  dfTime (J, milliseconds since the epoch),
+ * dfMode (I: DATE / TIME / DATE_TIME), dfInputMode (I).
+ * The textual value is produced here rather than by java.util.Calendar so that
+ * the UI keeps working even when a trimmed build leaves Calendar out.
+ */
+static void df_format(nj_s8 t, nj_s4 mode, char *out, int cap)
+{
+    nj_s4 days, rem, hh, mm;
+    int year = 1970, month = 0, day = 0;
+    int n = 0;
+    static const int mdays[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+
+    if (cap < 24) {
+        out[0] = '\0';
+        return;
+    }
+    days = (nj_s4)(t / 86400000);
+    rem = (nj_s4)(t % 86400000);
+    if (rem < 0) {
+        rem += 86400000;
+        days -= 1;
+    }
+    hh = rem / 3600000;
+    mm = (rem % 3600000) / 60000;
+    while (days < 0) {
+        year -= 1;
+        days += 365 + ((year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 1 : 0);
+    }
+    for (;;) {
+        int leap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 1 : 0;
+        int len = 365 + leap;
+        if (days < len) {
+            break;
+        }
+        days -= len;
+        year++;
+    }
+    for (month = 0; month < 12; month++) {
+        int len = mdays[month] + ((month == 1) ? ((year % 4 == 0 &&
+                  (year % 100 != 0 || year % 400 == 0)) ? 1 : 0) : 0);
+        if (days < len) {
+            break;
+        }
+        days -= len;
+    }
+    day = days + 1;
+    /* Format YYYY-MM-DD HH:MM (or the part the mode asks for). */
+    {
+        char tmp[8];
+        int k = 0, y = year;
+        if (y == 0) { tmp[k++] = '0'; }
+        while (y > 0 && k < 6) { tmp[k++] = (char)('0' + y % 10); y /= 10; }
+        while (k > 0 && n < cap - 1) { out[n++] = tmp[--k]; }
+    }
+    if (mode != 1) {
+        out[n++] = '-';
+        out[n++] = (char)('0' + (month + 1) / 10);
+        out[n++] = (char)('0' + (month + 1) % 10);
+        out[n++] = '-';
+        out[n++] = (char)('0' + day / 10);
+        out[n++] = (char)('0' + day % 10);
+    }
+    if (mode != 0) {
+        out[n++] = ' ';
+        out[n++] = (char)('0' + (hh / 10) % 10);
+        out[n++] = (char)('0' + hh % 10);
+        out[n++] = ':';
+        out[n++] = (char)('0' + (mm / 10) % 10);
+        out[n++] = (char)('0' + mm % 10);
+    }
+    out[n] = '\0';
+}
+
+NJFN(df_init)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 mode = NJ_ARG_INT(args, 2);
+
+    (void)item_init(vm, th, args, ret);
+    if (mode < 1 || mode > 3) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "unknown date field mode");
+    }
+    rput(vm, self, NJ_C_DATEFIELD, "dfLabel", D_STR, NJ_ARG_REF(args, 0));
+    {
+        nj_field *f = fld(vm, NJ_C_DATEFIELD, "dfTime", "J", 0);
+        if (f) {
+            nj_field_write_long(vm, self, f, NJ_ARG_LONG(args, 1));
+        }
+    }
+    fput(vm, self, NJ_C_DATEFIELD, "dfMode", D_INT, mode);
+    fput(vm, self, NJ_C_DATEFIELD, "dfInputMode", D_INT, -1);
+    return vm->exception ? NJ_ERR : NJ_OK;
+}
+
+NJFN(df_getDate)
+{
+    nj_field *f = fld(vm, NJ_C_DATEFIELD, "dfTime", "J", 0);
+    ret->j = f ? nj_field_read_long(vm, NJ_THIS(args), f) : 0;
+    return NJ_OK;
+}
+
+NJFN(df_setDate)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_field *f = fld(vm, NJ_C_DATEFIELD, "dfTime", "J", 0);
+
+    if (!f) {
+        return nj_throw(vm, "java/lang/InternalError", "DateField layout");
+    }
+    nj_field_write_long(vm, self, f, NJ_ARG_LONG(args, 0));
+    item_state_changed(vm, self);
+    return NJ_OK;
+}
+
+NJFN(df_setInputMode)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 t = NJ_ARG_INT(args, 0);
+    if (t != -1) {
+        switch (t) {
+        case 0: case 1: case 2: case 3: case 4: case 5:
+        case 6: case 7: case 8: case 9: case 10:
+            break;
+        default:
+            return nj_throw(vm, "java/lang/IllegalArgumentException",
+                            "unknown input mode");
+        }
+    }
+    fput(vm, self, NJ_C_DATEFIELD, "dfInputMode", D_INT, t);
+    return NJ_OK;
+}
+
+NJFN(df_getInputMode)
+{
+    ret->i = fget(vm, NJ_THIS(args), NJ_C_DATEFIELD, "dfInputMode", D_INT);
+    return NJ_OK;
+}
+
+NJFN(df_njText)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_field *f = fld(vm, NJ_C_DATEFIELD, "dfTime", "J", 0);
+    nj_s8 t = f ? nj_field_read_long(vm, self, f) : 0;
+    char buf[40];
+    df_format(t, fget(vm, self, NJ_C_DATEFIELD, "dfMode", D_INT), buf,
+              (int)sizeof(buf));
+    ret->r = nj_string_new(vm, buf);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+NJFN(df_njHeight)
+{
+    const nj_font *f = nj_midp_font_for(vm, NULL);
+    NJ_UNUSED(args);
+    ret->i = (f ? f->height : 11) + 2;
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Form (List derives from it)                                         */
+/* ------------------------------------------------------------------ */
+/*
+ * A Form is an Item[] plus a count.  Item.s itOwner points back at the Form so
+ * that notifyStateChanged() can reach the ItemStateListener.
+ */
+/* Forward: both Form and List append through the same code path. */
+static nj_status form_add_item(nj_vm *vm, nj_ref form, nj_ref item, nj_s4 at);
+
+NJFN(form_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    (void)d_init(vm, th, args, ret);
+    rput(vm, self, NJ_C_DISPLAYABLE, F_D_TITLE, D_STR, NJ_ARG_REF(args, 0));
+    rput(vm, self, NJ_C_FORM, "fmItems", D_ITEMARR, NULL);
+    fput(vm, self, NJ_C_FORM, "fmCount", D_INT, 0);
+    fput(vm, self, NJ_C_FORM, "fmIndex", D_INT, 0);
+    rput(vm, self, NJ_C_FORM, "fmItemListener", D_ISL, NULL);
+    rput(vm, self, NJ_C_FORM, "fmBuffer", D_IMAGE, NULL);
+    return vm->exception ? NJ_ERR : NJ_OK;
+}
+
+static nj_status form_add_item(nj_vm *vm, nj_ref form, nj_ref item, nj_s4 at)
+{
+    nj_ref items = rget(vm, form, NJ_C_FORM, "fmItems", D_ITEMARR);
+    nj_s4 n = fget(vm, form, NJ_C_FORM, "fmCount", D_INT);
+    nj_s4 i;
+
+    if (!item) {
+        return nj_throw(vm, "java/lang/NullPointerException", "item is null");
+    }
+    if (at < 0 || at > n) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    if (!items || (nj_u4)n >= items->length) {
+        nj_u4 cap = items ? items->length * 2u : 8u;
+        nj_ref ni;
+        while (cap < (nj_u4)n + 1u) {
+            cap *= 2u;
+        }
+        ni = nj_object_array_new(vm, NJ_C_ITEM, cap);
+        if (!ni) {
+            return nj_throw_oom(vm);
+        }
+        for (i = 0; i < n && items && (nj_u4)i < items->length; i++) {
+            nj_array_set_ref(ni, (nj_u4)i, nj_array_get_ref(items, (nj_u4)i));
+        }
+        rput(vm, form, NJ_C_FORM, "fmItems", D_ITEMARR, ni);
+        items = ni;
+    }
+    for (i = n; i > at; i--) {
+        nj_array_set_ref(items, (nj_u4)i, nj_array_get_ref(items, (nj_u4)(i - 1)));
+    }
+    nj_array_set_ref(items, (nj_u4)at, item);
+    rput(vm, item, NJ_C_ITEM, "itOwner", D_FORM, form);
+    rput(vm, item, NJ_C_ITEM, "itGraphics", D_GFX,
+         rget(vm, form, NJ_C_FORM, "fmBuffer", D_IMAGE)
+             ? rget(vm, form, NJ_C_FORM, "fmBuffer", D_IMAGE) : NULL);
+    fput(vm, form, NJ_C_FORM, "fmCount", D_INT, n + 1);
+    return NJ_OK;
+}
+
+NJFN(form_append_str)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref s = NJ_ARG_REF(args, 0);
+    nj_ref item;
+    nj_status st;
+    nj_value a[3];
+
+    if (!s) {
+        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
+    }
+    item = nj_object_new(vm, NJ_C_STRINGITEM);
+    if (!item) {
+        return nj_throw_oom(vm);
+    }
+    a[0].r = NULL;      /* label */
+    a[1].r = s;         /* text  */
+    a[2].i = 0;         /* PLAIN */
+    st = nj_call_special(vm, item, NJ_C_STRINGITEM, "<init>",
+                         "(Ljava/lang/String;Ljava/lang/String;I)V", a, NULL);
+    if (st != NJ_OK) {
+        return st;
+    }
+    st = form_add_item(vm, self, item, fget(vm, self, NJ_C_FORM, "fmCount", D_INT));
+    if (st != NJ_OK) {
+        return st;
+    }
+    ret->i = fget(vm, self, NJ_C_FORM, "fmCount", D_INT) - 1;
+    return NJ_OK;
+}
+
+NJFN(form_append_img)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref img = NJ_ARG_REF(args, 0);
+    nj_ref item;
+    nj_status st;
+    nj_value a[4];
+
+    if (!img) {
+        return nj_throw(vm, "java/lang/NullPointerException", "image is null");
+    }
+    item = nj_object_new(vm, NJ_C_IMAGEITEM);
+    if (!item) {
+        return nj_throw_oom(vm);
+    }
+    a[0].r = img;
+    a[1].r = nj_string_new(vm, "");
+    a[2].i = 0;
+    a[3].r = NULL;
+    st = nj_call_special(vm, item, NJ_C_IMAGEITEM, "<init>",
+                         "(L" NJ_C_IMAGE ";Ljava/lang/String;ILjava/lang/String;)V",
+                         a, NULL);
+    if (st != NJ_OK) {
+        return st;
+    }
+    st = form_add_item(vm, self, item, fget(vm, self, NJ_C_FORM, "fmCount", D_INT));
+    if (st != NJ_OK) {
+        return st;
+    }
+    ret->i = fget(vm, self, NJ_C_FORM, "fmCount", D_INT) - 1;
+    return NJ_OK;
+}
+
+NJFN(form_append_item)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_status st = form_add_item(vm, self, NJ_ARG_REF(args, 0),
+                                 fget(vm, self, NJ_C_FORM, "fmCount", D_INT));
+    if (st != NJ_OK) {
+        return st;
+    }
+    ret->i = fget(vm, self, NJ_C_FORM, "fmCount", D_INT) - 1;
+    return NJ_OK;
+}
+
+NJFN(form_insert_str)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref s = NJ_ARG_REF(args, 1);
+    nj_ref item;
+    nj_status st;
+    nj_value a[3];
+
+    if (!s) {
+        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
+    }
+    item = nj_object_new(vm, NJ_C_STRINGITEM);
+    if (!item) {
+        return nj_throw_oom(vm);
+    }
+    a[0].r = NULL;
+    a[1].r = s;
+    a[2].i = 0;
+    st = nj_call_special(vm, item, NJ_C_STRINGITEM, "<init>",
+                         "(Ljava/lang/String;Ljava/lang/String;I)V", a, NULL);
+    if (st != NJ_OK) {
+        return st;
+    }
+    return form_add_item(vm, self, item, at);
+}
+
+NJFN(form_insert_img)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref img = NJ_ARG_REF(args, 1);
+    nj_ref item;
+    nj_status st;
+    nj_value a[4];
+
+    if (!img) {
+        return nj_throw(vm, "java/lang/NullPointerException", "image is null");
+    }
+    item = nj_object_new(vm, NJ_C_IMAGEITEM);
+    if (!item) {
+        return nj_throw_oom(vm);
+    }
+    a[0].r = img;
+    a[1].r = nj_string_new(vm, "");
+    a[2].i = 0;
+    a[3].r = NULL;
+    st = nj_call_special(vm, item, NJ_C_IMAGEITEM, "<init>",
+                         "(L" NJ_C_IMAGE ";Ljava/lang/String;ILjava/lang/String;)V",
+                         a, NULL);
+    if (st != NJ_OK) {
+        return st;
+    }
+    return form_add_item(vm, self, item, at);
+}
+
+NJFN(form_insert_item)
+{
+    return form_add_item(vm, NJ_THIS(args), NJ_ARG_REF(args, 1),
+                         NJ_ARG_INT(args, 0));
+}
+
+NJFN(form_delete)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref items = rget(vm, self, NJ_C_FORM, "fmItems", D_ITEMARR);
+    nj_s4 n = fget(vm, self, NJ_C_FORM, "fmCount", D_INT);
+    nj_s4 i;
+
+    if (at < 0 || at >= n) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    if (items) {
+        for (i = at; i < n - 1; i++) {
+            nj_array_set_ref(items, (nj_u4)i,
+                             nj_array_get_ref(items, (nj_u4)(i + 1)));
+        }
+        nj_array_set_ref(items, (nj_u4)(n - 1), NULL);
+    }
+    fput(vm, self, NJ_C_FORM, "fmCount", D_INT, n - 1);
+    if (fget(vm, self, NJ_C_FORM, "fmIndex", D_INT) >= n - 1) {
+        fput(vm, self, NJ_C_FORM, "fmIndex", D_INT, n - 2);
+    }
+    return NJ_OK;
+}
+
+NJFN(form_deleteAll)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref items = rget(vm, self, NJ_C_FORM, "fmItems", D_ITEMARR);
+    nj_s4 n = fget(vm, self, NJ_C_FORM, "fmCount", D_INT);
+    nj_s4 i;
+
+    if (items) {
+        for (i = 0; i < n && (nj_u4)i < items->length; i++) {
+            nj_array_set_ref(items, (nj_u4)i, NULL);
+        }
+    }
+    fput(vm, self, NJ_C_FORM, "fmCount", D_INT, 0);
+    fput(vm, self, NJ_C_FORM, "fmIndex", D_INT, 0);
+    return NJ_OK;
+}
+
+NJFN(form_size)
+{
+    ret->i = fget(vm, NJ_THIS(args), NJ_C_FORM, "fmCount", D_INT);
+    return NJ_OK;
+}
+
+NJFN(form_get)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref items = rget(vm, self, NJ_C_FORM, "fmItems", D_ITEMARR);
+    nj_s4 n = fget(vm, self, NJ_C_FORM, "fmCount", D_INT);
+
+    if (at < 0 || at >= n || !items || (nj_u4)at >= items->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    ret->r = nj_array_get_ref(items, (nj_u4)at);
+    return NJ_OK;
+}
+
+NJFN(form_set)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref item = NJ_ARG_REF(args, 1);
+    nj_ref items = rget(vm, self, NJ_C_FORM, "fmItems", D_ITEMARR);
+    nj_s4 n = fget(vm, self, NJ_C_FORM, "fmCount", D_INT);
+
+    if (!item) {
+        return nj_throw(vm, "java/lang/NullPointerException", "item is null");
+    }
+    if (at < 0 || at >= n || !items || (nj_u4)at >= items->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    nj_array_set_ref(items, (nj_u4)at, item);
+    rput(vm, item, NJ_C_ITEM, "itOwner", D_FORM, self);
+    return NJ_OK;
+}
+
+NJFN(form_setItemStateListener)
+{
+    rput(vm, NJ_THIS(args), NJ_C_FORM, "fmItemListener", D_ISL,
+         NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* List                                                                */
+/* ------------------------------------------------------------------ */
+NJFN(list_init)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 type = NJ_ARG_INT(args, 1);
+    nj_value a[1];
+
+    a[0].r = NJ_ARG_REF(args, 0);
+    if (d_init(vm, th, a, ret) != NJ_OK) {
+        return NJ_ERR;
+    }
+    rput(vm, self, NJ_C_DISPLAYABLE, F_D_TITLE, D_STR, NJ_ARG_REF(args, 0));
+    rput(vm, self, NJ_C_FORM, "fmItems", D_ITEMARR, NULL);
+    fput(vm, self, NJ_C_FORM, "fmCount", D_INT, 0);
+    fput(vm, self, NJ_C_FORM, "fmIndex", D_INT, 0);
+    rput(vm, self, NJ_C_FORM, "fmItemListener", D_ISL, NULL);
+    rput(vm, self, NJ_C_FORM, "fmBuffer", D_IMAGE, NULL);
+    if (type < 1 || type > 3) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "list type must be IMPLICIT, EXCLUSIVE or MULTIPLE");
+    }
+    fput(vm, self, NJ_C_LIST, "lsType", D_INT, type);
+    rput(vm, self, NJ_C_LIST, "lsStrings", D_STRARR, NULL);
+    rput(vm, self, NJ_C_LIST, "lsImages", D_IMGARR, NULL);
+    fput(vm, self, NJ_C_LIST, "lsCount", D_INT, 0);
+    fput(vm, self, NJ_C_LIST, "lsIndex", D_INT, 0);
+    fput(vm, self, NJ_C_LIST, "lsFit", D_INT, 0);
+    rput(vm, self, NJ_C_LIST, "lsFont", D_FONT, NULL);
+    if (type == 3) {
+        rput(vm, self, NJ_C_LIST, "lsSelect", D_CMD,
+             rgets(vm, NJ_C_LIST, "SELECT_COMMAND", D_CMD));
+    }
+    return NJ_OK;
+}
+
+NJFN(list_init_arrays)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref strs = NJ_ARG_REF(args, 2);
+    nj_ref imgs = NJ_ARG_REF(args, 3);
+    nj_value a[2];
+    nj_u4 i;
+
+    a[0].r = NJ_ARG_REF(args, 0);
+    a[1].i = NJ_ARG_INT(args, 1);
+    if (list_init(vm, th, a, ret) != NJ_OK) {
+        return NJ_ERR;
+    }
+    if (!strs || !imgs) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "strings and images must not be null");
+    }
+    if (strs->length != imgs->length) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "strings and images differ in length");
+    }
+    for (i = 0u; i < strs->length; i++) {
+        nj_ref s = nj_array_get_ref(strs, i);
+        if (!s) {
+            return nj_throw(vm, "java/lang/NullPointerException",
+                            "list element is null");
+        }
+        {
+            nj_ref item = nj_object_new(vm, NJ_C_STRINGITEM);
+            nj_value ia[3];
+            if (!item) {
+                return nj_throw_oom(vm);
+            }
+            ia[0].r = NULL;
+            ia[1].r = s;
+            ia[2].i = 0;
+            if (nj_call_special(vm, item, NJ_C_STRINGITEM, "<init>",
+                                "(Ljava/lang/String;Ljava/lang/String;I)V",
+                                ia, NULL) != NJ_OK) {
+                return NJ_ERR;
+            }
+            rput(vm, item, NJ_C_ITEM, "itImage", D_IMAGE,
+                 nj_array_get_ref(imgs, i));
+            if (form_add_item(vm, self, item, (nj_s4)i) != NJ_OK) {
+                return NJ_ERR;
+            }
+        }
+    }
+    rput(vm, self, NJ_C_LIST, "lsStrings", D_STRARR, strs);
+    rput(vm, self, NJ_C_LIST, "lsImages", D_IMGARR, imgs);
+    fput(vm, self, NJ_C_LIST, "lsCount", D_INT, (nj_s4)strs->length);
+    fput(vm, self, NJ_C_LIST, "lsIndex", D_INT, 0);
+    return NJ_OK;
+}
+
+NJFN(list_getType)
+{
+    ret->i = fget(vm, NJ_THIS(args), NJ_C_LIST, "lsType", D_INT);
+    return NJ_OK;
+}
+
+NJFN(list_append_str)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = fget(vm, self, NJ_C_LIST, "lsCount", D_INT);
+    nj_status st = form_add_item(vm, self, NJ_ARG_REF(args, 0), at);
+    NJ_UNUSED(at);
+    return st;
+}
+
+NJFN(list_append_img)
+{
+    return list_append_str(vm, th, args, ret);
+}
+
+NJFN(list_insert_str)
+{
+    return form_add_item(vm, NJ_THIS(args), NJ_ARG_REF(args, 1),
+                         NJ_ARG_INT(args, 0));
+}
+
+NJFN(list_insert_img)
+{
+    return list_insert_str(vm, th, args, ret);
+}
+
+/*
+ * List keeps its Item[] (inherited from Form) as the source of truth; the
+ * parallel String/Image arrays are views rebuilt after every mutation so the
+ * native renderer can walk either representation.
+ */
+static void list_sync(nj_vm *vm, nj_ref self)
+{
+    nj_ref items = rget(vm, self, NJ_C_FORM, "fmItems", D_ITEMARR);
+    nj_s4 n = fget(vm, self, NJ_C_FORM, "fmCount", D_INT);
+    nj_ref strs;
+    nj_ref imgs;
+    nj_s4 i;
+
+    if (!items) {
+        return;
+    }
+    strs = nj_object_array_new(vm, "java/lang/String", (nj_u4)n);
+    imgs = nj_object_array_new(vm, NJ_C_IMAGE, (nj_u4)n);
+    if (!strs || !imgs) {
+        return;
+    }
+    for (i = 0; i < n && (nj_u4)i < items->length; i++) {
+        nj_ref it = nj_array_get_ref(items, (nj_u4)i);
+        nj_ref s = NULL;
+        nj_ref im = NULL;
+        if (it) {
+            s = rget(vm, it, NJ_C_STRINGITEM, "siText", D_STR);
+            im = rget(vm, it, NJ_C_ITEM, "itImage", D_IMAGE);
+        }
+        nj_array_set_ref(strs, (nj_u4)i, s);
+        nj_array_set_ref(imgs, (nj_u4)i, im);
+    }
+    rput(vm, self, NJ_C_LIST, "lsStrings", D_STRARR, strs);
+    rput(vm, self, NJ_C_LIST, "lsImages", D_IMGARR, imgs);
+    fput(vm, self, NJ_C_LIST, "lsCount", D_INT, n);
+}
+
+NJFN(list_delete)
+{
+    nj_status st = form_delete(vm, th, args, ret);
+    if (st != NJ_OK) {
+        return st;
+    }
+    list_sync(vm, NJ_THIS(args));
+    return NJ_OK;
+}
+
+NJFN(list_deleteAll)
+{
+    nj_status st = form_deleteAll(vm, th, args, ret);
+    if (st != NJ_OK) {
+        return st;
+    }
+    list_sync(vm, NJ_THIS(args));
+    fput(vm, NJ_THIS(args), NJ_C_LIST, "lsIndex", D_INT, 0);
+    return NJ_OK;
+}
+
+NJFN(list_size)
+{
+    ret->i = fget(vm, NJ_THIS(args), NJ_C_LIST, "lsCount", D_INT);
+    return NJ_OK;
+}
+
+NJFN(list_getString)
+{
+    return cg_getString(vm, th, args, ret);
+}
+
+NJFN(list_setString)
+{
+    nj_status st = cg_setString(vm, th, args, ret);
+    if (st != NJ_OK) {
+        return st;
+    }
+    list_sync(vm, NJ_THIS(args));
+    return NJ_OK;
+}
+
+NJFN(list_getImage)
+{
+    return cg_getImage(vm, th, args, ret);
+}
+
+NJFN(list_setImage)
+{
+    return cg_setImage(vm, th, args, ret);
+}
+
+NJFN(list_getSelectedIndex)
+{
+    ret->i = fget(vm, NJ_THIS(args), NJ_C_LIST, "lsIndex", D_INT);
+    return NJ_OK;
+}
+
+NJFN(list_setSelectedIndex)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_s4 n = fget(vm, self, NJ_C_LIST, "lsCount", D_INT);
+
+    if (at < 0 || at >= n) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    fput(vm, self, NJ_C_LIST, "lsIndex", D_INT, at);
+    return NJ_OK;
+}
+
+NJFN(list_isSelected)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_s4 n = fget(vm, self, NJ_C_LIST, "lsCount", D_INT);
+
+    if (at < 0 || at >= n) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    /* List items carry no per-element flag of their own; the cursor is the
+     * selection (MIDP keeps this consistent for all three list types). */
+    ret->i = (at == fget(vm, self, NJ_C_LIST, "lsIndex", D_INT)) ? 1 : 0;
+    return NJ_OK;
+}
+
+NJFN(list_setSelectedFlags)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref flags = NJ_ARG_REF(args, 0);
+    nj_s4 n = fget(vm, self, NJ_C_LIST, "lsCount", D_INT);
+    nj_s4 i;
+
+    if (!flags) {
+        return nj_throw(vm, "java/lang/NullPointerException", "flags is null");
+    }
+    for (i = 0; i < n && (nj_u4)i < flags->length; i++) {
+        if (flags->u.bytes[i]) {
+            fput(vm, self, NJ_C_LIST, "lsIndex", D_INT, i);
+            ret->i = 1;
+            return NJ_OK;
+        }
+    }
+    ret->i = 0;
+    return NJ_OK;
+}
+
+NJFN(list_getSelectedFlags)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref flags = NJ_ARG_REF(args, 0);
+    nj_s4 n = fget(vm, self, NJ_C_LIST, "lsCount", D_INT);
+    nj_s4 i, count = 0;
+
+    if (!flags) {
+        return nj_throw(vm, "java/lang/NullPointerException", "flags is null");
+    }
+    for (i = 0; i < n && (nj_u4)i < flags->length; i++) {
+        int on = (i == fget(vm, self, NJ_C_LIST, "lsIndex", D_INT)) ? 1 : 0;
+        flags->u.bytes[i] = (nj_u1)on;
+        count += on;
+    }
+    ret->i = count;
+    return NJ_OK;
+}
+
+NJFN(list_setFitPolicy)
+{
+    fput(vm, NJ_THIS(args), NJ_C_LIST, "lsFit", D_INT,
+         NJ_ARG_INT(args, 0) ? 1 : 0);
+    return NJ_OK;
+}
+
+NJFN(list_getFitPolicy)
+{
+    ret->i = fget(vm, NJ_THIS(args), NJ_C_LIST, "lsFit", D_INT);
+    return NJ_OK;
+}
+
+NJFN(list_setFont)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_ref f = NJ_ARG_REF(args, 1);
+    nj_s4 n = fget(vm, self, NJ_C_LIST, "lsCount", D_INT);
+
+    if (!f) {
+        return nj_throw(vm, "java/lang/NullPointerException", "font is null");
+    }
+    if (at < -1 || at >= n) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    rput(vm, self, NJ_C_LIST, "lsFont", D_FONT, f);
+    return NJ_OK;
+}
+
+NJFN(list_getFont)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 at = NJ_ARG_INT(args, 0);
+    nj_s4 n = fget(vm, self, NJ_C_LIST, "lsCount", D_INT);
+
+    if (at < -1 || at >= n) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    ret->r = rget(vm, self, NJ_C_LIST, "lsFont", D_FONT);
+    return NJ_OK;
+}
+
+NJFN(list_getSelectCommand)
+{
+    ret->r = rget(vm, NJ_THIS(args), NJ_C_LIST, "lsSelect", D_CMD);
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* TextBox                                                             */
+/* ------------------------------------------------------------------ */
+NJFN(tb_init)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref title = NJ_ARG_REF(args, 0);
+    nj_ref text = NJ_ARG_REF(args, 1);
+    nj_s4 max = NJ_ARG_INT(args, 2);
+    nj_s4 constraints = NJ_ARG_INT(args, 3);
+    nj_ref chars;
+
+    (void)d_init(vm, th, args, ret);
+    if (!text) {
+        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
+    }
+    if (max <= 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "maxSize must be positive");
+    }
+    if ((constraints & 0xFFFF) > 6) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "unknown constraints");
+    }
+    if (nj_string_len(text) > (nj_u4)max) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "initial text longer than maxSize");
+    }
+    if (!tf_allowed(constraints, nj_string_chars(text),
+                    (int)nj_string_len(text))) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "initial text violates the constraints");
+    }
+    chars = nj_char_array_new(vm, (nj_u4)max);
+    if (!chars) {
+        return nj_throw_oom(vm);
+    }
+    if (nj_string_len(text) > 0u) {
+        memcpy(chars->u.bytes, nj_string_chars(text),
+               (nj_size)nj_string_len(text) * sizeof(nj_u2));
+    }
+    rput(vm, self, NJ_C_DISPLAYABLE, F_D_TITLE, D_STR, title);
+    rput(vm, self, NJ_C_TEXTBOX, "tbText", D_STR, text);
+    rput(vm, self, NJ_C_TEXTBOX, "tbChars", D_CHARR, chars);
+    fput(vm, self, NJ_C_TEXTBOX, "tbMax", D_INT, max);
+    fput(vm, self, NJ_C_TEXTBOX, "tbConstraints", D_INT, constraints);
+    fput(vm, self, NJ_C_TEXTBOX, "tbCursor", D_INT, (nj_s4)nj_string_len(text));
+    fput(vm, self, NJ_C_TEXTBOX, "tbInputMode", D_INT, -1);
+    rput(vm, self, NJ_C_TEXTBOX, "tbInputModeName", D_STR, NULL);
+    rput(vm, self, NJ_C_TEXTBOX, "tbBuffer", D_IMAGE, NULL);
+    return vm->exception ? NJ_ERR : NJ_OK;
+}
+
+static nj_status tb_sync(nj_vm *vm, nj_ref self, const nj_u2 *s, int n)
+{
+    nj_ref chars = rget(vm, self, NJ_C_TEXTBOX, "tbChars", D_CHARR);
+    nj_ref str;
+
+    if (!chars || (nj_u4)n > chars->length) {
+        return NJ_OK;
+    }
+    if (n > 0) {
+        memcpy(chars->u.bytes, s, (nj_size)n * sizeof(nj_u2));
+    }
+    if ((nj_u4)n < chars->length) {
+        memset((nj_u2 *)chars->u.bytes + n, 0,
+               (nj_size)(chars->length - (nj_u4)n) * sizeof(nj_u2));
+    }
+    str = nj_new_string_utf16(vm, s, n);
+    if (!str) {
+        return nj_throw_oom(vm);
+    }
+    rput(vm, self, NJ_C_TEXTBOX, "tbText", D_STR, str);
+    return NJ_OK;
+}
+
+NJFN(tb_getString)
+{
+    ret->r = rget(vm, NJ_THIS(args), NJ_C_TEXTBOX, "tbText", D_STR);
+    return NJ_OK;
+}
+
+NJFN(tb_setString)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref s = NJ_ARG_REF(args, 0);
+    nj_s4 max = fget(vm, self, NJ_C_TEXTBOX, "tbMax", D_INT);
+
+    if (!s) {
+        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
+    }
+    if ((nj_s4)nj_string_len(s) > max) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "text longer than maxSize");
+    }
+    if (!tf_allowed(fget(vm, self, NJ_C_TEXTBOX, "tbConstraints", D_INT),
+                    nj_string_chars(s), (int)nj_string_len(s))) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "text violates the constraints");
+    }
+    if (tb_sync(vm, self, nj_string_chars(s), (int)nj_string_len(s)) != NJ_OK) {
+        return NJ_ERR;
+    }
+    fput(vm, self, NJ_C_TEXTBOX, "tbCursor", D_INT, (nj_s4)nj_string_len(s));
+    return NJ_OK;
+}
+
+NJFN(tb_getChars)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref dst = NJ_ARG_REF(args, 0);
+    nj_ref src = rget(vm, self, NJ_C_TEXTBOX, "tbChars", D_CHARR);
+    nj_ref text = rget(vm, self, NJ_C_TEXTBOX, "tbText", D_STR);
+
+    if (!dst) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (src && text) {
+        nj_u4 n = nj_string_len(text);
+        if (n > dst->length) {
+            n = dst->length;
+        }
+        memcpy(dst->u.bytes, src->u.bytes, (nj_size)n * sizeof(nj_u2));
+    }
+    return NJ_OK;
+}
+
+NJFN(tb_setChars)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref src = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 len = NJ_ARG_INT(args, 2);
+    nj_s4 max = fget(vm, self, NJ_C_TEXTBOX, "tbMax", D_INT);
+
+    if (!src) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (off < 0 || len < 0 || (nj_u4)(off + len) > src->length) {
+        return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
+    }
+    if (len > max) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "text longer than maxSize");
+    }
+    if (!tf_allowed(fget(vm, self, NJ_C_TEXTBOX, "tbConstraints", D_INT),
+                    (const nj_u2 *)src->u.bytes + off, (int)len)) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "text violates the constraints");
+    }
+    if (tb_sync(vm, self, (const nj_u2 *)src->u.bytes + off, (int)len) != NJ_OK) {
+        return NJ_ERR;
+    }
+    fput(vm, self, NJ_C_TEXTBOX, "tbCursor", D_INT, len);
+    return NJ_OK;
+}
+
+NJFN(tb_size)
+{
+    nj_ref s = rget(vm, NJ_THIS(args), NJ_C_TEXTBOX, "tbText", D_STR);
+    ret->i = s ? (nj_s4)nj_string_len(s) : 0;
+    return NJ_OK;
+}
+
+NJFN(tb_getMaxSize)
+{
+    ret->i = fget(vm, NJ_THIS(args), NJ_C_TEXTBOX, "tbMax", D_INT);
+    return NJ_OK;
+}
+
+NJFN(tb_setMaxSize)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 max = NJ_ARG_INT(args, 0);
+    nj_ref text = rget(vm, self, NJ_C_TEXTBOX, "tbText", D_STR);
+    nj_ref chars;
+
+    if (max <= 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "maxSize must be positive");
+    }
+    if (text && (nj_s4)nj_string_len(text) > max) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "text longer than the new maxSize");
+    }
+    chars = nj_char_array_new(vm, (nj_u4)max);
+    if (!chars) {
+        return nj_throw_oom(vm);
+    }
+    if (text && nj_string_len(text) > 0u) {
+        memcpy(chars->u.bytes, nj_string_chars(text),
+               (nj_size)nj_string_len(text) * sizeof(nj_u2));
+    }
+    rput(vm, self, NJ_C_TEXTBOX, "tbChars", D_CHARR, chars);
+    fput(vm, self, NJ_C_TEXTBOX, "tbMax", D_INT, max);
+    return NJ_OK;
+}
+
+NJFN(tb_getConstraints)
+{
+    ret->i = fget(vm, NJ_THIS(args), NJ_C_TEXTBOX, "tbConstraints", D_INT);
+    return NJ_OK;
+}
+
+NJFN(tb_setConstraints)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 c = NJ_ARG_INT(args, 0);
+    nj_ref text = rget(vm, self, NJ_C_TEXTBOX, "tbText", D_STR);
+
+    if ((c & 0xFFFF) > 6) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "unknown constraints");
+    }
+    if (text && !tf_allowed(c, nj_string_chars(text),
+                            (int)nj_string_len(text))) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "current text violates the new constraints");
+    }
+    fput(vm, self, NJ_C_TEXTBOX, "tbConstraints", D_INT, c);
+    return NJ_OK;
+}
+
+NJFN(tb_setInitialInputMode)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref s = NJ_ARG_REF(args, 0);
+    if (!s) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "input mode is null");
+    }
+    rput(vm, self, NJ_C_TEXTBOX, "tbInputModeName", D_STR, s);
+    return NJ_OK;
+}
+
+NJFN(tb_insert)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref src = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 len = NJ_ARG_INT(args, 2);
+    nj_s4 at = NJ_ARG_INT(args, 3);
+    nj_ref text = rget(vm, self, NJ_C_TEXTBOX, "tbText", D_STR);
+    nj_s4 cur = text ? (nj_s4)nj_string_len(text) : 0;
+    nj_s4 max = fget(vm, self, NJ_C_TEXTBOX, "tbMax", D_INT);
+    nj_u2 *buf;
+
+    if (!src) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (off < 0 || len < 0 || (nj_u4)(off + len) > src->length) {
+        return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
+    }
+    if (at < 0 || at > cur) {
+        return nj_throw(vm, "java/lang/StringIndexOutOfBoundsException", NULL);
+    }
+    if (cur + len > max) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "text longer than maxSize");
+    }
+    if (!tf_allowed(fget(vm, self, NJ_C_TEXTBOX, "tbConstraints", D_INT),
+                    (const nj_u2 *)src->u.bytes + off, (int)len)) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "text violates the constraints");
+    }
+    buf = (nj_u2 *)nj_host_alloc(vm, ((nj_size)cur + (nj_size)len + 1u) *
+                                     sizeof(nj_u2));
+    if (!buf) {
+        return nj_throw_oom(vm);
+    }
+    if (at > 0) {
+        memcpy(buf, nj_string_chars(text), (nj_size)at * sizeof(nj_u2));
+    }
+    memcpy(buf + at, (const nj_u2 *)src->u.bytes + off,
+           (nj_size)len * sizeof(nj_u2));
+    if (cur > at) {
+        memcpy(buf + at + len, nj_string_chars(text) + at,
+               (nj_size)(cur - at) * sizeof(nj_u2));
+    }
+    {
+        nj_status st = tb_sync(vm, self, buf, (int)(cur + len));
+        nj_host_free(vm, buf);
+        if (st != NJ_OK) {
+            return st;
+        }
+    }
+    fput(vm, self, NJ_C_TEXTBOX, "tbCursor", D_INT, at + len);
+    return NJ_OK;
+}
+
+NJFN(tb_delete)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 off = NJ_ARG_INT(args, 0);
+    nj_s4 len = NJ_ARG_INT(args, 1);
+    nj_ref text = rget(vm, self, NJ_C_TEXTBOX, "tbText", D_STR);
+    nj_s4 cur = text ? (nj_s4)nj_string_len(text) : 0;
+    nj_u2 *buf;
+
+    if (off < 0 || len < 0 || off + len > cur) {
+        return nj_throw(vm, "java/lang/StringIndexOutOfBoundsException", NULL);
+    }
+    if (len == 0) {
+        return NJ_OK;
+    }
+    buf = (nj_u2 *)nj_host_alloc(vm, ((nj_size)cur + 1u) * sizeof(nj_u2));
+    if (!buf) {
+        return nj_throw_oom(vm);
+    }
+    if (off > 0) {
+        memcpy(buf, nj_string_chars(text), (nj_size)off * sizeof(nj_u2));
+    }
+    if (cur > off + len) {
+        memcpy(buf + off, nj_string_chars(text) + off + len,
+               (nj_size)(cur - off - len) * sizeof(nj_u2));
+    }
+    {
+        nj_status st = tb_sync(vm, self, buf, (int)(cur - len));
+        nj_host_free(vm, buf);
+        if (st != NJ_OK) {
+            return st;
+        }
+    }
+    if (fget(vm, self, NJ_C_TEXTBOX, "tbCursor", D_INT) > off) {
+        fput(vm, self, NJ_C_TEXTBOX, "tbCursor", D_INT, off);
+    }
+    return NJ_OK;
+}
+
+NJFN(tb_setTicker)
+{
+    return d_setTicker(vm, th, args, ret);
+}
+
+NJFN(tb_getTicker)
+{
+    return d_getTicker(vm, th, args, ret);
+}
+
+/* ------------------------------------------------------------------ */
+/* Alert and AlertType                                                 */
+/* ------------------------------------------------------------------ */
+NJFN(alert_init)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref title = NJ_ARG_REF(args, 0);
+    nj_ref text = NJ_ARG_REF(args, 1);
+    nj_ref img = NJ_ARG_REF(args, 2);
+    nj_ref type = NJ_ARG_REF(args, 3);
+
+    (void)d_init(vm, th, args, ret);
+    rput(vm, self, NJ_C_DISPLAYABLE, F_D_TITLE, D_STR, title);
+    rput(vm, self, NJ_C_ALERT, F_AL_STRING, D_STR, text);
+    rput(vm, self, NJ_C_ALERT, F_AL_IMAGE, D_IMAGE, img);
+    rput(vm, self, NJ_C_ALERT, F_AL_TYPE,
+         "Ljavax/microedition/lcdui/AlertType;", type);
+    fput(vm, self, NJ_C_ALERT, F_AL_TIMEOUT, D_INT, 2000);
+    fput(vm, self, NJ_C_ALERT, F_AL_INDEF, D_BOOL, 0);
+    rput(vm, self, NJ_C_ALERT, "alBuffer", D_IMAGE, NULL);
+    return vm->exception ? NJ_ERR : NJ_OK;
+}
+
+NJFN(alert_init1)
+{
+    nj_value a[4];
+    a[0].r = NJ_ARG_REF(args, 0);
+    a[1].r = NULL;
+    a[2].r = NULL;
+    a[3].r = NULL;
+    return alert_init(vm, th, a, ret);
+}
+
+NJFN(alert_init4)
+{
+    return alert_init(vm, th, args, ret);
+}
+
+NJFN(alert_getType)
+{
+    ret->r = rget(vm, NJ_THIS(args), NJ_C_ALERT, F_AL_TYPE,
+                  "Ljavax/microedition/lcdui/AlertType;");
+    return NJ_OK;
+}
+
+NJFN(alert_setType)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref t = NJ_ARG_REF(args, 0);
+
+    if (!t) {
+        return nj_throw(vm, "java/lang/NullPointerException", "type is null");
+    }
+    rput(vm, self, NJ_C_ALERT, F_AL_TYPE,
+         "Ljavax/microedition/lcdui/AlertType;", t);
+    return NJ_OK;
+}
+
+NJFN(alert_getString)
+{
+    ret->r = rget(vm, NJ_THIS(args), NJ_C_ALERT, F_AL_STRING, D_STR);
+    return NJ_OK;
+}
+
+NJFN(alert_setString)
+{
+    rput(vm, NJ_THIS(args), NJ_C_ALERT, F_AL_STRING, D_STR,
+         NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+NJFN(alert_getImage)
+{
+    ret->r = rget(vm, NJ_THIS(args), NJ_C_ALERT, F_AL_IMAGE, D_IMAGE);
+    return NJ_OK;
+}
+
+NJFN(alert_setImage)
+{
+    rput(vm, NJ_THIS(args), NJ_C_ALERT, F_AL_IMAGE, D_IMAGE,
+         NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+NJFN(alert_getTimeout)
+{
+    ret->i = fget(vm, NJ_THIS(args), NJ_C_ALERT, F_AL_TIMEOUT, D_INT);
+    return NJ_OK;
+}
+
+NJFN(alert_setTimeout)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 t = NJ_ARG_INT(args, 0);
+
+    if (t == 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "timeout must not be zero");
+    }
+    fput(vm, self, NJ_C_ALERT, F_AL_TIMEOUT, D_INT, t);
+    fput(vm, self, NJ_C_ALERT, F_AL_INDEF, D_BOOL, (t < 0) ? 1 : 0);
+    return NJ_OK;
+}
+
+NJFN(alert_getDefaultTimeout)
+{
+    ret->i = sget(vm, NJ_C_ALERT, "sDefaultTimeout", D_INT);
+    return NJ_OK;
+}
+
+NJFN(alert_setDefaultTimeout)
+{
+    nj_s4 t = NJ_ARG_INT(args, 0);
+    /* -2 and below are reserved; -1 and 0.. are accepted, as on a device. */
+    if (t < -1) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "illegal default timeout");
+    }
+    sput(vm, NJ_C_ALERT, "sDefaultTimeout", D_INT, t);
+    return NJ_OK;
+}
+
+NJFN(alert_setIndicator)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref g = NJ_ARG_REF(args, 0);
+
+    if (g) {
+        if (!isa(vm, g, NJ_C_GAUGE)) {
+            return nj_throw(vm, "java/lang/IllegalArgumentException",
+                            "indicator must be a Gauge");
+        }
+        if (fget(vm, g, NJ_C_GAUGE, "gaInteractive", D_BOOL)) {
+            return nj_throw(vm, "java/lang/IllegalArgumentException",
+                            "indicator must be a non-interactive Gauge");
+        }
+    }
+    rput(vm, self, NJ_C_ALERT, "alIndicator", NJ_C_GAUGE, g);
+    return NJ_OK;
+}
+
+NJFN(alert_getIndicator)
+{
+    ret->r = rget(vm, NJ_THIS(args), NJ_C_ALERT, "alIndicator", NJ_C_GAUGE);
+    return NJ_OK;
+}
+
+NJFN(alerttype_init)
+{
+    nj_ref self = NJ_THIS(args);
+    fput(vm, self, NJ_C_ALERTTYPE, "atType", D_INT, NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
+
+NJFN(alerttype_getTypeName)
+{
+    nj_s4 t = fget(vm, NJ_THIS(args), NJ_C_ALERTTYPE, "atType", D_INT);
+    const char *name;
+
+    switch ((int)t) {
+    case 1: name = "WARNING"; break;
+    case 2: name = "ERROR"; break;
+    case 3: name = "ALARM"; break;
+    case 4: name = "CONFIRMATION"; break;
+    default: name = "INFO"; break;
+    }
+    ret->r = nj_string_new(vm, name);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+/*
+ * AlertType.playSound(Display) must never fail: a device without audio simply
+ * hears nothing.  When the port offers tone playback the alert gets a short
+ * pattern, and a missing port is not an error.
+ */
+NJFN(alerttype_playSound)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 t = fget(vm, self, NJ_C_ALERTTYPE, "atType", D_INT);
+    nj_audio_tone tones[3];
+
+    NJ_UNUSED(args);
+    if (!vm->port || !vm->port->tone_play) {
+        return NJ_OK;
+    }
+    switch ((int)t) {
+    case 1:   /* WARNING */
+        tones[0].freq_hz = 440; tones[0].duration_ms = 120;
+        tones[1].freq_hz = 0;   tones[1].duration_ms = 60;
+        tones[2].freq_hz = 440; tones[2].duration_ms = 120;
+        return (vm->port->tone_play(vm->port->ud, tones, 3) == 0) ? NJ_OK : NJ_OK;
+    case 2:   /* ERROR */
+        tones[0].freq_hz = 220; tones[0].duration_ms = 400;
+        return (vm->port->tone_play(vm->port->ud, tones, 1) == 0) ? NJ_OK : NJ_OK;
+    case 3:   /* ALARM */
+        tones[0].freq_hz = 880; tones[0].duration_ms = 200;
+        tones[1].freq_hz = 0;   tones[1].duration_ms = 100;
+        tones[2].freq_hz = 880; tones[2].duration_ms = 200;
+        return (vm->port->tone_play(vm->port->ud, tones, 3) == 0) ? NJ_OK : NJ_OK;
+    case 4:   /* CONFIRMATION */
+        tones[0].freq_hz = 660; tones[0].duration_ms = 80;
+        tones[1].freq_hz = 990; tones[1].duration_ms = 120;
+        return (vm->port->tone_play(vm->port->ud, tones, 2) == 0) ? NJ_OK : NJ_OK;
+    default:  /* INFO */
+        tones[0].freq_hz = 1046; tones[0].duration_ms = 100;
+        return (vm->port->tone_play(vm->port->ud, tones, 1) == 0) ? NJ_OK : NJ_OK;
+    }
 }

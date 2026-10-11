@@ -23,7 +23,6 @@
 extern "C" {
 #endif
 
-typedef struct nj_vm nj_vm;
 typedef struct nj_thread nj_thread;
 typedef struct nj_field nj_field;
 typedef struct nj_method nj_method;
@@ -201,6 +200,7 @@ typedef struct nj_vm_stats {
     nj_u4   cp_cache_misses;
     nj_u2   natives;
     nj_u4   native_misses;
+    nj_u2   codecs;
     nj_u4   host_live;
     nj_u4   host_peak;
     nj_size host_bytes;

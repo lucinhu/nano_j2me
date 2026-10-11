@@ -92,6 +92,7 @@ typedef enum nj_ptype {
 /* ------------------------------------------------------------------ */
 typedef struct nj_class  nj_class;
 typedef struct nj_object nj_object;
+typedef struct nj_vm     nj_vm;   /* the runtime instance; see nj_vm.h */
 
 /* A Java reference.  NULL is the Java `null`. */
 typedef nj_object *nj_ref;

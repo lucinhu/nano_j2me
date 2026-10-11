@@ -48,6 +48,10 @@
 extern "C" {
 #endif
 
+/* Forward declaration so the port contract can mention the VM without
+ * pulling the whole VM API into every port. */
+struct nj_vm;
+
 /* ------------------------------------------------------------------ */
 /* Input events                                                        */
 /* ------------------------------------------------------------------ */
@@ -189,6 +193,16 @@ typedef struct nj_port {
      * or embedded as a C array).  When this returns non-NULL the runtime
      * loads the MIDlet directly from memory and ignores `jar_path`. ---- */
     const void *(*app_blob)(void *ud, nj_u4 *size);
+
+    /* ---- platform image codecs ----
+     * Called once, right after the VM is created and before the built-in
+     * codecs are registered, so anything installed here takes precedence.
+     * Use nj_codec_register(vm, &my_codec, NJ_CODEC_PRIO_PLATFORM).
+     *
+     * This is how a board's hardware JPEG decoder, a mask-ROM PNG codec or
+     * Android's BitmapFactory gets wired in without touching the runtime.
+     * See include/nj2me/nj_codec.h. */
+    void (*install_codecs)(void *ud, struct nj_vm *vm);
 
     /* ---- audio ---- */
     /* Start/stop a tone.  `tones` is a NULL-terminated-by-count array. */

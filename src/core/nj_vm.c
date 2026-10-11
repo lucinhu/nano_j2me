@@ -105,6 +105,18 @@ static nj_status vm_setup(nj_vm *vm, const nj_port *port, nj_size heap_bytes)
         return NJ_ERR_NOMEM;
     }
 
+    /*
+     * Let the port install its own image codecs FIRST, then add the built-in
+     * software ones.  A platform decoder therefore wins on priority while the
+     * software path stays available as a fallback for formats the platform
+     * does not handle - a board with a hardware JPEG block still gets PNG
+     * from the built-in decoder.
+     */
+    if (port && port->install_codecs) {
+        port->install_codecs(port->ud, vm);
+    }
+    nj_codecs_register_builtins(vm);
+
     /* Materialise the C-implemented class library, then let it install its
      * static state (System.out, Math constants, ...). */
     nj_builtins_register_all(vm);
@@ -182,6 +194,17 @@ nj_u4 nj_vm_destroy(nj_vm *vm)
         nj_host_free(vm, vm->builtins);
         vm->builtins = NULL;
     }
+    if (vm->codecs) {
+        nj_u2 k;
+        for (k = 0u; k < vm->ncodecs; k++) {
+            if (vm->codecs[k].codec.detach) {
+                vm->codecs[k].codec.detach(vm, &vm->codecs[k].codec);
+            }
+        }
+        nj_host_free(vm, vm->codecs);
+        vm->codecs = NULL;
+        vm->ncodecs = 0u;
+    }
     if (vm->cp_cache) {
         nj_host_free(vm, vm->cp_cache);
         vm->cp_cache = NULL;
@@ -236,6 +259,7 @@ void nj_vm_get_stats(nj_vm *vm, nj_vm_stats *out)
     out->cp_cache_misses = vm->cp_cache_misses;
     out->natives = vm->nnatives;
     out->native_misses = vm->native_misses;
+    out->codecs = vm->ncodecs;
     out->host_live = vm->host_count;
     out->host_peak = vm->host_peak;
     out->host_bytes = (nj_size)vm->host_bytes;

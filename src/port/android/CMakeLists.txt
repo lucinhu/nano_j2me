@@ -43,6 +43,7 @@ add_library(nj2me SHARED
     ${NJ_ROOT}/src/gfx/nj_gfx.c
     ${NJ_ROOT}/src/gfx/nj_font.c
     ${NJ_ROOT}/src/gfx/nj_png.c
+    ${NJ_ROOT}/src/gfx/nj_codec.c
     ${NJ_ROOT}/src/zip/nj_inflate.c
     ${NJ_ROOT}/src/zip/nj_zip.c
     ${NJ_ROOT}/src/runner/nj_run.c

@@ -21,6 +21,7 @@
 #include "nj_app.h"
 
 #include "nj_gfx.h"
+#include "nj_codec.h"
 #include "nj_png.h"
 #include "nj_inflate.h"
 #include "nj_zip.h"

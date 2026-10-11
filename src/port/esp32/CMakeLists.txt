@@ -35,6 +35,8 @@ idf_component_register(
         "../../gfx/nj_gfx.c"
         "../../gfx/nj_font.c"
         "../../gfx/nj_png.c"
+        "../../gfx/nj_jpeg.c"
+        "../../gfx/nj_codec.c"
         "../../zip/nj_inflate.c"
         "../../zip/nj_zip.c"
         "../../runner/nj_run.c"
