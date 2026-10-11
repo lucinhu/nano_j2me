@@ -198,7 +198,12 @@ static const char *exc_message(nj_vm *vm, nj_ref exc, char *buf, nj_size cap)
  * script is meant to be read: "20:fire,40:fire" says what it does and "20:37"
  * does not.
  */
-#define NJ_KEY_SCRIPT_MAX 32
+/*
+ * Big enough for a full navigation: title -> menu -> start -> play -> back.
+ * The first version held 32 and the corpus only ever sent two or three presses,
+ * which is why "the game started" was the strongest thing it could claim.
+ */
+#define NJ_KEY_SCRIPT_MAX 512
 
 typedef struct key_script {
     nj_u8 frame[NJ_KEY_SCRIPT_MAX];
@@ -241,6 +246,51 @@ static int key_from_name(const char *p, int len, nj_u1 *out)
     return 0;
 }
 
+/*
+ * Load a key script from a file, or return the spec unchanged.
+ *
+ * A script that drives a game through its menus is a real artefact - it has to
+ * be read, edited when the game's menu moves, and kept next to the title it
+ * describes - so "--keys @tests/keys/maze.txt" is the form that gets used.  The
+ * caller frees the returned pointer when it differs from `spec`.
+ */
+static char *key_script_load(const char *spec, nj_size *out_len)
+{
+    const char *path;
+    FILE *f;
+    long n;
+    char *buf;
+
+    *out_len = 0u;
+    if (!spec || spec[0] != '@') {
+        return (char *)(uintptr_t)spec;      /* borrowed: not ours to free */
+    }
+    path = spec + 1;
+    f = fopen(path, "rb");
+    if (!f) {
+        return NULL;
+    }
+    if (fseek(f, 0L, SEEK_END) != 0 || (n = ftell(f)) < 0L) {
+        fclose(f);
+        return NULL;
+    }
+    rewind(f);
+    buf = (char *)malloc((size_t)n + 1u);
+    if (!buf) {
+        fclose(f);
+        return NULL;
+    }
+    if (n > 0L && fread(buf, 1u, (size_t)n, f) != (size_t)n) {
+        free(buf);
+        fclose(f);
+        return NULL;
+    }
+    buf[n] = '\0';
+    fclose(f);
+    *out_len = (nj_size)n;
+    return buf;
+}
+
 static int key_script_parse(const char *spec, key_script *ks)
 {
     const char *p = spec;
@@ -251,11 +301,25 @@ static int key_script_parse(const char *spec, key_script *ks)
     if (!spec) {
         return 0;
     }
+    /* Whitespace and newlines separate entries, and '#' starts a comment that
+     * runs to the end of the line.  A script that is meant to be READ - and to
+     * be edited when a game's menu moves - cannot be one long line. */
     while (*p && ks->n < NJ_KEY_SCRIPT_MAX) {
         nj_u8 frame = 0u;
         int len = 0;
         nj_u1 key = 0;
 
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' ||
+               *p == ',') {
+            p++;
+        }
+        if (*p == '#') {
+            while (*p && *p != '\n') { p++; }
+            continue;
+        }
+        if (!*p) {
+            break;
+        }
         while (*p >= '0' && *p <= '9') {
             frame = frame * 10u + (nj_u8)(*p - '0');
             p++;
@@ -264,7 +328,11 @@ static int key_script_parse(const char *spec, key_script *ks)
             return -1;
         }
         p++;
-        while (p[len] && p[len] != ',') {
+        /* Measure the key name BEFORE looking it up.  The scan was moved below
+         * the call while adding comments, which made len always 0 and rejected
+         * every script - including the well-formed ones. */
+        while (p[len] && p[len] != ',' && p[len] != ' ' && p[len] != '\t' &&
+               p[len] != '\n' && p[len] != '\r' && p[len] != '#') {
             len++;
         }
         if (!key_from_name(p, len, &key)) {
@@ -274,9 +342,6 @@ static int key_script_parse(const char *spec, key_script *ks)
         ks->key[ks->n] = key;
         ks->n++;
         p += len;
-        if (*p == ',') {
-            p++;
-        }
     }
     return ks->n;
 }
@@ -449,18 +514,34 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
         goto done;
     }
 
-    /* ---- the frame loop ---- */
+    /*
+     * The key script is loaded HERE, not inside the frame loop, so its lifetime
+     * is the whole run and the loop below can just tick it.
+     */
+    key_script keys;
     {
-        nj_status st;
-        key_script keys;
-    {
-        int bad = key_script_parse(opts->keys, &keys);
-        if (bad < 0 && port.log) {
-            port.log(port.user, 0,
-                     "--keys: expected frame:key pairs, e.g. \"20:fire,60:left\"");
+        nj_size klen = 0u;
+        char *kspec = key_script_load(opts->keys, &klen);
+        if (opts->keys && !kspec) {
+            if (port.log) {
+                port.log(port.user, 0, "--keys: cannot read the script file");
+            }
+            key_script_parse(NULL, &keys);
+        } else {
+            if (key_script_parse(kspec, &keys) < 0 && port.log) {
+                port.log(port.user, 0,
+                         "--keys: expected frame:key pairs such as "
+                         "\"20:fire,60:left\", or @file for a script");
+            }
+            if (kspec && kspec != opts->keys) {
+                free(kspec);
+            }
         }
     }
 
+    /* ---- the frame loop ---- */
+    {
+        nj_status st;
     /*
      * The explicit frame loop is used when a frame limit was asked for, and
      * ALWAYS when keys were scripted.

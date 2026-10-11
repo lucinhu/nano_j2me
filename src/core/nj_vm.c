@@ -43,6 +43,28 @@ void nj_logf(nj_vm *vm, int level, const char *fmt, ...)
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
 
+    /*
+     * Throttle before the sink, whoever owns it.  See nj_vm.log_emitted: a
+     * MIDlet that prints a stack trace per frame produced 24 MB in ten seconds
+     * and looked like a hang from outside.
+     */
+    if (vm) {
+        if (vm->log_emitted >= NJ_LOG_LIMIT) {
+            if (vm->log_dropped++ == 0u) {
+                /* Say it once, so the silence afterwards is explained. */
+                if (vm->port && vm->port->log) {
+                    vm->port->log(vm->port->user, 0,
+                                  "log limit reached; further messages from "
+                                  "this run are suppressed");
+                } else {
+                    fprintf(stderr, "[nj2me] log limit reached; further "
+                                    "messages from this run are suppressed\n");
+                }
+            }
+            return;
+        }
+        vm->log_emitted++;
+    }
     if (vm && vm->port && vm->port->log) {
         vm->port->log(vm->port->user, level, buf);
         return;

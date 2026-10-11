@@ -356,6 +356,21 @@ struct nj_vm {
      */
     nj_ref     media_players;
 
+    /*
+     * Log throttling.  A MIDlet can call Throwable.printStackTrace() as often
+     * as it likes, and one in the corpus does it on every frame of its failure
+     * path: 24 MB and 594,000 lines in ten seconds.  On a handset that is a
+     * serial console nobody can read, or a full filesystem, or both - and in
+     * the test suite it looked exactly like a hang, because the process was
+     * busy writing rather than stuck.
+     *
+     * The first NJ_LOG_LIMIT messages go through untouched; after that they are
+     * counted and dropped, with one line saying so.  A game that logs a few
+     * thousand lines still sees all of them.
+     */
+    nj_u4      log_emitted;
+    nj_u4      log_dropped;
+
     /* seeded identity hash */
     nj_u4      hash_seed;
 

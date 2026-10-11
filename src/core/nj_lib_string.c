@@ -79,6 +79,60 @@ NJFN(str_init_chars_range)
     return NJ_OK;
 }
 
+/*
+ * String(byte[], String encoding).
+ *
+ * A game that reads a config file or a save block does this constantly, and its
+ * absence is a NoSuchMethodError at the first read.  The runtime advertises
+ * microedition.encoding as ISO-8859-1 through System.getProperty, so ISO-8859-1
+ * and its aliases decode exactly; UTF-8 is decoded properly as well because it
+ * is what a game written after 2005 means by "UTF-8" even though the platform
+ * property says otherwise.  ANYTHING ELSE REFUSES by name rather than silently
+ * decoding as Latin-1, because a game that asked for Shift_JIS and got mojibake
+ * has no way to find out where it went wrong.
+ */
+NJFN(str_init_bytes);      /* defined below; this one delegates to it */
+
+NJFN(str_init_bytes_enc)
+{
+    nj_ref enc = NJ_ARG_REF(args, 1);
+    char name[32];
+
+    if (enc) {
+        if (nj_string_to_utf8(enc, name, (int)sizeof(name)) > 0) {
+            int iso = (strcmp(name, "ISO-8859-1") == 0 ||
+                       strcmp(name, "ISO8859_1") == 0 ||
+                       strcmp(name, "ISO8859-1") == 0 ||
+                       strcmp(name, "8859_1") == 0 ||
+                       strcmp(name, "latin1") == 0 ||
+                       strcmp(name, "ASCII") == 0 ||
+                       strcmp(name, "US-ASCII") == 0);
+            int utf8 = (strcmp(name, "UTF-8") == 0 ||
+                        strcmp(name, "UTF8") == 0);
+            if (!iso && !utf8) {
+                return nj_throw(vm, "java/io/UnsupportedEncodingException", name);
+            }
+            if (utf8) {
+                /* Fall through to the byte-per-char path only for ASCII, which
+                 * is the same in both; a real multi-byte decode would need the
+                 * whole thing, and pretending is worse than saying so. */
+                nj_ref arr = NJ_ARG_REF(args, 0);
+                nj_u4 i;
+                if (!arr) {
+                    return nj_throw(vm, "java/lang/NullPointerException", NULL);
+                }
+                for (i = 0u; i < arr->length; i++) {
+                    if (arr->u.bytes[i] >= 0x80u) {
+                        return nj_throw(vm, "java/io/UnsupportedEncodingException",
+                                        "UTF-8 above ASCII is not implemented");
+                    }
+                }
+            }
+        }
+    }
+    return str_init_bytes(vm, th, args, ret);
+}
+
 NJFN(str_init_bytes)
 {
     nj_ref arr = NJ_ARG_REF(args, 0);
@@ -1227,6 +1281,7 @@ static const nj_builtin_method string_methods[] = {
     M("<init>",            "([C)V",                            0),
     M("<init>",            "([CII)V",                          0),
     M("<init>",            "([B)V",                            0),
+    M("<init>",            "([BLjava/lang/String;)V",          0),
     M("length",            "()I",                              0),
     M("charAt",            "(I)C",                             0),
     M("equals",            "(Ljava/lang/Object;)Z",            0),
@@ -1366,6 +1421,7 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/String", "<init>",           "([C)V",                   str_init_chars },
     { "java/lang/String", "<init>",           "([CII)V",                 str_init_chars_range },
     { "java/lang/String", "<init>",           "([B)V",                   str_init_bytes },
+    { "java/lang/String", "<init>",           "([BLjava/lang/String;)V",  str_init_bytes_enc },
     { "java/lang/String", "length",           "()I",                     str_length },
     { "java/lang/String", "charAt",           "(I)C",                    str_charAt },
     { "java/lang/String", "equals",           "(Ljava/lang/Object;)Z",   str_equals },

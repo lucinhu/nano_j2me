@@ -40,3 +40,6 @@ tests/out/
 
 # Third-party test games fetched by tools/fetch_test_games.sh
 tests/games/
+
+# Python bytecode cache from the tools/
+__pycache__/

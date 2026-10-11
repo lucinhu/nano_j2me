@@ -62,6 +62,15 @@
 
 /* Floating point (CLDC 1.1 mandatory).  Set 0 on FPU-less MCUs; float/double
  * natives are then stubbed and Float/Double classes are omitted. */
+/*
+ * How many log messages a single run may emit before they are counted instead.
+ * Generous for a game, and it stops a runaway MIDlet from filling a serial
+ * console or a filesystem - and from looking like a hang in the test suite.
+ */
+#ifndef NJ_LOG_LIMIT
+#  define NJ_LOG_LIMIT 2000u
+#endif
+
 #ifndef NJ_ENABLE_FLOAT
 #  define NJ_ENABLE_FLOAT 1
 #endif

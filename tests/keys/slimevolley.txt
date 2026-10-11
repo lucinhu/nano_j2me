@@ -1,0 +1,5 @@
+# Slime Volleyball: the start screen is a Command on the RIGHT SOFT KEY.
+15:soft1      # start
+70:left       # move
+140:left
+210:right
