@@ -529,7 +529,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         &&L_slow,
         &&L_0x82,
         &&L_slow,
-        &&L_slow,
+        &&L_0x84,
         &&L_slow,
         &&L_slow,
         &&L_slow,
@@ -556,12 +556,12 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         &&L_slow,
         &&L_slow,
         &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
+        &&L_0x9f,
+        &&L_0x9f,
+        &&L_0x9f,
+        &&L_0x9f,
+        &&L_0x9f,
+        &&L_0x9f,
         &&L_slow,
         &&L_slow,
         &&L_0xa7,
@@ -569,15 +569,15 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         &&L_slow,
         &&L_slow,
         &&L_slow,
+        &&L_0xac,
+        &&L_slow,
+        &&L_0xac,
         &&L_slow,
         &&L_slow,
         &&L_slow,
+        &&L_0xb2,
         &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
+        &&L_0xb2,
         &&L_slow,
         &&L_slow,
         &&L_slow,
@@ -1022,11 +1022,11 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         L_0x82: case 0x82: { nj_s4 b = (--sp)->i, a = (--sp)->i; sp->i = a ^ b; sp++; DISPATCH(); }
         case 0x83: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
                      sp[0].j = sp[0].j ^ b; sp[1].bits = 0u; sp += 2; break; }
-        case 0x84: {                                       /* iinc */
+        L_0x84: case 0x84: {                               /* iinc */
             nj_u2 i = (nj_u2)U1();
             nj_s1 c = S1();
             locals[i].i += c;
-            break; }
+            DISPATCH(); }
 
         /* ================= conversions ================= */
         case 0x85: { nj_s4 v = (--sp)->i; PUSH_W((nj_s8)v); break; }
@@ -1087,7 +1087,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         case 0x9c: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v >= 0) JMP(o); break; }
         case 0x9d: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v > 0) JMP(o); break; }
         case 0x9e: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v <= 0) JMP(o); break; }
-        case 0x9f: case 0xa0: case 0xa1:
+        L_0x9f: case 0x9f: case 0xa0: case 0xa1:
         case 0xa2: case 0xa3: case 0xa4: {
             nj_s4 b = (--sp)->i, a = (--sp)->i;
             nj_s2 o = S2();
@@ -1101,7 +1101,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             default:   take = (a <= b); break;
             }
             if (take) JMP(o);
-            break; }
+            DISPATCH(); }
         case 0xa5: {                                       /* if_acmpeq */
             nj_ref b = (--sp)->r;
             nj_ref a = (--sp)->r;
@@ -1210,9 +1210,14 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             }                                                              \
         } while (0)
 
-        case 0xac: case 0xae:                              /* ireturn freturn */
+        L_0xac: case 0xac: case 0xae:                      /* ireturn freturn */
             DO_RETURN(*(--sp), 0);
-            break;
+            /* DO_RETURN either returns outright or RELOADs into the CALLER's
+             * frame, in which case this is an ordinary dispatch: pc and code
+             * were both reloaded, so the next instruction comes from the
+             * caller.  The break was reachable, and converting it is safe -
+             * it was skipped for a round on the suspicion that it was not. */
+            DISPATCH();
         case 0xad: case 0xaf:                              /* lreturn dreturn */
             sp -= 2;
             DO_RETURN(sp[0], 1);
@@ -1247,7 +1252,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             break;
 
         /* ================= fields ================= */
-        case 0xb2: case 0xb4: {                            /* getstatic / getfield */
+        L_0xb2: case 0xb2: case 0xb4: {                    /* getstatic / getfield */
             nj_u2 idx = U2();
             nj_cpentry *e = NULL;
             nj_ref o = NULL;
@@ -1277,7 +1282,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 sp->i = nj_field_read_int(vm, o, f); sp++;
                 break;
             }
-            break; }
+            DISPATCH(); }
         case 0xb3: case 0xb5: {                            /* putstatic / putfield */
             nj_u2 idx = U2();
             nj_cpentry *e = NULL;
