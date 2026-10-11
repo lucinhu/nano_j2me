@@ -77,6 +77,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_midlet.c
   src/midp/nj_lib_media.c
   src/midp/nj_lib_content.c
+  src/midp/nj_lib_nokia.c
   # ---- graphics ----
   src/gfx/nj_gfx.c
   src/gfx/nj_text.c

@@ -50,8 +50,18 @@ outside that - which is how the gate was found.
 | Tumbleweed (`jump.jar`) | `net.frog_parrot.jump.Jump` | 176x208 | **plays**: scrolling ground, an animated sprite, a live score and a countdown - [screenshot](images/tumbleweed.png) |
 | Maze (`maze.jar`) | `net.frog_parrot.maze.Maze` | 176x208 | **runs**: generates and draws a maze with the player marker - [screenshot](images/maze.png) |
 | Hello (`hello.jar`) | `net.frog_parrot.hello.Hello` | 176x208 | **runs**: draws "Hello World!" (a legitimately static screen) |
+| **Bubblet** (`bubblet.jar`) | `Bubblet` | 176x208 | **plays**: a full bubble-popper grid, and the only title here that is not from the Apress book - see below |
 | Dungeon (`book{5,6,7}.jar`) | `net.frog_parrot.dungeon.Dungeon` | 176x208 | **plays**: a platformer with tiled walls, keys, a door and a timer - [screenshot](images/dungeon.png) |
 | Platformer (`book4.jar`) | `net.frog_parrot.jump.Jump` | 176x208 | **plays**: the same Tumbleweed game at a later stage of the book |
+
+**Bubblet is built from source, not fetched.** `tools/make_bubblet_jar.sh`
+clones [Summeli/Bubblet-Asha](https://github.com/Summeli/Bubblet-Asha) (GPL v2,
+~900 lines, a Nokia SDK 2.0 project) and compiles it against this project's MIDP
+stubs. That proves something a prebuilt JAR cannot: that the API surface this
+runtime implements is the one javac resolves against, so a missing or
+differently-described method is a compile error rather than a NoSuchMethodError
+found later by a player. It found five things, all fixed, and two more that are
+recorded in docs/notes/OPEN-issue-stack-slot.md.
 
 `tools/run_game_corpus.sh` is the gate over all of them: it fails on "not a
 MIDlet suite", "could not start", an uncaught exception, "nothing ever

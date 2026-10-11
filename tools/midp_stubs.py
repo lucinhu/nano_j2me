@@ -37,7 +37,7 @@ import tempfile
 # ---------------------------------------------------------------------------
 CLASSES = {
     "javax/microedition/midlet/MIDletStateChangeException": {
-        "super": "java.lang.Exception",
+        "extends": "Exception",
         "methods": ["public MIDletStateChangeException()",
                     "public MIDletStateChangeException(String)"],
     },
@@ -626,7 +626,7 @@ CLASSES = {
                     "void setMute(boolean)", "boolean isMuted()"],
     },
     "javax/microedition/media/MediaException": {
-        "super": "java.lang.Exception",
+        "extends": "Exception",
         "methods": ["MediaException()", "MediaException(String)"],
     },
     "com/nokia/mid/ui/VirtualKeyboard": {
@@ -635,7 +635,7 @@ CLASSES = {
                     "public static void setVisibility(boolean)"],
     },
     "javax/microedition/content/ContentException": {
-        "super": "java.lang.Exception",
+        "extends": "Exception",
         "methods": ["ContentException()", "ContentException(String)"],
     },
     "javax/microedition/content/Invocation": {
@@ -684,12 +684,23 @@ def _named_params(params):
 
 
 def _split_sig(sig):
-    """Split "public void foo(int, String)" into (head, params)."""
+    """Split "public void foo(int) throws X" into (head, params, tail).
+
+    The TAIL is what follows the closing parenthesis, which in Java is the
+    throws clause.  It used to be discarded, and that is not cosmetic: a stub
+    without `throws RecordStoreFullException` makes a real game uncompilable,
+    because javac rejects a catch for an exception the try body cannot throw -
+    and catching that one is what every game that saves a high score does.
+
+    The stub file is the contract a game is compiled against, so a stub that is
+    not faithful to the real API rejects working games, which is the opposite of
+    what a compatibility generator is for.
+    """
     if "(" not in sig:
-        return sig, None
+        return sig, None, ""
     i = sig.index("(")
     j = sig.rindex(")")
-    return sig[:i] + "(", sig[i + 1:j]
+    return sig[:i] + "(", sig[i + 1:j], sig[j + 1:]
 
 
 def emit(path, name, spec, out_root):
@@ -720,20 +731,22 @@ def emit(path, name, spec, out_root):
     for m in spec.get("methods", []):
         if spec.get("interface"):
             # Java requires parameter names even in an interface declaration.
-            head, params = _split_sig(m.replace("public ", ""))
-            lines.append("    %s%s);\n" % (head, _named_params(params)))
+            head, params, tail = _split_sig(m.replace("public ", ""))
+            lines.append("    %s%s)%s;\n"
+                         % (head, _named_params(params), tail))
             continue
         if "(" not in m:
             # A bare constant declaration such as "public static final int X".
             lines.append("    %s = 0;\n" % m)
             continue
-        head, params = _split_sig(m)
-        if "abstract" in head:
+        head, params, tail = _split_sig(m)
+        if "abstract" in head or spec.get("interface"):
             # An abstract method declares; it does not have a body.
-            lines.append("    %s%s);\n" % (head, _named_params(params)))
+            lines.append("    %s%s)%s;\n"
+                         % (head, _named_params(params), tail))
         else:
-            lines.append("    %s%s) { throw new RuntimeException(\"midp stub\"); }\n"
-                         % (head, _named_params(params)))
+            lines.append("    %s%s)%s { throw new RuntimeException(\"midp stub\"); }\n"
+                         % (head, _named_params(params), tail))
     lines.append("}\n")
 
     rel = os.path.join(out_root, path + ".java")

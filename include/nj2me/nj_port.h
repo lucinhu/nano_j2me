@@ -244,6 +244,23 @@ typedef struct nj_port {
      * like".  Used to avoid holding a whole WAV in memory on a small part. */
     int   (*pcm_free)(void *ud);
 
+    /* ---- device properties ---- */
+    /*
+     * A property this DEVICE reports, or NULL.
+     *
+     * System.getProperty() answers the standard MIDP/CLDC keys itself and falls
+     * back to this for everything else.  Vendor keys belong here rather than in
+     * the runtime because they are facts about the device, not about the JVM:
+     * a Nokia build reports com.nokia.keyboard.type, a desktop reports that it
+     * has no keypad, and a port for a different handset reports its own.
+     *
+     * It matters because games PROBE these without checking for null - the
+     * first third-party game built from source here did exactly that - so a
+     * port that answers "no keypad" for a machine with no keypad is not
+     * inventing anything, it is describing itself.
+     */
+    const char *(*device_property)(void *ud, const char *key);
+
     /* ---- vibration ---- */
     void  (*vibrate)(void *ud, int ms);
 

@@ -146,6 +146,36 @@ static void hl_idle(void *ud)
     (void)ud;
 }
 
+/*
+ * Device properties.  These are facts about the MACHINE, which is why they live
+ * in the port and not in the runtime.
+ *
+ * com.nokia.keyboard.type deserves the comment: a game built from source here
+ * probed it and called .equals() on the result without checking for null, which
+ * is a bug in the game - but a real Nokia device always answers, so the game
+ * never met it.  A desktop has no keypad, and "None" is exactly what that
+ * means: the game then hides its on-screen keypad command, which is correct
+ * behaviour for a device that has no keypad to hide.
+ */
+static const char *hl_device_property(void *ud, const char *key)
+{
+    (void)ud;
+    if (!key) {
+        return NULL;
+    }
+    if (strcmp(key, "com.nokia.keyboard.type") == 0) {
+        return "None";              /* there is no keypad on a desktop */
+    }
+    if (strcmp(key, "com.nokia.mid.ui.version") == 0) {
+        return "1.1";
+    }
+    if (strcmp(key, "microedition.platform") == 0) {
+        return "nano_j2me/headless";
+    }
+    return NULL;                    /* honestly unknown */
+}
+
+
 /* ------------------------------------------------------------------ */
 /* Audio: recorded, not played                                         */
 /* ------------------------------------------------------------------ */
@@ -393,6 +423,7 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     out->millis = hl_millis;
     out->sleep_ms = hl_sleep_ms;
     out->idle = hl_idle;
+    out->device_property = hl_device_property;
     out->tone_play = hl_tone_play;
     out->tone_stop = hl_tone_stop;
     out->pcm_open = hl_pcm_open;

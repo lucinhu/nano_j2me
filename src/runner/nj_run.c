@@ -152,6 +152,44 @@ static nj_status blob_read(jar_blob *b, const char *path)
 /* ------------------------------------------------------------------ */
 /* The run                                                             */
 /* ------------------------------------------------------------------ */
+/*
+ * A Throwable's message, for a log line.
+ *
+ * The class name alone is not enough and this is the case that proves it:
+ * "cannot instantiate Bubblet: java/lang/NoClassDefFoundError" says nothing,
+ * while the MESSAGE of that exception names the class that was missing.  The
+ * runtime has always put it there; the runner was throwing it away.
+ *
+ * Returns "" rather than NULL so the caller can print unconditionally.
+ */
+static const char *exc_message(nj_vm *vm, nj_ref exc, char *buf, nj_size cap)
+{
+    nj_field *f;
+    nj_ref msg;
+
+    buf[0] = '\0';
+    if (!vm || !exc) {
+        return buf;
+    }
+    /*
+     * Looked up on Throwable rather than on the exception's own class: the
+     * field is DECLARED there, so the lookup walks nothing and the offset is
+     * valid for every subclass instance.  The runner only has the public
+     * headers, which do not expose a class's name from a ref.
+     */
+    f = nj_field_lookup(vm, "java/lang/Throwable", "detailMessage",
+                        "Ljava/lang/String;", 0);
+    if (!f) {
+        return buf;
+    }
+    msg = nj_field_read_ref(vm, exc, f);
+    if (!msg) {
+        return buf;
+    }
+    (void)nj_string_to_utf8(msg, buf, (int)cap);
+    return buf;
+}
+
 int nj_run(const nj_port *port_in, const nj_run_opts *opts)
 {
     nj_port port;
@@ -243,10 +281,13 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     midlet = nj_vm_new_midlet(vm, class_name, &exc);
     if (!midlet) {
         if (port.log) {
-            char buf[256];
+            char buf[512];
+            char why[256];
             const char *n = nj_ref_class_name(exc);
-            snprintf(buf, sizeof(buf), "cannot instantiate %s: %s",
-                     class_name, n);
+            (void)exc_message(vm, exc, why, sizeof(why));
+            snprintf(buf, sizeof(buf), "cannot instantiate %s: %s%s%s",
+                     class_name, n ? n : "?",
+                     why[0] ? ": " : "", why);
             port.log(port.user, 0, buf);
         }
         goto done;

@@ -823,6 +823,29 @@ NJFN(vec_toString)
 /* ------------------------------------------------------------------ */
 #define VE_CLS "java/util/VectorEnumerator"
 
+/*
+ * Vector.elements().  The enumerator class and its natives already existed -
+ * Hashtable.keys() used the same shape - and only this entry point was missing,
+ * which a real game found the moment it iterated a high-score list.
+ */
+NJFN(vec_elements)
+{
+    nj_ref v = NJ_THIS(args);
+    nj_ref e = nj_object_new(vm, VE_CLS);
+    nj_value a[1];
+
+    if (!e) {
+        return nj_throw_oom(vm);
+    }
+    a[0].r = v;
+    if (nj_call_special(vm, e, VE_CLS, "<init>", "(Ljava/util/Vector;)V",
+                        a, NULL) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = e;
+    return NJ_OK;
+}
+
 NJFN(ve_init)
 {
     nj_field *f = fld(vm, VE_CLS, "veVector", "Ljava/util/Vector;");
@@ -3236,6 +3259,7 @@ static const nj_builtin_method vector_methods[] = {
     M("lastElement",         "()Ljava/lang/Object;",             0),
     M("size",                "()I",                              0),
     M("capacity",            "()I",                              0),
+    M("elements",       "()Ljava/util/Enumeration;",           0),
     M("isEmpty",             "()Z",                              0),
     M("contains",            "(Ljava/lang/Object;)Z",            0),
     M("indexOf",             "(Ljava/lang/Object;)I",            0),
@@ -3577,6 +3601,7 @@ const nj_native_entry nj_lib_util_table[] = {
     { "java/util/Vector", "firstElement",      "()Ljava/lang/Object;", vec_firstElement },
     { "java/util/Vector", "lastElement",       "()Ljava/lang/Object;", vec_lastElement },
     { "java/util/Vector", "size",              "()I",                  vec_size },
+    { "java/util/Vector", "elements", "()Ljava/util/Enumeration;",    vec_elements },
     { "java/util/Vector", "capacity",          "()I",                  vec_capacity },
     { "java/util/Vector", "isEmpty",           "()Z",                  vec_isEmpty },
     { "java/util/Vector", "contains",          "(Ljava/lang/Object;)Z", vec_contains },

@@ -149,6 +149,14 @@ NJFN(sys_getProperty)
         ret->r = nj_string_new(vm, "\n");
     } else if (strcmp(k, "file.separator") == 0) {
         ret->r = nj_string_new(vm, "/");
+    } else if (vm->port && vm->port->device_property) {
+        const char *v = vm->port->device_property(vm->port->ud, k);
+        if (v) {
+            ret->r = nj_string_new(vm, v);
+            return NJ_OK;
+        }
+        ret->r = NULL;
+        return NJ_OK;
     } else if (strcmp(k, "java.version") == 0) {
         ret->r = nj_string_new(vm, "1.4.2");
     } else if (strcmp(k, "os.name") == 0) {

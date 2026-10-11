@@ -12,6 +12,11 @@
 # class file version 46, with the legacy jsr/ret finally blocks and the exact
 # API surface a 2004 phone had.
 #
+# The non-Apress titles come from a different route and a different toolchain:
+# tools/make_bubblet_jar.sh BUILDS Summeli/Bubblet-Asha (GPL v2) from source
+# against this project's MIDP stubs, which is a stronger check than fetching a
+# binary - see that script for why.  Run it alongside this one.
+#
 # Usage: tools/fetch_test_games.sh [dest-dir]
 set -euo pipefail
 

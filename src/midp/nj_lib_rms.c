@@ -701,18 +701,36 @@ static nj_s4 rs_do_add(nj_vm *vm, nj_ref rs, nj_ref data, nj_s4 off, nj_s4 len)
         return nj_throw(vm, "javax/microedition/rms/RecordStoreNotOpenException",
                         NULL);
     }
-    if (!data) {
+    /*
+     * A null array is tolerated ONLY when nothing is being read from it.
+     *
+     * MIDP says addRecord(null, ...) is a NullPointerException, and this
+     * implementation did exactly that - until a real GPL game built from source
+     * (Bubblet, tools/make_bubblet_jar.sh) called addRecord(null, 0, 0) to
+     * create its empty high-score record, and died on the first frame.  The
+     * game ran on Series 40 hardware, so the devices it was written for
+     * accepted this.
+     *
+     * The line drawn here is not "be permissive" but "null is harmless exactly
+     * when no bytes are read from it": len == 0 means an empty record either
+     * way, and len > 0 with a null array is still the error the spec says it
+     * is.  A game with a genuine null bug still finds out.
+     */
+    if (!data && len == 0) {
+        off = 0;
+        len = 0;
+    } else if (!data) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    if (off < 0 || len < 0 || (nj_u4)(off + len) > data->length) {
+    if (off < 0 || len < 0 || (data && (nj_u4)(off + len) > data->length)) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
     copy = nj_byte_array_new(vm, (nj_u4)len);
     if (!copy) {
         return nj_throw_oom(vm);
     }
-    if (len > 0) {
-        memcpy(copy->u.bytes, data->u.bytes + off, (nj_size)len);
+    if (data && len > 0) {
+        memcpy(copy->u.bytes, data->u.bytes + off, (size_t)len);
     }
     id = rs_geti(vm, rs, NJ_F_RS_NEXTID);
     rs_seti(vm, rs, NJ_F_RS_NEXTID, id + 1);
@@ -828,10 +846,28 @@ NJFN(rs_setRecord)
         return nj_throw(vm, "javax/microedition/rms/RecordStoreNotOpenException",
                         NULL);
     }
-    if (!data) {
+    /*
+     * A null array is tolerated ONLY when nothing is being read from it.
+     *
+     * MIDP says addRecord(null, ...) is a NullPointerException, and this
+     * implementation did exactly that - until a real GPL game built from source
+     * (Bubblet, tools/make_bubblet_jar.sh) called addRecord(null, 0, 0) to
+     * create its empty high-score record, and died on the first frame.  The
+     * game ran on Series 40 hardware, so the devices it was written for
+     * accepted this.
+     *
+     * The line drawn here is not "be permissive" but "null is harmless exactly
+     * when no bytes are read from it": len == 0 means an empty record either
+     * way, and len > 0 with a null array is still the error the spec says it
+     * is.  A game with a genuine null bug still finds out.
+     */
+    if (!data && len == 0) {
+        off = 0;
+        len = 0;
+    } else if (!data) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    if (off < 0 || len < 0 || (nj_u4)(off + len) > data->length) {
+    if (off < 0 || len < 0 || (data && (nj_u4)(off + len) > data->length)) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
     recs = rs_get(vm, rs, NJ_F_RS_RECORDS, "Ljava/util/Vector;");
