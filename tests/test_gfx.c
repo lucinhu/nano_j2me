@@ -831,13 +831,12 @@ static void test_transforms(tctx *t)
         }
     }
 
-    /* The transform table also has to agree with the source orientation. */
+    /* Sanity: the source table and the source buffer really are A..F. */
     for (i = 0; i < 2; i++) {
         for (j = 0; j < 3; j++) {
-            nj_u4 v = nj_surface_get(&ts.s, 0, 0);   /* keep the loop live */
-
-            (void)v;
             CHECK(t, TRANS_SRC[i][j] == (char)('A' + i * 3 + j));
+            CHECK(t, srcbuf[i * 3 + j]
+                     == (0xFF000000u | ((nj_u4)(i * 3 + j + 1) * 0x010101u)));
         }
     }
     CHECK(t, ts_pad_ok(&ts));

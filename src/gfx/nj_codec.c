@@ -143,17 +143,37 @@ int nj_codec_available(nj_vm *vm, const void *data, nj_u4 size)
 /* ------------------------------------------------------------------ */
 /* Decoding                                                            */
 /* ------------------------------------------------------------------ */
-nj_u4 nj_codec_pixel_bytes(nj_u4 out_format)
+nj_u4 nj_codec_pixel_bytes(int pixfmt)
 {
-    switch (out_format) {
-    case NJ_CODEC_OUT_RGB565:   return 2u;
-    case NJ_CODEC_OUT_ARGB8888: return 4u;
-    default:                    return 4u;
+    switch (pixfmt) {
+    case NJ_PIXFMT_RGB565:   return 2u;
+    case NJ_PIXFMT_RGB888:   return 3u;
+    case NJ_PIXFMT_ARGB8888: return 4u;
+    default:                 return 4u;
     }
 }
 
+int nj_codec_pick_format(nj_u4 can_produce, int display_format)
+{
+    /* Prefer a layout that matches the display, so nothing has to be
+     * converted at blit time; fall back to whatever the provider has. */
+    if (can_produce & NJ_CODEC_CAN(display_format)) {
+        return display_format;
+    }
+    if (can_produce & NJ_CODEC_CAN_ARGB8888) {
+        return NJ_PIXFMT_ARGB8888;
+    }
+    if (can_produce & NJ_CODEC_CAN_RGB888) {
+        return NJ_PIXFMT_RGB888;
+    }
+    if (can_produce & NJ_CODEC_CAN_RGB565) {
+        return NJ_PIXFMT_RGB565;
+    }
+    return NJ_PIXFMT_ARGB8888;
+}
+
 nj_image *nj_codec_image_new(const nj_codec_req *req, int w, int h,
-                             nj_u4 format, int has_alpha)
+                             int pixfmt, int has_alpha)
 {
     nj_image *img;
     nj_size bytes;
@@ -162,7 +182,7 @@ nj_image *nj_codec_image_new(const nj_codec_req *req, int w, int h,
         return NULL;
     }
     /* 64-bit arithmetic: a hostile header must not wrap the size. */
-    bytes = (nj_size)w * (nj_size)h * (nj_size)nj_codec_pixel_bytes(format);
+    bytes = (nj_size)w * (nj_size)h * (nj_size)nj_codec_pixel_bytes(pixfmt);
     if (bytes == 0u || bytes > (nj_size)0x7FFFFFFFu) {
         return NULL;
     }
@@ -179,7 +199,7 @@ nj_image *nj_codec_image_new(const nj_codec_req *req, int w, int h,
     memset(img->pixels, 0, bytes);
     img->width = w;
     img->height = h;
-    img->format = (int)format;
+    img->format = pixfmt;
     img->has_alpha = has_alpha ? 1 : 0;
     return img;
 }
@@ -280,7 +300,7 @@ static void req_init(nj_codec_req *req, nj_vm *vm, const void *data,
     req->dealloc = vm_dealloc;
     req->ud = vm;
     req->want_alpha = 1;
-    req->out_format = NJ_CODEC_OUT_ARGB8888;
+    req->out_format = NJ_CODEC_OUT_ANY;
     req->err = err;
 }
 
@@ -379,7 +399,7 @@ static nj_image *jpeg_unavailable_decode(const nj_codec_req *req)
 
 const nj_codec nj_codec_png_software = {
     "png-software",
-    { NJ_CODEC_FMT_PNG, NJ_CODEC_OUT_ARGB8888, NJ_CODEC_SCALE_1,
+    { NJ_CODEC_FMT_PNG, NJ_CODEC_CAN_ARGB8888, NJ_CODEC_SCALE_1,
       0u, 1, 0 },
 #if NJ_ENABLE_PNG
     png_accepts, png_info, png_decode,
@@ -391,7 +411,7 @@ const nj_codec nj_codec_png_software = {
 
 const nj_codec nj_codec_jpeg_unavailable = {
     "jpeg-unavailable",
-    { NJ_CODEC_FMT_JPEG, NJ_CODEC_OUT_ARGB8888, NJ_CODEC_SCALE_1,
+    { NJ_CODEC_FMT_JPEG, NJ_CODEC_CAN_ARGB8888, NJ_CODEC_SCALE_1,
       0u, 0, 0 },
     jpeg_accepts_stub, NULL, jpeg_unavailable_decode,
     NULL, NULL, NULL
@@ -400,7 +420,7 @@ const nj_codec nj_codec_jpeg_unavailable = {
 #if NJ_ENABLE_JPEG
 const nj_codec nj_codec_jpeg_software = {
     "jpeg-software",
-    { NJ_CODEC_FMT_JPEG, NJ_CODEC_OUT_ARGB8888, NJ_CODEC_SCALE_1,
+    { NJ_CODEC_FMT_JPEG, NJ_CODEC_CAN_ARGB8888, NJ_CODEC_SCALE_1,
       0u, 0, 0 },
     nj_jpeg_accepts, nj_jpeg_info, nj_jpeg_decode,
     NULL, NULL, NULL
@@ -410,7 +430,7 @@ const nj_codec nj_codec_jpeg_software = {
  * "unavailable" provider that explains the situation. */
 const nj_codec nj_codec_jpeg_software = {
     "jpeg-software",
-    { NJ_CODEC_FMT_JPEG, NJ_CODEC_OUT_ARGB8888, NJ_CODEC_SCALE_1,
+    { NJ_CODEC_FMT_JPEG, NJ_CODEC_CAN_ARGB8888, NJ_CODEC_SCALE_1,
       0u, 0, 0 },
     NULL, NULL, NULL,
     NULL, NULL, NULL

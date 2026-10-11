@@ -112,7 +112,7 @@ static nj_image *hw_decode(const nj_codec_req *req)
 {
     nj_image *img;
     hw.decodes++;
-    img = nj_codec_image_new(req, 1, 1, NJ_CODEC_OUT_ARGB8888, 0);
+    img = nj_codec_image_new(req, 1, 1, NJ_PIXFMT_ARGB8888, 0);
     if (img) {
         img->pixels[0] = 0xDEADBEEFu;   /* the marker */
     }
@@ -136,7 +136,7 @@ static void hw_detach(nj_vm *vm, struct nj_codec *self)
 
 static const nj_codec k_fake_hw = {
     "fake-hw",
-    { NJ_CODEC_FMT_PNG, NJ_CODEC_OUT_ARGB8888, NJ_CODEC_SCALE_1, 0u, 0, 0 },
+    { NJ_CODEC_FMT_PNG, NJ_CODEC_CAN_ARGB8888, NJ_CODEC_SCALE_1, 0u, 0, 0 },
     hw_accepts, hw_info, hw_decode,
     NULL,
     hw_attach, hw_detach
@@ -188,7 +188,8 @@ static void test_builtin(nj_vm *vm)
     if (img) {
         CHECK_EQ(img->width, 3, "decoded width");
         CHECK_EQ(img->height, 2, "decoded height");
-        CHECK_EQ(img->format, NJ_CODEC_OUT_ARGB8888, "decoded format");
+        CHECK_EQ(img->format, NJ_PIXFMT_ARGB8888,
+                 "nj_image.format is an NJ_PIXFMT_* value");
         CHECK_EQ(img->pixels[0], 0xFFFF0000u, "first pixel is opaque red");
         CHECK_EQ(img->pixels[5] & 0xFF000000u, 0x00000000u,
                  "the fully transparent pixel stayed transparent");
@@ -250,6 +251,12 @@ static void test_per_vm_isolation(nj_port *pa, nj_port *pb)
     const char *err = NULL;
 
     printf("per-VM isolation\n");
+    /* Record the baseline: earlier tests already registered and unregistered
+     * a provider, so detach has been called before. */
+    {
+        int base = hw.detaches;
+        (void)base;
+    }
     a = nj_vm_create(pa, 512u * 1024u);
     b = nj_vm_create(pb, 512u * 1024u);
     CHECK(a != NULL && b != NULL, "two VMs");
@@ -274,8 +281,11 @@ static void test_per_vm_isolation(nj_port *pa, nj_port *pb)
         nj_image_release(b, img);
     }
 
-    nj_vm_destroy(a);
-    CHECK_EQ(hw.detaches, 1, "teardown detached the provider");
+    {
+        int before = hw.detaches;
+        nj_vm_destroy(a);
+        CHECK_EQ(hw.detaches, before + 1, "teardown detached the provider");
+    }
 
     img = nj_image_decode_mem(b, k_png, (nj_u4)sizeof(k_png), &err);
     CHECK(img != NULL, "VM B still decodes after A was destroyed");
@@ -376,8 +386,18 @@ int main(void)
 
     {
         nj_port pa, pb;
-        if (make_port(&pa) && make_port(&pb)) {
+        int ok_a = make_port(&pa) != NULL;
+        int ok_b = make_port(&pb) != NULL;
+        if (ok_a && ok_b) {
             test_per_vm_isolation(&pa, &pb);
+        }
+        /* The port owns its framebuffer and event queue, so it has to be shut
+         * down explicitly - the same contract nj_run() follows. */
+        if (ok_a) {
+            nj_port_shutdown(&pa);
+        }
+        if (ok_b) {
+            nj_port_shutdown(&pb);
         }
     }
 
@@ -385,5 +405,9 @@ int main(void)
 
     printf("\nchecks: %d  failures: %d\n", checks, failures);
     printf("%s\n", failures == 0 ? "PASS" : "FAIL");
+    if (failures == 0) {
+        printf("run again under -fsanitize=address,undefined with\n"
+               "ASAN_OPTIONS=detect_leaks=1 for the process-level proof\n");
+    }
     return failures == 0 ? 0 : 1;
 }

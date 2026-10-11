@@ -63,10 +63,28 @@ extern "C" {
 #define NJ_CODEC_FMT_WBMP  0x0010u
 #define NJ_CODEC_FMT_RAW   0x0020u
 
-/* Pixel layouts a provider can produce. */
-#define NJ_CODEC_OUT_ARGB8888 0x0001u   /* 0xAARRGGBB, one nj_u4 per pixel */
-#define NJ_CODEC_OUT_RGB565   0x0002u   /* 16bpp, one nj_u2 per pixel      */
-#define NJ_CODEC_OUT_NATIVE   0x0004u   /* match the display's format      */
+/*
+ * Pixel layouts.
+ *
+ * TWO SPACES, DELIBERATELY:
+ *
+ *   nj_image.format          is an NJ_PIXFMT_* value (nj_config.h) - one
+ *                            layout, the one the image actually uses.
+ *   nj_codec_caps.outputs    is a BITMASK of NJ_CODEC_CAN_*, because a
+ *                            provider may be able to produce several.
+ *
+ * They were separate constants once and that was a bug waiting to happen: a
+ * decoder set nj_image.format to NJ_PIXFMT_ARGB8888 (2) while the caller
+ * compared it against NJ_CODEC_OUT_ARGB8888 (1).  Deriving the bitmask from
+ * the NJ_PIXFMT_* numbering makes the two impossible to confuse.
+ */
+#define NJ_CODEC_CAN(pixfmt)   (1u << (pixfmt))
+#define NJ_CODEC_CAN_RGB565    NJ_CODEC_CAN(NJ_PIXFMT_RGB565)
+#define NJ_CODEC_CAN_RGB888    NJ_CODEC_CAN(NJ_PIXFMT_RGB888)
+#define NJ_CODEC_CAN_ARGB8888  NJ_CODEC_CAN(NJ_PIXFMT_ARGB8888)
+
+/* "Any layout you can produce" for nj_codec_req.out_format. */
+#define NJ_CODEC_OUT_ANY       0xFFFFFFFFu
 
 /* Scale factors a provider can decode at, as a bitmask:
  * bit 0 = 1/1, bit 1 = 1/2, bit 2 = 1/4, bit 3 = 1/8. */
@@ -111,7 +129,7 @@ typedef struct nj_codec_req {
     int want_height;
 
     int want_alpha;      /* 1 = alpha must be preserved exactly          */
-    nj_u4 out_format;    /* one of NJ_CODEC_OUT_*, or 0 for "any"        */
+    nj_u4 out_format;    /* an NJ_PIXFMT_* value, or NJ_CODEC_OUT_ANY    */
 
     /* Memory.  A provider MUST use these. */
     void *(*alloc)(void *ud, nj_size n);
@@ -248,12 +266,19 @@ void nj_codecs_register_builtins(nj_vm *vm);
 /* ------------------------------------------------------------------ */
 /* Helpers for writing a provider                                      */
 /* ------------------------------------------------------------------ */
-/* Allocate a blank image through the request's hooks. */
+/*
+ * Allocate a blank image through the request's hooks.
+ * `pixfmt` is a NJ_PIXFMT_* value and becomes nj_image.format.
+ */
 nj_image *nj_codec_image_new(const nj_codec_req *req, int w, int h,
-                             nj_u4 format, int has_alpha);
+                             int pixfmt, int has_alpha);
 
-/* The number of bytes one pixel occupies in a given output format. */
-nj_u4 nj_codec_pixel_bytes(nj_u4 out_format);
+/* Bytes per pixel for an NJ_PIXFMT_* value. */
+nj_u4 nj_codec_pixel_bytes(int pixfmt);
+
+/* The best layout to hand a provider given what it can do and what the
+ * display wants.  Returns an NJ_PIXFMT_* value. */
+int nj_codec_pick_format(nj_u4 can_produce, int display_format);
 
 #ifdef __cplusplus
 }
