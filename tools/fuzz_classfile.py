@@ -73,7 +73,13 @@ for i in range(N):
     kind = KINDS[i % len(KINDS)] if i < len(KINDS) else random.choice(KINDS)
     jar = build({cls_name: mutate(kind)})
     try:
-        r = subprocess.run([BIN,'--port','headless','--heap','8',jar],
+        # --run-frames is ESSENTIAL and its absence produced a completely wrong
+        # result the first time: nj_midp_run loops until the MIDlet exits, so a
+        # MIDlet that does not call notifyDestroyed() runs forever BY DESIGN.
+        # Without this flag, unmutated hello.jar "hangs" too, and the tool
+        # reported 18 of 36 mutations as hangs when most were ordinary games.
+        r = subprocess.run([BIN,'--port','headless','--heap','8',
+                            '--run-frames','30',jar],
                            capture_output=True, timeout=PER)
         out = (r.stdout + r.stderr).decode('utf8','replace')
         if r.returncode < 0:
@@ -93,3 +99,6 @@ for h in hangs[:12]:
     print('  HANG  case %d kind=%s' % h)
 for c in crashed[:8]:
     print('  CRASH case %d kind=%s signal=%s %s' % c)
+
+# A malformed class must produce a clean error: not a signal, not a hang.
+sys.exit(1 if (crashed or hangs) else 0)

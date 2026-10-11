@@ -330,6 +330,17 @@ if(NJ_BUILD_TESTS)
   nj_add_test(test_zip       tests/test_zip.c ${NJ_FIXTURES})
   nj_add_test(test_codec     tests/test_codec.c)
 
+  # Malformed class files must produce a clean error, not a crash and not a
+  # hang.  Small case count so it stays a smoke test; run the tool directly with
+  # a larger number to fuzz properly.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/fuzz_classfile.py)
+    add_test(NAME fuzz_classfile
+             COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/fuzz_classfile.py
+                     $<TARGET_FILE:nj2me-cli> 24)
+    set_tests_properties(fuzz_classfile PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 300)
+  endif()
+
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_consts.c)
     nj_add_test(test_consts tests/test_consts.c
                 ${NJ_FIXTURES}/constdemo.expected)

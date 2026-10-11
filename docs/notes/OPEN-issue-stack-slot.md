@@ -554,9 +554,42 @@ immediately.
 
 ---
 
-# OPEN: half of all malformed class files make the runtime HANG
+# RETRACTED: "half of all malformed class files hang" was a broken measurement
 
-Status: **one mechanism fixed, several remain.**  Found by
+**The real result is 36 clean, 0 crashed, 0 hung.**  The section below is kept
+because the two mistakes in it are worth more than the finding was.
+
+The tool ran the runtime WITHOUT `--run-frames`.  `nj_midp_run` loops until the
+MIDlet exits, so a MIDlet that does not call `notifyDestroyed()` runs forever
+**by design** - that is what a game does.  Unmutated `hello.jar` "hangs" under
+exactly the same conditions, which is the control I should have run first and
+did not:
+
+    timeout 5 ./build/nj2me --port headless tests/games/hello.jar   -> rc=124
+
+With `--run-frames 30` the same 36 mutations give 36 clean, 0 crashed, 0 hung.
+A gdb backtrace (which needed ptrace to work - see below) showed the "hang"
+sitting in `nj_midp_paint` -> `nj_region_draw`, i.e. a MIDlet painting frames,
+which is the frame loop working correctly.
+
+**This is the third measurement this round that did not measure what it
+claimed**, and the pattern is the same every time: the instrument was never
+checked against a case whose answer was already known.  The first fuzzer mutated
+a class the runtime never loaded and reported "300 clean"; the constant check
+compared the stubs against themselves and reported "ok"; this one had no frame
+bound and reported a hang for normal behaviour.  All three agreed with
+themselves.
+
+**What survives from the work below**: the segfault is real.  A malformed Code
+attribute let a method push past its own `max_stack`, the operand stack walked
+into the NEXT frame's slots, and `putfield` dereferenced class bytes -
+`obj=0x4e4a484800010000`, the ASCII "NJHH".  `nj_frame.stack_limit` and the
+per-instruction check fix that, and the check costs less than the measurement
+can resolve.
+
+## The original (wrong) write-up, kept for the two mistakes in it
+
+Status: one mechanism fixed, several remain.  Found by
 `tools/fuzz_classfile.py`, which mutates the class the manifest names and
 watches what happens.
 
