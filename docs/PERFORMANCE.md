@@ -116,31 +116,64 @@ frames: `jump.jar` ~235 bytecodes, `maze.jar` ~378.  At 11 M/s that is 30,000 an
 47,000 frames per second.  The interpreter is not the constraint at these
 resolutions; the panel is.
 
-## An optimisation attempt that did nothing, and what it taught
+## Measuring, before optimising
 
-Measured on the benchmark above: **557-590 M bytecodes/s**, run to run.
+**The first version of this section was wrong, in the way that matters.** Two
+optimisation attempts were judged on wall-clock time over a 0.19 s run, whose
+run-to-run spread is 12-13%. Nothing under about 15% is visible in that, so both
+"no measurable gain" verdicts were unfalsifiable - in either direction. "I could
+not measure a gain" and "there is no gain" are different claims.
 
-**Attempt 1: hoist the instruction counter into a register.**  `vm->insns++` runs
-on every bytecode and is a read-modify-write to memory, which the compiler cannot
-hoist because it may alias the operand stack.  The counter was moved into a local
-and flushed at each of `nj_exec`'s exits.
+`tools/bench.sh` replaces it with something that can resolve a difference:
 
-Result: **566-584 M/s, i.e. no change** - inside the run-to-run spread of 557-590.
-Reverted, because the change touches every exit path of the hottest function in
-the program and buys nothing measurable.
+| | |
+|---|---|
+| **CPU time, not wall clock** | the interpreter bench is single-threaded and pure computation, so user time is exactly the work done |
+| **`taskset` pinning** | a process that migrates cores pays for cache it no longer has, which is most of the 12% |
+| **the minimum of N runs** | noise only ever ADDS time, so the fastest run is the closest to the machine's real speed; a mean reports how busy the machine was |
+
+Spread falls from **12-13% to 2.2-2.6%**, so 5% is visible and 10% is
+unambiguous. Two independent sessions on the same binary measured 0.186 s and
+0.187 s, so it is reproducible and not just precise.
+
+**Baseline: 112,117,067 bytecodes at min 0.186-0.187 s = 600-603 M bytecodes/s**
+on this machine. (Higher than the 549-590 M/s quoted earlier, because CPU time
+excludes the interference that wall clock was charging for.)
+
+## Two attempts, now with falsifiable numbers
+
+**Attempt 1: hoist the instruction counter into a register.** `vm->insns++` runs
+on every bytecode and is a read-modify-write to memory that the compiler cannot
+hoist, because it may alias the operand stack. The counter was moved into a local
+and flushed at all eight exits of `nj_exec`.
+
+    baseline   min 0.186 s   602.8 M/s
+    hoisted    min 0.189 s   593.2 M/s     -1.6%
+
+**It is slower.** Reverted. The bytecode count stayed exactly 112,117,067 across
+the change, which is how the flush points were verified - a missed exit shows up
+immediately as a wrong total rather than as a subtle statistic.
+
+**Attempt 2: profile-guided optimisation.** Built `-fprofile-generate`, trained
+on the benchmark, rebuilt `-fprofile-use -fprofile-correction`.
+
+    baseline   min 0.210 s
+    PGO        min 0.210 s     no change
+
+Reverted, because the build system does not need a two-stage configuration to
+buy nothing.
 
 **Why the classic next step is expensive here.** `objdump` shows GCC already
 turns the dispatch switch into a jump table (`cmp $0xc9` / `ja` / indirect jump),
-so the textbook computed-goto win is mostly already taken.  What remains is
+so the textbook computed-goto win is mostly already taken. What remains is
 REPLICATED dispatch - ending every one of the 170 opcode handlers with its own
 `goto *dispatch[next]` so the indirect branch is predicted per site rather than
-at one shared site.  That is 170 edits in a function whose `break` means two
-different things depending on nesting, verified by 12 tests and a benchmark that
-must keep reproducing exactly 112,117,067 bytecodes.
+at one shared site. That is 170 edits in a function whose `break` means two
+different things depending on nesting, verified by 12 tests and a bytecode count
+that must keep reproducing exactly 112,117,067.
 
 That is a real win of uncertain size bought with a real risk of a subtle
-breakage, and it is not obviously the best next thing to spend effort on.  It is
-recorded rather than guessed at.
+breakage. It is now at least measurable, which it was not before.
 
 ## A measurement mistake worth recording
 
