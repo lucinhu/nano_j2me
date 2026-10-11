@@ -213,6 +213,21 @@ nothing to suggest memory. The IDF component now sets 1024 slots (8 KiB), 96
 frames and 128 interned strings, next to the reason, rather than leaving an
 embedder to discover them one crash at a time.
 
+## The RISC-V side
+
+The same project builds for **ESP32-C3** (`idf.py set-target esp32c3`), and the
+whole runtime compiles for RV32IMC - but the link fails, and the error text did
+not make it into the captured log:
+
+    collect2: error: ld returned 1 exit status
+
+with a 24-line log whose only long line is the link command itself.  Next step is
+to run the link step under `ninja -v` and capture the linker's own stderr
+directly, since `idf.py build` is swallowing it.
+
+That is the last piece of "both ESP32 architectures": Xtensa runs a MIDlet
+(above), RISC-V compiles everything and does not yet link.
+
 ## Why PSRAM does not work under QEMU
 
 Not a configuration mistake, and not a branch problem. QEMU's `esp32s3` machine
