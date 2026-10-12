@@ -383,6 +383,24 @@ static nj_u4 mid_step_for(nj_u4 note)
     return step;
 }
 
+/*
+ * Events are collected track by track, and a format 1 file may interleave
+ * them, so put them in tick order before playback walks them.
+ */
+static void mid_sort_notes(mid_song *s)
+{
+    nj_u4 i, j;
+    for (i = 1u; i < s->nnotes; i++) {
+        mid_note key = s->notes[i];
+        j = i;
+        while (j > 0u && s->notes[j - 1u].tick > key.tick) {
+            s->notes[j] = s->notes[j - 1u];
+            j--;
+        }
+        s->notes[j] = key;
+    }
+}
+
 nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                       const nj_midi_mem *mem)
 {
@@ -399,6 +417,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
     nj_u1 *pcm;
     mid_voice voices[NJ_MIDI_VOICES];
     nj_u4 v;
+    nj_u4 ev = 0u;
 
     if (frames_out != NULL) {
         *frames_out = 0u;
@@ -491,59 +510,65 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
         return NULL;
     }
 
+    mid_sort_notes(&song);
     memset(voices, 0, sizeof(voices));
 
-    for (i = 0u; i < song.nnotes; i++) {
-        nj_u4 at = mid_sample_at(&song, song.notes[i].tick);
-
-        if (at >= frames) {
-            continue;
-        }
-        if (song.notes[i].on) {
-            /*
-             * A voice whose note has already ended is free again.  This pass
-             * runs before anything is mixed, so without it the first
-             * NJ_MIDI_VOICES notes of the file take every voice and the rest
-             * of the song is dropped: thirty seconds of MIDI came out as half
-             * a second of sound plus silence.  The short guard leaves room for
-             * the release tail, so a reused voice does not click.
-             */
-            for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-                if (voices[v].active && voices[v].end != 0u
-                    && voices[v].end + NJ_MIDI_RATE / 100u <= at) {
-                    voices[v].active = 0;
-                }
-            }
-            for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-                if (!voices[v].active) {
-                    break;
-                }
-            }
-            if (v == NJ_MIDI_VOICES) {
-                continue;       /* all voices busy: drop the note */
-            }
-            voices[v].active = 1;
-            voices[v].note = song.notes[i].note;
-            voices[v].step = mid_step_for(song.notes[i].note);
-            voices[v].amp = (nj_s4)(song.notes[i].velocity) * 200;  /* ~24% */
-            voices[v].start = at;
-            voices[v].end = 0u;
-        } else {
-            for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-                if (voices[v].active && voices[v].note == song.notes[i].note
-                    && voices[v].end == 0u) {
-                    voices[v].end = at;
-                    break;
-                }
-            }
-        }
-    }
-
-    /* Mix.  A square wave is the cheapest thing that is recognisably a note,
-     * and at these amplitudes twelve of them cannot clip a 16-bit sample. */
+    /*
+     * Play the events as they arrive: a voice is taken when its note starts
+     * and given back when the note ends.
+     *
+     * Assigning a voice to every note BEFORE the mix - which is what this used
+     * to do - leaves the output with only the notes that were still held when
+     * that pass ended: the last twelve notes of the file, or, before voices
+     * were ever given back, the first twelve.  Thirty seconds of MIDI came out
+     * as half a second of sound plus silence, and once the notes were long
+     * enough to hold every voice the whole song was silent - which is what the
+     * SDL2 window played.
+     */
     for (i = 0u; i < frames; i++) {
         nj_s4 mix = 0;
         nj_s4 scaled;
+
+        while (ev < song.nnotes
+               && mid_sample_at(&song, song.notes[ev].tick) <= i) {
+            if (song.notes[ev].on) {
+                /* A voice whose note has ended is free again.  The short guard
+                 * leaves room for the release tail, so a reused voice does not
+                 * click. */
+                for (v = 0u; v < NJ_MIDI_VOICES; v++) {
+                    if (voices[v].active && voices[v].end != 0u
+                        && voices[v].end + NJ_MIDI_RATE / 100u <= i) {
+                        voices[v].active = 0;
+                    }
+                }
+                for (v = 0u; v < NJ_MIDI_VOICES; v++) {
+                    if (!voices[v].active) {
+                        break;
+                    }
+                }
+                if (v == NJ_MIDI_VOICES) {
+                    ev++;
+                    continue;   /* all voices busy: drop the note */
+                }
+                voices[v].active = 1;
+                voices[v].note = song.notes[ev].note;
+                voices[v].phase = 0u;
+                voices[v].step = mid_step_for(song.notes[ev].note);
+                voices[v].amp = (nj_s4)(song.notes[ev].velocity) * 200;  /* ~24% */
+                voices[v].start = i;
+                voices[v].end = 0u;
+            } else {
+                for (v = 0u; v < NJ_MIDI_VOICES; v++) {
+                    if (voices[v].active && voices[v].note == song.notes[ev].note
+                        && voices[v].end == 0u) {
+                        voices[v].end = i;
+                        break;
+                    }
+                }
+            }
+            ev++;
+        }
+
 
         for (v = 0u; v < NJ_MIDI_VOICES; v++) {
             nj_s4 amp = voices[v].amp;

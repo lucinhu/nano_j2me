@@ -193,22 +193,37 @@ int main(void)
             /* Longer than the single note above; the exact tail is the
              * renderer's business, and the point here is the last quarter. */
             check(pf > 15000u, "the phrase renders far past the single note");
+            /*
+             * Every quarter must sound.  A renderer that hands out voices
+             * before the mix keeps only the notes still held when that pass
+             * ends - or, with no reuse at all, only the first ones - so a
+             * phrase longer than the voice count loses its beginning or its
+             * end.  Thirty seconds of a real song came out as silence that way.
+             */
+            loud = 1;
             if (pf != 0u) {
-                for (i = pf * 3u / 4u; i < pf; i++) {
-                    int s = (int)(short)((nj_u2)pp[i * 2u]
-                                         | ((nj_u2)pp[i * 2u + 1u] << 8));
-                    if (s > 200 || s < -200) {
-                        loud = 1;
-                        break;
+                nj_u4 q;
+                for (q = 0u; q < 4u; q++) {
+                    nj_u4 from = pf * q / 4u;
+                    nj_u4 to = pf * (q + 1u) / 4u;
+                    int heard = 0;
+                    for (i = from; i < to; i++) {
+                        int s = (int)(short)((nj_u2)pp[i * 2u]
+                                             | ((nj_u2)pp[i * 2u + 1u] << 8));
+                        if (s > 200 || s < -200) {
+                            heard = 1;
+                            break;
+                        }
+                    }
+                    if (!heard) {
+                        printf("     quarter %u of the phrase is silent\n",
+                               (unsigned)q);
+                        loud = 0;
                     }
                 }
             }
-            check(loud, "the last note of a phrase longer than the voice count"
+            check(loud, "every quarter of a phrase longer than the voice count"
                         " is audible");
-            if (!loud) {
-                printf("     nothing above the noise floor in the last quarter"
-                       " of %u frames\n", (unsigned)pf);
-            }
             t_free(NULL, pp);
         }
     }
