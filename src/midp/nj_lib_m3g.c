@@ -1785,12 +1785,12 @@ NJFN(m3g_img2d_set)
  * there is no rasteriser yet to light anything with.
  */
 static const nj_builtin_field light_fields[] = {
-    { "_nj_mode",       "I",  NJ_ACC_PUBLIC },
-    { "_nj_color",      "I",  NJ_ACC_PUBLIC },
-    { "_nj_intensity",  "F",  NJ_ACC_PUBLIC },
-    { "_nj_spotAngle",  "F",  NJ_ACC_PUBLIC },
-    { "_nj_spotExp",    "F",  NJ_ACC_PUBLIC },
-    { "_nj_atten",      "[F", NJ_ACC_PUBLIC },
+    { "_nj_mode",       "I",  0 },
+    { "_nj_color",      "I",  0 },
+    { "_nj_intensity",  "F",  0 },
+    { "_nj_spotAngle",  "F",  0 },
+    { "_nj_spotExp",    "F",  0 },
+    { "_nj_atten",      "[F", 0 },
     /* The mode constants, static and final: the values a title inlined when
      * it was compiled against the real API, so they have to match. */
     { "AMBIENT",        "I",  NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
@@ -1836,19 +1836,21 @@ NJFN(m3g_light_init)
 {
     nj_ref self = NJ_THIS(args);
     nj_u4 mark = nj_root_mark(vm);
-    nj_ref atten = nj_array_new(vm, "F", 3);
+    nj_ref atten;
 
+    /*
+     * The receiver is rooted as well as the array.  A native's arguments are a
+     * plain C array, so the collector cannot see the object it was called on;
+     * nj_array_new() below can collect, and the field writes that follow then
+     * land in reused memory.  (The array is rooted for the same reason: it is
+     * held only by a C local while the lookups run.)
+     */
+    self = nj_root(vm, self);
+    atten = nj_array_new(vm, "F", 3);
     if (!atten) {
         nj_root_release(vm, mark);
         return nj_throw_oom(vm);
     }
-    /*
-     * The array is held only by this C local while the field lookups below run
-     * Java-free but may still allocate; an unrooted reference is collected and
-     * the field then holds a pointer into reused memory.  That is how the
-     * paint Graphics was lost, and it is why every nj_ref that outlives a call
-     * that can allocate is rooted here.
-     */
     atten = nj_root(vm, atten);
     nj_iput(vm, self, light_f(vm, "_nj_mode", "I"), 129);      /* DIRECTIONAL */
     nj_iput(vm, self, light_f(vm, "_nj_color", "I"), 0x00FFFFFF);
