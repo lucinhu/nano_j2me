@@ -383,6 +383,12 @@ struct nj_vm {
      */
     nj_u4      log_emitted;
     nj_u4      log_dropped;
+    /*
+     * Wall-clock deadline on the call in progress, 0 for none.  Set around
+     * destroyApp(): a MIDlet that will not return from teardown must not be
+     * able to hold the process open.
+     */
+    nj_s8      halt_at_ms;
     const char *stop_why;     /* who asked the VM to stop, or NULL */
     /*
      * Called while a Java thread is parked in a blocking native, so a runner

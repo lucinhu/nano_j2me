@@ -286,6 +286,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_loopdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_latedemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_fsorder_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_hangdemo_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -416,7 +417,16 @@ if(NJ_BUILD_TESTS)
   # purpose and it has to say so: it used to report "cannot instantiate",
   # which reads as a missing class and sent a reader looking for one.
   if(EXISTS ${NJ_FIXTURES}/blockdemo.jar)
-    add_test(NAME check_splash_budget
+    if(NJ_JAVAC)
+    add_test(NAME check_hang_teardown
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_hang_teardown.sh
+                     ${NJ_FIXTURES}/hangdemo.jar)
+    set_tests_properties(check_hang_teardown PROPERTIES TIMEOUT 120)
+endif()
+
+add_test(NAME check_splash_budget
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_splash_budget.sh
                      $<TARGET_FILE:nj2me-cli> ${NJ_FIXTURES}/blockdemo.jar)
     set_tests_properties(check_splash_budget PROPERTIES TIMEOUT 120)

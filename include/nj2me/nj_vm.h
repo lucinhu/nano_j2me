@@ -90,6 +90,15 @@ nj_status nj_vm_start_app(nj_vm *vm, nj_ref midlet);  /* calls MIDlet.startApp()
  */
 nj_ref  nj_vm_new_midlet(nj_vm *vm, const char *class_name, nj_ref *out_exc);
 
+/*
+ * Ask the call in progress to give up after ms milliseconds (0 clears it).
+ * The clock is the port's, so this is the caller's wall clock.  Used around
+ * destroyApp(): teardown has to finish even when the MIDlet's own destroyApp()
+ * does not.  Clears it and returns non-zero if the deadline being replaced had
+ * already elapsed, which is how a caller learns the call had to be cut short.
+ */
+int     nj_vm_set_halt_after_ms(nj_vm *vm, nj_u4 ms);
+
 nj_thread *nj_thread_self(nj_vm *vm);
 void       nj_yield(nj_vm *vm);
 

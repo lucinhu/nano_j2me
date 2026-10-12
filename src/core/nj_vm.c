@@ -1091,6 +1091,18 @@ static nj_method *bridge_lookup(nj_vm *vm, nj_class *c, const char *name,
     return m;
 }
 
+int nj_vm_set_halt_after_ms(nj_vm *vm, nj_u4 ms)
+{
+    int elapsed;
+
+    if (!vm) {
+        return 0;
+    }
+    elapsed = (vm->halt_at_ms != 0 && nj_now_ms(vm) >= vm->halt_at_ms) ? 1 : 0;
+    vm->halt_at_ms = (ms == 0u) ? 0 : nj_now_ms(vm) + (nj_s8)ms;
+    return elapsed;
+}
+
 static /* How long a C caller will let a blocked Java call wait to be resumable. */
 #define NJ_CALL_BLOCK_MS 5000u
 
@@ -1240,6 +1252,16 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
      */
     for (;;) {
         st = nj_exec(vm, th, saved_frames);
+        /*
+         * A wall-clock deadline on this call.  The check sits here, once per
+         * quantum, rather than in the dispatch loop: a MIDlet in a CPU-bound
+         * loop yields every NJ_SCHED_QUANTUM bytecodes anyway, so this catches
+         * it without paying a branch per instruction.
+         */
+        if (vm->halt_at_ms != 0 && nj_now_ms(vm) >= vm->halt_at_ms) {
+            st = NJ_ERR_HALT;
+            break;
+        }
         if (st == NJ_ERR_YIELD && th->state == NJ_THREAD_RUNNING &&
             th->nframes > saved_frames) {
             continue;   /* quantum expired mid-call: resume it */

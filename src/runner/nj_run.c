@@ -1025,7 +1025,21 @@ done:
         if (port.log) {
             port.log(port.user, 2, "teardown: calling destroyApp()");
         }
+        /*
+         * destroyApp() is the MIDlet's last chance to save, and 红色警戒3_7037
+         * never returns from it.  Two seconds is far more than an honest
+         * teardown needs; past that the run is over whether the MIDlet agrees
+         * or not, and a process that will not exit is the worst outcome here.
+         */
+        int ran_out;
+
+        nj_vm_set_halt_after_ms(vm, 2000u);
         (void)nj_midp_destroy_app(vm, 0);
+        ran_out = nj_vm_set_halt_after_ms(vm, 0u);
+        if (ran_out && port.log) {
+            port.log(port.user, 0,
+                     "destroyApp() was cut short: it did not return in 2 s");
+        }
         if (port.log) {
             port.log(port.user, 2, "teardown: destroyApp() returned");
         }
