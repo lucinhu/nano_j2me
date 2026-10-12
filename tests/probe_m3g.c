@@ -77,6 +77,8 @@ int main(int argc, char **argv)
     static nj_m3g_object objs[65536];
     nj_u4 count = 0, nsections = 0, i;
     nj_u4 tally[256];
+    nj_u4 refused_by_type[256];
+    memset(refused_by_type, 0, sizeof(refused_by_type));   /* before the decode loop */
     nj_u4 img_formats = 0, img_empty = 0, va_ok = 0, va_odd = 0;
     nj_u4 poly_ok = 0, poly_odd = 0, obj_bad = 0;
     unsigned shown = 0;
@@ -133,6 +135,7 @@ int main(int argc, char **argv)
              * container is still fatal; this is not.
              */
             obj_bad++;
+            if (objs[i].type < 256u) { refused_by_type[objs[i].type]++; }
             continue;
         }
         if (!f.decoded) { continue; }
@@ -173,6 +176,7 @@ int main(int argc, char **argv)
     }
 
     memset(tally, 0, sizeof(tally));
+
     {
         nj_u4 lo = 0xffffffffu, hi = 0u, ids = 0u;
         for (i = 0; i < count && i < 65536u; i++) {
@@ -207,6 +211,20 @@ int main(int argc, char **argv)
                (unsigned long)(ids ? lo : 0u), (unsigned long)hi, (unsigned long)ids);
     }
 
+    {
+        /*
+         * Which types the decoder refuses.  The corpus-wide total (3245 of
+         * 36859) says how much is unexplained; this says where to look, and
+         * a type that appears here in numbers is a layout that is still wrong.
+         */
+        unsigned t;
+        for (t = 0; t < 256u; t++) {
+            if (refused_by_type[t]) {
+                printf("REFUSED-TYPE %u(%s)=%lu ", t, type_name((nj_u1)t),
+                       (unsigned long)refused_by_type[t]);
+            }
+        }
+    }
     printf("OK %lu bytes, %lu section(s), %lu object(s)",
            (unsigned long)len, (unsigned long)nsections, (unsigned long)count);
     for (i = 0; i < 256u; i++) {
