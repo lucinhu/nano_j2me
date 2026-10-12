@@ -255,6 +255,15 @@ if(NJ_BUILD_TESTS)
   # Every tests/gen_*.py is a fixture generator.  Globbing rather than listing
   # them means a new test module that needs assets only has to add its
   # generator, not edit the build.
+  # The JAR fixtures need a JDK; the C tests that use them are skipped
+  # without one, so this is only registered when javac is present.
+  find_program(NJ_JAVAC javac)
+  if(NJ_JAVAC)
+    add_custom_command(TARGET nj_fixtures POST_BUILD
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_keys_jar.sh
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      COMMENT "keysdemo.jar (input-effect fixture)")
+  endif()
   file(GLOB NJ_FIXTURE_GENERATORS
        ${CMAKE_CURRENT_SOURCE_DIR}/tests/gen_*.py)
   foreach(gen IN LISTS NJ_FIXTURE_GENERATORS)
@@ -403,6 +412,18 @@ if(NJ_BUILD_TESTS)
   # ---- end to end: run a whole MIDlet and assert on what it rendered ----
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_play.c)
     nj_add_test(test_play tests/test_play.c ${NJ_FIXTURES}/gamedemo.jar)
+
+  # Does input actually reach the game?  This is the only test that can tell a
+  # MIDlet which responds to the keypad from one that is merely alive, and it
+  # needs the keysdemo fixture because a real game animates on its own and
+  # would make the comparison meaningless.
+  if(NJ_JAVAC)
+    add_test(NAME test_input_effect
+      COMMAND ${CMAKE_COMMAND} -E env NJ_FRAMES=400 NJ_INKEY=150
+              ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_input_effect.sh
+              ${NJ_FIXTURES}/keysdemo.jar)
+    set_tests_properties(test_input_effect PROPERTIES TIMEOUT 180)
+  endif()
     set_tests_properties(test_play PROPERTIES TIMEOUT 120)
   endif()
 endif()
