@@ -281,6 +281,28 @@ static nj_ref interp_multianew(nj_vm *vm, nj_class *arr_cls,
 /* ------------------------------------------------------------------ */
 /* The main loop                                                       */
 /* ------------------------------------------------------------------ */
+/*
+ * Is `c` one of this VM's classes?
+ *
+ * The operand stack is untyped and there is no verifier, so anything can be
+ * sitting in a slot that is supposed to hold a receiver.  See the invoke
+ * handler for why the arena range check alone is not enough.
+ */
+static int class_is_registered(nj_vm *vm, const nj_class *c)
+{
+    nj_u4 i;
+
+    if (!c) {
+        return 0;
+    }
+    for (i = 0u; i < vm->nclasses; i++) {
+        if (vm->classes[i] == c) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
 {
     nj_frame *fr;
@@ -1492,6 +1514,22 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 recv = (sp - aslots - 1u)->r;
                 if (!recv) {
                     THROW("java/lang/NullPointerException", NULL);
+                }
+                /*
+                 * The operand stack is untyped and this runtime has no
+                 * verifier, so a slot that is supposed to hold a receiver can
+                 * hold anything at all.  `!recv` is not enough: a title in the
+                 * corpus put 0x87fff8008 there, which is not NULL, is not an
+                 * object, and crashed the emulator inside nj_method_lookup
+                 * three frames later with no indication of which method or
+                 * which class was at fault.
+                 *
+                 * Range-checking it turns an unexplainable SIGSEGV into a
+                 * named exception at the instruction that caused it.
+                 */
+                if (!nj_heap_owns(vm, recv)) {
+                    THROW("java/lang/VerifyError",
+                          "receiver is not an object reference");
                 }
                 if (e->recv_cls != recv->cls || !e->ic_target) {
                     nj_method *dm = nj_method_lookup(recv->cls, target->name,

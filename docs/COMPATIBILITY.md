@@ -170,10 +170,26 @@ do not match what the player sees, which is the classic bug in this area).
 score survives a restart. `RecordEnumeration` is implemented; listeners are
 accepted and ignored.
 
-One file per store is written to `nj_port.rms_dir` (the working directory when
-it is `NULL`), named `<store>.rms`. These are the player's saves, not project
-files: point `--rms-dir` somewhere disposable while developing, and never commit
-them. `*.rms` is gitignored for that reason.
+One file per store, named `<store>.rms`, in `nj_port.rms_dir`.
+
+**The runner derives that directory per game**, because the old default - the
+working directory - had two problems. It littered: a repository accumulated 45
+`.rms` files in its root, named after whatever each title called its store
+(`bubblet`, `shushan`, `__sfSmsInfo`). And worse, it collided: two games that
+both call their store "save" shared one file, so the second one to run read the
+first one's high scores.
+
+The default is now
+
+    $XDG_DATA_HOME/nano_j2me/<jar-name>/      or
+    $HOME/.local/share/nano_j2me/<jar-name>/  when XDG_DATA_HOME is unset
+
+created on demand, with `--rms-dir` still overriding it and a port that sets
+`rms_dir` itself left alone. A bare-metal port with no filesystem still gets the
+exception it would get from `openRecordStore` either way.
+
+These are the player's saves, not project files - never commit them. `*.rms` is
+gitignored for that reason.
 
 ### javax.microedition.media
 

@@ -568,6 +568,20 @@ static void nj_gc_mark_roots(nj_vm *vm)
     nj_gc_mark_object(vm, vm->display);
     nj_gc_mark_object(vm, vm->current_displayable);
     nj_gc_mark_object(vm, vm->thread_group);
+    /*
+     * Every nj_ref the VM holds itself must be listed here, or the object is
+     * swept while still in use and its payload is overwritten by the free
+     * list's next-pointer.  Two were missing:
+     *
+     *   media_players  the Vector of running Players
+     *   entry_this     (below) the receiver of a thread's bottom frame
+     *
+     * The second one is what a corpus title tripped over: its paint() called a
+     * method on a Thread receiver that had been collected, and the stale
+     * `cls` field - really a free-list pointer, 0x87fff8008 - crashed the
+     * emulator inside nj_method_lookup with no hint of the cause.
+     */
+    nj_gc_mark_object(vm, vm->media_players);
 
     /* temporary + registered C roots */
     for (i = 0; i < vm->nroots; i++) {
@@ -588,6 +602,7 @@ static void nj_gc_mark_roots(nj_vm *vm)
         }
         nj_gc_mark_object(vm, th->obj);
         nj_gc_mark_object(vm, th->target);
+        nj_gc_mark_object(vm, th->entry_this);
         nj_gc_mark_object(vm, th->name);
         nj_gc_mark_object(vm, th->pending_exc);
         nj_gc_mark_object(vm, th->wait_monitor);
@@ -609,9 +624,25 @@ static void nj_gc_mark_roots(nj_vm *vm)
              * range-checks every candidate against the arena before touching
              * it, so a stale int slot can never be mistaken for a reference.
              */
-            end = fr->stack + (fr->m ? fr->m->max_stack : 0u);
-            if (end > fr->sp) {
-                /* nothing to do: `end` already covers everything below */
+            /*
+             * When the frame has a method, its max_stack bounds the region.
+             * A C-bridge frame has no method at all, and the old expression
+             * collapsed to `fr->stack` - scanning the locals and NOT ONE
+             * OPERAND SLOT, while those slots hold the MIDlet's own receiver
+             * and arguments.  The next GC freed them, and a title in the
+             * corpus then called a method on the freed block; its `cls` field
+             * had become the free list's pointer, which is where 0x87fff8008
+             * came from.  Reproduced at 8, 16, 32 and 64 MB heaps alike,
+             * because it is not about how often GC runs but about what it
+             * looks at.
+             *
+             * A frame now records its own limit, and the live stack pointer
+             * is always covered whatever the limit says.
+             */
+            end = fr->stack_limit ? fr->stack_limit
+                                  : fr->stack + (fr->m ? fr->m->max_stack : 0u);
+            if (end < fr->sp) {
+                end = fr->sp;
             }
             for (p = fr->locals; p < end; p++) {
                 nj_gc_mark_object(vm, p->r);

@@ -78,8 +78,11 @@ fi
 
 pass=0
 fail=0
-printf '%-14s %-9s %-8s %-8s %-9s %s\n' TITLE SIZE FRAMES COLOURS CHANGED RESULT
-printf '%-14s %-9s %-8s %-8s %-9s %s\n' ----- ---- ------ ------- ------- ------
+# THR and IO come from the port, not from the pixels.  A title that saves a
+# high score and one that silently fails to are the same sequence of frames,
+# so those two columns are the only way this table can tell them apart.
+printf '%-14s %-9s %-8s %-8s %-9s %-4s %-6s %s\n' TITLE SIZE FRAMES COLOURS CHANGED THR IO RESULT
+printf '%-14s %-9s %-8s %-8s %-9s %-4s %-6s %s\n' ----- ---- ------ ------- ------- --- ---- ------
 
 # Keys a title needs to get past its splash screen, as "frame:key" pairs.
 #
@@ -111,7 +114,7 @@ for jar in "${JARS[@]}"; do
     for size in $SIZES; do
         : > "$log"
         timeout "$SECS" "$BIN" --port headless --heap 8 --size "$size" \
-                --fps "$FPS" --run-frames "$FRAMES" \
+                --fps "$FPS" --run-frames "$FRAMES" --stats \
                 --dump-frames "$out/" --dump-every 40 \
                 "${KARGS[@]}" \
                 "$jar" >"$log" 2>&1
@@ -175,11 +178,19 @@ if changed < 2:
 print("PASS|%d|%d|%d|" % (len(frames), cols, changed))
 PY
 )"
+    # Read the port's own report BEFORE deleting the temp dir it lives in.
+    # It did live after the rm once, and every title then reported "?" - which
+    # looked like a missing observation rather than a missing file.
+    obs="$(grep -m1 '^observed:' "$log" 2>/dev/null || true)"
+    thr="$(printf '%s' "$obs" | sed -n 's/.*threads=\([0-9-]*\).*/\1/p')"
+    io="$(printf '%s' "$obs" | sed -n 's/.*file_writes=\([0-9-]*\).*/\1/p')"
+    [ -n "$thr" ] || thr='?'
+    [ -n "$io" ] || io='?'
     rm -rf "$out"
 
     IFS='|' read -r status nframes ncols nchanged note <<<"$verdict"
-    printf '%-14s %-9s %-8s %-8s %-9s %s\n' "$title" "$used" "$nframes" "$ncols" \
-           "$nchanged" "$status${note:+ ($note)}"
+    printf '%-14s %-9s %-8s %-8s %-9s %-4s %-6s %s\n' "$title" "$used" "$nframes" "$ncols" \
+           "$nchanged" "$thr" "$io" "$status${note:+ ($note)}"
     if [ "$status" = "PASS" ] || [ "$status" = "SKIP" ]; then
         pass=$((pass + 1))
     else
