@@ -1105,6 +1105,45 @@ int main(void)
     }
 
     /*
+     * Program 45 is pizzicato strings, not the string section of program 48:
+     * the corpus plays both, and they share a block of the timbre table.  A
+     * plucked note is gone a third of a second later; a bowed one is still
+     * there.
+     */
+    {
+        static const nj_u1 pizz[] = { 0xC0u, 45u };
+        static const nj_u1 sect[] = { 0xC0u, 48u };
+        nj_u1 file[256];
+        nj_u4 n, fr = 0u;
+        nj_u1 *m;
+        nj_u8 p_early = 0u, p_late = 0u, s_early = 0u, s_late = 0u;
+
+        n = build_voiced(file, pizz, (nj_u4)sizeof(pizz), 0u, 69u);
+        m = nj_midi_render(file, n, &fr, &MEM);
+        check(m != NULL && fr > 0u, "a pizzicato note renders");
+        if (m != NULL) {
+            p_early = pcm_rms(m, fr, NJ_MIDI_RATE / 20u, NJ_MIDI_RATE / 8u);
+            p_late = pcm_rms(m, fr, NJ_MIDI_RATE * 35u / 100u, NJ_MIDI_RATE * 45u / 100u);
+            t_free(NULL, m);
+        }
+        n = build_voiced(file, sect, (nj_u4)sizeof(sect), 0u, 69u);
+        m = nj_midi_render(file, n, &fr, &MEM);
+        check(m != NULL && fr > 0u, "a string section note renders");
+        if (m != NULL) {
+            s_early = pcm_rms(m, fr, NJ_MIDI_RATE / 20u, NJ_MIDI_RATE / 8u);
+            s_late = pcm_rms(m, fr, NJ_MIDI_RATE * 35u / 100u, NJ_MIDI_RATE * 45u / 100u);
+            t_free(NULL, m);
+        }
+        check(p_early > 0u && p_late * 4u < p_early,
+              "a pizzicato note has died away a third of a second later");
+        check(s_early > 0u && s_late * 2u > s_early,
+              "a string section is still sounding a third of a second later");
+        printf("     pizzicato %llu -> %llu, strings %llu -> %llu\n",
+               (unsigned long long)p_early, (unsigned long long)p_late,
+               (unsigned long long)s_early, (unsigned long long)s_late);
+    }
+
+    /*
      * A chord wider than the voice count must still be a chord.  Twelve voices
      * used to be the ceiling, and nearly a third of the corpus writes more
      * notes at once than that - the surplus was stolen and the chord came out

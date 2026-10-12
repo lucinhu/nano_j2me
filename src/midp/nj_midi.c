@@ -468,6 +468,8 @@ static void mid_add_tempo(mid_song *s, nj_u4 tick, nj_u4 us)
 }
 
 /* Walk one MTrk chunk and collect its notes and tempo changes. */
+static void mid_program_timbre(nj_u4 prog, mid_timbre *t);
+
 static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
 {
     nj_u4 end = r->i + len;
@@ -633,6 +635,7 @@ static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
                     mid_drum(note, &t);
                 } else {
                     t = mid_timbres[(s->program[chan] & 0x7Fu) / 8u];
+                    mid_program_timbre(s->program[chan] & 0x7Fu, &t);
                 }
                 gain = (s->volume[chan] & 0x7Fu) * (s->expr[chan] & 0x7Fu) / 127u;
                 if (!mid_add_note(s, mem, tick, note, d2 & 0x7Fu, 1,
@@ -723,6 +726,46 @@ typedef struct {
     nj_u4 start;                /* sample the note starts at */
     nj_u4 end;                  /* sample the note stops at (0 = never) */
 } mid_voice;
+
+/*
+ * A block of eight programs shares a waveform, but not every program in the
+ * block is the same instrument.  Program 45 is pizzicato strings and 46 a
+ * harp, both plucked, while 48 - the string section - holds; 47 is a timpani,
+ * which is a drum.  The corpus plays 48 more than any other program (1360
+ * notes) and 45/46/47 often enough that telling them apart is audible.
+ */
+static void mid_program_timbre(nj_u4 prog, mid_timbre *t)
+{
+    switch (prog) {
+    case 45u:                       /* pizzicato strings: plucked */
+        t->wave = MID_W_TRIANGLE; t->decay_ms = 250u; t->sustain = 0u;
+        t->attack_ms = 1u; t->release_ms = 60u; t->vib = 0u;
+        break;
+    case 46u:                       /* harp: plucked, longer */
+        t->wave = MID_W_TRIANGLE; t->decay_ms = 900u; t->sustain = 0u;
+        t->attack_ms = 1u; t->release_ms = 120u; t->vib = 0u;
+        break;
+    case 47u:                       /* timpani: a drum with a pitch */
+        t->wave = MID_W_DRUM; t->tone = 60u; t->decay_ms = 600u;
+        t->sustain = 0u; t->attack_ms = 1u; t->release_ms = 150u;
+        t->pitch_drop = 48u; t->pitch_ms = 150u; t->vib = 0u;
+        break;
+    case 4u: case 5u:               /* electric piano: soft and struck */
+        t->wave = MID_W_TRIANGLE; t->decay_ms = 900u; t->sustain = 0u;
+        t->attack_ms = 1u; t->vib = 10u;
+        break;
+    case 6u:                        /* harpsichord: plucked and bright */
+        t->wave = MID_W_SQUARE; t->decay_ms = 500u; t->sustain = 0u;
+        t->attack_ms = 1u; t->release_ms = 80u; t->vib = 0u;
+        break;
+    case 7u:                        /* clavinet */
+        t->wave = MID_W_SQUARE; t->decay_ms = 300u; t->sustain = 0u;
+        t->attack_ms = 1u; t->release_ms = 60u; t->vib = 0u;
+        break;
+    default:
+        break;
+    }
+}
 
 static nj_u4 mid_step_for(nj_u4 note)
 {
