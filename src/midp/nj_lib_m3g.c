@@ -1766,6 +1766,13 @@ NJFN(m3g_clear)
 NJFN(m3g_render)
 {
     /*
+     * Counted, not rasterised: this module has no rasteriser yet, so the only
+     * honest thing to report is whether a title ever reaches this call at all.
+     * tris= answered that question for the Mascot path and the answer was
+     * zero everywhere; this is the same instrument for JSR 184.
+     */
+    vm->m3g_renders++;
+    /*
      * Step two territory: walking the graph is done, rasterising the meshes
      * is not.  Nothing is faked - the traversal really happens, so a title
      * that counts on its nodes being visited (finds, cameras, backgrounds)

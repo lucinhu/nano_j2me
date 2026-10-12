@@ -384,6 +384,7 @@ void nj_vm_get_stats(nj_vm *vm, nj_vm_stats *out)
     out->frames = vm->frames;
     out->paints = vm->paints;
     out->tris = vm->tris;
+    out->m3g_renders = vm->m3g_renders;
     out->gfx_calls = vm->gfx_calls;
     out->host_peak = vm->host_peak;
     out->host_bytes = (nj_size)vm->host_bytes;

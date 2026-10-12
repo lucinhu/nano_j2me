@@ -554,6 +554,33 @@ int main(void)
               "a node that already has a parent is still refused");
         nj_take_exception(vm);
     }
+    /* ---- render() is counted, because counting is all it can do --------- */
+    {
+        /*
+         * The module has no rasteriser, so the one honest question is whether
+         * a title ever reaches render() at all.  The corpus says they do, by
+         * the hundred thousand: 极品飞车之无间风云FX中文版_4518 calls it
+         * 495144 times in 30 frames.  That number is why the counter exists,
+         * and this is what keeps it honest.
+         */
+        nj_vm_stats before, after;
+        nj_ref w, g3d;
+        nj_value one, r;
+
+        nj_vm_get_stats(vm, &before);
+        g3d = nj_object_new(vm, CLS("Graphics3D"));
+        check(g3d != 0, "Graphics3D can be instantiated for the counter");
+        call(vm, g3d, CLS("Graphics3D"), "getInstance",
+             "()L" CLS("Graphics3D") ";", NULL, &r);
+        if (r.r) { g3d = r.r; }
+        w = make(vm, CLS("World"));
+        check(w != 0, "a World can be built for render()");
+        one.r = w;
+        call(vm, g3d, CLS("Graphics3D"), "render", "(L" CLS("World") ";)V", &one, NULL);
+        nj_vm_get_stats(vm, &after);
+        check(after.m3g_renders == before.m3g_renders + 1u,
+              "render(World) is counted, since it cannot yet draw");
+    }
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
     /* The file format calls type 18 Sprite; the titles call the class

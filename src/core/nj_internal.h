@@ -438,6 +438,11 @@ struct nj_vm {
     nj_u1        *screen_pixels;  /* the framebuffer itself, host-allocated */
     nj_u4         midp_flags;     /* NJ_MIDP_* capability bits             */
     nj_u1         repaint_pending;
+    /* Set while a paint is being delivered.  serviceRepaints() paints
+     * synchronously, and a callSerially() runnable drained at the top of a
+     * paint may itself ask for a repaint; without this the second one would
+     * re-enter the paint path. */
+    nj_u1         in_paint;
     nj_u4         frames_presented;
     nj_u2         screen_w;
     nj_u2         screen_h;
@@ -520,6 +525,7 @@ struct nj_vm {
      * the 3D path run" is a guess rather than an observation.
      */
     nj_u8   tris;
+    nj_u8   m3g_renders;      /* Graphics3D.render() calls that were reached */
     nj_u8   gfx_calls;      /* Graphics method calls that loaded the
                              * surface.  paints=N with gfx_calls=0 says the
                              * game painted and drew nothing; gfx_calls high
