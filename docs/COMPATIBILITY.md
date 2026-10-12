@@ -272,6 +272,42 @@ Benchmark titles overwhelmingly use PNG for sprite art. JPEG appears mostly for
 splash screens and photographic backgrounds, which is why it is the first thing
 to hand to a hardware block.
 
+## JSR 184 (Mobile 3D Graphics) is absent, and why
+
+Three collected titles need it - need-for-speed 14 and 16, and
+Metropolis (du-shi-mo-tian-lou) - and they are the only class-level gap
+left anywhere in the corpus.  A scan of every unresolved reference in all
+58 titles found exactly three names, all of them m3g:
+
+    javax/microedition/m3g/Image2D
+    javax/microedition/m3g/Graphics3D
+
+"Add the missing classes" is the wrong reading of that, and it is worth
+writing down what the surface actually is before anyone tries.  Reading
+every m3g call out of those three titles gives 70-odd distinct methods
+across about 25 classes, including:
+
+    Node.setRenderingEnable(Z)V          114 calls
+    Group.addChild(Node)V                 74
+    Transformable.setScale(FFF)V          24
+    Transformable.setTransform(Transform)V 21
+    Object3D.animate(I)I                  12
+    Graphics3D.render(World)V              6
+    Graphics3D.bindTarget(Object)V         4
+    Loader.load(String)[LObject3D;        1
+    Image2D.set(IIII[B)V                   1
+    Camera.setPerspective(FFFF)V           1
+
+Those are not class declarations, they are a scene graph, a fixed-point
+transform stack, a camera and projection pipeline, a software rasteriser
+with depth buffering, and a parser for the .m3g binary container that
+Loader.load() reads.
+
+So this stays unimplemented rather than stubbed.  Declaring the classes
+would move the failure from "no such class" to a wrong picture, and a
+wrong picture is the harder bug: it looks like it works.  A real
+implementation is a project of its own and should be scoped as one.
+
 ## Reporting a gap
 
 The failure modes are designed to name themselves:

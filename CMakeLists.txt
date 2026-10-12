@@ -276,6 +276,7 @@ if(NJ_BUILD_TESTS)
     add_custom_command(TARGET nj_fixtures POST_BUILD
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_keys_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_blockdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_latedemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_fsorder_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
@@ -387,6 +388,13 @@ if(NJ_BUILD_TESTS)
 
   # What the PORT observed, not what the VM counted: threads, GC, audio and
   # file activity on one machine-readable line.  Skipped without a fixture.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_late_display.sh)
+    add_test(NAME check_late_display
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_late_display.sh
+                     $<TARGET_FILE:nj2me-cli> ${NJ_FIXTURES}/latedemo.jar)
+    set_tests_properties(check_late_display PROPERTIES TIMEOUT 120)
+  endif()
+
   if(TARGET nj_fixtures)
     add_test(NAME test_observed_ports
              COMMAND ${CMAKE_COMMAND} -E env NJ_BIN=$<TARGET_FILE:nj2me-cli>

@@ -24,6 +24,12 @@
  */
 #include "nj2me/nj.h"
 
+/*
+ * How long to wait for a MIDlet to install its Displayable after startApp()
+ * returns, in frames.  See the comment at the check in nj_run().
+ */
+#define NJ_NO_DISPLAY_GRACE 60
+
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -711,6 +717,38 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
      * intervened.  Report and leave instead: an emulator that appears to hang
      * is far worse to debug than one that exits and says why.
      */
+    /*
+     * ...but do not give up the instant startApp() returns.
+     *
+     * A MIDlet is allowed to install its Displayable LATER - from a background
+     * thread it started, or after a timer - and doing so is ordinary, not
+     * broken.  Treating that as fatal turned "slow" into "broken":
+     * shi-qian-bu-luo (Prehistoric Tribes) installs nothing in startApp() and
+     * was reported as having nothing to show, after executing eighteen
+     * bytecodes.
+     *
+     * So wait - but not forever.  Without a bound, a MIDlet that really does
+     * install nothing would sit here looking like a hang, and a stuck emulator
+     * is exactly the failure this check exists to prevent.  Sixty frames is
+     * one second at the default rate, long enough for a thread to get going
+     * and short enough to stay a diagnostic.
+     */
+    {
+        int waited = 0;
+        while (!nj_midp_current(vm) && waited < NJ_NO_DISPLAY_GRACE) {
+            nj_midp_frame(vm);
+            waited++;
+        }
+        if (waited > 0 && nj_midp_current(vm) && port.log) {
+            /* Worth saying, because it explains a blank first second. */
+            char late[96];
+            snprintf(late, sizeof(late),
+                     "note: the Displayable arrived %d frame(s) after startApp()",
+                     waited);
+            port.log(port.user, 0, late);
+        }
+    }
+
     if (!nj_midp_current(vm)) {
         if (port.log) {
             port.log(port.user, 0,
