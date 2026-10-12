@@ -116,6 +116,18 @@ static nj_u4 le32(const nj_u1 *p)
  * every object chain is four bytes too long.
  */
 #define NJ_M3G_TYPE_EXTERNAL_REF 255u
+/*
+ * Every object's data starts with twelve bytes before its own fields: the
+ * userID, then eight bytes that are zero in all 36859 objects in the corpus.
+ * Measured the same way as everything else here - the first attempt assumed
+ * eight and read a PolygonMode's culling as 0 instead of 162.
+ */
+#define NJ_M3G_OBJECT_HEADER     12u
+#define NJ_M3G_T_POLYGON_MODE     8u
+#define NJ_M3G_T_IMAGE2D         10u
+#define NJ_M3G_T_MESH            14u
+#define NJ_M3G_T_VERTEX_ARRAY    20u
+#define NJ_M3G_T_VERTEX_BUFFER   21u
 #define NJ_M3G_SECTION 9u
 #define NJ_M3G_SECTION_MIN 13u   /* nine byte header + four byte Adler32 */
 
@@ -171,6 +183,98 @@ nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
         nj_u4 i;
         for (i = nids; i < id_count; i++) { ids[i] = 0xffu; }
     }
+    return NJ_OK;
+}
+
+
+/* ---- what is inside an object ----------------------------------------- */
+
+/*
+ * The fields of an object, decoded from the bytes that follow its header.
+ *
+ * Every offset here is measured, not assumed.  The measurement that makes it
+ * trustworthy is that the values land in closed sets: across the 975 real .m3g
+ * files, every PolygonMode holds culling 162 (CULL_NONE), shading 165
+ * (SHADE_SMOOTH) and winding 168 (WINDING_CCW) - three bytes out of 1513
+ * objects, all three inside the enumerations JSR 184 defines.  An offset that
+ * was one byte out would not do that.
+ *
+ * Only the types whose layout has been pinned this way are decoded.  Anything
+ * else comes back with its userID and nothing else, which is honest: the
+ * caller can tell "not decoded yet" from "decoded to zero".
+ */
+nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
+                               nj_m3g_fields *out, char *err, nj_u4 errcap)
+{
+    if (err && errcap) { err[0] = '\0'; }
+    if (!data || !out) { M3G_FAIL("no object bytes"); }
+    memset(out, 0, sizeof(*out));
+    if (type == NJ_M3G_TYPE_EXTERNAL_REF) {
+        /* a bare string, no header: nothing to decode and nothing wrong */
+        out->decoded = 0u;
+        return NJ_OK;
+    }
+    if (len < NJ_M3G_OBJECT_HEADER) {
+        M3G_FAIL("an object of type %u is %lu byte(s), too short to hold a header",
+                 (unsigned)type, (unsigned long)len);
+    }
+    out->user_id = le32(data);
+
+    switch (type) {
+    case NJ_M3G_T_POLYGON_MODE:      /* three enumeration bytes */
+        if (len < NJ_M3G_OBJECT_HEADER + 3u) {
+            M3G_FAIL("a PolygonMode is %lu byte(s)", (unsigned long)len);
+        }
+        out->a = data[12]; out->b = data[13]; out->c = data[14];
+        /* zero means "not set in the file"; anything else is one of the three
+           enumerations the format defines, and a file that says otherwise is
+           one we would be guessing at */
+        if (!((out->a == 0u) || (out->a >= 160u && out->a <= 162u)) ||
+            !((out->b == 0u) || (out->b >= 164u && out->b <= 165u)) ||
+            !((out->c == 0u) || (out->c >= 168u && out->c <= 169u))) {
+            M3G_FAIL("a PolygonMode holds culling=%lu shading=%lu winding=%lu",
+                     (unsigned long)out->a, (unsigned long)out->b,
+                     (unsigned long)out->c);
+        }
+        break;
+    case NJ_M3G_T_IMAGE2D:
+        /*
+         * format and width as u16 at 12 and 14, then two bytes that are zero
+         * in all 1054 objects in the corpus, then the height as u16 at 18.
+         * Measured: reading the height at 16 gave 0 for every texture in the
+         * corpus while the file's own width and height disagreed (a 256x256
+         * texture came back as 256 wide and 0 high).
+         */
+        if (len < NJ_M3G_OBJECT_HEADER + 8u) {
+            M3G_FAIL("an Image2D is %lu byte(s)", (unsigned long)len);
+        }
+        out->a = (nj_u4)data[12] | ((nj_u4)data[13] << 8);
+        out->b = (nj_u4)data[14] | ((nj_u4)data[15] << 8);
+        out->c = (nj_u4)data[18] | ((nj_u4)data[19] << 8);
+        if (!((out->a == 0u) || (out->a >= 96u && out->a <= 100u)) ||
+            out->b > 4096u || out->c > 4096u) {
+            M3G_FAIL("an Image2D holds format=%lu %lux%lu",
+                     (unsigned long)out->a, (unsigned long)out->b,
+                     (unsigned long)out->c);
+        }
+        break;
+    case NJ_M3G_T_VERTEX_ARRAY:      /* componentSize, componentCount, componentType */
+        if (len < NJ_M3G_OBJECT_HEADER + 3u) {
+            M3G_FAIL("a VertexArray is %lu byte(s)", (unsigned long)len);
+        }
+        out->a = data[12]; out->b = data[13]; out->c = data[14];
+        if (!(out->a == 0u || out->a == 1u || out->a == 2u || out->a == 4u) ||
+            out->b > 4u || out->c > 2u) {
+            M3G_FAIL("a VertexArray holds size=%lu count=%lu type=%lu",
+                     (unsigned long)out->a, (unsigned long)out->b,
+                     (unsigned long)out->c);
+        }
+        break;
+    default:
+        out->decoded = 0u;
+        return NJ_OK;
+    }
+    out->decoded = 1u;
     return NJ_OK;
 }
 
