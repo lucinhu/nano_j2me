@@ -546,6 +546,16 @@ nj_status nj_io_late_init(nj_vm *vm);
 typedef struct nj_m3g_fields {
     nj_u4 user_id;
     nj_u4 a, b, c;   /* the three fields of whichever type this is */
+    /*
+     * A Group's children, as indices into the file's object list.
+     *
+     * JSR 184 section 3.2: an ObjectIndex[] is a UInt32 count followed by that
+     * many UInt32 indices, and index 0 means null.  The indices are what the
+     * scene graph is actually made of - without them a Group is an empty box
+     * and Loader.load() hands the game a null where a child should be.
+     */
+    nj_u4 ref_off;   /* where the indices start, relative to the object data */
+    nj_u4 nrefs;     /* how many there are */
     nj_u1 decoded;
 } nj_m3g_fields;
 

@@ -123,6 +123,7 @@ static nj_u4 le32(const nj_u1 *p)
  * eight and read a PolygonMode's culling as 0 instead of 162.
  */
 #define NJ_M3G_OBJECT_HEADER     12u
+#define NJ_M3G_T_GROUP        9u
 #define NJ_M3G_T_POLYGON_MODE     8u
 #define NJ_M3G_T_IMAGE2D         10u
 #define NJ_M3G_T_MESH            14u
@@ -235,6 +236,32 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
             M3G_FAIL("a PolygonMode holds culling=%lu shading=%lu winding=%lu",
                      (unsigned long)out->a, (unsigned long)out->b,
                      (unsigned long)out->c);
+        }
+        break;
+    case NJ_M3G_T_GROUP:
+        /*
+         * A Group's children are the LAST thing in its data.  Node's own
+         * fields sit in front of them and their length depends on which
+         * transform representation the file chose, so instead of walking that
+         * layout from the front - which is where the previous three wrong
+         * guesses about this format came from - the tail is located by
+         * requiring the count and the indices to consume the data exactly.
+         *
+         * Not finding one is not an error: a Group whose children cannot be
+         * located draws nothing, which is better than refusing to load a file
+         * whose other 51 objects are fine.
+         */
+        {
+            nj_u4 o;
+            for (o = NJ_M3G_OBJECT_HEADER; o + 4u <= len; o++) {
+                nj_u4 n = le32(data + o);
+                if (n > 4096u) { continue; }
+                if (o + 4u + 4u * n != len) { continue; }
+                out->ref_off = o + 4u;
+                out->nrefs = n;
+                break;
+            }
+            out->a = out->nrefs;
         }
         break;
     case NJ_M3G_T_IMAGE2D:

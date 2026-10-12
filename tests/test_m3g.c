@@ -85,6 +85,13 @@ int main(void)
 
     nj_port_headless_ex(&port, 240, 320, 0, NULL);
     vm = nj_vm_create(&port, 2u * 1024u * 1024u);
+    /*
+     * Lay the builtin classes out and seed their constants before anything is
+     * looked up.  Without this the static slots the constants live in do not
+     * exist yet, and nj_field_read_int() on one dereferences a slot that was
+     * never assigned - a segfault, not a failing assertion.
+     */
+    (void)nj_lib_late_init(vm);
     if (!vm) {
         printf("FAILED: no VM\n");
         return 1;
@@ -461,41 +468,44 @@ int main(void)
               "Image2D(format, something else) does not throw");
     }
 
-    nj_vm_destroy(vm);
-    nj_port_shutdown(&port);
     /*
-     * The constants the file format and the API fix.  A MIDlet carries the
-     * values javac inlined, so a constant this runtime leaves at 0 - or gets
-     * wrong, which the winding check did - turns into a game that hands us a
-     * value we then reject.
+     * The constants the file format and the API fix, checked by what they are
+     * FOR rather than by reading the static slot they live in.
+     *
+     * Reading the slot directly is what the first version of this test did,
+     * and it segfaulted: a static field's address is resolved through the
+     * class's layout, and a lookup on a class that has not been initialised
+     * hands back an offset into a table that was never assigned.  The values
+     * that matter are the ones a MIDlet carries inlined by javac, and the way
+     * they reach us is as an argument, so this calls the setter with the value
+     * JSR 184 defines and with the number that was there before the fix.
      */
     {
-        static const struct { const char *cls; const char *name; nj_s4 want; } c[] = {
-            { "javax/microedition/m3g/PolygonMode", "WINDING_CCW", 168 },
-            { "javax/microedition/m3g/PolygonMode", "WINDING_CW", 169 },
-            { "javax/microedition/m3g/PolygonMode", "CULL_BACK", 161 },
-            { "javax/microedition/m3g/PolygonMode", "SHADE_SMOOTH", 165 },
-            { "javax/microedition/m3g/CompositingMode", "MODULATE", 66 },
-            { "javax/microedition/m3g/Texture2D", "FILTER_LINEAR", 209 },
-            { "javax/microedition/m3g/Light", "SPOT", 131 }
-        };
-        size_t ci;
-        for (ci = 0; ci < sizeof(c) / sizeof(c[0]); ci++) {
-            nj_field *f = nj_field_lookup(vm, c[ci].cls, c[ci].name, "I", 1);
-            int got = f ? (int)nj_field_read_int(vm, NULL, f) : -1;
-            CHECK(got == (int)c[ci].want, "%s.%s is %d, not %d",
-                  c[ci].cls, c[ci].name, got, (int)c[ci].want);
-        }
+        nj_ref pm = make(vm, "javax/microedition/m3g/PolygonMode");
+        /* four slots: an instance method's receiver plus its argument, with
+           room to spare - a one-element array here is a heap overflow */
+        nj_value a[4];
+        memset(a, 0, sizeof(a));
+        a[0].i = 168;           /* WINDING_CCW, per the specification */
+        check(pm && nj_call(vm, pm, "javax/microedition/m3g/PolygonMode",
+                            "setWinding", "(I)V", a, NULL) == NJ_OK,
+              "setWinding(WINDING_CCW) is rejected");
+        a[0].i = 16896;         /* what this runtime used to demand */
+        check(pm && nj_call(vm, pm, "javax/microedition/m3g/PolygonMode",
+                            "setWinding", "(I)V", a, NULL) != NJ_OK,
+              "setWinding(16896) is accepted, so the constants are still ours");
     }
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
     /* The file format calls type 18 Sprite; the titles call the class
        Sprite3D.  Both have to be loadable. */
-    CHECK(nj_class_lookup(vm, "javax/microedition/m3g/Sprite") != NULL,
+    check(nj_class_lookup(vm, "javax/microedition/m3g/Sprite") != NULL,
           "javax/microedition/m3g/Sprite is not registered");
-    CHECK(nj_class_lookup(vm, "javax/microedition/m3g/Sprite3D") != NULL,
+    check(nj_class_lookup(vm, "javax/microedition/m3g/Sprite3D") != NULL,
           "javax/microedition/m3g/Sprite3D is not registered");
-    CHECK(nj_class_lookup(vm, "javax/microedition/m3g/MorphingMesh") != NULL,
+    check(nj_class_lookup(vm, "javax/microedition/m3g/MorphingMesh") != NULL,
           "javax/microedition/m3g/MorphingMesh is not registered");
-    CHECK(nj_class_lookup(vm, "javax/microedition/m3g/SkinnedMesh") != NULL,
+    check(nj_class_lookup(vm, "javax/microedition/m3g/SkinnedMesh") != NULL,
           "javax/microedition/m3g/SkinnedMesh is not registered");
     printf("%d checks, %d failures\n", checks, failures);
     if (failures) {

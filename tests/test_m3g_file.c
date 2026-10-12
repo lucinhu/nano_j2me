@@ -44,6 +44,11 @@ static const nj_u1 ident[12] = {
     0x34u, 0xbbu, 0x0du, 0x0au, 0x1au, 0x0au
 };
 
+static nj_u4 le32_at(const nj_u1 *p)
+{
+    return (nj_u4)p[0] | ((nj_u4)p[1] << 8) | ((nj_u4)p[2] << 16) | ((nj_u4)p[3] << 24);
+}
+
 static void put32le(nj_u4 v, int at)
 {
     buf[at + 0] = (nj_u1)v;
@@ -379,6 +384,39 @@ int main(void)
             va[12] = 3u;                                /* not 1, 2 or 4 bytes */
             ok(nj_m3g_decode_object(va, sizeof(va), 20u, &f, err, sizeof(err)) != NJ_OK, "a component size that is not 1, 2 or 4 is refused");
         }
+    }
+
+    /*
+     * A Group's children are the last thing in its data: a UInt32 count and
+     * then that many UInt32 object indices.  Node's own fields sit in front of
+     * them and their length depends on which transform representation the file
+     * chose, so the tail is located by requiring the count and the indices to
+     * consume the data exactly - this is the layout the loader needs to build
+     * a scene graph instead of handing the game null children.
+     */
+    {
+        nj_m3g_fields f;
+        nj_u1 g[12u + 4u + 8u];
+        memset(g, 0, sizeof(g));
+        g[16] = 3u;                     /* first child: object index 3 */
+        g[20] = 7u;                     /* second child: object index 7 */
+        g[12] = 2u;                     /* and there are two of them */
+        ok(nj_m3g_decode_object(g, sizeof(g), 9u, &f, err, sizeof(err)) == NJ_OK,
+           "a Group decodes");
+        ok(f.nrefs == 2u && f.ref_off == 16u, "its two children are found");
+        ok(le32_at(g + f.ref_off) == 3u && le32_at(g + f.ref_off + 4u) == 7u,
+           "and they are the indices the file holds");
+    }
+    {
+        /* a tail that cannot be a child list is not an error: the group simply
+           has no children we can locate, which draws nothing rather than
+           refusing a file whose other objects are fine */
+        nj_m3g_fields f;
+        nj_u1 g[12u + 5u];
+        memset(g, 0, sizeof(g));
+        ok(nj_m3g_decode_object(g, sizeof(g), 9u, &f, err, sizeof(err)) == NJ_OK,
+           "a Group whose children cannot be located still decodes");
+        ok(f.nrefs == 0u, "with no children claimed");
     }
 
     printf("%d checks, %d failures\n", checks, failures);
