@@ -29,3 +29,20 @@ case "$out" in
     *) ;;
 esac
 echo "PASS: the corpus retried past the size where the game draws nothing"
+
+# Second case: a title that ends inside one dump interval.  At 128x160 the same
+# fixture draws two colours and calls notifyDestroyed() after three paints, so
+# a 1-in-40 dump samples none of them and the verdict becomes "nothing was ever
+# presented" - the failure that took seven Apress demos off the pass list when
+# the smoke key set started ending them early.  Nothing was dumped is not the
+# same as nothing drawn, and the corpus has to ask again before saying so.
+out128="$(NJ_FRAMES="${NJ_FRAMES:-60}" NJ_SIZES="128x160" \
+        "$ROOT/tools/run_game_corpus.sh" --dir "$dir" 2>/dev/null \
+        | grep sizedemo || true)"
+echo "$out128"
+case "$out128" in
+    *"nothing was ever presented"*) echo "FAIL: it believed a 3-frame title never drew"; exit 1 ;;
+    *PASS*) ;;
+    *) echo "FAIL: the dense-dump retry did not rescue the short run"; exit 1 ;;
+esac
+echo "PASS: a title that ends inside the dump interval is still measured"

@@ -18,7 +18,7 @@ import javax.microedition.midlet.MIDlet;
  */
 public class SizeDemo extends MIDlet {
     protected void startApp() {
-        Display.getDisplay(this).setCurrent(new V());
+        Display.getDisplay(this).setCurrent(new V(this));
     }
 
     protected void pauseApp() {
@@ -29,6 +29,13 @@ public class SizeDemo extends MIDlet {
 }
 
 class V extends Canvas {
+    private final MIDlet midlet;
+    private int paints;
+
+    V(MIDlet midlet) {
+        this.midlet = midlet;
+    }
+
     protected void paint(Graphics g) {
         if (getWidth() > 200) {
             g.setColor(0x00CC00);
@@ -36,6 +43,22 @@ class V extends Canvas {
             g.setColor(0xCC0000);
             g.fillRect(0, 0, getWidth() / 2, getHeight() / 2);
         }
-        /* Narrow screens are left to the background on purpose. */
+        if (getWidth() == 128) {
+            /*
+             * Also the "ends before the first dump" case: three frames, then
+             * out.  With a dump every 40 frames the corpus has no frames to
+             * measure and reports "nothing was ever presented" - which is what
+             * happened to seven Apress demos once the smoke keys started
+             * ending them early.  Two colours, so the retry is visible.
+             */
+            g.setColor(0x0000CC);
+            g.fillRect(0, 0, getWidth(), getHeight() / 2);
+            g.setColor(0xCCCC00);
+            g.fillRect(0, getHeight() / 2, getWidth(), getHeight() / 2);
+            if (++paints >= 3) {
+                midlet.notifyDestroyed();
+            }
+        }
+        /* Other narrow screens are left to the background on purpose. */
     }
 }

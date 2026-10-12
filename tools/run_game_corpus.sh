@@ -213,16 +213,24 @@ for jar in "${JARS[@]}"; do
     out="$(mktemp -d)"
     log="$out/log.txt"
 
-    used=""
-    tried=""
-    for size in $SIZES; do
+    # One run of this title at the size already chosen in $size, dumping every
+    # $1 frames.  It is a function because a title that ends inside the first
+    # dump interval has to be run again with a dump every frame - and a second
+    # hand-written copy of this command line is a second thing to get wrong.
+    run_here() {
         : > "$log"
         rm -f "$out"/*.ppm
         timeout "$SECS" "$BIN" --port headless --heap "$HEAP" --size "$size" \
                 --fps "$FPS" --run-frames "$FRAMES" --stats \
-                --dump-frames "$out/" --dump-every 40 \
+                --dump-frames "$out/" --dump-every "$1" \
                 "${KARGS[@]}" \
                 "$jar" >"$log" 2>&1
+    }
+
+    used=""
+    tried=""
+    for size in $SIZES; do
+        run_here 40
         if grep -q "Screen too" "$log"; then
             rm -f "$out"/*.ppm
             continue        # this title rejects this size; try the next
@@ -236,6 +244,15 @@ for jar in "${JARS[@]}"; do
         # black colour at 176x208, and SIZES lists 176x208 first.  So a verdict
         # of "flat" or "could not start" is not final while sizes remain.
         verdict="$(verdict_for)"
+        if [ "${verdict#*nothing was ever presented}" != "$verdict" ]; then
+            # Nothing was dumped, which is not the same as nothing drawn: these
+            # titles finish in a handful of frames and the smoke key set often
+            # ends them.  Seven Apress demos went from PASS to FAIL the moment
+            # the keys arrived, because a 1-in-40 dump interval sampled none of
+            # the three frames they run for.  Ask again, this time every frame.
+            run_here 1
+            verdict="$(verdict_for)"
+        fi
         case "$verdict" in
             PASS*) break ;;
             *"flat frame"*|*"could not start"*) continue ;;
