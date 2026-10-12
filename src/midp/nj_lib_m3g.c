@@ -173,6 +173,110 @@ nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
     return NJ_OK;
 }
 
+/* ---- the object layer ------------------------------------------------- */
+
+/*
+ * Walk the objects inside every section of a .m3g file.
+ *
+ * The container layer only proves that the sections tile the file.  This is
+ * the layer beneath it: a section's payload is a run of objects, each a one
+ * byte type, a four byte little endian data length, and that many bytes of
+ * data.  A compressed section is inflated through the port's inflate hook,
+ * because the runtime has no decompressor of its own and is meant to build
+ * without one - a port that leaves the hook null gets "unsupported" here
+ * rather than a wrong answer.
+ *
+ * `out` may be NULL with `out_cap` zero: the counts are reported either way,
+ * so a caller can ask "how many" and "which ones" separately.
+ */
+#define M3G_SCAN_FAIL(...) do { nj_host_free(vm, scratch); M3G_FAIL(__VA_ARGS__); } while (0)
+
+nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
+                              nj_m3g_object *out, nj_u4 out_cap,
+                              nj_u4 *count, nj_u4 *sections,
+                              char *err, nj_u4 errcap)
+{
+    nj_u4 off, nsec = 0, nobj = 0, scratch_cap = 0;
+    nj_u1 *scratch = NULL;
+    nj_status st;
+
+    if (count)    { *count = 0; }
+    if (sections) { *sections = 0; }
+    st = nj_m3g_container_probe(p, n, NULL, 0, err, errcap);
+    if (st != NJ_OK) { return st; }
+
+    off = NJ_M3G_HEADER;
+    while (off < n) {
+        nj_u4 clen = le32(p + off + 1u);
+        nj_u4 ulen = le32(p + off + 5u);
+        nj_u4 body_len = clen - NJ_M3G_SECTION_MIN;   /* less header and Adler32 */
+        const nj_u1 *body;
+        nj_u4 at;
+
+        nsec++;
+        /*
+         * The first section is the file header, and its payload is a header -
+         * version, flags, a few counts - not a run of objects.  Walking it as
+         * objects reads its fields as lengths, which is exactly the nonsense
+         * this check exists to catch.
+         */
+        if (off == NJ_M3G_HEADER || ulen == 0u) { off += clen; continue; }
+        if (p[off] == 1u) {
+            if (!vm || !vm->port || !vm->port->inflate) {
+                M3G_FAIL("the section at %lu is compressed and this port has no inflate hook",
+                         (unsigned long)off);
+            }
+            if (ulen > scratch_cap) {
+                nj_host_free(vm, scratch);
+                scratch = (nj_u1 *)nj_host_alloc(vm, (nj_size)ulen);
+                scratch_cap = scratch ? ulen : 0u;
+                if (!scratch) {
+                    M3G_SCAN_FAIL("out of host memory for a %lu byte section",
+                                  (unsigned long)ulen);
+                }
+            }
+            st = vm->port->inflate(vm->port->ud, p + off + NJ_M3G_SECTION,
+                                   body_len, scratch, ulen);
+            if (st != NJ_OK) {
+                M3G_SCAN_FAIL("the section at %lu did not inflate to the %lu byte(s) it declares",
+                              (unsigned long)off, (unsigned long)ulen);
+            }
+            body = scratch;
+            body_len = ulen;
+        } else {
+            body = p + off + NJ_M3G_SECTION;
+        }
+
+        at = 0;
+        while (at + 5u <= body_len) {
+            nj_u1 type = body[at];
+            nj_u4 olen = le32(body + at + 1u);
+            if (olen > body_len - at - 5u) {
+                M3G_SCAN_FAIL("an object at %lu in the section at %lu says it is %lu byte(s) but only %lu remain",
+                              (unsigned long)at, (unsigned long)off,
+                              (unsigned long)olen, (unsigned long)(body_len - at - 5u));
+            }
+            if (out && nobj < out_cap) {
+                out[nobj].type = type;
+                out[nobj].off  = off + NJ_M3G_SECTION + at;
+                out[nobj].len  = olen;
+            }
+            nobj++;
+            at += 5u + olen;
+        }
+        if (at != body_len) {
+            M3G_SCAN_FAIL("the objects in the section at %lu end at %lu, not at %lu",
+                          (unsigned long)off, (unsigned long)at, (unsigned long)body_len);
+        }
+        off += clen;
+    }
+
+    nj_host_free(vm, scratch);
+    if (count)    { *count = nobj; }
+    if (sections) { *sections = nsec; }
+    return NJ_OK;
+}
+
 
 /*
  * Walk the object stream inside one inflated section.

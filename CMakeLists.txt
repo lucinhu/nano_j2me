@@ -128,6 +128,14 @@ target_include_directories(nj2me
   PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
 
+# The headless port inflates .m3g sections through the nj_port.inflate hook,
+# so the library needs zlib when it is there.  A build without zlib still
+# compiles: the hook is then simply not filled in.
+find_package(ZLIB)
+if(ZLIB_FOUND)
+  target_link_libraries(nj2me PUBLIC ZLIB::ZLIB)
+endif()
+
 target_compile_options(nj2me PRIVATE -Wall -Wextra)
 if(NJ_WERROR)
   target_compile_options(nj2me PRIVATE -Werror)

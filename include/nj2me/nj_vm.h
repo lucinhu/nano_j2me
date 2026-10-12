@@ -537,4 +537,26 @@ nj_status nj_io_late_init(nj_vm *vm);
 }
 #endif
 
+
+/*
+ * The two layers of a .m3g container, both usable without a MIDlet:
+ * the container probe checks that the sections tile the file, and the object
+ * scan walks the objects inside them (inflating compressed sections through
+ * the port's inflate hook).
+ */
+typedef struct nj_m3g_object {
+    nj_u1 type;
+    nj_u4 off;   /* where the object's data starts in the file */
+    nj_u4 len;   /* the object's own Length field */
+} nj_m3g_object;
+
+nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
+                                 nj_u1 *ids, nj_u4 id_count,
+                                 char *err, nj_u4 errcap);
+
+nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
+                              nj_m3g_object *out, nj_u4 out_cap,
+                              nj_u4 *count, nj_u4 *sections,
+                              char *err, nj_u4 errcap);
+
 #endif /* NJ_VM_H */

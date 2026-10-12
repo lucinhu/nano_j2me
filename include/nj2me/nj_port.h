@@ -353,6 +353,18 @@ typedef struct nj_port {
                               nj_u1 *out, nj_u4 out_cap, nj_u4 *out_len,
                               nj_u4 *sample_rate, nj_u4 *channels);
 
+    /*
+     * Inflate one zlib stream, for the .m3g reader.
+     *
+     * Unlike audio_decode this needs no two-call dance: an .m3g section
+     * declares its uncompressed length up front, so the caller knows how much
+     * room to provide and passes it in.  Return NJ_ERR_UNSUPPORTED when the
+     * port has no decompressor - the loader then reports the section as
+     * unreadable rather than guessing at its contents.
+     */
+    nj_status (*inflate)(void *ud, const nj_u1 *in, nj_u4 in_len,
+                         nj_u1 *out, nj_u4 out_len);
+
     int   fps_cap;        /* 0 => uncapped */
     const char *rms_dir;  /* where RecordStore files live (hosted ports) */
 

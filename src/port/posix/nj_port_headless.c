@@ -806,6 +806,27 @@ static void hl_shutdown(void *ud)
 /* ------------------------------------------------------------------ */
 /* Construction                                                        */
 /* ------------------------------------------------------------------ */
+#if defined(NJ_USE_LIBC) && NJ_USE_LIBC
+#include <zlib.h>
+
+/*
+ * The host has zlib, so the headless port can read compressed .m3g sections.
+ * This is a port hook and not a runtime dependency on purpose: the runtime is
+ * meant to build with no libc at all, and a device that has no decompressor
+ * simply leaves the hook null and gets "unsupported" instead.
+ */
+static nj_status hl_inflate(void *ud, const nj_u1 *in, nj_u4 in_len,
+                            nj_u1 *out, nj_u4 out_len)
+{
+    uLongf got = (uLongf)out_len;
+    (void)ud;
+    if (!in || !out) { return NJ_ERR_FORMAT; }
+    if (uncompress(out, &got, in, (uLong)in_len) != Z_OK) { return NJ_ERR_FORMAT; }
+    if ((nj_u4)got != out_len) { return NJ_ERR_FORMAT; }
+    return NJ_OK;
+}
+#endif
+
 nj_status nj_port_headless(nj_port *out)
 {
     return nj_port_headless_ex(out, 0, 0, 0, NULL);
@@ -840,6 +861,9 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     out->code_commit = hl_code_commit;
     out->code_free = hl_code_free;
     out->dir_open = hl_dir_open;
+#if defined(NJ_USE_LIBC) && NJ_USE_LIBC
+    out->inflate = hl_inflate;
+#endif
     out->dir_next = hl_dir_next;
     out->dir_close = hl_dir_close;
     out->file_open = hl_file_open;

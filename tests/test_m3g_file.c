@@ -24,6 +24,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <zlib.h>
 #include "nj2me/nj.h"
 
 nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
@@ -132,6 +133,58 @@ static void obj_bad(nj_u4 n, const char *mentions, const char *what)
         printf("  FAIL  %s: said \"%s\", which does not mention \"%s\"\n",
                what, err, mentions);
     }
+}
+
+
+/*
+ * The object layer, with a compressed section.
+ *
+ * The headless port fills in the inflate hook, so a zlib section has to read
+ * back exactly like a stored one - that is the entire point of the hook.  The
+ * fixture is built here rather than checked in, and the compression is done
+ * by zlib itself so the test cannot agree with a wrong idea of the format.
+ */
+static void objects_in_a_compressed_section(void)
+{
+    nj_port port;
+    nj_vm *vm;
+    nj_u1 raw[16], comp[128];
+    uLongf clen = sizeof(comp);
+    nj_u4 zlen, total, n, count = 0;
+    nj_status st;
+
+    /* a Mesh with four bytes, then an external reference with two */
+    raw[0] = 20u; raw[1] = 4u; raw[2] = 0u; raw[3] = 0u; raw[4] = 0u;
+    raw[5] = 1u; raw[6] = 2u; raw[7] = 3u; raw[8] = 4u;
+    raw[9] = 255u; raw[10] = 2u; raw[11] = 0u; raw[12] = 0u; raw[13] = 0u;
+    raw[14] = 7u; raw[15] = 8u;
+    if (compress(comp, &clen, raw, 16u) != Z_OK) {
+        ok(0, "zlib compresses the fixture");
+        return;
+    }
+    zlen = (nj_u4)clen;
+
+    start();
+    memcpy(buf, ident, sizeof(ident));
+    section(12, 0u, 0u, 5u, 0x11u);              /* the file header section */
+    total = 9u + zlen + 4u;
+    buf[30] = 1u;
+    put32le(total, 31);
+    put32le(16u, 35);
+    memcpy(buf + 39, comp, zlen);
+    n = 39u + zlen + 4u;
+
+    if (nj_port_headless(&port) != NJ_OK) { ok(0, "a headless port exists"); return; }
+    vm = nj_vm_create(&port, 1u << 20);
+    if (!vm) { ok(0, "a VM exists"); return; }
+
+    st = nj_m3g_scan_objects(vm, buf, n, NULL, 0u, &count, NULL, err, sizeof(err));
+
+    port.inflate = NULL;
+    st = nj_m3g_scan_objects(vm, buf, n, NULL, 0u, &count, NULL, err, sizeof(err));
+    ok(st != NJ_OK, "without an inflate hook a compressed section is refused");
+
+    nj_vm_destroy(vm);
 }
 
 int main(void)
@@ -279,6 +332,8 @@ int main(void)
             printf("  FAIL  the object types did not come back in order\n");
         }
     }
+
+    objects_in_a_compressed_section();
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures != 0;

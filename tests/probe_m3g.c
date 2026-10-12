@@ -24,13 +24,8 @@
 #include <string.h>
 #include <zlib.h>
 #include "nj2me/nj.h"
+#include "nj2me/nj_vm.h"
 
-nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
-                                 nj_u1 *ids, nj_u4 id_count,
-                                 char *err, nj_u4 errcap);
-nj_status nj_m3g_objects_probe(const nj_u1 *p, nj_u4 n, nj_u4 *count,
-                               nj_u1 *types, nj_u4 type_count,
-                               char *err, nj_u4 errcap);
 
 #define MAX_SECTIONS 64u
 #define MAX_TYPES 24u
@@ -77,12 +72,14 @@ int main(int argc, char **argv)
     FILE *f;
     long len;
     nj_u1 *buf;
-    nj_u1 ids[MAX_SECTIONS];
-    char err[256];
-    nj_status st;
-    nj_u4 i, off, nsections = 0, nobjects = 0;
+    nj_port port;
+    nj_vm *vm;
+    static nj_m3g_object objs[65536];
+    nj_u4 count = 0, nsections = 0, i;
     nj_u4 tally[256];
     unsigned shown = 0;
+    char err[256];
+    nj_status st;
 
     if (argc != 2) { fprintf(stderr, "usage: probe_m3g FILE\n"); return 2; }
     f = fopen(argv[1], "rb");
@@ -94,69 +91,31 @@ int main(int argc, char **argv)
     if (fread(buf, 1u, (size_t)len, f) != (size_t)len) { free(buf); fclose(f); return 2; }
     fclose(f);
 
-    memset(tally, 0, sizeof(tally));
-    st = nj_m3g_container_probe(buf, (nj_u4)len, ids, MAX_SECTIONS, err, sizeof(err));
+    /*
+     * The runtime's scanner, not a copy of it.  The sections are inflated
+     * through the port's inflate hook - the same hook a device would fill in -
+     * so what this checks is the code the emulator will actually run, and a
+     * mistake in the runtime cannot be cancelled out by the same mistake
+     * written twice.
+     */
+    if (nj_port_headless(&port) != NJ_OK) { free(buf); return 2; }
+    vm = nj_vm_create(&port, 1u << 20);
+    if (!vm) { free(buf); return 2; }
+
+    st = nj_m3g_scan_objects(vm, buf, (nj_u4)len, objs, 65536u, &count,
+                             &nsections, err, sizeof(err));
     if (st != NJ_OK) {
         printf("REJECTED %d: %s\n", (int)st, err);
+        nj_vm_destroy(vm);
         free(buf);
         return 1;
     }
 
-    /* Walk the sections again here, because the probe reports ids and not
-       offsets, and this tool needs the offsets to reach the objects. */
-    for (off = 12u; off < (nj_u4)len; ) {
-        unsigned scheme = buf[off];
-        nj_u4 clen = le32(buf + off + 1u);
-        nj_u4 ulen = le32(buf + off + 5u);
-        nj_u4 count = 0;
-        nj_u1 types[MAX_TYPES];
-        nj_u1 *body = NULL;
-
-        if (clen < 13u || off + clen > (nj_u4)len) {
-            printf("REJECTED section at %lu: length %lu\n",
-                   (unsigned long)off, (unsigned long)clen);
-            free(buf);
-            return 1;
-        }
-        if (ulen != 0u) {
-            const nj_u1 *objs = buf + off + 9u;
-            nj_u4 objs_len = clen - 13u;
-            if (scheme == 1u) {
-                uLongf out = (uLongf)ulen;
-                body = (nj_u1 *)malloc(ulen ? ulen : 1u);
-                if (!body || uncompress(body, &out, objs, (uLong)objs_len) != Z_OK ||
-                    (nj_u4)out != ulen) {
-                    printf("REJECTED section at %lu: %lu byte(s) of zlib did not inflate to %lu\n",
-                           (unsigned long)off, (unsigned long)objs_len, (unsigned long)ulen);
-                    free(body); free(buf);
-                    return 1;
-                }
-            } else if (objs_len != ulen) {
-                printf("REJECTED section at %lu: stored, but %lu byte(s) of objects against %lu declared\n",
-                       (unsigned long)off, (unsigned long)objs_len, (unsigned long)ulen);
-                free(buf);
-                return 1;
-            }
-            st = nj_m3g_objects_probe(body ? body : objs, ulen, &count, types,
-                                      MAX_TYPES, err, sizeof(err));
-            if (st != NJ_OK) {
-                printf("REJECTED section at %lu: %s\n", (unsigned long)off, err);
-                free(body); free(buf);
-                return 1;
-            }
-            {
-                nj_u4 k;
-                for (k = 0; k < count && k < MAX_TYPES; k++) { tally[types[k]]++; }
-            }
-            nobjects += count;
-            free(body);
-        }
-        nsections++;
-        off += clen;
-    }
+    memset(tally, 0, sizeof(tally));
+    for (i = 0; i < count && i < 65536u; i++) { tally[objs[i].type]++; }
 
     printf("OK %lu bytes, %lu section(s), %lu object(s)",
-           (unsigned long)len, (unsigned long)nsections, (unsigned long)nobjects);
+           (unsigned long)len, (unsigned long)nsections, (unsigned long)count);
     for (i = 0; i < 256u; i++) {
         if (tally[i] != 0u && shown < 5u) {
             printf("%s%s=%lu", shown ? " " : " [", type_name((unsigned)i),
@@ -166,6 +125,8 @@ int main(int argc, char **argv)
     }
     if (shown) { printf("]"); }
     printf("\n");
+
+    nj_vm_destroy(vm);
     free(buf);
     return 0;
 }
