@@ -419,6 +419,90 @@ int main(void)
         }
     }
 
+    /* ---- the rasterizer --- */
+    /*
+     * This checks that geometry is turned into triangles, not that the pixels
+     * are right: the filling itself is nj_gfx_triangle, which other tests
+     * already cover pixel by pixel.  What is new here is the projection path,
+     * so the assertions count the drawing calls.  gfx_calls is the same
+     * counter --stats reports.
+     */
+    {
+        nj_ref g3 = make(vm, G3D);
+        nj_ref fl = make(vm, FL);
+        nj_ref xf = make(vm, XF);
+        nj_ref xs = nj_int_array_new(vm, 3);
+        nj_ref ys = nj_int_array_new(vm, 3);
+        nj_ref zs = nj_int_array_new(vm, 3);
+        nj_value a11[11], a2[2], r;
+        nj_vm_stats before, after;
+
+        (void)call(vm, xf, XF, "setIdentity", "()V", NULL, &r);
+        a2[0].r = xf;
+        (void)call(vm, fl, FL, "setAffineTrans", "(L" XF ";)V", a2, &r);
+        a11[0].i = 64; a11[1].i = 100; a11[2].i = 1000;
+        (void)call(vm, fl, FL, "setPerspective", "(III)V", a11, &r);
+        a2[0].i = 32; a2[1].i = 32;
+        (void)call(vm, fl, FL, "setCenter", "(II)V", a2, &r);
+        a2[0].i = ONE; a2[1].i = ONE;
+        (void)call(vm, fl, FL, "setScale", "(II)V", a2, &r);
+
+        ((nj_s4 *)nj_array_data(xs))[0] = -16;
+        ((nj_s4 *)nj_array_data(xs))[1] = 16;
+        ((nj_s4 *)nj_array_data(xs))[2] = 0;
+        ((nj_s4 *)nj_array_data(ys))[0] = -16;
+        ((nj_s4 *)nj_array_data(ys))[1] = -16;
+        ((nj_s4 *)nj_array_data(ys))[2] = 16;
+        ((nj_s4 *)nj_array_data(zs))[0] = 64;
+        ((nj_s4 *)nj_array_data(zs))[1] = 64;
+        ((nj_s4 *)nj_array_data(zs))[2] = 64;
+
+        nj_vm_get_stats(vm, &before);
+
+        /* Nothing bound: this must draw nothing rather than fault. */
+        a11[0].r = 0; a11[1].i = 0; a11[2].i = 3; a11[3].r = fl; a11[4].r = 0;
+        a11[5].i = 0; a11[6].i = 0;
+        a11[7].r = xs; a11[8].r = ys; a11[9].r = zs; a11[10].r = zs;
+        (void)call(vm, g3, G3D, "renderPrimitives",
+                   "(L" TEX ";IIL" FL ";L" FX ";II[I[I[I[I)V", a11, &r);
+        nj_vm_get_stats(vm, &after);
+        check(after.gfx_calls == before.gfx_calls,
+              "with no Graphics bound, renderPrimitives draws nothing");
+
+        /* Bind a real Image graphics and draw the same triangle. */
+        {
+            nj_ref img = 0;
+            nj_value a2i[2];
+
+            a2i[0].i = 64; a2i[1].i = 64;
+            img = 0;
+            {
+                nj_value rr;
+
+                if (nj_call_static(vm, "javax/microedition/lcdui/Image",
+                                   "createImage", "(II)Ljavax/microedition/lcdui/Image;",
+                                   a2i, &rr) == NJ_OK) {
+                    img = rr.r;
+                }
+            }
+            if (img) {
+                a2[0].r = img;
+                if (nj_call(vm, img, "javax/microedition/lcdui/Image", "getGraphics",
+                            "()Ljavax/microedition/lcdui/Graphics;", NULL, &r) == NJ_OK) {
+                    a2[0].r = r.r;
+                    (void)call(vm, g3, G3D, "bind",
+                               "(Ljavax/microedition/lcdui/Graphics;)V", a2, &r);
+                    nj_vm_get_stats(vm, &before);
+                    (void)call(vm, g3, G3D, "renderPrimitives",
+                               "(L" TEX ";IIL" FL ";L" FX ";II[I[I[I[I)V", a11, &r);
+                    nj_vm_get_stats(vm, &after);
+                    check(after.gfx_calls > before.gfx_calls,
+                          "a bound Graphics gets the projected triangle");
+                }
+            }
+        }
+    }
+
     /*
      * The control: prove that a lookup can fail, or every check above could be
      * passing because lookups always succeed.

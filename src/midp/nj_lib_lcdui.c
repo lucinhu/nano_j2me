@@ -718,6 +718,28 @@ static void gfx_store(nj_vm *vm, nj_ref g_obj, const nj_gfx *g)
     if (f) { nj_field_write_int(vm, g_obj, f, (nj_s4)g->xor_color); }
 }
 
+/*
+ * See nj_midp.h.  The colour is forced opaque for the same reason
+ * Graphics.setColor(int) does it: a triangle with alpha 0 would be invisible
+ * and the caller would have no way to tell that from a projection that put it
+ * off screen.
+ */
+int nj_midp_gfx_triangle(nj_vm *vm, nj_ref g_obj,
+                         nj_s4 x1, nj_s4 y1, nj_s4 x2, nj_s4 y2,
+                         nj_s4 x3, nj_s4 y3, nj_u4 argb)
+{
+    nj_gfx g;
+    nj_surface sc;
+
+    if (!gfx_load(vm, g_obj, &g, &sc)) {
+        return 0;
+    }
+    nj_gfx_set_color(&g, argb | 0xFF000000u);
+    nj_gfx_triangle(&g, x1, y1, x2, y2, x3, y3, 1);
+    gfx_store(vm, g_obj, &g);
+    return 1;
+}
+
 
 /* ---- construction ---- */
 NJFN(g_init)

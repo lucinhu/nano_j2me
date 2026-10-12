@@ -37,6 +37,7 @@
  */
 
 #include "nj_internal.h"
+#include "nj_midp.h"
 
 #if NJ_ENABLE_MASCOT
 
@@ -925,6 +926,160 @@ NJFN(mascot_g3d_release)
 }
 
 /* ------------------------------------------------------------------ */
+/* Graphics3D: the rasterizer                                         */
+/* ------------------------------------------------------------------ */
+/*
+ * Mascot Capsule hands the vertices over directly: renderPrimitives receives
+ * the coordinate arrays and a FigureLayout that carries both the affine
+ * transform and the projection.  There is no scene graph to walk and no .m3g
+ * container to parse, which is why the Micro3D rasterizer is written before
+ * the JSR 184 one.
+ *
+ * It transforms each vertex by the layout's affine matrix, projects it with
+ * the layout's perspective and fills the resulting triangles through the
+ * Graphics the game bound.  Everything is 4096 fixed point, which is what the
+ * API uses and what xf_read already returns.
+ *
+ * What it does not do, said plainly rather than hidden:
+ *   - no texture sampling.  The games' Texture data is a raw bitmap whose
+ *     layout is not documented and is not in a format this runtime reads, so
+ *     every triangle is flat shaded from the effect's light intensities.
+ *   - no depth buffer.  Triangles are painted in submission order, so a scene
+ *     that relies on z ordering will look wrong where it overlaps itself.
+ *   - renderFigure is still a no-op: a Figure carries posture tables and
+ *     textures but this runtime has no model geometry for it.
+ * With those limits it is still a real projection of the real vertices, so a
+ * game's 3D content appears where before there was nothing at all.
+ */
+#define M3_ONE 4096
+
+static nj_ref m3_get_ref(nj_vm *vm, nj_ref o, const char *cls,
+                         const char *name, const char *desc)
+{
+    const nj_field *f;
+
+    if (!o) {
+        return 0;
+    }
+    f = nj_field_lookup(vm, cls, name, desc, 0);
+    return f ? nj_field_read_ref(vm, o, f) : 0;
+}
+
+/* Light intensities are 0..4096; a light nobody configured shows mid grey
+ * rather than black, because black is indistinguishable from "the projection
+ * put it off screen". */
+static nj_u4 m3_shade(nj_vm *vm, nj_ref fx)
+{
+    nj_ref lig;
+    nj_s4 v;
+
+    lig = m3_get_ref(vm, fx, NJ_C_FX, "_lig", "L" NJ_C_LIG ";");
+    if (!lig) {
+        return 0xC0C0C0u;
+    }
+    v = m3_get(vm, lig, "_amb") + m3_get(vm, lig, "_dif");
+    if (v <= 0) {
+        return 0xC0C0C0u;
+    }
+    if (v > M3_ONE) {
+        v = M3_ONE;
+    }
+    v = v * 255 / M3_ONE;
+    return ((nj_u4)v << 16) | ((nj_u4)v << 8) | (nj_u4)v;
+}
+
+static void m3_project(const nj_s4 *m, nj_s4 kx, nj_s4 ky, nj_s4 cx, nj_s4 cy,
+                       nj_s4 x, nj_s4 y, nj_s4 z, nj_s4 *ox, nj_s4 *oy)
+{
+    nj_s8 vx = ((nj_s8)m[0] * x + (nj_s8)m[1] * y + (nj_s8)m[2] * z) / M3_ONE + m[3];
+    nj_s8 vy = ((nj_s8)m[4] * x + (nj_s8)m[5] * y + (nj_s8)m[6] * z) / M3_ONE + m[7];
+    nj_s8 vz = ((nj_s8)m[8] * x + (nj_s8)m[9] * y + (nj_s8)m[10] * z) / M3_ONE + m[11];
+
+    if (vz < 1) {
+        vz = 1;                     /* at or behind the eye: clamp, never divide by zero */
+    }
+    *ox = (nj_s4)(cx + (nj_s8)kx * vx / vz);
+    *oy = (nj_s4)(cy + (nj_s8)ky * vy / vz);
+}
+
+NJFN(mascot_g3d_renderPrimitives)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref g, layout, fx, xf, xa, ya, za;
+    nj_s4 m[12];
+    nj_s4 p, sx, sy, cx, cy, kx, ky, count, i;
+    nj_u4 colour;
+    nj_value r;
+
+    g = m3_get_ref(vm, self, NJ_C_G3D, "_g", "Ljavax/microedition/lcdui/Graphics;");
+    if (!g) {
+        return NJ_OK;               /* nothing bound: draw nothing, quietly */
+    }
+    layout = NJ_ARG_REF(args, 3);
+    fx = NJ_ARG_REF(args, 4);
+    count = NJ_ARG_INT(args, 2);
+    xa = NJ_ARG_REF(args, 7);
+    ya = NJ_ARG_REF(args, 8);
+    za = NJ_ARG_REF(args, 9);
+    if (!layout || !xa || !ya || !za || count < 3) {
+        return NJ_OK;
+    }
+
+    for (i = 0; i < 12; i++) {
+        m[i] = (i % 4 == 3) ? 0 : ((i / 4 == i % 4) ? M3_ONE : 0);
+    }
+    xf = m3_get_ref(vm, layout, NJ_C_FL, "_xf", "L" NJ_C_XF ";");
+    if (xf) {
+        xf_read(vm, xf, m);
+    }
+
+    p = m3_get(vm, layout, "_p");
+    sx = m3_get(vm, layout, "_sx");
+    sy = m3_get(vm, layout, "_sy");
+    cx = m3_get(vm, layout, "_cx");
+    cy = m3_get(vm, layout, "_cy");
+    if (p == 0) {
+        p = M3_ONE;
+    }
+    if (sx == 0) {
+        sx = M3_ONE;
+    }
+    if (sy == 0) {
+        sy = M3_ONE;
+    }
+    if (cx == 0 && cy == 0) {
+        /* A title that never called setCenter still means the middle of the
+         * screen.  Without this every model lands in the top-left corner,
+         * which looks like a projection bug rather than a missing default. */
+        if (nj_call(vm, g, "javax/microedition/lcdui/Graphics", "getWidth", "()I", NULL, &r) == NJ_OK) {
+            cx = r.i / 2;
+        }
+        if (nj_call(vm, g, "javax/microedition/lcdui/Graphics", "getHeight", "()I", NULL, &r) == NJ_OK) {
+            cy = r.i / 2;
+        }
+    }
+    kx = (nj_s4)(((nj_s8)p * sx) / M3_ONE);
+    ky = (nj_s4)(((nj_s8)p * sy) / M3_ONE);
+    colour = m3_shade(vm, fx);
+
+    for (i = 0; i + 2 < count; i++) {
+        nj_s4 x1, y1, x2, y2, x3, y3;
+
+        if (i + 2 >= xa->length || i + 2 >= ya->length || i + 2 >= za->length) {
+            break;                  /* the arrays are shorter than the count says */
+        }
+        m3_project(m, kx, ky, cx, cy, ((nj_s4 *)xa->u.bytes)[i],
+                   ((nj_s4 *)ya->u.bytes)[i], ((nj_s4 *)za->u.bytes)[i], &x1, &y1);
+        m3_project(m, kx, ky, cx, cy, ((nj_s4 *)xa->u.bytes)[i + 1],
+                   ((nj_s4 *)ya->u.bytes)[i + 1], ((nj_s4 *)za->u.bytes)[i + 1], &x2, &y2);
+        m3_project(m, kx, ky, cx, cy, ((nj_s4 *)xa->u.bytes)[i + 2],
+                   ((nj_s4 *)ya->u.bytes)[i + 2], ((nj_s4 *)za->u.bytes)[i + 2], &x3, &y3);
+        (void)nj_midp_gfx_triangle(vm, g, x1, y1, x2, y2, x3, y3, colour);
+    }
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
 /* Tables                                                             */
 /* ------------------------------------------------------------------ */
 
@@ -1017,7 +1172,7 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_G3D, "release", "(Ljavax/microedition/lcdui/Graphics;)V", mascot_g3d_release },
     { NJ_C_G3D, "flush", "()V", mascot_noop },
     { NJ_C_G3D, "renderPrimitives",
-      "(L" NJ_C_TEX ";IIL" NJ_C_FL ";L" NJ_C_FX ";II[I[I[I[I)V", mascot_noop },
+      "(L" NJ_C_TEX ";IIL" NJ_C_FL ";L" NJ_C_FX ";II[I[I[I[I)V", mascot_g3d_renderPrimitives },
     { NJ_C_G3D, "renderFigure", "(L" NJ_C_FIG ";IIL" NJ_C_FL ";L" NJ_C_FX ";)V", mascot_noop }
 };
 

@@ -316,4 +316,17 @@ nj_status nj_rms_late_init(nj_vm *vm);
  */
 nj_status nj_m3g_late_init(nj_vm *vm);
 
+/*
+ * Fill a triangle through a MIDlet's own javax.microedition.lcdui.Graphics.
+ *
+ * The Mascot Capsule rasterizer lives in another file and cannot reach
+ * gfx_load/gfx_store, which are static in nj_lib_lcdui.c.  Rather than
+ * duplicate the mapping from a Java Graphics to an nj_gfx -- including the
+ * clip and translate bookkeeping that took a real bug to get right -- it goes
+ * through this one entry point.  Returns 0 if the object is not a Graphics.
+ */
+int nj_midp_gfx_triangle(nj_vm *vm, nj_ref g_obj,
+                         nj_s4 x1, nj_s4 y1, nj_s4 x2, nj_s4 y2,
+                         nj_s4 x3, nj_s4 y3, nj_u4 argb);
+
 #endif /* NJ_MIDP_H */
