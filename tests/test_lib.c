@@ -255,6 +255,60 @@ static void test_round_trip(nj_vm *vm)
     OK(nj_call_int(vm, dis, DIS, "readShort", "()S", NULL) == 0x0102);
     OK_MSG(nj_call_int(vm, dis, DIS, "read", "()I", NULL) == -1,
            "read() past the end must return -1");
+
+    /*
+     * writeFloat and writeDouble.  Both were missing, and 3D跳台滑雪2011_4507
+     * died with NoSuchMethodError in its save routine because of it.  The
+     * encoding is IEEE 754 big-endian, which the round trip through the reader
+     * pins down: a wrong byte order still writes the right number of bytes,
+     * but reading them back does not give the same number.
+     */
+    {
+        nj_ref b2 = construct(vm, BAOS, "()V", NULL, "ByteArrayOutputStream()");
+        nj_ref d2, i2, r2;
+        nj_value q[2];
+        OK(b2 != NULL);
+        q[0] = vref(b2);
+        d2 = construct(vm, DOS, "(Ljava/io/OutputStream;)V", q,
+                       "DataOutputStream(baos)");
+        OK(d2 != NULL);
+        clean(vm, "new DataOutputStream for floats");
+
+        {   /* vfloat()/vdouble() are defined further down this file */
+            nj_value t;
+            t.bits = 0u;
+            t.f = 1.5f;
+            q[0] = t;
+        }
+        q[1].bits = 0u;
+        OK(nj_call(vm, d2, DOS, "writeFloat", "(F)V", q, NULL) == NJ_OK);
+        {
+            nj_value t;
+            t.bits = 0u;
+            t.d = -2.25;
+            q[0] = t;
+        }
+        q[1].bits = 0u;            /* (D)V occupies two slots */
+        OK(nj_call(vm, d2, DOS, "writeDouble", "(D)V", q, NULL) == NJ_OK);
+        clean(vm, "writeFloat/writeDouble");
+
+        n = nj_call_int(vm, b2, BAOS, "size", "()I", NULL);
+        OK_MSG(n == 12, "writeFloat+writeDouble wrote %d bytes, expected 12",
+               (int)n);
+
+        q[0] = vref(nj_call_ref(vm, b2, BAOS, "toByteArray", "()[B", NULL));
+        i2 = construct(vm, BAIS, "([B)V", q, "ByteArrayInputStream(byte[])");
+        OK(i2 != NULL);
+        r2 = dis_over(vm, i2);
+        OK(r2 != NULL);
+        if (r2) {
+            OK(nj_call(vm, r2, DIS, "readFloat", "()F", NULL, &ret) == NJ_OK);
+            OK_MSG(ret.f == 1.5f, "readFloat gave %g, expected 1.5", (double)ret.f);
+            OK(nj_call(vm, r2, DIS, "readDouble", "()D", NULL, &ret) == NJ_OK);
+            OK_MSG(ret.d == -2.25, "readDouble gave %g, expected -2.25", ret.d);
+        }
+        clean(vm, "float/double round trip");
+    }
     clean(vm, "DataInputStream reads");
 }
 

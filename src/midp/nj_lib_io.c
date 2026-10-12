@@ -590,6 +590,45 @@ NJFN(dos_write_long)
     return dos_raw(vm, dos_out(vm, NJ_THIS(args)), b, 8);
 }
 
+/*
+ * writeFloat and writeDouble.
+ *
+ * CLDC 1.1's DataOutputStream has both, and they write the IEEE 754 bit
+ * pattern big-endian, exactly as writeInt and writeLong write their integers.
+ * They were missing here, which is not a theoretical gap: 3D跳台滑雪2011_4507
+ * calls writeFloat from its save routine and died with
+ *
+ *     NoSuchMethodError at AlpineSki/h.h()V pc=61:
+ *     java/io/DataOutputStream.writeFloat(F)V
+ *
+ * on the first frame it tried to save, so the title never presented anything.
+ * The read side (dis_read_float, dis_read_double) has existed all along; only
+ * the writer was absent.
+ */
+NJFN(dos_write_float)
+{
+    nj_u1 b[4];
+    float f = NJ_ARG_FLOAT(args, 0);
+    nj_u4 v;
+    memcpy(&v, &f, sizeof(v));
+    b[0] = (nj_u1)(v >> 24); b[1] = (nj_u1)(v >> 16);
+    b[2] = (nj_u1)(v >> 8);  b[3] = (nj_u1)v;
+    return dos_raw(vm, dos_out(vm, NJ_THIS(args)), b, 4);
+}
+
+NJFN(dos_write_double)
+{
+    nj_u1 b[8];
+    double d = NJ_ARG_DOUBLE(args, 0);
+    nj_u8 v;
+    int i;
+    memcpy(&v, &d, sizeof(v));
+    for (i = 0; i < 8; i++) {
+        b[i] = (nj_u1)(v >> (56 - i * 8));
+    }
+    return dos_raw(vm, dos_out(vm, NJ_THIS(args)), b, 8);
+}
+
 NJFN(dos_write_boolean)
 {
     nj_u1 b = (nj_u1)(NJ_ARG_INT(args, 0) ? 1 : 0);
@@ -1358,6 +1397,8 @@ static const nj_builtin_method dos_methods[] = {
     M("writeChar",       "(I)V", 0),
     M("writeInt",        "(I)V", 0),
     M("writeLong",       "(J)V", 0),
+    M("writeFloat",      "(F)V", 0),
+    M("writeDouble",     "(D)V", 0),
     M("writeUTF",        "(Ljava/lang/String;)V", 0),
     M("flush",           "()V", 0),
     M("close",           "()V", 0),
@@ -1995,6 +2036,8 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/DataOutputStream", "writeChar",    "(I)V", dos_write_char },
     { "java/io/DataOutputStream", "writeInt",     "(I)V", dos_write_int },
     { "java/io/DataOutputStream", "writeLong",    "(J)V", dos_write_long },
+    { "java/io/DataOutputStream", "writeFloat",   "(F)V", dos_write_float },
+    { "java/io/DataOutputStream", "writeDouble",  "(D)V", dos_write_double },
     { "java/io/DataOutputStream", "writeUTF",     "(Ljava/lang/String;)V", dos_writeUTF },
     { "java/io/DataOutputStream", "flush",        "()V", dos_flush },
     { "java/io/DataOutputStream", "close",        "()V", dos_flush },
