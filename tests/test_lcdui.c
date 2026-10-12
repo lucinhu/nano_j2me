@@ -1003,8 +1003,13 @@ static void test_graphics(nj_vm *vm)
     a[2] = iref(-4);
     a[3] = iref(4);
     (void)nj_call(vm, g, NJ_C_GRAPHICS, "setClip", "(IIII)V", a, NULL);
-    OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
-           "setClip with a negative width did not throw");
+    /*
+     * b5b8146 made this legal on purpose: MIDlets compute w = width - x with x
+     * past the edge all the time (傲世三国志 and 穿越火线 did it every frame)
+     * and MIDP calls that an empty clip, not a programming error.  The old
+     * assertion below asserted the throw, so it was the test that had to move.
+     */
+    OK_MSG(!pending_exc(vm), "a negative clip size is an empty clip, not an error");
     /* A negative ORIGIN is legal: MIDP intersects the clip with the surface. */
     a[0] = iref(-3);
     a[1] = iref(-3);
