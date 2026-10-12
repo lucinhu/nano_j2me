@@ -107,11 +107,28 @@ keys_for() {
     printf '%s' "${KEYS[$1]:-}"
 }
 
+# Every title that has no script of its own gets this one.
+#
+# The purpose is T3/T4: a verdict of "flat frame: the game is not drawing" is
+# not trustworthy if nothing was ever pressed, because a game waiting on its
+# title screen looks exactly like a game that cannot draw.  Sending the whole
+# key set - one key per frame, each released the next frame - costs nothing and
+# turns "does not draw" into "does not draw even when poked", which is a claim
+# the corpus can actually defend.
+#
+# A title that throws because of this is fine (T3 allows errors); a title that
+# crashes or hangs because of it is a real finding, and that is the point.
+POKE="${NJ_POKE:-5:fire,6:up,7:down,8:left,9:right,10:soft1,11:soft2,12:1,13:2,14:5,15:star,16:pound,20:fire,21:fire,25:left,30:right,35:fire}"
+
 for jar in "${JARS[@]}"; do
     title="$(basename "$jar" .jar)"
     KARGS=()
     KS="$(keys_for "$title")"
-    [ -n "$KS" ] && KARGS=(--keys "$KS")
+    if [ -n "$KS" ]; then
+        KARGS=(--keys "$KS")
+    elif [ -n "$POKE" ]; then
+        KARGS=(--keys "$POKE")
+    fi
     out="$(mktemp -d)"
     log="$out/log.txt"
 
@@ -202,7 +219,7 @@ digests = {hashlib.md5(open(p, "rb").read()).hexdigest() for p in frames}
 changed = len(digests)
 
 if cols < min_colours:
-    print("FAIL|%d|%d|%d|flat frame: the game is not drawing" % (len(frames), cols, changed))
+    print("FAIL|%d|%d|%d|flat frame even after the whole key set was sent: the game is not drawing" % (len(frames), cols, changed))
     raise SystemExit
 if changed < 2:
     tag = "FAIL" if strict else "PASS"
