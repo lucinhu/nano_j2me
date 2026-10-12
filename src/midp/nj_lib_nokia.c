@@ -26,6 +26,7 @@
 #define NJ_C_VKEYBOARD "com/nokia/mid/ui/VirtualKeyboard"
 #define NJ_C_MPLISTEN  "com/nokia/mid/ui/multipointtouch/MultipointTouchListener"
 #define NJ_C_MPTOUCH   "com/nokia/mid/ui/multipointtouch/MultipointTouch"
+#define NJ_C_DEVCTL   "com/nokia/mid/ui/DeviceControl"
 #define NJ_C_DUTILS    "com/nokia/mid/ui/DirectUtils"
 #define NJ_C_DGRAPHICS "com/nokia/mid/ui/DirectGraphics"
 #define NJ_C_GRAPHICS "javax/microedition/lcdui/Graphics"
@@ -287,6 +288,35 @@ static const nj_builtin_method dutils_methods[] = {
       NJ_ACC_STATIC)
 };
 
+/*
+ * com.nokia.mid.ui.DeviceControl
+ *
+ * Vibration, the notification lights and the screen backlight have no
+ * equivalent in MIDP, so a MIDlet that wants any of them has no portable way
+ * to ask.  Three titles collected here call into this class, and on a device
+ * it is four side effects with nothing to observe afterwards.
+ *
+ * There is no port hook for them yet, so they succeed and do nothing.  That is
+ * a deliberate choice over throwing: a game that vibrates on a hit is playable
+ * without the buzz, and refusing the call would take the whole game down for a
+ * missing motor.  If a port ever grows a hook, these four are where it lands.
+ */
+static const nj_builtin_method devctl_methods[] = {
+    M("setLights",       "(II)V",  NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("setLights",       "(III)V", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("flashLights",     "(I)V",   NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("vibrate",         "(I)V",   NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("setScreenState",  "(Z)V",   NJ_ACC_STATIC | NJ_ACC_PUBLIC)
+};
+
+NJFN(nokia_dc_ok)
+{
+    (void)vm;
+    (void)args;
+    (void)ret;
+    return NJ_OK;
+}
+
 const nj_builtin_class nj_lib_nokia_classes[] = {
     { NJ_C_VKEYBOARD, "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, vkeyboard_methods,
@@ -320,12 +350,20 @@ const nj_builtin_class nj_lib_nokia_classes[] = {
     { NJ_C_DUTILS, "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, dutils_methods,
       (nj_u2)(sizeof(dutils_methods) / sizeof(dutils_methods[0])) },
+    { NJ_C_DEVCTL, "java/lang/Object", NJ_ACC_PUBLIC,
+      NULL, 0u, devctl_methods,
+      (nj_u2)(sizeof(devctl_methods) / sizeof(devctl_methods[0])) },
     { NULL, NULL, 0u, NULL, 0u, NULL, 0u }
 };
 const int nj_lib_nokia_class_count =
     (int)(sizeof(nj_lib_nokia_classes) / sizeof(nj_lib_nokia_classes[0])) - 1;
 
 const nj_native_entry nj_lib_nokia_table[] = {
+    { NJ_C_DEVCTL, "setLights",      "(II)V",  nokia_dc_ok },
+    { NJ_C_DEVCTL, "setLights",      "(III)V", nokia_dc_ok },
+    { NJ_C_DEVCTL, "flashLights",    "(I)V",   nokia_dc_ok },
+    { NJ_C_DEVCTL, "vibrate",        "(I)V",   nokia_dc_ok },
+    { NJ_C_DEVCTL, "setScreenState", "(Z)V",   nokia_dc_ok },
     { NJ_C_VKEYBOARD, "hideOpenKeypadCommand", "(Z)V", nokia_vk_hide },
     { NJ_C_VKEYBOARD, "showOpenKeypadCommand", "(Z)V", nokia_vk_show },
     { NJ_C_VKEYBOARD, "setVisibility",         "(Z)V", nokia_vk_hide },

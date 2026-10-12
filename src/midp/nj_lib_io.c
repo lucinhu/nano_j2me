@@ -876,6 +876,47 @@ NJFN(dis_read_long)
     return NJ_OK;
 }
 
+/*
+ * readFloat()/readDouble() were missing from the class table entirely, so any
+ * MIDlet that called them died with NoSuchMethodError before it drew anything
+ * (愤怒的小鸟 did).  CLDC's DataInputStream reads them big-endian, as IEEE 754
+ * bits - the same byte order readInt()/readLong() already use, so the value is
+ * assembled as an integer and reinterpreted.
+ */
+NJFN(dis_read_float)
+{
+    nj_u4 v = 0u;
+    float f;
+    int i;
+    for (i = 0; i < 4; i++) {
+        nj_s4 c = dis_one(vm, dis_in(vm, NJ_THIS(args)));
+        if (c < 0) {
+            return NJ_ERR;
+        }
+        v = (v << 8) | (nj_u4)c;
+    }
+    memcpy(&f, &v, sizeof(f));
+    ret->f = f;
+    return NJ_OK;
+}
+
+NJFN(dis_read_double)
+{
+    nj_u8 v = 0u;
+    double d;
+    int i;
+    for (i = 0; i < 8; i++) {
+        nj_s4 c = dis_one(vm, dis_in(vm, NJ_THIS(args)));
+        if (c < 0) {
+            return NJ_ERR;
+        }
+        v = (v << 8) | (nj_u8)c;
+    }
+    memcpy(&d, &v, sizeof(d));
+    ret->d = d;
+    return NJ_OK;
+}
+
 NJFN(dis_read_boolean)
 {
     nj_s4 c = dis_one(vm, dis_in(vm, NJ_THIS(args)));
@@ -1221,6 +1262,8 @@ static const nj_builtin_method dis_methods[] = {
     M("readChar",           "()C", 0),
     M("readInt",            "()I", 0),
     M("readLong",           "()J", 0),
+    M("readFloat",          "()F", 0),
+    M("readDouble",         "()D", 0),
     M("readUTF",            "()Ljava/lang/String;", 0),
     M("available",          "()I", 0),
     M("close",              "()V", 0)
@@ -1811,6 +1854,8 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/DataInputStream", "readChar",         "()C", dis_read_char },
     { "java/io/DataInputStream", "readInt",          "()I", dis_read_int },
     { "java/io/DataInputStream", "readLong",         "()J", dis_read_long },
+    { "java/io/DataInputStream", "readFloat",        "()F", dis_read_float },
+    { "java/io/DataInputStream", "readDouble",       "()D", dis_read_double },
     { "java/io/DataInputStream", "readUTF",          "()Ljava/lang/String;", dis_readUTF },
     { "java/io/DataInputStream", "available",        "()I", is_available },
     { "java/io/DataInputStream", "close",            "()V", is_close },
