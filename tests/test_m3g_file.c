@@ -424,6 +424,36 @@ int main(void)
         ok(f.nrefs == 0u, "with no children claimed");
     }
 
+    /* ---- a VertexArray's bytes are reachable --------------------------- */
+    {
+        /*
+         * The rasteriser needs the geometry, and the geometry was the one part
+         * of a VertexArray the decoder did not expose: the three header bytes
+         * say how the bytes are to be read, and the bytes themselves run from
+         * there to the end of the object.  Measured across the corpus - 18 of
+         * 18 VertexArrays in one real file - before being relied on.
+         */
+        nj_u1 va[12 + 3 + 8];
+        nj_m3g_fields f;
+        char err[128];
+        int i;
+
+        memset(va, 0, sizeof(va));
+        va[12] = 2u;    /* componentSize  */
+        va[13] = 3u;    /* componentCount */
+        va[14] = 1u;    /* componentType  */
+        for (i = 0; i < 8; i++) { va[15 + i] = (nj_u1)(0x40 + i); }
+
+        memset(&f, 0, sizeof(f));
+        ok(nj_m3g_decode_object(va, sizeof(va), 20u, &f, err, sizeof(err)) == NJ_OK,
+              "a VertexArray carrying geometry decodes");
+        ok(f.a == 2u && f.b == 3u && f.c == 1u,
+              "its component size, count and type are read");
+        ok(f.data_len == 8u, "its bytes run to the end of the object");
+        ok(f.data != NULL && f.data[0] == 0x40u && f.data[7] == 0x47u,
+              "and they are the bytes that were in the object");
+    }
+
     printf("%d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

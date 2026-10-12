@@ -569,6 +569,8 @@ typedef struct nj_m3g_fields {
 #define NJ_M3G_MAX_REFS 16u
     nj_u4 refs[NJ_M3G_MAX_REFS];
     nj_u4 nrefs_total;
+    const nj_u1 *data;   /* a VertexArray's bytes, inside the section buffer */
+    nj_u4 data_len;      /* how many of them there are */
     nj_u1 decoded;
 } nj_m3g_fields;
 
