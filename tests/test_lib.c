@@ -2160,6 +2160,57 @@ static unsigned long build_zip(unsigned char *out, unsigned long cap,
     return o;
 }
 
+/*
+ * The resolver has to match a Methodref by name and descriptor, not by
+ * staticness.  javac cannot emit the shape (a subclass may not declare a
+ * static method that hides an inherited instance method), so H_instance.class
+ * and J_static.class were produced by compiling J against a static H and then
+ * appending a static G()V to J with a byte-level patch:
+ *
+ *   class H { public void G() { } }                    // instance, in the super
+ *   class J extends H { public void b(); private static void G(); }
+ *
+ * J.b() is `invokestatic #7 // Method G:()V` with the owner being J itself.
+ * Resolving by staticness first finds H.G (an instance method) and the call
+ * fails; resolving by name and descriptor finds J.G.  三国争霸之赤壁大战_11681
+ * hit exactly this and printed 606 "invokestatic on an instance method" lines.
+ */
+static const unsigned char H_instance_class[] = {
+    202,254,186,190,0,0,0,71,0,14,10,0,2,0,3,7,0,4,12,0,5,0,6,1,0,16,106,97,118,97,47,108,97,110,103,
+    47,79,98,106,101,99,116,1,0,6,60,105,110,105,116,62,1,0,3,40,41,86,7,0,8,1,0,1,72,1,0,4,67,111,100,
+    101,1,0,15,76,105,110,101,78,117,109,98,101,114,84,97,98,108,101,1,0,1,71,1,0,10,83,111,117,114,99,
+    101,70,105,108,101,1,0,6,72,46,106,97,118,97,0,33,0,7,0,2,0,0,0,0,0,2,0,1,0,5,0,6,0,1,0,9,0,0,0,29,
+    0,1,0,1,0,0,0,5,42,183,0,1,177,0,0,0,1,0,10,0,0,0,6,0,1,0,0,0,1,0,1,0,11,0,6,0,1,0,9,0,0,0,25,0,0,
+    0,1,0,0,0,1,177,0,0,0,1,0,10,0,0,0,6,0,1,0,0,0,1,0,1,0,12,0,0,0,2,0,13,
+};
+
+static const unsigned char J_static_class[] = {
+    202,254,186,190,0,0,0,71,0,17,10,0,2,0,3,7,0,4,12,0,5,0,6,1,0,1,72,1,0,6,60,105,110,105,116,62,1,
+    0,3,40,41,86,10,0,8,0,9,7,0,10,12,0,11,0,6,1,0,1,74,1,0,1,71,1,0,4,67,111,100,101,1,0,15,76,105,110,
+    101,78,117,109,98,101,114,84,97,98,108,101,1,0,1,98,1,0,10,83,111,117,114,99,101,70,105,108,101,1,
+    0,6,74,46,106,97,118,97,0,33,0,8,0,2,0,0,0,0,0,3,0,1,0,5,0,6,0,1,0,12,0,0,0,29,0,1,0,1,0,0,0,5,42,
+    183,0,1,177,0,0,0,1,0,13,0,0,0,6,0,1,0,0,0,1,0,1,0,14,0,6,0,1,0,12,0,0,0,28,0,0,0,1,0,0,0,4,184,0,
+    7,177,0,0,0,1,0,13,0,0,0,6,0,1,0,0,0,1,0,10,0,11,0,6,0,1,0,12,0,0,0,13,0,0,0,0,0,0,0,1,177,0,0,0,
+    0,0,1,0,15,0,0,0,2,0,16,
+};
+
+static void test_invokestatic_resolution(nj_vm *vm)
+{
+    nj_value noargs[1];
+    nj_value ret;
+    nj_ref obj;
+
+    noargs[0].i = 0;
+    OK(nj_class_load(vm, "H", H_instance_class, sizeof(H_instance_class)) != NULL);
+    OK(nj_class_load(vm, "J", J_static_class, sizeof(J_static_class)) != NULL);
+    obj = nj_object_new(vm, "J");
+    OK(obj != NULL);
+    OK(nj_call_special(vm, obj, "J", "<init>", "()V", NULL, NULL) == NJ_OK);
+    ret.i = 1;
+    OK(nj_call(vm, obj, "J", "b", "()V", noargs, &ret) == NJ_OK);
+    clean(vm, "J.b() resolves invokestatic to its own static G");
+}
+
 static void test_class_relative_resource(nj_vm *vm)
 {
     static const unsigned char payload[] = { 'A', 'B', 'C', 'D', 'E', 'F', 'G' };
@@ -2295,6 +2346,7 @@ int main(void)
     test_image_survives_collection(vm);
     test_gc_ignores_freed_slot(vm);
     test_class_relative_resource(vm);
+    test_invokestatic_resolution(vm);
     test_array_assignability(vm);
 
     nj_vm_destroy(vm);
