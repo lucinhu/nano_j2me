@@ -469,6 +469,8 @@ nj_status nj_m3g_objects_probe(const nj_u1 *p, nj_u4 n, nj_u4 *count,
 #define NJ_C_ATRACK  "javax/microedition/m3g/AnimationTrack"
 #define NJ_C_APPEAR  "javax/microedition/m3g/Appearance"
 #define NJ_C_MESH    "javax/microedition/m3g/Mesh"
+#define NJ_C_MORPH   "javax/microedition/m3g/MorphingMesh"
+#define NJ_C_SKIN    "javax/microedition/m3g/SkinnedMesh"
 #define NJ_C_POLY    "javax/microedition/m3g/PolygonMode"
 #define NJ_C_COMP    "javax/microedition/m3g/CompositingMode"
 #define NJ_C_TEX2D   "javax/microedition/m3g/Texture2D"
@@ -476,6 +478,7 @@ nj_status nj_m3g_objects_probe(const nj_u1 *p, nj_u4 n, nj_u4 *count,
 #define NJ_C_VBUF    "javax/microedition/m3g/VertexBuffer"
 #define NJ_C_IBUF    "javax/microedition/m3g/IndexBuffer"
 #define NJ_C_SPRITE3D "javax/microedition/m3g/Sprite3D"
+#define NJ_C_SPRITE   "javax/microedition/m3g/Sprite"
 #define NJ_C_FOG      "javax/microedition/m3g/Fog"
 #define NJ_C_RAY      "javax/microedition/m3g/RayIntersection"
 #define NJ_C_ACTL     "javax/microedition/m3g/AnimationController"
@@ -1874,9 +1877,15 @@ NJFN(m3g_poly_setWinding)
 {
     nj_s4 w = NJ_ARG_INT(args, 0);
 
-    if (w != 16896 && w != 16897) {
+    /*
+     * 168 and 169, as the JSR 184 class definition says.  This check used to
+     * demand 16896 and 16897, which is what I wrote down from memory; the
+     * corpus title that calls setWinding passes the correct value and was
+     * rejected for it, so the wrong numbers were ours, not the game's.
+     */
+    if (w != 168 && w != 169) {
         NJ_THROW(vm, "java/lang/IllegalArgumentException",
-                 "a winding is WINDING_CCW (16896) or WINDING_CW (16897)");
+                 "a winding is WINDING_CCW (168) or WINDING_CW (169)");
     }
     nj_iput(vm, NJ_THIS(args),
             nj_field_lookup(vm, NJ_C_POLY, "_nj_winding", "I", 0), w);
@@ -2401,7 +2410,7 @@ NJFN(m3g_load)
             return nj_throw(vm, "java/io/IOException",
                             "the container holds no objects");
         }
-        arr = nj_object_array_new(vm, "javax/microedition/m3g/Object3D", nobj);
+        arr = nj_object_array_new(vm, "javax/microedition/m3g/Object3D", nobj + 1u);
         if (!arr) {
             nj_host_free(vm, objs);
             return NJ_ERR_NOMEM;
@@ -2420,7 +2429,7 @@ NJFN(m3g_load)
                 o = nj_root(vm, o);
                 nj_iput(vm, o, nj_field_lookup(vm, NJ_C_O3D, "_nj_userID", "I", 0),
                         (nj_s4)objs[i].fields.user_id);
-                nj_array_set_ref(arr, i, o);
+                nj_array_set_ref(arr, i + 1u, o);
             }
             nj_root_release(vm, inner);
         }
@@ -2824,14 +2833,34 @@ NJFN(m3g_light_getAttenuation)
  */
 nj_status nj_m3g_late_init(nj_vm *vm)
 {
-    static const struct { const char *name; nj_s4 value; } k[] = {
-        { "AMBIENT", 128 }, { "DIRECTIONAL", 129 },
-        { "OMNI", 130 },    { "SPOT", 131 }
+    /*
+     * JSR 184 fixes every one of these numbers, and a MIDlet carries the
+     * values javac inlined from whatever it compiled against - so a constant
+     * this runtime does not seed reads 0 and the game hands 0 back to us.
+     * The values are from the JSR 184 class definitions, not from a guess.
+     */
+    static const struct { const char *cls; const char *name; nj_s4 value; } k[] = {
+        { NJ_C_LIGHT, "AMBIENT", 128 }, { NJ_C_LIGHT, "DIRECTIONAL", 129 },
+        { NJ_C_LIGHT, "OMNI", 130 },    { NJ_C_LIGHT, "SPOT", 131 },
+        { NJ_C_POLY, "CULL_NONE", 160 },  { NJ_C_POLY, "CULL_BACK", 161 },
+        { NJ_C_POLY, "CULL_FRONT", 162 },
+        { NJ_C_POLY, "SHADE_FLAT", 164 }, { NJ_C_POLY, "SHADE_SMOOTH", 165 },
+        { NJ_C_POLY, "WINDING_CCW", 168 }, { NJ_C_POLY, "WINDING_CW", 169 },
+        { NJ_C_COMP, "ALPHA", 64 },      { NJ_C_COMP, "ALPHA_ADD", 65 },
+        { NJ_C_COMP, "MODULATE", 66 },   { NJ_C_COMP, "MODULATE_X2", 67 },
+        { NJ_C_COMP, "REPLACE", 68 },
+        { NJ_C_TEX2D, "FILTER_BASE_LEVEL", 208 },
+        { NJ_C_TEX2D, "FILTER_LINEAR", 209 },
+        { NJ_C_TEX2D, "FILTER_NEAREST", 210 },
+        { NJ_C_TEX2D, "FUNC_ADD", 224 }, { NJ_C_TEX2D, "FUNC_BLEND", 225 },
+        { NJ_C_TEX2D, "FUNC_DECAL", 226 }, { NJ_C_TEX2D, "FUNC_MODULATE", 227 },
+        { NJ_C_TEX2D, "FUNC_REPLACE", 228 },
+        { NJ_C_TEX2D, "WRAP_CLAMP", 240 }, { NJ_C_TEX2D, "WRAP_REPEAT", 241 }
     };
     size_t i;
 
     for (i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
-        nj_field *f = nj_field_lookup(vm, NJ_C_LIGHT, k[i].name, "I", 1);
+        nj_field *f = nj_field_lookup(vm, k[i].cls, k[i].name, "I", 1);
         if (f) {
             nj_field_write_int(vm, NULL, f, k[i].value);
         }
@@ -3327,6 +3356,10 @@ const nj_builtin_class nj_lib_m3g_classes[] = {
       tex2d_fields, M3G_N(tex2d_fields), tex2d_methods, M3G_N(tex2d_methods) },
     { NJ_C_MESH, NJ_C_NODE, NJ_ACC_PUBLIC,
       mesh_fields, M3G_N(mesh_fields), mesh_methods, M3G_N(mesh_methods) },
+    /* Morphing and skinned meshes are Meshes; the file format gives them
+       their own types, and the loader maps those types to these names. */
+    { NJ_C_MORPH, NJ_C_MESH, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
+    { NJ_C_SKIN,  NJ_C_MESH, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
     { NJ_C_ATRACK, "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, NULL, 0u },
 
@@ -3340,6 +3373,10 @@ const nj_builtin_class nj_lib_m3g_classes[] = {
      */
     { NJ_C_SPRITE3D, NJ_C_NODE,     NJ_ACC_PUBLIC,
       sprite_fields, M3G_N(sprite_fields), sprite_methods, M3G_N(sprite_methods) },
+    /* The file format calls type 18 "Sprite"; the titles call the class
+       Sprite3D.  Both names exist so neither the loader nor a MIDlet
+       trips over the other one. */
+    { NJ_C_SPRITE,   NJ_C_NODE,     NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
     { NJ_C_FOG,      NJ_C_O3D,      NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
     { NJ_C_RAY,      NJ_C_O3D,      NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
     { NJ_C_ACTL,     NJ_C_O3D,      NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },

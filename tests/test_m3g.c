@@ -463,6 +463,40 @@ int main(void)
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
+    /*
+     * The constants the file format and the API fix.  A MIDlet carries the
+     * values javac inlined, so a constant this runtime leaves at 0 - or gets
+     * wrong, which the winding check did - turns into a game that hands us a
+     * value we then reject.
+     */
+    {
+        static const struct { const char *cls; const char *name; nj_s4 want; } c[] = {
+            { "javax/microedition/m3g/PolygonMode", "WINDING_CCW", 168 },
+            { "javax/microedition/m3g/PolygonMode", "WINDING_CW", 169 },
+            { "javax/microedition/m3g/PolygonMode", "CULL_BACK", 161 },
+            { "javax/microedition/m3g/PolygonMode", "SHADE_SMOOTH", 165 },
+            { "javax/microedition/m3g/CompositingMode", "MODULATE", 66 },
+            { "javax/microedition/m3g/Texture2D", "FILTER_LINEAR", 209 },
+            { "javax/microedition/m3g/Light", "SPOT", 131 }
+        };
+        size_t ci;
+        for (ci = 0; ci < sizeof(c) / sizeof(c[0]); ci++) {
+            nj_field *f = nj_field_lookup(vm, c[ci].cls, c[ci].name, "I", 1);
+            int got = f ? (int)nj_field_read_int(vm, NULL, f) : -1;
+            CHECK(got == (int)c[ci].want, "%s.%s is %d, not %d",
+                  c[ci].cls, c[ci].name, got, (int)c[ci].want);
+        }
+    }
+    /* The file format calls type 18 Sprite; the titles call the class
+       Sprite3D.  Both have to be loadable. */
+    CHECK(nj_class_lookup(vm, "javax/microedition/m3g/Sprite") != NULL,
+          "javax/microedition/m3g/Sprite is not registered");
+    CHECK(nj_class_lookup(vm, "javax/microedition/m3g/Sprite3D") != NULL,
+          "javax/microedition/m3g/Sprite3D is not registered");
+    CHECK(nj_class_lookup(vm, "javax/microedition/m3g/MorphingMesh") != NULL,
+          "javax/microedition/m3g/MorphingMesh is not registered");
+    CHECK(nj_class_lookup(vm, "javax/microedition/m3g/SkinnedMesh") != NULL,
+          "javax/microedition/m3g/SkinnedMesh is not registered");
     printf("%d checks, %d failures\n", checks, failures);
     if (failures) {
         printf("FAILED (%d failures)\n", failures);
