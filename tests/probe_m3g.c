@@ -124,8 +124,8 @@ int main(int argc, char **argv)
     for (i = 0; i < count && i < 65536u; i++) {
         nj_m3g_fields f;
         /* objs[i].off is the object's header, so its data starts five bytes in */
-        if (nj_m3g_decode_object(objs[i].data, objs[i].len, objs[i].type,
-                                 &f, err, sizeof(err)) != NJ_OK) {
+        f = objs[i].fields;
+        if (!objs[i].decoded) {
             /*
              * Counted, not fatal.  The decoder refuses an object whose fields
              * are not values the format defines, and 773 of the 975 real files
@@ -139,7 +139,8 @@ int main(int argc, char **argv)
             if (obj_bad <= 3u) {
                 printf("REFUSED object %lu type=%u len=%lu off=%lu: %s\n",
                        (unsigned long)i, (unsigned)objs[i].type,
-                       (unsigned long)objs[i].len, (unsigned long)objs[i].off, err);
+                       (unsigned long)objs[i].len, (unsigned long)objs[i].off,
+                       "its fields are not values the format defines");
             }
             continue;
         }

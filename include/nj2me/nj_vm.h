@@ -69,7 +69,6 @@ nj_u4   nj_vm_destroy(nj_vm *vm);
  */
 int     nj_vm_use_font_file(nj_vm *vm, const char *path);
 
-
 nj_status nj_vm_start_app(nj_vm *vm, nj_ref midlet);  /* calls MIDlet.startApp() */
 /*
  * Create a MIDlet instance.
@@ -544,16 +543,26 @@ nj_status nj_io_late_init(nj_vm *vm);
  * scan walks the objects inside them (inflating compressed sections through
  * the port's inflate hook).
  */
+typedef struct nj_m3g_fields {
+    nj_u4 user_id;
+    nj_u4 a, b, c;   /* the three fields of whichever type this is */
+    nj_u1 decoded;
+} nj_m3g_fields;
+
 typedef struct nj_m3g_object {
     nj_u1 type;
-    /*
-     * The object's data, wherever it actually is.  For a section that was
-     * compressed this points into the inflated buffer the scanner owns, not
-     * into the file - and computing it from the file offset instead is what
-     * made the probe read garbage out of 2288 real VertexArrays.
-     */
-    const nj_u1 *data;
     nj_u4 off;     /* where the object sits in the file, for messages */
+    /*
+     * The object's fields, decoded while the bytes were still reachable.
+     *
+     * The scanner must not hand out a pointer into its scratch buffer: for a
+     * compressed section that buffer is freed and reallocated as bigger
+     * sections turn up, so pointers recorded for earlier sections dangle - and
+     * a dangling pointer here reads plausible nonsense, not a crash.  Decoding
+     * in place is what makes the two impossible to confuse.
+     */
+    nj_m3g_fields fields;
+    int decoded;
     nj_u4 len;     /* the object's own Length field */
     /*
      * The object's userID, the first thing every object's data holds.
@@ -577,11 +586,7 @@ nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
  * type's layout is known: for an unknown type the userID is still filled in and
  * the rest is zero, so a caller can tell "not decoded yet" from "decoded to 0".
  */
-typedef struct nj_m3g_fields {
-    nj_u4 user_id;
-    nj_u4 a, b, c;   /* the three fields of whichever type this is */
-    nj_u1 decoded;
-} nj_m3g_fields;
+
 
 nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
                                nj_m3g_fields *out, char *err, nj_u4 errcap);
