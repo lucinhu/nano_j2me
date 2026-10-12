@@ -647,8 +647,21 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
             /* No home either: keep it out of the way but make it obvious. */
             snprintf(rms_path, sizeof(rms_path), "%s.rms", name);
         }
-        mkdir_p(rms_path);
         port.rms_dir = rms_path;
+    }
+    /*
+     * Whichever way the directory was chosen, it has to exist.
+     *
+     * A MIDlet cannot create a directory, so --rms-dir pointing at a path that
+     * is not there yet is every store failing with RecordStoreException - and
+     * that is not a small failure: 三国争霸之赤壁大战_11681 stops drawing
+     * entirely (150 painted frames, one colour, black) when its save cannot be
+     * opened, and it is not the only title that saves on the way in.  The
+     * computed default below always made its own directory; a directory the
+     * caller named was taken on trust.
+     */
+    if (port.rms_dir && port.rms_dir[0]) {
+        mkdir_p(port.rms_dir);
     }
     nj_start_ms = (nj_s8)(port.millis ? port.millis(port.ud) : 0u);
     port.user = port_in->user;

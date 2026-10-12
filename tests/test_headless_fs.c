@@ -151,6 +151,48 @@ int main(int argc, char **argv)
            "a port that is not headless reports -1, not 0");
     }
 
+    /*
+     * --rms-dir used to be taken on trust.  A MIDlet cannot create a
+     * directory, so a save directory that is not there yet is a store that
+     * cannot be opened - and 三国争霸之赤壁大战_11681 does not merely fail to
+     * save, it stops drawing: 150 painted frames, one colour, black.
+     *
+     * The computed default always made its own directory.  A directory the
+     * caller named has to be made too, or the option is a trap.
+     */
+    {
+        char fresh[256];
+        struct stat st;
+        nj_port p2;
+        nj_run_opts o2;
+
+        /*
+         * A path of its own, so the precondition is a fact rather than a
+         * hope: an earlier run of this test leaves a record store behind, and
+         * a directory with a file in it cannot be removed again.
+         */
+        snprintf(fresh, sizeof(fresh), "%s/fresh-%ld/deep", RMS_DIR,
+                 (long)getpid());
+        ok(stat(fresh, &st) != 0, "the save directory does not exist yet");
+
+        if (nj_port_headless_ex(&p2, 176, 208, 0, NULL) != NJ_OK) {
+            fprintf(stderr, "cannot create the second headless port\n");
+            return 2;
+        }
+        p2.fps_cap = 0;
+        p2.rms_dir = fresh;
+
+        memset(&o2, 0, sizeof(o2));
+        o2.jar_path = argv[1];
+        o2.heap_bytes = 4u * 1024u * 1024u;
+
+        rc = nj_run(&p2, &o2);
+        ok(rc == NJ_OK, "a run pointed at a missing save directory succeeds");
+        ok(stat(fresh, &st) == 0 && S_ISDIR(st.st_mode),
+           "and the run created the directory it was pointed at");
+        nj_port_shutdown(&p2);
+    }
+
     nj_port_shutdown(&port);
 
     printf("\n%d checks, %d failure(s)\n", checks, failures);
