@@ -363,6 +363,7 @@ nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
             }
             if (out && nobj < out_cap) {
                 out[nobj].type = type;
+                out[nobj].data = body + at + 5u;
                 out[nobj].off  = off + NJ_M3G_SECTION + at;
                 out[nobj].len  = olen;
                 /* an external reference is a bare string, everything else

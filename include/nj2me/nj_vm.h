@@ -546,7 +546,14 @@ nj_status nj_io_late_init(nj_vm *vm);
  */
 typedef struct nj_m3g_object {
     nj_u1 type;
-    nj_u4 off;     /* where the object's data starts in the file */
+    /*
+     * The object's data, wherever it actually is.  For a section that was
+     * compressed this points into the inflated buffer the scanner owns, not
+     * into the file - and computing it from the file offset instead is what
+     * made the probe read garbage out of 2288 real VertexArrays.
+     */
+    const nj_u1 *data;
+    nj_u4 off;     /* where the object sits in the file, for messages */
     nj_u4 len;     /* the object's own Length field */
     /*
      * The object's userID, the first thing every object's data holds.
@@ -564,6 +571,20 @@ typedef struct nj_m3g_object {
 nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
                                  nj_u1 *ids, nj_u4 id_count,
                                  char *err, nj_u4 errcap);
+
+/*
+ * The fields of one object, decoded from its data.  `decoded` says whether the
+ * type's layout is known: for an unknown type the userID is still filled in and
+ * the rest is zero, so a caller can tell "not decoded yet" from "decoded to 0".
+ */
+typedef struct nj_m3g_fields {
+    nj_u4 user_id;
+    nj_u4 a, b, c;   /* the three fields of whichever type this is */
+    nj_u1 decoded;
+} nj_m3g_fields;
+
+nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
+                               nj_m3g_fields *out, char *err, nj_u4 errcap);
 
 nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
                               nj_m3g_object *out, nj_u4 out_cap,

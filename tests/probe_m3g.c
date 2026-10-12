@@ -124,7 +124,7 @@ int main(int argc, char **argv)
     for (i = 0; i < count && i < 65536u; i++) {
         nj_m3g_fields f;
         /* objs[i].off is the object's header, so its data starts five bytes in */
-        if (nj_m3g_decode_object(buf + objs[i].off + 5u, objs[i].len, objs[i].type,
+        if (nj_m3g_decode_object(objs[i].data, objs[i].len, objs[i].type,
                                  &f, err, sizeof(err)) != NJ_OK) {
             /*
              * Counted, not fatal.  The decoder refuses an object whose fields
@@ -136,6 +136,11 @@ int main(int argc, char **argv)
              */
             obj_bad++;
             if (objs[i].type < 256u) { refused_by_type[objs[i].type]++; }
+            if (obj_bad <= 3u) {
+                printf("REFUSED object %lu type=%u len=%lu off=%lu: %s\n",
+                       (unsigned long)i, (unsigned)objs[i].type,
+                       (unsigned long)objs[i].len, (unsigned long)objs[i].off, err);
+            }
             continue;
         }
         if (!f.decoded) { continue; }
