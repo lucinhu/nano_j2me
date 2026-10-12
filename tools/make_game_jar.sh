@@ -182,6 +182,22 @@ class DemoCanvas extends GameCanvas implements Runnable {
         Image tiles = null;
         try {
             sheet = Image.createImage("/res/player.png");
+            // The same picture by the other route a MIDlet can take.
+            // createImage(InputStream) had no implementation at all until
+            // 口袋灵兽 found it, so both forms are printed and the test
+            // compares them: one decoder, two doors, same answer.
+            System.out.println("STRINGIMG " + sheet.getWidth() + " "
+                               + sheet.getHeight());
+            java.io.InputStream pic =
+                getClass().getResourceAsStream("/res/player.png");
+            if (pic == null) {
+                System.out.println("STREAMIMG no stream");
+            } else {
+                Image fromStream = Image.createImage(pic);
+                pic.close();
+                System.out.println("STREAMIMG " + fromStream.getWidth() + " "
+                                   + fromStream.getHeight());
+            }
             tiles = Image.createImage("/res/tiles.png");
         } catch (Exception e) {
             status = "asset error: " + e;

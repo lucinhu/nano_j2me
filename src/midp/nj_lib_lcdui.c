@@ -1825,6 +1825,74 @@ static nj_status img_decode_into(nj_vm *vm, nj_ref arr, nj_s4 off, nj_s4 len,
     return NJ_OK;
 }
 
+/*
+ * Image.createImage(InputStream).
+ *
+ * Reads the stream to its end and hands the bytes to the array form, so
+ * there is one decoder rather than two.  The buffer grows from 8 KiB
+ * instead of being preallocated at a guess: a fixed 4 MiB buffer once hung
+ * a MIDlet on a 4 MiB heap, and a sprite sheet is usually far smaller.
+ *
+ * The array is rooted because every read() may allocate, and img_decode_into
+ * runs before the root is released for the same reason.
+ */
+#define NJ_IMG_STREAM_CHUNK 8192u
+
+NJFN(img_createImage_stream)
+{
+    nj_ref in = NJ_ARG_REF(args, 0);
+    nj_ref bytes;
+    nj_ref out = NULL;
+    nj_u4 cap = NJ_IMG_STREAM_CHUNK;
+    nj_u4 len = 0u;
+    nj_u4 mark;
+    nj_status st;
+
+    if (!in) {
+        (void)nj_throw(vm, "java/lang/NullPointerException", "stream is null");
+        return NJ_ERR;
+    }
+    bytes = nj_byte_array_new(vm, cap);
+    if (!bytes) {
+        return NJ_ERR;
+    }
+    mark = nj_root_mark(vm);
+    bytes = nj_root(vm, bytes);
+    for (;;) {
+        nj_value r;
+        nj_s4 b;
+
+        st = nj_call(vm, in, "java/io/InputStream", "read", "()I", NULL, &r);
+        if (st != NJ_OK) {
+            nj_root_release(vm, mark);
+            return st;
+        }
+        b = r.i;
+        if (b < 0) {
+            break;
+        }
+        if (len == cap) {
+            nj_ref bigger = nj_byte_array_new(vm, cap * 2u);
+
+            if (!bigger) {
+                nj_root_release(vm, mark);
+                return NJ_ERR;
+            }
+            memcpy(bigger->u.bytes, bytes->u.bytes, len);
+            bytes = nj_root(vm, bigger);
+            cap *= 2u;
+        }
+        ((unsigned char *)bytes->u.bytes)[len++] = (unsigned char)(nj_u4)b;
+    }
+    st = img_decode_into(vm, bytes, 0, (nj_s4)len, &out);
+    nj_root_release(vm, mark);
+    if (st != NJ_OK) {
+        return st;
+    }
+    ret->r = out;
+    return NJ_OK;
+}
+
 NJFN(img_createImage_bytes)
 {
     nj_ref out = NULL;
@@ -8497,6 +8565,7 @@ static const nj_builtin_method image_methods[] = {
     M("createImage", "([BIII)L" NJ_C_IMAGE ";",                NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("createImage", "(Ljava/lang/String;)L" NJ_C_IMAGE ";",   NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("createImage", "(L" NJ_C_IMAGE ";)L" NJ_C_IMAGE ";", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("createImage", "(Ljava/io/InputStream;)L" NJ_C_IMAGE ";", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("createImage", "(IIIIII)L" NJ_C_IMAGE ";", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("createImage", "(L" NJ_C_IMAGE ";IIIII)L" NJ_C_IMAGE ";", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("createRGBImage", "([IIIZ)L" NJ_C_IMAGE ";",             NJ_ACC_STATIC | NJ_ACC_PUBLIC),
@@ -9412,6 +9481,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_IMAGE, "createImage", "(IIIIII)L" NJ_C_IMAGE ";", img_createImage_sixints },
     { NJ_C_IMAGE, "createImage", "(L" NJ_C_IMAGE ";IIIII)L" NJ_C_IMAGE ";", img_createImage_img },
     { NJ_C_IMAGE, "createImage", "([BII)L" NJ_C_IMAGE ";", img_createImage_bytes3 },
+    { NJ_C_IMAGE, "createImage", "(Ljava/io/InputStream;)L" NJ_C_IMAGE ";", img_createImage_stream },
     { NJ_C_IMAGE, "createImage", "([BIII)L" NJ_C_IMAGE ";", img_createImage_bytes },
     { NJ_C_IMAGE, "createImage", "(Ljava/lang/String;)L" NJ_C_IMAGE ";", img_createImage_name },
     { NJ_C_IMAGE, "createRGBImage", "([IIIZ)L" NJ_C_IMAGE ";", img_createRGBImage },

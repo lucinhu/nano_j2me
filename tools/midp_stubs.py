@@ -190,6 +190,7 @@ CLASSES = {
             "public static Image createImage(byte[], int, int)",
             "public static Image createImage(byte[], int, int, int)",
             "public static Image createImage(String)",
+            "public static Image createImage(java.io.InputStream)",
             "public static Image createRGBImage(int[], int, int, boolean)",
             "public Graphics getGraphics()",
             "public int getWidth()", "public int getHeight()",

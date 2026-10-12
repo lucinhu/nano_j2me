@@ -182,6 +182,20 @@ int main(int argc, char **argv)
     CHECK(rc == 0, "the runner returned a clean exit code");
     CHECK(!cap.overflow, "the fixture's output fitted in the capture buffer");
 
+    /* Image.createImage(InputStream) and createImage(String) must agree:
+     * same decoder, so a stream that decodes differently is a bug in one of
+     * the two doors.  The stream route did not exist at all before. */
+    {
+        const char *sp = strstr(cap.buf, "STRINGIMG ");
+        const char *tp = strstr(cap.buf, "STREAMIMG ");
+
+        CHECK(sp != NULL, "the fixture printed the String form");
+        CHECK(tp != NULL, "the fixture printed the stream form");
+        if (sp && tp) {
+            CHECK(strncmp(sp + 10, tp + 10, 5) == 0,
+                  "createImage(InputStream) agrees with createImage(String)");
+        }
+    }
     report = strstr(cap.buf, "GAMEDEMO");
     CHECK(report != NULL, "the MIDlet reached its report and exited");
     if (report) {
