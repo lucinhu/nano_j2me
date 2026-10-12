@@ -2344,6 +2344,37 @@ static void test_array_assignability(nj_vm *vm)
     clean(vm, "array assignability");
 }
 
+/*
+ * --dump-frames takes a prefix, and "out" where out/ is a directory used to
+ * write "out00001.ppm" NEXT TO it while the run still exited 0, so a script
+ * that forgot the trailing slash saw a silent no-op.  A prefix that names a
+ * directory gets the separator; a real prefix keeps its old meaning.
+ */
+static void test_dump_frames_directory(nj_vm *vm)
+{
+    const char *dir = "tests/out/dumpdir";
+    char inside[256];
+    char beside[256];
+    struct stat st;
+
+    (void)mkdir("tests/out", 0777);
+    (void)mkdir(dir, 0777);
+    (void)remove("tests/out/dumpdir/00001.ppm");
+    (void)remove("tests/out/dumpdir00001.ppm");
+
+    nj_port_headless_set_dump(vm->port->ud, dir, 1);
+    vm->port->display_present(vm->port->ud, 0, 0, 176, 208);
+
+    snprintf(inside, sizeof(inside), "%s/00001.ppm", dir);
+    snprintf(beside, sizeof(beside), "%s00001.ppm", dir);
+    OK_MSG(stat(inside, &st) == 0, "a directory prefix dumps inside it");
+    OK_MSG(stat(beside, &st) != 0, "and not next to it");
+
+    nj_port_headless_set_dump(vm->port->ud, NULL, 0);
+    (void)remove(inside);
+    clean(vm, "frame dump prefix");
+}
+
 int main(void)
 {
     nj_port port;
@@ -2404,6 +2435,7 @@ int main(void)
     test_class_relative_resource(vm);
     test_invokestatic_resolution(vm);
     test_array_assignability(vm);
+    test_dump_frames_directory(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
