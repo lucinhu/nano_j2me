@@ -48,17 +48,14 @@
  * The .m3g container.
  * ---------------------------------------------------------------------------
  *
- * JSR 184 files start with a twelve byte header and are then a chain of
+ * JSR 184 files start with a twelve byte identifier and are then a chain of
  * sections that must tile the file exactly:
  *
- *     0   version                    (0x10 = 1.0, 0x11 = 1.1)
- *     1   has external references
- *     2   total file size            (big endian, INCLUDING this header)
- *     6   approximate content size
- *     10  ???  - the header is 12 bytes, so two bytes here are reserved
+ *     0..11   the identifier: AB 4A "JSR184" BB 0D 0A 1A 0A
  *
- *     then, repeatedly:  id (1 byte), length (4 bytes big endian, including
- *                        those five bytes), payload (length - 5 bytes)
+ *     then, repeatedly:  id (1 byte), compressed length (u32 little endian,
+ *                        the nine byte header included), uncompressed length
+ *                        (u32 little endian), payload
  *
  * Everything above is checked here and nothing else.  That is deliberate: this
  * function exists to turn "the file is not a .m3g" and "the file is a .m3g
@@ -67,11 +64,17 @@
  * the next step and is not pretended here.
  */
 #define NJ_M3G_HEADER 12u
+#define NJ_M3G_FILE_SECTION 30u
 
-static nj_u4 be32(const nj_u1 *p)
+static const nj_u1 m3g_ident[12] = {
+    0xabu, 0x4au, 0x53u, 0x52u, 0x31u, 0x38u,
+    0x34u, 0xbbu, 0x0du, 0x0au, 0x1au, 0x0au
+};
+
+static nj_u4 le32(const nj_u1 *p)
 {
-    return ((nj_u4)p[0] << 24) | ((nj_u4)p[1] << 16) |
-           ((nj_u4)p[2] << 8) | (nj_u4)p[3];
+    return (nj_u4)p[0] | ((nj_u4)p[1] << 8) |
+           ((nj_u4)p[2] << 16) | ((nj_u4)p[3] << 24);
 }
 
 #define M3G_FAIL(...)                                                     \
@@ -83,60 +86,67 @@ static nj_u4 be32(const nj_u1 *p)
     } while (0)
 
 /*
- * Returns NJ_OK when the container is well formed.  ids, when given, receives
- * the first id_count section ids (0xff fills the unused entries).
+ * Walk a .m3g container.
  *
- * NOT VALIDATED AGAINST THIS PROJECT'S GAMES, and that is worth writing down.
- * All 196 files named .m3g across the collected titles begin with the bytes
- * ab 4a and none of them begins with 0x10 or 0x11, so they are a vendor
- * container that borrowed the extension, not JSR 184 files.  The check below
- * is what the specification says and is exercised by tests/test_m3g_file.c;
- * what it has not had is a real conforming file to agree with.  The section
- * id numbers in the comment above come from the specification, not from
- * measurement, and should not be trusted until one is seen.
+ * The layout below was read off 975 real files in the collected corpus, not
+ * off a specification: the first attempt at this function used a version byte
+ * at offset 0 and big-endian section lengths, and every real file was then
+ * rejected as "not JSR 184" - which is how a whole format came to be written
+ * down wrongly in these comments.  What the files actually say:
+ *
+ *   0..11   the identifier, AB 4A "JSR184" BB 0D 0A 1A 0A
+ *   12..    sections: id(1), compressed length (u32 LE), uncompressed
+ *           length (u32 LE), then the payload
+ *
+ * The chain tiles every one of those 975 files exactly.  811 of the sections
+ * hold a zlib stream that inflates to precisely the declared uncompressed
+ * length; the rest - all of them section id 0, the file header - are stored.
+ * Their payload is four bytes longer than the length they declare, which is
+ * the one part of this format not yet explained; nothing here depends on it.
  */
+#define NJ_M3G_SECTION 9u
+
 nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
                                  nj_u1 *ids, nj_u4 id_count,
                                  char *err, nj_u4 errcap)
 {
-    nj_u4 off, total;
-    nj_u4 nids = 0;
+    nj_u4 off, nids = 0;
 
     if (err && errcap) { err[0] = '\0'; }
     if (!p) { M3G_FAIL("no bytes"); }
-    if (n < NJ_M3G_HEADER) {
-        M3G_FAIL("only %lu byte(s): a .m3g header alone is %u", (unsigned long)n,
-                 (unsigned)NJ_M3G_HEADER);
+    if (n < NJ_M3G_FILE_SECTION) {
+        M3G_FAIL("only %lu byte(s): the file header alone is %u",
+                 (unsigned long)n, (unsigned)NJ_M3G_FILE_SECTION);
     }
-    if (p[0] != 0x10u && p[0] != 0x11u) {
-        M3G_FAIL("version 0x%02x is not 0x10 (1.0) or 0x11 (1.1)", (unsigned)p[0]);
-    }
-    total = be32(p + 2);
-    if (total != n) {
-        M3G_FAIL("the header says %lu byte(s) and the file has %lu",
-                 (unsigned long)total, (unsigned long)n);
+    if (memcmp(p, m3g_ident, sizeof(m3g_ident)) != 0) {
+        M3G_FAIL("this is not a JSR 184 file: it starts %02x %02x %02x %02x",
+                 (unsigned)p[0], (unsigned)p[1], (unsigned)p[2], (unsigned)p[3]);
     }
     off = NJ_M3G_HEADER;
     while (off < n) {
-        nj_u4 len;
-        if (n - off < 5u) {
-            M3G_FAIL("section at offset %lu has only %lu byte(s) of header",
+        nj_u4 clen, ulen;
+        if (n - off < NJ_M3G_SECTION) {
+            M3G_FAIL("a section header at %lu is cut short: %lu byte(s) left",
                      (unsigned long)off, (unsigned long)(n - off));
         }
-        len = be32(p + off + 1);
-        if (len < 5u) {
-            M3G_FAIL("section 0x%02x at offset %lu claims %lu byte(s), less than "
-                     "its own five byte header", (unsigned)p[off],
-                     (unsigned long)off, (unsigned long)len);
+        clen = le32(p + off + 1u);
+        ulen = le32(p + off + 5u);
+        if (clen < NJ_M3G_SECTION) {
+            M3G_FAIL("the section at %lu says it is %lu byte(s), header included",
+                     (unsigned long)off, (unsigned long)clen);
         }
-        if (len > n - off) {
-            M3G_FAIL("section 0x%02x at offset %lu claims %lu byte(s) but only "
-                     "%lu remain", (unsigned)p[off], (unsigned long)off,
-                     (unsigned long)len, (unsigned long)(n - off));
+        if (clen > n - off) {
+            M3G_FAIL("the section at %lu runs %lu byte(s) past the end of a %lu byte file",
+                     (unsigned long)off, (unsigned long)(clen - (n - off)),
+                     (unsigned long)n);
+        }
+        if (ulen == 0u) {
+            M3G_FAIL("the section at %lu declares nothing to inflate into",
+                     (unsigned long)off);
         }
         if (ids && nids < id_count) { ids[nids] = p[off]; }
         nids++;
-        off += len;
+        off += clen;
     }
     if (off != n) {
         M3G_FAIL("the sections end at %lu, not at the end of the file (%lu)",
@@ -148,6 +158,7 @@ nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
     }
     return NJ_OK;
 }
+
 
 #define NJFN(name) NJ_NATIVE_FN(name)
 

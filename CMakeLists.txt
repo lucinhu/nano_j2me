@@ -413,6 +413,12 @@ if(NJ_BUILD_TESTS)
   nj_add_test(test_mascot    tests/test_mascot.c)
   nj_add_test(test_string    tests/test_string.c)
   nj_add_test(test_m3g_file tests/test_m3g_file.c)
+
+# The container probe as a command line tool, so tools/check_m3g_reals.sh can
+# run it over the .m3g files the collected games ship.  A unit test encodes the
+# format and therefore cannot catch the format being written down wrongly.
+add_executable(nj_m3g_probe tests/probe_m3g.c)
+target_link_libraries(nj_m3g_probe PRIVATE nj2me)
   nj_add_test(test_wireless tests/test_wireless.c)
 
   # What the PORT observed, not what the VM counted: threads, GC, audio and
@@ -445,6 +451,14 @@ if(NJ_BUILD_TESTS)
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_flat_wording.sh
                      ${NJ_FIXTURES}/flatdemo.jar)
     set_tests_properties(check_flat_wording PROPERTIES TIMEOUT 300)
+    # The container probe against the .m3g files real games ship.  Skips when
+    # the corpus is absent (tests/games/ is gitignored), which is why it is
+    # registered unconditionally: a clone without games still has to configure.
+    add_test(NAME check_m3g_reals
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_M3G_PROBE=$<TARGET_FILE:nj_m3g_probe>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_m3g_reals.sh)
+    set_tests_properties(check_m3g_reals PROPERTIES TIMEOUT 900)
     add_test(NAME check_hang_teardown
              COMMAND ${CMAKE_COMMAND} -E env
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
