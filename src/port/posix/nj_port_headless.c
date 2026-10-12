@@ -755,7 +755,21 @@ static void hl_display_present(void *ud, int x, int y, int w, int h)
     (void)x; (void)y; (void)w; (void)h;
     s->frame++;
     if (s->dump_every > 0 && (s->frame % s->dump_every) == 0 && s->dump_prefix) {
-        snprintf(path, sizeof(path), "%s%05d.ppm", s->dump_prefix, s->frame);
+        /*
+         * A prefix that names an existing directory gets the separator.
+         * "--dump-frames out" used to write "out00000.ppm" NEXT TO out/
+         * rather than inside it, and the run still exited 0, so the dump
+         * looked like it had silently written nothing.
+         */
+        struct stat st;
+        const char *p = s->dump_prefix;
+        size_t n = strlen(p);
+
+        if (n > 0u && p[n - 1u] != '/' && stat(p, &st) == 0 && S_ISDIR(st.st_mode)) {
+            snprintf(path, sizeof(path), "%s/%05d.ppm", p, s->frame);
+        } else {
+            snprintf(path, sizeof(path), "%s%05d.ppm", p, s->frame);
+        }
         ppm_dump(s, path);
     }
 }
