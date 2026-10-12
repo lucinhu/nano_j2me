@@ -31,25 +31,18 @@ static int known_missing_seen;
 /*
  * Implementations that are known to be absent, named one by one.
  *
- * These are the five methods CLDC defines as concrete on top of the abstract
- * ones - read(char[]), skip(long), write(int), write(char[]) and
- * write(String).  They are listed rather than skipped so that the count below
- * can be asserted: if one of them is implemented the list is stale and the
- * test says so, instead of quietly accumulating an allowlist that hides a
- * regression.
- *
- * TODO: implement them.  read(char[]) and the three write() overloads only
- * need to forward to the abstract method with the right arguments; skip(long)
- * is read() in a loop.
+ * The list is empty: every method a builtin class declares now has a native.
+ * It is kept because the mechanism is what makes a gap visible rather than
+ * skimmed over - an entry here is a documented, named exception, and the
+ * count below is asserted so that implementing one forces the entry to be
+ * removed instead of leaving a stale allowlist behind.  (It did exactly that
+ * when the five concrete Reader/Writer methods were implemented.)
  */
 static const char *const known_missing[] = {
-    "java/io/Reader.read([C)I",
-    "java/io/Reader.skip(J)J",
-    "java/io/Writer.write(I)V",
-    "java/io/Writer.write([C)V",
-    "java/io/Writer.write(Ljava/lang/String;)V"
+    ""      /* never matches; the count below is what decides */
 };
-#define NKNOWN ((int)(sizeof(known_missing) / sizeof(known_missing[0])))
+#define NKNOWN 0
+
 
 static int is_known_missing(const char *cls, const char *name, const char *desc)
 {

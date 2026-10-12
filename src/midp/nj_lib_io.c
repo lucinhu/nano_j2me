@@ -1245,6 +1245,130 @@ NJFN(osw_flush)
 
 #define RM(name, desc, flags) { name, desc, flags }
 
+/*
+ * The concrete half of java.io.Reader and java.io.Writer.
+ *
+ * CLDC defines five of their methods on top of the abstract ones, and all five
+ * were declared with no implementation behind them: read(char[]) is
+ * read(b, 0, b.length), write(int) and write(String) end up in
+ * write(char[], int, int), and skip(long) reads and discards.  Until these
+ * existed a MIDlet calling any of them got UnsatisfiedLinkError, and
+ * tests/test_natives listed them by name as the only known gap.
+ *
+ * Every one of them goes through the abstract method rather than doing the
+ * work here, which is what makes a subclass's implementation take effect.
+ */
+static nj_s4 ch_len(nj_ref a)
+{
+    return a ? (nj_s4)a->length : 0;
+}
+
+NJFN(rd_read_chars)
+{
+    nj_value a[3];
+    nj_value r;
+    nj_ref b = NJ_ARG_REF(args, 0);
+
+    if (!b) {
+        return nj_throw(vm, "java/lang/NullPointerException", "buffer is null");
+    }
+    a[0].r = b;
+    a[1].i = 0;
+    a[2].i = ch_len(b);
+    r.i = -1;
+    if (nj_call(vm, NJ_THIS(args), NJ_C_READER, "read", "([CII)I", a, &r)
+                != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->i = r.i;
+    return NJ_OK;
+}
+
+NJFN(rd_skip)
+{
+    nj_s8 want = NJ_ARG_LONG(args, 0);
+    nj_s8 done = 0;
+
+    while (done < want) {
+        nj_value r;
+        r.i = -1;
+        if (nj_call(vm, NJ_THIS(args), NJ_C_READER, "read", "()I", NULL, &r)
+            != NJ_OK) {
+            return NJ_ERR;
+        }
+        if (r.i < 0) {
+            break;      /* end of stream: report what was actually skipped */
+        }
+        done++;
+    }
+    ret->j = done;
+    return NJ_OK;
+}
+
+NJFN(wr_write_int)
+{
+    nj_value a[3];
+    nj_ref one = nj_char_array_new(vm, 1u);
+    nj_u2 *p;
+
+    if (!one) {
+        return NJ_ERR;
+    }
+    p = (nj_u2 *)nj_array_data(one);
+    if (p) {
+        p[0] = (nj_u2)NJ_ARG_INT(args, 0);
+    }
+    a[0].r = one;
+    a[1].i = 0;
+    a[2].i = 1;
+    if (nj_call(vm, NJ_THIS(args), NJ_C_WRITER, "write", "([CII)V", a, NULL)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    return NJ_OK;
+}
+
+NJFN(wr_write_chars)
+{
+    nj_value a[3];
+    nj_ref b = NJ_ARG_REF(args, 0);
+
+    if (!b) {
+        return nj_throw(vm, "java/lang/NullPointerException", "buffer is null");
+    }
+    a[0].r = b;
+    a[1].i = 0;
+    a[2].i = ch_len(b);
+    if (nj_call(vm, NJ_THIS(args), NJ_C_WRITER, "write", "([CII)V", a, NULL)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    return NJ_OK;
+}
+
+NJFN(wr_write_str)
+{
+    nj_value a[3];
+    nj_ref s = NJ_ARG_REF(args, 0);
+    nj_ref c;
+
+    if (!s) {
+        return nj_throw(vm, "java/lang/NullPointerException", "string is null");
+    }
+    c = nj_call_ref(vm, s, "java/lang/String", "toCharArray", "()[C", NULL);
+    if (!c) {
+        return NJ_ERR;
+    }
+    a[0].r = c;
+    a[1].i = 0;
+    a[2].i = ch_len(c);
+    if (nj_call(vm, NJ_THIS(args), NJ_C_WRITER, "write", "([CII)V", a, NULL)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    return NJ_OK;
+}
+
 static const nj_builtin_field isr_fields[] = {
     { "isrIn", "Ljava/io/InputStream;", 0 }
 };
@@ -1386,6 +1510,11 @@ const int nj_lib_io_class_count =
     (int)(sizeof(nj_lib_io_classes) / sizeof(nj_lib_io_classes[0]));
 
 const nj_native_entry nj_lib_io_table[] = {
+    { NJ_C_READER, "read",  "([C)I",                rd_read_chars },
+    { NJ_C_READER, "skip",  "(J)J",                 rd_skip },
+    { NJ_C_WRITER, "write", "(I)V",                 wr_write_int },
+    { NJ_C_WRITER, "write", "([C)V",                wr_write_chars },
+    { NJ_C_WRITER, "write", "(Ljava/lang/String;)V", wr_write_str },
     { "java/io/InputStream", "<init>",        "()V", is_close },
     { "java/io/InputStream", "read",          "()I", is_read_abstract },
     { "java/io/InputStream", "read",          "([B)I", is_read_bytes },
