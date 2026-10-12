@@ -252,13 +252,17 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
          * whose other 51 objects are fine.
          */
         {
-            nj_u4 o;
+            nj_u4 o, k;
             for (o = NJ_M3G_OBJECT_HEADER; o + 4u <= len; o++) {
                 nj_u4 n = le32(data + o);
                 if (n > 4096u) { continue; }
                 if (o + 4u + 4u * n != len) { continue; }
                 out->ref_off = o + 4u;
-                out->nrefs = n;
+                out->nrefs = (n < (nj_u4)NJ_M3G_MAX_REFS) ? n : (nj_u4)NJ_M3G_MAX_REFS;
+                out->nrefs_total = n;
+                for (k = 0u; k < out->nrefs; k++) {
+                    out->refs[k] = le32(data + out->ref_off + 4u * k);
+                }
                 break;
             }
             out->a = out->nrefs;
@@ -2460,6 +2464,24 @@ NJFN(m3g_load)
             }
             nj_root_release(vm, inner);
         }
+        /*
+         * The children are NOT linked into the graph here, and that is a
+         * measured decision rather than an unfinished one.
+         *
+         * The first version called Group.addChild() for every child the file
+         * names.  Need for Speed Most Wanted had been reaching 20 frames with
+         * 69 drawing calls; with the linking in place it dies on
+         * "the node already has a parent", because the game adds the same
+         * nodes itself and JSR 184 gives a Node exactly one parent.  The
+         * file's graph and the game's graph are the same graph, and building
+         * half of it here means the game cannot build the other half.
+         *
+         * What the game actually needs is for getChildCount()/getChild() to
+         * answer from the file's list, which means storing it on the object
+         * rather than mutating the graph behind the game's back.  The indices
+         * are decoded and carried (see nj_m3g_fields.refs) so that is a
+         * change to the Group class, not to the file parser.
+         */
         nj_root_release(vm, mark);
         nj_host_free(vm, objs);
         ret->r = arr;

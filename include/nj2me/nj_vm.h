@@ -556,6 +556,18 @@ typedef struct nj_m3g_fields {
      */
     nj_u4 ref_off;   /* where the indices start, relative to the object data */
     nj_u4 nrefs;     /* how many there are */
+    /*
+     * The indices, copied out of the file.
+     *
+     * The loader needs the numbers, not just where they were: by the time it
+     * builds the scene graph the section's bytes have been released.  A Group
+     * with more children than this keeps the first ones - truncation is
+     * visible in nrefs_total, and a scene that is missing some of its parts
+     * still draws, which is the same choice made everywhere else here.
+     */
+#define NJ_M3G_MAX_REFS 16u
+    nj_u4 refs[NJ_M3G_MAX_REFS];
+    nj_u4 nrefs_total;
     nj_u1 decoded;
 } nj_m3g_fields;
 

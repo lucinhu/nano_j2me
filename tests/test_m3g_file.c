@@ -403,9 +403,14 @@ int main(void)
         g[12] = 2u;                     /* and there are two of them */
         ok(nj_m3g_decode_object(g, sizeof(g), 9u, &f, err, sizeof(err)) == NJ_OK,
            "a Group decodes");
-        ok(f.nrefs == 2u && f.ref_off == 16u, "its two children are found");
+        ok(f.nrefs == 2u && f.ref_off == 16u && f.nrefs_total == 2u,
+           "its two children are found");
         ok(le32_at(g + f.ref_off) == 3u && le32_at(g + f.ref_off + 4u) == 7u,
            "and they are the indices the file holds");
+        /* the loader needs the numbers after the file bytes are gone, so they
+           are copied into the object rather than pointed at */
+        ok(f.refs[0] == 3u && f.refs[1] == 7u,
+           "the indices travel with the object, not with the bytes");
     }
     {
         /* a tail that cannot be a child list is not an error: the group simply
