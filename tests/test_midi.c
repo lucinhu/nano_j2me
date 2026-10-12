@@ -206,6 +206,29 @@ static nj_u4 pcm_crossings(const nj_u1 *pcm, nj_u4 frames, nj_u4 from, nj_u4 to)
     return n;
 }
 
+/* How much the crossing count varies from window to window: a steady note
+ * keeps it flat, a note with vibrato swings with the wobble. */
+static void pcm_cross_spread(const nj_u1 *pcm, nj_u4 frames, nj_u4 win,
+                             nj_u4 from, nj_u4 to, nj_u4 *mn_out, nj_u4 *mx_out)
+{
+    nj_u4 a, mn = 0xFFFFFFFFu, mx = 0u;
+
+    if (to > frames) {
+        to = frames;
+    }
+    for (a = from; a + win <= to; a += win) {
+        nj_u4 c = pcm_crossings(pcm, frames, a, a + win);
+        if (c < mn) {
+            mn = c;
+        }
+        if (c > mx) {
+            mx = c;
+        }
+    }
+    *mn_out = (mn == 0xFFFFFFFFu) ? 0u : mn;
+    *mx_out = mx;
+}
+
 /* A one-note file with a prefix of channel messages in front of it: a program
  * change, a control change, or both. */
 static nj_u4 build_voiced(nj_u1 *out, const nj_u1 *prefix, nj_u4 plen,
@@ -497,6 +520,47 @@ int main(void)
         }
     }
 
+
+    /*
+     * CC1 modulation: 10,477 events in the corpus, and the one thing a MIDlet
+     * ever means by it is vibrato.  A note with CC1 = 127 has to wobble - the
+     * crossing count over a quarter of the wobble period has to differ between
+     * the top and the bottom - while the same note without CC1 holds a steady
+     * pitch.
+     */
+    {
+        /* No delta bytes here: build_voiced() writes one for the prefix. */
+        /* Every event needs its own delta: a byte with the top bit set is a
+         * VLQ continuation, so the program change needs its 0x00. */
+        static const nj_u1 vib_body[] = { 0xB0, 1, 127, 0x00, 0xC0, 40 };
+        static const nj_u1 flat_body[] = { 0xC0, 40 };
+        nj_u1 *pcm;
+        nj_u4 fr = 0u, mn = 0u, mx = 0u, fmn = 0u, fmx = 0u, spread, fspread;
+
+        pcm = render_voiced(vib_body, (nj_u4)sizeof(vib_body), 0, 93, &fr);
+        check(pcm != NULL && fr > 0u, "a note with modulation still renders");
+        if (pcm != NULL) {
+            pcm_cross_spread(pcm, fr, NJ_MIDI_RATE / 20u,
+                             NJ_MIDI_RATE * 15u / 100u,
+                             NJ_MIDI_RATE * 45u / 100u, &mn, &mx);
+            t_free(NULL, pcm);
+        }
+        pcm = render_voiced(flat_body, (nj_u4)sizeof(flat_body), 0, 93, &fr);
+        if (pcm != NULL) {
+            pcm_cross_spread(pcm, fr, NJ_MIDI_RATE / 20u,
+                             NJ_MIDI_RATE * 15u / 100u,
+                             NJ_MIDI_RATE * 45u / 100u, &fmn, &fmx);
+            t_free(NULL, pcm);
+        }
+        spread = mx - mn;
+        fspread = fmx - fmn;
+        check(spread > fspread, "CC1 vibrato moves the pitch of a sounding note");
+        check(mn < fmn || mx > fmx, "and the wobble reaches past the steady pitch");
+        if (!(spread > fspread) || !(mn < fmn || mx > fmx)) {
+            printf("     vibrato crossings %u..%u, steady %u..%u\n",
+                   (unsigned)mn, (unsigned)mx, (unsigned)fmn, (unsigned)fmx);
+        }
+    }
 
     /*
      * Pitch bend.  47,596 bend events in 464 of the corpus files, and none of

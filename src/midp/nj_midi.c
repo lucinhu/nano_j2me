@@ -58,6 +58,17 @@
  * what keeps the per-sample loop bounded. */
 #define NJ_MIDI_VOICES 12
 
+/*
+ * Vibrato: CC1 is how deep, and 5 Hz is the rate a phone synth wobbled at.
+ * Full depth is half a semitone, the usual General MIDI figure.  The phase
+ * advances once per 64 samples - 2.9 ms, sixty steps per cycle - so the step
+ * is recomputed about as often as a wobble can be heard.
+ */
+#define NJ_MIDI_VIBRATO_HZ   5u
+#define NJ_MIDI_VIBRATO_MAX  1920u          /* Q16 ratio at CC1 = 127 (2.9%) */
+#define NJ_MIDI_VIBRATO_STEP \
+    ((nj_u4)((((nj_u8)1u << 32) / (NJ_MIDI_RATE / 64u)) * NJ_MIDI_VIBRATO_HZ))
+
 #define NJ_MIDI_MAX_EVENTS 8192u
 #define NJ_MIDI_MAX_TEMPOS 64u
 #define NJ_MIDI_MAX_CTLS 2048u
@@ -66,6 +77,7 @@
 #define MID_CTL_BEND  0u
 #define MID_CTL_PEDAL 1u
 #define MID_CTL_RANGE 2u
+#define MID_CTL_MOD   3u            /* CC1: how deep the vibrato goes */
 
 /* Pitch bend: 14 bits, 8192 is no bend. */
 #define MID_BEND_CENTRE 8192u
@@ -255,6 +267,7 @@ typedef struct {
     nj_u4      bend[16];        /* last pitch bend seen, 14 bits */
     nj_u4      bend_range[16];  /* semitones at full deflection, from RPN 0 */
     nj_u4      pedal[16];       /* sustain pedal state at the end of the file */
+    nj_u4      mod[16];         /* CC1 vibrato depth at the end of the file */
     nj_u4      rpn[16];         /* the registered parameter being selected */
 } mid_song;
 
@@ -442,6 +455,11 @@ static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
                     if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_PEDAL, val)) {
                         return;
                     }
+                } else if (cc == 1u) {          /* modulation: vibrato depth */
+                    s->mod[chan] = val;
+                    if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_MOD, val)) {
+                        return;
+                    }
                 } else if (cc == 101u) {        /* RPN MSB */
                     s->rpn[chan] = (s->rpn[chan] & 0x7Fu) | (val << 7);
                 } else if (cc == 100u) {        /* RPN LSB */
@@ -533,7 +551,10 @@ typedef struct {
     int   sustained;            /* the pedal is holding this note down */
     nj_u4 note;
     nj_u4 chan;
+    nj_u4 note_step;            /* the note's own step, before the bend */
     nj_u4 base_step;            /* phase increment before the bend */
+    nj_u4 lfo;                  /* vibrato phase, 32 bits */
+    nj_u4 mod;                  /* vibrato depth, Q16, from the channel */
     nj_u1 wave;
     nj_u4 phase;                /* 32-bit phase accumulator */
     nj_u4 step;                 /* phase increment per sample */
@@ -602,10 +623,31 @@ static nj_u4 mid_bend_ratio(nj_u4 bend, nj_u4 range)
     return (nj_u4)(65536 + delta);
 }
 
+/*
+ * The step a voice is actually using: its note's step with the channel's
+ * bend, plus the vibrato the LFO is asking for right now.  A triangle is
+ * what a cheap synth had, and the ear cannot tell it from a sine at 5 Hz.
+ */
+static void mid_set_step(mid_voice *v)
+{
+    nj_u4 t = v->lfo >> 16;                 /* 0 .. 65535 */
+    nj_s4 lfo = (t < 32768u) ? (nj_s4)t : (nj_s4)(65535u - t);
+
+    lfo = lfo * 2 - 32768;                  /* -32768 .. 32766 */
+    if (v->mod == 0u) {
+        v->step = v->base_step;
+        return;
+    }
+    v->step = (nj_u4)((nj_s4)v->base_step
+                      + (nj_s4)(((nj_s8)v->base_step * (nj_s8)lfo
+                                 * (nj_s8)v->mod) >> 31));
+}
+
 static void mid_apply_pitch(mid_voice *v, nj_u4 bend, nj_u4 range)
 {
-    v->step = (nj_u4)(((nj_u8)v->base_step
-                       * (nj_u8)mid_bend_ratio(bend, range)) >> 16);
+    v->base_step = (nj_u4)(((nj_u8)v->note_step
+                            * (nj_u8)mid_bend_ratio(bend, range)) >> 16);
+    mid_set_step(v);
 }
 
 /*
@@ -661,6 +703,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
     nj_u4 bend_now[16];
     nj_u4 range_now[16];
     int   pedal_now[16];
+    nj_u4 mod_now[16];
 
     if (frames_out != NULL) {
         *frames_out = 0u;
@@ -675,6 +718,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
         song.expr[i] = 127u;
         song.bend[i] = MID_BEND_CENTRE;
         song.bend_range[i] = MID_BEND_DEFAULT_RANGE;
+        mod_now[i] = 0u;
         song.rpn[i] = 0xFFFFu;          /* no registered parameter selected */
         bend_now[i] = MID_BEND_CENTRE;
         range_now[i] = MID_BEND_DEFAULT_RANGE;
@@ -790,6 +834,14 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
      * SDL2 window played.
      */
     for (i = 0u; i < frames; i++) {
+        if ((i & 63u) == 0u) {
+            for (v = 0u; v < NJ_MIDI_VOICES; v++) {
+                if (voices[v].active && voices[v].mod != 0u) {
+                    voices[v].lfo += NJ_MIDI_VIBRATO_STEP;
+                    mid_set_step(&voices[v]);
+                }
+            }
+        }
         nj_s4 mix = 0;
         nj_s4 scaled;
 
@@ -807,6 +859,14 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
                     if (voices[v].active && voices[v].chan == ch) {
                         mid_apply_pitch(&voices[v], bend_now[ch], range_now[ch]);
+                    }
+                }
+            } else if (kind == MID_CTL_MOD) {
+                mod_now[ch] = song.ctls[cev].a;
+                for (v = 0u; v < NJ_MIDI_VOICES; v++) {
+                    if (voices[v].active && voices[v].chan == ch) {
+                        voices[v].mod = mod_now[ch] * NJ_MIDI_VIBRATO_MAX / 127u;
+                        mid_set_step(&voices[v]);
                     }
                 }
             } else if (kind == MID_CTL_RANGE) {
@@ -859,7 +919,8 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                 voices[v].chan = song.notes[ev].chan;
                 voices[v].wave = song.notes[ev].wave;
                 voices[v].phase = 0u;
-                voices[v].base_step = mid_step_for(song.notes[ev].note);
+                voices[v].note_step = mid_step_for(song.notes[ev].note);
+                voices[v].base_step = voices[v].note_step;
                 voices[v].step = voices[v].base_step;
                 mid_apply_pitch(&voices[v], bend_now[song.notes[ev].chan],
                                 range_now[song.notes[ev].chan]);
@@ -877,6 +938,10 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                         voices[v].decay = (nj_u4)(voices[v].amp / (nj_s4)span) + 1u;
                     }
                 }
+                voices[v].lfo = 0u;
+                voices[v].mod = mod_now[song.notes[ev].chan]
+                    * NJ_MIDI_VIBRATO_MAX / 127u;
+                mid_set_step(&voices[v]);
                 voices[v].start = i;
                 voices[v].end = 0u;
             } else {
