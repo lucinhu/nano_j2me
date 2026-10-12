@@ -253,28 +253,54 @@ const nj_font *nj_midp_font_for(nj_vm *vm, nj_ref font_obj);
 
 /* ------------------------------------------------------------------ */
 /* MIDP key codes (javax.microedition.lcdui.Canvas)                    */
+/*                                                                     */
+/* These are the codes a MIDlet sees in keyPressed()/keyReleased() and  */
+/* reads back from getKeyCode().  They are NOT the port's input space:  */
+/* the nj_key enum in nj_port.h numbers the same keys 1..27, and        */
+/* nj_key_to_midp() is the single place that translates between them.   */
+/*                                                                     */
+/* The names here used to be NJ_KEY_UP and so on - the same names as    */
+/* the enum members - so these macros SHADOWED the enum in every        */
+/* translation unit that included this header.  nj_key_to_midp() then   */
+/* compared its input (an enum value: UP is 13) against MIDP values     */
+/* (UP is -1) and matched nothing, and every arrow and FIRE press from  */
+/* every port reached the MIDlet as keyCode 13..17.  Two more sites     */
+/* compared the raw input against these macros, so soft keys were dead  */
+/* too, and one had been papered over with a bare `== 13`.  Numeric     */
+/* keys survived by a coincidence: the enum is 1..10 for the digits and */
+/* the case that mapped them read the enum, so KEY_NUM2 came out right  */
+/* while UP did not.  That is why it lasted: the keypad worked.         */
+/*                                                                     */
+/* The prefix is the fix.  Anything that names a MIDP code uses         */
+/* NJ_MIDP_KEY_*, anything that names a port key uses NJ_KEY_*.         */
 /* ------------------------------------------------------------------ */
-#define NJ_KEY_NUM0     48
-#define NJ_KEY_NUM1     49
-#define NJ_KEY_NUM2     50
-#define NJ_KEY_NUM3     51
-#define NJ_KEY_NUM4     52
-#define NJ_KEY_NUM5     53
-#define NJ_KEY_NUM6     54
-#define NJ_KEY_NUM7     55
-#define NJ_KEY_NUM8     56
-#define NJ_KEY_NUM9     57
-#define NJ_KEY_STAR     42
-#define NJ_KEY_POUND    35
-#define NJ_KEY_UP       (-1)
-#define NJ_KEY_DOWN     (-2)
-#define NJ_KEY_LEFT     (-3)
-#define NJ_KEY_RIGHT    (-4)
-#define NJ_KEY_FIRE     (-5)
-#define NJ_KEY_GAME_A   (-6)
-#define NJ_KEY_GAME_B   (-7)
-#define NJ_KEY_GAME_C   (-8)
-#define NJ_KEY_GAME_D   (-9)
+#define NJ_MIDP_KEY_NUM0     48
+#define NJ_MIDP_KEY_NUM1     49
+#define NJ_MIDP_KEY_NUM2     50
+#define NJ_MIDP_KEY_NUM3     51
+#define NJ_MIDP_KEY_NUM4     52
+#define NJ_MIDP_KEY_NUM5     53
+#define NJ_MIDP_KEY_NUM6     54
+#define NJ_MIDP_KEY_NUM7     55
+#define NJ_MIDP_KEY_NUM8     56
+#define NJ_MIDP_KEY_NUM9     57
+#define NJ_MIDP_KEY_STAR     42
+#define NJ_MIDP_KEY_POUND    35
+#define NJ_MIDP_KEY_UP       (-1)
+#define NJ_MIDP_KEY_DOWN     (-2)
+#define NJ_MIDP_KEY_LEFT     (-3)
+#define NJ_MIDP_KEY_RIGHT    (-4)
+#define NJ_MIDP_KEY_FIRE     (-5)
+#define NJ_MIDP_KEY_GAME_A   (-6)
+#define NJ_MIDP_KEY_GAME_B   (-7)
+#define NJ_MIDP_KEY_GAME_C   (-8)
+#define NJ_MIDP_KEY_GAME_D   (-9)
+/* The soft keys share codes with GAME_A..GAME_C, which is MIDP's own
+ * overlap, not a mistake here: Canvas.KEY_SOFTKEY1 is -6. */
+#define NJ_MIDP_KEY_SOFT1    (-6)
+#define NJ_MIDP_KEY_SOFT2    (-7)
+#define NJ_MIDP_KEY_SOFT3    (-8)
+#define NJ_MIDP_KEY_CLEAR    (-8)
 
 /* Game action bits, as returned by GameCanvas.getKeyStates(). */
 #define NJ_GAME_UP     0x0002

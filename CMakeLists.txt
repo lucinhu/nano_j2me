@@ -659,6 +659,16 @@ nj_add_test(test_fullscreen tests/test_fullscreen.c ${NJ_FIXTURES}/fsorder.jar)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_pointer.sh
               ${NJ_FIXTURES}/keysdemo.jar)
     set_tests_properties(test_pointer PROPERTIES TIMEOUT 180)
+    # ... and the third question, which neither of the two above can ask: not
+    # "did a key arrive" but "did the RIGHT key arrive".  Every arrow and FIRE
+    # press used to reach the MIDlet as the port's own enum number (UP = 13)
+    # instead of the MIDP code (UP = -1), because nj_midp.h's MIDP macros
+    # shared their names with the nj_port.h enum and shadowed it.  The fixture
+    # prints the code it was handed, so this compares against Canvas's numbers.
+    add_test(NAME test_key_codes
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_key_codes.sh
+              ${NJ_FIXTURES}/keysdemo.jar)
+    set_tests_properties(test_key_codes PROPERTIES TIMEOUT 180)
   endif()
     set_tests_properties(test_play PROPERTIES TIMEOUT 120)
   endif()

@@ -48,8 +48,28 @@ public class KeysDemo extends MIDlet {
             g.fillRect(0, 0, getWidth(), getHeight());
         }
         void bump() { n++; repaint(); }
-        protected void keyPressed(int k)  { bump(); }
-        protected void keyReleased(int k) { }
+        /*
+         * Report the CODE, not just that something happened.
+         *
+         * "an event arrived" is a much weaker claim than "the right event
+         * arrived", and the gap between the two is exactly where the
+         * port-to-MIDP key translation lived.  Every arrow and FIRE press used
+         * to reach this method as the port's own enum number (UP = 13) instead
+         * of the MIDP code (UP = -1), and a fixture that only counted events
+         * cannot see the difference: the count is right, the key is wrong, and
+         * a game whose menu listens for UP just sits there.  Age of Empires III
+         * sat on its language menu for exactly this reason.
+         *
+         * tools/check_key_codes.sh reads these lines and compares them against
+         * the MIDP codes.
+         */
+        protected void keyPressed(int k)  {
+            System.out.println("KEY down " + k);
+            bump();
+        }
+        protected void keyReleased(int k) {
+            System.out.println("KEY up " + k);
+        }
         /*
          * Each callback reports itself, at its own coordinates, so a test can
          * tell which one the runtime actually called.  Before this the drag and

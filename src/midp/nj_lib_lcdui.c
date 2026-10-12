@@ -3244,7 +3244,12 @@ NJFN(d_getKeyName)
 /* ================================================================== */
 /* Canvas                                                              */
 /* ================================================================== */
-/* Map between the port's NJ_KEY_* codes and the MIDP key codes. */
+/*
+ * Map between the port's NJ_KEY_* codes (the nj_key enum in nj_port.h, which
+ * is what a port puts in nj_event.key and what --keys parses) and the MIDP key
+ * codes a MIDlet sees.  This is the ONLY translation: everything downstream of
+ * nj_midp_key() speaks MIDP codes.
+ */
 static int nj_key_to_midp(int key)
 {
     switch (key) {
@@ -3252,19 +3257,20 @@ static int nj_key_to_midp(int key)
     case NJ_KEY_4: case NJ_KEY_5: case NJ_KEY_6: case NJ_KEY_7:
     case NJ_KEY_8: case NJ_KEY_9:
         return 48 + (key - NJ_KEY_0);
-    case NJ_KEY_STAR:  return NJ_KEY_STAR;
-    case NJ_KEY_POUND: return NJ_KEY_POUND;
-    case NJ_KEY_UP:    return NJ_KEY_UP;
-    case NJ_KEY_DOWN:  return NJ_KEY_DOWN;
-    case NJ_KEY_LEFT:  return NJ_KEY_LEFT;
-    case NJ_KEY_RIGHT: return NJ_KEY_RIGHT;
-    case NJ_KEY_FIRE:  return NJ_KEY_FIRE;
-    case NJ_KEY_SOFT_LEFT:  return -6;
-    case NJ_KEY_SOFT_RIGHT: return -7;
-    case NJ_KEY_GAME_A: return NJ_KEY_GAME_A;
-    case NJ_KEY_GAME_B: return NJ_KEY_GAME_B;
-    case NJ_KEY_GAME_C: return NJ_KEY_GAME_C;
-    case NJ_KEY_GAME_D: return NJ_KEY_GAME_D;
+    case NJ_KEY_STAR:  return NJ_MIDP_KEY_STAR;
+    case NJ_KEY_POUND: return NJ_MIDP_KEY_POUND;
+    case NJ_KEY_UP:    return NJ_MIDP_KEY_UP;
+    case NJ_KEY_DOWN:  return NJ_MIDP_KEY_DOWN;
+    case NJ_KEY_LEFT:  return NJ_MIDP_KEY_LEFT;
+    case NJ_KEY_RIGHT: return NJ_MIDP_KEY_RIGHT;
+    case NJ_KEY_FIRE:  return NJ_MIDP_KEY_FIRE;
+    case NJ_KEY_SOFT_LEFT:  return NJ_MIDP_KEY_SOFT1;
+    case NJ_KEY_SOFT_RIGHT: return NJ_MIDP_KEY_SOFT2;
+    case NJ_KEY_CLEAR:      return NJ_MIDP_KEY_CLEAR;
+    case NJ_KEY_GAME_A: return NJ_MIDP_KEY_GAME_A;
+    case NJ_KEY_GAME_B: return NJ_MIDP_KEY_GAME_B;
+    case NJ_KEY_GAME_C: return NJ_MIDP_KEY_GAME_C;
+    case NJ_KEY_GAME_D: return NJ_MIDP_KEY_GAME_D;
     default: return 0;
     }
 }
@@ -3279,20 +3285,20 @@ static int nj_key_to_midp(int key)
 static int midp_game_action(nj_s4 code)
 {
     switch ((int)code) {
-    case NJ_KEY_UP:    return 1;    /* Canvas.UP     */
-    case NJ_KEY_LEFT:  return 2;    /* Canvas.LEFT   */
-    case NJ_KEY_RIGHT: return 5;    /* Canvas.RIGHT  */
-    case NJ_KEY_DOWN:  return 6;    /* Canvas.DOWN   */
-    case NJ_KEY_FIRE:  return 8;    /* Canvas.FIRE   */
-    case NJ_KEY_GAME_A: return 9;
-    case NJ_KEY_GAME_B: return 10;
-    case NJ_KEY_GAME_C: return 11;
-    case NJ_KEY_GAME_D: return 12;
-    case 50: return 1;              /* KEY_NUM2 -> UP    */
-    case 56: return 6;              /* KEY_NUM8 -> DOWN  */
-    case 52: return 2;              /* KEY_NUM4 -> LEFT  */
-    case 54: return 5;              /* KEY_NUM6 -> RIGHT */
-    case 53: return 8;              /* KEY_NUM5 -> FIRE  */
+    case NJ_MIDP_KEY_UP:    return 1;    /* Canvas.UP     */
+    case NJ_MIDP_KEY_LEFT:  return 2;    /* Canvas.LEFT   */
+    case NJ_MIDP_KEY_RIGHT: return 5;    /* Canvas.RIGHT  */
+    case NJ_MIDP_KEY_DOWN:  return 6;    /* Canvas.DOWN   */
+    case NJ_MIDP_KEY_FIRE:  return 8;    /* Canvas.FIRE   */
+    case NJ_MIDP_KEY_GAME_A: return 9;
+    case NJ_MIDP_KEY_GAME_B: return 10;
+    case NJ_MIDP_KEY_GAME_C: return 11;
+    case NJ_MIDP_KEY_GAME_D: return 12;
+    case NJ_MIDP_KEY_NUM2: return 1;    /* KEY_NUM2 -> UP    */
+    case NJ_MIDP_KEY_NUM8: return 6;    /* KEY_NUM8 -> DOWN  */
+    case NJ_MIDP_KEY_NUM4: return 2;    /* KEY_NUM4 -> LEFT  */
+    case NJ_MIDP_KEY_NUM6: return 5;    /* KEY_NUM6 -> RIGHT */
+    case NJ_MIDP_KEY_NUM5: return 8;    /* KEY_NUM5 -> FIRE  */
     default: return 0;
     }
 }
@@ -3301,20 +3307,20 @@ static int midp_game_action(nj_s4 code)
 static int midp_key_state_bit(nj_s4 code)
 {
     switch ((int)code) {
-    case NJ_KEY_UP:    return NJ_GAME_UP;
-    case NJ_KEY_DOWN:  return NJ_GAME_DOWN;
-    case NJ_KEY_LEFT:  return NJ_GAME_LEFT;
-    case NJ_KEY_RIGHT: return NJ_GAME_RIGHT;
-    case NJ_KEY_FIRE:  return NJ_GAME_FIRE;
-    case NJ_KEY_GAME_A: return NJ_GAME_A;
-    case NJ_KEY_GAME_B: return NJ_GAME_B;
-    case NJ_KEY_GAME_C: return NJ_GAME_C;
-    case NJ_KEY_GAME_D: return NJ_GAME_D;
-    case 50: return NJ_GAME_UP;
-    case 56: return NJ_GAME_DOWN;
-    case 52: return NJ_GAME_LEFT;
-    case 54: return NJ_GAME_RIGHT;
-    case 53: return NJ_GAME_FIRE;
+    case NJ_MIDP_KEY_UP:    return NJ_GAME_UP;
+    case NJ_MIDP_KEY_DOWN:  return NJ_GAME_DOWN;
+    case NJ_MIDP_KEY_LEFT:  return NJ_GAME_LEFT;
+    case NJ_MIDP_KEY_RIGHT: return NJ_GAME_RIGHT;
+    case NJ_MIDP_KEY_FIRE:  return NJ_GAME_FIRE;
+    case NJ_MIDP_KEY_GAME_A: return NJ_GAME_A;
+    case NJ_MIDP_KEY_GAME_B: return NJ_GAME_B;
+    case NJ_MIDP_KEY_GAME_C: return NJ_GAME_C;
+    case NJ_MIDP_KEY_GAME_D: return NJ_GAME_D;
+    case NJ_MIDP_KEY_NUM2: return NJ_GAME_UP;
+    case NJ_MIDP_KEY_NUM8: return NJ_GAME_DOWN;
+    case NJ_MIDP_KEY_NUM4: return NJ_GAME_LEFT;
+    case NJ_MIDP_KEY_NUM6: return NJ_GAME_RIGHT;
+    case NJ_MIDP_KEY_NUM5: return NJ_GAME_FIRE;
     default: return 0;
     }
 }
@@ -3322,15 +3328,15 @@ static int midp_key_state_bit(nj_s4 code)
 static int game_action_to_key(int action)
 {
     switch (action) {
-    case NJ_GAME_UP:    return NJ_KEY_UP;
-    case NJ_GAME_DOWN:  return NJ_KEY_DOWN;
-    case NJ_GAME_LEFT:  return NJ_KEY_LEFT;
-    case NJ_GAME_RIGHT: return NJ_KEY_RIGHT;
-    case NJ_GAME_FIRE:  return NJ_KEY_FIRE;
-    case NJ_GAME_A:     return NJ_KEY_GAME_A;
-    case NJ_GAME_B:     return NJ_KEY_GAME_B;
-    case NJ_GAME_C:     return NJ_KEY_GAME_C;
-    case NJ_GAME_D:     return NJ_KEY_GAME_D;
+    case NJ_GAME_UP:    return NJ_MIDP_KEY_UP;
+    case NJ_GAME_DOWN:  return NJ_MIDP_KEY_DOWN;
+    case NJ_GAME_LEFT:  return NJ_MIDP_KEY_LEFT;
+    case NJ_GAME_RIGHT: return NJ_MIDP_KEY_RIGHT;
+    case NJ_GAME_FIRE:  return NJ_MIDP_KEY_FIRE;
+    case NJ_GAME_A:     return NJ_MIDP_KEY_GAME_A;
+    case NJ_GAME_B:     return NJ_MIDP_KEY_GAME_B;
+    case NJ_GAME_C:     return NJ_MIDP_KEY_GAME_C;
+    case NJ_GAME_D:     return NJ_MIDP_KEY_GAME_D;
     default:            return 0;
     }
 }
@@ -4158,18 +4164,18 @@ static void displayable_render(nj_vm *vm, nj_gfx *g, nj_ref d)
  */
 static int ui_is_up(int action)
 {
-    return (action == NJ_KEY_UP || action == NJ_GAME_UP) ? 1 : 0;
+    return (action == NJ_MIDP_KEY_UP || action == NJ_GAME_UP) ? 1 : 0;
 }
 
 static int ui_is_down(int action)
 {
-    return (action == NJ_KEY_DOWN || action == NJ_GAME_DOWN) ? 1 : 0;
+    return (action == NJ_MIDP_KEY_DOWN || action == NJ_GAME_DOWN) ? 1 : 0;
 }
 
 static int ui_is_fire(int action)
 {
-    return (action == NJ_KEY_FIRE || action == NJ_GAME_FIRE ||
-            action == NJ_KEY_SOFT_RIGHT || action == 13) ? 1 : 0;
+    return (action == NJ_MIDP_KEY_FIRE || action == NJ_GAME_FIRE ||
+            action == NJ_MIDP_KEY_SOFT2) ? 1 : 0;
 }
 
 static int screen_move(nj_vm *vm, nj_ref d, int delta)
@@ -4378,7 +4384,7 @@ static int displayable_key(nj_vm *vm, nj_ref d, int action, int down)
     if (ui_is_fire(action)) {
         return screen_activate(vm, d);
     }
-    if (action == NJ_KEY_SOFT_LEFT) {
+    if (action == NJ_MIDP_KEY_SOFT1) {
         return command_default_activate(vm, d);
     }
     return 0;
