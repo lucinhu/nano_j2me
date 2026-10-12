@@ -1895,7 +1895,13 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/ByteArrayOutputStream", "size",        "()I", baos_size },
     { "java/io/ByteArrayOutputStream", "reset",       "()V", baos_reset },
     { "java/io/ByteArrayOutputStream", "toString",    "()Ljava/lang/String;", baos_toString },
-    { "java/io/ByteArrayOutputStream", "close",       "()V", baos_reset },
+    /*
+     * close() must NOT reset: ByteArrayOutputStream.close() is documented as
+     * having no effect, and 寻秦皇陵的诅咒_12450 does write(buf,0,n), close(),
+     * toByteArray() - bound to baos_reset it got an empty image back and
+     * reported IllegalArgumentException "no image data" once per frame.
+     */
+    { "java/io/ByteArrayOutputStream", "close",       "()V", is_close },
     { FOS, "<init>", "(Ljava/lang/String;)V", fos_init },
     { FOS, "flush",  "()V", fos_flush },
     { FOS, "close",  "()V", fos_close },

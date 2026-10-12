@@ -1324,6 +1324,48 @@ static void test_data_interfaces(nj_vm *vm)
  * ArrayStoreException, swallowed its own loader failure and painted a null
  * Image every frame after that.
  */
+/* ByteArrayOutputStream.close() is documented as having no effect;
+ * 寻秦皇陵的诅咒_12450 wrote its image bytes, closed, and asked for them back -
+ * bound to reset() it got a zero-length image every frame. */
+static void test_baos_close_keeps_data(nj_vm *vm)
+{
+    static const unsigned char src[4] = { 0x50, 0x4C, 0x54, 0x45 };
+    nj_value a[3];
+    nj_ref arr = nj_byte_array_new(vm, 4);
+    nj_ref baos = construct(vm, BAOS, "()V", NULL, "ByteArrayOutputStream()");
+    nj_ref out;
+
+    OK_MSG(arr != NULL && baos != NULL, "a four-byte array and a byte stream");
+    if (!arr || !baos) {
+        return;
+    }
+    memcpy(arr->u.bytes, src, sizeof(src));
+    a[0] = vref(arr);
+    a[1] = vint(0);
+    a[2] = vint(4);
+    OK_MSG(nj_call(vm, baos, BAOS, "write", "([BII)V", a, NULL) == NJ_OK,
+           "write(byte[], 0, 4)");
+    OK_MSG(nj_call_int(vm, baos, BAOS, "size", "()I", NULL) == 4,
+           "and the count is four");
+
+    OK_MSG(nj_call(vm, baos, BAOS, "close", "()V", NULL, NULL) == NJ_OK,
+           "close()");
+    OK_MSG(nj_call_int(vm, baos, BAOS, "size", "()I", NULL) == 4,
+           "close() does not reset the buffer");
+    out = nj_call_ref(vm, baos, BAOS, "toByteArray", "()[B", NULL);
+    OK_MSG(out != NULL && out->length == 4,
+           "toByteArray() still has all four bytes");
+    if (out && out->length == 4) {
+        OK_MSG(memcmp(out->u.bytes, src, 4) == 0, "with their values");
+    }
+
+    OK_MSG(nj_call(vm, baos, BAOS, "reset", "()V", NULL, NULL) == NJ_OK,
+           "reset()");
+    OK_MSG(nj_call_int(vm, baos, BAOS, "size", "()I", NULL) == 0,
+           "and reset() is the one that clears");
+    clean(vm, "ByteArrayOutputStream.close()");
+}
+
 /* DataInputStream.available() is the underlying stream's count, not
  * InputStream's default of zero: 寻秦皇陵的诅咒_12450 sized a buffer from it and
  * read a zero-length image ("no image data") once per frame. */
@@ -1611,6 +1653,7 @@ int main(void)
     test_data_interfaces(vm);
     test_null_initial_text(vm);
     test_data_input_available(vm);
+    test_baos_close_keeps_data(vm);
     test_player_survives_collection(vm);
     test_image_survives_collection(vm);
 
