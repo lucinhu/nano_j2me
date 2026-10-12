@@ -261,8 +261,9 @@ if(NJ_BUILD_TESTS)
   if(NJ_JAVAC)
     add_custom_command(TARGET nj_fixtures POST_BUILD
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_keys_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_blockdemo_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-      COMMENT "keysdemo.jar (input-effect fixture)")
+      COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
   file(GLOB NJ_FIXTURE_GENERATORS
        ${CMAKE_CURRENT_SOURCE_DIR}/tests/gen_*.py)
@@ -348,6 +349,7 @@ if(NJ_BUILD_TESTS)
   # game called it; this walks the whole class library instead of waiting.
   nj_add_test(test_natives   tests/test_natives.c)
   nj_add_test(test_directgraphics tests/test_directgraphics.c)
+  nj_add_test(test_blocked_init tests/test_blocked_init.c ${NJ_FIXTURES})
   nj_add_test(test_vm        tests/test_vm.c
               ${NJ_FIXTURES}/hello.jar HelloWorld "hello from j2me")
 

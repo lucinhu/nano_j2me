@@ -1299,10 +1299,55 @@ nj_ref nj_call_ref(nj_vm *vm, nj_ref obj, const char *cls, const char *name,
 /* ------------------------------------------------------------------ */
 /* MIDlet bootstrap                                                    */
 /* ------------------------------------------------------------------ */
+/*
+ * The exception a failed step left behind, or - when it left none - one that
+ * says which step failed.
+ *
+ * A failure with no exception object is not hypothetical: it is what a title
+ * whose <clinit> or <init> bailed out through a path that returned an error
+ * without throwing produces.  The runner can only name the exception it is
+ * handed, so a NULL here used to be reported as "cannot instantiate X: ?",
+ * which tells the reader nothing at all.  Naming the step is worth more than
+ * the silence, and it is still true: an InternalError is exactly what "the
+ * interpreter failed without saying why" is.
+ */
+static nj_ref take_or_synthesise(nj_vm *vm, const char *cls_name,
+                                 const char *stage, const char *member,
+                                 nj_status st)
+{
+    nj_ref e = nj_take_exception(vm);
+    char buf[256];
+
+    if (e) {
+        return e;
+    }
+    if (st == NJ_ERR_TIMEOUT) {
+        /*
+         * The one case worth spelling out, because it is not a defect in the
+         * class: the member called something that waits, and a C caller
+         * cannot be suspended the way a Java frame can.  com.ea.sims3.MonkeyApp
+         * does this in <init>, and the corpus has other titles that sleep on
+         * their first frame.
+         */
+        snprintf(buf, sizeof(buf),
+                 "%s of %s blocked (it called Thread.sleep or wait, and a C "
+                 "caller cannot be suspended)", stage, cls_name);
+    } else {
+        snprintf(buf, sizeof(buf),
+                 "%s of %s failed (status %d) and raised nothing (%s)",
+                 stage, cls_name, (int)st, member);
+    }
+    return nj_exception_new(vm, "java/lang/InternalError", buf);
+}
+
 nj_ref nj_vm_new_midlet(nj_vm *vm, const char *class_name, nj_ref *out_exc)
 {
     nj_class *c;
     nj_ref o;
+    nj_status init_st;
+    nj_status ctor_st;
+    nj_status nj_class_init_status;
+    nj_status ctor_status;
 
     if (out_exc) {
         *out_exc = NULL;
@@ -1318,9 +1363,12 @@ nj_ref nj_vm_new_midlet(nj_vm *vm, const char *class_name, nj_ref *out_exc)
         }
         return NULL;
     }
-    if (nj_class_init(vm, c) != NJ_OK) {
+    init_st = nj_class_init(vm, c);
+    if (init_st != NJ_OK) {
         if (out_exc) {
-            *out_exc = nj_take_exception(vm);
+            *out_exc = take_or_synthesise(vm, c->name, "class initialisation",
+                                          "<clinit>",
+                                          init_st);
         }
         return NULL;
     }
@@ -1331,9 +1379,11 @@ nj_ref nj_vm_new_midlet(nj_vm *vm, const char *class_name, nj_ref *out_exc)
         }
         return NULL;
     }
-    if (nj_call_special(vm, o, c->name, "<init>", "()V", NULL, NULL) != NJ_OK) {
+    ctor_st = nj_call_special(vm, o, c->name, "<init>", "()V", NULL, NULL);
+    if (ctor_st != NJ_OK) {
         if (out_exc) {
-            *out_exc = nj_take_exception(vm);
+            *out_exc = take_or_synthesise(vm, c->name, "construction",
+                                          "<init>", ctor_st);
         }
         return NULL;
     }
