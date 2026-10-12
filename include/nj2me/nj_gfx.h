@@ -313,12 +313,45 @@ nj_u4 nj_surface_format_color(int format, nj_u4 argb);
  * numbering here would silently re-interpret it (LEFT meaning HCENTER, say)
  * rather than fail.  Keep them in step with the seeds in nj_lib_lcdui.c and
  * with tools/midp_stubs.py, which javac inlines into the MIDlet.
+ *
+ * HOW WE KNOW.  javac inlines `static final int` constants into the caller, so
+ * every compiled MIDlet carries MIDP's real numbers.  Scanning 12476 classes
+ * from the 395 titles in tests/games/ and collecting the constant that precedes
+ * every drawString/drawImage/drawRegion call gives:
+ *
+ *     20  x11342   TOP|LEFT        the canonical text anchor
+ *      0  x 8640   "identical to TOP|LEFT" per the javadoc
+ *     17  x 4569   TOP|HCENTER
+ *      3  x 2482   HCENTER|VCENTER (images)
+ *     36  x 1506   BOTTOM|LEFT
+ *     33  x 1361   BOTTOM|HCENTER
+ *     40  x  859   BOTTOM|RIGHT   (soft-key labels)
+ *     24  x  772   TOP|RIGHT
+ *     68  x   19   BASELINE|LEFT
+ *
+ * Every one of those is a legal, sensible MIDP anchor under this numbering and
+ * several are illegal under the one that reads LEFT as 1: 20 would then be
+ * RIGHT|VCENTER, which MIDP forbids for text, yet it is the commonest anchor in
+ * the whole corpus.  So HCENTER is 1, VCENTER is 2, LEFT is 4, TOP is 16.
+ *
+ * A commit once "corrected" these to LEFT 1 / HCENTER 2 / RIGHT 4 / TOP 8 and
+ * added a translation at the MIDP boundary to compensate.  Both halves were
+ * wrong and the translation could not save it: MIDlets inlined the real values
+ * while the validator rejected them (anchor 3 became LEFT|HCENTER,
+ * "contradictory"), so titles died with IllegalArgumentException instead of
+ * drawing.  This numbering is the contract; do not "fix" it again without
+ * re-running that scan.
+ *
+ * NOTE for callers: nj_gfx treats "no vertical bit set" as BASELINE, because a
+ * text blitter needs some default.  MIDP instead defines a missing vertical
+ * component as TOP, so the MIDP layer spells TOP out explicitly -- see
+ * midp_anchor() in src/midp/nj_lib_lcdui.c.
  */
-#define NJ_ANCHOR_LEFT    1
-#define NJ_ANCHOR_HCENTER 2
-#define NJ_ANCHOR_RIGHT   4
-#define NJ_ANCHOR_TOP     8
-#define NJ_ANCHOR_VCENTER 16
+#define NJ_ANCHOR_HCENTER 1
+#define NJ_ANCHOR_VCENTER 2
+#define NJ_ANCHOR_LEFT    4
+#define NJ_ANCHOR_RIGHT   8
+#define NJ_ANCHOR_TOP     16
 #define NJ_ANCHOR_BOTTOM  32
 
 /* ROP constants, mirroring Graphics SET/PAINT. */

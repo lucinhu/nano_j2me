@@ -1335,76 +1335,44 @@ NJFN(g_fillTriangle)
 }
 
 /* ---- text ---- */
-/* javax.microedition.lcdui.Graphics' own anchor constants.  They are NOT the
- * renderer's NJ_ANCHOR_* bits - see midp_anchor() below - so a MIDlet's value
- * must never reach the renderer untranslated. */
-#define MIDP_ANCHOR_LEFT      1
-#define MIDP_ANCHOR_HCENTER   2
-#define MIDP_ANCHOR_RIGHT     4
-#define MIDP_ANCHOR_TOP       8
-#define MIDP_ANCHOR_VCENTER  16
+/*
+ * javax.microedition.lcdui.Graphics' anchor constants.  These ARE the
+ * renderer's NJ_ANCHOR_* bits -- the same numbers, deliberately -- because a
+ * MIDlet's anchor travels from Graphics.LEFT through the native call straight
+ * into nj_gfx.  The empirical proof is recorded in include/nj2me/nj_gfx.h:
+ * 12476 compiled classes put TOP|LEFT (20) at the top of the anchor histogram,
+ * and 20 is not even legal for text under any other reading.
+ */
+#define MIDP_ANCHOR_HCENTER   1
+#define MIDP_ANCHOR_VCENTER   2
+#define MIDP_ANCHOR_LEFT      4
+#define MIDP_ANCHOR_RIGHT     8
+#define MIDP_ANCHOR_TOP      16
 #define MIDP_ANCHOR_BOTTOM   32
 #define MIDP_ANCHOR_BASELINE 64
 
 /*
- * MIDP's anchor constants and the renderer's NJ_ANCHOR_* bits are two
- * different encodings of the same idea, and they disagree on almost every
- * value:
+ * The horizontal half is therefore a straight copy.  The vertical half is not,
+ * because the renderer has one more case than MIDP does: its "no vertical bit
+ * at all" already means BASELINE, a text blitter needing some default.  MIDP
+ * instead defines a missing vertical component as TOP:
  *
- *              MIDP   NJ_ANCHOR_*
- *   LEFT          1        4
- *   HCENTER       2        1
- *   RIGHT         4        8
- *   TOP           8       16
- *   VCENTER      16        2
- *   BOTTOM       32       32
- *   BASELINE     64        0   (no bit: the text blitter's default)
+ *   MIDP 2.0, Graphics, "Anchor Points":
+ *   "Zero may also be used as the value of an anchor point.  Using zero
+ *    for the anchor point value gives results identical to using TOP | LEFT."
  *
- * BOTTOM and BASELINE happen to agree, and that is exactly why passing the
- * MIDlet's value straight through looked correct for so long.  A game that
- * anchored with BOTTOM, or that set no vertical anchor at all and let the
- * default apply, got the right answer by accident.  TOP|LEFT - the commonest
- * anchor in the wild, and what the three-argument overloads of drawString and
- * drawImage mean - is 9: in the renderer's encoding bit 8 is RIGHT and bit 1
- * is HCENTER, and no vertical bit is set at all.  So the line came out
- * centred and, worse, on the BASELINE default instead of at the top, i.e.
- * `ascent` pixels too high.  On screen that is a game's dialogue text sitting
- * on the top border of its own dialogue box.
- *
- * Translate once, at the boundary where a MIDlet's value enters the renderer,
- * and every consumer downstream keeps a single encoding.
+ * So BASELINE is the value that has to translate to *nothing*, and TOP has to
+ * be spelled out explicitly.  Without that final `else`, every
+ * drawString(s, x, y, 0) -- and the bare three-argument drawString, which is
+ * the same call -- drew its line `ascent` pixels too high.  On the 仙剑奇侠传
+ * dialogue that is a line of speech sitting on the top border of its own
+ * dialogue frame.
  */
 static int midp_anchor(nj_s4 anchor)
 {
-    int out = 0;
+    int out = (int)anchor & (NJ_ANCHOR_LEFT | NJ_ANCHOR_HCENTER |
+                             NJ_ANCHOR_RIGHT);
 
-    if (anchor & MIDP_ANCHOR_LEFT)    { out |= NJ_ANCHOR_LEFT; }
-    if (anchor & MIDP_ANCHOR_HCENTER) { out |= NJ_ANCHOR_HCENTER; }
-    if (anchor & MIDP_ANCHOR_RIGHT)   { out |= NJ_ANCHOR_RIGHT; }
-
-    /*
-     * The vertical half cannot be a straight bit-for-bit mapping, because the
-     * renderer has one more case than MIDP does: its "no vertical bit at all"
-     * already means BASELINE.  So BASELINE is the value that must translate to
-     * *nothing*, and TOP has to be spelled out explicitly.
-     *
-     * The tempting version - copy every bit, let the renderer's default catch
-     * the rest - is right for BOTTOM (32 in both encodings) and right for an
-     * explicit BASELINE, and wrong for TOP.  A missing vertical component does
-     * not mean "unspecified", it means TOP:
-     *
-     *   MIDP 2.0, Graphics, "Anchor Points":
-     *   "Zero may also be used as the value of an anchor point.  Using zero
-     *    for the anchor point value gives results identical to using
-     *    TOP | LEFT."
-     *
-     * anchor_is_bad() below has stated that rule since it was written; this
-     * function did not implement it.  Every `drawString(s, x, y, 0)` - and the
-     * bare three-argument drawString, which is the same call - therefore drew
-     * its line `ascent` pixels too high, i.e. sitting on the top border of the
-     * box the game had just drawn for it.  On the 仙剑奇侠传 dialogue that is
-     * a line of speech above its own dialogue frame.
-     */
     if (anchor & MIDP_ANCHOR_TOP)           { out |= NJ_ANCHOR_TOP; }
     else if (anchor & MIDP_ANCHOR_BOTTOM)   { out |= NJ_ANCHOR_BOTTOM; }
     else if (anchor & MIDP_ANCHOR_BASELINE) { /* nothing: the blitter's default */ }
@@ -1414,22 +1382,19 @@ static int midp_anchor(nj_s4 anchor)
 }
 
 /*
- * Images.  Same horizontal translation, but the vertical set differs: an image
- * has no baseline, so MIDP allows VCENTER (which text may not use) and forbids
- * BASELINE (which text may).  A missing vertical component still means TOP.
+ * Images.  Same rule, but the vertical set differs: an image has no baseline,
+ * so MIDP allows VCENTER (which text may not use) and forbids BASELINE (which
+ * text may).  A missing vertical component still means TOP.
  */
 static int midp_anchor_image(nj_s4 anchor)
 {
-    int out = 0;
+    int out = (int)anchor & (NJ_ANCHOR_LEFT | NJ_ANCHOR_HCENTER |
+                             NJ_ANCHOR_RIGHT);
 
-    if (anchor & MIDP_ANCHOR_LEFT)    { out |= NJ_ANCHOR_LEFT; }
-    if (anchor & MIDP_ANCHOR_HCENTER) { out |= NJ_ANCHOR_HCENTER; }
-    if (anchor & MIDP_ANCHOR_RIGHT)   { out |= NJ_ANCHOR_RIGHT; }
-
-    if (anchor & MIDP_ANCHOR_TOP)         { out |= NJ_ANCHOR_TOP; }
+    if (anchor & MIDP_ANCHOR_TOP)          { out |= NJ_ANCHOR_TOP; }
     else if (anchor & MIDP_ANCHOR_VCENTER) { out |= NJ_ANCHOR_VCENTER; }
-    else if (anchor & MIDP_ANCHOR_BOTTOM) { out |= NJ_ANCHOR_BOTTOM; }
-    else                                  { out |= NJ_ANCHOR_TOP; }
+    else if (anchor & MIDP_ANCHOR_BOTTOM)  { out |= NJ_ANCHOR_BOTTOM; }
+    else                                   { out |= NJ_ANCHOR_TOP; }
 
     return out;
 }
@@ -1599,18 +1564,13 @@ NJFN(g_drawImage)
     }
     if (anchor != -1 &&
         anchor_is_bad(anchor)) {
-        nj_logf(vm, 0, "drawImage/drawRegion: rejected anchor %ld "
-                "(LEFT=%d HCENTER=%d RIGHT=%d TOP=%d VCENTER=%d BOTTOM=%d)",
-                (long)anchor, NJ_ANCHOR_LEFT, NJ_ANCHOR_HCENTER, NJ_ANCHOR_RIGHT,
-                NJ_ANCHOR_TOP, NJ_ANCHOR_VCENTER, NJ_ANCHOR_BOTTOM);
         return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "bad anchor: conflicting horizontal bits");
+                        "bad horizontal anchor");
     }
     if (!img_view(vm, img, &view)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "image has no pixels");
     }
-    if (getenv("NJ_DBGIMG")) fprintf(stderr, "IMGDBG %dx%d x=%d y=%d anchor=%d\n", view.width, view.height, (int)x, (int)y, (int)anchor);
     if (anchor != -1) {
         int a = midp_anchor_image(anchor);
 
@@ -1655,12 +1615,8 @@ NJFN(g_drawRegion)
     }
     if (anchor != -1 &&
         anchor_is_bad(anchor)) {
-        nj_logf(vm, 0, "drawImage/drawRegion: rejected anchor %ld "
-                "(LEFT=%d HCENTER=%d RIGHT=%d TOP=%d VCENTER=%d BOTTOM=%d)",
-                (long)anchor, NJ_ANCHOR_LEFT, NJ_ANCHOR_HCENTER, NJ_ANCHOR_RIGHT,
-                NJ_ANCHOR_TOP, NJ_ANCHOR_VCENTER, NJ_ANCHOR_BOTTOM);
         return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "bad anchor: conflicting horizontal bits");
+                        "bad horizontal anchor");
     }
     if (!img_view(vm, img, &view)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
@@ -1810,12 +1766,8 @@ NJFN(g_copyArea)
     }
     if (anchor != -1 &&
         anchor_is_bad(anchor)) {
-        nj_logf(vm, 0, "drawImage/drawRegion: rejected anchor %ld "
-                "(LEFT=%d HCENTER=%d RIGHT=%d TOP=%d VCENTER=%d BOTTOM=%d)",
-                (long)anchor, NJ_ANCHOR_LEFT, NJ_ANCHOR_HCENTER, NJ_ANCHOR_RIGHT,
-                NJ_ANCHOR_TOP, NJ_ANCHOR_VCENTER, NJ_ANCHOR_BOTTOM);
         return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "bad anchor: conflicting horizontal bits");
+                        "bad horizontal anchor");
     }
     if (w == 0 || h == 0) {
         return NJ_OK;
@@ -10345,21 +10297,36 @@ nj_status nj_lcdui_late_init(nj_vm *vm)
 
     /* ---- Graphics anchors and styles ---- */
     /*
-     * These are the values MIDP 2.0 defines, and they are NOT free choices:
-     * a MIDlet compiles Graphics.LEFT into 1, so a runtime that calls it 4
-     * answers a different question than the caller asked.  Here the difference
-     * was fatal rather than cosmetic -- a title computing HCENTER|VCENTER got
-     * 2|16 = 18 (fine) from the real values but 1|2 = 3 from these, and 3 is
-     * LEFT|HCENTER, which anchor_is_bad() correctly rejects as contradictory,
-     * so the MIDlet threw on every frame.  Whatever these numbers are, the
-     * stubs in tools/midp_stubs.py must say the same thing, because javac
-     * inlines the stub's value into the MIDlet.
+     * These are the values MIDP 2.0 defines, and they are NOT free choices: a
+     * MIDlet compiles Graphics.LEFT into a literal, so a runtime that calls it
+     * something else answers a different question than the caller asked.
+     *
+     * They are also, deliberately, the same numbers as NJ_ANCHOR_* in
+     * include/nj2me/nj_gfx.h, so no translation is needed for the horizontal
+     * half.  The evidence is a scan of 12476 compiled classes from the 395
+     * titles in tests/games/, collecting the constant that precedes every
+     * drawString/drawImage/drawRegion call: 20 (TOP|LEFT) leads with 11342
+     * occurrences, then 0, 17 (TOP|HCENTER), 3 (HCENTER|VCENTER), 36
+     * (BOTTOM|LEFT), 33, 40 (BOTTOM|RIGHT), 24 (TOP|RIGHT), 68
+     * (BASELINE|LEFT).  Every one is a legal MIDP anchor under THIS numbering
+     * and several are illegal under any other -- 20 would be RIGHT|VCENTER,
+     * which MIDP forbids for text.
+     *
+     * A commit once "corrected" these to LEFT 1 / HCENTER 2 / RIGHT 4 / TOP 8
+     * with a matching translation, on the theory that the renderer's numbering
+     * was private.  It made things worse: MIDlets inlined the real values while
+     * the validator rejected them (HCENTER|VCENTER became LEFT|HCENTER,
+     * "contradictory"), so titles threw IllegalArgumentException on every
+     * frame instead of drawing.
+     *
+     * Whatever these numbers are, tools/midp_stubs.py must say the same thing,
+     * because javac inlines the stub's value into the MIDlet.
      */
-    lcdui_const_int(vm, NJ_C_GRAPHICS, "LEFT",     1);
-    lcdui_const_int(vm, NJ_C_GRAPHICS, "HCENTER",  2);
-    lcdui_const_int(vm, NJ_C_GRAPHICS, "RIGHT",    4);
-    lcdui_const_int(vm, NJ_C_GRAPHICS, "TOP",      8);
-    lcdui_const_int(vm, NJ_C_GRAPHICS, "VCENTER",  16);
+    lcdui_const_int(vm, NJ_C_GRAPHICS, "HCENTER",  1);
+    lcdui_const_int(vm, NJ_C_GRAPHICS, "VCENTER",  2);
+    lcdui_const_int(vm, NJ_C_GRAPHICS, "LEFT",     4);
+    lcdui_const_int(vm, NJ_C_GRAPHICS, "RIGHT",    8);
+    lcdui_const_int(vm, NJ_C_GRAPHICS, "TOP",      16);
     lcdui_const_int(vm, NJ_C_GRAPHICS, "BOTTOM",   32);
     lcdui_const_int(vm, NJ_C_GRAPHICS, "BASELINE", 64);
     lcdui_const_int(vm, NJ_C_GRAPHICS, "SOLID",    0);

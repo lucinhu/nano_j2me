@@ -737,11 +737,12 @@ static void test_graphics(nj_vm *vm)
         a[0] = sref(s);
         a[1] = iref(0);
         a[2] = iref(0);
-        /* Graphics.TOP | Graphics.LEFT, the MIDlet's encoding - NOT the
-         * renderer's NJ_ANCHOR_* bits, which put RIGHT at 8 and HCENTER at 1.
-         * Passing NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP here is what let the two
-         * encodings drift apart unnoticed for so long. */
-        a[3] = iref(8 | 1);
+        /* Graphics.TOP | Graphics.LEFT = 16 | 4 = 20, which is also the
+         * commonest anchor in the wild (11342 of 34080 call sites across the
+         * corpus).  The runtime's NJ_ANCHOR_* bits carry the same numbers on
+         * purpose, so this literal is both the MIDlet's value and the
+         * renderer's. */
+        a[3] = iref(16 | 4);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawString",
                    "(Ljava/lang/String;III)V", a, NULL) == NJ_OK);
         {
@@ -772,7 +773,7 @@ static void test_graphics(nj_vm *vm)
         a[0] = iref('A');
         a[1] = iref(1);
         a[2] = iref(0);
-        a[3] = iref(8 | 1);         /* Graphics.TOP | Graphics.LEFT */
+        a[3] = iref(16 | 4);         /* Graphics.TOP | Graphics.LEFT */
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawChar", "(CIII)V", a, NULL) == NJ_OK);
         {
             int x, ink = 0;
@@ -790,12 +791,14 @@ static void test_graphics(nj_vm *vm)
     }
 
     /* ---- a MIDlet's anchor encoding, not the renderer's ------------------
-     * Graphics.TOP | Graphics.LEFT is 8 | 1 = 9.  The renderer's own bits make
-     * bit 8 RIGHT and bit 1 HCENTER, and set no vertical bit at all - which
-     * the text blitter reads as its BASELINE default.  A straight pass-through
-     * therefore centred every TOP|LEFT line and drew it `ascent` pixels too
-     * high.  On screen that is a game's dialogue text sitting on the top
-     * border of its own dialogue box, which is how this was found.
+     * The trap is the *vertical* half.  Graphics.TOP | Graphics.LEFT is
+     * 16 | 4 = 20, and the renderer's bits carry the same numbers - but the
+     * renderer reads "no vertical bit set at all" as BASELINE, because a text
+     * blitter needs some default, while MIDP defines a missing vertical
+     * component as TOP.  Pass the value through without spelling TOP out and
+     * every such line is drawn `ascent` pixels too high.  On screen that is a
+     * game's dialogue text sitting on the top border of its own dialogue box,
+     * which is how this was found.
      *
      * The robust way to pin the semantics is not to guess where a glyph's ink
      * starts, but to demand that two anchors describing the same place agree:
@@ -837,7 +840,7 @@ static void test_graphics(nj_vm *vm)
         a[0] = sref(s3);
         a[1] = iref(1);
         a[2] = iref(top_y);
-        a[3] = iref(8 | 1);
+        a[3] = iref(16 | 4);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawString",
                    "(Ljava/lang/String;III)V", a, NULL) == NJ_OK);
         {
@@ -869,7 +872,7 @@ static void test_graphics(nj_vm *vm)
         a[0] = sref(s3);
         a[1] = iref(1);
         a[2] = iref(top_y + base);
-        a[3] = iref(64 | 1);
+        a[3] = iref(64 | 4);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawString",
                    "(Ljava/lang/String;III)V", a, NULL) == NJ_OK);
         {
@@ -1025,7 +1028,7 @@ static void test_graphics(nj_vm *vm)
             ia[0] = sref(src);
             ia[1] = iref(5);
             ia[2] = iref(4);
-            ia[3] = iref(1 | 8);
+            ia[3] = iref(16 | 4);
             OK(nj_call(vm, dg, NJ_C_GRAPHICS, "drawImage",
                        "(L" NJ_C_IMAGE ";III)V", ia, NULL) == NJ_OK);
             OK_MSG(img_pixel(vm, dst, 5, 4) == 0xFFCC2200u,
@@ -1038,7 +1041,7 @@ static void test_graphics(nj_vm *vm)
             ia[0] = sref(src);
             ia[1] = iref(9);
             ia[2] = iref(0);
-            ia[3] = iref(2 | 8);
+            ia[3] = iref(1 | 16);
             OK(nj_call(vm, dg, NJ_C_GRAPHICS, "drawImage",
                        "(L" NJ_C_IMAGE ";III)V", ia, NULL) == NJ_OK);
             OK_MSG(img_pixel(vm, dst, 7, 0) == 0xFFCC2200u,
@@ -1069,18 +1072,65 @@ static void test_graphics(nj_vm *vm)
 
             /* Graphics.TOP alone is legal; the horizontal half defaults to
              * LEFT. */
-            ia[3] = iref(8);
+            ia[3] = iref(16);
             (void)nj_call(vm, dg2, NJ_C_GRAPHICS, "drawImage",
                           "(L" NJ_C_IMAGE ";III)V", ia, NULL);
             OK_MSG(!exc_is(vm, "java/lang/IllegalArgumentException"),
                    "drawImage with TOP alone threw; MIDP defaults it to LEFT");
 
-            /* Two horizontal constants at once is the real error. */
-            ia[3] = iref(1 | 4);
-            (void)nj_call(vm, dg2, NJ_C_GRAPHICS, "drawImage",
-                          "(L" NJ_C_IMAGE ";III)V", ia, NULL);
-            OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
-                   "drawImage with LEFT|RIGHT did not throw");
+            /*
+             * Graphics.HCENTER | Graphics.VCENTER = 1 | 2 = 3.  This is the
+             * fourth commonest anchor in the whole corpus -- 2482 call sites --
+             * and it is perfectly legal for an image: one horizontal constant,
+             * one vertical.  It must not be rejected.
+             *
+             * It was, once.  The runtime numbered LEFT as 1 in those days, so 3
+             * read as LEFT|HCENTER -- a real conflict -- and every title that
+             * centred a sprite threw IllegalArgumentException on every frame
+             * instead of drawing.  The numbering was the bug, not the anchor,
+             * and "resolve the conflict instead of rejecting it" was treating
+             * the symptom.
+             */
+            {
+                nj_ref dst3 = image_new(vm, 4, 4);
+                nj_ref dg3 = dst3 ? call_ref(vm, dst3, NJ_C_IMAGE, "getGraphics",
+                                             "()L" NJ_C_GRAPHICS ";", NULL, &ok) : NULL;
+                if (dg3) {
+                    nj_value ja[4];
+                    ja[0] = sref(img);
+                    ja[1] = iref(0);
+                    ja[2] = iref(0);
+                    ja[3] = iref(1 | 2);        /* HCENTER | VCENTER */
+                    (void)nj_call(vm, dg3, NJ_C_GRAPHICS, "drawImage",
+                                  "(L" NJ_C_IMAGE ";III)V", ja, NULL);
+                    OK_MSG(!exc_is(vm, "java/lang/IllegalArgumentException"),
+                           "drawImage with HCENTER|VCENTER threw; 2482 real call sites pass it");
+                }
+            }
+
+            /*
+             * Two constants from the SAME group is the conflict MIDP actually
+             * forbids -- "the anchor point ... is specified in terms of a
+             * constant for the horizontal and one for the vertical component".
+             * LEFT|RIGHT = 4 | 8 = 12 has no meaning, so it throws rather than
+             * quietly picking one.
+             */
+            {
+                nj_ref dst4 = image_new(vm, 4, 4);
+                nj_ref dg4 = dst4 ? call_ref(vm, dst4, NJ_C_IMAGE, "getGraphics",
+                                             "()L" NJ_C_GRAPHICS ";", NULL, &ok) : NULL;
+                if (dg4) {
+                    nj_value ja[4];
+                    ja[0] = sref(img);
+                    ja[1] = iref(0);
+                    ja[2] = iref(0);
+                    ja[3] = iref(4 | 8);        /* LEFT | RIGHT */
+                    (void)nj_call(vm, dg4, NJ_C_GRAPHICS, "drawImage",
+                                  "(L" NJ_C_IMAGE ";III)V", ja, NULL);
+                    OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
+                           "drawImage with LEFT|RIGHT must throw");
+                }
+            }
         }
     }
 
@@ -1252,11 +1302,11 @@ static void test_all_methods_bound(nj_vm *vm)
 static void test_constants(nj_vm *vm)
 {
     static const struct { const char *cls; const char *name; nj_s4 value; } k[] = {
-        { "javax/microedition/lcdui/Graphics", "LEFT",    1 },
-        { "javax/microedition/lcdui/Graphics", "HCENTER", 2 },
-        { "javax/microedition/lcdui/Graphics", "RIGHT",   4 },
-        { "javax/microedition/lcdui/Graphics", "TOP",     8 },
-        { "javax/microedition/lcdui/Graphics", "VCENTER", 16 },
+        { "javax/microedition/lcdui/Graphics", "HCENTER", 1 },
+        { "javax/microedition/lcdui/Graphics", "VCENTER", 2 },
+        { "javax/microedition/lcdui/Graphics", "LEFT",    4 },
+        { "javax/microedition/lcdui/Graphics", "RIGHT",   8 },
+        { "javax/microedition/lcdui/Graphics", "TOP",     16 },
         { "javax/microedition/lcdui/Graphics", "BOTTOM",  32 },
         { "javax/microedition/lcdui/Graphics", "BASELINE", 64 },
         { "javax/microedition/lcdui/Canvas",   "KEY_NUM0", 48 },

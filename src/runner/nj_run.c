@@ -245,9 +245,39 @@ static int key_from_name(const char *p, int len, nj_u1 *out)
     };
     int i;
 
-    if (len == 1 && p[0] >= '0' && p[0] <= '9') {
-        *out = (nj_u1)(NJ_KEY_0 + (p[0] - '0'));
-        return 1;
+    /*
+     * A single digit names the keypad key with that digit on it: "5" is the
+     * middle key, which MIDP calls KEY_NUM5 and numbers 53.
+     *
+     * Anything longer that is all digits is a LITERAL MIDP key code, because
+     * that is what nj_run_opts.keys documents - "20:53,40:53" is the example
+     * in nj_port.h.  It used to be rejected here, so the documented spelling
+     * of a key press did nothing at all: the parse failed, the runner logged
+     * one line and then ran the whole session with no input.  A splash screen
+     * that never advances looks exactly like a game that does not draw, and
+     * that is a bad afternoon to hand somebody.
+     */
+    if (len > 0 && p[0] >= '0' && p[0] <= '9') {
+        int all_digits = 1;
+        int value = 0;
+        for (i = 0; i < len; i++) {
+            if (p[i] < '0' || p[i] > '9') {
+                all_digits = 0;
+                break;
+            }
+            value = value * 10 + (p[i] - '0');
+            if (value > 255) {
+                return 0;   /* not a key code; fall through to the names */
+            }
+        }
+        if (all_digits) {
+            if (len == 1) {
+                *out = (nj_u1)(NJ_KEY_0 + (p[0] - '0'));
+            } else {
+                *out = (nj_u1)value;
+            }
+            return 1;
+        }
     }
     for (i = 0; names[i].name; i++) {
         int j = 0;
@@ -888,7 +918,9 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
             if (key_script_parse(kspec, &keys) < 0 && port.log) {
                 port.log(port.user, 0,
                          "--keys: expected frame:key pairs such as "
-                         "\"20:fire,60:left\", or @file for a script");
+                         "\"20:fire,60:left\" or \"20:53,60:35\", or @file for "
+                         "a script - THE WHOLE SCRIPT IS IGNORED, so this "
+                         "session will run with no input at all");
             }
             if (kspec && kspec != opts->keys) {
                 free(kspec);
