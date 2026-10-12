@@ -1369,6 +1369,23 @@ NJFN(sb_append_float)
     return NJ_OK;
 }
 
+NJFN(sb_append_double)
+{
+    char buf[40];
+    double d = NJ_ARG_DOUBLE(args, 0);
+#if NJ_USE_LIBC
+    snprintf(buf, sizeof(buf), "%g", d);
+#else
+    (void)d;
+    buf[0] = '0'; buf[1] = '\0';
+#endif
+    if (sb_append_cstr(vm, NJ_THIS(args), buf) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = NJ_THIS(args);
+    return NJ_OK;
+}
+
 NJFN(sb_append_chars_range)
 {
     nj_ref arr = NJ_ARG_REF(args, 0);
@@ -1664,6 +1681,7 @@ static const nj_builtin_method stringbuilder_methods[] = {
     M("append",           "(C)Ljava/lang/StringBuilder;",         0),
     M("append",           "(Z)Ljava/lang/StringBuilder;",         0),
     M("append",           "(F)Ljava/lang/StringBuilder;",         0),
+    M("append",           "(D)Ljava/lang/StringBuilder;",         0),
     M("append",           "([CII)Ljava/lang/StringBuilder;",      0),
     M("reverse",          "()Ljava/lang/StringBuilder;",          0),
     M("delete",           "(II)Ljava/lang/StringBuilder;",        0),
@@ -1695,6 +1713,7 @@ static const nj_builtin_method stringbuffer_methods[] = {
     M("append",           "(C)Ljava/lang/StringBuffer;",         0),
     M("append",           "(Z)Ljava/lang/StringBuffer;",         0),
     M("append",           "(F)Ljava/lang/StringBuffer;",         0),
+    M("append",           "(D)Ljava/lang/StringBuffer;",         0),
     M("append",           "([CII)Ljava/lang/StringBuffer;",      0),
     M("reverse",          "()Ljava/lang/StringBuffer;",          0),
     M("delete",           "(II)Ljava/lang/StringBuffer;",        0),
@@ -1803,6 +1822,7 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/StringBuffer", "append",         "(C)Ljava/lang/StringBuffer;", sb_append_char },
     { "java/lang/StringBuffer", "append",         "(Z)Ljava/lang/StringBuffer;", sb_append_bool },
     { "java/lang/StringBuffer", "append",         "(F)Ljava/lang/StringBuffer;", sb_append_float },
+    { "java/lang/StringBuffer", "append",         "(D)Ljava/lang/StringBuffer;", sb_append_double },
     { "java/lang/StringBuffer", "append",         "([CII)Ljava/lang/StringBuffer;", sb_append_chars_range },
     { "java/lang/StringBuffer", "reverse",        "()Ljava/lang/StringBuffer;", sb_reverse },
     { "java/lang/StringBuffer", "delete",         "(II)Ljava/lang/StringBuffer;", sb_delete },
@@ -1829,6 +1849,7 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/StringBuilder", "append",       "(C)Ljava/lang/StringBuilder;", sb_append_char },
     { "java/lang/StringBuilder", "append",       "(Z)Ljava/lang/StringBuilder;", sb_append_bool },
     { "java/lang/StringBuilder", "append",       "(F)Ljava/lang/StringBuilder;", sb_append_float },
+    { "java/lang/StringBuilder", "append",       "(D)Ljava/lang/StringBuilder;", sb_append_double },
     { "java/lang/StringBuilder", "append",       "([CII)Ljava/lang/StringBuilder;", sb_append_chars_range },
     { "java/lang/StringBuilder", "reverse",      "()Ljava/lang/StringBuilder;", sb_reverse },
     { "java/lang/StringBuilder", "delete",       "(II)Ljava/lang/StringBuilder;", sb_delete },

@@ -584,6 +584,255 @@ static void test_strings(nj_vm *vm)
 }
 
 /* ------------------------------------------------------------------ */
+/* Number wrappers, parsing, printing, and a double for the buffers    */
+/* ------------------------------------------------------------------ */
+#define INTEGER "java/lang/Integer"
+#define LONGW   "java/lang/Long"
+#define SHORTW  "java/lang/Short"
+#define BYTEW   "java/lang/Byte"
+#define CHARW   "java/lang/Character"
+#define FLOATW  "java/lang/Float"
+#define DOUBLEW "java/lang/Double"
+
+static nj_value vfloat(float f)
+{
+    nj_value v;
+
+    v.bits = 0u;
+    v.f = f;
+    return v;
+}
+
+static nj_value vdouble(double d)
+{
+    nj_value v;
+
+    v.bits = 0u;
+    v.d = d;
+    return v;
+}
+
+/* Call a static that takes one String and returns a value, reporting a throw
+ * through *threw (and clearing it, so the next case starts clean). */
+static nj_value static_from_string(nj_vm *vm, const char *cls, const char *name,
+                                   const char *desc, const char *text, int *threw)
+{
+    nj_value a[1];
+    nj_value r;
+
+    r.bits = 0u;
+    a[0] = vref(nj_string_new(vm, text));
+    *threw = 0;
+    if (nj_call_static(vm, cls, name, desc, a, &r) != NJ_OK) {
+        *threw = 1;
+        nj_clear_exception(vm);
+        r.bits = 0u;
+    }
+    return r;
+}
+
+static void test_numbers(nj_vm *vm)
+{
+    nj_value a[2];
+    nj_value r;
+    nj_ref o;
+    nj_ref sb;
+    nj_ref s;
+    int threw;
+
+    /* parseInt used to accept "2147483648" and wrap it to INT_MIN: its
+     * accumulator was compared against 2^32, not 2^31. */
+    OK_MSG(static_from_string(vm, INTEGER, "parseInt",
+                              "(Ljava/lang/String;)I", "2147483647",
+                              &threw).i == 2147483647 && !threw,
+           "parseInt(\"2147483647\") is the maximum");
+    (void)static_from_string(vm, INTEGER, "parseInt",
+                             "(Ljava/lang/String;)I", "2147483648", &threw);
+    OK_MSG(threw, "parseInt(\"2147483648\") is out of range");
+    OK_MSG(static_from_string(vm, INTEGER, "parseInt",
+                              "(Ljava/lang/String;)I", "-2147483648",
+                              &threw).i == (nj_s4)0x80000000 && !threw,
+           "parseInt(\"-2147483648\") is the minimum");
+
+    /* It is a parse, not a prefix scan. */
+    (void)static_from_string(vm, INTEGER, "parseInt",
+                             "(Ljava/lang/String;)I", " 12", &threw);
+    OK_MSG(threw, "parseInt(\" 12\") is not a number");
+    (void)static_from_string(vm, INTEGER, "parseInt",
+                             "(Ljava/lang/String;)I", "12x", &threw);
+    OK_MSG(threw, "parseInt(\"12x\") is not a number");
+    (void)static_from_string(vm, INTEGER, "parseInt",
+                             "(Ljava/lang/String;)I", "", &threw);
+    OK_MSG(threw, "parseInt(\"\") is not a number");
+
+    a[0] = vref(nj_string_new(vm, "-2A"));
+    a[1] = vint(16);
+    r.bits = 0u;
+    OK_MSG(nj_call_static(vm, INTEGER, "parseInt", "(Ljava/lang/String;I)I",
+                          a, &r) == NJ_OK && r.i == -42,
+           "parseInt(\"-2A\",16) is -42");
+    a[0] = vref(nj_string_new(vm, "z"));
+    a[1] = vint(36);
+    OK_MSG(nj_call_static(vm, INTEGER, "parseInt", "(Ljava/lang/String;I)I",
+                          a, &r) == NJ_OK && r.i == 35,
+           "parseInt(\"z\",36) is 35");
+    a[0] = vref(nj_string_new(vm, "2"));
+    a[1] = vint(2);
+    (void)nj_call_static(vm, INTEGER, "parseInt", "(Ljava/lang/String;I)I",
+                         a, &r);
+    OK_MSG(nj_has_exception(vm), "parseInt(\"2\",2) is not a base-2 digit");
+    nj_clear_exception(vm);
+
+    /* byteValue is a truncation to the low 8 bits, sign-extended. */
+    a[0] = vint(0x1FF);
+    o = construct(vm, INTEGER, "(I)V", a, "Integer(511)");
+    OK_MSG(o != NULL && nj_call_int(vm, o, INTEGER, "byteValue", "()B",
+                                    NULL) == -1,
+           "new Integer(511).byteValue() is -1");
+
+    a[0] = vref(nj_string_new(vm, "42"));
+    o = nj_call_ref(vm, NULL, INTEGER, "valueOf",
+                    "(Ljava/lang/String;)Ljava/lang/Integer;", a);
+    OK_MSG(o != NULL && nj_call_int(vm, o, INTEGER, "intValue", "()I",
+                                    NULL) == 42,
+           "Integer.valueOf(\"42\").intValue() is 42");
+    a[0] = vref(nj_string_new(vm, "4x"));
+    o = nj_call_ref(vm, NULL, INTEGER, "valueOf",
+                    "(Ljava/lang/String;)Ljava/lang/Integer;", a);
+    OK_MSG(o == NULL && nj_has_exception(vm),
+           "Integer.valueOf(\"4x\") throws");
+    nj_clear_exception(vm);
+
+    /* The 64-bit parse has to hold the whole range, in both directions. */
+    OK_MSG(static_from_string(vm, LONGW, "parseLong", "(Ljava/lang/String;)J",
+                              "9223372036854775807",
+                              &threw).j == 0x7FFFFFFFFFFFFFFFLL && !threw,
+           "parseLong(\"9223372036854775807\") is the maximum");
+    (void)static_from_string(vm, LONGW, "parseLong", "(Ljava/lang/String;)J",
+                             "9223372036854775808", &threw);
+    OK_MSG(threw, "parseLong(\"9223372036854775808\") is out of range");
+    OK_MSG(static_from_string(vm, LONGW, "parseLong", "(Ljava/lang/String;)J",
+                              "-9223372036854775808",
+                              &threw).j == -0x7FFFFFFFFFFFFFFFLL - 1 && !threw,
+           "parseLong(\"-9223372036854775808\") is the minimum");
+    a[0] = vref(nj_string_new(vm, "ff"));
+    a[1] = vint(16);
+    r.bits = 0u;
+    OK_MSG(nj_call_static(vm, LONGW, "parseLong", "(Ljava/lang/String;I)J",
+                          a, &r) == NJ_OK && r.j == 255,
+           "parseLong(\"ff\",16) is 255");
+
+    OK_MSG(static_from_string(vm, SHORTW, "parseShort",
+                              "(Ljava/lang/String;)S", "32767", &threw).i == 32767
+               && !threw,
+           "parseShort(\"32767\") is the maximum");
+    (void)static_from_string(vm, SHORTW, "parseShort",
+                             "(Ljava/lang/String;)S", "32768", &threw);
+    OK_MSG(threw, "parseShort(\"32768\") is out of range");
+    OK_MSG(static_from_string(vm, BYTEW, "parseByte",
+                              "(Ljava/lang/String;)B", "-128", &threw).i == -128
+               && !threw,
+           "parseByte(\"-128\") is the minimum");
+    (void)static_from_string(vm, BYTEW, "parseByte",
+                             "(Ljava/lang/String;)B", "128", &threw);
+    OK_MSG(threw, "parseByte(\"128\") is out of range");
+
+    a[0] = vint((nj_s4)'7');
+    a[1] = vint(10);
+    r.bits = 0u;
+    OK_MSG(nj_call_static(vm, CHARW, "digit", "(CI)I", a, &r) == NJ_OK
+               && r.i == 7,
+           "Character.digit('7',10) is 7");
+    a[0] = vint((nj_s4)'f');
+    a[1] = vint(16);
+    OK_MSG(nj_call_static(vm, CHARW, "digit", "(CI)I", a, &r) == NJ_OK
+               && r.i == 15,
+           "Character.digit('f',16) is 15");
+    a[0] = vint((nj_s4)'G');
+    OK_MSG(nj_call_static(vm, CHARW, "digit", "(CI)I", a, &r) == NJ_OK
+               && r.i == -1,
+           "Character.digit('G',16) is -1");
+
+    /* A wrapper is a bit box: the constructor stores the bits, so the value
+     * survives, NaN stays NaN, and the bit conversions agree with it.  The
+     * constructor used to write a C cast of the float into an int field. */
+    a[0] = vfloat(3.5f);
+    o = construct(vm, FLOATW, "(F)V", a, "Float(3.5f)");
+    r.bits = 0u;
+    OK_MSG(o != NULL
+               && nj_call(vm, o, FLOATW, "floatValue", "()F", NULL, &r) == NJ_OK
+               && r.f == 3.5f,
+           "new Float(3.5f).floatValue() is 3.5f");
+    a[0] = vfloat(0.0f / 0.0f);
+    o = construct(vm, FLOATW, "(F)V", a, "Float(NaN)");
+    OK_MSG(o != NULL && nj_call_int(vm, o, FLOATW, "isNaN", "()Z", NULL) == 1,
+           "new Float(NaN).isNaN() is true");
+    OK_MSG(o != NULL
+               && nj_call_int(vm, o, FLOATW, "isInfinite", "()Z", NULL) == 0,
+           "new Float(NaN).isInfinite() is false");
+
+    a[0] = vint(0x3F800000);
+    r.bits = 0u;
+    OK_MSG(nj_call_static(vm, FLOATW, "intBitsToFloat", "(I)F", a, &r) == NJ_OK
+               && r.f == 1.0f,
+           "Float.intBitsToFloat(0x3F800000) is 1.0f");
+    a[0] = vfloat(1.0f);
+    OK_MSG(nj_call_static(vm, FLOATW, "floatToIntBits", "(F)I", a, &r) == NJ_OK
+               && (nj_u4)r.i == 0x3F800000u,
+           "Float.floatToIntBits(1.0f) is 0x3F800000");
+    a[0] = vfloat(0.0f / 0.0f);
+    OK_MSG(nj_call_static(vm, FLOATW, "floatToIntBits", "(F)I", a, &r) == NJ_OK
+               && (nj_u4)r.i == 0x7FC00000u,
+           "floatToIntBits(NaN) is the canonical quiet NaN");
+
+    a[0] = vref(nj_string_new(vm, "2.5"));
+    o = nj_call_ref(vm, NULL, DOUBLEW, "valueOf",
+                    "(Ljava/lang/String;)Ljava/lang/Double;", a);
+    r.bits = 0u;
+    OK_MSG(o != NULL
+               && nj_call(vm, o, DOUBLEW, "doubleValue", "()D", NULL,
+                          &r) == NJ_OK
+               && r.d == 2.5,
+           "Double.valueOf(\"2.5\").doubleValue() is 2.5");
+    a[0] = vref(nj_string_new(vm, "2.5x"));
+    o = nj_call_ref(vm, NULL, DOUBLEW, "valueOf",
+                    "(Ljava/lang/String;)Ljava/lang/Double;", a);
+    OK_MSG(o == NULL && nj_has_exception(vm), "Double.valueOf(\"2.5x\") throws");
+    nj_clear_exception(vm);
+
+    /* append(double) on both buffers, so a title that prints a score as a
+     * double gets a line rather than a NoSuchMethodError. */
+    a[0] = vref(nj_string_new(vm, "x="));
+    sb = construct(vm, SBUF, "(Ljava/lang/String;)V", a, "StringBuffer(\"x=\")");
+    a[0] = vdouble(2.5);
+    OK_MSG(sb != NULL
+               && nj_call_ref(vm, sb, SBUF, "append",
+                              "(D)Ljava/lang/StringBuffer;", a) == sb,
+           "StringBuffer.append(double) returns the buffer");
+    s = nj_call_ref(vm, sb, SBUF, "toString", "()Ljava/lang/String;", NULL);
+    OK_MSG(s != NULL && nj_string_equals_utf8(s, "x=2.5"),
+           "StringBuffer(\"x=\").append(2.5) is \"x=2.5\"");
+
+    /* println(Object) and println(boolean): the assertion is that they return
+     * cleanly.  The text itself goes to the host's stdout, like the runtime's
+     * own diagnostics. */
+    o = nj_object_new(vm, "java/io/PrintStream");
+    a[0] = vref(NULL);
+    OK_MSG(o != NULL
+               && nj_call(vm, o, "java/io/PrintStream", "println",
+                          "(Ljava/lang/Object;)V", a, NULL) == NJ_OK,
+           "println((Object)null) writes a line");
+    a[0] = vint(0);
+    OK_MSG(o != NULL
+               && nj_call(vm, o, "java/io/PrintStream", "println", "(Z)V", a,
+                          NULL) == NJ_OK,
+           "println(false) writes a line");
+    clean(vm, "print");
+
+    clean(vm, "numbers");
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 int main(void)
@@ -610,6 +859,7 @@ int main(void)
     test_skips(vm);
     test_media(vm);
     test_strings(vm);
+    test_numbers(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

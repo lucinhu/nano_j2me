@@ -236,6 +236,40 @@ NJFN(ps_print_str)
     return NJ_OK;
 }
 
+/* println(Object) and println(boolean) - the two shapes a game reaches for
+ * when it dumps a score to System.out during development.  Without them the
+ * call is a NoSuchMethodError in the middle of a debug print. */
+NJFN(ps_println_obj)
+{
+    nj_ref o = NJ_ARG_REF(args, 0);
+
+    if (!o) {
+        static const nj_u2 null_s[] = { 'n', 'u', 'l', 'l' };
+        ps_write_chars(vm, null_s, 4u);
+    } else {
+        nj_ref s = nj_call_ref(vm, o, "java/lang/Object", "toString",
+                               "()Ljava/lang/String;", NULL);
+        if (!s) {
+            return NJ_ERR;
+        }
+        ps_write_chars(vm, nj_string_chars(s), nj_string_len(s));
+    }
+    return NJ_CALL(ps_println, vm, th, args, ret);
+}
+
+NJFN(ps_println_bool)
+{
+    static const nj_u2 true_s[] = { 't', 'r', 'u', 'e' };
+    static const nj_u2 false_s[] = { 'f', 'a', 'l', 's', 'e' };
+
+    if (NJ_ARG_INT(args, 0)) {
+        ps_write_chars(vm, true_s, 4u);
+    } else {
+        ps_write_chars(vm, false_s, 5u);
+    }
+    return NJ_CALL(ps_println, vm, th, args, ret);
+}
+
 NJFN(ps_println_int)
 {
     nj_ref s = nj_string_new_from_int(vm, NJ_ARG_INT(args, 0));
@@ -387,7 +421,9 @@ static const nj_builtin_method system_methods[] = {
 static const nj_builtin_method printstream_methods[] = {
     M("println",  "()V",                    0),
     M("println",  "(Ljava/lang/String;)V",  0),
+    M("println",  "(Ljava/lang/Object;)V",  0),
     M("println",  "(I)V",                   0),
+    M("println",  "(Z)V",                   0),
     M("print",    "(Ljava/lang/String;)V",  0),
     M("print",    "(C)V",                   0),
     M("print",    "(I)V",                   0),
@@ -437,6 +473,8 @@ const nj_native_entry nj_lib_system_table[] = {
 
     { "java/io/PrintStream", "println", "()V",                    ps_println },
     { "java/io/PrintStream", "println", "(Ljava/lang/String;)V",  ps_println_str },
+    { "java/io/PrintStream", "println", "(Ljava/lang/Object;)V",  ps_println_obj },
+    { "java/io/PrintStream", "println", "(Z)V",                   ps_println_bool },
     { "java/io/PrintStream", "println", "(I)V",                   ps_println_int },
     { "java/io/PrintStream", "print",   "(Ljava/lang/String;)V",  ps_print_str },
     { "java/io/PrintStream", "print",   "(C)V",                   ps_print_char },
