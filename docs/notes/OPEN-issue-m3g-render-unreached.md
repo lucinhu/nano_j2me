@@ -46,9 +46,21 @@ error: 格式 '%lu' expects argument of type 'long unsigned int',
 
 * `Graphics3D.render()` is implemented and draws through `nj_m3g_raster_mesh`,
   but no title in the corpus calls it, so the path is exercised only by
-  `tests/test_m3g.c`.  Why the titles stop short of it is not known: the one
-  throw they all share is a `NullPointerException` inside their own
-  `bc.a(I)Ljavax/microedition/m3g/Node;`, which is their resource lookup, not
-  our API.
+  `tests/test_m3g.c`.  **Where the titles stop is now measured**, by putting a
+  `nj_logf` at the top of the three entry points and counting the lines:
+
+  | title | `Graphics3D.getInstance()` | `bindTarget()` | `setCamera()` | `clear()` | `Loader.load()` |
+  |---|---|---|---|---|---|
+  | 极品飞车之无间风云FX中文版_4518 | 1 | 1 | 0 | 0 | 3 |
+  | 3D城市桌球_8299 | 1 | 1 | 0 | 0 | 1 |
+  | 鬼泣3D中文版_3376 | 0 | 0 | 0 | 0 | 0 |
+
+  So the games do reach the API, get an instance, bind a target, and load a
+  container - and then stop before configuring a camera or rendering anything.
+  The `Loader.load()` array is not the reason: counting the slots it fills
+  gives `nobj=1 nulls=0` for Most Wanted and `nobj=52 nulls=0` for 3D城市桌球,
+  so nothing is left null for a game to trip over.  What they hit next is a
+  `NullPointerException` in their own code (`bc.a(I)Ljavax/microedition/m3g/Node;
+  pc=12`, `c.n()V pc=107`), which is the resource lookup described above.
 * The lesson generalises past this column: an instrument that is never
   cross-checked against a second, independent reading is not an instrument.
