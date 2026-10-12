@@ -327,6 +327,8 @@ static const nj_builtin_method xf_methods[] = {
     M("rotationZ", "(I)V", 0),
     M("multiply", "(L" NJ_C_XF ";L" NJ_C_XF ";)V", 0),
     M("multiply", "(L" NJ_C_XF ";)V", 0),
+    /* The short spelling of the same operation; 浴火银河 uses this one. */
+    M("mul", "(L" NJ_C_XF ";)V", 0),
     M("setViewTrans", "(L" NJ_C_V3 ";L" NJ_C_V3 ";L" NJ_C_V3 ";)V", 0),
     M("transform", "(L" NJ_C_V3 ";)V", 0),
     M("translation", "(L" NJ_C_V3 ";)V", 0)
@@ -584,6 +586,11 @@ NJFN(mascot_u3d_sqrt)
 
 static const nj_builtin_method fig_methods[] = {
     M("<init>", "()V", 0),
+    /*
+     * Figure(byte[] data): the model itself.  浴火银河 builds its figures this
+     * way and cannot proceed without it.
+     */
+    M("<init>", "([B)V", 0),
     M("setTexture", "(L" NJ_C_TEX ";)V", 0),
     M("setTexture", "([L" NJ_C_TEX ";)V", 0),
     M("setPosture", "(L" NJ_C_AT ";II)V", 0),
@@ -591,6 +598,7 @@ static const nj_builtin_method fig_methods[] = {
 };
 
 static const nj_builtin_field fig_fields[] = {
+    { "_data", "[B", 0 },
     { "_tex", "L" NJ_C_TEX ";", 0 },
     { "_texs", "[L" NJ_C_TEX ";", 0 },
     { "_tbl", "L" NJ_C_AT ";", 0 },
@@ -665,13 +673,23 @@ static const nj_builtin_field fx_fields[] = {
 
 static const nj_builtin_method at_methods[] = {
     M("<init>", "([BII)V", 0),
+    /* The same model data, handed over whole rather than as a slice. */
+    M("<init>", "([B)V", 0),
     M("getNumFrame", "(I)I", 0),
     M("getFrameValue", "(II)I", 0)
 };
 
 static const nj_builtin_field at_fields[] = {
+    { "_data", "[B", 0 },
     { "_n", "I", 0 }, { "_pat", "I", 0 }
 };
+
+/* See mascot_fig_data: the pose table's bytes are kept, not understood. */
+NJFN(mascot_at_data)
+{
+    m3_set_ref(vm, NJ_THIS(args), "_data", "[B", NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
 
 static const nj_builtin_method g3d_methods[] = {
     M("<init>", "()V", 0),
@@ -696,6 +714,23 @@ NJFN(mascot_noop)
 }
 
 /* Figure */
+/*
+ * The model bytes are a Micro3D model file in a layout this runtime has no
+ * documentation for, and there is no reference render of any corpus title to
+ * check a parser against.  Keeping the bytes instead of throwing means a title
+ * gets past the constructor and keeps running -- it does NOT mean the model is
+ * understood, and renderFigure still draws nothing.
+ *
+ * This is the same choice as Sound.play and DeviceControl: accept the call,
+ * keep what was given, and say plainly what is missing rather than inventing a
+ * model that would make the picture wrong in a way nobody can debug.
+ */
+NJFN(mascot_fig_data)
+{
+    m3_set_ref(vm, NJ_THIS(args), "_data", "[B", NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
 NJFN(mascot_fig_tex)
 {
     m3_set_ref(vm, NJ_THIS(args), "_tex", "L" NJ_C_TEX ";", NJ_ARG_REF(args, 0));
@@ -1074,7 +1109,9 @@ NJFN(mascot_g3d_renderPrimitives)
                    ((nj_s4 *)ya->u.bytes)[i + 1], ((nj_s4 *)za->u.bytes)[i + 1], &x2, &y2);
         m3_project(m, kx, ky, cx, cy, ((nj_s4 *)xa->u.bytes)[i + 2],
                    ((nj_s4 *)ya->u.bytes)[i + 2], ((nj_s4 *)za->u.bytes)[i + 2], &x3, &y3);
-        (void)nj_midp_gfx_triangle(vm, g, x1, y1, x2, y2, x3, y3, colour);
+        if (nj_midp_gfx_triangle(vm, g, x1, y1, x2, y2, x3, y3, colour)) {
+            vm->tris++;
+        }
     }
     return NJ_OK;
 }
@@ -1126,6 +1163,7 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_XF, "rotationZ", "(I)V", mascot_xf_rot_z },
     { NJ_C_XF, "multiply", "(L" NJ_C_XF ";L" NJ_C_XF ";)V", mascot_xf_multiply },
     { NJ_C_XF, "multiply", "(L" NJ_C_XF ";)V", mascot_xf_multiply_in },
+    { NJ_C_XF, "mul", "(L" NJ_C_XF ";)V", mascot_xf_multiply_in },
     { NJ_C_XF, "setViewTrans", "(L" NJ_C_V3 ";L" NJ_C_V3 ";L" NJ_C_V3 ";)V", mascot_xf_set_view },
     { NJ_C_XF, "transform", "(L" NJ_C_V3 ";)V", mascot_xf_transform },
     { NJ_C_XF, "translation", "(L" NJ_C_V3 ";)V", mascot_xf_translation },
@@ -1134,6 +1172,7 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_U3D, "sqrt", "(I)I", mascot_u3d_sqrt },
 
     { NJ_C_FIG, "<init>", "()V", mascot_noop },
+    { NJ_C_FIG, "<init>", "([B)V", mascot_fig_data },
     { NJ_C_FIG, "setTexture", "(L" NJ_C_TEX ";)V", mascot_fig_tex },
     { NJ_C_FIG, "setTexture", "([L" NJ_C_TEX ";)V", mascot_fig_texs },
     { NJ_C_FIG, "setPosture", "(L" NJ_C_AT ";II)V", mascot_fig_posture },
@@ -1164,6 +1203,7 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_FX, "setSemiTransparentEnabled", "(Z)V", mascot_fx_semi },
 
     { NJ_C_AT, "<init>", "([BII)V", mascot_at_init },
+    { NJ_C_AT, "<init>", "([B)V", mascot_at_data },
     { NJ_C_AT, "getNumFrame", "(I)I", mascot_at_num_frame },
     { NJ_C_AT, "getFrameValue", "(II)I", mascot_at_frame_value },
 

@@ -268,6 +268,7 @@ typedef struct nj_vm_stats {
     nj_u8   paints;         /* paint() calls.  A game that presents frames
                              * without painting anything looks exactly like
                              * a game that draws - until you count. */
+    nj_u8   tris;           /* triangles the 3D rasterizer filled */
     nj_u8   gfx_calls;      /* javax.microedition.lcdui.Graphics method
                              * calls, counted where the Graphics is loaded
                              * from the Java object.  paints says the game

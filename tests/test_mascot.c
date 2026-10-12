@@ -466,7 +466,7 @@ int main(void)
         (void)call(vm, g3, G3D, "renderPrimitives",
                    "(L" TEX ";IIL" FL ";L" FX ";II[I[I[I[I)V", a11, &r);
         nj_vm_get_stats(vm, &after);
-        check(after.gfx_calls == before.gfx_calls,
+        check(after.tris == before.tris,
               "with no Graphics bound, renderPrimitives draws nothing");
 
         /* Bind a real Image graphics and draw the same triangle. */
@@ -496,7 +496,7 @@ int main(void)
                     (void)call(vm, g3, G3D, "renderPrimitives",
                                "(L" TEX ";IIL" FL ";L" FX ";II[I[I[I[I)V", a11, &r);
                     nj_vm_get_stats(vm, &after);
-                    check(after.gfx_calls > before.gfx_calls,
+                    check(after.tris > before.tris,
                           "a bound Graphics gets the projected triangle");
                 }
             }

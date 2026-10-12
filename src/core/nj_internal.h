@@ -499,6 +499,13 @@ struct nj_vm {
     nj_u8      native_calls;
     nj_u8      frames;          /* frames presented to the port */
     nj_u8   paints;         /* paint() calls - see nj_midp_paint */
+    /*
+     * Triangles the Mascot Capsule rasterizer has projected and filled.  Kept
+     * apart from gfx_calls because a 2D title calls the Graphics constantly and
+     * rasterizes nothing: without this the two are indistinguishable, and "did
+     * the 3D path run" is a guess rather than an observation.
+     */
+    nj_u8   tris;
     nj_u8   gfx_calls;      /* Graphics method calls that loaded the
                              * surface.  paints=N with gfx_calls=0 says the
                              * game painted and drew nothing; gfx_calls high
