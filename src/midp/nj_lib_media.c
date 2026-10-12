@@ -61,6 +61,8 @@
 #define NJ_C_MANAGER  "javax/microedition/media/Manager"
 #define NJ_C_PLISTEN  "javax/microedition/media/PlayerListener"
 #define NJ_C_MEXC     "javax/microedition/media/MediaException"
+#define NJ_C_CONTROL  "javax/microedition/media/Control"
+#define NJ_C_CONTROLLABLE "javax/microedition/media/Controllable"
 #define NJ_C_TONE     "javax/microedition/media/control/ToneControl"
 #define NJ_C_VOLUME   "javax/microedition/media/control/VolumeControl"
 
@@ -1531,6 +1533,16 @@ static const nj_builtin_method listener_methods[] = {
       NJ_ACC_ABSTRACT)
 };
 
+/* Controllable is how a game reaches a control without knowing the concrete
+ * type: it declares both methods, and the Player supplies them.  Titles call
+ * it as `((Controllable) player).getControl("VolumeControl")` - and several
+ * call the interface method straight on the Player, without a cast, so all
+ * that is needed is for the interface and its methods to exist. */
+static const nj_builtin_method controllable_methods[] = {
+    M("getControl",  "(Ljava/lang/String;)L" NJ_C_CONTROL ";", NJ_ACC_ABSTRACT),
+    M("getControls", "()[L" NJ_C_CONTROL ";", NJ_ACC_ABSTRACT)
+};
+
 static const nj_builtin_method toneseq_methods[] = {
     M("setToneSequence", "([B)V", 0),
     M("getToneSequence", "()[B", 0),
@@ -1561,6 +1573,15 @@ const nj_builtin_class nj_lib_media_classes[] = {
     { NJ_C_PLISTEN, NULL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
       NULL, 0u, listener_methods,
       (nj_u2)(sizeof(listener_methods) / sizeof(listener_methods[0])) },
+    /* Control is a marker interface, and it has to exist even though it
+     * declares nothing: Player.getControl's descriptor names it, and a game
+     * that assigns the result to a Control local resolves the class. */
+    { NJ_C_CONTROL, NULL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, NULL, 0u },
+    { NJ_C_CONTROLLABLE, NULL,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, controllable_methods,
+      (nj_u2)(sizeof(controllable_methods) / sizeof(controllable_methods[0])) },
     { NJ_C_TONE, "java/lang/Object", NJ_ACC_PUBLIC,
       ctl_fields,
       (nj_u2)(sizeof(ctl_fields) / sizeof(ctl_fields[0])), toneseq_methods,

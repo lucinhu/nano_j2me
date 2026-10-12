@@ -408,6 +408,25 @@ static void test_media(nj_vm *vm)
         g_pass++;
         nj_clear_exception(vm);
     }
+
+    /*
+     * Controllable and Control have to exist even though the Player is what
+     * answers: a title writes `((Controllable) player).getControl(...)`, and
+     * some call the interface method straight on the Player.  Resolving that
+     * reference is what used to raise NoClassDefFoundError, before any cast.
+     */
+    OK_MSG(nj_class_lookup(vm, "javax/microedition/media/Controllable") != NULL,
+           "javax/microedition/media/Controllable exists");
+    OK_MSG(nj_class_lookup(vm, "javax/microedition/media/Control") != NULL,
+           "javax/microedition/media/Control exists");
+    a[0] = vref(nj_string_new(vm, "VolumeControl"));
+    ret.bits = 0u;
+    OK_MSG(nj_call(vm, player, "javax/microedition/media/Controllable",
+                   "getControl",
+                   "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
+                   a, &ret) == NJ_OK && ret.r != NULL,
+           "the Player answers Controllable.getControl");
+    clean(vm, "Controllable");
     clean(vm, "media controls");
 }
 
