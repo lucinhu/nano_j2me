@@ -87,6 +87,21 @@ long nj_port_headless_pcm_frames(const nj_port *port);  /* frames accepted */
 int  nj_port_headless_pcm_opens(const nj_port *port);
 int  nj_port_headless_pcm_format(const nj_port *port, int *rate, int *channels);
 int  nj_port_headless_pcm_closes(const nj_port *port);
+/*
+ * File activity, so a test can tell "saved the score" from "silently did
+ * nothing".  RecordStore and FileConnection are otherwise indistinguishable
+ * from a MIDlet that never touched them: both are the same sequence of frames.
+ * -1 means the port is not a headless one, which is different from 0, which
+ * means it is one and the MIDlet really did no file IO.
+ */
+int  nj_port_headless_file_opens(const nj_port *port);
+int  nj_port_headless_file_closes(const nj_port *port);
+int  nj_port_headless_file_reads(const nj_port *port);
+int  nj_port_headless_file_writes(const nj_port *port);
+long nj_port_headless_bytes_read(const nj_port *port);
+long nj_port_headless_bytes_written(const nj_port *port);
+const char *nj_port_headless_last_path(const nj_port *port);   /* NULL if none */
+const char *nj_port_headless_last_mode(const nj_port *port);
 
 #ifdef __cplusplus
 }

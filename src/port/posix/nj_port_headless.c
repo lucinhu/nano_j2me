@@ -83,6 +83,25 @@ typedef struct nj_headless_state {
     long   pcm_frames;       /* frames accepted, total */
     int    pcm_rate;
     int    pcm_channels;
+
+    /*
+     * Files, for the same reason as the audio counters above.
+     *
+     * RecordStore and FileConnection both go through the port's file hooks
+     * (see src/midp/nj_lib_rms.c), and both are otherwise invisible from
+     * outside: a MIDlet that saves a high score and one that silently fails to
+     * are the same sequence of frames.  A test can only tell them apart by
+     * asserting on what the port was asked to write, so the port has to expose
+     * it.
+     */
+    int    file_opens;
+    int    file_closes;
+    int    file_reads;
+    int    file_writes;
+    long   bytes_read;
+    long   bytes_written;
+    char   file_last_path[256];   /* last path opened, for a direct assertion */
+    char   file_last_mode[8];
 } nj_headless_state;
 
 #define HS(ud) ((nj_headless_state *)(ud))
@@ -364,6 +383,153 @@ static void hl_dir_close(void *ud, void *handle)
 }
 
 /* ------------------------------------------------------------------ */
+/* Files                                                               */
+/* ------------------------------------------------------------------ */
+/*
+ * stdio, with the FILE* hidden behind nj_file.handle.
+ *
+ * The headless port left these hooks NULL for a long time, which is not the
+ * harmless omission it looks like: RecordStore and FileConnection both check
+ * `port->file_open` before doing anything (src/midp/nj_lib_rms.c), so on this
+ * port a MIDlet's saves and its file reads were silently skipped rather than
+ * failing.  The suite did not catch it because tests/test_fs.c brings its own
+ * port; every headless corpus run since has been running without a filesystem.
+ *
+ * Paths arrive already resolved against the port's fs_dir by the runtime, so
+ * this layer adds no sandbox of its own - the sandbox that matters is the one
+ * that knows which paths a MIDlet is allowed to name, and that lives in
+ * src/midp/nj_lib_fc.c.
+ */
+static void hl_note_path(nj_headless_state *s, const char *name, const char *mode)
+{
+    nj_size n = 0;
+
+    if (!s) {
+        return;
+    }
+    if (name) {
+        while (name[n] && n + 1u < sizeof(s->file_last_path)) {
+            s->file_last_path[n] = name[n];
+            n++;
+        }
+    }
+    s->file_last_path[n] = '\0';
+
+    n = 0;
+    if (mode) {
+        while (mode[n] && n + 1u < sizeof(s->file_last_mode)) {
+            s->file_last_mode[n] = mode[n];
+            n++;
+        }
+    }
+    s->file_last_mode[n] = '\0';
+}
+
+static int hl_file_open(void *ud, const char *name, const char *mode,
+                        nj_file *out)
+{
+    nj_headless_state *s = HS(ud);
+    FILE *fp;
+
+    if (!name || !out) {
+        return -1;
+    }
+    fp = fopen(name, mode ? mode : "rb");
+    if (!fp) {
+        return -1;
+    }
+    out->handle = (void *)fp;
+    out->pos = 0u;
+    out->size = 0u;
+    {
+        struct stat st;
+        if (stat(name, &st) == 0 && st.st_size > 0) {
+            out->size = (nj_u4)st.st_size;
+        }
+    }
+    s->file_opens++;
+    hl_note_path(s, name, mode);
+    return 0;
+}
+
+static nj_s4 hl_file_read(void *ud, nj_file *f, void *buf, nj_u4 n)
+{
+    nj_headless_state *s = HS(ud);
+    size_t got;
+
+    if (!f || !f->handle || !buf || n == 0u) {
+        return 0;
+    }
+    got = fread(buf, 1u, (size_t)n, (FILE *)f->handle);
+    f->pos += (nj_u4)got;
+    s->file_reads++;
+    s->bytes_read += (long)got;
+    return (nj_s4)got;
+}
+
+static nj_s4 hl_file_write(void *ud, nj_file *f, const void *buf, nj_u4 n)
+{
+    nj_headless_state *s = HS(ud);
+    size_t put;
+
+    if (!f || !f->handle || !buf || n == 0u) {
+        return 0;
+    }
+    put = fwrite(buf, 1u, (size_t)n, (FILE *)f->handle);
+    f->pos += (nj_u4)put;
+    if (f->pos > f->size) {
+        f->size = f->pos;
+    }
+    s->file_writes++;
+    s->bytes_written += (long)put;
+    return (nj_s4)put;
+}
+
+static void hl_file_close(void *ud, nj_file *f)
+{
+    nj_headless_state *s = HS(ud);
+
+    if (!f || !f->handle) {
+        return;
+    }
+    fclose((FILE *)f->handle);
+    f->handle = NULL;
+    s->file_closes++;
+}
+
+static int hl_file_seek(void *ud, nj_file *f, nj_u4 pos)
+{
+    (void)ud;
+    if (!f || !f->handle) {
+        return -1;
+    }
+    if (fseek((FILE *)f->handle, (long)pos, SEEK_SET) != 0) {
+        return -1;
+    }
+    f->pos = pos;
+    return 0;
+}
+
+static int hl_file_remove(void *ud, const char *name)
+{
+    (void)ud;
+    if (!name) {
+        return -1;
+    }
+    return remove(name) == 0 ? 0 : -1;
+}
+
+static int hl_file_exists(void *ud, const char *name)
+{
+    struct stat st;
+    (void)ud;
+    if (!name) {
+        return 0;
+    }
+    return stat(name, &st) == 0 ? 1 : 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Audio: recorded, not played                                         */
 /* ------------------------------------------------------------------ */
 static int hl_tone_play(void *ud, const nj_audio_tone *tones, int count)
@@ -467,6 +633,46 @@ int nj_port_headless_pcm_format(const nj_port *p, int *rate, int *channels)
     if (rate) { *rate = HS(p->ud)->pcm_rate; }
     if (channels) { *channels = HS(p->ud)->pcm_channels; }
     return 0;
+}
+
+int nj_port_headless_file_opens(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->file_opens : -1;
+}
+
+int nj_port_headless_file_closes(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->file_closes : -1;
+}
+
+int nj_port_headless_file_reads(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->file_reads : -1;
+}
+
+int nj_port_headless_file_writes(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->file_writes : -1;
+}
+
+long nj_port_headless_bytes_read(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->bytes_read : -1;
+}
+
+long nj_port_headless_bytes_written(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->bytes_written : -1;
+}
+
+const char *nj_port_headless_last_path(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->file_last_path : NULL;
+}
+
+const char *nj_port_headless_last_mode(const nj_port *p)
+{
+    return (p && p->ud) ? HS(p->ud)->file_last_mode : NULL;
 }
 
 static void hl_log(void *ud, int level, const char *msg)
@@ -622,6 +828,13 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     out->dir_open = hl_dir_open;
     out->dir_next = hl_dir_next;
     out->dir_close = hl_dir_close;
+    out->file_open = hl_file_open;
+    out->file_read = hl_file_read;
+    out->file_write = hl_file_write;
+    out->file_seek = hl_file_seek;
+    out->file_close = hl_file_close;
+    out->file_remove = hl_file_remove;
+    out->file_exists = hl_file_exists;
     out->input_push = hl_input_push;
     out->tone_play = hl_tone_play;
     out->tone_stop = hl_tone_stop;

@@ -24,10 +24,32 @@
 /* ------------------------------------------------------------------ */
 /* java.lang.String                                                    */
 /* ------------------------------------------------------------------ */
+
+/*
+ * Install the characters a String constructor just produced.
+ *
+ * `new` hands out a plain instance, because the kind tag describes an object's
+ * representation and a String has none until its constructor runs - so the
+ * constructor is what has to say what the object became.  nj_string_set_chars
+ * (which allocates the char[] and sets NJ_STR_WRAPPED) insists the kind already
+ * be STRING, and nothing in the runtime ever set it for a `new`ed String: the
+ * only writer was the internal factory.  Every one of the six constructors
+ * therefore failed with NJ_ERR, which their callers could only report as
+ * OutOfMemoryError.  A corpus title hit exactly that, inside
+ * new String(byte[], "UTF-8"), and reported it as an out-of-memory at 400 KB.
+ */
+static nj_status str_install(nj_vm *vm, nj_ref s, const nj_u2 *chars, nj_u4 len)
+{
+    if (s) {
+        s->kind = NJ_OBJ_STRING;
+    }
+    return nj_string_set_chars(vm, s, chars, len);
+}
+
 NJFN(str_init)
 {
     static const nj_u2 empty = 0u;
-    if (nj_string_set_chars(vm, NJ_THIS(args), &empty, 0u) != NJ_OK) {
+    if (str_install(vm, NJ_THIS(args), &empty, 0u) != NJ_OK) {
         return nj_throw_oom(vm);
     }
     return NJ_OK;
@@ -39,7 +61,7 @@ NJFN(str_init_str)
     if (!src) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    if (nj_string_set_chars(vm, NJ_THIS(args), nj_string_chars(src),
+    if (str_install(vm, NJ_THIS(args), nj_string_chars(src),
                             nj_string_len(src)) != NJ_OK) {
         return nj_throw_oom(vm);
     }
@@ -52,7 +74,7 @@ NJFN(str_init_chars)
     if (!arr) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    if (nj_string_set_chars(vm, NJ_THIS(args), (const nj_u2 *)arr->u.bytes,
+    if (str_install(vm, NJ_THIS(args), (const nj_u2 *)arr->u.bytes,
                             arr->length) != NJ_OK) {
         return nj_throw_oom(vm);
     }
@@ -71,7 +93,7 @@ NJFN(str_init_chars_range)
     if (off < 0 || cnt < 0 || (nj_u4)(off + cnt) > arr->length) {
         return nj_throw(vm, "java/lang/StringIndexOutOfBoundsException", NULL);
     }
-    if (nj_string_set_chars(vm, NJ_THIS(args),
+    if (str_install(vm, NJ_THIS(args),
                             (const nj_u2 *)arr->u.bytes + off,
                             (nj_u4)cnt) != NJ_OK) {
         return nj_throw_oom(vm);
@@ -92,6 +114,7 @@ NJFN(str_init_chars_range)
  * has no way to find out where it went wrong.
  */
 NJFN(str_init_bytes);      /* defined below; this one delegates to it */
+NJFN(str_init_utf8);       /* ... and a real multi-byte decode does too */
 
 NJFN(str_init_bytes_enc)
 {
@@ -113,20 +136,7 @@ NJFN(str_init_bytes_enc)
                 return nj_throw(vm, "java/io/UnsupportedEncodingException", name);
             }
             if (utf8) {
-                /* Fall through to the byte-per-char path only for ASCII, which
-                 * is the same in both; a real multi-byte decode would need the
-                 * whole thing, and pretending is worse than saying so. */
-                nj_ref arr = NJ_ARG_REF(args, 0);
-                nj_u4 i;
-                if (!arr) {
-                    return nj_throw(vm, "java/lang/NullPointerException", NULL);
-                }
-                for (i = 0u; i < arr->length; i++) {
-                    if (arr->u.bytes[i] >= 0x80u) {
-                        return nj_throw(vm, "java/io/UnsupportedEncodingException",
-                                        "UTF-8 above ASCII is not implemented");
-                    }
-                }
+                return str_init_utf8(vm, th, args, ret);
             }
         }
     }
@@ -152,7 +162,80 @@ NJFN(str_init_bytes)
             tmp[i] = (nj_u2)(nj_u1)arr->u.bytes[i];
         }
     }
-    st = nj_string_set_chars(vm, NJ_THIS(args), tmp, arr->length);
+    st = str_install(vm, NJ_THIS(args), tmp, arr->length);
+    nj_host_free(vm, tmp);
+    if (st != NJ_OK) {
+        return nj_throw_oom(vm);
+    }
+    return NJ_OK;
+}
+
+/*
+ * String(byte[], "UTF-8").
+ *
+ * Decoded here rather than aliased to the byte-per-char path above, because the
+ * two agree only below 0x80 and a title whose Chinese text is UTF-8 renders as
+ * mojibake without it - the corpus found two such titles on the first sweep.
+ *
+ * UTF-8 never expands on the way to UTF-16: the widest sequence, four bytes, is
+ * two code units (a surrogate pair), so the input length is always a sufficient
+ * bound and no second pass is needed.  A malformed sequence becomes U+FFFD, one
+ * per bad sequence, which is what a JVM's decoder substitutes; refusing the
+ * whole string instead would lose the good text around one bad byte.  Overlong
+ * forms are accepted rather than rejected, because the platform is defined to
+ * speak modified UTF-8 elsewhere (C0 80 is how a DataOutput stream writes NUL)
+ * and a title's resource files are written by its own toolchain.
+ */
+NJFN(str_init_utf8)
+{
+    nj_ref arr = NJ_ARG_REF(args, 0);
+    nj_u2 *tmp;
+    nj_u4 i, n = 0u;
+    nj_status st;
+
+    if (!arr) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    tmp = (nj_u2 *)nj_host_alloc(vm, ((nj_size)arr->length + 1u) * sizeof(nj_u2));
+    if (!tmp) {
+        return nj_throw_oom(vm);
+    }
+
+    i = 0u;
+    while (i < arr->length) {
+        nj_u4 c = (nj_u4)(nj_u1)arr->u.bytes[i++];
+
+        if (c < 0x80u) {
+            tmp[n++] = (nj_u2)c;
+        } else if ((c & 0xE0u) == 0xC0u && i < arr->length &&
+                   (arr->u.bytes[i] & 0xC0u) == 0x80u) {
+            nj_u4 c2 = (nj_u4)(nj_u1)arr->u.bytes[i++];
+            tmp[n++] = (nj_u2)(((c & 0x1Fu) << 6) | (c2 & 0x3Fu));
+        } else if ((c & 0xF0u) == 0xE0u && i + 1u < arr->length &&
+                   (arr->u.bytes[i] & 0xC0u) == 0x80u &&
+                   (arr->u.bytes[i + 1u] & 0xC0u) == 0x80u) {
+            nj_u4 c2 = (nj_u4)(nj_u1)arr->u.bytes[i++];
+            nj_u4 c3 = (nj_u4)(nj_u1)arr->u.bytes[i++];
+            tmp[n++] = (nj_u2)(((c & 0x0Fu) << 12) |
+                               ((c2 & 0x3Fu) << 6) | (c3 & 0x3Fu));
+        } else if ((c & 0xF8u) == 0xF0u && i + 2u < arr->length &&
+                   (arr->u.bytes[i] & 0xC0u) == 0x80u &&
+                   (arr->u.bytes[i + 1u] & 0xC0u) == 0x80u &&
+                   (arr->u.bytes[i + 2u] & 0xC0u) == 0x80u) {
+            nj_u4 c2 = (nj_u4)(nj_u1)arr->u.bytes[i++];
+            nj_u4 c3 = (nj_u4)(nj_u1)arr->u.bytes[i++];
+            nj_u4 c4 = (nj_u4)(nj_u1)arr->u.bytes[i++];
+            nj_u4 cp = ((c & 0x07u) << 18) | ((c2 & 0x3Fu) << 12) |
+                       ((c3 & 0x3Fu) << 6) | (c4 & 0x3Fu);
+            cp -= 0x10000u;
+            tmp[n++] = (nj_u2)(0xD800u + (cp >> 10));
+            tmp[n++] = (nj_u2)(0xDC00u + (cp & 0x3FFu));
+        } else {
+            tmp[n++] = 0xFFFDu;
+        }
+    }
+
+    st = str_install(vm, NJ_THIS(args), tmp, n);
     nj_host_free(vm, tmp);
     if (st != NJ_OK) {
         return nj_throw_oom(vm);

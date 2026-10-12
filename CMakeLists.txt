@@ -375,6 +375,14 @@ if(NJ_BUILD_TESTS)
     nj_add_test(test_fs tests/test_fs.c ${NJ_FIXTURES}/fsdemo.jar)
   endif()
 
+  # The other half of the filesystem story: test_fs brings its own port and
+  # proves the runtime's path rules, this one uses the headless port and proves
+  # that a MIDlet's saves are observable from outside it.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_headless_fs.c)
+    nj_add_test(test_headless_fs tests/test_headless_fs.c
+                ${NJ_FIXTURES}/gamedemo.jar)
+  endif()
+
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_port_code.c)
     nj_add_test(test_port_code tests/test_port_code.c)
   endif()
