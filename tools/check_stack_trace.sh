@@ -26,6 +26,13 @@ echo "$out" | grep -c "    at " | grep -qv "^0$" || {
 # The throw site is the other half: printStackTrace() reports where the
 # exception was CAUGHT, and a game that swallows its own exceptions never
 # shows the caller anything else.
+# Class.newInstance() must refuse a package-private class with
+# IllegalAccessException, and say which class: the specification distinguishes
+# it from InstantiationException, and a MIDlet may catch one of the two.
+echo "$out" | grep -q "ACCESS java.lang.IllegalAccessException: ExcHidden" || {
+    echo "FAIL: newInstance() on a package-private class must name it"
+    echo "$out" | grep "ACCESS" | head -2
+    exit 1; }
 echo "$out" | grep -q "thrown: java/lang/NullPointerException at ExcDemo.boom()V pc=" || {
     echo "FAIL: the throw site was not named"
     echo "$out" | grep "thrown:" | head -3

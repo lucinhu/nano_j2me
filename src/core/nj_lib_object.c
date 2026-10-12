@@ -332,6 +332,7 @@ NJFN(class_getResourceAsStream)
 NJFN(class_newInstance)
 {
     nj_class *c = NJ_CLASS_OF(args);
+    nj_method *m;
     nj_u4 mark;
     nj_ref o;
 
@@ -341,8 +342,22 @@ NJFN(class_newInstance)
     if (nj_class_init(vm, c) != NJ_OK) {
         return NJ_ERR;
     }
-    if (!nj_method_lookup(c, "<init>", "()V")) {
+    m = nj_method_lookup(c, "<init>", "()V");
+    if (!m) {
         return nj_throw(vm, "java/lang/InstantiationException", c->name);
+    }
+    /*
+     * ... and IllegalAccessException, not InstantiationException, when the
+     * class or its nullary constructor is not accessible.  That is what the
+     * specification says, and the difference is visible to a MIDlet that
+     * catches one of the two: 1945空战英雄 builds a screen out of a
+     * package-private class, and until this check existed it reported a bare
+     * `IllegalAccessException` with no message -- because the game's own code
+     * threw it after our newInstance() had wrongly succeeded.  Naming the
+     * class is what makes the report actionable.
+     */
+    if (!(c->flags & NJ_ACC_PUBLIC) || !(m->flags & NJ_ACC_PUBLIC)) {
+        return nj_throw(vm, "java/lang/IllegalAccessException", c->name);
     }
     mark = nj_root_mark(vm);
     o = nj_object_new(vm, c->name);

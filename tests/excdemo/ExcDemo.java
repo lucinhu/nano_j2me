@@ -8,6 +8,15 @@ import javax.microedition.midlet.MIDlet;
  * and nothing else - no method, no line, no way to tell which call failed.
  * The corpus had three such titles and the output was useless for all of them.
  */
+/*
+ * Package-private on purpose: Class.newInstance() is specified to refuse it
+ * with IllegalAccessException, and the message must name the class or the
+ * report is another "something went wrong somewhere".
+ */
+class ExcHidden {
+    public ExcHidden() { }
+}
+
 public class ExcDemo extends MIDlet {
     private void boom() {
         Object o = null;
@@ -19,6 +28,11 @@ public class ExcDemo extends MIDlet {
             boom();
         } catch (Exception e) {
             e.printStackTrace();
+        }
+        try {
+            Class.forName("ExcHidden").newInstance();
+        } catch (Exception e) {
+            System.out.println("ACCESS " + e.getClass().getName() + ": " + e.getMessage());
         }
         notifyDestroyed();
     }
