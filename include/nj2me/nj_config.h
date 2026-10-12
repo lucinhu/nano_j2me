@@ -212,9 +212,16 @@
 #  define NJ_MAX_RECORD_STORES 8
 #endif
 
-/* Cooperative thread scheduler. */
+/* Cooperative thread scheduler.
+ *
+ * Was 16, which a real title reached: 生化危机-险境求生_3290 reports
+ * "OutOfMemoryError: too many threads" at exactly that count.  A port that
+ * cannot afford 32 stacks can still set this lower - the ceiling is honest
+ * either way, and what it must not do is be low enough to refuse a game that
+ * a phone from the same era ran.
+ */
 #ifndef NJ_MAX_THREADS
-#  define NJ_MAX_THREADS 16
+#  define NJ_MAX_THREADS 32
 #endif
 
 /* JAR entries held in the loaded app (per-MIDlet-class count). */
