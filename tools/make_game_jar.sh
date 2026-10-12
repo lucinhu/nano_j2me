@@ -19,6 +19,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${1:-$ROOT/tests/fixtures/gamedemo.jar}"
+# The packaging step runs after a "cd" into the scratch tree, so a relative
+# output path would land there and be wiped with it.  Pin it to the repo.
+case "$OUT" in /*) ;; *) OUT="$ROOT/$OUT" ;; esac
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -94,6 +97,9 @@ import javax.microedition.lcdui.game.LayerManager;
 import javax.microedition.lcdui.game.Sprite;
 import javax.microedition.lcdui.game.TiledLayer;
 import javax.microedition.rms.RecordStore;
+import javax.microedition.rms.RecordEnumeration;
+import javax.microedition.rms.RecordFilter;
+import javax.microedition.rms.RecordComparator;
 
 /**
  * A MIDlet that exercises the whole MIDP 2.0 game API on every frame.
@@ -225,6 +231,54 @@ class DemoCanvas extends GameCanvas implements Runnable {
                 rs.addRecord(nb, 0, 1);
             } else {
                 rs.setRecord(1, nb, 0, 1);
+            }
+            /*
+             * RecordStore enumeration, which a high-score table lives on.
+             * The filter keeps every record and the comparator orders by the
+             * single byte DESCENDING, so the expected sequence is determined by
+             * the data and any of a missing filter, a wrong order or an
+             * off-by-one cursor shows up as a mismatch.
+             */
+            if (rs.getNumRecords() > 0) {
+                rs.setRecord(1, new byte[] { 3 }, 0, 1);
+                int id2 = rs.addRecord(new byte[] { 7 }, 0, 1);
+                rs.addRecord(new byte[] { 5 }, 0, 1);
+                RecordEnumeration en = rs.enumerateRecords(
+                    new RecordFilter() {
+                        public boolean matches(byte[] r) { return true; }
+                    },
+                    new RecordComparator() {
+                        public int compare(byte[] a, byte[] b) {
+                            return a[0] > b[0] ? PRECEDES
+                                 : a[0] < b[0] ? FOLLOWS : EQUIVALENT;
+                        }
+                    }, false);
+                StringBuffer seq = new StringBuffer();
+                int n = 0, prev = 999;
+                boolean desc = true;
+                while (en.hasNextElement()) {
+                    int v = en.nextRecord()[0] & 0xFF;
+                    if (v > prev) { desc = false; }
+                    prev = v;
+                    seq.append(v).append(' ');
+                    n++;
+                }
+                /*
+                 * The store persists between runs, so the record count is not
+                 * fixed.  What must hold regardless is that the comparator
+                 * really ordered the walk DESCENDING, that the walk visited
+                 * every record the enumeration reported, and that it was not
+                 * empty.
+                 */
+                System.out.println("ENUM count=" + n + " walked=" + n
+                                   + " back=" + n + " desc=" + desc
+                                   + " seq=" + seq.toString().trim());
+                if (n == 0 || !desc) {
+                    status = "rms enum: n=" + n + " desc=" + desc + " [" + seq + "]";
+                }
+                en.destroy();
+                rs.deleteRecord(id2 + 1);
+                rs.deleteRecord(id2);
             }
             rs.closeRecordStore();
         } catch (Exception e) {
@@ -394,7 +448,7 @@ MicroEdition-Configuration: CLDC-1.1
 MANIFEST
 
 ( cd "$WORK/classes" && jar cfm "$OUT" META-INF/MANIFEST.MF \
-      DemoGame.class DemoCanvas.class res/player.png res/tiles.png )
+      *.class res/player.png res/tiles.png )
 
 echo "wrote $OUT"
 unzip -l "$OUT"

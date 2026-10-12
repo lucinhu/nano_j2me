@@ -111,6 +111,59 @@ static void rs_seti(nj_vm *vm, nj_ref rs, const char *name, nj_s4 v)
     }
 }
 
+/* The enumeration classes.  Defined here, above their first use, and
+ * NOT next to the tables at the bottom where they were first written -
+ * a macro that is used before it is defined is not a macro yet. */
+#define NJ_C_RENUM "javax/microedition/rms/RecordEnumeration"
+#define NJ_C_RFILTER "javax/microedition/rms/RecordFilter"
+#define NJ_C_RCOMP "javax/microedition/rms/RecordComparator"
+
+/*
+ * The rsf/rs_get/rs_geti family looks fields up on RecordStore and nowhere
+ * else, so the enumeration's OWN fields were invisible to them - the same shape
+ * of bug as the field helpers that hardcoded the Player class and the "I"
+ * descriptor.  These take the class explicitly.
+ */
+static nj_field *renumf(nj_vm *vm, const char *name, const char *desc)
+{
+    return nj_field_lookup(vm, NJ_C_RENUM, name, desc, 0);
+}
+
+static nj_ref renum_get(nj_vm *vm, nj_ref o, const char *name, const char *desc)
+{
+    nj_field *f = renumf(vm, name, desc);
+    return f ? nj_field_read_ref(vm, o, f) : NULL;
+}
+
+static nj_s4 renum_geti(nj_vm *vm, nj_ref o, const char *name)
+{
+    nj_field *f = renumf(vm, name, "I");
+    if (!f) {
+        f = renumf(vm, name, "Z");
+    }
+    return f ? nj_field_read_int(vm, o, f) : 0;
+}
+
+static void renum_seti(nj_vm *vm, nj_ref o, const char *name, nj_s4 v)
+{
+    nj_field *f = renumf(vm, name, "I");
+    if (!f) {
+        f = renumf(vm, name, "Z");
+    }
+    if (f) {
+        nj_field_write_int(vm, o, f, v);
+    }
+}
+
+static void renum_setr(nj_vm *vm, nj_ref o, const char *name,
+                       const char *desc, nj_ref v)
+{
+    nj_field *f = renumf(vm, name, desc);
+    if (f) {
+        nj_field_write_ref(vm, o, f, v);
+    }
+}
+
 /* java.util.Vector, called through the usual virtual dispatch. */
 static nj_s4 vec_size(nj_vm *vm, nj_ref v)
 {
@@ -928,6 +981,253 @@ NJFN(rs_listener_noop)
 }
 
 /* ------------------------------------------------------------------ */
+/* RecordEnumeration                                                   */
+/* ------------------------------------------------------------------ */
+/*
+ * MIDP RMS enumeration: filter, order and walk a store's records.
+ *
+ * A game that keeps a high-score table sorts it through a RecordComparator and
+ * reads it back through one of these, and the first real title to try
+ * (五子棋) died on the missing enumerateRecords() before it could load its save
+ * file.
+ *
+ * The enumeration SNAPSHOTS the matching ids when it is created.  MIDP allows a
+ * live view through keepUpdated(true), and that is accepted here but does not
+ * rebuild - a store small enough for a high-score table is rebuilt by the game
+ * far more often than it changes underneath, and pretending to track it would
+ * be worse than saying so.
+ */
+
+NJFN(re_numRecords)
+{
+    nj_ref ids = renum_get(vm, NJ_THIS(args), "reIds", "[I");
+    ret->i = ids ? (nj_s4)ids->length : 0;
+    return NJ_OK;
+}
+
+NJFN(re_hasNext)     { ret->i = (renum_geti(vm, NJ_THIS(args), "rePos") <
+                                 (nj_s4)(renum_get(vm, NJ_THIS(args), "reIds", "[I")
+                                          ? renum_get(vm, NJ_THIS(args), "reIds", "[I")->length : 0u))
+                               ? 1 : 0; return NJ_OK; }
+NJFN(re_hasPrev)     { ret->i = (renum_geti(vm, NJ_THIS(args), "rePos") > 0) ? 1 : 0; return NJ_OK; }
+NJFN(re_reset)       { renum_seti(vm, NJ_THIS(args), "rePos", 0); return NJ_OK; }
+NJFN(re_destroy)     { renum_seti(vm, NJ_THIS(args), "reDestroyed", 1); return NJ_OK; }
+NJFN(re_isKept)      { ret->i = renum_geti(vm, NJ_THIS(args), "reKeep"); return NJ_OK; }
+NJFN(re_keepUpdated) { renum_seti(vm, NJ_THIS(args), "reKeep",
+                             NJ_ARG_INT(args, 0) ? 1 : 0); return NJ_OK; }
+
+NJFN(re_rebuild)
+{
+    /* Accepted, and it does not re-run the filter: see the note above. */
+    renum_seti(vm, NJ_THIS(args), "rePos", 0);
+    return NJ_OK;
+}
+
+/* The record at the cursor, moving it forward or back. */
+static nj_status re_step(nj_vm *vm, nj_value *args, nj_value *ret, int forward)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref ids = renum_get(vm, self, "reIds", "[I");
+    nj_ref rs = renum_get(vm, self, "reStore", "L" NJ_C_RECORDSTORE ";");
+    nj_s4 pos = renum_geti(vm, self, "rePos");
+    nj_s4 n = ids ? (nj_s4)ids->length : 0;
+    nj_s4 id;
+    nj_value a[1];
+    nj_value r;
+
+    if (renum_geti(vm, self, "reDestroyed")) {
+        return nj_throw(vm, "javax/microedition/rms/RecordStoreException",
+                        "the enumeration was destroyed");
+    }
+    if (forward) {
+        if (pos >= n) {
+            return nj_throw(vm, "javax/microedition/rms/InvalidRecordIDException",
+                            "no next record");
+        }
+        id = ((nj_s4 *)ids->u.bytes)[pos];
+        renum_seti(vm, self, "rePos", pos + 1);
+    } else {
+        if (pos <= 0) {
+            return nj_throw(vm, "javax/microedition/rms/InvalidRecordIDException",
+                            "no previous record");
+        }
+        id = ((nj_s4 *)ids->u.bytes)[pos - 1];
+        renum_seti(vm, self, "rePos", pos - 1);
+    }
+    if (!rs) {
+        return nj_throw(vm, "javax/microedition/rms/RecordStoreNotOpenException",
+                        NULL);
+    }
+    a[0].i = id;
+    r.r = NULL;
+    if (nj_call(vm, rs, NJ_C_RECORDSTORE, "getRecord", "(I)[B", a, &r) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = r.r;
+    return NJ_OK;
+}
+
+NJFN(re_nextRecord)     { return re_step(vm, args, ret, 1); }
+NJFN(re_previousRecord) { return re_step(vm, args, ret, 0); }
+
+/* The id at the cursor, without fetching the record. */
+static nj_status re_peek_id(nj_vm *vm, nj_value *args, nj_value *ret, int forward)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref ids = renum_get(vm, self, "reIds", "[I");
+    nj_s4 pos = renum_geti(vm, self, "rePos");
+    nj_s4 n = ids ? (nj_s4)ids->length : 0;
+
+    if (forward) {
+        if (pos >= n) {
+            return nj_throw(vm, "javax/microedition/rms/InvalidRecordIDException",
+                            "no next record");
+        }
+        ret->i = ((nj_s4 *)ids->u.bytes)[pos];
+        renum_seti(vm, self, "rePos", pos + 1);
+    } else {
+        if (pos <= 0) {
+            return nj_throw(vm, "javax/microedition/rms/InvalidRecordIDException",
+                            "no previous record");
+        }
+        ret->i = ((nj_s4 *)ids->u.bytes)[pos - 1];
+        renum_seti(vm, self, "rePos", pos - 1);
+    }
+    return NJ_OK;
+}
+
+NJFN(re_nextId)     { return re_peek_id(vm, args, ret, 1); }
+NJFN(re_previousId) { return re_peek_id(vm, args, ret, 0); }
+
+/*
+ * RecordStore.enumerateRecords(filter, comparator, keepUpdated).
+ *
+ * Filter first, then sort: the comparator is only ever asked about records the
+ * game said it wanted, and a comparator that behaves differently depending on
+ * order would otherwise see a different set.
+ */
+NJFN(rs_enumerateRecords)
+{
+    nj_ref rs = NJ_THIS(args);
+    nj_ref filter = NJ_ARG_REF(args, 0);
+    nj_ref comp = NJ_ARG_REF(args, 1);
+    nj_ref ids;
+    nj_ref out;
+    nj_s4 n, i, keep = 0;
+    nj_s4 *dst;
+
+    if (!rs_is_open(vm, rs)) {
+        return nj_throw(vm, "javax/microedition/rms/RecordStoreNotOpenException",
+                        NULL);
+    }
+    {
+        nj_ref idv = rs_get(vm, rs, NJ_F_RS_IDS, "Ljava/util/Vector;");
+        n = vec_size(vm, idv);
+        ids = nj_array_new(vm, "int", (nj_u4)n);
+        if (!ids) {
+            return nj_throw_oom(vm);
+        }
+        dst = (nj_s4 *)ids->u.bytes;
+        n = 0;
+        for (i = 0; i < vec_size(vm, idv); i++) {
+            nj_ref ido = vec_at(vm, idv, i);
+            nj_s4 id = ido ? nj_call_int(vm, ido, "java/lang/Integer",
+                                         "intValue", "()I", NULL) : 0;
+            if (filter) {
+                nj_value a[1];
+                nj_value r;
+                nj_value ga[1];
+                nj_value gr;
+                ga[0].i = id;
+                gr.r = NULL;
+                if (nj_call(vm, rs, NJ_C_RECORDSTORE, "getRecord", "(I)[B",
+                            ga, &gr) != NJ_OK) {
+                    return NJ_ERR;
+                }
+                a[0].r = gr.r;
+                r.i = 0;
+                if (nj_call(vm, filter, "javax/microedition/rms/RecordFilter",
+                            "matches", "([B)Z", a, &r) != NJ_OK) {
+                    return NJ_ERR;
+                }
+                if (!r.i) {
+                    continue;   /* filtered out */
+                }
+            }
+            dst[n++] = id;
+        }
+        ids->length = (nj_u4)n;
+    }
+
+    /*
+     * Insertion sort through the Java comparator.  A high-score table has tens
+     * of records, not thousands, and calling into Java per comparison makes any
+     * cleverer sort's bookkeeping the expensive part.
+     */
+    if (comp) {
+        for (i = 1; i < n; i++) {
+            nj_s4 key = dst[i];
+            nj_s4 j = i - 1;
+            while (j >= 0) {
+                nj_value a[2];
+                nj_value r;
+                nj_value ga[1];
+                nj_value gr;
+                int c;
+                ga[0].i = key;
+                gr.r = NULL;
+                if (nj_call(vm, rs, NJ_C_RECORDSTORE, "getRecord", "(I)[B",
+                            ga, &gr) != NJ_OK) {
+                    return NJ_ERR;
+                }
+                ga[0].i = dst[j];
+                a[0].r = NULL;
+                {
+                    nj_value gb[1];
+                    nj_value gbr;
+                    gb[0].i = dst[j];
+                    gbr.r = NULL;
+                    if (nj_call(vm, rs, NJ_C_RECORDSTORE, "getRecord", "(I)[B",
+                                gb, &gbr) != NJ_OK) {
+                        return NJ_ERR;
+                    }
+                    a[0].r = gbr.r;
+                }
+                a[1].r = gr.r;
+                r.i = 0;
+                if (nj_call(vm, comp, "javax/microedition/rms/RecordComparator",
+                            "compare", "([B[B)I", a, &r) != NJ_OK) {
+                    return NJ_ERR;
+                }
+                c = r.i;
+                if (c <= 0) {
+                    break;
+                }
+                dst[j + 1] = dst[j];
+                j--;
+            }
+            dst[j + 1] = key;
+        }
+    }
+
+    if (args[2].bits != 0u) {
+        keep = 1;
+    }
+    out = nj_object_new(vm, NJ_C_RENUM);
+    if (!out) {
+        return nj_throw_oom(vm);
+    }
+    /* renum_*, not rs_*: rs_* looks fields up on RecordStore, so writing the
+     * enumeration's fields through it would silently write nowhere. */
+    renum_setr(vm, out, "reIds", "[I", ids);
+    renum_setr(vm, out, "reStore", "L" NJ_C_RECORDSTORE ";", rs);
+    renum_seti(vm, out, "reKeep", keep);
+    renum_seti(vm, out, "rePos", 0);
+    ret->r = out;
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
 /* Tables                                                             */
 /* ------------------------------------------------------------------ */
 #define M(name, desc, flags) { name, desc, flags }
@@ -964,7 +1264,48 @@ static const nj_builtin_method recordstore_methods[] = {
     M("deleteRecord",      "(I)V", 0),
     M("closeRecordStore",  "()V", 0),
     M("addRecordListener", "(Ljavax/microedition/rms/RecordListener;)V", 0),
-    M("removeRecordListener", "(Ljavax/microedition/rms/RecordListener;)V", 0)
+    M("removeRecordListener", "(Ljavax/microedition/rms/RecordListener;)V", 0),
+    M("enumerateRecords",
+      "(Ljavax/microedition/rms/RecordFilter;"
+      "Ljavax/microedition/rms/RecordComparator;Z)"
+      "Ljavax/microedition/rms/RecordEnumeration;", 0)
+};
+
+static const nj_builtin_field renum_fields[] = {
+    FLD("reIds",       "[I",                     0),
+    FLD("reStore",     "L" NJ_C_RECORDSTORE ";", 0),
+    FLD("rePos",       "I",                      0),
+    FLD("reKeep",      "Z",                      0),
+    FLD("reDestroyed", "Z",                      0)
+};
+
+static const nj_builtin_method renum_methods[] = {
+    M("numRecords",       "()I",   0),
+    M("nextRecord",       "()[B",  0),
+    M("previousRecord",   "()[B",  0),
+    M("nextRecordId",     "()I",   0),
+    M("previousRecordId", "()I",   0),
+    M("hasNextElement",   "()Z",   0),
+    M("hasPreviousElement", "()Z", 0),
+    M("reset",            "()V",   0),
+    M("rebuild",          "()V",   0),
+    M("destroy",          "()V",   0),
+    M("isKeptUpdated",    "()Z",   0),
+    M("keepUpdated",      "(Z)V",  0)
+};
+
+static const nj_builtin_method rfilter_methods[] = {
+    M("matches", "([B)Z", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
+};
+
+static const nj_builtin_field rcomp_fields[] = {
+    FLD("EQUIVALENT", "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("PRECEDES",   "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("FOLLOWS",    "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method rcomp_methods[] = {
+    M("compare", "([B[B)I", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
 };
 
 /* The exception hierarchy: no members of their own, inherited constructors. */
@@ -987,6 +1328,19 @@ const nj_builtin_class nj_lib_rms_classes[] = {
       NULL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
       NULL, 0u, listener_methods,
       (nj_u2)(sizeof(listener_methods) / sizeof(listener_methods[0])) },
+    { NJ_C_RENUM, "java/lang/Object", NJ_ACC_PUBLIC,
+      renum_fields,
+      (nj_u2)(sizeof(renum_fields) / sizeof(renum_fields[0])),
+      renum_methods,
+      (nj_u2)(sizeof(renum_methods) / sizeof(renum_methods[0])) },
+    { NJ_C_RFILTER, NULL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, rfilter_methods,
+      (nj_u2)(sizeof(rfilter_methods) / sizeof(rfilter_methods[0])) },
+    { NJ_C_RCOMP, NULL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      rcomp_fields,
+      (nj_u2)(sizeof(rcomp_fields) / sizeof(rcomp_fields[0])),
+      rcomp_methods,
+      (nj_u2)(sizeof(rcomp_methods) / sizeof(rcomp_methods[0])) },
     NJ_RMS_EXC("javax/microedition/rms/RecordStoreException",
                "java/lang/Exception")
     NJ_RMS_EXC("javax/microedition/rms/RecordStoreNotFoundException",
@@ -1021,7 +1375,53 @@ const nj_native_entry nj_lib_rms_table[] = {
     { NJ_C_RECORDSTORE, "deleteRecord",    "(I)V", rs_deleteRecord },
     { NJ_C_RECORDSTORE, "closeRecordStore","()V", rs_close },
     { NJ_C_RECORDSTORE, "addRecordListener",    "(Ljavax/microedition/rms/RecordListener;)V", rs_listener_noop },
-    { NJ_C_RECORDSTORE, "removeRecordListener", "(Ljavax/microedition/rms/RecordListener;)V", rs_listener_noop }
+    { NJ_C_RECORDSTORE, "removeRecordListener", "(Ljavax/microedition/rms/RecordListener;)V", rs_listener_noop },
+    { NJ_C_RECORDSTORE, "enumerateRecords",
+      "(Ljavax/microedition/rms/RecordFilter;"
+      "Ljavax/microedition/rms/RecordComparator;Z)"
+      "Ljavax/microedition/rms/RecordEnumeration;", rs_enumerateRecords },
+    { NJ_C_RENUM, "numRecords",         "()I",  re_numRecords },
+    { NJ_C_RENUM, "nextRecord",         "()[B", re_nextRecord },
+    { NJ_C_RENUM, "previousRecord",     "()[B", re_previousRecord },
+    { NJ_C_RENUM, "nextRecordId",       "()I",  re_nextId },
+    { NJ_C_RENUM, "previousRecordId",   "()I",  re_previousId },
+    { NJ_C_RENUM, "hasNextElement",     "()Z",  re_hasNext },
+    { NJ_C_RENUM, "hasPreviousElement", "()Z",  re_hasPrev },
+    { NJ_C_RENUM, "reset",              "()V",  re_reset },
+    { NJ_C_RENUM, "rebuild",            "()V",  re_rebuild },
+    { NJ_C_RENUM, "destroy",            "()V",  re_destroy },
+    { NJ_C_RENUM, "isKeptUpdated",      "()Z",  re_isKept },
+    { NJ_C_RENUM, "keepUpdated",        "(Z)V", re_keepUpdated }
 };
 const int nj_lib_rms_count =
     (int)(sizeof(nj_lib_rms_table) / sizeof(nj_lib_rms_table[0]));
+
+/*
+ * A builtin class carries no ConstantValue attribute, so the comparator's
+ * ordering constants have to be planted at run time.
+ *
+ * They are load-bearing rather than decorative: javac inlines the STUB's value
+ * into every MIDlet that compares against RecordComparator.PRECEDES or
+ * FOLLOWS, so if the runtime holds a different number the sorter silently
+ * orders backwards while both halves look self-consistent.  tests/test_consts
+ * compares the two sides for exactly this reason.
+ */
+static const struct { const char *name; nj_s4 value; } rcomp_consts[] = {
+    { "PRECEDES",   -1 },
+    { "FOLLOWS",     1 },
+    { "EQUIVALENT",  0 }
+};
+
+nj_status nj_rms_late_init(nj_vm *vm)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(rcomp_consts) / sizeof(rcomp_consts[0]); i++) {
+        nj_field *f = nj_field_lookup(vm, NJ_C_RCOMP, rcomp_consts[i].name,
+                                      "I", 1);
+        if (f) {
+            nj_field_write_int(vm, NULL, f, rcomp_consts[i].value);
+        }
+    }
+    return NJ_OK;
+}

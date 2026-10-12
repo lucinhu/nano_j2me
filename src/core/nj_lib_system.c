@@ -308,6 +308,10 @@ NJFN(runtime_exit)
 /* ------------------------------------------------------------------ */
 /* Late static initialisation                                          */
 /* ------------------------------------------------------------------ */
+/* Declared locally: see the note below on why this file does not
+ * include every subsystem header. */
+nj_status nj_rms_late_init(nj_vm *vm);
+
 nj_status nj_lib_late_init(nj_vm *vm)
 {
     nj_field *f_out, *f_err;
@@ -336,6 +340,9 @@ nj_status nj_lib_late_init(nj_vm *vm)
         return NJ_ERR;
     }
     if (nj_io_late_init(vm) != NJ_OK) {
+        return NJ_ERR;
+    }
+    if (nj_rms_late_init(vm) != NJ_OK) {
         return NJ_ERR;
     }
     f_out = nj_field_lookup(vm, "java/lang/System", "out",

@@ -558,7 +558,37 @@ CLASSES = {
             "public void deleteRecord(int) throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreException",
             "public void closeRecordStore() throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreException",
             "public void addRecordListener(javax.microedition.rms.RecordListener) throws javax.microedition.rms.RecordStoreNotOpenException",
-            "public void removeRecordListener(javax.microedition.rms.RecordListener) throws javax.microedition.rms.RecordStoreNotOpenException"
+            "public void removeRecordListener(javax.microedition.rms.RecordListener) throws javax.microedition.rms.RecordStoreNotOpenException",
+            "public javax.microedition.rms.RecordEnumeration enumerateRecords(javax.microedition.rms.RecordFilter, javax.microedition.rms.RecordComparator, boolean) throws javax.microedition.rms.RecordStoreNotOpenException"
+        ],
+    },
+    # MIDP RMS enumeration.  A game that keeps a high-score table sorts and
+    # filters it through these three, and 五子棋 died on the missing
+    # enumerateRecords() the first time it tried to read its save file.
+    "javax/microedition/rms/RecordFilter": {
+        "interface": True,
+        "methods": ["boolean matches(byte[])"],
+    },
+    "javax/microedition/rms/RecordComparator": {
+        "interface": True,
+        "constants": {"EQUIVALENT": "0", "PRECEDES": "-1", "FOLLOWS": "1"},
+        "methods": ["int compare(byte[], byte[])"],
+    },
+    "javax/microedition/rms/RecordEnumeration": {
+        "interface": True,
+        "methods": [
+            "int numRecords()",
+            "byte[] nextRecord() throws javax.microedition.rms.InvalidRecordIDException, javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreException",
+            "int nextRecordId() throws javax.microedition.rms.InvalidRecordIDException, javax.microedition.rms.RecordStoreNotOpenException",
+            "byte[] previousRecord() throws javax.microedition.rms.InvalidRecordIDException, javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreException",
+            "int previousRecordId() throws javax.microedition.rms.InvalidRecordIDException, javax.microedition.rms.RecordStoreNotOpenException",
+            "boolean hasNextElement()",
+            "boolean hasPreviousElement()",
+            "void reset()",
+            "void rebuild() throws javax.microedition.rms.RecordStoreNotOpenException",
+            "void destroy()",
+            "boolean isKeptUpdated()",
+            "void keepUpdated(boolean)",
         ],
     },
     "javax/microedition/rms/RecordListener": {

@@ -208,6 +208,29 @@ int main(int argc, char **argv)
               "no asset or RMS error was reported by the MIDlet");
     }
 
+    /*
+     * RecordStore enumeration.  The count, the forward walk and the backward
+     * walk must agree, every record must be visited, and the comparator must
+     * have ordered the walk descending: a cursor that skips, repeats or stops
+     * early still reports a plausible count, so the numbers are checked
+     * against each other rather than against a fixed expectation (the store
+     * persists between runs).
+     */
+    {
+        const char *e = strstr(cap.buf, "ENUM count=");
+        int n = -1, walked = -1, back = -1;
+        CHECK(e != NULL, "the MIDlet reported its RecordStore enumeration");
+        if (e && sscanf(e, "ENUM count=%d walked=%d back=%d", &n, &walked, &back) == 3) {
+            CHECK(n > 0, "the enumeration found the records");
+            CHECK(walked == n, "the forward walk visited every record");
+            CHECK(back == n, "the backward walk visited every record");
+            CHECK(strstr(e, "desc=true") != NULL,
+                  "the RecordComparator ordered the walk descending");
+        } else {
+            CHECK(0, "the enumeration line parses");
+        }
+    }
+
     printf("\nchecks: %d  failures: %d\n", checks, failures);
     printf("%s\n", failures == 0 ? "PASS" : "FAIL");
     if (dump && *dump) {

@@ -298,4 +298,7 @@ void nj_media_frame(nj_vm *vm);
  * ConstantValue attribute. */
 nj_status nj_media_late_init(nj_vm *vm);
 
+/* javax.microedition.rms: the comparator's ordering constants. */
+nj_status nj_rms_late_init(nj_vm *vm);
+
 #endif /* NJ_MIDP_H */
