@@ -8154,6 +8154,253 @@ NJFN(alerttype_playSound)
 /* ================================================================== */
 /* Class tables                                                        */
 /* ================================================================== */
+/* ------------------------------------------------------------------ */
+/* com.nokia.mid.ui.DirectGraphics                                     */
+/* ------------------------------------------------------------------ */
+/*
+ * Nokia's DirectGraphics is an INTERFACE and twelve of the titles collected
+ * under tests/games call it.  The interface itself is declared next door in
+ * nj_lib_nokia.c; the METHODS live here for two reasons.  This is the file
+ * that can reach the nj_gfx primitives, and invokeinterface dispatches on the
+ * receiver's runtime class - so the object DirectUtils.getDirectGraphics()
+ * hands back is the Graphics itself, and for the call to resolve the methods
+ * have to be on Graphics.
+ *
+ * Only these seven exist, because only these seven are used anywhere in the
+ * corpus.  Inventing the rest of Nokia's API would be guesswork.
+ */
+#define NJ_DG_PIXFMT_RGB565 10   /* Nokia's TYPE_USHORT_565_RGB */
+
+NJFN(dg_setARGBColor)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_gfx g;
+    nj_surface sc;
+
+    if (!gfx_load(vm, self, &g, &sc)) {
+        return NJ_ERR;
+    }
+    /*
+     * The name says ARGB, but a zero alpha would draw nothing at all on a
+     * surface, and a game that writes 0x00FF0000 means red - the same trap
+     * setColor already documents.  Opaque it is.
+     */
+    nj_gfx_set_color(&g, (nj_u4)NJ_ARG_INT(args, 0) | 0xFF000000u);
+    gfx_store(vm, self, &g);
+    return NJ_OK;
+}
+
+NJFN(dg_getNativePixelFormat)
+{
+    ret->i = NJ_DG_PIXFMT_RGB565;
+    return NJ_OK;
+}
+
+/*
+ * drawImage(Image, x, y, anchor, manipulation).  The manipulation argument is
+ * accepted and ignored: this port draws through the same code as the MIDP
+ * method, which has no rotation.  Saying so here is better than pretending,
+ * and a game that asks for ROTATE_90 gets an unrotated image rather than an
+ * exception it cannot catch.
+ */
+NJFN(dg_drawImage)
+{
+    nj_value a[4];
+
+    a[0] = args[0];
+    a[1] = args[1];
+    a[2] = args[2];
+    a[3] = args[3];
+    return nj_call(vm, NJ_THIS(args), NJ_C_GRAPHICS, "drawImage",
+                   "(L" NJ_C_IMAGE ";III)V", a, NULL);
+}
+
+NJFN(dg_fillTriangle)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_gfx g;
+    nj_surface sc;
+
+    if (!gfx_load(vm, self, &g, &sc)) {
+        return NJ_ERR;
+    }
+    nj_gfx_triangle(&g, NJ_ARG_INT(args, 0), NJ_ARG_INT(args, 1),
+                    NJ_ARG_INT(args, 2), NJ_ARG_INT(args, 3),
+                    NJ_ARG_INT(args, 4), NJ_ARG_INT(args, 5), 1);
+    gfx_store(vm, self, &g);
+    return NJ_OK;
+}
+
+/*
+ * A polygon, filled a row at a time.
+ *
+ * nj_gfx has no polygon fill and does not need one: a scanline that calls
+ * nj_gfx_line once per row inherits the existing clipping, colour and blend
+ * rules instead of reimplementing them.  Slow and obvious is the right trade
+ * for something a game calls a handful of times a frame.
+ */
+static void dg_fill_poly(nj_gfx *g,
+                         const nj_s4 *xs, const nj_s4 *ys, nj_s4 n)
+{
+    nj_s4 y, ymin, ymax;
+
+    if (n < 3) {
+        return;
+    }
+    ymin = ymax = ys[0];
+    for (y = 1; y < n; y++) {
+        if (ys[y] < ymin) { ymin = ys[y]; }
+        if (ys[y] > ymax) { ymax = ys[y]; }
+    }
+    for (y = ymin; y <= ymax; y++) {
+        nj_s4 x0 = 0, x1 = 0;
+        int have = 0, i, j;
+
+        for (i = 0, j = n - 1; i < n; j = i++) {
+            nj_s4 ya = ys[j], yb = ys[i];
+            if ((ya <= y && yb > y) || (yb <= y && ya > y)) {
+                nj_s4 x = xs[j] + (nj_s4)(((nj_s8)(y - ya) *
+                                           (xs[i] - xs[j])) / (yb - ya));
+                if (!have) { x0 = x1 = x; have = 1; }
+                else if (x < x0) { x0 = x; }
+                else if (x > x1) { x1 = x; }
+            }
+        }
+        if (have && x1 >= x0) {
+            nj_gfx_line(g, x0, y, x1, y);
+        }
+    }
+}
+
+/* Shared argument marshalling for the two polygon calls. */
+static int dg_poly_args(nj_vm *vm, nj_value *args, nj_gfx *g,
+                        nj_s4 **xs_out, nj_s4 **ys_out, nj_s4 *n_out)
+{
+    nj_ref xa = NJ_ARG_REF(args, 0);
+    nj_s4 xoff = NJ_ARG_INT(args, 1);
+    nj_ref ya = NJ_ARG_REF(args, 2);
+    nj_s4 yoff = NJ_ARG_INT(args, 3);
+    nj_s4 n = NJ_ARG_INT(args, 4);
+    nj_s4 xlen = xa ? (nj_s4)xa->length : 0;
+    nj_s4 ylen = ya ? (nj_s4)ya->length : 0;
+
+    if (!xa || !ya) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL) == NJ_OK;
+    }
+    if (xoff < 0 || yoff < 0 || n < 0 || xoff + n > xlen || yoff + n > ylen) {
+        return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException",
+                        NULL) == NJ_OK;
+    }
+    *xs_out = (nj_s4 *)xa->u.bytes + xoff;
+    *ys_out = (nj_s4 *)ya->u.bytes + yoff;
+    *n_out = n;
+    (void)g;
+    return 1;
+}
+
+NJFN(dg_fillPolygon)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_gfx g;
+    nj_surface sc;
+    nj_s4 *xs = NULL, *ys = NULL, n = 0;
+
+    if (!gfx_load(vm, self, &g, &sc)) {
+        return NJ_ERR;
+    }
+    if (!dg_poly_args(vm, args, &g, &xs, &ys, &n)) {
+        return NJ_ERR;
+    }
+    nj_gfx_set_color(&g, (nj_u4)NJ_ARG_INT(args, 5) | 0xFF000000u);
+    dg_fill_poly(&g, xs, ys, n);
+    gfx_store(vm, self, &g);
+    return NJ_OK;
+}
+
+NJFN(dg_drawPolygon)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_gfx g;
+    nj_surface sc;
+    nj_s4 *xs = NULL, *ys = NULL, n = 0;
+    nj_s4 i;
+
+    if (!gfx_load(vm, self, &g, &sc)) {
+        return NJ_ERR;
+    }
+    if (!dg_poly_args(vm, args, &g, &xs, &ys, &n)) {
+        return NJ_ERR;
+    }
+    nj_gfx_set_color(&g, (nj_u4)NJ_ARG_INT(args, 5) | 0xFF000000u);
+    for (i = 0; i < n; i++) {
+        nj_s4 j = (i + 1 < n) ? i + 1 : 0;
+        nj_gfx_line(&g, xs[i], ys[i], xs[j], ys[j]);
+    }
+    gfx_store(vm, self, &g);
+    return NJ_OK;
+}
+
+/*
+ * drawPixels(short[], transparency, offset, scanlength, x, y, w, h,
+ *            manipulation, format).  One nj_gfx_pixel per pixel: a game that
+ * gets a correct picture slowly beats one that gets an exception, and this is
+ * not on the hot path for anything in the corpus.
+ */
+NJFN(dg_drawPixels)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref px = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 2);
+    nj_s4 scan = NJ_ARG_INT(args, 3);
+    nj_s4 x = NJ_ARG_INT(args, 4);
+    nj_s4 y = NJ_ARG_INT(args, 5);
+    nj_s4 w = NJ_ARG_INT(args, 6);
+    nj_s4 h = NJ_ARG_INT(args, 7);
+    nj_gfx g;
+    nj_surface sc;
+    nj_s4 row, col;
+    const nj_u2 *pix;
+
+    if (!px) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (!gfx_load(vm, self, &g, &sc)) {
+        return NJ_ERR;
+    }
+    pix = (const nj_u2 *)px->u.bytes;
+    for (row = 0; row < h; row++) {
+        for (col = 0; col < w; col++) {
+            nj_s4 idx = off + row * scan + col;
+            nj_u4 v;
+            if (idx < 0 || (nj_u4)idx >= px->length) {
+                continue;
+            }
+            v = pix[idx];
+            /* 565 in, 888 out: the same expansion RGB565 images already use. */
+            nj_gfx_set_color(&g,
+                             0xFF000000u |
+                             (((v >> 11) & 0x1Fu) << 19) |
+                             (((v >> 5) & 0x3Fu) << 10) |
+                             ((v & 0x1Fu) << 3));
+            nj_gfx_pixel(&g, x + col, y + row);
+        }
+    }
+    gfx_store(vm, self, &g);
+    return NJ_OK;
+}
+
+/*
+ * getPixels is the one method here that CANNOT be honest yet: reading pixels
+ * back needs a surface read primitive that nj_gfx does not expose.  Leaving
+ * the caller's array untouched is better than throwing into a game's paint()
+ * where it cannot be caught, but it is a real gap and it is written down here
+ * rather than hidden.
+ */
+NJFN(dg_getPixels)
+{
+    return NJ_OK;
+}
+
 #define M(name, desc, flags) { name, desc, flags }
 #define FLD(name, desc, flags) { name, desc, flags }
 
@@ -8311,7 +8558,17 @@ static const nj_builtin_method graphics_methods[] = {
     M("drawRegion",     "(L" NJ_C_IMAGE ";IIIIIIII)V", 0),
     M("drawRegion",     "(L" NJ_C_IMAGE ";IIIIIIIII)V", 0),
     M("drawRGB",        "([IIIIIIIZ)V", 0),
-    M("copyArea",       "(IIIIIII)V", 0)
+    M("copyArea",       "(IIIIIII)V", 0),
+
+    /* com.nokia.mid.ui.DirectGraphics, reached through the interface. */
+    M("setARGBColor",         "(I)V",   NJ_ACC_PUBLIC),
+    M("getNativePixelFormat", "()I",    NJ_ACC_PUBLIC),
+    M("drawImage",  "(L" NJ_C_IMAGE ";IIII)V", NJ_ACC_PUBLIC),
+    M("fillTriangle", "(IIIIIII)V",     NJ_ACC_PUBLIC),
+    M("drawPolygon", "([II[IIII)V",     NJ_ACC_PUBLIC),
+    M("fillPolygon", "([II[IIII)V",     NJ_ACC_PUBLIC),
+    M("drawPixels",  "([SZIIIIIIII)V",  NJ_ACC_PUBLIC),
+    M("getPixels",   "([SIIIIIII)V",    NJ_ACC_PUBLIC),
 };
 
 /* ---- Displayable / Canvas ---- */
@@ -9139,6 +9396,14 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_GRAPHICS, "drawLine", "(IIII)V", g_drawLine },
     { NJ_C_GRAPHICS, "drawRect", "(IIII)V", g_drawRect },
     { NJ_C_GRAPHICS, "fillRect", "(IIII)V", g_fillRect },
+    { NJ_C_GRAPHICS, "setARGBColor",         "(I)V",   dg_setARGBColor },
+    { NJ_C_GRAPHICS, "getNativePixelFormat", "()I",    dg_getNativePixelFormat },
+    { NJ_C_GRAPHICS, "drawImage", "(L" NJ_C_IMAGE ";IIII)V", dg_drawImage },
+    { NJ_C_GRAPHICS, "fillTriangle", "(IIIIIII)V", dg_fillTriangle },
+    { NJ_C_GRAPHICS, "drawPolygon", "([II[IIII)V", dg_drawPolygon },
+    { NJ_C_GRAPHICS, "fillPolygon", "([II[IIII)V", dg_fillPolygon },
+    { NJ_C_GRAPHICS, "drawPixels",  "([SZIIIIIIII)V", dg_drawPixels },
+    { NJ_C_GRAPHICS, "getPixels",   "([SIIIIIII)V",   dg_getPixels },
     { NJ_C_GRAPHICS, "drawRoundRect", "(IIIIII)V", g_drawRoundRect },
     { NJ_C_GRAPHICS, "fillRoundRect", "(IIIIII)V", g_fillRoundRect },
     { NJ_C_GRAPHICS, "drawArc", "(IIIIII)V", g_drawArc },

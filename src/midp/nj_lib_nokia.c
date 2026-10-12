@@ -26,6 +26,9 @@
 #define NJ_C_VKEYBOARD "com/nokia/mid/ui/VirtualKeyboard"
 #define NJ_C_MPLISTEN  "com/nokia/mid/ui/multipointtouch/MultipointTouchListener"
 #define NJ_C_MPTOUCH   "com/nokia/mid/ui/multipointtouch/MultipointTouch"
+#define NJ_C_DUTILS    "com/nokia/mid/ui/DirectUtils"
+#define NJ_C_DGRAPHICS "com/nokia/mid/ui/DirectGraphics"
+#define NJ_C_GRAPHICS "javax/microedition/lcdui/Graphics"
 #define NJ_C_FSELECT   "com/nokia/mid/ui/FileSelect"
 #define NJ_C_FSDETAIL  "com/nokia/mid/ui/FileSelectDetail"
 
@@ -181,6 +184,109 @@ static const nj_builtin_method vkeyboard_methods[] = {
     M("getVisibility",         "()Z",  NJ_ACC_STATIC)
 };
 
+/* com.nokia.mid.ui.DirectUtils ------------------------------------------ */
+
+/* The public-API image type, spelled once. */
+#define NJ_DU_IMAGE_CLS "javax/microedition/lcdui/Image"
+#define NJ_DU_IMAGE_DESC "Ljavax/microedition/lcdui/Image;"
+
+/*
+ * createImage(w, h, argb): a new image entirely of one colour.
+ *
+ * Built the long way round - create it, take its Graphics, paint the whole
+ * rectangle - because that path already exists, is already tested, and cannot
+ * disagree with what a game gets when it does the same three steps by hand.
+ */
+NJFN(nokia_du_createImage3)
+{
+    nj_value a[4];
+    nj_ref img;
+    nj_ref gfx;
+
+    a[0] = args[0];
+    a[1] = args[1];
+    img = nj_call_ref(vm, NULL, NJ_DU_IMAGE_CLS, "createImage",
+                      "(II)" NJ_DU_IMAGE_DESC, a);
+    if (!img) {
+        return NJ_ERR;
+    }
+    gfx = nj_call_ref(vm, img, NJ_DU_IMAGE_CLS, "getGraphics",
+                      "()Ljavax/microedition/lcdui/Graphics;", NULL);
+    if (!gfx) {
+        return NJ_ERR;
+    }
+    a[0] = args[2];
+    if (nj_call(vm, gfx, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    a[0].i = 0;
+    a[1].i = 0;
+    a[2].i = NJ_ARG_INT(args, 0);
+    a[3].i = NJ_ARG_INT(args, 1);
+    if (nj_call(vm, gfx, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = img;
+    return NJ_OK;
+}
+
+NJFN(nokia_du_createImage2)
+{
+    nj_value a[2];
+
+    a[0] = args[0];
+    a[1] = args[1];
+    ret->r = nj_call_ref(vm, NULL, NJ_DU_IMAGE_CLS, "createImage",
+                         "(II)" NJ_DU_IMAGE_DESC, a);
+    return ret->r ? NJ_OK : NJ_ERR;
+}
+
+/*
+ * getDirectGraphics(Graphics) returns that same Graphics - see the note above
+ * the interface table for why that is the whole implementation.
+ */
+NJFN(nokia_du_getDirectGraphics)
+{
+    ret->r = NJ_ARG_REF(args, 0);
+    return NJ_OK;
+}
+
+/*
+ * com.nokia.mid.ui.DirectUtils and DirectGraphics.
+ *
+ * DirectGraphics is an INTERFACE on the phone; twelve of the titles collected
+ * under tests/games ask for it, nearly all of them for createImage(w, h, argb)
+ * - a screen-sized image of one colour, which the standard API can only build
+ * by allocating and then filling through a Graphics.
+ *
+ * getDirectGraphics() hands back the Graphics it was given.  That is not a
+ * shortcut: invokeinterface dispatches on the receiver's RUNTIME class, and
+ * the seven DirectGraphics methods are declared on javax.microedition.lcdui.
+ * Graphics in nj_lib_lcdui.c, which is the file that can reach the nj_gfx
+ * primitives.  So the object a caller gets back must BE a Graphics, and it is.
+ */
+static const nj_builtin_method dgraphics_methods[] = {
+    M("setARGBColor",         "(I)V",   NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("getNativePixelFormat", "()I",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("drawImage",  "(L" NJ_C_IMAGE ";IIII)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("fillTriangle", "(IIIIIII)V",     NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("drawPolygon", "([II[IIII)V",     NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("fillPolygon", "([II[IIII)V",     NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("drawPixels",  "([SZIIIIIIII)V",  NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("getPixels",   "([SIIIIIII)V",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("drawImage",   "([IIII)V",        NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
+};
+
+static const nj_builtin_method dutils_methods[] = {
+    M("createImage", "(II)Ljavax/microedition/lcdui/Image;", NJ_ACC_STATIC),
+    M("createImage", "(III)Ljavax/microedition/lcdui/Image;", NJ_ACC_STATIC),
+    M("getDirectGraphics",
+      "(Ljavax/microedition/lcdui/Graphics;)L" NJ_C_DGRAPHICS ";",
+      NJ_ACC_STATIC)
+};
+
 const nj_builtin_class nj_lib_nokia_classes[] = {
     { NJ_C_VKEYBOARD, "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, vkeyboard_methods,
@@ -207,6 +313,13 @@ const nj_builtin_class nj_lib_nokia_classes[] = {
       (nj_u2)(sizeof(fsdetail_fields) / sizeof(fsdetail_fields[0])),
       fsdetail_methods,
       (nj_u2)(sizeof(fsdetail_methods) / sizeof(fsdetail_methods[0])) },
+    { NJ_C_DGRAPHICS, NULL,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, dgraphics_methods,
+      (nj_u2)(sizeof(dgraphics_methods) / sizeof(dgraphics_methods[0])) },
+    { NJ_C_DUTILS, "java/lang/Object", NJ_ACC_PUBLIC,
+      NULL, 0u, dutils_methods,
+      (nj_u2)(sizeof(dutils_methods) / sizeof(dutils_methods[0])) },
     { NULL, NULL, 0u, NULL, 0u, NULL, 0u }
 };
 const int nj_lib_nokia_class_count =
@@ -226,6 +339,13 @@ const nj_native_entry nj_lib_nokia_table[] = {
     { NJ_C_FSDETAIL, "<init>",  "()V", nokia_fsd_init },
     { NJ_C_FSDETAIL, "getUrl",  "()Ljava/lang/String;", nokia_fsd_getUrl },
     { NJ_C_FSDETAIL, "getName", "()Ljava/lang/String;", nokia_fsd_getName },
+    { NJ_C_DUTILS, "createImage", "(II)" NJ_DU_IMAGE_DESC,
+      nokia_du_createImage2 },
+    { NJ_C_DUTILS, "createImage", "(III)" NJ_DU_IMAGE_DESC,
+      nokia_du_createImage3 },
+    { NJ_C_DUTILS, "getDirectGraphics",
+      "(Ljavax/microedition/lcdui/Graphics;)L" NJ_C_DGRAPHICS ";",
+      nokia_du_getDirectGraphics },
     { NULL, NULL, NULL, NULL }
 };
 const int nj_lib_nokia_count =

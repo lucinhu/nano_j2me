@@ -347,6 +347,7 @@ if(NJ_BUILD_TESTS)
   # Three such bindings were missing and each one only surfaced when a real
   # game called it; this walks the whole class library instead of waiting.
   nj_add_test(test_natives   tests/test_natives.c)
+  nj_add_test(test_directgraphics tests/test_directgraphics.c)
   nj_add_test(test_vm        tests/test_vm.c
               ${NJ_FIXTURES}/hello.jar HelloWorld "hello from j2me")
 
