@@ -68,6 +68,55 @@ static const nj_u1 g_track_silent[23] = {
     0x00u, 0xFFu, 0x2Fu, 0x00u
 };
 
+/* Sixteen notes in a row - more notes than there are voices.  Each is held for
+ * 60 ticks and followed by 60 ticks of rest, so at most one sounds at a time
+ * and a renderer that reuses a voice whose note has ended plays all sixteen.
+ * One that never frees a voice stops sounding after the twelfth note: that is
+ * exactly what a 32-second song did, half a second of audio and then silence. */
+static const nj_u1 g_phrase_head[14] = {
+    'M', 'T', 'h', 'd', 0, 0, 0, 6u,
+    0u, 0u,             /* format 0 */
+    0u, 1u,             /* one track */
+    0x01u, 0xE0u        /* 480 */
+};
+
+static nj_u4 build_phrase(nj_u1 *out)
+{
+    nj_u4 n = 0u;
+    nj_u4 k;
+
+    memcpy(out, g_phrase_head, sizeof(g_phrase_head));
+    n = sizeof(g_phrase_head);
+    memcpy(out + n, "MTrk", 4u);
+    n += 4u;
+    out[n++] = 0x00u;
+    out[n++] = 0x00u;
+    out[n++] = 0x00u;
+    out[n++] = 0x8Bu;   /* 139 bytes: tempo, sixteen note pairs, end of track */
+    out[n++] = 0x00u;
+    out[n++] = 0xFFu;
+    out[n++] = 0x51u;
+    out[n++] = 0x03u;
+    out[n++] = 0x07u;
+    out[n++] = 0xA1u;
+    out[n++] = 0x20u;   /* 500000 us per quarter */
+    for (k = 0u; k < 16u; k++) {
+        out[n++] = (k == 0u) ? 0x00u : 0x78u;   /* 120 ticks between notes */
+        out[n++] = 0x90u;
+        out[n++] = 60u;
+        out[n++] = 0x64u;
+        out[n++] = 0x3Cu;                       /* held for 60 ticks */
+        out[n++] = 0x80u;
+        out[n++] = 60u;
+        out[n++] = 0x40u;
+    }
+    out[n++] = 0x00u;
+    out[n++] = 0xFFu;
+    out[n++] = 0x2Fu;
+    out[n++] = 0x00u;
+    return n;
+}
+
 int main(void)
 {
     nj_u1 file[sizeof(g_header) + sizeof(g_track)];
@@ -130,6 +179,38 @@ int main(void)
           "the pitch is A4 (440 Hz)");
     if (crossings < 400 || crossings > 480) {
         printf("     crossings = %d (expected about 440)\n", crossings);
+    }
+
+    {
+        static nj_u1 phrase[256];
+        nj_u4 pn = build_phrase(phrase);
+        nj_u4 pf = 0u;
+        nj_u1 *pp = nj_midi_render(phrase, pn, &pf, &MEM);
+        int loud = 0;
+
+        check(pp != NULL, "a sixteen-note phrase renders");
+        if (pp != NULL) {
+            /* Longer than the single note above; the exact tail is the
+             * renderer's business, and the point here is the last quarter. */
+            check(pf > 15000u, "the phrase renders far past the single note");
+            if (pf != 0u) {
+                for (i = pf * 3u / 4u; i < pf; i++) {
+                    int s = (int)(short)((nj_u2)pp[i * 2u]
+                                         | ((nj_u2)pp[i * 2u + 1u] << 8));
+                    if (s > 200 || s < -200) {
+                        loud = 1;
+                        break;
+                    }
+                }
+            }
+            check(loud, "the last note of a phrase longer than the voice count"
+                        " is audible");
+            if (!loud) {
+                printf("     nothing above the noise floor in the last quarter"
+                       " of %u frames\n", (unsigned)pf);
+            }
+            t_free(NULL, pp);
+        }
     }
 
     t_free(NULL, pcm);

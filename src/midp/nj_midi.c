@@ -500,6 +500,20 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
             continue;
         }
         if (song.notes[i].on) {
+            /*
+             * A voice whose note has already ended is free again.  This pass
+             * runs before anything is mixed, so without it the first
+             * NJ_MIDI_VOICES notes of the file take every voice and the rest
+             * of the song is dropped: thirty seconds of MIDI came out as half
+             * a second of sound plus silence.  The short guard leaves room for
+             * the release tail, so a reused voice does not click.
+             */
+            for (v = 0u; v < NJ_MIDI_VOICES; v++) {
+                if (voices[v].active && voices[v].end != 0u
+                    && voices[v].end + NJ_MIDI_RATE / 100u <= at) {
+                    voices[v].active = 0;
+                }
+            }
             for (v = 0u; v < NJ_MIDI_VOICES; v++) {
                 if (!voices[v].active) {
                     break;
