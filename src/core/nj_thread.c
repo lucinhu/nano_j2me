@@ -260,7 +260,6 @@ nj_status nj_thread_sleep(nj_vm *vm, nj_thread *t, nj_s8 ms)
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "timeout value is negative");
     }
-    vm->threads[vm->nthreads] = vm->threads[vm->nthreads];   /* no-op */
     t->wake_at_ms = nj_now_ms(vm) + ms;
     t->state = NJ_THREAD_SLEEPING;
     return NJ_ERR_TIMEOUT;   /* tells the interpreter to suspend this thread */

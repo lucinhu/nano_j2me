@@ -24,6 +24,7 @@
  */
 #include "nj2me/nj.h"
 
+#include <sys/time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,6 +80,17 @@ static unsigned char *read_file(const char *path, unsigned *len)
     return d;
 }
 
+/*
+ * CLOCK_MONOTONIC, because the assertion is about how long startup took and
+ * not about what time it is.
+ */
+static long now_ms(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (long)tv.tv_sec * 1000L + (long)(tv.tv_usec / 1000L);
+}
+
 int main(int argc, char **argv)
 {
     const char *dir = (argc > 1) ? argv[1] : "tests/fixtures";
@@ -91,6 +103,7 @@ int main(int argc, char **argv)
     nj_ref exc = NULL;
     nj_ref midlet;
     int round;
+    long t0 = 0, elapsed = 0;
 
     snprintf(path, sizeof(path), "%s/blockdemo.jar", dir);
     data = read_file(path, &len);
@@ -125,17 +138,30 @@ int main(int argc, char **argv)
         }
 
         exc = NULL;
+        t0 = now_ms();
         midlet = nj_vm_new_midlet(vm, "BlockDemo", &exc);
+        elapsed = now_ms() - t0;
 
-        OK(midlet == NULL);
-        /* 1. there IS an exception, and it can be named */
-        OK(exc != NULL);
-        OK(nj_ref_class_name(exc) != NULL);
-        /* 2. it is not the useless "?" the runner used to print */
-        if (nj_ref_class_name(exc)) {
-            OK_MSG(strcmp(nj_ref_class_name(exc), "?") != 0,
-                   "the exception has no class name (round %d)", round);
-        }
+        /*
+         * 1. A constructor that sleeps is no longer a startup failure.
+         *
+         * Two corpus titles (com.ea.sims3.MonkeyApp, and nokia7650's Start)
+         * failed to start for this reason alone.  This assertion is what
+         * caught the old behaviour, and what will catch its return.
+         */
+        OK_MSG(midlet != NULL, "a sleeping constructor still fails to start (round %d)", round);
+        OK_MSG(exc == NULL, "a sleeping constructor raised something (round %d)", round);
+
+        /*
+         * 2. And the sleep was WAITED FOR, not skipped.
+         *
+         * Without this, "the MIDlet started" is also satisfied by a runtime
+         * that wakes the thread immediately - which would break every title
+         * that uses a sleep to pace itself.  The fixture sleeps 300 ms.
+         */
+        OK_MSG(elapsed >= 250,
+               "startup finished in %ld ms: the 300 ms sleep was skipped (round %d)",
+               (long)elapsed, round);
 
         nj_vm_destroy(vm);
         nj_port_shutdown(&port);

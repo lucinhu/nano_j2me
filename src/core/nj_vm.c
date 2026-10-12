@@ -1087,7 +1087,10 @@ static nj_method *bridge_lookup(nj_vm *vm, nj_class *c, const char *name,
     return m;
 }
 
-static nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
+static /* How long a C caller will let a blocked Java call wait to be resumable. */
+#define NJ_CALL_BLOCK_MS 5000u
+
+nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
                            const char *name, const char *desc,
                            nj_value *args, nj_value *ret, int special)
 {
@@ -1236,6 +1239,47 @@ static nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
         if (st == NJ_ERR_YIELD && th->state == NJ_THREAD_RUNNING &&
             th->nframes > saved_frames) {
             continue;   /* quantum expired mid-call: resume it */
+        }
+        /*
+         * The native returned NJ_ERR_YIELD, not NJ_ERR_TIMEOUT: the TIMEOUT
+         * spelling is synthesised after this loop.  Matching only on TIMEOUT
+         * here is why pumping appeared to do nothing at all.
+         */
+        if ((st == NJ_ERR_YIELD || st == NJ_ERR_TIMEOUT) &&
+            (th->state == NJ_THREAD_SLEEPING ||
+             (th->state == NJ_THREAD_WAITING && th->wait_deadline != 0))) {
+            nj_s8 start = nj_now_ms(vm);
+
+            /*
+             * A native blocked - Thread.sleep() and friends.  The thread is
+             * parked, NOT dead, and its frames are intact, so the right answer
+             * is to wait for it to be runnable again and resume the very frame
+             * that blocked, not to report a failure.
+             *
+             * scheduler_step() cannot be used here: it returns NJ_ERR_HALT
+             * while !vm->running, and that is exactly the state during
+             * startup, when a MIDlet's constructor sleeps for a splash delay.
+             * That is why two corpus titles failed with "construction blocked"
+             * however long the scheduler was pumped.  Wait for the deadline
+             * directly instead; the port supplies the clock the deadline was
+             * computed from.
+             */
+            nj_s8 until = (th->state == NJ_THREAD_SLEEPING)
+                          ? th->wake_at_ms : th->wait_deadline;
+
+            while (nj_now_ms(vm) < until &&
+                   (nj_now_ms(vm) - start) < (nj_s8)NJ_CALL_BLOCK_MS) {
+                if (vm->port && vm->port->sleep_ms) {
+                    vm->port->sleep_ms(vm->port->ud, 1u);
+                }
+            }
+            if (nj_now_ms(vm) < until) {
+                break;   /* it really is stuck: report it rather than spin */
+            }
+            th->state = NJ_THREAD_RUNNING;
+            th->wait_monitor = NULL;
+            th->wait_deadline = 0;
+            continue;
         }
         break;
     }
