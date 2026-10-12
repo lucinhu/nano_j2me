@@ -1599,8 +1599,12 @@ NJFN(g_drawImage)
     }
     if (anchor != -1 &&
         anchor_is_bad(anchor)) {
+        nj_logf(vm, 0, "drawImage/drawRegion: rejected anchor %ld "
+                "(LEFT=%d HCENTER=%d RIGHT=%d TOP=%d VCENTER=%d BOTTOM=%d)",
+                (long)anchor, NJ_ANCHOR_LEFT, NJ_ANCHOR_HCENTER, NJ_ANCHOR_RIGHT,
+                NJ_ANCHOR_TOP, NJ_ANCHOR_VCENTER, NJ_ANCHOR_BOTTOM);
         return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "bad horizontal anchor");
+                        "bad anchor: conflicting horizontal bits");
     }
     if (!img_view(vm, img, &view)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
@@ -1651,8 +1655,12 @@ NJFN(g_drawRegion)
     }
     if (anchor != -1 &&
         anchor_is_bad(anchor)) {
+        nj_logf(vm, 0, "drawImage/drawRegion: rejected anchor %ld "
+                "(LEFT=%d HCENTER=%d RIGHT=%d TOP=%d VCENTER=%d BOTTOM=%d)",
+                (long)anchor, NJ_ANCHOR_LEFT, NJ_ANCHOR_HCENTER, NJ_ANCHOR_RIGHT,
+                NJ_ANCHOR_TOP, NJ_ANCHOR_VCENTER, NJ_ANCHOR_BOTTOM);
         return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "bad horizontal anchor");
+                        "bad anchor: conflicting horizontal bits");
     }
     if (!img_view(vm, img, &view)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
@@ -1802,8 +1810,12 @@ NJFN(g_copyArea)
     }
     if (anchor != -1 &&
         anchor_is_bad(anchor)) {
+        nj_logf(vm, 0, "drawImage/drawRegion: rejected anchor %ld "
+                "(LEFT=%d HCENTER=%d RIGHT=%d TOP=%d VCENTER=%d BOTTOM=%d)",
+                (long)anchor, NJ_ANCHOR_LEFT, NJ_ANCHOR_HCENTER, NJ_ANCHOR_RIGHT,
+                NJ_ANCHOR_TOP, NJ_ANCHOR_VCENTER, NJ_ANCHOR_BOTTOM);
         return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "bad horizontal anchor");
+                        "bad anchor: conflicting horizontal bits");
     }
     if (w == 0 || h == 0) {
         return NJ_OK;
