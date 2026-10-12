@@ -1324,6 +1324,33 @@ static void test_data_interfaces(nj_vm *vm)
  * ArrayStoreException, swallowed its own loader failure and painted a null
  * Image every frame after that.
  */
+/* DataInputStream.available() is the underlying stream's count, not
+ * InputStream's default of zero: 寻秦皇陵的诅咒_12450 sized a buffer from it and
+ * read a zero-length image ("no image data") once per frame. */
+static void test_data_input_available(nj_vm *vm)
+{
+    static const unsigned char data[5] = { 1, 2, 3, 4, 5 };
+    nj_value a[1];
+    nj_value ret;
+    nj_ref bais = bais_over(vm, data, sizeof(data));
+    nj_ref dis;
+
+    OK_MSG(bais != NULL, "a ByteArrayInputStream over five bytes");
+    dis = construct(vm, DIS, "(Ljava/io/InputStream;)V", (a[0].r = bais, a),
+                    "DataInputStream over it");
+    if (dis == NULL) {
+        return;
+    }
+    OK(nj_call(vm, dis, DIS, "available", "()I", NULL, &ret) == NJ_OK);
+    OK_MSG(ret.i == 5, "available() is the underlying count, got %d", (int)ret.i);
+
+    a[0].i = 0;
+    OK(nj_call(vm, dis, DIS, "read", "()I", NULL, &ret) == NJ_OK);
+    OK_MSG(ret.i == 1, "and the first byte reads back, got %d", (int)ret.i);
+    OK(nj_call(vm, dis, DIS, "available", "()I", NULL, &ret) == NJ_OK);
+    OK_MSG(ret.i == 4, "then it counts down, got %d", (int)ret.i);
+}
+
 /* Build a mono 8-bit PCM WAV whose data chunk is `frames` bytes long. */
 static nj_u1 *wav_of(nj_u4 frames)
 {
@@ -1583,6 +1610,7 @@ int main(void)
     test_alloc_gives_up(vm);
     test_data_interfaces(vm);
     test_null_initial_text(vm);
+    test_data_input_available(vm);
     test_player_survives_collection(vm);
     test_image_survives_collection(vm);
 
