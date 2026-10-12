@@ -68,12 +68,15 @@ def already_have(dest):
     return seen
 
 
-def collect_ids(pg, per_category):
-    """`xq.php?id=NNNN` links from the category pages.
+def collect_ids(pg, per_page):
+    """`xq.php?id=NNNN` links from every category page.
 
-    per_category is only a ceiling per page: the caller filters out ids it
-    already has, so taking the whole page is what keeps a run that is
-    mostly re-fetching from coming back empty.
+    per_page is a ceiling PER PAGE, not for the walk as a whole.  The previous
+    version compared the running total against it and broke out of the loop, so
+    a run that wanted 200 ids stopped after the first few categories and never
+    looked at the rest.  That is why a "find something new" run came back with
+    0 titles while the site still held ids this tool had never taken: every run
+    covered the same first categories and stopped in the same place.
     """
     ids = []
     for cat in range(1, 16):
@@ -81,10 +84,8 @@ def collect_ids(pg, per_category):
         pg.wait_for_timeout(4000)
         html = pg.locator('#results').inner_html()
         found = re.findall(r'href="xq\.php\?id=(\d+)"[^>]*>([^<]*)<', html)
-        for gid, name in found:
+        for gid, name in found[:per_page]:
             ids.append((gid, name.strip()))
-        if len(ids) >= per_category:
-            break
     return ids
 
 
