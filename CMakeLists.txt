@@ -410,6 +410,7 @@ if(NJ_BUILD_TESTS)
   nj_add_test(test_natives   tests/test_natives.c)
   nj_add_test(test_m3g       tests/test_m3g.c)
   nj_add_test(test_mascot    tests/test_mascot.c)
+  nj_add_test(test_string    tests/test_string.c)
   nj_add_test(test_m3g_file tests/test_m3g_file.c)
   nj_add_test(test_wireless tests/test_wireless.c)
 

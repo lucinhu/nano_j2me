@@ -616,15 +616,22 @@ static const nj_builtin_field fl_fields[] = {
 static const nj_builtin_method tex_methods[] = {
     M("<init>", "(II)V", 0),
     M("<init>", "(" M3_IMG ")V", 0),
-    M("<init>", "(" M3_IMG "II)V", 0)
+    M("<init>", "(" M3_IMG "II)V", 0),
+    /*
+     * Texture(byte[] data, boolean alphaBlend): the data is a raw texture
+     * bitmap whose layout the games know and this runtime does not.
+     */
+    M("<init>", "([BZ)V", 0)
 };
 
 static const nj_builtin_field tex_fields[] = {
-    { "_img", M3_IMG, 0 }, { "_w", "I", 0 }, { "_h", "I", 0 }
+    { "_img", M3_IMG, 0 }, { "_w", "I", 0 }, { "_h", "I", 0 },
+    { "_data", "[B", 0 }, { "_blend", "I", 0 }
 };
 
 static const nj_builtin_method lig_methods[] = {
     M("<init>", "()V", 0),
+    M("<init>", "(L" NJ_C_V3 ";II)V", 0),
     M("setDirection", "(L" NJ_C_V3 ";)V", 0),
     M("setAmbIntensity", "(I)V", 0),
     M("setDirIntensity", "(I)V", 0)
@@ -637,6 +644,12 @@ static const nj_builtin_field lig_fields[] = {
 
 static const nj_builtin_method fx_methods[] = {
     M("<init>", "()V", 0),
+    /*
+     * Effect3D(Light, int shading, boolean semiTransparent, Texture
+     * sphereMap): 浴火银河 builds its effects this way, and it is the
+     * only form in the corpus that takes a light up front.
+     */
+    M("<init>", "(L" NJ_C_LIG ";IZL" NJ_C_TEX ";)V", 0),
     M("setLight", "(L" NJ_C_LIG ";)V", 0),
     M("setSphereMap", "(L" NJ_C_TEX ";)V", 0),
     M("setShading", "(I)V", 0),
@@ -779,6 +792,41 @@ NJFN(mascot_tex_from_size)
 }
 
 /* Light */
+/*
+ * Light(Vector3D direction, int dirIntensity, int ambIntensity).
+ *
+ * Two newly fetched titles (浴火银河) construct a light this way; the two
+ * titles that were measured first only used the no-argument constructor, so
+ * this form was missing until the wider corpus asked for it.
+ */
+/*
+ * Texture(byte[], boolean) -- 浴火银河 builds its textures this way.
+ *
+ * The bytes are kept as they were handed over.  Nothing decodes them yet, so
+ * _w/_h stay 0: inventing a size from the array length would be a guess, and a
+ * wrong texture size is harder to notice than an obviously empty one.
+ */
+NJFN(mascot_tex_init_bytes)
+{
+    nj_ref self = NJ_THIS(args);
+
+    m3_set_ref(vm, self, "_data", "[B", NJ_ARG_REF(args, 0));
+    m3_set(vm, self, "_blend", NJ_ARG_INT(args, 1) ? 1 : 0);
+    return NJ_OK;
+}
+
+NJFN(mascot_lig_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    if (NJ_ARG_REF(args, 0)) {
+        m3_set_ref(vm, self, "_dir", "L" NJ_C_V3 ";", NJ_ARG_REF(args, 0));
+    }
+    m3_set(vm, self, "_dif", NJ_ARG_INT(args, 1));
+    m3_set(vm, self, "_amb", NJ_ARG_INT(args, 2));
+    return NJ_OK;
+}
+
 NJFN(mascot_lig_dir)
 {
     m3_set_ref(vm, NJ_THIS(args), "_dir", "L" NJ_C_V3 ";", NJ_ARG_REF(args, 0));
@@ -798,6 +846,17 @@ NJFN(mascot_lig_dif)
 }
 
 /* Effect3D */
+NJFN(mascot_fx_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    m3_set_ref(vm, self, "_lig", "L" NJ_C_LIG ";", NJ_ARG_REF(args, 0));
+    m3_set(vm, self, "_sh", NJ_ARG_INT(args, 1));
+    m3_set(vm, self, "_semi", NJ_ARG_INT(args, 2) ? 1 : 0);
+    m3_set_ref(vm, self, "_sph", "L" NJ_C_TEX ";", NJ_ARG_REF(args, 3));
+    return NJ_OK;
+}
+
 NJFN(mascot_fx_light)
 {
     m3_set_ref(vm, NJ_THIS(args), "_lig", "L" NJ_C_LIG ";", NJ_ARG_REF(args, 0));
@@ -935,7 +994,10 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_TEX, "<init>", "(" M3_IMG ")V", mascot_tex_from_image },
     { NJ_C_TEX, "<init>", "(" M3_IMG "II)V", mascot_tex_from_image },
 
+    { NJ_C_TEX, "<init>", "([BZ)V", mascot_tex_init_bytes },
+    { NJ_C_FX, "<init>", "(L" NJ_C_LIG ";IZL" NJ_C_TEX ";)V", mascot_fx_init },
     { NJ_C_LIG, "<init>", "()V", mascot_noop },
+    { NJ_C_LIG, "<init>", "(L" NJ_C_V3 ";II)V", mascot_lig_init },
     { NJ_C_LIG, "setDirection", "(L" NJ_C_V3 ";)V", mascot_lig_dir },
     { NJ_C_LIG, "setAmbIntensity", "(I)V", mascot_lig_amb },
     { NJ_C_LIG, "setDirIntensity", "(I)V", mascot_lig_dif },

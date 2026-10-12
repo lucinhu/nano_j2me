@@ -383,6 +383,42 @@ int main(void)
         check(ret.i == 0, "ActionTable reports no frames rather than inventing a pose");
     }
 
+    /* ---- the constructors the wider corpus asked for --- */
+    {
+        nj_ref li = make(vm, LIG);
+        nj_ref dir = vec(vm, 0, -ONE, 0);
+        nj_ref tx = make(vm, TEX);
+        nj_ref fx = make(vm, FX);
+        nj_ref bytes = nj_byte_array_new(vm, 4);
+
+        args[0].r = dir; args[1].i = 300; args[2].i = 100;
+        (void)call(vm, li, LIG, "<init>", "(L" V3 ";II)V", args, &ret);
+        check(field(vm, li, LIG, "_dif") == 300 && field(vm, li, LIG, "_amb") == 100,
+              "Light(direction, dirIntensity, ambIntensity) keeps both");
+
+        args[0].r = bytes; args[1].i = 1;
+        (void)call(vm, tx, TEX, "<init>", "([BZ)V", args, &ret);
+        check(field(vm, tx, TEX, "_blend") == 1,
+              "Texture(byte[], true) remembers the blend flag");
+
+        /* Four slots, so it gets its own array: the shared `args` at the top of
+         * main holds three, and writing a fourth into it smashes the stack. */
+        {
+            nj_value a4[4];
+
+            a4[0].r = li; a4[1].i = 255; a4[2].i = 1; a4[3].r = tx;
+            (void)call(vm, fx, FX, "<init>", "(L" LIG ";IZL" TEX ";)V", a4, &ret);
+        }
+        check(field(vm, fx, FX, "_sh") == 255 && field(vm, fx, FX, "_semi") == 1,
+              "Effect3D(light, shading, semi, sphereMap) keeps shading and the flag");
+        {
+            nj_field *lf = nj_field_lookup(vm, FX, "_lig", "L" LIG ";", 0);
+            nj_field *tf = nj_field_lookup(vm, FX, "_sph", "L" TEX ";", 0);
+            check(lf && tf && nj_rget(vm, fx, lf) == li && nj_rget(vm, fx, tf) == tx,
+                  "Effect3D keeps the light and the sphere map it was given");
+        }
+    }
+
     /*
      * The control: prove that a lookup can fail, or every check above could be
      * passing because lookups always succeed.

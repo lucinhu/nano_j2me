@@ -403,6 +403,74 @@ NJFN(str_length)
     return NJ_OK;
 }
 
+/*
+ * Case folding for regionMatches.  Only ASCII is folded, which is what the
+ * reference implementation does for the ranges a MIDlet can reach without a
+ * locale; a Turkish dotless i is not something this runtime can answer.
+ */
+static nj_u2 rm_fold(nj_u2 c)
+{
+    return (c >= 'A' && c <= 'Z') ? (nj_u2)(c + 32u) : c;
+}
+
+/*
+ * Shared body for both overloads.  With five arguments the first is the
+ * case-insensitive flag; with four there is no flag and the comparison is
+ * exact.  A negative or out-of-range window is not an exception: the Java
+ * contract says the answer is simply false.
+ */
+static nj_status region_matches(nj_vm *vm, nj_value *args, int argc, nj_value *ret)
+{
+    nj_ref self = NJ_THIS(args);
+    int i = (argc == 5) ? 1 : 0;
+    int fold = (argc == 5) ? (NJ_ARG_INT(args, 0) ? 1 : 0) : 0;
+    nj_s4 toff, ooff, len, k;
+    nj_ref other;
+    const nj_u2 *a, *b;
+    nj_u4 n, m;
+
+    toff = NJ_ARG_INT(args, i + 0);
+    other = NJ_ARG_REF(args, i + 1);
+    ooff = NJ_ARG_INT(args, i + 2);
+    len = NJ_ARG_INT(args, i + 3);
+    if (!other) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    n = nj_string_len(self);
+    m = nj_string_len(other);
+    if (len < 0 || toff < 0 || ooff < 0 ||
+        (nj_u4)toff + (nj_u4)len > n || (nj_u4)ooff + (nj_u4)len > m) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    a = nj_string_chars(self);
+    b = nj_string_chars(other);
+    for (k = 0; k < len; k++) {
+        nj_u2 ca = a[toff + k];
+        nj_u2 cb = b[ooff + k];
+
+        if (ca == cb) {
+            continue;
+        }
+        if (!fold || rm_fold(ca) != rm_fold(cb)) {
+            ret->i = 0;
+            return NJ_OK;
+        }
+    }
+    ret->i = 1;
+    return NJ_OK;
+}
+
+NJFN(str_regionMatches)
+{
+    return region_matches(vm, args, 4, ret);
+}
+
+NJFN(str_regionMatches_ci)
+{
+    return region_matches(vm, args, 5, ret);
+}
+
 NJFN(str_charAt)
 {
     nj_ref s = NJ_THIS(args);
@@ -1711,6 +1779,12 @@ static const nj_builtin_method string_methods[] = {
     M("substring",         "(I)Ljava/lang/String;",            0),
     M("substring",         "(II)Ljava/lang/String;",           0),
     M("concat",            "(Ljava/lang/String;)Ljava/lang/String;", 0),
+    /*
+     * regionMatches is a MIDP 1.0 / CLDC method, and neither overload was
+     * here at all: 3D台球之王_5014 calls the five-argument one.
+     */
+    M("regionMatches",     "(ILjava/lang/String;II)Z",        0),
+    M("regionMatches",     "(ZILjava/lang/String;II)Z",       0),
     M("replace",           "(CC)Ljava/lang/String;",           0),
     M("trim",              "()Ljava/lang/String;",             0),
     M("toLowerCase",       "()Ljava/lang/String;",             0),
@@ -1865,6 +1939,8 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/String", "replace",          "(CC)Ljava/lang/String;",  str_replace },
     { "java/lang/String", "trim",             "()Ljava/lang/String;",    str_trim },
     { "java/lang/String", "toLowerCase",      "()Ljava/lang/String;",    str_toLowerCase },
+    { "java/lang/String", "regionMatches",    "(ILjava/lang/String;II)Z",  str_regionMatches },
+    { "java/lang/String", "regionMatches",    "(ZILjava/lang/String;II)Z", str_regionMatches_ci },
     { "java/lang/String", "toUpperCase",      "()Ljava/lang/String;",    str_toUpperCase },
     { "java/lang/String", "startsWith",       "(Ljava/lang/String;)Z",   str_startsWith1 },
     { "java/lang/String", "startsWith",       "(Ljava/lang/String;I)Z",  str_startsWith },

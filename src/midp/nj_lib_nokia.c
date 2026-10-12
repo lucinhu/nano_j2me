@@ -33,6 +33,7 @@
 #define NJ_C_FSELECT   "com/nokia/mid/ui/FileSelect"
 #define NJ_C_FSDETAIL  "com/nokia/mid/ui/FileSelectDetail"
 #define NJ_C_SOUND     "com/nokia/mid/sound/Sound"
+#define NJ_C_SLISTEN   "com/nokia/mid/sound/SoundListener"
 
 /*
  * MultipointTouch.  Registering a listener succeeds and the listener is never
@@ -155,11 +156,48 @@ NJFN(nokia_snd_init)
     return NJ_OK;
 }
 
+/*
+ * Tell a registered SoundListener that the state changed.
+ *
+ * The listener is a real Java object held in an instance field, so the
+ * collector sees it.  Nothing calls this unless the state really did change:
+ * a listener fired for no reason makes a game believe something happened.
+ */
+static void snd_notify(nj_vm *vm, nj_ref self, nj_s4 state)
+{
+    nj_field *f = nj_field_lookup(vm, NJ_C_SOUND, "_listener",
+                                  "L" NJ_C_SLISTEN ";", 0);
+    nj_ref l;
+    nj_value a[2];
+
+    if (!f) {
+        return;
+    }
+    l = nj_field_read_ref(vm, self, f);
+    if (!l) {
+        return;
+    }
+    a[0].i = state;
+    (void)nj_call(vm, l, NJ_C_SLISTEN, "soundStateChanged",
+                  "(L" NJ_C_SOUND ";I)V", a, NULL);
+}
+
 NJFN(nokia_snd_play)
 {
     nj_field *f = snd_field(vm, "state");
     if (f) {
         nj_field_write_int(vm, NJ_THIS(args), f, 1);   /* SOUND_PLAYING */
+    }
+    snd_notify(vm, NJ_THIS(args), 1);
+    return NJ_OK;
+}
+
+NJFN(nokia_snd_setListener)
+{
+    nj_field *f = nj_field_lookup(vm, NJ_C_SOUND, "_listener",
+                                 "L" NJ_C_SLISTEN ";", 0);
+    if (f) {
+        nj_field_write_ref(vm, NJ_THIS(args), f, NJ_ARG_REF(args, 0));
     }
     return NJ_OK;
 }
@@ -170,6 +208,7 @@ NJFN(nokia_snd_stop)
     if (f) {
         nj_field_write_int(vm, NJ_THIS(args), f, 0);   /* SOUND_STOPPED */
     }
+    snd_notify(vm, NJ_THIS(args), 0);
     return NJ_OK;
 }
 
@@ -195,6 +234,10 @@ static const nj_builtin_method mplisten_methods[] = {
     M("pointersChanged", "([I)V", NJ_ACC_ABSTRACT)
 };
 
+static const nj_builtin_method slisten_methods[] = {
+    M("soundStateChanged", "(L" NJ_C_SOUND ";I)V", NJ_ACC_ABSTRACT)
+};
+
 static const nj_builtin_method mptouch_methods[] = {
     M("setMultipointTouchListener",
       "(L" NJ_C_MPLISTEN ";)V", NJ_ACC_STATIC),
@@ -205,6 +248,7 @@ static const nj_builtin_method mptouch_methods[] = {
 static const nj_builtin_field sound_fields[] = {
     { "state", "I", 0 },
     { "gain",  "I", 0 },
+    { "_listener", "L" NJ_C_SLISTEN ";", 0 },
     { "FORMAT_TONE",   "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
     { "FORMAT_WAV",    "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
     { "SOUND_STOPPED", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
@@ -226,6 +270,10 @@ static const nj_builtin_method sound_methods[] = {
     M("stop",          "()V",   0),
     M("setGain",       "(I)V",  0),
     M("getState",      "()I",   0),
+    /* Only one game in the corpus calls this, and it implements the
+     * listener itself: the interface has to exist or that class cannot
+     * even be loaded. */
+    M("setSoundListener", "(L" NJ_C_SLISTEN ";)V", 0),
     M("release",       "()V",   0)
 };
 
@@ -430,6 +478,10 @@ const nj_builtin_class nj_lib_nokia_classes[] = {
     { NJ_C_MPTOUCH, "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, mptouch_methods,
       (nj_u2)(sizeof(mptouch_methods) / sizeof(mptouch_methods[0])) },
+    { NJ_C_SLISTEN, NULL,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, slisten_methods,
+      (nj_u2)(sizeof(slisten_methods) / sizeof(slisten_methods[0])) },
     { NJ_C_FSELECT, "java/lang/Object", NJ_ACC_PUBLIC,
       fselect_fields,
       (nj_u2)(sizeof(fselect_fields) / sizeof(fselect_fields[0])),
@@ -486,6 +538,8 @@ const nj_native_entry nj_lib_nokia_table[] = {
     { NJ_C_SOUND, "<init>",  "([BI)V", nokia_snd_init },
     { NJ_C_SOUND, "init",    "(IJ)V", nokia_snd_init },
     { NJ_C_SOUND, "init",    "([BI)V", nokia_snd_init },
+    { NJ_C_SOUND, "setSoundListener",
+      "(L" NJ_C_SLISTEN ";)V", nokia_snd_setListener },
     { NJ_C_SOUND, "play",    "(I)V",  nokia_snd_play },
     { NJ_C_SOUND, "stop",    "()V",   nokia_snd_stop },
     { NJ_C_SOUND, "setGain", "(I)V",  nokia_snd_setGain },
