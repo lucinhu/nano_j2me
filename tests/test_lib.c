@@ -156,7 +156,7 @@ static nj_ref construct(nj_vm *vm, const char *cls, const char *desc,
 static nj_ref bais_over(nj_vm *vm, const unsigned char *data, nj_u4 len)
 {
     nj_ref arr = nj_byte_array_new(vm, len);
-    nj_value a[1];
+    nj_value a[2];
     nj_u4 i;
 
     if (!arr) {
@@ -173,7 +173,7 @@ static nj_ref bais_over(nj_vm *vm, const unsigned char *data, nj_u4 len)
 /* A DataInputStream over an existing stream. */
 static nj_ref dis_over(nj_vm *vm, nj_ref in)
 {
-    nj_value a[1];
+    nj_value a[2];
 
     a[0] = vref(in);
     return construct(vm, DIS, "(Ljava/io/InputStream;)V", a,
@@ -323,6 +323,7 @@ static void test_skips(nj_vm *vm)
     bais = bais_over(vm, data, 4u);
     OK(bais != NULL);
     a[0] = vlong(2);
+    a[1].bits = 0u;
     ret.bits = 0u;
     OK(nj_call_special(vm, bais, ISTREAM, "skip", "(J)J", a, &ret) == NJ_OK);
     OK_MSG(ret.j == 2, "InputStream.skip(2) = %lld, expected 2",
@@ -335,6 +336,7 @@ static void test_skips(nj_vm *vm)
     bais = bais_over(vm, data, 4u);
     OK(bais != NULL);
     a[0] = vlong(100);
+    a[1].bits = 0u;
     ret.bits = 0u;
     OK(nj_call_special(vm, bais, ISTREAM, "skip", "(J)J", a, &ret) == NJ_OK);
     OK_MSG(ret.j == 4, "skip(100) on 4 bytes = %lld, expected 4",
@@ -381,12 +383,14 @@ static void test_media(nj_vm *vm)
     OK(player != NULL);
 
     a[0] = vlong(5000);
+    a[1].bits = 0u;
     ret.bits = 0u;
     OK(nj_call(vm, player, PLAYER, "setMediaTime", "(J)J", a, &ret) == NJ_OK);
     OK_MSG(ret.j == 5000, "Player.setMediaTime returns the time it set, got %lld",
            (long long)ret.j);
 
     a[0] = vlong(-7);
+    a[1].bits = 0u;
     ret.bits = 0u;
     OK(nj_call(vm, player, PLAYER, "setMediaTime", "(J)J", a, &ret) == NJ_OK);
     OK_MSG(ret.j == 0, "and clamps a negative seek to 0, got %lld",
@@ -654,7 +658,7 @@ static nj_value vdouble(double d)
 static nj_value static_from_string(nj_vm *vm, const char *cls, const char *name,
                                    const char *desc, const char *text, int *threw)
 {
-    nj_value a[1];
+    nj_value a[2];
     nj_value r;
 
     r.bits = 0u;
@@ -1050,9 +1054,10 @@ static const unsigned char S_class[] = {
 #define RND "java/util/Random"
 static void test_random(nj_vm *vm)
 {
-    nj_value a[1];
+    nj_value a[2];
     nj_value out;
     a[0] = vlong(0);
+    a[1].bits = 0u;
     nj_ref r = construct(vm, RND, "(J)V", a, "Random(0)");
     if (!r) { return; }
 
@@ -1078,9 +1083,11 @@ static void test_random(nj_vm *vm)
 
     /* setSeed restarts the same LCG, so the sequence must match the JVM's. */
     a[0] = vlong(1);
+    a[1].bits = 0u;
     r = construct(vm, RND, "(J)V", a, "Random(1)");
     if (r) {
         a[0] = vlong(7);
+    a[1].bits = 0u;
         OK_MSG(nj_call(vm, r, RND, "setSeed", "(J)V", a, NULL) == NJ_OK,
                "setSeed(7)");
         OK_MSG(nj_call_int(vm, r, RND, "nextInt", "()I", NULL) == -1156638823,
@@ -1260,7 +1267,7 @@ static const unsigned char O_class[] = {
 
 static void test_constructor_arg_window(nj_vm *vm)
 {
-    nj_value a[1];
+    nj_value a[2];
     nj_value ret;
 
     OK(nj_class_load(vm, "S", S_class, (nj_u4)sizeof(S_class)) != NULL);
@@ -1294,7 +1301,7 @@ static void test_constructor_arg_window(nj_vm *vm)
 
 static void test_alloc_gives_up(nj_vm *vm)
 {
-    nj_value a[1];
+    nj_value a[2];
     nj_value ret;
     const char *d;
 
@@ -1451,7 +1458,7 @@ static void test_data_interfaces(nj_vm *vm)
  */
 static void test_long_to_string(nj_vm *vm)
 {
-    nj_value a[2];
+    nj_value a[3];
     nj_value ret;
 
     a[0].j = 0;
@@ -1480,13 +1487,14 @@ static void test_long_to_string(nj_vm *vm)
            "Long.toString(Long.MIN_VALUE) does not overflow");
 
     a[0].j = 255;
-    a[1] = vint(16);
+    a[1].bits = 0u;
+    a[2] = vint(16);
     ret.bits = 0u;
     OK_MSG(nj_call_static(vm, LONGW, "toString", "(JI)Ljava/lang/String;", a, &ret) == NJ_OK
            && nj_string_equals_utf8(ret.r, "ff"),
            "Long.toString(255, 16)");
 
-    a[1] = vint(99);                            /* out of range: base ten */
+    a[2] = vint(99);                            /* out of range: base ten */
     ret.bits = 0u;
     OK_MSG(nj_call_static(vm, LONGW, "toString", "(JI)Ljava/lang/String;", a, &ret) == NJ_OK
            && nj_string_equals_utf8(ret.r, "255"),
@@ -1657,7 +1665,7 @@ static void test_baos_close_keeps_data(nj_vm *vm)
 static void test_data_input_available(nj_vm *vm)
 {
     static const unsigned char data[5] = { 1, 2, 3, 4, 5 };
-    nj_value a[1];
+    nj_value a[2];
     nj_value ret;
     nj_ref bais = bais_over(vm, data, sizeof(data));
     nj_ref dis;

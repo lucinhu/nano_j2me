@@ -700,7 +700,8 @@ NJFN(long_toString)
 
 NJFN(long_toString_radix)
 {
-    nj_s4 r = NJ_ARG_INT(args, 1);
+    /* A long costs two slots, so the radix sits at index 2, not 1. */
+    nj_s4 r = NJ_ARG_INT(args, 2);
     nj_u8 mag;
     int neg;
 
