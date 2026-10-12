@@ -15,8 +15,21 @@
 #include <string.h>
 
 #include "nj2me/nj_types.h"
+#include "nj_midi.h"    /* nj_midi_mem: the renderer borrows this allocator */
 
-nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out);
+static void *t_alloc(void *ud, nj_size n)
+{
+    (void)ud;
+    return malloc(n);
+}
+
+static void t_free(void *ud, void *p)
+{
+    (void)ud;
+    free(p);
+}
+
+static const nj_midi_mem MEM = { NULL, t_alloc, t_free };
 
 static int g_checks;
 static int g_failures;
@@ -71,14 +84,14 @@ int main(void)
     memcpy(quiet, g_header, sizeof(g_header));
     memcpy(quiet + sizeof(g_header), g_track_silent, sizeof(g_track_silent));
 
-    check(nj_midi_render(NULL, 0u, &frames) == NULL,
+    check(nj_midi_render(NULL, 0u, &frames, &MEM) == NULL,
           "a null file renders nothing");
-    check(nj_midi_render("not a midi file at all", 23u, &frames) == NULL,
+    check(nj_midi_render("not a midi file at all", 23u, &frames, &MEM) == NULL,
           "a file without MThd renders nothing");
-    check(nj_midi_render(quiet, sizeof(quiet), &frames) == NULL,
+    check(nj_midi_render(quiet, sizeof(quiet), &frames, &MEM) == NULL,
           "a MIDI file with no notes renders nothing");
 
-    pcm = nj_midi_render(file, sizeof(file), &frames);
+    pcm = nj_midi_render(file, sizeof(file), &frames, &MEM);
     check(pcm != NULL, "the A4 file renders");
     if (pcm == NULL) {
         printf("%d checks, %d failures\n", g_checks, g_failures);
@@ -119,7 +132,7 @@ int main(void)
         printf("     crossings = %d (expected about 440)\n", crossings);
     }
 
-    free(pcm);
+    t_free(NULL, pcm);
     printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures != 0;
 }

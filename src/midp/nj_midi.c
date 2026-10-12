@@ -40,10 +40,11 @@
  * process must not be able to see each other.
  */
 
-#include <stdlib.h>
-#include <string.h>
-
 #include "nj_midi.h"
+
+#if NJ_USE_LIBC
+#  include <string.h>
+#endif
 
 /* A minute of music.  Beyond that a title is looping, and the loop is better
  * served by the Player's own repeat than by a longer buffer. */
@@ -153,7 +154,8 @@ typedef struct {
     int        smpte;           /* division was SMPTE frames instead */
 } mid_song;
 
-static int mid_add_note(mid_song *s, nj_u4 tick, nj_u4 note, nj_u4 vel, int on)
+static int mid_add_note(mid_song *s, const nj_midi_mem *mem,
+                        nj_u4 tick, nj_u4 note, nj_u4 vel, int on)
 {
     if (s->nnotes == s->capnotes) {
         nj_u4 cap = (s->capnotes == 0u) ? 256u : s->capnotes * 2u;
@@ -164,9 +166,13 @@ static int mid_add_note(mid_song *s, nj_u4 tick, nj_u4 note, nj_u4 vel, int on)
         if (s->nnotes >= cap) {
             return 1;           /* full: keep what we have, do not fail */
         }
-        n = (mid_note *)realloc(s->notes, (size_t)cap * sizeof(*n));
+        n = (mid_note *)mem->alloc(mem->ud, (nj_size)cap * sizeof(*n));
         if (n == NULL) {
             return 0;
+        }
+        if (s->notes != NULL) {
+            memcpy(n, s->notes, (nj_size)s->nnotes * sizeof(*n));
+            mem->free(mem->ud, s->notes);
         }
         s->notes = n;
         s->capnotes = cap;
@@ -201,7 +207,7 @@ static void mid_add_tempo(mid_song *s, nj_u4 tick, nj_u4 us)
 }
 
 /* Walk one MTrk chunk and collect its notes and tempo changes. */
-static void mid_track(mid_song *s, mid_rd *r, nj_u4 len)
+static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
 {
     nj_u4 end = r->i + len;
     nj_u4 tick = 0u;
@@ -274,11 +280,11 @@ static void mid_track(mid_song *s, mid_rd *r, nj_u4 len)
                 return;
             }
             if (hi == 0x90u && d2 != 0u) {
-                if (!mid_add_note(s, tick, d1 & 0x7Fu, d2 & 0x7Fu, 1)) {
+                if (!mid_add_note(s, mem, tick, d1 & 0x7Fu, d2 & 0x7Fu, 1)) {
                     return;
                 }
             } else if (hi == 0x80u || hi == 0x90u) {
-                if (!mid_add_note(s, tick, d1 & 0x7Fu, 0u, 0)) {
+                if (!mid_add_note(s, mem, tick, d1 & 0x7Fu, 0u, 0)) {
                     return;
                 }
             }
@@ -377,8 +383,13 @@ static nj_u4 mid_step_for(nj_u4 note)
     return step;
 }
 
-nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out)
+nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
+                      const nj_midi_mem *mem)
 {
+    if (mem == NULL || mem->alloc == NULL || mem->free == NULL) {
+        return NULL;
+    }
+
     mid_song song;
     mid_rd r;
     nj_u4 ntrk = 0u;
@@ -443,7 +454,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out)
             if (len > r.n - r.i) {
                 break;
             }
-            mid_track(&song, &r, len);
+            mid_track(&song, mem, &r, len);
             r.i = save + 8u + len;
         } else {
             if (!mid_skip(&r, len)) {
@@ -453,7 +464,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out)
     }
 
     if (song.nnotes == 0u || song.division == 0u) {
-        free(song.notes);
+        mem->free(mem->ud, song.notes);
         return NULL;            /* nothing to play: let the caller stay silent */
     }
 
@@ -471,9 +482,12 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out)
         frames = NJ_MIDI_MAX_FRAMES;
     }
 
-    pcm = (nj_u1 *)calloc((size_t)frames * 2u, 1u);
+    pcm = (nj_u1 *)mem->alloc(mem->ud, (nj_size)frames * 2u);
+    if (pcm != NULL) {
+        memset(pcm, 0, (nj_size)frames * 2u);
+    }
     if (pcm == NULL) {
-        free(song.notes);
+        mem->free(mem->ud, song.notes);
         return NULL;
     }
 
@@ -555,7 +569,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out)
         pcm[i * 2u + 1u] = (nj_u1)((scaled >> 8) & 0xFF);
     }
 
-    free(song.notes);
+    mem->free(mem->ud, song.notes);
     if (frames_out != NULL) {
         *frames_out = frames;
     }

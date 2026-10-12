@@ -56,6 +56,21 @@
 #define NJ_CALL(name, vm, th, args, ret) name((vm), (th), (args), (ret))
 #define NJ_UNUSED(x) ((void)(x))
 
+/*
+ * The MIDI renderer allocates through the caller (see nj_midi.h) so that
+ * nothing in the runtime reaches for libc: every byte goes through
+ * nj_host_alloc, which is what lets teardown account for it.
+ */
+static void *midi_alloc(void *ud, nj_size n)
+{
+    return nj_host_alloc((nj_vm *)ud, n);
+}
+
+static void midi_free(void *ud, void *p)
+{
+    nj_host_free((nj_vm *)ud, p);
+}
+
 /* ------------------------------------------------------------------ */
 /* Names                                                               */
 /* ------------------------------------------------------------------ */
@@ -893,15 +908,21 @@ NJFN(media_createPlayer_stream)
          * no sound as a quiet moment.
          */
         if (strcmp(what, "MIDI") == 0) {
+            nj_midi_mem mem;
             nj_u4 mframes = 0u;
-            nj_u1 *rendered = nj_midi_render(barray_bytes(data),
-                                             barray_len(data), &mframes);
+            nj_u1 *rendered;
+
+            mem.ud = vm;
+            mem.alloc = midi_alloc;
+            mem.free = midi_free;
+            rendered = nj_midi_render(barray_bytes(data), barray_len(data),
+                                      &mframes, &mem);
 
             if (rendered != NULL && mframes > 0u) {
                 nj_ref pcm = nj_byte_array_new(vm, mframes * 2u);
                 if (pcm != NULL) {
                     memcpy(pcm->u.bytes, rendered, (size_t)mframes * 2u);
-                    free(rendered);
+                    midi_free(vm, rendered);
                     w_r(vm, p, F_P_DATA, "[B", pcm);
                     w_i(vm, p, F_P_RATE, (nj_s4)NJ_MIDI_RATE);
                     w_i(vm, p, F_P_CHAN, 1);
