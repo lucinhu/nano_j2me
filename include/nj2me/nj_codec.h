@@ -249,11 +249,28 @@ void nj_image_release(nj_vm *vm, nj_image *img);
 extern const nj_codec nj_codec_png_software;
 
 /*
+ * The software GIF decoder (src/gfx/nj_gif.c), unless NJ_ENABLE_GIF is 0.
+ * MIDP 1.0 required GIF, and a MIDlet whose artwork is GIF usually swallows
+ * the resulting IOException and paints a null Image, so the failure shows up
+ * as a black screen rather than as an error.
+ */
+extern const nj_codec nj_codec_gif_software;
+
+/*
  * The software baseline JPEG decoder (src/gfx/nj_jpeg.c), when
  * NJ_ENABLE_JPEG is 1.  Otherwise this is a stub whose accepts() returns 0,
  * so a JPEG simply reports "no decoder" instead of being mis-detected.
  */
 extern const nj_codec nj_codec_jpeg_software;
+
+/*
+ * The GIF decode entry point (src/gfx/nj_gif.c).  Declared here because the
+ * provider descriptor is built from it and a codec test drives it directly,
+ * without a VM.
+ */
+nj_image *nj_gif_decode(const void *data, nj_u4 size,
+                        void *(*alloc)(void *ud, nj_size n), void *ud,
+                        void (*dealloc)(void *ud, void *p), const char **err);
 
 /*
  * The three entry points a software JPEG provider implements

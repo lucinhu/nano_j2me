@@ -442,6 +442,9 @@ void nj_codecs_register_builtins(nj_vm *vm)
 #if NJ_ENABLE_PNG
     (void)nj_codec_register(vm, &nj_codec_png_software, NJ_CODEC_PRIO_BUILTIN);
 #endif
+#if NJ_ENABLE_GIF
+    (void)nj_codec_register(vm, &nj_codec_gif_software, NJ_CODEC_PRIO_BUILTIN);
+#endif
 #if NJ_ENABLE_JPEG
     (void)nj_codec_register(vm, &nj_codec_jpeg_software, NJ_CODEC_PRIO_BUILTIN);
 #else

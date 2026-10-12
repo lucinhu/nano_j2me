@@ -108,6 +108,14 @@
 #ifndef NJ_ENABLE_JPEG
 #  define NJ_ENABLE_JPEG 0
 #endif
+/*
+ * GIF, on by default: MIDP 1.0 required it, and a MIDlet that cannot decode
+ * its own artwork tends to swallow the IOException and carry on painting a
+ * null Image, which reads as a black screen rather than as an error.
+ */
+#ifndef NJ_ENABLE_GIF
+#  define NJ_ENABLE_GIF 1
+#endif
 #ifndef NJ_ENABLE_FONT_CJK      /* built-in CJK glyph provider hook */
 #  define NJ_ENABLE_FONT_CJK 0
 #endif

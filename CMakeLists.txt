@@ -92,6 +92,7 @@ set(NJ_SOURCES
   src/gfx/nj_png.c
   src/gfx/nj_jpeg.c
   src/gfx/nj_codec.c
+  src/gfx/nj_gif.c
   # ---- compression ----
   src/zip/nj_inflate.c
   src/zip/nj_zip.c
@@ -357,6 +358,9 @@ if(NJ_BUILD_TESTS)
   # ---- the formats ----
   nj_add_test(test_zip       tests/test_zip.c ${NJ_FIXTURES})
   nj_add_test(test_codec     tests/test_codec.c)
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gif.c)
+    nj_add_test(test_gif tests/test_gif.c)
+  endif()
 
   # Malformed class files must produce a clean error, not a crash and not a
   # hang.  Small case count so it stays a smoke test; run the tool directly with
