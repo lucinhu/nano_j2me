@@ -57,3 +57,34 @@ The lesson that does generalise: a corpus verdict of "flat frame" cannot be
 read as "the game does not draw".  For this title it draws correctly for the
 first 14 frames and again on every keypress.  Any fix aimed at the wrong one of
 those two situations will look like it should work and will not.
+
+## Update: the same title, one screen size later
+
+The counters above were taken at 176x208 - the first entry in `SIZES`, and the
+size the corpus settles on because 宠物王国2紫_5550 accepts it.  Running the
+same binary at each size in turn, last frame of a 400-frame run:
+
+    size        frames presented   colours in the last frame
+    176x208     800                 1
+    240x320     800                 28
+    128x160     800                 1
+    320x240     800                 3
+
+No size is rejected; the title simply draws at 240x320 and does not at the
+others.  So "the picture is real, and it comes back when the game is poked" and
+"the screen is pure black" were both true observations of the same game at
+different sizes, and the corpus's habit of stopping at the first size that
+merely *starts* was manufacturing half of the failure list.
+
+`tools/run_game_corpus.sh` now tries the next size whenever the verdict is
+"flat frame" or "could not start", and takes the first size that actually
+draws.  `tools/check_corpus_size_retry.sh` pins the behaviour down with a
+fixture that draws two colours above 200 pixels wide and one below it.
+
+What this does NOT establish: whether the game draws nothing at 176x208 because
+it lays itself out for a screen it was built for, or because this runtime
+mis-lays-out at that size.  The two look identical from the outside - one
+paints, the other does not - and telling them apart needs a probe inside that
+game's own paint path, at 176x208, watching where its draw calls land.  The
+corpus fix stands either way: it no longer reports a size-dependent title as a
+title that cannot draw.
