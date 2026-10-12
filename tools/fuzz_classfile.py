@@ -3,8 +3,24 @@ crashes, or HANGS.
 
 A hang is as much a defect as a crash: a malformed JAR that spins forever is a
 denial of service, and the project's rule is a loud error, not a stuck process.
+
+WHAT THIS TOOL GOT WRONG, twice, and both are worth keeping.
+
+First it reported "300 clean, 0 crashes" while testing nothing: the JAR it
+built contained only the mutated class, so the MIDlet itself was missing and
+every case failed identically before reaching the mutation.
+
+Then it reported "18 of 36 mutations HANG" as the project's most serious
+defect class.  It had run without --run-frames, and nj_midp_run loops until the
+MIDlet exits - so a game that never calls notifyDestroyed() runs forever BY
+DESIGN.  The control settled it: the UNMUTATED hello.jar "hangs" the same way.
+
+A third, quieter one: a fixed 6 s budget per case.  Run under `ctest -j` it
+failed twice in a row while passing alone in 10 s, because a busy machine
+makes any absolute timeout a coin flip.  There is now a control run first and
+the budget is derived from it.
 """
-import os, random, struct, subprocess, sys, tempfile, zipfile
+import os, random, struct, subprocess, sys, tempfile, time, zipfile
 
 #
 #     tools/fuzz_classfile.py [binary] [cases]
@@ -18,8 +34,25 @@ import os, random, struct, subprocess, sys, tempfile, zipfile
 #
 # Until they are fixed this stays a tool rather than a test: a gate that hangs
 # is worse than no gate.
-SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                   '..', 'tests', 'games', 'hello.jar')
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+def pick_source():
+    """A JAR to mutate, preferring ones the repository can always build.
+
+    tests/games/ is gitignored and must stay that way, so a fresh checkout has
+    no hello.jar in it; tests/fixtures/ holds the same kind of thing and is
+    produced by the build.
+    """
+    cands = [os.path.join(HERE,'..','tests','fixtures',n) for n in
+             ('keysdemo.jar','gamedemo.jar','blockdemo.jar')]
+    cands.append(os.path.join(HERE,'..','tests','games','hello.jar'))
+    for c in cands:
+        if os.path.exists(c):
+            return c
+    sys.stderr.write('fuzz_classfile: no MIDlet fixture to mutate; skipping\n')
+    sys.exit(0)
+
+SRC = pick_source()
 BIN = sys.argv[1] if len(sys.argv) > 1 else './build/nj2me'
 N   = int(sys.argv[2]) if len(sys.argv) > 2 else 60
 PER = 6
@@ -68,6 +101,27 @@ def mutate(kind):
         m[len(m)-1] = random.randrange(256)
     return bytes(m)
 
+#
+# THE CONTROL COMES FIRST.  An absolute per-case timeout is a claim about this
+# machine's speed, and this test runs under `ctest -j` alongside a corpus scan
+# that loads every core.  Time the same command on the SAME unmutated fixture,
+# in the same conditions, and let that decide what "too slow" means.
+#
+# This is not a nicety: with a flat 6 s budget the test passed alone in 10 s
+# and failed twice in a row under load, which is a gate nobody can trust.
+t0 = time.monotonic()
+try:
+    subprocess.run([BIN,'--port','headless','--heap','8','--run-frames','30',SRC],
+                   capture_output=True, timeout=PER*10)
+except subprocess.TimeoutExpired:
+    sys.stderr.write('fuzz_classfile: the UNMUTATED fixture did not finish in '
+                     '%ds; this machine is too loaded to judge anything\n' % (PER*10))
+    sys.exit(0)
+BASE = max(time.monotonic() - t0, 0.05)
+BUDGET = max(PER, BASE * 20.0)
+print('control: unmutated fixture took %.2fs, so a case is a hang after %.1fs'
+      % (BASE, BUDGET))
+
 hangs, crashed, ok = [], [], 0
 for i in range(N):
     kind = KINDS[i % len(KINDS)] if i < len(KINDS) else random.choice(KINDS)
@@ -80,7 +134,7 @@ for i in range(N):
         # reported 18 of 36 mutations as hangs when most were ordinary games.
         r = subprocess.run([BIN,'--port','headless','--heap','8',
                             '--run-frames','30',jar],
-                           capture_output=True, timeout=PER)
+                           capture_output=True, timeout=BUDGET)
         out = (r.stdout + r.stderr).decode('utf8','replace')
         if r.returncode < 0:
             crashed.append((i, kind, -r.returncode, out[-120:]))
@@ -94,7 +148,7 @@ for i in range(N):
     sys.stdout.flush()
 
 print()
-print('clean: %d   crashed: %d   HUNG (>%ds): %d' % (ok, len(crashed), PER, len(hangs)))
+print('clean: %d   crashed: %d   HUNG (>%.1fs): %d' % (ok, len(crashed), BUDGET, len(hangs)))
 for h in hangs[:12]:
     print('  HANG  case %d kind=%s' % h)
 for c in crashed[:8]:
