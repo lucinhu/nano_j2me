@@ -1829,6 +1829,66 @@ static void test_image_survives_collection(nj_vm *vm)
 }
 
 /*
+ * A frame slot may hold the address of a block that has since been freed.
+ *
+ * "Inside the arena" is not enough to call that address an object: the sweep
+ * clears the block's magic and reuses its first payload word as the free-list
+ * link - and that word is nj_object.cls, so a collector that trusted the range
+ * alone walked a link pointer as if it were a class.  tests/games/
+ * 都市赛车3_10192.jar died that way inside the MIDlet's own System.gc(), with
+ * cls == 0x9000000000.
+ *
+ * The stale pointer is manufactured here because nothing in C keeps a
+ * reference to an object it has dropped: the object is allocated, dropped,
+ * collected, and then written into the scanned slot region of a frame.
+ */
+static void test_gc_ignores_freed_slot(nj_vm *vm)
+{
+    static const char *IMG = "javax/microedition/lcdui/Image";
+    nj_thread *th;
+    nj_object *freed;
+    nj_ref dead;
+
+    OK_MSG(nj_class_lookup(vm, IMG) != NULL,
+           "javax/microedition/lcdui/Image is registered");
+
+    dead = nj_object_new(vm, IMG);
+    OK_MSG(dead != NULL, "an object is allocated so it can be dropped");
+    if (!dead) {
+        clean(vm, "freed-slot setup");
+        return;
+    }
+    freed = (nj_object *)(void *)dead;
+
+    /* Nothing roots it: the next collection reclaims the block. */
+    OK_MSG(nj_gc_run(vm) == NJ_OK, "the first collection runs");
+    OK_MSG(freed->mark == 0u, "the dropped block is not marked any more");
+
+    /*
+     * Put the stale address where the collector scans.  A frame's slot region
+     * is [locals, stack_limit); a C-bridge frame has no method, so the test
+     * records the limit the way the interpreter would.
+     */
+    th = nj_thread_create(vm, NULL, 0);
+    OK_MSG(th != NULL, "a thread to hang the stale slot on");
+    if (th) {
+        th->nframes = 1;
+        memset(&th->frames[0], 0, sizeof(th->frames[0]));
+        th->frames[0].locals = th->stack_mem;
+        th->frames[0].stack = th->stack_mem + 8;
+        th->frames[0].sp = th->stack_mem + 9;
+        th->frames[0].stack_limit = th->stack_mem + 16;
+        th->stack_mem[8].r = dead;
+    }
+
+    OK_MSG(nj_gc_run(vm) == NJ_OK, "a collection with the stale slot runs");
+    OK_MSG(freed->mark == 0u,
+           "the freed block is not traced as an object (mark=%u)",
+           (unsigned)freed->mark);
+    clean(vm, "stale pointer in a scanned slot");
+}
+
+/*
  * Integer.valueOf(String, int) and Long.valueOf(String)/valueOf(String, int).
  * CLDC 1.1 declares the radix forms next to parseInt/parseLong, and only the
  * parse forms existed: tests/games/QQ飞车2010_5772.jar boxes a value it parsed
@@ -1937,6 +1997,7 @@ int main(void)
     test_long_to_string(vm);
     test_player_survives_collection(vm);
     test_image_survives_collection(vm);
+    test_gc_ignores_freed_slot(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

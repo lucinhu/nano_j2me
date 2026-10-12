@@ -520,6 +520,23 @@ static void nj_gc_mark_object(nj_vm *vm, nj_object *o)
     if (!nj_is_heap_ptr(vm, o)) {
         return;   /* untyped slot holding a non-reference value */
     }
+    /*
+     * Arena membership is not enough: a slot can also hold a pointer to a
+     * block that has since been FREED.  The sweep clears the block's magic and
+     * reuses its first payload word as the free-list link, so the `cls` field
+     * is a link pointer by then, and tracing it walked off into unmapped
+     * memory.  tests/games/都市赛车3_10192.jar did exactly that from a
+     * System.gc(): the chain was nj_gc_run -> nj_gc_mark_roots ->
+     * nj_gc_mark_object -> nj_gc_mark_children with o->cls == 0x9000000000.
+     *
+     * Every live block carries NJ_BLOCK_MAGIC in its header; a free one has it
+     * cleared.  One compare of a word that is always in cache turns a wild
+     * dereference into a skip, which is the same bargain the range check makes.
+     */
+    if (((const nj_block *)(const void *)((const nj_u1 *)(const void *)o - NJ_BLOCK_HDR))->magic
+        != NJ_BLOCK_MAGIC) {
+        return;   /* not the payload of a live block */
+    }
     if (o->mark) {
         return;
     }
