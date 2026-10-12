@@ -1976,6 +1976,77 @@ static void test_midi_too_big_for_heap(void)
     nj_port_shutdown(&port);
 }
 
+/*
+ * A song longer than the old sixty second ceiling has to keep playing.  The
+ * whole-file renderer stopped at NJ_MIDI_MAX_FRAMES - 1,323,000 frames, one
+ * minute at 22050 Hz - and the Player called that the end of the media, which
+ * cut off a tenth of the corpus mid-song.  A streamed Player reports the
+ * song's real length and its pushed count runs past the old ceiling.
+ */
+static void test_midi_long_song_streams(nj_vm *vm)
+{
+    static const unsigned char smf[] = {
+        0x4D, 0x54, 0x68, 0x64, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x01,
+        0x01, 0xE0,                                      /* division 480 */
+        0x4D, 0x54, 0x72, 0x6B, 0x00, 0x00, 0x00, 0x18, /* MTrk, 24 bytes */
+        0x00, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20,        /* tempo: 500000 us */
+        0x00, 0xC0, 40,                                  /* strings: held */
+        0x00, 0x90, 69, 100,                             /* A4 on */
+        0x87, 0xA3, 0x00, 0x80, 69, 64,                  /* +115200 ticks = 120 s */
+        0x00, 0xFF, 0x2F, 0x00                           /* end of track */
+    };
+    nj_ref bar, in;
+    nj_value ret;
+    nj_value a[2];
+    nj_value dur;
+    long before;
+    long pushed = 0;
+    int i;
+
+    bar = nj_byte_array_new(vm, (nj_u4)sizeof(smf));
+    OK(bar != NULL);
+    if (bar == NULL) {
+        return;
+    }
+    memcpy(bar->u.bytes, smf, sizeof(smf));
+    a[0].r = bar;
+    a[1].bits = 0u;
+    in = construct(vm, BAIS, "([B)V", a, "a stream over a 120 second MIDI file");
+
+    a[0].r = in;
+    a[1].r = NULL;
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                          "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                          "javax/microedition/media/Player;", a, &ret) == NJ_OK,
+           "Manager.createPlayer(a 120 second MIDI file)");
+    OK_MSG(ret.r != NULL, "a Player for the long MIDI file");
+    if (ret.r == NULL) {
+        return;
+    }
+
+    dur.bits = 0u;
+    OK(nj_call(vm, ret.r, PLAYER, "getDuration", "()J", NULL, &dur) == NJ_OK);
+    OK_MSG(dur.j > 115000000LL,
+           "the long song's duration is its own, not the ceiling (got %lld us)",
+           (long long)dur.j);
+
+    OK(nj_call(vm, ret.r, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    before = nj_port_headless_pcm_frames(vm->port);
+    for (i = 0; i < 600; i++) {
+        pushed = nj_port_headless_pcm_frames(vm->port) - before;
+        if (pushed > 1323000L) {
+            break;
+        }
+        nj_media_frame(vm);
+    }
+    pushed = nj_port_headless_pcm_frames(vm->port) - before;
+    OK_MSG(pushed > 1323000L,
+           "the Player streams past the old sixty second ceiling (%ld frames)",
+           pushed);
+    OK(nj_call(vm, ret.r, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
+}
+
 static void test_midi_player_is_pcm(nj_vm *vm)
 {
     /* The same file tests/test_midi.c renders: 480 ticks per quarter, 500000
@@ -2707,6 +2778,7 @@ int main(void)
     test_player_survives_collection(vm);
     test_eight_bit_wav_is_widened(vm);
     test_midi_player_is_pcm(vm);
+    test_midi_long_song_streams(vm);
     test_midi_too_big_for_heap();
     test_media_refusal_names_the_container(vm);
     test_image_survives_collection(vm);

@@ -879,7 +879,13 @@ typedef struct nj_midi_stream {
     nj_u4 rev_pa;
     nj_u4 rev_pb;
     nj_u4 rev_any;
-    const nj_midi_mem *mem;
+    /*
+     * The allocator is held BY VALUE: the caller's nj_midi_mem is usually a
+     * local in the branch that opened the stream, and a pointer to it dangles
+     * the moment that branch returns - which showed up as a jump through a
+     * garbage function pointer on close().
+     */
+    nj_midi_mem mem;
 } nj_midi_stream;
 
 static void mid_stream_drop(nj_midi_stream *s)
@@ -887,11 +893,11 @@ static void mid_stream_drop(nj_midi_stream *s)
     if (s == NULL) {
         return;
     }
-    if (s->mem != NULL) {
-        s->mem->free(s->mem->ud, s->song.notes);
-        s->mem->free(s->mem->ud, s->song.ctls);
-        s->mem->free(s->mem->ud, s->rev);
-        s->mem->free(s->mem->ud, s);
+    if (s->mem.free != NULL) {
+        s->mem.free(s->mem.ud, s->song.notes);
+        s->mem.free(s->mem.ud, s->song.ctls);
+        s->mem.free(s->mem.ud, s->rev);
+        s->mem.free(s->mem.ud, s);
     }
 }
 
@@ -1490,7 +1496,7 @@ nj_midi_stream *nj_midi_stream_open(const void *data, nj_u4 size, const nj_midi_
         return NULL;
     }
     memset(s, 0, sizeof(*s));
-    s->mem = mem;
+    s->mem = *mem;
     if (!mid_stream_init(s, data, size, mem)) {
         mid_stream_drop(s);
         return NULL;
