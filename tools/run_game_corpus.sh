@@ -86,8 +86,8 @@ fail=0
 # THR and IO come from the port, not from the pixels.  A title that saves a
 # high score and one that silently fails to are the same sequence of frames,
 # so those two columns are the only way this table can tell them apart.
-printf '%-14s %-9s %-8s %-8s %-9s %-4s %-6s %s\n' TITLE SIZE FRAMES COLOURS CHANGED THR IO RESULT
-printf '%-14s %-9s %-8s %-8s %-9s %-4s %-6s %s\n' ----- ---- ------ ------- ------- --- ---- ------
+printf '%-14s %-9s %-8s %-8s %-9s %-4s %-6s %-6s %s\n' TITLE SIZE FRAMES COLOURS CHANGED THR IO GFX RESULT
+printf '%-14s %-9s %-8s %-8s %-9s %-4s %-6s %-6s %s\n' ----- ---- ------ ------- ------- --- ---- --- ------
 
 # Keys a title needs to get past its splash screen, as "frame:key" pairs.
 #
@@ -272,11 +272,28 @@ for jar in "${JARS[@]}"; do
     io="$(printf '%s' "$obs" | sed -n 's/.*file_writes=\([0-9-]*\).*/\1/p')"
     [ -n "$thr" ] || thr='?'
     [ -n "$io" ] || io='?'
+
+    # How many drawing calls the game made.  Without it, every flat frame reads
+    # the same, and the two situations it covers need opposite work: gfx=0
+    # means paint() asked for nothing (the game is waiting for something), and
+    # gfx>0 means it drew and the pixels did not survive to the port.
+    gfx="$(sed -n 's/.*[^a-z]gfx=\([0-9]*\).*/\1/p' "$log" 2>/dev/null | head -1)"
+    [ -n "$gfx" ] || gfx='?'
     rm -rf "$out"
 
     IFS='|' read -r status nframes ncols nchanged note <<<"$verdict"
-    printf '%-14s %-9s %-8s %-8s %-9s %-4s %-6s %s\n' "$title" "$used" "$nframes" "$ncols" \
-           "$nchanged" "$thr" "$io" "$status${note:+ ($note)}"
+    # Say which of the two flat-frame situations this is, in the line itself.
+    case "$note" in
+        *"flat frame"*)
+            case "$gfx" in
+                0)   note="$note; paint() called nothing on the Graphics" ;;
+                '?') ;;
+                *)   note="$note; $gfx drawing calls reached nothing" ;;
+            esac
+            ;;
+    esac
+    printf '%-14s %-9s %-8s %-8s %-9s %-4s %-6s %-6s %s\n' "$title" "$used" "$nframes" "$ncols" \
+           "$nchanged" "$thr" "$io" "$gfx" "$status${note:+ ($note)}"
     if [ "$status" = "PASS" ] || [ "$status" = "SKIP" ]; then
         pass=$((pass + 1))
     else
