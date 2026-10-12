@@ -821,6 +821,49 @@ static void test_numbers(nj_vm *vm)
                && (nj_u4)r.i == 0x7FC00000u,
            "floatToIntBits(NaN) is the canonical quiet NaN");
 
+    /*
+     * The static isNaN/isInfinite(F) pair, which CLDC 1.1 declares alongside
+     * the no-arg instance forms.  Only the instance forms existed, so a MIDlet
+     * that tested a computed float failed to resolve the call - a real game
+     * (急速狂飙完美破解版_4964) stopped dead on Float.isNaN(F)Z.  Both
+     * descriptors are declared here, and the two must not be confused: a
+     * lookup that answered the static call with the instance body would read
+     * the receiver out of an argument list that has none.
+     */
+    a[0] = vfloat(0.0f / 0.0f);
+    OK_MSG(nj_call_static(vm, FLOATW, "isNaN", "(F)Z", a, &r) == NJ_OK
+               && r.i == 1,
+           "Float.isNaN(NaN) is true");
+    a[0] = vfloat(1.0f);
+    OK_MSG(nj_call_static(vm, FLOATW, "isNaN", "(F)Z", a, &r) == NJ_OK
+               && r.i == 0,
+           "Float.isNaN(1.0f) is false");
+    a[0] = vfloat(1.0f / 0.0f);
+    OK_MSG(nj_call_static(vm, FLOATW, "isInfinite", "(F)Z", a, &r) == NJ_OK
+               && r.i == 1,
+           "Float.isInfinite(1.0f/0.0f) is true");
+    a[0] = vfloat(-1.0f / 0.0f);
+    OK_MSG(nj_call_static(vm, FLOATW, "isInfinite", "(F)Z", a, &r) == NJ_OK
+               && r.i == 1,
+           "Float.isInfinite(-1.0f/0.0f) is true");
+    a[0] = vfloat(1.0f);
+    OK_MSG(nj_call_static(vm, FLOATW, "isInfinite", "(F)Z", a, &r) == NJ_OK
+               && r.i == 0,
+           "Float.isInfinite(1.0f) is false");
+
+    a[0] = vdouble(0.0 / 0.0);
+    OK_MSG(nj_call_static(vm, DOUBLEW, "isNaN", "(D)Z", a, &r) == NJ_OK
+               && r.i == 1,
+           "Double.isNaN(NaN) is true");
+    a[0] = vdouble(1.0 / 0.0);
+    OK_MSG(nj_call_static(vm, DOUBLEW, "isInfinite", "(D)Z", a, &r) == NJ_OK
+               && r.i == 1,
+           "Double.isInfinite(1.0/0.0) is true");
+    a[0] = vdouble(2.5);
+    OK_MSG(nj_call_static(vm, DOUBLEW, "isNaN", "(D)Z", a, &r) == NJ_OK
+               && r.i == 0,
+           "Double.isNaN(2.5) is false");
+
     a[0] = vref(nj_string_new(vm, "2.5"));
     o = nj_call_ref(vm, NULL, DOUBLEW, "valueOf",
                     "(Ljava/lang/String;)Ljava/lang/Double;", a);

@@ -338,6 +338,31 @@ NJFN(Float_isInfinite)
     return NJ_OK;
 }
 
+/*
+ * The static forms take the value, not a wrapper.  CLDC 1.1 declares both
+ * isNaN(float) and isNaN(), and a MIDlet testing a computed value calls the
+ * static one; only the no-arg instance form existed here, so those calls did
+ * not resolve at all.  急速狂飙完美破解版_4964 stopped with
+ * `NoSuchMethodError: java/lang/Float.isNaN(F)Z @ l.b+3` the first time it
+ * tried to reject a bad steering value - a hard stop for a game that uses NaN
+ * as its "no reading yet" marker, which is the usual idiom in a physics loop.
+ */
+NJFN(Float_isNaN_v)
+{
+    nj_s4 bits = float_bits(NJ_ARG_FLOAT(args, 0));
+
+    ret->i = float_is_nan_bits(bits) ? 1 : 0;
+    return NJ_OK;
+}
+
+NJFN(Float_isInfinite_v)
+{
+    nj_s4 bits = float_bits(NJ_ARG_FLOAT(args, 0));
+
+    ret->i = ((bits & 0x7FFFFFFF) == 0x7F800000) ? 1 : 0;
+    return NJ_OK;
+}
+
 NJFN(Double_isNaN)
 {
     nj_field *f = vf(vm, "java/lang/Double", "D");
@@ -353,6 +378,28 @@ NJFN(Double_isInfinite)
     nj_field *f = vf(vm, "java/lang/Double", "D");
     nj_s8 bits = f ? nj_field_read_long(vm, NJ_THIS(args), f) : 0;
 
+    ret->i = ((bits & 0x7FFFFFFFFFFFFFFFLL) == 0x7FF0000000000000LL) ? 1 : 0;
+    return NJ_OK;
+}
+
+/* The static Double forms, for the same reason as the Float ones above. */
+NJFN(Double_isNaN_d)
+{
+    nj_s8 bits;
+    double v = NJ_ARG_DOUBLE(args, 0);
+
+    memcpy(&bits, &v, sizeof(bits));
+    ret->i = ((bits & 0x7FF0000000000000LL) == 0x7FF0000000000000LL &&
+              (bits & 0x000FFFFFFFFFFFFFLL) != 0) ? 1 : 0;
+    return NJ_OK;
+}
+
+NJFN(Double_isInfinite_d)
+{
+    nj_s8 bits;
+    double v = NJ_ARG_DOUBLE(args, 0);
+
+    memcpy(&bits, &v, sizeof(bits));
     ret->i = ((bits & 0x7FFFFFFFFFFFFFFFLL) == 0x7FF0000000000000LL) ? 1 : 0;
     return NJ_OK;
 }
@@ -759,6 +806,8 @@ static const nj_builtin_method Float_methods[] = {
     M("floatValue", "()F",  0),
     M("isNaN",      "()Z",  0),
     M("isInfinite", "()Z",  0),
+    M("isNaN",      "(F)Z", NJ_ACC_STATIC),
+    M("isInfinite", "(F)Z", NJ_ACC_STATIC),
     M("intBitsToFloat", "(I)F", NJ_ACC_STATIC),
     M("floatToIntBits", "(F)I", NJ_ACC_STATIC)
 };
@@ -767,6 +816,8 @@ static const nj_builtin_method Double_methods[] = {
     M("doubleValue", "()D",  0),
     M("isNaN",       "()Z",  0),
     M("isInfinite",  "()Z",  0),
+    M("isNaN",       "(D)Z", NJ_ACC_STATIC),
+    M("isInfinite",  "(D)Z", NJ_ACC_STATIC),
     M("valueOf",     "(Ljava/lang/String;)Ljava/lang/Double;", NJ_ACC_STATIC)
 };
 
@@ -831,6 +882,8 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Float",     "floatValue",   "()F",  Float_value },
     { "java/lang/Float",     "isNaN",        "()Z",  Float_isNaN },
     { "java/lang/Float",     "isInfinite",   "()Z",  Float_isInfinite },
+    { "java/lang/Float",     "isNaN",        "(F)Z", Float_isNaN_v },
+    { "java/lang/Float",     "isInfinite",   "(F)Z", Float_isInfinite_v },
     { "java/lang/Float",     "intBitsToFloat", "(I)F", Float_intBitsToFloat },
     { "java/lang/Float",     "floatToIntBits", "(F)I", Float_floatToIntBits },
 
@@ -838,6 +891,8 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Double",    "doubleValue",  "()D",  Double_value },
     { "java/lang/Double",    "isNaN",        "()Z",  Double_isNaN },
     { "java/lang/Double",    "isInfinite",   "()Z",  Double_isInfinite },
+    { "java/lang/Double",    "isNaN",        "(D)Z", Double_isNaN_d },
+    { "java/lang/Double",    "isInfinite",   "(D)Z", Double_isInfinite_d },
     { "java/lang/Double",    "valueOf",      "(Ljava/lang/String;)Ljava/lang/Double;", Double_valueOf_str }
 };
 const int nj_lib_boxing_count =
