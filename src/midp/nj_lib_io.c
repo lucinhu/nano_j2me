@@ -111,22 +111,56 @@ NJFN(is_mark_supported)
     return NJ_OK;
 }
 
+/* How much of a skip is read per call.  Big enough that skipping a few
+ * kilobytes is a couple of reads, small enough to stay off the heap budget of
+ * a phone. */
+#define NJ_SKIP_CHUNK 512
+
 NJFN(is_skip)
 {
     nj_s8 want = NJ_ARG_LONG(args, 0);
     nj_s8 done = 0;
+    nj_u4 mark;
+    nj_ref scratch;
+
+    if (want <= 0) {
+        ret->j = 0;
+        return NJ_OK;
+    }
+
+    /* Skip through read(byte[], int, int), not read().  A stream is free to
+     * implement only the range form - several titles do - and the single-byte
+     * form would then land on the abstract read() and throw IOException
+     * instead of skipping.  Going the other way is always safe: our
+     * InputStream.read(byte[],int,int) chains down to read(). */
+    mark = nj_root_mark(vm);
+    scratch = nj_root(vm, nj_byte_array_new(vm, NJ_SKIP_CHUNK));
+    if (!scratch) {
+        nj_root_release(vm, mark);
+        return NJ_ERR;
+    }
 
     while (done < want) {
-        nj_s4 c = nj_call_int(vm, NJ_THIS(args), NJ_C_ISTREAM, "read", "()I",
-                              NULL);
+        nj_value a3[3];
+        nj_s4 want_here = (nj_s4)((want - done) > NJ_SKIP_CHUNK
+                                  ? NJ_SKIP_CHUNK : (want - done));
+        nj_s4 n;
+
+        a3[0].r = scratch;
+        a3[1].i = 0;
+        a3[2].i = want_here;
+        n = nj_call_int(vm, NJ_THIS(args), NJ_C_ISTREAM, "read", "([BII)I", a3);
         if (vm->exception) {
+            nj_root_release(vm, mark);
             return NJ_ERR;
         }
-        if (c < 0) {
+        if (n <= 0) {
             break;
         }
-        done++;
+        done += n;
     }
+
+    nj_root_release(vm, mark);
     ret->j = done;
     return NJ_OK;
 }
@@ -616,6 +650,35 @@ static nj_ref dis_in(nj_vm *vm, nj_ref self)
                                            "Ljava/io/InputStream;"));
 }
 
+/* DataInputStream(InputStream) and DataOutputStream(OutputStream).
+ *
+ * Both constructors used to be bound to baos_init, which reads its argument
+ * slot as a buffer capacity.  For a stream constructor that slot holds a
+ * REFERENCE, so the capacity became the low half of a heap pointer: the
+ * constructor asked the heap for a buffer tens of megabytes wide and died
+ * with OutOfMemoryError, or - when the pointer happened to land low - stored
+ * a ByteArrayOutputStream's fields into a DataInputStream object and left
+ * `in` uninitialised.  A corpus title showed exactly that pair of symptoms,
+ * alternating from run to run, which is what gave the game away. */
+NJFN(dis_init)
+{
+    nj_field_write_ref(vm, NJ_THIS(args), fld(vm, DIS, "in",
+                                              "Ljava/io/InputStream;"),
+                       NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+NJFN(dos_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_field_write_ref(vm, self, fld(vm, DOS, "out",
+                                     "Ljava/io/OutputStream;"),
+                       NJ_ARG_REF(args, 0));
+    nj_field_write_int(vm, self, fld(vm, DOS, "written", "I"), 0);
+    return NJ_OK;
+}
+
 static nj_s4 dis_one(nj_vm *vm, nj_ref in)
 {
     nj_s4 c = nj_call_int(vm, in, NJ_C_ISTREAM, "read", "()I", NULL);
@@ -635,7 +698,9 @@ NJFN(dis_read)
     if (!in) {
         return nj_throw(vm, "java/io/IOException", "no underlying stream");
     }
-    return nj_call(vm, NJ_THIS(args), NJ_C_ISTREAM, "read", "()I", NULL, ret);
+    /* `in`, not NJ_THIS(args): reading from the wrapper dispatches straight
+     * back into this function. */
+    return nj_call(vm, in, NJ_C_ISTREAM, "read", "()I", NULL, ret);
 }
 
 NJFN(dis_read_range)
@@ -648,15 +713,16 @@ NJFN(dis_read_range)
     if (!in) {
         return nj_throw(vm, "java/io/IOException", "no underlying stream");
     }
-    return nj_call(vm, NJ_THIS(args), NJ_C_ISTREAM, "read", "([BII)I", a3, ret);
+    return nj_call(vm, in, NJ_C_ISTREAM, "read", "([BII)I", a3, ret);
 }
 
-NJFN(dis_readFully)
+/* The body of both readFully overloads.  Takes the receiver explicitly rather
+ * than going through an NJFN, whose arguments are addressed as args[-1] for
+ * `this` - a synthetic argument block would make that read a garbage slot. */
+static nj_status dis_readFully_run(nj_vm *vm, nj_ref self, nj_ref buf,
+                                   nj_s4 off, nj_s4 len)
 {
-    nj_ref in = dis_in(vm, NJ_THIS(args));
-    nj_ref buf = NJ_ARG_REF(args, 0);
-    nj_s4 off = NJ_ARG_INT(args, 1);
-    nj_s4 len = NJ_ARG_INT(args, 2);
+    nj_ref in = dis_in(vm, self);
     nj_s4 i;
 
     if (!in) {
@@ -675,6 +741,50 @@ NJFN(dis_readFully)
         }
         buf->u.bytes[off + i] = (nj_u1)c;
     }
+    return NJ_OK;
+}
+
+NJFN(dis_readFully)
+{
+    return dis_readFully_run(vm, NJ_THIS(args), NJ_ARG_REF(args, 0),
+                             NJ_ARG_INT(args, 1), NJ_ARG_INT(args, 2));
+}
+
+/* readFully(byte[]) - the other overload CLDC declares on DataInput.  Reading
+ * into the whole array is the same work as the range form at off = 0, and a
+ * title compiled against the real CLDC calls exactly this one. */
+NJFN(dis_readFully_all)
+{
+    nj_ref buf = NJ_ARG_REF(args, 0);
+
+    return dis_readFully_run(vm, NJ_THIS(args), buf, 0,
+                             buf ? (nj_s4)buf->length : 0);
+}
+
+/* skipBytes: skips exactly n bytes or fails.  The javadoc promises
+ * EOFException rather than a short count, and the previous binding - to
+ * is_available() - did not skip anything at all, it just returned zero. */
+NJFN(dis_skip_bytes)
+{
+    nj_ref in = dis_in(vm, NJ_THIS(args));
+    nj_s4 want = NJ_ARG_INT(args, 0);
+    nj_s4 done = 0;
+
+    if (!in) {
+        return nj_throw(vm, "java/io/IOException", "no underlying stream");
+    }
+    if (want <= 0) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    while (done < want) {
+        nj_s4 c = dis_one(vm, in);   /* raises EOFException at the end */
+        if (c < 0) {
+            return NJ_ERR;
+        }
+        done++;
+    }
+    ret->i = done;
     return NJ_OK;
 }
 
@@ -937,6 +1047,7 @@ static const nj_builtin_method dis_methods[] = {
     M("<init>",             "(Ljava/io/InputStream;)V", 0),
     M("read",               "()I", 0),
     M("read",               "([BII)I", 0),
+    M("readFully",          "([B)V", 0),
     M("readFully",          "([BII)V", 0),
     M("skipBytes",          "(I)I", 0),
     M("readBoolean",        "()Z", 0),
@@ -1294,11 +1405,12 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/ByteArrayOutputStream", "toString",    "()Ljava/lang/String;", baos_toString },
     { "java/io/ByteArrayOutputStream", "close",       "()V", baos_reset },
 
-    { "java/io/DataInputStream", "<init>",           "(Ljava/io/InputStream;)V", baos_init },
+    { "java/io/DataInputStream", "<init>",           "(Ljava/io/InputStream;)V", dis_init },
     { "java/io/DataInputStream", "read",             "()I", dis_read },
     { "java/io/DataInputStream", "read",             "([BII)I", dis_read_range },
+    { "java/io/DataInputStream", "readFully",        "([B)V", dis_readFully_all },
     { "java/io/DataInputStream", "readFully",        "([BII)V", dis_readFully },
-    { "java/io/DataInputStream", "skipBytes",        "(I)I", is_available },
+    { "java/io/DataInputStream", "skipBytes",        "(I)I", dis_skip_bytes },
     { "java/io/DataInputStream", "readBoolean",      "()Z", dis_read_boolean },
     { "java/io/DataInputStream", "readByte",         "()B", dis_read },
     { "java/io/DataInputStream", "readUnsignedByte", "()I", dis_read },
@@ -1311,7 +1423,7 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/DataInputStream", "available",        "()I", is_available },
     { "java/io/DataInputStream", "close",            "()V", is_close },
 
-    { "java/io/DataOutputStream", "<init>",       "(Ljava/io/OutputStream;)V", baos_init },
+    { "java/io/DataOutputStream", "<init>",       "(Ljava/io/OutputStream;)V", dos_init },
     { "java/io/DataOutputStream", "write",        "(I)V", dos_write },
     { "java/io/DataOutputStream", "write",        "([BII)V", dos_write_range },
     { "java/io/DataOutputStream", "writeBoolean", "(Z)V", dos_write_boolean },
