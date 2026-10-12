@@ -1878,6 +1878,43 @@ NJFN(img_createImage_img)
 }
 
 /*
+ * Three tiny formatters.  This file has no stdio - core and midp code is
+ * expected to work without libc - and the error paths that need to explain
+ * themselves are not hot, so a dozen lines beat pulling in a printf.
+ */
+static int fmt_put(char *buf, int at, const char *s)
+{
+    while (*s) {
+        buf[at++] = *s++;
+    }
+    return at;
+}
+
+static int fmt_u4(char *buf, int at, nj_u4 v)
+{
+    char tmp[12];
+    int n = 0;
+
+    do {
+        tmp[n++] = (char)('0' + (int)(v % 10u));
+        v /= 10u;
+    } while (v != 0u && n < (int)sizeof(tmp));
+    while (n > 0) {
+        buf[at++] = tmp[--n];
+    }
+    return at;
+}
+
+static int fmt_hex2(char *buf, int at, nj_u4 b)
+{
+    static const char hex[] = "0123456789abcdef";
+
+    buf[at++] = hex[(b >> 4) & 0xFu];
+    buf[at++] = hex[b & 0xFu];
+    return at;
+}
+
+/*
  * Byte-array form: decode PNG (or JPEG) through the per-VM codec registry.
  *
  * The registry hands back a host-allocated nj_image; the pixels are copied
@@ -1902,10 +1939,31 @@ static nj_status img_decode_into(nj_vm *vm, nj_ref arr, nj_s4 off, nj_s4 len,
     }
     dec = nj_image_decode_mem(vm, arr->u.bytes + off, (nj_u4)len, NULL);
     if (!dec || !dec->pixels || dec->width <= 0 || dec->height <= 0) {
+        char msg[96];
+        int n;
+        int i;
+        const nj_u1 *p = (const nj_u1 *)arr->u.bytes + off;
+
         if (dec) {
             nj_image_release(vm, dec);
         }
-        return nj_throw(vm, "java/io/IOException", "cannot decode image");
+        /*
+         * Say what was offered.  "cannot decode image" with no clue sent a
+         * whole debugging round into the decoder, while the bytes turned out
+         * not to be an image at all - a game that encrypts its own resources
+         * hands its ciphertext to this function and expects the phone to cope.
+         * The length and the first four bytes settle that question at once.
+         */
+        n = fmt_put(msg, 0, "cannot decode image: ");
+        n = fmt_u4(msg, n, (nj_u4)len);
+        n = fmt_put(msg, n, " bytes starting ");
+        n = fmt_hex2(msg, n, len > 0 ? p[0] : 0u);
+        for (i = 1; i < 4; i++) {
+            n = fmt_put(msg, n, " ");
+            n = fmt_hex2(msg, n, (nj_u4)len > (nj_u4)i ? p[i] : 0u);
+        }
+        msg[n] = '\0';
+        return nj_throw(vm, "java/io/IOException", msg);
     }
     img = nj_midp_image_adopt(vm, dec->pixels, dec->width, dec->height);
     nj_image_release(vm, dec);

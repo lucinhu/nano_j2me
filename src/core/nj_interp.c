@@ -346,7 +346,15 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         pc = fr->pc;                                                   \
     } while (0)
 
+/*
+ * pc lives in a local and is written back to the frame only by SAVE(), which
+ * is called around calls.  A throw therefore used to leave fr->pc holding the
+ * last SAVED value - 0 for a frame that had just been entered - so anything
+ * asking "which instruction threw?" was answered with the method's first
+ * byte.  Sync it here, where the true pc is still in scope.
+ */
 #define THROW(cls, msg) do {                                           \
+        fr->pc = pc;                                                   \
         if (!vm->exception) { (void)nj_throw(vm, (cls), (msg)); }      \
         goto do_unwind;                                                \
     } while (0)

@@ -977,9 +977,9 @@ nj_status nj_throw(nj_vm *vm, const char *cls, const char *msg)
     if (vm->cur && vm->cur->nframes > 0) {
         const nj_frame *fr = &vm->cur->frames[vm->cur->nframes - 1];
         if (fr->m && fr->m->owner) {
-            nj_logf(vm, 2, "thrown: %s at %s.%s%s pc=%lu", cls ? cls : "?",
+            nj_logf(vm, 2, "thrown: %s at %s.%s%s pc=%lu: %s", cls ? cls : "?",
                     fr->m->owner->name, fr->m->name, fr->m->desc,
-                    (unsigned long)fr->pc);
+                    (unsigned long)fr->pc, msg ? msg : "(no message)");
         }
     }
     e = nj_exception_new(vm, cls, msg);
