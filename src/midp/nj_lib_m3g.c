@@ -2191,6 +2191,38 @@ NJFN(m3g_img2d_set)
 /* ------------------------------------------------------------------ */
 /* Tables                                                              */
 /* ------------------------------------------------------------------ */
+/*
+ * Loader.load(byte[] data, int offset).
+ *
+ * The same verdict as load(String), from a buffer the caller owns - which is
+ * also the only one of the two a unit test can reach, because load(String)
+ * needs an application loaded to have a JAR to read from.  `offset` is where
+ * the container starts, per the reference loader.
+ */
+NJFN(m3g_load_bytes)
+{
+    nj_ref data = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    const unsigned char *b;
+    nj_u4 n;
+
+    if (!data) {
+        return nj_throw(vm, "java/lang/NullPointerException", "data is null");
+    }
+    if (off < 0 || (nj_u4)off >= data->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", "offset");
+    }
+    b = (const unsigned char *)data->u.bytes + off;
+    n = data->length - (nj_u4)off;
+    if (!m3g_has_file_id(b, n)) {
+        return nj_throw(vm, "java/io/IOException",
+                        "the data is not a .m3g container "
+                        "(wrong file identifier)");
+    }
+    return nj_throw(vm, "java/io/IOException",
+                    "a .m3g container; this runtime has no object parser yet");
+}
+
 #define M(name, desc, flags) { name, desc, flags }
 
 /* ------------------------------------------------------------------ */
@@ -2582,7 +2614,8 @@ static const nj_builtin_method g3d_methods[] = {
     M("addLight",      "(L" NJ_C_LIGHT ";L" NJ_C_XFORM ";)I", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method loader_methods[] = {
-    M("load", "(Ljava/lang/String;)[L" NJ_C_O3D ";", NJ_ACC_PUBLIC | NJ_ACC_STATIC)
+    M("load", "(Ljava/lang/String;)[L" NJ_C_O3D ";", NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("load", "([BI)[L" NJ_C_O3D ";", NJ_ACC_PUBLIC | NJ_ACC_STATIC)
 };
 static const nj_builtin_method appear_methods[] = {
     M("setMaterial",        "(L" NJ_C_MAT ";)" "V",     NJ_ACC_PUBLIC),
@@ -2870,6 +2903,7 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_G3D, "resetLights",   "()V",                    m3g_g3d_resetLights },
     { NJ_C_G3D, "addLight",      "(L" NJ_C_LIGHT ";L" NJ_C_XFORM ";)I", m3g_g3d_addLight },
     { NJ_C_LOADER, "load", "(Ljava/lang/String;)[L" NJ_C_O3D ";", m3g_load },
+    { NJ_C_LOADER, "load", "([BI)[L" NJ_C_O3D ";", m3g_load_bytes },
     { NJ_C_APPEAR, "setMaterial",        "(L" NJ_C_MAT ";)" "V", m3g_app_setMaterial },
     { NJ_C_APPEAR, "setPolygonMode",     "(L" NJ_C_POLY ";)V",   m3g_app_setPolygonMode },
     { NJ_C_APPEAR, "getPolygonMode",     "()L" NJ_C_POLY ";",    m3g_app_getPolygonMode },
