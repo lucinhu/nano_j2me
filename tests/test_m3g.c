@@ -99,7 +99,7 @@ int main(void)
     {
         nj_ref t = make(vm, CLS("Transform"));
         nj_ref v;
-        nj_value a[1], n;
+        nj_value a[4], n;   /* the transform natives take three floats */
         float got = 0.0f;
 
         check(t != 0, "new Transform()");
@@ -163,7 +163,7 @@ int main(void)
         nj_ref g = make(vm, CLS("Group"));
         nj_ref child = make(vm, CLS("Group"));
         nj_ref other = make(vm, CLS("Group"));
-        nj_value a[1], n;
+        nj_value a[4], n;   /* the transform natives take three floats */
         int child_count = -1;
 
         check(g != 0 && child != 0, "two Groups");
@@ -201,7 +201,7 @@ int main(void)
 
     printf("== what is not implemented says so ==\n");
     {
-        nj_value a[1], n;
+        nj_value a[4], n;   /* the transform natives take three floats */
         nj_ref s = nj_string_new(vm, "level.m3g");
         nj_status st;
         nj_ref exc;
@@ -238,6 +238,43 @@ int main(void)
                  "(L" CLS("Transform") ";)I", a, &n);
             check(n.i == 1, "after setPerspective: getProjection returns 1");
         }
+    }
+
+    /*
+     * Light.  The class is registered because 生化危机3D(CAPCOM经典)_3671 asks
+     * for it; these assertions are the only thing that keeps it honest.
+     */
+    {
+        nj_ref l = make(vm, CLS("Light"));
+        nj_ref atten;
+        nj_value a[4], r;
+
+        check(l != 0, "a Light can be constructed");
+        call(vm, l, CLS("Light"), "getMode", "()I", NULL, &r);
+        check(r.i == 129, "a new Light is directional");
+
+        a[0].i = 131;
+        call(vm, l, CLS("Light"), "setMode", "(I)V", a, NULL);
+        call(vm, l, CLS("Light"), "getMode", "()I", NULL, &r);
+        check(r.i == 131, "setMode and getMode agree");
+
+        a[0].f = 1.0f; a[1].f = 2.0f; a[2].f = 3.0f;
+        call(vm, l, CLS("Light"), "setAttenuation", "(FFF)V", a, NULL);
+        atten = nj_array_new(vm, "F", 3);
+        a[0].r = atten;
+        call(vm, l, CLS("Light"), "getAttenuation", "([F)V", a, NULL);
+        check(((float *)atten->u.bytes)[0] == 1.0f &&
+              ((float *)atten->u.bytes)[2] == 3.0f,
+              "attenuation round trips through an array");
+
+        /*
+         * The static constants are looked up but not read back: this test has
+         * no safe way to read a static field, and doing it the obvious way
+         * (nj_field_read_int with a NULL receiver) dereferences obj + offset
+         * and dies.
+         */
+        check(nj_field_lookup(vm, CLS("Light"), "SPOT", "I", 1) != NULL,
+              "Light.SPOT is declared as a static field");
     }
 
     nj_vm_destroy(vm);
