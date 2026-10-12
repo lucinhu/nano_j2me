@@ -1523,7 +1523,7 @@ NJFN(g_drawChar)
  * transform and no anchor translation beyond the anchor itself.  Sharing one
  * helper between them reads past the end of the argument slots and rejects
  * perfectly ordinary calls with "negative source region".
-
+ */
 /*
  * Is this anchor illegal?  MIDP's rule is about CONFLICTS, not omissions: a
  * missing horizontal component means LEFT and a missing vertical one means
@@ -3501,8 +3501,30 @@ NJFN(c_repaint_all)
 
 NJFN(c_serviceRepaints)
 {
-    /* The runner repaints every frame; there is no separate event loop to
-     * flush, so this is deliberately a no-op. */
+    /*
+     * MIDP: "serviceRepaints() forces any pending repaints to be serviced ...
+     * it blocks until all pending repaint requests have been processed."
+     *
+     * This has to be synchronous, and the reason is not theoretical.  The
+     * common MIDlet idiom is
+     *
+     *     visible = true; repaint(); serviceRepaints(); visible = false;
+     *
+     * with paint() starting `if (!visible) return;`.  When this was a no-op,
+     * the runner's per-frame paint arrived after `visible` was already false,
+     * so paint() returned at its first instruction: the runtime reported a
+     * paint for every frame while the application made no Graphics call at
+     * all.  One title sat at zero drawn pixels for its whole run that way.
+     *
+     * Painting here also presents, which is what the caller asked for.  The
+     * guard keeps a callSerially() runnable drained inside the paint from
+     * re-entering it.
+     */
+    if (vm->repaint_pending && !vm->in_paint) {
+        vm->in_paint = 1u;
+        (void)nj_midp_paint(vm);
+        vm->in_paint = 0u;
+    }
     return NJ_OK;
 }
 

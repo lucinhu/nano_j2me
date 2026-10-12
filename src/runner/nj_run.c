@@ -1035,7 +1035,8 @@ done:
                      "bytecodes=%lu (%.2f M/s) natives=%lu "
                      "heap=%lu/%lu bytes",
                      (unsigned long)s.frames, (unsigned long)s.paints,
-                     (unsigned long)s.gfx_calls, (unsigned long)s.tris, secs,
+                     (unsigned long)s.gfx_calls, (unsigned long)s.tris,
+                     (unsigned long)s.m3g_renders, secs,
                      secs > 0.0 ? (double)s.frames / secs : 0.0,
                      (unsigned long)s.insns,
                      secs > 0.0 ? (double)s.insns / secs / 1.0e6 : 0.0,
