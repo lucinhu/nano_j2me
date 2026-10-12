@@ -608,6 +608,7 @@ static void media_unregister(nj_vm *vm, nj_ref player)
  * Walked BACKWARDS: a Player that finishes during the walk removes itself, and
  * iterating forwards would then skip the entry that shifted into its place.
  */
+
 void nj_media_frame(nj_vm *vm)
 {
     nj_ref v;
@@ -910,22 +911,24 @@ NJFN(media_createPlayer_stream)
         if (strcmp(what, "MIDI") == 0) {
             nj_midi_mem mem;
             nj_u4 mframes = 0u;
+            nj_u4 mchans = 1u;
             nj_u1 *rendered;
 
             mem.ud = vm;
             mem.alloc = midi_alloc;
             mem.free = midi_free;
-            rendered = nj_midi_render(barray_bytes(data), barray_len(data),
-                                      &mframes, &mem);
+            rendered = nj_midi_render_ex(barray_bytes(data), barray_len(data),
+                                         &mframes, &mchans, &mem);
 
             if (rendered != NULL && mframes > 0u) {
-                nj_ref pcm = nj_byte_array_new(vm, mframes * 2u);
+                nj_ref pcm = nj_byte_array_new(vm, mframes * mchans * 2u);
                 if (pcm != NULL) {
-                    memcpy(pcm->u.bytes, rendered, (size_t)mframes * 2u);
+                    memcpy(pcm->u.bytes, rendered,
+                           (size_t)mframes * (size_t)mchans * 2u);
                     midi_free(vm, rendered);
                     w_r(vm, p, F_P_DATA, "[B", pcm);
                     w_i(vm, p, F_P_RATE, (nj_s4)NJ_MIDI_RATE);
-                    w_i(vm, p, F_P_CHAN, 1);
+                    w_i(vm, p, F_P_CHAN, (nj_s4)mchans);
                     w_i(vm, p, F_P_FRAMES, (nj_s4)mframes);
                     w_j(vm, p, F_P_DURATION,
                         (nj_s8)mframes * 1000000LL / (nj_s8)NJ_MIDI_RATE);

@@ -39,4 +39,11 @@ typedef struct nj_midi_mem {
 nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                       const nj_midi_mem *mem);
 
+/*
+ * The stereo form: a file that never sends CC10 renders mono (one channel),
+ * and a file that pans renders two interleaved channels.  nj_midi_render()
+ * is the mono-only wrapper, so a caller that does not care stays simple.
+ */
+nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
+                         nj_u4 *chans_out, const nj_midi_mem *mem);
 #endif /* NJ_MIDI_H */

@@ -92,6 +92,7 @@
 #define MID_CTL_RANGE 2u
 #define MID_CTL_MOD   3u            /* CC1: how deep the vibrato goes */
 #define MID_CTL_REVERB 4u           /* CC91: how much of the note goes to the room */
+#define MID_CTL_PAN   5u            /* CC10: where the note sits between the speakers */
 
 /* Pitch bend: 14 bits, 8192 is no bend. */
 #define MID_BEND_CENTRE 8192u
@@ -130,6 +131,13 @@ typedef struct {
  * is what carries, and the effect banks are noise because there is nothing
  * else honest to make of them.
  */
+/*
+ * The General MIDI "effects" block (96..103) is not a sound effect: composers
+ * use it for pads and bells, and 仙剑奇侠传 puts BOTH of its 160-note melody
+ * lines on program 99.  Rendering that block as noise turned the theme into a
+ * hiss, so a player heard the drums and the string chords and no melody.
+ * Noise is kept for the true sound-effect block (120..127) and for drums.
+ */
 static const mid_timbre mid_timbres[16] = {
     { MID_W_TRIANGLE, 1400u,   2u, 140u,   0u ,   0u, 0u , 0u , 0u },   /* piano: struck, dies away */
     { MID_W_TRIANGLE,  900u,   1u, 120u,   0u ,   0u, 0u , 0u , 0u },   /* chromatic percussion */
@@ -143,9 +151,9 @@ static const mid_timbre mid_timbres[16] = {
     { MID_W_TRIANGLE,    0u,  30u,  70u, 105u ,   0u, 0u , 0u , 18u },   /* pipe */
     { MID_W_SAW,         0u,   8u,  80u, 100u ,   0u, 0u , 0u , 28u },   /* synth lead */
     { MID_W_TRIANGLE,    0u, 120u, 300u,  95u ,   0u, 0u , 0u , 16u },   /* synth pad: the slowest */
-    { MID_W_NOISE,     300u,   5u, 200u,   0u ,   0u, 0u , 0u , 0u },   /* effects */
+    { MID_W_TRIANGLE,    0u,  40u, 250u,  90u ,   0u, 0u , 0u , 0u },   /* effects: a pad, not noise */
     { MID_W_TRIANGLE,  900u,   5u, 120u,   0u ,   0u, 0u , 0u , 0u },   /* ethnic */
-    { MID_W_NOISE,     200u,   1u,  60u,   0u ,   0u, 0u , 0u , 0u },   /* percussive */
+    { MID_W_TRIANGLE,  600u,   1u, 120u,   0u ,   0u, 0u , 0u , 0u },   /* percussive: bells, boxes */
     { MID_W_NOISE,     250u,   2u, 150u,   0u ,   0u, 0u , 0u , 0u }    /* sound effects */
 };
 
@@ -350,6 +358,8 @@ typedef struct {
     nj_u4      mod[16];         /* CC1 vibrato depth at the end of the file */
     nj_u4      reverb[16];      /* CC91 send at the end of the file */
     nj_u4      rpn[16];         /* the registered parameter being selected */
+    nj_u4      pan[16];         /* CC10 at the end of the file, 64 is centre */
+    int        pan_used;        /* any CC10 at all: only then is the mix stereo */
     nj_u2      max_release_ms;  /* the longest release any note asked for */
 } mid_song;
 
@@ -557,6 +567,12 @@ static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
                     if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_REVERB, val)) {
                         return;
                     }
+                } else if (cc == 10u) {         /* pan: left 0, centre 64, right 127 */
+                    s->pan[chan] = val;
+                    s->pan_used = 1;
+                    if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_PAN, val)) {
+                        return;
+                    }
                 } else if (cc == 101u) {        /* RPN MSB */
                     s->rpn[chan] = (s->rpn[chan] & 0x7Fu) | (val << 7);
                 } else if (cc == 100u) {        /* RPN LSB */
@@ -656,6 +672,7 @@ typedef struct {
     nj_u1 wave;
     nj_u1 tone;                 /* MID_W_DRUM: the tone's share */
     nj_u1 filt;                 /* low pass divisor: small = bright */
+    nj_u1 gl, gr;               /* CC10 gains, 127 = full */
     nj_u4 phase;                /* 32-bit phase accumulator */
     nj_u4 step;                 /* phase increment per sample */
     nj_u4 noise;                /* linear feedback shift register, for noise */
@@ -788,8 +805,28 @@ static void mid_sort_ctls(mid_song *s)
     }
 }
 
-nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
-                      const nj_midi_mem *mem)
+/*
+ * CC10 is 0 at the left speaker, 64 in the middle and 127 at the right.  The
+ * taper is linear, so a centred voice is louder than a hard-panned one - which
+ * is what the phone synths did as well, and it keeps a file that pans one
+ * instrument from going quiet.
+ */
+static void mid_pan_gains(nj_u4 pan, nj_u1 *gl, nj_u1 *gr)
+{
+    if (pan > 127u) {
+        pan = 127u;
+    }
+    if (pan <= 64u) {
+        *gl = 127u;
+        *gr = (nj_u1)(pan * 2u);
+    } else {
+        *gl = (nj_u1)((127u - pan) * 2u);
+        *gr = 127u;
+    }
+}
+
+nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
+                         nj_u4 *chans_out, const nj_midi_mem *mem)
 {
     if (mem == NULL || mem->alloc == NULL || mem->free == NULL) {
         return NULL;
@@ -804,6 +841,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
     nj_u1 *pcm;
     mid_voice voices[NJ_MIDI_VOICES];
     nj_u4 v;
+    nj_u4 chans = 1u;
     nj_u4 ev = 0u;
     nj_u4 cev = 0u;
     nj_u4 bend_now[16];
@@ -811,6 +849,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
     int   pedal_now[16];
     nj_u4 mod_now[16];
     nj_u4 rev_now[16];
+    nj_u4 pan_now[16];
     nj_s4 *rev = NULL;
     nj_u4 rev_pa = 0u, rev_pb = 0u, rev_any = 0u;
 
@@ -827,8 +866,10 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
         song.expr[i] = 127u;
         song.bend[i] = MID_BEND_CENTRE;
         song.bend_range[i] = MID_BEND_DEFAULT_RANGE;
+        song.pan[i] = 64u;
         mod_now[i] = 0u;
         rev_now[i] = 0u;
+        pan_now[i] = 64u;
         song.rpn[i] = 0xFFFFu;          /* no registered parameter selected */
         bend_now[i] = MID_BEND_CENTRE;
         range_now[i] = MID_BEND_DEFAULT_RANGE;
@@ -936,7 +977,11 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
             memset(rev, 0, (nj_size)NJ_MIDI_REV_LEN * sizeof(nj_s4));
         }
     }
-    pcm = (nj_u1 *)mem->alloc(mem->ud, (nj_size)frames * 2u);
+    chans = song.pan_used ? 2u : 1u;
+    if (chans_out != NULL) {
+        *chans_out = chans;
+    }
+    pcm = (nj_u1 *)mem->alloc(mem->ud, (nj_size)frames * (nj_size)chans * 2u);
     if (pcm != NULL) {
         memset(pcm, 0, (nj_size)frames * 2u);
     }
@@ -971,9 +1016,11 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                 }
             }
         }
-        nj_s4 mix = 0;
+        nj_s4 mixL = 0;
+        nj_s4 mixR = 0;
         nj_s4 bus = 0;
-        nj_s4 scaled;
+        nj_s4 scaledL;
+        nj_s4 scaledR;
 
         /*
          * Channel events first: a bend or a pedal that lands on the same
@@ -997,6 +1044,13 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                     if (voices[v].active && voices[v].chan == ch) {
                         voices[v].mod = mod_now[ch] * NJ_MIDI_VIBRATO_MAX / 127u;
                         mid_set_step(&voices[v]);
+                    }
+                }
+            } else if (kind == MID_CTL_PAN) {
+                pan_now[ch] = song.ctls[cev].a;
+                for (v = 0u; v < NJ_MIDI_VOICES; v++) {
+                    if (voices[v].active && voices[v].chan == ch) {
+                        mid_pan_gains(pan_now[ch], &voices[v].gl, &voices[v].gr);
                     }
                 }
             } else if (kind == MID_CTL_REVERB) {
@@ -1049,8 +1103,30 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                     }
                 }
                 if (v == NJ_MIDI_VOICES) {
-                    ev++;
-                    continue;   /* all voices busy: drop the note */
+                    /*
+                     * All twelve voices are busy.  Dropping the note is what
+                     * made a melody vanish under a chord and a drum tail: the
+                     * theme of 仙剑奇侠传 is the top line of a dense file, and
+                     * a player only hears drums and chords.  The quietest
+                     * voice goes instead - a released note first, then the
+                     * lowest level, which is almost always a tail.
+                     */
+                    nj_s4 quiet = 0;
+                    nj_u4 pick = 0u;
+                    int have = 0;
+
+                    for (v = 0u; v < NJ_MIDI_VOICES; v++) {
+                        nj_s4 level = voices[v].amp;
+                        if (voices[v].end != 0u) {
+                            level /= 4;
+                        }
+                        if (!have || level < quiet) {
+                            quiet = level;
+                            pick = v;
+                            have = 1;
+                        }
+                    }
+                    v = pick;
                 }
                 voices[v].active = 1;
                 voices[v].sustained = 0;
@@ -1119,6 +1195,8 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                     voices[v].release = NJ_MIDI_RATE / 125u;
                 }
                 voices[v].rev = rev_now[song.notes[ev].chan];
+                mid_pan_gains(pan_now[song.notes[ev].chan], &voices[v].gl,
+                              &voices[v].gr);
                 voices[v].lfo = 0u;
                 /*
                  * A string section or a reed breathes even when the file
@@ -1250,7 +1328,13 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                     raw = raw * amp / 32768;    /* scale to this note's level */
                 }
                 voices[v].lp += (raw - voices[v].lp) / (nj_s4)voices[v].filt;
-                mix += voices[v].lp;
+                /*
+                 * A mono file has both gains at full, so this is the same sum
+                 * it always was; a file that pans puts each voice where it
+                 * asked to be.
+                 */
+                mixL += voices[v].lp * (nj_s4)voices[v].gl / 127;
+                mixR += voices[v].lp * (nj_s4)voices[v].gr / 127;
                 if (voices[v].rev != 0u) {
                     bus += voices[v].lp * (nj_s4)voices[v].rev / 127;
                 }
@@ -1273,7 +1357,11 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
             if (++rev_pb >= NJ_MIDI_REV_B) {
                 rev_pb = 0u;
             }
-            mix += (ya + yb) * 3 / 8;
+            {
+                nj_s4 wet = (ya + yb) * 3 / 8;
+                mixL += wet;        /* the room is in the middle */
+                mixR += wet;
+            }
         }
 
         /*
@@ -1282,19 +1370,37 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
          * four to one and only then clamped, which keeps a loud passage loud
          * without the crackle of clipping it.
          */
-        scaled = mix;
-        if (scaled > 24000) {
-            scaled = 24000 + (scaled - 24000) / 4;
-        } else if (scaled < -24000) {
-            scaled = -24000 + (scaled + 24000) / 4;
+        scaledL = mixL;
+        scaledR = mixR;
+        if (scaledL > 24000) {
+            scaledL = 24000 + (scaledL - 24000) / 4;
+        } else if (scaledL < -24000) {
+            scaledL = -24000 + (scaledL + 24000) / 4;
         }
-        if (scaled > 32767) {
-            scaled = 32767;
-        } else if (scaled < -32768) {
-            scaled = -32768;
+        if (scaledL > 32767) {
+            scaledL = 32767;
+        } else if (scaledL < -32768) {
+            scaledL = -32768;
         }
-        pcm[i * 2u] = (nj_u1)(scaled & 0xFF);
-        pcm[i * 2u + 1u] = (nj_u1)((scaled >> 8) & 0xFF);
+        if (scaledR > 24000) {
+            scaledR = 24000 + (scaledR - 24000) / 4;
+        } else if (scaledR < -24000) {
+            scaledR = -24000 + (scaledR + 24000) / 4;
+        }
+        if (scaledR > 32767) {
+            scaledR = 32767;
+        } else if (scaledR < -32768) {
+            scaledR = -32768;
+        }
+        if (chans == 2u) {
+            pcm[i * 4u] = (nj_u1)(scaledL & 0xFF);
+            pcm[i * 4u + 1u] = (nj_u1)((scaledL >> 8) & 0xFF);
+            pcm[i * 4u + 2u] = (nj_u1)(scaledR & 0xFF);
+            pcm[i * 4u + 3u] = (nj_u1)((scaledR >> 8) & 0xFF);
+        } else {
+            pcm[i * 2u] = (nj_u1)(scaledL & 0xFF);
+            pcm[i * 2u + 1u] = (nj_u1)((scaledL >> 8) & 0xFF);
+        }
     }
 
     mem->free(mem->ud, rev);
@@ -1304,4 +1410,10 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
         *frames_out = frames;
     }
     return pcm;
+}
+
+nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
+                      const nj_midi_mem *mem)
+{
+    return nj_midi_render_ex(data, size, frames_out, NULL, mem);
 }

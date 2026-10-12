@@ -294,6 +294,28 @@ static nj_u8 pcm_hf(const nj_u1 *pcm, nj_u4 frames, nj_u4 from, nj_u4 to)
 
 static nj_u4 build_track(nj_u1 *out, const nj_u1 *body, nj_u4 blen);
 
+/* A sample of one channel of an interleaved buffer. */
+static nj_s4 pcm_at_ch(const nj_u1 *pcm, nj_u4 frame, nj_u4 ch, nj_u4 chans)
+{
+    nj_u4 i = (frame * chans + ch) * 2u;
+    return (nj_s4)(nj_s2)((pcm[i] & 0xFFu) | ((nj_u4)pcm[i + 1u] << 8));
+}
+
+static nj_u8 pcm_rms_ch(const nj_u1 *pcm, nj_u4 frames, nj_u4 chans, nj_u4 ch,
+                        nj_u4 from, nj_u4 to)
+{
+    nj_u8 sumsq = 0u;
+    nj_u4 n = 0u;
+    nj_u4 i;
+
+    for (i = from; i < to && i < frames; i++) {
+        nj_s4 v = pcm_at_ch(pcm, i, ch, chans);
+        sumsq += (nj_u8)(nj_s4)(v * v);
+        n++;
+    }
+    return (n == 0u) ? 0u : isqrt64(sumsq / n);
+}
+
 /* How far the period wanders, in samples: a vibrato makes successive periods
  * differ, a steady tone keeps them the same.  Only useful on a low note, where
  * a fraction of a percent of pitch is several samples of period. */
@@ -1008,6 +1030,78 @@ int main(void)
               "strings breathe on their own, a piano does not");
         printf("     period spread: strings %u, piano %u samples\n",
                (unsigned)str_spread, (unsigned)pno_spread);
+    }
+
+    /*
+     * CC10 puts a voice between the speakers.  A file that never sends it
+     * stays mono - the whole corpus but a few hundred files - and a file that
+     * does gets two channels, so the cost is only paid where it buys
+     * something.  Hard left has to be loud on one side and silent on the
+     * other.
+     */
+    {
+        static const nj_u1 left[] = { 0xB0, 10, 0 };        /* CC10 = 0, hard left */
+        nj_u1 file[128];
+        nj_u4 n, fr = 0u, chans = 0u;
+        nj_u1 *m;
+        nj_u8 l = 0u, r = 0u;
+
+        n = build_voiced(file, left, (nj_u4)sizeof(left), 0u, 69u);
+        m = nj_midi_render_ex(file, n, &fr, &chans, &MEM);
+        check(m != NULL && chans == 2u, "a file that pans renders in stereo");
+        if (m != NULL) {
+            l = pcm_rms_ch(m, fr, chans, 0u, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 2u);
+            r = pcm_rms_ch(m, fr, chans, 1u, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 2u);
+            t_free(NULL, m);
+        }
+        check(l > 0u && r * 10u < l,
+              "hard left is loud on the left and silent on the right");
+        printf("     pan left: left %llu, right %llu\n",
+               (unsigned long long)l, (unsigned long long)r);
+
+        n = build_voiced(file, NULL, 0u, 0u, 69u);
+        m = nj_midi_render_ex(file, n, &fr, &chans, &MEM);
+        check(m != NULL && chans == 1u, "a file that never pans stays mono");
+        if (m != NULL) {
+            t_free(NULL, m);
+        }
+    }
+
+    /*
+     * The General MIDI effects block is where 仙剑奇侠传 puts both of its
+     * 160-note melody lines (program 99).  Rendering it as noise turned the
+     * theme into a hiss: a player heard the drums and the string chords and
+     * reported no melody at all.  A note on an effects program has to keep
+     * its pitch, while the sound-effect block stays noise.
+     */
+    {
+        nj_u1 file[128];
+        nj_u4 fr = 0u;
+        nj_u1 *m;
+        nj_u4 n, fx, sfx;
+
+        n = build_at(file, 0u, 69u, 100u, 99u);
+        m = nj_midi_render(file, n, &fr, &MEM);
+        fx = (m != NULL) ? pcm_crossings(m, fr, NJ_MIDI_RATE / 20u,
+                                         NJ_MIDI_RATE * 3u / 10u) : 0u;
+        if (m != NULL) {
+            t_free(NULL, m);
+        }
+        n = build_at(file, 0u, 69u, 100u, 120u);
+        m = nj_midi_render(file, n, &fr, &MEM);
+        sfx = (m != NULL) ? pcm_crossings(m, fr, NJ_MIDI_RATE / 20u,
+                                          NJ_MIDI_RATE * 3u / 10u) : 0u;
+        if (m != NULL) {
+            t_free(NULL, m);
+        }
+        check(fx > 0u && fx < 400u, "an effects program still has a pitch");
+        check(sfx > 800u, "the sound-effect block is still noise");
+        if (!(fx > 0u && fx < 400u)) {
+            printf("     effects crossings %u\n", (unsigned)fx);
+        }
+        if (!(sfx > 800u)) {
+            printf("     sound-effect crossings %u\n", (unsigned)sfx);
+        }
     }
 
     t_free(NULL, pcm);
