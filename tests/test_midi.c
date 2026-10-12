@@ -563,6 +563,46 @@ int main(void)
     }
 
     /*
+     * CC91 reverb send: 2,969 events in the corpus.  A note that is sent to
+     * the room has to keep ringing after it stops, and a note that was never
+     * sent has to stay dry - the send defaults to nothing, so a file that does
+     * not ask for reverb sounds exactly as it did before.
+     */
+    {
+        static const nj_u1 wet_body[] = { 0xB0, 91, 127, 0x00, 0xC0, 40 };
+        static const nj_u1 dry_body[] = { 0xC0, 40 };
+        nj_u1 *pcm;
+        nj_u4 fr = 0u;
+        nj_u8 wet_tail = 0u, dry_tail = 0u, wet_note = 0u, dry_note = 0u;
+
+        pcm = render_voiced(wet_body, (nj_u4)sizeof(wet_body), 0, 93, &fr);
+        check(pcm != NULL && fr > NJ_MIDI_RATE * 3u / 4u,
+              "a reverbed note renders past its note off");
+        if (pcm != NULL) {
+            wet_note = pcm_rms(pcm, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 5u);
+            wet_tail = pcm_rms(pcm, fr, NJ_MIDI_RATE * 55u / 100u,
+                               NJ_MIDI_RATE * 75u / 100u);
+            t_free(NULL, pcm);
+        }
+        pcm = render_voiced(dry_body, (nj_u4)sizeof(dry_body), 0, 93, &fr);
+        if (pcm != NULL) {
+            dry_note = pcm_rms(pcm, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 5u);
+            dry_tail = pcm_rms(pcm, fr, NJ_MIDI_RATE * 55u / 100u,
+                               NJ_MIDI_RATE * 75u / 100u);
+            t_free(NULL, pcm);
+        }
+        check(wet_tail > 0u && wet_tail > dry_tail * 20u,
+              "the reverb keeps the note ringing after it stops");
+        check(wet_note > 0u && wet_note < dry_note * 2u,
+              "and the note itself is still there");
+        if (!(wet_tail > dry_tail * 20u) || !(wet_note < dry_note * 2u)) {
+            printf("     reverb tail %llu vs dry %llu; note %llu vs %llu\n",
+                   (unsigned long long)wet_tail, (unsigned long long)dry_tail,
+                   (unsigned long long)wet_note, (unsigned long long)dry_note);
+        }
+    }
+
+    /*
      * Pitch bend.  47,596 bend events in 464 of the corpus files, and none of
      * them used to do anything.  A bend to the top of the range has to raise
      * the pitch of a note that is already sounding: two semitones is 12% more

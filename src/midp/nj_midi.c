@@ -69,6 +69,19 @@
 #define NJ_MIDI_VIBRATO_STEP \
     ((nj_u4)((((nj_u8)1u << 32) / (NJ_MIDI_RATE / 64u)) * NJ_MIDI_VIBRATO_HZ))
 
+/*
+ * Reverb: CC91 is how much of a channel goes into the room.  Two feedback
+ * combs - 59 ms and 32 ms - are what a cheap box had, and they are enough to
+ * stop a chord sounding like it was played in a vacuum.  The send defaults to
+ * nothing, so a file that never asks for reverb sounds exactly as it did.
+ */
+#define NJ_MIDI_REV_A      1300u        /* 59 ms at 22 kHz */
+#define NJ_MIDI_REV_B       700u        /* 32 ms */
+#define NJ_MIDI_REV_LEN    (NJ_MIDI_REV_A + NJ_MIDI_REV_B)
+#define NJ_MIDI_REV_FB_A  15000         /* Q15: 0.46 */
+#define NJ_MIDI_REV_FB_B  12000         /* Q15: 0.37 */
+#define NJ_MIDI_REV_TAIL  (NJ_MIDI_RATE / 2u)
+
 #define NJ_MIDI_MAX_EVENTS 8192u
 #define NJ_MIDI_MAX_TEMPOS 64u
 #define NJ_MIDI_MAX_CTLS 2048u
@@ -78,6 +91,7 @@
 #define MID_CTL_PEDAL 1u
 #define MID_CTL_RANGE 2u
 #define MID_CTL_MOD   3u            /* CC1: how deep the vibrato goes */
+#define MID_CTL_REVERB 4u           /* CC91: how much of the note goes to the room */
 
 /* Pitch bend: 14 bits, 8192 is no bend. */
 #define MID_BEND_CENTRE 8192u
@@ -268,6 +282,7 @@ typedef struct {
     nj_u4      bend_range[16];  /* semitones at full deflection, from RPN 0 */
     nj_u4      pedal[16];       /* sustain pedal state at the end of the file */
     nj_u4      mod[16];         /* CC1 vibrato depth at the end of the file */
+    nj_u4      reverb[16];      /* CC91 send at the end of the file */
     nj_u4      rpn[16];         /* the registered parameter being selected */
 } mid_song;
 
@@ -460,6 +475,11 @@ static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
                     if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_MOD, val)) {
                         return;
                     }
+                } else if (cc == 91u) {         /* reverb send */
+                    s->reverb[chan] = val;
+                    if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_REVERB, val)) {
+                        return;
+                    }
                 } else if (cc == 101u) {        /* RPN MSB */
                     s->rpn[chan] = (s->rpn[chan] & 0x7Fu) | (val << 7);
                 } else if (cc == 100u) {        /* RPN LSB */
@@ -555,6 +575,7 @@ typedef struct {
     nj_u4 base_step;            /* phase increment before the bend */
     nj_u4 lfo;                  /* vibrato phase, 32 bits */
     nj_u4 mod;                  /* vibrato depth, Q16, from the channel */
+    nj_u4 rev;                  /* CC91 send, 0..127, from the channel */
     nj_u1 wave;
     nj_u4 phase;                /* 32-bit phase accumulator */
     nj_u4 step;                 /* phase increment per sample */
@@ -704,6 +725,9 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
     nj_u4 range_now[16];
     int   pedal_now[16];
     nj_u4 mod_now[16];
+    nj_u4 rev_now[16];
+    nj_s4 *rev = NULL;
+    nj_u4 rev_pa = 0u, rev_pb = 0u, rev_any = 0u;
 
     if (frames_out != NULL) {
         *frames_out = 0u;
@@ -719,6 +743,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
         song.bend[i] = MID_BEND_CENTRE;
         song.bend_range[i] = MID_BEND_DEFAULT_RANGE;
         mod_now[i] = 0u;
+        rev_now[i] = 0u;
         song.rpn[i] = 0xFFFFu;          /* no registered parameter selected */
         bend_now[i] = MID_BEND_CENTRE;
         range_now[i] = MID_BEND_DEFAULT_RANGE;
@@ -803,10 +828,24 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
         }
         frames = mid_sample_at(&song, last) + (NJ_MIDI_RATE / 20u);
     }
+    for (i = 0u; i < 16u; i++) {
+        if (song.reverb[i] != 0u) {
+            rev_any = 1u;
+        }
+    }
+    if (rev_any != 0u) {
+        frames += NJ_MIDI_REV_TAIL;     /* the room needs time to empty */
+    }
     if (frames > NJ_MIDI_MAX_FRAMES) {
         frames = NJ_MIDI_MAX_FRAMES;
     }
 
+    if (rev_any != 0u) {
+        rev = (nj_s4 *)mem->alloc(mem->ud, (nj_size)NJ_MIDI_REV_LEN * sizeof(nj_s4));
+        if (rev != NULL) {
+            memset(rev, 0, (nj_size)NJ_MIDI_REV_LEN * sizeof(nj_s4));
+        }
+    }
     pcm = (nj_u1 *)mem->alloc(mem->ud, (nj_size)frames * 2u);
     if (pcm != NULL) {
         memset(pcm, 0, (nj_size)frames * 2u);
@@ -843,6 +882,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
             }
         }
         nj_s4 mix = 0;
+        nj_s4 bus = 0;
         nj_s4 scaled;
 
         /*
@@ -867,6 +907,13 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                     if (voices[v].active && voices[v].chan == ch) {
                         voices[v].mod = mod_now[ch] * NJ_MIDI_VIBRATO_MAX / 127u;
                         mid_set_step(&voices[v]);
+                    }
+                }
+            } else if (kind == MID_CTL_REVERB) {
+                rev_now[ch] = song.ctls[cev].a;
+                for (v = 0u; v < NJ_MIDI_VOICES; v++) {
+                    if (voices[v].active && voices[v].chan == ch) {
+                        voices[v].rev = rev_now[ch];
                     }
                 }
             } else if (kind == MID_CTL_RANGE) {
@@ -938,6 +985,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                         voices[v].decay = (nj_u4)(voices[v].amp / (nj_s4)span) + 1u;
                     }
                 }
+                voices[v].rev = rev_now[song.notes[ev].chan];
                 voices[v].lfo = 0u;
                 voices[v].mod = mod_now[song.notes[ev].chan]
                     * NJ_MIDI_VIBRATO_MAX / 127u;
@@ -1029,7 +1077,29 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                 }
                 voices[v].lp += (raw - voices[v].lp) / 2;
                 mix += voices[v].lp;
+                if (voices[v].rev != 0u) {
+                    bus += voices[v].lp * (nj_s4)voices[v].rev / 127;
+                }
             }
+        }
+
+        /*
+         * Two feedback combs on the send bus.  A channel with no send never
+         * reaches them, so the default is the dry signal this always was.
+         */
+        if (rev != NULL) {
+            nj_s4 ya = rev[rev_pa];
+            nj_s4 yb = rev[NJ_MIDI_REV_A + rev_pb];
+
+            rev[rev_pa] = bus + (nj_s4)((ya * NJ_MIDI_REV_FB_A) >> 15);
+            rev[NJ_MIDI_REV_A + rev_pb] = bus + (nj_s4)((yb * NJ_MIDI_REV_FB_B) >> 15);
+            if (++rev_pa >= NJ_MIDI_REV_A) {
+                rev_pa = 0u;
+            }
+            if (++rev_pb >= NJ_MIDI_REV_B) {
+                rev_pb = 0u;
+            }
+            mix += (ya + yb) * 3 / 8;
         }
 
         /*
@@ -1053,6 +1123,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
         pcm[i * 2u + 1u] = (nj_u1)((scaled >> 8) & 0xFF);
     }
 
+    mem->free(mem->ud, rev);
     mem->free(mem->ud, song.notes);
     mem->free(mem->ud, song.ctls);
     if (frames_out != NULL) {
