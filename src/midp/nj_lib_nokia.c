@@ -294,7 +294,7 @@ static const nj_builtin_method vkeyboard_methods[] = {
  */
 NJFN(nokia_du_createImage3)
 {
-    nj_value a[4];
+    nj_value a[5];
     nj_ref img;
     nj_ref gfx;
 
@@ -329,7 +329,7 @@ NJFN(nokia_du_createImage3)
 
 NJFN(nokia_du_createImage2)
 {
-    nj_value a[2];
+    nj_value a[5];
 
     a[0] = args[0];
     a[1] = args[1];

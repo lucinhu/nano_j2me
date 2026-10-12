@@ -146,7 +146,7 @@ NJFN(midlet_checkPermission)
 nj_status nj_midp_destroy_app(nj_vm *vm, int unconditional)
 {
     nj_ref app;
-    nj_value a1[1];
+    nj_value a1[2];
 
     if (!vm) {
         return NJ_ERR;

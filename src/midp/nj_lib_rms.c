@@ -172,7 +172,7 @@ static nj_s4 vec_size(nj_vm *vm, nj_ref v)
 
 static nj_ref vec_at(nj_vm *vm, nj_ref v, nj_s4 i)
 {
-    nj_value a1[1];
+    nj_value a1[2];
     a1[0].i = i;
     return nj_call_ref(vm, v, "java/util/Vector", "elementAt",
                        "(I)Ljava/lang/Object;", a1);
@@ -180,7 +180,7 @@ static nj_ref vec_at(nj_vm *vm, nj_ref v, nj_s4 i)
 
 static int vec_add(nj_vm *vm, nj_ref v, nj_ref o)
 {
-    nj_value a1[1];
+    nj_value a1[2];
     a1[0].r = o;
     return nj_call(vm, v, "java/util/Vector", "addElement",
                    "(Ljava/lang/Object;)V", a1, NULL) == NJ_OK;
@@ -188,7 +188,7 @@ static int vec_add(nj_vm *vm, nj_ref v, nj_ref o)
 
 static int vec_set(nj_vm *vm, nj_ref v, nj_s4 i, nj_ref o)
 {
-    nj_value a2[2];
+    nj_value a2[3];
     a2[0].r = o;
     a2[1].i = i;
     return nj_call(vm, v, "java/util/Vector", "setElementAt",
@@ -197,7 +197,7 @@ static int vec_set(nj_vm *vm, nj_ref v, nj_s4 i, nj_ref o)
 
 static int vec_del(nj_vm *vm, nj_ref v, nj_s4 i)
 {
-    nj_value a1[1];
+    nj_value a1[2];
     a1[0].i = i;
     return nj_call(vm, v, "java/util/Vector", "removeElementAt", "(I)V",
                    a1, NULL) == NJ_OK;
@@ -225,7 +225,7 @@ static nj_s4 rs_find(nj_vm *vm, nj_ref rs, nj_s4 id)
 
 static nj_ref rs_int_obj(nj_vm *vm, nj_s4 v)
 {
-    nj_value a1[1];
+    nj_value a1[2];
     a1[0].i = v;
     return nj_call_static_ref_local(vm, "java/lang/Integer", "valueOf",
                                     "(I)Ljava/lang/Integer;", a1);
@@ -1069,7 +1069,7 @@ static nj_status re_step(nj_vm *vm, nj_value *args, nj_value *ret, int forward)
     nj_s4 pos = renum_geti(vm, self, "rePos");
     nj_s4 n = ids ? (nj_s4)ids->length : 0;
     nj_s4 id;
-    nj_value a[1];
+    nj_value a[3];
     nj_value r;
 
     if (renum_geti(vm, self, "reDestroyed")) {
@@ -1171,9 +1171,9 @@ NJFN(rs_enumerateRecords)
             nj_s4 id = ido ? nj_call_int(vm, ido, "java/lang/Integer",
                                          "intValue", "()I", NULL) : 0;
             if (filter) {
-                nj_value a[1];
+                nj_value a[3];
                 nj_value r;
-                nj_value ga[1];
+                nj_value ga[2];
                 nj_value gr;
                 ga[0].i = id;
                 gr.r = NULL;
@@ -1206,9 +1206,9 @@ NJFN(rs_enumerateRecords)
             nj_s4 key = dst[i];
             nj_s4 j = i - 1;
             while (j >= 0) {
-                nj_value a[2];
+                nj_value a[3];
                 nj_value r;
-                nj_value ga[1];
+                nj_value ga[2];
                 nj_value gr;
                 int c;
                 ga[0].i = key;
@@ -1220,7 +1220,7 @@ NJFN(rs_enumerateRecords)
                 ga[0].i = dst[j];
                 a[0].r = NULL;
                 {
-                    nj_value gb[1];
+                    nj_value gb[2];
                     nj_value gbr;
                     gb[0].i = dst[j];
                     gbr.r = NULL;

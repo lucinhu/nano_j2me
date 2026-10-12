@@ -599,3 +599,14 @@ endif()
 message(STATUS "nano_j2me ${PROJECT_VERSION}: "
                "JPEG=${NJ_ENABLE_JPEG} PNG=${NJ_ENABLE_PNG} "
                "pixfmt=${NJ_PIXFMT} tests=${NJ_BUILD_TESTS}")
+
+# ---------------------------------------------------------------------------
+# An nj_value argument array must have room for every slot its descriptor names.
+# vm_invoke copies m->arg_slots entries out of it and a long or double occupies
+# two, so a one-entry array handed to a "(J)V" callee reads past the end.  That
+# is what AddressSanitizer caught in Long.valueOf(String, int) - the read is
+# usually harmless because the callee only looks at the first entry, so running
+# the code does not find it.
+# ---------------------------------------------------------------------------
+add_test(NAME check_arg_slots
+         COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_arg_slots.py)

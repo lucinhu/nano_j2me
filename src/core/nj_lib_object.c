@@ -226,7 +226,7 @@ NJFN(class_getResourceAsStream)
     nj_u4 len = 0u;
     nj_ref ba;
     nj_ref in;
-    nj_value a[1];
+    nj_value a[2];
     nj_u4 mark;
 
     if (!cname) {

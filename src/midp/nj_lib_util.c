@@ -132,7 +132,7 @@ static void put_int(char *buf, int cap, int *len, nj_s8 v)
 /* Text of an arbitrary object, via String.valueOf (which handles null). */
 static void put_value(nj_vm *vm, char *buf, int cap, int *len, nj_ref o)
 {
-    nj_value a[1];
+    nj_value a[2];
     nj_ref s;
     char tmp[128];
 
@@ -152,7 +152,7 @@ static void put_value(nj_vm *vm, char *buf, int cap, int *len, nj_ref o)
 /* o == null ? e == null : o.equals(e); *err is set if a Java call failed. */
 static int obj_equals(nj_vm *vm, nj_ref o, nj_ref e, int *err)
 {
-    nj_value a[1];
+    nj_value a[2];
     nj_value r;
 
     if (o == e) {
@@ -832,7 +832,7 @@ NJFN(vec_elements)
 {
     nj_ref v = NJ_THIS(args);
     nj_ref e = nj_object_new(vm, VE_CLS);
-    nj_value a[1];
+    nj_value a[2];
 
     if (!e) {
         return nj_throw_oom(vm);
@@ -2456,7 +2456,7 @@ NJFN(cal_init_zone)
 static nj_status cal_instance(nj_vm *vm, nj_ref zone, nj_value *ret)
 {
     nj_ref c = nj_object_new(vm, CAL_CLS);
-    nj_value a[1];
+    nj_value a[2];
 
     if (!c) {
         return NJ_ERR;

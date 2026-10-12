@@ -225,7 +225,7 @@ static nj_s4 vec_size(nj_vm *vm, nj_ref v)
 
 static nj_ref vec_at(nj_vm *vm, nj_ref v, nj_s4 i)
 {
-    nj_value a[1];
+    nj_value a[4];
     nj_value r;
     a[0].i = i;
     r.r = NULL;
@@ -239,7 +239,7 @@ static nj_ref vec_at(nj_vm *vm, nj_ref v, nj_s4 i)
 
 static int vec_add(nj_vm *vm, nj_ref v, nj_ref o)
 {
-    nj_value a[1];
+    nj_value a[4];
     a[0].r = o;
     return nj_call(vm, v, "java/util/Vector", "addElement",
                    "(Ljava/lang/Object;)V", a, NULL) == NJ_OK;
@@ -289,7 +289,7 @@ static void fire(nj_vm *vm, nj_ref player, const char *event)
     n = vec_size(vm, lst);
     for (i = 0; i < n; i++) {
         nj_ref l = vec_at(vm, lst, i);
-        nj_value a[3];
+        nj_value a[4];
         if (!l) {
             continue;
         }
@@ -540,7 +540,7 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
 static int media_register(nj_vm *vm, nj_ref player)
 {
     nj_ref v = vm->media_players;
-    nj_value a[1];
+    nj_value a[4];
 
     if (!v) {
         v = nj_object_new(vm, "java/util/Vector");
@@ -570,7 +570,7 @@ static void media_unregister(nj_vm *vm, nj_ref player)
     n = vec_size(vm, v);
     for (i = n - 1; i >= 0; i--) {
         if (vec_at(vm, v, i) == player) {
-            nj_value a[1];
+            nj_value a[4];
             a[0].r = player;
             (void)nj_call(vm, v, "java/util/Vector", "removeElement",
                           "(Ljava/lang/Object;)Z", a, NULL);
@@ -711,7 +711,7 @@ static nj_ref read_stream(nj_vm *vm, nj_ref in, nj_u4 cap)
      * and it is what a part with 512 KB of SRAM needs.
      */
     while (got < cap && guard++ < 1024) {
-        nj_value a[3];
+        nj_value a[4];
         nj_value r;
         nj_s4 n;
         if (got == grow) {
@@ -1219,7 +1219,7 @@ NJFN(player_removeListener)
         for (i = 0; i < n; i++) {
             nj_ref e = vec_at(vm, v, i);
             if (e == l) {
-                nj_value a[1];
+                nj_value a[4];
                 a[0].r = l;
                 (void)nj_call(vm, v, "java/util/Vector", "removeElement",
                               "(Ljava/lang/Object;)Z", a, NULL);
@@ -1283,7 +1283,7 @@ NJFN(player_getControls)
     }
     one.r = self;
     if (r_i(vm, self, F_P_KIND) == 0) {
-        nj_value a1[1];
+        nj_value a1[2];
         nj_value r;
         a1[0].r = nj_string_new(vm, "ToneControl");
         r.r = NULL;
@@ -1300,7 +1300,7 @@ NJFN(player_getControls)
             arr->u.refs[1] = r.r;
         }
     } else {
-        nj_value a1[1];
+        nj_value a1[2];
         nj_value r;
         a1[0].r = nj_string_new(vm, "VolumeControl");
         r.r = NULL;

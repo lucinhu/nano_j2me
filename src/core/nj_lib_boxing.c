@@ -202,7 +202,7 @@ NJFN(int_parseInt_radix)
  * starts. */
 NJFN(int_valueOf_str)
 {
-    nj_value a1[1];
+    nj_value a1[3];
     nj_ref o;
     nj_s4 v = 0;
 
@@ -232,7 +232,7 @@ NJFN(int_valueOf_str)
  */
 NJFN(int_valueOf_str_radix)
 {
-    nj_value a1[1];
+    nj_value a1[3];
     nj_ref o;
     nj_s4 v = 0;
 
@@ -320,7 +320,7 @@ NJFN(Long_parseLong_radix)
  */
 NJFN(Long_valueOf_str)
 {
-    nj_value a1[1];
+    nj_value a1[3];
     nj_ref o;
     nj_s8 v = 0;
 
@@ -342,7 +342,7 @@ NJFN(Long_valueOf_str)
 
 NJFN(Long_valueOf_str_radix)
 {
-    nj_value a1[1];
+    nj_value a1[3];
     nj_ref o;
     nj_s8 v = 0;
 
@@ -495,7 +495,7 @@ NJFN(Double_valueOf_str)
     nj_ref s = NJ_ARG_REF(args, 0);
     /*
      * Two slots, not one: <init>(D)V takes a double, and a double occupies two
-     * JVM slots with the payload in the lower one.  With `nj_value a1[1]` the
+     * JVM slots with the payload in the lower one.  With `nj_value a1[3]` the
      * call below read 8 bytes past the array - ASan called it a
      * stack-buffer-overflow in vm_invoke, which is where the read happens and
      * not where the mistake is.  Without a sanitizer it read whatever the next
@@ -504,7 +504,7 @@ NJFN(Double_valueOf_str)
      * The upper slot is zeroed for the same reason every other 2-slot value in
      * the runtime is: an uninitialised half looks like a pointer to the GC.
      */
-    nj_value a1[2];
+    nj_value a1[3];
     const nj_u2 *p;
     nj_u4 i = 0u;
     int neg = 0, any = 0;
@@ -655,7 +655,7 @@ NJFN(int_toString_radix)
 
 NJFN(int_valueOf)
 {
-    nj_value a1[1];
+    nj_value a1[3];
     nj_ref o = nj_object_new(vm, "java/lang/Integer");
     if (!o) {
         return NJ_ERR;
@@ -757,7 +757,7 @@ NJFN(Double_value)
 
 NJFN(Boolean_valueOf)
 {
-    nj_value a1[1];
+    nj_value a1[3];
     nj_ref o = nj_object_new(vm, "java/lang/Boolean");
     if (!o) {
         return NJ_ERR;

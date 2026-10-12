@@ -520,7 +520,7 @@ static nj_ref find_by_id(nj_vm *vm, nj_ref obj, nj_s4 id, int depth)
     kids_f = nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids", "L" NJ_C_VECTOR ";", 0);
     kids = nj_rget(vm, obj, kids_f);
     if (kids) {
-        nj_value a[1];
+        nj_value a[5];
         nj_value n;
         nj_s4 count, i;
 
@@ -621,7 +621,7 @@ static nj_ref track_vec(nj_vm *vm, nj_ref self, int create)
 NJFN(m3g_track_add)
 {
     nj_ref v = track_vec(vm, NJ_THIS(args), 1);
-    nj_value a[1], n;
+    nj_value a[5], n;
 
     if (!v) {
         return nj_throw_oom(vm);
@@ -653,7 +653,7 @@ NJFN(m3g_track_count)
 NJFN(m3g_track_get)
 {
     nj_ref v = track_vec(vm, NJ_THIS(args), 0);
-    nj_value a[1], n;
+    nj_value a[5], n;
 
     if (!v) {
         NJ_THROW(vm, "java/lang/IndexOutOfBoundsException", "no animation tracks");
@@ -985,7 +985,7 @@ NJFN(m3g_addChild)
     nj_ref kids = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
                                                     "L" NJ_C_VECTOR ";", 0));
     nj_field *pf = nj_field_lookup(vm, NJ_C_NODE, "_nj_parent", "L" NJ_C_NODE ";", 0);
-    nj_value a[1];
+    nj_value a[5];
     nj_value n;
 
     if (!child) {
@@ -1019,7 +1019,7 @@ NJFN(m3g_removeChild)
     nj_ref child = NJ_ARG_REF(args, 0);
     nj_ref kids = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
                                                     "L" NJ_C_VECTOR ";", 0));
-    nj_value a[1], n;
+    nj_value a[5], n;
 
     if (!child || !kids) {
         return NJ_OK;
@@ -1057,7 +1057,7 @@ NJFN(m3g_getChild)
     nj_ref kids = nj_rget(vm, NJ_THIS(args), nj_field_lookup(vm, NJ_C_GROUP,
                                                              "_nj_kids",
                                                              "L" NJ_C_VECTOR ";", 0));
-    nj_value a[1], n;
+    nj_value a[5], n;
 
     if (!kids) {
         NJ_THROW(vm, "java/lang/IndexOutOfBoundsException", "no children");
@@ -1338,7 +1338,7 @@ NJFN(m3g_render)
         }
         {
             nj_value n;
-            nj_value a[1];
+            nj_value a[5];
             if (nj_call(vm, kids, NJ_C_VECTOR, "size", "()I", NULL, &n) != NJ_OK) {
                 return NJ_ERR;
             }
@@ -1579,7 +1579,7 @@ NJFN(m3g_mesh_setAppearance)
     nj_s4 index = NJ_ARG_INT(args, 0);
     nj_ref vec = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_MESH, "_nj_subs",
                                                    "L" NJ_C_VECTOR ";", 0));
-    nj_value a[1];
+    nj_value a[5];
     nj_ref ap = NJ_ARG_REF(args, 1);
 
     if (index < 0) {
@@ -1637,7 +1637,7 @@ NJFN(m3g_mesh_getAppearance)
     nj_ref vec = nj_rget(vm, NJ_THIS(args), nj_field_lookup(vm, NJ_C_MESH,
                                                             "_nj_subs",
                                                             "L" NJ_C_VECTOR ";", 0));
-    nj_value a[1], n;
+    nj_value a[5], n;
 
     if (!vec) {
         NJ_THROW(vm, "java/lang/IndexOutOfBoundsException", "no submeshes");

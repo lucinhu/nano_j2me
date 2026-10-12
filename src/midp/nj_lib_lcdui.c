@@ -1752,6 +1752,8 @@ NJFN(img_createImage_img)
     nj_ref out;
     nj_u4 *dst;
     nj_s4 i, j;
+    nj_s4 dw, dh;
+    int rotated;
 
     if (!src) {
         return nj_throw(vm, "java/lang/NullPointerException", "source is null");
@@ -1772,7 +1774,23 @@ NJFN(img_createImage_img)
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "source region outside the image");
     }
-    out = img_alloc(vm, (int)w, (int)h, 0);
+    /*
+     * The quarter turns swap the dimensions: createImage(src, x, y, w, h,
+     * TRANS_ROT90) produces an image h wide and w high, because every pixel of
+     * the w x h source region is rotated into it.  Allocating w x h for those
+     * transforms was wrong twice over - the caller got the wrong size, and the
+     * copy below indexed the source with a coordinate that ran off the row
+     * (tests/games/三国赤壁小乔秘史_7976.jar asked for TRANS_ROT270, and the read
+     * at ux = w - 1 - j went negative on the first destination row, which is a
+     * segmentation fault rather than an exception).
+     */
+    rotated = (transform == NJ_TRANS_ROT90 ||
+               transform == NJ_TRANS_MIRROR_ROT90 ||
+               transform == NJ_TRANS_ROT270 ||
+               transform == NJ_TRANS_MIRROR_ROT270);
+    dw = rotated ? h : w;
+    dh = rotated ? w : h;
+    out = img_alloc(vm, (int)dw, (int)dh, 0);
     if (!out) {
         return vm->exception ? NJ_ERR : nj_throw_oom(vm);
     }
@@ -1786,8 +1804,8 @@ NJFN(img_createImage_img)
      * over that rotated space; untransform() maps it back into the source
      * region exactly like the rasterizer's blitter does.
      */
-    for (j = 0; j < h; j++) {
-        for (i = 0; i < w; i++) {
+    for (j = 0; j < dh; j++) {
+        for (i = 0; i < dw; i++) {
             nj_s4 ux = i, uy = j;
             nj_u4 p;
             switch ((int)transform) {
@@ -1802,7 +1820,7 @@ NJFN(img_createImage_img)
             }
             p = view.pixels[(nj_size)(y + uy) * (nj_size)view.width +
                             (nj_size)(x + ux)];
-            dst[(nj_size)j * (nj_size)w + (nj_size)i] = p;
+            dst[(nj_size)j * (nj_size)dw + (nj_size)i] = p;
         }
     }
     ret->r = out;

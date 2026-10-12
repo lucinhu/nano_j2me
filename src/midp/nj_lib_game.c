@@ -2406,7 +2406,7 @@ NJFN(lm_paint)
 
     for (i = n - 1; i >= 0; i--) {
         nj_ref layer;
-        nj_value gv[1];
+        nj_value gv[2];
 
         if ((nj_u4)i >= nj_array_length(a)) {
             continue;
@@ -2521,7 +2521,7 @@ static nj_ref gc_buffer(nj_vm *vm, nj_ref self, int create)
 static void gc_chain_super(nj_vm *vm, nj_ref self, int suppress)
 {
     nj_class *cv = nj_class_lookup(vm, NJ_C_CANVAS);
-    nj_value a1[1];
+    nj_value a1[2];
 
     if (!cv) {
         return;

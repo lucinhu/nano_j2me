@@ -88,7 +88,7 @@ NJFN(is_read_bytes_range)
 
 NJFN(is_read_bytes)
 {
-    nj_value a3[3];
+    nj_value a3[4];
     a3[0].r = NJ_ARG_REF(args, 0);
     a3[1].i = 0;
     a3[2].i = a3[0].r ? (nj_s4)a3[0].r->length : 0;
@@ -142,7 +142,7 @@ NJFN(is_skip)
     }
 
     while (done < want) {
-        nj_value a3[3];
+        nj_value a3[4];
         nj_s4 want_here = (nj_s4)((want - done) > NJ_SKIP_CHUNK
                                   ? NJ_SKIP_CHUNK : (want - done));
         nj_s4 n;
@@ -192,7 +192,7 @@ NJFN(os_write_bytes_range)
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
     for (i = 0; i < len; i++) {
-        nj_value a1[1];
+        nj_value a1[2];
         a1[0].i = (nj_s4)buf->u.bytes[off + i];
         if (nj_call(vm, NJ_THIS(args), NJ_C_OSTREAM, "write", "(I)V", a1, NULL)
             != NJ_OK) {
@@ -204,7 +204,7 @@ NJFN(os_write_bytes_range)
 
 NJFN(os_write_bytes)
 {
-    nj_value a3[3];
+    nj_value a3[4];
     a3[0].r = NJ_ARG_REF(args, 0);
     a3[1].i = 0;
     a3[2].i = a3[0].r ? (nj_s4)a3[0].r->length : 0;
@@ -523,7 +523,7 @@ static nj_ref dos_out(nj_vm *vm, nj_ref self)
 /* Write raw bytes through the wrapped stream. */
 static nj_status dos_raw(nj_vm *vm, nj_ref out, const nj_u1 *p, nj_s4 n)
 {
-    nj_value a3[3];
+    nj_value a3[4];
     nj_ref tmp;
 
     if (n <= 0) {
@@ -750,7 +750,7 @@ NJFN(dis_available)
 NJFN(dis_read_range)
 {
     nj_ref in = dis_in(vm, NJ_THIS(args));
-    nj_value a3[3];
+    nj_value a3[4];
     a3[0] = args[0];
     a3[1] = args[1];
     a3[2] = args[2];
@@ -1413,7 +1413,7 @@ NJFN(isr_close)
     nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_ISR, "isrIn",
                            "Ljava/io/InputStream;");
     if (in) {
-        nj_value a[1];
+        nj_value a[4];
         a[0].bits = 0u;
         (void)nj_call(vm, in, NJ_C_ISTREAM, "close", "()V", a, NULL);
     }
@@ -1439,7 +1439,7 @@ NJFN(osw_write)
 {
     nj_ref out = strm_field(vm, NJ_THIS(args), NJ_C_OSW, "oswOut",
                             "Ljava/io/OutputStream;");
-    nj_value a[1];
+    nj_value a[4];
     if (!out) {
         return nj_throw(vm, "java/io/IOException", "stream is closed");
     }
@@ -1478,7 +1478,7 @@ NJFN(osw_range)
         return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
     }
     for (i = 0; i < len; i++) {
-        nj_value a[1];
+        nj_value a[4];
         a[0].i = (nj_s4)(((nj_u2 *)chars->u.bytes)[off + i] & 0xFFu);
         if (nj_call(vm, out, NJ_C_OSTREAM, "write", "(I)V", a, NULL) != NJ_OK) {
             return NJ_ERR;
@@ -1531,7 +1531,7 @@ NJFN(osw_flush)
     nj_ref out = strm_field(vm, NJ_THIS(args), NJ_C_OSW, "oswOut",
                             "Ljava/io/OutputStream;");
     if (out) {
-        nj_value a[1];
+        nj_value a[4];
         a[0].bits = 0u;
         (void)nj_call(vm, out, NJ_C_OSTREAM, "flush", "()V", a, NULL);
     }
@@ -1560,7 +1560,7 @@ static nj_s4 ch_len(nj_ref a)
 
 NJFN(rd_read_chars)
 {
-    nj_value a[3];
+    nj_value a[4];
     nj_value r;
     nj_ref b = NJ_ARG_REF(args, 0);
 
@@ -1602,7 +1602,7 @@ NJFN(rd_skip)
 
 NJFN(wr_write_int)
 {
-    nj_value a[3];
+    nj_value a[4];
     nj_ref one = nj_char_array_new(vm, 1u);
     nj_u2 *p;
 
@@ -1625,7 +1625,7 @@ NJFN(wr_write_int)
 
 NJFN(wr_write_chars)
 {
-    nj_value a[3];
+    nj_value a[4];
     nj_ref b = NJ_ARG_REF(args, 0);
 
     if (!b) {
@@ -1643,7 +1643,7 @@ NJFN(wr_write_chars)
 
 NJFN(wr_write_str)
 {
-    nj_value a[3];
+    nj_value a[4];
     nj_ref s = NJ_ARG_REF(args, 0);
     nj_ref c;
 

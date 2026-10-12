@@ -411,7 +411,7 @@ NJFN(fc_openInputStream)
     nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
     char host[NJ_FC_PATHMAX];
     nj_ref ba, in;
-    nj_value a[1];
+    nj_value a[2];
 
     if (fget_int(vm, NJ_THIS(args), F_CLOSED, "Z")) {
         return fc_throw_closed(vm);
@@ -474,7 +474,7 @@ NJFN(fc_openOutputStream)
     char host[NJ_FC_PATHMAX];
     nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
     nj_ref ps, os;
-    nj_value a[1];
+    nj_value a[2];
 
     if (fget_int(vm, NJ_THIS(args), F_CLOSED, "Z")) {
         return fc_throw_closed(vm);
@@ -508,7 +508,7 @@ NJFN(fc_openOutputStream)
 NJFN(fc_openDataOutputStream)
 {
     nj_ref inner, out;
-    nj_value a[1];
+    nj_value a[2];
 
     if (fc_openOutputStream(vm, th, args, ret) != NJ_OK) {
         return NJ_ERR;
@@ -530,7 +530,7 @@ NJFN(fc_openDataOutputStream)
 NJFN(fc_openDataInputStream)
 {
     nj_ref inner, in;
-    nj_value a[1];
+    nj_value a[2];
 
     if (fc_openInputStream(vm, th, args, ret) != NJ_OK) {
         return NJ_ERR;
@@ -681,7 +681,7 @@ static nj_status fc_list_impl(nj_vm *vm, nj_value *args, nj_value *ret,
             }
             s = nj_string_new(vm, entry);
             if (s) {
-                nj_value a1[1];
+                nj_value a1[2];
                 a1[0].r = s;
                 (void)nj_call(vm, vec, "java/util/Vector", "addElement",
                               "(Ljava/lang/Object;)V", a1, NULL);
@@ -793,7 +793,7 @@ NJFN(fsr_listRoots)
 {
     nj_ref vec = nj_object_new(vm, "java/util/Vector");
     nj_ref s;
-    nj_value a1[1];
+    nj_value a1[2];
 
     if (!vec) {
         return NJ_ERR;

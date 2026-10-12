@@ -983,7 +983,7 @@ NJFN(str_getBytes_enc)
 NJFN(str_valueOf_obj)
 {
     nj_ref o = NJ_ARG_REF(args, 0);
-    nj_value a1[1];
+    nj_value a1[3];
     if (!o) {
         ret->r = nj_string_new(vm, "null");
         return ret->r ? NJ_OK : nj_throw_oom(vm);
@@ -1270,7 +1270,7 @@ NJFN(sb_append_obj)
 {
     nj_ref o = NJ_ARG_REF(args, 0);
     nj_ref s;
-    nj_value a1[1];
+    nj_value a1[3];
 
     if (!o) {
         if (sb_append_cstr(vm, NJ_THIS(args), "null") != NJ_OK) {
@@ -1312,7 +1312,7 @@ NJFN(sb_append_int)
 
 NJFN(sb_append_long)
 {
-    nj_value a1[2];
+    nj_value a1[3];
     a1[0].j = NJ_ARG_LONG(args, 0);
     a1[1].bits = 0u;
     {
@@ -1547,7 +1547,7 @@ static nj_status insert_chars(nj_vm *vm, nj_value *args, nj_value *ret,
 {
     nj_ref arr = NJ_ARG_REF(args, 1);
     nj_ref s;
-    nj_value a1[1];
+    nj_value a1[3];
     nj_u4 mark;
     nj_status st;
 

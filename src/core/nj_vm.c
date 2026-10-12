@@ -907,7 +907,7 @@ nj_ref nj_exception_new(nj_vm *vm, const char *cls, const char *msg)
 
     {
         nj_u4 mark = nj_root_mark(vm);
-        nj_value args[1];
+        nj_value args[2];
         nj_status st;
 
         nj_root(vm, e);
