@@ -306,12 +306,20 @@ nj_u4 nj_surface_format_color(int format, nj_u4 argb);
 /* ------------------------------------------------------------------ */
 /* Anchor constants (mirror javax.microedition.lcdui.Graphics)         */
 /* ------------------------------------------------------------------ */
-#define NJ_ANCHOR_HCENTER 1
-#define NJ_ANCHOR_RIGHT   8
-#define NJ_ANCHOR_LEFT    4
-#define NJ_ANCHOR_VCENTER 2
+/*
+ * These are the MIDP 2.0 Graphics anchor values, and they are deliberately the
+ * same numbers the Java constants carry: a MIDlet's anchor travels from
+ * Graphics.LEFT through the native call straight into nj_gfx, so any other
+ * numbering here would silently re-interpret it (LEFT meaning HCENTER, say)
+ * rather than fail.  Keep them in step with the seeds in nj_lib_lcdui.c and
+ * with tools/midp_stubs.py, which javac inlines into the MIDlet.
+ */
+#define NJ_ANCHOR_LEFT    1
+#define NJ_ANCHOR_HCENTER 2
+#define NJ_ANCHOR_RIGHT   4
+#define NJ_ANCHOR_TOP     8
+#define NJ_ANCHOR_VCENTER 16
 #define NJ_ANCHOR_BOTTOM  32
-#define NJ_ANCHOR_TOP     16
 
 /* ROP constants, mirroring Graphics SET/PAINT. */
 #define NJ_ROP_SET   0

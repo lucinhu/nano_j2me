@@ -737,7 +737,11 @@ static void test_graphics(nj_vm *vm)
         a[0] = sref(s);
         a[1] = iref(0);
         a[2] = iref(0);
-        a[3] = iref(NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
+        /* Graphics.TOP | Graphics.LEFT, the MIDlet's encoding - NOT the
+         * renderer's NJ_ANCHOR_* bits, which put RIGHT at 8 and HCENTER at 1.
+         * Passing NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP here is what let the two
+         * encodings drift apart unnoticed for so long. */
+        a[3] = iref(8 | 1);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawString",
                    "(Ljava/lang/String;III)V", a, NULL) == NJ_OK);
         {
@@ -768,7 +772,7 @@ static void test_graphics(nj_vm *vm)
         a[0] = iref('A');
         a[1] = iref(1);
         a[2] = iref(0);
-        a[3] = iref(NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
+        a[3] = iref(8 | 1);         /* Graphics.TOP | Graphics.LEFT */
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawChar", "(CIII)V", a, NULL) == NJ_OK);
         {
             int x, ink = 0;
@@ -782,6 +786,176 @@ static void test_graphics(nj_vm *vm)
                 }
             }
             OK_MSG(ink > 0, "drawChar drew nothing");
+        }
+    }
+
+    /* ---- a MIDlet's anchor encoding, not the renderer's ------------------
+     * Graphics.TOP | Graphics.LEFT is 8 | 1 = 9.  The renderer's own bits make
+     * bit 8 RIGHT and bit 1 HCENTER, and set no vertical bit at all - which
+     * the text blitter reads as its BASELINE default.  A straight pass-through
+     * therefore centred every TOP|LEFT line and drew it `ascent` pixels too
+     * high.  On screen that is a game's dialogue text sitting on the top
+     * border of its own dialogue box, which is how this was found.
+     *
+     * The robust way to pin the semantics is not to guess where a glyph's ink
+     * starts, but to demand that two anchors describing the same place agree:
+     * drawing at (x, y) with TOP|LEFT must leave the same ink as drawing at
+     * (x, y + Font.getBaselinePosition()) with BASELINE|LEFT.
+     */
+    {
+        nj_ref f3 = call_static_ref(vm, NJ_C_FONT, "getFont",
+                                    "(III)L" NJ_C_FONT ";",
+                                    (nj_value[]){ iref(0), iref(0), iref(0) },
+                                    &ok);
+        nj_ref s3 = str(vm, "Hg");
+        nj_s4 base = 0;
+        nj_s4 top_y = 6;
+        int box_top[4] = { 999, -1, 999, -1 };   /* x0, x1, y0, y1 */
+        int box_base[4] = { 999, -1, 999, -1 };
+
+        OK(f3 != NULL && ok);
+        if (f3) {
+            a[0] = sref(f3);
+            OK(nj_call(vm, g, NJ_C_GRAPHICS, "setFont", "(L" NJ_C_FONT ";)V",
+                       a, NULL) == NJ_OK);
+            base = call_int(vm, f3, NJ_C_FONT, "getBaselinePosition", "()I",
+                            NULL, &ok);
+        }
+        OK_MSG(base > 0, "Font.getBaselinePosition() = %d", (int)base);
+
+        a[0] = iref(0);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+        a[0] = iref(0);
+        a[1] = iref(0);
+        a[2] = iref(60);
+        a[3] = iref(40);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
+        a[0] = iref((nj_s4)0xFFFFFFFFu);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+
+        /* Graphics.TOP | Graphics.LEFT at (1, top_y). */
+        a[0] = sref(s3);
+        a[1] = iref(1);
+        a[2] = iref(top_y);
+        a[3] = iref(8 | 1);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawString",
+                   "(Ljava/lang/String;III)V", a, NULL) == NJ_OK);
+        {
+            int x, y;
+            for (y = 0; y < 40; y++) {
+                for (x = 0; x < 60; x++) {
+                    if (img_pixel(vm, img, x, y) == 0xFFFFFFFFu) {
+                        if (x < box_top[0]) { box_top[0] = x; }
+                        if (x > box_top[1]) { box_top[1] = x; }
+                        if (y < box_top[2]) { box_top[2] = y; }
+                        if (y > box_top[3]) { box_top[3] = y; }
+                    }
+                }
+            }
+        }
+        OK_MSG(box_top[1] >= 0, "TOP|LEFT drew nothing");
+
+        a[0] = iref(0);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+        a[0] = iref(0);
+        a[1] = iref(0);
+        a[2] = iref(60);
+        a[3] = iref(40);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
+        a[0] = iref((nj_s4)0xFFFFFFFFu);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+
+        /* Graphics.BASELINE | Graphics.LEFT, moved down by the baseline. */
+        a[0] = sref(s3);
+        a[1] = iref(1);
+        a[2] = iref(top_y + base);
+        a[3] = iref(64 | 1);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawString",
+                   "(Ljava/lang/String;III)V", a, NULL) == NJ_OK);
+        {
+            int x, y;
+            for (y = 0; y < 40; y++) {
+                for (x = 0; x < 60; x++) {
+                    if (img_pixel(vm, img, x, y) == 0xFFFFFFFFu) {
+                        if (x < box_base[0]) { box_base[0] = x; }
+                        if (x > box_base[1]) { box_base[1] = x; }
+                        if (y < box_base[2]) { box_base[2] = y; }
+                        if (y > box_base[3]) { box_base[3] = y; }
+                    }
+                }
+            }
+        }
+        OK_MSG(box_base[1] >= 0, "BASELINE|LEFT drew nothing");
+        OK_MSG(box_top[0] == box_base[0] && box_top[1] == box_base[1] &&
+               box_top[2] == box_base[2] && box_top[3] == box_base[3],
+               "TOP|LEFT at y=%d and BASELINE|LEFT at y=%d disagree: "
+               "[%d..%d]x[%d..%d] vs [%d..%d]x[%d..%d]",
+               (int)top_y, (int)(top_y + base),
+               box_top[0], box_top[1], box_top[2], box_top[3],
+               box_base[0], box_base[1], box_base[2], box_base[3]);
+        /* And TOP must not mean "the y is the baseline": the ink has to start
+         * inside the text box, not `ascent` pixels above it. */
+        OK_MSG(box_top[2] >= top_y && box_top[2] < top_y + base,
+               "TOP|LEFT put the ink top at %d, outside the box starting at y=%d",
+               box_top[2], (int)top_y);
+
+        /*
+         * Anchor 0.  MIDP 2.0, "Anchor Points": "Zero may also be used as the
+         * value of an anchor point.  Using zero for the anchor point value
+         * gives results identical to using TOP | LEFT."
+         *
+         * This is not a corner case.  `drawString(s, x, y, 0)` is what a great
+         * many games write, and it is what the bare three-argument
+         * `drawString(s, x, y)` means.  The pass-through encoding happened to
+         * give it "no vertical bit", which the blitter reads as BASELINE - so
+         * every one of those lines was drawn `ascent` pixels too high.  On the
+         * 仙剑奇侠传 dialogue that put a line of speech on the top border of
+         * the box drawn for it.
+         */
+        {
+            int box_zero[4] = { 999, -1, 999, -1 };
+            a[0] = iref(0);
+            OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+            a[0] = iref(0);
+            a[1] = iref(0);
+            a[2] = iref(60);
+            a[3] = iref(40);
+            OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
+            a[0] = iref((nj_s4)0xFFFFFFFFu);
+            OK(nj_call(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", a, NULL) == NJ_OK);
+
+            a[0] = sref(s3);
+            a[1] = iref(1);
+            a[2] = iref(top_y);
+            a[3] = iref(0);
+            OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawString",
+                       "(Ljava/lang/String;III)V", a, NULL) == NJ_OK);
+            {
+                int x, y;
+                for (y = 0; y < 40; y++) {
+                    for (x = 0; x < 60; x++) {
+                        if (img_pixel(vm, img, x, y) == 0xFFFFFFFFu) {
+                            if (x < box_zero[0]) { box_zero[0] = x; }
+                            if (x > box_zero[1]) { box_zero[1] = x; }
+                            if (y < box_zero[2]) { box_zero[2] = y; }
+                            if (y > box_zero[3]) { box_zero[3] = y; }
+                        }
+                    }
+                }
+            }
+            OK_MSG(box_zero[1] >= 0, "anchor 0 drew nothing");
+            OK_MSG(box_zero[0] == box_top[0] && box_zero[1] == box_top[1] &&
+                   box_zero[2] == box_top[2] && box_zero[3] == box_top[3],
+                   "anchor 0 and TOP|LEFT must be identical, but gave "
+                   "[%d..%d]x[%d..%d] vs [%d..%d]x[%d..%d]",
+                   box_zero[0], box_zero[1], box_zero[2], box_zero[3],
+                   box_top[0], box_top[1], box_top[2], box_top[3]);
+            /* Spelled out separately so a failure says which way it went:
+             * anchor 0 on the baseline is the historical bug, and it is the
+             * one that looks almost right. */
+            OK_MSG(box_zero[2] >= top_y,
+                   "anchor 0 was treated as BASELINE: ink starts at %d, above "
+                   "the box at y=%d", box_zero[2], (int)top_y);
         }
     }
 
@@ -847,11 +1021,11 @@ static void test_graphics(nj_vm *vm)
             ia[3] = iref(3);
             OK(nj_call(vm, sg, NJ_C_GRAPHICS, "fillRect", "(IIII)V", ia,
                        NULL) == NJ_OK);
-            /* top-left anchored at (5,4) */
+            /* top-left anchored at (5,4): Graphics.LEFT | Graphics.TOP */
             ia[0] = sref(src);
             ia[1] = iref(5);
             ia[2] = iref(4);
-            ia[3] = iref(NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
+            ia[3] = iref(1 | 8);
             OK(nj_call(vm, dg, NJ_C_GRAPHICS, "drawImage",
                        "(L" NJ_C_IMAGE ";III)V", ia, NULL) == NJ_OK);
             OK_MSG(img_pixel(vm, dst, 5, 4) == 0xFFCC2200u,
@@ -860,11 +1034,11 @@ static void test_graphics(nj_vm *vm)
                    "drawImage covered its whole 4x3 box");
             OK_MSG(img_pixel(vm, dst, 9, 6) == 0u, "drawImage overran its box");
             OK_MSG(img_pixel(vm, dst, 4, 4) == 0u, "drawImage started too early");
-            /* horizontally centred at (9,0): the 4-wide image starts at x=7 */
+            /* horizontally centred at (9,0): Graphics.HCENTER | Graphics.TOP */
             ia[0] = sref(src);
             ia[1] = iref(9);
             ia[2] = iref(0);
-            ia[3] = iref(NJ_ANCHOR_HCENTER | NJ_ANCHOR_TOP);
+            ia[3] = iref(2 | 8);
             OK(nj_call(vm, dg, NJ_C_GRAPHICS, "drawImage",
                        "(L" NJ_C_IMAGE ";III)V", ia, NULL) == NJ_OK);
             OK_MSG(img_pixel(vm, dst, 7, 0) == 0xFFCC2200u,
@@ -893,15 +1067,16 @@ static void test_graphics(nj_vm *vm)
             ia[1] = iref(0);
             ia[2] = iref(0);
 
-            /* TOP alone is legal; the horizontal half defaults to LEFT. */
-            ia[3] = iref(NJ_ANCHOR_TOP);
+            /* Graphics.TOP alone is legal; the horizontal half defaults to
+             * LEFT. */
+            ia[3] = iref(8);
             (void)nj_call(vm, dg2, NJ_C_GRAPHICS, "drawImage",
                           "(L" NJ_C_IMAGE ";III)V", ia, NULL);
             OK_MSG(!exc_is(vm, "java/lang/IllegalArgumentException"),
                    "drawImage with TOP alone threw; MIDP defaults it to LEFT");
 
             /* Two horizontal constants at once is the real error. */
-            ia[3] = iref(NJ_ANCHOR_LEFT | NJ_ANCHOR_RIGHT);
+            ia[3] = iref(1 | 4);
             (void)nj_call(vm, dg2, NJ_C_GRAPHICS, "drawImage",
                           "(L" NJ_C_IMAGE ";III)V", ia, NULL);
             OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
@@ -1077,11 +1252,11 @@ static void test_all_methods_bound(nj_vm *vm)
 static void test_constants(nj_vm *vm)
 {
     static const struct { const char *cls; const char *name; nj_s4 value; } k[] = {
-        { "javax/microedition/lcdui/Graphics", "HCENTER", 1 },
-        { "javax/microedition/lcdui/Graphics", "VCENTER", 2 },
-        { "javax/microedition/lcdui/Graphics", "LEFT",    4 },
-        { "javax/microedition/lcdui/Graphics", "RIGHT",   8 },
-        { "javax/microedition/lcdui/Graphics", "TOP",     16 },
+        { "javax/microedition/lcdui/Graphics", "LEFT",    1 },
+        { "javax/microedition/lcdui/Graphics", "HCENTER", 2 },
+        { "javax/microedition/lcdui/Graphics", "RIGHT",   4 },
+        { "javax/microedition/lcdui/Graphics", "TOP",     8 },
+        { "javax/microedition/lcdui/Graphics", "VCENTER", 16 },
         { "javax/microedition/lcdui/Graphics", "BOTTOM",  32 },
         { "javax/microedition/lcdui/Graphics", "BASELINE", 64 },
         { "javax/microedition/lcdui/Canvas",   "KEY_NUM0", 48 },

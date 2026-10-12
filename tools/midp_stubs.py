@@ -139,8 +139,8 @@ CLASSES = {
         ],
     },
     "javax/microedition/lcdui/Graphics": {
-        "constants": {"HCENTER": "1", "VCENTER": "2", "LEFT": "4", "RIGHT": "8",
-                      "TOP": "16", "BOTTOM": "32", "BASELINE": "64",
+        "constants": {"LEFT": "1", "HCENTER": "2", "RIGHT": "4", "TOP": "8",
+                      "VCENTER": "16", "BOTTOM": "32", "BASELINE": "64",
                       "SOLID": "0", "DOTTED": "1"},
         "methods": [
             "public void translate(int, int)",
