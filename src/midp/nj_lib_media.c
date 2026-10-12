@@ -95,6 +95,16 @@ static void midi_free(void *ud, void *p)
 #define F_P_TONES    "pTones"      /* [I freq,ms pairs */
 #define F_P_NTONES   "pNTones"     /* I */
 #define F_P_DATA     "pData"       /* [B PCM little-endian s16 */
+#define F_P_STREAM   "pStream"     /* Z: pData is a stream handle, not PCM */
+
+/*
+ * A MIDI Player holds its music in C, not in the Java heap: pData is a handle
+ * (the pointer in the first bytes) plus the scratch the pump pulls into.  That
+ * is what lets a fifty minute song play on a heap that could never hold its
+ * PCM - the whole file would be a hundred and forty megabytes.
+ */
+#define NJ_MEDIA_STREAM_FRAMES 4096u
+#define NJ_MEDIA_STREAM_BYTES  ((nj_u4)sizeof(void *) + NJ_MEDIA_STREAM_FRAMES * 2u * 2u)
 #define F_P_RATE     "pRate"       /* I */
 #define F_P_CHAN     "pChans"      /* I */
 #define F_P_FRAMES   "pFrames"     /* I */
@@ -492,6 +502,28 @@ static int wav_parse(const nj_u1 *b, nj_u4 len, wav_info *out)
  * Hand PCM to the port.  Returns the number of frames ACCEPTED, which is what
  * the caller stores; the port is allowed to take fewer than offered.
  */
+/* Release the C stream a streamed MIDI Player holds, once. */
+static void media_stream_release(nj_vm *vm, nj_ref player)
+{
+    nj_ref data;
+    const nj_u1 *b;
+    struct nj_midi_stream *st;
+
+    if (!r_z(vm, player, F_P_STREAM)) {
+        return;
+    }
+    w_z(vm, player, F_P_STREAM, 0);
+    data = r_r(vm, player, F_P_DATA, "[B");
+    b = barray_bytes(data);
+    if (b == NULL || barray_len(data) < NJ_MEDIA_STREAM_BYTES) {
+        return;
+    }
+    memcpy(&st, b, sizeof(st));
+    if (st != NULL) {
+        nj_midi_stream_close(st);
+    }
+}
+
 static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
 {
     nj_ref data = r_r(vm, player, F_P_DATA, "[B");
@@ -507,6 +539,50 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
 
     if (!b || !vm->port || !vm->port->pcm_write || chan <= 0) {
         return 0;
+    }
+    /*
+     * A streamed MIDI Player holds no PCM: the pump pulls what the device has
+     * room for, renders it into the handle's scratch and hands that over.  The
+     * song's length never reaches the Java heap, which is the whole point - a
+     * fifty minute .mid is a hundred and forty megabytes of samples.
+     */
+    if (r_z(vm, player, F_P_STREAM)) {
+        struct nj_midi_stream *st;
+        nj_u1 *scratch;
+        nj_u4 want;
+        nj_u4 got;
+
+        if (total < NJ_MEDIA_STREAM_BYTES) {
+            return 0;
+        }
+        memcpy(&st, b, sizeof(st));
+        if (st == NULL) {
+            return 0;
+        }
+        scratch = (nj_u1 *)(void *)(b + sizeof(st));
+        want = NJ_MEDIA_STREAM_FRAMES;
+        if ((int)want > max_frames && max_frames > 0) {
+            want = (nj_u4)max_frames;
+        }
+        got = nj_midi_stream_pull(st, scratch, want);
+        if (got == 0u) {
+            nj_midi_stream_close(st);
+            w_z(vm, player, F_P_STREAM, 0);
+            return 0;
+        }
+        took = vm->port->pcm_write(vm->port->ud,
+                                   (const nj_s2 *)(const void *)scratch,
+                                   (int)(got * (nj_u4)chan));
+        if (took < 0) {
+            return 0;
+        }
+        w_i(vm, player, F_P_PUSHED, done + (nj_s4)(got));
+        {
+            nj_s8 us = (nj_s8)(done + (nj_s4)got) * 1000000LL
+                       / (nj_s8)r_i(vm, player, F_P_RATE);
+            w_j(vm, player, F_P_TIME, us);
+        }
+        return (int)got;
     }
     off = (nj_u4)done * (nj_u4)chan * (nj_u4)(bits / 8);
     if (off >= total) {
@@ -910,23 +986,24 @@ NJFN(media_createPlayer_stream)
          */
         if (strcmp(what, "MIDI") == 0) {
             nj_midi_mem mem;
-            nj_u4 mframes = 0u;
-            nj_u4 mchans = 1u;
-            nj_u1 *rendered;
+            struct nj_midi_stream *st;
+            nj_u4 mframes;
+            nj_u4 mchans;
 
             mem.ud = vm;
             mem.alloc = midi_alloc;
             mem.free = midi_free;
-            rendered = nj_midi_render_ex(barray_bytes(data), barray_len(data),
-                                         &mframes, &mchans, &mem);
+            st = nj_midi_stream_open(barray_bytes(data), barray_len(data), &mem);
+            mframes = nj_midi_stream_frames(st);
+            mchans = nj_midi_stream_channels(st);
 
-            if (rendered != NULL && mframes > 0u) {
-                nj_ref pcm = nj_byte_array_new(vm, mframes * mchans * 2u);
-                if (pcm != NULL) {
-                    memcpy(pcm->u.bytes, rendered,
-                           (size_t)mframes * (size_t)mchans * 2u);
-                    midi_free(vm, rendered);
-                    w_r(vm, p, F_P_DATA, "[B", pcm);
+            if (st != NULL && mframes > 0u && mchans > 0u) {
+                nj_ref holder = nj_byte_array_new(vm, NJ_MEDIA_STREAM_BYTES);
+                if (holder != NULL) {
+                    struct nj_midi_stream *keep = st;
+                    memcpy(holder->u.bytes, &keep, sizeof(keep));
+                    w_r(vm, p, F_P_DATA, "[B", holder);
+                    w_z(vm, p, F_P_STREAM, 1);
                     w_i(vm, p, F_P_RATE, (nj_s4)NJ_MIDI_RATE);
                     w_i(vm, p, F_P_CHAN, (nj_s4)mchans);
                     w_i(vm, p, F_P_FRAMES, (nj_s4)mframes);
@@ -937,9 +1014,9 @@ NJFN(media_createPlayer_stream)
                     return NJ_OK;
                 }
                 /*
-                 * The heap could not take the music.  A silent Player is the
-                 * documented answer for a file that cannot be played (see the
-                 * comment above), and the byte array's failure has already
+                 * The heap could not take even the handle.  A silent Player is
+                 * the documented answer for a file that cannot be played (see
+                 * the comment above), and the byte array's failure has already
                  * raised OutOfMemoryError - so drop that and stay silent
                  * rather than failing createPlayer(): 愤怒的小鸟-高清版_2353
                  * asks for its music while the heap is full, and a title
@@ -948,7 +1025,7 @@ NJFN(media_createPlayer_stream)
                 if (nj_has_exception(vm)) {
                     nj_clear_exception(vm);
                 }
-                midi_free(vm, rendered);
+                nj_midi_stream_close(st);
             }
             w_i(vm, p, F_P_KIND, 0);
             nj_logf(vm, 3, "media: silent Player for %u bytes of MIDI "
@@ -1293,6 +1370,7 @@ NJFN(player_deallocate)
     if (r != NJ_OK) {
         return r;
     }
+    media_stream_release(vm, self);
     w_i(vm, self, F_P_STATE, 100);
     w_i(vm, self, F_P_PUSHED, 0);
     w_j(vm, self, F_P_TIME, 0);
@@ -1691,6 +1769,7 @@ static const nj_builtin_field player_fields[] = {
     FLD(F_P_TONES,    "[I", 0),
     FLD(F_P_NTONES,   "I", 0),
     FLD(F_P_DATA,     "[B", 0),
+    FLD(F_P_STREAM,   "Z", 0),
     FLD(F_P_RATE,     "I", 0),
     FLD(F_P_CHAN,     "I", 0),
     FLD(F_P_FRAMES,   "I", 0),
