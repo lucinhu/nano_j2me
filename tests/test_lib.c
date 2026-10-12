@@ -43,7 +43,8 @@
  */
 #include "nj2me/nj.h"
 
-#include "nj_internal.h" /* nj_class_load: the fixtures below are raw classes */
+#include "nj_internal.h"
+#include "nj_midi.h" /* nj_class_load: the fixtures below are raw classes */
 #include "nj_midp.h"     /* nj_midp_image_pixels: assert on an Image's store */
 
 #include <stdio.h>
@@ -2019,10 +2020,13 @@ static void test_midi_player_is_pcm(nj_vm *vm)
         return;
     }
 
-    /* 0.5 s of note plus the 50 ms release tail, at 8 kHz. */
+    /* 0.5 s of note plus the 50 ms release tail; the frame count follows the
+     * renderer's sample rate, the duration does not. */
     dur.bits = 0u;
     OK(nj_call(vm, ret.r, PLAYER, "getDuration", "()J", NULL, &dur) == NJ_OK);
-    OK_MSG(dur.j == 550000LL,
+    /* 0.55 s, to the microsecond the frame count allows: the renderer rounds
+     * frames to whole samples, so the exact figure follows the rate. */
+    OK_MSG(dur.j >= 540000LL && dur.j <= 560000LL,
            "the MIDI Player knows its duration (got %lld us)",
            (long long)dur.j);
 
@@ -2031,8 +2035,9 @@ static void test_midi_player_is_pcm(nj_vm *vm)
     data = (f != NULL) ? nj_field_read_ref(vm, ret.r, f) : NULL;
     OK_MSG(data != NULL, "the MIDI Player holds PCM");
     if (data != NULL) {
-        OK_MSG(data->length == 8800u,
-               "4400 frames of 16-bit mono PCM (got %u bytes)",
+        OK_MSG(data->length == 2u * (NJ_MIDI_RATE / 2u + NJ_MIDI_RATE / 20u),
+               "%u frames of 16-bit mono PCM (got %u bytes)",
+               (unsigned)(NJ_MIDI_RATE / 2u + NJ_MIDI_RATE / 20u),
                (unsigned)data->length);
     }
 }

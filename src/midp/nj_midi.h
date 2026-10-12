@@ -9,8 +9,15 @@
 
 #include "nj2me/nj_types.h"
 
-/* Mono, 16-bit signed, little-endian: the shape nj_port.pcm_write() takes. */
-#define NJ_MIDI_RATE 8000u
+/*
+ * Mono, 16-bit signed, little-endian: the shape nj_port.pcm_write() takes.
+ *
+ * 22.05 kHz rather than the 8 kHz this started at: a square wave has strong
+ * harmonics, and at 8 kHz everything above 4 kHz folded back into the audible
+ * band as a metallic buzz - a MIDlet asking for a tone got a telephone.  The
+ * cost is 2.75x the PCM buffer (a sixty second song is 2.6 MB).
+ */
+#define NJ_MIDI_RATE 22050u
 
 /*
  * Allocation hook.  Allocation in the runtime goes through nj_port callbacks

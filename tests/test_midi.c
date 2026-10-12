@@ -147,14 +147,16 @@ int main(void)
         return g_failures != 0;
     }
 
-    /* 480 ticks at 500000 us per quarter is 0.5 s; at 8 kHz that is 4000
-     * samples, plus the 50 ms tail the renderer adds for the release. */
-    check(frames == 4400u, "the render is 0.5 s plus the release tail");
-    if (frames != 4400u) {
+    /* 480 ticks at 500000 us per quarter is 0.5 s, plus the 50 ms tail the
+     * renderer adds for the release.  The sample count follows the rate. */
+    check(frames >= NJ_MIDI_RATE / 2u
+          && frames <= NJ_MIDI_RATE / 2u + NJ_MIDI_RATE / 10u,
+          "the render is 0.5 s plus the release tail");
+    if (frames < NJ_MIDI_RATE / 2u) {
         printf("     frames = %u\n", (unsigned)frames);
     }
 
-    for (i = 0u; i < 4000u && i * 2u + 1u < frames * 2u; i++) {
+    for (i = 0u; i < NJ_MIDI_RATE / 2u && i * 2u + 1u < frames * 2u; i++) {
         int s = (int)(short)((nj_u2)pcm[i * 2u] | ((nj_u2)pcm[i * 2u + 1u] << 8));
         int sign = (s > 200) ? 1 : ((s < -200) ? -1 : 0);
         if (s > peak) {

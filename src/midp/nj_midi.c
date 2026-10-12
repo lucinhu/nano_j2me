@@ -343,6 +343,7 @@ typedef struct {
     nj_u4 phase;                /* 32-bit phase accumulator */
     nj_u4 step;                 /* phase increment per sample */
     nj_s4 amp;                  /* 0..32767 */
+    nj_s4 lp;                   /* one-pole low pass state */
     nj_u4 start;                /* sample the note starts at */
     nj_u4 end;                  /* sample the note stops at (0 = never) */
 } mid_voice;
@@ -555,6 +556,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                 voices[v].phase = 0u;
                 voices[v].step = mid_step_for(song.notes[ev].note);
                 voices[v].amp = (nj_s4)(song.notes[ev].velocity) * 200;  /* ~24% */
+                voices[v].lp = 0;
                 voices[v].start = i;
                 voices[v].end = 0u;
             } else {
@@ -595,7 +597,18 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                 }
             }
             voices[v].phase += voices[v].step;
-            mix += (voices[v].phase < 0x80000000u) ? amp : -amp;
+            /*
+             * A square wave is the cheapest thing that is recognisably a note,
+             * but its harmonics fall off as 1/k, which is what makes it buzz -
+             * and the ones above Nyquist are what makes it sound broken.  A
+             * one-pole low pass costs one add and one shift and leaves a note
+             * that is still bright, just not harsh.
+             */
+            {
+                nj_s4 raw = (voices[v].phase < 0x80000000u) ? amp : -amp;
+                voices[v].lp += (raw - voices[v].lp) / 2;
+                mix += voices[v].lp;
+            }
         }
 
         scaled = mix;
