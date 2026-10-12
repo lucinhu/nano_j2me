@@ -51,7 +51,12 @@ static nj_ref make(nj_vm *vm, const char *cls)
 static void call(nj_vm *vm, nj_ref o, const char *cls, const char *name,
                  const char *desc, nj_value *args, nj_value *ret)
 {
-    (void)nj_call(vm, o, cls, name, desc, args, ret);
+    nj_status st = nj_call(vm, o, cls, name, desc, args, ret);
+    if (st != NJ_OK) {
+        /* A silent failure here is how Transform.get() looked like it worked
+           while the native was never entered. */
+        fprintf(stderr, "[call] %s.%s%s failed, status %d\n", cls, name, desc, (int)st);
+    }
 }
 
 int main(void)
@@ -96,6 +101,20 @@ int main(void)
           "a class that is not there is not found");
 
     printf("== transform maths ==\n");
+    {
+        nj_ref t = make(vm, CLS("Transform"));
+        nj_ref out = nj_array_new(vm, "F", 16);
+        nj_value a[4];
+
+        a[0].f = 10.0f; a[1].f = 20.0f; a[2].f = 30.0f;
+        call(vm, t, CLS("Transform"), "postTranslate", "(FFF)V", a, NULL);
+        a[0].r = out;
+        call(vm, t, CLS("Transform"), "get", "([F)V", a, NULL);
+        check(out && ((float *)out->u.bytes)[3] == 10.0f &&
+              ((float *)out->u.bytes)[7] == 20.0f,
+              "get() hands back the matrix");
+    }
+
     {
         nj_ref t = make(vm, CLS("Transform"));
         nj_ref v;
