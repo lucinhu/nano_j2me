@@ -4525,6 +4525,7 @@ int nj_midp_pointer(nj_vm *vm, int x, int y, int kind)
 /* ================================================================== */
 nj_status nj_midp_paint(nj_vm *vm)
 {
+    vm->paints++;
     nj_ref d;
     nj_surface *scr;
     nj_ref buf = NULL;

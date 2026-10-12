@@ -382,6 +382,7 @@ void nj_vm_get_stats(nj_vm *vm, nj_vm_stats *out)
     out->insns = vm->insns;
     out->native_calls = vm->native_calls;
     out->frames = vm->frames;
+    out->paints = vm->paints;
     out->host_peak = vm->host_peak;
     out->host_bytes = (nj_size)vm->host_bytes;
 }

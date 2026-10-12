@@ -256,6 +256,9 @@ typedef struct nj_vm_stats {
     nj_u8   insns;          /* bytecodes dispatched */
     nj_u8   native_calls;   /* natives invoked from Java */
     nj_u8   frames;         /* frames presented to the port */
+    nj_u8   paints;         /* paint() calls.  A game that presents frames
+                             * without painting anything looks exactly like
+                             * a game that draws - until you count. */
 } nj_vm_stats;
 
 void nj_vm_get_stats(nj_vm *vm, nj_vm_stats *out);

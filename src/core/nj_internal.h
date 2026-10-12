@@ -492,6 +492,7 @@ struct nj_vm {
     nj_u8      insns_peak;      /* not used for now; reserved, keeps 16B aligned */
     nj_u8      native_calls;
     nj_u8      frames;          /* frames presented to the port */
+    nj_u8   paints;         /* paint() calls - see nj_midp_paint */
 
     /* scratch: reusable buffers owned by the VM */
     nj_u2     *scratch_u2;
