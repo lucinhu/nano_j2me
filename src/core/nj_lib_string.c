@@ -1542,6 +1542,26 @@ NJFN(sb_deleteCharAt)
  * already live and a second copy of them would be a second chance to get the
  * bounds wrong.  A title compiled against CLDC 1.0 uses this form.
  */
+/*
+ * StringBuffer.getChars(ii[ci)v.
+ *
+ * The buffer already knows how to turn itself into a String, and String
+ * already knows how to copy a range out of itself into a char array - both
+ * are implemented and both are covered by tests.  Doing it any other way here
+ * would be a second implementation of the same rule, which is how the two
+ * drift apart.  合金弹头4(完美汉化版)_4053 calls this and stopped drawing
+ * until it existed.
+ */
+NJFN(sb_getChars)
+{
+    nj_ref str = nj_call_ref(vm, NJ_THIS(args), "java/lang/StringBuffer",
+                             "toString", "()Ljava/lang/String;", NULL);
+    if (!str) {
+        return NJ_ERR;
+    }
+    return nj_call(vm, str, "java/lang/String", "getChars", "(II[CI)V", args, NULL);
+}
+
 static nj_status insert_chars(nj_vm *vm, nj_value *args, nj_value *ret,
                               const char *cls, const char *desc)
 {
@@ -1751,6 +1771,7 @@ static const nj_builtin_field stringbuffer_fields[] = {
 };
 
 static const nj_builtin_method stringbuffer_methods[] = {
+    M("getChars", "(II[CI)V", 0),
     M("<init>",           "()V",                                 0),
     M("<init>",           "(I)V",                                0),
     M("<init>",           "(Ljava/lang/String;)V",               0),
@@ -1884,6 +1905,7 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/StringBuffer", "delete",         "(II)Ljava/lang/StringBuffer;", sb_delete },
     { "java/lang/StringBuffer", "deleteCharAt",   "(I)Ljava/lang/StringBuffer;", sb_deleteCharAt },
     { "java/lang/StringBuffer", "insert",         "(ILjava/lang/String;)Ljava/lang/StringBuffer;", sb_insert_str },
+    { "java/lang/StringBuffer", "getChars",        "(II[CI)V",               sb_getChars },
     { "java/lang/StringBuffer", "insert",         "(IC)Ljava/lang/StringBuffer;", sb_insert_char },
     { "java/lang/StringBuffer", "insert",         "(I[C)Ljava/lang/StringBuffer;", sb_insert_chars },
 
