@@ -1907,6 +1907,74 @@ static void test_eight_bit_wav_is_widened(nj_vm *vm)
  * within their first 200 frames, and the difference between the two outcomes
  * is visible on the Player itself: the silent one has no duration and no PCM,
  * the rendered one has both. */
+/*
+ * A MIDI file that renders to more than the heap can hold must still answer a
+ * Player.  createPlayer() falls back to the silent Player instead of failing,
+ * because a title treats a failed createPlayer() as a bug worth stopping for
+ * while it treats silence as a quiet moment - and 愤怒的小鸟-高清版_2353 asks
+ * for its music exactly when the heap is tight.
+ *
+ * The file is the same shape as the one above, with the note held for 66
+ * quarter notes: 33 s at 8 kHz is 528800 bytes, which cannot fit a 512 KB VM.
+ */
+static void test_midi_too_big_for_heap(void)
+{
+    static const nj_u1 longsmf[43] = {
+        'M', 'T', 'h', 'd', 0u, 0u, 0u, 6u,
+        0u, 0u, 0u, 1u, 0x01u, 0xE0u,
+        'M', 'T', 'r', 'k', 0u, 0u, 0u, 21u,
+        0x00u, 0xFFu, 0x51u, 0x03u, 0x07u, 0xA1u, 0x20u,
+        0x00u, 0x90u, 0x45u, 0x64u,
+        0x81u, 0xF7u, 0x40u, 0x80u, 0x45u, 0x40u,
+        0x00u, 0xFFu, 0x2Fu, 0x00u
+    };
+    nj_port port;
+    nj_vm *small;
+    nj_ref bar;
+    nj_ref in;
+    nj_value a[2];
+    nj_value ret;
+
+    memset(&port, 0, sizeof(port));
+    if (nj_port_headless(&port) != NJ_OK) {
+        OK_MSG(0, "the second headless port starts");
+        return;
+    }
+    small = nj_vm_create(&port, 512u * 1024u);
+    OK_MSG(small != NULL, "a 512 KB VM");
+    if (small == NULL) {
+        nj_port_shutdown(&port);
+        return;
+    }
+
+    bar = nj_byte_array_new(small, sizeof(longsmf));
+    OK_MSG(bar != NULL, "an array for the long MIDI file");
+    if (bar == NULL) {
+        nj_vm_destroy(small);
+        nj_port_shutdown(&port);
+        return;
+    }
+    memcpy(bar->u.bytes, longsmf, sizeof(longsmf));
+
+    a[0].r = bar;
+    a[1].bits = 0u;
+    in = construct(small, BAIS, "([B)V", a, "a stream over the long MIDI file");
+
+    a[0].r = in;
+    a[1].r = NULL;
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(small, MEDIA_MGR, "createPlayer",
+                          "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                          "javax/microedition/media/Player;", a, &ret) == NJ_OK,
+           "createPlayer() on a MIDI too big for the heap");
+    OK_MSG(!nj_has_exception(small),
+           "and the failed music did not leave an exception behind");
+    OK_MSG(ret.r != NULL, "and it answered a Player anyway");
+
+    nj_vm_destroy(small);
+    nj_port_shutdown(&port);
+}
+
 static void test_midi_player_is_pcm(nj_vm *vm)
 {
     /* The same file tests/test_midi.c renders: 480 ticks per quarter, 500000
@@ -2627,6 +2695,7 @@ int main(void)
     test_player_survives_collection(vm);
     test_eight_bit_wav_is_widened(vm);
     test_midi_player_is_pcm(vm);
+    test_midi_too_big_for_heap();
     test_media_refusal_names_the_container(vm);
     test_image_survives_collection(vm);
     test_gc_ignores_freed_slot(vm);

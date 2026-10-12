@@ -933,7 +933,19 @@ NJFN(media_createPlayer_stream)
                     ret->r = p;
                     return NJ_OK;
                 }
-                free(rendered);
+                /*
+                 * The heap could not take the music.  A silent Player is the
+                 * documented answer for a file that cannot be played (see the
+                 * comment above), and the byte array's failure has already
+                 * raised OutOfMemoryError - so drop that and stay silent
+                 * rather than failing createPlayer(): 愤怒的小鸟-高清版_2353
+                 * asks for its music while the heap is full, and a title
+                 * treats a failed createPlayer() as a bug worth stopping for.
+                 */
+                if (nj_has_exception(vm)) {
+                    nj_clear_exception(vm);
+                }
+                midi_free(vm, rendered);
             }
             w_i(vm, p, F_P_KIND, 0);
             nj_logf(vm, 3, "media: silent Player for %u bytes of MIDI "
