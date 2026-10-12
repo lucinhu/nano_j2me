@@ -741,6 +741,40 @@ static nj_ref read_stream(nj_vm *vm, nj_ref in, nj_u4 cap)
     return buf;
 }
 
+/*
+ * What is this file, really?
+ *
+ * "not a PCM WAV" used to be the only answer this code could give, and it gave
+ * it for .mid files - which are not a kind of WAV at all.  Two corpus titles
+ * (long-huo-2, xue-zhan-san-guo) ship MIDI and were told their WAV was
+ * malformed, which sends anyone reading the log looking for the wrong bug.
+ * Naming the container costs nothing.
+ */
+static const char *sniff_media(const nj_u1 *b, nj_u4 len)
+{
+    if (len >= 4u && b[0] == 'M' && b[1] == 'T' && b[2] == 'h' && b[3] == 'd') {
+        return "MIDI";
+    }
+    if (len >= 4u && b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F') {
+        return "RIFF, but not a PCM WAV";
+    }
+    if (len >= 6u && b[0] == '#' && b[1] == '!' && b[2] == 'A' &&
+        b[3] == 'M' && b[4] == 'R') {
+        return "AMR";
+    }
+    if (len >= 3u && b[0] == 'I' && b[1] == 'D' && b[2] == '3') {
+        return "MP3";
+    }
+    if (len >= 2u && b[0] == 0xFFu && (b[1] & 0xE0u) == 0xE0u) {
+        return "MP3";
+    }
+    if (len >= 4u && b[0] == 0x00u && b[1] == 0x00u && b[2] == 0x00u &&
+        (b[3] == 0x0Cu || b[3] == 0x18u || b[3] == 0x20u)) {
+        return "MP4";
+    }
+    return "an unrecognised container";
+}
+
 /* Build a Player from an already-parsed source. */
 static nj_ref player_new(nj_vm *vm, int kind)
 {
@@ -787,6 +821,28 @@ NJFN(media_createPlayer_stream)
         return NJ_ERR;
     }
     if (!wav_parse(barray_bytes(data), barray_len(data), &wi)) {
+        const char *what = sniff_media(barray_bytes(data), barray_len(data));
+
+        /*
+         * MIDI gets a player that makes no sound rather than an exception.
+         *
+         * Every title in the corpus treats createPlayer() as something that may
+         * reasonably fail, but treats an unplayable player as a bug - and the
+         * port contract has one tone hook, not a synthesiser.  Kind 0 is the
+         * tone kind, which nj_media_frame() never pumps, so this player reports
+         * UNREALIZED -> PREFETCHED -> STARTED with a duration of -1 and pushes
+         * no PCM at all.  The log says so plainly: the game runs, the music
+         * does not, and no one has to guess which.
+         */
+        if (strcmp(what, "MIDI") == 0) {
+            w_i(vm, p, F_P_KIND, 0);
+            nj_logf(vm, 3, "media: silent Player for %u bytes of MIDI "
+                           "(this runtime does not synthesise MIDI)",
+                    (unsigned)barray_len(data));
+            ret->r = p;
+            return NJ_OK;
+        }
+        nj_logf(vm, 3, "media: cannot play %s", what);
         return nj_throw(vm, NJ_C_MEXC,
                         "not a PCM WAV" NJ_MEXC_DATA);
     }
