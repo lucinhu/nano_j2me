@@ -419,6 +419,14 @@ if(NJ_BUILD_TESTS)
 # format and therefore cannot catch the format being written down wrongly.
 add_executable(nj_m3g_probe tests/probe_m3g.c)
 target_link_libraries(nj_m3g_probe PRIVATE nj2me)
+# The probe inflates real sections, so it needs zlib.  The runtime does not:
+# decompression belongs behind a port hook there, and this is a host tool.
+find_package(ZLIB)
+if(ZLIB_FOUND)
+  target_link_libraries(nj_m3g_probe PRIVATE ZLIB::ZLIB)
+else()
+  message(WARNING "no zlib: nj_m3g_probe cannot inflate compressed .m3g sections")
+endif()
   nj_add_test(test_wireless tests/test_wireless.c)
 
   # What the PORT observed, not what the VM counted: threads, GC, audio and

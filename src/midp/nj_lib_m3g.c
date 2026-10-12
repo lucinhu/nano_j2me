@@ -95,16 +95,28 @@ static nj_u4 le32(const nj_u1 *p)
  * down wrongly in these comments.  What the files actually say:
  *
  *   0..11   the identifier, AB 4A "JSR184" BB 0D 0A 1A 0A
- *   12..    sections: id(1), compressed length (u32 LE), uncompressed
- *           length (u32 LE), then the payload
  *
- * The chain tiles every one of those 975 files exactly.  811 of the sections
- * hold a zlib stream that inflates to precisely the declared uncompressed
- * length; the rest - all of them section id 0, the file header - are stored.
- * Their payload is four bytes longer than the length they declare, which is
- * the one part of this format not yet explained; nothing here depends on it.
+ *   then, repeatedly, a section:
+ *     Byte     compression scheme   (0 stored, 1 zlib; 2..255 are reserved)
+ *     UInt32   total section length (little endian, this header included)
+ *     UInt32   uncompressed length  (little endian, the Objects field after
+ *                                    decompression; 0 means "ignore me")
+ *     Byte[]   Objects              (total length - 13 bytes)
+ *     UInt32   Adler32 checksum     (little endian, over every byte above)
+ *
+ * The chain tiles every one of the 975 real files exactly, 811 of the sections
+ * are zlib and 1344 are stored, and every one of the 2155 inflates or reads
+ * back to precisely its declared uncompressed length.
+ *
+ * The four bytes after the Objects field are that checksum.  They were a
+ * mystery for one round because this function used to treat the whole
+ * post-header payload as objects: the object walk then ran into the checksum
+ * and reported nonsense types.  Checking the checksum is not done here - a
+ * loader is allowed to skip it - but the field has to be accounted for, or
+ * every object chain is four bytes too long.
  */
 #define NJ_M3G_SECTION 9u
+#define NJ_M3G_SECTION_MIN 13u   /* nine byte header + four byte Adler32 */
 
 nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
                                  nj_u1 *ids, nj_u4 id_count,
@@ -131,19 +143,21 @@ nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
         }
         clen = le32(p + off + 1u);
         ulen = le32(p + off + 5u);
-        if (clen < NJ_M3G_SECTION) {
-            M3G_FAIL("the section at %lu says it is %lu byte(s), header included",
-                     (unsigned long)off, (unsigned long)clen);
+        if (p[off] > 1u) {
+            M3G_FAIL("the section at %lu uses compression scheme %u; only 0 (stored) and 1 (zlib) exist",
+                     (unsigned long)off, (unsigned)p[off]);
+        }
+        if (clen < NJ_M3G_SECTION_MIN) {
+            M3G_FAIL("the section at %lu says it is %lu byte(s); %u is the smallest possible (nine byte header plus a four byte checksum)",
+                     (unsigned long)off, (unsigned long)clen,
+                     (unsigned)NJ_M3G_SECTION_MIN);
         }
         if (clen > n - off) {
             M3G_FAIL("the section at %lu runs %lu byte(s) past the end of a %lu byte file",
                      (unsigned long)off, (unsigned long)(clen - (n - off)),
                      (unsigned long)n);
         }
-        if (ulen == 0u) {
-            M3G_FAIL("the section at %lu declares nothing to inflate into",
-                     (unsigned long)off);
-        }
+        (void)ulen;
         if (ids && nids < id_count) { ids[nids] = p[off]; }
         nids++;
         off += clen;
@@ -156,6 +170,56 @@ nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
         nj_u4 i;
         for (i = nids; i < id_count; i++) { ids[i] = 0xffu; }
     }
+    return NJ_OK;
+}
+
+
+/*
+ * Walk the object stream inside one inflated section.
+ *
+ * An object is type(1), then the length of its data (u32 little endian, NOT
+ * counting the five byte header), then the data.  Getting that one field wrong
+ * by five bytes per object is what turned 36859 real objects into nonsense
+ * types: the walk drifts one byte further out of step with every object.  The
+ * chain must tile the section exactly, for the same
+ * reason the sections must tile the file: a reader that tolerates a short
+ * object will read the next object's type byte out of this one's payload and
+ * report a nonsense type several objects later, far from the damage.
+ *
+ * Nothing here interprets a payload.  That is the point: this layer answers
+ * "is this stream a well formed sequence of objects", and the object decoder
+ * answers "is this Mesh well formed".  Merging the two makes a truncated file
+ * indistinguishable from an object type we do not implement yet.
+ */
+nj_status nj_m3g_objects_probe(const nj_u1 *p, nj_u4 n, nj_u4 *count,
+                               nj_u1 *types, nj_u4 type_count,
+                               char *err, nj_u4 errcap)
+{
+    nj_u4 off = 0, seen = 0;
+
+    if (err && errcap) { err[0] = '\0'; }
+    if (count) { *count = 0u; }
+    if (!p && n != 0u) { M3G_FAIL("no bytes"); }
+    while (off < n) {
+        nj_u4 len;
+        if (n - off < 5u) {
+            M3G_FAIL("an object header at %lu is cut short: %lu byte(s) left",
+                     (unsigned long)off, (unsigned long)(n - off));
+        }
+        len = le32(p + off + 1u);
+        if (p[off] > 22u && p[off] != 255u) {
+            M3G_FAIL("the object at %lu has type %u, and 23..254 are reserved",
+                     (unsigned long)off, (unsigned)p[off]);
+        }
+        if (len > n - off - 5u) {
+            M3G_FAIL("the object at %lu says its data is %lu byte(s), which runs past the end of a %lu byte section",
+                     (unsigned long)off, (unsigned long)len, (unsigned long)n);
+        }
+        if (types && seen < type_count) { types[seen] = p[off]; }
+        seen++;
+        off += 5u + len;
+    }
+    if (count) { *count = seen; }
     return NJ_OK;
 }
 
