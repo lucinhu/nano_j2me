@@ -495,19 +495,32 @@ static void test_strings(nj_vm *vm)
     a[1] = vref(enc);
     s = construct(vm, STRING, "([BLjava/lang/String;)V", a,
                   "String(byte[],\"UTF-8\")");
-    OK_MSG(s != NULL && nj_string_equals_utf8(s, "\xE4\xB8\xAD"),
-           "String(byte[],\"UTF-8\") decodes the same bytes");
+    /* nj_string_equals_utf8 is one byte per char, so CJK is checked by code
+     * unit rather than through it. */
+    OK_MSG(s != NULL && nj_string_length(s) == 1u &&
+           nj_string_data(s)[0] == 0x4E2Du,
+           "String(byte[],\"UTF-8\") decodes the same bytes to U+4E2D");
 
     /* A bad sequence costs one replacement char and keeps the next byte. */
     arr = bytes_of(vm, bad, 2u);
     a[0] = vref(arr);
-    s = construct(vm, STRING, "([B)V", a, "String({0xE4,'A'})");
+    a[1] = vref(enc);
+    s = construct(vm, STRING, "([BLjava/lang/String;)V", a,
+                  "String({0xE4,'A'},\"UTF-8\")");
     OK_MSG(s != NULL && nj_string_length(s) == 2u,
            "a truncated sequence plus 'A' is 2 chars, got %u",
            s ? (unsigned)nj_string_length(s) : 0u);
     OK_MSG(s != NULL && nj_string_data(s)[0] == 0xFFFDu &&
            nj_string_data(s)[1] == (nj_u2)'A',
            "and reads U+FFFD then 'A'");
+
+    /* The one-argument form is Latin-1, which is what the platform default
+     * encoding means here: 0xE4 is U+00E4, not the start of a UTF-8 sequence. */
+    a[0] = vref(arr);
+    s = construct(vm, STRING, "([B)V", a, "String({0xE4,'A'})");
+    OK_MSG(s != NULL && nj_string_length(s) == 2u &&
+           nj_string_data(s)[0] == 0x00E4u && nj_string_data(s)[1] == 0x41u,
+           "String(byte[]) stays one byte per char");
 
     /* getBytes(String) has to write what the read side reads. */
     pair[0] = 0x4E2Du;
