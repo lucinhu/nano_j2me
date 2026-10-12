@@ -289,7 +289,12 @@ for jar in "${JARS[@]}"; do
     # Where the title first threw.  A failing line that says "flat frame" names
     # a symptom; "first throw: NullPointerException at DCTuxedo.i()V pc=26"
     # names the call that did not work, which is what has to be chased.
-    thrown="$(sed -n 's/^thrown: //p' "$log" 2>/dev/null | head -1)"
+    # Prefer a throw from the GAME's own code: "at DataInputStream.readUTF()
+    # pc=0" says a native refused, which a game routinely catches and carries
+    # on from, while "at DCTuxedo.i()V pc=26" says which of the game's own
+    # calls did not work.  Fall back to the native one when there is no other.
+    thrown="$(sed -n 's/^thrown: //p' "$log" 2>/dev/null | grep -v ' at java/\| at javax/' | head -1)"
+    [ -n "$thrown" ] || thrown="$(sed -n 's/^thrown: //p' "$log" 2>/dev/null | head -1)"
     rm -rf "$out"
 
     IFS='|' read -r status nframes ncols nchanged note <<<"$verdict"
