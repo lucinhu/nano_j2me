@@ -96,6 +96,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_rms.c
   src/midp/nj_lib_midlet.c
   src/midp/nj_lib_media.c
+  src/midp/nj_midi.c
   src/midp/nj_lib_content.c
   src/midp/nj_lib_nokia.c
   src/midp/nj_lib_fc.c
@@ -290,6 +291,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_sizedemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_utfdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flatdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_excdemo_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -443,6 +445,13 @@ if(NJ_BUILD_TESTS)
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_hang_teardown.sh
                      ${NJ_FIXTURES}/hangdemo.jar)
     set_tests_properties(check_hang_teardown PROPERTIES TIMEOUT 120)
+
+    add_test(NAME check_stack_trace
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_stack_trace.sh
+                     ${NJ_FIXTURES}/excdemo.jar)
+    set_tests_properties(check_stack_trace PROPERTIES TIMEOUT 120)
 endif()
 
 add_test(NAME check_splash_budget
@@ -528,7 +537,7 @@ nj_add_test(test_clip tests/test_clip.c)
     nj_add_test(test_port_code tests/test_port_code.c)
   endif()
 
-  foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib)
+  foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib test_midi)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${extra_test}.c)
       nj_add_test(${extra_test} tests/${extra_test}.c)
     endif()

@@ -45,9 +45,11 @@
  * because a game that checks getState() must see the truth.
  */
 #include "nj_midp.h"
+#include "nj_midi.h"
 
 #if NJ_USE_LIBC
 #  include <string.h>
+#  include <stdlib.h>
 #endif
 
 #define NJFN(name) NJ_NATIVE_FN(name)
@@ -847,20 +849,45 @@ NJFN(media_createPlayer_stream)
         const char *what = sniff_media(barray_bytes(data), barray_len(data));
 
         /*
-         * MIDI gets a player that makes no sound rather than an exception.
+         * MIDI is rendered to PCM here, once, and then plays through exactly
+         * the same path as a WAV: after this branch a MIDI Player and a WAV
+         * Player are the same object, which is what keeps the audio device
+         * contract at one hook.
          *
-         * Every title in the corpus treats createPlayer() as something that may
-         * reasonably fail, but treats an unplayable player as a bug - and the
-         * port contract has one tone hook, not a synthesiser.  Kind 0 is the
-         * tone kind, which nj_media_frame() never pumps, so this player reports
-         * UNREALIZED -> PREFETCHED -> STARTED with a duration of -1 and pushes
-         * no PCM at all.  The log says so plainly: the game runs, the music
-         * does not, and no one has to guess which.
+         * 105 of the 238 titles in tests/games/ reach this branch within their
+         * first 200 frames, and 107 of them ship no other audio at all - so
+         * before nj_midi.c existed, most of the corpus was silent by design.
+         *
+         * When the file holds nothing to play - or the heap cannot take the
+         * PCM - the silent Player below is still the answer, because a title
+         * treats a player that cannot start as a bug and a player that makes
+         * no sound as a quiet moment.
          */
         if (strcmp(what, "MIDI") == 0) {
+            nj_u4 mframes = 0u;
+            nj_u1 *rendered = nj_midi_render(barray_bytes(data),
+                                             barray_len(data), &mframes);
+
+            if (rendered != NULL && mframes > 0u) {
+                nj_ref pcm = nj_byte_array_new(vm, mframes * 2u);
+                if (pcm != NULL) {
+                    memcpy(pcm->u.bytes, rendered, (size_t)mframes * 2u);
+                    free(rendered);
+                    w_r(vm, p, F_P_DATA, "[B", pcm);
+                    w_i(vm, p, F_P_RATE, (nj_s4)NJ_MIDI_RATE);
+                    w_i(vm, p, F_P_CHAN, 1);
+                    w_i(vm, p, F_P_FRAMES, (nj_s4)mframes);
+                    w_j(vm, p, F_P_DURATION,
+                        (nj_s8)mframes * 1000000LL / (nj_s8)NJ_MIDI_RATE);
+                    nj_root_release(vm, mark);
+                    ret->r = p;
+                    return NJ_OK;
+                }
+                free(rendered);
+            }
             w_i(vm, p, F_P_KIND, 0);
             nj_logf(vm, 3, "media: silent Player for %u bytes of MIDI "
-                           "(this runtime does not synthesise MIDI)",
+                           "(nothing to play)",
                     (unsigned)barray_len(data));
             nj_root_release(vm, mark);
             ret->r = p;

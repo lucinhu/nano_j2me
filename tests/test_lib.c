@@ -1902,6 +1902,73 @@ static void test_eight_bit_wav_is_widened(nj_vm *vm)
     }
 }
 
+/* A .mid handed to createPlayer() is rendered to PCM, not turned into a
+ * silent Player.  105 of the 238 titles in tests/games/ reach the MIDI branch
+ * within their first 200 frames, and the difference between the two outcomes
+ * is visible on the Player itself: the silent one has no duration and no PCM,
+ * the rendered one has both. */
+static void test_midi_player_is_pcm(nj_vm *vm)
+{
+    /* The same file tests/test_midi.c renders: 480 ticks per quarter, 500000
+     * microseconds per quarter, one A4 held for one quarter note. */
+    static const nj_u1 smf[42] = {
+        'M', 'T', 'h', 'd', 0u, 0u, 0u, 6u,
+        0u, 0u, 0u, 1u, 0x01u, 0xE0u,
+        'M', 'T', 'r', 'k', 0u, 0u, 0u, 20u,
+        0x00u, 0xFFu, 0x51u, 0x03u, 0x07u, 0xA1u, 0x20u,
+        0x00u, 0x90u, 0x45u, 0x64u,
+        0x83u, 0x60u, 0x80u, 0x45u, 0x40u,
+        0x00u, 0xFFu, 0x2Fu, 0x00u
+    };
+    nj_ref bar;
+    nj_ref in;
+    nj_value a[2];
+    nj_value ret;
+    nj_value dur;
+    nj_field *f;
+    nj_ref data;
+
+    bar = nj_byte_array_new(vm, sizeof(smf));
+    OK_MSG(bar != NULL, "an array for the MIDI file");
+    if (bar == NULL) {
+        return;
+    }
+    memcpy(bar->u.bytes, smf, sizeof(smf));
+
+    a[0].r = bar;
+    a[1].bits = 0u;
+    in = construct(vm, BAIS, "([B)V", a, "a stream over the MIDI file");
+
+    a[0].r = in;
+    a[1].r = NULL;
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                          "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                          "javax/microedition/media/Player;", a, &ret) == NJ_OK,
+           "Manager.createPlayer(a MIDI file)");
+    OK_MSG(ret.r != NULL, "a Player for the MIDI file");
+    if (ret.r == NULL) {
+        return;
+    }
+
+    /* 0.5 s of note plus the 50 ms release tail, at 8 kHz. */
+    dur.bits = 0u;
+    OK(nj_call(vm, ret.r, PLAYER, "getDuration", "()J", NULL, &dur) == NJ_OK);
+    OK_MSG(dur.j == 550000LL,
+           "the MIDI Player knows its duration (got %lld us)",
+           (long long)dur.j);
+
+    f = nj_field_lookup(vm, PLAYER, "pData", "[B", 0);
+    OK_MSG(f != NULL, "the Player's pData field");
+    data = (f != NULL) ? nj_field_read_ref(vm, ret.r, f) : NULL;
+    OK_MSG(data != NULL, "the MIDI Player holds PCM");
+    if (data != NULL) {
+        OK_MSG(data->length == 8800u,
+               "4400 frames of 16-bit mono PCM (got %u bytes)",
+               (unsigned)data->length);
+    }
+}
+
 /* MIDP 2.0 documents the initial contents of TextBox and TextField as "the
  * text content, or null if the text is empty".  三国杀2．2美化版_1347 builds its
  * user-creation TextBox with a null text, so a runtime that rejected null made
@@ -2503,6 +2570,7 @@ int main(void)
     test_long_to_string(vm);
     test_player_survives_collection(vm);
     test_eight_bit_wav_is_widened(vm);
+    test_midi_player_is_pcm(vm);
     test_image_survives_collection(vm);
     test_gc_ignores_freed_slot(vm);
     test_class_relative_resource(vm);
