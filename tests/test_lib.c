@@ -1969,6 +1969,62 @@ static void test_midi_player_is_pcm(nj_vm *vm)
     }
 }
 
+/* A MIDlet handed a file this runtime cannot decode is told WHICH file.
+ *
+ * Eight corpus titles ship AMR effects and five ship MP3, and every one of
+ * them was told its WAV was malformed - a message that sends whoever reads
+ * the log looking for a bug in the wrong decoder.  The container is already
+ * sniffed; the refusal now says so. */
+static void test_media_refusal_names_the_container(nj_vm *vm)
+{
+    static const nj_u1 amr[8] = { '#', '!', 'A', 'M', 'R', '\n', 0x00u, 0x00u };
+    static const nj_u1 mp3[6] = { 'I', 'D', '3', 0x04u, 0x00u, 0x00u };
+    static const nj_u1 junk[4] = { 0x01u, 0x02u, 0x03u, 0x04u };
+    static const struct {
+        const nj_u1 *bytes;
+        nj_u4 len;
+        const char *want;
+    } cases[3] = {
+        { amr,  (nj_u4)sizeof(amr),  "AMR" },
+        { mp3,  (nj_u4)sizeof(mp3),  "MPEG" },
+        { junk, (nj_u4)sizeof(junk), "not a container" }
+    };
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        nj_ref arr = nj_byte_array_new(vm, cases[i].len);
+        nj_ref in;
+        nj_value a[2];
+        nj_value ret;
+        const char *d;
+
+        OK_MSG(arr != NULL, "an array for case %d", i);
+        if (arr == NULL) {
+            return;
+        }
+        memcpy(arr->u.bytes, cases[i].bytes, cases[i].len);
+        a[0].r = arr;
+        a[1].bits = 0u;
+        in = construct(vm, BAIS, "([B)V", a, "a stream over the file");
+        if (nj_has_exception(vm)) {
+            return;
+        }
+
+        a[0].r = in;
+        a[1].r = NULL;
+        ret.bits = 0u;
+        (void)nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                             "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                             "javax/microedition/media/Player;", a, &ret);
+        OK_MSG(nj_has_exception(vm), "createPlayer refuses case %d", i);
+        d = nj_exception_describe(vm);
+        OK_MSG(d != NULL && strstr(d, cases[i].want) != NULL,
+               "the refusal for case %d names %s (got: %s)",
+               i, cases[i].want, d != NULL ? d : "(none)");
+        nj_clear_exception(vm);
+    }
+}
+
 /* MIDP 2.0 documents the initial contents of TextBox and TextField as "the
  * text content, or null if the text is empty".  三国杀2．2美化版_1347 builds its
  * user-creation TextBox with a null text, so a runtime that rejected null made
@@ -2571,6 +2627,7 @@ int main(void)
     test_player_survives_collection(vm);
     test_eight_bit_wav_is_widened(vm);
     test_midi_player_is_pcm(vm);
+    test_media_refusal_names_the_container(vm);
     test_image_survives_collection(vm);
     test_gc_ignores_freed_slot(vm);
     test_class_relative_resource(vm);

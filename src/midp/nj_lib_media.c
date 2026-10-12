@@ -788,6 +788,35 @@ static const char *sniff_media(const nj_u1 *b, nj_u4 len)
     return "an unrecognised container";
 }
 
+/*
+ * What to tell the MIDlet when there is no decoder for what it handed us.
+ *
+ * sniff_media() already knows the container, and the exception used to ignore
+ * it: 8 corpus titles ship AMR effects and 5 ship MP3, and every one of them
+ * was told its WAV was malformed.  A title that is told the truth about the
+ * file it just read can fall back to something else; a title that is told
+ * "not a PCM WAV" about an AMR file learns nothing.
+ *
+ * The strings are spelled out rather than formatted because this file has to
+ * build without a libc, and because the set is small and closed.
+ */
+static const char *media_refusal(const char *what)
+{
+    if (strcmp(what, "AMR") == 0) {
+        return "this runtime has no AMR decoder" NJ_MEXC_DATA;
+    }
+    if (strcmp(what, "MP3") == 0) {
+        return "this runtime has no MPEG audio decoder" NJ_MEXC_DATA;
+    }
+    if (strcmp(what, "MP4") == 0) {
+        return "this runtime has no MP4 audio decoder" NJ_MEXC_DATA;
+    }
+    if (strcmp(what, "an unrecognised container") == 0) {
+        return "this is not a container this runtime knows" NJ_MEXC_DATA;
+    }
+    return "not a PCM WAV" NJ_MEXC_DATA;
+}
+
 /* Build a Player from an already-parsed source. */
 static nj_ref player_new(nj_vm *vm, int kind)
 {
@@ -895,8 +924,7 @@ NJFN(media_createPlayer_stream)
         }
         nj_logf(vm, 3, "media: cannot play %s", what);
         nj_root_release(vm, mark);
-        return nj_throw(vm, NJ_C_MEXC,
-                        "not a PCM WAV" NJ_MEXC_DATA);
+        return nj_throw(vm, NJ_C_MEXC, media_refusal(what));
     }
     /*
      * Copy out JUST the data chunk.
