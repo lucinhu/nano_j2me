@@ -1068,6 +1068,92 @@ int main(void)
     }
 
     /*
+     * The stream is the whole-file renderer made resumable: whatever the chunk
+     * size, it has to write the same bytes - and a song past the sixty second
+     * ceiling has to keep going, because a quarter of the corpus is longer
+     * than that and the buffer for one of those fits no heap we run on.
+     */
+    {
+        static nj_u1 got[65536];
+        static nj_u1 chunk[4096];
+        static const nj_u4 sizes[5] = { 1u, 7u, 64u, 512u, 4096u };
+        static const nj_u1 left[] = { 0xB0, 10, 0 };        /* CC10 = 0, hard left */
+        nj_u1 file[512];
+        nj_u4 pass;
+
+        for (pass = 0u; pass < 2u; pass++) {
+            nj_u4 n, whole_frames = 0u, chans = 0u, total = 0u, k = 0u;
+            nj_u1 *whole;
+            struct nj_midi_stream *s;
+
+            n = build_voiced(file, (pass == 0u) ? NULL : left,
+                             (pass == 0u) ? 0u : (nj_u4)sizeof(left), 0u, 69u);
+            whole = nj_midi_render_ex(file, n, &whole_frames, &chans, &MEM);
+            s = nj_midi_stream_open(file, n, &MEM);
+            check(whole != NULL && s != NULL, "a phrase opens as a stream");
+            if (whole == NULL || s == NULL) {
+                continue;
+            }
+            check(nj_midi_stream_channels(s) == chans,
+                  "the stream knows how many channels the song needs");
+            check(nj_midi_stream_frames(s) >= whole_frames,
+                  "the stream knows how long the song is");
+            for (;;) {
+                nj_u4 want = sizes[k % 5u];
+                nj_u4 gotn;
+                k++;
+                /* pull() writes want * chans * 2 bytes: keep it inside chunk */
+                if (want > (nj_u4)(sizeof(chunk) / (nj_size)chans / 2u)) {
+                    want = (nj_u4)(sizeof(chunk) / (nj_size)chans / 2u);
+                }
+                gotn = nj_midi_stream_pull(s, chunk, want);
+                if (gotn == 0u) {
+                    break;
+                }
+                if ((nj_size)total + (nj_size)gotn * chans * 2u > sizeof(got)) {
+                    break;
+                }
+                memcpy(got + total, chunk, (nj_size)gotn * chans * 2u);
+                total += gotn * chans * 2u;
+            }
+            check(total == whole_frames * chans * 2u,
+                  "ragged pulls write exactly as many bytes as the whole file");
+            check(total > 0u && memcmp(got, whole, total) == 0,
+                  "and the bytes are the same ones");
+            printf("     stream pass %u: %u frames, %u channels, %u bytes\n",
+                   (unsigned)pass, (unsigned)whole_frames, (unsigned)chans,
+                   (unsigned)total);
+            t_free(NULL, whole);
+            nj_midi_stream_close(s);
+        }
+    }
+
+    {
+        static const nj_u1 long_body[] = {
+            0x00, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20,   /* tempo: 500000 us */
+            0x00, 0xC0, 40,                             /* strings: held */
+            0x00, 0x90, 69, 100,                        /* A4 on */
+            0x87, 0xA3, 0x00, 0x80, 69, 64,             /* +115200 ticks = 120 s: off */
+            0x00, 0xFF, 0x2F, 0x00
+        };
+        nj_u1 file[128];
+        nj_u4 n = build_track(file, long_body, (nj_u4)sizeof(long_body));
+        nj_u4 fr = 0u, chans = 0u;
+        nj_u1 *whole = nj_midi_render_ex(file, n, &fr, &chans, &MEM);
+        struct nj_midi_stream *s = nj_midi_stream_open(file, n, &MEM);
+
+        check(s != NULL && nj_midi_stream_frames(s) > NJ_MIDI_MAX_FRAMES,
+              "a stream has no sixty second ceiling");
+        check(whole != NULL && fr == NJ_MIDI_MAX_FRAMES,
+              "the whole-file render still stops at the ceiling");
+        printf("     long song: stream %u frames, whole file %u\n",
+               (unsigned)((s != NULL) ? nj_midi_stream_frames(s) : 0u),
+               (unsigned)fr);
+        t_free(NULL, whole);
+        nj_midi_stream_close(s);
+    }
+
+    /*
      * The General MIDI effects block is where 仙剑奇侠传 puts both of its
      * 160-note melody lines (program 99).  Rendering it as noise turned the
      * theme into a hiss: a player heard the drums and the string chords and

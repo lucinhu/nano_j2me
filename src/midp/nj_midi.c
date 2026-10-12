@@ -51,8 +51,6 @@
 
 /* A minute of music.  Beyond that a title is looping, and the loop is better
  * served by the Player's own repeat than by a longer buffer. */
-#define NJ_MIDI_MAX_SECONDS 60u
-#define NJ_MIDI_MAX_FRAMES (NJ_MIDI_RATE * NJ_MIDI_MAX_SECONDS)
 
 /* Sixteen notes at once is more than any of these titles asks for; a cap is
  * what keeps the per-sample loop bounded. */
@@ -857,55 +855,80 @@ static void mid_pan_gains(nj_u4 pan, nj_u1 *gl, nj_u1 *gr)
     }
 }
 
-nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
-                         nj_u4 *chans_out, const nj_midi_mem *mem)
-{
-    if (mem == NULL || mem->alloc == NULL || mem->free == NULL) {
-        return NULL;
-    }
-
+/*
+ * A song rendered in one go has to fit in memory as PCM: three minutes of MIDI
+ * is eight megabytes at 22050 Hz, and the corpus holds files four times that
+ * long.  A stream renders on demand instead - the caller pulls what the port
+ * wants, and the music costs only the parser's event lists.
+ */
+typedef struct nj_midi_stream {
     mid_song song;
-    mid_rd r;
-    nj_u4 ntrk = 0u;
-    nj_u4 format = 0u;
-    nj_u4 i;
-    nj_u4 frames;
-    nj_u1 *pcm;
     mid_voice voices[NJ_MIDI_VOICES];
-    nj_u4 v;
-    nj_u4 chans = 1u;
-    nj_u4 ev = 0u;
-    nj_u4 cev = 0u;
+    nj_u4 chans;
+    nj_u4 frames;                 /* what the song needs, tail included */
+    nj_u4 i;                      /* the frame the next pull starts at */
+    nj_u4 ev;
+    nj_u4 cev;
     nj_u4 bend_now[16];
     nj_u4 range_now[16];
     int   pedal_now[16];
     nj_u4 mod_now[16];
     nj_u4 rev_now[16];
     nj_u4 pan_now[16];
-    nj_s4 *rev = NULL;
-    nj_u4 rev_pa = 0u, rev_pb = 0u, rev_any = 0u;
+    nj_s4 *rev;
+    nj_u4 rev_pa;
+    nj_u4 rev_pb;
+    nj_u4 rev_any;
+    const nj_midi_mem *mem;
+} nj_midi_stream;
 
-    if (frames_out != NULL) {
-        *frames_out = 0u;
+static void mid_stream_drop(nj_midi_stream *s)
+{
+    if (s == NULL) {
+        return;
     }
+    if (s->mem != NULL) {
+        s->mem->free(s->mem->ud, s->song.notes);
+        s->mem->free(s->mem->ud, s->song.ctls);
+        s->mem->free(s->mem->ud, s->rev);
+        s->mem->free(s->mem->ud, s);
+    }
+}
+
+/*
+ * Parse the file and set the stream up.  Returns 0 when there is nothing to
+ * play; the caller drops the stream either way.
+ */
+static int mid_stream_init(nj_midi_stream *s, const void *data, nj_u4 size,
+                           const nj_midi_mem *mem)
+{
+    if (mem == NULL || mem->alloc == NULL || mem->free == NULL) {
+        return 0;
+    }
+
+    mid_rd r;
+    nj_u4 ntrk = 0u;
+    nj_u4 format = 0u;
+    nj_u4 i;
+
     if (data == NULL || size < 14u) {
-        return NULL;
+        return 0;
     }
 
-    memset(&song, 0, sizeof(song));
+    memset(&s->song, 0, sizeof(s->song));
     for (i = 0u; i < 16u; i++) {
-        song.volume[i] = 100u;
-        song.expr[i] = 127u;
-        song.bend[i] = MID_BEND_CENTRE;
-        song.bend_range[i] = MID_BEND_DEFAULT_RANGE;
-        song.pan[i] = 64u;
-        mod_now[i] = 0u;
-        rev_now[i] = 0u;
-        pan_now[i] = 64u;
-        song.rpn[i] = 0xFFFFu;          /* no registered parameter selected */
-        bend_now[i] = MID_BEND_CENTRE;
-        range_now[i] = MID_BEND_DEFAULT_RANGE;
-        pedal_now[i] = 0;
+        s->song.volume[i] = 100u;
+        s->song.expr[i] = 127u;
+        s->song.bend[i] = MID_BEND_CENTRE;
+        s->song.bend_range[i] = MID_BEND_DEFAULT_RANGE;
+        s->song.pan[i] = 64u;
+        s->mod_now[i] = 0u;
+        s->rev_now[i] = 0u;
+        s->pan_now[i] = 64u;
+        s->song.rpn[i] = 0xFFFFu;          /* no registered parameter selected */
+        s->bend_now[i] = MID_BEND_CENTRE;
+        s->range_now[i] = MID_BEND_DEFAULT_RANGE;
+        s->pedal_now[i] = 0;
     }
     r.p = (const nj_u1 *)data;
     r.n = size;
@@ -914,28 +937,28 @@ nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
     {
         nj_u4 tag, hlen;
         if (!mid_u32(&r, &tag) || tag != 0x4D546864u /* "MThd" */) {
-            return NULL;
+            return 0;
         }
         if (!mid_u32(&r, &hlen) || hlen < 6u) {
-            return NULL;
+            return 0;
         }
         if (!mid_u16(&r, &format) || !mid_u16(&r, &ntrk)) {
-            return NULL;
+            return 0;
         }
         {
             nj_u4 div;
             if (!mid_u16(&r, &div)) {
-                return NULL;
+                return 0;
             }
             if (div & 0x8000u) {
-                song.smpte = 1;         /* SMPTE: not converted, see below */
-                song.division = 0u;
+                s->song.smpte = 1;         /* SMPTE: not converted, see below */
+                s->song.division = 0u;
             } else {
-                song.division = div;
+                s->song.division = div;
             }
         }
         if (!mid_skip(&r, hlen - 6u)) {
-            return NULL;
+            return 0;
         }
     }
     (void)format;
@@ -953,7 +976,7 @@ nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
             if (len > r.n - r.i) {
                 break;
             }
-            mid_track(&song, mem, &r, len);
+            mid_track(&s->song, mem, &r, len);
             r.i = save + 8u + len;
         } else {
             if (!mid_skip(&r, len)) {
@@ -962,10 +985,10 @@ nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
         }
     }
 
-    if (song.nnotes == 0u || song.division == 0u) {
-        mem->free(mem->ud, song.notes);
-        mem->free(mem->ud, song.ctls);
-        return NULL;            /* nothing to play: let the caller stay silent */
+    if (s->song.nnotes == 0u || s->song.division == 0u) {
+        mem->free(mem->ud, s->song.notes);
+        mem->free(mem->ud, s->song.ctls);
+        return 0;            /* nothing to play: let the caller stay silent */
     }
 
     /* Length: the last thing that happens, plus a short tail for the release.
@@ -974,58 +997,41 @@ nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
      * leave it ringing to the end. */
     {
         nj_u4 last = 0u;
-        for (i = 0u; i < song.nnotes; i++) {
-            if (song.notes[i].tick > last) {
-                last = song.notes[i].tick;
+        for (i = 0u; i < s->song.nnotes; i++) {
+            if (s->song.notes[i].tick > last) {
+                last = s->song.notes[i].tick;
             }
         }
-        for (i = 0u; i < song.nctls; i++) {
-            if (song.ctls[i].tick > last) {
-                last = song.ctls[i].tick;
+        for (i = 0u; i < s->song.nctls; i++) {
+            if (s->song.ctls[i].tick > last) {
+                last = s->song.ctls[i].tick;
             }
         }
         nj_u4 tail = NJ_MIDI_RATE / 20u;
-        nj_u4 rel = (nj_u4)song.max_release_ms * (NJ_MIDI_RATE / 1000u);
+        nj_u4 rel = (nj_u4)s->song.max_release_ms * (NJ_MIDI_RATE / 1000u);
         if (rel > tail) {
             tail = rel;         /* a pad's 300 ms release must not be cut off */
         }
-        frames = mid_sample_at(&song, last) + tail;
+        s->frames = mid_sample_at(&s->song, last) + tail;
     }
     for (i = 0u; i < 16u; i++) {
-        if (song.reverb[i] != 0u) {
-            rev_any = 1u;
+        if (s->song.reverb[i] != 0u) {
+            s->rev_any = 1u;
         }
     }
-    if (rev_any != 0u) {
-        frames += NJ_MIDI_REV_TAIL;     /* the room needs time to empty */
+    if (s->rev_any != 0u) {
+        s->frames += NJ_MIDI_REV_TAIL;     /* the room needs time to empty */
     }
-    if (frames > NJ_MIDI_MAX_FRAMES) {
-        frames = NJ_MIDI_MAX_FRAMES;
-    }
-
-    if (rev_any != 0u) {
-        rev = (nj_s4 *)mem->alloc(mem->ud, (nj_size)NJ_MIDI_REV_LEN * sizeof(nj_s4));
-        if (rev != NULL) {
-            memset(rev, 0, (nj_size)NJ_MIDI_REV_LEN * sizeof(nj_s4));
+    if (s->rev_any != 0u) {
+        s->rev = (nj_s4 *)mem->alloc(mem->ud, (nj_size)NJ_MIDI_REV_LEN * sizeof(nj_s4));
+        if (s->rev != NULL) {
+            memset(s->rev, 0, (nj_size)NJ_MIDI_REV_LEN * sizeof(nj_s4));
         }
     }
-    chans = song.pan_used ? 2u : 1u;
-    if (chans_out != NULL) {
-        *chans_out = chans;
-    }
-    pcm = (nj_u1 *)mem->alloc(mem->ud, (nj_size)frames * (nj_size)chans * 2u);
-    if (pcm != NULL) {
-        memset(pcm, 0, (nj_size)frames * 2u);
-    }
-    if (pcm == NULL) {
-        mem->free(mem->ud, song.notes);
-        mem->free(mem->ud, song.ctls);
-        return NULL;
-    }
-
-    mid_sort_notes(&song);
-    mid_sort_ctls(&song);
-    memset(voices, 0, sizeof(voices));
+    s->chans = s->song.pan_used ? 2u : 1u;
+    mid_sort_notes(&s->song);
+    mid_sort_ctls(&s->song);
+    memset(s->voices, 0, sizeof(s->voices));
 
     /*
      * Play the events as they arrive: a voice is taken when its note starts
@@ -1033,18 +1039,45 @@ nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
      *
      * Assigning a voice to every note BEFORE the mix - which is what this used
      * to do - leaves the output with only the notes that were still held when
-     * that pass ended: the last twelve notes of the file, or, before voices
+     * that pass ended: the last twelve notes of the file, or, before s->voices
      * were ever given back, the first twelve.  Thirty seconds of MIDI came out
      * as half a second of sound plus silence, and once the notes were long
-     * enough to hold every voice the whole song was silent - which is what the
+     * enough to hold every voice the whole s->song was silent - which is what the
      * SDL2 window played.
      */
-    for (i = 0u; i < frames; i++) {
+    return 1;
+}
+
+nj_u4 nj_midi_stream_channels(const nj_midi_stream *s)
+{
+    return (s == NULL) ? 0u : s->chans;
+}
+
+nj_u4 nj_midi_stream_frames(const nj_midi_stream *s)
+{
+    return (s == NULL) ? 0u : s->frames;
+}
+
+/*
+ * Render up to `want` frames into `out` (interleaved when the song pans) and
+ * return how many were written.  Zero means the song is over.
+ */
+nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
+{
+    nj_u4 i;
+    nj_u4 n;
+    nj_u4 v;
+
+    if (s == NULL || out == NULL) {
+        return 0u;
+    }
+    i = s->i;
+    for (n = 0u; n < want && i < s->frames; n++, i++) {
         if ((i & 63u) == 0u) {
             for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-                if (voices[v].active && voices[v].mod != 0u) {
-                    voices[v].lfo += NJ_MIDI_VIBRATO_STEP;
-                    mid_set_step(&voices[v]);
+                if (s->voices[v].active && s->voices[v].mod != 0u) {
+                    s->voices[v].lfo += NJ_MIDI_VIBRATO_STEP;
+                    mid_set_step(&s->voices[v]);
                 }
             }
         }
@@ -1058,85 +1091,85 @@ nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
          * Channel events first: a bend or a pedal that lands on the same
          * sample as a note-on has to be in force for that note.
          */
-        while (cev < song.nctls
-               && mid_sample_at(&song, song.ctls[cev].tick) <= i) {
-            nj_u4 ch = song.ctls[cev].chan;
-            nj_u4 kind = song.ctls[cev].kind;
+        while (s->cev < s->song.nctls
+               && mid_sample_at(&s->song, s->song.ctls[s->cev].tick) <= i) {
+            nj_u4 ch = s->song.ctls[s->cev].chan;
+            nj_u4 kind = s->song.ctls[s->cev].kind;
 
             if (kind == MID_CTL_BEND) {
-                bend_now[ch] = song.ctls[cev].a;
+                s->bend_now[ch] = s->song.ctls[s->cev].a;
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-                    if (voices[v].active && voices[v].chan == ch) {
-                        mid_apply_pitch(&voices[v], bend_now[ch], range_now[ch]);
+                    if (s->voices[v].active && s->voices[v].chan == ch) {
+                        mid_apply_pitch(&s->voices[v], s->bend_now[ch], s->range_now[ch]);
                     }
                 }
             } else if (kind == MID_CTL_MOD) {
-                mod_now[ch] = song.ctls[cev].a;
+                s->mod_now[ch] = s->song.ctls[s->cev].a;
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-                    if (voices[v].active && voices[v].chan == ch) {
-                        voices[v].mod = mod_now[ch] * NJ_MIDI_VIBRATO_MAX / 127u;
-                        mid_set_step(&voices[v]);
+                    if (s->voices[v].active && s->voices[v].chan == ch) {
+                        s->voices[v].mod = s->mod_now[ch] * NJ_MIDI_VIBRATO_MAX / 127u;
+                        mid_set_step(&s->voices[v]);
                     }
                 }
             } else if (kind == MID_CTL_PAN) {
-                pan_now[ch] = song.ctls[cev].a;
+                s->pan_now[ch] = s->song.ctls[s->cev].a;
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-                    if (voices[v].active && voices[v].chan == ch) {
-                        mid_pan_gains(pan_now[ch], &voices[v].gl, &voices[v].gr);
+                    if (s->voices[v].active && s->voices[v].chan == ch) {
+                        mid_pan_gains(s->pan_now[ch], &s->voices[v].gl, &s->voices[v].gr);
                     }
                 }
             } else if (kind == MID_CTL_REVERB) {
-                rev_now[ch] = song.ctls[cev].a;
+                s->rev_now[ch] = s->song.ctls[s->cev].a;
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-                    if (voices[v].active && voices[v].chan == ch) {
-                        voices[v].rev = rev_now[ch];
+                    if (s->voices[v].active && s->voices[v].chan == ch) {
+                        s->voices[v].rev = s->rev_now[ch];
                     }
                 }
             } else if (kind == MID_CTL_RANGE) {
-                range_now[ch] = song.ctls[cev].a;
+                s->range_now[ch] = s->song.ctls[s->cev].a;
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-                    if (voices[v].active && voices[v].chan == ch) {
-                        mid_apply_pitch(&voices[v], bend_now[ch], range_now[ch]);
+                    if (s->voices[v].active && s->voices[v].chan == ch) {
+                        mid_apply_pitch(&s->voices[v], s->bend_now[ch], s->range_now[ch]);
                     }
                 }
-            } else if (song.ctls[cev].a >= 64u) {
-                pedal_now[ch] = 1;
+            } else if (s->song.ctls[s->cev].a >= 64u) {
+                s->pedal_now[ch] = 1;
             } else {
                 /* The pedal came up: every note it was holding stops now. */
-                pedal_now[ch] = 0;
+                s->pedal_now[ch] = 0;
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-                    if (voices[v].active && voices[v].chan == ch
-                        && voices[v].sustained) {
-                        voices[v].sustained = 0;
+                    if (s->voices[v].active && s->voices[v].chan == ch
+                        && s->voices[v].sustained) {
+                        s->voices[v].sustained = 0;
                         /* The release runs INTO the end, so the note keeps
                          * sounding while it fades. */
-                        voices[v].end = i + voices[v].release;
+                        s->voices[v].end = i + s->voices[v].release;
                     }
                 }
             }
-            cev++;
+            s->cev++;
         }
 
-        while (ev < song.nnotes
-               && mid_sample_at(&song, song.notes[ev].tick) <= i) {
-            if (song.notes[ev].on) {
+        while (s->ev < s->song.nnotes
+               && mid_sample_at(&s->song, s->song.notes[s->ev].tick) <= i) {
+            if (s->song.notes[s->ev].on) {
                 /* A voice whose note has ended is free again.  The short guard
                  * leaves room for the release tail, so a reused voice does not
                  * click. */
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-                    if (voices[v].active && voices[v].end != 0u
-                        && voices[v].end + NJ_MIDI_RATE / 100u <= i) {
-                        voices[v].active = 0;
+                    if (s->voices[v].active && s->voices[v].end != 0u
+                        && s->voices[v].end + NJ_MIDI_RATE / 100u <= i) {
+                        s->voices[v].active = 0;
                     }
                 }
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-                    if (!voices[v].active) {
+                    if (!s->voices[v].active) {
                         break;
                     }
                 }
                 if (v == NJ_MIDI_VOICES) {
                     /*
-                     * All twelve voices are busy.  Dropping the note is what
+                     * All twelve s->voices are busy.  Dropping the note is what
                      * made a melody vanish under a chord and a drum tail: the
                      * theme of 仙剑奇侠传 is the top line of a dense file, and
                      * a player only hears drums and chords.  The quietest
@@ -1148,8 +1181,8 @@ nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
                     int have = 0;
 
                     for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-                        nj_s4 level = voices[v].amp;
-                        if (voices[v].end != 0u) {
+                        nj_s4 level = s->voices[v].amp;
+                        if (s->voices[v].end != 0u) {
                             level /= 4;
                         }
                         if (!have || level < quiet) {
@@ -1160,162 +1193,162 @@ nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
                     }
                     v = pick;
                 }
-                voices[v].active = 1;
-                voices[v].sustained = 0;
-                voices[v].note = song.notes[ev].note;
-                voices[v].chan = song.notes[ev].chan;
-                voices[v].wave = song.notes[ev].wave;
-                voices[v].tone = song.notes[ev].tone;
+                s->voices[v].active = 1;
+                s->voices[v].sustained = 0;
+                s->voices[v].note = s->song.notes[s->ev].note;
+                s->voices[v].chan = s->song.notes[s->ev].chan;
+                s->voices[v].wave = s->song.notes[s->ev].wave;
+                s->voices[v].tone = s->song.notes[s->ev].tone;
                 /*
                  * Velocity is not only loudness.  A hard note opens the
                  * filter, the way a struck string or a blown reed gets
                  * brighter the harder it is played; velocity 100 keeps the
                  * divisor this voice used before the filter followed it.
                  */
-                voices[v].filt = (nj_u1)(1u
-                    + (127u - song.notes[ev].velocity) * 7u / 127u);
-                voices[v].phase = 0u;
-                voices[v].note_step = mid_step_for(song.notes[ev].note);
-                voices[v].base_step = voices[v].note_step;
-                voices[v].step = voices[v].base_step;
+                s->voices[v].filt = (nj_u1)(1u
+                    + (127u - s->song.notes[s->ev].velocity) * 7u / 127u);
+                s->voices[v].phase = 0u;
+                s->voices[v].note_step = mid_step_for(s->song.notes[s->ev].note);
+                s->voices[v].base_step = s->voices[v].note_step;
+                s->voices[v].step = s->voices[v].base_step;
                 /*
                  * The pitch envelope: a struck skin starts above its note and
                  * falls to it, so the first milliseconds are a hit rather
                  * than a note.  128 is an octave, and the fall is linear.
                  */
-                voices[v].pitch_mul = 65536u;
-                voices[v].pitch_dec = 0u;
-                voices[v].pitch_left = 0u;
-                if (song.notes[ev].pitch_drop != 0u
-                    && song.notes[ev].pitch_ms != 0u) {
-                    nj_u4 span = (nj_u4)song.notes[ev].pitch_ms
+                s->voices[v].pitch_mul = 65536u;
+                s->voices[v].pitch_dec = 0u;
+                s->voices[v].pitch_left = 0u;
+                if (s->song.notes[s->ev].pitch_drop != 0u
+                    && s->song.notes[s->ev].pitch_ms != 0u) {
+                    nj_u4 span = (nj_u4)s->song.notes[s->ev].pitch_ms
                         * (NJ_MIDI_RATE / 1000u);
                     if (span != 0u) {
                         nj_u4 hi = 65536u
-                            + (nj_u4)song.notes[ev].pitch_drop * 512u;
-                        voices[v].pitch_mul = hi;
-                        voices[v].pitch_dec = (hi - 65536u) / span;
-                        voices[v].pitch_left = span;
+                            + (nj_u4)s->song.notes[s->ev].pitch_drop * 512u;
+                        s->voices[v].pitch_mul = hi;
+                        s->voices[v].pitch_dec = (hi - 65536u) / span;
+                        s->voices[v].pitch_left = span;
                     }
                 }
-                mid_apply_pitch(&voices[v], bend_now[song.notes[ev].chan],
-                                range_now[song.notes[ev].chan]);
-                voices[v].noise = 0x13579BDFu | 1u;
+                mid_apply_pitch(&s->voices[v], s->bend_now[s->song.notes[s->ev].chan],
+                                s->range_now[s->song.notes[s->ev].chan]);
+                s->voices[v].noise = 0x13579BDFu | 1u;
                 /* ~24% of full scale at velocity 100, then the channel's own
                  * volume and expression. */
-                voices[v].amp = (nj_s4)(song.notes[ev].velocity) * 300
-                    * (nj_s4)(song.notes[ev].gain) / 127;
-                voices[v].lp = 0;
-                voices[v].decay = 0u;
-                if (song.notes[ev].decay_ms != 0u) {
-                    nj_u4 span = (nj_u4)(song.notes[ev].decay_ms)
+                s->voices[v].amp = (nj_s4)(s->song.notes[s->ev].velocity) * 300
+                    * (nj_s4)(s->song.notes[s->ev].gain) / 127;
+                s->voices[v].lp = 0;
+                s->voices[v].decay = 0u;
+                if (s->song.notes[s->ev].decay_ms != 0u) {
+                    nj_u4 span = (nj_u4)(s->song.notes[s->ev].decay_ms)
                         * (NJ_MIDI_RATE / 1000u);
                     if (span != 0u) {
-                        voices[v].decay = (nj_u4)(voices[v].amp / (nj_s4)span) + 1u;
+                        s->voices[v].decay = (nj_u4)(s->voices[v].amp / (nj_s4)span) + 1u;
                     }
                 }
-                voices[v].sustain = (nj_s4)(voices[v].amp
-                    * (nj_s4)song.notes[ev].sustain / 127);
-                voices[v].attack = (nj_u4)song.notes[ev].attack_ms
+                s->voices[v].sustain = (nj_s4)(s->voices[v].amp
+                    * (nj_s4)s->song.notes[s->ev].sustain / 127);
+                s->voices[v].attack = (nj_u4)s->song.notes[s->ev].attack_ms
                     * (NJ_MIDI_RATE / 1000u);
-                if (voices[v].attack == 0u) {
-                    voices[v].attack = 1u;      /* no division by zero */
+                if (s->voices[v].attack == 0u) {
+                    s->voices[v].attack = 1u;      /* no division by zero */
                 }
-                voices[v].release = (nj_u4)song.notes[ev].release_ms
+                s->voices[v].release = (nj_u4)s->song.notes[s->ev].release_ms
                     * (NJ_MIDI_RATE / 1000u);
-                if (voices[v].release == 0u) {
-                    voices[v].release = NJ_MIDI_RATE / 125u;
+                if (s->voices[v].release == 0u) {
+                    s->voices[v].release = NJ_MIDI_RATE / 125u;
                 }
-                voices[v].rev = rev_now[song.notes[ev].chan];
-                mid_pan_gains(pan_now[song.notes[ev].chan], &voices[v].gl,
-                              &voices[v].gr);
-                voices[v].lfo = 0u;
+                s->voices[v].rev = s->rev_now[s->song.notes[s->ev].chan];
+                mid_pan_gains(s->pan_now[s->song.notes[s->ev].chan], &s->voices[v].gl,
+                              &s->voices[v].gr);
+                s->voices[v].lfo = 0u;
                 /*
                  * A string section or a reed breathes even when the file
                  * never sends CC1; a file that does send it wins.
                  */
-                if (mod_now[song.notes[ev].chan] != 0u) {
-                    voices[v].mod = mod_now[song.notes[ev].chan]
+                if (s->mod_now[s->song.notes[s->ev].chan] != 0u) {
+                    s->voices[v].mod = s->mod_now[s->song.notes[s->ev].chan]
                         * NJ_MIDI_VIBRATO_MAX / 127u;
                 } else {
-                    voices[v].mod = (nj_u4)song.notes[ev].vib
+                    s->voices[v].mod = (nj_u4)s->song.notes[s->ev].vib
                         * NJ_MIDI_VIBRATO_MAX / 127u;
                 }
-                mid_set_step(&voices[v]);
-                voices[v].start = i;
-                voices[v].end = 0u;
+                mid_set_step(&s->voices[v]);
+                s->voices[v].start = i;
+                s->voices[v].end = 0u;
             } else {
-                nj_u4 ch = song.notes[ev].chan;
+                nj_u4 ch = s->song.notes[s->ev].chan;
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-                    if (voices[v].active && voices[v].note == song.notes[ev].note
-                        && voices[v].chan == ch
-                        && voices[v].end == 0u) {
-                        if (pedal_now[ch]) {
-                            voices[v].sustained = 1;    /* the pedal holds it */
+                    if (s->voices[v].active && s->voices[v].note == s->song.notes[s->ev].note
+                        && s->voices[v].chan == ch
+                        && s->voices[v].end == 0u) {
+                        if (s->pedal_now[ch]) {
+                            s->voices[v].sustained = 1;    /* the pedal holds it */
                         } else {
                             /* The note stops sounding one release later: the
                              * ramp below fades it out over that time. */
-                            voices[v].end = i + voices[v].release;
+                            s->voices[v].end = i + s->voices[v].release;
                         }
                         break;
                     }
                 }
             }
-            ev++;
+            s->ev++;
         }
 
 
         for (v = 0u; v < NJ_MIDI_VOICES; v++) {
-            nj_s4 amp = voices[v].amp;
+            nj_s4 amp = s->voices[v].amp;
             nj_u4 age;
 
-            if (!voices[v].active) {
+            if (!s->voices[v].active) {
                 continue;
             }
-            if (i < voices[v].start) {
+            if (i < s->voices[v].start) {
                 continue;
             }
-            if (voices[v].end != 0u && i >= voices[v].end) {
+            if (s->voices[v].end != 0u && i >= s->voices[v].end) {
                 continue;
             }
-            if (voices[v].pitch_left != 0u) {
-                voices[v].pitch_mul -= voices[v].pitch_dec;
-                voices[v].pitch_left--;
-                if (voices[v].pitch_left == 0u) {
-                    voices[v].pitch_mul = 65536u;   /* it reached its note */
+            if (s->voices[v].pitch_left != 0u) {
+                s->voices[v].pitch_mul -= s->voices[v].pitch_dec;
+                s->voices[v].pitch_left--;
+                if (s->voices[v].pitch_left == 0u) {
+                    s->voices[v].pitch_mul = 65536u;   /* it reached its note */
                 }
-                mid_set_step(&voices[v]);
+                mid_set_step(&s->voices[v]);
             }
-            if (voices[v].decay != 0u && voices[v].amp > voices[v].sustain) {
+            if (s->voices[v].decay != 0u && s->voices[v].amp > s->voices[v].sustain) {
                 /* A struck note loses amplitude every sample, whether or not
                  * the file ever sends a note off, but only down to the level
                  * its family sustains at. */
-                voices[v].amp -= (nj_s4)voices[v].decay;
-                if (voices[v].amp <= voices[v].sustain) {
-                    voices[v].amp = voices[v].sustain;
-                    if (voices[v].sustain <= 0) {
-                        voices[v].active = 0;
+                s->voices[v].amp -= (nj_s4)s->voices[v].decay;
+                if (s->voices[v].amp <= s->voices[v].sustain) {
+                    s->voices[v].amp = s->voices[v].sustain;
+                    if (s->voices[v].sustain <= 0) {
+                        s->voices[v].active = 0;
                         continue;
                     }
                 }
-                amp = voices[v].amp;
+                amp = s->voices[v].amp;
             }
-            age = i - voices[v].start;
+            age = i - s->voices[v].start;
             /*
              * The envelope each family asked for: an attack that is 2 ms on a
              * piano and 120 ms on a pad, and a release that is 15 ms on a
              * hi-hat and 300 ms on a pad.  The old fixed 4 ms/8 ms pair is
              * what made every instrument sound like the same buzzer.
              */
-            if (age < voices[v].attack) {
-                amp = amp * (nj_s4)age / (nj_s4)voices[v].attack;
-            } else if (voices[v].end != 0u) {
-                nj_u4 left = voices[v].end - i;
-                if (left < voices[v].release) {
-                    amp = amp * (nj_s4)left / (nj_s4)voices[v].release;
+            if (age < s->voices[v].attack) {
+                amp = amp * (nj_s4)age / (nj_s4)s->voices[v].attack;
+            } else if (s->voices[v].end != 0u) {
+                nj_u4 left = s->voices[v].end - i;
+                if (left < s->voices[v].release) {
+                    amp = amp * (nj_s4)left / (nj_s4)s->voices[v].release;
                 }
             }
-            voices[v].phase += voices[v].step;
+            s->voices[v].phase += s->voices[v].step;
             /*
              * Every waveform here is a shape of the same phase accumulator.
              * A square's harmonics fall off as 1/k, which is what makes it
@@ -1329,46 +1362,46 @@ nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
              */
             {
                 nj_s4 raw;
-                if (voices[v].wave == MID_W_TRIANGLE) {
-                    nj_s4 t = (nj_s4)(voices[v].phase >> 16);
+                if (s->voices[v].wave == MID_W_TRIANGLE) {
+                    nj_s4 t = (nj_s4)(s->voices[v].phase >> 16);
                     raw = (t < 32768) ? (t * 2 - 32768) : (98303 - t * 2);
                     raw = raw * 3 / 4;
-                } else if (voices[v].wave == MID_W_SAW) {
-                    raw = ((nj_s4)(voices[v].phase >> 16) - 32768) * 3 / 4;
-                } else if (voices[v].wave == MID_W_NOISE
-                           || voices[v].wave == MID_W_DRUM) {
+                } else if (s->voices[v].wave == MID_W_SAW) {
+                    raw = ((nj_s4)(s->voices[v].phase >> 16) - 32768) * 3 / 4;
+                } else if (s->voices[v].wave == MID_W_NOISE
+                           || s->voices[v].wave == MID_W_DRUM) {
                     nj_s4 hiss;
-                    voices[v].noise = (voices[v].noise >> 1)
-                        ^ ((0u - (voices[v].noise & 1u)) & 0x80200003u);
-                    hiss = ((nj_s4)(voices[v].noise & 0xFFFFu) - 32768) / 2;
-                    if (voices[v].wave == MID_W_DRUM) {
+                    s->voices[v].noise = (s->voices[v].noise >> 1)
+                        ^ ((0u - (s->voices[v].noise & 1u)) & 0x80200003u);
+                    hiss = ((nj_s4)(s->voices[v].noise & 0xFFFFu) - 32768) / 2;
+                    if (s->voices[v].wave == MID_W_DRUM) {
                         /*
                          * A drum head is a tone under a noise skin: the
                          * snare's 180 Hz body below the wires is what makes
                          * it a snare instead of a hiss.
                          */
-                        nj_s4 body = (voices[v].phase < 0x80000000u) ? 32767 : -32767;
-                        raw = (body * (nj_s4)voices[v].tone
-                               + hiss * (nj_s4)(127u - (nj_u4)voices[v].tone)) / 127;
+                        nj_s4 body = (s->voices[v].phase < 0x80000000u) ? 32767 : -32767;
+                        raw = (body * (nj_s4)s->voices[v].tone
+                               + hiss * (nj_s4)(127u - (nj_u4)s->voices[v].tone)) / 127;
                     } else {
                         raw = hiss;
                     }
                 } else {
-                    raw = (voices[v].phase < 0x80000000u) ? amp : -amp;
+                    raw = (s->voices[v].phase < 0x80000000u) ? amp : -amp;
                 }
-                if (voices[v].wave != MID_W_SQUARE) {
+                if (s->voices[v].wave != MID_W_SQUARE) {
                     raw = raw * amp / 32768;    /* scale to this note's level */
                 }
-                voices[v].lp += (raw - voices[v].lp) / (nj_s4)voices[v].filt;
+                s->voices[v].lp += (raw - s->voices[v].lp) / (nj_s4)s->voices[v].filt;
                 /*
                  * A mono file has both gains at full, so this is the same sum
                  * it always was; a file that pans puts each voice where it
                  * asked to be.
                  */
-                mixL += voices[v].lp * (nj_s4)voices[v].gl / 127;
-                mixR += voices[v].lp * (nj_s4)voices[v].gr / 127;
-                if (voices[v].rev != 0u) {
-                    bus += voices[v].lp * (nj_s4)voices[v].rev / 127;
+                mixL += s->voices[v].lp * (nj_s4)s->voices[v].gl / 127;
+                mixR += s->voices[v].lp * (nj_s4)s->voices[v].gr / 127;
+                if (s->voices[v].rev != 0u) {
+                    bus += s->voices[v].lp * (nj_s4)s->voices[v].rev / 127;
                 }
             }
         }
@@ -1377,17 +1410,17 @@ nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
          * Two feedback combs on the send bus.  A channel with no send never
          * reaches them, so the default is the dry signal this always was.
          */
-        if (rev != NULL) {
-            nj_s4 ya = rev[rev_pa];
-            nj_s4 yb = rev[NJ_MIDI_REV_A + rev_pb];
+        if (s->rev != NULL) {
+            nj_s4 ya = s->rev[s->rev_pa];
+            nj_s4 yb = s->rev[NJ_MIDI_REV_A + s->rev_pb];
 
-            rev[rev_pa] = bus + (nj_s4)((ya * NJ_MIDI_REV_FB_A) >> 15);
-            rev[NJ_MIDI_REV_A + rev_pb] = bus + (nj_s4)((yb * NJ_MIDI_REV_FB_B) >> 15);
-            if (++rev_pa >= NJ_MIDI_REV_A) {
-                rev_pa = 0u;
+            s->rev[s->rev_pa] = bus + (nj_s4)((ya * NJ_MIDI_REV_FB_A) >> 15);
+            s->rev[NJ_MIDI_REV_A + s->rev_pb] = bus + (nj_s4)((yb * NJ_MIDI_REV_FB_B) >> 15);
+            if (++s->rev_pa >= NJ_MIDI_REV_A) {
+                s->rev_pa = 0u;
             }
-            if (++rev_pb >= NJ_MIDI_REV_B) {
-                rev_pb = 0u;
+            if (++s->rev_pb >= NJ_MIDI_REV_B) {
+                s->rev_pb = 0u;
             }
             {
                 nj_s4 wet = (ya + yb) * 3 / 8;
@@ -1397,7 +1430,7 @@ nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
         }
 
         /*
-         * Twelve voices can sum past full scale, and a hard clamp on the sum
+         * Twelve s->voices can sum past full scale, and a hard clamp on the sum
          * buzzes.  Above three quarters of the range the mix is compressed
          * four to one and only then clamped, which keeps a loud passage loud
          * without the crackle of clipping it.
@@ -1424,22 +1457,87 @@ nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
         } else if (scaledR < -32768) {
             scaledR = -32768;
         }
-        if (chans == 2u) {
-            pcm[i * 4u] = (nj_u1)(scaledL & 0xFF);
-            pcm[i * 4u + 1u] = (nj_u1)((scaledL >> 8) & 0xFF);
-            pcm[i * 4u + 2u] = (nj_u1)(scaledR & 0xFF);
-            pcm[i * 4u + 3u] = (nj_u1)((scaledR >> 8) & 0xFF);
+        if (s->chans == 2u) {
+            out[n * 4u] = (nj_u1)(scaledL & 0xFF);
+            out[n * 4u + 1u] = (nj_u1)((scaledL >> 8) & 0xFF);
+            out[n * 4u + 2u] = (nj_u1)(scaledR & 0xFF);
+            out[n * 4u + 3u] = (nj_u1)((scaledR >> 8) & 0xFF);
         } else {
-            pcm[i * 2u] = (nj_u1)(scaledL & 0xFF);
-            pcm[i * 2u + 1u] = (nj_u1)((scaledL >> 8) & 0xFF);
-        }
-    }
+            out[n * 2u] = (nj_u1)(scaledL & 0xFF);
+            out[n * 2u + 1u] = (nj_u1)((scaledL >> 8) & 0xFF);
+        }    }
+    s->i = i;
+    return n;
+}
 
-    mem->free(mem->ud, rev);
-    mem->free(mem->ud, song.notes);
-    mem->free(mem->ud, song.ctls);
+void nj_midi_stream_close(nj_midi_stream *s)
+{
+    mid_stream_drop(s);
+}
+
+nj_midi_stream *nj_midi_stream_open(const void *data, nj_u4 size, const nj_midi_mem *mem)
+{
+    nj_midi_stream *s;
+
+    if (mem == NULL || mem->alloc == NULL || mem->free == NULL) {
+        return NULL;
+    }
+    if (data == NULL || size < 14u) {
+        return NULL;
+    }
+    s = (nj_midi_stream *)mem->alloc(mem->ud, sizeof(*s));
+    if (s == NULL) {
+        return NULL;
+    }
+    memset(s, 0, sizeof(*s));
+    s->mem = mem;
+    if (!mid_stream_init(s, data, size, mem)) {
+        mid_stream_drop(s);
+        return NULL;
+    }
+    return s;
+}
+
+nj_u1 *nj_midi_render_ex(const void *data, nj_u4 size, nj_u4 *frames_out,
+                         nj_u4 *chans_out, const nj_midi_mem *mem)
+{
+    nj_midi_stream *s;
+    nj_u1 *pcm;
+    nj_u4 frames;
+    nj_u4 chans;
+    nj_u4 got = 0u;
+
     if (frames_out != NULL) {
-        *frames_out = frames;
+        *frames_out = 0u;
+    }
+    s = nj_midi_stream_open(data, size, mem);
+    if (s == NULL) {
+        return NULL;
+    }
+    frames = s->frames;
+    if (frames > NJ_MIDI_MAX_FRAMES) {
+        frames = NJ_MIDI_MAX_FRAMES;
+    }
+    chans = s->chans;
+    if (chans_out != NULL) {
+        *chans_out = chans;
+    }
+    pcm = (nj_u1 *)mem->alloc(mem->ud, (nj_size)frames * (nj_size)chans * 2u);
+    if (pcm == NULL) {
+        nj_midi_stream_close(s);
+        return NULL;
+    }
+    memset(pcm, 0, (nj_size)frames * (nj_size)chans * 2u);
+    while (got < frames) {
+        nj_u4 n = nj_midi_stream_pull(s, pcm + (nj_size)got * (nj_size)chans * 2u, frames - got);
+        if (n == 0u) {
+            break;
+        }
+        got += n;
+    }
+    nj_midi_stream_close(s);
+    if (frames_out != NULL) {
+        *frames_out = got;
     }
     return pcm;
 }
