@@ -1104,6 +1104,54 @@ int main(void)
         }
     }
 
+    /*
+     * RP-015: CC121 puts a channel back to its defaults - volume 100,
+     * expression 127, pan centre, no modulation, pedal up, wheel centred.
+     * 518 of the corpus's controller messages are this one, and ignoring it
+     * left a channel quiet or off to one side for the rest of the song.
+     */
+    {
+        static const nj_u1 reset_vol[] = { 0xB0, 7, 40, 0x00, 0xB0, 121, 0 };
+        static const nj_u1 plain_vol[] = { 0xB0, 7, 40 };
+        static const nj_u1 reset_pan[] = { 0xB0, 10, 0, 0x00, 0xB0, 121, 0 };
+        nj_u1 file[128];
+        nj_u4 n, fr = 0u, chans = 0u, loud, quiet;
+        nj_u1 *m;
+
+        n = build_voiced(file, reset_vol, (nj_u4)sizeof(reset_vol), 0u, 69u);
+        m = nj_midi_render(file, n, &fr, &MEM);
+        loud = (m != NULL) ? pcm_rms(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 2u) : 0u;
+        if (m != NULL) {
+            t_free(NULL, m);
+        }
+        n = build_voiced(file, plain_vol, (nj_u4)sizeof(plain_vol), 0u, 69u);
+        m = nj_midi_render(file, n, &fr, &MEM);
+        quiet = (m != NULL) ? pcm_rms(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 2u) : 0u;
+        if (m != NULL) {
+            t_free(NULL, m);
+        }
+        check(quiet > 0u && loud * 3u > quiet * 7u,
+              "CC121 puts the channel volume back to 100");
+        if (!(quiet > 0u && loud * 3u > quiet * 7u)) {
+            printf("     reset rms %u, no reset %u\n", (unsigned)loud, (unsigned)quiet);
+        }
+
+        n = build_voiced(file, reset_pan, (nj_u4)sizeof(reset_pan), 0u, 69u);
+        m = nj_midi_render_ex(file, n, &fr, &chans, &MEM);
+        check(m != NULL && chans == 2u, "a reset after a pan is still stereo");
+        if (m != NULL) {
+            nj_u8 l = pcm_rms_ch(m, fr, chans, 0u, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 2u);
+            nj_u8 r = pcm_rms_ch(m, fr, chans, 1u, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 2u);
+            check(l > 0u && r > 0u && l * 10u < r * 11u && r * 10u < l * 11u,
+                  "CC121 puts the pan back to the centre");
+            if (!(l > 0u && r > 0u && l * 10u < r * 11u && r * 10u < l * 11u)) {
+                printf("     reset pan: left %llu, right %llu\n",
+                       (unsigned long long)l, (unsigned long long)r);
+            }
+            t_free(NULL, m);
+        }
+    }
+
     t_free(NULL, pcm);
     printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures != 0;

@@ -573,6 +573,38 @@ static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
                     if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_PAN, val)) {
                         return;
                     }
+                } else if (cc == 121u) {        /* reset all controllers */
+                    /*
+                     * RP-015: a reset puts volume back to 100, expression to
+                     * 127, pan to centre, modulation to nothing, the pedal up
+                     * and the wheel centred.  518 of the corpus's controller
+                     * messages are this one, and ignoring it left a channel
+                     * quiet or off to one side for the rest of the song.
+                     */
+                    s->volume[chan] = 100u;
+                    s->expr[chan] = 127u;
+                    s->mod[chan] = 0u;
+                    s->reverb[chan] = 0u;
+                    s->pedal[chan] = 0u;
+                    s->bend[chan] = MID_BEND_CENTRE;
+                    if (s->pan_used) {
+                        s->pan[chan] = 64u;
+                        if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_PAN, 64u)) {
+                            return;
+                        }
+                    }
+                    if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_BEND, MID_BEND_CENTRE)) {
+                        return;
+                    }
+                    if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_PEDAL, 0u)) {
+                        return;
+                    }
+                    if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_MOD, 0u)) {
+                        return;
+                    }
+                    if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_REVERB, 0u)) {
+                        return;
+                    }
                 } else if (cc == 101u) {        /* RPN MSB */
                     s->rpn[chan] = (s->rpn[chan] & 0x7Fu) | (val << 7);
                 } else if (cc == 100u) {        /* RPN LSB */
