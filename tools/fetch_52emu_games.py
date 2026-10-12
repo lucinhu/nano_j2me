@@ -46,17 +46,44 @@ def file_name(name, gid):
     return '%s_%s.jar' % (base, gid)
 
 
+def already_have(dest):
+    """Ids a previous run already recorded in FETCHED.txt.
+
+    Without this the tool walks the category pages from the top every time
+    and re-downloads exactly what is already on disk, so "fetch 16 more"
+    can add nothing at all and still report 16 JARs.  One whole round was
+    spent that way.  The manifest is the record of what has been fetched;
+    it is authoritative because a JAR may be deleted from the directory
+    and refetching it is then the right thing to do.
+    """
+    seen = set()
+    try:
+        with open(os.path.join(dest, 'FETCHED.txt'), encoding='utf-8') as f:
+            for line in f:
+                m = re.search(r'id=(\d+)', line)
+                if m:
+                    seen.add(m.group(1))
+    except OSError:
+        pass
+    return seen
+
+
 def collect_ids(pg, per_category):
-    """`xq.php?id=NNNN` links from the category pages."""
+    """`xq.php?id=NNNN` links from the category pages.
+
+    per_category is only a ceiling per page: the caller filters out ids it
+    already has, so taking the whole page is what keeps a run that is
+    mostly re-fetching from coming back empty.
+    """
     ids = []
     for cat in range(1, 16):
         pg.goto('%s/?nsort=%d' % (BASE, cat), timeout=90000)
         pg.wait_for_timeout(4000)
         html = pg.locator('#results').inner_html()
         found = re.findall(r'href="xq\.php\?id=(\d+)"[^>]*>([^<]*)<', html)
-        for gid, name in found[:per_category]:
+        for gid, name in found:
             ids.append((gid, name.strip()))
-        if len(ids) >= 200:
+        if len(ids) >= per_category:
             break
     return ids
 
@@ -66,7 +93,10 @@ def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     if args:
         count = int(args[0])
-    per_cat = max(1, count // 15 + 1)
+    # A ceiling on how many links to take per category page, not a target:
+    # the loop below filters out what is already collected.  Generous on
+    # purpose, because re-fetching is what made an earlier run useless.
+    per_cat = 200
 
     from playwright.sync_api import sync_playwright
 
@@ -75,6 +105,8 @@ def main():
     print('destination: %s' % dest)
 
     got = 0
+    have = already_have(dest)
+    print('already collected: %d id(s)' % len(have))
     # Provenance, so a file can be traced back to the page it came from without
     # guessing from its name.  This is a text file and IS committed; the JARs
     # beside it are not.
@@ -85,6 +117,12 @@ def main():
         pg = b.new_page()
         ids = collect_ids(pg, per_cat)
         print('found %d ids' % len(ids))
+        before = len(ids)
+        ids = [(g, n) for (g, n) in ids if g not in have]
+        print('new: %d of %d (skipped %d already collected)'
+              % (len(ids), before, before - len(ids)))
+        if not ids:
+            print('nothing new on this site today')
         for gid, name in ids:
             if got >= count:
                 break
