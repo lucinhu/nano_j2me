@@ -1012,8 +1012,13 @@ NJFN(connector_open)
 
 NJFN(connector_open_stream)
 {
-    /* Same refusal; the (String,int) and openInputStream forms all land
-     * here so the message is identical whichever overload was called. */
+    /* Same refusal; the (String,int), (String,int,boolean) and
+     * openInputStream forms all land here so the message is identical
+     * whichever overload was called.  The mode and the timeout flag say
+     * whether the caller wants to read or write and whether it will accept a
+     * blocking connect; a file:// connection in this port is opened the same
+     * way either way, and reporting a mode it cannot honour as "not
+     * implemented" would be worse than opening the file. */
     return NJ_CALL(connector_open, vm, th, args, ret);
 }
 
@@ -1243,6 +1248,8 @@ static const nj_builtin_method dos_methods[] = {
 
 static const nj_builtin_method connector_methods[] = {
     M("open", "(Ljava/lang/String;)Ljavax/microedition/io/Connection;",
+      NJ_ACC_STATIC),
+    M("open", "(Ljava/lang/String;IZ)Ljavax/microedition/io/Connection;",
       NJ_ACC_STATIC),
     M("open", "(Ljava/lang/String;I)Ljavax/microedition/io/Connection;",
       NJ_ACC_STATIC),
@@ -1839,6 +1846,7 @@ const nj_native_entry nj_lib_io_table[] = {
     { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V", isr_init },
 
     { "javax/microedition/io/Connector", "open", "(Ljava/lang/String;I)Ljavax/microedition/io/Connection;", connector_open_stream },
+    { "javax/microedition/io/Connector", "open", "(Ljava/lang/String;IZ)Ljavax/microedition/io/Connection;", connector_open_stream },
     { "javax/microedition/io/Connector", "openInputStream", "(Ljava/lang/String;)Ljava/io/InputStream;", connector_open },
     { "javax/microedition/io/Connector", "openOutputStream", "(Ljava/lang/String;)Ljava/io/OutputStream;", connector_open },
     { "javax/microedition/io/Connector", "openDataInputStream", "(Ljava/lang/String;)Ljava/io/DataInputStream;", connector_open },

@@ -1124,6 +1124,43 @@ static void test_constructor_arg_window(nj_vm *vm)
     clean(vm, "the argument window");
 }
 
+/*
+ * Connector.open(name, mode, timeouts) - MIDP 2.0's form, and the one eight
+ * corpus titles call to read a data file.  The port serves file:// and
+ * nothing else, so the interesting part is that the call arrives at the
+ * scheme check at all: before the overload existed it raised
+ * NoSuchMethodError, and the title never got as far as its data.
+ */
+static void test_connector_open_mode(nj_vm *vm)
+{
+    static const char *CONN = "javax/microedition/io/Connector";
+    nj_value a[3];
+    nj_value ret;
+    const char *d;
+
+    /* Connector.READ == 1, timeouts == true */
+    a[0] = vref(nj_string_new(vm, "http://example.invalid/data"));
+    a[1] = vint(1);
+    a[2] = vint(1);
+    ret.bits = 0u;
+    if (nj_call_static(vm, CONN, "open",
+                       "(Ljava/lang/String;IZ)"
+                       "Ljavax/microedition/io/Connection;",
+                       a, &ret) == NJ_OK) {
+        g_fail++;
+        fprintf(stderr, "FAIL %s:%d: a scheme this port cannot serve opened\n",
+                __FILE__, __LINE__);
+        clean(vm, "Connector.open with a mode");
+        return;
+    }
+    d = nj_exception_describe(vm);
+    OK_MSG(d != NULL && strstr(d, "ConnectionNotFoundException") != NULL,
+           "the three-argument open reaches the scheme check: %s",
+           d ? d : "(nothing)");
+    nj_clear_exception(vm);
+    clean(vm, "Connector.open with a mode");
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -1169,6 +1206,7 @@ int main(void)
     test_static_field_init(vm);
     test_rms_overloads(vm);
     test_constructor_arg_window(vm);
+    test_connector_open_mode(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
