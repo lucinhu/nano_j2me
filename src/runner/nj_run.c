@@ -572,7 +572,17 @@ static int run_frame_hook(nj_vm *vm, void *ud)
      * so this is the only place that can end the run: the frame loop cannot
      * check its own budget while it is still waiting for startApp().
      */
-    return ctx->budget != 0u && ctx->drawn >= ctx->budget;
+    if (ctx->budget != 0u && ctx->drawn >= ctx->budget) {
+        /*
+         * Say who ended the run.  Leaving this unrecorded made a title whose
+         * constructor sleeps through a splash - so that the hook is what
+         * spends the budget - report "cannot instantiate ... the thread
+         * finished", which reads like a defect in the title and is not one.
+         */
+        nj_vm_stop_reason(vm, 0, "the frame budget ran out");
+        return 1;
+    }
+    return 0;
 }
 
 int nj_run(const nj_port *port_in, const nj_run_opts *opts)
@@ -751,6 +761,26 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     /* ---- the MIDlet ---- */
     midlet = nj_vm_new_midlet(vm, class_name, &exc);
     if (!midlet) {
+        const char *stopped = nj_vm_stop_why(vm);
+
+        if (stopped) {
+            /*
+             * The run ended while the MIDlet was still being constructed.
+             * That happens when a title sleeps through a splash screen in its
+             * constructor - true of both Need for Speed titles - so the frame
+             * hook spends the budget before the constructor ever returns.
+             * Saying "cannot instantiate" about that sends a reader hunting
+             * for a missing class that was never missing.
+             */
+            if (port.log) {
+                char buf[320];
+                snprintf(buf, sizeof(buf), "run ended: %s", stopped);
+                port.log(port.user, 2, buf);
+            }
+            /* A run that ended on purpose exits with the code it asked for. */
+            rc = (int)nj_vm_exit_code(vm);
+            goto done;
+        }
         if (port.log) {
             char buf[512];
             char why[256];

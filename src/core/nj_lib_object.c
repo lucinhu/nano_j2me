@@ -292,6 +292,48 @@ NJFN(class_getResourceAsStream)
     return NJ_OK;
 }
 
+/*
+ * Class.newInstance(): the no-argument constructor, and nothing else.  Two
+ * corpus titles (3D坦克对战1944, CS反恐精英) build their screens this way, and
+ * without it the call is a NoSuchMethodError that reads like a missing feature
+ * rather than a missing method.
+ *
+ * The exception on a missing <init>()V is InstantiationException, not
+ * NoSuchMethodError: that is what the CLDC specification says a reflective
+ * instantiation throws when the class cannot be instantiated this way, and a
+ * MIDlet that catches it is entitled to get it.
+ */
+NJFN(class_newInstance)
+{
+    nj_class *c = NJ_CLASS_OF(args);
+    nj_u4 mark;
+    nj_ref o;
+
+    if (!c) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (nj_class_init(vm, c) != NJ_OK) {
+        return NJ_ERR;
+    }
+    if (!nj_method_lookup(c, "<init>", "()V")) {
+        return nj_throw(vm, "java/lang/InstantiationException", c->name);
+    }
+    mark = nj_root_mark(vm);
+    o = nj_object_new(vm, c->name);
+    if (!o) {
+        nj_root_release(vm, mark);
+        return nj_throw_oom(vm);
+    }
+    o = nj_root(vm, o);
+    if (nj_call_special(vm, o, c->name, "<init>", "()V", NULL, NULL) != NJ_OK) {
+        nj_root_release(vm, mark);
+        return NJ_ERR;
+    }
+    nj_root_release(vm, mark);
+    ret->r = o;
+    return NJ_OK;
+}
+
 NJFN(class_getName)
 {
     nj_class *c = NJ_CLASS_OF(args);
@@ -504,6 +546,7 @@ static const nj_builtin_method class_methods[] = {
     M("isInstance",     "(Ljava/lang/Object;)Z",                0),
     M("getSuperclass",  "()Ljava/lang/Class;",                  0),
     M("forName",        "(Ljava/lang/String;)Ljava/lang/Class;", NJ_ACC_STATIC),
+    M("newInstance",    "()Ljava/lang/Object;",                 0),
     M("toString",       "()Ljava/lang/String;",                 0)
 };
 
@@ -608,6 +651,7 @@ const nj_native_entry nj_lib_object_table[] = {
     { "java/lang/Class",     "isInstance",        "(Ljava/lang/Object;)Z", class_isInstance },
     { "java/lang/Class",     "getSuperclass",     "()Ljava/lang/Class;",   class_getSuperclass },
     { "java/lang/Class",     "forName",           "(Ljava/lang/String;)Ljava/lang/Class;", class_forName },
+    { "java/lang/Class",     "newInstance",       "()Ljava/lang/Object;",  class_newInstance },
     { "java/lang/Class",     "toString",          "()Ljava/lang/String;",  class_toString },
 
     { "java/lang/Throwable", "<init>",            "()V",                          throwable_init },

@@ -411,6 +411,17 @@ if(NJ_BUILD_TESTS)
     set_tests_properties(check_late_display PROPERTIES TIMEOUT 120)
   endif()
 
+  # A title whose constructor outlasts the frame budget - both Need for Speed
+  # titles sleep through a splash screen in <init>.  That is the run ending on
+  # purpose and it has to say so: it used to report "cannot instantiate",
+  # which reads as a missing class and sent a reader looking for one.
+  if(EXISTS ${NJ_FIXTURES}/blockdemo.jar)
+    add_test(NAME check_splash_budget
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_splash_budget.sh
+                     $<TARGET_FILE:nj2me-cli> ${NJ_FIXTURES}/blockdemo.jar)
+    set_tests_properties(check_splash_budget PROPERTIES TIMEOUT 120)
+  endif()
+
   # Both of these drive generated JARs, and nj_add_test() deliberately keeps
   # nj_fixtures out of a plain build (see the comment there).  Register them
   # only when the fixture is actually on disk: on a fresh clone without

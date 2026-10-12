@@ -297,6 +297,13 @@ nj_s4 nj_vm_exit_code(nj_vm *vm);
 const char *nj_vm_stop_why(const nj_vm *vm);
 
 /*
+ * Stop the VM and say who asked.  The reason is a string literal - nothing
+ * allocates, so nothing can leak - and it is what lets a run that ended on
+ * purpose be told apart from one that failed.
+ */
+void nj_vm_stop_reason(nj_vm *vm, nj_s4 exit_code, const char *why);
+
+/*
  * Register a callback the VM runs while a Java thread is sleeping or waiting.
  *
  * It exists because a MIDlet is allowed to run its own frame loop inside

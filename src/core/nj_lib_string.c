@@ -1536,6 +1536,60 @@ NJFN(sb_deleteCharAt)
     return NJ_OK;
 }
 
+/*
+ * insert(int, char[]): the same operation as insert(int, String), reached by
+ * way of a String, because that is where the bounds check and the shifting
+ * already live and a second copy of them would be a second chance to get the
+ * bounds wrong.  A title compiled against CLDC 1.0 uses this form.
+ */
+static nj_status insert_chars(nj_vm *vm, nj_value *args, nj_value *ret,
+                              const char *cls, const char *desc)
+{
+    nj_ref arr = NJ_ARG_REF(args, 1);
+    nj_ref s;
+    nj_value a1[1];
+    nj_u4 mark;
+    nj_status st;
+
+    if (!arr) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    mark = nj_root_mark(vm);
+    s = nj_object_new(vm, "java/lang/String");
+    if (!s) {
+        nj_root_release(vm, mark);
+        return nj_throw_oom(vm);
+    }
+    s = nj_root(vm, s);
+    a1[0].r = arr;
+    st = nj_call_special(vm, s, "java/lang/String", "<init>", "([C)V", a1, NULL);
+    if (st != NJ_OK) {
+        nj_root_release(vm, mark);
+        return st;
+    }
+    {
+        nj_value a[2];
+        nj_status r;
+        a[0].i = NJ_ARG_INT(args, 0);
+        a[1].r = s;
+        r = nj_call(vm, NJ_THIS(args), cls, "insert", desc, a, ret);
+        nj_root_release(vm, mark);
+        return r;
+    }
+}
+
+NJFN(sb_insert_chars)
+{
+    return insert_chars(vm, args, ret, "java/lang/StringBuffer",
+                        "(ILjava/lang/String;)Ljava/lang/StringBuffer;");
+}
+
+NJFN(sbld_insert_chars)
+{
+    return insert_chars(vm, args, ret, "java/lang/StringBuilder",
+                        "(ILjava/lang/String;)Ljava/lang/StringBuilder;");
+}
+
 NJFN(sb_insert_str)
 {
     nj_ref sb = NJ_THIS(args);
@@ -1687,7 +1741,8 @@ static const nj_builtin_method stringbuilder_methods[] = {
     M("delete",           "(II)Ljava/lang/StringBuilder;",        0),
     M("deleteCharAt",     "(I)Ljava/lang/StringBuilder;",         0),
     M("insert",           "(ILjava/lang/String;)Ljava/lang/StringBuilder;", 0),
-    M("insert",           "(IC)Ljava/lang/StringBuilder;",        0)
+    M("insert",           "(IC)Ljava/lang/StringBuilder;",        0),
+    M("insert",           "(I[C)Ljava/lang/StringBuilder;",       0)
 };
 
 static const nj_builtin_field stringbuffer_fields[] = {
@@ -1719,7 +1774,8 @@ static const nj_builtin_method stringbuffer_methods[] = {
     M("delete",           "(II)Ljava/lang/StringBuffer;",        0),
     M("deleteCharAt",     "(I)Ljava/lang/StringBuffer;",         0),
     M("insert",           "(ILjava/lang/String;)Ljava/lang/StringBuffer;", 0),
-    M("insert",           "(IC)Ljava/lang/StringBuffer;",        0)
+    M("insert",           "(IC)Ljava/lang/StringBuffer;",        0),
+    M("insert",           "(I[C)Ljava/lang/StringBuffer;",       0)
 };
 
 /*
@@ -1829,6 +1885,7 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/StringBuffer", "deleteCharAt",   "(I)Ljava/lang/StringBuffer;", sb_deleteCharAt },
     { "java/lang/StringBuffer", "insert",         "(ILjava/lang/String;)Ljava/lang/StringBuffer;", sb_insert_str },
     { "java/lang/StringBuffer", "insert",         "(IC)Ljava/lang/StringBuffer;", sb_insert_char },
+    { "java/lang/StringBuffer", "insert",         "(I[C)Ljava/lang/StringBuffer;", sb_insert_chars },
 
     /* StringBuilder: the covariant descriptors javac emits.  Same natives as
      * StringBuffer - the return type is OBJECT either way. */
@@ -1856,6 +1913,7 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/StringBuilder", "deleteCharAt", "(I)Ljava/lang/StringBuilder;", sb_deleteCharAt },
     { "java/lang/StringBuilder", "insert",       "(ILjava/lang/String;)Ljava/lang/StringBuilder;", sb_insert_str },
     { "java/lang/StringBuilder", "insert",       "(IC)Ljava/lang/StringBuilder;", sb_insert_char },
+    { "java/lang/StringBuilder", "insert",         "(I[C)Ljava/lang/StringBuilder;", sbld_insert_chars },
 };
 const int nj_lib_string_count =
     (int)(sizeof(nj_lib_string_table) / sizeof(nj_lib_string_table[0]));
