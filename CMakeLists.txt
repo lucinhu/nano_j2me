@@ -403,6 +403,7 @@ if(NJ_BUILD_TESTS)
   # game called it; this walks the whole class library instead of waiting.
   nj_add_test(test_natives   tests/test_natives.c)
   nj_add_test(test_m3g       tests/test_m3g.c)
+  nj_add_test(test_m3g_file tests/test_m3g_file.c)
   nj_add_test(test_wireless tests/test_wireless.c)
 
   # What the PORT observed, not what the VM counted: threads, GC, audio and

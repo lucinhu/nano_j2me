@@ -38,8 +38,116 @@
 #include "nj_internal.h"
 #include "nj_midp.h"
 
+#include <stdio.h>
 #include <math.h>
 #include <string.h>
+
+
+/*
+ * ---------------------------------------------------------------------------
+ * The .m3g container.
+ * ---------------------------------------------------------------------------
+ *
+ * JSR 184 files start with a twelve byte header and are then a chain of
+ * sections that must tile the file exactly:
+ *
+ *     0   version                    (0x10 = 1.0, 0x11 = 1.1)
+ *     1   has external references
+ *     2   total file size            (big endian, INCLUDING this header)
+ *     6   approximate content size
+ *     10  ???  - the header is 12 bytes, so two bytes here are reserved
+ *
+ *     then, repeatedly:  id (1 byte), length (4 bytes big endian, including
+ *                        those five bytes), payload (length - 5 bytes)
+ *
+ * Everything above is checked here and nothing else.  That is deliberate: this
+ * function exists to turn "the file is not a .m3g" and "the file is a .m3g
+ * whose section 3 is truncated" into two different answers, because the second
+ * one is our bug and the first one is the game's.  Interpreting the payloads is
+ * the next step and is not pretended here.
+ */
+#define NJ_M3G_HEADER 12u
+
+static nj_u4 be32(const nj_u1 *p)
+{
+    return ((nj_u4)p[0] << 24) | ((nj_u4)p[1] << 16) |
+           ((nj_u4)p[2] << 8) | (nj_u4)p[3];
+}
+
+#define M3G_FAIL(...)                                                     \
+    do {                                                                  \
+        if (err && errcap) {                                              \
+            snprintf(err, errcap, __VA_ARGS__);                           \
+        }                                                                 \
+        return NJ_ERR_FORMAT;                                            \
+    } while (0)
+
+/*
+ * Returns NJ_OK when the container is well formed.  ids, when given, receives
+ * the first id_count section ids (0xff fills the unused entries).
+ *
+ * NOT VALIDATED AGAINST THIS PROJECT'S GAMES, and that is worth writing down.
+ * All 196 files named .m3g across the collected titles begin with the bytes
+ * ab 4a and none of them begins with 0x10 or 0x11, so they are a vendor
+ * container that borrowed the extension, not JSR 184 files.  The check below
+ * is what the specification says and is exercised by tests/test_m3g_file.c;
+ * what it has not had is a real conforming file to agree with.  The section
+ * id numbers in the comment above come from the specification, not from
+ * measurement, and should not be trusted until one is seen.
+ */
+nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
+                                 nj_u1 *ids, nj_u4 id_count,
+                                 char *err, nj_u4 errcap)
+{
+    nj_u4 off, total;
+    nj_u4 nids = 0;
+
+    if (err && errcap) { err[0] = '\0'; }
+    if (!p) { M3G_FAIL("no bytes"); }
+    if (n < NJ_M3G_HEADER) {
+        M3G_FAIL("only %lu byte(s): a .m3g header alone is %u", (unsigned long)n,
+                 (unsigned)NJ_M3G_HEADER);
+    }
+    if (p[0] != 0x10u && p[0] != 0x11u) {
+        M3G_FAIL("version 0x%02x is not 0x10 (1.0) or 0x11 (1.1)", (unsigned)p[0]);
+    }
+    total = be32(p + 2);
+    if (total != n) {
+        M3G_FAIL("the header says %lu byte(s) and the file has %lu",
+                 (unsigned long)total, (unsigned long)n);
+    }
+    off = NJ_M3G_HEADER;
+    while (off < n) {
+        nj_u4 len;
+        if (n - off < 5u) {
+            M3G_FAIL("section at offset %lu has only %lu byte(s) of header",
+                     (unsigned long)off, (unsigned long)(n - off));
+        }
+        len = be32(p + off + 1);
+        if (len < 5u) {
+            M3G_FAIL("section 0x%02x at offset %lu claims %lu byte(s), less than "
+                     "its own five byte header", (unsigned)p[off],
+                     (unsigned long)off, (unsigned long)len);
+        }
+        if (len > n - off) {
+            M3G_FAIL("section 0x%02x at offset %lu claims %lu byte(s) but only "
+                     "%lu remain", (unsigned)p[off], (unsigned long)off,
+                     (unsigned long)len, (unsigned long)(n - off));
+        }
+        if (ids && nids < id_count) { ids[nids] = p[off]; }
+        nids++;
+        off += len;
+    }
+    if (off != n) {
+        M3G_FAIL("the sections end at %lu, not at the end of the file (%lu)",
+                 (unsigned long)off, (unsigned long)n);
+    }
+    if (ids) {
+        nj_u4 i;
+        for (i = nids; i < id_count; i++) { ids[i] = 0xffu; }
+    }
+    return NJ_OK;
+}
 
 #define NJFN(name) NJ_NATIVE_FN(name)
 
