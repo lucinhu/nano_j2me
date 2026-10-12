@@ -520,6 +520,39 @@ NJFN(throwable_fillInStackTrace)
     return NJ_OK;
 }
 
+/*
+ * printStackTrace() prints the frames of the running thread, because the VM
+ * has them: nj_vm_describe_threads() walks them already.
+ *
+ * Limitation, stated here because it is visible in the output: this is the
+ * call chain AT THE MOMENT OF THE CALL, not a snapshot taken where the
+ * exception was constructed.  A faithful stack trace is captured by
+ * Throwable.<init>, and exceptions here do not carry one yet.  What this does
+ * give is the method and pc of whoever is handling the exception - which is
+ * what turned 疯狂企鹅's useless "NullPointerException" with no location into
+ * "DCTuxedo.b(I)V pc=2017" and showed the throw was inside the game's own
+ * catch block.
+ */
+static void trace_sink(void *ud, const char *line)
+{
+    nj_vm *vm = (nj_vm *)ud;
+    const char *p = line;
+
+    /* nj_vm_describe_threads() prefixes every line for the --where flag, and
+     * indents the frames behind it.  A stack trace has its own indentation. */
+    if (p[0]=='w'&&p[1]=='h'&&p[2]=='e'&&p[3]=='r'&&p[4]=='e'&&p[5]==':'&&p[6]==' ') {
+        p += 7;
+    }
+    while (*p == ' ') {
+        p++;
+    }
+    /* Its first line names the thread; a stack trace has no use for it. */
+    if (p[0]=='t'&&p[1]=='h'&&p[2]=='r'&&p[3]=='e'&&p[4]=='a'&&p[5]=='d'&&p[6]==' ') {
+        return;
+    }
+    nj_logf(vm, 1, "    at %s", p);
+}
+
 NJFN(throwable_printStackTrace)
 {
     nj_ref o = NJ_THIS(args);
@@ -543,6 +576,7 @@ NJFN(throwable_printStackTrace)
         nj_string_to_utf8(msg, text, (int)sizeof(text));
     }
     nj_logf(vm, 1, "exception: %s%s%s", name, text[0] ? ": " : "", text);
+    nj_vm_describe_threads(vm, trace_sink, vm);
     return NJ_OK;
 }
 
