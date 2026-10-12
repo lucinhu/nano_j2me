@@ -402,3 +402,38 @@ Re-run it with:
 
 The count is a moving target only in one direction: new titles get fetched, and
 if one names something new, this is how it gets found.
+
+## 0e: the whole corpus under ASan + UBSan + LSan
+
+Built on a clean detached worktree at the revision named below, not on the
+shared tree, so an in-flight edit by another writer cannot poison the build:
+
+    git worktree add --detach /tmp/wt118 <rev>
+    cmake -S . -B b -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DNJ_SANITIZE=ON
+    cmake --build b -j 4 --target nj2me-cli
+    ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:halt_on_error=0
+    UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0
+    # every title: ./b/nj2me --port headless --size 240x320 --heap 16 --run-frames 10
+
+| revision | titles | sanitizer findings | non-standard exits | timeouts |
+|---|---|---|---|---|
+| 298-title corpus (earlier) | 298 | 0 | 0 | 0 |
+| `b869aff` | 395 | **0** | 0 | 0 |
+| `406fc7b` (Mascot titles only) | 3 | **0** | 0 | 0 |
+
+Zero AddressSanitizer, LeakSanitizer and UndefinedBehaviorSanitizer findings
+across 395 real titles, and zero timeouts -- the titles that used to hang all
+end at the frame budget now.
+
+Two notes on how to read this, because a sweep is easy to run in a way that
+reports a comforting nothing:
+
+* **An empty findings file is not a result.**  The first version of this script
+  used `set -e`, and a MIDlet exiting non-zero is a normal outcome, so the sweep
+  aborted at the first such title and left `/tmp/san118.txt` empty.  That file
+  is byte-identical to one written by a completed, clean sweep.  Check the
+  script's own summary line (`ran=… findings=…`), not the file's emptiness.
+* The sweep covers the revision it was built at.  `406fc7b` is a three-line
+  move of a statistics counter in `src/midp/nj_lib_mascot.c`, so the three
+  titles that can reach that code were re-run at it rather than re-sweeping all
+  395.
