@@ -570,13 +570,22 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
             w_z(vm, player, F_P_STREAM, 0);
             return 0;
         }
+        /*
+         * pcm_write() takes FRAMES, not samples: it multiplies by the channel
+         * count itself.  Passing got * chan here made the port queue
+         * chan times the audio it was handed - four times as much for a
+         * stereo Player - and read past the scratch to fill the difference,
+         * which is heard as a stutter that alternates between fragments of
+         * the song.  The position advances by what the port ACCEPTED, as the
+         * whole-buffer path below already did.
+         */
         took = vm->port->pcm_write(vm->port->ud,
                                    (const nj_s2 *)(const void *)scratch,
-                                   (int)(got * (nj_u4)chan));
+                                   (int)got);
         if (took < 0) {
             return 0;
         }
-        w_i(vm, player, F_P_PUSHED, done + (nj_s4)(got));
+        w_i(vm, player, F_P_PUSHED, done + (nj_s4)took);
         {
             nj_s8 us = (nj_s8)(done + (nj_s4)got) * 1000000LL
                        / (nj_s8)r_i(vm, player, F_P_RATE);
@@ -1576,6 +1585,29 @@ NJFN(player_setMediaTime)
     }
     if (dur > 0 && want > dur) {
         want = dur;
+    }
+    /*
+     * A streamed Player renders as it goes, so the position it reports has to
+     * move the renderer too: a game that stops the theme, seeks to the start
+     * and starts it again would otherwise hear the tune resume in the middle.
+     */
+    if (r_z(vm, self, F_P_STREAM)) {
+        nj_ref data = r_r(vm, self, F_P_DATA, "[B");
+        if (data != NULL && barray_bytes(data) != NULL) {
+            struct nj_midi_stream *st = NULL;
+            nj_s4 rate = r_i(vm, self, F_P_RATE);
+            memcpy(&st, barray_bytes(data), sizeof(st));
+            if (st != NULL) {
+                nj_u4 target = (nj_u4)((nj_u8)want
+                                       * (nj_u8)(rate > 0 ? rate : 1)
+                                       / 1000000u);
+                nj_u4 got = nj_midi_stream_seek(st, target);
+                w_i(vm, self, F_P_PUSHED, (nj_s4)got);
+                if (rate > 0) {
+                    want = (nj_s8)got * 1000000LL / (nj_s8)rate;
+                }
+            }
+        }
     }
     w_j(vm, self, F_P_TIME, want);
     ret->j = want;

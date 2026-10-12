@@ -77,5 +77,10 @@ struct nj_midi_stream *nj_midi_stream_open(const void *data, nj_u4 size,
 nj_u4 nj_midi_stream_channels(const struct nj_midi_stream *s);
 nj_u4 nj_midi_stream_frames(const struct nj_midi_stream *s);
 nj_u4 nj_midi_stream_pull(struct nj_midi_stream *s, nj_u1 *out, nj_u4 want);
+/*
+ * Jump to a frame.  Returns the frame actually reached, which is the end of
+ * the song when the target is past it.
+ */
+nj_u4 nj_midi_stream_seek(struct nj_midi_stream *s, nj_u4 frame);
 void nj_midi_stream_close(struct nj_midi_stream *s);
 #endif /* NJ_MIDI_H */

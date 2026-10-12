@@ -1431,6 +1431,58 @@ int main(void)
         }
     }
 
+    /*
+     * A seek has to put the synth back where it was.  A Player that ignores
+     * setMediaTime() carries on from wherever it had got to, which is heard as
+     * the music jumping into another part of the tune.
+     */
+    {
+        nj_u1 file[512];
+        nj_u4 n = build_voiced(file, NULL, 0u, 0u, 69u);
+        struct nj_midi_stream *s = nj_midi_stream_open(file, n, &MEM);
+        nj_u1 a[4096];
+        nj_u1 b[4096];
+        nj_u4 chans = 1u;
+        nj_u4 got1 = 0u;
+        nj_u4 got2 = 0u;
+
+        check(s != NULL, "a stream opens for the seek test");
+        if (s != NULL) {
+            chans = nj_midi_stream_channels(s);
+            got1 = nj_midi_stream_pull(s, a, 512u);
+            check(nj_midi_stream_seek(s, 0u) == 0u,
+                  "a seek back to the start lands on frame 0");
+            got2 = nj_midi_stream_pull(s, b, 512u);
+            check(got1 > 0u && got1 == got2
+                      && memcmp(a, b, (nj_size)got1 * (nj_size)chans * 2u) == 0,
+                  "the frames after a seek are the frames from the start");
+            if (!(got1 > 0u && got1 == got2
+                      && memcmp(a, b, (nj_size)got1 * (nj_size)chans * 2u) == 0)) {
+                printf("     seek: %u frames then %u\n",
+                       (unsigned)got1, (unsigned)got2);
+            }
+            {
+                struct nj_midi_stream *f = nj_midi_stream_open(file, n, &MEM);
+                nj_u1 c[4096];
+                nj_u4 want = 512u;   /* the buffers below hold this much */
+                if (f != NULL) {
+                    nj_u4 gotf = nj_midi_stream_pull(f, c, want);
+                    nj_u4 seeked = nj_midi_stream_seek(s, want);
+                    /* the fresh stream has to be at the same frame: pull the
+                     * first 512 and throw them away */
+                    gotf = nj_midi_stream_pull(f, c, want);
+                    got2 = nj_midi_stream_pull(s, b, want);
+                    check(seeked == want && got2 == gotf
+                              && memcmp(b, c,
+                                        (nj_size)gotf * (nj_size)chans * 2u) == 0,
+                          "a seek into the song matches a fresh stream pulled there");
+                    nj_midi_stream_close(f);
+                }
+            }
+            nj_midi_stream_close(s);
+        }
+    }
+
     t_free(NULL, pcm);
     printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures != 0;

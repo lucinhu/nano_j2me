@@ -941,6 +941,8 @@ typedef struct nj_midi_stream {
     nj_u4 chans;
     nj_u4 frames;                 /* what the song needs, tail included */
     nj_u4 i;                      /* the frame the next pull starts at */
+    const void *data;             /* the file, so a seek can re-open it */
+    nj_u4 size;
     nj_u4 ev;
     nj_u4 cev;
     nj_u4 bend_now[16];
@@ -967,16 +969,32 @@ typedef struct nj_midi_stream {
     nj_midi_mem mem;
 } nj_midi_stream;
 
+/*
+ * Release what a stream owns, but NOT the struct itself: a seek keeps the
+ * caller's stream and moves a fresh state into it.
+ */
+static void mid_stream_clear(nj_midi_stream *s)
+{
+    if (s == NULL || s->mem.free == NULL) {
+        return;
+    }
+    s->mem.free(s->mem.ud, s->song.notes);
+    s->mem.free(s->mem.ud, s->song.ctls);
+    s->mem.free(s->mem.ud, s->rev);
+    s->mem.free(s->mem.ud, s->chor);
+    s->song.notes = NULL;
+    s->song.ctls = NULL;
+    s->rev = NULL;
+    s->chor = NULL;
+}
+
 static void mid_stream_drop(nj_midi_stream *s)
 {
     if (s == NULL) {
         return;
     }
+    mid_stream_clear(s);
     if (s->mem.free != NULL) {
-        s->mem.free(s->mem.ud, s->song.notes);
-        s->mem.free(s->mem.ud, s->song.ctls);
-        s->mem.free(s->mem.ud, s->rev);
-        s->mem.free(s->mem.ud, s->chor);
         s->mem.free(s->mem.ud, s);
     }
 }
@@ -991,6 +1009,8 @@ static int mid_stream_init(nj_midi_stream *s, const void *data, nj_u4 size,
     if (mem == NULL || mem->alloc == NULL || mem->free == NULL) {
         return 0;
     }
+    s->data = data;
+    s->size = size;
 
     mid_rd r;
     nj_u4 ntrk = 0u;
@@ -1634,6 +1654,57 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
 void nj_midi_stream_close(nj_midi_stream *s)
 {
     mid_stream_drop(s);
+}
+
+/*
+ * Jump to a frame.  A MIDI stream cannot be indexed - the synth state at frame
+ * N is the product of every event before it - so a seek re-opens the song and
+ * renders the frames it skips.  Rendering runs at a hundred times real time or
+ * better, so seeking even a long file costs a few milliseconds; the
+ * alternative is a Player that ignores setMediaTime() and carries on from
+ * where it was, which is heard as the music jumping to another part of the
+ * tune.
+ */
+nj_u4 nj_midi_stream_seek(nj_midi_stream *s, nj_u4 frame)
+{
+    nj_midi_stream *fresh;
+    nj_u1 *tmp;
+    nj_u4 chunk = NJ_MIDI_RATE / 4u;      /* a quarter of a second at a time */
+    nj_u4 done = 0u;
+
+    if (s == NULL) {
+        return 0u;
+    }
+    if (frame >= s->frames) {
+        s->i = s->frames;
+        return s->frames;
+    }
+    fresh = nj_midi_stream_open(s->data, s->size, &s->mem);
+    if (fresh == NULL) {
+        return 0u;
+    }
+    tmp = (nj_u1 *)s->mem.alloc(s->mem.ud, chunk * 4u);
+    if (tmp == NULL) {
+        nj_midi_stream_close(fresh);      /* frees the shell as well */
+        return 0u;
+    }
+    while (done < frame) {
+        nj_u4 want = frame - done;
+        nj_u4 got;
+        if (want > chunk) {
+            want = chunk;
+        }
+        got = nj_midi_stream_pull(fresh, tmp, want);
+        if (got == 0u) {
+            break;
+        }
+        done += got;
+    }
+    s->mem.free(s->mem.ud, tmp);
+    mid_stream_clear(s);                  /* the old song and voices */
+    *s = *fresh;                          /* take over the fresh state */
+    s->mem.free(s->mem.ud, fresh);        /* the shell, not its contents */
+    return done;
 }
 
 nj_midi_stream *nj_midi_stream_open(const void *data, nj_u4 size, const nj_midi_mem *mem)
