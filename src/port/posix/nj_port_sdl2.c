@@ -256,10 +256,29 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
      */
     SDL_RaiseWindow(s->window);
     SDL_SetWindowInputFocus(s->window);
+    /*
+     * Raising and focusing is not always enough: an Xwayland window that the
+     * window manager will not activate still receives nothing, and SDL hands
+     * the key to whatever surface the compositor focused.  A keyboard grab
+     * bypasses activation entirely - measured here: without it a synthetic
+     * Return leaves the picture byte-identical, with it the MIDlet repaints.
+     * Opt-in, because SDL documents a keyboard grab as a VM-frontend tool
+     * that also captures Alt+Tab and the Meta key, which is not what a player
+     * wants from a windowed emulator by default.
+     */
+    {
+        const char *grab = getenv("NJ_SDL_GRAB");
+
+        if (grab != NULL && grab[0] != '\0' && grab[0] != '0') {
+            SDL_SetWindowKeyboardGrab(s->window, SDL_TRUE);
+            sdl_log(NULL, 2, "keys: keyboard grabbed (NJ_SDL_GRAB)");
+        }
+    }
     sdl_log(NULL, 2,
             "keys: arrows=up/down/left/right  Enter/Space=fire  F1=soft-left"
             "  Esc/F2=soft-right  Backspace=clear  0-9 * #  "
-            "Z/X/C/V=game A/B/C/D  mouse: click and drag");
+            "Z/X/C/V=game A/B/C/D  mouse: click and drag"
+            "  (NJ_SDL_GRAB=1 if the window cannot be focused)");
 
     *w = s->width;
     *h = s->height;
