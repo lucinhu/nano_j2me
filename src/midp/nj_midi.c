@@ -652,6 +652,7 @@ typedef struct {
     nj_u4 rev;                  /* CC91 send, 0..127, from the channel */
     nj_u1 wave;
     nj_u1 tone;                 /* MID_W_DRUM: the tone's share */
+    nj_u1 filt;                 /* low pass divisor: small = bright */
     nj_u4 phase;                /* 32-bit phase accumulator */
     nj_u4 step;                 /* phase increment per sample */
     nj_u4 noise;                /* linear feedback shift register, for noise */
@@ -1054,6 +1055,14 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                 voices[v].chan = song.notes[ev].chan;
                 voices[v].wave = song.notes[ev].wave;
                 voices[v].tone = song.notes[ev].tone;
+                /*
+                 * Velocity is not only loudness.  A hard note opens the
+                 * filter, the way a struck string or a blown reed gets
+                 * brighter the harder it is played; velocity 100 keeps the
+                 * divisor this voice used before the filter followed it.
+                 */
+                voices[v].filt = (nj_u1)(1u
+                    + (127u - song.notes[ev].velocity) * 7u / 127u);
                 voices[v].phase = 0u;
                 voices[v].note_step = mid_step_for(song.notes[ev].note);
                 voices[v].base_step = voices[v].note_step;
@@ -1228,7 +1237,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                 if (voices[v].wave != MID_W_SQUARE) {
                     raw = raw * amp / 32768;    /* scale to this note's level */
                 }
-                voices[v].lp += (raw - voices[v].lp) / 2;
+                voices[v].lp += (raw - voices[v].lp) / (nj_s4)voices[v].filt;
                 mix += voices[v].lp;
                 if (voices[v].rev != 0u) {
                     bus += voices[v].lp * (nj_s4)voices[v].rev / 127;

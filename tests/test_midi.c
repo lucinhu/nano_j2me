@@ -276,6 +276,46 @@ static nj_u4 build_voiced(nj_u1 *out, const nj_u1 *prefix, nj_u4 plen,
     return n;
 }
 
+/* The level of the sample-to-sample difference: a crude high pass, which is
+ * what tells a bright note from a dull one at the same loudness. */
+static nj_u8 pcm_hf(const nj_u1 *pcm, nj_u4 frames, nj_u4 from, nj_u4 to)
+{
+    nj_u8 sumsq = 0u;
+    nj_u4 n = 0u;
+    nj_u4 i;
+
+    for (i = from + 1u; i < to && i < frames; i++) {
+        nj_s4 d = pcm_at(pcm, i) - pcm_at(pcm, i - 1u);
+        sumsq += (nj_u8)(nj_s4)(d * d);
+        n++;
+    }
+    return (n == 0u) ? 0u : isqrt64(sumsq / n);
+}
+
+static nj_u4 build_track(nj_u1 *out, const nj_u1 *body, nj_u4 blen);
+
+/* A one-note file at a chosen velocity: a hard note has to be brighter than a
+ * soft one at the same pitch, and only two of them side by side show that. */
+static nj_u4 build_at(nj_u1 *out, nj_u1 chan, nj_u1 note, nj_u1 vel)
+{
+    static const nj_u1 body[] = {
+        0x00, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20,   /* tempo */
+        0x00, 0xC0, 40,                             /* strings: bright and held */
+        0x00, 0x90, 0x45, 0x64,                     /* note on: patched below */
+        0x83, 0x60, 0x80, 0x45, 0x40,               /* +480: note off */
+        0x00, 0xFF, 0x2F, 0x00
+    };
+    nj_u1 b[sizeof(body)];
+
+    memcpy(b, body, sizeof(body));
+    b[11] = (nj_u1)(0x90u | chan);
+    b[12] = note;
+    b[13] = vel;
+    b[16] = (nj_u1)(0x80u | chan);
+    b[17] = note;
+    return build_track(out, b, (nj_u4)sizeof(b));
+}
+
 /* Wrap a track body that the test wrote out byte by byte. */
 static nj_u4 build_track(nj_u1 *out, const nj_u1 *body, nj_u4 blen)
 {
@@ -876,6 +916,40 @@ int main(void)
               "a snare has a drum head under the wires, not just noise");
         printf("     snare crossings %u, hat crossings %u in the first 20 ms\n",
                (unsigned)snare_c, (unsigned)hat_c);
+    }
+
+    /*
+     * Velocity drives the filter, not just the level: hit harder, sound
+     * brighter.  The two notes are compared as high-frequency level over
+     * their own level, so the loudness difference cancels out.
+     */
+    {
+        nj_u1 file[128];
+        nj_u4 n, fr = 0u;
+        nj_u1 *m;
+        nj_u8 loud_hf = 0u, loud_rms = 0u, soft_hf = 0u, soft_rms = 0u;
+
+        n = build_at(file, 0u, 69u, 127u);
+        m = nj_midi_render(file, n, &fr, &MEM);
+        check(m != NULL, "a hard note renders");
+        if (m != NULL) {
+            loud_hf = pcm_hf(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 2u);
+            loud_rms = pcm_rms(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 2u);
+            t_free(NULL, m);
+        }
+        n = build_at(file, 0u, 69u, 32u);
+        m = nj_midi_render(file, n, &fr, &MEM);
+        if (m != NULL) {
+            soft_hf = pcm_hf(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 2u);
+            soft_rms = pcm_rms(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 2u);
+            t_free(NULL, m);
+        }
+        check(loud_rms > 0u && soft_rms > 0u
+              && loud_hf * soft_rms > soft_hf * loud_rms * 2u,
+              "a hard note is brighter, not only louder");
+        printf("     brightness (hf/rms x1000): hard %llu, soft %llu\n",
+               (unsigned long long)(loud_hf * 1000u / (loud_rms ? loud_rms : 1u)),
+               (unsigned long long)(soft_hf * 1000u / (soft_rms ? soft_rms : 1u)));
     }
 
     t_free(NULL, pcm);
