@@ -307,3 +307,30 @@ complete bytes and then indexes past its end.  What is still unverified is only
 how our `DataInputStream` *presents* `2.pak` (the game parses it itself, so a
 value read slightly differently would give the same symptom), and that is where
 a future round should look next.
+
+### The pak path, read instruction by instruction
+
+That lead was followed and closed.  The game's reader is
+
+    public static java.io.DataInputStream a(java.lang.String);
+      aload_0; invokevirtual Object.getClass()Ljava/lang/Class;
+      invokevirtual Class.getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;
+      new java/io/DataInputStream; dup_x1; swap; invokespecial <init>(Ljava/io/InputStream;)V
+
+and the entry walk is `readInt()` for the length, `skip((long)len)` to step
+over an unwanted entry, and `readFully(byte[])` for the wanted one.  Every one
+of those was checked against the file itself:
+
+* `2.pak` is `[int32 big-endian length][data]` repeated -- parsed independently
+  in Python, entry lengths 2827, 6034, 5928, 3126, 836, 626, 700, 521 ... tiling
+  the whole 40908 bytes.
+* `dis_read_int` (`src/midp/nj_lib_io.c:904`) shifts in big-endian order.
+* `is_skip` (`:120`) and `bais_skip` (`:299`) both read `NJ_ARG_LONG(args, 0)`
+  and return `ret->j` -- the long is not mistaken for two ints, which is the
+  trap this project's `tools/check_arg_slots.py` exists for.
+
+So the runtime reads that file exactly as the format says.  The index the game
+computes is its own, and it is out of range in **every** frame, not only during
+the splash: `--dump-every 250` over a 3000-frame run shows nine real colours at
+250/500/750/1000/1250 and one colour (black) from 1500 on, with the
+`ad.a(...) pc=33` throw appearing throughout.
