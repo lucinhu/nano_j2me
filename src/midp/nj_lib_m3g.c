@@ -2375,6 +2375,65 @@ static int m3g_has_file_id(const unsigned char *b, nj_u4 len)
 /* the class an object type maps to; defined with the other tables below */
 static const char *m3g_class_of(nj_u1 type);
 
+/*
+ * Give every Group the children the file names, and set their parent.
+ *
+ * This is a function of its own rather than a loop inside the loader so that a
+ * test can reach it: the loader needs a real .m3g inside a real MIDlet suite,
+ * which a unit test cannot build, while this needs only an object table and
+ * the array the loader is filling.
+ *
+ * The parent IS set, and that is what lets Object3D.find() walk to these
+ * children - without the link a game looking a node up by userID gets null and
+ * then calls addChild(null).  It is only safe because m3g_addChild()
+ * recognises a node that is already in the vector, so the game's own
+ * addChild() for the same node adopts it and returns.
+ */
+nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
+                             nj_ref arr)
+{
+    nj_u4 i;
+
+    if (!vm || !objs || !arr) {
+        return NJ_ERR_STATE;
+    }
+    for (i = 0u; i < nobj; i++) {
+        nj_ref g, kids;
+        nj_u4 k;
+
+        if (objs[i].type != NJ_M3G_T_GROUP || objs[i].fields.nrefs == 0u) {
+            continue;
+        }
+        g = nj_array_get_ref(arr, i + 1u);
+        if (!g) { continue; }
+        kids = nj_rget(vm, g, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
+                                              "L" NJ_C_VECTOR ";", 0));
+        if (!kids) {
+            nj_value vn;
+            kids = nj_object_new(vm, NJ_C_VECTOR);
+            if (!kids) { continue; }
+            kids = nj_root(vm, kids);
+            nj_call(vm, kids, NJ_C_VECTOR, "<init>", "()V", NULL, &vn);
+            nj_rput(vm, g, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
+                                           "L" NJ_C_VECTOR ";", 0), kids);
+        }
+        for (k = 0u; k < objs[i].fields.nrefs; k++) {
+            nj_u4 idx = objs[i].fields.refs[k];
+            nj_value va[5], vr;
+            nj_ref ch;
+            if (idx == 0u || idx > nobj) { continue; }   /* 0 is null */
+            ch = nj_array_get_ref(arr, idx);
+            if (!ch) { continue; }
+            nj_rput(vm, ch, nj_field_lookup(vm, NJ_C_NODE, "_nj_parent",
+                                            "L" NJ_C_NODE ";", 0), g);
+            va[0].r = ch;
+            (void)nj_call(vm, kids, NJ_C_VECTOR, "addElement",
+                          "(Ljava/lang/Object;)V", va, &vr);
+        }
+    }
+    return NJ_OK;
+}
+
 NJFN(m3g_load)
 {
     nj_ref name = NJ_ARG_REF(args, 0);
@@ -2480,63 +2539,9 @@ NJFN(m3g_load)
             }
             nj_root_release(vm, inner);
         }
-        /*
-         * A Group's children are the last thing in its data: a count and that
-         * many object indices (JSR 184 file format section 3.2 and 11.9).
-         * They are put into the Group's own child vector so getChildCount()
-         * and getChild() answer from the file, which is what a game asks for.
-         *
-         * Their parent pointer is deliberately left unset.  The first version
-         * of this called Group.addChild() for them, and Need for Speed Most
-         * Wanted - 20 frames and 69 drawing calls without it - died on
-         * "the node already has a parent", because the game adds the same
-         * nodes itself and JSR 184 gives a Node exactly one parent.  The
-         * file's graph and the game's graph are the same graph.  Leaving the
-         * parent alone means the game's own addChild() still succeeds; it
-         * recognises a node that is already in the vector and adopts it.
-         */
-        for (i = 0u; i < nobj; i++) {
-            nj_ref g, kids;
-            nj_u4 k;
-
-            if (objs[i].type != NJ_M3G_T_GROUP || objs[i].fields.nrefs == 0u) {
-                continue;
-            }
-            g = nj_array_get_ref(arr, i + 1u);
-            if (!g) { continue; }
-            kids = nj_rget(vm, g, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
-                                                  "L" NJ_C_VECTOR ";", 0));
-            if (!kids) {
-                nj_value vn;
-                kids = nj_object_new(vm, NJ_C_VECTOR);
-                if (!kids) { continue; }
-                kids = nj_root(vm, kids);
-                nj_call(vm, kids, NJ_C_VECTOR, "<init>", "()V", NULL, &vn);
-                nj_rput(vm, g, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
-                                               "L" NJ_C_VECTOR ";", 0), kids);
-            }
-            for (k = 0u; k < objs[i].fields.nrefs; k++) {
-                nj_u4 idx = objs[i].fields.refs[k];
-                nj_value va[5], vr;
-                nj_ref ch;
-                if (idx == 0u || idx > nobj) { continue; }   /* 0 is null */
-                ch = nj_array_get_ref(arr, idx);
-                if (!ch) { continue; }
-                /*
-                 * The parent IS set, and that is what makes Object3D.find()
-                 * able to reach these children - it walks the graph, and
-                 * without the link a game looking a node up by userID gets
-                 * null and then calls addChild(null).  Doing this is only
-                 * safe because m3g_addChild() now recognises a node that is
-                 * already in the vector: the game's own addChild() for the
-                 * same node adopts it and returns instead of throwing.
-                 */
-                nj_rput(vm, ch, nj_field_lookup(vm, NJ_C_NODE, "_nj_parent",
-                                                "L" NJ_C_NODE ";", 0), g);
-                va[0].r = ch;
-                (void)nj_call(vm, kids, NJ_C_VECTOR, "addElement",
-                              "(Ljava/lang/Object;)V", va, &vr);
-            }
+        if (nj_m3g_link_groups(vm, objs, nobj, arr) != NJ_OK) {
+            nj_host_free(vm, objs);
+            return NJ_ERR;
         }
         /*
          * What is still not linked is the rest of the graph, and that is a

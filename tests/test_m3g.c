@@ -495,6 +495,65 @@ int main(void)
                             "setWinding", "(I)V", a, NULL) != NJ_OK,
               "setWinding(16896) is accepted, so the constants are still ours");
     }
+    /* ---- the file's Group children reach the Group --------------------- */
+    {
+        /*
+         * The loader builds one Java object per file object and hands the
+         * table to nj_m3g_link_groups().  That used to be a loop inside
+         * Loader.load(), which no unit test can reach - it needs a real .m3g
+         * inside a real MIDlet suite - so the state it takes is built here
+         * instead: three Groups, the first naming the other two.
+         */
+        nj_m3g_object objs[3];
+        nj_ref arr, g0, g1, g2;
+        nj_value one, c;
+
+        memset(objs, 0, sizeof(objs));
+        objs[0].type = 9u;               /* Group, the file's type number */
+        objs[0].fields.nrefs = 2u;
+        objs[0].fields.refs[0] = 2u;     /* index 1 is the file header */
+        objs[0].fields.refs[1] = 3u;
+        objs[1].type = 9u;
+        objs[2].type = 9u;
+
+        arr = nj_object_array_new(vm, CLS("Object3D"), 4u);
+        check(arr != 0, "the loader's object array is built");
+        g0 = make(vm, CLS("Group"));
+        g1 = make(vm, CLS("Group"));
+        g2 = make(vm, CLS("Group"));
+        check(g0 && g1 && g2, "three groups exist");
+        nj_array_set_ref(arr, 1u, g0);
+        nj_array_set_ref(arr, 2u, g1);
+        nj_array_set_ref(arr, 3u, g2);
+        check(nj_m3g_link_groups(vm, objs, 3u, arr) == NJ_OK,
+              "the linker accepts the table");
+
+        call(vm, g0, CLS("Group"), "getChildCount", "()I", NULL, &c);
+        check(c.i == 2, "the group has the two children the file names");
+        one.i = 0;
+        call(vm, g0, CLS("Group"), "getChild", "(I)L" CLS("Node") ";", &one, &c);
+        check(c.r == g1, "getChild(0) is the first child the file names");
+        one.i = 1;
+        call(vm, g0, CLS("Group"), "getChild", "(I)L" CLS("Node") ";", &one, &c);
+        check(c.r == g2, "getChild(1) is the second");
+
+        /* The game adds a child the file already listed: it must be adopted,
+           not added twice and not refused. */
+        one.r = g1;
+        call(vm, g0, CLS("Group"), "addChild", "(L" CLS("Node") ";)V", &one, &c);
+        call(vm, g0, CLS("Group"), "getChildCount", "()I", NULL, &c);
+        check(c.i == 2, "adopting a child the file listed does not duplicate it");
+
+        /* A node with a parent of its own is still refused.  The assertion is
+           on the CALL FAILING, not on a value: "c.r == 0 || 1" is true of
+           everything and would have been this file's third assertion that
+           cannot fail. */
+        one.r = g2;
+        check(nj_call(vm, g1, CLS("Group"), "addChild", "(L" CLS("Node") ";)V",
+                      &one, &c) != NJ_OK,
+              "a node that already has a parent is still refused");
+        nj_take_exception(vm);
+    }
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
     /* The file format calls type 18 Sprite; the titles call the class

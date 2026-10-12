@@ -618,4 +618,9 @@ nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
                               nj_u4 *count, nj_u4 *sections,
                               char *err, nj_u4 errcap);
 
+/* Give every Group in an object table the children the file names.  Split out
+   of Loader.load() so a test can reach it without a real MIDlet suite. */
+nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
+                             nj_ref arr);
+
 #endif /* NJ_VM_H */
