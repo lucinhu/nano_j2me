@@ -462,6 +462,93 @@ NJFN(fc_openInputStream)
     return NJ_OK;
 }
 
+/*
+ * openOutputStream() hands back a FileOutputStream over the resolved host
+ * path.  The path is resolved HERE, by the module that owns the sandbox, so a
+ * MIDlet cannot step outside the root by opening a stream instead of a
+ * connection - the stream only ever sees an already-validated path.
+ */
+NJFN(fc_openOutputStream)
+{
+    char path[NJ_FC_PATHMAX];
+    char host[NJ_FC_PATHMAX];
+    nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
+    nj_ref ps, os;
+    nj_value a[1];
+
+    if (fget_int(vm, NJ_THIS(args), F_CLOSED, "Z")) {
+        return fc_throw_closed(vm);
+    }
+    if (nj_string_to_utf8(url, path, (int)sizeof(path)) <= 0 ||
+        fc_resolve(vm, path, host, sizeof(host)) != 0) {
+        return nj_throw(vm, "java/io/IOException", "path is not accessible");
+    }
+    ps = nj_string_new(vm, host);
+    if (!ps) {
+        return nj_throw_oom(vm);
+    }
+    os = nj_object_new(vm, "java/io/FileOutputStream");
+    if (!os) {
+        return NJ_ERR;
+    }
+    a[0].r = ps;
+    if (nj_call_special(vm, os, "java/io/FileOutputStream", "<init>",
+                        "(Ljava/lang/String;)V", a, NULL) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = os;
+    return NJ_OK;
+}
+
+/*
+ * The two data-stream forms differ from the plain ones only by a wrapper, so
+ * each builds the plain form and wraps the result.  Wrapping rather than
+ * reimplementing is what keeps a single answer to "where does this file live".
+ */
+NJFN(fc_openDataOutputStream)
+{
+    nj_ref inner, out;
+    nj_value a[1];
+
+    if (fc_openOutputStream(vm, th, args, ret) != NJ_OK) {
+        return NJ_ERR;
+    }
+    inner = ret->r;
+    out = nj_object_new(vm, "java/io/DataOutputStream");
+    if (!out) {
+        return NJ_ERR;
+    }
+    a[0].r = inner;
+    if (nj_call_special(vm, out, "java/io/DataOutputStream", "<init>",
+                        "(Ljava/io/OutputStream;)V", a, NULL) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = out;
+    return NJ_OK;
+}
+
+NJFN(fc_openDataInputStream)
+{
+    nj_ref inner, in;
+    nj_value a[1];
+
+    if (fc_openInputStream(vm, th, args, ret) != NJ_OK) {
+        return NJ_ERR;
+    }
+    inner = ret->r;
+    in = nj_object_new(vm, "java/io/DataInputStream");
+    if (!in) {
+        return NJ_ERR;
+    }
+    a[0].r = inner;
+    if (nj_call_special(vm, in, "java/io/DataInputStream", "<init>",
+                        "(Ljava/io/InputStream;)V", a, NULL) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = in;
+    return NJ_OK;
+}
+
 /* Operations that are deliberately not implemented, each saying so. */
 NJFN(fc_not_impl)
 {
@@ -861,9 +948,9 @@ const nj_native_entry nj_lib_fc_table[] = {
     { NJ_C_FC, "delete",  "()V", fc_delete },
     { NJ_C_FC, "setFileConnection", "(Ljava/lang/String;)V", fc_setFileConnection },
     { NJ_C_FC, "availableSize", "()J", fc_fileSize },
-    { NJ_C_FC, "openOutputStream",   "()Ljava/io/OutputStream;", fc_not_impl },
-    { NJ_C_FC, "openDataInputStream",  "()Ljava/io/DataInputStream;", fc_not_impl },
-    { NJ_C_FC, "openDataOutputStream", "()Ljava/io/DataOutputStream;", fc_not_impl },
+    { NJ_C_FC, "openOutputStream",   "()Ljava/io/OutputStream;", fc_openOutputStream },
+    { NJ_C_FC, "openDataInputStream",  "()Ljava/io/DataInputStream;", fc_openDataInputStream },
+    { NJ_C_FC, "openDataOutputStream", "()Ljava/io/DataOutputStream;", fc_openDataOutputStream },
     { NJ_C_FC, "setReadable", "(Z)V", fc_not_impl },
     { NJ_C_FC, "setWritable", "(Z)V", fc_not_impl },
     { NJ_C_FC, "setHidden",   "(Z)V", fc_not_impl },

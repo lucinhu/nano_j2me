@@ -208,6 +208,18 @@ int main(int argc, char **argv)
            strcmp(v, "game.nes|") == 0,
            "the \"*.nes\" filter matches one file and not the others");
 
+        /*
+         * Reader/Writer, and specifically the five methods CLDC defines as
+         * concrete on top of the abstract ones.  skip(2) followed by
+         * read(char[4]) must land on "CDEF": if skip were a no-op the text
+         * would be "ABCD", and if read(char[]) did not forward to the stream
+         * it would not be "CDEF" either.  Three Writer overloads put the text
+         * there, so a stub that wrote nothing fails here too.
+         */
+        ok(field(&cap, "rw", v, sizeof(v)) &&
+           strcmp(v, "skip=2 n=4 text=CDEF") == 0,
+           "Reader.skip(long) and Reader.read(char[]) skip and read the stream");
+
         /* ---- the sandbox ---- */
         {
             const char *p = cap.buf;

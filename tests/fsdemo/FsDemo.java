@@ -55,6 +55,39 @@ public class FsDemo extends MIDlet {
             FileConnection d = (FileConnection) Connector.open("file:///root/");
             say("rootname", "[" + d.getName() + "]");
             say("rootdir", "" + d.isDirectory());
+            /*
+             * Reader/Writer over a real file: the five methods CLDC defines as
+             * concrete on top of the abstract ones.  Each is called and its
+             * result printed, because "it did not throw" is not evidence that
+             * it read or wrote the right thing.
+             *
+             * Written under sub/ so the listing counts asserted below keep
+             * the values they had.
+             */
+            FileConnection rw =
+                (FileConnection) Connector.open("file:///root/sub/rw.txt");
+            if (!rw.exists()) { rw.create(); }
+            java.io.OutputStreamWriter w =
+                new java.io.OutputStreamWriter(rw.openOutputStream());
+            w.write('A');                       /* Writer.write(int) */
+            w.write(new char[] { 'B', 'C' });   /* Writer.write(char[]) */
+            w.write("DEF");                     /* Writer.write(String) */
+            w.close();
+            rw.close();
+
+            FileConnection rr =
+                (FileConnection) Connector.open("file:///root/sub/rw.txt");
+            java.io.InputStreamReader rd =
+                new java.io.InputStreamReader(rr.openInputStream());
+            long sk = rd.skip(2);               /* Reader.skip(long) */
+            char[] buf = new char[4];
+            int n = rd.read(buf);               /* Reader.read(char[]) */
+            String seen = "";
+            for (int i = 0; i < n; i++) { seen = seen + buf[i]; }
+            say("rw", "skip=" + sk + " n=" + n + " text=" + seen);
+            rd.close();
+            rr.close();
+
             Enumeration en = d.list();
             String acc = "";
             int ndir = 0, nfile = 0;

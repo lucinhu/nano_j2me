@@ -42,8 +42,9 @@
 
 /* Defined further down, next to the other stream helpers; the tables are
  * emitted before them. */
-NJFN(isr_init); NJFN(isr_read); NJFN(isr_ready); NJFN(isr_close);
-NJFN(osw_init); NJFN(osw_write); NJFN(osw_flush);
+NJFN(isr_init); NJFN(isr_read); NJFN(isr_range); NJFN(isr_ready);
+NJFN(isr_close);
+NJFN(osw_init); NJFN(osw_write); NJFN(osw_range); NJFN(osw_flush);
 
 /* ------------------------------------------------------------------ */
 /* java.io.InputStream                                                 */
@@ -1033,6 +1034,128 @@ static const nj_builtin_method bais_methods[] = {
     M("close",          "()V", 0)
 };
 
+/* ------------------------------------------------------------------ */
+/* java.io.FileOutputStream                                            */
+/* ------------------------------------------------------------------ */
+/*
+ * Not a CLDC class, and not pretending to be one: FileConnection
+ * .openOutputStream() has to hand back an OutputStream that is backed by a
+ * file, and this is the smallest honest way to do it.  It is a
+ * ByteArrayOutputStream that also remembers where to write, so the inherited
+ * write(int) / write(byte[],int,int) need no code at all, and close() pours
+ * the buffer into the file.
+ *
+ * Buffering instead of writing through is what keeps the C side stateless: a
+ * FILE * cannot live in a Java field and the runtime may not keep one in a
+ * global.  The path arrives already resolved against the sandbox root, because
+ * FileConnection is the module that owns that decision.
+ */
+#define FOS "java/io/FileOutputStream"
+#define FOS_PATHMAX 1024
+
+static const nj_builtin_field fos_fields[] = {
+    FLD("path", "Ljava/lang/String;", 0)
+};
+static const nj_builtin_method fos_methods[] = {
+    M("<init>", "(Ljava/lang/String;)V", NJ_ACC_PUBLIC),
+    M("flush",  "()V", NJ_ACC_PUBLIC),
+    M("close",  "()V", NJ_ACC_PUBLIC)
+};
+
+/*
+ * Replace `path` with `data`.  A port that can open files is asked first,
+ * because that is the only route that exists when the runtime is built without
+ * a C library; libc is the fallback, not the other way round.
+ */
+static int fos_write_host(nj_vm *vm, const char *path, const void *data,
+                          nj_u4 n)
+{
+    if (vm->port && vm->port->file_open) {
+        nj_file f;
+        int ok;
+        if (vm->port->file_open(vm->port->ud, path, "wb", &f) != NJ_OK) {
+            return 0;
+        }
+        ok = (n == 0u) ||
+             (vm->port->file_write(vm->port->ud, &f, data, n) == (nj_s4)n);
+        vm->port->file_close(vm->port->ud, &f);
+        return ok;
+    }
+#if NJ_USE_LIBC
+    {
+        FILE *fp = fopen(path, "wb");
+        int ok;
+        if (!fp) {
+            return 0;
+        }
+        ok = (n == 0u) || (fwrite(data, 1u, (size_t)n, fp) == (size_t)n);
+        fclose(fp);
+        return ok;
+    }
+#else
+    (void)path;
+    (void)data;
+    (void)n;
+    return 0;
+#endif
+}
+
+NJFN(fos_init)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref path = NJ_ARG_REF(args, 0);
+    nj_ref buf;
+
+    if (!path) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    /*
+     * ByteArrayOutputStream's half, set up here rather than by calling its
+     * <init>, which takes the buffer capacity this constructor spends on the
+     * path instead.
+     */
+    buf = nj_byte_array_new(vm, 32u);
+    if (!buf) {
+        return nj_throw_oom(vm);
+    }
+    nj_field_write_ref(vm, self, fld(vm, BAOS, "buf", "[B"), buf);
+    nj_field_write_int(vm, self, fld(vm, BAOS, "count", "I"), 0);
+    nj_field_write_ref(vm, self, fld(vm, FOS, "path", "Ljava/lang/String;"),
+                       path);
+    return NJ_OK;
+}
+
+NJFN(fos_flush)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref path;
+    nj_ref buf;
+    nj_s4 count;
+    char host[FOS_PATHMAX];
+
+    path = nj_field_read_ref(vm, self,
+                             fld(vm, FOS, "path", "Ljava/lang/String;"));
+    buf = nj_field_read_ref(vm, self, fld(vm, BAOS, "buf", "[B"));
+    count = nj_field_read_int(vm, self, fld(vm, BAOS, "count", "I"));
+
+    if (!path || nj_string_to_utf8(path, host, (int)sizeof(host)) <= 0) {
+        return nj_throw(vm, "java/io/IOException", "no path to write to");
+    }
+    if (count < 0) {
+        count = 0;
+    }
+    if (!fos_write_host(vm, host, buf ? (const void *)buf->u.bytes : NULL,
+                        (nj_u4)count)) {
+        return nj_throw(vm, "java/io/IOException", "cannot write the file");
+    }
+    return NJ_OK;
+}
+
+NJFN(fos_close)
+{
+    return fos_flush(vm, th, args, ret);
+}
+
 static const nj_builtin_field baos_fields[] = {
     FLD("buf", "[B", 0), FLD("count", "I", 0)
 };
@@ -1231,6 +1354,85 @@ NJFN(osw_write)
     return nj_call(vm, out, NJ_C_OSTREAM, "write", "(I)V", a, NULL);
 }
 
+/*
+ * The range forms, which are where CLDC's concrete methods actually arrive:
+ * write(char[]), write(String) and read(char[]) all funnel into
+ * write(char[],int,int) and read(char[],int,int).  An OutputStreamWriter that
+ * only implements write(int) therefore turns every character-stream write
+ * into a method error - which is exactly what the reader/writer end-to-end
+ * fixture found the first time it ran.
+ *
+ * ISO-8859-1 again: the low byte each way, the same identity isr_read relies
+ * on, so a round trip through these two is byte-exact rather than approximately
+ * right.
+ */
+NJFN(osw_range)
+{
+    nj_ref out = strm_field(vm, NJ_THIS(args), NJ_C_OSW, "oswOut",
+                            "Ljava/io/OutputStream;");
+    nj_ref chars = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 len = NJ_ARG_INT(args, 2);
+    nj_s4 i;
+
+    if (!out) {
+        return nj_throw(vm, "java/io/IOException", "stream is closed");
+    }
+    if (!chars) {
+        return nj_throw(vm, "java/lang/NullPointerException", "buffer is null");
+    }
+    if (off < 0 || len < 0 || (nj_u4)(off + len) > chars->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    for (i = 0; i < len; i++) {
+        nj_value a[1];
+        a[0].i = (nj_s4)(((nj_u2 *)chars->u.bytes)[off + i] & 0xFFu);
+        if (nj_call(vm, out, NJ_C_OSTREAM, "write", "(I)V", a, NULL) != NJ_OK) {
+            return NJ_ERR;
+        }
+    }
+    return NJ_OK;
+}
+
+NJFN(isr_range)
+{
+    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_ISR, "isrIn",
+                           "Ljava/io/InputStream;");
+    nj_ref chars = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 len = NJ_ARG_INT(args, 2);
+    nj_s4 i = 0;
+    nj_value r;
+
+    if (!in) {
+        return nj_throw(vm, "java/io/IOException", "stream is closed");
+    }
+    if (!chars) {
+        return nj_throw(vm, "java/lang/NullPointerException", "buffer is null");
+    }
+    if (off < 0 || len < 0 || (nj_u4)(off + len) > chars->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    /*
+     * Read one byte at a time and stop at the first end of stream.  Returning
+     * the short count is the contract: -1 means nothing was read at all, and a
+     * zero-length request must not consume a byte.
+     */
+    while (i < len) {
+        r.i = 0;
+        if (nj_call(vm, in, NJ_C_ISTREAM, "read", "()I", NULL, &r) != NJ_OK) {
+            return NJ_ERR;
+        }
+        if (r.i < 0) {
+            break;
+        }
+        ((nj_u2 *)chars->u.bytes)[off + i] = (nj_u2)(r.i & 0xFF);
+        i++;
+    }
+    ret->i = (i == 0 && len > 0) ? -1 : i;
+    return NJ_OK;
+}
+
 NJFN(osw_flush)
 {
     nj_ref out = strm_field(vm, NJ_THIS(args), NJ_C_OSW, "oswOut",
@@ -1408,6 +1610,7 @@ static const nj_builtin_method isr_methods[] = {
     RM("<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V",
        NJ_ACC_PUBLIC),
     RM("read",   "()I", NJ_ACC_PUBLIC),
+    RM("read",   "([CII)I", NJ_ACC_PUBLIC),
     RM("ready",  "()Z", NJ_ACC_PUBLIC),
     RM("close",  "()V", NJ_ACC_PUBLIC)
 };
@@ -1416,6 +1619,7 @@ static const nj_builtin_method osw_methods[] = {
     RM("<init>", "(L" NJ_C_OSTREAM ";Ljava/lang/String;)V",
        NJ_ACC_PUBLIC),
     RM("write",  "(I)V", NJ_ACC_PUBLIC),
+    RM("write",  "([CII)V", NJ_ACC_PUBLIC),
     RM("flush",  "()V", NJ_ACC_PUBLIC),
     RM("close",  "()V", NJ_ACC_PUBLIC)
 };
@@ -1484,6 +1688,9 @@ const nj_builtin_class nj_lib_io_classes[] = {
     { "java/io/ByteArrayOutputStream", "java/io/OutputStream", NJ_ACC_PUBLIC,
       baos_fields, (nj_u2)(sizeof(baos_fields) / sizeof(baos_fields[0])),
       baos_methods, (nj_u2)(sizeof(baos_methods) / sizeof(baos_methods[0])) },
+    { FOS, BAOS, NJ_ACC_PUBLIC,
+      fos_fields, (nj_u2)(sizeof(fos_fields) / sizeof(fos_fields[0])),
+      fos_methods, (nj_u2)(sizeof(fos_methods) / sizeof(fos_methods[0])) },
     { "java/io/DataInputStream", "java/io/InputStream", NJ_ACC_PUBLIC,
       dis_fields, (nj_u2)(sizeof(dis_fields) / sizeof(dis_fields[0])),
       dis_methods, (nj_u2)(sizeof(dis_methods) / sizeof(dis_methods[0])) },
@@ -1552,6 +1759,9 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/ByteArrayOutputStream", "reset",       "()V", baos_reset },
     { "java/io/ByteArrayOutputStream", "toString",    "()Ljava/lang/String;", baos_toString },
     { "java/io/ByteArrayOutputStream", "close",       "()V", baos_reset },
+    { FOS, "<init>", "(Ljava/lang/String;)V", fos_init },
+    { FOS, "flush",  "()V", fos_flush },
+    { FOS, "close",  "()V", fos_close },
 
     { "java/io/DataInputStream", "<init>",           "(Ljava/io/InputStream;)V", dis_init },
     { "java/io/DataInputStream", "read",             "()I", dis_read },
@@ -1588,24 +1798,19 @@ const nj_native_entry nj_lib_io_table[] = {
     { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";)V", isr_init },
     { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V", isr_init },
     { NJ_C_ISR, "read",  "()I", isr_read },
+    { NJ_C_ISR, "read",  "([CII)I", isr_range },
     { NJ_C_ISR, "ready", "()Z", isr_ready },
     { NJ_C_ISR, "close", "()V", isr_close },
     { NJ_C_OSW, "<init>", "(L" NJ_C_OSTREAM ";)V", osw_init },
     { NJ_C_OSW, "<init>", "(L" NJ_C_OSTREAM ";Ljava/lang/String;)V", osw_init },
     { NJ_C_OSW, "write", "(I)V", osw_write },
+    { NJ_C_OSW, "write", "([CII)V", osw_range },
     { NJ_C_OSW, "flush", "()V", osw_flush },
     { NJ_C_OSW, "close", "()V", osw_flush },
     { "javax/microedition/io/Connector", "open", "(Ljava/lang/String;)Ljavax/microedition/io/Connection;", connector_open },
     { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";)V", isr_init },
     { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V", isr_init },
-    { NJ_C_ISR, "read",  "()I", isr_read },
-    { NJ_C_ISR, "ready", "()Z", isr_ready },
-    { NJ_C_ISR, "close", "()V", isr_close },
-    { NJ_C_OSW, "<init>", "(L" NJ_C_OSTREAM ";)V", osw_init },
-    { NJ_C_OSW, "<init>", "(L" NJ_C_OSTREAM ";Ljava/lang/String;)V", osw_init },
-    { NJ_C_OSW, "write", "(I)V", osw_write },
-    { NJ_C_OSW, "flush", "()V", osw_flush },
-    { NJ_C_OSW, "close", "()V", osw_flush },
+
     { "javax/microedition/io/Connector", "open", "(Ljava/lang/String;I)Ljavax/microedition/io/Connection;", connector_open_stream },
     { "javax/microedition/io/Connector", "openInputStream", "(Ljava/lang/String;)Ljava/io/InputStream;", connector_open },
     { "javax/microedition/io/Connector", "openOutputStream", "(Ljava/lang/String;)Ljava/io/OutputStream;", connector_open },
