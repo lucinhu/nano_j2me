@@ -241,10 +241,14 @@ static nj_field *fld(nj_vm *vm, const char *cls, const char *name,
 
 NJFN(bais_init)
 {
+    /* ByteArrayInputStream(byte[] buf) - ONE argument slot.  The null check
+     * used to be written as `!buf && NJ_ARG_INT(args, 1) != 0`, but there is
+     * no slot 1 in this form: it read the operand-stack word above the frame,
+     * which is whatever the calling expression left there. */
     nj_ref self = NJ_THIS(args);
     nj_ref buf = NJ_ARG_REF(args, 0);
 
-    if (!buf && NJ_ARG_INT(args, 1) != 0) {
+    if (!buf) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
     nj_field_write_ref(vm, self, fld(vm, BAIS, "buf", "[B"), buf);
@@ -369,18 +373,41 @@ static nj_status baos_ensure(nj_vm *vm, nj_ref self, nj_s4 need)
     return NJ_OK;
 }
 
-NJFN(baos_init)
+static nj_status baos_init_capacity(nj_vm *vm, nj_ref self, nj_u4 cap)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_s4 cap = (args != NULL && NJ_ARG_INT(args, 0) > 0) ? NJ_ARG_INT(args, 0)
-                                                          : 32;
-    nj_ref buf = nj_byte_array_new(vm, (nj_u4)cap);
+    nj_ref buf = nj_byte_array_new(vm, cap);
+
     if (!buf) {
         return nj_throw_oom(vm);
     }
     nj_field_write_ref(vm, self, fld(vm, BAOS, "buf", "[B"), buf);
     nj_field_write_int(vm, self, fld(vm, BAOS, "count", "I"), 0);
     return NJ_OK;
+}
+
+NJFN(baos_init)
+{
+    /* ByteArrayOutputStream() - the default 32 bytes.  This method takes NO
+     * arguments, so there is no argument window here: `args` points at the
+     * operand-stack word above the frame and nothing may read args[0]. */
+    return baos_init_capacity(vm, NJ_THIS(args), 32u);
+}
+
+NJFN(baos_init_cap)
+{
+    /* ByteArrayOutputStream(int size), bound separately on purpose.  While
+     * the two constructors shared one entry, the no-argument form still read
+     * args[0] - the operand-stack word above its own frame, an old reference
+     * or loop counter.  Whenever that word happened to be large and positive
+     * the runtime allocated it and raised OutOfMemoryError from inside a
+     * <clinit>.  Which titles died, and whether they died at all, moved with
+     * the heap layout, so it read like a memory shortage and was not one. */
+    nj_s4 size = NJ_ARG_INT(args, 0);
+
+    if (size < 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", NULL);
+    }
+    return baos_init_capacity(vm, NJ_THIS(args), (nj_u4)size);
 }
 
 NJFN(baos_write)
@@ -1751,7 +1778,7 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/ByteArrayInputStream", "close",         "()V", bais_close },
 
     { "java/io/ByteArrayOutputStream", "<init>",      "()V", baos_init },
-    { "java/io/ByteArrayOutputStream", "<init>",      "(I)V", baos_init },
+    { "java/io/ByteArrayOutputStream", "<init>",      "(I)V", baos_init_cap },
     { "java/io/ByteArrayOutputStream", "write",       "(I)V", baos_write },
     { "java/io/ByteArrayOutputStream", "write",       "([BII)V", baos_write_range },
     { "java/io/ByteArrayOutputStream", "toByteArray", "()[B", baos_toByteArray },
