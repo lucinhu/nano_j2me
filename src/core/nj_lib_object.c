@@ -227,6 +227,7 @@ NJFN(class_getResourceAsStream)
     nj_ref ba;
     nj_ref in;
     nj_value a[1];
+    nj_u4 mark;
 
     if (!cname) {
         return nj_throw(vm, "java/lang/NullPointerException", "name is null");
@@ -256,23 +257,37 @@ NJFN(class_getResourceAsStream)
         ret->r = NULL;
         return NJ_OK;
     }
+    /*
+     * Both the byte array and the stream are held only in these C locals, and
+     * creating the stream allocates: an unrooted array is collected here and
+     * the stream then wraps recycled memory.  寻秦皇陵的诅咒_12450 read every
+     * one of its 143 "/name.i" images as empty (Image.createImage(data, 0, 0)
+     * -> IllegalArgumentException "no image data") because of exactly that.
+     */
+    mark = nj_root_mark(vm);
     ba = nj_byte_array_new(vm, len);
     if (!ba) {
         nj_host_free(vm, data);
+        nj_root_release(vm, mark);
         return NJ_ERR;
     }
+    ba = nj_root(vm, ba);
     memcpy(ba->u.bytes, data, (size_t)len);
     nj_host_free(vm, data);
 
     in = nj_object_new(vm, "java/io/ByteArrayInputStream");
     if (!in) {
+        nj_root_release(vm, mark);
         return NJ_ERR;
     }
+    in = nj_root(vm, in);
     a[0].r = ba;
     if (nj_call_special(vm, in, "java/io/ByteArrayInputStream", "<init>",
                         "([B)V", a, NULL) != NJ_OK) {
+        nj_root_release(vm, mark);
         return NJ_ERR;
     }
+    nj_root_release(vm, mark);
     ret->r = in;
     return NJ_OK;
 }
