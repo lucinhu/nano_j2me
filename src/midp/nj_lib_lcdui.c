@@ -8219,12 +8219,25 @@ NJFN(dg_getNativePixelFormat)
  */
 NJFN(dg_drawImage)
 {
-    nj_value a[4];
+    /*
+     * drawImage(Image, x, y, anchor, manipulation) - the Nokia form, which
+     * adds a manipulation argument to the standard method.
+     *
+     * This forwarded through nj_call with a FOUR-slot argument array.  The
+     * callee takes five (receiver, image, x, y, anchor), so it read one slot
+     * past the end: a corpus title that called it ended up dispatching on a
+     * receiver that was really the caller's own stack word, and the emulator
+     * segfaulted three frames later inside nj_method_lookup.  Call the
+     * implementation with the array it actually wants, and with the receiver
+     * and the parameters in the slots it expects.
+     */
+    nj_value a[5];
 
-    a[0] = args[0];
-    a[1] = args[1];
-    a[2] = args[2];
-    a[3] = args[3];
+    a[0] = args[0];     /* the Graphics */
+    a[1] = args[1];     /* the Image */
+    a[2] = args[2];     /* x */
+    a[3] = args[3];     /* y */
+    a[4] = args[4];     /* anchor; args[5], the manipulation, is ignored */
     return nj_call(vm, NJ_THIS(args), NJ_C_GRAPHICS, "drawImage",
                    "(L" NJ_C_IMAGE ";III)V", a, NULL);
 }
