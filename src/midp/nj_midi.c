@@ -20,7 +20,8 @@
  * There is no wavetable and no reverb.  What there is: a General MIDI program
  * is mapped to a waveform family (square, triangle, saw, noise) and an
  * envelope (held, struck, percussive), the note's channel decides its volume
- * (controller 7 and 11) and channel 10 is played as drums.  A note is one
+ * (controller 7 and 11), its pitch bend and its sustain pedal, and channel 10
+ * is played as drums.  A note is one
  * oscillator with a short attack and release, mixed with the other notes that
  * are on at the same time.  That is a long way from a SoundFont, and it is a
  * very long way from silence.
@@ -59,6 +60,16 @@
 
 #define NJ_MIDI_MAX_EVENTS 8192u
 #define NJ_MIDI_MAX_TEMPOS 64u
+#define NJ_MIDI_MAX_CTLS 2048u
+
+/* Channel events the renderer follows while the notes play. */
+#define MID_CTL_BEND  0u
+#define MID_CTL_PEDAL 1u
+#define MID_CTL_RANGE 2u
+
+/* Pitch bend: 14 bits, 8192 is no bend. */
+#define MID_BEND_CENTRE 8192u
+#define MID_BEND_DEFAULT_RANGE 2u
 
 /* The percussion channel of a General MIDI file. */
 #define MID_CHANNEL_DRUMS 9u
@@ -200,11 +211,21 @@ typedef struct {
     nj_u4 tick;
     nj_u4 note;                 /* 0..127 */
     nj_u4 velocity;
+    nj_u4 chan;
     nj_u1 wave;                 /* resolved from the channel's program */
     nj_u2 decay_ms;             /* 0 = held */
     nj_u4 gain;                 /* channel volume * expression, 0..127 */
     int   on;
 } mid_note;
+
+/* A bend, a pedal or a bend-range change: things that happen to notes that are
+ * already sounding, so they cannot live in the note list. */
+typedef struct {
+    nj_u4 tick;
+    nj_u4 chan;
+    nj_u4 kind;
+    nj_u4 a;                    /* bend: the 14-bit value; else the value */
+} mid_ctl;
 
 typedef struct {
     nj_u4 tick;
@@ -215,6 +236,10 @@ typedef struct {
     mid_note  *notes;
     nj_u4      nnotes;
     nj_u4      capnotes;
+
+    mid_ctl   *ctls;
+    nj_u4      nctls;
+    nj_u4      capctls;
 
     mid_tempo  tempos[NJ_MIDI_MAX_TEMPOS];
     nj_u4      ntempos;
@@ -227,11 +252,15 @@ typedef struct {
     nj_u4      program[16];
     nj_u4      volume[16];      /* controller 7, 100 is the General MIDI default */
     nj_u4      expr[16];        /* controller 11, 127 is the default */
+    nj_u4      bend[16];        /* last pitch bend seen, 14 bits */
+    nj_u4      bend_range[16];  /* semitones at full deflection, from RPN 0 */
+    nj_u4      pedal[16];       /* sustain pedal state at the end of the file */
+    nj_u4      rpn[16];         /* the registered parameter being selected */
 } mid_song;
 
 static int mid_add_note(mid_song *s, const nj_midi_mem *mem,
                         nj_u4 tick, nj_u4 note, nj_u4 vel, int on,
-                        nj_u1 wave, nj_u2 decay_ms, nj_u4 gain)
+                        nj_u1 wave, nj_u2 decay_ms, nj_u4 gain, nj_u4 chan)
 {
     if (s->nnotes == s->capnotes) {
         nj_u4 cap = (s->capnotes == 0u) ? 256u : s->capnotes * 2u;
@@ -256,11 +285,43 @@ static int mid_add_note(mid_song *s, const nj_midi_mem *mem,
     s->notes[s->nnotes].tick = tick;
     s->notes[s->nnotes].note = note;
     s->notes[s->nnotes].velocity = vel;
+    s->notes[s->nnotes].chan = chan;
     s->notes[s->nnotes].wave = wave;
     s->notes[s->nnotes].decay_ms = decay_ms;
     s->notes[s->nnotes].gain = gain;
     s->notes[s->nnotes].on = on;
     s->nnotes++;
+    return 1;
+}
+
+static int mid_add_ctl(mid_song *s, const nj_midi_mem *mem,
+                       nj_u4 tick, nj_u4 chan, nj_u4 kind, nj_u4 a)
+{
+    if (s->nctls == s->capctls) {
+        nj_u4 cap = (s->capctls == 0u) ? 64u : s->capctls * 2u;
+        mid_ctl *c;
+        if (cap > NJ_MIDI_MAX_CTLS) {
+            cap = NJ_MIDI_MAX_CTLS;
+        }
+        if (s->nctls >= cap) {
+            return 1;           /* full: keep what we have, do not fail */
+        }
+        c = (mid_ctl *)mem->alloc(mem->ud, (nj_size)cap * sizeof(*c));
+        if (c == NULL) {
+            return 0;
+        }
+        if (s->ctls != NULL) {
+            memcpy(c, s->ctls, (nj_size)s->nctls * sizeof(*c));
+            mem->free(mem->ud, s->ctls);
+        }
+        s->ctls = c;
+        s->capctls = cap;
+    }
+    s->ctls[s->nctls].tick = tick;
+    s->ctls[s->nctls].chan = chan;
+    s->ctls[s->nctls].kind = kind;
+    s->ctls[s->nctls].a = a;
+    s->nctls++;
     return 1;
 }
 
@@ -363,12 +424,36 @@ static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
             if (!mid_u8(r, &d2)) {
                 return;
             }
-            if (hi == 0xB0u) {          /* control change */
+            if (hi == 0xE0u) {          /* pitch bend: 14 bits, centre 8192 */
+                nj_u4 val = ((d2 & 0x7Fu) << 7) | (d1 & 0x7Fu);
+                s->bend[chan] = val;
+                if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_BEND, val)) {
+                    return;
+                }
+            } else if (hi == 0xB0u) {   /* control change */
                 nj_u4 cc = d1 & 0x7Fu;
+                nj_u4 val = d2 & 0x7Fu;
                 if (cc == 7u) {
-                    s->volume[chan] = d2 & 0x7Fu;
+                    s->volume[chan] = val;
                 } else if (cc == 11u) {
-                    s->expr[chan] = d2 & 0x7Fu;
+                    s->expr[chan] = val;
+                } else if (cc == 64u) {         /* sustain pedal */
+                    s->pedal[chan] = (val >= 64u) ? 1u : 0u;
+                    if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_PEDAL, val)) {
+                        return;
+                    }
+                } else if (cc == 101u) {        /* RPN MSB */
+                    s->rpn[chan] = (s->rpn[chan] & 0x7Fu) | (val << 7);
+                } else if (cc == 100u) {        /* RPN LSB */
+                    s->rpn[chan] = (s->rpn[chan] & 0x3F80u) | val;
+                } else if (cc == 6u && s->rpn[chan] == 0u) {
+                    /* Data entry on RPN 0: how many semitones full deflection
+                     * means.  A file that says 12 is asking for an octave. */
+                    nj_u4 range = (val == 0u) ? 1u : ((val > 12u) ? 12u : val);
+                    s->bend_range[chan] = range;
+                    if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_RANGE, range)) {
+                        return;
+                    }
                 }
             } else if (hi == 0x90u && d2 != 0u) {
                 nj_u1 wave;
@@ -385,12 +470,12 @@ static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
                 }
                 gain = (s->volume[chan] & 0x7Fu) * (s->expr[chan] & 0x7Fu) / 127u;
                 if (!mid_add_note(s, mem, tick, note, d2 & 0x7Fu, 1,
-                                  wave, decay_ms, gain)) {
+                                  wave, decay_ms, gain, chan)) {
                     return;
                 }
             } else if (hi == 0x80u || hi == 0x90u) {
                 if (!mid_add_note(s, mem, tick, d1 & 0x7Fu, 0u, 0,
-                                  0u, 0u, 0u)) {
+                                  0u, 0u, 0u, chan)) {
                     return;
                 }
             }
@@ -445,7 +530,10 @@ static nj_u4 mid_sample_at(const mid_song *s, nj_u4 tick)
 
 typedef struct {
     int   active;
+    int   sustained;            /* the pedal is holding this note down */
     nj_u4 note;
+    nj_u4 chan;
+    nj_u4 base_step;            /* phase increment before the bend */
     nj_u1 wave;
     nj_u4 phase;                /* 32-bit phase accumulator */
     nj_u4 step;                 /* phase increment per sample */
@@ -494,6 +582,33 @@ static nj_u4 mid_step_for(nj_u4 note)
 }
 
 /*
+ * The channel's bend as a Q16 multiplier: 8192 is no bend, and the range says
+ * how many semitones full deflection means.  The curve is linear where the ear
+ * wants exponential, which is off by under two percent at full deflection -
+ * inaudible for a bend.
+ */
+static nj_u4 mid_bend_ratio(nj_u4 bend, nj_u4 range)
+{
+    nj_s4 off = (nj_s4)bend - (nj_s4)MID_BEND_CENTRE;
+    nj_s4 delta;
+
+    if (off == 0 || range == 0u) {
+        return 65536u;
+    }
+    delta = off * (nj_s4)range * 4014 / 8192;
+    if (delta <= -60000) {
+        return 5536u;           /* a floor, so the step never reaches zero */
+    }
+    return (nj_u4)(65536 + delta);
+}
+
+static void mid_apply_pitch(mid_voice *v, nj_u4 bend, nj_u4 range)
+{
+    v->step = (nj_u4)(((nj_u8)v->base_step
+                       * (nj_u8)mid_bend_ratio(bend, range)) >> 16);
+}
+
+/*
  * Events are collected track by track, and a format 1 file may interleave
  * them, so put them in tick order before playback walks them.
  */
@@ -508,6 +623,20 @@ static void mid_sort_notes(mid_song *s)
             j--;
         }
         s->notes[j] = key;
+    }
+}
+
+static void mid_sort_ctls(mid_song *s)
+{
+    nj_u4 i, j;
+    for (i = 1u; i < s->nctls; i++) {
+        mid_ctl key = s->ctls[i];
+        j = i;
+        while (j > 0u && s->ctls[j - 1u].tick > key.tick) {
+            s->ctls[j] = s->ctls[j - 1u];
+            j--;
+        }
+        s->ctls[j] = key;
     }
 }
 
@@ -528,6 +657,10 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
     mid_voice voices[NJ_MIDI_VOICES];
     nj_u4 v;
     nj_u4 ev = 0u;
+    nj_u4 cev = 0u;
+    nj_u4 bend_now[16];
+    nj_u4 range_now[16];
+    int   pedal_now[16];
 
     if (frames_out != NULL) {
         *frames_out = 0u;
@@ -540,6 +673,12 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
     for (i = 0u; i < 16u; i++) {
         song.volume[i] = 100u;
         song.expr[i] = 127u;
+        song.bend[i] = MID_BEND_CENTRE;
+        song.bend_range[i] = MID_BEND_DEFAULT_RANGE;
+        song.rpn[i] = 0xFFFFu;          /* no registered parameter selected */
+        bend_now[i] = MID_BEND_CENTRE;
+        range_now[i] = MID_BEND_DEFAULT_RANGE;
+        pedal_now[i] = 0;
     }
     r.p = (const nj_u1 *)data;
     r.n = size;
@@ -598,15 +737,24 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
 
     if (song.nnotes == 0u || song.division == 0u) {
         mem->free(mem->ud, song.notes);
+        mem->free(mem->ud, song.ctls);
         return NULL;            /* nothing to play: let the caller stay silent */
     }
 
-    /* Length: the last thing that happens, plus a short tail for the release. */
+    /* Length: the last thing that happens, plus a short tail for the release.
+     * Channel events count too: a pedal that comes up after the last note is
+     * what stops that note, and a buffer that ended at the note-off would
+     * leave it ringing to the end. */
     {
         nj_u4 last = 0u;
         for (i = 0u; i < song.nnotes; i++) {
             if (song.notes[i].tick > last) {
                 last = song.notes[i].tick;
+            }
+        }
+        for (i = 0u; i < song.nctls; i++) {
+            if (song.ctls[i].tick > last) {
+                last = song.ctls[i].tick;
             }
         }
         frames = mid_sample_at(&song, last) + (NJ_MIDI_RATE / 20u);
@@ -621,10 +769,12 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
     }
     if (pcm == NULL) {
         mem->free(mem->ud, song.notes);
+        mem->free(mem->ud, song.ctls);
         return NULL;
     }
 
     mid_sort_notes(&song);
+    mid_sort_ctls(&song);
     memset(voices, 0, sizeof(voices));
 
     /*
@@ -642,6 +792,45 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
     for (i = 0u; i < frames; i++) {
         nj_s4 mix = 0;
         nj_s4 scaled;
+
+        /*
+         * Channel events first: a bend or a pedal that lands on the same
+         * sample as a note-on has to be in force for that note.
+         */
+        while (cev < song.nctls
+               && mid_sample_at(&song, song.ctls[cev].tick) <= i) {
+            nj_u4 ch = song.ctls[cev].chan;
+            nj_u4 kind = song.ctls[cev].kind;
+
+            if (kind == MID_CTL_BEND) {
+                bend_now[ch] = song.ctls[cev].a;
+                for (v = 0u; v < NJ_MIDI_VOICES; v++) {
+                    if (voices[v].active && voices[v].chan == ch) {
+                        mid_apply_pitch(&voices[v], bend_now[ch], range_now[ch]);
+                    }
+                }
+            } else if (kind == MID_CTL_RANGE) {
+                range_now[ch] = song.ctls[cev].a;
+                for (v = 0u; v < NJ_MIDI_VOICES; v++) {
+                    if (voices[v].active && voices[v].chan == ch) {
+                        mid_apply_pitch(&voices[v], bend_now[ch], range_now[ch]);
+                    }
+                }
+            } else if (song.ctls[cev].a >= 64u) {
+                pedal_now[ch] = 1;
+            } else {
+                /* The pedal came up: every note it was holding stops now. */
+                pedal_now[ch] = 0;
+                for (v = 0u; v < NJ_MIDI_VOICES; v++) {
+                    if (voices[v].active && voices[v].chan == ch
+                        && voices[v].sustained) {
+                        voices[v].sustained = 0;
+                        voices[v].end = i;
+                    }
+                }
+            }
+            cev++;
+        }
 
         while (ev < song.nnotes
                && mid_sample_at(&song, song.notes[ev].tick) <= i) {
@@ -665,10 +854,15 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                     continue;   /* all voices busy: drop the note */
                 }
                 voices[v].active = 1;
+                voices[v].sustained = 0;
                 voices[v].note = song.notes[ev].note;
+                voices[v].chan = song.notes[ev].chan;
                 voices[v].wave = song.notes[ev].wave;
                 voices[v].phase = 0u;
-                voices[v].step = mid_step_for(song.notes[ev].note);
+                voices[v].base_step = mid_step_for(song.notes[ev].note);
+                voices[v].step = voices[v].base_step;
+                mid_apply_pitch(&voices[v], bend_now[song.notes[ev].chan],
+                                range_now[song.notes[ev].chan]);
                 voices[v].noise = 0x13579BDFu | 1u;
                 /* ~24% of full scale at velocity 100, then the channel's own
                  * volume and expression. */
@@ -686,10 +880,16 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                 voices[v].start = i;
                 voices[v].end = 0u;
             } else {
+                nj_u4 ch = song.notes[ev].chan;
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
                     if (voices[v].active && voices[v].note == song.notes[ev].note
+                        && voices[v].chan == ch
                         && voices[v].end == 0u) {
-                        voices[v].end = i;
+                        if (pedal_now[ch]) {
+                            voices[v].sustained = 1;    /* the pedal holds it */
+                        } else {
+                            voices[v].end = i;
+                        }
                         break;
                     }
                 }
@@ -789,6 +989,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
     }
 
     mem->free(mem->ud, song.notes);
+    mem->free(mem->ud, song.ctls);
     if (frames_out != NULL) {
         *frames_out = frames;
     }

@@ -253,6 +253,24 @@ static nj_u4 build_voiced(nj_u1 *out, const nj_u1 *prefix, nj_u4 plen,
     return n;
 }
 
+/* Wrap a track body that the test wrote out byte by byte. */
+static nj_u4 build_track(nj_u1 *out, const nj_u1 *body, nj_u4 blen)
+{
+    nj_u4 n = 0u;
+
+    memcpy(out, g_header, sizeof(g_header));
+    n = sizeof(g_header);
+    memcpy(out + n, "MTrk", 4u);
+    n += 4u;
+    out[n++] = (nj_u1)((blen >> 24) & 0xFFu);
+    out[n++] = (nj_u1)((blen >> 16) & 0xFFu);
+    out[n++] = (nj_u1)((blen >> 8) & 0xFFu);
+    out[n++] = (nj_u1)(blen & 0xFFu);
+    memcpy(out + n, body, blen);
+    n += blen;
+    return n;
+}
+
 /* Render one such file and hand back the PCM. */
 static nj_u1 *render_voiced(const nj_u1 *prefix, nj_u4 plen, nj_u1 chan,
                             nj_u1 note, nj_u4 *frames_out)
@@ -476,6 +494,106 @@ int main(void)
         if (!(r_soft < r_loud * 6u / 10u)) {
             printf("     rms loud %llu, soft %llu\n",
                    (unsigned long long)r_loud, (unsigned long long)r_soft);
+        }
+    }
+
+
+    /*
+     * Pitch bend.  47,596 bend events in 464 of the corpus files, and none of
+     * them used to do anything.  A bend to the top of the range has to raise
+     * the pitch of a note that is already sounding: two semitones is 12% more
+     * zero crossings, measured on either side of the bend.
+     */
+    {
+        static const nj_u1 bend_body[] = {
+            0x00, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20,   /* tempo 500000 */
+            0x00, 0xC0, 40,                             /* strings: a held wave */
+            0x00, 0x90, 69, 100,                        /* A4 on */
+            0x81, 0x70, 0xE0, 0x7F, 0x7F,               /* +240 ticks: bend up */
+            0x81, 0x70, 0x80, 69, 64,                   /* +240 ticks: note off */
+            0x00, 0xFF, 0x2F, 0x00
+        };
+        nj_u1 file[128];
+        nj_u4 n = build_track(file, bend_body, (nj_u4)sizeof(bend_body));
+        nj_u4 fr = 0u;
+        nj_u1 *pcm = nj_midi_render(file, n, &fr, &MEM);
+        nj_u4 early = 0u, late = 0u;
+
+        check(pcm != NULL && fr > 0u, "a bend still renders");
+        if (pcm != NULL) {
+            early = pcm_crossings(pcm, fr, 0u, NJ_MIDI_RATE / 5u);
+            late = pcm_crossings(pcm, fr, NJ_MIDI_RATE * 3u / 10u,
+                                 NJ_MIDI_RATE / 2u);
+            t_free(NULL, pcm);
+        }
+        check(early > 0u && late * 100u > early * 108u,
+              "a pitch bend raises the pitch of a sounding note");
+        if (!(early > 0u && late * 100u > early * 108u)) {
+            printf("     crossings before the bend %u, after it %u\n",
+                   (unsigned)early, (unsigned)late);
+        }
+    }
+
+    /*
+     * Sustain pedal.  2,226 pedal-down events in 68 files, and the notes used
+     * to stop dead at their note off regardless.  With the pedal down the note
+     * has to keep sounding, and it has to stop when the pedal comes up.
+     */
+    {
+        static const nj_u1 sus_body[] = {
+            0x00, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20,
+            0x00, 0xC0, 40,                             /* strings */
+            0x00, 0xB0, 64, 127,                        /* pedal down */
+            0x00, 0x90, 69, 100,                        /* A4 on */
+            0x81, 0x70, 0x80, 69, 64,                   /* +240: note off */
+            0x81, 0x70, 0xB0, 64, 0,                    /* +240: pedal up */
+            0x00, 0xFF, 0x2F, 0x00
+        };
+        static const nj_u1 dry_body[] = {
+            0x00, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20,
+            0x00, 0xC0, 40,
+            0x00, 0x90, 69, 100,
+            0x81, 0x70, 0x80, 69, 64,
+            0x00, 0xFF, 0x2F, 0x00
+        };
+        nj_u1 file[128];
+        nj_u4 n, fr = 0u;
+        nj_u1 *pcm;
+        nj_u8 held = 0u, after = 0u, released = 0u;
+        nj_u8 dry_held = 0u, dry_after = 0u;
+
+        n = build_track(file, sus_body, (nj_u4)sizeof(sus_body));
+        pcm = nj_midi_render(file, n, &fr, &MEM);
+        check(pcm != NULL && fr > 0u, "a pedalled note still renders");
+        if (pcm != NULL) {
+            held = pcm_rms(pcm, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 4u);
+            after = pcm_rms(pcm, fr, NJ_MIDI_RATE * 3u / 10u,
+                            NJ_MIDI_RATE * 48u / 100u);
+            released = pcm_rms(pcm, fr, NJ_MIDI_RATE * 52u / 100u,
+                               NJ_MIDI_RATE * 55u / 100u);
+            t_free(NULL, pcm);
+        }
+        n = build_track(file, dry_body, (nj_u4)sizeof(dry_body));
+        pcm = nj_midi_render(file, n, &fr, &MEM);
+        if (pcm != NULL) {
+            dry_held = pcm_rms(pcm, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 4u);
+            dry_after = pcm_rms(pcm, fr, NJ_MIDI_RATE * 3u / 10u,
+                                NJ_MIDI_RATE * 48u / 100u);
+            t_free(NULL, pcm);
+        }
+        check(held > 0u && after * 3u > held,
+              "the sustain pedal holds a note past its note off");
+        check(dry_held > 0u && dry_after * 10u < dry_held,
+              "without the pedal the same note stops at its note off");
+        check(held > 0u && released * 10u < held,
+              "the note stops when the pedal comes up");
+        if (!(held > 0u && after * 3u > held) || !(dry_after * 10u < dry_held)
+            || !(released * 10u < held)) {
+            printf("     pedal rms: sounding %llu, after note off %llu,"
+                   " after release %llu; dry %llu then %llu\n",
+                   (unsigned long long)held, (unsigned long long)after,
+                   (unsigned long long)released, (unsigned long long)dry_held,
+                   (unsigned long long)dry_after);
         }
     }
 
