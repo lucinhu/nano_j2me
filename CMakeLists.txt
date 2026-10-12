@@ -384,6 +384,16 @@ if(NJ_BUILD_TESTS)
   # game called it; this walks the whole class library instead of waiting.
   nj_add_test(test_natives   tests/test_natives.c)
   nj_add_test(test_wireless tests/test_wireless.c)
+
+  # What the PORT observed, not what the VM counted: threads, GC, audio and
+  # file activity on one machine-readable line.  Skipped without a fixture.
+  if(TARGET nj_fixtures)
+    add_test(NAME test_observed_ports
+             COMMAND ${CMAKE_COMMAND} -E env NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_observed.sh
+                     ${NJ_FIXTURES}/gamedemo.jar)
+    set_tests_properties(test_observed_ports PROPERTIES TIMEOUT 120)
+  endif()
   nj_add_test(test_directgraphics tests/test_directgraphics.c)
   nj_add_test(test_blocked_init tests/test_blocked_init.c ${NJ_FIXTURES})
   nj_add_test(test_vm        tests/test_vm.c

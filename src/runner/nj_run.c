@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/stat.h>
 
 /* ------------------------------------------------------------------ */
 /* Reading the archive                                                 */
@@ -512,6 +513,31 @@ static void where_sink(void *ud, const char *line)
     }
 }
 
+/*
+ * mkdir -p, for the RecordStore directory.  Failure is not fatal: if the
+ * directory cannot be made, RMS falls back to failing per store, which is the
+ * same thing that happens on a read-only filesystem and is already handled.
+ */
+static void mkdir_p(const char *path)
+{
+    char tmp[512];
+    size_t i;
+    size_t len = strlen(path);
+
+    if (len == 0u || len >= sizeof(tmp)) {
+        return;
+    }
+    memcpy(tmp, path, len + 1u);
+    for (i = 1u; i < len; i++) {
+        if (tmp[i] == '/') {
+            tmp[i] = '\0';
+            (void)mkdir(tmp, 0777);
+            tmp[i] = '/';
+        }
+    }
+    (void)mkdir(tmp, 0777);
+}
+
 int nj_run(const nj_port *port_in, const nj_run_opts *opts)
 {
     nj_port port;
@@ -523,6 +549,8 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     const char *class_name = NULL;
     int rc = 1;
     int stats = 0;
+    char rms_path[512];
+    rms_path[0] = '\0';
     nj_s8 nj_start_ms = 0;
     nj_s8 nj_end_ms = 0;
 
@@ -531,6 +559,50 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     }
     port = *port_in;
     stats = opts->stats;
+
+    /*
+     * Put RecordStore somewhere that is not the working directory.
+     *
+     * The RMS module falls back to "." when the port does not say, so running a
+     * game dropped its save files wherever you happened to be standing - which
+     * is how a repository ended up with 45 .rms files in its root, named after
+     * whatever each third-party title called its store ("bubblet", "shushan",
+     * "__sfSmsInfo").  They are gitignored, so nothing was ever committed, but
+     * a runtime that writes to the CWD by default is a runtime that litters.
+     *
+     * Worse, "." is also a COLLISION: two games that both call their store
+     * "save" share one file, and the second one to run reads the first one's
+     * high scores.
+     *
+     * So: one directory per game, under the user's data directory when there is
+     * one.  --rms-dir still overrides it, and a port that sets rms_dir itself
+     * is left alone.
+     */
+    if (!port.rms_dir && opts->jar_path && opts->jar_path[0]) {
+        const char *xdg = getenv("XDG_DATA_HOME");
+        const char *home = getenv("HOME");
+        char name[96];
+        int n = 0;
+        const char *q = opts->jar_path + strlen(opts->jar_path);
+
+        /* The JAR's basename, without directories and without the .jar. */
+        while (q > opts->jar_path && q[-1] != '/' && q[-1] != '\\') { q--; }
+        while (*q && *q != '.' && n < (int)sizeof(name) - 1) { name[n++] = *q++; }
+        if (n == 0) { memcpy(name, "game", 5); n = 4; }
+        name[n] = '\0';
+
+        if (xdg && xdg[0]) {
+            snprintf(rms_path, sizeof(rms_path), "%s/nano_j2me/%s", xdg, name);
+        } else if (home && home[0]) {
+            snprintf(rms_path, sizeof(rms_path), "%s/.local/share/nano_j2me/%s",
+                     home, name);
+        } else {
+            /* No home either: keep it out of the way but make it obvious. */
+            snprintf(rms_path, sizeof(rms_path), "%s.rms", name);
+        }
+        mkdir_p(rms_path);
+        port.rms_dir = rms_path;
+    }
     nj_start_ms = (nj_s8)(port.millis ? port.millis(port.ud) : 0u);
     port.user = port_in->user;
 
@@ -759,6 +831,36 @@ done:
                      (unsigned long)s.native_calls,
                      (unsigned long)s.heap_used, (unsigned long)s.heap_peak);
             port.log(port.user, 2, buf);
+
+            /*
+             * What the PORT observed, as opposed to what the VM counted.
+             *
+             * Pixels cannot tell "saved the score" from "silently did
+             * nothing": both are the same sequence of frames.  The headless
+             * port records audio and file activity for exactly that reason,
+             * and this is the line that lets a script assert on it.
+             *
+             * -1 means "this port does not report that at all", which is a
+             * different answer from 0 ("it reports, and nothing happened").
+             * A test that cannot tell those apart passes on a port that was
+             * never wired up.
+             */
+            if (nj_port_headless_file_opens(&port) >= 0 ||
+                nj_port_headless_tone_calls(&port) >= 0) {
+                snprintf(buf, sizeof(buf),
+                         "observed: threads=%u gc=%lu "
+                         "tones=%ld pcm_frames=%ld "
+                         "file_opens=%ld file_writes=%ld file_reads=%ld "
+                         "bytes_written=%ld",
+                         (unsigned)s.threads, (unsigned long)s.gc_count,
+                         (long)nj_port_headless_tone_calls(&port),
+                         (long)nj_port_headless_pcm_frames(&port),
+                         (long)nj_port_headless_file_opens(&port),
+                         (long)nj_port_headless_file_writes(&port),
+                         (long)nj_port_headless_file_reads(&port),
+                         (long)nj_port_headless_bytes_written(&port));
+                port.log(port.user, 2, buf);
+            }
         }
     }
     if (vm) {
