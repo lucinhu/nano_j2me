@@ -437,3 +437,33 @@ reports a comforting nothing:
   move of a statistics counter in `src/midp/nj_lib_mascot.c`, so the three
   titles that can reach that code were re-run at it rather than re-sweeping all
   395.
+
+## The Mascot Capsule rasterizer cannot be validated by this corpus
+
+Four collected titles reference `com.mascotcapsule.micro3d.v3`:
+鬼泣3D中文版_3376, 生化危机3D(CAPCOM经典)_3671, 浴火银河_10189, 浴火银河_3621.
+All four read `tris=0`, and the rasterizer they would exercise is real code
+(`mascot_g3d_renderPrimitives` projects through the layout matrix and fills
+triangles).  Two probes settled why.
+
+**They never call it.**  A probe at the top of `mascot_g3d_renderPrimitives`,
+plus one on each early-return path, run over all four titles for 60 frames:
+
+    entered=0  early=0      (all four titles)
+
+**The probe works.**  A negative result is worth nothing without a positive
+control, so `test_mascot` -- which does drive the rasterizer -- was run against
+the same build:
+
+    PROBE renderPrimitives ENTERED   x2      (test_mascot, 40 checks / 0 failures)
+
+So `tris=0` is the **correct** reading here: there is nothing to rasterize.
+The disassembly references are dead paths -- `javap` counts references in the
+bytecode, not executions, and this is the second time in this project that
+distinction mattered.
+
+What this means for the module: the Mascot code is exercised only by its own
+unit test, not by any real title, so it is held to the same standard as the
+`.m3g` container parser -- implemented, tested against the API as documented,
+and **not** claimed to work on real software, because nothing collected here
+reaches it.
