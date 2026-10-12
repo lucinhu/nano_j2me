@@ -92,9 +92,30 @@ live score and countdown. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 ```sh
 cmake -S . -B build -G Ninja
-cmake --build build
+cmake --build build                    # compiles.  Two seconds.  Nothing else.
+```
+
+To run the tests, generate their data once first:
+
+```sh
+cmake --build build --target nj_fixtures   # needs a JDK; Pillow for PNG/JPEG
 ctest --test-dir build --output-on-failure
 ```
+
+**The fixture step is separate on purpose.**  It runs the PNG/JPEG/zip
+generators, compiles a dozen MIDlet JARs with `javac`, and - only if you ask for
+it - downloads two third-party games from GitHub.  Making that a dependency of
+every build turned `cmake --build` into a multi-second job that had nothing to do
+with compiling and would fail without a network.  It is now:
+
+* **off by default** - `cmake --build build` is a compile, full stop;
+* **explicit** - `--target nj_fixtures` when you want it;
+* **network-free by default** - `-DNJ_FIXTURES_FETCH_GAMES=ON` is what allows the
+  two downloads, because a build should not need GitHub to be reachable;
+* **guarded** - `ctest` reports which command to run instead of failing 25 tests
+  one at a time with "cannot open tests/fixtures/...".
+
+Set `-DNJ_GENERATE_FIXTURES=ON` at configure time to get the old behaviour back.
 
 The headless port is always available and is what the test suite uses. The SDL2
 port is built automatically when `libsdl2-dev` (or the equivalent) is installed.

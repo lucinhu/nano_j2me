@@ -1346,8 +1346,6 @@ nj_ref nj_vm_new_midlet(nj_vm *vm, const char *class_name, nj_ref *out_exc)
     nj_ref o;
     nj_status init_st;
     nj_status ctor_st;
-    nj_status nj_class_init_status;
-    nj_status ctor_status;
 
     if (out_exc) {
         *out_exc = NULL;
