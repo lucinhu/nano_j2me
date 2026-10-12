@@ -117,6 +117,151 @@ static nj_u4 build_phrase(nj_u1 *out)
     return n;
 }
 
+
+/* ------------------------------------------------------------------ */
+/* Measuring what came out: crest factor, level, zero crossings        */
+/* ------------------------------------------------------------------ */
+
+static nj_s4 pcm_at(const nj_u1 *pcm, nj_u4 i)
+{
+    return (nj_s4)(short)((nj_u2)pcm[i * 2u] | ((nj_u2)pcm[i * 2u + 1u] << 8));
+}
+
+/* Integer square root, so the test does not need libm. */
+static nj_u8 isqrt64(nj_u8 v)
+{
+    nj_u8 r = 0u;
+    nj_u8 bit = (nj_u8)1u << 62;
+    while (bit > v) {
+        bit >>= 2;
+    }
+    while (bit != 0u) {
+        if (v >= r + bit) {
+            v -= r + bit;
+            r = (r >> 1) + bit;
+        } else {
+            r >>= 1;
+        }
+        bit >>= 2;
+    }
+    return r;
+}
+
+static nj_u8 pcm_rms(const nj_u1 *pcm, nj_u4 frames, nj_u4 from, nj_u4 to)
+{
+    nj_u8 sumsq = 0u;
+    nj_u4 n = 0u;
+    nj_u4 i;
+
+    for (i = from; i < to && i < frames; i++) {
+        nj_s4 v = pcm_at(pcm, i);
+        sumsq += (nj_u8)(nj_s4)(v * v);
+        n++;
+    }
+    return (n == 0u) ? 0u : isqrt64(sumsq / n);
+}
+
+static nj_s4 pcm_peak(const nj_u1 *pcm, nj_u4 frames, nj_u4 from, nj_u4 to)
+{
+    nj_s4 peak = 0;
+    nj_u4 i;
+
+    for (i = from; i < to && i < frames; i++) {
+        nj_s4 v = pcm_at(pcm, i);
+        nj_s4 a = (v < 0) ? -v : v;
+        if (a > peak) {
+            peak = a;
+        }
+    }
+    return peak;
+}
+
+/* Peak over RMS, times 100: about 100 for a square wave, 150 to 180 for a
+ * triangle or a saw, and past 200 for noise. */
+static int pcm_crest(const nj_u1 *pcm, nj_u4 frames, nj_u4 from, nj_u4 to)
+{
+    nj_u8 rms = pcm_rms(pcm, frames, from, to);
+    if (rms == 0u) {
+        return 0;
+    }
+    return (int)((nj_u8)pcm_peak(pcm, frames, from, to) * 100u / rms);
+}
+
+static nj_u4 pcm_crossings(const nj_u1 *pcm, nj_u4 frames, nj_u4 from, nj_u4 to)
+{
+    nj_u4 i;
+    nj_u4 n = 0u;
+    int prev = 0;
+
+    for (i = from; i < to && i < frames; i++) {
+        nj_s4 v = pcm_at(pcm, i);
+        int sign = (v > 0) ? 1 : ((v < 0) ? -1 : 0);
+        if (sign != 0 && prev != 0 && sign != prev) {
+            n++;
+        }
+        if (sign != 0) {
+            prev = sign;
+        }
+    }
+    return n;
+}
+
+/* A one-note file with a prefix of channel messages in front of it: a program
+ * change, a control change, or both. */
+static nj_u4 build_voiced(nj_u1 *out, const nj_u1 *prefix, nj_u4 plen,
+                          nj_u1 chan, nj_u1 note)
+{
+    nj_u4 n = 0u;
+    /* tempo(7) + [delta + prefix] + note on(4) + note off(5) + end(4) */
+    nj_u4 len = 7u + ((plen != 0u) ? 1u : 0u) + plen + 4u + 5u + 4u;
+    nj_u4 i;
+
+    memcpy(out, g_header, sizeof(g_header));
+    n = sizeof(g_header);
+    memcpy(out + n, "MTrk", 4u);
+    n += 4u;
+    out[n++] = (nj_u1)((len >> 24) & 0xFFu);
+    out[n++] = (nj_u1)((len >> 16) & 0xFFu);
+    out[n++] = (nj_u1)((len >> 8) & 0xFFu);
+    out[n++] = (nj_u1)(len & 0xFFu);
+    out[n++] = 0x00u;
+    out[n++] = 0xFFu;
+    out[n++] = 0x51u;
+    out[n++] = 0x03u;
+    out[n++] = 0x07u;
+    out[n++] = 0xA1u;
+    out[n++] = 0x20u;
+    if (plen != 0u) {
+        out[n++] = 0x00u;           /* the prefix starts at tick 0 too */
+    }
+    for (i = 0u; i < plen; i++) {
+        out[n++] = prefix[i];
+    }
+    out[n++] = 0x00u;
+    out[n++] = (nj_u1)(0x90u | chan);
+    out[n++] = note;
+    out[n++] = 0x64u;
+    out[n++] = 0x83u;
+    out[n++] = 0x60u;               /* held for 480 ticks */
+    out[n++] = (nj_u1)(0x80u | chan);
+    out[n++] = note;
+    out[n++] = 0x40u;
+    out[n++] = 0x00u;
+    out[n++] = 0xFFu;
+    out[n++] = 0x2Fu;
+    out[n++] = 0x00u;
+    return n;
+}
+
+/* Render one such file and hand back the PCM. */
+static nj_u1 *render_voiced(const nj_u1 *prefix, nj_u4 plen, nj_u1 chan,
+                            nj_u1 note, nj_u4 *frames_out)
+{
+    nj_u1 file[128];
+    nj_u4 n = build_voiced(file, prefix, plen, chan, note);
+    return nj_midi_render(file, n, frames_out, &MEM);
+}
+
 int main(void)
 {
     nj_u1 file[sizeof(g_header) + sizeof(g_track)];
@@ -227,6 +372,110 @@ int main(void)
             check(loud, "every quarter of a phrase longer than the voice count"
                         " is audible");
             t_free(NULL, pp);
+        }
+    }
+
+
+    /*
+     * The program number picks the waveform, and the waveforms differ in a way
+     * a test can count: peak over RMS is about 1.2 for a square, 1.5 to 1.8
+     * for a triangle or a saw, and past 2 for noise.
+     */
+    {
+        static const nj_u1 p_brass[2]  = { 0xC0u, 56u };   /* square */
+        static const nj_u1 p_bass[2]   = { 0xC0u, 32u };   /* triangle */
+        static const nj_u1 p_guitar[2] = { 0xC0u, 24u };   /* saw, struck */
+        static const nj_u1 p_noise[2]  = { 0xC0u, 120u };  /* noise */
+        nj_u4 fr = 0u;
+        nj_u4 to;
+        nj_u1 *b = render_voiced(p_brass, 2u, 0u, 69u, &fr);
+        int c_brass = 0, c_bass = 0, c_guitar = 0, c_noise = 0;
+
+        check(b != NULL && fr > 0u, "a program change still renders");
+        if (b != NULL) {
+            to = fr / 2u;
+            c_brass = pcm_crest(b, fr, 0u, to);
+            t_free(NULL, b);
+        }
+        b = render_voiced(p_bass, 2u, 0u, 45u, &fr);
+        if (b != NULL) {
+            c_bass = pcm_crest(b, fr, 0u, fr / 2u);
+            t_free(NULL, b);
+        }
+        b = render_voiced(p_guitar, 2u, 0u, 64u, &fr);
+        if (b != NULL) {
+            c_guitar = pcm_crest(b, fr, 0u, fr / 2u);
+            t_free(NULL, b);
+        }
+        b = render_voiced(p_noise, 2u, 0u, 69u, &fr);
+        if (b != NULL) {
+            c_noise = pcm_crest(b, fr, 0u, fr / 2u);
+            t_free(NULL, b);
+        }
+        check(c_brass > 0 && c_bass > c_brass,
+              "a triangle has a higher crest factor than a square");
+        check(c_guitar > c_brass,
+              "a saw has a higher crest factor than a square");
+        check(c_noise > c_brass + 40,
+              "noise has a much higher crest factor than a pitched wave");
+        if (!(c_bass > c_brass && c_guitar > c_brass && c_noise > c_brass + 40)) {
+            printf("     crest: brass %d, bass %d, guitar %d, noise %d\n",
+                   c_brass, c_bass, c_guitar, c_noise);
+        }
+    }
+
+    /* Channel 10 is drums, and a hi-hat is noise: in its first 50 ms it
+     * changes sign far more often than any pitch could, and it decays away
+     * instead of holding like a note. */
+    {
+        static const nj_u1 p_none[1] = { 0u };
+        nj_u4 fr = 0u;
+        nj_u1 *hat = render_voiced(p_none, 0u, 9u, 42u, &fr);
+        nj_u4 crossings = 0u;
+        nj_u8 early = 0u, late = 0u;
+
+        check(hat != NULL && fr > 0u, "a drum note still renders");
+        if (hat != NULL) {
+            nj_u4 window = NJ_MIDI_RATE / 20u;          /* 50 ms */
+            crossings = pcm_crossings(hat, fr, 0u, window);
+            early = pcm_rms(hat, fr, 0u, window);
+            late = pcm_rms(hat, fr, fr * 3u / 4u, fr);
+            t_free(NULL, hat);
+        }
+        check(crossings > 200u,
+              "a hi-hat on channel 10 is noise, not a pitched note");
+        check(early > 0u && late * 4u < early,
+              "a hi-hat decays away instead of holding");
+        if (crossings <= 200u || !(early > 0u && late * 4u < early)) {
+            printf("     hi-hat crossings in 50 ms: %u, rms %llu then %llu\n",
+                   (unsigned)crossings, (unsigned long long)early,
+                   (unsigned long long)late);
+        }
+    }
+
+    /* Controller 7 is the channel's volume: a quiet channel has to be quiet. */
+    {
+        static const nj_u1 p_loud[3] = { 0xB0u, 7u, 127u };
+        static const nj_u1 p_soft[3] = { 0xB0u, 7u, 40u };
+        nj_u4 fr1 = 0u, fr2 = 0u;
+        nj_u1 *loud = render_voiced(p_loud, 3u, 0u, 69u, &fr1);
+        nj_u1 *soft = render_voiced(p_soft, 3u, 0u, 69u, &fr2);
+        nj_u8 r_loud = 0u, r_soft = 0u;
+
+        if (loud != NULL) {
+            r_loud = pcm_rms(loud, fr1, 0u, fr1 / 2u);
+            t_free(NULL, loud);
+        }
+        if (soft != NULL) {
+            r_soft = pcm_rms(soft, fr2, 0u, fr2 / 2u);
+            t_free(NULL, soft);
+        }
+        check(r_loud > 0u && r_soft > 0u, "both volumes render");
+        check(r_soft > 0u && r_loud > 0u && r_soft < r_loud * 6u / 10u,
+              "volume 40 of 127 is quieter than the default");
+        if (!(r_soft < r_loud * 6u / 10u)) {
+            printf("     rms loud %llu, soft %llu\n",
+                   (unsigned long long)r_loud, (unsigned long long)r_soft);
         }
     }
 

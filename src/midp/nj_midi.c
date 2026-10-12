@@ -17,11 +17,13 @@
  * ---------------------------------------------------------------------------
  * WHAT IT IS NOT
  * ---------------------------------------------------------------------------
- * There is no wavetable, no envelope generator worth the name, no reverb, no
- * MIDI channel to instrument mapping beyond pitch.  A note is a square wave
- * with a short attack and release, mixed with the other notes that are on at
- * the same time.  That is a long way from a SoundFont, and it is a very long
- * way from silence.
+ * There is no wavetable and no reverb.  What there is: a General MIDI program
+ * is mapped to a waveform family (square, triangle, saw, noise) and an
+ * envelope (held, struck, percussive), the note's channel decides its volume
+ * (controller 7 and 11) and channel 10 is played as drums.  A note is one
+ * oscillator with a short attack and release, mixed with the other notes that
+ * are on at the same time.  That is a long way from a SoundFont, and it is a
+ * very long way from silence.
  *
  * ---------------------------------------------------------------------------
  * OUTPUT
@@ -57,6 +59,70 @@
 
 #define NJ_MIDI_MAX_EVENTS 8192u
 #define NJ_MIDI_MAX_TEMPOS 64u
+
+/* The percussion channel of a General MIDI file. */
+#define MID_CHANNEL_DRUMS 9u
+
+/* Waveforms.  Square is the cheapest; the others cost one compare and one
+ * multiply, and they are what keeps a bass line from sounding like a buzzer. */
+#define MID_W_SQUARE   0u
+#define MID_W_TRIANGLE 1u
+#define MID_W_SAW      2u
+#define MID_W_NOISE    3u
+
+typedef struct {
+    nj_u1 wave;
+    nj_u2 decay_ms;             /* 0 = the note holds until it is released */
+} mid_timbre;
+
+/*
+ * One entry per General MIDI program block of eight: piano, chromatic
+ * percussion, organ, guitar, bass, strings, ensemble, brass, reed, pipe, synth
+ * lead, synth pad, effects, ethnic, percussive, sound effects.
+ *
+ * The choices are what the corpus rewards: a piano and a guitar are struck and
+ * decay, strings and organs hold, a bass is a triangle because its fundamental
+ * is what carries, and the effect banks are noise because there is nothing
+ * else honest to make of them.
+ */
+static const mid_timbre mid_timbres[16] = {
+    { MID_W_TRIANGLE, 1400u },
+    { MID_W_TRIANGLE,  900u },
+    { MID_W_SQUARE,      0u },
+    { MID_W_SAW,      1200u },
+    { MID_W_TRIANGLE,  700u },
+    { MID_W_SAW,         0u },
+    { MID_W_SAW,         0u },
+    { MID_W_SQUARE,      0u },
+    { MID_W_SQUARE,      0u },
+    { MID_W_TRIANGLE,    0u },
+    { MID_W_SAW,         0u },
+    { MID_W_TRIANGLE,    0u },
+    { MID_W_NOISE,     300u },
+    { MID_W_TRIANGLE,  900u },
+    { MID_W_NOISE,     200u },
+    { MID_W_NOISE,     250u }
+};
+
+static void mid_drum(nj_u4 note, nj_u1 *wave, nj_u2 *decay_ms)
+{
+    if (note == 35u || note == 36u) {               /* kick */
+        *wave = MID_W_TRIANGLE;
+        *decay_ms = 120u;
+    } else if (note == 38u || note == 40u) {        /* snare */
+        *wave = MID_W_NOISE;
+        *decay_ms = 130u;
+    } else if (note == 42u || note == 44u || note == 46u) {  /* hats */
+        *wave = MID_W_NOISE;
+        *decay_ms = 45u;
+    } else if (note >= 47u && note <= 50u) {        /* toms */
+        *wave = MID_W_TRIANGLE;
+        *decay_ms = 180u;
+    } else {
+        *wave = MID_W_NOISE;
+        *decay_ms = 90u;
+    }
+}
 
 /* ------------------------------------------------------------------ */
 /* Reading the file                                                    */
@@ -134,6 +200,9 @@ typedef struct {
     nj_u4 tick;
     nj_u4 note;                 /* 0..127 */
     nj_u4 velocity;
+    nj_u1 wave;                 /* resolved from the channel's program */
+    nj_u2 decay_ms;             /* 0 = held */
+    nj_u4 gain;                 /* channel volume * expression, 0..127 */
     int   on;
 } mid_note;
 
@@ -152,10 +221,17 @@ typedef struct {
 
     nj_u4      division;        /* ticks per quarter note */
     int        smpte;           /* division was SMPTE frames instead */
+
+    /* Channel state, shared by every track: a format 1 file sets a program in
+     * one track and plays it in another. */
+    nj_u4      program[16];
+    nj_u4      volume[16];      /* controller 7, 100 is the General MIDI default */
+    nj_u4      expr[16];        /* controller 11, 127 is the default */
 } mid_song;
 
 static int mid_add_note(mid_song *s, const nj_midi_mem *mem,
-                        nj_u4 tick, nj_u4 note, nj_u4 vel, int on)
+                        nj_u4 tick, nj_u4 note, nj_u4 vel, int on,
+                        nj_u1 wave, nj_u2 decay_ms, nj_u4 gain)
 {
     if (s->nnotes == s->capnotes) {
         nj_u4 cap = (s->capnotes == 0u) ? 256u : s->capnotes * 2u;
@@ -180,6 +256,9 @@ static int mid_add_note(mid_song *s, const nj_midi_mem *mem,
     s->notes[s->nnotes].tick = tick;
     s->notes[s->nnotes].note = note;
     s->notes[s->nnotes].velocity = vel;
+    s->notes[s->nnotes].wave = wave;
+    s->notes[s->nnotes].decay_ms = decay_ms;
+    s->notes[s->nnotes].gain = gain;
     s->notes[s->nnotes].on = on;
     s->nnotes++;
     return 1;
@@ -268,23 +347,50 @@ static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
 
         {
             nj_u4 hi = status & 0xF0u;
+            nj_u4 chan = status & 0x0Fu;
             nj_u4 d1, d2;
 
             if (!mid_u8(r, &d1)) {
                 return;
             }
-            if (hi == 0xC0u || hi == 0xD0u) {
-                continue;       /* one data byte */
+            if (hi == 0xC0u) {          /* program change: one data byte */
+                s->program[chan] = d1 & 0x7Fu;
+                continue;
+            }
+            if (hi == 0xD0u) {
+                continue;       /* channel pressure: one data byte, ignored */
             }
             if (!mid_u8(r, &d2)) {
                 return;
             }
-            if (hi == 0x90u && d2 != 0u) {
-                if (!mid_add_note(s, mem, tick, d1 & 0x7Fu, d2 & 0x7Fu, 1)) {
+            if (hi == 0xB0u) {          /* control change */
+                nj_u4 cc = d1 & 0x7Fu;
+                if (cc == 7u) {
+                    s->volume[chan] = d2 & 0x7Fu;
+                } else if (cc == 11u) {
+                    s->expr[chan] = d2 & 0x7Fu;
+                }
+            } else if (hi == 0x90u && d2 != 0u) {
+                nj_u1 wave;
+                nj_u2 decay_ms;
+                nj_u4 gain;
+                nj_u4 note = d1 & 0x7Fu;
+
+                if (chan == MID_CHANNEL_DRUMS) {
+                    mid_drum(note, &wave, &decay_ms);
+                } else {
+                    mid_timbre t = mid_timbres[(s->program[chan] & 0x7Fu) / 8u];
+                    wave = t.wave;
+                    decay_ms = t.decay_ms;
+                }
+                gain = (s->volume[chan] & 0x7Fu) * (s->expr[chan] & 0x7Fu) / 127u;
+                if (!mid_add_note(s, mem, tick, note, d2 & 0x7Fu, 1,
+                                  wave, decay_ms, gain)) {
                     return;
                 }
             } else if (hi == 0x80u || hi == 0x90u) {
-                if (!mid_add_note(s, mem, tick, d1 & 0x7Fu, 0u, 0)) {
+                if (!mid_add_note(s, mem, tick, d1 & 0x7Fu, 0u, 0,
+                                  0u, 0u, 0u)) {
                     return;
                 }
             }
@@ -340,10 +446,13 @@ static nj_u4 mid_sample_at(const mid_song *s, nj_u4 tick)
 typedef struct {
     int   active;
     nj_u4 note;
+    nj_u1 wave;
     nj_u4 phase;                /* 32-bit phase accumulator */
     nj_u4 step;                 /* phase increment per sample */
+    nj_u4 noise;                /* linear feedback shift register, for noise */
     nj_s4 amp;                  /* 0..32767 */
     nj_s4 lp;                   /* one-pole low pass state */
+    nj_u4 decay;                /* amplitude lost per sample (0 = held) */
     nj_u4 start;                /* sample the note starts at */
     nj_u4 end;                  /* sample the note stops at (0 = never) */
 } mid_voice;
@@ -428,6 +537,10 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
     }
 
     memset(&song, 0, sizeof(song));
+    for (i = 0u; i < 16u; i++) {
+        song.volume[i] = 100u;
+        song.expr[i] = 127u;
+    }
     r.p = (const nj_u1 *)data;
     r.n = size;
     r.i = 0u;
@@ -553,10 +666,23 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                 }
                 voices[v].active = 1;
                 voices[v].note = song.notes[ev].note;
+                voices[v].wave = song.notes[ev].wave;
                 voices[v].phase = 0u;
                 voices[v].step = mid_step_for(song.notes[ev].note);
-                voices[v].amp = (nj_s4)(song.notes[ev].velocity) * 200;  /* ~24% */
+                voices[v].noise = 0x13579BDFu | 1u;
+                /* ~24% of full scale at velocity 100, then the channel's own
+                 * volume and expression. */
+                voices[v].amp = (nj_s4)(song.notes[ev].velocity) * 300
+                    * (nj_s4)(song.notes[ev].gain) / 127;
                 voices[v].lp = 0;
+                voices[v].decay = 0u;
+                if (song.notes[ev].decay_ms != 0u) {
+                    nj_u4 span = (nj_u4)(song.notes[ev].decay_ms)
+                        * (NJ_MIDI_RATE / 1000u);
+                    if (span != 0u) {
+                        voices[v].decay = (nj_u4)(voices[v].amp / (nj_s4)span) + 1u;
+                    }
+                }
                 voices[v].start = i;
                 voices[v].end = 0u;
             } else {
@@ -585,6 +711,16 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
             if (voices[v].end != 0u && i >= voices[v].end) {
                 continue;
             }
+            if (voices[v].decay != 0u) {
+                /* A struck note loses amplitude every sample, whether or not
+                 * the file ever sends a note off. */
+                if (voices[v].amp <= (nj_s4)voices[v].decay) {
+                    voices[v].active = 0;
+                    continue;
+                }
+                voices[v].amp -= (nj_s4)voices[v].decay;
+                amp = voices[v].amp;
+            }
             age = i - voices[v].start;
             /* 4 ms attack, 8 ms release: enough to stop the clicks that make
              * a square wave sound like a fault rather than a note. */
@@ -598,20 +734,51 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
             }
             voices[v].phase += voices[v].step;
             /*
-             * A square wave is the cheapest thing that is recognisably a note,
-             * but its harmonics fall off as 1/k, which is what makes it buzz -
-             * and the ones above Nyquist are what makes it sound broken.  A
-             * one-pole low pass costs one add and one shift and leaves a note
-             * that is still bright, just not harsh.
+             * Every waveform here is a shape of the same phase accumulator.
+             * A square's harmonics fall off as 1/k, which is what makes it
+             * buzz; a triangle's fall off as 1/k^2 and a saw's are brighter
+             * than a square's but thinner, and noise has no pitch at all,
+             * which is exactly what a hi-hat wants.
+             *
+             * The one-pole low pass costs one add and one shift, and it is
+             * what keeps the harmonics above Nyquist from folding back into
+             * the audible band as a metallic ring.
              */
             {
-                nj_s4 raw = (voices[v].phase < 0x80000000u) ? amp : -amp;
+                nj_s4 raw;
+                if (voices[v].wave == MID_W_TRIANGLE) {
+                    nj_s4 t = (nj_s4)(voices[v].phase >> 16);
+                    raw = (t < 32768) ? (t * 2 - 32768) : (98303 - t * 2);
+                    raw = raw * 3 / 4;
+                } else if (voices[v].wave == MID_W_SAW) {
+                    raw = ((nj_s4)(voices[v].phase >> 16) - 32768) * 3 / 4;
+                } else if (voices[v].wave == MID_W_NOISE) {
+                    voices[v].noise = (voices[v].noise >> 1)
+                        ^ ((0u - (voices[v].noise & 1u)) & 0x80200003u);
+                    raw = ((nj_s4)(voices[v].noise & 0xFFFFu) - 32768) / 2;
+                } else {
+                    raw = (voices[v].phase < 0x80000000u) ? amp : -amp;
+                }
+                if (voices[v].wave != MID_W_SQUARE) {
+                    raw = raw * amp / 32768;    /* scale to this note's level */
+                }
                 voices[v].lp += (raw - voices[v].lp) / 2;
                 mix += voices[v].lp;
             }
         }
 
+        /*
+         * Twelve voices can sum past full scale, and a hard clamp on the sum
+         * buzzes.  Above three quarters of the range the mix is compressed
+         * four to one and only then clamped, which keeps a loud passage loud
+         * without the crackle of clipping it.
+         */
         scaled = mix;
+        if (scaled > 24000) {
+            scaled = 24000 + (scaled - 24000) / 4;
+        } else if (scaled < -24000) {
+            scaled = -24000 + (scaled + 24000) / 4;
+        }
         if (scaled > 32767) {
             scaled = 32767;
         } else if (scaled < -32768) {
