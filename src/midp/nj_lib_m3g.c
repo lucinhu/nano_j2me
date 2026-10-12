@@ -1768,6 +1768,36 @@ NJFN(m3g_clear)
     return NJ_OK;
 }
 
+/*
+ * The two halves of a rasteriser, kept apart so each can be checked on its
+ * own: one turns a vertex into a pixel, the other fills the triangle those
+ * three pixels make.  Neither knows anything about the scene graph yet.
+ */
+void nj_m3g_project(const float m[16], const float v[3], int w, int h,
+                    float out[2])
+{
+    float x = m[0] * v[0] + m[4] * v[1] + m[8]  * v[2] + m[12];
+    float y = m[1] * v[0] + m[5] * v[1] + m[9]  * v[2] + m[13];
+    float ww = m[3] * v[0] + m[7] * v[1] + m[11] * v[2] + m[15];
+
+    if (ww == 0.0f) {
+        return;                     /* a vertex at infinity has no pixel */
+    }
+    out[0] = (x / ww + 1.0f) * 0.5f * (float)w;
+    out[1] = (1.0f - y / ww) * 0.5f * (float)h;
+}
+
+nj_u4 nj_m3g_raster_tri(struct nj_gfx *g, const float xy[6], nj_u4 argb)
+{
+    if (!g || !xy) {
+        return 0u;
+    }
+    nj_gfx_set_color(g, argb | 0xFF000000u);
+    nj_gfx_triangle(g, (int)xy[0], (int)xy[1], (int)xy[2], (int)xy[3],
+                    (int)xy[4], (int)xy[5], 1);
+    return 1u;
+}
+
 NJFN(m3g_render)
 {
     /*
@@ -1777,6 +1807,7 @@ NJFN(m3g_render)
      * zero everywhere; this is the same instrument for JSR 184.
      */
     vm->m3g_renders++;
+    (void)nj_m3g_project;   /* referenced from the native table below */
     /*
      * Step two territory: walking the graph is done, rasterising the meshes
      * is not.  Nothing is faked - the traversal really happens, so a title

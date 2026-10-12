@@ -623,6 +623,19 @@ nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
 
 /* Give every Group in an object table the children the file names.  Split out
    of Loader.load() so a test can reach it without a real MIDlet suite. */
+/* Project one vertex through a 4x4 matrix into pixel coordinates.  The
+   convention is v' = M v (a column vector), the same one Transform uses.
+   y is flipped, because the screen's origin is top-left and the clip space
+   origin is bottom-left. */
+void nj_m3g_project(const float m[16], const float v[3], int w, int h,
+                    float out[2]);
+
+/* Fill one screen-space triangle and count it.  The rasteriser is built on
+   the 2D triangle the graphics layer already has, so what a title sees here
+   goes through the same fill the rest of MIDP does. */
+struct nj_gfx;   /* nj_gfx.h includes this header, so name it only */
+nj_u4 nj_m3g_raster_tri(struct nj_gfx *g, const float xy[6], nj_u4 argb);
+
 nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
                              nj_ref arr);
 

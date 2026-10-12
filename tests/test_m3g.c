@@ -581,6 +581,53 @@ int main(void)
         check(after.m3g_renders == before.m3g_renders + 1u,
               "render(World) is counted, since it cannot yet draw");
     }
+    /* ---- the two halves of a rasteriser -------------------------------- */
+    {
+        /*
+         * One half turns a vertex into a pixel, the other fills the triangle
+         * three of them make.  The matrix is a plain scale by 2 in x and y, so
+         * a vertex at (0.25, 0.25, 0) lands at three quarters of the way
+         * across and a quarter of the way down - a value that can be worked
+         * out by hand, which is the point.
+         */
+        float m[16] = { 2,0,0,0,  0,2,0,0,  0,0,2,0,  0,0,0,1 };
+        float v[3] = { 0.25f, 0.25f, 0.0f };
+        float xy[2] = { -1.0f, -1.0f };
+        nj_u2 px[16 * 16];
+        nj_u4 bg_inside, bg_outside;
+        nj_surface s;
+        nj_gfx g;
+        float tri[6];
+        int i2;
+
+        nj_m3g_project(m, v, 16, 16, xy);
+        check(xy[0] == 12.0f && xy[1] == 4.0f,
+              "a vertex projects to the pixel the arithmetic says it should");
+
+        memset(&s, 0, sizeof(s));
+        for (i2 = 0; i2 < 16 * 16; i2++) { px[i2] = 0u; }
+        s.pixels = px;
+        s.width = 16; s.height = 16; s.stride = 16 * 2;
+        s.format = NJ_PIXFMT_RGB565; s.bpp = 2;
+        nj_surface_fill(&s, 0u);
+        nj_gfx_init(&g, &s);
+        bg_inside = nj_surface_get(&s, 3, 3);
+        bg_outside = nj_surface_get(&s, 15, 15);
+
+        tri[0] = 2.0f;  tri[1] = 2.0f;
+        tri[2] = 13.0f; tri[3] = 2.0f;
+        tri[4] = 2.0f;  tri[5] = 13.0f;
+        check(nj_m3g_raster_tri(&g, tri, 0x00FF0000u) == 1u,
+              "the rasteriser reports the triangle it filled");
+        /* Both comparisons are against the background read BEFORE the fill.
+           The first version compared the inside pixel against 0, which is
+           true of every pixel that is not black - it passed with the drawing
+           call deleted, which is how it was caught. */
+        check(nj_surface_get(&s, 3, 3) != bg_inside,
+              "and the pixels inside it are no longer the background");
+        check(nj_surface_get(&s, 15, 15) == bg_outside,
+              "while the pixels outside it are still the background");
+    }
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
     /* The file format calls type 18 Sprite; the titles call the class
