@@ -2210,6 +2210,34 @@ static void test_class_relative_resource(nj_vm *vm)
     clean(vm, "the relative-resource fixture");
 }
 
+/* Arrays are covariant when their elements are references: int[][] IS an
+ * Object[], int[] is not.  法拉利GT3－世界赛道BT版_776 casts the tables it
+ * deserialises that way and would not start without it. */
+static void test_array_assignability(nj_vm *vm)
+{
+    nj_class *int1 = nj_class_resolve(vm, "[I");
+    nj_class *int2 = nj_class_resolve(vm, "[[I");
+    nj_class *objarr = nj_class_resolve(vm, "[Ljava/lang/Object;");
+    nj_class *strarr = nj_class_resolve(vm, "[Ljava/lang/String;");
+    nj_class *object = nj_class_resolve(vm, "java/lang/Object");
+    nj_class *cloneable = nj_class_resolve(vm, "java/lang/Cloneable");
+
+    OK(int1 != NULL && int2 != NULL && objarr != NULL && strarr != NULL &&
+       object != NULL);
+    OK_MSG(nj_class_is_assignable(int2, objarr), "int[][] is an Object[]");
+    OK_MSG(!nj_class_is_assignable(int1, objarr), "int[] is not an Object[]");
+    OK_MSG(nj_class_is_assignable(int2, object), "int[][] is an Object");
+    OK_MSG(nj_class_is_assignable(strarr, objarr), "String[] is an Object[]");
+    OK_MSG(!nj_class_is_assignable(objarr, strarr), "Object[] is not a String[]");
+    OK_MSG(!nj_class_is_assignable(strarr, int1), "String[] is not an int[]");
+    OK_MSG(nj_class_is_assignable(int1, int1), "int[] is an int[]");
+    if (cloneable != NULL) {
+        OK_MSG(nj_class_is_assignable(int2, cloneable),
+               "an array of arrays is a Cloneable");
+    }
+    clean(vm, "array assignability");
+}
+
 int main(void)
 {
     nj_port port;
@@ -2267,6 +2295,7 @@ int main(void)
     test_image_survives_collection(vm);
     test_gc_ignores_freed_slot(vm);
     test_class_relative_resource(vm);
+    test_array_assignability(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

@@ -1081,11 +1081,31 @@ int nj_class_is_assignable(nj_class *from, nj_class *to)
     if (from == to) {
         return 1;
     }
+    /*
+     * Arrays are covariant in an array-of-references and implement Object,
+     * Cloneable and Serializable whatever their element type is.  An int[][]
+     * IS an Object[] (its elements are int[] objects), while an int[] is not:
+     * 法拉利GT3－世界赛道BT版_776 casts the tables it deserialises that way
+     * and caught a ClassCastException for every one of them, so the loader
+     * gave up and the MIDlet died in its constructor.
+     */
+    if (from->is_array) {
+        if (to->is_array) {
+            if (from->component_cls == NULL || to->component_cls == NULL) {
+                return 0;   /* [I and [Ljava/... can never be the same shape */
+            }
+            return nj_class_is_assignable(from->component_cls, to->component_cls);
+        }
+        if ((to->flags & NJ_ACC_INTERFACE) != 0u) {
+            const char *n = to->name;
+            return n != NULL && (strcmp(n, "java/lang/Cloneable") == 0 ||
+                                 strcmp(n, "java/io/Serializable") == 0);
+        }
+        return nj_class_is_subclass_of(from, to);   /* java/lang/Object */
+    }
     if ((to->flags & NJ_ACC_INTERFACE) != 0u) {
         return implements_interface(from, to);
     }
-    /* Every array is an Object and a Cloneable/Serializable in real Java;
-     * for MIDP purposes treating arrays as assignable to Object is enough. */
     return nj_class_is_subclass_of(from, to);
 }
 
