@@ -45,6 +45,30 @@ nj_vm  *nj_vm_create(const nj_port *port, nj_size heap_bytes);
  */
 nj_u4   nj_vm_destroy(nj_vm *vm);
 
+/*
+ * Draw MIDP text through a TrueType face instead of the built-in bitmap one.
+ *
+ * `path` is read through the port's own file hooks, so a platform that keeps
+ * its font in flash uses the same call as one that reads it from a disk; there
+ * is no stdio in the path.  The bytes and the faces built from them are held
+ * in the VM's host registry, so they are released by nj_vm_destroy() with
+ * everything else and there is nothing to unload.
+ *
+ * Load it before the MIDlet starts.  MIDP layout is measured, not re-flowed:
+ * the first screen a MIDlet builds is laid out with whatever face was
+ * installed at the time, so swapping the font afterwards moves text but not
+ * the layout decision that placed it.
+ *
+ * The built-in faces are kept as the fallback, so a character the supplied
+ * font has no glyph for still renders rather than coming out blank.
+ *
+ * Returns 1 on success.  Returns 0, leaving the VM on its bitmap fonts, if the
+ * file cannot be read, the font does not parse, or the build has
+ * NJ_ENABLE_TTF=0 - in which case a caller that needs a font file must be told
+ * rather than left to discover it by looking at the screen.
+ */
+int     nj_vm_use_font_file(nj_vm *vm, const char *path);
+
 
 nj_status nj_vm_start_app(nj_vm *vm, nj_ref midlet);  /* calls MIDlet.startApp() */
 /*
@@ -425,6 +449,14 @@ extern const nj_builtin_class nj_lib_wireless_classes[];
 extern const int nj_lib_wireless_class_count;
 extern const nj_native_entry nj_lib_wireless_table[];
 extern const int nj_lib_wireless_count;
+
+/* JSR 184 (Mobile 3D Graphics): the classes, the scene graph and the
+ * transform maths.  Compiled out with -DNJ_ENABLE_M3G=0, in which case both
+ * tables are empty and the classes are simply absent. */
+extern const nj_builtin_class nj_lib_m3g_classes[];
+extern const int nj_lib_m3g_class_count;
+extern const nj_native_entry nj_lib_m3g_table[];
+extern const int nj_lib_m3g_count;
 
 /* Built by nj_lib_fc.c, used by Connector.open() in nj_lib_io.c.  Returns a new
  * FileConnection, or NULL with an exception pending. */

@@ -53,6 +53,7 @@ option(NJ_WERROR         "Treat warnings as errors"         OFF)
 option(NJ_SANITIZE       "Build with ASan + UBSan"          OFF)
 
 set(NJ_ENABLE_JPEG  1 CACHE STRING "Built-in baseline JPEG decoder")
+set(NJ_ENABLE_TTF   1 CACHE STRING "TrueType text (0 = bitmap faces only)")
 set(NJ_ENABLE_PNG   1 CACHE STRING "Built-in PNG decoder")
 set(NJ_ENABLE_RMS   1 CACHE STRING "RecordStore persistence")
 set(NJ_ENABLE_IO    1 CACHE STRING "java.io and javax.microedition.io")
@@ -61,6 +62,7 @@ set(NJ_ENABLE_IO    1 CACHE STRING "java.io and javax.microedition.io")
 # passed it to the compiler at all - so -DNJ_ENABLE_FLOAT=0 built a runtime that
 # still linked every libm transcendental.  A configuration option that lies is
 # worse than one that is missing.
+set(NJ_ENABLE_M3G 1 CACHE STRING "Build JSR 184 (Mobile 3D Graphics)")
 set(NJ_ENABLE_FLOAT 1 CACHE STRING "libm transcendentals for java.lang.Math")
 set(NJ_PIXFMT       "NJ_PIXFMT_RGB565" CACHE STRING
     "Framebuffer pixel format: NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888 or NJ_PIXFMT_ARGB8888")
@@ -98,10 +100,13 @@ set(NJ_SOURCES
   src/midp/nj_lib_nokia.c
   src/midp/nj_lib_fc.c
   src/midp/nj_lib_wireless.c
+  src/midp/nj_lib_m3g.c
   # ---- graphics ----
   src/gfx/nj_gfx.c
   src/gfx/nj_text.c
   src/gfx/nj_font.c
+  src/gfx/nj_font_ttf.c
+  src/gfx/nj_ttf.c
   src/gfx/nj_png.c
   src/gfx/nj_jpeg.c
   src/gfx/nj_codec.c
@@ -131,7 +136,9 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_JPEG=${NJ_ENABLE_JPEG}
   NJ_ENABLE_RMS=${NJ_ENABLE_RMS}
   NJ_ENABLE_IO=${NJ_ENABLE_IO}
-  NJ_ENABLE_FLOAT=${NJ_ENABLE_FLOAT})
+  NJ_ENABLE_FLOAT=${NJ_ENABLE_FLOAT}
+  NJ_ENABLE_M3G=${NJ_ENABLE_M3G}
+  NJ_ENABLE_TTF=${NJ_ENABLE_TTF})
 
 if(NJ_SANITIZE)
   target_compile_options(nj2me PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
@@ -339,6 +346,13 @@ if(NJ_BUILD_TESTS)
   add_custom_command(TARGET nj_fixtures POST_BUILD
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_const_jar.sh
     COMMENT "stub constant fixture")
+  # The TrueType fixtures are hand-built by a script (there is no system font
+  # we could legally check in): deterministic, so re-running is a no-op.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_ttf_fixture.py)
+    add_custom_command(TARGET nj_fixtures POST_BUILD
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_ttf_fixture.py
+      COMMENT "TrueType rasteriser fixtures")
+  endif()
 
   # A test that fails with the command to fix it, rather than 25 tests failing
   # one at a time with "cannot open tests/fixtures/...".  The fixtures are
@@ -385,6 +399,7 @@ if(NJ_BUILD_TESTS)
   # Three such bindings were missing and each one only surfaced when a real
   # game called it; this walks the whole class library instead of waiting.
   nj_add_test(test_natives   tests/test_natives.c)
+  nj_add_test(test_m3g       tests/test_m3g.c)
   nj_add_test(test_wireless tests/test_wireless.c)
 
   # What the PORT observed, not what the VM counted: threads, GC, audio and
@@ -396,12 +411,20 @@ if(NJ_BUILD_TESTS)
     set_tests_properties(check_late_display PROPERTIES TIMEOUT 120)
   endif()
 
-  if(TARGET nj_fixtures)
+  # Both of these drive generated JARs, and nj_add_test() deliberately keeps
+  # nj_fixtures out of a plain build (see the comment there).  Register them
+  # only when the fixture is actually on disk: on a fresh clone without
+  # `--target fixtures` they would otherwise fail with "no fixture at ...",
+  # which reads as a runtime defect when nothing was ever run.  A test that
+  # did not run must not look like a test that failed.
+  if(EXISTS ${NJ_FIXTURES}/gamedemo.jar)
     add_test(NAME test_observed_ports
              COMMAND ${CMAKE_COMMAND} -E env NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_observed.sh
                      ${NJ_FIXTURES}/gamedemo.jar)
     set_tests_properties(test_observed_ports PROPERTIES TIMEOUT 120)
+  endif()
+  if(EXISTS ${NJ_FIXTURES}/loopdemo.jar)
     # A MIDlet that runs its own frame loop inside startApp() must still
     # present frames; 仙剑奇侠传完美版 does exactly that.
     add_test(NAME test_loop_frames
@@ -487,6 +510,30 @@ if(NJ_BUILD_TESTS)
     add_test(NAME test_gfx COMMAND test_gfx)
     set_tests_properties(test_gfx PROPERTIES
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  endif()
+
+  # Antialiased text, with the rasteriser taken out of the picture.  test_gfx
+  # above pins the renderer against a stub font; test_ttf later pins the
+  # TrueType rasteriser.  This one is the third piece - the coverage path those
+  # two meet in - and it hands the renderer coverage values it chose itself, so
+  # a wrong pixel here means the renderer is wrong and not the rasteriser.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_font_coverage.c)
+    nj_add_test(test_font_coverage tests/test_font_coverage.c)
+  endif()
+
+  # The third piece, and the one that makes the other two mean something: the
+  # TrueType rasteriser on its own, compared glyph by glyph against FreeType
+  # through Pillow.  Three things have to hold, and each is a real skip rather
+  # than a failure: the rasteriser must be compiled in (NJ_ENABLE_TTF), the
+  # test must exist, and the hand-built fixture faces in tests/fixtures/ttf
+  # must be on disk (make them with `--target nj_fixtures`, or
+  # tools/gen_ttf_fixture.py).  The FreeType comparison reports SKIP by itself
+  # when Pillow is missing; a missing fixture directory is a hard error in the
+  # test, which would read as a rasteriser defect when nothing was run.
+  if(NJ_ENABLE_TTF
+     AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ttf.c
+     AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/ttf)
+    nj_add_test(test_ttf tests/test_ttf.c)
   endif()
 
   # ---- audio: what the MIDlet asked for AND what the port received ----

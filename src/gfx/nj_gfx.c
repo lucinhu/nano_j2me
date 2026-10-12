@@ -705,6 +705,34 @@ static void nj_plot(nj_gfx *g, int x, int y, nj_u4 argb)
                nj_surface_format_color(g->surf->format, argb));
 }
 
+/*
+ * Blend the current colour at `coverage` (0..255), honouring the clip.
+ *
+ * This is what an antialiased glyph needs and what nj_plot alone cannot give
+ * it: coverage scales the colour's alpha per pixel instead of replacing the
+ * destination, so the rim of a stroke fades into the background.
+ *
+ * A fully covered pixel is handed to nj_plot rather than blended, so the solid
+ * interior of a glyph keeps the renderer's exact semantics (XOR mode, blend
+ * mode, format conversion) and only the antialiased rim pays for a blend.  On
+ * a 1bpp font every pixel takes that path, which is why antialiasing costs
+ * nothing until a face actually produces partial coverage.
+ */
+void nj_gfx_blend_coverage(nj_gfx *g, int x, int y, int coverage)
+{
+    if (!g || coverage <= 0) {
+        return;
+    }
+    if (!nj_in_clip(g, x, y)) {
+        return;
+    }
+    if (coverage >= 255) {
+        nj_plot(g, x, y, g->color);
+        return;
+    }
+    nj_gfx_blend_pixel(g->surf, x, y, g->color, coverage);
+}
+
 /* Inclusive horizontal run, already clipped to the clip rectangle. */
 static void nj_span(nj_gfx *g, int x0, int x1, int y, nj_u4 argb)
 {

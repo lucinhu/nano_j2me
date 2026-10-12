@@ -698,6 +698,27 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
         goto done;
     }
 
+    /*
+     * ---- the font ----
+     *
+     * Before the application, not after: MIDP layout is measured rather than
+     * re-flowed, so the first screen a MIDlet builds is laid out with whatever
+     * face was installed when it built it.  Swapping the font later would move
+     * the text without moving the decision that placed it, which reads as a
+     * layout bug in the MIDlet.
+     *
+     * A font that will not load is reported and stepped over.  Running on in
+     * the built-in typeface is the right behaviour, but doing it silently
+     * would present a wrong-looking screen as if it were what was asked for.
+     */
+    if (opts->font_path != NULL && opts->font_path[0] != '\0') {
+        if (!nj_vm_use_font_file(vm, opts->font_path) && port.log) {
+            port.log(port.user, 0,
+                     "--font: cannot use that font file; "
+                     "the built-in faces are still in place");
+        }
+    }
+
     /* ---- the application ---- */
     app = nj_app_open(vm, blob.data, blob.size);
     if (!app) {

@@ -5,16 +5,17 @@
  * THROWAWAY TEST STUBS -- NOT PART OF THE RUNTIME.
  * ============================================================================
  *
- * The real text layer lives in src/gfx/nj_font.c, which is owned by another
- * module and does not exist yet.  tests/test_gfx.c deliberately does not test
- * glyph rendering; it only needs *something* to link against so that
- * nj_gfx.c's call into nj_font_builtin() resolves and so the anchor maths of
- * nj_gfx_draw_text()/nj_gfx_draw_char() can be exercised.
+ * The real text layer lives in src/gfx/nj_font.c.  This file survives it on
+ * purpose: tests/test_gfx.c compiles nj_gfx.c against these stubs instead of
+ * linking the library, so the anchor maths of nj_gfx_draw_text() and
+ * nj_gfx_draw_char() is measured against a fixed glyph set rather than against
+ * whatever the real bitmap font happens to contain.  Do not delete it to
+ * "finish" the port - the CMake rule for test_gfx names it explicitly, and
+ * swapping in the real font would quietly make those assertions vacuous.
  *
  * Every glyph below is a hollow 5x7 box drawn through the real primitives from
  * src/gfx/nj_gfx.c (nj_gfx_rect / nj_gfx_pixel), so the stubs honour clip,
  * translate, colour, blend and XOR exactly like the real font module must.
- * Delete this file the moment src/gfx/nj_font.c lands.
  */
 #include "nj2me/nj_gfx.h"
 
@@ -42,7 +43,10 @@ static const nj_font stub_font = {
     0, 0,
     STUB_ADVANCE, 8,
     NULL,                   /* no fixed bitmap */
-    NULL, NULL, NULL,       /* no wide-glyph provider */
+    NULL,                   /* no glyph_lookup: the stub draws via primitives */
+    0,                      /* coverage: 1bpp rows (unused by this stub) */
+    NULL,                   /* glyph_ud */
+    NULL,                   /* glyph_advance */
     NULL                    /* no fallback */
 };
 

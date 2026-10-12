@@ -155,6 +155,18 @@ build/nj2me --port sdl2 game.jar
 build/nj2me --port headless --dump-frames out/ game.jar
 ```
 
+Text comes from six built-in bitmap faces. To draw it with a TrueType file
+instead, name one — the em size of each face is fitted to the box the bitmap
+face occupied, so no baseline moves:
+
+```sh
+build/nj2me --port sdl2 --font /usr/share/fonts/liberation/LiberationMono-Regular.ttf game.jar
+```
+
+An unreadable or malformed file is not fatal: the built-in faces stay in place
+and a warning is logged. Compile the rasteriser out with `-DNJ_ENABLE_TTF=0`
+to keep only the bitmaps. See `docs/PORTING.md` for the embedding details.
+
 ## Verifying the memory contract
 
 ```sh

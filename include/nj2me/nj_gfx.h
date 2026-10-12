@@ -67,8 +67,19 @@ typedef struct nj_font {
     int   glyph_h;
     const nj_u1 *bitmap; /* (last-first+1) * glyph_h * row_bytes */
 
-    /* Optional wide-glyph provider: returns 1bpp rows for `ch`, sets w/h. */
+    /*
+     * Optional glyph provider, for anything the fixed table cannot hold: a wide
+     * face, a CJK font, or a TrueType face rasterised on demand.
+     *
+     * The rows it returns are 1bpp (MSB first, (w+7)/8 bytes per row) unless
+     * `coverage` is set, in which case they are one byte per pixel of coverage
+     * and the renderer blends.  Coverage exists because thresholding an
+     * antialiased rasteriser deletes thin strokes: a hinted-away stem is two
+     * columns at about 50%, and a 1bpp cut through it loses the stem entirely
+     * from "1", "l", "i" and "t".
+     */
     const nj_u1 *(*glyph_lookup)(void *ud, nj_u2 ch, int *w, int *h);
+    int   coverage;      /* 0 = 1bpp rows, 1 = 8bpp coverage rows */
     void *glyph_ud;
     /* Optional advance metric override (proportional wide glyphs). */
     int (*glyph_advance)(void *ud, nj_u2 ch);
@@ -101,7 +112,21 @@ typedef struct nj_font {
  *   nj_fontset_set_fallback(&fs, my_cjk_font);
  *   const nj_font *f = nj_fontset_get(&fs, NJ_FONT_SIZE_MEDIUM, NJ_FONT_STYLE_PLAIN);
  */
-#define NJ_FONTSET_SLOTS 6
+/*
+ * The variants each size has in a font set: plain and bold, and nothing else.
+ * A MIDP font also has ITALIC and UNDERLINED, but those are synthesised by the
+ * renderer, so they do not get a slot of their own.
+ *
+ * This is the stride of the slot array, which makes it the one number
+ * nj_fontset_get() has to agree on with everything that fills the slots
+ * (nj_font_ttf.c).  Two files computing a slot index from a private copy of it
+ * is a bug waiting for the day one copy changes: the writer and the reader
+ * would disagree about which face a size maps to, and the wrong font would be
+ * handed out with no error anywhere.
+ */
+#define NJ_FONT_SLOT_STYLES 2
+
+#define NJ_FONTSET_SLOTS (3 * NJ_FONT_SLOT_STYLES)
 
 typedef struct nj_fontset {
     nj_font fonts[NJ_FONTSET_SLOTS];
@@ -117,6 +142,34 @@ void          nj_fontset_set_fallback(nj_fontset *fs, const nj_font *fb);
  * port can build its own nj_font if it wants a different registry lifetime.
  * Never NULL. */
 const nj_font *nj_font_builtin(int size, int style);
+
+/*
+ * Render through a TrueType face.
+ *
+ * `data`/`len` is the whole font file and must stay valid for as long as the
+ * font set uses it - the faces borrow it and do not copy it, so a caller
+ * holding the file in a heap block must keep that block alive.  `alloc`
+ * supplies each face's memory including its glyph cache; the emulator passes
+ * the VM's host allocator, so every block is released by nj_vm_destroy() and
+ * nothing here needs a matching teardown.  Two emulator instances in one
+ * process see nothing of each other's faces.
+ *
+ * Every (size, style) slot is rebuilt.  Metrics come from the bitmap face each
+ * slot replaces rather than from the font, because MIDlet layout is written
+ * against Font.getHeight(): a drop-in face reporting a different line height
+ * would silently re-flow every screen.  The bitmap face stays as the fallback,
+ * so a character the supplied font has no glyph for still renders.
+ *
+ * Returns the number of slots rebuilt (NJ_FONTSET_SLOTS on success), or 0 if
+ * the font cannot be parsed or an allocation fails.  On 0 the font set is left
+ * exactly as it was - a partly upgraded font set is a state no caller can
+ * reason about, and a corrupt file should not be able to produce one.  A build
+ * with NJ_ENABLE_TTF=0 always returns 0 and keeps its bitmap faces.
+ */
+typedef void *(*nj_font_alloc_fn)(void *ud, nj_size n);
+
+int nj_fontset_use_ttf(nj_fontset *fs, const nj_u1 *data, nj_u4 len,
+                       nj_font_alloc_fn alloc, void *ud);
 
 /* Metrics. */
 int nj_font_char_width(const nj_font *f, nj_u2 ch);
@@ -234,6 +287,13 @@ void nj_gfx_draw_region(nj_gfx *g, const nj_image *src,
 
 /* Alpha-blended fill of an arbitrary region with coverage 0..255. */
 void nj_gfx_blend_pixel(nj_surface *s, int x, int y, nj_u4 argb, int alpha);
+
+/*
+ * Draw one pixel of the current colour at `coverage` (0..255), respecting the
+ * clip.  Text drawn through a `coverage` font uses this; 255 goes down the
+ * ordinary opaque path so a bitmap face is unaffected.
+ */
+void nj_gfx_blend_coverage(nj_gfx *g, int x, int y, int coverage);
 
 /* ------------------------------------------------------------------ */
 /* Surface helpers                                                     */

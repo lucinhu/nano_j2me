@@ -375,6 +375,17 @@ typedef struct nj_run_opts {
      * a key that goes down and never comes up leaves many of them stuck.
      */
     const char *keys;
+
+    /*
+     * Draw text with a TrueType face from this file, or NULL for the built-in
+     * bitmap faces.  Read through the port's file hooks and installed before
+     * the MIDlet starts, because MIDP layout is measured rather than
+     * re-flowed: the first screen the MIDlet builds is laid out with whatever
+     * face was in place at the time.  A font that fails to load leaves the
+     * built-in faces alone; nj_run() says so rather than running silently in
+     * the wrong typeface.
+     */
+    const char *font_path;
 } nj_run_opts;
 
 /*

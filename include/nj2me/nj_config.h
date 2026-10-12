@@ -71,6 +71,13 @@
 #  define NJ_LOG_LIMIT 2000u
 #endif
 
+/* JSR 184 (Mobile 3D Graphics).  On by default: the classes must exist for a
+ * MIDlet's Class.forName to work, and a build that turns this off simply does
+ * not have them.  Nothing here is needed to run a 2D title. */
+#ifndef NJ_ENABLE_M3G
+#define NJ_ENABLE_M3G 1
+#endif
+
 #ifndef NJ_ENABLE_FLOAT
 #  define NJ_ENABLE_FLOAT 1
 #endif
@@ -126,6 +133,25 @@
  */
 #ifndef NJ_ENABLE_FONT_CJK
 #  define NJ_ENABLE_FONT_CJK 1
+#endif
+/*
+ * TrueType text (src/gfx/nj_ttf.c + nj_font_ttf.c): render through a real font
+ * file instead of the generated bitmap faces.
+ *
+ * Two different questions, so two switches.  NJ_ENABLE_TTF=0 removes the
+ * rasteriser from the build entirely - that is the embedded build: no parser,
+ * no font file to store, no glyph cache in RAM, and the 33 KB of bitmap tables
+ * stay because they are what draws the text.  NJ_ENABLE_TTF=1 only makes the
+ * capability *available*; the face is still chosen at runtime, so a build that
+ * has it can still run with the built-in font.
+ *
+ * The bitmap faces are never removed by this switch.  They are the fallback
+ * for any character a supplied face has no glyph for, and a font that silently
+ * renders nothing for a missing glyph reads as a blank screen rather than as a
+ * missing font.
+ */
+#ifndef NJ_ENABLE_TTF
+#  define NJ_ENABLE_TTF 1
 #endif
 
 /* ------------------------------------------------------------------ */

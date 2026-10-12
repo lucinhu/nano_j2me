@@ -366,6 +366,46 @@ that deliberately also claims PNG and proves that
 Copy its shape when you add a codec: a provider that is only tested through the
 built-in path has not been tested at all.
 
+## Text: built-in bitmaps or a TrueType file
+
+By default every glyph comes from six generated bitmap faces checked into
+`src/gfx/nj_font_data.h` (three sizes, plain and bold). Nothing has to be
+provided by the port and nothing is loaded at runtime.
+
+`nj_vm_use_font_file(vm, path)` replaces all six with faces rasterised from a
+TrueType file instead. The file is read through the port's **file hooks**, so a
+port that already implements `file_open`/`file_read`/`file_close` needs no new
+callbacks. `alloc`/`free` are *not* required — the scratch buffer comes from the
+VM's own tracked allocator, and `nj_port.h` documents those two as optional.
+
+```c
+if (!nj_vm_use_font_file(vm, "/system/fonts/DroidSansMono.ttf")) {
+    /* The built-in faces are still installed and still correct.  This is a
+     * normal outcome, not a failure: a missing, unreadable or malformed file
+     * leaves the VM exactly as it was. */
+}
+```
+
+The em size of each face is chosen so its `ascent + descent` lands on the same
+box the bitmap face occupied. **That is the point of the design**: a MIDlet has
+already committed to a layout using `Font.getHeight()` before you get a say, so
+changing the font must not move a single baseline. What changes is the glyph
+quality inside an unchanged box.
+
+To compile the rasteriser out entirely — it is the largest optional component —
+set `-DNJ_ENABLE_TTF=0`. `nj_vm_use_font_file()` then always returns 0 and the
+bitmap faces are the only ones that exist. The bitmap faces are never trimmed
+away: they are the fallback that makes a bad font file a non-event.
+
+Verification is in three pieces, and they are deliberately separate:
+
+- `tests/test_ttf.c` — the rasteriser alone, against FreeType through Pillow;
+- `tests/test_font_coverage.c` — the renderer alone, against coverage values it
+  chose itself, so a wrong pixel there cannot be the rasteriser's fault;
+- `tools/check_ttf_text.sh` — end to end: a real game, with and without
+  `--font`, asserting the frames differ and that an unusable file falls back
+  with a warning instead of silently doing nothing.
+
 ## Bring-up checklist
 
 1. Implement `millis`, `display_init`, `display_present`, `input_poll`, `log`.

@@ -283,27 +283,6 @@ static nj_ref interp_multianew(nj_vm *vm, nj_class *arr_cls,
 /* ------------------------------------------------------------------ */
 /* The main loop                                                       */
 /* ------------------------------------------------------------------ */
-/*
- * Is `c` one of this VM's classes?
- *
- * The operand stack is untyped and there is no verifier, so anything can be
- * sitting in a slot that is supposed to hold a receiver.  See the invoke
- * handler for why the arena range check alone is not enough.
- */
-static int class_is_registered(nj_vm *vm, const nj_class *c)
-{
-    nj_u4 i;
-
-    if (!c) {
-        return 0;
-    }
-    for (i = 0u; i < vm->nclasses; i++) {
-        if (vm->classes[i] == c) {
-            return 1;
-        }
-    }
-    return 0;
-}
 
 nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
 {

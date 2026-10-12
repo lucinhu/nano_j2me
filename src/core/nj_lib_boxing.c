@@ -363,7 +363,18 @@ NJFN(Double_isInfinite)
 NJFN(Double_valueOf_str)
 {
     nj_ref s = NJ_ARG_REF(args, 0);
-    nj_value a1[1];
+    /*
+     * Two slots, not one: <init>(D)V takes a double, and a double occupies two
+     * JVM slots with the payload in the lower one.  With `nj_value a1[1]` the
+     * call below read 8 bytes past the array - ASan called it a
+     * stack-buffer-overflow in vm_invoke, which is where the read happens and
+     * not where the mistake is.  Without a sanitizer it read whatever the next
+     * stack slot happened to hold, so the boxed value was usually right and
+     * occasionally a garbage bit pattern that the collector would then scan.
+     * The upper slot is zeroed for the same reason every other 2-slot value in
+     * the runtime is: an uninitialised half looks like a pointer to the GC.
+     */
+    nj_value a1[2];
     const nj_u2 *p;
     nj_u4 i = 0u;
     int neg = 0, any = 0;

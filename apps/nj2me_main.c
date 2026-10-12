@@ -20,6 +20,7 @@ static void usage(const char *argv0)
 "options:\n"
 "  --port <name>        headless | sdl2        (default: sdl2 if built in)\n"
 "  --midlet <class>     run a specific MIDlet class instead of MIDlet-1\n"
+"  --font <file>        draw text with a TrueType face (default: built-in)\n"
 "  --heap <mb>          Java heap size in megabytes (default: %u)\n"
 "  --scale <n>          integer upscale for the window (sdl2, default: auto)\n"
 "  --size <WxH>         screen size, e.g. 240x320 (default: %dx%d)\n"
@@ -28,6 +29,13 @@ static void usage(const char *argv0)
 "  --run-frames <n>     stop after n presented frames (for benchmarks)\n"
         "  --fs-dir <path>      root for file:// (JSR 75); no filesystem by default\n"
 "  --stats              print bytecode and frame counters at the end\n"
+"\n"
+"fonts\n"
+"  Text uses the built-in bitmap faces unless --font names a TrueType file.\n"
+"  The face is fitted to the built-in line heights rather than the other way\n"
+"  round, so MIDlet layout is unchanged, and any character the supplied font\n"
+"  has no glyph for still comes from the built-in face.  A build made with\n"
+"  -DNJ_ENABLE_TTF=0 has no rasteriser at all and ignores this option.\n"
 "\n"
 "on-screen keys (sdl2)\n"
 "  The window draws every J2ME key: soft-left, soft-right, the D-pad, fire,\n"
@@ -68,6 +76,7 @@ typedef struct cli {
     int         where;
     int         run_frames;
     const char *keys;
+    const char *font;
 } cli;
 
 static int parse_size(const char *s, int *w, int *h)
@@ -114,6 +123,8 @@ int main(int argc, char **argv)
             c.port_name = argv[++i];
         } else if (strcmp(a, "--midlet") == 0 && i + 1 < argc) {
             c.midlet = argv[++i];
+        } else if (strcmp(a, "--font") == 0 && i + 1 < argc) {
+            c.font = argv[++i];
         } else if (strcmp(a, "--heap") == 0 && i + 1 < argc) {
             c.heap_mb = (unsigned)atoi(argv[++i]);
         } else if (strcmp(a, "--scale") == 0 && i + 1 < argc) {
@@ -209,6 +220,7 @@ int main(int argc, char **argv)
     opts.where = c.where;
     opts.run_frames = (nj_u4)(c.run_frames > 0 ? c.run_frames : 0);
     opts.keys = c.keys;
+    opts.font_path = c.font;
 
     st = (nj_status)nj_run(&port, &opts);
 

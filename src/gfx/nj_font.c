@@ -33,7 +33,8 @@
 
 #define NJ_FONT_SIZE_COUNT 3
 #define NJ_FONT_STYLE_COUNT 8   /* bold | italic | underlined combinations */
-#define NJ_FONT_SLOT_STYLES 2   /* per fontset slot: plain and bold only   */
+/* NJ_FONT_SLOT_STYLES lives in nj_gfx.h: it is the slot stride, and
+ * nj_font_ttf.c indexes the same array. */
 #define NJ_FONT_FALLBACK_MAX_DEPTH 8
 
 #define NJ_FONT_STYLE_MASK \
@@ -44,9 +45,11 @@
  * whose geometry is (last_char - first_char + 1) cells of glyph_h rows of
  * (glyph_w + 7) / 8 bytes - see nj_gfx.h.
  *
- * `wide` expands to the three wide-glyph fields (lookup, ud, advance); the
- * fixed cell only covers ASCII and Latin-1, so this is how a character such
- * as a hanzi is found at all.
+ * `wide` expands to the wide-glyph fields in descriptor order - lookup,
+ * coverage, ud, advance.  It is four values and not three because `coverage`
+ * sits between the lookup hook and its `glyph_ud`, and C initialisers cannot
+ * step over a field.  The fixed cell only covers ASCII and Latin-1, so this
+ * is how a character such as a hanzi is found at all.
  */
 #define NJ_FONT_ENTRY(nm, szv, styv, wv, hv, av, dv, lv, bmp, wide) \
     {                                                          \
@@ -141,13 +144,14 @@ static int cjk_advance_16(void *ud, nj_u2 ch)
                ? 0 : NJ_CJK_16_W;
 }
 
-#define CJK_WIDE_12 cjk_lookup_12, NULL, cjk_advance_12
-#define CJK_WIDE_16 cjk_lookup_16, NULL, cjk_advance_16
+/* These tables are bitmaps, so their coverage is 0. */
+#define CJK_WIDE_12 cjk_lookup_12, 0, NULL, cjk_advance_12
+#define CJK_WIDE_16 cjk_lookup_16, 0, NULL, cjk_advance_16
 #else
 /* No table compiled in: the wide-glyph fields stay empty and a hanzi keeps
  * the placeholder advance it had before this existed. */
-#define CJK_WIDE_12 NULL, NULL, NULL
-#define CJK_WIDE_16 NULL, NULL, NULL
+#define CJK_WIDE_12 NULL, 0, NULL, NULL
+#define CJK_WIDE_16 NULL, 0, NULL, NULL
 #endif
 
 /* name, MIDP size value, style bits, cell metrics, bitmap */

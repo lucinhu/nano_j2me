@@ -41,10 +41,12 @@
 /* Glyph access                                                        */
 /* ------------------------------------------------------------------ */
 typedef struct glyph {
-    const nj_u1 *bits;   /* 1bpp rows, MSB first, row_bytes per row */
+    const nj_u1 *bits;   /* 1bpp rows, or 8bpp coverage rows        */
+    const nj_font *src;  /* the face that supplied `bits`           */
     int w;
     int h;
     int advance;         /* how far the pen moves after this glyph   */
+    int coverage;        /* 1 = one byte per pixel, 0 = 1bpp rows    */
 } glyph;
 
 static int f_row_bytes(int w)
@@ -65,9 +67,11 @@ static int f_row_bytes(int w)
 static void glyph_lookup(const nj_font *f, nj_u2 ch, glyph *out, int depth)
 {
     out->bits = NULL;
+    out->src = f;
     out->w = f->glyph_w;
     out->h = f->glyph_h;
     out->advance = f->glyph_w;
+    out->coverage = f->coverage;
 
     if (f->glyph_lookup) {
         int w = 0, h = 0;
@@ -116,10 +120,37 @@ static void blit_glyph(nj_gfx *g, const nj_font *f, const glyph *gl,
                        int pen_x, int baseline_y)
 {
     int row_bytes = f_row_bytes(gl->w);
-    int top = baseline_y - f->ascent;
+    /* The baseline comes from the face that supplied the glyph, not from the
+     * face the caller asked: a fallback with different metrics would otherwise
+     * be drawn at the wrong height. */
+    const nj_font *face = gl->src ? gl->src : f;
+    int top = baseline_y - face->ascent;
     int y;
 
     if (!gl->bits || gl->w <= 0 || gl->h <= 0) {
+        return;
+    }
+
+    if (gl->coverage) {
+        /*
+         * One byte per pixel.  Blending per pixel is the only option: a
+         * coverage of 128 has no 1bpp equivalent, and cutting at 128 is
+         * precisely what deletes the thin strokes of "1", "l", "i" and "t"
+         * when an antialiased rasteriser is fed through a bitmap one.
+         *
+         * Covered-but-empty pixels are skipped whole, which is most of an
+         * average glyph's box, so this costs less than it looks.
+         */
+        for (y = 0; y < gl->h; y++) {
+            const nj_u1 *row = gl->bits + (nj_size)y * gl->w;
+            int x;
+
+            for (x = 0; x < gl->w; x++) {
+                if (row[x] != 0u) {
+                    nj_gfx_blend_coverage(g, pen_x + x, top + y, row[x]);
+                }
+            }
+        }
         return;
     }
 

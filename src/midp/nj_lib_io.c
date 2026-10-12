@@ -731,6 +731,22 @@ NJFN(dis_read)
     return nj_call(vm, in, NJ_C_ISTREAM, "read", "()I", NULL, ret);
 }
 
+/*
+ * DataInputStream.available() is the underlying stream's, not InputStream's
+ * default of zero.  A MIDlet that sizes a buffer from available() - and the
+ * corpus is full of them - otherwise reads a zero-length image:
+ * 寻秦皇陵的诅咒_12450 called Image.createImage(data, 0, 0) and was told
+ * "no image data" once per frame.
+ */
+NJFN(dis_available)
+{
+    nj_ref in = dis_in(vm, NJ_THIS(args));
+    if (!in) {
+        return nj_throw(vm, "java/io/IOException", "no underlying stream");
+    }
+    return nj_call(vm, in, NJ_C_ISTREAM, "available", "()I", NULL, ret);
+}
+
 NJFN(dis_read_range)
 {
     nj_ref in = dis_in(vm, NJ_THIS(args));
@@ -1901,7 +1917,7 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/DataInputStream", "readFloat",        "()F", dis_read_float },
     { "java/io/DataInputStream", "readDouble",       "()D", dis_read_double },
     { "java/io/DataInputStream", "readUTF",          "()Ljava/lang/String;", dis_readUTF },
-    { "java/io/DataInputStream", "available",        "()I", is_available },
+    { "java/io/DataInputStream", "available",        "()I", dis_available },
     { "java/io/DataInputStream", "close",            "()V", is_close },
 
     { "java/io/DataOutputStream", "<init>",       "(Ljava/io/OutputStream;)V", dos_init },
