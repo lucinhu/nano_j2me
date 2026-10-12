@@ -147,6 +147,21 @@ static nj_u8 isqrt64(nj_u8 v)
     return r;
 }
 
+/* RMS of the difference between two renders of the same length. */
+static nj_u8 pcm_diff(const nj_u1 *a, const nj_u1 *b, nj_u4 frames, nj_u4 from, nj_u4 to)
+{
+    nj_u8 sumsq = 0u;
+    nj_u4 n = 0u;
+    nj_u4 i;
+
+    for (i = from; i < to && i < frames; i++) {
+        nj_s4 d = pcm_at(a, i) - pcm_at(b, i);
+        sumsq += (nj_u8)(nj_s4)(d * d);
+        n++;
+    }
+    return (n == 0u) ? 0u : isqrt64(sumsq / n);
+}
+
 static nj_u8 pcm_rms(const nj_u1 *pcm, nj_u4 frames, nj_u4 from, nj_u4 to)
 {
     nj_u8 sumsq = 0u;
@@ -1102,6 +1117,43 @@ int main(void)
         if (m != NULL) {
             t_free(NULL, m);
         }
+    }
+
+    /*
+     * CC93 is a chorus send: the note comes back a few milliseconds later and
+     * slightly out of tune with itself, so the render is not the signal it
+     * would have been.  The corpus sends it 1,260 times.
+     */
+    {
+        /* Every event after the first needs its own delta: without the 0x00
+         * between them the parser reads the next status byte as a VLQ and
+         * the note lands thousands of ticks away. */
+        static const nj_u1 wet[] = { 0xC0u, 48u, 0x00u, 0xB0u, 93u, 127u };
+        static const nj_u1 dry[] = { 0xC0u, 48u };
+        nj_u1 file[256];
+        nj_u4 n, fr1 = 0u, fr2 = 0u;
+        nj_u1 *m1;
+        nj_u1 *m2;
+        nj_u8 diff = 0u;
+        nj_u8 level = 0u;
+
+        n = build_voiced(file, wet, (nj_u4)sizeof(wet), 0u, 69u);
+        m1 = nj_midi_render(file, n, &fr1, &MEM);
+        n = build_voiced(file, dry, (nj_u4)sizeof(dry), 0u, 69u);
+        m2 = nj_midi_render(file, n, &fr2, &MEM);
+        check(m1 != NULL && m2 != NULL && fr1 > 0u, "a chorus send still renders");
+        if (m1 != NULL && m2 != NULL) {
+            nj_u4 lim = (fr1 < fr2) ? fr1 : fr2;
+            diff = pcm_diff(m1, m2, lim, NJ_MIDI_RATE / 20u, lim);
+            level = pcm_rms(m1, lim, NJ_MIDI_RATE / 20u, lim);
+            t_free(NULL, m1);
+            t_free(NULL, m2);
+        }
+        check(diff > 0u && level > 0u && diff * 10u > level,
+              "a chorus send puts a second copy of the note in the mix");
+        printf("     chorus difference %llu against level %llu (fr %u/%u)\n",
+               (unsigned long long)diff, (unsigned long long)level,
+               (unsigned)fr1, (unsigned)fr2);
     }
 
     /*

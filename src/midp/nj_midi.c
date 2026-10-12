@@ -88,6 +88,15 @@
 #define NJ_MIDI_REV_FB_B  12000         /* Q15: 0.37 */
 #define NJ_MIDI_REV_TAIL  (NJ_MIDI_RATE / 2u)
 
+/*
+ * CC93 is a chorus send (1,260 events in the corpus).  A chorus is the note
+ * again a few milliseconds later and slightly out of tune with itself, so the
+ * bus is a short delay whose length drifts between eight and sixteen
+ * milliseconds.
+ */
+#define NJ_MIDI_CHORUS_LEN  (NJ_MIDI_RATE / 62u)
+#define NJ_MIDI_CHORUS_TAIL (NJ_MIDI_RATE / 50u)
+
 #define NJ_MIDI_MAX_EVENTS 8192u
 #define NJ_MIDI_MAX_TEMPOS 64u
 #define NJ_MIDI_MAX_CTLS 2048u
@@ -99,6 +108,7 @@
 #define MID_CTL_MOD   3u            /* CC1: how deep the vibrato goes */
 #define MID_CTL_REVERB 4u           /* CC91: how much of the note goes to the room */
 #define MID_CTL_PAN   5u            /* CC10: where the note sits between the speakers */
+#define MID_CTL_CHORUS 6u           /* CC93: how much of the note goes to the chorus */
 
 /* Pitch bend: 14 bits, 8192 is no bend. */
 #define MID_BEND_CENTRE 8192u
@@ -363,6 +373,7 @@ typedef struct {
     nj_u4      pedal[16];       /* sustain pedal state at the end of the file */
     nj_u4      mod[16];         /* CC1 vibrato depth at the end of the file */
     nj_u4      reverb[16];      /* CC91 send at the end of the file */
+    nj_u4      chorus[16];      /* CC93 send at the end of the file */
     nj_u4      rpn[16];         /* the registered parameter being selected */
     nj_u4      pan[16];         /* CC10 at the end of the file, 64 is centre */
     int        pan_used;        /* any CC10 at all: only then is the mix stereo */
@@ -570,6 +581,11 @@ static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
                     if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_MOD, val)) {
                         return;
                     }
+                } else if (cc == 93u) {         /* chorus send */
+                    s->chorus[chan] = val;
+                    if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_CHORUS, val)) {
+                        return;
+                    }
                 } else if (cc == 91u) {         /* reverb send */
                     s->reverb[chan] = val;
                     if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_REVERB, val)) {
@@ -611,6 +627,10 @@ static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
                         return;
                     }
                     if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_REVERB, 0u)) {
+                        return;
+                    }
+                    s->chorus[chan] = 0u;
+                    if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_CHORUS, 0u)) {
                         return;
                     }
                 } else if (cc == 101u) {        /* RPN MSB */
@@ -710,6 +730,7 @@ typedef struct {
     nj_u4 lfo;                  /* vibrato phase, 32 bits */
     nj_u4 mod;                  /* vibrato depth, Q16, from the channel */
     nj_u4 rev;                  /* CC91 send, 0..127, from the channel */
+    nj_u4 chor;                 /* CC93 send, 0..127, from the channel */
     nj_u1 wave;
     nj_u1 tone;                 /* MID_W_DRUM: the tone's share */
     nj_u1 filt;                 /* low pass divisor: small = bright */
@@ -930,6 +951,11 @@ typedef struct nj_midi_stream {
     nj_u4 rev_pa;
     nj_u4 rev_pb;
     nj_u4 rev_any;
+    nj_u4 chorus_now[16];
+    nj_s4 *chor;
+    nj_u4 chor_pos;
+    nj_u4 chor_phase;
+    nj_u4 chor_any;
     /*
      * The allocator is held BY VALUE: the caller's nj_midi_mem is usually a
      * local in the branch that opened the stream, and a pointer to it dangles
@@ -948,6 +974,7 @@ static void mid_stream_drop(nj_midi_stream *s)
         s->mem.free(s->mem.ud, s->song.notes);
         s->mem.free(s->mem.ud, s->song.ctls);
         s->mem.free(s->mem.ud, s->rev);
+        s->mem.free(s->mem.ud, s->chor);
         s->mem.free(s->mem.ud, s);
     }
 }
@@ -1085,6 +1112,18 @@ static int mid_stream_init(nj_midi_stream *s, const void *data, nj_u4 size,
             memset(s->rev, 0, (nj_size)NJ_MIDI_REV_LEN * sizeof(nj_s4));
         }
     }
+    for (i = 0u; i < 16u; i++) {
+        if (s->song.chorus[i] != 0u) {
+            s->chor_any = 1u;
+        }
+    }
+    if (s->chor_any != 0u) {
+        s->frames += NJ_MIDI_CHORUS_TAIL;  /* the delayed copy needs somewhere to go */
+        s->chor = (nj_s4 *)mem->alloc(mem->ud, (nj_size)NJ_MIDI_CHORUS_LEN * sizeof(nj_s4));
+        if (s->chor != NULL) {
+            memset(s->chor, 0, (nj_size)NJ_MIDI_CHORUS_LEN * sizeof(nj_s4));
+        }
+    }
     s->chans = s->song.pan_used ? 2u : 1u;
     mid_sort_notes(&s->song);
     mid_sort_ctls(&s->song);
@@ -1141,6 +1180,7 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
         nj_s4 mixL = 0;
         nj_s4 mixR = 0;
         nj_s4 bus = 0;
+        nj_s4 cbus = 0;
         nj_s4 scaledL;
         nj_s4 scaledR;
 
@@ -1180,6 +1220,13 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
                     if (s->voices[v].active && s->voices[v].chan == ch) {
                         s->voices[v].rev = s->rev_now[ch];
+                    }
+                }
+            } else if (kind == MID_CTL_CHORUS) {
+                s->chorus_now[ch] = s->song.ctls[s->cev].a;
+                for (v = 0u; v < NJ_MIDI_VOICES; v++) {
+                    if (s->voices[v].active && s->voices[v].chan == ch) {
+                        s->voices[v].chor = s->chorus_now[ch];
                     }
                 }
             } else if (kind == MID_CTL_RANGE) {
@@ -1317,6 +1364,7 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
                     s->voices[v].release = NJ_MIDI_RATE / 125u;
                 }
                 s->voices[v].rev = s->rev_now[s->song.notes[s->ev].chan];
+                s->voices[v].chor = s->chorus_now[s->song.notes[s->ev].chan];
                 mid_pan_gains(s->pan_now[s->song.notes[s->ev].chan], &s->voices[v].gl,
                               &s->voices[v].gr);
                 s->voices[v].lfo = 0u;
@@ -1460,7 +1508,37 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
                 if (s->voices[v].rev != 0u) {
                     bus += s->voices[v].lp * (nj_s4)s->voices[v].rev / 127;
                 }
+                if (s->voices[v].chor != 0u) {
+                    cbus += s->voices[v].lp * (nj_s4)s->voices[v].chor / 127;
+                }
             }
+        }
+
+        /*
+         * The chorus: a short delay whose length drifts, so the delayed copy
+         * beats against the note that made it.  A channel with no CC93 never
+         * reaches it.
+         */
+        if (s->chor != NULL) {
+            nj_u4 depth = NJ_MIDI_CHORUS_LEN / 2u;
+            nj_s4 tri;
+            nj_u4 d;
+            nj_u4 rp;
+            nj_s4 wet;
+
+            s->chor[s->chor_pos] = cbus / 2;
+            s->chor_phase = (s->chor_phase + 1u) & 0xFFFFu;
+            tri = (s->chor_phase < 32768u) ? (nj_s4)s->chor_phase
+                                           : (nj_s4)(65535u - s->chor_phase);
+            d = depth + (nj_u4)(tri * (nj_s4)depth / 32768);
+            if (d >= NJ_MIDI_CHORUS_LEN) {
+                d = NJ_MIDI_CHORUS_LEN - 1u;
+            }
+            rp = (s->chor_pos + NJ_MIDI_CHORUS_LEN - d) % NJ_MIDI_CHORUS_LEN;
+            wet = s->chor[rp] / 3;      /* about a sixth of the dry level */
+            mixL += wet;
+            mixR += wet;
+            s->chor_pos = (s->chor_pos + 1u) % NJ_MIDI_CHORUS_LEN;
         }
 
         /*
