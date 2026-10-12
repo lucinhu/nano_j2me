@@ -824,10 +824,13 @@ NJFN(g_setClip)
     nj_gfx g;
     nj_surface sc;
 
-    if (w < 0 || h < 0) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "clip dimensions must not be negative");
-    }
+    /*
+     * A negative width or height is not an error: MIDlets routinely compute
+     * w = width - x with x past the edge and expect an empty clip.
+     * 傲世三国志－群雄争霸_5633 and 穿越火线-韩国正版_6874 did exactly that
+     * once per frame (~1600 lines between them), and the throw aborted paint().
+     * nj_gfx_set_clip() already turns a non-positive size into an empty clip.
+     */
     if (!gfx_load(vm, self, &g, &sc)) {
         return NJ_ERR;
     }

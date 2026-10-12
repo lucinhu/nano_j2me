@@ -1324,6 +1324,53 @@ static void test_data_interfaces(nj_vm *vm)
  * ArrayStoreException, swallowed its own loader failure and painted a null
  * Image every frame after that.
  */
+/* setClip() with a negative size leaves an empty clip; it does not throw.
+ * The comment above g_setClip() names the two corpus titles that do this once
+ * per frame. */
+static void test_clip_negative_is_empty(nj_vm *vm)
+{
+    nj_value a[4];
+    nj_value ret;
+    nj_ref img;
+    nj_ref g;
+
+    a[0] = vint(8);
+    a[1] = vint(8);
+    ret.bits = 0u;
+    if (nj_call_static(vm, "javax/microedition/lcdui/Image", "createImage",
+                       "(II)Ljavax/microedition/lcdui/Image;", a, &ret) != NJ_OK
+        || ret.r == NULL) {
+        OK_MSG(0, "an 8x8 mutable image: %s", nj_exception_describe(vm));
+        nj_clear_exception(vm);
+        return;
+    }
+    img = ret.r;
+    g = nj_call_ref(vm, img, "javax/microedition/lcdui/Image", "getGraphics",
+                    "()Ljavax/microedition/lcdui/Graphics;", NULL);
+    OK_MSG(g != NULL, "the image hands out a Graphics");
+
+    a[0] = vint(1);
+    a[1] = vint(1);
+    a[2] = vint(4);
+    a[3] = vint(4);
+    OK_MSG(nj_call(vm, g, "javax/microedition/lcdui/Graphics", "setClip",
+                   "(IIII)V", a, NULL) == NJ_OK,
+           "setClip(1,1,4,4)");
+    OK_MSG(nj_call_int(vm, g, "javax/microedition/lcdui/Graphics",
+                       "getClipWidth", "()I", NULL) == 4,
+           "and the clip is four wide");
+
+    a[2] = vint(-2);
+    a[3] = vint(-2);
+    OK_MSG(nj_call(vm, g, "javax/microedition/lcdui/Graphics", "setClip",
+                   "(IIII)V", a, NULL) == NJ_OK,
+           "setClip(1,1,-2,-2) does not throw");
+    OK_MSG(nj_call_int(vm, g, "javax/microedition/lcdui/Graphics",
+                       "getClipWidth", "()I", NULL) == 0,
+           "and the clip is empty");
+    clean(vm, "Graphics.setClip");
+}
+
 /* ByteArrayOutputStream.close() is documented as having no effect;
  * 寻秦皇陵的诅咒_12450 wrote its image bytes, closed, and asked for them back -
  * bound to reset() it got a zero-length image every frame. */
@@ -1654,6 +1701,7 @@ int main(void)
     test_null_initial_text(vm);
     test_data_input_available(vm);
     test_baos_close_keeps_data(vm);
+    test_clip_negative_is_empty(vm);
     test_player_survives_collection(vm);
     test_image_survives_collection(vm);
 
