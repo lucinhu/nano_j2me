@@ -1324,6 +1324,62 @@ static void test_data_interfaces(nj_vm *vm)
  * ArrayStoreException, swallowed its own loader failure and painted a null
  * Image every frame after that.
  */
+/* MIDP 2.0 documents the initial contents of TextBox and TextField as "the
+ * text content, or null if the text is empty".  三国杀2．2美化版_1347 builds its
+ * user-creation TextBox with a null text, so a runtime that rejected null made
+ * the game die before its first frame. */
+static void test_null_initial_text(nj_vm *vm)
+{
+    const char TB[] = "javax/microedition/lcdui/TextBox";
+    const char TF[] = "javax/microedition/lcdui/TextField";
+    const char *DESC = "(Ljava/lang/String;Ljava/lang/String;II)V";
+    nj_value a[4];
+    nj_ref title = nj_string_new(vm, "title");
+    nj_ref tb, tf, s;
+
+    a[0].r = title;
+    a[1].r = NULL;
+    a[2].i = 10;
+    a[3].i = 0;
+
+    tb = construct(vm, TB, DESC, a, "TextBox with a null text");
+    if (tb != NULL) {
+        s = nj_call_ref(vm, tb, TB, "getString", "()Ljava/lang/String;", NULL);
+        OK_MSG(s != NULL && nj_string_length(s) == 0u,
+               "a null initial text becomes the empty string, got %u chars",
+               s ? (unsigned)nj_string_length(s) : 0u);
+        a[0].r = nj_string_new(vm, "abc");
+        OK(nj_call(vm, tb, TB, "setString", "(Ljava/lang/String;)V", a, NULL) == NJ_OK);
+        s = nj_call_ref(vm, tb, TB, "getString", "()Ljava/lang/String;", NULL);
+        OK_MSG(s != NULL && nj_string_equals_utf8(s, "abc"),
+               "and the field is writable afterwards");
+    }
+
+    a[0].r = title;
+    a[1].r = NULL;
+    tf = construct(vm, TF, DESC, a, "TextField with a null text");
+    if (tf != NULL) {
+        s = nj_call_ref(vm, tf, TF, "getString", "()Ljava/lang/String;", NULL);
+        OK_MSG(s != NULL && nj_string_length(s) == 0u,
+               "a TextField takes a null initial text too");
+    }
+
+    /* A null string is still not a legal font or an illegal maxSize. */
+    a[0].r = title;
+    a[1].r = NULL;
+    a[2].i = 0;
+    a[3].i = 0;
+    {
+        nj_ref o = nj_object_new(vm, TB);
+        OK(o != NULL);
+        if (o != NULL) {
+            OK_MSG(nj_call_special(vm, o, TB, "<init>", DESC, a, NULL) != NJ_OK,
+                   "a non-positive maxSize is still rejected");
+            nj_clear_exception(vm);
+        }
+    }
+}
+
 static void test_image_survives_collection(nj_vm *vm)
 {
     static const char *IMG = "javax/microedition/lcdui/Image";
@@ -1429,6 +1485,7 @@ int main(void)
     test_connector_open_mode(vm);
     test_alloc_gives_up(vm);
     test_data_interfaces(vm);
+    test_null_initial_text(vm);
     test_image_survives_collection(vm);
 
     nj_vm_destroy(vm);

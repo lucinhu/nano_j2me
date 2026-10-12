@@ -5631,6 +5631,20 @@ static int text_height_for(nj_vm *vm, nj_ref str, int width, const nj_font *f)
     }
 }
 
+/*
+ * MIDP 2.0 documents the initial contents of both TextBox and TextField as
+ * "the text content, or null if the text is empty".  三国杀2．2美化版_1347
+ * builds its user-creation TextBox with a null text and used to die with
+ * NullPointerException in lk.<init> before the first frame was painted.
+ */
+static nj_ref text_or_empty(nj_vm *vm, nj_ref text)
+{
+    if (text) {
+        return text;
+    }
+    return nj_string_new_n(vm, "", 0);
+}
+
 NJFN(tf_init)
 {
     nj_ref self = NJ_THIS(args);
@@ -5641,8 +5655,9 @@ NJFN(tf_init)
     nj_ref chars;
 
     (void)item_init(vm, th, args, ret);
+    text = text_or_empty(vm, text);
     if (!text) {
-        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
+        return nj_throw_oom(vm);
     }
     if (max <= 0) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
@@ -7726,8 +7741,9 @@ NJFN(tb_init)
     nj_ref chars;
 
     (void)d_init(vm, th, args, ret);
+    text = text_or_empty(vm, text);
     if (!text) {
-        return nj_throw(vm, "java/lang/NullPointerException", "text is null");
+        return nj_throw_oom(vm);
     }
     if (max <= 0) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
