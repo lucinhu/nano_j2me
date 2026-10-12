@@ -3659,6 +3659,7 @@ const nj_native_entry nj_lib_util_table[] = {
     { "java/util/Date", "setTime",     "(J)V",                  date_setTime },
     { "java/util/Date", "equals",      "(Ljava/lang/Object;)Z", date_equals },
     { "java/util/Date", "hashCode",    "()I",                   date_hashCode },
+    { "java/util/Date", "hashCode",    "()I",                   date_hashCode },
     { "java/util/Date", "toString",    "()Ljava/lang/String;",  date_toString },
     { "java/util/Date", "before",      "(Ljava/util/Date;)Z",   date_before },
     { "java/util/Date", "after",       "(Ljava/util/Date;)Z",   date_after },

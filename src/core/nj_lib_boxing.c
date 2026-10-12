@@ -39,6 +39,48 @@ NJFN(int_intValue)
     return NJ_OK;
 }
 
+/*
+ * Integer.hashCode() is the value it wraps, which is what a Hashtable keyed on
+ * Integers needs.  The method was declared in Integer_methods but never bound,
+ * so it existed, resolved, and then threw UnsatisfiedLinkError the moment
+ * anything called it - which is how an assassin's creed title failed, by
+ * putting Integers into a Hashtable.
+ *
+ * Falling back to Object.hashCode (identity) would have kept it running, so
+ * this would have stayed invisible while quietly bucketing every key wrong.
+ */
+NJFN(int_hashCode)
+{
+    nj_field *f = vf(vm, "java/lang/Integer", "I");
+    ret->i = f ? nj_field_read_int(vm, NJ_THIS(args), f) : 0;
+    return NJ_OK;
+}
+
+/*
+ * An Integer equals another Integer holding the same number - and only that.
+ * A Long or a Short holding the same value is NOT equal, which is what the
+ * wrapper contract says and what a Hashtable keyed on mixed wrappers relies
+ * on.  Like hashCode above, this method was declared and never bound.
+ */
+NJFN(int_equals)
+{
+    nj_ref a = NJ_THIS(args);
+    nj_ref b = NJ_ARG_REF(args, 0);
+    nj_field *f = vf(vm, "java/lang/Integer", "I");
+
+    if (!a || !b) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    if (b->cls && a->cls && !nj_class_is_subclass_of(b->cls, a->cls)) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    ret->i = (f && nj_field_read_int(vm, a, f) ==
+                   nj_field_read_int(vm, b, f)) ? 1 : 0;
+    return NJ_OK;
+}
+
 NJFN(int_parseInt)
 {
     nj_ref s = NJ_ARG_REF(args, 0);
@@ -361,6 +403,8 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Integer",   "<init>",       "(I)V", int_init },
     { "java/lang/Integer",   "intValue",     "()I",  int_intValue },
     { "java/lang/Integer",   "parseInt",     "(Ljava/lang/String;)I", int_parseInt },
+    { "java/lang/Integer",   "hashCode",     "()I",                   int_hashCode },
+    { "java/lang/Integer",   "equals",       "(Ljava/lang/Object;)Z", int_equals },
     { "java/lang/Integer",   "toString",     "(I)Ljava/lang/String;", int_toString },
     { "java/lang/Integer",   "toString",     "(II)Ljava/lang/String;", int_toString_radix },
     { "java/lang/Integer",   "toHexString",  "(I)Ljava/lang/String;", int_toHexString },
