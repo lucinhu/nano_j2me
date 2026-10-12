@@ -499,6 +499,13 @@ struct nj_vm {
     nj_u8      native_calls;
     nj_u8      frames;          /* frames presented to the port */
     nj_u8   paints;         /* paint() calls - see nj_midp_paint */
+    nj_u8   gfx_calls;      /* Graphics method calls that loaded the
+                             * surface.  paints=N with gfx_calls=0 says the
+                             * game painted and drew nothing; gfx_calls high
+                             * with a black frame says the drawing landed
+                             * somewhere else.  Counted here and not per
+                             * pixel: a per-pixel counter would cost more
+                             * than the thing it measures. */
 
     /* scratch: reusable buffers owned by the VM */
     nj_u2     *scratch_u2;

@@ -287,6 +287,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_latedemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_fsorder_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_hangdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_sizedemo_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -418,6 +419,11 @@ if(NJ_BUILD_TESTS)
   # which reads as a missing class and sent a reader looking for one.
   if(EXISTS ${NJ_FIXTURES}/blockdemo.jar)
     if(NJ_JAVAC)
+    add_test(NAME check_corpus_size_retry
+             COMMAND ${CMAKE_COMMAND} -E env
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_corpus_size_retry.sh
+                     ${NJ_FIXTURES}/sizedemo.jar)
+    set_tests_properties(check_corpus_size_retry PROPERTIES TIMEOUT 300)
     add_test(NAME check_hang_teardown
              COMMAND ${CMAKE_COMMAND} -E env
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>

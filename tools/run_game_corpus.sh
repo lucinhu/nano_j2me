@@ -120,39 +120,11 @@ keys_for() {
 # crashes or hangs because of it is a real finding, and that is the point.
 POKE="${NJ_POKE:-5:fire,6:up,7:down,8:left,9:right,10:soft1,11:soft2,12:1,13:2,14:5,15:star,16:pound,20:fire,21:fire,25:left,30:right,35:fire}"
 
-for jar in "${JARS[@]}"; do
-    title="$(basename "$jar" .jar)"
-    KARGS=()
-    KS="$(keys_for "$title")"
-    if [ -n "$KS" ]; then
-        KARGS=(--keys "$KS")
-    elif [ -n "$POKE" ]; then
-        KARGS=(--keys "$POKE")
-    fi
-    out="$(mktemp -d)"
-    log="$out/log.txt"
-
-    used=""
-    for size in $SIZES; do
-        : > "$log"
-        timeout "$SECS" "$BIN" --port headless --heap "$HEAP" --size "$size" \
-                --fps "$FPS" --run-frames "$FRAMES" --stats \
-                --dump-frames "$out/" --dump-every 40 \
-                "${KARGS[@]}" \
-                "$jar" >"$log" 2>&1
-        if grep -q "Screen too" "$log"; then
-            rm -f "$out"/*.ppm
-            continue        # this title rejects this size; try the next
-        fi
-        used="$size"
-        break
-    done
-    if [ -z "$used" ]; then
-        if [ -n "$SIZE" ]; then :; fi
-        used="(no size accepted)"
-    fi
-
-    verdict="$(python3 - "$out" "$MIN_COLOURS" "$log" "$STRICT_MOTION" <<'PY'
+# The per-run verdict, as a function: the size loop has to be able to ask
+# "does it draw HERE?" more than once per title, because whether a title
+# draws at all depends on the screen size it was given.
+verdict_for() {
+    python3 - "${out:-}" "$MIN_COLOURS" "${log:-}" "$STRICT_MOTION" <<'PY'
 import glob, sys, hashlib
 from collections import Counter
 try:
@@ -227,7 +199,54 @@ if changed < 2:
     raise SystemExit
 print("PASS|%d|%d|%d|" % (len(frames), cols, changed))
 PY
-)"
+}
+
+for jar in "${JARS[@]}"; do
+    title="$(basename "$jar" .jar)"
+    KARGS=()
+    KS="$(keys_for "$title")"
+    if [ -n "$KS" ]; then
+        KARGS=(--keys "$KS")
+    elif [ -n "$POKE" ]; then
+        KARGS=(--keys "$POKE")
+    fi
+    out="$(mktemp -d)"
+    log="$out/log.txt"
+
+    used=""
+    tried=""
+    for size in $SIZES; do
+        : > "$log"
+        rm -f "$out"/*.ppm
+        timeout "$SECS" "$BIN" --port headless --heap "$HEAP" --size "$size" \
+                --fps "$FPS" --run-frames "$FRAMES" --stats \
+                --dump-frames "$out/" --dump-every 40 \
+                "${KARGS[@]}" \
+                "$jar" >"$log" 2>&1
+        if grep -q "Screen too" "$log"; then
+            rm -f "$out"/*.ppm
+            continue        # this title rejects this size; try the next
+        fi
+        used="$size"
+        tried="$tried$size "
+
+        # Does it actually draw HERE?  Stopping at the first size that merely
+        # starts is how a size-dependent game gets written off as "the game is
+        # not drawing": 宠物王国2紫_5550 renders at 240x320 and is a single
+        # black colour at 176x208, and SIZES lists 176x208 first.  So a verdict
+        # of "flat" or "could not start" is not final while sizes remain.
+        verdict="$(verdict_for)"
+        case "$verdict" in
+            PASS*) break ;;
+            *"flat frame"*|*"could not start"*) continue ;;
+            *) break ;;
+        esac
+    done
+    if [ -z "$used" ]; then
+        if [ -n "$SIZE" ]; then :; fi
+        used="(no size accepted)"
+    fi
+
     # Read the port's own report BEFORE deleting the temp dir it lives in.
     # It did live after the rm once, and every title then reported "?" - which
     # looked like a missing observation rather than a missing file.

@@ -973,10 +973,11 @@ done:
         if (port.log) {
             char buf[256];
             snprintf(buf, sizeof(buf),
-                     "stats: frames=%lu paints=%lu time=%.3fs fps=%.1f "
+                     "stats: frames=%lu paints=%lu gfx=%lu time=%.3fs fps=%.1f "
                      "bytecodes=%lu (%.2f M/s) natives=%lu "
                      "heap=%lu/%lu bytes",
-                     (unsigned long)s.frames, (unsigned long)s.paints, secs,
+                     (unsigned long)s.frames, (unsigned long)s.paints,
+                     (unsigned long)s.gfx_calls, secs,
                      secs > 0.0 ? (double)s.frames / secs : 0.0,
                      (unsigned long)s.insns,
                      secs > 0.0 ? (double)s.insns / secs / 1.0e6 : 0.0,

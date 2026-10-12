@@ -638,6 +638,13 @@ static int gfx_load(nj_vm *vm, nj_ref g_obj, nj_gfx *g, nj_surface *surf_scratch
     if (!s) {
         return 0;
     }
+    /*
+     * Every Graphics method - draw and query alike - comes through here, so
+     * this is the one place a call count can be taken without touching the
+     * pixel path.  A frame that was painted but is empty shows up as
+     * paints rising while this does not.
+     */
+    vm->gfx_calls++;
     nj_gfx_init(g, s);
 
     tx = (int)fget(vm, g_obj, G_CLS, F_G_TX, D_INT);
