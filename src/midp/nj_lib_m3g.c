@@ -2316,6 +2316,9 @@ static int m3g_has_file_id(const unsigned char *b, nj_u4 len)
     return 1;
 }
 
+/* the class an object type maps to; defined with the other tables below */
+static const char *m3g_class_of(nj_u1 type);
+
 NJFN(m3g_load)
 {
     nj_ref name = NJ_ARG_REF(args, 0);
@@ -2358,47 +2361,107 @@ NJFN(m3g_load)
         magic = 0xAB4Au;
     }
     {
-        char mbuf[192];
-        char num[32];
-        nj_u4 n = 0u;
-        const char *q;
-        int k;
-        nj_host_free(vm, data);
-
-        if (magic != 0xAB4Au) {
-            q = " is not a .m3g container (wrong file identifier)";
-            for (k = 0; cname[k] && n + 1u < sizeof(mbuf); k++) {
-                mbuf[n++] = cname[k];
-            }
-            while (*q && n + 1u < sizeof(mbuf)) { mbuf[n++] = *q++; }
-            mbuf[n] = '\0';
-            return nj_throw(vm, "java/io/IOException", mbuf);
-        }
-
         /*
-         * It IS a container.  Report the size so a log reader can tell a
-         * two-byte stub from a real model file without opening the JAR.
+         * It is a container, so build the objects it holds.  One Java object
+         * per file object, of the class the file's type byte names, carrying
+         * the userID the file gave it - which is what Object3D.find() looks
+         * for.  The type numbers are the ones in the format specification's
+         * ObjectType table, and this mapping was checked against it rather
+         * than remembered: an earlier version of the table in the corpus tool
+         * had 11 as IndexBuffer when the specification says TriangleStripArray.
+         *
+         * What is NOT done here is linking: a Group's children, a Mesh's
+         * submeshes, an Appearance's textures are all object references in the
+         * file, and reading them needs the object table and the reference
+         * rules.  Until that exists the objects come back empty, which is
+         * honest - and it is why a title that loads a model still draws
+         * nothing.
          */
-        k = 0;
-        {
-            nj_u4 v = len;
-            char tmp[16];
-            int t = 0;
-            if (v == 0u) { tmp[t++] = '0'; }
-            while (v && t < (int)sizeof(tmp)) { tmp[t++] = (char)('0' + (v % 10u)); v /= 10u; }
-            while (t > 0 && k < (int)sizeof(num) - 1) { num[k++] = tmp[--t]; }
+        nj_m3g_object *objs;
+        nj_u4 nobj = 0u, nsec = 0u, i;
+        nj_u4 cap = 4096u;
+        char err[192];
+        nj_ref arr;
+        nj_u4 mark;
+
+        objs = (nj_m3g_object *)nj_host_alloc(vm, (nj_size)(sizeof(nj_m3g_object) * cap));
+        if (!objs) {
+            nj_host_free(vm, data);
+            return nj_throw(vm, "java/lang/OutOfMemoryError", "the object table");
         }
-        num[k] = '\0';
-        q = cname;
-        while (*q && n + 1u < sizeof(mbuf)) { mbuf[n++] = *q++; }
-        q = ": a .m3g container of ";
-        while (*q && n + 1u < sizeof(mbuf)) { mbuf[n++] = *q++; }
-        q = num;
-        while (*q && n + 1u < sizeof(mbuf)) { mbuf[n++] = *q++; }
-        q = " byte(s); this runtime recognises the container but has no object parser yet";
-        while (*q && n + 1u < sizeof(mbuf)) { mbuf[n++] = *q++; }
-        mbuf[n] = '\0';
-        return nj_throw(vm, "java/io/IOException", mbuf);
+        if (nj_m3g_scan_objects(vm, (const nj_u1 *)data, len, objs, cap,
+                                &nobj, &nsec, err, sizeof(err)) != NJ_OK) {
+            nj_host_free(vm, objs);
+            nj_host_free(vm, data);
+            return nj_throw(vm, "java/io/IOException", err);
+        }
+        nj_host_free(vm, data);
+        if (nobj == 0u) {
+            nj_host_free(vm, objs);
+            return nj_throw(vm, "java/io/IOException",
+                            "the container holds no objects");
+        }
+        arr = nj_object_array_new(vm, "javax/microedition/m3g/Object3D", nobj);
+        if (!arr) {
+            nj_host_free(vm, objs);
+            return NJ_ERR_NOMEM;
+        }
+        mark = nj_root_mark(vm);
+        arr = nj_root(vm, arr);
+        for (i = 0u; i < nobj; i++) {
+            const char *cls = m3g_class_of(objs[i].type);
+            nj_u4 inner;
+            nj_ref o;
+
+            if (!cls) { continue; }   /* a reserved type: the slot stays empty */
+            inner = nj_root_mark(vm);
+            o = nj_object_new(vm, cls);
+            if (o) {
+                o = nj_root(vm, o);
+                nj_iput(vm, o, nj_field_lookup(vm, NJ_C_O3D, "_nj_userID", "I", 0),
+                        (nj_s4)objs[i].fields.user_id);
+                nj_array_set_ref(arr, i, o);
+            }
+            nj_root_release(vm, inner);
+        }
+        nj_root_release(vm, mark);
+        nj_host_free(vm, objs);
+        ret->r = arr;
+        return NJ_OK;
+    }
+}
+
+/*
+ * The class a file object of this type becomes, from the ObjectType table in
+ * the format specification.  Zero means the type is reserved (23 to 254), and
+ * the caller leaves that slot of the array empty rather than inventing one.
+ */
+static const char *m3g_class_of(nj_u1 type)
+{
+    switch (type) {
+    case 1u:   return "javax/microedition/m3g/AnimationController";
+    case 2u:   return "javax/microedition/m3g/AnimationTrack";
+    case 3u:   return "javax/microedition/m3g/Appearance";
+    case 4u:   return "javax/microedition/m3g/Background";
+    case 5u:   return "javax/microedition/m3g/Camera";
+    case 6u:   return "javax/microedition/m3g/CompositingMode";
+    case 7u:   return "javax/microedition/m3g/Fog";
+    case 8u:   return "javax/microedition/m3g/PolygonMode";
+    case 9u:   return "javax/microedition/m3g/Group";
+    case 10u:  return "javax/microedition/m3g/Image2D";
+    case 11u:  return "javax/microedition/m3g/TriangleStripArray";
+    case 12u:  return "javax/microedition/m3g/Light";
+    case 13u:  return "javax/microedition/m3g/Material";
+    case 14u:  return "javax/microedition/m3g/Mesh";
+    case 15u:  return "javax/microedition/m3g/MorphingMesh";
+    case 16u:  return "javax/microedition/m3g/SkinnedMesh";
+    case 17u:  return "javax/microedition/m3g/Texture2D";
+    case 18u:  return "javax/microedition/m3g/Sprite";
+    case 19u:  return "javax/microedition/m3g/KeyframeSequence";
+    case 20u:  return "javax/microedition/m3g/VertexArray";
+    case 21u:  return "javax/microedition/m3g/VertexBuffer";
+    case 22u:  return "javax/microedition/m3g/World";
+    default:   return NULL;   /* 0 is the header, 255 an external reference */
     }
 }
 
