@@ -1075,12 +1075,81 @@ static void test_graphics(nj_vm *vm)
             OK_MSG(!exc_is(vm, "java/lang/IllegalArgumentException"),
                    "drawImage with TOP alone threw; MIDP defaults it to LEFT");
 
-            /* Two horizontal constants at once is the real error. */
-            ia[3] = iref(1 | 4);
-            (void)nj_call(vm, dg2, NJ_C_GRAPHICS, "drawImage",
-                          "(L" NJ_C_IMAGE ";III)V", ia, NULL);
-            OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
-                   "drawImage with LEFT|RIGHT did not throw");
+            /*
+             * Two horizontal constants at once is NOT an error here.
+             *
+             * MIDP 2.0 makes LEFT, HCENTER and RIGHT mutually exclusive, and
+             * this runtime used to throw.  But the devices these MIDlets
+             * shipped on did not enforce it, and five titles in the collected
+             * corpus pass a value that mixes bits -- 3, which under MIDP is
+             * LEFT|HCENTER.  All five drew correctly on real phones and all
+             * five stopped presenting frames here, so the conflict is now
+             * resolved rather than rejected.  These two cases pin down HOW it
+             * is resolved, so that "resolve" cannot quietly become "ignore":
+             * with no centre bit LEFT wins, and a centre bit beats LEFT.
+             */
+            {
+                nj_ref dst3 = image_new(vm, 16, 4);
+                nj_ref dg3 = dst3 ? call_ref(vm, dst3, NJ_C_IMAGE, "getGraphics",
+                                             "()L" NJ_C_GRAPHICS ";", NULL, &ok) : NULL;
+                if (dg3) {
+                    nj_value ja[4];
+                    ja[0] = sref(img);
+                    ja[1] = iref(0);
+                    ja[2] = iref(0);
+
+                    ja[3] = iref(1 | 4);        /* LEFT|RIGHT */
+                    (void)nj_call(vm, dg3, NJ_C_GRAPHICS, "drawImage",
+                                  "(L" NJ_C_IMAGE ";III)V", ja, NULL);
+                    OK_MSG(!exc_is(vm, "java/lang/IllegalArgumentException"),
+                           "drawImage with LEFT|RIGHT threw; the conflict must be resolved");
+                    OK_MSG(img_pixel(vm, dst3, 0, 0) != 0,
+                           "LEFT|RIGHT resolved to something other than LEFT (nothing at x=0)");
+
+                    dst3 = image_new(vm, 16, 4);
+                    dg3 = dst3 ? call_ref(vm, dst3, NJ_C_IMAGE, "getGraphics",
+                                          "()L" NJ_C_GRAPHICS ";", NULL, &ok) : NULL;
+                    if (dg3) {
+                        ja[3] = iref(1 | 2);    /* LEFT|HCENTER */
+                        (void)nj_call(vm, dg3, NJ_C_GRAPHICS, "drawImage",
+                                      "(L" NJ_C_IMAGE ";III)V", ja, NULL);
+                        OK_MSG(!exc_is(vm, "java/lang/IllegalArgumentException"),
+                               "drawImage with LEFT|HCENTER threw; this is the value real titles pass");
+                        /*
+                         * HCENTER must beat LEFT, so this cannot look like the
+                         * plain LEFT case.  Comparing the two pictures is
+                         * independent of how wide the source image happens to
+                         * be, which a positional assertion is not.
+                         */
+                        {
+                            nj_ref dst4 = image_new(vm, 16, 4);
+                            nj_ref dg4 = dst4 ? call_ref(vm, dst4, NJ_C_IMAGE, "getGraphics",
+                                                         "()L" NJ_C_GRAPHICS ";", NULL, &ok) : NULL;
+                            int differs = 0;
+                            if (dg4) {
+                                nj_value ka[4];
+                                ka[0] = sref(img);
+                                ka[1] = iref(0);
+                                ka[2] = iref(0);
+                                ka[3] = iref(1);        /* LEFT alone */
+                                (void)nj_call(vm, dg4, NJ_C_GRAPHICS, "drawImage",
+                                              "(L" NJ_C_IMAGE ";III)V", ka, NULL);
+                                for (int yy = 0; yy < 4 && !differs; yy++) {
+                                    for (int xx = 0; xx < 16; xx++) {
+                                        if (img_pixel(vm, dst3, xx, yy) !=
+                                            img_pixel(vm, dst4, xx, yy)) {
+                                            differs = 1;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            OK_MSG(differs,
+                                   "LEFT|HCENTER drew exactly like LEFT, so the conflict was ignored, not resolved");
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -1571,15 +1571,42 @@ NJFN(g_drawChar)
  *
  * Two bits set in the same group is a genuine conflict and still throws.
  */
-static int anchor_is_bad(nj_s4 anchor)
+/*
+ * Resolve an anchor the way the devices these MIDlets shipped on did: a
+ * contradictory pair is not an error, it means "centred".
+ *
+ * MIDP 2.0 makes the horizontal bits (LEFT, HCENTER, RIGHT) mutually exclusive
+ * and the vertical ones too, and this runtime used to throw
+ * IllegalArgumentException whenever a MIDlet set two of them.  Five titles in
+ * the collected corpus pass 3, which under MIDP is LEFT|HCENTER -- a
+ * combination no compliant device would accept either, yet all five drew
+ * correctly on the phones they were written for, because those
+ * implementations simply did not enforce the rule.
+ *
+ * Refusing to start is the worst of the available answers: it loses the whole
+ * program over where a label sits.  So the conflict is resolved instead, and
+ * deterministically -- the centre bit wins, which is what a MIDlet mixing
+ * horizontal bits is asking for; with no centre bit the leftmost/topmost bit
+ * wins.  The choice is visible in the picture rather than silent: an anchor
+ * that resolves differently than the author intended puts the image in the
+ * wrong place, and that is a bug someone can see and report.
+ */
+static nj_s4 anchor_resolve(nj_s4 anchor)
 {
-    int h = (int)anchor & (MIDP_ANCHOR_LEFT | MIDP_ANCHOR_HCENTER |
-                           MIDP_ANCHOR_RIGHT);
-    int v = (int)anchor & (MIDP_ANCHOR_TOP | MIDP_ANCHOR_VCENTER |
-                           MIDP_ANCHOR_BOTTOM | MIDP_ANCHOR_BASELINE);
-
-    /* For a power-of-two group, h & (h - 1) is nonzero iff two bits are set. */
-    return (h != 0 && (h & (h - 1)) != 0) || (v != 0 && (v & (v - 1)) != 0);
+    if (anchor & MIDP_ANCHOR_HCENTER) {
+        anchor &= ~(nj_s4)(MIDP_ANCHOR_LEFT | MIDP_ANCHOR_RIGHT);
+    } else if (anchor & MIDP_ANCHOR_LEFT) {
+        anchor &= ~(nj_s4)MIDP_ANCHOR_RIGHT;
+    }
+    if (anchor & MIDP_ANCHOR_VCENTER) {
+        anchor &= ~(nj_s4)(MIDP_ANCHOR_TOP | MIDP_ANCHOR_BOTTOM |
+                           MIDP_ANCHOR_BASELINE);
+    } else if (anchor & MIDP_ANCHOR_TOP) {
+        anchor &= ~(nj_s4)(MIDP_ANCHOR_BOTTOM | MIDP_ANCHOR_BASELINE);
+    } else if (anchor & MIDP_ANCHOR_BOTTOM) {
+        anchor &= ~(nj_s4)MIDP_ANCHOR_BASELINE;
+    }
+    return anchor;
 }
 
 
@@ -1597,14 +1624,13 @@ NJFN(g_drawImage)
     if (!img) {
         return nj_throw(vm, "java/lang/NullPointerException", "image is null");
     }
-    if (anchor != -1 &&
-        anchor_is_bad(anchor)) {
-        nj_logf(vm, 0, "drawImage/drawRegion: rejected anchor %ld "
-                "(LEFT=%d HCENTER=%d RIGHT=%d TOP=%d VCENTER=%d BOTTOM=%d)",
-                (long)anchor, NJ_ANCHOR_LEFT, NJ_ANCHOR_HCENTER, NJ_ANCHOR_RIGHT,
-                NJ_ANCHOR_TOP, NJ_ANCHOR_VCENTER, NJ_ANCHOR_BOTTOM);
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "bad anchor: conflicting horizontal bits");
+    if (anchor != -1) {
+        nj_s4 fixed = anchor_resolve(anchor);
+        if (fixed != anchor) {
+            nj_logf(vm, 0, "drawImage/drawRegion: anchor %ld has conflicting "
+                    "bits, using %ld", (long)anchor, (long)fixed);
+        }
+        anchor = fixed;
     }
     if (!img_view(vm, img, &view)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
@@ -1653,14 +1679,13 @@ NJFN(g_drawRegion)
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "negative source region");
     }
-    if (anchor != -1 &&
-        anchor_is_bad(anchor)) {
-        nj_logf(vm, 0, "drawImage/drawRegion: rejected anchor %ld "
-                "(LEFT=%d HCENTER=%d RIGHT=%d TOP=%d VCENTER=%d BOTTOM=%d)",
-                (long)anchor, NJ_ANCHOR_LEFT, NJ_ANCHOR_HCENTER, NJ_ANCHOR_RIGHT,
-                NJ_ANCHOR_TOP, NJ_ANCHOR_VCENTER, NJ_ANCHOR_BOTTOM);
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "bad anchor: conflicting horizontal bits");
+    if (anchor != -1) {
+        nj_s4 fixed = anchor_resolve(anchor);
+        if (fixed != anchor) {
+            nj_logf(vm, 0, "drawImage/drawRegion: anchor %ld has conflicting "
+                    "bits, using %ld", (long)anchor, (long)fixed);
+        }
+        anchor = fixed;
     }
     if (!img_view(vm, img, &view)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
@@ -1808,14 +1833,13 @@ NJFN(g_copyArea)
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "negative size");
     }
-    if (anchor != -1 &&
-        anchor_is_bad(anchor)) {
-        nj_logf(vm, 0, "drawImage/drawRegion: rejected anchor %ld "
-                "(LEFT=%d HCENTER=%d RIGHT=%d TOP=%d VCENTER=%d BOTTOM=%d)",
-                (long)anchor, NJ_ANCHOR_LEFT, NJ_ANCHOR_HCENTER, NJ_ANCHOR_RIGHT,
-                NJ_ANCHOR_TOP, NJ_ANCHOR_VCENTER, NJ_ANCHOR_BOTTOM);
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "bad anchor: conflicting horizontal bits");
+    if (anchor != -1) {
+        nj_s4 fixed = anchor_resolve(anchor);
+        if (fixed != anchor) {
+            nj_logf(vm, 0, "drawImage/drawRegion: anchor %ld has conflicting "
+                    "bits, using %ld", (long)anchor, (long)fixed);
+        }
+        anchor = fixed;
     }
     if (w == 0 || h == 0) {
         return NJ_OK;
