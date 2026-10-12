@@ -1571,12 +1571,91 @@ NJFN(m3g_comp_setAlphaThreshold)
     return NJ_OK;
 }
 
+/*
+ * Shading.  JSR 184 fixes the two values - SHADE_FLAT 164, SHADE_SMOOTH 165 -
+ * and 剑灵－古剑魂梦 calls setShading() during start-up, so without this the
+ * title never gets to its first frame.  getShading() comes along because a
+ * value that can be set but not read is a value the caller cannot check.
+ */
+NJFN(m3g_poly_setShading)
+{
+    nj_s4 sh = NJ_ARG_INT(args, 0);
+
+    if (sh != 164 && sh != 165) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "shading is SHADE_FLAT (164) or SHADE_SMOOTH (165)");
+    }
+    nj_iput(vm, NJ_THIS(args),
+            nj_field_lookup(vm, NJ_C_POLY, "_nj_shading", "I", 0), sh);
+    return NJ_OK;
+}
+
+NJFN(m3g_poly_getShading)
+{
+    ret->i = nj_field_read_int(vm, NJ_THIS(args),
+                               nj_field_lookup(vm, NJ_C_POLY, "_nj_shading",
+                                               "I", 0));
+    return NJ_OK;
+}
+
+/* Two-sided lighting, from 急速公路狂飙－新年版_84.  A boolean with no
+ * validation to get wrong: store it and read it back. */
+NJFN(m3g_poly_setTwoSided)
+{
+    nj_iput(vm, NJ_THIS(args),
+            nj_field_lookup(vm, NJ_C_POLY, "_nj_twosided", "Z", 0),
+            NJ_ARG_INT(args, 0) ? 1 : 0);
+    return NJ_OK;
+}
+
+NJFN(m3g_poly_getTwoSided)
+{
+    ret->i = nj_field_read_int(vm, NJ_THIS(args),
+                               nj_field_lookup(vm, NJ_C_POLY, "_nj_twosided",
+                                               "Z", 0)) ? 1 : 0;
+    return NJ_OK;
+}
+
 NJFN(m3g_tex_setImage)
 {
     nj_rput(vm, NJ_THIS(args),
             nj_field_lookup(vm, NJ_C_TEX2D, "_nj_img",
                             "L" NJ_C_IMAGE2D ";", 0),
             NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+/* Texture2D(Image2D) is the whole of the constructor: it stores the image,
+ * which is exactly what setImage() does, so share the one implementation
+ * rather than writing the same field store twice. */
+NJFN(m3g_tex2d_init)
+{
+    return m3g_tex_setImage(vm, th, args, ret);
+}
+
+/*
+ * Filtering, from 急速公路狂飙－新年版_84.  Both arguments are stored as given:
+ * this module does not rasterise, so nothing consumes them yet, and rejecting a
+ * value here would turn "we do not use it" into "your title does not start".
+ * The constants belong to a step that renders, and guessing them now would be
+ * a guess with a failure mode of its own.
+ */
+NJFN(m3g_tex_setFiltering)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_TEX2D, "_nj_filtLevel", "I", 0),
+            NJ_ARG_INT(args, 0));
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_TEX2D, "_nj_filtImage", "I", 0),
+            NJ_ARG_INT(args, 1));
+    return NJ_OK;
+}
+
+NJFN(m3g_tex_getFiltering)
+{
+    ret->i = nj_field_read_int(vm, NJ_THIS(args),
+                               nj_field_lookup(vm, NJ_C_TEX2D, "_nj_filtLevel",
+                                               "I", 0));
     return NJ_OK;
 }
 
@@ -2093,7 +2172,9 @@ static const nj_builtin_field appear_fields[] = {
 static const nj_builtin_field poly_fields[] = {
     { "_nj_winding", "I", NJ_ACC_PUBLIC },
     { "_nj_persp",   "Z", NJ_ACC_PUBLIC },
-    { "_nj_culling", "I", NJ_ACC_PUBLIC }
+    { "_nj_culling", "I", NJ_ACC_PUBLIC },
+    { "_nj_shading", "I", NJ_ACC_PUBLIC },
+    { "_nj_twosided", "Z", NJ_ACC_PUBLIC }
 };
 static const nj_builtin_field comp_fields[] = {
     { "_nj_blend",    "I", NJ_ACC_PUBLIC },
@@ -2105,7 +2186,9 @@ static const nj_builtin_field tex2d_fields[] = {
     { "_nj_img",   "L" NJ_C_IMAGE2D ";", NJ_ACC_PUBLIC },
     { "_nj_blend", "I",                  NJ_ACC_PUBLIC },
     { "_nj_wrapS", "I",                  NJ_ACC_PUBLIC },
-    { "_nj_wrapT", "I",                  NJ_ACC_PUBLIC }
+    { "_nj_wrapT", "I",                  NJ_ACC_PUBLIC },
+    { "_nj_filtLevel", "I",              NJ_ACC_PUBLIC },
+    { "_nj_filtImage", "I",              NJ_ACC_PUBLIC }
 };
 static const nj_builtin_field sprite_fields[] = {
     { "_nj_img", "L" NJ_C_IMAGE2D ";", NJ_ACC_PUBLIC },
@@ -2215,7 +2298,11 @@ static const nj_builtin_method poly_methods[] = {
     M("setWinding",                   "(I)V", NJ_ACC_PUBLIC),
     M("setPerspectiveCorrectionEnable", "(Z)V", NJ_ACC_PUBLIC),
     M("setCulling",                   "(I)V", NJ_ACC_PUBLIC),
-    M("getCulling",                   "()I",  NJ_ACC_PUBLIC)
+    M("getCulling",                   "()I",  NJ_ACC_PUBLIC),
+    M("setShading",                   "(I)V", NJ_ACC_PUBLIC),
+    M("getShading",                   "()I",  NJ_ACC_PUBLIC),
+    M("setTwoSidedLightingEnable",    "(Z)V", NJ_ACC_PUBLIC),
+    M("isTwoSidedLightingEnabled",    "()Z",  NJ_ACC_PUBLIC)
 };
 static const nj_builtin_method comp_methods[] = {
     M("setBlending",        "(I)V", NJ_ACC_PUBLIC),
@@ -2225,9 +2312,12 @@ static const nj_builtin_method comp_methods[] = {
     M("setDepthWriteEnable","(Z)V", NJ_ACC_PUBLIC)
 };
 static const nj_builtin_method tex2d_methods[] = {
+    M("<init>",      "(L" NJ_C_IMAGE2D ";)V", NJ_ACC_PUBLIC),
     M("setImage",    "(L" NJ_C_IMAGE2D ";)V", NJ_ACC_PUBLIC),
     M("setBlending", "(I)V",                  NJ_ACC_PUBLIC),
-    M("setWrapping", "(II)V",                 NJ_ACC_PUBLIC)
+    M("setWrapping", "(II)V",                 NJ_ACC_PUBLIC),
+    M("setFiltering", "(II)V",                NJ_ACC_PUBLIC),
+    M("getFiltering", "()I",                  NJ_ACC_PUBLIC)
 };
 static const nj_builtin_method sprite_methods[] = {
     M("<init>",        "(ZL" NJ_C_IMAGE2D ";L" NJ_C_APPEAR ";)V", NJ_ACC_PUBLIC),
@@ -2387,6 +2477,10 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_APPEAR, "getTexture",         "(I)L" NJ_C_TEX2D ";",  m3g_app_getTexture },
     { NJ_C_APPEAR, "setLayer",           "(I)V",                 m3g_app_setLayer },
     { NJ_C_POLY, "setCulling",                    "(I)V", m3g_poly_setCulling },
+    { NJ_C_POLY, "setShading",                    "(I)V", m3g_poly_setShading },
+    { NJ_C_POLY, "getShading",                    "()I",  m3g_poly_getShading },
+    { NJ_C_POLY, "setTwoSidedLightingEnable",     "(Z)V", m3g_poly_setTwoSided },
+    { NJ_C_POLY, "isTwoSidedLightingEnabled",     "()Z",  m3g_poly_getTwoSided },
     { NJ_C_POLY, "getCulling",                    "()I",  m3g_poly_getCulling },
     { NJ_C_POLY, "setWinding",                    "(I)V", m3g_poly_setWinding },
     { NJ_C_POLY, "setPerspectiveCorrectionEnable", "(Z)V", m3g_poly_setPersp },
@@ -2395,7 +2489,10 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_COMP, "setAlphaThreshold",   "(F)V", m3g_comp_setAlphaThreshold },
     { NJ_C_COMP, "setDepthTestEnable",  "(Z)V", m3g_comp_setDepthTest },
     { NJ_C_COMP, "setDepthWriteEnable", "(Z)V", m3g_comp_setDepthWrite },
+    { NJ_C_TEX2D, "<init>",      "(L" NJ_C_IMAGE2D ";)V", m3g_tex2d_init },
     { NJ_C_TEX2D, "setImage",    "(L" NJ_C_IMAGE2D ";)V", m3g_tex_setImage },
+    { NJ_C_TEX2D, "setFiltering", "(II)V", m3g_tex_setFiltering },
+    { NJ_C_TEX2D, "getFiltering", "()I",   m3g_tex_getFiltering },
     { NJ_C_TEX2D, "setBlending", "(I)V",  m3g_tex_setBlending },
     { NJ_C_TEX2D, "setWrapping", "(II)V", m3g_tex_setWrapping },
     { NJ_C_SPRITE3D, "<init>", "(ZL" NJ_C_IMAGE2D ";L" NJ_C_APPEAR ";)V",
