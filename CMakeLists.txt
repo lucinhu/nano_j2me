@@ -1,11 +1,14 @@
 # =====================================================================
 #  nano_j2me - build
 #
-#  One command, no options, should give you a working emulator and a
-#  green test suite:
+#  Build:
 #
 #      cmake -S . -B build -G Ninja
-#      cmake --build build
+#      cmake --build build                    # compiles; nothing else
+#
+#  Test (the fixture step is separate on purpose - see NJ_GENERATE_FIXTURES):
+#
+#      cmake --build build --target nj_fixtures   # once, needs a JDK + Pillow
 #      ctest --test-dir build --output-on-failure
 #
 #  Everything below is either that default or a documented opt-out.  The
@@ -32,6 +35,15 @@ include(GNUInstallDirs)
 # Options.  All default to "the useful thing".
 # ---------------------------------------------------------------------
 option(NJ_BUILD_TESTS    "Build the test suite"             ON)
+option(NJ_GENERATE_FIXTURES
+       "Generate test fixtures as part of the build.  OFF by default: they are
+test DATA, they need a JDK and Pillow, and generating them on every build turns
+'cmake --build' into a multi-second job that has nothing to do with compiling.
+Run it once with: cmake --build build --target fixtures" OFF)
+option(NJ_FIXTURES_FETCH_GAMES
+       "Let the fixture step download third-party games from the network.  OFF
+by default because a build should not depend on GitHub being reachable; the
+tests that need those titles skip themselves when they are absent." OFF)
 option(NJ_BUILD_CLI      "Build the command-line runner"    ON)
 option(NJ_BUILD_SDL2     "Build the SDL2 desktop port"      ON)
 option(NJ_BUILD_EMBEDDED_PORTS
@@ -85,6 +97,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_content.c
   src/midp/nj_lib_nokia.c
   src/midp/nj_lib_fc.c
+  src/midp/nj_lib_wireless.c
   # ---- graphics ----
   src/gfx/nj_gfx.c
   src/gfx/nj_text.c
@@ -309,17 +322,31 @@ if(NJ_BUILD_TESTS)
   # Two real third-party titles, built into the FIXTURE directory as well as the
   # corpus one, because test_poke drives them and a test cannot depend on a
   # gitignored directory that may not exist.
-  add_custom_command(TARGET nj_fixtures POST_BUILD
-    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_slimevolley_jar.sh
-            ${NJ_FIXTURES}/slimevolley.jar
-    COMMENT "Slime Volleyball fixture (for automated operation)")
-  add_custom_command(TARGET nj_fixtures POST_BUILD
-    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_game15_jar.sh
-            ${NJ_FIXTURES}/game15.jar
-    COMMENT "15-puzzle fixture (for automated operation)")
+  # These two FETCH FROM THE NETWORK, which is why they are behind their own
+  # switch: a build that silently needs GitHub is a build that fails on a plane.
+  if(NJ_FIXTURES_FETCH_GAMES)
+    add_custom_command(TARGET nj_fixtures POST_BUILD
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_slimevolley_jar.sh
+              ${NJ_FIXTURES}/slimevolley.jar
+      COMMENT "Slime Volleyball fixture (downloaded)")
+    add_custom_command(TARGET nj_fixtures POST_BUILD
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_game15_jar.sh
+              ${NJ_FIXTURES}/game15.jar
+      COMMENT "15-puzzle fixture (downloaded)")
+  endif()
   add_custom_command(TARGET nj_fixtures POST_BUILD
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_const_jar.sh
     COMMENT "stub constant fixture")
+
+  # A test that fails with the command to fix it, rather than 25 tests failing
+  # one at a time with "cannot open tests/fixtures/...".  The fixtures are
+  # gitignored build inputs, so a fresh clone has none.
+  add_test(NAME fixtures_present
+           COMMAND ${CMAKE_COMMAND}
+                   -DFIX=${NJ_FIXTURES}
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_fixtures.cmake)
+  set_tests_properties(fixtures_present PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
   # ---- helper: one test executable, linked against the runtime ----
   function(nj_add_test name source)
@@ -332,7 +359,13 @@ if(NJ_BUILD_TESTS)
       ${CMAKE_CURRENT_SOURCE_DIR}/src/core
       ${CMAKE_CURRENT_SOURCE_DIR}/src/midp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/gfx)
-    add_dependencies(${name} nj_fixtures)
+    # NOT a dependency of the default build.  Fixtures are data: they are
+    # generated once, explicitly, with `--target fixtures`, and a plain build
+    # stays a compile.  Set NJ_GENERATE_FIXTURES=ON to go back to the old
+    # behaviour where every build regenerated them.
+    if(NJ_GENERATE_FIXTURES)
+      add_dependencies(${name} nj_fixtures)
+    endif()
     if(ARGC GREATER 2)
       add_test(NAME ${name} COMMAND ${name} ${ARGN})
     else()
@@ -350,6 +383,7 @@ if(NJ_BUILD_TESTS)
   # Three such bindings were missing and each one only surfaced when a real
   # game called it; this walks the whole class library instead of waiting.
   nj_add_test(test_natives   tests/test_natives.c)
+  nj_add_test(test_wireless tests/test_wireless.c)
   nj_add_test(test_directgraphics tests/test_directgraphics.c)
   nj_add_test(test_blocked_init tests/test_blocked_init.c ${NJ_FIXTURES})
   nj_add_test(test_vm        tests/test_vm.c

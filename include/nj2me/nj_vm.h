@@ -400,9 +400,25 @@ extern const int nj_lib_fc_class_count;
 extern const nj_native_entry nj_lib_fc_table[];
 extern const int nj_lib_fc_count;
 
+/* JSR 120/205, Wireless Messaging.  Messages go out through optional port
+ * hooks; a port without them has the API and gets the exception the spec
+ * defines, rather than a link error. */
+extern const nj_builtin_class nj_lib_wireless_classes[];
+extern const int nj_lib_wireless_class_count;
+extern const nj_native_entry nj_lib_wireless_table[];
+extern const int nj_lib_wireless_count;
+
 /* Built by nj_lib_fc.c, used by Connector.open() in nj_lib_io.c.  Returns a new
  * FileConnection, or NULL with an exception pending. */
 nj_ref nj_fc_new(nj_vm *vm, const char *url);
+
+/* JSR 120 (messaging) and JSR 82 (Bluetooth): the classes exist so that a
+ * MIDlet's Class.forName / catch fallback works, and every operation that
+ * would need a radio throws BluetoothStateException instead. */
+extern const nj_builtin_class nj_lib_wireless_classes[];
+extern const int nj_lib_wireless_class_count;
+extern const nj_native_entry nj_lib_wireless_table[];
+extern const int nj_lib_wireless_count;
 
 extern const nj_builtin_class nj_lib_nokia_classes[];
 extern const int nj_lib_nokia_class_count;

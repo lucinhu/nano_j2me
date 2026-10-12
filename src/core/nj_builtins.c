@@ -26,6 +26,7 @@ const nj_builtin_source nj_builtin_sources[] = {
     { nj_lib_content_classes, &nj_lib_content_class_count },
     { nj_lib_nokia_classes,  &nj_lib_nokia_class_count  },
     { nj_lib_fc_classes,     &nj_lib_fc_class_count     }
+    , { nj_lib_wireless_classes, &nj_lib_wireless_class_count }
 };
 const int nj_builtin_source_count =
     (int)(sizeof(nj_builtin_sources) / sizeof(nj_builtin_sources[0]));
