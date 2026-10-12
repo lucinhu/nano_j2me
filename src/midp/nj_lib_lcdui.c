@@ -1350,6 +1350,27 @@ NJFN(g_drawChar)
  * helper between them reads past the end of the argument slots and rejects
  * perfectly ordinary calls with "negative source region".
  */
+/*
+ * Is this anchor illegal?  MIDP's rule is about CONFLICTS, not omissions: a
+ * missing horizontal component means LEFT and a missing vertical one means
+ * TOP, and 0 is a perfectly legal anchor meaning TOP|LEFT.  The old test
+ * demanded a horizontal bit, so any caller that passed 0 - or Graphics.TOP on
+ * its own - got "bad horizontal anchor" on every single frame and the MIDlet
+ * painted nothing at all.  That is exactly how 植物大战僵尸2013完美升级版 was
+ * failing: an exception per frame, no picture, and nothing in the log that
+ * named the anchor value.
+ *
+ * Two bits set in the same group is a genuine conflict and still throws.
+ */
+static int anchor_is_bad(int anchor)
+{
+    int h = anchor & (NJ_ANCHOR_LEFT | NJ_ANCHOR_HCENTER | NJ_ANCHOR_RIGHT);
+    int v = anchor & (NJ_ANCHOR_TOP | NJ_ANCHOR_VCENTER | NJ_ANCHOR_BOTTOM);
+
+    /* For a power-of-two group, h & (h - 1) is nonzero iff two bits are set. */
+    return (h != 0 && (h & (h - 1)) != 0) || (v != 0 && (v & (v - 1)) != 0);
+}
+
 NJFN(g_drawImage)
 {
     nj_ref self = NJ_THIS(args);
@@ -1365,7 +1386,7 @@ NJFN(g_drawImage)
         return nj_throw(vm, "java/lang/NullPointerException", "image is null");
     }
     if (anchor != -1 &&
-        (anchor & (NJ_ANCHOR_LEFT | NJ_ANCHOR_HCENTER | NJ_ANCHOR_RIGHT)) == 0) {
+        anchor_is_bad(anchor)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "bad horizontal anchor");
     }
@@ -1415,7 +1436,7 @@ NJFN(g_drawRegion)
                         "negative source region");
     }
     if (anchor != -1 &&
-        (anchor & (NJ_ANCHOR_LEFT | NJ_ANCHOR_HCENTER | NJ_ANCHOR_RIGHT)) == 0) {
+        anchor_is_bad(anchor)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "bad horizontal anchor");
     }
@@ -1564,7 +1585,7 @@ NJFN(g_copyArea)
                         "negative size");
     }
     if (anchor != -1 &&
-        (anchor & (NJ_ANCHOR_LEFT | NJ_ANCHOR_HCENTER | NJ_ANCHOR_RIGHT)) == 0) {
+        anchor_is_bad(anchor)) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "bad horizontal anchor");
     }

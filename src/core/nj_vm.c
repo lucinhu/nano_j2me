@@ -296,6 +296,65 @@ int nj_vm_running(nj_vm *vm)
     return (vm->running && vm->state != NJ_VM_STOPPING) ? 1 : 0;
 }
 
+/*
+ * The state names, so a log line says "waiting" instead of "3".  A number
+ * would be worse than useless here: the whole point is to be read by a human
+ * who is trying to find out why nothing was painted.
+ */
+static const char *thread_state_name(nj_u1 st)
+{
+    switch (st) {
+    case NJ_THREAD_NEW:     return "new";
+    case NJ_THREAD_RUNNING: return "running";
+    case NJ_THREAD_SLEEPING:return "sleeping";
+    case NJ_THREAD_WAITING: return "waiting";
+    case NJ_THREAD_BLOCKED: return "blocked";
+    case NJ_THREAD_DEAD:    return "dead";
+    default:                return "?";
+    }
+}
+
+#define NJ_WHERE_FRAMES 8   /* innermost frames shown per thread */
+
+void nj_vm_describe_threads(nj_vm *vm,
+                            void (*sink)(void *ud, const char *line),
+                            void *ud)
+{
+    nj_u2 i;
+
+    if (!vm || !sink) {
+        return;
+    }
+    for (i = 0u; i < vm->nthreads; i++) {
+        nj_thread *t = vm->threads[i];
+        char buf[320];
+        int d;
+
+        if (!t) {
+            continue;
+        }
+        snprintf(buf, sizeof(buf), "where: thread %lu %s depth=%d%s",
+                 (unsigned long)t->id, thread_state_name(t->state),
+                 t->nframes, (t == vm->cur) ? " (current)" : "");
+        sink(ud, buf);
+
+        for (d = t->nframes - 1; d >= 0 && d > t->nframes - 1 - NJ_WHERE_FRAMES;
+             d--) {
+            const nj_frame *fr = &t->frames[d];
+            const nj_method *m = fr->m;
+
+            if (!m) {
+                continue;
+            }
+            snprintf(buf, sizeof(buf), "where:   %s.%s%s pc=%lu",
+                     (m->owner && m->owner->name) ? m->owner->name : "?",
+                     m->name ? m->name : "?", m->desc ? m->desc : "",
+                     (unsigned long)fr->pc);
+            sink(ud, buf);
+        }
+    }
+}
+
 void nj_vm_get_stats(nj_vm *vm, nj_vm_stats *out)
 {
     if (!out) {

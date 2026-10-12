@@ -28,6 +28,7 @@ static void usage(const char *argv0)
 "  --run-frames <n>     stop after n presented frames (for benchmarks)\n"
         "  --fs-dir <path>      root for file:// (JSR 75); no filesystem by default\n"
 "  --stats              print bytecode and frame counters at the end\n"
+"  --where              say where each thread stopped, frame by frame\n"
 "  --dump-frames <dir>  write a PPM per frame (headless)\n"
 "  --dump-every <n>     write every n-th frame (headless, default: 1)\n"
 "  --version            print the version and exit\n"
@@ -57,6 +58,7 @@ typedef struct cli {
     int         height;
     unsigned    heap_mb;
     int         stats;
+    int         where;
     int         run_frames;
     const char *keys;
 } cli;
@@ -131,6 +133,8 @@ int main(int argc, char **argv)
             c.keys = argv[++i];
         } else if (strcmp(a, "--stats") == 0) {
             c.stats = 1;
+        } else if (strcmp(a, "--where") == 0) {
+            c.where = 1;
         } else if (strcmp(a, "--run-frames") == 0 && i + 1 < argc) {
             c.run_frames = atoi(argv[++i]);
         } else if (a[0] == '-') {
@@ -195,6 +199,7 @@ int main(int argc, char **argv)
     opts.argv = (const char *const *)argv;
     opts.argc = argc;
     opts.stats = c.stats;
+    opts.where = c.where;
     opts.run_frames = (nj_u4)(c.run_frames > 0 ? c.run_frames : 0);
     opts.keys = c.keys;
 

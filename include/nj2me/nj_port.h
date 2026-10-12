@@ -361,6 +361,7 @@ typedef struct nj_run_opts {
     const char *const *argv;
     nj_size     heap_bytes;    /* 0 => NJ_MAX_HEAP                        */
     int         stats;         /* print execution counters before teardown */
+    int         where;         /* describe where each thread stopped */
     nj_u4       run_frames;    /* 0 => run until the MIDlet exits */
 
     /*

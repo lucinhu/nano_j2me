@@ -235,6 +235,23 @@ typedef struct nj_vm_stats {
 } nj_vm_stats;
 
 void nj_vm_get_stats(nj_vm *vm, nj_vm_stats *out);
+
+/*
+ * Diagnostic: describe where every live thread currently is.
+ *
+ * One line per thread (id, state, depth) followed by the innermost frames of
+ * its stack, passed to `sink` as they are built.
+ *
+ * This is not decoration.  "The MIDlet presented no frames" is how most
+ * titles fail and it is the least informative symptom there is: a game
+ * spinning in its own update loop, one blocked on a monitor, one parked
+ * inside a native and one that never returned from its constructor are
+ * indistinguishable from the outside, and they need completely different
+ * fixes.  The top frames tell them apart.
+ */
+void nj_vm_describe_threads(nj_vm *vm,
+                            void (*sink)(void *ud, const char *line),
+                            void *ud);
 void nj_vm_dump_stats(nj_vm *vm);
 
 /* A human-readable description of the pending exception, or NULL. */

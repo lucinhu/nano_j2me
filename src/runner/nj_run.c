@@ -497,6 +497,21 @@ static void key_script_tick(const nj_port *port, key_script *ks, nj_u8 frame)
     }
 }
 
+/*
+ * --where: hand the core's thread/frame description to the port's log.
+ *
+ * The core builds the lines, because it is the only place that can see the
+ * frames; the runner only decides where they go.
+ */
+static void where_sink(void *ud, const char *line)
+{
+    const nj_port *p = (const nj_port *)ud;
+
+    if (p && p->log) {
+        p->log(p->user, 2, line);
+    }
+}
+
 int nj_run(const nj_port *port_in, const nj_run_opts *opts)
 {
     nj_port port;
@@ -721,6 +736,10 @@ done:
      * a torn-down VM.  The definitions are the ones in nj_vm.h, so an embedder
      * measuring its own target gets comparable figures.
      */
+    if (opts->where && vm) {
+        nj_vm_describe_threads(vm, where_sink, (void *)&port);
+    }
+
     if (stats && vm) {
         nj_vm_stats s;
         double secs = (nj_end_ms > nj_start_ms)

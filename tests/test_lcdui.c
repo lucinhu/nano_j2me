@@ -873,7 +873,17 @@ static void test_graphics(nj_vm *vm)
     }
 
     {
-        /* An anchor with no horizontal component is invalid in MIDP 2.0. */
+        /*
+         * MIDP's anchor rule is about CONFLICTS, not omissions: a missing
+         * horizontal component means LEFT and a missing vertical means TOP,
+         * and 0 is a legal anchor meaning TOP|LEFT.
+         *
+         * This block used to assert the opposite - that Graphics.TOP on its
+         * own throws - which is not what MIDP says, and which made
+         * 植物大战僵尸2013完美升级版 throw once per frame and paint nothing.
+         * The test was encoding the bug, so it is now the other way round and
+         * also checks the case that really is an error.
+         */
         nj_ref dst2 = image_new(vm, 4, 4);
         nj_ref dg2 = dst2 ? call_ref(vm, dst2, NJ_C_IMAGE, "getGraphics",
                                      "()L" NJ_C_GRAPHICS ";", NULL, &ok) : NULL;
@@ -882,11 +892,20 @@ static void test_graphics(nj_vm *vm)
             ia[0] = sref(img);
             ia[1] = iref(0);
             ia[2] = iref(0);
-            ia[3] = iref(NJ_ANCHOR_TOP);   /* no LEFT/HCENTER/RIGHT */
+
+            /* TOP alone is legal; the horizontal half defaults to LEFT. */
+            ia[3] = iref(NJ_ANCHOR_TOP);
+            (void)nj_call(vm, dg2, NJ_C_GRAPHICS, "drawImage",
+                          "(L" NJ_C_IMAGE ";III)V", ia, NULL);
+            OK_MSG(!exc_is(vm, "java/lang/IllegalArgumentException"),
+                   "drawImage with TOP alone threw; MIDP defaults it to LEFT");
+
+            /* Two horizontal constants at once is the real error. */
+            ia[3] = iref(NJ_ANCHOR_LEFT | NJ_ANCHOR_RIGHT);
             (void)nj_call(vm, dg2, NJ_C_GRAPHICS, "drawImage",
                           "(L" NJ_C_IMAGE ";III)V", ia, NULL);
             OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
-                   "drawImage with an invalid anchor did not throw");
+                   "drawImage with LEFT|RIGHT did not throw");
         }
     }
 
