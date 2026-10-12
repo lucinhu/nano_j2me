@@ -1572,6 +1572,55 @@ NJFN(m3g_comp_setAlphaThreshold)
 }
 
 /*
+ * VertexArray, from 急速公路狂飙－新年版_84: the corpus asked for
+ * VertexArray(int,int,int) and nothing else, so that is what is here, plus the
+ * three accessors that read back what the constructor was told.  Guessing at
+ * the rest of the class would be inventing an API instead of implementing one.
+ */
+NJFN(m3g_varr_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_numVerts", "I", 0),
+            NJ_ARG_INT(args, 0));
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_numComp", "I", 0),
+            NJ_ARG_INT(args, 1));
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_compSize", "I", 0),
+            NJ_ARG_INT(args, 2));
+    return NJ_OK;
+}
+
+#define NJ_M3G_VARR_GET(fn, field)                                            \
+    NJFN(fn)                                                                  \
+    {                                                                         \
+        ret->i = nj_field_read_int(vm, NJ_THIS(args),                         \
+                                   nj_field_lookup(vm, NJ_C_VARR, field,      \
+                                                   "I", 0));                  \
+        return NJ_OK;                                                         \
+    }
+
+/*
+ * VertexArray.set(int, int, short[]), also from 急速公路狂飙－新年版_84.  The
+ * three arguments are kept together so the range means something later.
+ */
+NJFN(m3g_varr_set_short)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_data", "[S", 0),
+            NJ_ARG_REF(args, 2));
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_first", "I", 0),
+            NJ_ARG_INT(args, 0));
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_count", "I", 0),
+            NJ_ARG_INT(args, 1));
+    return NJ_OK;
+}
+
+NJ_M3G_VARR_GET(m3g_varr_getVertexCount,    "_nj_numVerts")
+NJ_M3G_VARR_GET(m3g_varr_getComponentCount, "_nj_numComp")
+NJ_M3G_VARR_GET(m3g_varr_getComponentSize,  "_nj_compSize")
+
+/*
  * Shading.  JSR 184 fixes the two values - SHADE_FLAT 164, SHADE_SMOOTH 165 -
  * and 剑灵－古剑魂梦 calls setShading() during start-up, so without this the
  * title never gets to its first frame.  getShading() comes along because a
@@ -1648,6 +1697,14 @@ NJFN(m3g_tex_setFiltering)
             NJ_ARG_INT(args, 0));
     nj_iput(vm, self, nj_field_lookup(vm, NJ_C_TEX2D, "_nj_filtImage", "I", 0),
             NJ_ARG_INT(args, 1));
+    return NJ_OK;
+}
+
+NJFN(m3g_tex_getImage)
+{
+    ret->r = nj_rget(vm, NJ_THIS(args),
+                     nj_field_lookup(vm, NJ_C_TEX2D, "_nj_img",
+                                     "L" NJ_C_IMAGE2D ";", 0));
     return NJ_OK;
 }
 
@@ -2169,6 +2226,17 @@ static const nj_builtin_field appear_fields[] = {
     { "_nj_tex1", "L" NJ_C_TEX2D ";", NJ_ACC_PUBLIC },
     { "_nj_layer", "I",               NJ_ACC_PUBLIC }
 };
+static const nj_builtin_field varr_fields[] = {
+    { "_nj_numVerts", "I", NJ_ACC_PUBLIC },
+    { "_nj_numComp",  "I", NJ_ACC_PUBLIC },
+    { "_nj_compSize", "I", NJ_ACC_PUBLIC },
+    /* Where set() put its data.  Nothing reads these yet - this module does
+     * not rasterise - but storing the reference is what lets step two find it
+     * instead of the caller's data having been dropped on the floor. */
+    { "_nj_data",     "[S", NJ_ACC_PUBLIC },
+    { "_nj_first",    "I",  NJ_ACC_PUBLIC },
+    { "_nj_count",    "I",  NJ_ACC_PUBLIC }
+};
 static const nj_builtin_field poly_fields[] = {
     { "_nj_winding", "I", NJ_ACC_PUBLIC },
     { "_nj_persp",   "Z", NJ_ACC_PUBLIC },
@@ -2294,6 +2362,105 @@ static const nj_builtin_method appear_methods[] = {
     M("getTexture",         "(I)L" NJ_C_TEX2D ";",      NJ_ACC_PUBLIC),
     M("setLayer",           "(I)V",                     NJ_ACC_PUBLIC)
 };
+/*
+ * VertexBuffer's default colour, from 急速公路狂飙－新年版_84.  VertexBuffer had
+ * no fields and no methods of its own, so both are new; a colour with no getter
+ * is a colour the caller cannot check, and both directions are here.
+ */
+NJFN(m3g_vbuf_setDefaultColor)
+{
+    nj_iput(vm, NJ_THIS(args),
+            nj_field_lookup(vm, NJ_C_VBUF, "_nj_defColor", "I", 0),
+            NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_vbuf_getDefaultColor)
+{
+    ret->i = nj_field_read_int(vm, NJ_THIS(args),
+                               nj_field_lookup(vm, NJ_C_VBUF, "_nj_defColor",
+                                               "I", 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_vbuf_setPositions)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_positions",
+                                      "L" NJ_C_VARR ";", 0), NJ_ARG_REF(args, 0));
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_bias", "F", 0),
+            f2bits(NJ_ARG_FLOAT(args, 1)));
+    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_scale", "[F", 0),
+            NJ_ARG_REF(args, 2));
+    return NJ_OK;
+}
+
+NJFN(m3g_vbuf_setColors)
+{
+    nj_rput(vm, NJ_THIS(args),
+            nj_field_lookup(vm, NJ_C_VBUF, "_nj_colors",
+                            "L" NJ_C_VARR ";", 0), NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+/* The float[]+float[] form of the same call, which is the one
+ * 急速公路狂飙－新年版_84 actually uses.  Same three things are kept. */
+NJFN(m3g_vbuf_setTexCoords_ff)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_texUnit", "I", 0),
+            NJ_ARG_INT(args, 0));
+    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_tex0",
+                                      "L" NJ_C_VARR ";", 0), NJ_ARG_REF(args, 1));
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_bias", "F", 0),
+            f2bits(NJ_ARG_FLOAT(args, 2)));
+    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_scale", "[F", 0),
+            NJ_ARG_REF(args, 3));
+    return NJ_OK;
+}
+
+NJFN(m3g_vbuf_setTexCoords)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_tex0",
+                                      "L" NJ_C_VARR ";", 0), NJ_ARG_REF(args, 1));
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_texOff", "I", 0),
+            NJ_ARG_INT(args, 2));
+    return NJ_OK;
+}
+
+static const nj_builtin_field vbuf_fields[] = {
+    { "_nj_defColor",  "I",              NJ_ACC_PUBLIC },
+    /* The four arrays a Mesh is built from, kept together with the offsets
+     * they were given.  Stored, not consumed: this module still does not
+     * rasterise, and dropping them would mean step two has nothing to read. */
+    { "_nj_positions", "L" NJ_C_VARR ";", NJ_ACC_PUBLIC },
+    { "_nj_bias",      "F",              NJ_ACC_PUBLIC },
+    { "_nj_scale",     "[F",             NJ_ACC_PUBLIC },
+    { "_nj_colors",    "L" NJ_C_VARR ";", NJ_ACC_PUBLIC },
+    { "_nj_tex0",      "L" NJ_C_VARR ";", NJ_ACC_PUBLIC },
+    { "_nj_texOff",    "I",              NJ_ACC_PUBLIC },
+    { "_nj_texUnit",   "I",              NJ_ACC_PUBLIC }
+};
+static const nj_builtin_method vbuf_methods[] = {
+    M("setDefaultColor", "(I)V", NJ_ACC_PUBLIC),
+    M("getDefaultColor", "()I",  NJ_ACC_PUBLIC),
+    M("setPositions",    "(L" NJ_C_VARR ";F[F)V", NJ_ACC_PUBLIC),
+    M("setColors",       "(L" NJ_C_VARR ";)V",    NJ_ACC_PUBLIC),
+    M("setTexCoords",    "(IL" NJ_C_VARR ";I)V",  NJ_ACC_PUBLIC),
+    M("setTexCoords",    "(IL" NJ_C_VARR ";F[F)V", NJ_ACC_PUBLIC)
+};
+
+static const nj_builtin_method varr_methods[] = {
+    M("<init>",             "(III)V", NJ_ACC_PUBLIC),
+    M("getVertexCount",     "()I",    NJ_ACC_PUBLIC),
+    M("getComponentCount",  "()I",    NJ_ACC_PUBLIC),
+    M("getComponentSize",   "()I",    NJ_ACC_PUBLIC),
+    M("set",                "(II[S)V", NJ_ACC_PUBLIC)
+};
 static const nj_builtin_method poly_methods[] = {
     M("setWinding",                   "(I)V", NJ_ACC_PUBLIC),
     M("setPerspectiveCorrectionEnable", "(Z)V", NJ_ACC_PUBLIC),
@@ -2317,7 +2484,8 @@ static const nj_builtin_method tex2d_methods[] = {
     M("setBlending", "(I)V",                  NJ_ACC_PUBLIC),
     M("setWrapping", "(II)V",                 NJ_ACC_PUBLIC),
     M("setFiltering", "(II)V",                NJ_ACC_PUBLIC),
-    M("getFiltering", "()I",                  NJ_ACC_PUBLIC)
+    M("getFiltering", "()I",                  NJ_ACC_PUBLIC),
+    M("getImage",     "()L" NJ_C_IMAGE2D ";",  NJ_ACC_PUBLIC)
 };
 static const nj_builtin_method sprite_methods[] = {
     M("<init>",        "(ZL" NJ_C_IMAGE2D ";L" NJ_C_APPEAR ";)V", NJ_ACC_PUBLIC),
@@ -2367,7 +2535,8 @@ const nj_builtin_class nj_lib_m3g_classes[] = {
     { NJ_C_MAT, NJ_C_O3D, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
     { NJ_C_LIGHT, NJ_C_NODE, NJ_ACC_PUBLIC,
       light_fields, M3G_N(light_fields), light_methods, M3G_N(light_methods) },
-    { NJ_C_VBUF, NJ_C_O3D, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
+    { NJ_C_VBUF, NJ_C_O3D, NJ_ACC_PUBLIC,
+      vbuf_fields, M3G_N(vbuf_fields), vbuf_methods, M3G_N(vbuf_methods) },
     { NJ_C_IBUF, NJ_C_O3D, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
     { NJ_C_APPEAR, NJ_C_O3D, NJ_ACC_PUBLIC,
       appear_fields, M3G_N(appear_fields), appear_methods, M3G_N(appear_methods) },
@@ -2396,7 +2565,8 @@ const nj_builtin_class nj_lib_m3g_classes[] = {
     { NJ_C_RAY,      NJ_C_O3D,      NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
     { NJ_C_ACTL,     NJ_C_O3D,      NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
     { NJ_C_KFS,      NJ_C_O3D,      NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
-    { NJ_C_VARR,     NJ_C_O3D,      NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
+    { NJ_C_VARR,     NJ_C_O3D,      NJ_ACC_PUBLIC,
+      varr_fields, M3G_N(varr_fields), varr_methods, M3G_N(varr_methods) },
     { NJ_C_TSA,      NJ_C_IBUF,     NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
     { NJ_C_IMAGE2D, NJ_C_O3D, NJ_ACC_PUBLIC,
       img2d_fields, M3G_N(img2d_fields), img2d_methods, M3G_N(img2d_methods) },
@@ -2490,9 +2660,21 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_COMP, "setDepthTestEnable",  "(Z)V", m3g_comp_setDepthTest },
     { NJ_C_COMP, "setDepthWriteEnable", "(Z)V", m3g_comp_setDepthWrite },
     { NJ_C_TEX2D, "<init>",      "(L" NJ_C_IMAGE2D ";)V", m3g_tex2d_init },
+    { NJ_C_VBUF, "setDefaultColor",   "(I)V", m3g_vbuf_setDefaultColor },
+    { NJ_C_VBUF, "getDefaultColor",   "()I",  m3g_vbuf_getDefaultColor },
+    { NJ_C_VBUF, "setPositions",      "(L" NJ_C_VARR ";F[F)V", m3g_vbuf_setPositions },
+    { NJ_C_VBUF, "setColors",         "(L" NJ_C_VARR ";)V",    m3g_vbuf_setColors },
+    { NJ_C_VBUF, "setTexCoords",      "(IL" NJ_C_VARR ";I)V",  m3g_vbuf_setTexCoords },
+    { NJ_C_VBUF, "setTexCoords",      "(IL" NJ_C_VARR ";F[F)V", m3g_vbuf_setTexCoords_ff },
+    { NJ_C_VARR, "<init>",            "(III)V", m3g_varr_init },
+    { NJ_C_VARR, "set",               "(II[S)V", m3g_varr_set_short },
+    { NJ_C_VARR, "getVertexCount",    "()I",    m3g_varr_getVertexCount },
+    { NJ_C_VARR, "getComponentCount", "()I",    m3g_varr_getComponentCount },
+    { NJ_C_VARR, "getComponentSize",  "()I",    m3g_varr_getComponentSize },
     { NJ_C_TEX2D, "setImage",    "(L" NJ_C_IMAGE2D ";)V", m3g_tex_setImage },
     { NJ_C_TEX2D, "setFiltering", "(II)V", m3g_tex_setFiltering },
     { NJ_C_TEX2D, "getFiltering", "()I",   m3g_tex_getFiltering },
+    { NJ_C_TEX2D, "getImage",     "()L" NJ_C_IMAGE2D ";", m3g_tex_getImage },
     { NJ_C_TEX2D, "setBlending", "(I)V",  m3g_tex_setBlending },
     { NJ_C_TEX2D, "setWrapping", "(II)V", m3g_tex_setWrapping },
     { NJ_C_SPRITE3D, "<init>", "(ZL" NJ_C_IMAGE2D ";L" NJ_C_APPEAR ";)V",
