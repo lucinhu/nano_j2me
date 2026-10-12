@@ -113,3 +113,37 @@ Two situations, two opposite investigations:
 Neither number was available before this round, and the corpus verdict alone
 cannot separate them - which is exactly the T2 complaint about measuring pixels
 instead of state.
+
+## Round 69: two hypotheses eliminated by experiment
+
+The titles that still fail with `flat frame ... N drawing calls reached nothing`
+(合金弹头4(完美汉化版)_4053, 24000 calls; 疯狂企鹅中文版_10228, 31993 calls)
+call the drawing API thousands of times and present one colour.  Two candidate
+explanations were tested rather than argued about.
+
+### 1. The game's clip is not the cause
+
+`nj_gfx_set_clip()` and `nj_gfx_clip_rect()` were temporarily made no-ops, so
+the clip stayed at the whole surface that `nj_gfx_init()` sets, and nothing the
+game asked for could clip anything away.  Same binary otherwise, same flags:
+
+    A  normal build      120 frames   colours in the last frame = 1
+    B  clip bypassed     120 frames   colours in the last frame = 1
+
+Identical.  The clip is excluded.  (The patch was reverted and the file
+compared byte for byte.)
+
+### 2. An invisible colour is not the cause
+
+Both `Graphics.setColor(int)` and `setColor(int,int,int)` are checked, because
+they are the two ways a game can make every pixel invisible without one error
+message: the integer form already forces `| 0xFF000000` with a comment saying
+exactly why, and the three argument form goes through `nj_gfx_set_color_rgb()`.
+Neither leaves alpha at zero.
+
+### What is left
+
+The drawing calls therefore reach a surface and put pixels somewhere that is not
+the surface which gets presented, or the copy that would carry them is never
+made.  The next experiment should follow one `fillRect` from the call to the
+bytes of the presented frame, instead of testing more hypotheses in bulk.
