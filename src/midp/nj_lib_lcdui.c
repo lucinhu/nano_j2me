@@ -7782,10 +7782,14 @@ NJFN(list_setSelectCommand)
         return nj_throw(vm, "java/lang/IllegalStateException",
                         "only an IMPLICIT List has a select command");
     }
-    if (fget(vm, c, NJ_C_COMMAND, "cmdType", D_INT) != 8) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "select command must be of type ITEM");
-    }
+    /*
+     * The type is NOT checked.  JSR 118 says the select command should be of
+     * type ITEM, but a real phone accepted 贪吃蛇经典版_4515's Command of type
+     * OK here, and refusing it killed the MIDlet in its constructor - three
+     * frames and a dead run, which is a certain failure, against a soft key
+     * that shows a slightly odd label, which is cosmetic.  When those are the
+     * two outcomes, take the cosmetic one.
+     */
     rput(vm, self, NJ_C_LIST, "lsSelect", D_CMD, c);
     return NJ_OK;
 }
