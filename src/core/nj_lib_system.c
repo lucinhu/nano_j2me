@@ -111,7 +111,16 @@ NJFN(sys_identityHashCode)
 
 NJFN(sys_gc)
 {
-    (void)nj_gc_run(vm);
+    /*
+     * System.gc() is documented as best effort - "there is no guarantee that
+     * the virtual machine will actually collect".  When nothing has been
+     * allocated since the last collection there is nothing new to reclaim,
+     * so the walk is skipped; the next allocation still collects if it needs
+     * to, so no memory is stranded.
+     */
+    if (vm->heap.allocs_since_gc != 0u) {
+        (void)nj_gc_run(vm);
+    }
     return NJ_OK;
 }
 
@@ -317,7 +326,9 @@ NJFN(ps_close)
 
 NJFN(runtime_gc)
 {
-    (void)nj_gc_run(vm);
+    if (vm->heap.allocs_since_gc != 0u) {
+        (void)nj_gc_run(vm);
+    }
     return NJ_OK;
 }
 

@@ -230,6 +230,20 @@ typedef struct nj_heap {
     nj_size bump;           /* current bump offset */
     nj_size peak;
     nj_u4   gc_count;
+    /*
+     * Allocations attempted since the last collection.
+     *
+     * An explicit System.gc() when nothing has been allocated since the last
+     * collection has nothing new to find: the heap is in exactly the state the
+     * previous collection left it in, and that collection already reclaimed
+     * everything it could reach.  Walking the whole heap again is pure cost.
+     * One collected title called System.gc() 4000 times in a single frame.
+     *
+     * The check is deliberately conservative: a *failed* allocation counts too,
+     * so the only way this reads zero is if a collection really did just run
+     * and nothing has been asked of the heap since.
+     */
+    nj_u4   allocs_since_gc;
     nj_gcbin bins[NJ_GC_BINS];
     void   *big_free;       /* free list for allocations > bin range */
     nj_u1   external;       /* base came from the port: never free it */

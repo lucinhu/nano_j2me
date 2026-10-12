@@ -256,6 +256,7 @@ nj_status nj_heap_init(nj_vm *vm, void *block, nj_size size)
     vm->heap.bump = 0u;
     vm->heap.peak = 0u;
     vm->heap.gc_count = 0u;
+    vm->heap.allocs_since_gc = 0u;
     return NJ_OK;
 }
 
@@ -366,6 +367,7 @@ static nj_block *nj_free_find(nj_vm *vm, nj_size total)
 
 void *nj_alloc(nj_vm *vm, nj_size bytes)
 {
+    vm->heap.allocs_since_gc++;
     nj_block *b;
     nj_size total;
     int collected = 0;
@@ -742,6 +744,7 @@ nj_status nj_gc_run(nj_vm *vm)
     nj_gc_mark_roots(vm);
     nj_gc_sweep(vm);
     vm->heap.gc_count++;
+    vm->heap.allocs_since_gc = 0u;
     return NJ_OK;
 }
 
