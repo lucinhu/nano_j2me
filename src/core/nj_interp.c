@@ -1387,8 +1387,59 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 THROW("java/lang/NoSuchMethodError", NULL);
             }
 
-            if (op == 0xb6 || op == 0xb9) {
-                /* virtual / interface: dispatch on the receiver's class */
+            /*
+             * The OPCODE says whether an objectref is on the operand stack; the
+             * CONSTANT POOL says what the method actually is - and they can
+             * disagree.  Old J2ME compilers and obfuscators emit invokevirtual
+             * for a static method (Canvas.getGameAction is the classic one, and
+             * five of the games in tests/games/ do it), leaving an objectref
+             * that the callee must never receive as `this`.
+             *
+             * nj_class.c already works this out when it resolves the entry: it
+             * probes for an instance method and falls back to a static one,
+             * recording the answer in e->kind.  Trusting the opcode instead -
+             * as this dispatch used to - sent the call down the virtual path,
+             * where nj_method_lookup() skips statics by design and therefore
+             * never found it.  The receiver class then got blamed for a method
+             * its superclass declares: "n does not implement
+             * javax/microedition/lcdui/Canvas.getGameAction".
+             *
+             * So when the reference is static but the opcode pushed a receiver,
+             * drop the artifact: shift the arguments down one slot and shrink
+             * the stack.  The callee then sees exactly the operands a plain
+             * invokestatic would have given it.
+             */
+            if (op != 0xb8 && e->kind == NJ_LINK_METHOD_STATIC) {
+                nj_u2 aslots = target->arg_slots;
+                nj_value *dst;
+
+                if (sp - stack < (nj_s4)(aslots + 1u)) {
+                    THROW("java/lang/VerifyError", "operand stack underflow");
+                }
+                dst = sp - aslots - 1u;
+                {
+                    nj_u2 i;
+                    for (i = 0u; i < aslots; i++) {
+                        dst[i] = dst[i + 1u];
+                    }
+                }
+                sp = dst + aslots;
+            } else if (op == 0xb8 && e->kind != NJ_LINK_METHOD_STATIC) {
+                /*
+                 * The mirror image: invokestatic naming an instance method.
+                 * No receiver was pushed, so the callee would read `this` from
+                 * whatever happens to sit below its arguments.  Say so instead
+                 * of silently corrupting the frame.
+                 */
+                THROW("java/lang/IncompatibleClassChangeError",
+                      "invokestatic on an instance method");
+            }
+
+            if ((op == 0xb6 || op == 0xb9) && e->kind != NJ_LINK_METHOD_STATIC) {
+                /* virtual / interface: dispatch on the receiver's class.
+                 * A static target never comes here: the block above already
+                 * dropped its artifact receiver, and dispatching on the
+                 * receiver is exactly what must not happen for a static call. */
                 nj_u2 aslots = target->arg_slots;
                 nj_ref recv;
 
