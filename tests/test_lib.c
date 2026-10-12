@@ -1257,6 +1257,73 @@ static void test_connector_open_mode(nj_vm *vm)
     clean(vm, "Connector.open with a mode");
 }
 
+/*
+ * A big Image's pixel array can force a collection between the moment the
+ * Image object exists and the moment its fields are written into it.  The
+ * object lives only in a C local until the function returns, so a collector
+ * that cannot see it sweeps it and links its block into a free list - right
+ * over its class pointer.  The old code handed that dangling Image back;
+ * 火影忍者-终极格斗_6604 stored it into an Image[] and got
+ * ArrayStoreException, swallowed its own loader failure and painted a null
+ * Image every frame after that.
+ */
+static void test_image_survives_collection(nj_vm *vm)
+{
+    static const char *IMG = "javax/microedition/lcdui/Image";
+    nj_vm_stats before, after;
+    nj_class *want;
+    nj_value a[2];
+    nj_value ret;
+    int i;
+
+    want = nj_class_lookup(vm, IMG);
+    OK_MSG(want != NULL, "javax/microedition/lcdui/Image is registered");
+
+    /*
+     * Fill the bump area with garbage the collector may reclaim, so the
+     * 295x279 pixel array (329 KB) cannot be placed without collecting.
+     *
+     * Stop while the bump still has room for the next chunk but not for the
+     * array, so the array is placed by a collection rather than by the bump
+     * pointer.  Stopping at a FAILED allocation would not do: that failure
+     * collects already and leaves a large free block behind, and the
+     * collection this test is about never happens.
+     */
+    for (i = 0; i < 4000; i++) {
+        nj_vm_get_stats(vm, &before);
+        if (before.heap_size - before.heap_used < 270000u) {
+            break;
+        }
+        if (!nj_byte_array_new(vm, 65536u)) {
+            nj_clear_exception(vm);
+            break;
+        }
+    }
+    memset(&before, 0, sizeof(before));
+    nj_vm_get_stats(vm, &before);
+
+    a[0] = vint(295);
+    a[1] = vint(279);
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, IMG, "createImage",
+                          "(II)Ljavax/microedition/lcdui/Image;", a, &ret) == NJ_OK,
+           "Image.createImage(295,279) on a heap that needs a collection");
+
+    memset(&after, 0, sizeof(after));
+    nj_vm_get_stats(vm, &after);
+    OK_MSG(after.gc_count > before.gc_count,
+           "placing the pixel array really did run a collection");
+
+    OK_MSG(ret.r != NULL, "it returned an Image");
+    if (ret.r) {
+        OK_MSG(ret.r->cls == want,
+               "the Image still knows its class after the collection: got %p, want %p",
+               (void *)ret.r->cls, (void *)want);
+        OK_MSG(ret.r->kind == NJ_OBJ_PLAIN, "and it is still a plain object");
+    }
+    clean(vm, "Image.createImage on a full heap");
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -1304,6 +1371,7 @@ int main(void)
     test_constructor_arg_window(vm);
     test_connector_open_mode(vm);
     test_alloc_gives_up(vm);
+    test_image_survives_collection(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

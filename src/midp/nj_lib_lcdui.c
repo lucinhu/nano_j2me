@@ -262,6 +262,7 @@ static nj_ref img_alloc(nj_vm *vm, int w, int h, int mutable)
     nj_ref img;
     nj_ref px;
     nj_field *fw, *fh, *fp, *fm;
+    nj_u4 mark;
 
     if (!vm) {
         return NULL;
@@ -279,18 +280,37 @@ static nj_ref img_alloc(nj_vm *vm, int w, int h, int mutable)
         (void)nj_throw(vm, "java/lang/InternalError", "Image layout");
         return NULL;
     }
+    /*
+     * The pixel array is w*h ints: a 295x279 Image asks for 329 KB, which is
+     * enough that allocating it runs a collection.  The half-built Image
+     * exists only in this C local until it is returned, so it has to be
+     * rooted across that call - otherwise the sweep frees it and writes a
+     * free-list link over its first word, and the caller gets a dangling
+     * Image whose `cls` is not an nj_class at all.  The symptom is nowhere
+     * near here: storing that Image into an Image[] throws
+     * ArrayStoreException (the assignability test dereferences the bogus
+     * cls), and a game that catches its own loader failure then paints a
+     * null Image every frame - 火影忍者-终极格斗_6604 lost its first frame
+     * that way, at e.paint+376.
+     */
+    mark = nj_root_mark(vm);
     img = nj_object_new(vm, NJ_C_IMAGE);
     if (!img) {
+        nj_root_release(vm, mark);
         return NULL;
     }
+    img = nj_root(vm, img);
     px = nj_int_array_new(vm, (nj_u4)w * (nj_u4)h);
     if (!px) {
+        nj_root_release(vm, mark);
         return NULL;
     }
+    px = nj_root(vm, px);
     nj_field_write_int(vm, img, fw, w);
     nj_field_write_int(vm, img, fh, h);
     nj_field_write_int(vm, img, fm, mutable ? 1 : 0);
     nj_field_write_ref(vm, img, fp, px);
+    nj_root_release(vm, mark);
     return img;
 }
 
