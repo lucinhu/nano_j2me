@@ -1849,6 +1849,51 @@ nj_status nj_m3g_load_geometry(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
     return NJ_OK;
 }
 
+nj_u4 nj_m3g_raster_mesh(nj_vm *vm, struct nj_gfx *g, nj_ref mesh,
+                         const float m[16], int w, int h, nj_u4 argb)
+{
+    nj_ref vb, va, data;
+    const nj_s2 *s;
+    nj_u4 nverts, comp, drawn = 0u, i;
+
+    if (!vm || !g || !mesh) {
+        return 0u;
+    }
+    vb = nj_rget(vm, mesh, nj_field_lookup(vm, NJ_C_MESH, "_nj_vb", "L" NJ_C_VBUF ";", 0));
+    if (!vb) { return 0u; }
+    va = nj_rget(vm, vb, nj_field_lookup(vm, NJ_C_VBUF, "_nj_positions",
+                                         "L" NJ_C_VARR ";", 0));
+    if (!va) { return 0u; }
+    data = nj_rget(vm, va, nj_field_lookup(vm, NJ_C_VARR, "_nj_data", "[S", 0));
+    if (!data) { return 0u; }
+    nverts = (nj_u4)nj_iget(vm, va, nj_field_lookup(vm, NJ_C_VARR, "_nj_numVerts", "I", 0));
+    comp = (nj_u4)nj_iget(vm, va, nj_field_lookup(vm, NJ_C_VARR, "_nj_compSize", "I", 0));
+    s = (const nj_s2 *)nj_array_data(data);
+    if (!s || comp < 2u || nverts < 3u) {
+        return 0u;
+    }
+    /* Consecutive triples.  A TriangleStripArray is a strip, not a list of
+       independent triangles; this is the simple case and says so. */
+    for (i = 0u; i + 3u <= nverts; i += 3u) {
+        float xy[6];
+        float v[3];
+        nj_u4 k;
+
+        for (k = 0u; k < 3u; k++) {
+            const nj_s2 *p = s + (i + k) * comp;
+            v[0] = (float)p[0];
+            v[1] = (comp >= 2u) ? (float)p[1] : 0.0f;
+            v[2] = (comp >= 3u) ? (float)p[2] : 0.0f;
+            nj_m3g_project(m, v, w, h, xy + k * 2u);
+        }
+        if (nj_m3g_raster_tri(g, xy, argb) != 0u) {
+            drawn++;
+        }
+    }
+    vm->tris += (nj_u8)drawn;
+    return drawn;
+}
+
 NJFN(m3g_render)
 {
     /*

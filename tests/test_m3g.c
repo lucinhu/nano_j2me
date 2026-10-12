@@ -571,9 +571,15 @@ int main(void)
         nj_vm_get_stats(vm, &before);
         g3d = nj_object_new(vm, CLS("Graphics3D"));
         check(g3d != 0, "Graphics3D can be instantiated for the counter");
-        call(vm, g3d, CLS("Graphics3D"), "getInstance",
-             "()L" CLS("Graphics3D") ";", NULL, &r);
-        if (r.r) { g3d = r.r; }
+        /* The return slot is only read when the call succeeded.  The first
+           version read it unconditionally and the test segfaulted inside
+           bridge_lookup(): getInstance() fails in a test with no application
+           loaded, so the slot held whatever the stack held. */
+        r.r = 0;
+        if (nj_call(vm, g3d, CLS("Graphics3D"), "getInstance",
+                    "()L" CLS("Graphics3D") ";", NULL, &r) == NJ_OK && r.r) {
+            g3d = r.r;
+        }
         w = make(vm, CLS("World"));
         check(w != 0, "a World can be built for render()");
         one.r = w;
@@ -681,6 +687,65 @@ int main(void)
                   sh[2] == (nj_s2)0x0300,
                   "and they are the numbers the file held, little-endian");
         }
+    }
+    /* ---- a Mesh reaches the screen ------------------------------------- */
+    {
+        /*
+         * The whole chain in one assertion: a Mesh names a VertexBuffer, the
+         * VertexBuffer names a VertexArray, and the VertexArray holds the
+         * positions.  The matrix scales by 1/256 so that integer positions of
+         * 128 land at 0.5 in clip space - pixel 12 of 16 across - and the
+         * triangle is small enough to check pixel by pixel.
+         */
+        float m[16] = { 1.0f/256,0,0,0,  0,1.0f/256,0,0,  0,0,1.0f/256,0,  0,0,0,1 };
+        nj_s2 pos[9];
+        nj_u2 px[16 * 16];
+        nj_surface s;
+        nj_gfx g;
+        nj_ref va, vb, mesh, data;
+        nj_vm_stats before, after;
+        nj_u4 bg;
+        int i2;
+
+        pos[0] = 0;   pos[1] = 0;   pos[2] = 0;
+        pos[3] = 128; pos[4] = 0;   pos[5] = 0;
+        pos[6] = 0;   pos[7] = 128; pos[8] = 0;
+
+        va = make(vm, CLS("VertexArray"));
+        vb = make(vm, CLS("VertexBuffer"));
+        mesh = make(vm, CLS("Mesh"));
+        check(va && vb && mesh, "a VertexArray, a VertexBuffer and a Mesh exist");
+        data = nj_array_new(vm, "S", 9u);
+        check(data != 0, "the positions array is built");
+        if (data) {
+            nj_s2 *d = (nj_s2 *)nj_array_data(data);
+            int k;
+            check(d != NULL, "the positions array has storage");
+            for (k = 0; d && k < 9; k++) { d[k] = pos[k]; }
+            nj_iput(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_numVerts", "I", 0), 3);
+            nj_iput(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_compSize", "I", 0), 3);
+            nj_rput(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_data", "[S", 0), data);
+        }
+        nj_rput(vm, vb, nj_field_lookup(vm, CLS("VertexBuffer"), "_nj_positions",
+                                        "L" CLS("VertexArray") ";", 0), va);
+        nj_rput(vm, mesh, nj_field_lookup(vm, CLS("Mesh"), "_nj_vb",
+                                          "L" CLS("VertexBuffer") ";", 0), vb);
+
+        memset(&s, 0, sizeof(s));
+        for (i2 = 0; i2 < 16 * 16; i2++) { px[i2] = 0u; }
+        s.pixels = px; s.width = 16; s.height = 16; s.stride = 16 * 2;
+        s.format = NJ_PIXFMT_RGB565; s.bpp = 2;
+        nj_surface_fill(&s, 0u);
+        nj_gfx_init(&g, &s);
+        bg = nj_surface_get(&s, 8, 7);
+
+        nj_vm_get_stats(vm, &before);
+        check(nj_m3g_raster_mesh(vm, &g, mesh, m, 16, 16, 0x0000FF00u) == 1u,
+              "the mesh's one triangle is drawn");
+        nj_vm_get_stats(vm, &after);
+        check(after.tris == before.tris + 1u, "and the triangle counter moves by one");
+        check(nj_surface_get(&s, 8, 7) != bg,
+              "and a pixel inside the triangle is no longer the background");
     }
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
