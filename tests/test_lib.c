@@ -1032,6 +1032,66 @@ static const unsigned char S_class[] = {
     0x00, 0x14, 0x00, 0x01, 0x00, 0x1f, 0x00, 0x00, 0x00, 0x02, 0x00, 0x20,
 };
 
+/*
+ * java.util.Random, checked against a real JVM.
+ *
+ * The seed multiply, the 48-bit truncation, the next(32) splice and the
+ * nextLong() shift are wrapping arithmetic that Java specifies exactly and C
+ * leaves undefined.  Two of those were already found by UBSan and fixed - the
+ * seed multiply, and the nextLong() shift, which reported
+ *
+ *   nj_lib_util.c:1623:18: runtime error: left shift of 2271413148 by 32
+ *   places cannot be represented in type 'long int'
+ *
+ * while running 电子宠物蛋_11972.  The values below come from running the same
+ * seeds through OpenJDK, so this is a reference and not a snapshot of whatever
+ * this runtime happens to do.
+ */
+#define RND "java/util/Random"
+static void test_random(nj_vm *vm)
+{
+    nj_value a[1];
+    nj_value out;
+    a[0] = vlong(0);
+    nj_ref r = construct(vm, RND, "(J)V", a, "Random(0)");
+    if (!r) { return; }
+
+    OK_MSG(nj_call_int(vm, r, RND, "nextInt", "()I", NULL) == -1155484576,
+           "new Random(0).nextInt() == -1155484576 (OpenJDK)");
+    OK_MSG(nj_call_int(vm, r, RND, "nextInt", "()I", NULL) == -723955400,
+           "then -723955400");
+    OK_MSG(nj_call_int(vm, r, RND, "nextInt", "()I", NULL) == 1033096058,
+           "then 1033096058");
+    OK_MSG(nj_call(vm, r, RND, "nextLong", "()J", NULL, &out) == NJ_OK &&
+           out.j == (nj_s8)(-7261648964369397258LL),
+           "then nextLong() == -7261648964369397258");
+    OK_MSG(nj_call(vm, r, RND, "nextLong", "()J", NULL, &out) == NJ_OK &&
+           out.j == (nj_s8)5700976833288827063LL,
+           "then 5700976833288827063");
+    OK_MSG(nj_call_int(vm, r, RND, "nextBoolean", "()Z", NULL) == 0,
+           "then nextBoolean() == false");
+    OK_MSG(nj_call_int(vm, r, RND, "nextBoolean", "()Z", NULL) == 1,
+           "then true");
+    OK_MSG(nj_call(vm, r, RND, "nextDouble", "()D", NULL, &out) == NJ_OK &&
+           out.d == 0.78153463204530480,
+           "then nextDouble() == 0.7815346320453048");
+
+    /* setSeed restarts the same LCG, so the sequence must match the JVM's. */
+    a[0] = vlong(1);
+    r = construct(vm, RND, "(J)V", a, "Random(1)");
+    if (r) {
+        a[0] = vlong(7);
+        OK_MSG(nj_call(vm, r, RND, "setSeed", "(J)V", a, NULL) == NJ_OK,
+               "setSeed(7)");
+        OK_MSG(nj_call_int(vm, r, RND, "nextInt", "()I", NULL) == -1156638823,
+               "then nextInt() == -1156638823");
+        a[0] = vint(100);
+        OK_MSG(nj_call_int(vm, r, RND, "nextInt", "(I)I", a) == 64,
+               "then nextInt(100) == 64");
+    }
+    clean(vm, "java.util.Random");
+}
+
 static void test_static_field_init(nj_vm *vm)
 {
     nj_value ret;
@@ -2190,6 +2250,7 @@ int main(void)
     test_strings(vm);
     test_numbers(vm);
     test_boxing_valueof_radix(vm);
+    test_random(vm);
     test_static_field_init(vm);
     test_rms_overloads(vm);
     test_constructor_arg_window(vm);

@@ -1617,10 +1617,45 @@ NJFN(rnd_nextIntN)
 NJFN(rnd_nextLong)
 {
     nj_ref r = NJ_THIS(args);
-    nj_s8 hi = (nj_s8)rnd_next_seed(vm, r, 32);
-    nj_s8 lo = (nj_s8)rnd_next_seed(vm, r, 32);
+    /*
+     * java.util.Random.nextLong() is ((long)next(32) << 32) + next(32), and a
+     * Java long wraps.  The equivalent C is undefined behaviour the moment any
+     * of the low 32 bits is set - shifting a signed 64-bit value left by 32 is
+     * not representable - which is what UBSan reported while running
+     * 电子宠物蛋_11972:
+     *
+     *   nj_lib_util.c:1623:18: runtime error: left shift of 2271413148 by 32
+     *   places cannot be represented in type 'long int'
+     *
+     * Same bits, no UB: shift an unsigned value and reinterpret.  This is the
+     * same defect class as the String.hashCode() and Random seed multiply fixed
+     * earlier - Java asks for wrapping arithmetic, and C needs to be told.
+     */
+    /*
+     * The intermediate MUST go through nj_s4.  rnd_next_seed() hands back the
+     * 32 extracted bits as a non-negative nj_s8, so widening it straight to
+     * nj_s8 keeps it positive - but Java's nextLong() widens an int, which
+     * sign-extends.  Getting this wrong makes the result differ by exactly
+     * 2^32 when the second half has its top bit set, which is what the OpenJDK
+     * reference values in tests/test_lib.c caught.
+     */
+    nj_s8 hi = (nj_s4)rnd_next_seed(vm, r, 32);
+    nj_s8 lo = (nj_s4)rnd_next_seed(vm, r, 32);
 
-    ret->j = (hi << 32) + lo;
+    /*
+     * Java's own expression is ((long) next(32) << 32) + next(32), and next(32)
+     * returns an int - so both halves are SIGN-EXTENDED before they are
+     * combined.  Sign extension is the whole point: widening them as unsigned
+     * values instead gives a different number, which is how the first version
+     * of this fix broke nextLong() (tests/test_lib.c, checked against OpenJDK,
+     * caught it immediately).
+     *
+     * So keep the sign-extended operands and only move the arithmetic into
+     * unsigned: the shift of a negative signed value by 32 is not representable
+     * and UBSan rejects it, while the same shift on the two's-complement
+     * unsigned value produces exactly the bits Java wants.
+     */
+    ret->j = (nj_s8)(((nj_u8)hi << 32) + (nj_u8)lo);
     return NJ_OK;
 }
 
