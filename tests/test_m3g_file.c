@@ -151,6 +151,7 @@ static void objects_in_a_compressed_section(void)
     nj_u1 raw[16], comp[128];
     uLongf clen = sizeof(comp);
     nj_u4 zlen, total, n, count = 0;
+    nj_m3g_object objs[8];
     nj_status st;
 
     /* a Mesh with four bytes, then an external reference with two */
@@ -178,7 +179,15 @@ static void objects_in_a_compressed_section(void)
     vm = nj_vm_create(&port, 1u << 20);
     if (!vm) { ok(0, "a VM exists"); return; }
 
-    st = nj_m3g_scan_objects(vm, buf, n, NULL, 0u, &count, NULL, err, sizeof(err));
+    st = nj_m3g_scan_objects(vm, buf, n, objs, 8u, &count, NULL, err, sizeof(err));
+    ok(st == NJ_OK && count == 2u, "a compressed section yields its two objects");
+    if (st == NJ_OK && count == 2u) {
+        /* the fixture's first object holds 1 2 3 4, so its userID is 0x04030201 */
+        ok(objs[0].type == 20u && objs[0].user_id == 0x04030201u,
+           "an object's first four data bytes are its userID");
+        ok(objs[1].type == 255u && objs[1].user_id == 0u,
+           "an external reference is a bare string and has no userID");
+    }
 
     port.inflate = NULL;
     st = nj_m3g_scan_objects(vm, buf, n, NULL, 0u, &count, NULL, err, sizeof(err));

@@ -112,7 +112,19 @@ int main(int argc, char **argv)
     }
 
     memset(tally, 0, sizeof(tally));
-    for (i = 0; i < count && i < 65536u; i++) { tally[objs[i].type]++; }
+    {
+        nj_u4 lo = 0xffffffffu, hi = 0u, ids = 0u;
+        for (i = 0; i < count && i < 65536u; i++) {
+            tally[objs[i].type]++;
+            if (objs[i].type != 255u) {
+                if (objs[i].user_id < lo) { lo = objs[i].user_id; }
+                if (objs[i].user_id > hi) { hi = objs[i].user_id; }
+                ids++;
+            }
+        }
+        printf("userIDs %lu..%lu over %lu object(s)  ",
+               (unsigned long)(ids ? lo : 0u), (unsigned long)hi, (unsigned long)ids);
+    }
 
     printf("OK %lu bytes, %lu section(s), %lu object(s)",
            (unsigned long)len, (unsigned long)nsections, (unsigned long)count);

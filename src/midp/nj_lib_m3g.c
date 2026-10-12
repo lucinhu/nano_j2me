@@ -115,6 +115,7 @@ static nj_u4 le32(const nj_u1 *p)
  * loader is allowed to skip it - but the field has to be accounted for, or
  * every object chain is four bytes too long.
  */
+#define NJ_M3G_TYPE_EXTERNAL_REF 255u
 #define NJ_M3G_SECTION 9u
 #define NJ_M3G_SECTION_MIN 13u   /* nine byte header + four byte Adler32 */
 
@@ -260,6 +261,10 @@ nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
                 out[nobj].type = type;
                 out[nobj].off  = off + NJ_M3G_SECTION + at;
                 out[nobj].len  = olen;
+                /* an external reference is a bare string, everything else
+                   starts with its userID */
+                out[nobj].user_id = (type == NJ_M3G_TYPE_EXTERNAL_REF || olen < 4u)
+                                  ? 0u : le32(body + at + 5u);
             }
             nobj++;
             at += 5u + olen;
