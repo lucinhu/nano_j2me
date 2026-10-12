@@ -246,3 +246,24 @@ resource it needs but never gets) and is **not** evidence of a runtime defect;
 what is still unmeasured is *which surface* those four calls land on.  The
 probe that answers that question is the one used for the other titles: print
 the bound target's class in `gfx_load()`.
+
+### Where those four calls land (probe run)
+
+`gfx_load()` in `src/midp/nj_lib_lcdui.c` is the single place every `Graphics`
+method passes through, so a one-line probe there (`nj_logf(vm, 0, "PROBE
+bound-to=%s", nj_ref_class_name(target))`) answers the question for good.  Over
+three frames of `仙魔飞行棋_417`:
+
+    18 PROBE bound-to=javax/microedition/lcdui/Image
+
+**Every call is bound to an Image, not to the screen surface** -- and that is
+the design, not a bug: `nj_midp_paint()` hands `paint()` the Canvas buffer's
+`Graphics` and then blits that buffer to the display itself.  Combined with the
+dump above (one colour in the presented frames), the chain is closed:
+
+* the game draws ~6 uniform operations per frame **into its own buffer**,
+* the runtime blits the buffer faithfully,
+* so the uniform picture is the game's own output.
+
+No runtime defect is demonstrated for this title, and the probe was removed and
+the worktree discarded after the run.
