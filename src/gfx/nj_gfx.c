@@ -565,11 +565,21 @@ void nj_gfx_translate(nj_gfx *g, int dx, int dy)
     if (!g) {
         return;
     }
-    /* Cumulative, and deliberately does not touch the (device space) clip. */
+    /*
+     * Cumulative.  The clip is stored in DEVICE space but is defined in USER
+     * space, so moving the origin has to move the clip with it: setClip(0,0,8,8)
+     * followed by translate(8,8) must clip at (8,8), exactly like the other
+     * order (see tests/test_clip.c).  Leaving the clip behind while the origin
+     * moves is how every draw ends up outside its own clip.
+     */
     g->translate_x = (int)nj_clamp64((nj_s8)g->translate_x + dx,
                                      -NJ_GFX_COORD_LIMIT, NJ_GFX_COORD_LIMIT);
     g->translate_y = (int)nj_clamp64((nj_s8)g->translate_y + dy,
                                      -NJ_GFX_COORD_LIMIT, NJ_GFX_COORD_LIMIT);
+    if (g->clip_w > 0 && g->clip_h > 0) {
+        g->clip_x += dx;
+        g->clip_y += dy;
+    }
 }
 
 void nj_gfx_get_translate(const nj_gfx *g, int *dx, int *dy)

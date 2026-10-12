@@ -303,13 +303,21 @@ static void test_fill_rect(tctx *t)
     PX(t, &ts, 3, 4, C_WHITE, "pixel below clip untouched");
     PX(t, &ts, 2, 2, C_WHITE, "pixel left of clip untouched");
 
-    /* The clip is device space and is not moved by translate(). */
+    /*
+     * The clip is DEFINED in user space, so moving the origin carries it
+     * along: the caller's clip keeps the same user coordinates and translate()
+     * must not be able to change what getClipX() reports.  (It used to: the
+     * device clip stayed put while the origin moved, so the next store
+     * re-derived the user clip as device - translate and it drifted by exactly
+     * (dx, dy) on every translate.  tests/test_clip.c pins the observable end
+     * of that - setClip() before translate() and after it have to agree.)
+     */
     nj_gfx_translate(&g, 5, 5);
-    CHECK(t, nj_gfx_get_clip_x(&g) == 3 && nj_gfx_get_clip_y(&g) == 2);
+    CHECK(t, nj_gfx_get_clip_x(&g) == 8 && nj_gfx_get_clip_y(&g) == 7);
     ts_clear(&ts, C_WHITE);
     nj_gfx_fill_rect(&g, -100, -100, 300, 300);
-    PX(t, &ts, 3, 2, C_RED, "clip still applies after translate");
-    PX(t, &ts, 5, 2, C_WHITE, "clip still stops at x=5");
+    PX(t, &ts, 8, 7, C_RED, "clip moved with the translated origin");
+    PX(t, &ts, 3, 2, C_WHITE, "the clip is no longer where it was");
 
     /* clipRect intersects in user space. */
     nj_gfx_translate(&g, -5, -5);            /* back to (3,2) */

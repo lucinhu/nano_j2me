@@ -445,6 +445,7 @@ if(NJ_BUILD_TESTS)
     set_tests_properties(test_loop_frames PROPERTIES TIMEOUT 120)
   endif()
   nj_add_test(test_directgraphics tests/test_directgraphics.c)
+nj_add_test(test_clip tests/test_clip.c)
   nj_add_test(test_blocked_init tests/test_blocked_init.c ${NJ_FIXTURES})
   nj_add_test(test_vm        tests/test_vm.c
               ${NJ_FIXTURES}/hello.jar HelloWorld "hello from j2me")

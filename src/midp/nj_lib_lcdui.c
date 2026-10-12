@@ -649,13 +649,14 @@ static int gfx_load(nj_vm *vm, nj_ref g_obj, nj_gfx *g, nj_surface *surf_scratch
     cy = (int)fget(vm, g_obj, G_CLS, F_G_CY, D_INT);
     cw = (int)fget(vm, g_obj, G_CLS, F_G_CW, D_INT);
     ch = (int)fget(vm, g_obj, G_CLS, F_G_CH, D_INT);
-    if (cw <= 0 || ch <= 0) {
-        /* A freshly built Graphics clips to its whole target. */
-        cx = 0;
-        cy = 0;
-        cw = s->width;
-        ch = s->height;
-    }
+    /*
+     * No fallback here on purpose.  A non-positive size is an EMPTY clip, which
+     * is what setClip() asked for, and gfx_new() has already written the whole
+     * target into these fields for a Graphics nobody has clipped yet - so the
+     * two cases are told apart at construction instead of being guessed at on
+     * every load.  Reinstating a "cw <= 0 means the whole surface" fallback
+     * here reintroduces the bug that tests/test_clip.c exists for.
+     */
     /*
      * The clip fields (NJ_F_G_CX/CY/CW/CH) hold USER-space coordinates, exactly
      * like Graphics.getClipX(), and nj_gfx_set_clip() applies the translate
@@ -756,6 +757,47 @@ NJFN(g_init_noarg)
  * Build a Graphics over `target` (NULL = the display) and hand it to the
  * caller.  Used by Image.getGraphics() and by the paint machinery.
  */
+/*
+ * A brand new Graphics clips to its whole target.  gfx_load() reconstructs the
+ * clip from the object's own fields, so those fields have to SAY so: otherwise
+ * "the clip is empty" and "no clip has ever been set" are both (0,0,0,0), and
+ * gfx_load() ends up guessing.  It guessed "whole target", which turned
+ * setClip(x, y, 0, h) - a game clipping a strip away - into a licence to draw
+ * over the entire screen.  See tests/test_clip.c.
+ */
+static void gfx_seed_clip(nj_vm *vm, nj_ref g, nj_ref target)
+{
+    nj_value args[1];
+    nj_value ret;
+    nj_s4 w = 0, h = 0;
+    nj_field *f;
+
+    args[0].bits = 0u;
+    args[0].r = target;
+    ret.bits = 0u;
+    if (target && nj_call(vm, target, NJ_C_IMAGE, "getWidth", "()I", NULL, &ret)
+        == NJ_OK) {
+        w = ret.i;
+    }
+    ret.bits = 0u;
+    if (target && nj_call(vm, target, NJ_C_IMAGE, "getHeight", "()I", NULL, &ret)
+        == NJ_OK) {
+        h = ret.i;
+    }
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    f = fld(vm, G_CLS, F_G_CX, D_INT, 0);
+    if (f) { nj_field_write_int(vm, g, f, 0); }
+    f = fld(vm, G_CLS, F_G_CY, D_INT, 0);
+    if (f) { nj_field_write_int(vm, g, f, 0); }
+    f = fld(vm, G_CLS, F_G_CW, D_INT, 0);
+    if (f) { nj_field_write_int(vm, g, f, w); }
+    f = fld(vm, G_CLS, F_G_CH, D_INT, 0);
+    if (f) { nj_field_write_int(vm, g, f, h); }
+    (void)args;
+}
+
 static nj_ref gfx_new(nj_vm *vm, nj_ref target)
 {
     nj_ref g;
@@ -782,6 +824,7 @@ static nj_ref gfx_new(nj_vm *vm, nj_ref target)
         nj_root_release(vm, mark);
         return NULL;
     }
+    gfx_seed_clip(vm, g, target);
     nj_root_release(vm, mark);
     return g;
 }

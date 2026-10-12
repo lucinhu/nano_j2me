@@ -144,7 +144,7 @@ static nj_ref image_graphics(nj_vm *vm, nj_ref img)
 static nj_u4 img_pixel(nj_vm *vm, nj_ref img, int x, int y)
 {
     nj_ref px = nj_int_array_new(vm, 1u);
-    nj_value ga[7];
+    nj_value ga[8];
     nj_u4 v;
 
     ga[0] = sref(px);
@@ -154,6 +154,7 @@ static nj_u4 img_pixel(nj_vm *vm, nj_ref img, int x, int y)
     ga[4] = iref(y);
     ga[5] = iref(1);
     ga[6] = iref(1);
+    ga[7] = iref(0);
     if (nj_call(vm, img, NJ_C_IMAGE, "getRGB", "([IIIIIII)V", ga, NULL)
         != NJ_OK) {
         return 0xDEADBEEFu;
