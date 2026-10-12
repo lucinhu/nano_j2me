@@ -258,6 +258,53 @@ static void test_round_trip(nj_vm *vm)
 }
 
 /* ------------------------------------------------------------------ */
+/* 2: the static DataInputStream.readUTF(DataInput)                    */
+/* ------------------------------------------------------------------ */
+static void test_read_utf_static(nj_vm *vm)
+{
+    /* writeUTF's encoding: a two-byte big-endian length, then the bytes.
+     * "hi" is two bytes, and U+4E2D is three (E4 B8 AD). */
+    static const unsigned char data[9] = {
+        0x00, 0x02, 'h', 'i',
+        0x00, 0x03, 0xE4, 0xB8, 0xAD
+    };
+    nj_value a[3];
+    nj_value ret;
+    nj_ref dis;
+
+    /* A game calls this form to decode a length-prefixed string out of a
+     * stream it already holds. Two things have to be right: the linker must
+     * find the static row, and the native behind it must read the ARGUMENT
+     * rather than the receiver. */
+    dis = dis_over(vm, bais_over(vm, data, (nj_u4)sizeof(data)));
+    OK(dis != NULL);
+
+    a[0] = vref(dis);
+    a[1].bits = 0u;
+    ret.bits = 0u;
+    OK(nj_call_static(vm, DIS, "readUTF",
+                      "(Ljava/io/DataInput;)Ljava/lang/String;", a,
+                      &ret) == NJ_OK);
+    OK_MSG(ret.r != NULL && nj_string_equals_utf8(ret.r, "hi"),
+           "the static readUTF returned the first string");
+
+    a[0] = vref(dis);
+    ret.bits = 0u;
+    OK(nj_call_static(vm, DIS, "readUTF",
+                      "(Ljava/io/DataInput;)Ljava/lang/String;", a,
+                      &ret) == NJ_OK);
+    {
+        const nj_u2 *ch = ret.r ? nj_string_chars(ret.r) : NULL;
+
+        OK_MSG(ch != NULL && nj_string_length(ret.r) == 1u &&
+               ch[0] == 0x4E2Du,
+               "and three UTF-8 bytes decoded to U+4E2D, got %u chars",
+               ret.r ? (unsigned)nj_string_length(ret.r) : 0u);
+    }
+    clean(vm, "static readUTF");
+}
+
+/* ------------------------------------------------------------------ */
 /* 2: readFully(byte[])                                                */
 /* ------------------------------------------------------------------ */
 static void test_read_fully(nj_vm *vm)
@@ -2331,6 +2378,7 @@ int main(void)
     }
 
     test_round_trip(vm);
+    test_read_utf_static(vm);
     test_read_fully(vm);
     test_skips(vm);
     test_media(vm);
