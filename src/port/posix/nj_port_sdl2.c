@@ -243,6 +243,24 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
         return -1;
     }
 
+    /*
+     * Take keyboard focus, and say which key does what.
+     *
+     * The most common "the game is deaf" report on a desktop is a window that
+     * was mapped but never focused: the key events go to whatever window the
+     * window manager left focused, while the mouse keeps working because
+     * button and motion events are delivered to the window under the pointer.
+     * Raising and explicitly focusing the window removes the guesswork, and
+     * printing the mapping lets a player tell "no key arrived" from "that key
+     * is not mapped to anything".
+     */
+    SDL_RaiseWindow(s->window);
+    SDL_SetWindowInputFocus(s->window);
+    sdl_log(NULL, 2,
+            "keys: arrows=up/down/left/right  Enter/Space=fire  F1=soft-left"
+            "  Esc/F2=soft-right  Backspace=clear  0-9 * #  "
+            "Z/X/C/V=game A/B/C/D  mouse: click and drag");
+
     *w = s->width;
     *h = s->height;
     *stride = s->stride;
