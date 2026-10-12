@@ -1136,8 +1136,19 @@ nj_method *nj_method_lookup(nj_class *c, const char *name, const char *desc)
     return NULL;
 }
 
-static nj_method *method_lookup_any(nj_class *c, const char *name,
-                                    const char *desc, int want_static)
+/*
+ * JVMS 5.4.3.3 resolves a Methodref by NAME and DESCRIPTOR, walking the
+ * referenced class and then its superclasses; static-ness is a property of
+ * the method that wins, not a filter on the search.  Asking for an instance
+ * method first lets an instance method of a superclass shadow a static
+ * method declared in the referenced class: class j declares
+ * `private static void G()V` while its superclass h declares an instance
+ * `G()V`, and 三国争霸之赤壁大战_11681 calls the static one with
+ * invokestatic, which used to raise "invokestatic on an instance method"
+ * once per frame and never let the title finish.
+ */
+static nj_method *method_lookup_named(nj_class *c, const char *name,
+                                      const char *desc)
 {
     nj_class *k;
 
@@ -1145,10 +1156,6 @@ static nj_method *method_lookup_any(nj_class *c, const char *name,
         nj_u2 i;
         for (i = 0u; i < k->method_count; i++) {
             nj_method *m = &k->methods[i];
-            int is_static = (m->flags & NJ_ACC_STATIC) != 0u;
-            if (is_static != want_static) {
-                continue;
-            }
             if (strcmp(m->name, name) == 0 && strcmp(m->desc, desc) == 0) {
                 return m;
             }
@@ -1398,14 +1405,7 @@ nj_status nj_cp_resolve(nj_vm *vm, nj_class *c, nj_u2 index, nj_cpentry **out)
         e->target = f;
         e->slot = f->offset;
     } else if (tag == NJ_CP_METHODREF) {
-        int want_static = 0;
-        nj_method *m;
-        /* A Methodref may name a static method: detect it by asking for both. */
-        m = method_lookup_any(owner, mname, mdesc, 0);
-        if (!m) {
-            m = method_lookup_any(owner, mname, mdesc, 1);
-            want_static = 1;
-        }
+        nj_method *m = method_lookup_named(owner, mname, mdesc);
         if (!m) {
             vm->resolve_fail = NJ_RESOLVE_METHOD;
             vm->resolve_cls = cls_name;
@@ -1414,22 +1414,19 @@ nj_status nj_cp_resolve(nj_vm *vm, nj_class *c, nj_u2 index, nj_cpentry **out)
             return NJ_ERR;
         }
         e->target = m;
-        e->kind = want_static ? NJ_LINK_METHOD_STATIC : NJ_LINK_METHOD_INST;
+        e->kind = ((m->flags & NJ_ACC_STATIC) != 0u) ? NJ_LINK_METHOD_STATIC
+                                                     : NJ_LINK_METHOD_INST;
     } else {
-        nj_method *m = method_lookup_any(owner, mname, mdesc, 0);
+        nj_method *m = method_lookup_named(owner, mname, mdesc);
         if (!m) {
-            m = method_lookup_any(owner, mname, mdesc, 1);
-            if (!m) {
-                vm->resolve_fail = NJ_RESOLVE_METHOD;
-                vm->resolve_cls = cls_name;
-                vm->resolve_name = mname;
-                vm->resolve_desc = mdesc;
-                return NJ_ERR;
-            }
-            e->kind = NJ_LINK_METHOD_STATIC;
-        } else {
-            e->kind = NJ_LINK_METHOD_INST;
+            vm->resolve_fail = NJ_RESOLVE_METHOD;
+            vm->resolve_cls = cls_name;
+            vm->resolve_name = mname;
+            vm->resolve_desc = mdesc;
+            return NJ_ERR;
         }
+        e->kind = ((m->flags & NJ_ACC_STATIC) != 0u) ? NJ_LINK_METHOD_STATIC
+                                                     : NJ_LINK_METHOD_INST;
         e->target = m;
     }
 
