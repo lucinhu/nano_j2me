@@ -276,6 +276,7 @@ if(NJ_BUILD_TESTS)
     add_custom_command(TARGET nj_fixtures POST_BUILD
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_keys_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_blockdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_loopdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_latedemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_fsorder_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -401,6 +402,13 @@ if(NJ_BUILD_TESTS)
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_observed.sh
                      ${NJ_FIXTURES}/gamedemo.jar)
     set_tests_properties(test_observed_ports PROPERTIES TIMEOUT 120)
+    # A MIDlet that runs its own frame loop inside startApp() must still
+    # present frames; 仙剑奇侠传完美版 does exactly that.
+    add_test(NAME test_loop_frames
+             COMMAND ${CMAKE_COMMAND} -E env NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_loopdemo.sh
+                     ${NJ_FIXTURES}/loopdemo.jar)
+    set_tests_properties(test_loop_frames PROPERTIES TIMEOUT 120)
   endif()
   nj_add_test(test_directgraphics tests/test_directgraphics.c)
   nj_add_test(test_blocked_init tests/test_blocked_init.c ${NJ_FIXTURES})

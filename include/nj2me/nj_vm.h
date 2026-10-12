@@ -281,7 +281,7 @@ const char *nj_vm_stop_why(const nj_vm *vm);
  * top of the stack; the VM guards against it re-entering itself.  Pass NULL to
  * unregister.
  */
-void nj_vm_set_frame_hook(nj_vm *vm, void (*fn)(nj_vm *vm, void *ud), void *ud);
+int  nj_vm_set_frame_hook(nj_vm *vm, int (*fn)(nj_vm *vm, void *ud), void *ud);
 
 /* Is the VM still running?  0 once the MIDlet has exited or asked to stop.
  * The runner needs this to drive the frame loop itself (see --run-frames). */

@@ -378,7 +378,13 @@ struct nj_vm {
      * event thread, so a sleep must not stop the screen.  NULL for embedders
      * that do not want it, which is every path that is not driving frames.
      */
-    void      (*frame_hook)(nj_vm *vm, void *ud);
+    /*
+     * Called while a Java thread is parked in a blocking native, so that an
+     * embedder's display keeps being drawn.  Returning non-zero asks the VM to
+     * stop: the parked Java frame is abandoned and the call unwinds, which is
+     * the only way out for a MIDlet that never returns from startApp().
+     */
+    int      (*frame_hook)(nj_vm *vm, void *ud);
     void       *frame_hook_ud;
     int         in_frame_hook;  /* re-entrancy guard: the hook may call back in */
 

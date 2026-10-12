@@ -1267,6 +1267,8 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
             nj_s8 until = (th->state == NJ_THREAD_SLEEPING)
                           ? th->wake_at_ms : th->wait_deadline;
 
+            int stop_requested = 0;
+
             while (nj_now_ms(vm) < until &&
                    (nj_now_ms(vm) - start) < (nj_s8)NJ_CALL_BLOCK_MS) {
                 /*
@@ -1280,13 +1282,28 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
                  * changes for an embedder that drives frames itself.
                  */
                 if (vm->frame_hook && !vm->in_frame_hook) {
+                    int stop;
                     vm->in_frame_hook = 1;
-                    vm->frame_hook(vm, vm->frame_hook_ud);
+                    stop = vm->frame_hook(vm, vm->frame_hook_ud);
                     vm->in_frame_hook = 0;
+                    if (stop) {
+                        stop_requested = 1;
+                        break;
+                    }
                 }
                 if (vm->port && vm->port->sleep_ms) {
                     vm->port->sleep_ms(vm->port->ud, 1u);
                 }
+            }
+            if (stop_requested) {
+                /*
+                 * The embedder is done with this run.  The Java frame is
+                 * parked in a sleep it will never wake from, so abandon it
+                 * and unwind: this is the only way out for a MIDlet that
+                 * never returns from startApp().
+                 */
+                st = NJ_ERR_HALT;
+                break;
             }
             if (nj_now_ms(vm) < until) {
                 break;   /* it really is stuck: report it rather than spin */
@@ -1403,14 +1420,15 @@ static nj_ref take_or_synthesise(nj_vm *vm, const char *cls_name,
  * Register a callback the VM runs while a Java thread is parked.  See
  * include/nj2me/nj_vm.h for why a runner wants one.
  */
-void nj_vm_set_frame_hook(nj_vm *vm, void (*fn)(nj_vm *vm, void *ud), void *ud)
+int nj_vm_set_frame_hook(nj_vm *vm, int (*fn)(nj_vm *vm, void *ud), void *ud)
 {
     if (!vm) {
-        return;
+        return -1;
     }
     vm->frame_hook = fn;
     vm->frame_hook_ud = ud;
     vm->in_frame_hook = 0;
+    return 0;
 }
 
 

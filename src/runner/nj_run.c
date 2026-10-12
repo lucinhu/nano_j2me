@@ -544,6 +544,37 @@ static void mkdir_p(const char *path)
     (void)mkdir(tmp, 0777);
 }
 
+/*
+ * Draw one frame while a Java thread is parked in a blocking native.
+ *
+ * nj_midp_frame() is what the runner would have called next anyway; calling it
+ * from the sleep path is what lets a MIDlet that runs its own loop inside
+ * startApp() present anything at all.
+ */
+typedef struct run_hook_ctx {
+    nj_u8 budget;   /* 0 = no frame budget */
+    nj_u8 drawn;
+} run_hook_ctx;
+
+static int run_frame_hook(nj_vm *vm, void *ud)
+{
+    run_hook_ctx *ctx = (run_hook_ctx *)ud;
+
+    if (!nj_vm_running(vm)) {
+        return 1;
+    }
+    (void)nj_midp_frame(vm);
+    ctx->drawn++;
+    /*
+     * End the run once the budget is spent.
+     *
+     * The MIDlet is parked inside startApp() and will not return on its own,
+     * so this is the only place that can end the run: the frame loop cannot
+     * check its own budget while it is still waiting for startApp().
+     */
+    return ctx->budget != 0u && ctx->drawn >= ctx->budget;
+}
+
 int nj_run(const nj_port *port_in, const nj_run_opts *opts)
 {
     nj_port port;
@@ -640,7 +671,26 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     }
 
     /* ---- the VM ---- */
+    run_hook_ctx hook_ctx;
+
     vm = nj_vm_create(&port, opts->heap_bytes);
+    /*
+     * Let the display keep being drawn while a Java thread sleeps.
+     *
+     * A MIDlet may run its own frame loop inside startApp() and sleep in it -
+     * 仙剑奇侠传完美版 does - and on a handset the AMS paints from its own
+     * event thread, so those sleeps must not stop the screen.  This has to be
+     * registered here and not at the frame loop: startApp() runs before the
+     * loop is reached, so the sleeps happen first.
+     *
+     * Only on the path that is already driving frames; an embedder that calls
+     * nj_midp_run() drives its own.
+     */
+    if (vm && (opts->run_frames > 0u || (opts->keys && opts->keys[0]))) {
+        hook_ctx.budget = opts->run_frames;
+        hook_ctx.drawn = 0u;
+        nj_vm_set_frame_hook(vm, run_frame_hook, &hook_ctx);
+    }
     if (!vm) {
         if (port.log) {
             port.log(port.user, 0, "cannot create the VM (out of memory?)");
