@@ -1428,6 +1428,22 @@ NJFN(m3g_addChild)
         NJ_THROW(vm, "java/lang/IllegalStateException",
                  "the node already has a parent");
     }
+    /*
+     * A child the FILE listed is already in this vector - m3g_load put it
+     * there and deliberately left its parent unset - so the game calling
+     * addChild() for it must adopt it and succeed, not fail and not append a
+     * second copy.  A node with some other parent has already been refused
+     * above, which is why this check sits after that one.
+     */
+    if (kids) {
+        nj_value ia[5], ir;
+        ia[0].r = child;
+        if (nj_call(vm, kids, NJ_C_VECTOR, "indexOf", "(Ljava/lang/Object;)I",
+                    ia, &ir) == NJ_OK && ir.i >= 0) {
+            nj_rput(vm, child, pf, self);
+            return NJ_OK;
+        }
+    }
     if (!kids) {
         kids = nj_object_new(vm, NJ_C_VECTOR);
         if (!kids) {
@@ -2465,7 +2481,65 @@ NJFN(m3g_load)
             nj_root_release(vm, inner);
         }
         /*
-         * The children are NOT linked into the graph here, and that is a
+         * A Group's children are the last thing in its data: a count and that
+         * many object indices (JSR 184 file format section 3.2 and 11.9).
+         * They are put into the Group's own child vector so getChildCount()
+         * and getChild() answer from the file, which is what a game asks for.
+         *
+         * Their parent pointer is deliberately left unset.  The first version
+         * of this called Group.addChild() for them, and Need for Speed Most
+         * Wanted - 20 frames and 69 drawing calls without it - died on
+         * "the node already has a parent", because the game adds the same
+         * nodes itself and JSR 184 gives a Node exactly one parent.  The
+         * file's graph and the game's graph are the same graph.  Leaving the
+         * parent alone means the game's own addChild() still succeeds; it
+         * recognises a node that is already in the vector and adopts it.
+         */
+        for (i = 0u; i < nobj; i++) {
+            nj_ref g, kids;
+            nj_u4 k;
+
+            if (objs[i].type != NJ_M3G_T_GROUP || objs[i].fields.nrefs == 0u) {
+                continue;
+            }
+            g = nj_array_get_ref(arr, i + 1u);
+            if (!g) { continue; }
+            kids = nj_rget(vm, g, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
+                                                  "L" NJ_C_VECTOR ";", 0));
+            if (!kids) {
+                nj_value vn;
+                kids = nj_object_new(vm, NJ_C_VECTOR);
+                if (!kids) { continue; }
+                kids = nj_root(vm, kids);
+                nj_call(vm, kids, NJ_C_VECTOR, "<init>", "()V", NULL, &vn);
+                nj_rput(vm, g, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
+                                               "L" NJ_C_VECTOR ";", 0), kids);
+            }
+            for (k = 0u; k < objs[i].fields.nrefs; k++) {
+                nj_u4 idx = objs[i].fields.refs[k];
+                nj_value va[5], vr;
+                nj_ref ch;
+                if (idx == 0u || idx > nobj) { continue; }   /* 0 is null */
+                ch = nj_array_get_ref(arr, idx);
+                if (!ch) { continue; }
+                /*
+                 * The parent IS set, and that is what makes Object3D.find()
+                 * able to reach these children - it walks the graph, and
+                 * without the link a game looking a node up by userID gets
+                 * null and then calls addChild(null).  Doing this is only
+                 * safe because m3g_addChild() now recognises a node that is
+                 * already in the vector: the game's own addChild() for the
+                 * same node adopts it and returns instead of throwing.
+                 */
+                nj_rput(vm, ch, nj_field_lookup(vm, NJ_C_NODE, "_nj_parent",
+                                                "L" NJ_C_NODE ";", 0), g);
+                va[0].r = ch;
+                (void)nj_call(vm, kids, NJ_C_VECTOR, "addElement",
+                              "(Ljava/lang/Object;)V", va, &vr);
+            }
+        }
+        /*
+         * What is still not linked is the rest of the graph, and that is a
          * measured decision rather than an unfinished one.
          *
          * The first version called Group.addChild() for every child the file
