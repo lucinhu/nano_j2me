@@ -847,6 +847,37 @@ int main(void)
         }
     }
 
+    /*
+     * A snare is a drum head with wires over it: the tone under the noise is
+     * what separates it from a hiss.  Measured as zero crossings in the first
+     * twenty milliseconds, where the head is loudest - a hat at the same
+     * velocity is all noise and crosses far more often.
+     */
+    {
+        nj_u1 file[128];
+        nj_u4 n, fr = 0u, win = NJ_MIDI_RATE / 50u;
+        nj_u1 *m;
+        nj_u4 snare_c = 0u, hat_c = 0u;
+
+        n = build_voiced(file, NULL, 0u, 9u, 38u);      /* snare */
+        m = nj_midi_render(file, n, &fr, &MEM);
+        check(m != NULL, "a snare renders");
+        if (m != NULL) {
+            snare_c = pcm_crossings(m, fr, 0u, win);
+            t_free(NULL, m);
+        }
+        n = build_voiced(file, NULL, 0u, 9u, 42u);      /* closed hat */
+        m = nj_midi_render(file, n, &fr, &MEM);
+        if (m != NULL) {
+            hat_c = pcm_crossings(m, fr, 0u, win);
+            t_free(NULL, m);
+        }
+        check(snare_c > 0u && snare_c * 10u < hat_c * 7u,
+              "a snare has a drum head under the wires, not just noise");
+        printf("     snare crossings %u, hat crossings %u in the first 20 ms\n",
+               (unsigned)snare_c, (unsigned)hat_c);
+    }
+
     t_free(NULL, pcm);
     printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures != 0;

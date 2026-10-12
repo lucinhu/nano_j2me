@@ -106,6 +106,7 @@
 #define MID_W_TRIANGLE 1u
 #define MID_W_SAW      2u
 #define MID_W_NOISE    3u
+#define MID_W_DRUM     4u      /* noise with a tone body under it */
 
 typedef struct {
     nj_u1 wave;
@@ -115,6 +116,7 @@ typedef struct {
     nj_u1 sustain;              /* 0..127: the level the decay settles on */
     nj_u1 pitch_drop;           /* 128 = starts an octave high (a kick) */
     nj_u2 pitch_ms;             /* how long the pitch takes to fall */
+    nj_u1 tone;                 /* MID_W_DRUM: the tone's share, 0..127 */
 } mid_timbre;
 
 /*
@@ -128,22 +130,22 @@ typedef struct {
  * else honest to make of them.
  */
 static const mid_timbre mid_timbres[16] = {
-    { MID_W_TRIANGLE, 1400u,   2u, 140u,   0u ,   0u, 0u },   /* piano: struck, dies away */
-    { MID_W_TRIANGLE,  900u,   1u, 120u,   0u ,   0u, 0u },   /* chromatic percussion */
-    { MID_W_SQUARE,      0u,   6u,  40u, 110u ,   0u, 0u },   /* organ: instant, holds */
-    { MID_W_SAW,      1200u,   3u, 130u,   0u ,   0u, 0u },   /* guitar */
-    { MID_W_TRIANGLE,  700u,   2u,  90u,   0u ,   0u, 0u },   /* bass */
-    { MID_W_SAW,         0u,  45u, 180u, 100u ,   0u, 0u },   /* strings: slow, sustained */
-    { MID_W_SAW,         0u,  55u, 200u, 100u ,   0u, 0u },   /* ensemble */
-    { MID_W_SQUARE,      0u,  25u,  90u, 105u ,   0u, 0u },   /* brass: a small swell */
-    { MID_W_SQUARE,      0u,  20u,  80u, 110u ,   0u, 0u },   /* reed */
-    { MID_W_TRIANGLE,    0u,  30u,  70u, 105u ,   0u, 0u },   /* pipe */
-    { MID_W_SAW,         0u,   8u,  80u, 100u ,   0u, 0u },   /* synth lead */
-    { MID_W_TRIANGLE,    0u, 120u, 300u,  95u ,   0u, 0u },   /* synth pad: the slowest */
-    { MID_W_NOISE,     300u,   5u, 200u,   0u ,   0u, 0u },   /* effects */
-    { MID_W_TRIANGLE,  900u,   5u, 120u,   0u ,   0u, 0u },   /* ethnic */
-    { MID_W_NOISE,     200u,   1u,  60u,   0u ,   0u, 0u },   /* percussive */
-    { MID_W_NOISE,     250u,   2u, 150u,   0u ,   0u, 0u }    /* sound effects */
+    { MID_W_TRIANGLE, 1400u,   2u, 140u,   0u ,   0u, 0u , 0u },   /* piano: struck, dies away */
+    { MID_W_TRIANGLE,  900u,   1u, 120u,   0u ,   0u, 0u , 0u },   /* chromatic percussion */
+    { MID_W_SQUARE,      0u,   6u,  40u, 110u ,   0u, 0u , 0u },   /* organ: instant, holds */
+    { MID_W_SAW,      1200u,   3u, 130u,   0u ,   0u, 0u , 0u },   /* guitar */
+    { MID_W_TRIANGLE,  700u,   2u,  90u,   0u ,   0u, 0u , 0u },   /* bass */
+    { MID_W_SAW,         0u,  45u, 180u, 100u ,   0u, 0u , 0u },   /* strings: slow, sustained */
+    { MID_W_SAW,         0u,  55u, 200u, 100u ,   0u, 0u , 0u },   /* ensemble */
+    { MID_W_SQUARE,      0u,  25u,  90u, 105u ,   0u, 0u , 0u },   /* brass: a small swell */
+    { MID_W_SQUARE,      0u,  20u,  80u, 110u ,   0u, 0u , 0u },   /* reed */
+    { MID_W_TRIANGLE,    0u,  30u,  70u, 105u ,   0u, 0u , 0u },   /* pipe */
+    { MID_W_SAW,         0u,   8u,  80u, 100u ,   0u, 0u , 0u },   /* synth lead */
+    { MID_W_TRIANGLE,    0u, 120u, 300u,  95u ,   0u, 0u , 0u },   /* synth pad: the slowest */
+    { MID_W_NOISE,     300u,   5u, 200u,   0u ,   0u, 0u , 0u },   /* effects */
+    { MID_W_TRIANGLE,  900u,   5u, 120u,   0u ,   0u, 0u , 0u },   /* ethnic */
+    { MID_W_NOISE,     200u,   1u,  60u,   0u ,   0u, 0u , 0u },   /* percussive */
+    { MID_W_NOISE,     250u,   2u, 150u,   0u ,   0u, 0u , 0u }    /* sound effects */
 };
 
 static void mid_drum(nj_u4 note, mid_timbre *t)
@@ -161,6 +163,7 @@ static void mid_drum(nj_u4 note, mid_timbre *t)
     t->sustain = 0u;
     t->pitch_drop = 0u;
     t->pitch_ms = 0u;
+    t->tone = 0u;
 
     if (note == 35u || note == 36u) {               /* kick */
         t->wave = MID_W_TRIANGLE;
@@ -171,6 +174,8 @@ static void mid_drum(nj_u4 note, mid_timbre *t)
         t->decay_ms = 40u;
         t->release_ms = 20u;
     } else if (note == 38u || note == 40u) {        /* snare */
+        t->wave = MID_W_DRUM;                       /* wires over a 180 Hz head */
+        t->tone = 70u;
         t->decay_ms = 130u;
         t->release_ms = 30u;
     } else if (note == 39u) {                       /* hand clap */
@@ -292,6 +297,7 @@ typedef struct {
     nj_u4 velocity;
     nj_u4 chan;
     nj_u1 wave;                 /* resolved from the channel's program */
+    nj_u1 tone;                 /* MID_W_DRUM: the tone's share, 0..127 */
     nj_u2 decay_ms;             /* 0 = held */
     nj_u1 pitch_drop;           /* a drum's skin starts above its note */
     nj_u2 pitch_ms;
@@ -374,6 +380,7 @@ static int mid_add_note(mid_song *s, const nj_midi_mem *mem,
     s->notes[s->nnotes].velocity = vel;
     s->notes[s->nnotes].chan = chan;
     s->notes[s->nnotes].wave = (t != NULL) ? t->wave : 0u;
+    s->notes[s->nnotes].tone = (t != NULL) ? t->tone : 0u;
     s->notes[s->nnotes].decay_ms = (t != NULL) ? t->decay_ms : 0u;
     s->notes[s->nnotes].attack_ms = (t != NULL) ? t->attack_ms : 0u;
     s->notes[s->nnotes].release_ms = (t != NULL) ? t->release_ms : 0u;
@@ -644,6 +651,7 @@ typedef struct {
     nj_u4 mod;                  /* vibrato depth, Q16, from the channel */
     nj_u4 rev;                  /* CC91 send, 0..127, from the channel */
     nj_u1 wave;
+    nj_u1 tone;                 /* MID_W_DRUM: the tone's share */
     nj_u4 phase;                /* 32-bit phase accumulator */
     nj_u4 step;                 /* phase increment per sample */
     nj_u4 noise;                /* linear feedback shift register, for noise */
@@ -1045,6 +1053,7 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                 voices[v].note = song.notes[ev].note;
                 voices[v].chan = song.notes[ev].chan;
                 voices[v].wave = song.notes[ev].wave;
+                voices[v].tone = song.notes[ev].tone;
                 voices[v].phase = 0u;
                 voices[v].note_step = mid_step_for(song.notes[ev].note);
                 voices[v].base_step = voices[v].note_step;
@@ -1195,10 +1204,24 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                     raw = raw * 3 / 4;
                 } else if (voices[v].wave == MID_W_SAW) {
                     raw = ((nj_s4)(voices[v].phase >> 16) - 32768) * 3 / 4;
-                } else if (voices[v].wave == MID_W_NOISE) {
+                } else if (voices[v].wave == MID_W_NOISE
+                           || voices[v].wave == MID_W_DRUM) {
+                    nj_s4 hiss;
                     voices[v].noise = (voices[v].noise >> 1)
                         ^ ((0u - (voices[v].noise & 1u)) & 0x80200003u);
-                    raw = ((nj_s4)(voices[v].noise & 0xFFFFu) - 32768) / 2;
+                    hiss = ((nj_s4)(voices[v].noise & 0xFFFFu) - 32768) / 2;
+                    if (voices[v].wave == MID_W_DRUM) {
+                        /*
+                         * A drum head is a tone under a noise skin: the
+                         * snare's 180 Hz body below the wires is what makes
+                         * it a snare instead of a hiss.
+                         */
+                        nj_s4 body = (voices[v].phase < 0x80000000u) ? 32767 : -32767;
+                        raw = (body * (nj_s4)voices[v].tone
+                               + hiss * (nj_s4)(127u - (nj_u4)voices[v].tone)) / 127;
+                    } else {
+                        raw = hiss;
+                    }
                 } else {
                     raw = (voices[v].phase < 0x80000000u) ? amp : -amp;
                 }
