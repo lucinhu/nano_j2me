@@ -486,7 +486,7 @@ int main(void)
 
     for (i = 0u; i < NJ_MIDI_RATE / 2u && i * 2u + 1u < frames * 2u; i++) {
         int s = (int)(short)((nj_u2)pcm[i * 2u] | ((nj_u2)pcm[i * 2u + 1u] << 8));
-        int sign = (s > 200) ? 1 : ((s < -200) ? -1 : 0);
+        int sign = (s > 100) ? 1 : ((s < -100) ? -1 : 0);
         if (s > peak) {
             peak = s;
         } else if (-s > peak) {
@@ -500,7 +500,7 @@ int main(void)
         }
     }
 
-    check(peak > 8000, "the note is loud, not a whisper");
+    check(peak > 2000, "the note is loud, not a whisper");
     if (peak <= 8000) {
         printf("     peak = %d\n", peak);
     }
@@ -979,6 +979,9 @@ int main(void)
             crash = pcm_rms(m, fr, NJ_MIDI_RATE * 3u / 10u, NJ_MIDI_RATE * 6u / 10u);
             t_free(NULL, m);
         }
+        printf("     DBG crash %llu closed_late %llu frames %u\n",
+               (unsigned long long)crash, (unsigned long long)closed_late,
+               (unsigned)fr);
         check(crash > 0u && crash > closed_late * 10u,
               "a crash is still ringing half a second later");
         if (!(crash > 0u && crash > closed_late * 10u)) {
@@ -1117,6 +1120,32 @@ int main(void)
         if (m != NULL) {
             t_free(NULL, m);
         }
+    }
+
+    /*
+     * A chord at full velocity must stay inside the range.  The amplitude is
+     * velocity * 300 * volume / 127 / 127, so twelve notes at full velocity
+     * and full volume peak around 3600.  With the volume multiplied in
+     * instead of scaling - velocity * 300 * volume / 127 - a single note
+     * reached 21000 and every chord clipped, which is what a real title
+     * sounded like.
+     */
+    {
+        nj_u1 file[512];
+        nj_u4 n, fr = 0u, chans = 0u;
+        nj_u1 *m;
+        nj_s4 peak = 0;
+
+        n = build_chord(file, 12u, 127u);
+        m = nj_midi_render_ex(file, n, &fr, &chans, &MEM);
+        check(m != NULL && fr > 0u, "a full velocity chord renders");
+        if (m != NULL) {
+            peak = pcm_peak(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 3u);
+            t_free(NULL, m);
+        }
+        check(peak > 0 && peak < 32000,
+              "a full velocity chord stays inside the range");
+        printf("     full velocity chord peak %ld\n", (long)peak);
     }
 
     /*
@@ -1345,7 +1374,7 @@ int main(void)
             t_free(NULL, m);
         }
         check(fx > 0u && fx < 400u, "an effects program still has a pitch");
-        check(sfx > 800u, "the sound-effect block is still noise");
+        check(sfx > 350u, "the sound-effect block is still noise");
         if (!(fx > 0u && fx < 400u)) {
             printf("     effects crossings %u\n", (unsigned)fx);
         }

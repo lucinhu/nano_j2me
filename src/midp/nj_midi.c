@@ -740,7 +740,9 @@ typedef struct {
     nj_u4 noise;                /* linear feedback shift register, for noise */
     nj_s4 amp;                  /* 0..32767 */
     nj_s4 lp;                   /* one-pole low pass state */
-    nj_u4 decay;                /* amplitude lost per sample (0 = held) */
+    nj_u4 decay_left;           /* samples of decay left (0 = held) */
+    nj_u4 decay_span;           /* samples the decay was meant to take */
+    nj_s4 amp0;                 /* the amplitude the decay started from */
     nj_s4 sustain;              /* the level the decay settles on */
     nj_u4 attack;               /* samples to reach full level */
     nj_u4 release;              /* samples to fall silent after the note off */
@@ -1340,15 +1342,36 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
                 s->voices[v].noise = 0x13579BDFu | 1u;
                 /* ~24% of full scale at velocity 100, then the channel's own
                  * volume and expression. */
-                s->voices[v].amp = (nj_s4)(s->song.notes[s->ev].velocity) * 300
-                    * (nj_s4)(s->song.notes[s->ev].gain) / 127;
+                /*
+                 * One voice at full velocity and full volume peaks around
+                 * 4800 - about a seventh of the range - so a twelve note
+                 * chord reaches about 57000 and the soft knee below has real
+                 * work to do.  The channel volume SCALES the note: dividing
+                 * by 127 once instead of twice left a single note at 21000,
+                 * so every chord saturated and the mix was a wall with no
+                 * dynamics left in it.
+                 */
+                s->voices[v].amp = (nj_s4)(s->song.notes[s->ev].velocity) * 9600
+                    * (nj_s4)(s->song.notes[s->ev].gain) / (127 * 127);
                 s->voices[v].lp = 0;
-                s->voices[v].decay = 0u;
+                /*
+                 * The decay is counted down in samples and the amplitude
+                 * recomputed from the time left, not stepped by a fixed
+                 * amount per sample.  A step of amp/span rounds to zero for
+                 * a quiet note and to more than one for a loud one, so the
+                 * same instrument decayed in a different time depending on
+                 * how hard it was hit - a crash rang for 0.18 s at one
+                 * volume and 0.48 s at another.
+                 */
+                s->voices[v].decay_left = 0u;
+                s->voices[v].decay_span = 0u;
+                s->voices[v].amp0 = s->voices[v].amp;
                 if (s->song.notes[s->ev].decay_ms != 0u) {
                     nj_u4 span = (nj_u4)(s->song.notes[s->ev].decay_ms)
                         * (NJ_MIDI_RATE / 1000u);
                     if (span != 0u) {
-                        s->voices[v].decay = (nj_u4)(s->voices[v].amp / (nj_s4)span) + 1u;
+                        s->voices[v].decay_left = span;
+                        s->voices[v].decay_span = span;
                     }
                 }
                 s->voices[v].sustain = (nj_s4)(s->voices[v].amp
@@ -1424,11 +1447,14 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
                 }
                 mid_set_step(&s->voices[v]);
             }
-            if (s->voices[v].decay != 0u && s->voices[v].amp > s->voices[v].sustain) {
-                /* A struck note loses amplitude every sample, whether or not
-                 * the file ever sends a note off, but only down to the level
-                 * its family sustains at. */
-                s->voices[v].amp -= (nj_s4)s->voices[v].decay;
+            if (s->voices[v].decay_left != 0u && s->voices[v].amp > s->voices[v].sustain) {
+                /* A struck note loses amplitude as its decay runs out,
+                 * whether or not the file ever sends a note off, but only
+                 * down to the level its family sustains at. */
+                s->voices[v].decay_left--;
+                s->voices[v].amp = (nj_s4)((nj_u8)s->voices[v].amp0
+                    * (nj_u8)s->voices[v].decay_left
+                    / (nj_u8)s->voices[v].decay_span);
                 if (s->voices[v].amp <= s->voices[v].sustain) {
                     s->voices[v].amp = s->voices[v].sustain;
                     if (s->voices[v].sustain <= 0) {
@@ -1572,20 +1598,20 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
          */
         scaledL = mixL;
         scaledR = mixR;
-        if (scaledL > 24000) {
-            scaledL = 24000 + (scaledL - 24000) / 4;
-        } else if (scaledL < -24000) {
-            scaledL = -24000 + (scaledL + 24000) / 4;
+        if (scaledL > 20000) {
+            scaledL = 20000 + (scaledL - 20000) / 16;
+        } else if (scaledL < -20000) {
+            scaledL = -20000 + (scaledL + 20000) / 16;
         }
         if (scaledL > 32767) {
             scaledL = 32767;
         } else if (scaledL < -32768) {
             scaledL = -32768;
         }
-        if (scaledR > 24000) {
-            scaledR = 24000 + (scaledR - 24000) / 4;
-        } else if (scaledR < -24000) {
-            scaledR = -24000 + (scaledR + 24000) / 4;
+        if (scaledR > 20000) {
+            scaledR = 20000 + (scaledR - 20000) / 16;
+        } else if (scaledR < -20000) {
+            scaledR = -20000 + (scaledR + 20000) / 16;
         }
         if (scaledR > 32767) {
             scaledR = 32767;
