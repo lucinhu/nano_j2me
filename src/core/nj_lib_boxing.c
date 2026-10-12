@@ -332,6 +332,7 @@ NJFN(Long_valueOf_str)
         return nj_throw_oom(vm);
     }
     a1[0].j = v;
+    a1[1].bits = 0u;   /* the upper half of the two-slot value */
     if (nj_call_special(vm, o, "java/lang/Long", "<init>", "(J)V", a1, NULL)
         != NJ_OK) {
         return NJ_ERR;
@@ -355,6 +356,7 @@ NJFN(Long_valueOf_str_radix)
         return nj_throw_oom(vm);
     }
     a1[0].j = v;
+    a1[1].bits = 0u;   /* the upper half of the two-slot value */
     if (nj_call_special(vm, o, "java/lang/Long", "<init>", "(J)V", a1, NULL)
         != NJ_OK) {
         return NJ_ERR;
@@ -573,6 +575,7 @@ NJFN(Double_valueOf_str)
         return nj_throw_oom(vm);
     }
     a1[0].d = neg ? -d : d;
+    a1[1].bits = 0u;   /* the upper half of the two-slot value */
     if (nj_call_special(vm, o, "java/lang/Double", "<init>", "(D)V", a1, NULL)
         != NJ_OK) {
         return NJ_ERR;
@@ -711,6 +714,71 @@ NJFN(long_toString_radix)
     long_magnitude(NJ_ARG_LONG(args, 0), &mag, &neg);
     ret->r = to_radix_string64(vm, mag, neg, (nj_u8)r);
     return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+
+/*
+ * The wide `valueOf` statics.
+ *
+ * CLDC 1.1 declares Long.valueOf(long), Double.valueOf(double) and
+ * Float.valueOf(float) beside the String forms, and all three were missing:
+ * `Long.valueOf(60L)` raised NoSuchMethodError.
+ *
+ * The first two also show the trap the C side has to respect.  A long or a
+ * double occupies TWO operand slots with the payload in the lower one, and
+ * vm_invoke() copies m->arg_slots of them into the frame - so a1[1] must be
+ * zeroed explicitly.  Left as whatever the C stack happened to hold, the boxed
+ * value comes back with a garbage upper half.  That is the same mistake that
+ * made Math.max(0L, 60L) return 0.
+ */
+NJFN(Long_valueOf)
+{
+    nj_value a1[3];
+    nj_ref o = nj_object_new(vm, "java/lang/Long");
+    if (!o) {
+        return NJ_ERR;
+    }
+    a1[0].j = NJ_ARG_LONG(args, 0);
+    a1[1].bits = 0u;
+    if (nj_call_special(vm, o, "java/lang/Long", "<init>", "(J)V", a1, NULL)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = o;
+    return NJ_OK;
+}
+
+NJFN(Double_valueOf)
+{
+    nj_value a1[3];
+    nj_ref o = nj_object_new(vm, "java/lang/Double");
+    if (!o) {
+        return NJ_ERR;
+    }
+    a1[0].d = NJ_ARG_DOUBLE(args, 0);
+    a1[1].bits = 0u;
+    if (nj_call_special(vm, o, "java/lang/Double", "<init>", "(D)V", a1, NULL)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = o;
+    return NJ_OK;
+}
+
+NJFN(Float_valueOf)
+{
+    nj_value a1[1];
+    nj_ref o = nj_object_new(vm, "java/lang/Float");
+    if (!o) {
+        return NJ_ERR;
+    }
+    a1[0].f = NJ_ARG_FLOAT(args, 0);
+    if (nj_call_special(vm, o, "java/lang/Float", "<init>", "(F)V", a1, NULL)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = o;
+    return NJ_OK;
 }
 
 NJFN(int_valueOf)
@@ -917,6 +985,7 @@ static const nj_builtin_method Long_methods[] = {
     M("parseLong", "(Ljava/lang/String;)J", NJ_ACC_STATIC),
     M("parseLong", "(Ljava/lang/String;I)J", NJ_ACC_STATIC),
     M("valueOf",   "(Ljava/lang/String;)Ljava/lang/Long;", NJ_ACC_STATIC),
+    M("valueOf",   "(J)Ljava/lang/Long;", NJ_ACC_STATIC),
     M("valueOf",   "(Ljava/lang/String;I)Ljava/lang/Long;", NJ_ACC_STATIC),
     M("toString",  "(J)Ljava/lang/String;", NJ_ACC_STATIC),
     M("toString",  "(JI)Ljava/lang/String;", NJ_ACC_STATIC)
@@ -957,7 +1026,8 @@ static const nj_builtin_method Float_methods[] = {
     M("isNaN",      "(F)Z", NJ_ACC_STATIC),
     M("isInfinite", "(F)Z", NJ_ACC_STATIC),
     M("intBitsToFloat", "(I)F", NJ_ACC_STATIC),
-    M("floatToIntBits", "(F)I", NJ_ACC_STATIC)
+    M("floatToIntBits", "(F)I", NJ_ACC_STATIC),
+    M("valueOf",        "(F)Ljava/lang/Float;", NJ_ACC_STATIC)
 };
 static const nj_builtin_method Double_methods[] = {
     M("<init>",      "(D)V", 0),
@@ -966,6 +1036,7 @@ static const nj_builtin_method Double_methods[] = {
     M("isInfinite",  "()Z",  0),
     M("isNaN",       "(D)Z", NJ_ACC_STATIC),
     M("isInfinite",  "(D)Z", NJ_ACC_STATIC),
+    M("valueOf",     "(D)Ljava/lang/Double;", NJ_ACC_STATIC),
     M("valueOf",     "(Ljava/lang/String;)Ljava/lang/Double;", NJ_ACC_STATIC)
 };
 
@@ -1004,6 +1075,7 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Long",      "parseLong",    "(Ljava/lang/String;I)J", Long_parseLong_radix },
     { "java/lang/Long",      "valueOf",      "(Ljava/lang/String;)Ljava/lang/Long;", Long_valueOf_str },
     { "java/lang/Long",      "valueOf",      "(Ljava/lang/String;I)Ljava/lang/Long;", Long_valueOf_str_radix },
+    { "java/lang/Long",      "valueOf",      "(J)Ljava/lang/Long;", Long_valueOf },
     { "java/lang/Long",      "toString",     "(J)Ljava/lang/String;", long_toString },
     { "java/lang/Long",      "toString",     "(JI)Ljava/lang/String;", long_toString_radix },
 
@@ -1046,7 +1118,9 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Double",    "isInfinite",   "()Z",  Double_isInfinite },
     { "java/lang/Double",    "isNaN",        "(D)Z", Double_isNaN_d },
     { "java/lang/Double",    "isInfinite",   "(D)Z", Double_isInfinite_d },
-    { "java/lang/Double",    "valueOf",      "(Ljava/lang/String;)Ljava/lang/Double;", Double_valueOf_str }
+    { "java/lang/Double",    "valueOf",      "(Ljava/lang/String;)Ljava/lang/Double;", Double_valueOf_str },
+    { "java/lang/Double",    "valueOf",      "(D)Ljava/lang/Double;", Double_valueOf },
+    { "java/lang/Float",     "valueOf",      "(F)Ljava/lang/Float;", Float_valueOf }
 };
 const int nj_lib_boxing_count =
     (int)(sizeof(nj_lib_boxing_table) / sizeof(nj_lib_boxing_table[0]));

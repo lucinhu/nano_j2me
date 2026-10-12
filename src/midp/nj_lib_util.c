@@ -3200,7 +3200,7 @@ NJFN(timer_schedule_period)
 {
     nj_ref task = NJ_ARG_REF(args, 0);
     nj_s8 delay = NJ_ARG_LONG(args, 1);
-    nj_s8 period = NJ_ARG_LONG(args, 2);
+    nj_s8 period = NJ_ARG_LONG(args, 3);
 
     if (delay < 0 || period <= 0) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
@@ -3213,7 +3213,7 @@ NJFN(timer_schedule_rate)
 {
     nj_ref task = NJ_ARG_REF(args, 0);
     nj_s8 delay = NJ_ARG_LONG(args, 1);
-    nj_s8 period = NJ_ARG_LONG(args, 2);
+    nj_s8 period = NJ_ARG_LONG(args, 3);
 
     if (delay < 0 || period <= 0) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",

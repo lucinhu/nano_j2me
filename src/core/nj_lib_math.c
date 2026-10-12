@@ -49,17 +49,17 @@ NJFN(math_max_i)  { nj_s4 a = NJ_ARG_INT(args,0), b = NJ_ARG_INT(args,1);
                     ret->i = (a >= b) ? a : b; return NJ_OK; }
 NJFN(math_min_i)  { nj_s4 a = NJ_ARG_INT(args,0), b = NJ_ARG_INT(args,1);
                     ret->i = (a <= b) ? a : b; return NJ_OK; }
-NJFN(math_max_l)  { nj_s8 a = NJ_ARG_LONG(args,0), b = NJ_ARG_LONG(args,1);
+NJFN(math_max_l)  { nj_s8 a = NJ_ARG_LONG(args,0), b = NJ_ARG_LONG(args,2);
                     ret->j = (a >= b) ? a : b; return NJ_OK; }
-NJFN(math_min_l)  { nj_s8 a = NJ_ARG_LONG(args,0), b = NJ_ARG_LONG(args,1);
+NJFN(math_min_l)  { nj_s8 a = NJ_ARG_LONG(args,0), b = NJ_ARG_LONG(args,2);
                     ret->j = (a <= b) ? a : b; return NJ_OK; }
 NJFN(math_max_f)  { float a = NJ_ARG_FLOAT(args,0), b = NJ_ARG_FLOAT(args,1);
                     ret->f = (a >= b) ? a : b; return NJ_OK; }
 NJFN(math_min_f)  { float a = NJ_ARG_FLOAT(args,0), b = NJ_ARG_FLOAT(args,1);
                     ret->f = (a <= b) ? a : b; return NJ_OK; }
-NJFN(math_max_d)  { double a = NJ_ARG_DOUBLE(args,0), b = NJ_ARG_DOUBLE(args,1);
+NJFN(math_max_d)  { double a = NJ_ARG_DOUBLE(args,0), b = NJ_ARG_DOUBLE(args,2);
                     ret->d = (a >= b) ? a : b; return NJ_OK; }
-NJFN(math_min_d)  { double a = NJ_ARG_DOUBLE(args,0), b = NJ_ARG_DOUBLE(args,1);
+NJFN(math_min_d)  { double a = NJ_ARG_DOUBLE(args,0), b = NJ_ARG_DOUBLE(args,2);
                     ret->d = (a <= b) ? a : b; return NJ_OK; }
 
 /*
@@ -91,11 +91,11 @@ NJFN(math_tan)   { ret->d = tan(NJ_ARG_DOUBLE(args,0)); return NJ_OK; }
 NJFN(math_asin)  { ret->d = asin(NJ_ARG_DOUBLE(args,0)); return NJ_OK; }
 NJFN(math_acos)  { ret->d = acos(NJ_ARG_DOUBLE(args,0)); return NJ_OK; }
 NJFN(math_atan)  { ret->d = atan(NJ_ARG_DOUBLE(args,0)); return NJ_OK; }
-NJFN(math_atan2) { ret->d = atan2(NJ_ARG_DOUBLE(args,0), NJ_ARG_DOUBLE(args,1));
+NJFN(math_atan2) { ret->d = atan2(NJ_ARG_DOUBLE(args,0), NJ_ARG_DOUBLE(args,2));
                    return NJ_OK; }
 NJFN(math_exp)   { ret->d = exp(NJ_ARG_DOUBLE(args,0)); return NJ_OK; }
 NJFN(math_log)   { ret->d = log(NJ_ARG_DOUBLE(args,0)); return NJ_OK; }
-NJFN(math_pow)   { ret->d = pow(NJ_ARG_DOUBLE(args,0), NJ_ARG_DOUBLE(args,1));
+NJFN(math_pow)   { ret->d = pow(NJ_ARG_DOUBLE(args,0), NJ_ARG_DOUBLE(args,2));
                    return NJ_OK; }
 #else
 #define NJ_MATH_OFF(jname, jtext)                                      \

@@ -123,6 +123,38 @@ public class HelloWorld {
         double root = Math.sqrt(2.0);
         System.out.println(String.valueOf((int) (root * 1000.0)));
 
+        /*
+         * Two-slot arguments in the SECOND position.
+         *
+         * A long or a double occupies two operand slots, and a native is handed
+         * a pointer to the raw slots - so the second wide argument begins at
+         * slot 2, not slot 1.  Reading it from slot 1 splices the first
+         * argument's high half onto the second argument's low half.
+         *
+         * Every call below went through the wrong slot.  The symptom is never
+         * "a slightly wrong number": Math.max(0L, 60L) returned 0, so a frame
+         * pacer written as Thread.sleep(Math.max(0 - elapsed, 60L)) asked for a
+         * sleep of 4,400 years and the game never drew another frame.  A C-side
+         * test cannot catch this - it packs arguments one value per slot, which
+         * happens to agree with the wrong index - so it has to be checked from
+         * bytecode, which is what this fixture is.
+         */
+        boolean wideOk = true;
+        wideOk = wideOk && (Math.max(0L, 60L) == 60L);
+        wideOk = wideOk && (Math.max(5L, 7L) == 7L);
+        wideOk = wideOk && (Math.min(5L, 7L) == 5L);
+        wideOk = wideOk && (Math.max(2.5, 0.5) == 2.5);
+        wideOk = wideOk && (Math.min(2.5, 0.5) == 0.5);
+        wideOk = wideOk && ((int) Math.pow(2.0, 10.0) == 1024);
+        wideOk = wideOk && ((int) (Math.atan2(1.0, 1.0) * 1000.0) == 785);
+        // Boxing a wide value: the object's field is filled from TWO slots, so
+        // the caller must zero the upper one.  Leaving it as whatever was on
+        // the C stack boxes a long whose top half is garbage.
+        wideOk = wideOk && (Long.valueOf(60L).longValue() == 60L);
+        wideOk = wideOk && (Long.valueOf(-1234567890123L).longValue() == -1234567890123L);
+        wideOk = wideOk && (Double.valueOf(2.5).doubleValue() == 2.5);
+        System.out.println(wideOk ? "wideargs ok" : "ERROR: wideargs");
+
         // Recursion.
         System.out.println(String.valueOf(fib(15)));
 

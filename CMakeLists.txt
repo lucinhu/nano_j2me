@@ -531,7 +531,7 @@ add_test(NAME check_splash_budget
 nj_add_test(test_clip tests/test_clip.c)
   nj_add_test(test_blocked_init tests/test_blocked_init.c ${NJ_FIXTURES})
   nj_add_test(test_vm        tests/test_vm.c
-              ${NJ_FIXTURES}/hello.jar HelloWorld "hello from j2me")
+              ${NJ_FIXTURES}/hello.jar HelloWorld "wideargs ok")
 
   # ---- the formats ----
   nj_add_test(test_zip       tests/test_zip.c ${NJ_FIXTURES})
@@ -694,3 +694,18 @@ message(STATUS "nano_j2me ${PROJECT_VERSION}: "
 # ---------------------------------------------------------------------------
 add_test(NAME check_arg_slots
          COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_arg_slots.py)
+
+# ---------------------------------------------------------------------------
+# ... and the INDEX into those slots.
+#
+# check_arg_slots above verifies the array is big enough.  It says nothing about
+# which entry a native reads: `args` points at raw operand slots, so in
+# Math.max(long, long) the second argument is at index 2, not 1.  Reading it
+# from 1 splices the first argument's high half onto the second's low half -
+# Math.max(0L, 60L) returned 0, and Thread.sleep(Math.max(0 - elapsed, 60L))
+# became a 4,400-year sleep that froze a whole game.  No C-level test can see
+# it, because nj_call() packs one value per slot and therefore agrees with the
+# wrong index; the check has to read the source.
+# ---------------------------------------------------------------------------
+add_test(NAME check_wide_args
+         COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_wide_args.py)
