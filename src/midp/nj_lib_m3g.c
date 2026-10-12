@@ -62,6 +62,7 @@
 #define NJ_C_GROUP   "javax/microedition/m3g/Group"
 #define NJ_C_WORLD   "javax/microedition/m3g/World"
 #define NJ_C_CAMERA  "javax/microedition/m3g/Camera"
+#define NJ_C_LIGHT   "javax/microedition/m3g/Light"
 #define NJ_C_BG      "javax/microedition/m3g/Background"
 #define NJ_C_G3D     "javax/microedition/m3g/Graphics3D"
 #define NJ_C_LOADER  "javax/microedition/m3g/Loader"
@@ -389,6 +390,43 @@ NJFN(m3g_xf_postRotate)
     if (d) {
         mat_rotate(d, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
                    NJ_ARG_FLOAT(args, 2), NJ_ARG_FLOAT(args, 3));
+    }
+    return NJ_OK;
+}
+
+/*
+ * get(float[]) / set(float[]): the matrix in and out as a 16-element array.
+ * Neither is in the first pass of this module and 生化危机3D walks straight
+ * into get(), so it is here; set() is its mirror and costs nothing.
+ */
+NJFN(m3g_xf_get)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref out = NJ_ARG_REF(args, 0);
+    nj_ref m = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_XFORM, "_nj_m", "[F", 0));
+
+    if (!out || out->length < 16) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "the array must hold at least sixteen elements");
+    }
+    if (m) {
+        memcpy(nj_array_data(out), nj_array_data(m), 16u * sizeof(float));
+    }
+    return NJ_OK;
+}
+
+NJFN(m3g_xf_set)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref in = NJ_ARG_REF(args, 0);
+    nj_ref m = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_XFORM, "_nj_m", "[F", 0));
+
+    if (!in || in->length < 16) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "the array must hold at least sixteen elements");
+    }
+    if (m) {
+        memcpy(nj_array_data(m), nj_array_data(in), 16u * sizeof(float));
     }
     return NJ_OK;
 }
@@ -1737,6 +1775,212 @@ NJFN(m3g_img2d_set)
 /* ------------------------------------------------------------------ */
 #define M(name, desc, flags) { name, desc, flags }
 
+/* ------------------------------------------------------------------ */
+/* Light                                                               */
+/* ------------------------------------------------------------------ */
+/*
+ * A Light is a Node with a mode and a colour.  It is here because
+ * 生化危机3D(CAPCOM经典) asks for the class and stops without it; the values
+ * it is given are remembered and handed back, and nothing is lit, because
+ * there is no rasteriser yet to light anything with.
+ */
+static const nj_builtin_field light_fields[] = {
+    { "_nj_mode",       "I",  NJ_ACC_PUBLIC },
+    { "_nj_color",      "I",  NJ_ACC_PUBLIC },
+    { "_nj_intensity",  "F",  NJ_ACC_PUBLIC },
+    { "_nj_spotAngle",  "F",  NJ_ACC_PUBLIC },
+    { "_nj_spotExp",    "F",  NJ_ACC_PUBLIC },
+    { "_nj_atten",      "[F", NJ_ACC_PUBLIC },
+    /* The mode constants, static and final: the values a title inlined when
+     * it was compiled against the real API, so they have to match. */
+    { "AMBIENT",        "I",  NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "DIRECTIONAL",    "I",  NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "OMNI",           "I",  NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SPOT",           "I",  NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+
+static const nj_builtin_method light_methods[] = {
+    M("<init>",           "()V",    NJ_ACC_PUBLIC),
+    M("setMode",          "(I)V",   NJ_ACC_PUBLIC),
+    M("getMode",          "()I",    NJ_ACC_PUBLIC),
+    M("setColor",         "(I)V",   NJ_ACC_PUBLIC),
+    M("getColor",         "()I",    NJ_ACC_PUBLIC),
+    M("setIntensity",     "(F)V",   NJ_ACC_PUBLIC),
+    M("getIntensity",     "()F",    NJ_ACC_PUBLIC),
+    M("setSpotAngle",     "(F)V",   NJ_ACC_PUBLIC),
+    M("getSpotAngle",     "()F",    NJ_ACC_PUBLIC),
+    M("setSpotExponent",  "(F)V",   NJ_ACC_PUBLIC),
+    M("getSpotExponent",  "()F",    NJ_ACC_PUBLIC),
+    M("setAttenuation",   "(FFF)V", NJ_ACC_PUBLIC),
+    M("getAttenuation",   "([F)V",  NJ_ACC_PUBLIC)
+};
+
+/*
+ * A Light whose storage cannot be found is a broken build, not a broken
+ * MIDlet, so say so and throw rather than dereference NULL: a missing field
+ * here would otherwise show up as a segfault inside a native, which tells the
+ * next person nothing.
+ */
+static nj_field *light_f(nj_vm *vm, const char *name, const char *desc)
+{
+    nj_field *f = nj_field_lookup(vm, NJ_C_LIGHT, name, desc, 0);
+
+    if (!f) {
+        nj_throw(vm, "java/lang/InternalError",
+                 "the Light class is missing a field this native needs");
+    }
+    return f;
+}
+
+NJFN(m3g_light_init)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref atten = nj_array_new(vm, "F", 3);
+
+    if (!atten) {
+        nj_root_release(vm, mark);
+        return nj_throw_oom(vm);
+    }
+    /*
+     * The array is held only by this C local while the field lookups below run
+     * Java-free but may still allocate; an unrooted reference is collected and
+     * the field then holds a pointer into reused memory.  That is how the
+     * paint Graphics was lost, and it is why every nj_ref that outlives a call
+     * that can allocate is rooted here.
+     */
+    atten = nj_root(vm, atten);
+    nj_iput(vm, self, light_f(vm, "_nj_mode", "I"), 129);      /* DIRECTIONAL */
+    nj_iput(vm, self, light_f(vm, "_nj_color", "I"), 0x00FFFFFF);
+    nj_iput(vm, self, light_f(vm, "_nj_intensity", "F"), f2bits(1.0f));
+    nj_iput(vm, self, light_f(vm, "_nj_spotAngle", "F"), f2bits(45.0f));
+    nj_iput(vm, self, light_f(vm, "_nj_spotExp", "F"), f2bits(0.0f));
+    nj_rput(vm, self, light_f(vm, "_nj_atten", "[F"), atten);
+    nj_root_release(vm, mark);
+    return NJ_OK;
+}
+
+NJFN(m3g_light_setMode)
+{
+    nj_iput(vm, NJ_THIS(args), light_f(vm, "_nj_mode", "I"), NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_light_getMode)
+{
+    ret->i = nj_iget(vm, NJ_THIS(args), light_f(vm, "_nj_mode", "I"));
+    return NJ_OK;
+}
+
+NJFN(m3g_light_setColor)
+{
+    nj_iput(vm, NJ_THIS(args), light_f(vm, "_nj_color", "I"), NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_light_getColor)
+{
+    ret->i = nj_iget(vm, NJ_THIS(args), light_f(vm, "_nj_color", "I"));
+    return NJ_OK;
+}
+
+NJFN(m3g_light_setIntensity)
+{
+    nj_iput(vm, NJ_THIS(args), light_f(vm, "_nj_intensity", "F"),
+            f2bits(NJ_ARG_FLOAT(args, 0)));
+    return NJ_OK;
+}
+
+NJFN(m3g_light_getIntensity)
+{
+    ret->f = bits2f(nj_iget(vm, NJ_THIS(args), light_f(vm, "_nj_intensity", "F")));
+    return NJ_OK;
+}
+
+NJFN(m3g_light_setSpotAngle)
+{
+    nj_iput(vm, NJ_THIS(args), light_f(vm, "_nj_spotAngle", "F"),
+            f2bits(NJ_ARG_FLOAT(args, 0)));
+    return NJ_OK;
+}
+
+NJFN(m3g_light_getSpotAngle)
+{
+    ret->f = bits2f(nj_iget(vm, NJ_THIS(args), light_f(vm, "_nj_spotAngle", "F")));
+    return NJ_OK;
+}
+
+NJFN(m3g_light_setSpotExponent)
+{
+    nj_iput(vm, NJ_THIS(args), light_f(vm, "_nj_spotExp", "F"),
+            f2bits(NJ_ARG_FLOAT(args, 0)));
+    return NJ_OK;
+}
+
+NJFN(m3g_light_getSpotExponent)
+{
+    ret->f = bits2f(nj_iget(vm, NJ_THIS(args), light_f(vm, "_nj_spotExp", "F")));
+    return NJ_OK;
+}
+
+NJFN(m3g_light_setAttenuation)
+{
+    nj_ref a = nj_rget(vm, NJ_THIS(args), light_f(vm, "_nj_atten", "[F"));
+    float *d = a ? (float *)nj_array_data(a) : NULL;
+
+    if (!d || a->length < 3) {
+        return nj_throw_oom(vm);
+    }
+    d[0] = NJ_ARG_FLOAT(args, 0);
+    d[1] = NJ_ARG_FLOAT(args, 1);
+    d[2] = NJ_ARG_FLOAT(args, 2);
+    return NJ_OK;
+}
+
+NJFN(m3g_light_getAttenuation)
+{
+    nj_ref a = nj_rget(vm, NJ_THIS(args), light_f(vm, "_nj_atten", "[F"));
+    nj_ref out = NJ_ARG_REF(args, 0);
+    float *d = a ? (float *)nj_array_data(a) : NULL;
+    float *o = out ? (float *)nj_array_data(out) : NULL;
+
+    if (!o || out->length < 3) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "the array must hold at least three elements");
+    }
+    if (d) {
+        o[0] = d[0];
+        o[1] = d[1];
+        o[2] = d[2];
+    }
+    return NJ_OK;
+}
+
+/*
+ * The mode constants are seeded at run time because a MIDlet compiled against
+ * the real API has them inlined at its call sites: a Light built with
+ * Light.DIRECTIONAL carries 129 whatever this runtime believes.  Leaving the
+ * static fields at zero would make getMode() disagree with the value the
+ * title passed to setMode() while both sides looked self-consistent - the
+ * same trap List.IMPLICIT and RecordComparator.FOLLOWS fell into.
+ */
+nj_status nj_m3g_late_init(nj_vm *vm)
+{
+    static const struct { const char *name; nj_s4 value; } k[] = {
+        { "AMBIENT", 128 }, { "DIRECTIONAL", 129 },
+        { "OMNI", 130 },    { "SPOT", 131 }
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
+        nj_field *f = nj_field_lookup(vm, NJ_C_LIGHT, k[i].name, "I", 1);
+        if (f) {
+            nj_field_write_int(vm, NULL, f, k[i].value);
+        }
+    }
+    return NJ_OK;
+}
+
 #if NJ_ENABLE_M3G
 
 static const nj_builtin_field o3d_fields[] = {
@@ -1839,8 +2083,9 @@ static const nj_builtin_method o3d_methods[] = {
 static const nj_builtin_method transform_methods[] = {
     M("<init>",        "()V",                       NJ_ACC_PUBLIC),
     M("setIdentity",   "()V",                       NJ_ACC_PUBLIC),
-    M("set",           "(L" NJ_C_XFORM ";)V",       NJ_ACC_PUBLIC),
+    M("get",           "([F)V",                     NJ_ACC_PUBLIC),
     M("set",           "([F)V",                     NJ_ACC_PUBLIC),
+    M("set",           "(L" NJ_C_XFORM ";)V",       NJ_ACC_PUBLIC),
     M("postMultiply",  "(L" NJ_C_XFORM ";)V",       NJ_ACC_PUBLIC),
     M("postTranslate", "(FFF)V",                    NJ_ACC_PUBLIC),
     M("postScale",     "(FFF)V",                    NJ_ACC_PUBLIC),
@@ -1973,6 +2218,8 @@ const nj_builtin_class nj_lib_m3g_classes[] = {
     { NJ_C_LOADER, "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, loader_methods, M3G_N(loader_methods) },
     { NJ_C_MAT, NJ_C_O3D, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
+    { NJ_C_LIGHT, NJ_C_NODE, NJ_ACC_PUBLIC,
+      light_fields, M3G_N(light_fields), light_methods, M3G_N(light_methods) },
     { NJ_C_VBUF, NJ_C_O3D, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
     { NJ_C_IBUF, NJ_C_O3D, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
     { NJ_C_APPEAR, NJ_C_O3D, NJ_ACC_PUBLIC,
@@ -2031,6 +2278,7 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_XFORM, "postScale",     "(FFF)V",              m3g_xf_postScale },
     { NJ_C_XFORM, "postRotate",    "(FFFF)V",             m3g_xf_postRotate },
     { NJ_C_XFORM, "invert",        "()V",                 m3g_xf_invert },
+    { NJ_C_XFORM, "get",           "([F)V",               m3g_xf_get },
     { NJ_C_XFORM, "transform",     "([F)V",               m3g_xf_transform },
     { NJ_C_XABLE, "setTransform",   "(L" NJ_C_XFORM ";)V", m3g_xable_setTransform },
     { NJ_C_XABLE, "getTransform",   "(L" NJ_C_XFORM ";)V", m3g_xable_getTransform },
@@ -2106,6 +2354,19 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_IMAGE2D, "getFormat", "()I", m3g_img2d_getFormat },
     { NJ_C_IMAGE2D, "getWidth",  "()I", m3g_img2d_getWidth },
     { NJ_C_IMAGE2D, "getHeight", "()I", m3g_img2d_getHeight },
+    { NJ_C_LIGHT, "<init>",           "()V",    m3g_light_init },
+    { NJ_C_LIGHT, "setMode",          "(I)V",   m3g_light_setMode },
+    { NJ_C_LIGHT, "getMode",          "()I",    m3g_light_getMode },
+    { NJ_C_LIGHT, "setColor",         "(I)V",   m3g_light_setColor },
+    { NJ_C_LIGHT, "getColor",         "()I",    m3g_light_getColor },
+    { NJ_C_LIGHT, "setIntensity",     "(F)V",   m3g_light_setIntensity },
+    { NJ_C_LIGHT, "getIntensity",     "()F",    m3g_light_getIntensity },
+    { NJ_C_LIGHT, "setSpotAngle",     "(F)V",   m3g_light_setSpotAngle },
+    { NJ_C_LIGHT, "getSpotAngle",     "()F",    m3g_light_getSpotAngle },
+    { NJ_C_LIGHT, "setSpotExponent",  "(F)V",   m3g_light_setSpotExponent },
+    { NJ_C_LIGHT, "getSpotExponent",  "()F",    m3g_light_getSpotExponent },
+    { NJ_C_LIGHT, "setAttenuation",   "(FFF)V", m3g_light_setAttenuation },
+    { NJ_C_LIGHT, "getAttenuation",   "([F)V",  m3g_light_getAttenuation },
     { NULL, NULL, NULL, NULL }
 };
 const int nj_lib_m3g_count =
@@ -2122,5 +2383,11 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NULL, NULL, NULL, NULL }
 };
 const int nj_lib_m3g_count = 0;
+
+nj_status nj_m3g_late_init(nj_vm *vm)
+{
+    (void)vm;   /* nothing to seed: there are no m3g classes in this build */
+    return NJ_OK;
+}
 
 #endif /* NJ_ENABLE_M3G */

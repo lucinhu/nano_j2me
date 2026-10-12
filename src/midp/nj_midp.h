@@ -310,4 +310,10 @@ nj_status nj_media_late_init(nj_vm *vm);
 /* javax.microedition.rms: the comparator's ordering constants. */
 nj_status nj_rms_late_init(nj_vm *vm);
 
+/*
+ * Seed the class constants that a MIDlet has inlined at its call sites -
+ * Light.AMBIENT and friends.  A no-op in a build without the m3g module.
+ */
+nj_status nj_m3g_late_init(nj_vm *vm);
+
 #endif /* NJ_MIDP_H */

@@ -345,6 +345,7 @@ NJFN(runtime_exit)
 /* Declared locally: see the note below on why this file does not
  * include every subsystem header. */
 nj_status nj_rms_late_init(nj_vm *vm);
+nj_status nj_m3g_late_init(nj_vm *vm);
 
 nj_status nj_lib_late_init(nj_vm *vm)
 {
@@ -374,6 +375,9 @@ nj_status nj_lib_late_init(nj_vm *vm)
         return NJ_ERR;
     }
     if (nj_io_late_init(vm) != NJ_OK) {
+        return NJ_ERR;
+    }
+    if (nj_m3g_late_init(vm) != NJ_OK) {
         return NJ_ERR;
     }
     if (nj_rms_late_init(vm) != NJ_OK) {
