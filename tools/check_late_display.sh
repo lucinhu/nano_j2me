@@ -39,6 +39,14 @@ if grep -qiE "exception|error" "$LOG"; then
     fail "the run reported an exception"
 fi
 
+# State, not pixels: the fixture starts a Thread in startApp() and the port has
+# to see it.  A port that does not record threads reports -1, which must fail
+# here rather than pass as "fewer than two".
+threads="$(grep -o 'threads=[0-9-]*' "$LOG" | head -1 | cut -d= -f2)"
+if [ "${threads:--1}" -lt 2 ] 2>/dev/null; then
+    fail "the fixture starts a Thread, but the port observed threads=${threads:-none}"
+fi
+
 if [ "$fails" -eq 0 ]; then
     echo "PASS: waited for a Displayable installed from a thread ($frames frames)"
 else
