@@ -12,14 +12,23 @@ to be one of the gaps listed here, and knowing which one saves an afternoon.
 | CLDC 1.0 | implemented — the runtime is a superset; class files with major version 45–48 load unchanged |
 | MIDP 2.0 (JSR 118) | implemented, see the API table below |
 | MIDP 1.0 | implemented — every 1.0 call exists in 2.0 |
-| JSR 75 (FileConnection/PIM) | not implemented, not planned |
-| JSR 82 (Bluetooth) | not implemented |
-| JSR 120/205 (messaging) | not implemented |
-| JSR 135 (Mobile Media) | tone playback only; no sampled audio or video |
+| JSR 75 (FileConnection/PIM) | `FileConnection`, sandboxed to `--fs-dir`, and `RecordStore`; the PIM half (`ContactList`) is not implemented |
+| JSR 82 (Bluetooth) | classes present; every operation refuses with `BluetoothStateException`, because there is no radio — a MIDlet that is told "no radio" keeps working, one that is told "no such class" does not |
+| JSR 120/205 (messaging) | classes present; connections refuse the same way |
+| JSR 135 (Mobile Media) | tone and sampled PCM playback, WAV from a stream or a JAR resource; no video |
+| JSR 184 (Mobile 3D Graphics) | being implemented: the surface real titles use, behind `NJ_ENABLE_M3G` (see below) |
 
 Anything not implemented raises. That is deliberate: a
 `java.lang.NoSuchMethodError` naming the method is a five-minute fix, whereas a
-silently-ignored call is a two-day one.
+silently-ignored call is a two-day one. The one exception is a radio or a
+sensor that does not exist on the host: those classes are present and refuse at
+run time, because "this device has no Bluetooth" is a normal answer a MIDlet is
+written to handle, while "this build has no Bluetooth class" is not.
+
+Modules a platform may want to leave out entirely are switched off with a
+compile-time macro rather than by editing the tables, so the same source builds
+for a microcontroller and for a desktop. `NJ_ENABLE_M3G` is the first of these;
+see `include/nj2me/nj_config.h` for the list and what each one costs.
 
 ## Class file support
 
@@ -191,13 +200,7 @@ exception it would get from `openRecordStore` either way.
 These are the player's saves, not project files - never commit them. `*.rms` is
 gitignored for that reason.
 
-### javax.microedition.media
-
-`Manager.playTone` and tone `Player`s, routed through `nj_port.tone_play`. No
-sampled audio, no video. A game with music will be silent; a game with beeps
-will not.
-
-## javax.microedition.media
+## javax.microedition.m3g
 
 Implemented, and tested end to end by `tests/test_audio.c` (24 assertions)
 driving `tests/fixtures/audiodemo.jar`, built by `tools/make_audio_jar.sh`.
@@ -272,7 +275,7 @@ Benchmark titles overwhelmingly use PNG for sprite art. JPEG appears mostly for
 splash screens and photographic backgrounds, which is why it is the first thing
 to hand to a hardware block.
 
-## JSR 184 (Mobile 3D Graphics) is absent, and why
+## JSR 184 (Mobile 3D Graphics): what it takes
 
 Three collected titles need it - need-for-speed 14 and 16, and
 Metropolis (du-shi-mo-tian-lou) - and they are the only class-level gap
@@ -303,10 +306,25 @@ transform stack, a camera and projection pipeline, a software rasteriser
 with depth buffering, and a parser for the .m3g binary container that
 Loader.load() reads.
 
-So this stays unimplemented rather than stubbed.  Declaring the classes
-would move the failure from "no such class" to a wrong picture, and a
-wrong picture is the harder bug: it looks like it works.  A real
-implementation is a project of its own and should be scoped as one.
+It is being implemented, behind `NJ_ENABLE_M3G`.  The order below is the
+order titles stop failing in, and it is also the order of the work:
+
+1. the classes and the scene graph, so a title runs at all and can draw its
+   2D interface around an empty 3D view;
+2. the transform stack, camera and software rasteriser, so that view fills
+   in;
+3. `Loader.load()` and the `.m3g` container, for the titles that read a
+   resource rather than build their scene from code.
+
+A platform that cannot afford the rasteriser builds with
+`-DNJ_ENABLE_M3G=0` and gets the previous behaviour back - the classes are
+gone and a MIDlet that needs them gets `NoClassDefFoundError`, which is the
+honest answer for a build that left the module out.
+
+What was *not* acceptable is the middle ground of declaring the classes and
+letting the calls do nothing: that moves the failure from "no such class" to
+a wrong picture, and a wrong picture is the harder bug because it looks like
+it works.
 
 ## Reporting a gap
 
