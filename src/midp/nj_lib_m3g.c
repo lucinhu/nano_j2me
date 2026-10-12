@@ -1899,14 +1899,54 @@ nj_u4 nj_m3g_collect_meshes(nj_vm *vm, nj_ref root, nj_ref *out, nj_u4 cap)
     return n;
 }
 
-nj_u4 nj_m3g_raster_mesh(nj_vm *vm, struct nj_gfx *g, nj_ref mesh,
-                         const float m[16], int w, int h, nj_u4 argb)
+/*
+ * Where the filled triangles go.  A target is either the runtime's own
+ * surface or a Java Graphics, and the walk should not care which - so the
+ * mesh walk hands each projected triangle to a callback.
+ */
+typedef nj_u4 (*nj_m3g_emit_fn)(void *ud, const float xy[6], nj_u4 argb);
+
+typedef struct {
+    nj_vm *vm;
+    nj_ref g;
+} m3g_java_target;
+
+static nj_u4 emit_to_java(void *ud, const float xy[6], nj_u4 argb)
+{
+    m3g_java_target *t = (m3g_java_target *)ud;
+    /* Its own name: check_arg_slots.py maps array names file-wide, and this
+       file has plenty of five-entry `a`s that this is not. */
+    nj_value emit_args[7], r;
+
+    emit_args[0].i = (nj_s4)(argb | 0xFF000000u);
+    if (nj_call(t->vm, t->g, "javax/microedition/lcdui/Graphics", "setColor",
+                "(I)V", emit_args, &r) != NJ_OK) {
+        return 0u;
+    }
+    emit_args[0].i = (nj_s4)xy[0]; emit_args[1].i = (nj_s4)xy[1];
+    emit_args[2].i = (nj_s4)xy[2]; emit_args[3].i = (nj_s4)xy[3];
+    emit_args[4].i = (nj_s4)xy[4]; emit_args[5].i = (nj_s4)xy[5];
+    if (nj_call(t->vm, t->g, "javax/microedition/lcdui/Graphics", "fillTriangle",
+                "(IIIIII)V", emit_args, &r) != NJ_OK) {
+        return 0u;
+    }
+    return 1u;
+}
+
+static nj_u4 emit_to_gfx(void *ud, const float xy[6], nj_u4 argb)
+{
+    return nj_m3g_raster_tri((struct nj_gfx *)ud, xy, argb);
+}
+
+static nj_u4 raster_mesh_with(nj_vm *vm, nj_ref mesh, const float m[16],
+                              int w, int h, nj_u4 argb,
+                              nj_m3g_emit_fn emit, void *ud)
 {
     nj_ref vb, va, data;
     const nj_s2 *s;
     nj_u4 nverts, comp, drawn = 0u, i;
 
-    if (!vm || !g || !mesh) {
+    if (!vm || !mesh || !emit) {
         return 0u;
     }
     vb = nj_rget(vm, mesh, nj_field_lookup(vm, NJ_C_MESH, "_nj_vb", "L" NJ_C_VBUF ";", 0));
@@ -1936,61 +1976,109 @@ nj_u4 nj_m3g_raster_mesh(nj_vm *vm, struct nj_gfx *g, nj_ref mesh,
             v[2] = (comp >= 3u) ? (float)p[2] : 0.0f;
             nj_m3g_project(m, v, w, h, xy + k * 2u);
         }
-        if (nj_m3g_raster_tri(g, xy, argb) != 0u) {
+        if (emit(ud, xy, argb) != 0u) {
             drawn++;
         }
     }
     vm->tris += (nj_u8)drawn;
     return drawn;
 }
+nj_u4 nj_m3g_raster_mesh(nj_vm *vm, struct nj_gfx *g, nj_ref mesh,
+                         const float m[16], int w, int h, nj_u4 argb)
+{
+    return raster_mesh_with(vm, mesh, m, w, h, argb, emit_to_gfx, g);
+}
+
+/*
+ * The camera holds the angles the title asked for, not a matrix.  Turning
+ * them into one here keeps Camera a data holder, the way JSR 184 describes
+ * it.  Column-major, matching nj_m3g_project's own convention.
+ */
+static int m3g_cam_projection(nj_vm *vm, nj_ref cam, float vx, float vw, float out[16])
+{
+    float fovy, aspect, znear, zfar, f;
+    int i;
+
+    if (!cam) { return 0; }
+    fovy  = bits2f(nj_iget(vm, cam, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_fovy", "I", 0)));
+    aspect= bits2f(nj_iget(vm, cam, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_aspect", "I", 0)));
+    znear = bits2f(nj_iget(vm, cam, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_near", "I", 0)));
+    zfar  = bits2f(nj_iget(vm, cam, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_far", "I", 0)));
+    if (!(fovy > 0.0f) || !(aspect > 0.0f) || !(zfar > znear)) {
+        return 0;                   /* no usable projection: draw nothing */
+    }
+    for (i = 0; i < 16; i++) { out[i] = 0.0f; }
+    f = 1.0f / (float)tan((double)fovy * 0.5);
+    out[0]  = f / aspect;
+    out[5]  = f;
+    out[10] = (zfar + znear) / (znear - zfar);
+    out[11] = -1.0f;
+    out[14] = 2.0f * zfar * znear / (znear - zfar);
+    if (vw > 0.0f) { out[12] = 2.0f * vx / vw; }   /* viewport origin */
+    return 1;
+}
+
+static void m3g_mat_mul(float out[16], const float a[16], const float b[16])
+{
+    float t[16];
+    int r, c, k;
+
+    for (c = 0; c < 4; c++) {
+        for (r = 0; r < 4; r++) {
+            float sum = 0.0f;
+            for (k = 0; k < 4; k++) { sum += a[k * 4 + r] * b[c * 4 + k]; }
+            t[c * 4 + r] = sum;
+        }
+    }
+    memcpy(out, t, sizeof(t));
+}
 
 NJFN(m3g_render)
 {
-    /*
-     * Counted, not rasterised: this module has no rasteriser yet, so the only
-     * honest thing to report is whether a title ever reaches this call at all.
-     * tris= answered that question for the Mascot path and the answer was
-     * zero everywhere; this is the same instrument for JSR 184.
-     */
-    vm->m3g_renders++;
-    (void)nj_m3g_project;   /* referenced from the native table below */
-    /*
-     * Step two territory: walking the graph is done, rasterising the meshes
-     * is not.  Nothing is faked - the traversal really happens, so a title
-     * that counts on its nodes being visited (finds, cameras, backgrounds)
-     * behaves, and the screen honestly shows no 3D yet.
-     */
-    nj_ref node = NJ_ARG_REF(args, 0);
-    int depth = 0;
+    nj_ref self = NJ_THIS(args);
+    nj_ref root = NJ_ARG_REF(args, 0);
+    nj_ref target, cam, camarr, meshes[64];
+    nj_u4 n, i, drawn = 0u;
+    float view[16], proj[16], mvp[16];
+    nj_s4 vx, vy, vw, vh;
+    m3g_java_target jt;
 
-    while (node && nj_heap_owns(vm, node) && depth < 64) {
-        nj_ref kids;
-        depth++;
-        if (!nj_class_is_subclass_of(node->cls, nj_class_lookup(vm, NJ_C_GROUP))) {
-            break;
-        }
-        kids = nj_rget(vm, node, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
-                                                 "L" NJ_C_VECTOR ";", 0));
-        if (!kids) {
-            break;
-        }
-        {
-            nj_value n;
-            nj_value a[5];
-            if (nj_call(vm, kids, NJ_C_VECTOR, "size", "()I", NULL, &n) != NJ_OK) {
-                return NJ_ERR;
-            }
-            if (n.i <= 0) {
-                break;
-            }
-            a[0].i = 0;
-            if (nj_call(vm, kids, NJ_C_VECTOR, "elementAt",
-                        "(I)Ljava/lang/Object;", a, &n) != NJ_OK) {
-                return NJ_ERR;
-            }
-            node = n.r;
-        }
+    vm->m3g_renders++;
+
+    target = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_target",
+                                               "Ljava/lang/Object;", 0));
+    if (!target || !nj_heap_owns(vm, target)) {
+        return NJ_OK;               /* nothing was bound to draw into */
     }
+    cam = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_camera",
+                                            "L" NJ_C_CAMERA ";", 0));
+    vx = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vx", "I", 0));
+    vy = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vy", "I", 0));
+    vw = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vw", "I", 0));
+    vh = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vh", "I", 0));
+    if (vw <= 0 || vh <= 0) {
+        return NJ_OK;               /* no viewport, no pixels */
+    }
+
+    for (i = 0u; i < 16u; i++) { view[i] = 0.0f; }
+    view[0] = view[5] = view[10] = view[15] = 1.0f;
+    camarr = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_cam_m", "[F", 0));
+    if (camarr && nj_array_length(camarr) >= (nj_s4)(sizeof(float) * 16u)) {
+        memcpy(view, nj_array_data(camarr), sizeof(float) * 16u);
+    }
+    if (!m3g_cam_projection(vm, cam, (float)vx, (float)vw, proj)) {
+        return NJ_OK;               /* a camera with no projection sees nothing */
+    }
+    m3g_mat_mul(mvp, view, proj);
+
+    n = nj_m3g_collect_meshes(vm, root, meshes, 64u);
+    jt.vm = vm;
+    jt.g = target;
+    for (i = 0u; i < n && i < 64u; i++) {
+        drawn += raster_mesh_with(vm, meshes[i], mvp, (int)vw, (int)vh,
+                                  0xFFFFFFFFu, emit_to_java, &jt);
+    }
+    (void)drawn;               /* counted by the caller's pixels, not here */
     return NJ_OK;
 }
 
@@ -2973,8 +3061,8 @@ NJFN(m3g_load_bytes)
 static const nj_builtin_field light_fields[] = {
     { "_nj_mode",       "I",  0 },
     { "_nj_color",      "I",  0 },
-    { "_nj_intensity",  "F",  0 },
-    { "_nj_spotAngle",  "F",  0 },
+    { "_nj_intensity",  "I",  0 },
+    { "_nj_spotAngle",  "I",  0 },
     { "_nj_spotExp",    "F",  0 },
     { "_nj_atten",      "[F", 0 },
     /* The mode constants, static and final: the values a title inlined when
@@ -3216,11 +3304,11 @@ static const nj_builtin_field world_fields[] = {
 static const nj_builtin_field camera_fields[] = {
     { "_nj_is_persp",    "Z", NJ_ACC_PUBLIC },
     { "_nj_is_parallel", "Z", NJ_ACC_PUBLIC },
-    { "_nj_fovy",   "F", NJ_ACC_PUBLIC },
-    { "_nj_height", "F", NJ_ACC_PUBLIC },
-    { "_nj_aspect", "F", NJ_ACC_PUBLIC },
-    { "_nj_near",   "F", NJ_ACC_PUBLIC },
-    { "_nj_far",    "F", NJ_ACC_PUBLIC }
+    { "_nj_fovy",   "I", NJ_ACC_PUBLIC },
+    { "_nj_height", "I", NJ_ACC_PUBLIC },
+    { "_nj_aspect", "I", NJ_ACC_PUBLIC },
+    { "_nj_near",   "I", NJ_ACC_PUBLIC },
+    { "_nj_far",    "I", NJ_ACC_PUBLIC }
 };
 static const nj_builtin_field bg_fields[] = {
     { "_nj_color",  "I", NJ_ACC_PUBLIC },
