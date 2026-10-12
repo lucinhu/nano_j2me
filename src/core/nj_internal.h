@@ -610,6 +610,19 @@ void       nj_vm_monitor_exit(nj_vm *vm, nj_ref obj);
 /* ------------------------------------------------------------------ */
 nj_status    nj_natives_init(nj_vm *vm);
 void         nj_natives_shutdown(nj_vm *vm);
+/*
+ * Every class-library module, in one table.  Exposed to tests so that a check
+ * can walk *all* of them instead of a hand-written list that a new module
+ * would silently fall off.  `const`, so .rodata - no RAM, no mutable global.
+ */
+typedef struct nj_builtin_source {
+    const nj_builtin_class *classes;
+    const int              *count;
+} nj_builtin_source;
+
+extern const nj_builtin_source nj_builtin_sources[];
+extern const int               nj_builtin_source_count;
+
 nj_native_fn nj_native_find(nj_vm *vm, const char *cls, const char *name,
                             const char *desc);
 /* Every class-library module exposes its bindings through these; nj_native.c

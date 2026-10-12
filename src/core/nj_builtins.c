@@ -9,12 +9,7 @@
  */
 #include "nj_internal.h"
 
-typedef struct nj_builtin_source {
-    const nj_builtin_class *classes;
-    const int              *count;
-} nj_builtin_source;
-
-static const nj_builtin_source nj_sources[] = {
+const nj_builtin_source nj_builtin_sources[] = {
     { nj_lib_object_classes, &nj_lib_object_class_count },
     { nj_lib_string_classes, &nj_lib_string_class_count },
     { nj_lib_system_classes, &nj_lib_system_class_count },
@@ -32,7 +27,8 @@ static const nj_builtin_source nj_sources[] = {
     { nj_lib_nokia_classes,  &nj_lib_nokia_class_count  },
     { nj_lib_fc_classes,     &nj_lib_fc_class_count     }
 };
-#define NJ_NSOURCES ((int)(sizeof(nj_sources) / sizeof(nj_sources[0])))
+const int nj_builtin_source_count =
+    (int)(sizeof(nj_builtin_sources) / sizeof(nj_builtin_sources[0]));
 
 nj_status nj_builtins_register_all(nj_vm *vm)
 {
@@ -44,9 +40,9 @@ nj_status nj_builtins_register_all(nj_vm *vm)
     }
 
     /* Pass 1: create every class record so that cross-references resolve. */
-    for (s = 0; s < NJ_NSOURCES; s++) {
-        const nj_builtin_class *cs = nj_sources[s].classes;
-        int n = *nj_sources[s].count;
+    for (s = 0; s < nj_builtin_source_count; s++) {
+        const nj_builtin_class *cs = nj_builtin_sources[s].classes;
+        int n = *nj_builtin_sources[s].count;
         int i;
         for (i = 0; i < n; i++) {
             nj_class *c = nj_class_create_builtin(vm, &cs[i]);

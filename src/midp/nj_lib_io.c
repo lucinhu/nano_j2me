@@ -1252,20 +1252,31 @@ static const nj_builtin_field osw_fields[] = {
     { "oswOut", "Ljava/io/OutputStream;", 0 }
 };
 
+/*
+ * Reader and Writer are abstract in CLDC, and so is most of what they declare.
+ * The flag matters: without it a call to one of these looks like a method that
+ * simply has no implementation and reports UnsatisfiedLinkError, when the
+ * honest answer is AbstractMethodError - the subclass was supposed to provide
+ * it.  InputStreamReader and OutputStreamWriter do provide all of them.
+ *
+ * Four Reader and three Writer methods are abstract; read(char[]), skip(long),
+ * write(int), write(char[]) and write(String) are concrete in the spec and
+ * still need implementations - see the TODO in tests/test_natives.c.
+ */
 static const nj_builtin_method reader_methods[] = {
-    RM("close",  "()V", NJ_ACC_PUBLIC),
-    RM("read",   "()I", NJ_ACC_PUBLIC),
-    RM("read",   "([C)I", NJ_ACC_PUBLIC),
-    RM("read",   "([CII)I", NJ_ACC_PUBLIC),
-    RM("ready",  "()Z", NJ_ACC_PUBLIC),
-    RM("skip",   "(J)J", NJ_ACC_PUBLIC)
+    RM("close",  "()V",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    RM("read",   "()I",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    RM("read",   "([C)I",  NJ_ACC_PUBLIC),
+    RM("read",   "([CII)I", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    RM("ready",  "()Z",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    RM("skip",   "(J)J",   NJ_ACC_PUBLIC)
 };
 static const nj_builtin_method writer_methods[] = {
-    RM("close",  "()V", NJ_ACC_PUBLIC),
-    RM("flush",  "()V", NJ_ACC_PUBLIC),
-    RM("write",  "(I)V", NJ_ACC_PUBLIC),
-    RM("write",  "([C)V", NJ_ACC_PUBLIC),
-    RM("write",  "([CII)V", NJ_ACC_PUBLIC),
+    RM("close",  "()V",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    RM("flush",  "()V",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    RM("write",  "(I)V",   NJ_ACC_PUBLIC),
+    RM("write",  "([C)V",  NJ_ACC_PUBLIC),
+    RM("write",  "([CII)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
     RM("write",  "(Ljava/lang/String;)V", NJ_ACC_PUBLIC)
 };
 static const nj_builtin_method isr_methods[] = {

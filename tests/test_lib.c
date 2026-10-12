@@ -406,6 +406,171 @@ static void test_media(nj_vm *vm)
 }
 
 /* ------------------------------------------------------------------ */
+/* 7: String - the ranged, encoded and StringBuffer constructors        */
+/* ------------------------------------------------------------------ */
+#define STRING "java/lang/String"
+#define SBUF   "java/lang/StringBuffer"
+
+/* A byte[] from a C array of bytes. */
+static nj_ref bytes_of(nj_vm *vm, const unsigned char *data, nj_u4 len)
+{
+    nj_ref arr = nj_byte_array_new(vm, len);
+    nj_u4 i;
+
+    if (!arr) {
+        g_fail++;
+        return NULL;
+    }
+    for (i = 0u; i < len; i++) {
+        nj_array_set_int(arr, i, (nj_s4)data[i]);
+    }
+    return arr;
+}
+
+/*
+ * String(byte[], int, int) and String(byte[], int, int, String) were missing
+ * outright - 11 and 6 corpus titles call them, and a missing constructor is a
+ * NoSuchMethodError on the first decode, i.e. before the game draws anything.
+ * The decode itself is shared with String(byte[]) and String(byte[], String),
+ * so this also pins the UTF-8 decoder: it must produce the character, not
+ * refuse the bytes above ASCII, and a truncated sequence must cost one U+FFFD
+ * rather than the rest of the array.
+ */
+static void test_strings(nj_vm *vm)
+{
+    static const unsigned char ascii[4] = { 'a', 'b', 'c', 'd' };
+    static const unsigned char cjk[3] = { 0xE4, 0xB8, 0xAD };   /* U+4E2D 中 */
+    static const unsigned char bad[2] = { 0xE4, 0x41 };         /* cut 3-byte + 'A' */
+    nj_value a[4];
+    nj_ref arr, s, sb, enc, chars, out;
+    nj_u2 pair[2];
+
+    /* new String(byte[], int, int) is a slice, not the whole array. */
+    arr = bytes_of(vm, ascii, 4u);
+    a[0] = vref(arr);
+    a[1] = vint(1);
+    a[2] = vint(2);
+    s = construct(vm, STRING, "([BII)V", a, "String(byte[],1,2)");
+    OK_MSG(s != NULL && nj_string_equals_utf8(s, "bc"),
+           "new String({'a','b','c','d'},1,2) is \"bc\"");
+    OK_MSG(s != NULL && nj_string_length(s) == 2u,
+           "and is 2 chars, got %u", s ? (unsigned)nj_string_length(s) : 0u);
+
+    /* A range that runs off the end is an index exception, not a truncation. */
+    a[0] = vref(arr);
+    a[1] = vint(3);
+    a[2] = vint(5);
+    sb = nj_object_new(vm, STRING);
+    OK(sb != NULL);
+    if (sb &&
+        nj_call_special(vm, sb, STRING, "<init>", "([BII)V", a, NULL) == NJ_OK) {
+        g_fail++;
+        fprintf(stderr, "FAIL String(bytes,3,5) was accepted\n");
+    } else if (sb) {
+        const char *d = nj_exception_describe(vm);
+        OK_MSG(d != NULL && strstr(d, "StringIndexOutOfBounds") != NULL,
+               "String(bytes,3,5) throws an index exception, got %s",
+               d ? d : "(nothing)");
+        nj_clear_exception(vm);
+    }
+
+    /* The UTF-8 form of the ranged constructor, and the same bytes through the
+     * single-argument decoder. */
+    arr = bytes_of(vm, cjk, 3u);
+    enc = nj_string_new(vm, "UTF-8");
+    a[0] = vref(arr);
+    a[1] = vint(0);
+    a[2] = vint(3);
+    a[3] = vref(enc);
+    s = construct(vm, STRING, "([BIILjava/lang/String;)V", a,
+                  "String(byte[],0,3,\"UTF-8\")");
+    OK_MSG(s != NULL && nj_string_length(s) == 1u,
+           "three UTF-8 bytes make one char, got %u",
+           s ? (unsigned)nj_string_length(s) : 0u);
+    OK_MSG(s != NULL && nj_string_data(s)[0] == 0x4E2Du,
+           "and it is U+4E2D, got U+%04X",
+           s ? (unsigned)nj_string_data(s)[0] : 0u);
+
+    a[0] = vref(arr);
+    a[1] = vref(enc);
+    s = construct(vm, STRING, "([BLjava/lang/String;)V", a,
+                  "String(byte[],\"UTF-8\")");
+    OK_MSG(s != NULL && nj_string_equals_utf8(s, "\xE4\xB8\xAD"),
+           "String(byte[],\"UTF-8\") decodes the same bytes");
+
+    /* A bad sequence costs one replacement char and keeps the next byte. */
+    arr = bytes_of(vm, bad, 2u);
+    a[0] = vref(arr);
+    s = construct(vm, STRING, "([B)V", a, "String({0xE4,'A'})");
+    OK_MSG(s != NULL && nj_string_length(s) == 2u,
+           "a truncated sequence plus 'A' is 2 chars, got %u",
+           s ? (unsigned)nj_string_length(s) : 0u);
+    OK_MSG(s != NULL && nj_string_data(s)[0] == 0xFFFDu &&
+           nj_string_data(s)[1] == (nj_u2)'A',
+           "and reads U+FFFD then 'A'");
+
+    /* getBytes(String) has to write what the read side reads. */
+    pair[0] = 0x4E2Du;
+    chars = nj_char_array_new(vm, 1u);
+    OK(chars != NULL);
+    if (chars) {
+        nj_array_set_int(chars, 0u, 0x4E2D);
+    }
+    s = nj_string_new_chars(vm, pair, 1);
+    OK(s != NULL);
+    a[0] = vref(enc);
+    out = nj_call_ref(vm, s, STRING, "getBytes", "(Ljava/lang/String;)[B", a);
+    OK_MSG(out != NULL && nj_array_length(out) == 3u,
+           "getBytes(\"UTF-8\") of U+4E2D is 3 bytes, got %u",
+           out ? (unsigned)nj_array_length(out) : 0u);
+    if (out && nj_array_length(out) == 3u) {
+        const unsigned char *raw = (const unsigned char *)nj_array_data(out);
+        OK_MSG(raw && raw[0] == 0xE4u && raw[1] == 0xB8u && raw[2] == 0xADu,
+               "and they are E4 B8 AD");
+    }
+    clean(vm, "getBytes(String)");
+
+    /* String.valueOf(char[]) and new String(StringBuffer) - the two shapes a
+     * game uses to turn a buffer of characters back into a string. */
+    pair[0] = (nj_u2)'h';
+    pair[1] = (nj_u2)'i';
+    a[0] = vref(nj_char_array_new(vm, 2u));
+    OK(a[0].r != NULL);
+    if (a[0].r) {
+        nj_array_set_int(a[0].r, 0u, (nj_s4)'h');
+        nj_array_set_int(a[0].r, 1u, (nj_s4)'i');
+    }
+    s = nj_call_ref(vm, NULL, STRING, "valueOf", "([C)Ljava/lang/String;", a);
+    OK_MSG(s != NULL && nj_string_equals_utf8(s, "hi"),
+           "String.valueOf({'h','i'}) is \"hi\"");
+    clean(vm, "String.valueOf(char[])");
+
+    a[0] = vref(nj_string_new(vm, "hi"));
+    sb = construct(vm, SBUF, "(Ljava/lang/String;)V", a, "StringBuffer(\"hi\")");
+    OK(sb != NULL);
+    a[0] = vref(sb);
+    s = construct(vm, STRING, "(Ljava/lang/StringBuffer;)V", a,
+                  "String(StringBuffer)");
+    OK_MSG(s != NULL && nj_string_equals_utf8(s, "hi"),
+           "new String(StringBuffer(\"hi\")) is \"hi\"");
+
+    /* lastIndexOf(int, int) walks back from fromIndex, and a negative start
+     * finds nothing instead of scanning the whole string. */
+    s = nj_string_new(vm, "abcabc");
+    a[0] = vint((nj_s4)'a');
+    a[1] = vint(5);
+    OK_MSG(nj_call_int(vm, s, STRING, "lastIndexOf", "(II)I", a) == 3,
+           "lastIndexOf('a',5) is 3");
+    a[1] = vint(2);
+    OK_MSG(nj_call_int(vm, s, STRING, "lastIndexOf", "(II)I", a) == 0,
+           "lastIndexOf('a',2) is 0");
+    a[1] = vint(-1);
+    OK_MSG(nj_call_int(vm, s, STRING, "lastIndexOf", "(II)I", a) == -1,
+           "lastIndexOf('a',-1) is -1");
+    clean(vm, "String.lastIndexOf");
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 int main(void)
@@ -431,6 +596,7 @@ int main(void)
     test_read_fully(vm);
     test_skips(vm);
     test_media(vm);
+    test_strings(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

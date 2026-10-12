@@ -687,7 +687,10 @@ CLASSES = {
     },
     "javax/microedition/media/control/VolumeControl": {
         "interface": True,
-        "methods": ["void setLevel(int)", "int getLevel()",
+        # MMAPI declares setLevel as returning int (the level actually set),
+        # so a stub saying void makes every caller compile to setLevel(I)V and
+        # the runtime - which declares setLevel(I)I - answers NoSuchMethodError.
+        "methods": ["int setLevel(int)", "int getLevel()",
                     "void setMute(boolean)", "boolean isMuted()"],
     },
     "javax/microedition/media/MediaException": {

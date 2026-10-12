@@ -113,61 +113,190 @@ NJFN(str_init_chars_range)
  * decoding as Latin-1, because a game that asked for Shift_JIS and got mojibake
  * has no way to find out where it went wrong.
  */
-NJFN(str_init_bytes);      /* defined below; this one delegates to it */
-NJFN(str_init_utf8);       /* ... and a real multi-byte decode does too */
-
-NJFN(str_init_bytes_enc)
+/* Which decoder an encoding name asks for.  0 = one byte per char (ISO-8859-1
+ * and the aliases of it this runtime advertises), 1 = UTF-8, -1 = refused by
+ * name, with the exception already raised. */
+static int str_encoding_kind(nj_vm *vm, nj_ref enc)
 {
-    nj_ref enc = NJ_ARG_REF(args, 1);
     char name[32];
 
-    if (enc) {
-        if (nj_string_to_utf8(enc, name, (int)sizeof(name)) > 0) {
-            int iso = (strcmp(name, "ISO-8859-1") == 0 ||
-                       strcmp(name, "ISO8859_1") == 0 ||
-                       strcmp(name, "ISO8859-1") == 0 ||
-                       strcmp(name, "8859_1") == 0 ||
-                       strcmp(name, "latin1") == 0 ||
-                       strcmp(name, "ASCII") == 0 ||
-                       strcmp(name, "US-ASCII") == 0);
-            int utf8 = (strcmp(name, "UTF-8") == 0 ||
-                        strcmp(name, "UTF8") == 0);
-            if (!iso && !utf8) {
-                return nj_throw(vm, "java/io/UnsupportedEncodingException", name);
-            }
-            if (utf8) {
-                return str_init_utf8(vm, th, args, ret);
-            }
-        }
+    if (!enc || nj_string_to_utf8(enc, name, (int)sizeof(name)) <= 0) {
+        return 0;
     }
-    return str_init_bytes(vm, th, args, ret);
+    if (strcmp(name, "ISO-8859-1") == 0 || strcmp(name, "ISO8859_1") == 0 ||
+        strcmp(name, "ISO8859-1") == 0 || strcmp(name, "8859_1") == 0 ||
+        strcmp(name, "latin1") == 0 || strcmp(name, "ASCII") == 0 ||
+        strcmp(name, "US-ASCII") == 0) {
+        return 0;
+    }
+    if (strcmp(name, "UTF-8") == 0 || strcmp(name, "UTF8") == 0) {
+        return 1;
+    }
+    (void)nj_throw(vm, "java/io/UnsupportedEncodingException", name);
+    return -1;
 }
 
-NJFN(str_init_bytes)
+/* Bytes [off, off+len) of `arr`, one byte per char.  The caller has already
+ * checked the range, so this only has to allocate. */
+static nj_status str_decode_latin1(nj_vm *vm, nj_ref self, nj_ref arr,
+                                   nj_u4 off, nj_u4 len)
 {
-    nj_ref arr = NJ_ARG_REF(args, 0);
     nj_u2 *tmp;
     nj_status st;
+    nj_u4 i;
 
-    if (!arr) {
-        return nj_throw(vm, "java/lang/NullPointerException", NULL);
-    }
-    tmp = (nj_u2 *)nj_host_alloc(vm, ((nj_size)arr->length + 1u) * sizeof(nj_u2));
+    tmp = (nj_u2 *)nj_host_alloc(vm, ((nj_size)len + 1u) * sizeof(nj_u2));
     if (!tmp) {
         return nj_throw_oom(vm);
     }
-    {
-        nj_u4 i;
-        for (i = 0u; i < arr->length; i++) {
-            tmp[i] = (nj_u2)(nj_u1)arr->u.bytes[i];
-        }
+    for (i = 0u; i < len; i++) {
+        tmp[i] = (nj_u2)(nj_u1)arr->u.bytes[off + i];
     }
-    st = str_install(vm, NJ_THIS(args), tmp, arr->length);
+    st = str_install(vm, self, tmp, len);
     nj_host_free(vm, tmp);
     if (st != NJ_OK) {
         return nj_throw_oom(vm);
     }
     return NJ_OK;
+}
+
+/* Bytes [off, off+len) of `arr`, decoded as UTF-8.  A malformed sequence
+ * becomes one U+FFFD and does not eat the byte after it, so one bad byte in a
+ * save file costs one character instead of the rest of the text.  Four-byte
+ * sequences become a surrogate pair, because the string is UTF-16. */
+static nj_status str_decode_utf8(nj_vm *vm, nj_ref self, nj_ref arr,
+                                 nj_u4 off, nj_u4 len)
+{
+    nj_u2 *tmp;
+    nj_u4 i, n = 0u, end = off + len;
+    nj_status st;
+
+    tmp = (nj_u2 *)nj_host_alloc(vm, ((nj_size)len + 1u) * sizeof(nj_u2));
+    if (!tmp) {
+        return nj_throw_oom(vm);
+    }
+
+    i = off;
+    while (i < end) {
+        nj_u4 c = (nj_u4)(nj_u1)arr->u.bytes[i++];
+
+        if (c < 0x80u) {
+            tmp[n++] = (nj_u2)c;
+        } else if ((c & 0xE0u) == 0xC0u && i < end &&
+                   (arr->u.bytes[i] & 0xC0u) == 0x80u) {
+            nj_u4 c2 = (nj_u4)(nj_u1)arr->u.bytes[i++];
+            tmp[n++] = (nj_u2)(((c & 0x1Fu) << 6) | (c2 & 0x3Fu));
+        } else if ((c & 0xF0u) == 0xE0u && i + 1u < end &&
+                   (arr->u.bytes[i] & 0xC0u) == 0x80u &&
+                   (arr->u.bytes[i + 1u] & 0xC0u) == 0x80u) {
+            nj_u4 c2 = (nj_u4)(nj_u1)arr->u.bytes[i++];
+            nj_u4 c3 = (nj_u4)(nj_u1)arr->u.bytes[i++];
+            tmp[n++] = (nj_u2)(((c & 0x0Fu) << 12) |
+                               ((c2 & 0x3Fu) << 6) | (c3 & 0x3Fu));
+        } else if ((c & 0xF8u) == 0xF0u && i + 2u < end &&
+                   (arr->u.bytes[i] & 0xC0u) == 0x80u &&
+                   (arr->u.bytes[i + 1u] & 0xC0u) == 0x80u &&
+                   (arr->u.bytes[i + 2u] & 0xC0u) == 0x80u) {
+            nj_u4 c2 = (nj_u4)(nj_u1)arr->u.bytes[i++];
+            nj_u4 c3 = (nj_u4)(nj_u1)arr->u.bytes[i++];
+            nj_u4 c4 = (nj_u4)(nj_u1)arr->u.bytes[i++];
+            nj_u4 cp = ((c & 0x07u) << 18) | ((c2 & 0x3Fu) << 12) |
+                       ((c3 & 0x3Fu) << 6) | (c4 & 0x3Fu);
+            cp -= 0x10000u;
+            tmp[n++] = (nj_u2)(0xD800u + (cp >> 10));
+            tmp[n++] = (nj_u2)(0xDC00u + (cp & 0x3FFu));
+        } else {
+            tmp[n++] = 0xFFFDu;
+        }
+    }
+
+    st = str_install(vm, self, tmp, n);
+    nj_host_free(vm, tmp);
+    if (st != NJ_OK) {
+        return nj_throw_oom(vm);
+    }
+    return NJ_OK;
+}
+
+/* offset/count on a byte[] or char[] constructor.  The spec's exception for a
+ * range that does not fit is an index one, and games catch that. */
+static nj_status str_range_check(nj_vm *vm, nj_ref arr, nj_s4 off, nj_s4 cnt)
+{
+    if (off < 0 || cnt < 0 || (nj_u4)off + (nj_u4)cnt > arr->length) {
+        (void)nj_throw(vm, "java/lang/StringIndexOutOfBoundsException", NULL);
+        return NJ_ERR;
+    }
+    return NJ_OK;
+}
+
+NJFN(str_init_bytes_enc)
+{
+    nj_ref arr = NJ_ARG_REF(args, 0);
+    int kind;
+
+    if (!arr) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    kind = str_encoding_kind(vm, NJ_ARG_REF(args, 1));
+    if (kind < 0) {
+        return NJ_ERR;
+    }
+    if (kind == 1) {
+        return str_decode_utf8(vm, NJ_THIS(args), arr, 0u, arr->length);
+    }
+    return str_decode_latin1(vm, NJ_THIS(args), arr, 0u, arr->length);
+}
+
+/* String(byte[], int offset, int count) - the ranged form, which is how a game
+ * decodes one field out of a save block or a packet without copying it out
+ * first.  11 titles in the corpus call it. */
+NJFN(str_init_bytes_range)
+{
+    nj_ref arr = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 cnt = NJ_ARG_INT(args, 2);
+
+    if (!arr) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (str_range_check(vm, arr, off, cnt) != NJ_OK) {
+        return NJ_ERR;
+    }
+    return str_decode_latin1(vm, NJ_THIS(args), arr, (nj_u4)off, (nj_u4)cnt);
+}
+
+/* ... and the same with the encoding named. */
+NJFN(str_init_bytes_range_enc)
+{
+    nj_ref arr = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 cnt = NJ_ARG_INT(args, 2);
+    int kind;
+
+    if (!arr) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    kind = str_encoding_kind(vm, NJ_ARG_REF(args, 3));
+    if (kind < 0) {
+        return NJ_ERR;
+    }
+    if (str_range_check(vm, arr, off, cnt) != NJ_OK) {
+        return NJ_ERR;
+    }
+    if (kind == 1) {
+        return str_decode_utf8(vm, NJ_THIS(args), arr, (nj_u4)off, (nj_u4)cnt);
+    }
+    return str_decode_latin1(vm, NJ_THIS(args), arr, (nj_u4)off, (nj_u4)cnt);
+}
+
+NJFN(str_init_bytes)
+{
+    nj_ref arr = NJ_ARG_REF(args, 0);
+
+    if (!arr) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    return str_decode_latin1(vm, NJ_THIS(args), arr, 0u, arr->length);
 }
 
 /*
@@ -186,60 +315,85 @@ NJFN(str_init_bytes)
  * speak modified UTF-8 elsewhere (C0 80 is how a DataOutput stream writes NUL)
  * and a title's resource files are written by its own toolchain.
  */
-NJFN(str_init_utf8)
+/* String(StringBuffer) - StringBuffer has no pack() in CLDC, so a game that
+ * built a line in one converts it this way. */
+static nj_field *sb_value(nj_vm *vm);
+static nj_field *sb_count(nj_vm *vm);
+
+NJFN(str_init_sb)
+{
+    nj_ref sb = NJ_ARG_REF(args, 0);
+    nj_field *fv = sb_value(vm);
+    nj_field *fc = sb_count(vm);
+    nj_ref arr;
+    nj_s4 cnt;
+
+    if (!sb) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (!fv || !fc) {
+        return nj_throw(vm, "java/lang/InternalError", "StringBuffer layout");
+    }
+    arr = nj_field_read_ref(vm, sb, fv);
+    cnt = nj_field_read_int(vm, sb, fc);
+    if (!arr || cnt <= 0) {
+        return str_init(vm, th, args, ret);
+    }
+    if ((nj_u4)cnt > arr->length) {
+        cnt = (nj_s4)arr->length;
+    }
+    if (str_install(vm, NJ_THIS(args), (const nj_u2 *)arr->u.bytes,
+                    (nj_u4)cnt) != NJ_OK) {
+        return nj_throw_oom(vm);
+    }
+    return NJ_OK;
+}
+
+/* String.valueOf(char[]) */
+NJFN(str_valueOf_chars)
 {
     nj_ref arr = NJ_ARG_REF(args, 0);
-    nj_u2 *tmp;
-    nj_u4 i, n = 0u;
-    nj_status st;
+    nj_ref s;
 
     if (!arr) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    tmp = (nj_u2 *)nj_host_alloc(vm, ((nj_size)arr->length + 1u) * sizeof(nj_u2));
-    if (!tmp) {
+    s = nj_string_new(vm, "");
+    if (!s) {
         return nj_throw_oom(vm);
     }
+    if (str_install(vm, s, (const nj_u2 *)arr->u.bytes, arr->length) != NJ_OK) {
+        return nj_throw_oom(vm);
+    }
+    ret->r = s;
+    return NJ_OK;
+}
 
-    i = 0u;
-    while (i < arr->length) {
-        nj_u4 c = (nj_u4)(nj_u1)arr->u.bytes[i++];
+/* lastIndexOf(int ch, int fromIndex): the search starts at fromIndex and walks
+ * back, so an index past the end starts at the end, and a negative one finds
+ * nothing. */
+NJFN(str_lastIndexOf_from)
+{
+    nj_ref s = NJ_THIS(args);
+    nj_s4 ch = NJ_ARG_INT(args, 0);
+    nj_s4 from = NJ_ARG_INT(args, 1);
+    nj_u4 i = nj_string_len(s);
 
-        if (c < 0x80u) {
-            tmp[n++] = (nj_u2)c;
-        } else if ((c & 0xE0u) == 0xC0u && i < arr->length &&
-                   (arr->u.bytes[i] & 0xC0u) == 0x80u) {
-            nj_u4 c2 = (nj_u4)(nj_u1)arr->u.bytes[i++];
-            tmp[n++] = (nj_u2)(((c & 0x1Fu) << 6) | (c2 & 0x3Fu));
-        } else if ((c & 0xF0u) == 0xE0u && i + 1u < arr->length &&
-                   (arr->u.bytes[i] & 0xC0u) == 0x80u &&
-                   (arr->u.bytes[i + 1u] & 0xC0u) == 0x80u) {
-            nj_u4 c2 = (nj_u4)(nj_u1)arr->u.bytes[i++];
-            nj_u4 c3 = (nj_u4)(nj_u1)arr->u.bytes[i++];
-            tmp[n++] = (nj_u2)(((c & 0x0Fu) << 12) |
-                               ((c2 & 0x3Fu) << 6) | (c3 & 0x3Fu));
-        } else if ((c & 0xF8u) == 0xF0u && i + 2u < arr->length &&
-                   (arr->u.bytes[i] & 0xC0u) == 0x80u &&
-                   (arr->u.bytes[i + 1u] & 0xC0u) == 0x80u &&
-                   (arr->u.bytes[i + 2u] & 0xC0u) == 0x80u) {
-            nj_u4 c2 = (nj_u4)(nj_u1)arr->u.bytes[i++];
-            nj_u4 c3 = (nj_u4)(nj_u1)arr->u.bytes[i++];
-            nj_u4 c4 = (nj_u4)(nj_u1)arr->u.bytes[i++];
-            nj_u4 cp = ((c & 0x07u) << 18) | ((c2 & 0x3Fu) << 12) |
-                       ((c3 & 0x3Fu) << 6) | (c4 & 0x3Fu);
-            cp -= 0x10000u;
-            tmp[n++] = (nj_u2)(0xD800u + (cp >> 10));
-            tmp[n++] = (nj_u2)(0xDC00u + (cp & 0x3FFu));
-        } else {
-            tmp[n++] = 0xFFFDu;
+    if (from < 0) {
+        ret->i = -1;
+        return NJ_OK;
+    }
+    if ((nj_u4)from < i) {
+        i = (nj_u4)from + 1u;
+    }
+    while (i > 0u) {
+        i--;
+        if ((nj_s4)nj_string_chars(s)[i] == ch) {
+            ret->i = (nj_s4)i;
+            return NJ_OK;
         }
     }
-
-    st = str_install(vm, NJ_THIS(args), tmp, n);
-    nj_host_free(vm, tmp);
-    if (st != NJ_OK) {
-        return nj_throw_oom(vm);
-    }
+    ret->i = -1;
     return NJ_OK;
 }
 
@@ -738,6 +892,89 @@ NJFN(str_getBytes)
     }
     for (i = 0u; i < s->length; i++) {
         a->u.bytes[i] = (nj_u1)(nj_string_chars(s)[i] & 0xFFu);
+    }
+    ret->r = a;
+    return NJ_OK;
+}
+
+/* How many bytes `n` chars need in UTF-8: one, two or three each, four for a
+ * surrogate pair. */
+static nj_u4 utf8_count(const nj_u2 *c, nj_u4 n)
+{
+    nj_u4 i, total = 0u;
+
+    for (i = 0u; i < n; i++) {
+        nj_u4 ch = c[i];
+        if (ch < 0x80u) {
+            total += 1u;
+        } else if (ch < 0x800u) {
+            total += 2u;
+        } else if (ch >= 0xD800u && ch <= 0xDBFFu && i + 1u < n &&
+                   c[i + 1u] >= 0xDC00u && c[i + 1u] <= 0xDFFFu) {
+            total += 4u;
+            i++;
+        } else {
+            total += 3u;
+        }
+    }
+    return total;
+}
+
+/* Write `n` chars as UTF-8 into `out`, which must hold utf8_count() bytes. */
+static void utf8_write(const nj_u2 *c, nj_u4 n, nj_u1 *out)
+{
+    nj_u4 i, o = 0u;
+
+    for (i = 0u; i < n; i++) {
+        nj_u4 ch = c[i];
+        if (ch < 0x80u) {
+            out[o++] = (nj_u1)ch;
+        } else if (ch < 0x800u) {
+            out[o++] = (nj_u1)(0xC0u | (ch >> 6));
+            out[o++] = (nj_u1)(0x80u | (ch & 0x3Fu));
+        } else if (ch >= 0xD800u && ch <= 0xDBFFu && i + 1u < n &&
+                   c[i + 1u] >= 0xDC00u && c[i + 1u] <= 0xDFFFu) {
+            nj_u4 cp = 0x10000u + ((ch - 0xD800u) << 10) +
+                       ((nj_u4)c[++i] - 0xDC00u);
+            out[o++] = (nj_u1)(0xF0u | (cp >> 18));
+            out[o++] = (nj_u1)(0x80u | ((cp >> 12) & 0x3Fu));
+            out[o++] = (nj_u1)(0x80u | ((cp >> 6) & 0x3Fu));
+            out[o++] = (nj_u1)(0x80u | (cp & 0x3Fu));
+        } else {
+            out[o++] = (nj_u1)(0xE0u | (ch >> 12));
+            out[o++] = (nj_u1)(0x80u | ((ch >> 6) & 0x3Fu));
+            out[o++] = (nj_u1)(0x80u | (ch & 0x3Fu));
+        }
+    }
+}
+
+/* getBytes(String encoding): the write side of the encodings the constructors
+ * read.  A char that ISO-8859-1 cannot hold becomes '?' - that is what the
+ * platform's own encoder does, and writing a lone low byte instead would turn
+ * a Chinese title into plausible-looking garbage. */
+NJFN(str_getBytes_enc)
+{
+    nj_ref s = NJ_THIS(args);
+    int kind = str_encoding_kind(vm, NJ_ARG_REF(args, 0));
+    const nj_u2 *c = nj_string_chars(s);
+    nj_u4 n = nj_string_len(s);
+    nj_u4 need, i;
+    nj_ref a;
+
+    if (kind < 0) {
+        return NJ_ERR;
+    }
+    need = (kind == 1) ? utf8_count(c, n) : n;
+    a = nj_new_array(vm, NULL, need, NJ_ARRAY_T_BYTE);
+    if (!a) {
+        return nj_throw_oom(vm);
+    }
+    if (kind == 1) {
+        utf8_write(c, n, a->u.bytes);
+    } else {
+        for (i = 0u; i < n; i++) {
+            a->u.bytes[i] = (c[i] > 0xFFu) ? (nj_u1)'?' : (nj_u1)c[i];
+        }
     }
     ret->r = a;
     return NJ_OK;
@@ -1365,6 +1602,9 @@ static const nj_builtin_method string_methods[] = {
     M("<init>",            "([CII)V",                          0),
     M("<init>",            "([B)V",                            0),
     M("<init>",            "([BLjava/lang/String;)V",          0),
+    M("<init>",            "([BII)V",                          0),
+    M("<init>",            "([BIILjava/lang/String;)V",        0),
+    M("<init>",            "(Ljava/lang/StringBuffer;)V",      0),
     M("length",            "()I",                              0),
     M("charAt",            "(I)C",                             0),
     M("equals",            "(Ljava/lang/Object;)Z",            0),
@@ -1376,6 +1616,7 @@ static const nj_builtin_method string_methods[] = {
     M("indexOf",           "(Ljava/lang/String;)I",            0),
     M("indexOf",           "(Ljava/lang/String;I)I",           0),
     M("lastIndexOf",       "(I)I",                             0),
+    M("lastIndexOf",       "(II)I",                            0),
     M("substring",         "(I)Ljava/lang/String;",            0),
     M("substring",         "(II)Ljava/lang/String;",           0),
     M("concat",            "(Ljava/lang/String;)Ljava/lang/String;", 0),
@@ -1390,12 +1631,14 @@ static const nj_builtin_method string_methods[] = {
     M("toCharArray",       "()[C",                             0),
     M("getChars",          "(II[CI)V",                         0),
     M("getBytes",          "()[B",                             0),
+    M("getBytes",          "(Ljava/lang/String;)[B",           0),
     M("valueOf",           "(Ljava/lang/Object;)Ljava/lang/String;", NJ_ACC_STATIC),
     M("valueOf",           "(I)Ljava/lang/String;",            NJ_ACC_STATIC),
     M("valueOf",           "(J)Ljava/lang/String;",            NJ_ACC_STATIC),
     M("valueOf",           "(Z)Ljava/lang/String;",            NJ_ACC_STATIC),
     M("valueOf",           "(C)Ljava/lang/String;",            NJ_ACC_STATIC),
-    M("valueOf",           "(F)Ljava/lang/String;",            NJ_ACC_STATIC)
+    M("valueOf",           "(F)Ljava/lang/String;",            NJ_ACC_STATIC),
+    M("valueOf",           "([C)Ljava/lang/String;",           NJ_ACC_STATIC)
 };
 
 /*
@@ -1505,6 +1748,9 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/String", "<init>",           "([CII)V",                 str_init_chars_range },
     { "java/lang/String", "<init>",           "([B)V",                   str_init_bytes },
     { "java/lang/String", "<init>",           "([BLjava/lang/String;)V",  str_init_bytes_enc },
+    { "java/lang/String", "<init>",           "([BII)V",                 str_init_bytes_range },
+    { "java/lang/String", "<init>",           "([BIILjava/lang/String;)V", str_init_bytes_range_enc },
+    { "java/lang/String", "<init>",           "(Ljava/lang/StringBuffer;)V", str_init_sb },
     { "java/lang/String", "length",           "()I",                     str_length },
     { "java/lang/String", "charAt",           "(I)C",                    str_charAt },
     { "java/lang/String", "equals",           "(Ljava/lang/Object;)Z",   str_equals },
@@ -1516,6 +1762,7 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/String", "indexOf",          "(Ljava/lang/String;)I",   str_indexOf_str },
     { "java/lang/String", "indexOf",          "(Ljava/lang/String;I)I",  str_indexOf_str_from },
     { "java/lang/String", "lastIndexOf",      "(I)I",                    str_lastIndexOf },
+    { "java/lang/String", "lastIndexOf",      "(II)I",                   str_lastIndexOf_from },
     { "java/lang/String", "substring",        "(I)Ljava/lang/String;",   str_substring },
     { "java/lang/String", "substring",        "(II)Ljava/lang/String;",  str_substring_to },
     { "java/lang/String", "concat",           "(Ljava/lang/String;)Ljava/lang/String;", str_concat },
@@ -1530,12 +1777,14 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/String", "toCharArray",      "()[C",                    str_toCharArray },
     { "java/lang/String", "getChars",         "(II[CI)V",                str_getChars },
     { "java/lang/String", "getBytes",         "()[B",                    str_getBytes },
+    { "java/lang/String", "getBytes",         "(Ljava/lang/String;)[B",  str_getBytes_enc },
     { "java/lang/String", "valueOf",          "(Ljava/lang/Object;)Ljava/lang/String;", str_valueOf_obj },
     { "java/lang/String", "valueOf",          "(I)Ljava/lang/String;",   str_valueOf_int },
     { "java/lang/String", "valueOf",          "(J)Ljava/lang/String;",   str_valueOf_long },
     { "java/lang/String", "valueOf",          "(Z)Ljava/lang/String;",   str_valueOf_bool },
     { "java/lang/String", "valueOf",          "(C)Ljava/lang/String;",   str_valueOf_char },
     { "java/lang/String", "valueOf",          "(F)Ljava/lang/String;",   str_valueOf_float },
+    { "java/lang/String", "valueOf",          "([C)Ljava/lang/String;",  str_valueOf_chars },
 
     { "java/lang/StringBuffer", "<init>",         "()V",                    sb_init },
     { "java/lang/StringBuffer", "<init>",         "(I)V",                   sb_init_int },

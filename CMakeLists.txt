@@ -343,6 +343,10 @@ if(NJ_BUILD_TESTS)
 
   # ---- the memory contract and the class library ----
   nj_add_test(test_lifecycle tests/test_lifecycle.c)
+  # Every method a C-implemented class declares must have a native behind it.
+  # Three such bindings were missing and each one only surfaced when a real
+  # game called it; this walks the whole class library instead of waiting.
+  nj_add_test(test_natives   tests/test_natives.c)
   nj_add_test(test_vm        tests/test_vm.c
               ${NJ_FIXTURES}/hello.jar HelloWorld "hello from j2me")
 
