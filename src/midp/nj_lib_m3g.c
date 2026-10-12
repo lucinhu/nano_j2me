@@ -1974,17 +1974,106 @@ NJFN(m3g_mesh_setVertexBuffer)
 }
 
 /* ---- Loader -------------------------------------------------------- */
+/*
+ * Loader.load(String name).
+ *
+ * There is no .m3g object parser yet, so this cannot hand back a scene graph.
+ * What it CAN do - and did not do before - is find the resource and say what
+ * it found.  "no such resource" and "found 41280 bytes and cannot parse them"
+ * are different answers, and only the first one is about the MIDlet's own
+ * packaging; reporting both as the same IOException sends anyone reading the
+ * log looking for a missing file that is right there.
+ *
+ * Returning an empty array instead was rejected: the JSR's own answer for
+ * "could not load" is IOException, every title already has to handle it, and
+ * an empty array puts a null World in the scene graph that fails somewhere far
+ * from the cause.
+ */
 NJFN(m3g_load)
 {
+    nj_ref name = NJ_ARG_REF(args, 0);
+    nj_app *app = (nj_app *)vm->loader_ud;
+    char cname[256];
+    void *data;
+    nj_u4 len = 0u;
+    nj_u4 magic = 0u;
+
+    if (!name) {
+        return nj_throw(vm, "java/lang/NullPointerException", "name is null");
+    }
+    if (!app) {
+        return nj_throw(vm, "java/io/IOException", "no application is loaded");
+    }
+    if (nj_string_to_utf8(name, cname, (int)sizeof(cname)) <= 0) {
+        return nj_throw(vm, "java/io/IOException", "bad resource name");
+    }
+    data = nj_app_resource(vm, app, cname, &len);
+    if (!data || len == 0u) {
+        if (data) {
+            nj_host_free(vm, data);
+        }
+        return nj_throw(vm, "java/io/IOException", cname);
+    }
     /*
-     * No .m3g parser yet.  An IOException is the JSR's own answer for "could
-     * not load", and every title that calls this already has to handle it;
-     * returning an empty array instead would put a null World in the scene
-     * graph and fail somewhere far away from the cause.
+     * The container signature.  I first wrote the four-byte 0xAB4A4A4A that I
+     * remembered from the specification, and a real title then reported
+     * "wrong magic" for a file that is one:
+     *
+     *     $ unzip -p 毁灭战士3_10598.jar mars/mar.m3g | head -c 8 | xxd
+     *     00000000: ab4a 5352 3138 34bb 0d0a 1a0a 005f 0000  .JSR184......_..
+     *
+     * So the fixed part is the two bytes 0xAB 0x4A, followed by the ASCII tag
+     * "JSR184".  Only the two bytes are checked here; anything more specific
+     * would be a guess, and a wrong guess rejects valid files - which is the
+     * same defect this comment is about.
      */
-    (void)args;
-    NJ_THROW(vm, "java/io/IOException",
-             "this runtime has no .m3g container parser yet");
+    if (len >= 2u) {
+        const unsigned char *b = (const unsigned char *)data;
+        magic = ((nj_u4)b[0] << 8) | (nj_u4)b[1];
+    }
+    {
+        char mbuf[192];
+        char num[32];
+        nj_u4 n = 0u;
+        const char *q;
+        int k;
+        nj_host_free(vm, data);
+
+        if (magic != 0xAB4Au) {
+            q = " is not a .m3g container (wrong magic)";
+            for (k = 0; cname[k] && n + 1u < sizeof(mbuf); k++) {
+                mbuf[n++] = cname[k];
+            }
+            while (*q && n + 1u < sizeof(mbuf)) { mbuf[n++] = *q++; }
+            mbuf[n] = '\0';
+            return nj_throw(vm, "java/io/IOException", mbuf);
+        }
+
+        /*
+         * It IS a container.  Report the size so a log reader can tell a
+         * two-byte stub from a real model file without opening the JAR.
+         */
+        k = 0;
+        {
+            nj_u4 v = len;
+            char tmp[16];
+            int t = 0;
+            if (v == 0u) { tmp[t++] = '0'; }
+            while (v && t < (int)sizeof(tmp)) { tmp[t++] = (char)('0' + (v % 10u)); v /= 10u; }
+            while (t > 0 && k < (int)sizeof(num) - 1) { num[k++] = tmp[--t]; }
+        }
+        num[k] = '\0';
+        q = cname;
+        while (*q && n + 1u < sizeof(mbuf)) { mbuf[n++] = *q++; }
+        q = ": a .m3g container of ";
+        while (*q && n + 1u < sizeof(mbuf)) { mbuf[n++] = *q++; }
+        q = num;
+        while (*q && n + 1u < sizeof(mbuf)) { mbuf[n++] = *q++; }
+        q = " byte(s); this runtime recognises the container but has no object parser yet";
+        while (*q && n + 1u < sizeof(mbuf)) { mbuf[n++] = *q++; }
+        mbuf[n] = '\0';
+        return nj_throw(vm, "java/io/IOException", mbuf);
+    }
 }
 
 /* ---- Image2D ------------------------------------------------------- */
