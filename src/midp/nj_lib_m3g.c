@@ -2150,6 +2150,58 @@ NJFN(m3g_img2d_init_bytes)
  * per-entry cookie and the VM exposes no "which method am I" call, so the
  * cheap answer is the obvious one.
  */
+/*
+ * Image2D(int format, Object image).
+ *
+ * Which of the two shapes the object has decides where it is kept: an Image
+ * goes into _nj_image with its size copied out, a byte[] into _nj_pixels.
+ * Anything else is ignored rather than rejected -- a title that passes
+ * something this runtime does not know how to hold is better off running with
+ * an empty texture than dying in a constructor.
+ */
+NJFN(m3g_img2d_init_obj)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref o = NJ_ARG_REF(args, 1);
+    const nj_field *f;
+
+    f = nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_fmt", "I", 0);
+    if (f) {
+        nj_field_write_int(vm, self, f, NJ_ARG_INT(args, 0));
+    }
+    if (!o) {
+        return NJ_OK;
+    }
+    f = nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_image",
+                        "Ljavax/microedition/lcdui/Image;", 0);
+    if (f && nj_class_is_subclass_of(o->cls, nj_class_lookup(vm, "javax/microedition/lcdui/Image"))) {
+        nj_value r;
+        nj_s4 w = 0, h = 0;
+
+        nj_field_write_ref(vm, self, f, o);
+        if (nj_call(vm, o, "javax/microedition/lcdui/Image", "getWidth", "()I", NULL, &r) == NJ_OK) {
+            w = r.i;
+        }
+        if (nj_call(vm, o, "javax/microedition/lcdui/Image", "getHeight", "()I", NULL, &r) == NJ_OK) {
+            h = r.i;
+        }
+        f = nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_w", "I", 0);
+        if (f) {
+            nj_field_write_int(vm, self, f, w);
+        }
+        f = nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_h", "I", 0);
+        if (f) {
+            nj_field_write_int(vm, self, f, h);
+        }
+        return NJ_OK;
+    }
+    f = nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B", 0);
+    if (f) {
+        nj_field_write_ref(vm, self, f, o);
+    }
+    return NJ_OK;
+}
+
 NJFN(m3g_img2d_getFormat)
 {
     ret->i = nj_iget(vm, NJ_THIS(args),
@@ -2637,7 +2689,8 @@ static const nj_builtin_field img2d_fields[] = {
     { "_nj_fmt",    "I",   NJ_ACC_PUBLIC },
     { "_nj_w",      "I",   NJ_ACC_PUBLIC },
     { "_nj_h",      "I",   NJ_ACC_PUBLIC },
-    { "_nj_pixels", "[B",  NJ_ACC_PUBLIC }
+    { "_nj_pixels", "[B",  NJ_ACC_PUBLIC },
+    { "_nj_image",  "Ljavax/microedition/lcdui/Image;", NJ_ACC_PUBLIC }
 };
 
 static const nj_builtin_method o3d_methods[] = {
@@ -2869,6 +2922,12 @@ static const nj_builtin_method mesh_methods[] = {
 static const nj_builtin_method img2d_methods[] = {
     M("<init>", "(III)V",     NJ_ACC_PUBLIC),
     M("<init>", "(II[B)V",    NJ_ACC_PUBLIC),
+    /*
+     * JSR 184's other form: the image is an object that may be either a
+     * javax.microedition.lcdui.Image or a byte[].  3D激爆拳击 builds its
+     * textures this way and could not start without it.
+     */
+    M("<init>", "(ILjava/lang/Object;)V", NJ_ACC_PUBLIC),
     M("set",    "(IIII[B)V",  NJ_ACC_PUBLIC),
     M("getFormat",   "()I",   NJ_ACC_PUBLIC),
     M("getWidth",    "()I",   NJ_ACC_PUBLIC),
@@ -3062,6 +3121,7 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_MESH, "getAppearance",   "(I)L" NJ_C_APPEAR ";",  m3g_mesh_getAppearance },
     { NJ_C_IMAGE2D, "<init>", "(III)V",  m3g_img2d_init3 },
     { NJ_C_IMAGE2D, "<init>", "(II[B)V", m3g_img2d_init_bytes },
+    { NJ_C_IMAGE2D, "<init>", "(ILjava/lang/Object;)V", m3g_img2d_init_obj },
     { NJ_C_IMAGE2D, "set", "(IIII[B)V", m3g_img2d_set },
     { NJ_C_IMAGE2D, "getFormat", "()I", m3g_img2d_getFormat },
     { NJ_C_IMAGE2D, "getWidth",  "()I", m3g_img2d_getWidth },

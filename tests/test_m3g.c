@@ -416,6 +416,51 @@ int main(void)
         }
     }
 
+    /* ---- Image2D(int, Object): the form 3D激爆拳击 builds textures with --- */
+    {
+        nj_ref i2 = make(vm, "javax/microedition/m3g/Image2D");
+        nj_ref i3 = make(vm, "javax/microedition/m3g/Image2D");
+        nj_ref img = 0;
+        nj_ref bytes = nj_byte_array_new(vm, 16);
+        nj_value a2[2], ia[2], r;
+        const nj_field *fw, *fh, *fp, *fi;
+
+        ia[0].i = 8;
+        ia[1].i = 4;
+        if (nj_call_static(vm, "javax/microedition/lcdui/Image", "createImage",
+                           "(II)Ljavax/microedition/lcdui/Image;", ia, &r) == NJ_OK) {
+            img = r.r;
+        }
+        fw = nj_field_lookup(vm, "javax/microedition/m3g/Image2D", "_nj_w", "I", 0);
+        fh = nj_field_lookup(vm, "javax/microedition/m3g/Image2D", "_nj_h", "I", 0);
+        fp = nj_field_lookup(vm, "javax/microedition/m3g/Image2D", "_nj_pixels", "[B", 0);
+        fi = nj_field_lookup(vm, "javax/microedition/m3g/Image2D", "_nj_image",
+                             "Ljavax/microedition/lcdui/Image;", 0);
+
+        a2[0].i = 10;
+        a2[1].r = img;
+        check(nj_call(vm, i2, "javax/microedition/m3g/Image2D", "<init>",
+                      "(ILjava/lang/Object;)V", a2, &r) == NJ_OK && img != 0,
+              "Image2D(format, Image) constructs");
+        check(fw && fh && nj_field_read_int(vm, i2, fw) == 8 && nj_field_read_int(vm, i2, fh) == 4,
+              "Image2D(format, Image) copies the size out of the image");
+        check(fi && nj_field_read_ref(vm, i2, fi) == img,
+              "Image2D(format, Image) keeps the image itself");
+
+        a2[1].r = bytes;
+        check(nj_call(vm, i3, "javax/microedition/m3g/Image2D", "<init>",
+                      "(ILjava/lang/Object;)V", a2, &r) == NJ_OK && fp != 0 &&
+              nj_field_read_ref(vm, i3, fp) == bytes,
+              "Image2D(format, byte[]) keeps the pixel bytes");
+
+        /* An object of neither shape must not throw: a title that hands over
+         * something this runtime cannot hold should keep running. */
+        a2[1].r = make(vm, "java/lang/Object");
+        check(nj_call(vm, i3, "javax/microedition/m3g/Image2D", "<init>",
+                      "(ILjava/lang/Object;)V", a2, &r) == NJ_OK,
+              "Image2D(format, something else) does not throw");
+    }
+
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
     printf("%d checks, %d failures\n", checks, failures);
