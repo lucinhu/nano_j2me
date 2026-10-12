@@ -110,6 +110,9 @@
 typedef struct {
     nj_u1 wave;
     nj_u2 decay_ms;             /* 0 = the note holds until it is released */
+    nj_u2 attack_ms;            /* how long it takes to reach full level */
+    nj_u2 release_ms;           /* how long it takes to fall silent */
+    nj_u1 sustain;              /* 0..127: the level the decay settles on */
 } mid_timbre;
 
 /*
@@ -123,41 +126,48 @@ typedef struct {
  * else honest to make of them.
  */
 static const mid_timbre mid_timbres[16] = {
-    { MID_W_TRIANGLE, 1400u },
-    { MID_W_TRIANGLE,  900u },
-    { MID_W_SQUARE,      0u },
-    { MID_W_SAW,      1200u },
-    { MID_W_TRIANGLE,  700u },
-    { MID_W_SAW,         0u },
-    { MID_W_SAW,         0u },
-    { MID_W_SQUARE,      0u },
-    { MID_W_SQUARE,      0u },
-    { MID_W_TRIANGLE,    0u },
-    { MID_W_SAW,         0u },
-    { MID_W_TRIANGLE,    0u },
-    { MID_W_NOISE,     300u },
-    { MID_W_TRIANGLE,  900u },
-    { MID_W_NOISE,     200u },
-    { MID_W_NOISE,     250u }
+    { MID_W_TRIANGLE, 1400u,   2u, 140u,   0u },   /* piano: struck, dies away */
+    { MID_W_TRIANGLE,  900u,   1u, 120u,   0u },   /* chromatic percussion */
+    { MID_W_SQUARE,      0u,   6u,  40u, 110u },   /* organ: instant, holds */
+    { MID_W_SAW,      1200u,   3u, 130u,   0u },   /* guitar */
+    { MID_W_TRIANGLE,  700u,   2u,  90u,   0u },   /* bass */
+    { MID_W_SAW,         0u,  45u, 180u, 100u },   /* strings: slow, sustained */
+    { MID_W_SAW,         0u,  55u, 200u, 100u },   /* ensemble */
+    { MID_W_SQUARE,      0u,  25u,  90u, 105u },   /* brass: a small swell */
+    { MID_W_SQUARE,      0u,  20u,  80u, 110u },   /* reed */
+    { MID_W_TRIANGLE,    0u,  30u,  70u, 105u },   /* pipe */
+    { MID_W_SAW,         0u,   8u,  80u, 100u },   /* synth lead */
+    { MID_W_TRIANGLE,    0u, 120u, 300u,  95u },   /* synth pad: the slowest */
+    { MID_W_NOISE,     300u,   5u, 200u,   0u },   /* effects */
+    { MID_W_TRIANGLE,  900u,   5u, 120u,   0u },   /* ethnic */
+    { MID_W_NOISE,     200u,   1u,  60u,   0u },   /* percussive */
+    { MID_W_NOISE,     250u,   2u, 150u,   0u }    /* sound effects */
 };
 
-static void mid_drum(nj_u4 note, nj_u1 *wave, nj_u2 *decay_ms)
+static void mid_drum(nj_u4 note, mid_timbre *t)
 {
+    t->sustain = 0u;
+    t->attack_ms = 1u;
     if (note == 35u || note == 36u) {               /* kick */
-        *wave = MID_W_TRIANGLE;
-        *decay_ms = 120u;
+        t->wave = MID_W_TRIANGLE;
+        t->decay_ms = 120u;
+        t->release_ms = 40u;
     } else if (note == 38u || note == 40u) {        /* snare */
-        *wave = MID_W_NOISE;
-        *decay_ms = 130u;
+        t->wave = MID_W_NOISE;
+        t->decay_ms = 130u;
+        t->release_ms = 30u;
     } else if (note == 42u || note == 44u || note == 46u) {  /* hats */
-        *wave = MID_W_NOISE;
-        *decay_ms = 45u;
+        t->wave = MID_W_NOISE;
+        t->decay_ms = 45u;
+        t->release_ms = 15u;
     } else if (note >= 47u && note <= 50u) {        /* toms */
-        *wave = MID_W_TRIANGLE;
-        *decay_ms = 180u;
+        t->wave = MID_W_TRIANGLE;
+        t->decay_ms = 180u;
+        t->release_ms = 50u;
     } else {
-        *wave = MID_W_NOISE;
-        *decay_ms = 90u;
+        t->wave = MID_W_NOISE;
+        t->decay_ms = 90u;
+        t->release_ms = 40u;
     }
 }
 
@@ -240,6 +250,9 @@ typedef struct {
     nj_u4 chan;
     nj_u1 wave;                 /* resolved from the channel's program */
     nj_u2 decay_ms;             /* 0 = held */
+    nj_u2 attack_ms;
+    nj_u2 release_ms;
+    nj_u1 sustain;              /* 0..127 of full level */
     nj_u4 gain;                 /* channel volume * expression, 0..127 */
     int   on;
 } mid_note;
@@ -284,11 +297,12 @@ typedef struct {
     nj_u4      mod[16];         /* CC1 vibrato depth at the end of the file */
     nj_u4      reverb[16];      /* CC91 send at the end of the file */
     nj_u4      rpn[16];         /* the registered parameter being selected */
+    nj_u2      max_release_ms;  /* the longest release any note asked for */
 } mid_song;
 
 static int mid_add_note(mid_song *s, const nj_midi_mem *mem,
                         nj_u4 tick, nj_u4 note, nj_u4 vel, int on,
-                        nj_u1 wave, nj_u2 decay_ms, nj_u4 gain, nj_u4 chan)
+                        const mid_timbre *t, nj_u4 gain, nj_u4 chan)
 {
     if (s->nnotes == s->capnotes) {
         nj_u4 cap = (s->capnotes == 0u) ? 256u : s->capnotes * 2u;
@@ -314,8 +328,14 @@ static int mid_add_note(mid_song *s, const nj_midi_mem *mem,
     s->notes[s->nnotes].note = note;
     s->notes[s->nnotes].velocity = vel;
     s->notes[s->nnotes].chan = chan;
-    s->notes[s->nnotes].wave = wave;
-    s->notes[s->nnotes].decay_ms = decay_ms;
+    s->notes[s->nnotes].wave = (t != NULL) ? t->wave : 0u;
+    s->notes[s->nnotes].decay_ms = (t != NULL) ? t->decay_ms : 0u;
+    s->notes[s->nnotes].attack_ms = (t != NULL) ? t->attack_ms : 0u;
+    s->notes[s->nnotes].release_ms = (t != NULL) ? t->release_ms : 0u;
+    s->notes[s->nnotes].sustain = (t != NULL) ? t->sustain : 0u;
+    if (t != NULL && t->release_ms > s->max_release_ms) {
+        s->max_release_ms = t->release_ms;      /* the render has to outlast it */
+    }
     s->notes[s->nnotes].gain = gain;
     s->notes[s->nnotes].on = on;
     s->nnotes++;
@@ -494,26 +514,23 @@ static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
                     }
                 }
             } else if (hi == 0x90u && d2 != 0u) {
-                nj_u1 wave;
-                nj_u2 decay_ms;
+                mid_timbre t;
                 nj_u4 gain;
                 nj_u4 note = d1 & 0x7Fu;
 
                 if (chan == MID_CHANNEL_DRUMS) {
-                    mid_drum(note, &wave, &decay_ms);
+                    mid_drum(note, &t);
                 } else {
-                    mid_timbre t = mid_timbres[(s->program[chan] & 0x7Fu) / 8u];
-                    wave = t.wave;
-                    decay_ms = t.decay_ms;
+                    t = mid_timbres[(s->program[chan] & 0x7Fu) / 8u];
                 }
                 gain = (s->volume[chan] & 0x7Fu) * (s->expr[chan] & 0x7Fu) / 127u;
                 if (!mid_add_note(s, mem, tick, note, d2 & 0x7Fu, 1,
-                                  wave, decay_ms, gain, chan)) {
+                                  &t, gain, chan)) {
                     return;
                 }
             } else if (hi == 0x80u || hi == 0x90u) {
                 if (!mid_add_note(s, mem, tick, d1 & 0x7Fu, 0u, 0,
-                                  0u, 0u, 0u, chan)) {
+                                  NULL, 0u, chan)) {
                     return;
                 }
             }
@@ -583,6 +600,9 @@ typedef struct {
     nj_s4 amp;                  /* 0..32767 */
     nj_s4 lp;                   /* one-pole low pass state */
     nj_u4 decay;                /* amplitude lost per sample (0 = held) */
+    nj_s4 sustain;              /* the level the decay settles on */
+    nj_u4 attack;               /* samples to reach full level */
+    nj_u4 release;              /* samples to fall silent after the note off */
     nj_u4 start;                /* sample the note starts at */
     nj_u4 end;                  /* sample the note stops at (0 = never) */
 } mid_voice;
@@ -826,7 +846,12 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                 last = song.ctls[i].tick;
             }
         }
-        frames = mid_sample_at(&song, last) + (NJ_MIDI_RATE / 20u);
+        nj_u4 tail = NJ_MIDI_RATE / 20u;
+        nj_u4 rel = (nj_u4)song.max_release_ms * (NJ_MIDI_RATE / 1000u);
+        if (rel > tail) {
+            tail = rel;         /* a pad's 300 ms release must not be cut off */
+        }
+        frames = mid_sample_at(&song, last) + tail;
     }
     for (i = 0u; i < 16u; i++) {
         if (song.reverb[i] != 0u) {
@@ -932,7 +957,9 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                     if (voices[v].active && voices[v].chan == ch
                         && voices[v].sustained) {
                         voices[v].sustained = 0;
-                        voices[v].end = i;
+                        /* The release runs INTO the end, so the note keeps
+                         * sounding while it fades. */
+                        voices[v].end = i + voices[v].release;
                     }
                 }
             }
@@ -985,6 +1012,18 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                         voices[v].decay = (nj_u4)(voices[v].amp / (nj_s4)span) + 1u;
                     }
                 }
+                voices[v].sustain = (nj_s4)(voices[v].amp
+                    * (nj_s4)song.notes[ev].sustain / 127);
+                voices[v].attack = (nj_u4)song.notes[ev].attack_ms
+                    * (NJ_MIDI_RATE / 1000u);
+                if (voices[v].attack == 0u) {
+                    voices[v].attack = 1u;      /* no division by zero */
+                }
+                voices[v].release = (nj_u4)song.notes[ev].release_ms
+                    * (NJ_MIDI_RATE / 1000u);
+                if (voices[v].release == 0u) {
+                    voices[v].release = NJ_MIDI_RATE / 125u;
+                }
                 voices[v].rev = rev_now[song.notes[ev].chan];
                 voices[v].lfo = 0u;
                 voices[v].mod = mod_now[song.notes[ev].chan]
@@ -1001,7 +1040,9 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                         if (pedal_now[ch]) {
                             voices[v].sustained = 1;    /* the pedal holds it */
                         } else {
-                            voices[v].end = i;
+                            /* The note stops sounding one release later: the
+                             * ramp below fades it out over that time. */
+                            voices[v].end = i + voices[v].release;
                         }
                         break;
                     }
@@ -1024,25 +1065,33 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
             if (voices[v].end != 0u && i >= voices[v].end) {
                 continue;
             }
-            if (voices[v].decay != 0u) {
+            if (voices[v].decay != 0u && voices[v].amp > voices[v].sustain) {
                 /* A struck note loses amplitude every sample, whether or not
-                 * the file ever sends a note off. */
-                if (voices[v].amp <= (nj_s4)voices[v].decay) {
-                    voices[v].active = 0;
-                    continue;
-                }
+                 * the file ever sends a note off, but only down to the level
+                 * its family sustains at. */
                 voices[v].amp -= (nj_s4)voices[v].decay;
+                if (voices[v].amp <= voices[v].sustain) {
+                    voices[v].amp = voices[v].sustain;
+                    if (voices[v].sustain <= 0) {
+                        voices[v].active = 0;
+                        continue;
+                    }
+                }
                 amp = voices[v].amp;
             }
             age = i - voices[v].start;
-            /* 4 ms attack, 8 ms release: enough to stop the clicks that make
-             * a square wave sound like a fault rather than a note. */
-            if (age < NJ_MIDI_RATE / 250u) {
-                amp = amp * (nj_s4)age / (nj_s4)(NJ_MIDI_RATE / 250u);
+            /*
+             * The envelope each family asked for: an attack that is 2 ms on a
+             * piano and 120 ms on a pad, and a release that is 15 ms on a
+             * hi-hat and 300 ms on a pad.  The old fixed 4 ms/8 ms pair is
+             * what made every instrument sound like the same buzzer.
+             */
+            if (age < voices[v].attack) {
+                amp = amp * (nj_s4)age / (nj_s4)voices[v].attack;
             } else if (voices[v].end != 0u) {
                 nj_u4 left = voices[v].end - i;
-                if (left < NJ_MIDI_RATE / 125u) {
-                    amp = amp * (nj_s4)left / (nj_s4)(NJ_MIDI_RATE / 125u);
+                if (left < voices[v].release) {
+                    amp = amp * (nj_s4)left / (nj_s4)voices[v].release;
                 }
             }
             voices[v].phase += voices[v].step;

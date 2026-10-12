@@ -2020,13 +2020,14 @@ static void test_midi_player_is_pcm(nj_vm *vm)
         return;
     }
 
-    /* 0.5 s of note plus the 50 ms release tail; the frame count follows the
-     * renderer's sample rate, the duration does not. */
+    /* 0.5 s of note plus the renderer's tail for the release: the longest
+     * release any note in this file asked for, which is the piano bank's
+     * 140 ms.  The frame count follows the renderer's sample rate, the
+     * duration does not. */
     dur.bits = 0u;
     OK(nj_call(vm, ret.r, PLAYER, "getDuration", "()J", NULL, &dur) == NJ_OK);
-    /* 0.55 s, to the microsecond the frame count allows: the renderer rounds
-     * frames to whole samples, so the exact figure follows the rate. */
-    OK_MSG(dur.j >= 540000LL && dur.j <= 560000LL,
+    /* 14105 frames at 22050 Hz is 639682 us; allow the rounding either way. */
+    OK_MSG(dur.j >= 630000LL && dur.j <= 650000LL,
            "the MIDI Player knows its duration (got %lld us)",
            (long long)dur.j);
 
@@ -2035,9 +2036,10 @@ static void test_midi_player_is_pcm(nj_vm *vm)
     data = (f != NULL) ? nj_field_read_ref(vm, ret.r, f) : NULL;
     OK_MSG(data != NULL, "the MIDI Player holds PCM");
     if (data != NULL) {
-        OK_MSG(data->length == 2u * (NJ_MIDI_RATE / 2u + NJ_MIDI_RATE / 20u),
+        OK_MSG(data->length == 2u * (NJ_MIDI_RATE / 2u
+                                     + 140u * (NJ_MIDI_RATE / 1000u)),
                "%u frames of 16-bit mono PCM (got %u bytes)",
-               (unsigned)(NJ_MIDI_RATE / 2u + NJ_MIDI_RATE / 20u),
+               (unsigned)(NJ_MIDI_RATE / 2u + 140u * (NJ_MIDI_RATE / 1000u)),
                (unsigned)data->length);
     }
 }

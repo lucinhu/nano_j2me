@@ -333,10 +333,12 @@ int main(void)
         return g_failures != 0;
     }
 
-    /* 480 ticks at 500000 us per quarter is 0.5 s, plus the 50 ms tail the
-     * renderer adds for the release.  The sample count follows the rate. */
+    /* 480 ticks at 500000 us per quarter is 0.5 s, plus the tail the renderer
+     * adds for the release: the longest release any note in the file asked
+     * for - the piano bank's 140 ms here - and never less than 50 ms.  The
+     * sample count follows the rate. */
     check(frames >= NJ_MIDI_RATE / 2u
-          && frames <= NJ_MIDI_RATE / 2u + NJ_MIDI_RATE / 10u,
+          && frames <= NJ_MIDI_RATE / 2u + NJ_MIDI_RATE * 3u / 20u,
           "the render is 0.5 s plus the release tail");
     if (frames < NJ_MIDI_RATE / 2u) {
         printf("     frames = %u\n", (unsigned)frames);
@@ -569,8 +571,10 @@ int main(void)
      * not ask for reverb sounds exactly as it did before.
      */
     {
-        static const nj_u1 wet_body[] = { 0xB0, 91, 127, 0x00, 0xC0, 40 };
-        static const nj_u1 dry_body[] = { 0xC0, 40 };
+        /* Organ: it holds, and its 40 ms release is over before the tail
+         * window opens, so a dry note really is silent there. */
+        static const nj_u1 wet_body[] = { 0xB0, 91, 127, 0x00, 0xC0, 16 };
+        static const nj_u1 dry_body[] = { 0xC0, 16 };
         nj_u1 *pcm;
         nj_u4 fr = 0u;
         nj_u8 wet_tail = 0u, dry_tail = 0u, wet_note = 0u, dry_note = 0u;
@@ -646,7 +650,8 @@ int main(void)
     {
         static const nj_u1 sus_body[] = {
             0x00, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20,
-            0x00, 0xC0, 40,                             /* strings */
+            0x00, 0xC0, 16,                             /* organ: holds, and
+                                                         * releases in 40 ms */
             0x00, 0xB0, 64, 127,                        /* pedal down */
             0x00, 0x90, 69, 100,                        /* A4 on */
             0x81, 0x70, 0x80, 69, 64,                   /* +240: note off */
@@ -655,7 +660,7 @@ int main(void)
         };
         static const nj_u1 dry_body[] = {
             0x00, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20,
-            0x00, 0xC0, 40,
+            0x00, 0xC0, 16,
             0x00, 0x90, 69, 100,
             0x81, 0x70, 0x80, 69, 64,
             0x00, 0xFF, 0x2F, 0x00
@@ -673,8 +678,10 @@ int main(void)
             held = pcm_rms(pcm, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 4u);
             after = pcm_rms(pcm, fr, NJ_MIDI_RATE * 3u / 10u,
                             NJ_MIDI_RATE * 48u / 100u);
-            released = pcm_rms(pcm, fr, NJ_MIDI_RATE * 52u / 100u,
-                               NJ_MIDI_RATE * 55u / 100u);
+            /* The pedal comes up at 0.5 s and the release is 40 ms, so the
+             * note is gone by 0.55 s. */
+            released = pcm_rms(pcm, fr, NJ_MIDI_RATE * 55u / 100u,
+                               NJ_MIDI_RATE * 6u / 10u);
             t_free(NULL, pcm);
         }
         n = build_track(file, dry_body, (nj_u4)sizeof(dry_body));
@@ -698,6 +705,81 @@ int main(void)
                    (unsigned long long)held, (unsigned long long)after,
                    (unsigned long long)released, (unsigned long long)dry_held,
                    (unsigned long long)dry_after);
+        }
+    }
+
+    /*
+     * Per-family ADSR.  The banks differ in more than waveform now: a string
+     * section fades in over 45 ms and then holds its level, a piano is struck
+     * and keeps decaying, an organ is at full level within 6 ms and has
+     * stopped 40 ms after its note off where a string section is still
+     * sounding 130 ms later.
+     */
+    {
+        /* No delta bytes: build_voiced() writes one before the prefix. */
+        static const nj_u1 organ_pre[] = { 0xC0u, 16u };
+        static const nj_u1 str_pre[]   = { 0xC0u, 40u };
+        static const nj_u1 piano_pre[] = { 0xC0u, 0u };
+        nj_u1 file[128];
+        nj_u4 n, fr = 0u;
+        nj_u4 off = NJ_MIDI_RATE / 2u;      /* the note off lands at 0.5 s */
+        nj_u4 o_head = 0u, o_body = 0u, o_rel = 0u;
+        nj_u4 s_head = 0u, s_body = 0u, s_rel = 0u;
+        nj_u4 s_early = 0u, s_late = 0u, p_early = 0u, p_late = 0u;
+        nj_u1 *m;
+
+        n = build_voiced(file, organ_pre, (nj_u4)sizeof(organ_pre), 0u, 69u);
+        m = nj_midi_render(file, n, &fr, &MEM);
+        check(m != NULL, "the organ note renders");
+        if (m != NULL) {
+            o_head = pcm_rms(m, fr, 0u, NJ_MIDI_RATE / 50u);
+            o_body = pcm_rms(m, fr, NJ_MIDI_RATE * 3u / 50u, NJ_MIDI_RATE * 6u / 50u);
+            o_rel  = pcm_rms(m, fr, off + NJ_MIDI_RATE / 20u,
+                             off + NJ_MIDI_RATE * 13u / 100u);
+            t_free(NULL, m);
+        }
+        n = build_voiced(file, str_pre, (nj_u4)sizeof(str_pre), 0u, 69u);
+        m = nj_midi_render(file, n, &fr, &MEM);
+        check(m != NULL, "the strings note renders");
+        if (m != NULL) {
+            s_head = pcm_rms(m, fr, 0u, NJ_MIDI_RATE / 50u);
+            s_body = pcm_rms(m, fr, NJ_MIDI_RATE * 3u / 50u, NJ_MIDI_RATE * 6u / 50u);
+            s_early = pcm_rms(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 5u);
+            s_late = pcm_rms(m, fr, NJ_MIDI_RATE * 3u / 10u, NJ_MIDI_RATE * 9u / 20u);
+            s_rel = pcm_rms(m, fr, off + NJ_MIDI_RATE / 20u,
+                            off + NJ_MIDI_RATE * 13u / 100u);
+            t_free(NULL, m);
+        }
+        n = build_voiced(file, piano_pre, (nj_u4)sizeof(piano_pre), 0u, 69u);
+        m = nj_midi_render(file, n, &fr, &MEM);
+        check(m != NULL, "the piano note renders");
+        if (m != NULL) {
+            p_early = pcm_rms(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 5u);
+            p_late = pcm_rms(m, fr, NJ_MIDI_RATE * 3u / 10u, NJ_MIDI_RATE * 9u / 20u);
+            t_free(NULL, m);
+        }
+
+        check(o_body > 0u && o_head * 2u > o_body,
+              "the organ reaches its level within 20 ms");
+        check(s_body > 0u && s_head * 2u < s_body,
+              "the strings are still fading in after 20 ms");
+        check(s_early > 0u && s_late * 10u > s_early * 9u,
+              "the strings bank holds the level its attack reached");
+        check(p_early > 0u && p_late * 10u < p_early * 9u,
+              "the piano bank keeps decaying after its attack");
+        check(s_rel > 0u && o_rel * 10u < s_rel,
+              "an organ stops sooner after the note off than a string section");
+        if (!(o_body > 0u && o_head * 2u > o_body)
+            || !(s_body > 0u && s_head * 2u < s_body)
+            || !(s_early > 0u && s_late * 10u > s_early * 9u)
+            || !(p_early > 0u && p_late * 10u < p_early * 9u)
+            || !(s_rel > 0u && o_rel * 10u < s_rel)) {
+            printf("     adsr rms: organ head %u body %u rel %u | strings head %u"
+                   " body %u early %u late %u rel %u | piano early %u late %u\n",
+                   (unsigned)o_head, (unsigned)o_body, (unsigned)o_rel,
+                   (unsigned)s_head, (unsigned)s_body, (unsigned)s_early,
+                   (unsigned)s_late, (unsigned)s_rel, (unsigned)p_early,
+                   (unsigned)p_late);
         }
     }
 
