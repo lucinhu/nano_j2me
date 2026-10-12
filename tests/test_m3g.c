@@ -296,6 +296,85 @@ int main(void)
               "Light.SPOT is declared as a static field");
     }
 
+    /*
+     * The members that arrived with Light.  test_natives can prove a binding
+     * exists; only this can prove the getter reads the field the setter wrote,
+     * which is the failure mode that actually happened elsewhere in this tree
+     * (Integer.hashCode declared, unbound; a setter writing one field while its
+     * getter read another).
+     *
+     * Only round trips with an unambiguous answer are asserted.  JSR 184 gives
+     * Texture2D.setFiltering(int,int) but no per-axis getter, so there is no
+     * honest way to check both halves - asserting "one of the two" would be a
+     * test that cannot fail.
+     */
+    {
+        nj_value a[4], r;
+        nj_ref img, tex, app, g3, lit, xf, poly;
+
+        memset(&r, 0, sizeof(r));
+        memset(a, 0, sizeof(a));
+
+        a[0].i = 8; a[1].i = 8; a[2].i = 0;
+        img = nj_object_new(vm, CLS("Image2D"));
+        check(img != 0 &&
+              nj_call_special(vm, img, CLS("Image2D"), "<init>", "(III)V", a, NULL) == NJ_OK,
+              "an Image2D can be constructed");
+
+        a[0].r = img;
+        tex = nj_object_new(vm, CLS("Texture2D"));
+        check(tex != 0 &&
+              nj_call_special(vm, tex, CLS("Texture2D"), "<init>",
+                              "(L" CLS("Image2D") ";)V", a, NULL) == NJ_OK,
+              "a Texture2D can be constructed around it");
+
+        app  = make(vm, CLS("Appearance"));
+        g3   = make(vm, CLS("Graphics3D"));
+        lit  = make(vm, CLS("Light"));
+        xf   = make(vm, CLS("Transform"));
+        poly = make(vm, CLS("PolygonMode"));
+        check(app && g3 && lit && xf && poly, "the Light-era classes construct");
+
+        if (tex && img) {
+            call(vm, tex, CLS("Texture2D"), "getImage",
+                 "()L" CLS("Image2D") ";", NULL, &r);
+            check(r.r == img, "Texture2D.getImage returns the image it was built with");
+
+            a[0].r = img;
+            call(vm, tex, CLS("Texture2D"), "setImage",
+                 "(L" CLS("Image2D") ";)V", a, NULL);
+            call(vm, tex, CLS("Texture2D"), "getImage",
+                 "()L" CLS("Image2D") ";", NULL, &r);
+            check(r.r == img, "Texture2D.setImage and getImage agree");
+        }
+
+        if (app && tex) {
+            a[0].i = 0; a[1].r = tex;
+            call(vm, app, CLS("Appearance"), "setTexture",
+                 "(IL" CLS("Texture2D") ";)V", a, NULL);
+            call(vm, app, CLS("Appearance"), "getTexture",
+                 "(I)L" CLS("Texture2D") ";", a, &r);
+            check(r.r == tex, "Appearance.setTexture and getTexture agree");
+        }
+
+        if (g3 && lit && xf) {
+            a[0].r = lit; a[1].r = xf;
+            call(vm, g3, CLS("Graphics3D"), "addLight",
+                 "(L" CLS("Light") ";L" CLS("Transform") ";)I", a, &r);
+            check(r.i == 0, "the first addLight is index 0");
+            call(vm, g3, CLS("Graphics3D"), "addLight",
+                 "(L" CLS("Light") ";L" CLS("Transform") ";)I", a, &r);
+            check(r.i == 1, "the second addLight is index 1");
+        }
+
+        if (poly) {
+            a[0].i = 161;
+            call(vm, poly, CLS("PolygonMode"), "setCulling", "(I)V", a, NULL);
+            call(vm, poly, CLS("PolygonMode"), "getCulling", "()I", NULL, &r);
+            check(r.i == 161, "PolygonMode.setCulling and getCulling agree");
+        }
+    }
+
     nj_vm_destroy(vm);
     printf("%d checks, %d failures\n", checks, failures);
     if (failures) {
