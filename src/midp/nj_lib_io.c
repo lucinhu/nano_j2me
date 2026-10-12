@@ -866,12 +866,20 @@ NJFN(dis_read_char)
 NJFN(dis_readUTF)
 {
     nj_ref in = dis_in(vm, NJ_THIS(args));
-    nj_s4 len = NJ_CALL(dis_read_unsigned_short, vm, th, args, ret);
+    nj_s4 len;
     nj_u2 *tmp;
     nj_s4 i, n = 0;
     nj_ref out;
 
-    if (len < 0 || vm->exception) {
+    /* The length lives in `ret`, not in this call's return value: NJ_CALL
+     * returns a status, so assigning it to `len` made every readUTF() return
+     * the empty string and leave the string's own bytes in the stream for the
+     * next read to walk into. */
+    if (NJ_CALL(dis_read_unsigned_short, vm, th, args, ret) != NJ_OK) {
+        return NJ_ERR;
+    }
+    len = ret->i;
+    if (len < 0) {
         return NJ_ERR;
     }
     tmp = (nj_u2 *)nj_host_alloc(vm, ((nj_size)len + 1u) * sizeof(nj_u2));
