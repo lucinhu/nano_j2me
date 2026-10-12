@@ -109,6 +109,36 @@ static int bounded_free(void *ud)
     return BOUNDED_LIMIT;
 }
 
+/*
+ * A port that can decode what the runtime cannot.
+ *
+ * The runtime ships no AMR decoder and says so by name; this is what a phone
+ * with a hardware codec, or a desktop with libavcodec, fills in.  It reports
+ * 32 bytes of silence -- 16 frames at 8000 Hz, i.e. a 2000 microsecond file --
+ * so the assertions can tell the port's numbers from the runtime's.
+ */
+static nj_status fake_amr_decode(void *ud, const nj_u1 *in, nj_u4 in_len,
+                                 nj_u1 *out, nj_u4 out_cap, nj_u4 *out_len,
+                                 nj_u4 *sample_rate, nj_u4 *channels)
+{
+    (void)ud;
+    *sample_rate = 8000u;
+    *channels = 1u;
+    if (!out) {
+        *out_len = 32u;
+        return NJ_OK;
+    }
+    if (out_cap < 32u) {
+        return NJ_ERR_FORMAT;
+    }
+    if (in_len < 6u || in[0] != '#' || in[2] != 'A') {
+        return NJ_ERR_UNSUPPORTED;   /* decline anything that is not AMR */
+    }
+    memset(out, 0, 32u);
+    *out_len = 32u;
+    return NJ_OK;
+}
+
 int main(int argc, char **argv)
 {
     nj_port port;
@@ -265,6 +295,38 @@ int main(int argc, char **argv)
         ok(nj_port_headless_pcm_closes(&port) >= 1,
            "the device is closed once the file ends");
         nj_port_shutdown(&port);
+    }
+
+    /*
+     * The same fixture again, with a port that has a decoder of its own.  The
+     * rounds above assert the refusal; this asserts the difference the hook
+     * exists to make, and that the numbers come from the port rather than
+     * from a guess the runtime made.
+     */
+    {
+        memset(&cap, 0, sizeof(cap));
+        if (nj_port_headless_ex(&port, 176, 208, 0, NULL) == NJ_OK) {
+            port.log = cap_log;
+            port.user = &cap;
+            port.fps_cap = 0;
+            port.audio_decode = fake_amr_decode;
+            memset(&opts, 0, sizeof(opts));
+            opts.jar_path = jar;
+            opts.heap_bytes = 4u * 1024u * 1024u;
+            (void)nj_run(&port, &opts);
+
+            ok(nj_port_headless_pcm_frames(&port) > 0,
+               "the PCM the port produced is what reaches the device");
+            ok(field(cap.buf, "AUDIO amrrefused=", v, sizeof(v)) == 0,
+               "nothing is refused once the port can decode it");
+            ok(field(cap.buf, "AUDIO amrstate=", v, sizeof(v)) &&
+               strcmp(v, "400") == 0,
+               "an AMR player reaches STARTED through the port's decoder");
+            ok(field(cap.buf, "AUDIO amr=", v, sizeof(v)) &&
+               strcmp(v, "2000") == 0,
+               "the duration is the port's PCM, not a guess");
+            nj_port_shutdown(&port);
+        }
     }
 
     printf("\n%d checks, %d failures\n", checks, fails);

@@ -334,6 +334,25 @@ typedef struct nj_port {
     int   height;         /* 0 => use NJ_SCREEN_HEIGHT */
     int   fullscreen;
     int   scale;          /* integer upscale hint for desktop windows (>=1) */
+    /*
+     * Optional audio decoder, for platforms that have one.
+     *
+     * The runtime decodes PCM WAV and synthesises MIDI itself, and names what
+     * it cannot do (8 collected titles ship AMR effects and 5 ship MP3).  A
+     * port that can decode more fills this in and the runtime hands it the
+     * whole file, then plays whatever PCM comes back -- so a phone with a
+     * hardware codec, or a desktop with libavcodec, plays the file instead of
+     * being told no.
+     *
+     * Called twice: once with out == NULL to report how much room is needed,
+     * then with a buffer the runtime allocated and therefore owns.  Return
+     * NJ_ERR_UNSUPPORTED to decline a container and get the usual refusal.
+     * PCM is signed 16-bit little-endian, interleaved.
+     */
+    nj_status (*audio_decode)(void *ud, const nj_u1 *in, nj_u4 in_len,
+                              nj_u1 *out, nj_u4 out_cap, nj_u4 *out_len,
+                              nj_u4 *sample_rate, nj_u4 *channels);
+
     int   fps_cap;        /* 0 => uncapped */
     const char *rms_dir;  /* where RecordStore files live (hosted ports) */
 

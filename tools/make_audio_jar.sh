@@ -35,6 +35,11 @@ hdr = (b'RIFF' + struct.pack('<I', 36 + len(samples)) + b'WAVE'
 open(sys.argv[1], 'wb').write(hdr + samples)
 PY
 
+# An AMR file, for the port-hook path.  The runtime ships no AMR decoder and
+# says so by name; a port that fills in nj_port.audio_decode plays it instead.
+# The bytes only have to be recognised as AMR by the sniffer.
+{ printf '#!AMR\n'; head -c 64 /dev/zero; } > "$WORK/classes/res/tone.amr"
+
 cat > "$WORK/src/snd/AudioDemo.java" <<'JAVA'
 package snd;
 
@@ -118,6 +123,25 @@ public class AudioDemo extends MIDlet implements PlayerListener {
                 System.out.println("AUDIO wavstate=" + w.getState());
                 w.deallocate();
                 w.close();
+
+            /* 4. AMR: no decoder in the runtime, so the port hook decides. */
+            InputStream amr = getClass().getResourceAsStream("/res/tone.amr");
+            if (amr == null) {
+                System.out.println("AUDIO amr=missing");
+            } else {
+                try {
+                    Player a = Manager.createPlayer(amr, "audio/amr");
+                    a.realize();
+                    a.prefetch();
+                    a.start();
+                    System.out.println("AUDIO amr=" + a.getDuration());
+                    System.out.println("AUDIO amrstate=" + a.getState());
+                    a.deallocate();
+                    a.close();
+                } catch (Exception e) {
+                    System.out.println("AUDIO amrrefused=" + e.getMessage());
+                }
+            }
                 in.close();
             }
 

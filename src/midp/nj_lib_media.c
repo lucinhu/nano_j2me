@@ -955,6 +955,41 @@ NJFN(media_createPlayer_stream)
             ret->r = p;
             return NJ_OK;
         }
+        /*
+         * A port that has a decoder of its own gets the file before the
+         * refusal.  The runtime owns the buffer it hands over, so the port
+         * never has to allocate and never has to free.
+         */
+        if (vm->port && vm->port->audio_decode) {
+            nj_u4 need = 0u, rate = 0u, chan = 0u;
+            if (vm->port->audio_decode(vm->port->ud, barray_bytes(data),
+                                       barray_len(data), NULL, 0u, &need,
+                                       &rate, &chan) == NJ_OK &&
+                need > 0u && rate > 0u && chan > 0u) {
+                nj_ref pcm = nj_byte_array_new(vm, need);
+                if (!pcm) {
+                    nj_root_release(vm, mark);
+                    return NJ_ERR;
+                }
+                if (vm->port->audio_decode(vm->port->ud, barray_bytes(data),
+                                           barray_len(data), pcm->u.bytes, need,
+                                           &need, &rate, &chan) == NJ_OK &&
+                    need > 0u) {
+                    nj_s4 frames = (nj_s4)(need / (2u * chan));
+                    w_r(vm, p, F_P_DATA, "[B", pcm);
+                    w_i(vm, p, F_P_RATE, (nj_s4)rate);
+                    w_i(vm, p, F_P_CHAN, (nj_s4)chan);
+                    w_i(vm, p, F_P_FRAMES, frames);
+                    w_j(vm, p, F_P_DURATION,
+                        (nj_s8)frames * 1000000LL / (nj_s8)rate);
+                    nj_logf(vm, 3, "media: the port decoded %s into %u PCM "
+                                   "bytes", what, (unsigned)need);
+                    nj_root_release(vm, mark);
+                    ret->r = p;
+                    return NJ_OK;
+                }
+            }
+        }
         nj_logf(vm, 3, "media: cannot play %s", what);
         nj_root_release(vm, mark);
         return nj_throw(vm, NJ_C_MEXC, media_refusal(what));
