@@ -653,6 +653,65 @@ NJFN(int_toString_radix)
     return ret->r ? NJ_OK : nj_throw_oom(vm);
 }
 
+/*
+ * The 64-bit twin of to_radix_string.  A long needs twenty digits in base ten
+ * and sixty-four in base two, and the magnitude has to be taken in unsigned
+ * arithmetic so that Long.MIN_VALUE does not overflow on the way in.
+ */
+static nj_ref to_radix_string64(nj_vm *vm, nj_u8 v, int neg, nj_u8 radix)
+{
+    char buf[72];
+    char tmp[72];
+    int i = 0, j = 0;
+
+    if (v == 0u) {
+        tmp[i++] = '0';
+    }
+    while (v != 0u && i < 70) {
+        nj_u8 d = v % radix;
+        tmp[i++] = (char)(d < 10u ? ('0' + (int)d) : ('a' + (int)(d - 10u)));
+        v /= radix;
+    }
+    if (neg) {
+        buf[j++] = '-';
+    }
+    while (i > 0) {
+        buf[j++] = tmp[--i];
+    }
+    buf[j] = '\0';
+    return nj_string_new(vm, buf);
+}
+
+static void long_magnitude(nj_s8 v, nj_u8 *mag, int *neg)
+{
+    *neg = v < 0 ? 1 : 0;
+    *mag = *neg ? (nj_u8)(-(v + 1)) + 1u : (nj_u8)v;
+}
+
+NJFN(long_toString)
+{
+    nj_u8 mag;
+    int neg;
+
+    long_magnitude(NJ_ARG_LONG(args, 0), &mag, &neg);
+    ret->r = to_radix_string64(vm, mag, neg, 10u);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+NJFN(long_toString_radix)
+{
+    nj_s4 r = NJ_ARG_INT(args, 1);
+    nj_u8 mag;
+    int neg;
+
+    if (r < 2 || r > 36) {
+        r = 10;
+    }
+    long_magnitude(NJ_ARG_LONG(args, 0), &mag, &neg);
+    ret->r = to_radix_string64(vm, mag, neg, (nj_u8)r);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
 NJFN(int_valueOf)
 {
     nj_value a1[3];
@@ -857,7 +916,9 @@ static const nj_builtin_method Long_methods[] = {
     M("parseLong", "(Ljava/lang/String;)J", NJ_ACC_STATIC),
     M("parseLong", "(Ljava/lang/String;I)J", NJ_ACC_STATIC),
     M("valueOf",   "(Ljava/lang/String;)Ljava/lang/Long;", NJ_ACC_STATIC),
-    M("valueOf",   "(Ljava/lang/String;I)Ljava/lang/Long;", NJ_ACC_STATIC)
+    M("valueOf",   "(Ljava/lang/String;I)Ljava/lang/Long;", NJ_ACC_STATIC),
+    M("toString",  "(J)Ljava/lang/String;", NJ_ACC_STATIC),
+    M("toString",  "(JI)Ljava/lang/String;", NJ_ACC_STATIC)
 };
 static const nj_builtin_method Short_methods[] = {
     M("<init>",     "(S)V", 0),
@@ -942,6 +1003,8 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Long",      "parseLong",    "(Ljava/lang/String;I)J", Long_parseLong_radix },
     { "java/lang/Long",      "valueOf",      "(Ljava/lang/String;)Ljava/lang/Long;", Long_valueOf_str },
     { "java/lang/Long",      "valueOf",      "(Ljava/lang/String;I)Ljava/lang/Long;", Long_valueOf_str_radix },
+    { "java/lang/Long",      "toString",     "(J)Ljava/lang/String;", long_toString },
+    { "java/lang/Long",      "toString",     "(JI)Ljava/lang/String;", long_toString_radix },
 
     { "java/lang/Short",     "<init>",       "(S)V", Short_init },
     { "java/lang/Short",     "shortValue",   "()S",  Short_value },

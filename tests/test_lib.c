@@ -1382,6 +1382,57 @@ static void test_data_interfaces(nj_vm *vm)
  * fault rather than an exception (tests/games/三国赤壁小乔秘史_7976.jar died that
  * way after printing its first two log lines).
  */
+/*
+ * Long.toString has a long argument, and the port had no such method at all:
+ * tests/games/CS反恐精英(蓝牙对战)_6858.jar died with
+ *   NoSuchMethodError: java/lang/Long.toString(J)Ljava/lang/String;
+ * at the first score it formatted.  The magnitude is taken in unsigned
+ * arithmetic, so Long.MIN_VALUE prints as the JDK prints it.
+ */
+static void test_long_to_string(nj_vm *vm)
+{
+    nj_value a[2];
+    nj_value ret;
+
+    a[0].j = 0;
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, LONGW, "toString", "(J)Ljava/lang/String;", a, &ret) == NJ_OK
+           && nj_string_equals_utf8(ret.r, "0"),
+           "Long.toString(0)");
+    if (nj_has_exception(vm)) { nj_clear_exception(vm); return; }
+
+    a[0].j = -1;
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, LONGW, "toString", "(J)Ljava/lang/String;", a, &ret) == NJ_OK
+           && nj_string_equals_utf8(ret.r, "-1"),
+           "Long.toString(-1)");
+
+    a[0].j = 9007199254740993LL;
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, LONGW, "toString", "(J)Ljava/lang/String;", a, &ret) == NJ_OK
+           && nj_string_equals_utf8(ret.r, "9007199254740993"),
+           "Long.toString keeps every digit of a 53-bit value");
+
+    a[0].j = (-9223372036854775807LL - 1LL);   /* Long.MIN_VALUE */
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, LONGW, "toString", "(J)Ljava/lang/String;", a, &ret) == NJ_OK
+           && nj_string_equals_utf8(ret.r, "-9223372036854775808"),
+           "Long.toString(Long.MIN_VALUE) does not overflow");
+
+    a[0].j = 255;
+    a[1] = vint(16);
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, LONGW, "toString", "(JI)Ljava/lang/String;", a, &ret) == NJ_OK
+           && nj_string_equals_utf8(ret.r, "ff"),
+           "Long.toString(255, 16)");
+
+    a[1] = vint(99);                            /* out of range: base ten */
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, LONGW, "toString", "(JI)Ljava/lang/String;", a, &ret) == NJ_OK
+           && nj_string_equals_utf8(ret.r, "255"),
+           "an out-of-range radix means ten, the way the JDK defaults it");
+}
+
 static void test_image_transform_dimensions(nj_vm *vm)
 {
     static const struct { int trans; int dw; int dh; } cases[] = {
@@ -1883,6 +1934,7 @@ int main(void)
     test_baos_close_keeps_data(vm);
     test_clip_negative_is_empty(vm);
     test_image_transform_dimensions(vm);
+    test_long_to_string(vm);
     test_player_survives_collection(vm);
     test_image_survives_collection(vm);
 
