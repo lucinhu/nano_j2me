@@ -215,6 +215,13 @@ static const nj_builtin_field sound_fields[] = {
 static const nj_builtin_method sound_methods[] = {
     M("<init>",        "(IJ)V", 0),
     M("<init>",        "([BI)V", 0),
+    /*
+     * The same two payloads are also reachable as a plain init() method, and
+     * 3D滚球_11586 calls it that way.  Declaring only the constructors made
+     * the class exist and the call fail, which is the worst of both.
+     */
+    M("init",          "(IJ)V", 0),
+    M("init",          "([BI)V", 0),
     M("play",          "(I)V",  0),
     M("stop",          "()V",   0),
     M("setGain",       "(I)V",  0),
@@ -476,6 +483,8 @@ const nj_native_entry nj_lib_nokia_table[] = {
     { NJ_C_FSDETAIL, "<init>",  "()V", nokia_fsd_init },
     { NJ_C_SOUND, "<init>",  "(IJ)V", nokia_snd_init },
     { NJ_C_SOUND, "<init>",  "([BI)V", nokia_snd_init },
+    { NJ_C_SOUND, "init",    "(IJ)V", nokia_snd_init },
+    { NJ_C_SOUND, "init",    "([BI)V", nokia_snd_init },
     { NJ_C_SOUND, "play",    "(I)V",  nokia_snd_play },
     { NJ_C_SOUND, "stop",    "()V",   nokia_snd_stop },
     { NJ_C_SOUND, "setGain", "(I)V",  nokia_snd_setGain },
