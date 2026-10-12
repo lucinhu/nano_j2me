@@ -44,6 +44,7 @@
 #include "nj2me/nj.h"
 
 #include "nj_internal.h" /* nj_class_load: the fixtures below are raw classes */
+#include "nj_midp.h"     /* nj_midp_image_pixels: assert on an Image's store */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1370,6 +1371,89 @@ static void test_data_interfaces(nj_vm *vm)
 /* setClip() with a negative size leaves an empty clip; it does not throw.
  * The comment above g_setClip() names the two corpus titles that do this once
  * per frame. */
+/*
+ * Image.createImage(Image, x, y, w, h, transform) is the copy-and-transform
+ * constructor.  The quarter turns produce an image h wide and w high: every
+ * pixel of the w x h source region is rotated into it.  The port allocated
+ * w x h for every transform and ran the copy over the source dimensions, so
+ * for TRANS_ROT270 the inverse mapping read the source at ux = w - 1 - j,
+ * which goes negative as soon as the destination row index reaches w - and a
+ * negative index in nj_size arithmetic is a wild read, i.e. a segmentation
+ * fault rather than an exception (tests/games/三国赤壁小乔秘史_7976.jar died that
+ * way after printing its first two log lines).
+ */
+static void test_image_transform_dimensions(nj_vm *vm)
+{
+    static const struct { int trans; int dw; int dh; } cases[] = {
+        { 0, 3, 2 }, { 1, 3, 2 }, { 2, 3, 2 }, { 3, 3, 2 },
+        { 4, 2, 3 }, { 5, 2, 3 }, { 6, 2, 3 }, { 7, 2, 3 }
+    };
+    nj_value a[6];
+    nj_value ret;
+    nj_ref src;
+    nj_u4 *px;
+    int n;
+
+    a[0] = vint(3);
+    a[1] = vint(2);
+    ret.bits = 0u;
+    if (nj_call_static(vm, "javax/microedition/lcdui/Image", "createImage",
+                       "(II)Ljavax/microedition/lcdui/Image;", a, &ret) != NJ_OK
+        || ret.r == NULL) {
+        OK_MSG(0, "a 3x2 mutable image: %s", nj_exception_describe(vm));
+        nj_clear_exception(vm);
+        return;
+    }
+    src = ret.r;
+    px = nj_midp_image_pixels(vm, src);
+    OK_MSG(px != NULL, "the source image exposes its pixel store");
+    if (px == NULL) {
+        return;
+    }
+    for (n = 0; n < 6; n++) {
+        px[n] = 0xFF000000u | (nj_u4)n;   /* six distinguishable pixels */
+    }
+
+    for (n = 0; n < (int)(sizeof(cases) / sizeof(cases[0])); n++) {
+        nj_u4 *dpx;
+        a[0].r = src;
+        a[1] = vint(0);
+        a[2] = vint(0);
+        a[3] = vint(3);
+        a[4] = vint(2);
+        a[5] = vint(cases[n].trans);
+        ret.bits = 0u;
+        if (nj_call_static(vm, "javax/microedition/lcdui/Image", "createImage",
+                           "(Ljavax/microedition/lcdui/Image;IIIII)"
+                           "Ljavax/microedition/lcdui/Image;", a, &ret) != NJ_OK
+            || ret.r == NULL) {
+            OK_MSG(0, "transform %d: %s", cases[n].trans, nj_exception_describe(vm));
+            nj_clear_exception(vm);
+            continue;
+        }
+        OK_MSG(nj_call_int(vm, ret.r, "javax/microedition/lcdui/Image",
+                           "getWidth", "()I", NULL) == cases[n].dw,
+               "transform %d is %d wide", cases[n].trans, cases[n].dw);
+        OK_MSG(nj_call_int(vm, ret.r, "javax/microedition/lcdui/Image",
+                           "getHeight", "()I", NULL) == cases[n].dh,
+               "transform %d is %d high", cases[n].trans, cases[n].dh);
+
+        dpx = nj_midp_image_pixels(vm, ret.r);
+        if (dpx == NULL) {
+            OK_MSG(0, "transform %d hands out a pixel store", cases[n].trans);
+            continue;
+        }
+        if (cases[n].trans == 5) {          /* TRANS_ROT90: dst(i,j) = src(j, h-1-i) */
+            OK_MSG((dpx[0] & 0xFFu) == 3u, "TRANS_ROT90 puts src(0,1) at dst(0,0)");
+            OK_MSG((dpx[1] & 0xFFu) == 0u, "TRANS_ROT90 puts src(0,0) at dst(1,0)");
+        } else if (cases[n].trans == 6) {   /* TRANS_ROT270: dst(i,j) = src(w-1-j, i) */
+            OK_MSG((dpx[0] & 0xFFu) == 2u, "TRANS_ROT270 puts src(2,0) at dst(0,0)");
+            OK_MSG((dpx[4] & 0xFFu) == 0u, "TRANS_ROT270 puts src(0,0) at dst(0,2)");
+            OK_MSG((dpx[3] & 0xFFu) == 4u, "TRANS_ROT270 puts src(1,1) at dst(1,1)");
+        }
+    }
+}
+
 static void test_clip_negative_is_empty(nj_vm *vm)
 {
     nj_value a[4];
@@ -1798,6 +1882,7 @@ int main(void)
     test_data_input_available(vm);
     test_baos_close_keeps_data(vm);
     test_clip_negative_is_empty(vm);
+    test_image_transform_dimensions(vm);
     test_player_survives_collection(vm);
     test_image_survives_collection(vm);
 

@@ -159,9 +159,18 @@
 /* ------------------------------------------------------------------ */
 
 /* Java heap size in bytes.  Overridden by the port at runtime when the port
- * supplies its own heap block (nj_port.heap_block). */
+ * supplies its own heap block (nj_port.heap_block).
+ *
+ * The desktop default is 16 MB because MIDlet suites of that size are ordinary
+ * in the corpus this port is measured against.  At 8 MB 愤怒的小鸟-高清版_2353
+ * raises OutOfMemoryError inside luma.k.c while it loads its level tables, and
+ * the game then divides by a rate that never got its value - an
+ * ArithmeticException on screen that looks like a runtime bug and is not.  The
+ * heap is mmap'd lazily and only the live set is touched, so the larger
+ * reservation costs address space, not memory; ports that know better
+ * (ESP32-S3, Android) pin NJ_MAX_HEAP themselves. */
 #ifndef NJ_MAX_HEAP
-#  define NJ_MAX_HEAP (8u * 1024u * 1024u)
+#  define NJ_MAX_HEAP (16u * 1024u * 1024u)
 #endif
 
 /* Maximum java.lang.Thread stack depth (number of frames), and the operand +
