@@ -28,6 +28,10 @@
  *      class that declares it, so `getstatic` must run its <clinit> first.
  *      A title read an interface's static array before that initialiser had
  *      run and died in `iaload` with a NullPointerException on a null array.
+ *   7. Record store overloads - the corpus opens its save file with MIDP
+ *      2.0's (name, create, authmode, writable) and with MIDP 1.0's (name,
+ *      vendor, suite); both were missing, and eight titles died in startApp
+ *      before they had read a record.
  *
  * Usage:  test_lib
  * Exit code 0 on PASS, non-zero otherwise.
@@ -37,7 +41,9 @@
 #include "nj_internal.h" /* nj_class_load: the fixtures below are raw classes */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 /* ------------------------------------------------------------------ */
 /* Assertion machinery                                                 */
@@ -943,6 +949,79 @@ static void test_static_field_init(nj_vm *vm)
     clean(vm, "static field init");
 }
 
+/*
+ * Record store overloads.  The corpus asks for a store in the MIDP 2.0 form
+ * (name, createIfNecessary, authmode, writable) and in MIDP 1.0's three
+ * string form; only (name) and (name, create) were declared, so eight titles
+ * died in startApp with NoSuchMethodError before they read a single record.
+ */
+static void test_rms_overloads(nj_vm *vm)
+{
+    static const char *RS = "javax/microedition/rms/RecordStore";
+    static const char *OPEN4 = "(Ljava/lang/String;ZIZ)"
+                               "Ljavax/microedition/rms/RecordStore;";
+    static const char *OPEN3 = "(Ljava/lang/String;Ljava/lang/String;"
+                               "Ljava/lang/String;)"
+                               "Ljavax/microedition/rms/RecordStore;";
+    nj_value a[4];
+    nj_value ret;
+    nj_ref nm, rs, got;
+
+    nm = nj_string_new(vm, "njlib_overloads");
+    OK_MSG(nm != NULL, "an RMS name can be built");
+
+    /* createIfNecessary = true, AUTHMODE_ANY = 1, writable = true */
+    a[0] = vref(nm);
+    a[1] = vint(1);
+    a[2] = vint(1);
+    a[3] = vint(1);
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, RS, "openRecordStore", OPEN4, a, &ret) == NJ_OK,
+           "MIDP 2.0's openRecordStore(name, create, authmode, writable)");
+    rs = ret.r;
+    OK_MSG(rs != NULL, "the store opened");
+    clean(vm, "opening a store the MIDP 2.0 way");
+    if (!rs) {
+        return;
+    }
+
+    got = nj_call_ref(vm, rs, RS, "getName", "()Ljava/lang/String;", NULL);
+    OK_MSG(got != NULL && nj_string_equals_utf8(got, "njlib_overloads"),
+           "the store knows its own name");
+    clean(vm, "asking the store its name");
+
+    /* The same store through MIDP 1.0's (name, vendor, suite). */
+    a[0] = vref(nm);
+    a[1] = vref(nj_string_new(vm, "nanoj2me"));
+    a[2] = vref(nj_string_new(vm, "test_lib"));
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, RS, "openRecordStore", OPEN3, a, &ret) == NJ_OK,
+           "MIDP 1.0's openRecordStore(name, vendor, suite)");
+    OK_MSG(ret.r != NULL, "the store opens under a vendor and suite too");
+    clean(vm, "opening a store the MIDP 1.0 way");
+
+    /* createIfNecessary = false on a name that is not there.  The spec wants
+     * RecordStoreNotFoundException; a silent NULL would surface much later as
+     * a NullPointerException inside the title. */
+    a[0] = vref(nj_string_new(vm, "njlib_absent_9f3a"));
+    a[1] = vint(0);
+    a[2] = vint(1);
+    a[3] = vint(0);
+    ret.bits = 0u;
+    if (nj_call_static(vm, RS, "openRecordStore", OPEN4, a, &ret) == NJ_OK) {
+        g_fail++;
+        fprintf(stderr, "FAIL %s:%d: a missing store opened anyway\n",
+                __FILE__, __LINE__);
+        clean(vm, "opening a store that is not there");
+    } else {
+        const char *d = nj_exception_describe(vm);
+        OK_MSG(d != NULL && strstr(d, "RecordStoreNotFoundException") != NULL,
+               "a missing store raises RecordStoreNotFoundException: %s",
+               d ? d : "(nothing)");
+        nj_clear_exception(vm);
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -950,6 +1029,7 @@ int main(void)
 {
     nj_port port;
     nj_vm *vm;
+    const char *rms_dir;
 
     printf("== nano_j2me class library test ==\n");
 
@@ -958,6 +1038,19 @@ int main(void)
         fprintf(stderr, "cannot start the headless port\n");
         return 2;
     }
+
+    /*
+     * RMS writes one file per store into nj_port.rms_dir, and the default is
+     * the working directory, so the record store cases below would leave
+     * njlib_overloads.rms wherever the suite happened to run.
+     */
+    rms_dir = getenv("NANO_J2ME_RMS");
+    if (!rms_dir || !*rms_dir) {
+        rms_dir = "tests/out/rms";
+    }
+    (void)mkdir(rms_dir, 0777);
+    port.rms_dir = rms_dir;
+
     vm = nj_vm_create(&port, 2u * 1024u * 1024u);
     if (!vm) {
         fprintf(stderr, "cannot create the VM\n");
@@ -972,6 +1065,7 @@ int main(void)
     test_strings(vm);
     test_numbers(vm);
     test_static_field_init(vm);
+    test_rms_overloads(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

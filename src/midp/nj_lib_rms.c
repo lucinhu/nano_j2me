@@ -646,6 +646,43 @@ NJFN(rs_open_three)
     return NJ_CALL(rs_open, vm, th, args, ret);
 }
 
+NJFN(rs_open_auth)
+{
+    /* (name, createIfNecessary, authmode, writable) - the MIDP 2.0 overload,
+     * and the one the corpus calls: eight titles ask for a store this way and
+     * got a NoSuchMethodError before the first byte of game state was read.
+     * authmode is about OTHER suites in OTHER processes, so AUTHMODE_ANY and
+     * AUTHMODE_PRIVATE both mean "this one process" here; `writable` decides
+     * whether an existing store may be written, which is enforced per record
+     * write by the store itself. */
+    return NJ_CALL(rs_open, vm, th, args, ret);
+}
+
+NJFN(rs_open_named)
+{
+    /* (name, vendorName, suiteName) - MIDP 1.0's form, which creates the
+     * store when it is missing.  Vendor and suite only choose a directory on
+     * a device that hosts several suites; every store here lives in the one
+     * RMS directory, so the store's own name is what identifies it. */
+    nj_ref name = NJ_ARG_REF(args, 0);
+    nj_ref rs;
+
+    if (!name || !NJ_ARG_REF(args, 1) || !NJ_ARG_REF(args, 2)) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    rs = rs_open_common(vm, name, 1);
+    if (!rs) {
+        if (vm->exception) {
+            return NJ_ERR;
+        }
+        return nj_throw(vm,
+                        "javax/microedition/rms/RecordStoreNotFoundException",
+                        NULL);
+    }
+    ret->r = rs;
+    return NJ_OK;
+}
+
 NJFN(rs_delete)
 {
     nj_ref name = NJ_ARG_REF(args, 0);
@@ -1247,6 +1284,12 @@ static const nj_builtin_method recordstore_methods[] = {
       NJ_ACC_STATIC),
     M("openRecordStore", "(Ljava/lang/String;ZZ)L" NJ_C_RECORDSTORE ";",
       NJ_ACC_STATIC),
+    M("openRecordStore", "(Ljava/lang/String;ZIZ)L" NJ_C_RECORDSTORE ";",
+      NJ_ACC_STATIC),
+    M("openRecordStore",
+      "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)L"
+      NJ_C_RECORDSTORE ";",
+      NJ_ACC_STATIC),
     M("deleteRecordStore", "(Ljava/lang/String;)V", NJ_ACC_STATIC),
     M("listRecordStores", "()[Ljava/lang/String;", NJ_ACC_STATIC),
     M("getName",           "()Ljava/lang/String;", 0),
@@ -1358,6 +1401,10 @@ const int nj_lib_rms_class_count =
 const nj_native_entry nj_lib_rms_table[] = {
     { NJ_C_RECORDSTORE, "openRecordStore", "(Ljava/lang/String;Z)L" NJ_C_RECORDSTORE ";", rs_open },
     { NJ_C_RECORDSTORE, "openRecordStore", "(Ljava/lang/String;ZZ)L" NJ_C_RECORDSTORE ";", rs_open_three },
+    { NJ_C_RECORDSTORE, "openRecordStore", "(Ljava/lang/String;ZIZ)L" NJ_C_RECORDSTORE ";", rs_open_auth },
+    { NJ_C_RECORDSTORE, "openRecordStore",
+      "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)L" NJ_C_RECORDSTORE ";",
+      rs_open_named },
     { NJ_C_RECORDSTORE, "deleteRecordStore", "(Ljava/lang/String;)V", rs_delete },
     { NJ_C_RECORDSTORE, "listRecordStores", "()[Ljava/lang/String;", rs_listNames },
     { NJ_C_RECORDSTORE, "getName",         "()Ljava/lang/String;", rs_getName },
