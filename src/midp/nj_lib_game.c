@@ -2734,10 +2734,15 @@ static void gc_flush_region(nj_vm *vm, nj_ref self, nj_ref gobj,
     int req_w = w, req_h = h, canvas_w, canvas_h;
 
     if (!buf) {
+        /* Silent before: a GameCanvas whose buffer could not be created draws
+         * thousands of times into nothing and presents a blank screen with no
+         * explanation anywhere. */
+        nj_logf(vm, 2, "flushGraphics: the off screen buffer does not exist");
         return;
     }
     dst = nj_midp_screen(vm);
     if (!dst) {
+        nj_logf(vm, 2, "flushGraphics: there is no screen surface");
         return;
     }
     canvas_w = (int)fgi(vm, self, NJ_C_CANVAS, NJ_F_C_WIDTH, D_INT);
@@ -2754,6 +2759,8 @@ static void gc_flush_region(nj_vm *vm, nj_ref self, nj_ref gobj,
     if (x + w > canvas_w) { w = canvas_w - x; }
     if (y + h > canvas_h) { h = canvas_h - y; }
     if (w < 1 || h < 1) {
+        nj_logf(vm, 2, "flushGraphics(%d,%d,%d,%d): nothing left after clipping "
+                       "to the %dx%d game canvas", x, y, w, h, canvas_w, canvas_h);
         return;
     }
     if (gobj) {
