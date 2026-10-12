@@ -1109,9 +1109,15 @@ NJFN(mascot_g3d_renderPrimitives)
                    ((nj_s4 *)ya->u.bytes)[i + 1], ((nj_s4 *)za->u.bytes)[i + 1], &x2, &y2);
         m3_project(m, kx, ky, cx, cy, ((nj_s4 *)xa->u.bytes)[i + 2],
                    ((nj_s4 *)ya->u.bytes)[i + 2], ((nj_s4 *)za->u.bytes)[i + 2], &x3, &y3);
-        if (nj_midp_gfx_triangle(vm, g, x1, y1, x2, y2, x3, y3, colour)) {
-            vm->tris++;
-        }
+        /*
+         * Count the triangle as soon as it has been PROJECTED, not when it has
+         * been filled.  Counting only successful fills hid the exact thing this
+         * instrument exists to detect: a rasterizer that runs every frame but
+         * puts every triangle off-screen reads as "tris=0", which is
+         * indistinguishable from a rasterizer that never runs at all.
+         */
+        vm->tris++;
+        (void)nj_midp_gfx_triangle(vm, g, x1, y1, x2, y2, x3, y3, colour);
     }
     return NJ_OK;
 }
