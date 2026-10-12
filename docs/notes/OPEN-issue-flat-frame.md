@@ -267,3 +267,43 @@ dump above (one colour in the presented frames), the chain is closed:
 
 No runtime defect is demonstrated for this title, and the probe was removed and
 the worktree discarded after the run.
+
+## 合金弹头4(完美汉化版)_4053 — the game's own table index, and byte-exact resources
+
+This one is flat *and* draws: `--run-frames 1500 --stats` reports
+`paints=1502 gfx=4506`, exactly **three Graphics calls per paint**, and the
+dumps show a real nine-colour picture (white 248,252,248 and pink 232,48,104)
+at 500 and 1000 and pure black at 1500 and after.  So the game paints a splash
+and then paints black forever.
+
+The corpus line names why:
+
+    302 thrown: java/lang/ArrayIndexOutOfBoundsException
+        at ad.a(Ljavax/microedition/lcdui/Graphics;IIIII)I pc=33
+
+once per frame.  `javap -c -p ad.class` shows the failing instruction:
+
+     27: aload         7        // the short[] from c()
+     29: iload_2
+     30: iconst_4
+     31: iadd
+     32: saload                 // index = local2 + 4
+     33: istore        8
+
+with `local2` rewritten at 20..26 as `3 + local2 * 7`, so the index is
+`7 * (local2 + 1)` — a multiple of seven into a table the game holds in its own
+`Object[] b` field (`c()` is `(short[]) b[0]`).  A short table is a game-side
+problem *unless* we handed it short data, so that was measured next: a probe on
+`Class.getResourceAsStream` printed every name and the length we returned, and
+every one matches the JAR entry byte for byte —
+
+    PROBE got 2.pak len=40908          (unzip -l: 40908)
+    PROBE got loadingbar.uspac len=97  (unzip -l: 97)
+    PROBE got menu.png len=6548        (and the other four PNGs)
+
+— and no `EOFException` is thrown anywhere in the run, so the reads complete.
+The resource layer is therefore not the cause: the game builds that table from
+complete bytes and then indexes past its end.  What is still unverified is only
+how our `DataInputStream` *presents* `2.pak` (the game parses it itself, so a
+value read slightly differently would give the same symptom), and that is where
+a future round should look next.
