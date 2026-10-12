@@ -198,8 +198,25 @@ static void frame_pace(nj_vm *vm, nj_s8 frame_start)
     }
     budget = 1000 / cap;
     elapsed = nj_now_ms(vm) - frame_start;
+    /*
+     * Never sleep for longer than one frame budget.
+     *
+     * `elapsed` is a difference of two clock reads, and a clock that steps
+     * backwards makes it negative - which turns `budget - elapsed` into a sleep
+     * of hours.  A pacer that can park the emulator for hours is worse than one
+     * that occasionally runs a frame early, so the wait is clamped to the
+     * budget it came from.
+     *
+     * This is a safety bound, not a measured win: it changed nothing on the one
+     * title that led here (that run is not stuck in the pacer at all - see the
+     * commit message).
+     */
     if (elapsed < budget && vm->port && vm->port->sleep_ms) {
-        vm->port->sleep_ms(vm->port->ud, (nj_u4)(budget - elapsed));
+        nj_s8 wait = budget - elapsed;
+        if (wait > budget) {
+            wait = budget;
+        }
+        vm->port->sleep_ms(vm->port->ud, (nj_u4)wait);
     } else if (vm->port && vm->port->idle) {
         /* Already fast enough: still give the RTOS a chance to run. */
         vm->port->idle(vm->port->ud);
