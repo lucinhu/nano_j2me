@@ -88,3 +88,28 @@ paints, the other does not - and telling them apart needs a probe inside that
 game's own paint path, at 176x208, watching where its draw calls land.  The
 corpus fix stands either way: it no longer reports a size-dependent title as a
 title that cannot draw.
+
+## Update: the failure list splits in two, and `gfx=` does the splitting
+
+`--stats` now reports `gfx=`, the number of `javax.microedition.lcdui.Graphics`
+method calls (counted once per call in `gfx_load()`, not per pixel).  On the
+three titles that were still flat at every screen size:
+
+    title                        frames  paints  gfx
+    都市摩天楼中文版_3219         400     400     0
+    模拟人生3中文版_6162          400     400     0
+    合金弹头4(完美汉化版)_4053     400     400     1200
+
+Two situations, two opposite investigations:
+
+  - **gfx=0**: `paint()` runs every frame and calls nothing on the Graphics.  No
+    drawing is being lost because none is being asked for; the game is waiting
+    for something (asset, timer, input) and this is not a rendering bug at all.
+  - **gfx=1200**: three drawing calls per frame are made and the frame is still
+    one colour, so the pixels do not survive to the port.  This is the case the
+    old single verdict could not distinguish, and the only one where "the game
+    is not drawing" is a lie.
+
+Neither number was available before this round, and the corpus verdict alone
+cannot separate them - which is exactly the T2 complaint about measuring pixels
+instead of state.
