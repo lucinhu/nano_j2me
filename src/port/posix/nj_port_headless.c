@@ -797,6 +797,14 @@ nj_status nj_port_headless(nj_port *out)
     return nj_port_headless_ex(out, 0, 0, 0, NULL);
 }
 
+void nj_port_headless_free(nj_port *p)
+{
+    if (p && p->ud) {
+        free(p->ud);
+        p->ud = NULL;
+    }
+}
+
 nj_status nj_port_headless_ex(nj_port *out, int width, int height,
                               int dump_every, const char *dump_prefix)
 {
