@@ -32,6 +32,7 @@
 #include "nj_internal.h"
 
 
+
 #if NJ_USE_LIBC
 #  include <string.h>
 #  include <math.h>

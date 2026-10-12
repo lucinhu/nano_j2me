@@ -4120,6 +4120,29 @@ static int canvas_call_paint(nj_vm *vm, nj_ref canvas, nj_ref g)
                                 "(L" NJ_C_GRAPHICS ";)V", a, &why);
 }
 
+/*
+ * Run the MIDlet's paint() with its Graphics rooted.
+ *
+ * paint() is Java: it allocates, so a collection can happen inside it.  The
+ * only reference to this Graphics is a C local in the caller, which the
+ * collector cannot see, so without a root it frees the object - and the
+ * title's own `aload_1; invokevirtual drawImage` then dispatches on the freed
+ * block.  That was a SIGSEGV inside nj_method_lookup on a receiver reported as
+ * "idx=-1 super=(nil) mcount=1 flags=0": not one of this VM's classes.
+ *
+ * src/core/nj_internal.h states the rule this call site was breaking.
+ */
+static int canvas_call_paint_rooted(nj_vm *vm, nj_ref canvas, nj_ref g)
+{
+    nj_u4 mark = nj_root_mark(vm);
+    int ok;
+
+    g = nj_root(vm, g);
+    ok = canvas_call_paint(vm, canvas, g);
+    nj_root_release(vm, mark);
+    return ok;
+}
+
 static int canvas_visible(nj_vm *vm, nj_ref canvas)
 {
     /*
@@ -4410,7 +4433,7 @@ nj_status nj_midp_paint(nj_vm *vm)
             return NJ_ERR;   /* names the class; not a silent blank frame */
         }
         (void)canvas_visible(vm, d);
-        if (!canvas_call_paint(vm, d, g)) {
+        if (!canvas_call_paint_rooted(vm, d, g)) {
             /*
              * Leave a real exception pending if there is one: paint() is
              * abstract on Canvas, so "method not implemented" is exactly what
