@@ -2532,6 +2532,107 @@ static const nj_builtin_field mesh_fields[] = {
     { "_nj_subs", "L" NJ_C_VECTOR ";", NJ_ACC_PUBLIC },
     { "_nj_nsub", "I",                NJ_ACC_PUBLIC }
 };
+/*
+ * javax.microedition.m3g.TriangleStripArray
+ *
+ * Geometry a title assembles by hand.  Measured over the whole collected
+ * corpus, the only members any title actually uses are the two constructors
+ * (TriangleStripArray([I[I) and TriangleStripArray(I[I)); the getters below
+ * are here because they read back what those constructors stored, and a test
+ * cannot check storage without them.
+ *
+ * The strip lengths are KEPT.  The rasteriser does not exist yet, and
+ * accepting a strip and forgetting it is how a "supported" class becomes a
+ * wrong picture later.
+ */
+static const nj_builtin_field tsa_fields[] = {
+    { "_nj_lengths", "[I", 0 },
+    { "_nj_strips",  "I",  0 },
+    { "_nj_first",   "I",  0 }
+};
+
+NJFN(m3g_tsa_init_lengths)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref lens = NJ_ARG_REF(args, 0);
+
+    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_TSA, "_nj_lengths", "[I", 0),
+            lens);
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_TSA, "_nj_strips", "I", 0),
+            (nj_s4)(lens ? lens->length : 0));
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_TSA, "_nj_first", "I", 0), 0);
+    return NJ_OK;
+}
+
+NJFN(m3g_tsa_init_first)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref lens = NJ_ARG_REF(args, 1);
+
+    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_TSA, "_nj_lengths", "[I", 0),
+            lens);
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_TSA, "_nj_strips", "I", 0),
+            (nj_s4)(lens ? lens->length : 0));
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_TSA, "_nj_first", "I", 0),
+            NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_tsa_getStripCount)
+{
+    ret->i = nj_field_read_int(vm, NJ_THIS(args),
+                               nj_field_lookup(vm, NJ_C_TSA, "_nj_strips",
+                                               "I", 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_tsa_getIndexCount)
+{
+    nj_ref lens = nj_rget(vm, NJ_THIS(args),
+                          nj_field_lookup(vm, NJ_C_TSA, "_nj_lengths", "[I",
+                                          0));
+    nj_s4 i, total = 0;
+
+    if (lens) {
+        for (i = 0; i < (nj_s4)lens->length; i++) {
+            total += ((nj_s4 *)lens->u.bytes)[i];
+        }
+    }
+    ret->i = total;
+    return NJ_OK;
+}
+
+NJFN(m3g_tsa_getStripLengths)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref lens = nj_rget(vm, self,
+                          nj_field_lookup(vm, NJ_C_TSA, "_nj_lengths", "[I",
+                                          0));
+    nj_ref dst = NJ_ARG_REF(args, 0);
+    nj_s4 i;
+
+    if (!dst || !lens) {
+        return NJ_OK;
+    }
+    if ((nj_s4)lens->length > (nj_s4)dst->length) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "the array is too short for the strip lengths");
+        return NJ_OK;
+    }
+    for (i = 0; i < (nj_s4)lens->length; i++) {
+        ((nj_s4 *)dst->u.bytes)[i] = ((nj_s4 *)lens->u.bytes)[i];
+    }
+    return NJ_OK;
+}
+
+static const nj_builtin_method tsa_methods[] = {
+    M("<init>",          "([I[I)V", NJ_ACC_PUBLIC),
+    M("<init>",          "(I[I)V",  NJ_ACC_PUBLIC),
+    M("getStripCount",   "()I",     NJ_ACC_PUBLIC),
+    M("getIndexCount",   "()I",     NJ_ACC_PUBLIC),
+    M("getStripLengths", "([I)V",   NJ_ACC_PUBLIC)
+};
+
 static const nj_builtin_field img2d_fields[] = {
     { "_nj_fmt",    "I",   NJ_ACC_PUBLIC },
     { "_nj_w",      "I",   NJ_ACC_PUBLIC },
@@ -2832,7 +2933,8 @@ const nj_builtin_class nj_lib_m3g_classes[] = {
     { NJ_C_KFS,      NJ_C_O3D,      NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
     { NJ_C_VARR,     NJ_C_O3D,      NJ_ACC_PUBLIC,
       varr_fields, M3G_N(varr_fields), varr_methods, M3G_N(varr_methods) },
-    { NJ_C_TSA,      NJ_C_IBUF,     NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
+    { NJ_C_TSA,      NJ_C_IBUF,     NJ_ACC_PUBLIC,
+      tsa_fields, M3G_N(tsa_fields), tsa_methods, M3G_N(tsa_methods) },
     { NJ_C_IMAGE2D, NJ_C_O3D, NJ_ACC_PUBLIC,
       img2d_fields, M3G_N(img2d_fields), img2d_methods, M3G_N(img2d_methods) },
     { NULL, NULL, 0u, NULL, 0u, NULL, 0u }
@@ -2842,6 +2944,11 @@ const int nj_lib_m3g_class_count =
 
 const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_O3D, "setUserID", "(" "I)V", m3g_userID_set },
+    { NJ_C_TSA, "<init>",          "(" "[I[I)V", m3g_tsa_init_lengths },
+    { NJ_C_TSA, "<init>",          "(" "I[I)V",  m3g_tsa_init_first },
+    { NJ_C_TSA, "getStripCount",   "()I",        m3g_tsa_getStripCount },
+    { NJ_C_TSA, "getIndexCount",   "()I",        m3g_tsa_getIndexCount },
+    { NJ_C_TSA, "getStripLengths", "(" "[I)V",   m3g_tsa_getStripLengths },
     { NJ_C_O3D, "getUserID", "()I",     m3g_userID_get },
     { NJ_C_O3D, "animate",   "(I)I",    m3g_animate },
     { NJ_C_O3D, "addAnimationTrack",

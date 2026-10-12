@@ -375,6 +375,47 @@ int main(void)
         }
     }
 
+    /*
+     * TriangleStripArray stores what its constructors are handed.  The
+     * rasteriser does not exist yet, so "it did not crash" is not evidence
+     * that anything was kept; these read it back.
+     */
+    {
+        nj_value a[4];
+        nj_value r;
+        nj_ref tsa = make(vm, CLS("TriangleStripArray"));
+        nj_ref lens = nj_int_array_new(vm, 3);
+        nj_ref idx = nj_int_array_new(vm, 9);
+
+        check(tsa != 0, "TriangleStripArray can be constructed");
+        if (tsa && lens && idx) {
+            nj_s4 i;
+            for (i = 0; i < 3; i++) {
+                ((nj_s4 *)lens->u.bytes)[i] = 3;
+            }
+            a[0].r = lens; a[1].r = idx;
+            call(vm, tsa, CLS("TriangleStripArray"), "<init>", "([I[I)V", a,
+                 NULL);
+            call(vm, tsa, CLS("TriangleStripArray"), "getStripCount", "()I",
+                 NULL, &r);
+            check(r.i == 3, "three strip lengths were kept");
+            call(vm, tsa, CLS("TriangleStripArray"), "getIndexCount", "()I",
+                 NULL, &r);
+            check(r.i == 9, "the strip lengths add up to the index count");
+
+            for (i = 0; i < 3; i++) {
+                ((nj_s4 *)idx->u.bytes)[i] = 0;
+            }
+            a[0].r = idx;
+            call(vm, tsa, CLS("TriangleStripArray"), "getStripLengths", "([I)V",
+                 a, NULL);
+            check(((nj_s4 *)idx->u.bytes)[1] == 3,
+                  "getStripLengths writes the lengths back");
+            check(((nj_s4 *)idx->u.bytes)[2] == 3,
+                  "and all of them, not just the first");
+        }
+    }
+
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
     printf("%d checks, %d failures\n", checks, failures);
