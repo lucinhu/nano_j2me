@@ -493,6 +493,9 @@ nj_status nj_class_init(nj_vm *vm, nj_class *c)
     if (c->state >= NJ_CLASS_READY) {
         return NJ_OK;
     }
+    /* A link failure is already a describable exception: nj_class_link()
+     * raises one naming what was missing.  The <clinit> below can fail with an
+     * exception of its own.  So every NJ_ERR leaving here has one set. */
     if (nj_class_link(vm, c) != NJ_OK) {
         return NJ_ERR;
     }

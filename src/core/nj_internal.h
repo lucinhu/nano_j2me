@@ -331,6 +331,19 @@ struct nj_vm {
     const char *resolve_name;
     const char *resolve_desc;
 
+    /*
+     * Why the last class *link* failed, as opposed to a constant-pool lookup.
+     * nj_class_link() already knows precisely ("superclass not found: X",
+     * "interface this runtime does not provide: Y") but it only said so
+     * through nj_logf() at debug level, which is filtered out by default.  The
+     * caller then raised a bare NoClassDefFoundError naming the class that
+     * failed and never the name it could not find - so a game that merely
+     * implements an optional-API interface looked like a corrupt class file.
+     * Both names are interned, so they outlive the failure.
+     */
+    const char *link_cls;          /* the class that failed to link */
+    const char *link_missing;      /* what it could not resolve, or NULL */
+
     /* interned strings */
     nj_ref     interned[NJ_MAX_INTERNED];
     nj_u2      ninterned;

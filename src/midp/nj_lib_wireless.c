@@ -38,6 +38,7 @@
 #define NJ_C_MSGCONN    "javax/wireless/messaging/MessageConnection"
 #define NJ_C_TEXTMSG    "javax/wireless/messaging/TextMessage"
 #define NJ_C_BINMSG     "javax/wireless/messaging/BinaryMessage"
+#define NJ_C_MSGLIS     "javax/wireless/messaging/MessageListener"
 
 /* ---- JSR 82: javax.bluetooth -------------------------------------- */
 #define NJ_C_BTSTATE    "javax/bluetooth/BluetoothStateException"
@@ -84,6 +85,20 @@ static const nj_builtin_method msgconn_methods[] = {
     I("receive",        "()L" NJ_C_MSG ";"),
     I("numberOfSegments", "(L" NJ_C_MSG ";)I"),
     I("close",          "()V")
+};
+
+/*
+ * JSR 120's callback interface: the one method a MIDlet implements to be told
+ * that an SMS arrived.  A MIDlet that merely *implements* it must still link,
+ * or the whole class fails to load - and that is exactly how 魂斗罗_5652 died.
+ * Its bundled SMS/QQ module has an obfuscated class `g` that implements this
+ * interface, so the game stopped with `NoClassDefFoundError: g` before its
+ * first frame, on a handset that simply had no radio.  Declaring the interface
+ * costs nothing: nothing calls it unless the MIDlet registers a listener with
+ * a real MessageConnection, which this runtime never hands out.
+ */
+static const nj_builtin_method msglis_methods[] = {
+    I("notifyIncomingMessage", "(L" NJ_C_MSGCONN ";)V")
 };
 
 /* ------------------------------------------------------------------ */
@@ -325,6 +340,10 @@ const nj_builtin_class nj_lib_wireless_classes[] = {
       NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
       NULL, 0u, binmsg_methods,
       (nj_u2)(sizeof(binmsg_methods) / sizeof(binmsg_methods[0])) },
+    { NJ_C_MSGLIS, NULL,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, msglis_methods,
+      (nj_u2)(sizeof(msglis_methods) / sizeof(msglis_methods[0])) },
 
     { NJ_C_BTSTATE, "java/io/IOException", NJ_ACC_PUBLIC,
       NULL, 0u, NULL, 0u },

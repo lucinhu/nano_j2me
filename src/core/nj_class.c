@@ -864,7 +864,9 @@ static nj_u4 field_bytes(const nj_field *f)
     }
 }
 
-nj_status nj_class_link(nj_vm *vm, nj_class *c)
+/* The real linker.  Call it through nj_class_link() below, which turns a
+ * failure into a describable exception - see the comment there. */
+static nj_status class_link_inner(nj_vm *vm, nj_class *c)
 {
     nj_u2 i;
     nj_u2 base;
@@ -872,6 +874,10 @@ nj_status nj_class_link(nj_vm *vm, nj_class *c)
     if (!vm || !c) {
         return NJ_ERR;
     }
+    /* Clear the previous attempt's reason, so a stale name is never reported
+     * against the class that failed this time. */
+    vm->link_cls = NULL;
+    vm->link_missing = NULL;
     if (c->state >= NJ_CLASS_LINKED) {
         return NJ_OK;
     }
@@ -891,6 +897,8 @@ nj_status nj_class_link(nj_vm *vm, nj_class *c)
             /* The most common bring-up failure: say exactly what is missing
              * rather than leaving the caller to guess. */
             nj_logf(vm, 3, "link %s: superclass not found: %s", c->name, sn);
+            vm->link_cls = c->name;
+            vm->link_missing = sn;
             return NJ_ERR;
         }
         if (nj_class_link(vm, c->super) != NJ_OK) {
@@ -899,6 +907,8 @@ nj_status nj_class_link(nj_vm *vm, nj_class *c)
     } else if (c->super_name != NULL) {
         c->super = nj_class_resolve(vm, c->super_name);
         if (!c->super) {
+            vm->link_cls = c->name;
+            vm->link_missing = c->super_name;
             return NJ_ERR;
         }
         if (nj_class_link(vm, c->super) != NJ_OK) {
@@ -926,6 +936,8 @@ nj_status nj_class_link(nj_vm *vm, nj_class *c)
         if (!c->interfaces[i]) {
             nj_logf(vm, 3, "link %s: interface this runtime does not provide: "
                           "%s", c->name, in);
+            vm->link_cls = c->name;
+            vm->link_missing = in;
             return NJ_ERR;
         }
         (void)nj_class_link(vm, c->interfaces[i]);
@@ -976,6 +988,49 @@ nj_status nj_class_link(nj_vm *vm, nj_class *c)
         vm->cls_throwable = c;
     }
     return NJ_OK;
+}
+
+/*
+ * Append `s` to buf[*n], never overrunning.  A freestanding build has no
+ * snprintf to borrow, and this is the whole of the formatting below.
+ */
+static void append_str(char *buf, nj_u4 *n, nj_u4 cap, const char *s)
+{
+    while (s != NULL && *s != '\0' && *n + 1u < cap) {
+        buf[(*n)++] = *s++;
+    }
+}
+
+/*
+ * Link a class, and on failure raise an exception that says what was missing.
+ *
+ * This is the single point where the reason is still known: class_link_inner()
+ * records it in vm->link_cls / vm->link_missing as it gives up.  Without this
+ * wrapper every caller turned a link failure into a bare
+ * `NoClassDefFoundError: <the class that failed>` - which names the class that
+ * is demonstrably present in the JAR and never the name that is actually
+ * absent.  nj_throw() keeps the first exception, so the plain NoClassDefFound
+ * errors raised further out become no-ops rather than overwriting this one.
+ */
+nj_status nj_class_link(nj_vm *vm, nj_class *c)
+{
+    nj_status st = class_link_inner(vm, c);
+
+    if (st != NJ_OK && vm != NULL && !vm->exception && vm->link_cls != NULL) {
+        char buf[320];
+        nj_u4 n = 0u;
+
+        append_str(buf, &n, sizeof(buf), vm->link_cls);
+        if (vm->link_missing != NULL) {
+            append_str(buf, &n, sizeof(buf), ": missing ");
+            append_str(buf, &n, sizeof(buf), vm->link_missing);
+            append_str(buf, &n, sizeof(buf),
+                       " (this runtime does not provide it)");
+        }
+        buf[n] = '\0';
+        (void)nj_throw(vm, "java/lang/NoClassDefFoundError", buf);
+    }
+    return st;
 }
 
 nj_status nj_class_ensure_refs(nj_vm *vm, nj_class *c)
