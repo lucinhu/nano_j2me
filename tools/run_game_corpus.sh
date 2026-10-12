@@ -286,6 +286,10 @@ for jar in "${JARS[@]}"; do
     [ -n "$gfx" ] || gfx='?'
     paints="$(sed -n 's/.*[^a-z]paints=\([0-9]*\).*/\1/p' "$log" 2>/dev/null | head -1)"
     [ -n "$paints" ] || paints='?'
+    # Where the title first threw.  A failing line that says "flat frame" names
+    # a symptom; "first throw: NullPointerException at DCTuxedo.i()V pc=26"
+    # names the call that did not work, which is what has to be chased.
+    thrown="$(sed -n 's/^thrown: //p' "$log" 2>/dev/null | head -1)"
     rm -rf "$out"
 
     IFS='|' read -r status nframes ncols nchanged note <<<"$verdict"
@@ -298,6 +302,10 @@ for jar in "${JARS[@]}"; do
                 *)   note="$note; $gfx Graphics calls over $paints paint() calls left the picture unchanged" ;;
             esac
             ;;
+    esac
+    case "$status" in
+        PASS|SKIP) ;;
+        *) [ -n "$thrown" ] && note="$note; first throw: $thrown" ;;
     esac
     printf '%-14s %-9s %-8s %-8s %-9s %-4s %-6s %-6s %s\n' "$title" "$used" "$nframes" "$ncols" \
            "$nchanged" "$thr" "$io" "$gfx" "$status${note:+ ($note)}"
