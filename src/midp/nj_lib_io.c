@@ -1734,6 +1734,42 @@ nj_status nj_io_late_init(nj_vm *vm)
     return NJ_OK;
 }
 
+/*
+ * CLDC 1.1 declares DataInput and DataOutput as interfaces, and MIDlets call
+ * their methods through an interface reference: 拳皇98终极之战_7534 does
+ * `invokeinterface java/io/DataInput.readByte:()B` on a DataInputStream.
+ * The call is resolved through the interface, so the method set has to be
+ * declared here; dispatch itself still happens on the receiver's class, where
+ * DataInputStream and DataOutputStream already answer every one of them.
+ */
+static const nj_builtin_method datainput_methods[] = {
+    M("readFully", "([B)V", NJ_ACC_ABSTRACT),
+    M("readFully", "([BII)V", NJ_ACC_ABSTRACT),
+    M("skipBytes", "(I)I", NJ_ACC_ABSTRACT),
+    M("readBoolean", "()Z", NJ_ACC_ABSTRACT),
+    M("readByte", "()B", NJ_ACC_ABSTRACT),
+    M("readUnsignedByte", "()I", NJ_ACC_ABSTRACT),
+    M("readShort", "()S", NJ_ACC_ABSTRACT),
+    M("readUnsignedShort", "()I", NJ_ACC_ABSTRACT),
+    M("readChar", "()C", NJ_ACC_ABSTRACT),
+    M("readInt", "()I", NJ_ACC_ABSTRACT),
+    M("readLong", "()J", NJ_ACC_ABSTRACT),
+    M("readUTF", "()Ljava/lang/String;", NJ_ACC_ABSTRACT)
+};
+
+static const nj_builtin_method dataoutput_methods[] = {
+    M("write", "(I)V", NJ_ACC_ABSTRACT),
+    M("write", "([B)V", NJ_ACC_ABSTRACT),
+    M("write", "([BII)V", NJ_ACC_ABSTRACT),
+    M("writeBoolean", "(Z)V", NJ_ACC_ABSTRACT),
+    M("writeByte", "(I)V", NJ_ACC_ABSTRACT),
+    M("writeShort", "(I)V", NJ_ACC_ABSTRACT),
+    M("writeChar", "(I)V", NJ_ACC_ABSTRACT),
+    M("writeInt", "(I)V", NJ_ACC_ABSTRACT),
+    M("writeLong", "(J)V", NJ_ACC_ABSTRACT),
+    M("writeUTF", "(Ljava/lang/String;)V", NJ_ACC_ABSTRACT)
+};
+
 const nj_builtin_class nj_lib_io_classes[] = {
     { NJ_C_READER, "java/lang/Object",
       NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
@@ -1788,7 +1824,15 @@ const nj_builtin_class nj_lib_io_classes[] = {
     { "javax/microedition/io/Connection",
       NULL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
       NULL, 0u, connection_methods,
-      (nj_u2)(sizeof(connection_methods) / sizeof(connection_methods[0])) }
+      (nj_u2)(sizeof(connection_methods) / sizeof(connection_methods[0])) },
+    { "java/io/DataInput", NULL,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, datainput_methods,
+      (nj_u2)(sizeof(datainput_methods) / sizeof(datainput_methods[0])) },
+    { "java/io/DataOutput", NULL,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, dataoutput_methods,
+      (nj_u2)(sizeof(dataoutput_methods) / sizeof(dataoutput_methods[0])) }
 };
 const int nj_lib_io_class_count =
     (int)(sizeof(nj_lib_io_classes) / sizeof(nj_lib_io_classes[0]));

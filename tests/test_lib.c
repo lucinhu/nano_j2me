@@ -1258,6 +1258,63 @@ static void test_connector_open_mode(nj_vm *vm)
 }
 
 /*
+ * CLDC 1.1 declares DataInput and DataOutput as interfaces, and MIDlets call
+ * their methods through an interface reference: 拳皇98终极之战_7534 does
+ * `invokeinterface java/io/DataInput.readByte:()B` on a DataInputStream and
+ * used to stop there with NoClassDefFoundError.
+ */
+static void test_data_interfaces(nj_vm *vm)
+{
+    static const char *DIN = "java/io/DataInput";
+    static const char *DOUT = "java/io/DataOutput";
+    nj_value a[3];
+    nj_value ret;
+    nj_ref bytes, obj;
+
+    OK_MSG(nj_class_lookup(vm, DIN) != NULL, "java/io/DataInput is declared");
+    OK_MSG(nj_class_lookup(vm, DOUT) != NULL, "java/io/DataOutput is declared");
+
+    /* One byte, read back through the interface. */
+    bytes = nj_byte_array_new(vm, 1u);
+    OK_MSG(bytes != NULL, "a one-byte array");
+    ((nj_u1 *)nj_array_data(bytes))[0] = (nj_u1)0x2Au;
+    a[0].r = bytes;
+    obj = nj_object_new(vm, BAIS);
+    OK_MSG(obj != NULL, "a ByteArrayInputStream object");
+    OK_MSG(nj_call_special(vm, obj, BAIS, "<init>", "([B)V", a, NULL) == NJ_OK,
+           "over the array");
+    a[0].r = obj;
+    obj = nj_object_new(vm, DIS);
+    OK_MSG(obj != NULL, "a DataInputStream object");
+    OK_MSG(nj_call_special(vm, obj, DIS, "<init>",
+                           "(Ljava/io/InputStream;)V", a, NULL) == NJ_OK,
+           "over that stream");
+    ret.bits = 0u;
+    OK_MSG(nj_call(vm, obj, DIN, "readByte", "()B", NULL, &ret) == NJ_OK,
+           "readByte() through java/io/DataInput");
+    OK_MSG(ret.i == 0x2A, "and it returned the byte: got %d", ret.i);
+
+    /* And the writing side through java/io/DataOutput. */
+    obj = nj_object_new(vm, BAOS);
+    OK_MSG(obj != NULL, "a ByteArrayOutputStream object");
+    OK_MSG(nj_call_special(vm, obj, BAOS, "<init>", "()V", NULL, NULL) == NJ_OK,
+           "constructs");
+    a[0].r = obj;
+    { nj_ref dos = nj_object_new(vm, DOS);
+      OK_MSG(dos != NULL, "a DataOutputStream object");
+      OK_MSG(nj_call_special(vm, dos, DOS, "<init>",
+                             "(Ljava/io/OutputStream;)V", a, NULL) == NJ_OK,
+             "over the byte stream");
+      a[0] = vint(7);
+      OK_MSG(nj_call(vm, dos, DOUT, "writeByte", "(I)V", a, &ret) == NJ_OK,
+             "writeByte(int) through java/io/DataOutput");
+    }
+    OK_MSG(nj_call_int(vm, obj, BAOS, "size", "()I", NULL) == 1,
+           "and one byte reached the stream");
+    clean(vm, "DataInput/DataOutput");
+}
+
+/*
  * A big Image's pixel array can force a collection between the moment the
  * Image object exists and the moment its fields are written into it.  The
  * object lives only in a C local until the function returns, so a collector
@@ -1371,6 +1428,7 @@ int main(void)
     test_constructor_arg_window(vm);
     test_connector_open_mode(vm);
     test_alloc_gives_up(vm);
+    test_data_interfaces(vm);
     test_image_survives_collection(vm);
 
     nj_vm_destroy(vm);
