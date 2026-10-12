@@ -191,7 +191,12 @@ digests = {hashlib.md5(open(p, "rb").read()).hexdigest() for p in frames}
 changed = len(digests)
 
 if cols < min_colours:
-    print("FAIL|%d|%d|%d|flat frame even after the whole key set was sent: the game is not drawing" % (len(frames), cols, changed))
+    # No claim about WHY it is flat.  Whether paint() asked for nothing or
+    # asked for a great deal is measured below and reported as numbers; the
+    # verdict line used to assert "the game is not drawing" without having
+    # looked, and that phrase sent a reader after a rendering bug that was not
+    # there (合金弹头4(完美汉化版)_4053 draws 3 times per paint and is flat).
+    print("FAIL|%d|%d|%d|flat frame even after the whole key set was sent" % (len(frames), cols, changed))
     raise SystemExit
 if changed < 2:
     tag = "FAIL" if strict else "PASS"
@@ -279,6 +284,8 @@ for jar in "${JARS[@]}"; do
     # gfx>0 means it drew and the pixels did not survive to the port.
     gfx="$(sed -n 's/.*[^a-z]gfx=\([0-9]*\).*/\1/p' "$log" 2>/dev/null | head -1)"
     [ -n "$gfx" ] || gfx='?'
+    paints="$(sed -n 's/.*[^a-z]paints=\([0-9]*\).*/\1/p' "$log" 2>/dev/null | head -1)"
+    [ -n "$paints" ] || paints='?'
     rm -rf "$out"
 
     IFS='|' read -r status nframes ncols nchanged note <<<"$verdict"
@@ -286,9 +293,9 @@ for jar in "${JARS[@]}"; do
     case "$note" in
         *"flat frame"*)
             case "$gfx" in
-                0)   note="$note; paint() called nothing on the Graphics" ;;
-                '?') ;;
-                *)   note="$note; $gfx drawing calls did not change the presented picture" ;;
+                '?') note="$note; the run printed no gfx= count" ;;
+                0)   note="$note; paint() made no Graphics call at all" ;;
+                *)   note="$note; $gfx Graphics calls over $paints paint() calls left the picture unchanged" ;;
             esac
             ;;
     esac

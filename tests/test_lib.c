@@ -1830,6 +1830,78 @@ static void test_player_survives_collection(nj_vm *vm)
     }
 }
 
+/* An 8-bit WAV has to be widened to the 16-bit the port takes.  pcm_push()
+ * reads pData as 16-bit samples, so a file pushed as it stands plays every
+ * byte pair as ONE sample: noise at half speed.  The observable is the
+ * Player's own pData array - four 8-bit samples become eight bytes, and the
+ * unsigned-to-signed conversion is visible in the bytes themselves. */
+static void test_eight_bit_wav_is_widened(nj_vm *vm)
+{
+    static const nj_u1 expect[8] = {
+        0x00u, 0x80u,             /* sample 0   -> -32768 */
+        0x00u, 0x81u,             /* sample 1   -> -32512 */
+        0x00u, 0x82u,             /* sample 2   -> -32256 */
+        0x00u, 0x83u              /* sample 3   -> -32000 */
+    };
+    nj_u1 *w = wav_of(4u);
+    nj_ref bar;
+    nj_ref in;
+    nj_value a[2];
+    nj_value ret;
+    nj_field *f;
+    nj_ref data;
+    int i;
+    int same = 1;
+
+    OK_MSG(w != NULL, "a four-frame 8-bit WAV");
+    if (w == NULL) {
+        return;
+    }
+    bar = nj_byte_array_new(vm, 48u);
+    OK_MSG(bar != NULL, "an array for the file");
+    if (bar == NULL) {
+        free(w);
+        return;
+    }
+    memcpy(bar->u.bytes, w, 48u);
+    free(w);
+
+    a[0].r = bar;
+    a[1].bits = 0u;
+    in = construct(vm, BAIS, "([B)V", a, "a stream over the WAV");
+    OK_MSG(in != NULL, "the stream exists");
+
+    a[0].r = in;
+    a[1].r = NULL;
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                          "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                          "javax/microedition/media/Player;", a, &ret) == NJ_OK,
+           "Manager.createPlayer(8-bit WAV)");
+    OK_MSG(ret.r != NULL, "a Player for the 8-bit WAV");
+
+    f = nj_field_lookup(vm, PLAYER, "pData", "[B", 0);
+    OK_MSG(f != NULL, "the Player's pData field");
+    data = (f != NULL) ? nj_field_read_ref(vm, ret.r, f) : NULL;
+    OK_MSG(data != NULL, "the Player holds PCM");
+    if (data != NULL) {
+        OK_MSG(data->length == 8u,
+               "four 8-bit frames are eight bytes of 16-bit PCM (got %u)",
+               (unsigned)data->length);
+        if (data->length == 8u) {
+            for (i = 0; i < 8; i++) {
+                if (data->u.bytes[i] != expect[i]) {
+                    same = 0;
+                }
+            }
+            OK_MSG(same, "the samples were widened, not copied "
+                         "(%02x %02x %02x %02x ...)",
+                   data->u.bytes[0], data->u.bytes[1],
+                   data->u.bytes[2], data->u.bytes[3]);
+        }
+    }
+}
+
 /* MIDP 2.0 documents the initial contents of TextBox and TextField as "the
  * text content, or null if the text is empty".  三国杀2．2美化版_1347 builds its
  * user-creation TextBox with a null text, so a runtime that rejected null made
@@ -2430,6 +2502,7 @@ int main(void)
     test_image_transform_dimensions(vm);
     test_long_to_string(vm);
     test_player_survives_collection(vm);
+    test_eight_bit_wav_is_widened(vm);
     test_image_survives_collection(vm);
     test_gc_ignores_freed_slot(vm);
     test_class_relative_resource(vm);

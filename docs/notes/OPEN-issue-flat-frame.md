@@ -184,3 +184,32 @@ Still not established: whether a title that draws a single colour is doing that
 by design at that screen size, or because our layout differs from the device it
 was written for. Telling those apart needs a probe inside the game's own paint
 path, not more counting at the boundary.
+
+## The verdict itself was the next wrong thing
+
+Two of the three "drawing calls reached nothing" titles turned out not to be
+rendering defects at all, and the corpus was the reason they looked like ones.
+合金弹头4(完美汉化版)_4053, measured with a probe that was removed afterwards
+(`git diff --quiet src/midp/nj_lib_lcdui.c` against HEAD):
+
+    at                       <- the current Displayable, 20 times (once per frame)
+    stats: frames=20 paints=20 gfx=60
+
+`at` is declared `extends javax.microedition.lcdui.game.GameCanvas`, so the
+GameCanvas path ran, the runtime called the game's own `paint()` every frame,
+and `paint()` made three Graphics calls per frame.  Decompiled, `at.paint` is a
+`tableswitch` on a state code whose branches mostly fall straight through to an
+exit that draws nothing — which is what three calls per frame looks like.  The
+GameCanvas buffer is blitted to the screen and that blit had already been
+verified end to end (`buf(10,10)=0xffffffff` before and after).
+
+So the picture does not change because the game is sitting in a state where it
+paints nothing, and the phrase "the game is not drawing" was a claim the corpus
+had never measured.  The verdict now reports counts and stops interpreting:
+
+    FAIL (flat frame even after the whole key set was sent; 40 Graphics calls
+          over 20 paint() calls left the picture unchanged)
+
+`tools/check_flat_wording.sh` (ctest, with the `tests/flatdemo` fixture) holds
+it to that: a flat frame must carry both counts, and the old sentence fails the
+check.

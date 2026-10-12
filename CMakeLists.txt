@@ -289,6 +289,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_hangdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_sizedemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_utfdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flatdemo_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -431,6 +432,11 @@ if(NJ_BUILD_TESTS)
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_corpus_size_retry.sh
                      ${NJ_FIXTURES}/sizedemo.jar)
     set_tests_properties(check_corpus_size_retry PROPERTIES TIMEOUT 300)
+    add_test(NAME check_flat_wording
+             COMMAND ${CMAKE_COMMAND} -E env
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_flat_wording.sh
+                     ${NJ_FIXTURES}/flatdemo.jar)
+    set_tests_properties(check_flat_wording PROPERTIES TIMEOUT 300)
     add_test(NAME check_hang_teardown
              COMMAND ${CMAKE_COMMAND} -E env
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>

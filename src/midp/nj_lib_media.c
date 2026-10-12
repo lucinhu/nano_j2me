@@ -883,12 +883,34 @@ NJFN(media_createPlayer_stream)
     {
         nj_u4 off = (nj_u4)(wi.data - barray_bytes(data));
         nj_u4 want = wi.frames * (nj_u4)wi.channels * (nj_u4)(wi.bits / 8);
-        nj_ref pcm = nj_byte_array_new(vm, want);
+
+        /*
+         * Widen 8-bit samples to the 16-bit the port takes.
+         *
+         * nj_port.pcm_write() takes nj_s2 samples and pcm_push() reads
+         * F_P_DATA as 16-bit, so an 8-bit file pushed as it stands plays at
+         * half speed as noise: every byte pair becomes one sample.  WAV's
+         * 8-bit samples are UNSIGNED with 128 as silence, which is where the
+         * -128 comes from.
+         */
+        nj_u4 wide = (wi.bits == 8) ? want * 2u : want;
+        nj_ref pcm = nj_byte_array_new(vm, wide);
         if (!pcm) {
             nj_root_release(vm, mark);
             return NJ_ERR;
         }
-        memcpy(pcm->u.bytes, barray_bytes(data) + off, (size_t)want);
+        if (wi.bits == 8) {
+            const nj_u1 *src = barray_bytes(data) + off;
+            nj_u1 *dst = pcm->u.bytes;
+            nj_u4 i;
+            for (i = 0u; i < want; i++) {
+                nj_s4 v = ((nj_s4)src[i] - 128) * 256;
+                dst[i * 2u] = (nj_u1)(v & 0xFF);
+                dst[i * 2u + 1u] = (nj_u1)((v >> 8) & 0xFF);
+            }
+        } else {
+            memcpy(pcm->u.bytes, barray_bytes(data) + off, (size_t)want);
+        }
         w_r(vm, p, F_P_DATA, "[B", pcm);
     }
     w_i(vm, p, F_P_RATE, wi.rate);
