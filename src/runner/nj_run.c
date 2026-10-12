@@ -837,6 +837,19 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
 
     rc = (int)nj_vm_exit_code(vm);
 
+    /*
+     * Always: a run that presented nothing and a run the MIDlet asked to end
+     * look identical in a frame dump.  Ports that cannot log still get the
+     * answer through nj_vm_stop_why().
+     */
+    if (port.log && vm) {
+        const char *why = nj_vm_stop_why(vm);
+        char whybuf[160];
+        snprintf(whybuf, sizeof(whybuf), "run ended: %s (exit code %d)",
+                 why ? why : "the frame budget ran out", rc);
+        port.log(port.user, 1, whybuf);
+    }
+
 done:
     nj_end_ms = (nj_s8)(port.millis ? port.millis(port.ud) : 0u);
     /*

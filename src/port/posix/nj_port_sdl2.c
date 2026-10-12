@@ -17,6 +17,13 @@
 #include <string.h>
 #include <stdio.h>
 
+/* Up, down, left, right, fire, soft-left, soft-right. */
+#define NJ_SDL2_NBTN 7
+enum {
+    NJ_SDL2_BTN_UP = 0, NJ_SDL2_BTN_DOWN, NJ_SDL2_BTN_LEFT, NJ_SDL2_BTN_RIGHT,
+    NJ_SDL2_BTN_FIRE, NJ_SDL2_BTN_SOFT_L, NJ_SDL2_BTN_SOFT_R
+};
+
 typedef struct sdl_state {
     SDL_Window   *window;
     SDL_Renderer *renderer;
@@ -49,7 +56,28 @@ typedef struct sdl_state {
     const char *capture;   /* NJ_SDL2_CAPTURE: proof-of-presentation dump */
     int  capture_n;
     int  capture_every;
+
+    /*
+     * On-screen keys.
+     *
+     * A desktop emulator has a keyboard, so these are for the other two cases:
+     * a touchscreen, and a user who would rather click than memorise that
+     * Escape is the soft-right key.  They are drawn OVER the game, in WINDOW
+     * coordinates - which is why this port computes its own letterbox instead
+     * of letting SDL_RenderSetLogicalSize do it: with a logical size set, every
+     * drawing call is in game pixels and a button would have to be drawn inside
+     * the 176x208 the game owns, covering the thing you are trying to play.
+     *
+     * Default on.  F12 or Tab hides them; NJ_SDL2_KEYS=0 starts hidden.
+     */
+    int  keys_visible;
+    SDL_Rect game_dst;      /* the letterboxed game area, in window pixels */
+    SDL_Rect btn[NJ_SDL2_NBTN];
+    nj_u1    btn_key[NJ_SDL2_NBTN];
+    int      btn_n;
+    int      btn_held;      /* index into btn[], or -1 */
 } sdl_state;
+
 
 #define SS(ud) ((sdl_state *)(ud))
 
@@ -233,7 +261,13 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
             return -1;
         }
     }
-    SDL_RenderSetLogicalSize(s->renderer, s->width, s->height);
+    /*
+     * NO SDL_RenderSetLogicalSize.  It would letterbox the game for us, and it
+     * would also put every subsequent drawing call in GAME pixels - so the
+     * on-screen keys would have to fit inside the 176x208 the game owns and
+     * would cover the thing being played.  sdl_layout() does the same
+     * arithmetic and leaves the renderer in window coordinates.
+     */
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
 
     s->texture = SDL_CreateTexture(s->renderer, sdl_pixel_format(NJ_PIXFMT),
@@ -306,12 +340,229 @@ static void sdl_push_pointer(sdl_state *s, int x, int y, unsigned char type)
     s->qt = (s->qt + 1) % (int)(sizeof(s->queue) / sizeof(s->queue[0]));
 }
 
+static void sdl_push_key(sdl_state *s, int key, int down)
+{
+    nj_event e;
+    memset(&e, 0, sizeof(e));
+    e.type = (nj_u1)(down ? NJ_EV_KEY_DOWN : NJ_EV_KEY_UP);
+    e.key = (nj_u1)key;
+    s->queue[s->qt] = e;
+    s->qt = (s->qt + 1) % (int)(sizeof(s->queue) / sizeof(s->queue[0]));
+}
+
 /* Window pixels to device pixels.  The window is the screen at an integer
  * scale, so this is exact and needs no rounding. */
-static int sdl_to_device(sdl_state *s, int v)
+/* Window point -> game point, through the letterbox.  A click in the bars maps
+ * outside the screen, which the runtime clips for us. */
+static void sdl_to_game(sdl_state *s, int wx, int wy, int *gx, int *gy)
 {
     int scale = (s->scale > 0) ? s->scale : 1;
-    return v / scale;
+    *gx = (wx - s->game_dst.x) / scale;
+    *gy = (wy - s->game_dst.y) / scale;
+}
+
+/*
+ * Where the game goes, and where the keys go.
+ *
+ * Recomputed whenever the window size is read rather than at setup, because the
+ * window is resizable and a layout computed once would leave the buttons
+ * floating over the wrong place after a resize.
+ *
+ * The game is scaled by the largest INTEGER factor that fits and centred, with
+ * the leftover as bars: J2ME art is pixel art and a fractional scale turns
+ * every sprite edge into a blur.
+ */
+static void sdl_layout(sdl_state *s)
+{
+    int win_w = 0, win_h = 0;
+    int scale, bs, pad, cross_x, cross_y;
+
+    if (s->window) {
+        SDL_GetWindowSize(s->window, &win_w, &win_h);
+    }
+    if (win_w <= 0 || win_h <= 0 || s->width <= 0 || s->height <= 0) {
+        s->game_dst.x = s->game_dst.y = 0;
+        s->game_dst.w = s->width;
+        s->game_dst.h = s->height;
+        s->btn_n = 0;
+        return;
+    }
+
+    scale = win_w / s->width;
+    if (win_h / s->height < scale) { scale = win_h / s->height; }
+    if (scale < 1) { scale = 1; }
+
+    s->game_dst.w = s->width * scale;
+    s->game_dst.h = s->height * scale;
+    s->game_dst.x = (win_w - s->game_dst.w) / 2;
+    s->game_dst.y = (win_h - s->game_dst.h) / 2;
+    s->scale = scale;
+
+    if (!s->keys_visible) {
+        s->btn_n = 0;
+        return;
+    }
+
+    /*
+     * A 3x3 cross of `bs` cells bottom-left, a round fire bottom-right, and the
+     * two soft keys along the top - the positions a phone had them in, so the
+     * layout needs no label to be understood.
+     */
+    bs = win_h / 7;
+    if (bs > 72) { bs = 72; }
+    if (bs < 24) { bs = 24; }
+    pad = bs / 3;
+
+    cross_x = pad;
+    cross_y = win_h - pad - 3 * bs;
+
+    s->btn[NJ_SDL2_BTN_LEFT].x  = cross_x;
+    s->btn[NJ_SDL2_BTN_LEFT].y  = cross_y + bs;
+    s->btn[NJ_SDL2_BTN_RIGHT].x = cross_x + 2 * bs;
+    s->btn[NJ_SDL2_BTN_RIGHT].y = cross_y + bs;
+    s->btn[NJ_SDL2_BTN_UP].x    = cross_x + bs;
+    s->btn[NJ_SDL2_BTN_UP].y    = cross_y;
+    s->btn[NJ_SDL2_BTN_DOWN].x  = cross_x + bs;
+    s->btn[NJ_SDL2_BTN_DOWN].y  = cross_y + 2 * bs;
+    s->btn[NJ_SDL2_BTN_FIRE].x  = win_w - pad - 2 * bs;
+    s->btn[NJ_SDL2_BTN_FIRE].y  = win_h - pad - 2 * bs;
+    s->btn[NJ_SDL2_BTN_SOFT_L].x = pad;
+    s->btn[NJ_SDL2_BTN_SOFT_L].y = pad;
+    s->btn[NJ_SDL2_BTN_SOFT_R].x = win_w - pad - 2 * bs;
+    s->btn[NJ_SDL2_BTN_SOFT_R].y = pad;
+
+    s->btn[NJ_SDL2_BTN_UP].w     = bs;  s->btn[NJ_SDL2_BTN_UP].h     = bs;
+    s->btn[NJ_SDL2_BTN_DOWN].w   = bs;  s->btn[NJ_SDL2_BTN_DOWN].h   = bs;
+    s->btn[NJ_SDL2_BTN_LEFT].w   = bs;  s->btn[NJ_SDL2_BTN_LEFT].h   = bs;
+    s->btn[NJ_SDL2_BTN_RIGHT].w  = bs;  s->btn[NJ_SDL2_BTN_RIGHT].h  = bs;
+    s->btn[NJ_SDL2_BTN_FIRE].w   = 2 * bs;
+    s->btn[NJ_SDL2_BTN_FIRE].h   = 2 * bs;
+    s->btn[NJ_SDL2_BTN_SOFT_L].w = 2 * bs;
+    s->btn[NJ_SDL2_BTN_SOFT_L].h = bs;
+    s->btn[NJ_SDL2_BTN_SOFT_R].w = 2 * bs;
+    s->btn[NJ_SDL2_BTN_SOFT_R].h = bs;
+    s->btn_n = NJ_SDL2_NBTN;
+}
+
+/*
+ * A filled triangle drawn as horizontal spans.  Spans rather than
+ * SDL_RenderGeometry because this has to work on the software renderer too, and
+ * a shape made of one-pixel lines always does.
+ *
+ * `dir` is SDL2_DIR_*, and it is NOT the button index: an arrow's direction and
+ * a button's position in an enum are different things that happen to be numbers,
+ * and passing the index here drew a cross whose arrows all pointed the wrong way
+ * while every rect was in the right place.
+ */
+#define SDL2_DIR_UP    0
+#define SDL2_DIR_DOWN  1
+#define SDL2_DIR_LEFT  2
+#define SDL2_DIR_RIGHT 3
+
+static void fill_triangle(SDL_Renderer *r, int x, int y, int w, int h, int dir)
+{
+    int i;
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    if (dir == SDL2_DIR_UP || dir == SDL2_DIR_DOWN) {
+        for (i = 0; i < h; i++) {
+            int half = (w / 2) * i / (h > 1 ? h - 1 : 1);
+            int yy = (dir == SDL2_DIR_UP) ? (y + i) : (y + h - 1 - i);
+            SDL_RenderDrawLine(r, x + w / 2 - half, yy, x + w / 2 + half, yy);
+        }
+    } else {
+        for (i = 0; i < w; i++) {
+            int half = (h / 2) * i / (w > 1 ? w - 1 : 1);
+            int xx = (dir == SDL2_DIR_LEFT) ? (x + i) : (x + w - 1 - i);
+            SDL_RenderDrawLine(r, xx, y + h / 2 - half, xx, y + h / 2 + half);
+        }
+    }
+}
+
+static void fill_round(SDL_Renderer *r, int cx, int cy, int rad)
+{
+    int dy;
+    for (dy = -rad; dy <= rad; dy++) {
+        int dx = rad;
+        while (dx > 0 && dx * dx + dy * dy > rad * rad) { dx--; }
+        SDL_RenderDrawLine(r, cx - dx, cy + dy, cx + dx, cy + dy);
+    }
+}
+
+static void sdl_draw_keys(sdl_state *s)
+{
+    int i;
+
+    if (s->btn_n <= 0) {
+        return;
+    }
+    SDL_SetRenderDrawBlendMode(s->renderer, SDL_BLENDMODE_BLEND);
+
+    for (i = 0; i < s->btn_n; i++) {
+        SDL_Rect *b = &s->btn[i];
+        int held = (s->btn_held == i);
+
+        /* Translucent, because these sit on top of somebody's game. */
+        SDL_SetRenderDrawColor(s->renderer, 250, 250, 250,
+                               (Uint8)(held ? 190 : 90));
+        if (i == NJ_SDL2_BTN_FIRE) {
+            fill_round(s->renderer, b->x + b->w / 2, b->y + b->h / 2,
+                       b->w / 2 - 2);
+        } else {
+            SDL_RenderFillRect(s->renderer, b);
+        }
+
+        SDL_SetRenderDrawColor(s->renderer, 20, 20, 20,
+                               (Uint8)(held ? 255 : 150));
+        if (i == NJ_SDL2_BTN_FIRE) {
+            fill_round(s->renderer, b->x + b->w / 2, b->y + b->h / 2,
+                       b->w / 2 - 2);
+            SDL_SetRenderDrawColor(s->renderer, 250, 250, 250, 160);
+            fill_round(s->renderer, b->x + b->w / 2, b->y + b->h / 2,
+                       b->w / 2 - 5);
+        } else {
+            SDL_RenderDrawRect(s->renderer, b);
+        }
+
+        /* A glyph so the cross reads as directions rather than as four boxes. */
+        SDL_SetRenderDrawColor(s->renderer, 30, 30, 30, 220);
+        if (i < 4) {
+            static const int arrow[NJ_SDL2_NBTN] = {
+                SDL2_DIR_UP, SDL2_DIR_DOWN, SDL2_DIR_LEFT, SDL2_DIR_RIGHT,
+                SDL2_DIR_UP, SDL2_DIR_UP, SDL2_DIR_UP
+            };
+            fill_triangle(s->renderer, b->x + b->w / 4, b->y + b->h / 4,
+                          b->w / 2, b->h / 2, arrow[i]);
+        } else if (i == NJ_SDL2_BTN_FIRE) {
+            SDL_SetRenderDrawColor(s->renderer, 30, 30, 30, 200);
+            fill_round(s->renderer, b->x + b->w / 2, b->y + b->h / 2,
+                       b->w / 5);
+        } else {
+            /* Soft keys: a filled bar, left- or right-aligned in the pill. */
+            SDL_Rect bar;
+            bar.w = b->w / 3;
+            bar.h = b->h / 4;
+            bar.y = b->y + (b->h - bar.h) / 2;
+            bar.x = (i == NJ_SDL2_BTN_SOFT_L) ? (b->x + b->w / 6)
+                                              : (b->x + b->w / 2);
+            SDL_RenderFillRect(s->renderer, &bar);
+        }
+    }
+    SDL_SetRenderDrawBlendMode(s->renderer, SDL_BLENDMODE_NONE);
+}
+
+/* Which key is at this window point, or -1. */
+static int sdl_key_at(sdl_state *s, int x, int y)
+{
+    int i;
+    for (i = 0; i < s->btn_n; i++) {
+        const SDL_Rect *b = &s->btn[i];
+        if (x >= b->x && x < b->x + b->w && y >= b->y && y < b->y + b->h) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 static void sdl_display_present(void *ud, int x, int y, int w, int h)
@@ -335,6 +586,25 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
         case SDL_KEYDOWN:
         case SDL_KEYUP: {
             int k = -1;
+
+            /*
+             * F12 or Tab shows and hides the on-screen keys.  Not F1: that is
+             * already the soft-left key, and a control that both does something
+             * and undoes it is worse than no control.
+             */
+            if ((ev.key.keysym.sym == SDLK_F12 || ev.key.keysym.sym == SDLK_TAB)) {
+                if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0) {
+                    s->keys_visible = !s->keys_visible;
+                    if (!s->keys_visible && s->btn_held >= 0) {
+                        /* Hiding them while one is held would leave the key
+                         * stuck down, because the release would never come. */
+                        sdl_push_key(s, s->btn_key[s->btn_held], 0);
+                        s->btn_held = -1;
+                    }
+                    sdl_layout(s);
+                }
+                break;
+            }
             switch (ev.key.keysym.sym) {
             case SDLK_UP:     k = NJ_KEY_UP;     break;
             case SDLK_DOWN:   k = NJ_KEY_DOWN;   break;
@@ -390,10 +660,32 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
         case SDL_MOUSEBUTTONDOWN:
         case SDL_MOUSEBUTTONUP:
             if (ev.button.button == SDL_BUTTON_LEFT) {
-                sdl_push_pointer(s, sdl_to_device(s, ev.button.x),
-                                 sdl_to_device(s, ev.button.y),
-                                 (ev.type == SDL_MOUSEBUTTONDOWN)
-                                     ? NJ_EV_POINTER_DOWN : NJ_EV_POINTER_UP);
+                /*
+                 * The on-screen keys come first.  A press that lands on one is
+                 * a key press, not a pointer press - otherwise every tap on the
+                 * D-pad would ALSO be reported to a MIDlet as a click at that
+                 * spot, and a game with a pointer UI would react to both.
+                 */
+                if (ev.type == SDL_MOUSEBUTTONDOWN) {
+                    int hit = sdl_key_at(s, ev.button.x, ev.button.y);
+                    if (hit >= 0) {
+                        sdl_push_key(s, s->btn_key[hit], 1);
+                        s->btn_held = hit;
+                        break;
+                    }
+                } else if (s->btn_held >= 0) {
+                    sdl_push_key(s, s->btn_key[s->btn_held], 0);
+                    s->btn_held = -1;
+                    break;
+                }
+                {
+                    int gx, gy;
+                    sdl_to_game(s, ev.button.x, ev.button.y, &gx, &gy);
+                    sdl_push_pointer(s, gx, gy,
+                                     (ev.type == SDL_MOUSEBUTTONDOWN)
+                                         ? NJ_EV_POINTER_DOWN
+                                         : NJ_EV_POINTER_UP);
+                }
             }
             break;
         case SDL_MOUSEMOTION:
@@ -401,11 +693,14 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
              * Only while a button is held.  A desktop mouse sweeping across the
              * window is not a finger on a panel, and reporting it as a drag
              * would give every MIDlet a stream of phantom moves.
+             *
+             * And not at all while an on-screen key is held: the finger that is
+             * pressing "right" is not dragging across the game.
              */
-            if ((ev.motion.state & SDL_BUTTON_LMASK) != 0) {
-                sdl_push_pointer(s, sdl_to_device(s, ev.motion.x),
-                                 sdl_to_device(s, ev.motion.y),
-                                 NJ_EV_POINTER_MOVE);
+            if ((ev.motion.state & SDL_BUTTON_LMASK) != 0 && s->btn_held < 0) {
+                int gx, gy;
+                sdl_to_game(s, ev.motion.x, ev.motion.y, &gx, &gy);
+                sdl_push_pointer(s, gx, gy, NJ_EV_POINTER_MOVE);
             }
             break;
         /*
@@ -415,14 +710,39 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
          */
         case SDL_FINGERDOWN:
         case SDL_FINGERUP:
-        case SDL_FINGERMOTION:
-            sdl_push_pointer(s,
-                             (int)(ev.tfinger.x * (float)s->width),
-                             (int)(ev.tfinger.y * (float)s->height),
-                             (ev.type == SDL_FINGERDOWN)   ? NJ_EV_POINTER_DOWN :
-                             (ev.type == SDL_FINGERUP)     ? NJ_EV_POINTER_UP :
-                                                             NJ_EV_POINTER_MOVE);
+        case SDL_FINGERMOTION: {
+            /*
+             * tfinger coordinates are normalised 0..1 over the WINDOW, so they
+             * have to come back to window pixels before the on-screen keys can
+             * be hit-tested, and then through the letterbox to reach the game.
+             */
+            int ww = 0, wh = 0;
+            int wx, wy, gx, gy;
+            SDL_GetWindowSize(s->window, &ww, &wh);
+            wx = (int)(ev.tfinger.x * (float)ww);
+            wy = (int)(ev.tfinger.y * (float)wh);
+
+            if (ev.type == SDL_FINGERDOWN) {
+                int hit = sdl_key_at(s, wx, wy);
+                if (hit >= 0) {
+                    sdl_push_key(s, s->btn_key[hit], 1);
+                    s->btn_held = hit;
+                    break;
+                }
+            } else if (s->btn_held >= 0) {
+                if (ev.type == SDL_FINGERUP) {
+                    sdl_push_key(s, s->btn_key[s->btn_held], 0);
+                    s->btn_held = -1;
+                }
+                break;
+            }
+            sdl_to_game(s, wx, wy, &gx, &gy);
+            sdl_push_pointer(s, gx, gy,
+                             (ev.type == SDL_FINGERDOWN) ? NJ_EV_POINTER_DOWN :
+                             (ev.type == SDL_FINGERUP)   ? NJ_EV_POINTER_UP :
+                                                           NJ_EV_POINTER_MOVE);
             break;
+        }
         default:
             break;
         }
@@ -442,8 +762,10 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
                       (const nj_u1 *)s->pixels + (size_t)r.y * (size_t)s->stride
                           + (size_t)r.x * (size_t)sdl_bytes_per_pixel(s->format),
                       s->stride);
+    sdl_layout(s);
     SDL_RenderClear(s->renderer);
-    SDL_RenderCopy(s->renderer, s->texture, NULL, NULL);
+    SDL_RenderCopy(s->renderer, s->texture, NULL, &s->game_dst);
+    sdl_draw_keys(s);
 
     /*
      * Optional proof-of-presentation capture.
@@ -756,6 +1078,27 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
         return NJ_ERR_NOMEM;
     }
     s->scale = 0;                 /* auto: largest integer fit */
+    /*
+     * On-screen keys: on by default, because the point of them is the user who
+     * has not memorised the keyboard map.  NJ_SDL2_KEYS=0 starts them hidden,
+     * and F12 or Tab toggles at run time.
+     */
+    {
+        const char *kv = SDL_getenv("NJ_SDL2_KEYS");
+        s->keys_visible = 1;
+        if (kv && kv[0] == '0') {
+            s->keys_visible = 0;
+        }
+    }
+    s->btn_held = -1;
+    s->btn_key[NJ_SDL2_BTN_UP]     = NJ_KEY_UP;
+    s->btn_key[NJ_SDL2_BTN_DOWN]   = NJ_KEY_DOWN;
+    s->btn_key[NJ_SDL2_BTN_LEFT]   = NJ_KEY_LEFT;
+    s->btn_key[NJ_SDL2_BTN_RIGHT]  = NJ_KEY_RIGHT;
+    s->btn_key[NJ_SDL2_BTN_FIRE]   = NJ_KEY_FIRE;
+    s->btn_key[NJ_SDL2_BTN_SOFT_L] = NJ_KEY_SOFT_LEFT;
+    s->btn_key[NJ_SDL2_BTN_SOFT_R] = NJ_KEY_SOFT_RIGHT;
+
     s->capture = SDL_getenv("NJ_SDL2_CAPTURE");
     s->capture_n = 0;
     s->capture_every = 1;

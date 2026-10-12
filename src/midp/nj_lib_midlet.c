@@ -79,7 +79,7 @@ NJFN(midlet_notifyDestroyed)
         nj_field_write_int(vm, NJ_THIS(args), f, NJ_MIDLET_DESTROYED);
     }
     /* The MIDlet is asking the AMS to end the application. */
-    nj_vm_stop(vm, 0);
+    nj_vm_stop_reason(vm, 0, "the MIDlet called notifyDestroyed()");
     return NJ_OK;
 }
 

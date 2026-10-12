@@ -265,6 +265,13 @@ const char *nj_ref_class_name(nj_ref o);
 /* The value passed to System.exit()/MIDlet.notifyDestroyed(), or 0. */
 nj_s4 nj_vm_exit_code(nj_vm *vm);
 
+/*
+ * Who asked the VM to stop, or NULL when it stopped by itself (the frame budget
+ * ran out, for instance).  The result points at a string literal, so it stays
+ * valid after the VM is destroyed and never needs freeing.
+ */
+const char *nj_vm_stop_why(const nj_vm *vm);
+
 /* Is the VM still running?  0 once the MIDlet has exited or asked to stop.
  * The runner needs this to drive the frame loop itself (see --run-frames). */
 int   nj_vm_running(nj_vm *vm);

@@ -370,6 +370,7 @@ struct nj_vm {
      */
     nj_u4      log_emitted;
     nj_u4      log_dropped;
+    const char *stop_why;     /* who asked the VM to stop, or NULL */
 
     /* seeded identity hash */
     nj_u4      hash_seed;
@@ -578,6 +579,7 @@ nj_status  nj_scheduler_step(nj_vm *vm);
 nj_status  nj_scheduler_run_until_idle(nj_vm *vm, nj_u4 budget_ms);
 nj_s8      nj_now_ms(nj_vm *vm);
 void       nj_vm_stop(nj_vm *vm, nj_s4 exit_code);
+void       nj_vm_stop_reason(nj_vm *vm, nj_s4 exit_code, const char *why);
 nj_status  nj_vm_monitor_wait(nj_vm *vm, nj_thread *t, nj_ref obj, nj_s8 timeout_ms);
 int        nj_vm_monitor_notify(nj_vm *vm, nj_ref obj, int all);
 nj_status  nj_thread_sleep(nj_vm *vm, nj_thread *t, nj_s8 ms);

@@ -498,3 +498,25 @@ void nj_vm_stop(nj_vm *vm, nj_s4 exit_code)
     vm->running = 0u;
     vm->state = NJ_VM_STOPPING;
 }
+
+/*
+ * Stop the VM, saying who asked for it.
+ *
+ * "Nothing was ever presented" and "the MIDlet called notifyDestroyed() in its
+ * first frame" leave the same empty frame directory, and telling them apart is
+ * the difference between a missing class and a game that quit on purpose.  The
+ * reason is a string literal: nothing here allocates, so nothing can leak.
+ */
+void nj_vm_stop_reason(nj_vm *vm, nj_s4 exit_code, const char *why)
+{
+    if (!vm) {
+        return;
+    }
+    nj_vm_stop(vm, exit_code);
+    vm->stop_why = why;
+}
+
+const char *nj_vm_stop_why(const nj_vm *vm)
+{
+    return vm ? vm->stop_why : NULL;
+}

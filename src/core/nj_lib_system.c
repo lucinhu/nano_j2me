@@ -119,7 +119,7 @@ NJFN(sys_exit)
 {
     nj_s4 code = NJ_ARG_INT(args, 0);
     /* Run finalisation is not modelled; stop the VM cleanly instead. */
-    nj_vm_stop(vm, code);
+    nj_vm_stop_reason(vm, code, "the MIDlet called System.exit()");
     return NJ_OK;
 }
 
@@ -335,7 +335,7 @@ NJFN(runtime_totalMemory)
 
 NJFN(runtime_exit)
 {
-    nj_vm_stop(vm, NJ_ARG_INT(args, 0));
+    nj_vm_stop_reason(vm, NJ_ARG_INT(args, 0), "the MIDlet called Runtime.exit()");
     return NJ_OK;
 }
 

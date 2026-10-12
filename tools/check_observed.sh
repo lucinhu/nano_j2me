@@ -56,6 +56,18 @@ for f in file_opens file_writes bytes_written; do
     fi
 done
 
+# Every run must say why it ended.  "Nothing was ever presented" and "the
+# MIDlet asked to be destroyed" leave the same empty frame directory, and the
+# reason is the only thing that tells a missing class from a game that quit.
+ended="$(printf '%s\n' "$out" | grep -m1 '^run ended:')"
+if [ -z "$ended" ]; then
+    note FAIL "the run never said why it ended"
+    fail=1
+elif ! printf '%s' "$ended" | grep -q "frame budget"; then
+    note FAIL "this fixture should end on the frame budget, but: $ended"
+    fail=1
+fi
+
 [ "$fail" -eq 0 ] && note ok "every observation is a real number, not a missing one"
 [ "$fail" -eq 0 ] && echo "PASS" || echo "FAILED"
 exit "$fail"
