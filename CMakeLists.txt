@@ -438,7 +438,12 @@ if(NJ_BUILD_TESTS)
                 ${NJ_FIXTURES}/constdemo.expected)
   endif()
 
-  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_poke.c)
+  # Only when the two downloaded titles are actually there: NJ_FIXTURES_FETCH_GAMES
+  # is off by default, and a test whose fixture is missing fails for a reason
+  # that has nothing to do with the emulator.  A gate that is red on a plain
+  # build is worse than no gate - it teaches people to ignore it.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_poke.c AND
+     EXISTS ${NJ_FIXTURES}/slimevolley.jar AND EXISTS ${NJ_FIXTURES}/game15.jar)
     nj_add_test(test_poke tests/test_poke.c
                 ${NJ_FIXTURES}/slimevolley.jar ${NJ_FIXTURES}/game15.jar)
   endif()
