@@ -741,15 +741,28 @@ static nj_ref gfx_new(nj_vm *vm, nj_ref target)
     nj_ref g;
     nj_value a1[1];
 
+    /*
+     * <init> is Java: it allocates, and the object being constructed is held
+     * only by this C local, which the collector cannot see.  Without the root
+     * the <init> itself could free its own receiver.  Rooting here is not
+     * enough on its own - the reference has to stay rooted until paint() has
+     * run, which is what canvas_call_paint_rooted() below is for.
+     */
+    nj_u4 mark = nj_root_mark(vm);
+
     g = nj_object_new(vm, G_CLS);
     if (!g) {
+        nj_root_release(vm, mark);
         return NULL;
     }
+    g = nj_root(vm, g);
     a1[0].r = target;
     if (nj_call_special(vm, g, G_CLS, "<init>", "(L" NJ_C_IMAGE ";)V",
                         a1, NULL) != NJ_OK) {
+        nj_root_release(vm, mark);
         return NULL;
     }
+    nj_root_release(vm, mark);
     return g;
 }
 
@@ -4132,12 +4145,28 @@ static int canvas_call_paint(nj_vm *vm, nj_ref canvas, nj_ref g)
  *
  * src/core/nj_internal.h states the rule this call site was breaking.
  */
+static int canvas_visible(nj_vm *vm, nj_ref canvas);
+
+/*
+ * Paint the canvas with its Graphics rooted - and with showNotify()/
+ * sizeChanged() inside the root too.
+ *
+ * Both halves are Java and both allocate, and the Graphics exists only in the
+ * caller's C local.  Rooting around paint() alone was not enough and did not
+ * fix anything: showNotify() runs first and the collection it triggers freed
+ * the Graphics before paint() was reached, so a title's own
+ * `aload_1; invokevirtual drawImage` dispatched on the freed block - SIGSEGV
+ * inside nj_method_lookup on a receiver that was not one of this VM's classes
+ * (idx=-1, super=nil).  It looked like a bad class table; it was a live
+ * reference nobody was holding.
+ */
 static int canvas_call_paint_rooted(nj_vm *vm, nj_ref canvas, nj_ref g)
 {
     nj_u4 mark = nj_root_mark(vm);
     int ok;
 
     g = nj_root(vm, g);
+    (void)canvas_visible(vm, canvas);
     ok = canvas_call_paint(vm, canvas, g);
     nj_root_release(vm, mark);
     return ok;
@@ -4432,7 +4461,6 @@ nj_status nj_midp_paint(nj_vm *vm)
         if (!g) {
             return NJ_ERR;   /* names the class; not a silent blank frame */
         }
-        (void)canvas_visible(vm, d);
         if (!canvas_call_paint_rooted(vm, d, g)) {
             /*
              * Leave a real exception pending if there is one: paint() is

@@ -368,6 +368,7 @@ void *nj_alloc(nj_vm *vm, nj_size bytes)
 {
     nj_block *b;
     nj_size total;
+    int collected = 0;
 
     if (!vm) {
         return NULL;
@@ -407,8 +408,20 @@ void *nj_alloc(nj_vm *vm, nj_size bytes)
             return NJ_BLOCK_PAYLOAD(b);
         }
 
-        /* Out of room: collect once and retry, then give up. */
-        if (!vm->gc_requested) {
+        /*
+         * Out of room: collect once and retry, then give up.
+         *
+         * The "once" has to be remembered HERE and not in vm->gc_requested:
+         * nj_gc_run clears that flag when it starts, so a request that no
+         * amount of collection can satisfy collected, retried, collected,
+         * retried - forever.  A title that asked for a 300 KB array on a heap
+         * with 7.2 MB free but no free block larger than 285 KB spun 750,000
+         * collections in twenty seconds and never returned: the emulator hung
+         * where the JVM contract says OutOfMemoryError.  The caller turns the
+         * NULL into that exception, which is what a game is written to catch.
+         */
+        if (!collected) {
+            collected = 1;
             vm->gc_requested = 1u;
             if (nj_gc_run(vm) == NJ_OK) {
                 continue;
