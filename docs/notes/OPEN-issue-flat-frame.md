@@ -147,3 +147,40 @@ The drawing calls therefore reach a surface and put pixels somewhere that is not
 the surface which gets presented, or the copy that would carry them is never
 made.  The next experiment should follow one `fillRect` from the call to the
 bytes of the presented frame, instead of testing more hypotheses in bulk.
+
+## The presentation pipeline is verified working (2026-10-12)
+
+For a while the corpus verdict for these titles read "N drawing calls reached
+nothing", which invited the conclusion that the runtime was losing the pixels.
+It is not: the pipeline was instrumented at a fixed pixel and moves data
+correctly.
+
+`nj_midp_paint()` hands `paint()` a Graphics bound to an off-screen buffer
+(`canvas_ensure_buffer()` + `gfx_new(vm, buf)`) and blits that buffer onto the
+screen itself. That is deliberate, not a defect, and it is why a probe that
+watches the Graphics methods only ever sees image-bound draws.
+
+Printed from inside the GameCanvas branch, at pixel (10,10), 疯狂企鹅中文版_10228
+at 320x240:
+
+    [probe] GC-BLIT img_view=1 buf(10,10)=0xffffffff
+            screen before=0xffffffff after=0xffffffff
+            scr=320x240 buf=320x240
+
+The buffer holds the colour, the blit runs, and the screen ends up holding it.
+So a flat frame means the buffer itself is a single colour: the game's own
+drawing produced that, and the runtime delivered it faithfully.
+
+Two consequences:
+
+  * "flat frame" is not one defect and not necessarily a defect at all. The
+    instrument now distinguishes "paint() was never called" (paints=0), "paint()
+    ran but made no drawing calls" (gfx=0) and "drawing calls ran and produced
+    this picture" (both non-zero), which is the useful part.
+  * The corpus note said "reached nothing", which was wrong; it now says the
+    calls "did not change the presented picture".
+
+Still not established: whether a title that draws a single colour is doing that
+by design at that screen size, or because our layout differs from the device it
+was written for. Telling those apart needs a probe inside the game's own paint
+path, not more counting at the boundary.

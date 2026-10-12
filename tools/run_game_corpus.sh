@@ -288,7 +288,7 @@ for jar in "${JARS[@]}"; do
             case "$gfx" in
                 0)   note="$note; paint() called nothing on the Graphics" ;;
                 '?') ;;
-                *)   note="$note; $gfx drawing calls reached nothing" ;;
+                *)   note="$note; $gfx drawing calls did not change the presented picture" ;;
             esac
             ;;
     esac
