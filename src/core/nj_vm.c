@@ -1387,6 +1387,27 @@ nj_ref nj_call_ref(nj_vm *vm, nj_ref obj, const char *cls, const char *name,
  * the silence, and it is still true: an InternalError is exactly what "the
  * interpreter failed without saying why" is.
  */
+/*
+ * A number in a diagnostic is not a diagnosis: "status -3" made a reader go
+ * and look up nj_types.h to find out that the thread had finished, which the
+ * MIDlet did on purpose.  The names come from nj_status, so they cannot drift.
+ */
+static const char *status_name(nj_status st)
+{
+    switch (st) {
+    case NJ_ERR_OOM:         return "the Java heap ran out";
+    case NJ_ERR_HALT:        return "the thread finished";
+    case NJ_ERR_YIELD:       return "the scheduler quantum expired";
+    case NJ_ERR_TIMEOUT:     return "a blocking native timed out";
+    case NJ_ERR_UNSUPPORTED: return "a feature is not compiled in";
+    case NJ_ERR_FORMAT:      return "malformed jar, class or image";
+    case NJ_ERR_STATE:       return "the VM was in the wrong state";
+    case NJ_ERR_EXIT:        return "System.exit() was called";
+    case NJ_ERR_NOMEM:       return "the host could not allocate";
+    default:                 return "unknown status";
+    }
+}
+
 static nj_ref take_or_synthesise(nj_vm *vm, const char *cls_name,
                                  const char *stage, const char *member,
                                  nj_status st)
@@ -1408,10 +1429,21 @@ static nj_ref take_or_synthesise(nj_vm *vm, const char *cls_name,
         snprintf(buf, sizeof(buf),
                  "%s of %s blocked (it called Thread.sleep or wait, and a C "
                  "caller cannot be suspended)", stage, cls_name);
+    } else if (st == NJ_ERR_HALT) {
+        /*
+         * The MIDlet stopped the run itself - notifyDestroyed() from <init>,
+         * which is what a title does when a check it makes fails.  Saying
+         * "failed" here sent a reader looking for a defect that is not
+         * there; the VM already knows the reason, so quote it.
+         */
+        const char *why = nj_vm_stop_why(vm);
+        snprintf(buf, sizeof(buf), "%s of %s stopped the run (%s)%s%s",
+                 stage, cls_name, status_name(st), why ? ": " : "",
+                 why ? why : "");
     } else {
         snprintf(buf, sizeof(buf),
-                 "%s of %s failed (status %d) and raised nothing (%s)",
-                 stage, cls_name, (int)st, member);
+                 "%s of %s failed: %s (%d), and raised nothing (%s)",
+                 stage, cls_name, status_name(st), (int)st, member);
     }
     return nj_exception_new(vm, "java/lang/InternalError", buf);
 }
