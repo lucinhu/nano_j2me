@@ -372,3 +372,33 @@ Two details that change the estimate:
 Nothing of this is written yet; the measurement is recorded so the next round
 decides with a number instead of an impression, which is how JSR 184 was
 scoped.
+
+## Every collected title can now resolve what it asks for
+
+`tools/fetch_52emu_games.py` has collected 395 real titles.  A sweep over all of
+them (8 frames each, `--port headless`, 240x320, `--heap 16`) looks for the
+runtime *naming* something it does not have:
+
+    NoClassDefFoundError | NoSuchMethodError | NoSuchFieldError
+    UnsatisfiedLinkError | ClassNotFoundException
+
+Result: **0 of 395**.  Not one title is stopped by a missing class, method,
+field or unbound native any more.
+
+This is worth stating precisely, because it is not the same as "395 titles
+work".  What it says is that the *static* surface -- the vocabulary of classes
+and members a MIDlet can name -- is complete for everything collected here.  A
+title can still fail on behaviour: drawing that does not reach the picture,
+`.m3g` containers this runtime declines to parse, Mascot Capsule models with no
+geometry parser, or the game's own bugs.  Those failures no longer look like
+"the emulator is missing X"; they look like "the emulator does X differently".
+
+Re-run it with:
+
+    for jar in tests/games/*.jar; do
+      build/nj2me --port headless --size 240x320 --heap 16 --run-frames 8 "$jar" 2>&1 \
+        | grep -oE "(NoClassDefFoundError|NoSuchMethodError|NoSuchFieldError|UnsatisfiedLinkError|ClassNotFoundException): [^ ]+"
+    done | sort -u
+
+The count is a moving target only in one direction: new titles get fetched, and
+if one names something new, this is how it gets found.
