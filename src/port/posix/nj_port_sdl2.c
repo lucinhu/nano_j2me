@@ -9,6 +9,8 @@
  * A microcontroller port does the same three things against an SPI panel.
  */
 #include "nj2me/nj_port.h"
+
+#include "nj_sdl2_font.h"
 #include "nj2me/nj_types.h"
 
 #include <SDL.h>
@@ -17,11 +19,79 @@
 #include <string.h>
 #include <stdio.h>
 
-/* Up, down, left, right, fire, soft-left, soft-right. */
-#define NJ_SDL2_NBTN 7
+/*
+ * EVERY key the runtime has, not just the four directions and fire.
+ *
+ * A J2ME keypad is 27 keys, and games use all of them: the digits as a menu
+ * shortcut, * and # as extra fire buttons, the soft keys for the command bar,
+ * and A/B/C/D for whatever the game likes.  An overlay with only a D-pad would
+ * run a platformer and nothing else.
+ */
 enum {
     NJ_SDL2_BTN_UP = 0, NJ_SDL2_BTN_DOWN, NJ_SDL2_BTN_LEFT, NJ_SDL2_BTN_RIGHT,
-    NJ_SDL2_BTN_FIRE, NJ_SDL2_BTN_SOFT_L, NJ_SDL2_BTN_SOFT_R
+    NJ_SDL2_BTN_FIRE,
+    NJ_SDL2_BTN_1, NJ_SDL2_BTN_2, NJ_SDL2_BTN_3,
+    NJ_SDL2_BTN_4, NJ_SDL2_BTN_5, NJ_SDL2_BTN_6,
+    NJ_SDL2_BTN_7, NJ_SDL2_BTN_8, NJ_SDL2_BTN_9,
+    NJ_SDL2_BTN_STAR, NJ_SDL2_BTN_0, NJ_SDL2_BTN_POUND,
+    NJ_SDL2_BTN_SOFT_L, NJ_SDL2_BTN_SOFT_R, NJ_SDL2_BTN_CLEAR,
+    NJ_SDL2_BTN_A, NJ_SDL2_BTN_B, NJ_SDL2_BTN_C, NJ_SDL2_BTN_D,
+    NJ_SDL2_BTN_VOLUP, NJ_SDL2_BTN_VOLDOWN, NJ_SDL2_BTN_POWER,
+    NJ_SDL2_NBTN
+};
+
+/* What to draw on a button. */
+enum { NJ_SDL2_SHAPE_RECT = 0, NJ_SDL2_SHAPE_TRI, NJ_SDL2_SHAPE_DOT };
+
+/* Which way an arrow points.  NOT the button index: a direction and a position
+ * in an enum are different things that happen to be numbers, and passing the
+ * index drew a cross whose arrows all pointed the wrong way while every rect was
+ * in the right place. */
+#define SDL2_DIR_UP    0
+#define SDL2_DIR_DOWN  1
+#define SDL2_DIR_LEFT  2
+#define SDL2_DIR_RIGHT 3
+
+typedef struct sdl2_key_def {
+    nj_u1       key;      /* the nj_key this button sends */
+    nj_u1       shape;
+    nj_u1       arrow;    /* SDL2_DIR_*, for NJ_SDL2_SHAPE_TRI */
+    const char *label;    /* drawn with nj_sdl2_font.h; NULL for none */
+} sdl2_key_def;
+
+/*
+ * The buttons, in the enum's order.  `event` at the bottom of the file is the
+ * only thing that has to stay in step with the enum, and it is one line per
+ * entry.
+ */
+static const sdl2_key_def sdl2_keys[NJ_SDL2_NBTN] = {
+    { NJ_KEY_UP,         NJ_SDL2_SHAPE_TRI,  SDL2_DIR_UP,    0 },
+    { NJ_KEY_DOWN,       NJ_SDL2_SHAPE_TRI,  SDL2_DIR_DOWN,  0 },
+    { NJ_KEY_LEFT,       NJ_SDL2_SHAPE_TRI,  SDL2_DIR_LEFT,  0 },
+    { NJ_KEY_RIGHT,      NJ_SDL2_SHAPE_TRI,  SDL2_DIR_RIGHT, 0 },
+    { NJ_KEY_FIRE,       NJ_SDL2_SHAPE_DOT,  SDL2_DIR_UP,    0 },
+    { NJ_KEY_1,          NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "1" },
+    { NJ_KEY_2,          NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "2" },
+    { NJ_KEY_3,          NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "3" },
+    { NJ_KEY_4,          NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "4" },
+    { NJ_KEY_5,          NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "5" },
+    { NJ_KEY_6,          NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "6" },
+    { NJ_KEY_7,          NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "7" },
+    { NJ_KEY_8,          NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "8" },
+    { NJ_KEY_9,          NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "9" },
+    { NJ_KEY_STAR,       NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "*" },
+    { NJ_KEY_0,          NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "0" },
+    { NJ_KEY_POUND,      NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "#" },
+    { NJ_KEY_SOFT_LEFT,  NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "L" },
+    { NJ_KEY_SOFT_RIGHT, NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "R" },
+    { NJ_KEY_CLEAR,      NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "CLR" },
+    { NJ_KEY_GAME_A,     NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "A" },
+    { NJ_KEY_GAME_B,     NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "B" },
+    { NJ_KEY_GAME_C,     NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "C" },
+    { NJ_KEY_GAME_D,     NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "D" },
+    { NJ_KEY_VOLUP,      NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "+" },
+    { NJ_KEY_VOLDOWN,    NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "-" },
+    { NJ_KEY_POWER,      NJ_SDL2_SHAPE_RECT, SDL2_DIR_UP,    "P" }
 };
 
 typedef struct sdl_state {
@@ -73,7 +143,6 @@ typedef struct sdl_state {
     int  keys_visible;
     SDL_Rect game_dst;      /* the letterboxed game area, in window pixels */
     SDL_Rect btn[NJ_SDL2_NBTN];
-    nj_u1    btn_key[NJ_SDL2_NBTN];
     int      btn_n;
     int      btn_held;      /* index into btn[], or -1 */
 } sdl_state;
@@ -375,7 +444,8 @@ static void sdl_to_game(sdl_state *s, int wx, int wy, int *gx, int *gy)
 static void sdl_layout(sdl_state *s)
 {
     int win_w = 0, win_h = 0;
-    int scale, bs, pad, cross_x, cross_y;
+    int scale, bs, ks, gs, pad, gap;
+    int dx, dy, fx, fy, kx, ky, gy, vy, cy;
 
     if (s->window) {
         SDL_GetWindowSize(s->window, &win_w, &win_h);
@@ -388,10 +458,14 @@ static void sdl_layout(sdl_state *s)
         return;
     }
 
+    /*
+     * The game keeps the middle: the largest INTEGER scale that fits, centred,
+     * with the leftover as bars.  Integer because J2ME art is pixel art and a
+     * fractional scale turns every sprite edge into a blur.
+     */
     scale = win_w / s->width;
     if (win_h / s->height < scale) { scale = win_h / s->height; }
     if (scale < 1) { scale = 1; }
-
     s->game_dst.w = s->width * scale;
     s->game_dst.h = s->height * scale;
     s->game_dst.x = (win_w - s->game_dst.w) / 2;
@@ -404,61 +478,125 @@ static void sdl_layout(sdl_state *s)
     }
 
     /*
-     * A 3x3 cross of `bs` cells bottom-left, a round fire bottom-right, and the
-     * two soft keys along the top - the positions a phone had them in, so the
-     * layout needs no label to be understood.
+     * Three groups, laid out from the window size so they scale with it:
+     *
+     *   left   the D-pad cross, and the four game keys under it
+     *   right  the twelve-key phone pad, CLEAR under it, volume/power above it
+     *   top    the two soft keys
+     *
+     * Sizes are clamped rather than proportional alone, so the keys stay
+     * tappable in a small window and do not turn into billboards in a large one.
      */
-    bs = win_h / 7;
-    if (bs > 72) { bs = 72; }
-    if (bs < 24) { bs = 24; }
-    pad = bs / 3;
+    bs = win_h / 11;   if (bs > 56) { bs = 56; }   if (bs < 16) { bs = 16; }
+    ks = bs * 9 / 10;  if (ks > 48) { ks = 48; }   if (ks < 14) { ks = 14; }
+    gs = bs * 4 / 5;   if (gs > 44) { gs = 44; }   if (gs < 14) { gs = 14; }
+    pad = bs / 4;      if (pad < 4) { pad = 4; }
+    gap = pad;
 
-    cross_x = pad;
-    cross_y = win_h - pad - 3 * bs;
+    /* ---- left: the cross ---- */
+    dx = pad;
+    dy = win_h - pad - 3 * bs - gap - 2 * gs;
+    s->btn[NJ_SDL2_BTN_UP].x    = dx + bs;  s->btn[NJ_SDL2_BTN_UP].y    = dy;
+    s->btn[NJ_SDL2_BTN_LEFT].x  = dx;       s->btn[NJ_SDL2_BTN_LEFT].y  = dy + bs;
+    s->btn[NJ_SDL2_BTN_RIGHT].x = dx + 2 * bs;
+    s->btn[NJ_SDL2_BTN_RIGHT].y = dy + bs;
+    s->btn[NJ_SDL2_BTN_DOWN].x  = dx + bs;  s->btn[NJ_SDL2_BTN_DOWN].y  = dy + 2 * bs;
+    s->btn[NJ_SDL2_BTN_UP].w    = bs;  s->btn[NJ_SDL2_BTN_UP].h    = bs;
+    s->btn[NJ_SDL2_BTN_DOWN].w  = bs;  s->btn[NJ_SDL2_BTN_DOWN].h  = bs;
+    s->btn[NJ_SDL2_BTN_LEFT].w  = bs;  s->btn[NJ_SDL2_BTN_LEFT].h  = bs;
+    s->btn[NJ_SDL2_BTN_RIGHT].w = bs;  s->btn[NJ_SDL2_BTN_RIGHT].h = bs;
 
-    s->btn[NJ_SDL2_BTN_LEFT].x  = cross_x;
-    s->btn[NJ_SDL2_BTN_LEFT].y  = cross_y + bs;
-    s->btn[NJ_SDL2_BTN_RIGHT].x = cross_x + 2 * bs;
-    s->btn[NJ_SDL2_BTN_RIGHT].y = cross_y + bs;
-    s->btn[NJ_SDL2_BTN_UP].x    = cross_x + bs;
-    s->btn[NJ_SDL2_BTN_UP].y    = cross_y;
-    s->btn[NJ_SDL2_BTN_DOWN].x  = cross_x + bs;
-    s->btn[NJ_SDL2_BTN_DOWN].y  = cross_y + 2 * bs;
-    s->btn[NJ_SDL2_BTN_FIRE].x  = win_w - pad - 2 * bs;
-    s->btn[NJ_SDL2_BTN_FIRE].y  = win_h - pad - 2 * bs;
+    /*
+     * FIRE goes in the space between the cross and the game, sized to FIT that
+     * space rather than to a constant.
+     *
+     * The game is centred and takes the whole height, so the only room is the
+     * side bars, and how wide they are depends on the window: a fixed 2*bs put
+     * the button on top of the game at this window size and would put it in the
+     * middle of nowhere at another.  Below `bs` it stops shrinking and starts
+     * overlapping instead - a fire button you cannot hit is worse than one that
+     * covers a few pixels of grass.
+     */
+    {
+        int free_w = s->game_dst.x - (dx + 3 * bs) - gap;
+        int fbs = free_w - gap;
+        if (fbs > 2 * bs) { fbs = 2 * bs; }
+        if (fbs < bs) { fbs = bs; }
+        fx = dx + 3 * bs + gap + ((free_w - fbs) > 0 ? (free_w - fbs) / 2 : 0);
+        fy = dy + (3 * bs - fbs) / 2;
+        if (fy < dy) { fy = dy; }
+        s->btn[NJ_SDL2_BTN_FIRE].x = fx;
+        s->btn[NJ_SDL2_BTN_FIRE].y = fy;
+        s->btn[NJ_SDL2_BTN_FIRE].w = fbs;
+        s->btn[NJ_SDL2_BTN_FIRE].h = fbs;
+    }
+
+    /* ---- left, below the cross: A/B/C/D in a 2x2 ---- */
+    gy = dy + 3 * bs + gap;
+    s->btn[NJ_SDL2_BTN_A].x = dx;          s->btn[NJ_SDL2_BTN_A].y = gy;
+    s->btn[NJ_SDL2_BTN_B].x = dx + gs;     s->btn[NJ_SDL2_BTN_B].y = gy;
+    s->btn[NJ_SDL2_BTN_C].x = dx;          s->btn[NJ_SDL2_BTN_C].y = gy + gs;
+    s->btn[NJ_SDL2_BTN_D].x = dx + gs;     s->btn[NJ_SDL2_BTN_D].y = gy + gs;
+    s->btn[NJ_SDL2_BTN_A].w = gs; s->btn[NJ_SDL2_BTN_A].h = gs;
+    s->btn[NJ_SDL2_BTN_B].w = gs; s->btn[NJ_SDL2_BTN_B].h = gs;
+    s->btn[NJ_SDL2_BTN_C].w = gs; s->btn[NJ_SDL2_BTN_C].h = gs;
+    s->btn[NJ_SDL2_BTN_D].w = gs; s->btn[NJ_SDL2_BTN_D].h = gs;
+
+    /* ---- right: the twelve-key pad, 1-9 then *0# ---- */
+    kx = win_w - pad - 3 * ks;
+    cy = win_h - pad - gs;                 /* CLEAR sits on the bottom */
+    ky = cy - gap - 4 * ks;                /* the pad above it */
+    {
+        static const int pad_btn[12] = {
+            NJ_SDL2_BTN_1, NJ_SDL2_BTN_2, NJ_SDL2_BTN_3,
+            NJ_SDL2_BTN_4, NJ_SDL2_BTN_5, NJ_SDL2_BTN_6,
+            NJ_SDL2_BTN_7, NJ_SDL2_BTN_8, NJ_SDL2_BTN_9,
+            NJ_SDL2_BTN_STAR, NJ_SDL2_BTN_0, NJ_SDL2_BTN_POUND
+        };
+        int n;
+        for (n = 0; n < 12; n++) {
+            s->btn[pad_btn[n]].x = kx + (n % 3) * ks;
+            s->btn[pad_btn[n]].y = ky + (n / 3) * ks;
+            s->btn[pad_btn[n]].w = ks;
+            s->btn[pad_btn[n]].h = ks;
+        }
+    }
+    s->btn[NJ_SDL2_BTN_CLEAR].x = kx;
+    s->btn[NJ_SDL2_BTN_CLEAR].y = cy;
+    s->btn[NJ_SDL2_BTN_CLEAR].w = 3 * ks;
+    s->btn[NJ_SDL2_BTN_CLEAR].h = gs;
+
+    /* Volume and power above the pad, out of the way of the digits. */
+    vy = ky - gap - gs;
+    s->btn[NJ_SDL2_BTN_VOLUP].x   = kx;
+    s->btn[NJ_SDL2_BTN_VOLUP].y   = vy;
+    s->btn[NJ_SDL2_BTN_VOLDOWN].x = kx + ks;
+    s->btn[NJ_SDL2_BTN_VOLDOWN].y = vy;
+    s->btn[NJ_SDL2_BTN_POWER].x   = kx + 2 * ks;
+    s->btn[NJ_SDL2_BTN_POWER].y   = vy;
+    s->btn[NJ_SDL2_BTN_VOLUP].w   = ks;
+    s->btn[NJ_SDL2_BTN_VOLUP].h   = gs;
+    s->btn[NJ_SDL2_BTN_VOLDOWN].w = ks;
+    s->btn[NJ_SDL2_BTN_VOLDOWN].h = gs;
+    s->btn[NJ_SDL2_BTN_POWER].w   = ks;
+    s->btn[NJ_SDL2_BTN_POWER].h   = gs;
+
+    /* ---- top: the soft keys, where a phone had them ---- */
     s->btn[NJ_SDL2_BTN_SOFT_L].x = pad;
     s->btn[NJ_SDL2_BTN_SOFT_L].y = pad;
     s->btn[NJ_SDL2_BTN_SOFT_R].x = win_w - pad - 2 * bs;
     s->btn[NJ_SDL2_BTN_SOFT_R].y = pad;
-
-    s->btn[NJ_SDL2_BTN_UP].w     = bs;  s->btn[NJ_SDL2_BTN_UP].h     = bs;
-    s->btn[NJ_SDL2_BTN_DOWN].w   = bs;  s->btn[NJ_SDL2_BTN_DOWN].h   = bs;
-    s->btn[NJ_SDL2_BTN_LEFT].w   = bs;  s->btn[NJ_SDL2_BTN_LEFT].h   = bs;
-    s->btn[NJ_SDL2_BTN_RIGHT].w  = bs;  s->btn[NJ_SDL2_BTN_RIGHT].h  = bs;
-    s->btn[NJ_SDL2_BTN_FIRE].w   = 2 * bs;
-    s->btn[NJ_SDL2_BTN_FIRE].h   = 2 * bs;
     s->btn[NJ_SDL2_BTN_SOFT_L].w = 2 * bs;
     s->btn[NJ_SDL2_BTN_SOFT_L].h = bs;
     s->btn[NJ_SDL2_BTN_SOFT_R].w = 2 * bs;
     s->btn[NJ_SDL2_BTN_SOFT_R].h = bs;
+
     s->btn_n = NJ_SDL2_NBTN;
 }
 
-/*
- * A filled triangle drawn as horizontal spans.  Spans rather than
+/* A filled triangle drawn as horizontal spans.  Spans rather than
  * SDL_RenderGeometry because this has to work on the software renderer too, and
- * a shape made of one-pixel lines always does.
- *
- * `dir` is SDL2_DIR_*, and it is NOT the button index: an arrow's direction and
- * a button's position in an enum are different things that happen to be numbers,
- * and passing the index here drew a cross whose arrows all pointed the wrong way
- * while every rect was in the right place.
- */
-#define SDL2_DIR_UP    0
-#define SDL2_DIR_DOWN  1
-#define SDL2_DIR_LEFT  2
-#define SDL2_DIR_RIGHT 3
-
+ * a shape made of one-pixel lines always does. */
 static void fill_triangle(SDL_Renderer *r, int x, int y, int w, int h, int dir)
 {
     int i;
@@ -483,10 +621,65 @@ static void fill_triangle(SDL_Renderer *r, int x, int y, int w, int h, int dir)
 static void fill_round(SDL_Renderer *r, int cx, int cy, int rad)
 {
     int dy;
+    if (rad < 1) {
+        return;
+    }
     for (dy = -rad; dy <= rad; dy++) {
         int dx = rad;
         while (dx > 0 && dx * dx + dy * dy > rad * rad) { dx--; }
         SDL_RenderDrawLine(r, cx - dx, cy + dy, cx + dx, cy + dy);
+    }
+}
+
+/*
+ * A label, centred, at the largest integer scale that fits the button.
+ *
+ * Integer for the same reason the game is: a 5x7 font scaled by 7.3 is a
+ * smudge.  A label that cannot fit even at 1:1 is dropped rather than drawn
+ * over the edge - a truncated "CLR" is worse than no label, because the key
+ * beside it is then a guess.
+ */
+static void draw_label(SDL_Renderer *r, const SDL_Rect *b, const char *text)
+{
+    int len = 0;
+    int sc, tw, th, ox, oy, i;
+    const char *q;
+
+    for (q = text; *q; q++) { len++; }
+    if (len <= 0) {
+        return;
+    }
+    sc = (b->w - 6) / (SDL2_GLYPH_W * len + (len - 1));
+    if ((b->h - 6) / SDL2_GLYPH_H < sc) { sc = (b->h - 6) / SDL2_GLYPH_H; }
+    if (sc < 1) {
+        return;
+    }
+    tw = (SDL2_GLYPH_W * len + (len - 1)) * sc;
+    th = SDL2_GLYPH_H * sc;
+    ox = b->x + (b->w - tw) / 2;
+    oy = b->y + (b->h - th) / 2;
+
+    for (i = 0; i < len; i++) {
+        const sdl2_glyph *g = NULL;
+        int k;
+        for (k = 0; k < SDL2_FONT_N; k++) {
+            if (sdl2_font[k].ch == text[i]) { g = &sdl2_font[k]; break; }
+        }
+        if (g) {
+            int col, row;
+            for (col = 0; col < SDL2_GLYPH_W; col++) {
+                for (row = 0; row < SDL2_GLYPH_H; row++) {
+                    if ((g->col[col] & (1u << row)) != 0u) {
+                        SDL_Rect p;
+                        p.x = ox + (i * (SDL2_GLYPH_W + 1) + col) * sc;
+                        p.y = oy + row * sc;
+                        p.w = sc;
+                        p.h = sc;
+                        SDL_RenderFillRect(r, &p);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -500,65 +693,62 @@ static void sdl_draw_keys(sdl_state *s)
     SDL_SetRenderDrawBlendMode(s->renderer, SDL_BLENDMODE_BLEND);
 
     for (i = 0; i < s->btn_n; i++) {
-        SDL_Rect *b = &s->btn[i];
+        const SDL_Rect *b = &s->btn[i];
+        const sdl2_key_def *k = &sdl2_keys[i];
         int held = (s->btn_held == i);
 
         /* Translucent, because these sit on top of somebody's game. */
         SDL_SetRenderDrawColor(s->renderer, 250, 250, 250,
-                               (Uint8)(held ? 190 : 90));
-        if (i == NJ_SDL2_BTN_FIRE) {
+                               (Uint8)(held ? 200 : 96));
+        if (k->shape == NJ_SDL2_SHAPE_DOT) {
             fill_round(s->renderer, b->x + b->w / 2, b->y + b->h / 2,
                        b->w / 2 - 2);
         } else {
             SDL_RenderFillRect(s->renderer, b);
         }
 
-        SDL_SetRenderDrawColor(s->renderer, 20, 20, 20,
-                               (Uint8)(held ? 255 : 150));
-        if (i == NJ_SDL2_BTN_FIRE) {
+        SDL_SetRenderDrawColor(s->renderer, 25, 25, 25,
+                               (Uint8)(held ? 255 : 170));
+        if (k->shape == NJ_SDL2_SHAPE_DOT) {
             fill_round(s->renderer, b->x + b->w / 2, b->y + b->h / 2,
-                       b->w / 2 - 2);
-            SDL_SetRenderDrawColor(s->renderer, 250, 250, 250, 160);
+                       b->w / 2 - 3);
+            SDL_SetRenderDrawColor(s->renderer, 250, 250, 250, 180);
             fill_round(s->renderer, b->x + b->w / 2, b->y + b->h / 2,
-                       b->w / 2 - 5);
+                       b->w / 2 - 7);
         } else {
             SDL_RenderDrawRect(s->renderer, b);
         }
 
-        /* A glyph so the cross reads as directions rather than as four boxes. */
-        SDL_SetRenderDrawColor(s->renderer, 30, 30, 30, 220);
-        if (i < 4) {
-            static const int arrow[NJ_SDL2_NBTN] = {
-                SDL2_DIR_UP, SDL2_DIR_DOWN, SDL2_DIR_LEFT, SDL2_DIR_RIGHT,
-                SDL2_DIR_UP, SDL2_DIR_UP, SDL2_DIR_UP
-            };
+        SDL_SetRenderDrawColor(s->renderer, 20, 20, 20, 235);
+        if (k->shape == NJ_SDL2_SHAPE_TRI) {
             fill_triangle(s->renderer, b->x + b->w / 4, b->y + b->h / 4,
-                          b->w / 2, b->h / 2, arrow[i]);
-        } else if (i == NJ_SDL2_BTN_FIRE) {
-            SDL_SetRenderDrawColor(s->renderer, 30, 30, 30, 200);
+                          b->w / 2, b->h / 2, k->arrow);
+        } else if (k->shape == NJ_SDL2_SHAPE_DOT) {
             fill_round(s->renderer, b->x + b->w / 2, b->y + b->h / 2,
                        b->w / 5);
-        } else {
-            /* Soft keys: a filled bar, left- or right-aligned in the pill. */
-            SDL_Rect bar;
-            bar.w = b->w / 3;
-            bar.h = b->h / 4;
-            bar.y = b->y + (b->h - bar.h) / 2;
-            bar.x = (i == NJ_SDL2_BTN_SOFT_L) ? (b->x + b->w / 6)
-                                              : (b->x + b->w / 2);
-            SDL_RenderFillRect(s->renderer, &bar);
+        } else if (k->label) {
+            draw_label(s->renderer, b, k->label);
         }
     }
     SDL_SetRenderDrawBlendMode(s->renderer, SDL_BLENDMODE_NONE);
 }
 
-/* Which key is at this window point, or -1. */
+/* Which button is at this window point, or -1. */
 static int sdl_key_at(sdl_state *s, int x, int y)
 {
     int i;
     for (i = 0; i < s->btn_n; i++) {
         const SDL_Rect *b = &s->btn[i];
         if (x >= b->x && x < b->x + b->w && y >= b->y && y < b->y + b->h) {
+            /* The fire button is round; the corners of its box are not it. */
+            if (sdl2_keys[i].shape == NJ_SDL2_SHAPE_DOT) {
+                int cx = b->x + b->w / 2 - x;
+                int cy = b->y + b->h / 2 - y;
+                int rad = b->w / 2 - 2;
+                if (cx * cx + cy * cy > rad * rad) {
+                    continue;
+                }
+            }
             return i;
         }
     }
@@ -598,7 +788,7 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
                     if (!s->keys_visible && s->btn_held >= 0) {
                         /* Hiding them while one is held would leave the key
                          * stuck down, because the release would never come. */
-                        sdl_push_key(s, s->btn_key[s->btn_held], 0);
+                        sdl_push_key(s, sdl2_keys[s->btn_held].key, 0);
                         s->btn_held = -1;
                     }
                     sdl_layout(s);
@@ -669,12 +859,12 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
                 if (ev.type == SDL_MOUSEBUTTONDOWN) {
                     int hit = sdl_key_at(s, ev.button.x, ev.button.y);
                     if (hit >= 0) {
-                        sdl_push_key(s, s->btn_key[hit], 1);
+                        sdl_push_key(s, sdl2_keys[hit].key, 1);
                         s->btn_held = hit;
                         break;
                     }
                 } else if (s->btn_held >= 0) {
-                    sdl_push_key(s, s->btn_key[s->btn_held], 0);
+                    sdl_push_key(s, sdl2_keys[s->btn_held].key, 0);
                     s->btn_held = -1;
                     break;
                 }
@@ -725,13 +915,13 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
             if (ev.type == SDL_FINGERDOWN) {
                 int hit = sdl_key_at(s, wx, wy);
                 if (hit >= 0) {
-                    sdl_push_key(s, s->btn_key[hit], 1);
+                    sdl_push_key(s, sdl2_keys[hit].key, 1);
                     s->btn_held = hit;
                     break;
                 }
             } else if (s->btn_held >= 0) {
                 if (ev.type == SDL_FINGERUP) {
-                    sdl_push_key(s, s->btn_key[s->btn_held], 0);
+                    sdl_push_key(s, sdl2_keys[s->btn_held].key, 0);
                     s->btn_held = -1;
                 }
                 break;
@@ -1091,13 +1281,6 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
         }
     }
     s->btn_held = -1;
-    s->btn_key[NJ_SDL2_BTN_UP]     = NJ_KEY_UP;
-    s->btn_key[NJ_SDL2_BTN_DOWN]   = NJ_KEY_DOWN;
-    s->btn_key[NJ_SDL2_BTN_LEFT]   = NJ_KEY_LEFT;
-    s->btn_key[NJ_SDL2_BTN_RIGHT]  = NJ_KEY_RIGHT;
-    s->btn_key[NJ_SDL2_BTN_FIRE]   = NJ_KEY_FIRE;
-    s->btn_key[NJ_SDL2_BTN_SOFT_L] = NJ_KEY_SOFT_LEFT;
-    s->btn_key[NJ_SDL2_BTN_SOFT_R] = NJ_KEY_SOFT_RIGHT;
 
     s->capture = SDL_getenv("NJ_SDL2_CAPTURE");
     s->capture_n = 0;

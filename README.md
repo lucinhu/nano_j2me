@@ -120,6 +120,34 @@ Set `-DNJ_GENERATE_FIXTURES=ON` at configure time to get the old behaviour back.
 The headless port is always available and is what the test suite uses. The SDL2
 port is built automatically when `libsdl2-dev` (or the equivalent) is installed.
 
+## On-screen keys
+
+The SDL2 window draws **every J2ME key**, because a D-pad alone runs a platformer
+and nothing else:
+
+![on-screen keys](docs/images/sdl2-keys.png)
+
+* **soft-left / soft-right** top corners, where a phone had them
+* **D-pad** bottom-left, with **A / B / C / D** under it
+* **fire** in the bar between the D-pad and the game
+* **the twelve-key phone pad** on the right, with **clear** under it and
+  **volume / power** above it
+
+Click or tap them. A press that lands on a key is a key press and NOT also a
+pointer press, so a game with both a pointer UI and a keypad does not see two
+events from one tap.
+
+```sh
+F12 or Tab          show / hide, at run time
+NJ_SDL2_KEYS=0      start with them hidden
+```
+
+They are translucent and sit in the letterbox bars, so the game stays fully
+visible at the scales the window normally opens at. The port computes that
+letterbox itself rather than using `SDL_RenderSetLogicalSize`, precisely so the
+overlay can be drawn in window pixels instead of inside the 176x208 the game
+owns.
+
 ## Running a game
 
 ```sh

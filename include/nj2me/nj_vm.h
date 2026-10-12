@@ -272,6 +272,17 @@ nj_s4 nj_vm_exit_code(nj_vm *vm);
  */
 const char *nj_vm_stop_why(const nj_vm *vm);
 
+/*
+ * Register a callback the VM runs while a Java thread is sleeping or waiting.
+ *
+ * It exists because a MIDlet is allowed to run its own frame loop inside
+ * startApp(), and a sleep inside that loop must not stop the display.  The
+ * callback is called from inside the VM, so it must not assume it is at the
+ * top of the stack; the VM guards against it re-entering itself.  Pass NULL to
+ * unregister.
+ */
+void nj_vm_set_frame_hook(nj_vm *vm, void (*fn)(nj_vm *vm, void *ud), void *ud);
+
 /* Is the VM still running?  0 once the MIDlet has exited or asked to stop.
  * The runner needs this to drive the frame loop itself (see --run-frames). */
 int   nj_vm_running(nj_vm *vm);

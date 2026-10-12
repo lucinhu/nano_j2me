@@ -1269,6 +1269,21 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
 
             while (nj_now_ms(vm) < until &&
                    (nj_now_ms(vm) - start) < (nj_s8)NJ_CALL_BLOCK_MS) {
+                /*
+                 * Keep the display alive while this thread is parked.
+                 *
+                 * A MIDlet may run its own frame loop inside startApp() and
+                 * sleep in it; on a handset the AMS paints from a separate
+                 * event thread, so the sleep must not stop the screen.  Without
+                 * this, such a MIDlet spins here and presents no frame at all.
+                 * The hook is NULL unless a runner asked for it, so nothing
+                 * changes for an embedder that drives frames itself.
+                 */
+                if (vm->frame_hook && !vm->in_frame_hook) {
+                    vm->in_frame_hook = 1;
+                    vm->frame_hook(vm, vm->frame_hook_ud);
+                    vm->in_frame_hook = 0;
+                }
                 if (vm->port && vm->port->sleep_ms) {
                     vm->port->sleep_ms(vm->port->ud, 1u);
                 }
@@ -1383,6 +1398,21 @@ static nj_ref take_or_synthesise(nj_vm *vm, const char *cls_name,
     }
     return nj_exception_new(vm, "java/lang/InternalError", buf);
 }
+
+/*
+ * Register a callback the VM runs while a Java thread is parked.  See
+ * include/nj2me/nj_vm.h for why a runner wants one.
+ */
+void nj_vm_set_frame_hook(nj_vm *vm, void (*fn)(nj_vm *vm, void *ud), void *ud)
+{
+    if (!vm) {
+        return;
+    }
+    vm->frame_hook = fn;
+    vm->frame_hook_ud = ud;
+    vm->in_frame_hook = 0;
+}
+
 
 nj_ref nj_vm_new_midlet(nj_vm *vm, const char *class_name, nj_ref *out_exc)
 {

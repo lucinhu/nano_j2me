@@ -371,6 +371,16 @@ struct nj_vm {
     nj_u4      log_emitted;
     nj_u4      log_dropped;
     const char *stop_why;     /* who asked the VM to stop, or NULL */
+    /*
+     * Called while a Java thread is parked in a blocking native, so a runner
+     * can keep drawing.  A MIDlet may run its own frame loop inside startApp()
+     * - 仙剑奇侠传完美版 does - and on a handset the AMS paints from its own
+     * event thread, so a sleep must not stop the screen.  NULL for embedders
+     * that do not want it, which is every path that is not driving frames.
+     */
+    void      (*frame_hook)(nj_vm *vm, void *ud);
+    void       *frame_hook_ud;
+    int         in_frame_hook;  /* re-entrancy guard: the hook may call back in */
 
     /* seeded identity hash */
     nj_u4      hash_seed;
