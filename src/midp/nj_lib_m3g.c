@@ -1798,6 +1798,57 @@ nj_u4 nj_m3g_raster_tri(struct nj_gfx *g, const float xy[6], nj_u4 argb)
     return 1u;
 }
 
+nj_status nj_m3g_load_geometry(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
+                               nj_ref arr)
+{
+    nj_u4 i;
+
+    if (!vm || !objs || !arr) {
+        return NJ_ERR_STATE;
+    }
+    for (i = 0u; i < nobj; i++) {
+        nj_ref o, values;
+        nj_s2 *shorts;
+        nj_u4 per, nverts, n, k;
+        const nj_u1 *p;
+
+        if (objs[i].type != NJ_M3G_T_VERTEX_ARRAY || !objs[i].fields.data) {
+            continue;
+        }
+        o = nj_array_get_ref(arr, i + 1u);
+        if (!o) { continue; }
+        per = (nj_u4)objs[i].fields.a * (nj_u4)objs[i].fields.b;
+        if (per == 0u) { continue; }
+        nverts = objs[i].fields.data_len / per;
+        n = nverts * per;
+        if (n == 0u) { continue; }
+
+        values = nj_array_new(vm, "S", n);
+        if (!values) { continue; }
+        values = nj_root(vm, values);
+        p = objs[i].fields.data;
+        shorts = (nj_s2 *)nj_array_data(values);
+        if (!shorts) { continue; }
+        for (k = 0u; k < n; k++) {
+            /* componentSize 1 is one byte per component, 2 is a
+               little-endian pair - the same order the container uses for
+               everything else. */
+            shorts[k] = (objs[i].fields.a == 2u)
+                      ? (nj_s2)((nj_u2)p[k * 2u] | ((nj_u2)p[k * 2u + 1u] << 8))
+                      : (nj_s2)(nj_s1)p[k];
+        }
+        nj_iput(vm, o, nj_field_lookup(vm, NJ_C_VARR, "_nj_numVerts", "I", 0),
+                (nj_s4)nverts);
+        nj_iput(vm, o, nj_field_lookup(vm, NJ_C_VARR, "_nj_numComp", "I", 0),
+                (nj_s4)objs[i].fields.b);
+        nj_iput(vm, o, nj_field_lookup(vm, NJ_C_VARR, "_nj_compSize", "I", 0),
+                (nj_s4)objs[i].fields.a);
+        nj_rput(vm, o, nj_field_lookup(vm, NJ_C_VARR, "_nj_data", "[S", 0),
+                values);
+    }
+    return NJ_OK;
+}
+
 NJFN(m3g_render)
 {
     /*
@@ -2581,6 +2632,10 @@ NJFN(m3g_load)
                 nj_array_set_ref(arr, i + 1u, o);
             }
             nj_root_release(vm, inner);
+        }
+        if (nj_m3g_load_geometry(vm, objs, nobj, arr) != NJ_OK) {
+            nj_host_free(vm, objs);
+            return NJ_ERR;
         }
         if (nj_m3g_link_groups(vm, objs, nobj, arr) != NJ_OK) {
             nj_host_free(vm, objs);

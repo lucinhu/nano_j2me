@@ -636,6 +636,12 @@ void nj_m3g_project(const float m[16], const float v[3], int w, int h,
 struct nj_gfx;   /* nj_gfx.h includes this header, so name it only */
 nj_u4 nj_m3g_raster_tri(struct nj_gfx *g, const float xy[6], nj_u4 argb);
 
+/* Move the geometry a file carries onto the Java objects that describe it.
+   A VertexArray's bytes are in the file; the class the titles call expects
+   them in a short[], which is what set() puts there too. */
+nj_status nj_m3g_load_geometry(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
+                               nj_ref arr);
+
 nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
                              nj_ref arr);
 

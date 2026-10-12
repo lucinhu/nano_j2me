@@ -17,6 +17,7 @@
 #include "nj2me/nj.h"
 #include "nj2me/nj_config.h"
 #include "nj2me/nj_vm.h"
+#include "nj_internal.h"   /* nj_field_lookup, to read what the loader wrote */
 
 #include <stdio.h>
 #include <string.h>
@@ -627,6 +628,59 @@ int main(void)
               "and the pixels inside it are no longer the background");
         check(nj_surface_get(&s, 15, 15) == bg_outside,
               "while the pixels outside it are still the background");
+    }
+    /* ---- a file's VertexArray bytes reach the Java object -------------- */
+    {
+        /*
+         * The file keeps a VertexArray's geometry as bytes; the class the
+         * titles call keeps it in a short[], the same place set() puts it.
+         * This is the join between the two, and it is the geometry the
+         * rasteriser will read.
+         */
+        nj_u1 bytes[12 + 3 + 6];
+        nj_m3g_object objs[2];
+        nj_ref arr, va, data;
+        nj_value c;
+
+        memset(objs, 0, sizeof(objs));
+        memset(bytes, 0, sizeof(bytes));
+        bytes[12] = 2u;    /* componentSize  */
+        bytes[13] = 1u;    /* componentCount */
+        bytes[14] = 2u;    /* componentType  */
+        bytes[15] = 0x00; bytes[16] = 0x01;   /* 0x0100 */
+        bytes[17] = 0x00; bytes[18] = 0x02;   /* 0x0200 */
+        bytes[19] = 0x00; bytes[20] = 0x03;   /* 0x0300 */
+        objs[0].type = 20u;
+        objs[0].fields.a = 2u; objs[0].fields.b = 1u; objs[0].fields.c = 2u;
+        objs[0].fields.data = bytes + 15;
+        objs[0].fields.data_len = 6u;
+
+        arr = nj_object_array_new(vm, CLS("Object3D"), 2u);
+        va = make(vm, CLS("VertexArray"));
+        check(va != 0, "a VertexArray exists for the loader to fill");
+        nj_array_set_ref(arr, 1u, va);
+        check(nj_m3g_load_geometry(vm, objs, 1u, arr) == NJ_OK,
+              "the geometry loader accepts the table");
+
+        call(vm, va, CLS("VertexArray"), "getVertexCount", "()I", NULL, &c);
+        check(c.i == 3, "the file's three vertices are on the object");
+        call(vm, va, CLS("VertexArray"), "getComponentCount", "()I", NULL, &c);
+        check(c.i == 1, "and its component count");
+        call(vm, va, CLS("VertexArray"), "getComponentSize", "()I", NULL, &c);
+        check(c.i == 2, "and its component size");
+
+        data = nj_rget(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_data", "[S", 0));
+        /* nj_array_length() counts BYTES - three shorts are six of them.  The
+           probe that found this printed len=6 for what the code believed was
+           three values. */
+        check(data != 0 && nj_array_length(data) == 6u,
+              "the short[] holds one value per vertex");
+        if (data) {
+            nj_s2 *sh = (nj_s2 *)nj_array_data(data);
+            check(sh != NULL && sh[0] == (nj_s2)0x0100 && sh[1] == (nj_s2)0x0200 &&
+                  sh[2] == (nj_s2)0x0300,
+                  "and they are the numbers the file held, little-endian");
+        }
     }
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
