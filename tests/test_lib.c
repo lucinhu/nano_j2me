@@ -2327,7 +2327,6 @@ int main(void)
     if (!vm) {
         fprintf(stderr, "cannot create the VM\n");
         nj_port_shutdown(&port);
-    nj_port_headless_free(&port);
         return 2;
     }
 
@@ -2360,7 +2359,6 @@ int main(void)
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
-    nj_port_headless_free(&port);
 
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

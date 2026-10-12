@@ -188,6 +188,5 @@ int main(void)
     printf("%d checks, %d failures\n", g_pass, g_fail);
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
-    nj_port_headless_free(&port);
     return g_fail == 0 ? 0 : 1;
 }

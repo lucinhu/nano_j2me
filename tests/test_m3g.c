@@ -377,7 +377,6 @@ int main(void)
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
-    nj_port_headless_free(&port);
     printf("%d checks, %d failures\n", checks, failures);
     if (failures) {
         printf("FAILED (%d failures)\n", failures);

@@ -64,8 +64,6 @@ nj_status nj_midp_destroy_app(nj_vm *vm, int unconditional);
 
 /* Convenience: start the headless port with an optional frame dump.
  * Pass dump_prefix == NULL to keep frames in memory only. */
-void nj_port_headless_free(nj_port *out);
-
 nj_status nj_port_headless_ex(nj_port *out, int width, int height,
                               int dump_every, const char *dump_prefix);
 

@@ -151,6 +151,8 @@ int main(int argc, char **argv)
            "a port that is not headless reports -1, not 0");
     }
 
+    nj_port_shutdown(&port);
+
     printf("\n%d checks, %d failure(s)\n", checks, failures);
     return failures ? 1 : 0;
 }
