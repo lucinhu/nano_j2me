@@ -1016,7 +1016,19 @@ done:
         }
     }
     if (vm) {
+        /*
+         * Say so before and after: a MIDlet whose destroyApp() never returns
+         * hangs the process with the log ending right after the frame budget,
+         * which reads exactly like a hang inside the frame loop.
+         * 红色警戒3_7037 runs its whole budget and then never exits.
+         */
+        if (port.log) {
+            port.log(port.user, 2, "teardown: calling destroyApp()");
+        }
         (void)nj_midp_destroy_app(vm, 0);
+        if (port.log) {
+            port.log(port.user, 2, "teardown: destroyApp() returned");
+        }
         if (app) {
             nj_app_close(vm, app);
             app = NULL;
