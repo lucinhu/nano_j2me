@@ -948,31 +948,44 @@ NJFN(dis_read_char)
     return NJ_CALL(dis_read_unsigned_short, vm, th, args, ret);
 }
 
-NJFN(dis_readUTF)
+/*
+ * One byte of a modified-UTF-8 string, from either kind of source.
+ *
+ * The instance form reads through dis_one(); the static form is handed any
+ * DataInput at all and has to go through that object's own readByte().  That is
+ * the ONLY difference between the two, so it lives here and the length
+ * handling, the continuation counting and the four allocation-failure paths
+ * are shared below instead of copied.  A negative return means the byte could
+ * not be read and an exception is pending: readByte() throws EOFException at
+ * the end, dis_one() returns -1.
+ */
+static nj_s4 utf_next(nj_vm *vm, nj_ref src, int via_interface)
 {
-    nj_ref in = dis_in(vm, NJ_THIS(args));
-    nj_s4 len;
+    nj_value r;
+
+    if (!via_interface) {
+        return dis_one(vm, src);
+    }
+    if (nj_call(vm, src, "java/io/DataInput", "readByte", "()B", NULL, &r) != NJ_OK) {
+        return -1;
+    }
+    return r.i;
+}
+
+/* Decode `len` modified-UTF-8 bytes from `src` into a new String. */
+static nj_status read_utf_body(nj_vm *vm, nj_ref src, int via_interface,
+                               nj_s4 len, nj_value *ret)
+{
     nj_u2 *tmp;
     nj_s4 i, n = 0;
     nj_ref out;
 
-    /* The length lives in `ret`, not in this call's return value: NJ_CALL
-     * returns a status, so assigning it to `len` made every readUTF() return
-     * the empty string and leave the string's own bytes in the stream for the
-     * next read to walk into. */
-    if (NJ_CALL(dis_read_unsigned_short, vm, th, args, ret) != NJ_OK) {
-        return NJ_ERR;
-    }
-    len = ret->i;
-    if (len < 0) {
-        return NJ_ERR;
-    }
     tmp = (nj_u2 *)nj_host_alloc(vm, ((nj_size)len + 1u) * sizeof(nj_u2));
     if (!tmp) {
         return nj_throw_oom(vm);
     }
     for (i = 0; i < len; i++) {
-        nj_s4 c = dis_one(vm, in);
+        nj_s4 c = utf_next(vm, src, via_interface);
         if (c < 0) {
             nj_host_free(vm, tmp);
             return NJ_ERR;
@@ -980,7 +993,7 @@ NJFN(dis_readUTF)
         if (c < 0x80) {
             tmp[n++] = (nj_u2)c;
         } else if ((c & 0xE0) == 0xC0) {
-            nj_s4 c2 = dis_one(vm, in);
+            nj_s4 c2 = utf_next(vm, src, via_interface);
             if (c2 < 0) {
                 nj_host_free(vm, tmp);
                 return NJ_ERR;
@@ -988,13 +1001,13 @@ NJFN(dis_readUTF)
             tmp[n++] = (nj_u2)(((c & 0x1F) << 6) | (c2 & 0x3F));
             i++;
         } else {
-            nj_s4 c2 = dis_one(vm, in);
+            nj_s4 c2 = utf_next(vm, src, via_interface);
             nj_s4 c3;
             if (c2 < 0) {
                 nj_host_free(vm, tmp);
                 return NJ_ERR;
             }
-            c3 = dis_one(vm, in);
+            c3 = utf_next(vm, src, via_interface);
             if (c3 < 0) {
                 nj_host_free(vm, tmp);
                 return NJ_ERR;
@@ -1011,6 +1024,50 @@ NJFN(dis_readUTF)
     }
     ret->r = out;
     return NJ_OK;
+}
+
+NJFN(dis_readUTF)
+{
+    nj_ref in = dis_in(vm, NJ_THIS(args));
+    nj_s4 len;
+
+    /* The length lives in `ret`, not in this call's return value: NJ_CALL
+     * returns a status, so assigning it to `len` made every readUTF() return
+     * the empty string and leave the string's own bytes in the stream for the
+     * next read to walk into. */
+    if (NJ_CALL(dis_read_unsigned_short, vm, th, args, ret) != NJ_OK) {
+        return NJ_ERR;
+    }
+    len = ret->i;
+    if (len < 0) {
+        return NJ_ERR;
+    }
+    return read_utf_body(vm, in, 0, len, ret);
+}
+
+/*
+ * public static String DataInputStream.readUTF(DataInput in)
+ *
+ * Reads the length from `in` itself and then the same body.  It cannot call the
+ * instance form above: that one was called on a DataInputStream and reads
+ * through it, while this one is handed any DataInput - which is the whole
+ * reason the static overload exists.  世界冠军拉力赛3D_8360 uses it.
+ */
+NJFN(dis_readUTF_static)
+{
+    nj_ref in = NJ_ARG_REF(args, 0);
+    nj_value r;
+    nj_s4 len;
+
+    if (nj_call(vm, in, "java/io/DataInput", "readUnsignedShort", "()I",
+                NULL, &r) != NJ_OK) {
+        return NJ_ERR;
+    }
+    len = r.i;
+    if (len < 0) {
+        return NJ_ERR;
+    }
+    return read_utf_body(vm, in, 1, len, ret);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1281,6 +1338,8 @@ static const nj_builtin_method dis_methods[] = {
     M("readFloat",          "()F", 0),
     M("readDouble",         "()D", 0),
     M("readUTF",            "()Ljava/lang/String;", 0),
+    M("readUTF",            "(Ljava/io/DataInput;)Ljava/lang/String;",
+                            NJ_ACC_PUBLIC | NJ_ACC_STATIC),
     M("available",          "()I", 0),
     M("close",              "()V", 0)
 };
@@ -1923,6 +1982,7 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/DataInputStream", "readFloat",        "()F", dis_read_float },
     { "java/io/DataInputStream", "readDouble",       "()D", dis_read_double },
     { "java/io/DataInputStream", "readUTF",          "()Ljava/lang/String;", dis_readUTF },
+    { "java/io/DataInputStream", "readUTF",          "(Ljava/io/DataInput;)Ljava/lang/String;", dis_readUTF_static },
     { "java/io/DataInputStream", "available",        "()I", dis_available },
     { "java/io/DataInputStream", "close",            "()V", is_close },
 
