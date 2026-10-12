@@ -57,5 +57,5 @@ done
 
 echo "m3g files probed=$n rejected=$bad"
 echo "objects the decoder refused: $obj_bad"
-echo "decoded objects: PolygonMode $poly_ok/$poly_n in range, Image2D $img_ok/$img_n, VertexArray $va_ok/$va_n"
+echo "decoded objects: PolygonMode $poly_ok/$poly_n in range, Image2D $img_ok with an image of $img_n, VertexArray $va_ok/$va_n"
 [ "$bad" -eq 0 ]
