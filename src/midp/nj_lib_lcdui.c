@@ -4571,13 +4571,27 @@ nj_status nj_midp_set_current(nj_vm *vm, nj_ref d)
     }
     rput(vm, disp, NJ_C_DISPLAY, F_DISP_CUR, D_DISPLAY, d);
     vm->current_displayable = d;
-    if (d && isa(vm, d, NJ_C_CANVAS)) {
-        /* showNotify()/hideNotify() are Canvas (and GameCanvas) callbacks. */
-        (void)canvas_visible(vm, d);
-        if (vm->exception) {
-            nj_clear_exception(vm);
-        }
-    }
+    /*
+     * showNotify() is deliberately NOT delivered here.
+     *
+     * On a real device setCurrent() returns before the Displayable is shown:
+     * showNotify() arrives later, on the event thread, and the first paint
+     * follows it.  Delivering it synchronously made the Canvas "visible" the
+     * instant setCurrent() returned, which changes what the MIDlet is allowed
+     * to do next - Displayable.setFullScreenMode() must throw
+     * IllegalStateException while the Displayable is visible, so
+     *
+     *     Display.getDisplay(this).setCurrent(canvas);
+     *     canvas.setFullScreenMode(true);
+     *
+     * threw during construction for 开心农场.  That sequence is legal on the
+     * phones these titles were written for, and there is no other way to ask
+     * for full screen before the first frame.
+     *
+     * The paint path calls canvas_visible() before paint(), so showNotify()
+     * still runs first - it just runs on the frame that shows the Canvas
+     * rather than inside setCurrent().
+     */
     nj_midp_repaint(vm);
     return NJ_OK;
 }

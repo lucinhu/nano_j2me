@@ -262,6 +262,7 @@ if(NJ_BUILD_TESTS)
     add_custom_command(TARGET nj_fixtures POST_BUILD
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_keys_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_blockdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_fsorder_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -427,6 +428,7 @@ if(NJ_BUILD_TESTS)
   # ---- end to end: run a whole MIDlet and assert on what it rendered ----
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_play.c)
     nj_add_test(test_play tests/test_play.c ${NJ_FIXTURES}/gamedemo.jar)
+nj_add_test(test_fullscreen tests/test_fullscreen.c ${NJ_FIXTURES}/fsorder.jar)
 
   # Does input actually reach the game?  This is the only test that can tell a
   # MIDlet which responds to the keypad from one that is merely alive, and it

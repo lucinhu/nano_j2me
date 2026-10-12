@@ -91,6 +91,7 @@ CLASSES = {
             "public void removeCommand(Command)",
             "public void setCommandListener(CommandListener)",
             "public boolean isShown()",
+            "public boolean isFullScreenMode()",
             "public int getWidth()",
             "public int getHeight()",
             # PROTECTED in MIDP, not public: a subclass that declares it
@@ -126,6 +127,7 @@ CLASSES = {
             "public final void repaint(int, int, int, int)",
             "public final void serviceRepaints()",
             "public void setFullScreenMode(boolean)",
+            "public boolean isFullScreenMode()",
             "public boolean hasPointerEvents()",
             "public boolean hasPointerMotionEvents()",
             "public static int getGameAction(int)",
@@ -518,6 +520,7 @@ CLASSES = {
             "protected void flushGraphics()",
             "protected void flushGraphics(int, int, int, int)",
             "public void setFullScreenMode(boolean)",
+            "public boolean isFullScreenMode()",
             "public int getKeyStates()",
             "protected void paint(Graphics)",
             "public static final int UP_PRESSED",
