@@ -921,6 +921,17 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
              * gives the same work every time, which is what a performance
              * comparison needs.
              */
+            /*
+             * Count frames *attempted*, not frames painted.
+             *
+             * vm->frames only advances when the paint succeeds, so a title that
+             * throws from paint() on every frame - 空战1944_10321 does - never
+             * reaches its budget and the loop runs for ever at the frame rate.
+             * The budget is a limit on how much work the runner does, so it has
+             * to count the work it asked for; a title that cannot draw still
+             * ends up judged on the blank frames it produced.
+             */
+            nj_u8 attempted = 0u;
             for (;;) {
                 nj_vm_stats s;
                 if (!nj_vm_running(vm)) {
@@ -928,11 +939,13 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
                 }
                 nj_vm_get_stats(vm, &s);
                 if (opts->run_frames > 0u &&
-                    s.frames >= (nj_u8)opts->run_frames) {
+                    (attempted >= (nj_u8)opts->run_frames ||
+                     s.frames >= (nj_u8)opts->run_frames)) {
                     break;
                 }
                 key_script_tick(&port, &keys, s.frames);
                 st = nj_midp_frame(vm);
+                attempted++;
                 if (st != NJ_OK) {
                     break;
                 }

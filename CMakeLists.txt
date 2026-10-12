@@ -295,6 +295,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_utfdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flatdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_excdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_paintthrow_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -457,6 +458,15 @@ if(NJ_BUILD_TESTS)
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_stack_trace.sh
                      ${NJ_FIXTURES}/excdemo.jar)
     set_tests_properties(check_stack_trace PROPERTIES TIMEOUT 120)
+
+    # A title that throws from paint() on every frame must still stop at the
+    # frame budget; the budget used to be compared against frames painted.
+    add_test(NAME check_paint_budget
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_paint_budget.sh
+                     ${NJ_FIXTURES}/paintthrow.jar)
+    set_tests_properties(check_paint_budget PROPERTIES TIMEOUT 120)
 endif()
 
 add_test(NAME check_splash_budget
