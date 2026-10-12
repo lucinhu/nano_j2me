@@ -1484,6 +1484,56 @@ NJFN(m3g_poly_setWinding)
     return NJ_OK;
 }
 
+/*
+ * Culling.  JSR 184 fixes the three values (CULL_NONE 160, CULL_BACK 161,
+ * CULL_FRONT 162) and PolygonMode.setCulling(I)V is called by a corpus title
+ * that would otherwise not start at all.
+ */
+NJFN(m3g_poly_setCulling)
+{
+    nj_s4 c = NJ_ARG_INT(args, 0);
+
+    if (c != 160 && c != 161 && c != 162) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "culling is CULL_NONE (160), CULL_BACK (161) or CULL_FRONT (162)");
+    }
+    nj_iput(vm, NJ_THIS(args),
+            nj_field_lookup(vm, NJ_C_POLY, "_nj_culling", "I", 0), c);
+    return NJ_OK;
+}
+
+NJFN(m3g_poly_getCulling)
+{
+    ret->i = nj_iget(vm, NJ_THIS(args),
+                     nj_field_lookup(vm, NJ_C_POLY, "_nj_culling", "I", 0));
+    return NJ_OK;
+}
+
+/*
+ * The light list.  Nothing is lit - there is no rasteriser yet - so this
+ * keeps the LENGTH of the list and nothing else: addLight() returns the index
+ * the caller expects and resetLights() empties it.  setLight()/getLight() are
+ * deliberately NOT declared: a method that accepts a light and forgets it is
+ * the half-implementation this project keeps refusing to ship, and no title in
+ * the corpus calls them.
+ */
+NJFN(m3g_g3d_addLight)
+{
+    nj_field *f = nj_field_lookup(vm, NJ_C_G3D, "_nj_nlights", "I", 0);
+    nj_s4 n = nj_iget(vm, NJ_THIS(args), f);
+
+    nj_iput(vm, NJ_THIS(args), f, n + 1);
+    ret->i = n;
+    return NJ_OK;
+}
+
+NJFN(m3g_g3d_resetLights)
+{
+    nj_iput(vm, NJ_THIS(args),
+            nj_field_lookup(vm, NJ_C_G3D, "_nj_nlights", "I", 0), 0);
+    return NJ_OK;
+}
+
 NJFN(m3g_poly_setPersp)
 {
     nj_iput(vm, NJ_THIS(args),
@@ -2022,6 +2072,7 @@ static const nj_builtin_field bg_fields[] = {
     { "_nj_dclear", "Z", NJ_ACC_PUBLIC }
 };
 static const nj_builtin_field g3d_fields[] = {
+    { "_nj_nlights", "I", NJ_ACC_PUBLIC },
     { "_nj_target", "Ljava/lang/Object;", NJ_ACC_PUBLIC },
     { "_nj_camera", "L" NJ_C_CAMERA ";", NJ_ACC_PUBLIC },
     { "_nj_cam_m",  "[F", NJ_ACC_PUBLIC },
@@ -2041,7 +2092,8 @@ static const nj_builtin_field appear_fields[] = {
 };
 static const nj_builtin_field poly_fields[] = {
     { "_nj_winding", "I", NJ_ACC_PUBLIC },
-    { "_nj_persp",   "Z", NJ_ACC_PUBLIC }
+    { "_nj_persp",   "Z", NJ_ACC_PUBLIC },
+    { "_nj_culling", "I", NJ_ACC_PUBLIC }
 };
 static const nj_builtin_field comp_fields[] = {
     { "_nj_blend",    "I", NJ_ACC_PUBLIC },
@@ -2143,7 +2195,8 @@ static const nj_builtin_method g3d_methods[] = {
     M("clear",         "(L" NJ_C_BG ";)V",           NJ_ACC_PUBLIC),
     M("render",        "(L" NJ_C_WORLD ";)V",        NJ_ACC_PUBLIC),
     M("render",        "(L" NJ_C_NODE ";L" NJ_C_XFORM ";)V", NJ_ACC_PUBLIC),
-    M("resetLights",   "()V",                        NJ_ACC_PUBLIC)
+    M("resetLights",   "()V",                        NJ_ACC_PUBLIC),
+    M("addLight",      "(L" NJ_C_LIGHT ";L" NJ_C_XFORM ";)I", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method loader_methods[] = {
     M("load", "(Ljava/lang/String;)[L" NJ_C_O3D ";", NJ_ACC_PUBLIC | NJ_ACC_STATIC)
@@ -2160,7 +2213,9 @@ static const nj_builtin_method appear_methods[] = {
 };
 static const nj_builtin_method poly_methods[] = {
     M("setWinding",                   "(I)V", NJ_ACC_PUBLIC),
-    M("setPerspectiveCorrectionEnable", "(Z)V", NJ_ACC_PUBLIC)
+    M("setPerspectiveCorrectionEnable", "(Z)V", NJ_ACC_PUBLIC),
+    M("setCulling",                   "(I)V", NJ_ACC_PUBLIC),
+    M("getCulling",                   "()I",  NJ_ACC_PUBLIC)
 };
 static const nj_builtin_method comp_methods[] = {
     M("setBlending",        "(I)V", NJ_ACC_PUBLIC),
@@ -2320,7 +2375,8 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_G3D, "render",        "(L" NJ_C_WORLD ";)V",    m3g_render },
     { NJ_C_G3D, "render",
       "(L" NJ_C_NODE ";L" NJ_C_XFORM ";)V", m3g_render },
-    { NJ_C_G3D, "resetLights",   "()V",                    m3g_noop_init },
+    { NJ_C_G3D, "resetLights",   "()V",                    m3g_g3d_resetLights },
+    { NJ_C_G3D, "addLight",      "(L" NJ_C_LIGHT ";L" NJ_C_XFORM ";)I", m3g_g3d_addLight },
     { NJ_C_LOADER, "load", "(Ljava/lang/String;)[L" NJ_C_O3D ";", m3g_load },
     { NJ_C_APPEAR, "setMaterial",        "(L" NJ_C_MAT ";)" "V", m3g_app_setMaterial },
     { NJ_C_APPEAR, "setPolygonMode",     "(L" NJ_C_POLY ";)V",   m3g_app_setPolygonMode },
@@ -2330,6 +2386,8 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_APPEAR, "setTexture",         "(IL" NJ_C_TEX2D ";)V", m3g_app_setTexture },
     { NJ_C_APPEAR, "getTexture",         "(I)L" NJ_C_TEX2D ";",  m3g_app_getTexture },
     { NJ_C_APPEAR, "setLayer",           "(I)V",                 m3g_app_setLayer },
+    { NJ_C_POLY, "setCulling",                    "(I)V", m3g_poly_setCulling },
+    { NJ_C_POLY, "getCulling",                    "()I",  m3g_poly_getCulling },
     { NJ_C_POLY, "setWinding",                    "(I)V", m3g_poly_setWinding },
     { NJ_C_POLY, "setPerspectiveCorrectionEnable", "(Z)V", m3g_poly_setPersp },
     { NJ_C_COMP, "setBlending",         "(I)V", m3g_comp_setBlending },

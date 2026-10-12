@@ -8643,9 +8643,94 @@ NJFN(dg_drawPixels)
  * where it cannot be caught, but it is a real gap and it is written down here
  * rather than hidden.
  */
+/*
+ * DirectGraphics.getPixels() - reading the target back.
+ *
+ * This used to be a deliberate no-op, because nj_gfx had no way to read a
+ * surface.  nj_surface_get()/nj_surface_format_color() exist, so it is a
+ * no-op no longer: a game that reads the framebuffer to detect a collision or
+ * to fade out gets the pixels it drew.
+ *
+ * `format` follows Nokia: TYPE_INT_8888_ARGB (12) and TYPE_INT_888_RGB (11)
+ * are honoured, TYPE_USHORT_565_RGB (10) and anything else get the packed
+ * 565 value, which is what the surface holds anyway.
+ */
+#define NJ_DG_TYPE_INT_888_RGB    11
+#define NJ_DG_TYPE_INT_8888_ARGB  12
+
+/* elem is 2 for the short[] overload and 4 for the int[] one. */
+static nj_status dg_get_pixels(nj_vm *vm, nj_value *args, nj_value *ret,
+                               int elem)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref dest = NJ_ARG_REF(args, 0);
+    nj_s4 offset = NJ_ARG_INT(args, 1);
+    nj_s4 scan = NJ_ARG_INT(args, 2);
+    nj_s4 x = NJ_ARG_INT(args, 3);
+    nj_s4 y = NJ_ARG_INT(args, 4);
+    nj_s4 w = NJ_ARG_INT(args, 5);
+    nj_s4 h = NJ_ARG_INT(args, 6);
+    nj_s4 fmt = NJ_ARG_INT(args, 7);
+    nj_gfx g;
+    nj_surface sc;
+    nj_s4 j, i;
+
+    (void)ret;
+    if (!gfx_load(vm, self, &g, &sc)) {
+        return NJ_ERR;
+    }
+    if (!dest) {
+        NJ_THROW(vm, "java/lang/NullPointerException",
+                 "the destination array is null");
+    }
+    if (w <= 0 || h <= 0) {
+        return NJ_OK;
+    }
+    if (offset < 0 || scan < w) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "offset and scanlength are too small for the pixels asked for");
+    }
+    /* The last element written is offset + (h-1)*scan + (w-1). */
+    if ((nj_s8)offset + (nj_s8)(h - 1) * scan + (w - 1)
+        >= (nj_s8)dest->length) {
+        NJ_THROW(vm, "java/lang/ArrayIndexOutOfBoundsException",
+                 "the destination array is too small for the pixels asked for");
+    }
+    for (j = 0; j < h; j++) {
+        for (i = 0; i < w; i++) {
+            nj_u4 argb = nj_surface_format_color(sc.format,
+                                                 nj_surface_get(&sc, x + i,
+                                                                y + j));
+            nj_s4 v;
+            nj_s4 at = offset + j * scan + i;
+
+            if (fmt == NJ_DG_TYPE_INT_8888_ARGB) {
+                v = (nj_s4)argb;
+            } else if (fmt == NJ_DG_TYPE_INT_888_RGB) {
+                v = (nj_s4)(argb & 0xFFFFFFu);
+            } else {
+                v = (nj_s4)(((argb >> 19) & 0x1Fu) << 11
+                            | ((argb >> 10) & 0x3Fu) << 5
+                            | ((argb >> 3) & 0x1Fu));
+            }
+            if (elem == 2) {
+                ((nj_u2 *)dest->u.bytes)[at] = (nj_u2)v;
+            } else {
+                ((nj_s4 *)dest->u.bytes)[at] = v;
+            }
+        }
+    }
+    return NJ_OK;
+}
+
 NJFN(dg_getPixels)
 {
-    return NJ_OK;
+    return dg_get_pixels(vm, args, ret, 2);
+}
+
+NJFN(dg_getPixelsInt)
+{
+    return dg_get_pixels(vm, args, ret, 4);
 }
 
 #define M(name, desc, flags) { name, desc, flags }
@@ -8817,6 +8902,7 @@ static const nj_builtin_method graphics_methods[] = {
     M("fillPolygon", "([II[IIII)V",     NJ_ACC_PUBLIC),
     M("drawPixels",  "([SZIIIIIIII)V",  NJ_ACC_PUBLIC),
     M("getPixels",   "([SIIIIIII)V",    NJ_ACC_PUBLIC),
+    M("getPixels",      "([IIIIIIII)V", NJ_ACC_PUBLIC),
 };
 
 /* ---- Displayable / Canvas ---- */
@@ -9653,6 +9739,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_GRAPHICS, "fillPolygon", "([II[IIII)V", dg_fillPolygon },
     { NJ_C_GRAPHICS, "drawPixels",  "([SZIIIIIIII)V", dg_drawPixels },
     { NJ_C_GRAPHICS, "getPixels",   "([SIIIIIII)V",   dg_getPixels },
+    { NJ_C_GRAPHICS, "getPixels",   "([IIIIIIII)V",   dg_getPixelsInt },
     { NJ_C_GRAPHICS, "drawRoundRect", "(IIIIII)V", g_drawRoundRect },
     { NJ_C_GRAPHICS, "fillRoundRect", "(IIIIII)V", g_fillRoundRect },
     { NJ_C_GRAPHICS, "drawArc", "(IIIIII)V", g_drawArc },

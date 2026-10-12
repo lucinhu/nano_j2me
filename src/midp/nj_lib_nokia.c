@@ -378,6 +378,7 @@ static const nj_builtin_method dgraphics_methods[] = {
     M("fillPolygon", "([II[IIII)V",     NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
     M("drawPixels",  "([SZIIIIIIII)V",  NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
     M("getPixels",   "([SIIIIIII)V",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("getPixels", "([IIIIIIII)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
     M("drawImage",   "([IIII)V",        NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
 };
 

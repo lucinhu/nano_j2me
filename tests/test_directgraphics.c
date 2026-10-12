@@ -34,6 +34,10 @@
 /* Nokia's DirectGraphics.TYPE_USHORT_565_RGB. */
 #define NJ_DG_TYPE_USHORT_565_RGB 10
 
+/* The two int formats getPixels(int[], ...) can be asked for. */
+#define NJ_DG_TYPE_INT_888_RGB   11
+#define NJ_DG_TYPE_INT_8888_ARGB 12
+
 /* ------------------------------------------------------------------ */
 /* Assertion machinery                                                 */
 /* ------------------------------------------------------------------ */
@@ -411,32 +415,60 @@ static void test_drawing(nj_vm *vm)
 
     /* --- getPixels: the documented gap, asserted so it cannot hide --- */
     {
-        nj_ref buf = nj_short_array_new(vm, 4u);
+        /*
+         * Eight elements with scanlength 4 and a 2x2 read: that touches
+         * indices 0, 1, 4 and 5, and 2 and 3 must be left alone.  (A four
+         * element array is too small for the same read, which is exactly the
+         * check the old no-op version could not exercise.)
+         */
+        nj_ref buf = nj_short_array_new(vm, 8u);
         nj_u2 *p = (nj_u2 *)buf->u.bytes;
         int i;
 
-        for (i = 0; i < 4; i++) {
+        for (i = 0; i < 8; i++) {
             p[i] = 0x1234u;
         }
         a[0] = sref(buf);
         a[1] = iref(0);
         a[2] = iref(4);
-        a[3] = iref(0);
-        a[4] = iref(0);
+        a[3] = iref(2);          /* read back the two 565-red pixels that */
+        a[4] = iref(18);         /* drawPixels() put at (2,18) and (3,18) */
         a[5] = iref(2);
         a[6] = iref(2);
         a[7] = iref(NJ_DG_TYPE_USHORT_565_RGB);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "getPixels", "([SIIIIIII)V", a, NULL)
            == NJ_OK);
-        /*
-         * nj_gfx exposes no way to read a surface back, so getPixels is a
-         * no-op that does NOT throw - a game reading the screen gets stale
-         * data rather than an exception it cannot catch.  When someone adds a
-         * read primitive this assertion is the one that must change.
-         */
-        OK_MSG(p[0] == 0x1234u,
-               "getPixels wrote something (0x%04X): if the gap is closed, "
-               "update this test rather than deleting it", p[0]);
+        OK_MSG(p[0] == 0xF800u,
+               "getPixels(2,18) = 0x%04X, want 0xF800 (565 red)", p[0]);
+        OK_MSG(p[1] == 0xF800u,
+               "getPixels(3,18) = 0x%04X, want 0xF800 (565 red)", p[1]);
+        OK_MSG(p[2] == 0x1234u && p[3] == 0x1234u,
+               "getPixels touched pixels it was not asked for (0x%04X 0x%04X)",
+               p[2], p[3]);
+        /* The int[] overload reads the same pixels, as 888 or 8888. */
+        {
+            nj_ref ibuf = nj_int_array_new(vm, 8u);
+            nj_s4 *q = (nj_s4 *)ibuf->u.bytes;
+            int k;
+            for (k = 0; k < 8; k++) {
+                q[k] = 0x12345678;
+            }
+            a[0] = sref(ibuf);
+            a[7] = iref(NJ_DG_TYPE_INT_8888_ARGB);
+            OK(nj_call(vm, g, NJ_C_GRAPHICS, "getPixels", "([IIIIIIII)V", a,
+                       NULL) == NJ_OK);
+            /*
+             * 0xFFF80000, not 0xFF0000: the surface is RGB565, so red has
+             * already lost its low three bits before anyone reads it.  The
+             * expectation has to go through the pixel format too - the same
+             * trap as the "tan background" and the drawPixels checks above.
+             */
+            OK_MSG(q[0] == 0xFFF80000u,
+                   "getPixels(int[],8888) = 0x%08X, want 0xFFF80000 (565 red)",
+                   q[0]);
+            OK_MSG(q[2] == 0x12345678,
+                   "getPixels(int[]) wrote past the rectangle (0x%08X)", q[2]);
+        }
     }
 
 }
