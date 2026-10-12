@@ -325,6 +325,87 @@ static void test_skips(nj_vm *vm)
 }
 
 /* ------------------------------------------------------------------ */
+/* 6: media - VolumeControl.setLevel and Player.setMediaTime            */
+/* ------------------------------------------------------------------ */
+#define MEDIA_MGR "javax/microedition/media/Manager"
+#define PLAYER    "javax/microedition/media/Player"
+#define VOLUME    "javax/microedition/media/control/VolumeControl"
+
+/*
+ * Both of these were advertised with the wrong shape: setLevel was declared
+ * void where the spec returns the level it settled on, and setMediaTime did
+ * not exist at all.  The corpus found them the honest way - 28 titles call
+ * setLevel(I)I and 11 call setMediaTime(J)J - as a NoSuchMethodError on the
+ * first media call, which a game usually catches and then plays on in silence.
+ */
+static void test_media(nj_vm *vm)
+{
+    nj_value a[2];
+    nj_value ret;
+    nj_ref player, ctl, uri;
+
+    uri = nj_string_new(vm, "tone://");
+    OK_MSG(uri != NULL, "a tone locator can be built");
+    a[0] = vref(uri);
+    ret.bits = 0u;
+    if (nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                       "(Ljava/lang/String;)Ljavax/microedition/media/Player;",
+                       a, &ret) != NJ_OK) {
+        const char *d = nj_exception_describe(vm);
+        g_fail++;
+        fprintf(stderr, "FAIL Manager.createPlayer(tone://) threw: %s\n",
+                d ? d : "(no description)");
+        nj_clear_exception(vm);
+        return;
+    }
+    g_pass++;
+    player = ret.r;
+    OK(player != NULL);
+
+    a[0] = vlong(5000);
+    ret.bits = 0u;
+    OK(nj_call(vm, player, PLAYER, "setMediaTime", "(J)J", a, &ret) == NJ_OK);
+    OK_MSG(ret.j == 5000, "Player.setMediaTime returns the time it set, got %lld",
+           (long long)ret.j);
+
+    a[0] = vlong(-7);
+    ret.bits = 0u;
+    OK(nj_call(vm, player, PLAYER, "setMediaTime", "(J)J", a, &ret) == NJ_OK);
+    OK_MSG(ret.j == 0, "and clamps a negative seek to 0, got %lld",
+           (long long)ret.j);
+
+    a[0] = vref(nj_string_new(vm, "VolumeControl"));
+    ret.bits = 0u;
+    OK(nj_call(vm, player, PLAYER, "getControl",
+               "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
+               a, &ret) == NJ_OK);
+    ctl = ret.r;
+    OK_MSG(ctl != NULL, "the tone player offers a VolumeControl");
+    if (!ctl) {
+        return;
+    }
+
+    a[0] = vint(60);
+    ret.bits = 0u;
+    OK(nj_call(vm, ctl, VOLUME, "setLevel", "(I)I", a, &ret) == NJ_OK);
+    OK_MSG(ret.i == 60, "VolumeControl.setLevel returns the level it set, "
+           "got %d", ret.i);
+    OK_MSG(nj_call_int(vm, ctl, VOLUME, "getLevel", "()I", NULL) == 60,
+           "and the level stuck");
+
+    a[0] = vint(101);
+    ret.bits = 0u;
+    if (nj_call(vm, ctl, VOLUME, "setLevel", "(I)I", a, &ret) == NJ_OK) {
+        g_fail++;
+        fprintf(stderr, "FAIL setLevel(101) was accepted\n");
+    } else {
+        g_pass++;
+        nj_clear_exception(vm);
+    }
+    clean(vm, "media controls");
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 int main(void)
@@ -349,6 +430,7 @@ int main(void)
     test_round_trip(vm);
     test_read_fully(vm);
     test_skips(vm);
+    test_media(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

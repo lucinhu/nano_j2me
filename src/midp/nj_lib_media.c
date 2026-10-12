@@ -1248,6 +1248,29 @@ NJFN(player_getMediaTime)
     return NJ_OK;
 }
 
+/*
+ * Player.setMediaTime(long) returns the time it settled on, not void: a title
+ * seeking past the end reads the return value to find out where it really
+ * landed.  Clamped to [0, duration] and to 0 when the duration is unknown
+ * (-1), which is how a live stream reports itself.
+ */
+NJFN(player_setMediaTime)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s8 want = NJ_ARG_LONG(args, 0);
+    nj_s8 dur = r_j(vm, self, F_P_DURATION);
+
+    if (want < 0) {
+        want = 0;
+    }
+    if (dur > 0 && want > dur) {
+        want = dur;
+    }
+    w_j(vm, self, F_P_TIME, want);
+    ret->j = want;
+    return NJ_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* Natives: controls                                                   */
 /* ------------------------------------------------------------------ */
@@ -1299,6 +1322,7 @@ NJFN(vol_setLevel)
                         "level out of range");
     }
     w_i(vm, self, F_P_VOLUME, lvl);
+    ret->i = lvl;               /* VolumeControl.setLevel returns the level set */
     return NJ_OK;
 }
 
@@ -1475,6 +1499,7 @@ static const nj_builtin_method player_methods[] = {
     M("getState",    "()I", 0),
     M("getDuration", "()J", 0),
     M("getMediaTime", "()J", 0),
+    M("setMediaTime", "(J)J", 0),
     M("getControl",  "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
       0),
     M("getControls", "()[Ljavax/microedition/media/Control;", 0)
@@ -1513,7 +1538,7 @@ static const nj_builtin_method toneseq_methods[] = {
 };
 
 static const nj_builtin_method volume_methods[] = {
-    M("setLevel", "(I)V", 0),
+    M("setLevel", "(I)I", 0),
     M("getLevel", "()I", 0),
     M("setMute",  "(Z)V", 0),
     M("isMuted",  "()Z", 0)
@@ -1578,6 +1603,7 @@ const nj_native_entry nj_lib_media_table[] = {
     { NJ_C_PLAYER, "getState",    "()I", player_getState },
     { NJ_C_PLAYER, "getDuration", "()J", player_getDuration },
     { NJ_C_PLAYER, "getMediaTime", "()J", player_getMediaTime },
+    { NJ_C_PLAYER, "setMediaTime", "(J)J", player_setMediaTime },
     { NJ_C_PLAYER, "getControl",
       "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
       player_getControl },
@@ -1588,7 +1614,7 @@ const nj_native_entry nj_lib_media_table[] = {
     { NJ_C_TONE, "getToneSequence", "()[B", tone_getSequence },
     { NJ_C_TONE, "setSequence",     "([B)V", tone_setSequence },
 
-    { NJ_C_VOLUME, "setLevel", "(I)V", vol_setLevel },
+    { NJ_C_VOLUME, "setLevel", "(I)I", vol_setLevel },
     { NJ_C_VOLUME, "getLevel", "()I", vol_getLevel },
     { NJ_C_VOLUME, "setMute",  "(Z)V", vol_setMute },
     { NJ_C_VOLUME, "isMuted",  "()Z", vol_isMuted },
