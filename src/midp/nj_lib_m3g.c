@@ -1989,6 +1989,42 @@ NJFN(m3g_mesh_setVertexBuffer)
  * an empty array puts a null World in the scene graph that fails somewhere far
  * from the cause.
  */
+/*
+ * The M3G file identifier, all twelve bytes of it.
+ *
+ * From the JSR 184 reference loader, which spells it out as the byte array
+ * {-85, 74, 83, 82, 49, 56, 52, -69, 13, 10, 26, 10} - that is
+ * AB 4A 'J' 'S' 'R' '1' '8' '4' BB 0D 0A 1A 0A, and it is exactly what
+ * 毁灭战士3_10598 ships in mars/mar.m3g:
+ *
+ *     $ unzip -p 毁灭战士3_10598.jar mars/mar.m3g | head -c 16 | xxd
+ *     00000000: ab4a 5352 3138 34bb 0d0a 1a0a 005f 0000  .JSR184......_..
+ *
+ * An earlier revision checked only the first two bytes; that was a guess made
+ * before this evidence existed.  Twelve is the number, and the reference
+ * implementation parses the object section in native code, so the layout
+ * beyond this identifier is not recoverable from its Java source either.
+ */
+static const unsigned char NJ_M3G_FILE_ID[12] = {
+    0xABu, 0x4Au, 0x53u, 0x52u, 0x31u, 0x38u, 0x34u, 0xBBu,
+    0x0Du, 0x0Au, 0x1Au, 0x0Au
+};
+
+static int m3g_has_file_id(const unsigned char *b, nj_u4 len)
+{
+    int i;
+
+    if (!b || len < (nj_u4)sizeof(NJ_M3G_FILE_ID)) {
+        return 0;
+    }
+    for (i = 0; i < (int)sizeof(NJ_M3G_FILE_ID); i++) {
+        if (b[i] != NJ_M3G_FILE_ID[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 NJFN(m3g_load)
 {
     nj_ref name = NJ_ARG_REF(args, 0);
@@ -2027,9 +2063,8 @@ NJFN(m3g_load)
      * would be a guess, and a wrong guess rejects valid files - which is the
      * same defect this comment is about.
      */
-    if (len >= 2u) {
-        const unsigned char *b = (const unsigned char *)data;
-        magic = ((nj_u4)b[0] << 8) | (nj_u4)b[1];
+    if (m3g_has_file_id((const unsigned char *)data, len)) {
+        magic = 0xAB4Au;
     }
     {
         char mbuf[192];
@@ -2040,7 +2075,7 @@ NJFN(m3g_load)
         nj_host_free(vm, data);
 
         if (magic != 0xAB4Au) {
-            q = " is not a .m3g container (wrong magic)";
+            q = " is not a .m3g container (wrong file identifier)";
             for (k = 0; cname[k] && n + 1u < sizeof(mbuf); k++) {
                 mbuf[n++] = cname[k];
             }
