@@ -1301,6 +1301,23 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 goto do_unwind;
             }
             f = (nj_field *)e->target;
+            /*
+             * Reading a static field is an active use of the class that
+             * DECLARES it, so its <clinit> has to have run.  Interfaces count:
+             * obfuscated titles park lookup tables in an interface and fill
+             * them from its static initialiser, and without this the table
+             * reads back null and the next iaload throws.
+             */
+            if (e->kind == NJ_LINK_FIELD_STATIC) {
+                SAVE();
+                if (nj_class_init(vm, f->owner) != NJ_OK) {
+                    if (!vm->exception) {
+                        (void)nj_throw(vm, "java/lang/NoClassDefFoundError",
+                                       f->owner->name);
+                    }
+                    goto do_unwind;
+                }
+            }
             switch (f->ptype) {
             case NJ_PT_LONG:
             case NJ_PT_DOUBLE:
@@ -1327,6 +1344,18 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 goto do_unwind;
             }
             f = (nj_field *)e->target;
+            /* Writing one is an active use too, and the value is left on the
+             * operand stack across the initialiser so the GC can see it. */
+            if (e->kind == NJ_LINK_FIELD_STATIC) {
+                SAVE();
+                if (nj_class_init(vm, f->owner) != NJ_OK) {
+                    if (!vm->exception) {
+                        (void)nj_throw(vm, "java/lang/NoClassDefFoundError",
+                                       f->owner->name);
+                    }
+                    goto do_unwind;
+                }
+            }
             switch (f->ptype) {
             case NJ_PT_LONG:
             case NJ_PT_DOUBLE: {
