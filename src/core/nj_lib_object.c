@@ -240,8 +240,34 @@ NJFN(class_getResourceAsStream)
     }
     {
         const char *p = path;
+        char rel[256];
         if (*p == '/') {
             p++;                /* absolute: the JAR root */
+        } else {
+            /*
+             * A RELATIVE name resolves against the class's own package
+             * directory: class Z/a asking for "D0" means the JAR entry
+             * "Z/D0", not "D0".
+             *
+             * 蛋蛋历险记_11460 loads every level file this way.  Without
+             * this, getResourceAsStream() answers NULL, the game's loader
+             * NPEs on the null stream inside its own retry loop and hangs
+             * forever: it retries the whole level after a System.gc() and
+             * the retry can never succeed.
+             */
+            nj_class *owner = NJ_CLASS_OF(args);
+            const char *slash = (owner != NULL && owner->name != NULL)
+                                    ? strrchr(owner->name, '/') : NULL;
+            if (slash != NULL) {
+                nj_size plen = (nj_size)(slash - owner->name);
+                nj_size nlen = (nj_size)strlen(p);
+                if (plen + 1u + nlen < (nj_size)sizeof(rel)) {
+                    memcpy(rel, owner->name, (size_t)plen);
+                    rel[plen] = '/';
+                    memcpy(rel + plen + 1u, p, (size_t)nlen + 1u);
+                    p = rel;
+                }
+            }
         }
         data = nj_app_resource(vm, app, p, &len);
     }
