@@ -783,6 +783,70 @@ int main(void)
         }
     }
 
+    /*
+     * Drum layering.  A kick is not a low note: its skin starts an octave
+     * above the note and falls to it, so the first milliseconds cross zero
+     * far more often than the rest.  The metal is noise, and the open pieces
+     * ring where the closed ones have already stopped.
+     */
+    {
+        nj_u1 file[128];
+        nj_u4 n, fr = 0u;
+        nj_u1 *m;
+        nj_u4 early = 0u, late = 0u;
+        nj_u8 open_hat = 0u, closed_hat = 0u, crash = 0u, closed_late = 0u;
+
+        n = build_voiced(file, NULL, 0u, 9u, 36u);      /* kick */
+        m = nj_midi_render(file, n, &fr, &MEM);
+        check(m != NULL, "a kick renders");
+        if (m != NULL) {
+            early = pcm_crossings(m, fr, 0u, NJ_MIDI_RATE * 3u / 100u);
+            late = pcm_crossings(m, fr, NJ_MIDI_RATE * 6u / 100u,
+                                 NJ_MIDI_RATE / 10u);
+            t_free(NULL, m);
+        }
+        check(late > 0u && early * 10u > late * 13u,
+              "a kick starts above its note and falls to it");
+        if (!(late > 0u && early * 10u > late * 13u)) {
+            printf("     kick crossings early %u late %u\n",
+                   (unsigned)early, (unsigned)late);
+        }
+
+        n = build_voiced(file, NULL, 0u, 9u, 46u);      /* open hat */
+        m = nj_midi_render(file, n, &fr, &MEM);
+        if (m != NULL) {
+            open_hat = pcm_rms(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 4u);
+            t_free(NULL, m);
+        }
+        n = build_voiced(file, NULL, 0u, 9u, 42u);      /* closed hat */
+        m = nj_midi_render(file, n, &fr, &MEM);
+        if (m != NULL) {
+            closed_hat = pcm_rms(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 4u);
+            closed_late = pcm_rms(m, fr, NJ_MIDI_RATE * 3u / 10u,
+                                  NJ_MIDI_RATE * 6u / 10u);
+            t_free(NULL, m);
+        }
+        check(open_hat > 0u && open_hat > closed_hat * 10u,
+              "an open hi-hat rings where a closed one has stopped");
+        if (!(open_hat > 0u && open_hat > closed_hat * 10u)) {
+            printf("     hat rms: open %llu, closed %llu\n",
+                   (unsigned long long)open_hat, (unsigned long long)closed_hat);
+        }
+
+        n = build_voiced(file, NULL, 0u, 9u, 49u);      /* crash */
+        m = nj_midi_render(file, n, &fr, &MEM);
+        if (m != NULL) {
+            crash = pcm_rms(m, fr, NJ_MIDI_RATE * 3u / 10u, NJ_MIDI_RATE * 6u / 10u);
+            t_free(NULL, m);
+        }
+        check(crash > 0u && crash > closed_late * 10u,
+              "a crash is still ringing half a second later");
+        if (!(crash > 0u && crash > closed_late * 10u)) {
+            printf("     crash rms %llu vs closed hat %llu\n",
+                   (unsigned long long)crash, (unsigned long long)closed_late);
+        }
+    }
+
     t_free(NULL, pcm);
     printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures != 0;

@@ -113,6 +113,8 @@ typedef struct {
     nj_u2 attack_ms;            /* how long it takes to reach full level */
     nj_u2 release_ms;           /* how long it takes to fall silent */
     nj_u1 sustain;              /* 0..127: the level the decay settles on */
+    nj_u1 pitch_drop;           /* 128 = starts an octave high (a kick) */
+    nj_u2 pitch_ms;             /* how long the pitch takes to fall */
 } mid_timbre;
 
 /*
@@ -126,48 +128,89 @@ typedef struct {
  * else honest to make of them.
  */
 static const mid_timbre mid_timbres[16] = {
-    { MID_W_TRIANGLE, 1400u,   2u, 140u,   0u },   /* piano: struck, dies away */
-    { MID_W_TRIANGLE,  900u,   1u, 120u,   0u },   /* chromatic percussion */
-    { MID_W_SQUARE,      0u,   6u,  40u, 110u },   /* organ: instant, holds */
-    { MID_W_SAW,      1200u,   3u, 130u,   0u },   /* guitar */
-    { MID_W_TRIANGLE,  700u,   2u,  90u,   0u },   /* bass */
-    { MID_W_SAW,         0u,  45u, 180u, 100u },   /* strings: slow, sustained */
-    { MID_W_SAW,         0u,  55u, 200u, 100u },   /* ensemble */
-    { MID_W_SQUARE,      0u,  25u,  90u, 105u },   /* brass: a small swell */
-    { MID_W_SQUARE,      0u,  20u,  80u, 110u },   /* reed */
-    { MID_W_TRIANGLE,    0u,  30u,  70u, 105u },   /* pipe */
-    { MID_W_SAW,         0u,   8u,  80u, 100u },   /* synth lead */
-    { MID_W_TRIANGLE,    0u, 120u, 300u,  95u },   /* synth pad: the slowest */
-    { MID_W_NOISE,     300u,   5u, 200u,   0u },   /* effects */
-    { MID_W_TRIANGLE,  900u,   5u, 120u,   0u },   /* ethnic */
-    { MID_W_NOISE,     200u,   1u,  60u,   0u },   /* percussive */
-    { MID_W_NOISE,     250u,   2u, 150u,   0u }    /* sound effects */
+    { MID_W_TRIANGLE, 1400u,   2u, 140u,   0u ,   0u, 0u },   /* piano: struck, dies away */
+    { MID_W_TRIANGLE,  900u,   1u, 120u,   0u ,   0u, 0u },   /* chromatic percussion */
+    { MID_W_SQUARE,      0u,   6u,  40u, 110u ,   0u, 0u },   /* organ: instant, holds */
+    { MID_W_SAW,      1200u,   3u, 130u,   0u ,   0u, 0u },   /* guitar */
+    { MID_W_TRIANGLE,  700u,   2u,  90u,   0u ,   0u, 0u },   /* bass */
+    { MID_W_SAW,         0u,  45u, 180u, 100u ,   0u, 0u },   /* strings: slow, sustained */
+    { MID_W_SAW,         0u,  55u, 200u, 100u ,   0u, 0u },   /* ensemble */
+    { MID_W_SQUARE,      0u,  25u,  90u, 105u ,   0u, 0u },   /* brass: a small swell */
+    { MID_W_SQUARE,      0u,  20u,  80u, 110u ,   0u, 0u },   /* reed */
+    { MID_W_TRIANGLE,    0u,  30u,  70u, 105u ,   0u, 0u },   /* pipe */
+    { MID_W_SAW,         0u,   8u,  80u, 100u ,   0u, 0u },   /* synth lead */
+    { MID_W_TRIANGLE,    0u, 120u, 300u,  95u ,   0u, 0u },   /* synth pad: the slowest */
+    { MID_W_NOISE,     300u,   5u, 200u,   0u ,   0u, 0u },   /* effects */
+    { MID_W_TRIANGLE,  900u,   5u, 120u,   0u ,   0u, 0u },   /* ethnic */
+    { MID_W_NOISE,     200u,   1u,  60u,   0u ,   0u, 0u },   /* percussive */
+    { MID_W_NOISE,     250u,   2u, 150u,   0u ,   0u, 0u }    /* sound effects */
 };
 
 static void mid_drum(nj_u4 note, mid_timbre *t)
 {
-    t->sustain = 0u;
+    /*
+     * A drum is a skin and a rattle.  The skins - kick and toms - start high
+     * and fall, which is what makes them sound struck rather than tuned; the
+     * metal is noise, and the open pieces ring far longer than the closed
+     * ones.  Everything here is short, ends silent, and has no sustain.
+     */
+    t->wave = MID_W_NOISE;
+    t->decay_ms = 90u;
     t->attack_ms = 1u;
+    t->release_ms = 40u;
+    t->sustain = 0u;
+    t->pitch_drop = 0u;
+    t->pitch_ms = 0u;
+
     if (note == 35u || note == 36u) {               /* kick */
         t->wave = MID_W_TRIANGLE;
         t->decay_ms = 120u;
-        t->release_ms = 40u;
+        t->pitch_drop = 128u;                       /* an octave above the note */
+        t->pitch_ms = 60u;
+    } else if (note == 37u) {                       /* side stick */
+        t->decay_ms = 40u;
+        t->release_ms = 20u;
     } else if (note == 38u || note == 40u) {        /* snare */
-        t->wave = MID_W_NOISE;
         t->decay_ms = 130u;
         t->release_ms = 30u;
-    } else if (note == 42u || note == 44u || note == 46u) {  /* hats */
-        t->wave = MID_W_NOISE;
+    } else if (note == 39u) {                       /* hand clap */
+        t->decay_ms = 100u;
+        t->release_ms = 30u;
+    } else if (note == 42u || note == 44u) {        /* closed and pedal hat */
         t->decay_ms = 45u;
         t->release_ms = 15u;
-    } else if (note >= 47u && note <= 50u) {        /* toms */
+    } else if (note == 46u) {                       /* open hat: it rings */
+        t->decay_ms = 300u;
+        t->release_ms = 60u;
+    } else if (note == 49u || note == 57u) {        /* crash */
+        t->decay_ms = 900u;
+        t->release_ms = 120u;
+    } else if (note == 51u || note == 59u) {        /* ride */
+        t->decay_ms = 700u;
+        t->release_ms = 120u;
+    } else if (note == 52u) {                       /* china */
+        t->decay_ms = 800u;
+        t->release_ms = 120u;
+    } else if (note == 53u) {                       /* bell */
         t->wave = MID_W_TRIANGLE;
-        t->decay_ms = 180u;
-        t->release_ms = 50u;
-    } else {
-        t->wave = MID_W_NOISE;
-        t->decay_ms = 90u;
+        t->decay_ms = 600u;
+        t->release_ms = 120u;
+    } else if (note == 54u) {                       /* tambourine */
+        t->decay_ms = 200u;
         t->release_ms = 40u;
+    } else if (note == 55u) {                       /* splash */
+        t->decay_ms = 400u;
+        t->release_ms = 80u;
+    } else if (note == 56u) {                       /* cowbell */
+        t->wave = MID_W_SQUARE;
+        t->decay_ms = 250u;
+        t->release_ms = 60u;
+    } else if (note >= 41u && note <= 50u) {        /* toms */
+        t->wave = MID_W_TRIANGLE;
+        t->decay_ms = (note >= 50u) ? 160u : 200u;
+        t->release_ms = 50u;
+        t->pitch_drop = 96u;                        /* a fifth and a half up */
+        t->pitch_ms = 120u;
     }
 }
 
@@ -250,6 +293,8 @@ typedef struct {
     nj_u4 chan;
     nj_u1 wave;                 /* resolved from the channel's program */
     nj_u2 decay_ms;             /* 0 = held */
+    nj_u1 pitch_drop;           /* a drum's skin starts above its note */
+    nj_u2 pitch_ms;
     nj_u2 attack_ms;
     nj_u2 release_ms;
     nj_u1 sustain;              /* 0..127 of full level */
@@ -333,6 +378,8 @@ static int mid_add_note(mid_song *s, const nj_midi_mem *mem,
     s->notes[s->nnotes].attack_ms = (t != NULL) ? t->attack_ms : 0u;
     s->notes[s->nnotes].release_ms = (t != NULL) ? t->release_ms : 0u;
     s->notes[s->nnotes].sustain = (t != NULL) ? t->sustain : 0u;
+    s->notes[s->nnotes].pitch_drop = (t != NULL) ? t->pitch_drop : 0u;
+    s->notes[s->nnotes].pitch_ms = (t != NULL) ? t->pitch_ms : 0u;
     if (t != NULL && t->release_ms > s->max_release_ms) {
         s->max_release_ms = t->release_ms;      /* the render has to outlast it */
     }
@@ -590,6 +637,9 @@ typedef struct {
     nj_u4 chan;
     nj_u4 note_step;            /* the note's own step, before the bend */
     nj_u4 base_step;            /* phase increment before the bend */
+    nj_u4 pitch_mul;            /* Q16: the pitch envelope's multiplier */
+    nj_u4 pitch_dec;            /* how much it falls per sample */
+    nj_u4 pitch_left;           /* samples of fall left (0 = at the note) */
     nj_u4 lfo;                  /* vibrato phase, 32 bits */
     nj_u4 mod;                  /* vibrato depth, Q16, from the channel */
     nj_u4 rev;                  /* CC91 send, 0..127, from the channel */
@@ -673,14 +723,17 @@ static void mid_set_step(mid_voice *v)
 {
     nj_u4 t = v->lfo >> 16;                 /* 0 .. 65535 */
     nj_s4 lfo = (t < 32768u) ? (nj_s4)t : (nj_s4)(65535u - t);
+    /* The pitch envelope rides on top of the bend: a kick starts an octave
+     * high and falls to its note, which is what makes it a kick. */
+    nj_u4 base = (nj_u4)(((nj_u8)v->base_step * (nj_u8)v->pitch_mul) >> 16);
 
     lfo = lfo * 2 - 32768;                  /* -32768 .. 32766 */
     if (v->mod == 0u) {
-        v->step = v->base_step;
+        v->step = base;
         return;
     }
-    v->step = (nj_u4)((nj_s4)v->base_step
-                      + (nj_s4)(((nj_s8)v->base_step * (nj_s8)lfo
+    v->step = (nj_u4)((nj_s4)base
+                      + (nj_s4)(((nj_s8)base * (nj_s8)lfo
                                  * (nj_s8)v->mod) >> 31));
 }
 
@@ -996,6 +1049,26 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
                 voices[v].note_step = mid_step_for(song.notes[ev].note);
                 voices[v].base_step = voices[v].note_step;
                 voices[v].step = voices[v].base_step;
+                /*
+                 * The pitch envelope: a struck skin starts above its note and
+                 * falls to it, so the first milliseconds are a hit rather
+                 * than a note.  128 is an octave, and the fall is linear.
+                 */
+                voices[v].pitch_mul = 65536u;
+                voices[v].pitch_dec = 0u;
+                voices[v].pitch_left = 0u;
+                if (song.notes[ev].pitch_drop != 0u
+                    && song.notes[ev].pitch_ms != 0u) {
+                    nj_u4 span = (nj_u4)song.notes[ev].pitch_ms
+                        * (NJ_MIDI_RATE / 1000u);
+                    if (span != 0u) {
+                        nj_u4 hi = 65536u
+                            + (nj_u4)song.notes[ev].pitch_drop * 512u;
+                        voices[v].pitch_mul = hi;
+                        voices[v].pitch_dec = (hi - 65536u) / span;
+                        voices[v].pitch_left = span;
+                    }
+                }
                 mid_apply_pitch(&voices[v], bend_now[song.notes[ev].chan],
                                 range_now[song.notes[ev].chan]);
                 voices[v].noise = 0x13579BDFu | 1u;
@@ -1064,6 +1137,14 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
             }
             if (voices[v].end != 0u && i >= voices[v].end) {
                 continue;
+            }
+            if (voices[v].pitch_left != 0u) {
+                voices[v].pitch_mul -= voices[v].pitch_dec;
+                voices[v].pitch_left--;
+                if (voices[v].pitch_left == 0u) {
+                    voices[v].pitch_mul = 65536u;   /* it reached its note */
+                }
+                mid_set_step(&voices[v]);
             }
             if (voices[v].decay != 0u && voices[v].amp > voices[v].sustain) {
                 /* A struck note loses amplitude every sample, whether or not
