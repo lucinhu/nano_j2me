@@ -679,6 +679,7 @@ static nj_ref read_stream(nj_vm *vm, nj_ref in, nj_u4 cap)
     nj_ref buf;
     nj_u4 got = 0u;
     int guard = 0;
+    nj_u4 mark;
 
     if (!in) {
         return NULL;
@@ -691,6 +692,15 @@ static nj_ref read_stream(nj_vm *vm, nj_ref in, nj_u4 cap)
         nj_clear_exception(vm);
         return NULL;
     }
+    /*
+     * The buffer is held only in this C local, and both the growing copy below
+     * and the reads in the loop allocate.  A collection in either place would
+     * free the buffer out from under the bytes already read, so it is rooted
+     * for the whole function (firefox/愤怒的小鸟-高清版_2353 crashed inside the
+     * memcpy that copies a WAV out of it).
+     */
+    mark = nj_root_mark(vm);
+    buf = nj_root(vm, buf);
 
     /*
      * Read in growing chunks rather than allocating the ceiling up front.
@@ -716,7 +726,7 @@ static nj_ref read_stream(nj_vm *vm, nj_ref in, nj_u4 cap)
                 break;          /* keep what we have */
             }
             memcpy(nb->u.bytes, buf->u.bytes, (size_t)got);
-            buf = nb;
+            buf = nj_root(vm, nb);
             grow = want;
         }
         a[0].r = buf;
@@ -734,6 +744,7 @@ static nj_ref read_stream(nj_vm *vm, nj_ref in, nj_u4 cap)
         }
         got += (nj_u4)n;
     }
+    nj_root_release(vm, mark);
     if (got == 0u) {
         return NULL;
     }
@@ -806,18 +817,30 @@ NJFN(media_createPlayer_stream)
     nj_ref data;
     nj_ref p;
     wav_info wi;
+    nj_u4 mark;
 
     (void)type;                 /* the content type is advisory: we sniff */
     if (!in) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "stream is null");
     }
+    mark = nj_root_mark(vm);
     data = read_stream(vm, in, 4u * 1024u * 1024u);
     if (!data) {
+        nj_root_release(vm, mark);
         return nj_throw(vm, NJ_C_MEXC, "empty stream");
     }
+    /*
+     * read_stream hands back the only reference, and player_new allocates a
+     * Player plus a Vector: a collection there used to free the file we are
+     * about to parse.  愤怒的小鸟-高清版_2353 crashed in the memcpy below
+     * (SIGSEGV inside libc, from this function) because the source block had
+     * been recycled by the collector by then.
+     */
+    data = nj_root(vm, data);
     p = player_new(vm, 1);
     if (!p) {
+        nj_root_release(vm, mark);
         return NJ_ERR;
     }
     if (!wav_parse(barray_bytes(data), barray_len(data), &wi)) {
@@ -839,10 +862,12 @@ NJFN(media_createPlayer_stream)
             nj_logf(vm, 3, "media: silent Player for %u bytes of MIDI "
                            "(this runtime does not synthesise MIDI)",
                     (unsigned)barray_len(data));
+            nj_root_release(vm, mark);
             ret->r = p;
             return NJ_OK;
         }
         nj_logf(vm, 3, "media: cannot play %s", what);
+        nj_root_release(vm, mark);
         return nj_throw(vm, NJ_C_MEXC,
                         "not a PCM WAV" NJ_MEXC_DATA);
     }
@@ -860,6 +885,7 @@ NJFN(media_createPlayer_stream)
         nj_u4 want = wi.frames * (nj_u4)wi.channels * (nj_u4)(wi.bits / 8);
         nj_ref pcm = nj_byte_array_new(vm, want);
         if (!pcm) {
+            nj_root_release(vm, mark);
             return NJ_ERR;
         }
         memcpy(pcm->u.bytes, barray_bytes(data) + off, (size_t)want);
@@ -870,6 +896,7 @@ NJFN(media_createPlayer_stream)
     w_i(vm, p, F_P_FRAMES, (nj_s4)wi.frames);
     w_j(vm, p, F_P_DURATION,
         (nj_s8)wi.frames * 1000000LL / (nj_s8)wi.rate);
+    nj_root_release(vm, mark);
     ret->r = p;
     return NJ_OK;
 }

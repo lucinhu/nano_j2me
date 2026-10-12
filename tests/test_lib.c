@@ -1324,6 +1324,103 @@ static void test_data_interfaces(nj_vm *vm)
  * ArrayStoreException, swallowed its own loader failure and painted a null
  * Image every frame after that.
  */
+/* Build a mono 8-bit PCM WAV whose data chunk is `frames` bytes long. */
+static nj_u1 *wav_of(nj_u4 frames)
+{
+    nj_u4 total = 44u + frames;
+    nj_u1 *b = (nj_u1 *)malloc(total);
+    nj_u4 i;
+
+    if (b == NULL) {
+        return NULL;
+    }
+    memset(b, 0, total);
+    memcpy(b, "RIFF", 4);
+    b[4] = (nj_u1)((36u + frames) & 0xFFu);
+    b[5] = (nj_u1)(((36u + frames) >> 8) & 0xFFu);
+    b[6] = (nj_u1)(((36u + frames) >> 16) & 0xFFu);
+    b[7] = (nj_u1)(((36u + frames) >> 24) & 0xFFu);
+    memcpy(b + 8, "WAVEfmt ", 8);
+    b[16] = 16;
+    b[20] = 1;                  /* PCM */
+    b[22] = 1;                  /* mono */
+    b[24] = 0x40; b[25] = 0x1F; /* 8000 Hz */
+    b[28] = 0x40; b[29] = 0x1F;
+    b[32] = 1;                  /* block align */
+    b[34] = 8;                  /* bits per sample */
+    memcpy(b + 36, "data", 4);
+    b[40] = (nj_u1)(frames & 0xFFu);
+    b[41] = (nj_u1)((frames >> 8) & 0xFFu);
+    b[42] = (nj_u1)((frames >> 16) & 0xFFu);
+    b[43] = (nj_u1)((frames >> 24) & 0xFFu);
+    for (i = 0; i < frames; i++) {
+        b[44u + i] = (nj_u1)(i & 0x7Fu);
+    }
+    return b;
+}
+
+/* Manager.createPlayer(InputStream, String) reads the whole stream and then
+ * allocates the Player.  Both the growing buffer inside the read and the file
+ * itself were held only in C locals, so a collection during the pixel copy
+ * freed the very bytes being parsed: 愤怒的小鸟-高清版_2353 died with SIGSEGV
+ * inside libc, in the memcpy in media_createPlayer_stream. */
+static void test_player_survives_collection(nj_vm *vm)
+{
+    const nj_u4 FRAMES = 400000u;       /* 400000 frames at 8000 Hz = 50 s */
+    nj_u1 *wav = wav_of(FRAMES);
+    nj_vm_stats before, after;
+    nj_value a[2];
+    nj_value ret;
+    nj_value dur;
+    nj_ref in;
+    int i;
+
+    if (wav == NULL) {
+        OK_MSG(0, "cannot allocate the WAV fixture");
+        return;
+    }
+    in = bais_over(vm, wav, 44u + FRAMES);
+    free(wav);
+    OK_MSG(in != NULL, "a ByteArrayInputStream over a 400 KB WAV");
+
+    /* Leave less room than the PCM array needs, so allocating it collects. */
+    for (i = 0; i < 4000; i++) {
+        nj_vm_stats st;
+        nj_vm_get_stats(vm, &st);
+        if (st.heap_size - st.heap_used < 700000u) {
+            break;
+        }
+        if (!nj_byte_array_new(vm, 65536u)) {
+            nj_clear_exception(vm);
+            break;
+        }
+    }
+    memset(&before, 0, sizeof(before));
+    nj_vm_get_stats(vm, &before);
+
+    a[0].r = in;
+    a[1].r = NULL;
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                          "(Ljava/io/InputStream;Ljava/lang/String;)L" 
+                          "javax/microedition/media/Player;", a, &ret) == NJ_OK,
+           "createPlayer on a heap that has to collect mid-call");
+    OK_MSG(ret.r != NULL, "a Player for 400000 frames of 8-bit PCM");
+
+    memset(&after, 0, sizeof(after));
+    nj_vm_get_stats(vm, &after);
+    OK_MSG(after.gc_count > before.gc_count,
+           "allocating the PCM array really did run a collection");
+
+    if (ret.r != NULL) {
+        dur.bits = 0u;
+        OK(nj_call(vm, ret.r, PLAYER, "getDuration", "()J", NULL, &dur) == NJ_OK);
+        OK_MSG(dur.j == 50000000LL,
+               "the parsed duration is the file's own (got %lld us)",
+               (long long)dur.j);
+    }
+}
+
 /* MIDP 2.0 documents the initial contents of TextBox and TextField as "the
  * text content, or null if the text is empty".  三国杀2．2美化版_1347 builds its
  * user-creation TextBox with a null text, so a runtime that rejected null made
@@ -1486,6 +1583,7 @@ int main(void)
     test_alloc_gives_up(vm);
     test_data_interfaces(vm);
     test_null_initial_text(vm);
+    test_player_survives_collection(vm);
     test_image_survives_collection(vm);
 
     nj_vm_destroy(vm);
