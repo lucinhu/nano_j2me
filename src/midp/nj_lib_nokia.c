@@ -32,6 +32,7 @@
 #define NJ_C_GRAPHICS "javax/microedition/lcdui/Graphics"
 #define NJ_C_FSELECT   "com/nokia/mid/ui/FileSelect"
 #define NJ_C_FSDETAIL  "com/nokia/mid/ui/FileSelectDetail"
+#define NJ_C_SOUND     "com/nokia/mid/sound/Sound"
 
 /*
  * MultipointTouch.  Registering a listener succeeds and the listener is never
@@ -92,6 +93,17 @@ nj_status nj_nokia_late_init(nj_vm *vm)
     nokia_const_int(vm, NJ_C_FSELECT, "MEDIA_TYPE_APPLICATION", 8);
     nokia_const_int(vm, NJ_C_FSELECT, "MEDIA_TYPE_ALL", 16);
 
+    /*
+     * The stub jar inlines these, so the runtime has to hold the same numbers:
+     * a MIDlet comparing getState() against a stub's SOUND_PLAYING of 1 while
+     * the runtime answers 0 never notices it is being lied to.
+     */
+    nokia_const_int(vm, NJ_C_SOUND, "FORMAT_TONE", 1);
+    nokia_const_int(vm, NJ_C_SOUND, "FORMAT_WAV", 2);
+    nokia_const_int(vm, NJ_C_SOUND, "SOUND_STOPPED", 0);
+    nokia_const_int(vm, NJ_C_SOUND, "SOUND_PLAYING", 1);
+    nokia_const_int(vm, NJ_C_SOUND, "SOUND_UNPLAYABLE", 2);
+
     {
         const char *fc = "com/nokia/mid/ui/FullCanvas";
         nokia_const_int(vm, fc, "SOFT_KEY_LEFT", -6);
@@ -115,6 +127,68 @@ NJFN(nokia_vk_hide)     { return NJ_OK; }
 NJFN(nokia_vk_show)     { return NJ_OK; }
 NJFN(nokia_vk_visible)  { ret->i = 0; return NJ_OK; }
 
+/*
+ * com.nokia.mid.sound.Sound.
+ *
+ * Only four members of it are used anywhere in the collected corpus:
+ * getState(), play(int), setGain(int) and stop().  Only those are implemented;
+ * inventing the rest would be inventing behaviour nobody asked for.
+ *
+ * play() sets real, observable state and does NOT synthesise audio.  A Sound is
+ * built from a Nokia tone string or from WAV bytes, and converting either into
+ * portable audio is a job the media module already does for javax.microedition
+ * .media - duplicating it here would give games two audio paths that disagree.
+ * getState() reports what actually happened, which is what a game polling for
+ * "is it still playing" is really asking.
+ */
+static nj_field *snd_field(nj_vm *vm, const char *name)
+{
+    return nj_field_lookup(vm, NJ_C_SOUND, name, "I", 0);
+}
+
+NJFN(nokia_snd_init)
+{
+    nj_field *f = snd_field(vm, "state");
+    if (f) {
+        nj_field_write_int(vm, NJ_THIS(args), f, 0);
+    }
+    return NJ_OK;
+}
+
+NJFN(nokia_snd_play)
+{
+    nj_field *f = snd_field(vm, "state");
+    if (f) {
+        nj_field_write_int(vm, NJ_THIS(args), f, 1);   /* SOUND_PLAYING */
+    }
+    return NJ_OK;
+}
+
+NJFN(nokia_snd_stop)
+{
+    nj_field *f = snd_field(vm, "state");
+    if (f) {
+        nj_field_write_int(vm, NJ_THIS(args), f, 0);   /* SOUND_STOPPED */
+    }
+    return NJ_OK;
+}
+
+NJFN(nokia_snd_setGain)
+{
+    nj_field *f = snd_field(vm, "gain");
+    if (f) {
+        nj_field_write_int(vm, NJ_THIS(args), f, NJ_ARG_INT(args, 0));
+    }
+    return NJ_OK;
+}
+
+NJFN(nokia_snd_getState)
+{
+    nj_field *f = snd_field(vm, "state");
+    ret->i = f ? nj_field_read_int(vm, NJ_THIS(args), f) : 0;
+    return NJ_OK;
+}
+
 #define M(name, desc, flags) { name, desc, flags }
 
 static const nj_builtin_method mplisten_methods[] = {
@@ -126,6 +200,26 @@ static const nj_builtin_method mptouch_methods[] = {
       "(L" NJ_C_MPLISTEN ";)V", NJ_ACC_STATIC),
     M("setMultipointTouchListener",
       "(L" NJ_C_MPLISTEN ";I)V", NJ_ACC_STATIC)
+};
+
+static const nj_builtin_field sound_fields[] = {
+    { "state", "I", 0 },
+    { "gain",  "I", 0 },
+    { "FORMAT_TONE",   "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "FORMAT_WAV",    "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SOUND_STOPPED", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SOUND_PLAYING", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SOUND_UNPLAYABLE", "I", NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+
+static const nj_builtin_method sound_methods[] = {
+    M("<init>",        "(IJ)V", 0),
+    M("<init>",        "([BI)V", 0),
+    M("play",          "(I)V",  0),
+    M("stop",          "()V",   0),
+    M("setGain",       "(I)V",  0),
+    M("getState",      "()I",   0),
+    M("release",       "()V",   0)
 };
 
 static const nj_builtin_field fsdetail_fields[] = {
@@ -338,6 +432,11 @@ const nj_builtin_class nj_lib_nokia_classes[] = {
       fullcanvas_fields,
       (nj_u2)(sizeof(fullcanvas_fields) / sizeof(fullcanvas_fields[0])),
       NULL, 0u },
+    { NJ_C_SOUND, "java/lang/Object", NJ_ACC_PUBLIC,
+      sound_fields,
+      (nj_u2)(sizeof(sound_fields) / sizeof(sound_fields[0])),
+      sound_methods,
+      (nj_u2)(sizeof(sound_methods) / sizeof(sound_methods[0])) },
     { NJ_C_FSDETAIL, "java/lang/Object", NJ_ACC_PUBLIC,
       fsdetail_fields,
       (nj_u2)(sizeof(fsdetail_fields) / sizeof(fsdetail_fields[0])),
@@ -375,6 +474,13 @@ const nj_native_entry nj_lib_nokia_table[] = {
     { NJ_C_FSELECT, "launch", "(IIZ)[L" NJ_C_FSDETAIL ";",
       nokia_fselect_launch },
     { NJ_C_FSDETAIL, "<init>",  "()V", nokia_fsd_init },
+    { NJ_C_SOUND, "<init>",  "(IJ)V", nokia_snd_init },
+    { NJ_C_SOUND, "<init>",  "([BI)V", nokia_snd_init },
+    { NJ_C_SOUND, "play",    "(I)V",  nokia_snd_play },
+    { NJ_C_SOUND, "stop",    "()V",   nokia_snd_stop },
+    { NJ_C_SOUND, "setGain", "(I)V",  nokia_snd_setGain },
+    { NJ_C_SOUND, "getState","()I",   nokia_snd_getState },
+    { NJ_C_SOUND, "release", "()V",   nokia_snd_stop },
     { NJ_C_FSDETAIL, "getUrl",  "()Ljava/lang/String;", nokia_fsd_getUrl },
     { NJ_C_FSDETAIL, "getName", "()Ljava/lang/String;", nokia_fsd_getName },
     { NJ_C_DUTILS, "createImage", "(II)" NJ_DU_IMAGE_DESC,
