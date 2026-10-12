@@ -294,9 +294,34 @@ static nj_u8 pcm_hf(const nj_u1 *pcm, nj_u4 frames, nj_u4 from, nj_u4 to)
 
 static nj_u4 build_track(nj_u1 *out, const nj_u1 *body, nj_u4 blen);
 
+/* How far the period wanders, in samples: a vibrato makes successive periods
+ * differ, a steady tone keeps them the same.  Only useful on a low note, where
+ * a fraction of a percent of pitch is several samples of period. */
+static nj_u4 pcm_period_spread(const nj_u1 *pcm, nj_u4 frames, nj_u4 from, nj_u4 to)
+{
+    nj_u4 last = 0u, lo = 0u, hi = 0u, n = 0u, i;
+
+    for (i = from + 1u; i < to && i < frames; i++) {
+        if (pcm_at(pcm, i - 1u) < 0 && pcm_at(pcm, i) >= 0) {
+            if (last != 0u) {
+                nj_u4 d = i - last;
+                if (n == 0u || d < lo) {
+                    lo = d;
+                }
+                if (n == 0u || d > hi) {
+                    hi = d;
+                }
+                n++;
+            }
+            last = i;
+        }
+    }
+    return (n < 4u) ? 0u : (hi - lo);
+}
+
 /* A one-note file at a chosen velocity: a hard note has to be brighter than a
  * soft one at the same pitch, and only two of them side by side show that. */
-static nj_u4 build_at(nj_u1 *out, nj_u1 chan, nj_u1 note, nj_u1 vel)
+static nj_u4 build_at(nj_u1 *out, nj_u1 chan, nj_u1 note, nj_u1 vel, nj_u1 prog)
 {
     static const nj_u1 body[] = {
         0x00, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20,   /* tempo */
@@ -308,6 +333,7 @@ static nj_u4 build_at(nj_u1 *out, nj_u1 chan, nj_u1 note, nj_u1 vel)
     nj_u1 b[sizeof(body)];
 
     memcpy(b, body, sizeof(body));
+    b[9] = prog;
     b[11] = (nj_u1)(0x90u | chan);
     b[12] = note;
     b[13] = vel;
@@ -929,7 +955,7 @@ int main(void)
         nj_u1 *m;
         nj_u8 loud_hf = 0u, loud_rms = 0u, soft_hf = 0u, soft_rms = 0u;
 
-        n = build_at(file, 0u, 69u, 127u);
+        n = build_at(file, 0u, 69u, 127u, 40u);
         m = nj_midi_render(file, n, &fr, &MEM);
         check(m != NULL, "a hard note renders");
         if (m != NULL) {
@@ -937,7 +963,7 @@ int main(void)
             loud_rms = pcm_rms(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 2u);
             t_free(NULL, m);
         }
-        n = build_at(file, 0u, 69u, 32u);
+        n = build_at(file, 0u, 69u, 32u, 40u);
         m = nj_midi_render(file, n, &fr, &MEM);
         if (m != NULL) {
             soft_hf = pcm_hf(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 2u);
@@ -950,6 +976,38 @@ int main(void)
         printf("     brightness (hf/rms x1000): hard %llu, soft %llu\n",
                (unsigned long long)(loud_hf * 1000u / (loud_rms ? loud_rms : 1u)),
                (unsigned long long)(soft_hf * 1000u / (soft_rms ? soft_rms : 1u)));
+    }
+
+    /*
+     * A bowed or a blown instrument breathes even when the file never sends
+     * CC1, which is why the families that do carry a small default vibrato.
+     * Measured on a low note: strings wander, a piano does not.
+     */
+    {
+        nj_u1 file[128];
+        nj_u4 n, fr = 0u;
+        nj_u1 *m;
+        nj_u4 str_spread = 0u, pno_spread = 0u;
+
+        n = build_at(file, 0u, 45u, 100u, 40u);      /* A2, strings */
+        m = nj_midi_render(file, n, &fr, &MEM);
+        check(m != NULL, "a low strings note renders");
+        if (m != NULL) {
+            str_spread = pcm_period_spread(m, fr, NJ_MIDI_RATE / 20u,
+                                           NJ_MIDI_RATE / 2u);
+            t_free(NULL, m);
+        }
+        n = build_at(file, 0u, 45u, 100u, 0u);       /* A2, piano */
+        m = nj_midi_render(file, n, &fr, &MEM);
+        if (m != NULL) {
+            pno_spread = pcm_period_spread(m, fr, NJ_MIDI_RATE / 20u,
+                                           NJ_MIDI_RATE / 2u);
+            t_free(NULL, m);
+        }
+        check(str_spread >= 2u && pno_spread <= 1u,
+              "strings breathe on their own, a piano does not");
+        printf("     period spread: strings %u, piano %u samples\n",
+               (unsigned)str_spread, (unsigned)pno_spread);
     }
 
     t_free(NULL, pcm);
