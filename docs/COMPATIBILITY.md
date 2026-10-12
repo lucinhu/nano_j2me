@@ -339,3 +339,36 @@ link com/example/Game: interface this runtime does not provide: java/lang/Runnab
 
 Run `tools/nj_inspect game.jar --parse-only` first: if that is clean, the class
 files are fine and the problem is an API gap, which the message will name.
+
+## Mascot Capsule V3: measured, not yet implemented
+
+JSR 184 is not the only 3D API in the collection.  Two titles call Mascot
+Capsule instead (鬼泣3D中文版_3376, 生化危机3D(CAPCOM经典)_3671), and `javap` over
+every class in both says the caller-side surface is **13 classes and 41
+distinct members** - the same order of magnitude as the JSR 184 work, with the
+same shape: a scene description (Figure, FigureLayout, ActionTable, Light,
+Effect3D, Texture) plus a rasteriser (`Graphics3D.renderFigure`,
+`renderPrimitives`).
+
+    AffineTrans.rotationY(I)V                        37 calls
+    AffineTrans.multiply(AffineTrans, AffineTrans)V  26
+    Vector3D.unit()V                                 24
+    Graphics3D.flush()V                              21
+    FigureLayout.setAffineTrans(AffineTrans)V        18
+    Graphics3D.renderPrimitives(Texture,II,FigureLayout,
+                                Effect3D,II,[I[I[I[I)V  15
+    Util3D.sqrt(I)I                                  13
+
+Two details that change the estimate:
+
+  - The same API appears under **three package names**: `com.mascotcapsule.
+    micro3d.v3`, the older flat `com.mascotcapsule`, and Capcom's own
+    `com.capcom.mascotcapsule`.  The class tables are constant data, so the
+    aliases cost table entries, not code.
+  - `Util3D.sqrt(I)I` returns an **int** - fixed-point arithmetic throughout.
+    A rasteriser here cannot be float-only and still match what the titles
+    expect.
+
+Nothing of this is written yet; the measurement is recorded so the next round
+decides with a number instead of an impression, which is how JSR 184 was
+scoped.
