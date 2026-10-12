@@ -131,7 +131,8 @@ int main(int argc, char **argv)
         app = nj_app_open(vm, data, len);
         OK(app != NULL);
         if (!app) {
-            nj_vm_destroy(vm);
+            nj_app_close(vm, app);
+        nj_vm_destroy(vm);
             nj_port_shutdown(&port);
             free(data);
             return 1;
@@ -163,6 +164,7 @@ int main(int argc, char **argv)
                "startup finished in %ld ms: the 300 ms sleep was skipped (round %d)",
                (long)elapsed, round);
 
+        nj_app_close(vm, app);
         nj_vm_destroy(vm);
         nj_port_shutdown(&port);
     }
