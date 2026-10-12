@@ -137,6 +137,12 @@ if(ZLIB_FOUND)
 endif()
 
 target_compile_options(nj2me PRIVATE -Wall -Wextra)
+# A printf whose conversions and arguments disagree is undefined behaviour, and
+# it cost this project a day: an eleven-argument stats line printed the bit
+# pattern of a double as `m3g=516708`, which read as a measurement and sent me
+# looking for a regression that did not exist.  -Wall already warns about it;
+# this makes the warning stop the build.
+target_compile_options(nj2me PRIVATE -Werror=format)
 if(NJ_WERROR)
   target_compile_options(nj2me PRIVATE -Werror)
 endif()
