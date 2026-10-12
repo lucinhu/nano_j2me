@@ -78,6 +78,15 @@
 #define NJ_ENABLE_M3G 1
 #endif
 
+/*
+ * Mascot Capsule Micro3D v3 (com.mascotcapsule.micro3d.v3), the other 3D API of
+ * that era, used by two titles in the collection.  0 removes every class in
+ * that package.
+ */
+#ifndef NJ_ENABLE_MASCOT
+#define NJ_ENABLE_MASCOT 1
+#endif
+
 #ifndef NJ_ENABLE_FLOAT
 #  define NJ_ENABLE_FLOAT 1
 #endif

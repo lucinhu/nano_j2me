@@ -482,6 +482,13 @@ extern const int nj_lib_m3g_class_count;
 extern const nj_native_entry nj_lib_m3g_table[];
 extern const int nj_lib_m3g_count;
 
+/* Built by nj_lib_mascot.c (Mascot Capsule Micro3D v3).  Compiled out with
+ * -DNJ_ENABLE_MASCOT=0, in which case both tables are empty. */
+extern const nj_builtin_class nj_lib_mascot_classes[];
+extern const int nj_lib_mascot_class_count;
+extern const nj_native_entry nj_lib_mascot_table[];
+extern const int nj_lib_mascot_count;
+
 /* Built by nj_lib_fc.c, used by Connector.open() in nj_lib_io.c.  Returns a new
  * FileConnection, or NULL with an exception pending. */
 nj_ref nj_fc_new(nj_vm *vm, const char *url);

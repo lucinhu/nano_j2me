@@ -63,6 +63,7 @@ set(NJ_ENABLE_IO    1 CACHE STRING "java.io and javax.microedition.io")
 # still linked every libm transcendental.  A configuration option that lies is
 # worse than one that is missing.
 set(NJ_ENABLE_M3G 1 CACHE STRING "Build JSR 184 (Mobile 3D Graphics)")
+set(NJ_ENABLE_MASCOT 1 CACHE STRING "Build JSR 184 (Mobile 3D Graphics)")
 set(NJ_ENABLE_FLOAT 1 CACHE STRING "libm transcendentals for java.lang.Math")
 set(NJ_PIXFMT       "NJ_PIXFMT_RGB565" CACHE STRING
     "Framebuffer pixel format: NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888 or NJ_PIXFMT_ARGB8888")
@@ -102,6 +103,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_fc.c
   src/midp/nj_lib_wireless.c
   src/midp/nj_lib_m3g.c
+  src/midp/nj_lib_mascot.c
   # ---- graphics ----
   src/gfx/nj_gfx.c
   src/gfx/nj_text.c
@@ -139,6 +141,7 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_IO=${NJ_ENABLE_IO}
   NJ_ENABLE_FLOAT=${NJ_ENABLE_FLOAT}
   NJ_ENABLE_M3G=${NJ_ENABLE_M3G}
+    NJ_ENABLE_MASCOT=${NJ_ENABLE_MASCOT}
   NJ_ENABLE_TTF=${NJ_ENABLE_TTF})
 
 if(NJ_SANITIZE)
@@ -406,6 +409,7 @@ if(NJ_BUILD_TESTS)
   # game called it; this walks the whole class library instead of waiting.
   nj_add_test(test_natives   tests/test_natives.c)
   nj_add_test(test_m3g       tests/test_m3g.c)
+  nj_add_test(test_mascot    tests/test_mascot.c)
   nj_add_test(test_m3g_file tests/test_m3g_file.c)
   nj_add_test(test_wireless tests/test_wireless.c)
 
