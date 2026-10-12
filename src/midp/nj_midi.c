@@ -135,6 +135,13 @@ typedef struct {
     nj_u2 pitch_ms;             /* how long the pitch takes to fall */
     nj_u1 tone;                 /* MID_W_DRUM: the tone's share, 0..127 */
     nj_u1 vib;                  /* default vibrato depth, 0..127, no CC1 needed */
+    /*
+     * Instrument attenuation, 0..127: the balance a phone synth got from
+     * its per-instrument tables.  Without it every note has the same
+     * amplitude, so a ten-note chord buries the single note carrying the
+     * melody and the tune is heard as chords, then melody, never together.
+     */
+    nj_u1 att;
 } mid_timbre;
 
 /*
@@ -155,26 +162,27 @@ typedef struct {
  * Noise is kept for the true sound-effect block (120..127) and for drums.
  */
 static const mid_timbre mid_timbres[16] = {
-    { MID_W_TRIANGLE, 1400u,   2u, 140u,   0u ,   0u, 0u , 0u , 0u },   /* piano: struck, dies away */
-    { MID_W_TRIANGLE,  900u,   1u, 120u,   0u ,   0u, 0u , 0u , 0u },   /* chromatic percussion */
-    { MID_W_SQUARE,      0u,   6u,  40u, 110u ,   0u, 0u , 0u , 0u },   /* organ: instant, holds */
-    { MID_W_SAW,      1200u,   3u, 130u,   0u ,   0u, 0u , 0u , 0u },   /* guitar */
-    { MID_W_TRIANGLE,  700u,   2u,  90u,   0u ,   0u, 0u , 0u , 0u },   /* bass */
-    { MID_W_SAW,         0u,  45u, 180u, 100u ,   0u, 0u , 0u , 30u },   /* strings: slow, sustained */
-    { MID_W_SAW,         0u,  55u, 200u, 100u ,   0u, 0u , 0u , 26u },   /* ensemble */
-    { MID_W_SQUARE,      0u,  25u,  90u, 105u ,   0u, 0u , 0u , 20u },   /* brass: a small swell */
-    { MID_W_SQUARE,      0u,  20u,  80u, 110u ,   0u, 0u , 0u , 22u },   /* reed */
-    { MID_W_TRIANGLE,    0u,  30u,  70u, 105u ,   0u, 0u , 0u , 18u },   /* pipe */
-    { MID_W_SAW,         0u,   8u,  80u, 100u ,   0u, 0u , 0u , 28u },   /* synth lead */
-    { MID_W_TRIANGLE,    0u, 120u, 300u,  95u ,   0u, 0u , 0u , 16u },   /* synth pad: the slowest */
-    { MID_W_TRIANGLE,    0u,  40u, 250u,  90u ,   0u, 0u , 0u , 0u },   /* effects: a pad, not noise */
-    { MID_W_TRIANGLE,  900u,   5u, 120u,   0u ,   0u, 0u , 0u , 0u },   /* ethnic */
-    { MID_W_TRIANGLE,  600u,   1u, 120u,   0u ,   0u, 0u , 0u , 0u },   /* percussive: bells, boxes */
-    { MID_W_NOISE,     250u,   2u, 150u,   0u ,   0u, 0u , 0u , 0u }    /* sound effects */
+    { MID_W_TRIANGLE, 1400u,   2u, 140u,   0u ,   0u, 0u , 0u , 0u , 110u },   /* piano: struck, dies away */
+    { MID_W_TRIANGLE,  900u,   1u, 120u,   0u ,   0u, 0u , 0u , 0u , 110u },   /* chromatic percussion */
+    { MID_W_SQUARE,      0u,   6u,  40u, 110u ,   0u, 0u , 0u , 0u , 90u },   /* organ: instant, holds */
+    { MID_W_SAW,      1200u,   3u, 130u,   0u ,   0u, 0u , 0u , 0u , 110u },   /* guitar */
+    { MID_W_TRIANGLE,  700u,   2u,  90u,   0u ,   0u, 0u , 0u , 0u , 110u },   /* bass */
+    { MID_W_SAW,         0u,  45u, 180u, 100u ,   0u, 0u , 0u , 30u , 96u },   /* strings: slow, sustained */
+    { MID_W_SAW,         0u,  55u, 200u, 100u ,   0u, 0u , 0u , 26u , 96u },   /* ensemble */
+    { MID_W_SQUARE,      0u,  25u,  90u, 105u ,   0u, 0u , 0u , 20u , 96u },   /* brass: a small swell */
+    { MID_W_SQUARE,      0u,  20u,  80u, 110u ,   0u, 0u , 0u , 22u , 127u },   /* reed */
+    { MID_W_TRIANGLE,    0u,  30u,  70u, 105u ,   0u, 0u , 0u , 18u , 127u },   /* pipe */
+    { MID_W_SAW,         0u,   8u,  80u, 100u ,   0u, 0u , 0u , 28u , 127u },   /* synth lead */
+    { MID_W_TRIANGLE,    0u, 120u, 300u,  95u ,   0u, 0u , 0u , 16u , 90u },   /* synth pad: the slowest */
+    { MID_W_TRIANGLE,    0u,  40u, 250u,  90u ,   0u, 0u , 0u , 0u , 127u },   /* effects: the corpus puts MELODIES here */
+    { MID_W_TRIANGLE,  900u,   5u, 120u,   0u ,   0u, 0u , 0u , 0u , 110u },   /* ethnic */
+    { MID_W_TRIANGLE,  600u,   1u, 120u,   0u ,   0u, 0u , 0u , 0u , 110u },   /* percussive: bells, boxes */
+    { MID_W_NOISE,     250u,   2u, 150u,   0u ,   0u, 0u , 0u , 0u , 90u }    /* sound effects */
 };
 
 static void mid_drum(nj_u4 note, mid_timbre *t)
 {
+    t->att = 95u;    /* loud enough without being the loudest thing */
     /*
      * A drum is a skin and a rattle.  The skins - kick and toms - start high
      * and fall, which is what makes them sound struck rather than tuned; the
@@ -384,6 +392,16 @@ static int mid_add_note(mid_song *s, const nj_midi_mem *mem,
                         nj_u4 tick, nj_u4 note, nj_u4 vel, int on,
                         const mid_timbre *t, nj_u4 gain, nj_u4 chan)
 {
+    /*
+     * The bank's attenuation, folded into the note's own gain: every note used
+     * to carry the same amplitude, so a chord of ten notes was ten times the
+     * energy of the single note holding the melody and buried it.  Folding it
+     * into the gain keeps the note struct unchanged - adding a field there
+     * shifted positional initializers and crashed.
+     */
+    if (t != NULL) {
+        gain = (nj_u4)((nj_u8)gain * (nj_u8)t->att / 127u);
+    }
     if (s->nnotes == s->capnotes) {
         nj_u4 cap = (s->capnotes == 0u) ? 256u : s->capnotes * 2u;
         mid_note *n;
@@ -647,7 +665,7 @@ static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
                     }
                 }
             } else if (hi == 0x90u && d2 != 0u) {
-                mid_timbre t;
+                mid_timbre t = mid_timbres[0];   /* every field set */
                 nj_u4 gain;
                 nj_u4 note = d1 & 0x7Fu;
 
