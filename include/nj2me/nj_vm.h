@@ -639,6 +639,11 @@ nj_u4 nj_m3g_raster_tri(struct nj_gfx *g, const float xy[6], nj_u4 argb);
 /* Move the geometry a file carries onto the Java objects that describe it.
    A VertexArray's bytes are in the file; the class the titles call expects
    them in a short[], which is what set() puts there too. */
+/* Walk a scene graph from `root` and collect the Meshes under it, in the
+   order the graph gives them.  Returns how many there are, which may be more
+   than `cap`; only the first `cap` are written. */
+nj_u4 nj_m3g_collect_meshes(nj_vm *vm, nj_ref root, nj_ref *out, nj_u4 cap);
+
 /* Draw a Mesh: read its VertexBuffer's positions, project them through the
    matrix, and fill the triangles they make.  Returns how many were filled. */
 nj_u4 nj_m3g_raster_mesh(nj_vm *vm, struct nj_gfx *g, nj_ref mesh,

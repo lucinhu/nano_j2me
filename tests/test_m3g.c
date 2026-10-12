@@ -747,6 +747,28 @@ int main(void)
         check(nj_surface_get(&s, 8, 7) != bg,
               "and a pixel inside the triangle is no longer the background");
     }
+    /* ---- the scene graph walk finds the meshes ------------------------- */
+    {
+        nj_ref w, grp, mesh, found[4];
+        nj_value a, r;
+
+        w = make(vm, CLS("World"));
+        grp = make(vm, CLS("Group"));
+        mesh = make(vm, CLS("Mesh"));
+        check(w && grp && mesh, "a World, a Group and a Mesh exist");
+
+        a.r = grp; r.r = 0;
+        call(vm, w, CLS("Group"), "addChild", "(L" CLS("Node") ";)V", &a, &r);
+        a.r = mesh; r.r = 0;
+        call(vm, grp, CLS("Group"), "addChild", "(L" CLS("Node") ";)V", &a, &r);
+
+        memset(found, 0, sizeof(found));
+        check(nj_m3g_collect_meshes(vm, w, found, 4u) == 1u,
+              "the walk finds the one mesh under the world");
+        check(found[0] == mesh, "and it is the mesh that was added");
+        check(nj_m3g_collect_meshes(vm, mesh, found, 4u) == 1u,
+              "a mesh is itself a mesh");
+    }
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
     /* The file format calls type 18 Sprite; the titles call the class

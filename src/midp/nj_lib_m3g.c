@@ -1849,6 +1849,56 @@ nj_status nj_m3g_load_geometry(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
     return NJ_OK;
 }
 
+static void collect_walk(nj_vm *vm, nj_ref o, nj_ref *out, nj_u4 cap,
+                         nj_u4 *n, int depth)
+{
+    const char *cn;
+    nj_ref kids;
+    nj_value v;
+    nj_u4 len, i;
+
+    if (!o || depth > 32) {          /* a graph a file made cannot be a loop */
+        return;
+    }
+    cn = nj_ref_class_name(o);
+    if (cn && strcmp(cn, NJ_C_MESH) == 0) {
+        if (*n < cap) { out[*n] = o; }
+        (*n)++;
+        return;
+    }
+    /* Everything with children is a Group or a World, and both keep them in
+       the same Vector the file's indices were resolved into. */
+    kids = nj_rget(vm, o, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
+                                          "L" NJ_C_VECTOR ";", 0));
+    if (!kids) { return; }
+    v.i = 0;
+    if (nj_call(vm, kids, NJ_C_VECTOR, "size", "()I", NULL, &v) != NJ_OK) {
+        return;
+    }
+    len = (nj_u4)v.i;
+    for (i = 0u; i < len; i++) {
+        nj_value a, r;
+        a.i = (nj_s4)i;
+        r.r = 0;
+        if (nj_call(vm, kids, NJ_C_VECTOR, "elementAt",
+                    "(I)Ljava/lang/Object;", &a, &r) != NJ_OK) {
+            continue;
+        }
+        collect_walk(vm, r.r, out, cap, n, depth + 1);
+    }
+}
+
+nj_u4 nj_m3g_collect_meshes(nj_vm *vm, nj_ref root, nj_ref *out, nj_u4 cap)
+{
+    nj_u4 n = 0u;
+
+    if (!vm || !root) {
+        return 0u;
+    }
+    collect_walk(vm, root, out, cap, &n, 0);
+    return n;
+}
+
 nj_u4 nj_m3g_raster_mesh(nj_vm *vm, struct nj_gfx *g, nj_ref mesh,
                          const float m[16], int w, int h, nj_u4 argb)
 {
