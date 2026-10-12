@@ -26,6 +26,15 @@ line="$(printf '%s\n' "$out" | grep -m1 '^observed:')"
 fail=0
 note() { printf '  %-4s %s\n' "$1" "$2"; }
 
+# The fixture has to really be a MIDlet, and the manifest does not settle it:
+# tests/fixtures/hello.jar declares MIDlet-1 and names a plain HelloWorld with
+# main(), so every check below used to answer questions about a program the
+# emulator could not start - while saying so in a line nobody read.
+if printf '%s\n' "$out" | grep -q "startApp() threw"; then
+    note FAIL "the fixture is not runnable as a MIDlet: $(printf '%s\n' "$out" | grep -m1 'startApp() threw')"
+    fail=1
+fi
+
 if [ -z "$line" ]; then
     note FAIL "no observed: line at all"
     exit 1
