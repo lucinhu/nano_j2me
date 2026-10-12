@@ -250,6 +250,33 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
     return NJ_PIXFMT;
 }
 
+/*
+ * Queue a pointer event, in DEVICE pixels.
+ *
+ * Mouse coordinates arrive in window pixels while the runtime's contract is
+ * device pixels, so the caller scales them down first; a tap that skipped that
+ * would land at `scale` times its intended position and miss everything below
+ * the top-left corner of the screen.
+ */
+static void sdl_push_pointer(sdl_state *s, int x, int y, unsigned char type)
+{
+    nj_event e;
+    memset(&e, 0, sizeof(e));
+    e.type = type;
+    e.x = (nj_s2)x;
+    e.y = (nj_s2)y;
+    s->queue[s->qt] = e;
+    s->qt = (s->qt + 1) % (int)(sizeof(s->queue) / sizeof(s->queue[0]));
+}
+
+/* Window pixels to device pixels.  The window is the screen at an integer
+ * scale, so this is exact and needs no rounding. */
+static int sdl_to_device(sdl_state *s, int v)
+{
+    int scale = (s->scale > 0) ? s->scale : 1;
+    return v / scale;
+}
+
 static void sdl_display_present(void *ud, int x, int y, int w, int h)
 {
     sdl_state *s = SS(ud);
@@ -311,6 +338,54 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
             }
             break;
         }
+        /*
+         * Pointer input.
+         *
+         * There was none: the port could push an event into its own queue but
+         * nothing ever came out of the window, so on a desktop build a MIDlet
+         * with a pointer-driven UI was simply dead to the mouse, and on a
+         * touchscreen the only input that worked was the keyboard mapping.
+         *
+         * Both sources are accepted.  A laptop has a mouse, a phone has a
+         * touchscreen, and SDL reports them as different event types that mean
+         * the same thing to a MIDlet.
+         */
+        case SDL_MOUSEBUTTONDOWN:
+        case SDL_MOUSEBUTTONUP:
+            if (ev.button.button == SDL_BUTTON_LEFT) {
+                sdl_push_pointer(s, sdl_to_device(s, ev.button.x),
+                                 sdl_to_device(s, ev.button.y),
+                                 (ev.type == SDL_MOUSEBUTTONDOWN)
+                                     ? NJ_EV_POINTER_DOWN : NJ_EV_POINTER_UP);
+            }
+            break;
+        case SDL_MOUSEMOTION:
+            /*
+             * Only while a button is held.  A desktop mouse sweeping across the
+             * window is not a finger on a panel, and reporting it as a drag
+             * would give every MIDlet a stream of phantom moves.
+             */
+            if ((ev.motion.state & SDL_BUTTON_LMASK) != 0) {
+                sdl_push_pointer(s, sdl_to_device(s, ev.motion.x),
+                                 sdl_to_device(s, ev.motion.y),
+                                 NJ_EV_POINTER_MOVE);
+            }
+            break;
+        /*
+         * Touch.  tfinger coordinates are normalised to 0..1 over the window,
+         * so multiplying by the screen size gives device pixels directly - no
+         * scale factor, because the normalisation already removed it.
+         */
+        case SDL_FINGERDOWN:
+        case SDL_FINGERUP:
+        case SDL_FINGERMOTION:
+            sdl_push_pointer(s,
+                             (int)(ev.tfinger.x * (float)s->width),
+                             (int)(ev.tfinger.y * (float)s->height),
+                             (ev.type == SDL_FINGERDOWN)   ? NJ_EV_POINTER_DOWN :
+                             (ev.type == SDL_FINGERUP)     ? NJ_EV_POINTER_UP :
+                                                             NJ_EV_POINTER_MOVE);
+            break;
         default:
             break;
         }

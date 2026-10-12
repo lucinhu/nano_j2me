@@ -567,6 +567,7 @@ nj_s4       nj_identity_hash(nj_vm *vm, nj_ref o);
 /* Threads (nj_thread.c)                                               */
 /* ------------------------------------------------------------------ */
 nj_thread *nj_thread_create(nj_vm *vm, nj_ref thread_obj, int is_main);
+nj_thread *nj_thread_main(nj_vm *vm);
 void       nj_thread_destroy(nj_vm *vm, nj_thread *t);
 nj_status  nj_thread_start(nj_vm *vm, nj_thread *t, nj_method *run);
 nj_status  nj_frame_push(nj_vm *vm, nj_thread *th, nj_method *m,

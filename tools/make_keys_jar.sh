@@ -50,9 +50,23 @@ public class KeysDemo extends MIDlet {
         void bump() { n++; repaint(); }
         protected void keyPressed(int k)  { bump(); }
         protected void keyReleased(int k) { }
-        protected void pointerPressed(int x, int y) { bump(); }
-        protected void pointerDragged(int x, int y) { }
-        protected void pointerReleased(int x, int y) { }
+        /*
+         * Each callback reports itself, at its own coordinates, so a test can
+         * tell which one the runtime actually called.  Before this the drag and
+         * release bodies were empty, which meant a runtime that misrouted a
+         * drag into pointerPressed looked exactly like one that got it right:
+         * nothing observable changed.
+         */
+        protected void pointerPressed(int x, int y) {
+            System.out.println("PTR pressed " + x + "," + y);
+            bump();
+        }
+        protected void pointerDragged(int x, int y) {
+            System.out.println("PTR dragged " + x + "," + y);
+        }
+        protected void pointerReleased(int x, int y) {
+            System.out.println("PTR released " + x + "," + y);
+        }
     }
     Pad pad = new Pad();
     public void startApp() { Display.getDisplay(this).setCurrent(pad); }

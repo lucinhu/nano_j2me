@@ -431,6 +431,14 @@ if(NJ_BUILD_TESTS)
               ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_input_effect.sh
               ${NJ_FIXTURES}/keysdemo.jar)
     set_tests_properties(test_input_effect PROPERTIES TIMEOUT 180)
+    # Pointer input, from the same fixture: the script drives a press, two
+    # drags and a release, and the check asserts that a drag reaches
+    # pointerDragged rather than arriving as another pointerPressed - which is
+    # what it did until the event kind stopped being tested for truthiness.
+    add_test(NAME test_pointer
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_pointer.sh
+              ${NJ_FIXTURES}/keysdemo.jar)
+    set_tests_properties(test_pointer PROPERTIES TIMEOUT 180)
   endif()
     set_tests_properties(test_play PROPERTIES TIMEOUT 120)
   endif()

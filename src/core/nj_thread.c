@@ -137,6 +137,26 @@ nj_thread *nj_thread_self(nj_vm *vm)
     return vm ? vm->cur : NULL;
 }
 
+/*
+ * The MIDlet's own thread: the one nj_vm_create makes, the one the frame loop
+ * drives, and the thread every call the host makes from C belongs to.  NULL
+ * only before the VM has a thread at all.
+ */
+nj_thread *nj_thread_main(nj_vm *vm)
+{
+    nj_u2 i;
+
+    if (!vm) {
+        return NULL;
+    }
+    for (i = 0u; i < vm->nthreads; i++) {
+        if (vm->threads[i] && vm->threads[i]->is_main) {
+            return vm->threads[i];
+        }
+    }
+    return NULL;
+}
+
 void nj_yield(nj_vm *vm)
 {
     if (vm && vm->cur) {
@@ -320,14 +340,7 @@ int nj_vm_monitor_notify(nj_vm *vm, nj_ref obj, int all)
 /* ------------------------------------------------------------------ */
 /* Scheduler                                                           */
 /* ------------------------------------------------------------------ */
-/*
- * Run every runnable thread for one quantum.
- *
- * Returns NJ_OK when at least one thread ran, NJ_ERR_HALT when every thread is
- * dead (the program is over), or NJ_ERR_STATE on a deadlock that cannot be
- * resolved by waiting (all remaining threads blocked on wait()).
- */
-nj_status nj_scheduler_step(nj_vm *vm)
+static nj_status scheduler_step(nj_vm *vm)
 {
     nj_u2 i;
     int alive = 0;
@@ -427,6 +440,35 @@ nj_status nj_scheduler_step(nj_vm *vm)
     }
     vm->scheduler_ticks++;
     return NJ_OK;
+}
+
+/*
+ * Run every runnable thread for one quantum, then hand control back to the
+ * MIDlet's own thread.
+ *
+ * Returns NJ_OK when at least one thread ran, NJ_ERR_HALT when every thread is
+ * dead (the program is over), or NJ_ERR_STATE on a deadlock that cannot be
+ * resolved by waiting (all remaining threads blocked on wait()).
+ */
+nj_status nj_scheduler_step(nj_vm *vm)
+{
+    nj_thread *main_thread = nj_thread_main(vm);
+    nj_status st = scheduler_step(vm);
+
+    /*
+     * scheduler_step points vm->cur at each thread it runs, which is right
+     * while that thread is executing and wrong the moment this returns: the
+     * caller is C again (nj_midp_frame drains key events, then paints) and
+     * vm_invoke starts from vm->cur.  A MIDlet whose own game thread parks in
+     * Thread.sleep() therefore had its key callbacks and paint() dispatched on
+     * a sleeping thread: nj_exec yielded at once, vm_invoke turned that into
+     * NJ_ERR_TIMEOUT, and the canvas logged "paint() failed without raising an
+     * exception" every frame while the keys went nowhere.
+     */
+    if (main_thread) {
+        vm->cur = main_thread;
+    }
+    return st;
 }
 
 /* Run the scheduler until every thread is dead or `budget_ms` elapses. */

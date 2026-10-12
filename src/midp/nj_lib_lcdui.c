@@ -4265,7 +4265,7 @@ int nj_midp_key(nj_vm *vm, int key, int down)
     return consumed;
 }
 
-int nj_midp_pointer(nj_vm *vm, int x, int y, int down)
+int nj_midp_pointer(nj_vm *vm, int x, int y, int kind)
 {
     nj_ref d;
     int cx = x, cy = y;
@@ -4282,27 +4282,55 @@ int nj_midp_pointer(nj_vm *vm, int x, int y, int down)
         int cw = fget(vm, d, NJ_C_CANVAS, F_C_WIDTH, D_INT);
         int ch = fget(vm, d, NJ_C_CANVAS, F_C_HEIGHT, D_INT);
         nj_surface *s = nj_midp_screen(vm);
+        const char *method;
+
         if (s && cw > 0 && ch > 0 && (cw != s->width || ch != s->height)) {
             cx = x * cw / s->width;
             cy = y * ch / s->height;
         }
-        canvas_keys_update(vm, d, 0, down);
+        /*
+         * A move is NOT a press.
+         *
+         * This used to be `down ? "pointerPressed" : "pointerReleased"`, and
+         * NJ_EV_POINTER_MOVE arrives as 2 - truthy - so every drag reported
+         * another press: a MIDlet following a finger got a stream of
+         * pointerPressed() at the new coordinates and never one
+         * pointerDragged(), while F_C_PRESSED was rewritten and the key state
+         * was disturbed on every move.  pointerDragged is in the Canvas
+         * contract and was simply unreachable.
+         */
+        if (kind == NJ_POINTER_MOVE) {
+            method = "pointerDragged";
+        } else {
+            method = (kind == NJ_POINTER_DOWN) ? "pointerPressed" : "pointerReleased";
+            canvas_keys_update(vm, d, 0, (kind == NJ_POINTER_DOWN));
+        }
         a[0].i = cx;
         a[1].i = cy;
         if (!canvas_visible(vm, d)) {
             nj_clear_exception(vm);
             return 1;
         }
-        (void)canvas_call(vm, d, down ? "pointerPressed" : "pointerReleased", 2,
-                          a);
+        (void)canvas_call(vm, d, method, 2, a);
         if (vm->exception) {
             return 1;   /* the MIDlet's exception is the caller's to handle */
         }
-        fput(vm, d, NJ_C_CANVAS, F_C_PRESSED, D_BOOL, down ? 1 : 0);
+        /* The pressed flag means "a pointer is down", which a move does not
+         * change: clearing it here would make a drag look like a release to
+         * every Canvas that reads isPointerPressed(). */
+        if (kind != NJ_POINTER_MOVE) {
+            fput(vm, d, NJ_C_CANVAS, F_C_PRESSED, D_BOOL,
+                 (kind == NJ_POINTER_DOWN) ? 1 : 0);
+        }
         nj_midp_repaint(vm);
         return 1;
     }
-    if (down) {
+    /*
+     * A non-Canvas Displayable has no pointer methods, so a tap can only mean
+     * one thing there: activate the focused item, exactly as the fire key
+     * does.  A drag on a menu is not an activation.
+     */
+    if (kind == NJ_POINTER_DOWN) {
         int consumed = screen_activate(vm, d);
         nj_midp_repaint(vm);
         return consumed;

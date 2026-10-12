@@ -228,8 +228,17 @@ void nj_midp_repaint(nj_vm *vm);
  * `down` is 1 for press, 0 for release.  Returns 1 if it was consumed. */
 int nj_midp_key(nj_vm *vm, int key, int down);
 
-/* Deliver a pointer event in device pixels. */
-int nj_midp_pointer(nj_vm *vm, int x, int y, int down);
+/*
+ * Pointer events, in device pixels.  These three values are the whole reason
+ * the parameter is not called `down` any more: NJ_EV_POINTER_MOVE used to be
+ * passed as a bare 2, which is truthy, so a drag reached the Canvas as a
+ * pointerPressed().  Named, the mistake is not available.
+ */
+#define NJ_POINTER_UP    0
+#define NJ_POINTER_DOWN  1
+#define NJ_POINTER_MOVE  2
+
+int nj_midp_pointer(nj_vm *vm, int x, int y, int kind);
 
 /* Paint the current Displayable into the screen surface. */
 nj_status nj_midp_paint(nj_vm *vm);

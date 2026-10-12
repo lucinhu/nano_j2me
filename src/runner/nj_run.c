@@ -208,6 +208,15 @@ static const char *exc_message(nj_vm *vm, nj_ref exc, char *buf, nj_size cap)
 typedef struct key_script {
     nj_u8 frame[NJ_KEY_SCRIPT_MAX];
     nj_u1 key[NJ_KEY_SCRIPT_MAX];
+    /*
+     * Pointer entries live in the same list as key entries so their ORDER and
+     * their frame numbers are the same thing a key's are.  ptr_kind is 0 for a
+     * key entry and one of NJ_POINTER_* for a pointer entry, which is what
+     * tells the two apart; px/py are only read when it is set.
+     */
+    nj_u1 ptr_kind[NJ_KEY_SCRIPT_MAX];
+    nj_s2 px[NJ_KEY_SCRIPT_MAX];
+    nj_s2 py[NJ_KEY_SCRIPT_MAX];
     int   n;
     int   next_down;      /* index of the next press to send   */
     int   next_up;        /* index of the next release to send */
@@ -291,6 +300,22 @@ static char *key_script_load(const char *spec, nj_size *out_len)
     return buf;
 }
 
+/*
+ * `pressed@X,Y`, `dragged@X,Y`, `released@X,Y`.  Coordinates are DEVICE pixels,
+ * the same thing the port contract takes, so a script stays valid if the
+ * window scale changes.
+ *
+ * The '@' is what keeps this out of the key namespace: `down` is already the
+ * down-arrow key, so `down@40,60` would have been ambiguous.
+ */
+static int ptr_kind_from_name(const char *p, int len)
+{
+    if (len == 7 && memcmp(p, "pressed", 7) == 0)  { return NJ_EV_POINTER_DOWN; }
+    if (len == 8 && memcmp(p, "released", 8) == 0) { return NJ_EV_POINTER_UP; }
+    if (len == 7 && memcmp(p, "dragged", 7) == 0)  { return NJ_EV_POINTER_MOVE; }
+    return -1;
+}
+
 static int key_script_parse(const char *spec, key_script *ks)
 {
     const char *p = spec;
@@ -330,18 +355,90 @@ static int key_script_parse(const char *spec, key_script *ks)
         p++;
         /* Measure the key name BEFORE looking it up.  The scan was moved below
          * the call while adding comments, which made len always 0 and rejected
-         * every script - including the well-formed ones. */
-        while (p[len] && p[len] != ',' && p[len] != ' ' && p[len] != '\t' &&
+         * every script - including the well-formed ones.
+         *
+         * The scan runs to whitespace now rather than stopping at a comma,
+         * because a pointer entry's two coordinates are comma-separated and
+         * stopping at the first one would truncate it to `pressed@40`. */
+        while (p[len] && p[len] != ' ' && p[len] != '\t' &&
                p[len] != '\n' && p[len] != '\r' && p[len] != '#') {
             len++;
         }
-        if (!key_from_name(p, len, &key)) {
-            return -1;
+        {
+            int at = -1;
+            int i;
+            for (i = 0; i < len; i++) {
+                if (p[i] == '@') { at = i; break; }
+            }
+            if (at > 0) {
+                int kind = ptr_kind_from_name(p, at);
+                int x = 0, y = 0, j = at + 1;
+                if (kind < 0) {
+                    return -1;
+                }
+                while (j < len && p[j] >= '0' && p[j] <= '9') {
+                    x = x * 10 + (p[j] - '0');
+                    j++;
+                }
+                if (j >= len || p[j] != ',') {
+                    return -1;
+                }
+                j++;
+                while (j < len && p[j] >= '0' && p[j] <= '9') {
+                    y = y * 10 + (p[j] - '0');
+                    j++;
+                }
+                if (j != len) {
+                    return -1;
+                }
+                ks->ptr_kind[ks->n] = (nj_u1)kind;
+                ks->px[ks->n] = (nj_s2)x;
+                ks->py[ks->n] = (nj_s2)y;
+                ks->key[ks->n] = 0;
+            } else {
+                /*
+                 * A comma separates entries only for a KEY name.  The scan
+                 * above runs to whitespace - it has to, or a pointer entry's
+                 * coordinates would be cut short - so "5:fire,20:up" arrives
+                 * here as one long name.  Cut it at the first comma rather than
+                 * relying on the scan to have stopped there.
+                 *
+                 * Getting this wrong sent NO keys at all, silently: the parse
+                 * returned -1 and the runner carried on with no input.
+                 * tests/test_poke caught it.
+                 */
+                {
+                    int c;
+                    for (c = 0; c < len; c++) {
+                        if (p[c] == ',') {
+                            len = c;
+                            break;
+                        }
+                    }
+                }
+                if (!key_from_name(p, len, &key)) {
+                    return -1;
+                }
+                ks->ptr_kind[ks->n] = 0;
+                ks->key[ks->n] = key;
+            }
+            ks->frame[ks->n] = frame;
+            ks->n++;
+            p += len;
+            /*
+             * A pointer entry stopped on its own comma, so anything up to the
+             * next separator is the rest of its coordinates and has to be
+             * stepped over here.  A key entry must NOT do this: with
+             * "5:fire,20:up" there is no whitespace between the entries, and
+             * skipping to the next space would swallow the second one.
+             */
+            if (at > 0) {
+                while (*p && *p != ' ' && *p != '\t' && *p != '\n' &&
+                       *p != '\r' && *p != '#') {
+                    p++;
+                }
+            }
         }
-        ks->frame[ks->n] = frame;
-        ks->key[ks->n] = key;
-        ks->n++;
-        p += len;
     }
     return ks->n;
 }
@@ -360,13 +457,34 @@ static void key_script_tick(const nj_port *port, key_script *ks, nj_u8 frame)
         return;
     }
     while (ks->next_down < ks->n && ks->frame[ks->next_down] <= frame) {
+        int i = ks->next_down;
         memset(&ev, 0, sizeof(ev));
-        ev.type = (nj_u1)NJ_EV_KEY_DOWN;
-        ev.key = ks->key[ks->next_down];
+        if (ks->ptr_kind[i] != 0) {
+            /*
+             * A pointer entry says exactly what happens and nothing is
+             * inferred: `pressed` sends a down and `released` sends an up, so a
+             * tap is two lines.  Auto-releasing one frame later the way keys do
+             * would be convenient and wrong - it would make a long press or a
+             * drag impossible to express, and a script that also wrote
+             * `released` would send two ups.
+             */
+            ev.type = ks->ptr_kind[i];
+            ev.x = ks->px[i];
+            ev.y = ks->py[i];
+            ks->next_down++;
+            ks->next_up++;      /* nothing to release later */
+        } else {
+            ev.type = (nj_u1)NJ_EV_KEY_DOWN;
+            ev.key = ks->key[i];
+            ks->next_down++;
+        }
         (void)port->input_push(port->ud, &ev);
-        ks->next_down++;
     }
     while (ks->next_up < ks->next_down) {
+        if (ks->ptr_kind[ks->next_up] != 0) {
+            ks->next_up++;
+            continue;
+        }
         /* Release one frame after the matching press. */
         if (ks->frame[ks->next_up] + 1u > frame) {
             break;

@@ -18,6 +18,7 @@
  * Usage: test_lifecycle
  */
 #include "nj2me/nj.h"
+#include "nj_internal.h"   /* nj_thread: whose thread the host is running on */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -228,6 +229,55 @@ static void test_heap_stability(void)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* 5. The host gets its own thread back after every scheduling round    */
+/* ------------------------------------------------------------------ */
+/*
+ * The frame loop is C: it drains key events, then repaints.  In between, the
+ * scheduler runs the MIDlet's background threads and leaves vm->cur on
+ * whichever thread ran last - and for a title with its own animation loop that
+ * is a thread parked in Thread.sleep().  Every call the host makes from C
+ * starts at vm->cur, so paint() and the key callbacks were being dispatched
+ * onto that sleeping thread: nj_exec yielded at once, vm_invoke turned the
+ * yield into NJ_ERR_TIMEOUT, and the canvas logged "paint() failed without
+ * raising an exception" on every frame while the keys went nowhere.  A title
+ * whose own thread sleeps is the normal case, not an exotic one.
+ */
+static void test_frame_thread_ownership(void)
+{
+    nj_port port;
+    nj_vm *vm;
+    nj_thread *bg;
+
+    printf("the host runs on the MIDlet's thread, not the scheduler's\n");
+    CHECK(nj_port_headless_ex(&port, 240, 320, 0, NULL) == NJ_OK, "port");
+    vm = nj_vm_create(&port, 1024u * 1024u);
+    CHECK(vm != NULL, "vm created");
+    if (!vm) {
+        nj_port_shutdown(&port);
+        return;
+    }
+
+    CHECK(nj_thread_main(vm) == nj_thread_self(vm),
+          "a fresh VM runs on its own thread");
+
+    bg = nj_thread_create(vm, NULL, 0);
+    CHECK(bg != NULL, "background thread created");
+    if (bg) {
+        /* Runnable, with no frames to run: the scheduler selects it and
+         * finishes the round current on it, exactly as a game thread does. */
+        bg->state = NJ_THREAD_RUNNING;
+        CHECK(nj_scheduler_step(vm) == NJ_OK, "scheduling round");
+        CHECK(nj_thread_self(vm) == nj_thread_main(vm),
+              "the round hands the host back the MIDlet's thread");
+        CHECK(nj_thread_self(vm) != bg,
+              "and not the background thread it ran last");
+    }
+
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+}
+
 int main(void)
 {
     printf("== nano_j2me lifecycle and memory contract ==\n");
@@ -236,6 +286,7 @@ int main(void)
     test_coexistence();
     test_failure_recovery();
     test_heap_stability();
+    test_frame_thread_ownership();
 
     printf("\nchecks: %d  failures: %d\n", checks, failures);
     if (failures == 0) {
