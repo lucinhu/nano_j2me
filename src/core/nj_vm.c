@@ -968,6 +968,20 @@ nj_status nj_throw(nj_vm *vm, const char *cls, const char *msg)
     if (vm->exception) {
         return NJ_ERR;   /* keep the first, most specific exception */
     }
+    /*
+     * Name the throw site before the frame unwinds.  printStackTrace() reports
+     * where the exception is CAUGHT, which for the titles that swallow their
+     * own exceptions is a catch block - the interesting question is which call
+     * failed, and that is only answerable here.
+     */
+    if (vm->cur && vm->cur->nframes > 0) {
+        const nj_frame *fr = &vm->cur->frames[vm->cur->nframes - 1];
+        if (fr->m && fr->m->owner) {
+            nj_logf(vm, 2, "thrown: %s at %s.%s%s pc=%lu", cls ? cls : "?",
+                    fr->m->owner->name, fr->m->name, fr->m->desc,
+                    (unsigned long)fr->pc);
+        }
+    }
     e = nj_exception_new(vm, cls, msg);
     if (!e) {
         /* Absolute last resort: no memory and no class library.  Signal a

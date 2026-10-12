@@ -23,4 +23,11 @@ echo "$out" | grep -q "    at ExcDemo.startApp" || {
 # A trace of one line is not a trace: the chain must have more than one frame.
 echo "$out" | grep -c "    at " | grep -qv "^0$" || {
     echo "FAIL: no frames were printed at all"; exit 1; }
-echo "PASS: printStackTrace() names the throwing method and its caller"
+# The throw site is the other half: printStackTrace() reports where the
+# exception was CAUGHT, and a game that swallows its own exceptions never
+# shows the caller anything else.
+echo "$out" | grep -q "thrown: java/lang/NullPointerException at ExcDemo.boom()V pc=" || {
+    echo "FAIL: the throw site was not named"
+    echo "$out" | grep "thrown:" | head -3
+    exit 1; }
+echo "PASS: printStackTrace() names the frames, and nj_throw() names the throw site"
