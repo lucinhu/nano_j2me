@@ -1693,6 +1693,58 @@ static void test_image_survives_collection(nj_vm *vm)
     clean(vm, "Image.createImage on a full heap");
 }
 
+/*
+ * Integer.valueOf(String, int) and Long.valueOf(String)/valueOf(String, int).
+ * CLDC 1.1 declares the radix forms next to parseInt/parseLong, and only the
+ * parse forms existed: tests/games/QQ飞车2010_5772.jar boxes a value it parsed
+ * with a radix and never instantiated for the missing method.
+ */
+static void test_boxing_valueof_radix(nj_vm *vm)
+{
+    nj_value a[2];
+    nj_value r;
+    nj_value r2;
+    nj_ref o;
+
+    a[0] = vref(nj_string_new_n(vm, "ff", 2));
+    a[1].i = 16;
+    OK_MSG(nj_call_static(vm, INTEGER, "valueOf",
+                          "(Ljava/lang/String;I)Ljava/lang/Integer;", a, &r)
+               == NJ_OK,
+           "Integer.valueOf(\"ff\", 16) resolves");
+    o = r.r;
+    OK_MSG(nj_call_int(vm, o, INTEGER, "intValue", "()I", NULL) == 255,
+           "and it boxes 255");
+
+    a[0] = vref(nj_string_new_n(vm, "zz", 2));
+    a[1].i = 16;
+    OK_MSG(nj_call_static(vm, INTEGER, "valueOf",
+                          "(Ljava/lang/String;I)Ljava/lang/Integer;", a, &r)
+               != NJ_OK,
+           "a digit outside the radix is a NumberFormatException");
+    nj_clear_exception(vm);
+
+    a[0] = vref(nj_string_new_n(vm, "101", 3));
+    a[1].i = 2;
+    OK_MSG(nj_call_static(vm, LONGW, "valueOf", "(Ljava/lang/String;I)Ljava/lang/Long;",
+                          a, &r) == NJ_OK,
+           "Long.valueOf(\"101\", 2) resolves");
+    r2.bits = 0u;
+    OK_MSG(nj_call(vm, r.r, LONGW, "longValue", "()J", NULL, &r2) == NJ_OK
+               && r2.j == 5,
+           "and it boxes 5");
+
+    a[0] = vref(nj_string_new_n(vm, "42", 2));
+    OK_MSG(nj_call_static(vm, LONGW, "valueOf", "(Ljava/lang/String;)Ljava/lang/Long;",
+                          a, &r) == NJ_OK,
+           "Long.valueOf(\"42\") resolves");
+    r2.bits = 0u;
+    OK_MSG(nj_call(vm, r.r, LONGW, "longValue", "()J", NULL, &r2) == NJ_OK
+               && r2.j == 42,
+           "and it boxes 42");
+    clean(vm, "boxing valueOf with a radix");
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -1735,6 +1787,7 @@ int main(void)
     test_media(vm);
     test_strings(vm);
     test_numbers(vm);
+    test_boxing_valueof_radix(vm);
     test_static_field_init(vm);
     test_rms_overloads(vm);
     test_constructor_arg_window(vm);

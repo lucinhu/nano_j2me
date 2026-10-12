@@ -222,6 +222,37 @@ NJFN(int_valueOf_str)
     return NJ_OK;
 }
 
+/*
+ * Integer.valueOf(String, int) - CLDC 1.1 declares the radix form beside
+ * parseInt(String, int), and a MIDlet that boxes a value it just parsed with a
+ * radix needs it: tests/games/QQ飞车2010_5772.jar calls it while building an
+ * SMS address and never starts without it.  Same contract as parseInt: a bad
+ * digit, no digits at all, or a radix outside 2..36 is a
+ * NumberFormatException raised by the parser, not a silent zero.
+ */
+NJFN(int_valueOf_str_radix)
+{
+    nj_value a1[1];
+    nj_ref o;
+    nj_s4 v = 0;
+
+    if (parse_int(vm, NJ_ARG_REF(args, 0), (nj_u4)NJ_ARG_INT(args, 1), &v)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    o = nj_object_new(vm, "java/lang/Integer");
+    if (!o) {
+        return nj_throw_oom(vm);
+    }
+    a1[0].i = v;
+    if (nj_call_special(vm, o, "java/lang/Integer", "<init>", "(I)V", a1, NULL)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = o;
+    return NJ_OK;
+}
+
 NJFN(int_byteValue)
 {
     nj_field *f = vf(vm, "java/lang/Integer", "I");
@@ -279,6 +310,58 @@ NJFN(Long_parseLong_radix)
     return NJ_OK;
 }
 
+/*
+ * Long.valueOf(String) and Long.valueOf(String, int).  CLDC 1.1 declares all
+ * four of parseLong(String), parseLong(String, int), valueOf(String) and
+ * valueOf(String, int); only the two parseLong forms existed, so a MIDlet that
+ * boxed what it had just parsed failed with a NoSuchMethodError.  The wrapper
+ * is built through the ordinary <init>(J)V constructor so the Long class keeps
+ * owning the bit pattern.
+ */
+NJFN(Long_valueOf_str)
+{
+    nj_value a1[1];
+    nj_ref o;
+    nj_s8 v = 0;
+
+    if (parse_long(vm, NJ_ARG_REF(args, 0), 10u, &v) != NJ_OK) {
+        return NJ_ERR;
+    }
+    o = nj_object_new(vm, "java/lang/Long");
+    if (!o) {
+        return nj_throw_oom(vm);
+    }
+    a1[0].j = v;
+    if (nj_call_special(vm, o, "java/lang/Long", "<init>", "(J)V", a1, NULL)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = o;
+    return NJ_OK;
+}
+
+NJFN(Long_valueOf_str_radix)
+{
+    nj_value a1[1];
+    nj_ref o;
+    nj_s8 v = 0;
+
+    if (parse_long(vm, NJ_ARG_REF(args, 0), (nj_u4)NJ_ARG_INT(args, 1), &v)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    o = nj_object_new(vm, "java/lang/Long");
+    if (!o) {
+        return nj_throw_oom(vm);
+    }
+    a1[0].j = v;
+    if (nj_call_special(vm, o, "java/lang/Long", "<init>", "(J)V", a1, NULL)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->r = o;
+    return NJ_OK;
+}
 /* ------------------------------------------------------------------ */
 /* Float and Double bit patterns                                       */
 /* ------------------------------------------------------------------ */
@@ -763,6 +846,7 @@ static const nj_builtin_method Integer_methods[] = {
     M("toHexString",   "(I)Ljava/lang/String;", NJ_ACC_STATIC),
     M("valueOf",       "(I)Ljava/lang/Integer;", NJ_ACC_STATIC),
     M("valueOf",       "(Ljava/lang/String;)Ljava/lang/Integer;", NJ_ACC_STATIC),
+    M("valueOf",       "(Ljava/lang/String;I)Ljava/lang/Integer;", NJ_ACC_STATIC),
     M("equals",        "(Ljava/lang/Object;)Z", 0),
     M("hashCode",      "()I", 0)
 };
@@ -771,7 +855,9 @@ static const nj_builtin_method Long_methods[] = {
     M("longValue","()J",  0),
     M("intValue", "()I",  0),
     M("parseLong", "(Ljava/lang/String;)J", NJ_ACC_STATIC),
-    M("parseLong", "(Ljava/lang/String;I)J", NJ_ACC_STATIC)
+    M("parseLong", "(Ljava/lang/String;I)J", NJ_ACC_STATIC),
+    M("valueOf",   "(Ljava/lang/String;)Ljava/lang/Long;", NJ_ACC_STATIC),
+    M("valueOf",   "(Ljava/lang/String;I)Ljava/lang/Long;", NJ_ACC_STATIC)
 };
 static const nj_builtin_method Short_methods[] = {
     M("<init>",     "(S)V", 0),
@@ -841,6 +927,7 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Integer",   "parseInt",     "(Ljava/lang/String;I)I", int_parseInt_radix },
     { "java/lang/Integer",   "byteValue",    "()B",                   int_byteValue },
     { "java/lang/Integer",   "valueOf",      "(Ljava/lang/String;)Ljava/lang/Integer;", int_valueOf_str },
+    { "java/lang/Integer",   "valueOf",      "(Ljava/lang/String;I)Ljava/lang/Integer;", int_valueOf_str_radix },
     { "java/lang/Integer",   "hashCode",     "()I",                   int_hashCode },
     { "java/lang/Integer",   "equals",       "(Ljava/lang/Object;)Z", int_equals },
     { "java/lang/Integer",   "toString",     "(I)Ljava/lang/String;", int_toString },
@@ -853,6 +940,8 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Long",      "intValue",     "()I",  Long_longValue },
     { "java/lang/Long",      "parseLong",    "(Ljava/lang/String;)J", Long_parseLong },
     { "java/lang/Long",      "parseLong",    "(Ljava/lang/String;I)J", Long_parseLong_radix },
+    { "java/lang/Long",      "valueOf",      "(Ljava/lang/String;)Ljava/lang/Long;", Long_valueOf_str },
+    { "java/lang/Long",      "valueOf",      "(Ljava/lang/String;I)Ljava/lang/Long;", Long_valueOf_str_radix },
 
     { "java/lang/Short",     "<init>",       "(S)V", Short_init },
     { "java/lang/Short",     "shortValue",   "()S",  Short_value },
