@@ -1510,7 +1510,14 @@ static nj_s8 rnd_next_seed(nj_vm *vm, nj_ref r, int bits)
     nj_field *f = rnd_fseed(vm);
     nj_s8 seed = f ? nj_field_read_long(vm, r, f) : 0;
 
-    seed = (seed * RND_MULT + RND_ADD) & RND_MASK;
+    /*
+     * java.util.Random specifies a 48-bit linear congruential generator, so the
+     * multiply is MEANT to overflow and wrap.  Doing it in signed arithmetic
+     * makes that undefined behaviour in C; the unsigned form below wraps by
+     * definition and produces the specified sequence.  UBSan flagged this on
+     * several corpus titles, and NextInt()/nextInt(n) both run through here.
+     */
+    seed = (nj_s8)(((nj_u8)seed * (nj_u8)RND_MULT + (nj_u8)RND_ADD) & (nj_u8)RND_MASK);
     if (f) {
         nj_field_write_long(vm, r, f, seed);
     }

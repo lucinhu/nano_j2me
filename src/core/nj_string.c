@@ -315,7 +315,15 @@ int nj_string_hash(nj_ref s)
         return 0;
     }
     for (i = 0; i < s->length; i++) {
-        h = 31 * h + (nj_s4)nj_string_chars(s)[i];
+        /*
+         * String.hashCode() is specified as 32-bit WRAPPING arithmetic.  On a
+         * signed type that is undefined behaviour in C, and a compiler is
+         * entitled to assume it never happens - which would silently break the
+         * hash contract that Hashtable keys depend on.  Unsigned arithmetic
+         * wraps by definition, so the specified value is computed without UB.
+         * UBSan flagged this on three corpus titles.
+         */
+        h = (nj_s4)((nj_u4)h * 31u + (nj_u4)nj_string_chars(s)[i]);
     }
     return h;
 }
