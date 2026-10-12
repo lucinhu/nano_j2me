@@ -213,3 +213,36 @@ had never measured.  The verdict now reports counts and stops interpreting:
 `tools/check_flat_wording.sh` (ctest, with the `tests/flatdemo` fixture) holds
 it to that: a flat frame must carry both counts, and the old sentence fails the
 check.
+
+## 仙魔飞行棋_417 — measured, and it is not a performance problem
+
+This title was on the failure list as `flat frame` with a large drawing-call
+count.  Two measurements pin it down.
+
+**It is not slow.**  240x320, `--heap 16`, `--stats`:
+
+| frames | time | fps | gfx | bytecodes | heap (used/peak) |
+|---|---|---|---|---|---|
+| 1 | 0.036 s | 27.8 | 6 | 79,649 | 351,280 |
+| 5 | 0.168 s | 29.8 | 30 | 325,436 | 356,112 |
+| 10 | 0.334 s | 29.9 | 50 | 330,973 | 634,288 |
+| 20 | 0.666 s | 30.0 | 90 | 333,263 | 635,888 |
+| 40 | 1.330 s | 30.1 | 170 | 337,849 | 639,088 |
+
+Forty frames in 1.33 s at exactly the 30 fps pace, a flat per-frame bytecode
+count after frame 10, and a heap that stops growing: a fixed-length loop, no
+accumulating structure.  (An earlier note here said this title "took longer
+than expected" -- that reading came from a command line that omitted `--stats`,
+so the line being looked for was never printed.  Withdrawn.)
+
+**It draws about four times per frame and the result is one colour.**
+`--dump-frames` over 40 frames writes 80 images: the first and the last have
+exactly **1 distinct colour**, and only **2 of the 80** differ from each other
+-- the picture changes once and then holds.  No exception is thrown in the run.
+
+So the game calls `Graphics` about four times a frame, forever, and produces a
+uniform surface.  That is consistent with its own state machine (or with a
+resource it needs but never gets) and is **not** evidence of a runtime defect;
+what is still unmeasured is *which surface* those four calls land on.  The
+probe that answers that question is the one used for the other titles: print
+the bound target's class in `gfx_load()`.
