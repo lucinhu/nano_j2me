@@ -368,10 +368,24 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
      *
      * A handler that has NOT been converted has no L_ label, its entry in the
      * table points at L_slow, and it runs through the switch exactly as before.
-     * The two kinds coexist, which is what makes this incremental: the
-     * benchmark must keep reproducing exactly 112117067 bytecodes after every
-     * single conversion, and a mistake shows up immediately as a wrong count
-     * rather than as a subtle wrong answer.
+     * The two kinds coexist, which is what makes this incremental.  After
+     * every conversion the benchmark must still print
+     *
+     *     BENCH sum=-136042548 s=5
+     *
+     * which is the only instrument left that can tell a correct conversion
+     * from a subtle one.  It used to be the bytecode count, and that stopped
+     * working when bipush+iand became a superinstruction: a fused pair runs
+     * two instructions and counts one, so the total is 105717067 by design.
+     *
+     * The invoke family (0xb6-0xb9) sits behind one label because it always
+     * shared one case body - which is exactly why it was the last thing
+     * converted.  Interleaved A/B against the unconverted build measured it
+     * NEUTRAL, not faster: 40 samples on the synthetic benchmark gave
+     * min 0.179 vs 0.180 s and identical medians and means, and 300 frames of
+     * vnes gave 0.112 vs 0.112 s.  It is kept because it completes the
+     * conversion without costing anything, NOT because a speedup was
+     * demonstrated - there is none to show on either instrument.
      */
     for (;;) {
         nj_u1 op;
@@ -579,10 +593,10 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         &&L_slow,
         &&L_0xb2,
         &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
-        &&L_slow,
+        &&L_invoke,
+        &&L_invoke,
+        &&L_invoke,
+        &&L_invoke,
         &&L_slow,
         &&L_slow,
         &&L_slow,
@@ -1391,7 +1405,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             break; }
 
         /* ================= invokes ================= */
-        case 0xb6: case 0xb7: case 0xb8: case 0xb9: {
+        L_invoke: case 0xb6: case 0xb7: case 0xb8: case 0xb9: {
             nj_u2 idx;
             nj_cpentry *e = NULL;
             nj_method *target;
@@ -1610,7 +1624,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             if (pushed) {
                 RELOAD();
             }
-            break;
+            DISPATCH();
         }
 
         /* ================= object creation ================= */

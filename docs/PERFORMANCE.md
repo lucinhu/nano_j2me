@@ -350,3 +350,37 @@ each produced a message that pointed somewhere other than the cause:
 * `NJ_MAX_STACK_SLOTS` defaults to 64 KiB of slots per Java thread, a desktop
   number; the symptom of leaving it is "main thread failed" with nothing to
   suggest memory.
+
+## The invoke family: measured, and it made no difference
+
+`bipush`/`sipush` + `iand` fused into a superinstruction, `ireturn` was skipped
+because its `break` follows `DO_RETURN`, and `invokeinterface` (0xb9) stayed
+unconverted longer than anything else for a mundane reason: 0xb6, 0xb7, 0xb8 and
+0xb9 have always shared ONE case body, so there was no single handler to convert
+without splitting it.  They now share one replicated-dispatch label instead,
+with four table rows pointing at it.
+
+It was measured properly before it was kept, and it is NOT a speedup:
+
+| instrument | A (switch) | B (converted) | verdict |
+|---|---|---|---|
+| synthetic, 40 samples | min 0.179 s, median 0.183 | min 0.180 s, median 0.183 | identical |
+| vnes, 300 frames, 24 samples | min 0.112 s, mean 0.1130 | min 0.112 s, mean 0.1135 | identical |
+
+Both arms were built ONCE into separate binaries and then run alternately, so no
+round could measure the wrong build - the mistake that invalidated an earlier
+A/B loop here.  The control was verified two ways: the two binaries differ
+byte-for-byte, and re-applying the conversion from the unconverted source
+reproduced `/tmp/nj_B` byte-identically.
+
+The explanation is that neither workload ever becomes invoke-bound: the
+synthetic benchmark is loop arithmetic, and vnes on this corpus renders its menu
+rather than emulating a ROM.  So the honest summary is that the conversion
+completes a technique the other seventeen handlers already use and costs
+nothing - not that it bought anything.  A reported zero is a result.
+
+The instrument that DID matter here is the benchmark's own output line,
+`BENCH sum=-136042548 s=5`.  It is now the only thing that can tell a correct
+dispatch conversion from a subtle one: the bytecode total stopped being usable
+the moment a fused pair started executing two instructions while counting one,
+which is why the total is 105717067 rather than 112117067.
