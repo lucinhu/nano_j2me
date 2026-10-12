@@ -26,6 +26,11 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="${NJ_BIN:-$ROOT/build/nj2me}"
+# The heap used for every title.  This was hard-coded to 8 MB, which is below
+# the emulator's own default of 16 MB, so the corpus reported OutOfMemoryError
+# for titles that run perfectly well when a person runs them by hand.  A test
+# harness may not be stricter than the product it tests without saying so.
+HEAP="${NJ_HEAP:-16}"
 DIR="${NJ_GAMES:-$ROOT/tests/games}"
 # Titles gate themselves on the screen size and the gates differ: Tumbleweed
 # refuses anything larger than 250 in either axis ("Screen too large") and
@@ -113,7 +118,7 @@ for jar in "${JARS[@]}"; do
     used=""
     for size in $SIZES; do
         : > "$log"
-        timeout "$SECS" "$BIN" --port headless --heap 8 --size "$size" \
+        timeout "$SECS" "$BIN" --port headless --heap "$HEAP" --size "$size" \
                 --fps "$FPS" --run-frames "$FRAMES" --stats \
                 --dump-frames "$out/" --dump-every 40 \
                 "${KARGS[@]}" \
@@ -138,6 +143,35 @@ try:
 except ImportError:
     print("SKIP|PIL missing"); raise SystemExit
 
+def why(log):
+    """Name the concrete thing that is missing, not just "could not start".
+
+    A verdict of "could not start" sends the next person hunting through the
+    log by hand, and it hides the difference between a class that was never
+    written and an allocation that ran out of room.  Every one of these is now
+    a line you can act on.
+    """
+    import re
+    for pat, fmt in (
+        (r"NoClassDefFoundError: (\S+)", "missing class %s"),
+        (r"NoSuchMethodError: (\S+)", "missing method %s"),
+        (r"NoSuchFieldError: (\S+)", "missing field %s"),
+        (r"UnsatisfiedLinkError: (\S+)", "unbound native %s"),
+        (r"ClassNotFoundException: (\S+)", "class not found %s"),
+    ):
+        m = re.search(pat, log)
+        if m:
+            return fmt % m.group(1)
+    m = re.search(r"OutOfMemoryError[^\n]*", log)
+    if m:
+        return m.group(0)[:70]
+    m = re.search(r"InternalError: ([^\n]+)", log)
+    if m:
+        return m.group(1)[:70]
+    lines = [l for l in log.splitlines() if l.strip()]
+    return (lines[-1] if lines else "no output")[:70]
+
+
 d, min_colours, logpath = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 strict = sys.argv[4] == "1"
 log = open(logpath, errors="replace").read()
@@ -146,10 +180,9 @@ frames = sorted(glob.glob(d + "/*.ppm"))
 if "not a usable MIDlet suite" in log:
     print("FAIL|0|0|0|not a MIDlet suite"); raise SystemExit
 if "cannot instantiate" in log or "cannot read the JAR" in log:
-    print("FAIL|0|0|0|could not start"); raise SystemExit
+    print("FAIL|0|0|0|could not start: %s" % why(log)); raise SystemExit
 if "uncaught exception" in log:
-    line = [l for l in log.splitlines() if "uncaught exception" in l][0]
-    print("FAIL|%d|0|0|%s" % (len(frames), line.split(": ", 1)[-1][:44]))
+    print("FAIL|%d|0|0|%s" % (len(frames), why(log)))
     raise SystemExit
 if not frames:
     print("FAIL|0|0|0|nothing was ever presented"); raise SystemExit
