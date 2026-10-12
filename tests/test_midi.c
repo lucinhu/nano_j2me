@@ -343,6 +343,43 @@ static nj_u4 pcm_period_spread(const nj_u1 *pcm, nj_u4 frames, nj_u4 from, nj_u4
 
 /* A one-note file at a chosen velocity: a hard note has to be brighter than a
  * soft one at the same pitch, and only two of them side by side show that. */
+/*
+ * A chord of `count` notes, all starting on the same tick, held for half a
+ * second.  Used to ask how many of them actually sound at once.
+ */
+static nj_u4 build_chord(nj_u1 *out, nj_u4 count, nj_u4 vel)
+{
+    static const nj_u1 head[] = {
+        0x00, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20,   /* tempo: 500000 us */
+        0x00, 0xC0, 40                              /* strings: held */
+    };
+    nj_u1 body[512];
+    nj_u4 n = 0u;
+    nj_u4 i;
+
+    memcpy(body, head, sizeof(head));
+    n = (nj_u4)sizeof(head);
+    for (i = 0u; i < count; i++) {
+        body[n++] = 0x00;                           /* all on one tick */
+        body[n++] = 0x90;
+        body[n++] = (nj_u1)(48u + (i % 12u) + 12u * (i / 12u));
+        body[n++] = (nj_u1)vel;
+    }
+    body[n++] = 0x81;
+    body[n++] = 0x70;                               /* +240 ticks */
+    for (i = 0u; i < count; i++) {
+        body[n++] = 0x00;
+        body[n++] = 0x80;
+        body[n++] = (nj_u1)(48u + (i % 12u) + 12u * (i / 12u));
+        body[n++] = 0x40;
+    }
+    body[n++] = 0x00;
+    body[n++] = 0xFF;
+    body[n++] = 0x2F;
+    body[n++] = 0x00;
+    return build_track(out, body, n);
+}
+
 static nj_u4 build_at(nj_u1 *out, nj_u1 chan, nj_u1 note, nj_u1 vel, nj_u1 prog)
 {
     static const nj_u1 body[] = {
@@ -1065,6 +1102,42 @@ int main(void)
         if (m != NULL) {
             t_free(NULL, m);
         }
+    }
+
+    /*
+     * A chord wider than the voice count must still be a chord.  Twelve voices
+     * used to be the ceiling, and nearly a third of the corpus writes more
+     * notes at once than that - the surplus was stolen and the chord came out
+     * thinner than the file asked for.  Twenty-four quiet notes have to be
+     * about twice as loud as twelve, not the same.
+     */
+    {
+        nj_u1 file[512];
+        nj_u4 n, fr = 0u, chans = 0u;
+        nj_u1 *m;
+        nj_u8 twelve = 0u, twentyfour = 0u;
+
+        n = build_chord(file, 12u, 30u);
+        m = nj_midi_render_ex(file, n, &fr, &chans, &MEM);
+        check(m != NULL && fr > 0u, "a twelve note chord renders");
+        if (m != NULL) {
+            twelve = pcm_rms(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 3u);
+            t_free(NULL, m);
+        }
+        n = build_chord(file, 24u, 30u);
+        m = nj_midi_render_ex(file, n, &fr, &chans, &MEM);
+        check(m != NULL && fr > 0u, "a twenty-four note chord renders");
+        if (m != NULL) {
+            twentyfour = pcm_rms(m, fr, NJ_MIDI_RATE / 10u, NJ_MIDI_RATE / 3u);
+            t_free(NULL, m);
+        }
+        /* Uncorrelated tones add in power, so twice the notes is sqrt(2)
+         * times the level - about 1.41, not 2.  A twelfth-voice ceiling
+         * would leave it at 1.0 because the surplus notes are stolen. */
+        check(twelve > 0u && twentyfour * 10u > twelve * 12u,
+              "twenty-four voices sound where twelve would steal");
+        printf("     chord rms: twelve %llu, twenty-four %llu\n",
+               (unsigned long long)twelve, (unsigned long long)twentyfour);
     }
 
     /*

@@ -54,7 +54,15 @@
 
 /* Sixteen notes at once is more than any of these titles asks for; a cap is
  * what keeps the per-sample loop bounded. */
-#define NJ_MIDI_VOICES 12
+/*
+ * Thirty-two voices, not the twelve this started with: measured over the 1445
+ * .mid files inside tests/games/, the median file peaks at nine notes at once
+ * but 29.8% of them pass twelve, 11.8% pass sixteen and 1.6% pass twenty-four,
+ * so twelve voices made nearly a third of the corpus drop notes it wrote.  An
+ * inactive voice costs a compare in the mix loop, so the ceiling is nearly
+ * free; the four files that pass forty-eight still steal.
+ */
+#define NJ_MIDI_VOICES 32
 
 /*
  * Vibrato: CC1 is how deep, and 5 Hz is the rate a phone synth wobbled at.
