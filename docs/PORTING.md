@@ -766,6 +766,18 @@ that does not exist comes back as `ConnectionNotFoundException` rather than a
 hang. `BluetoothAdapter.getBluetoothClass()` is a hidden API on modern releases,
 so the class-of-device reads 0 — the same answer as a radio that will not say.
 
+One platform behaviour is worth knowing before a MIDlet calls
+`LocalDevice.setDiscoverable()`: from Android 12 the system shows its own
+consent dialog for that, and the dialog takes the focus, so the MIDlet's frame
+pump stops until somebody answers it. That is the platform's rule, not this
+runtime's, but it looks like a freeze from the inside — a game that makes itself
+discoverable on the first frame will appear hung until the dialog is dismissed.
+Measured on API 36: the walk stood still for three and a half minutes until
+`adb shell input keyevent 4`, and then every remaining step ran in the expected
+order, with each notifier's `acceptAndOpen()` giving up after exactly the
+runtime's thirty seconds (`19:55:03.138` server opened, `19:55:33.336` no peer,
+`19:56:03.544` the L2CAP notifier, `done`).
+
 `tools/check_bt.sh` runs the whole walk against the headless port's fake radio
 (`NJ_HEADLESS_BT=1`), which is opt-in precisely because the radio-less answer is
 the default a test can assert.
