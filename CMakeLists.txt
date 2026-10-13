@@ -332,6 +332,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_utfdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_encdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_devicedemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_waitdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flatdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_excdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_paintthrow_jar.sh
@@ -507,6 +508,16 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_device_props.sh
                      ${NJ_FIXTURES}/devicedemo.jar)
+    # A MIDlet constructor is entered from C, and it may park on another thread:
+    # 毁灭战士3_10598 starts a loader and waits for it while it builds the level,
+    # and the C caller has to keep the VM running so the loader finishes rather
+    # than report a timeout.  check_wait_pump.sh runs the fixture whose
+    # constructor waits and asserts that it starts and paints.
+    add_test(NAME check_wait_pump
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_wait_pump.sh
+                     ${NJ_FIXTURES}/waitdemo.jar)
     add_test(NAME check_corpus_size_retry
              COMMAND ${CMAKE_COMMAND} -E env
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_corpus_size_retry.sh

@@ -163,6 +163,17 @@ suspended, so this works on any port. `monitorenter`/`monitorexit` are recorded
 but do not lock, because a cooperatively scheduled thread is never preempted
 inside a critical section.
 
+**The caller may be C.** A MIDlet constructor is entered from C
+(`nj_vm_new_midlet`), so there is no interpreter frame to pop when that
+constructor parks. `vm_invoke` therefore pumps the scheduler while the callee
+waits - for a timed park until its deadline, and for an untimed one
+(`Object.wait()`, `Thread.join()`) until the thread wakes or the call budget
+runs out - and the pump ticks the frame hook and honours a stop request like
+any other loop. A re-entrancy guard keeps it from being entered twice, because
+the scheduler runs Java code that can re-enter C. Without the pump,
+毁灭战士3_10598 - whose constructor builds its scene on a loader thread and
+waits for it - was reported as `construction ... blocked` and never started.
+
 ## 6. The class library is C, so classes are data
 
 `java.lang.Object` and friends do not exist as `.class` files. Each module

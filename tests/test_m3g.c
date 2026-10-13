@@ -418,6 +418,123 @@ int main(void)
     }
 
     /*
+     * The transform API a node carries, and the node's own switches.
+     *
+     * 毁灭战士3_10598 calls Group.postRotate() and Node.setScope() while it
+     * builds its scene; before these existed the run ended in
+     * NoSuchMethodError: javax/microedition/m3g/Group.postRotate(FFFF)V, and a
+     * method that is bound but stores the wrong thing would look the same from
+     * the launcher.  So each one is read back rather than merely called.
+     */
+    {
+        nj_value a[4], r;
+        nj_ref grp = make(vm, CLS("Group"));
+        nj_ref xf = make(vm, CLS("Transform"));
+        nj_ref m = nj_array_new(vm, "F", 16);
+        nj_ref cam = make(vm, CLS("Camera"));
+        nj_ref bg = make(vm, CLS("Background"));
+        nj_ref world = make(vm, CLS("World"));
+        nj_ref img = 0;
+
+        memset(a, 0, sizeof(a));
+        memset(&r, 0, sizeof(r));
+
+        a[0].i = 4; a[1].i = 4; a[2].i = 0;
+        img = nj_object_new(vm, CLS("Image2D"));
+        if (img && nj_call_special(vm, img, CLS("Image2D"), "<init>", "(III)V",
+                                   a, NULL) != NJ_OK) {
+            img = 0;
+        }
+
+        check(grp && xf && m && cam && bg && world && img,
+              "the node, camera, background and world classes construct");
+
+        if (grp && xf && m) {
+            a[0].f = 5.0f; a[1].f = 0.0f; a[2].f = 0.0f;
+            call(vm, grp, CLS("Group"), "translate", "(FFF)V", a, NULL);
+            a[0].r = xf;
+            call(vm, grp, CLS("Group"), "getCompositeTransform",
+                 "(L" CLS("Transform") ";)V", a, NULL);
+            a[0].r = m;
+            call(vm, xf, CLS("Transform"), "get", "([F)V", a, NULL);
+            check(fabsf(((float *)m->u.bytes)[3] - 5.0f) < 1e-4f,
+                  "Group.translate reaches getCompositeTransform");
+
+            a[0].f = 2.0f; a[1].f = 2.0f; a[2].f = 2.0f;
+            call(vm, grp, CLS("Group"), "scale", "(FFF)V", a, NULL);
+            a[0].f = 90.0f; a[1].f = 0.0f; a[2].f = 0.0f; a[3].f = 1.0f;
+            call(vm, grp, CLS("Group"), "postRotate", "(FFFF)V", a, NULL);
+            check(!nj_has_exception(vm),
+                  "a node accepts scale and postRotate without raising");
+            nj_clear_exception(vm);
+
+            a[0].i = 3;
+            call(vm, grp, CLS("Group"), "setScope", "(I)V", a, NULL);
+            call(vm, grp, CLS("Group"), "getScope", "()I", NULL, &r);
+            check(r.i == 3, "Node.setScope and getScope agree");
+
+            a[0].i = 1;
+            call(vm, grp, CLS("Group"), "setPickingEnable", "(Z)V", a, NULL);
+            call(vm, grp, CLS("Group"), "isPickingEnabled", "()Z", NULL, &r);
+            check(r.i == 1, "setPickingEnable and isPickingEnabled agree");
+        }
+
+        if (cam && xf) {
+            a[0].r = xf;
+            call(vm, cam, CLS("Camera"), "setGeneric",
+                 "(L" CLS("Transform") ";)V", a, NULL);
+            a[0].r = xf;
+            call(vm, cam, CLS("Camera"), "getProjection",
+                 "(L" CLS("Transform") ";)I", a, &r);
+            check(r.i == 1 && !nj_has_exception(vm),
+                  "setGeneric makes getProjection report a matrix");
+            nj_clear_exception(vm);
+        }
+
+        if (bg && img) {
+            a[0].i = 0;
+            call(vm, bg, CLS("Background"), "setColorClearEnable", "(Z)V", a, NULL);
+            call(vm, bg, CLS("Background"), "isColorClearEnabled", "()Z", NULL, &r);
+            check(r.i == 0, "setColorClearEnable and isColorClearEnabled agree");
+
+            a[0].i = 1;
+            call(vm, bg, CLS("Background"), "setDepthClearEnable", "(Z)V", a, NULL);
+            call(vm, bg, CLS("Background"), "isDepthClearEnabled", "()Z", NULL, &r);
+            check(r.i == 1, "setDepthClearEnable and isDepthClearEnabled agree");
+
+            a[0].i = 1; a[1].i = 2; a[2].i = 3; a[3].i = 4;
+            call(vm, bg, CLS("Background"), "setCrop", "(IIII)V", a, NULL);
+            call(vm, bg, CLS("Background"), "getCropX", "()I", NULL, &r);
+            check(r.i == 1, "setCrop and getCropX agree");
+            call(vm, bg, CLS("Background"), "getCropHeight", "()I", NULL, &r);
+            check(r.i == 4, "setCrop and getCropHeight agree");
+
+            a[0].r = img;
+            call(vm, bg, CLS("Background"), "setImage",
+                 "(L" CLS("Image2D") ";)V", a, NULL);
+            call(vm, bg, CLS("Background"), "getImage", "()L" CLS("Image2D") ";",
+                 NULL, &r);
+            check(r.r == img, "Background.setImage and getImage agree");
+        }
+
+        if (world && cam && bg) {
+            a[0].r = cam;
+            call(vm, world, CLS("World"), "setActiveCamera",
+                 "(L" CLS("Camera") ";)V", a, NULL);
+            call(vm, world, CLS("World"), "getActiveCamera",
+                 "()L" CLS("Camera") ";", NULL, &r);
+            check(r.r == cam, "World.setActiveCamera and getActiveCamera agree");
+
+            a[0].r = bg;
+            call(vm, world, CLS("World"), "setBackground",
+                 "(L" CLS("Background") ";)V", a, NULL);
+            call(vm, world, CLS("World"), "getBackground",
+                 "()L" CLS("Background") ";", NULL, &r);
+            check(r.r == bg, "World.setBackground and getBackground agree");
+        }
+    }
+
+    /*
      * TriangleStripArray stores what its constructors are handed.  The
      * rasteriser does not exist yet, so "it did not crash" is not evidence
      * that anything was kept; these read it back.
@@ -546,6 +663,7 @@ int main(void)
         memset(objs, 0, sizeof(objs));
         objs[0].type = 9u;               /* Group, the file's type number */
         objs[0].fields.nrefs = 2u;
+        objs[0].fields.nrefs_total = 2u; /* what the loader records */
         objs[0].fields.refs[0] = 2u;     /* index 1 is the file header */
         objs[0].fields.refs[1] = 3u;
         objs[1].type = 9u;

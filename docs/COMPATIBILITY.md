@@ -16,7 +16,7 @@ to be one of the gaps listed here, and knowing which one saves an afternoon.
 | JSR 82 (Bluetooth) | classes present; every operation refuses with `BluetoothStateException`, because there is no radio — a MIDlet that is told "no radio" keeps working, one that is told "no such class" does not |
 | JSR 120/205 (messaging) | classes present; connections refuse the same way |
 | JSR 135 (Mobile Media) | tone and sampled PCM playback, WAV from a stream or a JAR resource, MIDI rendered by the runtime itself (or by the platform's synthesizer through the port's MIDI hooks), and AMR narrowband decoded by the runtime itself; no video. MP3, AAC and anything else the platform can decode arrive through `nj_port.audio_decode`, which is what the Android port does with MediaCodec |
-| JSR 184 (Mobile 3D Graphics) | the classes, scene graph, transform maths, and the member surface real titles use, behind `NJ_ENABLE_M3G`. **No rasterizer and no `.m3g` container parser**, so nothing collected here renders 3D through it (see below) |
+| JSR 184 (Mobile 3D Graphics) | the classes, the scene graph, the transform maths, a `.m3g` container parser and the member surface real titles use, behind `NJ_ENABLE_M3G`. **No collected title rasterises a triangle through it** (`tris=0`), so each of them is judged by its 2D interface (see below) |
 | Mascot Capsule Micro3D v3 | classes, fixed-point transform maths and a real triangle rasterizer, behind `NJ_ENABLE_MASCOT`. **No collected title reaches the rasterizer**, so it is exercised only by its own unit test (see below) |
 
 Anything not implemented raises. That is deliberate: a
@@ -451,15 +451,27 @@ transform stack, a camera and projection pipeline, a software rasteriser
 with depth buffering, and a parser for the .m3g binary container that
 Loader.load() reads.
 
-It is being implemented, behind `NJ_ENABLE_M3G`.  The order below is the
-order titles stop failing in, and it is also the order of the work:
+It is being implemented, behind `NJ_ENABLE_M3G`, in the order titles stop
+failing in:
 
 1. the classes and the scene graph, so a title runs at all and can draw its
-   2D interface around an empty 3D view;
-2. the transform stack, camera and software rasteriser, so that view fills
-   in;
+   2D interface around an empty 3D view - **done**;
+2. the transform stack and camera - **done**; the rasteriser is partial, and
+   no collected title reaches a triangle through it yet;
 3. `Loader.load()` and the `.m3g` container, for the titles that read a
-   resource rather than build their scene from code.
+   resource rather than build their scene from code - **done**: sections
+   (including zlib-compressed ones), the object table, a `World`'s children
+   along with its active camera and background, and `find()` falling back to
+   the file's own object table when the child list does not name the object a
+   title asks for.
+
+`毁灭战士3_10598` is the title this was written against.  It used to stop in
+its constructor - first `addChild(null)`, then
+`NoSuchMethodError: javax/microedition/m3g/Group.postRotate(FFFF)V`, then
+`construction of Doom/Doom blocked` - and now runs: 120 frames, no uncaught
+exception, `m3g=2`, `tris=0`.  The `tris=0` is the honest part of that
+sentence: the scene is built and `render()` is called, and nothing is
+rasterised, so its 3D view stays empty.
 
 A platform that cannot afford the rasteriser builds with
 `-DNJ_ENABLE_M3G=0` and gets the previous behaviour back - the classes are

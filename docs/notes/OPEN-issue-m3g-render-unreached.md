@@ -64,3 +64,40 @@ error: 格式 '%lu' expects argument of type 'long unsigned int',
   pc=12`, `c.n()V pc=107`), which is the resource lookup described above.
 * The lesson generalises past this column: an instrument that is never
   cross-checked against a second, independent reading is not an instrument.
+
+## Where the scene graph stops now (2026-10-13)
+
+毁灭战士3_10598 was the title that made the scene graph measurable, because it
+builds one from `.m3g` files rather than from code.  Four separate defects sat
+between `Loader.load()` and a filled `World`, and each one was visible only
+because the next one appeared after it was fixed:
+
+* a `World`'s children were never decoded at all - the allocator that keeps the
+  object table has no case for type 22, so `find()` walked an empty vector;
+* the child list was truncated: `NJ_M3G_MAX_REFS` is 16 and one `World` in
+  `/doors/mars.m3g` names 155 children, so `find(889)` answered null and the
+  game called `addChild(null)`.  The loader now allocates the overflow;
+* the references in a child list can be read three ways - one-based into the
+  file's table, zero-based, or matched against each object's `userID` - and
+  files disagree, sometimes within themselves (`/mars/mar.m3g` reads as
+  `userID`, `/doors/mars.m3g` as one-based, `/rol1/s.m3g` as neither).  The
+  loader picks one reading per file, keeping the old per-list choice for a file
+  that contradicts itself;
+* and when all of that still does not name the object a title asks for,
+  `find()` now falls back to the file's own object table, which the loader
+  stores on every `World` as `_nj_all`.  A heuristic that misses should cost a
+  `find()` its speed, not the title its scene.
+
+Two further gaps were in the member surface rather than the parser: the
+transform API (`Group.postRotate`, `translate`, `scale`,
+`getCompositeTransform`, `Transform.transpose`, `Node.setScope`,
+`Camera.setGeneric`, `Background.setImage`/`setCrop`, ...) did not exist, and
+a scene object built with `new` had a **null** matrix, so every transform call
+that did exist wrote nothing.  `mat_of()` installs the identity matrix on first
+access now; `tests/test_m3g.c` reads each of these back through its getter (130
+checks, 0 failures).
+
+With those in place 毁灭战士3_10598 starts and runs - 120 frames, no uncaught
+exception, `m3g=2` - and `tris=0` is still the reading, so the open question is
+no longer "does the runtime get there" but "which triangle of these meshes
+should have been drawn".

@@ -129,6 +129,7 @@ static nj_u4 le32(const nj_u1 *p)
 #define NJ_M3G_T_MESH            14u
 #define NJ_M3G_T_VERTEX_ARRAY    20u
 #define NJ_M3G_T_VERTEX_BUFFER   21u
+#define NJ_M3G_T_WORLD           22u
 #define NJ_M3G_SECTION 9u
 #define NJ_M3G_SECTION_MIN 13u   /* nine byte header + four byte Adler32 */
 
@@ -289,6 +290,45 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
                      (unsigned long)out->c);
         }
         break;
+    case NJ_M3G_T_WORLD:
+        /*
+         * A World is a Group, but its children do not sit at the end of its
+         * data: Node's fields are in front of them and the two references the
+         * World adds (its active camera and its background) are behind them.
+         *
+         * Unlike a Group - where the tail of the data is the anchor - the
+         * layout here was measured across the corpus: of the 93 World objects
+         * in the collected titles, every single one puts the child count at
+         * offset 22 and has exactly eight bytes after the children, so a
+         * layout is accepted only when the count, the indices and those eight
+         * bytes consume the data exactly.  Without this a World came back with
+         * no children, Object3D.find() could not reach the model inside it,
+         * and a title that looks its mesh up by userID called addChild(null) -
+         * which is 毁灭战士3_10598 failing to start.
+         */
+        if (len >= 26u) {
+            nj_u4 n = le32(data + 22u);
+            if ((n > 0u) && (n <= 4096u) &&
+                (22u + 4u + 4u * n + 8u == len)) {
+                nj_u4 k;
+                out->ref_off = 26u;
+                out->nrefs = (n < (nj_u4)NJ_M3G_MAX_REFS) ? n
+                                                          : (nj_u4)NJ_M3G_MAX_REFS;
+                out->nrefs_total = n;
+                for (k = 0u; k < out->nrefs; k++) {
+                    out->refs[k] = le32(data + out->ref_off + 4u * k);
+                }
+                out->a = out->nrefs;
+                /* The two references the World adds behind its children: the
+                   active camera and the background.  Nothing reads them yet;
+                   they are kept so that getActiveCamera() and getBackground()
+                   can answer instead of the title finding the camera by
+                   scanning the children itself. */
+                out->b = le32(data + 26u + 4u * n);
+                out->c = le32(data + 30u + 4u * n);
+            }
+        }
+        break;
     case NJ_M3G_T_VERTEX_ARRAY:      /* componentSize, componentCount, componentType */
         if (len < NJ_M3G_OBJECT_HEADER + 3u) {
             M3G_FAIL("a VertexArray is %lu byte(s)", (unsigned long)len);
@@ -331,6 +371,27 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
  * so a caller can ask "how many" and "which ones" separately.
  */
 #define M3G_SCAN_FAIL(...) do { nj_host_free(vm, scratch); M3G_FAIL(__VA_ARGS__); } while (0)
+
+nj_u4 nj_m3g_ref_at(const nj_m3g_fields *f, nj_u4 k)
+{
+    if (k < (nj_u4)NJ_M3G_MAX_REFS) {
+        return f->refs[k];
+    }
+    return (f->extra != NULL) ? f->extra[k - (nj_u4)NJ_M3G_MAX_REFS] : 0u;
+}
+
+/* Release the per-object overflow lists of a scan result. */
+static void m3g_free_refs(nj_vm *vm, nj_m3g_object *objs, nj_u4 nobj)
+{
+    nj_u4 i;
+
+    for (i = 0u; i < nobj; i++) {
+        if (objs[i].fields.extra != NULL) {
+            nj_host_free(vm, objs[i].fields.extra);
+            objs[i].fields.extra = NULL;
+        }
+    }
+}
 
 nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
                               nj_m3g_object *out, nj_u4 out_cap,
@@ -408,6 +469,25 @@ nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
                    starts with its userID */
                 out[nobj].user_id = (type == NJ_M3G_TYPE_EXTERNAL_REF || olen < 4u)
                                   ? 0u : le32(body + at + 5u);
+                {
+                    nj_m3g_fields *f = &out[nobj].fields;
+                    if (f->nrefs_total > (nj_u4)NJ_M3G_MAX_REFS) {
+                        nj_u4 want = f->nrefs_total - (nj_u4)NJ_M3G_MAX_REFS;
+                        nj_u4 *more = (nj_u4 *)nj_host_alloc(
+                            vm, (nj_size)want * sizeof(nj_u4));
+                        if (more == NULL) {
+                            /* keep what fits rather than reading past it */
+                            f->nrefs_total = (nj_u4)NJ_M3G_MAX_REFS;
+                        } else {
+                            nj_u4 k;
+                            for (k = 0u; k < want; k++) {
+                                more[k] = le32(body + at + 5u + f->ref_off +
+                                               4u * ((nj_u4)NJ_M3G_MAX_REFS + k));
+                            }
+                            f->extra = more;
+                        }
+                    }
+                }
             }
             nobj++;
             at += 5u + olen;
@@ -555,10 +635,40 @@ static float bits2f(nj_s4 i)
     return u.f;
 }
 
+static nj_ref mat_new(nj_vm *vm);
+
+/*
+ * The matrix a scene object carries, allocated the first time anybody asks.
+ *
+ * A node decoded out of an .m3g file has its matrix filled in by the loader,
+ * but a node built with `new Group()` has never stored one - the field is
+ * null, and every Transformable method used to quietly do nothing with it.
+ * That is why 毁灭战士3_10598 kept drawing nothing even after postRotate
+ * existed: the call was answered, and had nowhere to write.  The identity
+ * matrix is the value the JSR gives a fresh Transformable, so installing it
+ * on first access is the behaviour a title already expects.
+ */
 static float *mat_of(nj_vm *vm, nj_ref obj, const char *cls, const char *name)
 {
-    nj_ref a = nj_rget(vm, obj, nj_field_lookup(vm, cls, name, "[F", 0));
-    return a ? (float *)a->u.bytes : NULL;
+    nj_field *f;
+    nj_ref a;
+
+    if (!obj) {
+        return NULL;
+    }
+    f = nj_field_lookup(vm, cls, name, "[F", 0);
+    if (!f) {
+        return NULL;
+    }
+    a = nj_rget(vm, obj, f);
+    if (!a) {
+        a = mat_new(vm);
+        if (!a) {
+            return NULL;
+        }
+        nj_rput(vm, obj, f, a);
+    }
+    return (float *)a->u.bytes;
 }
 
 static nj_ref mat_new(nj_vm *vm)
@@ -985,9 +1095,41 @@ static nj_ref find_by_id(nj_vm *vm, nj_ref obj, nj_s4 id, int depth)
     return 0;
 }
 
+/*
+ * The userID lookup the title actually asked for.
+ *
+ * Object3D.find() is defined over an object and its descendants, and that is
+ * what find_by_id() does; a World, though, stands for a whole file, and the
+ * title's idea of what is in that file comes from the file itself.  When our
+ * reading of the references did not link the object the title is looking for,
+ * the answer that keeps the title running is the file's own table.
+ */
+static nj_ref find_in_table(nj_vm *vm, nj_ref world, nj_s4 id)
+{
+    nj_field *uf = nj_field_lookup(vm, NJ_C_O3D, "_nj_userID", "I", 0);
+    nj_ref all = nj_rget(vm, world, nj_field_lookup(vm, NJ_C_WORLD, "_nj_all",
+                                                    "[L" NJ_C_O3D ";", 0));
+    nj_u4 n, i;
+
+    if (!all || !uf) {
+        return 0;
+    }
+    n = nj_array_length(all);
+    for (i = 0u; i < n; i++) {
+        nj_ref o = nj_array_get_ref(all, i);
+        if (o && nj_iget(vm, o, uf) == id) {
+            return o;
+        }
+    }
+    return 0;
+}
+
 NJFN(m3g_find)
 {
     nj_ref got = find_by_id(vm, NJ_THIS(args), NJ_ARG_INT(args, 0), 0);
+    if (!got) {
+        got = find_in_table(vm, NJ_THIS(args), NJ_ARG_INT(args, 0));
+    }
     ret->r = got;
     return NJ_OK;
 }
@@ -1319,6 +1461,155 @@ NJFN(m3g_xable_getTranslation)
     return NJ_OK;
 }
 
+/*
+ * The three moves that follow placement.
+ *
+ * translate, scale and postRotate are Transform's moves applied to the
+ * object's own matrix, and they are how a title positions a node after
+ * creating it - 毁灭战士3_10598 rotates each part about its own origin and then
+ * moves it along its own axes, and it has no other way to say that.
+ */
+NJFN(m3g_xable_translate)
+{
+    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
+    if (m) {
+        mat_translate(m, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
+                      NJ_ARG_FLOAT(args, 2));
+    }
+    return NJ_OK;
+}
+
+NJFN(m3g_xable_scale)
+{
+    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
+    if (m) {
+        mat_scale(m, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
+                  NJ_ARG_FLOAT(args, 2));
+    }
+    return NJ_OK;
+}
+
+NJFN(m3g_xable_postRotate)
+{
+    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
+    if (m) {
+        mat_rotate(m, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
+                   NJ_ARG_FLOAT(args, 2), NJ_ARG_FLOAT(args, 3));
+    }
+    return NJ_OK;
+}
+
+/*
+ * getCompositeTransform: this node's matrix with every ancestor's applied, so
+ * a part can find out where it ended up.  The parent chain is walked upwards
+ * and each parent multiplies from the left; the depth cap is there because a
+ * parent chain that somehow became a cycle would otherwise never end, and a
+ * transform that is wrong is better than a runtime that hangs.
+ */
+#define NJ_M3G_MAX_DEPTH 64
+
+NJFN(m3g_xable_getCompositeTransform)
+{
+    float acc[NJ_MF], tmp[NJ_MF];
+    nj_ref out = NJ_ARG_REF(args, 0);
+    float *dst = mat_of(vm, out, NJ_C_XFORM, "_nj_m");
+    nj_ref node = NJ_THIS(args);
+    float *own;
+    int depth = 0;
+
+    if (!dst) {
+        return NJ_OK;
+    }
+    own = mat_of(vm, node, NJ_C_XABLE, "_nj_m");
+    if (own) {
+        memcpy(acc, own, sizeof(acc));
+    } else {
+        mat_identity(acc);
+    }
+    node = nj_rget(vm, node, nj_field_lookup(vm, NJ_C_NODE, "_nj_parent",
+                                             "L" NJ_C_NODE ";", 0));
+    while (node && depth < NJ_M3G_MAX_DEPTH) {
+        float *pm = mat_of(vm, node, NJ_C_XABLE, "_nj_m");
+        if (pm) {
+            mat_mul(pm, acc, tmp);
+            memcpy(acc, tmp, sizeof(acc));
+        }
+        node = nj_rget(vm, node, nj_field_lookup(vm, NJ_C_NODE, "_nj_parent",
+                                                 "L" NJ_C_NODE ";", 0));
+        depth++;
+    }
+    memcpy(dst, acc, sizeof(float) * NJ_MF);
+    return NJ_OK;
+}
+
+NJFN(m3g_node_scope_set)
+{
+    nj_iput(vm, NJ_THIS(args),
+            nj_field_lookup(vm, NJ_C_NODE, "_nj_scope", "I", 0),
+            NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_node_scope_get)
+{
+    ret->i = nj_iget(vm, NJ_THIS(args),
+                     nj_field_lookup(vm, NJ_C_NODE, "_nj_scope", "I", 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_node_pick_set)
+{
+    nj_iput(vm, NJ_THIS(args),
+            nj_field_lookup(vm, NJ_C_NODE, "_nj_pick", "Z", 0),
+            NJ_ARG_INT(args, 0) ? 1 : 0);
+    return NJ_OK;
+}
+
+NJFN(m3g_node_pick_get)
+{
+    ret->i = nj_iget(vm, NJ_THIS(args),
+                     nj_field_lookup(vm, NJ_C_NODE, "_nj_pick", "Z", 0));
+    return NJ_OK;
+}
+
+/*
+ * setAlignment(zRef, zTarget, yRef, yTarget): "point my Z axis at zRef and my
+ * Y axis at yRef".  The references and the axes they stand for are kept.
+ */
+NJFN(m3g_node_align_set)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_NODE, "_nj_alignZA", "I", 0),
+            NJ_ARG_INT(args, 1));
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_NODE, "_nj_alignYA", "I", 0),
+            NJ_ARG_INT(args, 3));
+    nj_rput(vm, self,
+            nj_field_lookup(vm, NJ_C_NODE, "_nj_alignZ", "L" NJ_C_NODE ";", 0),
+            NJ_ARG_REF(args, 0));
+    nj_rput(vm, self,
+            nj_field_lookup(vm, NJ_C_NODE, "_nj_alignY", "L" NJ_C_NODE ";", 0),
+            NJ_ARG_REF(args, 2));
+    return NJ_OK;
+}
+
+NJFN(m3g_xf_transpose)
+{
+    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XFORM, "_nj_m");
+    float t[NJ_MF];
+    int r, c;
+
+    if (!m) {
+        return NJ_OK;
+    }
+    for (r = 0; r < 4; r++) {
+        for (c = 0; c < 4; c++) {
+            t[c * 4 + r] = m[r * 4 + c];
+        }
+    }
+    memcpy(m, t, sizeof(t));
+    return NJ_OK;
+}
+
 /* ---- Node ---------------------------------------------------------- */
 NJFN(m3g_render_set)
 {
@@ -1542,6 +1833,29 @@ NJFN(m3g_setBackground)
     return NJ_OK;
 }
 
+/*
+ * The getters were missing, and the corpus calls them: three references to
+ * World.getActiveCamera and two to World.getBackground across the collected
+ * titles, all of which died with NoSuchMethodError before this - 毁灭战士3_10598
+ * got as far as loading its model and then asked the World which camera it
+ * should render with.
+ */
+NJFN(m3g_getActiveCamera)
+{
+    ret->r = nj_rget(vm, NJ_THIS(args),
+                     nj_field_lookup(vm, NJ_C_WORLD, "_nj_cam",
+                                     "L" NJ_C_CAMERA ";", 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_getBackground)
+{
+    ret->r = nj_rget(vm, NJ_THIS(args),
+                     nj_field_lookup(vm, NJ_C_WORLD, "_nj_bg",
+                                     "L" NJ_C_BG ";", 0));
+    return NJ_OK;
+}
+
 /* ---- Background ---------------------------------------------------- */
 NJFN(m3g_bg_setColor)
 {
@@ -1564,6 +1878,98 @@ NJFN(m3g_bg_setDepthClear)
     nj_iput(vm, NJ_THIS(args),
             nj_field_lookup(vm, NJ_C_BG, "_nj_dclear", "Z", 0),
             NJ_ARG_INT(args, 0) ? 1 : 0);
+    return NJ_OK;
+}
+
+NJFN(m3g_bg_isColorClear)
+{
+    ret->i = nj_iget(vm, NJ_THIS(args),
+                     nj_field_lookup(vm, NJ_C_BG, "_nj_cclear", "Z", 0)) ? 1 : 0;
+    return NJ_OK;
+}
+
+NJFN(m3g_bg_isDepthClear)
+{
+    ret->i = nj_iget(vm, NJ_THIS(args),
+                     nj_field_lookup(vm, NJ_C_BG, "_nj_dclear", "Z", 0)) ? 1 : 0;
+    return NJ_OK;
+}
+
+/*
+ * The background is what a World draws behind the scene: a colour, and - when
+ * a title wants a bitmap behind it - an image with a crop window and an image
+ * mode.  毁灭战士3_10598 sets one, and the image it hands over is the sky.
+ */
+NJFN(m3g_bg_setImage)
+{
+    nj_rput(vm, NJ_THIS(args),
+            nj_field_lookup(vm, NJ_C_BG, "_nj_img", "L" NJ_C_IMAGE2D ";", 0),
+            NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_bg_getImage)
+{
+    ret->r = nj_rget(vm, NJ_THIS(args),
+                     nj_field_lookup(vm, NJ_C_BG, "_nj_img",
+                                     "L" NJ_C_IMAGE2D ";", 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_bg_setImageMode)
+{
+    nj_iput(vm, NJ_THIS(args),
+            nj_field_lookup(vm, NJ_C_BG, "_nj_immode", "I", 0),
+            NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_bg_getImageMode)
+{
+    ret->i = nj_iget(vm, NJ_THIS(args),
+                     nj_field_lookup(vm, NJ_C_BG, "_nj_immode", "I", 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_bg_setCrop)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_BG, "_nj_cropX", "I", 0),
+            NJ_ARG_INT(args, 0));
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_BG, "_nj_cropY", "I", 0),
+            NJ_ARG_INT(args, 1));
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_BG, "_nj_cropW", "I", 0),
+            NJ_ARG_INT(args, 2));
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_BG, "_nj_cropH", "I", 0),
+            NJ_ARG_INT(args, 3));
+    return NJ_OK;
+}
+
+NJFN(m3g_bg_getCropX)
+{
+    ret->i = nj_iget(vm, NJ_THIS(args),
+                     nj_field_lookup(vm, NJ_C_BG, "_nj_cropX", "I", 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_bg_getCropY)
+{
+    ret->i = nj_iget(vm, NJ_THIS(args),
+                     nj_field_lookup(vm, NJ_C_BG, "_nj_cropY", "I", 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_bg_getCropW)
+{
+    ret->i = nj_iget(vm, NJ_THIS(args),
+                     nj_field_lookup(vm, NJ_C_BG, "_nj_cropW", "I", 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_bg_getCropH)
+{
+    ret->i = nj_iget(vm, NJ_THIS(args),
+                     nj_field_lookup(vm, NJ_C_BG, "_nj_cropH", "I", 0));
     return NJ_OK;
 }
 
@@ -1605,6 +2011,30 @@ NJFN(m3g_setParallel)
  * or leaves it alone and returns 0 when the camera has neither projection -
  * the two return values the JSR defines.
  */
+/*
+ * setGeneric: the title hands over a projection matrix of its own.  It is kept
+ * as given and used instead of the perspective or parallel formula; a camera
+ * with a generic projection is neither of the other two.
+ */
+NJFN(m3g_cam_setGeneric)
+{
+    nj_ref self = NJ_THIS(args);
+    float *src = mat_of(vm, NJ_ARG_REF(args, 0), NJ_C_XFORM, "_nj_m");
+    nj_ref a = mat_new(vm);
+
+    if (!src) {
+        return NJ_OK;
+    }
+    if (!a) {
+        NJ_THROW(vm, "java/lang/OutOfMemoryError", "Camera.setGeneric");
+    }
+    memcpy((float *)a->u.bytes, src, sizeof(float) * NJ_MF);
+    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_generic", "[F", 0), a);
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_persp", "Z", 0), 0);
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_parallel", "Z", 0), 0);
+    return NJ_OK;
+}
+
 NJFN(m3g_getProjection)
 {
     nj_ref self = NJ_THIS(args);
@@ -1614,6 +2044,15 @@ NJFN(m3g_getProjection)
     if (!out) {
         ret->i = 0;
         return NJ_OK;
+    }
+    {
+        nj_ref g = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_generic",
+                                                     "[F", 0));
+        if (g && g->length >= (nj_s4)NJ_MF) {
+            memcpy(out, (const float *)g->u.bytes, sizeof(float) * NJ_MF);
+            ret->i = 1;
+            return NJ_OK;
+        }
     }
     if (!nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_persp", "Z", 0)) &&
         !nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_parallel", "Z", 0))) {
@@ -2000,6 +2439,15 @@ static int m3g_cam_projection(nj_vm *vm, nj_ref cam, float vx, float vw, float o
     int i;
 
     if (!cam) { return 0; }
+    {
+        nj_ref g = nj_rget(vm, cam, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_generic",
+                                                    "[F", 0));
+        if (g && g->length >= (nj_s4)NJ_MF) {
+            memcpy(out, (const float *)g->u.bytes, sizeof(float) * NJ_MF);
+            if (vw > 0.0f) { out[12] = 2.0f * vx / vw; }
+            return 1;
+        }
+    }
     fovy  = bits2f(nj_iget(vm, cam, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_fovy", "I", 0)));
     aspect= bits2f(nj_iget(vm, cam, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_aspect", "I", 0)));
     znear = bits2f(nj_iget(vm, cam, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_near", "I", 0)));
@@ -2666,19 +3114,157 @@ static const char *m3g_class_of(nj_u1 type);
  * recognises a node that is already in the vector, so the game's own
  * addChild() for the same node adopts it and returns.
  */
+/*
+ * Resolving a child reference.
+ *
+ * A reference in a Group or a World can be read two ways, and both are in the
+ * corpus: as an index into the object table, or as the userID the file gave
+ * the object.  The index reading is the one the format defines and the one
+ * that fits 92% of the 4326 references in the collected titles, so it is tried
+ * first - but a list that resolves to the group ITSELF is not being read the
+ * way its file meant it (a node cannot be its own child), and for those the
+ * file's own userIDs are the reading that makes sense.  毁灭战士3_10598 is one:
+ * its World names 13, 14 and 15, which are the userIDs of its camera, its
+ * light and its mesh, and reading them as indices would name the light, the
+ * mesh and the World itself.
+ */
+/*
+ * How one file numbers its references.
+ *
+ * All three are in the corpus.  Most files index the object table the way the
+ * format defines it, where the first object is 1 (0 is null).  Some index it
+ * from 0 instead, and some name objects by the userID the file gave them -
+ * 毁灭战士3_10598 does: its World says 13, 14, 15, which are the userIDs of its
+ * camera, light and mesh, while reading them as indices names the light, the
+ * mesh and the World itself.  A file that says a group is its own child is not
+ * being read the way it meant, so a reading is only used when every reference
+ * in the list lands on a node and never on the group itself.
+ */
+#define M3G_REF_ONE   0
+#define M3G_REF_ZERO  1
+#define M3G_REF_UID   2
+
+static int m3g_is_a(nj_vm *vm, nj_ref o, const char *cls)
+{
+    nj_class *want = nj_class_lookup(vm, cls);
+    return (o != 0 && want != NULL && nj_class_is_subclass_of(o->cls, want));
+}
+
+static int m3g_is_node(nj_vm *vm, nj_ref o)
+{
+    return m3g_is_a(vm, o, NJ_C_NODE);
+}
+
+static nj_ref m3g_by_user_id(nj_vm *vm, nj_ref arr, nj_u4 nobj, nj_u4 id)
+{
+    nj_field *uf = nj_field_lookup(vm, NJ_C_O3D, "_nj_userID", "I", 0);
+    nj_u4 k;
+
+    if (!uf) {
+        return 0;
+    }
+    for (k = 1u; k <= nobj; k++) {
+        nj_ref o = nj_array_get_ref(arr, k);
+        if (o && nj_iget(vm, o, uf) == (nj_s4)id) {
+            return o;
+        }
+    }
+    return 0;
+}
+
+static nj_ref m3g_resolve_ref(nj_vm *vm, nj_ref arr, nj_u4 nobj, nj_ref self,
+                              nj_u4 r, int mode)
+{
+    nj_ref ch;
+
+    if (r == 0u) {
+        return 0;
+    }
+    if (mode == M3G_REF_UID) {
+        ch = m3g_by_user_id(vm, arr, nobj, r);
+    } else if (mode == M3G_REF_ZERO) {
+        ch = (r + 1u <= nobj) ? nj_array_get_ref(arr, r + 1u) : 0;
+    } else {
+        ch = (r <= nobj) ? nj_array_get_ref(arr, r) : 0;
+    }
+    if (!ch || ch == self) {
+        return 0;
+    }
+    return ch;
+}
+
+static int m3g_list_resolves(nj_vm *vm, nj_ref arr, nj_u4 nobj, nj_ref self,
+                             const nj_m3g_object *ob, int mode)
+{
+    nj_u4 k;
+
+    for (k = 0u; k < ob->fields.nrefs; k++) {
+        nj_u4 r = ob->fields.refs[k];
+        nj_ref ch;
+
+        if (r == 0u) {
+            continue;
+        }
+        ch = m3g_resolve_ref(vm, arr, nobj, self, r, mode);
+        if (!m3g_is_node(vm, ch)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
                              nj_ref arr)
 {
     nj_u4 i;
+    int file_mode;
 
     if (!vm || !objs || !arr) {
         return NJ_ERR_STATE;
     }
+    /*
+     * One file numbers its references one way, so the reading is chosen for
+     * the file and not for each list: a list of one child that happens to land
+     * on a node under the wrong reading is still the wrong child, and a scene
+     * graph built from the wrong children draws the wrong thing instead of
+     * nothing.  A reading is used only when every list in the file resolves
+     * under it.
+     */
+    file_mode = -1;
+    {
+        int m;
+        for (m = M3G_REF_ONE; m <= M3G_REF_UID && file_mode < 0; m++) {
+            nj_u4 j;
+            int all = 1;
+            for (j = 0u; j < nobj && all; j++) {
+                nj_ref gj;
+                if (objs[j].type != NJ_M3G_T_GROUP &&
+                    objs[j].type != NJ_M3G_T_WORLD) {
+                    continue;
+                }
+                if (objs[j].fields.nrefs_total == 0u) {
+                    continue;
+                }
+                gj = nj_array_get_ref(arr, j + 1u);
+                if (gj && !m3g_list_resolves(vm, arr, nobj, gj, &objs[j], m)) {
+                    all = 0;
+                }
+            }
+            if (all) {
+                file_mode = m;
+            }
+        }
+    }
     for (i = 0u; i < nobj; i++) {
         nj_ref g, kids;
-        nj_u4 k;
+        nj_u4 k, total;
+        int mode;
 
-        if (objs[i].type != NJ_M3G_T_GROUP || objs[i].fields.nrefs == 0u) {
+        if (objs[i].type != NJ_M3G_T_GROUP &&
+            objs[i].type != NJ_M3G_T_WORLD) {
+            continue;
+        }
+        if (objs[i].type == NJ_M3G_T_GROUP && objs[i].fields.nrefs == 0u) {
             continue;
         }
         g = nj_array_get_ref(arr, i + 1u);
@@ -2694,18 +3280,61 @@ nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
             nj_rput(vm, g, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
                                            "L" NJ_C_VECTOR ";", 0), kids);
         }
-        for (k = 0u; k < objs[i].fields.nrefs; k++) {
-            nj_u4 idx = objs[i].fields.refs[k];
+        /*
+         * The file's own reading, or - for a file whose lists disagree with
+         * each other - the reading that describes THIS list, preferring the
+         * format's own index reading.
+         */
+        mode = (file_mode >= 0) ? file_mode : M3G_REF_ONE;
+        if (!m3g_list_resolves(vm, arr, nobj, g, &objs[i], mode)) {
+            if (m3g_list_resolves(vm, arr, nobj, g, &objs[i], M3G_REF_ZERO)) {
+                mode = M3G_REF_ZERO;
+            } else if (m3g_list_resolves(vm, arr, nobj, g, &objs[i],
+                                         M3G_REF_UID)) {
+                mode = M3G_REF_UID;
+            }
+        }
+        /*
+         * nrefs_total is how many the file named and nrefs is how many fitted;
+         * a caller that predates the overflow array sets only nrefs, and a list
+         * that is silently not walked is a group with no children rather than
+         * an error, which is the worse of the two failures.
+         */
+        total = (objs[i].fields.nrefs_total != 0u) ? objs[i].fields.nrefs_total
+                                                   : objs[i].fields.nrefs;
+        for (k = 0u; k < total; k++) {
+            nj_u4 idx = nj_m3g_ref_at(&objs[i].fields, k);
             nj_value va[5], vr;
-            nj_ref ch;
-            if (idx == 0u || idx > nobj) { continue; }   /* 0 is null */
-            ch = nj_array_get_ref(arr, idx);
-            if (!ch) { continue; }
+            nj_ref ch = m3g_resolve_ref(vm, arr, nobj, g, idx, mode);
+
+            if (idx == 0u || !ch || !m3g_is_node(vm, ch)) { continue; }
             nj_rput(vm, ch, nj_field_lookup(vm, NJ_C_NODE, "_nj_parent",
                                             "L" NJ_C_NODE ";", 0), g);
             va[0].r = ch;
             (void)nj_call(vm, kids, NJ_C_VECTOR, "addElement",
                           "(Ljava/lang/Object;)V", va, &vr);
+        }
+        if (objs[i].type == NJ_M3G_T_WORLD) {
+            /*
+             * The World's own two references - its active camera and its
+             * background - are read with the same reading the children were,
+             * and only stored when they really are a Camera and a Background:
+             * a title that asks for a camera and is handed a mesh draws
+             * nothing and cannot tell why.
+             */
+            nj_ref cam = m3g_resolve_ref(vm, arr, nobj, g, objs[i].fields.b,
+                                         mode);
+            nj_ref bg = m3g_resolve_ref(vm, arr, nobj, g, objs[i].fields.c,
+                                        mode);
+
+            if (m3g_is_a(vm, cam, NJ_C_CAMERA)) {
+                nj_rput(vm, g, nj_field_lookup(vm, NJ_C_WORLD, "_nj_cam",
+                                               "L" NJ_C_CAMERA ";", 0), cam);
+            }
+            if (m3g_is_a(vm, bg, NJ_C_BG)) {
+                nj_rput(vm, g, nj_field_lookup(vm, NJ_C_WORLD, "_nj_bg",
+                                               "L" NJ_C_BG ";", 0), bg);
+            }
         }
     }
     return NJ_OK;
@@ -2783,18 +3412,21 @@ NJFN(m3g_load)
         }
         if (nj_m3g_scan_objects(vm, (const nj_u1 *)data, len, objs, cap,
                                 &nobj, &nsec, err, sizeof(err)) != NJ_OK) {
+            m3g_free_refs(vm, objs, nobj);
             nj_host_free(vm, objs);
             nj_host_free(vm, data);
             return nj_throw(vm, "java/io/IOException", err);
         }
         nj_host_free(vm, data);
         if (nobj == 0u) {
+            m3g_free_refs(vm, objs, nobj);
             nj_host_free(vm, objs);
             return nj_throw(vm, "java/io/IOException",
                             "the container holds no objects");
         }
         arr = nj_object_array_new(vm, "javax/microedition/m3g/Object3D", nobj + 1u);
         if (!arr) {
+            m3g_free_refs(vm, objs, nobj);
             nj_host_free(vm, objs);
             return NJ_ERR_NOMEM;
         }
@@ -2812,15 +3444,21 @@ NJFN(m3g_load)
                 o = nj_root(vm, o);
                 nj_iput(vm, o, nj_field_lookup(vm, NJ_C_O3D, "_nj_userID", "I", 0),
                         (nj_s4)objs[i].fields.user_id);
+                if (objs[i].type == NJ_M3G_T_WORLD) {
+                    nj_rput(vm, o, nj_field_lookup(vm, NJ_C_WORLD, "_nj_all",
+                                                   "[L" NJ_C_O3D ";", 0), arr);
+                }
                 nj_array_set_ref(arr, i + 1u, o);
             }
             nj_root_release(vm, inner);
         }
         if (nj_m3g_load_geometry(vm, objs, nobj, arr) != NJ_OK) {
+            m3g_free_refs(vm, objs, nobj);
             nj_host_free(vm, objs);
             return NJ_ERR;
         }
         if (nj_m3g_link_groups(vm, objs, nobj, arr) != NJ_OK) {
+            m3g_free_refs(vm, objs, nobj);
             nj_host_free(vm, objs);
             return NJ_ERR;
         }
@@ -2843,7 +3481,8 @@ NJFN(m3g_load)
          * change to the Group class, not to the file parser.
          */
         nj_root_release(vm, mark);
-        nj_host_free(vm, objs);
+        m3g_free_refs(vm, objs, nobj);
+            nj_host_free(vm, objs);
         ret->r = arr;
         return NJ_OK;
     }
@@ -3297,14 +3936,32 @@ static const nj_builtin_field xform_fields[] = {
 static const nj_builtin_field node_fields[] = {
     { "_nj_render", "Z", NJ_ACC_PUBLIC },
     { "_nj_alpha",  "F", NJ_ACC_PUBLIC },
-    { "_nj_parent", "L" NJ_C_NODE ";", NJ_ACC_PUBLIC }
+    { "_nj_parent", "L" NJ_C_NODE ";", NJ_ACC_PUBLIC },
+    { "_nj_scope",  "I", NJ_ACC_PUBLIC },
+    { "_nj_pick",   "Z", NJ_ACC_PUBLIC },
+    { "_nj_alignZ",  "L" NJ_C_NODE ";", NJ_ACC_PUBLIC },
+    { "_nj_alignZA", "I", NJ_ACC_PUBLIC },
+    { "_nj_alignY",  "L" NJ_C_NODE ";", NJ_ACC_PUBLIC },
+    { "_nj_alignYA", "I", NJ_ACC_PUBLIC },
 };
 static const nj_builtin_field group_fields[] = {
     { "_nj_kids", "L" NJ_C_VECTOR ";", NJ_ACC_PUBLIC }
 };
 static const nj_builtin_field world_fields[] = {
     { "_nj_cam", "L" NJ_C_CAMERA ";", NJ_ACC_PUBLIC },
-    { "_nj_bg",  "L" NJ_C_BG ";", NJ_ACC_PUBLIC }
+    { "_nj_bg",  "L" NJ_C_BG ";", NJ_ACC_PUBLIC },
+    /*
+     * Every object the World's file declared, in table order.
+     *
+     * A file numbers its references one of three ways and a title that reads
+     * its model out of the world by userID is entitled to get it; when the
+     * reading chosen for the file is not the one its author used, the object is
+     * in the file but not in the linked tree, the lookup answers null, and the
+     * title calls addChild(null) - 毁灭战士3_10598 does exactly that.  Keeping
+     * the table lets find() answer what the title asked for instead of what our
+     * reading of the file produced.
+     */
+    { "_nj_all", "[L" NJ_C_O3D ";", NJ_ACC_PUBLIC }
 };
 static const nj_builtin_field camera_fields[] = {
     { "_nj_is_persp",    "Z", NJ_ACC_PUBLIC },
@@ -3313,12 +3970,21 @@ static const nj_builtin_field camera_fields[] = {
     { "_nj_height", "I", NJ_ACC_PUBLIC },
     { "_nj_aspect", "I", NJ_ACC_PUBLIC },
     { "_nj_near",   "I", NJ_ACC_PUBLIC },
-    { "_nj_far",    "I", NJ_ACC_PUBLIC }
+    { "_nj_far",    "I", NJ_ACC_PUBLIC },
+    /* A projection handed over as a matrix, used when set. */
+    { "_nj_generic", "[F", NJ_ACC_PUBLIC },
 };
 static const nj_builtin_field bg_fields[] = {
     { "_nj_color",  "I", NJ_ACC_PUBLIC },
     { "_nj_cclear", "Z", NJ_ACC_PUBLIC },
-    { "_nj_dclear", "Z", NJ_ACC_PUBLIC }
+    { "_nj_dclear", "Z", NJ_ACC_PUBLIC },
+    /* An image behind the scene, with the window it is drawn through. */
+    { "_nj_img",    "L" NJ_C_IMAGE2D ";", NJ_ACC_PUBLIC },
+    { "_nj_immode", "I", NJ_ACC_PUBLIC },
+    { "_nj_cropX",  "I", NJ_ACC_PUBLIC },
+    { "_nj_cropY",  "I", NJ_ACC_PUBLIC },
+    { "_nj_cropW",  "I", NJ_ACC_PUBLIC },
+    { "_nj_cropH",  "I", NJ_ACC_PUBLIC }
 };
 static const nj_builtin_field g3d_fields[] = {
     { "_nj_nlights", "I", NJ_ACC_PUBLIC },
@@ -3511,7 +4177,8 @@ static const nj_builtin_method transform_methods[] = {
     M("postScale",     "(FFF)V",                    NJ_ACC_PUBLIC),
     M("postRotate",    "(FFFF)V",                   NJ_ACC_PUBLIC),
     M("invert",        "()V",                       NJ_ACC_PUBLIC),
-    M("transform",     "([F)V",                     NJ_ACC_PUBLIC)
+    M("transform",     "([F)V",                     NJ_ACC_PUBLIC),
+    M("transpose",     "()V",                      NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method xable_methods[] = {
     M("setTransform",     "(L" NJ_C_XFORM ";)V", NJ_ACC_PUBLIC),
@@ -3521,14 +4188,23 @@ static const nj_builtin_method xable_methods[] = {
     M("setOrientation",   "(FFFF)V",             NJ_ACC_PUBLIC),
     M("getOrientation",   "([F)V",               NJ_ACC_PUBLIC),
     M("setTranslation",   "(FFF)V",              NJ_ACC_PUBLIC),
-    M("getTranslation",   "([F)V",               NJ_ACC_PUBLIC)
+    M("getTranslation",   "([F)V",               NJ_ACC_PUBLIC),
+    M("translate",            "(FFF)V",              NJ_ACC_PUBLIC),
+    M("scale",                "(FFF)V",              NJ_ACC_PUBLIC),
+    M("postRotate",           "(FFFF)V",             NJ_ACC_PUBLIC),
+    M("getCompositeTransform","(L" NJ_C_XFORM ";)V", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method node_methods[] = {
     M("setRenderingEnable", "(Z)V",                    NJ_ACC_PUBLIC),
     M("isRenderingEnabled", "()Z",                     NJ_ACC_PUBLIC),
     M("setAlphaFactor",     "(F)V",                    NJ_ACC_PUBLIC),
     M("getParent",          "()L" NJ_C_NODE ";",       NJ_ACC_PUBLIC),
-    M("getTransformTo",     "(L" NJ_C_NODE ";L" NJ_C_XFORM ";)Z", NJ_ACC_PUBLIC)
+    M("getTransformTo",     "(L" NJ_C_NODE ";L" NJ_C_XFORM ";)Z", NJ_ACC_PUBLIC),
+    M("setScope",           "(I)V",                    NJ_ACC_PUBLIC),
+    M("getScope",           "()I",                     NJ_ACC_PUBLIC),
+    M("setPickingEnable",   "(Z)V",                    NJ_ACC_PUBLIC),
+    M("isPickingEnabled",   "()Z",                     NJ_ACC_PUBLIC),
+    M("setAlignment", "(L" NJ_C_NODE ";IL" NJ_C_NODE ";I)V", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method group_methods[] = {
     M("addChild",       "(L" NJ_C_NODE ";)V",          NJ_ACC_PUBLIC),
@@ -3538,17 +4214,31 @@ static const nj_builtin_method group_methods[] = {
 };
 static const nj_builtin_method world_methods[] = {
     M("setActiveCamera", "(L" NJ_C_CAMERA ";)V",   NJ_ACC_PUBLIC),
-    M("setBackground",   "(L" NJ_C_BG ";)V",       NJ_ACC_PUBLIC)
+    M("getActiveCamera", "()L" NJ_C_CAMERA ";",    NJ_ACC_PUBLIC),
+    M("setBackground",   "(L" NJ_C_BG ";)V",       NJ_ACC_PUBLIC),
+    M("getBackground",   "()L" NJ_C_BG ";",        NJ_ACC_PUBLIC)
 };
 static const nj_builtin_method camera_methods[] = {
     M("setPerspective", "(FFFF)V",                NJ_ACC_PUBLIC),
     M("setParallel",    "(FFFF)V",                NJ_ACC_PUBLIC),
-    M("getProjection",  "(L" NJ_C_XFORM ";)I",    NJ_ACC_PUBLIC)
+    M("getProjection",  "(L" NJ_C_XFORM ";)I",    NJ_ACC_PUBLIC),
+    M("setGeneric",     "(L" NJ_C_XFORM ";)V",  NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method bg_methods[] = {
     M("setColor",            "(I)V", NJ_ACC_PUBLIC),
     M("setColorClearEnable", "(Z)V", NJ_ACC_PUBLIC),
-    M("setDepthClearEnable", "(Z)V", NJ_ACC_PUBLIC)
+    M("setDepthClearEnable", "(Z)V", NJ_ACC_PUBLIC),
+    M("isColorClearEnabled", "()Z", NJ_ACC_PUBLIC),
+    M("isDepthClearEnabled", "()Z", NJ_ACC_PUBLIC),
+    M("setImage",            "(L" NJ_C_IMAGE2D ";)V", NJ_ACC_PUBLIC),
+    M("getImage",            "()L" NJ_C_IMAGE2D ";", NJ_ACC_PUBLIC),
+    M("setImageMode",        "(II)V", NJ_ACC_PUBLIC),
+    M("getImageMode",        "()I",  NJ_ACC_PUBLIC),
+    M("setCrop",             "(IIII)V", NJ_ACC_PUBLIC),
+    M("getCropX",            "()I", NJ_ACC_PUBLIC),
+    M("getCropY",            "()I", NJ_ACC_PUBLIC),
+    M("getCropWidth",        "()I", NJ_ACC_PUBLIC),
+    M("getCropHeight",       "()I", NJ_ACC_PUBLIC)
 };
 static const nj_builtin_method g3d_methods[] = {
     M("<init>",        "()V",                        NJ_ACC_PUBLIC),
@@ -3841,6 +4531,18 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_XABLE, "getOrientation", "([F)V",               m3g_xable_getOrientation },
     { NJ_C_XABLE, "setTranslation", "(FFF)V",              m3g_xable_setTranslation },
     { NJ_C_XABLE, "getTranslation", "([F)V",               m3g_xable_getTranslation },
+    { NJ_C_XABLE, "translate",      "(FFF)V",              m3g_xable_translate },
+    { NJ_C_XABLE, "scale",          "(FFF)V",              m3g_xable_scale },
+    { NJ_C_XABLE, "postRotate",     "(FFFF)V",             m3g_xable_postRotate },
+    { NJ_C_XABLE, "getCompositeTransform",
+      "(L" NJ_C_XFORM ";)V", m3g_xable_getCompositeTransform },
+    { NJ_C_XFORM, "transpose",      "()V",                 m3g_xf_transpose },
+    { NJ_C_NODE, "setScope",        "(I)V",                m3g_node_scope_set },
+    { NJ_C_NODE, "getScope",        "()I",                 m3g_node_scope_get },
+    { NJ_C_NODE, "setPickingEnable","(Z)V",                m3g_node_pick_set },
+    { NJ_C_NODE, "isPickingEnabled","()Z",                 m3g_node_pick_get },
+    { NJ_C_NODE, "setAlignment",
+      "(L" NJ_C_NODE ";IL" NJ_C_NODE ";I)V", m3g_node_align_set },
     { NJ_C_NODE, "setRenderingEnable", "(Z)V",              m3g_render_set },
     { NJ_C_NODE, "isRenderingEnabled", "()Z",               m3g_render_get },
     { NJ_C_NODE, "setAlphaFactor",     "(F)V",              m3g_alpha_set },
@@ -3853,12 +4555,26 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_GROUP, "getChildCount", "()I",                  m3g_getChildCount },
     { NJ_C_WORLD, "setActiveCamera", "(L" NJ_C_CAMERA ";)V", m3g_setActiveCamera },
     { NJ_C_WORLD, "setBackground",   "(L" NJ_C_BG ";)V",     m3g_setBackground },
+    { NJ_C_BG, "setImage",           "(L" NJ_C_IMAGE2D ";)V", m3g_bg_setImage },
+    { NJ_C_BG, "getImage",           "()L" NJ_C_IMAGE2D ";",  m3g_bg_getImage },
+    { NJ_C_BG, "setImageMode",       "(II)V",                 m3g_bg_setImageMode },
+    { NJ_C_BG, "getImageMode",       "()I",                   m3g_bg_getImageMode },
+    { NJ_C_BG, "setCrop",            "(IIII)V",               m3g_bg_setCrop },
+    { NJ_C_BG, "getCropX",           "()I",                   m3g_bg_getCropX },
+    { NJ_C_BG, "getCropY",           "()I",                   m3g_bg_getCropY },
+    { NJ_C_BG, "getCropWidth",       "()I",                   m3g_bg_getCropW },
+    { NJ_C_BG, "getCropHeight",      "()I",                   m3g_bg_getCropH },
+    { NJ_C_WORLD, "getActiveCamera", "()L" NJ_C_CAMERA ";",  m3g_getActiveCamera },
+    { NJ_C_WORLD, "getBackground",   "()L" NJ_C_BG ";",      m3g_getBackground },
     { NJ_C_CAMERA, "setPerspective", "(FFFF)V",              m3g_setPerspective },
     { NJ_C_CAMERA, "setParallel",    "(FFFF)V",              m3g_setParallel },
     { NJ_C_CAMERA, "getProjection",  "(L" NJ_C_XFORM ";)I",  m3g_getProjection },
+    { NJ_C_CAMERA, "setGeneric",     "(L" NJ_C_XFORM ";)V",  m3g_cam_setGeneric },
     { NJ_C_BG, "setColor",            "(I)V", m3g_bg_setColor },
     { NJ_C_BG, "setColorClearEnable", "(Z)V", m3g_bg_setColorClear },
+    { NJ_C_BG, "isColorClearEnabled", "()Z",  m3g_bg_isColorClear },
     { NJ_C_BG, "setDepthClearEnable", "(Z)V", m3g_bg_setDepthClear },
+    { NJ_C_BG, "isDepthClearEnabled", "()Z",  m3g_bg_isDepthClear },
     { NJ_C_G3D, "<init>",        "()V",                    m3g_noop_init },
     { NJ_C_G3D, "getInstance",   "()L" NJ_C_G3D ";",       m3g_getInstance },
     { NJ_C_G3D, "bindTarget",    "(Ljava/lang/Object;)V",  m3g_bindTarget },
