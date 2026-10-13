@@ -1,4 +1,4 @@
-package com.example.nj2me;
+package com.lucinhu.nj2me;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -17,6 +17,7 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.widget.AdapterView;
 import android.widget.BaseAdapter;
 import android.widget.EditText;
@@ -68,7 +69,7 @@ public class LibraryActivity extends Activity {
         LinearLayout column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
 
-        LinearLayout header = new LinearLayout(this);
+        final LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
         header.setPadding(dp(16), dp(10), dp(4), dp(10));
@@ -126,9 +127,30 @@ public class LibraryActivity extends Activity {
 
         root.addView(column, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        root.addView(addButton(), fabParams());
+        final TextView fab = addButton();
+        root.addView(fab, fabParams());
 
         setContentView(root);
+        /*
+         * A notch is a hole the framework cannot move out of the way: on the
+         * library the title and the add button are padded past it.  This screen
+         * keeps its status bar - it is a list, and a list is not a game - so
+         * only the cutout insets are counted, never the bars the framework
+         * already kept the window clear of.
+         */
+        root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            public WindowInsets onApplyWindowInsets(View v, WindowInsets in) {
+                int[] e = Ui.insets(in, false);
+                header.setPadding(dp(16) + e[0], dp(10) + e[1], dp(4) + e[2], dp(10));
+                FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) fab.getLayoutParams();
+                lp.setMargins(0, 0, dp(18) + e[2], dp(18) + e[3]);
+                fab.setLayoutParams(lp);
+                list.setPadding(0, 0, 0, dp(84) + e[3]);
+                return in;
+            }
+        });
+        root.requestApplyInsets();
 
         /* First draw needs the count before the first resume lands. */
         reload();
@@ -286,10 +308,9 @@ public class LibraryActivity extends Activity {
         ((ImageView) row.getChildAt(0)).setImageBitmap(JarIcons.forEntry(e, dp(42)));
 
         LinearLayout text = (LinearLayout) row.getChildAt(1);
-        /* JarIcons keeps the parsed manifest of the last few dozen jars, so this
-         * is a map lookup on every bind but the first one. */
-        String[] info = JarIcons.info(e.jar);
-        ((TextView) text.getChildAt(0)).setText(info != null ? info[0] : e.title);
+        /* The MIDlet's own name, or - for a jar that declares none - the file's.
+         * JarStore.read() already decided this once and cached it. */
+        ((TextView) text.getChildAt(0)).setText(e.title);
 
         /*
          * One line for everything else, in the order the player cares about:
@@ -501,9 +522,23 @@ public class LibraryActivity extends Activity {
                     String t = input.getText().toString().trim();
                     if (t.length() > 0) {
                         e.title = t;
+                        e.titleSet = true;
                         JarStore.write(LibraryActivity.this, e);
                         reload();
                     }
+                }
+            })
+            /* The name in the jar is what the game calls itself; a player who
+             * renamed a game can get back to it without re-importing. */
+            .setNeutralButton("用游戏名", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface d, int w) {
+                    e.titleSet = false;
+                    JarStore.Entry fresh = JarStore.read(LibraryActivity.this, e.jar);
+                    e.title = fresh.title;
+                    JarStore.write(LibraryActivity.this, e);
+                    reload();
+                    toast("已改回 " + e.title);
                 }
             })
             .setNegativeButton("取消", null)
@@ -540,8 +575,11 @@ public class LibraryActivity extends Activity {
     }
 
     private void menu() {
+        final boolean immersive = Ui.immersive(this);
         new AlertDialog.Builder(this)
-                .setItems(new String[] { "按键布局", "添加 JAR", "怎么放游戏进来" },
+                .setItems(new String[] { "按键布局",
+                                immersive ? "沉浸模式：开（游戏全屏）" : "沉浸模式：关（显示状态栏）",
+                                "添加 JAR", "怎么放游戏进来" },
                         new DialogInterface.OnClickListener() {
                             @Override
                             public void onClick(DialogInterface d, int which) {
@@ -549,6 +587,11 @@ public class LibraryActivity extends Activity {
                                     startActivity(new Intent(LibraryActivity.this,
                                             PadEditActivity.class));
                                 } else if (which == 1) {
+                                    Ui.setImmersive(LibraryActivity.this, !immersive);
+                                    toast(!immersive
+                                            ? "沉浸模式已打开：游戏里隐藏状态栏和导航栏"
+                                            : "沉浸模式已关闭：游戏里显示状态栏");
+                                } else if (which == 2) {
                                     pickJar();
                                 } else {
                                     help();

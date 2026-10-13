@@ -1,4 +1,4 @@
-package com.example.nj2me;
+package com.lucinhu.nj2me;
 
 import java.util.ArrayList;
 import java.util.List;

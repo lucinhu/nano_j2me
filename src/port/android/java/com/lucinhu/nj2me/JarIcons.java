@@ -1,4 +1,4 @@
-package com.example.nj2me;
+package com.lucinhu.nj2me;
 
 import android.content.res.Resources;
 import android.graphics.Bitmap;
@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.jar.Attributes;
 import java.util.jar.JarFile;
 import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
@@ -74,11 +75,15 @@ final class JarIcons {
             JarFile jf = new JarFile(jar);
             try {
                 Manifest mf = jf.getManifest();
-                String v = mf == null ? null : mf.getMainAttributes().getValue("MIDlet-1");
+                Attributes at = mf == null ? null : mf.getMainAttributes();
+                String v = at == null ? null : at.getValue("MIDlet-1");
                 String[] f = v == null ? new String[0] : v.split(",");
-                String name = f.length > 0 ? f[0].trim() : "";
+                /* JarName owns the naming rules - it reads the same manifest,
+                 * so a jar that names itself only in MIDlet-Name still shows a
+                 * name, and there is one answer to what a game is called. */
+                String name = JarName.from(at);
                 String icon = f.length > 1 ? f[1].trim() : "";
-                return new String[] { name.length() > 0 ? name : null,
+                return new String[] { name,
                                       icon.length() > 0 ? icon : null };
             } finally {
                 jf.close();
@@ -87,6 +92,17 @@ final class JarIcons {
             /* not a zip, a manifest no parser survives, or a rejected signer */
             return null;
         }
+    }
+
+    /**
+     * The MIDlet's own name, or null when the jar does not declare one.
+     *
+     * <p>The launcher shows this instead of the file name: "Metal Slug 4" is
+     * what the game calls itself, and a player who imports
+     * {@code 240x320_metal_slug_4_cn.jar} never asked to read that string.
+     */
+    static String displayName(File jar) {
+        return JarName.of(jar);
     }
 
     /** The icon decoded at a size that fits {@code px}, or null when the jar has no readable icon. */

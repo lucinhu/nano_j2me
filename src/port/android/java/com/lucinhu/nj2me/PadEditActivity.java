@@ -1,4 +1,4 @@
-package com.example.nj2me;
+package com.lucinhu.nj2me;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -10,6 +10,7 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
@@ -78,12 +79,15 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
         screenW = getIntent().getIntExtra("w", JarStore.DEF_W);
         screenH = getIntent().getIntExtra("h", JarStore.DEF_H);
         work = PadConfig.load(this).copy();
+        Ui.edgeToEdge(getWindow());
+        Ui.apply(this, Ui.immersive(this));
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.BLACK);
 
-        root.addView(buildToolbar());
+        final View toolbar = buildToolbar();
+        root.addView(toolbar);
 
         FrameLayout stage = new FrameLayout(this);
         stage.addView(new GameFrame(this), new FrameLayout.LayoutParams(
@@ -96,14 +100,27 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
         root.addView(stage, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        TextView hint = new TextView(this);
-        hint.setText("布局=整套按键 · 拖动=移动 · 双指=缩放 · 长按按键=改键/删除 · 长按空白=添加 · 滑杆=游戏中显示的透明度");
+        final TextView hint = new TextView(this);
+        hint.setText("布局=整套按键 · 拖动=移动 · 双指=缩放 · 长按按键=改键/删除 · 长按空白=添加 · 滑杆=游戏中显示的透明度 · 淡黄框=避开刘海/挖孔的可用区");
         hint.setTextColor(Color.argb(220, 200, 200, 200));
         hint.setTextSize(11f);
         hint.setPadding(dp(8), dp(6), dp(8), dp(8));
         root.addView(hint);
 
         setContentView(root);
+        /* The editor has to show the same safe area the game will use. */
+        final boolean immersive = Ui.immersive(this);
+        root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            public WindowInsets onApplyWindowInsets(View v, WindowInsets in) {
+                int[] e = Ui.insets(in, immersive);
+                pad.setSafeAreaPx(e[0], e[1], e[2], e[3]);
+                toolbar.setPadding(dp(6) + e[0], dp(4) + e[1], dp(6) + e[2], dp(4));
+                hint.setPadding(dp(8) + e[0], dp(6), dp(8) + e[2], dp(8) + e[3]);
+                return in;
+            }
+        });
+        root.requestApplyInsets();
     }
 
     @Override
@@ -237,26 +254,18 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
      * both would leave the old layout sitting under the new one.
      */
     private void layoutDialog() {
-        final String[] names = {
-            "方向盘（默认）",
-            "数字键盘（12 键）",
-            "全按键（所有键）",
-            "清空（自己摆）"
-        };
+        final int[] ids = PadConfig.PRESET_IDS;
+        String[] names = new String[ids.length];
+        for (int i = 0; i < ids.length; i++) {
+            names[i] = (ids[i] == work.preset ? "\u2713 " : "      ")
+                    + PadConfig.presetName(ids[i]) + " · " + PadConfig.presetHint(ids[i]);
+        }
         new AlertDialog.Builder(this)
             .setTitle("悬浮按键布局 · 当前：" + PadConfig.presetName(work.preset))
             .setItems(names, new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int which) {
-                    if (which == 0) {
-                        work.applyPreset(PadConfig.defaults());
-                    } else if (which == 1) {
-                        work.applyPreset(PadConfig.numeric());
-                    } else if (which == 2) {
-                        work.applyPreset(PadConfig.full());
-                    } else {
-                        work.applyPreset(PadConfig.blank());
-                    }
+                    work.applyPreset(PadConfig.byId(ids[which]));
                     pad.setConfig(work);
                     pad.invalidate();
                 }

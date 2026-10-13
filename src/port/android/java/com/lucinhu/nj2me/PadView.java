@@ -1,4 +1,4 @@
-package com.example.nj2me;
+package com.lucinhu.nj2me;
 
 import android.content.Context;
 import android.graphics.Canvas;
@@ -55,6 +55,18 @@ class PadView extends View {
     private final RectF rect = new RectF();
     private final RectF inner = new RectF();
     private final Path shape = new Path();
+    private final Paint guide = new Paint();
+    private final PadConfig.Box box = new PadConfig.Box();
+
+    /*
+     * The window edges the display cutout and the system bars occupy, in
+     * pixels, as the layout last heard them.  Kept in pixels rather than
+     * fractions because they arrive from the window insets, and converted on
+     * every size change: a rotation swaps width and height and the fractions
+     * have to follow.
+     */
+    private int insetL, insetT, insetR, insetB;
+
     private Sink sink;
     private EditListener editListener;
     private boolean editing;
@@ -64,11 +76,34 @@ class PadView extends View {
     private float adjustSpread;     /* two-finger distance while pinching it */
     private PadConfig.Key selected;
 
-    /* Which key each active finger is holding down.  A finger can slide from
-     * one key to another, so this is a live map, not a press record. */
-    private final android.util.SparseIntArray held = new android.util.SparseIntArray();
-    private boolean gamePointerDown;
-    private int gamePointerId = -1;
+    /*
+     * Which key each active finger holds, when a key is released, and which
+     * finger the game owns: all of that is PadPress, which has no Android
+     * dependency so the rules can be tested off the device.  This view is the
+     * translation layer - pixels to fractions, events to calls - and the
+     * editor.
+     */
+    private PadPress padPress;
+
+    /* PadPress works in fractions of the view; the game wants pixels. */
+    private final PadPress.Sink padSink = new PadPress.Sink() {
+        @Override
+        public void onKey(int androidKeyCode, boolean down) {
+            if (down) {
+                buzz();
+            }
+            if (sink != null) {
+                sink.onPadKey(androidKeyCode, down);
+            }
+        }
+
+        @Override
+        public void onTouch(int pointerId, int phase, float nx, float ny) {
+            if (sink != null) {
+                sink.onGameTouch(pointerId, phase, nx * getWidth(), ny * getHeight());
+            }
+        }
+    };
 
     private float dragDx, dragDy;
     private float pinchStartDist;
@@ -81,6 +116,7 @@ class PadView extends View {
     PadView(Context ctx, PadConfig cfg) {
         super(ctx);
         this.cfg = cfg;
+        this.padPress = new PadPress(cfg, padSink);
         setFocusable(false);
         fill.setAntiAlias(true);
         stroke.setAntiAlias(true);
@@ -94,7 +130,44 @@ class PadView extends View {
 
     void setConfig(PadConfig cfg) {
         this.cfg = cfg;
+        padPress.setConfig(cfg);
+        applySafeArea();
         invalidate();
+    }
+
+    /**
+     * The edges of the window the display cutout and the system bars own.
+     *
+     * <p>Keycaps are moved clear of them rather than squashed into what is
+     * left: a player who laid their pad out on a phone without a notch should
+     * not find the D-pad rearranged on one that has it.
+     */
+    void setSafeAreaPx(int l, int t, int r, int b) {
+        insetL = Math.max(0, l);
+        insetT = Math.max(0, t);
+        insetR = Math.max(0, r);
+        insetB = Math.max(0, b);
+        applySafeArea();
+        invalidate();
+    }
+
+    private void applySafeArea() {
+        if (cfg == null) {
+            return;
+        }
+        int w = getWidth();
+        int h = getHeight();
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+        cfg.setSafeArea(insetL / (float) w, insetT / (float) h,
+                        (w - insetR) / (float) w, (h - insetB) / (float) h);
+    }
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldW, int oldH) {
+        super.onSizeChanged(w, h, oldW, oldH);
+        applySafeArea();
     }
 
     void setSink(Sink sink) {
@@ -114,7 +187,7 @@ class PadView extends View {
     void setBarShowing(boolean showing) {
         barShowing = showing;
         if (showing) {
-            releaseAll();
+            releaseAllKeys();
         }
     }
 
@@ -127,8 +200,7 @@ class PadView extends View {
         adjusting = a;
         adjustSpread = 0f;
         if (!a) {
-            gamePointerDown = false;
-            gamePointerId = -1;
+            padPress.forgetGame();
         }
         invalidate();
     }
@@ -151,45 +223,21 @@ class PadView extends View {
         }
     }
 
-    private void press(PadConfig.Key k) {
-        selected = k;
-        if (sink != null && k != null) {
-            sink.onPadKey(k.code, true);
-            buzz();
-        }
-        invalidate();
-    }
-
-    private void release(PadConfig.Key k) {
-        if (sink != null && k != null) {
-            sink.onPadKey(k.code, false);
-        }
-        if (selected == k) {
-            selected = null;
-        }
-        invalidate();
-    }
-
     private void releaseAll() {
-        for (int i = 0; i < held.size(); i++) {
-            release(keyByCode(held.valueAt(i)));
-        }
-        held.clear();
-        if (gamePointerDown && sink != null) {
-            sink.onGameTouch(gamePointerId, 2, 0f, 0f);
-        }
-        gamePointerDown = false;
+        padPress.cancel();
         selected = null;
         invalidate();
     }
 
-    private PadConfig.Key keyByCode(int code) {
-        for (int i = 0; i < cfg.keys.size(); i++) {
-            if (cfg.keys.get(i).code == code) {
-                return cfg.keys.get(i);
-            }
-        }
-        return null;
+    /**
+     * Let go of everything the pad is holding.
+     *
+     * <p>Called when the game goes to the background: a key the player was
+     * holding as the activity paused would otherwise stay down in the MIDlet
+     * until they touched the pad again.
+     */
+    void releaseAllKeys() {
+        releaseAll();
     }
 
     private PadConfig.Key keyAt(float px, float py) {
@@ -243,16 +291,10 @@ class PadView extends View {
                     invalidate();
                     return true;
                 }
-                if (k != null) {
-                    held.put(id, k.code);
-                    press(k);
-                } else if (!gamePointerDown) {
-                    gamePointerDown = true;
-                    gamePointerId = id;
-                    if (sink != null) {
-                        sink.onGameTouch(id, 0, x, y);
-                    }
-                }
+                /* A keycap is pressed by the event that delivers the touch, not
+                 * by the one that lifts the finger; empty space is the game's. */
+                padPress.down(id, x / getWidth(), y / getHeight());
+                invalidate();
                 return true;
             }
             case MotionEvent.ACTION_MOVE: {
@@ -272,27 +314,10 @@ class PadView extends View {
                     return true;
                 }
                 for (int i = 0; i < ev.getPointerCount(); i++) {
-                    int id = ev.getPointerId(i);
-                    float x = ev.getX(i);
-                    float y = ev.getY(i);
-                    int at = held.indexOfKey(id);
-                    if (at >= 0) {
-                        PadConfig.Key over = keyAt(x, y);
-                        if (over == null || over.code != held.valueAt(at)) {
-                            /* slid off the key (or onto a neighbour): the MIDP
-                             * key the game sees must follow the finger. */
-                            release(keyByCode(held.valueAt(at)));
-                            if (over != null) {
-                                held.put(id, over.code);
-                                press(over);
-                            } else {
-                                held.removeAt(at);
-                            }
-                        }
-                    } else if (gamePointerDown && id == gamePointerId && sink != null) {
-                        sink.onGameTouch(id, 1, x, y);
-                    }
+                    padPress.move(ev.getPointerId(i), ev.getX(i) / getWidth(),
+                                  ev.getY(i) / getHeight());
                 }
+                invalidate();
                 if (adjusting && !editing && sink != null) {
                     if (ev.getPointerCount() >= 2) {
                         float d = spread(ev);
@@ -323,20 +348,12 @@ class PadView extends View {
                 if (adjusting) {
                     adjustSpread = 0f;
                 }
-                int at = held.indexOfKey(id);
-                if (at >= 0) {
-                    release(keyByCode(held.valueAt(at)));
-                    held.removeAt(at);
-                } else if (gamePointerDown && id == gamePointerId) {
-                    if (sink != null) {
-                        sink.onGameTouch(id, 2, ev.getX(idx), ev.getY(idx));
-                    }
-                    gamePointerDown = false;
-                    gamePointerId = -1;
-                }
+                padPress.up(id, ev.getX(idx) / getWidth(), ev.getY(idx) / getHeight());
+                invalidate();
                 return true;
             }
             case MotionEvent.ACTION_CANCEL: {
+                disarmLongPress();
                 releaseAll();
                 return true;
             }
@@ -391,8 +408,11 @@ class PadView extends View {
             nx = Math.round(nx / PadConfig.GRID_STEP) * PadConfig.GRID_STEP;
             ny = Math.round(ny / PadConfig.GRID_STEP) * PadConfig.GRID_STEP;
         }
-        k.x = clamp(nx, -k.w * 0.5f, 1f - k.w * 0.5f);
-        k.y = clamp(ny, -k.h * 0.5f, 1f - k.h * 0.5f);
+        k.x = nx;
+        k.y = ny;
+        /* The editor shows the same rectangle the player will press, so a key
+         * cannot be dragged to a place it would only be drawn in. */
+        cfg.clampInto(k);
     }
 
     /**
@@ -451,8 +471,12 @@ class PadView extends View {
         text.setTextSize(Math.max(14f, Math.min(w, h) * 0.022f));
         for (int i = 0; i < cfg.keys.size(); i++) {
             PadConfig.Key k = cfg.keys.get(i);
-            boolean down = selected == k;
-            rect.set(k.x * w, k.y * h, (k.x + k.w) * w, (k.y + k.h) * h);
+            /* Every key under a finger lights up, not just the last one
+             * pressed: with two thumbs on a D-pad the player has to be able to
+             * see both. */
+            boolean down = selected == k || padPress.isPressed(k.code);
+            cfg.rectOf(k, box);
+            rect.set(box.x * w, box.y * h, (box.x + box.w) * w, (box.y + box.h) * h);
             float r = Math.min(rect.width(), rect.height()) * 0.22f;
 
             fill.setColor(down ? Color.argb(235, 255, 214, 64)
@@ -584,15 +608,45 @@ class PadView extends View {
     }
 
     private void drawEditorGuides(Canvas c, int w, int h) {
-        if (!cfg.grid) {
-            return;
+        if (cfg.grid) {
+            Paint g = guide;
+            g.setColor(Color.argb(60, 0, 160, 255));
+            g.setStrokeWidth(1f);
+            g.setStyle(Paint.Style.STROKE);
+            for (float f = PadConfig.GRID_STEP; f < 1f; f += PadConfig.GRID_STEP) {
+                c.drawLine(f * w, 0, f * w, h, g);
+                c.drawLine(0, f * h, w, f * h, g);
+            }
         }
-        Paint g = new Paint();
-        g.setColor(Color.argb(60, 0, 160, 255));
-        g.setStrokeWidth(1f);
-        for (float f = PadConfig.GRID_STEP; f < 1f; f += PadConfig.GRID_STEP) {
-            c.drawLine(f * w, 0, f * w, h, g);
-            c.drawLine(0, f * h, w, f * h, g);
+        /*
+         * Where the notch and the system bars are, drawn whether or not the
+         * grid is on: a player who cannot see the cutout has no way to
+         * understand why a key refuses to go any further left.
+         */
+        float l = cfg.safeLeft() * w;
+        float t = cfg.safeTop() * h;
+        float r = cfg.safeRight() * w;
+        float b = cfg.safeBottom() * h;
+        if (l > 0.5f || t > 0.5f || r < w - 0.5f || b < h - 0.5f) {
+            Paint s = guide;
+            s.setStyle(Paint.Style.FILL);
+            s.setColor(Color.argb(40, 255, 120, 0));
+            if (t > 0.5f) {
+                c.drawRect(0f, 0f, w, t, s);
+            }
+            if (b < h - 0.5f) {
+                c.drawRect(0f, b, w, h, s);
+            }
+            if (l > 0.5f) {
+                c.drawRect(0f, t, l, b, s);
+            }
+            if (r < w - 0.5f) {
+                c.drawRect(r, t, w, b, s);
+            }
+            s.setStyle(Paint.Style.STROKE);
+            s.setStrokeWidth(2f);
+            s.setColor(Color.argb(120, 255, 170, 0));
+            c.drawRect(l, t, r, b, s);
         }
     }
 }

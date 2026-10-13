@@ -32,7 +32,7 @@
  * written to the app cache once per playback and deleted with the handle.  A
  * .mid is a few kilobytes, so this is a file the OS never has to flush.
  */
-package com.example.nj2me;
+package com.lucinhu.nj2me;
 
 import android.content.Context;
 import android.media.MediaPlayer;

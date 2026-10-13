@@ -1,4 +1,4 @@
-package com.example.nj2me;
+package com.lucinhu.nj2me;
 
 import android.content.Context;
 import android.net.Uri;
@@ -44,6 +44,13 @@ final class JarStore {
     static final class Entry {
         File jar;
         String title;
+        /*
+         * True when the title is the player's own, rather than the MIDlet's
+         * name read out of the jar.  Only that kind is written to the sidecar:
+         * a derived title must stay derived, or re-importing a renamed jar
+         * would keep showing the previous manifest's name for ever.
+         */
+        boolean titleSet;
         int w = DEF_W;
         int h = DEF_H;
         int heapMB = DEF_HEAP_MB;
@@ -144,8 +151,21 @@ final class JarStore {
         e.jar = jar;
         e.size = jar.length();
         e.touched = playedAt(jar);
-        e.title = jar.getName().substring(0, jar.getName().length() - 4);
+        String file = jar.getName();
+        String base = file.toLowerCase(java.util.Locale.US).endsWith(".jar")
+                    ? file.substring(0, file.length() - 4) : file;
+        /*
+         * The name a game is shown under comes from the game: a MIDlet declares
+         * its own name in the manifest, and a list of file names is a list of
+         * strings somebody typed into a download folder.  The file's name is
+         * the fallback for the jars that declare nothing, and it stays on the
+         * row's second line either way.
+         */
+        String own = JarIcons.displayName(jar);
         File cfg = cfgOf(jar);
+        String savedTitle = null;
+        boolean savedFlag = false;
+        boolean haveFlag = false;
         if (cfg.isFile()) {
             try {
                 List<String> lines = readLines(cfg);
@@ -157,8 +177,11 @@ final class JarStore {
                     }
                     String k = line.substring(0, eq).trim();
                     String v = line.substring(eq + 1).trim();
-                    if (k.equals("title") && v.length() > 0) {
-                        e.title = v;
+                    if (k.equals("title")) {
+                        savedTitle = v.length() > 0 ? v : savedTitle;
+                    } else if (k.equals("titleset")) {
+                        haveFlag = true;
+                        savedFlag = v.equals("1") || v.equalsIgnoreCase("true");
                     } else if (k.equals("w")) {
                         e.w = parseInt(v, DEF_W);
                     } else if (k.equals("h")) {
@@ -179,10 +202,17 @@ final class JarStore {
                         e.detH = parseInt(v, 0);
                     }
                 }
+                /*
+                 * Which name wins, and whether the sidecar's title is the
+                 * player's own or a stale copy of the file name, is decided in
+                 * JarName so it can be tested off the device.
+                 */
             } catch (IOException ioe) {
                 /* keep the defaults; a broken sidecar must not hide the game */
             }
         }
+        e.title = JarName.chooseTitle(base, own, savedTitle, haveFlag, savedFlag);
+        e.titleSet = JarName.renamed(base, savedTitle, haveFlag, savedFlag);
         return e;
     }
 
@@ -190,7 +220,11 @@ final class JarStore {
         File cfg = cfgOf(e.jar);
         try {
             OutputStream os = new FileOutputStream(cfg);
-            String text = "title=" + e.title + "\nw=" + e.w + "\nh=" + e.h
+            /* title= only when the player named it: the MIDlet's own name is
+             * read from the jar every time, so a re-import cannot inherit a
+             * stale one. */
+            String text = (e.titleSet ? "title=" + e.title + "\ntitleset=1\n" : "")
+                        + "w=" + e.w + "\nh=" + e.h
                         + "\nheap=" + e.heapMB + "\nview=" + e.viewMode
                         + "\nzoom=" + e.zoom + "\npanx=" + e.panX
                         + "\npany=" + e.panY + "\ndetw=" + e.detW

@@ -825,6 +825,34 @@ static nj_status hl_inflate(void *ud, const nj_u1 *in, nj_u4 in_len,
     if ((nj_u4)got != out_len) { return NJ_ERR_FORMAT; }
     return NJ_OK;
 }
+
+/*
+ * The raw form (RFC 1951), which is what a zip entry holds: no zlib header,
+ * no trailing checksum.  nj_zip_set_inflate() takes this one, so a build with
+ * -DNJ_ENABLE_INFLATE=0 can still read a compressed JAR on this port - which
+ * is the whole point of the switch being a switch rather than a wall.  A
+ * window of -15 is zlib's "raw deflate" and nothing else about the call
+ * changes.
+ */
+static nj_status hl_inflate_raw(void *ud, const nj_u1 *in, nj_u4 in_len,
+                                nj_u1 *out, nj_u4 out_len)
+{
+    z_stream zs;
+    int rc;
+    (void)ud;
+    if (!in || !out) { return NJ_ERR_FORMAT; }
+    memset(&zs, 0, sizeof(zs));
+    if (inflateInit2(&zs, -15) != Z_OK) { return NJ_ERR_FORMAT; }
+    zs.next_in = (Bytef *)in;
+    zs.avail_in = (uInt)in_len;
+    zs.next_out = (Bytef *)out;
+    zs.avail_out = (uInt)out_len;
+    rc = inflate(&zs, Z_FINISH);
+    inflateEnd(&zs);
+    if (rc != Z_STREAM_END) { return NJ_ERR_FORMAT; }
+    if ((nj_u4)zs.total_out != out_len) { return NJ_ERR_FORMAT; }
+    return NJ_OK;
+}
 #endif
 
 nj_status nj_port_headless(nj_port *out)
@@ -863,6 +891,7 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     out->dir_open = hl_dir_open;
 #if defined(NJ_USE_LIBC) && NJ_USE_LIBC
     out->inflate = hl_inflate;
+    out->inflate_raw = hl_inflate_raw;
 #endif
     out->dir_next = hl_dir_next;
     out->dir_close = hl_dir_close;

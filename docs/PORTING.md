@@ -180,7 +180,7 @@ for what "a port" means here:
 | piece | where |
 | --- | --- |
 | the port itself, plus all JNI entry points | `src/port/android/nj_port_android.c` |
-| library UI, game activity, keypad editor, system-font rasteriser (framework only, no AndroidX) | `src/port/android/java/com/example/nj2me/` |
+| library UI, game activity, keypad editor, system-font rasteriser (framework only, no AndroidX) | `src/port/android/java/com/lucinhu/nj2me/` |
 | the shared library, one `.so` per ABI | `tools/build_android.sh` |
 | the APK, by hand: `aapt2` + `javac` + `d8` + `apksigner` | `tools/build_android_apk.sh` |
 | the launcher icon set (PNG mipmaps + adaptive icon, no vector placeholder) | `tools/gen_android_icon.py` |

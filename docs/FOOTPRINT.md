@@ -330,7 +330,7 @@ symbol and not the code that wanted it.
 
 Both are real cross-builds with NDK r28b, not stub-header compiles:
 `nj_port_android.c` includes `<jni.h>`, exports
-`Java_com_example_nj2me_GameActivity_native*`, and links against liblog,
+`Java_com_lucinhu_nj2me_GameActivity_native*`, and links against liblog,
 libandroid and libOpenSLES. The shared library passes the same zero-writable-state
 gate as everything else, by section name:
 

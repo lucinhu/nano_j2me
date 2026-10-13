@@ -8,7 +8,7 @@
 #
 # This is a REAL cross-build with the real NDK toolchain, not a stub-header
 # compile: nj_port_android.c includes <jni.h>, exports the JNI entry points
-# Java_com_example_nj2me_GameActivity_native*, and links against liblog,
+# Java_com_lucinhu_nj2me_GameActivity_native*, and links against liblog,
 # libandroid and libOpenSLES.  What it does not do is run on a device or an
 # emulator - see docs/PORTING.md for how to do that end to end.
 #

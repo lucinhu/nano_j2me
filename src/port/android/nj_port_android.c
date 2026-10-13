@@ -731,11 +731,21 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
             if (!(scale > 0.0f)) {
                 scale = 1.0f;
             }
-        } else if (s->view_mode == NJ_VIEW_CUSTOM) {
-            float z = (s->view_zoom > 0.05f) ? s->view_zoom : 1.0f;
-            scale = (float)fit * z;
         } else {
             scale = (float)fit;
+        }
+        /*
+         * The zoom and the pan are the player's in every mode, not just in
+         * NJ_VIEW_CUSTOM: choosing 整数倍 / 铺满 / 适配 decides the base fit,
+         * it does not take the picture away.  A player whose game sits under a
+         * notch, or who wants two more pixels of the sprite sheet on screen,
+         * would otherwise have to give up the crisp integer scaling to move it.
+         */
+        {
+            float z = (s->view_zoom > 0.05f) ? s->view_zoom : 1.0f;
+            if (z != 1.0f) {
+                scale *= z;
+            }
         }
         drawn_w = (int)((float)sw * scale);
         drawn_h = (int)((float)sh * scale);
@@ -743,10 +753,8 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
         if (drawn_h < 1) { drawn_h = 1; }
         ox = (buf.width - drawn_w) / 2;
         oy = (buf.height - drawn_h) / 2;
-        if (s->view_mode == NJ_VIEW_CUSTOM) {
-            ox += (int)s->view_dx;
-            oy += (int)s->view_dy;
-        }
+        ox += (int)s->view_dx;
+        oy += (int)s->view_dy;
         /* Keep the picture reachable.  One that fits may be parked anywhere
          * inside the window; one that does not is clamped so that no edge can
          * be dragged past the panel and lost. */
@@ -2961,7 +2969,7 @@ static int android_jstr(JNIEnv *env, jstring js, char *dst, size_t cap)
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_example_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
+Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
                                                  jobject surface,
                                                  jstring jarPath,
                                                  jint screenW, jint screenH,
@@ -3028,7 +3036,7 @@ Java_com_example_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
      * unambiguously the app's; the run thread only calls the cached method.
      */
     {
-        jclass gcls = (*env)->FindClass(env, "com/example/nj2me/GlyphSource");
+        jclass gcls = (*env)->FindClass(env, "com/lucinhu/nj2me/GlyphSource");
         if ((*env)->ExceptionCheck(env)) {
             (*env)->ExceptionClear(env);
             gcls = NULL;
@@ -3060,7 +3068,7 @@ Java_com_example_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
      * no MidiPlayer at all.
      */
     {
-        jclass mcls = (*env)->FindClass(env, "com/example/nj2me/MidiPlayer");
+        jclass mcls = (*env)->FindClass(env, "com/lucinhu/nj2me/MidiPlayer");
         if ((*env)->ExceptionCheck(env)) {
             (*env)->ExceptionClear(env);
             mcls = NULL;
@@ -3105,7 +3113,7 @@ Java_com_example_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
      * installed and the runtime decodes whatever it can by itself.
      */
     {
-        jclass icls = (*env)->FindClass(env, "com/example/nj2me/PlatformImage");
+        jclass icls = (*env)->FindClass(env, "com/lucinhu/nj2me/PlatformImage");
         if ((*env)->ExceptionCheck(env)) {
             (*env)->ExceptionClear(env);
             icls = NULL;
@@ -3129,7 +3137,7 @@ Java_com_example_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
         }
     }
     {
-        jclass acls = (*env)->FindClass(env, "com/example/nj2me/PlatformAudio");
+        jclass acls = (*env)->FindClass(env, "com/lucinhu/nj2me/PlatformAudio");
         if ((*env)->ExceptionCheck(env)) {
             (*env)->ExceptionClear(env);
             acls = NULL;
@@ -3162,7 +3170,7 @@ Java_com_example_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_nj2me_GameActivity_nativeSetSurface(JNIEnv *env, jobject thiz,
+Java_com_lucinhu_nj2me_GameActivity_nativeSetSurface(JNIEnv *env, jobject thiz,
                                                      jlong handle,
                                                      jobject surface)
 {
@@ -3199,7 +3207,7 @@ Java_com_example_nj2me_GameActivity_nativeSetSurface(JNIEnv *env, jobject thiz,
  * the UI thread must stay free to show the last frame and leave the screen.
  */
 JNIEXPORT void JNICALL
-Java_com_example_nj2me_GameActivity_nativeRun(JNIEnv *env, jobject thiz,
+Java_com_lucinhu_nj2me_GameActivity_nativeRun(JNIEnv *env, jobject thiz,
                                               jlong handle)
 {
     android_app *a = (android_app *)(intptr_t)handle;
@@ -3219,7 +3227,7 @@ Java_com_example_nj2me_GameActivity_nativeRun(JNIEnv *env, jobject thiz,
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_nj2me_GameActivity_nativeKey(JNIEnv *env, jobject thiz,
+Java_com_lucinhu_nj2me_GameActivity_nativeKey(JNIEnv *env, jobject thiz,
                                               jlong handle, jint keyCode,
                                               jboolean down)
 {
@@ -3231,7 +3239,7 @@ Java_com_example_nj2me_GameActivity_nativeKey(JNIEnv *env, jobject thiz,
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_nj2me_GameActivity_nativeTouch(JNIEnv *env, jobject thiz,
+Java_com_lucinhu_nj2me_GameActivity_nativeTouch(JNIEnv *env, jobject thiz,
                                                 jlong handle, jint id,
                                                 jint phase, jfloat x, jfloat y)
 {
@@ -3244,7 +3252,7 @@ Java_com_example_nj2me_GameActivity_nativeTouch(JNIEnv *env, jobject thiz,
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_nj2me_GameActivity_nativeSetActive(JNIEnv *env, jobject thiz,
+Java_com_lucinhu_nj2me_GameActivity_nativeSetActive(JNIEnv *env, jobject thiz,
                                                     jlong handle,
                                                     jboolean active)
 {
@@ -3256,7 +3264,7 @@ Java_com_example_nj2me_GameActivity_nativeSetActive(JNIEnv *env, jobject thiz,
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_example_nj2me_GameActivity_nativeStats(JNIEnv *env, jobject thiz,
+Java_com_lucinhu_nj2me_GameActivity_nativeStats(JNIEnv *env, jobject thiz,
                                                 jlong handle)
 {
     android_app *a = (android_app *)(intptr_t)handle;
@@ -3277,7 +3285,7 @@ Java_com_example_nj2me_GameActivity_nativeStats(JNIEnv *env, jobject thiz,
  * the port handles by taking its own lock.
  */
 JNIEXPORT void JNICALL
-Java_com_example_nj2me_GameActivity_nativeSetView(JNIEnv *env, jobject thiz,
+Java_com_lucinhu_nj2me_GameActivity_nativeSetView(JNIEnv *env, jobject thiz,
                                                   jlong handle, jint mode,
                                                   jfloat zoom, jfloat dx,
                                                   jfloat dy)
@@ -3301,7 +3309,7 @@ Java_com_example_nj2me_GameActivity_nativeSetView(JNIEnv *env, jobject thiz,
  * answers and a caller that cannot tell them apart would save 0x0.
  */
 JNIEXPORT jintArray JNICALL
-Java_com_example_nj2me_GameActivity_nativeDetect(JNIEnv *env, jobject thiz,
+Java_com_lucinhu_nj2me_GameActivity_nativeDetect(JNIEnv *env, jobject thiz,
                                                  jlong handle)
 {
     android_app *a = (android_app *)(intptr_t)handle;
@@ -3334,7 +3342,7 @@ Java_com_example_nj2me_GameActivity_nativeDetect(JNIEnv *env, jobject thiz,
  * button the port would ignore.
  */
 JNIEXPORT jobjectArray JNICALL
-Java_com_example_nj2me_GameActivity_nativeKeyTable(JNIEnv *env, jclass cls)
+Java_com_lucinhu_nj2me_GameActivity_nativeKeyTable(JNIEnv *env, jclass cls)
 {
     jobjectArray arr;
     jclass strcls;
@@ -3365,7 +3373,7 @@ Java_com_example_nj2me_GameActivity_nativeKeyTable(JNIEnv *env, jclass cls)
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_nj2me_GameActivity_nativeQuit(JNIEnv *env, jobject thiz,
+Java_com_lucinhu_nj2me_GameActivity_nativeQuit(JNIEnv *env, jobject thiz,
                                                jlong handle)
 {
     android_app *a = (android_app *)(intptr_t)handle;
@@ -3380,7 +3388,7 @@ Java_com_example_nj2me_GameActivity_nativeQuit(JNIEnv *env, jobject thiz,
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_nj2me_GameActivity_nativeDestroy(JNIEnv *env, jobject thiz,
+Java_com_lucinhu_nj2me_GameActivity_nativeDestroy(JNIEnv *env, jobject thiz,
                                                   jlong handle)
 {
     android_app *a = (android_app *)(intptr_t)handle;
@@ -3395,8 +3403,15 @@ Java_com_example_nj2me_GameActivity_nativeDestroy(JNIEnv *env, jobject thiz,
      * completely torn down before the surface goes away.  Without the join the
      * rasterizer can be mid-frame when Android destroys the window.
      */
-    if (a->started) {
+    if (a->started && !a->joined) {
+        /*
+         * Only when nativeRun() did not already do it.  A pthread_t may be
+         * joined exactly once: bionic answers the second attempt with
+         * "invalid pthread_t ... passed to pthread_join" and abort()s, which
+         * is how a game that ended cleanly took the whole app down with it.
+         */
         pthread_join(a->thread, NULL);
+        a->joined = 1;
     }
     /* The Java reference belongs to this layer, so it is released here rather
      * than in the port's shutdown.  Releasing it is what makes "back out of the

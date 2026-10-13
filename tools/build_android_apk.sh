@@ -4,6 +4,8 @@
 #
 #     tools/build_android_apk.sh [--abi arm64-v8a] [--screen 240x320]
 #                                [--install] [--push FILE.jar] [--no-midi]
+#                                [--no-png] [--no-jpeg] [--no-gif]
+#                                [--no-inflate] [--no-wav] [--no-amr]
 #
 # --no-midi drops the built-in MIDI renderer from the .so (~13 KB per ABI; the
 # platform's own synth still plays .mid, and MIDIControl stops working - see
@@ -23,7 +25,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PKG=com.example.nj2me
+PKG=com.lucinhu.nj2me
 # The version comes from CMakeLists.txt, so an APK can never claim a version
 # the release does not have.  versionCode stays 1 until there is a second one.
 VERSION="$(sed -n 's/^project(nano_j2me VERSION \([0-9][0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt" | head -1)"
@@ -35,6 +37,7 @@ INSTALL=0
 PUSH=""
 OUT="$ROOT/build/android"
 NO_MIDI=0
+NO_CODECS=""   # --no-<codec> flags, forwarded to tools/build_android.sh
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -44,6 +47,8 @@ while [ $# -gt 0 ]; do
         --install) INSTALL=1; shift ;;
         --push) PUSH="$2"; shift 2 ;;
         --no-midi) NO_MIDI=1; shift ;;
+        --no-png|--no-jpeg|--no-gif|--no-inflate|--no-wav|--no-amr)
+            NO_CODECS="$NO_CODECS $1"; shift ;;
         -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
@@ -76,6 +81,7 @@ for abi in $ABIS; do
     echo "== native ($abi)"
     MIDI_FLAG=""
     [ "$NO_MIDI" = "1" ] && MIDI_FLAG="--no-midi"
+    MIDI_FLAG="$MIDI_FLAG $NO_CODECS"
     if [ -n "$SCREEN" ]; then
         "$ROOT/tools/build_android.sh" --abi "$abi" --out "$OUT" --screen "$SCREEN" $MIDI_FLAG || exit 1
     else

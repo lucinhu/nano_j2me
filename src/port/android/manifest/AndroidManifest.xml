@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.example.nj2me">
+    package="com.lucinhu.nj2me">
 
     <!-- VIBRATE is the only thing this app asks for.  No storage permission: jars
          live in app-private storage, which needs none. -->

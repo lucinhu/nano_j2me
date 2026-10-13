@@ -1,4 +1,4 @@
-package com.example.nj2me;
+package com.lucinhu.nj2me;
 
 import android.app.Activity;
 import android.content.Context;
@@ -21,6 +21,7 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -64,6 +65,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private LinearLayout bar;
     private TextView status;
     private TextView handleButton;
+    private TextView titleView;
 
     private String jarPath = "";   /* absolute: what the port opens */
     private String jarName = "";   /* file name: the JarStore key */
@@ -89,6 +91,18 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private boolean detSaved;       /* the measured resolution is already stored */
     private int detW, detH;
     private int detLastW, detLastH, detStable;
+
+    /*
+     * 调整画面 is a state the player turns on, not a view mode: the picture
+     * follows the finger while it is on, in whichever fit they chose.  It is
+     * deliberately separate from viewMode so that moving a picture never
+     * costs the player their crisp integer scaling.
+     */
+    private boolean movingPicture;
+
+    /* 沉浸模式: the player's setting, plus where the notch and bars are. */
+    private boolean immersive;
+    private int insetL, insetT, insetR, insetB;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable barHider = new Runnable() {
@@ -160,6 +174,11 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
          * pin an Activity that is being destroyed.
          */
         MidiPlayer.init(getApplicationContext());
+        /* The platform codecs.  Both are optional: if the classes are
+         * missing or a device cannot decode something, the native side
+         * falls back to the runtime's own decoders. */
+        PlatformImage.init(getApplicationContext());
+        PlatformAudio.init(getApplicationContext());
         Intent it = getIntent();
         /*
          * Two names on purpose. "jar" is the file name, which is what the
@@ -194,7 +213,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 : android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        goFullscreen();
+        applyFullscreen();
 
         padConfig = PadConfig.load(this);
 
@@ -244,17 +263,61 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         });
 
         setContentView(root);
+        /*
+         * A notch is a hole in the panel the framework cannot move out of the
+         * way, so everything the player has to touch is told where it is: the
+         * keycaps are moved clear inside PadView, the control bar, the status
+         * overlay and the handle are padded by the same insets.
+         */
+        root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            public WindowInsets onApplyWindowInsets(View v, WindowInsets in) {
+                applyInsets(in);
+                return in;
+            }
+        });
+        root.requestApplyInsets();
         showBar(true);
+    }
+
+    /** Keeps the controls out of the cutout and the system bars. */
+    private void applyInsets(WindowInsets in) {
+        int[] e = Ui.insets(in, immersive);
+        insetL = e[0];
+        insetT = e[1];
+        insetR = e[2];
+        insetB = e[3];
+        if (pad != null) {
+            pad.setSafeAreaPx(insetL, insetT, insetR, insetB);
+        }
+        if (bar != null) {
+            bar.setPadding(dp(6) + insetL, dp(4) + insetT, dp(40) + insetR, dp(4));
+        }
+        if (status != null) {
+            status.setPadding(dp(8) + insetL, dp(4), dp(8) + insetR, dp(4) + insetB);
+        }
+        if (handleButton != null) {
+            FrameLayout.LayoutParams lp =
+                (FrameLayout.LayoutParams) handleButton.getLayoutParams();
+            lp.topMargin = insetT;
+            lp.rightMargin = insetR;
+            handleButton.setLayoutParams(lp);
+        }
+    }
+
+    /** True while empty space moves the picture instead of reaching the game. */
+    private boolean adjustingNow() {
+        return movingPicture || viewMode == VIEW_CUSTOM;
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        goFullscreen();
+        applyFullscreen();
         /* The keypad editor may have changed the layout while we were away. */
         padConfig.replaceWith(PadConfig.load(this));
         pad.setConfig(padConfig);
-        pad.setAdjusting(viewMode == VIEW_CUSTOM);
+        pad.setAdjusting(adjustingNow());
         applyView();
         ui.removeCallbacks(statusTick);
         ui.post(statusTick);
@@ -432,7 +495,11 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     public void onViewGesture(float zoomFactor, float dx, float dy) {
         /* The port works in absolute zoom and absolute pan, the gesture in
          * deltas: accumulating here keeps the native side a pure function of
-         * what it is told, which is also what the sidecar file stores. */
+         * what it is told, which is also what the sidecar file stores.
+         *
+         * The mode is deliberately left alone: the zoom and the pan apply on
+         * top of whichever fit the player chose, so moving a picture never
+         * costs them the integer scaling they picked it for. */
         viewZoom *= zoomFactor;
         if (viewZoom < 0.25f) {
             viewZoom = 0.25f;
@@ -442,7 +509,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         }
         viewPanX += dx;
         viewPanY += dy;
-        viewMode = VIEW_CUSTOM;
         viewDirty = true;
         applyView();
     }
@@ -463,14 +529,51 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         if (mode == VIEW_CUSTOM) {
             /* Free adjustment is a mode the player is in, not a setting: the
              * picture follows the finger until they pick a fixed mode again. */
-            pad.setAdjusting(true);
             toast("拖动移动画面，双指缩放；在「画面」里选其他方式结束调整");
         } else {
-            pad.setAdjusting(false);
+            movingPicture = false;
         }
+        pad.setAdjusting(adjustingNow());
         applyView();
         saveView();
         armBarTimer();
+        updateBarTitle();
+    }
+
+    /**
+     * 移动画面: the picture follows the finger, in whichever fit is in force.
+     *
+     * <p>Separate from 自由缩放 because a player who wants their 240x320 game
+     * shifted off the notch should not have to give up integer scaling to do
+     * it - and because a drag that moves the picture is a drag the game does
+     * not get, so it has to be something the player asks for.
+     */
+    private void toggleMovingPicture() {
+        movingPicture = !movingPicture;
+        pad.setAdjusting(adjustingNow());
+        if (movingPicture) {
+            toast("拖动移动画面，双指缩放；再按一次「移动画面」结束");
+        } else if (viewMode == VIEW_CUSTOM) {
+            toast("自由缩放本身就是拖动模式；选其他方式可结束调整");
+        }
+        updateBarTitle();
+        armBarTimer();
+    }
+
+    /** Nudges the picture by one step; shared with the 微调 dialog. */
+    private void nudge(float dx, float dy) {
+        viewPanX += dx;
+        viewPanY += dy;
+        viewDirty = true;
+        applyView();
+    }
+
+    private String panText() {
+        return Math.round(viewPanX) + "," + Math.round(viewPanY);
+    }
+
+    private String zoomText() {
+        return (Math.round(viewZoom * 100f) / 100f) + "x";
     }
 
     private String viewName(int mode) {
@@ -495,19 +598,28 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         }
         final int dw = det != null ? det[2] : 0;
         final int dh = det != null ? det[3] : 0;
-        final String info = dw > 0
-                ? "游戏画面 " + dw + "x" + dh + "（已测量）· 画布 " + screenW + "x" + screenH
-                : "还没测出画布，多等几秒再打开 · 画布 " + screenW + "x" + screenH;
+        final String info = (dw > 0
+                ? "游戏画面 " + dw + "x" + dh + "（已测量）· "
+                : "还没测出画布，多等几秒再打开 · ")
+                + "画布 " + screenW + "x" + screenH
+                + "\n" + viewName(viewMode) + " " + zoomText()
+                + " · 偏移 " + panText() + (movingPicture ? " · 拖动中" : "");
         final String[] items = {
             "整数倍缩放（默认，像素最清晰）",
             "铺满屏幕（放大到没有黑边）",
             "适配画面（自动裁掉不画的部分）",
-            "自由缩放（拖动 / 双指缩放）"
+            "自由缩放（拖动 / 双指缩放）",
+            "移动画面（拖动摆位置，再点一次结束）",
+            "微调位置（方向按钮一点点挪）",
+            "居中（偏移归零）"
         };
-        final int[] modes = { VIEW_INT, VIEW_FILL, VIEW_AUTO, VIEW_CUSTOM };
-        for (int i = 0; i < items.length; i++) {
+        final int[] modes = { VIEW_INT, VIEW_FILL, VIEW_AUTO, VIEW_CUSTOM, -1, -2, -3 };
+        for (int i = 0; i < 4; i++) {
             items[i] = (modes[i] == viewMode ? "\u2713 " : "      ") + items[i];
         }
+        items[4] = (movingPicture ? "\u2713 " : "      ") + items[4];
+        items[5] = "      " + items[5];
+        items[6] = "      " + items[6];
         /*
          * The info line rides in a custom title instead of setMessage(): with a
          * list set as well the platform dialog drops the message on the floor.
@@ -517,7 +629,20 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             .setItems(items, new android.content.DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(android.content.DialogInterface d, int which) {
-                    setViewMode(modes[which]);
+                    if (which < 4) {
+                        setViewMode(modes[which]);
+                    } else if (which == 4) {
+                        toggleMovingPicture();
+                    } else if (which == 5) {
+                        nudgeDialog();
+                    } else {
+                        viewPanX = 0f;
+                        viewPanY = 0f;
+                        viewDirty = true;
+                        applyView();
+                        saveView();
+                        toast("画面已居中");
+                    }
                 }
             })
             .setPositiveButton(dw > 0 ? ("用 " + dw + "x" + dh + " 作为分辨率") : "关闭",
@@ -538,6 +663,72 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                     setViewMode(VIEW_INT);
                 }
             })
+            .show();
+    }
+
+    /**
+     * 微调位置: a picture one step away from where the player wants it should
+     * not need a drag - and the edges, where a drag is hardest to aim, are
+     * exactly where a picture usually has to go to clear a notch.
+     */
+    private void nudgeDialog() {
+        final int step = Math.max(4,
+                Math.round(Math.min(pad.getWidth(), pad.getHeight()) * 0.02f));
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        grid.setPadding(dp(12), dp(8), dp(12), dp(8));
+        final String up = "\u2191";
+        final String down = "\u2193";
+        final String left = "\u2190";
+        final String right = "\u2192";
+        final String centre = "\u25a0 居中";
+        final String[][] rows = {
+            { null, up, null },
+            { left, centre, right },
+            { null, down, null }
+        };
+        for (String[] row : rows) {
+            LinearLayout line = new LinearLayout(this);
+            line.setOrientation(LinearLayout.HORIZONTAL);
+            for (String label : row) {
+                if (label == null) {
+                    line.addView(new View(this), new LinearLayout.LayoutParams(0, dp(44), 1f));
+                    continue;
+                }
+                Button b = new Button(this);
+                b.setText(label);
+                b.setAllCaps(false);
+                if (centre.equals(label)) {
+                    b.setOnClickListener(new View.OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            viewPanX = 0f;
+                            viewPanY = 0f;
+                            viewDirty = true;
+                            applyView();
+                            saveView();
+                        }
+                    });
+                } else {
+                    final float dx = left.equals(label) ? -step : right.equals(label) ? step : 0f;
+                    final float dy = up.equals(label) ? -step : down.equals(label) ? step : 0f;
+                    b.setOnClickListener(new View.OnClickListener() {
+                        @Override
+                        public void onClick(View v) {
+                            nudge(dx, dy);
+                        }
+                    });
+                }
+                line.addView(b, new LinearLayout.LayoutParams(0, dp(44), 1f));
+            }
+            grid.addView(line);
+        }
+        new android.app.AlertDialog.Builder(this)
+            .setCustomTitle(dialogTitle("微调位置 · 当前偏移 " + panText(),
+                    "每按一次移动 " + step + " 像素（" + viewName(viewMode) + " "
+                            + zoomText() + "）"))
+            .setView(grid)
+            .setNegativeButton("关闭", null)
             .show();
     }
 
@@ -615,7 +806,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         b.setPadding(dp(6), dp(4), dp(40), dp(4));
 
         TextView title = new TextView(this);
-        title.setText(jarTitle);
+        titleView = title;
+        updateBarTitle();
         title.setTextColor(Color.WHITE);
         title.setTextSize(13f);
         title.setSingleLine(true);
@@ -723,63 +915,26 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         status.setText(jarTitle + "  " + screenW + "x" + screenH + "\n" + s);
     }
 
-    /**
-     * Hide the system bars and keep them hidden.
-     *
-     * <p>The SYSTEM_UI_FLAG_* family below is how this was always done, and it
-     * has been a no-op since Android 11 - on the API 36 emulator the clock and
-     * the 5G icon sat on top of the MIDlet's own title bar.  API 30 added the
-     * replacement, so the flags are now only the fallback for older devices.
-     *
-     * <p>The API 30 calls live in their own class instead of in a branch here:
-     * on an Android 5 phone a method that mentions WindowInsetsController can
-     * fail class verification when the class is loaded, branch or no branch,
-     * and this APK has to install and start all the way back to API 21.
-     */
-    private void goFullscreen() {
-        Window w = getWindow();
-        w.setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,
-                   WindowManager.LayoutParams.FLAG_FULLSCREEN);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Bars30.hide(w);
-        } else {
-            w.getDecorView().setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                  | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                  | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                  | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                  | View.SYSTEM_UI_FLAG_FULLSCREEN
-                  | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+    /** Shows 调整画面 in the bar while the picture follows the finger. */
+    private void updateBarTitle() {
+        if (titleView != null) {
+            titleView.setText(movingPicture ? jarTitle + " · 调整画面" : jarTitle);
         }
     }
 
-    /** API 30's way of hiding the bars, kept where old devices never load it. */
-    private static final class Bars30 {
-        static void hide(final Window w) {
-            w.setDecorFitsSystemWindows(false);
-            /* The bars can only be hidden once there is a decor view attached
-             * to this window, and onCreate has no view at all yet, so the hide
-             * is posted: it runs when the view is attached, and getWindowInsets
-             * Controller() returns the real controller instead of null. */
-            final View decor = w.getDecorView();
-            if (decor != null) {
-                decor.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        WindowInsetsController c = decor.getWindowInsetsController();
-                        if (c != null) {
-                            c.hide(WindowInsets.Type.statusBars()
-                                 | WindowInsets.Type.navigationBars());
-                            /* A swipe brings the bars back for a moment, then
-                             * they leave again: a game that loses the screen to
-                             * a stray swipe cannot be played. */
-                            c.setSystemBarsBehavior(
-                                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-                        }
-                    }
-                });
-            }
-        }
+    /**
+     * Immersive mode and the notch, both of which the player can turn on.
+     *
+     * <p>The SYSTEM_UI_FLAG_* family this used to rely on has been a no-op
+     * since Android 11 - on the API 36 emulator the clock and the 5G icon sat
+     * on top of the MIDlet's own title bar.  API 30's WindowInsetsController is
+     * the replacement, so the flags are only the fallback for older devices,
+     * and everything that mentions the new API lives in {@link Ui} where a
+     * device that predates it never loads the class.
+     */
+    private void applyFullscreen() {
+        immersive = Ui.immersive(this);
+        Ui.apply(this, immersive);
     }
 
     /** A swipe or a dialog can bring the system bars back; take them away again. */
@@ -787,7 +942,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
-            goFullscreen();
+            applyFullscreen();
         }
     }
 
