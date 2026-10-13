@@ -922,6 +922,23 @@ across the triangle:
 - A `VertexBuffer` with no normals is not lit at all: the material's diffuse
   colour is used flat, which is what an unlit appearance means.  A title that
   never calls `setLight` keeps its geometry unlit and flat, exactly as before.
+  The last part is a rule of its own, and the World path learned it the hard
+  way: `3D拉力赛-进化汉化版_6366` never adds a light - no class of it calls
+  `Graphics3D.addLight` - but every mesh of it carries a Material, so the JSR's
+  own condition (a Material plus normals) turned lighting on, and with an empty
+  light array the equation leaves the material's emissive colour, which is
+  black.  Its track was a black silhouette on a white sky.  Lighting now also
+  requires something to light with, `r.nlights > 0`, which is the same picture
+  a buffer with no normals already gets.
+
+The World path (`render(World)`) draws through this same pipeline: each
+collected mesh keeps the world matrix the walk accumulated for it, its own
+`VertexBuffer` and first-submesh `Appearance`, and a World that carries a
+`Background` has its viewport cleared to that background's colour before the
+meshes are drawn - the clear is the same native `Graphics3D.clear()` a title
+would have called, so there is one implementation of it.  The title above sets
+a white background of its own, which is why its sky is white: that is the
+title's data, not a missing clear.
 
 The two conventions are the part worth remembering, because getting them
 crossed is silent:

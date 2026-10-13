@@ -4403,13 +4403,20 @@ nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
         case NJ_M3G_T_COMPOSITING_MODE:
             nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_blend", "I"),
                     (nj_s4)((f->a >> 8) & 0xFFu));
-            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_dtest", "Z"),
+            /*
+             * The four flags are declared "I" on the class, not "Z": the
+             * field lookup matches the descriptor exactly and raises an
+             * InternalError when the name is there with another type, which is
+             * how 都市摩天楼_6192 stopped loading the moment this link step
+             * was added.  Booleans are stored as ints throughout this module.
+             */
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_dtest", "I"),
                     (nj_s4)(f->a & 1u));
-            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_dwrite", "Z"),
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_dwrite", "I"),
                     (nj_s4)((f->a >> 1) & 1u));
-            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_cwrite", "Z"),
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_cwrite", "I"),
                     (nj_s4)((f->a >> 2) & 1u));
-            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_awrite", "Z"),
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_awrite", "I"),
                     (nj_s4)((f->a >> 3) & 1u));
             nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_athresh", "I"),
                     (nj_s4)((f->a >> 16) & 0xFFu));
@@ -4466,6 +4473,7 @@ nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
             break;
         case NJ_M3G_T_BACKGROUND: {
             nj_ref img = m3g_resolve_ref(vm, arr, nobj, o, f->refs[0], mode);
+
 
             nj_iput(vm, o, m3g_fof(vm, NJ_C_BG, "_nj_color", "I"), (nj_s4)f->a);
             nj_iput(vm, o, m3g_fof(vm, NJ_C_BG, "_nj_cclear", "Z"),
