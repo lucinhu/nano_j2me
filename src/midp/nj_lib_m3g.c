@@ -2203,6 +2203,10 @@ NJFN(m3g_bindTarget)
         nj_iput(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vw", "I", 0), w);
         nj_iput(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vh", "I", 0), h);
     }
+    /* The depth buffer belongs to the target as much as the viewport does:
+       binding a new one starts from a clean buffer.  The next render clears
+       it (an impossible frame number is what "needs clearing" looks like). */
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), -1);
     return NJ_OK;
 }
 
@@ -4185,6 +4189,13 @@ static const nj_builtin_field g3d_fields[] = {
     { "_nj_drfar", "F", NJ_ACC_PUBLIC },
     { "_nj_lights", "[L" NJ_C_LIGHT ";", NJ_ACC_PUBLIC },
     { "_nj_lmats", "[F", NJ_ACC_PUBLIC },
+    /* The software rasteriser's own state: 1/w per pixel (larger is
+       nearer), the viewport it belongs to, and the frame it was last
+       cleared in - a title that never calls clear() still renders. */
+    { "_nj_zbuf", "[I", NJ_ACC_PUBLIC },
+    { "_nj_zw", "I", NJ_ACC_PUBLIC },
+    { "_nj_zh", "I", NJ_ACC_PUBLIC },
+    { "_nj_zframe", "I", NJ_ACC_PUBLIC },
 };
 static const nj_builtin_field appear_fields[] = {
     { "_nj_mat",  "L" NJ_C_MAT ";",   NJ_ACC_PUBLIC },
@@ -6511,6 +6522,256 @@ NJFN(m3g_g3d_setDepthRange)
 M3G_F_GET(m3g_g3d_getDepthRangeNear, NJ_C_G3D, "_nj_drnear")
 M3G_F_GET(m3g_g3d_getDepthRangeFar, NJ_C_G3D, "_nj_drfar")
 
+/* ---- software rasteriser: depth, texture, culling -------------------
+ *
+ * The Java call path (Graphics.fillTriangle) can carry a flat colour and
+ * nothing else: no depth, no texture, and one interpreter round trip per
+ * triangle.  A title that renders a world into an Image or into a bound
+ * Graphics wants a depth buffer, and a textured planet wants texture
+ * coordinates - so the pixels are written here, straight into the target
+ * surface, and the Java call remains the fallback for a target this cannot
+ * reach.
+ *
+ * The depth buffer lives in a Java int[] on the Graphics3D (a C buffer
+ * would have to be owned by someone, and the only lifetime the collector
+ * understands is a Java one).  Entries hold 1/w scaled by 65536: larger is
+ * nearer, and a freshly allocated array is all zero = "nothing drawn",
+ * which is exactly the state a new buffer must be in.  It is cleared once
+ * per frame so a title that never calls clear() still renders.
+ */
+typedef struct {
+    nj_surface *surf;
+    nj_s4 *z;
+    int vx, vy, vw, vh;
+    const nj_u1 *tex;
+    int tex_w, tex_h, tex_bpp;
+    int wrap_s, wrap_t;
+    int cull;                  /* 160 CULL_BACK, 161 CULL_FRONT, 162 none */
+    int winding;               /* 168 CCW, 169 CW */
+} m3g_sw;
+
+#define M3G_SW_BACK  160
+#define M3G_SW_FRONT 161
+#define M3G_SW_CCW   168
+
+static int sw_depth(nj_vm *vm, nj_ref self, m3g_sw *sw)
+{
+    nj_field *fz = nj_field_lookup(vm, NJ_C_G3D, "_nj_zbuf", "[I", 0);
+    nj_field *fw = nj_field_lookup(vm, NJ_C_G3D, "_nj_zw", "I", 0);
+    nj_field *fh = nj_field_lookup(vm, NJ_C_G3D, "_nj_zh", "I", 0);
+    nj_field *fr = nj_field_lookup(vm, NJ_C_G3D, "_nj_zframe", "I", 0);
+    nj_size n = (nj_size)sw->vw * (nj_size)sw->vh;
+    nj_ref a;
+    nj_u4 mark;
+    nj_s4 zw, zh, zf;
+    nj_s4 *p;
+
+    if (!fz || !fw || !fh || !fr || n == 0u) {
+        return 0;
+    }
+    zw = nj_iget(vm, self, fw);
+    zh = nj_iget(vm, self, fh);
+    zf = nj_iget(vm, self, fr);
+    a = nj_rget(vm, self, fz);
+    if (!a || zw != sw->vw || zh != sw->vh || a->length < (nj_u4)n) {
+        nj_ref na = nj_array_new(vm, "I", n);
+
+        if (!na) {
+            return 0;
+        }
+        mark = nj_root_mark(vm);
+        na = nj_root(vm, na);
+        nj_rput(vm, self, fz, na);
+        nj_iput(vm, self, fw, sw->vw);
+        nj_iput(vm, self, fh, sw->vh);
+        a = na;
+        nj_root_release(vm, mark);
+        zf = -1;                       /* a fresh array is already "far" */
+    }
+    if (zf != (nj_s4)vm->frames) {     /* one clear per frame */
+        p = (nj_s4 *)nj_array_data(a);
+        if (p) {
+            memset(p, 0, (size_t)n * sizeof(nj_s4));
+        }
+        nj_iput(vm, self, fr, (nj_s4)vm->frames);
+    }
+    sw->z = (nj_s4 *)nj_array_data(a);
+    return sw->z != NULL;
+}
+
+static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
+{
+    float fs, ft;
+    int u, v;
+    const nj_u1 *p;
+    nj_u4 tr, tg, tb;
+
+    if (!sw->tex || sw->tex_w <= 0 || sw->tex_h <= 0) {
+        return argb;
+    }
+    if (sw->wrap_s == 32) {            /* WRAP_CLAMP */
+        fs = s < 0.0f ? 0.0f : (s > 1.0f ? 1.0f : s);
+    } else {                           /* WRAP_REPEAT (the default) */
+        fs = s - (float)(nj_s4)s;
+        if (fs < 0.0f) { fs += 1.0f; }
+        if (fs >= 1.0f) { fs = 0.999f; }
+    }
+    if (sw->wrap_t == 32) {
+        ft = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    } else {
+        ft = t - (float)(nj_s4)t;
+        if (ft < 0.0f) { ft += 1.0f; }
+        if (ft >= 1.0f) { ft = 0.999f; }
+    }
+    u = (int)(fs * (float)(sw->tex_w - 1) + 0.5f);
+    v = (int)(ft * (float)(sw->tex_h - 1) + 0.5f);
+    if (u < 0) { u = 0; }
+    if (u >= sw->tex_w) { u = sw->tex_w - 1; }
+    if (v < 0) { v = 0; }
+    if (v >= sw->tex_h) { v = sw->tex_h - 1; }
+    p = sw->tex + ((nj_size)v * (nj_size)sw->tex_w + (nj_size)u) *
+                  (nj_size)sw->tex_bpp;
+    if (sw->tex_bpp == 4) {
+        tr = p[0]; tg = p[1]; tb = p[2];
+    } else {
+        tr = p[0]; tg = p[1]; tb = p[2];
+    }
+    /* MODULATE: the texture is the colour, the material tints it. */
+    return 0xFF000000u
+         | (((tr * ((argb >> 16) & 0xFFu)) / 255u) << 16)
+         | (((tg * ((argb >> 8) & 0xFFu)) / 255u) << 8)
+         | ((tb * (argb & 0xFFu)) / 255u);
+}
+
+static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
+                    const float st[6], int has_tex, nj_u4 argb)
+{
+    float x0 = xy[0], y0 = xy[1], x1 = xy[2], y1 = xy[3], x2 = xy[4], y2 = xy[5];
+    float area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+    float ia;
+    int cull = sw->cull ? sw->cull : M3G_SW_BACK;
+    int wind = sw->winding ? sw->winding : M3G_SW_CCW;
+    int back, minx, maxx, miny, maxy, px, py;
+    float e0, e1, e2, g, h, k;
+    float dxe0, dye0, dxe1, dye1, dxe2, dye2, dxg, dyg, dxh, dyh, dxk, dyk;
+    nj_u4 *dst;
+    nj_u4 drawn = 0u;
+
+    if (!sw->surf || !sw->z || !sw->surf->pixels) {
+        return 0u;
+    }
+    if (sw->surf->format != NJ_PIXFMT_ARGB8888) {
+        return 0u;
+    }
+    if (area == 0.0f) {
+        return 0u;
+    }
+    /* In NDC (y up) the JSR's front face is counter-clockwise; the
+       projection flips y for the screen, so a front face has a NEGATIVE
+       signed area here.  tests/m3gdemo pins both directions: the triangle it
+       renders is front-facing and must appear, and the same triangle with
+       two of its vertices swapped is back-facing and must not. */
+    back = (wind == M3G_SW_CCW) ? (area > 0.0f) : (area < 0.0f);
+    if ((cull == M3G_SW_BACK && back) || (cull == M3G_SW_FRONT && !back)) {
+        return 0u;
+    }
+    ia = 1.0f / area;
+    minx = (int)floorf(x0 < x1 ? (x0 < x2 ? x0 : x2) : (x1 < x2 ? x1 : x2));
+    maxx = (int)ceilf(x0 > x1 ? (x0 > x2 ? x0 : x2) : (x1 > x2 ? x1 : x2));
+    miny = (int)floorf(y0 < y1 ? (y0 < y2 ? y0 : y2) : (y1 < y2 ? y1 : y2));
+    maxy = (int)ceilf(y0 > y1 ? (y0 > y2 ? y0 : y2) : (y1 > y2 ? y1 : y2));
+    if (minx < sw->vx) { minx = sw->vx; }
+    if (miny < sw->vy) { miny = sw->vy; }
+    if (maxx > sw->vx + sw->vw - 1) { maxx = sw->vx + sw->vw - 1; }
+    if (maxy > sw->vy + sw->vh - 1) { maxy = sw->vy + sw->vh - 1; }
+    if (minx > maxx || miny > maxy) {
+        return 0u;
+    }
+    dst = (nj_u4 *)sw->surf->pixels;
+    /* The edge functions are evaluated once per scanline and then stepped
+       by a constant, which is what makes this affordable: a triangle that
+       covers a third of a 240x320 screen used to cost three multiplies per
+       pixel per edge.  The same trick covers the interpolation - s/w, t/w
+       and 1/w are all linear in screen space, so each is one accumulator
+       and one add per pixel. */
+    dxe0 = -(y1 - y0); dye0 = (x1 - x0);
+    dxe1 = -(y2 - y1); dye1 = (x2 - x1);
+    dxe2 = -(y0 - y2); dye2 = (x0 - x2);
+    e0 = (x1 - x0) * ((float)miny + 0.5f - y0) - (y1 - y0) * ((float)minx + 0.5f - x0);
+    e1 = (x2 - x1) * ((float)miny + 0.5f - y1) - (y2 - y1) * ((float)minx + 0.5f - x1);
+    e2 = (x0 - x2) * ((float)miny + 0.5f - y2) - (y0 - y2) * ((float)minx + 0.5f - x2);
+    /* 1/w and the two texture coordinates, in the same stepping scheme. */
+    g = e1 * inv[0] + e2 * inv[1] + e0 * inv[2];
+    h = e1 * st[0] * inv[0] + e2 * st[2] * inv[1] + e0 * st[4] * inv[2];
+    k = e1 * st[1] * inv[0] + e2 * st[3] * inv[1] + e0 * st[5] * inv[2];
+    dxg = dxe1 * inv[0] + dxe2 * inv[1] + dxe0 * inv[2];
+    dyg = dye1 * inv[0] + dye2 * inv[1] + dye0 * inv[2];
+    dxh = dxe1 * st[0] * inv[0] + dxe2 * st[2] * inv[1] + dxe0 * st[4] * inv[2];
+    dyh = dye1 * st[0] * inv[0] + dye2 * st[2] * inv[1] + dye0 * st[4] * inv[2];
+    dxk = dxe1 * st[1] * inv[0] + dxe2 * st[3] * inv[1] + dxe0 * st[5] * inv[2];
+    dyk = dye1 * st[1] * inv[0] + dye2 * st[3] * inv[1] + dye0 * st[5] * inv[2];
+    for (py = miny; py <= maxy; py++) {
+        float r0 = e0, r1 = e1, r2 = e2, rg = g, rh = h, rk = k;
+        float sgn = (area > 0.0f) ? 1.0f : -1.0f;
+        float lo = (float)minx, hi = (float)maxx;
+        int xl, xr, i;
+        nj_size o;
+        nj_u4 *drow;
+        int empty = 0;
+
+        /* The span this scanline's three edges allow, solved directly
+           instead of testing every pixel of the bounding box: each edge is
+           linear in x, so "on the inside" is one bound per edge. */
+        for (i = 0; i < 3; i++) {
+            float w = sgn * (i == 0 ? r0 : (i == 1 ? r1 : r2));
+            float d = sgn * (i == 0 ? dxe0 : (i == 1 ? dxe1 : dxe2));
+
+            if (d > 0.0f) {
+                float x = (float)minx + (-w) / d;
+                if (x > lo) { lo = x; }
+            } else if (d < 0.0f) {
+                float x = (float)minx + w / (-d);
+                if (x < hi) { hi = x; }
+            } else if (w < 0.0f) {
+                empty = 1;
+            }
+        }
+        if (!empty) {
+            xl = (int)ceilf(lo - 0.5f);
+            xr = (int)floorf(hi - 0.5f);
+            if (xl < minx) { xl = minx; }
+            if (xr > maxx) { xr = maxx; }
+            if (xl > xr) { empty = 1; }
+        }
+        if (!empty) {
+            float skip = (float)(xl - minx);
+            float pg = rg + dxg * skip;
+            float ph = rh + dxh * skip, pk = rk + dxk * skip;
+
+            o = (nj_size)(py - sw->vy) * (nj_size)sw->vw + (nj_size)(xl - sw->vx);
+            drow = dst + (nj_size)py * (nj_size)sw->surf->width + (nj_size)xl;
+            for (px = xl; px <= xr; px++, o++, drow++, pg += dxg, ph += dxh,
+                     pk += dxk) {
+                nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
+
+                if (key <= 0 || key <= sw->z[o]) {
+                    continue;
+                }
+                sw->z[o] = key;
+                if (has_tex) {
+                    *drow = sw_texel(sw, ph / pg, pk / pg, argb);
+                } else {
+                    *drow = argb;
+                }
+                drawn = 1u;
+            }
+        }
+        e0 += dye0; e1 += dye1; e2 += dye2;
+        g += dyg; h += dyh; k += dyk;
+    }
+    return drawn;
+}
+
 /*
  * The JSR's render(VertexBuffer, IndexBuffer, Appearance, Transform, int) is
  * the path a modern title uses: the camera, the viewport and the target come
@@ -6540,19 +6801,25 @@ typedef struct {
     m3g_java_target jt;
     nj_u4 dif;
     nj_u4 drawn;
+    m3g_sw sw;                    /* the target surface, when reachable */
+    const nj_s2 *tpos;            /* texture coordinates, unit 0 */
+    nj_s4 tcomp, tfirst, tcount, ttype;
 } m3g_jr;
 
-static void jr_vertex(m3g_jr *r, nj_u4 v, float xy[2])
+static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2])
 {
     float p[4];
+    float ww;
     nj_u4 k;
     const nj_s2 *s;
 
+    inv[0] = 0.0f;
+    st[0] = st[1] = 0.0f;
     p[0] = p[1] = p[2] = 0.0f;
     p[3] = 1.0f;
     if (!r->pos || v >= (nj_u4)r->pcount) {
         xy[0] = xy[1] = 0.0f;
-        return;
+        return 0;
     }
     s = r->pos + ((nj_size)r->pfirst + (nj_size)v) * (nj_size)r->pcomp;
     for (k = 0u; k < 4u && k < (nj_u4)r->pcomp; k++) {
@@ -6563,7 +6830,22 @@ static void jr_vertex(m3g_jr *r, nj_u4 v, float xy[2])
         if (r->ptype == 2) { raw = (float)(raw / 65536.0f); }
         p[k] = raw * r->pfac + r->pbias[k];
     }
+    /* The clip-space w: the depth buffer keeps its reciprocal, because 1/w
+       is what interpolates linearly across a projected triangle. */
+    ww = r->mvp[3] * p[0] + r->mvp[7] * p[1] + r->mvp[11] * p[2] + r->mvp[15];
+    if (ww > 1.0e-6f) { inv[0] = 1.0f / ww; }
     nj_m3g_project(r->mvp, p, r->vw, r->vh, xy);
+    if (r->tpos && v < (nj_u4)r->tcount && r->tcomp >= 2) {
+        const nj_s2 *q = r->tpos +
+            ((nj_size)r->tfirst + (nj_size)v) * (nj_size)r->tcomp;
+        float su = (float)q[0];
+        float tv = (float)q[1];
+
+        if (r->ttype == 2) { su /= 65536.0f; tv /= 65536.0f; }
+        st[0] = su;
+        st[1] = tv;
+    }
+    return 1;
 }
 
 static nj_u4 jr_colour(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
@@ -6571,7 +6853,7 @@ static nj_u4 jr_colour(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
     nj_u4 i;
 
     if (r->dif != 0xFFFFFFFFu) {
-        return r->dif;
+        return r->dif | 0xFF000000u;   /* a material colour is opaque */
     }
     if (!r->col || r->ccomp < 4) {
         return 0xFFFFFFFFu;
@@ -6598,15 +6880,27 @@ static nj_u4 jr_colour(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
 
 static void jr_triangle(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
 {
-    float xy[6];
+    float xy[6], inv[3], st[6];
+    nj_u4 argb;
 
     if (a == b || b == c || a == c) {
         return;                    /* a degenerate triangle draws nothing */
     }
-    jr_vertex(r, a, xy + 0);
-    jr_vertex(r, b, xy + 2);
-    jr_vertex(r, c, xy + 4);
-    if (emit_to_java(&r->jt, xy, jr_colour(r, a, b, c)) != 0u) {
+    if (!jr_vertex(r, a, xy + 0, &inv[0], st + 0) ||
+        !jr_vertex(r, b, xy + 2, &inv[1], st + 2) ||
+        !jr_vertex(r, c, xy + 4, &inv[2], st + 4)) {
+        return;
+    }
+    argb = jr_colour(r, a, b, c);
+    if (r->sw.surf) {
+        /* The rasteriser writes the pixels: depth, texture, culling. */
+        if (sw_tri(&r->sw, xy, inv, st, r->sw.tex != NULL && r->tpos != NULL,
+                   argb) != 0u) {
+            r->drawn++;
+        }
+        return;
+    }
+    if (emit_to_java(&r->jt, xy, argb) != 0u) {
         r->drawn++;
     }
 }
@@ -6620,7 +6914,14 @@ static void jr_strip(m3g_jr *r, const nj_s4 *idx, nj_s4 count, nj_s4 first)
         nj_s4 v1 = idx ? idx[i + 1] : (first + i + 1);
         nj_s4 v2 = idx ? idx[i + 2] : (first + i + 2);
 
-        jr_triangle(r, (nj_u4)v0, (nj_u4)v1, (nj_u4)v2);
+        /* A strip walks its vertices in order, so consecutive triangles come
+           out with OPPOSITE winding unless the odd ones swap their first two
+           vertices - which is exactly what a strip rasteriser does. */
+        if (i & 1) {
+            jr_triangle(r, (nj_u4)v1, (nj_u4)v0, (nj_u4)v2);
+        } else {
+            jr_triangle(r, (nj_u4)v0, (nj_u4)v1, (nj_u4)v2);
+        }
     }
 }
 
@@ -6646,6 +6947,7 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
     const nj_s4 *idx = NULL, *lens = NULL;
     nj_s4 nstrip = 0;
     float view[16], proj[16], model[16];
+    nj_surface sc;
     m3g_jr r;
 
     if (!vm || !self || !vb) {
@@ -6685,6 +6987,37 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
         r.vx = r.vy = 0;
         r.vw = tw;
         r.vh = th;
+    }
+
+    /* The surface the pixels go into.  nj_midp_surface() answers the whole
+       image, or the screen for a null target; the Java call stays the
+       fallback for a target this cannot reach. */
+    memset(&r.sw, 0, sizeof(r.sw));
+    {
+        const char *tcn = nj_ref_class_name(target);
+        nj_ref img = 0;
+        nj_surface *s;
+
+        if (tcn && strcmp(tcn, "javax/microedition/lcdui/Image") == 0) {
+            img = target;
+        } else if (tcn && strcmp(tcn, "javax/microedition/lcdui/Graphics") == 0) {
+            nj_field *gf = nj_field_lookup(vm, "javax/microedition/lcdui/Graphics",
+                                           "gTarget",
+                                           "Ljavax/microedition/lcdui/Image;", 0);
+            if (gf) { img = nj_rget(vm, target, gf); }
+        }
+        s = nj_midp_surface(vm, img, &sc);
+        if (s && r.vx >= 0 && r.vy >= 0 && r.vx + r.vw <= s->width &&
+            r.vy + r.vh <= s->height) {
+            r.sw.surf = s;
+            r.sw.vx = r.vx;
+            r.sw.vy = r.vy;
+            r.sw.vw = r.vw;
+            r.sw.vh = r.vh;
+            if (!sw_depth(vm, self, &r.sw)) {
+                r.sw.surf = NULL;      /* no depth buffer, no depth test */
+            }
+        }
     }
 
     memset(view, 0, sizeof(view));
@@ -6763,6 +7096,68 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
                                          "L" NJ_C_MAT ";")) : 0;
     if (mat) {
         r.dif = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_dif", "I"));
+    }
+
+    /* Texture unit 0 and the polygon mode: a textured title says so in the
+       Appearance, and the PolygonMode is where culling and winding live
+       (the JSR defaults are CULL_BACK and CCW). */
+    r.sw.cull = 0;
+    r.sw.winding = 0;
+    if (app) {
+        nj_ref pm = nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_pm",
+                                             "L" NJ_C_POLY ";"));
+
+        if (pm) {
+            r.sw.cull = (int)nj_iget(vm, pm,
+                          m3g_fof(vm, NJ_C_POLY, "_nj_culling", "I"));
+            r.sw.winding = (int)nj_iget(vm, pm,
+                             m3g_fof(vm, NJ_C_POLY, "_nj_winding", "I"));
+        }
+        {
+            nj_ref tex = nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_tex0",
+                                                  "L" NJ_C_TEX2D ";"));
+            if (tex) {
+                nj_ref im2 = nj_rget(vm, tex, m3g_fof(vm, NJ_C_TEX2D, "_nj_img",
+                                                      "L" NJ_C_IMAGE2D ";"));
+                r.sw.wrap_s = (int)nj_iget(vm, tex,
+                               m3g_fof(vm, NJ_C_TEX2D, "_nj_wrapS", "I"));
+                r.sw.wrap_t = (int)nj_iget(vm, tex,
+                               m3g_fof(vm, NJ_C_TEX2D, "_nj_wrapT", "I"));
+                if (im2) {
+                    nj_ref px = nj_rget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
+                                                         "_nj_pixels", "[B"));
+                    nj_s4 fmt = nj_iget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
+                                                         "_nj_fmt", "I"));
+
+                    r.sw.tex_w = (int)nj_iget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
+                                                               "_nj_w", "I"));
+                    r.sw.tex_h = (int)nj_iget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
+                                                               "_nj_h", "I"));
+                    if (px && r.sw.tex_w > 0 && r.sw.tex_h > 0 &&
+                        (fmt == 99 || fmt == 100)) {
+                        r.sw.tex = (const nj_u1 *)nj_array_data(px);
+                        r.sw.tex_bpp = (fmt == 100) ? 4 : 3;
+                    }
+                }
+            }
+        }
+    }
+
+    /* Texture coordinates, unit 0.  The JSR's per-unit scale and bias are
+       not applied yet; the arrays titles ship already carry the mapping. */
+    r.tpos = NULL;
+    r.tcomp = r.tfirst = r.tcount = r.ttype = 0;
+    d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_tex0", "L" NJ_C_VARR ";"));
+    if (d) {
+        nj_ref td = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+
+        if (td) {
+            r.tpos   = (const nj_s2 *)nj_array_data(td);
+            r.tcomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
+            r.tfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
+            r.tcount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+            r.ttype  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
+        }
     }
 
     /* The index buffer.  A TriangleStripArray carries strip lengths; a plain

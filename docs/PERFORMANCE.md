@@ -547,3 +547,35 @@ result - `bench.jar` allocates and dispatches, it does not call the library, so
 it cannot see any of this.  A change that makes games faster while leaving the
 fixture where it was is exactly why the corpus titles are the workload that
 matters here.
+
+## The 3D rasteriser: 5.5x slower than the thing it replaced, then 2.3x
+
+The first version of `Graphics3D.render(VertexBuffer, ...)` drew every triangle
+by calling the target `Graphics.fillTriangle` through the interpreter.  That is
+cheap per triangle and flat-shaded, and it cannot do a depth buffer, a texture
+or back-face culling at all, so it was replaced by a rasteriser that writes the
+target's pixels itself.  The first honest measurement of the replacement was
+bad, and worth recording: on one machine, 4,000 overlapping triangles into a
+240x320 target took
+
+| version | ms for 4,000 triangles |
+| --- | --- |
+| `Graphics.fillTriangle` path (flat, no depth, no texture) | 18 |
+| software rasteriser, first version | 180 |
+| + incremental edge functions instead of per-pixel multiplies | 99 |
+| + solving each scanline's span instead of testing the bounding box | 41 |
+
+The last two are the whole story of writing a filler that is worth having.
+Evaluating the three edge functions per pixel costs three multiplies per pixel
+per edge, and about half the pixels in a triangle's bounding box are outside
+the triangle anyway; both go away when the edges are stepped by a constant and
+each scanline's span is solved directly (each edge is linear in x, so "inside"
+is one bound per edge).  The final version is 2.3x the cost of the path it
+replaced and does three things that path could not do at all.
+
+The benchmark is not a fixture check - it would be a timing assertion, and
+those rot.  It is a mode of the existing fixture, run by hand:
+`nj2me --port headless --heap 16 --size 240x320 --fps 0 --run-frames 10
+--prop nj2me.bench=4000 tests/fixtures/m3gdemo.jar` prints
+`M3G BENCH triangles=4000 ms=41`.  The same jar on the older binary is the
+other arm, which is how the table above was produced.

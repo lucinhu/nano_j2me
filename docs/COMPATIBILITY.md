@@ -638,8 +638,8 @@ Most of them were a line or two.  The lesson is the one this file keeps
 recording: a member that exists can still be a member that lies, and only a
 caller that uses the answer finds out.
 
-The fixture prints `M3G checks=110 failures=0` since the rasteriser round below
-added two checks that read pixels back off the target.
+The fixture prints `M3G checks=122 failures=0` since the rasteriser round below
+added checks that read pixels back off the target (depth, culling, texture).
 
 ### The geometry reaches the target
 
@@ -658,18 +658,64 @@ SHORT or FIXED (the last divided by 65536) with the `setPositions` scale and
 bias applied; the fill colour is the appearance's `Material.DIFFUSE` when there
 is one and the average of the per-vertex colours otherwise; indices come from an
 explicit `IndexBuffer`, from a `TriangleStripArray`'s strip lengths, or from
-consecutive vertex triples.  There is no depth buffer, no back-face culling, no
-texture mapping, no perspective-correct interpolation and no lighting: the
-triangle's colour is flat, so a textured level renders as coloured polygons.
-The `--stats` line carries `tris=` so a title can be checked for it, and
-`tests/m3gdemo/M3GDemo.java` asserts two pixels of a rendered triangle and two
-of a strip.
+consecutive vertex triples.  The `--stats` line carries `tris=` so a title can
+be checked for it, and `tests/m3gdemo/M3GDemo.java` asserts the pixels of a
+rendered triangle and of a strip.
+
+That first version drew through the target's `Graphics.fillTriangle`, one
+interpreter round trip per triangle and a flat colour per triangle: no depth,
+no texture, no culling.  It has since been replaced by a rasteriser that writes
+the target's pixels itself - see the next section.
 
 One real bug came out of wiring it: `new TriangleStripArray(indices,
 stripLengths)` stored the **indices** array as the strip lengths (the
 constructor's arguments were swapped), so every strip was one vertex long and
 no triangle was ever assembled.  `tests/test_m3g.c` had encoded the same
 mistake, which is why it passed.
+
+### The rasteriser: depth, texture, culling
+
+`Graphics3D.render(VertexBuffer, ...)` now rasterises into the target surface
+itself (`nj_midp_surface()` answers an ARGB8888 view of an `Image`, or the
+screen when the target is a `Graphics` for the display), which is what makes
+the three things a flat `fillTriangle` cannot express possible:
+
+- **A depth buffer per target.**  Four fields on the `Graphics3D`
+  (`_nj_zbuf`, `_nj_zw`, `_nj_zh`, `_nj_zframe`) hold a Java `int[]` of
+  `1/w * 65536`, so **larger is nearer** and a freshly allocated (all zero)
+  array already means "nothing has been drawn here" - the right initial state
+  for free.  It is cleared once per frame and reset at `bindTarget`, because
+  the depth buffer belongs to the target the way the viewport does.  The
+  fixture renders two triangles three units apart in z in both draw orders and
+  requires the nearer colour both times; without the test the far triangle wins
+  when it is drawn second.
+- **Perspective-correct texture mapping.**  Unit 0 of the `Appearance`:
+  nearest sampling, `WRAP_REPEAT` (the default) or `WRAP_CLAMP`, `MODULATE`
+  with the material colour.  s/w and t/w are interpolated and divided by the
+  interpolated 1/w.  The fixture renders a 2x2 texture with a different colour
+  at each corner and reads three pixels back.
+- **Back-face culling** from the appearance's `PolygonMode` (default
+  `CULL_BACK`, winding `WINDING_CCW`).  The sign convention is worth writing
+  down because it is easy to get backwards: the JSR's front face is
+  counter-clockwise in NDC (y up), and this projection flips y for the screen,
+  so a **front face has a negative screen-space signed area**.  The first
+  version had it inverted and culled exactly the wrong triangles; the fixture
+  now pins both directions, and `CULL_NONE` must draw the same triangle.
+  A triangle strip alternates winding between its triangles, so the strip
+  walker swaps the first two vertices of its odd triangles.
+
+What is still honest about it: no lighting, no Gouraud shading (a triangle is
+flat-coloured, or the average of its vertex colours), no fog, no alpha blending
+inside the rasteriser (an opaque write), no mipmaps and no bilinear filtering.
+None of the collected 3D titles reaches a lit or blended scene yet, so this is
+the part to grow next.
+
+A bug the fixture caught immediately, and the kind that only a pixel test
+finds: the three edge functions were paired with the wrong vertices.  Each edge
+function skips one vertex, so `e0` is the weight of `v2`, `e1` of `v0` and
+`e2` of `v1`; using them in order rotated every vertex's colour and texture
+coordinate onto its neighbour.  The triangle still covered the right pixels and
+still had the right depth, so only the texture corners gave it away.
 
 ### Three more things between a 3D title and its first frame
 

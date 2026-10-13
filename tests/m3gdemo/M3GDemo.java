@@ -432,8 +432,12 @@ public class M3GDemo extends MIDlet {
                 Graphics3D g3d = Graphics3D.getInstance();
                 VertexBuffer vb = new VertexBuffer();
                 VertexArray pos = new VertexArray(4, 3, 2);
-                pos.set(0, 4, new short[] { -2, 2, -5, 2, 2, -5,
-                                            -2, -2, -5, 2, -2, -5 });
+                /* Wound the way the JSR calls a front face (counter-
+                 * clockwise seen from the camera): a strip keeps that
+                 * winding by swapping the first two vertices of its odd
+                 * triangles, which is how the rasteriser walks it. */
+                pos.set(0, 4, new short[] { -2, 2, -5, -2, -2, -5,
+                                            2, 2, -5, 2, -2, -5 });
                 vb.setPositions(pos, 1.0f, null);
                 IndexBuffer ib = new TriangleStripArray(
                         new int[] { 0, 1, 2, 3 }, new int[] { 4 });
@@ -536,6 +540,179 @@ public class M3GDemo extends MIDlet {
             }
         });
 
+        /* A depth buffer: two triangles over the same pixels three units
+         * apart in z, drawn far first and then near first.  The nearer
+         * colour must be on screen both times - that is what a depth test
+         * buys, and without one the second render would always win. */
+        run("the depth buffer keeps the nearer triangle", new Runnable() {
+            public void run() {
+                int[] px = new int[1];
+
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                VertexBuffer near = tri(-2, -2, -5, 2, -2, -5, 0, 2, -5);
+                VertexBuffer far = tri(-2, -2, -8, 2, -2, -8, 0, 2, -8);
+                Appearance red = flat(0x00FF0000);
+                Appearance blue = flat(0x000000FF);
+
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(far, null, blue, new Transform());
+                g3d.render(near, null, red, new Transform());
+                g3d.releaseTarget();
+                img.getRGB(px, 0, 1, 16, 16, 1, 1);
+                check("the near triangle wins when it is drawn last",
+                      px[0] == 0xFFFF0000);
+
+                Image img2 = Image.createImage(32, 32);
+                Graphics g2 = img2.getGraphics();
+                g2.setColor(0x000000);
+                g2.fillRect(0, 0, 32, 32);
+                g3d.bindTarget(g2);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(near, null, red, new Transform());
+                g3d.render(far, null, blue, new Transform());
+                g3d.releaseTarget();
+                img2.getRGB(px, 0, 1, 16, 16, 1, 1);
+                check("the depth buffer does not depend on the draw order",
+                      px[0] == 0xFFFF0000);
+            }
+        });
+
+        /* Back-face culling: the same triangle with its first two vertices
+         * swapped faces away from the camera, so it is not drawn - unless
+         * the PolygonMode asks for CULL_NONE, which must then draw it. */
+        run("a back-facing triangle is culled unless asked for", new Runnable() {
+            public void run() {
+                int[] px = new int[1];
+
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                VertexBuffer back = tri(2, -2, -5, -2, -2, -5, 0, 2, -5);
+                Appearance red = flat(0x00FF0000);
+
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(back, null, red, new Transform());
+                g3d.releaseTarget();
+                img.getRGB(px, 0, 1, 16, 16, 1, 1);
+                check("a back-facing triangle draws nothing",
+                      px[0] == 0xFF000000);
+
+                PolygonMode pm = new PolygonMode();
+                pm.setCulling(PolygonMode.CULL_NONE);
+                red.setPolygonMode(pm);
+                Image img2 = Image.createImage(32, 32);
+                Graphics g2 = img2.getGraphics();
+                g2.setColor(0x000000);
+                g2.fillRect(0, 0, 32, 32);
+                g3d.bindTarget(g2);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(back, null, red, new Transform());
+                g3d.releaseTarget();
+                img2.getRGB(px, 0, 1, 16, 16, 1, 1);
+                check("CULL_NONE draws the same triangle",
+                      px[0] == 0xFFFF0000);
+            }
+        });
+
+        /* Texture mapping: a 2x2 RGB texture whose four texels are red,
+         * green, blue and white.  The triangle's texture coordinates put
+         * each corner on a different texel, so the pixels say which texel
+         * the sampler picked - the material is white, so it cannot be the
+         * colour that made them. */
+        run("a textured triangle samples the texture", new Runnable() {
+            public void run() {
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                Image2D image = new Image2D(Image2D.RGB, 2, 2, new byte[] {
+                    (byte) 255, 0, 0,  0, (byte) 255, 0,
+                    0, 0, (byte) 255,  (byte) 255, (byte) 255, (byte) 255 });
+                Appearance app = new Appearance();
+                Material mat = new Material();
+                mat.setColor(Material.DIFFUSE, 0x00FFFFFF);
+                app.setMaterial(mat);
+                app.setTexture(0, new Texture2D(image));
+
+                VertexBuffer vb = new VertexBuffer();
+                VertexArray pos = new VertexArray(3, 3, 2);
+                pos.set(0, 3, new short[] { -2, -2, -5, 2, -2, -5, 0, 2, -5 });
+                vb.setPositions(pos, 1.0f, null);
+                VertexArray tc = new VertexArray(3, 2, 2);
+                tc.set(0, 3, new short[] { 0, 0, 1, 0, 0, 1 });
+                vb.setTexCoords(0, tc, 1.0f, null);
+
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(vb, null, app, new Transform(), -1);
+                g3d.releaseTarget();
+
+                int[] red = new int[1];
+                int[] blue = new int[1];
+                img.getRGB(red, 0, 1, 10, 21, 1, 1);
+                /* The apex is the third vertex: (0, 2, -5) divides through
+                 * w = 5 and projects to (16, 12.9) in the 32x32 viewport -
+                 * not to (16, 0) or (12, 0), which is what the first two
+                 * versions of this check assumed. */
+                img.getRGB(blue, 0, 1, 16, 14, 1, 1);
+                int[] green = new int[1];
+                img.getRGB(green, 0, 1, 21, 22, 1, 1);
+                check("the texel at (0,0) is the colour at that corner",
+                      red[0] == 0xFFFF0000);
+                check("the texel at (0,1) is the colour at that corner",
+                      blue[0] == 0xFF0000FF);
+                check("the texel at (1,0) is the colour at that corner",
+                      green[0] == 0xFF00FF00);
+            }
+        });
+
+        /* A benchmark mode, not a check: with -Dnj2me.bench=<n> the same
+         * triangle is rendered n times into a target and the elapsed time
+         * is printed, so the two render paths can be compared on one
+         * machine.  It prints and returns; it never fails the fixture. */
+        if (System.getProperty("nj2me.bench") != null) {
+            int n = Integer.parseInt(System.getProperty("nj2me.bench"));
+            Image img = Image.createImage(240, 320);
+            Graphics g = img.getGraphics();
+            g.setColor(0x000000);
+            g.fillRect(0, 0, 240, 320);
+
+            Graphics3D g3d = Graphics3D.getInstance();
+            VertexBuffer vb = new VertexBuffer();
+            VertexArray pos = new VertexArray(3, 3, 2);
+            pos.set(0, 3, new short[] { -40, -40, -80, 40, -40, -80, 0, 40, -80 });
+            vb.setPositions(pos, 1.0f, null);
+            Appearance app = flat(0x00336699);
+
+            g3d.bindTarget(g);
+            g3d.setViewport(0, 0, 240, 320);
+            g3d.setCamera(new Camera(), new Transform());
+            long t0 = System.currentTimeMillis();
+            for (int i = 0; i < n; i++) {
+                g3d.render(vb, null, app, new Transform(), -1);
+            }
+            long ms = System.currentTimeMillis() - t0;
+            g3d.releaseTarget();
+            System.out.println("M3G BENCH triangles=" + n + " ms=" + ms);
+        }
+
         run("Loader.load of a resource the suite does not have", new Runnable() {
             public void run() {
                 try {
@@ -546,6 +723,29 @@ public class M3GDemo extends MIDlet {
                 }
             }
         });
+    }
+
+    /* An Appearance whose material is one opaque colour. */
+    private static Appearance flat(int rgb) {
+        Appearance app = new Appearance();
+        Material mat = new Material();
+        mat.setColor(Material.DIFFUSE, rgb);
+        app.setMaterial(mat);
+        return app;
+    }
+
+    /* A VertexBuffer holding one triangle, wound the way the JSR calls a
+     * front face (counter-clockwise seen from the camera). */
+    private static VertexBuffer tri(float x0, float y0, float z0,
+                                    float x1, float y1, float z1,
+                                    float x2, float y2, float z2) {
+        VertexBuffer vb = new VertexBuffer();
+        VertexArray pos = new VertexArray(3, 3, 2);
+        pos.set(0, 3, new short[] { (short) x0, (short) y0, (short) z0,
+                                    (short) x1, (short) y1, (short) z1,
+                                    (short) x2, (short) y2, (short) z2 });
+        vb.setPositions(pos, 1.0f, null);
+        return vb;
     }
 
     protected void pauseApp() {
