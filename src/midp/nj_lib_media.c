@@ -2662,6 +2662,26 @@ nj_status nj_media_late_init(nj_vm *vm)
     nj_media_const_str(vm, NJ_C_MANAGER, "TONE_DEVICE_LOCATOR", "tone://");
 
     /*
+     * MIDIControl's two constants.  176 is the MIDI "control change" status
+     * nibble and 144 the "note on" one; a MIDlet that builds an event by hand
+     * writes `MIDIControl.CONTROL_CHANGE | channel`, so these are not
+     * decorative.
+     */
+    {
+        static const struct { const char *n; nj_s4 v; } mc[] = {
+            { "CONTROL_CHANGE", 176 },
+            { "NOTE_ON", 144 }
+        };
+        unsigned mi;
+        for (mi = 0u; mi < sizeof(mc) / sizeof(mc[0]); mi++) {
+            nj_field *f = nj_field_lookup(vm, NJ_C_MIDICTL, mc[mi].n, "I", 1);
+            if (f) {
+                nj_field_write_int(vm, NULL, f, mc[mi].v);
+            }
+        }
+    }
+
+    /*
      * The Player STATE constants.  They were declared as fields and never
      * given values, so every one of them read 0 - which meant a MIDlet's
      * `p.getState() == Player.STARTED` compared against 0 and a
@@ -2784,6 +2804,18 @@ static const nj_builtin_field ctl_fields[] = {
     FLD(F_C_OWNER, "L" NJ_C_PLAYER ";", 0)
 };
 
+/*
+ * The two constants a MIDlet may read off a MIDIControl.  JSR 135 defines
+ * them, the stubs declare them, and a field the runtime does not have is a
+ * NoSuchFieldError naming a descriptor the MIDlet never wrote - which is
+ * exactly what tests/gen_const_fixture.py exists to catch.  The values are
+ * written in nj_media_late_init().
+ */
+static const nj_builtin_field midictl_fields[] = {
+    FLD("CONTROL_CHANGE", "I", NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("NOTE_ON",        "I", NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
 static const nj_builtin_method manager_methods[] = {
     M("createPlayer", "(Ljava/io/InputStream;Ljava/lang/String;)L"
       NJ_C_PLAYER ";", NJ_ACC_STATIC),
@@ -2893,8 +2925,8 @@ const nj_builtin_class nj_lib_media_classes[] = {
       (nj_u2)(sizeof(ctl_fields) / sizeof(ctl_fields[0])), volume_methods,
       (nj_u2)(sizeof(volume_methods) / sizeof(volume_methods[0])) },
     { NJ_C_MIDICTL, "java/lang/Object", NJ_ACC_PUBLIC,
-      ctl_fields,
-      (nj_u2)(sizeof(ctl_fields) / sizeof(ctl_fields[0])), midictl_methods,
+      midictl_fields,
+      (nj_u2)(sizeof(midictl_fields) / sizeof(midictl_fields[0])), midictl_methods,
       (nj_u2)(sizeof(midictl_methods) / sizeof(midictl_methods[0])) },
     NJ_MEDIA_EXC(NJ_C_MEXC, "java/lang/Exception")
     /* A sentinel keeps the array non-empty for tooling that assumes arrays
