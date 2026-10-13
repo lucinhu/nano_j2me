@@ -415,6 +415,18 @@ if(NJ_BUILD_TESTS)
   set_tests_properties(fixtures_present PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
+  # The Android port's plain-Java decisions on a desktop JVM: the keypad's
+  # press semantics (a keycap presses with the touch that lands on it, releases
+  # when the finger slides off) and the name a game is shown under (the
+  # MIDlet's own name, not the file's).  A JDK is the whole requirement - no
+  # SDK, no device - so this runs wherever the tests do.
+  if(NJ_JAVAC)
+    add_test(NAME check_android_java
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_android_java.sh)
+    set_tests_properties(check_android_java PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 180)
+  endif()
+
   # ---- helper: one test executable, linked against the runtime ----
   function(nj_add_test name source)
     add_executable(${name} ${source})

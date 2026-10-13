@@ -272,14 +272,60 @@ Five details are Android-specific and each one cost a debugging session:
   immersive-fullscreen replacement (`WindowInsetsController`, API 30) cannot sit
   in a method that also runs on Android 5: a method whose code mentions a class
   the device does not have can fail verification when its class is loaded, before
-  the `SDK_INT` test is ever reached. It lives in a small nested class
-  (`GameActivity.Bars30`) that only the API 30+ branch touches, and the legacy
-  `SYSTEM_UI_FLAG_*` flags stay for everything older.
+  the `SDK_INT` test is ever reached. It lives in `Ui.java`, which only the API
+  30+ branch touches, and the legacy `SYSTEM_UI_FLAG_*` flags stay there for
+  everything older.
 
 The JNI handle is a `jlong`, not a `static nj_port`, so two games can never share
 state and the library keeps passing `tools/check_no_statics.sh`; the VM runs on
 its own thread which is joined before `nj_port_shutdown()`, and backgrounding
 parks that thread in `idle()` instead of letting it spin against a dead surface.
+
+### The shell around the game
+
+Five things in that shell are worth copying, because each one is a rule a plain
+"put a SurfaceView in an Activity" port gets wrong:
+
+- **The name comes from the jar, not from the file.** `JarName.of(File)` reads
+  `MIDlet-1` (first field), then `MIDlet-Name`, then `MIDlet-2..9` out of the
+  manifest, skipping records that are blank or a bare `-`; `JarStore.read()`
+  makes that the title of the row and of the game that launches from it, and
+  falls back to the file name only when the jar declares nothing. A rename made
+  in the library is stored in the sidecar as `title=` + `titleset=1`, so it wins
+  over the manifest and stays won; a legacy sidecar whose title is just the file
+  name is re-derived instead of being mistaken for a rename. The file name keeps
+  its own line in the list, so nothing becomes un-findable.
+- **A keycap presses when the finger arrives, not when it leaves.** `PadPress`
+  (pure Java, no Android imports) owns that state machine: a finger that lands on
+  a cap presses it immediately, sliding off releases it, sliding onto another cap
+  presses that one, a finger the game has already been told about is handed back
+  to the game when it reaches a cap, and `cancel()` releases every held key
+  exactly once when the control bar opens, the activity pauses or the framework
+  sends `ACTION_CANCEL`. The class is unit-tested off-device, which is the only
+  reason the rules survived the move out of `PadView`.
+- **Layouts are data.** `PadConfig` stores keycaps as fractions of the view
+  (`0..1`, top-left corner) and ships eight presets (`PRESET_IDS`, `byId()`,
+  `presetName()`, `presetHint()`): 方向盘, 数字键盘, 全按键, 横屏双手, 街机双键,
+  极简方向, 手机键盘 and an empty one to build on. Editor and game load the same
+  blob, so a layout tweaked in game is the one the editor opens.
+- **The picture can be moved in every mode.** The port applies zoom and pan on
+  top of whichever fit was chosen - `NJ_VIEW_INT` keeps its integer scale - and
+  publishes how far the pan may go once per frame
+  (`nj_port_android_view_limits`, surfaced as `nativeViewLimits`) because only the
+  blit knows the drawn size. Java clamps to that instead of guessing, so dragging
+  cannot park the picture off-screen and 微调位置 can show the player the limits.
+- **Immersive and the cutout are two different insets.** `Ui.apply()` hides the
+  bars (API 30+ through `WindowInsetsController`, older through
+  `SYSTEM_UI_FLAG_IMMERSIVE_STICKY`) and `Ui.edgeToEdge()` asks for
+  `LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES` on API 28+; `Ui.insets()` then
+  returns the display-cutout safe insets always, but the system-bar insets only
+  while immersive - counting both when the window is already shrunk by the
+  framework reserves the same space twice. `PadConfig.setSafeArea()` +
+  `PadView.setSafeAreaPx()` move a keycap out of a notch band **without touching
+  its stored position**: drawing and hit-testing both go through `rectOf()`, so a
+  key under a camera hole is still where it is drawn, and the editor paints the
+  amber border so the player can see why a key refuses to move further. The
+  library's ⋮ menu owns the switch (`ui`/`immersive`, on by default).
 
 ## Worked example: a bare-metal board
 

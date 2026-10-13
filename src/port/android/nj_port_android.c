@@ -277,8 +277,10 @@ typedef struct android_state {
     float view_off_x, view_off_y;  /* where the picture starts in the window */
     int   view_src_x, view_src_y;  /* first logical pixel drawn */
     int   view_mode;               /* NJ_VIEW_* */
-    float view_zoom;               /* CUSTOM: multiplier on the fit scale */
-    float view_dx, view_dy;        /* CUSTOM: extra offset, window pixels */
+    float view_zoom;               /* multiplier on the fit scale, every mode */
+    float view_dx, view_dy;        /* extra offset, window pixels, every mode */
+    int   view_limits_valid;       /* a frame has published the pan limits */
+    int   view_max_pan_x, view_max_pan_y;  /* how far the pan may reach */
     long  frames_presented;
     int   logged_format;   /* window buffer format already reported to logcat */
 
@@ -784,6 +786,18 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
         s->view_off_y = (float)oy;
         s->view_src_x = sx0;
         s->view_src_y = sy0;
+        /*
+         * How far the pan may go from here, published with the transform so
+         * nj_port_android_view_limits() and the picture agree by construction.
+         * A picture that fits may be parked anywhere inside the window
+         * (half the slack either way); one that does not keeps an edge on the
+         * panel, which is the same number measured from the centre.
+         */
+        s->view_max_pan_x = (buf.width > drawn_w ? buf.width - drawn_w
+                                                 : drawn_w - buf.width) / 2;
+        s->view_max_pan_y = (buf.height > drawn_h ? buf.height - drawn_h
+                                                  : drawn_h - buf.height) / 2;
+        s->view_limits_valid = 1;
         pthread_mutex_unlock(&s->lock);
 
         /*
@@ -2812,11 +2826,13 @@ void nj_port_android_push_event(nj_port *port, const nj_event *ev)
 /*
  * How the game's picture is placed in the window.
  *
- * `mode` is one of the NJ_VIEW_* values in this file; `zoom` is only read in
- * NJ_VIEW_CUSTOM (a multiplier on the fit scale, 1.0 = the default size) and
- * `dx`/`dy` are a pan in window pixels, also only for NJ_VIEW_CUSTOM.  Safe to
- * call at any time from the UI thread: display_present() reads all four under
- * the same mutex it publishes the transform with.
+ * `mode` is one of the NJ_VIEW_* values in this file and decides the base fit;
+ * `zoom` is a multiplier on that fit (1.0 = the default size) and `dx`/`dy`
+ * are a pan in window pixels.  Zoom and pan are the player's in every mode, not
+ * just NJ_VIEW_CUSTOM: moving the picture must not cost the crisp integer
+ * scaling.  Safe to call at any time from the UI thread: display_present()
+ * reads all four under the same mutex it publishes the transform with, and
+ * nj_port_android_view_limits() reports how far a pan may actually go.
  */
 void nj_port_android_set_view(nj_port *port, int mode, float zoom, float dx,
                               float dy)
@@ -2836,6 +2852,39 @@ void nj_port_android_set_view(nj_port *port, int mode, float zoom, float dx,
     s->view_dx = dx;
     s->view_dy = dy;
     pthread_mutex_unlock(&s->lock);
+}
+
+/*
+ * How far the picture may be panned in the mode and zoom now in force, in
+ * window pixels, as *max_x / *max_y.
+ *
+ * display_present() clamps the picture to the panel with exactly these
+ * numbers; the UI clamps the pan it stores with them too, so that a long drag
+ * cannot wind up a pan the player then has to unwind before the picture moves
+ * the other way again.  Returns 0 until a frame has published them, so a pan
+ * restored from the launcher is not clamped against limits nobody measured.
+ */
+int nj_port_android_view_limits(nj_port *port, int *max_x, int *max_y)
+{
+    android_state *s;
+
+    if (!port || !port->ud) {
+        return 0;
+    }
+    s = AS(port->ud);
+    pthread_mutex_lock(&s->lock);
+    if (!s->view_limits_valid) {
+        pthread_mutex_unlock(&s->lock);
+        return 0;
+    }
+    if (max_x) {
+        *max_x = s->view_max_pan_x;
+    }
+    if (max_y) {
+        *max_y = s->view_max_pan_y;
+    }
+    pthread_mutex_unlock(&s->lock);
+    return 1;
 }
 
 /*
@@ -3280,9 +3329,9 @@ Java_com_lucinhu_nj2me_GameActivity_nativeStats(JNIEnv *env, jobject thiz,
 
 /*
  * The player's choice of how the picture sits in the window.  `mode` is one of
- * the NJ_VIEW_* values in include/nj2me/nj_port.h; zoom and the pan are only
- * used by NJ_VIEW_CUSTOM.  Called from the UI thread while the VM runs, which
- * the port handles by taking its own lock.
+ * the NJ_VIEW_* values in include/nj2me/nj_port.h and decides the base fit;
+ * zoom and the pan stay the player's in every mode.  Called from the UI thread
+ * while the VM runs, which the port handles by taking its own lock.
  */
 JNIEXPORT void JNICALL
 Java_com_lucinhu_nj2me_GameActivity_nativeSetView(JNIEnv *env, jobject thiz,
@@ -3296,6 +3345,34 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetView(JNIEnv *env, jobject thiz,
         nj_port_android_set_view(&a->port, (int)mode, (float)zoom, (float)dx,
                                  (float)dy);
     }
+}
+
+/*
+ * How far the pan may reach in the mode and zoom now in force, as
+ * {max_x, max_y}, or NULL before the first frame has been presented.
+ *
+ * The launcher and the game's own 画面 dialog clamp the pan they store with
+ * these numbers, so what the dialog reports is what the player sees.
+ */
+JNIEXPORT jintArray JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeViewLimits(JNIEnv *env, jobject thiz,
+                                                     jlong handle)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    jint vals[2];
+    jintArray arr;
+
+    (void)thiz;
+    if (!a || !nj_port_android_view_limits(&a->port, (int *)&vals[0],
+                                           (int *)&vals[1])) {
+        return NULL;
+    }
+    arr = (*env)->NewIntArray(env, 2);
+    if (!arr) {
+        return NULL;
+    }
+    (*env)->SetIntArrayRegion(env, arr, 0, 2, vals);
+    return arr;
 }
 
 /*
@@ -3542,6 +3619,14 @@ void nj_port_android_set_view(nj_port *port, int mode, float zoom, float dx,
     (void)zoom;
     (void)dx;
     (void)dy;
+}
+
+int nj_port_android_view_limits(nj_port *port, int *max_x, int *max_y)
+{
+    (void)port;
+    (void)max_x;
+    (void)max_y;
+    return 0;
 }
 
 int nj_port_android_detect(const nj_port *port, int out[5])

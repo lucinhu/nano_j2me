@@ -87,6 +87,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private int viewMode = VIEW_INT;
     private float viewZoom = 1.0f;
     private float viewPanX, viewPanY;
+    private int maxPanX, maxPanY;   /* how far the pan may go, from the port */
     private boolean viewDirty;      /* worth writing back to the sidecar */
     private boolean detSaved;       /* the measured resolution is already stored */
     private int detW, detH;
@@ -142,6 +143,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                                              float dx, float dy);
 
     private static native int[] nativeDetect(long handle);
+    private static native int[] nativeViewLimits(long handle);
 
     private static native void nativeQuit(long handle);
 
@@ -518,8 +520,37 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private void applyView() {
         synchronized (lock) {
             if (handle != 0) {
+                clampPan();
                 nativeSetView(handle, viewMode, viewZoom, viewPanX, viewPanY);
             }
+        }
+    }
+
+    /*
+     * The frame loop clamps the picture to the panel; clamping the pan it was
+     * given as well keeps 偏移 in the 画面 dialog honest, and stops a long drag
+     * from winding up an offset the player would have to unwind before the
+     * picture moved back.  Before the first frame there are no limits to clamp
+     * against, so a pan restored from the launcher survives.
+     *
+     * Caller holds `lock`.
+     */
+    private void clampPan() {
+        int[] lim = nativeViewLimits(handle);
+        if (lim == null || lim.length < 2) {
+            return;
+        }
+        maxPanX = lim[0];
+        maxPanY = lim[1];
+        if (viewPanX > maxPanX) {
+            viewPanX = maxPanX;
+        } else if (viewPanX < -maxPanX) {
+            viewPanX = -maxPanX;
+        }
+        if (viewPanY > maxPanY) {
+            viewPanY = maxPanY;
+        } else if (viewPanY < -maxPanY) {
+            viewPanY = -maxPanY;
         }
     }
 
@@ -674,6 +705,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private void nudgeDialog() {
         final int step = Math.max(4,
                 Math.round(Math.min(pad.getWidth(), pad.getHeight()) * 0.02f));
+        /* the port publishes its pan limits with the first drawn frame, so on a
+           freshly opened game they are still zero - ask once more here, or the
+           dialog would claim the picture cannot move at all */
+        if (handle != 0) {
+            clampPan();
+            applyView();
+        }
         LinearLayout grid = new LinearLayout(this);
         grid.setOrientation(LinearLayout.VERTICAL);
         grid.setPadding(dp(12), dp(8), dp(12), dp(8));
@@ -687,6 +725,12 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             { left, centre, right },
             { null, down, null }
         };
+        final TextView info = new TextView(this);
+        info.setTextSize(12f);
+        info.setTextColor(0xFF9AA0A6);
+        info.setPadding(dp(4), 0, dp(4), dp(10));
+        grid.addView(info);
+        updateNudge(info, step);
         for (String[] row : rows) {
             LinearLayout line = new LinearLayout(this);
             line.setOrientation(LinearLayout.HORIZONTAL);
@@ -707,6 +751,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                             viewDirty = true;
                             applyView();
                             saveView();
+                            updateNudge(info, step);
                         }
                     });
                 } else {
@@ -716,6 +761,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                         @Override
                         public void onClick(View v) {
                             nudge(dx, dy);
+                            updateNudge(info, step);
                         }
                     });
                 }
@@ -724,12 +770,24 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             grid.addView(line);
         }
         new android.app.AlertDialog.Builder(this)
-            .setCustomTitle(dialogTitle("微调位置 · 当前偏移 " + panText(),
-                    "每按一次移动 " + step + " 像素（" + viewName(viewMode) + " "
-                            + zoomText() + "）"))
+            .setCustomTitle(dialogTitle("微调位置",
+                    "按方向按钮一点点挪画面，居中把偏移归零"))
             .setView(grid)
             .setNegativeButton("关闭", null)
             .show();
+    }
+
+    /**
+     * The line above the nudge buttons, refreshed after every press.
+     *
+     * "可移动" is what the port reports the picture has left to give: the frame
+     * loop clamps the pan with the same numbers, so a button that would go past
+     * them does nothing and the player can see why.
+     */
+    private void updateNudge(TextView info, int step) {
+        info.setText("每步 " + step + " px · 可移动 ±" + maxPanX + " / ±" + maxPanY
+                + " px\n当前偏移 " + panText() + " · " + viewName(viewMode) + " "
+                + zoomText());
     }
 
     /** A dialog heading with a second, quieter line under it. */
