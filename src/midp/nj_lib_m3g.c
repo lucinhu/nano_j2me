@@ -8344,6 +8344,14 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
             ne[0] = ne[1] = ne[2] = 0.0f;
         }
     }
+    /*
+     * A buffer with no texture coordinates samples the first texel, and the
+     * caller's array is not initialised: writing the zero here is what makes
+     * that true instead of leaving whatever the stack held, which drew the
+     * rally title's track as a moire of unrelated texels.
+     */
+    st[0] = 0.0f;
+    st[1] = 0.0f;
     if (r->tpos && v < (nj_u4)r->tcount && r->tcomp >= 2) {
         const nj_s2 *q = r->tpos +
             ((nj_size)r->tfirst + (nj_size)v) * (nj_size)r->tcomp;
@@ -8989,7 +8997,19 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         r.nlights = (nj_s4)r.lights->length;
     }
     if (!r.lights) { r.nlights = 0; }
-    r.lit = (mat != 0 && r.nrm != NULL && r.ncomp >= 3);
+    /*
+     * Lighting needs a Material, normals, and something to light with.  The
+     * last part is not in the JSR's own condition and it is what the rally
+     * title needs: it never adds a light - it calls neither
+     * Graphics3D.addLight nor anything else that fills the array - so the
+     * lighting equation would leave every one of its meshes at the material's
+     * emissive colour, which is black, and the track would be a silhouette.
+     * With no lights in the scene there is nothing to light with, so the
+     * surface is drawn unlit: its own colours, or the material's diffuse, or
+     * its texture.  That is also the picture a title gets when its buffer
+     * carries no normals, so it is one rule, not two.
+     */
+    r.lit = (mat != 0 && r.nrm != NULL && r.ncomp >= 3 && r.nlights > 0);
     r.fog = 0;
     if (app) {
         nj_ref fog = nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_fog",

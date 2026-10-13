@@ -287,6 +287,38 @@ coordinates, so even with pixels in hand the sampler would have nothing to
 sample by.  That has to be measured before it is written, the way every other
 layout in this file was.
 
+## Two rules the picture needed, and one it still does not have
+
+The first is about lighting and it is a deliberate deviation.  The rally title
+never adds a light: no class of it calls `Graphics3D.addLight` (or anything
+else that fills the light array), yet every one of its meshes carries a
+Material, so the JSR's own condition - a Material plus normals - turned
+lighting on.  With an empty light array the equation leaves the material's
+emissive colour, which is black, and the track was a black silhouette on a
+white sky.  `jr_setup` now requires something to light with as well:
+
+    r.lit = (mat != 0 && r.nrm != NULL && r.ncomp >= 3 && r.nlights > 0);
+
+A scene with no lights is drawn unlit - its own vertex colours, or the
+material's diffuse, or its texture - which is the same picture a buffer with no
+normals already gets, so it is one rule rather than two.  The screenshot after
+it (docs/images/rally3d-track.png is the older one) shows the road as a grey
+band where it was a silhouette.
+
+The second is a bug the same screenshot exposed: `jr_triangle` declares
+`float st[6]` and `jr_vertex` only writes it when the buffer has texture
+coordinates, so a buffer without them sampled whatever the stack held - the
+track came out as a moire of unrelated texels.  `jr_vertex` now writes the zero
+first, so such a buffer samples the first texel, which is what the sampler's
+own guard already assumed.
+
+What is still missing is the texture itself.  The appearance carries a
+Texture2D and its Image2D now has pixels (see below), but the drawn meshes
+report `tpos=0 tcount=0`: they carry no texture coordinates.  The title calls
+`setTexCoords` nowhere, so on a real device those meshes would sample one texel
+too - which is worth confirming against a title that does ship coordinates
+before anything is written for it.
+
 ## What is still missing, and it is one thing
 
 The World path now runs the full pipeline, and the objects it names are
