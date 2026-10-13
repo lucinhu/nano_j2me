@@ -35,9 +35,11 @@ hdr = (b'RIFF' + struct.pack('<I', 36 + len(samples)) + b'WAVE'
 open(sys.argv[1], 'wb').write(hdr + samples)
 PY
 
-# An AMR file, for the port-hook path.  The runtime ships no AMR decoder and
-# says so by name; a port that fills in nj_port.audio_decode plays it instead.
-# The bytes only have to be recognised as AMR by the sniffer.
+# An AMR file.  Four 4.75 kbit/s frames of silence: byte 0 of each frame is the
+# frame header (0x00 = mode 0, 13 bytes on the wire), and the sniffer has to
+# recognise "#!AMR" whether or not anything names it ".amr".  The runtime decodes
+# it itself, so the fixture proves the built-in decoder; a port that fills in
+# nj_port.audio_decode answers first and overrides it.
 { printf '#!AMR\n'; head -c 64 /dev/zero; } > "$WORK/classes/res/tone.amr"
 
 cat > "$WORK/src/snd/AudioDemo.java" <<'JAVA'
@@ -124,7 +126,8 @@ public class AudioDemo extends MIDlet implements PlayerListener {
                 w.deallocate();
                 w.close();
 
-            /* 4. AMR: no decoder in the runtime, so the port hook decides. */
+            /* 4. AMR: the runtime decodes narrowband itself, so this only
+             * reaches the port hook when a port has a decoder of its own. */
             InputStream amr = getClass().getResourceAsStream("/res/tone.amr");
             if (amr == null) {
                 System.out.println("AUDIO amr=missing");

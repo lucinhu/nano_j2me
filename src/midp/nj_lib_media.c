@@ -27,7 +27,12 @@
  * ---------------------------------------------------------------------------
  *   tone    a JSR-135 tone sequence, converted to nj_audio_tone entries and
  *           handed to the port in one call
- *   sampled PCM from a WAV, pushed to the port a frame at a time
+ *   sampled PCM, pushed to the port a frame at a time.  Three containers
+ *           arrive here and they all leave as the same object: a PCM WAV is
+ *           sliced out of its chunk, a MIDI file is rendered by nj_midi.c, and
+ *           an AMR narrowband clip is decoded by nj_amr.c - the two rendered
+ *           formats up front, at createPlayer() time, so that by the time a
+ *           Player exists there is only ever PCM in it.
  *
  * Sampled audio is pushed rather than dumped because a small part has a small
  * device buffer: pcm_write() returns how many frames it took, the rest stays in
@@ -39,13 +44,17 @@
  * WHAT IS NOT IMPLEMENTED
  * ---------------------------------------------------------------------------
  * No streaming protocols (http:// and rtsp:// raise MediaException rather than
- * pretending), no MIDI, no video, no audio capture, and no custom controls
- * beyond ToneControl and VolumeControl.  Realize/prefetch are state transitions
- * with real work behind them (the WAV is parsed at realize) rather than no-ops,
- * because a game that checks getState() must see the truth.
+ * pretending), no MPEG audio, no MP4, no AMR wideband, no video, no audio
+ * capture, and no custom controls beyond ToneControl and VolumeControl.
+ * Realize/prefetch are state transitions with real work behind them (the WAV is
+ * parsed at realize) rather than no-ops, because a game that checks getState()
+ * must see the truth.
  */
 #include "nj_midp.h"
 #include "nj_midi.h"
+#if NJ_ENABLE_AMR
+#  include "nj_amr.h"
+#endif
 
 #if NJ_USE_LIBC
 #  include <string.h>
@@ -872,6 +881,19 @@ static const char *sniff_media(const nj_u1 *b, nj_u4 len)
     if (len >= 4u && b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F') {
         return "RIFF, but not a PCM WAV";
     }
+    /*
+     * Wideband first: "#!AMR-WB\n" starts with "#!AMR" too, and the two are
+     * not the same codec.  The narrowband decoder would read a wideband frame
+     * header as narrowband and hand back noise, so the sniffer separates them
+     * and the refusal says which one it is.  (The collection has no wideband
+     * asset at all - 182 of them are "#!AMR\n" - which is why nothing here
+     * decodes it.)
+     */
+    if (len >= 8u && b[0] == '#' && b[1] == '!' && b[2] == 'A' &&
+        b[3] == 'M' && b[4] == 'R' && b[5] == '-' && b[6] == 'W' &&
+        b[7] == 'B') {
+        return "AMR-WB";
+    }
     if (len >= 6u && b[0] == '#' && b[1] == '!' && b[2] == 'A' &&
         b[3] == 'M' && b[4] == 'R') {
         return "AMR";
@@ -904,7 +926,14 @@ static const char *sniff_media(const nj_u1 *b, nj_u4 len)
 static const char *media_refusal(const char *what)
 {
     if (strcmp(what, "AMR") == 0) {
+#if NJ_ENABLE_AMR
+        return "this AMR file holds no narrowband speech frame" NJ_MEXC_DATA;
+#else
         return "this runtime has no AMR decoder" NJ_MEXC_DATA;
+#endif
+    }
+    if (strcmp(what, "AMR-WB") == 0) {
+        return "this runtime decodes AMR narrowband, not wideband" NJ_MEXC_DATA;
     }
     if (strcmp(what, "MP3") == 0) {
         return "this runtime has no MPEG audio decoder" NJ_MEXC_DATA;
@@ -1079,6 +1108,69 @@ NJFN(media_createPlayer_stream)
                 }
             }
         }
+#if NJ_ENABLE_AMR
+        /*
+         * AMR narrowband: the runtime's own decoder, and the last thing tried
+         * before the refusal.
+         *
+         * It sits AFTER the port hook and not before it because the hook is a
+         * port saying "I have a codec for this" - a phone with AMR in firmware,
+         * a desktop with libavcodec - and a codec that runs in hardware is a
+         * better answer than 65 KB of tables and a float DSP.  Both the SDL2
+         * port and the headless port have no decoder, so they land here; before
+         * this branch existed they were refused, and The Sims 3 dereferenced
+         * the null Player it got back, once per sound effect, for as long as it
+         * ran (14 of its assets are AMR and not one is named ".amr").
+         *
+         * The frame count comes first because the decoder allocates nothing:
+         * it writes into a buffer the caller sized, which here IS the Java byte
+         * array, so the samples are never held twice.  Nothing between the
+         * allocation and the decode allocates either, which is what keeps the
+         * still-unrooted array safe from the collector.
+         */
+        if (strcmp(what, "AMR") == 0) {
+            nj_u4 aframes = nj_amr_frames(barray_bytes(data), barray_len(data));
+            nj_ref pcm = NULL;
+
+            if (aframes > 0u) {
+                pcm = nj_byte_array_new(vm,
+                                        aframes * (nj_u4)NJ_AMR_BLOCK * 2u);
+            }
+            if (pcm != NULL &&
+                nj_amr_decode(barray_bytes(data), barray_len(data),
+                              pcm->u.bytes) == aframes) {
+                w_r(vm, p, F_P_DATA, "[B", pcm);
+                w_i(vm, p, F_P_RATE, (nj_s4)NJ_AMR_RATE);
+                w_i(vm, p, F_P_CHAN, 1);
+                w_i(vm, p, F_P_FRAMES, (nj_s4)(aframes * NJ_AMR_BLOCK));
+                w_j(vm, p, F_P_DURATION,
+                    (nj_s8)(aframes * NJ_AMR_BLOCK) * 1000000LL /
+                    (nj_s8)NJ_AMR_RATE);
+                nj_logf(vm, 3, "media: decoded %u AMR frames into %u PCM bytes",
+                        (unsigned)aframes,
+                        (unsigned)(aframes * (nj_u4)NJ_AMR_BLOCK * 2u));
+                nj_root_release(vm, mark);
+                ret->r = p;
+                return NJ_OK;
+            }
+            /*
+             * Nothing to play, or no room for the samples: a silent Player,
+             * for the reason the MIDI branch above gives.  The byte array's
+             * failure has already raised OutOfMemoryError, so drop that rather
+             * than failing createPlayer().
+             */
+            if (nj_has_exception(vm)) {
+                nj_clear_exception(vm);
+            }
+            w_i(vm, p, F_P_KIND, 0);
+            nj_logf(vm, 3, "media: silent Player for %u bytes of AMR "
+                           "(no narrowband frame)",
+                    (unsigned)barray_len(data));
+            nj_root_release(vm, mark);
+            ret->r = p;
+            return NJ_OK;
+        }
+#endif /* NJ_ENABLE_AMR */
         nj_logf(vm, 3, "media: cannot play %s", what);
         nj_root_release(vm, mark);
         return nj_throw(vm, NJ_C_MEXC, media_refusal(what));

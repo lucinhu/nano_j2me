@@ -110,12 +110,13 @@ static int bounded_free(void *ud)
 }
 
 /*
- * A port that can decode what the runtime cannot.
+ * A port that can decode the same file differently.
  *
- * The runtime ships no AMR decoder and says so by name; this is what a phone
- * with a hardware codec, or a desktop with libavcodec, fills in.  It reports
- * 32 bytes of silence -- 16 frames at 8000 Hz, i.e. a 2000 microsecond file --
- * so the assertions can tell the port's numbers from the runtime's.
+ * The runtime's own AMR decoder is the fallback; this is what a phone with a
+ * hardware codec, or a desktop with libavcodec, fills in instead - and the
+ * port wins, because it answers first.  It reports 32 bytes of silence -- 16
+ * frames at 8000 Hz, i.e. a 2000 microsecond file -- so the assertions can
+ * tell the port's numbers (2000) from the runtime's (80000).
  */
 static nj_status fake_amr_decode(void *ud, const nj_u1 *in, nj_u4 in_len,
                                  nj_u1 *out, nj_u4 out_cap, nj_u4 *out_len,
@@ -210,6 +211,23 @@ int main(int argc, char **argv)
            strcmp(v, "200000") == 0,
            "the WAV from the JAR reports its real duration (200000 us)");
 
+        /*
+         * The AMR asset is four 4.75 kbit/s frames of silence: 4 * 160 samples
+         * at 8000 Hz, i.e. 80000 microseconds.  The runtime decodes it itself;
+         * the port hook in the last round is a port's decoder, not the only
+         * one there is.  Before nj_amr.c existed createPlayer() threw here and
+         * the MIDlet was handed nothing to play - which is the shape of the
+         * bug this asserts away.
+         */
+        ok(field(cap.buf, "AUDIO amr=", v, sizeof(v)) &&
+           strcmp(v, "80000") == 0,
+           "the AMR from the JAR is decoded by the runtime (80000 us)");
+        ok(field(cap.buf, "AUDIO amrstate=", v, sizeof(v)) &&
+           strcmp(v, "400") == 0,
+           "the AMR Player reaches STARTED with no port decoder");
+        ok(field(cap.buf, "AUDIO amrrefused=", v, sizeof(v)) == 0,
+           "the AMR asset is no longer refused");
+
         ok(field(cap.buf, "AUDIO http=", v, sizeof(v)) &&
            strcmp(v, "unsupported protocol: http") == 0,
            "an unsupported protocol is refused BY NAME, not silently");
@@ -234,10 +252,18 @@ int main(int argc, char **argv)
         ok(tone_calls == 4, "the port was asked to play 4 tone sequences");
         ok(nj_port_headless_tone_stops(&port) >= 1,
            "the port was told to stop at least once");
-        ok(pcm_opens == 1, "the PCM device was opened exactly once");
-        ok(pcm_frames == 4410, "4410 PCM frames were pushed (22050 Hz * 0.2 s)");
-        ok(rate == 22050, "the device was opened at the WAV's own rate");
-        ok(chans == 1, "the device was opened mono, as the WAV is");
+        /*
+         * Two Players reach the device: the WAV, and the AMR the runtime
+         * decodes itself. Each opens it once, at its own rate - and the AMR is
+         * the second of the two, so the format below is its, not the WAV's.
+         * The WAV's own rate is asserted in the bounded round, where it is the
+         * only Player in the fixture.
+         */
+        ok(pcm_opens == 2, "each Player opened the PCM device exactly once");
+        ok(pcm_frames == 4410 + 640,
+           "4410 WAV frames and the AMR's 640 both reached the device");
+        ok(rate == 8000, "the AMR Player's device is opened at 8000 Hz");
+        ok(chans == 1, "the device was opened mono, as the AMR is");
 
         /* The port is the caller's, so it is the caller's to close - and it has
          * to happen AFTER the observations above, which is exactly what used to
@@ -258,6 +284,8 @@ int main(int argc, char **argv)
      */
     {
         long frames;
+        int wrate = 0;
+        int wchans = 0;
 
         memset(&cap, 0, sizeof(cap));
         if (nj_port_headless_ex(&port, 176, 208, 0, NULL) != NJ_OK) {
@@ -294,14 +322,22 @@ int main(int argc, char **argv)
            "the whole file is delivered across frames, not just the first push");
         ok(nj_port_headless_pcm_closes(&port) >= 1,
            "the device is closed once the file ends");
+        /*
+         * This MIDlet plays one file, so the device's format is the WAV's own
+         * and not the AMR's - which is the assertion the first rounds cannot
+         * make, because there the AMR Player opens the device last.
+         */
+        (void)nj_port_headless_pcm_format(&port, &wrate, &wchans);
+        ok(wrate == 22050 && wchans == 1,
+           "the WAV's own rate and channel count reach the device");
         nj_port_shutdown(&port);
     }
 
     /*
      * The same fixture again, with a port that has a decoder of its own.  The
-     * rounds above assert the refusal; this asserts the difference the hook
-     * exists to make, and that the numbers come from the port rather than
-     * from a guess the runtime made.
+     * rounds above assert what the runtime's own AMR decoder produces; this
+     * asserts the difference the hook exists to make, and that the numbers
+     * come from the port rather than from a guess the runtime made.
      */
     {
         memset(&cap, 0, sizeof(cap));

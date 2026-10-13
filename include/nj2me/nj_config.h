@@ -118,6 +118,21 @@
 #ifndef NJ_ENABLE_MEDIA         /* javax.microedition.media (tone only) */
 #  define NJ_ENABLE_MEDIA 0
 #endif
+/*
+ * AMR narrowband speech, on by default: 182 assets across 22 titles in
+ * tests/games/ are "#!AMR" - sixty-three of them not even named ".amr" - and a
+ * sound loader that is handed a MediaException by createPlayer() either plays
+ * on in silence or dereferences the null Player and throws: The Sims 3 does
+ * the second, once per sound effect, for as long as it runs.
+ *
+ * What it costs is mostly nj_amr_tables.h, a hundred kilobytes of the
+ * standard's codebooks, so a build with no voice clips in it can drop the lot
+ * with -DNJ_ENABLE_AMR=0; createPlayer() then refuses AMR exactly as it did
+ * before nj_amr.c existed.
+ */
+#ifndef NJ_ENABLE_AMR
+#  define NJ_ENABLE_AMR 1
+#endif
 #ifndef NJ_ENABLE_PNG
 #  define NJ_ENABLE_PNG 1
 #endif
