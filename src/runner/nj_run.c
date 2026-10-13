@@ -1110,7 +1110,7 @@ done:
             snprintf(buf, sizeof(buf),
                      "stats: frames=%lu paints=%lu gfx=%lu tris=%lu m3g=%lu time=%.3fs fps=%.1f "
                      "bytecodes=%lu (%.2f M/s) natives=%lu "
-                     "heap=%lu/%lu bytes",
+                     "heap=%lu/%lu bytes cpcache=%lu/%lu",
                      (unsigned long)s.frames, (unsigned long)s.paints,
                      (unsigned long)s.gfx_calls, (unsigned long)s.tris,
                      (unsigned long)s.m3g_renders, secs,
@@ -1118,7 +1118,9 @@ done:
                      (unsigned long)s.insns,
                      secs > 0.0 ? (double)s.insns / secs / 1.0e6 : 0.0,
                      (unsigned long)s.native_calls,
-                     (unsigned long)s.heap_used, (unsigned long)s.heap_peak);
+                     (unsigned long)s.heap_used, (unsigned long)s.heap_peak,
+                     (unsigned long)s.cp_cache_hits,
+                     (unsigned long)s.cp_cache_misses);
             port.log(port.user, 2, buf);
 
             /*

@@ -837,47 +837,17 @@ nj_s4 nj_field_read_int(nj_vm *vm, nj_ref obj, const nj_field *f)
 {
     nj_u1 *p = field_addr(vm, obj, f);
 
-    if (!p) {
-        return 0;
-    }
-    switch (f->ptype) {
-    case NJ_PT_BOOLEAN:
-    case NJ_PT_BYTE:   return (nj_s4)(*(nj_s1 *)p);
-    case NJ_PT_CHAR:   return (nj_s4)(*(nj_u2 *)p);
-    case NJ_PT_SHORT:  return (nj_s4)(*(nj_s2 *)p);
-    case NJ_PT_LONG:   return (nj_s4)(*(nj_s8 *)p);
-    case NJ_PT_FLOAT:  return (nj_s4)(*(float *)p);
-    case NJ_PT_DOUBLE: return (nj_s4)(*(double *)p);
-    case NJ_PT_OBJECT: {
-        nj_ref r;
-        memcpy(&r, p, sizeof(r));
-        return (nj_s4)(nj_size)(uintptr_t)r;
-    }
-    default:           return *(nj_s4 *)p;
-    }
+    /* The type switch itself lives in nj_internal.h so the interpreter can
+     * inline it; this is the called version of the same body. */
+    return p ? nj_field_load_int(p, f) : 0;
 }
 
 void nj_field_write_int(nj_vm *vm, nj_ref obj, const nj_field *f, nj_s4 v)
 {
     nj_u1 *p = field_addr(vm, obj, f);
 
-    if (!p) {
-        return;
-    }
-    switch (f->ptype) {
-    case NJ_PT_BOOLEAN:
-    case NJ_PT_BYTE:   *(nj_s1 *)p = (nj_s1)v; break;
-    case NJ_PT_CHAR:   *(nj_u2 *)p = (nj_u2)v; break;
-    case NJ_PT_SHORT:  *(nj_s2 *)p = (nj_s2)v; break;
-    case NJ_PT_LONG:   *(nj_s8 *)p = (nj_s8)v; break;
-    case NJ_PT_FLOAT:  *(float *)p = (float)v; break;
-    case NJ_PT_DOUBLE: *(double *)p = (double)v; break;
-    case NJ_PT_OBJECT: {
-        nj_ref r = (nj_ref)(void *)(uintptr_t)(nj_size)v;
-        memcpy(p, &r, sizeof(r));
-        break;
-    }
-    default:           *(nj_s4 *)p = v; break;
+    if (p) {
+        nj_field_store_int(p, f, v);
     }
 }
 
@@ -887,13 +857,10 @@ nj_s8 nj_field_read_long(nj_vm *vm, nj_ref obj, const nj_field *f)
     if (!p) {
         return 0;
     }
-    if (f->ptype == NJ_PT_DOUBLE) {
-        return (nj_s8)(*(double *)p);
+    if (f->ptype == NJ_PT_DOUBLE || f->ptype == NJ_PT_LONG) {
+        return nj_field_load_long(p, f);
     }
-    if (f->ptype == NJ_PT_LONG) {
-        return *(nj_s8 *)p;
-    }
-    return (nj_s8)nj_field_read_int(vm, obj, f);
+    return (nj_s8)nj_field_load_int(p, f);
 }
 
 void nj_field_write_long(nj_vm *vm, nj_ref obj, const nj_field *f, nj_s8 v)
@@ -902,24 +869,21 @@ void nj_field_write_long(nj_vm *vm, nj_ref obj, const nj_field *f, nj_s8 v)
     if (!p) {
         return;
     }
-    if (f->ptype == NJ_PT_DOUBLE) {
-        *(double *)p = (double)v;
-    } else if (f->ptype == NJ_PT_LONG) {
-        *(nj_s8 *)p = v;
+    if (f->ptype == NJ_PT_DOUBLE || f->ptype == NJ_PT_LONG) {
+        nj_field_store_long(p, f, v);
     } else {
-        nj_field_write_int(vm, obj, f, (nj_s4)v);
+        nj_field_store_int(p, f, (nj_s4)v);
     }
 }
 
 nj_ref nj_field_read_ref(nj_vm *vm, nj_ref obj, const nj_field *f)
 {
     nj_u1 *p = field_addr(vm, obj, f);
-    nj_ref r;
+    nj_ref r = NULL;
 
-    if (!p) {
-        return NULL;
+    if (p) {
+        memcpy(&r, p, sizeof(r));
     }
-    memcpy(&r, p, sizeof(r));
     return r;
 }
 

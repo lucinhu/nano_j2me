@@ -621,3 +621,47 @@ How it was checked, because a blit is only "faster" until a pixel moves:
   `开心农场_240`), with the same binary run twice as the control.
 * the corpus sweep is re-run with the new binary; every verdict and colour count
   is expected to match the previous sweep exactly.
+
+## Two lookups the interpreter makes millions of times
+
+A run asks the constant pool for the same reference tens of millions of times -
+`实况足球经理2009_10609` asked 34.5 million times and missed 1,076 - and it reads
+or writes a field about as often, so both are pure per-instruction overhead.
+
+**The constant-pool cache is probed where it is asked for.**  `nj_cp_resolve()`
+computed the entry's offset and read its tag *before* it consulted the cache, so
+every hit paid for work only a miss needs, plus a call into another translation
+unit.  The interpreter now probes the (class, index) slot itself
+(`nj_cp_hit()` in `src/core/nj_internal.h`, hashing with the same function the
+table uses) and calls the resolver only on a miss; the resolver reads the tag
+and offset after the cache answers no.
+
+**A field's type switch is inlined.**  Every `getfield`/`putfield`/`getstatic`/
+`putstatic` called a function whose body is "work out the address, then switch on
+the field's type": 1.78 million `nj_field_read_ref()` calls and 1.76 million
+`nj_field_read_long()` calls in 400 frames of the same title.  The switch now
+lives in `src/core/nj_internal.h` as `nj_field_load_int()` / `nj_field_store_int()`
+and friends, the interpreter inlines them, and the out-of-line accessors in
+`src/core/nj_vm.c` call the same bodies - one implementation, so an inlined read
+and a called one cannot drift.
+
+| title | before | after | speed-up |
+| --- | ---: | ---: | ---: |
+| `实况足球经理2009_10609` | 0.409 s | 0.325 s | 1.26x |
+| `帝国时代3-亚洲王朝_6288` | 0.038 s | 0.037 s | 1.03x |
+| `合金弹头4(完美汉化版)_4053` | 0.048 s | 0.047 s | 1.02x |
+| `模拟人生2_10762` | 0.168 s | 0.167 s | 1.01x |
+| `炸弹人_10311`, `开心农场_240`, `仙魔飞行棋_417`, `浴火银河2完整版_7689` | - | - | 1.00x |
+| **total** | **0.840 s** | **0.753 s** | **1.12x** |
+
+The constant-pool half of that, measured on its own (same tree, one build with
+the inline probe and one without), is 1.04x-1.06x on the two invoke-heavy
+titles and 1.00x on the rest: the win is real but it is per instruction, and a
+title that spends its time in the rasteriser does not notice it.
+
+The `--stats` line now ends with `cpcache=<hits>/<misses>`, because the numbers
+above are what decided this change and they were not visible from the command
+line before.  The full test suite passes with both changes, three titles dumped
+with `--dump-frames` are byte-for-byte identical between the two binaries with
+the same binary run twice as the control, and the corpus sweep still stands at
+389 passed / 6 failed.

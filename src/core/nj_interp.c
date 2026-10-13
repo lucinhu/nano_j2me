@@ -1340,8 +1340,9 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 o = (--sp)->r;
                 if (!o) THROW("java/lang/NullPointerException", NULL);
             }
-            if (nj_cp_resolve(vm, m->owner, idx, &e) != NJ_OK || !e ||
-                !e->target) {
+            e = nj_cp_hit(vm, m->owner, idx);
+            if ((!e && (nj_cp_resolve(vm, m->owner, idx, &e) != NJ_OK || !e))
+                || !e->target) {
                 if (!vm->exception) {
                     (void)nj_resolve_error(vm);
                 }
@@ -1380,23 +1381,23 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             }
             switch (f->ptype) {
             case NJ_PT_LONG:
-                sp[0].j = nj_field_read_long(vm, o, f);
+                sp[0].j = nj_field_read_long_fast(vm, o, f);
                 sp[1].bits = 0u; sp += 2;
                 break;
             case NJ_PT_DOUBLE:
                 /* A double field holds its bit pattern, and that is what the
                  * operand stack carries; the typed accessor would convert. */
-                sp[0].j = (nj_s8)nj_field_read_bits64(vm, o, f);
+                sp[0].j = (nj_s8)nj_field_read_bits64_fast(vm, o, f);
                 sp[1].bits = 0u; sp += 2;
                 break;
             case NJ_PT_FLOAT:
-                sp->i = (nj_s4)nj_field_read_bits32(vm, o, f); sp++;
+                sp->i = (nj_s4)nj_field_read_bits32_fast(vm, o, f); sp++;
                 break;
             case NJ_PT_OBJECT:
-                sp->r = nj_field_read_ref(vm, o, f); sp++;
+                sp->r = nj_field_read_ref_fast(vm, o, f); sp++;
                 break;
             default:
-                sp->i = nj_field_read_int(vm, o, f); sp++;
+                sp->i = nj_field_read_int_fast(vm, o, f); sp++;
                 break;
             }
             DISPATCH(); }
@@ -1404,8 +1405,9 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             nj_u2 idx = U2();
             nj_cpentry *e = NULL;
             nj_field *f;
-            if (nj_cp_resolve(vm, m->owner, idx, &e) != NJ_OK || !e ||
-                !e->target) {
+            e = nj_cp_hit(vm, m->owner, idx);
+            if ((!e && (nj_cp_resolve(vm, m->owner, idx, &e) != NJ_OK || !e))
+                || !e->target) {
                 if (!vm->exception) {
                     (void)nj_resolve_error(vm);
                 }
@@ -1441,7 +1443,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                     o = (--sp)->r;
                     if (!o) THROW("java/lang/NullPointerException", NULL);
                 }
-                nj_field_write_long(vm, o, f, v);
+                nj_field_write_long_fast(vm, o, f, v);
                 break; }
             case NJ_PT_DOUBLE: {
                 /* Bytes, not a conversion: the stack slot holds the double's
@@ -1454,7 +1456,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                     o = (--sp)->r;
                     if (!o) THROW("java/lang/NullPointerException", NULL);
                 }
-                nj_field_write_bits64(vm, o, f, (nj_u8)v);
+                nj_field_write_bits64_fast(vm, o, f, (nj_u8)v);
                 break; }
             case NJ_PT_FLOAT: {
                 nj_s4 v = (--sp)->i;
@@ -1463,7 +1465,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                     o = (--sp)->r;
                     if (!o) THROW("java/lang/NullPointerException", NULL);
                 }
-                nj_field_write_bits32(vm, o, f, (nj_u4)v);
+                nj_field_write_bits32_fast(vm, o, f, (nj_u4)v);
                 break; }
             case NJ_PT_OBJECT: {
                 nj_ref v = (--sp)->r;
@@ -1472,7 +1474,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                     o = (--sp)->r;
                     if (!o) THROW("java/lang/NullPointerException", NULL);
                 }
-                nj_field_write_ref(vm, o, f, v);
+                nj_field_write_ref_fast(vm, o, f, v);
                 break; }
             default: {
                 nj_s4 v = (--sp)->i;
@@ -1481,7 +1483,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                     o = (--sp)->r;
                     if (!o) THROW("java/lang/NullPointerException", NULL);
                 }
-                nj_field_write_int(vm, o, f, v);
+                nj_field_write_int_fast(vm, o, f, v);
                 break; }
             }
             break; }
@@ -1501,7 +1503,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             } else {
                 idx = U2();
             }
-            if (nj_cp_resolve(vm, m->owner, idx, &e) != NJ_OK || !e) {
+            e = nj_cp_hit(vm, m->owner, idx);
+            if (!e && (nj_cp_resolve(vm, m->owner, idx, &e) != NJ_OK || !e)) {
                 if (!vm->exception) {
                     (void)nj_resolve_error(vm);
                 }

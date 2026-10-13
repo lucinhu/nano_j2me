@@ -1253,10 +1253,7 @@ nj_field *nj_field_lookup_in(nj_class *c, const char *name, const char *desc,
 /* ------------------------------------------------------------------ */
 static nj_u4 cp_key_hash(nj_class *c, nj_u4 cp_index)
 {
-    nj_u4 h = (nj_u4)(((nj_size)(uintptr_t)c) >> 4);
-    h ^= cp_index * 2654435761u;
-    h ^= h >> 15;
-    return h;
+    return nj_cp_key_hash(c, cp_index);
 }
 
 static nj_cpentry *cp_cache_slot(nj_vm *vm, nj_class *c, nj_u4 cp_index)
@@ -1337,12 +1334,6 @@ nj_status nj_cp_resolve(nj_vm *vm, nj_class *c, nj_u2 index, nj_cpentry **out)
     if (!vm || !c || !out || index == 0u || index >= c->cp_count) {
         return NJ_ERR;
     }
-    off = cp_off(c, index);
-    if (off == 0u) {
-        return NJ_ERR_FORMAT;
-    }
-    tag = (nj_u1)NJ_CP_TAG(c->cp_info[index]);
-
     e = cp_cache_slot(vm, c, index);
     if (e && e->used) {
         vm->cp_cache_hits++;
@@ -1353,6 +1344,13 @@ nj_status nj_cp_resolve(nj_vm *vm, nj_class *c, nj_u2 index, nj_cpentry **out)
         return NJ_ERR_NOMEM;
     }
     vm->cp_cache_misses++;
+
+    /* Only a miss needs the entry's tag and offset. */
+    off = cp_off(c, index);
+    if (off == 0u) {
+        return NJ_ERR_FORMAT;
+    }
+    tag = (nj_u1)NJ_CP_TAG(c->cp_info[index]);
 
     if (tag == NJ_CP_STRING) {
         nj_u2 s_idx = cp_u2(c, off);

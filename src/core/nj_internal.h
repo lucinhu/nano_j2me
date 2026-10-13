@@ -768,6 +768,226 @@ nj_status   nj_cp_resolve(nj_vm *vm, nj_class *c, nj_u2 index, nj_cpentry **out)
 /* Raise the Java error matching the recorded resolution failure, with the
  * full signature in the message.  Call after nj_cp_resolve returns non-NJ_OK. */
 nj_status   nj_resolve_error(nj_vm *vm);
+
+/*
+ * The same (class, index) pair is asked for tens of millions of times in a run
+ * and essentially every one of those is a hit: 实况足球经理2009_10609 asked 34.5
+ * million times and missed 1,076.  The lookup was a call into nj_class.c that
+ * read the entry's tag and offset before it even consulted the cache, so the
+ * interpreter probes the cache itself and calls the resolver only on a miss.
+ *
+ * The hash is nj_class.c's cp_key_hash(), which now calls this one: one
+ * function, one table.
+ */
+static inline nj_u4 nj_cp_key_hash(const nj_class *c, nj_u4 cp_index)
+{
+    nj_u4 h = (nj_u4)(((nj_size)(uintptr_t)c) >> 4);
+    h ^= cp_index * 2654435761u;
+    h ^= h >> 15;
+    return h;
+}
+
+static inline nj_cpentry *nj_cp_hit(nj_vm *vm, nj_class *c, nj_u2 index)
+{
+    nj_cpentry *e;
+
+    if (vm->cp_cache_size == 0u) {
+        return NULL;
+    }
+    e = &vm->cp_cache[nj_cp_key_hash(c, (nj_u4)index)
+                      & ((nj_u4)vm->cp_cache_size - 1u)];
+    if (e->used && e->cls == c && e->cp_index == index) {
+        vm->cp_cache_hits++;
+        return e;
+    }
+    return NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Field access, inlined for the interpreter                          */
+/* ------------------------------------------------------------------ */
+/*
+ * A field is read or written tens of millions of times in a run and every one
+ * of those was a call plus the same two-branch address computation:
+ * 实况足球经理2009_10609 made 1.78 million nj_field_read_ref() calls and 1.76
+ * million nj_field_read_long() calls in 400 frames.
+ *
+ * The bodies below are the single implementation of each type switch - the
+ * out-of-line accessors in nj_vm.c call them too, after their own address
+ * check - so an inlined read and a called one cannot drift apart.
+ */
+static inline nj_u1 *nj_field_addr_fast(nj_vm *vm, nj_ref obj,
+                                        const nj_field *f)
+{
+    if ((f->flags & NJ_ACC_STATIC) != 0u) {
+        if (vm == NULL || (nj_u4)f->offset >= vm->nstatics) {
+            return NULL;
+        }
+        return (nj_u1 *)&vm->statics[f->offset];
+    }
+    if (obj == NULL) {
+        return NULL;
+    }
+    return (nj_u1 *)obj + f->offset;
+}
+
+static inline nj_s4 nj_field_load_int(const nj_u1 *p, const nj_field *f)
+{
+    switch (f->ptype) {
+    case NJ_PT_BOOLEAN:
+    case NJ_PT_BYTE:   return (nj_s4)(*(const nj_s1 *)p);
+    case NJ_PT_CHAR:   return (nj_s4)(*(const nj_u2 *)p);
+    case NJ_PT_SHORT:  return (nj_s4)(*(const nj_s2 *)p);
+    case NJ_PT_LONG:   return (nj_s4)(*(const nj_s8 *)p);
+    case NJ_PT_FLOAT:  return (nj_s4)(*(const float *)p);
+    case NJ_PT_DOUBLE: return (nj_s4)(*(const double *)p);
+    case NJ_PT_OBJECT: {
+        nj_ref r;
+        memcpy(&r, p, sizeof(r));
+        return (nj_s4)(nj_size)(uintptr_t)r;
+    }
+    default:           return *(const nj_s4 *)p;
+    }
+}
+
+static inline void nj_field_store_int(nj_u1 *p, const nj_field *f, nj_s4 v)
+{
+    switch (f->ptype) {
+    case NJ_PT_BOOLEAN:
+    case NJ_PT_BYTE:   *(nj_s1 *)p = (nj_s1)v; break;
+    case NJ_PT_CHAR:   *(nj_u2 *)p = (nj_u2)v; break;
+    case NJ_PT_SHORT:  *(nj_s2 *)p = (nj_s2)v; break;
+    case NJ_PT_LONG:   *(nj_s8 *)p = (nj_s8)v; break;
+    case NJ_PT_FLOAT:  *(float *)p = (float)v; break;
+    case NJ_PT_DOUBLE: *(double *)p = (double)v; break;
+    case NJ_PT_OBJECT: {
+        nj_ref r = (nj_ref)(void *)(uintptr_t)(nj_size)v;
+        memcpy(p, &r, sizeof(r));
+        break;
+    }
+    default:           *(nj_s4 *)p = v; break;
+    }
+}
+
+static inline nj_s8 nj_field_load_long(const nj_u1 *p, const nj_field *f)
+{
+    if (f->ptype == NJ_PT_DOUBLE) {
+        return (nj_s8)(*(const double *)p);
+    }
+    return *(const nj_s8 *)p;
+}
+
+static inline void nj_field_store_long(nj_u1 *p, const nj_field *f, nj_s8 v)
+{
+    if (f->ptype == NJ_PT_DOUBLE) {
+        *(double *)p = (double)v;
+    } else {
+        *(nj_s8 *)p = v;
+    }
+}
+
+static inline nj_s4 nj_field_read_int_fast(nj_vm *vm, nj_ref obj,
+                                           const nj_field *f)
+{
+    nj_u1 *p = nj_field_addr_fast(vm, obj, f);
+    return p ? nj_field_load_int(p, f) : 0;
+}
+
+static inline void nj_field_write_int_fast(nj_vm *vm, nj_ref obj,
+                                           const nj_field *f, nj_s4 v)
+{
+    nj_u1 *p = nj_field_addr_fast(vm, obj, f);
+    if (p) {
+        nj_field_store_int(p, f, v);
+    }
+}
+
+static inline nj_s8 nj_field_read_long_fast(nj_vm *vm, nj_ref obj,
+                                            const nj_field *f)
+{
+    nj_u1 *p = nj_field_addr_fast(vm, obj, f);
+    if (!p) {
+        return 0;
+    }
+    if (f->ptype == NJ_PT_LONG || f->ptype == NJ_PT_DOUBLE) {
+        return nj_field_load_long(p, f);
+    }
+    return (nj_s8)nj_field_load_int(p, f);
+}
+
+static inline void nj_field_write_long_fast(nj_vm *vm, nj_ref obj,
+                                            const nj_field *f, nj_s8 v)
+{
+    nj_u1 *p = nj_field_addr_fast(vm, obj, f);
+    if (!p) {
+        return;
+    }
+    if (f->ptype == NJ_PT_LONG || f->ptype == NJ_PT_DOUBLE) {
+        nj_field_store_long(p, f, v);
+    } else {
+        nj_field_store_int(p, f, (nj_s4)v);
+    }
+}
+
+static inline nj_ref nj_field_read_ref_fast(nj_vm *vm, nj_ref obj,
+                                            const nj_field *f)
+{
+    nj_u1 *p = nj_field_addr_fast(vm, obj, f);
+    nj_ref r = NULL;
+    if (p) {
+        memcpy(&r, p, sizeof(r));
+    }
+    return r;
+}
+
+static inline void nj_field_write_ref_fast(nj_vm *vm, nj_ref obj,
+                                           const nj_field *f, nj_ref v)
+{
+    nj_u1 *p = nj_field_addr_fast(vm, obj, f);
+    if (p) {
+        memcpy(p, &v, sizeof(v));
+    }
+}
+
+static inline nj_u4 nj_field_read_bits32_fast(nj_vm *vm, nj_ref obj,
+                                              const nj_field *f)
+{
+    nj_u1 *p = nj_field_addr_fast(vm, obj, f);
+    nj_u4 v = 0u;
+    if (p) {
+        memcpy(&v, p, 4u);
+    }
+    return v;
+}
+
+static inline void nj_field_write_bits32_fast(nj_vm *vm, nj_ref obj,
+                                              const nj_field *f, nj_u4 v)
+{
+    nj_u1 *p = nj_field_addr_fast(vm, obj, f);
+    if (p) {
+        memcpy(p, &v, 4u);
+    }
+}
+
+static inline nj_u8 nj_field_read_bits64_fast(nj_vm *vm, nj_ref obj,
+                                              const nj_field *f)
+{
+    nj_u1 *p = nj_field_addr_fast(vm, obj, f);
+    nj_u8 v = 0u;
+    if (p) {
+        memcpy(&v, p, 8u);
+    }
+    return v;
+}
+
+static inline void nj_field_write_bits64_fast(nj_vm *vm, nj_ref obj,
+                                              const nj_field *f, nj_u8 v)
+{
+    nj_u1 *p = nj_field_addr_fast(vm, obj, f);
+    if (p) {
+        memcpy(p, &v, 8u);
+    }
+}
 nj_method  *nj_method_lookup(nj_class *c, const char *name, const char *desc);
 const char *nj_cp_class_name(nj_class *c, nj_u2 class_index);
 nj_ref      nj_array_new_of(nj_vm *vm, const char *array_desc, nj_u4 len);
@@ -820,6 +1040,19 @@ nj_status  nj_scheduler_step(nj_vm *vm);
 nj_status  nj_scheduler_run_until_idle(nj_vm *vm, nj_u4 budget_ms);
 nj_s8      nj_now_ms(nj_vm *vm);
 void       nj_vm_stop(nj_vm *vm, nj_s4 exit_code);
+/* ------------------------------------------------------------------ */
+/* Detected canvases (nj_detect.c)                                     */
+/* ------------------------------------------------------------------ */
+/*
+ * Turn the box a port detected a MIDlet painting into the screen size that box
+ * most likely is, or refuse when it is not a screen anybody makes.  See
+ * src/core/nj_detect.c for why a port wants this at all: a port that crops to
+ * the raw box zooms a game into a strip of itself when the game only ever
+ * touched part of its canvas.  Returns 1 and writes the box to use, centred on
+ * the detected one, or 0 when the caller should keep watching.
+ */
+int        nj_detect_snap(int bx, int by, int bw, int bh, int cw, int ch,
+                          int *ox, int *oy, int *ow, int *oh);
 void       nj_vm_stop_reason(nj_vm *vm, nj_s4 exit_code, const char *why);
 nj_status  nj_vm_monitor_wait(nj_vm *vm, nj_thread *t, nj_ref obj, nj_s8 timeout_ms);
 int        nj_vm_monitor_notify(nj_vm *vm, nj_ref obj, int all);
