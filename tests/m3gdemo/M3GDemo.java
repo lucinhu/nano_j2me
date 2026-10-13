@@ -683,6 +683,162 @@ public class M3GDemo extends MIDlet {
             }
         });
 
+        /* Lighting.  A surface is lit when the Appearance carries a Material
+         * and the buffer carries normals: the material's ambient colour times
+         * the ambient lights, plus the material's diffuse colour times
+         * max(0, N.L) for every other light, plus emission and specular.
+         * The triangle faces +z, so a light shining along -z - the identity
+         * transform's own axis - lights it fully, and the same light turned
+         * 90 degrees about y only grazes it. */
+        run("a directional light lights the face towards it", new Runnable() {
+            public void run() {
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                VertexBuffer vb = new VertexBuffer();
+                VertexArray pos = new VertexArray(3, 3, 2);
+                pos.set(0, 3, new short[] { -2, -2, -5, 2, -2, -5, 0, 2, -5 });
+                vb.setPositions(pos, 1.0f, null);
+                /* Normals are one byte per component in this API: 127 is 1.0. */
+                VertexArray nrm = new VertexArray(3, 3, 1);
+                nrm.set(0, 3, new byte[] { 0, 0, 127, 0, 0, 127, 0, 0, 127 });
+                vb.setNormals(nrm);
+
+                Appearance app = new Appearance();
+                Material mat = new Material();
+                mat.setColor(Material.AMBIENT, 0x00404040);
+                mat.setColor(Material.DIFFUSE, 0x00FF0000);
+                app.setMaterial(mat);
+
+                Light amb = new Light();
+                amb.setMode(Light.AMBIENT);
+                amb.setColor(0x00808080);
+                Light dir = new Light();          /* DIRECTIONAL by default */
+                dir.setColor(0x00FFFFFF);
+
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.resetLights();
+                g3d.addLight(amb, null);
+                g3d.addLight(dir, null);
+                g3d.render(vb, null, app, new Transform(), -1);
+                int[] lit = new int[1];
+                img.getRGB(lit, 0, 1, 10, 21, 1, 1);
+                /* 0x404040 * 0x808080 / 255 = 0x202020 ambient, plus the
+                 * diffuse red at full strength. */
+                check("the lit face is its diffuse colour over its ambient",
+                      lit[0] == 0xFFFF2020);
+
+                Transform turned = new Transform();
+                turned.postRotate(90.0f, 0.0f, 1.0f, 0.0f);
+                g3d.setLight(1, dir, turned);
+                /* clear() clears the depth buffer as well as the colour, so
+                 * the second render is not rejected by the first one's
+                 * depths - the same triangle at the same depth is exactly
+                 * what the depth test is supposed to reject. */
+                Background bg = new Background();
+                bg.setColor(0x000000);
+                bg.setColorClearEnable(true);
+                bg.setDepthClearEnable(true);
+                g3d.clear(bg);
+                g3d.render(vb, null, app, new Transform(), -1);
+                g3d.releaseTarget();
+                int[] grazed = new int[1];
+                img.getRGB(grazed, 0, 1, 10, 21, 1, 1);
+                check("a light that grazes the surface leaves only the ambient",
+                      grazed[0] == 0xFF202020);
+            }
+        });
+
+        /* Without normals there is nothing to light: the material's diffuse
+         * colour is used flat, which is what an unlit appearance means. */
+        run("a buffer with no normals is not lit", new Runnable() {
+            public void run() {
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                VertexBuffer vb = new VertexBuffer();
+                VertexArray pos = new VertexArray(3, 3, 2);
+                pos.set(0, 3, new short[] { -2, -2, -5, 2, -2, -5, 0, 2, -5 });
+                vb.setPositions(pos, 1.0f, null);
+
+                Appearance app = new Appearance();
+                Material mat = new Material();
+                mat.setColor(Material.DIFFUSE, 0x0000FF00);
+                app.setMaterial(mat);
+
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(vb, null, app, new Transform(), -1);
+                g3d.releaseTarget();
+                int[] px = new int[1];
+                img.getRGB(px, 0, 1, 10, 21, 1, 1);
+                check("the material colour is used unchanged", px[0] == 0xFF00FF00);
+            }
+        });
+
+        /* A model transform has to move the geometry rather than merely be
+         * accepted: postTranslate(1, 0, 0) moves the triangle one world unit
+         * towards +x, which at z = -5 with the default camera is about eight
+         * of the 32 pixels.  The triangle covers x = -1..1 at the middle row
+         * before the move, so a pixel at x = 20 is inside it and a pixel at
+         * x = 28 is not; after the move those two swap. */
+        run("a model transform moves the geometry", new Runnable() {
+            public void run() {
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                VertexBuffer vb = new VertexBuffer();
+                VertexArray pos = new VertexArray(3, 3, 2);
+                pos.set(0, 3, new short[] { -2, -2, -5, 2, -2, -5, 0, 2, -5 });
+                vb.setPositions(pos, 1.0f, null);
+                Appearance app = flat(0x00FF00FF);
+
+                Transform moved = new Transform();
+                moved.postTranslate(1.0f, 0.0f, 0.0f);
+
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(vb, null, app, moved, -1);
+                g3d.releaseTarget();
+                int[] far = new int[1];
+                int[] near = new int[1];
+                img.getRGB(far, 0, 1, 30, 16, 1, 1);
+                img.getRGB(near, 0, 1, 10, 16, 1, 1);
+                int[] row = new int[32];
+                img.getRGB(row, 0, 32, 0, 16, 32, 1);
+                int lo = -1, hi = -1;
+                for (int i = 0; i < 32; i++) {
+                    if (row[i] != 0xFF000000) { if (lo < 0) { lo = i; } hi = i; }
+                }
+                /* lo..hi is the run the moved triangle covers in row 16;
+                 * the printed span is the evidence if a check ever fails. */
+                if (lo < 0) {
+                    System.out.println("M3G DIAG moved row16 is empty");
+                }
+                /* The triangle is 4 world units wide and 4 tall at z = -5;
+                 * a translation of +1 in x moves it one fifth of the way
+                 * across the 32-pixel viewport, so its right edge lands in
+                 * the last few columns and the left half stays empty. */
+                check("the moved triangle reaches the right of the viewport",
+                      far[0] == 0xFFFF00FF);
+                check("and has left the column it covered before",
+                      near[0] == 0xFF000000);
+            }
+        });
+
         /* A benchmark mode, not a check: with -Dnj2me.bench=<n> the same
          * triangle is rendered n times into a target and the elapsed time
          * is printed, so the two render paths can be compared on one

@@ -17,7 +17,7 @@ to be one of the gaps listed here, and knowing which one saves an afternoon.
 | JSR 256 (Sensor) | implemented: `findSensors`, `getSensorConnection`, channels, measurement ranges and data listeners, with the sensors themselves supplied by the port (`nj_port.sensor_list/open/read/close`). A port that has none reports none. Conditions are not evaluated — `addCondition` raises `UnsupportedOperationException` — and availability push answers `false` |
 | JSR 120/205 (messaging) | classes present; connections refuse the same way |
 | JSR 135 (Mobile Media) | tone and sampled PCM playback, WAV from a stream or a JAR resource, MIDI rendered by the runtime itself (or by the platform's synthesizer through the port's MIDI hooks), and AMR narrowband decoded by the runtime itself; no video. MP3, AAC and anything else the platform can decode arrive through `nj_port.audio_decode`, which is what the Android port does with MediaCodec |
-| JSR 184 (Mobile 3D Graphics) | the classes, the scene graph, the transform maths, a `.m3g` container parser and the member surface real titles use, behind `NJ_ENABLE_M3G`. **No collected title rasterises a triangle through it** (`tris=0`), so each of them is judged by its 2D interface (see below) |
+| JSR 184 (Mobile 3D Graphics) | the classes, the scene graph, the transform maths, a `.m3g` container parser, the member surface real titles use, and a software rasteriser with a depth buffer, perspective-correct texturing, back-face culling and per-vertex lighting — all behind `NJ_ENABLE_M3G`. `浴火银河2完整版_7689` renders its 3D scenes through it (thousands of triangles, `tris=` in `--stats`); the rest of the collected titles keep their 3D behind menus, so each of them is judged by its 2D interface (see below) |
 | Mascot Capsule Micro3D v3 | classes, fixed-point transform maths and a real triangle rasterizer, behind `NJ_ENABLE_MASCOT`. **No collected title reaches the rasterizer**, so it is exercised only by its own unit test (see below) |
 
 Anything not implemented raises. That is deliberate: a
@@ -633,13 +633,21 @@ were not exotic:
 | `MorphingMesh`/`SkinnedMesh` `instanceof Mesh` | false: their class rows named Object3D as the superclass |
 | `Transformable.align()` then `getAlignmentReference(NONE)` | the reference was stored and not found again |
 | `Transform.transform(VertexArray, float[], boolean)` | transformed two components per vertex: `_nj_compSize` was read where `_nj_numComp` was meant |
+| a `VertexArray.set(0, 3, byte[9])` of normals, read back | vertices 1 and 2 came back zero and 144: the same `_nj_compSize`-as-count mistake copied 3 of the 9 bytes |
+| `VertexBuffer.getPositions(float[])` | read two components of a three-component position, so `z` was 0 |
+| a model `Transform` handed to `render()` | ignored: `nj_array_length()` answers *elements*, and the code compared it against `sizeof(float) * 16` (64), so the matrix was never copied |
+| `setCamera(cam, transform)` | the camera's placement was used *as* the view matrix instead of its inverse, and then read with the wrong layout |
+| `setLight(1, light, transform)` | threw `InternalError`: the array helper was asked for an element of type `Light` for a field declared `[LLight;` |
+| `TriangleStripArray(int[] indices, int[] stripLengths)` | stored the **indices** as the strip lengths (found while adding lighting; the C test had encoded the same mistake) |
+| `g3d.clear(background)` then a second `render()` | the second render was rejected by the first one's depths: `clear()` cleared the colour and not the depth buffer |
 
 Most of them were a line or two.  The lesson is the one this file keeps
 recording: a member that exists can still be a member that lies, and only a
 caller that uses the answer finds out.
 
-The fixture prints `M3G checks=122 failures=0` since the rasteriser round below
-added checks that read pixels back off the target (depth, culling, texture).
+The fixture prints `M3G checks=130 failures=0` since the rasteriser and lighting
+rounds below added checks that read pixels back off the target (depth, culling,
+texture, lighting, a model transform, the viewport after `bindTarget`).
 
 ### The geometry reaches the target
 
@@ -704,11 +712,62 @@ the three things a flat `fillTriangle` cannot express possible:
   A triangle strip alternates winding between its triangles, so the strip
   walker swaps the first two vertices of its odd triangles.
 
-What is still honest about it: no lighting, no Gouraud shading (a triangle is
-flat-coloured, or the average of its vertex colours), no fog, no alpha blending
-inside the rasteriser (an opaque write), no mipmaps and no bilinear filtering.
-None of the collected 3D titles reaches a lit or blended scene yet, so this is
-the part to grow next.
+What is still honest about it: no fog, no alpha blending inside the rasteriser
+(an opaque write), no mipmaps and no bilinear filtering, and no anisotropic or
+per-fragment lighting (lighting is per vertex, below).
+
+### Lighting, and two matrix conventions that cannot be mixed
+
+`Light`, `Material` and `Appearance` were data holders until this round: the
+values round-tripped and nothing read them.  A mesh with three normals and an
+appearance with a material is now lit per vertex and Gouraud-interpolated
+across the triangle:
+
+- emission plus `Material.AMBIENT` against every `AMBIENT` light, then one
+  term per other light: `Material.DIFFUSE * light * max(N.L, 0)`, plus a
+  specular term `Material.SPECULAR * light * pow(max(N.H, 0), shininess)`
+  when the material asks for one.  `N` is the eye-space normal (the upper 3x3
+  of the model-view matrix), `L` points at the light, `V` at the eye.
+- `DIRECTIONAL` lights shine along the **negative** z axis of their own
+  transform, `OMNI` lights sit at the transform's origin, `SPOT` adds the
+  `spotAngle` cone and the `spotExponent` falloff, and attenuation is
+  `1 / (a0 + a1 d + a2 d^2)` with the JSR's `(1, 0, 0)` default.
+- `Material.VERTEX_COLORS` multiplies the vertex colour into the ambient and
+  diffuse terms.
+- A `VertexBuffer` with no normals is not lit at all: the material's diffuse
+  colour is used flat, which is what an unlit appearance means.  A title that
+  never calls `setLight` keeps its geometry unlit and flat, exactly as before.
+
+The two conventions are the part worth remembering, because getting them
+crossed is silent:
+
+| where a matrix comes from | storage | translation |
+| --- | --- | --- |
+| the Java API: any `Transform`, `setCamera`'s transform, `Camera.setGeneric` | row-major, acting on column vectors (`v' = M v`), which is what `m3g_xf_transform` and `mat_translate` implement | last **column**: `m[3]`, `m[7]`, `m[11]` |
+| the M3G file loader, `nj_m3g_project()`, `m3g_cam_projection()` | the transpose of the above (OpenGL's column-major layout) | last **row**: `m[12]`, `m[13]`, `m[14]` |
+
+Feeding a Java matrix to `nj_m3g_project()` produced a camera at the origin and
+a model that never moved - every `translate()` and `rotate()` in a title was
+silently dropped, and the scene still rendered, which is why it survived a
+whole round.  `Render(VertexBuffer, ...)` now has its own reader (`jr_project`)
+and multiplies with `mat_mul()`, the world path transposes the camera with
+`mat_from_java()`, and the light transform is read the Java way (origin in the
+last column, z axis in the third column).
+
+The second half of the same problem: `setCamera(camera, transform)` stores the
+transform **as the title set it** (because `getCamera()` hands it straight
+back), but a transform that *places* a camera is not a view matrix - the view
+is its inverse.  Both render paths now invert a copy at render time.
+`Graphics3D.clear(background)` also clears the depth buffer now, not only the
+colour: a second `render()` into the same target in the same frame was being
+rejected by the first one's depths.
+
+All of it is pinned by pixel checks in `tests/m3gdemo/M3GDemo.java` (130
+checks): a directional light that lights the face towards it and only grazes it
+after a 90-degree rotation, a buffer without normals staying flat, a model
+transform moving the geometry across the viewport, the depth test, the texture
+corners and the culling both ways.  The rounded shapes in
+`浴火银河2完整版_7689` (Galaxy on Fire 2) are now shaded rather than flat.
 
 A bug the fixture caught immediately, and the kind that only a pixel test
 finds: the three edge functions were paired with the wrong vertices.  Each edge

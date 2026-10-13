@@ -900,7 +900,12 @@ int main(void)
             check(d != NULL, "the positions array has storage");
             for (k = 0; d && k < 9; k++) { d[k] = pos[k]; }
             nj_iput(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_numVerts", "I", 0), 3);
-            nj_iput(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_compSize", "I", 0), 3);
+            /* The JSR's constructor is (numVertices, numComponents,
+               componentSize): three components of two bytes each.  This test
+               used to write only _nj_compSize = 3 - the byte WIDTH of one
+               component - and the reader treated it as a component count. */
+            nj_iput(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_numComp", "I", 0), 3);
+            nj_iput(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_compSize", "I", 0), 2);
             nj_rput(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_data", "[S", 0), data);
         }
         nj_rput(vm, vb, nj_field_lookup(vm, CLS("VertexBuffer"), "_nj_positions",
@@ -991,7 +996,12 @@ int main(void)
             nj_s2 *d = (nj_s2 *)nj_array_data(data);
             for (k = 0; d && k < 9; k++) { d[k] = pos[k]; }
             nj_iput(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_numVerts", "I", 0), 3);
-            nj_iput(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_compSize", "I", 0), 3);
+            /* The JSR's constructor is (numVertices, numComponents,
+               componentSize): three components of two bytes each.  This test
+               used to write only _nj_compSize = 3 - the byte WIDTH of one
+               component - and the reader treated it as a component count. */
+            nj_iput(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_numComp", "I", 0), 3);
+            nj_iput(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_compSize", "I", 0), 2);
             nj_rput(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_data", "[S", 0), data);
         }
         nj_rput(vm, vb, nj_field_lookup(vm, CLS("VertexBuffer"), "_nj_positions",

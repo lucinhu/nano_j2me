@@ -2294,6 +2294,16 @@ NJFN(m3g_clear)
         (void)nj_call(vm, target, "javax/microedition/lcdui/Graphics", "fillRect",
                       "(IIII)V", a, &n);
     }
+    /*
+     * clear() clears the DEPTH buffer too, not only the colour: without this
+     * a second render() into the same target in the same frame is rejected by
+     * the depth test against the first one's depths, and the scene keeps the
+     * colours of the first render.  _nj_zframe is the frame stamp the depth
+     * buffer is cleared with; -1 means "clear before the next triangle".
+     */
+    if (nj_iget(vm, bg, nj_field_lookup(vm, NJ_C_BG, "_nj_dclear", "Z", 0))) {
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), -1);
+    }
     return NJ_OK;
 }
 
@@ -2302,6 +2312,26 @@ NJFN(m3g_clear)
  * own: one turns a vertex into a pixel, the other fills the triangle those
  * three pixels make.  Neither knows anything about the scene graph yet.
  */
+/*
+ * Java's matrices and the file loader's are transposes of each other.  The
+ * Java API (Transform, setCamera's matrix, a generic Camera projection)
+ * stores row-major with the translation in the last COLUMN; nj_m3g_project()
+ * and m3g_cam_projection() read row-major with the translation in the last
+ * ROW, which is what the M3G file format produces.  This turns one into the
+ * other, so a world rendered from a file can still be looked at through a
+ * camera whose Transform came from Java.
+ */
+static void mat_from_java(float out[NJ_MF], const float *m)
+{
+    int r, c;
+
+    for (r = 0; r < 4; r++) {
+        for (c = 0; c < 4; c++) {
+            out[c * 4 + r] = m[r * 4 + c];
+        }
+    }
+}
+
 void nj_m3g_project(const float m[16], const float v[3], int w, int h,
                     float out[2])
 {
@@ -2497,7 +2527,7 @@ static nj_u4 raster_mesh_with(nj_vm *vm, nj_ref mesh, const float m[16],
     data = nj_rget(vm, va, nj_field_lookup(vm, NJ_C_VARR, "_nj_data", "[S", 0));
     if (!data) { return 0u; }
     nverts = (nj_u4)nj_iget(vm, va, nj_field_lookup(vm, NJ_C_VARR, "_nj_numVerts", "I", 0));
-    comp = (nj_u4)nj_iget(vm, va, nj_field_lookup(vm, NJ_C_VARR, "_nj_compSize", "I", 0));
+    comp = (nj_u4)nj_iget(vm, va, nj_field_lookup(vm, NJ_C_VARR, "_nj_numComp", "I", 0));
     s = (const nj_s2 *)nj_array_data(data);
     if (!s || comp < 2u || nverts < 3u) {
         return 0u;
@@ -2544,7 +2574,9 @@ static int m3g_cam_projection(nj_vm *vm, nj_ref cam, float vx, float vw, float o
         nj_ref g = nj_rget(vm, cam, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_generic",
                                                     "[F", 0));
         if (g && g->length >= (nj_s4)NJ_MF) {
-            memcpy(out, (const float *)g->u.bytes, sizeof(float) * NJ_MF);
+            /* setGeneric's float[] is Java's layout; transpose it like the
+               camera's own matrix above. */
+            mat_from_java(out, (const float *)g->u.bytes);
             if (vw > 0.0f) { out[12] = 2.0f * vx / vw; }
             return 1;
         }
@@ -2626,8 +2658,15 @@ NJFN(m3g_render)
     for (i = 0u; i < 16u; i++) { view[i] = 0.0f; }
     view[0] = view[5] = view[10] = view[15] = 1.0f;
     camarr = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_cam_m", "[F", 0));
-    if (camarr && nj_array_length(camarr) >= (nj_s4)(sizeof(float) * 16u)) {
-        memcpy(view, nj_array_data(camarr), sizeof(float) * 16u);
+    if (camarr && nj_array_length(camarr) >= 16) {
+        /* setCamera's Transform is a Java matrix that places the camera, so
+           the view is its inverse - and then transposed into the convention
+           nj_m3g_project and m3g_mat_mul work in. */
+        float camm[NJ_MF];
+
+        memcpy(camm, nj_array_data(camarr), sizeof(camm));
+        mat_invert(camm);
+        mat_from_java(view, camm);
     }
     if (!m3g_cam_projection(vm, cam, (float)vx, (float)vw, proj)) {
         return NJ_OK;               /* a camera with no projection sees nothing */
@@ -6333,7 +6372,14 @@ NJFN(m3g_varr_set_bytes)
     nj_ref src = NJ_ARG_REF(args, 2);
     nj_s4 first = NJ_ARG_INT(args, 0);
     nj_s4 count = NJ_ARG_INT(args, 1);
-    nj_s4 comp = nj_iget(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_compSize", "I"));
+    /*
+     * Components PER VERTEX, not the width of one: _nj_compSize is the byte
+     * width the constructor derived the component type from (1, 2 or 4), and
+     * the stored array holds _nj_numComp of them per vertex.  Using the width
+     * here copied a third of the bytes a normal array needs, which is how
+     * "set the normals" ended up filling one vertex in three.
+     */
+    nj_s4 comp = nj_iget(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
     nj_s4 total = count * (comp > 0 ? comp : 1);
     nj_ref dst;
     nj_s4 i;
@@ -6367,7 +6413,7 @@ NJFN(m3g_varr_get_short)
     nj_ref out = NJ_ARG_REF(args, 2);
     nj_s4 first = NJ_ARG_INT(args, 0);
     nj_s4 count = NJ_ARG_INT(args, 1);
-    nj_s4 comp = nj_iget(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_compSize", "I"));
+    nj_s4 comp = nj_iget(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
     nj_s4 i, total = count * (comp > 0 ? comp : 1);
 
     if (!src || !out) {
@@ -6388,7 +6434,7 @@ NJFN(m3g_varr_get_bytes)
     nj_ref out = NJ_ARG_REF(args, 2);
     nj_s4 first = NJ_ARG_INT(args, 0);
     nj_s4 count = NJ_ARG_INT(args, 1);
-    nj_s4 comp = nj_iget(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_compSize", "I"));
+    nj_s4 comp = nj_iget(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
     nj_s4 i, total = count * (comp > 0 ? comp : 1);
 
     if (!src || !out) {
@@ -6454,7 +6500,9 @@ static void m3g_vbuf_read(nj_vm *vm, nj_ref va, nj_ref out, nj_s4 per_vertex,
     }
     data = nj_rget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
     nverts = nj_iget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
-    comp = nj_iget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_compSize", "I"));
+    /* The stride of the stored array is the component COUNT; the component
+       size is only how wide one component is. */
+    comp = nj_iget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
     bias = bits2f(nj_iget(vm, self, m3g_fof(vm, NJ_C_VBUF, "_nj_bias", "F")));
     for (i = 0; i < nverts; i++) {
         for (c = 0; c < per_vertex; c++) {
@@ -6644,7 +6692,7 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
 }
 
 static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
-                    const float st[6], int has_tex, nj_u4 argb)
+                    const float st[6], int has_tex, const nj_u4 rgb[3])
 {
     float x0 = xy[0], y0 = xy[1], x1 = xy[2], y1 = xy[3], x2 = xy[4], y2 = xy[5];
     float area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
@@ -6656,6 +6704,16 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     float dxe0, dye0, dxe1, dye1, dxe2, dye2, dxg, dyg, dxh, dyh, dxk, dyk;
     nj_u4 *dst;
     nj_u4 drawn = 0u;
+    /* Gouraud: the three vertex colours, interpolated like 1/w.  A flat
+       triangle (the same colour three times, which is every unlit one) keeps
+       the single-colour loop. */
+    int gouraud = (rgb[0] != rgb[1] || rgb[1] != rgb[2]);
+    nj_u4 flat = 0xFF000000u | (rgb[0] & 0x00FFFFFFu);
+    float cr = 0.0f, cg = 0.0f, cb = 0.0f;
+    float dxr = 0.0f, dyr = 0.0f, dxgc = 0.0f, dygc = 0.0f, dxb = 0.0f, dyb = 0.0f;
+    float r0f = 0.0f, g0f = 0.0f, b0f = 0.0f;
+    float r1f = 0.0f, g1f = 0.0f, b1f = 0.0f;
+    float r2f = 0.0f, g2f = 0.0f, b2f = 0.0f;
 
     if (!sw->surf || !sw->z || !sw->surf->pixels) {
         return 0u;
@@ -6710,8 +6768,32 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     dyh = dye1 * st[0] * inv[0] + dye2 * st[2] * inv[1] + dye0 * st[4] * inv[2];
     dxk = dxe1 * st[1] * inv[0] + dxe2 * st[3] * inv[1] + dxe0 * st[5] * inv[2];
     dyk = dye1 * st[1] * inv[0] + dye2 * st[3] * inv[1] + dye0 * st[5] * inv[2];
+    if (gouraud) {
+        /* e1 carries vertex 0, e2 vertex 1 and e0 vertex 2 - the pairing the
+           texture coordinates and 1/w already use.  The colours are
+           interpolated affinely, which is what Gouraud shading means. */
+        r0f = (float)((rgb[0] >> 16) & 0xFFu);
+        g0f = (float)((rgb[0] >> 8) & 0xFFu);
+        b0f = (float)(rgb[0] & 0xFFu);
+        r1f = (float)((rgb[1] >> 16) & 0xFFu);
+        g1f = (float)((rgb[1] >> 8) & 0xFFu);
+        b1f = (float)(rgb[1] & 0xFFu);
+        r2f = (float)((rgb[2] >> 16) & 0xFFu);
+        g2f = (float)((rgb[2] >> 8) & 0xFFu);
+        b2f = (float)(rgb[2] & 0xFFu);
+        cr = e1 * r0f + e2 * r1f + e0 * r2f;
+        cg = e1 * g0f + e2 * g1f + e0 * g2f;
+        cb = e1 * b0f + e2 * b1f + e0 * b2f;
+        dxr = dxe1 * r0f + dxe2 * r1f + dxe0 * r2f;
+        dyr = dye1 * r0f + dye2 * r1f + dye0 * r2f;
+        dxgc = dxe1 * g0f + dxe2 * g1f + dxe0 * g2f;
+        dygc = dye1 * g0f + dye2 * g1f + dye0 * g2f;
+        dxb = dxe1 * b0f + dxe2 * b1f + dxe0 * b2f;
+        dyb = dye1 * b0f + dye2 * b1f + dye0 * b2f;
+    }
     for (py = miny; py <= maxy; py++) {
         float r0 = e0, r1 = e1, r2 = e2, rg = g, rh = h, rk = k;
+        float rr = cr, rgc = cg, rbc = cb;
         float sgn = (area > 0.0f) ? 1.0f : -1.0f;
         float lo = (float)minx, hi = (float)maxx;
         int xl, xr, i;
@@ -6748,26 +6830,39 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
             float pg = rg + dxg * skip;
             float ph = rh + dxh * skip, pk = rk + dxk * skip;
 
+            rr += dxr * skip;
+            rgc += dxgc * skip;
+            rbc += dxb * skip;
             o = (nj_size)(py - sw->vy) * (nj_size)sw->vw + (nj_size)(xl - sw->vx);
             drow = dst + (nj_size)py * (nj_size)sw->surf->width + (nj_size)xl;
             for (px = xl; px <= xr; px++, o++, drow++, pg += dxg, ph += dxh,
-                     pk += dxk) {
+                     pk += dxk, rr += dxr, rgc += dxgc, rbc += dxb) {
                 nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
+                nj_u4 c;
 
                 if (key <= 0 || key <= sw->z[o]) {
                     continue;
                 }
                 sw->z[o] = key;
-                if (has_tex) {
-                    *drow = sw_texel(sw, ph / pg, pk / pg, argb);
+                if (gouraud) {
+                    c = 0xFF000000u |
+                        ((nj_u4)(rr * ia + 0.5f) << 16) |
+                        ((nj_u4)(rgc * ia + 0.5f) << 8) |
+                        (nj_u4)(rbc * ia + 0.5f);
                 } else {
-                    *drow = argb;
+                    c = flat;
+                }
+                if (has_tex) {
+                    *drow = sw_texel(sw, ph / pg, pk / pg, c);
+                } else {
+                    *drow = c;
                 }
                 drawn = 1u;
             }
         }
         e0 += dye0; e1 += dye1; e2 += dye2;
         g += dyg; h += dyh; k += dyk;
+        cr += dyr; cg += dygc; cb += dyb;
     }
     return drawn;
 }
@@ -6804,12 +6899,60 @@ typedef struct {
     m3g_sw sw;                    /* the target surface, when reachable */
     const nj_s2 *tpos;            /* texture coordinates, unit 0 */
     nj_s4 tcomp, tfirst, tcount, ttype;
+    /*
+     * Lighting.  JSR 184 lights a Material with the Light objects of the
+     * Graphics3D: emission always, ambient from the ambient lights, and one
+     * diffuse and specular term per remaining light, all evaluated per vertex
+     * and interpolated across the triangle (Gouraud).  Without a Material or
+     * without normals the buffer's colours are used as they are, which is
+     * what the specification says an unlit appearance means.
+     */
+    const nj_s2 *nrm;             /* vertex normals, when the buffer has them */
+    nj_s4 ncomp, nfirst, ncount, ntype;
+    float mv[16];                 /* view * model: model space -> eye space */
+    float view[16];               /* world -> eye, for the lights */
+    nj_ref lights;                /* Graphics3D._nj_lights */
+    nj_ref lmats;                 /* ... and one float[16] per light */
+    nj_s4 nlights;
+    int lit;
+    nj_u4 emi, amb, spc;          /* the material's other colours */
+    float shin;
+    int vcolor;
 } m3g_jr;
 
-static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2])
+/*
+ * A matrix from Java, projected.  The matrices this path works with come
+ * from the Java API - Camera.getProjection, setCamera's Transform, the
+ * Transform handed to render() - and the runtime stores those ROW-MAJOR with
+ * the translation in the last COLUMN (m[3], m[7], m[11]), which is what
+ * m3g_xf_transform and mat_translate implement.  nj_m3g_project() reads the
+ * transpose of that (the layout the M3G file loader produces), so this path
+ * needs its own reader: the plain column-vector product, w from the fourth
+ * row.  Mixing the two conventions is what made every model and view
+ * transform silently do nothing.
+ */
+static void jr_project(const float m[16], const float v[3], int w, int h,
+                       float out[2], float *inv)
+{
+    float x = m[0] * v[0] + m[1] * v[1] + m[2]  * v[2] + m[3];
+    float y = m[4] * v[0] + m[5] * v[1] + m[6]  * v[2] + m[7];
+    float ww = m[12] * v[0] + m[13] * v[1] + m[14] * v[2] + m[15];
+
+    inv[0] = 0.0f;
+    if (ww == 0.0f) {
+        out[0] = 0.0f;               /* a vertex at infinity has no pixel */
+        out[1] = 0.0f;
+        return;
+    }
+    out[0] = (x / ww + 1.0f) * 0.5f * (float)w;
+    out[1] = (1.0f - y / ww) * 0.5f * (float)h;
+    if (ww > 1.0e-6f) { inv[0] = 1.0f / ww; }
+}
+
+static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
+                     float pe[3], float ne[3])
 {
     float p[4];
-    float ww;
     nj_u4 k;
     const nj_s2 *s;
 
@@ -6817,6 +6960,8 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2])
     st[0] = st[1] = 0.0f;
     p[0] = p[1] = p[2] = 0.0f;
     p[3] = 1.0f;
+    pe[0] = pe[1] = pe[2] = 0.0f;
+    ne[0] = ne[1] = ne[2] = 0.0f;
     if (!r->pos || v >= (nj_u4)r->pcount) {
         xy[0] = xy[1] = 0.0f;
         return 0;
@@ -6832,9 +6977,40 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2])
     }
     /* The clip-space w: the depth buffer keeps its reciprocal, because 1/w
        is what interpolates linearly across a projected triangle. */
-    ww = r->mvp[3] * p[0] + r->mvp[7] * p[1] + r->mvp[11] * p[2] + r->mvp[15];
-    if (ww > 1.0e-6f) { inv[0] = 1.0f / ww; }
-    nj_m3g_project(r->mvp, p, r->vw, r->vh, xy);
+    jr_project(r->mvp, p, r->vw, r->vh, xy, inv);
+    /*
+     * The eye-space position, which the lights need.  mv is view * model in
+     * the Java layout jr_project reads (translation in m[3], m[7], m[11]).
+     */
+    if (r->lit) {
+        pe[0] = r->mv[0] * p[0] + r->mv[1] * p[1] + r->mv[2]  * p[2] + r->mv[3];
+        pe[1] = r->mv[4] * p[0] + r->mv[5] * p[1] + r->mv[6]  * p[2] + r->mv[7];
+        pe[2] = r->mv[8] * p[0] + r->mv[9] * p[1] + r->mv[10] * p[2] + r->mv[11];
+    }
+    if (r->lit && r->nrm && v < (nj_u4)r->ncount && r->ncomp >= 3) {
+        const nj_s2 *q = r->nrm +
+            ((nj_size)r->nfirst + (nj_size)v) * (nj_size)r->ncomp;
+        float nx = (float)q[0], ny = (float)q[1], nz = (float)q[2];
+        float len;
+
+        if (r->ntype == 2) {
+            nx /= 65536.0f; ny /= 65536.0f; nz /= 65536.0f;
+        }
+        /* Rotating a normal means the upper 3x3 of the model-view matrix.
+           A title that only translates, rotates or scales uniformly gets the
+           right answer; a non-uniform scale would need the inverse
+           transpose, and is not attempted here. */
+        ne[0] = r->mv[0] * nx + r->mv[1] * ny + r->mv[2]  * nz;
+        ne[1] = r->mv[4] * nx + r->mv[5] * ny + r->mv[6]  * nz;
+        ne[2] = r->mv[8] * nx + r->mv[9] * ny + r->mv[10] * nz;
+        len = ne[0] * ne[0] + ne[1] * ne[1] + ne[2] * ne[2];
+        if (len > 1.0e-12f) {
+            len = 1.0f / (float)sqrt((double)len);
+            ne[0] *= len; ne[1] *= len; ne[2] *= len;
+        } else {
+            ne[0] = ne[1] = ne[2] = 0.0f;
+        }
+    }
     if (r->tpos && v < (nj_u4)r->tcount && r->tcomp >= 2) {
         const nj_s2 *q = r->tpos +
             ((nj_size)r->tfirst + (nj_size)v) * (nj_size)r->tcomp;
@@ -6878,24 +7054,276 @@ static nj_u4 jr_colour(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
     }
 }
 
+/*
+ * The lighting equation, one vertex at a time.  JSR 184's model is: the
+ * emission colour is always there; the ambient lights give material.ambient
+ * times their colour; every other light gives material.diffuse times
+ * max(0, N.L) and, when the material has a shininess, material.specular times
+ * (N.H)^shininess - each scaled by the light's intensity, by its distance
+ * attenuation and, for a spot, by its cone.  The viewer sits at the origin of
+ * eye space, which is why the caller passes eye-space positions.
+ *
+ * What is not attempted: two-sided lighting (a back face is lit by the
+ * material as it is), local vs infinite viewer (the specular term uses the
+ * vertex-to-eye direction), and the per-light "vertex colour tracking"
+ * nuances beyond multiplying ambient and diffuse by the vertex colour.
+ */
+static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
+                   nj_u4 vcol, float out[3])
+{
+    float acc[3];
+    float mod[3];
+    float mamb[3], mdif[3], mspc[3];
+    float amb[3] = { 0.0f, 0.0f, 0.0f };
+    float spec_scale = r->shin;
+    nj_s4 i;
+
+    if (spec_scale < 0.0f) { spec_scale = 0.0f; }
+    if (spec_scale > 128.0f) { spec_scale = 128.0f; }
+
+    mod[0] = mod[1] = mod[2] = 1.0f;
+    if (r->vcolor) {
+        float vr = (float)((vcol >> 16) & 0xFFu) / 255.0f;
+        float vg = (float)((vcol >> 8) & 0xFFu) / 255.0f;
+        float vb = (float)(vcol & 0xFFu) / 255.0f;
+
+        if (vr > 0.0f || vg > 0.0f || vb > 0.0f) {
+            mod[0] = vr; mod[1] = vg; mod[2] = vb;
+        }
+    }
+    mamb[0] = (float)((r->amb >> 16) & 0xFFu) / 255.0f * mod[0];
+    mamb[1] = (float)((r->amb >> 8) & 0xFFu) / 255.0f * mod[1];
+    mamb[2] = (float)(r->amb & 0xFFu) / 255.0f * mod[2];
+    mdif[0] = (float)((r->dif >> 16) & 0xFFu) / 255.0f * mod[0];
+    mdif[1] = (float)((r->dif >> 8) & 0xFFu) / 255.0f * mod[1];
+    mdif[2] = (float)(r->dif & 0xFFu) / 255.0f * mod[2];
+    mspc[0] = (float)((r->spc >> 16) & 0xFFu) / 255.0f;
+    mspc[1] = (float)((r->spc >> 8) & 0xFFu) / 255.0f;
+    mspc[2] = (float)(r->spc & 0xFFu) / 255.0f;
+
+    acc[0] = (float)((r->emi >> 16) & 0xFFu);
+    acc[1] = (float)((r->emi >> 8) & 0xFFu);
+    acc[2] = (float)(r->emi & 0xFFu);
+
+    /* First pass: the ambient lights, whose colour is the ambient light. */
+    for (i = 0; i < r->nlights; i++) {
+        nj_ref lt = nj_array_get_ref(r->lights, (nj_u4)i);
+        nj_field *fm = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_mode", "I", 0);
+        nj_field *fi = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_intensity", "F", 0);
+        nj_field *fc = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_color", "I", 0);
+        nj_u4 col;
+        float inten;
+
+        if (!lt || !fm || !fi || !fc) { continue; }
+        if (nj_iget(r->vm, lt, fm) != 128) { continue; }   /* AMBIENT */
+        col = (nj_u4)nj_iget(r->vm, lt, fc);
+        inten = bits2f(nj_iget(r->vm, lt, fi));
+        amb[0] += (float)((col >> 16) & 0xFFu) / 255.0f * inten;
+        amb[1] += (float)((col >> 8) & 0xFFu) / 255.0f * inten;
+        amb[2] += (float)(col & 0xFFu) / 255.0f * inten;
+    }
+    acc[0] += mamb[0] * amb[0] * 255.0f;
+    acc[1] += mamb[1] * amb[1] * 255.0f;
+    acc[2] += mamb[2] * amb[2] * 255.0f;
+
+    /* Second pass: everything else, brightest first is not needed - the
+       terms add up. */
+    for (i = 0; i < r->nlights; i++) {
+        nj_ref lt = nj_array_get_ref(r->lights, (nj_u4)i);
+        nj_ref xf = r->lmats ? nj_array_get_ref(r->lmats, (nj_u4)i) : 0;
+        nj_field *fm, *fi, *fc, *fa, *fsa, *fse;
+        nj_u4 col;
+        float inten, att[3] = { 1.0f, 0.0f, 0.0f }, spot = 1.0f;
+        float lx, ly, lz, dist = 0.0f, ndl;
+        float lr, lg, lb;
+        int mode;
+
+        if (!lt) { continue; }
+        fm  = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_mode", "I", 0);
+        fi  = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_intensity", "F", 0);
+        fc  = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_color", "I", 0);
+        fa  = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_atten", "[F", 0);
+        fsa = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_spotAngle", "F", 0);
+        fse = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_spotExp", "F", 0);
+        if (!fm || !fi || !fc) { continue; }
+        mode = (int)nj_iget(r->vm, lt, fm);
+        if (mode == 128) { continue; }                        /* ambient, done above */
+        col   = (nj_u4)nj_iget(r->vm, lt, fc);
+        inten = bits2f(nj_iget(r->vm, lt, fi));
+        if (fa) {
+            nj_ref a = nj_rget(r->vm, lt, fa);
+
+            if (a && nj_array_length(a) >= 3) {
+                const float *pp = (const float *)nj_array_data(a);
+                att[0] = pp[0]; att[1] = pp[1]; att[2] = pp[2];
+            }
+        }
+        if (!(att[0] > 0.0f) && att[1] == 0.0f && att[2] == 0.0f) {
+            att[0] = 1.0f;                    /* the JSR default attenuation */
+        }
+        /*
+         * The light's transform is in world space.  A directional light
+         * shines along the negative z axis of that transform; a positional
+         * light sits at its origin.  Both are brought into eye space with
+         * the view matrix, the same convention the camera's own matrix uses.
+         */
+        {
+            float lw[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+            float le[4];
+            float dx, dy, dz;
+
+            if (xf && nj_array_length(xf) >= 16) {
+                const float *m = (const float *)nj_array_data(xf);
+                /* The transform's origin and z axis, read the way
+                   nj_m3g_project() reads a matrix (the same convention the
+                   camera's own matrix is applied with, so a light and the
+                   geometry agree about where the world is). */
+                /* Origin m[3], m[7], m[11] and z axis m[2], m[6], m[10]:
+                   the Java layout jr_project reads, not the transposed one
+                   nj_m3g_project uses. */
+                lw[0] = m[3]; lw[1] = m[7]; lw[2] = m[11];
+                le[0] = r->view[0] * lw[0] + r->view[1] * lw[1] +
+                        r->view[2] * lw[2] + r->view[3];
+                le[1] = r->view[4] * lw[0] + r->view[5] * lw[1] +
+                        r->view[6] * lw[2] + r->view[7];
+                le[2] = r->view[8] * lw[0] + r->view[9] * lw[1] +
+                        r->view[10] * lw[2] + r->view[11];
+                /* The light's z axis, rotated into eye space. */
+                dx = r->view[0] * m[2] + r->view[1] * m[6] + r->view[2]  * m[10];
+                dy = r->view[4] * m[2] + r->view[5] * m[6] + r->view[6]  * m[10];
+                dz = r->view[8] * m[2] + r->view[9] * m[6] + r->view[10] * m[10];
+            } else {
+                /* No transform: the identity, whose z axis is +z. */
+                le[0] = 0.0f; le[1] = 0.0f; le[2] = 0.0f;
+                dx = 0.0f; dy = 0.0f; dz = 1.0f;
+            }
+            if (mode == 129) {                            /* DIRECTIONAL */
+                /* A light shines along the NEGATIVE z axis of its own
+                   transform, so the direction towards it is +z. */
+                lx = dx; ly = dy; lz = dz;
+            } else {                                      /* OMNI and SPOT */
+                float dl = (float)sqrt((double)(dx * dx + dy * dy + dz * dz));
+
+                lx = le[0] - pe[0];
+                ly = le[1] - pe[1];
+                lz = le[2] - pe[2];
+                dist = (float)sqrt((double)(lx * lx + ly * ly + lz * lz));
+                if (dl > 0.0f) { dx /= dl; dy /= dl; dz /= dl; }
+                if (dist > 0.0f) {
+                    float cosang;
+
+                    if (mode == 131 && fsa) {             /* SPOT */
+                        float half_angle = bits2f(nj_iget(r->vm, lt, fsa)) * 0.5f;
+                        float limit = (float)cos((double)(half_angle * 0.017453292f));
+                        float ex = bits2f(nj_iget(r->vm, lt, fse));
+
+                        cosang = (lx * dx + ly * dy + lz * dz) / dist;
+                        if (cosang <= limit) {
+                            continue;                     /* outside the cone */
+                        }
+                        if (cosang < 1.0f && ex > 0.0f) {
+                            spot = (float)pow((double)cosang, (double)ex);
+                        }
+                    }
+                }
+            }
+            {
+                float ll = (float)sqrt((double)(lx * lx + ly * ly + lz * lz));
+
+                if (ll <= 1.0e-9f) { continue; }
+                lx /= ll; ly /= ll; lz /= ll;
+            }
+            ndl = ne[0] * lx + ne[1] * ly + ne[2] * lz;
+            if (ndl <= 0.0f) { continue; }                /* facing away */
+            lr = (float)((col >> 16) & 0xFFu) / 255.0f * inten;
+            lg = (float)((col >> 8) & 0xFFu) / 255.0f * inten;
+            lb = (float)(col & 0xFFu) / 255.0f * inten;
+            if (mode != 129) {
+                float den = att[0] + att[1] * dist + att[2] * dist * dist;
+
+                if (den > 0.0f) { lr /= den; lg /= den; lb /= den; }
+            }
+            lr *= spot; lg *= spot; lb *= spot;
+            acc[0] += mdif[0] * lr * ndl * 255.0f;
+            acc[1] += mdif[1] * lg * ndl * 255.0f;
+            acc[2] += mdif[2] * lb * ndl * 255.0f;
+            if (spec_scale > 0.0f) {
+                float vx = -pe[0], vy = -pe[1], vz = -pe[2];
+                float vl = (float)sqrt((double)(vx * vx + vy * vy + vz * vz));
+                float hx, hy, hz, hl, ndh, sp;
+
+                if (vl > 1.0e-9f) {
+                    vx /= vl; vy /= vl; vz /= vl;
+                    hx = lx + vx; hy = ly + vy; hz = lz + vz;
+                    hl = (float)sqrt((double)(hx * hx + hy * hy + hz * hz));
+                    if (hl > 1.0e-9f) {
+                        hx /= hl; hy /= hl; hz /= hl;
+                        ndh = ne[0] * hx + ne[1] * hy + ne[2] * hz;
+                        if (ndh > 0.0f) {
+                            sp = (float)pow((double)ndh, (double)spec_scale);
+                            acc[0] += mspc[0] * lr * sp * 255.0f;
+                            acc[1] += mspc[1] * lg * sp * 255.0f;
+                            acc[2] += mspc[2] * lb * sp * 255.0f;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out[0] = acc[0] < 0.0f ? 0.0f : (acc[0] > 255.0f ? 255.0f : acc[0]);
+    out[1] = acc[1] < 0.0f ? 0.0f : (acc[1] > 255.0f ? 255.0f : acc[1]);
+    out[2] = acc[2] < 0.0f ? 0.0f : (acc[2] > 255.0f ? 255.0f : acc[2]);
+}
+
 static void jr_triangle(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
 {
     float xy[6], inv[3], st[6];
+    float pe[3][3], ne[3][3];
+    nj_u4 rgb[3];
     nj_u4 argb;
 
     if (a == b || b == c || a == c) {
         return;                    /* a degenerate triangle draws nothing */
     }
-    if (!jr_vertex(r, a, xy + 0, &inv[0], st + 0) ||
-        !jr_vertex(r, b, xy + 2, &inv[1], st + 2) ||
-        !jr_vertex(r, c, xy + 4, &inv[2], st + 4)) {
+    if (!jr_vertex(r, a, xy + 0, &inv[0], st + 0, pe[0], ne[0]) ||
+        !jr_vertex(r, b, xy + 2, &inv[1], st + 2, pe[1], ne[1]) ||
+        !jr_vertex(r, c, xy + 4, &inv[2], st + 4, pe[2], ne[2])) {
         return;
     }
-    argb = jr_colour(r, a, b, c);
+    if (r->lit) {
+        /* Lighting is per vertex (Gouraud): the filler interpolates the three
+           colours the equation produced.  A flat material gives the same
+           colour three times, and the filler notices that. */
+        nj_u4 vi[3];
+        int k;
+
+        vi[0] = a; vi[1] = b; vi[2] = c;
+        for (k = 0; k < 3; k++) {
+            float col[3];
+            nj_u4 vc = 0xFFFFFFFFu;
+
+            if (r->col && r->ccomp >= 4 && vi[k] < (nj_u4)r->ccount) {
+                const nj_s2 *s = r->col +
+                    ((nj_size)r->cfirst + (nj_size)vi[k]) * (nj_size)r->ccomp;
+
+                vc = ((nj_u4)(nj_u1)(s[0] & 0xFF) << 16) |
+                     ((nj_u4)(nj_u1)(s[1] & 0xFF) << 8) |
+                     (nj_u4)(nj_u1)(s[2] & 0xFF);
+            }
+            jr_lit(r, pe[k], ne[k], vc, col);
+            rgb[k] = ((nj_u4)(col[0] + 0.5f) << 16) |
+                     ((nj_u4)(col[1] + 0.5f) << 8) |
+                     (nj_u4)(col[2] + 0.5f);
+        }
+        argb = 0xFF000000u | rgb[0];   /* the Java path has no gradients */
+    } else {
+        argb = jr_colour(r, a, b, c);
+        rgb[0] = rgb[1] = rgb[2] = argb & 0x00FFFFFFu;
+    }
     if (r->sw.surf) {
         /* The rasteriser writes the pixels: depth, texture, culling. */
         if (sw_tri(&r->sw, xy, inv, st, r->sw.tex != NULL && r->tpos != NULL,
-                   argb) != 0u) {
+                   rgb) != 0u) {
             r->drawn++;
         }
         return;
@@ -7025,8 +7453,16 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
     view[0] = view[5] = view[10] = view[15] = 1.0f;
     model[0] = model[5] = model[10] = model[15] = 1.0f;
     arr = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_cam_m", "[F"));
-    if (arr && nj_array_length(arr) >= (nj_s4)(sizeof(float) * 16u)) {
+    if (arr && nj_array_length(arr) >= 16) {
         memcpy(view, nj_array_data(arr), sizeof(float) * 16u);
+        /*
+         * setCamera's Transform PLACES the camera in world space, so the
+         * view matrix is its inverse: the stored matrix stays exactly what
+         * the title set (getCamera hands it back), and the inverse is taken
+         * here.  Using the transform itself as the view put the world in
+         * front of a camera that was looking the other way.
+         */
+        mat_invert(view);
     }
     cam = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_camera",
                                     "L" NJ_C_CAMERA ";"));
@@ -7039,12 +7475,17 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
     }
     if (xf) {
         d = nj_rget(vm, xf, m3g_fof(vm, NJ_C_XFORM, "_nj_m", "[F"));
-        if (d && nj_array_length(d) >= (nj_s4)(sizeof(float) * 16u)) {
+        if (d && nj_array_length(d) >= 16) {
             memcpy(model, nj_array_data(d), sizeof(float) * 16u);
         }
     }
-    m3g_mat_mul(r.mvp, view, proj);
-    m3g_mat_mul(r.mvp, r.mvp, model);
+    /* All three matrices are Java ones, so they multiply with mat_mul() (the
+       row-major product) and not with m3g_mat_mul(), whose convention is the
+       file loader's: clip = P * V * M * v, and mv = V * M for the lights. */
+    mat_mul(proj, view, r.mvp);
+    mat_mul(r.mvp, model, r.mvp);
+    memcpy(r.view, view, sizeof(r.view));
+    mat_mul(view, model, r.mv);
 
     /* The vertex buffer's positions.  setPositions(vb, scale, bias) stores the
        scalar in _nj_bias and the per-component bias in _nj_scale. */
@@ -7097,6 +7538,46 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
     if (mat) {
         r.dif = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_dif", "I"));
     }
+    /*
+     * The rest of the material and the lights.  A surface is lit when the
+     * appearance carries a Material and the buffer carries normals - that is
+     * the JSR's own condition, and it is why an unlit buffer keeps its own
+     * colours.  Nothing here reads the light list unless lighting is on.
+     */
+    r.emi = r.amb = r.spc = 0u;
+    r.shin = 0.0f;
+    r.vcolor = 0;
+    if (mat) {
+        r.emi = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_emi", "I"));
+        r.amb = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_amb", "I"));
+        r.spc = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_spec", "I"));
+        r.shin = bits2f(nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_shininess", "F")));
+        r.vcolor = (int)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_vcolor", "Z"));
+    }
+    r.nrm = NULL;
+    r.ncomp = r.nfirst = r.ncount = r.ntype = 0;
+    d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_normals", "L" NJ_C_VARR ";"));
+    if (d) {
+        nj_ref nd = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+
+        if (nd) {
+            r.nrm    = (const nj_s2 *)nj_array_data(nd);
+            r.ncomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
+            r.nfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
+            r.ncount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+            r.ntype  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
+        }
+    }
+    r.lights = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lights",
+                                         "[L" NJ_C_LIGHT ";"));
+    r.lmats = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lmats", "[F"));
+    r.nlights = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I"));
+    if (r.nlights < 0) { r.nlights = 0; }
+    if (r.lights && r.nlights > (nj_s4)r.lights->length) {
+        r.nlights = (nj_s4)r.lights->length;
+    }
+    if (!r.lights) { r.nlights = 0; }
+    r.lit = (mat != 0 && r.nrm != NULL && r.ncomp >= 3);
 
     /* Texture unit 0 and the polygon mode: a textured title says so in the
        Appearance, and the PolygonMode is where culling and winding live
@@ -7241,9 +7722,15 @@ NJFN(m3g_g3d_getCamera)
  * "the number of lights in the array".
  */
 static nj_ref m3g_g3d_slot(nj_vm *vm, nj_ref self, const char *fld,
-                           const char *elem, nj_s4 index)
+                           const char *elem, const char *arrtype, nj_s4 index)
 {
-    nj_ref arr = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, fld, elem));
+    /*
+     * The field is an array of `elem` (so its descriptor is `arrtype`, which
+     * for a light array is "[Ljavax/microedition/m3g/Light;" and not the
+     * element descriptor).  Looking the field up with the element descriptor
+     * is what made setLight() throw the moment a title called it.
+     */
+    nj_ref arr = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, fld, arrtype));
 
     if (!arr || (nj_s4)arr->length <= index) {
         nj_ref bigger = nj_object_array_new(vm, elem, (nj_u4)index + 8u);
@@ -7255,7 +7742,7 @@ static nj_ref m3g_g3d_slot(nj_vm *vm, nj_ref self, const char *fld,
         for (i = 0; arr && i < (nj_s4)arr->length; i++) {
             nj_array_set_ref(bigger, (nj_u4)i, nj_array_get_ref(arr, (nj_u4)i));
         }
-        nj_rput(vm, self, m3g_fof(vm, NJ_C_G3D, fld, elem), bigger);
+        nj_rput(vm, self, m3g_fof(vm, NJ_C_G3D, fld, arrtype), bigger);
         arr = bigger;
     }
     return arr;
@@ -7270,8 +7757,9 @@ NJFN(m3g_g3d_setLight)
     if (index < 0) {
         NJ_THROW(vm, "java/lang/IndexOutOfBoundsException", "negative light");
     }
-    lights = m3g_g3d_slot(vm, self, "_nj_lights", "L" NJ_C_LIGHT ";", index);
-    mats = m3g_g3d_slot(vm, self, "_nj_lmats", "[F", index);
+    lights = m3g_g3d_slot(vm, self, "_nj_lights", "L" NJ_C_LIGHT ";",
+                              "[L" NJ_C_LIGHT ";", index);
+    mats = m3g_g3d_slot(vm, self, "_nj_lmats", "[F", "[F", index);
     if (!lights || !mats) {
         return nj_throw_oom(vm);
     }
