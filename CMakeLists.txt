@@ -310,6 +310,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_hangdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_sizedemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_utfdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_encdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flatdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_excdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_paintthrow_jar.sh
@@ -466,6 +467,15 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_readutf.sh
                      ${NJ_FIXTURES}/utfdemo.jar)
+    # Java encoding names are case-insensitive; the table in nj_lib_string.c was
+    # matched with strcmp, which made getBytes("utf-8") an
+    # UnsupportedEncodingException - 疯狂战机_2013 dies there on every run and 48
+    # of the collected titles carry a non-canonical spelling of the name.
+    add_test(NAME check_encoding_names
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_encoding_names.sh
+                     ${NJ_FIXTURES}/encdemo.jar)
     add_test(NAME check_corpus_size_retry
              COMMAND ${CMAKE_COMMAND} -E env
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_corpus_size_retry.sh

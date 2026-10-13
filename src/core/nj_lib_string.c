@@ -113,26 +113,97 @@ NJFN(str_init_chars_range)
  * decoding as Latin-1, because a game that asked for Shift_JIS and got mojibake
  * has no way to find out where it went wrong.
  */
+/* One spelling of an encoding name, and which decoder it asks for. */
+typedef struct { const char *name; int kind; } str_encoding;
+
+/*
+ * ENCODING NAMES ARE CASE-INSENSITIVE in Java: `getBytes("utf-8")` and
+ * `new String(b, "iso8859_1")` are the same calls as their upper-case
+ * spellings.  A strcmp here made the first of those an
+ * UnsupportedEncodingException, which a title reads as "this file is not what
+ * I thought" and usually answers with garbage or a crash - and the message
+ * blamed the game's own resource.  It is not a rare spelling: 48 of the
+ * collected titles carry a lower- or mixed-case "utf-8"/"utf8" in their class
+ * files, and 疯狂战机_2013 threw here on every frame of a run.
+ *
+ * The table is the alias set a J2ME title actually writes - the platform
+ * encoding this runtime advertises and every spelling of it seen in a jar, the
+ * ASCII family, and UTF-8.  Anything else still refuses BY NAME, because a
+ * game that asked for Shift_JIS and got Latin-1 has no way to find out.
+ */
+static const str_encoding str_encodings[] = {
+    { "ISO-8859-1",  0 }, { "ISO8859-1",  0 }, { "ISO8859_1",  0 },
+    { "ISO_8859-1",  0 }, { "ISO_8859_1", 0 }, { "8859_1",     0 },
+    { "8859-1",      0 }, { "ISO-IR-100", 0 }, { "LATIN1",     0 },
+    { "LATIN-1",     0 }, { "L1",         0 }, { "CP819",      0 },
+    { "IBM819",      0 }, { "819",        0 }, { "CSISOLATIN1", 0 },
+    { "ASCII",       0 }, { "US-ASCII",   0 }, { "USASCII",    0 },
+    { "ISO646-US",   0 }, { "ISO-IR-6",   0 }, { "646",        0 },
+    { "IBM367",      0 }, { "CP367",      0 }, { "CSASCII",    0 },
+    { "ANSI_X3.4-1968", 0 }, { "ANSI_X3.4-1986", 0 },
+    { "UTF-8",       1 }, { "UTF8",       1 }, { "UTF_8",      1 },
+    { "UNICODE-1-1-UTF-8", 1 }
+};
+
+/* "is this Java string the ASCII name `name`, ignoring case?"  A length check
+ * first, so a name longer than any entry cannot match a prefix of one. */
+static int str_name_is(const nj_u2 *c, nj_u4 n, const char *name)
+{
+    nj_u4 i;
+
+    for (i = 0u; i < n; i++) {
+        int a = (int)c[i];
+        int b = (unsigned char)name[i];
+
+        if (b == 0) {
+            return 0;
+        }
+        if (a >= 'a' && a <= 'z') {
+            a -= 32;
+        }
+        if (b >= 'a' && b <= 'z') {
+            b -= 32;
+        }
+        if (a != b) {
+            return 0;
+        }
+    }
+    return name[n] == '\0';
+}
+
 /* Which decoder an encoding name asks for.  0 = one byte per char (ISO-8859-1
  * and the aliases of it this runtime advertises), 1 = UTF-8, -1 = refused by
- * name, with the exception already raised. */
+ * name, with the exception already raised.  The no-argument overloads are
+ * separate natives, so a NULL reference here can only be a game passing null,
+ * which the spec answers with a NullPointerException - decoding it as the
+ * platform encoding instead would hide the game's mistake and hand it text it
+ * did not ask for. */
 static int str_encoding_kind(nj_vm *vm, nj_ref enc)
 {
-    char name[32];
+    const nj_u2 *c;
+    nj_u4 n;
+    nj_u4 i;
 
-    if (!enc || nj_string_to_utf8(enc, name, (int)sizeof(name)) <= 0) {
-        return 0;
+    if (!enc) {
+        (void)nj_throw(vm, "java/lang/NullPointerException", NULL);
+        return -1;
     }
-    if (strcmp(name, "ISO-8859-1") == 0 || strcmp(name, "ISO8859_1") == 0 ||
-        strcmp(name, "ISO8859-1") == 0 || strcmp(name, "8859_1") == 0 ||
-        strcmp(name, "latin1") == 0 || strcmp(name, "ASCII") == 0 ||
-        strcmp(name, "US-ASCII") == 0) {
-        return 0;
+    c = nj_string_chars(enc);
+    n = nj_string_len(enc);
+    for (i = 0u; i < (nj_u4)(sizeof(str_encodings) / sizeof(str_encodings[0]));
+         i++) {
+        if (str_name_is(c, n, str_encodings[i].name)) {
+            return str_encodings[i].kind;
+        }
     }
-    if (strcmp(name, "UTF-8") == 0 || strcmp(name, "UTF8") == 0) {
-        return 1;
+    {
+        char name[32];
+
+        if (nj_string_to_utf8(enc, name, (int)sizeof(name)) <= 0) {
+            return 0;
+        }
+        (void)nj_throw(vm, "java/io/UnsupportedEncodingException", name);
     }
-    (void)nj_throw(vm, "java/io/UnsupportedEncodingException", name);
     return -1;
 }
 

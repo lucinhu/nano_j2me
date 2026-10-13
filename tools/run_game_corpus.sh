@@ -49,6 +49,15 @@ FPS="${NJ_FPS:-0}"
 # makes a run identical on a loaded machine and an idle one, which a timeout
 # never is.
 FRAMES="${NJ_FRAMES:-8000}"
+# A "flat frame" verdict from a short sweep is a claim about the budget, not
+# about the game: 疯狂战机_2013 is black for its first ~2000 frames because it
+# is sitting inside an SMS billing request that can never complete offline, and
+# only then draws its menu.  A 600-frame sweep wrote that down as "the game is
+# not drawing" - the wrong conclusion about the right observation.  So a flat
+# verdict is re-run once at a longer budget before it is recorded; the row says
+# which budget the verdict came from.
+LONG_FRAMES="${NJ_LONG_FRAMES:-$((FRAMES * 4))}"
+[ "$LONG_FRAMES" -ge 4000 ] || LONG_FRAMES=4000
 STRICT_MOTION="${NJ_STRICT_MOTION:-0}"
 
 while [ $# -gt 0 ]; do
@@ -222,11 +231,14 @@ for jar in "${JARS[@]}"; do
     # $1 frames.  It is a function because a title that ends inside the first
     # dump interval has to be run again with a dump every frame - and a second
     # hand-written copy of this command line is a second thing to get wrong.
+    # $2 overrides the frame budget and the wall-clock bound together, so a long
+    # re-run cannot be cut off by a timeout that was sized for the short one.
     run_here() {
         : > "$log"
         rm -f "$out"/*.ppm
-        timeout "$SECS" "$BIN" --port headless --heap "$HEAP" --size "$size" \
-                --fps "$FPS" --run-frames "$FRAMES" --stats \
+        timeout "$((SECS * ${3:-1}))" "$BIN" --port headless --heap "$HEAP" \
+                --size "$size" \
+                --fps "$FPS" --run-frames "${2:-$FRAMES}" --stats \
                 --dump-frames "$out/" --dump-every "$1" \
                 "${KARGS[@]}" \
                 "$jar" >"$log" 2>&1
@@ -269,6 +281,24 @@ for jar in "${JARS[@]}"; do
         used="(no size accepted)"
     fi
 
+    # Still flat after every size: ask once more with a budget that is long
+    # enough to outlast a title's boot - a billing wait, a splash countdown, a
+    # long decompression.  The pixel claim is unchanged when it fails again, but
+    # now it is a claim about a run that had room to draw.
+    longrun=""
+    case "$verdict" in
+        *"flat frame"*)
+            if [ "$FRAMES" -lt "$LONG_FRAMES" ] && [ "$used" != "(no size accepted)" ]; then
+                size="$used"
+                run_here 100 "$LONG_FRAMES" 4
+                if ! grep -q "Screen too" "$log"; then
+                    verdict="$(verdict_for)"
+                    longrun=" after $LONG_FRAMES frames"
+                fi
+            fi
+            ;;
+    esac
+
     # Read the port's own report BEFORE deleting the temp dir it lives in.
     # It did live after the rm once, and every title then reported "?" - which
     # looked like a missing observation rather than a missing file.
@@ -306,6 +336,7 @@ for jar in "${JARS[@]}"; do
                 0)   note="$note; paint() made no Graphics call at all" ;;
                 *)   note="$note; $gfx Graphics calls over $paints paint() calls left the picture unchanged" ;;
             esac
+            note="$note$longrun"
             ;;
     esac
     case "$status" in

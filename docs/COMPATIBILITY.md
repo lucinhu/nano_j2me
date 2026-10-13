@@ -113,7 +113,7 @@ Specifically supported:
 | Class | Status |
 |---|---|
 | `Object` | complete (`hashCode` is a stable identity hash) |
-| `String` | complete; both the embedded and the wrapped representation |
+| `String` | complete; both the embedded and the wrapped representation, including the `byte[]` constructors and `getBytes`, named or not |
 | `StringBuffer` | complete |
 | `StringBuilder` | present as a `StringBuffer` subclass — not in CLDC, but every modern javac lowers `a + b` to it |
 | `Math` | complete, plus `cbrt`/`rint` beyond CLDC |
@@ -127,6 +127,19 @@ Specifically supported:
 `System.getProperty` answers for `microedition.platform`, `.configuration`,
 `.profiles`, `.locale`, `.encoding`, `line.separator`, `java.version`. Anything
 else returns `null`, which is what a real device does for unknown keys.
+
+**Encoding names are case-insensitive**, as the spec says, and the table is
+deliberately closed. `String.getBytes`/`new String(byte[], String)` decode the
+platform encoding this runtime advertises (ISO-8859-1, with every alias and
+spelling seen in a jar), the ASCII family, and UTF-8. Anything else —
+`Shift_JIS`, `GB2312`, `Big5`, `UTF-16` — refuses **by name** with
+`UnsupportedEncodingException` rather than decoding as Latin-1: a title that
+asked for one of those and got mojibake has no way to find out where it went
+wrong. The corpus is the reason the table exists at all — 48 collected titles
+spell UTF-8 some other way than `"UTF-8"` (`"utf-8"`, `"Utf-8"`, `"utf8"`), and
+`疯狂战机_2013` died on every run at `getBytes("utf-8")` until the comparison
+stopped being case-sensitive. `tools/check_encoding_names.sh` is the regression
+test.
 
 ### java.util
 
