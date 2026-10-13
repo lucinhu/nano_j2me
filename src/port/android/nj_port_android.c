@@ -333,8 +333,27 @@ typedef struct android_state {
     android_glyph_cache *glyph_cache;
     jclass    glyph_class;
     jmethodID glyph_mid;
-    JNIEnv   *glyph_env;       /* the run thread's env, attached on first use */
-    int       glyph_attached;
+    JNIEnv   *run_env;         /* the run thread's env, attached on first use */
+    int       run_attached;
+
+    /*
+     * MIDI.  The platform has a General MIDI synthesizer (Sonivox, in
+     * libsonivox.so since API 21) behind MediaPlayer, and MidiPlayer.java
+     * wraps it: the port hands it a file, gets back a handle, and the
+     * synthesizer plays with real instruments instead of the four waveforms
+     * src/midp/nj_midi.c can draw.  The handle is a Java-side id, never a
+     * pointer, so nothing here has to know what a MediaPlayer is.
+     */
+    jclass    midi_class;
+    jmethodID midi_open_mid;
+    jmethodID midi_length_mid;
+    jmethodID midi_start_mid;
+    jmethodID midi_stop_mid;
+    jmethodID midi_close_mid;
+    jmethodID midi_seek_mid;
+    jmethodID midi_time_mid;
+    jmethodID midi_volume_mid;
+    jmethodID midi_done_mid;
 } android_state;
 
 #define AS(ud) ((android_state *)(ud))
@@ -1189,12 +1208,12 @@ static void android_vibrate(void *ud, int ms)
  * and that thread lives as long as the game.  android_main_thread() detaches
  * it when the run is over.
  */
-static JNIEnv *android_glyph_env(android_state *s)
+static JNIEnv *android_run_env(android_state *s)
 {
     JNIEnv *env = NULL;
 
-    if (s->glyph_env) {
-        return s->glyph_env;
+    if (s->run_env) {
+        return s->run_env;
     }
     if (!s->jvm) {
         return NULL;
@@ -1204,9 +1223,9 @@ static JNIEnv *android_glyph_env(android_state *s)
         if ((*s->jvm)->AttachCurrentThread(s->jvm, &env, NULL) != JNI_OK) {
             return NULL;
         }
-        s->glyph_attached = 1;
+        s->run_attached = 1;
     }
-    s->glyph_env = env;
+    s->run_env = env;
     return env;
 }
 
@@ -1239,7 +1258,7 @@ static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
         }
     }
     if (!slot) {
-        env = android_glyph_env(s);
+        env = android_run_env(s);
         if (!env || !s->glyph_class || !s->glyph_mid) {
             c->failed++;
             return NULL;
@@ -1337,6 +1356,231 @@ static void android_glyph_init(android_state *s)
         gf->last_w = 0;
         s->face_ptrs[i] = &gf->face;
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* MIDI: the platform's own synthesizer                                */
+/* ------------------------------------------------------------------ */
+/*
+ * Android has shipped a General MIDI synthesizer since API 21 - Sonivox, in
+ * libsonivox.so, reachable through MediaPlayer (and through the MIDI
+ * extractor the media framework registers).  That is the same engine the
+ * Android J2ME loaders vendor as a native library, and it is what makes a
+ * .mid sound like the music the composer wrote instead of four waveforms.
+ *
+ * The runtime does not know any of this: it calls nj_port.midi_* and, when
+ * the port declines a file, renders it with src/midp/nj_midi.c exactly as it
+ * does on the desktop.  So a device whose platform refuses MIDI (or a build
+ * with the class missing) is silent in the way it always was, not broken.
+ *
+ * Everything here runs on the VM thread, which is not the UI thread: JNI
+ * needs that thread attached (android_run_env does it once), and MidiPlayer
+ * keeps the MediaPlayer objects on the Java side so no Java object is ever
+ * held in C.
+ */
+static void *android_midi_open(void *ud, const void *data, nj_u4 len,
+                               nj_u4 *duration_ms)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jbyteArray arr;
+    jlong id;
+    jint dur;
+
+    if (duration_ms) {
+        *duration_ms = 0u;
+    }
+    if (!s || !s->midi_class || !s->midi_open_mid || data == NULL || len == 0u) {
+        return NULL;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return NULL;
+    }
+    arr = (*env)->NewByteArray(env, (jsize)len);
+    if (!arr) {
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
+    (*env)->SetByteArrayRegion(env, arr, 0, (jsize)len, (const jbyte *)data);
+    id = (*env)->CallStaticLongMethod(env, s->midi_class, s->midi_open_mid,
+                                      arr);
+    (*env)->DeleteLocalRef(env, arr);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
+    if (id == 0) {
+        /*
+         * The runtime answers a refusal by rendering the file with its own
+         * synth, so this is information, not a failure - but it is the one
+         * line that explains why a game's music sounds like a square wave on
+         * a device whose platform has no MIDI engine.
+         */
+        __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                            "midi: the platform declined %u bytes; "
+                            "the runtime renders it", (unsigned)len);
+        return NULL;                /* the platform would not take the file */
+    }
+    if (duration_ms && s->midi_length_mid) {
+        dur = (*env)->CallStaticIntMethod(env, s->midi_class,
+                                          s->midi_length_mid, id);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            dur = 0;
+        }
+        if (dur > 0) {
+            *duration_ms = (nj_u4)dur;
+        }
+    }
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                        "midi: the platform synth took %u bytes, %u ms",
+                        (unsigned)len,
+                        (unsigned)(duration_ms ? *duration_ms : 0u));
+    return (void *)(intptr_t)id;
+}
+
+static int android_midi_start(void *ud, void *handle, int loop)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jboolean ok;
+
+    if (!s || !s->midi_class || !s->midi_start_mid || handle == NULL) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    ok = (*env)->CallStaticBooleanMethod(env, s->midi_class, s->midi_start_mid,
+                                         (jlong)(intptr_t)handle,
+                                         loop ? JNI_TRUE : JNI_FALSE);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return NJ_ERR;
+    }
+    return ok == JNI_TRUE ? 0 : NJ_ERR;
+}
+
+static void android_midi_stop(void *ud, void *handle)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+
+    if (!s || !s->midi_class || !s->midi_stop_mid || handle == NULL) {
+        return;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return;
+    }
+    (*env)->CallStaticVoidMethod(env, s->midi_class, s->midi_stop_mid,
+                                 (jlong)(intptr_t)handle);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    }
+}
+
+static void android_midi_close(void *ud, void *handle)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+
+    if (!s || !s->midi_class || !s->midi_close_mid || handle == NULL) {
+        return;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return;
+    }
+    (*env)->CallStaticVoidMethod(env, s->midi_class, s->midi_close_mid,
+                                 (jlong)(intptr_t)handle);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    }
+}
+
+static void android_midi_seek(void *ud, void *handle, nj_u4 ms)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+
+    if (!s || !s->midi_class || !s->midi_seek_mid || handle == NULL) {
+        return;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return;
+    }
+    (*env)->CallStaticVoidMethod(env, s->midi_class, s->midi_seek_mid,
+                                 (jlong)(intptr_t)handle, (jint)ms);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    }
+}
+
+static nj_u4 android_midi_time(void *ud, void *handle)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jint ms;
+
+    if (!s || !s->midi_class || !s->midi_time_mid || handle == NULL) {
+        return 0u;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return 0u;
+    }
+    ms = (*env)->CallStaticIntMethod(env, s->midi_class, s->midi_time_mid,
+                                     (jlong)(intptr_t)handle);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return 0u;
+    }
+    return ms > 0 ? (nj_u4)ms : 0u;
+}
+
+static void android_midi_volume(void *ud, void *handle, int volume)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+
+    if (!s || !s->midi_class || !s->midi_volume_mid || handle == NULL) {
+        return;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return;
+    }
+    (*env)->CallStaticVoidMethod(env, s->midi_class, s->midi_volume_mid,
+                                 (jlong)(intptr_t)handle, (jint)volume);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    }
+}
+
+static int android_midi_finished(void *ud, void *handle)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jboolean done;
+
+    if (!s || !s->midi_class || !s->midi_done_mid || handle == NULL) {
+        return 1;   /* nothing to poll: the runtime stops waiting */
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return 1;
+    }
+    done = (*env)->CallStaticBooleanMethod(env, s->midi_class, s->midi_done_mid,
+                                           (jlong)(intptr_t)handle);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return 1;
+    }
+    return done == JNI_TRUE ? 1 : 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2086,6 +2330,19 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     out->pcm_write = android_pcm_write;
     out->pcm_close = android_pcm_close;
     out->pcm_free = android_pcm_free;
+    /*
+     * MIDI goes to the platform's synthesizer.  All eight are set, and the
+     * port still works when the Java class is missing: midi_open answers NULL
+     * and the runtime renders the file itself.
+     */
+    out->midi_open = android_midi_open;
+    out->midi_start = android_midi_start;
+    out->midi_stop = android_midi_stop;
+    out->midi_close = android_midi_close;
+    out->midi_seek = android_midi_seek;
+    out->midi_time = android_midi_time;
+    out->midi_volume = android_midi_volume;
+    out->midi_finished = android_midi_finished;
     out->log = android_log;
     out->shutdown = android_shutdown;
     out->fps_cap = 30;
@@ -2293,10 +2550,10 @@ static void *android_main_thread(void *arg)
         a->opts.fallback_count = NJ_FONTSET_SLOTS;
     }
     (void)nj_run(&a->port, &a->opts);
-    if (s && s->glyph_attached && s->jvm) {
+    if (s && s->run_attached && s->jvm) {
         (*s->jvm)->DetachCurrentThread(s->jvm);
-        s->glyph_attached = 0;
-        s->glyph_env = NULL;
+        s->run_attached = 0;
+        s->run_env = NULL;
     }
     a->running = 0;
     return NULL;
@@ -2406,6 +2663,55 @@ Java_com_example_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
             (*env)->DeleteLocalRef(env, gcls);
         }
         android_glyph_init(s);
+    }
+
+    /*
+     * The platform's MIDI synthesizer, behind MidiPlayer.java.  Same reasoning
+     * as the glyphs above: resolved here, on the UI thread, where the class
+     * loader is unambiguously the app's, and cached as a global reference.
+     *
+     * A missing class is NOT an error: every hook checks its own method id and
+     * declines, which leaves the runtime rendering MIDI the way it does on the
+     * desktop.  That is what keeps this port buildable against an app that has
+     * no MidiPlayer at all.
+     */
+    {
+        jclass mcls = (*env)->FindClass(env, "com/example/nj2me/MidiPlayer");
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            mcls = NULL;
+        }
+        if (mcls) {
+            jmethodID m = (*env)->GetStaticMethodID(env, mcls, "open", "([B)J");
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                m = NULL;
+            }
+            if (m) {
+                s->midi_class = (jclass)(*env)->NewGlobalRef(env, mcls);
+                s->midi_open_mid = m;
+                s->midi_length_mid = (*env)->GetStaticMethodID(env, mcls,
+                                                               "length", "(J)I");
+                s->midi_start_mid = (*env)->GetStaticMethodID(env, mcls,
+                                                              "start", "(JZ)Z");
+                s->midi_stop_mid = (*env)->GetStaticMethodID(env, mcls,
+                                                             "stop", "(J)V");
+                s->midi_close_mid = (*env)->GetStaticMethodID(env, mcls,
+                                                              "close", "(J)V");
+                s->midi_seek_mid = (*env)->GetStaticMethodID(env, mcls,
+                                                             "seek", "(JI)V");
+                s->midi_time_mid = (*env)->GetStaticMethodID(env, mcls,
+                                                             "time", "(J)I");
+                s->midi_volume_mid = (*env)->GetStaticMethodID(env, mcls,
+                                                               "volume", "(JI)V");
+                s->midi_done_mid = (*env)->GetStaticMethodID(env, mcls,
+                                                             "finished", "(J)Z");
+                if ((*env)->ExceptionCheck(env)) {
+                    (*env)->ExceptionClear(env);
+                }
+            }
+            (*env)->DeleteLocalRef(env, mcls);
+        }
     }
 
     win = ANativeWindow_fromSurface(env, surface);
@@ -2665,6 +2971,22 @@ Java_com_example_nj2me_GameActivity_nativeDestroy(JNIEnv *env, jobject thiz,
         (*env)->DeleteGlobalRef(env, s->glyph_class);
         s->glyph_class = NULL;
         s->glyph_mid = NULL;
+    }
+    if (s && s->midi_class) {
+        /* Every MediaPlayer this run opened was already closed by the runtime
+         * (Player.deallocate), so there is nothing to stop here - only the
+         * class reference to let go of. */
+        (*env)->DeleteGlobalRef(env, s->midi_class);
+        s->midi_class = NULL;
+        s->midi_open_mid = NULL;
+        s->midi_length_mid = NULL;
+        s->midi_start_mid = NULL;
+        s->midi_stop_mid = NULL;
+        s->midi_close_mid = NULL;
+        s->midi_seek_mid = NULL;
+        s->midi_time_mid = NULL;
+        s->midi_volume_mid = NULL;
+        s->midi_done_mid = NULL;
     }
     if (s && s->glyph_cache) {
         /* Only after the run thread is joined: it is the thread that fills it. */

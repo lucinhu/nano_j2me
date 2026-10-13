@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
@@ -19,6 +20,7 @@ import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.BaseAdapter;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
@@ -52,45 +54,41 @@ public class LibraryActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
+        /*
+         * A flat list, one add button, one menu.  This is the J2ME-Loader
+         * shape - icon, name, a line of detail - because a launcher is a thing
+         * you look at for two seconds: everything a particular game needs
+         * (screen size, heap, its name) lives behind a long press on its row,
+         * and the keypad layout behind the menu.  Fewer things on screen, and
+         * the one thing you came for is bigger.
+         */
+        FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(rgb(14, 14, 18));          /* #0E0E12 */
 
-        /* Header: name and game count on the left, the two actions on the right. */
+        LinearLayout column = new LinearLayout(this);
+        column.setOrientation(LinearLayout.VERTICAL);
+
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(16), dp(14), dp(16), dp(14));
-        header.setBackground(rect(new int[] { 0xFF16203A, 0xFF0E0E12 },
-                GradientDrawable.Orientation.LEFT_RIGHT, 0, 0));
+        header.setPadding(dp(16), dp(10), dp(4), dp(10));
 
         LinearLayout titles = new LinearLayout(this);
         titles.setOrientation(LinearLayout.VERTICAL);
-        TextView title = tv("Nano J2ME", 22f, 0xFFFFFFFF, true);
-        headerCount = tv("", 12f, 0xFF9AA0A6, false);
+        TextView title = tv("Nano J2ME", 19f, 0xFFFFFFFF, true);
+        headerCount = tv("", 11.5f, 0xFF8A9099, false);
         titles.addView(title);
         titles.addView(headerCount);
         header.addView(titles, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        header.addView(button("按键布局", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startActivity(new Intent(LibraryActivity.this, PadEditActivity.class));
-            }
-        }));
-        header.addView(button("添加 JAR", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                pickJar();
-            }
-        }));
-        root.addView(header);
+        header.addView(menuButton());
+        column.addView(header);
 
         list = new ListView(this);
-        list.setDivider(null);
-        list.setDividerHeight(dp(6));
-        list.setPadding(dp(10), dp(10), dp(10), dp(10));
+        list.setDivider(new ColorDrawable(0xFF1C1C22));
+        list.setDividerHeight(1);
+        list.setPadding(0, 0, 0, dp(84));          /* keep the last row clear of the add button */
         list.setClipToPadding(false);
         list.setVerticalScrollBarEnabled(false);
         list.setOverScrollMode(View.OVER_SCROLL_NEVER);
@@ -109,7 +107,7 @@ public class LibraryActivity extends Activity {
                 return true;
             }
         });
-        root.addView(list, new LinearLayout.LayoutParams(
+        column.addView(list, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         /* The list shows the empty view by itself; the scroll view is only here
@@ -122,9 +120,13 @@ public class LibraryActivity extends Activity {
         emptyBox.addView(empty, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         emptyBox.setVisibility(View.GONE);
-        root.addView(emptyBox, new LinearLayout.LayoutParams(
+        column.addView(emptyBox, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         list.setEmptyView(emptyBox);
+
+        root.addView(column, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        root.addView(addButton(), fabParams());
 
         setContentView(root);
 
@@ -213,8 +215,9 @@ public class LibraryActivity extends Activity {
         adapter.notifyDataSetChanged();
         if (items.isEmpty()) {
             empty.setText("还没有游戏\n\n"
-                    + "点右上角「添加 JAR」从文件管理器选一个\n"
-                    + "或者用电脑执行：\n"
+                    + "点右下角的「+」从文件管理器选一个\n"
+                    + "也可以直接在其他文件管理器里点开 .jar\n\n"
+                    + "用电脑推送：\n"
                     + "adb push 游戏.jar " + JarStore.dir(this).getAbsolutePath() + "/");
         }
         headerCount.setText("J2ME 运行时 · " + items.size() + " 个游戏");
@@ -251,71 +254,59 @@ public class LibraryActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(rect(null, null, rgb(25, 25, 32), dp(14)));   /* #191920 */
-        row.setPadding(dp(12), dp(12), dp(12), dp(12));
+        row.setBackground(rowBackground());
+        row.setPadding(dp(16), dp(10), dp(16), dp(10));
         row.setMinimumHeight(dp(64));
 
         ImageView icon = new ImageView(this);
-        row.addView(icon, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        row.addView(icon, new LinearLayout.LayoutParams(dp(42), dp(42)));
 
         LinearLayout text = new LinearLayout(this);
         text.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        tp.leftMargin = dp(12);
-        tp.rightMargin = dp(8);
+        tp.leftMargin = dp(14);
         row.addView(text, tp);
 
         TextView name = tv("", 15f, 0xFFF2F2F5, true);
         name.setSingleLine(true);
         name.setEllipsize(TextUtils.TruncateAt.END);
-        TextView sub = tv("", 11.5f, 0xFF8A9099, false);
+        TextView sub = tv("", 12f, 0xFF8A9099, false);
+        sub.setSingleLine(true);
+        sub.setEllipsize(TextUtils.TruncateAt.END);
         text.addView(name);
         text.addView(sub);
 
-        LinearLayout chips = new LinearLayout(this);
-        chips.setOrientation(LinearLayout.VERTICAL);
-        chips.setGravity(Gravity.END);
-        row.addView(chips, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        TextView screen = tv("", 11f, 0xFFA8C7FF, false);
-        screen.setBackground(rect(null, null, rgb(30, 42, 68), dp(9)));  /* #1E2A44 */
-        screen.setPadding(dp(6), dp(2), dp(6), dp(2));
-        chips.addView(screen);
-
-        TextView det = tv("", 10f, 0xFF6FCF97, false);
-        det.setPadding(0, dp(3), dp(2), 0);
-        det.setVisibility(View.GONE);
-        chips.addView(det);
-
         row.setTag("card");
-        /* bindRow() finds these three by position, so their order is the layout. */
+        /* bindRow() finds these two by position, so their order is the layout. */
         return row;
     }
 
     private void bindRow(ViewGroup row, JarStore.Entry e) {
-        ((ImageView) row.getChildAt(0)).setImageBitmap(JarIcons.forEntry(e, dp(48)));
+        ((ImageView) row.getChildAt(0)).setImageBitmap(JarIcons.forEntry(e, dp(42)));
 
         LinearLayout text = (LinearLayout) row.getChildAt(1);
         /* JarIcons keeps the parsed manifest of the last few dozen jars, so this
          * is a map lookup on every bind but the first one. */
         String[] info = JarIcons.info(e.jar);
         ((TextView) text.getChildAt(0)).setText(info != null ? info[0] : e.title);
-        ((TextView) text.getChildAt(1)).setText(e.jar.getName() + " · " + e.sizeText());
 
-        LinearLayout chips = (LinearLayout) row.getChildAt(2);
+        /*
+         * One line for everything else, in the order the player cares about:
+         * the size the game will be asked to paint (or, once it has run, the
+         * size it actually painted), the file name and how big the file is.
+         */
         String det = e.detText();
-        /* Before the game has ever run, nothing was measured, so the chip shows
-         * what it will be asked to paint; afterwards the truth wins. */
-        ((TextView) chips.getChildAt(0)).setText(det != null ? det : e.w + "x" + e.h);
-        TextView detView = (TextView) chips.getChildAt(1);
-        if (det == null) {
-            detView.setVisibility(View.GONE);
-        } else {
-            detView.setVisibility(View.VISIBLE);
-            detView.setText("设置 " + e.w + "x" + e.h);
-        }
+        String size = (det != null) ? det + " · " : e.w + "x" + e.h + " · ";
+        ((TextView) text.getChildAt(1)).setText(size + e.jar.getName() + " · " + e.sizeText());
+    }
+
+    /** A row lights up while it is pressed; there is no card behind it any more. */
+    private Drawable rowBackground() {
+        StateListDrawable s = new StateListDrawable();
+        s.addState(new int[] { android.R.attr.state_pressed }, rect(null, null, rgb(32, 32, 42), 0));
+        s.addState(new int[0], rect(null, null, rgb(14, 14, 18), 0));
+        return s;
     }
 
     /* --------------------------------------------------------------- actions */
@@ -534,20 +525,79 @@ public class LibraryActivity extends Activity {
             .show();
     }
 
-    private TextView button(String label, View.OnClickListener click) {
-        TextView t = tv(label, 13f, 0xFFFFFFFF, false);
-        t.setPadding(dp(12), dp(8), dp(12), dp(8));
-        StateListDrawable bg = new StateListDrawable();
-        bg.addState(new int[] { android.R.attr.state_pressed },
-                rect(null, null, rgb(23, 83, 200), dp(18)));
-        bg.addState(new int[0], rect(null, null, rgb(47, 111, 237), dp(18)));  /* #2F6FED */
-        t.setBackground(bg);
-        t.setOnClickListener(click);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.setMargins(dp(8), 0, 0, 0);
-        t.setLayoutParams(lp);
+    /** The overflow: keypad layout, add a jar, and how to get jars in. */
+    private TextView menuButton() {
+        TextView t = tv("⋮", 20f, 0xFFD8DCE3, false);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(dp(12), dp(2), dp(12), dp(2));
+        t.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                menu();
+            }
+        });
         return t;
+    }
+
+    private void menu() {
+        new AlertDialog.Builder(this)
+                .setItems(new String[] { "按键布局", "添加 JAR", "怎么放游戏进来" },
+                        new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface d, int which) {
+                                if (which == 0) {
+                                    startActivity(new Intent(LibraryActivity.this,
+                                            PadEditActivity.class));
+                                } else if (which == 1) {
+                                    pickJar();
+                                } else {
+                                    help();
+                                }
+                            }
+                        })
+                .show();
+    }
+
+    private void help() {
+        new AlertDialog.Builder(this)
+                .setTitle("怎么放游戏进来")
+                .setMessage("「添加 JAR」从文件管理器里挑一个 .jar，也可以直接在别的文件管理器里"
+                        + "点开 .jar，选 Nano J2ME。\n\n"
+                        + "用电脑推送：\nadb push 游戏.jar "
+                        + JarStore.dir(this).getAbsolutePath() + "/\n\n"
+                        + "长按列表里的游戏可以改分辨率、内存和名字。")
+                .setPositiveButton("知道了", null)
+                .show();
+    }
+
+    /** The one action that always makes sense: bring a game in. */
+    private TextView addButton() {
+        TextView t = tv("+", 26f, 0xFFFFFFFF, false);
+        t.setGravity(Gravity.CENTER);
+        t.setIncludeFontPadding(false);
+        t.setBackground(circle());
+        t.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                pickJar();
+            }
+        });
+        return t;
+    }
+
+    private Drawable circle() {
+        StateListDrawable s = new StateListDrawable();
+        s.addState(new int[] { android.R.attr.state_pressed },
+                rect(null, null, rgb(23, 83, 200), dp(28)));
+        s.addState(new int[0], rect(null, null, rgb(47, 111, 237), dp(28)));
+        return s;
+    }
+
+    private FrameLayout.LayoutParams fabParams() {
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(56), dp(56));
+        lp.gravity = Gravity.BOTTOM | Gravity.END;
+        lp.setMargins(0, 0, dp(18), dp(18));
+        return lp;
     }
 
     /* ---------------------------------------------------------------- chrome */

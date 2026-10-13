@@ -153,6 +153,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        /*
+         * The platform MIDI synthesizer writes the file it is given into the
+         * app cache, so it needs a Context before the VM can ask for music.
+         * The application context, not this Activity: a static field must not
+         * pin an Activity that is being destroyed.
+         */
+        MidiPlayer.init(getApplicationContext());
         Intent it = getIntent();
         /*
          * Two names on purpose. "jar" is the file name, which is what the

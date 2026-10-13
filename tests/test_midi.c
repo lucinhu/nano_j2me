@@ -68,6 +68,35 @@ static const nj_u1 g_track_silent[23] = {
     0x00u, 0xFFu, 0x2Fu, 0x00u
 };
 
+/* The same file, but the note is held for 4800 ticks (5 s).  A second sequence
+ * this long makes "rendered the first sequence" and "merged both" impossible
+ * to confuse. */
+static const nj_u1 g_track_long[28] = {
+    'M', 'T', 'r', 'k', 0u, 0u, 0u, 20u,
+    0x00u, 0xFFu, 0x51u, 0x03u, 0x07u, 0xA1u, 0x20u,
+    0x00u, 0x90u, 0x45u, 0x64u,
+    0xA5u, 0x40u, 0x80u, 0x45u, 0x40u,   /* delta 4800, then note off */
+    0x00u, 0xFFu, 0x2Fu, 0x00u
+};
+
+/* Two complete Standard MIDI Files in one buffer: a jar entry taken with a
+ * wildcard, or a download that concatenated two songs.  Every other player
+ * renders the first sequence and stops at the second "MThd". */
+static nj_u4 build_double(nj_u1 *out)
+{
+    nj_u4 n = 0u;
+
+    memcpy(out, g_header, sizeof(g_header));
+    n = sizeof(g_header);
+    memcpy(out + n, g_track, sizeof(g_track));
+    n += sizeof(g_track);
+    memcpy(out + n, g_header, sizeof(g_header));
+    n += sizeof(g_header);
+    memcpy(out + n, g_track_long, sizeof(g_track_long));
+    n += sizeof(g_track_long);
+    return n;
+}
+
 /* Sixteen notes in a row - more notes than there are voices.  Each is held for
  * 60 ticks and followed by 60 ticks of rest, so at most one sounds at a time
  * and a renderer that reuses a voice whose note has ended plays all sixteen.
@@ -482,6 +511,28 @@ int main(void)
           "the render is 0.5 s plus the release tail");
     if (frames < NJ_MIDI_RATE / 2u) {
         printf("     frames = %u\n", (unsigned)frames);
+    }
+
+    /*
+     * A buffer holding two sequences: the reader renders the first and stops
+     * at the second header.  Merging them would give 4800 ticks - five seconds
+     * - of song instead of 480, and the second file's tempo event would land
+     * on tick 0 of the first and set the tempo of the whole song.
+     */
+    {
+        nj_u1 dbl[sizeof(g_header) * 2u + sizeof(g_track)
+                 + sizeof(g_track_long)];
+        nj_u4 dn = build_double(dbl);
+        nj_u4 dframes = 0u;
+        nj_u1 *dpcm = nj_midi_render(dbl, dn, &dframes, &MEM);
+
+        check(dpcm != NULL, "a buffer holding two sequences still renders");
+        check(dframes <= NJ_MIDI_RATE * 3u / 2u,
+              "the second sequence is ignored, not merged");
+        if (dframes > NJ_MIDI_RATE * 3u / 2u) {
+            printf("     frames = %u\n", (unsigned)dframes);
+        }
+        free(dpcm);
     }
 
     for (i = 0u; i < NJ_MIDI_RATE / 2u && i * 2u + 1u < frames * 2u; i++) {

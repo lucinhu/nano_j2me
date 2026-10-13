@@ -272,6 +272,43 @@ typedef struct nj_port {
      * like".  Used to avoid holding a whole WAV in memory on a small part. */
     int   (*pcm_free)(void *ud);
 
+    /* ---- MIDI ---- */
+    /*
+     * Some platforms ship a General MIDI synthesizer of their own.  Android
+     * has had one since API 21 - libsonivox.so plus a MIDI extractor - and it
+     * is the difference between the four waveforms src/midp/nj_midi.c can
+     * draw and a piano.  A port that has one implements this group and the
+     * runtime hands the whole Standard MIDI File over instead of rendering it
+     * sample by sample; a port that does not leaves all eight NULL and the
+     * runtime renders, which is what the desktop, the ESP32 and the headless
+     * test port do.
+     *
+     * The split is the platform's own, not an invention here: open prepares a
+     * file and returns an opaque handle, start begins playing it, close
+     * releases it.  A handle belongs to ONE Player, so two MIDI Players at
+     * once are two handles and the runtime never assumes there is only one.
+     *
+     * midi_open returning NULL is not an error the MIDlet sees: it means
+     * "this port cannot play that file", and the runtime renders it itself.
+     * A port may therefore accept some files and decline others, and a build
+     * may stop offering the hook at all without anything above it changing.
+     *
+     * `loop` is 1 to repeat until stopped and 0 to play once.  midi_time and
+     * midi_seek are milliseconds from the start, so Player.getMediaTime() and
+     * setMediaTime() keep working; a port that cannot seek leaves midi_seek
+     * NULL and the runtime keeps its own clock.  midi_finished answers 1 once
+     * the file has played out, which is what END_OF_MEDIA is fired from.
+     */
+    void *(*midi_open)(void *ud, const void *data, nj_u4 len,
+                       nj_u4 *duration_ms);
+    int   (*midi_start)(void *ud, void *handle, int loop);
+    void  (*midi_stop)(void *ud, void *handle);
+    void  (*midi_close)(void *ud, void *handle);
+    void  (*midi_seek)(void *ud, void *handle, nj_u4 ms);
+    nj_u4 (*midi_time)(void *ud, void *handle);
+    void  (*midi_volume)(void *ud, void *handle, int volume);  /* 0..100 */
+    int   (*midi_finished)(void *ud, void *handle);
+
     /* ---- executable memory (for a JIT; unused by the interpreter) ---- */
     /*
      * These are NOT the same request as alloc() above.

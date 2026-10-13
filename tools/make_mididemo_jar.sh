@@ -26,7 +26,17 @@ if [ -z "$MID" ]; then
         exit 1
     fi
     MID="$WORK/song.mid"
-    unzip -p "$JAR" "*.mid" > "$MID"
+    # One entry, named explicitly.  "unzip -p jar '*.mid'" concatenates every
+    # match, and 龙火2加强版_12437.jar ships music.mid and richman.mid: the
+    # fixture was then a buffer holding two Standard MIDI Files, which the
+    # renderer plays as one song and the platform synth plays as the first one
+    # only.  Two players disagreeing about the fixture is not a test.
+    MIDNAME="$(unzip -Z1 "$JAR" '*.mid' | head -n 1)"
+    if [ -z "$MIDNAME" ]; then
+        echo "no .mid entry in $JAR" >&2
+        exit 1
+    fi
+    unzip -p "$JAR" "$MIDNAME" > "$MID"
 fi
 
 STUBS="$(python3 "$ROOT/tools/midp_stubs.py" --quiet)"

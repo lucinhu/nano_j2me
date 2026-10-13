@@ -122,6 +122,22 @@ static void midi_free(void *ud, void *p)
 #define F_P_LISTEN   "pListen"     /* Ljava/util/Vector; */
 
 /*
+ * A MIDI Player a PORT is playing (nj_port.midi_open).  The handle the port
+ * handed back lives in pMidi the same way a stream handle lives in pData -
+ * the pointer in the first bytes of a byte array - because the Java heap is
+ * the only place this runtime keeps per-object state and a pointer is not a
+ * Java value.
+ *
+ * pPlat is the flag that says which of the two MIDI paths this Player took,
+ * and it is what the start/stop/seek branches below switch on.  pLoopDone
+ * counts the plays of a setLoopCount(n) Player, which the platform player
+ * cannot count for itself (a MediaPlayer loops forever or not at all).
+ */
+#define F_P_MIDI     "pMidi"       /* [B the port's MIDI handle, or NULL */
+#define F_P_PLAT     "pPlat"       /* Z: pMidi is a port MIDI handle */
+#define F_P_LOOPDONE "pLoopDone"   /* I plays finished, for loop count > 1 */
+
+/*
  * A Control is a separate object that acts on its Player, so it carries the
  * Player it belongs to.  Without this the control's natives would look the
  * Player fields up on the CONTROL - which silently finds nothing, so
@@ -533,6 +549,52 @@ static void media_stream_release(nj_vm *vm, nj_ref player)
     }
 }
 
+/* The port's MIDI handle a platform MIDI Player holds, or NULL. */
+static void *midi_handle(nj_vm *vm, nj_ref player)
+{
+    nj_ref data = r_r(vm, player, F_P_MIDI, "[B");
+    const nj_u1 *b = barray_bytes(data);
+    void *h = NULL;
+
+    if (b == NULL || barray_len(data) < (nj_u4)sizeof(h)) {
+        return NULL;
+    }
+    memcpy(&h, b, sizeof(h));
+    return h;
+}
+
+/* Store one.  Returns 0 when the heap cannot take the byte array, in which
+ * case the caller closes the handle and plays the file the long way. */
+static int midi_handle_set(nj_vm *vm, nj_ref player, void *h)
+{
+    nj_ref holder = nj_byte_array_new(vm, (nj_u4)sizeof(h));
+
+    if (holder == NULL) {
+        return 0;
+    }
+    memcpy(holder->u.bytes, &h, sizeof(h));
+    w_r(vm, player, F_P_MIDI, "[B", holder);
+    return 1;
+}
+
+/* Release the port's handle a platform MIDI Player holds, once.  Safe on a
+ * Player that never had one, which is why deallocate can call it blindly. */
+static void media_midi_release(nj_vm *vm, nj_ref player)
+{
+    void *h;
+
+    if (!r_z(vm, player, F_P_PLAT)) {
+        return;
+    }
+    h = midi_handle(vm, player);
+    if (h != NULL && vm->port && vm->port->midi_close) {
+        vm->port->midi_close(vm->port->ud, h);
+    }
+    w_r(vm, player, F_P_MIDI, "[B", NULL);
+    w_z(vm, player, F_P_PLAT, 0);
+    w_z(vm, player, F_P_OPEN, 0);
+}
+
 static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
 {
     nj_ref data = r_r(vm, player, F_P_DATA, "[B");
@@ -708,7 +770,8 @@ void nj_media_frame(nj_vm *vm)
     nj_ref v;
     nj_s4 n, i;
 
-    if (!vm || !vm->media_players || !vm->port || !vm->port->pcm_write) {
+    if (!vm || !vm->media_players || !vm->port
+        || (!vm->port->pcm_write && !vm->port->midi_finished)) {
         return;
     }
     v = vm->media_players;
@@ -718,6 +781,37 @@ void nj_media_frame(nj_vm *vm)
         int room = 1 << 20;      /* a port with no pcm_free takes everything */
 
         if (!p) {
+            continue;
+        }
+        /*
+         * A Player the PORT is playing is not topped up - the synthesizer has
+         * its own clock and its own buffer - so it is only asked whether it
+         * has finished.  A finite loop count is counted here because the
+         * platform can only loop forever or not at all.
+         */
+        if (r_z(vm, p, F_P_PLAT)) {
+            void *mh = midi_handle(vm, p);
+            if (mh != NULL && vm->port->midi_finished
+                && vm->port->midi_finished(vm->port->ud, mh)) {
+                nj_s4 loop = r_i(vm, p, F_P_LOOP);
+                nj_s4 done = r_i(vm, p, F_P_LOOPDONE) + 1;
+                if (loop > 1 && done < loop) {
+                    w_i(vm, p, F_P_LOOPDONE, done);
+                    if (vm->port->midi_seek) {
+                        vm->port->midi_seek(vm->port->ud, mh, 0);
+                    }
+                    if (vm->port->midi_start) {
+                        (void)vm->port->midi_start(vm->port->ud, mh, 0);
+                    }
+                } else {
+                    w_z(vm, p, F_P_OPEN, 0);
+                    if (r_i(vm, p, F_P_STATE) == 400) {
+                        w_i(vm, p, F_P_STATE, 300);
+                        fire(vm, p, "endOfMedia");
+                    }
+                    media_unregister(vm, p);
+                }
+            }
             continue;
         }
         if (vm->port->pcm_free) {
@@ -1023,6 +1117,40 @@ NJFN(media_createPlayer_stream)
          * no sound as a quiet moment.
          */
         if (strcmp(what, "MIDI") == 0) {
+            /*
+             * A port with a synthesizer of its own gets the file whole.
+             * Android's is Sonivox - the same General MIDI engine the phone's
+             * own MIDI player uses, and the same one the popular Android J2ME
+             * loaders vendor as a native library - and against the renderer
+             * below it is the difference between a piano and a square wave.
+             * So it is tried first, and the renderer stays as the answer for
+             * every port that has none AND for the files a platform that has
+             * one still refuses.
+             */
+            if (vm->port && vm->port->midi_open) {
+                nj_u4 dur = 0;
+                void *mh = vm->port->midi_open(vm->port->ud,
+                                               barray_bytes(data),
+                                               barray_len(data), &dur);
+                if (mh != NULL && midi_handle_set(vm, p, mh)) {
+                    w_z(vm, p, F_P_PLAT, 1);
+                    w_z(vm, p, F_P_STREAM, 0);
+                    w_i(vm, p, F_P_KIND, 1);
+                    /* The platform knows the real duration; -1 is what a
+                     * Player with no duration reports, and a title that asks
+                     * gets an honest "unknown" instead of a wrong number. */
+                    w_j(vm, p, F_P_DURATION, dur > 0u ? (nj_s8)dur * 1000LL : -1);
+                    nj_root_release(vm, mark);
+                    ret->r = p;
+                    return NJ_OK;
+                }
+                if (mh != NULL && vm->port->midi_close) {
+                    vm->port->midi_close(vm->port->ud, mh);
+                }
+                if (nj_has_exception(vm)) {
+                    nj_clear_exception(vm);     /* the renderer is the answer */
+                }
+            }
             nj_midi_mem mem;
             struct nj_midi_stream *st;
             nj_u4 mframes;
@@ -1423,6 +1551,27 @@ NJFN(player_start)
                                           tones->u.bytes,
                                       n);
         }
+    } else if (r_z(vm, self, F_P_PLAT)) {
+        void *mh = midi_handle(vm, self);
+        nj_s4 loop = r_i(vm, self, F_P_LOOP);
+
+        /*
+         * A platform synthesizer loops forever or not at all, so only -1
+         * ("until stopped") is handed to it as a loop and a finite count is
+         * played once and counted here (F_P_LOOPDONE, in nj_media_frame).
+         * The volume goes down with the start because a Player created at
+         * volume 20 must not be heard at 100 for the first frame.
+         */
+        if (mh != NULL && vm->port && vm->port->midi_start
+            && vm->port->midi_start(vm->port->ud, mh, loop == -1) == 0) {
+            if (vm->port->midi_volume) {
+                vm->port->midi_volume(vm->port->ud, mh,
+                                      (int)r_i(vm, self, F_P_VOLUME));
+            }
+            w_i(vm, self, F_P_LOOPDONE, 0);
+            w_z(vm, self, F_P_OPEN, 1);
+            (void)media_register(vm, self);
+        }
     } else if (vm->port && vm->port->pcm_open) {
         if (!r_z(vm, self, F_P_OPEN)) {
             if (vm->port->pcm_open(vm->port->ud, (int)r_i(vm, self, F_P_RATE),
@@ -1447,7 +1596,15 @@ NJFN(player_stop)
     nj_ref self = NJ_THIS(args);
 
     if (r_i(vm, self, F_P_STATE) == 400) {
-        if (r_i(vm, self, F_P_KIND) == 0) {
+        if (r_z(vm, self, F_P_PLAT)) {
+            /* Stop, not close: the handle stays so start() can play it again,
+             * which is what a game that pauses its music does. */
+            void *mh = midi_handle(vm, self);
+            if (mh != NULL && vm->port && vm->port->midi_stop) {
+                vm->port->midi_stop(vm->port->ud, mh);
+            }
+            w_z(vm, self, F_P_OPEN, 0);
+        } else if (r_i(vm, self, F_P_KIND) == 0) {
             if (vm->port && vm->port->tone_stop) {
                 vm->port->tone_stop(vm->port->ud);
             }
@@ -1472,6 +1629,7 @@ NJFN(player_deallocate)
         return r;
     }
     media_stream_release(vm, self);
+    media_midi_release(vm, self);
     w_i(vm, self, F_P_STATE, 100);
     w_i(vm, self, F_P_PUSHED, 0);
     w_j(vm, self, F_P_TIME, 0);
@@ -1656,7 +1814,22 @@ NJFN(player_getDuration)
 
 NJFN(player_getMediaTime)
 {
-    ret->j = r_j(vm, NJ_THIS(args), F_P_TIME);
+    nj_ref self = NJ_THIS(args);
+
+    /*
+     * A platform MIDI Player's clock is the device's, not this runtime's: the
+     * synthesizer has been playing for as long as it has been playing, and
+     * the runtime only knows what it is told.  So the position is read back
+     * rather than counted, which is also what makes it survive a slow frame.
+     */
+    if (r_z(vm, self, F_P_PLAT)) {
+        void *mh = midi_handle(vm, self);
+        if (mh != NULL && vm->port && vm->port->midi_time) {
+            w_j(vm, self, F_P_TIME,
+                (nj_s8)vm->port->midi_time(vm->port->ud, mh) * 1000LL);
+        }
+    }
+    ret->j = r_j(vm, self, F_P_TIME);
     return NJ_OK;
 }
 
@@ -1679,11 +1852,23 @@ NJFN(player_setMediaTime)
         want = dur;
     }
     /*
-     * A streamed Player renders as it goes, so the position it reports has to
-     * move the renderer too: a game that stops the theme, seeks to the start
-     * and starts it again would otherwise hear the tune resume in the middle.
+     * A platform MIDI Player is told where to go; a streamed one is moved by
+     * the same amount, because its renderer has to skip to the same place.  A
+     * port with no midi_seek keeps its own clock and the position stands, so
+     * setMediaTime() reports where it landed either way.
      */
-    if (r_z(vm, self, F_P_STREAM)) {
+    if (r_z(vm, self, F_P_PLAT)) {
+        void *mh = midi_handle(vm, self);
+        if (mh != NULL && vm->port && vm->port->midi_seek) {
+            vm->port->midi_seek(vm->port->ud, mh, (nj_u4)(want / 1000));
+        }
+    } else if (r_z(vm, self, F_P_STREAM)) {
+        /*
+         * A streamed Player renders as it goes, so the position it reports has
+         * to move the renderer too: a game that stops the theme, seeks to the
+         * start and starts it again would otherwise hear the tune resume in
+         * the middle.
+         */
         nj_ref data = r_r(vm, self, F_P_DATA, "[B");
         if (data != NULL && barray_bytes(data) != NULL) {
             struct nj_midi_stream *st = NULL;
@@ -1757,6 +1942,16 @@ NJFN(vol_setLevel)
                         "level out of range");
     }
     w_i(vm, self, F_P_VOLUME, lvl);
+    /*
+     * A platform MIDI Player's level is the device's mixer, so it has to be
+     * told; the rendered paths scale their own samples and need nothing here.
+     */
+    if (r_z(vm, self, F_P_PLAT)) {
+        void *mh = midi_handle(vm, self);
+        if (mh != NULL && vm->port && vm->port->midi_volume) {
+            vm->port->midi_volume(vm->port->ud, mh, (int)lvl);
+        }
+    }
     ret->i = lvl;               /* VolumeControl.setLevel returns the level set */
     return NJ_OK;
 }
@@ -1900,6 +2095,9 @@ static const nj_builtin_field player_fields[] = {
     FLD(F_P_PUSHED,   "I", 0),
     FLD(F_P_OPEN,     "Z", 0),
     FLD(F_P_LISTEN,   "Ljava/util/Vector;", 0),
+    FLD(F_P_MIDI,     "[B", 0),
+    FLD(F_P_PLAT,     "Z", 0),
+    FLD(F_P_LOOPDONE, "I", 0),
     /* MIDP state constants. */
     FLD("CLOSED",     "I", NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("UNREALIZED", "I", NJ_ACC_STATIC | NJ_ACC_FINAL),

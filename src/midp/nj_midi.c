@@ -1096,6 +1096,19 @@ static int mid_stream_init(nj_midi_stream *s, const void *data, nj_u4 size,
         if (!mid_u32(&r, &tag) || !mid_u32(&r, &len)) {
             break;
         }
+        if (tag == 0x4D546864u /* "MThd" */) {
+            /*
+             * A second sequence header: the buffer is two Standard MIDI Files
+             * glued together (a jar entry taken with a wildcard, a download
+             * that concatenated two songs).  Every other player renders the
+             * first sequence and stops here - Android's synth reports the
+             * first file's duration for such a buffer - and merging them is
+             * worse than stopping: the second sequence's tempo event lands on
+             * tick 0 of the first and would set the tempo of the whole song,
+             * and its note-off ticks would stretch the length.
+             */
+            break;
+        }
         if (tag == 0x4D54726Bu /* "MTrk" */) {
             if (len > r.n - r.i) {
                 break;
