@@ -209,6 +209,17 @@ struct nj_thread {
     nj_s4      exit_value;
     nj_value   ret_value;   /* result of a C-initiated call */
     int        stop_depth;  /* nj_exec returns when nframes reaches this */
+    /*
+     * Set while this thread is parked inside a nested C call - a native that
+     * invoked Java, which parked.  Its C stack is this thread's own, and the
+     * top frame on it is the NATIVE, whose code_len is 0, so the scheduler
+     * must not run the thread: the pump in vm_invoke() resumes it instead.
+     * Running it from the scheduler executed that native frame as bytecode;
+     * five collected titles died with
+     *   VerifyError: code runs past the end of the method
+     * at nj2me/util/TimerThread.pump pc=0 that way.
+     */
+    int        in_c_call;
 
     void      *port_ud;     /* free for the port */
     nj_u4      id;
@@ -570,6 +581,7 @@ nj_ref    nj_new_array(nj_vm *vm, nj_class *array_cls, nj_u4 length, int elem_ki
 nj_status nj_gc_run(nj_vm *vm);
 void      nj_gc_mark_ref(nj_vm *vm, nj_ref r);
 int       nj_heap_owns(nj_vm *vm, const void *p);   /* range check for untyped slots */
+int       nj_heap_owns_object(nj_vm *vm, const void *p);  /* + live-block magic */
 void      nj_gc_mark_value(nj_vm *vm, nj_value v);
 nj_size   nj_heap_free_bytes(nj_vm *vm);
 nj_size   nj_heap_used_bytes(nj_vm *vm);

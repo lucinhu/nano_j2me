@@ -893,7 +893,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             nj_s4 v_ = (--sp)->i;
             nj_s4 i_ = (--sp)->i;
             nj_ref a_ = (--sp)->r;
-            if (!a_ || !nj_heap_owns(vm, a_)) THROW("java/lang/NullPointerException", NULL);
+            if (!a_ || !nj_heap_owns_object(vm, a_)) THROW("java/lang/NullPointerException", NULL);
             if (a_->kind != NJ_OBJ_ARRAY || (nj_u4)i_ >= a_->length)
                 THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
             switch (op) {
@@ -909,7 +909,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             sp -= 2; v_ = sp[0].j;
             { nj_s4 i_ = (--sp)->i;
               nj_ref a_ = (--sp)->r;
-              if (!a_ || !nj_heap_owns(vm, a_)) THROW("java/lang/NullPointerException", NULL);
+              if (!a_ || !nj_heap_owns_object(vm, a_)) THROW("java/lang/NullPointerException", NULL);
               if (a_->kind != NJ_OBJ_ARRAY || (nj_u4)i_ >= a_->length)
                   THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
               ((nj_s8 *)a_->u.bytes)[i_] = v_; }
@@ -919,7 +919,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             sp -= 2; v_ = sp[0].j;
             { nj_s4 i_ = (--sp)->i;
               nj_ref a_ = (--sp)->r;
-              if (!a_ || !nj_heap_owns(vm, a_)) THROW("java/lang/NullPointerException", NULL);
+              if (!a_ || !nj_heap_owns_object(vm, a_)) THROW("java/lang/NullPointerException", NULL);
               if (a_->kind != NJ_OBJ_ARRAY || (nj_u4)i_ >= a_->length)
                   THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
               memcpy(&((double *)a_->u.bytes)[i_], &v_, 8u); }
@@ -928,7 +928,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             nj_ref v_ = (--sp)->r;
             nj_s4 i_ = (--sp)->i;
             nj_ref a_ = (--sp)->r;
-            if (!a_ || !nj_heap_owns(vm, a_)) THROW("java/lang/NullPointerException", NULL);
+            if (!a_ || !nj_heap_owns_object(vm, a_)) THROW("java/lang/NullPointerException", NULL);
             if (a_->kind != NJ_OBJ_ARRAY || a_->aflags != NJ_ARRAY_T_REF ||
                 (nj_u4)i_ >= a_->length)
                 THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
@@ -944,7 +944,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
              * reference array, so ArrayStoreException is both the safe answer
              * and the correct one.
              */
-            if (v_ && !nj_heap_owns(vm, v_)) {
+            if (v_ && !nj_heap_owns_object(vm, v_)) {
                 THROW("java/lang/ArrayStoreException", NULL);
             }
             if (v_ && v_->cls && a_->cls && a_->cls->component_cls &&
@@ -1514,9 +1514,18 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                  * which class was at fault.
                  *
                  * Range-checking it turns an unexplainable SIGSEGV into a
-                 * named exception at the instruction that caused it.
+                 * named exception at the instruction that caused it - and
+                 * membership alone is not enough.  A reference to a block the
+                 * collector has FREED is still inside the arena, and its first
+                 * word is the free list's next pointer by then, so `recv->cls`
+                 * read as NULL and the dispatch faulted on a null dereference:
+                 * 愤怒的小鸟-高清版_2353 did exactly that with a Player that
+                 * media_createPlayer_stream() had returned without rooting it
+                 * (the note there has the whole story).
+                 * nj_heap_owns_object() checks the block's magic as well as its
+                 * address, which is what the collector checks before tracing.
                  */
-                if (!nj_heap_owns(vm, recv)) {
+                if (!nj_heap_owns_object(vm, recv)) {
                     THROW("java/lang/VerifyError",
                           "receiver is not an object reference");
                 }

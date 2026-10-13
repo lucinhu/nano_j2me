@@ -393,6 +393,24 @@ static nj_status scheduler_step(nj_vm *vm)
         if (t->state != NJ_THREAD_RUNNING) {
             continue;
         }
+        /*
+         * Parked inside a nested C call: its C stack belongs to a native that
+         * is still running (or to the pump waiting for it), and the top frame
+         * on that stack is the NATIVE's, with code_len 0.  Running it here
+         * would fetch an opcode out of an empty method - five collected
+         * titles reported exactly that as
+         *   VerifyError: code runs past the end of the method
+         * at nj2me/util/TimerThread.pump pc=0.  The pump that owns the stack
+         * notices the thread becoming runnable and resumes it itself, so all
+         * this loop owes the thread is the deadline accounting above (which
+         * is why the check sits after it, not before: a thread parked in
+         * Thread.sleep() inside a native still has to set `earliest`, or the
+         * loop below mistakes "one thread asleep, one waiting" for a
+         * deadlock - 极品飞车16：亡命狂飙_1519 died that way).
+         */
+        if (t->in_c_call) {
+            continue;
+        }
 
         ran = 1;
         vm->cur = t;

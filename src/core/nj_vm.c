@@ -1329,6 +1329,16 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
              * nothing changes for an embedder that drives frames itself.
              */
             int stop_requested = 0;
+            /*
+             * This thread is now on a C stack that another thread's scheduler
+             * step must not touch: tell the scheduler to leave it alone and
+             * let this pump resume it, which is the only stack its frames
+             * belong to.  Saved and restored rather than cleared, because a
+             * native may nest another C call inside this one.
+             */
+            int prev_in_c_call = th->in_c_call;
+
+            th->in_c_call = 1;
 
             for (;;) {
                 nj_s8 now = nj_now_ms(vm);
@@ -1398,6 +1408,7 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
                 st = NJ_ERR_HALT;
                 break;
             }
+            th->in_c_call = prev_in_c_call;
             if (th->state != NJ_THREAD_RUNNING) {
                 break;   /* it really is stuck: report it rather than spin */
             }

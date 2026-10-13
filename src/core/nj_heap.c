@@ -563,6 +563,45 @@ int nj_heap_owns(nj_vm *vm, const void *p)
     return nj_is_heap_ptr(vm, p);
 }
 
+/*
+ * Is this pointer a LIVE object, or merely an address inside the arena?
+ *
+ * nj_heap_owns() answers the cheap question, and for a slot that held an int
+ * it is enough.  It is NOT enough for a slot that is about to be dereferenced
+ * as an object: a reference to a block the collector has already freed passes
+ * the range check, and its payload is then either the free list's next
+ * pointer or another object's data.  The first word of a freed block is that
+ * link (NULL for the last block of a bin), so `->cls` reads as 0 and the
+ * dereference faults with no hint of which reference was stale.
+ *
+ * The collector learned this first (see nj_gc_mark_object) and this is the
+ * same check, offered to the interpreter.  It costs one load of a word the
+ * allocator has just touched, and it turns an unexplainable SIGSEGV into a
+ * named exception at the instruction that used the bad reference.
+ */
+int nj_heap_owns_object(nj_vm *vm, const void *p)
+{
+    const nj_u1 *q = (const nj_u1 *)p;
+    const nj_block *b;
+    const nj_object *o;
+
+    if (!nj_is_heap_ptr(vm, p)) {
+        return 0;
+    }
+    if (q < vm->heap.base + NJ_BLOCK_HDR) {
+        return 0;               /* the arena's own header, not a payload */
+    }
+    b = (const nj_block *)(const void *)(q - NJ_BLOCK_HDR);
+    if (b->magic != NJ_BLOCK_MAGIC) {
+        return 0;               /* freed, or an interior pointer */
+    }
+    o = (const nj_object *)p;
+    if (o->kind > NJ_OBJ_THROW || o->size < sizeof(nj_object)) {
+        return 0;               /* a payload, but not a live object header */
+    }
+    return 1;
+}
+
 void nj_gc_mark_ref(nj_vm *vm, nj_ref r)
 {
     nj_gc_mark_object(vm, r);

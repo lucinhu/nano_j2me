@@ -1145,6 +1145,25 @@ NJFN(media_createPlayer_stream)
         nj_root_release(vm, mark);
         return NJ_ERR;
     }
+    /*
+     * Root the Player as well, for the same reason `data` is rooted above -
+     * and with the same title behind it, one step further along.
+     *
+     * A Player created here is reachable from nothing until this native
+     * returns it: the C local is not a root and the caller's operand slot is
+     * still empty.  Everything between player_new() and `ret->r = p` allocates
+     * (player_new itself allocates the Vector for F_P_LISTEN, the WAV path
+     * allocates the PCM array), and on a heap that is nearly full one of those
+     * allocations collects - freeing the Player and handing the title a
+     * reference to a recycled block.
+     *
+     * 愤怒的小鸟-高清版_2353 under --heap 32 did exactly that: the game stored
+     * the dangling Player in a field, and the SIGSEGV arrived three frames
+     * later inside `Player.realize()`, at the invokeinterface that dispatched
+     * on the freed object's `cls` word - which the sweep had overwritten with
+     * the free list's next pointer (NULL, so it read as "class == 0").
+     */
+    p = nj_root(vm, p);
     if (!wav_parse(barray_bytes(data), barray_len(data), &wi)) {
         const char *what = sniff_media(barray_bytes(data), barray_len(data));
 
@@ -1445,13 +1464,21 @@ NJFN(media_createPlayer_url)
      * failure mode that costs an afternoon.
      */
     if (n > 5 && c[0] == 't' && c[1] == 'o' && c[2] == 'n' && c[3] == 'e') {
+        nj_u4 tmark = nj_root_mark(vm);
         nj_ref p = player_new(vm, 0);
         nj_ref seq;
         nj_u2 *tmp;
         int k;
         if (!p) {
+            nj_root_release(vm, tmark);
             return NJ_ERR;
         }
+        /*
+         * Rooted, like the stream path: a Player is reachable from nothing
+         * until this native returns it, and nj_byte_array_new() below can
+         * collect on a heap that is nearly full.
+         */
+        p = nj_root(vm, p);
         for (i = 5; i < n && c[i] != (nj_u2)'/'; i++) {
             /* skip the "://" or ":" */
         }
@@ -1466,11 +1493,13 @@ NJFN(media_createPlayer_url)
          * accepts only the unusual literal-sequence form.
          */
         if (i >= n) {
+            nj_root_release(vm, tmark);
             ret->r = p;             /* locator form: no sequence yet */
             return NJ_OK;
         }
         seq = nj_byte_array_new(vm, (nj_u4)(n - i));
         if (!seq) {
+            nj_root_release(vm, tmark);
             return NJ_ERR;
         }
         tmp = (nj_u2 *)nj_string_chars(url);
@@ -1478,6 +1507,7 @@ NJFN(media_createPlayer_url)
             seq->u.bytes[k] = (nj_u1)(tmp[k + i] & 0xffu);
         }
         w_r(vm, p, F_P_SEQ, "[B", seq);
+        nj_root_release(vm, tmark);
         ret->r = p;
         return NJ_OK;
     }
@@ -1503,23 +1533,50 @@ NJFN(media_createPlayer_url)
 
 NJFN(media_supported_types)
 {
-    /* One element: "audio/x-wav", which is what this implementation decodes. */
-    nj_ref a = nj_array_new(vm, "java/lang/String", 1u);
-    if (!a) {
+    /* One element: "audio/x-wav", which is what this implementation decodes.
+     *
+     * Both objects are rooted while the other is built: a collection between
+     * nj_array_new() and the store would otherwise recycle whichever of the
+     * two is still only a C local, and the caller would hold a reference to a
+     * freed block (the same failure the note in media_createPlayer_stream()
+     * describes, one allocation later). */
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref s = nj_string_new(vm, "audio/x-wav");
+    nj_ref a;
+    if (!s) {
+        nj_root_release(vm, mark);
         return NJ_ERR;
     }
-    a->u.refs[0] = nj_string_new(vm, "audio/x-wav");
+    s = nj_root(vm, s);
+    a = nj_array_new(vm, "java/lang/String", 1u);
+    if (!a) {
+        nj_root_release(vm, mark);
+        return NJ_ERR;
+    }
+    a->u.refs[0] = s;
+    nj_root_release(vm, mark);
     ret->r = a;
     return NJ_OK;
 }
 
 NJFN(media_supported_protocols)
 {
-    nj_ref a = nj_array_new(vm, "java/lang/String", 1u);
-    if (!a) {
+    /* One element: "tone" - see media_supported_types() for the rooting. */
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref s = nj_string_new(vm, "tone");
+    nj_ref a;
+    if (!s) {
+        nj_root_release(vm, mark);
         return NJ_ERR;
     }
-    a->u.refs[0] = nj_string_new(vm, "tone");
+    s = nj_root(vm, s);
+    a = nj_array_new(vm, "java/lang/String", 1u);
+    if (!a) {
+        nj_root_release(vm, mark);
+        return NJ_ERR;
+    }
+    a->u.refs[0] = s;
+    nj_root_release(vm, mark);
     ret->r = a;
     return NJ_OK;
 }

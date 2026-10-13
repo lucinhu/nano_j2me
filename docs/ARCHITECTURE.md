@@ -68,6 +68,30 @@ The same property is what makes untyped operand slots safe at all: a Java `int`
 may hold any 32-bit pattern, and without the range check, walking the stack
 would be a wild read.
 
+### C locals are not roots
+
+A native that creates an object and then allocates again has to root the first
+one. Until the native returns it, an object is reachable from nothing: the
+caller's operand slot is still empty, and the C local holding it is invisible to
+the collector. `nj_root_mark()`/`nj_root()`/`nj_root_release()` exist for that
+window, and every native that allocates twice uses it.
+
+Two collected titles paid for that rule. 愤怒的小鸟-高清版_2353, run with
+`--heap 32`, took `Player.createPlayer()` down a path where `nj_byte_array_new()`
+collected between `player_new()` and the return; the game stored the Player in a
+field, and the SIGSEGV three frames later was an `invokeinterface` dispatching on
+the freed block's `cls` word — which the free list had overwritten with its next
+pointer, so it read as a null class. `Player.getControl("javax.microedition.
+media.control.VolumeControl")` (fully qualified, which is the spelling the spec
+requires) returned null for 开心农场_240 the same way.
+
+That is also why the interpreter's receiver check uses `nj_heap_owns_object()`
+and not `nj_heap_owns()`: membership alone accepts a freed block, because a
+freed block is still inside the arena. Checking the live-block magic as well
+turns "the collector took this object and something reused the memory" into a
+named `VerifyError` at the instruction that used it, instead of a null
+dereference inside the dispatcher.
+
 ## 3. Classes: lazy resolution with inline caches
 
 Class bytes are parsed once and **kept alive**, because the constant pool is
@@ -173,6 +197,24 @@ any other loop. A re-entrancy guard keeps it from being entered twice, because
 the scheduler runs Java code that can re-enter C. Without the pump,
 毁灭战士3_10598 - whose constructor builds its scene on a loader thread and
 waits for it - was reported as `construction ... blocked` and never started.
+
+**A thread parked inside a nested C call must not be scheduled.** When the
+parked frame was reached through a native - a `java.util.Timer` task, whose
+`run()` the timer thread enters from the native `nj2me/util/TimerThread.pump` -
+the thread's C stack is inside that native, so the top frame on it is the
+NATIVE, with no bytecode at all. The pump marks the thread `in_c_call`, the
+scheduler skips it and lets the pump resume it on the stack its frames belong
+to. Without that, a scheduler pass that found the thread runnable handed the
+native frame to the interpreter, and five collected titles (电子宠物蛋_11972,
+极品飞车16：亡命狂飙_1519, 纽约人生_1339, 实况足球2008中文版_9284,
+倚天屠龙记_4827) died with `VerifyError: code runs past the end of the method
+at nj2me/util/TimerThread.pump pc=0`.
+
+The skip sits *after* the deadline accounting, not before it: a thread parked
+in `Thread.sleep()` inside a native still has to contribute its deadline to the
+scheduler's `earliest`, or a scheduler pass that has nothing else to run reads
+"one thread asleep in a C call, one waiting" as a deadlock and gives up on a
+title that was painting perfectly well.
 
 ## 6. The class library is C, so classes are data
 
