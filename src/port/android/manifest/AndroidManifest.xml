@@ -1,26 +1,83 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  The whole manifest.  No permissions: the runtime reads a JAR from assets and
-  draws into a Surface, and RecordStore writes to the app's own private
-  directory, so there is nothing here that needs one.  A port that adds
-  networking would add INTERNET here and nowhere else.
--->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.example.nj2me">
 
+    <!-- VIBRATE is the only thing this app asks for.  No storage permission: jars
+         live in app-private storage, which needs none. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
-    <application android:label="nano_j2me"
-                 android:hasCode="true"
-                 android:allowBackup="false">
-        <activity android:name=".Nj2meActivity"
-                  android:exported="true"
-                  android:screenOrientation="portrait"
-                  android:configChanges="orientation|keyboardHidden|screenSize">
+    <application
+        android:label="Nano J2ME"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:allowBackup="false"
+        android:hardwareAccelerated="true"
+        android:theme="@style/NjTheme">
+
+        <!-- The launcher and the .jar opener are the same screen. -->
+        <activity
+            android:name=".LibraryActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Tapping a .jar in a file manager.
+                 File managers disagree about what a .jar is, and the platform
+                 tests MIME type and URI separately, so this needs four filters
+                 to be reachable from all of them:
+                   - the canonical MIME types (Android's own pickers);
+                   - a .jar path with NO type declared, which is the only thing
+                     that matches a sender that passes a URI and no type at all;
+                   - the same path with "*/*" declared, because an intent whose
+                     type is concrete (application/octet-stream is the common
+                     one) does not match a filter that declares no type;
+                   - the share sheet.
+                 The two path filters say content: and file: explicitly: a
+                 content:// URI would otherwise also match a filter that names
+                 no scheme, but the extension is the whole point here. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/java-archive" />
+                <data android:mimeType="application/x-java-archive" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:pathPattern=".*\.jar" />
+                <data android:scheme="file" android:pathPattern=".*\.jar" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" android:pathPattern=".*\.jar"
+                      android:mimeType="*/*" />
+                <data android:scheme="file" android:pathPattern=".*\.jar"
+                      android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
         </activity>
+
+        <activity
+            android:name=".GameActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
+            android:theme="@style/NjTheme" />
+
+        <activity
+            android:name=".PadEditActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/NjTheme" />
     </application>
 </manifest>

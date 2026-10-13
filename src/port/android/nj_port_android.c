@@ -3,12 +3,12 @@
  *
  * The Android NDK port, plus the JNI glue an Activity needs.
  *
- * Android is a hosted target, so the port has no file-system or memory work to
- * do; what it does need is a framebuffer that can be handed to the window
- * compositor without a copy, and an input queue that the UI thread can post
- * into from Java.
+ * Android is a hosted target, so the port has no memory work to do and its
+ * filesystem is bionic's stdio; what it does need is a framebuffer that can be
+ * handed to the window compositor without a copy, an input queue that the UI
+ * thread can post into from Java, and an audio device.
  *
- * TWO DETAILS THAT MATTER
+ * FOUR DETAILS THAT MATTER
  *
  *   ANativeWindow_lock() gives you a STRIDE, not a width.  That stride is
  *   passed straight to display_init and the rasterizer respects it, so no
@@ -20,6 +20,19 @@
  *   in as ANativeWindow_Buffer changes, not as a new surface.  The port
  *   therefore re-locks per frame and re-inits the surface view when the
  *   geometry moves, rather than caching the buffer pointer.
+ *
+ *   The MIDlet screen and the Surface are DIFFERENT SIZES, and the transform
+ *   between them is only in here.  display_present() computes an integer scale
+ *   and a centring offset; nj_port_android_touch() records the same numbers so
+ *   that it can invert them.  Every touch coordinate a game sees is therefore
+ *   in the coordinate system its Canvas was given, which is the only thing that
+ *   makes a tap land where the user aimed.
+ *
+ *   THE PORT RENDERS, THE ACTIVITY DRAWS THE KEYPAD.  An on-screen keypad is a
+ *   UI concern (it is configured in a settings screen and it changes shape
+ *   between titles), so it lives in Java, on top of the SurfaceView, and turns
+ *   its buttons into the same key events a hardware keypad would send.  The
+ *   port never learns that the keypad exists - it only sees key codes.
  */
 #include "nj2me/nj_port.h"
 #include "nj2me/nj_types.h"
@@ -37,8 +50,204 @@
 #include <jni.h>
 #include <time.h>
 #include <pthread.h>
+#include <dirent.h>
+#include <sys/stat.h>
+
+/*
+ * Two audio devices, one mixer, one APK.
+ *
+ * AAudio (API 26) is the device this port wants: one stream, a data callback,
+ * and no object graph to build and tear down.  OpenSL ES (API 9) is what every
+ * Android older than that has.  Building for only one of them means either an
+ * APK that will not install on a 2015 phone or one that cannot use the audio a
+ * 2023 phone has, and shipping two APKs is a worse answer than this one.
+ *
+ * So neither library is linked.  libaaudio.so is opened by hand the first time
+ * a sound is played - a hard link would make the loader refuse to load
+ * libnj2me.so at all on a device that has no such library - and when it is
+ * missing the same mixer is driven by OpenSL ES.  The declarations below are
+ * copied from the NDK's <aaudio/AAudio.h>, which marks all of them "introduced
+ * in Android 26" and refuses to compile them for an older target; they have to
+ * keep matching it.
+ */
+#include <dlfcn.h>
+#include <sys/system_properties.h>
+#include <SLES/OpenSLES.h>
+#include <SLES/OpenSLES_Android.h>
+
+#ifndef PROP_VALUE_MAX
+#define PROP_VALUE_MAX 92   /* __system_property_get's buffer, from <sys/system_properties.h> */
+#endif
+
+typedef struct AAudioStreamStruct AAudioStream;
+typedef struct AAudioStreamBuilderStruct AAudioStreamBuilder;
+typedef int32_t aaudio_result_t;
+typedef int32_t aaudio_direction_t;
+typedef int32_t aaudio_sharing_mode_t;
+typedef int32_t aaudio_performance_mode_t;
+typedef int32_t aaudio_format_t;
+typedef int32_t aaudio_usage_t;
+typedef int32_t aaudio_data_callback_result_t;
+
+#define AAUDIO_OK                        0
+#define AAUDIO_DIRECTION_OUTPUT          0
+#define AAUDIO_SHARING_MODE_SHARED       1
+#define AAUDIO_PERFORMANCE_MODE_NONE     10
+#define AAUDIO_FORMAT_PCM_I16            1
+#define AAUDIO_USAGE_GAME                14
+#define AAUDIO_CALLBACK_RESULT_CONTINUE  0
+
+typedef aaudio_data_callback_result_t (*aaudio_data_cb_t)(AAudioStream *, void *,
+                                                          void *, int32_t);
+typedef void (*aaudio_error_cb_t)(AAudioStream *, void *, aaudio_result_t);
+
+/* Resolved once per port, on the first sound.  A phone without AAudio leaves
+ * lib NULL and the OpenSL ES path takes over. */
+typedef struct android_aaudio {
+    void  *lib;
+    int    tried;
+    aaudio_result_t (*createBuilder)(AAudioStreamBuilder **);
+    void (*setDirection)(AAudioStreamBuilder *, aaudio_direction_t);
+    void (*setSharingMode)(AAudioStreamBuilder *, aaudio_sharing_mode_t);
+    void (*setPerformanceMode)(AAudioStreamBuilder *, aaudio_performance_mode_t);
+    void (*setFormat)(AAudioStreamBuilder *, aaudio_format_t);
+    void (*setChannelCount)(AAudioStreamBuilder *, int32_t);
+    void (*setSampleRate)(AAudioStreamBuilder *, int32_t);
+    void (*setUsage)(AAudioStreamBuilder *, aaudio_usage_t);   /* API 28 */
+    void (*setDataCallback)(AAudioStreamBuilder *, aaudio_data_cb_t, void *);
+    void (*setErrorCallback)(AAudioStreamBuilder *, aaudio_error_cb_t, void *);
+    aaudio_result_t (*openStream)(AAudioStreamBuilder *, AAudioStream **);
+    void (*deleteBuilder)(AAudioStreamBuilder *);
+    int32_t (*getSampleRate)(AAudioStream *);
+    int32_t (*getChannelCount)(AAudioStream *);
+    aaudio_result_t (*requestStart)(AAudioStream *);
+    aaudio_result_t (*requestPause)(AAudioStream *);
+    aaudio_result_t (*requestStop)(AAudioStream *);
+    aaudio_result_t (*close)(AAudioStream *);
+} android_aaudio;
 
 #define LOG_TAG "nj2me"
+
+/* ------------------------------------------------------------------ */
+/* Audio                                                               */
+/* ------------------------------------------------------------------ */
+/*
+ * A tone synth and a PCM ring, mixed in one AAudio callback.
+ *
+ * Why both in one stream: MIDlet games play tones and sampled audio at the
+ * same time (a jingle over a sound effect), and two output streams would mix
+ * them in the hardware mixer with no control over relative level and no way to
+ * count what was actually played.
+ *
+ * The device is opened LAZILY, on the first tone or PCM write.  A MIDlet that
+ * never makes a sound never touches the audio device, which matters on a phone.
+ *
+ * The stream is NOT paused when a sound ends.  Pausing on pcm_close() would cut
+ * the tail of anything still sitting in the ring - the runtime throttles writes
+ * through pcm_free() and can close the player the moment the last frame is
+ * queued - so the stream stays open for as long as the game is in the
+ * foreground, and nj_port_android_set_active(0) is what releases it.
+ */
+#define ANDROID_AUDIO_RATE   44100
+#define ANDROID_AUDIO_TONES  16       /* one playTone() sequence            */
+#define ANDROID_AUDIO_RING   16384    /* stereo frames, ~370 ms at 44.1 kHz */
+#define ANDROID_TONE_AMP     7000     /* of 32767, leaving room for PCM     */
+
+/*
+ * OpenSL ES wants a fixed queue of buffers it hands back one at a time, and it
+ * plays them on its own thread.  1024 frames is 23 ms at 44.1 kHz: short enough
+ * that a tone starts when the game says so, long enough that a slow phone is
+ * not woken up four hundred times a second.
+ */
+#define ANDROID_SL_BUFFERS   4
+#define ANDROID_SL_FRAMES    1024
+
+typedef struct android_audio {
+    pthread_mutex_t lock;
+    int   backend;       /* 0 = no device, 1 = AAudio, 2 = OpenSL ES */
+    int   out_rate, out_ch;
+    int   failed;        /* open failed once: stop retrying every tone */
+    int   stream_paused;
+
+    android_aaudio aa;                 /* backend 1 */
+    AAudioStream  *stream;
+
+    SLObjectItf    sl_engine_obj;      /* backend 2 */
+    SLEngineItf    sl_engine;
+    SLObjectItf    sl_mix_obj;
+    SLObjectItf    sl_player_obj;
+    SLPlayItf      sl_play;
+    SLAndroidSimpleBufferQueueItf sl_queue;
+    nj_s2         *sl_buf;
+    int            sl_buf_frames;
+    int            sl_next;
+
+    /* tone sequencer */
+    nj_audio_tone tones[ANDROID_AUDIO_TONES];
+    int   tone_count, tone_next, tone_on;
+    nj_u4 phase, step, left;   /* 16.16 phase accumulator, step, frames left */
+
+    /* streaming PCM, always stored interleaved stereo */
+    nj_s2 *ring;
+    int   pcm_on, src_rate, src_ch, rd, wr;
+    nj_u4 pcm_pos;             /* 16.16 playback position inside one frame */
+
+    long long tones_played, pcm_frames, frames_rendered, callbacks;
+} android_audio;
+
+static nj_u4 android_millis(void *ud);
+
+/*
+ * How the logical screen is fitted into the window (android_state.view_mode) is
+ * nj_android_view_mode, declared in include/nj2me/nj_port.h: the values travel
+ * over JNI and are stored in the jar's sidecar file by Java, so they are part of
+ * the Java contract and live where Java's caller can see them.
+ */
+
+/* ------------------------------------------------------------------ */
+/* Glyphs from the platform                                            */
+/* ------------------------------------------------------------------ */
+/*
+ * The runtime's wide-glyph table is a bitmap face compiled into the library:
+ * 7445 GB2312 characters at 12x12 and 16x16, about 480 KB of rodata per ABI -
+ * more than half of every libnj2me.so and 1.4 MB across the three ABIs in the
+ * APK.
+ *
+ * Android already has those glyphs, in fonts this runtime cannot parse: the
+ * system CJK faces are CFF2 (OTTO), and the TrueType path here reads glyf
+ * outlines only.  So the port asks the platform to rasterise instead, through
+ * one fallback face per slot (nj_vm_set_fallback_fonts).  Java draws a single
+ * character into coverage rows, the port caches them, and the renderer blends
+ * them exactly as it blends a compiled-in face.  With this in place the Android
+ * build sets NJ_ENABLE_FONT_CJK=0 and ships no glyph table at all: the CJK
+ * text is the phone's own font, at the phone's own hinting.
+ *
+ * A miss costs one JNI call per character per size, so the cache is not an
+ * optimisation to add later - a screen of Chinese text would otherwise cross
+ * the JNI boundary thousands of times a frame.
+ */
+#define ANDROID_GLYPH_CELL_MAX 16
+#define ANDROID_GLYPH_CACHE    96
+
+typedef struct android_glyph_slot {
+    nj_u2 ch;
+    int   cell;
+    int   w, h;
+    nj_u1 rows[ANDROID_GLYPH_CELL_MAX * ANDROID_GLYPH_CELL_MAX];
+} android_glyph_slot;
+
+typedef struct android_glyph_cache {
+    android_glyph_slot slot[ANDROID_GLYPH_CACHE];
+    int next;                      /* round-robin victim */
+    int calls, hits, misses, failed;
+} android_glyph_cache;
+
+typedef struct android_glyph_face {
+    nj_font face;                  /* borrowed by the runtime, never freed */
+    struct android_state *state;
+    int   cell;                    /* the cell Java is asked to fill */
+    int   last_w;                  /* what the last lookup returned */
+} android_glyph_face;
 
 typedef struct android_state {
     ANativeWindow *window;
@@ -49,10 +258,83 @@ typedef struct android_state {
     int   format;
     nj_u1 *shadow;        /* the logical screen; scaled into the window */
 
+    /*
+     * The transform display_present() applies, kept so that touch can undo it.
+     *
+     * Floats, not the integer scale this port started with: the player can ask
+     * for a fractional scale ("铺满屏幕") and a pan, and a tap mapped with a stale
+     * integer scale lands on the wrong pixel of the game.
+     *
+     * view_src_* is the first LOGICAL pixel of the picture.  It is (0,0) unless
+     * the player asked for 适配画面, which crops to the area the MIDlet paints.
+     *
+     * Guarded by `lock`: the frame loop writes it, the UI thread reads it, and
+     * they are different threads.
+     */
+    float view_scale;              /* window pixels per logical pixel */
+    float view_off_x, view_off_y;  /* where the picture starts in the window */
+    int   view_src_x, view_src_y;  /* first logical pixel drawn */
+    int   view_mode;               /* NJ_VIEW_* */
+    float view_zoom;               /* CUSTOM: multiplier on the fit scale */
+    float view_dx, view_dy;        /* CUSTOM: extra offset, window pixels */
+    long  frames_presented;
+    int   logged_format;   /* window buffer format already reported to logcat */
+
+    /*
+     * Which part of the logical screen the MIDlet actually paints.
+     *
+     * No manifest in the corpus says what screen a game was written for - 6 of
+     * the 395 jars in tests/games have a size key, and guessing from resource
+     * names finds 5 - so the only honest answer is the one the game gives by
+     * painting: keep the previous frame, union the pixels that changed into a
+     * box, and stop once the box covers the screen (a game that paints
+     * everywhere) or after a few hundred frames (one that does not).  That box
+     * is what 适配画面 crops to, and what the launcher offers as the resolution
+     * it detected.
+     */
+    nj_u1 *det_prev;               /* the previous frame, same size as shadow */
+    int   det_x, det_y, det_w, det_h;
+    int   det_frames;
+    int   det_done;
+
     nj_event queue[256];
     int   qh, qt;
 
+    /* observations, for nj_port_android_stats() */
+    int   key_events, ptr_events;
+    int   ptr_id;              /* finger that owns the MIDP pointer, or -1 */
+
+    /* set_paths() copies these; where the MIDlet may write */
+    char  rms_dir[512];
+    char  fs_dir[512];
+
+    int   paused;              /* backgrounded: idle() parks the VM thread */
     int   quit;
+
+    android_audio *audio;
+
+    /*
+     * Java callbacks.  Owned by the JNI layer below, which sets these in
+     * nativeCreate() and releases the global reference in nativeDestroy() -
+     * the port itself must stay free of JNI lifecycle.
+     */
+    JavaVM *jvm;
+    jclass  activity_class;
+    jmethodID vibrate_mid;
+
+    /*
+     * The platform's glyphs.  One face per (size, style) slot, each a copy of
+     * the built-in bitmap face of that slot plus a provider hook, so a face
+     * keeps the line height MIDlet layout was measured against and only the
+     * characters the bitmap cannot draw come from Java.
+     */
+    android_glyph_face  faces[NJ_FONTSET_SLOTS];
+    const nj_font      *face_ptrs[NJ_FONTSET_SLOTS];
+    android_glyph_cache *glyph_cache;
+    jclass    glyph_class;
+    jmethodID glyph_mid;
+    JNIEnv   *glyph_env;       /* the run thread's env, attached on first use */
+    int       glyph_attached;
 } android_state;
 
 #define AS(ud) ((android_state *)(ud))
@@ -88,6 +370,49 @@ static void android_log(void *ud, int level, const char *msg)
     default: prio = ANDROID_LOG_INFO;  break;
     }
     __android_log_write(prio, LOG_TAG, msg);
+}
+
+/*
+ * Called by the scheduler every quantum.  When the app is in the background
+ * this is where the VM thread waits: the frame loop, the MIDlet's threads and
+ * the audio all stop advancing, the CPU drops to nothing, and resuming is
+ * instant because nothing was torn down.  Sleeping rather than spinning keeps a
+ * suspended game from showing up as a background battery drain.
+ */
+static void android_idle(void *ud)
+{
+    android_state *s = AS(ud);
+    while (s->paused && !s->quit) {
+        android_sleep_ms(ud, 10);
+    }
+}
+
+/*
+ * Local wall clock, for java.util.Date and Calendar.  Without this the runtime
+ * answers in UTC and a game that prints a timestamp prints the wrong one.
+ */
+static int android_now(void *ud, nj_datetime *out)
+{
+    struct timespec ts;
+    struct tm tmv;
+    (void)ud;
+    if (!out) {
+        return 0;
+    }
+    clock_gettime(CLOCK_REALTIME, &ts);
+    if (!localtime_r(&ts.tv_sec, &tmv)) {
+        return 0;
+    }
+    out->year = tmv.tm_year + 1900;
+    out->month = tmv.tm_mon;
+    out->day = tmv.tm_mday;
+    out->hour = tmv.tm_hour;
+    out->minute = tmv.tm_min;
+    out->second = tmv.tm_sec;
+    out->millis = (nj_s4)(ts.tv_nsec / 1000000);
+    out->weekday = tmv.tm_wday;
+    out->tz_offset = (nj_s4)(tmv.tm_gmtoff / 60);   /* bionic has tm_gmtoff */
+    return 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -152,6 +477,19 @@ static int android_display_init(void *ud, int *w, int *h, int *stride, void **px
     if (!s->shadow) {
         return -1;
     }
+    /*
+     * The frame the detection compares against, and a fresh box.  Only
+     * display_present() uses these; if the allocation fails the port simply
+     * has no auto-detect, which is a convenience, not a display.
+     */
+    free(s->det_prev);
+    s->det_prev = (nj_u1 *)calloc(1u, (size_t)s->stride * (size_t)s->height);
+    s->det_x = 0;
+    s->det_y = 0;
+    s->det_w = 0;
+    s->det_h = 0;
+    s->det_frames = 0;
+    s->det_done = 0;
     *w = s->width;
     *h = s->height;
     *stride = s->stride;
@@ -159,80 +497,360 @@ static int android_display_init(void *ud, int *w, int *h, int *stride, void **px
     return NJ_PIXFMT;
 }
 
+/*
+ * One logical pixel as the window wants it.
+ *
+ * The window's byte order is not something this port may assume away.
+ * WINDOW_FORMAT_RGBA_8888 is R,G,B,A in memory starting at the lowest address,
+ * so the 32-bit value to store is 0xAABBGGRR.  The natural-looking
+ * 0xffRRGGBB swaps red and blue on the panel, and no other check in the tree
+ * can see that: the rasteriser really does put red in the high bits of its
+ * 5-6-5 word, the headless frame dump really does print those bytes, and both
+ * are right.  It is this one store that decides the colour - and an RGB_565
+ * window wants red back in the high bits, the opposite packing.
+ * tools/make_colordemo_jar.sh paints pure primaries left to right so that this
+ * is a measurement (tools/sample_screenshot.py) instead of an opinion.
+ */
+static nj_u4 android_pixel(const android_state *s, int wide, int lx, int ly)
+{
+    const nj_u1 *src = s->shadow + (size_t)ly * (size_t)s->stride;
+    nj_u4 r, g, b;
+
+    if (s->format == NJ_PIXFMT_ARGB8888) {
+        nj_u4 c4 = ((const nj_u4 *)src)[lx];
+        r = (c4 >> 16) & 0xffu;
+        g = (c4 >> 8) & 0xffu;
+        b = c4 & 0xffu;
+    } else {
+        nj_u2 c = ((const nj_u2 *)src)[lx];
+        nj_u4 r5 = (nj_u4)((c >> 11) & 0x1fu);
+        nj_u4 g6 = (nj_u4)((c >> 5) & 0x3fu);
+        nj_u4 b5 = (nj_u4)(c & 0x1fu);
+        /* Always carry 8 bits per channel and narrow again at the end: 5-6-5 ->
+         * 8 -> 5-6-5 is exact (the expand replicates the top bits), and one
+         * shape for both paths cannot get the second one wrong. */
+        r = (r5 << 3) | (r5 >> 2);
+        g = (g6 << 2) | (g6 >> 4);
+        b = (b5 << 3) | (b5 >> 2);
+    }
+    if (wide) {
+        return 0xff000000u | (b << 16) | (g << 8) | r;
+    }
+    return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+}
+
+/*
+ * Grow the box of pixels the MIDlet has painted, one present at a time.
+ *
+ * This is the answer to "what resolution is this game, really?".  A title
+ * written for 128x128 gets the 240x320 canvas every other title gets and paints
+ * in a corner of it; nothing in the jar says so (6 of 395 declare a size), but
+ * the pixels do.
+ *
+ * Rows are compared whole first: most of a frame is usually identical to the
+ * one before it, so only the rows that differ are scanned for their first and
+ * last changed pixel.
+ */
+static void android_detect(android_state *s)
+{
+    int bpp = android_bytes_per_pixel(s->format);
+    size_t rowbytes = (size_t)s->width * (size_t)bpp;
+    int bx0 = s->width, by0 = s->height, bx1 = -1, by1 = -1;
+    int y;
+
+    if (!s->det_prev || !s->shadow || s->width <= 0 || s->height <= 0) {
+        s->det_done = 1;
+        return;
+    }
+    for (y = 0; y < s->height; y++) {
+        const nj_u1 *cur = s->shadow + (size_t)y * (size_t)s->stride;
+        const nj_u1 *prv = s->det_prev + (size_t)y * (size_t)s->stride;
+        int x;
+
+        if (memcmp(cur, prv, rowbytes) == 0) {
+            continue;
+        }
+        if (y < by0) { by0 = y; }
+        if (y > by1) { by1 = y; }
+        for (x = 0; x < s->width; x++) {
+            if (memcmp(cur + (size_t)x * (size_t)bpp,
+                       prv + (size_t)x * (size_t)bpp, (size_t)bpp) != 0) {
+                if (x < bx0) { bx0 = x; }
+                break;
+            }
+        }
+        for (x = s->width - 1; x >= 0; x--) {
+            if (memcmp(cur + (size_t)x * (size_t)bpp,
+                       prv + (size_t)x * (size_t)bpp, (size_t)bpp) != 0) {
+                if (x > bx1) { bx1 = x; }
+                break;
+            }
+        }
+    }
+    if (bx1 >= bx0 && by1 >= by0) {
+        int x0 = bx0, y0 = by0, x1 = bx1, y1 = by1;
+
+        if (s->det_w > 0 && s->det_h > 0) {
+            if (s->det_x < x0) { x0 = s->det_x; }
+            if (s->det_y < y0) { y0 = s->det_y; }
+            if (s->det_x + s->det_w - 1 > x1) { x1 = s->det_x + s->det_w - 1; }
+            if (s->det_y + s->det_h - 1 > y1) { y1 = s->det_y + s->det_h - 1; }
+        }
+        s->det_x = x0;
+        s->det_y = y0;
+        s->det_w = x1 - x0 + 1;
+        s->det_h = y1 - y0 + 1;
+    }
+    memcpy(s->det_prev, s->shadow, rowbytes * (size_t)s->height);
+    s->det_frames++;
+
+    /*
+     * Stop when there is nothing left to learn.  A game that paints the whole
+     * screen has said its resolution is the canvas; one that does not has had
+     * 600 frames - twenty seconds at the frame cap - to show where it draws.
+     */
+    if (s->det_w >= s->width - 1 && s->det_h >= s->height - 1) {
+        s->det_done = 1;
+    } else if (s->det_frames >= 600) {
+        s->det_done = 1;
+    }
+}
+
 static void android_display_present(void *ud, int x, int y, int w, int h)
 {
     android_state *s = AS(ud);
+    ANativeWindow *win;
     ANativeWindow_Buffer buf;
     (void)x; (void)y; (void)w; (void)h;
 
-    if (!s->window || s->quit) {
+    /*
+     * Take a reference for the duration of the frame rather than holding the
+     * lock across it.  The window can be replaced at any time - the activity
+     * destroys its surface when the app goes to the background and creates a
+     * new one coming back - and holding the lock through a blit would make the
+     * UI thread wait for a frame; releasing the reference under it would leave
+     * this frame writing into a window the activity had already given up.
+     */
+    pthread_mutex_lock(&s->lock);
+    win = s->window;
+    if (win) {
+        ANativeWindow_acquire(win);
+    }
+    pthread_mutex_unlock(&s->lock);
+    if (!win || s->quit) {
+        if (win) {
+            ANativeWindow_release(win);
+        }
         return;
     }
-    if (ANativeWindow_lock(s->window, &buf, NULL) != 0) {
+    if (ANativeWindow_lock(win, &buf, NULL) != 0) {
+        ANativeWindow_release(win);
         return;
     }
     /*
-     * Blit the logical screen into the window, scaled by the largest INTEGER
-     * factor that fits and centred, with the leftover as black bars.
+     * Decide the picture: which logical pixels, at what scale, and where.
      *
-     * Integer, because a J2ME game's art is pixel art and a fractional scale
-     * turns every sprite edge into a blur; nearest-neighbour at 3x or 4x looks
-     * like a phone from the era, which is the point.  Centred and letterboxed,
-     * because stretching to the aspect ratio would distort the game.
+     * The default is the largest INTEGER factor that fits, centred, with the
+     * leftover as black bars - integer because a J2ME game's art is pixel art
+     * and a fractional scale turns every sprite edge into a blur, centred
+     * because stretching to the panel's aspect ratio would distort the game.
+     *
+     * On top of that the player gets three things this port cannot guess:
+     * 铺满 (use the whole screen, fractional scale), 自定义 (a zoom and a pan),
+     * and 适配画面 (crop to the area the MIDlet actually paints and scale that,
+     * which is what a title written for 128x128 needs on a 240x320 canvas).
      */
+    if (!s->det_done) {
+        android_detect(s);
+    }
     {
-        int scale = 1;
-        int ox, oy, row, col;
-        if (s->win_w > 0 && s->win_h > 0 && s->width > 0 && s->height > 0) {
-            int sx = s->win_w / s->width;
-            int sy = s->win_h / s->height;
-            scale = (sx < sy) ? sx : sy;
-            if (scale < 1) {
-                scale = 1;      /* smaller than the game: show the top-left */
+        int sx0 = 0, sy0 = 0, sw = s->width, sh = s->height;
+        int fit, ox, oy, drawn_w, drawn_h;
+        float scale;
+
+        if (s->view_mode == NJ_VIEW_AUTO && s->det_w >= 16 && s->det_h >= 16
+                && (long)s->det_w * s->det_h
+                       < (long)s->width * (long)s->height / 10L * 9L) {
+            sx0 = s->det_x;
+            sy0 = s->det_y;
+            sw = s->det_w;
+            sh = s->det_h;
+        }
+        /* the largest whole-number scale that fits the picture */
+        {
+            int fx = 1, fy = 1;
+            if (s->win_w > 0 && s->win_h > 0 && sw > 0 && sh > 0) {
+                fx = s->win_w / sw;
+                fy = s->win_h / sh;
+            }
+            fit = (fx < fy) ? fx : fy;
+            if (fit < 1) {
+                fit = 1;        /* smaller than the game: show the top-left */
             }
         }
-        ox = (buf.width - s->width * scale) / 2;
-        oy = (buf.height - s->height * scale) / 2;
-        if (ox < 0) { ox = 0; }
-        if (oy < 0) { oy = 0; }
-
-        /* Black bars first, so the areas the game does not cover are not
-         * whatever the compositor last left there. */
-        for (row = 0; row < buf.height; row++) {
-            memset((nj_u1 *)buf.bits + (size_t)row * (size_t)buf.stride * 4u,
-                   0, (size_t)buf.width * 4u);
+        if (s->view_mode == NJ_VIEW_FILL) {
+            float fx = (float)buf.width / (float)sw;
+            float fy = (float)buf.height / (float)sh;
+            scale = (fx < fy) ? fx : fy;
+            if (!(scale > 0.0f)) {
+                scale = 1.0f;
+            }
+        } else if (s->view_mode == NJ_VIEW_CUSTOM) {
+            float z = (s->view_zoom > 0.05f) ? s->view_zoom : 1.0f;
+            scale = (float)fit * z;
+        } else {
+            scale = (float)fit;
         }
-        for (row = 0; row < s->height; row++) {
-            const nj_u1 *src = s->shadow + (size_t)row * (size_t)s->stride;
-            for (col = 0; col < s->width; col++) {
-                nj_u4 px = 0u;
+        drawn_w = (int)((float)sw * scale);
+        drawn_h = (int)((float)sh * scale);
+        if (drawn_w < 1) { drawn_w = 1; }
+        if (drawn_h < 1) { drawn_h = 1; }
+        ox = (buf.width - drawn_w) / 2;
+        oy = (buf.height - drawn_h) / 2;
+        if (s->view_mode == NJ_VIEW_CUSTOM) {
+            ox += (int)s->view_dx;
+            oy += (int)s->view_dy;
+        }
+        /* Keep the picture reachable.  One that fits may be parked anywhere
+         * inside the window; one that does not is clamped so that no edge can
+         * be dragged past the panel and lost. */
+        if (drawn_w <= buf.width) {
+            if (ox < 0) { ox = 0; }
+            if (ox > buf.width - drawn_w) { ox = buf.width - drawn_w; }
+        } else if (ox > 0) {
+            ox = 0;
+        } else if (ox < buf.width - drawn_w) {
+            ox = buf.width - drawn_w;
+        }
+        if (drawn_h <= buf.height) {
+            if (oy < 0) { oy = 0; }
+            if (oy > buf.height - drawn_h) { oy = buf.height - drawn_h; }
+        } else if (oy > 0) {
+            oy = 0;
+        } else if (oy < buf.height - drawn_h) {
+            oy = buf.height - drawn_h;
+        }
+
+        /* Publish the transform for nj_port_android_touch() before the frame
+         * reaches the panel: a tap that arrives between the two would otherwise
+         * be mapped with the previous geometry. */
+        pthread_mutex_lock(&s->lock);
+        s->view_scale = scale;
+        s->view_off_x = (float)ox;
+        s->view_off_y = (float)oy;
+        s->view_src_x = sx0;
+        s->view_src_y = sy0;
+        pthread_mutex_unlock(&s->lock);
+
+        /*
+         * The window's byte order is not something this port may assume away.
+         *
+         * WINDOW_FORMAT_RGBA_8888 is R,G,B,A in memory starting at the lowest
+         * address, so the 32-bit value to store is 0xAABBGGRR.  The
+         * natural-looking 0xffRRGGBB swaps red and blue on the panel, and no
+         * other check in the tree can see that: the rasteriser really does put
+         * red in the high bits of its 5-6-5 word, the headless frame dump
+         * really does print those bytes, and both are right.  It is this one
+         * store that decides the colour - and an RGB_565 window wants red back
+         * in the high bits, the opposite packing.  tools/make_colordemo_jar.sh
+         * paints pure primaries left to right so that this is a measurement
+         * (tools/sample_screenshot.py) instead of an opinion.
+         */
+        {
+            int wide = (buf.format == WINDOW_FORMAT_RGB_565) ? 0 : 1;
+            size_t bpp = wide ? 4u : 2u;
+            int row, col;
+            /* The destination is clipped by hand when a custom zoom makes the
+             * picture larger than the window: the row stride is the window's,
+             * so a block that starts off-screen must not be written. */
+            int cx0 = (ox < 0) ? -ox : 0;
+            int cy0 = (oy < 0) ? -oy : 0;
+            int cx1 = (ox + drawn_w > buf.width) ? buf.width - ox : drawn_w;
+            int cy1 = (oy + drawn_h > buf.height) ? buf.height - oy : drawn_h;
+
+            if (buf.format != s->logged_format) {
+                char msg[96];
+                s->logged_format = buf.format;
+                snprintf(msg, sizeof(msg),
+                         "window buffer %dx%d stride %d format %d, %d bytes/px",
+                         buf.width, buf.height, buf.stride, (int)buf.format,
+                         (int)bpp);
+                android_log(NULL, 2, msg);
+            }
+
+            /* Black bars first, so the areas the game does not cover are not
+             * whatever the compositor last left there. */
+            for (row = 0; row < buf.height; row++) {
+                memset((nj_u1 *)buf.bits + (size_t)row * (size_t)buf.stride * bpp,
+                       0, (size_t)buf.width * bpp);
+            }
+
+            if (scale == (float)fit) {
+                /* Whole-number scale: one logical pixel becomes a solid block.
+                 * This is the default and by far the cheapest path. */
                 int dy;
-                if (s->format == NJ_PIXFMT_ARGB8888) {
-                    const nj_u4 *p4 = (const nj_u4 *)src;
-                    px = p4[col];
-                } else {
-                    const nj_u2 *p2 = (const nj_u2 *)src;
-                    nj_u2 c = p2[col];
-                    nj_u4 r = (nj_u4)((c >> 11) & 0x1fu);
-                    nj_u4 g = (nj_u4)((c >> 5) & 0x3fu);
-                    nj_u4 b = (nj_u4)(c & 0x1fu);
-                    px = 0xff000000u | ((r << 3) | (r >> 2)) << 16
-                         | ((g << 2) | (g >> 4)) << 8 | ((b << 3) | (b >> 2));
+                for (row = 0; row < sh; row++) {
+                    for (dy = 0; dy < fit; dy++) {
+                        int ry = row * fit + dy;
+                        nj_u1 *drow;
+                        if (ry < cy0 || ry >= cy1) {
+                            continue;
+                        }
+                        drow = (nj_u1 *)buf.bits
+                               + (size_t)(oy + ry) * (size_t)buf.stride * bpp;
+                        for (col = 0; col < sw; col++) {
+                            nj_u4 px = android_pixel(s, wide, sx0 + col,
+                                                     sy0 + row);
+                            int bx = col * fit;
+                            int dx0 = (cx0 > bx) ? cx0 : bx;
+                            int dx1 = (cx1 < bx + fit) ? cx1 : bx + fit;
+                            int dx;
+                            if (wide) {
+                                nj_u4 *dst = (nj_u4 *)drow;
+                                for (dx = dx0; dx < dx1; dx++) {
+                                    dst[ox + dx] = px;
+                                }
+                            } else {
+                                nj_u2 *dst = (nj_u2 *)drow;
+                                for (dx = dx0; dx < dx1; dx++) {
+                                    dst[ox + dx] = (nj_u2)px;
+                                }
+                            }
+                        }
+                    }
                 }
-                for (dy = 0; dy < scale; dy++) {
-                    nj_u4 *dst = (nj_u4 *)((nj_u1 *)buf.bits
-                                 + (size_t)(oy + row * scale + dy)
-                                       * (size_t)buf.stride * 4u)
-                                 + ox + col * scale;
+            } else {
+                /* Fractional scale (铺满 and 自定义): nearest neighbour, one
+                 * destination pixel at a time.  A J2ME screen is small and a
+                 * phone panel is not, so this is the expensive path - which is
+                 * why it is not the default. */
+                int dy;
+                for (dy = cy0; dy < cy1; dy++) {
+                    int sy = sy0 + (int)((float)dy / scale);
+                    nj_u1 *drow = (nj_u1 *)buf.bits
+                                  + (size_t)(oy + dy) * (size_t)buf.stride * bpp;
                     int dx;
-                    for (dx = 0; dx < scale; dx++) {
-                        dst[dx] = px;
+                    if (sy > sy0 + sh - 1) { sy = sy0 + sh - 1; }
+                    if (sy < sy0) { sy = sy0; }
+                    for (dx = cx0; dx < cx1; dx++) {
+                        int sx = sx0 + (int)((float)dx / scale);
+                        nj_u4 px;
+                        if (sx > sx0 + sw - 1) { sx = sx0 + sw - 1; }
+                        if (sx < sx0) { sx = sx0; }
+                        px = android_pixel(s, wide, sx, sy);
+                        if (wide) {
+                            ((nj_u4 *)drow)[ox + dx] = px;
+                        } else {
+                            ((nj_u2 *)drow)[ox + dx] = (nj_u2)px;
+                        }
                     }
                 }
             }
         }
     }
-    ANativeWindow_unlockAndPost(s->window);
+    ANativeWindow_unlockAndPost(win);
+    ANativeWindow_release(win);
+    s->frames_presented++;
 }
 
 /* ------------------------------------------------------------------ */
@@ -253,18 +871,1145 @@ static int android_input_poll(void *ud, nj_event *ev)
     return have;
 }
 
+/* Caller holds s->lock. */
+static int android_push_locked(android_state *s, const nj_event *ev)
+{
+    int next = (s->qt + 1) % (int)(sizeof(s->queue) / sizeof(s->queue[0]));
+
+    if (next == s->qh) {
+        /* Full.  Dropping the newest beats dropping the oldest: the event the
+         * game has not seen yet is the one it can still do without, while the
+         * key-down it is waiting on may be what unblocks it. */
+        return 0;
+    }
+    s->queue[s->qt] = *ev;
+    s->qt = next;
+    return 1;
+}
+
 static void android_push(void *ud, const nj_event *ev)
 {
     android_state *s = AS(ud);
-    int next;
+    pthread_mutex_lock(&s->lock);
+    android_push_locked(s, ev);
+    pthread_mutex_unlock(&s->lock);
+}
+
+/* Queue depth the harness gets to see: the runtime's input_push hook. */
+static int android_input_push(void *ud, const nj_event *ev)
+{
+    android_state *s = AS(ud);
+    int taken;
+    pthread_mutex_lock(&s->lock);
+    taken = android_push_locked(s, ev);
+    pthread_mutex_unlock(&s->lock);
+    return taken;
+}
+
+/*
+ * The key table.  ONE table, two users: push_key() translates a hardware key
+ * through it, and the keypad editor in Java asks for it over JNI so that the
+ * buttons it offers are exactly the codes this port understands.  A second
+ * table in Java would be a second place to be wrong.
+ */
+typedef struct android_keymap_entry {
+    int         android;   /* android.view.KeyEvent.KEYCODE_*, written out    */
+    nj_u1       nj;        /* nj_key                                         */
+    const char *label;     /* shown on the on-screen keypad                  */
+} android_keymap_entry;
+
+static const android_keymap_entry k_keymap[] = {
+    { 19, NJ_KEY_UP,        "Up"     },   /* KEYCODE_DPAD_UP       */
+    { 20, NJ_KEY_DOWN,      "Down"   },   /* KEYCODE_DPAD_DOWN     */
+    { 21, NJ_KEY_LEFT,      "Left"   },   /* KEYCODE_DPAD_LEFT     */
+    { 22, NJ_KEY_RIGHT,     "Right"  },   /* KEYCODE_DPAD_RIGHT    */
+    { 23, NJ_KEY_FIRE,      "Fire"   },   /* KEYCODE_DPAD_CENTER   */
+    { 66, NJ_KEY_FIRE,      "Fire"   },   /* KEYCODE_ENTER         */
+    { 62, NJ_KEY_FIRE,      "Fire"   },   /* KEYCODE_SPACE         */
+    {  4, NJ_KEY_SOFT_RIGHT,"Soft R" },   /* KEYCODE_BACK          */
+    { 82, NJ_KEY_SOFT_LEFT, "Soft L" },   /* KEYCODE_MENU          */
+    { 67, NJ_KEY_CLEAR,     "Clear"  },   /* KEYCODE_DEL           */
+    {  7, NJ_KEY_0,         "0"      },   /* KEYCODE_0             */
+    {  8, NJ_KEY_1,         "1"      },
+    {  9, NJ_KEY_2,         "2"      },
+    { 10, NJ_KEY_3,         "3"      },
+    { 11, NJ_KEY_4,         "4"      },
+    { 12, NJ_KEY_5,         "5"      },
+    { 13, NJ_KEY_6,         "6"      },
+    { 14, NJ_KEY_7,         "7"      },
+    { 15, NJ_KEY_8,         "8"      },
+    { 16, NJ_KEY_9,         "9"      },
+    { 17, NJ_KEY_STAR,      "*"      },   /* KEYCODE_STAR          */
+    { 18, NJ_KEY_POUND,     "#"      },   /* KEYCODE_POUND         */
+    { 29, NJ_KEY_GAME_A,    "A"      },   /* KEYCODE_A             */
+    { 30, NJ_KEY_GAME_B,    "B"      },
+    { 31, NJ_KEY_GAME_C,    "C"      },
+    { 32, NJ_KEY_GAME_D,    "D"      }
+};
+
+#define KEYMAP_N ((int)(sizeof(k_keymap) / sizeof(k_keymap[0])))
+
+void nj_port_android_push_key(nj_port *port, int android_keycode, int down)
+{
+    nj_event ev;
+    int k = NJ_KEY_NONE;
+    int i;
+
+    if (!port) {
+        return;
+    }
+    for (i = 0; i < KEYMAP_N; i++) {
+        if (k_keymap[i].android == android_keycode) {
+            k = (int)k_keymap[i].nj;
+            break;
+        }
+    }
+    if (k == NJ_KEY_NONE) {
+        return;
+    }
+    memset(&ev, 0, sizeof(ev));
+    ev.type = (nj_u1)(down ? NJ_EV_KEY_DOWN : NJ_EV_KEY_UP);
+    ev.key = (nj_u1)k;
+    AS(port->ud)->key_events++;
+    android_push(port->ud, &ev);
+}
+
+void nj_port_android_touch(nj_port *port, int pointer_id, int phase, float x,
+                           float y)
+{
+    android_state *s;
+    nj_event ev;
+    float scale;
+    int lx, ly;
+
+    if (!port || !port->ud) {
+        return;
+    }
+    s = AS(port->ud);
 
     pthread_mutex_lock(&s->lock);
-    next = (s->qt + 1) % (int)(sizeof(s->queue) / sizeof(s->queue[0]));
-    if (next != s->qh) {
-        s->queue[s->qt] = *ev;
-        s->qt = next;
+    /*
+     * One finger owns the MIDP pointer.  A second finger on the keypad must not
+     * be able to wrench the pointer the first one is dragging, and MIDP has no
+     * way to express two - so the extra fingers are simply not the pointer.
+     */
+    if (phase == NJ_ANDROID_TOUCH_DOWN) {
+        if (s->ptr_id >= 0 && s->ptr_id != pointer_id) {
+            pthread_mutex_unlock(&s->lock);
+            return;
+        }
+        s->ptr_id = pointer_id;
+    } else if (s->ptr_id != pointer_id) {
+        pthread_mutex_unlock(&s->lock);
+        return;
+    }
+
+    /*
+     * Undo exactly what display_present() did: the source origin (non-zero when
+     * the picture is cropped to the area the MIDlet paints), the offset in the
+     * window, and the scale, which may be fractional.  A tap that lands in the
+     * black bar around the picture is clamped onto the nearest edge rather than
+     * dropped, because dragging a finger off the game area is a drag and the
+     * game should see it reach the edge.
+     */
+    scale = (s->view_scale > 0.0f) ? s->view_scale : 1.0f;
+    lx = s->view_src_x + (int)((x - s->view_off_x) / scale);
+    ly = s->view_src_y + (int)((y - s->view_off_y) / scale);
+    if (lx < 0) { lx = 0; }
+    if (ly < 0) { ly = 0; }
+    if (lx > s->width - 1)  { lx = s->width - 1; }
+    if (ly > s->height - 1) { ly = s->height - 1; }
+
+    if (phase == NJ_ANDROID_TOUCH_UP || phase == NJ_ANDROID_TOUCH_CANCEL) {
+        s->ptr_id = -1;
     }
     pthread_mutex_unlock(&s->lock);
+
+    memset(&ev, 0, sizeof(ev));
+    switch (phase) {
+    case NJ_ANDROID_TOUCH_DOWN: ev.type = NJ_EV_POINTER_DOWN; break;
+    case NJ_ANDROID_TOUCH_MOVE: ev.type = NJ_EV_POINTER_MOVE; break;
+    default:                    ev.type = NJ_EV_POINTER_UP;   break;
+    }
+    ev.x = (nj_s2)lx;
+    ev.y = (nj_s2)ly;
+    s->ptr_events++;
+    android_push(port->ud, &ev);
+}
+
+/* ------------------------------------------------------------------ */
+/* Storage: directory iteration                                        */
+/* ------------------------------------------------------------------ */
+/*
+ * The file hooks are deliberately left NULL.
+ *
+ * The runtime already falls back to fopen/fread/fwrite for RecordStore and for
+ * reading the JAR, and bionic's stdio is exactly what that fallback wants - so
+ * a second implementation here would be a second implementation to keep
+ * correct.  Directories are different: the runtime has no stdio fallback for
+ * them, and leaving them out would make FileConnection.list() throw on a phone
+ * that obviously has directories.  So this is the one piece of the filesystem
+ * the port implements itself.
+ */
+typedef struct android_dir {
+    DIR  *d;
+    char  path[512];
+} android_dir;
+
+static int android_dir_open(void *ud, const char *path, void **out_handle)
+{
+    android_dir *h;
+    (void)ud;
+
+    if (!out_handle) {
+        return NJ_ERR;
+    }
+    h = (android_dir *)calloc(1u, sizeof(*h));
+    if (!h) {
+        return NJ_ERR_NOMEM;
+    }
+    snprintf(h->path, sizeof(h->path), "%s", (path && path[0]) ? path : ".");
+    h->d = opendir(h->path);
+    if (!h->d) {
+        free(h);
+        return NJ_ERR;
+    }
+    *out_handle = h;
+    return NJ_OK;
+}
+
+static int android_dir_next(void *ud, void *handle, char *name, nj_size cap,
+                            int *is_dir)
+{
+    android_dir *h = (android_dir *)handle;
+    struct dirent *e;
+    (void)ud;
+
+    if (!h || !h->d || !name || cap == 0) {
+        return NJ_ERR;
+    }
+    while ((e = readdir(h->d)) != NULL) {
+        char full[700];
+        struct stat st;
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) {
+            continue;
+        }
+        if (is_dir) {
+            *is_dir = 0;
+            snprintf(full, sizeof(full), "%s/%s", h->path, e->d_name);
+            if (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) {
+                *is_dir = 1;
+            }
+        }
+        snprintf(name, cap, "%s", e->d_name);
+        return 1;
+    }
+    return 0;
+}
+
+static void android_dir_close(void *ud, void *handle)
+{
+    android_dir *h = (android_dir *)handle;
+    (void)ud;
+    if (h) {
+        if (h->d) {
+            closedir(h->d);
+        }
+        free(h);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Device properties, vibration                                        */
+/* ------------------------------------------------------------------ */
+static const char *android_device_property(void *ud, const char *key)
+{
+    (void)ud;
+    if (!key) {
+        return NULL;
+    }
+    /*
+     * Games PROBE these without checking for NULL, so the keys a desktop port
+     * answers are answered here too - and answered as what this device is,
+     * which is a touchscreen with an on-screen keypad, not a handset with a
+     * numeric keypad under the screen.
+     */
+    if (strcmp(key, "com.nokia.keyboard.type") == 0) {
+        return "None";              /* no physical keypad: the UI draws one */
+    }
+    if (strcmp(key, "com.nokia.mid.ui.version") == 0) {
+        return "1.1";
+    }
+    if (strcmp(key, "microedition.platform") == 0) {
+        return "nano_j2me/android";
+    }
+    return NULL;                    /* honestly unknown */
+}
+
+/*
+ * Vibration goes back into Java: Android's Vibrator is a framework service, and
+ * the alternative would be an NDK binder client for one call.  The VM thread is
+ * a plain pthread, so it has to attach before it can call in - and detach
+ * again, because leaving a thread attached keeps it (and its class loader)
+ * alive after the game is over.
+ */
+static void android_vibrate(void *ud, int ms)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env = NULL;
+    int attached = 0;
+
+    if (!s || !s->jvm || !s->activity_class || !s->vibrate_mid || ms <= 0) {
+        return;
+    }
+    if ((*s->jvm)->GetEnv(s->jvm, (void **)&env, JNI_VERSION_1_6) ==
+        JNI_EDETACHED) {
+        if ((*s->jvm)->AttachCurrentThread(s->jvm, &env, NULL) != JNI_OK) {
+            return;
+        }
+        attached = 1;
+    }
+    if (env) {
+        (*env)->CallStaticVoidMethod(env, s->activity_class, s->vibrate_mid,
+                                     (jint)ms);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);   /* a game must not die of a vibrate */
+        }
+    }
+    if (attached) {
+        (*s->jvm)->DetachCurrentThread(s->jvm);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Glyph provider                                                      */
+/* ------------------------------------------------------------------ */
+/*
+ * Attach once, not per glyph: this runs on the thread that executes the VM,
+ * and that thread lives as long as the game.  android_main_thread() detaches
+ * it when the run is over.
+ */
+static JNIEnv *android_glyph_env(android_state *s)
+{
+    JNIEnv *env = NULL;
+
+    if (s->glyph_env) {
+        return s->glyph_env;
+    }
+    if (!s->jvm) {
+        return NULL;
+    }
+    if ((*s->jvm)->GetEnv(s->jvm, (void **)&env, JNI_VERSION_1_6) ==
+        JNI_EDETACHED) {
+        if ((*s->jvm)->AttachCurrentThread(s->jvm, &env, NULL) != JNI_OK) {
+            return NULL;
+        }
+        s->glyph_attached = 1;
+    }
+    s->glyph_env = env;
+    return env;
+}
+
+static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
+{
+    android_glyph_face *gf = (android_glyph_face *)ud;
+    android_state *s = gf->state;
+    android_glyph_cache *c;
+    android_glyph_slot *slot = NULL;
+    jbyte tmp[2 + ANDROID_GLYPH_CELL_MAX * ANDROID_GLYPH_CELL_MAX];
+    jbyteArray arr;
+    JNIEnv *env;
+    jsize len;
+    int i;
+    int ww, hh;
+
+    *w = 0;
+    *h = 0;
+    if (!s || !s->glyph_cache) {
+        return NULL;
+    }
+    c = s->glyph_cache;
+    c->calls++;
+    for (i = 0; i < ANDROID_GLYPH_CACHE; i++) {
+        if (c->slot[i].w > 0 && c->slot[i].cell == gf->cell &&
+            c->slot[i].ch == ch) {
+            slot = &c->slot[i];
+            c->hits++;
+            break;
+        }
+    }
+    if (!slot) {
+        env = android_glyph_env(s);
+        if (!env || !s->glyph_class || !s->glyph_mid) {
+            c->failed++;
+            return NULL;
+        }
+        arr = (jbyteArray)(*env)->CallStaticObjectMethod(
+            env, s->glyph_class, s->glyph_mid, (jint)ch, (jint)gf->cell);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            c->failed++;
+            return NULL;
+        }
+        if (!arr) {
+            c->failed++;
+            return NULL;
+        }
+        len = (*env)->GetArrayLength(env, arr);
+        if (len < 2 || len > (jsize)sizeof(tmp)) {
+            (*env)->DeleteLocalRef(env, arr);
+            c->failed++;
+            return NULL;
+        }
+        (*env)->GetByteArrayRegion(env, arr, 0, len, tmp);
+        (*env)->DeleteLocalRef(env, arr);
+
+        ww = (int)(unsigned char)tmp[0];
+        hh = (int)(unsigned char)tmp[1];
+        if (ww <= 0 || hh <= 0 || ww > ANDROID_GLYPH_CELL_MAX ||
+            hh > ANDROID_GLYPH_CELL_MAX || (int)len < 2 + ww * hh) {
+            c->failed++;
+            return NULL;
+        }
+        slot = &c->slot[c->next];
+        c->next = (c->next + 1) % ANDROID_GLYPH_CACHE;
+        slot->ch = ch;
+        slot->cell = gf->cell;
+        slot->w = ww;
+        slot->h = hh;
+        memcpy(slot->rows, tmp + 2, (size_t)(ww * hh));
+        c->misses++;
+    }
+
+    gf->last_w = slot->w;
+    *w = slot->w;
+    *h = slot->h;
+    return slot->rows;
+}
+
+static int android_glyph_advance(void *ud, nj_u2 ch)
+{
+    android_glyph_face *gf = (android_glyph_face *)ud;
+
+    (void)ch;
+    return gf->last_w > 0 ? gf->last_w : gf->cell;
+}
+
+/*
+ * Build one fallback face per slot out of the built-in face of that slot.
+ *
+ * The copy is the point: MIDP layout is measured against Font.getHeight(), so
+ * a provider face that reported its own metrics would re-flow every screen the
+ * MIDlet had already laid out.  Only the glyph hook changes.
+ */
+static void android_glyph_init(android_state *s)
+{
+    int i;
+
+    if (s->glyph_cache || !s->glyph_mid) {
+        return;   /* no platform glyphs: the built-in faces stay in charge */
+    }
+    s->glyph_cache = (android_glyph_cache *)calloc(1u, sizeof(*s->glyph_cache));
+    if (!s->glyph_cache) {
+        return;
+    }
+    for (i = 0; i < NJ_FONTSET_SLOTS; i++) {
+        int si = i / NJ_FONT_SLOT_STYLES;
+        int style = (i % NJ_FONT_SLOT_STYLES) ? NJ_FONT_STYLE_BOLD
+                                              : NJ_FONT_STYLE_PLAIN;
+        int size = si == 0 ? NJ_FONT_SIZE_SMALL
+                           : (si == 1 ? NJ_FONT_SIZE_MEDIUM
+                                      : NJ_FONT_SIZE_LARGE);
+        const nj_font *b = nj_font_builtin(size, style);
+        android_glyph_face *gf = &s->faces[i];
+
+        gf->face = *b;
+        gf->face.name = "android-system";
+        gf->face.glyph_lookup = android_glyph_lookup;
+        gf->face.glyph_ud = gf;
+        gf->face.glyph_advance = android_glyph_advance;
+        gf->face.coverage = 1;      /* the platform rasterises antialiased */
+        gf->face.fallback = NULL;   /* this face IS the end of the chain */
+        gf->state = s;
+        gf->cell = b->glyph_h > 0 && b->glyph_h <= ANDROID_GLYPH_CELL_MAX
+                       ? b->glyph_h
+                       : 12;
+        gf->last_w = 0;
+        s->face_ptrs[i] = &gf->face;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Audio implementation                                                */
+/* ------------------------------------------------------------------ */
+static int android_audio_ensure(android_state *s, android_audio *a);
+
+static android_audio *android_audio_get(android_state *s)
+{
+    android_audio *a;
+
+    if (s->audio) {
+        return s->audio;
+    }
+    a = (android_audio *)calloc(1u, sizeof(*a));
+    if (!a) {
+        return NULL;
+    }
+    pthread_mutex_init(&a->lock, NULL);
+    a->ring = (nj_s2 *)calloc((size_t)ANDROID_AUDIO_RING * 2u, sizeof(nj_s2));
+    if (!a->ring) {
+        pthread_mutex_destroy(&a->lock);
+        free(a);
+        return NULL;
+    }
+    s->audio = a;
+    return a;
+}
+
+static void android_audio_close(android_state *s)
+{
+    android_audio *a = s->audio;
+
+    if (!a) {
+        return;
+    }
+    if (a->backend == 1 && a->stream) {
+        a->aa.requestStop(a->stream);
+        a->aa.close(a->stream);
+        a->stream = NULL;
+    }
+    if (a->backend == 2) {
+        if (a->sl_player_obj) {
+            (*a->sl_player_obj)->Destroy(a->sl_player_obj);
+            a->sl_player_obj = NULL;
+        }
+        if (a->sl_mix_obj) {
+            (*a->sl_mix_obj)->Destroy(a->sl_mix_obj);
+            a->sl_mix_obj = NULL;
+        }
+        if (a->sl_engine_obj) {
+            (*a->sl_engine_obj)->Destroy(a->sl_engine_obj);
+            a->sl_engine_obj = NULL;
+        }
+        free(a->sl_buf);
+        a->sl_buf = NULL;
+    }
+    if (a->aa.lib) {
+        dlclose(a->aa.lib);
+        a->aa.lib = NULL;
+    }
+    a->backend = 0;
+    free(a->ring);
+    pthread_mutex_destroy(&a->lock);
+    free(a);
+    s->audio = NULL;
+}
+
+/*
+ * Mix `frames` output frames: square-wave tone (if a sequence is playing) plus
+ * the PCM ring (if a player is draining), each clamped on the way out.
+ *
+ * Resampling is nearest-neighbour on purpose.  Sampled audio in a MIDlet is a
+ * jingle or an effect at 8-22 kHz; a linear interpolator would cost more than
+ * it is worth here, and the ring is already the wrong shape for a good one.
+ */
+static void android_audio_render(android_audio *a, nj_s2 *dst, int frames,
+                                 int out_ch)
+{
+    int i;
+    nj_u4 pcm_step = (a->src_rate > 0 && a->out_rate > 0)
+                   ? (nj_u4)(((nj_u8)a->src_rate << 16) / (nj_u8)a->out_rate)
+                   : 65536u;
+
+    for (i = 0; i < frames; i++) {
+        int acc = 0;
+        int pl = 0, pr = 0;
+
+        if (a->tone_on) {
+            while (a->left == 0 && a->tone_on) {
+                if (a->tone_next >= a->tone_count) {
+                    a->tone_on = 0;
+                    break;
+                }
+                {
+                    const nj_audio_tone *t = &a->tones[a->tone_next++];
+                    nj_u4 f = t->freq_hz;
+                    a->left = ((nj_u4)t->duration_ms * (nj_u4)a->out_rate) / 1000u;
+                    a->phase = 0;
+                    a->step = 0;
+                    if (f > 0) {
+                        /* Above Nyquist a square wave folds down into a tone
+                         * that was never asked for; the top of the band is the
+                         * honest ceiling. */
+                        if (f > (nj_u4)(a->out_rate / 2)) {
+                            f = (nj_u4)(a->out_rate / 2);
+                        }
+                        a->step = (nj_u4)(((nj_u8)f << 16) / (nj_u8)a->out_rate);
+                    }
+                }
+            }
+            if (a->tone_on && a->left > 0) {
+                a->left--;
+                if (a->step) {
+                    acc += (a->phase < 32768u) ? ANDROID_TONE_AMP
+                                               : -ANDROID_TONE_AMP;
+                    a->phase += a->step;
+                    if (a->phase >= 65536u) {
+                        a->phase -= 65536u;
+                    }
+                }
+            }
+        }
+
+        if (a->pcm_on && a->rd != a->wr) {
+            const nj_s2 *src = a->ring + (size_t)a->rd * 2u;
+            pl = src[0];
+            pr = src[1];
+            a->pcm_pos += pcm_step;
+            while (a->pcm_pos >= 65536u) {
+                a->pcm_pos -= 65536u;
+                a->rd = (a->rd + 1) % ANDROID_AUDIO_RING;
+                if (a->rd == a->wr) {
+                    break;
+                }
+            }
+        }
+
+        {
+            int l = acc + pl;
+            int r = acc + pr;
+            if (l > 32767)  { l = 32767; }
+            if (l < -32768) { l = -32768; }
+            if (r > 32767)  { r = 32767; }
+            if (r < -32768) { r = -32768; }
+            dst[(size_t)i * (size_t)out_ch] = (nj_s2)l;
+            if (out_ch > 1) {
+                dst[(size_t)i * (size_t)out_ch + 1u] = (nj_s2)r;
+            }
+            {
+                int c;
+                for (c = 2; c < out_ch; c++) {
+                    dst[(size_t)i * (size_t)out_ch + (size_t)c] = (nj_s2)l;
+                }
+            }
+        }
+    }
+    a->frames_rendered += frames;
+}
+
+/* ------------------------------------------------------------------ */
+/* The modern device: AAudio, opened by hand                           */
+/* ------------------------------------------------------------------ */
+/*
+ * dlsym through a void* slot rather than casting the result: the function
+ * pointer types above are not compatible with void* by the letter of the
+ * standard, and the cast is what every compiler warns about.
+ */
+#define AA_SYM(api, field, name) \
+    do { *(void **)(&(api)->field) = dlsym((api)->lib, name); } while (0)
+
+static int android_aaudio_load(android_aaudio *api)
+{
+    if (api->lib) {
+        return NJ_OK;
+    }
+    if (api->tried) {
+        return NJ_ERR_UNSUPPORTED;      /* asked once already */
+    }
+    api->tried = 1;
+    api->lib = dlopen("libaaudio.so", RTLD_NOW | RTLD_LOCAL);
+    if (!api->lib) {
+        return NJ_ERR_UNSUPPORTED;      /* older than API 26: OpenSL ES it is */
+    }
+    AA_SYM(api, createBuilder,     "AAudio_createStreamBuilder");
+    AA_SYM(api, setDirection,      "AAudioStreamBuilder_setDirection");
+    AA_SYM(api, setSharingMode,    "AAudioStreamBuilder_setSharingMode");
+    AA_SYM(api, setPerformanceMode,"AAudioStreamBuilder_setPerformanceMode");
+    AA_SYM(api, setFormat,         "AAudioStreamBuilder_setFormat");
+    AA_SYM(api, setChannelCount,   "AAudioStreamBuilder_setChannelCount");
+    AA_SYM(api, setSampleRate,     "AAudioStreamBuilder_setSampleRate");
+    AA_SYM(api, setUsage,          "AAudioStreamBuilder_setUsage");
+    AA_SYM(api, setDataCallback,   "AAudioStreamBuilder_setDataCallback");
+    AA_SYM(api, setErrorCallback,  "AAudioStreamBuilder_setErrorCallback");
+    AA_SYM(api, openStream,        "AAudioStreamBuilder_openStream");
+    AA_SYM(api, deleteBuilder,     "AAudioStreamBuilder_delete");
+    AA_SYM(api, getSampleRate,     "AAudioStream_getSampleRate");
+    AA_SYM(api, getChannelCount,   "AAudioStream_getChannelCount");
+    AA_SYM(api, requestStart,      "AAudioStream_requestStart");
+    AA_SYM(api, requestPause,      "AAudioStream_requestPause");
+    AA_SYM(api, requestStop,       "AAudioStream_requestStop");
+    AA_SYM(api, close,             "AAudioStream_close");
+
+    /* setUsage is API 28 and is the only optional one: on 26/27 there is no
+     * such symbol, and the default routing is right anyway. */
+    if (!api->createBuilder || !api->setDirection || !api->setSharingMode
+        || !api->setPerformanceMode || !api->setFormat || !api->setChannelCount
+        || !api->setSampleRate || !api->setDataCallback
+        || !api->setErrorCallback || !api->openStream || !api->deleteBuilder
+        || !api->getSampleRate || !api->getChannelCount || !api->requestStart
+        || !api->requestPause || !api->requestStop || !api->close) {
+        dlclose(api->lib);
+        api->lib = NULL;
+        return NJ_ERR_UNSUPPORTED;
+    }
+    return NJ_OK;
+}
+
+static aaudio_data_callback_result_t android_aaudio_cb(AAudioStream *stream,
+                                                       void *user,
+                                                       void *audio_data,
+                                                       int32_t num_frames)
+{
+    android_audio *a = (android_audio *)user;
+    int32_t ch = a->aa.getChannelCount(stream);
+
+    if (ch < 1) {
+        ch = 2;
+    }
+    pthread_mutex_lock(&a->lock);
+    a->callbacks++;
+    if (a->failed) {
+        memset(audio_data, 0, (size_t)num_frames * (size_t)ch * sizeof(nj_s2));
+    } else {
+        android_audio_render(a, (nj_s2 *)audio_data, (int)num_frames, (int)ch);
+    }
+    pthread_mutex_unlock(&a->lock);
+    return AAUDIO_CALLBACK_RESULT_CONTINUE;
+}
+/* --- AAudio callbacks end --- */
+
+static void android_aaudio_err(AAudioStream *stream, void *user,
+                               aaudio_result_t error)
+{
+    android_audio *a = (android_audio *)user;
+    char b[96];
+    (void)stream;
+    if (!a) {
+        return;
+    }
+    snprintf(b, sizeof(b), "audio: AAudio error %d, sound is off",
+             (int)error);
+    __android_log_write(ANDROID_LOG_WARN, LOG_TAG, b);
+    pthread_mutex_lock(&a->lock);
+    a->failed = 1;
+    pthread_mutex_unlock(&a->lock);
+}
+/* --- AAudio error callback end --- */
+
+static int android_aaudio_open(android_audio *a)
+{
+    AAudioStreamBuilder *b = NULL;
+    aaudio_result_t r;
+
+    if (a->aa.createBuilder(&b) != AAUDIO_OK || !b) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    a->aa.setDirection(b, AAUDIO_DIRECTION_OUTPUT);
+    a->aa.setSharingMode(b, AAUDIO_SHARING_MODE_SHARED);
+    a->aa.setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_NONE);
+    a->aa.setFormat(b, AAUDIO_FORMAT_PCM_I16);
+    a->aa.setChannelCount(b, 2);
+    a->aa.setSampleRate(b, ANDROID_AUDIO_RATE);
+    /* setUsage arrived in API 28: on 26/27 the symbol is not there at all and
+     * the default MEDIA usage is the right routing anyway. */
+    if (a->aa.setUsage) {
+        a->aa.setUsage(b, AAUDIO_USAGE_GAME);
+    }
+    a->aa.setDataCallback(b, android_aaudio_cb, a);
+    a->aa.setErrorCallback(b, android_aaudio_err, a);
+    r = a->aa.openStream(b, &a->stream);
+    a->aa.deleteBuilder(b);
+    if (r != AAUDIO_OK || !a->stream) {
+        a->stream = NULL;
+        return NJ_ERR_UNSUPPORTED;
+    }
+    /* The device may hand back a different rate or channel count than the one
+     * asked for, and the mixer has to resample to what it actually got rather
+     * than to what it wanted. */
+    a->out_rate = a->aa.getSampleRate(a->stream);
+    a->out_ch = a->aa.getChannelCount(a->stream);
+    if (a->out_rate <= 0) {
+        a->out_rate = ANDROID_AUDIO_RATE;
+    }
+    if (a->out_ch <= 0) {
+        a->out_ch = 2;
+    }
+    if (a->aa.requestStart(a->stream) != AAUDIO_OK) {
+        a->aa.close(a->stream);
+        a->stream = NULL;
+        return NJ_ERR_UNSUPPORTED;
+    }
+    a->stream_paused = 0;
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* The older device: OpenSL ES, linked normally                        */
+/* ------------------------------------------------------------------ */
+/*
+ * OpenSL ES pulls instead of pushing: the player calls back asking for the next
+ * buffer, so this is a short ring of buffers refilled from the same mixer the
+ * AAudio callback uses.  Same tones, same volume, same PCM - only the plumbing
+ * differs, and that is the whole point of keeping one mixer.
+ */
+static void android_sl_cb(SLAndroidSimpleBufferQueueItf queue, void *user)
+{
+    android_audio *a = (android_audio *)user;
+    int frames = a->sl_buf_frames;
+    nj_s2 *buf;
+
+    pthread_mutex_lock(&a->lock);
+    buf = a->sl_buf + (size_t)a->sl_next * (size_t)frames * 2u;
+    a->sl_next = (a->sl_next + 1) % ANDROID_SL_BUFFERS;
+    if (a->failed || a->stream_paused) {
+        memset(buf, 0, (size_t)frames * 2u * sizeof(nj_s2));
+    } else {
+        a->callbacks++;
+        android_audio_render(a, buf, frames, 2);
+    }
+    pthread_mutex_unlock(&a->lock);
+    (*queue)->Enqueue(queue, buf,
+                      (SLuint32)((size_t)frames * 2u * sizeof(nj_s2)));
+}
+
+static int android_sl_open(android_audio *a)
+{
+    SLDataLocator_AndroidSimpleBufferQueue loc_bq;
+    SLDataFormat_PCM fmt;
+    SLDataSource src;
+    SLDataLocator_OutputMix loc_mix;
+    SLDataSink sink;
+    const SLInterfaceID ids[2] = { SL_IID_BUFFERQUEUE, SL_IID_VOLUME };
+    const SLboolean req[2] = { SL_BOOLEAN_TRUE, SL_BOOLEAN_FALSE };
+    int i;
+
+    if (slCreateEngine(&a->sl_engine_obj, 0, NULL, 0, NULL, NULL)
+        != SL_RESULT_SUCCESS) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    if ((*a->sl_engine_obj)->Realize(a->sl_engine_obj, SL_BOOLEAN_FALSE)
+        != SL_RESULT_SUCCESS) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    if ((*a->sl_engine_obj)->GetInterface(a->sl_engine_obj, SL_IID_ENGINE,
+                                          &a->sl_engine) != SL_RESULT_SUCCESS) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    if ((*a->sl_engine)->CreateOutputMix(a->sl_engine, &a->sl_mix_obj, 0, NULL,
+                                         NULL) != SL_RESULT_SUCCESS) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    if ((*a->sl_mix_obj)->Realize(a->sl_mix_obj, SL_BOOLEAN_FALSE)
+        != SL_RESULT_SUCCESS) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+
+    memset(&loc_bq, 0, sizeof(loc_bq));
+    memset(&fmt, 0, sizeof(fmt));
+    memset(&src, 0, sizeof(src));
+    memset(&loc_mix, 0, sizeof(loc_mix));
+    memset(&sink, 0, sizeof(sink));
+    loc_bq.locatorType = SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE;
+    loc_bq.numBuffers = ANDROID_SL_BUFFERS;
+    fmt.formatType = SL_DATAFORMAT_PCM;
+    fmt.numChannels = 2;
+    fmt.samplesPerSec = SL_SAMPLINGRATE_44_1;
+    fmt.bitsPerSample = SL_PCMSAMPLEFORMAT_FIXED_16;
+    fmt.containerSize = SL_PCMSAMPLEFORMAT_FIXED_16;
+    fmt.channelMask = SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT;
+    fmt.endianness = SL_BYTEORDER_LITTLEENDIAN;
+    src.pLocator = &loc_bq;
+    src.pFormat = &fmt;
+    loc_mix.locatorType = SL_DATALOCATOR_OUTPUTMIX;
+    loc_mix.outputMix = a->sl_mix_obj;
+    sink.pLocator = &loc_mix;
+    sink.pFormat = NULL;
+
+    if ((*a->sl_engine)->CreateAudioPlayer(a->sl_engine, &a->sl_player_obj, &src,
+                                           &sink, 2, ids, req)
+        != SL_RESULT_SUCCESS) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    if ((*a->sl_player_obj)->Realize(a->sl_player_obj, SL_BOOLEAN_FALSE)
+        != SL_RESULT_SUCCESS) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    if ((*a->sl_player_obj)->GetInterface(a->sl_player_obj, SL_IID_PLAY,
+                                          &a->sl_play) != SL_RESULT_SUCCESS) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    if ((*a->sl_player_obj)->GetInterface(a->sl_player_obj, SL_IID_BUFFERQUEUE,
+                                          &a->sl_queue) != SL_RESULT_SUCCESS) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    if ((*a->sl_queue)->RegisterCallback(a->sl_queue, android_sl_cb, a)
+        != SL_RESULT_SUCCESS) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+
+    a->sl_buf_frames = ANDROID_SL_FRAMES;
+    a->sl_buf = (nj_s2 *)calloc((size_t)ANDROID_SL_BUFFERS
+                                * (size_t)ANDROID_SL_FRAMES * 2u, sizeof(nj_s2));
+    if (!a->sl_buf) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    a->sl_next = 0;
+    a->out_rate = ANDROID_AUDIO_RATE;
+    a->out_ch = 2;
+    a->stream_paused = 0;
+    if ((*a->sl_play)->SetPlayState(a->sl_play, SL_PLAYSTATE_PLAYING)
+        != SL_RESULT_SUCCESS) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    /* OpenSL ES only starts calling back once something is queued, so the whole
+     * ring goes in up front.  Each callback then refills the buffer the player
+     * just finished with, in the order they were queued. */
+    for (i = 0; i < ANDROID_SL_BUFFERS; i++) {
+        nj_s2 *buf = a->sl_buf + (size_t)i * (size_t)ANDROID_SL_FRAMES * 2u;
+        memset(buf, 0, (size_t)ANDROID_SL_FRAMES * 2u * sizeof(nj_s2));
+        (*a->sl_queue)->Enqueue(a->sl_queue, buf,
+                                (SLuint32)((size_t)ANDROID_SL_FRAMES * 2u
+                                           * sizeof(nj_s2)));
+    }
+    return NJ_OK;
+}
+
+/*
+ * One device per run, chosen by what the phone actually has.  AAudio is tried
+ * first because it is the supported API and the one the mixer was written for;
+ * a phone that has no libaaudio.so falls through to OpenSL ES, and a phone
+ * where both fail simply has no sound for this run - the game keeps running,
+ * because a silent game is a far better outcome than a crash on startup.
+ *
+ * `adb shell setprop debug.nj2me.audio opensl` pins the old backend, which is
+ * the only way to exercise that path on a phone that has AAudio.
+ */
+static int android_audio_ensure(android_state *s, android_audio *a)
+{
+    char msg[96];
+    char pref[PROP_VALUE_MAX];
+    int force_opensl = 0;
+
+    (void)s;
+    if (a->backend) {
+        return NJ_OK;
+    }
+    if (a->failed) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    pref[0] = '\0';
+    __system_property_get("debug.nj2me.audio", pref);
+    if (pref[0] == 'o' || pref[0] == 'O') {
+        force_opensl = 1;
+    }
+    if (!force_opensl && android_aaudio_load(&a->aa) == NJ_OK
+        && android_aaudio_open(a) == NJ_OK) {
+        a->backend = 1;
+        snprintf(msg, sizeof(msg), "audio: AAudio started, %d Hz, %d ch",
+                 a->out_rate, a->out_ch);
+        __android_log_write(ANDROID_LOG_INFO, LOG_TAG, msg);
+        return NJ_OK;
+    }
+    if (a->aa.lib) {
+        dlclose(a->aa.lib);
+        a->aa.lib = NULL;
+    }
+    if (android_sl_open(a) == NJ_OK) {
+        a->backend = 2;
+        snprintf(msg, sizeof(msg), "audio: OpenSL ES started, %d Hz, %d ch%s",
+                 a->out_rate, a->out_ch, force_opensl ? " (pinned)" : "");
+        __android_log_write(ANDROID_LOG_INFO, LOG_TAG, msg);
+        return NJ_OK;
+    }
+    a->failed = 1;
+    __android_log_write(ANDROID_LOG_WARN, LOG_TAG,
+                        "audio: no output device (AAudio and OpenSL ES both "
+                        "failed): sound is off for this run");
+    return NJ_ERR_UNSUPPORTED;
+}
+
+static int android_tone_play(void *ud, const nj_audio_tone *tones, int count)
+{
+    android_state *s = AS(ud);
+    android_audio *a = android_audio_get(s);
+
+    if (!a || !tones || count <= 0) {
+        return NJ_ERR;
+    }
+    if (android_audio_ensure(s, a) != NJ_OK) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    if (count > ANDROID_AUDIO_TONES) {
+        count = ANDROID_AUDIO_TONES;   /* the tail of a huge sequence is lost */
+    }
+    pthread_mutex_lock(&a->lock);
+    memcpy(a->tones, tones, (size_t)count * sizeof(a->tones[0]));
+    a->tone_count = count;
+    a->tone_next = 0;
+    a->tone_on = 1;
+    a->left = 0;
+    a->phase = 0;
+    a->step = 0;
+    a->tones_played++;
+    pthread_mutex_unlock(&a->lock);
+    return 0;
+}
+
+static void android_tone_stop(void *ud)
+{
+    android_state *s = AS(ud);
+    android_audio *a = s->audio;
+
+    if (!a) {
+        return;
+    }
+    pthread_mutex_lock(&a->lock);
+    a->tone_on = 0;
+    a->tone_count = 0;
+    a->tone_next = 0;
+    a->left = 0;
+    pthread_mutex_unlock(&a->lock);
+}
+
+static int android_pcm_open(void *ud, int sample_rate, int channels)
+{
+    android_state *s = AS(ud);
+    android_audio *a = android_audio_get(s);
+
+    if (!a) {
+        return NJ_ERR_NOMEM;
+    }
+    if (channels < 1 || channels > 2 || sample_rate <= 0) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    if (android_audio_ensure(s, a) != NJ_OK) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    pthread_mutex_lock(&a->lock);
+    a->src_rate = sample_rate;
+    a->src_ch = channels;
+    a->pcm_on = 1;
+    a->rd = a->wr = 0;
+    a->pcm_pos = 0;
+    pthread_mutex_unlock(&a->lock);
+    return 0;
+}
+
+static int android_pcm_write(void *ud, const nj_s2 *samples, int frames)
+{
+    android_state *s = AS(ud);
+    android_audio *a = s->audio;
+    int space, take, i;
+
+    if (!a || !samples || frames <= 0) {
+        return 0;
+    }
+    pthread_mutex_lock(&a->lock);
+    if (!a->pcm_on || a->failed) {
+        pthread_mutex_unlock(&a->lock);
+        return 0;
+    }
+    space = (a->wr + ANDROID_AUDIO_RING - a->rd) % ANDROID_AUDIO_RING;
+    space = ANDROID_AUDIO_RING - 1 - space;
+    take = (frames < space) ? frames : space;
+    for (i = 0; i < take; i++) {
+        nj_s2 *dst = a->ring + (size_t)a->wr * 2u;
+        if (a->src_ch == 1) {
+            /* Mono is duplicated here, once, so the callback never has to ask
+             * what shape the stream is. */
+            dst[0] = dst[1] = samples[i];
+        } else {
+            dst[0] = samples[(size_t)i * 2u];
+            dst[1] = samples[(size_t)i * 2u + 1u];
+        }
+        a->wr = (a->wr + 1) % ANDROID_AUDIO_RING;
+    }
+    a->pcm_frames += take;
+    pthread_mutex_unlock(&a->lock);
+    return take;
+}
+
+static int android_pcm_free(void *ud)
+{
+    android_state *s = AS(ud);
+    android_audio *a = s->audio;
+    int space, used;
+
+    if (!a) {
+        return 0;
+    }
+    pthread_mutex_lock(&a->lock);
+    used = (a->wr + ANDROID_AUDIO_RING - a->rd) % ANDROID_AUDIO_RING;
+    space = ANDROID_AUDIO_RING - 1 - used;
+    pthread_mutex_unlock(&a->lock);
+    return space;
+}
+
+static void android_pcm_close(void *ud)
+{
+    android_state *s = AS(ud);
+    android_audio *a = s->audio;
+
+    if (!a) {
+        return;
+    }
+    pthread_mutex_lock(&a->lock);
+    a->pcm_on = 0;
+    a->rd = a->wr = 0;
+    a->pcm_pos = 0;
+    pthread_mutex_unlock(&a->lock);
+}
+
+/*
+ * Foreground/background, and the audio side of it.  The stream is paused rather
+ * than closed so that resuming a game does not have to reopen the device (which
+ * costs tens of milliseconds and can glitch the first sound); everything the
+ * mixer holds stays in the ring.
+ */
+/*
+ * Pausing is per backend.  AAudio has a real paused state and stops pulling, so
+ * it is told to pause; OpenSL ES keeps pulling whatever happens, so it is left
+ * running and the callback hands it silence - same result, no device churn.
+ */
+static void android_audio_set_paused(android_audio *a, int paused)
+{
+    if (!a || !a->backend) {
+        return;
+    }
+    if (a->backend == 1 && a->stream) {
+        if (paused && !a->stream_paused) {
+            if (a->aa.requestPause(a->stream) == AAUDIO_OK) {
+                a->stream_paused = 1;
+            }
+        } else if (!paused && a->stream_paused) {
+            if (a->aa.requestStart(a->stream) == AAUDIO_OK) {
+                a->stream_paused = 0;
+            }
+        }
+        return;
+    }
+    if (a->backend == 2) {
+        pthread_mutex_lock(&a->lock);
+        a->stream_paused = paused ? 1 : 0;
+        pthread_mutex_unlock(&a->lock);
+    }
+}
+
+void nj_port_android_set_active(nj_port *port, int active)
+{
+    android_state *s;
+
+    if (!port || !port->ud) {
+        return;
+    }
+    s = AS(port->ud);
+    s->paused = active ? 0 : 1;
+    android_audio_set_paused(s->audio, active ? 0 : 1);
+    if (!active) {
+        return;
+    }
+    /* Waking up: park nothing, resume the device, and put the MIDlet where it
+     * was when the frame loop stopped. */
 }
 
 static void android_shutdown(void *ud)
@@ -274,8 +2019,10 @@ static void android_shutdown(void *ud)
     if (!s) {
         return;
     }
+    android_audio_close(s);
     pthread_mutex_destroy(&s->lock);
     free(s->shadow);
+    free(s->det_prev);
     free(s);
 }
 
@@ -312,15 +2059,33 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
      * screen it accepts instead of a 1080x2400 phone. */
     s->width = (screen_w > 0) ? screen_w : NJ_SCREEN_WIDTH;
     s->height = (screen_h > 0) ? screen_h : NJ_SCREEN_HEIGHT;
+    s->ptr_id = -1;
+    s->view_mode = NJ_VIEW_INT;
+    s->view_scale = 1.0f;
+    s->view_zoom = 1.0f;
 
     memset(out, 0, sizeof(*out));
     out->name = "android";
     out->ud = s;
     out->millis = android_millis;
     out->sleep_ms = android_sleep_ms;
+    out->idle = android_idle;
+    out->now = android_now;
     out->display_init = android_display_init;
     out->display_present = android_display_present;
     out->input_poll = android_input_poll;
+    out->input_push = android_input_push;
+    out->dir_open = android_dir_open;
+    out->dir_next = android_dir_next;
+    out->dir_close = android_dir_close;
+    out->device_property = android_device_property;
+    out->vibrate = android_vibrate;
+    out->tone_play = android_tone_play;
+    out->tone_stop = android_tone_stop;
+    out->pcm_open = android_pcm_open;
+    out->pcm_write = android_pcm_write;
+    out->pcm_close = android_pcm_close;
+    out->pcm_free = android_pcm_free;
     out->log = android_log;
     out->shutdown = android_shutdown;
     out->fps_cap = 30;
@@ -330,20 +2095,61 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
 void nj_port_android_set_window(nj_port *port, void *native_window)
 {
     android_state *s;
+    ANativeWindow *old;
 
     if (!port || !port->ud) {
         return;
     }
     s = AS(port->ud);
+    if (s->window == (ANativeWindow *)native_window) {
+        return;
+    }
+    pthread_mutex_lock(&s->lock);
+    old = s->window;
     s->window = (ANativeWindow *)native_window;
     if (s->window) {
         ANativeWindow_acquire(s->window);
+        /*
+         * Ask for the format the blit knows how to fill, so the bytes this
+         * port writes are the bytes the compositor reads.  A SurfaceView that
+         * comes up RGB_565 would otherwise take the other packing - handled,
+         * but not what a phone with a 24-bit panel should be showing.
+         * Impossible requests are ignored: display_present() reads the format
+         * back from every lock and packs for whatever it finds.
+         */
+        (void)ANativeWindow_setBuffersGeometry(s->window, 0, 0,
+                                               WINDOW_FORMAT_RGBA_8888);
         /* The WINDOW size, not the screen size.  Overwriting s->width here is
          * what kept this port handing the MIDlet a 640x1280 screen after
          * nj_port_android_ex() had set it to 176x208 - the window used to be
          * the screen, and this line is what was left of that. */
         s->win_w = ANativeWindow_getWidth(s->window);
         s->win_h = ANativeWindow_getHeight(s->window);
+    }
+    pthread_mutex_unlock(&s->lock);
+    /* Outside the lock: the reference this port held is dropped, and a frame
+     * that is presenting right now holds its own. */
+    if (old) {
+        ANativeWindow_release(old);
+    }
+}
+
+void nj_port_android_set_paths(nj_port *port, const char *rms_dir,
+                               const char *fs_dir)
+{
+    android_state *s;
+
+    if (!port || !port->ud) {
+        return;
+    }
+    s = AS(port->ud);
+    if (rms_dir && rms_dir[0]) {
+        snprintf(s->rms_dir, sizeof(s->rms_dir), "%s", rms_dir);
+        port->rms_dir = s->rms_dir;
+    }
+    if (fs_dir && fs_dir[0]) {
+        snprintf(s->fs_dir, sizeof(s->fs_dir), "%s", fs_dir);
+        port->fs_dir = s->fs_dir;
     }
 }
 
@@ -355,47 +2161,96 @@ void nj_port_android_push_event(nj_port *port, const nj_event *ev)
 }
 
 /*
- * Java key codes are translated here rather than in Java so the mapping stays
- * in one place, next to the port that owns the input contract.
+ * How the game's picture is placed in the window.
+ *
+ * `mode` is one of the NJ_VIEW_* values in this file; `zoom` is only read in
+ * NJ_VIEW_CUSTOM (a multiplier on the fit scale, 1.0 = the default size) and
+ * `dx`/`dy` are a pan in window pixels, also only for NJ_VIEW_CUSTOM.  Safe to
+ * call at any time from the UI thread: display_present() reads all four under
+ * the same mutex it publishes the transform with.
  */
-void nj_port_android_push_key(nj_port *port, int android_keycode, int down)
+void nj_port_android_set_view(nj_port *port, int mode, float zoom, float dx,
+                              float dy)
 {
-    nj_event ev;
-    int k = -1;
+    android_state *s;
 
-    /* Values from android.view.KeyEvent.  Written numerically so that this
-     * file compiles without the Android framework headers. */
-    switch (android_keycode) {
-    case 19:  k = NJ_KEY_UP;     break;   /* KEYCODE_DPAD_UP */
-    case 20:  k = NJ_KEY_DOWN;   break;   /* KEYCODE_DPAD_DOWN */
-    case 21:  k = NJ_KEY_LEFT;   break;   /* KEYCODE_DPAD_LEFT */
-    case 22:  k = NJ_KEY_RIGHT;  break;   /* KEYCODE_DPAD_RIGHT */
-    case 23:  k = NJ_KEY_FIRE;   break;   /* KEYCODE_DPAD_CENTER */
-    case 66:  k = NJ_KEY_FIRE;   break;   /* KEYCODE_ENTER */
-    case 62:  k = NJ_KEY_FIRE;   break;   /* KEYCODE_SPACE */
-    case 4:   k = NJ_KEY_SOFT_RIGHT; break;  /* KEYCODE_BACK */
-    case 82:  k = NJ_KEY_SOFT_LEFT;  break;  /* KEYCODE_MENU */
-    case 67:  k = NJ_KEY_CLEAR;  break;   /* KEYCODE_DEL */
-    case 7:  k = NJ_KEY_0; break;   case 8:  k = NJ_KEY_1; break;
-    case 9:  k = NJ_KEY_2; break;   case 10: k = NJ_KEY_3; break;
-    case 11: k = NJ_KEY_4; break;   case 12: k = NJ_KEY_5; break;
-    case 13: k = NJ_KEY_6; break;   case 14: k = NJ_KEY_7; break;
-    case 15: k = NJ_KEY_8; break;   case 16: k = NJ_KEY_9; break;
-    case 17: k = NJ_KEY_STAR;  break;   /* KEYCODE_STAR */
-    case 18: k = NJ_KEY_POUND; break;   /* KEYCODE_POUND */
-    case 29: k = NJ_KEY_GAME_A; break;  /* KEYCODE_A */
-    case 30: k = NJ_KEY_GAME_B; break;  /* KEYCODE_B */
-    case 31: k = NJ_KEY_GAME_C; break;  /* KEYCODE_C */
-    case 32: k = NJ_KEY_GAME_D; break;  /* KEYCODE_D */
-    default: break;
-    }
-    if (k < 0 || !port) {
+    if (!port || !port->ud) {
         return;
     }
-    memset(&ev, 0, sizeof(ev));
-    ev.type = (nj_u1)(down ? NJ_EV_KEY_DOWN : NJ_EV_KEY_UP);
-    ev.key = (nj_u1)k;
-    android_push(port->ud, &ev);
+    s = AS(port->ud);
+    if (mode < 0 || mode >= NJ_VIEW_MODE_COUNT) {
+        return;
+    }
+    pthread_mutex_lock(&s->lock);
+    s->view_mode = mode;
+    s->view_zoom = (zoom > 0.05f) ? zoom : 1.0f;
+    s->view_dx = dx;
+    s->view_dy = dy;
+    pthread_mutex_unlock(&s->lock);
+}
+
+/*
+ * The area of the logical screen the MIDlet has painted, as
+ * {x, y, w, h, frames}.  Returns 1 when the box is worth using.
+ *
+ * This is what the launcher shows as "detected resolution" and what 适配画面
+ * crops to.  The last element is how many frames the measurement has seen: a
+ * box that appeared after two frames is a game still starting up, not one that
+ * only paints a corner, and the caller can wait for more before trusting it.
+ */
+int nj_port_android_detect(const nj_port *port, int out[5])
+{
+    android_state *s;
+
+    if (!port || !port->ud) {
+        return 0;
+    }
+    s = AS((void *)port->ud);
+    if (!out) {
+        return 0;
+    }
+    pthread_mutex_lock((pthread_mutex_t *)&s->lock);
+    out[0] = s->det_x;
+    out[1] = s->det_y;
+    out[2] = s->det_w;
+    out[3] = s->det_h;
+    out[4] = s->det_frames;
+    pthread_mutex_unlock((pthread_mutex_t *)&s->lock);
+    return (s->det_w >= 16 && s->det_h >= 16) ? 1 : 0;
+}
+
+int nj_port_android_stats(const nj_port *port, char *buf, nj_size cap)
+{
+    android_state *s;
+    android_audio *a;
+    int n;
+
+    if (!port || !port->ud || !buf || cap == 0) {
+        return NJ_ERR;
+    }
+    s = AS((void *)port->ud);
+    a = s->audio;
+    n = snprintf(buf, cap,
+                 "screen=%dx%d window=%dx%d scale=%.2f frames=%ld keys=%d "
+                 "ptr=%d paused=%d view=%d zoom=%.2f det=%dx%d@%d,%d f=%d%s "
+                 "audio=%s",
+                 s->width, s->height, s->win_w, s->win_h, (double)s->view_scale,
+                 s->frames_presented, s->key_events, s->ptr_events,
+                 s->paused, s->view_mode, (double)s->view_zoom,
+                 s->det_w, s->det_h, s->det_x, s->det_y, s->det_frames,
+                 s->det_done ? "" : "?",
+                 a ? (a->failed ? "failed"
+                                : (a->stream_paused ? "paused" : "on")) : "off");
+    if (n > 0 && n < (int)cap && a && a->stream) {
+        n += snprintf(buf + n, (size_t)((int)cap - n),
+                      " rate=%d rates=%lld tones=%lld pcm=%lld",
+                      a->out_rate, a->frames_rendered, a->tones_played,
+                      a->pcm_frames);
+        if (n > (int)cap) {
+            n = (int)cap;
+        }
+    }
+    return n;
 }
 
 /* ================================================================== */
@@ -418,54 +2273,189 @@ typedef struct android_app {
     pthread_t  thread;
     int        running;
     int        started;
+    int        joined;
 } android_app;
 
 static void *android_main_thread(void *arg)
 {
     android_app *a = (android_app *)arg;
+    android_state *s = AS(a->port.ud);
+
     a->opts.jar_path = a->jar_path;
+    /*
+     * Hand the runtime the platform's glyphs.  Set here rather than in
+     * nativeCreate because the faces live in this run's state: two Activities
+     * in one process must not share a glyph cache, and a finished run must not
+     * leave a face pointing at a freed cache.
+     */
+    if (s && s->glyph_mid && s->face_ptrs[0]) {
+        a->opts.fallback_fonts = s->face_ptrs;
+        a->opts.fallback_count = NJ_FONTSET_SLOTS;
+    }
     (void)nj_run(&a->port, &a->opts);
+    if (s && s->glyph_attached && s->jvm) {
+        (*s->jvm)->DetachCurrentThread(s->jvm);
+        s->glyph_attached = 0;
+        s->glyph_env = NULL;
+    }
     a->running = 0;
     return NULL;
 }
 
+/* Copy a jstring into a fixed buffer; returns 1 if anything was copied. */
+static int android_jstr(JNIEnv *env, jstring js, char *dst, size_t cap)
+{
+    const char *p;
+
+    if (!js || !dst || cap == 0) {
+        return 0;
+    }
+    p = (*env)->GetStringUTFChars(env, js, NULL);
+    if (!p) {
+        return 0;
+    }
+    snprintf(dst, cap, "%s", p);
+    (*env)->ReleaseStringUTFChars(env, js, p);
+    return 1;
+}
+
 JNIEXPORT jlong JNICALL
-Java_com_example_nj2me_Nj2meActivity_nativeCreate(JNIEnv *env, jobject thiz,
-                                                  jobject surface,
-                                                  jstring jarPath)
+Java_com_example_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
+                                                 jobject surface,
+                                                 jstring jarPath,
+                                                 jint screenW, jint screenH,
+                                                 jint heapMB,
+                                                 jstring rmsDir,
+                                                 jstring fsDir)
 {
     android_app *a;
+    android_state *s;
     ANativeWindow *win;
-    const char *path;
+    char rms[512], fsd[512];
 
     (void)thiz;
     a = (android_app *)calloc(1u, sizeof(*a));
     if (!a) {
         return 0;
     }
-    if (jarPath) {
-        path = (*env)->GetStringUTFChars(env, jarPath, NULL);
-        if (path) {
-            snprintf(a->jar_path, sizeof(a->jar_path), "%s", path);
-            (*env)->ReleaseStringUTFChars(env, jarPath, path);
-        }
-    }
-    if (nj_port_android(&a->port) != NJ_OK) {
+    android_jstr(env, jarPath, a->jar_path, sizeof(a->jar_path));
+
+    if (nj_port_android_ex(&a->port, (int)screenW, (int)screenH) != NJ_OK) {
         free(a);
         return 0;
     }
+    s = AS(a->port.ud);
+
+    rms[0] = fsd[0] = '\0';
+    android_jstr(env, rmsDir, rms, sizeof(rms));
+    android_jstr(env, fsDir, fsd, sizeof(fsd));
+    nj_port_android_set_paths(&a->port, rms[0] ? rms : NULL,
+                              fsd[0] ? fsd : NULL);
+
+    if (heapMB > 0) {
+        a->opts.heap_bytes = (nj_size)heapMB * 1024u * 1024u;
+    } else {
+        a->opts.heap_bytes = 0;        /* 0 => NJ_MAX_HEAP */
+    }
+
+    /*
+     * The vibrate callback needs the class, not the instance, and it needs it
+     * from a thread that is not the UI thread.  A global reference is what
+     * survives this call; nativeDestroy() releases it.
+     */
+    {
+        jclass cls = (*env)->GetObjectClass(env, thiz);
+        if (cls) {
+            jmethodID mid = (*env)->GetStaticMethodID(env, cls, "vibrateDevice",
+                                                      "(I)V");
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                mid = NULL;
+            }
+            if (mid) {
+                s->activity_class = (jclass)(*env)->NewGlobalRef(env, cls);
+                s->vibrate_mid = mid;
+            }
+            (*env)->DeleteLocalRef(env, cls);
+        }
+    }
+    (*env)->GetJavaVM(env, &s->jvm);
+
+    /*
+     * The platform's text stack, for the characters the built-in bitmap faces
+     * cannot draw.  Resolved here, on the UI thread, while a class loader is
+     * unambiguously the app's; the run thread only calls the cached method.
+     */
+    {
+        jclass gcls = (*env)->FindClass(env, "com/example/nj2me/GlyphSource");
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            gcls = NULL;
+        }
+        if (gcls) {
+            jmethodID gmid = (*env)->GetStaticMethodID(env, gcls, "render",
+                                                       "(II)[B");
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                gmid = NULL;
+            }
+            if (gmid) {
+                s->glyph_class = (jclass)(*env)->NewGlobalRef(env, gcls);
+                s->glyph_mid = gmid;
+            }
+            (*env)->DeleteLocalRef(env, gcls);
+        }
+        android_glyph_init(s);
+    }
+
     win = ANativeWindow_fromSurface(env, surface);
     nj_port_android_set_window(&a->port, win);
     if (win) {
         ANativeWindow_release(win);   /* the port holds its own reference */
     }
-    a->opts.heap_bytes = 0;           /* 0 => NJ_MAX_HEAP */
     return (jlong)(intptr_t)a;
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_nj2me_Nj2meActivity_nativeRun(JNIEnv *env, jobject thiz,
-                                               jlong handle)
+Java_com_example_nj2me_GameActivity_nativeSetSurface(JNIEnv *env, jobject thiz,
+                                                     jlong handle,
+                                                     jobject surface)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    ANativeWindow *win;
+    (void)thiz;
+    if (!a) {
+        return;
+    }
+    /* NULL is a real value here: the activity hands the surface back on stop,
+     * and the port must stop drawing rather than lock a window whose surface is
+     * gone. */
+    win = surface ? ANativeWindow_fromSurface(env, surface) : NULL;
+    nj_port_android_set_window(&a->port, win);
+    if (win) {
+        ANativeWindow_release(win);
+    }
+}
+
+/*
+ * Runs the MIDlet, and RETURNS WHEN THE MIDLET IS OVER.
+ *
+ * The blocking contract matters more than it looks.  Java calls this on its own
+ * thread and only then tears the port down, so if this returned as soon as the
+ * pthread was created, that thread would go straight to nativeDestroy() and
+ * sit in pthread_join() for the whole game.  The failure mode is not subtle:
+ * the caller holds a lock across the join, so every UI-thread call that needs
+ * the same lock - the status tick, key delivery - blocks until the player
+ * quits, and the system declares the app unresponsive 5 seconds in.  Joining
+ * here also means the caller's own join in nativeDestroy() is instant.
+ *
+ * It deliberately does NOT hold the caller's lock while waiting: a surface that
+ * goes away mid-frame can park the rasterizer inside the graphics driver, and
+ * the UI thread must stay free to show the last frame and leave the screen.
+ */
+JNIEXPORT void JNICALL
+Java_com_example_nj2me_GameActivity_nativeRun(JNIEnv *env, jobject thiz,
+                                              jlong handle)
 {
     android_app *a = (android_app *)(intptr_t)handle;
     (void)env; (void)thiz;
@@ -476,13 +2466,17 @@ Java_com_example_nj2me_Nj2meActivity_nativeRun(JNIEnv *env, jobject thiz,
     a->started = 1;
     if (pthread_create(&a->thread, NULL, android_main_thread, a) != 0) {
         a->running = 0;
+        return;
     }
+    pthread_join(a->thread, NULL);
+    a->joined = 1;
+    a->running = 0;
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_nj2me_Nj2meActivity_nativeKey(JNIEnv *env, jobject thiz,
-                                               jlong handle, jint keyCode,
-                                               jboolean down)
+Java_com_example_nj2me_GameActivity_nativeKey(JNIEnv *env, jobject thiz,
+                                              jlong handle, jint keyCode,
+                                              jboolean down)
 {
     android_app *a = (android_app *)(intptr_t)handle;
     (void)env; (void)thiz;
@@ -492,26 +2486,142 @@ Java_com_example_nj2me_Nj2meActivity_nativeKey(JNIEnv *env, jobject thiz,
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_nj2me_Nj2meActivity_nativePointer(JNIEnv *env, jobject thiz,
-                                                   jlong handle, jint x, jint y,
-                                                   jboolean down)
+Java_com_example_nj2me_GameActivity_nativeTouch(JNIEnv *env, jobject thiz,
+                                                jlong handle, jint id,
+                                                jint phase, jfloat x, jfloat y)
 {
     android_app *a = (android_app *)(intptr_t)handle;
-    nj_event ev;
     (void)env; (void)thiz;
-    if (!a) {
-        return;
+    if (a) {
+        nj_port_android_touch(&a->port, (int)id, (int)phase, (float)x,
+                              (float)y);
     }
-    memset(&ev, 0, sizeof(ev));
-    ev.type = (nj_u1)(down ? NJ_EV_POINTER_DOWN : NJ_EV_POINTER_UP);
-    ev.x = (nj_s2)x;
-    ev.y = (nj_s2)y;
-    nj_port_android_push_event(&a->port, &ev);
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_nj2me_Nj2meActivity_nativeQuit(JNIEnv *env, jobject thiz,
+Java_com_example_nj2me_GameActivity_nativeSetActive(JNIEnv *env, jobject thiz,
+                                                    jlong handle,
+                                                    jboolean active)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    (void)env; (void)thiz;
+    if (a) {
+        nj_port_android_set_active(&a->port, active ? 1 : 0);
+    }
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_example_nj2me_GameActivity_nativeStats(JNIEnv *env, jobject thiz,
                                                 jlong handle)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    char buf[256];
+    (void)thiz;
+    if (!a) {
+        return NULL;
+    }
+    buf[0] = '\0';
+    (void)nj_port_android_stats(&a->port, buf, sizeof(buf));
+    return (*env)->NewStringUTF(env, buf);
+}
+
+/*
+ * The player's choice of how the picture sits in the window.  `mode` is one of
+ * the NJ_VIEW_* values in include/nj2me/nj_port.h; zoom and the pan are only
+ * used by NJ_VIEW_CUSTOM.  Called from the UI thread while the VM runs, which
+ * the port handles by taking its own lock.
+ */
+JNIEXPORT void JNICALL
+Java_com_example_nj2me_GameActivity_nativeSetView(JNIEnv *env, jobject thiz,
+                                                  jlong handle, jint mode,
+                                                  jfloat zoom, jfloat dx,
+                                                  jfloat dy)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    (void)env; (void)thiz;
+    if (a) {
+        nj_port_android_set_view(&a->port, (int)mode, (float)zoom, (float)dx,
+                                 (float)dy);
+    }
+}
+
+/*
+ * What the port has measured the MIDlet to paint, as
+ * {x, y, w, h, framesMeasured}, or NULL when it has nothing to report yet.
+ *
+ * The launcher calls this once, a few seconds into the first run of a game, to
+ * remember the resolution and offer a screen size that fits; the in-game menu
+ * calls it for the "detected" line and the 适配画面 action.  Null, not zeros,
+ * because "not measured yet" and "measured an empty screen" are different
+ * answers and a caller that cannot tell them apart would save 0x0.
+ */
+JNIEXPORT jintArray JNICALL
+Java_com_example_nj2me_GameActivity_nativeDetect(JNIEnv *env, jobject thiz,
+                                                 jlong handle)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    int box[5];
+    jintArray arr;
+    jint vals[5];
+    int i;
+
+    (void)thiz;
+    if (!a) {
+        return NULL;
+    }
+    if (!nj_port_android_detect(&a->port, box)) {
+        return NULL;
+    }
+    for (i = 0; i < 5; i++) {
+        vals[i] = (jint)box[i];
+    }
+    arr = (*env)->NewIntArray(env, 5);
+    if (!arr) {
+        return NULL;
+    }
+    (*env)->SetIntArrayRegion(env, arr, 0, 5, vals);
+    return arr;
+}
+
+/*
+ * The key codes the keypad editor may offer, as "code:label" pairs.  Generated
+ * from the same table push_key() translates with, so the editor cannot offer a
+ * button the port would ignore.
+ */
+JNIEXPORT jobjectArray JNICALL
+Java_com_example_nj2me_GameActivity_nativeKeyTable(JNIEnv *env, jclass cls)
+{
+    jobjectArray arr;
+    jclass strcls;
+    int i;
+
+    (void)cls;
+    strcls = (*env)->FindClass(env, "java/lang/String");
+    if (!strcls) {
+        return NULL;
+    }
+    arr = (*env)->NewObjectArray(env, KEYMAP_N, strcls, NULL);
+    if (!arr) {
+        return NULL;
+    }
+    for (i = 0; i < KEYMAP_N; i++) {
+        char line[64];
+        jstring js;
+        snprintf(line, sizeof(line), "%d:%s", k_keymap[i].android,
+                 k_keymap[i].label);
+        js = (*env)->NewStringUTF(env, line);
+        if (!js) {
+            return arr;
+        }
+        (*env)->SetObjectArrayElement(env, arr, i, js);
+        (*env)->DeleteLocalRef(env, js);
+    }
+    return arr;
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_nj2me_GameActivity_nativeQuit(JNIEnv *env, jobject thiz,
+                                               jlong handle)
 {
     android_app *a = (android_app *)(intptr_t)handle;
     nj_event ev;
@@ -525,14 +2635,16 @@ Java_com_example_nj2me_Nj2meActivity_nativeQuit(JNIEnv *env, jobject thiz,
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_nj2me_Nj2meActivity_nativeDestroy(JNIEnv *env, jobject thiz,
-                                                   jlong handle)
+Java_com_example_nj2me_GameActivity_nativeDestroy(JNIEnv *env, jobject thiz,
+                                                  jlong handle)
 {
     android_app *a = (android_app *)(intptr_t)handle;
-    (void)env; (void)thiz;
+    android_state *s;
+    (void)thiz;
     if (!a) {
         return;
     }
+    s = AS(a->port.ud);
     /*
      * The frame loop exits when it sees the QUIT event; join it so the VM is
      * completely torn down before the surface goes away.  Without the join the
@@ -540,6 +2652,24 @@ Java_com_example_nj2me_Nj2meActivity_nativeDestroy(JNIEnv *env, jobject thiz,
      */
     if (a->started) {
         pthread_join(a->thread, NULL);
+    }
+    /* The Java reference belongs to this layer, so it is released here rather
+     * than in the port's shutdown.  Releasing it is what makes "back out of the
+     * game, start another" not leak an Activity class per game. */
+    if (s && s->activity_class) {
+        (*env)->DeleteGlobalRef(env, s->activity_class);
+        s->activity_class = NULL;
+        s->vibrate_mid = NULL;
+    }
+    if (s && s->glyph_class) {
+        (*env)->DeleteGlobalRef(env, s->glyph_class);
+        s->glyph_class = NULL;
+        s->glyph_mid = NULL;
+    }
+    if (s && s->glyph_cache) {
+        /* Only after the run thread is joined: it is the thread that fills it. */
+        free(s->glyph_cache);
+        s->glyph_cache = NULL;
     }
     nj_port_shutdown(&a->port);
     free(a);
@@ -569,6 +2699,20 @@ void nj_port_android_set_window(nj_port *port, void *native_window)
     (void)native_window;
 }
 
+void nj_port_android_set_paths(nj_port *port, const char *rms_dir,
+                               const char *fs_dir)
+{
+    (void)port;
+    (void)rms_dir;
+    (void)fs_dir;
+}
+
+void nj_port_android_set_active(nj_port *port, int active)
+{
+    (void)port;
+    (void)active;
+}
+
 void nj_port_android_push_event(nj_port *port, const nj_event *ev)
 {
     (void)port;
@@ -580,6 +2724,41 @@ void nj_port_android_push_key(nj_port *port, int android_keycode, int down)
     (void)port;
     (void)android_keycode;
     (void)down;
+}
+
+void nj_port_android_touch(nj_port *port, int pointer_id, int phase,
+                           float x, float y)
+{
+    (void)port;
+    (void)pointer_id;
+    (void)phase;
+    (void)x;
+    (void)y;
+}
+
+int nj_port_android_stats(const nj_port *port, char *buf, nj_size cap)
+{
+    (void)port;
+    (void)buf;
+    (void)cap;
+    return NJ_ERR_UNSUPPORTED;
+}
+
+void nj_port_android_set_view(nj_port *port, int mode, float zoom, float dx,
+                              float dy)
+{
+    (void)port;
+    (void)mode;
+    (void)zoom;
+    (void)dx;
+    (void)dy;
+}
+
+int nj_port_android_detect(const nj_port *port, int out[5])
+{
+    (void)port;
+    (void)out;
+    return 0;
 }
 
 #endif /* __ANDROID__ */

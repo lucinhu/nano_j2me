@@ -36,6 +36,62 @@
 #include <sys/stat.h>
 
 /* ------------------------------------------------------------------ */
+/* Port observation, without depending on a particular port             */
+/* ------------------------------------------------------------------ */
+/*
+ * The stats line reports what the PORT observed - tones queued, records
+ * written - because pixels cannot tell "saved the score" from "silently did
+ * nothing", and the port that answers is the headless one.
+ *
+ * It lives in its own source file, so a port that links a standalone library
+ * would otherwise have to pull the desktop port and its stdio in just to
+ * satisfy the linker for a log line.  libnj2me.so for Android is exactly that
+ * case.  The references are weak: a weak undefined function is NULL, the
+ * wrappers answer -1, and -1 already means "this port does not report that" -
+ * which is the truth for a port that was never asked to.
+ *
+ * A build that links the headless port (desktop, tests, the game corpus) gets
+ * the real numbers and the same behaviour as before.
+ */
+#if defined(__GNUC__)
+#define NJ_WEAK __attribute__((weak))
+#else
+#define NJ_WEAK
+#endif
+
+extern int  nj_port_headless_tone_calls(const nj_port *port) NJ_WEAK;
+extern long nj_port_headless_pcm_frames(const nj_port *port) NJ_WEAK;
+extern int  nj_port_headless_file_opens(const nj_port *port) NJ_WEAK;
+extern int  nj_port_headless_file_writes(const nj_port *port) NJ_WEAK;
+extern int  nj_port_headless_file_reads(const nj_port *port) NJ_WEAK;
+extern long nj_port_headless_bytes_written(const nj_port *port) NJ_WEAK;
+
+static int obs_tone_calls(const nj_port *p)
+{
+    return nj_port_headless_tone_calls ? nj_port_headless_tone_calls(p) : -1;
+}
+static long obs_pcm_frames(const nj_port *p)
+{
+    return nj_port_headless_pcm_frames ? nj_port_headless_pcm_frames(p) : -1;
+}
+static int obs_file_opens(const nj_port *p)
+{
+    return nj_port_headless_file_opens ? nj_port_headless_file_opens(p) : -1;
+}
+static int obs_file_writes(const nj_port *p)
+{
+    return nj_port_headless_file_writes ? nj_port_headless_file_writes(p) : -1;
+}
+static int obs_file_reads(const nj_port *p)
+{
+    return nj_port_headless_file_reads ? nj_port_headless_file_reads(p) : -1;
+}
+static long obs_bytes_written(const nj_port *p)
+{
+    return nj_port_headless_bytes_written ? nj_port_headless_bytes_written(p) : -1;
+}
+
+/* ------------------------------------------------------------------ */
 /* Reading the archive                                                 */
 /* ------------------------------------------------------------------ */
 /*
@@ -764,6 +820,17 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
      * the built-in typeface is the right behaviour, but doing it silently
      * would present a wrong-looking screen as if it were what was asked for.
      */
+    if (opts->fallback_fonts != NULL && opts->fallback_count > 0) {
+        /*
+         * The port's own glyph source, installed before font_path because a
+         * TrueType face builds its own fallback chain and would replace this
+         * one.  Nothing is logged: a fallback only answers for characters the
+         * built-in faces cannot draw, so a port that installs one and never
+         * sees a wide glyph is not misconfigured.
+         */
+        nj_vm_set_fallback_fonts(vm, opts->fallback_fonts,
+                                 opts->fallback_count);
+    }
     if (opts->font_path != NULL && opts->font_path[0] != '\0') {
         if (!nj_vm_use_font_file(vm, opts->font_path) && port.log) {
             port.log(port.user, 0,
@@ -1057,20 +1124,20 @@ done:
              * A test that cannot tell those apart passes on a port that was
              * never wired up.
              */
-            if (nj_port_headless_file_opens(&port) >= 0 ||
-                nj_port_headless_tone_calls(&port) >= 0) {
+            if (obs_file_opens(&port) >= 0 ||
+                obs_tone_calls(&port) >= 0) {
                 snprintf(buf, sizeof(buf),
                          "observed: threads=%u gc=%lu "
                          "tones=%ld pcm_frames=%ld "
                          "file_opens=%ld file_writes=%ld file_reads=%ld "
                          "bytes_written=%ld",
                          (unsigned)s.threads, (unsigned long)s.gc_count,
-                         (long)nj_port_headless_tone_calls(&port),
-                         (long)nj_port_headless_pcm_frames(&port),
-                         (long)nj_port_headless_file_opens(&port),
-                         (long)nj_port_headless_file_writes(&port),
-                         (long)nj_port_headless_file_reads(&port),
-                         (long)nj_port_headless_bytes_written(&port));
+                         (long)obs_tone_calls(&port),
+                         (long)obs_pcm_frames(&port),
+                         (long)obs_file_opens(&port),
+                         (long)obs_file_writes(&port),
+                         (long)obs_file_reads(&port),
+                         (long)obs_bytes_written(&port));
                 port.log(port.user, 2, buf);
             }
         }

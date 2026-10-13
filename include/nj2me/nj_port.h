@@ -43,6 +43,7 @@
 #define NJ_PORT_H
 
 #include "nj_types.h"
+#include "nj_gfx.h"   /* nj_font: the port may supply the glyphs */
 
 #ifdef __cplusplus
 extern "C" {
@@ -417,6 +418,22 @@ typedef struct nj_run_opts {
      * the wrong typeface.
      */
     const char *font_path;
+
+    /*
+     * Fallback faces for glyphs no built-in face can draw - how a port hands
+     * the runtime the platform's own text stack instead of shipping a font.
+     *
+     * Indexed by size_index(size) * NJ_FONT_SLOT_STYLES + bold: small, medium
+     * and large, each plain then bold.  A NULL entry leaves that slot as it
+     * was, so a port that only knows one cell size fills one entry per size
+     * and points them at the same provider.
+     *
+     * Each face is borrowed, not copied: it must outlive the run.  Install
+     * happens before the MIDlet starts, for the same reason font_path is read
+     * there - MIDP layout is measured, not re-flowed.
+     */
+    const nj_font *const *fallback_fonts;
+    int         fallback_count;
 } nj_run_opts;
 
 /*
@@ -453,11 +470,107 @@ nj_status nj_port_sdl2(nj_port *out, const char *title);
 /* Android NDK port.
  *   nj_port_android_set_window(&port, ANativeWindow *win);
  *   nj_port_android_push_event(&port, const nj_event *ev);
- *   nj_port_android_push_key(&port, int android_keycode, int down); */
+ *   nj_port_android_push_key(&port, int android_keycode, int down);
+ *
+ * The port owns an ANativeWindow it was handed, an event queue the UI thread
+ * posts into, and (once something asks for sound) an AAudio output stream.
+ * Everything else in this list exists because the UI thread needs to say
+ * something to the frame loop that the frame loop cannot find out by itself.
+ */
 nj_status nj_port_android(nj_port *out);
 void      nj_port_android_set_window(nj_port *port, void *native_window);
 void      nj_port_android_push_event(nj_port *port, const nj_event *ev);
 void      nj_port_android_push_key(nj_port *port, int android_keycode, int down);
+
+/* Touch phases, matching MotionEvent's action so the JNI layer can pass one
+ * straight through.  CANCEL is delivered to the MIDlet as a release: MIDP has
+ * no third state, and a finger the system took away is a finger that is up. */
+typedef enum nj_android_touch_phase {
+    NJ_ANDROID_TOUCH_DOWN = 0,
+    NJ_ANDROID_TOUCH_MOVE,
+    NJ_ANDROID_TOUCH_UP,
+    NJ_ANDROID_TOUCH_CANCEL
+} nj_android_touch_phase;
+
+/*
+ * A finger moved, in VIEW pixels.
+ *
+ * View pixels, not MIDlet pixels, because the letterbox transform lives in
+ * display_present() and nothing outside the port knows the scale factor or the
+ * black bars.  The caller passes what the MotionEvent said and the port
+ * inverts its own transform, so a tap on a scaled-up sprite lands on that
+ * sprite.  Only ONE finger drives the MIDP pointer (pointerPressed/Dragged/
+ * Released is a single-pointer API); the first finger down owns it and the
+ * rest are ignored until it lifts, which is what makes a second thumb on the
+ * keypad harmless.
+ */
+void      nj_port_android_touch(nj_port *port, int pointer_id, int phase,
+                                float x, float y);
+
+/*
+ * Where this app may write: RecordStore files, and what "file:///root/" means
+ * to javax.microedition.io.file.  Both are absolute host paths from Java
+ * (Context.getFilesDir()); the port copies them.  fs_dir NULL or empty leaves
+ * the MIDlet without a filesystem, which is an honest answer rather than an
+ * empty directory.  Call before nj_run().
+ */
+void      nj_port_android_set_paths(nj_port *port, const char *rms_dir,
+                                    const char *fs_dir);
+
+/*
+ * Foreground/background.  Android tells Java when the app is hidden, and the
+ * runtime has no way to notice by itself: the frame loop would keep running
+ * and keep playing audio behind the launcher.  inactive parks the VM thread in
+ * the port's idle() hook and pauses the audio stream; active lets it go again.
+ */
+void      nj_port_android_set_active(nj_port *port, int active);
+
+/*
+ * One line describing what this port has observed - screen, scale, frames,
+ * keys, pointer, audio state.  Written for logcat and for a diagnostic screen:
+ * "the game is running" and "the game is running and its keys arrive" look
+ * identical from outside, and this is what tells them apart.  Returns the
+ * length written, or negative.
+ */
+int       nj_port_android_stats(const nj_port *port, char *buf, nj_size cap);
+
+/*
+ * How the game's picture is placed in the window.  Values are part of the Java
+ * contract (the launcher stores the chosen one per game), so they are fixed.
+ */
+typedef enum nj_android_view_mode {
+    NJ_VIEW_INT = 0,     /* largest whole-number scale that fits, centred */
+    NJ_VIEW_FILL,        /* fractional scale: the largest that fits, centred */
+    NJ_VIEW_CUSTOM,      /* fit scale times `zoom`, moved by `dx`/`dy` */
+    NJ_VIEW_AUTO,        /* crop to the painted area, then as NJ_VIEW_INT */
+    NJ_VIEW_MODE_COUNT
+} nj_android_view_mode;
+
+/*
+ * Place the picture: `zoom` is read only in NJ_VIEW_CUSTOM (a multiplier on the
+ * fit scale, 1.0 = default) and `dx`/`dy` are a pan in window pixels, also only
+ * there.  Safe to call from the UI thread at any time.
+ *
+ * This exists because a J2ME screen is small and a title written for 128x128
+ * gets a canvas the launcher chose, so the picture can end up a stamp in the
+ * corner of a black rectangle.  The player can fill the screen, drag and zoom
+ * it, or ask for the area the MIDlet actually paints.
+ */
+void      nj_port_android_set_view(nj_port *port, int mode, float zoom,
+                                   float dx, float dy);
+
+/*
+ * The area of the logical screen the MIDlet has painted, as
+ * {x, y, w, h, frames}.  Returns 1 when the box is worth using - which is what
+ * the launcher shows as "detected resolution" and what NJ_VIEW_AUTO crops to.
+ *
+ * No manifest in this project's corpus declares a screen size (6 of 395 games),
+ * so this is measured instead of read: frames are compared with the one before
+ * and the pixels that changed are unioned into a box.  `frames` says how many
+ * frames the measurement has seen, so a caller can wait for more than a couple
+ * before trusting a box that appeared while the game was still starting.
+ */
+int       nj_port_android_detect(const nj_port *port, int out[5]);
 
 /* ESP-IDF port for ESP32-S3 (SPI/RGB LCD + GPIO buttons).  Configure it with
  * nj_port_esp32_config before calling nj_port_esp32(). */

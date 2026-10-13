@@ -1,30 +1,39 @@
 #!/usr/bin/env bash
 #
-# Build, sign and install a debug APK that runs a MIDlet on Android.
+# Build, sign and install a debug APK of the Android port.
 #
-#     tools/build_android_apk.sh [--jar FILE] [--abi arm64-v8a] [--install]
+#     tools/build_android_apk.sh [--abi arm64-v8a] [--screen 240x320]
+#                                [--install] [--push FILE.jar]
 #
 # Built by hand with aapt2/d8/apksigner rather than Gradle, on purpose: this
 # repository has no Gradle wrapper, no dependency graph and nothing to download,
-# and the APK it produces is a normal, installable, signed APK.  A real project
-# would use Gradle; what this is for is proving the native side is complete -
-# a valid manifest, dexed Java, the .so in lib/<abi>/, the game in assets/.
+# and the APK this produces is a normal, installable, signed APK.  A real
+# project would use Gradle; what this is for is proving the port is complete -
+# a valid manifest, linked resources, dexed Java, the .so in lib/<abi>/, an
+# activity that picks a .jar and an overlay keypad that can be rearranged.
+#
+# No game is bundled.  The launcher reads jars from the app's own storage
+# (files/jars) and from its external storage
+# (/sdcard/Android/data/<package>/files/jars), which is the directory a user can
+# fill with a cable or one adb push - see --push below.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ABI=arm64-v8a
+PKG=com.example.nj2me
+ABIS="arm64-v8a armeabi-v7a x86 x86_64"
 SCREEN=""
-JAR="${NJ_ANDROID_JAR:-$ROOT/tests/games/jump.jar}"
 INSTALL=0
+PUSH=""
 OUT="$ROOT/build/android"
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --jar) JAR="$2"; shift 2 ;;
-        --abi) ABI="$2"; shift 2 ;;
+        --abi) ABIS="$2"; shift 2 ;;
         --screen) SCREEN="$2"; shift 2 ;;
+        --out) OUT="$2"; shift 2 ;;
         --install) INSTALL=1; shift ;;
-        -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --push) PUSH="$2"; shift 2 ;;
+        -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -33,51 +42,68 @@ SDK="${ANDROID_HOME:-$HOME/Android/Sdk}"
 BT="$(ls -d "$SDK"/build-tools/*/ 2>/dev/null | sort -V | tail -1)"; BT="${BT%/}"
 PLATFORM="$(ls -d "$SDK"/platforms/*/ 2>/dev/null | sort -V | tail -1)"; PLATFORM="${PLATFORM%/}"
 JAVA_HOME_DIR="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+ADB="$SDK/platform-tools/adb"
 
 for t in aapt2 d8 zipalign apksigner; do
     [ -x "$BT/$t" ] || { echo "missing $BT/$t" >&2; exit 2; }
 done
 [ -f "$PLATFORM/android.jar" ] || { echo "no android.jar in $PLATFORM" >&2; exit 2; }
-[ -f "$JAR" ] || { echo "no JAR at $JAR (run tools/fetch_test_games.sh)" >&2; exit 2; }
+[ -f "$ROOT/src/port/android/manifest/AndroidManifest.xml" ] || { echo "no manifest" >&2; exit 2; }
 
-# 1. The native side, for one ABI.
-echo "== native ($ABI)"
-if [ -n "$SCREEN" ]; then
-    "$ROOT/tools/build_android.sh" --abi "$ABI" --out "$OUT" --screen "$SCREEN" || exit 1
-else
-    "$ROOT/tools/build_android.sh" --abi "$ABI" --out "$OUT" || exit 1
+if [ -n "$PUSH" ]; then
+    [ -f "$PUSH" ] || { echo "no jar at $PUSH" >&2; exit 2; }
+    # mkdir first: the directory under Android/data belongs to the app and is
+    # only created once the app has run, but the shell user may create it too,
+    # which is what makes one-command testing possible.
+    "$ADB" shell mkdir -p "/sdcard/Android/data/$PKG/files/jars" || exit 1
+    "$ADB" push "$PUSH" "/sdcard/Android/data/$PKG/files/jars/" || exit 1
 fi
-SO="$OUT/$ABI/libnj2me.so"
 
-W="$OUT/apk"; rm -rf "$W"; mkdir -p "$W/classes" "$W/dex" "$W/assets" "$W/lib/$ABI" "$W/gen"
-cp "$SO" "$W/lib/$ABI/"
-cp "$JAR" "$W/assets/game.jar"
+# 1. The native side, once per ABI.
+W="$OUT/apk"; rm -rf "$W"; mkdir -p "$W/classes" "$W/dex" "$W/assets" "$W/gen" "$W/res"
+for abi in $ABIS; do
+    echo "== native ($abi)"
+    if [ -n "$SCREEN" ]; then
+        "$ROOT/tools/build_android.sh" --abi "$abi" --out "$OUT" --screen "$SCREEN" || exit 1
+    else
+        "$ROOT/tools/build_android.sh" --abi "$abi" --out "$OUT" || exit 1
+    fi
+    mkdir -p "$W/lib/$abi"
+    cp "$OUT/$abi/libnj2me.so" "$W/lib/$abi/"
+done
 
-# 2. Java -> .class -> .dex.
+# 2. Java -> .class -> .dex.  Compiled against android.jar as the boot class
+#    path rather than against the host JDK's, so the API level is the one the
+#    manifest asks for; -source/-target 8 keeps d8 and old tooling happy.
 echo "== java"
-"$JAVA_HOME_DIR/bin/javac" -source 8 -target 8 -nowarn \
+find "$ROOT/src/port/android/java" -name '*.java' > "$W/sources.txt"
+"$JAVA_HOME_DIR/bin/javac" -source 8 -target 8 -nowarn -Xlint:-options \
     -bootclasspath "$PLATFORM/android.jar" -classpath "$PLATFORM/android.jar" \
-    -d "$W/classes" \
-    "$ROOT/src/port/android/java/com/example/nj2me/Nj2meActivity.java" || exit 1
+    -d "$W/classes" @"$W/sources.txt" || exit 1
 "$BT/d8" --lib "$PLATFORM/android.jar" --min-api 21 --output "$W/dex" \
     $(find "$W/classes" -name '*.class') || exit 1
 
-# 3. Manifest + dex + lib + assets -> an unsigned APK.
-echo "== package"
+# 3. Resources, then manifest + resources -> an unsigned APK.
+echo "== resources"
+"$BT/aapt2" compile --dir "$ROOT/src/port/android/res" -o "$W/res.zip" || exit 1
+# --auto-add-overlay: aapt2 treats every -R input as an overlay of the base
+# table, and with no base table there is nothing for these resources to
+# override - without the flag it refuses them as redundant.
 "$BT/aapt2" link -o "$W/base.apk" \
     --manifest "$ROOT/src/port/android/manifest/AndroidManifest.xml" \
-    -I "$PLATFORM/android.jar" --min-sdk-version 21 --target-sdk-version 34 \
-    --version-code 1 --version-name 1.0 || exit 1
+    -I "$PLATFORM/android.jar" -R "$W/res.zip" --auto-add-overlay \
+    --min-sdk-version 21 --target-sdk-version 34 \
+    --version-code 1 --version-name 1.0 --no-version-vectors || exit 1
 
 # dex/, lib/<abi>/ and assets/ are added with Python's zipfile rather than the
 # zip(1) command: zip is not installed everywhere and is not worth a dependency
-# for three entries.  aapt2 produced a valid APK; this appends to it.
-python3 - "$W" "$ABI" <<'PY' || exit 1
+# for a handful of entries.  aapt2 produced a valid APK; this appends to it.
+python3 - "$W" "$ABIS" <<'PY' || exit 1
 import os, sys, zipfile
-w, abi = sys.argv[1], sys.argv[2]
-add = [(os.path.join(w, "dex", "classes.dex"), "classes.dex"),
-       (os.path.join(w, "lib", abi, "libnj2me.so"), "lib/%s/libnj2me.so" % abi),
-       (os.path.join(w, "assets", "game.jar"), "assets/game.jar")]
+w, abis = sys.argv[1], sys.argv[2].split()
+add = [(os.path.join(w, "dex", "classes.dex"), "classes.dex")]
+for abi in abis:
+    add.append((os.path.join(w, "lib", abi, "libnj2me.so"), "lib/%s/libnj2me.so" % abi))
 with zipfile.ZipFile(os.path.join(w, "base.apk"), "a", zipfile.ZIP_DEFLATED) as z:
     for src, dst in add:
         if not os.path.exists(src):
@@ -99,9 +125,11 @@ fi
 "$BT/apksigner" verify "$OUT/nj2me.apk" >/dev/null 2>&1 || { echo "signature did not verify" >&2; exit 1; }
 
 echo "== ok"
-printf '  %s  (%s bytes, %s, %s)\n' "$OUT/nj2me.apk" "$(stat -c%s "$OUT/nj2me.apk")" "$ABI" "$(basename "$JAR")"
+printf '  %s  (%s bytes, %s)\n' "$OUT/nj2me.apk" "$(stat -c%s "$OUT/nj2me.apk")" "$ABIS"
 
 if [ "$INSTALL" -eq 1 ]; then
-    "$SDK/platform-tools/adb" install -r "$OUT/nj2me.apk"
-    "$SDK/platform-tools/adb" shell am start -n com.example.nj2me/.Nj2meActivity
+    "$ADB" install -r "$OUT/nj2me.apk" || exit 1
+    # The launch screen, not a game: which game to run is the user's choice in
+    # the UI, and that is the point of this port.
+    "$ADB" shell am start -n "$PKG/.LibraryActivity"
 fi
