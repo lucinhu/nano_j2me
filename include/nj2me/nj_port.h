@@ -44,6 +44,7 @@
 
 #include "nj_types.h"
 #include "nj_gfx.h"   /* nj_font: the port may supply the glyphs */
+#include "nj_device.h" /* nj_device_prop: the properties nj_run() installs */
 
 #ifdef __cplusplus
 extern "C" {
@@ -471,6 +472,21 @@ typedef struct nj_run_opts {
      */
     const nj_font *const *fallback_fonts;
     int         fallback_count;
+
+    /*
+     * System properties to answer on top of the runtime's own - the device the
+     * MIDlet believes it is running on.  Borrowed, and the table must outlive
+     * the run; NULL is the "generic" profile (see nj2me/nj_device.h, which also
+     * has the built-in handset profiles and what they answer).
+     *
+     * Within the table the LAST match wins, so a caller installs a device
+     * profile first and its own overrides after it.  A MIDlet asking for a key
+     * that is not here, not one of the runtime's own facts, and not something
+     * the port knows falls through to NULL - which is what the old code answered
+     * for almost everything, including for keys the port DID know.
+     */
+    const nj_device_prop *props;
+    int         nprops;
 } nj_run_opts;
 
 /*

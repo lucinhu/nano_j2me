@@ -21,9 +21,10 @@
 # Usage:
 #   tools/run_game_corpus.sh [--dir DIR] [--size WxH] [--timeout SECS]
 #                            [--bin PATH] [--min-colours N] [--strict-motion]
+#                            [--device NAME]
 #
 # Environment: NJ_BIN, NJ_GAMES, NJ_HEAP, NJ_SIZES, NJ_TIMEOUT, NJ_FRAMES,
-# NJ_LONG_FRAMES, NJ_MIN_COLOURS, NJ_FPS, NJ_POKE, NJ_CORPUS_WORK.
+# NJ_LONG_FRAMES, NJ_MIN_COLOURS, NJ_FPS, NJ_POKE, NJ_CORPUS_WORK, NJ_DEVICE.
 # This sweep is deliberately sequential: every title gets the machine, so a
 # frame count means the same thing for all of them.  tools/corpus_fatal.sh is
 # the parallel one when all you need is "does anything crash".
@@ -74,9 +75,10 @@ while [ $# -gt 0 ]; do
         --timeout)  SECS="$2"; shift 2 ;;
         --bin)      BIN="$2"; shift 2 ;;
         --min-colours) MIN_COLOURS="$2"; shift 2 ;;
+        --device)   DEVICE="$2"; shift 2 ;;
         --strict-motion) STRICT_MOTION=1; shift ;;
         -h|--help)
-            sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
@@ -99,6 +101,11 @@ fi
 
 pass=0
 fail=0
+# Which handset every title is being told it is on.  Printed because it changes
+# what a row MEANS: a title that only starts under a Nokia profile has been
+# shown to work on its Nokia path, not to work in general.
+echo "device: ${DEVICE:-(generic)}"
+echo
 # THR and IO come from the port, not from the pixels.  A title that saves a
 # high score and one that silently fails to are the same sequence of frames,
 # so those two columns are the only way this table can tell them apart.
@@ -151,6 +158,18 @@ trap cleanup EXIT INT TERM
 # A title that throws because of this is fine (T3 allows errors); a title that
 # crashes or hangs because of it is a real finding, and that is the point.
 POKE="${NJ_POKE:-5:fire,6:up,7:down,8:left,9:right,10:soft1,11:soft2,12:1,13:2,14:5,15:star,16:pound,20:fire,21:fire,25:left,30:right,35:fire}"
+
+# Which handset the titles are told they are running on (--device in nj2me).
+#
+# Empty means the generic profile, which is what a person gets by default and
+# therefore what the corpus must measure by default.  It is a knob because a
+# whole class of titles branches on microedition.platform: 1945空战英雄_6105
+# throws out of its MIDlet constructor unless the platform starts with "Nokia",
+# so a sweep under a Nokia profile answers a different - and useful - question
+# ("does the title work if it takes its Nokia path?") than the default one does.
+# Every row records the profile so a rewritten verdict can be told from a fix.
+# (--device, parsed above, wins over the environment.)
+DEVICE="${DEVICE:-${NJ_DEVICE:-}}"
 
 # The per-run verdict, as a function: the size loop has to be able to ask
 # "does it draw HERE?" more than once per title, because whether a title
@@ -241,6 +260,8 @@ PY
 for jar in "${JARS[@]}"; do
     title="$(basename "$jar" .jar)"
     KARGS=()
+    DARGS=()
+    [ -n "$DEVICE" ] && DARGS=(--device "$DEVICE")
     KS="$(keys_for "$title")"
     if [ -n "$KS" ]; then
         KARGS=(--keys "$KS")
@@ -263,6 +284,7 @@ for jar in "${JARS[@]}"; do
                 --size "$size" \
                 --fps "$FPS" --run-frames "${2:-$FRAMES}" --stats \
                 --dump-frames "$out/" --dump-every "$1" \
+                "${DARGS[@]}" \
                 "${KARGS[@]}" \
                 "$jar" >"$log" 2>&1
     }

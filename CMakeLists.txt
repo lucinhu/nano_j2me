@@ -83,6 +83,7 @@ set(NJ_SOURCES
   src/core/nj_interp.c
   src/core/nj_app.c
   src/core/nj_builtins.c
+  src/core/nj_device.c
   # ---- java.lang, in C ----
   src/core/nj_lib_object.c
   src/core/nj_lib_string.c
@@ -311,6 +312,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_sizedemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_utfdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_encdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_devicedemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flatdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_excdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_paintthrow_jar.sh
@@ -476,6 +478,16 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_encoding_names.sh
                      ${NJ_FIXTURES}/encdemo.jar)
+    # --device / --prop: the runtime can be told which handset a title is on,
+    # because a title branches on microedition.platform and on the vendor's IMEI
+    # spellings, and takes an unfinished path when it gets an answer it does not
+    # know.  1945空战英雄_6105 will not start at all unless the platform begins
+    # with "Nokia", and runs when told it is one.
+    add_test(NAME check_device_props
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_device_props.sh
+                     ${NJ_FIXTURES}/devicedemo.jar)
     add_test(NAME check_corpus_size_retry
              COMMAND ${CMAKE_COMMAND} -E env
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_corpus_size_retry.sh

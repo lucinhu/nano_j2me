@@ -125,8 +125,11 @@ Specifically supported:
 | `Runtime` | `gc`, `freeMemory`, `totalMemory`, `exit` |
 
 `System.getProperty` answers for `microedition.platform`, `.configuration`,
-`.profiles`, `.locale`, `.encoding`, `line.separator`, `java.version`. Anything
-else returns `null`, which is what a real device does for unknown keys.
+`.profiles`, `.locale`, `.encoding`, `line.separator`, `java.version` and
+`os.name`. A key the runtime does not know, the installed device profile does
+not carry and the port does not answer returns `null`, which is what a real
+device does for unknown keys. The platform string is itself overridable — see
+[the device a title believes it is on](#the-device-a-title-believes-it-is-on).
 
 **Encoding names are case-insensitive**, as the spec says, and the table is
 deliberately closed. `String.getBytes`/`new String(byte[], String)` decode the
@@ -274,6 +277,50 @@ opened":
         build/nj2me --port sdl2 tests/fixtures/audiodemo.jar
     INFO: audio: dummy opened, 22050 Hz, 1 channel(s)
     INFO: AUDIO wav=200000 state=400
+
+## The device a title believes it is on
+
+`System.getProperty("microedition.platform")` is how a J2ME title decides which
+handset it is running on, and a great many of them decide badly: they ask, get a
+string they do not recognise, and take a path that was never finished. A few
+stop outright. `1945空战英雄_6105` reads the first five characters, requires
+`"Nokia"`, and throws `IllegalAccessException` out of its MIDlet constructor
+when it does not get one — the runtime's own `"nano_j2me"` is a refusal, and the
+title never draws a frame.
+
+Of the 394 readable collected titles, 65 ask for `microedition.platform` and 31
+of those also compare it against `"Nokia"`. The corpus probes the handset's
+*identity* far more often than its platform: `com.sonyericsson.imei` in 14
+titles, `com.nokia.mid.imei` in 13, `com.nokia.IMEI` in 12, `com.samsung.imei`
+in 12, `com.nokia.mid.imsi` in 8, `com.siemens.IMEI` in 8, and a dozen more
+spellings of IMEI, IMSI, MCC and MNC. A real device answers all of them; a
+runtime that answers `null` leaves the MIDlet holding a null it never checks
+for.
+
+So the runtime can be told which handset it is on:
+
+    build/nj2me --list-devices                       # the built-in profiles
+    build/nj2me --device nokia6230 game.jar          # answer as that phone
+    build/nj2me --prop microedition.platform=Nokia6230/05.50 game.jar
+
+`--prop key=value` may be repeated and wins over the profile. The profiles
+themselves live in `include/nj2me/nj_device.h` and `src/core/nj_device.c`, and
+carry the platform string plus the vendor's own IMEI/IMSI/network spellings —
+`nokia6230` answers `Nokia6230/05.50`, `com.nokia.keyboard.type` as
+`PhoneKeypad` and eight identity keys; `generic`, the default, answers only the
+port's own identity and no vendor keys at all.
+
+The IMEI/IMSI values are **synthetic**: a valid length and Luhn check digit, a
+TAC and an MCC/MNC that belong to nobody. They are there so a title that reads
+or parses an identity sees something shaped like one. They identify neither this
+host, nor its owner, nor any subscriber. An embedding installs the same table
+through `nj_run_opts.props` / `nj_vm_set_system_properties()`.
+
+The lookup order is: the installed table (last match wins, so a caller puts its
+own overrides after a profile), then the runtime's own facts, then the port's
+`device_property` hook, and only then `null`. A port's answer for
+`microedition.platform` is therefore live — it used to be unreachable, because
+the runtime answered that key before consulting the port.
 
 ## Known behavioural differences
 

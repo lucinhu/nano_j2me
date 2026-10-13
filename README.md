@@ -169,6 +169,26 @@ An unreadable or malformed file is not fatal: the built-in faces stay in place
 and a warning is logged. Compile the rasteriser out with `-DNJ_ENABLE_TTF=0`
 to keep only the bitmaps. See `docs/PORTING.md` for the embedding details.
 
+## Telling a title which phone it is on
+
+A J2ME title asks `System.getProperty("microedition.platform")` to find out
+which handset it is running on, and some of them refuse to start on an answer
+they do not know — `1945空战英雄_6105` wants a platform that begins with
+`"Nokia"`. Name a built-in handset profile and the runtime answers as that
+phone, identity numbers and vendor keys included:
+
+```sh
+build/nj2me --list-devices                              # what is built in
+build/nj2me --device nokia6230 game.jar                 # run as a Nokia 6230
+build/nj2me --prop microedition.platform=Nokia6230/05.50 game.jar
+```
+
+`--prop key=value` may be repeated and wins over the profile; the default is
+`generic`, which answers only the port's own identity. The IMEI/IMSI values in
+the profiles are synthetic — a valid shape, nobody's number. See
+[the device section of docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#the-device-a-title-believes-it-is-on)
+for what each profile answers and why.
+
 ## Verifying the memory contract
 
 ```sh

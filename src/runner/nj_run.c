@@ -808,6 +808,18 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     }
 
     /*
+     * ---- the device ----
+     *
+     * Before the application, for the same reason the font is: a title asks
+     * who it is running on while its constructor runs, and the answer decides
+     * which of its code paths ever executes.  Installing a profile later would
+     * be installing it after the decision.
+     */
+    if (opts->props != NULL && opts->nprops > 0) {
+        nj_vm_set_system_properties(vm, opts->props, (nj_u4)opts->nprops);
+    }
+
+    /*
      * ---- the font ----
      *
      * Before the application, not after: MIDP layout is measured rather than

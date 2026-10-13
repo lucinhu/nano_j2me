@@ -17,6 +17,7 @@
 #include "nj2me/nj_zip.h"
 #include "nj2me/nj_gfx.h"
 #include "nj2me/nj_codec.h"
+#include "nj2me/nj_device.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -426,6 +427,16 @@ struct nj_vm {
 
     /* port */
     const nj_port *port;
+
+    /*
+     * The system properties the DEVICE answers, on top of the runtime's own.
+     * Borrowed, not owned: a caller hands over a table of pointers into its own
+     * storage (argv, a device profile, a static array) and keeps it alive for
+     * the life of the VM.  Empty by default, which is the "generic" profile:
+     * the port's identity and nothing else.
+     */
+    const nj_device_prop *sys_props;
+    nj_u4                 nsys_props;
 
     /* where class bytes come from (JAR loader, flash partition, test fixture) */
     nj_class_source *source;

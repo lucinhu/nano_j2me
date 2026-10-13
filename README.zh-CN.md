@@ -133,6 +133,18 @@ build/nj2me --port sdl2 --font /usr/share/fonts/liberation/LiberationMono-Regula
 
 文件读不了或者格式不对都不致命：内置字体会留在原位，只打一条警告。加 `-DNJ_ENABLE_TTF=0` 可以把 TrueType 光栅化器整个编译掉，只留点阵字体。嵌入相关的细节见 `docs/PORTING.md`。
 
+## 告诉游戏它跑在哪台手机上
+
+J2ME 游戏会问 `System.getProperty("microedition.platform")` 来判断自己在哪台手机上，其中一些遇到不认识的答案就直接不启动——`1945空战英雄_6105` 要求平台串以 `"Nokia"` 开头。指定一个内置机型档案，运行时就会以那台手机的身份作答，包括它的识别号和厂商私有键：
+
+```sh
+build/nj2me --list-devices                              # 有哪些内置档案
+build/nj2me --device nokia6230 game.jar                 # 以 Nokia 6230 运行
+build/nj2me --prop microedition.platform=Nokia6230/05.50 game.jar
+```
+
+`--prop key=value` 可以重复给出，并覆盖档案里的值；默认档案是 `generic`，只用移植层自己的身份作答。档案里的 IMEI/IMSI 是**合成的**：形状合法，但不是任何人的号码。每个档案具体答什么、为什么要这么答，见 [docs/COMPATIBILITY.md 的设备一节](docs/COMPATIBILITY.md#the-device-a-title-believes-it-is-on)。
+
 ## 验证内存契约
 
 ```sh

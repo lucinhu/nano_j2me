@@ -29,6 +29,21 @@ static void usage(const char *argv0)
 "  --run-frames <n>     stop after n presented frames (for benchmarks)\n"
         "  --fs-dir <path>      root for file:// (JSR 75); no filesystem by default\n"
 "  --stats              print bytecode and frame counters at the end\n"
+"  --device <name>      answer System.getProperty() as this handset\n"
+"  --prop <key>=<value> answer one more property (repeatable)\n"
+"  --list-devices       print the built-in handsets and exit\n"
+"\n"
+"the device a MIDlet thinks it is on\n"
+"  Many titles ask microedition.platform which handset they are running on and\n"
+"  take a code path that was never finished when the answer is not one they\n"
+"  know - 1945空战英雄_6105 stops outright unless the platform starts with\n"
+"  \"Nokia\".  --device names a built-in profile with a platform string, an IMEI,\n"
+"  an IMSI and the vendor's own spellings of them; --list-devices prints them.\n"
+"  --prop answers any key on its own, on top of a profile or instead of one:\n"
+"      --prop com.nokia.keyboard.type=None\n"
+"  Both are for compatibility work, not for hiding a bug in the runtime: run\n"
+"  without them first, and treat a title that only starts with a profile as a\n"
+"  title whose own code chose that path.\n"
 "\n"
 "fonts\n"
 "  Text uses the built-in bitmap faces unless --font names a TrueType file.\n"
@@ -78,7 +93,31 @@ typedef struct cli {
     int         run_frames;
     const char *keys;
     const char *font;
+    const char *device_name;
 } cli;
+
+/*
+ * Room for a device profile plus the caller's own --prop entries.  The largest
+ * built-in profile has eleven rows, so a profile and a handful of overrides fit
+ * with room to spare; going over is a usage error rather than a silent drop.
+ */
+#define NJ_CLI_MAX_PROPS 32
+#define NJ_CLI_PROP_LEN  96
+
+static void list_devices(void)
+{
+    nj_u4 n = nj_device_count();
+    nj_u4 i;
+
+    printf("built-in devices:\n");
+    for (i = 0; i < n; i++) {
+        const nj_device *d = nj_device_at(i);
+        printf("  %-20s %s\n", d->name, d->summary);
+    }
+    printf("\n  The default is \"%s\".  See nj2me/nj_device.h for what each\n"
+           "  profile answers and why the identity numbers are synthetic.\n",
+           nj_device_default()->name);
+}
 
 static int parse_size(const char *s, int *w, int *h)
 {
@@ -99,6 +138,12 @@ int main(int argc, char **argv)
     nj_status st;
     int i;
     int use_sdl2 = 0;
+    /* The merged property table nj_run() installs: the device, then overrides. */
+    static nj_device_prop props[NJ_CLI_MAX_PROPS];
+    static char prop_key[NJ_CLI_MAX_PROPS][NJ_CLI_PROP_LEN];
+    static char prop_val[NJ_CLI_MAX_PROPS][NJ_CLI_PROP_LEN];
+    int nprops = 0;
+    nj_size klen;
 
     memset(&c, 0, sizeof(c));
     c.dump_every = 1;
@@ -150,6 +195,37 @@ int main(int argc, char **argv)
             c.fs_dir = argv[++i];
         } else if (strcmp(a, "--keys") == 0 && i + 1 < argc) {
             c.keys = argv[++i];
+        } else if (strcmp(a, "--list-devices") == 0) {
+            list_devices();
+            return 0;
+        } else if (strcmp(a, "--device") == 0 && i + 1 < argc) {
+            c.device_name = argv[++i];
+        } else if (strcmp(a, "--prop") == 0 && i + 1 < argc) {
+            const char *kv = argv[++i];
+            const char *eq = strchr(kv, '=');
+            nj_size k;
+            if (eq == NULL || eq == kv) {
+                fprintf(stderr, "--prop wants key=value, got: %s\n", kv);
+                return 2;
+            }
+            if (nprops >= NJ_CLI_MAX_PROPS) {
+                fprintf(stderr, "too many --prop options (the limit is %d)\n",
+                        NJ_CLI_MAX_PROPS);
+                return 2;
+            }
+            k = (nj_size)(eq - kv);
+            if (k >= NJ_CLI_PROP_LEN ||
+                strlen(eq + 1) >= (size_t)NJ_CLI_PROP_LEN) {
+                fprintf(stderr, "--prop key and value must each be shorter "
+                                "than %d characters\n", NJ_CLI_PROP_LEN);
+                return 2;
+            }
+            memcpy(prop_key[nprops], kv, (size_t)k);
+            prop_key[nprops][k] = '\0';
+            memcpy(prop_val[nprops], eq + 1, strlen(eq + 1) + 1u);
+            props[nprops].key = prop_key[nprops];
+            props[nprops].value = prop_val[nprops];
+            nprops++;
         } else if (strcmp(a, "--stats") == 0) {
             c.stats = 1;
         } else if (strcmp(a, "--where") == 0) {
@@ -168,6 +244,34 @@ int main(int argc, char **argv)
     if (!c.jar) {
         usage(argv[0]);
         return 2;
+    }
+
+    /*
+     * Build the property table: the device profile first, the caller's own
+     * --prop entries after it.  A later row wins, so an override lands on top
+     * of the profile it names rather than being shadowed by it.
+     */
+    if (c.device_name != NULL) {
+        const nj_device *d = nj_device_find(c.device_name);
+        nj_u4 j;
+
+        if (d == NULL) {
+            fprintf(stderr, "unknown device: %s\n", c.device_name);
+            list_devices();
+            return 2;
+        }
+        if ((int)d->count + nprops > NJ_CLI_MAX_PROPS) {
+            fprintf(stderr, "too many properties for one run (the limit is "
+                            "%d)\n", NJ_CLI_MAX_PROPS);
+            return 2;
+        }
+        for (j = (nj_u4)nprops; j > 0u; j--) {
+            props[j - 1u + d->count] = props[j - 1u];
+        }
+        for (j = 0; j < d->count; j++) {
+            props[j] = d->props[j];
+        }
+        nprops += (int)d->count;
     }
 
     memset(&port, 0, sizeof(port));
@@ -222,6 +326,8 @@ int main(int argc, char **argv)
     opts.run_frames = (nj_u4)(c.run_frames > 0 ? c.run_frames : 0);
     opts.keys = c.keys;
     opts.font_path = c.font;
+    opts.props = nprops > 0 ? props : NULL;
+    opts.nprops = nprops;
 
     st = (nj_status)nj_run(&port, &opts);
 

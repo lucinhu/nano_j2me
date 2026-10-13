@@ -201,7 +201,7 @@ only way to exercise that path on a phone that has AAudio.
 The port fills in `display_init`/`display_present`, `input_poll`, `input_push`,
 `now`, `dir_open`/`dir_next`/`dir_close`, `tone_play`/`tone_stop`,
 `pcm_open`/`pcm_write`/`pcm_close`/`pcm_free`, `device_property`, `vibrate` and
-`idle`. Three of those are worth copying:
+`idle`. Four of those are worth copying:
 
 - **Directories, but not files.** `dir_open`/`dir_next`/`dir_close` are real
   (`dirent` + `stat`), because the runtime has no fallback for them and
@@ -220,6 +220,15 @@ The port fills in `display_init`/`display_present`, `input_poll`, `input_push`,
   synth (`MediaPlayer`, which is Sonivox EAS), which is why a phone gets the
   platform's timbres and a game's `getDuration()`/`getMediaTime()`/looping still
   behave - the remaining seven hooks back the same `Player` state machine.
+- **`device_property` is a real hook, and its platform answer is now reachable.**
+  It is asked for every key the runtime does not answer itself, which is how a
+  port publishes its own identity - `"nano_j2me/headless"`, `"nano_j2me/sdl2"`,
+  an Android model number. The platform string is NOT among the runtime's own
+  facts any more, so the port's answer is the one a MIDlet sees; the built-in
+  fallback `"nano_j2me"` is used only when the hook is absent or returns `NULL`,
+  and a device profile installed through `nj_run_opts.props` (`--device
+  nokia6230`) is consulted *before* the hook. Answering `NULL` means "no
+  opinion" and is always correct.
 
 Five details are Android-specific and each one cost a debugging session:
 

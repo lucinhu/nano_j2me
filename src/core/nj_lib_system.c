@@ -132,10 +132,81 @@ NJFN(sys_exit)
     return NJ_OK;
 }
 
+/*
+ * The system properties the RUNTIME answers, whatever the device is.
+ *
+ * These are the implementation's own facts - the configuration and profile it
+ * implements, the locale it is in, the separator its files use - so they sit
+ * below the device table and above the port: a device profile can override them
+ * (that is what makes `--device` a real impersonation rather than a decoration),
+ * and a port that knows better than the runtime can still answer them.
+ */
+static const nj_device_prop runtime_props[] = {
+    { "microedition.encoding",      "ISO-8859-1" },
+    { "microedition.configuration", "CLDC-1.1" },
+    { "microedition.profiles",      "MIDP-2.0" },
+    { "microedition.locale",        "en-US" },
+    { "line.separator",             "\n" },
+    { "file.separator",             "/" },
+    { "java.version",               "1.4.2" },
+    { "os.name",                    "nano_j2me" },
+};
+
+/*
+ * Answer one system property, or NULL when nobody has an opinion.
+ *
+ * The order is the whole point of this function:
+ *
+ *   1. the device table (see nj_device.h) - a profile first, overrides on top,
+ *      which is why within the table the LAST match wins;
+ *   2. the runtime's own facts, above;
+ *   3. the port's device_property hook, which is where a port says
+ *      "com.nokia.keyboard.type is None here, because a desktop has no keypad";
+ *   4. "nano_j2me" for microedition.platform alone, for a port with no hook.
+ *
+ * Before this existed the port hook sat in the middle of an if/else chain with
+ * no `return` behind it, so every key it did not answer - java.version and
+ * os.name among them - came back null on every real port, and the two lines
+ * after it were dead code.  Each port's own microedition.platform answer was
+ * dead too: the chain matched that key before consulting the hook.
+ */
+static const char *sys_prop_lookup(nj_vm *vm, const char *k)
+{
+    const char *v = NULL;
+    nj_u4 i;
+
+    for (i = 0; i < vm->nsys_props; i++) {
+        if (vm->sys_props[i].value != NULL &&
+            strcmp(vm->sys_props[i].key, k) == 0) {
+            v = vm->sys_props[i].value;      /* last match wins */
+        }
+    }
+    if (v != NULL) {
+        return v;
+    }
+    for (i = 0; i < (nj_u4)(sizeof(runtime_props) / sizeof(runtime_props[0]));
+         i++) {
+        if (strcmp(runtime_props[i].key, k) == 0) {
+            return runtime_props[i].value;
+        }
+    }
+    if (vm->port != NULL && vm->port->device_property != NULL) {
+        v = vm->port->device_property(vm->port->ud, k);
+        if (v != NULL) {
+            return v;
+        }
+    }
+    if (strcmp(k, "microedition.platform") == 0) {
+        return "nano_j2me";
+    }
+    return NULL;
+}
+
 NJFN(sys_getProperty)
 {
     nj_ref key = NJ_ARG_REF(args, 0);
     char k[64];
+    const char *v;
 
     if (!key) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
@@ -144,35 +215,8 @@ NJFN(sys_getProperty)
         ret->r = NULL;
         return NJ_OK;
     }
-    if (strcmp(k, "microedition.platform") == 0) {
-        ret->r = nj_string_new(vm, "nano_j2me");
-    } else if (strcmp(k, "microedition.encoding") == 0) {
-        ret->r = nj_string_new(vm, "ISO-8859-1");
-    } else if (strcmp(k, "microedition.configuration") == 0) {
-        ret->r = nj_string_new(vm, "CLDC-1.1");
-    } else if (strcmp(k, "microedition.profiles") == 0) {
-        ret->r = nj_string_new(vm, "MIDP-2.0");
-    } else if (strcmp(k, "microedition.locale") == 0) {
-        ret->r = nj_string_new(vm, "en-US");
-    } else if (strcmp(k, "line.separator") == 0) {
-        ret->r = nj_string_new(vm, "\n");
-    } else if (strcmp(k, "file.separator") == 0) {
-        ret->r = nj_string_new(vm, "/");
-    } else if (vm->port && vm->port->device_property) {
-        const char *v = vm->port->device_property(vm->port->ud, k);
-        if (v) {
-            ret->r = nj_string_new(vm, v);
-            return NJ_OK;
-        }
-        ret->r = NULL;
-        return NJ_OK;
-    } else if (strcmp(k, "java.version") == 0) {
-        ret->r = nj_string_new(vm, "1.4.2");
-    } else if (strcmp(k, "os.name") == 0) {
-        ret->r = nj_string_new(vm, "nano_j2me");
-    } else {
-        ret->r = NULL;
-    }
+    v = sys_prop_lookup(vm, k);
+    ret->r = v != NULL ? nj_string_new(vm, v) : NULL;
     if (vm->exception) {
         return NJ_ERR;
     }
