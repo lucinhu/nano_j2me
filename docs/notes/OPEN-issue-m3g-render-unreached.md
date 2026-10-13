@@ -361,12 +361,13 @@ asphalt pair, which is why the track is dark rather than white.
 
 What the picture still does not have, in the order it would show:
 
-  - **no mipmaps.**  `imageFilter` is read and bilinear filtering is
-    implemented (see below); a level chain is not, because the M3G file format
-    gives `Texture2D` one `Image2D` and nothing to select a level from, so
-    `levelFilter` degenerates to the base image.  A receding textured plane
-    therefore still aliases: bilinear helps magnification and the near field,
-    and only a level chain would help the far field.
+  - **one level per texture, and it is the base one.**  The file format gives
+    `Texture2D` a single `Image2D`, so a hardware sampler's `levelFilter` has
+    nothing to choose from; this runtime therefore builds the level chain
+    itself from those pixels and picks a level per triangle (see below).
+    What is still missing is a *per-fragment* choice: a triangle large enough
+    to span both a near and a far field gets one level, where hardware would
+    interpolate between two.
   - **one texture unit.**  `FUNC_ADD` and `FUNC_BLEND` need a second.
   - **per-vertex, not per-fragment, lighting** - visible only where a light
     sits close to a large triangle.
@@ -398,6 +399,35 @@ red/blue texture, rendered once with each filter, and the check counts the
 in-between pixels - NEAREST must produce none, LINEAR must produce some.  The
 check is deliberately a count over a scan line rather than one named pixel,
 because where the texel crossing lands on screen is the rasteriser's business.
+
+## The level chain, and what it does to the track
+
+`m3g_image_mips()` builds a box-filtered chain from an Image2D's RGBA pixels -
+level 0 is the image itself, each level below it is half the size each way,
+down to 1x1 - and stores it as one `byte[]` on the Image2D, so it is built once
+and freed with the object; the pixel setters invalidate it.  The rasteriser
+picks a level per triangle from the ratio of the triangle's area in texture
+space to its area on screen, which is the same measurement a mipmap selection
+does, one derivative coarser.
+
+The title shows it.  `3D拉力赛-进化汉化版_6366`, the same paced 1500-frame run
+and the same key sweep, the two builds differing only in that one `if`:
+
+| build | distinct colours | third most common colour |
+| --- | --- | --- |
+| without the chain | 87 | `(0,4,8)` x 2023 - the near-black speckle |
+| with the chain | 64 | `(64,72,64)` x 2494 - the same surface, averaged |
+
+The speckle is the asphalt texture sampled one texel at a time across a
+receding plane; the averaged tone is what the level chain answers instead.
+`docs/images/m3g-mips-ab.png` is the pair side by side (left: without, right:
+with).
+
+`tools/m3gdemo/M3GDemo.java` pins the behaviour without a title: a 128x128
+one-texel checkerboard drawn over a triangle a few hundred pixels across must
+come out grey - no pixel below 40 or above 215 - and with the level choice
+disabled the same check fails, which is how the check was shown to be load
+bearing.
 
 Corpus regression over the 395 titles at 176x208: **393 passed, 2 failed**
 (`鲁宾逊漂流记汉化BT版_4677`, a truncated JAR, and

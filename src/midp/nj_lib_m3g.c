@@ -210,6 +210,8 @@ static int m3g_type_is_node(nj_u1 type)
 }
 
 static float bits2f(nj_s4 bits);
+static void m3g_image_dirty(nj_vm *vm, nj_ref img);
+static nj_ref m3g_image_mips(nj_vm *vm, nj_ref img);
 
 /*
  * A Node's transform, as the file stores it: translation (3 floats), scale
@@ -5016,6 +5018,7 @@ NJFN(m3g_img2d_init_bytes)
             NJ_ARG_INT(args, 1));
     nj_rput(vm, self, nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B", 0),
             NJ_ARG_REF(args, 2));
+    m3g_image_dirty(vm, self);
     return NJ_OK;
 }
 /*
@@ -5152,6 +5155,7 @@ NJFN(m3g_img2d_set)
             NJ_ARG_INT(args, 2));
     nj_rput(vm, self, nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B", 0),
             NJ_ARG_REF(args, 3));
+    m3g_image_dirty(vm, self);
     return NJ_OK;
 }
 
@@ -5702,6 +5706,7 @@ static const nj_builtin_field img2d_fields[] = {
     { "_nj_pixels", "[B",  NJ_ACC_PUBLIC },
     { "_nj_image",  "Ljavax/microedition/lcdui/Image;", NJ_ACC_PUBLIC },
     { "_nj_palette", "[B", NJ_ACC_PUBLIC },
+    { "_nj_mips",   "[B",  NJ_ACC_PUBLIC },
 };
 
 static const nj_builtin_method o3d_methods[] = {
@@ -7882,6 +7887,8 @@ typedef struct {
     int winding;               /* 168 CCW, 169 CW */
     int texfunc;               /* 224 ADD .. 228 REPLACE; 227 MODULATE */
     int filt_image;            /* 128 NEAREST (the default) / 129 LINEAR */
+    const nj_u1 *mips;         /* the level chain, RGBA, level 0 first */
+    int mip_w, mip_h, mip_n;   /* its base size and how many levels it has */
     int blend;                 /* CompositingMode: 64 ALPHA .. 68 REPLACE */
     int athresh;               /* the alpha test, 0..255 */
     int awrite;                /* alphaWriteEnable */
@@ -7974,6 +7981,132 @@ static nj_u4 sw_blend(nj_u4 src, nj_u4 dst, int mode, int awrite)
         oa = 255u;
     }
     return (oa << 24) | (r << 16) | (g << 8) | b;
+}
+
+/*
+ * The level chain a texture is sampled through.
+ *
+ * The M3G file format gives a Texture2D one Image2D and no second level, so a
+ * hardware sampler's level filter has nothing to choose from; a software
+ * rasteriser can build the chain itself, which is the only way a receding
+ * textured plane stops aliasing.  The chain is box-filtered from the image's
+ * own RGBA pixels, kept as one byte[] on the Image2D (so it is built once and
+ * freed with the object), and invalidated whenever the pixels change.
+ */
+static int m3g_mip_count(int w, int h)
+{
+    int n = 1;
+
+    while (w > 1 || h > 1) {
+        w = w > 1 ? w / 2 : 1;
+        h = h > 1 ? h / 2 : 1;
+        n++;
+    }
+    return n;
+}
+
+static void m3g_image_dirty(nj_vm *vm, nj_ref img)
+{
+    nj_rput(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_mips", "[B"), 0);
+}
+
+static nj_ref m3g_image_mips(nj_vm *vm, nj_ref img)
+{
+    nj_ref px, mips = 0;
+    const nj_u1 *src;
+    nj_u1 *dst;
+    nj_s4 w, h, lw, lh, n, total, i;
+    nj_u4 mark;
+
+    if (!img) {
+        return 0;
+    }
+    mips = nj_rget(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_mips", "[B"));
+    if (mips) {
+        return mips;               /* built once, freed with the image */
+    }
+    if (nj_iget(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I")) != 100) {
+        return 0;                  /* only RGBA pixels have a known layout */
+    }
+    w = nj_iget(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"));
+    h = nj_iget(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"));
+    px = nj_rget(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"));
+    if (!px || w <= 0 || h <= 0) {
+        return 0;
+    }
+    src = (const nj_u1 *)nj_array_data(px);
+    if (!src || nj_array_length(px) < (nj_u4)(w * h * 4)) {
+        return 0;
+    }
+    total = 0;
+    for (lw = w, lh = h; ; lw = lw > 1 ? lw / 2 : 1, lh = lh > 1 ? lh / 2 : 1) {
+        total += lw * lh * 4;
+        if (lw <= 1 && lh <= 1) {
+            break;
+        }
+    }
+    mips = nj_array_new(vm, "B", (nj_u4)total);
+    if (!mips) {
+        return 0;
+    }
+    mark = nj_root_mark(vm);
+    mips = nj_root(vm, mips);
+    dst = (nj_u1 *)nj_array_data(mips);
+    if (!dst) {
+        nj_root_release(vm, mark);
+        return 0;
+    }
+    memcpy(dst, src, (size_t)(w * h * 4));
+    lw = w;
+    lh = h;
+    for (n = 0; (lw > 1 || lh > 1) && n < 16; n++) {
+        nj_s4 nw = lw > 1 ? lw / 2 : 1, nh = lh > 1 ? lh / 2 : 1;
+        const nj_u1 *up = dst;
+        nj_u1 *to = dst + lw * lh * 4;
+        nj_s4 x, y, c;
+
+        for (y = 0; y < nh; y++) {
+            for (x = 0; x < nw; x++) {
+                for (c = 0; c < 4; c++) {
+                    nj_s4 sx0 = x * 2, sy0 = y * 2;
+                    nj_s4 sx1 = (sx0 + 1 < lw) ? sx0 + 1 : sx0;
+                    nj_s4 sy1 = (sy0 + 1 < lh) ? sy0 + 1 : sy0;
+                    nj_u4 v = up[((nj_size)sy0 * lw + sx0) * 4 + c]
+                            + up[((nj_size)sy0 * lw + sx1) * 4 + c]
+                            + up[((nj_size)sy1 * lw + sx0) * 4 + c]
+                            + up[((nj_size)sy1 * lw + sx1) * 4 + c];
+
+                    to[((nj_size)y * nw + x) * 4 + c] = (nj_u1)((v + 2u) / 4u);
+                }
+            }
+        }
+        dst = to;
+        lw = nw;
+        lh = nh;
+    }
+    /* One more pass to keep the loop's pointer arithmetic honest: the caller
+       only needs the array, and the levels are found by walking from its start. */
+    nj_rput(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_mips", "[B"), mips);
+    nj_root_release(vm, mark);
+    (void)i;
+    return mips;
+}
+
+/* The level `lv` inside the chain, with its own size. */
+static const nj_u1 *m3g_mip_level(const nj_u1 *mips, int w, int h, int lv,
+                                  int *lw, int *lh)
+{
+    const nj_u1 *p = mips;
+    int k;
+
+    for (k = 0; k < lv; k++) {
+        p += (nj_size)w * (nj_size)h * 4;
+        w = w > 1 ? w / 2 : 1;
+        h = h > 1 ? h / 2 : 1;
+    }
+    *lw = w;
+    *lh = h;
+    return p;
 }
 
 /* One texel as 0xAARRGGBB, for the filter below. */
@@ -8793,6 +8926,40 @@ static void jr_triangle(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
         }
     }
     if (r->sw.surf) {
+        /* How many texels does one pixel cover?  The triangle's screen area
+           and its area in texture space answer that, and the answer picks the
+           level: 0 for a magnified texture, higher for a receding one, which
+           is what stops the far field from sparkling.  Per triangle, not per
+           fragment: a triangle small enough to alias is a triangle whose
+           pixels all want the same level, and this rasteriser has no room for
+           a derivative per pixel. */
+        if (r->sw.mips && r->tpos != NULL && r->sw.mip_n > 1) {
+            float sa = (xy[2] - xy[0]) * (xy[5] - xy[1]) -
+                       (xy[4] - xy[0]) * (xy[3] - xy[1]);
+            float ta = (st[2] - st[0]) * (st[5] - st[1]) -
+                       (st[4] - st[0]) * (st[3] - st[1]);
+            float ratio;
+            int lv, lw, lh;
+            const nj_u1 *p;
+
+            if (sa < 0.0f) { sa = -sa; }
+            if (ta < 0.0f) { ta = -ta; }
+            sa *= 0.5f;
+            ta *= 0.5f * (float)(r->sw.mip_w * r->sw.mip_h);
+            ratio = ta / (sa > 0.25f ? sa : 0.25f);
+            lv = 0;
+            while (ratio > 4.0f && lv < r->sw.mip_n - 1) {
+                ratio *= 0.25f;    /* one level is half the size each way */
+                lv++;
+            }
+            p = m3g_mip_level(r->sw.mips, r->sw.mip_w, r->sw.mip_h, lv, &lw, &lh);
+            if (p) {
+                r->sw.tex = p;
+                r->sw.tex_w = lw;
+                r->sw.tex_h = lh;
+                r->sw.tex_bpp = 4;   /* the chain is RGBA at every level */
+            }
+        }
         /* The rasteriser writes the pixels: depth, texture, culling. */
         if (sw_tri(&r->sw, xy, inv, st, r->sw.tex != NULL && r->tpos != NULL,
                    rgb) != 0u) {
@@ -9164,6 +9331,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                 if (im2) {
                     nj_ref px = nj_rget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
                                                          "_nj_pixels", "[B"));
+                    nj_ref mipref;
                     nj_s4 fmt = nj_iget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
                                                          "_nj_fmt", "I"));
 
@@ -9175,6 +9343,17 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                         (fmt == 99 || fmt == 100)) {
                         r.sw.tex = (const nj_u1 *)nj_array_data(px);
                         r.sw.tex_bpp = (fmt == 100) ? 4 : 3;
+                        /* The level chain, when the image has one to build:
+                           level 0 of the chain is the RGBA copy of these very
+                           pixels, and the levels below it are the same picture
+                           at half the size each. */
+                        mipref = m3g_image_mips(vm, im2);
+                        if (mipref) {
+                            r.sw.mips = (const nj_u1 *)nj_array_data(mipref);
+                            r.sw.mip_w = r.sw.tex_w;
+                            r.sw.mip_h = r.sw.tex_h;
+                            r.sw.mip_n = m3g_mip_count(r.sw.tex_w, r.sw.tex_h);
+                        }
                     }
                 }
             }
@@ -9557,6 +9736,7 @@ NJFN(m3g_img2d_init_pixels)
             NJ_ARG_INT(args, 2));
     nj_rput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"),
             NJ_ARG_REF(args, 3));
+    m3g_image_dirty(vm, self);
     return NJ_OK;
 }
 /*
@@ -9576,6 +9756,7 @@ NJFN(m3g_img2d_init_paletted)
             NJ_ARG_INT(args, 2));
     nj_rput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"),
             NJ_ARG_REF(args, 3));
+    m3g_image_dirty(vm, self);
     nj_rput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_palette", "[B"),
             NJ_ARG_REF(args, 4));
     return NJ_OK;

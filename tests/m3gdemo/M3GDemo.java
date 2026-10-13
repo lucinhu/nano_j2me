@@ -1018,6 +1018,67 @@ public class M3GDemo extends MIDlet {
             System.out.println("M3G BENCH triangles=" + n + " ms=" + ms);
         }
 
+        run("a minified texture is sampled from its level chain", new Runnable() {
+            public void run() {
+                /* A 128x128 one-texel checkerboard drawn over a triangle that
+                 * covers a few hundred pixels: every pixel stands for many
+                 * texels, which is the case a single level cannot answer.  With
+                 * the chain the pixels come out the average of what they cover
+                 * - grey - and without it they come out the black and the white
+                 * the checkerboard is made of. */
+                int n = 128;
+                byte[] px = new byte[n * n * 4];
+                int x, y;
+                for (y = 0; y < n; y++) {
+                    for (x = 0; x < n; x++) {
+                        int o = (y * n + x) * 4;
+                        byte v = (byte) (((x + y) & 1) == 0 ? 0xFF : 0x00);
+                        px[o] = v; px[o + 1] = v; px[o + 2] = v; px[o + 3] = (byte) 0xFF;
+                    }
+                }
+                Image2D image = new Image2D(Image2D.RGBA, n, n, px);
+
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Appearance app = new Appearance();
+                Material mat = new Material();
+                mat.setColor(Material.DIFFUSE, 0x00FFFFFF);
+                app.setMaterial(mat);
+                Texture2D tex = new Texture2D(image);
+                tex.setBlending(Texture2D.FUNC_REPLACE);
+                app.setTexture(0, tex);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(tex_tri(), null, app, new Transform(), -1);
+                g3d.releaseTarget();
+
+                int[] row = new int[32];
+                int counted = 0, extreme = 0;
+                for (y = 8; y < 24; y++) {
+                    img.getRGB(row, 0, 32, 0, y, 32, 1);
+                    for (x = 0; x < 32; x++) {
+                        int r = (row[x] >> 16) & 0xFF;
+
+                        if (row[x] == 0xFF000000) {
+                            continue;      /* the background, not the triangle */
+                        }
+                        counted++;
+                        if (r < 40 || r > 215) {
+                            extreme++;     /* a texel, not an average of texels */
+                        }
+                    }
+                }
+                check("a minified checkerboard averages to grey instead of sparkling",
+                      counted > 40 && extreme == 0);
+            }
+        });
+
         run("Loader.load of a resource the suite does not have", new Runnable() {
             public void run() {
                 try {
