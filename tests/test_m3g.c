@@ -732,6 +732,86 @@ int main(void)
               "a node that already has a parent is still refused");
         nj_take_exception(vm);
     }
+    /* ---- a Mesh is handed the buffers and appearances it names -------- */
+    {
+        /*
+         * The numbers a Mesh carries are the ones every .m3g in the corpus
+         * uses: two ahead of the object's place in the file.  That is not a
+         * guess - reading the 2,606 Meshes of the 975 files the corpus ships
+         * that way puts every vertex buffer on a VertexBuffer, every index
+         * buffer on a TriangleStripArray and every appearance on an
+         * Appearance, while the format's own one-based reading fits 629 of
+         * them and a zero-based one 528.
+         *
+         * The table below is that shape: the Mesh is object 0 (slot 1) and it
+         * names object 3 as 5, object 4 as 6 and object 5 as 7.
+         */
+        nj_m3g_object objs[6];
+        nj_ref arr, mesh, vb, ib, app, other;
+        nj_value a[4], r;
+
+        memset(objs, 0, sizeof(objs));
+        objs[0].type = 14u;                 /* Mesh */
+        objs[0].fields.decoded = 1u;
+        objs[0].fields.a = 5u;              /* vertex buffer: object 3 */
+        objs[0].fields.b = 1u;              /* one submesh */
+        objs[0].fields.nrefs_total = 2u;
+        objs[0].fields.refs[0] = 6u;        /* index buffer: object 4 */
+        objs[0].fields.refs[1] = 7u;        /* appearance: object 5 */
+        objs[1].type = 21u;                 /* VertexBuffer */
+        objs[2].type = 21u;                 /* another, never named */
+        objs[3].type = 21u;                 /* VertexBuffer, the one named */
+        objs[4].type = 11u;                 /* TriangleStripArray */
+        objs[5].type = 3u;                  /* Appearance */
+
+        arr = nj_object_array_new(vm, CLS("Object3D"), 7u);
+        check(arr != 0, "the array a Mesh is linked into exists");
+        mesh = make(vm, CLS("Mesh"));
+        vb = make(vm, CLS("VertexBuffer"));
+        ib = make(vm, CLS("TriangleStripArray"));
+        app = make(vm, CLS("Appearance"));
+        other = make(vm, CLS("Appearance"));
+        check(mesh && vb && ib && app && other, "the mesh and its parts exist");
+        nj_array_set_ref(arr, 1u, mesh);
+        nj_array_set_ref(arr, 2u, make(vm, CLS("VertexBuffer")));
+        nj_array_set_ref(arr, 3u, make(vm, CLS("VertexBuffer")));
+        nj_array_set_ref(arr, 4u, vb);
+        nj_array_set_ref(arr, 5u, ib);
+        nj_array_set_ref(arr, 6u, app);
+
+        check(nj_m3g_link_meshes(vm, objs, 6u, arr) == NJ_OK,
+              "the mesh linker accepts the table");
+
+        call(vm, mesh, CLS("Mesh"), "getVertexBuffer",
+             "()L" CLS("VertexBuffer") ";", NULL, &r);
+        check(r.r == vb, "the vertex buffer is object 3, named as 5");
+        a[0].i = 0;
+        call(vm, mesh, CLS("Mesh"), "getIndexBuffer",
+             "(I)L" CLS("IndexBuffer") ";", a, &r);
+        check(r.r == ib, "the index buffer is object 4, named as 6");
+        call(vm, mesh, CLS("Mesh"), "getSubmeshCount", "()I", NULL, &r);
+        check(r.i == 1, "the mesh has the one submesh the file names");
+        call(vm, mesh, CLS("Mesh"), "getAppearance",
+             "(I)L" CLS("Appearance") ";", a, &r);
+        check(r.r == app, "the appearance is object 5, named as 7");
+
+        /*
+         * setAppearance(int, Appearance) wrote its two arguments into each
+         * other's slots: the object went into the slot the index is read from
+         * and the index into the object's, so the callee saw a null object and
+         * an index made of a pointer.  Every game that patches a material does
+         * this, and it threw ArrayIndexOutOfBoundsException instead.
+         */
+        a[0].i = 0;
+        a[1].r = other;
+        check(nj_call(vm, mesh, CLS("Mesh"), "setAppearance",
+                      "(IL" CLS("Appearance") ";)V", a, NULL) == NJ_OK,
+              "setAppearance(0, appearance) is accepted");
+        a[0].i = 0;
+        call(vm, mesh, CLS("Mesh"), "getAppearance",
+             "(I)L" CLS("Appearance") ";", a, &r);
+        check(r.r == other, "and it is the appearance that was set");
+    }
     /* ---- render() is counted, because counting is all it can do --------- */
     {
         /*

@@ -167,3 +167,41 @@ treatment `World` got - one layout accepted only when every field of every
 object in the corpus agrees - and then `_nj_subs`, `_nj_ib`, `_nj_vb` and
 `_nj_nsub` filled the way `mesh_set_base()` fills them.
 
+
+## The Mesh layout is settled: the references count from two
+
+The rule the corpus agreed on is the one the paragraph above was waiting for:
+
+```
+base  = 0x10 + ((data[12] & 0x01) ? 40 : 0)     /* the Node transform */
+mark  = le32(data + base)                        /* FF FF FF FF */
+vb    = le32(data + base + 6)
+count = le32(data + base + 10)
+refs  = 8 bytes per submesh: index buffer, appearance
+accept only when count <= 8 and base + 14 + 8 * count == len
+```
+
+2,608 of the 2,906 Meshes in the corpus (89.7%) satisfy it exactly; the 298
+that do not keep their counted bytes and refuse to link, which is the same
+bargain `World` got: an object is only read when the reading consumes it
+completely.
+
+The references inside a Mesh (and inside `World`, `Group` and the prop lists)
+are **the object's number plus two**: the title's `World.find(22)` found the
+Mesh the game wanted, and the same numbers that name an object elsewhere in
+the file land on the right object here only under that offset.  Measured over
+every accepted Mesh in the corpus - each reference resolved and then checked
+against the type the slot needs (a `VertexBuffer`, an `IndexBuffer` and an
+`Appearance`) - the three readings score:
+
+| reading | Meshes whose three references all land on the expected type |
+|---|---|
+| 1-based (the old reading) | 629 of 2,606 |
+| 0-based | 528 of 2,606 |
+| **value - 2 (adopted)** | **2,606 of 2,606** |
+
+With that, `3D拉力赛-进化汉化版_6366` reaches its race: the canvas constructs,
+`getSubmeshCount()` answers, `getAppearance(0)` returns an `Appearance` and
+`getIndexBuffer(0)`/`getVertexBuffer()` return the buffers the file names.  What
+the player still sees is a black 3D area, because nothing rasterises a
+`VertexBuffer` yet - that is the rest of this note.

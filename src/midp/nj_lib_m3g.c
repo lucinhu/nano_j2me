@@ -329,6 +329,64 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
             }
         }
         break;
+    case NJ_M3G_T_MESH:
+        /*
+         * A Mesh is a Node followed by the vertex buffer it draws from and its
+         * submeshes: for each one an IndexBuffer reference and an Appearance
+         * reference.
+         *
+         * The Node's length is not fixed, which is what made this layout look
+         * like two different ones at first.  Byte 12 is the Node's enable bits
+         * and bit 0 says whether the 40 bytes of transform (translation, scale,
+         * orientation) are in the file; 1,725 of the 2,906 Meshes in the 975
+         * corpus files carry them and 988 do not.  Past that a Mesh holds four
+         * bytes that are 0xFFFFFFFF in every file (the same eight-byte pair
+         * every object's header ends with), then the vertex buffer, then the
+         * submesh count and the 8 bytes per submesh.
+         *
+         * The layout is accepted only when it consumes the object exactly, the
+         * same rule the World above is held to: a wrong reading here does not
+         * draw nothing, it draws some other object's submesh list.  Measured
+         * over the corpus, that rule accepts 2,608 of the 2,906 Meshes; the
+         * rest keep their vertex buffer and no submeshes, which is where they
+         * are today.
+         */
+        if (len >= 0x20u) {
+            nj_u4 base = 0x10u;
+            nj_u4 vb, nsub;
+
+            if ((data[12] & 0x01u) != 0u) {
+                base += 40u;
+            }
+            if (base + 14u <= len && le32(data + base) == 0xFFFFFFFFu) {
+                vb = le32(data + base + 6u);
+                nsub = le32(data + base + 10u);
+                if (nsub <= (nj_u4)(NJ_M3G_MAX_REFS / 2u) &&
+                    len == base + 14u + 8u * nsub) {
+                    nj_u4 k;
+                    int usable = 1;
+
+                    for (k = 0u; k < nsub && usable; k++) {
+                        nj_u4 ib = le32(data + base + 14u + 8u * k);
+                        nj_u4 app = le32(data + base + 18u + 8u * k);
+
+                        if (ib == 0u || app == 0u) {
+                            usable = 0;
+                        } else {
+                            out->refs[2u * k] = ib;
+                            out->refs[2u * k + 1u] = app;
+                        }
+                    }
+                    if (usable) {
+                        out->a = vb;
+                        out->b = nsub;
+                        out->nrefs = 2u * nsub;
+                        out->decoded = 1u;
+                    }
+                }
+            }
+        }
+        break;
     case NJ_M3G_T_VERTEX_ARRAY:      /* componentSize, componentCount, componentType */
         if (len < NJ_M3G_OBJECT_HEADER + 3u) {
             M3G_FAIL("a VertexArray is %lu byte(s)", (unsigned long)len);
@@ -3184,8 +3242,16 @@ NJFN(m3g_mesh_setAppearance)
             n.i++;
         }
     }
-    a[0].i = index;
-    a[1].r = ap;
+    /*
+     * The object is argument 0 and the index argument 1, and the two must be
+     * written into the slot their type belongs to: a slot is one union, so
+     * writing the index into a[0].i makes the callee read a null object (or a
+     * pointer made of an integer) and the appearance into a[1].r makes it read
+     * an index out of the pointer's low half - which is how setAppearance()
+     * came to throw ArrayIndexOutOfBoundsException on a one-element vector.
+     */
+    a[0].r = ap;
+    a[1].i = index;
     if (nj_call(vm, vec, NJ_C_VECTOR, "setElementAt",
                 "(Ljava/lang/Object;I)V", a, NULL) != NJ_OK) {
         return NJ_ERR;
@@ -3344,6 +3410,20 @@ static const char *m3g_class_of(nj_u1 type);
 #define M3G_REF_ONE   0
 #define M3G_REF_ZERO  1
 #define M3G_REF_UID   2
+/*
+ * The reading every file in the corpus actually uses.
+ *
+ * A Group or a Mesh names another object by a number that is TWO ahead of the
+ * object's place in the file: the VertexBuffer, TriangleStripArray and
+ * Appearance a Mesh names are at value - 2, and a World's children are its
+ * group, its light and its mesh the same way.  Checked over the 2,606 Meshes
+ * in the 975 .m3g files the corpus ships: reading them as value - 2 puts all
+ * 2,606 vertex buffers on a VertexBuffer, all 2,606 index buffers on a
+ * TriangleStripArray and all 2,606 appearances on an Appearance, while the
+ * format's own one-based reading fits 629 and a zero-based one 528.  The same
+ * offset is what makes a World's child list name nodes.
+ */
+#define M3G_REF_TWO   3
 
 static int m3g_is_a(nj_vm *vm, nj_ref o, const char *cls)
 {
@@ -3385,6 +3465,10 @@ static nj_ref m3g_resolve_ref(nj_vm *vm, nj_ref arr, nj_u4 nobj, nj_ref self,
         ch = m3g_by_user_id(vm, arr, nobj, r);
     } else if (mode == M3G_REF_ZERO) {
         ch = (r + 1u <= nobj) ? nj_array_get_ref(arr, r + 1u) : 0;
+    } else if (mode == M3G_REF_TWO) {
+        /* object r - 2 of the file, which is table slot r - 1 (slot 0 is
+           unused, slot i + 1 holds object i) */
+        ch = (r >= 1u && r - 1u <= nobj) ? nj_array_get_ref(arr, r - 1u) : 0;
     } else {
         ch = (r <= nobj) ? nj_array_get_ref(arr, r) : 0;
     }
@@ -3433,7 +3517,7 @@ static int m3g_ref_mode_of(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
 {
     int m;
 
-    for (m = M3G_REF_ONE; m <= M3G_REF_UID; m++) {
+    for (m = M3G_REF_TWO; m >= M3G_REF_ONE; m--) {
         nj_u4 j;
         int all = 1;
         for (j = 0u; j < nobj && all; j++) {
@@ -3496,7 +3580,14 @@ static void m3g_mark_ref(nj_u1 *is_ref, const nj_m3g_object *objs, nj_u4 nobj,
         }
         return;
     }
-    index = (mode == M3G_REF_ZERO) ? r + 1u : r;
+    if (mode == M3G_REF_TWO) {
+        if (r < 1u) {
+            return;
+        }
+        index = r - 1u;
+    } else {
+        index = (mode == M3G_REF_ZERO) ? r + 1u : r;
+    }
     if (index >= 1u && index <= nobj && index != self &&
         objs[index - 1u].type != NJ_M3G_T_WORLD) {
         is_ref[index] = 1u;
@@ -3543,7 +3634,7 @@ nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
          * each other - the reading that describes THIS list, preferring the
          * format's own index reading.
          */
-        mode = (file_mode >= 0) ? file_mode : M3G_REF_ONE;
+        mode = (file_mode >= 0) ? file_mode : M3G_REF_TWO;
         if (!m3g_list_resolves(vm, arr, nobj, g, &objs[i], mode)) {
             if (m3g_list_resolves(vm, arr, nobj, g, &objs[i], M3G_REF_ZERO)) {
                 mode = M3G_REF_ZERO;
@@ -3594,6 +3685,83 @@ nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
                                                "L" NJ_C_BG ";", 0), bg);
             }
         }
+    }
+    return NJ_OK;
+}
+
+/*
+ * Give a Mesh the vertex buffer, index buffers and appearances the file names
+ * for it.
+ *
+ * A Mesh in the file is a Node followed by the same three things the Java
+ * constructor takes - a VertexBuffer, one IndexBuffer per submesh and one
+ * Appearance per submesh - so this is the file's route to what mesh_set_base()
+ * builds from code.  Without it a title that loads a model gets a Mesh with a
+ * vertex buffer and no submeshes, and the first getAppearance(0) throws
+ * IndexOutOfBoundsException: "no submeshes".  3D拉力赛-进化汉化版_6366 stops
+ * exactly there, on its way into a race.
+ *
+ * The references are file indices like every other reference here, so they are
+ * resolved with the reading this file uses; a reference that names nothing
+ * leaves the submesh out rather than inventing one.
+ */
+/*
+ * This is the mesh half of the linking above, exported for the same reason:
+ * a unit test can build an object table and check what a Mesh ends up holding,
+ * while the loader it normally runs under needs a real .m3g inside a MIDlet.
+ */
+nj_status nj_m3g_link_meshes(nj_vm *vm, const nj_m3g_object *objs,
+                             nj_u4 nobj, nj_ref arr)
+{
+    int mode = m3g_ref_mode_of(vm, objs, nobj, arr);
+    nj_u4 i;
+
+    if (mode < 0) {
+        mode = M3G_REF_TWO;
+    }
+    for (i = 0u; i < nobj; i++) {
+        nj_ref mesh, subs;
+        nj_u4 k, nsub;
+
+        if (objs[i].type != NJ_M3G_T_MESH || objs[i].fields.decoded == 0u) {
+            continue;
+        }
+        nsub = objs[i].fields.b;
+        mesh = nj_array_get_ref(arr, i + 1u);
+        if (!mesh) {
+            continue;
+        }
+        nj_rput(vm, mesh, m3g_fof(vm, NJ_C_MESH, "_nj_vb",
+                                  "L" NJ_C_VBUF ";"),
+                m3g_resolve_ref(vm, arr, nobj, mesh, objs[i].fields.a, mode));
+        subs = nj_object_new(vm, NJ_C_VECTOR);
+        if (!subs) {
+            continue;
+        }
+        nj_root(vm, subs);
+        nj_call(vm, subs, NJ_C_VECTOR, "<init>", "()V", NULL, NULL);
+        for (k = 0u; k < nsub; k++) {
+            nj_ref ib = m3g_resolve_ref(vm, arr, nobj, mesh,
+                                        objs[i].fields.refs[2u * k], mode);
+            nj_ref app = m3g_resolve_ref(vm, arr, nobj, mesh,
+                                         objs[i].fields.refs[2u * k + 1u], mode);
+            nj_value av[1];
+
+            if (k == 0u) {
+                nj_rput(vm, mesh, m3g_fof(vm, NJ_C_MESH, "_nj_ib",
+                                          "L" NJ_C_IBUF ";"), ib);
+            }
+            if (!app) {
+                continue;
+            }
+            av[0].r = app;
+            nj_call(vm, subs, NJ_C_VECTOR, "addElement",
+                    "(Ljava/lang/Object;)V", av, NULL);
+        }
+        nj_rput(vm, mesh, m3g_fof(vm, NJ_C_MESH, "_nj_subs",
+                                  "L" NJ_C_VECTOR ";"), subs);
+        nj_iput(vm, mesh, m3g_fof(vm, NJ_C_MESH, "_nj_nsub", "I"),
+                (nj_s4)nsub);
     }
     return NJ_OK;
 }
@@ -3697,6 +3865,17 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
     if (nj_m3g_link_groups(vm, objs, nobj, arr) != NJ_OK) {
         m3g_free_refs(vm, objs, nobj);
         nj_host_free(vm, objs);
+        return NJ_ERR_STATE;
+    }
+    /*
+     * A Mesh's submeshes are the next thing a title touches after the World -
+     * getAppearance(), getIndexBuffer(), getSubmeshCount() - and they are
+     * references in the same table, so they are linked here, beside the
+     * children rather than inside the object builder.
+     */
+    if (nj_m3g_link_meshes(vm, objs, nobj, arr) != NJ_OK) {
+        m3g_free_refs(vm, objs, nobj);
+        nj_host_free(vm, objs);
         return NJ_ERR;
     }
     /*
@@ -3762,7 +3941,7 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
     {
         int mode = m3g_ref_mode_of(vm, objs, nobj, arr);
         if (mode < 0) {
-            mode = M3G_REF_ONE;
+            mode = M3G_REF_TWO;
         }
         for (i = 0u; i < nobj; i++) {
             nj_u4 k;
