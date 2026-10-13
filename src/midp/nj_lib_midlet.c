@@ -221,8 +221,21 @@ static void frame_pace(nj_vm *vm, nj_s8 frame_start)
      */
     if (elapsed < budget && vm->port && vm->port->sleep_ms) {
         nj_s8 wait = budget - elapsed;
+        int speed = (vm->speed_percent > 0) ? vm->speed_percent : 100;
         if (wait > budget) {
             wait = budget;
+        }
+        /*
+         * `wait` is MIDlet time and sleep_ms() is real time: at 200% a 33 ms
+         * frame takes 16 ms of the player's life, which is the whole point of
+         * the multiplier.  Never round the wait away entirely - a frame of
+         * sleep is what keeps the emulator from spinning a core flat out.
+         */
+        if (speed != 100) {
+            wait = wait * 100 / speed;
+            if (wait < 1) {
+                wait = 1;
+            }
         }
         vm->port->sleep_ms(vm->port->ud, (nj_u4)wait);
     } else if (vm->port && vm->port->idle) {

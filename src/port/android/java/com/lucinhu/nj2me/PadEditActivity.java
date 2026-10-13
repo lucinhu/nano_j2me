@@ -13,6 +13,7 @@ import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
@@ -131,7 +132,7 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
             detW = entry.detW;
             detH = entry.detH;
         }
-        work = PadConfig.load(this).copy();
+        work = PadConfig.forGame(this, jarName).copy();
         Ui.edgeToEdge(getWindow());
         Ui.apply(this, Ui.immersive(this));
 
@@ -570,7 +571,11 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
     }
 
     private void save() {
-        work.save(this);
+        if (jarName != null) {
+            PadConfig.saveForGame(this, jarName, work);
+        } else {
+            work.save(this);
+        }
         if (entry != null) {
             entry.viewMode = viewMode;
             entry.zoom = viewZoom;
@@ -620,6 +625,17 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
                 pickKey(key, 0, 0);
             }
         }), Md3.gap(this, 12));
+        box.addView(rowAction(Md3.IC_KEYS, key.code2 != 0 ? "改组合键" : "加组合键",
+                key.code2 != 0
+                        ? "现在是 " + KeyCatalog.labelOf(key.code) + " + "
+                          + KeyCatalog.labelOf(key.code2)
+                        : "再选一个键，两颗一起按下",
+                new Runnable() {
+            @Override
+            public void run() {
+                pickCombo(key);
+            }
+        }), Md3.gap(this, 12));
         box.addView(rowAction(Md3.IC_RENAME, "复制一个", "在旁边再放一个同样的键", new Runnable() {
             @Override
             public void run() {
@@ -665,30 +681,138 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
      */
     private void layoutDialog() {
         final int[] ids = PadConfig.PRESET_IDS;
-        String[] labels = new String[ids.length];
-        String[] hints = new String[ids.length];
+        final List<String> mine = PadConfig.layoutNames(this);
+        final int n = ids.length;
+        final int saveIdx = n + mine.size();
+        final int defIdx = saveIdx + 1;
+        String[] labels = new String[defIdx + 1];
+        String[] hints = new String[defIdx + 1];
         int checked = -1;
-        for (int i = 0; i < ids.length; i++) {
+        for (int i = 0; i < n; i++) {
             labels[i] = PadConfig.presetName(ids[i]);
             hints[i] = PadConfig.presetHint(ids[i]);
             if (ids[i] == work.preset) {
                 checked = i;
             }
         }
+        for (int i = 0; i < mine.size(); i++) {
+            labels[n + i] = "我的布局：" + mine.get(i);
+            hints[n + i] = "自己存下来的这一套";
+        }
+        labels[saveIdx] = "保存当前为…";
+        hints[saveIdx] = "起个名字，以后还能挑出来用";
+        labels[defIdx] = "设为默认布局";
+        hints[defIdx] = "以后新导入的游戏都先用这一套";
+
         Md3.chooser(this, Md3.IC_KEYS, "悬浮按键布局",
                 "整套换掉现在的按键（当前：" + PadConfig.presetName(work.preset) + "）",
                 labels, hints, checked, new Md3.Choice() {
                     @Override
                     public void picked(int which, AlertDialog d) {
-                        work.applyPreset(PadConfig.byId(ids[which]));
-                        pad.setConfig(work);
-                        pad.invalidate();
+                        if (which < n) {
+                            /* Built for the window the game will get, not for a
+                             * guess: the presets are written in short-side
+                             * units, so a landscape window must be told to the
+                             * factory or the keys land in the wrong place. */
+                            int vw = pad.getWidth() > 0 ? pad.getWidth() : screenW;
+                            int vh = pad.getHeight() > 0 ? pad.getHeight() : screenH;
+                            work.applyPreset(PadConfig.byId(ids[which], vw, vh));
+                            pad.setConfig(work);
+                            pad.invalidate();
+                        } else if (which < saveIdx) {
+                            String name = mine.get(which - n);
+                            PadConfig p = PadConfig.loadLayout(PadEditActivity.this, name);
+                            if (p != null) {
+                                work.applyPreset(p);
+                                pad.setConfig(work);
+                                pad.invalidate();
+                                toast("已用上「" + name + "」");
+                            }
+                        } else if (which == saveIdx) {
+                            nameLayout();
+                        } else {
+                            work.save(PadEditActivity.this);
+                            toast("以后新导入的游戏默认用这一套");
+                        }
                     }
                 });
     }
 
+    /** Ask for a name and keep the current arrangement under it. */
+    private void nameLayout() {
+        final EditText input = new EditText(this);
+        input.setHint("比如「街机」「右手」");
+        Md3.field(input, this);
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.title(this, "保存这套按键"));
+        box.addView(Md3.supporting(this, "存下来以后可以从「悬浮按键布局」里再挑出来"),
+                Md3.gap(this, 8));
+        box.addView(input);
+        Md3.show(new AlertDialog.Builder(this)
+                .setView(box)
+                .setPositiveButton("保存", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        String name = input.getText().toString().trim();
+                        if (name.length() == 0) {
+                            toast("没写名字，没保存");
+                            return;
+                        }
+                        PadConfig.saveLayout(PadEditActivity.this, name, work);
+                        toast("已保存「" + name + "」");
+                    }
+                })
+                .setNegativeButton("取消", null), this);
+    }
+
+    /** A keycap's width for `u` short-side units - square on any window. */
+    private float unitW(float u) {
+        int w = pad.getWidth();
+        int h = pad.getHeight();
+        int m = Math.min(w, h);
+        return (w > 0 && h > 0) ? (u * m / w) : u;
+    }
+
+    private float unitH(float u) {
+        int w = pad.getWidth();
+        int h = pad.getHeight();
+        int m = Math.min(w, h);
+        return (w > 0 && h > 0) ? (u * m / h) : u;
+    }
 
     /** Add a key here, or re-point an existing one. */
+    /**
+     * Pick the second code of a combo cap.
+     *
+     * <p>A combo is what a diagonal on a feature phone really is: the game
+     * reads Canvas.getKeyStates() and sees "left and up", which is a walk, not
+     * a stray digit.  The same key again clears the combo.
+     */
+    private void pickCombo(final PadConfig.Key key) {
+        final List<KeyCatalog.Item> items = KeyCatalog.items();
+        String[] labels = new String[items.size() + 1];
+        labels[0] = "不要组合键";
+        for (int i = 0; i < items.size(); i++) {
+            labels[i + 1] = items.get(i).label + "　(" + items.get(i).code + ")";
+        }
+        Md3.show(new AlertDialog.Builder(this)
+            .setCustomTitle(Md3.headline(this,
+                    "和「" + KeyCatalog.labelOf(key.code) + "」一起按的键",
+                    "两颗键同一下同一起，MIDlet 会同时看到它们"))
+            .setItems(labels, new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface d, int which) {
+                    if (which == 0) {
+                        key.code2 = 0;
+                    } else {
+                        int code = items.get(which - 1).code;
+                        key.code2 = (code == key.code) ? 0 : code;
+                    }
+                    refresh();
+                }
+            }), this, true);
+    }
+
     /** Add a key here, or re-point an existing one. */
     private void pickKey(final PadConfig.Key existing, final float nx, final float ny) {
         final List<KeyCatalog.Item> items = KeyCatalog.items();
@@ -708,7 +832,7 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
                         existing.code = code;
                     } else {
                         work.keys.add(new PadConfig.Key(code, clamp01(nx), clamp01(ny),
-                                0.14f, 0.06f));
+                                unitW(0.15f), unitH(0.15f)));
                     }
                     refresh();
                 }

@@ -99,6 +99,7 @@ set(NJ_SOURCES
   src/core/nj_app.c
   src/core/nj_builtins.c
   src/core/nj_device.c
+  src/core/nj_detect.c
   # ---- java.lang, in C ----
   src/core/nj_lib_object.c
   src/core/nj_lib_string.c
@@ -799,6 +800,14 @@ nj_add_test(test_clip tests/test_clip.c)
 
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_port_code.c)
     nj_add_test(test_port_code tests/test_port_code.c)
+  endif()
+
+  # The rule that decides whether the box a port detected is a canvas at all.
+  # It needs no fixture and no port: it is a table and a distance, which is why
+  # it lives in core rather than inside the Android blit that uses it.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_detect.c)
+    nj_add_test(test_detect tests/test_detect.c)
+    nj_add_test(test_speed tests/test_speed.c)
   endif()
 
   foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib)

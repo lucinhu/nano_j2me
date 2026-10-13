@@ -352,6 +352,20 @@ typedef struct nj_vm_stats {
 void nj_vm_get_stats(nj_vm *vm, nj_vm_stats *out);
 
 /*
+ * Run the MIDlet's clock at `percent` of real time (100 = real time, 200 =
+ * twice as fast, 50 = half speed).
+ *
+ * One clock drives everything a MIDlet can measure - Thread.sleep,
+ * Object.wait, java.util.Timer, the frame pacer - so this is the game speed,
+ * not the emulator's.  Deadlines already parked stay where they are: the
+ * change is applied to the clock, and the next read continues from it.
+ * Clamped to 10..800.
+ */
+void nj_vm_set_speed(nj_vm *vm, int percent);
+
+int nj_vm_speed(const nj_vm *vm);
+
+/*
  * Diagnostic: describe where every live thread currently is.
  *
  * One line per thread (id, state, depth) followed by the innermost frames of

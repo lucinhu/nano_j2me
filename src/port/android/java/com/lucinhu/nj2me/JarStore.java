@@ -54,6 +54,8 @@ final class JarStore {
         int w = DEF_W;
         int h = DEF_H;
         int heapMB = DEF_HEAP_MB;
+        /** Game speed in percent of real time: 100 is real time. */
+        int speed = 100;
         long size;
         long touched;
 
@@ -188,6 +190,8 @@ final class JarStore {
                         e.h = parseInt(v, DEF_H);
                     } else if (k.equals("heap")) {
                         e.heapMB = parseInt(v, DEF_HEAP_MB);
+                    } else if (k.equals("speed")) {
+                        e.speed = parseInt(v, 100);
                     } else if (k.equals("view")) {
                         e.viewMode = parseInt(v, 0);
                     } else if (k.equals("zoom")) {
@@ -226,6 +230,7 @@ final class JarStore {
             String text = (e.titleSet ? "title=" + e.title + "\ntitleset=1\n" : "")
                         + "w=" + e.w + "\nh=" + e.h
                         + "\nheap=" + e.heapMB + "\nview=" + e.viewMode
+                        + "\nspeed=" + e.speed
                         + "\nzoom=" + e.zoom + "\npanx=" + e.panX
                         + "\npany=" + e.panY + "\ndetw=" + e.detW
                         + "\ndeth=" + e.detH + "\n";

@@ -303,14 +303,37 @@ typedef struct android_state {
      * names finds 5 - so the only honest answer is the one the game gives by
      * painting: keep the previous frame, union the pixels that changed into a
      * box, and stop once the box covers the screen (a game that paints
-     * everywhere) or after a few hundred frames (one that does not).  That box
-     * is what 适配画面 crops to, and what the launcher offers as the resolution
-     * it detected.
+     * everywhere) or has held a screen-sized box still for a few seconds (one
+     * that does not).  That box is what 适配画面 crops to, and what the launcher
+     * offers as the resolution it detected.
+     *
+     * The union is not published as it stands: it is the raw box, and a port
+     * that crops to it zooms a title into a strip of itself whenever the title
+     * only ever touched part of its canvas.  See det_raw_* below.
      */
     nj_u1 *det_prev;               /* the previous frame, same size as shadow */
-    int   det_x, det_y, det_w, det_h;
+    int   det_x, det_y, det_w, det_h;   /* published: a screen, see below */
     int   det_frames;
     int   det_done;
+    /*
+     * The union of everything that changed, before it is snapped to a screen
+     * size.  The two are kept apart on purpose: the union is the truth about
+     * what the MIDlet touched, and the published box is the claim that it is a
+     * canvas - a claim nj_detect_snap() refuses when the union is a corner of
+     * one.  det_raw_same counts the frames the published box has held still,
+     * which is how long a caller waits before trusting it.
+     */
+    int   det_raw_x, det_raw_y, det_raw_w, det_raw_h;
+
+    /*
+     * Game speed, in percent of real time.  The UI thread only ever writes
+     * speed_percent; the run thread applies it at the top of a frame, because
+     * nothing outside the VM thread may touch the VM.
+     */
+    nj_vm *vm;
+    int   speed_percent;
+    int   speed_applied;
+    int   det_raw_same;
 
     nj_event queue[256];
     int   qh, qt;
@@ -638,6 +661,11 @@ static int android_display_init(void *ud, int *w, int *h, int *stride, void **px
     s->det_h = 0;
     s->det_frames = 0;
     s->det_done = 0;
+    s->det_raw_x = 0;
+    s->det_raw_y = 0;
+    s->det_raw_w = 0;
+    s->det_raw_h = 0;
+    s->det_raw_same = 0;
     *w = s->width;
     *h = s->height;
     *stride = s->stride;
@@ -738,29 +766,67 @@ static void android_detect(android_state *s)
     if (bx1 >= bx0 && by1 >= by0) {
         int x0 = bx0, y0 = by0, x1 = bx1, y1 = by1;
 
-        if (s->det_w > 0 && s->det_h > 0) {
-            if (s->det_x < x0) { x0 = s->det_x; }
-            if (s->det_y < y0) { y0 = s->det_y; }
-            if (s->det_x + s->det_w - 1 > x1) { x1 = s->det_x + s->det_w - 1; }
-            if (s->det_y + s->det_h - 1 > y1) { y1 = s->det_y + s->det_h - 1; }
+        if (s->det_raw_w > 0 && s->det_raw_h > 0) {
+            if (s->det_raw_x < x0) { x0 = s->det_raw_x; }
+            if (s->det_raw_y < y0) { y0 = s->det_raw_y; }
+            if (s->det_raw_x + s->det_raw_w - 1 > x1) {
+                x1 = s->det_raw_x + s->det_raw_w - 1;
+            }
+            if (s->det_raw_y + s->det_raw_h - 1 > y1) {
+                y1 = s->det_raw_y + s->det_raw_h - 1;
+            }
         }
-        s->det_x = x0;
-        s->det_y = y0;
-        s->det_w = x1 - x0 + 1;
-        s->det_h = y1 - y0 + 1;
+        s->det_raw_x = x0;
+        s->det_raw_y = y0;
+        s->det_raw_w = x1 - x0 + 1;
+        s->det_raw_h = y1 - y0 + 1;
     }
     memcpy(s->det_prev, s->shadow, rowbytes * (size_t)s->height);
     s->det_frames++;
 
     /*
-     * Stop when there is nothing left to learn.  A game that paints the whole
-     * screen has said its resolution is the canvas; one that does not has had
-     * 600 frames - twenty seconds at the frame cap - to show where it draws.
+     * Publish the union as a screen - or publish nothing.
+     *
+     * The union says what the MIDlet touched; it does not say what screen it
+     * thinks it is on.  A title that never repaints its status bar, a menu that
+     * only draws a corner and a game with a black background and a small HUD
+     * all leave a box that is real and is not a canvas, and cropping to one of
+     * those zooms the game into a strip of itself.  nj_detect_snap() answers
+     * with the handset screen the box most likely is, and refuses when it is
+     * not one - in which case this keeps measuring instead of guessing.
      */
-    if (s->det_w >= s->width - 1 && s->det_h >= s->height - 1) {
-        s->det_done = 1;
-    } else if (s->det_frames >= 600) {
-        s->det_done = 1;
+    if (s->det_raw_w > 0 && s->det_raw_h > 0) {
+        int px = 0, py = 0, pw = 0, ph = 0;
+
+        if (nj_detect_snap(s->det_raw_x, s->det_raw_y, s->det_raw_w, s->det_raw_h,
+                           s->width, s->height, &px, &py, &pw, &ph)) {
+            if (px == s->det_x && py == s->det_y
+                    && pw == s->det_w && ph == s->det_h) {
+                s->det_raw_same++;
+            } else {
+                s->det_x = px;
+                s->det_y = py;
+                s->det_w = pw;
+                s->det_h = ph;
+                s->det_raw_same = 0;
+            }
+            /*
+             * Stop when there is nothing left to learn: a game that paints the
+             * whole screen has said its resolution is the canvas, and one that
+             * paints less has held a screen-sized box still for 300 frames -
+             * ten seconds at the frame cap, long enough for a title that draws
+             * its screen in two passes.
+             */
+            if (s->det_w >= s->width - 1 && s->det_h >= s->height - 1) {
+                s->det_done = 1;
+            } else if (s->det_raw_same >= 300) {
+                s->det_done = 1;
+            }
+        } else if (s->det_frames >= 3000) {
+            /* Nothing in the table is close after 100 seconds: that box is a
+             * corner, and a picture cropped to it would be a bug report. */
+            s->det_done = 1;
+        }
     }
 }
 
@@ -1029,6 +1095,10 @@ static int android_input_poll(void *ud, nj_event *ev)
     android_state *s = AS(ud);
     int have = 0;
 
+    if (s->speed_percent > 0 && s->speed_percent != s->speed_applied && s->vm) {
+        nj_vm_set_speed(s->vm, s->speed_percent);
+        s->speed_applied = s->speed_percent;
+    }
     pthread_mutex_lock(&s->lock);
     if (s->qh != s->qt) {
         *ev = s->queue[s->qh];
@@ -2773,6 +2843,10 @@ static void android_install_codecs(void *ud, nj_vm *vm)
     if (!s || !vm) {
         return;
     }
+    /* Remember the VM: the settings the player changes mid-game are applied
+     * at the top of a frame, never from the JNI thread that delivered them. */
+    s->vm = vm;
+    s->speed_applied = 0;
     if (s->image_class && s->image_info_mid && s->image_decode_mid) {
         nj_codec_register(vm, &nj_codec_android_image, -1);
     }
@@ -4825,6 +4899,24 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetView(JNIEnv *env, jobject thiz,
     if (a) {
         nj_port_android_set_view(&a->port, (int)mode, (float)zoom, (float)dx,
                                  (float)dy);
+    }
+}
+
+/*
+ * Game speed: 100 is real time, 200 twice as fast.  Applied by the run thread
+ * on its next frame, so this only leaves a number behind.
+ */
+JNIEXPORT void JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeSetSpeed(JNIEnv *env, jobject thiz,
+                                                   jlong handle, jint percent)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    (void)env; (void)thiz;
+    if (a) {
+        android_state *s = AS(a->port.ud);
+        if (s) {
+            s->speed_percent = (int)percent;
+        }
     }
 }
 

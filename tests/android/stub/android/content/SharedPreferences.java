@@ -11,6 +11,8 @@ public interface SharedPreferences {
 
     int getInt(String key, int defValue);
 
+    java.util.Map<String, ?> getAll();
+
     Editor edit();
 
     interface Editor {
@@ -22,6 +24,12 @@ public interface SharedPreferences {
 
         Editor putInt(String key, int value);
 
+        Editor remove(String key);
+
+        Editor clear();
+
         void apply();
+
+        boolean commit();
     }
 }

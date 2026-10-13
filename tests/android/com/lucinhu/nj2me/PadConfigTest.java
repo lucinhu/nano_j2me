@@ -60,21 +60,45 @@ public final class PadConfigTest {
         Check.isTrue(name + ": the layout has keys", keys.size() > 0);
     }
 
-    /** Sane on a phone, no matter which way up it is. */
-    private static void bothOrientations(PadConfig c) {
-        float[][] screens = { { 1080f, 1920f }, { 1920f, 1080f }, { 320f, 640f } };
-        boolean ok = true;
-        for (float[] s : screens) {
+    /**
+     * Sane on a phone, whichever way up it is.
+     *
+     * A preset is written in units of the screen's short side, so the same cap
+     * must come out the same number of PIXELS on a portrait and a landscape
+     * window: that is what stops a pad looking stretched when the phone turns.
+     * The old presets were raw window fractions and failed exactly this.
+     */
+    private static void bothOrientations(int id, String name) {
+        int[][] screens = { { 1080, 1920 }, { 1920, 1080 }, { 320, 640 }, { 640, 320 } };
+        boolean reachable = true;
+        boolean shaped = true;
+
+        for (int[] s : screens) {
+            PadConfig c = PadConfig.byId(id, s[0], s[1]);
             for (PadConfig.Key k : c.keys) {
-                float px = k.x * s[0], py = k.y * s[1];
-                float pw = k.w * s[0], ph = k.h * s[1];
-                if (pw < 16f || ph < 16f || px < 0f || py < 0f
-                        || px + pw > s[0] || py + ph > s[1]) {
-                    ok = false;
+                float px = k.x * s[0];
+                float py = k.y * s[1];
+                float pw = k.w * s[0];
+                float ph = k.h * s[1];
+                /* 16 px is the floor: a dense layout (digits plus an
+                 * eight-way cluster) on the 320 px screen of an old handset
+                 * has to shrink that far, and 16 px is still a target. */
+                if (pw < 16f || ph < 16f || px < -0.5f || py < -0.5f
+                        || px + pw > s[0] + 0.5f || py + ph > s[1] + 0.5f) {
+                    reachable = false;
+                }
+                /* A keycap is written in short-side units, so its SHAPE is the
+                 * same whichever way the phone is held.  Raw window fractions
+                 * (which is what these presets used to be) gave a 4:1 cap on
+                 * one orientation and a 1:4 cap on the other. */
+                float aspect = pw / ph;
+                if (aspect < 0.35f || aspect > 3.6f) {
+                    shaped = false;
                 }
             }
         }
-        Check.isTrue("every preset key is reachable on 1080p, landscape and 320x640", ok);
+        Check.isTrue(name + ": every key is reachable on portrait, landscape and 320x640", reachable);
+        Check.isTrue(name + ": a key keeps its shape whichever way up the phone is", shaped);
     }
 
     public static void main(String[] args) {
@@ -86,7 +110,7 @@ public final class PadConfigTest {
             Check.isTrue("preset " + id + " has a hint", PadConfig.presetHint(id).length() > 0);
             if (id != PadConfig.PRESET_CUSTOM) {
                 wellFormed(PadConfig.presetName(id), c);
-                bothOrientations(c);
+                bothOrientations(id, PadConfig.presetName(id));
             }
         }
         Check.eq("清空 really is empty", PadConfig.byId(PadConfig.PRESET_CUSTOM).keys.size(), 0);

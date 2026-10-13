@@ -94,6 +94,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
 
     /* 沉浸模式: the player's setting, plus where the notch and bars are. */
     private boolean immersive;
+    private int speed = 100;      /* game speed, percent of real time */
     private int insetL, insetT, insetR, insetB;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -129,6 +130,12 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
 
     private static native int[] nativeDetect(long handle);
     private static native int[] nativeViewLimits(long handle);
+
+    /**
+     * Game speed in percent of real time.  The port applies it on its next
+     * frame; the VM is never touched from this thread.
+     */
+    private static native void nativeSetSpeed(long handle, int percent);
 
     private static native void nativeQuit(long handle);
 
@@ -229,7 +236,11 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         applyFullscreen();
 
-        padConfig = PadConfig.load(this);
+        padConfig = PadConfig.forGame(this, jarName);
+        JarStore.Entry se = JarStore.byName(this, jarName);
+        if (se != null && se.speed > 0) {
+            speed = se.speed;
+        }
 
         FrameLayout root = new FrameLayout(this);
         surfaceView = new SurfaceView(this);
@@ -312,7 +323,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         applyFullscreen();
         /* The editor may have changed the layout or moved the picture while
          * we were away - it is the one screen where both are set up. */
-        padConfig.replaceWith(PadConfig.load(this));
+        padConfig.replaceWith(PadConfig.forGame(this, jarName));
         pad.setConfig(padConfig);
         reloadView();
         MidiPlayer.resumeAll();
@@ -375,6 +386,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 handle = nativeCreate(holder.getSurface(), jarPath, screenW, screenH,
                                       heapMB, JarStore.rmsRoot(this).getAbsolutePath(),
                                       JarStore.fsRoot(this).getAbsolutePath());
+            if (handle != 0) {
+                nativeSetSpeed(handle, speed);
+            }
                 if (handle == 0) {
                     Log.e(TAG, "port creation failed");
                     toastThenFinish();
@@ -652,11 +666,15 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         LinearLayout toggle = Md3.row(this, Md3.IC_INFO,
                 shown ? "隐藏状态信息" : "显示状态信息",
                 shown ? "收起帧率、缩放这些数字" : "看帧率、缩放和测到的画面大小", false, null);
+        LinearLayout fast = Md3.row(this, Md3.IC_PLAY, "游戏速度",
+                speedText() + " · 慢动作到三倍速", false, null);
         LinearLayout quit = Md3.dangerRow(this, Md3.IC_POWER, "退出游戏", null);
 
         box.addView(adjust, Md3.gap(this, 12));
         box.addView(Md3.divider(this));
         box.addView(toggle);
+        box.addView(Md3.divider(this));
+        box.addView(fast);
         box.addView(Md3.divider(this));
         box.addView(quit);
 
@@ -687,6 +705,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 dlg.dismiss();
             }
         });
+        fast.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                dlg.dismiss();
+                speedDialog();
+            }
+        });
         quit.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -698,6 +723,53 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 }
             }
         });
+    }
+
+    /** "1.0x" for the current speed, for a row's hint. */
+    private String speedText() {
+        return (speed / 100f) + "x";
+    }
+
+    /**
+     * Pick the game speed.
+     *
+     * <p>This is the MIDlet's clock, not a frame-skip: Thread.sleep, timers,
+     * Object.wait and the frame pacer all run off one clock in the runtime, so
+     * a game that is merely slow (or one whose animations drag) speeds up as a
+     * whole.
+     */
+    private void speedDialog() {
+        final int[] percents = { 50, 75, 100, 150, 200, 300 };
+        String[] labels = new String[percents.length];
+        String[] hints = new String[percents.length];
+        int checked = 2;
+        for (int i = 0; i < percents.length; i++) {
+            labels[i] = (percents[i] / 100f) + "x";
+            hints[i] = percents[i] == 100 ? "和手机上的原速一样"
+                    : (percents[i] < 100 ? "慢下来，看剧情或过场"
+                                         : "时间是 MIDlet 的，不是画面的");
+            if (percents[i] == speed) {
+                checked = i;
+            }
+        }
+        Md3.chooser(this, Md3.IC_PLAY, "游戏速度", "当前 " + speedText(),
+                labels, hints, checked, new Md3.Choice() {
+                    @Override
+                    public void picked(int which, AlertDialog d) {
+                        speed = percents[which];
+                        synchronized (lock) {
+                            if (handle != 0) {
+                                nativeSetSpeed(handle, speed);
+                            }
+                        }
+                        JarStore.Entry e = JarStore.byName(GameActivity.this, jarName);
+                        if (e != null) {
+                            e.speed = speed;
+                            JarStore.write(GameActivity.this, e);
+                        }
+                        toast("游戏速度 " + speedText());
+                    }
+                });
     }
 
 

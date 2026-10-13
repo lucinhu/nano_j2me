@@ -921,8 +921,29 @@ void      nj_port_android_set_view(nj_port *port, int mode, float zoom,
  * and the pixels that changed are unioned into a box.  `frames` says how many
  * frames the measurement has seen, so a caller can wait for more than a couple
  * before trusting a box that appeared while the game was still starting.
+ *
+ * What is returned is the union snapped to a real handset screen by
+ * nj_detect_snap() - never a raw box, so a caller can use it as a resolution
+ * without checking it first.  The Android port refuses to publish at all when
+ * the union is not a screen, and keeps measuring instead.
  */
 int       nj_port_android_detect(const nj_port *port, int out[5]);
+
+/*
+ * Is the box a port detected a screen, or just the part of one a MIDlet
+ * happened to touch?  A port that crops to a raw box zooms a game into a strip
+ * of itself the moment the game only ever painted a corner - and one that
+ * offers the box as "the game's resolution" writes a size no MIDlet is laid
+ * out for.  This snaps the box to the nearest real handset screen (a table of
+ * nineteen of them, portrait and landscape) within a sixteenth per dimension,
+ * centred on what was detected, or refuses when nothing is close enough.
+ *
+ * Returns 1 and writes the box to use, or 0 when the caller should keep
+ * watching instead of cropping.  Implementation: src/core/nj_detect.c, tests:
+ * tests/test_detect.c.
+ */
+int       nj_detect_snap(int bx, int by, int bw, int bh, int cw, int ch,
+                         int *ox, int *oy, int *ow, int *oh);
 
 /* ESP-IDF port for ESP32-S3 (SPI/RGB LCD + GPIO buttons).  Configure it with
  * nj_port_esp32_config before calling nj_port_esp32(). */

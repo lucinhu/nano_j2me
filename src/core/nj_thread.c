@@ -45,17 +45,64 @@ nj_s8 nj_now_ms(nj_vm *vm)
         ms = 0u;
 #endif
     }
-    if (vm) {
-        /* Fold the 32-bit port clock into the VM's monotonic epoch so that
-         * the value keeps increasing across a wrap. */
+    if (!vm) {
+        return (nj_s8)ms;
+    }
+    /* Fold the 32-bit port clock into the VM's monotonic epoch so that the
+     * value keeps increasing across a wrap. */
+    {
         nj_u4 last = (nj_u4)(vm->scheduler_ticks & 0xFFFFFFFFu);
         if (ms < last) {
             vm->scheduler_ticks += 0x100000000ull;
         }
         vm->scheduler_ticks = (vm->scheduler_ticks & ~0xFFFFFFFFull) | ms;
-        return (nj_s8)vm->scheduler_ticks;
     }
-    return (nj_s8)ms;
+    {
+        /* A zero here means "not set yet" - a VM that has never been told a
+         * speed runs at real time, and it must not depend on an initialiser
+         * somewhere else having run. */
+        int percent = (vm->speed_percent > 0) ? vm->speed_percent : 100;
+        nj_s8 real = (nj_s8)vm->scheduler_ticks;
+        nj_s8 virt = vm->speed_virtual
+                   + (real - vm->speed_real) * percent / 100;
+
+        if (percent == 100) {
+            /* Real time: keep the origin on the clock so the arithmetic above
+             * cannot drift over a long session.  It is rebased AFTER the value
+             * the MIDlet gets is computed - rebasing first is what made the
+             * clock jump backwards when the player turned the multiplier back
+             * off, and every parked deadline would have fired at once. */
+            vm->speed_virtual = virt;
+            vm->speed_real = real;
+        }
+        return virt;
+    }
+}
+
+void nj_vm_set_speed(nj_vm *vm, int percent)
+{
+    nj_s8 now;
+
+    if (!vm) {
+        return;
+    }
+    if (percent < 10) {
+        percent = 10;
+    }
+    if (percent > 800) {
+        percent = 800;
+    }
+    /* Read the clock through the OLD scale first: that instant is where the
+     * new one starts, so a MIDlet never sees its clock jump. */
+    now = nj_now_ms(vm);
+    vm->speed_virtual = now;
+    vm->speed_real = (nj_s8)vm->scheduler_ticks;
+    vm->speed_percent = percent;
+}
+
+int nj_vm_speed(const nj_vm *vm)
+{
+    return vm ? vm->speed_percent : 100;
 }
 
 static void port_idle(nj_vm *vm)

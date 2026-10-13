@@ -348,7 +348,25 @@ struct nj_vm {
     nj_thread *cur;
     nj_u2      nthreads;
     nj_u4      next_thread_id;
-    nj_u4      scheduler_ticks;
+    /*
+     * The MIDlet's monotonic clock: the port's 32-bit millisecond counter
+     * folded into a 64-bit epoch.  It is 64-bit on purpose - a 32-bit field
+     * truncates the carry, and the clock then jumps backwards by 49.7 days
+     * every 49.7 days.
+     */
+    nj_s8      scheduler_ticks;
+
+    /*
+     * How fast the MIDlet's clock runs, in percent of real time.
+     *
+     * 100 is real time.  Everything a MIDlet measures goes through
+     * nj_now_ms(), so scaling that one clock scales the game: sleeps,
+     * Object.wait deadlines, java.util.Timer and the frame pacer all follow,
+     * and no code that reads the clock has to know.
+     */
+    int        speed_percent;
+    nj_s8      speed_virtual;   /* the MIDlet's instant when the scale was set */
+    nj_s8      speed_real;      /* the folded real instant it was set at */
 
     /* pending exception */
     nj_ref     exception;

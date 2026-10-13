@@ -57,7 +57,8 @@ final class PadConfig {
     static final int PRESET_ARCADE = 5;
     static final int PRESET_PHONE = 7;
     static final int PRESET_CLASSIC = 8;
-    static final int PRESET_COUNT = 7;
+    static final int PRESET_ONEHAND = 9;
+    static final int PRESET_COUNT = 8;
 
     final List<Key> keys = new ArrayList<Key>();
     float opacity = 0.50f;      /* how solid an idle keycap is; the
@@ -138,23 +139,172 @@ final class PadConfig {
     }
 
     /**
+     * A preset's coordinates, in units of the screen's SHORT side.
+     *
+     * <p>A pad built in raw fractions of the window is stretched on a landscape
+     * window and squashed on a portrait one: the same 0.14 x 0.06 keycap is
+     * 151x115 px on a phone held upright and 269x65 px on the same phone held
+     * sideways, which is what "some layouts look crooked, some too big or too
+     * small" was about. Every preset below is written in short-side units
+     * instead - one unit is min(window width, window height) - so a keycap is
+     * as wide as it is tall on any screen in either orientation.
+     *
+     * <p>u is also the natural unit for a thumb: a 0.11 u cap is 119 px on a
+     * 1080p phone whatever way up it is.
+     */
+    private static final class Grid {
+        /** A handset held upright: the box the portrait layouts are drawn in. */
+        static final float PORTRAIT_W = 1.0f;
+        static final float PORTRAIT_H = 1.78f;
+        /** The same handset on its side. */
+        static final float LANDSCAPE_W = 1.78f;
+        static final float LANDSCAPE_H = 1.0f;
+
+        final int w;
+        final int h;
+        final float m;
+        private final float k;
+        private final float oy;
+
+        Grid(int winW, int winH, float designW, float designH) {
+            w = (winW > 0) ? winW : 1080;
+            h = (winH > 0) ? winH : 1920;
+            m = (w < h) ? w : h;
+            float kx = xmax() / designW;
+            float ky = ymax() / designH;
+            k = (kx < ky) ? kx : ky;
+            /* The box is pinned to the bottom of the window: a pad belongs
+             * under the thumbs, not floating in the middle of the picture. */
+            oy = ymax() - designH * k;
+        }
+
+        Grid(int winW, int winH) {
+            this(winW, winH, PORTRAIT_W, PORTRAIT_H);
+        }
+
+        /** How wide the window is in units. */
+        float xmax() {
+            return w / m;
+        }
+
+        /** How tall the window is in units. */
+        float ymax() {
+            return h / m;
+        }
+
+        /** Units from the left edge. */
+        float x(float u) {
+            return u * k * m / w;
+        }
+
+        /** Units from the top edge. */
+        float y(float u) {
+            return (u * k + oy) * m / h;
+        }
+
+        /**
+         * Units down from the TOP of the window, ignoring the pad's bottom
+         * anchor.
+         *
+         * <p>The whole block is pinned to the bottom because that is where
+         * thumbs are, but a handset's soft keys sit under the earpiece
+         * whatever the game does - anchored to the pad they end up floating
+         * in the middle of the picture.
+         */
+        float top(float u) {
+            return sy(u);
+        }
+
+        /** A width in units, as a fraction of the window's width. */
+        float sx(float u) {
+            return u * k * m / w;
+        }
+
+        /** A height in units, as a fraction of the window's height.  Not the
+         *  same number as sx() unless the window is square: that difference is
+         *  exactly what keeps a keycap square. */
+        float sy(float u) {
+            return u * k * m / h;
+        }
+
+        /** Units back from the right edge, mirrored so a right-anchored key
+         *  keeps its margin whatever the window's width is. */
+        float xr(float u) {
+            return (xmax() - u * k) * m / w;
+        }
+
+        /** Also scaled: the largest key width that still fits the window. */
+        float k() {
+            return k;
+        }
+
+        void add(List<Key> out, int code, float ux, float uy, float uw, float uh) {
+            out.add(new Key(code, x(ux), y(uy), sx(uw), sy(uh)));
+        }
+
+        /** A key whose right edge sits `uright` units in from the window's
+         *  right edge.  Mirroring the margin is what keeps a right-anchored
+         *  cluster in place on a window of any width. */
+        void addRight(List<Key> out, int code, float uright, float uy,
+                      float uw, float uh) {
+            out.add(new Key(code, xr(uright + uw), y(uy), sx(uw), sy(uh)));
+        }
+
+        void combo(List<Key> out, int code, int code2,
+                   float ux, float uy, float uw, float uh) {
+            out.add(new Key(code, code2, x(ux), y(uy), sx(uw), sy(uh)));
+        }
+
+        void comboRight(List<Key> out, int code, int code2,
+                        float uright, float uy, float uw, float uh) {
+            out.add(new Key(code, code2, xr(uright + uw), y(uy), sx(uw), sy(uh)));
+        }
+
+        /** The four directions of a cross, without the middle key. */
+        void cross(List<Key> out, float x0, float y0, float cap, float step) {
+            add(out, 19, x0 + step, y0, cap, cap);                  /* 上 */
+            add(out, 21, x0, y0 + step, cap, cap);                  /* 左 */
+            add(out, 22, x0 + 2 * step, y0 + step, cap, cap);       /* 右 */
+            add(out, 20, x0 + step, y0 + 2 * step, cap, cap);       /* 下 */
+        }
+
+        /** Three soft keys across the top: left, clear, right. */
+        void softRow(List<Key> out, float margin, float y0, float wide, float tall) {
+            add(out, 82, margin, y0, wide, tall);
+            add(out, 67, (xmax() - wide * k) / 2f, y0, wide, tall);
+            addRight(out, 4, margin, y0, wide, tall);
+        }
+    }
+
+    /** The twelve keys of a handset, in the order a phone had them. */
+    private static final int[] DIGITS = {
+        8, 9, 10,          /* 1 2 3 */
+        11, 12, 13,        /* 4 5 6 */
+        14, 15, 16,        /* 7 8 9 */
+        17, 7, 18          /* * 0 # */
+    };
+
+    /**
      * The layout a game gets before anyone has an opinion.  Everything sits in
      * the bars above and below a 240x320 screen, because that is where there is
      * nothing to cover: a MIDlet's own game area is the last place a control
      * should be drawn.
      */
     static PadConfig defaults() {
+        return defaults(1080, 1920);
+    }
+
+    static PadConfig defaults(int winW, int winH) {
         PadConfig p = new PadConfig();
-        p.keys.add(new Key(19, 0.100f, 0.795f, 0.140f, 0.060f));   /* 上 */
-        p.keys.add(new Key(21, 0.020f, 0.860f, 0.140f, 0.060f));   /* 左 */
-        p.keys.add(new Key(22, 0.180f, 0.860f, 0.140f, 0.060f));   /* 右 */
-        p.keys.add(new Key(20, 0.100f, 0.925f, 0.140f, 0.060f));   /* 下 */
-        p.keys.add(new Key(23, 0.700f, 0.860f, 0.260f, 0.115f));   /* 确定 */
-        /* The soft keys clear the top edge by more than they look like they
-         * need to: the game's control bar lives there until it times out, and a
-         * keycap underneath a button is a keycap the player cannot press. */
-        p.keys.add(new Key(82, 0.020f, 0.080f, 0.200f, 0.055f));   /* 左软键 */
-        p.keys.add(new Key(4,  0.780f, 0.080f, 0.200f, 0.055f));   /* 右软键 */
+        p.preset = PRESET_DPAD;
+        Grid g = new Grid(winW, winH);
+        final float cap = 0.115f;      /* ~124 px on a 1080p phone */
+        final float step = 0.125f;
+
+        g.cross(p.keys, 0.045f, 1.34f, cap, step);
+        g.add(p.keys, 23, 0.66f, 1.44f, 0.30f, 0.20f);     /* 确定 / 火力 */
+        g.add(p.keys, 82, 0.045f, 0.045f, 0.34f, 0.10f);   /* 左软键 */
+        g.addRight(p.keys, 4, 0.045f, 0.045f, 0.34f, 0.10f);
         return p;
     }
 
@@ -171,25 +321,21 @@ final class PadConfig {
      * the fire button in the middle.
      */
     static PadConfig classic() {
+        return classic(1080, 1920);
+    }
+
+    static PadConfig classic(int winW, int winH) {
         PadConfig p = new PadConfig();
         p.preset = PRESET_CLASSIC;
-        float w = 0.155f, h = 0.098f, gap = 0.006f;
-        float lx = 0.010f, rx = 0.506f;
-        float y0 = 0.560f;
+        Grid g = new Grid(winW, winH);
+        final float cap = 0.135f;
+        final float step = 0.143f;
+        final float left = 0.012f;
+        final float y0 = 1.06f;
 
-        int[] digits = {
-            8, 9, 10,          /* 1 2 3 */
-            11, 12, 13,        /* 4 5 6 */
-            14, 15, 16,        /* 7 8 9 */
-            17, 7, 18          /* * 0 # */
-        };
-        for (int i = 0; i < digits.length; i++) {
-            int col = i % 3;
-            int row = i / 3;
-            p.keys.add(new Key(digits[i],
-                               lx + col * (w + gap),
-                               y0 + row * (h + gap),
-                               w, h));
+        for (int i = 0; i < DIGITS.length; i++) {
+            g.add(p.keys, DIGITS[i],
+                  left + (i % 3) * step, y0 + (i / 3) * step, cap, cap);
         }
 
         /* Right block: the soft keys along the top, then the eight-way
@@ -200,22 +346,22 @@ final class PadConfig {
          * with a single digit code it would never see a diagonal walk.  The
          * digits themselves are one block to the left, so a game that asks for
          * the phone's '1' still gets it. */
-        float sx = w + gap, sy = h + gap;
-        p.keys.add(new Key(82, rx, y0, w, h));                          /* L */
-        p.keys.add(new Key(4, rx + 2 * sx, y0, w, h));                  /* R */
-        p.keys.add(new Key(21, 19, rx, y0 + sy, w, h));                 /* ↖ */
-        p.keys.add(new Key(19, rx + sx, y0 + sy, w, h));                /* ↑ */
-        p.keys.add(new Key(22, 19, rx + 2 * sx, y0 + sy, w, h));        /* ↗ */
-        p.keys.add(new Key(21, rx, y0 + 2 * sy, w, h));                 /* ← */
-        p.keys.add(new Key(23, rx + sx, y0 + 2 * sy, w, h));            /* ● */
-        p.keys.add(new Key(22, rx + 2 * sx, y0 + 2 * sy, w, h));        /* → */
-        p.keys.add(new Key(21, 20, rx, y0 + 3 * sy, w, h));             /* ↙ */
-        p.keys.add(new Key(20, rx + sx, y0 + 3 * sy, w, h));            /* ↓ */
-        p.keys.add(new Key(22, 20, rx + 2 * sx, y0 + 3 * sy, w, h));    /* ↘ */
+        final float colL = 2 * step;          /* units in from the right edge */
+        g.addRight(p.keys, 82, colL, y0, cap, cap);                    /* L */
+        g.addRight(p.keys, 4, 0f, y0, cap, cap);                       /* R */
+        g.comboRight(p.keys, 21, 19, colL, y0 + step, cap, cap);       /* ↖ */
+        g.addRight(p.keys, 19, step, y0 + step, cap, cap);             /* ↑ */
+        g.comboRight(p.keys, 22, 19, 0f, y0 + step, cap, cap);         /* ↗ */
+        g.addRight(p.keys, 21, colL, y0 + 2 * step, cap, cap);         /* ← */
+        g.addRight(p.keys, 23, step, y0 + 2 * step, cap, cap);         /* ● */
+        g.addRight(p.keys, 22, 0f, y0 + 2 * step, cap, cap);           /* → */
+        g.comboRight(p.keys, 21, 20, colL, y0 + 3 * step, cap, cap);   /* ↙ */
+        g.addRight(p.keys, 20, step, y0 + 3 * step, cap, cap);         /* ↓ */
+        g.comboRight(p.keys, 22, 20, 0f, y0 + 3 * step, cap, cap);     /* ↘ */
         return p;
     }
 
-    /** No keys at all, for a layout built by hand. */
+    /** No keys at all: the player is about to place every one of them. */
     static PadConfig blank() {
         PadConfig p = new PadConfig();
         p.preset = PRESET_CUSTOM;
@@ -223,173 +369,189 @@ final class PadConfig {
     }
 
     /**
-     * Every key the port can deliver, on one screen.
-     *
-     * <p>For the titles that use the whole handset: a D-pad in one corner, the
-     * twelve digits in the other, the soft keys and Clear along the top, and
-     * A/B/C/D down the side. Nothing is left to guess about which key a game
-     * wants, and the player can drag away the ones it does not use - which is
-     * why this is a preset rather than a mode.
-     *
-     * <p>It covers the bottom of the game area by design: a full keypad and an
-     * unobstructed screen cannot both be had, and a game that needs every key
-     * needs them more than it needs the last two rows of pixels.
+     * Everything a pad can hold, laid out on one grid: soft keys across the
+     * top, A/B/C/D above the cross on the left, the twelve digits on the right.
      */
     static PadConfig full() {
+        return full(1080, 1920);
+    }
+
+    static PadConfig full(int winW, int winH) {
         PadConfig p = new PadConfig();
         p.preset = PRESET_FULL;
+        Grid g = new Grid(winW, winH);
+        final float cap = 0.105f;
+        final float step = 0.115f;
+        final float left = 0.015f;
 
-        /* soft keys and Clear along the top, clear of the control bar */
-        p.keys.add(new Key(82, 0.020f, 0.080f, 0.200f, 0.050f));   /* 左软键 */
-        p.keys.add(new Key(67, 0.400f, 0.080f, 0.200f, 0.050f));   /* 清除 */
-        p.keys.add(new Key(4,  0.780f, 0.080f, 0.200f, 0.050f));   /* 右软键 */
+        g.softRow(p.keys, 0.03f, 0.045f, 0.30f, 0.10f);
 
-        /* A/B/C/D */
-        float aw = 0.088f;
-        int[] game = { 29, 30, 31, 32 };
-        for (int i = 0; i < game.length; i++) {
-            p.keys.add(new Key(game[i], 0.020f + i * (aw + 0.005f), 0.700f,
-                               aw, 0.045f));
+        int[] abcd = { 29, 30, 31, 32 };
+        for (int i = 0; i < abcd.length; i++) {
+            g.add(p.keys, abcd[i], left + i * step, 1.03f, cap, cap);
         }
+        g.cross(p.keys, left, 1.18f, cap, step);
+        g.add(p.keys, 23, left + step, 1.18f + step, cap, cap);   /* 确定 */
 
-        /* D-pad and fire */
-        p.keys.add(new Key(21, 0.020f, 0.752f, 0.120f, 0.048f));   /* 左 */
-        p.keys.add(new Key(19, 0.145f, 0.752f, 0.120f, 0.048f));   /* 上 */
-        p.keys.add(new Key(22, 0.270f, 0.752f, 0.120f, 0.048f));   /* 右 */
-        p.keys.add(new Key(20, 0.145f, 0.805f, 0.120f, 0.048f));   /* 下 */
-        p.keys.add(new Key(23, 0.020f, 0.858f, 0.370f, 0.080f));   /* 确定 */
-
-        /* twelve digits, in the order a phone has them */
-        int[] digits = {
-            8, 9, 10,
-            11, 12, 13,
-            14, 15, 16,
-            17, 7, 18
-        };
-        float x0 = 0.560f, y0 = 0.700f;
-        float dw = 0.120f, dh = 0.048f, gx = 0.020f, gy = 0.010f;
-        for (int i = 0; i < digits.length; i++) {
-            p.keys.add(new Key(digits[i],
-                               x0 + (i % 3) * (dw + gx),
-                               y0 + (i / 3) * (dh + gy),
-                               dw, dh));
+        final float dx = 0.56f;
+        final float dy = 1.00f;
+        for (int i = 0; i < DIGITS.length; i++) {
+            g.add(p.keys, DIGITS[i],
+                  dx + (i % 3) * step, dy + (i / 3) * step, cap, cap);
         }
         return p;
     }
 
     /**
-     * Two hands, one landscape screen: soft keys in the top corners, the D-pad
-     * under the left thumb, A/B/确定 under the right.
-     *
-     * <p>A landscape window is short, so the controls are pushed to the edges
-     * and the middle of the screen is left for the game.
+     * Two hands, one screen on its side: the cross under the left thumb, the
+     * two game keys and the fire button under the right one.
      */
     static PadConfig landscape() {
+        return landscape(1920, 1080);
+    }
+
+    static PadConfig landscape(int winW, int winH) {
         PadConfig p = new PadConfig();
         p.preset = PRESET_LANDSCAPE;
+        Grid g = new Grid(winW, winH, Grid.LANDSCAPE_W, Grid.LANDSCAPE_H);
+        final float cap = 0.16f;
+        final float step = 0.175f;
 
-        p.keys.add(new Key(82, 0.020f, 0.080f, 0.180f, 0.060f));   /* 左软键 */
-        p.keys.add(new Key(4,  0.800f, 0.080f, 0.180f, 0.060f));   /* 右软键 */
+        g.add(p.keys, 82, 0.04f, 0.05f, 0.24f, 0.10f);
+        g.addRight(p.keys, 4, 0.04f, 0.05f, 0.24f, 0.10f);
 
-        p.keys.add(new Key(21, 0.040f, 0.300f, 0.120f, 0.140f));   /* 左 */
-        p.keys.add(new Key(19, 0.170f, 0.300f, 0.120f, 0.140f));   /* 上 */
-        p.keys.add(new Key(22, 0.300f, 0.300f, 0.120f, 0.140f));   /* 右 */
-        p.keys.add(new Key(20, 0.170f, 0.450f, 0.120f, 0.140f));   /* 下 */
+        g.cross(p.keys, 0.05f, 0.40f, cap, step);
+        g.add(p.keys, 23, 0.05f + step, 0.40f + step, cap, cap);   /* 确定 */
 
-        p.keys.add(new Key(29, 0.700f, 0.290f, 0.140f, 0.150f));   /* A */
-        p.keys.add(new Key(30, 0.855f, 0.290f, 0.130f, 0.150f));   /* B */
-        p.keys.add(new Key(23, 0.760f, 0.560f, 0.220f, 0.180f));   /* 确定 */
+        /* The two game keys and the fire button, anchored to the right edge
+         * so they keep their margin on a window of any width. */
+        g.addRight(p.keys, 30, 0.045f, 0.30f, cap, cap);
+        g.addRight(p.keys, 29, 0.045f + cap + 0.02f, 0.30f, cap, cap);
+        g.addRight(p.keys, 31, 0.045f, 0.30f + cap + 0.04f, cap * 1.3f, cap);
         return p;
     }
 
-    /**
-     * Arcade: a D-pad cross on the left, two buttons and fire on the right.
-     *
-     * <p>No digits and no soft keys - a game that needs either wants 全按键,
-     * and one that needs neither should not have them in the way.
-     */
+    /** A stick and three big buttons - the arcade cabinet arrangement. */
     static PadConfig arcade() {
+        return arcade(1920, 1080);
+    }
+
+    static PadConfig arcade(int winW, int winH) {
         PadConfig p = new PadConfig();
         p.preset = PRESET_ARCADE;
+        Grid g = new Grid(winW, winH, Grid.LANDSCAPE_W, Grid.LANDSCAPE_H);
+        final float cap = 0.185f;
+        final float step = 0.20f;
 
-        p.keys.add(new Key(82, 0.020f, 0.080f, 0.150f, 0.060f));   /* 左软键 */
-        p.keys.add(new Key(4,  0.830f, 0.080f, 0.150f, 0.060f));   /* 右软键 */
+        /* The two soft keys go under the top edge of the WINDOW: on a phone
+         * they are the plates beside the screen, not part of the pad. */
+        p.keys.add(new Key(4, g.xr(0.04f + 0.22f), g.top(0.30f), g.sx(0.22f), g.sy(0.09f)));
+        p.keys.add(new Key(82, g.x(0.04f), g.top(0.30f), g.sx(0.22f), g.sy(0.09f)));
 
-        p.keys.add(new Key(21, 0.030f, 0.400f, 0.130f, 0.150f));   /* 左 */
-        p.keys.add(new Key(19, 0.170f, 0.230f, 0.130f, 0.150f));   /* 上 */
-        p.keys.add(new Key(22, 0.310f, 0.400f, 0.130f, 0.150f));   /* 右 */
-        p.keys.add(new Key(20, 0.170f, 0.570f, 0.130f, 0.150f));   /* 下 */
+        g.cross(p.keys, 0.04f, 0.34f, cap, step);
+        g.add(p.keys, 23, 0.04f + step, 0.34f + step, cap, cap);
 
-        p.keys.add(new Key(29, 0.700f, 0.240f, 0.140f, 0.150f));   /* A */
-        p.keys.add(new Key(30, 0.860f, 0.240f, 0.130f, 0.150f));   /* B */
-        p.keys.add(new Key(23, 0.760f, 0.500f, 0.220f, 0.220f));   /* 开火 */
+        g.addRight(p.keys, 30, 0.045f, 0.32f, 0.20f, 0.20f);
+        g.addRight(p.keys, 29, 0.045f + 0.22f, 0.32f, 0.20f, 0.20f);
+        g.addRight(p.keys, 31, 0.045f + 0.10f, 0.58f, 0.24f, 0.24f);
         return p;
     }
 
     /**
-     * A whole candybar phone, portrait: soft keys and Clear on top, the D-pad
-     * in the middle, and the twelve digits under it in the order a handset has
-     * them, so muscle memory from the original device still works.
+     * A whole handset on screen: the three soft keys along the top, the cross
+     * over the twelve digits, both centred on the same grid, the way a Nokia
+     * laid its keypad out.
      */
     static PadConfig phone() {
+        return phone(1080, 1920);
+    }
+
+    static PadConfig phone(int winW, int winH) {
         PadConfig p = new PadConfig();
         p.preset = PRESET_PHONE;
+        Grid g = new Grid(winW, winH);
+        final float cap = 0.105f;
+        final float step = 0.115f;
 
-        p.keys.add(new Key(82, 0.020f, 0.080f, 0.200f, 0.060f));   /* 左软键 */
-        p.keys.add(new Key(67, 0.400f, 0.080f, 0.200f, 0.060f));   /* 清除 */
-        p.keys.add(new Key(4,  0.780f, 0.080f, 0.200f, 0.060f));   /* 右软键 */
+        g.softRow(p.keys, 0.03f, 0.045f, 0.30f, 0.10f);
 
-        p.keys.add(new Key(19, 0.370f, 0.420f, 0.110f, 0.060f));   /* 上 */
-        p.keys.add(new Key(21, 0.250f, 0.490f, 0.110f, 0.060f));   /* 左 */
-        p.keys.add(new Key(23, 0.370f, 0.490f, 0.110f, 0.060f));   /* 确定 */
-        p.keys.add(new Key(22, 0.490f, 0.490f, 0.110f, 0.060f));   /* 右 */
-        p.keys.add(new Key(20, 0.370f, 0.560f, 0.110f, 0.060f));   /* 下 */
+        final float block = 3 * step - (step - cap);
+        final float x0 = (g.xmax() - block) / 2f;
+        g.cross(p.keys, x0, 0.90f, cap, step);
+        g.add(p.keys, 23, x0 + step, 0.90f + step, cap, cap);
 
-        int[] digits = {
-            8, 9, 10,
-            11, 12, 13,
-            14, 15, 16,
-            17, 7, 18
-        };
-        float x0 = 0.250f, y0 = 0.650f;
-        float dw = 0.110f, dh = 0.060f, gx = 0.060f, gy = 0.010f;
-        for (int i = 0; i < digits.length; i++) {
-            p.keys.add(new Key(digits[i],
-                               x0 + (i % 3) * (dw + gx),
-                               y0 + (i / 3) * (dh + gy),
-                               dw, dh));
+        for (int i = 0; i < DIGITS.length; i++) {
+            g.add(p.keys, DIGITS[i],
+                  x0 + (i % 3) * step, 1.28f + (i / 3) * step, cap, cap);
         }
+        return p;
+    }
+
+    /**
+     * Everything under the right thumb: the cross in the bottom right corner
+     * and the fire button just left of it, for a phone held in one hand.
+     */
+    static PadConfig onehand() {
+        return onehand(1080, 1920);
+    }
+
+    static PadConfig onehand(int winW, int winH) {
+        PadConfig p = new PadConfig();
+        p.preset = PRESET_ONEHAND;
+        Grid g = new Grid(winW, winH);
+        final float cap = 0.12f;
+        final float step = 0.13f;
+
+        final float y0 = 1.30f;
+        final float col = 0.05f + 2 * step + cap;    /* units in from the right */
+        /* the cross, mirrored: 右 column first, then the middle, then 左 */
+        g.addRight(p.keys, 19, col - step, y0, cap, cap);              /* 上 */
+        g.addRight(p.keys, 22, col - 2 * step, y0 + step, cap, cap);   /* 右 */
+        g.addRight(p.keys, 21, col, y0 + step, cap, cap);              /* 左 */
+        g.addRight(p.keys, 20, col - step, y0 + 2 * step, cap, cap);   /* 下 */
+        g.addRight(p.keys, 23, col + 0.02f + cap, y0 + step, 0.24f, 0.20f); /* 火力 */
+
+        g.addRight(p.keys, 82, 0.38f, 0.045f, 0.33f, 0.10f);
+        g.addRight(p.keys, 4, 0.03f, 0.045f, 0.33f, 0.10f);
         return p;
     }
 
     /** The presets the layout picker offers, in the order it shows them. */
     static final int[] PRESET_IDS = {
-        PRESET_DPAD, PRESET_CLASSIC, PRESET_FULL,
-        PRESET_LANDSCAPE, PRESET_ARCADE, PRESET_PHONE,
+        PRESET_DPAD, PRESET_CLASSIC, PRESET_FULL, PRESET_PHONE,
+        PRESET_ONEHAND, PRESET_ARCADE, PRESET_LANDSCAPE,
         PRESET_CUSTOM
     };
 
-    /** The layout of a preset.  CUSTOM has no keys, by definition. */
-    static PadConfig byId(int id) {
+    /** The layout of a preset, for a window of this shape. */
+    static PadConfig byId(int id, int winW, int winH) {
         if (id == PRESET_CLASSIC) {
-            return classic();
+            return classic(winW, winH);
         }
         if (id == PRESET_FULL) {
-            return full();
+            return full(winW, winH);
         }
         if (id == PRESET_LANDSCAPE) {
-            return landscape();
+            return landscape(winW, winH);
         }
         if (id == PRESET_ARCADE) {
-            return arcade();
+            return arcade(winW, winH);
         }
         if (id == PRESET_PHONE) {
-            return phone();
+            return phone(winW, winH);
+        }
+        if (id == PRESET_ONEHAND) {
+            return onehand(winW, winH);
         }
         if (id == PRESET_CUSTOM) {
             return blank();
         }
-        return defaults();
+        return defaults(winW, winH);
+    }
+
+    /** The layout of a preset.  CUSTOM has no keys, by definition. */
+    static PadConfig byId(int id) {
+        return byId(id, 1080, 1920);
     }
 
     /** What a preset is for, one line, for the picker. */
@@ -398,21 +560,24 @@ final class PadConfig {
             return "左数字 · 右八向 + 火力";
         }
         if (id == PRESET_FULL) {
-            return "方向 + 数字 + A/B/C/D，占底部";
+            return "方向 + 数字 + A/B/C/D";
         }
         if (id == PRESET_LANDSCAPE) {
             return "左手方向，右手 A/B/确定";
         }
         if (id == PRESET_ARCADE) {
-            return "方向十字 + 两个按键";
+            return "左方向 + 右侧三个大键";
         }
         if (id == PRESET_PHONE) {
             return "整台手机：软键 + 方向 + 数字";
         }
+        if (id == PRESET_ONEHAND) {
+            return "全在右下角，一只手能按";
+        }
         if (id == PRESET_CUSTOM) {
             return "清空，自己摆";
         }
-        return "左下方向 + 右下确定 + 软键";
+        return "左下方向 + 右下火力 + 软键";
     }
 
     static String presetName(int id) {
@@ -431,6 +596,9 @@ final class PadConfig {
         if (id == PRESET_PHONE) {
             return "手机键盘";
         }
+        if (id == PRESET_ONEHAND) {
+            return "单手右下";
+        }
         if (id == PRESET_CUSTOM) {
             return "自定义";
         }
@@ -448,10 +616,47 @@ final class PadConfig {
     }
 
     static PadConfig load(Context ctx) {
-        SharedPreferences sp = ctx.getSharedPreferences("pad", Context.MODE_PRIVATE);
-        String blob = sp.getString("keys", null);
-        if (blob == null) {
+        SharedPreferences sp = pref(ctx);
+        PadConfig p = parse(sp.getString("keys", null));
+        if (p == null) {
+            String named = defaultLayout(ctx);
+            if (named != null) {
+                p = loadLayout(ctx, named);
+            }
+        }
+        if (p == null) {
             return defaults();
+        }
+        p.opacity = sp.getFloat("opacity", p.opacity);
+        p.grid = sp.getBoolean("grid", p.grid);
+        p.snap = sp.getBoolean("snap", p.snap);
+        p.haptics = sp.getBoolean("haptics", p.haptics);
+        p.preset = sp.getInt("preset", PRESET_CUSTOM);
+        return p;
+    }
+
+    /** The whole arrangement as one string, ready for a preference. */
+    String blob() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < keys.size(); i++) {
+            Key k = keys.get(i);
+            sb.append(k.code).append(',').append(fmt(k.x)).append(',').append(fmt(k.y))
+              .append(',').append(fmt(k.w)).append(',').append(fmt(k.h));
+            if (k.code2 != 0) {
+                /* written only when it is used: a pad with no combos keeps the
+                 * old five-field record, so nothing else has to learn a new
+                 * format */
+                sb.append(',').append(k.code2);
+            }
+            sb.append(';');
+        }
+        return sb.toString();
+    }
+
+    /** Reads back what blob() wrote; null when there is nothing stored. */
+    private static PadConfig parse(String blob) {
+        if (blob == null || blob.length() == 0) {
+            return null;
         }
         PadConfig p = new PadConfig();
         int i = 0;
@@ -476,39 +681,111 @@ final class PadConfig {
             }
         }
         if (p.keys.isEmpty()) {
-            return defaults();
+            return null;
         }
         upgradeClassicDiagonals(p.keys);
-        p.opacity = sp.getFloat("opacity", p.opacity);
-        p.grid = sp.getBoolean("grid", p.grid);
-        p.snap = sp.getBoolean("snap", p.snap);
-        p.haptics = sp.getBoolean("haptics", p.haptics);
-        p.preset = sp.getInt("preset", PRESET_CUSTOM);
         return p;
     }
 
+    /** The keyboard flags that are shared by every layout. */
+    private static SharedPreferences.Editor saveFlags(SharedPreferences.Editor e,
+                                                      PadConfig cfg) {
+        return e.putFloat("opacity", cfg.opacity)
+                .putBoolean("grid", cfg.grid)
+                .putBoolean("snap", cfg.snap)
+                .putBoolean("haptics", cfg.haptics)
+                .putInt("preset", cfg.preset);
+    }
+
+    /** Writes this arrangement as the default the next game starts from. */
     void save(Context ctx) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < keys.size(); i++) {
-            Key k = keys.get(i);
-            sb.append(k.code).append(',').append(fmt(k.x)).append(',').append(fmt(k.y))
-              .append(',').append(fmt(k.w)).append(',').append(fmt(k.h));
-            if (k.code2 != 0) {
-                /* written only when it is used: a pad with no combos keeps the
-                 * old five-field record, so nothing else has to learn a new
-                 * format */
-                sb.append(',').append(k.code2);
-            }
-            sb.append(';');
+        saveFlags(ctx.getSharedPreferences("pad", Context.MODE_PRIVATE).edit()
+                  .putString("keys", blob()), this)
+              .apply();
+    }
+
+    /**
+     * The layout a game should open with: the one the player arranged for this
+     * jar, or the default when this game has none.
+     */
+    static PadConfig forGame(Context ctx, String jar) {
+        PadConfig own = parse(pref(ctx).getString(gameKey(jar), null));
+        if (own == null) {
+            return load(ctx);
         }
-        ctx.getSharedPreferences("pad", Context.MODE_PRIVATE).edit()
-           .putString("keys", sb.toString())
-           .putFloat("opacity", opacity)
-           .putBoolean("grid", grid)
-           .putBoolean("snap", snap)
-           .putBoolean("haptics", haptics)
-           .putInt("preset", preset)
-           .apply();
+        own.opacity = pref(ctx).getFloat("opacity", own.opacity);
+        own.grid = pref(ctx).getBoolean("grid", own.grid);
+        own.snap = pref(ctx).getBoolean("snap", own.snap);
+        own.haptics = pref(ctx).getBoolean("haptics", own.haptics);
+        own.preset = pref(ctx).getInt("preset", PRESET_CUSTOM);
+        return own;
+    }
+
+    /** Remembers this arrangement for one game only.  The default stays put. */
+    static void saveForGame(Context ctx, String jar, PadConfig cfg) {
+        SharedPreferences.Editor e = pref(ctx).edit();
+        if (jar != null && jar.length() > 0) {
+            e.putString(gameKey(jar), cfg.blob());
+        }
+        saveFlags(e, cfg);
+        e.apply();
+    }
+
+    static void forgetGame(Context ctx, String jar) {
+        if (jar != null && jar.length() > 0) {
+            pref(ctx).edit().remove(gameKey(jar)).apply();
+        }
+    }
+
+    private static String gameKey(String jar) {
+        return "game:" + jar;
+    }
+
+    private static SharedPreferences pref(Context ctx) {
+        return ctx.getSharedPreferences("pad", Context.MODE_PRIVATE);
+    }
+
+    /** The names of the layouts the player saved for reuse. */
+    static java.util.List<String> layoutNames(Context ctx) {
+        java.util.List<String> out = new ArrayList<String>();
+        for (String k : pref(ctx).getAll().keySet()) {
+            if (k.startsWith("layout:") && k.length() > 7) {
+                out.add(k.substring(7));
+            }
+        }
+        java.util.Collections.sort(out);
+        return out;
+    }
+
+    /** Keeps this arrangement under a name the player can pick again. */
+    static void saveLayout(Context ctx, String name, PadConfig cfg) {
+        if (name == null || name.trim().length() == 0) {
+            return;
+        }
+        pref(ctx).edit().putString("layout:" + name.trim(), cfg.blob()).apply();
+    }
+
+    static PadConfig loadLayout(Context ctx, String name) {
+        return parse(pref(ctx).getString("layout:" + name, null));
+    }
+
+    static void deleteLayout(Context ctx, String name) {
+        pref(ctx).edit().remove("layout:" + name).apply();
+    }
+
+    /** Which named layout a game with no arrangement of its own should use. */
+    static String defaultLayout(Context ctx) {
+        return pref(ctx).getString("defaultLayout", null);
+    }
+
+    static void setDefaultLayout(Context ctx, String name) {
+        SharedPreferences.Editor e = pref(ctx).edit();
+        if (name == null) {
+            e.remove("defaultLayout");
+        } else {
+            e.putString("defaultLayout", name);
+        }
+        e.apply();
     }
 
     /**

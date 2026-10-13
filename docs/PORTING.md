@@ -304,9 +304,22 @@ Eleven things in that shell are worth copying, because each one is a rule a plai
   `ACTION_CANCEL`. The class is unit-tested off-device, which is the only
   reason the rules survived the move out of `PadView`.
 - **Layouts are data.** `PadConfig` stores keycaps as fractions of the view
-  (`0..1`, top-left corner) and ships seven presets (`PRESET_IDS`, `byId()`,
+  (`0..1`, top-left corner) and ships eight presets (`PRESET_IDS`, `byId()`,
   `presetName()`, `presetHint()`): 方向盘, 经典手机, 全按键, 横屏双手, 街机双键,
-  手机键盘 and an empty one to build on. 经典手机 is the handset the games were
+  手机键盘, 单手右下 and an empty one to build on. The presets are *written* in
+  short-side units, not in window fractions: a keycap is `0.185` units on its
+  short side and the factory converts with the window it is given, so a pad that
+  is square on a 1080x1920 phone is still square on a 1920x1080 one and on a
+  320x640 emulator - raw fractions is what made the first eight presets look
+  stretched. `Grid` holds that arithmetic (the design box, the bottom anchor, the
+  mirroring) and `tools/check_android_java.sh`'s `PadConfigTest` asserts every
+  preset on four window shapes: on screen, at least 16 px, aspect between 0.35
+  and 3.6.
+  A player can also keep an arrangement under a name (`layoutNames()`,
+  `saveLayout()`, `loadLayout()`), pick it from the same chooser, and make one the
+  default (`setDefaultLayout()`), and every game can have its own pad
+  (`forGame(ctx, jar)` / `saveForGame()` - the editor writes the per-jar key when
+  it was opened from a game and the default when it was opened from the library). 经典手机 is the handset the games were
   written for - twelve digits on the left, the eight-way cluster on the right,
   where the diagonals carry the digit codes 1/3/7/9 a second time because that is
   what they are on a phone; the preset list stayed at what a player can tell
@@ -322,6 +335,29 @@ Eleven things in that shell are worth copying, because each one is a rule a plai
   slider - default `PadConfig.opacity = 0.50`, a percentage beside the thumb, and
   the caps preview the game's alpha while the thumb is held, since the editor
   otherwise paints them solid in order to be placeable.
+- **The game's clock is a setting.** `nj_vm_set_speed(vm, percent)` scales the
+  single clock a MIDlet can read (`nj_now_ms`: `Thread.sleep`, `Object.wait`,
+  `java.util.Timer`, the frame pacer), so the panel's 游戏速度 row makes a slow
+  game faster instead of skipping its frames; the pacer divides its wait by the
+  same factor, which is what keeps the emulator from pinning a core at 300%. The
+  Android side never touches the VM from the UI thread: `nativeSetSpeed` leaves a
+  number behind and the port applies it at the top of its next frame.
+  `tests/test_speed.c` drives a port whose clock the test owns and pins the
+  arithmetic, including the two mistakes that look harmless and are not: the
+  clock must not jump when the multiplier changes (every parked deadline would
+  fire at once) and the 64-bit fold must survive the port's 32-bit clock wrapping
+  (the field was 32-bit, so the fold was dead code and the MIDlet's clock jumped
+  backwards every 49.7 days).
+- **A canvas is only a canvas when it is one.** A port measures the box the game
+  actually painted and hands it to the runtime, which snaps it to one of nineteen
+  standard MIDP sizes with a tolerance of `size/16 + 3` px and accepts it only if
+  it is smaller than nine tenths of the window in area
+  (`src/core/nj_detect.c`, `nj_detect_snap`). A 240x305 measurement in a 240x320
+  canvas is a game that did not paint its last fifteen rows, not a 240x305
+  device: without the snap, the picture gets cropped and scaled to a size the
+  title never asked for. `src/port/android/nj_port_android.c` keeps the raw box,
+  refuses to publish anything until the same box has been seen for 300 frames
+  (and gives up after 3000), and lets `nj_detect_snap` decide.
 - **One adjustment page, not two.** `PadEditActivity` is where both the keycaps
   and the picture are placed: an empty-space drag moves the picture, two fingers
   scale it, and 画面 chooses the fit - plus a first-run card that says so, because
