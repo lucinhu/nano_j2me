@@ -110,6 +110,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_util.c
   src/midp/nj_lib_io.c
   src/midp/nj_lib_http.c
+  src/midp/nj_lib_socket.c
   src/midp/nj_lib_sensor.c
   src/midp/nj_lib_lcdui.c
   src/midp/nj_lib_game.c
@@ -405,6 +406,9 @@ if(NJ_BUILD_TESTS)
   add_custom_command(TARGET nj_fixtures POST_BUILD
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_sensor_jar.sh
     COMMENT "JSR 256 sensor fixture")
+  add_custom_command(TARGET nj_fixtures POST_BUILD
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_socket_jar.sh
+    COMMENT "SocketConnection fixture")
   # The TrueType fixtures are hand-built by a script (there is no system font
   # we could legally check in): deterministic, so re-running is a no-op.
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_ttf_fixture.py)
@@ -499,6 +503,17 @@ endif()
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_sensor.sh
                      $<TARGET_FILE:nj2me-cli> ${NJ_FIXTURES}/sensordemo.jar)
     set_tests_properties(check_sensor PROPERTIES TIMEOUT 120)
+  endif()
+
+  # SocketConnection's negative half: the headless port has no socket stack, so
+  # every socket:// open must come back as a ConnectionNotFoundException that
+  # names the build rather than the server.  The positive half needs a live
+  # server and is run on a device (see tools/check_socket.sh).
+  if(EXISTS ${NJ_FIXTURES}/socketdemo.jar)
+    add_test(NAME check_socket
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_socket.sh
+                     $<TARGET_FILE:nj2me-cli> ${NJ_FIXTURES}/socketdemo.jar)
+    set_tests_properties(check_socket PROPERTIES TIMEOUT 120)
   endif()
 
   # What the PORT observed, not what the VM counted: threads, GC, audio and

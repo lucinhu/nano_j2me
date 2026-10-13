@@ -449,6 +449,22 @@ run time is the port's, not the runtime's: on Android the handles are
 MIDlet ends, so a game that leaves a connection open does not leave the
 accelerometer waking the process.
 
+### What the socket package costs
+
+`SocketConnection` is a third of the size of HTTP and, like it, has no switch:
+the four `nj_port.socket_*` hooks are the switch, and a port that leaves them
+NULL gets a refusal by name at no runtime cost. Host `gcc -Os`:
+
+| Translation unit | `.text` | `.rodata` |
+| --- | --- | --- |
+| `nj_lib_socket.o` | 4,397 | 1,340 |
+
+The x86_64 `libnj2me.so` this is linked into is 1,231,256 bytes with
+`--no-midi` (data+bss still 0) and the x86_64 APK built from it is 579,737
+bytes. What a connection costs at run time is the port's again: on Android one
+`java.net.Socket` per open connection, released by the hook when the MIDlet
+closes it, and nothing kept on the C side but an opaque handle.
+
 ### The bug that only running found
 
 The first APK installed, started, and died:

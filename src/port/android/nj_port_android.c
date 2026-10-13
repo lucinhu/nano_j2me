@@ -414,6 +414,23 @@ typedef struct android_state {
     char      sensor_model[NJ_SENSOR_MAX_DESCRIPTORS][48];
     char      sensor_names[NJ_SENSOR_MAX_DESCRIPTORS][NJ_SENSOR_MAX_CHANNELS][16];
     char      sensor_units[NJ_SENSOR_MAX_DESCRIPTORS][NJ_SENSOR_MAX_CHANNELS][16];
+
+    /*
+     * Stream sockets.  PlatformSocket holds one java.net.Socket per open
+     * connection and answers an opaque long, so the runtime never sees a file
+     * descriptor and this port never sees the MIDlet's buffer.  Four of the
+     * corpus titles open one; a port with no socket stack leaves the hooks
+     * NULL and Connector.open() refuses socket:// by name instead.
+     */
+    jclass    socket_class;
+    jmethodID socket_connect_mid;
+    jmethodID socket_address_mid;
+    jmethodID socket_port_mid;
+    jmethodID socket_local_mid;
+    jmethodID socket_local_port_mid;
+    jmethodID socket_read_mid;
+    jmethodID socket_write_mid;
+    jmethodID socket_close_mid;
 } android_state;
 
 #define AS(ud) ((android_state *)(ud))
@@ -3125,6 +3142,211 @@ static void android_sensor_close(void *ud, void *handle)
 }
 
 /* ------------------------------------------------------------------ */
+/* Stream sockets                                                      */
+/* ------------------------------------------------------------------ */
+/*
+ * PlatformSocket does the connecting and hands back an opaque long; what the
+ * runtime gets is a handle it passes to read/write/close and the four strings
+ * and numbers a MIDlet reads back through getAddress()/getPort().  The peer's
+ * address is asked for here rather than read out of the URL because a name
+ * that resolved to an address should answer with the address.
+ */
+static void android_socket_text(JNIEnv *env, jstring js, char *dst, nj_size cap)
+{
+    const char *utf;
+    nj_size n;
+
+    if (!dst || cap == 0u) {
+        return;
+    }
+    dst[0] = '\0';
+    if (!js) {
+        return;
+    }
+    utf = (*env)->GetStringUTFChars(env, js, NULL);
+    if (!utf) {
+        (*env)->ExceptionClear(env);
+        return;
+    }
+    n = (nj_size)strlen(utf);
+    if (n >= cap) {
+        n = cap - 1u;
+    }
+    memcpy(dst, utf, n);
+    dst[n] = '\0';
+    (*env)->ReleaseStringUTFChars(env, js, utf);
+}
+
+static void *android_socket_connect(void *ud, const char *url, nj_u4 timeout_ms,
+                                    nj_socket_info *info, char *err,
+                                    nj_size err_cap)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jstring ju;
+    jstring js;
+    jlong h;
+
+    if (err && err_cap > 0u) {
+        err[0] = '\0';
+    }
+    if (!s || !s->socket_class || !s->socket_connect_mid || !url) {
+        return NULL;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return NULL;
+    }
+    ju = (*env)->NewStringUTF(env, url);
+    if (!ju) {
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
+    h = (*env)->CallStaticLongMethod(env, s->socket_class, s->socket_connect_mid,
+                                     ju, (jint)(timeout_ms ? timeout_ms : 30000u));
+    (*env)->DeleteLocalRef(env, ju);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        h = 0;
+    }
+    if (h == 0) {
+        /* The Java side logs the reason (it has the exception text); what the
+         * MIDlet gets is a sentence that names the connection it asked for. */
+        if (err && err_cap > 0u) {
+            snprintf(err, (size_t)err_cap, "the platform could not open %s", url);
+        }
+        return NULL;
+    }
+
+    if (info) {
+        memset(info, 0, sizeof(*info));
+        js = (jstring)(*env)->CallStaticObjectMethod(env, s->socket_class,
+                                                     s->socket_address_mid, h);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+        android_socket_text(env, js, info->address, (nj_size)sizeof(info->address));
+        if (js) {
+            (*env)->DeleteLocalRef(env, js);
+        }
+        js = (jstring)(*env)->CallStaticObjectMethod(env, s->socket_class,
+                                                     s->socket_local_mid, h);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+        android_socket_text(env, js, info->local_address,
+                            (nj_size)sizeof(info->local_address));
+        if (js) {
+            (*env)->DeleteLocalRef(env, js);
+        }
+        info->port = (int)(*env)->CallStaticIntMethod(env, s->socket_class,
+                                                      s->socket_port_mid, h);
+        info->local_port = (int)(*env)->CallStaticIntMethod(
+            env, s->socket_class, s->socket_local_port_mid, h);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+    }
+    return (void *)(intptr_t)h;
+}
+
+static int android_socket_read(void *ud, void *handle, nj_u1 *buf, int len,
+                               nj_u4 timeout_ms)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jbyteArray ja;
+    jint n;
+
+    if (!s || !s->socket_class || !s->socket_read_mid || !handle || !buf || len <= 0) {
+        return -1;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return -1;
+    }
+    ja = (*env)->NewByteArray(env, (jsize)len);
+    if (!ja) {
+        (*env)->ExceptionClear(env);
+        return -1;
+    }
+    n = (*env)->CallStaticIntMethod(env, s->socket_class, s->socket_read_mid,
+                                    (jlong)(intptr_t)handle, ja, (jint)len,
+                                    (jint)(timeout_ms ? timeout_ms : 30000u));
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteLocalRef(env, ja);
+        return -1;
+    }
+    if (n > 0) {
+        if (n > len) {
+            n = (jint)len;
+        }
+        (*env)->GetByteArrayRegion(env, ja, 0, n, (jbyte *)buf);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            n = -1;
+        }
+    }
+    (*env)->DeleteLocalRef(env, ja);
+    return (int)n;
+}
+
+static int android_socket_write(void *ud, void *handle, const nj_u1 *buf, int len)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jbyteArray ja;
+    jint n;
+
+    if (!s || !s->socket_class || !s->socket_write_mid || !handle || !buf || len <= 0) {
+        return -1;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return -1;
+    }
+    ja = (*env)->NewByteArray(env, (jsize)len);
+    if (!ja) {
+        (*env)->ExceptionClear(env);
+        return -1;
+    }
+    (*env)->SetByteArrayRegion(env, ja, 0, (jsize)len, (const jbyte *)buf);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteLocalRef(env, ja);
+        return -1;
+    }
+    n = (*env)->CallStaticIntMethod(env, s->socket_class, s->socket_write_mid,
+                                    (jlong)(intptr_t)handle, ja, (jint)len);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        n = -1;
+    }
+    (*env)->DeleteLocalRef(env, ja);
+    return (int)n;
+}
+
+static void android_socket_close(void *ud, void *handle)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+
+    if (!s || !s->socket_class || !s->socket_close_mid || !handle) {
+        return;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return;
+    }
+    (*env)->CallStaticVoidMethod(env, s->socket_class, s->socket_close_mid,
+                                 (jlong)(intptr_t)handle);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Construction and the public configuration entry points              */
 /* ------------------------------------------------------------------ */
 /*
@@ -3222,6 +3444,16 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     out->sensor_open = android_sensor_open;
     out->sensor_read = android_sensor_read;
     out->sensor_close = android_sensor_close;
+    /*
+     * Sockets, through java.net.  A missing bridge class leaves these NULL and
+     * Connector.open("socket://...") then refuses by name - the same answer a
+     * desktop build gives, which is what a title that needs the network has to
+     * be able to tell apart from a server that is down.
+     */
+    out->socket_connect = android_socket_connect;
+    out->socket_read = android_socket_read;
+    out->socket_write = android_socket_write;
+    out->socket_close = android_socket_close;
     out->log = android_log;
     out->shutdown = android_shutdown;
     out->fps_cap = 30;
@@ -3771,6 +4003,58 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
         }
     }
 
+    {
+        /*
+         * PlatformSocket.java, for javax.microedition.io.SocketConnection.  It
+         * needs no Context - a TCP socket is not a permission the app asks for
+         * - so a missing class means Connector.open("socket://") refuses by
+         * name, which is the same answer a build without a socket stack gives.
+         */
+        jclass kcls = (*env)->FindClass(env, "com/lucinhu/nj2me/PlatformSocket");
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            kcls = NULL;
+        }
+        if (kcls) {
+            jmethodID kconn = (*env)->GetStaticMethodID(
+                env, kcls, "connect", "(Ljava/lang/String;I)J");
+            jmethodID kaddr = (*env)->GetStaticMethodID(
+                env, kcls, "address", "(J)Ljava/lang/String;");
+            jmethodID kport = (*env)->GetStaticMethodID(env, kcls, "port", "(J)I");
+            jmethodID kladdr = (*env)->GetStaticMethodID(
+                env, kcls, "localAddress", "(J)Ljava/lang/String;");
+            jmethodID klport = (*env)->GetStaticMethodID(
+                env, kcls, "localPort", "(J)I");
+            jmethodID kread = (*env)->GetStaticMethodID(
+                env, kcls, "read", "(J[BII)I");
+            jmethodID kwrite = (*env)->GetStaticMethodID(
+                env, kcls, "write", "(J[BI)I");
+            jmethodID kclose = (*env)->GetStaticMethodID(env, kcls, "close", "(J)V");
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                kconn = NULL;
+            }
+            if (kconn && kaddr && kport && kladdr && klport && kread && kwrite
+                && kclose) {
+                s->socket_class = (jclass)(*env)->NewGlobalRef(env, kcls);
+                s->socket_connect_mid = kconn;
+                s->socket_address_mid = kaddr;
+                s->socket_port_mid = kport;
+                s->socket_local_mid = kladdr;
+                s->socket_local_port_mid = klport;
+                s->socket_read_mid = kread;
+                s->socket_write_mid = kwrite;
+                s->socket_close_mid = kclose;
+            } else {
+                __android_log_print(ANDROID_LOG_WARN, "nj2me",
+                                    "socket: PlatformSocket is present but its "
+                                    "connect API is not; socket:// stays "
+                                    "unavailable for this run");
+            }
+            (*env)->DeleteLocalRef(env, kcls);
+        }
+    }
+
     win = ANativeWindow_fromSurface(env, surface);
     nj_port_android_set_window(&a->port, win);
     if (win) {
@@ -4120,6 +4404,20 @@ Java_com_lucinhu_nj2me_GameActivity_nativeDestroy(JNIEnv *env, jobject thiz,
         s->sensor_open_mid = NULL;
         s->sensor_read_mid = NULL;
         s->sensor_close_mid = NULL;
+    }
+    if (s && s->socket_class) {
+        /* A socket the MIDlet left open is closed by nj_socket_close() on the
+         * object it holds; nothing here keeps a Java-side entry alive. */
+        (*env)->DeleteGlobalRef(env, s->socket_class);
+        s->socket_class = NULL;
+        s->socket_connect_mid = NULL;
+        s->socket_address_mid = NULL;
+        s->socket_port_mid = NULL;
+        s->socket_local_mid = NULL;
+        s->socket_local_port_mid = NULL;
+        s->socket_read_mid = NULL;
+        s->socket_write_mid = NULL;
+        s->socket_close_mid = NULL;
     }
     nj_port_shutdown(&a->port);
     free(a);

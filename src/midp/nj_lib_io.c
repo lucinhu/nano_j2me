@@ -1171,6 +1171,16 @@ NJFN(connector_open)
         ret->r = nj_http_new(vm, u);
         return ret->r ? NJ_OK : NJ_ERR;
     }
+    /*
+     * socket:// is a TCP client connection, and it is real only when the port
+     * has a socket stack: without the hooks the connection is refused here,
+     * with the URL in the message.  No server and no datagram scheme - 0 of
+     * the 436 titles in the corpus use either.
+     */
+    if (strncmp(u, "socket://", 9u) == 0) {
+        ret->r = nj_socket_new(vm, u);
+        return ret->r ? NJ_OK : NJ_ERR;
+    }
     return nj_throw(vm, "javax/microedition/io/ConnectionNotFoundException", u);
 }
 

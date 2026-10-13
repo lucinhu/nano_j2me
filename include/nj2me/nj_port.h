@@ -154,6 +154,24 @@ typedef struct nj_sensor_desc {
     nj_u4       max_rate_hz;  /* 0 when the port does not know               */
 } nj_sensor_desc;
 
+/*
+ * What a connected socket is, as the MIDlet sees it through
+ * SocketConnection: the peer's address and port, and the local ones.
+ *
+ * A port fills this in when it connects.  A port with nothing to report
+ * leaves the strings empty and the ports 0, and the runtime then answers with
+ * the host and port that were asked for rather than with an empty string -
+ * which is the useful answer, and the one a MIDlet that logs its connection
+ * is looking for.  `address` is a name for a TCP peer and a Bluetooth address
+ * for an RFCOMM one; the runtime does not interpret it.
+ */
+typedef struct nj_socket_info {
+    char address[64];
+    char local_address[64];
+    int  port;
+    int  local_port;
+} nj_socket_info;
+
 /* ------------------------------------------------------------------ */
 /* The port vtable                                                     */
 /* ------------------------------------------------------------------ */
@@ -543,6 +561,39 @@ typedef struct nj_port {
     void *(*sensor_open)(void *ud, const char *url, nj_u4 period_ms);
     int   (*sensor_read)(void *ud, void *handle, double *values, int max_values);
     void  (*sensor_close)(void *ud, void *handle);
+
+    /*
+     * Stream sockets, for javax.microedition.io.SocketConnection - and, one
+     * day, for javax.bluetooth's RFCOMM, which is the same byte stream over a
+     * different radio.
+     *
+     *   socket_connect  open a stream to `url` ("socket://host:port", or a
+     *                   "btspp://..." URL if the port has Bluetooth).  Returns
+     *                   a handle, or NULL after writing a sentence into `err`
+     *                   for the MIDlet's ConnectionNotFoundException.
+     *                   `timeout_ms` is how long the caller will wait; 0 means
+     *                   wait indefinitely.
+     *   socket_read     block up to `timeout_ms` for at most `len` bytes:
+     *                   > 0 is that many bytes, 0 is "nothing arrived yet",
+     *                   -1 is "the peer closed".  A port that cannot wait
+     *                   returns 0 immediately and the runtime asks again.
+     *   socket_write    send all of it; < 0 is an error.
+     *   socket_close    hang up and release the handle.  The runtime calls it
+     *                   when the MIDlet closes the connection, and the port's
+     *                   shutdown() has to close whatever is still open.
+     *
+     * A port with no socket stack leaves all four NULL, and Connector.open()
+     * then refuses socket:// BY NAME - "this build has no socket support" -
+     * which is what the specification asks for an unsupported scheme and what
+     * a developer can act on.  There is no server socket and no datagram
+     * hook: 0 of the 436 titles in the test corpus use either.
+     */
+    void *(*socket_connect)(void *ud, const char *url, nj_u4 timeout_ms,
+                            nj_socket_info *info, char *err, nj_size err_cap);
+    int   (*socket_read)(void *ud, void *handle, nj_u1 *buf, int len,
+                         nj_u4 timeout_ms);
+    int   (*socket_write)(void *ud, void *handle, const nj_u1 *buf, int len);
+    void  (*socket_close)(void *ud, void *handle);
 
     int   fps_cap;        /* 0 => uncapped */
     const char *rms_dir;  /* where RecordStore files live (hosted ports) */

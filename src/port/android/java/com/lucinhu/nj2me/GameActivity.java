@@ -176,6 +176,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
          * answers "no sensors", so findSensors() comes back empty instead of
          * the package being reported missing. */
         PlatformSensor.init(getApplicationContext());
+        /* Stream sockets, for SocketConnection.  Optional in the same way:
+         * without it Connector.open("socket://...") refuses by name. */
+        PlatformSocket.init(getApplicationContext());
         /* The Material 3 palette, before the first view is built: the dialogs
          * this screen opens are the framework's, and they have to agree with
          * the colours the library used. */

@@ -666,6 +666,18 @@ CLASSES = {
         "methods": ["java.lang.String getType()", "java.lang.String getEncoding()",
                     "long getLength()"],
     },
+    "javax/microedition/io/SocketConnection": {
+        "interface": True, "extends": "javax.microedition.io.StreamConnection",
+        "constants": {"DELAY": "byte:0", "LINGER": "byte:1", "KEEPALIVE": "byte:2",
+                      "RCVBUF": "byte:3", "SNDBUF": "byte:4"},
+        "methods": [
+            "java.io.InputStream openInputStream()",
+            "java.io.OutputStream openOutputStream()",
+            "java.lang.String getAddress()", "int getPort()",
+            "java.lang.String getLocalAddress()", "int getLocalPort()",
+            "int getSocketOption(byte)", "void setSocketOption(byte, int)",
+        ],
+    },
     "javax/microedition/io/HttpConnection": {
         "interface": True, "extends": "javax.microedition.io.ContentConnection",
         "constants": {"GET": '"GET"', "POST": '"POST"', "HEAD": '"HEAD"'},
@@ -1131,6 +1143,15 @@ def emit(path, name, spec, out_root):
             # it at every use site, so the runtime's field is never read - but
             # the fixture must still compile against the same API a MIDlet sees.
             lines.append("    public static final String %s = %s;\n" % (cname, cval))
+        elif cval.startswith("byte:"):
+            # A TYPED constant.  JSR 118 declares SocketConnection's option ids
+            # as `byte`, and it matters at the use site rather than in the
+            # runtime: javac inlines the value AND its type, so a fixture built
+            # against an `int` KEEPALIVE hands setSocketOption(byte,int) an int
+            # and does not compile - while the same code against the real API
+            # compiles.  The stub has to hold the same type the spec does.
+            lines.append("    public static final byte %s = %s;\n"
+                         % (cname, cval[5:]))
         else:
             lines.append("    public static final int %s = %s;\n" % (cname, cval))
 

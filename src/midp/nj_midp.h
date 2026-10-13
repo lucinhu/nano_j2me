@@ -354,6 +354,23 @@ nj_ref nj_http_new(nj_vm *vm, const char *url);
 nj_status nj_http_late_init(nj_vm *vm);
 
 /*
+ * javax.microedition.io.SocketConnection: the object Connector.open() hands
+ * back for a socket:// URL, already connected.
+ *
+ * The connect happens here rather than on the first read, because that is what
+ * open() means for a socket and because a MIDlet that cannot reach its server
+ * wants to hear about it at the point it asked.  With no socket_connect hook
+ * on the port this returns NULL with a ConnectionNotFoundException whose
+ * message says the build has no sockets, and with one that declines it the
+ * port's own sentence goes to the MIDlet.
+ */
+nj_ref nj_socket_new(nj_vm *vm, const char *url);
+
+/* SocketConnection.DELAY/LINGER/KEEPALIVE/RCVBUF/SNDBUF - the option numbers
+ * are also the indices setSocketOption() checks, so one list seeds both. */
+nj_status nj_socket_late_init(nj_vm *vm);
+
+/*
  * JSR 256 sensors.
  *
  * nj_sensor_frame() is the pump: it reads any connection that has a

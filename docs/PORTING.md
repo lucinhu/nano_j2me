@@ -556,7 +556,6 @@ whatever rate it is given (8 kHz AMR and 44.1 kHz MP3 both go through the same
 resampler), so a decoder's only job is to hand back PCM.
 
 ## Networking: the HTTP hook
-
 `javax.microedition.io.HttpConnection` needs a socket stack, which portable C
 cannot have, so it is one optional field — `http_request` — that does a whole
 request and buffers the whole response:
@@ -594,6 +593,48 @@ is what the first emulator run of the fixture printed — MIDlet URLs predate
 TLS, and no per-host allowlist can be written for software that hard-codes
 hosts from 2005.
 
+## Sockets: the four stream hooks
+
+`javax.microedition.io.SocketConnection` is the other half of "the network",
+and it is four optional fields rather than one, because a socket is a
+connection a MIDlet holds open and reads in pieces:
+
+```c
+void *(*socket_connect)(void *ud, const char *url, nj_u4 timeout_ms,
+                        nj_socket_info *info, char *err, nj_size err_cap);
+int   (*socket_read)(void *ud, void *handle, nj_u1 *buf, int len,
+                     nj_u4 timeout_ms);
+int   (*socket_write)(void *ud, void *handle, const nj_u1 *buf, int len);
+void  (*socket_close)(void *ud, void *handle);
+```
+
+`url` is what the MIDlet passed to `Connector.open()` — `socket://host:port` —
+and `handle` is whatever the port wants it to be: the runtime stores it as an
+opaque value and never dereferences it. `socket_connect` fills in the peer and
+local address/port a MIDlet reads back through `getAddress()`/`getPort()`,
+where a name that resolved to an address should answer with the address; a port
+with nothing to report leaves the fields empty and the runtime answers with the
+host and port from the URL instead.
+
+`socket_read` has three answers that a game can tell apart, and that is the
+point of the split: **> 0** bytes read, **0** nothing arrived within
+`timeout_ms`, **< 0** the peer is gone (the runtime turns `-1` into `read()`
+returning `-1`, and any other negative into an `IOException`). A port whose
+socket API only has "read or fail" must still produce that middle case rather
+than blocking forever — a game loop that polls its lobby every frame is the
+normal shape here. `socket_write` sends all of it or returns negative;
+`socket_close` hangs up and releases the handle, and the runtime calls it
+exactly once per connection.
+
+Leave all four NULL and `socket://` is refused by name —
+`ConnectionNotFoundException: this build has no socket support; the port must
+supply it` — which is what `--port headless` prints for
+`tests/fixtures/socketdemo.jar`, and what `tools/check_socket.sh` asserts in the
+test suite. On Android the four hooks are `PlatformSocket.java` over
+`java.net.Socket`; the positive half of the fixture is run against a host echo
+server (`python3 tools/socket_echo_server.py 8080`, reached from the emulator as
+`10.0.2.2:8080`).
+
 ### Worked example: Android
 
 The Android port fills all of them, and each one is optional — the port still
@@ -607,6 +648,7 @@ builds and runs against an app that has none of the Java classes:
 | `midi_open` … | `MidiPlayer.java` hands the file to the platform's own General MIDI synthesizer (Sonivox, behind `MediaPlayer`) |
 | `http_request` | `PlatformHttp.java` wraps `HttpURLConnection`; the app declares `INTERNET` and permits cleartext, because a MIDlet's URL is `http://` |
 | `sensor_list` … `sensor_close` | `PlatformSensor.java` over `android.hardware.Sensor`: eight Android sensor types are mapped onto the quantities a MIDlet asks for, and every open handle is one registered listener |
+| `socket_connect` … `socket_close` | `PlatformSocket.java` over `java.net.Socket` (TCP_NODELAY on, because a J2ME game sends small messages and waits), with the Java-side id kept in a map and the peer address read back rather than copied from the URL |
 
 `tools/make_platformimg_jar.sh` builds the fixture that holds those hooks to
 account: one MIDlet that feeds the runtime five assets — `pic.bmp`, `pic.webp`,

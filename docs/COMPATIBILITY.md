@@ -102,10 +102,10 @@ ab.run()V pc=11` for 开心农场_240, a loop that sleeps between frames).
 ### Where the collected 395 stand
 
 `NJ_FRAMES=600 NJ_TIMEOUT=25 tools/run_game_corpus.sh` over `tests/games`, with
-the long re-run, the paced re-run and the heap re-run below: **384 passed, 11
-failed**. The sweeps before it were 374/21 (before the pacing retry), 376/19,
-381/14 and now 384/11, and every drop came from a bug the corpus itself pointed
-at rather than from a title being excused.
+the long re-run, the paced re-run and the two heap re-runs below: **386 passed,
+9 failed**. The sweeps before it were 374/21 (before the pacing retry), 376/19,
+381/14, 384/11, 385/10 and now 386/9, and every drop came from a bug the corpus
+itself pointed at rather than from a title being excused.
 
 ### A title is allowed to ask how much memory it has
 
@@ -121,18 +121,25 @@ heap is the faithful run, and the sweep now asks once more with
 nothing. The row says which run the verdict came from: "the picture appeared
 only with a 4 MB heap".
 
+The same question has an opposite answer, and the sweep asks that one too:
+愤怒的小鸟-高清版_2353 dies of `OutOfMemoryError` inside
+`Class.getResourceAsStream` at the default 16 MB — it peaks at 16.5 MB — and runs
+when it is given 32 (`NJ_HEAP_BIG`). That is not a faithful handset either; it is
+the other end of the same range, and the row says which one it took: "the title
+needed a 32 MB heap". The order matters: a title that ran out of heap is asked
+for more room *before* it is asked to manage with less.
+
 This is the same class of finding as the platform string: the runtime is not
 wrong, the title made a decision about its world, and the honest way to run it
 is to give it the world it was written for.
 
-The eleven that remain are each classified, not just counted:
+The nine that remain are each classified, not just counted:
 
 | kind | titles |
 |---|---|
 | a broken JAR (truncated, no end-of-central-directory) | 鲁宾逊漂流记汉化BT版_4677 |
 | a title that refuses a platform string this runtime does not imitate (`--device nokia6230` runs it) | 1945空战英雄_6105 |
-| Java heap genuinely too small for the title at `--heap 16` | 愤怒的小鸟-高清版_2353 |
-| flat under every pace, cause not yet found | 反恐精英2正式版_5836, 灌篮高手-爆发!樱木_7947, 模拟人生2_10762, 实况足球经理2009_10609, 午夜台球圣诞中文版_8677, 仙魔飞行棋_417, 有女倾城破解版_11525, 战争艺术2之全球联盟中文版_1918 |
+| flat under every pace and every heap, cause not yet found | 反恐精英2正式版_5836, 灌篮高手-爆发!樱木_7947, 模拟人生2_10762, 实况足球经理2009_10609, 午夜台球圣诞中文版_8677, 仙魔飞行棋_417, 战争艺术2之全球联盟中文版_1918 |
 
 The most recent fix to come out of this list is a good example of why it is
 worth keeping: 疯狂农场2_2375 showed a black screen with 0 Graphics calls, and
@@ -230,7 +237,7 @@ UTF-8 via `readUTF`/`writeUTF`), `ByteArrayInputStream`,
 
 ### javax.microedition.io
 
-`Connector.open` for `file://` and `http://`/`https://`.
+`Connector.open` for `file://`, `http://`/`https://` and `socket://`.
 
 `HttpConnection` is complete for what a MIDlet uses: the URL accessors,
 `setRequestMethod`/`getRequestMethod`, `setRequestProperty`/`getRequestProperty`,
@@ -251,9 +258,23 @@ and the app declares `INTERNET` plus a cleartext-permitted network security
 config (MIDlet URLs predate TLS, and a per-host allowlist cannot be written
 for software that hard-codes hosts from 2005).
 
-Sockets, datagrams, server sockets, OBEX and the push registry are **not**
-implemented: `Connector.open` raises `ConnectionNotFoundException` naming the
-scheme.
+`SocketConnection` is implemented for TCP, on four more port hooks
+(`socket_connect/read/write/close`): `getAddress`, `getPort`,
+`getLocalAddress`, `getLocalPort`, `openInputStream`/`openOutputStream` (and the
+`Data*` wrappers), `getSocketOption`/`setSocketOption` for the five option ids
+(this runtime remembers what was set and answers `-1` for an option no MIDlet
+has asked for, rather than inventing a socket-level default), and `close`.
+`setSocketOption` is registered under both `(BI)V` - the descriptor JSR 118
+declares - and `(II)V`, because a title compiled against a stub that typed the
+option id as an `int` exists in the corpus. Four of the 436 titles in
+`tests/games` open a socket; an end of stream reaches `read()` as `-1`, and a
+read that times out is not an end. With no hooks the URL is refused by name
+(`this build has no socket support; the port must supply it`), which is what
+the desktop build does and what `tools/check_socket.sh` asserts.
+
+Datagrams, server sockets, OBEX, the push registry and JSR 82 Bluetooth are
+**not** implemented: `Connector.open` raises `ConnectionNotFoundException`
+naming the scheme.
 
 ### javax.microedition.lcdui
 
