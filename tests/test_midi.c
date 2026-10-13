@@ -336,6 +336,60 @@ static nj_u8 pcm_hf(const nj_u1 *pcm, nj_u4 frames, nj_u4 from, nj_u4 to)
     return (n == 0u) ? 0u : isqrt64(sumsq / n);
 }
 
+/*
+ * A file with one short note, a long rest, and a second note at the end.  The
+ * rest is what an injected event has to be measured against: the renderer's
+ * length is driven by the notes, so a file that merely ends with a long rest
+ * is over, while a file whose next note is four seconds away is still playing
+ * and silent at the point the test seeks to.  (Seeking past the end leaves
+ * nothing to pull, and a test that reads a buffer the renderer never filled
+ * measures the buffer, not the renderer.)
+ */
+static nj_u4 build_gap(nj_u1 *out)
+{
+    static const nj_u1 hdr[14] = { 'M','T','h','d',0,0,0,6,0,0,0,1,1,0xE0 };
+    nj_u4 n = 0u;
+    nj_u4 len = 7u + 4u + 4u + 4u + 4u + 4u;
+
+    memcpy(out, hdr, sizeof(hdr));
+    n = sizeof(hdr);
+    memcpy(out + n, "MTrk", 4u);
+    n += 4u;
+    out[n++] = (nj_u1)((len >> 24) & 0xFFu);
+    out[n++] = (nj_u1)((len >> 16) & 0xFFu);
+    out[n++] = (nj_u1)((len >> 8) & 0xFFu);
+    out[n++] = (nj_u1)(len & 0xFFu);
+    out[n++] = 0x00u;                   /* tempo: 500000 us per quarter */
+    out[n++] = 0xFFu;
+    out[n++] = 0x51u;
+    out[n++] = 0x03u;
+    out[n++] = 0x07u;
+    out[n++] = 0xA1u;
+    out[n++] = 0x20u;
+    out[n++] = 0x00u;                   /* note on at tick 0 */
+    out[n++] = 0x90u;
+    out[n++] = 0x45u;
+    out[n++] = 0x64u;
+    out[n++] = 0x60u;                   /* off 96 ticks later (0.1 s) */
+    out[n++] = 0x80u;
+    out[n++] = 0x45u;
+    out[n++] = 0x40u;
+    out[n++] = 0x9Eu;                   /* rest of 3904 ticks (4.1 s) */
+    out[n++] = 0x40u;
+    out[n++] = 0x90u;                   /* second note at tick 4000 */
+    out[n++] = 0x45u;
+    out[n++] = 0x64u;
+    out[n++] = 0x60u;
+    out[n++] = 0x80u;
+    out[n++] = 0x45u;
+    out[n++] = 0x40u;
+    out[n++] = 0x00u;                   /* end of track */
+    out[n++] = 0xFFu;
+    out[n++] = 0x2Fu;
+    out[n++] = 0x00u;
+    return n;
+}
+
 static nj_u4 build_track(nj_u1 *out, const nj_u1 *body, nj_u4 blen);
 
 /* A sample of one channel of an interleaved buffer. */
@@ -1531,6 +1585,130 @@ int main(void)
                 }
             }
             nj_midi_stream_close(s);
+        }
+    }
+
+    /*
+     * MIDIControl.  A title reaches the song through the Player, so an event
+     * sent that way has to reach the renderer and change what is heard - the
+     * calls are useless if they only move a number in a Java object.
+     */
+    {
+        nj_u1 file[512];
+        nj_u4 n = build_voiced(file, NULL, 0u, 0u, 69u);
+        struct nj_midi_stream *s = nj_midi_stream_open(file, n, &MEM);
+        nj_u1 buf[8192];
+        nj_u4 chans = 1u;
+
+        check(s != NULL, "a stream opens for the control test");
+        if (s != NULL) {
+            nj_u8 loud = 0u;
+            nj_u8 quiet = 0u;
+            int bank = -1;
+            int prog = -1;
+            int vol = -1;
+
+            chans = nj_midi_stream_channels(s);
+            nj_midi_stream_pull(s, buf, 512u);        /* the note is sounding */
+            loud = pcm_rms_ch(buf, 512u, chans, 0u, 0u, 512u);
+            nj_midi_stream_event(s, 0xB0, 7, 10);     /* CC7 = 10 of 127 */
+            nj_midi_stream_pull(s, buf, 512u);
+            quiet = pcm_rms_ch(buf, 512u, chans, 0u, 0u, 512u);
+            check(loud > 0u && quiet * 2u < loud,
+                  "setChannelVolume turns a note that is already sounding down");
+            if (!(loud > 0u && quiet * 2u < loud)) {
+                printf("     volume: loud %u, quiet %u\n",
+                       (unsigned)loud, (unsigned)quiet);
+            }
+            check(nj_midi_stream_channel_state(s, 0, &bank, &prog, &vol) != 0
+                      && vol == 10,
+                  "the channel reports the volume that was set");
+            nj_midi_stream_event(s, 0xC0, 40, 0);     /* program change */
+            check(nj_midi_stream_channel_state(s, 0, NULL, &prog, NULL) != 0
+                      && prog == 40,
+                  "a program change is remembered");
+            nj_midi_stream_close(s);
+        }
+    }
+    {
+        /*
+         * Two streams from the same point in a song that is still playing but
+         * silent there, one of them sent a note: only the one that was sent a
+         * note may make a sound.
+         */
+        nj_u1 file[512];
+        nj_u4 n = build_gap(file);
+        struct nj_midi_stream *a = nj_midi_stream_open(file, n, &MEM);
+        struct nj_midi_stream *b = nj_midi_stream_open(file, n, &MEM);
+        nj_u1 buf[8192];
+        nj_u4 chans = 1u;
+
+        if (a != NULL && b != NULL) {
+            nj_u8 plain = 0u;
+            nj_u8 extra = 0u;
+            nj_u4 gota;
+            nj_u4 gotb;
+
+            chans = nj_midi_stream_channels(a);
+            nj_midi_stream_seek(a, NJ_MIDI_RATE * 3u);
+            nj_midi_stream_seek(b, NJ_MIDI_RATE * 3u);
+            nj_midi_stream_event(b, 0x90, 60, 100);   /* note on */
+            gota = nj_midi_stream_pull(a, buf, 512u);
+            plain = pcm_rms_ch(buf, gota, chans, 0u, 0u, gota);
+            gotb = nj_midi_stream_pull(b, buf, 512u);
+            extra = pcm_rms_ch(buf, gotb, chans, 0u, 0u, gotb);
+            check(gota == 512u && gotb == 512u && plain == 0u && extra > 0u,
+                  "a note sent with shortMidiEvent is heard");
+            if (!(gota == 512u && gotb == 512u && plain == 0u && extra > 0u)) {
+                printf("     injected note: %u/%u frames, plain %u, with note %u\n",
+                       (unsigned)gota, (unsigned)gotb,
+                       (unsigned)plain, (unsigned)extra);
+            }
+        }
+        if (a != NULL) {
+            nj_midi_stream_close(a);
+        }
+        if (b != NULL) {
+            nj_midi_stream_close(b);
+        }
+    }
+    {
+        /* The byte form: one complete event, delta time included. */
+        nj_u1 file[512];
+        nj_u4 n = build_gap(file);
+        struct nj_midi_stream *a = nj_midi_stream_open(file, n, &MEM);
+        struct nj_midi_stream *b = nj_midi_stream_open(file, n, &MEM);
+        nj_u1 buf[8192];
+        static const nj_u1 msg[4] = { 0x00u, 0x90u, 64u, 100u };
+        nj_u4 chans = 1u;
+
+        if (a != NULL && b != NULL) {
+            nj_u8 plain = 0u;
+            nj_u8 extra = 0u;
+            nj_u4 gota;
+            nj_u4 gotb;
+            int took;
+
+            chans = nj_midi_stream_channels(a);
+            nj_midi_stream_seek(a, NJ_MIDI_RATE * 3u);
+            nj_midi_stream_seek(b, NJ_MIDI_RATE * 3u);
+            took = nj_midi_stream_events(b, msg, 4u);
+            gota = nj_midi_stream_pull(a, buf, 512u);
+            plain = pcm_rms_ch(buf, gota, chans, 0u, 0u, gota);
+            gotb = nj_midi_stream_pull(b, buf, 512u);
+            extra = pcm_rms_ch(buf, gotb, chans, 0u, 0u, gotb);
+            check(took == 1 && plain == 0u && extra > 0u,
+                  "longMidiEvent takes a Standard MIDI File event");
+            if (!(took == 1 && plain == 0u && extra > 0u)) {
+                printf("     long event: took %d, plain %u, with event %u\n",
+                       took, (unsigned)plain, (unsigned)extra);
+            }
+        }
+        if (a != NULL) {
+            nj_midi_stream_close(a);
+        }
+        if (b != NULL) {
+            nj_midi_stream_close(b);
         }
     }
 

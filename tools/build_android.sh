@@ -2,7 +2,7 @@
 #
 # Build libnj2me.so with the Android NDK, for every ABI the SDK ships.
 #
-#     tools/build_android.sh [--abi arm64-v8a] [--api 21] [--out DIR]
+#     tools/build_android.sh [--abi arm64-v8a] [--api 21] [--out DIR] [--no-midi]
 #
 # This is a REAL cross-build with the real NDK toolchain, not a stub-header
 # compile: nj_port_android.c includes <jni.h>, exports the JNI entry points
@@ -23,6 +23,7 @@ API=21
 OUT="${NJ_ANDROID_OUT:-$ROOT/build/android}"
 ABIS="arm64-v8a armeabi-v7a x86 x86_64"
 SCREEN=""     # e.g. 176x208; empty leaves the runtime's default (240x320)
+NO_MIDI=0     # 1 drops the built-in MIDI renderer (see --no-midi below)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -30,6 +31,7 @@ while [ $# -gt 0 ]; do
         --api)  API="$2"; shift 2 ;;
         --out)  OUT="$2"; shift 2 ;;
         --screen) SCREEN="$2"; shift 2 ;;
+        --no-midi) NO_MIDI=1; shift ;;
         -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
@@ -107,6 +109,17 @@ FEATURE_DEFS="-DNJ_PIXFMT=NJ_PIXFMT_RGB565 \
 -DNJ_ENABLE_PNG=1 -DNJ_ENABLE_JPEG=1 -DNJ_ENABLE_RMS=1 -DNJ_ENABLE_IO=1 \
 -DNJ_ENABLE_FLOAT=1 -DNJ_ENABLE_M3G=1 -DNJ_ENABLE_MASCOT=1 -DNJ_ENABLE_TTF=1 \
 -DNJ_ENABLE_FONT_CJK=0"
+
+# --no-midi: drop the built-in MIDI renderer (src/midp/nj_midi.c, ~11 KB of
+# text per ABI).  Android plays .mid through the platform's own Sonivox synth
+# via MediaPlayer, so the renderer is not what makes music audible here - it is
+# kept by default for two reasons: it is the fallback for a file the platform
+# refuses, and it is the only synthesizer MIDIControl can drive (MediaPlayer
+# cannot be sent single note events).  A build for a platform whose synth does
+# accept them, or one that wants the last few kilobytes, turns it off.
+if [ "$NO_MIDI" = "1" ]; then
+    FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_MIDI=0"
+fi
 
 fail=0
 for abi in $ABIS; do

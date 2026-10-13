@@ -49,6 +49,8 @@
 #  include <string.h>
 #endif
 
+#if NJ_ENABLE_MIDI
+
 /* A minute of music.  Beyond that a title is looping, and the loop is better
  * served by the Player's own repeat than by a longer buffer. */
 
@@ -109,6 +111,20 @@
 #define MID_CTL_REVERB 4u           /* CC91: how much of the note goes to the room */
 #define MID_CTL_PAN   5u            /* CC10: where the note sits between the speakers */
 #define MID_CTL_CHORUS 6u           /* CC93: how much of the note goes to the chorus */
+/*
+ * The four below only move the renderer's idea of where the channel is, so
+ * that a note injected later (MIDIControl) is built the way the file's own
+ * notes were at that point.  A file's CC7/CC11 is not applied to notes that
+ * are already sounding - the gain was folded in when the note started, and
+ * changing that would alter every song that fades with a controller.  A
+ * MIDIControl call, which is a live instruction, scales what is sounding at
+ * the moment it is made (see nj_midi_stream_event) and then moves the same
+ * value, so both paths end up with the same state.
+ */
+#define MID_CTL_VOL   7u            /* CC7: the channel's volume from here on */
+#define MID_CTL_EXPR  8u            /* CC11: its expression from here on */
+#define MID_CTL_PROG  9u            /* program change: which timbre from here on */
+#define MID_CTL_BANK  10u           /* CC0: the bank select MSB */
 
 /* Pitch bend: 14 bits, 8192 is no bend. */
 #define MID_BEND_CENTRE 8192u
@@ -568,6 +584,10 @@ static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
             }
             if (hi == 0xC0u) {          /* program change: one data byte */
                 s->program[chan] = d1 & 0x7Fu;
+                if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_PROG,
+                                 d1 & 0x7Fu)) {
+                    return;
+                }
                 continue;
             }
             if (hi == 0xD0u) {
@@ -587,8 +607,18 @@ static void mid_track(mid_song *s, const nj_midi_mem *mem, mid_rd *r, nj_u4 len)
                 nj_u4 val = d2 & 0x7Fu;
                 if (cc == 7u) {
                     s->volume[chan] = val;
+                    if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_VOL, val)) {
+                        return;
+                    }
                 } else if (cc == 11u) {
                     s->expr[chan] = val;
+                    if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_EXPR, val)) {
+                        return;
+                    }
+                } else if (cc == 0u) {          /* bank select MSB */
+                    if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_BANK, val)) {
+                        return;
+                    }
                 } else if (cc == 64u) {         /* sustain pedal */
                     s->pedal[chan] = (val >= 64u) ? 1u : 0u;
                     if (!mid_add_ctl(s, mem, tick, chan, MID_CTL_PEDAL, val)) {
@@ -747,12 +777,15 @@ typedef struct {
     nj_u4 pitch_left;           /* samples of fall left (0 = at the note) */
     nj_u4 lfo;                  /* vibrato phase, 32 bits */
     nj_u4 mod;                  /* vibrato depth, Q16, from the channel */
-    nj_u4 rev;                  /* CC91 send, 0..127, from the channel */
-    nj_u4 chor;                 /* CC93 send, 0..127, from the channel */
+    nj_u4 rev;                  /* CC91 send, Q15, from the channel */
+    nj_u4 chor;                 /* CC93 send, Q15, from the channel */
     nj_u1 wave;
     nj_u1 tone;                 /* MID_W_DRUM: the tone's share */
-    nj_u1 filt;                 /* low pass divisor: small = bright */
-    nj_u1 gl, gr;               /* CC10 gains, 127 = full */
+    nj_u4 filt_recip;           /* Q16 reciprocal of the low pass divisor:
+                                 * one multiply per sample instead of a
+                                 * division, which on a part without a
+                                 * hardware divider is most of the mixer */
+    nj_u4 gl, gr;               /* CC10 gains, Q15, 32768 = full */
     nj_u4 phase;                /* 32-bit phase accumulator */
     nj_u4 step;                 /* phase increment per sample */
     nj_u4 noise;                /* linear feedback shift register, for noise */
@@ -932,18 +965,28 @@ static void mid_sort_ctls(mid_song *s)
  * taper is linear, so a centred voice is louder than a hard-panned one - which
  * is what the phone synths did as well, and it keeps a file that pans one
  * instrument from going quiet.
+ *
+ * The gains come back in Q15 (32768 = full) rather than as 0..127, because
+ * that is how the mixer uses them: a voice is multiplied by its gain once per
+ * sample, and a division by 127 there costs more than the whole oscillator.
+ * mid_q15() is the one place the conversion happens.
  */
-static void mid_pan_gains(nj_u4 pan, nj_u1 *gl, nj_u1 *gr)
+static nj_u4 mid_q15(nj_u4 v)
+{
+    return (v * 32768u) / 127u;
+}
+
+static void mid_pan_gains(nj_u4 pan, nj_u4 *gl, nj_u4 *gr)
 {
     if (pan > 127u) {
         pan = 127u;
     }
     if (pan <= 64u) {
-        *gl = 127u;
-        *gr = (nj_u1)(pan * 2u);
+        *gl = mid_q15(127u);
+        *gr = mid_q15(pan * 2u);
     } else {
-        *gl = (nj_u1)((127u - pan) * 2u);
-        *gr = 127u;
+        *gl = mid_q15((127u - pan) * 2u);
+        *gr = mid_q15(127u);
     }
 }
 
@@ -978,6 +1021,18 @@ typedef struct nj_midi_stream {
     nj_u4 chor_pos;
     nj_u4 chor_phase;
     nj_u4 chor_any;
+    /*
+     * Where the renderer has got to, and the channel state in force there.
+     * A note the file parsed carries the state that was in force at its own
+     * tick, folded in at parse time; a note injected while the song plays
+     * (MIDIControl.shortMidiEvent) has no such tick, so it is built from
+     * these, which the controller events above keep up to date.
+     */
+    nj_u4 tick_now;
+    nj_u4 vol_now[16];
+    nj_u4 expr_now[16];
+    nj_u4 prog_now[16];
+    nj_u4 bank_now[16];
     /*
      * The allocator is held BY VALUE: the caller's nj_midi_mem is usually a
      * local in the branch that opened the stream, and a pointer to it dangles
@@ -1183,6 +1238,21 @@ static int mid_stream_init(nj_midi_stream *s, const void *data, nj_u4 size,
     memset(s->voices, 0, sizeof(s->voices));
 
     /*
+     * The state a note injected before the first event is built from: the
+     * General MIDI defaults, exactly what a file that sets nothing gets.
+     */
+    {
+        nj_u4 c;
+        for (c = 0u; c < 16u; c++) {
+            s->vol_now[c] = 100u;
+            s->expr_now[c] = 127u;
+            s->prog_now[c] = 0u;
+            s->bank_now[c] = 0u;
+        }
+    }
+    s->tick_now = 0u;
+
+    /*
      * Play the events as they arrive: a voice is taken when its note starts
      * and given back when the note ends.
      *
@@ -1205,6 +1275,31 @@ nj_u4 nj_midi_stream_channels(const nj_midi_stream *s)
 nj_u4 nj_midi_stream_frames(const nj_midi_stream *s)
 {
     return (s == NULL) ? 0u : s->frames;
+}
+
+/*
+ * Scale what a channel already has sounding.  A controller event from the file
+ * is not applied this way (its value is folded into each note when the note
+ * starts, and every song that fades with CC7 would otherwise change); this is
+ * for MIDIControl.setChannelVolume(), which is a live instruction.
+ */
+static void mid_rescale_chan(nj_midi_stream *s, nj_u4 ch, nj_u4 oldv, nj_u4 newv)
+{
+    nj_u4 v;
+
+    if (oldv == 0u || oldv == newv) {
+        return;
+    }
+    for (v = 0u; v < NJ_MIDI_VOICES; v++) {
+        if (s->voices[v].active && s->voices[v].chan == ch) {
+            s->voices[v].amp = (nj_s4)((nj_s8)s->voices[v].amp
+                                       * (nj_s8)newv / (nj_s8)oldv);
+            s->voices[v].amp0 = (nj_s4)((nj_s8)s->voices[v].amp0
+                                        * (nj_s8)newv / (nj_s8)oldv);
+            s->voices[v].sustain = (nj_s4)((nj_s8)s->voices[v].sustain
+                                           * (nj_s8)newv / (nj_s8)oldv);
+        }
+    }
 }
 
 /*
@@ -1246,6 +1341,7 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
             nj_u4 ch = s->song.ctls[s->cev].chan;
             nj_u4 kind = s->song.ctls[s->cev].kind;
 
+            s->tick_now = s->song.ctls[s->cev].tick;
             if (kind == MID_CTL_BEND) {
                 s->bend_now[ch] = s->song.ctls[s->cev].a;
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
@@ -1272,14 +1368,14 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
                 s->rev_now[ch] = s->song.ctls[s->cev].a;
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
                     if (s->voices[v].active && s->voices[v].chan == ch) {
-                        s->voices[v].rev = s->rev_now[ch];
+                        s->voices[v].rev = mid_q15(s->rev_now[ch]);
                     }
                 }
             } else if (kind == MID_CTL_CHORUS) {
                 s->chorus_now[ch] = s->song.ctls[s->cev].a;
                 for (v = 0u; v < NJ_MIDI_VOICES; v++) {
                     if (s->voices[v].active && s->voices[v].chan == ch) {
-                        s->voices[v].chor = s->chorus_now[ch];
+                        s->voices[v].chor = mid_q15(s->chorus_now[ch]);
                     }
                 }
             } else if (kind == MID_CTL_RANGE) {
@@ -1289,6 +1385,14 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
                         mid_apply_pitch(&s->voices[v], s->bend_now[ch], s->range_now[ch]);
                     }
                 }
+            } else if (kind == MID_CTL_VOL) {
+                s->vol_now[ch] = s->song.ctls[s->cev].a;
+            } else if (kind == MID_CTL_EXPR) {
+                s->expr_now[ch] = s->song.ctls[s->cev].a;
+            } else if (kind == MID_CTL_PROG) {
+                s->prog_now[ch] = s->song.ctls[s->cev].a;
+            } else if (kind == MID_CTL_BANK) {
+                s->bank_now[ch] = s->song.ctls[s->cev].a;
             } else if (s->song.ctls[s->cev].a >= 64u) {
                 s->pedal_now[ch] = 1;
             } else {
@@ -1309,6 +1413,7 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
 
         while (s->ev < s->song.nnotes
                && mid_sample_at(&s->song, s->song.notes[s->ev].tick) <= i) {
+            s->tick_now = s->song.notes[s->ev].tick;
             if (s->song.notes[s->ev].on) {
                 /* A voice whose note has ended is free again.  The short guard
                  * leaves room for the release tail, so a reused voice does not
@@ -1362,7 +1467,7 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
                  * brighter the harder it is played; velocity 100 keeps the
                  * divisor this voice used before the filter followed it.
                  */
-                s->voices[v].filt = (nj_u1)(1u
+                s->voices[v].filt_recip = 65536u / (nj_u4)(1u
                     + (127u - s->song.notes[s->ev].velocity) * 7u / 127u);
                 s->voices[v].phase = 0u;
                 s->voices[v].note_step = mid_step_for(s->song.notes[s->ev].note);
@@ -1437,8 +1542,9 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
                 if (s->voices[v].release == 0u) {
                     s->voices[v].release = NJ_MIDI_RATE / 125u;
                 }
-                s->voices[v].rev = s->rev_now[s->song.notes[s->ev].chan];
-                s->voices[v].chor = s->chorus_now[s->song.notes[s->ev].chan];
+                s->voices[v].rev = mid_q15(s->rev_now[s->song.notes[s->ev].chan]);
+                s->voices[v].chor =
+                    mid_q15(s->chorus_now[s->song.notes[s->ev].chan]);
                 mid_pan_gains(s->pan_now[s->song.notes[s->ev].chan], &s->voices[v].gl,
                               &s->voices[v].gr);
                 s->voices[v].lfo = 0u;
@@ -1574,19 +1680,21 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
                 if (s->voices[v].wave != MID_W_SQUARE) {
                     raw = raw * amp / 32768;    /* scale to this note's level */
                 }
-                s->voices[v].lp += (raw - s->voices[v].lp) / (nj_s4)s->voices[v].filt;
+                s->voices[v].lp += ((raw - s->voices[v].lp)
+                                    * (nj_s4)s->voices[v].filt_recip) >> 16;
                 /*
                  * A mono file has both gains at full, so this is the same sum
                  * it always was; a file that pans puts each voice where it
-                 * asked to be.
+                 * asked to be.  The gains are Q15, so the shift replaces the
+                 * division by 127 the mixer used to do four times a sample.
                  */
-                mixL += s->voices[v].lp * (nj_s4)s->voices[v].gl / 127;
-                mixR += s->voices[v].lp * (nj_s4)s->voices[v].gr / 127;
+                mixL += (s->voices[v].lp * (nj_s4)s->voices[v].gl) >> 15;
+                mixR += (s->voices[v].lp * (nj_s4)s->voices[v].gr) >> 15;
                 if (s->voices[v].rev != 0u) {
-                    bus += s->voices[v].lp * (nj_s4)s->voices[v].rev / 127;
+                    bus += (s->voices[v].lp * (nj_s4)s->voices[v].rev) >> 15;
                 }
                 if (s->voices[v].chor != 0u) {
-                    cbus += s->voices[v].lp * (nj_s4)s->voices[v].chor / 127;
+                    cbus += (s->voices[v].lp * (nj_s4)s->voices[v].chor) >> 15;
                 }
             }
         }
@@ -1810,3 +1918,272 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
 {
     return nj_midi_render_ex(data, size, frames_out, NULL, mem);
 }
+
+/* ------------------------------------------------------------------ */
+/* Events sent while the song plays (MIDIControl)                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The renderer walks the note and controller lists with a cursor, so an event
+ * that has to be heard NOW cannot simply be appended: everything behind the
+ * cursor has already been played.  mid_add_note()/mid_add_ctl() append, and
+ * these two put the element they appended in front of the cursor instead.
+ *
+ * The lists are sorted by tick and every event still ahead has a tick at or
+ * after the renderer's, so this is an insert at the first position that is
+ * still in the future - which also keeps several events sent in one burst in
+ * the order they were sent.
+ */
+static void mid_insert_note(nj_midi_stream *s, nj_u4 at)
+{
+    mid_note tmp;
+    nj_u4 last = s->song.nnotes - 1u;
+
+    if (at >= last) {
+        return;                     /* already where it belongs */
+    }
+    tmp = s->song.notes[last];
+    memmove(&s->song.notes[at + 1u], &s->song.notes[at],
+            (nj_size)(last - at) * sizeof(mid_note));
+    s->song.notes[at] = tmp;
+}
+
+static void mid_insert_ctl(nj_midi_stream *s, nj_u4 at)
+{
+    mid_ctl tmp;
+    nj_u4 last = s->song.nctls - 1u;
+
+    if (at >= last) {
+        return;
+    }
+    tmp = s->song.ctls[last];
+    memmove(&s->song.ctls[at + 1u], &s->song.ctls[at],
+            (nj_size)(last - at) * sizeof(mid_ctl));
+    s->song.ctls[at] = tmp;
+}
+
+static void mid_inject_ctl(nj_midi_stream *s, nj_u4 chan, nj_u4 kind, nj_u4 a)
+{
+    nj_u4 at;
+
+    if (!mid_add_ctl(&s->song, &s->mem, s->tick_now, chan, kind, a)) {
+        return;
+    }
+    at = s->cev;
+    while (at < s->song.nctls - 1u && s->song.ctls[at].tick <= s->tick_now) {
+        at++;
+    }
+    mid_insert_ctl(s, at);
+}
+
+/*
+ * A note sent by the MIDlet: built exactly like the file's own notes, from the
+ * channel state in force at this moment (the renderer's, not the end of the
+ * file's), and dropped when the note list is full - the same answer the parser
+ * gives a file with more events than NJ_MIDI_MAX_EVENTS.
+ */
+static void mid_inject_note(nj_midi_stream *s, nj_u4 note, nj_u4 vel, int on,
+                            nj_u4 chan)
+{
+    mid_timbre t = mid_timbres[0];      /* every field set */
+    nj_u4 gain = 0u;
+    nj_u4 at;
+
+    if (on) {
+        if (chan == MID_CHANNEL_DRUMS) {
+            mid_drum(note, &t);
+        } else {
+            t = mid_timbres[(s->prog_now[chan] & 0x7Fu) / 8u];
+            mid_program_timbre(s->prog_now[chan] & 0x7Fu, &t);
+        }
+        gain = (s->vol_now[chan] & 0x7Fu) * (s->expr_now[chan] & 0x7Fu) / 127u;
+    }
+    if (!mid_add_note(&s->song, &s->mem, s->tick_now, note, vel, on,
+                      on ? &t : NULL, gain, chan)) {
+        return;
+    }
+    at = s->ev;
+    while (at < s->song.nnotes - 1u && s->song.notes[at].tick <= s->tick_now) {
+        at++;
+    }
+    mid_insert_note(s, at);
+}
+
+/*
+ * One MIDI channel message, as MIDIControl.shortMidiEvent() takes it: the
+ * status byte (0x90 | channel for a note on, and so on) and its two data
+ * bytes.  Only the messages this renderer understands do anything; the rest
+ * are ignored, the way the file parser ignores them.
+ */
+void nj_midi_stream_event(nj_midi_stream *s, int status, int d1, int d2)
+{
+    nj_u4 hi;
+    nj_u4 chan;
+    nj_u4 a;
+    nj_u4 b;
+
+    if (s == NULL || status < 0 || status > 255) {
+        return;
+    }
+    hi = (nj_u4)status & 0xF0u;
+    chan = (nj_u4)status & 0x0Fu;
+    a = (nj_u4)d1 & 0x7Fu;
+    b = (nj_u4)d2 & 0x7Fu;
+
+    if (hi == 0x90u && b != 0u) {
+        mid_inject_note(s, a, b, 1, chan);
+    } else if (hi == 0x80u || hi == 0x90u) {
+        mid_inject_note(s, a, 0u, 0, chan);
+    } else if (hi == 0xC0u) {           /* program change */
+        s->prog_now[chan] = a;
+        mid_inject_ctl(s, chan, MID_CTL_PROG, a);
+    } else if (hi == 0xE0u) {           /* pitch bend, 14 bits */
+        mid_inject_ctl(s, chan, MID_CTL_BEND, (b << 7) | a);
+    } else if (hi == 0xB0u) {           /* control change */
+        if (a == 7u) {
+            /*
+             * Volume is the one controller a MIDlet sets expecting to hear the
+             * difference immediately (MIDIControl.setChannelVolume), so the
+             * notes the channel already has sounding are scaled here, at the
+             * moment of the call, and the value then moves with the event.
+             */
+            mid_rescale_chan(s, chan, s->vol_now[chan], b);
+            s->vol_now[chan] = b;
+            mid_inject_ctl(s, chan, MID_CTL_VOL, b);
+        } else if (a == 11u) {
+            mid_rescale_chan(s, chan, s->expr_now[chan], b);
+            s->expr_now[chan] = b;
+            mid_inject_ctl(s, chan, MID_CTL_EXPR, b);
+        } else if (a == 0u) {           /* bank select MSB */
+            s->bank_now[chan] = b;
+            mid_inject_ctl(s, chan, MID_CTL_BANK, b);
+        } else if (a == 64u) {
+            mid_inject_ctl(s, chan, MID_CTL_PEDAL, b);
+        } else if (a == 1u) {
+            mid_inject_ctl(s, chan, MID_CTL_MOD, b);
+        } else if (a == 91u) {
+            mid_inject_ctl(s, chan, MID_CTL_REVERB, b);
+        } else if (a == 93u) {
+            mid_inject_ctl(s, chan, MID_CTL_CHORUS, b);
+        } else if (a == 10u) {
+            mid_inject_ctl(s, chan, MID_CTL_PAN, b);
+        }
+    }
+}
+
+/*
+ * A whole Standard MIDI File's worth of bytes, as
+ * MIDIControl.longMidiEvent() takes them: the same walk the file parser does,
+ * with every channel message handed to nj_midi_stream_event().  The deltas are
+ * read (the stream has to stay in step) and then ignored - these events land
+ * where the song is now, which is the only place a live event can land.
+ * Returns how many messages were applied.
+ */
+int nj_midi_stream_events(nj_midi_stream *s, const nj_u1 *data, nj_u4 len)
+{
+    mid_rd r;
+    nj_u4 status = 0u;
+    int n = 0;
+
+    if (s == NULL || data == NULL || len == 0u) {
+        return 0;
+    }
+    r.p = data;
+    r.n = len;
+    r.i = 0u;
+
+    while (r.i < r.n) {
+        nj_u4 delta;
+        nj_u4 b;
+        nj_u4 hi;
+
+        if (!mid_vlq(&r, &delta)) {
+            break;
+        }
+        (void)delta;
+        if (!mid_u8(&r, &b)) {
+            break;
+        }
+        if (b == 0xFFu) {               /* meta: length, then the bytes */
+            nj_u4 type;
+            nj_u4 mlen;
+            if (!mid_u8(&r, &type) || !mid_vlq(&r, &mlen)
+                || !mid_skip(&r, mlen)) {
+                break;
+            }
+            status = 0u;
+            continue;
+        }
+        if (b == 0xF0u || b == 0xF7u) { /* sysex: length, then the bytes */
+            nj_u4 mlen;
+            if (!mid_vlq(&r, &mlen) || !mid_skip(&r, mlen)) {
+                break;
+            }
+            status = 0u;
+            continue;
+        }
+        if (b & 0x80u) {
+            status = b;                 /* a new status byte */
+            if (!mid_u8(&r, &b)) {      /* and its first data byte */
+                break;
+            }
+        } else if (status == 0u) {
+            break;                      /* a data byte with nothing before it */
+        }
+        hi = status & 0xF0u;
+        if (hi == 0xC0u || hi == 0xD0u) {
+            if (hi == 0xC0u) {          /* program change: one data byte */
+                nj_midi_stream_event(s, (int)status, (int)b, 0);
+            }
+            n++;
+            continue;
+        }
+        {
+            nj_u4 c;
+            if (!mid_u8(&r, &c)) {
+                break;
+            }
+            nj_midi_stream_event(s, (int)status, (int)b, (int)c);
+            n++;
+        }
+    }
+    return n;
+}
+
+/*
+ * The channel state the renderer has reached: the bank select MSB, the program
+ * and the volume in force right now.  Any pointer may be NULL.  Returns 0 for
+ * a channel that does not exist.
+ */
+int nj_midi_stream_channel_state(const nj_midi_stream *s, int chan,
+                                 int *bank, int *program, int *volume)
+{
+    if (s == NULL || chan < 0 || chan > 15) {
+        return 0;
+    }
+    if (bank != NULL) {
+        *bank = (int)s->bank_now[chan];
+    }
+    if (program != NULL) {
+        *program = (int)s->prog_now[chan];
+    }
+    if (volume != NULL) {
+        *volume = (int)s->vol_now[chan];
+    }
+    return 1;
+}
+
+#else  /* !NJ_ENABLE_MIDI */
+
+/*
+ * ISO C forbids an empty translation unit, and a build with the renderer
+ * compiled out is exactly that.
+ *
+ * Nothing here defines the nj_midi_* API on purpose: the only caller
+ * (src/midp/nj_lib_media.c) guards its calls with the same macro, so a build
+ * with -DNJ_ENABLE_MIDI=0 has no unresolved symbol to link and no bytes of
+ * this file in the image.
+ */
+typedef int nj_midi_disabled_;
+
+#endif /* NJ_ENABLE_MIDI */

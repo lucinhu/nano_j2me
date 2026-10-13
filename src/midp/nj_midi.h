@@ -83,4 +83,23 @@ nj_u4 nj_midi_stream_pull(struct nj_midi_stream *s, nj_u1 *out, nj_u4 want);
  */
 nj_u4 nj_midi_stream_seek(struct nj_midi_stream *s, nj_u4 frame);
 void nj_midi_stream_close(struct nj_midi_stream *s);
+
+/*
+ * Events from MIDIControl, applied to the song where it has got to.
+ *
+ * shortMidiEvent() is one channel message - the status byte (0x90 | channel
+ * for a note on, 0x80 for a note off, 0xB0 for a controller, 0xC0 for a
+ * program change, 0xE0 for pitch bend) and its data bytes; longMidiEvent() is
+ * a whole Standard MIDI File's worth of bytes, whose deltas are read and then
+ * ignored because a live event has only one place it can land.
+ *
+ * A controller 7 (volume) or 11 (expression) message also scales what the
+ * channel already has sounding: a MIDlet that turns a channel down means now,
+ * not from the next note.
+ */
+void nj_midi_stream_event(struct nj_midi_stream *s, int status, int d1, int d2);
+int  nj_midi_stream_events(struct nj_midi_stream *s, const nj_u1 *data,
+                           nj_u4 len);
+int  nj_midi_stream_channel_state(const struct nj_midi_stream *s, int chan,
+                                  int *bank, int *program, int *volume);
 #endif /* NJ_MIDI_H */

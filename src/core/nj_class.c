@@ -1060,6 +1060,17 @@ static int implements_interface(nj_class *c, nj_class *iface)
     nj_class *k;
     for (k = c; k; k = k->super) {
         nj_u2 i;
+        /*
+         * A built-in class has no constant-pool interface list, so a built-in
+         * that is-a interface is spelled as that interface being its super
+         * (see javax/microedition/media/Player, which JSR 135 declares as
+         * `extends Controllable').  A class file can never name an interface
+         * as its super_class, so this equality only ever fires for those
+         * hand-written entries.
+         */
+        if (k == iface) {
+            return 1;
+        }
         for (i = 0u; i < k->ninterfaces; i++) {
             nj_class *ic = k->interfaces[i];
             if (ic == iface) {

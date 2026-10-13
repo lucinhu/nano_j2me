@@ -683,6 +683,13 @@ CLASSES = {
         "interface": True,
         "methods": ["javax.microedition.media.Control getControl(String)"],
     },
+    # Controllable lives in javax.microedition.media (not .control) and is how
+    # a game reaches a control without knowing the concrete type.
+    "javax/microedition/media/Controllable": {
+        "interface": True,
+        "methods": ["javax.microedition.media.Control getControl(String)",
+                    "javax.microedition.media.Control[] getControls()"],
+    },
     "javax/microedition/media/control/ToneControl": {
         "interface": True,
         "methods": ["void setToneSequence(byte[])",
@@ -696,6 +703,26 @@ CLASSES = {
         # the runtime - which declares setLevel(I)I - answers NoSuchMethodError.
         "methods": ["int setLevel(int)", "int getLevel()",
                     "void setMute(boolean)", "boolean isMuted()"],
+    },
+    # MIDIControl is the one control that changes a song while it plays.  The
+    # stub carries the reference signatures, and the runtime registers the
+    # same names with the same descriptors (getProgram twice, because the
+    # reference implementations disagree about whether it returns the program
+    # or {bank, program}).
+    "javax/microedition/media/control/MIDIControl": {
+        "interface": True,
+        "constants": {"CONTROL_CHANGE": "176", "NOTE_ON": "144"},
+        "methods": ["void setChannelVolume(int, int)",
+                    "int getChannelVolume(int)",
+                    "void setProgram(int, int, int)",
+                    "int[] getProgram(int)",
+                    "int[] getBankList(boolean)",
+                    "int[] getProgramList(int)",
+                    "String getProgramName(int, int)",
+                    "String getKeyName(int, int, int)",
+                    "boolean isBankQuerySupported()",
+                    "void shortMidiEvent(int, int, int)",
+                    "int longMidiEvent(byte[], int, int)"],
     },
     "javax/microedition/media/MediaException": {
         "extends": "Exception",

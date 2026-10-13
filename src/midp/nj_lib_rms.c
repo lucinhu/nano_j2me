@@ -1160,7 +1160,7 @@ NJFN(rs_enumerateRecords)
     {
         nj_ref idv = rs_get(vm, rs, NJ_F_RS_IDS, "Ljava/util/Vector;");
         n = vec_size(vm, idv);
-        ids = nj_array_new(vm, "int", (nj_u4)n);
+        ids = nj_array_new(vm, "I", (nj_u4)n);
         if (!ids) {
             return nj_throw_oom(vm);
         }

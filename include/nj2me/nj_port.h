@@ -310,6 +310,28 @@ typedef struct nj_port {
     void  (*midi_volume)(void *ud, void *handle, int volume);  /* 0..100 */
     int   (*midi_finished)(void *ud, void *handle);
 
+    /*
+     * Single events, for MIDIControl.
+     *
+     * A port whose synthesizer can be played note by note offers these and
+     * keeps the song when a MIDlet calls MIDIControl.setChannelVolume() or
+     * sends an event.  Both return NJ_OK when the event was taken and
+     * anything else to decline it; declining is not an error.  A port that
+     * cannot take events - Android's MediaPlayer has no such call - leaves
+     * both NULL, and the runtime then moves the song into its own renderer at
+     * the position the platform had reached, so the call still works.
+     *
+     * midi_short_event carries one channel message: type is the status byte
+     * (0x90 note on, 0x80 note off, 0xB0 control change, 0xC0 program change,
+     * 0xE0 pitch bend), data1/data2 the two data bytes.  midi_long_event
+     * carries a Standard MIDI File byte stream (one or more complete events,
+     * delta times included) for a port that prefers to forward the bytes.
+     */
+    int   (*midi_short_event)(void *ud, void *handle, int type, int data1,
+                              int data2);
+    int   (*midi_long_event)(void *ud, void *handle, const void *data,
+                             nj_u4 len);
+
     /* ---- executable memory (for a JIT; unused by the interpreter) ---- */
     /*
      * These are NOT the same request as alloc() above.

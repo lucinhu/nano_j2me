@@ -133,6 +133,25 @@
 #ifndef NJ_ENABLE_AMR
 #  define NJ_ENABLE_AMR 1
 #endif
+/*
+ * The built-in MIDI renderer (src/midp/nj_midi.c), on by default.
+ *
+ * It is the answer for every port that has no synthesizer of its own, and the
+ * fallback for the files a port that has one still refuses.  A port whose
+ * platform plays MIDI itself does not need it, and -DNJ_ENABLE_MIDI=0 takes it
+ * out: createPlayer() then asks the port, and a port that declines leaves the
+ * Player silent the way it was before nj_midi.c existed.
+ *
+ * What that costs is MIDIControl.  A MIDlet that plays its sound effects by
+ * sending single note events (shortMidiEvent) needs a synthesizer it can talk
+ * to; a port that only forwards whole files to the platform's player cannot
+ * take them, so such a Player falls back to this renderer.  A port whose synth
+ * does accept events implements nj_port.midi_short_event/midi_long_event and
+ * can drop the renderer as well.
+ */
+#ifndef NJ_ENABLE_MIDI
+#  define NJ_ENABLE_MIDI 1
+#endif
 #ifndef NJ_ENABLE_PNG
 #  define NJ_ENABLE_PNG 1
 #endif

@@ -70,6 +70,7 @@
  * nothing in the runtime reaches for libc: every byte goes through
  * nj_host_alloc, which is what lets teardown account for it.
  */
+#if NJ_ENABLE_MIDI
 static void *midi_alloc(void *ud, nj_size n)
 {
     return nj_host_alloc((nj_vm *)ud, n);
@@ -79,6 +80,7 @@ static void midi_free(void *ud, void *p)
 {
     nj_host_free((nj_vm *)ud, p);
 }
+#endif /* NJ_ENABLE_MIDI */
 
 /* ------------------------------------------------------------------ */
 /* Names                                                               */
@@ -91,6 +93,7 @@ static void midi_free(void *ud, void *p)
 #define NJ_C_CONTROLLABLE "javax/microedition/media/Controllable"
 #define NJ_C_TONE     "javax/microedition/media/control/ToneControl"
 #define NJ_C_VOLUME   "javax/microedition/media/control/VolumeControl"
+#define NJ_C_MIDICTL  "javax/microedition/media/control/MIDIControl"
 
 /* Player fields.  Everything the C side needs, on the object. */
 #define F_P_STATE    "pState"      /* I */
@@ -136,6 +139,13 @@ static void midi_free(void *ud, void *p)
 #define F_P_MIDI     "pMidi"       /* [B the port's MIDI handle, or NULL */
 #define F_P_PLAT     "pPlat"       /* Z: pMidi is a port MIDI handle */
 #define F_P_LOOPDONE "pLoopDone"   /* I plays finished, for loop count > 1 */
+/*
+ * pMidiK says the source is a MIDI song.  F_P_KIND cannot say it: kind 1
+ * means "streamed", and a WAV is streamed too, so getControl() would hand a
+ * MIDIControl to a WAV Player - which is exactly what a game must not get,
+ * because every event it sends would be discarded in silence.
+ */
+#define F_P_MIDIK    "pMidiK"      /* Z: 1 when the source is MIDI */
 
 /*
  * A Control is a separate object that acts on its Player, so it carries the
@@ -532,7 +542,9 @@ static void media_stream_release(nj_vm *vm, nj_ref player)
 {
     nj_ref data;
     const nj_u1 *b;
+#if NJ_ENABLE_MIDI
     struct nj_midi_stream *st;
+#endif
 
     if (!r_z(vm, player, F_P_STREAM)) {
         return;
@@ -543,10 +555,14 @@ static void media_stream_release(nj_vm *vm, nj_ref player)
     if (b == NULL || barray_len(data) < NJ_MEDIA_STREAM_BYTES) {
         return;
     }
+#if NJ_ENABLE_MIDI
     memcpy(&st, b, sizeof(st));
     if (st != NULL) {
         nj_midi_stream_close(st);
     }
+#else
+    (void)b;    /* no renderer: F_P_STREAM is never set, so this is dead */
+#endif
 }
 
 /* The port's MIDI handle a platform MIDI Player holds, or NULL. */
@@ -616,7 +632,12 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
      * room for, renders it into the handle's scratch and hands that over.  The
      * song's length never reaches the Java heap, which is the whole point - a
      * fifty minute .mid is a hundred and forty megabytes of samples.
+     *
+     * With -DNJ_ENABLE_MIDI=0 there is no renderer to pull from, so this whole
+     * branch is unreachable: F_P_STREAM is only ever set by createPlayer()
+     * below, and that path is compiled out with the same macro.
      */
+#if NJ_ENABLE_MIDI
     if (r_z(vm, player, F_P_STREAM)) {
         struct nj_midi_stream *st;
         nj_u1 *scratch;
@@ -664,6 +685,7 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
         }
         return (int)got;
     }
+#endif /* NJ_ENABLE_MIDI */
     off = (nj_u4)done * (nj_u4)chan * (nj_u4)(bits / 8);
     if (off >= total) {
         return 0;
@@ -1134,8 +1156,17 @@ NJFN(media_createPlayer_stream)
                                                barray_len(data), &dur);
                 if (mh != NULL && midi_handle_set(vm, p, mh)) {
                     w_z(vm, p, F_P_PLAT, 1);
+                    w_z(vm, p, F_P_MIDIK, 1);
                     w_z(vm, p, F_P_STREAM, 0);
                     w_i(vm, p, F_P_KIND, 1);
+                    /*
+                     * Keep the song itself.  MIDIControl can arrive at any
+                     * moment and a platform synth that cannot take single
+                     * events has to be replaced by the renderer in
+                     * midi_take_over(), which renders from these bytes - and
+                     * the Player is the only place they can live.
+                     */
+                    w_r(vm, p, F_P_DATA, "[B", data);
                     /* The platform knows the real duration; -1 is what a
                      * Player with no duration reports, and a title that asks
                      * gets an honest "unknown" instead of a wrong number. */
@@ -1151,6 +1182,7 @@ NJFN(media_createPlayer_stream)
                     nj_clear_exception(vm);     /* the renderer is the answer */
                 }
             }
+#if NJ_ENABLE_MIDI
             nj_midi_mem mem;
             struct nj_midi_stream *st;
             nj_u4 mframes;
@@ -1170,6 +1202,7 @@ NJFN(media_createPlayer_stream)
                     memcpy(holder->u.bytes, &keep, sizeof(keep));
                     w_r(vm, p, F_P_DATA, "[B", holder);
                     w_z(vm, p, F_P_STREAM, 1);
+                    w_z(vm, p, F_P_MIDIK, 1);
                     w_i(vm, p, F_P_RATE, (nj_s4)NJ_MIDI_RATE);
                     w_i(vm, p, F_P_CHAN, (nj_s4)mchans);
                     w_i(vm, p, F_P_FRAMES, (nj_s4)mframes);
@@ -1197,6 +1230,18 @@ NJFN(media_createPlayer_stream)
             nj_logf(vm, 3, "media: silent Player for %u bytes of MIDI "
                            "(nothing to play)",
                     (unsigned)barray_len(data));
+#else
+            /*
+             * -DNJ_ENABLE_MIDI=0: the renderer is not in this build, so a port
+             * that has no synthesizer of its own (or that declined this file)
+             * gets the silent Player instead.  Same answer as a file with
+             * nothing to play, and the log says which of the two it was.
+             */
+            w_i(vm, p, F_P_KIND, 0);
+            nj_logf(vm, 3, "media: silent Player for %u bytes of MIDI "
+                           "(this build has no MIDI renderer)",
+                    (unsigned)barray_len(data));
+#endif /* NJ_ENABLE_MIDI */
             nj_root_release(vm, mark);
             ret->r = p;
             return NJ_OK;
@@ -1487,7 +1532,7 @@ NJFN(player_realize)
                                 "malformed tone sequence" NJ_MEXC_DATA);
             }
             {
-                nj_ref arr = nj_array_new(vm, "int", (nj_u4)(n * 2));
+                nj_ref arr = nj_array_new(vm, "I", (nj_u4)(n * 2));
                 int i;
                 if (!arr) {
                     return NJ_ERR;
@@ -1760,6 +1805,16 @@ NJFN(player_getControl)
         }
     } else if (n == 13 && c[0] == 'V' && c[1] == 'o' && c[2] == 'l') {
         cls = NJ_C_VOLUME;
+    } else if (n == 11 && c[0] == 'M' && c[1] == 'I' && c[2] == 'D'
+               && c[3] == 'I') {
+        /*
+         * MIDIControl is only for a MIDI Player (F_P_KIND 1), for the same
+         * reason ToneControl is only for a tone Player: a game that gets one
+         * for a WAV would send it events that can never play.
+         */
+        if (r_z(vm, self, F_P_MIDIK)) {
+            cls = NJ_C_MIDICTL;
+        }
     }
     if (!cls) {
         ret->r = NULL;
@@ -1779,42 +1834,51 @@ NJFN(player_getControl)
 NJFN(player_getControls)
 {
     nj_ref self = NJ_THIS(args);
-    nj_ref arr = nj_array_new(vm, "javax/microedition/media/Control",
-                              (r_i(vm, self, F_P_KIND) == 0) ? 2u : 1u);
-    nj_value one;
+    nj_ref arr;
+    nj_u4 n;
+    nj_u4 at = 0u;
+    nj_value a1[2];
+    nj_value r;
+
+    /*
+     * The array holds exactly the controls this Player has: a tone Player has
+     * two, a streamed Player has VolumeControl and - only when the source is a
+     * MIDI song - MIDIControl.  Building it from getControl() keeps one answer
+     * for both entry points, and asking the length first keeps a NULL out of
+     * the array, which a game walking getControls() would dereference.
+     */
+    n = (r_i(vm, self, F_P_KIND) == 0) ? 2u
+      : (r_z(vm, self, F_P_MIDIK) ? 2u : 1u);
+    arr = nj_array_new(vm, "javax/microedition/media/Control", n);
     if (!arr) {
         return NJ_ERR;
     }
-    one.r = self;
     if (r_i(vm, self, F_P_KIND) == 0) {
-        nj_value a1[2];
-        nj_value r;
         a1[0].r = nj_string_new(vm, "ToneControl");
         r.r = NULL;
         if (nj_call(vm, self, NJ_C_PLAYER, "getControl",
                     "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
-                    a1, &r) == NJ_OK) {
-            arr->u.refs[0] = r.r;
-        }
-        a1[0].r = nj_string_new(vm, "VolumeControl");
-        r.r = NULL;
-        if (nj_call(vm, self, NJ_C_PLAYER, "getControl",
-                    "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
-                    a1, &r) == NJ_OK) {
-            arr->u.refs[1] = r.r;
-        }
-    } else {
-        nj_value a1[2];
-        nj_value r;
-        a1[0].r = nj_string_new(vm, "VolumeControl");
-        r.r = NULL;
-        if (nj_call(vm, self, NJ_C_PLAYER, "getControl",
-                    "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
-                    a1, &r) == NJ_OK) {
-            arr->u.refs[0] = r.r;
+                    a1, &r) == NJ_OK && r.r != NULL) {
+            arr->u.refs[at++] = r.r;
         }
     }
-    (void)one;
+    a1[0].r = nj_string_new(vm, "VolumeControl");
+    r.r = NULL;
+    if (nj_call(vm, self, NJ_C_PLAYER, "getControl",
+                "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
+                a1, &r) == NJ_OK && r.r != NULL) {
+        arr->u.refs[at++] = r.r;
+    }
+    if (r_z(vm, self, F_P_MIDIK)) {
+        a1[0].r = nj_string_new(vm, "MIDIControl");
+        r.r = NULL;
+        if (nj_call(vm, self, NJ_C_PLAYER, "getControl",
+                    "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
+                    a1, &r) == NJ_OK && r.r != NULL) {
+            arr->u.refs[at++] = r.r;
+        }
+    }
+    (void)at;
     ret->r = arr;
     return NJ_OK;
 }
@@ -1887,7 +1951,12 @@ NJFN(player_setMediaTime)
          * to move the renderer too: a game that stops the theme, seeks to the
          * start and starts it again would otherwise hear the tune resume in
          * the middle.
+         *
+         * F_P_STREAM is only set by createPlayer(), which sets it under
+         * NJ_ENABLE_MIDI - so a build with the renderer compiled out never
+         * reaches this branch.
          */
+#if NJ_ENABLE_MIDI
         nj_ref data = r_r(vm, self, F_P_DATA, "[B");
         if (data != NULL && barray_bytes(data) != NULL) {
             struct nj_midi_stream *st = NULL;
@@ -1904,6 +1973,7 @@ NJFN(player_setMediaTime)
                 }
             }
         }
+#endif /* NJ_ENABLE_MIDI */
     }
     w_j(vm, self, F_P_TIME, want);
     ret->j = want;
@@ -1931,7 +2001,7 @@ NJFN(tone_setSequence)
     }
     w_r(vm, self, F_P_SEQ, "[B", b);
     {
-        nj_ref arr = nj_array_new(vm, "int", (nj_u4)(n * 2));
+        nj_ref arr = nj_array_new(vm, "I", (nj_u4)(n * 2));
         int i;
         if (!arr) {
             return NJ_ERR;
@@ -2005,6 +2075,475 @@ NJFN(vol_isMuted)
     ret->i = (f && p) ? nj_field_read_int(vm, p, f) : 0;
     return NJ_OK;
 }
+
+/* ------------------------------------------------------------------ */
+/* Natives: MIDIControl                                                */
+/* ------------------------------------------------------------------ */
+/*
+ * MIDIControl is the one control that acts on a song while it plays, so its
+ * calls have to reach whatever is rendering that song rather than the Player
+ * object.  Which one that is depends on how the Player was created:
+ *
+ *   - the renderer in this library (a streamed MIDI Player): the events go
+ *     straight into it;
+ *   - a port's own synthesizer (a platform-backed Player): the port's
+ *     midi_short_event()/midi_long_event() hooks get them first, because a
+ *     port whose synth takes note events should keep the song;
+ *   - a port that cannot take them - Android's MediaPlayer has no way to be
+ *     sent a single note - hands the song back to this library's renderer,
+ *     which picks it up at the position the platform had reached.  That is
+ *     what makes these calls work at all, and it is why the renderer is kept
+ *     in the Android build.
+ *
+ * With -DNJ_ENABLE_MIDI=0 there is nothing to hand the song to, so a
+ * platform-backed Player ignores the events and the queries answer with the
+ * General MIDI defaults.  The class is still there: a MIDlet that asks for it
+ * links and runs instead of failing with a NoClassDefFoundError.
+ */
+#if NJ_ENABLE_MIDI
+/* The renderer a Player owns, or NULL: a platform-backed Player has none. */
+static struct nj_midi_stream *midi_stream_of(nj_vm *vm, nj_ref player)
+{
+    nj_ref data;
+    struct nj_midi_stream *st = NULL;
+
+    if (player == NULL || !r_z(vm, player, F_P_STREAM)) {
+        return NULL;
+    }
+    data = r_r(vm, player, F_P_DATA, "[B");
+    if (data == NULL || barray_bytes(data) == NULL
+        || barray_len(data) < NJ_MEDIA_STREAM_BYTES) {
+        return NULL;
+    }
+    memcpy(&st, barray_bytes(data), sizeof(st));
+    return st;
+}
+
+/*
+ * Stop the platform's player and continue the song in this library's
+ * renderer, at the point the platform had reached.  Returns NULL when there is
+ * nothing to take over (no file bytes, or no memory for the stream).
+ */
+static struct nj_midi_stream *midi_take_over(nj_vm *vm, nj_ref player)
+{
+    nj_ref data = r_r(vm, player, F_P_DATA, "[B");
+    const nj_u1 *b = barray_bytes(data);
+    nj_u4 len = barray_len(data);
+    nj_midi_mem mem;
+    struct nj_midi_stream *st;
+    nj_ref holder;
+    nj_s8 us;
+
+    if (b == NULL || len == 0u) {
+        return NULL;
+    }
+    mem.ud = vm;
+    mem.alloc = midi_alloc;
+    mem.free = midi_free;
+    st = nj_midi_stream_open(b, len, &mem);
+    if (st == NULL) {
+        return NULL;
+    }
+    us = r_j(vm, player, F_P_TIME);
+    if (us > 0) {
+        nj_u4 frame = (nj_u4)((nj_u8)us * (nj_u8)NJ_MIDI_RATE / 1000000u);
+        nj_midi_stream_seek(st, frame);
+    }
+    holder = nj_byte_array_new(vm, NJ_MEDIA_STREAM_BYTES);
+    if (holder == NULL) {
+        nj_midi_stream_close(st);
+        nj_clear_exception(vm);     /* a silent answer, not a failed call */
+        return NULL;
+    }
+    /*
+     * Say it out loud: from here on this Player is rendered by the runtime,
+     * not by the platform's synthesizer.  It is the one audible difference
+     * MIDIControl makes on a port whose synth cannot take single events
+     * (Android's MediaPlayer cannot), and a listener comparing the two would
+     * otherwise have no way to tell why the instruments changed.
+     */
+    nj_logf(vm, 2, "media: the platform synth cannot take MIDI events; "
+                   "the runtime took over this song at %u ms",
+            (unsigned)(us > 0 ? us / 1000 : 0));
+    {
+        struct nj_midi_stream *keep = st;
+        memcpy(holder->u.bytes, &keep, sizeof(keep));
+    }
+    w_r(vm, player, F_P_DATA, "[B", holder);
+    w_z(vm, player, F_P_STREAM, 1);
+    w_i(vm, player, F_P_RATE, (nj_s4)NJ_MIDI_RATE);
+    w_i(vm, player, F_P_CHAN, (nj_s4)nj_midi_stream_channels(st));
+    w_i(vm, player, F_P_FRAMES, (nj_s4)nj_midi_stream_frames(st));
+    w_j(vm, player, F_P_DURATION,
+        (nj_s8)nj_midi_stream_frames(st) * 1000000LL / (nj_s8)NJ_MIDI_RATE);
+    if (r_z(vm, player, F_P_PLAT)) {
+        void *h = midi_handle(vm, player);
+        if (h != NULL && vm->port && vm->port->midi_close) {
+            vm->port->midi_close(vm->port->ud, h);
+        }
+        midi_handle_set(vm, player, NULL);
+        w_z(vm, player, F_P_PLAT, 0);
+    }
+    return st;
+}
+#endif /* NJ_ENABLE_MIDI */
+
+/*
+ * Hand one channel message to whatever is playing this Player's song.  Returns
+ * 1 when it was taken, 0 when this build has no renderer to fall back on.
+ */
+static int midi_send_short(nj_vm *vm, nj_ref player, int status, int d1, int d2)
+{
+#if NJ_ENABLE_MIDI
+    struct nj_midi_stream *st;
+
+    if (player != NULL && r_z(vm, player, F_P_PLAT)) {
+        void *h = midi_handle(vm, player);
+        if (h != NULL && vm->port && vm->port->midi_short_event
+            && vm->port->midi_short_event(vm->port->ud, h, status, d1, d2)
+               == NJ_OK) {
+            return 1;               /* the port's synth took it */
+        }
+        if (midi_take_over(vm, player) == NULL) {
+            return 0;
+        }
+    }
+    st = midi_stream_of(vm, player);
+    if (st == NULL) {
+        return 0;
+    }
+    nj_midi_stream_event(st, status, d1, d2);
+    return 1;
+#else
+    (void)vm;
+    (void)player;
+    (void)status;
+    (void)d1;
+    (void)d2;
+    return 0;                       /* no renderer in this build */
+#endif
+}
+
+static int midi_send_long(nj_vm *vm, nj_ref player, const nj_u1 *data, nj_u4 len)
+{
+#if NJ_ENABLE_MIDI
+    struct nj_midi_stream *st;
+
+    if (player != NULL && r_z(vm, player, F_P_PLAT)) {
+        void *h = midi_handle(vm, player);
+        if (h != NULL && vm->port && vm->port->midi_long_event
+            && vm->port->midi_long_event(vm->port->ud, h, data, len) == NJ_OK) {
+            return 1;
+        }
+        if (midi_take_over(vm, player) == NULL) {
+            return 0;
+        }
+    }
+    st = midi_stream_of(vm, player);
+    if (st == NULL) {
+        return 0;
+    }
+    nj_midi_stream_events(st, data, len);
+    return 1;
+#else
+    (void)vm;
+    (void)player;
+    (void)data;
+    (void)len;
+    return 0;
+#endif
+}
+
+/* The channel's volume: the renderer's value, or the General MIDI default
+ * while the platform is still playing the song. */
+static int midi_channel_volume(nj_vm *vm, nj_ref player, int chan)
+{
+#if NJ_ENABLE_MIDI
+    struct nj_midi_stream *st = midi_stream_of(vm, player);
+    int v = 100;
+    if (st != NULL && nj_midi_stream_channel_state(st, chan, NULL, NULL, &v)) {
+        return v;
+    }
+#endif
+    (void)vm;
+    (void)player;
+    (void)chan;
+    return 100;
+}
+
+/* Append a decimal number, without libc. */
+static char *midi_put_int(char *p, int v)
+{
+    char tmp[8];
+    int n = 0;
+
+    if (v < 0) {
+        *p++ = '-';
+        v = -v;
+    }
+    if (v == 0) {
+        *p++ = '0';
+        return p;
+    }
+    while (v > 0 && n < (int)sizeof(tmp)) {
+        tmp[n++] = (char)('0' + v % 10);
+        v /= 10;
+    }
+    while (n > 0) {
+        *p++ = tmp[--n];
+    }
+    return p;
+}
+
+/*
+ * The runtime has no soundfont, so it has no per-program names either: the
+ * name is the General MIDI family the timbre table is built around plus the
+ * number inside it ("Piano 1"), which is a name a title can show and is at
+ * least true of the sound it will get.
+ */
+static const char *const midi_family_names[16] = {
+    "Piano", "Chromatic", "Organ", "Guitar", "Bass", "Strings", "Ensemble",
+    "Brass", "Reed", "Pipe", "Synth Lead", "Synth Pad", "Synth Effects",
+    "Ethnic", "Percussive", "Effects"
+};
+
+static const char *const midi_key_names[12] = {
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+};
+
+NJFN(midi_setChannelVolume)
+{
+    nj_ref self = ctl_owner(vm, NJ_THIS(args));
+    nj_s4 chan = NJ_ARG_INT(args, 0);
+    nj_s4 vol = NJ_ARG_INT(args, 1);
+
+    if (chan < 0 || chan > 15) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "channel out of range");
+    }
+    if (vol < 0 || vol > 127) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "volume out of range");
+    }
+    midi_send_short(vm, self, 0xB0 | (int)chan, 7, (int)vol);
+    return NJ_OK;
+}
+
+NJFN(midi_getChannelVolume)
+{
+    nj_ref self = ctl_owner(vm, NJ_THIS(args));
+    nj_s4 chan = NJ_ARG_INT(args, 0);
+
+    if (chan < 0 || chan > 15) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "channel out of range");
+    }
+    ret->i = midi_channel_volume(vm, self, (int)chan);
+    return NJ_OK;
+}
+
+NJFN(midi_shortEvent)
+{
+    nj_ref self = ctl_owner(vm, NJ_THIS(args));
+    nj_s4 type = NJ_ARG_INT(args, 0);
+    nj_s4 d1 = NJ_ARG_INT(args, 1);
+    nj_s4 d2 = NJ_ARG_INT(args, 2);
+
+    if (type < 0 || type > 255) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "bad event type");
+    }
+    midi_send_short(vm, self, (int)type, (int)d1, (int)d2);
+    return NJ_OK;
+}
+
+NJFN(midi_longEvent)
+{
+    nj_ref self = ctl_owner(vm, NJ_THIS(args));
+    nj_ref data = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 len = NJ_ARG_INT(args, 2);
+    nj_u4 total;
+
+    if (data == NULL) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "null data");
+    }
+    total = barray_len(data);
+    if (off < 0 || len < 0 || (nj_u4)off > total
+        || (nj_u4)len > total - (nj_u4)off) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "offset or length out of range");
+    }
+    /*
+     * The return value is the number of bytes consumed, per JSR 135: a Player
+     * that cannot take them returns -1.  Here the bytes are taken whenever
+     * there is a renderer, and 0 is a zero length request.
+     */
+    if (midi_send_long(vm, self, barray_bytes(data) + (nj_u4)off,
+                       (nj_u4)len)) {
+        ret->i = len;
+    } else {
+        ret->i = -1;
+    }
+    return NJ_OK;
+}
+
+NJFN(midi_setProgram)
+{
+    nj_ref self = ctl_owner(vm, NJ_THIS(args));
+    nj_s4 chan = NJ_ARG_INT(args, 0);
+    nj_s4 bank = NJ_ARG_INT(args, 1);
+    nj_s4 prog = NJ_ARG_INT(args, 2);
+
+    if (chan < 0 || chan > 15) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "channel out of range");
+    }
+    if (bank < 0 || bank > 127 || prog < 0 || prog > 127) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "bank or program out of range");
+    }
+    if (bank != 0) {
+        /* Bank select MSB first, then the program: the order a file uses. */
+        midi_send_short(vm, self, 0xB0 | (int)chan, 0, (int)bank);
+    }
+    midi_send_short(vm, self, 0xC0 | (int)chan, (int)prog, 0);
+    return NJ_OK;
+}
+
+/* getProgram returns {bank, program}; a title compiled against the other
+ * reading of the same method calls the int form below. */
+NJFN(midi_getProgram)
+{
+    nj_s4 chan = NJ_ARG_INT(args, 0);
+    nj_ref arr;
+    int bank = 0;
+    int prog = 0;
+
+    if (chan < 0 || chan > 15) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "channel out of range");
+    }
+#if NJ_ENABLE_MIDI
+    {
+        struct nj_midi_stream *st =
+            midi_stream_of(vm, ctl_owner(vm, NJ_THIS(args)));
+        if (st != NULL) {
+            nj_midi_stream_channel_state(st, (int)chan, &bank, &prog, NULL);
+        }
+    }
+#endif
+    arr = nj_array_new(vm, "I", 2u);
+    if (arr == NULL) {
+        return NJ_ERR;
+    }
+    ((nj_s4 *)arr->u.bytes)[0] = (nj_s4)bank;
+    ((nj_s4 *)arr->u.bytes)[1] = (nj_s4)prog;
+    ret->r = arr;
+    return NJ_OK;
+}
+
+NJFN(midi_getProgramInt)
+{
+    nj_s4 chan = NJ_ARG_INT(args, 0);
+    int prog = 0;
+
+    if (chan < 0 || chan > 15) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "channel out of range");
+    }
+#if NJ_ENABLE_MIDI
+    {
+        struct nj_midi_stream *st =
+            midi_stream_of(vm, ctl_owner(vm, NJ_THIS(args)));
+        if (st != NULL) {
+            nj_midi_stream_channel_state(st, (int)chan, NULL, &prog, NULL);
+        }
+    }
+#endif
+    ret->i = prog;
+    return NJ_OK;
+}
+
+/* Only the General MIDI bank exists here, so the list is bank 0. */
+NJFN(midi_getBankList)
+{
+    nj_ref arr = nj_array_new(vm, "I", 1u);
+    if (arr == NULL) {
+        return NJ_ERR;
+    }
+    ((nj_s4 *)arr->u.bytes)[0] = 0;
+    ret->r = arr;
+    return NJ_OK;
+}
+
+NJFN(midi_getProgramList)
+{
+    nj_s4 bank = NJ_ARG_INT(args, 0);
+    nj_ref arr = nj_array_new(vm, "I", (bank == 0) ? 128u : 0u);
+    int i;
+
+    if (arr == NULL) {
+        return NJ_ERR;
+    }
+    for (i = 0; bank == 0 && i < 128; i++) {
+        ((nj_s4 *)arr->u.bytes)[i] = (nj_s4)i;
+    }
+    ret->r = arr;
+    return NJ_OK;
+}
+
+NJFN(midi_getProgramName)
+{
+    nj_s4 bank = NJ_ARG_INT(args, 0);
+    nj_s4 prog = NJ_ARG_INT(args, 1);
+    char buf[40];
+    char *p = buf;
+    const char *nm;
+
+    if (bank < 0 || bank > 127 || prog < 0 || prog > 127) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "bank or program out of range");
+    }
+    nm = midi_family_names[(prog / 8) % 16];
+    while (*nm != '\0' && p < buf + (int)sizeof(buf) - 4) {
+        *p++ = *nm++;
+    }
+    *p++ = ' ';
+    p = midi_put_int(p, (int)(prog % 8) + 1);
+    *p = '\0';
+    ret->r = nj_string_new(vm, buf);
+    return ret->r ? NJ_OK : NJ_ERR;
+}
+
+NJFN(midi_getKeyName)
+{
+    nj_s4 key = NJ_ARG_INT(args, 2);
+    char buf[8];
+    char *p = buf;
+    const char *nm;
+
+    if (key < 0 || key > 127) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "key out of range");
+    }
+    nm = midi_key_names[key % 12];
+    while (*nm != '\0') {
+        *p++ = *nm++;
+    }
+    p = midi_put_int(p, (int)(key / 12) - 1);
+    *p = '\0';
+    ret->r = nj_string_new(vm, buf);
+    return ret->r ? NJ_OK : NJ_ERR;
+}
+
+NJFN(midi_isBankQuerySupported)
+{
+    ret->i = 0;         /* bank 0 only: there is no second sound bank */
+    return NJ_OK;
+}
+
 
 /* ------------------------------------------------------------------ */
 /* Late init                                                           */
@@ -2115,6 +2654,7 @@ static const nj_builtin_field player_fields[] = {
     FLD(F_P_OPEN,     "Z", 0),
     FLD(F_P_LISTEN,   "Ljava/util/Vector;", 0),
     FLD(F_P_MIDI,     "[B", 0),
+    FLD(F_P_MIDIK,    "Z", 0),
     FLD(F_P_PLAT,     "Z", 0),
     FLD(F_P_LOOPDONE, "I", 0),
     /* MIDP state constants. */
@@ -2207,11 +2747,40 @@ static const nj_builtin_method volume_methods[] = {
     M("isMuted",  "()Z", 0)
 };
 
+/*
+ * MIDIControl.  getProgram is declared twice on purpose: JSR 135's reference
+ * implementations disagree about whether it returns the program or {bank,
+ * program}, and the runtime resolves a native by name AND descriptor, so
+ * both readings link.  A title compiled against either one gets an answer.
+ */
+static const nj_builtin_method midictl_methods[] = {
+    M("setChannelVolume",     "(II)V", 0),
+    M("getChannelVolume",     "(I)I", 0),
+    M("setProgram",           "(III)V", 0),
+    M("getProgram",           "(I)[I", 0),
+    M("getProgram",           "(I)I", 0),
+    M("getBankList",          "(Z)[I", 0),
+    M("getProgramList",       "(I)[I", 0),
+    M("getProgramName",       "(II)Ljava/lang/String;", 0),
+    M("getKeyName",           "(III)Ljava/lang/String;", 0),
+    M("isBankQuerySupported", "()Z", 0),
+    M("shortMidiEvent",       "(III)V", 0),
+    M("longMidiEvent",        "([BII)I", 0)
+};
+
 #define NJ_MEDIA_EXC(name, super)                                             \
     { name, super, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
 
 const nj_builtin_class nj_lib_media_classes[] = {
-    { NJ_C_PLAYER, "java/lang/Object", NJ_ACC_PUBLIC,
+    /* JSR 135 declares Player as `interface Player extends Controllable', and
+     * MIDlets reach every control through the cast `(Controllable) player'.
+     * This runtime's Player is a class (its instances are the player objects),
+     * and a built-in entry has one super slot, so the is-a relationship is
+     * spelled as Player's super being Controllable.  Controllable in turn
+     * names Object so that a Player is still an Object - the super chain is
+     * what nj_class_is_subclass_of walks.  Without this, the cast threw
+     * ClassCastException and the MIDlet never got as far as its first note. */
+    { NJ_C_PLAYER, NJ_C_CONTROLLABLE, NJ_ACC_PUBLIC,
       player_fields,
       (nj_u2)(sizeof(player_fields) / sizeof(player_fields[0])),
       player_methods,
@@ -2229,7 +2798,7 @@ const nj_builtin_class nj_lib_media_classes[] = {
      * that assigns the result to a Control local resolves the class. */
     { NJ_C_CONTROL, NULL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
       NULL, 0u, NULL, 0u },
-    { NJ_C_CONTROLLABLE, NULL,
+    { NJ_C_CONTROLLABLE, "java/lang/Object",
       NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
       NULL, 0u, controllable_methods,
       (nj_u2)(sizeof(controllable_methods) / sizeof(controllable_methods[0])) },
@@ -2241,6 +2810,10 @@ const nj_builtin_class nj_lib_media_classes[] = {
       ctl_fields,
       (nj_u2)(sizeof(ctl_fields) / sizeof(ctl_fields[0])), volume_methods,
       (nj_u2)(sizeof(volume_methods) / sizeof(volume_methods[0])) },
+    { NJ_C_MIDICTL, "java/lang/Object", NJ_ACC_PUBLIC,
+      ctl_fields,
+      (nj_u2)(sizeof(ctl_fields) / sizeof(ctl_fields[0])), midictl_methods,
+      (nj_u2)(sizeof(midictl_methods) / sizeof(midictl_methods[0])) },
     NJ_MEDIA_EXC(NJ_C_MEXC, "java/lang/Exception")
     /* A sentinel keeps the array non-empty for tooling that assumes arrays
      * rather than counting on the length macro. */
@@ -2290,6 +2863,20 @@ const nj_native_entry nj_lib_media_table[] = {
     { NJ_C_VOLUME, "getLevel", "()I", vol_getLevel },
     { NJ_C_VOLUME, "setMute",  "(Z)V", vol_setMute },
     { NJ_C_VOLUME, "isMuted",  "()Z", vol_isMuted },
+    { NJ_C_MIDICTL, "setChannelVolume",     "(II)V", midi_setChannelVolume },
+    { NJ_C_MIDICTL, "getChannelVolume",     "(I)I",  midi_getChannelVolume },
+    { NJ_C_MIDICTL, "setProgram",           "(III)V", midi_setProgram },
+    { NJ_C_MIDICTL, "getProgram",           "(I)[I", midi_getProgram },
+    { NJ_C_MIDICTL, "getProgram",           "(I)I",  midi_getProgramInt },
+    { NJ_C_MIDICTL, "getBankList",          "(Z)[I", midi_getBankList },
+    { NJ_C_MIDICTL, "getProgramList",       "(I)[I", midi_getProgramList },
+    { NJ_C_MIDICTL, "getProgramName",       "(II)Ljava/lang/String;",
+      midi_getProgramName },
+    { NJ_C_MIDICTL, "getKeyName",           "(III)Ljava/lang/String;",
+      midi_getKeyName },
+    { NJ_C_MIDICTL, "isBankQuerySupported", "()Z",   midi_isBankQuerySupported },
+    { NJ_C_MIDICTL, "shortMidiEvent",       "(III)V", midi_shortEvent },
+    { NJ_C_MIDICTL, "longMidiEvent",        "([BII)I", midi_longEvent },
 
     { NULL, NULL, NULL, NULL }
 };

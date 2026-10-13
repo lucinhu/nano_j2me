@@ -3,7 +3,11 @@
 # Build, sign and install a debug APK of the Android port.
 #
 #     tools/build_android_apk.sh [--abi arm64-v8a] [--screen 240x320]
-#                                [--install] [--push FILE.jar]
+#                                [--install] [--push FILE.jar] [--no-midi]
+#
+# --no-midi drops the built-in MIDI renderer from the .so (~13 KB per ABI; the
+# platform's own synth still plays .mid, and MIDIControl stops working - see
+# the comment in tools/build_android.sh).
 #
 # Built by hand with aapt2/d8/apksigner rather than Gradle, on purpose: this
 # repository has no Gradle wrapper, no dependency graph and nothing to download,
@@ -30,6 +34,7 @@ SCREEN=""
 INSTALL=0
 PUSH=""
 OUT="$ROOT/build/android"
+NO_MIDI=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -38,6 +43,7 @@ while [ $# -gt 0 ]; do
         --out) OUT="$2"; shift 2 ;;
         --install) INSTALL=1; shift ;;
         --push) PUSH="$2"; shift 2 ;;
+        --no-midi) NO_MIDI=1; shift ;;
         -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
@@ -68,10 +74,12 @@ fi
 W="$OUT/apk"; rm -rf "$W"; mkdir -p "$W/classes" "$W/dex" "$W/assets" "$W/gen" "$W/res"
 for abi in $ABIS; do
     echo "== native ($abi)"
+    MIDI_FLAG=""
+    [ "$NO_MIDI" = "1" ] && MIDI_FLAG="--no-midi"
     if [ -n "$SCREEN" ]; then
-        "$ROOT/tools/build_android.sh" --abi "$abi" --out "$OUT" --screen "$SCREEN" || exit 1
+        "$ROOT/tools/build_android.sh" --abi "$abi" --out "$OUT" --screen "$SCREEN" $MIDI_FLAG || exit 1
     else
-        "$ROOT/tools/build_android.sh" --abi "$abi" --out "$OUT" || exit 1
+        "$ROOT/tools/build_android.sh" --abi "$abi" --out "$OUT" $MIDI_FLAG || exit 1
     fi
     mkdir -p "$W/lib/$abi"
     cp "$OUT/$abi/libnj2me.so" "$W/lib/$abi/"

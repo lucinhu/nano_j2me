@@ -136,6 +136,15 @@ nj_field *nj_field_lookup(nj_vm *vm, const char *cls, const char *name,
 /* Object and array creation                                           */
 /* ------------------------------------------------------------------ */
 nj_ref nj_object_new(nj_vm *vm, const char *cls);                 /* NULL on OOM */
+/*
+ * elem_cls_or_prim is the ELEMENT TYPE as the class file spells it: the
+ * descriptor letter for a primitive ("I", "F", "S", "B", "C", "J", "D",
+ * "Z") or the internal class name ("java/lang/String").  The Java spelling
+ * ("int") is not one of them, and passing it builds an array of a class
+ * that does not exist - it resolves, the length is right, and every element
+ * reads back as zero, which is how RecordStore.getRecordIDs() and
+ * ToneControl.getToneSequence() were silently broken.
+ */
 nj_ref nj_array_new(nj_vm *vm, const char *elem_cls_or_prim, nj_u4 len);
 nj_ref nj_byte_array_new(nj_vm *vm, nj_u4 len);
 nj_ref nj_char_array_new(nj_vm *vm, nj_u4 len);

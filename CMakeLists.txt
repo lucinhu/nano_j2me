@@ -58,6 +58,11 @@ set(NJ_ENABLE_PNG   1 CACHE STRING "Built-in PNG decoder")
 set(NJ_ENABLE_RMS   1 CACHE STRING "RecordStore persistence")
 set(NJ_ENABLE_IO    1 CACHE STRING "java.io and javax.microedition.io")
 set(NJ_ENABLE_AMR   1 CACHE STRING "Built-in AMR narrowband speech decoder")
+# The built-in MIDI renderer.  A port whose platform plays MIDI itself (Android
+# hands the file to the system synthesizer) can drop it: what is lost is the
+# fallback for a device without that synthesizer, and MIDIControl's single note
+# events, which a platform player cannot be sent.
+set(NJ_ENABLE_MIDI  1 CACHE STRING "Built-in MIDI renderer (0 = platform only)")
 # Floating point.  This switch was documented in nj_config.h from the start and
 # broken in TWO independent ways: nothing in src/ read it, and CMake never
 # passed it to the compiler at all - so -DNJ_ENABLE_FLOAT=0 built a runtime that
@@ -157,6 +162,7 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_RMS=${NJ_ENABLE_RMS}
   NJ_ENABLE_IO=${NJ_ENABLE_IO}
   NJ_ENABLE_AMR=${NJ_ENABLE_AMR}
+  NJ_ENABLE_MIDI=${NJ_ENABLE_MIDI}
   NJ_ENABLE_FLOAT=${NJ_ENABLE_FLOAT}
   NJ_ENABLE_M3G=${NJ_ENABLE_M3G}
     NJ_ENABLE_MASCOT=${NJ_ENABLE_MASCOT}
@@ -613,11 +619,17 @@ nj_add_test(test_clip tests/test_clip.c)
     nj_add_test(test_port_code tests/test_port_code.c)
   endif()
 
-  foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib test_midi)
+  foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${extra_test}.c)
       nj_add_test(${extra_test} tests/${extra_test}.c)
     endif()
   endforeach()
+
+  # The MIDI test drives the built-in renderer directly, so it needs that
+  # renderer to be part of the library it links against.
+  if(NJ_ENABLE_MIDI AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_midi.c)
+    nj_add_test(test_midi tests/test_midi.c)
+  endif()
 
   # The rasterizer test is deliberately standalone: it compiles nj_gfx.c with
   # tests/stub_font.c rather than linking the library, so its text assertions
