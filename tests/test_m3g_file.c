@@ -429,11 +429,17 @@ int main(void)
         /*
          * The rasteriser needs the geometry, and the geometry was the one part
          * of a VertexArray the decoder did not expose: the three header bytes
-         * say how the bytes are to be read, and the bytes themselves run from
-         * there to the end of the object.  Measured across the corpus - 18 of
-         * 18 VertexArrays in one real file - before being relied on.
+         * say how the bytes are to be read, a UInt16 vertex count follows
+         * them, and the bytes themselves run from there to the end of the
+         * object.  Measured across the corpus - 5,210 of 5,210 VertexArrays
+         * in 975 real files fit this reading and consume the object exactly -
+         * before being relied on.
+         *
+         * This test used to place the bytes at offset 15, one field too early,
+         * which is how the decoder was written at first: every value then sat
+         * half a component out of step with the vertex it belonged to.
          */
-        nj_u1 va[12 + 3 + 8];
+        nj_u1 va[12 + 5 + 8];
         nj_m3g_fields f;
         char err[128];
         int i;
@@ -441,8 +447,10 @@ int main(void)
         memset(va, 0, sizeof(va));
         va[12] = 2u;    /* componentSize  */
         va[13] = 3u;    /* componentCount */
-        va[14] = 1u;    /* componentType  */
-        for (i = 0; i < 8; i++) { va[15 + i] = (nj_u1)(0x40 + i); }
+        va[14] = 1u;    /* encoding       */
+        va[15] = 3u;    /* vertexCount, a UInt16 */
+        va[16] = 0u;
+        for (i = 0; i < 8; i++) { va[17 + i] = (nj_u1)(0x40 + i); }
 
         memset(&f, 0, sizeof(f));
         ok(nj_m3g_decode_object(va, sizeof(va), 20u, &f, err, sizeof(err)) == NJ_OK,

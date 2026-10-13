@@ -808,4 +808,13 @@ nj_status nj_m3g_load_geometry(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
 nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
                              nj_ref arr);
 
+/*
+ * The same for the Mesh objects: give every Mesh the vertex buffer, the first
+ * index buffer and the appearance list the file's references name.  Exported
+ * beside nj_m3g_link_groups() for the same reason - a test can hand it an
+ * object table, while the loader needs a real .m3g inside a MIDlet suite.
+ */
+nj_status nj_m3g_link_meshes(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
+                             nj_ref arr);
+
 #endif /* NJ_VM_H */

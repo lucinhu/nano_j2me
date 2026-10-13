@@ -203,5 +203,40 @@ against the type the slot needs (a `VertexBuffer`, an `IndexBuffer` and an
 With that, `3D拉力赛-进化汉化版_6366` reaches its race: the canvas constructs,
 `getSubmeshCount()` answers, `getAppearance(0)` returns an `Appearance` and
 `getIndexBuffer(0)`/`getVertexBuffer()` return the buffers the file names.  What
-the player still sees is a black 3D area, because nothing rasterises a
-`VertexBuffer` yet - that is the rest of this note.
+the player still saw at that point was a black 3D area, because the rasteriser
+had no geometry to draw - see the next section for what that took.
+
+## The geometry the rasteriser was waiting for
+
+The rasteriser was reachable but empty: `VertexArray` bytes were exposed at
+offset 15 instead of 17 (a UInt16 vertex count sits between the three header
+bytes and the components), nothing linked a decoded `VertexBuffer` into the
+`VertexArray` objects a `Mesh` reads, and no `TriangleStripArray` was decoded at
+all.  Measured against the corpus before any of it was written:
+
+| object | reading that consumes the object exactly |
+|---|---|
+| `VertexArray` | 5,210 of 5,210 (componentSize/Count/encoding at 12/13/14, vertex count at 15, data at 17) |
+| `TriangleStripArray` | 2,397 of 2,397 (encoding at 12, index count at 13, indices at 17, then the strip lengths) |
+| `VertexBuffer` | 1,852 of 1,901 are 68 bytes with one texture unit and 49 are 48 with none; every reference lands on a `VertexArray` under the value-minus-two rule |
+
+Two more things had to be right for the picture to appear, and both were
+runtime bugs rather than format ones:
+
+* `Graphics3D.render(World)` read only the camera named by
+  `Graphics3D.setCamera()`.  The corpus names its camera with
+  `World.setActiveCamera()` and never calls `setCamera()` at all, so every
+  render took the "no projection" exit before it drew a triangle.  A World's
+  active camera is a node, so the view is the inverse of its own transform
+  (`_nj_m`), not of a matrix handed to `setCamera()`.
+* the scene-graph walk read `_nj_kids` out of whatever object it was handed.  A
+  field looked up by name is read at that offset in ANY object, so a `Camera`
+  in the graph produced 0x1 as a "Vector" and the renderer crashed inside the
+  collection.  A built-in class has one super, so the walk now asks the class
+  name first: `World` is a `Group`, `MorphingMesh` and `SkinnedMesh` are
+  meshes, and nothing else has children.
+
+With those, `3D拉力赛-进化汉化版_6366` draws its track: 172,032 triangles and
+377,781 pixels over a 1,500-frame paced run, where the same run drew nothing
+before.  The picture is still flat white - materials, textures, lighting and
+the background clear are the next pieces.

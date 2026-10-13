@@ -1011,18 +1011,30 @@ int main(void)
     }
     /* ---- the scene graph walk finds the meshes ------------------------- */
     {
-        nj_ref w, grp, mesh, found[4];
+        nj_ref w, grp, mesh, cam, found[4];
         nj_value a, r;
 
         w = make(vm, CLS("World"));
         grp = make(vm, CLS("Group"));
         mesh = make(vm, CLS("Mesh"));
-        check(w && grp && mesh, "a World, a Group and a Mesh exist");
+        cam = make(vm, CLS("Camera"));
+        check(w && grp && mesh && cam,
+              "a World, a Group, a Mesh and a Camera exist");
 
         a.r = grp; r.r = 0;
         call(vm, w, CLS("Group"), "addChild", "(L" CLS("Node") ";)V", &a, &r);
         a.r = mesh; r.r = 0;
         call(vm, grp, CLS("Group"), "addChild", "(L" CLS("Node") ";)V", &a, &r);
+        /*
+         * A Camera is a Node and not a container.  The walk used to read
+         * "_nj_kids" out of whatever it was handed, and a field looked up by
+         * name is read at that offset in ANY object: a Camera in the graph
+         * produced a garbage Vector pointer (0x1 in the wild) and the render
+         * crashed inside the collection, which is why the title's 3D area
+         * stayed empty instead of drawing.
+         */
+        a.r = cam; r.r = 0;
+        call(vm, w, CLS("Group"), "addChild", "(L" CLS("Node") ";)V", &a, &r);
 
         memset(found, 0, sizeof(found));
         check(nj_m3g_collect_meshes(vm, w, found, 4u) == 1u,
@@ -1030,6 +1042,8 @@ int main(void)
         check(found[0] == mesh, "and it is the mesh that was added");
         check(nj_m3g_collect_meshes(vm, mesh, found, 4u) == 1u,
               "a mesh is itself a mesh");
+        check(nj_m3g_collect_meshes(vm, cam, found, 4u) == 0u,
+              "and a camera is not walked as a container");
     }
     /* ---- render() really draws the world into the bound target --------- */
     {
@@ -1136,6 +1150,44 @@ int main(void)
             }
         }
         check(lit > 0, "render() put pixels into the target image");
+
+        /*
+         * The other way a title names the camera: World.setActiveCamera().
+         * The corpus uses this one and never calls Graphics3D.setCamera() at
+         * all, so with only the latter read every render found no camera, took
+         * the "no projection" exit and drew nothing - the black 3D area the
+         * user reported.
+         */
+        {
+            nj_ref g2 = nj_object_new(vm, CLS("Graphics3D"));
+            int lit2 = 0;
+
+            check(g2 != 0, "a second Graphics3D exists");
+            a[0].r = gr; r.r = 0;
+            call(vm, g2, CLS("Graphics3D"), "bindTarget",
+                 "(Ljava/lang/Object;)V", a, &r);
+            a[0].i = 0; a[1].i = 0; a[2].i = 16; a[3].i = 16;
+            call(vm, g2, CLS("Graphics3D"), "setViewport", "(IIII)V", a, &r);
+            /* No setCamera() on this one: the World carries the camera. */
+            a[0].r = cam; r.r = 0;
+            call(vm, world, CLS("World"), "setActiveCamera",
+                 "(L" CLS("Camera") ";)V", a, &r);
+
+            a[0].r = world; r.r = 0;
+            call(vm, g2, CLS("Graphics3D"), "render", "(L" CLS("World") ";)V",
+                 a, &r);
+            if (one) {
+                const nj_s4 *px;
+
+                a[0].r = one; a[1].i = 0; a[2].i = 16; a[3].i = 0;
+                a[4].i = 0; a[5].i = 16; a[6].i = 16; a[7].i = 0; r.r = 0;
+                call(vm, img, "javax/microedition/lcdui/Image", "getRGB",
+                     "([IIIIIII)V", a, &r);
+                px = (const nj_s4 *)nj_array_data(one);
+                for (k = 0; px && k < 256; k++) { if (px[k] != 0) { lit2++; } }
+            }
+            check(lit2 > 0, "and a World's own active camera draws it too");
+        }
     }
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

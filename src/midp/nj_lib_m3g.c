@@ -129,6 +129,7 @@ static nj_u4 le32(const nj_u1 *p)
 #define NJ_M3G_T_MESH            14u
 #define NJ_M3G_T_VERTEX_ARRAY    20u
 #define NJ_M3G_T_VERTEX_BUFFER   21u
+#define NJ_M3G_T_TRIANGLE_STRIP_ARRAY 11u
 #define NJ_M3G_T_WORLD           22u
 #define NJ_M3G_SECTION 9u
 #define NJ_M3G_SECTION_MIN 13u   /* nine byte header + four byte Adler32 */
@@ -387,16 +388,101 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
             }
         }
         break;
+    case NJ_M3G_T_VERTEX_BUFFER: {
+        /*
+         * JSR 184 file format 11.29: defaultColor, the positions reference,
+         * positionBias[3], positionScale, the normals and colors references,
+         * then a texture-unit count and that many (texCoords, texCoordBias[3],
+         * texCoordScale) triples.
+         *
+         * Measured over the corpus: 1,852 of the 1,901 VertexBuffers are 68
+         * bytes (one texture unit) and 49 are 48 (none), and every one of
+         * them lands all four references on a VertexArray under the value-2
+         * rule the Mesh layout forced.  Nothing is accepted unless the layout
+         * consumes the object exactly.
+         *
+         * The four floats are kept as bit patterns in the reference slots
+         * from NJ_M3G_MAX_REFS - 4 upwards: the slots below nrefs are what
+         * the roots pass walks, so a float stored there would be mistaken for
+         * a reference to some object and would quietly unroot the World.
+         */
+        if (len >= 48u) {
+            nj_u4 texn = le32(data + 44u);
+            if (texn <= 8u && len == 48u + 20u * texn) {
+                out->a = le32(data + 16u);          /* positions */
+                out->b = le32(data + 36u);          /* normals */
+                out->c = le32(data + 40u);          /* colors */
+                out->refs[0] = out->a;
+                out->refs[1] = out->b;
+                out->refs[2] = out->c;
+                out->nrefs = 3u;
+                if (texn > 0u) {
+                    out->refs[3] = le32(data + 48u);
+                    out->nrefs = 4u;
+                    out->refs[8]  = le32(data + 52u);   /* texCoordBias bits */
+                    out->refs[9]  = le32(data + 56u);
+                    out->refs[10] = le32(data + 60u);
+                    out->refs[11] = le32(data + 64u);   /* texCoordScale bits */
+                }
+                out->refs[NJ_M3G_MAX_REFS - 4u] = le32(data + 20u);  /* bias */
+                out->refs[NJ_M3G_MAX_REFS - 3u] = le32(data + 24u);
+                out->refs[NJ_M3G_MAX_REFS - 2u] = le32(data + 28u);
+                out->refs[NJ_M3G_MAX_REFS - 1u] = le32(data + 32u);  /* scale */
+                out->decoded = 1u;
+            }
+        }
+        break; }
+    case NJ_M3G_T_TRIANGLE_STRIP_ARRAY: {
+        /*
+         * JSR 184 file format 11.27: an encoding byte (128 = 32-bit indices,
+         * 129 = a byte each, 130 = 16-bit each), the index count, that many
+         * indices, then a strip count and that many strip lengths which add
+         * up to the index count.
+         *
+         * Measured: all 2,397 TriangleStripArrays in the 975 corpus files
+         * consume their object exactly under this reading.  The indices stay
+         * in the section buffer and are copied out when the scene graph is
+         * built, the way a VertexArray's bytes already are.
+         */
+        {
+            nj_u4 enc = data[12];
+            nj_u4 isz = (enc == 128u) ? 4u : (enc == 130u) ? 2u
+                     : (enc == 129u) ? 1u : 0u;
+            if (isz != 0u && len >= 21u) {
+                nj_u4 n = le32(data + 13u);
+                nj_u4 at = 17u + isz * n;
+                if (at + 4u <= len) {
+                    nj_u4 nstrip = le32(data + at);
+                    if (nstrip >= 1u && nstrip <= 64u &&
+                        at + 4u + 4u * nstrip == len) {
+                        out->a = enc;
+                        out->b = n;
+                        out->c = nstrip;
+                        out->data = data + 17u;
+                        out->data_len = isz * n;
+                        out->ref_off = at;   /* where the strip lengths sit */
+                        out->decoded = 1u;
+                    }
+                }
+            }
+        }
+        break; }
     case NJ_M3G_T_VERTEX_ARRAY:      /* componentSize, componentCount, componentType */
         if (len < NJ_M3G_OBJECT_HEADER + 3u) {
             M3G_FAIL("a VertexArray is %lu byte(s)", (unsigned long)len);
         }
         out->a = data[12]; out->b = data[13]; out->c = data[14];
-        /* The bytes start right after the three header bytes and run to the
-           end of the object.  Measured across the corpus: 18 of 18 decoded
-           VertexArrays in one real file put their first component here. */
-        out->data = data + NJ_M3G_OBJECT_HEADER + 3u;
-        out->data_len = len - (NJ_M3G_OBJECT_HEADER + 3u);
+        /*
+         * JSR 184 file format 11.28: componentSize, componentCount, the
+         * encoding, then a UInt16 vertex count, and only then the components.
+         * The two bytes of the count are why the data starts at 17: a reading
+         * that started at 15 put every value half a component out of step,
+         * and a shape that is out of step is not a shape that is missing.
+         * Measured across the corpus, all 5,210 VertexArrays consume their
+         * object exactly under this reading (17 + vertexCount * size * count).
+         */
+        out->data = data + NJ_M3G_OBJECT_HEADER + 5u;
+        out->data_len = len - (NJ_M3G_OBJECT_HEADER + 5u);
         if (!(out->a == 0u || out->a == 1u || out->a == 2u || out->a == 4u) ||
             out->b > 4u || out->c > 2u) {
             M3G_FAIL("a VertexArray holds size=%lu count=%lu type=%lu",
@@ -2487,13 +2573,28 @@ static void collect_walk(nj_vm *vm, nj_ref o, nj_ref *out, nj_u4 cap,
         return;
     }
     cn = nj_ref_class_name(o);
-    if (cn && strcmp(cn, NJ_C_MESH) == 0) {
+    /*
+     * Which class the object is decides what may be read out of it.  A
+     * built-in class has one super, so MorphingMesh and SkinnedMesh are
+     * meshes and World is a Group, and asking by name is how this walk knows.
+     *
+     * nj_field_lookup() is NOT that test: it finds a field by name in any
+     * class and nj_rget() then reads that offset out of the object in front
+     * of it.  Reading "_nj_kids" that way out of a Camera - which has no such
+     * field, and whose own fields sit at those offsets - produced 0x1 as a
+     * "Vector", and the renderer then walked into it and crashed.
+     */
+    if (cn != NULL && (strcmp(cn, NJ_C_MESH) == 0 ||
+                       strcmp(cn, NJ_C_MORPH) == 0 ||
+                       strcmp(cn, NJ_C_SKIN) == 0)) {
         if (*n < cap) { out[*n] = o; }
         (*n)++;
         return;
     }
-    /* Everything with children is a Group or a World, and both keep them in
-       the same Vector the file's indices were resolved into. */
+    if (cn == NULL || (strcmp(cn, NJ_C_GROUP) != 0 &&
+                       strcmp(cn, NJ_C_WORLD) != 0)) {
+        return;                  /* a Camera, a Light, a Sprite: no children */
+    }
     kids = nj_rget(vm, o, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
                                           "L" NJ_C_VECTOR ";", 0));
     if (!kids) { return; }
@@ -2566,13 +2667,49 @@ static nj_u4 emit_to_gfx(void *ud, const float xy[6], nj_u4 argb)
     return nj_m3g_raster_tri((struct nj_gfx *)ud, xy, argb);
 }
 
+/*
+ * One triangle of a Mesh, from three vertex indices.
+ *
+ * A vertex component is a quantised integer: the file gives a scale and a bias
+ * per VertexBuffer and the vertex is component * scale + bias (JSR 184 file
+ * format 11.29).  Drawing the raw components instead puts the model at the
+ * origin at a size that has nothing to do with the model.
+ */
+static nj_u4 emit_vertex_tri(nj_m3g_emit_fn emit, void *ud, const nj_s2 *s,
+                             nj_u4 comp, nj_u4 a, nj_u4 b, nj_u4 c,
+                             float scale, const float *bias,
+                             const float m[16], int w, int h, nj_u4 argb)
+{
+    const nj_u4 ii[3] = { a, b, c };
+    float xy[6];
+    nj_u4 k, e;
+
+    for (k = 0u; k < 3u; k++) {
+        const nj_s2 *p = s + (nj_u4)ii[k] * comp;
+        float v[3];
+
+        for (e = 0u; e < 3u; e++) {
+            float raw = (e < comp) ? (float)p[e] : 0.0f;
+            float off = (bias != NULL) ? bias[e] : 0.0f;
+
+            v[e] = raw * scale + off;
+        }
+        nj_m3g_project(m, v, w, h, xy + k * 2u);
+    }
+    return emit(ud, xy, argb);
+}
+
 static nj_u4 raster_mesh_with(nj_vm *vm, nj_ref mesh, const float m[16],
                               int w, int h, nj_u4 argb,
                               nj_m3g_emit_fn emit, void *ud)
 {
-    nj_ref vb, va, data;
+    nj_ref vb, va, data, ib;
     const nj_s2 *s;
-    nj_u4 nverts, comp, drawn = 0u, i;
+    const nj_s4 *idx = NULL;
+    const nj_s4 *strips = NULL;
+    const float *bias = NULL;
+    float scale = 1.0f;
+    nj_u4 nverts, comp, nidx = 0u, nstrip = 0u, drawn = 0u, i;
 
     if (!vm || !mesh || !emit) {
         return 0u;
@@ -2581,31 +2718,83 @@ static nj_u4 raster_mesh_with(nj_vm *vm, nj_ref mesh, const float m[16],
     if (!vb) { return 0u; }
     va = nj_rget(vm, vb, nj_field_lookup(vm, NJ_C_VBUF, "_nj_positions",
                                          "L" NJ_C_VARR ";", 0));
-    if (!va) { return 0u; }
     data = nj_rget(vm, va, nj_field_lookup(vm, NJ_C_VARR, "_nj_data", "[S", 0));
-    if (!data) { return 0u; }
     nverts = (nj_u4)nj_iget(vm, va, nj_field_lookup(vm, NJ_C_VARR, "_nj_numVerts", "I", 0));
     comp = (nj_u4)nj_iget(vm, va, nj_field_lookup(vm, NJ_C_VARR, "_nj_numComp", "I", 0));
     s = (const nj_s2 *)nj_array_data(data);
     if (!s || comp < 2u || nverts < 3u) {
         return 0u;
     }
-    /* Consecutive triples.  A TriangleStripArray is a strip, not a list of
-       independent triangles; this is the simple case and says so. */
-    for (i = 0u; i + 3u <= nverts; i += 3u) {
-        float xy[6];
-        float v[3];
-        nj_u4 k;
-
-        for (k = 0u; k < 3u; k++) {
-            const nj_s2 *p = s + (i + k) * comp;
-            v[0] = (float)p[0];
-            v[1] = (comp >= 2u) ? (float)p[1] : 0.0f;
-            v[2] = (comp >= 3u) ? (float)p[2] : 0.0f;
-            nj_m3g_project(m, v, w, h, xy + k * 2u);
+    scale = bits2f(nj_iget(vm, vb, nj_field_lookup(vm, NJ_C_VBUF, "_nj_bias",
+                                                   "F", 0)));
+    if (!(scale > 0.0f) && !(scale < 0.0f)) {
+        scale = 1.0f;      /* setPositions was never called: the JSR's default */
+    }
+    {
+        nj_ref b = nj_rget(vm, vb, nj_field_lookup(vm, NJ_C_VBUF, "_nj_scale",
+                                                   "[F", 0));
+        if (b && b->length >= 3) {
+            bias = (const float *)nj_array_data(b);
         }
-        if (emit(ud, xy, argb) != 0u) {
-            drawn++;
+    }
+    /*
+     * The index buffer, when the file gave one.  A TriangleStripArray is a
+     * strip and not a list of triangles: triangle j uses indices j, j+1 and
+     * j+2, and every odd triangle swaps its last two so the winding stays
+     * consistent (JSR 184, TriangleStripArray).  A Mesh without one still
+     * draws its vertices as consecutive triples, which is what a Mesh built
+     * from a plain array of positions means.
+     */
+    ib = nj_rget(vm, mesh, nj_field_lookup(vm, NJ_C_MESH, "_nj_ib",
+                                           "L" NJ_C_IBUF ";", 0));
+    if (ib) {
+        nj_ref d = nj_rget(vm, ib, nj_field_lookup(vm, NJ_C_IBUF, "_nj_ib_data",
+                                                   "[I", 0));
+        nj_ref l = nj_rget(vm, ib, nj_field_lookup(vm, NJ_C_TSA, "_nj_lengths",
+                                                   "[I", 0));
+        nj_s4 ns = nj_iget(vm, ib, nj_field_lookup(vm, NJ_C_TSA, "_nj_strips",
+                                                   "I", 0));
+
+        nidx = (nj_u4)nj_iget(vm, ib, nj_field_lookup(vm, NJ_C_IBUF,
+                                                      "_nj_ib_count", "I", 0));
+        if (d && nidx > 0u) {
+            idx = (const nj_s4 *)nj_array_data(d);
+        }
+        if (l && ns > 0) {
+            strips = (const nj_s4 *)nj_array_data(l);
+            nstrip = (nj_u4)ns;
+        }
+    }
+    if (idx != NULL && strips != NULL && nstrip > 0u) {
+        nj_u4 at = 0u, st;
+
+        for (st = 0u; st < nstrip && at < nidx; st++) {
+            nj_u4 slen = (nj_u4)strips[st];
+            nj_u4 t;
+
+            for (t = 0u; t + 3u <= slen && at + t + 2u < nidx; t++) {
+                nj_u4 a0 = (nj_u4)idx[at + t];
+                nj_u4 a1 = (nj_u4)idx[at + t + 1u];
+                nj_u4 a2 = (nj_u4)idx[at + t + 2u];
+
+                if ((t & 1u) != 0u) {
+                    nj_u4 sw = a1; a1 = a2; a2 = sw;
+                }
+                if (a0 < nverts && a1 < nverts && a2 < nverts) {
+                    if (emit_vertex_tri(emit, ud, s, comp, a0, a1, a2, scale,
+                                        bias, m, w, h, argb) != 0u) {
+                        drawn++;
+                    }
+                }
+            }
+            at += slen;
+        }
+    } else {
+        for (i = 0u; i + 3u <= nverts; i += 3u) {
+            if (emit_vertex_tri(emit, ud, s, comp, i, i + 1u, i + 2u, scale,
+                                bias, m, w, h, argb) != 0u) {
+                drawn++;
+            }
         }
     }
     vm->tris += (nj_u8)drawn;
@@ -2691,6 +2880,19 @@ NJFN(m3g_render)
     }
     cam = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_camera",
                                             "L" NJ_C_CAMERA ";", 0));
+    if (!cam) {
+        /*
+         * JSR 184 gives a title two ways to say which camera draws a World:
+         * Graphics3D.setCamera() and World.setActiveCamera().  Only the first
+         * was read, and the corpus uses the second - the rally title calls
+         * setPerspective() on its camera and setActiveCamera() on the World
+         * and never calls Graphics3D.setCamera() at all.  With no camera the
+         * projection is empty, so the render returned before it drew a single
+         * triangle: this is why the 3D area was black.
+         */
+        cam = nj_rget(vm, root, nj_field_lookup(vm, NJ_C_WORLD, "_nj_cam",
+                                                "L" NJ_C_CAMERA ";", 0));
+    }
     vx = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vx", "I", 0));
     vy = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vy", "I", 0));
     vw = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vw", "I", 0));
@@ -2725,6 +2927,22 @@ NJFN(m3g_render)
         memcpy(camm, nj_array_data(camarr), sizeof(camm));
         mat_invert(camm);
         mat_from_java(view, camm);
+    } else if (cam) {
+        /*
+         * A World's active camera is a node, so the view is the inverse of
+         * the node's own transform (_nj_m, which translate()/setTranslation()
+         * keep up to date) rather than of a matrix handed to setCamera().
+         */
+        nj_ref cm = nj_rget(vm, cam, nj_field_lookup(vm, NJ_C_XABLE, "_nj_m",
+                                                     "[F", 0));
+
+        if (cm && nj_array_length(cm) >= 16) {
+            float camm[NJ_MF];
+
+            memcpy(camm, nj_array_data(cm), sizeof(camm));
+            mat_invert(camm);
+            mat_from_java(view, camm);
+        }
     }
     if (!m3g_cam_projection(vm, cam, (float)vx, (float)vw, proj)) {
         return NJ_OK;               /* a camera with no projection sees nothing */
@@ -3766,6 +3984,120 @@ nj_status nj_m3g_link_meshes(nj_vm *vm, const nj_m3g_object *objs,
     return NJ_OK;
 }
 
+
+/*
+ * The geometry half of the linking: what a Mesh's vertex buffer points at, and
+ * what a strip array holds.
+ *
+ * A VertexBuffer names its VertexArrays (positions, normals, colors, texture
+ * coordinates) and carries the scale and bias the components were quantised
+ * with; a TriangleStripArray holds indices and strip lengths.  Without this a
+ * Mesh has a vertex buffer with nothing in it, and a rasteriser asked to draw
+ * it draws nothing at all - which is exactly what the 3D area of a title did
+ * before this existed.
+ *
+ * The indices are copied out of the section buffer here, for the same reason
+ * the VertexArray components are: by the time anything draws, those bytes are
+ * gone.  The floats travel as bit patterns in the reference slots from
+ * NJ_M3G_MAX_REFS - 4 up, which the roots pass never looks at.
+ */
+static nj_status m3g_link_geometry(nj_vm *vm, const nj_m3g_object *objs,
+                                   nj_u4 nobj, nj_ref arr)
+{
+    int mode = m3g_ref_mode_of(vm, objs, nobj, arr);
+    nj_u4 i;
+
+    if (mode < 0) {
+        mode = M3G_REF_TWO;
+    }
+    for (i = 0u; i < nobj; i++) {
+        const nj_m3g_object *ob = &objs[i];
+        nj_ref o;
+
+        if (ob->fields.decoded == 0u) {
+            continue;
+        }
+        o = nj_array_get_ref(arr, i + 1u);
+        if (!o) {
+            continue;
+        }
+        if (ob->type == NJ_M3G_T_VERTEX_BUFFER) {
+            static const char *names[3] = { "_nj_positions", "_nj_normals",
+                                            "_nj_colors" };
+            nj_ref bias3;
+            float *bp;
+            nj_u4 k;
+
+            for (k = 0u; k < 3u; k++) {
+                nj_ref a = (ob->fields.refs[k] != 0u)
+                         ? m3g_resolve_ref(vm, arr, nobj, o, ob->fields.refs[k], mode)
+                         : 0;
+                if (a) {
+                    nj_rput(vm, o, m3g_fof(vm, NJ_C_VBUF, names[k],
+                                           "L" NJ_C_VARR ";"), a);
+                }
+            }
+            if (ob->fields.nrefs > 3u) {
+                nj_ref t = m3g_resolve_ref(vm, arr, nobj, o, ob->fields.refs[3], mode);
+                if (t) {
+                    nj_rput(vm, o, m3g_fof(vm, NJ_C_VBUF, "_nj_tex0",
+                                           "L" NJ_C_VARR ";"), t);
+                }
+            }
+            /* The API's setPositions(positions, scale, bias[]) keeps the
+               scalar in _nj_bias and the three floats in _nj_scale; the file
+               calls the same two things positionScale and positionBias. */
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_VBUF, "_nj_bias", "F"),
+                    (nj_s4)ob->fields.refs[NJ_M3G_MAX_REFS - 1u]);
+            bias3 = nj_array_new(vm, "F", 3u);
+            bp = bias3 ? (float *)nj_array_data(bias3) : NULL;
+            if (bp) {
+                bp[0] = bits2f((nj_s4)ob->fields.refs[NJ_M3G_MAX_REFS - 4u]);
+                bp[1] = bits2f((nj_s4)ob->fields.refs[NJ_M3G_MAX_REFS - 3u]);
+                bp[2] = bits2f((nj_s4)ob->fields.refs[NJ_M3G_MAX_REFS - 2u]);
+                nj_rput(vm, o, m3g_fof(vm, NJ_C_VBUF, "_nj_scale", "[F"),
+                        nj_root(vm, bias3));
+            }
+        } else if (ob->type == NJ_M3G_T_TRIANGLE_STRIP_ARRAY && ob->fields.data) {
+            nj_u4 isz = (ob->fields.a == 128u) ? 4u : (ob->fields.a == 130u) ? 2u : 1u;
+            nj_u4 n = ob->fields.b, k;
+            nj_ref ia = nj_array_new(vm, "I", n);
+            nj_s4 *ip = ia ? (nj_s4 *)nj_array_data(ia) : NULL;
+
+            if (ip) {
+                for (k = 0u; k < n; k++) {
+                    const nj_u1 *q = ob->fields.data + k * isz;
+                    ip[k] = (isz == 4u) ? (nj_s4)le32(q)
+                          : (isz == 2u)
+                          ? (nj_s4)((nj_u2)q[0] | ((nj_u2)q[1] << 8))
+                          : (nj_s4)(nj_u1)q[0];
+                }
+                nj_rput(vm, o, m3g_fof(vm, NJ_C_IBUF, "_nj_ib_data", "[I"),
+                        nj_root(vm, ia));
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_IBUF, "_nj_ib_count", "I"),
+                        (nj_s4)n);
+            }
+            {
+                nj_u4 ns = ob->fields.c;
+                nj_ref la = nj_array_new(vm, "I", ns);
+                nj_s4 *lp = la ? (nj_s4 *)nj_array_data(la) : NULL;
+
+                if (lp) {
+                    for (k = 0u; k < ns; k++) {
+                        lp[k] = (nj_s4)le32(ob->fields.data + (ob->fields.ref_off - 17u)
+                                            + 4u + 4u * k);
+                    }
+                    nj_rput(vm, o, m3g_fof(vm, NJ_C_TSA, "_nj_lengths", "[I"),
+                            nj_root(vm, la));
+                    nj_iput(vm, o, m3g_fof(vm, NJ_C_TSA, "_nj_strips", "I"),
+                            (nj_s4)ns);
+                }
+            }
+        }
+    }
+    return NJ_OK;
+}
+
 /*
  * Build the Java objects a container holds, from its bytes.  Both
  * Loader.load() overloads end up here: they differ only in where the bytes
@@ -3858,6 +4190,11 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
         nj_root_release(vm, inner);
     }
     if (nj_m3g_load_geometry(vm, objs, nobj, arr) != NJ_OK) {
+        m3g_free_refs(vm, objs, nobj);
+        nj_host_free(vm, objs);
+        return NJ_ERR;
+    }
+    if (m3g_link_geometry(vm, objs, nobj, arr) != NJ_OK) {
         m3g_free_refs(vm, objs, nobj);
         nj_host_free(vm, objs);
         return NJ_ERR;
@@ -8204,9 +8541,10 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
 
 NJFN(m3g_g3d_render5)
 {
-    ret->i = (nj_s4)m3g_render_jr(vm, NJ_THIS(args), NJ_ARG_REF(args, 0),
-                                  NJ_ARG_REF(args, 1), NJ_ARG_REF(args, 2),
-                                  NJ_ARG_REF(args, 3));
+    nj_u4 drew = m3g_render_jr(vm, NJ_THIS(args), NJ_ARG_REF(args, 0),
+                               NJ_ARG_REF(args, 1), NJ_ARG_REF(args, 2),
+                               NJ_ARG_REF(args, 3));
+    ret->i = (nj_s4)drew;
     return NJ_OK;
 }
 NJFN(m3g_g3d_getCamera)
