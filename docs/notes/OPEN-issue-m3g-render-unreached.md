@@ -240,3 +240,10 @@ With those, `3D拉力赛-进化汉化版_6366` draws its track: 172,032 triangle
 377,781 pixels over a 1,500-frame paced run, where the same run drew nothing
 before.  The picture is still flat white - materials, textures, lighting and
 the background clear are the next pieces.
+
+![the rally title's track, drawn](../images/rally3d-track.png)
+
+(The HUD is the title's own 2D layer; everything under it is the rasteriser's
+output.  The frame comes from
+`./build/nj2me --port headless --heap 16 --size 240x320 --fps 30 --run-frames
+1500 --dump-frames ... --keys ... tests/games/3D拉力赛-进化汉化版_6366.jar`.)
