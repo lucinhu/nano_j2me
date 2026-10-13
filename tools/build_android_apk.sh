@@ -138,7 +138,11 @@ print("  added %d entries" % len(add))
 PY
 
 # 4. Align, sign.
-KS="$OUT/debug.keystore"
+# One keystore for every build: a per-OUT key would make a rebuilt APK
+# impossible to install over the previous one (INSTALL_PARSE_FAILED_
+# INCONSISTENT_CERTIFICATES). The default lives under build/, so an --out
+# elsewhere still signs with the same debug key.
+KS="$ROOT/build/android/debug.keystore"
 if [ ! -f "$KS" ]; then
     "$JAVA_HOME_DIR/bin/keytool" -genkeypair -keystore "$KS" -storepass android \
         -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 \
