@@ -441,3 +441,41 @@ the row records which pace it came from ("the picture appeared only when the run
 was paced at 30 fps" / "still flat when paced at 30 fps"). In a twelve-title
 check set that turned three FAILs into PASSes (纯爱物语3之梦想之翼_5112,
 新三国志_10225, PC正版-使命召唤5_7199) and left the genuinely flat ones flat.
+
+## 疯狂企鹅中文版_10228: the runtime's half is verified, the game is stuck (2026-10-13)
+
+The row has read "flat frame ... 19200 Graphics calls over 300 paint() calls left
+the picture unchanged" since the paced retry went in, and the first throw is
+always `java/lang/NullPointerException at DCTuxedo.i()V pc=27`. What the runtime
+supplies is not in question:
+
+- A probe MIDlet injected into a copy of the JAR read every data resource the
+  title ships (`p`, `l0_0`, `r2`, `r10`, `icon.png`) through
+  `getClass().getResourceAsStream()` and reported the same length and the same
+  FNV-1a hash as python's `zipfile` reads from the JAR - byte for byte, so the
+  ZIP layer, the stream and the entry decompression all deliver what the file
+  holds.
+- Those blobs are the game's own format rather than PNG, JPEG or zlib (`l0_0`
+  starts `00 00 13 3d`, which is the file's own length, and there is no format
+  magic anywhere in them), so the decode is the game's Java code and nothing in
+  the run throws from it.
+- The title's current Displayable is its own fallback canvas: the whole of
+  `f.paint(Graphics)` is `System.out.println("aaaaa")`, which is where the 1439
+  `aaaaa` lines in the log come from.
+
+What the game does instead of drawing: its loop thread runs `k.run()` into
+`DCTuxedo.b(I)V pc=2017`, and `DCTuxedo.i()` throws at pc=27 on `a[C].a()` - `a`
+is a `[Ld;` of 26 slots and `DCTuxedo.v()` deliberately nulls every slot except
+4, 24, 25 and 21, expecting the state it is about to enter to have been built by
+`DCTuxedo.a(Z)`, `n()`, `w()`, `y()` or `b()`. The NPE is caught inside `b(I)`
+itself, which calls `printStackTrace()` every iteration (400 times before the
+run's log limit), so nothing is ever reported as uncaught.
+
+Three thousand frames paced at 30 fps - a hundred seconds of the game's own time
+- leave the same single colour, so this is not the starved-sweep case either.
+Either the game's flow never reaches the state factory it needs (its manifest
+advertises `Media-Price: 单次下载12元`, and this family is where the
+never-completing billing request lives), or the runtime breaks something in its
+data decode that the game swallows. The next step is to read the state index `B`
+holds when `i()` throws: it is a plain static field, so a debugger settles it in
+one run.
