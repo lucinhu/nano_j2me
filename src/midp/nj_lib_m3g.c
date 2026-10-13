@@ -3414,6 +3414,95 @@ static int m3g_list_resolves(nj_vm *vm, nj_ref arr, nj_u4 nobj, nj_ref self,
     return 1;
 }
 
+/*
+ * Which way this file numbers its object references.
+ *
+ * One file numbers its references one way, so the reading is chosen for the
+ * file and not for each list: a list of one child that happens to land on a
+ * node under the wrong reading is still the wrong child, and a scene graph
+ * built from the wrong children draws the wrong thing instead of nothing.  A
+ * reading is used only when every list in the file resolves under it.
+ *
+ * The loader asks this twice: once to link the children, and once to work out
+ * which objects the file's references name at all (the roots).  It was a block
+ * inside nj_m3g_link_groups until the roots needed the same answer, and two
+ * copies of a rule about an undocumented byte layout is one copy too many.
+ */
+static int m3g_ref_mode_of(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
+                           nj_ref arr)
+{
+    int m;
+
+    for (m = M3G_REF_ONE; m <= M3G_REF_UID; m++) {
+        nj_u4 j;
+        int all = 1;
+        for (j = 0u; j < nobj && all; j++) {
+            nj_ref gj;
+            if (objs[j].type != NJ_M3G_T_GROUP &&
+                objs[j].type != NJ_M3G_T_WORLD) {
+                continue;
+            }
+            if (objs[j].fields.nrefs_total == 0u) {
+                continue;
+            }
+            gj = nj_array_get_ref(arr, j + 1u);
+            if (gj && !m3g_list_resolves(vm, arr, nobj, gj, &objs[j], m)) {
+                all = 0;
+            }
+        }
+        if (all) {
+            return m;
+        }
+    }
+    return -1;
+}
+
+/*
+ * Remember that some object's reference names the object a reference value
+ * stands for, under the reading this file uses.
+ *
+ * The mark is by the file's own object number, which is what the table handed
+ * to the loader is indexed by (slot i + 1 holds object i).  A value that names
+ * nothing - the format's 0, or a number past the last object - marks nothing,
+ * which is the honest answer for a reference the file itself cannot resolve.
+ *
+ * Two values are deliberately not marks:
+ *
+ *  - A reference from an object to itself.  Reachability is what decides
+ *    whether an object is a root, and a self-loop would make any object with
+ *    one unrooted.  Two corpus files do exactly this: their World's trailing
+ *    pair reads back as camera 0 and background = the World's own number,
+ *    which is not a background any renderer could draw.
+ *  - A reference to a World.  A World is the top of a scene graph: nothing in
+ *    the format can hold it, Loader.load() is how a title gets hold of it, and
+ *    a title that finds it missing can only fail.  Reading a file's World out
+ *    of its own speculative trailing fields is a risk with no upside.
+ */
+static void m3g_mark_ref(nj_u1 *is_ref, const nj_m3g_object *objs, nj_u4 nobj,
+                         int mode, nj_u4 r, nj_u4 self)
+{
+    nj_u4 index;
+
+    if (r == 0u) {
+        return;
+    }
+    if (mode == M3G_REF_UID) {
+        nj_u4 j;
+        for (j = 0u; j < nobj; j++) {
+            if (objs[j].fields.user_id == r && j + 1u != self &&
+                objs[j].type != NJ_M3G_T_WORLD) {
+                is_ref[j + 1u] = 1u;
+            }
+        }
+        return;
+    }
+    index = (mode == M3G_REF_ZERO) ? r + 1u : r;
+    if (index >= 1u && index <= nobj && index != self &&
+        objs[index - 1u].type != NJ_M3G_T_WORLD) {
+        is_ref[index] = 1u;
+    }
+}
+
 nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
                              nj_ref arr)
 {
@@ -3423,39 +3512,7 @@ nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
     if (!vm || !objs || !arr) {
         return NJ_ERR_STATE;
     }
-    /*
-     * One file numbers its references one way, so the reading is chosen for
-     * the file and not for each list: a list of one child that happens to land
-     * on a node under the wrong reading is still the wrong child, and a scene
-     * graph built from the wrong children draws the wrong thing instead of
-     * nothing.  A reading is used only when every list in the file resolves
-     * under it.
-     */
-    file_mode = -1;
-    {
-        int m;
-        for (m = M3G_REF_ONE; m <= M3G_REF_UID && file_mode < 0; m++) {
-            nj_u4 j;
-            int all = 1;
-            for (j = 0u; j < nobj && all; j++) {
-                nj_ref gj;
-                if (objs[j].type != NJ_M3G_T_GROUP &&
-                    objs[j].type != NJ_M3G_T_WORLD) {
-                    continue;
-                }
-                if (objs[j].fields.nrefs_total == 0u) {
-                    continue;
-                }
-                gj = nj_array_get_ref(arr, j + 1u);
-                if (gj && !m3g_list_resolves(vm, arr, nobj, gj, &objs[j], m)) {
-                    all = 0;
-                }
-            }
-            if (all) {
-                file_mode = m;
-            }
-        }
-    }
+    file_mode = m3g_ref_mode_of(vm, objs, nobj, arr);
     for (i = 0u; i < nobj; i++) {
         nj_ref g, kids;
         nj_u4 k, total;
@@ -3583,7 +3640,9 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
     nj_u4 nobj = 0u, nsec = 0u, i;
     nj_u4 cap = 4096u;
     char err[192];
-    nj_ref arr;
+    nj_ref arr;      /* the file's own table: index 0 unused, object i at i + 1 */
+    nj_ref roots;    /* what the caller gets: the table's root objects only */
+    nj_u1 *is_ref = NULL;
     nj_u4 mark;
 
     objs = (nj_m3g_object *)nj_host_alloc(vm, (nj_size)(sizeof(nj_m3g_object) * cap));
@@ -3658,10 +3717,119 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
      * are decoded and carried (see nj_m3g_fields.refs) so that is a
      * change to the Group class, not to the file parser.
      */
+    /*
+     * Hand back the file's ROOT objects, not the file's whole table.
+     *
+     * JSR 184 requires this of the method: load() "returns an array of
+     * Object3Ds.  These are the root level objects in the file; in other
+     * words, those objects that are not referenced by any other objects.
+     * The array is guaranteed not to contain any null objects, but the order
+     * of the objects in the array is undefined."
+     *
+     * The table above is indexed the way the file numbers its objects - from
+     * one, with slot 0 unused - so handing it back meant two things the API
+     * forbids: null slots, and non-root objects mixed in with the roots.  A
+     * title doing the ordinary thing,
+     *
+     *     World w = (World) Loader.load("/res/arc.m3g")[0];
+     *
+     * read a null there and died of a NullPointerException inside its own
+     * constructor, far from the cause.  3D拉力赛-进化汉化版 is one of them:
+     * the race canvas loads its car that way, the constructor aborts, and
+     * the half-built canvas then throws on every paint.  The array the API
+     * describes has no nulls to trip over.
+     *
+     * Roots are computed from the references the parser already decoded: an
+     * object is a root when no other object names it.  Both index conventions
+     * are marked (the value and the value plus one) because which one a file
+     * uses is auto-detected later by the linking pass; over-marking drops a
+     * root, which costs an object in the answer, while under-marking would
+     * hand back something the API says is not there.
+     *
+     * The World goes first when the file has one.  The order is undefined in
+     * the API and the titles in the corpus read [0], so the undefined order
+     * is spent on the object they are all looking for.
+     */
+    is_ref = (nj_u1 *)nj_host_alloc(vm, (nj_size)(nobj + 1u));
+    if (!is_ref) {
+        m3g_free_refs(vm, objs, nobj);
+        nj_host_free(vm, objs);
+        return NJ_ERR_NOMEM;
+    }
+    for (i = 0u; i <= nobj; i++) {
+        is_ref[i] = 0u;
+    }
+    {
+        int mode = m3g_ref_mode_of(vm, objs, nobj, arr);
+        if (mode < 0) {
+            mode = M3G_REF_ONE;
+        }
+        for (i = 0u; i < nobj; i++) {
+            nj_u4 k;
+            for (k = 0u; k < objs[i].fields.nrefs; k++) {
+                m3g_mark_ref(is_ref, objs, nobj, mode, objs[i].fields.refs[k],
+                             i + 1u);
+            }
+            if (objs[i].type == NJ_M3G_T_WORLD) {
+                /* the World's own two references are read the same way */
+                m3g_mark_ref(is_ref, objs, nobj, mode, objs[i].fields.b, i + 1u);
+                m3g_mark_ref(is_ref, objs, nobj, mode, objs[i].fields.c, i + 1u);
+            }
+        }
+    }
+    {
+        nj_u4 count = 0u, world = 0u, at = 0u;
+        nj_u4 rootmark;
+
+        for (i = 0u; i < nobj; i++) {
+            nj_ref o = nj_array_get_ref(arr, i + 1u);
+            if (!o || is_ref[i + 1u]) {
+                continue;
+            }
+            count++;
+            if (objs[i].type == NJ_M3G_T_WORLD && !world) {
+                world = i + 1u;
+            }
+        }
+        if (count == 0u) {
+            /* every object is named by another one: answer with what exists,
+             * or the title gets an empty scene for a file full of geometry */
+            for (i = 0u; i < nobj; i++) {
+                if (nj_array_get_ref(arr, i + 1u)) {
+                    count++;
+                    if (objs[i].type == NJ_M3G_T_WORLD && !world) {
+                        world = i + 1u;
+                    }
+                }
+            }
+        }
+        rootmark = nj_root_mark(vm);
+        roots = nj_object_array_new(vm, "javax/microedition/m3g/Object3D", count);
+        if (!roots) {
+            nj_root_release(vm, rootmark);
+            nj_host_free(vm, is_ref);
+            m3g_free_refs(vm, objs, nobj);
+            nj_host_free(vm, objs);
+            return NJ_ERR_NOMEM;
+        }
+        roots = nj_root(vm, roots);
+        if (world) {
+            nj_array_set_ref(roots, at++, nj_array_get_ref(arr, world));
+        }
+        for (i = 0u; i < nobj && at < count; i++) {
+            nj_ref o = nj_array_get_ref(arr, i + 1u);
+            if (!o || i + 1u == world || is_ref[i + 1u]) {
+                continue;
+            }
+            nj_array_set_ref(roots, at++, o);
+        }
+        nj_root_release(vm, rootmark);
+    }
+    nj_host_free(vm, is_ref);
     nj_root_release(vm, mark);
     m3g_free_refs(vm, objs, nobj);
-        nj_host_free(vm, objs);
-    ret->r = arr;
+    nj_host_free(vm, objs);
+    ret->r = roots;
     return NJ_OK;
 }
 
