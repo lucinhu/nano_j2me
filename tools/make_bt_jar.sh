@@ -153,8 +153,12 @@ public class BtDemo extends MIDlet implements DiscoveryListener {
 
     private void search() {
         if (first == null) {
+            /* No peer heard.  The connections are still worth walking: a
+             * server URL is local (it does not need a peer to exist) and a
+             * client URL to a device that is not there has to come back with
+             * a sentence rather than a hang. */
             screen.log("no peer to search");
-            screen.log("done");
+            connections();
             return;
         }
         try {
@@ -196,6 +200,10 @@ public class BtDemo extends MIDlet implements DiscoveryListener {
         /* The client URL first: with no radio the port refuses it by name,
          * which is the answer this port owes a MIDlet rather than a silent
          * dead stream. */
+        connections();
+    }
+
+    private void connections() {
         client();
         server();
         l2cap();

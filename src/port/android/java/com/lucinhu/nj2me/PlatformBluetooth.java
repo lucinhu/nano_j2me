@@ -57,6 +57,8 @@ import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothClass;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothServerSocket;
+import android.bluetooth.BluetoothSocket;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -66,6 +68,9 @@ import android.os.Build;
 import android.os.ParcelUuid;
 import android.util.Log;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -340,7 +345,7 @@ final class PlatformBluetooth {
             scanMode = SCAN_MODE_NONE;
         } else {
             logOnce("discoverable-mode:" + mode,
-                    "this is not an inquiry access code the port knows");
+                    "this is not an inquiry access code the port knows: " + mode);
             return -1;
         }
         if (a == null) {
@@ -1089,4 +1094,422 @@ final class PlatformBluetooth {
         }
         Log.w(TAG, "bluetooth: " + detail);
     }
+
+    /* ---------------------------------------------------------------- */
+    /* Connections: a server, a client, and the bytes in between         */
+    /* ---------------------------------------------------------------- */
+
+    /*
+     * One handle space for both kinds: a server socket (listen/accept) and a
+     * connected socket (connect/accept's result).  The runtime holds the id as
+     * an opaque long, and close() on it releases whichever it is.
+     */
+    private static final Map<Long, Peer> PEERS = new HashMap<Long, Peer>();
+    private static long nextPeer = 1;
+
+    private static final class Peer {
+        final BluetoothServerSocket server;
+        final BluetoothSocket socket;
+        final InputStream in;
+        final OutputStream out;
+        /*
+         * A server socket needs a thread of its own parked in accept(): the
+         * platform's accept(int timeout) does not honour its timeout on this
+         * path - it waits on the socket's signal socket and blocks until a
+         * peer arrives - so the runtime's "come back in 250 ms and ask again"
+         * contract is met by polling this slot instead.  One thread per
+         * listening server, never one per call.
+         */
+        Thread waiter;
+        BluetoothSocket accepted;
+        boolean waiterDone;
+
+        Peer(BluetoothServerSocket s) {
+            this.server = s;
+            this.socket = null;
+            this.in = null;
+            this.out = null;
+        }
+
+        Peer(BluetoothSocket s) throws IOException {
+            this.server = null;
+            this.socket = s;
+            this.in = s.getInputStream();
+            this.out = s.getOutputStream();
+        }
+
+        void close() {
+            try {
+                if (server != null) {
+                    server.close();
+                }
+            } catch (Throwable ignored) {
+                /* a socket that is already gone is closed enough */
+            }
+            try {
+                if (socket != null) {
+                    socket.close();
+                }
+            } catch (Throwable ignored) {
+                /* same */
+            }
+        }
+    }
+
+    /*
+     * The UUID in a "btspp://localhost:<uuid>" URL.  JSR 82 writes it as the
+     * full 32 hex digits, but the short 4- and 8-digit forms are common in the
+     * wild, and both mean the Bluetooth base UUID with those digits in the
+     * low end.
+     */
+    private static UUID uuidOf(String url) {
+        /* The colon that separates the host from the UUID, not the one in
+         * "btspp://" - the scheme's own colon comes first in the string. */
+        int colon = url.indexOf(':', url.indexOf("//") + 2);
+        if (colon < 0) {
+            return null;
+        }
+        String hex = url.substring(colon + 1);
+        int semi = hex.indexOf(';');
+        if (semi >= 0) {
+            hex = hex.substring(0, semi);
+        }
+        hex = hex.replace("-", "").trim().toLowerCase(Locale.US);
+        if (hex.length() == 0 || hex.length() > 32) {
+            return null;
+        }
+        int i;
+        for (i = 0; i < hex.length(); i++) {
+            char c = hex.charAt(i);
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+                return null;
+            }
+        }
+        StringBuilder full = new StringBuilder();
+        if (hex.length() <= 8) {
+            full.append("00000000");
+        } else {
+            full.append(hex.substring(0, 8));
+            hex = hex.substring(8);
+        }
+        while (full.length() < 32 - hex.length()) {
+            full.append('0');
+        }
+        full.append(hex);
+        String h = full.toString();
+        return UUID.fromString(h.substring(0, 8) + "-" + h.substring(8, 12) + "-"
+                + h.substring(12, 16) + "-" + h.substring(16, 20) + "-"
+                + h.substring(20));
+    }
+
+    /* The ";name=x" part of a server URL, or a default. */
+    private static String nameOf(String url) {
+        int i = url.indexOf(";name=");
+        if (i < 0) {
+            return "nano_j2me";
+        }
+        String n = url.substring(i + 6);
+        int semi = n.indexOf(';');
+        if (semi >= 0) {
+            n = n.substring(0, semi);
+        }
+        return n.length() == 0 ? "nano_j2me" : n;
+    }
+
+    /*
+     * Open a server.  "btspp://localhost:<uuid>" becomes an RFCOMM listener
+     * with an SDP record; "btl2cap://localhost:<uuid>" becomes an L2CAP one,
+     * which exists from Android 10 on.  Returns 0 when the radio will not have
+     * it, which the runtime turns into ConnectionNotFoundException.
+     */
+    static synchronized long listen(String url) {
+        BluetoothAdapter a = adapter;
+        if (a == null || url == null) {
+            return 0;
+        }
+        UUID uuid = uuidOf(url);
+        try {
+            BluetoothServerSocket server;
+            if (url.startsWith("btl2cap:")) {
+                if (Build.VERSION.SDK_INT < 29) {
+                    logOnce("l2listen", "an L2CAP server needs Android 10 or newer");
+                    return 0;
+                }
+                server = a.listenUsingInsecureL2capChannel();
+            } else {
+                if (uuid == null) {
+                    logOnce("nouri", "the server URL has no UUID");
+                    return 0;
+                }
+                server = a.listenUsingInsecureRfcommWithServiceRecord(
+                        nameOf(url), uuid);
+            }
+            long id = nextPeer++;
+            PEERS.put(Long.valueOf(id), new Peer(server));
+            return id;
+        } catch (Throwable t) {
+            logOnce("listen:" + t.getClass().getName(),
+                    "the server could not be opened (" + t + ")");
+            return 0;
+        }
+    }
+
+    /*
+     * Wait for a peer, at most timeoutMs.  Zero means "nobody yet" - the
+     * runtime comes back and asks again - which is why the wait is bounded
+     * here rather than left to the platform's own accept().
+     */
+    static long accept(long handle, int timeoutMs) {
+        Peer p;
+        synchronized (PlatformBluetooth.class) {
+            p = PEERS.get(Long.valueOf(handle));
+        }
+        if (p == null || p.server == null) {
+            return 0;
+        }
+        startWaiter(p);
+        int wait = timeoutMs <= 0 ? 250 : timeoutMs;
+        long deadline = System.nanoTime() + (long) wait * 1000000L;
+        synchronized (p) {
+            while (p.accepted == null && !p.waiterDone) {
+                long left = deadline - System.nanoTime();
+                if (left <= 0) {
+                    break;
+                }
+                try {
+                    p.wait(Math.max(1L, left / 1000000L));
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            if (p.accepted != null) {
+                BluetoothSocket s = p.accepted;
+                p.accepted = null;
+                try {
+                    long id = nextPeer++;
+                    PEERS.put(Long.valueOf(id), new Peer(s));
+                    return id;
+                } catch (Throwable t) {
+                    try {
+                        s.close();
+                    } catch (Throwable ignored) {
+                        /* the peer is gone either way */
+                    }
+                    return 0;
+                }
+            }
+        }
+        return 0;               /* nobody yet: the caller comes back */
+    }
+
+    private static void startWaiter(final Peer p) {
+        synchronized (p) {
+            if (p.waiter != null) {
+                return;
+            }
+            Thread t = new Thread(new Runnable() {
+                public void run() {
+                    try {
+                        while (true) {
+                            BluetoothSocket s = p.server.accept();
+                            if (s == null) {
+                                break;
+                            }
+                            synchronized (p) {
+                                p.accepted = s;
+                                p.notifyAll();
+                            }
+                        }
+                    } catch (Throwable t) {
+                        /* close() lands here: the server socket is gone */
+                    }
+                    synchronized (p) {
+                        p.waiterDone = true;
+                        p.notifyAll();
+                    }
+                }
+            }, "nj2me-bt-accept");
+            t.setDaemon(true);
+            p.waiter = t;
+            t.start();
+        }
+    }
+
+    /*
+     * Connect to "btspp://<address>:<channel>" or
+     * "btl2cap://<address>:<psm>".  The platform's connect() has no timeout,
+     * so it runs on a short-lived thread and this call gives up after
+     * timeoutMs - a MIDlet waiting in Connector.open() must not be able to
+     * hang the VM thread for a minute.
+     */
+    static long connect(String url, final int timeoutMs) {
+        final BluetoothAdapter a = adapter;
+        if (a == null || url == null) {
+            return 0;
+        }
+        final String rest = url.substring(url.indexOf("//") + 2);
+        int colon = rest.lastIndexOf(':');
+        if (colon <= 0) {
+            return 0;
+        }
+        final String addr = rest.substring(0, colon).replace(":", "");
+        final String tail = rest.substring(colon + 1);
+        final boolean l2 = url.startsWith("btl2cap:");
+        final int channel;
+        if (l2) {
+            channel = 0;                 /* L2CAP takes a PSM, handled below */
+        } else {
+            try {
+                channel = Integer.parseInt(tail.trim());
+            } catch (Throwable t) {
+                return 0;
+            }
+        }
+        final int psm;
+        try {
+            psm = Integer.parseInt(tail.trim());
+        } catch (Throwable t) {
+            return 0;
+        }
+        final BluetoothSocket[] box = new BluetoothSocket[1];
+        final Throwable[] bad = new Throwable[1];
+        Thread t = new Thread(new Runnable() {
+            public void run() {
+                try {
+                    BluetoothDevice d = a.getRemoteDevice(addr);
+                    BluetoothSocket s;
+                    if (l2) {
+                        if (Build.VERSION.SDK_INT < 29) {
+                            throw new IOException("an L2CAP channel needs Android 10"
+                                    + " or newer");
+                        }
+                        s = d.createInsecureL2capChannel(psm);
+                    } else {
+                        s = rfcommSocket(d, channel);
+                    }
+                    s.connect();
+                    box[0] = s;
+                } catch (Throwable e) {
+                    bad[0] = e;
+                }
+            }
+        }, "nj2me-bt-connect");
+        t.setDaemon(true);
+        t.start();
+        try {
+            t.join(timeoutMs <= 0 ? 30000 : timeoutMs);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+        if (box[0] == null) {
+            if (bad[0] != null) {
+                logOnce("connect:" + bad[0].getClass().getName(),
+                        "the device could not be reached (" + bad[0] + ")");
+            } else {
+                logOnce("connect-slow", "the device did not answer in time");
+            }
+            return 0;
+        }
+        try {
+            long id = nextPeer++;
+            synchronized (PlatformBluetooth.class) {
+                PEERS.put(Long.valueOf(id), new Peer(box[0]));
+            }
+            return id;
+        } catch (Throwable e) {
+            try {
+                box[0].close();
+            } catch (Throwable ignored) {
+                /* nothing left to do about it */
+            }
+            return 0;
+        }
+    }
+
+    /*
+     * An RFCOMM socket for a channel number, which is what a JSR 82 client URL
+     * names: "btspp://<address>:<channel>".  Android's public API wants a
+     * service UUID and does the SDP lookup itself, while the channel-taking
+     * call is @hide and has been present since the beginning - so it is asked
+     * for by reflection and the standard Serial Port Profile UUID is the
+     * fallback.  A game that names a channel is talking about the SPP channel
+     * its peer opened, so both roads lead there; one skips the SDP round trip.
+     */
+    private static final UUID SPP_UUID =
+            UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
+
+    private static BluetoothSocket rfcommSocket(BluetoothDevice d, int channel)
+            throws IOException {
+        if (channel > 0) {
+            try {
+                java.lang.reflect.Method m = BluetoothDevice.class
+                        .getMethod("createInsecureRfcommSocket", Integer.TYPE);
+                Object s = m.invoke(d, Integer.valueOf(channel));
+                if (s instanceof BluetoothSocket) {
+                    return (BluetoothSocket) s;
+                }
+            } catch (Throwable t) {
+                logOnce("rfcomm-channel", "this platform will not open RFCOMM"
+                        + " channel " + channel + " directly (" + t + ");"
+                        + " falling back to a service lookup");
+            }
+        }
+        return d.createInsecureRfcommSocketToServiceRecord(SPP_UUID);
+    }
+
+    /*
+     * Read what is already there.  BluetoothSocket has no read timeout, but
+     * available() asks the native layer with a zero timeout, so this never
+     * blocks: 0 means "nothing yet, ask again", which is exactly what the
+     * runtime's bt_read(..., timeout_ms) contract wants.
+     */
+    static int read(long handle, byte[] buf, int off, int len) {
+        Peer p;
+        synchronized (PlatformBluetooth.class) {
+            p = PEERS.get(Long.valueOf(handle));
+        }
+        if (p == null || p.in == null || buf == null || len <= 0) {
+            return -1;
+        }
+        try {
+            int have = p.in.available();
+            if (have <= 0) {
+                return 0;
+            }
+            int want = have < len ? have : len;
+            int n = p.in.read(buf, off, want);
+            return n < 0 ? -1 : n;
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    static int write(long handle, byte[] buf, int off, int len) {
+        Peer p;
+        synchronized (PlatformBluetooth.class) {
+            p = PEERS.get(Long.valueOf(handle));
+        }
+        if (p == null || p.out == null || buf == null || len <= 0) {
+            return -1;
+        }
+        try {
+            p.out.write(buf, off, len);
+            p.out.flush();
+            return len;
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    static void close(long handle) {
+        Peer p;
+        synchronized (PlatformBluetooth.class) {
+            p = PEERS.remove(Long.valueOf(handle));
+        }
+        if (p != null) {
+            p.close();
+        }
+    }
+
 }

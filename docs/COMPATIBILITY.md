@@ -13,7 +13,7 @@ to be one of the gaps listed here, and knowing which one saves an afternoon.
 | MIDP 2.0 (JSR 118) | implemented, see the API table below |
 | MIDP 1.0 | implemented — every 1.0 call exists in 2.0 |
 | JSR 75 (FileConnection/PIM) | `FileConnection`, sandboxed to `--fs-dir`, and `RecordStore`; the PIM half (`ContactList`) is not implemented |
-| JSR 82 (Bluetooth) | implemented for discovery, on nine port hooks (`nj_port.bt_*`): `LocalDevice`, `DiscoveryAgent.startInquiry`/`searchServices`, `UUID`, `DeviceClass`, `DataElement`, `ServiceRecord` and `RemoteDevice`. The connections themselves (RFCOMM `btspp://` and L2CAP `btl2cap://`) are RFCOMM/L2CAP servers on `bt_listen/accept/read/write`, which a port may leave NULL — then the URL is refused by name. With no hooks at all (or a radio the port cannot reach, like an emulator) every operation raises `BluetoothStateException`, because a MIDlet that is told "no radio" keeps working and one that is told "no such class" does not |
+| JSR 82 (Bluetooth) | implemented, on ten port hooks (`nj_port.bt_*`): `LocalDevice`, `DiscoveryAgent.startInquiry`/`searchServices`, `UUID`, `DeviceClass`, `DataElement`, `ServiceRecord`, `RemoteDevice`, and RFCOMM `btspp://` / L2CAP `btl2cap://` connections both ways — a client through `bt_connect`, a server through `bt_listen/accept/read/write`. Any of the hooks may be NULL, and then that URL is refused by name. With no hooks at all (or a radio the port cannot reach) every operation raises `BluetoothStateException`, because a MIDlet that is told "no radio" keeps working and one that is told "no such class" does not. `DataElement` covers the int/boolean/String/UUID/sequence types; `L2CAPConnection` is a byte stream with the default 672-byte MTU |
 | JSR 256 (Sensor) | implemented: `findSensors`, `getSensorConnection`, channels, measurement ranges and data listeners, with the sensors themselves supplied by the port (`nj_port.sensor_list/open/read/close`). A port that has none reports none. Conditions are not evaluated — `addCondition` raises `UnsupportedOperationException` — and availability push answers `false` |
 | JSR 120/205 (messaging) | classes present; connections refuse the same way |
 | JSR 135 (Mobile Media) | tone and sampled PCM playback, WAV from a stream or a JAR resource, MIDI rendered by the runtime itself (or by the platform's synthesizer through the port's MIDI hooks), and AMR narrowband decoded by the runtime itself; no video. MP3, AAC and anything else the platform can decode arrive through `nj_port.audio_decode`, which is what the Android port does with MediaCodec |
@@ -274,10 +274,12 @@ the desktop build does and what `tools/check_socket.sh` asserts.
 
 Datagrams, server sockets, OBEX and the push registry are **not**
 implemented: `Connector.open` raises `ConnectionNotFoundException` naming the
-scheme.  JSR 82 Bluetooth is implemented for discovery, as described above; the
-part that is missing there is RFCOMM/L2CAP connections on a port that has not
-written the hooks, and L2CAP is a byte stream rather than a datagram service
-(`L2CAPConnection.receive()` reads, it does not wait for a packet boundary).
+scheme.  JSR 82 Bluetooth is implemented both ways, as described above, on a
+port that writes the hooks; a port that writes none refuses the URL by name
+rather than failing halfway, and the Android port writes them all — servers and
+clients alike — subject to the platform's own permissions.  L2CAP here is a byte
+stream rather than a datagram service (`L2CAPConnection.receive()` reads, it
+does not wait for a packet boundary, and `ready()` answers `false`).
 
 Bluetooth Low Energy has **no** Java ME standard API at all: JSR 82 predates it
 by a decade, and the vendor extensions that exist (`com.nokia.mid.bt.*` and

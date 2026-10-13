@@ -1182,11 +1182,12 @@ NJFN(connector_open)
         return ret->r ? NJ_OK : NJ_ERR;
     }
     /*
-     * Bluetooth.  A CLIENT connection ("btspp://001122334455:3") is a byte
-     * stream, so it goes to exactly the same place a socket does - the port
-     * decides what the URL means.  A SERVER URL names localhost, and that is
-     * the notifier the javax.bluetooth module hands back: acceptAndOpen()
-     * waits for a peer and returns the connection.
+     * Bluetooth.  A SERVER URL names localhost, and that is the notifier the
+     * javax.bluetooth module hands back: acceptAndOpen() waits for a peer and
+     * returns the connection.  A CLIENT URL ("btspp://001122334455:3") is a
+     * byte stream, but not a TCP one: it goes to the Bluetooth module, which
+     * asks the port's bt_connect() hook.  Handing it to socket_connect() would
+     * have made the port guess which of its two stacks the URL meant.
      */
     if (strncmp(u, "btspp://", 8u) == 0 || strncmp(u, "btl2cap://", 10u) == 0) {
         /* "btl2cap://" is two characters longer than "btspp://". */
@@ -1199,8 +1200,12 @@ NJFN(connector_open)
                     nj_bt_listen_error(vm, u));
             return NJ_OK;
         }
-        ret->r = nj_socket_new(vm, u);
-        return ret->r ? NJ_OK : NJ_ERR;
+        ret->r = nj_bt_connect(vm, u);
+        if (!ret->r)
+            return nj_throw(vm,
+                "javax/microedition/io/ConnectionNotFoundException",
+                nj_bt_connect_error(vm, u));
+        return NJ_OK;
     }
     return nj_throw(vm, "javax/microedition/io/ConnectionNotFoundException", u);
 }

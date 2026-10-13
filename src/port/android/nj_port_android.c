@@ -466,6 +466,12 @@ typedef struct android_state {
     jmethodID bt_inquiry_devices_mid;
     jmethodID bt_inquiry_stop_mid;
     jmethodID bt_services_mid;
+    jmethodID bt_listen_mid;
+    jmethodID bt_accept_mid;
+    jmethodID bt_connect_mid;
+    jmethodID bt_read_mid;
+    jmethodID bt_write_mid;
+    jmethodID bt_close_mid;
     int       bt_discovering;
     char      bt_address[BT_ADDR_CAP];
     char      bt_name[BT_NAME_CAP];
@@ -3712,6 +3718,169 @@ static int android_bt_services(void *ud, const char *address,
     return (int)n;
 }
 
+/* ------------------------------------------------------------------ */
+/* Bluetooth connections: servers, clients and the bytes in between     */
+/* ------------------------------------------------------------------ */
+/*
+ * The discovery half of javax.bluetooth is above; this is the half a MIDlet
+ * reaches for when it wants to play against another handset.  Every function
+ * here is one call into PlatformBluetooth, and every one of them can say "not
+ * now": a NULL from connect or listen makes the runtime refuse the URL by
+ * name, and a 0 from read means "nothing yet, ask again" - which is what the
+ * runtime's timeout loop is written against.
+ */
+static void *android_bt_listen(void *ud, const char *url, char *err,
+                               nj_size err_cap)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jstring ju;
+    jlong h;
+
+    if (err && err_cap) err[0] = '\0';
+    if (!s || !url) return NULL;
+    env = android_run_env(s);
+    if (!env || !s->bt_class || !s->bt_listen_mid) return NULL;
+    ju = (*env)->NewStringUTF(env, url);
+    if (!ju) return NULL;
+    h = (*env)->CallStaticLongMethod(env, s->bt_class, s->bt_listen_mid, ju);
+    (*env)->DeleteLocalRef(env, ju);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
+    if (h == 0) {
+        if (err && err_cap) {
+            const char *m = "the Bluetooth server could not be opened";
+            nj_size n = (nj_size)strlen(m);
+            if (n > err_cap - 1) n = err_cap - 1;
+            memcpy(err, m, n);
+            err[n] = '\0';
+        }
+        return NULL;
+    }
+    return (void *)(intptr_t)h;
+}
+
+static void *android_bt_accept(void *ud, void *handle, nj_u4 timeout_ms)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jlong h;
+
+    if (!s || !handle) return NULL;
+    env = android_run_env(s);
+    if (!env || !s->bt_class || !s->bt_accept_mid) return NULL;
+    h = (*env)->CallStaticLongMethod(env, s->bt_class, s->bt_accept_mid,
+                                     (jlong)(intptr_t)handle,
+                                     (jint)(timeout_ms ? timeout_ms : 250u));
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
+    return h ? (void *)(intptr_t)h : NULL;
+}
+
+static void *android_bt_connect(void *ud, const char *url, nj_u4 timeout_ms,
+                                char *err, nj_size err_cap)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jstring ju;
+    jlong h;
+
+    if (err && err_cap) err[0] = '\0';
+    if (!s || !url) return NULL;
+    env = android_run_env(s);
+    if (!env || !s->bt_class || !s->bt_connect_mid) return NULL;
+    ju = (*env)->NewStringUTF(env, url);
+    if (!ju) return NULL;
+    h = (*env)->CallStaticLongMethod(env, s->bt_class, s->bt_connect_mid, ju,
+                                     (jint)(timeout_ms ? timeout_ms : 30000u));
+    (*env)->DeleteLocalRef(env, ju);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
+    if (h == 0) {
+        if (err && err_cap) {
+            const char *m = "the Bluetooth device could not be reached";
+            nj_size n = (nj_size)strlen(m);
+            if (n > err_cap - 1) n = err_cap - 1;
+            memcpy(err, m, n);
+            err[n] = '\0';
+        }
+        return NULL;
+    }
+    return (void *)(intptr_t)h;
+}
+
+static int android_bt_read(void *ud, void *handle, nj_u1 *buf, int len,
+                           nj_u4 timeout_ms)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jbyteArray arr;
+    jint n;
+
+    (void)timeout_ms;
+    if (!s || !handle || !buf || len <= 0) return -1;
+    env = android_run_env(s);
+    if (!env || !s->bt_class || !s->bt_read_mid) return -1;
+    arr = (*env)->NewByteArray(env, (jsize)len);
+    if (!arr) return -1;
+    n = (*env)->CallStaticIntMethod(env, s->bt_class, s->bt_read_mid,
+                                    (jlong)(intptr_t)handle, arr, (jint)0,
+                                    (jint)len);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteLocalRef(env, arr);
+        return -1;
+    }
+    if (n > 0) {
+        (*env)->GetByteArrayRegion(env, arr, 0, (jsize)n, (jbyte *)buf);
+    }
+    (*env)->DeleteLocalRef(env, arr);
+    return (int)n;
+}
+
+static int android_bt_write(void *ud, void *handle, const nj_u1 *buf, int len)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jbyteArray arr;
+    jint n;
+
+    if (!s || !handle || !buf || len <= 0) return -1;
+    env = android_run_env(s);
+    if (!env || !s->bt_class || !s->bt_write_mid) return -1;
+    arr = (*env)->NewByteArray(env, (jsize)len);
+    if (!arr) return -1;
+    (*env)->SetByteArrayRegion(env, arr, 0, (jsize)len, (const jbyte *)buf);
+    n = (*env)->CallStaticIntMethod(env, s->bt_class, s->bt_write_mid,
+                                    (jlong)(intptr_t)handle, arr, (jint)0,
+                                    (jint)len);
+    (*env)->DeleteLocalRef(env, arr);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return -1;
+    }
+    return (int)n;
+}
+
+static void android_bt_close(void *ud, void *handle)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+
+    if (!s || !handle) return;
+    env = android_run_env(s);
+    if (!env || !s->bt_class || !s->bt_close_mid) return;
+    (*env)->CallStaticVoidMethod(env, s->bt_class, s->bt_close_mid,
+                                 (jlong)(intptr_t)handle);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+}
+
 /* Construction and the public configuration entry points              */
 /* ------------------------------------------------------------------ */
 /*
@@ -3820,17 +3989,22 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     out->socket_write = android_socket_write;
     out->socket_close = android_socket_close;
     /*
-     * Bluetooth discovery, through the platform's adapter.  The connection
-     * half (listen/accept/read/write) is left NULL on purpose: an emulator has
-     * no adapter at all, a phone's RFCOMM needs runtime permissions this
-     * bridge does not ask for yet, and a hook that cannot work is worse than a
-     * hook that is not there - the runtime refuses the URL by name instead of
-     * failing halfway through a connection.
+     * Bluetooth: discovery through the platform's adapter, and connections
+     * through BluetoothServerSocket/BluetoothSocket.  Every one of these is
+     * optional in the same way the rest of the port is - a device without a
+     * radio leaves available() at 0 and the runtime says so, and an accept()
+     * that times out is "nobody yet", not an error.
      */
     out->bt_local = android_bt_local;
     out->bt_discoverable = android_bt_discoverable;
     out->bt_inquiry = android_bt_inquiry;
     out->bt_services = android_bt_services;
+    out->bt_connect = android_bt_connect;
+    out->bt_listen = android_bt_listen;
+    out->bt_accept = android_bt_accept;
+    out->bt_read = android_bt_read;
+    out->bt_write = android_bt_write;
+    out->bt_close = android_bt_close;
     out->log = android_log;
     out->shutdown = android_shutdown;
     out->fps_cap = 30;
@@ -4416,6 +4590,24 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
             jmethodID bsvcs = (*env)->GetStaticMethodID(
                 env, bcls, "services",
                 "(Ljava/lang/String;Ljava/lang/String;)[Ljava/lang/String;");
+            /*
+             * The connection half.  A missing one is not fatal - the runtime
+             * treats a NULL hook as "this port cannot connect" and refuses the
+             * URL by name - but the ids are looked up once here so the hooks
+             * do not resolve them per call.
+             */
+            jmethodID blisten = (*env)->GetStaticMethodID(
+                env, bcls, "listen", "(Ljava/lang/String;)J");
+            jmethodID baccept = (*env)->GetStaticMethodID(env, bcls, "accept",
+                                                          "(JI)J");
+            jmethodID bconnect = (*env)->GetStaticMethodID(
+                env, bcls, "connect", "(Ljava/lang/String;I)J");
+            jmethodID bread = (*env)->GetStaticMethodID(env, bcls, "read",
+                                                        "(J[BII)I");
+            jmethodID bwrite = (*env)->GetStaticMethodID(env, bcls, "write",
+                                                         "(J[BII)I");
+            jmethodID bclose = (*env)->GetStaticMethodID(env, bcls, "close",
+                                                         "(J)V");
             if ((*env)->ExceptionCheck(env)) {
                 (*env)->ExceptionClear(env);
                 bavail = NULL;
@@ -4431,6 +4623,12 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
                 s->bt_inquiry_devices_mid = bdevs;
                 s->bt_inquiry_stop_mid = bstop;
                 s->bt_services_mid = bsvcs;
+                s->bt_listen_mid = blisten;
+                s->bt_accept_mid = baccept;
+                s->bt_connect_mid = bconnect;
+                s->bt_read_mid = bread;
+                s->bt_write_mid = bwrite;
+                s->bt_close_mid = bclose;
             } else {
                 __android_log_print(ANDROID_LOG_WARN, "nj2me",
                                     "bluetooth: PlatformBluetooth is present "
@@ -4877,6 +5075,12 @@ Java_com_lucinhu_nj2me_GameActivity_nativeDestroy(JNIEnv *env, jobject thiz,
         s->bt_inquiry_devices_mid = NULL;
         s->bt_inquiry_stop_mid = NULL;
         s->bt_services_mid = NULL;
+        s->bt_listen_mid = NULL;
+        s->bt_accept_mid = NULL;
+        s->bt_connect_mid = NULL;
+        s->bt_read_mid = NULL;
+        s->bt_write_mid = NULL;
+        s->bt_close_mid = NULL;
         s->bt_discovering = 0;
     }
     nj_port_shutdown(&a->port);

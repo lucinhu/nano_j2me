@@ -701,11 +701,11 @@ PLATFORM pic.png FAILED java.io.IOException: cannot decode image: 102 bytes
 is what a `-DNJ_ENABLE_PNG=0` build answers, instead of the same "cannot decode
 image" a corrupt file gets.
 
-## Bluetooth: the nine hooks
+## Bluetooth: the ten hooks
 
 `javax.bluetooth` (JSR 82) is split the same way the package is: asking what is
-out there, and connecting to it. The first half is five hooks, the second half
-is four, and every one of them may be NULL.
+out there, connecting to it, and serving it. The first half is four hooks, the
+connection half is five, and every one of them may be NULL.
 
 | Hook | Answers |
 | --- | --- |
@@ -713,34 +713,58 @@ is four, and every one of them may be NULL.
 | `bt_discoverable` | asks the radio to become (or stop being) discoverable; returns the mode achieved |
 | `bt_inquiry` | fills in the devices found so far, at most `max`, waiting no longer than `duration_ms`. Called once per pump slice while the inquiry runs |
 | `bt_services` | fills in the services known for one address, optionally filtered by a UUID |
+| `bt_connect` | opens a CLIENT connection to a `btspp://<address>:<channel>` or `btl2cap://<address>:<psm>` URL and returns an opaque handle |
 | `bt_listen` | opens a server on a `btspp://localhost:<uuid>` or `btl2cap://localhost:<uuid>` URL and returns an opaque handle |
 | `bt_accept` | waits for a peer, at most `timeout_ms`, and returns a connection handle |
 | `bt_read` / `bt_write` | the byte stream on that connection |
 | `bt_close` | hangs up one connection, or one server |
 
-A port with no radio leaves all nine NULL. `SensorManager`-style degradation is
+`bt_connect` is deliberately NOT `socket_connect`, although both open a TCP-ish
+stream: a Bluetooth connect has to name the RFCOMM channel or the L2CAP PSM, and
+a port that has a socket layer but no radio must still refuse `btspp://` by
+name. A port with both writes two small functions.
+
+A port with no radio leaves all ten NULL. `SensorManager`-style degradation is
 the rule here too: the classes are present, `LocalDevice.getLocalDevice()`
 raises `BluetoothStateException`, and `Connector.open("btspp://...")` refuses by
-name. That is what an Android emulator does — the bridge is there, the adapter
-is not — and it is what the corpus titles that ask "is there Bluetooth?" need
-in order to keep running.
+name — with one sentence for a server URL and another for a client one.
 
 An inquiry is a poll, not a callback: `bt_inquiry` is called once per frame-pump
 slice, it must return devices in a STABLE order (discovery order) because the
 runtime fires `deviceDiscovered()` only for the ones it has not reported yet,
 and `inquiryCompleted()` arrives when `duration_ms` is up. A simulated radio
 that knows its answer immediately sets `inquiry_ms` small; a real one leaves it
-0 and gets the twelve seconds a real inquiry needs.
+0 and gets the twelve seconds a real inquiry needs. `bt_accept` is called in
+250 ms slices and the runtime stops after thirty seconds of REAL time, so a hook
+that blocks for its whole slice is still bounded — the budget is measured with
+the VM's clock, not by adding up the pauses.
 
-On Android the bridge is `PlatformBluetooth.java` over `BluetoothAdapter` and
-`BroadcastReceiver`, and the manifest declares `BLUETOOTH`/`BLUETOOTH_ADMIN`
-(up to API 30) plus `BLUETOOTH_SCAN`/`BLUETOOTH_CONNECT`/`BLUETOOTH_ADVERTISE`.
-The three modern ones are runtime permissions: this app never raises the prompt
-itself, so on a device running Android 12 or newer grant them once with
+On Android the bridge is `PlatformBluetooth.java`: discovery over
+`BluetoothAdapter` and a `BroadcastReceiver`, servers over
+`listenUsingInsecureRfcommWithServiceRecord()` (the SPP UUID) and
+`listenUsingInsecureL2capChannel()` (API 29+), and clients over
+`createInsecureRfcommSocket()`/`createInsecureL2capChannel()` driven from a
+worker thread with a join timeout, because the platform's own connect has none.
+`accept()` gets one parked waiter thread per server: Android's
+`BluetoothServerSocket.accept(int timeout)` does not honour its timeout (the
+call ends up in `waitSocketSignal`), and one thread per server is cheaper than
+one per poll. The manifest declares `BLUETOOTH`/`BLUETOOTH_ADMIN` (up to API 30)
+plus `BLUETOOTH_SCAN`/`BLUETOOTH_CONNECT`/`BLUETOOTH_ADVERTISE`. The three
+modern ones are runtime permissions: this app never raises the prompt itself, so
+on a device running Android 12 or newer grant them once with
 `adb shell pm grant com.lucinhu.nj2me android.permission.BLUETOOTH_CONNECT`
-(and `...BLUETOOTH_SCAN`). Until then `LocalDevice.getLocalDevice()` raises
+(and `...BLUETOOTH_SCAN`, and `...BLUETOOTH_ADVERTISE` if the MIDlet calls
+`setDiscoverable()`). Until then `LocalDevice.getLocalDevice()` raises
 `BluetoothStateException`, which is the correct answer from a program's point of
 view: no radio is available, keep playing.
+
+An Android emulator HAS a virtual adapter, so there the walk goes further: the
+address and name come back, `setDiscoverable()` works once `BLUETOOTH_ADVERTISE`
+is granted (before that the platform refuses and the bridge says so once), an
+inquiry runs its twelve seconds and finds nothing, and a connection to a device
+that does not exist comes back as `ConnectionNotFoundException` rather than a
+hang. `BluetoothAdapter.getBluetoothClass()` is a hidden API on modern releases,
+so the class-of-device reads 0 — the same answer as a radio that will not say.
 
 `tools/check_bt.sh` runs the whole walk against the headless port's fake radio
 (`NJ_HEADLESS_BT=1`), which is opt-in precisely because the radio-less answer is

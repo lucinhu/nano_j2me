@@ -666,6 +666,15 @@ typedef struct nj_port {
      *   bt_services     search one device for services whose UUID matches
      *                   `uuid` (NULL = any).  Same rules: returns a count,
      *                   0 or < 0, and never blocks for long.
+     *   bt_connect      open a client connection from a
+     *                   "btspp://<address>:<channel>" or
+     *                   "btl2cap://<address>:<psm>" URL, waiting no longer than
+     *                   `timeout_ms` for the peer, returning a connection
+     *                   handle (NULL + a sentence in `err` when it cannot).
+     *                   This is deliberately NOT socket_connect: a TCP socket
+     *                   cannot reach a Bluetooth address, and a port that has
+     *                   both would otherwise have to guess from the URL which
+     *                   of its two stacks the caller meant.
      *   bt_listen       open a server from a "btspp://localhost:<uuid>;name=x"
      *                   or "btl2cap://localhost:<uuid>;name=x" URL, returning a
      *                   notifier handle (NULL + a sentence in `err` if it
@@ -685,6 +694,8 @@ typedef struct nj_port {
     int   (*bt_inquiry)(void *ud, nj_bt_device *out, int max, nj_u4 duration_ms);
     int   (*bt_services)(void *ud, const char *address, const nj_u1 *uuid,
                          nj_bt_service *out, int max);
+    void *(*bt_connect)(void *ud, const char *url, nj_u4 timeout_ms,
+                        char *err, nj_size err_cap);
     void *(*bt_listen)(void *ud, const char *url, char *err, nj_size err_cap);
     void *(*bt_accept)(void *ud, void *handle, nj_u4 timeout_ms);
     int   (*bt_read)(void *ud, void *handle, nj_u1 *buf, int len,

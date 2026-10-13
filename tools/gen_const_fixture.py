@@ -44,6 +44,12 @@ def main():
         for name, value in sorted(consts.items()):
             # Only ints and Strings; anything else is not inlined the same way
             # and is out of scope for this check.
+            if value.startswith("byte:"):
+                # A byte constant (SocketConnection's option ids are bytes).
+                # javac inlines the value exactly like an int, so the check is
+                # the same one - but the runtime declares the field as an int,
+                # and without this the value read as the text "null".
+                value = value[5:]
             if value.startswith("null:"):
                 # A typed null in the stubs that the RUNTIME constructs (an Alert
                 # DISMISS_COMMAND, say).  Its identity is not a value that can be

@@ -1143,7 +1143,7 @@ CLASSES = {
     },
     "javax/bluetooth/DiscoveryAgent": {
         "constants": {
-            "NOT_DISCOVERABLE": "0", "GIAC": "10390227", "LIAC": "10390208",
+            "NOT_DISCOVERABLE": "0", "GIAC": "10390323", "LIAC": "10390272",
             "CACHED": "0", "PREKNOWN": "1",
         },
         "methods": [

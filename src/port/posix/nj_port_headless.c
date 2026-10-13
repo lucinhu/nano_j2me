@@ -113,6 +113,7 @@ typedef struct nj_headless_state {
      */
     int    bt_listens;            /* how many servers were opened */
     int    bt_accepts;
+    int    bt_connects;   /* client connections made through bt_connect */
     long   bt_bytes_read;
     long   bt_bytes_written;
     char   bt_last_url[192];
@@ -1078,9 +1079,53 @@ static void *hl_bt_listen(void *ud, const char *url, char *err,
     return s;
 }
 
-static void *hl_bt_accept(void *ud, void *handle, nj_u4 timeout_ms)
+/*
+ * A client connection to one of the fake peers.  Only the two advertised
+ * addresses can be reached; anything else is refused with a sentence, which is
+ * what a real port does for a device that is not there.
+ */
+static void *hl_bt_connect(void *ud, const char *url, nj_u4 timeout_ms,
+                           char *err, nj_size err_cap)
 {
     nj_headless_state *s = HS(ud);
+    int i;
+
+    (void)timeout_ms;
+    if (err && err_cap) {
+        err[0] = '\0';
+    }
+    if (!s || !url) {
+        return NULL;
+    }
+    if (strncmp(url, "btspp://001122aabbcc", 20) != 0
+        && strncmp(url, "btl2cap://001122aabbcc", 22) != 0) {
+        if (err && err_cap) {
+            const char *m = "no such Bluetooth device";
+            nj_size n = strlen(m);
+            if (n > err_cap - 1) n = err_cap - 1;
+            memcpy(err, m, (size_t)n);
+            err[n] = '\0';
+        }
+        return NULL;
+    }
+    for (i = 0; i < 4; i++) {
+        if (!s->bt_conn_used[i]) {
+            break;
+        }
+    }
+    if (i == 4) {
+        return NULL;
+    }
+    s->bt_conn_used[i] = 1;
+    s->bt_conn_len[i] = (int)strlen(HL_BT_GREETING);
+    s->bt_conn_pos[i] = 0;
+    memcpy(s->bt_conn_buf[i], HL_BT_GREETING, (size_t)s->bt_conn_len[i]);
+    s->bt_connects++;
+    return (void *)(intptr_t)(i + 1);
+}
+
+static void *hl_bt_accept(void *ud, void *handle, nj_u4 timeout_ms)
+{    nj_headless_state *s = HS(ud);
     int i;
 
     (void)timeout_ms;
@@ -1221,6 +1266,7 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
         out->bt_discoverable = hl_bt_discoverable;
         out->bt_inquiry = hl_bt_inquiry;
         out->bt_services = hl_bt_services;
+        out->bt_connect = hl_bt_connect;
         out->bt_listen = hl_bt_listen;
         out->bt_accept = hl_bt_accept;
         out->bt_read = hl_bt_read;

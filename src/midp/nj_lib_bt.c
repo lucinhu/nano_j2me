@@ -133,6 +133,11 @@
  * the job's own deadline is what ends it. */
 #define BT_SLICE_MS 250u
 
+/* How long a client connection waits for the peer.  JSR 82 has no timeout
+ * argument on Connector.open(), and a caller that wanted a short wait cannot
+ * ask for one, so this is the same thirty seconds the socket module uses. */
+#define BT_CONNECT_MS 30000u
+
 /* JSR 82's own numbers, repeated here because the runtime never includes the
  * stub headers. */
 #define BT_GIAC 0x9E8B33
@@ -493,18 +498,21 @@ static void bt_run_inquiry(nj_vm *vm, nj_ref job)
         nj_s4 fired = bget_int(vm, job, NJ_C_JOB, F_JFIRED, "I");
         if (fired > n) fired = 0;          /* the port changed its mind */
         for (i = fired; i < n; i++) {
-        nj_value a[2];
-        nj_ref d = bt_remote_new(vm, devs[i].address, devs[i].name,
-                                 devs[i].device_class);
-        nj_ref dc = nj_object_new(vm, NJ_C_DEVCLASS);
-        if (!d) continue;
-        if (dc) bset_int(vm, dc, NJ_C_DEVCLASS, F_DVAL, "I",
-                         (nj_s4)devs[i].device_class);
-        a[0].r = d;
-        a[1].r = dc;
-        (void)nj_call(vm, listener, NJ_C_LISTENER, "deviceDiscovered",
-                      "(Ljavax/bluetooth/RemoteDevice;Ljavax/bluetooth/DeviceClass;)V",
-                      a, NULL);
+            /* Named cb, not a: tools/check_arg_slots.py keys argument arrays
+             * by name across the file, so two functions that both call a local
+             * "a" of different sizes read as one. */
+            nj_value cb[2];
+            nj_ref d = bt_remote_new(vm, devs[i].address, devs[i].name,
+                                     devs[i].device_class);
+            nj_ref dc = nj_object_new(vm, NJ_C_DEVCLASS);
+            if (!d) continue;
+            if (dc) bset_int(vm, dc, NJ_C_DEVCLASS, F_DVAL, "I",
+                             (nj_s4)devs[i].device_class);
+            cb[0].r = d;
+            cb[1].r = dc;
+            (void)nj_call(vm, listener, NJ_C_LISTENER, "deviceDiscovered",
+                          "(Ljavax/bluetooth/RemoteDevice;Ljavax/bluetooth/DeviceClass;)V",
+                          cb, NULL);
         }
         if (n > fired) bset_int(vm, job, NJ_C_JOB, F_JFIRED, "I", n);
     }
@@ -546,7 +554,7 @@ static void bt_run_search(nj_vm *vm, nj_ref job)
     }
     {
         nj_ref arr = nj_array_new(vm, NJ_C_SVCREC, (nj_u4)n);
-        nj_value a[2];
+        nj_value cb[2];
         if (!arr) {
             bt_call_completed(vm, listener, job, "serviceSearchCompleted", 3);
             bset_int(vm, job, NJ_C_JOB, F_JDONE, "Z", 1);
@@ -556,10 +564,10 @@ static void bt_run_search(nj_vm *vm, nj_ref job)
             nj_ref rec = bt_record_new(vm, &svcs[i]);
             if (rec) nj_array_set_ref(arr, (nj_u4)i, rec);
         }
-        a[0].i = trans;
-        a[1].r = arr;
+        cb[0].i = trans;
+        cb[1].r = arr;
         (void)nj_call(vm, listener, NJ_C_LISTENER, "servicesDiscovered",
-                      "(I[Ljavax/bluetooth/ServiceRecord;)V", a, NULL);
+                      "(I[Ljavax/bluetooth/ServiceRecord;)V", cb, NULL);
     }
     bt_call_completed(vm, listener, job, "serviceSearchCompleted", 1);
     bset_int(vm, job, NJ_C_JOB, F_JDONE, "Z", 1);
@@ -833,11 +841,11 @@ NJFN(delem_get_value)
         /* A number comes back as a Long: the reference implementation does the
          * same, and a MIDlet that wants an int calls intValue(). */
         {
-            nj_value a[2], out;
-            a[0].j = bget_long(vm, NJ_THIS(args), NJ_C_DELEM, F_ENUM, "J");
+            nj_value wide[2], out;
+            wide[0].j = bget_long(vm, NJ_THIS(args), NJ_C_DELEM, F_ENUM, "J");
             out.r = NULL;
             if (nj_call_static(vm, "java/lang/Long", "valueOf",
-                               "(J)Ljava/lang/Long;", a, &out) != NJ_OK)
+                               "(J)Ljava/lang/Long;", wide, &out) != NJ_OK)
                 return NJ_ERR;
             ret->r = out.r;
         }
@@ -893,16 +901,16 @@ NJFN(delem_insert)
 {
     nj_s4 t = bget_int(vm, NJ_THIS(args), NJ_C_DELEM, F_ETYPE, "I");
     nj_ref seq;
-    nj_value a[2];
+    nj_value cb[2];
     if (t != DE_DATSEQ && t != DE_DATALT)
         return nj_throw(vm, "java/lang/ClassCastException", NULL);
     seq = bget_ref(vm, NJ_THIS(args), NJ_C_DELEM, F_ESEQ, "Ljava/util/Vector;");
     if (!seq || !NJ_ARG_REF(args, 0))
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
-    a[0].r = NJ_ARG_REF(args, 0);
-    a[1].i = NJ_ARG_INT(args, 1);
+    cb[0].r = NJ_ARG_REF(args, 0);
+    cb[1].i = NJ_ARG_INT(args, 1);
     (void)nj_call(vm, seq, NJ_C_VECTOR, "insertElementAt",
-                  "(Ljava/lang/Object;I)V", a, NULL);
+                  "(Ljava/lang/Object;I)V", cb, NULL);
     return NJ_OK;
 }
 
@@ -1452,23 +1460,23 @@ static int bt_x_read_once(nj_vm *vm, const char *cls, nj_ref conn, nj_u1 *buf,
                           int len, nj_u4 budget_ms, int *eof)
 {
     const nj_port *p = bt_port_of(vm, conn);
-    nj_u4 waited = 0;
+    nj_u4 start = nj_now_ms(vm);
     *eof = 0;
     if (bt_x_closed(vm, cls, conn) || bt_x_handle(vm, cls, conn) == 0)
         return -2;
     if (!p || !p->bt_read)
         return -2;
     /* A port that cannot wait answers 0 immediately; the runtime keeps asking
-     * until the caller's own patience - the same budget - runs out. */
+     * until the caller's own patience - the same budget - runs out.  The clock
+     * is the VM's, because the call below may itself have waited 250 ms. */
     for (;;) {
         int n = p->bt_read(p->ud, (void *)(intptr_t)bt_x_handle(vm, cls, conn),
                            buf, len, budget_ms > 250 ? 250 : budget_ms);
         if (n > 0) return n;
         if (n < 0) { *eof = 1; return -1; }
-        if (waited >= budget_ms) return 0;
+        if ((nj_u4)(nj_now_ms(vm) - start) >= budget_ms) return 0;
         if (p->sleep_ms) p->sleep_ms(p->ud, 10);
         else if (p->idle) p->idle(p->ud);
-        waited += 10;
     }
 }
 
@@ -1789,15 +1797,20 @@ static void *bt_accept_wait(nj_vm *vm, nj_ref notifier, const char *cls,
 {
     const nj_port *p = nj_vm_port(vm);
     nj_s8 h = bget_long(vm, notifier, cls, F_NHANDLE, "J");
-    nj_u4 waited = 0;
+    nj_u4 start = nj_now_ms(vm);
     if (h == 0 || !p || !p->bt_accept) return NULL;
     for (;;) {
         void *peer = p->bt_accept(p->ud, (void *)(intptr_t)h, 250);
         if (peer) return peer;
-        if (waited >= cap_ms) return NULL;
+        /*
+         * The budget is real time, not a count of pauses.  The call above may
+         * itself have waited its own 250 ms, so a loop that only added up the
+         * sleeps below would let a 30-second accept run for minutes - which is
+         * what a MIDlet stuck in acceptAndOpen() looks like.
+         */
+        if ((nj_u4)(nj_now_ms(vm) - start) >= cap_ms) return NULL;
         if (p->sleep_ms) p->sleep_ms(p->ud, 10);
         else if (p->idle) p->idle(p->ud);
-        waited += 10;
     }
 }
 
@@ -1905,6 +1918,61 @@ const char *nj_bt_listen_error(nj_vm *vm, const char *url)
     return "the Bluetooth server could not be opened";
 }
 
+/*
+ * A CLIENT connection: "btspp://001122334455:3" or "btl2cap://001122334455:1".
+ * This used to be handed to socket_connect() on the theory that a byte stream
+ * is a byte stream - true for the runtime, wrong for the port: a TCP socket
+ * cannot reach a Bluetooth address, and a port with both stacks would have had
+ * to guess from the URL which one the caller meant.  It gets its own hook, and
+ * with that hook NULL the URL is refused by name like every other optional
+ * feature here.
+ */
+nj_ref nj_bt_connect(nj_vm *vm, const char *url)
+{
+    const nj_port *p = nj_vm_port(vm);
+    char err[128];
+    void *handle;
+    int l2;
+    nj_ref c;
+
+    if (!url) return NULL;
+    if (!p || !p->bt_connect) return NULL;
+    l2 = strncmp(url, "btl2cap:", 8) == 0;
+    err[0] = '\0';
+    handle = p->bt_connect(p->ud, url, BT_CONNECT_MS, err, sizeof err);
+    if (!handle) return NULL;
+    if (l2) {
+        c = nj_object_new(vm, NJ_C_BTL2);
+        if (c) {
+            bset_long(vm, c, NJ_C_BTL2, F_BHANDLE, "J", (nj_s8)(intptr_t)handle);
+            bset_ref(vm, c, NJ_C_BTL2, F_BURL, "Ljava/lang/String;",
+                     bstr(vm, url));
+        }
+    } else {
+        c = nj_object_new(vm, NJ_C_BTSTREAM);
+        if (c) {
+            bset_long(vm, c, NJ_C_BTSTREAM, F_BHANDLE, "J",
+                      (nj_s8)(intptr_t)handle);
+            bset_ref(vm, c, NJ_C_BTSTREAM, F_BURL, "Ljava/lang/String;",
+                     bstr(vm, url));
+        }
+    }
+    if (!c) {
+        if (p->bt_close) p->bt_close(p->ud, handle);
+        return NULL;
+    }
+    return c;
+}
+
+const char *nj_bt_connect_error(nj_vm *vm, const char *url)
+{
+    const nj_port *p = nj_vm_port(vm);
+    if (!p || !p->bt_connect)
+        return "this build has no Bluetooth support; the port must supply it";
+    (void)url;
+    return "the Bluetooth device could not be reached";
+}
+
 /* ------------------------------------------------------------------ */
 /* The class and native tables                                         */
 /* ------------------------------------------------------------------ */
@@ -1939,11 +2007,24 @@ static const nj_builtin_method btstate_methods[] = {
     M("<init>", "(Ljava/lang/String;)V", NJ_ACC_PUBLIC)
 };
 
+/* The specification's public constants.  They are declared as fields because
+ * the runtime is what a MIDlet's javac-INLINED copy is compared against, and
+ * javac took the value from tools/midp_stubs.py: tests/test_consts walks that
+ * list and reads these.  The numbers themselves are written once, by
+ * nj_bt_late_init() at the end of this file. */
+#define CONST(name) FLD(name, "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL)
+
 static const nj_builtin_field delem_fields[] = {
     FLD(F_ETYPE, "I", NJ_ACC_PRIVATE),
     FLD(F_ENUM,  "J", NJ_ACC_PRIVATE),
     FLD(F_EOBJ,  "Ljava/lang/Object;", NJ_ACC_PRIVATE),
-    FLD(F_ESEQ,  "Ljava/util/Vector;", NJ_ACC_PRIVATE)
+    FLD(F_ESEQ,  "Ljava/util/Vector;", NJ_ACC_PRIVATE),
+
+    CONST("NULL"), CONST("U_INT_1"), CONST("U_INT_2"), CONST("U_INT_4"),
+    CONST("U_INT_8"), CONST("U_INT_16"), CONST("INT_1"), CONST("INT_2"),
+    CONST("INT_4"), CONST("INT_8"), CONST("INT_16"), CONST("UUID"),
+    CONST("STRING"), CONST("BOOL"), CONST("DATSEQ"), CONST("DATALT"),
+    CONST("URL")
 };
 static const nj_builtin_method delem_methods[] = {
     M("<init>",           "(I)V", NJ_ACC_PUBLIC),
@@ -1966,7 +2047,10 @@ static const nj_builtin_field svcrec_fields[] = {
     FLD(F_RNAME, "Ljava/lang/String;", NJ_ACC_PRIVATE),
     FLD(F_RUUID, "Ljavax/bluetooth/UUID;", NJ_ACC_PRIVATE),
     FLD(F_RIDS,  "[I", NJ_ACC_PRIVATE),
-    FLD(F_RVALS, "[Ljava/lang/Object;", NJ_ACC_PRIVATE)
+    FLD(F_RVALS, "[Ljava/lang/Object;", NJ_ACC_PRIVATE),
+
+    CONST("NOAUTHENTICATE_NOENCRYPT"), CONST("AUTHENTICATE_NOENCRYPT"),
+    CONST("AUTHENTICATE_ENCRYPT")
 };
 static const nj_builtin_method svcrec_methods[] = {
     M("getConnectionURL",   "(IZ)Ljava/lang/String;", NJ_ACC_PUBLIC),
@@ -2016,6 +2100,14 @@ static const nj_builtin_method agent_methods[] = {
     M("selectService",     "(Ljavax/bluetooth/UUID;IZ)Ljava/lang/String;", NJ_ACC_PUBLIC)
 };
 
+static const nj_builtin_field listener_fields[] = {
+    CONST("INQUIRY_COMPLETED"), CONST("INQUIRY_TERMINATED"),
+    CONST("INQUIRY_ERROR"), CONST("SERVICE_SEARCH_COMPLETED"),
+    CONST("SERVICE_SEARCH_TERMINATED"), CONST("SERVICE_SEARCH_ERROR"),
+    CONST("SERVICE_SEARCH_NO_RECORDS"),
+    CONST("SERVICE_SEARCH_DEVICE_NOT_REACHABLE")
+};
+
 static const nj_builtin_method listener_methods[] = {
     M("deviceDiscovered",  "(Ljavax/bluetooth/RemoteDevice;Ljavax/bluetooth/DeviceClass;)V",
       NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
@@ -2023,6 +2115,15 @@ static const nj_builtin_method listener_methods[] = {
       NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
     M("serviceSearchCompleted", "(II)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
     M("inquiryCompleted",  "(I)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
+};
+
+static const nj_builtin_field agent_fields[] = {
+    CONST("NOT_DISCOVERABLE"), CONST("GIAC"), CONST("LIAC"),
+    CONST("CACHED"), CONST("PREKNOWN")
+};
+
+static const nj_builtin_field l2cap_fields[] = {
+    CONST("DEFAULT_MTU"), CONST("MINIMUM_MTU")
 };
 
 static const nj_builtin_method l2cap_methods[] = {
@@ -2136,14 +2237,14 @@ const nj_builtin_class nj_lib_bt_classes[] = {
            remote_fields, remote_methods),
     NCLASS0(NJ_C_LOCAL, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_FINAL,
             local_methods),
-    NCLASS0(NJ_C_AGENT, "java/lang/Object", NJ_ACC_PUBLIC,
-            agent_methods),
-    NCLASS0(NJ_C_LISTENER, "java/lang/Object",
+    NCLASS(NJ_C_AGENT, "java/lang/Object", NJ_ACC_PUBLIC,
+            agent_fields, agent_methods),
+    NCLASS(NJ_C_LISTENER, "java/lang/Object",
             NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
-            listener_methods),
-    NCLASS0(NJ_C_L2CAP, "javax/microedition/io/Connection",
+            listener_fields, listener_methods),
+    NCLASS(NJ_C_L2CAP, "javax/microedition/io/Connection",
             NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
-            l2cap_methods),
+            l2cap_fields, l2cap_methods),
     NCLASS0(NJ_C_L2CAPN, "javax/microedition/io/Connection",
             NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
             l2capn_methods),

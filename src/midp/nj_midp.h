@@ -410,6 +410,16 @@ nj_status nj_sensor_late_init(nj_vm *vm);
  */
 nj_ref  nj_bt_listen(nj_vm *vm, const char *url);
 const char *nj_bt_listen_error(nj_vm *vm, const char *url);
+
+/*
+ * nj_bt_connect() opens the OTHER end: a client "btspp://<address>:<channel>"
+ * or "btl2cap://<address>:<psm>" through the port's bt_connect() hook.  It is
+ * a separate hook from socket_connect() because a TCP socket cannot reach a
+ * Bluetooth address; NULL from either function means the scheme is refused,
+ * and the sentence to throw comes from the matching ..._error() function.
+ */
+nj_ref  nj_bt_connect(nj_vm *vm, const char *url);
+const char *nj_bt_connect_error(nj_vm *vm, const char *url);
 void    nj_bt_frame(nj_vm *vm);
 void    nj_bt_shutdown(nj_vm *vm);
 nj_status nj_bt_late_init(nj_vm *vm);
