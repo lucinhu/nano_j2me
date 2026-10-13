@@ -1627,8 +1627,10 @@ NJFN(m3g_render_get)
 
 NJFN(m3g_alpha_set)
 {
+    /* "F", the way node_fields declares it: a lookup that asks for the wrong
+     * descriptor answers NULL, and the setter then sets nothing. */
     nj_iput(vm, NJ_THIS(args),
-            nj_field_lookup(vm, NJ_C_NODE, "_nj_alpha", "I", 0),
+            nj_field_lookup(vm, NJ_C_NODE, "_nj_alpha", "F", 0),
             f2bits(NJ_ARG_FLOAT(args, 0)));
     return NJ_OK;
 }

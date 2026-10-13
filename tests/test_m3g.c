@@ -477,6 +477,22 @@ int main(void)
             call(vm, grp, CLS("Group"), "setPickingEnable", "(Z)V", a, NULL);
             call(vm, grp, CLS("Group"), "isPickingEnabled", "()Z", NULL, &r);
             check(r.i == 1, "setPickingEnable and isPickingEnabled agree");
+
+            /*
+             * setAlphaFactor() asked for _nj_alpha as an "I" while the class
+             * declares it "F", so the lookup answered NULL and the setter set
+             * nothing - silently, because a C write to a NULL field is a
+             * no-op.  There is no getter to ask, so read the field.
+             */
+            {
+                nj_field *af = nj_field_lookup(vm, CLS("Node"), "_nj_alpha", "F", 0);
+
+                a[0].f = 0.25f;
+                call(vm, grp, CLS("Node"), "setAlphaFactor", "(F)V", a, NULL);
+                check(af != NULL
+                          && nj_field_read_bits32(vm, grp, af) == 0x3E800000u,
+                      "Node.setAlphaFactor stores the factor's bytes");
+            }
         }
 
         if (cam && xf) {

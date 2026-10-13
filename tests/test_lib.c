@@ -958,6 +958,56 @@ static void test_numbers(nj_vm *vm)
            "floatToIntBits(NaN) is the canonical quiet NaN");
 
     /*
+     * A float field holds the bit pattern, not a rounded number, and 0.1f is
+     * the value that tells the two apart: its 32 bits (0x3DCCCCCD) do not
+     * survive a round trip through a C float-to-int conversion, so a wrapper
+     * that stored or read `value` through the typed accessors handed back
+     * 0x3DCCCC00 - a different float, by one part in ten million, in every
+     * arithmetic expression the title went on to evaluate.
+     */
+    a[0] = vfloat(0.1f);
+    o = construct(vm, FLOATW, "(F)V", a, "Float(0.1f)");
+    {
+        nj_value got;
+        got.bits = 0u;
+        OK(o != NULL && nj_call(vm, o, FLOATW, "floatValue", "()F", NULL, &got) == NJ_OK);
+        a[0] = got;
+        OK_MSG(nj_call_static(vm, FLOATW, "floatToIntBits", "(F)I", a, &r) == NJ_OK
+                   && (nj_u4)r.i == 0x3DCCCCCDu,
+               "new Float(0.1f).floatValue() keeps its four bytes");
+    }
+    a[0] = vdouble(0.1);
+    o = construct(vm, DOUBLEW, "(D)V", a, "Double(0.1)");
+    {
+        nj_value got;
+        got.bits = 0u;
+        OK(o != NULL && nj_call(vm, o, DOUBLEW, "doubleValue", "()D", NULL, &got) == NJ_OK);
+        a[0] = got;
+        OK_MSG(nj_call_static(vm, DOUBLEW, "doubleToLongBits", "(D)J", a, &r) == NJ_OK
+                   && (nj_u8)r.j == 0x3FB999999999999Aull,
+               "new Double(0.1).doubleValue() keeps its eight bytes");
+    }
+    /* A NaN carrying a payload the runtime never chose still reads as NaN:
+     * the typed accessors converted it, and a float-to-int conversion of a NaN
+     * is not required to give anything back at all. */
+    a[0] = vint(0x7FC00001);
+    OK(nj_call_static(vm, FLOATW, "intBitsToFloat", "(I)F", a, &r) == NJ_OK);
+    a[0] = r;
+    o = construct(vm, FLOATW, "(F)V", a, "Float(payload NaN)");
+    OK_MSG(o != NULL && nj_call_int(vm, o, FLOATW, "isNaN", "()Z", NULL) == 1,
+           "a NaN with a payload is still NaN");
+    a[0] = vlong((nj_s8)0x7FF8000000000001LL);
+    OK(nj_call_static(vm, DOUBLEW, "longBitsToDouble", "(J)D", a, &r) == NJ_OK);
+    a[0] = r;
+    o = construct(vm, DOUBLEW, "(D)V", a, "Double(payload NaN)");
+    OK_MSG(o != NULL && nj_call_int(vm, o, DOUBLEW, "isNaN", "()Z", NULL) == 1,
+           "a double NaN with a payload is still NaN");
+    a[0] = r;
+    OK_MSG(nj_call_static(vm, DOUBLEW, "doubleToLongBits", "(D)J", a, &r) == NJ_OK
+               && (nj_u8)r.j == 0x7FF8000000000000ull,
+           "doubleToLongBits collapses that NaN to the canonical pattern");
+
+    /*
      * The static isNaN/isInfinite(F) pair, which CLDC 1.1 declares alongside
      * the no-arg instance forms.  Only the instance forms existed, so a MIDlet
      * that tested a computed float failed to resolve the call - a real game

@@ -408,7 +408,7 @@ NJFN(Float_floatToIntBits)
 NJFN(Float_isNaN)
 {
     nj_field *f = vf(vm, "java/lang/Float", "F");
-    nj_s4 bits = f ? nj_field_read_int(vm, NJ_THIS(args), f) : 0;
+    nj_s4 bits = f ? (nj_s4)nj_field_read_bits32(vm, NJ_THIS(args), f) : 0;
 
     ret->i = float_is_nan_bits(bits) ? 1 : 0;
     return NJ_OK;
@@ -417,7 +417,7 @@ NJFN(Float_isNaN)
 NJFN(Float_isInfinite)
 {
     nj_field *f = vf(vm, "java/lang/Float", "F");
-    nj_s4 bits = f ? nj_field_read_int(vm, NJ_THIS(args), f) : 0;
+    nj_s4 bits = f ? (nj_s4)nj_field_read_bits32(vm, NJ_THIS(args), f) : 0;
 
     ret->i = ((bits & 0x7FFFFFFF) == 0x7F800000) ? 1 : 0;
     return NJ_OK;
@@ -448,10 +448,44 @@ NJFN(Float_isInfinite_v)
     return NJ_OK;
 }
 
+static nj_s8 double_bits(double d)
+{
+    nj_s8 bits;
+    memcpy(&bits, &d, sizeof(bits));
+    return bits;
+}
+
+static double double_from_bits(nj_s8 bits)
+{
+    double d;
+    memcpy(&d, &bits, sizeof(d));
+    return d;
+}
+
+NJFN(Double_longBitsToDouble)
+{
+    ret->d = double_from_bits(NJ_ARG_LONG(args, 0));
+    return NJ_OK;
+}
+
+/* doubleToLongBits collapses every NaN to one pattern, the way
+ * Float.floatToIntBits() does; a game comparing NaNs depends on it. */
+NJFN(Double_doubleToLongBits)
+{
+    nj_s8 bits = double_bits(NJ_ARG_DOUBLE(args, 0));
+
+    if ((bits & 0x7FF0000000000000LL) == 0x7FF0000000000000LL &&
+        (bits & 0x000FFFFFFFFFFFFFLL) != 0) {
+        bits = 0x7FF8000000000000LL;
+    }
+    ret->j = bits;
+    return NJ_OK;
+}
+
 NJFN(Double_isNaN)
 {
     nj_field *f = vf(vm, "java/lang/Double", "D");
-    nj_s8 bits = f ? nj_field_read_long(vm, NJ_THIS(args), f) : 0;
+    nj_s8 bits = f ? (nj_s8)nj_field_read_bits64(vm, NJ_THIS(args), f) : 0;
 
     ret->i = ((bits & 0x7FF0000000000000LL) == 0x7FF0000000000000LL &&
               (bits & 0x000FFFFFFFFFFFFFLL) != 0) ? 1 : 0;
@@ -461,7 +495,7 @@ NJFN(Double_isNaN)
 NJFN(Double_isInfinite)
 {
     nj_field *f = vf(vm, "java/lang/Double", "D");
-    nj_s8 bits = f ? nj_field_read_long(vm, NJ_THIS(args), f) : 0;
+    nj_s8 bits = f ? (nj_s8)nj_field_read_bits64(vm, NJ_THIS(args), f) : 0;
 
     ret->i = ((bits & 0x7FFFFFFFFFFFFFFFLL) == 0x7FF0000000000000LL) ? 1 : 0;
     return NJ_OK;
@@ -842,7 +876,7 @@ NJFN(Float_init)
         float v = NJ_ARG_FLOAT(args, 0);
         nj_s4 bits;
         memcpy(&bits, &v, sizeof(bits));
-        nj_field_write_int(vm, NJ_THIS(args), f, bits);
+        nj_field_write_bits32(vm, NJ_THIS(args), f, (nj_u4)bits);
     }
     return NJ_OK;
 }
@@ -851,7 +885,7 @@ NJFN(Float_value)
 {
     nj_field *f = vf(vm, "java/lang/Float", "F");
     if (f) {
-        nj_s4 bits = nj_field_read_int(vm, NJ_THIS(args), f);
+        nj_s4 bits = (nj_s4)nj_field_read_bits32(vm, NJ_THIS(args), f);
         memcpy(&ret->f, &bits, sizeof(ret->f));
     } else {
         ret->f = 0.0f;
@@ -866,7 +900,7 @@ NJFN(Double_init)
         double d = NJ_ARG_DOUBLE(args, 0);
         nj_s8 bits;
         memcpy(&bits, &d, 8u);
-        nj_field_write_long(vm, NJ_THIS(args), f, bits);
+        nj_field_write_bits64(vm, NJ_THIS(args), f, (nj_u8)bits);
     }
     return NJ_OK;
 }
@@ -875,7 +909,7 @@ NJFN(Double_value)
 {
     nj_field *f = vf(vm, "java/lang/Double", "D");
     if (f) {
-        nj_s8 bits = nj_field_read_long(vm, NJ_THIS(args), f);
+        nj_s8 bits = (nj_s8)nj_field_read_bits64(vm, NJ_THIS(args), f);
         memcpy(&ret->d, &bits, 8u);
     } else {
         ret->d = 0.0;
@@ -1037,6 +1071,8 @@ static const nj_builtin_method Double_methods[] = {
     M("isNaN",       "(D)Z", NJ_ACC_STATIC),
     M("isInfinite",  "(D)Z", NJ_ACC_STATIC),
     M("valueOf",     "(D)Ljava/lang/Double;", NJ_ACC_STATIC),
+    M("longBitsToDouble", "(J)D", NJ_ACC_STATIC),
+    M("doubleToLongBits", "(D)J", NJ_ACC_STATIC),
     M("valueOf",     "(Ljava/lang/String;)Ljava/lang/Double;", NJ_ACC_STATIC)
 };
 
@@ -1111,6 +1147,8 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Float",     "isInfinite",   "(F)Z", Float_isInfinite_v },
     { "java/lang/Float",     "intBitsToFloat", "(I)F", Float_intBitsToFloat },
     { "java/lang/Float",     "floatToIntBits", "(F)I", Float_floatToIntBits },
+    { "java/lang/Double",    "longBitsToDouble", "(J)D", Double_longBitsToDouble },
+    { "java/lang/Double",    "doubleToLongBits", "(D)J", Double_doubleToLongBits },
 
     { "java/lang/Double",    "<init>",       "(D)V", Double_init },
     { "java/lang/Double",    "doubleValue",  "()D",  Double_value },

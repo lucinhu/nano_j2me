@@ -202,14 +202,38 @@ void     nj_field_write_bits32(nj_vm *vm, nj_ref obj, nj_field *f, nj_u4 v);
 nj_u8    nj_field_read_bits64(nj_vm *vm, nj_ref obj, nj_field *f);
 void     nj_field_write_bits64(nj_vm *vm, nj_ref obj, nj_field *f, nj_u8 v);
 
+/* One predicate, so a caller can tell a float field from an int one without
+ * seeing the struct: nj_field is opaque here on purpose. */
+int      nj_field_is_float(const nj_field *f);
+
 /* Look a field up once and cache the nj_field* in a static const-free slot of
  * your own objects; these are the hot-path accessors. */
 #define NJ_F(vm, cls, name, desc)  nj_field_lookup((vm), (cls), (name), (desc), 0)
 #define NJ_FS(vm, cls, name, desc) nj_field_lookup((vm), (cls), (name), (desc), 1)
 
-/* Short forms used throughout the class library. */
-static inline nj_s4  nj_iget(nj_vm *vm, nj_ref o, nj_field *f) { return nj_field_read_int(vm, o, f); }
-static inline void   nj_iput(nj_vm *vm, nj_ref o, nj_field *f, nj_s4 v) { nj_field_write_int(vm, o, f, v); }
+/* Short forms used throughout the class library.
+ *
+ * On a `float` field these two move the bit pattern, not a number: every
+ * caller that has one writes f2bits(v) into it and reads it back through
+ * bits2f(), and the typed accessors would convert on the way in and out -
+ * storing (float)0x40200000 instead of 2.5f, and losing the low bits of any
+ * pattern that 24 bits of mantissa cannot hold. */
+static inline nj_s4  nj_iget(nj_vm *vm, nj_ref o, nj_field *f)
+{
+    if (f != NULL && nj_field_is_float(f)) {
+        return (nj_s4)nj_field_read_bits32(vm, o, f);
+    }
+    return nj_field_read_int(vm, o, f);
+}
+
+static inline void nj_iput(nj_vm *vm, nj_ref o, nj_field *f, nj_s4 v)
+{
+    if (f != NULL && nj_field_is_float(f)) {
+        nj_field_write_bits32(vm, o, f, (nj_u4)v);
+        return;
+    }
+    nj_field_write_int(vm, o, f, v);
+}
 static inline nj_ref nj_rget(nj_vm *vm, nj_ref o, nj_field *f) { return nj_field_read_ref(vm, o, f); }
 static inline void   nj_rput(nj_vm *vm, nj_ref o, nj_field *f, nj_ref v) { nj_field_write_ref(vm, o, f, v); }
 

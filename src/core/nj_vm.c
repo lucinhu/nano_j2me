@@ -924,6 +924,11 @@ void nj_field_write_ref(nj_vm *vm, nj_ref obj, nj_field *f, nj_ref v)
     memcpy(p, &v, sizeof(v));
 }
 
+int nj_field_is_float(const nj_field *f)
+{
+    return f != NULL && f->ptype == NJ_PT_FLOAT;
+}
+
 nj_u4 nj_field_read_bits32(nj_vm *vm, nj_ref obj, nj_field *f)
 {
     nj_u1 *p = field_addr(vm, obj, f);

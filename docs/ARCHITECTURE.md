@@ -163,6 +163,25 @@ order JVMS 5.5 specifies. This is not a theoretical gap: 20 static fields across
 else, because a reader compiled against a *non-final* field keeps the fieldref
 even after the field becomes final.
 
+**A field is found by name *and* descriptor.** `nj_field_lookup()` answers NULL
+when either differs, and a native built on that lookup then does nothing at
+all: no exception, no diagnostic, just a setter that sets nothing or a
+constructor that cannot find its own state. That is how a `Light` came to be
+unconstructable (`_nj_intensity` declared `"I"`, asked for `"F"`) and how
+`Node.setAlphaFactor()` came to store nothing (`_nj_alpha` the same way).
+`tools/check_field_descs.py` reads the builtin field tables and every lookup in
+`src/` the way the compiler would - expanding the macros that *are* class names
+and descriptors - and fails `ctest` on a mismatch, so the next one is caught
+before a title finds it.
+
+**A `float` field moves bytes, not numbers.** `nj_iget()`/`nj_iput()` and the
+`Float`/`Double` wrappers use the raw accessors on a `float`/`double` field:
+the value in it is a bit pattern (`f2bits()`, `Float.floatToIntBits()`), and the
+typed accessors would convert on the way in and out. 0.1f is the value that
+shows the difference - its bits (0x3DCCCCCD) do not survive a round trip
+through a C float-to-int conversion, so a wrapper that converted handed back
+0x3DCCCC00 and every later arithmetic step inherited the error.
+
 ## 4. The interpreter
 
 The full CLDC 1.1 instruction set, including the parts small JVMs often skip:
