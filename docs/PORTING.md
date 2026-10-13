@@ -485,11 +485,14 @@ PLATFORM tone.amr  OK     duration=520000 played=520000
 PLATFORM pic.bmp OK / pic.webp OK / pic.png OK / tone.mp3 OK / tone.amr OK
 ```
 
-The Android line was measured twice: once with everything built in, and once
-with `tools/build_android_apk.sh --no-amr --no-inflate --no-wav --no-gif`, where
-every one of those five answers still comes from the platform — the JAR itself
-is inflated by the platform's `zlib` through `inflate_raw`, and AMR is decoded
-by `MediaCodec` because the runtime's own decoder is not compiled in.
+The Android line was measured three times: once with everything built in, once
+with `tools/build_android_apk.sh --no-amr --no-inflate --no-wav --no-gif`, and
+once with `--no-png --no-jpeg --no-gif`. Every one of the five answers still
+comes from the platform in all three — the JAR itself is inflated by the
+platform's `zlib` through `inflate_raw`, AMR is decoded by `MediaCodec`, and the
+pictures go through `BitmapFactory` even when all three built-in image decoders
+are compiled out. That last run is the one that matters for `install_codecs`:
+priority `-1` only keeps the built-in in front while it exists.
 
 A decoder that is compiled out says so **by name**: the MIDlet's `IOException`
 now carries the provider's reason, so
