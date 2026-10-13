@@ -2189,14 +2189,13 @@ static void test_media_refusal_names_the_container(nj_vm *vm)
         const nj_u1 *bytes;
         nj_u4 len;
         const char *want;
-    } cases[3] = {
-        { amr,  (nj_u4)sizeof(amr),  "AMR" },
+    } cases[2] = {
         { mp3,  (nj_u4)sizeof(mp3),  "MPEG" },
         { junk, (nj_u4)sizeof(junk), "not a container" }
     };
     int i;
 
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < 2; i++) {
         nj_ref arr = nj_byte_array_new(vm, cases[i].len);
         nj_ref in;
         nj_value a[2];
@@ -2227,6 +2226,60 @@ static void test_media_refusal_names_the_container(nj_vm *vm)
                "the refusal for case %d names %s (got: %s)",
                i, cases[i].want, d != NULL ? d : "(none)");
         nj_clear_exception(vm);
+    }
+
+    /*
+     * AMR used to be the first case in that list, refused by name.  With the
+     * built-in decoder (NJ_ENABLE_AMR, on by default) it is not refused any
+     * more: a stream that carries the magic but holds no complete frame is the
+     * silent Player every unplayable file gets - a Player the MIDlet can play,
+     * so there is nothing for it to catch.
+     *
+     * That is the whole shape of the bug this test used to encode: The Sims 3
+     * creates a Player per sound effect, and a createPlayer() that threw left
+     * its loader holding a null it dereferenced on the spot.  test_audio.c
+     * asserts what a real AMR asset produces; this only asserts that these
+     * bytes no longer throw.  Built without the decoder the old answer is the
+     * right one, so it is asserted there too.
+     */
+    {
+        nj_ref arr = nj_byte_array_new(vm, (nj_u4)sizeof(amr));
+        nj_value a[2];
+        nj_value ret;
+        nj_ref in;
+
+        OK_MSG(arr != NULL, "an array for the AMR case");
+        if (arr == NULL) {
+            return;
+        }
+        memcpy(arr->u.bytes, amr, sizeof(amr));
+        a[0].r = arr;
+        a[1].bits = 0u;
+        in = construct(vm, BAIS, "([B)V", a, "a stream over the AMR file");
+        if (nj_has_exception(vm)) {
+            return;
+        }
+        a[0].r = in;
+        a[1].r = NULL;
+        ret.bits = 0u;
+        (void)nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                             "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                             "javax/microedition/media/Player;", a, &ret);
+#if NJ_ENABLE_AMR
+        OK_MSG(!nj_has_exception(vm),
+               "an AMR stream with no complete frame is not refused");
+        nj_clear_exception(vm);
+        OK_MSG(ret.r != NULL, "the AMR stream still produces a Player");
+#else
+        {
+            const char *d = nj_exception_describe(vm);
+
+            OK_MSG(d != NULL && strstr(d, "AMR") != NULL,
+                   "with the decoder built out, AMR is refused by name (got: %s)",
+                   d != NULL ? d : "(none)");
+            nj_clear_exception(vm);
+        }
+#endif
     }
 }
 

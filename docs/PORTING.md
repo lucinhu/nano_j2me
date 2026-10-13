@@ -172,51 +172,92 @@ xxd -i hello.jar > main/game_jar.h      # then return it from app_blob
 
 ## Worked example: Android
 
-The NDK port is a software framebuffer blitted into an `ANativeWindow`; a
-thread-safe event queue carries input from the Java side.
+The NDK port is a software framebuffer blitted into an `ANativeWindow`, with a
+thread-safe event queue carrying input from the Java side. It is the largest
+port in the tree and the one with the most to say, so read it as the reference
+for what "a port" means here:
 
-```java
-// MainActivity.java
-public class MainActivity extends Activity {
-    static { System.loadLibrary("nj2me"); }
-    private native void nativeCreate(Surface surface, int w, int h);
-    private native void nativeResize(int w, int h);
-    private native void nativeDestroy();
-    private native void nativeKey(int keyCode, boolean down);
-    private native void nativeRun(String jarPath);
+| piece | where |
+| --- | --- |
+| the port itself, plus all JNI entry points | `src/port/android/nj_port_android.c` |
+| library UI, game activity, keypad editor, system-font rasteriser (framework only, no AndroidX) | `src/port/android/java/com/example/nj2me/` |
+| the shared library, one `.so` per ABI | `tools/build_android.sh` |
+| the APK, by hand: `aapt2` + `javac` + `d8` + `apksigner` | `tools/build_android_apk.sh` |
+| the launcher icon set (PNG mipmaps + adaptive icon, no vector placeholder) | `tools/gen_android_icon.py` |
 
-    @Override public boolean onKeyDown(int code, KeyEvent e) {
-        nativeKey(code, true);  return true;
-    }
-    @Override public boolean onKeyUp(int code, KeyEvent e) {
-        nativeKey(code, false); return true;
-    }
-}
-```
+The floor is **API 21**, the oldest level the NDK still ships a compiler for, and
+the audio is what makes it work: neither `libaaudio.so` nor `libOpenSLES.so` is
+linked. AAudio is `dlopen()`ed on the first sound and used when the phone has it
+(API 26+); when it is missing the same mixer is driven by OpenSL ES, which every
+Android since 2.3 has. One APK, both devices: verified on an API 36 emulator
+(`audio: AAudio started, 44100 Hz, 2 ch`) and on an API 21 emulator
+(`audio: OpenSL ES started, 44100 Hz, 2 ch`). A hard link to `libaaudio.so` would
+make the loader refuse `libnj2me.so` entirely on an older phone, which is why the
+declarations are copied from `<aaudio/AAudio.h>` instead of included - the header
+marks them "introduced in Android 26" and will not compile for a lower target.
+`adb shell setprop debug.nj2me.audio opensl` pins the old backend, which is the
+only way to exercise that path on a phone that has AAudio.
 
-```c
-/* nj2me_jni.c */
-static nj_port g_port;            /* per-activity, owned by the native side */
-static jobject g_window;
+The port fills in `display_init`/`display_present`, `input_poll`, `input_push`,
+`now`, `dir_open`/`dir_next`/`dir_close`, `tone_play`/`tone_stop`,
+`pcm_open`/`pcm_write`/`pcm_close`/`pcm_free`, `device_property`, `vibrate` and
+`idle`. Two of those are worth copying:
 
-JNIEXPORT void JNICALL
-Java_com_example_MainActivity_nativeCreate(JNIEnv *env, jobject thiz,
-                                           jobject surface, jint w, jint h)
-{
-    ANativeWindow *win = ANativeWindow_fromSurface(env, surface);
-    nj_port_android(&g_port);
-    nj_port_android_set_window(&g_port, win);
-}
-```
+- **Directories, but not files.** `dir_open`/`dir_next`/`dir_close` are real
+  (`dirent` + `stat`), because the runtime has no fallback for them and
+  `FileConnection.list()` would have to throw. The byte-level file hooks stay
+  `NULL` on purpose: every one of them already falls back to stdio, and bionic
+  supplies it, so a JAR in `filesDir` opens with the same `fopen` the desktop
+  build uses.
+- **`rms_dir` and `fs_dir` set from Java.** The runtime derives them from
+  `XDG_DATA_HOME`/`HOME` when a port leaves them `NULL`, which on Android means
+  the record store lands in `/`. They are pushed in as absolute paths from
+  `Context.getFilesDir()` before the VM thread starts.
 
-Two Android-specific details:
+Five details are Android-specific and each one cost a debugging session:
 
-- **`ANativeWindow_lock` gives you a stride, not a width.** Hand that stride
-  straight to `display_init`; the rasterizer already respects it, so no copy is
-  needed between the Java heap and the window buffer.
+- **`ANativeWindow_lock` gives you a stride, not a width, and a format you did
+  not choose.** Hand the stride to `display_init` and scale from it; and pack
+  the pixels for `buffer.format` as it comes back from every lock, never for the
+  format you asked for. `WINDOW_FORMAT_RGBA_8888` is `R,G,B,A` in memory from
+  the lowest address, so the 32-bit value is `0xAABBGGRR` - writing the
+  natural-looking `0xffRRGGBB` swaps red and blue on the panel while every byte
+  the runtime produced is correct. `tools/make_colordemo_jar.sh` paints the
+  three primaries and `tools/check_color_order.sh` reads them back, on a
+  screenshot or on a headless frame dump, which is how that one is settled.
 - **Do not map Android key codes to MIDP codes in Java.** Push the raw key code
-  and let `nj_port_android_push_key` do the translation, so the mapping stays in
-  one place next to the port.
+  and let `nj_port_android_push_key` translate through the one table in the port
+  - and expose that same table back to Java (`nativeKeyTable()`) so the on-screen
+  keypad editor can only offer keys the port actually understands.
+- **Touch arrives in view pixels and is needed in device pixels.** The port owns
+  the letterbox transform, so the transform is published under the same lock
+  that the blit uses before the frame reaches the panel, and
+  `nj_port_android_touch` inverts it. A tap that lands between the two would
+  otherwise be mapped with the previous geometry.
+- **Text can come from the platform instead of from a table.** Android already
+  ships a text stack with every script in it, so this port does not carry one:
+  `tools/build_android.sh` compiles the runtime with `NJ_ENABLE_FONT_CJK=0`
+  (that one table is ~480 KB per ABI) and the port installs three `nj_font`
+  providers through `nj_run_opts.fallback_fonts`, whose `glyph_lookup` asks
+  `Paint` for a coverage bitmap (`GlyphSource.java`) and caches it. A fallback
+  is only consulted for what the built-in faces cannot draw, so Latin text
+  keeps the deterministic bitmap font and only the wide characters change.
+  Two traps: install the providers **before** `font_path`, because loading a
+  TTF resets every slot's fallback to the built-in box; and the lookup runs on
+  the VM thread, so it attaches to the JVM itself rather than borrowing the
+  UI thread's `JNIEnv`.
+- **An API-gated call must live in its own class, not in a branch.** The
+  immersive-fullscreen replacement (`WindowInsetsController`, API 30) cannot sit
+  in a method that also runs on Android 5: a method whose code mentions a class
+  the device does not have can fail verification when its class is loaded, before
+  the `SDK_INT` test is ever reached. It lives in a small nested class
+  (`GameActivity.Bars30`) that only the API 30+ branch touches, and the legacy
+  `SYSTEM_UI_FLAG_*` flags stay for everything older.
+
+The JNI handle is a `jlong`, not a `static nj_port`, so two games can never share
+state and the library keeps passing `tools/check_no_statics.sh`; the VM runs on
+its own thread which is joined before `nj_port_shutdown()`, and backgrounding
+parks that thread in `idle()` instead of letting it spin against a dead surface.
 
 ## Worked example: a bare-metal board
 

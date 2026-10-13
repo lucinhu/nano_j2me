@@ -78,10 +78,10 @@ usually skip, and they are exactly the parts old games use.
 | PNG and baseline JPEG decoders, bitmap fonts | **done**, behind a pluggable codec registry |
 | Ports: headless (reference) | **done** |
 | Ports: SDL2 | **done** |
-| Ports: Android (NDK + JNI) | **done** — real NDK build for 3 ABIs, and it RUNS on an emulator |
+| Ports: Android (NDK + JNI) | **done** — one APK for Android 5.0 (API 21) and up, 4 ABIs, a launcher that shows each game's own name and icon and opens `.jar` files from a file manager, three configurable floating keypad layouts, sound through AAudio or OpenSL ES, multi-touch, and auto-detected screen size; 1.57 MiB for all four ABIs, runs on an API 21 emulator, an API 36 emulator and a phone |
 | Ports: ESP32-S3 (ESP-IDF, Xtensa) | **done** — real IDF build, RUNS a MIDlet under QEMU |
 | Ports: ESP32-C3 (ESP-IDF, RISC-V) | builds, links and boots; needs PSRAM for the VM |
-| Test suite | **11/11 passing** (`ctest`) |
+| Test suite | **52/52 passing** (`ctest`) |
 | Sanitized suite | **11/11 passing** under ASan + UBSan + LSan (`tools/run_sanitized_tests.sh`) |
 
 Verified end to end: **Tumbleweed** (`net.frog_parrot.jump.Jump`, Apress 2004)

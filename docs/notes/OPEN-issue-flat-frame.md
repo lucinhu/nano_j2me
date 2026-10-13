@@ -334,3 +334,52 @@ computes is its own, and it is out of range in **every** frame, not only during
 the splash: `--dump-every 250` over a 3000-frame run shows nine real colours at
 250/500/750/1000/1250 and one colour (black) from 1500 on, with the
 `ad.a(...) pc=33` throw appearing throughout.
+
+## 灌篮高手-爆发!樱木_7947 -- the game divides by the literal zero
+
+The corpus line is `nothing was ever presented` with
+`first throw: java/lang/ArithmeticException at w.paint(...) pc=91: / by zero`.
+`javap -c -p w.class` shows what is divided:
+
+    85: aload_0
+    86: invokevirtual Canvas.getWidth:()I
+    89: iconst_0
+    90: idiv
+    91: ...
+
+`iconst_0` pushes the divisor, so this instruction sequence raises
+ArithmeticException unconditionally on the first paint -- no device, ours or
+anyone's, can present a frame from it.  **Not a runtime defect**: the bytecode
+says what it says, and the same title is one of several in the corpus carrying
+a "cracked" name.
+
+## 模拟人生3中文版_6162 -- the NPE is a null receiver, and it is downstream
+
+`--run-frames 40 --stats` reports `paints=40 gfx=0`: `paint()` runs forty times
+and makes **no Graphics call at all**, so the frame is necessarily flat.
+
+The corpus names `q.c(I)V pc=18`.  With this project's known pc off-by-one
+(`fr->pc = pc` runs after the fetch), the failing instruction is pc=13:
+
+     7: invokevirtual a:(I)Ljava/lang/Object;
+    10: checkcast     // class javax/microedition/media/Player
+    13: invokeinterface javax/microedition/media/Player.realize:()V
+    18: return
+
+`checkcast` on null **succeeds** (JVM spec, and this runtime implements it that
+way), so "checkcast passed and invokeinterface threw NPE" has exactly one
+explanation: the receiver was null, i.e. the game's own `a(int)` returned null
+from a slot that was never filled.  Both runtime sides were read and neither
+can throw NPE here:
+
+* `player_realize` (`src/midp/nj_lib_media.c:1332-1379`) throws only
+  `IllegalStateException` (state 0, closed) and `MediaException` (malformed tone
+  sequence);
+* `Manager.createPlayer` (`:1287-1303`) never returns null -- an unknown
+  protocol is refused by name with `MediaException`.
+
+The game catches that NPE itself and logs "SDKSound An error occured while
+trying to prefecth the sound", so the flat frame is downstream of an earlier
+init failure.  The next thing to find is that title's **first** throw: the
+40-frame run raises none at all, and the corpus run (whole key set, 8000
+frames) is the one that reaches it.

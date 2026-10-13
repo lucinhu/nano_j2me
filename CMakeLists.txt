@@ -57,6 +57,7 @@ set(NJ_ENABLE_TTF   1 CACHE STRING "TrueType text (0 = bitmap faces only)")
 set(NJ_ENABLE_PNG   1 CACHE STRING "Built-in PNG decoder")
 set(NJ_ENABLE_RMS   1 CACHE STRING "RecordStore persistence")
 set(NJ_ENABLE_IO    1 CACHE STRING "java.io and javax.microedition.io")
+set(NJ_ENABLE_AMR   1 CACHE STRING "Built-in AMR narrowband speech decoder")
 # Floating point.  This switch was documented in nj_config.h from the start and
 # broken in TWO independent ways: nothing in src/ read it, and CMake never
 # passed it to the compiler at all - so -DNJ_ENABLE_FLOAT=0 built a runtime that
@@ -98,6 +99,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_midlet.c
   src/midp/nj_lib_media.c
   src/midp/nj_midi.c
+  src/midp/nj_amr.c
   src/midp/nj_lib_content.c
   src/midp/nj_lib_nokia.c
   src/midp/nj_lib_fc.c
@@ -153,6 +155,7 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_JPEG=${NJ_ENABLE_JPEG}
   NJ_ENABLE_RMS=${NJ_ENABLE_RMS}
   NJ_ENABLE_IO=${NJ_ENABLE_IO}
+  NJ_ENABLE_AMR=${NJ_ENABLE_AMR}
   NJ_ENABLE_FLOAT=${NJ_ENABLE_FLOAT}
   NJ_ENABLE_M3G=${NJ_ENABLE_M3G}
     NJ_ENABLE_MASCOT=${NJ_ENABLE_MASCOT}
@@ -622,6 +625,26 @@ nj_add_test(test_clip tests/test_clip.c)
     nj_add_test(test_font_coverage tests/test_font_coverage.c)
   endif()
 
+  # A port can hand the font set its own glyphs instead of shipping a table,
+  # which is how the Android port drops the built-in CJK face.  This one is
+  # standalone on purpose: the library is built with NJ_ENABLE_FONT_CJK=1, and
+  # with the built-in table present a provider is never consulted for a wide
+  # character - which is precisely the behaviour the test has to observe.  It
+  # compiles nj_font.c by itself with the table off, so the assertion does not
+  # depend on how the rest of the build was configured.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fallback_font.c)
+    add_executable(test_fallback_font
+                   tests/test_fallback_font.c src/gfx/nj_font.c)
+    target_compile_definitions(test_fallback_font PRIVATE NJ_ENABLE_FONT_CJK=0)
+    target_include_directories(test_fallback_font PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/gfx)
+    add_test(NAME test_fallback_font COMMAND test_fallback_font)
+    set_tests_properties(test_fallback_font PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  endif()
+
   # The third piece, and the one that makes the other two mean something: the
   # TrueType rasteriser on its own, compared glyph by glyph against FreeType
   # through Pillow.  Three things have to hold, and each is a real skip rather
@@ -640,6 +663,12 @@ nj_add_test(test_clip tests/test_clip.c)
   # ---- audio: what the MIDlet asked for AND what the port received ----
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_audio.c)
     nj_add_test(test_audio tests/test_audio.c ${NJ_FIXTURES}/audiodemo.jar)
+  endif()
+
+  # The AMR decoder under test_audio's feet: frame walking and every speech
+  # mode, against samples another implementation of the same standard produced.
+  if(NJ_ENABLE_AMR AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_amr.c)
+    nj_add_test(test_amr tests/test_amr.c)
   endif()
 
   # ---- end to end: run a whole MIDlet and assert on what it rendered ----
