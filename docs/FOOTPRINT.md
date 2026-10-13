@@ -465,6 +465,21 @@ bytes. What a connection costs at run time is the port's again: on Android one
 `java.net.Socket` per open connection, released by the hook when the MIDlet
 closes it, and nothing kept on the C side but an opaque handle.
 
+### What the Bluetooth package costs
+
+`javax.bluetooth` has no switch either — the nine `nj_port.bt_*` hooks are the
+switch — and it is the largest of the optional MIDP-side packages because
+`DataElement`, `ServiceRecord` and the SDP record parsing live in it. Host
+`gcc -Os`:
+
+| Translation unit | `.text` | `.rodata` |
+| --- | --- | --- |
+| `nj_lib_bt.o` | 16,948 | 76 |
+
+For scale: `nj_lib_socket.o` is 4,397 and `nj_lib_http.o` is about twice that.
+The runtime keeps one `BtJob` object per running inquiry or service search and
+nothing else; a MIDlet that never asks for a device pays for none of it.
+
 ### The bug that only running found
 
 The first APK installed, started, and died:

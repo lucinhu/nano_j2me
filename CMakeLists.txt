@@ -112,6 +112,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_http.c
   src/midp/nj_lib_socket.c
   src/midp/nj_lib_sensor.c
+  src/midp/nj_lib_bt.c
   src/midp/nj_lib_lcdui.c
   src/midp/nj_lib_game.c
   src/midp/nj_lib_rms.c
@@ -409,6 +410,9 @@ if(NJ_BUILD_TESTS)
   add_custom_command(TARGET nj_fixtures POST_BUILD
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_socket_jar.sh
     COMMENT "SocketConnection fixture")
+  add_custom_command(TARGET nj_fixtures POST_BUILD
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_bt_jar.sh
+    COMMENT "javax.bluetooth fixture")
   # The TrueType fixtures are hand-built by a script (there is no system font
   # we could legally check in): deterministic, so re-running is a no-op.
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_ttf_fixture.py)
@@ -503,6 +507,18 @@ endif()
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_sensor.sh
                      $<TARGET_FILE:nj2me-cli> ${NJ_FIXTURES}/sensordemo.jar)
     set_tests_properties(check_sensor PROPERTIES TIMEOUT 120)
+  endif()
+
+  # javax.bluetooth end to end, on the headless port's fake radio: the local
+  # device, an inquiry whose devices arrive through the frame pump, a service
+  # search, an RFCOMM server accepted and echoed, and an L2CAP server.  The
+  # fake is opt-in (NJ_HEADLESS_BT=1 inside the script) so the radio-less
+  # answer tests/test_wireless.c pins down stays the default.
+  if(EXISTS ${NJ_FIXTURES}/btdemo.jar)
+    add_test(NAME check_bt
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_bt.sh
+                     $<TARGET_FILE:nj2me-cli> ${NJ_FIXTURES}/btdemo.jar)
+    set_tests_properties(check_bt PROPERTIES TIMEOUT 180)
   endif()
 
   # SocketConnection's negative half: the headless port has no socket stack, so

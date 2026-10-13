@@ -403,6 +403,7 @@ nj_status nj_rms_late_init(nj_vm *vm);
 nj_status nj_m3g_late_init(nj_vm *vm);
 nj_status nj_http_late_init(nj_vm *vm);
 nj_status nj_sensor_late_init(nj_vm *vm);
+nj_status nj_bt_late_init(nj_vm *vm);
 nj_status nj_socket_late_init(nj_vm *vm);
 
 nj_status nj_lib_late_init(nj_vm *vm)
@@ -436,6 +437,9 @@ nj_status nj_lib_late_init(nj_vm *vm)
         return NJ_ERR;
     }
     if (nj_http_late_init(vm) != NJ_OK) {
+        return NJ_ERR;
+    }
+    if (nj_bt_late_init(vm) != NJ_OK) {
         return NJ_ERR;
     }
     if (nj_sensor_late_init(vm) != NJ_OK) {

@@ -416,6 +416,14 @@ struct nj_vm {
     nj_ref     sensor_conns;
 
     /*
+     * The Bluetooth jobs an inquiry or a service search is waiting on, held
+     * for the same reason again: javax.bluetooth's DiscoveryListener callbacks
+     * have to be called from the frame pump, and no Java object holds the job.
+     * NULL until a MIDlet starts a discovery.
+     */
+    nj_ref     bt_jobs;
+
+    /*
      * Log throttling.  A MIDlet can call Throwable.printStackTrace() as often
      * as it likes, and one in the corpus does it on every frame of its failure
      * path: 24 MB and 594,000 lines in ten seconds.  On a handset that is a

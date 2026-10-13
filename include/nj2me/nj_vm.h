@@ -576,6 +576,14 @@ extern const int nj_lib_sensor_class_count;
 extern const nj_native_entry nj_lib_sensor_table[];
 extern const int nj_lib_sensor_count;
 
+/* Built by nj_lib_bt.c (JSR 82, javax.bluetooth).  The radio is the port's,
+ * through the optional bt_* hooks; the classes and the discovery job pump are
+ * the runtime's. */
+extern const nj_builtin_class nj_lib_bt_classes[];
+extern const int nj_lib_bt_class_count;
+extern const nj_native_entry nj_lib_bt_table[];
+extern const int nj_lib_bt_count;
+
 /* JSR 120/205, Wireless Messaging.  Messages go out through optional port
  * hooks; a port without them has the API and gets the exception the spec
  * defines, rather than a link error. */

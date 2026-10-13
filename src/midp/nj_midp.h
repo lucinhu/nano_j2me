@@ -390,6 +390,31 @@ void nj_sensor_shutdown(nj_vm *vm);
 nj_status nj_sensor_late_init(nj_vm *vm);
 
 /*
+ * JSR 82 Bluetooth.
+ *
+ * nj_bt_listen() opens a "btspp://localhost:..." or "btl2cap://localhost:..."
+ * server through the port's bt_listen() hook and returns the notifier object
+ * Connector.open() hands the MIDlet, or NULL when there is no radio - the
+ * caller then throws ConnectionNotFoundException with
+ * nj_bt_listen_error()'s sentence, which is what the specification asks for.
+ *
+ * nj_bt_frame() is where an inquiry and a service search make progress: they
+ * are jobs the port is asked about a slice at a time, and the MIDlet's
+ * DiscoveryListener is called from here, once per frame.
+ *
+ * nj_bt_shutdown() drops those jobs when the MIDlet ends - the port's own
+ * shutdown() closes anything it still holds open.
+ *
+ * nj_bt_late_init() writes the static final constants (the DataElement types,
+ * the inquiry access codes, the search result codes).
+ */
+nj_ref  nj_bt_listen(nj_vm *vm, const char *url);
+const char *nj_bt_listen_error(nj_vm *vm, const char *url);
+void    nj_bt_frame(nj_vm *vm);
+void    nj_bt_shutdown(nj_vm *vm);
+nj_status nj_bt_late_init(nj_vm *vm);
+
+/*
  * Fill a triangle through a MIDlet's own javax.microedition.lcdui.Graphics.
  *
  * The Mascot Capsule rasterizer lives in another file and cannot reach

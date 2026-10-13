@@ -102,6 +102,24 @@ typedef struct nj_headless_state {
     long   bytes_written;
     char   file_last_path[256];   /* last path opened, for a direct assertion */
     char   file_last_mode[8];
+
+    /*
+     * Bluetooth, faked for the same reason the accelerometer above is faked:
+     * a desktop has no radio, and "findSensors() found nothing" is not a test
+     * of the code that walks a discovery.  There is one peer with two services
+     * and a loopback server: a connection accepted from it holds a greeting
+     * and then echoes whatever the MIDlet writes, so a fixture can prove the
+     * order of accept, read, write and close without any hardware.
+     */
+    int    bt_listens;            /* how many servers were opened */
+    int    bt_accepts;
+    long   bt_bytes_read;
+    long   bt_bytes_written;
+    char   bt_last_url[192];
+    int    bt_conn_used[4];
+    int    bt_conn_len[4];
+    int    bt_conn_pos[4];
+    nj_u1  bt_conn_buf[4][256];
 } nj_headless_state;
 
 #define HS(ud) ((nj_headless_state *)(ud))
@@ -941,6 +959,207 @@ static void hl_sensor_close(void *ud, void *handle)
     (void)handle;                      /* nothing to release */
 }
 
+/*
+ * The fake Bluetooth radio.
+ *
+ * A desktop has no adapter, so LocalDevice would throw BluetoothStateException
+ * and every discovery would be an empty list - which would make the Bluetooth
+ * fixture prove nothing at all.  This answers all nine hooks with a fixed
+ * world: one local device, two peers, two services on the first peer, and a
+ * server whose accepted connections echo.
+ *
+ * Everything is fixed rather than random for the same reason the accelerometer
+ * is: the fixture asserts on it, and a test that reads different values on
+ * every run is not a test.
+ */
+#define HL_BT_LOCAL_ADDR "001122334455"
+#define HL_BT_PEER_ADDR  "001122aabbcc"
+#define HL_BT_PEER2_ADDR "001122ddeeff"
+#define HL_BT_GREETING   "peer-says-hello\n"
+
+static nj_status hl_bt_local(void *ud, nj_bt_local *out)
+{
+    (void)ud;
+    if (!out) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    memset(out, 0, sizeof(*out));
+    strcpy(out->address, HL_BT_LOCAL_ADDR);
+    strcpy(out->name, "nano_j2me headless");
+    out->device_class = 0x10020Cu;      /* computer, uncategorized */
+    out->discoverable = 0x9E8B33;       /* GIAC */
+    out->inquiry_ms = 300;              /* a fake radio answers at once */
+    return NJ_OK;
+}
+
+static int hl_bt_discoverable(void *ud, int mode, nj_u4 seconds)
+{
+    (void)ud;
+    (void)mode;
+    (void)seconds;
+    return 1;                           /* the fake radio always says yes */
+}
+
+static int hl_bt_inquiry(void *ud, nj_bt_device *out, int max,
+                        nj_u4 duration_ms)
+{
+    (void)ud;
+    (void)duration_ms;
+    if (max <= 0) {
+        return 0;
+    }
+    if (!out) {
+        return 2;                       /* the count alone */
+    }
+    memset(out, 0, sizeof(out[0]) * 2u);
+    strcpy(out[0].address, HL_BT_PEER_ADDR);
+    strcpy(out[0].name, "Peer One");
+    out[0].device_class = 0x5A0204u;    /* phone, smartphone */
+    out[0].paired = 1;
+    strcpy(out[1].address, HL_BT_PEER2_ADDR);
+    strcpy(out[1].name, "Peer Two");
+    out[1].device_class = 0x5A0208u;
+    out[1].paired = 0;
+    return max < 2 ? max : 2;
+}
+
+static int hl_bt_services(void *ud, const char *address, const nj_u1 *uuid,
+                          nj_bt_service *out, int max)
+{
+    (void)ud;
+    /* A real radio filters by uuid; the fake has exactly two services and
+     * answers both, which is enough for a fixture that asks for one. */
+    (void)uuid;
+    if (max <= 0) {
+        return 0;
+    }
+    if (!address || strcmp(address, HL_BT_PEER_ADDR) != 0) {
+        return 0;                       /* peer two advertises nothing */
+    }
+    if (!out) {
+        return 2;                       /* the count alone */
+    }
+    memset(out, 0, sizeof(out[0]) * 2u);
+    strcpy(out[0].address, HL_BT_PEER_ADDR);
+    strcpy(out[0].name, "Serial Port");
+    strcpy(out[0].url, "btspp://" HL_BT_PEER_ADDR ":1");
+    out[0].uuid[14] = 0x11;             /* 0x1101 = Serial Port */
+    out[0].uuid[15] = 0x01;
+    strcpy(out[1].address, HL_BT_PEER_ADDR);
+    strcpy(out[1].name, "OBEX Object Push");
+    strcpy(out[1].url, "btspp://" HL_BT_PEER_ADDR ":3");
+    out[1].uuid[14] = 0x11;             /* 0x1105 = OBEX Object Push */
+    out[1].uuid[15] = 0x05;
+    return max < 2 ? max : 2;
+}
+
+static void *hl_bt_listen(void *ud, const char *url, char *err,
+                          nj_size err_cap)
+{
+    nj_headless_state *s = HS(ud);
+
+    if (err && err_cap) {
+        err[0] = '\0';
+    }
+    if (!s || !url
+        || (strncmp(url, "btspp://localhost", 17) != 0
+            && strncmp(url, "btl2cap://localhost", 19) != 0)) {
+        return NULL;
+    }
+    s->bt_listens++;
+    {
+        int i = 0;
+        while (url[i] && i + 1 < (int)sizeof(s->bt_last_url)) {
+            s->bt_last_url[i] = url[i];
+            i++;
+        }
+        s->bt_last_url[i] = '\0';
+    }
+    return s;
+}
+
+static void *hl_bt_accept(void *ud, void *handle, nj_u4 timeout_ms)
+{
+    nj_headless_state *s = HS(ud);
+    int i;
+
+    (void)timeout_ms;
+    if (!s || !handle) {
+        return NULL;
+    }
+    for (i = 0; i < 4; i++) {
+        if (!s->bt_conn_used[i]) {
+            break;
+        }
+    }
+    if (i == 4) {
+        return NULL;                    /* no free slot: no peer */
+    }
+    s->bt_conn_used[i] = 1;
+    s->bt_conn_len[i] = (int)strlen(HL_BT_GREETING);
+    s->bt_conn_pos[i] = 0;
+    memcpy(s->bt_conn_buf[i], HL_BT_GREETING, (size_t)s->bt_conn_len[i]);
+    s->bt_accepts++;
+    return (void *)(intptr_t)(i + 1);
+}
+
+static int hl_bt_read(void *ud, void *handle, nj_u1 *buf, int len,
+                      nj_u4 timeout_ms)
+{
+    nj_headless_state *s = HS(ud);
+    int slot = (int)(intptr_t)handle - 1;
+    int n;
+
+    (void)timeout_ms;
+    if (!s || slot < 0 || slot >= 4 || !s->bt_conn_used[slot] || !buf
+        || len <= 0) {
+        return -1;
+    }
+    n = s->bt_conn_len[slot] - s->bt_conn_pos[slot];
+    if (n <= 0) {
+        return -1;                      /* the peer closed: end of stream */
+    }
+    if (n > len) {
+        n = len;
+    }
+    memcpy(buf, s->bt_conn_buf[slot] + s->bt_conn_pos[slot], (size_t)n);
+    s->bt_conn_pos[slot] += n;
+    s->bt_bytes_read += n;
+    return n;
+}
+
+static int hl_bt_write(void *ud, void *handle, const nj_u1 *buf, int len)
+{
+    nj_headless_state *s = HS(ud);
+    int slot = (int)(intptr_t)handle - 1;
+    int room;
+
+    if (!s || slot < 0 || slot >= 4 || !s->bt_conn_used[slot] || !buf
+        || len <= 0) {
+        return -1;
+    }
+    room = 256 - s->bt_conn_len[slot];
+    if (len > room) {
+        len = room;                     /* a full pipe is a short write */
+    }
+    if (len > 0) {
+        memcpy(s->bt_conn_buf[slot] + s->bt_conn_len[slot], buf, (size_t)len);
+        s->bt_conn_len[slot] += len;
+        s->bt_bytes_written += len;
+    }
+    return len;
+}
+
+static void hl_bt_close(void *ud, void *handle)
+{
+    nj_headless_state *s = HS(ud);
+    int slot = (int)(intptr_t)handle - 1;
+
+    if (s && slot >= 0 && slot < 4) {
+        s->bt_conn_used[slot] = 0;
+    }
+}
+
 nj_status nj_port_headless_ex(nj_port *out, int width, int height,
                               int dump_every, const char *dump_prefix)
 {    nj_headless_state *s;
@@ -987,6 +1206,27 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     out->sensor_open = hl_sensor_open;
     out->sensor_read = hl_sensor_read;
     out->sensor_close = hl_sensor_close;
+    /*
+     * The Bluetooth fake is OPT-IN, unlike the accelerometer above.
+     *
+     * There is a test that asserts the opposite answer - that a headless
+     * desktop has no radio, so LocalDevice.getLocalDevice() throws
+     * BluetoothStateException - and that is the answer a port without a radio
+     * has to give.  A fixture that wants the fake radio says so:
+     *
+     *     NJ_HEADLESS_BT=1 ./build/nj2me --port headless btdemo.jar
+     */
+    if (getenv("NJ_HEADLESS_BT") != NULL) {
+        out->bt_local = hl_bt_local;
+        out->bt_discoverable = hl_bt_discoverable;
+        out->bt_inquiry = hl_bt_inquiry;
+        out->bt_services = hl_bt_services;
+        out->bt_listen = hl_bt_listen;
+        out->bt_accept = hl_bt_accept;
+        out->bt_read = hl_bt_read;
+        out->bt_write = hl_bt_write;
+        out->bt_close = hl_bt_close;
+    }
     out->tone_play = hl_tone_play;
     out->tone_stop = hl_tone_stop;
     out->pcm_open = hl_pcm_open;

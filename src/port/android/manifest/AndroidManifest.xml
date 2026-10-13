@@ -6,9 +6,26 @@
          permission: jars live in app-private storage, which needs none.
          INTERNET is what javax.microedition.io.HttpConnection needs: it goes
          through PlatformHttp (HttpURLConnection), and the framework checks the
-         permission when the socket is opened. -->
-    <uses-permission android:name="android.permission.VIBRATE" />
-    <uses-permission android:name="android.permission.INTERNET" />
+         permission when the socket is opened.
+
+         The Bluetooth pair below is for javax.bluetooth (JSR 82).  Android 12
+         split the old pair into three runtime permissions, so a device running
+         12 or newer needs BLUETOOTH_SCAN and BLUETOOTH_CONNECT granted at run
+         time (BLUETOOTH_ADVERTISE only for setDiscoverable's dialog).  Nothing
+         here is requested by the app: a MIDlet that never asks for a device
+         never triggers a prompt, and one that does gets the same
+         BluetoothStateException a radio-less handset gives.  For a device with
+         a radio, grant them once with
+         `adb shell pm grant com.lucinhu.nj2me android.permission.BLUETOOTH_CONNECT`
+         (same for BLUETOOTH_SCAN). -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
 
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 

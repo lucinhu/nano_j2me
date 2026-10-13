@@ -172,6 +172,49 @@ typedef struct nj_socket_info {
     int  local_port;
 } nj_socket_info;
 
+/*
+ * One Bluetooth device, as javax.bluetooth.RemoteDevice shows it.  The
+ * address is twelve hex digits and no separators ("001122334455"), which is
+ * the spelling J2ME uses everywhere and the spelling a port has to produce.
+ */
+typedef struct nj_bt_device {
+    char address[18];
+    char name[64];       /* the friendly name; may be empty, never NULL */
+    nj_u4 device_class;  /* the class-of-device word, 0 when unknown */
+    int  paired;
+} nj_bt_device;
+
+/*
+ * One Bluetooth service, as javax.bluetooth.ServiceRecord shows it.  `url` is
+ * a complete J2ME connection URL ("btspp://001122334455:3") so that
+ * ServiceRecord.getConnectionURL() can hand it straight to Connector.open().
+ * `uuid` is the service's UUID, big-endian: a 16-bit UUID sits in the last two
+ * bytes, a 128-bit one fills all sixteen.
+ */
+typedef struct nj_bt_service {
+    char address[18];
+    char name[64];
+    char url[192];
+    nj_u1 uuid[16];
+} nj_bt_service;
+
+/* The local adapter, for javax.bluetooth.LocalDevice. */
+typedef struct nj_bt_local {
+    char address[18];
+    char name[64];
+    nj_u4 device_class;
+    int  discoverable;   /* 0x9E8B00 not discoverable, 0x9E8B33 GIAC */
+    /*
+     * How long an inquiry should run on this radio, in milliseconds; 0 means
+     * the runtime's default (twelve seconds, which is what a real adapter
+     * needs).  It is here because the inquiry's length is a property of the
+     * radio and not of the MIDlet - the API takes no duration - and a
+     * simulated radio that answers on the first call should not make a test
+     * wait twelve real seconds to see inquiryCompleted().
+     */
+    int  inquiry_ms;
+} nj_bt_local;
+
 /* ------------------------------------------------------------------ */
 /* The port vtable                                                     */
 /* ------------------------------------------------------------------ */
@@ -594,6 +637,60 @@ typedef struct nj_port {
                          nj_u4 timeout_ms);
     int   (*socket_write)(void *ud, void *handle, const nj_u1 *buf, int len);
     void  (*socket_close)(void *ud, void *handle);
+
+    /*
+     * Bluetooth, for javax.bluetooth (JSR 82) - nine of the 436 titles in the
+     * test corpus name a class from that package, every one of them for a
+     * game that plays against another handset.  The radio is the port's; what
+     * the runtime keeps is the API around it.
+     *
+     * A Bluetooth client connection is NOT a hook of its own: Connector.open()
+     * hands "btspp://001122334455:3" to socket_connect(), which is the same
+     * byte stream over a different radio (see the note above), so a port that
+     * has both writes that one function and gets both schemes.
+     *
+     *   bt_local        describe the local device; NJ_ERR_UNSUPPORTED (or a
+     *                   NULL hook) means "this machine has no radio", and
+     *                   LocalDevice.getLocalDevice() then throws
+     *                   BluetoothStateException naming that, which is exactly
+     *                   what the specification asks for.
+     *   bt_discoverable 0x9E8B00 not discoverable, 0x9E8B33 GIAC (general),
+     *                   0x9E8B01..0x9E8B32 LIAC.  < 0 means the port cannot
+     *                   change it.
+     *   bt_inquiry      fill in at most `max` devices, waiting no longer than
+     *                   `duration_ms`; returns how many, 0 for none, < 0 when
+     *                   the radio cannot inquire.  The runtime calls this from
+     *                   the frame pump, so a port that cannot block reports 0
+     *                   and is asked again - the MIDlet's listener is what
+     *                   makes the wait finite.
+     *   bt_services     search one device for services whose UUID matches
+     *                   `uuid` (NULL = any).  Same rules: returns a count,
+     *                   0 or < 0, and never blocks for long.
+     *   bt_listen       open a server from a "btspp://localhost:<uuid>;name=x"
+     *                   or "btl2cap://localhost:<uuid>;name=x" URL, returning a
+     *                   notifier handle (NULL + a sentence in `err` if it
+     *                   cannot), or NULL with an empty err when the port has no
+     *                   Bluetooth at all - the scheme is then refused by name.
+     *   bt_accept       wait up to `timeout_ms` for a peer; NULL is "nobody
+     *                   yet", and the caller comes back.
+     *   bt_read/write/close  the same contract as socket_read/write/close,
+     *                   and close() must also close a notifier.
+     *
+     * A port with no radio leaves every one of them NULL: the package is still
+     * there, findSensors-style "nothing found" answers come back, and
+     * LocalDevice.getLocalDevice() says why.
+     */
+    nj_status (*bt_local)(void *ud, nj_bt_local *out);
+    int   (*bt_discoverable)(void *ud, int mode, nj_u4 seconds);
+    int   (*bt_inquiry)(void *ud, nj_bt_device *out, int max, nj_u4 duration_ms);
+    int   (*bt_services)(void *ud, const char *address, const nj_u1 *uuid,
+                         nj_bt_service *out, int max);
+    void *(*bt_listen)(void *ud, const char *url, char *err, nj_size err_cap);
+    void *(*bt_accept)(void *ud, void *handle, nj_u4 timeout_ms);
+    int   (*bt_read)(void *ud, void *handle, nj_u1 *buf, int len,
+                     nj_u4 timeout_ms);
+    int   (*bt_write)(void *ud, void *handle, const nj_u1 *buf, int len);
+    void  (*bt_close)(void *ud, void *handle);
 
     int   fps_cap;        /* 0 => uncapped */
     const char *rms_dir;  /* where RecordStore files live (hosted ports) */

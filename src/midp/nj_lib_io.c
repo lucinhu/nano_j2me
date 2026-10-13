@@ -1181,6 +1181,27 @@ NJFN(connector_open)
         ret->r = nj_socket_new(vm, u);
         return ret->r ? NJ_OK : NJ_ERR;
     }
+    /*
+     * Bluetooth.  A CLIENT connection ("btspp://001122334455:3") is a byte
+     * stream, so it goes to exactly the same place a socket does - the port
+     * decides what the URL means.  A SERVER URL names localhost, and that is
+     * the notifier the javax.bluetooth module hands back: acceptAndOpen()
+     * waits for a peer and returns the connection.
+     */
+    if (strncmp(u, "btspp://", 8u) == 0 || strncmp(u, "btl2cap://", 10u) == 0) {
+        /* "btl2cap://" is two characters longer than "btspp://". */
+        const char *host = (u[2] == 'l') ? u + 10 : u + 8;
+        if (strncmp(host, "localhost", 9u) == 0) {
+            ret->r = nj_bt_listen(vm, u);
+            if (!ret->r)
+                return nj_throw(vm,
+                    "javax/microedition/io/ConnectionNotFoundException",
+                    nj_bt_listen_error(vm, u));
+            return NJ_OK;
+        }
+        ret->r = nj_socket_new(vm, u);
+        return ret->r ? NJ_OK : NJ_ERR;
+    }
     return nj_throw(vm, "javax/microedition/io/ConnectionNotFoundException", u);
 }
 
@@ -1907,7 +1928,25 @@ static const nj_builtin_method dataoutput_methods[] = {
     M("writeUTF", "(Ljava/lang/String;)V", NJ_ACC_ABSTRACT)
 };
 
+/*
+ * StreamConnectionNotifier is the server half of javax.microedition.io: a
+ * MIDlet opens a local URL, calls acceptAndOpen() and gets the connection a
+ * peer made.  It is declared here because it is an io type, even though the
+ * only thing in this runtime that can answer it is javax.bluetooth - a port
+ * with a Bluetooth hook family gets it, and a port without one never sees the
+ * class used, because opening the URL already failed.
+ */
+static const nj_builtin_method streamnotifier_methods[] = {
+    { "acceptAndOpen", "()Ljavax/microedition/io/StreamConnection;",
+      NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT }
+};
+
 const nj_builtin_class nj_lib_io_classes[] = {
+    { "javax/microedition/io/StreamConnectionNotifier",
+      "javax/microedition/io/Connection",
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, streamnotifier_methods,
+      (nj_u2)(sizeof(streamnotifier_methods) / sizeof(streamnotifier_methods[0])) },
     { NJ_C_READER, "java/lang/Object",
       NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
       NULL, 0u, reader_methods,

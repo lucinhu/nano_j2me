@@ -179,6 +179,10 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         /* Stream sockets, for SocketConnection.  Optional in the same way:
          * without it Connector.open("socket://...") refuses by name. */
         PlatformSocket.init(getApplicationContext());
+        /* Bluetooth discovery, for javax.bluetooth.  The emulator has no
+         * adapter, so this one mostly answers "no radio" - which is exactly
+         * the answer the runtime turns into BluetoothStateException. */
+        PlatformBluetooth.init(getApplicationContext());
         /* The Material 3 palette, before the first view is built: the dialogs
          * this screen opens are the framework's, and they have to agree with
          * the colours the library used. */

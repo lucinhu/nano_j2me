@@ -77,6 +77,7 @@ usually skip, and they are exactly the parts old games use.
 | `javax.microedition.lcdui.game` | **done** |
 | `java.util`, `java.io`, RMS | **done** |
 | `javax.microedition.io` | **done** — `file://`, `http(s)://` (one optional `http_request` hook, the Android port wraps `HttpURLConnection`) and `socket://` (four optional `socket_*` hooks over TCP); any other scheme is refused by name |
+| `javax.bluetooth` | **discovery done** — `LocalDevice`, `DiscoveryAgent`, `UUID`, `DeviceClass`, `DataElement`, `ServiceRecord` and `RemoteDevice` over nine optional `bt_*` hooks; RFCOMM/L2CAP servers are the port's, and a port with no radio gets `BluetoothStateException` |
 | `javax.microedition.sensor` (JSR 256) | **done** — `findSensors`, connections, channels, ranges and data listeners, with the sensors themselves supplied by the port; conditions are refused rather than faked |
 | Software rasterizer | **done** |
 | Decoders: PNG, JPEG, GIF, DEFLATE, WAV, AMR, MIDI, bitmap fonts | **done**, each behind its own switch (`NJ_ENABLE_*`) and all behind a pluggable registry, so a port can cut one or replace it with the platform's |
@@ -85,7 +86,7 @@ usually skip, and they are exactly the parts old games use.
 | Ports: Android (NDK + JNI) | **done** — one APK for Android 5.0 (API 21) and up, 4 ABIs, a launcher that shows each game's own name and icon and opens `.jar` files from a file manager, three configurable floating keypad layouts, sound through AAudio or OpenSL ES with MIDI handed to the phone's own synth, multi-touch, and auto-detected screen size; 1.57 MiB for all four ABIs, runs on an API 21 emulator, an API 36 emulator and a phone |
 | Ports: ESP32-S3 (ESP-IDF, Xtensa) | **done** — real IDF build, RUNS a MIDlet under QEMU |
 | Ports: ESP32-C3 (ESP-IDF, RISC-V) | builds, links and boots; needs PSRAM for the VM |
-| Test suite | **63 tests** (`ctest`) |
+| Test suite | **64 tests** (`ctest`) |
 | Sanitized suite | **11/11 passing** under ASan + UBSan + LSan (`tools/run_sanitized_tests.sh`) |
 
 Verified end to end: **Tumbleweed** (`net.frog_parrot.jump.Jump`, Apress 2004)

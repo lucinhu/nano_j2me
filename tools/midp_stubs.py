@@ -657,9 +657,18 @@ CLASSES = {
     # MIDP 2.0 makes HttpConnection mandatory.  The runtime implements it on
     # top of the port's HTTP hook (src/midp/nj_lib_http.c); the fixtures that
     # exercise it are built against these stubs.
+    # StreamConnection really extends InputConnection and OutputConnection;
+    # the stub generator gives an interface one parent, so the four stream
+    # methods are declared here, exactly as the runtime declares the union on
+    # the classes it hands out.
     "javax/microedition/io/StreamConnection": {
         "interface": True, "extends": "javax.microedition.io.Connection",
-        "methods": [],
+        "methods": [
+            "java.io.InputStream openInputStream()",
+            "java.io.DataInputStream openDataInputStream()",
+            "java.io.OutputStream openOutputStream()",
+            "java.io.DataOutputStream openDataOutputStream()",
+        ],
     },
     "javax/microedition/io/ContentConnection": {
         "interface": True, "extends": "javax.microedition.io.StreamConnection",
@@ -1032,6 +1041,153 @@ CLASSES = {
     "javax/microedition/sensor/ConditionListener": {
         "interface": True,
         "methods": ["void conditionMet(javax.microedition.sensor.SensorConnection, javax.microedition.sensor.Data, javax.microedition.sensor.Condition)"],
+    },
+
+    # ---- javax.bluetooth (JSR 82) -------------------------------------
+    "javax/microedition/io/StreamConnectionNotifier": {
+        "interface": True,
+        "extends": "javax.microedition.io.Connection",
+        "methods": [
+            "javax.microedition.io.StreamConnection acceptAndOpen()",
+        ],
+    },
+    "javax/bluetooth/BluetoothStateException": {
+        "extends": "java.io.IOException",
+        "methods": ["public BluetoothStateException()",
+                    "public BluetoothStateException(String)"],
+    },
+    "javax/bluetooth/UUID": {
+        "methods": [
+            "public UUID(String)",
+            "public UUID(long)",
+            "public boolean equals(Object)",
+            "public int hashCode()",
+            "public String toString()",
+        ],
+    },
+    "javax/bluetooth/DeviceClass": {
+        "methods": [
+            "public int getMajorDeviceClass()",
+            "public int getMinorDeviceClass()",
+            "public int getServiceClasses()",
+        ],
+    },
+    "javax/bluetooth/DataElement": {
+        "constants": {
+            "NULL": "0", "U_INT_1": "8", "U_INT_2": "9", "U_INT_4": "10",
+            "U_INT_8": "11", "U_INT_16": "12", "INT_1": "16", "INT_2": "17",
+            "INT_4": "18", "INT_8": "19", "INT_16": "20", "UUID": "24",
+            "STRING": "32", "BOOL": "40", "DATSEQ": "48", "DATALT": "56",
+            "URL": "64",
+        },
+        "methods": [
+            "public DataElement(int)",
+            "public DataElement(boolean)",
+            "public DataElement(int, long)",
+            "public DataElement(int, Object)",
+            "public int getDataType()",
+            "public long getLong()",
+            "public boolean getBoolean()",
+            "public Object getValue()",
+            "public int getSize()",
+            "public void addElement(DataElement)",
+            "public void insertElementAt(DataElement, int)",
+            "public boolean removeElement(DataElement)",
+        ],
+    },
+    "javax/bluetooth/ServiceRecord": {
+        "interface": True,
+        "constants": {
+            "NOAUTHENTICATE_NOENCRYPT": "0",
+            "AUTHENTICATE_NOENCRYPT": "1",
+            "AUTHENTICATE_ENCRYPT": "2",
+        },
+        "methods": [
+            "DataElement getAttributeValue(int)",
+            "String getConnectionURL(int, boolean)",
+            "RemoteDevice getHostDevice()",
+            "int[] getAttributeIDs()",
+            "boolean populateRecord(int[])",
+            "void setAttributeValue(int, DataElement)",
+            "void removeAttributeValue(int, boolean)",
+        ],
+    },
+    "javax/bluetooth/RemoteDevice": {
+        "methods": [
+            "public static RemoteDevice getRemoteDevice(String)",
+            "public String getBluetoothAddress()",
+            "public String getFriendlyName(boolean)",
+            "public DeviceClass getDeviceClass()",
+            "public boolean equals(Object)",
+            "public int hashCode()",
+            "public boolean authenticate()",
+            "public boolean authorize(String)",
+            "public boolean encrypt(boolean)",
+            "public boolean isAuthenticated()",
+            "public boolean isEncrypted()",
+            "public boolean isTrustedDevice()",
+        ],
+    },
+    "javax/bluetooth/LocalDevice": {
+        "methods": [
+            "public static LocalDevice getLocalDevice()",
+            "public String getFriendlyName()",
+            "public String getBluetoothAddress()",
+            "public DeviceClass getDeviceClass()",
+            "public DiscoveryAgent getDiscoveryAgent()",
+            "public String getProperty(String)",
+            "public ServiceRecord getRecord(ServiceRecord)",
+            "public void updateRecord(ServiceRecord)",
+            "public boolean setDiscoverable(int)",
+        ],
+    },
+    "javax/bluetooth/DiscoveryAgent": {
+        "constants": {
+            "NOT_DISCOVERABLE": "0", "GIAC": "10390227", "LIAC": "10390208",
+            "CACHED": "0", "PREKNOWN": "1",
+        },
+        "methods": [
+            "public boolean startInquiry(int, DiscoveryListener)",
+            "public boolean cancelInquiry(DiscoveryListener)",
+            "public int searchServices(int[], UUID[], RemoteDevice, DiscoveryListener)",
+            "public boolean cancelServiceSearch(int)",
+            "public RemoteDevice[] retrieveDevices(int)",
+            "public String selectService(UUID, int, boolean)",
+        ],
+    },
+    "javax/bluetooth/DiscoveryListener": {
+        "interface": True,
+        "constants": {
+            "INQUIRY_COMPLETED": "0", "INQUIRY_TERMINATED": "1",
+            "INQUIRY_ERROR": "2", "SERVICE_SEARCH_COMPLETED": "1",
+            "SERVICE_SEARCH_TERMINATED": "2", "SERVICE_SEARCH_ERROR": "3",
+            "SERVICE_SEARCH_NO_RECORDS": "4",
+            "SERVICE_SEARCH_DEVICE_NOT_REACHABLE": "6",
+        },
+        "methods": [
+            "void deviceDiscovered(RemoteDevice, DeviceClass)",
+            "void servicesDiscovered(int, ServiceRecord[])",
+            "void serviceSearchCompleted(int, int)",
+            "void inquiryCompleted(int)",
+        ],
+    },
+    "javax/bluetooth/L2CAPConnection": {
+        "interface": True,
+        "extends": "javax.microedition.io.Connection",
+        "constants": {"DEFAULT_MTU": "672", "MINIMUM_MTU": "48"},
+        "methods": [
+            "void send(byte[])",
+            "int receive(byte[])",
+            "boolean ready()",
+            "int getReceiveMTU()",
+            "int getTransmitMTU()",
+            "void close()",
+        ],
+    },
+    "javax/bluetooth/L2CAPConnectionNotifier": {
+        "interface": True,
+        "extends": "javax.microedition.io.Connection",
+        "methods": ["L2CAPConnection acceptAndOpen()"],
     },
 }
 

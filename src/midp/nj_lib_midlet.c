@@ -157,6 +157,7 @@ nj_status nj_midp_destroy_app(nj_vm *vm, int unconditional)
      * SensorEventListener keeps waking the process up).  This runs even when
      * destroyApp() itself never returns - the runner cuts that short. */
     nj_sensor_shutdown(vm);
+    nj_bt_shutdown(vm);
 
     app = vm->app;
     if (!app) {
@@ -291,6 +292,9 @@ nj_status nj_midp_frame(nj_vm *vm)
      * cadence: a listener is a poll with a callback attached, and the spec
      * gives no better clock than the program's own frame. */
     nj_sensor_frame(vm);
+    /* Bluetooth discovery jobs get the same clock: an inquiry is a poll the
+     * port answers a slice at a time, and its listener hears about it here. */
+    nj_bt_frame(vm);
 
     /* ---- paint ---- */
     /*

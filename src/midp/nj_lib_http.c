@@ -1218,6 +1218,21 @@ static const nj_builtin_method outputconn_methods[] = {
     M("openDataOutputStream", "()Ljava/io/DataOutputStream;", NJ_ACC_ABSTRACT)
 };
 
+/*
+ * StreamConnection has the same problem HttpConnection has below: a call
+ * typed StreamConnection (which is what acceptAndOpen() returns) resolves in
+ * THIS table, so the table has to carry the union of what a stream connection
+ * offers even though real Java inherits it from Connection and the two
+ * direction interfaces.
+ */
+static const nj_builtin_method streamconn_methods[] = {
+    M("close",                "()V", NJ_ACC_ABSTRACT),
+    M("openInputStream",      "()Ljava/io/InputStream;", NJ_ACC_ABSTRACT),
+    M("openDataInputStream",  "()Ljava/io/DataInputStream;", NJ_ACC_ABSTRACT),
+    M("openOutputStream",     "()Ljava/io/OutputStream;", NJ_ACC_ABSTRACT),
+    M("openDataOutputStream", "()Ljava/io/DataOutputStream;", NJ_ACC_ABSTRACT)
+};
+
 static const nj_builtin_method contentconn_methods[] = {
     M("getType",     "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
     M("getEncoding", "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
@@ -1316,7 +1331,8 @@ const nj_builtin_class nj_lib_http_classes[] = {
       (nj_u2)(sizeof(outputconn_methods) / sizeof(outputconn_methods[0])) },
     { NJ_C_STREAMCONN, NJ_C_CONNECTION,
       NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
-      NULL, 0u, NULL, 0u },
+      NULL, 0u, streamconn_methods,
+      (nj_u2)(sizeof(streamconn_methods) / sizeof(streamconn_methods[0])) },
     { NJ_C_CONTENTCONN, NJ_C_STREAMCONN,
       NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
       NULL, 0u, contentconn_methods,
