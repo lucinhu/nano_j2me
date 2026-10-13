@@ -334,6 +334,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_devicedemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_waitdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_timerdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_fielddemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flatdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_excdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_paintthrow_jar.sh
@@ -541,6 +542,17 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_timer_wait.sh
                      ${NJ_FIXTURES}/timerdemo.jar)
+    # JVMS 5.4.3.2 resolves a Fieldref by name and descriptor through the class
+    # and its superclasses; static-ness is a property of the field that wins.
+    # Resolving the instance variant first linked 疯狂农场2_2375's static Vector
+    # to its superclass's instance field of the same name, and the static access
+    # then read and wrote nothing at all.  check_field_shadow.sh runs the
+    # fixture that hides an instance field behind a static one.
+    add_test(NAME check_field_shadow
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_field_shadow.sh
+                     ${NJ_FIXTURES}/fielddemo.jar)
     add_test(NAME check_corpus_size_retry
              COMMAND ${CMAKE_COMMAND} -E env
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_corpus_size_retry.sh

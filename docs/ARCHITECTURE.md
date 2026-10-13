@@ -133,6 +133,19 @@ the whole cache is bounded and growable.
 Field access uses the same cache, storing the byte offset (instance) or the
 static slot index.
 
+**A field is resolved by name and descriptor, not by static-ness.** JVMS
+5.4.3.2 walks the referenced class and then its superclasses, and static-ness is
+a property of the field that wins rather than a filter on the search; the
+opcode (`getstatic`/`getfield`) only has to agree with the field that was found.
+Asking for the instance variant first instead made 疯狂农场2_2375 lose its
+screen: class `h` declares a static `Vector b` while its superclass `j` declares
+an *instance* `Vector b`, so `getstatic h.b` and `putstatic h.b` were linked to
+`j`'s instance offset. A `getstatic` then read the field off a NULL receiver and
+a `putstatic` dropped the value on the floor, both silently, and the only
+symptom was a `Vector` that stayed null three methods away. The interpreter now
+refuses the mismatch by name (`IncompatibleClassChangeError`) instead of
+accessing nothing, and `check_field_shadow` regresses the whole thing.
+
 ### Layout computation
 
 `nj_class_link()` resolves the superclass, then lays instance fields out

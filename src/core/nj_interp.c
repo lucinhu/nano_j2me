@@ -1327,6 +1327,19 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             }
             f = (nj_field *)e->target;
             /*
+             * The opcode says whether the field is static; the field itself
+             * says what it is.  When they disagree the access used to read or
+             * write nothing at all - `getfield` with a static field read it
+             * off a NULL receiver, `putstatic` with an instance field dropped
+             * the value on the floor - and the only symptom was a field that
+             * stayed null somewhere else entirely.  Name it instead.
+             */
+            if ((op == 0xb2) != (e->kind == NJ_LINK_FIELD_STATIC)) {
+                THROW("java/lang/IncompatibleClassChangeError",
+                      (op == 0xb2) ? "getstatic names an instance field"
+                                   : "getfield names a static field");
+            }
+            /*
              * Reading a static field is an active use of the class that
              * DECLARES it, so its <clinit> has to have run.  Interfaces count:
              * obfuscated titles park lookup tables in an interface and fill
@@ -1369,6 +1382,13 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 goto do_unwind;
             }
             f = (nj_field *)e->target;
+            /* Same guard as the read side: never write through a link whose
+             * static-ness does not match the opcode. */
+            if ((op == 0xb3) != (e->kind == NJ_LINK_FIELD_STATIC)) {
+                THROW("java/lang/IncompatibleClassChangeError",
+                      (op == 0xb3) ? "putstatic names an instance field"
+                                   : "putfield names a static field");
+            }
             /* Writing one is an active use too, and the value is left on the
              * operand stack across the initialiser so the GC can see it. */
             if (e->kind == NJ_LINK_FIELD_STATIC) {

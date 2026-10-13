@@ -1186,7 +1186,7 @@ static nj_field *field_lookup_walk(nj_class *c, const char *name,
         for (i = 0u; i < k->field_count; i++) {
             nj_field *f = &k->fields[i];
             int is_static = (f->flags & NJ_ACC_STATIC) != 0u;
-            if (is_static != want_static) {
+            if (want_static >= 0 && is_static != want_static) {
                 continue;
             }
             if (strcmp(f->name, name) != 0) {
@@ -1398,23 +1398,33 @@ nj_status nj_cp_resolve(nj_vm *vm, nj_class *c, nj_u2 index, nj_cpentry **out)
     e->slot = 0u;
 
     if (tag == NJ_CP_FIELDREF) {
-        nj_field *f = nj_field_lookup_in(owner, mname, mdesc, 0);
+        /*
+         * JVMS 5.4.3.2 resolves a Fieldref by NAME and DESCRIPTOR through the
+         * referenced class and then its superclasses; static-ness is a
+         * property of the field that wins, not a filter on the search.
+         *
+         * Asking for an instance field first was wrong in a way that hid
+         * itself: 疯狂农场2_2375's class h declares a STATIC
+         * `b:Ljava/util/Vector;` while its superclass j declares an instance
+         * field with the same name and descriptor, so the instance-first
+         * search walked past h's own field, found j's, and linked the static
+         * access to an instance offset.  A getstatic then read the field off a
+         * NULL receiver and a putstatic dropped the value, both silently; the
+         * title's constructor stored its Vector into nothing, and the next
+         * addElement() on it threw NullPointerException with no trace of why.
+         */
+        nj_field *f = field_lookup_walk(owner, mname, mdesc, -1, 1);
         if (!f) {
-            /* Try the static variant: some obfuscators emit both. */
-            f = nj_field_lookup_in(owner, mname, mdesc, 1);
-            if (!f) {
-                vm->resolve_fail = NJ_RESOLVE_FIELD;
-                vm->resolve_cls = cls_name;
-                vm->resolve_name = mname;
-                vm->resolve_desc = mdesc;
-                return NJ_ERR;
-            }
-            e->kind = NJ_LINK_FIELD_STATIC;
-        } else {
-            e->kind = NJ_LINK_FIELD_INST;
+            vm->resolve_fail = NJ_RESOLVE_FIELD;
+            vm->resolve_cls = cls_name;
+            vm->resolve_name = mname;
+            vm->resolve_desc = mdesc;
+            return NJ_ERR;
         }
         e->target = f;
         e->slot = f->offset;
+        e->kind = ((f->flags & NJ_ACC_STATIC) != 0u) ? NJ_LINK_FIELD_STATIC
+                                                     : NJ_LINK_FIELD_INST;
     } else if (tag == NJ_CP_METHODREF) {
         nj_method *m = method_lookup_named(owner, mname, mdesc);
         if (!m) {
