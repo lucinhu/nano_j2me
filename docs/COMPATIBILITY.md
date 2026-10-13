@@ -167,6 +167,16 @@ Four of the five that remain are the title's own defect, its own dead code or it
 own loading loop (`1945空战英雄_6105`, `鲁宾逊漂流记汉化BT版_4677`,
 `灌篮高手-爆发!樱木_7947`, `战争艺术2之全球联盟中文版_1918`), and
 `午夜台球圣诞中文版_8677` computes a negative length in its own resource decoder.
+
+`实况足球经理2009_10609` deserves a note of its own, because its row changes
+between sweeps: it draws a nine colour screen at 176x208 and a flat one at
+320x240, and its own initialisation races - the `NullPointerException` in
+`d.T(int)` (its string cache) appears only in the runs where its loader thread
+did not finish first.  Two runs of the SAME binary on the same size can execute
+208 million or 15 million bytecodes, which is the title's timing, not the
+runtime's.  The tool's fallback name for it, "flat under every pace and every
+heap", is accurate per run and misleading across runs; the honest statement is
+that it draws when its own race goes its way.
 None of them is known to be the runtime's - which is a different statement from
 "the runtime is perfect", and it is the reason the sweeps keep being re-run:
 every one of these numbers has moved because of a bug the corpus itself pointed
