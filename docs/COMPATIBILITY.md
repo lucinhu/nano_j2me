@@ -107,6 +107,31 @@ the long re-run, the paced re-run and the two heap re-runs below: **386 passed,
 381/14, 384/11, 385/10 and now 386/9, and every drop came from a bug the corpus
 itself pointed at rather than from a title being excused.
 
+### The nine that still fail, and what each one turned out to be
+
+Nine titles do not paint a frame.  They have been looked at one by one, because
+the eighth and ninth of the last three bugs came out of exactly this list, and
+the honest answer differs per title:
+
+| title | what happens | what it is |
+| --- | --- | --- |
+| `1945空战英雄_6105` | `IllegalAccessException` out of its own MIDlet constructor | the title's own platform check: it demands `microedition.platform` start with `Nokia`, and runs (`frames=60 paints=60 gfx=180`) with `--device nokia6230` |
+| `鲁宾逊漂流记汉化BT版_4677` | `not a MIDlet suite` | the JAR is truncated: 286,534 bytes with no end-of-central-directory record at all (python's `zipfile` refuses it too) |
+| `灌篮高手-爆发!樱木_7947` | `ArithmeticException: / by zero` in `w.paint()` | the class file really does `getWidth() / 0` (`iconst_0; idiv`) once its image field is loaded - no runtime can finish that paint |
+| `实况足球经理2009_10609` | every string lookup NPEs; only 3 Graphics calls in 600 paints | the method that builds its string table (`d.E()V`) has **no caller** anywhere in the JAR: dead initialiser, so the table stays null |
+| `战争艺术2之全球联盟中文版_1918` | NPEs in `n.a(String,int)`; nothing drawn | same shape: `d.f()`, which builds the config array `b.bb`, is never called |
+| `午夜台球圣诞中文版_8677` | `NegativeArraySizeException` in its own decoder (`c.a(I)`), then a flat frame | its resource reader computes a negative length; the title is the only thing that can fix that |
+| `反恐精英2正式版_5836` | flat, first throw NPE in `k.c(Graphics)` at the first paint | still inside its own splash/loading loop after 4,000 frames (`--where` shows `k.o()V pc=62`), the same shape as `疯狂战机_2013` before the pacing retry |
+| `模拟人生2_10762` | flat, paint() makes no Graphics call at all; NPE in `root/SimsApp.q(Z)` | not root-caused |
+| `仙魔飞行棋_417` | flat, no exception at all | it draws through the `Graphics` it captured in `paint()` and only ever clears there; the title's own timing decides when that thread draws |
+
+Six of the nine are the title's own defect or its own dead code, and two are not
+root-caused; none of them is known to be the runtime's.  That is a different
+statement from "the runtime is perfect", and it is the reason the sweeps keep
+being re-run: a fix that moves one of these nine moves the whole number.
+
+
+
 ### A title is allowed to ask how much memory it has
 
 `Runtime.totalMemory()` is a real question with a real answer, and one title
