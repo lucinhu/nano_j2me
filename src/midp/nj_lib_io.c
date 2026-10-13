@@ -844,14 +844,31 @@ NJFN(dis_readFully_all)
                              buf ? (nj_s4)buf->length : 0);
 }
 
-/* skipBytes: skips exactly n bytes or fails.  The javadoc promises
- * EOFException rather than a short count, and the previous binding - to
- * is_available() - did not skip anything at all, it just returned zero. */
+/*
+ * skipBytes: an ATTEMPT, and a short count is the documented answer.  The
+ * CLDC 1.1 DataInput javadoc is explicit - "Makes an attempt to skip over n
+ * bytes ... However, it may skip over some smaller number of bytes, possibly
+ * zero.  This method never throws an EOFException.  The actual number of
+ * bytes skipped is returned." - so this must not turn an end of file into an
+ * EOFException.
+ *
+ * It used to, and 实况足球经理2009_10609 is the title that paid for it: its
+ * loader (d.E) reads a length, skipBytes()s past it, reads the next length
+ * and builds its string table from what follows.  The first skip ran past
+ * the end of a short resource, the EOFException aborted the loader before the
+ * table was built, and every later lookup - the game's own string cache -
+ * dereferenced a null array and drew nothing.  The title never reached its
+ * first frame because of one short skip.
+ *
+ * The skip goes through the underlying stream's skip(long), which reads
+ * through read(byte[],int,int) and answers the number of bytes it really
+ * moved.
+ */
 NJFN(dis_skip_bytes)
 {
     nj_ref in = dis_in(vm, NJ_THIS(args));
     nj_s4 want = NJ_ARG_INT(args, 0);
-    nj_s4 done = 0;
+    nj_value sret;
 
     if (!in) {
         return nj_throw(vm, "java/io/IOException", "no underlying stream");
@@ -860,14 +877,17 @@ NJFN(dis_skip_bytes)
         ret->i = 0;
         return NJ_OK;
     }
-    while (done < want) {
-        nj_s4 c = dis_one(vm, in);   /* raises EOFException at the end */
-        if (c < 0) {
+    memset(&sret, 0, sizeof(sret));
+    sret.j = 0;
+    {
+        nj_value a1[3];
+
+        a1[0].j = (nj_s8)want;
+        if (nj_call(vm, in, NJ_C_ISTREAM, "skip", "(J)J", a1, &sret) != NJ_OK) {
             return NJ_ERR;
         }
-        done++;
     }
-    ret->i = done;
+    ret->i = (nj_s4)sret.j;
     return NJ_OK;
 }
 

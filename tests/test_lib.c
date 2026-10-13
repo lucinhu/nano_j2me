@@ -419,6 +419,25 @@ static void test_skips(nj_vm *vm)
            "the byte after a 2-byte skip must be the third one");
     clean(vm, "skipBytes");
 
+    /*
+     * ... and a skip that runs past the end is a SHORT COUNT, not an
+     * exception: "This method never throws an EOFException.  The actual
+     * number of bytes skipped is returned." (CLDC 1.1 DataInput).  It threw
+     * one, and 实况足球经理2009_10609's loader died in the middle of building
+     * its string table because of it.
+     */
+    bais = bais_over(vm, data, 4u);
+    OK(bais != NULL);
+    dis = dis_over(vm, bais);
+    OK(dis != NULL);
+    a[0] = vint(100);
+    OK_MSG(nj_call_int(vm, dis, DIS, "skipBytes", "(I)I", a) == 4,
+           "skipBytes past the end must report the 4 bytes it could skip");
+    OK_MSG(!vm->exception, "and must not raise anything");
+    OK_MSG(nj_call_int(vm, dis, DIS, "skipBytes", "(I)I", a) == 0,
+           "and a skip at the end of the stream is 0");
+    clean(vm, "skipBytes past the end");
+
     /* InputStream.skip, on the inherited implementation (nj_call_special
      * bypasses ByteArrayInputStream's own override, which is what a subclass
      * providing only read(byte[],int,int) would inherit). */
