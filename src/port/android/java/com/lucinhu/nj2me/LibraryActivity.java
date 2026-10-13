@@ -426,7 +426,7 @@ public class LibraryActivity extends Activity {
     }
 
     private void options(final JarStore.Entry e) {
-        final String[] actions = { "运行", "修改分辨率", "修改内存", "改名", "按键布局", "删除" };
+        final String[] actions = { "运行", "修改分辨率", "修改内存", "改名", "调整画面和按键", "删除" };
         Md3.show(new AlertDialog.Builder(this)
             .setCustomTitle(Md3.headline(this, e.title, null))
             .setItems(actions, new DialogInterface.OnClickListener() {
@@ -438,7 +438,10 @@ public class LibraryActivity extends Activity {
                         case 2: heapDialog(e); break;
                         case 3: renameDialog(e); break;
                         case 4:
+                            /* the one screen where the picture and the keys are
+                             * placed together, so it needs to know the game */
                             Intent it = new Intent(LibraryActivity.this, PadEditActivity.class);
+                            it.putExtra("jar", e.jar.getName());
                             it.putExtra("w", e.w);
                             it.putExtra("h", e.h);
                             startActivity(it);

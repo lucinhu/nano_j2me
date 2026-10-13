@@ -286,6 +286,18 @@ class PadView extends View {
                         if (ev.getPointerCount() >= 2) {
                             startPinch(ev, k);
                         }
+                    } else {
+                        /* Empty space is the picture, not only a place to add a
+                         * key: dragging here moves the game picture and a pinch
+                         * scales it, which is what lets one screen place the
+                         * keys and the picture against each other.  The long
+                         * press that adds a key stays armed and is cancelled as
+                         * soon as the finger travels. */
+                        adjustX = x;
+                        adjustY = y;
+                        if (ev.getPointerCount() >= 2) {
+                            adjustSpread = spread(ev);
+                        }
                     }
                     armLongPress(k, x / getWidth(), y / getHeight());
                     invalidate();
@@ -310,6 +322,8 @@ class PadView extends View {
                                             ev.getY(0) / getHeight() + dragDy);
                         }
                         invalidate();
+                    } else if (selected == null && !longFired && sink != null) {
+                        pictureGesture(ev);
                     }
                     return true;
                 }
@@ -319,18 +333,7 @@ class PadView extends View {
                 }
                 invalidate();
                 if (adjusting && !editing && sink != null) {
-                    if (ev.getPointerCount() >= 2) {
-                        float d = spread(ev);
-                        if (adjustSpread > 1f && d > 1f) {
-                            sink.onViewGesture(d / adjustSpread, 0f, 0f);
-                            adjustSpread = d;
-                        }
-                    } else {
-                        sink.onViewGesture(1f, ev.getX(0) - adjustX,
-                                           ev.getY(0) - adjustY);
-                        adjustX = ev.getX(0);
-                        adjustY = ev.getY(0);
-                    }
+                    pictureGesture(ev);
                 }
                 return true;
             }
@@ -342,6 +345,7 @@ class PadView extends View {
                     disarmLongPress();
                     if (ev.getPointerCount() <= 2) {
                         pinchStartDist = 0f;
+                        adjustSpread = 0f;
                     }
                     return true;
                 }
@@ -359,6 +363,26 @@ class PadView extends View {
             }
             default:
                 return true;
+        }
+    }
+
+    /**
+     * Feed the picture the finger's travel (or the spread between two of them).
+     *
+     * <p>Deltas, not positions: the sink accumulates them, so a pan is the sum
+     * of the moves and a pinch is the ratio between two spreads.
+     */
+    private void pictureGesture(MotionEvent ev) {
+        if (ev.getPointerCount() >= 2) {
+            float d = spread(ev);
+            if (adjustSpread > 1f && d > 1f) {
+                sink.onViewGesture(d / adjustSpread, 0f, 0f);
+                adjustSpread = d;
+            }
+        } else {
+            sink.onViewGesture(1f, ev.getX(0) - adjustX, ev.getY(0) - adjustY);
+            adjustX = ev.getX(0);
+            adjustY = ev.getY(0);
         }
     }
 

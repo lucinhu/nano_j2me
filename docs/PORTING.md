@@ -283,7 +283,7 @@ parks that thread in `idle()` instead of letting it spin against a dead surface.
 
 ### The shell around the game
 
-Six things in that shell are worth copying, because each one is a rule a plain
+Seven things in that shell are worth copying, because each one is a rule a plain
 "put a SurfaceView in an Activity" port gets wrong:
 
 - **The name comes from the jar, not from the file.** `JarName.of(File)` reads
@@ -308,12 +308,23 @@ Six things in that shell are worth copying, because each one is a rule a plain
   `presetName()`, `presetHint()`): 方向盘, 数字键盘, 全按键, 横屏双手, 街机双键,
   极简方向, 手机键盘 and an empty one to build on. Editor and game load the same
   blob, so a layout tweaked in game is the one the editor opens.
+- **One adjustment page, not two.** `PadEditActivity` is where both the keycaps
+  and the picture are placed: an empty-space drag moves the picture, two fingers
+  scale it, and 画面 chooses the fit. The in-game bar is down to 调整 / 状态 / 退出 -
+  调整 opens that page over the running game - because setting the keys and the
+  screen up in the same place beats hunting for two separate screens. The page
+  loads the game's sidecar (`JarStore.byName`) and writes it back with 保存, and
+  `GameActivity.reloadView()` re-reads those fields in `onResume()`, so a game
+  that is already running picks up the new position without a restart.
 - **The picture can be moved in every mode.** The port applies zoom and pan on
   top of whichever fit was chosen - `NJ_VIEW_INT` keeps its integer scale - and
   publishes how far the pan may go once per frame
   (`nj_port_android_view_limits`, surfaced as `nativeViewLimits`) because only the
-  blit knows the drawn size. Java clamps to that instead of guessing, so dragging
-  cannot park the picture off-screen and 微调位置 can show the player the limits.
+  blit knows the drawn size. `PictureFit` (pure Java, no Android imports) computes
+  that same rectangle off-device from the window, the canvas size and those
+  numbers, so the editor can draw where the picture will really land and show the
+  limits it clamps to (`可挪 ±60 / ±320`) before the game is even started; the game
+  clamps a restored pan to the port's own limits instead of guessing.
 - **Immersive and the cutout are two different insets.** `Ui.apply()` hides the
   bars (API 30+ through `WindowInsetsController`, older through
   `SYSTEM_UI_FLAG_IMMERSIVE_STICKY`) and `Ui.edgeToEdge()` asks for
@@ -340,7 +351,11 @@ Six things in that shell are worth copying, because each one is a rule a plain
   space again. A `Theme.Material` dialog is dark-on-dark under a light palette,
   so `Md3.show()` recolours the message and each list row - colours only, never
   padding or text size, because restyling metrics after the dialog has been
-  measured clips its last row.
+  measured clips its last row. The chrome that floats **on the picture** - the
+  control bar, the status card, the ≡ handle - keeps the dark end of the palette
+  in both schemes (`Md3.OVERLAY`, `overlayButton()`, `overlayHandle()`): it sits
+  on a black game, and a bright bar there is worse than the black system bars
+  this shell used to have. The picture itself is never restyled.
 
 ## Worked example: a bare-metal board
 

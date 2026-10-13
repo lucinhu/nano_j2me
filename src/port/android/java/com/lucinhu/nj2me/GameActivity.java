@@ -65,7 +65,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private LinearLayout bar;
     private TextView status;
     private TextView handleButton;
-    private TextView titleView;
 
     private String jarPath = "";   /* absolute: what the port opens */
     private String jarName = "";   /* file name: the JarStore key */
@@ -92,14 +91,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private boolean detSaved;       /* the measured resolution is already stored */
     private int detW, detH;
     private int detLastW, detLastH, detStable;
-
-    /*
-     * 调整画面 is a state the player turns on, not a view mode: the picture
-     * follows the finger while it is on, in whichever fit they chose.  It is
-     * deliberately separate from viewMode so that moving a picture never
-     * costs the player their crisp integer scaling.
-     */
-    private boolean movingPicture;
 
     /* 沉浸模式: the player's setting, plus where the notch and bars are. */
     private boolean immersive;
@@ -187,6 +178,10 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
          * missing bridge shows up in the log at start-up rather than at the
          * first request. */
         PlatformHttp.init(getApplicationContext());
+        /* The Material 3 palette, before the first view is built: the dialogs
+         * this screen opens are the framework's, and they have to agree with
+         * the colours the library used. */
+        Md3.init(this);
         Intent it = getIntent();
         /*
          * Two names on purpose. "jar" is the file name, which is what the
@@ -237,10 +232,10 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         status = new TextView(this);
-        status.setTextColor(Color.WHITE);
+        status.setTextColor(Md3.OVERLAY_MUTED);
         status.setTextSize(11f);
-        status.setBackgroundColor(Color.argb(170, 0, 0, 0));
-        status.setPadding(dp(8), dp(4), dp(8), dp(4));
+        status.setBackground(Md3.round(this, Md3.OVERLAY, 12f));
+        status.setPadding(dp(10), dp(6), dp(10), dp(6));
         status.setVisibility(View.GONE);
         FrameLayout.LayoutParams slp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -256,11 +251,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
 
         handleButton = new TextView(this);
         handleButton.setText("≡");
-        handleButton.setTextSize(18f);
-        handleButton.setTextColor(Color.WHITE);
-        handleButton.setGravity(Gravity.CENTER);
-        handleButton.setBackgroundColor(Color.argb(120, 0, 0, 0));
-        FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(dp(34), dp(34));
+        Md3.overlayHandle(handleButton, this);
+        FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(dp(40), dp(40));
         hlp.gravity = Gravity.TOP | Gravity.END;
         root.addView(handleButton, hlp);
         handleButton.setOnClickListener(new View.OnClickListener() {
@@ -313,19 +305,15 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         }
     }
 
-    /** True while empty space moves the picture instead of reaching the game. */
-    private boolean adjustingNow() {
-        return movingPicture || viewMode == VIEW_CUSTOM;
-    }
-
     @Override
     protected void onResume() {
         super.onResume();
         applyFullscreen();
-        /* The keypad editor may have changed the layout while we were away. */
+        /* The editor may have changed the layout or moved the picture while
+         * we were away - it is the one screen where both are set up. */
         padConfig.replaceWith(PadConfig.load(this));
         pad.setConfig(padConfig);
-        pad.setAdjusting(adjustingNow());
+        reloadView();
         applyView();
         ui.removeCallbacks(statusTick);
         ui.post(statusTick);
@@ -523,6 +511,30 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
 
     /* ---------------------------------------------------------------- view */
 
+    /**
+     * Pick up a picture the editor moved, without restarting the game.
+     *
+     * <p>The port keeps the geometry the player chose, so a change here is
+     * applied on the next frame rather than at the next launch: walking back
+     * from 调整 shows the new position immediately.
+     */
+    private void reloadView() {
+        JarStore.Entry e = JarStore.byName(this, jarName);
+        if (e == null) {
+            return;
+        }
+        viewMode = e.viewMode;
+        if (e.zoom > 0.05f) {
+            viewZoom = e.zoom;
+        }
+        viewPanX = e.panX;
+        viewPanY = e.panY;
+        if (e.detW > 0) {
+            detW = e.detW;
+            detH = e.detH;
+        }
+    }
+
     private void applyView() {
         synchronized (lock) {
             if (handle != 0) {
@@ -560,282 +572,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         }
     }
 
-    private void setViewMode(int mode) {
-        viewMode = mode;
-        viewDirty = true;
-        if (mode == VIEW_CUSTOM) {
-            /* Free adjustment is a mode the player is in, not a setting: the
-             * picture follows the finger until they pick a fixed mode again. */
-            toast("拖动移动画面，双指缩放；在「画面」里选其他方式结束调整");
-        } else {
-            movingPicture = false;
-        }
-        pad.setAdjusting(adjustingNow());
-        applyView();
-        saveView();
-        armBarTimer();
-        updateBarTitle();
-    }
-
-    /**
-     * 移动画面: the picture follows the finger, in whichever fit is in force.
-     *
-     * <p>Separate from 自由缩放 because a player who wants their 240x320 game
-     * shifted off the notch should not have to give up integer scaling to do
-     * it - and because a drag that moves the picture is a drag the game does
-     * not get, so it has to be something the player asks for.
-     */
-    private void toggleMovingPicture() {
-        movingPicture = !movingPicture;
-        pad.setAdjusting(adjustingNow());
-        if (movingPicture) {
-            toast("拖动移动画面，双指缩放；再按一次「移动画面」结束");
-        } else if (viewMode == VIEW_CUSTOM) {
-            toast("自由缩放本身就是拖动模式；选其他方式可结束调整");
-        }
-        updateBarTitle();
-        armBarTimer();
-    }
-
-    /** Nudges the picture by one step; shared with the 微调 dialog. */
-    private void nudge(float dx, float dy) {
-        viewPanX += dx;
-        viewPanY += dy;
-        viewDirty = true;
-        applyView();
-    }
-
-    private String panText() {
-        return Math.round(viewPanX) + "," + Math.round(viewPanY);
-    }
-
-    private String zoomText() {
-        return (Math.round(viewZoom * 100f) / 100f) + "x";
-    }
-
-    private String viewName(int mode) {
-        if (mode == VIEW_FILL) {
-            return "铺满屏幕";
-        }
-        if (mode == VIEW_CUSTOM) {
-            return "自由缩放";
-        }
-        if (mode == VIEW_AUTO) {
-            return "适配画面";
-        }
-        return "整数倍缩放";
-    }
-
-    private void viewDialog() {
-        int[] det = null;
-        synchronized (lock) {
-            if (handle != 0) {
-                det = nativeDetect(handle);
-            }
-        }
-        final int dw = det != null ? det[2] : 0;
-        final int dh = det != null ? det[3] : 0;
-        final String info = (dw > 0
-                ? "游戏画面 " + dw + "x" + dh + "（已测量）· "
-                : "还没测出画布，多等几秒再打开 · ")
-                + "画布 " + screenW + "x" + screenH
-                + "\n" + viewName(viewMode) + " " + zoomText()
-                + " · 偏移 " + panText() + (movingPicture ? " · 拖动中" : "");
-        final String[] items = {
-            "整数倍缩放（默认，像素最清晰）",
-            "铺满屏幕（放大到没有黑边）",
-            "适配画面（自动裁掉不画的部分）",
-            "自由缩放（拖动 / 双指缩放）",
-            "移动画面（拖动摆位置，再点一次结束）",
-            "微调位置（方向按钮一点点挪）",
-            "居中（偏移归零）"
-        };
-        final int[] modes = { VIEW_INT, VIEW_FILL, VIEW_AUTO, VIEW_CUSTOM, -1, -2, -3 };
-        for (int i = 0; i < 4; i++) {
-            items[i] = (modes[i] == viewMode ? "\u2713 " : "      ") + items[i];
-        }
-        items[4] = (movingPicture ? "\u2713 " : "      ") + items[4];
-        items[5] = "      " + items[5];
-        items[6] = "      " + items[6];
-        /*
-         * The info line rides in a custom title instead of setMessage(): with a
-         * list set as well the platform dialog drops the message on the floor.
-         */
-        new android.app.AlertDialog.Builder(this)
-            .setCustomTitle(dialogTitle("画面 · 当前：" + viewName(viewMode), info))
-            .setItems(items, new android.content.DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(android.content.DialogInterface d, int which) {
-                    if (which < 4) {
-                        setViewMode(modes[which]);
-                    } else if (which == 4) {
-                        toggleMovingPicture();
-                    } else if (which == 5) {
-                        nudgeDialog();
-                    } else {
-                        viewPanX = 0f;
-                        viewPanY = 0f;
-                        viewDirty = true;
-                        applyView();
-                        saveView();
-                        toast("画面已居中");
-                    }
-                }
-            })
-            .setPositiveButton(dw > 0 ? ("用 " + dw + "x" + dh + " 作为分辨率") : "关闭",
-                    new android.content.DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(android.content.DialogInterface d, int which) {
-                    if (dw > 0) {
-                        adoptDetected(dw, dh);
-                    }
-                }
-            })
-            .setNegativeButton("重置", new android.content.DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(android.content.DialogInterface d, int which) {
-                    viewZoom = 1.0f;
-                    viewPanX = 0f;
-                    viewPanY = 0f;
-                    setViewMode(VIEW_INT);
-                }
-            })
-            .show();
-    }
-
-    /**
-     * 微调位置: a picture one step away from where the player wants it should
-     * not need a drag - and the edges, where a drag is hardest to aim, are
-     * exactly where a picture usually has to go to clear a notch.
-     */
-    private void nudgeDialog() {
-        final int step = Math.max(4,
-                Math.round(Math.min(pad.getWidth(), pad.getHeight()) * 0.02f));
-        /* the port publishes its pan limits with the first drawn frame, so on a
-           freshly opened game they are still zero - ask once more here, or the
-           dialog would claim the picture cannot move at all */
-        if (handle != 0) {
-            clampPan();
-            applyView();
-        }
-        LinearLayout grid = new LinearLayout(this);
-        grid.setOrientation(LinearLayout.VERTICAL);
-        grid.setPadding(dp(12), dp(8), dp(12), dp(8));
-        final String up = "\u2191";
-        final String down = "\u2193";
-        final String left = "\u2190";
-        final String right = "\u2192";
-        final String centre = "\u25a0 居中";
-        final String[][] rows = {
-            { null, up, null },
-            { left, centre, right },
-            { null, down, null }
-        };
-        final TextView info = new TextView(this);
-        info.setTextSize(12f);
-        info.setTextColor(0xFF9AA0A6);
-        info.setPadding(dp(4), 0, dp(4), dp(10));
-        grid.addView(info);
-        updateNudge(info, step);
-        for (String[] row : rows) {
-            LinearLayout line = new LinearLayout(this);
-            line.setOrientation(LinearLayout.HORIZONTAL);
-            for (String label : row) {
-                if (label == null) {
-                    line.addView(new View(this), new LinearLayout.LayoutParams(0, dp(44), 1f));
-                    continue;
-                }
-                Button b = new Button(this);
-                b.setText(label);
-                b.setAllCaps(false);
-                if (centre.equals(label)) {
-                    b.setOnClickListener(new View.OnClickListener() {
-                        @Override
-                        public void onClick(View v) {
-                            viewPanX = 0f;
-                            viewPanY = 0f;
-                            viewDirty = true;
-                            applyView();
-                            saveView();
-                            updateNudge(info, step);
-                        }
-                    });
-                } else {
-                    final float dx = left.equals(label) ? -step : right.equals(label) ? step : 0f;
-                    final float dy = up.equals(label) ? -step : down.equals(label) ? step : 0f;
-                    b.setOnClickListener(new View.OnClickListener() {
-                        @Override
-                        public void onClick(View v) {
-                            nudge(dx, dy);
-                            updateNudge(info, step);
-                        }
-                    });
-                }
-                line.addView(b, new LinearLayout.LayoutParams(0, dp(44), 1f));
-            }
-            grid.addView(line);
-        }
-        new android.app.AlertDialog.Builder(this)
-            .setCustomTitle(dialogTitle("微调位置",
-                    "按方向按钮一点点挪画面，居中把偏移归零"))
-            .setView(grid)
-            .setNegativeButton("关闭", null)
-            .show();
-    }
-
-    /**
-     * The line above the nudge buttons, refreshed after every press.
-     *
-     * "可移动" is what the port reports the picture has left to give: the frame
-     * loop clamps the pan with the same numbers, so a button that would go past
-     * them does nothing and the player can see why.
-     */
-    private void updateNudge(TextView info, int step) {
-        info.setText("每步 " + step + " px · 可移动 ±" + maxPanX + " / ±" + maxPanY
-                + " px\n当前偏移 " + panText() + " · " + viewName(viewMode) + " "
-                + zoomText());
-    }
-
-    /** A dialog heading with a second, quieter line under it. */
-    private View dialogTitle(String title, String info) {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(24), dp(18), dp(24), dp(4));
-        TextView t = new TextView(this);
-        t.setText(title);
-        t.setTextColor(0xFFFFFFFF);
-        t.setTextSize(17f);
-        box.addView(t);
-        TextView s = new TextView(this);
-        s.setText(info);
-        s.setTextColor(0xFF9AA0A6);
-        s.setTextSize(12f);
-        s.setPadding(0, dp(6), 0, 0);
-        box.addView(s);
-        return box;
-    }
-
-    /**
-     * Adopt what the port measured as this game's screen size.
-     *
-     * <p>The size cannot change while the game runs - the MIDlet's canvas is
-     * created once - so this is remembered for the next launch, and the player
-     * is told rather than left wondering why nothing moved.
-     */
-    private void adoptDetected(int w, int h) {
-        JarStore.Entry e = JarStore.byName(this, jarName);
-        if (e == null) {
-            toast("找不到这个游戏的记录");
-            return;
-        }
-        e.w = w;
-        e.h = h;
-        e.detW = w;
-        e.detH = h;
-        JarStore.write(this, e);
-        toast("已记住 " + w + "x" + h + "，下次启动生效");
-    }
-
     private void saveView() {
         if (!viewDirty) {
             return;
@@ -865,31 +601,31 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private LinearLayout buildBar() {
         LinearLayout b = new LinearLayout(this);
         b.setOrientation(LinearLayout.HORIZONTAL);
-        b.setBackgroundColor(Color.argb(200, 16, 16, 16));
+        b.setBackgroundColor(Md3.OVERLAY);
         b.setGravity(Gravity.CENTER_VERTICAL);
         b.setPadding(dp(6), dp(4), dp(40), dp(4));
 
         TextView title = new TextView(this);
-        titleView = title;
-        updateBarTitle();
-        title.setTextColor(Color.WHITE);
-        title.setTextSize(13f);
+        title.setText(jarTitle);
+        Md3.type(title, 14f, Md3.OVERLAY_TEXT, true);
         title.setSingleLine(true);
         title.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
         b.addView(title, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        b.addView(barButton("画面", new View.OnClickListener() {
+        b.addView(barButton("调整", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                viewDialog();
-            }
-        }));
-        b.addView(barButton("按键", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
+                /* One screen for the picture and the keys, so the player can
+                 * see where the game sits while placing the controls - and so
+                 * that the answer to "where did my keys go" is one tap, not
+                 * two dialogs in a different activity. */
                 showBar(false);
-                startActivity(new Intent(GameActivity.this, PadEditActivity.class));
+                Intent it = new Intent(GameActivity.this, PadEditActivity.class);
+                it.putExtra("jar", jarName);
+                it.putExtra("w", screenW);
+                it.putExtra("h", screenH);
+                startActivity(it);
             }
         }));
         b.addView(barButton("状态", new View.OnClickListener() {
@@ -918,9 +654,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private TextView barButton(String label, View.OnClickListener click) {
         TextView t = new TextView(this);
         t.setText(label);
-        t.setTextColor(Color.WHITE);
-        t.setTextSize(13f);
-        t.setPadding(dp(10), dp(6), dp(10), dp(6));
+        Md3.overlayButton(t, this);
         t.setOnClickListener(click);
         return t;
     }
@@ -977,13 +711,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             }
         }
         status.setText(jarTitle + "  " + screenW + "x" + screenH + "\n" + s);
-    }
-
-    /** Shows 调整画面 in the bar while the picture follows the finger. */
-    private void updateBarTitle() {
-        if (titleView != null) {
-            titleView.setText(movingPicture ? jarTitle + " · 调整画面" : jarTitle);
-        }
     }
 
     /**

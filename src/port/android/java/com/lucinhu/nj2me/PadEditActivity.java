@@ -11,8 +11,8 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.widget.Button;
 import android.widget.FrameLayout;
-import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -20,24 +20,54 @@ import android.widget.TextView;
 import java.util.List;
 
 /**
- * Visual editor for the on-screen keypad.
+ * The one screen where a game is set up: where the picture goes and where the
+ * keys go, together.
  *
- * <p>The dark band around the preview is the whole point: a MIDlet's own pixels
- * are precious and a key laid over them hides them, so the editor draws where
- * the game will actually be ({@link GameFrame}) and the player puts controls in
- * the bars around it.  That is a layout decision the runtime cannot make for
- * them, which is why it is a screen and not a setting.
+ * <p>They belong on one screen because they are one decision.  A 240x320 game
+ * on a tall phone leaves black bands above and below the picture, the player
+ * wants the controls in those bands rather than on top of the game, and the
+ * only way to judge that is to see both at once - which is why the stage here
+ * is the whole window, the picture is drawn at exactly the size and position
+ * {@link PictureFit} says the port will paint it, and the keypad floats over it
+ * in the coordinates it will have in the game.
+ *
+ * <p>Dragging empty space moves the picture, pinching empty space scales it;
+ * dragging a key moves that key, and a long press still adds one.  Saving
+ * writes the keys to the shared pad blob and the picture to this game's
+ * sidecar, so the game picks both up when it resumes.
  */
-public class PadEditActivity extends Activity implements PadView.EditListener {
+public class PadEditActivity extends Activity implements PadView.EditListener, PadView.Sink {
 
     private PadConfig work;
     private PadView pad;
+    private PictureFrame frame;
     private int screenW = JarStore.DEF_W;
     private int screenH = JarStore.DEF_H;
 
-    /** The letterboxed game area the keys must not cover. */
-    private class GameFrame extends View {
-        GameFrame(android.content.Context c) {
+    /* The game being set up, or null when the editor was opened on its own
+     * (the library's ⋮ menu): keys are global, a picture position is not. */
+    private JarStore.Entry entry;
+    private String jarName;
+
+    private int viewMode = PictureFit.MODE_INT;
+    private float viewZoom = 1f;
+    private float viewPanX, viewPanY;
+    private int detW, detH;
+    /** Published by the frame on every draw, so a drag can be clamped. */
+    private float maxPanX, maxPanY;
+
+    private TextView hint;
+
+    /**
+     * The window as the game will paint it.
+     *
+     * <p>Black where the port would leave black, the MIDlet's rectangle where
+     * the chosen fit puts it.  Deliberately not a mock-up: the numbers come
+     * from the same arithmetic the presenter uses, so a key the player parks
+     * in a bar is in that bar in the game too.
+     */
+    private class PictureFrame extends View {
+        PictureFrame(android.content.Context c) {
             super(c);
         }
 
@@ -46,66 +76,96 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
             int w = getWidth();
             int h = getHeight();
             Paint p = new Paint();
-            p.setColor(Color.argb(255, 18, 18, 20));
+            p.setColor(Color.BLACK);
             canvas.drawRect(0, 0, w, h, p);
+            if (w <= 0 || h <= 0) {
+                return;
+            }
+            PictureFit fit = PictureFit.of(w, h, screenW, screenH, viewMode,
+                    viewZoom, viewPanX, viewPanY, detW, detH);
+            maxPanX = PictureFit.maxPan(w, fit.w);
+            maxPanY = PictureFit.maxPan(h, fit.h);
 
-            float scale = Math.min(w / (float) screenW, h / (float) screenH);
-            float gw = screenW * scale;
-            float gh = screenH * scale;
-            float left = (w - gw) / 2f;
-            float top = (h - gh) / 2f;
-
+            float l = fit.x, t = fit.y, r = fit.x + fit.w, b = fit.y + fit.h;
             p.setColor(Color.argb(255, 48, 96, 48));
-            canvas.drawRect(left, top, left + gw, top + gh, p);
+            canvas.drawRect(l, t, r, b, p);
             p.setStyle(Paint.Style.STROKE);
             p.setStrokeWidth(2f);
-            p.setColor(Color.argb(255, 220, 220, 220));
-            canvas.drawRect(left, top, left + gw, top + gh, p);
+            p.setColor(Color.argb(255, 235, 235, 235));
+            canvas.drawRect(l, t, r, b, p);
             p.setStyle(Paint.Style.FILL);
 
             p.setColor(Color.WHITE);
-            p.setTextSize(Math.max(16f, Math.min(w, h) * 0.035f));
             p.setTextAlign(Paint.Align.CENTER);
-            canvas.drawText(screenW + "x" + screenH + " 游戏画面", w / 2f, top + gh / 2f, p);
-            p.setTextSize(Math.max(12f, Math.min(w, h) * 0.026f));
-            p.setColor(Color.argb(220, 255, 220, 120));
-            canvas.drawText("按键放在上下黑边里", w / 2f, top + gh / 2f + p.getTextSize() * 1.6f, p);
+            p.setTextSize(Math.max(16f, Math.min(w, h) * 0.030f));
+            canvas.drawText(screenW + "x" + screenH + " 游戏画面", w / 2f,
+                    t + fit.h / 2f, p);
+            p.setTextSize(Math.max(12f, Math.min(w, h) * 0.023f));
+            p.setColor(Color.argb(230, 255, 220, 120));
+            canvas.drawText(viewText(), w / 2f,
+                    t + fit.h / 2f + p.getTextSize() * 1.8f, p);
         }
     }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        Md3.init(this);
+        jarName = getIntent().getStringExtra("jar");
         screenW = getIntent().getIntExtra("w", JarStore.DEF_W);
         screenH = getIntent().getIntExtra("h", JarStore.DEF_H);
+        if (jarName != null) {
+            entry = JarStore.byName(this, jarName);
+        }
+        if (entry != null) {
+            screenW = entry.w;
+            screenH = entry.h;
+            viewMode = entry.viewMode;
+            viewZoom = entry.zoom > 0.05f ? entry.zoom : 1f;
+            viewPanX = entry.panX;
+            viewPanY = entry.panY;
+            detW = entry.detW;
+            detH = entry.detH;
+        }
         work = PadConfig.load(this).copy();
         Ui.edgeToEdge(getWindow());
         Ui.apply(this, Ui.immersive(this));
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.BLACK);
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Md3.surface);
 
-        final View toolbar = buildToolbar();
-        root.addView(toolbar);
-
-        FrameLayout stage = new FrameLayout(this);
-        stage.addView(new GameFrame(this), new FrameLayout.LayoutParams(
+        frame = new PictureFrame(this);
+        root.addView(frame, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         pad = new PadView(this, work);
         pad.setEditing(true);
         pad.setEditListener(this);
-        stage.addView(pad, new FrameLayout.LayoutParams(
+        pad.setSink(this);
+        root.addView(pad, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        root.addView(stage, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        final TextView hint = new TextView(this);
-        hint.setText("布局=整套按键 · 拖动=移动 · 双指=缩放 · 长按按键=改键/删除 · 长按空白=添加 · 滑杆=游戏中显示的透明度 · 淡黄框=避开刘海/挖孔的可用区");
-        hint.setTextColor(Color.argb(220, 200, 200, 200));
-        hint.setTextSize(11f);
+        /* The bars float over the stage instead of shrinking it: the stage has
+         * to be the window the game gets, or the preview would be a lie.  They
+         * only take the touches that land on a button - the rest falls through
+         * to the keypad underneath, so a key under the toolbar is still
+         * draggable. */
+        final View toolbar = buildToolbar();
+        FrameLayout.LayoutParams tlp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tlp.gravity = Gravity.TOP;
+        root.addView(toolbar, tlp);
+
+        hint = new TextView(this);
+        hint.setText("拖动空白=移动画面 · 双指=缩放画面 · 长按空白=加按键 · 拖动按键=摆位置 · "
+                + "双指按按键=改大小 · 长按按键=改键/删除 · 滑杆=游戏里按键的透明度 · 淡黄框=避开刘海/挖孔");
+        Md3.type(hint, 11f, Md3.onSurfaceVariant, false);
+        hint.setBackgroundColor(Md3.surfaceContainer);
         hint.setPadding(dp(8), dp(6), dp(8), dp(8));
-        root.addView(hint);
+        FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        hlp.gravity = Gravity.BOTTOM;
+        root.addView(hint, hlp);
 
         setContentView(root);
         /* The editor has to show the same safe area the game will use. */
@@ -128,11 +188,13 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
         confirmDiscard();
     }
 
+    /* ------------------------------------------------------------- the bar */
+
     private View buildToolbar() {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackgroundColor(Color.argb(255, 24, 24, 26));
+        bar.setBackgroundColor(Md3.surfaceContainer);
         bar.setPadding(dp(6), dp(4), dp(6), dp(4));
 
         bar.addView(button("布局", new View.OnClickListener() {
@@ -141,10 +203,10 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
                 layoutDialog();
             }
         }));
-        bar.addView(button("添加按键", new View.OnClickListener() {
+        bar.addView(button("画面", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                pickKey(null, 0.32f, 0.86f);
+                viewDialog();
             }
         }));
         bar.addView(button("重置", new View.OnClickListener() {
@@ -157,8 +219,7 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
         bar.addView(button("保存", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                work.save(PadEditActivity.this);
-                finish();
+                save();
             }
         }));
         bar.addView(button("取消", new View.OnClickListener() {
@@ -168,10 +229,16 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
             }
         }));
 
-        SeekBar bar2 = new SeekBar(this);
-        bar2.setMax(85);
-        bar2.setProgress(Math.round(work.opacity * 100f) - 5);
-        bar2.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+        SeekBar slider = new SeekBar(this);
+        /* the platform slider is teal in the dark theme and would disappear on
+         * a light palette; both halves wear the accent instead */
+        slider.getProgressDrawable().setColorFilter(Md3.primary,
+                android.graphics.PorterDuff.Mode.SRC_IN);
+        slider.getThumb().setColorFilter(Md3.primary,
+                android.graphics.PorterDuff.Mode.SRC_IN);
+        slider.setMax(85);
+        slider.setProgress(Math.round(work.opacity * 100f) - 5);
+        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
                 work.opacity = (progress + 5) / 100f;
@@ -189,16 +256,16 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         slp.setMargins(dp(8), 0, 0, 0);
-        bar.addView(bar2, slp);
+        bar.addView(slider, slp);
         return bar;
     }
 
     private TextView button(String label, View.OnClickListener click) {
         TextView t = new TextView(this);
         t.setText(label);
-        t.setTextColor(Color.WHITE);
-        t.setTextSize(13f);
-        t.setPadding(dp(9), dp(7), dp(9), dp(7));
+        /* five call-to-action labels and a slider share one row, so this is the
+         * compact Material 3 text button rather than the full-size one */
+        Md3.compactButton(t, this);
         t.setOnClickListener(click);
         return t;
     }
@@ -215,13 +282,213 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
         pad.invalidate();
     }
 
+    /* -------------------------------------------------------- the picture */
+
+    @Override
+    public void onViewGesture(float zoomFactor, float dx, float dy) {
+        viewZoom *= zoomFactor;
+        if (viewZoom < 0.25f) {
+            viewZoom = 0.25f;
+        } else if (viewZoom > 8f) {
+            viewZoom = 8f;
+        }
+        viewPanX += dx;
+        viewPanY += dy;
+        clampPan();
+        frame.invalidate();
+    }
+
+    private void clampPan() {
+        viewPanX = PictureFit.clampPan(viewPanX, maxPanX);
+        viewPanY = PictureFit.clampPan(viewPanY, maxPanY);
+    }
+
+    private String viewText() {
+        return viewName(viewMode) + " " + zoomText() + " · 偏移 " + panText()
+                + " · 可挪 " + Math.round(maxPanX) + "/" + Math.round(maxPanY);
+    }
+
+    private String panText() {
+        return Math.round(viewPanX) + "," + Math.round(viewPanY);
+    }
+
+    private String zoomText() {
+        return (Math.round(viewZoom * 100f) / 100f) + "x";
+    }
+
+    private static String viewName(int mode) {
+        if (mode == PictureFit.MODE_FILL) {
+            return "铺满屏幕";
+        }
+        if (mode == PictureFit.MODE_AUTO) {
+            return "适配画面";
+        }
+        return "整数倍缩放";
+    }
+
+    /**
+     * How the picture is fitted, and the two ways to place it.
+     *
+     * <p>Picking a fit keeps the player's zoom and offset, because that is what
+     * the port does: the fit decides the base scale, it does not take the
+     * picture away from the finger that moved it.
+     */
+    private void viewDialog() {
+        final int[] modes = { PictureFit.MODE_INT, PictureFit.MODE_FILL, PictureFit.MODE_AUTO };
+        final int shown = viewMode == PictureFit.MODE_CUSTOM ? PictureFit.MODE_INT : viewMode;
+        /* three fits, then 居中, then - when the port has measured a canvas -
+         * the offer to adopt it as this game's resolution */
+        final boolean adopt = detW > 0;
+        String[] items = new String[modes.length + (adopt ? 2 : 1)];
+        String[] names = { "整数倍缩放（默认，像素最清晰）",
+                "铺满屏幕（放到最大，不裁画面）",
+                "适配画面（只画 MIDlet 真正画到的那块）" };
+        for (int i = 0; i < names.length; i++) {
+            items[i] = (modes[i] == shown ? "\u2713 " : "      ") + names[i];
+        }
+        items[3] = "居中（偏移归零，缩放回到 1.0）";
+        if (adopt) {
+            items[4] = "用 " + detW + "x" + detH + " 作为分辨率（端口测到的）";
+        }
+        Md3.show(new AlertDialog.Builder(this)
+            .setCustomTitle(Md3.headline(this, "游戏画面 · 当前：" + viewName(shown),
+                    viewName(shown) + " " + zoomText() + " · 偏移 " + panText()
+                    + " · 可挪 " + Math.round(maxPanX) + "/" + Math.round(maxPanY)
+                    + "\n拖动画面空白处也能挪，双指缩放"))
+            .setItems(items, new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface d, int which) {
+                    if (which < modes.length) {
+                        viewMode = modes[which];
+                    } else if (which == 3) {
+                        viewZoom = 1f;
+                        viewPanX = 0f;
+                        viewPanY = 0f;
+                    } else {
+                        adoptDetected();
+                    }
+                    frame.invalidate();
+                }
+            })
+            .setPositiveButton("微调位置", new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface d, int w) {
+                    nudgeDialog();
+                }
+            })
+            .setNegativeButton("关闭", null), this);
+    }
+
+    /** Arrow buttons, for placing the picture when a drag is too coarse. */
+    private void nudgeDialog() {
+        final int step = Math.max(4,
+                Math.round(Math.min(pad.getWidth(), pad.getHeight()) * 0.02f));
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        grid.setPadding(dp(24), dp(4), dp(24), dp(12));
+
+        final TextView info = new TextView(this);
+        info.setPadding(dp(24), dp(8), dp(24), dp(8));
+        grid.addView(info);
+
+        grid.addView(nudgeRow(new String[] { null, "\u2191", null }, step, info));
+        grid.addView(nudgeRow(new String[] { "\u2190", "居中", "\u2192" }, step, info));
+        grid.addView(nudgeRow(new String[] { null, "\u2193", null }, step, info));
+        updateNudge(info, step);
+
+        Md3.show(new AlertDialog.Builder(this)
+            .setCustomTitle(Md3.headline(this, "微调位置", "每按一次移动 " + step + " 像素"))
+            .setView(grid)
+            .setNegativeButton("关闭", null), this);
+    }
+
+    /**
+     * One row of the nudge cross: an arrow, 居中, or the gap where the cross
+     * has no arm.  The arrow's direction is its own label, so one builder can
+     * make all five buttons.
+     */
+    private View nudgeRow(String[] cells, final int step, final TextView info) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER);
+        for (int i = 0; i < 3; i++) {
+            final String label = cells[i];
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(52), 1f);
+            lp.setMargins(dp(2), dp(2), dp(2), dp(2));
+            if (label == null) {
+                row.addView(new View(this), lp);
+                continue;
+            }
+            final boolean centre = "居中".equals(label);
+            final float ax = "\u2190".equals(label) ? -step : ("\u2192".equals(label) ? step : 0f);
+            final float ay = "\u2191".equals(label) ? -step : ("\u2193".equals(label) ? step : 0f);
+            TextView t = new TextView(this);
+            t.setText(label);
+            t.setGravity(Gravity.CENTER);
+            Md3.tonalButton(t, this);
+            t.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (centre) {
+                        viewZoom = 1f;
+                        viewPanX = 0f;
+                        viewPanY = 0f;
+                    } else {
+                        viewPanX += ax;
+                        viewPanY += ay;
+                    }
+                    clampPan();
+                    frame.invalidate();
+                    updateNudge(info, step);
+                }
+            });
+            row.addView(t, lp);
+        }
+        return row;
+    }
+
+    private void updateNudge(TextView info, int step) {
+        info.setText("每步 " + step + " px · 可挪 ±" + Math.round(maxPanX)
+                + " / ±" + Math.round(maxPanY) + " px\n当前偏移 " + panText()
+                + " · " + viewName(viewMode) + " " + zoomText());
+    }
+
+    /** Take the port's measurement as this game's canvas size, next launch. */
+    private void adoptDetected() {
+        if (entry == null) {
+            return;
+        }
+        entry.w = detW;
+        entry.h = detH;
+        JarStore.write(this, entry);
+        screenW = detW;
+        screenH = detH;
+        toast("已改成 " + detW + "x" + detH + "，下次启动生效");
+    }
+
+    private void save() {
+        work.save(this);
+        if (entry != null) {
+            entry.viewMode = viewMode;
+            entry.zoom = viewZoom;
+            entry.panX = viewPanX;
+            entry.panY = viewPanY;
+            JarStore.write(this, entry);
+            toast("已保存：按键和画面位置");
+        } else {
+            toast("已保存按键；画面位置要从小游戏的「调整」进来才会记住");
+        }
+        finish();
+    }
+
     /* ----------------------------------------------------- pad edit callbacks */
 
     @Override
     public void onKeyLongPress(final PadConfig.Key key) {
         final String[] actions = { "改键", "复制", "删除" };
-        new AlertDialog.Builder(this)
-            .setTitle(KeyCatalog.labelOf(key.code))
+        Md3.show(new AlertDialog.Builder(this)
+            .setCustomTitle(Md3.headline(this, KeyCatalog.labelOf(key.code),
+                    "这个按键要做什么"))
             .setItems(actions, new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int which) {
@@ -237,8 +504,7 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
                         refresh();
                     }
                 }
-            })
-            .show();
+            }), this, true);
     }
 
     @Override
@@ -260,8 +526,9 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
             names[i] = (ids[i] == work.preset ? "\u2713 " : "      ")
                     + PadConfig.presetName(ids[i]) + " · " + PadConfig.presetHint(ids[i]);
         }
-        new AlertDialog.Builder(this)
-            .setTitle("悬浮按键布局 · 当前：" + PadConfig.presetName(work.preset))
+        Md3.show(new AlertDialog.Builder(this)
+            .setCustomTitle(Md3.headline(this,
+                    "悬浮按键布局", "当前：" + PadConfig.presetName(work.preset)))
             .setItems(names, new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int which) {
@@ -269,8 +536,7 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
                     pad.setConfig(work);
                     pad.invalidate();
                 }
-            })
-            .show();
+            }), this, true);
     }
 
     /** Add a key here, or re-point an existing one. */
@@ -280,8 +546,9 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
         for (int i = 0; i < items.size(); i++) {
             labels[i] = items.get(i).label + "  (code " + items.get(i).code + ")";
         }
-        new AlertDialog.Builder(this)
-            .setTitle(existing == null ? "添加按键" : "改成哪个键")
+        Md3.show(new AlertDialog.Builder(this)
+            .setCustomTitle(Md3.headline(this,
+                    existing == null ? "添加按键" : "改成哪个键", null))
             .setItems(labels, new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int which) {
@@ -294,8 +561,7 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
                     }
                     refresh();
                 }
-            })
-            .show();
+            }), this, true);
     }
 
     private static float clamp01(float v) {
@@ -303,16 +569,35 @@ public class PadEditActivity extends Activity implements PadView.EditListener {
     }
 
     private void confirmDiscard() {
-        new AlertDialog.Builder(this)
-            .setTitle("放弃这次修改？")
+        Md3.show(new AlertDialog.Builder(this)
+            .setCustomTitle(Md3.headline(this, "放弃这次修改？", "改动还没有保存"))
             .setPositiveButton("放弃", new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int w) {
                     finish();
                 }
             })
-            .setNegativeButton("继续编辑", null)
-            .show();
+            .setNegativeButton("继续编辑", null), this);
+    }
+
+    /* ------------------------------------------- the sink the pad talks to */
+
+    /*
+     * The editor is not playing anything: the pad is in edit mode, where a
+     * touch moves a key instead of pressing one, so the two press callbacks
+     * cannot fire.  Only the picture gesture has something to do here.
+     */
+
+    @Override
+    public void onPadKey(int androidKeyCode, boolean down) {
+    }
+
+    @Override
+    public void onGameTouch(int pointerId, int phase, float x, float y) {
+    }
+
+    private void toast(String s) {
+        android.widget.Toast.makeText(this, s, android.widget.Toast.LENGTH_SHORT).show();
     }
 
     private int dp(int v) {
