@@ -26,7 +26,7 @@
 # Environment: NJ_BIN, NJ_GAMES, NJ_HEAP, NJ_SIZES, NJ_TIMEOUT, NJ_FRAMES,
 # NJ_LONG_FRAMES, NJ_MIN_COLOURS, NJ_FPS, NJ_POKE, NJ_CORPUS_WORK, NJ_DEVICE,
 # NJ_PACED_FPS, NJ_PACED_FRAMES, NJ_HEAP_RETRY, NJ_HEAP_BIG,
-# NJ_SLOW_SECS.
+# NJ_SLOW_SECS, NJ_DEVICE_RETRY.
 # This sweep is deliberately sequential: every title gets the machine, so a
 # frame count means the same thing for all of them.  tools/corpus_fatal.sh is
 # the parallel one when all you need is "does anything crash".
@@ -107,6 +107,13 @@ PACED_FRAMES="${NJ_PACED_FRAMES:-300}"
 # has no picture after the retries above gets this many seconds of wall clock
 # and is judged on whatever it drew.  NJ_SLOW_SECS=0 switches the pass off.
 SLOW_SECS="${NJ_SLOW_SECS:-90}"
+# Some titles refuse to run on a phone they were not written for.  1945空战英雄
+# _6105's MIDlet constructor throws IllegalAccessException unless
+# microedition.platform starts with "Nokia": the runtime decides which world a
+# title is given, and the title decides which worlds it accepts.  A title that
+# did not start at all gets one more run as a Nokia handset.  It never
+# overrides an explicit --device, and NJ_DEVICE_RETRY=0 switches it off.
+DEVICE_RETRY="${NJ_DEVICE_RETRY:-nokia6230}"
 STRICT_MOTION="${NJ_STRICT_MOTION:-0}"
 
 while [ $# -gt 0 ]; do
@@ -151,11 +158,14 @@ echo "device: ${DEVICE:-(generic)}   heap: ${HEAP} MB (small retry ${HEAP_RETRY:
 # pace before it is recorded.
 if [ "$FPS" = "0" ] && [ "$PACED_FPS" != "0" ]; then
     echo "pacing: uncapped ($FRAMES frames), unpainted verdicts re-run at $PACED_FPS fps"
+else
+    echo "pacing: $FPS fps"
 fi
 if [ "${SLOW_SECS:-0}" != "0" ]; then
     echo "slow starters: a title still without a picture gets ${SLOW_SECS}s of its own clock"
-else
-    echo "pacing: $FPS fps"
+fi
+if [ "${DEVICE_RETRY:-0}" != "0" ]; then
+    echo "device: a title that did not start is tried once as a ${DEVICE_RETRY} handset"
 fi
 echo
 # THR and IO come from the port, not from the pixels.  A title that saves a
@@ -507,6 +517,44 @@ for jar in "${JARS[@]}"; do
         fi
     fi
 
+    # A title that drew nothing may be refusing the platform string it was
+    # given rather than failing: 1945空战英雄_6105 does not even construct its
+    # MIDlet unless microedition.platform starts with "Nokia", and runs its
+    # sixty frames as a Nokia 6230.  The runtime
+    # supports the device profiles, so the honest way to run a title like that
+    # is to give it the phone it was written for, exactly as the heap retries
+    # give a title the memory it asks for.
+    devretry=""
+    if [ "${DEVICE_RETRY:-0}" != "0" ] && [ -z "$DEVICE" ] && [ "$used" != "(no size accepted)" ]; then
+        IFS='|' read -r dstatus dframes dcols dchanged dnote <<<"$verdict"
+        dretry=0
+        if [ "$dstatus" = "FAIL" ]; then
+            case "$dnote" in
+                "not a MIDlet suite"*) dretry=0 ;;
+                *) dretry=1 ;;
+            esac
+        fi
+        if [ "$dretry" = "1" ]; then
+            size="$used"
+            : > "$log"
+            rm -f "$out"/*.ppm
+            timeout "$SECS" "$BIN" --port headless --heap "$HEAP" \
+                    --size "$size" --fps "$FPS" --run-frames "$FRAMES" --stats \
+                    --dump-frames "$out/" --dump-every 40 \
+                    --device "$DEVICE_RETRY" \
+                    "${KARGS[@]}" \
+                    "$jar" >"$log" 2>&1
+            if ! grep -q "Screen too" "$log"; then
+                dv="$(verdict_for)"
+                case "$dv" in
+                    PASS*|SKIP*) devretry="only ran as a ${DEVICE_RETRY} handset" ;;
+                    *) devretry="still failed as a ${DEVICE_RETRY} handset" ;;
+                esac
+                verdict="$dv"
+            fi
+        fi
+    fi
+
     # Still without a picture, and the sweep is running the title with a heap no
     # handset of the period had.  A MIDlet is entitled to ask how much memory it
     # has (`Runtime.totalMemory()`) and to refuse to run when the answer is not
@@ -640,6 +688,9 @@ for jar in "${JARS[@]}"; do
     fi
     if [ -n "$slow" ]; then
         if [ -n "$note" ]; then note="$note; $slow"; else note="$slow"; fi
+    fi
+    if [ -n "$devretry" ]; then
+        if [ -n "$note" ]; then note="$note; $devretry"; else note="$devretry"; fi
     fi
     case "$status" in
         PASS|SKIP) ;;

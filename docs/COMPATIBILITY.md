@@ -301,6 +301,27 @@ factor.  Both increments are gone; `tests/test_speed.c` pins it with "a
 scheduler pass does not move the clock" (5,000 `nj_yield()` calls leave
 `nj_now_ms()` unchanged) and the same title now runs at 30.0 fps.
 
+### The passes reach further than the table did
+
+The table above is a snapshot of one sweep, and three of its rows were written
+before the tool learned to pace a title, to give it real seconds, and to hand it
+the phone it was written for.  Run with those passes:
+
+* `1945空战英雄_6105` passes - `PASS (static picture; only ran as a nokia6230
+  handset)`.  The runtime has had device profiles all along; the sweep now uses
+  one for a title that did not start.
+* `灌篮高手-爆发!樱木_7947` passes - `PASS (the picture appeared only when the
+  run was paced at 30 fps)`.  Its class file really does divide by zero inside
+  `paint()`, which is why the row said so, but the frames drawn before the
+  division stay on the screen and the tool accepts a static picture.
+* `战争艺术2之全球联盟中文版_1918` passes the same way, with 405 colours: the
+  initialiser with no caller is on a later menu path, not on the first screen.
+
+What has NOT moved is the truncated JAR (`鲁宾逊漂流记汉化BT版_4677`): no pass
+helps a suite whose central directory was never written.  The honest reading of
+a row is therefore "this is what one pass of the tool saw", which is why the
+tool prints the note that made a title pass.
+
 ### A title is allowed to ask how much memory it has
 
 `Runtime.totalMemory()` is a real question with a real answer, and one title
