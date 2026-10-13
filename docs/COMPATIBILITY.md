@@ -102,40 +102,49 @@ ab.run()V pc=11` for 开心农场_240, a loop that sleeps between frames).
 ### Where the collected 395 stand
 
 `NJ_FRAMES=600 NJ_TIMEOUT=25 tools/run_game_corpus.sh` over `tests/games`, with
-the long re-run, the paced re-run and the two heap re-runs below: **387 passed,
-8 failed**. The sweeps before it were 374/21 (before the pacing retry), 376/19,
-381/14, 384/11, 385/10, 386/9 and now 387/8, and every drop came from a bug the
-corpus itself pointed at rather than from a title being excused.
+the long re-run, the paced re-run and the two heap re-runs below: **389 passed,
+6 failed**. The sweeps before it were 374/21 (before the pacing retry), 376/19,
+381/14, 384/11, 385/10, 386/9, 387/8 and now 389/6, and every drop came from a
+bug the corpus itself pointed at rather than from a title being excused.
 
-### The eight that still fail, and what each one turned out to be
+### The six that still fail, and what each one turned out to be
 
-Eight titles do not paint a frame.  They have been looked at one by one, because
-the eighth and ninth of the last three bugs came out of exactly this list, and
-the honest answer differs per title:
+Six titles do not paint a frame.  They have been looked at one by one, because
+the last three bugs came out of exactly this list, and the honest answer differs
+per title:
 
 | title | what happens | what it is |
 | --- | --- | --- |
 | `1945空战英雄_6105` | `IllegalAccessException` out of its own MIDlet constructor | the title's own platform check: it demands `microedition.platform` start with `Nokia`, and runs (`frames=60 paints=60 gfx=180`) with `--device nokia6230` |
 | `鲁宾逊漂流记汉化BT版_4677` | `not a MIDlet suite` | the JAR is truncated: 286,534 bytes with no end-of-central-directory record at all (python's `zipfile` refuses it too) |
 | `灌篮高手-爆发!樱木_7947` | `ArithmeticException: / by zero` in `w.paint()` | the class file really does `getWidth() / 0` (`iconst_0; idiv`) once its image field is loaded - no runtime can finish that paint |
-| `实况足球经理2009_10609` | every string lookup NPEs; only 3 Graphics calls in 600 paints | the method that builds its string table (`d.E()V`) has **no caller** anywhere in the JAR: dead initialiser, so the table stays null |
 | `战争艺术2之全球联盟中文版_1918` | NPEs in `n.a(String,int)`; nothing drawn | same shape: `d.f()`, which builds the config array `b.bb`, is never called |
 | `午夜台球圣诞中文版_8677` | `NegativeArraySizeException` in its own decoder (`c.a(I)`), then a flat frame | its resource reader computes a negative length; the title is the only thing that can fix that |
 | `反恐精英2正式版_5836` | flat, first throw NPE in `k.c(Graphics)` at the first paint | still inside its own splash/loading loop after 4,000 frames (`--where` shows `k.o()V pc=62`), the same shape as `疯狂战机_2013` before the pacing retry. Its assets are **not** the blocker: every `l*.png` in the JAR is XOR-obfuscated (rolling key from 100), the title tries the raw bytes first (one `unrecognised image format` per attempt, 5 in 2,000 frames, all the same resource), then retries with its own `h.b(byte[],100)` - and that decrypted buffer is a valid PNG this runtime decodes without a further error. The NPE is `this.cW.getWidth()` on an Image field that was never filled |
-| `仙魔飞行棋_417` | flat, no exception at all | it draws through the `Graphics` it captured in `paint()` and only ever clears there; the title's own timing decides when that thread draws |
 
-`模拟人生2_10762` used to be in this table, as the one row nobody could explain:
-its `paint()` made no Graphics call at all and its game thread returned before
-the first frame.  It was the runtime after all - a wrapper class without
-`toString()` sent the game looking for a JAR entry named
-`global_data/java.lang.Integer@c1803e7` (see *A missing override is not a link
-error*), and it now passes.
+Three titles left this table, and all three were the runtime:
 
-Seven of the eight are the title's own defect, its own dead code or its own
-loading loop, and one (`仙魔飞行棋_417`) is not root-caused; none of them is
-known to be the runtime's.  That is a different statement from "the runtime is
-perfect", and it is the reason the sweeps keep being re-run: a fix that moves
-one of these eight moves the whole number.
+* `模拟人生2_10762` was the row nobody could explain: its `paint()` made no
+  Graphics call at all and its game thread returned before the first frame.  A
+  wrapper class without `toString()` sent the game looking for a JAR entry named
+  `global_data/java.lang.Integer@c1803e7` (see *A missing override is not a link
+  error*).
+* `实况足球经理2009_10609` was catalogued here as "the method that builds its
+  string table has no caller" - a dead initialiser, we thought.  With the same
+  wrapper overrides in place it loads its strings and paints, so the caller was
+  there and the missing `Integer.toString()` was what stopped it.
+* `仙魔飞行棋_417` was the one row with no exception at all; it was
+  `Canvas.repaint()` dropping the request (see *MIDP paints on request*).  It now
+  paints 79 colours and 16,206 Graphics calls per run where it painted black.
+
+Four of the six that remain are the title's own defect, its own dead code or its
+own loading loop (`1945空战英雄_6105`, `鲁宾逊漂流记汉化BT版_4677`,
+`灌篮高手-爆发!樱木_7947`, `战争艺术2之全球联盟中文版_1918`), `午夜台球圣诞中文版_8677`
+computes a negative length in its own resource decoder, and
+`反恐精英2正式版_5836` is still inside its own splash loop.  None of them is known
+to be the runtime's - which is a different statement from "the runtime is
+perfect", and it is the reason the sweeps keep being re-run: every one of these
+numbers has moved because of a bug the corpus itself pointed at.
 
 
 
@@ -157,7 +166,8 @@ state = 0;
 later paint in the same frame finds `state == 0` and leaves the screen blank.
 `仙魔飞行棋_417`'s `mobile/k.e(I)V` is exactly this (`f = state; repaint();
 serviceRepaints(); f = 0;`), and its board stayed black for a whole run while the
-runtime reported a paint for every frame.
+runtime reported a paint for every frame.  With both halves fixed the same title
+paints 79 colours and 16,206 Graphics calls where it painted one colour and 370.
 
 Two things were wrong:
 
