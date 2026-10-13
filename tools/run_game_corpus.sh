@@ -273,7 +273,11 @@ if not frames:
 cols = 0
 for p in frames[-6:]:
     try:
-        n = len(Counter(Image.open(p).getdata()))
+        # get_flattened_data() replaced getdata() in Pillow 11: the old name
+        # emitted a DeprecationWarning per sampled frame, i.e. per title, and
+        # the wall of warnings buried the results this tool exists to print.
+        img = Image.open(p)
+        n = len(Counter(img.get_flattened_data()))
     except Exception:
         continue
     cols = max(cols, n)
