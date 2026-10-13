@@ -36,14 +36,13 @@ final class PadConfig {
     }
 
     static final int PRESET_DPAD = 0;
-    static final int PRESET_NUMERIC = 1;
     static final int PRESET_CUSTOM = 2;
     static final int PRESET_FULL = 3;
     static final int PRESET_LANDSCAPE = 4;
     static final int PRESET_ARCADE = 5;
-    static final int PRESET_MINIMAL = 6;
     static final int PRESET_PHONE = 7;
-    static final int PRESET_COUNT = 8;
+    static final int PRESET_CLASSIC = 8;
+    static final int PRESET_COUNT = 7;
 
     final List<Key> keys = new ArrayList<Key>();
     float opacity = 0.30f;      /* how solid an idle keycap is */
@@ -143,34 +142,54 @@ final class PadConfig {
     }
 
     /**
-     * The other layout a phone game can want: twelve number keys.
+     * The handset the games were written for: the digits on one side, the whole
+     * eight-way cluster on the other.
      *
-     * <p>Plenty of titles - puzzle games, dial pads, anything ported from a
-     * feature phone - use the digit keys and nothing else, and a D-pad plus a
-     * fire button gives them nothing to press.  Three columns and four rows in
-     * the bottom-right corner, laid out in the order the keypad of a phone has
-     * them, because that is the shape a hand already knows.
-     *
-     * <p>The fractions are wider than they are tall on purpose: the view is
-     * taller than it is wide, so equal fractions would be tall thin caps.
+     * <p>A feature phone had no joystick.  The same twelve keys were the
+     * numbers, the directions and the diagonals at once, so a title that walks
+     * its hero with 2/4/6/8 and jumps with 5 expects to find all of that on one
+     * keypad.  The left block is the twelve keys; the right block is that same
+     * keypad read as directions - the diagonals really are 1/3/7/9, which is why
+     * they carry those codes twice - with the soft keys along its top row and
+     * the fire button in the middle.
      */
-    static PadConfig numeric() {
+    static PadConfig classic() {
         PadConfig p = new PadConfig();
-        p.preset = PRESET_NUMERIC;
-        int[] codes = {
+        p.preset = PRESET_CLASSIC;
+        float w = 0.155f, h = 0.098f, gap = 0.006f;
+        float lx = 0.010f, rx = 0.506f;
+        float y0 = 0.560f;
+
+        int[] digits = {
             8, 9, 10,          /* 1 2 3 */
             11, 12, 13,        /* 4 5 6 */
             14, 15, 16,        /* 7 8 9 */
             17, 7, 18          /* * 0 # */
         };
-        float x0 = 0.63f, y0 = 0.640f;
-        float w = 0.110f, h = 0.055f, gapx = 0.010f, gapy = 0.010f;
-        for (int i = 0; i < codes.length; i++) {
+        for (int i = 0; i < digits.length; i++) {
             int col = i % 3;
             int row = i / 3;
-            p.keys.add(new Key(codes[i],
-                               x0 + col * (w + gapx),
-                               y0 + row * (h + gapy),
+            p.keys.add(new Key(digits[i],
+                               lx + col * (w + gap),
+                               y0 + row * (h + gap),
+                               w, h));
+        }
+
+        int[] cluster = {
+            82, 0, 4,          /* 左软键 · · 右软键 */
+            8, 19, 10,         /* ↖ 上 ↗ */
+            21, 23, 22,        /* 左 火力 右 */
+            14, 20, 16         /* ↙ 下 ↘ */
+        };
+        for (int i = 0; i < cluster.length; i++) {
+            if (cluster[i] == 0) {
+                continue;
+            }
+            int col = i % 3;
+            int row = i / 3;
+            p.keys.add(new Key(cluster[i],
+                               rx + col * (w + gap),
+                               y0 + row * (h + gap),
                                w, h));
         }
         return p;
@@ -288,27 +307,6 @@ final class PadConfig {
     }
 
     /**
-     * The smallest thing that can still play a game: D-pad, fire, soft keys.
-     *
-     * <p>Everything sits in the bottom strip and the top corners, which is what
-     * a title that expects a 128x128 canvas under a tall screen needs.
-     */
-    static PadConfig minimal() {
-        PadConfig p = new PadConfig();
-        p.preset = PRESET_MINIMAL;
-
-        p.keys.add(new Key(82, 0.020f, 0.080f, 0.180f, 0.055f));   /* 左软键 */
-        p.keys.add(new Key(4,  0.800f, 0.080f, 0.180f, 0.055f));   /* 右软键 */
-
-        p.keys.add(new Key(19, 0.070f, 0.700f, 0.160f, 0.080f));   /* 上 */
-        p.keys.add(new Key(21, 0.020f, 0.790f, 0.160f, 0.080f));   /* 左 */
-        p.keys.add(new Key(22, 0.190f, 0.790f, 0.160f, 0.080f));   /* 右 */
-        p.keys.add(new Key(20, 0.105f, 0.880f, 0.160f, 0.080f));   /* 下 */
-        p.keys.add(new Key(23, 0.720f, 0.820f, 0.240f, 0.140f));   /* 确定 */
-        return p;
-    }
-
-    /**
      * A whole candybar phone, portrait: soft keys and Clear on top, the D-pad
      * in the middle, and the twelve digits under it in the order a handset has
      * them, so muscle memory from the original device still works.
@@ -346,15 +344,15 @@ final class PadConfig {
 
     /** The presets the layout picker offers, in the order it shows them. */
     static final int[] PRESET_IDS = {
-        PRESET_DPAD, PRESET_NUMERIC, PRESET_FULL,
-        PRESET_LANDSCAPE, PRESET_ARCADE, PRESET_MINIMAL, PRESET_PHONE,
+        PRESET_DPAD, PRESET_CLASSIC, PRESET_FULL,
+        PRESET_LANDSCAPE, PRESET_ARCADE, PRESET_PHONE,
         PRESET_CUSTOM
     };
 
     /** The layout of a preset.  CUSTOM has no keys, by definition. */
     static PadConfig byId(int id) {
-        if (id == PRESET_NUMERIC) {
-            return numeric();
+        if (id == PRESET_CLASSIC) {
+            return classic();
         }
         if (id == PRESET_FULL) {
             return full();
@@ -364,9 +362,6 @@ final class PadConfig {
         }
         if (id == PRESET_ARCADE) {
             return arcade();
-        }
-        if (id == PRESET_MINIMAL) {
-            return minimal();
         }
         if (id == PRESET_PHONE) {
             return phone();
@@ -379,8 +374,8 @@ final class PadConfig {
 
     /** What a preset is for, one line, for the picker. */
     static String presetHint(int id) {
-        if (id == PRESET_NUMERIC) {
-            return "右侧 12 键";
+        if (id == PRESET_CLASSIC) {
+            return "左数字 · 右八向 + 火力";
         }
         if (id == PRESET_FULL) {
             return "方向 + 数字 + A/B/C/D，占底部";
@@ -390,9 +385,6 @@ final class PadConfig {
         }
         if (id == PRESET_ARCADE) {
             return "方向十字 + 两个按键";
-        }
-        if (id == PRESET_MINIMAL) {
-            return "只留方向、确定和软键";
         }
         if (id == PRESET_PHONE) {
             return "整台手机：软键 + 方向 + 数字";
@@ -404,8 +396,8 @@ final class PadConfig {
     }
 
     static String presetName(int id) {
-        if (id == PRESET_NUMERIC) {
-            return "数字键盘";
+        if (id == PRESET_CLASSIC) {
+            return "经典手机";
         }
         if (id == PRESET_FULL) {
             return "全按键";
@@ -415,9 +407,6 @@ final class PadConfig {
         }
         if (id == PRESET_ARCADE) {
             return "街机双键";
-        }
-        if (id == PRESET_MINIMAL) {
-            return "极简方向";
         }
         if (id == PRESET_PHONE) {
             return "手机键盘";

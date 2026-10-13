@@ -304,9 +304,13 @@ Ten things in that shell are worth copying, because each one is a rule a plain
   `ACTION_CANCEL`. The class is unit-tested off-device, which is the only
   reason the rules survived the move out of `PadView`.
 - **Layouts are data.** `PadConfig` stores keycaps as fractions of the view
-  (`0..1`, top-left corner) and ships eight presets (`PRESET_IDS`, `byId()`,
-  `presetName()`, `presetHint()`): 方向盘, 数字键盘, 全按键, 横屏双手, 街机双键,
-  极简方向, 手机键盘 and an empty one to build on. Editor and game load the same
+  (`0..1`, top-left corner) and ships seven presets (`PRESET_IDS`, `byId()`,
+  `presetName()`, `presetHint()`): 方向盘, 经典手机, 全按键, 横屏双手, 街机双键,
+  手机键盘 and an empty one to build on. 经典手机 is the handset the games were
+  written for - twelve digits on the left, the eight-way cluster on the right,
+  where the diagonals carry the digit codes 1/3/7/9 a second time because that is
+  what they are on a phone; the preset list stayed at what a player can tell
+  apart instead of one entry per key combination. Editor and game load the same
   blob, so a layout tweaked in game is the one the editor opens.
 - **One adjustment page, not two.** `PadEditActivity` is where both the keycaps
   and the picture are placed: an empty-space drag moves the picture, two fingers

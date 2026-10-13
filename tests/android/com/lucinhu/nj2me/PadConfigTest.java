@@ -42,7 +42,10 @@ public final class PadConfigTest {
             }
             for (int j = i + 1; j < keys.size(); j++) {
                 PadConfig.Key o = keys.get(j);
-                if (o.code == k.code) {
+                /* On a handset the diagonals ARE the digit keys 1/3/7/9, so
+                 * the one preset that shows both blocks repeats them on
+                 * purpose; everywhere else a repeat is a mistake. */
+                if (o.code == k.code && c.preset != PadConfig.PRESET_CLASSIC) {
                     distinct = false;
                 }
                 if (overlap(k, o)) {
