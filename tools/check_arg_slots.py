@@ -18,9 +18,15 @@ DESC = re.compile(r'"\(([^"]*)\)')
 
 
 def slots(desc):
+    """Slots the argument list of a descriptor such as "(J)V" needs.
+
+    The closing ")" is not an argument: stopping at it matters, because
+    counting it as one slot made every descriptor look one slot wider than it
+    is and produced false positives on correct arrays.
+    """
     n = 0
     i = 1
-    while i < len(desc):
+    while i < len(desc) and desc[i] != ')':
         c = desc[i]
         if c in 'JD':
             n += 2

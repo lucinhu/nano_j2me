@@ -44,9 +44,12 @@ public class FsDemo extends MIDlet {
             tryOpen("file:///root/sub/../../etc/passwd");
             tryOpen("file:///root/a/../../etc/passwd");
 
-            /* Not file:// at all. */
+            /* Not file:// at all, and not something a port can serve either:
+             * http:// used to be the example here, but the runtime now serves
+             * it through the port's http_request hook, so the example is a
+             * scheme that stays refused. */
             try {
-                Connector.open("http://example.com/x");
+                Connector.open("socket://example.com:80/x");
                 say("scheme", "accepted");
             } catch (Exception e) {
                 say("scheme", e.getClass().getName());

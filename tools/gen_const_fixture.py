@@ -57,7 +57,13 @@ def main():
                 lines.append('        px("X %s.%s", String.valueOf(%s.%s));'
                              % (java, name, java, name))
                 continue
-            if value == "null" or not (value.lstrip("-").isdigit()):
+            if value.startswith('"') and value.endswith('"') and len(value) > 1:
+                # A String constant: the runtime holds the text itself, so the
+                # expectation is that text - not "null", which is what the
+                # branch below assumes of anything non-numeric.
+                lines.append('        p("%s.%s", %s.%s);' % (java, name, java, name))
+                expected.append("%s.%s=%s" % (java, name, value[1:-1]))
+            elif value == "null" or not (value.lstrip("-").isdigit()):
                 lines.append('        p("%s.%s", String.valueOf(%s.%s));'
                              % (java, name, java, name))
                 expected.append("%s.%s=%s" % (java, name, "null"))
