@@ -188,6 +188,20 @@ void     nj_field_write_long(nj_vm *vm, nj_ref obj, nj_field *f, nj_s8 v);
 nj_ref   nj_field_read_ref (nj_vm *vm, nj_ref obj, nj_field *f);
 void     nj_field_write_ref(nj_vm *vm, nj_ref obj, nj_field *f, nj_ref v);
 
+/*
+ * Raw access, for the interpreter.
+ *
+ * The typed accessors above convert: reading a `float` field holding 2.5f
+ * through nj_field_read_int() gives 2, and writing 0x40200000 through
+ * nj_field_write_int() stores (float)1075838976.  The interpreter's operand
+ * stack holds a float's or a double's *bit pattern*, so its getstatic /
+ * getfield / putstatic / putfield have to move the bytes and nothing else.
+ */
+nj_u4    nj_field_read_bits32(nj_vm *vm, nj_ref obj, nj_field *f);
+void     nj_field_write_bits32(nj_vm *vm, nj_ref obj, nj_field *f, nj_u4 v);
+nj_u8    nj_field_read_bits64(nj_vm *vm, nj_ref obj, nj_field *f);
+void     nj_field_write_bits64(nj_vm *vm, nj_ref obj, nj_field *f, nj_u8 v);
+
 /* Look a field up once and cache the nj_field* in a static const-free slot of
  * your own objects; these are the hot-path accessors. */
 #define NJ_F(vm, cls, name, desc)  nj_field_lookup((vm), (cls), (name), (desc), 0)

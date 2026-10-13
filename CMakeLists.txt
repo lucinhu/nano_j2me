@@ -336,6 +336,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_waitdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_timerdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_fielddemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_cvdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flatdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_excdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_paintthrow_jar.sh
@@ -554,6 +555,17 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_field_shadow.sh
                      ${NJ_FIXTURES}/fielddemo.jar)
+    # JVMS 5.5 step 4: a static field with a ConstantValue attribute takes its
+    # value before <clinit> runs, and javac leaves such a field out of <clinit>
+    # entirely.  20 static fields across 11 collected titles are read by a
+    # getstatic and assigned nowhere else.  The fixture also pins the float and
+    # double cases, where the field has to receive the constant's bytes rather
+    # than a converted number.
+    add_test(NAME check_constant_value
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_constant_value.sh
+                     ${NJ_FIXTURES}/cvdemo.jar)
     add_test(NAME check_corpus_size_retry
              COMMAND ${CMAKE_COMMAND} -E env
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_corpus_size_retry.sh

@@ -432,11 +432,21 @@ static nj_status parse_fields(nj_vm *vm, nj_class *c, nj_rd *r)
         if (!f->name || !f->desc) {
             return NJ_ERR_FORMAT;
         }
+        f->const_cp = 0u;
         for (a = 0u; a < attr_count; a++) {
             nj_u2 an = rd_u2(r);
             nj_u4 alen = rd_u4(r);
-            (void)an;
-            rd_skip(r, alen);
+            const char *aname = nj_cp_utf8(c, an);
+            if (aname && strcmp(aname, "ConstantValue") == 0 && alen == 2u) {
+                /* JVMS 4.7.2: the attribute body is one constant pool index.
+                 * javac emits it for a static field initialised with a
+                 * constant expression and does NOT assign the field in
+                 * <clinit>, so the runtime has to apply the value -
+                 * nj_class_init() does, before <clinit> runs. */
+                f->const_cp = rd_u2(r);
+            } else {
+                rd_skip(r, alen);
+            }
             if (r->err) {
                 return NJ_ERR_FORMAT;
             }

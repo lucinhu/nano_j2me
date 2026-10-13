@@ -501,6 +501,8 @@ nj_field *nj_field_lookup(nj_vm *vm, const char *cls, const char *name,
 /* ------------------------------------------------------------------ */
 /* Class initialisation (<clinit>)                                     */
 /* ------------------------------------------------------------------ */
+static nj_u1 *field_addr(nj_vm *vm, nj_ref obj, nj_field *f);
+
 nj_status nj_class_init(nj_vm *vm, nj_class *c)
 {
     nj_method *clinit;
@@ -532,6 +534,41 @@ nj_status nj_class_init(nj_vm *vm, nj_class *c)
     /* Mark first so a static initialiser that touches its own class does not
      * recurse forever. */
     c->state = NJ_CLASS_READY;
+
+    /* JVMS 5.5 step 4: a static field carrying a ConstantValue attribute takes
+     * that value before <clinit> runs.  javac inlines compile-time constants at
+     * their use sites, so a getstatic of one only appears when the reading
+     * class was compiled against a non-final field or when the title's own
+     * tools kept the reference - 20 such fields across 11 of the collected
+     * titles, each of which read 0 or null because nothing applied it. */
+    {
+        nj_u2 fi;
+        for (fi = 0u; fi < c->field_count; fi++) {
+            nj_field *f = &c->fields[fi];
+            nj_value cst[2];
+            nj_ref sr = NULL;
+            nj_u1 *p;
+            int k;
+            if ((f->flags & NJ_ACC_STATIC) == 0u || f->const_cp == 0u) {
+                continue;
+            }
+            k = nj_cp_const(vm, c, f->const_cp, 1, cst, &sr);
+            if (k < 0) {
+                continue;
+            }
+            p = field_addr(vm, NULL, f);
+            if (!p) {
+                continue;
+            }
+            if (k == 1) {
+                memcpy(p, &sr, sizeof sr);
+            } else if (f->width == 2u) {
+                memcpy(p, &cst[0].j, 8u);
+            } else {
+                memcpy(p, &cst[0].i, 4u);
+            }
+        }
+    }
 
     if (clinit && clinit->code) {
         nj_status st = nj_call_static(vm, c->name, "<clinit>", "()V", NULL, NULL);
@@ -885,6 +922,44 @@ void nj_field_write_ref(nj_vm *vm, nj_ref obj, nj_field *f, nj_ref v)
         return;
     }
     memcpy(p, &v, sizeof(v));
+}
+
+nj_u4 nj_field_read_bits32(nj_vm *vm, nj_ref obj, nj_field *f)
+{
+    nj_u1 *p = field_addr(vm, obj, f);
+    nj_u4 v = 0u;
+
+    if (p) {
+        memcpy(&v, p, 4u);
+    }
+    return v;
+}
+
+void nj_field_write_bits32(nj_vm *vm, nj_ref obj, nj_field *f, nj_u4 v)
+{
+    nj_u1 *p = field_addr(vm, obj, f);
+    if (p) {
+        memcpy(p, &v, 4u);
+    }
+}
+
+nj_u8 nj_field_read_bits64(nj_vm *vm, nj_ref obj, nj_field *f)
+{
+    nj_u1 *p = field_addr(vm, obj, f);
+    nj_u8 v = 0u;
+
+    if (p) {
+        memcpy(&v, p, 8u);
+    }
+    return v;
+}
+
+void nj_field_write_bits64(nj_vm *vm, nj_ref obj, nj_field *f, nj_u8 v)
+{
+    nj_u1 *p = field_addr(vm, obj, f);
+    if (p) {
+        memcpy(p, &v, 8u);
+    }
 }
 
 /* ------------------------------------------------------------------ */

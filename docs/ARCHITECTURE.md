@@ -153,6 +153,16 @@ superclass-first with per-type alignment, and assigns static fields indices into
 a flat `vm->statics` array. Final instance sizes are rounded to 16 bytes so a
 `long`/`double` field is always naturally aligned.
 
+**A constant is not in `<clinit>`.** `javac` writes a `ConstantValue` attribute
+for a `static final` field initialised with a constant expression and emits *no
+assignment for it* in the static initialiser, so a runtime that ignores the
+attribute leaves the field at 0 or null for good. `nj_class_init()` now assigns
+every static field that carries one before it runs `<clinit>`, which is the
+order JVMS 5.5 specifies. This is not a theoretical gap: 20 static fields across
+11 of the 395 collected titles are read by a `getstatic` and assigned nowhere
+else, because a reader compiled against a *non-final* field keeps the fieldref
+even after the field becomes final.
+
 ## 4. The interpreter
 
 The full CLDC 1.1 instruction set, including the parts small JVMs often skip:

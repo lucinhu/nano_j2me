@@ -1358,9 +1358,17 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             }
             switch (f->ptype) {
             case NJ_PT_LONG:
-            case NJ_PT_DOUBLE:
                 sp[0].j = nj_field_read_long(vm, o, f);
                 sp[1].bits = 0u; sp += 2;
+                break;
+            case NJ_PT_DOUBLE:
+                /* A double field holds its bit pattern, and that is what the
+                 * operand stack carries; the typed accessor would convert. */
+                sp[0].j = (nj_s8)nj_field_read_bits64(vm, o, f);
+                sp[1].bits = 0u; sp += 2;
+                break;
+            case NJ_PT_FLOAT:
+                sp->i = (nj_s4)nj_field_read_bits32(vm, o, f); sp++;
                 break;
             case NJ_PT_OBJECT:
                 sp->r = nj_field_read_ref(vm, o, f); sp++;
@@ -1402,8 +1410,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 }
             }
             switch (f->ptype) {
-            case NJ_PT_LONG:
-            case NJ_PT_DOUBLE: {
+            case NJ_PT_LONG: {
                 nj_s8 v;
                 nj_ref o = NULL;
                 sp -= 2;
@@ -1413,6 +1420,28 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                     if (!o) THROW("java/lang/NullPointerException", NULL);
                 }
                 nj_field_write_long(vm, o, f, v);
+                break; }
+            case NJ_PT_DOUBLE: {
+                /* Bytes, not a conversion: the stack slot holds the double's
+                 * bit pattern, and the field has to receive exactly that. */
+                nj_s8 v;
+                nj_ref o = NULL;
+                sp -= 2;
+                v = sp[0].j;
+                if (op == 0xb5) {
+                    o = (--sp)->r;
+                    if (!o) THROW("java/lang/NullPointerException", NULL);
+                }
+                nj_field_write_bits64(vm, o, f, (nj_u8)v);
+                break; }
+            case NJ_PT_FLOAT: {
+                nj_s4 v = (--sp)->i;
+                nj_ref o = NULL;
+                if (op == 0xb5) {
+                    o = (--sp)->r;
+                    if (!o) THROW("java/lang/NullPointerException", NULL);
+                }
+                nj_field_write_bits32(vm, o, f, (nj_u4)v);
                 break; }
             case NJ_PT_OBJECT: {
                 nj_ref v = (--sp)->r;
