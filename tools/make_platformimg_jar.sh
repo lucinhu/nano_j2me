@@ -6,6 +6,8 @@
 #
 #   pic.bmp   a 32x32 24-bit BMP, left half red, right half blue
 #   pic.webp  the same picture as WebP
+#   pic.png   the same picture as PNG (the runtime has this decoder; it is here
+#             to prove that cutting it is refused BY NAME, not silently)
 #   tone.mp3  half a second of MP3
 #   tone.amr  half a second of AMR-NB
 #
@@ -45,6 +47,10 @@ for y in range(32):
         im.putpixel((x, y), (255, 0, 0) if x < 16 else (0, 0, 255))
 im.save(work + "/pic.bmp")
 im.save(work + "/pic.webp", lossless=True)
+# PNG too: the runtime HAS a PNG decoder, so this is the asset that proves the
+# other half - a build with -DNJ_ENABLE_PNG=0 must say so by name instead of
+# failing with the same "cannot decode image" a corrupt file gets.
+im.save(work + "/pic.png")
 PY
 
 # --- the sound ----------------------------------------------------------
@@ -82,6 +88,7 @@ with open(work + "/src/Assets.java", "w") as f:
     f.write("class Assets {\n")
     f.write(emit("BMP", work + "/pic.bmp"))
     f.write(emit("WEBP", work + "/pic.webp"))
+    f.write(emit("PNG", work + "/pic.png"))
     f.write(emit("MP3", work + "/tone.mp3"))
     f.write(emit("AMR", work + "/tone.amr"))
     f.write("}\n")
@@ -153,6 +160,7 @@ public class PlatformDemo extends MIDlet {
         Display.getDisplay(this).setCurrent(new Show());
         image("pic.bmp", Assets.BMP, new int[] { 16 * 32 + 8, 16 * 32 + 24 });
         image("pic.webp", Assets.WEBP, new int[] { 16 * 32 + 8, 16 * 32 + 24 });
+        image("pic.png", Assets.PNG, new int[] { 16 * 32 + 8, 16 * 32 + 24 });
         sound("tone.mp3", Assets.MP3, "audio/mpeg");
         sound("tone.amr", Assets.AMR, "audio/amr");
         System.out.println("PLATFORM done");

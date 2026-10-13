@@ -469,6 +469,40 @@ builds and runs against an app that has none of the Java classes:
 | `audio_decode` | `PlatformAudio.java` drives `MediaCodec` directly — **not** `MediaExtractor`, which on the API 36 emulator fails with `Service media.extractor didn't start` in an app process |
 | `midi_open` … | `MidiPlayer.java` hands the file to the platform's own General MIDI synthesizer (Sonivox, behind `MediaPlayer`) |
 
+`tools/make_platformimg_jar.sh` builds the fixture that holds those hooks to
+account: one MIDlet that feeds the runtime five assets — `pic.bmp`, `pic.webp`,
+`pic.png`, `tone.mp3` and `tone.amr` — through `Image.createImage(byte[])` and
+`Manager.createPlayer()`, and prints one `PLATFORM <name> OK/FAILED` line each.
+The same JAR is a positive test on Android and a negative one on the desktop,
+and both answers are the expected ones:
+
+```
+(desktop, headless)
+PLATFORM pic.bmp   FAILED java.io.IOException: cannot decode image: 3126 bytes starting 42 4d 36 0c
+PLATFORM pic.png   OK     32x32 ffff0000 ff0000ff
+PLATFORM tone.amr  OK     duration=520000 played=520000
+(Android, API 36 and API 21)
+PLATFORM pic.bmp OK / pic.webp OK / pic.png OK / tone.mp3 OK / tone.amr OK
+```
+
+The Android line was measured twice: once with everything built in, and once
+with `tools/build_android_apk.sh --no-amr --no-inflate --no-wav --no-gif`, where
+every one of those five answers still comes from the platform — the JAR itself
+is inflated by the platform's `zlib` through `inflate_raw`, and AMR is decoded
+by `MediaCodec` because the runtime's own decoder is not compiled in.
+
+A decoder that is compiled out says so **by name**: the MIDlet's `IOException`
+now carries the provider's reason, so
+
+```
+PLATFORM pic.png FAILED java.io.IOException: cannot decode image: 102 bytes
+  starting 89 50 4e 47: this build has no PNG decoder; install one with
+  nj_codec_register() (see include/nj2me/nj_codec.h)
+```
+
+is what a `-DNJ_ENABLE_PNG=0` build answers, instead of the same "cannot decode
+image" a corrupt file gets.
+
 ## Text: built-in bitmaps or a TrueType file
 
 By default every glyph comes from six generated bitmap faces checked into

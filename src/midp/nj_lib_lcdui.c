@@ -1986,6 +1986,19 @@ static int fmt_put(char *buf, int at, const char *s)
     return at;
 }
 
+/*
+ * Like fmt_put, but stops before cap.  The strings this carries are the
+ * provider's - a port's own decoder writes them - so the copy is bounded by
+ * the buffer here rather than by the caller's promise.
+ */
+static int fmt_put_max(char *buf, int at, int cap, const char *s)
+{
+    while (*s && at < cap) {
+        buf[at++] = *s++;
+    }
+    return at;
+}
+
 static int fmt_u4(char *buf, int at, nj_u4 v)
 {
     char tmp[12];
@@ -2022,6 +2035,7 @@ static nj_status img_decode_into(nj_vm *vm, nj_ref arr, nj_s4 off, nj_s4 len,
 {
     nj_image *dec;
     nj_ref img;
+    const char *why;
 
     if (!arr) {
         return nj_throw(vm, "java/lang/NullPointerException", "data is null");
@@ -2033,9 +2047,10 @@ static nj_status img_decode_into(nj_vm *vm, nj_ref arr, nj_s4 off, nj_s4 len,
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "no image data");
     }
-    dec = nj_image_decode_mem(vm, arr->u.bytes + off, (nj_u4)len, NULL);
+    why = NULL;
+    dec = nj_image_decode_mem(vm, arr->u.bytes + off, (nj_u4)len, &why);
     if (!dec || !dec->pixels || dec->width <= 0 || dec->height <= 0) {
-        char msg[96];
+        char msg[256];
         int n;
         int i;
         const nj_u1 *p = (const nj_u1 *)arr->u.bytes + off;
@@ -2059,6 +2074,17 @@ static nj_status img_decode_into(nj_vm *vm, nj_ref arr, nj_s4 off, nj_s4 len,
             n = fmt_hex2(msg, n, (nj_u4)len > (nj_u4)i ? p[i] : 0u);
         }
         msg[n] = '\0';
+        /*
+         * And what the decoder said, when a provider said anything.  Without
+         * this the MIDlet sees "cannot decode image" for both "this build has
+         * no PNG decoder" and "those bytes are not a PNG", which are the two
+         * answers a port needs to tell apart.
+         */
+        if (why != NULL && why[0] != '\0') {
+            n = fmt_put(msg, n, ": ");
+            n = fmt_put_max(msg, n, (int)sizeof(msg) - 1, why);
+            msg[n] = '\0';
+        }
         return nj_throw(vm, "java/io/IOException", msg);
     }
     img = nj_midp_image_adopt(vm, dec->pixels, dec->width, dec->height);
@@ -2173,6 +2199,7 @@ NJFN(img_createImage_name)
     nj_ref name = NJ_ARG_REF(args, 0);
     nj_app *app = (nj_app *)vm->loader_ud;
     char cname[256];
+    const char *why;
     void *data;
     nj_u4 len = 0u;
     nj_ref out = NULL;
@@ -2194,11 +2221,21 @@ NJFN(img_createImage_name)
         }
         return nj_throw(vm, "java/io/IOException", cname);
     }
-    dec = nj_image_decode_mem(vm, data, len, NULL);
+    why = NULL;
+    dec = nj_image_decode_mem(vm, data, len, &why);
     nj_host_free(vm, data);
     if (!dec || !dec->pixels || dec->width <= 0 || dec->height <= 0) {
         if (dec) {
             nj_image_release(vm, dec);
+        }
+        /* The resource name alone says nothing about why it would not decode. */
+        if (why != NULL && why[0] != '\0') {
+            char msg[256];
+            int n = fmt_put_max(msg, 0, (int)sizeof(msg) - 1, cname);
+            n = fmt_put(msg, n, ": ");
+            n = fmt_put_max(msg, n, (int)sizeof(msg) - 1, why);
+            msg[n] = '\0';
+            return nj_throw(vm, "java/io/IOException", msg);
         }
         return nj_throw(vm, "java/io/IOException", cname);
     }
