@@ -121,7 +121,7 @@ the honest answer differs per title:
 | `实况足球经理2009_10609` | every string lookup NPEs; only 3 Graphics calls in 600 paints | the method that builds its string table (`d.E()V`) has **no caller** anywhere in the JAR: dead initialiser, so the table stays null |
 | `战争艺术2之全球联盟中文版_1918` | NPEs in `n.a(String,int)`; nothing drawn | same shape: `d.f()`, which builds the config array `b.bb`, is never called |
 | `午夜台球圣诞中文版_8677` | `NegativeArraySizeException` in its own decoder (`c.a(I)`), then a flat frame | its resource reader computes a negative length; the title is the only thing that can fix that |
-| `反恐精英2正式版_5836` | flat, first throw NPE in `k.c(Graphics)` at the first paint | still inside its own splash/loading loop after 4,000 frames (`--where` shows `k.o()V pc=62`), the same shape as `疯狂战机_2013` before the pacing retry |
+| `反恐精英2正式版_5836` | flat, first throw NPE in `k.c(Graphics)` at the first paint | still inside its own splash/loading loop after 4,000 frames (`--where` shows `k.o()V pc=62`), the same shape as `疯狂战机_2013` before the pacing retry. Its assets are **not** the blocker: every `l*.png` in the JAR is XOR-obfuscated (rolling key from 100), the title tries the raw bytes first (one `unrecognised image format` per attempt, 5 in 2,000 frames, all the same resource), then retries with its own `h.b(byte[],100)` - and that decrypted buffer is a valid PNG this runtime decodes without a further error. The NPE is `this.cW.getWidth()` on an Image field that was never filled |
 | `模拟人生2_10762` | flat, paint() makes no Graphics call at all; NPE in `root/SimsApp.q(Z)` | not root-caused |
 | `仙魔飞行棋_417` | flat, no exception at all | it draws through the `Graphics` it captured in `paint()` and only ever clears there; the title's own timing decides when that thread draws |
 
@@ -217,7 +217,7 @@ Specifically supported:
 | `Thread`, `Runnable` | green threads, `sleep`, `join`, `yield`, `wait`/`notify` on `Object` |
 | `Throwable` and the full exception hierarchy | complete, with `toString`/`getMessage`/`printStackTrace` |
 | `Class` | `getName`, `isArray`, `isInterface`, `isInstance`, `getSuperclass`, `forName` |
-| `Integer`/`Long`/`Short`/`Byte`/`Character`/`Boolean`/`Float`/`Double` | constructors, `*Value`, `parseInt`, `toString(radix)`, `toHexString`, `valueOf` |
+| `Integer`/`Long`/`Short`/`Byte`/`Character`/`Boolean`/`Float`/`Double` | constructors, `*Value`, `parseInt`, `toString(radix)`, `toHexString`, `valueOf`, and the value semantics of `toString()`/`equals(Object)`/`hashCode()` |
 | `Runtime` | `gc`, `freeMemory`, `totalMemory`, `exit` |
 
 `System.getProperty` answers for `microedition.platform`, `.configuration`,
@@ -239,6 +239,40 @@ spell UTF-8 some other way than `"UTF-8"` (`"utf-8"`, `"Utf-8"`, `"utf8"`), and
 `疯狂战机_2013` died on every run at `getBytes("utf-8")` until the comparison
 stopped being case-sensitive. `tools/check_encoding_names.sh` is the regression
 test.
+
+### A missing override is not a link error
+
+CLDC declares `toString()`, `equals(Object)` and `hashCode()` on every wrapper
+class. This runtime declared none of the first and, outside `Integer`, none of
+the others - and a missing override here is invisible: the call resolves up to
+`java.lang.Object`, so the method exists, runs, and answers the identity form.
+
+`模拟人生2_10762` is what that costs. Its content loader
+(`com/ideaworks3d/sims/util/a.a`) names a file by concatenating
+`"/global_data/" + <content id>`; `String.valueOf(Object)` reached
+`Integer.toString()`, the runtime answered `java.lang.Integer@c1803e7`, the
+lookup for the JAR entry `global_data/java.lang.Integer@c1803e7` found nothing,
+the game threw `Failed to locate content: 34795` into its own catch-all handler,
+and its game thread returned before the first frame - a MIDlet that looks alive
+and paints a black screen for as long as you watch it. With the value semantics
+in place the same run reaches `loadAllSounds` and `start menu`, and paints
+(401 paints / 8,635 Graphics calls in 400 frames, 2.4 M bytecodes/s).
+
+The same gap made every `Hashtable` keyed on a `Long`, `Short`, `Character`,
+`Boolean`, `Float` or `Double` compare identities, and `Boolean.hashCode()`
+answered the identity hash instead of 1231/1237.
+
+`Float` and `Double` follow Java's own details rather than a `printf`: a whole
+value prints with its `.0` (`2.0f` is `"2.0"`, not `"2"`), `equals()` compares
+the bit patterns - so `NaN` equals `NaN` and `+0.0f` does **not** equal `-0.0f` -
+and `hashCode()` is `floatToIntBits()`, or the xor of the two halves of
+`doubleToLongBits()`. `NaN`, `Infinity` and `-Infinity` are spelled the Java
+way, not `printf`'s.
+
+`tests/boxdemo` and `tools/check_boxing.sh` pin all of it, including the
+cross-class rule (`new Integer(5).equals(new Long(5L))` is false) and the
+float/double cases above; the negative check is the same fixture against the
+pre-fix runtime, which prints `java.lang.Integer@e85f125` for `new Integer(34795)`.
 
 ### java.util
 

@@ -750,6 +750,317 @@ NJFN(long_toString_radix)
     return ret->r ? NJ_OK : nj_throw_oom(vm);
 }
 
+/*
+ * The INSTANCE toString() of the wrappers.
+ *
+ * A wrapper that forgets to override it is neither a compile error nor a link
+ * error: the call resolves up to Object.toString() and answers
+ * "java.lang.Integer@1f2a3b".  Every title that builds a string by
+ * concatenating a boxed number goes through it ("..." + n calls
+ * String.valueOf(Object) -> Integer.toString(), and StringBuffer.append(Object)
+ * does the same).
+ *
+ * 模拟人生2_10762 is the title that made this visible: its content loader
+ * (com/ideaworks3d/sims/util/a.a) builds "/global_data/" + <content id> and
+ * hands the result to Class.getResourceAsStream, so the runtime asked the JAR
+ * for "global_data/java.lang.Integer@c1803e7", the game threw
+ * "Failed to locate content: 34795" into its own catch-all handler, its game
+ * thread returned before the first frame, and the screen stayed black while
+ * every counter said the MIDlet was running.
+ */
+NJFN(int_toString_obj)
+{
+    nj_field *f = vf(vm, "java/lang/Integer", "I");
+    ret->r = nj_string_new_from_int(vm, f ? nj_field_read_int(vm, NJ_THIS(args), f) : 0);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+NJFN(long_toString_obj)
+{
+    nj_field *f = vf(vm, "java/lang/Long", "J");
+    nj_u8 mag;
+    int neg;
+
+    long_magnitude(f ? nj_field_read_long(vm, NJ_THIS(args), f) : 0, &mag, &neg);
+    ret->r = to_radix_string64(vm, mag, neg, 10u);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+NJFN(short_toString_obj)
+{
+    nj_field *f = vf(vm, "java/lang/Short", "S");
+    ret->r = nj_string_new_from_int(vm, f ? nj_field_read_int(vm, NJ_THIS(args), f) : 0);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+NJFN(byte_toString_obj)
+{
+    nj_field *f = vf(vm, "java/lang/Byte", "B");
+    ret->r = nj_string_new_from_int(vm, f ? nj_field_read_int(vm, NJ_THIS(args), f) : 0);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+NJFN(char_toString_obj)
+{
+    nj_field *f = vf(vm, "java/lang/Character", "C");
+    nj_u2 ch = (nj_u2)(f ? nj_field_read_int(vm, NJ_THIS(args), f) : 0);
+
+    ret->r = nj_string_new_chars(vm, &ch, 1);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+NJFN(bool_toString_obj)
+{
+    nj_field *f = vf(vm, "java/lang/Boolean", "Z");
+
+    ret->r = nj_string_new(vm, (f && nj_field_read_int(vm, NJ_THIS(args), f)) ? "true" : "false");
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+/*
+ * equals()/hashCode() of the remaining wrappers.  Like the toString() above,
+ * they were declared by CLDC and missing here, so a Hashtable keyed on Longs,
+ * Shorts, Characters or Booleans compared identities: every lookup missed, and
+ * the title looked like a game that simply never found its data.  The value is
+ * the key, exactly as for Integer.
+ */
+static int wrapper_value_equals(nj_vm *vm, const nj_value *args, const char *cls, const char *desc)
+{
+    nj_ref a = NJ_THIS(args);
+    nj_ref b = NJ_ARG_REF(args, 0);
+    nj_field *f;
+
+    if (!a || !b || !b->cls || (a->cls && !nj_class_is_subclass_of(b->cls, a->cls))) {
+        return 0;
+    }
+    f = vf(vm, cls, desc);
+    return (f && nj_field_read_int(vm, a, f) == nj_field_read_int(vm, b, f)) ? 1 : 0;
+}
+
+static int wrapper_value_hash(nj_vm *vm, const nj_value *args, const char *cls, const char *desc)
+{
+    nj_field *f = vf(vm, cls, desc);
+
+    return f ? nj_field_read_int(vm, NJ_THIS(args), f) : 0;
+}
+
+NJFN(short_equals)  { ret->i = wrapper_value_equals(vm, args, "java/lang/Short", "S"); return NJ_OK; }
+NJFN(byte_equals)   { ret->i = wrapper_value_equals(vm, args, "java/lang/Byte", "B"); return NJ_OK; }
+NJFN(char_equals)   { ret->i = wrapper_value_equals(vm, args, "java/lang/Character", "C"); return NJ_OK; }
+NJFN(bool_equals)   { ret->i = wrapper_value_equals(vm, args, "java/lang/Boolean", "Z"); return NJ_OK; }
+NJFN(short_hashCode){ ret->i = wrapper_value_hash(vm, args, "java/lang/Short", "S"); return NJ_OK; }
+NJFN(byte_hashCode) { ret->i = wrapper_value_hash(vm, args, "java/lang/Byte", "B"); return NJ_OK; }
+NJFN(char_hashCode) { ret->i = wrapper_value_hash(vm, args, "java/lang/Character", "C"); return NJ_OK; }
+
+NJFN(bool_hashCode)
+{
+    /* Boolean.hashCode() is 1231 for true and 1237 for false, by the
+     * specification - not 1 and 0. */
+    nj_field *f = vf(vm, "java/lang/Boolean", "Z");
+    ret->i = (f && nj_field_read_int(vm, NJ_THIS(args), f)) ? 1231 : 1237;
+    return NJ_OK;
+}
+
+NJFN(long_equals)
+{
+    nj_ref a = NJ_THIS(args);
+    nj_ref b = NJ_ARG_REF(args, 0);
+    nj_field *f;
+
+    if (!a || !b || !b->cls || (a->cls && !nj_class_is_subclass_of(b->cls, a->cls))) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    f = vf(vm, "java/lang/Long", "J");
+    ret->i = (f && nj_field_read_long(vm, a, f) == nj_field_read_long(vm, b, f)) ? 1 : 0;
+    return NJ_OK;
+}
+
+NJFN(long_hashCode)
+{
+    nj_field *f = vf(vm, "java/lang/Long", "J");
+    nj_u8 v = (nj_u8)(f ? nj_field_read_long(vm, NJ_THIS(args), f) : 0);
+
+    ret->i = (nj_s4)(v ^ (v >> 32));
+    return NJ_OK;
+}
+
+/*
+ * The decimal form of a float or a double, as close to the Java contract as a
+ * printf gets: %g writes "1" where Java writes "1.0", and a title that shows a
+ * score reads the difference; Java spells the special values "NaN",
+ * "Infinity" and "-Infinity", not "nan"/"inf".
+ *
+ * This is the same class of gap as the integer wrappers above: Float and
+ * Double declared no toString()/equals()/hashCode() at all, so "..." + 1.5f
+ * answered "java.lang.Float@1f2a3b" and a Hashtable keyed on Floats bucketed
+ * by identity.
+ */
+static void boxing_fmt_double(char *buf, size_t cap, double v)
+{
+#if NJ_USE_LIBC
+    size_t n;
+    nj_s8 bits;
+    nj_u8 u;
+
+    /*
+     * The specials are read from the bit pattern rather than compared, so this
+     * needs no <float.h> ({NaN, +Inf, -Inf} are the only doubles with every
+     * exponent bit set).  Java spells them "NaN", "Infinity", "-Infinity";
+     * printf spells them "nan", "inf", "-inf".
+     */
+    memcpy(&bits, &v, sizeof(bits));
+    u = (nj_u8)bits;
+    if ((u & 0x7FF0000000000000ull) == 0x7FF0000000000000ull) {
+        if ((u & 0x000FFFFFFFFFFFFFull) != 0u) {
+            snprintf(buf, cap, "NaN");
+        } else {
+            snprintf(buf, cap, (bits < 0) ? "-Infinity" : "Infinity");
+        }
+        return;
+    }
+    snprintf(buf, cap, "%g", v);
+    n = strlen(buf);
+    if (n + 2u < cap && strchr(buf, '.') == NULL &&
+        strchr(buf, 'e') == NULL && strchr(buf, 'E') == NULL) {
+        buf[n] = '.';
+        buf[n + 1u] = '0';
+        buf[n + 2u] = '\0';
+    }
+#else
+    (void)v;
+    if (cap > 3u) {
+        memcpy(buf, "0.0", 4u);
+    }
+#endif
+}
+
+NJFN(float_toString_obj)
+{
+    nj_field *f = vf(vm, "java/lang/Float", "F");
+    nj_s4 bits = f ? (nj_s4)nj_field_read_bits32(vm, NJ_THIS(args), f) : 0;
+    char buf[48];
+
+    boxing_fmt_double(buf, sizeof(buf), (double)float_from_bits(bits));
+    ret->r = nj_string_new(vm, buf);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+NJFN(float_toString_v)
+{
+    char buf[48];
+
+    boxing_fmt_double(buf, sizeof(buf), (double)NJ_ARG_FLOAT(args, 0));
+    ret->r = nj_string_new(vm, buf);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+/* Float.equals() compares floatToIntBits(), so NaN equals NaN and +0.0f does
+ * not equal -0.0f - the rule the javadoc states and the one a title's own
+ * "did this value change" test relies on. */
+NJFN(float_equals)
+{
+    nj_ref a = NJ_THIS(args);
+    nj_ref b = NJ_ARG_REF(args, 0);
+    nj_field *f;
+
+    if (!a || !b || !b->cls || (a->cls && !nj_class_is_subclass_of(b->cls, a->cls))) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    f = vf(vm, "java/lang/Float", "F");
+    if (!f) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    {
+        nj_s4 ba = (nj_s4)nj_field_read_bits32(vm, a, f);
+        nj_s4 bb = (nj_s4)nj_field_read_bits32(vm, b, f);
+        if (float_is_nan_bits(ba)) {
+            ba = 0x7FC00000;
+        }
+        if (float_is_nan_bits(bb)) {
+            bb = 0x7FC00000;
+        }
+        ret->i = (ba == bb) ? 1 : 0;
+    }
+    return NJ_OK;
+}
+
+NJFN(float_hashCode)
+{
+    nj_field *f = vf(vm, "java/lang/Float", "F");
+    nj_s4 bits = f ? (nj_s4)nj_field_read_bits32(vm, NJ_THIS(args), f) : 0;
+
+    ret->i = float_is_nan_bits(bits) ? 0x7FC00000 : bits;
+    return NJ_OK;
+}
+
+NJFN(double_toString_obj)
+{
+    nj_field *f = vf(vm, "java/lang/Double", "D");
+    nj_s8 bits = f ? (nj_s8)nj_field_read_bits64(vm, NJ_THIS(args), f) : 0;
+    char buf[48];
+
+    boxing_fmt_double(buf, sizeof(buf), double_from_bits(bits));
+    ret->r = nj_string_new(vm, buf);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+NJFN(double_toString_v)
+{
+    char buf[48];
+
+    boxing_fmt_double(buf, sizeof(buf), NJ_ARG_DOUBLE(args, 0));
+    ret->r = nj_string_new(vm, buf);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+NJFN(double_equals)
+{
+    nj_ref a = NJ_THIS(args);
+    nj_ref b = NJ_ARG_REF(args, 0);
+    nj_field *f;
+    nj_s8 ba, bb;
+
+    if (!a || !b || !b->cls || (a->cls && !nj_class_is_subclass_of(b->cls, a->cls))) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    f = vf(vm, "java/lang/Double", "D");
+    if (!f) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    ba = (nj_s8)nj_field_read_bits64(vm, a, f);
+    bb = (nj_s8)nj_field_read_bits64(vm, b, f);
+    if ((ba & 0x7FF0000000000000LL) == 0x7FF0000000000000LL &&
+        (ba & 0x000FFFFFFFFFFFFFLL) != 0) {
+        ba = 0x7FF8000000000000LL;
+    }
+    if ((bb & 0x7FF0000000000000LL) == 0x7FF0000000000000LL &&
+        (bb & 0x000FFFFFFFFFFFFFLL) != 0) {
+        bb = 0x7FF8000000000000LL;
+    }
+    ret->i = (ba == bb) ? 1 : 0;
+    return NJ_OK;
+}
+
+NJFN(double_hashCode)
+{
+    nj_field *f = vf(vm, "java/lang/Double", "D");
+    nj_s8 bits = f ? (nj_s8)nj_field_read_bits64(vm, NJ_THIS(args), f) : 0;
+    nj_u8 u;
+
+    if ((bits & 0x7FF0000000000000LL) == 0x7FF0000000000000LL &&
+        (bits & 0x000FFFFFFFFFFFFFLL) != 0) {
+        bits = 0x7FF8000000000000LL;
+    }
+    u = (nj_u8)bits;
+    ret->i = (nj_s4)(u ^ (u >> 32));
+    return NJ_OK;
+}
+
 
 /*
  * The wide `valueOf` statics.
@@ -1005,6 +1316,7 @@ static const nj_builtin_method Integer_methods[] = {
     M("parseInt",      "(Ljava/lang/String;I)I", NJ_ACC_STATIC),
     M("toString",      "(I)Ljava/lang/String;", NJ_ACC_STATIC),
     M("toString",      "(II)Ljava/lang/String;", NJ_ACC_STATIC),
+    M("toString",      "()Ljava/lang/String;", 0),
     M("toHexString",   "(I)Ljava/lang/String;", NJ_ACC_STATIC),
     M("valueOf",       "(I)Ljava/lang/Integer;", NJ_ACC_STATIC),
     M("valueOf",       "(Ljava/lang/String;)Ljava/lang/Integer;", NJ_ACC_STATIC),
@@ -1022,19 +1334,28 @@ static const nj_builtin_method Long_methods[] = {
     M("valueOf",   "(J)Ljava/lang/Long;", NJ_ACC_STATIC),
     M("valueOf",   "(Ljava/lang/String;I)Ljava/lang/Long;", NJ_ACC_STATIC),
     M("toString",  "(J)Ljava/lang/String;", NJ_ACC_STATIC),
-    M("toString",  "(JI)Ljava/lang/String;", NJ_ACC_STATIC)
+    M("toString",  "(JI)Ljava/lang/String;", NJ_ACC_STATIC),
+    M("toString",  "()Ljava/lang/String;", 0),
+    M("equals",    "(Ljava/lang/Object;)Z", 0),
+    M("hashCode",  "()I", 0)
 };
 static const nj_builtin_method Short_methods[] = {
     M("<init>",     "(S)V", 0),
     M("shortValue", "()S",  0),
     M("intValue",   "()I",  0),
-    M("parseShort", "(Ljava/lang/String;)S", NJ_ACC_STATIC)
+    M("parseShort", "(Ljava/lang/String;)S", NJ_ACC_STATIC),
+    M("toString",   "()Ljava/lang/String;", 0),
+    M("equals",     "(Ljava/lang/Object;)Z", 0),
+    M("hashCode",   "()I", 0)
 };
 static const nj_builtin_method Byte_methods[] = {
     M("<init>",    "(B)V", 0),
     M("byteValue","()B",  0),
     M("intValue", "()I",  0),
-    M("parseByte", "(Ljava/lang/String;)B", NJ_ACC_STATIC)
+    M("parseByte", "(Ljava/lang/String;)B", NJ_ACC_STATIC),
+    M("toString",  "()Ljava/lang/String;", 0),
+    M("equals",    "(Ljava/lang/Object;)Z", 0),
+    M("hashCode",  "()I", 0)
 };
 static const nj_builtin_method Character_methods[] = {
     M("<init>",      "(C)V", 0),
@@ -1045,12 +1366,18 @@ static const nj_builtin_method Character_methods[] = {
     M("isUpperCase", "(C)Z", NJ_ACC_STATIC),
     M("toLowerCase", "(C)C", NJ_ACC_STATIC),
     M("toUpperCase", "(C)C", NJ_ACC_STATIC),
-    M("digit",       "(CI)I", NJ_ACC_STATIC)
+    M("digit",       "(CI)I", NJ_ACC_STATIC),
+    M("toString",    "()Ljava/lang/String;", 0),
+    M("equals",      "(Ljava/lang/Object;)Z", 0),
+    M("hashCode",    "()I", 0)
 };
 static const nj_builtin_method Boolean_methods[] = {
     M("<init>",      "(Z)V", 0),
     M("booleanValue","()Z",  0),
-    M("valueOf",     "(Z)Ljava/lang/Boolean;", NJ_ACC_STATIC)
+    M("valueOf",     "(Z)Ljava/lang/Boolean;", NJ_ACC_STATIC),
+    M("toString",    "()Ljava/lang/String;", 0),
+    M("equals",      "(Ljava/lang/Object;)Z", 0),
+    M("hashCode",    "()I", 0)
 };
 static const nj_builtin_method Float_methods[] = {
     M("<init>",     "(F)V", 0),
@@ -1061,7 +1388,11 @@ static const nj_builtin_method Float_methods[] = {
     M("isInfinite", "(F)Z", NJ_ACC_STATIC),
     M("intBitsToFloat", "(I)F", NJ_ACC_STATIC),
     M("floatToIntBits", "(F)I", NJ_ACC_STATIC),
-    M("valueOf",        "(F)Ljava/lang/Float;", NJ_ACC_STATIC)
+    M("valueOf",        "(F)Ljava/lang/Float;", NJ_ACC_STATIC),
+    M("toString",       "()Ljava/lang/String;", 0),
+    M("toString",       "(F)Ljava/lang/String;", NJ_ACC_STATIC),
+    M("equals",         "(Ljava/lang/Object;)Z", 0),
+    M("hashCode",       "()I", 0)
 };
 static const nj_builtin_method Double_methods[] = {
     M("<init>",      "(D)V", 0),
@@ -1072,6 +1403,10 @@ static const nj_builtin_method Double_methods[] = {
     M("isInfinite",  "(D)Z", NJ_ACC_STATIC),
     M("valueOf",     "(D)Ljava/lang/Double;", NJ_ACC_STATIC),
     M("longBitsToDouble", "(J)D", NJ_ACC_STATIC),
+    M("toString",      "()Ljava/lang/String;", 0),
+    M("toString",      "(D)Ljava/lang/String;", NJ_ACC_STATIC),
+    M("equals",        "(Ljava/lang/Object;)Z", 0),
+    M("hashCode",      "()I", 0),
     M("doubleToLongBits", "(D)J", NJ_ACC_STATIC),
     M("valueOf",     "(Ljava/lang/String;)Ljava/lang/Double;", NJ_ACC_STATIC)
 };
@@ -1102,6 +1437,7 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Integer",   "toString",     "(I)Ljava/lang/String;", int_toString },
     { "java/lang/Integer",   "toString",     "(II)Ljava/lang/String;", int_toString_radix },
     { "java/lang/Integer",   "toHexString",  "(I)Ljava/lang/String;", int_toHexString },
+    { "java/lang/Integer",   "toString",     "()Ljava/lang/String;", int_toString_obj },
     { "java/lang/Integer",   "valueOf",      "(I)Ljava/lang/Integer;", int_valueOf },
 
     { "java/lang/Long",      "<init>",       "(J)V", Long_init },
@@ -1114,16 +1450,25 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Long",      "valueOf",      "(J)Ljava/lang/Long;", Long_valueOf },
     { "java/lang/Long",      "toString",     "(J)Ljava/lang/String;", long_toString },
     { "java/lang/Long",      "toString",     "(JI)Ljava/lang/String;", long_toString_radix },
+    { "java/lang/Long",      "toString",     "()Ljava/lang/String;", long_toString_obj },
+    { "java/lang/Long",      "equals",       "(Ljava/lang/Object;)Z", long_equals },
+    { "java/lang/Long",      "hashCode",     "()I",                  long_hashCode },
 
     { "java/lang/Short",     "<init>",       "(S)V", Short_init },
     { "java/lang/Short",     "shortValue",   "()S",  Short_value },
     { "java/lang/Short",     "intValue",     "()I",  Short_value },
     { "java/lang/Short",     "parseShort",   "(Ljava/lang/String;)S", Short_parseShort },
+    { "java/lang/Short",     "toString",     "()Ljava/lang/String;", short_toString_obj },
+    { "java/lang/Short",     "equals",       "(Ljava/lang/Object;)Z", short_equals },
+    { "java/lang/Short",     "hashCode",     "()I",                  short_hashCode },
 
     { "java/lang/Byte",      "<init>",       "(B)V", Byte_init },
     { "java/lang/Byte",      "byteValue",    "()B",  Byte_value },
     { "java/lang/Byte",      "intValue",     "()I",  Byte_value },
     { "java/lang/Byte",      "parseByte",    "(Ljava/lang/String;)B", Byte_parseByte },
+    { "java/lang/Byte",      "toString",     "()Ljava/lang/String;", byte_toString_obj },
+    { "java/lang/Byte",      "equals",       "(Ljava/lang/Object;)Z", byte_equals },
+    { "java/lang/Byte",      "hashCode",     "()I",                  byte_hashCode },
 
     { "java/lang/Character", "<init>",       "(C)V", Character_init },
     { "java/lang/Character", "charValue",    "()C",  Character_value },
@@ -1134,10 +1479,16 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Character", "toLowerCase",  "(C)C", Character_toLowerCase },
     { "java/lang/Character", "toUpperCase",  "(C)C", Character_toUpperCase },
     { "java/lang/Character", "digit",        "(CI)I", Character_digit },
+    { "java/lang/Character", "toString",     "()Ljava/lang/String;", char_toString_obj },
+    { "java/lang/Character", "equals",       "(Ljava/lang/Object;)Z", char_equals },
+    { "java/lang/Character", "hashCode",     "()I",                  char_hashCode },
 
     { "java/lang/Boolean",   "<init>",       "(Z)V", Boolean_init },
     { "java/lang/Boolean",   "booleanValue", "()Z",  Boolean_value },
     { "java/lang/Boolean",   "valueOf",      "(Z)Ljava/lang/Boolean;", Boolean_valueOf },
+    { "java/lang/Boolean",   "toString",     "()Ljava/lang/String;", bool_toString_obj },
+    { "java/lang/Boolean",   "equals",       "(Ljava/lang/Object;)Z", bool_equals },
+    { "java/lang/Boolean",   "hashCode",     "()I",                  bool_hashCode },
 
     { "java/lang/Float",     "<init>",       "(F)V", Float_init },
     { "java/lang/Float",     "floatValue",   "()F",  Float_value },
@@ -1156,9 +1507,17 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Double",    "isInfinite",   "()Z",  Double_isInfinite },
     { "java/lang/Double",    "isNaN",        "(D)Z", Double_isNaN_d },
     { "java/lang/Double",    "isInfinite",   "(D)Z", Double_isInfinite_d },
+    { "java/lang/Double",    "toString",     "()Ljava/lang/String;", double_toString_obj },
+    { "java/lang/Double",    "toString",     "(D)Ljava/lang/String;", double_toString_v },
+    { "java/lang/Double",    "equals",       "(Ljava/lang/Object;)Z", double_equals },
+    { "java/lang/Double",    "hashCode",     "()I",                  double_hashCode },
     { "java/lang/Double",    "valueOf",      "(Ljava/lang/String;)Ljava/lang/Double;", Double_valueOf_str },
     { "java/lang/Double",    "valueOf",      "(D)Ljava/lang/Double;", Double_valueOf },
-    { "java/lang/Float",     "valueOf",      "(F)Ljava/lang/Float;", Float_valueOf }
+    { "java/lang/Float",     "valueOf",      "(F)Ljava/lang/Float;", Float_valueOf },
+    { "java/lang/Float",     "toString",     "()Ljava/lang/String;", float_toString_obj },
+    { "java/lang/Float",     "toString",     "(F)Ljava/lang/String;", float_toString_v },
+    { "java/lang/Float",     "equals",       "(Ljava/lang/Object;)Z", float_equals },
+    { "java/lang/Float",     "hashCode",     "()I",                  float_hashCode }
 };
 const int nj_lib_boxing_count =
     (int)(sizeof(nj_lib_boxing_table) / sizeof(nj_lib_boxing_table[0]));

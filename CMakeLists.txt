@@ -345,6 +345,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_paintthrow_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_clipdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_m3gdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_boxdemo_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -619,6 +620,16 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_clip_translate.sh
                      ${NJ_FIXTURES}/clipdemo.jar)
+    # CLDC declares toString()/equals()/hashCode() on every wrapper class.  A
+    # missing override resolves up to java.lang.Object, so a title that builds
+    # a path or a Hashtable key from a boxed value keeps running with the wrong
+    # answer: 模拟人生2_10762 asked its JAR for
+    # "global_data/java.lang.Integer@c1803e7" and went black.
+    add_test(NAME check_boxing
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_boxing.sh
+                     ${NJ_FIXTURES}/boxdemo.jar)
     add_test(NAME check_constant_value
              COMMAND ${CMAKE_COMMAND} -E env
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
