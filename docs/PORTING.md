@@ -766,6 +766,21 @@ that does not exist comes back as `ConnectionNotFoundException` rather than a
 hang. `BluetoothAdapter.getBluetoothClass()` is a hidden API on modern releases,
 so the class-of-device reads 0 — the same answer as a radio that will not say.
 
+A real handset is the useful test. On a Redmi Note 12 Turbo (Android 15) the
+same fixture reported `BT name Redmi Note 12 Turbo`, `BT addr 020000000000`,
+`discoverable true`, and an inquiry that found three actual neighbours — a
+`BT5.1 Mouse`, a `GamepadSpace-Q37` and `sirius` — before `inquiryCompleted()`
+twelve seconds later; `searchServices` for 0x1101 came back empty for a device
+that offers no SPP record, the client to a made-up address was refused with a
+sentence, a real RFCOMM server with its SDP record opened, and both notifiers
+gave up after exactly thirty seconds. Two things a port user should expect on
+modern Android: the address is the privacy placeholder `02:00:00:00:00:00`
+(third-party apps are no longer told the hardware address, and the runtime
+treats it like any other address a radio will not name), and
+`getBluetoothClass()` is hidden, so the class reads 0 unless the port is rooted.
+Discovery also needs `BLUETOOTH_SCAN`, and with `neverForLocation` declared it
+does not need the location permission.
+
 One platform behaviour is worth knowing before a MIDlet calls
 `LocalDevice.setDiscoverable()`: from Android 12 the system shows its own
 consent dialog for that, and the dialog takes the focus, so the MIDlet's frame
