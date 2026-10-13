@@ -67,22 +67,31 @@ def main():
     bad = 0
     for path in sorted((root / 'src').rglob('*.c')):
         text = path.read_text(encoding='utf-8', errors='replace')
-        decls = {m.group(1): int(m.group(2)) for m in DECL.finditer(text)}
+        # Every declaration with the line it sits on, so a call is judged
+        # against the declaration in scope above it.  A file-wide name -> size
+        # map reports the wrong thing as soon as two functions both call an
+        # array "a": the last declaration in the file wins for every call.
+        decls = [(m.group(1), int(m.group(2)), text[:m.start()].count('\n') + 1)
+                 for m in DECL.finditer(text)]
         if not decls:
             continue
-        for _, body in calls(text):
-            names = [n for n in decls if re.search(r'\b' + n + r'\b', body)]
-            if not names:
-                continue
+        for start, body in calls(text):
+            line = text[:start].count('\n') + 1
             d = DESC.search(body)
             if not d:
                 continue
             need = slots('(' + d.group(1) + ')')
-            for n in names:
-                if decls[n] < need:
-                    line = text[:text.index(body)].count('\n') + 1
-                    print(f'{path.relative_to(root)}: nj_value {n}[{decls[n]}] '
-                          f'is passed to something needing {need} slot(s)')
+            for name in {n for n, _, _ in decls
+                         if re.search(r'\b' + n + r'\b', body)}:
+                above = [(dl, sz) for n, sz, dl in decls
+                         if n == name and dl <= line]
+                if not above:
+                    continue
+                size = max(above)[1]
+                if size < need:
+                    print(f'{path.relative_to(root)}: nj_value {name}[{size}] '
+                          f'is passed to something needing {need} slot(s) '
+                          f'(line {line})')
                     bad += 1
     print(f'{bad} argument array(s) too small')
     return 1 if bad else 0

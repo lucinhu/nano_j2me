@@ -2127,11 +2127,82 @@ NJFN(m3g_getInstance)
     return NJ_OK;
 }
 
+/*
+ * The Graphics a bound target draws into, with its size.  A target may be a
+ * Graphics or a mutable Image2D (which is asked for its Graphics), and a
+ * title that binds one and never calls setViewport still draws over the whole
+ * of it - 浴火银河2完整版_7689 calls render(World) once a frame after
+ * binding and never sets a viewport, and with the viewport left at its
+ * initial 0x0 the whole scene was skipped (513 renders, no triangles).
+ */
+static nj_ref m3g_target_graphics(nj_vm *vm, nj_ref target, int *w, int *h)
+{
+    const char *cn;
+    nj_value got;
+    nj_ref g = target;
+
+    *w = 0;
+    *h = 0;
+    if (!target || !nj_heap_owns(vm, target)) {
+        return 0;
+    }
+    cn = nj_ref_class_name(g);
+    if (!cn) {
+        return 0;
+    }
+    if (strcmp(cn, "javax/microedition/lcdui/Image") == 0) {
+        got.r = 0;
+        if (nj_call(vm, g, "javax/microedition/lcdui/Image", "getGraphics",
+                    "()Ljavax/microedition/lcdui/Graphics;", NULL, &got) != NJ_OK
+            || !got.r) {
+            return 0;
+        }
+        g = got.r;
+    } else if (strcmp(cn, "javax/microedition/lcdui/Graphics") != 0) {
+        return 0;                 /* neither of the two target kinds */
+    }
+    /*
+     * getClipWidth()/getClipHeight(), not getWidth()/getHeight(): Graphics
+     * has no width or height of its own (calling getWidth on it is a
+     * NoSuchMethodError, which is how this was found - the title's thread died
+     * on it).  A Graphics nobody has clipped is clipped to its whole target
+     * when it is made, so the clip is the surface size here.
+     */
+    got.i = 0;
+    if (nj_call(vm, g, "javax/microedition/lcdui/Graphics", "getClipWidth",
+                "()I", NULL, &got) == NJ_OK) {
+        *w = (int)got.i;
+    }
+    got.i = 0;
+    if (nj_call(vm, g, "javax/microedition/lcdui/Graphics", "getClipHeight",
+                "()I", NULL, &got) == NJ_OK) {
+        *h = (int)got.i;
+    }
+    return g;
+}
+
 NJFN(m3g_bindTarget)
 {
-    nj_rput(vm, NJ_THIS(args),
+    nj_ref self = NJ_THIS(args);
+    nj_ref target = NJ_ARG_REF(args, 0);
+    int w = 0, h = 0;
+
+    nj_rput(vm, self,
             nj_field_lookup(vm, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;", 0),
-            NJ_ARG_REF(args, 0));
+            target);
+    /*
+     * "the state of the Graphics3D instance is ... viewport : undefined
+     * (reset at bindTarget)" - the reset is to the whole target, so a title
+     * that never calls setViewport draws into all of it.  The fields stay 0
+     * for a target this runtime cannot draw into, and render() then does
+     * nothing.
+     */
+    if (m3g_target_graphics(vm, target, &w, &h) != 0 && w > 0 && h > 0) {
+        nj_iput(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vx", "I", 0), 0);
+        nj_iput(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vy", "I", 0), 0);
+        nj_iput(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vw", "I", 0), w);
+        nj_iput(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vh", "I", 0), h);
+    }
     return NJ_OK;
 }
 
@@ -2531,7 +2602,21 @@ NJFN(m3g_render)
     vw = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vw", "I", 0));
     vh = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vh", "I", 0));
     if (vw <= 0 || vh <= 0) {
-        return NJ_OK;               /* no viewport, no pixels */
+        /* No setViewport: the whole target, which is what bindTarget resets
+           the viewport to. */
+        int tw = 0, th = 0;
+        if (m3g_target_graphics(vm, target, &tw, &th) == 0 || tw <= 0 || th <= 0) {
+            return NJ_OK;           /* no usable target, no pixels */
+        }
+        vx = vy = 0;
+        vw = tw;
+        vh = th;
+    } else {
+        int tw = 0, th = 0;
+        nj_ref g = m3g_target_graphics(vm, target, &tw, &th);
+        if (g != 0) {
+            target = g;             /* an Image target draws through its Graphics */
+        }
     }
 
     for (i = 0u; i < 16u; i++) { view[i] = 0.0f; }
@@ -3413,6 +3498,125 @@ nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
     return NJ_OK;
 }
 
+/*
+ * Build the Java objects a container holds, from its bytes.  Both
+ * Loader.load() overloads end up here: they differ only in where the bytes
+ * come from - a resource name, or a byte[] the title read itself, which is
+ * how 浴火银河2 and the other 3D titles hand over a .m3g they unpacked.  The
+ * byte[] overload used to stop at the file identifier with "this runtime has
+ * no object parser yet" while the String overload parsed the file, so a title
+ * that loaded from its own stream got an IOException and an empty scene.
+ *
+ * The buffer stays owned by the caller; nothing here frees it.
+ */
+static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
+                                   nj_value *ret)
+{
+    /*
+     * It is a container, so build the objects it holds.  One Java object
+     * per file object, of the class the file's type byte names, carrying
+     * the userID the file gave it - which is what Object3D.find() looks
+     * for.  The type numbers are the ones in the format specification's
+     * ObjectType table, and this mapping was checked against it rather
+     * than remembered: an earlier version of the table in the corpus tool
+     * had 11 as IndexBuffer when the specification says TriangleStripArray.
+     *
+     * What is NOT done here is linking: a Group's children, a Mesh's
+     * submeshes, an Appearance's textures are all object references in the
+     * file, and reading them needs the object table and the reference
+     * rules.  Until that exists the objects come back empty, which is
+     * honest - and it is why a title that loads a model still draws
+     * nothing.
+     */
+    nj_m3g_object *objs;
+    nj_u4 nobj = 0u, nsec = 0u, i;
+    nj_u4 cap = 4096u;
+    char err[192];
+    nj_ref arr;
+    nj_u4 mark;
+
+    objs = (nj_m3g_object *)nj_host_alloc(vm, (nj_size)(sizeof(nj_m3g_object) * cap));
+    if (!objs) {
+        nj_host_free(vm, data);
+        return nj_throw(vm, "java/lang/OutOfMemoryError", "the object table");
+    }
+    if (nj_m3g_scan_objects(vm, (const nj_u1 *)data, len, objs, cap,
+                            &nobj, &nsec, err, sizeof(err)) != NJ_OK) {
+        m3g_free_refs(vm, objs, nobj);
+        nj_host_free(vm, objs);
+        nj_host_free(vm, data);
+        return nj_throw(vm, "java/io/IOException", err);
+    }
+    nj_host_free(vm, data);
+    if (nobj == 0u) {
+        m3g_free_refs(vm, objs, nobj);
+        nj_host_free(vm, objs);
+        return nj_throw(vm, "java/io/IOException",
+                        "the container holds no objects");
+    }
+    arr = nj_object_array_new(vm, "javax/microedition/m3g/Object3D", nobj + 1u);
+    if (!arr) {
+        m3g_free_refs(vm, objs, nobj);
+        nj_host_free(vm, objs);
+        return NJ_ERR_NOMEM;
+    }
+    mark = nj_root_mark(vm);
+    arr = nj_root(vm, arr);
+    for (i = 0u; i < nobj; i++) {
+        const char *cls = m3g_class_of(objs[i].type);
+        nj_u4 inner;
+        nj_ref o;
+
+        if (!cls) { continue; }   /* a reserved type: the slot stays empty */
+        inner = nj_root_mark(vm);
+        o = nj_object_new(vm, cls);
+        if (o) {
+            o = nj_root(vm, o);
+            nj_iput(vm, o, nj_field_lookup(vm, NJ_C_O3D, "_nj_userID", "I", 0),
+                    (nj_s4)objs[i].fields.user_id);
+            if (objs[i].type == NJ_M3G_T_WORLD) {
+                nj_rput(vm, o, nj_field_lookup(vm, NJ_C_WORLD, "_nj_all",
+                                               "[L" NJ_C_O3D ";", 0), arr);
+            }
+            nj_array_set_ref(arr, i + 1u, o);
+        }
+        nj_root_release(vm, inner);
+    }
+    if (nj_m3g_load_geometry(vm, objs, nobj, arr) != NJ_OK) {
+        m3g_free_refs(vm, objs, nobj);
+        nj_host_free(vm, objs);
+        return NJ_ERR;
+    }
+    if (nj_m3g_link_groups(vm, objs, nobj, arr) != NJ_OK) {
+        m3g_free_refs(vm, objs, nobj);
+        nj_host_free(vm, objs);
+        return NJ_ERR;
+    }
+    /*
+     * What is still not linked is the rest of the graph, and that is a
+     * measured decision rather than an unfinished one.
+     *
+     * The first version called Group.addChild() for every child the file
+     * names.  Need for Speed Most Wanted had been reaching 20 frames with
+     * 69 drawing calls; with the linking in place it dies on
+     * "the node already has a parent", because the game adds the same
+     * nodes itself and JSR 184 gives a Node exactly one parent.  The
+     * file's graph and the game's graph are the same graph, and building
+     * half of it here means the game cannot build the other half.
+     *
+     * What the game actually needs is for getChildCount()/getChild() to
+     * answer from the file's list, which means storing it on the object
+     * rather than mutating the graph behind the game's back.  The indices
+     * are decoded and carried (see nj_m3g_fields.refs) so that is a
+     * change to the Group class, not to the file parser.
+     */
+    nj_root_release(vm, mark);
+    m3g_free_refs(vm, objs, nobj);
+        nj_host_free(vm, objs);
+    ret->r = arr;
+    return NJ_OK;
+}
+
 NJFN(m3g_load)
 {
     nj_ref name = NJ_ARG_REF(args, 0);
@@ -3450,111 +3654,11 @@ NJFN(m3g_load)
      * would be a guess, and a wrong guess rejects valid files - which is the
      * same defect this comment is about.
      */
-    (void)m3g_has_file_id((const unsigned char *)data, len);
     {
-        /*
-         * It is a container, so build the objects it holds.  One Java object
-         * per file object, of the class the file's type byte names, carrying
-         * the userID the file gave it - which is what Object3D.find() looks
-         * for.  The type numbers are the ones in the format specification's
-         * ObjectType table, and this mapping was checked against it rather
-         * than remembered: an earlier version of the table in the corpus tool
-         * had 11 as IndexBuffer when the specification says TriangleStripArray.
-         *
-         * What is NOT done here is linking: a Group's children, a Mesh's
-         * submeshes, an Appearance's textures are all object references in the
-         * file, and reading them needs the object table and the reference
-         * rules.  Until that exists the objects come back empty, which is
-         * honest - and it is why a title that loads a model still draws
-         * nothing.
-         */
-        nj_m3g_object *objs;
-        nj_u4 nobj = 0u, nsec = 0u, i;
-        nj_u4 cap = 4096u;
-        char err[192];
-        nj_ref arr;
-        nj_u4 mark;
+        nj_status st = m3g_build_objects(vm, (const nj_u1 *)data, len, ret);
 
-        objs = (nj_m3g_object *)nj_host_alloc(vm, (nj_size)(sizeof(nj_m3g_object) * cap));
-        if (!objs) {
-            nj_host_free(vm, data);
-            return nj_throw(vm, "java/lang/OutOfMemoryError", "the object table");
-        }
-        if (nj_m3g_scan_objects(vm, (const nj_u1 *)data, len, objs, cap,
-                                &nobj, &nsec, err, sizeof(err)) != NJ_OK) {
-            m3g_free_refs(vm, objs, nobj);
-            nj_host_free(vm, objs);
-            nj_host_free(vm, data);
-            return nj_throw(vm, "java/io/IOException", err);
-        }
         nj_host_free(vm, data);
-        if (nobj == 0u) {
-            m3g_free_refs(vm, objs, nobj);
-            nj_host_free(vm, objs);
-            return nj_throw(vm, "java/io/IOException",
-                            "the container holds no objects");
-        }
-        arr = nj_object_array_new(vm, "javax/microedition/m3g/Object3D", nobj + 1u);
-        if (!arr) {
-            m3g_free_refs(vm, objs, nobj);
-            nj_host_free(vm, objs);
-            return NJ_ERR_NOMEM;
-        }
-        mark = nj_root_mark(vm);
-        arr = nj_root(vm, arr);
-        for (i = 0u; i < nobj; i++) {
-            const char *cls = m3g_class_of(objs[i].type);
-            nj_u4 inner;
-            nj_ref o;
-
-            if (!cls) { continue; }   /* a reserved type: the slot stays empty */
-            inner = nj_root_mark(vm);
-            o = nj_object_new(vm, cls);
-            if (o) {
-                o = nj_root(vm, o);
-                nj_iput(vm, o, nj_field_lookup(vm, NJ_C_O3D, "_nj_userID", "I", 0),
-                        (nj_s4)objs[i].fields.user_id);
-                if (objs[i].type == NJ_M3G_T_WORLD) {
-                    nj_rput(vm, o, nj_field_lookup(vm, NJ_C_WORLD, "_nj_all",
-                                                   "[L" NJ_C_O3D ";", 0), arr);
-                }
-                nj_array_set_ref(arr, i + 1u, o);
-            }
-            nj_root_release(vm, inner);
-        }
-        if (nj_m3g_load_geometry(vm, objs, nobj, arr) != NJ_OK) {
-            m3g_free_refs(vm, objs, nobj);
-            nj_host_free(vm, objs);
-            return NJ_ERR;
-        }
-        if (nj_m3g_link_groups(vm, objs, nobj, arr) != NJ_OK) {
-            m3g_free_refs(vm, objs, nobj);
-            nj_host_free(vm, objs);
-            return NJ_ERR;
-        }
-        /*
-         * What is still not linked is the rest of the graph, and that is a
-         * measured decision rather than an unfinished one.
-         *
-         * The first version called Group.addChild() for every child the file
-         * names.  Need for Speed Most Wanted had been reaching 20 frames with
-         * 69 drawing calls; with the linking in place it dies on
-         * "the node already has a parent", because the game adds the same
-         * nodes itself and JSR 184 gives a Node exactly one parent.  The
-         * file's graph and the game's graph are the same graph, and building
-         * half of it here means the game cannot build the other half.
-         *
-         * What the game actually needs is for getChildCount()/getChild() to
-         * answer from the file's list, which means storing it on the object
-         * rather than mutating the graph behind the game's back.  The indices
-         * are decoded and carried (see nj_m3g_fields.refs) so that is a
-         * change to the Group class, not to the file parser.
-         */
-        nj_root_release(vm, mark);
-        m3g_free_refs(vm, objs, nobj);
-            nj_host_free(vm, objs);
-        ret->r = arr;
-        return NJ_OK;
+        return st;
     }
 }
 
@@ -3752,8 +3856,7 @@ NJFN(m3g_load_bytes)
                         "the data is not a .m3g container "
                         "(wrong file identifier)");
     }
-    return nj_throw(vm, "java/io/IOException",
-                    "a .m3g container; this runtime has no object parser yet");
+    return m3g_build_objects(vm, (const nj_u1 *)b, n, ret);
 }
 
 #define M(name, desc, flags) { name, desc, flags }
@@ -6570,20 +6673,13 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
     r.vw = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vw", "I"));
     r.vh = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vh", "I"));
     if (r.vw <= 0 || r.vh <= 0) {
-        nj_value got;                         /* no setViewport: the whole target */
-        got.i = 0;
-        if (nj_call(vm, g, "javax/microedition/lcdui/Graphics", "getWidth",
-                    "()I", NULL, &got) != NJ_OK || got.i <= 0) {
+        int tw = 0, th = 0;           /* no setViewport: the whole target */
+        if (m3g_target_graphics(vm, g, &tw, &th) == 0 || tw <= 0 || th <= 0) {
             return 0u;
         }
-        r.vw = (int)got.i;
-        got.i = 0;
-        if (nj_call(vm, g, "javax/microedition/lcdui/Graphics", "getHeight",
-                    "()I", NULL, &got) != NJ_OK || got.i <= 0) {
-            return 0u;
-        }
-        r.vh = (int)got.i;
         r.vx = r.vy = 0;
+        r.vw = tw;
+        r.vh = th;
     }
 
     memset(view, 0, sizeof(view));

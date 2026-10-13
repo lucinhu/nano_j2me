@@ -554,12 +554,14 @@ def build_negatives(out_dir, quiet):
     log("  neg_ihdr_h0")
     add_negative(out_dir, "neg_ihdr_h0", PNG_SIG + body, "non-zero")
 
-    # Oversized dimensions.
+    # Oversized: 4097x4097 is 16.79 million pixels, past the 16.7 million cap
+    # (a single dimension is no longer the limit - 浴火银河2完整版_7689 ships a
+    # 5456x15 sprite sheet - but the pixel count is).
     ihdr = struct.pack(">IIBBBBB", 4097, 4097, 8, 2, 0, 0, 0)
     body = chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + \
         chunk(b"IEND", b"")
     log("  neg_too_large")
-    add_negative(out_dir, "neg_too_large", PNG_SIG + body, "4096")
+    add_negative(out_dir, "neg_too_large", PNG_SIG + body, "16.7 million")
 
     # Illegal colour type / bit depth combinations.
     for name, depth, ctype in (("neg_ctype5", 8, 5), ("neg_depth3_16", 16, 3),

@@ -671,6 +671,29 @@ constructor's arguments were swapped), so every strip was one vertex long and
 no triangle was ever assembled.  `tests/test_m3g.c` had encoded the same
 mistake, which is why it passed.
 
+### Three more things between a 3D title and its first frame
+
+Driving `浴火银河2完整版_7689` (Galaxy on Fire 2) until its engine runs found
+the rest of the chain.  Each link was invisible until the one before it was
+fixed, and the run went from an IOException with `m3g=0 tris=0` to
+`m3g=461 tris=5763` with a textured planet on the screen:
+
+| what the title did | what the runtime did |
+| --- | --- |
+| `Loader.load(byte[], int)` on a `.m3g` it had unpacked itself | checked the file identifier and then threw "this runtime has no object parser yet": the `String` overload had the parser, the `byte[]` overload never got it.  Both call one `m3g_build_objects()` now |
+| `Image.createImage(bytes, 0, len)` of `data/interface/items.png`, a 5456x15 sprite sheet | refused it - "PNG image is larger than 4096x4096".  The single-dimension cap was ours, not the format's: 81,840 pixels is nothing.  The cap is now 65535 a side, with a 16.7-million-pixel bound, which is what actually costs memory |
+| `bindTarget(g)` and then `render(world)` once a frame, never calling `setViewport` | skipped every frame ("no viewport, no pixels"): the viewport fields started at 0x0 and stayed there.  The JSR says the state is "viewport : undefined (reset at bindTarget)", so binding now resets it to the whole target, and `render()` still falls back to the target's size if it is unset |
+
+The third has a footnote worth keeping: the fallback first asked the `Graphics`
+for `getWidth()`, which is a `Canvas`/`Displayable` method - the title's thread
+died on `NoSuchMethodError: Graphics.getWidth`, which is how the mistake was
+found.  A `Graphics` reports `getClipWidth()`/`getClipHeight()`, and a Graphics
+nobody has clipped is clipped to its whole target.
+
+`tests/m3gdemo/M3GDemo.java` now asks for the reset as well ("a render after
+bindTarget covers the target"), so a title that never sets a viewport cannot
+regress to a black screen: 112 checks, 0 failures.
+
 ### A float stored in an array came back as 1.06535e9
 
 The fixture's simplest check - put `1.0f` in a `float[]` and read it back -

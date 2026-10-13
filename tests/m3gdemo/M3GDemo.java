@@ -460,6 +460,40 @@ public class M3GDemo extends MIDlet {
             }
         });
 
+        /* bindTarget resets the viewport to the whole target: a title that
+         * binds and renders without ever calling setViewport still draws.
+         * 浴火银河2完整版_7689 does exactly that once a frame, and with the
+         * viewport left at 0x0 every one of its scenes was skipped. */
+        run("bindTarget leaves the viewport over the whole target", new Runnable() {
+            public void run() {
+                Image img = Image.createImage(24, 24);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 24, 24);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                VertexBuffer vb = new VertexBuffer();
+                VertexArray pos = new VertexArray(3, 3, 2);
+                pos.set(0, 3, new short[] { -4, -4, -5, 4, -4, -5, 0, 4, -5 });
+                vb.setPositions(pos, 1.0f, null);
+
+                Appearance app = new Appearance();
+                Material mat = new Material();
+                mat.setColor(Material.DIFFUSE, 0x00FFFF00);
+                app.setMaterial(mat);
+
+                g3d.bindTarget(g);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(vb, null, app, new Transform(), -1);
+                g3d.releaseTarget();
+
+                int[] px = new int[1];
+                img.getRGB(px, 0, 1, 12, 16, 1, 1);
+                check("a render after bindTarget covers the target",
+                      px[0] == 0xFFFFFF00);
+            }
+        });
+
         /* render() used to answer 0 without drawing: the modern JSR call had
          * no path at all, while render(World) went through the graphics
          * layer.  This asks for one triangle and looks for its pixels. */

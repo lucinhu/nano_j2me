@@ -96,8 +96,18 @@ static void png_mem_free(png_alloc *a, void *p)
 /* Limits visible even when PNG support is compiled out                */
 /* ------------------------------------------------------------------ */
 
-/* One dimension cap, as requested by the Image API contract. */
-#define NJ_PNG_MAX_DIM 4096
+/*
+ * The Image API lets an implementation refuse what it cannot hold, and this
+ * decoder has to bound its own arithmetic - but a single dimension is the
+ * wrong bound.  浴火银河2完整版_7689 ships data/interface/items.png as a
+ * 5456x15 indexed sprite sheet: 81,840 pixels, 327 KB decoded, and the old
+ * "4096 in every direction" rule refused it with "PNG image is larger than
+ * 4096x4096" while the phone it was written for drew it.  The dimension cap
+ * is now about arithmetic (a row must fit comfortably in nj_u4/nj_u8), and
+ * the memory bound is the pixel count, which is what actually costs.
+ */
+#define NJ_PNG_MAX_DIM 65535
+#define NJ_PNG_MAX_PIXELS ((nj_u8)4096u * 4096u)
 #define NJ_PNG_SIG_LEN 8
 
 #if NJ_ENABLE_PNG
@@ -107,8 +117,9 @@ static void png_mem_free(png_alloc *a, void *p)
 /* ------------------------------------------------------------------ */
 
 /* Worst case inflate target: 16-bit RGBA scanlines plus the filter byte. */
+/* Worst case: 8 bytes per pixel (16-bit RGBA) plus one filter byte a row. */
 #define NJ_PNG_MAX_RAW \
-    ((nj_u8)NJ_PNG_MAX_DIM * (((nj_u8)NJ_PNG_MAX_DIM * 8u) + 1u))
+    (NJ_PNG_MAX_PIXELS * 8u + (nj_u8)NJ_PNG_MAX_DIM)
 
 /* Initial inflate guess: 8x the compressed size plus a floor, clamped to the
  * exact size the image needs.  A stream that expands further (solid colour
@@ -220,7 +231,14 @@ static const char *ihdr_check(const nj_u1 *p, nj_u4 len, png_info *info)
         return "PNG width and height must be non-zero";
     }
     if (w > (nj_u4)NJ_PNG_MAX_DIM || h > (nj_u4)NJ_PNG_MAX_DIM) {
-        return "PNG image is larger than 4096x4096";
+        return "a PNG side is longer than 65535 pixels";
+    }
+    /*
+     * The bound that matters: how many pixels we would have to hold.  A wide
+     * and short sheet (5456x15) is cheap; a square one is not.
+     */
+    if ((nj_u8)w * (nj_u8)h > NJ_PNG_MAX_PIXELS) {
+        return "PNG image is larger than 16.7 million pixels";
     }
 
     switch (colour) {
@@ -437,8 +455,9 @@ static nj_u4 pass_extent(nj_u4 total, nj_u4 origin, nj_u4 step)
 /*
  * Exact number of inflated bytes the image needs: for every Adam7 pass (or
  * the single non-interlaced pass) one filter byte plus ceil(pw*bpp/8) bytes
- * per row.  All of it fits comfortably in 64 bits given the 4096 dimension
- * cap; the caller checks it against the platform limits.
+ * per row.  All of it fits comfortably in 64 bits: the pixel cap bounds
+ * width*height and the dimension cap bounds a single row; the caller checks
+ * the result against the platform limits.
  */
 static nj_u8 raw_expected(const png_info *info)
 {
@@ -953,7 +972,8 @@ nj_image *nj_image_create(int w, int h,
     nj_image *img;
     nj_size bytes;
 
-    if (w <= 0 || h <= 0 || w > NJ_PNG_MAX_DIM || h > NJ_PNG_MAX_DIM) {
+    if (w <= 0 || h <= 0 || w > NJ_PNG_MAX_DIM || h > NJ_PNG_MAX_DIM ||
+        (nj_u8)w * (nj_u8)h > NJ_PNG_MAX_PIXELS) {
         return NULL;
     }
     png_alloc_init(&mem, alloc, ud, NULL);

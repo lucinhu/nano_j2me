@@ -783,7 +783,21 @@ static void test_png_api(const char *dir)
     CHECK(nj_image_create(0, 4, NULL, NULL) == NULL, "width 0 must fail");
     CHECK(nj_image_create(4, 0, NULL, NULL) == NULL, "height 0 must fail");
     CHECK(nj_image_create(-1, 4, NULL, NULL) == NULL, "negative must fail");
-    CHECK(nj_image_create(5000, 4, NULL, NULL) == NULL, "too wide must fail");
+    /*
+     * The dimension cap is 65535 and the real bound is the pixel count: a wide
+     * and short sheet is allowed (浴火银河2完整版_7689 ships a 5456x15 PNG),
+     * while a side past 65535 or more than 16.7 million pixels is refused.
+     */
+    img = nj_image_create(5000, 4, NULL, NULL);
+    CHECK(img != NULL, "a wide short image must be allowed");
+    if (img != NULL) {
+        CHECK_EQ_INT(img->width, 5000, "wide image width");
+        nj_image_free(img, NULL, NULL);
+    }
+    CHECK(nj_image_create(65536, 1, NULL, NULL) == NULL,
+          "a side past 65535 must fail");
+    CHECK(nj_image_create(5000, 5000, NULL, NULL) == NULL,
+          "more than 16.7 million pixels must fail");
     nj_image_free(NULL, NULL, NULL);   /* must be a no-op */
 
     /* nj_image_load sniffs the container. */
