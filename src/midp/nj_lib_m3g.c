@@ -3509,6 +3509,14 @@ nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
  *
  * The buffer stays owned by the caller; nothing here frees it.
  */
+/*
+ * Build the object table for a container and hand back the Object3D array.
+ * `data` is BORROWED: one caller owns a host buffer it frees itself, the other
+ * points straight into a Java byte[], so this function must never free it (it
+ * used to, which meant a file load freed its buffer twice and a byte[] load
+ * handed an interior pointer of a Java array to the host allocator - harmless
+ * only because nj_host_free checks its own header magic and gives up).
+ */
 static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
                                    nj_value *ret)
 {
@@ -3537,17 +3545,14 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
 
     objs = (nj_m3g_object *)nj_host_alloc(vm, (nj_size)(sizeof(nj_m3g_object) * cap));
     if (!objs) {
-        nj_host_free(vm, data);
         return nj_throw(vm, "java/lang/OutOfMemoryError", "the object table");
     }
     if (nj_m3g_scan_objects(vm, (const nj_u1 *)data, len, objs, cap,
                             &nobj, &nsec, err, sizeof(err)) != NJ_OK) {
         m3g_free_refs(vm, objs, nobj);
         nj_host_free(vm, objs);
-        nj_host_free(vm, data);
         return nj_throw(vm, "java/io/IOException", err);
     }
-    nj_host_free(vm, data);
     if (nobj == 0u) {
         m3g_free_refs(vm, objs, nobj);
         nj_host_free(vm, objs);
