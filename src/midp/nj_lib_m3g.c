@@ -77,6 +77,62 @@ static nj_u4 le32(const nj_u1 *p)
            ((nj_u4)p[2] << 16) | ((nj_u4)p[3] << 24);
 }
 
+/*
+ * The colours of JSR 184: a ColorRGB is three bytes and a ColorRGBA four, in
+ * the order Red, Green, Blue (and Alpha).  The corpus settles the order of the
+ * fourth byte - every one of the 594 Materials it holds has 0xFF there, and 54
+ * of its 56 Backgrounds have it in the last byte - so it is an alpha and it
+ * comes last.  This runtime stores a colour as 0xAARRGGBB.
+ */
+static nj_u4 m3g_rgb(const nj_u1 *p)
+{
+    return 0xFF000000u | ((nj_u4)p[0] << 16) | ((nj_u4)p[1] << 8) | (nj_u4)p[2];
+}
+
+static nj_u4 m3g_rgba(const nj_u1 *p)
+{
+    return ((nj_u4)p[3] << 24) | ((nj_u4)p[0] << 16) | ((nj_u4)p[1] << 8) |
+           (nj_u4)p[2];
+}
+
+/*
+ * Where a Node's own data starts.
+ *
+ * Every Node in the corpus - Mesh, Camera, Light, Sprite, Texture2D - is
+ * laid out as the twelve byte Object3D header, a byte saying whether the
+ * forty byte component transform follows, three flag bytes, the four byte
+ * sentinel 0xFFFFFFFF and two more bytes; the type's own fields start after
+ * that, at offset 22 without a transform and 62 with one.  The readings below
+ * were each checked against the corpus by requiring them to consume the
+ * object exactly, which is how the ten byte prefix was found: reading the
+ * type's fields at 12 left ten bytes unaccounted for in all 152 Cameras and
+ * all 110 Lights.
+ */
+/*
+ * Where a Transformable's own data starts: the same twelve byte header and the
+ * same optional forty byte component transform, but no Node prefix - a
+ * Texture2D and a VertexBuffer are not Nodes and carry no flags or sentinel.
+ */
+static nj_u4 m3g_xform_data(const nj_u1 *data, nj_u4 len)
+{
+    nj_u4 base = 12u;
+
+    if (len > 12u && (data[12] & 0x01u)) {
+        base += 40u;
+    }
+    return base;
+}
+
+static nj_u4 m3g_node_data(const nj_u1 *data, nj_u4 len)
+{
+    nj_u4 base = 12u + 10u;             /* the Object3D header, then the prefix */
+
+    if (len > 12u && (data[12] & 0x01u)) {
+        base += 40u;
+    }
+    return base;
+}
+
 #define M3G_FAIL(...)                                                     \
     do {                                                                  \
         if (err && errcap) {                                              \
@@ -131,6 +187,65 @@ static nj_u4 le32(const nj_u1 *p)
 #define NJ_M3G_T_VERTEX_BUFFER   21u
 #define NJ_M3G_T_TRIANGLE_STRIP_ARRAY 11u
 #define NJ_M3G_T_WORLD           22u
+#define NJ_M3G_T_APPEARANCE        3u
+#define NJ_M3G_T_BACKGROUND        4u
+#define NJ_M3G_T_CAMERA            5u
+#define NJ_M3G_T_COMPOSITING_MODE  6u
+#define NJ_M3G_T_FOG               7u
+#define NJ_M3G_T_LIGHT            12u
+#define NJ_M3G_T_MATERIAL         13u
+#define NJ_M3G_T_TEXTURE2D        17u
+#define NJ_M3G_T_SPRITE           18u
+
+/*
+ * The object types that are Nodes, and therefore start with the Node header:
+ * an enable byte whose bit 0 says a transform follows.  Everything else in the
+ * format begins with its own fields at byte 12, and reading a transform out of
+ * one of those would be reading its data.
+ */
+static int m3g_type_is_node(nj_u1 type)
+{
+    return type == 5u  || type == 9u  || type == 12u || type == 14u ||
+           type == 15u || type == 16u || type == 18u || type == 22u;
+}
+
+static float bits2f(nj_s4 bits);
+
+/*
+ * A Node's transform, as the file stores it: translation (3 floats), scale
+ * (3 floats) and orientation (angle in radians followed by the axis), which
+ * compose as T * R * S.  The runtime keeps a Java matrix, so the result is
+ * row-major with the translation in the last column - the layout
+ * setTranslation() writes and jr_setup() multiplies.
+ */
+static void m3g_node_matrix(const nj_u1 *d, float *m)
+{
+    float tx, ty, tz, sx, sy, sz, ang, ax, ay, az;
+    float len, sn, cs, om, r[9];
+    int k;
+
+    tx = bits2f((nj_s4)le32(d));      ty = bits2f((nj_s4)le32(d + 4u));
+    tz = bits2f((nj_s4)le32(d + 8u)); sx = bits2f((nj_s4)le32(d + 12u));
+    sy = bits2f((nj_s4)le32(d + 16u)); sz = bits2f((nj_s4)le32(d + 20u));
+    ang = bits2f((nj_s4)le32(d + 24u));
+    ax = bits2f((nj_s4)le32(d + 28u)); ay = bits2f((nj_s4)le32(d + 32u));
+    az = bits2f((nj_s4)le32(d + 36u));
+    len = sqrtf(ax * ax + ay * ay + az * az);
+    if (!(len > 0.0f)) { ax = 0.0f; ay = 0.0f; az = 1.0f; len = 1.0f; }
+    ax /= len; ay /= len; az /= len;
+    sn = sinf(ang); cs = cosf(ang); om = 1.0f - cs;
+    r[0] = om * ax * ax + cs;      r[1] = om * ax * ay - sn * az;
+    r[2] = om * ax * az + sn * ay; r[3] = om * ax * ay + sn * az;
+    r[4] = om * ay * ay + cs;      r[5] = om * ay * az - sn * ax;
+    r[6] = om * ax * az - sn * ay; r[7] = om * ay * az + sn * ax;
+    r[8] = om * az * az + cs;
+    for (k = 0; k < 4; k++) { m[k] = 0.0f; m[4 + k] = 0.0f; m[8 + k] = 0.0f; }
+    m[0] = r[0] * sx; m[1] = r[1] * sy; m[2] = r[2] * sz;
+    m[4] = r[3] * sx; m[5] = r[4] * sy; m[6] = r[5] * sz;
+    m[8] = r[6] * sx; m[9] = r[7] * sy; m[10] = r[8] * sz;
+    m[3] = tx; m[7] = ty; m[11] = tz;
+    m[12] = m[13] = m[14] = 0.0f; m[15] = 1.0f;
+}
 #define NJ_M3G_SECTION 9u
 #define NJ_M3G_SECTION_MIN 13u   /* nine byte header + four byte Adler32 */
 
@@ -222,6 +337,18 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
                  (unsigned)type, (unsigned long)len);
     }
     out->user_id = le32(data);
+    /*
+     * A Node's transform sits at byte 16 when bit 0 of the enable byte says so
+     * (byte 12 is the enable byte, 13-15 the alpha/picking/rendering flags,
+     * then the transform).  It is remembered as a pointer into the section
+     * buffer - the same shape a VertexArray's bytes are kept in - and the
+     * object builder turns it into the Java matrix.
+     */
+    if (m3g_type_is_node(type) && len >= NJ_M3G_OBJECT_HEADER + 44u &&
+        (data[12] & 0x01u)) {
+        out->data = data + NJ_M3G_OBJECT_HEADER + 4u;
+        out->data_len = 40u;
+    }
 
     switch (type) {
     case NJ_M3G_T_POLYGON_MODE:      /* three enumeration bytes */
@@ -490,6 +617,159 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
                      (unsigned long)out->c);
         }
         break;
+    /*
+     * The types below are what turns a white silhouette into the picture the
+     * title drew: an Appearance names the material, the polygon mode, the
+     * compositing mode and the textures; a Material holds the colours; a
+     * Background holds the colour the viewport is cleared to.  Each reading is
+     * accepted only when it consumes the object exactly - the same rule the
+     * World and the Mesh were read under - because a layout that merely fits
+     * is a layout that draws the wrong picture rather than none.
+     */
+    case NJ_M3G_T_APPEARANCE:        /* layer, then the references */
+        if (len < 13u || (len - 13u) % 4u != 0u || (len - 13u) / 4u > 6u) {
+            out->decoded = 0u;
+            return NJ_OK;
+        }
+        out->a = data[12];
+        {
+            nj_u4 k = (len - 13u) / 4u;
+            nj_u4 j;
+
+            /* compositingMode, fog, polygonMode, material, textures[] */
+            for (j = 0u; j < k; j++) {
+                out->refs[j] = le32(data + 13u + 4u * j);
+            }
+            out->nrefs = k;
+        }
+        break;
+    case NJ_M3G_T_BACKGROUND:
+        /* 11.5: the colour, the image, the two image modes, the four crop
+           numbers and the two clear flags.  Two corpus Backgrounds carry four
+           bytes more, so the rule is "at least", and the fields read are the
+           ones this runtime has somewhere to put. */
+        if (len < 40u) {
+            out->decoded = 0u;
+            return NJ_OK;
+        }
+        out->a = m3g_rgba(data + 12);
+        out->refs[0] = le32(data + 16);          /* backgroundImage */
+        out->nrefs = 1u;
+        out->b = (nj_u4)data[20] | ((nj_u4)data[21] << 8) |
+                 ((nj_u4)data[38] << 16) | ((nj_u4)data[39] << 17);
+        break;
+    case NJ_M3G_T_CAMERA: {
+        nj_u4 base = m3g_node_data(data, len);
+
+        /*
+         * 11.6: a Byte projectionType and then either a 4x4 matrix (GENERIC)
+         * or fovy, aspectRatio, near, far.  The reading is chosen by length,
+         * not by the type byte: the corpus writes 49 and 50 there, neither of
+         * which is the 0 the specification names, while all 152 of its Cameras
+         * consume their object exactly under one of these two shapes.
+         */
+        if (len == base + 17u) {
+            out->a = 1u;                         /* perspective */
+            out->f[0] = bits2f((nj_s4)le32(data + base + 1u));   /* fovy */
+            out->f[1] = bits2f((nj_s4)le32(data + base + 5u));   /* aspect */
+            out->f[2] = bits2f((nj_s4)le32(data + base + 9u));   /* near */
+            out->f[3] = bits2f((nj_s4)le32(data + base + 13u));  /* far */
+        } else if (len == base + 65u) {
+            out->a = 0u;                         /* a handed-over matrix */
+            out->data = data + base + 1u;
+            out->data_len = 64u;
+        } else {
+            out->decoded = 0u;      /* a shape this runtime does not read */
+            return NJ_OK;
+        }
+        break;
+    }
+    case NJ_M3G_T_COMPOSITING_MODE:
+        if (len != 26u) {
+            out->decoded = 0u;
+            return NJ_OK;
+        }
+        out->a = (nj_u4)(data[12] ? 1u : 0u) | (nj_u4)(data[13] ? 2u : 0u) |
+                 (nj_u4)(data[14] ? 4u : 0u) | (nj_u4)(data[15] ? 8u : 0u) |
+                 ((nj_u4)data[16] << 8) | ((nj_u4)data[17] << 16);
+        out->f[0] = bits2f((nj_s4)le32(data + 18));   /* depthOffsetFactor */
+        out->f[1] = bits2f((nj_s4)le32(data + 22));   /* depthOffsetUnits */
+        break;
+    case NJ_M3G_T_FOG:
+        if (len != 20u && len != 24u) {
+            out->decoded = 0u;
+            return NJ_OK;
+        }
+        out->a = m3g_rgb(data + 12);
+        out->b = data[15];                       /* mode */
+        out->f[0] = bits2f((nj_s4)le32(data + 16));
+        out->f[1] = (len == 24u) ? bits2f((nj_s4)le32(data + 20)) : 0.0f;
+        break;
+    case NJ_M3G_T_LIGHT: {
+        nj_u4 base = m3g_node_data(data, len);
+
+        if (len != base + 28u) {
+            out->decoded = 0u;
+            return NJ_OK;
+        }
+        out->f[0] = bits2f((nj_s4)le32(data + base));        /* attenuation */
+        out->f[1] = bits2f((nj_s4)le32(data + base + 4u));
+        out->f[2] = bits2f((nj_s4)le32(data + base + 8u));
+        out->a = m3g_rgb(data + base + 12u);                 /* color */
+        out->b = data[base + 15u];                           /* mode */
+        out->f[3] = bits2f((nj_s4)le32(data + base + 16u));  /* intensity */
+        out->f[4] = bits2f((nj_s4)le32(data + base + 20u));  /* spotAngle */
+        out->f[5] = bits2f((nj_s4)le32(data + base + 24u));  /* spotExponent */
+        break;
+    }
+    case NJ_M3G_T_MATERIAL:
+        if (len != 30u) {
+            out->decoded = 0u;
+            return NJ_OK;
+        }
+        out->a = m3g_rgb(data + 12);             /* ambient */
+        out->b = m3g_rgba(data + 15);            /* diffuse */
+        out->c = m3g_rgb(data + 19);             /* emissive */
+        out->d = m3g_rgb(data + 22);             /* specular */
+        out->f[0] = bits2f((nj_s4)le32(data + 25));   /* shininess */
+        out->f[1] = (data[29] != 0u) ? 1.0f : 0.0f;   /* vertexColorTracking */
+        break;
+    case NJ_M3G_T_TEXTURE2D: {
+        nj_u4 base = m3g_xform_data(data, len);
+
+        /*
+         * The corpus holds this type in three shapes: 932 of 26 bytes, 182 of
+         * 66 (the same object with a component transform) and 10 of 90, whose
+         * extra 24 bytes are not accounted for.  The first two are read; the
+         * third is left undecoded, because a reading that does not consume the
+         * object exactly is a reading that would put a texture in the wrong
+         * place, and an untextured surface still draws.
+         */
+        if (len != base + 14u) {
+            out->decoded = 0u;
+            return NJ_OK;
+        }
+        out->refs[0] = le32(data + base);        /* image */
+        out->nrefs = 1u;
+        out->a = m3g_rgb(data + base + 4u);      /* blendColor */
+        out->b = (nj_u4)data[base + 7u] | ((nj_u4)data[base + 8u] << 8) |
+                 ((nj_u4)data[base + 9u] << 16) | ((nj_u4)data[base + 10u] << 24);
+        out->c = (nj_u4)data[base + 11u];
+        break;
+    }
+    case NJ_M3G_T_SPRITE: {
+        nj_u4 base = m3g_node_data(data, len);
+
+        if (len != base + 25u) {
+            out->decoded = 0u;
+            return NJ_OK;
+        }
+        out->refs[0] = le32(data + base);        /* image */
+        out->refs[1] = le32(data + base + 4u);   /* appearance */
+        out->nrefs = 2u;
+        out->a = data[base + 8u];                /* isScaled */
+        break;
+    }
     default:
         out->decoded = 0u;
         return NJ_OK;
@@ -2451,30 +2731,6 @@ NJFN(m3g_clear)
     return NJ_OK;
 }
 
-/*
- * The two halves of a rasteriser, kept apart so each can be checked on its
- * own: one turns a vertex into a pixel, the other fills the triangle those
- * three pixels make.  Neither knows anything about the scene graph yet.
- */
-/*
- * Java's matrices and the file loader's are transposes of each other.  The
- * Java API (Transform, setCamera's matrix, a generic Camera projection)
- * stores row-major with the translation in the last COLUMN; nj_m3g_project()
- * and m3g_cam_projection() read row-major with the translation in the last
- * ROW, which is what the M3G file format produces.  This turns one into the
- * other, so a world rendered from a file can still be looked at through a
- * camera whose Transform came from Java.
- */
-static void mat_from_java(float out[NJ_MF], const float *m)
-{
-    int r, c;
-
-    for (r = 0; r < 4; r++) {
-        for (c = 0; c < 4; c++) {
-            out[c * 4 + r] = m[r * 4 + c];
-        }
-    }
-}
 
 void nj_m3g_project(const float m[16], const float v[3], int w, int h,
                     float out[2])
@@ -2561,18 +2817,31 @@ nj_status nj_m3g_load_geometry(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
     return NJ_OK;
 }
 
-static void collect_walk(nj_vm *vm, nj_ref o, nj_ref *out, nj_u4 cap,
-                         nj_u4 *n, int depth)
+static void collect_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
+                         const float *parent, nj_u4 cap, nj_u4 *n, int depth)
 {
     const char *cn;
-    nj_ref kids;
+    nj_ref kids, m;
     nj_value v;
     nj_u4 len, i;
+    float model[16];
 
     if (!o || depth > 32) {          /* a graph a file made cannot be a loop */
         return;
     }
     cn = nj_ref_class_name(o);
+    /*
+     * Every object this walk visits is a Transformable (a Mesh is a Node, a
+     * Group and a World are Groups), so its own matrix may be read - and it
+     * must be read only for those classes: nj_field_lookup() finds a field by
+     * name in any class, so asking a Camera for "_nj_m" would read whatever
+     * sits at that offset in it.
+     */
+    memcpy(model, parent, sizeof(model));
+    m = nj_rget(vm, o, nj_field_lookup(vm, NJ_C_XABLE, "_nj_m", "[F", 0));
+    if (m && nj_array_length(m) >= 16) {
+        mat_mul(parent, (const float *)nj_array_data(m), model);
+    }
     /*
      * Which class the object is decides what may be read out of it.  A
      * built-in class has one super, so MorphingMesh and SkinnedMesh are
@@ -2587,7 +2856,10 @@ static void collect_walk(nj_vm *vm, nj_ref o, nj_ref *out, nj_u4 cap,
     if (cn != NULL && (strcmp(cn, NJ_C_MESH) == 0 ||
                        strcmp(cn, NJ_C_MORPH) == 0 ||
                        strcmp(cn, NJ_C_SKIN) == 0)) {
-        if (*n < cap) { out[*n] = o; }
+        if (*n < cap) {
+            out[*n] = o;
+            if (mats) { memcpy(mats + (*n) * 16u, model, sizeof(model)); }
+        }
         (*n)++;
         return;
     }
@@ -2611,18 +2883,36 @@ static void collect_walk(nj_vm *vm, nj_ref o, nj_ref *out, nj_u4 cap,
                     "(I)Ljava/lang/Object;", &a, &r) != NJ_OK) {
             continue;
         }
-        collect_walk(vm, r.r, out, cap, n, depth + 1);
+        collect_walk(vm, r.r, out, mats, model, cap, n, depth + 1);
     }
 }
 
+nj_u4 nj_m3g_collect_meshes_m(nj_vm *vm, nj_ref root, nj_ref *out, float *mats,
+                              nj_u4 cap);
+
 nj_u4 nj_m3g_collect_meshes(nj_vm *vm, nj_ref root, nj_ref *out, nj_u4 cap)
 {
+    return nj_m3g_collect_meshes_m(vm, root, out, NULL, cap);
+}
+
+/*
+ * The same walk, and for each mesh the matrix that takes its vertices to
+ * world space: the product of every Group transform above it.  A renderer
+ * needs that matrix, and recomputing it per mesh would mean walking the
+ * graph once per mesh.
+ */
+nj_u4 nj_m3g_collect_meshes_m(nj_vm *vm, nj_ref root, nj_ref *out, float *mats,
+                              nj_u4 cap)
+{
     nj_u4 n = 0u;
+    float id[16];
 
     if (!vm || !root) {
         return 0u;
     }
-    collect_walk(vm, root, out, cap, &n, 0);
+    memset(id, 0, sizeof(id));
+    id[0] = id[5] = id[10] = id[15] = 1.0f;
+    collect_walk(vm, root, out, mats, id, cap, &n, 0);
     return n;
 }
 
@@ -2806,70 +3096,23 @@ nj_u4 nj_m3g_raster_mesh(nj_vm *vm, struct nj_gfx *g, nj_ref mesh,
     return raster_mesh_with(vm, mesh, m, w, h, argb, emit_to_gfx, g);
 }
 
+
 /*
- * The camera holds the angles the title asked for, not a matrix.  Turning
- * them into one here keeps Camera a data holder, the way JSR 184 describes
- * it.  Column-major, matching nj_m3g_project's own convention.
+ * The World path draws through the same software pipeline the immediate
+ * render(VertexBuffer, IndexBuffer, Appearance, Transform, int) uses, so it
+ * lives with that pipeline further down this file and is declared here.
  */
-static int m3g_cam_projection(nj_vm *vm, nj_ref cam, float vx, float vw, float out[16])
-{
-    float fovy, aspect, znear, zfar, f;
-    int i;
-
-    if (!cam) { return 0; }
-    {
-        nj_ref g = nj_rget(vm, cam, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_generic",
-                                                    "[F", 0));
-        if (g && g->length >= (nj_s4)NJ_MF) {
-            /* setGeneric's float[] is Java's layout; transpose it like the
-               camera's own matrix above. */
-            mat_from_java(out, (const float *)g->u.bytes);
-            if (vw > 0.0f) { out[12] = 2.0f * vx / vw; }
-            return 1;
-        }
-    }
-    fovy  = bits2f(nj_iget(vm, cam, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_fovy", "I", 0)));
-    aspect= bits2f(nj_iget(vm, cam, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_aspect", "I", 0)));
-    znear = bits2f(nj_iget(vm, cam, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_near", "I", 0)));
-    zfar  = bits2f(nj_iget(vm, cam, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_far", "I", 0)));
-    if (!(fovy > 0.0f) || !(aspect > 0.0f) || !(zfar > znear)) {
-        return 0;                   /* no usable projection: draw nothing */
-    }
-    for (i = 0; i < 16; i++) { out[i] = 0.0f; }
-    f = 1.0f / (float)tan((double)fovy * 0.5);
-    out[0]  = f / aspect;
-    out[5]  = f;
-    out[10] = (zfar + znear) / (znear - zfar);
-    out[11] = -1.0f;
-    out[14] = 2.0f * zfar * znear / (znear - zfar);
-    if (vw > 0.0f) { out[12] = 2.0f * vx / vw; }   /* viewport origin */
-    return 1;
-}
-
-static void m3g_mat_mul(float out[16], const float a[16], const float b[16])
-{
-    float t[16];
-    int r, c, k;
-
-    for (c = 0; c < 4; c++) {
-        for (r = 0; r < 4; r++) {
-            float sum = 0.0f;
-            for (k = 0; k < 4; k++) { sum += a[k * 4 + r] * b[c * 4 + k]; }
-            t[c * 4 + r] = sum;
-        }
-    }
-    memcpy(out, t, sizeof(t));
-}
+static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
+                            nj_ref *meshes, float *mats, nj_u4 n);
 
 NJFN(m3g_render)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref root = NJ_ARG_REF(args, 0);
-    nj_ref target, cam, camarr, meshes[64];
-    nj_u4 n, i, drawn = 0u;
-    float view[16], proj[16], mvp[16];
-    nj_s4 vx, vy, vw, vh;
-    m3g_java_target jt;
+    nj_ref target, meshes[64];
+    nj_u4 n;
+    float mats[64 * 16];
+    nj_s4 vw, vh;
 
     vm->m3g_renders++;
 
@@ -2878,90 +3121,54 @@ NJFN(m3g_render)
     if (!target || !nj_heap_owns(vm, target)) {
         return NJ_OK;               /* nothing was bound to draw into */
     }
-    cam = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_camera",
-                                            "L" NJ_C_CAMERA ";", 0));
-    if (!cam) {
-        /*
-         * JSR 184 gives a title two ways to say which camera draws a World:
-         * Graphics3D.setCamera() and World.setActiveCamera().  Only the first
-         * was read, and the corpus uses the second - the rally title calls
-         * setPerspective() on its camera and setActiveCamera() on the World
-         * and never calls Graphics3D.setCamera() at all.  With no camera the
-         * projection is empty, so the render returned before it drew a single
-         * triangle: this is why the 3D area was black.
-         */
-        cam = nj_rget(vm, root, nj_field_lookup(vm, NJ_C_WORLD, "_nj_cam",
-                                                "L" NJ_C_CAMERA ";", 0));
-    }
-    vx = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vx", "I", 0));
-    vy = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vy", "I", 0));
+    /*
+     * The viewport is checked here rather than used: a render with no target
+     * to draw into, or one whose target cannot be reached, draws nothing at
+     * all, and that answer has to come before the walk.  The camera, the
+     * projection and the matrices live in jr_setup(), which every mesh goes
+     * through - including the World's active camera, which is the way the
+     * corpus names its camera (World.setActiveCamera(), not setCamera()).
+     */
     vw = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vw", "I", 0));
     vh = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vh", "I", 0));
     if (vw <= 0 || vh <= 0) {
+        int tw = 0, th = 0;
+
         /* No setViewport: the whole target, which is what bindTarget resets
            the viewport to. */
-        int tw = 0, th = 0;
         if (m3g_target_graphics(vm, target, &tw, &th) == 0 || tw <= 0 || th <= 0) {
             return NJ_OK;           /* no usable target, no pixels */
         }
-        vx = vy = 0;
-        vw = tw;
-        vh = th;
-    } else {
-        int tw = 0, th = 0;
-        nj_ref g = m3g_target_graphics(vm, target, &tw, &th);
-        if (g != 0) {
-            target = g;             /* an Image target draws through its Graphics */
+    }
+    /*
+     * A World may carry its own Background, and a title that draws a World
+     * without calling Graphics3D.clear() expects the sky to be cleared to it.
+     * The clear is the same native the title would have called, so there is
+     * one implementation of "fill the viewport with the background colour"
+     * and the World path is not a second one.
+     */
+    {
+        nj_ref bg = nj_rget(vm, root, m3g_fof(vm, NJ_C_WORLD, "_nj_bg",
+                                              "L" NJ_C_BG ";"));
+
+        if (bg) {
+            nj_value ca[1], cn;
+
+            ca[0].r = bg;
+            (void)nj_call(vm, self, NJ_C_G3D, "clear", "(L" NJ_C_BG ";)V", ca, &cn);
         }
     }
 
-    for (i = 0u; i < 16u; i++) { view[i] = 0.0f; }
-    view[0] = view[5] = view[10] = view[15] = 1.0f;
-    camarr = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_cam_m", "[F", 0));
-    if (camarr && nj_array_length(camarr) >= 16) {
-        /* setCamera's Transform is a Java matrix that places the camera, so
-           the view is its inverse - and then transposed into the convention
-           nj_m3g_project and m3g_mat_mul work in. */
-        float camm[NJ_MF];
-
-        memcpy(camm, nj_array_data(camarr), sizeof(camm));
-        mat_invert(camm);
-        mat_from_java(view, camm);
-    } else if (cam) {
-        /*
-         * A World's active camera is a node, so the view is the inverse of
-         * the node's own transform (_nj_m, which translate()/setTranslation()
-         * keep up to date) rather than of a matrix handed to setCamera().
-         */
-        nj_ref cm = nj_rget(vm, cam, nj_field_lookup(vm, NJ_C_XABLE, "_nj_m",
-                                                     "[F", 0));
-
-        if (cm && nj_array_length(cm) >= 16) {
-            float camm[NJ_MF];
-
-            memcpy(camm, nj_array_data(cm), sizeof(camm));
-            mat_invert(camm);
-            mat_from_java(view, camm);
-        }
-    }
-    if (!m3g_cam_projection(vm, cam, (float)vx, (float)vw, proj)) {
-        return NJ_OK;               /* a camera with no projection sees nothing */
-    }
-    m3g_mat_mul(mvp, view, proj);
-
-    n = nj_m3g_collect_meshes(vm, root, meshes, 64u);
-    jt.vm = vm;
-    jt.g = target;
-    /* The viewport is a rectangle in the target, not just a size: a title that
-       puts it at (x, y) means the projection lands there.  The y coordinate
-       used to be read and then dropped on the floor (-Wunused-but-set). */
-    jt.ox = vx;
-    jt.oy = vy;
-    for (i = 0u; i < n && i < 64u; i++) {
-        drawn += raster_mesh_with(vm, meshes[i], mvp, (int)vw, (int)vh,
-                                  0xFFFFFFFFu, emit_to_java, &jt);
-    }
-    (void)drawn;               /* counted by the caller's pixels, not here */
+    /*
+     * Each mesh draws through the same pipeline the immediate
+     * render(VertexBuffer, IndexBuffer, Appearance, Transform, int) uses:
+     * the model matrix from the walk, the mesh's vertex buffer, its index
+     * buffer and its first submesh appearance.  That is what gives a World
+     * its materials, textures, lighting, fog, culling and depth - before
+     * this, a World was drawn as flat white triangles with no transform.
+     */
+    n = nj_m3g_collect_meshes_m(vm, root, meshes, mats, 64u);
+    (void)m3g_world_draw(vm, self, root, meshes, mats, n);
     return NJ_OK;
 }
 
@@ -4001,6 +4208,175 @@ nj_status nj_m3g_link_meshes(nj_vm *vm, const nj_m3g_object *objs,
  * gone.  The floats travel as bit patterns in the reference slots from
  * NJ_M3G_MAX_REFS - 4 up, which the roots pass never looks at.
  */
+/*
+ * Move the scalars and the references a decoded object carries into the Java
+ * object that stands for it.
+ *
+ * The loader decodes a whole file before any Java object exists, so the two
+ * halves meet here.  Without this step an Appearance is an empty box: the
+ * rasteriser finds no material (and paints everything white), no polygon mode
+ * (and culls by its own default) and no texture.  References go through
+ * m3g_resolve_ref() so they follow the file's own numbering.
+ */
+nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
+                           nj_ref arr)
+{
+    int mode = m3g_ref_mode_of(vm, objs, nobj, arr);
+    nj_u4 i;
+
+    if (mode < 0) {
+        mode = M3G_REF_TWO;
+    }
+    for (i = 0u; i < nobj; i++) {
+        const nj_m3g_fields *f = &objs[i].fields;
+        nj_ref o = nj_array_get_ref(arr, i + 1u);
+
+        if (f->decoded == 0u || !o) {
+            continue;
+        }
+        switch (objs[i].type) {
+        case NJ_M3G_T_APPEARANCE: {
+            static const char *names[6] = { "_nj_cm", "_nj_fog", "_nj_pm",
+                                            "_nj_mat", "_nj_tex0", "_nj_tex1" };
+            static const char *descs[6] = {
+                "L" NJ_C_COMP ";", "L" NJ_C_FOG ";", "L" NJ_C_POLY ";",
+                "L" NJ_C_MAT ";", "L" NJ_C_TEX2D ";", "L" NJ_C_TEX2D ";"
+            };
+            nj_u4 k;
+
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_APPEAR, "_nj_layer", "I"),
+                    (nj_s4)f->a);
+            for (k = 0u; k < f->nrefs && k < 6u; k++) {
+                nj_ref r = m3g_resolve_ref(vm, arr, nobj, o, f->refs[k],
+                                           mode);
+
+                if (r) {
+                    nj_rput(vm, o, m3g_fof(vm, NJ_C_APPEAR, names[k],
+                                           descs[k]), r);
+                }
+            }
+            break;
+        }
+        case NJ_M3G_T_MATERIAL:
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_MAT, "_nj_c_amb", "I"), (nj_s4)f->a);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_MAT, "_nj_c_dif", "I"), (nj_s4)f->b);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_MAT, "_nj_c_emi", "I"), (nj_s4)f->c);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_MAT, "_nj_c_spec", "I"), (nj_s4)f->d);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_MAT, "_nj_shininess", "F"),
+                    (nj_s4)f2bits(f->f[0]));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_MAT, "_nj_vcolor", "Z"),
+                    (f->f[1] != 0.0f) ? 1 : 0);
+            break;
+        case NJ_M3G_T_COMPOSITING_MODE:
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_blend", "I"),
+                    (nj_s4)((f->a >> 8) & 0xFFu));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_dtest", "Z"),
+                    (nj_s4)(f->a & 1u));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_dwrite", "Z"),
+                    (nj_s4)((f->a >> 1) & 1u));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_cwrite", "Z"),
+                    (nj_s4)((f->a >> 2) & 1u));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_awrite", "Z"),
+                    (nj_s4)((f->a >> 3) & 1u));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_athresh", "I"),
+                    (nj_s4)((f->a >> 16) & 0xFFu));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_dofact", "F"),
+                    (nj_s4)f2bits(f->f[0]));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_dounits", "F"),
+                    (nj_s4)f2bits(f->f[1]));
+            break;
+        case NJ_M3G_T_FOG:
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_FOG, "_nj_mode", "I"), (nj_s4)f->b);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_FOG, "_nj_color", "I"), (nj_s4)f->a);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_FOG, "_nj_density", "F"),
+                    (nj_s4)f2bits(f->f[0]));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_FOG, "_nj_near", "F"),
+                    (nj_s4)f2bits(f->f[0]));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_FOG, "_nj_far", "F"),
+                    (nj_s4)f2bits(f->f[1]));
+            break;
+        case NJ_M3G_T_CAMERA:
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_CAMERA, "_nj_is_persp", "Z"),
+                    (f->a == 1u) ? 1 : 0);
+            if (f->a == 0u) {
+                /* A generic projection: the file's own 4x4 matrix, sixteen
+                   floats, handed over as it stands. */
+                nj_ref g = nj_rget(vm, o, m3g_fof(vm, NJ_C_CAMERA, "_nj_generic",
+                                                  "[F"));
+
+                if (g && nj_array_length(g) >= 16u && f->data_len >= 64u) {
+                    const float *src = (const float *)(const void *)f->data;
+                    float *dst = (float *)nj_array_data(g);
+                    nj_u4 k;
+
+                    for (k = 0u; k < 16u; k++) {
+                        dst[k] = bits2f((nj_s4)le32(f->data + 4u * k));
+                    }
+                    (void)src;
+                }
+            } else {
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_CAMERA, "_nj_fovy", "I"),
+                        (nj_s4)f2bits(f->f[0]));
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_CAMERA, "_nj_aspect", "I"),
+                        (nj_s4)f2bits(f->f[1]));
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_CAMERA, "_nj_near", "I"),
+                        (nj_s4)f2bits(f->f[2]));
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_CAMERA, "_nj_far", "I"),
+                        (nj_s4)f2bits(f->f[3]));
+            }
+            break;
+        case NJ_M3G_T_LIGHT:
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_LIGHT, "_nj_mode", "I"), (nj_s4)f->b);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_LIGHT, "_nj_color", "I"), (nj_s4)f->a);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_LIGHT, "_nj_intensity", "F"),
+                    (nj_s4)f2bits(f->f[3]));
+            break;
+        case NJ_M3G_T_BACKGROUND: {
+            nj_ref img = m3g_resolve_ref(vm, arr, nobj, o, f->refs[0], mode);
+
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_BG, "_nj_color", "I"), (nj_s4)f->a);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_BG, "_nj_cclear", "Z"),
+                    (nj_s4)((f->b >> 17) & 1u));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_BG, "_nj_dclear", "Z"),
+                    (nj_s4)((f->b >> 16) & 1u));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_BG, "_nj_immode", "I"),
+                    (nj_s4)(f->b & 0xFFu));
+            if (img) {
+                nj_rput(vm, o, m3g_fof(vm, NJ_C_BG, "_nj_img",
+                                       "L" NJ_C_IMAGE2D ";"), img);
+            }
+            break;
+        }
+        case NJ_M3G_T_TEXTURE2D: {
+            nj_ref img = m3g_resolve_ref(vm, arr, nobj, o, f->refs[0], mode);
+
+            if (img) {
+                nj_rput(vm, o, m3g_fof(vm, NJ_C_TEX2D, "_nj_img",
+                                       "L" NJ_C_IMAGE2D ";"), img);
+            }
+            break;
+        }
+        case NJ_M3G_T_SPRITE: {
+            nj_ref img = m3g_resolve_ref(vm, arr, nobj, o, f->refs[0], mode);
+            nj_ref app = m3g_resolve_ref(vm, arr, nobj, o, f->refs[1], mode);
+
+            if (img) {
+                nj_rput(vm, o, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_img",
+                                       "L" NJ_C_IMAGE2D ";"), img);
+            }
+            if (app) {
+                nj_rput(vm, o, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_app",
+                                       "L" NJ_C_APPEAR ";"), app);
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    return NJ_OK;
+}
+
 static nj_status m3g_link_geometry(nj_vm *vm, const nj_m3g_object *objs,
                                    nj_u4 nobj, nj_ref arr)
 {
@@ -4181,6 +4557,23 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
             o = nj_root(vm, o);
             nj_iput(vm, o, nj_field_lookup(vm, NJ_C_O3D, "_nj_userID", "I", 0),
                     (nj_s4)objs[i].fields.user_id);
+            if (objs[i].fields.data_len == 40u && objs[i].fields.data) {
+                /*
+                 * The transform the file gives this Node.  Without it every
+                 * object of a loaded scene sits at the origin, which is what a
+                 * World drawn with no model matrices looks like - the camera
+                 * and the track end up in the same place.
+                 */
+                nj_ref m = nj_rget(vm, o, nj_field_lookup(vm, NJ_C_XABLE, "_nj_m",
+                                                          "[F", 0));
+
+                if (m && nj_array_length(m) >= 16) {
+                    float xf[16];
+
+                    m3g_node_matrix(objs[i].fields.data, xf);
+                    memcpy(nj_array_data(m), xf, sizeof(xf));
+                }
+            }
             if (objs[i].type == NJ_M3G_T_WORLD) {
                 nj_rput(vm, o, nj_field_lookup(vm, NJ_C_WORLD, "_nj_all",
                                                "[L" NJ_C_O3D ";", 0), arr);
@@ -4198,6 +4591,11 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
         m3g_free_refs(vm, objs, nobj);
         nj_host_free(vm, objs);
         return NJ_ERR;
+    }
+    if (nj_m3g_link_misc(vm, objs, nobj, arr) != NJ_OK) {
+        m3g_free_refs(vm, (nj_m3g_object *)objs, nobj);
+        nj_host_free(vm, (void *)objs);
+        return NJ_ERR_NOMEM;
     }
     if (nj_m3g_link_groups(vm, objs, nobj, arr) != NJ_OK) {
         m3g_free_refs(vm, objs, nobj);
@@ -7646,6 +8044,11 @@ typedef struct {
     m3g_java_target jt;
     nj_u4 dif;
     nj_u4 drawn;
+    const nj_s4 *idx;             /* the index buffer, when the mesh has one */
+    nj_s4 icount;
+    const nj_s4 *lens;            /* a strip array's strip lengths */
+    nj_s4 nstrip;
+    nj_s4 ifirst;
     m3g_sw sw;                    /* the target surface, when reachable */
     const nj_s2 *tpos;            /* texture coordinates, unit 0 */
     nj_s4 tcomp, tfirst, tcount, ttype;
@@ -8170,8 +8573,20 @@ static void jr_list(m3g_jr *r, const nj_s4 *idx, nj_s4 count, nj_s4 first)
     }
 }
 
-static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
-                           nj_ref app, nj_ref xf)
+/*
+ * Everything the software pipeline needs, gathered from the Graphics3D (the
+ * target, the viewport, the camera and the lights), the VertexBuffer, the
+ * index buffer, the Appearance and the model matrix.  The World path and the
+ * immediate render(VertexBuffer, IndexBuffer, Appearance, Transform, int)
+ * path differ only in where those come from, so both build this same state
+ * and then hand the triangles to jr_draw().
+ *
+ * A 1 means the state is complete and the caller may draw.  A 0 means the
+ * scene cannot be drawn at all - no target, no camera, no positions - which
+ * the JSR answers with a render that draws nothing rather than an exception.
+ */
+static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
+                    nj_ref world, const float *model_in, m3g_jr *out)
 {
     nj_ref target, g, cam, arr, d, mat;
     const char *cn;
@@ -8182,26 +8597,24 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
     nj_surface sc;
     m3g_jr r;
 
-    if (!vm || !self || !vb) {
-        return 0u;
-    }
+    memset(&r, 0, sizeof(r));
     target = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_target",
                                        "Ljava/lang/Object;"));
     if (!target || !nj_heap_owns(vm, target)) {
-        return 0u;                            /* nothing bound, nothing drawn */
+        return 0;                            /* nothing bound, nothing drawn */
     }
     g = target;
     cn = nj_ref_class_name(g);
     if (!cn || strcmp(cn, "javax/microedition/lcdui/Graphics") != 0) {
         nj_value got;
         if (!cn || strcmp(cn, "javax/microedition/lcdui/Image") != 0) {
-            return 0u;                        /* neither a Graphics nor an Image */
+            return 0;                        /* neither a Graphics nor an Image */
         }
         got.r = 0;
         if (nj_call(vm, g, "javax/microedition/lcdui/Image", "getGraphics",
                     "()Ljavax/microedition/lcdui/Graphics;", NULL, &got) != NJ_OK
             || !got.r) {
-            return 0u;
+            return 0;
         }
         g = got.r;
     }
@@ -8214,7 +8627,7 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
     if (r.vw <= 0 || r.vh <= 0) {
         int tw = 0, th = 0;           /* no setViewport: the whole target */
         if (m3g_target_graphics(vm, g, &tw, &th) == 0 || tw <= 0 || th <= 0) {
-            return 0u;
+            return 0;
         }
         r.vx = r.vy = 0;
         r.vw = tw;
@@ -8239,7 +8652,16 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
             if (gf) { img = nj_rget(vm, target, gf); }
         }
         s = nj_midp_surface(vm, img, &sc);
-        if (s && r.vx >= 0 && r.vy >= 0 && r.vx + r.vw <= s->width &&
+        /*
+         * The software rasteriser writes 32-bit pixels, so a 16-bit target
+         * cannot go through it - and a renderer that quietly dropped every
+         * triangle on such a target would look exactly like a scene that is
+         * off screen.  sw.surf stays NULL there, which sends the triangles to
+         * the Java emitter instead: no depth buffer and no texture, but the
+         * geometry appears, and that is the honest trade for a 565 screen.
+         */
+        if (s && s->format == NJ_PIXFMT_ARGB8888 &&
+            r.vx >= 0 && r.vy >= 0 && r.vx + r.vw <= s->width &&
             r.vy + r.vh <= s->height) {
             r.sw.surf = s;
             r.sw.vx = r.vx;
@@ -8256,7 +8678,22 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
     memset(model, 0, sizeof(model));
     view[0] = view[5] = view[10] = view[15] = 1.0f;
     model[0] = model[5] = model[10] = model[15] = 1.0f;
+    cam = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_camera",
+                                    "L" NJ_C_CAMERA ";"));
+    if (!cam && world) {
+        /* World.setActiveCamera() is the other way a title names its camera,
+           and the corpus uses it: without this fallback a World rendered
+           through the Graphics3D's own (unset) camera draws nothing. */
+        cam = nj_rget(vm, world, m3g_fof(vm, NJ_C_WORLD, "_nj_cam",
+                                         "L" NJ_C_CAMERA ";"));
+    }
+
     arr = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_cam_m", "[F"));
+    if ((!arr || nj_array_length(arr) < 16) && cam) {
+        /* No setCamera() Transform: the camera is a node in the scene, so the
+           view is the inverse of the node's own matrix. */
+        arr = nj_rget(vm, cam, m3g_fof(vm, NJ_C_XABLE, "_nj_m", "[F"));
+    }
     if (arr && nj_array_length(arr) >= 16) {
         memcpy(view, nj_array_data(arr), sizeof(float) * 16u);
         /*
@@ -8268,20 +8705,15 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
          */
         mat_invert(view);
     }
-    cam = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_camera",
-                                    "L" NJ_C_CAMERA ";"));
     /* cam_proj_fill, not m3g_cam_projection: a Camera that never had its
        angles set is the JSR's default perspective (45 degrees, aspect 1,
        near 1, far 1000), and the viewport origin is added by the emitter
        rather than baked into the matrix. */
     if (!cam_proj_fill(vm, cam, proj)) {
-        return 0u;                            /* a camera this runtime cannot use */
+        return 0;                            /* a camera this runtime cannot use */
     }
-    if (xf) {
-        d = nj_rget(vm, xf, m3g_fof(vm, NJ_C_XFORM, "_nj_m", "[F"));
-        if (d && nj_array_length(d) >= 16) {
-            memcpy(model, nj_array_data(d), sizeof(float) * 16u);
-        }
+    if (model_in) {
+        memcpy(model, model_in, sizeof(float) * 16u);
     }
     /* All three matrices are Java ones, so they multiply with mat_mul() (the
        row-major product) and not with m3g_mat_mul(), whose convention is the
@@ -8296,11 +8728,11 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
     d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_positions",
                                 "L" NJ_C_VARR ";"));
     if (!d) {
-        return 0u;
+        return 0;
     }
     arr = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
     if (!arr) {
-        return 0u;
+        return 0;
     }
     r.pos    = (const nj_s2 *)nj_array_data(arr);
     r.pcomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
@@ -8309,7 +8741,7 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
     r.pcount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_count", "I"));
     nverts   = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
     if (!r.pos || r.pcomp < 2 || nverts <= 0) {
-        return 0u;
+        return 0;
     }
     if (r.pcount <= 0 || r.pcount > nverts) { r.pcount = nverts; }
     r.pfac = bits2f(nj_iget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_bias", "F")));
@@ -8515,29 +8947,112 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
         f = nj_field_lookup(vm, cn, "_nj_first", "I", 0);
         if (f) { ifirst = nj_iget(vm, ib, f); }
     }
+    r.idx = idx;
+    r.icount = icount;
+    r.lens = lens;
+    r.nstrip = nstrip;
+    r.ifirst = ifirst;
 
     r.jt.vm = vm;
     r.jt.g = g;
     r.jt.ox = r.vx;
     r.jt.oy = r.vy;
-    r.drawn = 0u;
-
-    if (nstrip > 0 && lens) {
-        nj_s4 i, base = ifirst;
-
-        for (i = 0; i < nstrip; i++) {
-            jr_strip(&r, idx, lens[i], base);
-            base += lens[i];
-        }
-    } else if (idx && icount > 0) {
-        jr_list(&r, idx, icount, ifirst);
-    } else {
-        jr_list(&r, NULL, r.pcount, ifirst);
-    }
-    vm->tris += (nj_u8)r.drawn;
-    vm->m3g_renders++;
-    return r.drawn;
+    r.drawn = 0u;    *out = r;
+    return 1;
 }
+
+/*
+ * Draw what jr_setup() described: a strip array walks its own lengths (the
+ * winding flips on every second triangle, which jr_strip handles), a plain
+ * index buffer walks its indices, and a mesh with neither is the JSR's
+ * implicit list over the vertex range.
+ */
+static nj_u4 jr_draw(m3g_jr *r)
+{
+    if (r->nstrip > 0 && r->lens) {
+        nj_s4 i, base = r->ifirst;
+
+        for (i = 0; i < r->nstrip; i++) {
+            jr_strip(r, r->idx, r->lens[i], base);
+            base += r->lens[i];
+        }
+    } else if (r->idx && r->icount > 0) {
+        jr_list(r, r->idx, r->icount, r->ifirst);
+    } else {
+        jr_list(r, NULL, r->pcount, r->ifirst);
+    }
+    r->vm->tris += (nj_u8)r->drawn;
+    r->vm->m3g_renders++;
+    return r->drawn;
+}
+
+static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
+                           nj_ref app, nj_ref xf)
+{
+    m3g_jr r;
+    float model[16];
+    nj_ref d;
+
+    if (!vm || !self || !vb) {
+        return 0u;
+    }
+    memset(model, 0, sizeof(model));
+    model[0] = model[5] = model[10] = model[15] = 1.0f;
+    if (xf) {
+        d = nj_rget(vm, xf, m3g_fof(vm, NJ_C_XFORM, "_nj_m", "[F"));
+        if (d && nj_array_length(d) >= 16) {
+            memcpy(model, nj_array_data(d), sizeof(float) * 16u);
+        }
+    }
+    if (!jr_setup(vm, self, vb, ib, app, 0, model, &r)) {
+        return 0u;
+    }
+    return jr_draw(&r);
+}
+
+/*
+ * Draw every mesh the walk collected, each with its own matrix, vertex buffer,
+ * index buffer and first submesh appearance.  That is what gives a World its
+ * materials, textures, lighting, fog, culling and depth: before this, a World
+ * was drawn as flat white triangles with no transform at all.
+ */
+static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
+                            nj_ref *meshes, float *mats, nj_u4 n)
+{
+    nj_u4 i, drawn = 0u;
+
+    for (i = 0u; i < n && i < 64u; i++) {
+        nj_ref vb, ib = 0, app = 0, subs;
+        m3g_jr r;
+
+        vb = nj_rget(vm, meshes[i], nj_field_lookup(vm, NJ_C_MESH, "_nj_vb",
+                                                    "L" NJ_C_VBUF ";", 0));
+        if (!vb) {
+            continue;                   /* a mesh with no vertices draws nothing */
+        }
+        ib = nj_rget(vm, meshes[i], nj_field_lookup(vm, NJ_C_MESH, "_nj_ib",
+                                                    "L" NJ_C_IBUF ";", 0));
+        subs = nj_rget(vm, meshes[i], nj_field_lookup(vm, NJ_C_MESH, "_nj_subs",
+                                                      "L" NJ_C_VECTOR ";", 0));
+        if (subs) {
+            nj_value a0, rr;
+
+            a0.i = 0;
+            rr.r = 0;
+            if (nj_call(vm, subs, NJ_C_VECTOR, "elementAt",
+                        "(I)Ljava/lang/Object;", &a0, &rr) == NJ_OK) {
+                app = rr.r;
+            }
+        }
+        if (!jr_setup(vm, self, vb, ib, app, root,
+                      mats + (nj_size)i * 16u, &r)) {
+            continue;
+        }
+        drawn += jr_draw(&r);
+    }
+    return drawn;
+}
+
 
 NJFN(m3g_g3d_render5)
 {

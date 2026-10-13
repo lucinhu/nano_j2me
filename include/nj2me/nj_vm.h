@@ -733,6 +733,17 @@ typedef struct nj_m3g_fields {
     nj_u4 user_id;
     nj_u4 a, b, c;   /* the three fields of whichever type this is */
     /*
+     * A fourth scalar, and the floats an object carries.
+     *
+     * A Material is four colours, a Camera is four projection numbers, a Fog
+     * is a density and a range, a Light is an intensity and an attenuation.
+     * They live here rather than in a union because the loader decodes a whole
+     * file before any Java object exists; the link step is what moves them
+     * across, and it needs somewhere to read them from.
+     */
+    nj_u4 d;
+    float f[6];
+    /*
      * A Group's children, as indices into the file's object list.
      *
      * JSR 184 section 3.2: an ObjectIndex[] is a UInt32 count followed by that
@@ -869,5 +880,14 @@ nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
  */
 nj_status nj_m3g_link_meshes(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
                              nj_ref arr);
+
+/*
+ * The scalars and references of the other decoded types (an Appearance's
+ * material and textures, a Material's colours, a Background's colour, a
+ * Camera's projection).  Exported so a test can drive it on a table of its
+ * own, the same way nj_m3g_link_meshes is.
+ */
+nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
+                           nj_ref arr);
 
 #endif /* NJ_VM_H */

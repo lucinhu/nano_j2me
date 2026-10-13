@@ -812,6 +812,67 @@ int main(void)
              "(I)L" CLS("Appearance") ";", a, &r);
         check(r.r == other, "and it is the appearance that was set");
     }
+    /* ---- an Appearance is handed the material the file names ---------- */
+    {
+        /*
+         * The loader decodes a whole file before any Java object exists, so
+         * the two halves meet in the link step.  Without it an Appearance is
+         * an empty box: the rasteriser finds no material and paints every
+         * triangle white, which is exactly what the rally title looked like
+         * before this step existed.
+         *
+         * The table is the shape the corpus uses: references count from two
+         * (value - 2 is the object's place), so the Appearance is object 0 and
+         * names the Material at object 1 as 3.
+         */
+        nj_m3g_object objs[3];
+        nj_ref arr, app, mat, spare;
+        nj_value a[2], r;
+
+        memset(objs, 0, sizeof(objs));
+        objs[0].type = 3u;                  /* Appearance */
+        objs[0].fields.decoded = 1u;
+        objs[0].fields.a = 1u;              /* layer */
+        objs[0].fields.nrefs = 4u;
+        objs[0].fields.refs[0] = 0u;        /* no compositing mode */
+        objs[0].fields.refs[1] = 0u;        /* no fog */
+        objs[0].fields.refs[2] = 0u;        /* no polygon mode */
+        objs[0].fields.refs[3] = 3u;        /* material: object 1 */
+        objs[1].type = 13u;                 /* Material */
+        objs[1].fields.decoded = 1u;
+        objs[1].fields.a = 0xFF204080u;     /* ambient */
+        objs[1].fields.b = 0xFF3366CCu;     /* diffuse */
+        objs[1].fields.c = 0xFF000000u;     /* emissive */
+        objs[1].fields.d = 0xFFFFFFFFu;     /* specular */
+        objs[1].fields.f[0] = 20.0f;        /* shininess */
+        objs[2].type = 3u;                  /* an Appearance nobody names */
+
+        arr = nj_object_array_new(vm, CLS("Object3D"), 3u);
+        app = make(vm, CLS("Appearance"));
+        mat = make(vm, CLS("Material"));
+        spare = make(vm, CLS("Appearance"));
+        check(arr != 0 && app != 0 && mat != 0 && spare != 0,
+              "the appearance and its material exist");
+        nj_array_set_ref(arr, 1u, app);
+        nj_array_set_ref(arr, 2u, mat);
+        nj_array_set_ref(arr, 3u, spare);
+
+        check(nj_m3g_link_misc(vm, objs, 3u, arr) == NJ_OK,
+              "the misc linker accepts the table");
+        call(vm, app, CLS("Appearance"), "getMaterial",
+             "()L" CLS("Material") ";", NULL, &r);
+        check(r.r == mat, "the appearance is handed the material it names");
+        /* The colours are read through the JSR's own targets: 1024 is the
+           ambient one and 2048 the diffuse one. */
+        a[0].i = 2048;
+        call(vm, mat, CLS("Material"), "getColor", "(I)I", a, &r);
+        check((nj_u4)r.i == 0xFF3366CCu, "the diffuse colour is the file's");
+        a[0].i = 1024;
+        call(vm, mat, CLS("Material"), "getColor", "(I)I", a, &r);
+        check((nj_u4)r.i == 0xFF204080u, "the ambient colour is the file's");
+        call(vm, mat, CLS("Material"), "getShininess", "()F", NULL, &r);
+        check(r.f == 20.0f, "the shininess is the file's");
+    }
     /* ---- render() is counted, because counting is all it can do --------- */
     {
         /*
