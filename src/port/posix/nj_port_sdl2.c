@@ -1086,15 +1086,6 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
     while (SDL_PollEvent(&ev)) {
         nj_event e;
         memset(&e, 0, sizeof(e));
-        if (getenv("NJ_SDL2_EVDBG")) {
-            if (ev.type == SDL_MOUSEMOTION) {
-                SDL_Log("EV motion state=%d xy=%d,%d", (int)ev.motion.state,
-                        ev.motion.x, ev.motion.y);
-            } else if (ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEBUTTONUP) {
-                SDL_Log("EV button type=%u xy=%d,%d", (unsigned)ev.type,
-                        ev.button.x, ev.button.y);
-            }
-        }
         switch (ev.type) {
         case SDL_QUIT:
             e.type = NJ_EV_QUIT;
