@@ -25,7 +25,7 @@
 #
 # Environment: NJ_BIN, NJ_GAMES, NJ_HEAP, NJ_SIZES, NJ_TIMEOUT, NJ_FRAMES,
 # NJ_LONG_FRAMES, NJ_MIN_COLOURS, NJ_FPS, NJ_POKE, NJ_CORPUS_WORK, NJ_DEVICE,
-# NJ_PACED_FPS, NJ_PACED_FRAMES.
+# NJ_PACED_FPS, NJ_PACED_FRAMES, NJ_HEAP_RETRY.
 # This sweep is deliberately sequential: every title gets the machine, so a
 # frame count means the same thing for all of them.  tools/corpus_fatal.sh is
 # the parallel one when all you need is "does anything crash".
@@ -50,6 +50,13 @@ BIN="${NJ_BIN:-$ROOT/build/nj2me}"
 # for titles that run perfectly well when a person runs them by hand.  A test
 # harness may not be stricter than the product it tests without saying so.
 HEAP="${NJ_HEAP:-16}"
+# A title from that era may size its own run off Runtime.totalMemory().
+# 有女倾城破解版_11525 destroys itself in startApp when it sees more than 6 MB of
+# Java heap - a 2005 handset had 1-4 MB - so a 16 MB sweep writes it off as
+# "nothing was ever presented" while --heap 4 runs it and draws.  When a title
+# paints nothing at the sweep's heap, ask once more with the heap a phone of
+# the period actually had.  NJ_HEAP_RETRY=0 switches the retry off.
+HEAP_RETRY="${NJ_HEAP_RETRY:-4}"
 DIR="${NJ_GAMES:-$ROOT/tests/games}"
 # Titles gate themselves on the screen size and the gates differ: Tumbleweed
 # refuses anything larger than 250 in either axis ("Screen too large") and
@@ -122,7 +129,7 @@ fail=0
 # Which handset every title is being told it is on.  Printed because it changes
 # what a row MEANS: a title that only starts under a Nokia profile has been
 # shown to work on its Nokia path, not to work in general.
-echo "device: ${DEVICE:-(generic)}"
+echo "device: ${DEVICE:-(generic)}   heap: ${HEAP} MB (retry ${HEAP_RETRY:-off})"
 # Printed because it changes what a "flat frame" row means: the titles are run
 # uncapped, and a verdict with no colour on screen is re-checked at a phone's
 # pace before it is recorded.
@@ -422,6 +429,48 @@ for jar in "${JARS[@]}"; do
         fi
     fi
 
+    # Still without a picture, and the sweep is running the title with a heap no
+    # handset of the period had.  A MIDlet is entitled to ask how much memory it
+    # has (`Runtime.totalMemory()`) and to refuse to run when the answer is not
+    # one it recognises: 有女倾城破解版_11525 calls notifyDestroyed() from its own
+    # startApp when the total is above 6 MB, and at --heap 4 it runs and draws
+    # 627 graphics calls.  The packet data gateway of the era was 1-4 MB, so a
+    # smaller heap is the FAITHFUL run, not a workaround for a runtime defect.
+    heapretry=""
+    if [ "${HEAP_RETRY:-0}" != "0" ] && [ "$HEAP" != "$HEAP_RETRY" ] && \
+       [ "$used" != "(no size accepted)" ]; then
+        IFS='|' read -r vstatus vframes vcols vchanged vnote <<<"$verdict"
+        hretry=0
+        case "$vnote" in
+            "could not start"*|"not a MIDlet suite"*) hretry=0 ;;
+            *)
+                case "$vstatus" in
+                    PASS|SKIP) hretry=0 ;;
+                    *) if [ "$vcols" -lt "$MIN_COLOURS" ]; then hretry=1; fi ;;
+                esac
+                ;;
+        esac
+        if [ "$hretry" = "1" ]; then
+            heap_saved="$HEAP"
+            HEAP="$HEAP_RETRY"
+            size="$used"
+            run_here 40 "$FRAMES" 2 "$FPS"
+            HEAP="$heap_saved"
+            if ! grep -q "Screen too" "$log"; then
+                hv="$(verdict_for)"
+                case "$hv" in
+                    *"flat frame"*|*"nothing was ever presented"*)
+                        heapretry="still nothing at ${HEAP_RETRY} MB" ;;
+                    FAIL*)
+                        heapretry="still failed at ${HEAP_RETRY} MB" ;;
+                    *)
+                        heapretry="the picture appeared only with a ${HEAP_RETRY} MB heap" ;;
+                esac
+                verdict="$hv"
+            fi
+        fi
+    fi
+
     # Read the port's own report BEFORE deleting the temp dir it lives in.
     # It did live after the rm once, and every title then reported "?" - which
     # looked like a missing observation rather than a missing file.
@@ -466,6 +515,9 @@ for jar in "${JARS[@]}"; do
     # that says "flat" after a paced run is a statement about the title; a row
     # that only became flat once it was paced says the uncapped run never gave
     # the game a chance to draw.
+    if [ -n "$heapretry" ]; then
+        if [ -n "$note" ]; then note="$note; $heapretry"; else note="$heapretry"; fi
+    fi
     if [ -n "$paced" ]; then
         if [ -n "$note" ]; then note="$note; $paced"; else note="$paced"; fi
     fi

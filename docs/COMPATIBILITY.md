@@ -99,10 +99,28 @@ ab.run()V pc=11` for 开心农场_240, a loop that sleeps between frames).
 ### Where the collected 395 stand
 
 `NJ_FRAMES=600 NJ_TIMEOUT=25 tools/run_game_corpus.sh` over `tests/games`, with
-the long re-run and the paced re-run above: **384 passed, 11 failed**. The
-sweeps before it were 374/21 (before the pacing retry), 376/19, 381/14 and now
-384/11, and every drop came from a bug the corpus itself pointed at rather than
-from a title being excused.
+the long re-run, the paced re-run and the heap re-run below: **384 passed, 11
+failed**. The sweeps before it were 374/21 (before the pacing retry), 376/19,
+381/14 and now 384/11, and every drop came from a bug the corpus itself pointed
+at rather than from a title being excused.
+
+### A title is allowed to ask how much memory it has
+
+`Runtime.totalMemory()` is a real question with a real answer, and one title
+uses the answer to decide whether to run at all: 有女倾城破解版_11525 calls
+`notifyDestroyed()` out of its own `startApp()` when the total is above 6 MB
+(the bytecode is `Runtime.getRuntime().totalMemory()` `>> 20`, compared with
+`6L`). At `--heap 16` the sweep sees a MIDlet that presented nothing and exited
+in 7 ms; at `--heap 4` it runs and draws 627 Graphics calls a second. A Java
+heap of 1-4 MB is what the phones being imitated actually had, so the smaller
+heap is the faithful run, and the sweep now asks once more with
+`NJ_HEAP_RETRY` (default 4 MB, `0` switches it off) when a title paints
+nothing. The row says which run the verdict came from: "the picture appeared
+only with a 4 MB heap".
+
+This is the same class of finding as the platform string: the runtime is not
+wrong, the title made a decision about its world, and the honest way to run it
+is to give it the world it was written for.
 
 The eleven that remain are each classified, not just counted:
 
