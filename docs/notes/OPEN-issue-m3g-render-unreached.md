@@ -247,3 +247,30 @@ the background clear are the next pieces.
 output.  The frame comes from
 `./build/nj2me --port headless --heap 16 --size 240x320 --fps 30 --run-frames
 1500 --dump-frames ... --keys ... tests/games/3D拉力赛-进化汉化版_6366.jar`.)
+
+## What is still missing, and it is one thing
+
+The World path now runs the full pipeline, and the objects it names are
+decoded.  The rally title draws its cockpit and the track's silhouettes, but
+every surface is flat, and the reason is narrow:
+
+**`Image2D` is decoded for its format and its size, and not for its pixels.**
+`nj_m3g_decode_object`'s `NJ_M3G_T_IMAGE2D` case reads the format (offset 12),
+the width and the height, and stops; `_nj_pixels` is only ever filled by the
+Java `Image2D` constructor.  `jr_setup` reads the texture pixels out of that
+field, so `r.sw.tex` stays NULL and `sw_tri` samples nothing.
+
+The title says the same thing from the other side: `javap` over its canvas
+class counts 117 references to `Texture2D` and 5 calls to `setTexture`, and
+**not one** call to `setLight` or `addLight` - the look of this game is
+textures, not lighting.  So the next piece is the `Image2D` pixel payload:
+
+  - format 96 ALPHA, 97 LUMINANCE, 98 LUMINANCE_ALPHA, 99 RGB, 100 RGBA;
+  - the palette that formats 97 and 99 may carry (the corpus has to be
+    measured before the reading is written, as with every other type here);
+  - a byte[] in `_nj_pixels` in the shape `sw_texel` expects (RGBA with four
+    bytes per texel for format 100, three for 99).
+
+Everything downstream of that is already in place: the Appearance's
+`_nj_tex0`, the Texture2D's `_nj_img`, the VertexBuffer's texture coordinates
+and scale/bias, and `sw_tri`'s sampler with its alpha test and blending.
