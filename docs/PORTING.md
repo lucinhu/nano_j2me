@@ -503,6 +503,45 @@ or render audio itself: `pcm_write()` already mixes tone and sampled audio at
 whatever rate it is given (8 kHz AMR and 44.1 kHz MP3 both go through the same
 resampler), so a decoder's only job is to hand back PCM.
 
+## Networking: the HTTP hook
+
+`javax.microedition.io.HttpConnection` needs a socket stack, which portable C
+cannot have, so it is one optional field — `http_request` — that does a whole
+request and buffers the whole response:
+
+```c
+nj_status (*http_request)(void *ud, const char *url, const char *method,
+                          const char *headers,
+                          const nj_u1 *body, nj_u4 body_len,
+                          int *status, char *rheaders, nj_size rheaders_cap,
+                          nj_u1 **out_body, nj_u4 *out_len,
+                          void *(*alloc)(void *aud, nj_u4 n), void *aud);
+```
+
+The shape is deliberately not streaming. A MIDP `HttpConnection` is asked for
+its response code and then read as a stream, and every title in
+`tests/games` that touches the network does exactly that with a small
+document; buffering removes a state machine from both sides of the HAL.
+`headers` and `rheaders` are text blocks of `Name: value` lines, so a port
+that has a header map does not have to know MIDP's accessor order. The body
+comes back through `alloc` — the runtime's own tracked allocator — so the
+runtime frees it and a leak shows up in the same count as everything else.
+
+Return `NJ_ERR_UNSUPPORTED` (or leave the hook NULL) and `http://` is refused
+by name: `IOException: this build has no HTTP support; the port must supply
+it`. That is the correct answer for a bare-metal board, and it is what the
+desktop ports do — try `--port headless` with `tests/fixtures/httpdemo.jar` to
+see it.
+
+On Android the hook is `PlatformHttp.java` over `HttpURLConnection`, and the
+app needs two manifest facts: `android.permission.INTERNET` and a network
+security config with `cleartextTrafficPermitted="true"`. Without the second
+one every `http://` request fails with
+`java.io.IOException: Cleartext HTTP traffic to <host> not permitted`, which
+is what the first emulator run of the fixture printed — MIDlet URLs predate
+TLS, and no per-host allowlist can be written for software that hard-codes
+hosts from 2005.
+
 ### Worked example: Android
 
 The Android port fills all of them, and each one is optional — the port still
@@ -514,6 +553,7 @@ builds and runs against an app that has none of the Java classes:
 | `inflate` / `inflate_raw` | the platform's `zlib`, driven with `Z_FINISH` into a buffer of the declared size |
 | `audio_decode` | `PlatformAudio.java` drives `MediaCodec` directly — **not** `MediaExtractor`, which on the API 36 emulator fails with `Service media.extractor didn't start` in an app process |
 | `midi_open` … | `MidiPlayer.java` hands the file to the platform's own General MIDI synthesizer (Sonivox, behind `MediaPlayer`) |
+| `http_request` | `PlatformHttp.java` wraps `HttpURLConnection`; the app declares `INTERNET` and permits cleartext, because a MIDlet's URL is `http://` |
 
 `tools/make_platformimg_jar.sh` builds the fixture that holds those hooks to
 account: one MIDlet that feeds the runtime five assets — `pic.bmp`, `pic.webp`,
