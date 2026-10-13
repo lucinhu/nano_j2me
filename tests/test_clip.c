@@ -4,15 +4,23 @@
  * setClip() and translate() are the two calls a game uses to draw a small
  * picture inside a big canvas, and the corpus has a class of title that
  * presents frame after frame of one flat colour with paint() running every
- * frame (see --stats paints=).  The obvious way to get that wrong is to apply
- * the clip in the wrong coordinate space: translate first and a clip that is
- * stored in device pixels lands somewhere the drawing never reaches, so every
- * draw is discarded and the screen stays the colour it started as.
+ * frame (see --stats paints=).  The obvious way to get that wrong is to drag
+ * the clip along with the origin: the clip is a rectangle of PIXELS on the
+ * target, and MIDP 2.0 says so in Graphics.translate - "Operations on the
+ * coordinate system, such as translate(), do not modify the clip".
  *
- * This pins both orders down, and pins the empty clip as well:
+ * 帝国时代3-亚洲王朝_6288 is what that costs.  It draws its map by translating
+ * the origin by the camera offset and then blitting tiles at map coordinates;
+ * with the clip dragged to (-336,-216) every tile was clipped away and the
+ * campaign showed a black field with only the untranslated HUD on it.
  *
- *   1. translate(8,8) then setClip(0,0,8,8) clips at the translated origin;
- *   2. setClip(0,0,8,8) then translate(8,8) clips at the same place;
+ * This pins the rule down, and pins the empty clip as well:
+ *
+ *   1. translate(8,8) then setClip(0,0,8,8) clips at device (8..15, 8..15),
+ *      because setClip() takes coordinates in the CURRENT system;
+ *   2. setClip(0,0,8,8) then translate(8,8) does NOT: the clip stays at device
+ *      (0..7, 0..7) and the drawing, which now lands at (8,8) and beyond, is
+ *      discarded;
  *   3. everything outside the clip keeps the colour underneath it;
  *   4. a zero-sized clip discards the drawing and keeps what was there.
  *
@@ -125,8 +133,11 @@ static nj_u4 pixel(nj_vm *vm, nj_ref img, int x, int y)
 }
 
 /*
- * Paint the whole image red, then draw a green square that a clip of 8x8 at
- * the translated origin (8,8) must confine to (8..15, 8..15).
+ * Paint the whole image red, then draw a green square that a clip of 8x8 must
+ * confine.  With the clip set first the clip is at the origin and translate()
+ * leaves it there, so the green square (which lands at device (8,8)..(40,40))
+ * misses it entirely; with translate first the clip follows the current
+ * coordinate system to (8..15, 8..15) and confines the square to it.
  */
 static void paint_and_clip(nj_vm *vm, nj_ref g, int clip_first)
 {
@@ -158,6 +169,8 @@ int main(void)
     }
 
     for (phase = 0; phase < 2; phase++) {
+        /* phase 0: translate() first, then setClip().  phase 1: the other way. */
+        int clip_first = (phase == 1);
         img = image_new(vm, 32, 32);
         OK(img != NULL);
         g = image_graphics(vm, img);
@@ -165,10 +178,30 @@ int main(void)
         if (!img || !g) {
             continue;
         }
-        paint_and_clip(vm, g, phase);
+        paint_and_clip(vm, g, clip_first);
 
-        OK_MSG(pixel(vm, img, 8, 8) == GREEN, "(%d,8) phase %d", 8, phase);
-        OK_MSG(pixel(vm, img, 15, 15) == GREEN, "(15,15) phase %d", phase);
+        if (clip_first) {
+            /*
+             * setClip(0,0,8,8) then translate(8,8): the clip is a rectangle of
+             * pixels and a move of the coordinate system does not move it, so
+             * the green square - drawn at device (8,8) and beyond - misses the
+             * clip at the origin entirely and nothing of it is drawn.
+             */
+            OK_MSG(pixel(vm, img, 8, 8) == RED,
+                   "(8,8) after setClip-then-translate is 0x%08lX",
+                   (unsigned long)pixel(vm, img, 8, 8));
+            OK_MSG(pixel(vm, img, 15, 15) == RED,
+                   "(15,15) after setClip-then-translate is 0x%08lX",
+                   (unsigned long)pixel(vm, img, 15, 15));
+        } else {
+            /*
+             * translate(8,8) then setClip(0,0,8,8): setClip() takes coordinates
+             * in the CURRENT system, so the clip lands on device (8..15) and
+             * confines the square to it.
+             */
+            OK_MSG(pixel(vm, img, 8, 8) == GREEN, "(8,8) phase %d", phase);
+            OK_MSG(pixel(vm, img, 15, 15) == GREEN, "(15,15) phase %d", phase);
+        }
         OK_MSG(pixel(vm, img, 7, 7) == RED, "(7,7) phase %d is 0x%08lX",
                phase, (unsigned long)pixel(vm, img, 7, 7));
         OK_MSG(pixel(vm, img, 16, 16) == RED, "(16,16) phase %d", phase);

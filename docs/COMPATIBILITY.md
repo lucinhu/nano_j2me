@@ -451,6 +451,36 @@ the runtime answered that key before consulting the port.
 | Fonts | three built-in bitmap sizes from Liberation Mono; CJK needs a glyph provider installed through the font fallback hook |
 | Image size limits | 8192 px per axis, checked in 64-bit before any allocation |
 
+### The clip does not move when the coordinate system does
+
+MIDP 2.0 states the rule in an unexpected place — `Graphics.translate()`:
+
+> Operations on the coordinate system, such as `translate()`, do not modify the
+> clip. The methods `getClipX()`, `getClipY()`, `getClipWidth()` and
+> `getClipHeight()` must return a rectangle that, if passed to `setClip` without
+> an intervening change to the `Graphics` object's coordinate system, must result
+> in the identical set of pixels in the clip.
+
+So the clip is a rectangle of *pixels* on the target: `setClip()` takes its
+coordinates in the coordinate system current at that moment (which is why
+`setClip` after a `translate` lands somewhere else), and `translate()` itself
+moves only the origin. The runtime used to drag the clip along with the origin,
+which makes the two orders equivalent — convenient, and wrong.
+
+帝国时代3-亚洲王朝_6288 is what that cost. It draws its campaign map by
+translating the origin by the camera offset (`-336,-216` in the mission that was
+tested) and then blitting tiles at *map* coordinates: the tiles land on the
+screen, but with the clip dragged off it every one of them was discarded. The
+game ran, drew its HUD (which is not translated), and presented a black field.
+With the clip left where it belongs, the same run draws the terrain, the units
+and the tutorial panel: `gfx` calls in the map frames went from a few hundred to
+tens of thousands, and the frame is no longer one colour.
+
+Two tests pin it down, because the pixel layer and the MIDP layer can disagree:
+`tests/test_clip.c` (both orders, plus the empty clip) and the
+`check_clip_translate` fixture, which runs the four cases through a real MIDlet
+and also checks the `getClipX()` round trip above.
+
 ## Codec coverage
 
 Decoding goes through a registry

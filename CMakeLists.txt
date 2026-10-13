@@ -341,6 +341,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flatdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_excdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_paintthrow_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_clipdemo_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -576,6 +577,16 @@ endif()
     # getstatic and assigned nowhere else.  The fixture also pins the float and
     # double cases, where the field has to receive the constant's bytes rather
     # than a converted number.
+    # MIDP 2.0, Graphics.translate(): "Operations on the coordinate system,
+    # such as translate(), do not modify the clip."  Dragging the clip along
+    # with the origin wiped out every tile of 帝国时代3-亚洲王朝_6288's campaign
+    # map, which is drawn by translating the origin by the camera offset and
+    # then blitting at map coordinates.
+    add_test(NAME check_clip_translate
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_clip_translate.sh
+                     ${NJ_FIXTURES}/clipdemo.jar)
     add_test(NAME check_constant_value
              COMMAND ${CMAKE_COMMAND} -E env
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>

@@ -566,20 +566,28 @@ void nj_gfx_translate(nj_gfx *g, int dx, int dy)
         return;
     }
     /*
-     * Cumulative.  The clip is stored in DEVICE space but is defined in USER
-     * space, so moving the origin has to move the clip with it: setClip(0,0,8,8)
-     * followed by translate(8,8) must clip at (8,8), exactly like the other
-     * order (see tests/test_clip.c).  Leaving the clip behind while the origin
-     * moves is how every draw ends up outside its own clip.
+     * Cumulative, and the clip does NOT move with it.  MIDP 2.0 puts it plainly
+     * (Graphics.translate): "Operations on the coordinate system, such as
+     * translate(), do not modify the clip.  The methods getClipX(), getClipY(),
+     * getClipWidth() and getClipHeight() must return a rectangle that, if passed
+     * to setClip without an intervening change to the Graphics object's
+     * coordinate system, must result in the identical set of pixels in the
+     * clip."
+     *
+     * So the clip is a rectangle of PIXELS on the target and it stays where it
+     * is; only the coordinate system moves.  Shifting it here looked harmless
+     * and is not: 帝国时代3-亚洲王朝_6288 draws its map by translating the origin
+     * by the camera (-336,-216) and then blitting tiles at map coordinates -
+     * every tile lands on the screen, but the clip had been dragged off it, so
+     * the whole map was clipped away and the campaign showed a black field with
+     * only the untranslated HUD on it.  setClip() after a translate() still
+     * takes coordinates in the CURRENT system (it adds the translate itself),
+     * so the two orders are deliberately not the same thing.
      */
     g->translate_x = (int)nj_clamp64((nj_s8)g->translate_x + dx,
                                      -NJ_GFX_COORD_LIMIT, NJ_GFX_COORD_LIMIT);
     g->translate_y = (int)nj_clamp64((nj_s8)g->translate_y + dy,
                                      -NJ_GFX_COORD_LIMIT, NJ_GFX_COORD_LIMIT);
-    if (g->clip_w > 0 && g->clip_h > 0) {
-        g->clip_x += dx;
-        g->clip_y += dy;
-    }
 }
 
 void nj_gfx_get_translate(const nj_gfx *g, int *dx, int *dy)
