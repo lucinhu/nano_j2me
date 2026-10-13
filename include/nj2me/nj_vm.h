@@ -504,6 +504,13 @@ extern const int nj_lib_fc_class_count;
 extern const nj_native_entry nj_lib_fc_table[];
 extern const int nj_lib_fc_count;
 
+/* Built by nj_lib_http.c (javax.microedition.io.HttpConnection).  The
+ * implementation class is HttpImpl; the interfaces above it carry no state. */
+extern const nj_builtin_class nj_lib_http_classes[];
+extern const int nj_lib_http_class_count;
+extern const nj_native_entry nj_lib_http_table[];
+extern const int nj_lib_http_count;
+
 /* JSR 120/205, Wireless Messaging.  Messages go out through optional port
  * hooks; a port without them has the API and gets the exception the spec
  * defines, rather than a link error. */

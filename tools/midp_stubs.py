@@ -654,6 +654,41 @@ CLASSES = {
         "interface": True, "methods": ["java.io.DataOutputStream openDataOutputStream()",
                                        "java.io.OutputStream openOutputStream()"],
     },
+    # MIDP 2.0 makes HttpConnection mandatory.  The runtime implements it on
+    # top of the port's HTTP hook (src/midp/nj_lib_http.c); the fixtures that
+    # exercise it are built against these stubs.
+    "javax/microedition/io/StreamConnection": {
+        "interface": True, "extends": "javax.microedition.io.Connection",
+        "methods": [],
+    },
+    "javax/microedition/io/ContentConnection": {
+        "interface": True, "extends": "javax.microedition.io.StreamConnection",
+        "methods": ["java.lang.String getType()", "java.lang.String getEncoding()",
+                    "long getLength()"],
+    },
+    "javax/microedition/io/HttpConnection": {
+        "interface": True, "extends": "javax.microedition.io.ContentConnection",
+        "constants": {"GET": '"GET"', "POST": '"POST"', "HEAD": '"HEAD"'},
+        "methods": [
+            "java.lang.String getURL()", "java.lang.String getProtocol()",
+            "java.lang.String getHost()", "int getPort()",
+            "java.lang.String getFile()", "java.lang.String getQuery()",
+            "java.lang.String getRef()",
+            "void setRequestMethod(java.lang.String)",
+            "java.lang.String getRequestMethod()",
+            "void setRequestProperty(java.lang.String, java.lang.String)",
+            "java.lang.String getRequestProperty(java.lang.String)",
+            "int getResponseCode()", "java.lang.String getResponseMessage()",
+            "java.lang.String getHeaderField(java.lang.String)",
+            "java.lang.String getHeaderField(int)",
+            "java.lang.String getHeaderFieldKey(int)",
+            "long getDate()", "long getExpiration()", "long getLastModified()",
+            "java.io.InputStream openInputStream()",
+            "java.io.DataInputStream openDataInputStream()",
+            "java.io.OutputStream openOutputStream()",
+            "java.io.DataOutputStream openDataOutputStream()",
+        ],
+    },
     "javax/microedition/media/Player": {
         "interface": True,
         "constants": {"CLOSED": "0", "UNREALIZED": "100", "REALIZED": "200",
@@ -967,6 +1002,11 @@ def emit(path, name, spec, out_root):
                          % (_java_type(cval[5:]), cname))
         elif cval == "null":
             lines.append("    public static final Object %s = null;\n" % cname)
+        elif cval.startswith('"'):
+            # A String constant (HttpConnection.GET/POST/HEAD).  javac inlines
+            # it at every use site, so the runtime's field is never read - but
+            # the fixture must still compile against the same API a MIDlet sees.
+            lines.append("    public static final String %s = %s;\n" % (cname, cval))
         else:
             lines.append("    public static final int %s = %s;\n" % (cname, cval))
 

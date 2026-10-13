@@ -444,6 +444,43 @@ typedef struct nj_port {
     nj_status (*inflate_raw)(void *ud, const nj_u1 *in, nj_u4 in_len,
                              nj_u1 *out, nj_u4 out_len);
 
+    /*
+     * One HTTP request, for javax.microedition.io.HttpConnection.
+     *
+     * MIDP 2.0 makes HttpConnection mandatory, and it is the one network API
+     * MIDlets actually use: 99 of the 396 titles in tests/games reference
+     * javax/microedition/io/HttpConnection - high-score tables, ads, "check
+     * for updates" screens.  A port with a network stack fills this in and
+     * those games work; a bare-metal target leaves it NULL and the runtime
+     * refuses "http://" by name, which is what it did before this hook
+     * existed.
+     *
+     * The call is synchronous and the whole response comes back at once.  That
+     * is the shape the MIDP API has anyway - a MIDlet asks for a response code
+     * and then reads a stream - and it keeps a port's implementation to one
+     * function instead of a connection state machine.
+     *
+     * `headers` and `rheaders` are text blocks, one "Name: value" per line,
+     * '\n' terminated; `rheaders` may be truncated (never split mid-line) when
+     * the port has more headers than fit.  `body`/`body_len` carry a POST
+     * payload (NULL/0 for GET or HEAD).  On success fill *status with the HTTP
+     * status code, *out_body with the response body and *out_len with its
+     * length, and return NJ_OK.  `alloc` allocates through the runtime's own
+     * tracked allocator, so whatever the port puts in *out_body the runtime
+     * frees with the matching `aud` - a port must not hand back memory the
+     * runtime did not allocate.
+     *
+     * Return NJ_ERR_UNSUPPORTED when the port has no HTTP stack; any other
+     * error means the request itself failed, and the MIDlet then sees an
+     * IOException rather than a fabricated 200.
+     */
+    nj_status (*http_request)(void *ud, const char *url, const char *method,
+                              const char *headers,
+                              const nj_u1 *body, nj_u4 body_len,
+                              int *status, char *rheaders, nj_size rheaders_cap,
+                              nj_u1 **out_body, nj_u4 *out_len,
+                              void *(*alloc)(void *aud, nj_u4 n), void *aud);
+
     int   fps_cap;        /* 0 => uncapped */
     const char *rms_dir;  /* where RecordStore files live (hosted ports) */
 

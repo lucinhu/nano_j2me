@@ -1150,14 +1150,25 @@ NJFN(connector_open)
     (void)nj_string_to_utf8(url, u, (int)sizeof(u));
 
     /*
-     * file:// is the one scheme this runtime can honour, and it is a real one:
-     * JSR 75 is how a MIDlet reads a ROM, a level pack or its own save data.
-     * Everything else is refused BY NAME - a bare-metal target has no socket
-     * stack, and a game handed a silently empty stream from an http:// URL is
-     * far harder to diagnose than one that throws where it asked.
+     * file:// is the one scheme this runtime can honour on its own, and it is
+     * a real one: JSR 75 is how a MIDlet reads a ROM, a level pack or its own
+     * save data.  Everything else is refused BY NAME - a game handed a
+     * silently empty stream from an http:// URL is far harder to diagnose
+     * than one that throws where it asked.
      */
     if (strncmp(u, "file://", 7u) == 0) {
         ret->r = nj_fc_new(vm, u);
+        return ret->r ? NJ_OK : NJ_ERR;
+    }
+    /*
+     * http:// and https:// are real when the port has an HTTP stack.  The
+     * request itself goes out on the first call that needs a response (see
+     * nj_lib_http.c), so a MIDlet that only builds a URL and never reads it
+     * never touches the network.  A port without the hook refuses the URL
+     * here, which is what the specification asks for an unsupported scheme.
+     */
+    if (strncmp(u, "http://", 7u) == 0 || strncmp(u, "https://", 8u) == 0) {
+        ret->r = nj_http_new(vm, u);
         return ret->r ? NJ_OK : NJ_ERR;
     }
     return nj_throw(vm, "javax/microedition/io/ConnectionNotFoundException", u);

@@ -1476,8 +1476,15 @@ static void test_connector_open_mode(nj_vm *vm)
     nj_value ret;
     const char *d;
 
-    /* Connector.READ == 1, timeouts == true */
-    a[0] = vref(nj_string_new(vm, "http://example.invalid/data"));
+    /* Connector.READ == 1, timeouts == true.
+     *
+     * The URL used to be "http://", which this runtime now serves through the
+     * port's http_request hook, so the example of a scheme that stays refused
+     * moved to one no port can serve without a socket stack.  The point of the
+     * check is the three-argument overload reaching the scheme check and
+     * naming the scheme, not which scheme it is.
+     */
+    a[0] = vref(nj_string_new(vm, "socket://example.invalid:80/data"));
     a[1] = vint(1);
     a[2] = vint(1);
     ret.bits = 0u;

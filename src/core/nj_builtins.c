@@ -25,7 +25,8 @@ const nj_builtin_source nj_builtin_sources[] = {
     { nj_lib_media_classes,  &nj_lib_media_class_count  },
     { nj_lib_content_classes, &nj_lib_content_class_count },
     { nj_lib_nokia_classes,  &nj_lib_nokia_class_count  },
-    { nj_lib_fc_classes,     &nj_lib_fc_class_count     }
+    { nj_lib_fc_classes,     &nj_lib_fc_class_count     },
+    { nj_lib_http_classes,   &nj_lib_http_class_count   }
     , { nj_lib_wireless_classes, &nj_lib_wireless_class_count }
     , { nj_lib_m3g_classes, &nj_lib_m3g_class_count }
     , { nj_lib_mascot_classes, &nj_lib_mascot_class_count }

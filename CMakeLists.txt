@@ -109,6 +109,7 @@ set(NJ_SOURCES
   # ---- the MIDP class library, in C ----
   src/midp/nj_lib_util.c
   src/midp/nj_lib_io.c
+  src/midp/nj_lib_http.c
   src/midp/nj_lib_lcdui.c
   src/midp/nj_lib_game.c
   src/midp/nj_lib_rms.c

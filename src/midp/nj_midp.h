@@ -343,6 +343,17 @@ nj_status nj_rms_late_init(nj_vm *vm);
 nj_status nj_m3g_late_init(nj_vm *vm);
 
 /*
+ * javax.microedition.io.HttpConnection: build the object Connector.open()
+ * hands back for an http:// or https:// URL.  The class the MIDlet holds is
+ * nj_lib_http.c's own HttpImpl; the MIDP interfaces above it carry no state.
+ * Returns NULL with an exception set when the URL cannot be parsed.
+ */
+nj_ref nj_http_new(nj_vm *vm, const char *url);
+
+/* HttpConnection.GET/POST/HEAD - same reason as the other late inits. */
+nj_status nj_http_late_init(nj_vm *vm);
+
+/*
  * Fill a triangle through a MIDlet's own javax.microedition.lcdui.Graphics.
  *
  * The Mascot Capsule rasterizer lives in another file and cannot reach
