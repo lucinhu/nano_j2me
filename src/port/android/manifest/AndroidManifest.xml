@@ -2,9 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.lucinhu.nj2me">
 
-    <!-- VIBRATE is the only thing this app asks for.  No storage permission: jars
-         live in app-private storage, which needs none. -->
+    <!-- VIBRATE and INTERNET are the only things this app asks for.  No storage
+         permission: jars live in app-private storage, which needs none.
+         INTERNET is what javax.microedition.io.HttpConnection needs: it goes
+         through PlatformHttp (HttpURLConnection), and the framework checks the
+         permission when the socket is opened. -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
@@ -14,6 +18,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="false"
         android:hardwareAccelerated="true"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@style/NjTheme">
 
         <!-- The launcher and the .jar opener are the same screen. -->

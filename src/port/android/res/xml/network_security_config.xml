@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    J2ME MIDlets predate TLS.  Their javax.microedition.io.HttpConnection URLs
+    are "http://", and Android 9 (API 28) blocks cleartext traffic by default -
+    measured here as "java.io.IOException: Cleartext HTTP traffic to 10.0.2.2
+    not permitted", which reaches the MIDlet as a failed request.
+
+    A per-domain allowlist cannot work for an emulator: a game connects to
+    whatever host its author wrote down in 2005.  So cleartext is permitted
+    globally, and HTTPS is untouched - nothing is downgraded, the platform
+    simply stops refusing plain HTTP on the MIDlet's behalf.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

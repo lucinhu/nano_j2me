@@ -373,6 +373,22 @@ typedef struct android_state {
     jclass    audio_class;
     jmethodID audio_info_mid;
     jmethodID audio_decode_mid;
+
+    /*
+     * HTTP, for javax.microedition.io.HttpConnection.  PlatformHttp.java wraps
+     * HttpURLConnection; the runtime calls it once per request and buffers the
+     * whole response, because that is the shape the MIDP API has (a MIDlet
+     * asks for a response code and then reads a stream).  The request handle
+     * is a Java-side long, never a pointer.  With no class resolved the hook
+     * stays NULL and "http://" is refused by name, exactly as on a target with
+     * no network stack.
+     */
+    jclass    http_class;
+    jmethodID http_request_mid;
+    jmethodID http_status_mid;
+    jmethodID http_headers_mid;
+    jmethodID http_body_mid;
+    jmethodID http_close_mid;
 } android_state;
 
 #define AS(ud) ((android_state *)(ud))
@@ -2669,6 +2685,163 @@ static void android_install_codecs(void *ud, nj_vm *vm)
 }
 
 /* ------------------------------------------------------------------ */
+/* HTTP: javax.microedition.io.HttpConnection                          */
+/* ------------------------------------------------------------------ */
+/*
+ * One request, one call.  PlatformHttp.java does the socket work with
+ * HttpURLConnection and buffers the whole response; this side copies the
+ * strings across, hands the body to the runtime's allocator, and frees the
+ * Java-side entry immediately - the runtime owns the bytes from then on.
+ *
+ * Everything here fails soft: a missing class, a Java exception or a refused
+ * request all come back as an error status, and the MIDlet then sees an
+ * IOException.  Nothing may throw across JNI, which would take the VM down.
+ */
+static nj_status android_http_request(void *ud, const char *url,
+                                      const char *method, const char *headers,
+                                      const nj_u1 *body, nj_u4 body_len,
+                                      int *status, char *rheaders,
+                                      nj_size rheaders_cap,
+                                      nj_u1 **out_body, nj_u4 *out_len,
+                                      void *(*alloc)(void *aud, nj_u4 n),
+                                      void *aud)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jstring jurl = NULL;
+    jstring jmethod = NULL;
+    jstring jheaders = NULL;
+    jbyteArray jbody = NULL;
+    jlong id;
+    jstring jrheaders = NULL;
+    jbyteArray jresp = NULL;
+
+    if (out_body) {
+        *out_body = NULL;
+    }
+    if (out_len) {
+        *out_len = 0u;
+    }
+    if (rheaders && rheaders_cap > 0) {
+        rheaders[0] = '\0';
+    }
+    if (!s || !url) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    env = android_run_env(s);
+    if (!env || !s->http_class || !s->http_request_mid) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+
+    jurl = (*env)->NewStringUTF(env, url);
+    jmethod = (*env)->NewStringUTF(env, method ? method : "GET");
+    jheaders = (*env)->NewStringUTF(env, headers ? headers : "");
+    if (!jurl || !jmethod || !jheaders) {
+        goto fail;
+    }
+    if (body && body_len > 0u) {
+        jbody = (*env)->NewByteArray(env, (jsize)body_len);
+        if (!jbody) {
+            goto fail;
+        }
+        (*env)->SetByteArrayRegion(env, jbody, 0, (jsize)body_len,
+                                   (const jbyte *)body);
+    }
+
+    id = (*env)->CallStaticLongMethod(env, s->http_class, s->http_request_mid,
+                                      jurl, jmethod, jheaders, jbody);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        goto fail;
+    }
+    if (id == 0) {
+        /* The Java side logs the reason; nothing to add here. */
+        goto fail;
+    }
+
+    if (status) {
+        *status = (int)(*env)->CallStaticIntMethod(env, s->http_class,
+                                                   s->http_status_mid, id);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            *status = 0;
+        }
+    }
+
+    /*
+     * The response header block, as "Name: value\n" lines.  A truncated copy
+     * is acceptable: it never ends mid-line, because the string is cut at the
+     * last newline that fits.
+     */
+    jrheaders = (jstring)(*env)->CallStaticObjectMethod(env, s->http_class,
+                                                        s->http_headers_mid, id);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        jrheaders = NULL;
+    }
+    if (jrheaders && rheaders && rheaders_cap > 1u) {
+        const char *utf = (*env)->GetStringUTFChars(env, jrheaders, NULL);
+        if (utf) {
+            size_t n = strlen(utf);
+            if (n >= (size_t)rheaders_cap) {
+                n = (size_t)rheaders_cap - 1u;
+                while (n > 0u && utf[n - 1u] != '\n') {
+                    n--;
+                }
+            }
+            memcpy(rheaders, utf, n);
+            rheaders[n] = '\0';
+            (*env)->ReleaseStringUTFChars(env, jrheaders, utf);
+        }
+    }
+
+    jresp = (jbyteArray)(*env)->CallStaticObjectMethod(env, s->http_class,
+                                                       s->http_body_mid, id);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        jresp = NULL;
+    }
+    if (jresp && out_body && out_len && alloc) {
+        jsize n = (*env)->GetArrayLength(env, jresp);
+        if (n > 0) {
+            nj_u1 *buf = (nj_u1 *)alloc(aud, (nj_u4)n);
+            if (!buf) {
+                goto fail;
+            }
+            (*env)->GetByteArrayRegion(env, jresp, 0, n, (jbyte *)buf);
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                goto fail;
+            }
+            *out_body = buf;
+            *out_len = (nj_u4)n;
+        }
+    }
+
+    /* The Java entry is done with; the body has been copied out. */
+    (*env)->CallStaticVoidMethod(env, s->http_class, s->http_close_mid, id);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    }
+    if (jurl) { (*env)->DeleteLocalRef(env, jurl); }
+    if (jmethod) { (*env)->DeleteLocalRef(env, jmethod); }
+    if (jheaders) { (*env)->DeleteLocalRef(env, jheaders); }
+    if (jbody) { (*env)->DeleteLocalRef(env, jbody); }
+    if (jrheaders) { (*env)->DeleteLocalRef(env, jrheaders); }
+    if (jresp) { (*env)->DeleteLocalRef(env, jresp); }
+    return NJ_OK;
+
+fail:
+    if (jurl) { (*env)->DeleteLocalRef(env, jurl); }
+    if (jmethod) { (*env)->DeleteLocalRef(env, jmethod); }
+    if (jheaders) { (*env)->DeleteLocalRef(env, jheaders); }
+    if (jbody) { (*env)->DeleteLocalRef(env, jbody); }
+    if (jrheaders) { (*env)->DeleteLocalRef(env, jrheaders); }
+    if (jresp) { (*env)->DeleteLocalRef(env, jresp); }
+    return NJ_ERR;
+}
+
+/* ------------------------------------------------------------------ */
 /* Construction and the public configuration entry points              */
 /* ------------------------------------------------------------------ */
 /*
@@ -2749,6 +2922,12 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     out->inflate = android_inflate;
     out->inflate_raw = android_inflate_raw;
     out->audio_decode = android_audio_decode;
+    /*
+     * http_request is set even when PlatformHttp did not resolve: the hook
+     * then answers NJ_ERR_UNSUPPORTED, which is the same answer a port with no
+     * network stack gives, and the runtime refuses http:// by name either way.
+     */
+    out->http_request = android_http_request;
     out->log = android_log;
     out->shutdown = android_shutdown;
     out->fps_cap = 30;
@@ -3209,6 +3388,53 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
             (*env)->DeleteLocalRef(env, acls);
         }
     }
+    {
+        /*
+         * PlatformHttp.java.  Unlike the two bridges above this one is a plain
+         * class with no Context at all: HttpURLConnection needs no permission
+         * object of its own, only the manifest's INTERNET permission, which is
+         * checked by the framework when the socket is opened.  A missing class
+         * leaves the hook answering NJ_ERR_UNSUPPORTED.
+         */
+        jclass hcls = (*env)->FindClass(env, "com/lucinhu/nj2me/PlatformHttp");
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            hcls = NULL;
+        }
+        if (hcls) {
+            jmethodID hreq = (*env)->GetStaticMethodID(
+                env, hcls, "request",
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)J");
+            jmethodID hstat = (*env)->GetStaticMethodID(env, hcls, "status",
+                                                        "(J)I");
+            jmethodID hhead = (*env)->GetStaticMethodID(env, hcls, "headers",
+                                                        "(J)Ljava/lang/String;");
+            jmethodID hbody = (*env)->GetStaticMethodID(env, hcls, "body",
+                                                        "(J)[B");
+            jmethodID hclose = (*env)->GetStaticMethodID(env, hcls, "close",
+                                                         "(J)V");
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                hreq = NULL;
+            }
+            if (hreq && hstat && hhead && hbody && hclose) {
+                s->http_class = (jclass)(*env)->NewGlobalRef(env, hcls);
+                s->http_request_mid = hreq;
+                s->http_status_mid = hstat;
+                s->http_headers_mid = hhead;
+                s->http_body_mid = hbody;
+                s->http_close_mid = hclose;
+            } else {
+                /* Name what is missing: a silent NULL here reads as "this
+                 * build has no HTTP", which is a different problem. */
+                __android_log_print(ANDROID_LOG_WARN, "nj2me",
+                                    "http: PlatformHttp is present but its "
+                                    "request API is not; http:// stays "
+                                    "unavailable for this run");
+            }
+            (*env)->DeleteLocalRef(env, hcls);
+        }
+    }
 
     win = ANativeWindow_fromSurface(env, surface);
     nj_port_android_set_window(&a->port, win);
@@ -3537,6 +3763,17 @@ Java_com_lucinhu_nj2me_GameActivity_nativeDestroy(JNIEnv *env, jobject thiz,
         s->audio_class = NULL;
         s->audio_info_mid = NULL;
         s->audio_decode_mid = NULL;
+    }
+    if (s && s->http_class) {
+        /* Every request closes its Java-side entry before the hook returns, so
+         * there is nothing to drain here - just the class reference. */
+        (*env)->DeleteGlobalRef(env, s->http_class);
+        s->http_class = NULL;
+        s->http_request_mid = NULL;
+        s->http_status_mid = NULL;
+        s->http_headers_mid = NULL;
+        s->http_body_mid = NULL;
+        s->http_close_mid = NULL;
     }
     nj_port_shutdown(&a->port);
     free(a);

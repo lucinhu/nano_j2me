@@ -181,6 +181,12 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
          * falls back to the runtime's own decoders. */
         PlatformImage.init(getApplicationContext());
         PlatformAudio.init(getApplicationContext());
+        /* HTTP for javax.microedition.io.HttpConnection.  It needs no Context
+         * of its own (HttpURLConnection is checked against the manifest's
+         * INTERNET permission when the socket opens); the call is here so a
+         * missing bridge shows up in the log at start-up rather than at the
+         * first request. */
+        PlatformHttp.init(getApplicationContext());
         Intent it = getIntent();
         /*
          * Two names on purpose. "jar" is the file name, which is what the
