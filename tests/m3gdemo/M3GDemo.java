@@ -725,6 +725,11 @@ public class M3GDemo extends MIDlet {
                 g3d.resetLights();
                 g3d.addLight(amb, null);
                 g3d.addLight(dir, null);
+                Background pre = new Background();
+                pre.setColor(0x000000);
+                pre.setColorClearEnable(true);
+                pre.setDepthClearEnable(true);
+                g3d.clear(pre);
                 g3d.render(vb, null, app, new Transform(), -1);
                 int[] lit = new int[1];
                 img.getRGB(lit, 0, 1, 10, 21, 1, 1);
