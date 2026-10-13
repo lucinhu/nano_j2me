@@ -768,7 +768,7 @@ public class LibraryActivity extends Activity {
                 + "MIDlet 会按这个大小排版，游戏画错位时再调。"), Md3.gap(this, 6));
         box.addView(input, Md3.gap(this, 16));
         Md3.show(new AlertDialog.Builder(this)
-            .setView(box)
+            .setView(Md3.scroller(this, box))
             .setPositiveButton("确定", new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int w) {
@@ -832,7 +832,7 @@ public class LibraryActivity extends Activity {
                 + "「用游戏名」可以改回 jar 里写的名字。"), Md3.gap(this, 6));
         box.addView(input, Md3.gap(this, 16));
         Md3.show(new AlertDialog.Builder(this)
-            .setView(box)
+            .setView(Md3.scroller(this, box))
             .setPositiveButton("保存", new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int w) {
@@ -869,7 +869,7 @@ public class LibraryActivity extends Activity {
         box.addView(Md3.supporting(this, "会删掉这个 jar，以及它的设置和存档目录名。"
                 + "这一步不能撤销。"), Md3.gap(this, 6));
         AlertDialog d = Md3.show(new AlertDialog.Builder(this)
-            .setView(box)
+            .setView(Md3.scroller(this, box))
             .setPositiveButton("删除", new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int w) {
@@ -961,7 +961,7 @@ public class LibraryActivity extends Activity {
                 "长按列表里的游戏可以改分辨率、内存、名字、按键；"
                         + "点右上角的 ⋮ 可以排序、切换沉浸模式。"), Md3.gap(this, 16));
         Md3.show(new AlertDialog.Builder(this)
-                .setView(box)
+                .setView(Md3.scroller(this, box))
                 .setPositiveButton("知道了", null)
                 , this);
     }
@@ -974,7 +974,7 @@ public class LibraryActivity extends Activity {
      */
     private AlertDialog showBox(LinearLayout box, String negative) {
         openBox = Md3.show(new AlertDialog.Builder(this)
-                .setView(box)
+                .setView(Md3.scroller(this, box))
                 .setNegativeButton(negative, null), this);
         return openBox;
     }

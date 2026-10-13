@@ -230,7 +230,7 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
         box.addView(never, Md3.gap(this, 16));
 
         Md3.show(new AlertDialog.Builder(this)
-                .setView(box)
+                .setView(Md3.scroller(this, box))
                 .setPositiveButton("知道了", new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface d, int which) {
@@ -501,7 +501,7 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
         updateNudge(info, step);
 
         Md3.show(new AlertDialog.Builder(this)
-            .setView(box)
+            .setView(Md3.scroller(this, box))
             .setNegativeButton("关闭", null), this);
     }
 
@@ -594,7 +594,7 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
     /** Shows a body built with the Md3 anatomy; its rows act through rowAction. */
     private AlertDialog showBox(LinearLayout box, String negative) {
         openBox = Md3.show(new AlertDialog.Builder(this)
-                .setView(box)
+                .setView(Md3.scroller(this, box))
                 .setNegativeButton(negative, null), this);
         return openBox;
     }
@@ -749,7 +749,7 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
                 Md3.gap(this, 8));
         box.addView(input);
         Md3.show(new AlertDialog.Builder(this)
-                .setView(box)
+                .setView(Md3.scroller(this, box))
                 .setPositiveButton("保存", new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface d, int which) {
@@ -856,7 +856,7 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
                 }
             })
             .setNegativeButton("继续编辑", null)
-            .setView(box), this);
+            .setView(Md3.scroller(this, box)), this);
         Md3.errorButton(d, DialogInterface.BUTTON_POSITIVE);
     }
 

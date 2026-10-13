@@ -21,7 +21,9 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -472,6 +474,22 @@ final class Md3 {
     }
 
     /**
+     * Wrap a dialog body so a card taller than the screen can still be read.
+     * The dialog's own frame does not scroll: a body with nine rows simply
+     * loses its last row off the bottom edge, which is how a card with a
+     * snapshot in it hid its own "delete the snapshot" row.
+     */
+    static View scroller(Context ctx, View body) {
+        ScrollView sv = new ScrollView(ctx);
+        sv.setFillViewport(true);
+        sv.setClipToPadding(false);
+        sv.addView(body, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT));
+        return sv;
+    }
+
+    /**
      * Show a dialog with the Material 3 container: 28dp corners on
      * surfaceContainerHigh, text buttons, no capital letters.  The framework
      * background carries the dialog's own padding, so replacing it means
@@ -789,7 +807,7 @@ final class Md3 {
             box.addView(row, gap(ctx, i == 0 ? 12 : 0));
         }
         holder[0] = show(new AlertDialog.Builder(ctx)
-                .setView(box)
+                .setView(scroller(ctx, box))
                 .setNegativeButton("关闭", null), ctx);
         return holder[0];
     }

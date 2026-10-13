@@ -712,7 +712,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(quit);
 
         final AlertDialog dlg = Md3.show(new AlertDialog.Builder(this)
-                .setView(box)
+                .setView(Md3.scroller(this, box))
                 .setNegativeButton("关闭", null), this);
 
         adjust.setOnClickListener(new View.OnClickListener() {
