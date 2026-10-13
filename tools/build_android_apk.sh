@@ -20,6 +20,11 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PKG=com.example.nj2me
+# The version comes from CMakeLists.txt, so an APK can never claim a version
+# the release does not have.  versionCode stays 1 until there is a second one.
+VERSION="$(sed -n 's/^project(nano_j2me VERSION \([0-9][0-9.]*\).*/\1/p' "$ROOT/CMakeLists.txt" | head -1)"
+[ -n "$VERSION" ] || VERSION=0.0.0
+VERSION_CODE="${VERSION//./}"
 ABIS="arm64-v8a armeabi-v7a x86 x86_64"
 SCREEN=""
 INSTALL=0
@@ -93,7 +98,7 @@ echo "== resources"
     --manifest "$ROOT/src/port/android/manifest/AndroidManifest.xml" \
     -I "$PLATFORM/android.jar" -R "$W/res.zip" --auto-add-overlay \
     --min-sdk-version 21 --target-sdk-version 34 \
-    --version-code 1 --version-name 1.0 --no-version-vectors || exit 1
+    --version-code "$VERSION_CODE" --version-name "$VERSION" --no-version-vectors || exit 1
 
 # dex/, lib/<abi>/ and assets/ are added with Python's zipfile rather than the
 # zip(1) command: zip is not installed everywhere and is not worth a dependency
