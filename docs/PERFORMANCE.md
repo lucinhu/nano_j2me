@@ -495,3 +495,55 @@ tests pass: the same titles were run against both binaries with
 plus eighteen of twenty sampled corpus titles - the two that differ, book4 and
 宇宙战机_10521, differ between two runs of the SAME binary as well, because they
 animate on wall-clock time).  ctest is 61/61 on the same tree.
+
+## The lookup a game makes millions of times, which the fixture never makes
+
+The compute fixture measures the interpreter and the interpreter is not what a
+game spends its time in.  Profiling 合金弹头4(完美汉化版)_4053 with `gprof` (1200
+frames, uncapped) put `nj_field_lookup` at 16.8% of sampled self time with
+1,498,980 calls, and the call graph says where they came from:
+
+    1,346,898  bais_read -> nj_field_lookup
+    1,498,980  nj_field_lookup -> nj_class_find
+    1,498,980  nj_field_lookup -> nj_class_resolve
+    1,498,980  nj_field_lookup -> nj_class_link
+
+`bais_read` is `ByteArrayInputStream.read()` - the native every `DataInputStream`
+read lands in - and it looked up its `buf`/`pos`/`count` fields BY NAME on every
+single call.  Each of those lookups resolved the class from its name string
+(hash, bucket walk, `strcmp`) and then walked the class's field array, then
+called `nj_class_link()` to discover the class had been linked long ago.
+
+Three changes, all of them plumbing rather than policy:
+
+  * `nj_class_find()` keeps four slots keyed on the ADDRESS of the name (a
+    literal in this library is the same address every time).  A hit is only
+    taken when the class it names really carries that name, so a caller that
+    reuses a stack buffer gets the slow path instead of a wrong answer, and a
+    dotted name can never match, because class names use slashes.
+  * `nj_class_lookup()` calls `nj_class_link()` only while `state < READY`.
+  * `nj_string.c` asks `vm->cls_string` first - the class table has recorded it
+    since it was created; the lookup stays as the answer for the window before
+    that.
+
+Measured the same way as everything else - CPU time from the runner's own stats
+line, one core, two alternating runs per title per binary, both binaries built
+once, 600 frames uncapped, smallest of the two:
+
+    title                          before   after    change
+    合金弹头4(完美汉化版)_4053      0.236    0.183    +22.5%
+    模拟人生3中文版_6162           0.234    0.182    +22.2%
+    实况足球经理2009_10609         1.308    1.131    +13.5%
+    帝国时代3-亚洲王朝_6288        0.155    0.140     +9.7%
+    疯狂企鹅中文版_10228           9.116    8.299     +9.0%
+    炸弹人_10311                   0.110    0.104     +5.5%
+    仙魔飞行棋_417                 0.143    0.136     +4.9%
+    开心农场_240                   0.128    0.126     +1.6%
+    total                         11.430   10.301     +9.9%
+
+The compute fixture moves the other way, inside its own spread: 607.6 M
+bytecodes/s before, 600.7 M after.  That is the honest and useful half of this
+result - `bench.jar` allocates and dispatches, it does not call the library, so
+it cannot see any of this.  A change that makes games faster while leaving the
+fixture where it was is exactly why the corpus titles are the workload that
+matters here.

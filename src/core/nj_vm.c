@@ -463,7 +463,10 @@ nj_class *nj_class_lookup(nj_vm *vm, const char *name)
     if (!c) {
         return NULL;
     }
-    if (nj_class_link(vm, c) != NJ_OK) {
+    /* A class that is already linked answers here on every later call, and this
+     * function is on the field-lookup path the I/O natives walk millions of
+     * times; keep the call to nj_class_link for the first visit only. */
+    if (c->state < NJ_CLASS_READY && nj_class_link(vm, c) != NJ_OK) {
         return NULL;
     }
     return c;

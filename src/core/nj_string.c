@@ -163,7 +163,13 @@ nj_ref nj_new_string_utf16(nj_vm *vm, const nj_u2 *s, int len)
     if (!o) {
         return NULL;
     }
-    o->cls = nj_class_find(vm, "java/lang/String");
+    /* nj_class_find walked the class hash once per String created - 1.86 M
+       lookups for "java/lang/String" in 1200 frames of 合金弹头4.  The class
+       table already records the class when it is created (src/core/nj_class.c,
+       "frequently used classes"), so ask it first; the lookup stays as the
+       answer for the window before the class exists. */
+    o->cls = vm->cls_string ? vm->cls_string
+                            : nj_class_find(vm, "java/lang/String");
     o->kind = NJ_OBJ_STRING;
     o->length = (nj_u4)len;
     o->size = (nj_u4)(sizeof(nj_object) + bytes);

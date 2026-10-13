@@ -210,14 +210,31 @@ static void normalise_name(const char *in, char *out, nj_u4 cap)
 
 nj_class *nj_class_find(nj_vm *vm, const char *internal_name)
 {
-    nj_u4 h;
+    nj_u4 h, slot;
     nj_class *c;
     char buf[256];
+    int dotted;
 
     if (!vm || !internal_name) {
         return NULL;
     }
-    if (strchr(internal_name, '.')) {
+    /* Fast path, keyed on the ADDRESS of the name.  Most calls come from a
+     * literal in this library ("java/lang/String" once per String created,
+     * "java/io/ByteArrayInputStream" once per stream read), so the same pointer
+     * arrives again and again.  The hit is only taken when the class it names
+     * really carries that name, so a caller that reuses a stack buffer gets the
+     * slow path instead of a wrong answer, and a name that needed normalising
+     * (it has a dot) can never match, because class names use slashes. */
+    slot = (nj_u4)(((unsigned long)internal_name >> 4) &
+                   (unsigned long)(NJ_CLASS_FIND_SLOTS - 1u));
+    c = vm->find_cls[slot];
+    if (c != NULL && vm->find_key[slot] == internal_name &&
+        strcmp(c->name, internal_name) == 0) {
+        return c;
+    }
+
+    dotted = (strchr(internal_name, '.') != NULL);
+    if (dotted) {
         normalise_name(internal_name, buf, (nj_u4)sizeof(buf));
     } else {
         nj_u4 i = 0u;
@@ -231,6 +248,10 @@ nj_class *nj_class_find(nj_vm *vm, const char *internal_name)
     h = name_hash(buf) & (NJ_CLASS_HASH - 1u);
     for (c = vm->class_head[h]; c; c = c->next_hash) {
         if (strcmp(c->name, buf) == 0) {
+            if (!dotted) {
+                vm->find_key[slot] = internal_name;
+                vm->find_cls[slot] = c;
+            }
             return c;
         }
     }

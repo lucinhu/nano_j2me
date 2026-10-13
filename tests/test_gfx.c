@@ -304,20 +304,26 @@ static void test_fill_rect(tctx *t)
     PX(t, &ts, 2, 2, C_WHITE, "pixel left of clip untouched");
 
     /*
-     * The clip is DEFINED in user space, so moving the origin carries it
-     * along: the caller's clip keeps the same user coordinates and translate()
-     * must not be able to change what getClipX() reports.  (It used to: the
-     * device clip stayed put while the origin moved, so the next store
-     * re-derived the user clip as device - translate and it drifted by exactly
-     * (dx, dy) on every translate.  tests/test_clip.c pins the observable end
-     * of that - setClip() before translate() and after it have to agree.)
+     * The clip is a rectangle of PIXELS, and translate() does not move it.
+     * MIDP 2.0 (Graphics.translate): "Operations on the coordinate system, such
+     * as translate(), do not modify the clip.  The methods getClipX(),
+     * getClipY(), getClipWidth() and getClipHeight() must return a rectangle
+     * that, if passed to setClip without an intervening change to the Graphics
+     * object's coordinate system, must result in the identical set of pixels in
+     * the clip."  These getters are the raw device rectangle; the Java-visible
+     * Graphics.getClipX() (src/midp/nj_lib_lcdui.c) subtracts the translate and
+     * so reports the clip in the caller's own coordinates.
+     *
+     * This is what the black map of 帝国时代3-亚洲王朝_6288 was: it translated
+     * to scroll its map and the clip scrolled with the origin, so nothing the
+     * game drew afterwards landed inside it.
      */
     nj_gfx_translate(&g, 5, 5);
-    CHECK(t, nj_gfx_get_clip_x(&g) == 8 && nj_gfx_get_clip_y(&g) == 7);
+    CHECK(t, nj_gfx_get_clip_x(&g) == 3 && nj_gfx_get_clip_y(&g) == 2);
     ts_clear(&ts, C_WHITE);
     nj_gfx_fill_rect(&g, -100, -100, 300, 300);
-    PX(t, &ts, 8, 7, C_RED, "clip moved with the translated origin");
-    PX(t, &ts, 3, 2, C_WHITE, "the clip is no longer where it was");
+    PX(t, &ts, 3, 2, C_RED, "the clip stays where it was");
+    PX(t, &ts, 8, 7, C_WHITE, "translate did not carry the clip with it");
 
     /* clipRect intersects in user space. */
     nj_gfx_translate(&g, -5, -5);            /* back to (3,2) */

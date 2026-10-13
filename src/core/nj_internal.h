@@ -296,6 +296,11 @@ typedef struct nj_codec_reg {
 /* ------------------------------------------------------------------ */
 #define NJ_CLASS_HASH 64
 
+/* Slots in nj_class_find's pointer-keyed cache.  Four is enough to hold the
+ * handful of names the library asks for once per call (every String creation,
+ * every stream read); see the comment in nj_class_find for why it is safe. */
+#define NJ_CLASS_FIND_SLOTS 4
+
 /* Reasons a constant-pool entry failed to resolve. */
 #define NJ_RESOLVE_OK     0u
 #define NJ_RESOLVE_CLASS  1u
@@ -311,6 +316,13 @@ struct nj_vm {
     nj_class  *classes[NJ_MAX_CLASSES];
     nj_u2      nclasses;
     nj_u2      next_class_id;
+
+    /* nj_class_find's cache: the last name POINTER answered per slot.  A hit
+     * costs one compare and one strcmp instead of a copy, a hash and a bucket
+     * walk - and 1.5 M of the 1.9 M lookups in a 1200-frame run of 合金弹头4
+     * came through nj_field_lookup. */
+    const char *find_key[NJ_CLASS_FIND_SLOTS];
+    nj_class   *find_cls[NJ_CLASS_FIND_SLOTS];
 
     /* frequently used classes (filled lazily, keeps hot paths hash-free) */
     nj_class  *cls_string;
