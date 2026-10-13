@@ -20,7 +20,10 @@ cp "$JAR" "$dir/"
 # twenty, which was enough while a frame was presented twice (the paint path
 # and the frame hook both called the port); now that the frame boundary
 # presents once, the fixture needs 120 frames to be measured at all.
-out="$(NJ_FRAMES="${NJ_FRAMES:-120}" NJ_SIZES="240x320" NJ_MIN_COLOURS=2 \
+# NJ_SLOW_SECS=0: this checks the tool's wording for a title that never
+# draws, so the wall-clock retry the tool runs for slow starters would only
+# spend its default ninety seconds proving the same thing.
+out="$(NJ_SLOW_SECS=0 NJ_FRAMES="${NJ_FRAMES:-120}" NJ_SIZES="240x320" NJ_MIN_COLOURS=2 \
         "$ROOT/tools/run_game_corpus.sh" --dir "$dir" 2>/dev/null \
         | grep flatdemo || true)"
 echo "$out"
