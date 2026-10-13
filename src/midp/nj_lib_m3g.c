@@ -5989,7 +5989,7 @@ NJFN(m3g_comp_init)
 {
     nj_ref self = NJ_THIS(args);
 
-    nj_iput(vm, self, m3g_fof(vm, NJ_C_COMP, "_nj_blend", "I"), 64);  /* REPLACE */
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_COMP, "_nj_blend", "I"), 64);  /* ALPHA */
     nj_iput(vm, self, m3g_fof(vm, NJ_C_COMP, "_nj_dtest", "I"), 1);
     nj_iput(vm, self, m3g_fof(vm, NJ_C_COMP, "_nj_dwrite", "I"), 1);
     nj_iput(vm, self, m3g_fof(vm, NJ_C_COMP, "_nj_awrite", "I"), 1);
@@ -6596,6 +6596,10 @@ typedef struct {
     int wrap_s, wrap_t;
     int cull;                  /* 160 CULL_BACK, 161 CULL_FRONT, 162 none */
     int winding;               /* 168 CCW, 169 CW */
+    int texfunc;               /* 224 ADD .. 228 REPLACE; 227 MODULATE */
+    int blend;                 /* CompositingMode: 64 ALPHA .. 68 REPLACE */
+    int athresh;               /* the alpha test, 0..255 */
+    int awrite;                /* alphaWriteEnable */
 } m3g_sw;
 
 #define M3G_SW_BACK  160
@@ -6647,12 +6651,53 @@ static int sw_depth(nj_vm *vm, nj_ref self, m3g_sw *sw)
     return sw->z != NULL;
 }
 
+/* The destination blend of CompositingMode.  Only reached when the source
+   really is translucent (or when the mode multiplies regardless), so an
+   opaque sprite still costs one store per pixel. */
+static nj_u4 sw_blend(nj_u4 src, nj_u4 dst, int mode, int awrite)
+{
+    nj_u4 a = (src >> 24) & 0xFFu;
+    nj_u4 inv = 255u - a;
+    nj_u4 sr = (src >> 16) & 0xFFu, sg = (src >> 8) & 0xFFu, sb = src & 0xFFu;
+    nj_u4 dr = (dst >> 16) & 0xFFu, dg = (dst >> 8) & 0xFFu, db = dst & 0xFFu;
+    nj_u4 r, g, b, oa;
+
+    if (mode == 65) {                     /* ALPHA_ADD: src*a + dst */
+        r = (sr * a) / 255u + dr;
+        g = (sg * a) / 255u + dg;
+        b = (sb * a) / 255u + db;
+    } else if (mode == 66 || mode == 67) {  /* MODULATE, MODULATE_X2 */
+        nj_u4 m = (mode == 67) ? 2u : 1u;
+
+        r = (sr * dr * m) / 255u;
+        g = (sg * dg * m) / 255u;
+        b = (sb * db * m) / 255u;
+    } else {                              /* 64 ALPHA: src over dst */
+        r = (sr * a + dr * inv) / 255u;
+        g = (sg * a + dg * inv) / 255u;
+        b = (sb * a + db * inv) / 255u;
+    }
+    if (r > 255u) { r = 255u; }
+    if (g > 255u) { g = 255u; }
+    if (b > 255u) { b = 255u; }
+    if (!awrite) {
+        oa = (dst >> 24) & 0xFFu;
+    } else if (mode == 64) {
+        oa = a + (((dst >> 24) & 0xFFu) * inv) / 255u;
+        if (oa > 255u) { oa = 255u; }
+    } else {
+        oa = 255u;
+    }
+    return (oa << 24) | (r << 16) | (g << 8) | b;
+}
+
 static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
 {
     float fs, ft;
     int u, v;
     const nj_u1 *p;
     nj_u4 tr, tg, tb;
+    nj_u4 ta = 255u;
 
     if (!sw->tex || sw->tex_w <= 0 || sw->tex_h <= 0) {
         return argb;
@@ -6679,13 +6724,19 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
     if (v >= sw->tex_h) { v = sw->tex_h - 1; }
     p = sw->tex + ((nj_size)v * (nj_size)sw->tex_w + (nj_size)u) *
                   (nj_size)sw->tex_bpp;
+    tr = p[0]; tg = p[1]; tb = p[2];
     if (sw->tex_bpp == 4) {
-        tr = p[0]; tg = p[1]; tb = p[2];
-    } else {
-        tr = p[0]; tg = p[1]; tb = p[2];
+        ta = p[3];               /* 100 rgB: four bytes per texel */
     }
-    /* MODULATE: the texture is the colour, the material tints it. */
-    return 0xFF000000u
+    /* FUNC_REPLACE and FUNC_DECAL take the texture's own colour; FUNC_MODULATE
+       (the JSR default) tints it with the material colour, which is what the
+       light or the vertex colour produced.  FUNC_ADD and FUNC_BLEND need a
+       second texture unit, which this rasteriser does not have; MODULATE is
+       the stand-in and docs/COMPATIBILITY.md says so. */
+    if (sw->texfunc == 228 || sw->texfunc == 226) {
+        return (ta << 24) | (tr << 16) | (tg << 8) | tb;
+    }
+    return (ta << 24)
          | (((tr * ((argb >> 16) & 0xFFu)) / 255u) << 16)
          | (((tg * ((argb >> 8) & 0xFFu)) / 255u) << 8)
          | ((tb * (argb & 0xFFu)) / 255u);
@@ -6838,12 +6889,11 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
             for (px = xl; px <= xr; px++, o++, drow++, pg += dxg, ph += dxh,
                      pk += dxk, rr += dxr, rgc += dxgc, rbc += dxb) {
                 nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
-                nj_u4 c;
+                nj_u4 c, ca;
 
                 if (key <= 0 || key <= sw->z[o]) {
                     continue;
                 }
-                sw->z[o] = key;
                 if (gouraud) {
                     c = 0xFF000000u |
                         ((nj_u4)(rr * ia + 0.5f) << 16) |
@@ -6853,9 +6903,25 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     c = flat;
                 }
                 if (has_tex) {
-                    *drow = sw_texel(sw, ph / pg, pk / pg, c);
+                    c = sw_texel(sw, ph / pg, pk / pg, c);
+                }
+                ca = (c >> 24) & 0xFFu;
+                /* The alpha test is a test on the fragment, so a discarded
+                   one leaves no depth behind - which is what lets a cut-out
+                   sprite pass in front of the thing behind it. */
+                if (sw->athresh > 0 && (nj_s4)ca < sw->athresh) {
+                    continue;
+                }
+                sw->z[o] = key;
+                if (sw->blend == 68) {              /* REPLACE */
+                    *drow = sw->awrite ? c
+                                       : ((c & 0x00FFFFFFu) | (*drow & 0xFF000000u));
+                } else if (ca < 255u || sw->blend == 65 || sw->blend == 66 ||
+                           sw->blend == 67) {
+                    *drow = sw_blend(c, *drow, sw->blend, sw->awrite);
                 } else {
-                    *drow = c;
+                    *drow = sw->awrite ? c
+                                       : ((c & 0x00FFFFFFu) | (*drow & 0xFF000000u));
                 }
                 drawn = 1u;
             }
@@ -6911,6 +6977,10 @@ typedef struct {
     nj_s4 ncomp, nfirst, ncount, ntype;
     float mv[16];                 /* view * model: model space -> eye space */
     float view[16];               /* world -> eye, for the lights */
+    int fog;                      /* a Fog is attached to the appearance */
+    int fog_mode;                 /* 80 EXPONENTIAL, 81 LINEAR */
+    nj_u4 fog_colour;
+    float fog_density, fog_near, fog_far;
     nj_ref lights;                /* Graphics3D._nj_lights */
     nj_ref lmats;                 /* ... and one float[16] per light */
     nj_s4 nlights;
@@ -6982,7 +7052,7 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
      * The eye-space position, which the lights need.  mv is view * model in
      * the Java layout jr_project reads (translation in m[3], m[7], m[11]).
      */
-    if (r->lit) {
+    if (r->lit || r->fog) {
         pe[0] = r->mv[0] * p[0] + r->mv[1] * p[1] + r->mv[2]  * p[2] + r->mv[3];
         pe[1] = r->mv[4] * p[0] + r->mv[5] * p[1] + r->mv[6]  * p[2] + r->mv[7];
         pe[2] = r->mv[8] * p[0] + r->mv[9] * p[1] + r->mv[10] * p[2] + r->mv[11];
@@ -7275,6 +7345,36 @@ static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
     out[2] = acc[2] < 0.0f ? 0.0f : (acc[2] > 255.0f ? 255.0f : acc[2]);
 }
 
+/* Fog is applied to the colour the vertex already has, per vertex: GL ES 1.x
+   computes the fog factor per vertex and interpolates it, and a title that
+   wants the horizon to fade is served by that.  f == 1 is "no fog". */
+static void jr_fog(m3g_jr *r, const float pe[3], float col[3])
+{
+    float d, f, span;
+    int i;
+
+    if (!r->fog) {
+        return;
+    }
+    /* The depth along the view axis, which is what GL ES's default fog
+       coordinate (FRAGMENT_DEPTH) uses: a vertex 5 units in front of the
+       camera is 5 units into the fog, wherever it is on the screen. */
+    d = fabsf(pe[2]);
+    if (r->fog_mode == 81) {              /* LINEAR */
+        span = r->fog_far - r->fog_near;
+        f = (span > 0.0f) ? ((r->fog_far - d) / span) : 1.0f;
+    } else {                              /* EXPONENTIAL */
+        f = expf(-r->fog_density * d);
+    }
+    if (f < 0.0f) { f = 0.0f; }
+    if (f > 1.0f) { f = 1.0f; }
+    for (i = 0; i < 3; i++) {
+        float fc = (float)((r->fog_colour >> (16 - i * 8)) & 0xFFu);
+
+        col[i] = col[i] * f + fc * (1.0f - f);
+    }
+}
+
 static void jr_triangle(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
 {
     float xy[6], inv[3], st[6];
@@ -7311,6 +7411,7 @@ static void jr_triangle(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
                      (nj_u4)(nj_u1)(s[2] & 0xFF);
             }
             jr_lit(r, pe[k], ne[k], vc, col);
+            jr_fog(r, pe[k], col);
             rgb[k] = ((nj_u4)(col[0] + 0.5f) << 16) |
                      ((nj_u4)(col[1] + 0.5f) << 8) |
                      (nj_u4)(col[2] + 0.5f);
@@ -7319,6 +7420,25 @@ static void jr_triangle(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
     } else {
         argb = jr_colour(r, a, b, c);
         rgb[0] = rgb[1] = rgb[2] = argb & 0x00FFFFFFu;
+        if (r->fog) {
+            /* Fog makes the three vertices differ even when nothing is lit,
+               so the filler's gradient path takes over. */
+            float base[3];
+            int k;
+
+            base[0] = (float)((argb >> 16) & 0xFFu);
+            base[1] = (float)((argb >> 8) & 0xFFu);
+            base[2] = (float)(argb & 0xFFu);
+            for (k = 0; k < 3; k++) {
+                float col[3];
+
+                col[0] = base[0]; col[1] = base[1]; col[2] = base[2];
+                jr_fog(r, pe[k], col);
+                rgb[k] = ((nj_u4)(col[0] + 0.5f) << 16) |
+                         ((nj_u4)(col[1] + 0.5f) << 8) |
+                         (nj_u4)(col[2] + 0.5f);
+            }
+        }
     }
     if (r->sw.surf) {
         /* The rasteriser writes the pixels: depth, texture, culling. */
@@ -7578,12 +7698,36 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
     }
     if (!r.lights) { r.nlights = 0; }
     r.lit = (mat != 0 && r.nrm != NULL && r.ncomp >= 3);
+    r.fog = 0;
+    if (app) {
+        nj_ref fog = nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_fog",
+                                              "L" NJ_C_FOG ";"));
+
+        if (fog) {
+            r.fog = 1;
+            r.fog_mode = (int)nj_iget(vm, fog, m3g_fof(vm, NJ_C_FOG, "_nj_mode", "I"));
+            r.fog_colour = (nj_u4)nj_iget(vm, fog,
+                            m3g_fof(vm, NJ_C_FOG, "_nj_color", "I")) & 0x00FFFFFFu;
+            r.fog_density = bits2f(nj_iget(vm, fog,
+                             m3g_fof(vm, NJ_C_FOG, "_nj_density", "F")));
+            r.fog_near = bits2f(nj_iget(vm, fog,
+                          m3g_fof(vm, NJ_C_FOG, "_nj_near", "F")));
+            r.fog_far = bits2f(nj_iget(vm, fog,
+                         m3g_fof(vm, NJ_C_FOG, "_nj_far", "F")));
+        }
+    }
 
     /* Texture unit 0 and the polygon mode: a textured title says so in the
        Appearance, and the PolygonMode is where culling and winding live
        (the JSR defaults are CULL_BACK and CCW). */
     r.sw.cull = 0;
     r.sw.winding = 0;
+    /* The JSR defaults when the appearance carries no CompositingMode:
+       ALPHA blending with no alpha test, and the alpha channel written. */
+    r.sw.texfunc = 227;
+    r.sw.blend = 64;
+    r.sw.athresh = 0;
+    r.sw.awrite = 1;
     if (app) {
         nj_ref pm = nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_pm",
                                              "L" NJ_C_POLY ";"));
@@ -7595,6 +7739,22 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
                              m3g_fof(vm, NJ_C_POLY, "_nj_winding", "I"));
         }
         {
+            nj_ref cm = nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_cm",
+                                                 "L" NJ_C_COMP ";"));
+
+            if (cm) {
+                r.sw.blend = (int)nj_iget(vm, cm,
+                              m3g_fof(vm, NJ_C_COMP, "_nj_blend", "I"));
+                r.sw.awrite = (int)nj_iget(vm, cm,
+                               m3g_fof(vm, NJ_C_COMP, "_nj_awrite", "I"));
+                r.sw.athresh = (int)(bits2f(nj_iget(vm, cm,
+                               m3g_fof(vm, NJ_C_COMP, "_nj_athresh", "I")))
+                                     * 255.0f + 0.5f);
+                if (r.sw.athresh < 0) { r.sw.athresh = 0; }
+                if (r.sw.athresh > 255) { r.sw.athresh = 255; }
+            }
+        }
+        {
             nj_ref tex = nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_tex0",
                                                   "L" NJ_C_TEX2D ";"));
             if (tex) {
@@ -7604,6 +7764,8 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
                                m3g_fof(vm, NJ_C_TEX2D, "_nj_wrapS", "I"));
                 r.sw.wrap_t = (int)nj_iget(vm, tex,
                                m3g_fof(vm, NJ_C_TEX2D, "_nj_wrapT", "I"));
+                r.sw.texfunc = (int)nj_iget(vm, tex,
+                                m3g_fof(vm, NJ_C_TEX2D, "_nj_blend", "I"));
                 if (im2) {
                     nj_ref px = nj_rget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
                                                          "_nj_pixels", "[B"));

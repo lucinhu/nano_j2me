@@ -737,9 +737,25 @@ the three things a flat `fillTriangle` cannot express possible:
   A triangle strip alternates winding between its triangles, so the strip
   walker swaps the first two vertices of its odd triangles.
 
-What is still honest about it: no fog, no alpha blending inside the rasteriser
-(an opaque write), no mipmaps and no bilinear filtering, and no anisotropic or
-per-fragment lighting (lighting is per vertex, below).
+- **Alpha blending and the alpha test** from the appearance's
+  `CompositingMode`: `ALPHA` (the JSR default) writes
+  `src·a + dst·(1−a)`, `ALPHA_ADD`, `MODULATE`, `MODULATE_X2` and `REPLACE`
+  are implemented, and `setAlphaThreshold` discards a fragment **before** the
+  depth write - so a cut-out sprite leaves no depth behind and the thing
+  behind it shows through.  The source alpha comes from the texture
+  (`Image2D.RGBA` texels); a `Texture2D.FUNC_REPLACE`/`FUNC_DECAL` texture
+  keeps its own colour instead of being tinted by the material.
+- **Fog** from `Appearance.getFog()`: `LINEAR` fades towards `Fog`'s colour
+  between its near and far distances, `EXPONENTIAL` by `exp(-density·d)`,
+  where d is the depth along the view axis - the fog coordinate GL ES uses by
+  default.  The factor is computed per vertex and interpolated with the rest
+  of the colour, which is what the fixed-function pipeline does; the fixture
+  puts a triangle half way into a 4..6 fog and reads the pixel back.
+
+What is still honest about it: no mipmaps, no bilinear filtering
+(`FILTER_LINEAR` samples nearest), no `FUNC_ADD`/`FUNC_BLEND` (they need a
+second texture unit), no per-fragment lighting (lighting is per vertex,
+below), and no stencil or `PolygonMode` offset.
 
 ### Lighting, and two matrix conventions that cannot be mixed
 
@@ -822,7 +838,7 @@ nobody has clipped is clipped to its whole target.
 
 `tests/m3gdemo/M3GDemo.java` now asks for the reset as well ("a render after
 bindTarget covers the target"), so a title that never sets a viewport cannot
-regress to a black screen: 112 checks, 0 failures.
+regress to a black screen: 140 checks, 0 failures.
 
 ### A float stored in an array came back as 1.06535e9
 

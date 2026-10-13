@@ -839,6 +839,150 @@ public class M3GDemo extends MIDlet {
             }
         });
 
+        run("a translucent texture blends with what is behind it", new Runnable() {
+            public void run() {
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(tex_tri(), null, flat(0x00FF00FF), new Transform(), -1);
+                g3d.releaseTarget();
+                /* A fresh binding clears the depth buffer, so the second
+                 * triangle is not rejected by the first one's depth. */
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(tex_tri(), null, tex_app(0x00FF0000, 0x80, -1),
+                           new Transform(), -1);
+                g3d.releaseTarget();
+
+                int[] px = new int[1];
+                img.getRGB(px, 0, 1, 16, 14, 1, 1);
+                /* Red 255 over magenta with alpha 128: blue is the channel
+                 * the two do not share, and it must land half way. */
+                check("half a red triangle over magenta leaves half the blue",
+                      px[0] == 0xFFFF007F);
+            }
+        });
+
+        run("the alpha test discards a texel below the threshold", new Runnable() {
+            public void run() {
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(tex_tri(), null, flat(0x00FF00FF), new Transform(), -1);
+                g3d.releaseTarget();
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                Appearance app = tex_app(0x00FF0000, 0x4C, -1);   /* alpha 76 */
+                CompositingMode cm = new CompositingMode();
+                cm.setAlphaThreshold(0.5f);                       /* 127 */
+                app.setCompositingMode(cm);
+                g3d.render(tex_tri(), null, app, new Transform(), -1);
+                g3d.releaseTarget();
+
+                int[] px = new int[1];
+                img.getRGB(px, 0, 1, 16, 14, 1, 1);
+                check("a texel the alpha test rejects leaves the pixel alone",
+                      px[0] == 0xFFFF00FF);
+            }
+        });
+
+        run("without the alpha test the same texel blends", new Runnable() {
+            public void run() {
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(tex_tri(), null, flat(0x00FF00FF), new Transform(), -1);
+                g3d.releaseTarget();
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(tex_tri(), null, tex_app(0x00FF0000, 0x4C, -1),
+                           new Transform(), -1);
+                g3d.releaseTarget();
+
+                int[] px = new int[1];
+                img.getRGB(px, 0, 1, 16, 14, 1, 1);
+                check("alpha 76 leaves 179 of the blue behind", px[0] == 0xFFFF00B3);
+            }
+        });
+
+        run("FUNC_REPLACE takes the texture colour as it is", new Runnable() {
+            public void run() {
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                /* A green texture under a red material: MODULATE would give
+                 * black, FUNC_REPLACE must give the texture's own green. */
+                g3d.render(tex_tri(), null,
+                           tex_app(0x0000FF00, 0xFF, Texture2D.FUNC_REPLACE),
+                           new Transform(), -1);
+                g3d.releaseTarget();
+
+                int[] px = new int[1];
+                img.getRGB(px, 0, 1, 16, 14, 1, 1);
+                check("the material does not tint a REPLACE texture",
+                      px[0] == 0xFF00FF00);
+            }
+        });
+
+        run("fog fades a triangle towards its colour", new Runnable() {
+            public void run() {
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                Appearance app = flat(0x00FF0000);
+                Fog fog = new Fog();
+                fog.setMode(Fog.LINEAR);
+                fog.setColor(0x0000FF00);
+                fog.setLinear(4.0f, 6.0f);
+                app.setFog(fog);
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(tri(-2, -2, -5, 2, -2, -5, 0, 2, -5), null, app,
+                           new Transform(), -1);
+                g3d.releaseTarget();
+
+                int[] px = new int[1];
+                img.getRGB(px, 0, 1, 16, 14, 1, 1);
+                /* The triangle sits at z = -5, next to the middle of 4..6,
+                 * so half of the red survives and half the fog shows. */
+                /* Half of the red survives and half the fog's green:
+                 * 0x80 red, 0x80 green, and no blue from either. */
+                check("fog at half distance keeps half the colour",
+                      px[0] == 0xFF808000);
+            }
+        });
+
         /* A benchmark mode, not a check: with -Dnj2me.bench=<n> the same
          * triangle is rendered n times into a target and the elapsed time
          * is printed, so the two render paths can be compared on one
@@ -902,6 +1046,36 @@ public class M3GDemo extends MIDlet {
                                     (short) x2, (short) y2, (short) z2 });
         vb.setPositions(pos, 1.0f, null);
         return vb;
+    }
+
+    /* The same triangle with unit-0 texture coordinates. */
+    private static VertexBuffer tex_tri() {
+        VertexBuffer vb = tri(-2, -2, -5, 2, -2, -5, 0, 2, -5);
+        VertexArray tc = new VertexArray(3, 2, 2);
+        tc.set(0, 3, new short[] { 0, 0, 1, 0, 0, 1 });
+        vb.setTexCoords(0, tc, 1.0f, null);
+        return vb;
+    }
+
+    /* An appearance whose texture is one colour at one alpha; func -1 leaves
+     * the JSR default (FUNC_MODULATE) in place. */
+    private static Appearance tex_app(int rgb, int alpha, int func) {
+        byte r = (byte) ((rgb >> 16) & 0xFF);
+        byte g = (byte) ((rgb >> 8) & 0xFF);
+        byte b = (byte) (rgb & 0xFF);
+        Image2D image = new Image2D(Image2D.RGBA, 2, 2, new byte[] {
+            r, g, b, (byte) alpha, r, g, b, (byte) alpha,
+            r, g, b, (byte) alpha, r, g, b, (byte) alpha });
+        Appearance app = new Appearance();
+        Material mat = new Material();
+        mat.setColor(Material.DIFFUSE, 0x00FFFFFF);
+        app.setMaterial(mat);
+        Texture2D tex = new Texture2D(image);
+        if (func >= 0) {
+            tex.setBlending(func);
+        }
+        app.setTexture(0, tex);
+        return app;
     }
 
     protected void pauseApp() {
