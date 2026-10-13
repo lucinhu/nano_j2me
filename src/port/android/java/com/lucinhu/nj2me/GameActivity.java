@@ -1,9 +1,11 @@
 package com.lucinhu.nj2me;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
+import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -44,7 +46,6 @@ import android.widget.TextView;
 public class GameActivity extends Activity implements SurfaceHolder.Callback, PadView.Sink {
 
     private static final String TAG = "nj2me";
-    private static final int BAR_TIMEOUT_MS = 7000;
 
     static {
         try {
@@ -62,7 +63,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private SurfaceView surfaceView;
     private PadView pad;
     private PadConfig padConfig;
-    private LinearLayout bar;
     private TextView status;
     private TextView handleButton;
 
@@ -97,12 +97,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private int insetL, insetT, insetR, insetB;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final Runnable barHider = new Runnable() {
-        @Override
-        public void run() {
-            showBar(false);
-        }
-    };
     private final Runnable statusTick = new Runnable() {
         @Override
         public void run() {
@@ -178,6 +172,10 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
          * missing bridge shows up in the log at start-up rather than at the
          * first request. */
         PlatformHttp.init(getApplicationContext());
+        /* JSR 256 sensors.  Optional in the same way: without it the C hook
+         * answers "no sensors", so findSensors() comes back empty instead of
+         * the package being reported missing. */
+        PlatformSensor.init(getApplicationContext());
         /* The Material 3 palette, before the first view is built: the dialogs
          * this screen opens are the framework's, and they have to agree with
          * the colours the library used. */
@@ -243,12 +241,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         slp.setMargins(dp(6), 0, 0, dp(6));
         root.addView(status, slp);
 
-        bar = buildBar();
-        FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        blp.gravity = Gravity.TOP;
-        root.addView(bar, blp);
-
         handleButton = new TextView(this);
         handleButton.setText("≡");
         Md3.overlayHandle(handleButton, this);
@@ -258,7 +250,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         handleButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                showBar(bar.getVisibility() != View.VISIBLE);
+                showPanel();
             }
         });
 
@@ -277,7 +269,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             }
         });
         root.requestApplyInsets();
-        showBar(true);
     }
 
     /** Keeps the controls out of the cutout and the system bars. */
@@ -289,9 +280,6 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         insetB = e[3];
         if (pad != null) {
             pad.setSafeAreaPx(insetL, insetT, insetR, insetB);
-        }
-        if (bar != null) {
-            bar.setPadding(dp(6) + insetL, dp(4) + insetT, dp(40) + insetR, dp(4));
         }
         if (status != null) {
             status.setPadding(dp(8) + insetL, dp(4), dp(8) + insetR, dp(4) + insetB);
@@ -314,6 +302,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         padConfig.replaceWith(PadConfig.load(this));
         pad.setConfig(padConfig);
         reloadView();
+        MidiPlayer.resumeAll();
         applyView();
         ui.removeCallbacks(statusTick);
         ui.post(statusTick);
@@ -334,6 +323,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 nativeSetActive(handle, false);
             }
         }
+        /* The port pauses its mixer; a MIDI Player is a MediaPlayer and has to
+         * be paused here too, or the music follows the player into the library. */
+        MidiPlayer.pauseAll();
         ui.removeCallbacks(statusTick);
         super.onPause();
     }
@@ -341,8 +333,10 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     @Override
     protected void onDestroy() {
         finishing = true;
+        /* The VM is gone by now, but a Player it left started is not: the shell
+         * closes every MediaPlayer it opened, or the music outlives the game. */
+        MidiPlayer.closeAll();
         ui.removeCallbacks(statusTick);
-        ui.removeCallbacks(barHider);
         synchronized (lock) {
             if (handle != 0) {
                 nativeQuit(handle);     /* the run thread frees the port */
@@ -354,9 +348,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     @Override
     public void onBackPressed() {
         /* Not a hard exit: a MIDlet's back button is its right soft key, so the
-         * key press has already gone to the game.  Back opens the bar, where
+         * key press has already gone to the game.  Back opens the panel, where
          * 退出 is one deliberate tap away. */
-        showBar(true);
+        showPanel();
     }
 
     /* --------------------------------------------------------------- surface */
@@ -423,6 +417,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             }
         }
         saveView();
+        /* The VM has been torn down; anything it left playing is ours to stop. */
+        MidiPlayer.closeAll();
         ui.post(new Runnable() {
             @Override
             public void run() {
@@ -448,6 +444,24 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     public boolean dispatchKeyEvent(KeyEvent ev) {
         int code = ev.getKeyCode();
         boolean down = ev.getAction() == KeyEvent.ACTION_DOWN;
+        /*
+         * Volume is the system's, not the MIDlet's.  A MIDP key set has no
+         * volume key, so forwarding these left the player with no way to turn
+         * the sound down - and the stream that matters here is music, which is
+         * what a game's soundtrack plays on.
+         */
+        if (code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN
+                || code == KeyEvent.KEYCODE_VOLUME_MUTE) {
+            AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+            if (am == null) {
+                return false;       /* let the framework do it the usual way */
+            }
+            int dir = code == KeyEvent.KEYCODE_VOLUME_UP ? AudioManager.ADJUST_RAISE
+                    : (code == KeyEvent.KEYCODE_VOLUME_DOWN ? AudioManager.ADJUST_LOWER
+                    : AudioManager.ADJUST_TOGGLE_MUTE);
+            am.adjustStreamVolume(AudioManager.STREAM_MUSIC, dir, AudioManager.FLAG_SHOW_UI);
+            return true;
+        }
         if (down && ev.getRepeatCount() > 0) {
             return true;        /* MIDP has no key repeat; a held key is held */
         }
@@ -596,82 +610,83 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         android.widget.Toast.makeText(this, s, android.widget.Toast.LENGTH_SHORT).show();
     }
 
-    /* ------------------------------------------------------------------- bar */
+    /* ----------------------------------------------------------------- panel */
 
-    private LinearLayout buildBar() {
-        LinearLayout b = new LinearLayout(this);
-        b.setOrientation(LinearLayout.HORIZONTAL);
-        b.setBackgroundColor(Md3.OVERLAY);
-        b.setGravity(Gravity.CENTER_VERTICAL);
-        b.setPadding(dp(6), dp(4), dp(40), dp(4));
+    /**
+     * The game's controls, as a panel instead of a strip across the top.
+     *
+     * <p>A bar that is always there covers the MIDlet's own title row, and
+     * while it is up it swallows every pad touch - which is how the first
+     * seconds of a game went missing.  The panel appears when the ≡ handle is
+     * tapped, leaves nothing on screen when it is dismissed, and the game
+     * underneath keeps running.
+     */
+    private void showPanel() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(8), 0, dp(8), dp(4));
 
-        TextView title = new TextView(this);
-        title.setText(jarTitle);
-        Md3.type(title, 14f, Md3.OVERLAY_TEXT, true);
-        title.setSingleLine(true);
-        title.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
-        b.addView(title, new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView adjust = panelButton("调整画面和按键");
+        TextView toggle = panelButton(status.getVisibility() == View.VISIBLE
+                ? "隐藏状态信息" : "显示状态信息");
+        TextView quit = panelButton("退出游戏");
+        box.addView(adjust);
+        box.addView(toggle);
+        box.addView(quit);
 
-        b.addView(barButton("调整", new View.OnClickListener() {
+        String sub = screenW + "x" + screenH
+                + (detW > 0 ? " · 画面 " + detW + "x" + detH : "");
+        final AlertDialog dlg = Md3.show(new AlertDialog.Builder(this)
+                .setCustomTitle(Md3.headline(this, jarTitle, sub))
+                .setView(box)
+                .setNegativeButton("关闭", null), this);
+
+        adjust.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                dlg.dismiss();
                 /* One screen for the picture and the keys, so the player can
                  * see where the game sits while placing the controls - and so
                  * that the answer to "where did my keys go" is one tap, not
                  * two dialogs in a different activity. */
-                showBar(false);
                 Intent it = new Intent(GameActivity.this, PadEditActivity.class);
                 it.putExtra("jar", jarName);
                 it.putExtra("w", screenW);
                 it.putExtra("h", screenH);
                 startActivity(it);
             }
-        }));
-        b.addView(barButton("状态", new View.OnClickListener() {
+        });
+        toggle.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 status.setVisibility(status.getVisibility() == View.VISIBLE
                         ? View.GONE : View.VISIBLE);
                 refreshStatus();
-                armBarTimer();
+                dlg.dismiss();
             }
-        }));
-        b.addView(barButton("退出", new View.OnClickListener() {
+        });
+        quit.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                dlg.dismiss();
                 synchronized (lock) {
                     if (handle != 0) {
                         nativeQuit(handle);
                     }
                 }
-                showBar(false);
             }
-        }));
-        return b;
+        });
     }
 
-    private TextView barButton(String label, View.OnClickListener click) {
+    private TextView panelButton(String label) {
         TextView t = new TextView(this);
         t.setText(label);
-        Md3.overlayButton(t, this);
-        t.setOnClickListener(click);
+        Md3.textButton(t, this);
+        t.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        t.setPadding(dp(12), 0, dp(12), 0);
+        t.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
         return t;
-    }
-
-    private void showBar(boolean showing) {
-        bar.setVisibility(showing ? View.VISIBLE : View.GONE);
-        pad.setBarShowing(showing);
-        handleButton.setVisibility(showing ? View.GONE : View.VISIBLE);
-        ui.removeCallbacks(barHider);
-        if (showing) {
-            armBarTimer();
-        }
-    }
-
-    private void armBarTimer() {
-        ui.removeCallbacks(barHider);
-        ui.postDelayed(barHider, BAR_TIMEOUT_MS);
     }
 
     private void refreshStatus() {

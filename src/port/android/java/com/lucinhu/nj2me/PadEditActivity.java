@@ -12,6 +12,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
@@ -56,7 +57,8 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
     /** Published by the frame on every draw, so a drag can be clamped. */
     private float maxPanX, maxPanY;
 
-    private TextView hint;
+    private View toolbar;
+    private TextView barPill;
 
     /**
      * The window as the game will paint it.
@@ -150,22 +152,31 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
          * only take the touches that land on a button - the rest falls through
          * to the keypad underneath, so a key under the toolbar is still
          * draggable. */
-        final View toolbar = buildToolbar();
+        toolbar = buildToolbar();
         FrameLayout.LayoutParams tlp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         tlp.gravity = Gravity.TOP;
         root.addView(toolbar, tlp);
 
-        hint = new TextView(this);
-        hint.setText("拖动空白=移动画面 · 双指=缩放画面 · 长按空白=加按键 · 拖动按键=摆位置 · "
-                + "双指按按键=改大小 · 长按按键=改键/删除 · 滑杆=游戏里按键的透明度 · 淡黄框=避开刘海/挖孔");
-        Md3.type(hint, 11f, Md3.onSurfaceVariant, false);
-        hint.setBackgroundColor(Md3.surfaceContainer);
-        hint.setPadding(dp(8), dp(6), dp(8), dp(8));
-        FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        hlp.gravity = Gravity.BOTTOM;
-        root.addView(hint, hlp);
+        /* What the toolbar leaves behind when it is put away: a key the player
+         * wants at the very top of the screen would otherwise sit under it. */
+        barPill = new TextView(this);
+        barPill.setText("▾ 工具条");
+        Md3.overlayHandle(barPill, this);
+        Md3.type(barPill, 12f, Md3.OVERLAY_TEXT, false);
+        barPill.setPadding(dp(12), dp(6), dp(12), dp(6));
+        barPill.setVisibility(View.GONE);
+        FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        plp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        plp.topMargin = dp(6);
+        root.addView(barPill, plp);
+        barPill.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                setToolbarVisible(true);
+            }
+        });
 
         setContentView(root);
         /* The editor has to show the same safe area the game will use. */
@@ -176,11 +187,68 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
                 int[] e = Ui.insets(in, immersive);
                 pad.setSafeAreaPx(e[0], e[1], e[2], e[3]);
                 toolbar.setPadding(dp(6) + e[0], dp(4) + e[1], dp(6) + e[2], dp(4));
-                hint.setPadding(dp(8) + e[0], dp(6), dp(8) + e[2], dp(8) + e[3]);
+                barPill.setPadding(dp(12) + e[0], dp(6), dp(12) + e[2], dp(6));
                 return in;
             }
         });
         root.requestApplyInsets();
+        showTip();
+    }
+
+    /**
+     * The gestures, told once, instead of a strip of small print along the
+     * bottom that was in the way of the keys the player was placing.
+     */
+    private void showTip() {
+        if (getSharedPreferences("pad", MODE_PRIVATE).getBoolean("tipOff", false)) {
+            return;
+        }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(24), 0, dp(24), 0);
+
+        TextView lines = new TextView(this);
+        lines.setText("拖动空白：移动游戏画面\n"
+                + "双指：缩放画面\n"
+                + "长按空白：添加按键\n"
+                + "拖动按键：摆位置 · 双指按按键：改大小\n"
+                + "长按按键：改键 / 删除\n"
+                + "滑杆：按键在游戏里的透明度\n"
+                + "淡黄框：避开刘海 / 挖孔的可用区\n"
+                + "工具条的 ▴ 把它收起来，点顶部「▾ 工具条」再打开");
+        Md3.type(lines, 13f, Md3.onSurfaceVariant, false);
+        lines.setLineSpacing(dp(4), 1f);
+        box.addView(lines);
+
+        final CheckBox never = new CheckBox(this);
+        never.setText("不再提示");
+        never.setTextColor(Md3.onSurface);
+        never.setButtonTintList(android.content.res.ColorStateList.valueOf(Md3.primary));
+        never.setPadding(0, dp(8), 0, 0);
+        box.addView(never);
+
+        Md3.show(new AlertDialog.Builder(this)
+                .setCustomTitle(Md3.headline(this, "调整画面和按键", "怎么操作"))
+                .setView(box)
+                .setPositiveButton("知道了", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        if (never.isChecked()) {
+                            getSharedPreferences("pad", MODE_PRIVATE).edit()
+                                    .putBoolean("tipOff", true).apply();
+                        }
+                    }
+                }), this);
+    }
+
+    /** Puts the toolbar away so the top of the screen can hold a key. */
+    private void setToolbarVisible(boolean visible) {
+        if (toolbar != null) {
+            toolbar.setVisibility(visible ? View.VISIBLE : View.GONE);
+        }
+        if (barPill != null) {
+            barPill.setVisibility(visible ? View.GONE : View.VISIBLE);
+        }
     }
 
     @Override
@@ -257,6 +325,16 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         slp.setMargins(dp(8), 0, 0, 0);
         bar.addView(slider, slp);
+
+        /* The strip can get out of the way: a player who wants a key along the
+         * very top of the screen should not have to place it under the tools
+         * they are using to place it. */
+        bar.addView(button("\u25b4", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                setToolbarVisible(false);
+            }
+        }));
         return bar;
     }
 

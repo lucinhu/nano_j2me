@@ -56,6 +56,9 @@ final class MidiPlayer {
     private static final Map<Long, MediaPlayer> PLAYERS = new HashMap<Long, MediaPlayer>();
     private static final Map<Long, File> FILES = new HashMap<Long, File>();
 
+    /* Ids this shell paused itself, so resume only restarts its own work. */
+    private static final java.util.Set<Long> PAUSED = new java.util.HashSet<Long>();
+
     private static Context appContext;
     private static long nextId = 1L;
 
@@ -158,6 +161,58 @@ final class MidiPlayer {
         } catch (Throwable t) {
             Log.d(TAG, "midi: stop failed (" + t + ")");
         }
+    }
+
+    /*
+     * The game is over, but a MIDlet does not always get that far: it can be
+     * torn down with its Player still started, and a MediaPlayer outlives the
+     * VM, the port and the Activity.  That is the "the music keeps playing
+     * after I leave the game" complaint, so the shell closes the books itself
+     * instead of trusting deallocate() to have run.
+     */
+    static synchronized void closeAll() {
+        for (Long id : new java.util.ArrayList<Long>(PLAYERS.keySet())) {
+            close(id);
+        }
+        PLAYERS.clear();
+        FILES.clear();
+        PAUSED.clear();
+    }
+
+    /*
+     * Leaving the screen is not the end of the game: pause what is playing and
+     * remember it, so the same players come back when the game does.  A player
+     * the MIDlet itself stopped is not playing, so it stays stopped - the shell
+     * only undoes what it did.
+     */
+    static synchronized void pauseAll() {
+        PAUSED.clear();
+        for (Map.Entry<Long, MediaPlayer> e : PLAYERS.entrySet()) {
+            MediaPlayer mp = e.getValue();
+            try {
+                if (mp.isPlaying()) {
+                    mp.pause();
+                    PAUSED.add(e.getKey());
+                }
+            } catch (Throwable ignored) {
+                /* a player the platform already let go of */
+            }
+        }
+    }
+
+    static synchronized void resumeAll() {
+        for (Long id : PAUSED) {
+            MediaPlayer mp = PLAYERS.get(id);
+            if (mp == null) {
+                continue;
+            }
+            try {
+                mp.start();
+            } catch (Throwable t) {
+                Log.d(TAG, "midi: resume failed (" + t + ")");
+            }
+        }
+        PAUSED.clear();
     }
 
     static synchronized void close(long id) {

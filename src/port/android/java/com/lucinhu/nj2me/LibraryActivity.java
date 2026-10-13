@@ -8,7 +8,9 @@ import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.text.Editable;
 import android.text.InputType;
+import android.text.TextWatcher;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -27,6 +29,9 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -46,7 +51,15 @@ public class LibraryActivity extends Activity {
     private TextView empty;
     private TextView headerCount;
     private List<JarStore.Entry> items;
+    private List<JarStore.Entry> all = new ArrayList<JarStore.Entry>();
     private EntryAdapter adapter;
+    private EditText searchBox;
+    private String query = "";
+    /* The library remembers the order the player likes (see sortDialog()); the
+     * default is the one a launcher would use, most recently played first. */
+    private int sortMode;
+    private static final String[] SORT_NAMES =
+            { "最近运行", "名称", "文件大小", "最近导入" };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -63,6 +76,7 @@ public class LibraryActivity extends Activity {
         /* Material 3 starts here: the palette is read once, before any view is
          * built, because every colour below comes out of it. */
         Md3.init(this);
+        sortMode = getSharedPreferences("lib", MODE_PRIVATE).getInt("sort", 0);
         /* The theme's window is black, which a light scheme would flash on the
          * way in: the window wears the palette from the first frame. */
         getWindow().setBackgroundDrawable(new ColorDrawable(Md3.surface));
@@ -94,6 +108,32 @@ public class LibraryActivity extends Activity {
 
         header.addView(menuButton());
         column.addView(header);
+
+        searchBox = new EditText(this);
+        searchBox.setHint("搜索游戏");
+        searchBox.setSingleLine(true);
+        searchBox.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
+        Md3.type(searchBox, 14f, Md3.onSurface, false);
+        Md3.field(searchBox, this);
+        searchBox.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int a, int b, int c) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+                query = s.toString().trim().toLowerCase();
+                applyFilter();
+            }
+        });
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp.setMargins(dp(16), 0, dp(16), dp(8));
+        column.addView(searchBox, slp);
 
         list = new ListView(this);
         /* Material 3 lists have no dividers - the rows sit on the surface and
@@ -253,16 +293,87 @@ public class LibraryActivity extends Activity {
     /* ------------------------------------------------------------------ list */
 
     private void reload() {
-        items = JarStore.list(this);
-        adapter.notifyDataSetChanged();
-        if (items.isEmpty()) {
+        all = JarStore.list(this);
+        applyFilter();
+        if (all.isEmpty()) {
             empty.setText("还没有游戏\n\n"
                     + "点右下角的「+」从文件管理器选一个\n"
                     + "也可以直接在其他文件管理器里点开 .jar\n\n"
                     + "用电脑推送：\n"
                     + "adb push 游戏.jar " + JarStore.dir(this).getAbsolutePath() + "/");
         }
-        headerCount.setText("J2ME 运行时 · " + items.size() + " 个游戏");
+    }
+
+    /*
+     * Everything the list shows is decided here: the filter first, then the one
+     * order the player picked.  Keeping the whole list in `all` means a search
+     * never needs the disk, and clearing it is instant.
+     */
+    private void applyFilter() {
+        List<JarStore.Entry> shown = new ArrayList<JarStore.Entry>();
+        for (JarStore.Entry e : all) {
+            if (query.length() == 0 || matches(e)) {
+                shown.add(e);
+            }
+        }
+        sort(shown);
+        items = shown;
+        adapter.notifyDataSetChanged();
+        if (query.length() == 0) {
+            headerCount.setText("J2ME 运行时 · " + all.size() + " 个游戏");
+        } else {
+            headerCount.setText("找到 " + shown.size() + " / " + all.size() + " 个游戏");
+        }
+    }
+
+    private boolean matches(JarStore.Entry e) {
+        String t = e.title == null ? "" : e.title.toLowerCase();
+        String f = e.jar.getName().toLowerCase();
+        return t.contains(query) || f.contains(query);
+    }
+
+    private void sort(List<JarStore.Entry> l) {
+        final int mode = sortMode;
+        Collections.sort(l, new Comparator<JarStore.Entry>() {
+            @Override
+            public int compare(JarStore.Entry a, JarStore.Entry b) {
+                if (mode == 1) {
+                    return a.title.compareToIgnoreCase(b.title);
+                }
+                if (mode == 2) {
+                    /* biggest first: the ones that hog the storage are the ones
+                     * a player is looking for when they sort by size */
+                    return b.size > a.size ? 1 : (b.size < a.size ? -1 : 0);
+                }
+                if (mode == 3) {
+                    long x = b.jar.lastModified();
+                    long y = a.jar.lastModified();
+                    return x > y ? 1 : (x < y ? -1 : 0);
+                }
+                long x = b.touched;
+                long y = a.touched;
+                return x > y ? 1 : (x < y ? -1 : 0);
+            }
+        });
+    }
+
+    private void sortDialog() {
+        String[] labels = new String[SORT_NAMES.length];
+        for (int i = 0; i < SORT_NAMES.length; i++) {
+            labels[i] = (i == sortMode ? "\u2713 " : "      ") + SORT_NAMES[i];
+        }
+        Md3.show(new AlertDialog.Builder(this)
+                .setCustomTitle(Md3.headline(this, "排序方式",
+                        "当前：" + SORT_NAMES[sortMode]))
+                .setItems(labels, new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int which) {
+                        sortMode = which;
+                        getSharedPreferences("lib", MODE_PRIVATE).edit()
+                                .putInt("sort", sortMode).apply();
+                        applyFilter();
+                    }
+                }), this, true);
     }
 
     private class EntryAdapter extends BaseAdapter {
@@ -599,6 +710,7 @@ public class LibraryActivity extends Activity {
         Md3.show(new AlertDialog.Builder(this)
                 .setItems(new String[] { "按键布局",
                                 immersive ? "沉浸模式：开（游戏全屏）" : "沉浸模式：关（显示状态栏）",
+                                "排序方式：" + SORT_NAMES[sortMode],
                                 "添加 JAR", "怎么放游戏进来" },
                         new DialogInterface.OnClickListener() {
                             @Override
@@ -612,6 +724,8 @@ public class LibraryActivity extends Activity {
                                             ? "沉浸模式已打开：游戏里隐藏状态栏和导航栏"
                                             : "沉浸模式已关闭：游戏里显示状态栏");
                                 } else if (which == 2) {
+                                    sortDialog();
+                                } else if (which == 3) {
                                     pickJar();
                                 } else {
                                     help();

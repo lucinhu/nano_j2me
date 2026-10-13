@@ -283,7 +283,7 @@ parks that thread in `idle()` instead of letting it spin against a dead surface.
 
 ### The shell around the game
 
-Seven things in that shell are worth copying, because each one is a rule a plain
+Ten things in that shell are worth copying, because each one is a rule a plain
 "put a SurfaceView in an Activity" port gets wrong:
 
 - **The name comes from the jar, not from the file.** `JarName.of(File)` reads
@@ -300,8 +300,8 @@ Seven things in that shell are worth copying, because each one is a rule a plain
   a cap presses it immediately, sliding off releases it, sliding onto another cap
   presses that one, a finger the game has already been told about is handed back
   to the game when it reaches a cap, and `cancel()` releases every held key
-  exactly once when the control bar opens, the activity pauses or the framework
-  sends `ACTION_CANCEL`. The class is unit-tested off-device, which is the only
+  exactly once when the panel opens, the activity pauses or the framework sends
+  `ACTION_CANCEL`. The class is unit-tested off-device, which is the only
   reason the rules survived the move out of `PadView`.
 - **Layouts are data.** `PadConfig` stores keycaps as fractions of the view
   (`0..1`, top-left corner) and ships eight presets (`PRESET_IDS`, `byId()`,
@@ -310,12 +310,34 @@ Seven things in that shell are worth copying, because each one is a rule a plain
   blob, so a layout tweaked in game is the one the editor opens.
 - **One adjustment page, not two.** `PadEditActivity` is where both the keycaps
   and the picture are placed: an empty-space drag moves the picture, two fingers
-  scale it, and 画面 chooses the fit. The in-game bar is down to 调整 / 状态 / 退出 -
-  调整 opens that page over the running game - because setting the keys and the
-  screen up in the same place beats hunting for two separate screens. The page
-  loads the game's sidecar (`JarStore.byName`) and writes it back with 保存, and
+  scale it, and 画面 chooses the fit - plus a first-run card that says so, because
+  none of those gestures are discoverable on their own. The page loads the game's
+  sidecar (`JarStore.byName`) and writes it back with 保存, and
   `GameActivity.reloadView()` re-reads those fields in `onResume()`, so a game
   that is already running picks up the new position without a restart.
+- **Tools are a panel, and the panel can get out of the way.** Nothing is drawn
+  across the top of a game: the in-game controls sit behind the `≡` handle as a
+  panel (调整画面和按键 / 状态信息 / 退出游戏), so the MIDlet's own title row stays
+  visible and no strip is silently swallowing pad touches until a timer hides it.
+  The editor's strip collapses with `▴` and comes back from a `▾ 工具条` pill, so a
+  key can be placed along the very top edge - the one place a fixed strip makes
+  unreachable.
+- **The shell owns what outlives the game.** A MIDP `Player` is an
+  `android.media.MediaPlayer`, and that player outlives the VM, the port and the
+  Activity: a game closed with its music running used to keep playing over the
+  library (`piid` still `state:started` after 退出). `MidiPlayer.pauseAll()` /
+  `resumeAll()` follow the activity lifecycle - a player the MIDlet itself stopped
+  stays stopped - and `closeAll()` runs when the VM thread ends and again in
+  `onDestroy`. Volume keys are answered by the activity
+  (`AudioManager.STREAM_MUSIC`, returning `false` only when there is no audio
+  service) instead of being forwarded to the MIDlet, which has no volume key in
+  its key set and would leave the player with no way to turn the sound down.
+- **The library is searchable and keeps the order the player chose.** The field
+  under the app bar filters in memory over the list already read - title or file
+  name, case-insensitive - and the count line says `找到 N / M 个游戏`; 排序方式
+  (最近运行 / 名称 / 文件大小 / 最近导入) is stored in `lib/sort`, so the library opens
+  the way it was left. Sorting and filtering both happen on a copy, which is why
+  neither touches the disk.
 - **The picture can be moved in every mode.** The port applies zoom and pan on
   top of whichever fit was chosen - `NJ_VIEW_INT` keeps its integer scale - and
   publishes how far the pan may go once per frame

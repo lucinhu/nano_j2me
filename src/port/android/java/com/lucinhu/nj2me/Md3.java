@@ -393,6 +393,50 @@ final class Md3 {
         t.setIncludeFontPadding(false);
     }
 
+    /* -------------------------------------------- the chrome over the game */
+
+    /**
+     * The control bar, the status card and the handle float ON the game rather
+     * than in a window, so they keep the dark scheme's colours in both schemes:
+     * a bright bar over a black picture is the one thing worse than the black
+     * system bars this app used to have.  They are still Material 3 neutrals,
+     * just read from the dark end.
+     */
+    static final int OVERLAY = 0xE62B2930;        /* surfaceContainerHigh at 90% */
+    static final int OVERLAY_TEXT = 0xFFE6E0E9;   /* the dark scheme's onSurface */
+    static final int OVERLAY_MUTED = 0xFFCAC4D0;  /* ... and onSurfaceVariant */
+    static final int OVERLAY_ACCENT = 0xFFD0BCFF; /* ... and primary */
+
+    /** A text button for something that sits on the picture. */
+    static void overlayButton(TextView t, Context ctx) {
+        t.setBackground(ripple(ctx, Color.TRANSPARENT, SHAPE_FULL, OVERLAY_ACCENT));
+        type(t, 14f, OVERLAY_ACCENT, true);
+        t.setAllCaps(false);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(dp(ctx, 12), dp(ctx, 8), dp(ctx, 12), dp(ctx, 8));
+    }
+
+    /** The round handle that brings the bar back, floating over the picture. */
+    static void overlayHandle(TextView t, Context ctx) {
+        t.setBackground(rippleCircle(ctx, 0xB32B2930, OVERLAY_TEXT));
+        type(t, 20f, OVERLAY_TEXT, false);
+        t.setGravity(Gravity.CENTER);
+        t.setIncludeFontPadding(false);
+    }
+
+    /**
+     * A text button with tight padding, for a bar that has to hold half a dozen
+     * of them and a slider next to each other.  {@link #textButton} is the
+     * Material 3 size, which is the right one when there is room for it.
+     */
+    static void compactButton(TextView t, Context ctx) {
+        t.setBackground(ripple(ctx, Color.TRANSPARENT, SHAPE_FULL, primary));
+        type(t, 13f, primary, true);
+        t.setAllCaps(false);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(dp(ctx, 10), dp(ctx, 8), dp(ctx, 10), dp(ctx, 8));
+    }
+
     /**
      * A dialog headline and its supporting text, for
      * {@link AlertDialog.Builder#setCustomTitle}.  The framework's own title is
