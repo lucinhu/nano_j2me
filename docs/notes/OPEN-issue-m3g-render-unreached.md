@@ -399,6 +399,9 @@ in-between pixels - NEAREST must produce none, LINEAR must produce some.  The
 check is deliberately a count over a scan line rather than one named pixel,
 because where the texel crossing lands on screen is the rasteriser's business.
 
-Corpus regression over the 395 titles at 176x208: **390 passed, 5 failed**,
-against the 388/7 the docs recorded before this work; `都市摩天楼_6192`, which
-the `CompositingMode` descriptor mismatch had broken, is back.
+Corpus regression over the 395 titles at 176x208: **393 passed, 2 failed**
+(`鲁宾逊漂流记汉化BT版_4677`, a truncated JAR, and
+`战争艺术2之全球联盟中文版_1918`, which throws its own `NullPointerException`),
+against the 390/5 this note recorded before the sampling work and the 388/7 the
+docs recorded before it; `都市摩天楼_6192`, which the `CompositingMode`
+descriptor mismatch had broken, is back.
