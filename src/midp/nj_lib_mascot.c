@@ -1100,7 +1100,11 @@ NJFN(mascot_g3d_renderPrimitives)
     for (i = 0; i + 2 < count; i++) {
         nj_s4 x1, y1, x2, y2, x3, y3;
 
-        if (i + 2 >= xa->length || i + 2 >= ya->length || i + 2 >= za->length) {
+        /* The casts are the point: i and count are nj_s4, an array length is
+           nj_u4, and mixing them is what -Wsign-compare is for.  A Java array
+           cannot reach INT_MAX here. */
+        if (i + 2 >= (nj_s4)xa->length || i + 2 >= (nj_s4)ya->length ||
+            i + 2 >= (nj_s4)za->length) {
             break;                  /* the arrays are shorter than the count says */
         }
         m3_project(m, kx, ky, cx, cy, ((nj_s4 *)xa->u.bytes)[i],

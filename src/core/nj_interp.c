@@ -31,6 +31,21 @@
  */
 #include "nj_internal.h"
 
+/*
+ * WHICH DISPATCH IS COMPILED decides whether the L_* labels exist.
+ *
+ * Every converted opcode carries a label (`L_0x03: case 0x03: ...`) that only
+ * the threaded dispatch table can take the address of.  With
+ * NJ_THREADED_DISPATCH 0 - which is what a desktop build gets, see
+ * include/nj2me/nj_config.h - the table is not compiled, the labels have no
+ * reference, and GCC says so about each of them.  That is not a defect to fix
+ * by deleting labels the other configuration needs, so the warning is turned
+ * off here, next to the reason.
+ */
+#if !NJ_THREADED_DISPATCH && (defined(__GNUC__) || defined(__clang__))
+#pragma GCC diagnostic ignored "-Wunused-label"
+#endif
+
 
 
 #if NJ_USE_LIBC
@@ -898,7 +913,14 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
             switch (op) {
             case 0x4f: nj_array_set_int(a_, (nj_u4)i_, v_); break;
-            case 0x51: ((float *)a_->u.bytes)[i_] = (float)v_; break;
+            /*
+             * fastore moves the BITS, not the value: v_ was read from the
+             * operand stack's .i, so it already holds the float's bit pattern
+             * and `(float)v_` would reinterpret 1.0f as 1.06535e9 - the
+             * integer 1065353216 read as a float.  tests/m3gdemo found it the
+             * moment a fixture stored a float in an array.
+             */
+            case 0x51: memcpy(&((float *)a_->u.bytes)[i_], &v_, 4u); break;
             case 0x54: ((nj_s1 *)a_->u.bytes)[i_] = (nj_s1)v_; break;
             case 0x55: ((nj_u2 *)a_->u.bytes)[i_] = (nj_u2)(v_ & 0xFFFF); break;
             default:   ((nj_s2 *)a_->u.bytes)[i_] = (nj_s2)v_; break;

@@ -509,7 +509,7 @@ nj_field *nj_field_lookup(nj_vm *vm, const char *cls, const char *name,
 /* ------------------------------------------------------------------ */
 /* Class initialisation (<clinit>)                                     */
 /* ------------------------------------------------------------------ */
-static nj_u1 *field_addr(nj_vm *vm, nj_ref obj, nj_field *f);
+static nj_u1 *field_addr(nj_vm *vm, nj_ref obj, const nj_field *f);
 
 nj_status nj_class_init(nj_vm *vm, nj_class *c)
 {
@@ -816,7 +816,7 @@ void nj_array_set_ref(nj_ref a, nj_u4 i, nj_ref v)
  * live in vm->statics at index `f->offset`.  The accessors below take the VM
  * explicitly because statics cannot be located from the object pointer.
  */
-static nj_u1 *field_addr(nj_vm *vm, nj_ref obj, nj_field *f)
+static nj_u1 *field_addr(nj_vm *vm, nj_ref obj, const nj_field *f)
 {
     if (!f) {
         return NULL;
@@ -833,7 +833,7 @@ static nj_u1 *field_addr(nj_vm *vm, nj_ref obj, nj_field *f)
     return (nj_u1 *)obj + f->offset;
 }
 
-nj_s4 nj_field_read_int(nj_vm *vm, nj_ref obj, nj_field *f)
+nj_s4 nj_field_read_int(nj_vm *vm, nj_ref obj, const nj_field *f)
 {
     nj_u1 *p = field_addr(vm, obj, f);
 
@@ -857,7 +857,7 @@ nj_s4 nj_field_read_int(nj_vm *vm, nj_ref obj, nj_field *f)
     }
 }
 
-void nj_field_write_int(nj_vm *vm, nj_ref obj, nj_field *f, nj_s4 v)
+void nj_field_write_int(nj_vm *vm, nj_ref obj, const nj_field *f, nj_s4 v)
 {
     nj_u1 *p = field_addr(vm, obj, f);
 
@@ -881,7 +881,7 @@ void nj_field_write_int(nj_vm *vm, nj_ref obj, nj_field *f, nj_s4 v)
     }
 }
 
-nj_s8 nj_field_read_long(nj_vm *vm, nj_ref obj, nj_field *f)
+nj_s8 nj_field_read_long(nj_vm *vm, nj_ref obj, const nj_field *f)
 {
     nj_u1 *p = field_addr(vm, obj, f);
     if (!p) {
@@ -896,7 +896,7 @@ nj_s8 nj_field_read_long(nj_vm *vm, nj_ref obj, nj_field *f)
     return (nj_s8)nj_field_read_int(vm, obj, f);
 }
 
-void nj_field_write_long(nj_vm *vm, nj_ref obj, nj_field *f, nj_s8 v)
+void nj_field_write_long(nj_vm *vm, nj_ref obj, const nj_field *f, nj_s8 v)
 {
     nj_u1 *p = field_addr(vm, obj, f);
     if (!p) {
@@ -911,7 +911,7 @@ void nj_field_write_long(nj_vm *vm, nj_ref obj, nj_field *f, nj_s8 v)
     }
 }
 
-nj_ref nj_field_read_ref(nj_vm *vm, nj_ref obj, nj_field *f)
+nj_ref nj_field_read_ref(nj_vm *vm, nj_ref obj, const nj_field *f)
 {
     nj_u1 *p = field_addr(vm, obj, f);
     nj_ref r;
@@ -923,7 +923,7 @@ nj_ref nj_field_read_ref(nj_vm *vm, nj_ref obj, nj_field *f)
     return r;
 }
 
-void nj_field_write_ref(nj_vm *vm, nj_ref obj, nj_field *f, nj_ref v)
+void nj_field_write_ref(nj_vm *vm, nj_ref obj, const nj_field *f, nj_ref v)
 {
     nj_u1 *p = field_addr(vm, obj, f);
     if (!p) {
@@ -937,7 +937,7 @@ int nj_field_is_float(const nj_field *f)
     return f != NULL && f->ptype == NJ_PT_FLOAT;
 }
 
-nj_u4 nj_field_read_bits32(nj_vm *vm, nj_ref obj, nj_field *f)
+nj_u4 nj_field_read_bits32(nj_vm *vm, nj_ref obj, const nj_field *f)
 {
     nj_u1 *p = field_addr(vm, obj, f);
     nj_u4 v = 0u;
@@ -948,7 +948,7 @@ nj_u4 nj_field_read_bits32(nj_vm *vm, nj_ref obj, nj_field *f)
     return v;
 }
 
-void nj_field_write_bits32(nj_vm *vm, nj_ref obj, nj_field *f, nj_u4 v)
+void nj_field_write_bits32(nj_vm *vm, nj_ref obj, const nj_field *f, nj_u4 v)
 {
     nj_u1 *p = field_addr(vm, obj, f);
     if (p) {
@@ -956,7 +956,7 @@ void nj_field_write_bits32(nj_vm *vm, nj_ref obj, nj_field *f, nj_u4 v)
     }
 }
 
-nj_u8 nj_field_read_bits64(nj_vm *vm, nj_ref obj, nj_field *f)
+nj_u8 nj_field_read_bits64(nj_vm *vm, nj_ref obj, const nj_field *f)
 {
     nj_u1 *p = field_addr(vm, obj, f);
     nj_u8 v = 0u;
@@ -967,7 +967,7 @@ nj_u8 nj_field_read_bits64(nj_vm *vm, nj_ref obj, nj_field *f)
     return v;
 }
 
-void nj_field_write_bits64(nj_vm *vm, nj_ref obj, nj_field *f, nj_u8 v)
+void nj_field_write_bits64(nj_vm *vm, nj_ref obj, const nj_field *f, nj_u8 v)
 {
     nj_u1 *p = field_addr(vm, obj, f);
     if (p) {

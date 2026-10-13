@@ -601,6 +601,51 @@ exception, `m3g=2`, `tris=0`.  The `tris=0` is the honest part of that
 sentence: the scene is built and `render()` is called, and nothing is
 rasterised, so its 3D view stays empty.
 
+### A declared member is not a working member
+
+The member list is not an impression: `tools/data/m3g-api-1.1.txt` is the JSR 184
+API surface (30 classes, 308 constructors, methods and constants), and
+`tools/m3g_api_audit.py` parses `src/midp/nj_lib_m3g.c` the way the compiler
+would, follows superclasses for inherited members, and exits non-zero for the
+first member that is missing.  It is a ctest (`check_m3g_api`), and it reports
+31 classes / 330 members against the reference's 30 / 308 - the extra class is
+`Sprite`, the JSR 184 1.0 name the loader maps file type 18 to.
+
+Completing the surface raised the more interesting question: how much of it
+*behaved*.  `tests/m3gdemo/M3GDemo.java` calls every area once and prints one
+summary line (`M3G checks=104 failures=0`); `tools/check_m3gdemo.sh` asserts it
+as a ctest (`check_m3gdemo`).  The first run reported fourteen defects, and they
+were not exotic:
+
+| what the fixture asked | what the runtime did |
+| --- | --- |
+| `Group.getReferences()` | never reported the group's children, only AnimationTracks |
+| `new VertexArray(n, c, 2).getComponentType()` | answered BYTE; `set()` clobbered the type |
+| `new VertexArray(1, 3, 4).getComponentType()` | answered FIXED for a four-byte component's size, which is right, but the ctor read the third argument as a type |
+| `new Sprite3D(false, img, app)` | stored nothing: `getImage()` answered null |
+| `Graphics3D.setLight(i, light)` | counted the light and kept none, so `getLight()` threw |
+| `Background.setImageMode(x, y)` | stored only `x` |
+| `CompositingMode.getAlphaThreshold()` | answered the float's bits as an integer |
+| `Object3D.getReferences()` with a too-small array | no `IllegalArgumentException` |
+| `MorphingMesh`/`SkinnedMesh` `instanceof Mesh` | false: their class rows named Object3D as the superclass |
+| `Transformable.align()` then `getAlignmentReference(NONE)` | the reference was stored and not found again |
+| `Transform.transform(VertexArray, float[], boolean)` | transformed two components per vertex: `_nj_compSize` was read where `_nj_numComp` was meant |
+
+Most of them were a line or two.  The lesson is the one this file keeps
+recording: a member that exists can still be a member that lies, and only a
+caller that uses the answer finds out.
+
+### A float stored in an array came back as 1.06535e9
+
+The fixture's simplest check - put `1.0f` in a `float[]` and read it back -
+failed.  The interpreter's `fastore` took the operand from the operand stack's
+`.i` (the bits) and then wrote `(float)bits` into the array, so `1.0f`
+(0x3F800000) was stored as the integer 1065353216 converted to float and read
+back as 1.06535e9.  `src/core/nj_interp.c` now copies the four bytes instead.
+Any title that kept float state in an array was reading noise; no collected
+title's verdict changed, because they keep state in fields, which had been
+fixed already.
+
 A platform that cannot afford the rasteriser builds with
 `-DNJ_ENABLE_M3G=0` and gets the previous behaviour back - the classes are
 gone and a MIDlet that needs them gets `NoClassDefFoundError`, which is the

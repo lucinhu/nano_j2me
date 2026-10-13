@@ -594,7 +594,10 @@ nj_status nj_m3g_objects_probe(const nj_u1 *p, nj_u4 n, nj_u4 *count,
 #define NJ_C_VBUF    "javax/microedition/m3g/VertexBuffer"
 #define NJ_C_IBUF    "javax/microedition/m3g/IndexBuffer"
 #define NJ_C_SPRITE3D "javax/microedition/m3g/Sprite3D"
-#define NJ_C_SPRITE   "javax/microedition/m3g/Sprite"
+/* Distinct from nj_midp.h's NJ_C_SPRITE3D, which is the GAME package's
+   javax/microedition/lcdui/game/Sprite: the two names clashed and whichever
+   header was read last won (-Wmacro-redefined). */
+#define NJ_C_M3G_SPRITE "javax/microedition/m3g/Sprite"
 #define NJ_C_FOG      "javax/microedition/m3g/Fog"
 #define NJ_C_RAY      "javax/microedition/m3g/RayIntersection"
 #define NJ_C_ACTL     "javax/microedition/m3g/AnimationController"
@@ -615,6 +618,15 @@ nj_status nj_m3g_objects_probe(const nj_u1 *p, nj_u4 n, nj_u4 *count,
  * owns it - there is no C-side matrix cache and nothing is global.
  */
 #define NJ_MF 16
+
+/*
+ * Look a field up, or throw.  Declared here and defined with the rest of the
+ * helpers far below, because the natives that use it are spread over the whole
+ * file: the batch that added the second half of the JSR 184 surface put one
+ * native above the definition, and gcc refuses to guess a signature.
+ */
+static nj_field *m3g_fof(nj_vm *vm, const char *cls, const char *name,
+                         const char *desc);
 
 /*
  * Floats live in int fields as their IEEE-754 bit patterns.  The public field
@@ -963,21 +975,9 @@ NJFN(m3g_xf_get)
     return NJ_OK;
 }
 
-NJFN(m3g_xf_set)
-{
-    nj_ref self = NJ_THIS(args);
-    nj_ref in = NJ_ARG_REF(args, 0);
-    nj_ref m = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_XFORM, "_nj_m", "[F", 0));
-
-    if (!in || in->length < 16) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "the array must hold at least sixteen elements");
-    }
-    if (m) {
-        memcpy(nj_array_data(m), nj_array_data(in), 16u * sizeof(float));
-    }
-    return NJ_OK;
-}
+/* Transform.set(float[]) is m3g_xf_set_arr above.  A second function with the
+   same job lived here and was never registered, so it compiled to nothing and
+   warned (-Wunused-function); the registered one is the one with the check. */
 
 NJFN(m3g_xf_invert)
 {
@@ -1920,9 +1920,12 @@ NJFN(m3g_bg_getImage)
 
 NJFN(m3g_bg_setImageMode)
 {
-    nj_iput(vm, NJ_THIS(args),
-            nj_field_lookup(vm, NJ_C_BG, "_nj_immode", "I", 0),
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_BG, "_nj_immode", "I"),
             NJ_ARG_INT(args, 0));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_BG, "_nj_immodeY", "I"),
+            NJ_ARG_INT(args, 1));
     return NJ_OK;
 }
 
@@ -2037,48 +2040,47 @@ NJFN(m3g_cam_setGeneric)
     return NJ_OK;
 }
 
-NJFN(m3g_getProjection)
+static int cam_proj_fill(nj_vm *vm, nj_ref self, float *out)
 {
-    nj_ref self = NJ_THIS(args);
-    float *out = mat_of(vm, NJ_ARG_REF(args, 0), NJ_C_XFORM, "_nj_m");
     float f, aspect, near, far, fov;
 
-    if (!out) {
-        ret->i = 0;
-        return NJ_OK;
-    }
     {
-        nj_ref g = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_generic",
-                                                     "[F", 0));
+        nj_ref g = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA,
+                                                     "_nj_generic", "[F", 0));
         if (g && g->length >= (nj_s4)NJ_MF) {
             memcpy(out, (const float *)g->u.bytes, sizeof(float) * NJ_MF);
-            ret->i = 1;
-            return NJ_OK;
+            return 1;
         }
     }
-    if (!nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_persp", "Z", 0)) &&
-        !nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_parallel", "Z", 0))) {
-        ret->i = 0;
-        return NJ_OK;
+    if (!nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_persp",
+                                           "Z", 0)) &&
+        !nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_parallel",
+                                           "Z", 0))) {
+        return 0;
     }
-    f = bits2f(nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_fovy", "I", 0)));
+    f = bits2f(nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_fovy",
+                                                 "I", 0)));
     if (f == 0.0f) {
         f = 45.0f;
     }
-    aspect = bits2f(nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_aspect", "I", 0)));
+    aspect = bits2f(nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA,
+                                                      "_nj_aspect", "I", 0)));
     if (aspect == 0.0f) {
         aspect = 1.0f;
     }
-    near = bits2f(nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_near", "I", 0)));
+    near = bits2f(nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_near",
+                                                    "I", 0)));
     if (near == 0.0f) {
         near = 1.0f;
     }
-    far = bits2f(nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_far", "I", 0)));
+    far = bits2f(nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_far",
+                                                   "I", 0)));
     if (far == 0.0f) {
         far = 1000.0f;
     }
     mat_identity(out);
-    if (nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_persp", "Z", 0))) {
+    if (nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_persp",
+                                          "Z", 0))) {
         fov = f * 3.14159265358979f / 180.0f;
         out[0] = 1.0f / tanf(fov * 0.5f) / aspect;
         out[5] = 1.0f / tanf(fov * 0.5f);
@@ -2087,7 +2089,18 @@ NJFN(m3g_getProjection)
         out[14] = -1.0f;
         out[15] = 0.0f;
     }
-    ret->i = 1;
+    return 1;
+}
+
+NJFN(m3g_getProjection)
+{
+    float *out = mat_of(vm, NJ_ARG_REF(args, 0), NJ_C_XFORM, "_nj_m");
+
+    if (!out) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    ret->i = cam_proj_fill(vm, NJ_THIS(args), out);
     return NJ_OK;
 }
 
@@ -2222,7 +2235,16 @@ void nj_m3g_project(const float m[16], const float v[3], int w, int h,
     float ww = m[3] * v[0] + m[7] * v[1] + m[11] * v[2] + m[15];
 
     if (ww == 0.0f) {
-        return;                     /* a vertex at infinity has no pixel */
+        /* A vertex at infinity has no pixel.  It still has to leave `out`
+           DETERMINED: the caller builds a triangle from three of these, and
+           returning here without writing handed the rasteriser two stack words
+           GCC is right to call uninitialised (-Wmaybe-uninitialized, xy[0..5]).
+           Zero puts the vertex at the viewport's own origin, so such a
+           triangle is degenerate and draws nothing - which is what a vertex at
+           infinity deserves. */
+        out[0] = 0.0f;
+        out[1] = 0.0f;
+        return;
     }
     out[0] = (x / ww + 1.0f) * 0.5f * (float)w;
     out[1] = (1.0f - y / ww) * 0.5f * (float)h;
@@ -2350,6 +2372,7 @@ typedef nj_u4 (*nj_m3g_emit_fn)(void *ud, const float xy[6], nj_u4 argb);
 typedef struct {
     nj_vm *vm;
     nj_ref g;
+    int ox, oy;     /* the viewport's own origin: Graphics3D.setViewport(x,y,..) */
 } m3g_java_target;
 
 static nj_u4 emit_to_java(void *ud, const float xy[6], nj_u4 argb)
@@ -2358,15 +2381,16 @@ static nj_u4 emit_to_java(void *ud, const float xy[6], nj_u4 argb)
     /* Its own name: check_arg_slots.py maps array names file-wide, and this
        file has plenty of five-entry `a`s that this is not. */
     nj_value emit_args[7], r;
+    float ox = (float)t->ox, oy = (float)t->oy;
 
     emit_args[0].i = (nj_s4)(argb | 0xFF000000u);
     if (nj_call(t->vm, t->g, "javax/microedition/lcdui/Graphics", "setColor",
                 "(I)V", emit_args, &r) != NJ_OK) {
         return 0u;
     }
-    emit_args[0].i = (nj_s4)xy[0]; emit_args[1].i = (nj_s4)xy[1];
-    emit_args[2].i = (nj_s4)xy[2]; emit_args[3].i = (nj_s4)xy[3];
-    emit_args[4].i = (nj_s4)xy[4]; emit_args[5].i = (nj_s4)xy[5];
+    emit_args[0].i = (nj_s4)(xy[0] + ox); emit_args[1].i = (nj_s4)(xy[1] + oy);
+    emit_args[2].i = (nj_s4)(xy[2] + ox); emit_args[3].i = (nj_s4)(xy[3] + oy);
+    emit_args[4].i = (nj_s4)(xy[4] + ox); emit_args[5].i = (nj_s4)(xy[5] + oy);
     if (nj_call(t->vm, t->g, "javax/microedition/lcdui/Graphics", "fillTriangle",
                 "(IIIIII)V", emit_args, &r) != NJ_OK) {
         return 0u;
@@ -2524,6 +2548,11 @@ NJFN(m3g_render)
     n = nj_m3g_collect_meshes(vm, root, meshes, 64u);
     jt.vm = vm;
     jt.g = target;
+    /* The viewport is a rectangle in the target, not just a size: a title that
+       puts it at (x, y) means the projection lands there.  The y coordinate
+       used to be read and then dropped on the floor (-Wunused-but-set). */
+    jt.ox = vx;
+    jt.oy = vy;
     for (i = 0u; i < n && i < 64u; i++) {
         drawn += raster_mesh_with(vm, meshes[i], mvp, (int)vw, (int)vh,
                                   0xFFFFFFFFu, emit_to_java, &jt);
@@ -2701,10 +2730,31 @@ NJFN(m3g_poly_getCulling)
  */
 NJFN(m3g_g3d_addLight)
 {
+    nj_ref self = NJ_THIS(args);
     nj_field *f = nj_field_lookup(vm, NJ_C_G3D, "_nj_nlights", "I", 0);
-    nj_s4 n = nj_iget(vm, NJ_THIS(args), f);
+    nj_s4 n = nj_iget(vm, self, f);
+    nj_ref lights = nj_rget(vm, self,
+                            m3g_fof(vm, NJ_C_G3D, "_nj_lights",
+                                    "[L" NJ_C_LIGHT ";"));
 
-    nj_iput(vm, NJ_THIS(args), f, n + 1);
+    /*
+     * The list itself: addLight used to count the lights and drop them, so
+     * getLight() answered an index error for a light that had just been
+     * added.  Eight is the JSR 184 limit, so the list is allocated once and
+     * never grows.
+     */
+    if (!lights) {
+        lights = nj_object_array_new(vm, NJ_C_LIGHT, 8u);
+        if (!lights) {
+            return nj_throw_oom(vm);
+        }
+        nj_rput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lights",
+                                  "[L" NJ_C_LIGHT ";"), lights);
+    }
+    if (n >= 0 && n < (nj_s4)lights->length) {
+        nj_array_set_ref(lights, (nj_u4)n, NJ_ARG_REF(args, 0));
+    }
+    nj_iput(vm, self, f, n + 1);
     ret->i = n;
     return NJ_OK;
 }
@@ -2767,8 +2817,22 @@ NJFN(m3g_varr_init)
             NJ_ARG_INT(args, 0));
     nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_numComp", "I", 0),
             NJ_ARG_INT(args, 1));
-    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_compSize", "I", 0),
-            NJ_ARG_INT(args, 2));
+    /*
+     * The third argument is the component SIZE in bytes, not the type: the
+     * reference implementation's signature is VertexArray(int numVertices, int
+     * numComponents, int componentSize), and getComponentType() answers the
+     * type that size implies - BYTE (0), SHORT (1) or FIXED (2).  Every
+     * collected title passes 2, which is what a 16-bit vertex component is.
+     */
+    {
+        nj_s4 size = NJ_ARG_INT(args, 2);
+        nj_s4 type = (size <= 1) ? 0 : (size == 2) ? 1 : 2;
+
+        nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_compSize", "I", 0),
+                size);
+        nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_ctype", "I", 0),
+                type);
+    }
     return NJ_OK;
 }
 
@@ -2918,7 +2982,14 @@ NJFN(m3g_tex_setWrapping)
  */
 NJFN(m3g_sprite_init)
 {
-    (void)args;
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_scaled", "Z"),
+            NJ_ARG_INT(args, 0) ? 1 : 0);
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_img",
+                              "L" NJ_C_IMAGE2D ";"), NJ_ARG_REF(args, 1));
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_app",
+                              "L" NJ_C_APPEAR ";"), NJ_ARG_REF(args, 2));
     return NJ_OK;
 }
 
@@ -3349,7 +3420,6 @@ NJFN(m3g_load)
     char cname[256];
     void *data;
     nj_u4 len = 0u;
-    nj_u4 magic = 0u;
 
     if (!name) {
         return nj_throw(vm, "java/lang/NullPointerException", "name is null");
@@ -3380,9 +3450,7 @@ NJFN(m3g_load)
      * would be a guess, and a wrong guess rejects valid files - which is the
      * same defect this comment is about.
      */
-    if (m3g_has_file_id((const unsigned char *)data, len)) {
-        magic = 0xAB4Au;
-    }
+    (void)m3g_has_file_id((const unsigned char *)data, len);
     {
         /*
          * It is a container, so build the objects it holds.  One Java object
@@ -3727,7 +3795,10 @@ static const nj_builtin_method light_methods[] = {
     M("setSpotExponent",  "(F)V",   NJ_ACC_PUBLIC),
     M("getSpotExponent",  "()F",    NJ_ACC_PUBLIC),
     M("setAttenuation",   "(FFF)V", NJ_ACC_PUBLIC),
-    M("getAttenuation",   "([F)V",  NJ_ACC_PUBLIC)
+    M("getAttenuation",   "([F)V",  NJ_ACC_PUBLIC),
+    M("getConstantAttenuation", "()F", NJ_ACC_PUBLIC),
+    M("getLinearAttenuation", "()F", NJ_ACC_PUBLIC),
+    M("getQuadraticAttenuation", "()F", NJ_ACC_PUBLIC),
 };
 
 /*
@@ -3927,7 +3998,8 @@ nj_status nj_m3g_late_init(nj_vm *vm)
 
 static const nj_builtin_field o3d_fields[] = {
     { "_nj_userID", "I", NJ_ACC_PUBLIC },
-    { "_nj_tracks", "L" NJ_C_VECTOR ";", NJ_ACC_PUBLIC }
+    { "_nj_tracks", "L" NJ_C_VECTOR ";", NJ_ACC_PUBLIC },
+    { "_nj_user", "Ljava/lang/Object;", NJ_ACC_PUBLIC },
 };
 static const nj_builtin_field xable_fields[] = {
     { "_nj_m", "[F", NJ_ACC_PUBLIC }
@@ -3986,7 +4058,8 @@ static const nj_builtin_field bg_fields[] = {
     { "_nj_cropX",  "I", NJ_ACC_PUBLIC },
     { "_nj_cropY",  "I", NJ_ACC_PUBLIC },
     { "_nj_cropW",  "I", NJ_ACC_PUBLIC },
-    { "_nj_cropH",  "I", NJ_ACC_PUBLIC }
+    { "_nj_cropH",  "I", NJ_ACC_PUBLIC },
+    { "_nj_immodeY", "I", NJ_ACC_PUBLIC },
 };
 static const nj_builtin_field g3d_fields[] = {
     { "_nj_nlights", "I", NJ_ACC_PUBLIC },
@@ -3997,7 +4070,13 @@ static const nj_builtin_field g3d_fields[] = {
     { "_nj_vy", "I", NJ_ACC_PUBLIC },
     { "_nj_vw", "I", NJ_ACC_PUBLIC },
     { "_nj_vh", "I", NJ_ACC_PUBLIC },
-    { "_nj_instance", "L" NJ_C_G3D ";", NJ_ACC_PUBLIC | NJ_ACC_STATIC }
+    { "_nj_instance", "L" NJ_C_G3D ";", NJ_ACC_PUBLIC | NJ_ACC_STATIC },
+    { "_nj_hints", "I", NJ_ACC_PUBLIC },
+    { "_nj_depth", "Z", NJ_ACC_PUBLIC },
+    { "_nj_drnear", "F", NJ_ACC_PUBLIC },
+    { "_nj_drfar", "F", NJ_ACC_PUBLIC },
+    { "_nj_lights", "[L" NJ_C_LIGHT ";", NJ_ACC_PUBLIC },
+    { "_nj_lmats", "[F", NJ_ACC_PUBLIC },
 };
 static const nj_builtin_field appear_fields[] = {
     { "_nj_mat",  "L" NJ_C_MAT ";",   NJ_ACC_PUBLIC },
@@ -4005,7 +4084,8 @@ static const nj_builtin_field appear_fields[] = {
     { "_nj_cm",   "L" NJ_C_COMP ";",  NJ_ACC_PUBLIC },
     { "_nj_tex0", "L" NJ_C_TEX2D ";", NJ_ACC_PUBLIC },
     { "_nj_tex1", "L" NJ_C_TEX2D ";", NJ_ACC_PUBLIC },
-    { "_nj_layer", "I",               NJ_ACC_PUBLIC }
+    { "_nj_layer", "I",               NJ_ACC_PUBLIC },
+    { "_nj_fog", "L" NJ_C_FOG ";", NJ_ACC_PUBLIC },
 };
 static const nj_builtin_field varr_fields[] = {
     { "_nj_numVerts", "I", NJ_ACC_PUBLIC },
@@ -4016,20 +4096,26 @@ static const nj_builtin_field varr_fields[] = {
      * instead of the caller's data having been dropped on the floor. */
     { "_nj_data",     "[S", NJ_ACC_PUBLIC },
     { "_nj_first",    "I",  NJ_ACC_PUBLIC },
-    { "_nj_count",    "I",  NJ_ACC_PUBLIC }
+    { "_nj_count",    "I",  NJ_ACC_PUBLIC },
+    { "_nj_ctype", "I", NJ_ACC_PUBLIC },
 };
 static const nj_builtin_field poly_fields[] = {
     { "_nj_winding", "I", NJ_ACC_PUBLIC },
     { "_nj_persp",   "Z", NJ_ACC_PUBLIC },
     { "_nj_culling", "I", NJ_ACC_PUBLIC },
     { "_nj_shading", "I", NJ_ACC_PUBLIC },
-    { "_nj_twosided", "Z", NJ_ACC_PUBLIC }
+    { "_nj_twosided", "Z", NJ_ACC_PUBLIC },
+    { "_nj_localcam", "Z", NJ_ACC_PUBLIC },
 };
 static const nj_builtin_field comp_fields[] = {
     { "_nj_blend",    "I", NJ_ACC_PUBLIC },
     { "_nj_dtest",    "I", NJ_ACC_PUBLIC },
     { "_nj_dwrite",   "I", NJ_ACC_PUBLIC },
-    { "_nj_athresh",  "I", NJ_ACC_PUBLIC }
+    { "_nj_athresh",  "I", NJ_ACC_PUBLIC },
+    { "_nj_awrite", "I", NJ_ACC_PUBLIC },
+    { "_nj_cwrite", "I", NJ_ACC_PUBLIC },
+    { "_nj_dofact", "F", NJ_ACC_PUBLIC },
+    { "_nj_dounits", "F", NJ_ACC_PUBLIC },
 };
 static const nj_builtin_field tex2d_fields[] = {
     { "_nj_img",   "L" NJ_C_IMAGE2D ";", NJ_ACC_PUBLIC },
@@ -4037,11 +4123,17 @@ static const nj_builtin_field tex2d_fields[] = {
     { "_nj_wrapS", "I",                  NJ_ACC_PUBLIC },
     { "_nj_wrapT", "I",                  NJ_ACC_PUBLIC },
     { "_nj_filtLevel", "I",              NJ_ACC_PUBLIC },
-    { "_nj_filtImage", "I",              NJ_ACC_PUBLIC }
+    { "_nj_filtImage", "I",              NJ_ACC_PUBLIC },
+    { "_nj_blendcolor", "I", NJ_ACC_PUBLIC },
 };
 static const nj_builtin_field sprite_fields[] = {
     { "_nj_img", "L" NJ_C_IMAGE2D ";", NJ_ACC_PUBLIC },
-    { "_nj_app", "L" NJ_C_APPEAR ";",  NJ_ACC_PUBLIC }
+    { "_nj_app", "L" NJ_C_APPEAR ";",  NJ_ACC_PUBLIC },
+    { "_nj_scaled", "Z", NJ_ACC_PUBLIC },
+    { "_nj_cropX", "I", NJ_ACC_PUBLIC },
+    { "_nj_cropY", "I", NJ_ACC_PUBLIC },
+    { "_nj_cropW", "I", NJ_ACC_PUBLIC },
+    { "_nj_cropH", "I", NJ_ACC_PUBLIC },
 };
 static const nj_builtin_field mesh_fields[] = {
     { "_nj_vb",   "L" NJ_C_VBUF ";", NJ_ACC_PUBLIC },
@@ -4155,7 +4247,8 @@ static const nj_builtin_field img2d_fields[] = {
     { "_nj_w",      "I",   NJ_ACC_PUBLIC },
     { "_nj_h",      "I",   NJ_ACC_PUBLIC },
     { "_nj_pixels", "[B",  NJ_ACC_PUBLIC },
-    { "_nj_image",  "Ljavax/microedition/lcdui/Image;", NJ_ACC_PUBLIC }
+    { "_nj_image",  "Ljavax/microedition/lcdui/Image;", NJ_ACC_PUBLIC },
+    { "_nj_palette", "[B", NJ_ACC_PUBLIC },
 };
 
 static const nj_builtin_method o3d_methods[] = {
@@ -4166,7 +4259,11 @@ static const nj_builtin_method o3d_methods[] = {
     M("duplicate",             "()L" NJ_C_O3D ";",         NJ_ACC_PUBLIC),
     M("find",                  "(I)L" NJ_C_O3D ";",        NJ_ACC_PUBLIC),
     M("getAnimationTrack",     "(I)L" NJ_C_ATRACK ";",     NJ_ACC_PUBLIC),
-    M("getAnimationTrackCount","()I",                      NJ_ACC_PUBLIC)
+    M("getAnimationTrackCount","()I",                      NJ_ACC_PUBLIC),
+    M("getReferences", "([Ljavax/microedition/m3g/Object3D;)I", NJ_ACC_PUBLIC),
+    M("setUserObject", "(Ljava/lang/Object;)V", NJ_ACC_PUBLIC),
+    M("getUserObject", "()Ljava/lang/Object;", NJ_ACC_PUBLIC),
+    M("removeAnimationTrack", "(Ljavax/microedition/m3g/AnimationTrack;)V", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method transform_methods[] = {
     M("<init>",        "()V",                       NJ_ACC_PUBLIC),
@@ -4181,6 +4278,9 @@ static const nj_builtin_method transform_methods[] = {
     M("invert",        "()V",                       NJ_ACC_PUBLIC),
     M("transform",     "([F)V",                     NJ_ACC_PUBLIC),
     M("transpose",     "()V",                      NJ_ACC_PUBLIC),
+    M("<init>", "(Ljavax/microedition/m3g/Transform;)V", NJ_ACC_PUBLIC),
+    M("postRotateQuat", "(FFFF)V", NJ_ACC_PUBLIC),
+    M("transform", "(Ljavax/microedition/m3g/VertexArray;[FZ)V", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method xable_methods[] = {
     M("setTransform",     "(L" NJ_C_XFORM ";)V", NJ_ACC_PUBLIC),
@@ -4195,6 +4295,7 @@ static const nj_builtin_method xable_methods[] = {
     M("scale",                "(FFF)V",              NJ_ACC_PUBLIC),
     M("postRotate",           "(FFFF)V",             NJ_ACC_PUBLIC),
     M("getCompositeTransform","(L" NJ_C_XFORM ";)V", NJ_ACC_PUBLIC),
+    M("preRotate", "(FFFF)V", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method node_methods[] = {
     M("setRenderingEnable", "(Z)V",                    NJ_ACC_PUBLIC),
@@ -4207,24 +4308,34 @@ static const nj_builtin_method node_methods[] = {
     M("setPickingEnable",   "(Z)V",                    NJ_ACC_PUBLIC),
     M("isPickingEnabled",   "()Z",                     NJ_ACC_PUBLIC),
     M("setAlignment", "(L" NJ_C_NODE ";IL" NJ_C_NODE ";I)V", NJ_ACC_PUBLIC),
+    M("getAlphaFactor", "()F", NJ_ACC_PUBLIC),
+    M("align", "(Ljavax/microedition/m3g/Node;)V", NJ_ACC_PUBLIC),
+    M("getAlignmentTarget", "(I)I", NJ_ACC_PUBLIC),
+    M("getAlignmentReference", "(I)Ljavax/microedition/m3g/Node;", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method group_methods[] = {
     M("addChild",       "(L" NJ_C_NODE ";)V",          NJ_ACC_PUBLIC),
     M("removeChild",    "(L" NJ_C_NODE ";)V",          NJ_ACC_PUBLIC),
     M("getChild",       "(I)L" NJ_C_NODE ";",          NJ_ACC_PUBLIC),
-    M("getChildCount",  "()I",                         NJ_ACC_PUBLIC)
+    M("getChildCount",  "()I",                         NJ_ACC_PUBLIC),
+    M("<init>", "()V", NJ_ACC_PUBLIC),
+    M("pick", "(IFFFFFFLjavax/microedition/m3g/RayIntersection;)Z", NJ_ACC_PUBLIC),
+    M("pick", "(IFFLjavax/microedition/m3g/Camera;Ljavax/microedition/m3g/RayIntersection;)Z", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method world_methods[] = {
     M("setActiveCamera", "(L" NJ_C_CAMERA ";)V",   NJ_ACC_PUBLIC),
     M("getActiveCamera", "()L" NJ_C_CAMERA ";",    NJ_ACC_PUBLIC),
     M("setBackground",   "(L" NJ_C_BG ";)V",       NJ_ACC_PUBLIC),
-    M("getBackground",   "()L" NJ_C_BG ";",        NJ_ACC_PUBLIC)
+    M("getBackground",   "()L" NJ_C_BG ";",        NJ_ACC_PUBLIC),
+    M("<init>", "()V", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method camera_methods[] = {
     M("setPerspective", "(FFFF)V",                NJ_ACC_PUBLIC),
     M("setParallel",    "(FFFF)V",                NJ_ACC_PUBLIC),
     M("getProjection",  "(L" NJ_C_XFORM ";)I",    NJ_ACC_PUBLIC),
     M("setGeneric",     "(L" NJ_C_XFORM ";)V",  NJ_ACC_PUBLIC),
+    M("<init>", "()V", NJ_ACC_PUBLIC),
+    M("getProjection", "([F)I", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method bg_methods[] = {
     M("setColor",            "(I)V", NJ_ACC_PUBLIC),
@@ -4240,7 +4351,11 @@ static const nj_builtin_method bg_methods[] = {
     M("getCropX",            "()I", NJ_ACC_PUBLIC),
     M("getCropY",            "()I", NJ_ACC_PUBLIC),
     M("getCropWidth",        "()I", NJ_ACC_PUBLIC),
-    M("getCropHeight",       "()I", NJ_ACC_PUBLIC)
+    M("getCropHeight",       "()I", NJ_ACC_PUBLIC),
+    M("<init>", "()V", NJ_ACC_PUBLIC),
+    M("getColor", "()I", NJ_ACC_PUBLIC),
+    M("getImageModeX", "()I", NJ_ACC_PUBLIC),
+    M("getImageModeY", "()I", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method g3d_methods[] = {
     M("<init>",        "()V",                        NJ_ACC_PUBLIC),
@@ -4255,6 +4370,24 @@ static const nj_builtin_method g3d_methods[] = {
     M("render",        "(L" NJ_C_NODE ";L" NJ_C_XFORM ";)V", NJ_ACC_PUBLIC),
     M("resetLights",   "()V",                        NJ_ACC_PUBLIC),
     M("addLight",      "(L" NJ_C_LIGHT ";L" NJ_C_XFORM ";)I", NJ_ACC_PUBLIC),
+    M("getTarget", "()Ljava/lang/Object;", NJ_ACC_PUBLIC),
+    M("getHints", "()I", NJ_ACC_PUBLIC),
+    M("isDepthBufferEnabled", "()Z", NJ_ACC_PUBLIC),
+    M("getViewportX", "()I", NJ_ACC_PUBLIC),
+    M("getViewportY", "()I", NJ_ACC_PUBLIC),
+    M("getViewportWidth", "()I", NJ_ACC_PUBLIC),
+    M("getViewportHeight", "()I", NJ_ACC_PUBLIC),
+    M("setDepthRange", "(FF)V", NJ_ACC_PUBLIC),
+    M("getDepthRangeNear", "()F", NJ_ACC_PUBLIC),
+    M("getDepthRangeFar", "()F", NJ_ACC_PUBLIC),
+    M("render", "(Ljavax/microedition/m3g/VertexBuffer;Ljavax/microedition/m3g/IndexBuffer;Ljavax/microedition/m3g/Appearance;Ljavax/microedition/m3g/Transform;I)V", NJ_ACC_PUBLIC),
+    M("render", "(Ljavax/microedition/m3g/VertexBuffer;Ljavax/microedition/m3g/IndexBuffer;Ljavax/microedition/m3g/Appearance;Ljavax/microedition/m3g/Transform;)V", NJ_ACC_PUBLIC),
+    M("getCamera", "(Ljavax/microedition/m3g/Transform;)Ljavax/microedition/m3g/Camera;", NJ_ACC_PUBLIC),
+    M("setLight", "(ILjavax/microedition/m3g/Light;Ljavax/microedition/m3g/Transform;)V", NJ_ACC_PUBLIC),
+    M("getLightCount", "()I", NJ_ACC_PUBLIC),
+    M("getLight", "(ILjavax/microedition/m3g/Transform;)Ljavax/microedition/m3g/Light;", NJ_ACC_PUBLIC),
+    /* Static: it describes the implementation, not an instance. */
+    M("getProperties", "()Ljava/util/Hashtable;", NJ_ACC_PUBLIC | NJ_ACC_STATIC),
 };
 static const nj_builtin_method loader_methods[] = {
     M("load", "(Ljava/lang/String;)[L" NJ_C_O3D ";", NJ_ACC_PUBLIC | NJ_ACC_STATIC),
@@ -4268,7 +4401,12 @@ static const nj_builtin_method appear_methods[] = {
     M("getCompositingMode", "()L" NJ_C_COMP ";",        NJ_ACC_PUBLIC),
     M("setTexture",         "(IL" NJ_C_TEX2D ";)V",     NJ_ACC_PUBLIC),
     M("getTexture",         "(I)L" NJ_C_TEX2D ";",      NJ_ACC_PUBLIC),
-    M("setLayer",           "(I)V",                     NJ_ACC_PUBLIC)
+    M("setLayer",           "(I)V",                     NJ_ACC_PUBLIC),
+    M("<init>", "()V", NJ_ACC_PUBLIC),
+    M("getLayer", "()I", NJ_ACC_PUBLIC),
+    M("setFog", "(Ljavax/microedition/m3g/Fog;)V", NJ_ACC_PUBLIC),
+    M("getFog", "()Ljavax/microedition/m3g/Fog;", NJ_ACC_PUBLIC),
+    M("getMaterial", "()Ljavax/microedition/m3g/Material;", NJ_ACC_PUBLIC),
 };
 /*
  * VertexBuffer's default colour, from 急速公路狂飙－新年版_84.  VertexBuffer had
@@ -4351,7 +4489,8 @@ static const nj_builtin_field vbuf_fields[] = {
     { "_nj_colors",    "L" NJ_C_VARR ";", NJ_ACC_PUBLIC },
     { "_nj_tex0",      "L" NJ_C_VARR ";", NJ_ACC_PUBLIC },
     { "_nj_texOff",    "I",              NJ_ACC_PUBLIC },
-    { "_nj_texUnit",   "I",              NJ_ACC_PUBLIC }
+    { "_nj_texUnit",   "I",              NJ_ACC_PUBLIC },
+    { "_nj_normals", "L" NJ_C_VARR ";", NJ_ACC_PUBLIC },
 };
 static const nj_builtin_method vbuf_methods[] = {
     M("setDefaultColor", "(I)V", NJ_ACC_PUBLIC),
@@ -4359,7 +4498,14 @@ static const nj_builtin_method vbuf_methods[] = {
     M("setPositions",    "(L" NJ_C_VARR ";F[F)V", NJ_ACC_PUBLIC),
     M("setColors",       "(L" NJ_C_VARR ";)V",    NJ_ACC_PUBLIC),
     M("setTexCoords",    "(IL" NJ_C_VARR ";I)V",  NJ_ACC_PUBLIC),
-    M("setTexCoords",    "(IL" NJ_C_VARR ";F[F)V", NJ_ACC_PUBLIC)
+    M("setTexCoords",    "(IL" NJ_C_VARR ";F[F)V", NJ_ACC_PUBLIC),
+    M("<init>", "()V", NJ_ACC_PUBLIC),
+    M("getVertexCount", "()I", NJ_ACC_PUBLIC),
+    M("setNormals", "(Ljavax/microedition/m3g/VertexArray;)V", NJ_ACC_PUBLIC),
+    M("getPositions", "([F)Ljavax/microedition/m3g/VertexArray;", NJ_ACC_PUBLIC),
+    M("getTexCoords", "(I[F)Ljavax/microedition/m3g/VertexArray;", NJ_ACC_PUBLIC),
+    M("getNormals", "()Ljavax/microedition/m3g/VertexArray;", NJ_ACC_PUBLIC),
+    M("getColors", "()Ljavax/microedition/m3g/VertexArray;", NJ_ACC_PUBLIC),
 };
 
 static const nj_builtin_method varr_methods[] = {
@@ -4367,7 +4513,11 @@ static const nj_builtin_method varr_methods[] = {
     M("getVertexCount",     "()I",    NJ_ACC_PUBLIC),
     M("getComponentCount",  "()I",    NJ_ACC_PUBLIC),
     M("getComponentSize",   "()I",    NJ_ACC_PUBLIC),
-    M("set",                "(II[S)V", NJ_ACC_PUBLIC)
+    M("set",                "(II[S)V", NJ_ACC_PUBLIC),
+    M("set", "(II[B)V", NJ_ACC_PUBLIC),
+    M("getComponentType", "()I", NJ_ACC_PUBLIC),
+    M("get", "(II[S)V", NJ_ACC_PUBLIC),
+    M("get", "(II[B)V", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method poly_methods[] = {
     M("setWinding",                   "(I)V", NJ_ACC_PUBLIC),
@@ -4377,14 +4527,30 @@ static const nj_builtin_method poly_methods[] = {
     M("setShading",                   "(I)V", NJ_ACC_PUBLIC),
     M("getShading",                   "()I",  NJ_ACC_PUBLIC),
     M("setTwoSidedLightingEnable",    "(Z)V", NJ_ACC_PUBLIC),
-    M("isTwoSidedLightingEnabled",    "()Z",  NJ_ACC_PUBLIC)
+    M("isTwoSidedLightingEnabled",    "()Z",  NJ_ACC_PUBLIC),
+    M("<init>", "()V", NJ_ACC_PUBLIC),
+    M("getWinding", "()I", NJ_ACC_PUBLIC),
+    M("setLocalCameraLightingEnable", "(Z)V", NJ_ACC_PUBLIC),
+    M("isLocalCameraLightingEnabled", "()Z", NJ_ACC_PUBLIC),
+    M("isPerspectiveCorrectionEnabled", "()Z", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method comp_methods[] = {
     M("setBlending",        "(I)V", NJ_ACC_PUBLIC),
     M("getBlending",        "()I",  NJ_ACC_PUBLIC),
     M("setAlphaThreshold",  "(F)V", NJ_ACC_PUBLIC),
     M("setDepthTestEnable", "(Z)V", NJ_ACC_PUBLIC),
-    M("setDepthWriteEnable","(Z)V", NJ_ACC_PUBLIC)
+    M("setDepthWriteEnable","(Z)V", NJ_ACC_PUBLIC),
+    M("<init>", "()V", NJ_ACC_PUBLIC),
+    M("getAlphaThreshold", "()F", NJ_ACC_PUBLIC),
+    M("setAlphaWriteEnable", "(Z)V", NJ_ACC_PUBLIC),
+    M("isAlphaWriteEnabled", "()Z", NJ_ACC_PUBLIC),
+    M("setColorWriteEnable", "(Z)V", NJ_ACC_PUBLIC),
+    M("isColorWriteEnabled", "()Z", NJ_ACC_PUBLIC),
+    M("isDepthWriteEnabled", "()Z", NJ_ACC_PUBLIC),
+    M("isDepthTestEnabled", "()Z", NJ_ACC_PUBLIC),
+    M("setDepthOffset", "(FF)V", NJ_ACC_PUBLIC),
+    M("getDepthOffsetFactor", "()F", NJ_ACC_PUBLIC),
+    M("getDepthOffsetUnits", "()F", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method tex2d_methods[] = {
     M("<init>",      "(L" NJ_C_IMAGE2D ";)V", NJ_ACC_PUBLIC),
@@ -4393,14 +4559,33 @@ static const nj_builtin_method tex2d_methods[] = {
     M("setWrapping", "(II)V",                 NJ_ACC_PUBLIC),
     M("setFiltering", "(II)V",                NJ_ACC_PUBLIC),
     M("getFiltering", "()I",                  NJ_ACC_PUBLIC),
-    M("getImage",     "()L" NJ_C_IMAGE2D ";",  NJ_ACC_PUBLIC)
+    M("getImage",     "()L" NJ_C_IMAGE2D ";",  NJ_ACC_PUBLIC),
+    M("getLevelFilter", "()I", NJ_ACC_PUBLIC),
+    M("getImageFilter", "()I", NJ_ACC_PUBLIC),
+    M("getWrappingS", "()I", NJ_ACC_PUBLIC),
+    M("getWrappingT", "()I", NJ_ACC_PUBLIC),
+    M("getBlending", "()I", NJ_ACC_PUBLIC),
+    M("setBlendColor", "(I)V", NJ_ACC_PUBLIC),
+    M("getBlendColor", "()I", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method sprite_methods[] = {
     M("<init>",        "(ZL" NJ_C_IMAGE2D ";L" NJ_C_APPEAR ";)V", NJ_ACC_PUBLIC),
     M("setImage",      "(L" NJ_C_IMAGE2D ";)V", NJ_ACC_PUBLIC),
-    M("setAppearance", "(L" NJ_C_APPEAR ";)V",  NJ_ACC_PUBLIC)
+    M("setAppearance", "(L" NJ_C_APPEAR ";)V",  NJ_ACC_PUBLIC),
+    M("isScaled", "()Z", NJ_ACC_PUBLIC),
+    M("getAppearance", "()Ljavax/microedition/m3g/Appearance;", NJ_ACC_PUBLIC),
+    M("getImage", "()Ljavax/microedition/m3g/Image2D;", NJ_ACC_PUBLIC),
+    M("setCrop", "(IIII)V", NJ_ACC_PUBLIC),
+    M("getCropX", "()I", NJ_ACC_PUBLIC),
+    M("getCropY", "()I", NJ_ACC_PUBLIC),
+    M("getCropWidth", "()I", NJ_ACC_PUBLIC),
+    M("getCropHeight", "()I", NJ_ACC_PUBLIC),
 };
 static const nj_builtin_method mesh_methods[] = {
+    M("<init>",           "(L" NJ_C_VBUF ";L" NJ_C_IBUF ";L" NJ_C_APPEAR ";)V",
+                          NJ_ACC_PUBLIC),
+    M("<init>",           "(L" NJ_C_VBUF ";[L" NJ_C_IBUF ";[L" NJ_C_APPEAR ";)V",
+                          NJ_ACC_PUBLIC),
     M("getVertexBuffer",  "()L" NJ_C_VBUF ";",        NJ_ACC_PUBLIC),
     M("setVertexBuffer",  "(L" NJ_C_VBUF ";)V",       NJ_ACC_PUBLIC),
     M("getIndexBuffer",   "(I)L" NJ_C_IBUF ";",       NJ_ACC_PUBLIC),
@@ -4420,10 +4605,2131 @@ static const nj_builtin_method img2d_methods[] = {
     M("set",    "(IIII[B)V",  NJ_ACC_PUBLIC),
     M("getFormat",   "()I",   NJ_ACC_PUBLIC),
     M("getWidth",    "()I",   NJ_ACC_PUBLIC),
-    M("getHeight",   "()I",   NJ_ACC_PUBLIC)
+    M("getHeight",   "()I",   NJ_ACC_PUBLIC),
+    M("<init>", "(III[B)V", NJ_ACC_PUBLIC),
+    M("<init>", "(III[B[B)V", NJ_ACC_PUBLIC),
+    M("isMutable", "()Z", NJ_ACC_PUBLIC),
 };
 
 #define M3G_N(arr) ((nj_u2)(sizeof(arr) / sizeof((arr)[0])))
+
+/*
+ * ------------------------------------------------------------------
+ * The rest of the package: the holders a title builds by hand
+ * ------------------------------------------------------------------
+ *
+ * A note above the class table used to say that none of the collected titles
+ * calls a method on Material, Fog, KeyframeSequence and the rest, which was
+ * true when it was written and stopped being true as soon as a title built
+ * one by hand: a MIDlet that writes `new Material()` got NoSuchMethodError
+ * out of its constructor.  The classes below are the ones a title can
+ * construct or animate with; each stores what it is given and hands it back.
+ *
+ * The storage rule is the file's own: a float lives in a field typed "F" and
+ * moves through nj_iget/nj_iput, which carry its four bytes; a reference
+ * lives in a field of its own type.  Nothing here rasterises.
+ */
+static nj_field *m3g_fof(nj_vm *vm, const char *cls, const char *name,
+                         const char *desc)
+{
+    nj_field *f = nj_field_lookup(vm, cls, name, desc, 0);
+
+    if (!f) {
+        /* Name it: "a field this native needs" is true and useless, and it
+         * is what made 浴火银河2's InternalError take a rebuild to place. */
+        char msg[176];
+
+        snprintf(msg, sizeof msg, "m3g: %s has no field %s of type %s",
+                 cls, name, desc);
+        nj_throw(vm, "java/lang/InternalError", msg);
+    }
+    return f;
+}
+
+#define M3G_I_GET(fn, cls, fld)                                          \
+    NJFN(fn)                                                             \
+    {                                                                    \
+        nj_field *f = m3g_fof(vm, cls, fld, "I");                        \
+        ret->i = f ? nj_iget(vm, NJ_THIS(args), f) : 0;                  \
+        return NJ_OK;                                                    \
+    }
+#define M3G_I_SET(fn, cls, fld)                                          \
+    NJFN(fn)                                                             \
+    {                                                                    \
+        nj_field *f = m3g_fof(vm, cls, fld, "I");                        \
+        if (f) {                                                         \
+            nj_iput(vm, NJ_THIS(args), f, NJ_ARG_INT(args, 0));          \
+        }                                                                \
+        return NJ_OK;                                                    \
+    }
+#define M3G_Z_GET(fn, cls, fld)                                          \
+    NJFN(fn)                                                             \
+    {                                                                    \
+        nj_field *f = m3g_fof(vm, cls, fld, "Z");                        \
+        ret->i = f ? (nj_iget(vm, NJ_THIS(args), f) ? 1 : 0) : 0;        \
+        return NJ_OK;                                                    \
+    }
+#define M3G_Z_SET(fn, cls, fld)                                          \
+    NJFN(fn)                                                             \
+    {                                                                    \
+        nj_field *f = m3g_fof(vm, cls, fld, "Z");                        \
+        if (f) {                                                         \
+            nj_iput(vm, NJ_THIS(args), f, NJ_ARG_INT(args, 0) ? 1 : 0);  \
+        }                                                                \
+        return NJ_OK;                                                    \
+    }
+#define M3G_F_GET(fn, cls, fld)                                          \
+    NJFN(fn)                                                             \
+    {                                                                    \
+        nj_field *f = m3g_fof(vm, cls, fld, "F");                        \
+        ret->f = f ? bits2f(nj_iget(vm, NJ_THIS(args), f)) : 0.0f;       \
+        return NJ_OK;                                                    \
+    }
+#define M3G_F_SET(fn, cls, fld)                                          \
+    NJFN(fn)                                                             \
+    {                                                                    \
+        nj_field *f = m3g_fof(vm, cls, fld, "F");                        \
+        if (f) {                                                         \
+            nj_iput(vm, NJ_THIS(args), f, f2bits(NJ_ARG_FLOAT(args, 0)));\
+        }                                                                \
+        return NJ_OK;                                                    \
+    }
+#define M3G_R_GET(fn, cls, fld, desc)                                    \
+    NJFN(fn)                                                             \
+    {                                                                    \
+        nj_field *f = m3g_fof(vm, cls, fld, desc);                       \
+        ret->r = f ? nj_rget(vm, NJ_THIS(args), f) : 0;                  \
+        return NJ_OK;                                                    \
+    }
+#define M3G_R_SET(fn, cls, fld, desc)                                    \
+    NJFN(fn)                                                             \
+    {                                                                    \
+        nj_field *f = m3g_fof(vm, cls, fld, desc);                       \
+        if (f) {                                                         \
+            nj_rput(vm, NJ_THIS(args), f, NJ_ARG_REF(args, 0));          \
+        }                                                                \
+        return NJ_OK;                                                    \
+    }
+
+/* Copy a java float[] into another, as short as the shorter one. */
+static nj_u4 m3g_copy_floats(nj_ref dst, nj_ref src)
+{
+    float *d, *s;
+    nj_u4 n, i;
+
+    if (!dst || !src) {
+        return 0u;
+    }
+    n = (nj_u4)nj_array_length(src);
+    if (n > (nj_u4)nj_array_length(dst)) {
+        n = (nj_u4)nj_array_length(dst);
+    }
+    d = (float *)nj_array_data(dst);
+    s = (float *)nj_array_data(src);
+    if (!d || !s) {
+        return 0u;
+    }
+    for (i = 0u; i < n; i++) {
+        d[i] = s[i];
+    }
+    return n;
+}
+
+/* ------------------------------------------------------------------ */
+/* Material                                                            */
+/* ------------------------------------------------------------------ */
+static const nj_builtin_field mat_fields[] = {
+    { "_nj_c_amb",     "I", 0 },
+    { "_nj_c_dif",     "I", 0 },
+    { "_nj_c_emi",     "I", 0 },
+    { "_nj_c_spec",    "I", 0 },
+    { "_nj_shininess", "F", 0 },
+    { "_nj_vcolor",    "Z", 0 },
+    { "AMBIENT",  "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "DIFFUSE",  "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "EMISSIVE", "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SPECULAR", "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+
+static const nj_builtin_method mat_methods[] = {
+    M("<init>",                       "()V", NJ_ACC_PUBLIC),
+    M("setColor",                     "(II)V", NJ_ACC_PUBLIC),
+    M("getColor",                     "(I)I", NJ_ACC_PUBLIC),
+    M("setShininess",                 "(F)V", NJ_ACC_PUBLIC),
+    M("getShininess",                 "()F", NJ_ACC_PUBLIC),
+    M("setVertexColorTrackingEnable", "(Z)V", NJ_ACC_PUBLIC),
+    M("isVertexColorTrackingEnabled", "()Z", NJ_ACC_PUBLIC)
+};
+
+/*
+ * The four colour targets are the JSR's own numbers: 1024 AMBIENT, 2048
+ * DIFFUSE, 4096 EMISSIVE, 8192 SPECULAR.  A title that passes anything else
+ * gets an exception naming them, not a silent write into the wrong slot.
+ */
+static const char *mat_colour_field(nj_vm *vm, nj_s4 target)
+{
+    switch (target) {
+    case 1024: return "_nj_c_amb";
+    case 2048: return "_nj_c_dif";
+    case 4096: return "_nj_c_emi";
+    case 8192: return "_nj_c_spec";
+    default:
+        /* nj_throw, not NJ_THROW: this helper answers a field name, so the
+           macro's `return` would hand back an nj_status as a pointer. */
+        (void)nj_throw(vm, "java/lang/IllegalArgumentException",
+                       "colour target is AMBIENT (1024), DIFFUSE (2048), "
+                       "EMISSIVE (4096) or SPECULAR (8192)");
+        return NULL;
+    }
+}
+
+NJFN(m3g_mat_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_MAT, "_nj_c_amb", "I"), (nj_s4)0x3F800000);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_MAT, "_nj_c_dif", "I"), (nj_s4)0xCCCCCCCC);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_MAT, "_nj_c_emi", "I"), 0);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_MAT, "_nj_c_spec", "I"), 0);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_MAT, "_nj_shininess", "F"), 0);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_MAT, "_nj_vcolor", "Z"), 0);
+    return NJ_OK;
+}
+
+NJFN(m3g_mat_setColor)
+{
+    const char *fld = mat_colour_field(vm, NJ_ARG_INT(args, 0));
+
+    if (!fld) {
+        return NJ_ERR;
+    }
+    nj_iput(vm, NJ_THIS(args), m3g_fof(vm, NJ_C_MAT, fld, "I"),
+            NJ_ARG_INT(args, 1));
+    return NJ_OK;
+}
+
+NJFN(m3g_mat_getColor)
+{
+    const char *fld = mat_colour_field(vm, NJ_ARG_INT(args, 0));
+
+    if (!fld) {
+        return NJ_ERR;
+    }
+    ret->i = nj_iget(vm, NJ_THIS(args), m3g_fof(vm, NJ_C_MAT, fld, "I"));
+    return NJ_OK;
+}
+
+M3G_F_SET(m3g_mat_setShininess, NJ_C_MAT, "_nj_shininess")
+M3G_F_GET(m3g_mat_getShininess, NJ_C_MAT, "_nj_shininess")
+M3G_Z_SET(m3g_mat_setTrackColor, NJ_C_MAT, "_nj_vcolor")
+M3G_Z_GET(m3g_mat_isTrackColor, NJ_C_MAT, "_nj_vcolor")
+
+/* ------------------------------------------------------------------ */
+/* Fog                                                                 */
+/* ------------------------------------------------------------------ */
+static const nj_builtin_field fog_fields[] = {
+    { "_nj_mode",    "I", 0 },
+    { "_nj_color",   "I", 0 },
+    { "_nj_density", "F", 0 },
+    { "_nj_near",    "F", 0 },
+    { "_nj_far",     "F", 0 },
+    { "EXPONENTIAL", "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "LINEAR",      "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+
+static const nj_builtin_method fog_methods[] = {
+    M("<init>",          "()V",  NJ_ACC_PUBLIC),
+    M("setMode",         "(I)V", NJ_ACC_PUBLIC),
+    M("getMode",         "()I",  NJ_ACC_PUBLIC),
+    M("setColor",        "(I)V", NJ_ACC_PUBLIC),
+    M("getColor",        "()I",  NJ_ACC_PUBLIC),
+    M("setDensity",      "(F)V", NJ_ACC_PUBLIC),
+    M("getDensity",      "()F",  NJ_ACC_PUBLIC),
+    M("setLinear",       "(FF)V", NJ_ACC_PUBLIC),
+    M("getNearDistance", "()F",  NJ_ACC_PUBLIC),
+    M("getFarDistance",  "()F",  NJ_ACC_PUBLIC)
+};
+
+NJFN(m3g_fog_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_FOG, "_nj_mode", "I"), 80);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_FOG, "_nj_color", "I"), 0);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_FOG, "_nj_density", "F"), f2bits(1.0f));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_FOG, "_nj_near", "F"), f2bits(0.0f));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_FOG, "_nj_far", "F"), f2bits(1.0f));
+    return NJ_OK;
+}
+
+NJFN(m3g_fog_setMode)
+{
+    nj_s4 mode = NJ_ARG_INT(args, 0);
+
+    if (mode != 80 && mode != 81) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "fog mode is EXPONENTIAL (80) or LINEAR (81)");
+        return NJ_ERR;
+    }
+    nj_iput(vm, NJ_THIS(args), m3g_fof(vm, NJ_C_FOG, "_nj_mode", "I"), mode);
+    return NJ_OK;
+}
+
+NJFN(m3g_fog_setLinear)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_FOG, "_nj_near", "F"),
+            f2bits(NJ_ARG_FLOAT(args, 0)));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_FOG, "_nj_far", "F"),
+            f2bits(NJ_ARG_FLOAT(args, 1)));
+    return NJ_OK;
+}
+
+M3G_I_GET(m3g_fog_getMode,    NJ_C_FOG, "_nj_mode")
+M3G_I_SET(m3g_fog_setColor,   NJ_C_FOG, "_nj_color")
+M3G_I_GET(m3g_fog_getColor,   NJ_C_FOG, "_nj_color")
+M3G_F_SET(m3g_fog_setDensity, NJ_C_FOG, "_nj_density")
+M3G_F_GET(m3g_fog_getDensity, NJ_C_FOG, "_nj_density")
+M3G_F_GET(m3g_fog_getNear,    NJ_C_FOG, "_nj_near")
+M3G_F_GET(m3g_fog_getFar,     NJ_C_FOG, "_nj_far")
+
+/* ------------------------------------------------------------------ */
+/* IndexBuffer                                                         */
+/* ------------------------------------------------------------------ */
+/*
+ * An IndexBuffer is abstract in the API: the class that is really built is
+ * TriangleStripArray, which keeps its strip lengths and fills these two
+ * fields.  They live here because getIndexCount() and getIndices() are
+ * declared here and a subclass inherits both the method and the storage.
+ */
+static const nj_builtin_field ibuf_fields[] = {
+    { "_nj_ib_count", "I",  0 },
+    { "_nj_ib_data",  "[I", 0 }
+};
+
+static const nj_builtin_method ibuf_methods[] = {
+    M("getIndexCount", "()I",  NJ_ACC_PUBLIC),
+    M("getIndices",    "([I)V", NJ_ACC_PUBLIC)
+};
+
+NJFN(m3g_ibuf_getIndexCount)
+{
+    ret->i = nj_iget(vm, NJ_THIS(args),
+                     m3g_fof(vm, NJ_C_IBUF, "_nj_ib_count", "I"));
+    return NJ_OK;
+}
+
+NJFN(m3g_ibuf_getIndices)
+{
+    nj_ref dst = NJ_ARG_REF(args, 0);
+    nj_ref data = nj_rget(vm, NJ_THIS(args),
+                          m3g_fof(vm, NJ_C_IBUF, "_nj_ib_data", "[I"));
+    nj_u4 n;
+
+    if (!dst || !data) {
+        return NJ_OK;
+    }
+    n = (nj_u4)nj_array_length(data);
+    if (n > (nj_u4)nj_array_length(dst)) {
+        n = (nj_u4)nj_array_length(dst);
+    }
+    {
+        nj_u4 i;
+
+        for (i = 0u; i < n; i++) {
+            nj_array_set_int(dst, i, nj_array_get_int(data, i));
+        }
+    }
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* KeyframeSequence                                                    */
+/* ------------------------------------------------------------------ */
+static const nj_builtin_field kfs_fields[] = {
+    { "_nj_ncomp",  "I",  0 },
+    { "_nj_nkeys",  "I",  0 },
+    { "_nj_interp", "I",  0 },
+    { "_nj_dur",    "I",  0 },
+    { "_nj_repeat", "I",  0 },
+    { "_nj_vfirst", "I",  0 },
+    { "_nj_vlast",  "I",  0 },
+    { "_nj_times",  "[I", 0 },
+    { "_nj_keys",   "[F", 0 },
+    { "STEP",     "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "LINEAR",   "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SPLINE",   "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SQUAD",    "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SLERP",    "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "CONSTANT", "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "LOOP",     "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+
+static const nj_builtin_method kfs_methods[] = {
+    M("<init>",               "(III)V",  NJ_ACC_PUBLIC),
+    M("getComponentCount",    "()I",     NJ_ACC_PUBLIC),
+    M("getKeyframeCount",     "()I",     NJ_ACC_PUBLIC),
+    M("getInterpolationType", "()I",     NJ_ACC_PUBLIC),
+    M("setKeyframe",          "(II[F)V", NJ_ACC_PUBLIC),
+    M("getKeyframe",          "(I[F)I",  NJ_ACC_PUBLIC),
+    M("setValidRange",        "(II)V",   NJ_ACC_PUBLIC),
+    M("getValidRangeFirst",   "()I",     NJ_ACC_PUBLIC),
+    M("getValidRangeLast",    "()I",     NJ_ACC_PUBLIC),
+    M("setDuration",          "(I)V",    NJ_ACC_PUBLIC),
+    M("getDuration",          "()I",     NJ_ACC_PUBLIC),
+    M("setRepeatMode",        "(I)V",    NJ_ACC_PUBLIC),
+    M("getRepeatMode",        "()I",     NJ_ACC_PUBLIC)
+};
+
+NJFN(m3g_kfs_init)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 ncomp = NJ_ARG_INT(args, 0);
+    nj_s4 nkeys = NJ_ARG_INT(args, 1);
+    nj_s4 interp = NJ_ARG_INT(args, 2);
+    nj_ref times, keys;
+
+    if (ncomp < 1 || ncomp > 4 || nkeys < 1 ||
+        (interp != 176 && interp != 177 && interp != 178 &&
+         interp != 179 && interp != 180)) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "a sequence is 1..4 components, 1.. keyframes, and one of "
+                 "STEP (180), LINEAR (176), SPLINE (178), SQUAD (179), "
+                 "SLERP (177)");
+        return NJ_ERR;
+    }
+    times = nj_int_array_new(vm, (nj_u4)nkeys);
+    keys = nj_array_new(vm, "F", (nj_u4)(ncomp * nkeys));
+    if (!times || !keys) {
+        return nj_throw_oom(vm);
+    }
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_times", "[I"), times);
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_keys", "[F"), keys);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_ncomp", "I"), ncomp);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_nkeys", "I"), nkeys);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_interp", "I"), interp);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_repeat", "I"), 192);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_vlast", "I"), nkeys - 1);
+    return NJ_OK;
+}
+
+NJFN(m3g_kfs_setKeyframe)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 idx = NJ_ARG_INT(args, 0);
+    nj_s4 time = NJ_ARG_INT(args, 1);
+    nj_ref src = NJ_ARG_REF(args, 2);
+    nj_ref keys, times;
+    nj_s4 nkeys, ncomp;
+    float *k, *s;
+    nj_u4 n, i;
+
+    nkeys = nj_iget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_nkeys", "I"));
+    ncomp = nj_iget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_ncomp", "I"));
+    if (idx < 0 || idx >= nkeys) {
+        NJ_THROW(vm, "java/lang/IndexOutOfBoundsException",
+                 "no such keyframe");
+        return NJ_ERR;
+    }
+    if (time < 0) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "keyframe time must not be negative");
+        return NJ_ERR;
+    }
+    keys = nj_rget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_keys", "[F"));
+    times = nj_rget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_times", "[I"));
+    if (!keys || !times) {
+        return NJ_OK;
+    }
+    nj_array_set_int(times, (nj_u4)idx, time);
+    if (!src) {
+        return NJ_OK;
+    }
+    k = (float *)nj_array_data(keys);
+    s = (float *)nj_array_data(src);
+    if (!k || !s) {
+        return NJ_OK;
+    }
+    n = (nj_u4)ncomp;
+    if (n > (nj_u4)nj_array_length(src)) {
+        n = (nj_u4)nj_array_length(src);
+    }
+    for (i = 0u; i < n; i++) {
+        k[(nj_u4)idx * (nj_u4)ncomp + i] = s[i];
+    }
+    return NJ_OK;
+}
+
+NJFN(m3g_kfs_getKeyframe)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 idx = NJ_ARG_INT(args, 0);
+    nj_ref dst = NJ_ARG_REF(args, 1);
+    nj_ref keys, times;
+    nj_s4 nkeys, ncomp;
+    float *k, *d;
+    nj_u4 n, i;
+
+    nkeys = nj_iget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_nkeys", "I"));
+    ncomp = nj_iget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_ncomp", "I"));
+    if (idx < 0 || idx >= nkeys) {
+        NJ_THROW(vm, "java/lang/IndexOutOfBoundsException",
+                 "no such keyframe");
+        return NJ_ERR;
+    }
+    keys = nj_rget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_keys", "[F"));
+    times = nj_rget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_times", "[I"));
+    ret->i = times ? nj_array_get_int(times, (nj_u4)idx) : 0;
+    if (!keys || !dst) {
+        return NJ_OK;
+    }
+    k = (float *)nj_array_data(keys);
+    d = (float *)nj_array_data(dst);
+    if (!k || !d) {
+        return NJ_OK;
+    }
+    n = (nj_u4)ncomp;
+    if (n > (nj_u4)nj_array_length(dst)) {
+        n = (nj_u4)nj_array_length(dst);
+    }
+    for (i = 0u; i < n; i++) {
+        d[i] = k[(nj_u4)idx * (nj_u4)ncomp + i];
+    }
+    return NJ_OK;
+}
+
+NJFN(m3g_kfs_setValidRange)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 first = NJ_ARG_INT(args, 0);
+    nj_s4 last = NJ_ARG_INT(args, 1);
+    nj_s4 nkeys = nj_iget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_nkeys", "I"));
+
+    if (first < 0 || last >= nkeys || first > last) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "the valid range must be inside the keyframes, first <= last");
+        return NJ_ERR;
+    }
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_vfirst", "I"), first);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_vlast", "I"), last);
+    return NJ_OK;
+}
+
+NJFN(m3g_kfs_setDuration)
+{
+    nj_s4 d = NJ_ARG_INT(args, 0);
+
+    if (d <= 0) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "the duration must be positive");
+        return NJ_ERR;
+    }
+    nj_iput(vm, NJ_THIS(args), m3g_fof(vm, NJ_C_KFS, "_nj_dur", "I"), d);
+    return NJ_OK;
+}
+
+NJFN(m3g_kfs_setRepeatMode)
+{
+    nj_s4 mode = NJ_ARG_INT(args, 0);
+
+    if (mode != 192 && mode != 193) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "repeat mode is CONSTANT (192) or LOOP (193)");
+        return NJ_ERR;
+    }
+    nj_iput(vm, NJ_THIS(args), m3g_fof(vm, NJ_C_KFS, "_nj_repeat", "I"), mode);
+    return NJ_OK;
+}
+
+M3G_I_GET(m3g_kfs_getComponentCount,    NJ_C_KFS, "_nj_ncomp")
+M3G_I_GET(m3g_kfs_getKeyframeCount,     NJ_C_KFS, "_nj_nkeys")
+M3G_I_GET(m3g_kfs_getInterpolationType, NJ_C_KFS, "_nj_interp")
+M3G_I_GET(m3g_kfs_getValidRangeFirst,   NJ_C_KFS, "_nj_vfirst")
+M3G_I_GET(m3g_kfs_getValidRangeLast,    NJ_C_KFS, "_nj_vlast")
+M3G_I_GET(m3g_kfs_getDuration,          NJ_C_KFS, "_nj_dur")
+M3G_I_GET(m3g_kfs_getRepeatMode,        NJ_C_KFS, "_nj_repeat")
+
+/* ------------------------------------------------------------------ */
+/* AnimationController                                                 */
+/* ------------------------------------------------------------------ */
+static const nj_builtin_field actl_fields[] = {
+    { "_nj_ai0",    "I", 0 },
+    { "_nj_ai1",    "I", 0 },
+    { "_nj_speed",  "F", 0 },
+    { "_nj_pos",    "F", 0 },
+    { "_nj_weight", "F", 0 }
+};
+
+static const nj_builtin_method actl_methods[] = {
+    M("<init>",                "()V",  NJ_ACC_PUBLIC),
+    M("setActiveInterval",     "(II)V", NJ_ACC_PUBLIC),
+    M("getActiveIntervalStart", "()I", NJ_ACC_PUBLIC),
+    M("getActiveIntervalEnd",  "()I",  NJ_ACC_PUBLIC),
+    M("setSpeed",              "(FI)V", NJ_ACC_PUBLIC),
+    M("getSpeed",              "()F",  NJ_ACC_PUBLIC),
+    M("setPosition",           "(FI)V", NJ_ACC_PUBLIC),
+    M("getPosition",           "(I)F", NJ_ACC_PUBLIC),
+    M("getRefWorldTime",       "()I",  NJ_ACC_PUBLIC),
+    M("setWeight",             "(F)V", NJ_ACC_PUBLIC),
+    M("getWeight",             "()F",  NJ_ACC_PUBLIC)
+};
+
+NJFN(m3g_actl_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_ai0", "I"), 0);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_ai1", "I"), 0);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_speed", "F"), f2bits(1.0f));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_pos", "F"), f2bits(0.0f));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_weight", "F"), f2bits(1.0f));
+    return NJ_OK;
+}
+
+NJFN(m3g_actl_setActiveInterval)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 first = NJ_ARG_INT(args, 0);
+    nj_s4 last = NJ_ARG_INT(args, 1);
+    nj_s4 t;
+
+    /* The JSR says the two are swapped when they arrive the wrong way
+       round, rather than refused. */
+    if (first > last) {
+        t = first;
+        first = last;
+        last = t;
+    }
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_ai0", "I"), first);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_ai1", "I"), last);
+    return NJ_OK;
+}
+
+NJFN(m3g_actl_getRefWorldTime)
+{
+    ret->i = (nj_s4)nj_now_ms(vm);
+    return NJ_OK;
+}
+
+M3G_I_GET(m3g_actl_getActiveIntervalStart, NJ_C_ACTL, "_nj_ai0")
+M3G_I_GET(m3g_actl_getActiveIntervalEnd,   NJ_C_ACTL, "_nj_ai1")
+M3G_F_SET(m3g_actl_setSpeed,    NJ_C_ACTL, "_nj_speed")
+M3G_F_GET(m3g_actl_getSpeed,    NJ_C_ACTL, "_nj_speed")
+M3G_F_SET(m3g_actl_setPosition, NJ_C_ACTL, "_nj_pos")
+M3G_F_GET(m3g_actl_getPosition, NJ_C_ACTL, "_nj_pos")
+M3G_F_SET(m3g_actl_setWeight,   NJ_C_ACTL, "_nj_weight")
+M3G_F_GET(m3g_actl_getWeight,   NJ_C_ACTL, "_nj_weight")
+
+/* ------------------------------------------------------------------ */
+/* AnimationTrack                                                      */
+/* ------------------------------------------------------------------ */
+#define M3G_PROP(name, value) { name, "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+
+static const nj_builtin_field atrack_fields[] = {
+    { "_nj_kfs",  "L" NJ_C_KFS ";",  0 },
+    { "_nj_ctl",  "L" NJ_C_ACTL ";", 0 },
+    { "_nj_prop", "I", 0 },
+    M3G_PROP("ALPHA",          256),
+    M3G_PROP("AMBIENT_COLOR",  257),
+    M3G_PROP("COLOR",          258),
+    M3G_PROP("CROP",           259),
+    M3G_PROP("DENSITY",        260),
+    M3G_PROP("DIFFUSE_COLOR",  261),
+    M3G_PROP("EMISSIVE_COLOR", 262),
+    M3G_PROP("FAR_DISTANCE",   263),
+    M3G_PROP("FIELD_OF_VIEW",  264),
+    M3G_PROP("INTENSITY",      265),
+    M3G_PROP("MORPH_WEIGHTS",  266),
+    M3G_PROP("NEAR_DISTANCE",  267),
+    M3G_PROP("ORIENTATION",    268),
+    M3G_PROP("PICKABILITY",    269),
+    M3G_PROP("SCALE",          270),
+    M3G_PROP("SHININESS",      271),
+    M3G_PROP("SPECULAR_COLOR", 272),
+    M3G_PROP("SPOT_ANGLE",     273),
+    M3G_PROP("SPOT_EXPONENT",  274),
+    M3G_PROP("TRANSLATION",    275),
+    M3G_PROP("VISIBILITY",     276)
+};
+
+static const nj_builtin_method atrack_methods[] = {
+    M("<init>",             "(L" NJ_C_KFS ";I)V", NJ_ACC_PUBLIC),
+    M("setController",      "(L" NJ_C_ACTL ";)V", NJ_ACC_PUBLIC),
+    M("getController",      "()L" NJ_C_ACTL ";",  NJ_ACC_PUBLIC),
+    M("getKeyframeSequence", "()L" NJ_C_KFS ";",  NJ_ACC_PUBLIC),
+    M("getTargetProperty",  "()I",                NJ_ACC_PUBLIC)
+};
+
+NJFN(m3g_atrack_init)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref seq = NJ_ARG_REF(args, 0);
+    nj_s4 prop = NJ_ARG_INT(args, 1);
+
+    if (!seq) {
+        NJ_THROW(vm, "java/lang/NullPointerException",
+                 "an AnimationTrack needs a KeyframeSequence");
+        return NJ_ERR;
+    }
+    if (prop < 256 || prop > 276) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "the target property is one of 256..276");
+        return NJ_ERR;
+    }
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_ATRACK, "_nj_kfs", "L" NJ_C_KFS ";"), seq);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_ATRACK, "_nj_prop", "I"), prop);
+    return NJ_OK;
+}
+
+M3G_R_SET(m3g_atrack_setController, NJ_C_ATRACK, "_nj_ctl",
+          "L" NJ_C_ACTL ";")
+M3G_R_GET(m3g_atrack_getController, NJ_C_ATRACK, "_nj_ctl",
+          "L" NJ_C_ACTL ";")
+M3G_R_GET(m3g_atrack_getSequence, NJ_C_ATRACK, "_nj_kfs",
+          "L" NJ_C_KFS ";")
+M3G_I_GET(m3g_atrack_getProperty, NJ_C_ATRACK, "_nj_prop")
+
+/* ------------------------------------------------------------------ */
+/* RayIntersection                                                     */
+/* ------------------------------------------------------------------ */
+static const nj_builtin_field ray_fields[] = {
+    { "_nj_xnode",   "L" NJ_C_NODE ";", 0 },
+    { "_nj_ray",     "[F", 0 },
+    { "_nj_dist",    "F",  0 },
+    { "_nj_submesh", "I",  0 },
+    { "_nj_tex",     "[F", 0 },
+    { "_nj_norm",    "[F", 0 }
+};
+
+static const nj_builtin_method ray_methods[] = {
+    M("<init>",         "()V",                NJ_ACC_PUBLIC),
+    M("getIntersected", "()L" NJ_C_NODE ";",  NJ_ACC_PUBLIC),
+    M("getRay",         "([F)V",              NJ_ACC_PUBLIC),
+    M("getDistance",    "()F",                NJ_ACC_PUBLIC),
+    M("getSubmeshIndex", "()I",               NJ_ACC_PUBLIC),
+    M("getTextureS",    "(I)F",               NJ_ACC_PUBLIC),
+    M("getTextureT",    "(I)F",               NJ_ACC_PUBLIC),
+    M("getNormalX",     "()F",                NJ_ACC_PUBLIC),
+    M("getNormalY",     "()F",                NJ_ACC_PUBLIC),
+    M("getNormalZ",     "()F",                NJ_ACC_PUBLIC)
+};
+
+NJFN(m3g_ray_init)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref ray = nj_array_new(vm, "F", 6u);
+    nj_ref tex = nj_array_new(vm, "F", 4u);
+    nj_ref nrm = nj_array_new(vm, "F", 3u);
+
+    if (!ray || !tex || !nrm) {
+        return nj_throw_oom(vm);
+    }
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_RAY, "_nj_ray", "[F"), ray);
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_RAY, "_nj_tex", "[F"), tex);
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_RAY, "_nj_norm", "[F"), nrm);
+    return NJ_OK;
+}
+
+NJFN(m3g_ray_getRay)
+{
+    nj_ref dst = NJ_ARG_REF(args, 0);
+    nj_ref ray = nj_rget(vm, NJ_THIS(args),
+                         m3g_fof(vm, NJ_C_RAY, "_nj_ray", "[F"));
+
+    (void)m3g_copy_floats(dst, ray);
+    return NJ_OK;
+}
+
+/* One of the two texture coordinates of texture unit `index`, or of the
+   normal, read out of the small float arrays the intersection carries. */
+static nj_s4 m3g_ray_component(nj_vm *vm, nj_value *args, const char *fld, int k)
+{
+    nj_ref a = nj_rget(vm, NJ_THIS(args), m3g_fof(vm, NJ_C_RAY, fld, "[F"));
+    float *p;
+
+    if (!a || k >= (nj_s4)nj_array_length(a)) {
+        return 0;
+    }
+    p = (float *)nj_array_data(a);
+    return p ? f2bits(p[k]) : 0;
+}
+
+NJFN(m3g_ray_getTextureS)
+{
+    nj_s4 idx = NJ_ARG_INT(args, 0);
+
+    ret->i = m3g_ray_component(vm, args, "_nj_tex", (int)(idx * 2));
+    if ((idx * 2) < 0 || (idx * 2) >= 4) {
+        NJ_THROW(vm, "java/lang/IndexOutOfBoundsException",
+                 "texture unit 0 or 1");
+        return NJ_ERR;
+    }
+    return NJ_OK;
+}
+
+NJFN(m3g_ray_getTextureT)
+{
+    nj_s4 idx = NJ_ARG_INT(args, 0);
+
+    ret->i = m3g_ray_component(vm, args, "_nj_tex", (int)(idx * 2 + 1));
+    if ((idx * 2 + 1) < 0 || (idx * 2 + 1) >= 4) {
+        NJ_THROW(vm, "java/lang/IndexOutOfBoundsException",
+                 "texture unit 0 or 1");
+        return NJ_ERR;
+    }
+    return NJ_OK;
+}
+
+NJFN(m3g_ray_getNormalX)
+{
+    ret->i = m3g_ray_component(vm, args, "_nj_norm", 0);
+    return NJ_OK;
+}
+
+NJFN(m3g_ray_getNormalY)
+{
+    ret->i = m3g_ray_component(vm, args, "_nj_norm", 1);
+    return NJ_OK;
+}
+
+NJFN(m3g_ray_getNormalZ)
+{
+    ret->i = m3g_ray_component(vm, args, "_nj_norm", 2);
+    return NJ_OK;
+}
+
+M3G_R_GET(m3g_ray_getIntersected, NJ_C_RAY, "_nj_xnode", "L" NJ_C_NODE ";")
+M3G_F_GET(m3g_ray_getDistance,    NJ_C_RAY, "_nj_dist")
+M3G_I_GET(m3g_ray_getSubmeshIndex, NJ_C_RAY, "_nj_submesh")
+
+/* ------------------------------------------------------------------ */
+/* The mesh family: the base a Mesh ctor stores                        */
+/* ------------------------------------------------------------------ */
+/*
+ * Vertex buffer, index buffer and one appearance per submesh.  The loader
+ * fills the same three things from the file, and getSubmeshCount() answers
+ * from the int field, so both routes end up with the two in step.
+ */
+static void mesh_set_base(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
+                          nj_ref app)
+{
+    nj_ref subs = nj_object_new(vm, NJ_C_VECTOR);
+
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_vb", "L" NJ_C_VBUF ";"), vb);
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_ib", "L" NJ_C_IBUF ";"), ib);
+    if (!subs) {
+        return;
+    }
+    nj_call(vm, subs, NJ_C_VECTOR, "<init>", "()V", NULL, NULL);
+    if (app) {
+        nj_value a[1];
+
+        a[0].r = app;
+        nj_call(vm, subs, NJ_C_VECTOR, "addElement", "(Ljava/lang/Object;)V",
+                a, NULL);
+    }
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_subs", "L" NJ_C_VECTOR ";"),
+            subs);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_nsub", "I"), app ? 1 : 0);
+}
+
+NJFN(m3g_mesh_init)
+{
+    mesh_set_base(vm, NJ_THIS(args), NJ_ARG_REF(args, 0), NJ_ARG_REF(args, 1),
+                  NJ_ARG_REF(args, 2));
+    return NJ_OK;
+}
+
+/* The array form: one index buffer and one appearance per submesh, as long
+   as the shorter of the two arrays.  Mesh keeps the first index buffer,
+   because a Mesh has one - the rest belong to submeshes this runtime does
+   not draw separately yet. */
+NJFN(m3g_mesh_init_arrays)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref vb = NJ_ARG_REF(args, 0);
+    nj_ref ibs = NJ_ARG_REF(args, 1);
+    nj_ref apps = NJ_ARG_REF(args, 2);
+    nj_ref ib = 0, app = 0;
+    nj_u4 nsub;
+
+    if (ibs && nj_array_length(ibs) > 0) {
+        ib = nj_array_get_ref(ibs, 0u);
+    }
+    if (apps && nj_array_length(apps) > 0) {
+        app = nj_array_get_ref(apps, 0u);
+    }
+    mesh_set_base(vm, self, vb, ib, app);
+    nsub = (nj_u4)(apps ? nj_array_length(apps) : 0);
+    if (ibs && (nj_u4)nj_array_length(ibs) < nsub) {
+        nsub = (nj_u4)nj_array_length(ibs);
+    }
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_nsub", "I"), (nj_s4)nsub);
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* MorphingMesh                                                        */
+/* ------------------------------------------------------------------ */
+static const nj_builtin_field morph_fields[] = {
+    { "_nj_morphs",  "[L" NJ_C_VBUF ";", 0 },
+    { "_nj_nmorph",  "I", 0 },
+    { "_nj_weights", "[F", 0 }
+};
+
+static const nj_builtin_method morph_methods[] = {
+    M("<init>", "(L" NJ_C_VBUF ";[L" NJ_C_VBUF ";L" NJ_C_IBUF ";"
+                "L" NJ_C_APPEAR ";)V", NJ_ACC_PUBLIC),
+    M("<init>", "(L" NJ_C_VBUF ";[L" NJ_C_VBUF ";[L" NJ_C_IBUF ";"
+                "[L" NJ_C_APPEAR ";)V", NJ_ACC_PUBLIC),
+    M("getMorphTarget",      "(I)L" NJ_C_VBUF ";", NJ_ACC_PUBLIC),
+    M("getMorphTargetCount", "()I",                NJ_ACC_PUBLIC),
+    M("setWeights",          "([F)V",              NJ_ACC_PUBLIC),
+    M("getWeights",          "([F)V",              NJ_ACC_PUBLIC)
+};
+
+/* Store the morph targets and give every one of them a weight: the first is
+   the whole shape until a title says otherwise, which is the default the JSR
+   describes. */
+static void morph_set_targets(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref targets,
+                              nj_ref ib, nj_ref app)
+{
+    nj_u4 n = targets ? (nj_u4)nj_array_length(targets) : 0u;
+    nj_ref copy = 0, weights = 0;
+    nj_u4 i;
+
+    mesh_set_base(vm, self, vb, ib, app);
+    if (n > 0u) {
+        copy = nj_object_array_new(vm, "javax/microedition/m3g/VertexBuffer", n);
+        weights = nj_array_new(vm, "F", n);
+        if (!copy || !weights) {
+            return;
+        }
+        for (i = 0u; i < n; i++) {
+            nj_array_set_ref(copy, i, nj_array_get_ref(targets, i));
+        }
+        {
+            float *w = (float *)nj_array_data(weights);
+
+            if (w) {
+                for (i = 0u; i < n; i++) {
+                    w[i] = (i == 0u) ? 1.0f : 0.0f;
+                }
+            }
+        }
+    }
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_MORPH, "_nj_morphs",
+                              "[L" NJ_C_VBUF ";"), copy);
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_MORPH, "_nj_weights", "[F"), weights);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_MORPH, "_nj_nmorph", "I"), (nj_s4)n);
+}
+
+NJFN(m3g_morph_init)
+{
+    morph_set_targets(vm, NJ_THIS(args), NJ_ARG_REF(args, 0), NJ_ARG_REF(args, 1),
+                      NJ_ARG_REF(args, 2), NJ_ARG_REF(args, 3));
+    return NJ_OK;
+}
+
+NJFN(m3g_morph_init_arrays)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref ibs = NJ_ARG_REF(args, 2);
+    nj_ref apps = NJ_ARG_REF(args, 3);
+    nj_ref ib = 0, app = 0;
+
+    if (ibs && nj_array_length(ibs) > 0) {
+        ib = nj_array_get_ref(ibs, 0u);
+    }
+    if (apps && nj_array_length(apps) > 0) {
+        app = nj_array_get_ref(apps, 0u);
+    }
+    morph_set_targets(vm, self, NJ_ARG_REF(args, 0), NJ_ARG_REF(args, 1),
+                      ib, app);
+    return NJ_OK;
+}
+
+NJFN(m3g_morph_getTarget)
+{
+    nj_ref targets = nj_rget(vm, NJ_THIS(args),
+                             m3g_fof(vm, NJ_C_MORPH, "_nj_morphs",
+                                     "[L" NJ_C_VBUF ";"));
+    nj_s4 idx = NJ_ARG_INT(args, 0);
+
+    if (!targets || idx < 0 || idx >= (nj_s4)nj_array_length(targets)) {
+        NJ_THROW(vm, "java/lang/IndexOutOfBoundsException",
+                 "no such morph target");
+        return NJ_ERR;
+    }
+    ret->r = nj_array_get_ref(targets, (nj_u4)idx);
+    return NJ_OK;
+}
+
+NJFN(m3g_morph_setWeights)
+{
+    nj_ref w = nj_rget(vm, NJ_THIS(args),
+                       m3g_fof(vm, NJ_C_MORPH, "_nj_weights", "[F"));
+
+    (void)m3g_copy_floats(w, NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+NJFN(m3g_morph_getWeights)
+{
+    nj_ref w = nj_rget(vm, NJ_THIS(args),
+                       m3g_fof(vm, NJ_C_MORPH, "_nj_weights", "[F"));
+
+    (void)m3g_copy_floats(NJ_ARG_REF(args, 0), w);
+    return NJ_OK;
+}
+
+M3G_I_GET(m3g_morph_getTargetCount, NJ_C_MORPH, "_nj_nmorph")
+
+/* ------------------------------------------------------------------ */
+/* SkinnedMesh                                                         */
+/* ------------------------------------------------------------------ */
+#define NJ_M3G_BONES 64
+
+static const nj_builtin_field skin_fields[] = {
+    { "_nj_skeleton", "L" NJ_C_GROUP ";",  0 },
+    { "_nj_bones",    "[L" NJ_C_NODE ";",  0 },
+    { "_nj_nbones",   "I",                 0 }
+};
+
+static const nj_builtin_method skin_methods[] = {
+    M("<init>", "(L" NJ_C_VBUF ";L" NJ_C_IBUF ";L" NJ_C_APPEAR ";"
+                "L" NJ_C_GROUP ";)V", NJ_ACC_PUBLIC),
+    M("<init>", "(L" NJ_C_VBUF ";[L" NJ_C_IBUF ";[L" NJ_C_APPEAR ";"
+                "L" NJ_C_GROUP ";)V", NJ_ACC_PUBLIC),
+    M("getSkeleton",     "()L" NJ_C_GROUP ";", NJ_ACC_PUBLIC),
+    M("addTransform",    "(L" NJ_C_NODE ";III)V", NJ_ACC_PUBLIC),
+    M("getBoneTransform", "(L" NJ_C_NODE ";L" NJ_C_XFORM ";)V", NJ_ACC_PUBLIC),
+    M("getBoneVertices", "(L" NJ_C_NODE ";[I[F)I", NJ_ACC_PUBLIC)
+};
+
+NJFN(m3g_skin_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    mesh_set_base(vm, self, NJ_ARG_REF(args, 0), NJ_ARG_REF(args, 1),
+                  NJ_ARG_REF(args, 2));
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_skeleton",
+                              "L" NJ_C_GROUP ";"), NJ_ARG_REF(args, 3));
+    return NJ_OK;
+}
+
+NJFN(m3g_skin_init_arrays)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref ibs = NJ_ARG_REF(args, 1);
+    nj_ref apps = NJ_ARG_REF(args, 2);
+    nj_ref ib = 0, app = 0;
+
+    if (ibs && nj_array_length(ibs) > 0) {
+        ib = nj_array_get_ref(ibs, 0u);
+    }
+    if (apps && nj_array_length(apps) > 0) {
+        app = nj_array_get_ref(apps, 0u);
+    }
+    mesh_set_base(vm, self, NJ_ARG_REF(args, 0), ib, app);
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_skeleton",
+                              "L" NJ_C_GROUP ";"), NJ_ARG_REF(args, 3));
+    return NJ_OK;
+}
+
+/*
+ * addTransform records which node drives which bone.  Nothing skins a vertex
+ * yet, so the table is what the getters answer from: getBoneTransform hands
+ * back the node's own transform and getBoneVertices answers zero, which says
+ * "this runtime does not skin" instead of inventing vertices.  The table is
+ * a fixed 64 entries because a bone count is bounded by the file format
+ * (255) and a title that exceeds 64 is better refused than silently cut.
+ */
+NJFN(m3g_skin_addTransform)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref node = NJ_ARG_REF(args, 0);
+    nj_ref bones = nj_rget(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_bones",
+                                             "[L" NJ_C_NODE ";"));
+    nj_s4 n = nj_iget(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_nbones", "I"));
+
+    if (!node) {
+        NJ_THROW(vm, "java/lang/NullPointerException", "addTransform(null)");
+        return NJ_ERR;
+    }
+    if (!bones) {
+        bones = nj_object_array_new(vm, "javax/microedition/m3g/Node",
+                                    (nj_u4)NJ_M3G_BONES);
+        if (!bones) {
+            return nj_throw_oom(vm);
+        }
+        nj_rput(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_bones",
+                                  "[L" NJ_C_NODE ";"), bones);
+    }
+    if (n >= (nj_s4)NJ_M3G_BONES) {
+        NJ_THROW(vm, "java/lang/IndexOutOfBoundsException",
+                 "this runtime keeps 64 bone links");
+        return NJ_ERR;
+    }
+    nj_array_set_ref(bones, (nj_u4)n, node);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_nbones", "I"), n + 1);
+    return NJ_OK;
+}
+
+NJFN(m3g_skin_getBoneTransform)
+{
+    nj_ref node = NJ_ARG_REF(args, 0);
+    nj_ref dst = NJ_ARG_REF(args, 1);
+
+    if (dst) {
+        float *m = mat_of(vm, dst, NJ_C_XFORM, "_nj_m");
+
+        if (m && node) {
+            float *src = mat_of(vm, node, NJ_C_NODE, "_nj_m");
+
+            if (src) {
+                memcpy(m, src, sizeof(float) * NJ_MF);
+            }
+        }
+    }
+    return NJ_OK;
+}
+
+NJFN(m3g_skin_getBoneVertices)
+{
+    /* Nothing is skinned: zero vertices, and the index array is left alone
+       rather than filled with values that would be wrong. */
+    ret->i = 0;
+    return NJ_OK;
+}
+
+M3G_R_GET(m3g_skin_getSkeleton, NJ_C_SKIN, "_nj_skeleton",
+          "L" NJ_C_GROUP ";")
+
+
+/* ==================================================================== *
+ * Tranche two: the rest of the member surface.  Same rule as tranche one
+ * - store what a title hands over, answer what it asks for - and the same
+ * limit, stated where it bites: this module does not rasterise, so
+ * Graphics3D.render() returns the number of triangles it did NOT draw.
+ *
+ * The audit that produced this list is tools/m3g_api_audit.py: it reads
+ * this file's tables the way the compiler would and compares them with
+ * the API the collected titles were compiled against.
+ * ==================================================================== */
+
+#define M3G_REF_GET(fn, cls, fld, desc)                                   \
+    NJFN(fn)                                                              \
+    {                                                                     \
+        nj_field *f = m3g_fof(vm, cls, fld, desc);                        \
+        ret->r = f ? nj_rget(vm, NJ_THIS(args), f) : NULL;                \
+        return NJ_OK;                                                     \
+    }
+#define M3G_REF_SET(fn, cls, fld, desc)                                   \
+    NJFN(fn)                                                              \
+    {                                                                     \
+        nj_field *f = m3g_fof(vm, cls, fld, desc);                        \
+        if (f) {                                                          \
+            /* nj_rput, not nj_iput: a reference does not fit an nj_s4. */\
+            nj_rput(vm, NJ_THIS(args), f, NJ_ARG_REF(args, 0));           \
+        }                                                                 \
+        return NJ_OK;                                                     \
+    }
+/* A boolean that is stored in an "I" field, because that is how this file
+ * has kept them since PolygonMode.setTwoSided. */
+#define M3G_BOOL_GET(fn, cls, fld)                                        \
+    NJFN(fn)                                                              \
+    {                                                                     \
+        nj_field *f = m3g_fof(vm, cls, fld, "I");                         \
+        ret->i = f ? (nj_iget(vm, NJ_THIS(args), f) ? 1 : 0) : 0;         \
+        return NJ_OK;                                                     \
+    }
+#define M3G_BOOL_SET(fn, cls, fld)                                        \
+    NJFN(fn)                                                              \
+    {                                                                     \
+        nj_field *f = m3g_fof(vm, cls, fld, "I");                         \
+        if (f) {                                                          \
+            nj_iput(vm, NJ_THIS(args), f, NJ_ARG_INT(args, 0) ? 1 : 0);   \
+        }                                                                 \
+        return NJ_OK;                                                     \
+    }
+
+/* ---- Appearance ---------------------------------------------------- */
+NJFN(m3g_appear_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_APPEAR, "_nj_layer", "I"), 0);
+    return NJ_OK;
+}
+M3G_I_GET(m3g_appear_getLayer, NJ_C_APPEAR, "_nj_layer")
+M3G_REF_SET(m3g_appear_setFog, NJ_C_APPEAR, "_nj_fog", "L" NJ_C_FOG ";")
+M3G_REF_GET(m3g_appear_getFog, NJ_C_APPEAR, "_nj_fog", "L" NJ_C_FOG ";")
+M3G_REF_GET(m3g_appear_getMaterial, NJ_C_APPEAR, "_nj_mat", "L" NJ_C_MAT ";")
+
+/* ---- Background ---------------------------------------------------- */
+NJFN(m3g_bg_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_BG, "_nj_color", "I"), 0);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_BG, "_nj_cclear", "Z"), 1);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_BG, "_nj_dclear", "Z"), 1);
+    return NJ_OK;
+}
+M3G_I_GET(m3g_bg_getColor, NJ_C_BG, "_nj_color")
+M3G_I_GET(m3g_bg_getImageModeX, NJ_C_BG, "_nj_immode")
+M3G_I_GET(m3g_bg_getImageModeY, NJ_C_BG, "_nj_immodeY")
+
+/* ---- Camera -------------------------------------------------------- */
+/*
+ * JSR 184's no-argument Camera has a perspective projection, 45 degrees of
+ * vertical field of view, aspect 1, near 1 and far 1000.  The field values
+ * are left at zero on purpose: cam_proj_fill() applies exactly those
+ * defaults when it finds a zero, so the object answers the same matrix
+ * without a second copy of the numbers.
+ */
+NJFN(m3g_cam_init)
+{
+    nj_iput(vm, NJ_THIS(args),
+            m3g_fof(vm, NJ_C_CAMERA, "_nj_is_persp", "Z"), 1);
+    return NJ_OK;
+}
+
+NJFN(m3g_cam_getProjection_arr)
+{
+    nj_ref arr = NJ_ARG_REF(args, 0);
+    float m[NJ_MF];
+
+    if (!arr || arr->length < (nj_s4)NJ_MF) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    if (!cam_proj_fill(vm, NJ_THIS(args), m)) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    memcpy((float *)arr->u.bytes, m, sizeof m);
+    ret->i = 1;
+    return NJ_OK;
+}
+
+/* ---- CompositingMode ----------------------------------------------- */
+NJFN(m3g_comp_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_COMP, "_nj_blend", "I"), 64);  /* REPLACE */
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_COMP, "_nj_dtest", "I"), 1);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_COMP, "_nj_dwrite", "I"), 1);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_COMP, "_nj_awrite", "I"), 1);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_COMP, "_nj_cwrite", "I"), 1);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_COMP, "_nj_athresh", "I"), 0);
+    return NJ_OK;
+}
+NJFN(m3g_comp_getAlphaThreshold)
+{
+    nj_field *f = m3g_fof(vm, NJ_C_COMP, "_nj_athresh", "I");
+
+    /* The setter stores the float's bits, so the getter has to read bits. */
+    ret->f = f ? bits2f(nj_iget(vm, NJ_THIS(args), f)) : 0.0f;
+    return NJ_OK;
+}
+M3G_BOOL_SET(m3g_comp_setAlphaWrite, NJ_C_COMP, "_nj_awrite")
+M3G_BOOL_GET(m3g_comp_isAlphaWrite, NJ_C_COMP, "_nj_awrite")
+M3G_BOOL_SET(m3g_comp_setColorWrite, NJ_C_COMP, "_nj_cwrite")
+M3G_BOOL_GET(m3g_comp_isColorWrite, NJ_C_COMP, "_nj_cwrite")
+M3G_BOOL_GET(m3g_comp_isDepthWrite, NJ_C_COMP, "_nj_dwrite")
+M3G_BOOL_GET(m3g_comp_isDepthTest, NJ_C_COMP, "_nj_dtest")
+NJFN(m3g_comp_setDepthOffset)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_COMP, "_nj_dofact", "F"),
+            f2bits(NJ_ARG_FLOAT(args, 0)));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_COMP, "_nj_dounits", "F"),
+            f2bits(NJ_ARG_FLOAT(args, 1)));
+    return NJ_OK;
+}
+M3G_F_GET(m3g_comp_getDepthOffsetFactor, NJ_C_COMP, "_nj_dofact")
+M3G_F_GET(m3g_comp_getDepthOffsetUnits, NJ_C_COMP, "_nj_dounits")
+
+/* ---- Light attenuation --------------------------------------------- */
+/*
+ * The three coefficients live in one float[3].  A Light that never had
+ * setAttenuation() has no array at all, and the JSR's default is the
+ * constant 1 with no distance terms, which is what the zero index answers.
+ */
+static float m3g_atten_of(nj_vm *vm, nj_ref self, int index)
+{
+    nj_ref a = nj_rget(vm, self, m3g_fof(vm, NJ_C_LIGHT, "_nj_atten", "[F"));
+
+    if (!a || (nj_s4)a->length <= (nj_s4)index) {
+        return index == 0 ? 1.0f : 0.0f;
+    }
+    return ((const float *)a->u.bytes)[index];
+}
+NJFN(m3g_light_getConstantAtten)
+{
+    ret->f = m3g_atten_of(vm, NJ_THIS(args), 0);
+    return NJ_OK;
+}
+NJFN(m3g_light_getLinearAtten)
+{
+    ret->f = m3g_atten_of(vm, NJ_THIS(args), 1);
+    return NJ_OK;
+}
+NJFN(m3g_light_getQuadraticAtten)
+{
+    ret->f = m3g_atten_of(vm, NJ_THIS(args), 2);
+    return NJ_OK;
+}
+
+/* ---- Node ---------------------------------------------------------- */
+M3G_F_GET(m3g_node_getAlphaFactor, NJ_C_NODE, "_nj_alpha")
+NJFN(m3g_node_align)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_NODE, "_nj_alignZ",
+                              "L" NJ_C_NODE ";"), NJ_ARG_REF(args, 0));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_NODE, "_nj_alignZA", "I"), 148);
+    return NJ_OK;
+}
+NJFN(m3g_node_getAlignmentTarget)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 axis = NJ_ARG_INT(args, 0);
+    nj_s4 got;
+
+    /*
+     * align(reference) aligns the Z axis, and NONE asks "whichever axis you
+     * are aligned on" - so a node aligned on Z has to answer Z for NONE as
+     * well, and answer NONE only when it is aligned on nothing.
+     */
+    if (axis == 148 || axis == 144) {
+        got = nj_iget(vm, self, m3g_fof(vm, NJ_C_NODE, "_nj_alignZA", "I"));
+        if (axis == 148) {
+            ret->i = got;
+            return NJ_OK;
+        }
+        ret->i = (got != 0) ? 148 : 144;
+        return NJ_OK;
+    }
+    if (axis == 147) {
+        ret->i = nj_iget(vm, self, m3g_fof(vm, NJ_C_NODE, "_nj_alignYA", "I"));
+        return NJ_OK;
+    }
+    ret->i = 144;
+    return NJ_OK;
+}
+NJFN(m3g_node_getAlignmentReference)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 axis = NJ_ARG_INT(args, 0);
+    nj_ref ref;
+
+    if (axis == 147) {
+        ret->r = nj_rget(vm, self, m3g_fof(vm, NJ_C_NODE, "_nj_alignY",
+                                           "L" NJ_C_NODE ";"));
+        return NJ_OK;
+    }
+    /* Z, and NONE which means "the axis you are aligned on". */
+    ref = nj_rget(vm, self, m3g_fof(vm, NJ_C_NODE, "_nj_alignZ",
+                                    "L" NJ_C_NODE ";"));
+    if (!ref && axis == 144) {
+        ref = nj_rget(vm, self, m3g_fof(vm, NJ_C_NODE, "_nj_alignY",
+                                        "L" NJ_C_NODE ";"));
+    }
+    ret->r = ref;
+    return NJ_OK;
+}
+
+/* ---- Object3D ------------------------------------------------------ */
+/*
+ * getReferences() answers the AnimationTracks that animate this object,
+ * which is the Vector addAnimationTrack() filled.  Inside the Vector they
+ * are Object3Ds as far as the array is concerned, which is what the JSR
+ * declares the array to hold.
+ */
+NJFN(m3g_o3d_getReferences)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref arr = NJ_ARG_REF(args, 0);
+    nj_ref got[64];
+    nj_s4 n = 0;
+    nj_s4 i;
+    nj_ref vec;
+    nj_class *grp = nj_class_lookup(vm, NJ_C_GROUP);
+    static const struct {
+        const char *cls;
+        const char *fld;
+        const char *desc;
+    } table[] = {
+        { NJ_C_WORLD,    "_nj_cam",       "L" NJ_C_CAMERA ";" },
+        { NJ_C_WORLD,    "_nj_bg",        "L" NJ_C_BG ";" },
+        { NJ_C_SPRITE3D, "_nj_img",       "L" NJ_C_IMAGE2D ";" },
+        { NJ_C_SPRITE3D, "_nj_app",       "L" NJ_C_APPEAR ";" },
+        { NJ_C_MESH,     "_nj_vb",        "L" NJ_C_VBUF ";" },
+        { NJ_C_MESH,     "_nj_ib",        "L" NJ_C_IBUF ";" },
+        { NJ_C_APPEAR,   "_nj_mat",       "L" NJ_C_MAT ";" },
+        { NJ_C_APPEAR,   "_nj_pm",        "L" NJ_C_POLY ";" },
+        { NJ_C_APPEAR,   "_nj_cm",        "L" NJ_C_COMP ";" },
+        { NJ_C_APPEAR,   "_nj_tex0",      "L" NJ_C_TEX2D ";" },
+        { NJ_C_APPEAR,   "_nj_tex1",      "L" NJ_C_TEX2D ";" },
+        { NJ_C_TEX2D,    "_nj_img",       "L" NJ_C_IMAGE2D ";" },
+        { NJ_C_BG,       "_nj_img",       "L" NJ_C_IMAGE2D ";" },
+        { NJ_C_ATRACK,   "_nj_kfs",       "L" NJ_C_KFS ";" },
+        { NJ_C_ATRACK,   "_nj_ctl",       "L" NJ_C_ACTL ";" },
+        { NJ_C_VBUF,     "_nj_positions", "L" NJ_C_VARR ";" },
+        { NJ_C_VBUF,     "_nj_normals",   "L" NJ_C_VARR ";" },
+        { NJ_C_VBUF,     "_nj_colors",    "L" NJ_C_VARR ";" },
+        { NJ_C_VBUF,     "_nj_tex0",      "L" NJ_C_VARR ";" }
+    };
+
+    /*
+     * The eight members above the call are not objects: they are counted, so
+     * that a caller that asks with a null array still gets the right number,
+     * and only the first 64 are remembered for the copy below.
+     */
+#define M3G_REF_PUSH(r)                                                     \
+    do {                                                                    \
+        if ((r) != 0) {                                                     \
+            if (n < (nj_s4)(sizeof(got) / sizeof(got[0]))) {                \
+                got[n] = (r);                                               \
+            }                                                               \
+            n++;                                                            \
+        }                                                                   \
+    } while (0)
+
+    i = n;
+    vec = nj_rget(vm, self, m3g_fof(vm, NJ_C_O3D, "_nj_tracks",
+                                    "L" NJ_C_VECTOR ";"));
+    for (i = 0; i < 2; i++) {
+        nj_ref v = i == 0 ? vec : NULL;
+
+        if (i == 1 && grp && nj_class_is_subclass_of(self->cls, grp)) {
+            v = nj_rget(vm, self, m3g_fof(vm, NJ_C_GROUP, "_nj_kids",
+                                          "L" NJ_C_VECTOR ";"));
+        }
+        if (v) {
+            nj_value sz;
+
+            if (nj_call(vm, v, NJ_C_VECTOR, "size", "()I", NULL, &sz) == NJ_OK) {
+                nj_s4 k;
+
+                for (k = 0; k < sz.i; k++) {
+                    nj_value a[1];
+                    nj_value e;
+
+                    a[0].i = k;
+                    if (nj_call(vm, v, NJ_C_VECTOR, "elementAt",
+                                "(I)Ljava/lang/Object;", a, &e) == NJ_OK) {
+                        M3G_REF_PUSH(e.r);
+                    }
+                }
+            }
+        }
+    }
+    for (i = 0; i < (nj_s4)(sizeof(table) / sizeof(table[0])); i++) {
+        nj_class *c = nj_class_lookup(vm, table[i].cls);
+        nj_field *f;
+
+        if (!c || !nj_class_is_subclass_of(self->cls, c)) {
+            continue;
+        }
+        f = nj_field_lookup(vm, table[i].cls, table[i].fld, table[i].desc, 0);
+        if (f) {
+            M3G_REF_PUSH(nj_rget(vm, self, f));
+        }
+    }
+#undef M3G_REF_PUSH
+
+    if (arr) {
+        if ((nj_s4)arr->length < n) {
+            NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                     "references array is too small");
+        }
+        for (i = 0; i < n && i < (nj_s4)arr->length; i++) {
+            nj_array_set_ref(arr, (nj_u4)i, got[i]);
+        }
+    }
+    ret->i = n;
+    return NJ_OK;
+}
+M3G_REF_SET(m3g_o3d_setUserObject, NJ_C_O3D, "_nj_user", "Ljava/lang/Object;")
+M3G_REF_GET(m3g_o3d_getUserObject, NJ_C_O3D, "_nj_user", "Ljava/lang/Object;")
+NJFN(m3g_o3d_removeAnimationTrack)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref tracks = nj_rget(vm, self,
+                            m3g_fof(vm, NJ_C_O3D, "_nj_tracks",
+                                    "L" NJ_C_VECTOR ";"));
+    nj_value a[1];
+
+    if (tracks) {
+        a[0].r = NJ_ARG_REF(args, 0);
+        (void)nj_call(vm, tracks, NJ_C_VECTOR, "removeElement",
+                      "(Ljava/lang/Object;)Z", a, NULL);
+    }
+    return NJ_OK;
+}
+
+/* ---- PolygonMode --------------------------------------------------- */
+NJFN(m3g_poly_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_POLY, "_nj_winding", "I"), 168); /* CCW */
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_POLY, "_nj_culling", "I"), 160); /* BACK */
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_POLY, "_nj_shading", "I"), 164); /* FLAT */
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_POLY, "_nj_persp", "Z"), 1);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_POLY, "_nj_twosided", "Z"), 0);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_POLY, "_nj_localcam", "Z"), 0);
+    return NJ_OK;
+}
+M3G_I_GET(m3g_poly_getWinding, NJ_C_POLY, "_nj_winding")
+M3G_Z_SET(m3g_poly_setLocalCam, NJ_C_POLY, "_nj_localcam")
+M3G_Z_GET(m3g_poly_isLocalCam, NJ_C_POLY, "_nj_localcam")
+M3G_Z_GET(m3g_poly_isPersp, NJ_C_POLY, "_nj_persp")
+
+/* ---- Sprite3D ------------------------------------------------------ */
+M3G_Z_GET(m3g_sprite_isScaled, NJ_C_SPRITE3D, "_nj_scaled")
+M3G_REF_GET(m3g_sprite_getAppearance, NJ_C_SPRITE3D, "_nj_app",
+            "L" NJ_C_APPEAR ";")
+M3G_REF_GET(m3g_sprite_getImage, NJ_C_SPRITE3D, "_nj_img",
+            "L" NJ_C_IMAGE2D ";")
+NJFN(m3g_sprite_setCrop)
+{
+    nj_ref self = NJ_THIS(args);
+    static const char *names[4] = { "_nj_cropX", "_nj_cropY",
+                                    "_nj_cropW", "_nj_cropH" };
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, names[i], "I"),
+                NJ_ARG_INT(args, i));
+    }
+    return NJ_OK;
+}
+M3G_I_GET(m3g_sprite_getCropX, NJ_C_SPRITE3D, "_nj_cropX")
+M3G_I_GET(m3g_sprite_getCropY, NJ_C_SPRITE3D, "_nj_cropY")
+M3G_I_GET(m3g_sprite_getCropW, NJ_C_SPRITE3D, "_nj_cropW")
+M3G_I_GET(m3g_sprite_getCropH, NJ_C_SPRITE3D, "_nj_cropH")
+
+/* ---- Texture2D ----------------------------------------------------- */
+M3G_I_GET(m3g_tex_getLevelFilter, NJ_C_TEX2D, "_nj_filtLevel")
+M3G_I_GET(m3g_tex_getImageFilter, NJ_C_TEX2D, "_nj_filtImage")
+M3G_I_GET(m3g_tex_getWrappingS, NJ_C_TEX2D, "_nj_wrapS")
+M3G_I_GET(m3g_tex_getWrappingT, NJ_C_TEX2D, "_nj_wrapT")
+M3G_I_GET(m3g_tex_getBlending, NJ_C_TEX2D, "_nj_blend")
+M3G_I_SET(m3g_tex_setBlendColor, NJ_C_TEX2D, "_nj_blendcolor")
+M3G_I_GET(m3g_tex_getBlendColor, NJ_C_TEX2D, "_nj_blendcolor")
+
+/* ---- Transformable.preRotate --------------------------------------- */
+NJFN(m3g_xable_preRotate)
+{
+    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
+    float r[NJ_MF];
+    float cur[NJ_MF];
+
+    if (!m) {
+        return NJ_OK;
+    }
+    mat_identity(r);
+    mat_rotate(r, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
+               NJ_ARG_FLOAT(args, 2), NJ_ARG_FLOAT(args, 3));
+    memcpy(cur, m, sizeof cur);
+    mat_mul(r, cur, m);
+    return NJ_OK;
+}
+
+/* ---- Transform ----------------------------------------------------- */
+NJFN(m3g_xf_init_copy)
+{
+    float *src = mat_of(vm, NJ_ARG_REF(args, 0), NJ_C_XFORM, "_nj_m");
+    float *dst = mat_of(vm, NJ_THIS(args), NJ_C_XFORM, "_nj_m");
+
+    if (src && dst) {
+        memcpy(dst, src, sizeof(float) * NJ_MF);
+    }
+    return NJ_OK;
+}
+/*
+ * postRotateQuat(x, y, z, w): a unit quaternion, converted with the same
+ * row-major layout mat_rotate() writes, then post-multiplied.
+ */
+NJFN(m3g_xf_postRotateQuat)
+{
+    float x = NJ_ARG_FLOAT(args, 0), y = NJ_ARG_FLOAT(args, 1);
+    float z = NJ_ARG_FLOAT(args, 2), w = NJ_ARG_FLOAT(args, 3);
+    float n = sqrtf(x * x + y * y + z * z + w * w);
+    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XFORM, "_nj_m");
+    float r[NJ_MF];
+    float cur[NJ_MF];
+
+    if (!m || n <= 0.0f) {
+        return NJ_OK;                    /* a zero quaternion rotates nothing */
+    }
+    x /= n; y /= n; z /= n; w /= n;
+    mat_identity(r);
+    r[0] = 1.0f - 2.0f * (y * y + z * z);
+    r[1] = 2.0f * (x * y - z * w);
+    r[2] = 2.0f * (x * z + y * w);
+    r[4] = 2.0f * (x * y + z * w);
+    r[5] = 1.0f - 2.0f * (x * x + z * z);
+    r[6] = 2.0f * (y * z - x * w);
+    r[8] = 2.0f * (x * z - y * w);
+    r[9] = 2.0f * (y * z + x * w);
+    r[10] = 1.0f - 2.0f * (x * x + y * y);
+    memcpy(cur, m, sizeof cur);
+    mat_mul(cur, r, m);
+    return NJ_OK;
+}
+
+/* ---- VertexArray --------------------------------------------------- */
+/*
+ * The file keeps its data as shorts, which is what the container format
+ * uses; the byte form widens on the way in and narrows on the way out.
+ */
+static nj_ref m3g_varr_data(nj_vm *vm, nj_ref self)
+{
+    return nj_rget(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+}
+NJFN(m3g_varr_set_bytes)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref src = NJ_ARG_REF(args, 2);
+    nj_s4 first = NJ_ARG_INT(args, 0);
+    nj_s4 count = NJ_ARG_INT(args, 1);
+    nj_s4 comp = nj_iget(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_compSize", "I"));
+    nj_s4 total = count * (comp > 0 ? comp : 1);
+    nj_ref dst;
+    nj_s4 i;
+
+    if (!src || total <= 0) {
+        return NJ_OK;
+    }
+    dst = nj_short_array_new(vm, (nj_u4)total);
+    if (!dst) {
+        return nj_throw_oom(vm);
+    }
+    for (i = 0; i < total && i < (nj_s4)src->length; i++) {
+        ((nj_s2 *)dst->u.bytes)[i] = (nj_s2)(nj_s1)src->u.bytes[i];
+    }
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"), dst);
+    /*
+     * _nj_ctype is NOT touched: the component type was fixed by the
+     * constructor from the component size, and set() only copies values.
+     * Clobbering it here made `new VertexArray(3, 4, 2)` answer BYTE.
+     */
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"), count);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"), first);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_count", "I"), count);
+    return NJ_OK;
+}
+M3G_I_GET(m3g_varr_getComponentType, NJ_C_VARR, "_nj_ctype")
+NJFN(m3g_varr_get_short)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref src = m3g_varr_data(vm, self);
+    nj_ref out = NJ_ARG_REF(args, 2);
+    nj_s4 first = NJ_ARG_INT(args, 0);
+    nj_s4 count = NJ_ARG_INT(args, 1);
+    nj_s4 comp = nj_iget(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_compSize", "I"));
+    nj_s4 i, total = count * (comp > 0 ? comp : 1);
+
+    if (!src || !out) {
+        return NJ_OK;
+    }
+    for (i = 0; i < total
+                && first * (comp > 0 ? comp : 1) + i < (nj_s4)src->length
+                && i < (nj_s4)out->length; i++) {
+        ((nj_s2 *)out->u.bytes)[i] =
+            ((const nj_s2 *)src->u.bytes)[first * (comp > 0 ? comp : 1) + i];
+    }
+    return NJ_OK;
+}
+NJFN(m3g_varr_get_bytes)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref src = m3g_varr_data(vm, self);
+    nj_ref out = NJ_ARG_REF(args, 2);
+    nj_s4 first = NJ_ARG_INT(args, 0);
+    nj_s4 count = NJ_ARG_INT(args, 1);
+    nj_s4 comp = nj_iget(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_compSize", "I"));
+    nj_s4 i, total = count * (comp > 0 ? comp : 1);
+
+    if (!src || !out) {
+        return NJ_OK;
+    }
+    for (i = 0; i < total
+                && first * (comp > 0 ? comp : 1) + i < (nj_s4)src->length
+                && i < (nj_s4)out->length; i++) {
+        nj_s2 v = ((const nj_s2 *)src->u.bytes)[first * (comp > 0 ? comp : 1) + i];
+
+        out->u.bytes[i] = (nj_u1)(nj_s1)(v > 127 ? 127 : (v < -128 ? -128 : v));
+    }
+    return NJ_OK;
+}
+
+/* ---- VertexBuffer -------------------------------------------------- */
+NJFN(m3g_vbuf_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_VBUF, "_nj_defColor", "I"),
+            (nj_s4)0xFFFFFFFF);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_VBUF, "_nj_bias", "F"), 0);
+    return NJ_OK;
+}
+NJFN(m3g_vbuf_getVertexCount)
+{
+    nj_ref pos = nj_rget(vm, NJ_THIS(args),
+                         m3g_fof(vm, NJ_C_VBUF, "_nj_positions",
+                                 "L" NJ_C_VARR ";"));
+
+    ret->i = pos ? nj_iget(vm, pos,
+                           m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I")) : 0;
+    return NJ_OK;
+}
+M3G_REF_SET(m3g_vbuf_setNormals, NJ_C_VBUF, "_nj_normals", "L" NJ_C_VARR ";")
+M3G_REF_GET(m3g_vbuf_getNormals, NJ_C_VBUF, "_nj_normals", "L" NJ_C_VARR ";")
+M3G_REF_GET(m3g_vbuf_getColors, NJ_C_VBUF, "_nj_colors", "L" NJ_C_VARR ";")
+
+/*
+ * The float[] getters answer the values a title handed in, with the bias
+ * and scale the JSR says to apply.  A vertex with no scale array is scaled
+ * by 1, which is what a VertexBuffer that never called setScale() means.
+ */
+static float m3g_vbuf_scale(nj_vm *vm, nj_ref self, nj_s4 comp)
+{
+    nj_ref s = nj_rget(vm, self, m3g_fof(vm, NJ_C_VBUF, "_nj_scale", "[F"));
+
+    if (!s || (nj_s4)s->length <= comp) {
+        return 1.0f;
+    }
+    return ((const float *)s->u.bytes)[comp];
+}
+static void m3g_vbuf_read(nj_vm *vm, nj_ref va, nj_ref out, nj_s4 per_vertex,
+                          nj_ref self)
+{
+    nj_ref data;
+    nj_s4 nverts, comp, i, c;
+    float bias;
+
+    if (!va || !out) {
+        return;
+    }
+    data = nj_rget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+    nverts = nj_iget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+    comp = nj_iget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_compSize", "I"));
+    bias = bits2f(nj_iget(vm, self, m3g_fof(vm, NJ_C_VBUF, "_nj_bias", "F")));
+    for (i = 0; i < nverts; i++) {
+        for (c = 0; c < per_vertex; c++) {
+            float v = 0.0f;
+
+            if (data && c < comp && i * comp + c < (nj_s4)data->length) {
+                v = (float)((const nj_s2 *)data->u.bytes)[i * comp + c];
+            } else if (c == 3) {
+                v = 1.0f;               /* the W a position implies */
+            }
+            if (i * per_vertex + c < (nj_s4)out->length) {
+                ((float *)out->u.bytes)[i * per_vertex + c] =
+                    v * m3g_vbuf_scale(vm, self, c) + bias;
+            }
+        }
+    }
+}
+NJFN(m3g_vbuf_getPositions)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref pos = nj_rget(vm, self,
+                         m3g_fof(vm, NJ_C_VBUF, "_nj_positions",
+                                 "L" NJ_C_VARR ";"));
+
+    m3g_vbuf_read(vm, pos, NJ_ARG_REF(args, 0), 4, self);
+    ret->r = pos;
+    return NJ_OK;
+}
+NJFN(m3g_vbuf_getTexCoords)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref tex = nj_rget(vm, self,
+                         m3g_fof(vm, NJ_C_VBUF, "_nj_tex0",
+                                 "L" NJ_C_VARR ";"));
+
+    m3g_vbuf_read(vm, tex, NJ_ARG_REF(args, 1), 2, self);
+    ret->r = tex;
+    return NJ_OK;
+}
+
+/* ---- World --------------------------------------------------------- */
+NJFN(m3g_world_init)
+{
+    return NJ_OK;          /* a fresh World has no camera and no background */
+}
+
+/* ---- Graphics3D ---------------------------------------------------- */
+M3G_REF_GET(m3g_g3d_getTarget, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;")
+M3G_I_GET(m3g_g3d_getHints, NJ_C_G3D, "_nj_hints")
+M3G_Z_GET(m3g_g3d_isDepthBuffer, NJ_C_G3D, "_nj_depth")
+M3G_I_GET(m3g_g3d_getViewportX, NJ_C_G3D, "_nj_vx")
+M3G_I_GET(m3g_g3d_getViewportY, NJ_C_G3D, "_nj_vy")
+M3G_I_GET(m3g_g3d_getViewportW, NJ_C_G3D, "_nj_vw")
+M3G_I_GET(m3g_g3d_getViewportH, NJ_C_G3D, "_nj_vh")
+NJFN(m3g_g3d_setDepthRange)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_drnear", "F"),
+            f2bits(NJ_ARG_FLOAT(args, 0)));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_drfar", "F"),
+            f2bits(NJ_ARG_FLOAT(args, 1)));
+    return NJ_OK;
+}
+M3G_F_GET(m3g_g3d_getDepthRangeNear, NJ_C_G3D, "_nj_drnear")
+M3G_F_GET(m3g_g3d_getDepthRangeFar, NJ_C_G3D, "_nj_drfar")
+
+/*
+ * render(): the JSR's answer is the number of triangles drawn.  This
+ * runtime has no rasteriser for m3g geometry, so the honest answer is 0 -
+ * and 0 is also what a title draws with when its geometry is off screen,
+ * which is why it does not throw.
+ */
+NJFN(m3g_g3d_render5)
+{
+    ret->i = 0;
+    return NJ_OK;
+}
+NJFN(m3g_g3d_getCamera)
+{
+    nj_ref cam = nj_rget(vm, NJ_THIS(args),
+                         m3g_fof(vm, NJ_C_G3D, "_nj_camera",
+                                 "L" NJ_C_CAMERA ";"));
+    nj_ref m = nj_rget(vm, NJ_THIS(args),
+                       m3g_fof(vm, NJ_C_G3D, "_nj_cam_m", "[F"));
+    float *out = mat_of(vm, NJ_ARG_REF(args, 0), NJ_C_XFORM, "_nj_m");
+
+    if (out && m && m->length >= (nj_s4)NJ_MF) {
+        memcpy(out, (const float *)m->u.bytes, sizeof(float) * NJ_MF);
+    }
+    ret->r = cam;
+    return NJ_OK;
+}
+/*
+ * The light list: an object array of Light plus one float[] per slot for
+ * the transform each was given.  Index 0 is LIGHT_0, so a title that sets
+ * slot 3 alone still reports a count of 4, which is what the JSR means by
+ * "the number of lights in the array".
+ */
+static nj_ref m3g_g3d_slot(nj_vm *vm, nj_ref self, const char *fld,
+                           const char *elem, nj_s4 index)
+{
+    nj_ref arr = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, fld, elem));
+
+    if (!arr || (nj_s4)arr->length <= index) {
+        nj_ref bigger = nj_object_array_new(vm, elem, (nj_u4)index + 8u);
+        nj_s4 i;
+
+        if (!bigger) {
+            return NULL;
+        }
+        for (i = 0; arr && i < (nj_s4)arr->length; i++) {
+            nj_array_set_ref(bigger, (nj_u4)i, nj_array_get_ref(arr, (nj_u4)i));
+        }
+        nj_rput(vm, self, m3g_fof(vm, NJ_C_G3D, fld, elem), bigger);
+        arr = bigger;
+    }
+    return arr;
+}
+NJFN(m3g_g3d_setLight)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 index = NJ_ARG_INT(args, 0);
+    nj_ref lights, mats;
+    float *src;
+
+    if (index < 0) {
+        NJ_THROW(vm, "java/lang/IndexOutOfBoundsException", "negative light");
+    }
+    lights = m3g_g3d_slot(vm, self, "_nj_lights", "L" NJ_C_LIGHT ";", index);
+    mats = m3g_g3d_slot(vm, self, "_nj_lmats", "[F", index);
+    if (!lights || !mats) {
+        return nj_throw_oom(vm);
+    }
+    nj_array_set_ref(lights, (nj_u4)index, NJ_ARG_REF(args, 1));
+    if (NJ_ARG_REF(args, 2)) {
+        nj_ref m = mat_new(vm);
+
+        src = mat_of(vm, NJ_ARG_REF(args, 2), NJ_C_XFORM, "_nj_m");
+        if (!m) {
+            return nj_throw_oom(vm);
+        }
+        if (src) {
+            memcpy((float *)m->u.bytes, src, sizeof(float) * NJ_MF);
+        }
+        nj_array_set_ref(mats, (nj_u4)index, m);
+    } else {
+        nj_array_set_ref(mats, (nj_u4)index, NULL);
+    }
+    if (nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I")) < index + 1) {
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I"), index + 1);
+    }
+    return NJ_OK;
+}
+NJFN(m3g_g3d_getLightCount)
+{
+    ret->i = nj_iget(vm, NJ_THIS(args),
+                     m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I"));
+    return NJ_OK;
+}
+NJFN(m3g_g3d_getLight)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 index = NJ_ARG_INT(args, 0);
+    nj_ref lights = nj_rget(vm, self,
+                            m3g_fof(vm, NJ_C_G3D, "_nj_lights",
+                                    "[L" NJ_C_LIGHT ";"));
+    nj_ref mats = nj_rget(vm, self,
+                          m3g_fof(vm, NJ_C_G3D, "_nj_lmats", "[F"));
+    float *out = mat_of(vm, NJ_ARG_REF(args, 1), NJ_C_XFORM, "_nj_m");
+
+    if (lights && index >= 0 && index < (nj_s4)lights->length) {
+        ret->r = nj_array_get_ref(lights, (nj_u4)index);
+    } else {
+        NJ_THROW(vm, "java/lang/IndexOutOfBoundsException", "light index");
+    }
+    if (out && mats && (nj_s4)mats->length >= NJ_MF * (index + 1)) {
+        const float *all = (const float *)nj_array_data(mats);
+
+        memcpy(out, all + (nj_u4)index * NJ_MF, sizeof(float) * NJ_MF);
+    }
+    return NJ_OK;
+}
+
+/* A boxed value for getProperties().  The classes are CLDC's own. */
+static nj_ref m3g_box(nj_vm *vm, const char *cls, nj_s4 v, int is_bool)
+{
+    nj_ref o;
+    nj_value a[1];
+    nj_value r;
+
+    o = nj_object_new(vm, cls);
+    if (!o) {
+        return NULL;
+    }
+    a[0].i = v;
+    if (nj_call_special(vm, o, cls, "<init>", is_bool ? "(Z)V" : "(I)V",
+                        a, &r) != NJ_OK) {
+        return NULL;
+    }
+    return o;
+}
+/*
+ * getProperties() answers what this implementation supports.  The values
+ * are the ones the rest of this file implies: no antialiasing, no dither,
+ * no mipmapping, no local camera lighting, and a rasteriser that does not
+ * exist yet - so the support flags that would promise a picture are false
+ * rather than optimistic.
+ */
+NJFN(m3g_g3d_getProperties)
+{
+    static const struct { const char *key; nj_s4 v; int is_bool; } props[] = {
+        { "supportAntialiasing",           0, 1 },
+        { "supportTrueColor",              0, 1 },
+        { "supportDithering",              0, 1 },
+        { "supportMipmapping",             0, 1 },
+        { "supportPerspectiveCorrection",  1, 1 },
+        { "supportLocalCameraLighting",    0, 1 },
+        { "maxLights",                     8, 0 },
+        { "maxViewportWidth",           4096, 0 },
+        { "maxViewportHeight",          4096, 0 },
+        { "maxTextureDimension",        1024, 0 },
+        { "maxSpriteCropDimension",     4096, 0 },
+        { "maxTransformsPerVertex",        3, 0 }
+    };
+    nj_ref ht;
+    nj_u4 i;
+
+    ht = nj_object_new(vm, "java/util/Hashtable");
+    if (!ht) {
+        return nj_throw_oom(vm);
+    }
+    if (nj_call_special(vm, ht, "java/util/Hashtable", "<init>", "()V",
+                        NULL, NULL) != NJ_OK) {
+        nj_clear_exception(vm);
+        ret->r = NULL;
+        return NJ_OK;
+    }
+    for (i = 0; i < (nj_u4)(sizeof(props) / sizeof(props[0])); i++) {
+        nj_ref key = nj_string_new(vm, props[i].key);
+        nj_ref val = m3g_box(vm, props[i].is_bool ? "java/lang/Boolean"
+                                                  : "java/lang/Integer",
+                             props[i].v, props[i].is_bool);
+        nj_value a[2];
+        nj_value r;
+
+        if (!key || !val) {
+            nj_clear_exception(vm);
+            continue;
+        }
+        a[0].r = key;
+        a[1].r = val;
+        if (nj_call(vm, ht, "java/util/Hashtable", "put",
+                    "(Ljava/lang/Object;Ljava/lang/Object;)"
+                    "Ljava/lang/Object;", a, &r) != NJ_OK) {
+            nj_clear_exception(vm);
+        }
+    }
+    ret->r = ht;
+    return NJ_OK;
+}
+
+/* ---- Group, Image2D, Transform.transform --------------------------- */
+
+/*
+ * A Group is born empty: the child Vector is created by whichever call
+ * needs it (addChild, or the loader when a file names children), so the
+ * constructor has nothing to store.
+ */
+NJFN(m3g_group_init)
+{
+    return NJ_OK;
+}
+
+/* Image2D(int format, int width, int height, byte[] image). */
+NJFN(m3g_img2d_init_pixels)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I"),
+            NJ_ARG_INT(args, 0));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"),
+            NJ_ARG_INT(args, 1));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"),
+            NJ_ARG_INT(args, 2));
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"),
+            NJ_ARG_REF(args, 3));
+    return NJ_OK;
+}
+/*
+ * Image2D(int format, int width, int height, byte[] image, byte[] palette).
+ * The palette form is a real JSR 184 shape - the file format carries one -
+ * and this runtime keeps it beside the pixels rather than in a second class.
+ */
+NJFN(m3g_img2d_init_paletted)
+{
+    nj_ref self = NJ_THIS(args);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I"),
+            NJ_ARG_INT(args, 0));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"),
+            NJ_ARG_INT(args, 1));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"),
+            NJ_ARG_INT(args, 2));
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"),
+            NJ_ARG_REF(args, 3));
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_palette", "[B"),
+            NJ_ARG_REF(args, 4));
+    return NJ_OK;
+}
+/* An Image2D made from a MIDP Image cannot be written through. */
+NJFN(m3g_img2d_isMutable)
+{
+    /*
+     * JSR 184: the constructors that take pixel data - or an lcdui Image -
+     * build an immutable image; the one that takes only a format and a size
+     * builds one whose pixels can still be set.  So the answer is "neither
+     * a pixel array nor an lcdui image is behind it".
+     */
+    nj_ref img = nj_rget(vm, NJ_THIS(args),
+                         m3g_fof(vm, NJ_C_IMAGE2D, "_nj_image",
+                                 "Ljavax/microedition/lcdui/Image;"));
+    nj_ref px = nj_rget(vm, NJ_THIS(args),
+                        m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"));
+
+    ret->i = (img == 0 && px == 0) ? 1 : 0;
+    return NJ_OK;
+}
+
+/*
+ * Transform.transform(VertexArray src, float[] dst, boolean w): each
+ * vertex of the array through this matrix.  Three floats per vertex, or
+ * four when the caller asks for the W it was computed with.
+ */
+NJFN(m3g_xf_transform_array)
+{
+    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XFORM, "_nj_m");
+    nj_ref va = NJ_ARG_REF(args, 0);
+    nj_ref out = NJ_ARG_REF(args, 1);
+    nj_s4 with_w = NJ_ARG_INT(args, 2);
+    nj_ref data;
+    nj_s4 nverts, comp, per, i;
+
+    if (!m || !va || !out) {
+        return NJ_OK;
+    }
+    data = nj_rget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+    nverts = nj_iget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+    /*
+     * Components PER VERTEX, not the component size: this read _nj_compSize
+     * (which is 2 for every collected title's vertex arrays, the size of a
+     * short component) and so transformed two components per vertex and
+     * stopped, leaving the rest of the output at zero.
+     */
+    comp = nj_iget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
+    per = with_w ? 4 : 3;
+    for (i = 0; i < nverts; i++) {
+        float v[4];
+        nj_s4 c;
+
+        v[0] = v[1] = v[2] = 0.0f;
+        v[3] = 1.0f;
+        for (c = 0; c < 4 && c < comp; c++) {
+            if (data && i * comp + c < (nj_s4)data->length) {
+                v[c] = (float)((const nj_s2 *)data->u.bytes)[i * comp + c];
+            }
+        }
+        for (c = 0; c < per; c++) {
+            nj_s4 o = i * per + c;
+
+            if (o >= (nj_s4)out->length) {
+                break;
+            }
+            if (c == 3) {
+                ((float *)out->u.bytes)[o] = m[12] * v[0] + m[13] * v[1]
+                                           + m[14] * v[2] + m[15] * v[3];
+            } else {
+                ((float *)out->u.bytes)[o] = m[c * 4 + 0] * v[0]
+                                           + m[c * 4 + 1] * v[1]
+                                           + m[c * 4 + 2] * v[2]
+                                           + m[c * 4 + 3] * v[3];
+            }
+        }
+    }
+    return NJ_OK;
+}
+
+/* ---- Group, Image2D and Transform natives listed above ------------- */
+/* (registration rows live in the table below)                          */
+
+/*
+ * Group.pick(): "the ray hit nothing" is 0, and nothing here can hit
+ * anything yet.  The two overloads differ in the far plane they take - a
+ * distance or a Camera - and both answer the same way.
+ */
+NJFN(m3g_group_pick_vec)
+{
+    ret->i = 0;
+    return NJ_OK;
+}
+NJFN(m3g_group_pick_cam)
+{
+    ret->i = 0;
+    return NJ_OK;
+}
 
 const nj_builtin_class nj_lib_m3g_classes[] = {
     { NJ_C_O3D, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
@@ -4446,12 +6752,14 @@ const nj_builtin_class nj_lib_m3g_classes[] = {
       g3d_fields, M3G_N(g3d_fields), g3d_methods, M3G_N(g3d_methods) },
     { NJ_C_LOADER, "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, loader_methods, M3G_N(loader_methods) },
-    { NJ_C_MAT, NJ_C_O3D, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
+    { NJ_C_MAT, NJ_C_O3D, NJ_ACC_PUBLIC,
+      mat_fields, M3G_N(mat_fields), mat_methods, M3G_N(mat_methods) },
     { NJ_C_LIGHT, NJ_C_NODE, NJ_ACC_PUBLIC,
       light_fields, M3G_N(light_fields), light_methods, M3G_N(light_methods) },
     { NJ_C_VBUF, NJ_C_O3D, NJ_ACC_PUBLIC,
       vbuf_fields, M3G_N(vbuf_fields), vbuf_methods, M3G_N(vbuf_methods) },
-    { NJ_C_IBUF, NJ_C_O3D, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
+    { NJ_C_IBUF, NJ_C_O3D, NJ_ACC_PUBLIC,
+      ibuf_fields, M3G_N(ibuf_fields), ibuf_methods, M3G_N(ibuf_methods) },
     { NJ_C_APPEAR, NJ_C_O3D, NJ_ACC_PUBLIC,
       appear_fields, M3G_N(appear_fields), appear_methods, M3G_N(appear_methods) },
     { NJ_C_POLY, NJ_C_O3D, NJ_ACC_PUBLIC,
@@ -4464,10 +6772,12 @@ const nj_builtin_class nj_lib_m3g_classes[] = {
       mesh_fields, M3G_N(mesh_fields), mesh_methods, M3G_N(mesh_methods) },
     /* Morphing and skinned meshes are Meshes; the file format gives them
        their own types, and the loader maps those types to these names. */
-    { NJ_C_MORPH, NJ_C_MESH, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
-    { NJ_C_SKIN,  NJ_C_MESH, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
+    { NJ_C_MORPH, NJ_C_MESH, NJ_ACC_PUBLIC,
+      morph_fields, M3G_N(morph_fields), morph_methods, M3G_N(morph_methods) },
+    { NJ_C_SKIN, NJ_C_MESH, NJ_ACC_PUBLIC,
+      skin_fields, M3G_N(skin_fields), skin_methods, M3G_N(skin_methods) },
     { NJ_C_ATRACK, "java/lang/Object", NJ_ACC_PUBLIC,
-      NULL, 0u, NULL, 0u },
+      atrack_fields, M3G_N(atrack_fields), atrack_methods, M3G_N(atrack_methods) },
 
     /*
      * The rest of the package exists so that a title which only names these
@@ -4482,11 +6792,16 @@ const nj_builtin_class nj_lib_m3g_classes[] = {
     /* The file format calls type 18 "Sprite"; the titles call the class
        Sprite3D.  Both names exist so neither the loader nor a MIDlet
        trips over the other one. */
-    { NJ_C_SPRITE,   NJ_C_NODE,     NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
-    { NJ_C_FOG,      NJ_C_O3D,      NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
-    { NJ_C_RAY,      NJ_C_O3D,      NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
-    { NJ_C_ACTL,     NJ_C_O3D,      NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
-    { NJ_C_KFS,      NJ_C_O3D,      NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
+    { NJ_C_M3G_SPRITE, NJ_C_NODE,     NJ_ACC_PUBLIC,
+      sprite_fields, M3G_N(sprite_fields), sprite_methods, M3G_N(sprite_methods) },
+    { NJ_C_FOG, NJ_C_O3D, NJ_ACC_PUBLIC,
+      fog_fields, M3G_N(fog_fields), fog_methods, M3G_N(fog_methods) },
+    { NJ_C_RAY, NJ_C_O3D, NJ_ACC_PUBLIC,
+      ray_fields, M3G_N(ray_fields), ray_methods, M3G_N(ray_methods) },
+    { NJ_C_ACTL, NJ_C_O3D, NJ_ACC_PUBLIC,
+      actl_fields, M3G_N(actl_fields), actl_methods, M3G_N(actl_methods) },
+    { NJ_C_KFS, NJ_C_O3D, NJ_ACC_PUBLIC,
+      kfs_fields, M3G_N(kfs_fields), kfs_methods, M3G_N(kfs_methods) },
     { NJ_C_VARR,     NJ_C_O3D,      NJ_ACC_PUBLIC,
       varr_fields, M3G_N(varr_fields), varr_methods, M3G_N(varr_methods) },
     { NJ_C_TSA,      NJ_C_IBUF,     NJ_ACC_PUBLIC,
@@ -4662,6 +6977,185 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_LIGHT, "getSpotExponent",  "()F",    m3g_light_getSpotExponent },
     { NJ_C_LIGHT, "setAttenuation",   "(FFF)V", m3g_light_setAttenuation },
     { NJ_C_LIGHT, "getAttenuation",   "([F)V",  m3g_light_getAttenuation },
+    { NJ_C_MAT, "<init>", "()V", m3g_mat_init },
+    { NJ_C_MAT, "setColor", "(II)V", m3g_mat_setColor },
+    { NJ_C_MAT, "getColor", "(I)I", m3g_mat_getColor },
+    { NJ_C_MAT, "setShininess", "(F)V", m3g_mat_setShininess },
+    { NJ_C_MAT, "getShininess", "()F", m3g_mat_getShininess },
+    { NJ_C_MAT, "setVertexColorTrackingEnable", "(Z)V", m3g_mat_setTrackColor },
+    { NJ_C_MAT, "isVertexColorTrackingEnabled", "()Z", m3g_mat_isTrackColor },
+    { NJ_C_FOG, "<init>", "()V", m3g_fog_init },
+    { NJ_C_FOG, "setMode", "(I)V", m3g_fog_setMode },
+    { NJ_C_FOG, "getMode", "()I", m3g_fog_getMode },
+    { NJ_C_FOG, "setColor", "(I)V", m3g_fog_setColor },
+    { NJ_C_FOG, "getColor", "()I", m3g_fog_getColor },
+    { NJ_C_FOG, "setDensity", "(F)V", m3g_fog_setDensity },
+    { NJ_C_FOG, "getDensity", "()F", m3g_fog_getDensity },
+    { NJ_C_FOG, "setLinear", "(FF)V", m3g_fog_setLinear },
+    { NJ_C_FOG, "getNearDistance", "()F", m3g_fog_getNear },
+    { NJ_C_FOG, "getFarDistance", "()F", m3g_fog_getFar },
+    { NJ_C_IBUF, "getIndexCount", "()I", m3g_ibuf_getIndexCount },
+    { NJ_C_IBUF, "getIndices", "([I)V", m3g_ibuf_getIndices },
+    { NJ_C_KFS, "<init>", "(III)V", m3g_kfs_init },
+    { NJ_C_KFS, "getComponentCount", "()I", m3g_kfs_getComponentCount },
+    { NJ_C_KFS, "getKeyframeCount", "()I", m3g_kfs_getKeyframeCount },
+    { NJ_C_KFS, "getInterpolationType", "()I", m3g_kfs_getInterpolationType },
+    { NJ_C_KFS, "setKeyframe", "(II[F)V", m3g_kfs_setKeyframe },
+    { NJ_C_KFS, "getKeyframe", "(I[F)I", m3g_kfs_getKeyframe },
+    { NJ_C_KFS, "setValidRange", "(II)V", m3g_kfs_setValidRange },
+    { NJ_C_KFS, "getValidRangeFirst", "()I", m3g_kfs_getValidRangeFirst },
+    { NJ_C_KFS, "getValidRangeLast", "()I", m3g_kfs_getValidRangeLast },
+    { NJ_C_KFS, "setDuration", "(I)V", m3g_kfs_setDuration },
+    { NJ_C_KFS, "getDuration", "()I", m3g_kfs_getDuration },
+    { NJ_C_KFS, "setRepeatMode", "(I)V", m3g_kfs_setRepeatMode },
+    { NJ_C_KFS, "getRepeatMode", "()I", m3g_kfs_getRepeatMode },
+    { NJ_C_ACTL, "<init>", "()V", m3g_actl_init },
+    { NJ_C_ACTL, "setActiveInterval", "(II)V", m3g_actl_setActiveInterval },
+    { NJ_C_ACTL, "getActiveIntervalStart", "()I", m3g_actl_getActiveIntervalStart },
+    { NJ_C_ACTL, "getActiveIntervalEnd", "()I", m3g_actl_getActiveIntervalEnd },
+    { NJ_C_ACTL, "setSpeed", "(FI)V", m3g_actl_setSpeed },
+    { NJ_C_ACTL, "getSpeed", "()F", m3g_actl_getSpeed },
+    { NJ_C_ACTL, "setPosition", "(FI)V", m3g_actl_setPosition },
+    { NJ_C_ACTL, "getPosition", "(I)F", m3g_actl_getPosition },
+    { NJ_C_ACTL, "getRefWorldTime", "()I", m3g_actl_getRefWorldTime },
+    { NJ_C_ACTL, "setWeight", "(F)V", m3g_actl_setWeight },
+    { NJ_C_ACTL, "getWeight", "()F", m3g_actl_getWeight },
+    { NJ_C_ATRACK, "<init>", "(L" NJ_C_KFS ";I)V", m3g_atrack_init },
+    { NJ_C_ATRACK, "setController", "(L" NJ_C_ACTL ";)V", m3g_atrack_setController },
+    { NJ_C_ATRACK, "getController", "()L" NJ_C_ACTL ";", m3g_atrack_getController },
+    { NJ_C_ATRACK, "getKeyframeSequence", "()L" NJ_C_KFS ";", m3g_atrack_getSequence },
+    { NJ_C_ATRACK, "getTargetProperty", "()I", m3g_atrack_getProperty },
+    { NJ_C_RAY, "<init>", "()V", m3g_ray_init },
+    { NJ_C_RAY, "getIntersected", "()L" NJ_C_NODE ";", m3g_ray_getIntersected },
+    { NJ_C_RAY, "getRay", "([F)V", m3g_ray_getRay },
+    { NJ_C_RAY, "getDistance", "()F", m3g_ray_getDistance },
+    { NJ_C_RAY, "getSubmeshIndex", "()I", m3g_ray_getSubmeshIndex },
+    { NJ_C_RAY, "getTextureS", "(I)F", m3g_ray_getTextureS },
+    { NJ_C_RAY, "getTextureT", "(I)F", m3g_ray_getTextureT },
+    { NJ_C_RAY, "getNormalX", "()F", m3g_ray_getNormalX },
+    { NJ_C_RAY, "getNormalY", "()F", m3g_ray_getNormalY },
+    { NJ_C_RAY, "getNormalZ", "()F", m3g_ray_getNormalZ },
+    { NJ_C_MESH, "<init>", "(L" NJ_C_VBUF ";L" NJ_C_IBUF ";L" NJ_C_APPEAR ";)V", m3g_mesh_init },
+    { NJ_C_MESH, "<init>", "(L" NJ_C_VBUF ";[L" NJ_C_IBUF ";[L" NJ_C_APPEAR ";)V", m3g_mesh_init_arrays },
+    { NJ_C_MORPH, "<init>", "(L" NJ_C_VBUF ";[L" NJ_C_VBUF ";L" NJ_C_IBUF ";L" NJ_C_APPEAR ";)V", m3g_morph_init },
+    { NJ_C_MORPH, "<init>", "(L" NJ_C_VBUF ";[L" NJ_C_VBUF ";[L" NJ_C_IBUF ";[L" NJ_C_APPEAR ";)V", m3g_morph_init_arrays },
+    { NJ_C_MORPH, "getMorphTarget", "(I)L" NJ_C_VBUF ";", m3g_morph_getTarget },
+    { NJ_C_MORPH, "getMorphTargetCount", "()I", m3g_morph_getTargetCount },
+    { NJ_C_MORPH, "setWeights", "([F)V", m3g_morph_setWeights },
+    { NJ_C_MORPH, "getWeights", "([F)V", m3g_morph_getWeights },
+    { NJ_C_SKIN, "<init>", "(L" NJ_C_VBUF ";L" NJ_C_IBUF ";L" NJ_C_APPEAR ";L" NJ_C_GROUP ";)V", m3g_skin_init },
+    { NJ_C_SKIN, "<init>", "(L" NJ_C_VBUF ";[L" NJ_C_IBUF ";[L" NJ_C_APPEAR ";L" NJ_C_GROUP ";)V", m3g_skin_init_arrays },
+    { NJ_C_SKIN, "getSkeleton", "()L" NJ_C_GROUP ";", m3g_skin_getSkeleton },
+    { NJ_C_SKIN, "addTransform", "(L" NJ_C_NODE ";III)V", m3g_skin_addTransform },
+    { NJ_C_SKIN, "getBoneTransform", "(L" NJ_C_NODE ";L" NJ_C_XFORM ";)V", m3g_skin_getBoneTransform },
+    { NJ_C_SKIN, "getBoneVertices", "(L" NJ_C_NODE ";[I[F)I", m3g_skin_getBoneVertices },
+    { NJ_C_APPEAR, "<init>", "()V", m3g_appear_init },
+    { NJ_C_APPEAR, "getLayer", "()I", m3g_appear_getLayer },
+    { NJ_C_APPEAR, "setFog", "(Ljavax/microedition/m3g/Fog;)V", m3g_appear_setFog },
+    { NJ_C_APPEAR, "getFog", "()Ljavax/microedition/m3g/Fog;", m3g_appear_getFog },
+    { NJ_C_APPEAR, "getMaterial", "()Ljavax/microedition/m3g/Material;", m3g_appear_getMaterial },
+    { NJ_C_BG, "<init>", "()V", m3g_bg_init },
+    { NJ_C_BG, "getColor", "()I", m3g_bg_getColor },
+    { NJ_C_BG, "getImageModeX", "()I", m3g_bg_getImageModeX },
+    { NJ_C_BG, "getImageModeY", "()I", m3g_bg_getImageModeY },
+    { NJ_C_CAMERA, "<init>", "()V", m3g_cam_init },
+    { NJ_C_CAMERA, "getProjection", "([F)I", m3g_cam_getProjection_arr },
+    { NJ_C_COMP, "<init>", "()V", m3g_comp_init },
+    { NJ_C_COMP, "getAlphaThreshold", "()F", m3g_comp_getAlphaThreshold },
+    { NJ_C_COMP, "setAlphaWriteEnable", "(Z)V", m3g_comp_setAlphaWrite },
+    { NJ_C_COMP, "isAlphaWriteEnabled", "()Z", m3g_comp_isAlphaWrite },
+    { NJ_C_COMP, "setColorWriteEnable", "(Z)V", m3g_comp_setColorWrite },
+    { NJ_C_COMP, "isColorWriteEnabled", "()Z", m3g_comp_isColorWrite },
+    { NJ_C_COMP, "isDepthWriteEnabled", "()Z", m3g_comp_isDepthWrite },
+    { NJ_C_COMP, "isDepthTestEnabled", "()Z", m3g_comp_isDepthTest },
+    { NJ_C_COMP, "setDepthOffset", "(FF)V", m3g_comp_setDepthOffset },
+    { NJ_C_COMP, "getDepthOffsetFactor", "()F", m3g_comp_getDepthOffsetFactor },
+    { NJ_C_COMP, "getDepthOffsetUnits", "()F", m3g_comp_getDepthOffsetUnits },
+    { NJ_C_G3D, "getTarget", "()Ljava/lang/Object;", m3g_g3d_getTarget },
+    { NJ_C_G3D, "getHints", "()I", m3g_g3d_getHints },
+    { NJ_C_G3D, "isDepthBufferEnabled", "()Z", m3g_g3d_isDepthBuffer },
+    { NJ_C_G3D, "getViewportX", "()I", m3g_g3d_getViewportX },
+    { NJ_C_G3D, "getViewportY", "()I", m3g_g3d_getViewportY },
+    { NJ_C_G3D, "getViewportWidth", "()I", m3g_g3d_getViewportW },
+    { NJ_C_G3D, "getViewportHeight", "()I", m3g_g3d_getViewportH },
+    { NJ_C_G3D, "setDepthRange", "(FF)V", m3g_g3d_setDepthRange },
+    { NJ_C_G3D, "getDepthRangeNear", "()F", m3g_g3d_getDepthRangeNear },
+    { NJ_C_G3D, "getDepthRangeFar", "()F", m3g_g3d_getDepthRangeFar },
+    { NJ_C_G3D, "render", "(Ljavax/microedition/m3g/VertexBuffer;Ljavax/microedition/m3g/IndexBuffer;Ljavax/microedition/m3g/Appearance;Ljavax/microedition/m3g/Transform;I)V", m3g_g3d_render5 },
+    { NJ_C_G3D, "render", "(Ljavax/microedition/m3g/VertexBuffer;Ljavax/microedition/m3g/IndexBuffer;Ljavax/microedition/m3g/Appearance;Ljavax/microedition/m3g/Transform;)V", m3g_g3d_render5 },
+    { NJ_C_G3D, "getCamera", "(Ljavax/microedition/m3g/Transform;)Ljavax/microedition/m3g/Camera;", m3g_g3d_getCamera },
+    { NJ_C_G3D, "setLight", "(ILjavax/microedition/m3g/Light;Ljavax/microedition/m3g/Transform;)V", m3g_g3d_setLight },
+    { NJ_C_G3D, "getLightCount", "()I", m3g_g3d_getLightCount },
+    { NJ_C_G3D, "getLight", "(ILjavax/microedition/m3g/Transform;)Ljavax/microedition/m3g/Light;", m3g_g3d_getLight },
+    { NJ_C_G3D, "getProperties", "()Ljava/util/Hashtable;", m3g_g3d_getProperties },
+    { NJ_C_GROUP, "<init>", "()V", m3g_group_init },
+    { NJ_C_GROUP, "pick", "(IFFFFFFLjavax/microedition/m3g/RayIntersection;)Z", m3g_group_pick_vec },
+    { NJ_C_GROUP, "pick", "(IFFLjavax/microedition/m3g/Camera;Ljavax/microedition/m3g/RayIntersection;)Z", m3g_group_pick_cam },
+    { NJ_C_IMAGE2D, "<init>", "(III[B)V", m3g_img2d_init_pixels },
+    { NJ_C_IMAGE2D, "<init>", "(III[B[B)V", m3g_img2d_init_paletted },
+    { NJ_C_IMAGE2D, "isMutable", "()Z", m3g_img2d_isMutable },
+    { NJ_C_LIGHT, "getConstantAttenuation", "()F", m3g_light_getConstantAtten },
+    { NJ_C_LIGHT, "getLinearAttenuation", "()F", m3g_light_getLinearAtten },
+    { NJ_C_LIGHT, "getQuadraticAttenuation", "()F", m3g_light_getQuadraticAtten },
+    { NJ_C_NODE, "getAlphaFactor", "()F", m3g_node_getAlphaFactor },
+    { NJ_C_NODE, "align", "(Ljavax/microedition/m3g/Node;)V", m3g_node_align },
+    { NJ_C_NODE, "getAlignmentTarget", "(I)I", m3g_node_getAlignmentTarget },
+    { NJ_C_NODE, "getAlignmentReference", "(I)Ljavax/microedition/m3g/Node;", m3g_node_getAlignmentReference },
+    { NJ_C_O3D, "getReferences", "([Ljavax/microedition/m3g/Object3D;)I", m3g_o3d_getReferences },
+    { NJ_C_O3D, "setUserObject", "(Ljava/lang/Object;)V", m3g_o3d_setUserObject },
+    { NJ_C_O3D, "getUserObject", "()Ljava/lang/Object;", m3g_o3d_getUserObject },
+    { NJ_C_O3D, "removeAnimationTrack", "(Ljavax/microedition/m3g/AnimationTrack;)V", m3g_o3d_removeAnimationTrack },
+    { NJ_C_POLY, "<init>", "()V", m3g_poly_init },
+    { NJ_C_POLY, "getWinding", "()I", m3g_poly_getWinding },
+    { NJ_C_POLY, "setLocalCameraLightingEnable", "(Z)V", m3g_poly_setLocalCam },
+    { NJ_C_POLY, "isLocalCameraLightingEnabled", "()Z", m3g_poly_isLocalCam },
+    { NJ_C_POLY, "isPerspectiveCorrectionEnabled", "()Z", m3g_poly_isPersp },
+    { NJ_C_SPRITE3D, "isScaled", "()Z", m3g_sprite_isScaled },
+    { NJ_C_SPRITE3D, "getAppearance", "()Ljavax/microedition/m3g/Appearance;", m3g_sprite_getAppearance },
+    { NJ_C_SPRITE3D, "getImage", "()Ljavax/microedition/m3g/Image2D;", m3g_sprite_getImage },
+    { NJ_C_SPRITE3D, "setCrop", "(IIII)V", m3g_sprite_setCrop },
+    { NJ_C_SPRITE3D, "getCropX", "()I", m3g_sprite_getCropX },
+    { NJ_C_SPRITE3D, "getCropY", "()I", m3g_sprite_getCropY },
+    { NJ_C_SPRITE3D, "getCropWidth", "()I", m3g_sprite_getCropW },
+    { NJ_C_SPRITE3D, "getCropHeight", "()I", m3g_sprite_getCropH },
+    /* The loader maps file type 18 to "Sprite" and a title names "Sprite3D";
+       both class names are in the table, so both need the methods bound.
+       A method declared by a class with no binding is a link error the
+       moment a title calls it - test_natives is what caught this. */
+    { NJ_C_M3G_SPRITE, "<init>", "(ZL" NJ_C_IMAGE2D ";L" NJ_C_APPEAR ";)V", m3g_sprite_init },
+    { NJ_C_M3G_SPRITE, "setImage", "(L" NJ_C_IMAGE2D ";)V", m3g_sprite_setImage },
+    { NJ_C_M3G_SPRITE, "setAppearance", "(L" NJ_C_APPEAR ";)V", m3g_sprite_setAppearance },
+    { NJ_C_M3G_SPRITE, "isScaled", "()Z", m3g_sprite_isScaled },
+    { NJ_C_M3G_SPRITE, "getAppearance", "()Ljavax/microedition/m3g/Appearance;", m3g_sprite_getAppearance },
+    { NJ_C_M3G_SPRITE, "getImage", "()Ljavax/microedition/m3g/Image2D;", m3g_sprite_getImage },
+    { NJ_C_M3G_SPRITE, "setCrop", "(IIII)V", m3g_sprite_setCrop },
+    { NJ_C_M3G_SPRITE, "getCropX", "()I", m3g_sprite_getCropX },
+    { NJ_C_M3G_SPRITE, "getCropY", "()I", m3g_sprite_getCropY },
+    { NJ_C_M3G_SPRITE, "getCropWidth", "()I", m3g_sprite_getCropW },
+    { NJ_C_M3G_SPRITE, "getCropHeight", "()I", m3g_sprite_getCropH },
+    { NJ_C_TEX2D, "getLevelFilter", "()I", m3g_tex_getLevelFilter },
+    { NJ_C_TEX2D, "getImageFilter", "()I", m3g_tex_getImageFilter },
+    { NJ_C_TEX2D, "getWrappingS", "()I", m3g_tex_getWrappingS },
+    { NJ_C_TEX2D, "getWrappingT", "()I", m3g_tex_getWrappingT },
+    { NJ_C_TEX2D, "getBlending", "()I", m3g_tex_getBlending },
+    { NJ_C_TEX2D, "setBlendColor", "(I)V", m3g_tex_setBlendColor },
+    { NJ_C_TEX2D, "getBlendColor", "()I", m3g_tex_getBlendColor },
+    { NJ_C_XFORM, "<init>", "(Ljavax/microedition/m3g/Transform;)V", m3g_xf_init_copy },
+    { NJ_C_XFORM, "postRotateQuat", "(FFFF)V", m3g_xf_postRotateQuat },
+    { NJ_C_XFORM, "transform", "(Ljavax/microedition/m3g/VertexArray;[FZ)V", m3g_xf_transform_array },
+    { NJ_C_XABLE, "preRotate", "(FFFF)V", m3g_xable_preRotate },
+    { NJ_C_VARR, "set", "(II[B)V", m3g_varr_set_bytes },
+    { NJ_C_VARR, "getComponentType", "()I", m3g_varr_getComponentType },
+    { NJ_C_VARR, "get", "(II[S)V", m3g_varr_get_short },
+    { NJ_C_VARR, "get", "(II[B)V", m3g_varr_get_bytes },
+    { NJ_C_VBUF, "<init>", "()V", m3g_vbuf_init },
+    { NJ_C_VBUF, "getVertexCount", "()I", m3g_vbuf_getVertexCount },
+    { NJ_C_VBUF, "setNormals", "(Ljavax/microedition/m3g/VertexArray;)V", m3g_vbuf_setNormals },
+    { NJ_C_VBUF, "getPositions", "([F)Ljavax/microedition/m3g/VertexArray;", m3g_vbuf_getPositions },
+    { NJ_C_VBUF, "getTexCoords", "(I[F)Ljavax/microedition/m3g/VertexArray;", m3g_vbuf_getTexCoords },
+    { NJ_C_VBUF, "getNormals", "()Ljavax/microedition/m3g/VertexArray;", m3g_vbuf_getNormals },
+    { NJ_C_VBUF, "getColors", "()Ljavax/microedition/m3g/VertexArray;", m3g_vbuf_getColors },
+    { NJ_C_WORLD, "<init>", "()V", m3g_world_init },
     { NULL, NULL, NULL, NULL }
 };
 const int nj_lib_m3g_count =

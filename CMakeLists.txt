@@ -344,6 +344,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_excdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_paintthrow_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_clipdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_m3gdemo_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -727,6 +728,25 @@ nj_add_test(test_clip tests/test_clip.c)
     set_tests_properties(check_field_descs PROPERTIES
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 120)
   endif()
+
+  # The JSR 184 API surface is enumerated in tools/data/m3g-api-1.1.txt and
+  # compared with what src/midp/nj_lib_m3g.c declares; the audit exits non-zero
+  # for the first member that is missing, so this test is what keeps "the whole
+  # package is implemented" true.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/m3g_api_audit.py)
+    add_test(NAME check_m3g_api
+             COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/m3g_api_audit.py)
+    set_tests_properties(check_m3g_api PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 120)
+  endif()
+
+  # ... and the surface has to behave, not merely exist.  M3GDemo calls every
+  # API area and prints one summary line; check_m3gdemo.sh asserts it.
+  add_test(NAME check_m3gdemo
+           COMMAND ${CMAKE_COMMAND} -E env
+                   NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                   ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_m3gdemo.sh
+                   ${NJ_FIXTURES}/m3gdemo.jar)
 
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_consts.c)
     nj_add_test(test_consts tests/test_consts.c

@@ -321,7 +321,6 @@ static int img_view(nj_vm *vm, nj_ref img, nj_image *out)
 {
     int w = 0, h = 0;
     nj_u4 *px;
-    nj_size i, n;
 
     if (!img || !img_dims(vm, img, &w, &h) || w <= 0 || h <= 0) {
         return 0;
@@ -330,18 +329,16 @@ static int img_view(nj_vm *vm, nj_ref img, nj_image *out)
     if (!px) {
         return 0;
     }
-    n = (nj_size)w * (nj_size)h;
     out->width = w;
     out->height = h;
     out->format = NJ_PIXFMT_ARGB8888;
     out->pixels = px;
+    /* NOT measured.  The rasteriser decides per pixel whether to copy or to
+       blend, so the only thing a pre-scan buys is the scan itself - and for a
+       full-screen image that is 76,800 reads per blit, every frame (23% of the
+       sampled time in a 1200-frame run of 合金弹头4(完美汉化版)_4053, whose
+       whole screen is one opaque image).  Nothing reads this field. */
     out->has_alpha = 0;
-    for (i = 0; i < n; i++) {
-        if ((px[i] >> 24) != 0xFFu) {
-            out->has_alpha = 1;
-            break;
-        }
-    }
     return 1;
 }
 

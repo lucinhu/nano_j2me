@@ -411,32 +411,12 @@ static int njg_bind(nj_vm *vm, nj_ref gobj, njg_gfx_bind *b, nj_gfx *g)
 /* ------------------------------------------------------------------ */
 /*
  * The blitters want an nj_image; the game package has an Image whose pixels are
- * a Java int[].  nj_midp_image_pixels() gives the store; this wrapper also
- * decides `has_alpha`, which the rasterizer uses to pick its fast path.  The
- * flag is measured over exactly the region about to be drawn, so per-pixel
- * alpha still decides every pixel and no stale per-image cache is needed.
- */
-static int region_has_alpha(const nj_u4 *px, int stride, int sx, int sy,
-                            int sw, int sh)
-{
-    int x, y;
-
-    for (y = 0; y < sh; y++) {
-        const nj_u4 *row = px + (nj_size)(sy + y) * (nj_size)stride +
-                           (nj_size)sx;
-        for (x = 0; x < sw; x++) {
-            if (((row[x] >> 24) & 0xFFu) != 0xFFu) {
-                return 1;
-            }
-        }
-    }
-    return 0;
-}
-
-/*
- * View `imgref`, with has_alpha measured over the region (ax,ay,aw,ah) (the
- * region that is about to be drawn).  width/height describe the whole image,
- * because the source coordinates of a blit are relative to the image.
+ * a Java int[].  nj_midp_image_pixels() gives the store.  `has_alpha` used to
+ * be measured here, over exactly the region about to be drawn, on the theory
+ * that the rasterizer picked its fast path from it; the rasterizer decides per
+ * pixel instead (it copies opaque pixels and blends the translucent ones), so
+ * the scan was work nobody read - and a Sprite or TiledLayer paid it for every
+ * rectangle it drew.
  */
 static int image_view(nj_vm *vm, nj_ref imgref, int ax, int ay, int aw, int ah,
                       nj_image *out)
@@ -444,6 +424,10 @@ static int image_view(nj_vm *vm, nj_ref imgref, int ax, int ay, int aw, int ah,
     int w = 0, h = 0;
     nj_u4 *px;
 
+    (void)ax;
+    (void)ay;
+    (void)aw;
+    (void)ah;   /* kept: the caller's region, unused since the scan went away */
     if (!imgref) {
         return 0;
     }
@@ -458,7 +442,7 @@ static int image_view(nj_vm *vm, nj_ref imgref, int ax, int ay, int aw, int ah,
     out->height = h;
     out->format = NJ_PIXFMT_ARGB8888;
     out->pixels = px;
-    out->has_alpha = region_has_alpha(px, w, ax, ay, aw, ah);
+    out->has_alpha = 0;   /* see the comment above: nobody reads it */
     return 1;
 }
 

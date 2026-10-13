@@ -256,7 +256,14 @@ int main(void)
             a[0].r = t;
             call(vm, cam, CLS("Camera"), "getProjection",
                  "(L" CLS("Transform") ";)I", a, &n);
-            check(n.i == 0, "no projection yet: getProjection returns 0");
+            /*
+             * JSR 184's no-argument Camera has a perspective projection
+             * already - 45 degrees, aspect 1, near 1, far 1000 - so a
+             * fresh Camera answers 1.  This assertion used to read 0,
+             * which is what the runtime answered when its constructor
+             * left the camera with no projection at all.
+             */
+            check(n.i == 1, "a fresh Camera has the default perspective");
 
             a[0].f = 45.0f; a[1].f = 1.5f; a[2].f = 1.0f; a[3].f = 100.0f;
             call(vm, cam, CLS("Camera"), "setPerspective", "(FFFF)V", a, NULL);

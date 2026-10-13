@@ -1,0 +1,426 @@
+CLASS javax.microedition.m3g.AnimationController javax.microedition.m3g.Object3D
+CTOR javax.microedition.m3g.AnimationController ()V
+METHOD javax.microedition.m3g.AnimationController setActiveInterval (II)V
+METHOD javax.microedition.m3g.AnimationController getActiveIntervalStart ()I
+METHOD javax.microedition.m3g.AnimationController getActiveIntervalEnd ()I
+METHOD javax.microedition.m3g.AnimationController setSpeed (FI)V
+METHOD javax.microedition.m3g.AnimationController getSpeed ()F
+METHOD javax.microedition.m3g.AnimationController setPosition (FI)V
+METHOD javax.microedition.m3g.AnimationController getPosition (I)F
+METHOD javax.microedition.m3g.AnimationController getRefWorldTime ()I
+METHOD javax.microedition.m3g.AnimationController setWeight (F)V
+METHOD javax.microedition.m3g.AnimationController getWeight ()F
+CLASS javax.microedition.m3g.AnimationTrack javax.microedition.m3g.Object3D
+FIELD javax.microedition.m3g.AnimationTrack ALPHA I 256
+FIELD javax.microedition.m3g.AnimationTrack AMBIENT_COLOR I 257
+FIELD javax.microedition.m3g.AnimationTrack COLOR I 258
+FIELD javax.microedition.m3g.AnimationTrack CROP I 259
+FIELD javax.microedition.m3g.AnimationTrack DENSITY I 260
+FIELD javax.microedition.m3g.AnimationTrack DIFFUSE_COLOR I 261
+FIELD javax.microedition.m3g.AnimationTrack EMISSIVE_COLOR I 262
+FIELD javax.microedition.m3g.AnimationTrack FAR_DISTANCE I 263
+FIELD javax.microedition.m3g.AnimationTrack FIELD_OF_VIEW I 264
+FIELD javax.microedition.m3g.AnimationTrack INTENSITY I 265
+FIELD javax.microedition.m3g.AnimationTrack MORPH_WEIGHTS I 266
+FIELD javax.microedition.m3g.AnimationTrack NEAR_DISTANCE I 267
+FIELD javax.microedition.m3g.AnimationTrack ORIENTATION I 268
+FIELD javax.microedition.m3g.AnimationTrack PICKABILITY I 269
+FIELD javax.microedition.m3g.AnimationTrack SCALE I 270
+FIELD javax.microedition.m3g.AnimationTrack SHININESS I 271
+FIELD javax.microedition.m3g.AnimationTrack SPECULAR_COLOR I 272
+FIELD javax.microedition.m3g.AnimationTrack SPOT_ANGLE I 273
+FIELD javax.microedition.m3g.AnimationTrack SPOT_EXPONENT I 274
+FIELD javax.microedition.m3g.AnimationTrack TRANSLATION I 275
+FIELD javax.microedition.m3g.AnimationTrack VISIBILITY I 276
+CTOR javax.microedition.m3g.AnimationTrack (Ljavax/microedition/m3g/KeyframeSequence;I)V
+METHOD javax.microedition.m3g.AnimationTrack setController (Ljavax/microedition/m3g/AnimationController;)V
+METHOD javax.microedition.m3g.AnimationTrack getController ()Ljavax/microedition/m3g/AnimationController;
+METHOD javax.microedition.m3g.AnimationTrack getKeyframeSequence ()Ljavax/microedition/m3g/KeyframeSequence;
+METHOD javax.microedition.m3g.AnimationTrack getTargetProperty ()I
+CLASS javax.microedition.m3g.Appearance javax.microedition.m3g.Object3D
+CTOR javax.microedition.m3g.Appearance ()V
+METHOD javax.microedition.m3g.Appearance setLayer (I)V
+METHOD javax.microedition.m3g.Appearance getLayer ()I
+METHOD javax.microedition.m3g.Appearance setFog (Ljavax/microedition/m3g/Fog;)V
+METHOD javax.microedition.m3g.Appearance getFog ()Ljavax/microedition/m3g/Fog;
+METHOD javax.microedition.m3g.Appearance setPolygonMode (Ljavax/microedition/m3g/PolygonMode;)V
+METHOD javax.microedition.m3g.Appearance getPolygonMode ()Ljavax/microedition/m3g/PolygonMode;
+METHOD javax.microedition.m3g.Appearance setCompositingMode (Ljavax/microedition/m3g/CompositingMode;)V
+METHOD javax.microedition.m3g.Appearance getCompositingMode ()Ljavax/microedition/m3g/CompositingMode;
+METHOD javax.microedition.m3g.Appearance setTexture (ILjavax/microedition/m3g/Texture2D;)V
+METHOD javax.microedition.m3g.Appearance getTexture (I)Ljavax/microedition/m3g/Texture2D;
+METHOD javax.microedition.m3g.Appearance setMaterial (Ljavax/microedition/m3g/Material;)V
+METHOD javax.microedition.m3g.Appearance getMaterial ()Ljavax/microedition/m3g/Material;
+CLASS javax.microedition.m3g.Background javax.microedition.m3g.Object3D
+FIELD javax.microedition.m3g.Background BORDER I 32
+FIELD javax.microedition.m3g.Background REPEAT I 33
+CTOR javax.microedition.m3g.Background ()V
+METHOD javax.microedition.m3g.Background setColorClearEnable (Z)V
+METHOD javax.microedition.m3g.Background isColorClearEnabled ()Z
+METHOD javax.microedition.m3g.Background setDepthClearEnable (Z)V
+METHOD javax.microedition.m3g.Background isDepthClearEnabled ()Z
+METHOD javax.microedition.m3g.Background setColor (I)V
+METHOD javax.microedition.m3g.Background getColor ()I
+METHOD javax.microedition.m3g.Background setImage (Ljavax/microedition/m3g/Image2D;)V
+METHOD javax.microedition.m3g.Background getImage ()Ljavax/microedition/m3g/Image2D;
+METHOD javax.microedition.m3g.Background setImageMode (II)V
+METHOD javax.microedition.m3g.Background getImageModeX ()I
+METHOD javax.microedition.m3g.Background getImageModeY ()I
+METHOD javax.microedition.m3g.Background setCrop (IIII)V
+METHOD javax.microedition.m3g.Background getCropX ()I
+METHOD javax.microedition.m3g.Background getCropY ()I
+METHOD javax.microedition.m3g.Background getCropWidth ()I
+METHOD javax.microedition.m3g.Background getCropHeight ()I
+CLASS javax.microedition.m3g.Camera javax.microedition.m3g.Node
+FIELD javax.microedition.m3g.Camera GENERIC I 48
+FIELD javax.microedition.m3g.Camera PARALLEL I 49
+FIELD javax.microedition.m3g.Camera PERSPECTIVE I 50
+CTOR javax.microedition.m3g.Camera ()V
+METHOD javax.microedition.m3g.Camera setParallel (FFFF)V
+METHOD javax.microedition.m3g.Camera setPerspective (FFFF)V
+METHOD javax.microedition.m3g.Camera setGeneric (Ljavax/microedition/m3g/Transform;)V
+METHOD javax.microedition.m3g.Camera getProjection (Ljavax/microedition/m3g/Transform;)I
+METHOD javax.microedition.m3g.Camera getProjection ([F)I
+CLASS javax.microedition.m3g.CompositingMode javax.microedition.m3g.Object3D
+FIELD javax.microedition.m3g.CompositingMode ALPHA I 64
+FIELD javax.microedition.m3g.CompositingMode ALPHA_ADD I 65
+FIELD javax.microedition.m3g.CompositingMode MODULATE I 66
+FIELD javax.microedition.m3g.CompositingMode MODULATE_X2 I 67
+FIELD javax.microedition.m3g.CompositingMode REPLACE I 68
+CTOR javax.microedition.m3g.CompositingMode ()V
+METHOD javax.microedition.m3g.CompositingMode setBlending (I)V
+METHOD javax.microedition.m3g.CompositingMode getBlending ()I
+METHOD javax.microedition.m3g.CompositingMode setAlphaThreshold (F)V
+METHOD javax.microedition.m3g.CompositingMode getAlphaThreshold ()F
+METHOD javax.microedition.m3g.CompositingMode setAlphaWriteEnable (Z)V
+METHOD javax.microedition.m3g.CompositingMode isAlphaWriteEnabled ()Z
+METHOD javax.microedition.m3g.CompositingMode setColorWriteEnable (Z)V
+METHOD javax.microedition.m3g.CompositingMode isColorWriteEnabled ()Z
+METHOD javax.microedition.m3g.CompositingMode setDepthWriteEnable (Z)V
+METHOD javax.microedition.m3g.CompositingMode isDepthWriteEnabled ()Z
+METHOD javax.microedition.m3g.CompositingMode setDepthTestEnable (Z)V
+METHOD javax.microedition.m3g.CompositingMode isDepthTestEnabled ()Z
+METHOD javax.microedition.m3g.CompositingMode setDepthOffset (FF)V
+METHOD javax.microedition.m3g.CompositingMode getDepthOffsetFactor ()F
+METHOD javax.microedition.m3g.CompositingMode getDepthOffsetUnits ()F
+CLASS javax.microedition.m3g.Fog javax.microedition.m3g.Object3D
+FIELD javax.microedition.m3g.Fog EXPONENTIAL I 80
+FIELD javax.microedition.m3g.Fog LINEAR I 81
+CTOR javax.microedition.m3g.Fog ()V
+METHOD javax.microedition.m3g.Fog setMode (I)V
+METHOD javax.microedition.m3g.Fog getMode ()I
+METHOD javax.microedition.m3g.Fog setLinear (FF)V
+METHOD javax.microedition.m3g.Fog getNearDistance ()F
+METHOD javax.microedition.m3g.Fog getFarDistance ()F
+METHOD javax.microedition.m3g.Fog setDensity (F)V
+METHOD javax.microedition.m3g.Fog getDensity ()F
+METHOD javax.microedition.m3g.Fog setColor (I)V
+METHOD javax.microedition.m3g.Fog getColor ()I
+CLASS javax.microedition.m3g.Graphics3D java.lang.Object
+FIELD javax.microedition.m3g.Graphics3D ANTIALIAS I 2
+FIELD javax.microedition.m3g.Graphics3D DITHER I 4
+FIELD javax.microedition.m3g.Graphics3D TRUE_COLOR I 8
+FIELD javax.microedition.m3g.Graphics3D OVERWRITE I 16
+STATIC javax.microedition.m3g.Graphics3D getInstance ()Ljavax/microedition/m3g/Graphics3D;
+METHOD javax.microedition.m3g.Graphics3D bindTarget (Ljava/lang/Object;)V
+METHOD javax.microedition.m3g.Graphics3D bindTarget (Ljava/lang/Object;ZI)V
+METHOD javax.microedition.m3g.Graphics3D releaseTarget ()V
+METHOD javax.microedition.m3g.Graphics3D getTarget ()Ljava/lang/Object;
+METHOD javax.microedition.m3g.Graphics3D getHints ()I
+METHOD javax.microedition.m3g.Graphics3D isDepthBufferEnabled ()Z
+METHOD javax.microedition.m3g.Graphics3D setViewport (IIII)V
+METHOD javax.microedition.m3g.Graphics3D getViewportX ()I
+METHOD javax.microedition.m3g.Graphics3D getViewportY ()I
+METHOD javax.microedition.m3g.Graphics3D getViewportWidth ()I
+METHOD javax.microedition.m3g.Graphics3D getViewportHeight ()I
+METHOD javax.microedition.m3g.Graphics3D setDepthRange (FF)V
+METHOD javax.microedition.m3g.Graphics3D getDepthRangeNear ()F
+METHOD javax.microedition.m3g.Graphics3D getDepthRangeFar ()F
+METHOD javax.microedition.m3g.Graphics3D clear (Ljavax/microedition/m3g/Background;)V
+METHOD javax.microedition.m3g.Graphics3D render (Ljavax/microedition/m3g/World;)V
+METHOD javax.microedition.m3g.Graphics3D render (Ljavax/microedition/m3g/Node;Ljavax/microedition/m3g/Transform;)V
+METHOD javax.microedition.m3g.Graphics3D render (Ljavax/microedition/m3g/VertexBuffer;Ljavax/microedition/m3g/IndexBuffer;Ljavax/microedition/m3g/Appearance;Ljavax/microedition/m3g/Transform;I)V
+METHOD javax.microedition.m3g.Graphics3D render (Ljavax/microedition/m3g/VertexBuffer;Ljavax/microedition/m3g/IndexBuffer;Ljavax/microedition/m3g/Appearance;Ljavax/microedition/m3g/Transform;)V
+METHOD javax.microedition.m3g.Graphics3D setCamera (Ljavax/microedition/m3g/Camera;Ljavax/microedition/m3g/Transform;)V
+METHOD javax.microedition.m3g.Graphics3D getCamera (Ljavax/microedition/m3g/Transform;)Ljavax/microedition/m3g/Camera;
+METHOD javax.microedition.m3g.Graphics3D addLight (Ljavax/microedition/m3g/Light;Ljavax/microedition/m3g/Transform;)I
+METHOD javax.microedition.m3g.Graphics3D setLight (ILjavax/microedition/m3g/Light;Ljavax/microedition/m3g/Transform;)V
+METHOD javax.microedition.m3g.Graphics3D resetLights ()V
+METHOD javax.microedition.m3g.Graphics3D getLightCount ()I
+METHOD javax.microedition.m3g.Graphics3D getLight (ILjavax/microedition/m3g/Transform;)Ljavax/microedition/m3g/Light;
+STATIC javax.microedition.m3g.Graphics3D getProperties ()Ljava/util/Hashtable;
+CLASS javax.microedition.m3g.Group javax.microedition.m3g.Node
+CTOR javax.microedition.m3g.Group ()V
+METHOD javax.microedition.m3g.Group addChild (Ljavax/microedition/m3g/Node;)V
+METHOD javax.microedition.m3g.Group removeChild (Ljavax/microedition/m3g/Node;)V
+METHOD javax.microedition.m3g.Group getChildCount ()I
+METHOD javax.microedition.m3g.Group getChild (I)Ljavax/microedition/m3g/Node;
+METHOD javax.microedition.m3g.Group pick (IFFFFFFLjavax/microedition/m3g/RayIntersection;)Z
+METHOD javax.microedition.m3g.Group pick (IFFLjavax/microedition/m3g/Camera;Ljavax/microedition/m3g/RayIntersection;)Z
+CLASS javax.microedition.m3g.Image2D javax.microedition.m3g.Object3D
+FIELD javax.microedition.m3g.Image2D ALPHA I 96
+FIELD javax.microedition.m3g.Image2D LUMINANCE I 97
+FIELD javax.microedition.m3g.Image2D LUMINANCE_ALPHA I 98
+FIELD javax.microedition.m3g.Image2D RGB I 99
+FIELD javax.microedition.m3g.Image2D RGBA I 100
+CTOR javax.microedition.m3g.Image2D (ILjava/lang/Object;)V
+CTOR javax.microedition.m3g.Image2D (III[B)V
+CTOR javax.microedition.m3g.Image2D (III[B[B)V
+CTOR javax.microedition.m3g.Image2D (III)V
+METHOD javax.microedition.m3g.Image2D set (IIII[B)V
+METHOD javax.microedition.m3g.Image2D isMutable ()Z
+METHOD javax.microedition.m3g.Image2D getFormat ()I
+METHOD javax.microedition.m3g.Image2D getWidth ()I
+METHOD javax.microedition.m3g.Image2D getHeight ()I
+CLASS javax.microedition.m3g.IndexBuffer javax.microedition.m3g.Object3D
+METHOD javax.microedition.m3g.IndexBuffer getIndexCount ()I
+METHOD javax.microedition.m3g.IndexBuffer getIndices ([I)V
+CLASS javax.microedition.m3g.KeyframeSequence javax.microedition.m3g.Object3D
+FIELD javax.microedition.m3g.KeyframeSequence LINEAR I 176
+FIELD javax.microedition.m3g.KeyframeSequence SLERP I 177
+FIELD javax.microedition.m3g.KeyframeSequence SPLINE I 178
+FIELD javax.microedition.m3g.KeyframeSequence SQUAD I 179
+FIELD javax.microedition.m3g.KeyframeSequence STEP I 180
+FIELD javax.microedition.m3g.KeyframeSequence CONSTANT I 192
+FIELD javax.microedition.m3g.KeyframeSequence LOOP I 193
+CTOR javax.microedition.m3g.KeyframeSequence (III)V
+METHOD javax.microedition.m3g.KeyframeSequence getComponentCount ()I
+METHOD javax.microedition.m3g.KeyframeSequence getKeyframeCount ()I
+METHOD javax.microedition.m3g.KeyframeSequence getInterpolationType ()I
+METHOD javax.microedition.m3g.KeyframeSequence setKeyframe (II[F)V
+METHOD javax.microedition.m3g.KeyframeSequence getKeyframe (I[F)I
+METHOD javax.microedition.m3g.KeyframeSequence setValidRange (II)V
+METHOD javax.microedition.m3g.KeyframeSequence getValidRangeFirst ()I
+METHOD javax.microedition.m3g.KeyframeSequence getValidRangeLast ()I
+METHOD javax.microedition.m3g.KeyframeSequence setDuration (I)V
+METHOD javax.microedition.m3g.KeyframeSequence getDuration ()I
+METHOD javax.microedition.m3g.KeyframeSequence setRepeatMode (I)V
+METHOD javax.microedition.m3g.KeyframeSequence getRepeatMode ()I
+CLASS javax.microedition.m3g.Light javax.microedition.m3g.Node
+FIELD javax.microedition.m3g.Light AMBIENT I 128
+FIELD javax.microedition.m3g.Light DIRECTIONAL I 129
+FIELD javax.microedition.m3g.Light OMNI I 130
+FIELD javax.microedition.m3g.Light SPOT I 131
+CTOR javax.microedition.m3g.Light ()V
+METHOD javax.microedition.m3g.Light setMode (I)V
+METHOD javax.microedition.m3g.Light getMode ()I
+METHOD javax.microedition.m3g.Light setIntensity (F)V
+METHOD javax.microedition.m3g.Light getIntensity ()F
+METHOD javax.microedition.m3g.Light setColor (I)V
+METHOD javax.microedition.m3g.Light getColor ()I
+METHOD javax.microedition.m3g.Light setSpotAngle (F)V
+METHOD javax.microedition.m3g.Light getSpotAngle ()F
+METHOD javax.microedition.m3g.Light setSpotExponent (F)V
+METHOD javax.microedition.m3g.Light getSpotExponent ()F
+METHOD javax.microedition.m3g.Light setAttenuation (FFF)V
+METHOD javax.microedition.m3g.Light getConstantAttenuation ()F
+METHOD javax.microedition.m3g.Light getLinearAttenuation ()F
+METHOD javax.microedition.m3g.Light getQuadraticAttenuation ()F
+CLASS javax.microedition.m3g.Loader java.lang.Object
+STATIC javax.microedition.m3g.Loader load (Ljava/lang/String;)[Ljavax/microedition/m3g/Object3D;
+STATIC javax.microedition.m3g.Loader load ([BI)[Ljavax/microedition/m3g/Object3D;
+CLASS javax.microedition.m3g.Material javax.microedition.m3g.Object3D
+FIELD javax.microedition.m3g.Material AMBIENT I 1024
+FIELD javax.microedition.m3g.Material DIFFUSE I 2048
+FIELD javax.microedition.m3g.Material EMISSIVE I 4096
+FIELD javax.microedition.m3g.Material SPECULAR I 8192
+CTOR javax.microedition.m3g.Material ()V
+METHOD javax.microedition.m3g.Material setColor (II)V
+METHOD javax.microedition.m3g.Material getColor (I)I
+METHOD javax.microedition.m3g.Material setShininess (F)V
+METHOD javax.microedition.m3g.Material getShininess ()F
+METHOD javax.microedition.m3g.Material setVertexColorTrackingEnable (Z)V
+METHOD javax.microedition.m3g.Material isVertexColorTrackingEnabled ()Z
+CLASS javax.microedition.m3g.Mesh javax.microedition.m3g.Node
+CTOR javax.microedition.m3g.Mesh (Ljavax/microedition/m3g/VertexBuffer;Ljavax/microedition/m3g/IndexBuffer;Ljavax/microedition/m3g/Appearance;)V
+CTOR javax.microedition.m3g.Mesh (Ljavax/microedition/m3g/VertexBuffer;[Ljavax/microedition/m3g/IndexBuffer;[Ljavax/microedition/m3g/Appearance;)V
+METHOD javax.microedition.m3g.Mesh setAppearance (ILjavax/microedition/m3g/Appearance;)V
+METHOD javax.microedition.m3g.Mesh getAppearance (I)Ljavax/microedition/m3g/Appearance;
+METHOD javax.microedition.m3g.Mesh getIndexBuffer (I)Ljavax/microedition/m3g/IndexBuffer;
+METHOD javax.microedition.m3g.Mesh getVertexBuffer ()Ljavax/microedition/m3g/VertexBuffer;
+METHOD javax.microedition.m3g.Mesh getSubmeshCount ()I
+CLASS javax.microedition.m3g.MorphingMesh javax.microedition.m3g.Mesh
+CTOR javax.microedition.m3g.MorphingMesh (Ljavax/microedition/m3g/VertexBuffer;[Ljavax/microedition/m3g/VertexBuffer;Ljavax/microedition/m3g/IndexBuffer;Ljavax/microedition/m3g/Appearance;)V
+CTOR javax.microedition.m3g.MorphingMesh (Ljavax/microedition/m3g/VertexBuffer;[Ljavax/microedition/m3g/VertexBuffer;[Ljavax/microedition/m3g/IndexBuffer;[Ljavax/microedition/m3g/Appearance;)V
+METHOD javax.microedition.m3g.MorphingMesh getMorphTarget (I)Ljavax/microedition/m3g/VertexBuffer;
+METHOD javax.microedition.m3g.MorphingMesh getMorphTargetCount ()I
+METHOD javax.microedition.m3g.MorphingMesh setWeights ([F)V
+METHOD javax.microedition.m3g.MorphingMesh getWeights ([F)V
+CLASS javax.microedition.m3g.Node javax.microedition.m3g.Transformable
+FIELD javax.microedition.m3g.Node NONE I 144
+FIELD javax.microedition.m3g.Node ORIGIN I 145
+FIELD javax.microedition.m3g.Node X_AXIS I 146
+FIELD javax.microedition.m3g.Node Y_AXIS I 147
+FIELD javax.microedition.m3g.Node Z_AXIS I 148
+METHOD javax.microedition.m3g.Node setRenderingEnable (Z)V
+METHOD javax.microedition.m3g.Node setPickingEnable (Z)V
+METHOD javax.microedition.m3g.Node setScope (I)V
+METHOD javax.microedition.m3g.Node setAlphaFactor (F)V
+METHOD javax.microedition.m3g.Node isRenderingEnabled ()Z
+METHOD javax.microedition.m3g.Node isPickingEnabled ()Z
+METHOD javax.microedition.m3g.Node getScope ()I
+METHOD javax.microedition.m3g.Node getAlphaFactor ()F
+METHOD javax.microedition.m3g.Node getParent ()Ljavax/microedition/m3g/Node;
+METHOD javax.microedition.m3g.Node getTransformTo (Ljavax/microedition/m3g/Node;Ljavax/microedition/m3g/Transform;)Z
+METHOD javax.microedition.m3g.Node align (Ljavax/microedition/m3g/Node;)V
+METHOD javax.microedition.m3g.Node setAlignment (Ljavax/microedition/m3g/Node;ILjavax/microedition/m3g/Node;I)V
+METHOD javax.microedition.m3g.Node getAlignmentTarget (I)I
+METHOD javax.microedition.m3g.Node getAlignmentReference (I)Ljavax/microedition/m3g/Node;
+CLASS javax.microedition.m3g.Object3D java.lang.Object
+METHOD javax.microedition.m3g.Object3D animate (I)I
+METHOD javax.microedition.m3g.Object3D duplicate ()Ljavax/microedition/m3g/Object3D;
+METHOD javax.microedition.m3g.Object3D find (I)Ljavax/microedition/m3g/Object3D;
+METHOD javax.microedition.m3g.Object3D getReferences ([Ljavax/microedition/m3g/Object3D;)I
+METHOD javax.microedition.m3g.Object3D setUserID (I)V
+METHOD javax.microedition.m3g.Object3D getUserID ()I
+METHOD javax.microedition.m3g.Object3D setUserObject (Ljava/lang/Object;)V
+METHOD javax.microedition.m3g.Object3D getUserObject ()Ljava/lang/Object;
+METHOD javax.microedition.m3g.Object3D addAnimationTrack (Ljavax/microedition/m3g/AnimationTrack;)V
+METHOD javax.microedition.m3g.Object3D getAnimationTrack (I)Ljavax/microedition/m3g/AnimationTrack;
+METHOD javax.microedition.m3g.Object3D removeAnimationTrack (Ljavax/microedition/m3g/AnimationTrack;)V
+METHOD javax.microedition.m3g.Object3D getAnimationTrackCount ()I
+CLASS javax.microedition.m3g.PolygonMode javax.microedition.m3g.Object3D
+FIELD javax.microedition.m3g.PolygonMode CULL_BACK I 160
+FIELD javax.microedition.m3g.PolygonMode CULL_FRONT I 161
+FIELD javax.microedition.m3g.PolygonMode CULL_NONE I 162
+FIELD javax.microedition.m3g.PolygonMode SHADE_FLAT I 164
+FIELD javax.microedition.m3g.PolygonMode SHADE_SMOOTH I 165
+FIELD javax.microedition.m3g.PolygonMode WINDING_CCW I 168
+FIELD javax.microedition.m3g.PolygonMode WINDING_CW I 169
+CTOR javax.microedition.m3g.PolygonMode ()V
+METHOD javax.microedition.m3g.PolygonMode setCulling (I)V
+METHOD javax.microedition.m3g.PolygonMode getCulling ()I
+METHOD javax.microedition.m3g.PolygonMode setWinding (I)V
+METHOD javax.microedition.m3g.PolygonMode getWinding ()I
+METHOD javax.microedition.m3g.PolygonMode setShading (I)V
+METHOD javax.microedition.m3g.PolygonMode getShading ()I
+METHOD javax.microedition.m3g.PolygonMode setTwoSidedLightingEnable (Z)V
+METHOD javax.microedition.m3g.PolygonMode isTwoSidedLightingEnabled ()Z
+METHOD javax.microedition.m3g.PolygonMode setLocalCameraLightingEnable (Z)V
+METHOD javax.microedition.m3g.PolygonMode isLocalCameraLightingEnabled ()Z
+METHOD javax.microedition.m3g.PolygonMode setPerspectiveCorrectionEnable (Z)V
+METHOD javax.microedition.m3g.PolygonMode isPerspectiveCorrectionEnabled ()Z
+CLASS javax.microedition.m3g.RayIntersection java.lang.Object
+CTOR javax.microedition.m3g.RayIntersection ()V
+METHOD javax.microedition.m3g.RayIntersection getIntersected ()Ljavax/microedition/m3g/Node;
+METHOD javax.microedition.m3g.RayIntersection getRay ([F)V
+METHOD javax.microedition.m3g.RayIntersection getDistance ()F
+METHOD javax.microedition.m3g.RayIntersection getSubmeshIndex ()I
+METHOD javax.microedition.m3g.RayIntersection getTextureS (I)F
+METHOD javax.microedition.m3g.RayIntersection getTextureT (I)F
+METHOD javax.microedition.m3g.RayIntersection getNormalX ()F
+METHOD javax.microedition.m3g.RayIntersection getNormalY ()F
+METHOD javax.microedition.m3g.RayIntersection getNormalZ ()F
+CLASS javax.microedition.m3g.SkinnedMesh javax.microedition.m3g.Mesh
+CTOR javax.microedition.m3g.SkinnedMesh (Ljavax/microedition/m3g/VertexBuffer;Ljavax/microedition/m3g/IndexBuffer;Ljavax/microedition/m3g/Appearance;Ljavax/microedition/m3g/Group;)V
+CTOR javax.microedition.m3g.SkinnedMesh (Ljavax/microedition/m3g/VertexBuffer;[Ljavax/microedition/m3g/IndexBuffer;[Ljavax/microedition/m3g/Appearance;Ljavax/microedition/m3g/Group;)V
+METHOD javax.microedition.m3g.SkinnedMesh getSkeleton ()Ljavax/microedition/m3g/Group;
+METHOD javax.microedition.m3g.SkinnedMesh addTransform (Ljavax/microedition/m3g/Node;III)V
+METHOD javax.microedition.m3g.SkinnedMesh getBoneTransform (Ljavax/microedition/m3g/Node;Ljavax/microedition/m3g/Transform;)V
+METHOD javax.microedition.m3g.SkinnedMesh getBoneVertices (Ljavax/microedition/m3g/Node;[I[F)I
+CLASS javax.microedition.m3g.Sprite3D javax.microedition.m3g.Node
+CTOR javax.microedition.m3g.Sprite3D (ZLjavax/microedition/m3g/Image2D;Ljavax/microedition/m3g/Appearance;)V
+METHOD javax.microedition.m3g.Sprite3D isScaled ()Z
+METHOD javax.microedition.m3g.Sprite3D setAppearance (Ljavax/microedition/m3g/Appearance;)V
+METHOD javax.microedition.m3g.Sprite3D getAppearance ()Ljavax/microedition/m3g/Appearance;
+METHOD javax.microedition.m3g.Sprite3D setImage (Ljavax/microedition/m3g/Image2D;)V
+METHOD javax.microedition.m3g.Sprite3D getImage ()Ljavax/microedition/m3g/Image2D;
+METHOD javax.microedition.m3g.Sprite3D setCrop (IIII)V
+METHOD javax.microedition.m3g.Sprite3D getCropX ()I
+METHOD javax.microedition.m3g.Sprite3D getCropY ()I
+METHOD javax.microedition.m3g.Sprite3D getCropWidth ()I
+METHOD javax.microedition.m3g.Sprite3D getCropHeight ()I
+CLASS javax.microedition.m3g.Texture2D javax.microedition.m3g.Transformable
+FIELD javax.microedition.m3g.Texture2D FILTER_BASE_LEVEL I 208
+FIELD javax.microedition.m3g.Texture2D FILTER_LINEAR I 209
+FIELD javax.microedition.m3g.Texture2D FILTER_NEAREST I 210
+FIELD javax.microedition.m3g.Texture2D FUNC_ADD I 224
+FIELD javax.microedition.m3g.Texture2D FUNC_BLEND I 225
+FIELD javax.microedition.m3g.Texture2D FUNC_DECAL I 226
+FIELD javax.microedition.m3g.Texture2D FUNC_MODULATE I 227
+FIELD javax.microedition.m3g.Texture2D FUNC_REPLACE I 228
+FIELD javax.microedition.m3g.Texture2D WRAP_CLAMP I 240
+FIELD javax.microedition.m3g.Texture2D WRAP_REPEAT I 241
+CTOR javax.microedition.m3g.Texture2D (Ljavax/microedition/m3g/Image2D;)V
+METHOD javax.microedition.m3g.Texture2D setImage (Ljavax/microedition/m3g/Image2D;)V
+METHOD javax.microedition.m3g.Texture2D getImage ()Ljavax/microedition/m3g/Image2D;
+METHOD javax.microedition.m3g.Texture2D setFiltering (II)V
+METHOD javax.microedition.m3g.Texture2D getLevelFilter ()I
+METHOD javax.microedition.m3g.Texture2D getImageFilter ()I
+METHOD javax.microedition.m3g.Texture2D setWrapping (II)V
+METHOD javax.microedition.m3g.Texture2D getWrappingS ()I
+METHOD javax.microedition.m3g.Texture2D getWrappingT ()I
+METHOD javax.microedition.m3g.Texture2D setBlending (I)V
+METHOD javax.microedition.m3g.Texture2D getBlending ()I
+METHOD javax.microedition.m3g.Texture2D setBlendColor (I)V
+METHOD javax.microedition.m3g.Texture2D getBlendColor ()I
+CLASS javax.microedition.m3g.Transform java.lang.Object
+CTOR javax.microedition.m3g.Transform ()V
+CTOR javax.microedition.m3g.Transform (Ljavax/microedition/m3g/Transform;)V
+METHOD javax.microedition.m3g.Transform setIdentity ()V
+METHOD javax.microedition.m3g.Transform set (Ljavax/microedition/m3g/Transform;)V
+METHOD javax.microedition.m3g.Transform set ([F)V
+METHOD javax.microedition.m3g.Transform get ([F)V
+METHOD javax.microedition.m3g.Transform invert ()V
+METHOD javax.microedition.m3g.Transform transpose ()V
+METHOD javax.microedition.m3g.Transform postMultiply (Ljavax/microedition/m3g/Transform;)V
+METHOD javax.microedition.m3g.Transform postScale (FFF)V
+METHOD javax.microedition.m3g.Transform postRotate (FFFF)V
+METHOD javax.microedition.m3g.Transform postRotateQuat (FFFF)V
+METHOD javax.microedition.m3g.Transform postTranslate (FFF)V
+METHOD javax.microedition.m3g.Transform transform (Ljavax/microedition/m3g/VertexArray;[FZ)V
+METHOD javax.microedition.m3g.Transform transform ([F)V
+CLASS javax.microedition.m3g.Transformable javax.microedition.m3g.Object3D
+METHOD javax.microedition.m3g.Transformable setOrientation (FFFF)V
+METHOD javax.microedition.m3g.Transformable preRotate (FFFF)V
+METHOD javax.microedition.m3g.Transformable postRotate (FFFF)V
+METHOD javax.microedition.m3g.Transformable getOrientation ([F)V
+METHOD javax.microedition.m3g.Transformable setScale (FFF)V
+METHOD javax.microedition.m3g.Transformable scale (FFF)V
+METHOD javax.microedition.m3g.Transformable getScale ([F)V
+METHOD javax.microedition.m3g.Transformable setTranslation (FFF)V
+METHOD javax.microedition.m3g.Transformable translate (FFF)V
+METHOD javax.microedition.m3g.Transformable getTranslation ([F)V
+METHOD javax.microedition.m3g.Transformable setTransform (Ljavax/microedition/m3g/Transform;)V
+METHOD javax.microedition.m3g.Transformable getTransform (Ljavax/microedition/m3g/Transform;)V
+METHOD javax.microedition.m3g.Transformable getCompositeTransform (Ljavax/microedition/m3g/Transform;)V
+CLASS javax.microedition.m3g.TriangleStripArray javax.microedition.m3g.IndexBuffer
+CTOR javax.microedition.m3g.TriangleStripArray (I[I)V
+CTOR javax.microedition.m3g.TriangleStripArray ([I[I)V
+CLASS javax.microedition.m3g.VertexArray javax.microedition.m3g.Object3D
+CTOR javax.microedition.m3g.VertexArray (III)V
+METHOD javax.microedition.m3g.VertexArray set (II[S)V
+METHOD javax.microedition.m3g.VertexArray set (II[B)V
+METHOD javax.microedition.m3g.VertexArray getVertexCount ()I
+METHOD javax.microedition.m3g.VertexArray getComponentCount ()I
+METHOD javax.microedition.m3g.VertexArray getComponentType ()I
+METHOD javax.microedition.m3g.VertexArray get (II[S)V
+METHOD javax.microedition.m3g.VertexArray get (II[B)V
+CLASS javax.microedition.m3g.VertexBuffer javax.microedition.m3g.Object3D
+CTOR javax.microedition.m3g.VertexBuffer ()V
+METHOD javax.microedition.m3g.VertexBuffer getVertexCount ()I
+METHOD javax.microedition.m3g.VertexBuffer setPositions (Ljavax/microedition/m3g/VertexArray;F[F)V
+METHOD javax.microedition.m3g.VertexBuffer setTexCoords (ILjavax/microedition/m3g/VertexArray;F[F)V
+METHOD javax.microedition.m3g.VertexBuffer setNormals (Ljavax/microedition/m3g/VertexArray;)V
+METHOD javax.microedition.m3g.VertexBuffer setColors (Ljavax/microedition/m3g/VertexArray;)V
+METHOD javax.microedition.m3g.VertexBuffer getPositions ([F)Ljavax/microedition/m3g/VertexArray;
+METHOD javax.microedition.m3g.VertexBuffer getTexCoords (I[F)Ljavax/microedition/m3g/VertexArray;
+METHOD javax.microedition.m3g.VertexBuffer getNormals ()Ljavax/microedition/m3g/VertexArray;
+METHOD javax.microedition.m3g.VertexBuffer getColors ()Ljavax/microedition/m3g/VertexArray;
+METHOD javax.microedition.m3g.VertexBuffer setDefaultColor (I)V
+METHOD javax.microedition.m3g.VertexBuffer getDefaultColor ()I
+CLASS javax.microedition.m3g.World javax.microedition.m3g.Group
+CTOR javax.microedition.m3g.World ()V
+METHOD javax.microedition.m3g.World setBackground (Ljavax/microedition/m3g/Background;)V
+METHOD javax.microedition.m3g.World getBackground ()Ljavax/microedition/m3g/Background;
+METHOD javax.microedition.m3g.World setActiveCamera (Ljavax/microedition/m3g/Camera;)V
+METHOD javax.microedition.m3g.World getActiveCamera ()Ljavax/microedition/m3g/Camera;
+NOTE official javadoc URL https://docs.oracle.com/javame/config/cldc/ref-impl/m3g/jsr184/javax/microedition/m3g/package-summary.html returns HTTP 404 (checked 2026-10-13); all 30 class pages were taken from the identical M3G 1.1 javadoc mirror https://nikita36078.github.io/J2ME_Docs/docs/jsr184/javax/microedition/m3g/<Class>.html (raw files: https://raw.githubusercontent.com/nikita36078/J2ME_Docs/master/docs/jsr184/javax/microedition/m3g/)
+NOTE package javax.microedition.m3g (M3G 1.1, Jun 22 2005) has 30 classes, 0 interfaces, 0 exception classes; abstract classes are IndexBuffer, Node, Object3D, Transformable
+NOTE M3G 1.1 renamed Sprite to Sprite3D; javax.microedition.m3g.Sprite does not exist in this package, so the Sprite.html page is absent (HTTP 404) and no Sprite members are listed
+NOTE METHOD lines are members declared by that class only; inherited members are not repeated (follow the CLASS superclass chain)
+NOTE STATIC lines are static methods in the same shape as METHOD (name, arg descriptors, return descriptor); static methods are not duplicated as METHOD lines; methods=276 counts 272 METHOD + 4 STATIC
+NOTE all members are public; there are no protected members; throws clauses are omitted (only Loader.load declares java.io.IOException)
+NOTE FIELD lines are the public static final int constants with their literal values as published in constant-values.html
+NOTE verification: 387 documented member anchors parsed (32 ctors + 276 methods + 79 fields), 0 unresolved types, cross-checked against an independent implementation (J2ME-Loader javax.microedition.m3g sources) with 0 differences in member names, parameter types, return types, superclasses and constant values
+TOTAL classes=30 ctors=32 methods=276 fields=79

@@ -181,12 +181,12 @@ int    nj_string_equals_utf8(nj_ref s, const char *utf8);
  * pointer: it lives in the VM's static slot array at `field->offset`.
  * For a static field pass obj == NULL.
  */
-nj_s4    nj_field_read_int (nj_vm *vm, nj_ref obj, nj_field *f);
-void     nj_field_write_int(nj_vm *vm, nj_ref obj, nj_field *f, nj_s4 v);
-nj_s8    nj_field_read_long (nj_vm *vm, nj_ref obj, nj_field *f);
-void     nj_field_write_long(nj_vm *vm, nj_ref obj, nj_field *f, nj_s8 v);
-nj_ref   nj_field_read_ref (nj_vm *vm, nj_ref obj, nj_field *f);
-void     nj_field_write_ref(nj_vm *vm, nj_ref obj, nj_field *f, nj_ref v);
+nj_s4    nj_field_read_int (nj_vm *vm, nj_ref obj, const nj_field *f);
+void     nj_field_write_int(nj_vm *vm, nj_ref obj, const nj_field *f, nj_s4 v);
+nj_s8    nj_field_read_long (nj_vm *vm, nj_ref obj, const nj_field *f);
+void     nj_field_write_long(nj_vm *vm, nj_ref obj, const nj_field *f, nj_s8 v);
+nj_ref   nj_field_read_ref (nj_vm *vm, nj_ref obj, const nj_field *f);
+void     nj_field_write_ref(nj_vm *vm, nj_ref obj, const nj_field *f, nj_ref v);
 
 /*
  * Raw access, for the interpreter.
@@ -197,10 +197,10 @@ void     nj_field_write_ref(nj_vm *vm, nj_ref obj, nj_field *f, nj_ref v);
  * stack holds a float's or a double's *bit pattern*, so its getstatic /
  * getfield / putstatic / putfield have to move the bytes and nothing else.
  */
-nj_u4    nj_field_read_bits32(nj_vm *vm, nj_ref obj, nj_field *f);
-void     nj_field_write_bits32(nj_vm *vm, nj_ref obj, nj_field *f, nj_u4 v);
-nj_u8    nj_field_read_bits64(nj_vm *vm, nj_ref obj, nj_field *f);
-void     nj_field_write_bits64(nj_vm *vm, nj_ref obj, nj_field *f, nj_u8 v);
+nj_u4    nj_field_read_bits32(nj_vm *vm, nj_ref obj, const nj_field *f);
+void     nj_field_write_bits32(nj_vm *vm, nj_ref obj, const nj_field *f, nj_u4 v);
+nj_u8    nj_field_read_bits64(nj_vm *vm, nj_ref obj, const nj_field *f);
+void     nj_field_write_bits64(nj_vm *vm, nj_ref obj, const nj_field *f, nj_u8 v);
 
 /* One predicate, so a caller can tell a float field from an int one without
  * seeing the struct: nj_field is opaque here on purpose. */
@@ -218,7 +218,7 @@ int      nj_field_is_float(const nj_field *f);
  * bits2f(), and the typed accessors would convert on the way in and out -
  * storing (float)0x40200000 instead of 2.5f, and losing the low bits of any
  * pattern that 24 bits of mantissa cannot hold. */
-static inline nj_s4  nj_iget(nj_vm *vm, nj_ref o, nj_field *f)
+static inline nj_s4  nj_iget(nj_vm *vm, nj_ref o, const nj_field *f)
 {
     if (f != NULL && nj_field_is_float(f)) {
         return (nj_s4)nj_field_read_bits32(vm, o, f);
@@ -226,7 +226,7 @@ static inline nj_s4  nj_iget(nj_vm *vm, nj_ref o, nj_field *f)
     return nj_field_read_int(vm, o, f);
 }
 
-static inline void nj_iput(nj_vm *vm, nj_ref o, nj_field *f, nj_s4 v)
+static inline void nj_iput(nj_vm *vm, nj_ref o, const nj_field *f, nj_s4 v)
 {
     if (f != NULL && nj_field_is_float(f)) {
         nj_field_write_bits32(vm, o, f, (nj_u4)v);
@@ -234,8 +234,8 @@ static inline void nj_iput(nj_vm *vm, nj_ref o, nj_field *f, nj_s4 v)
     }
     nj_field_write_int(vm, o, f, v);
 }
-static inline nj_ref nj_rget(nj_vm *vm, nj_ref o, nj_field *f) { return nj_field_read_ref(vm, o, f); }
-static inline void   nj_rput(nj_vm *vm, nj_ref o, nj_field *f, nj_ref v) { nj_field_write_ref(vm, o, f, v); }
+static inline nj_ref nj_rget(nj_vm *vm, nj_ref o, const nj_field *f) { return nj_field_read_ref(vm, o, f); }
+static inline void   nj_rput(nj_vm *vm, nj_ref o, const nj_field *f, nj_ref v) { nj_field_write_ref(vm, o, f, v); }
 
 /* ------------------------------------------------------------------ */
 /* Exceptions                                                          */
