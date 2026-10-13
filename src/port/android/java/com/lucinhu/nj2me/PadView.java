@@ -230,7 +230,15 @@ class PadView extends View {
         }
         Vibrator v = (Vibrator) getContext().getSystemService(Context.VIBRATOR_SERVICE);
         if (v != null && v.hasVibrator()) {
-            v.vibrate(12);
+            try {
+                v.vibrate(12);
+            } catch (SecurityException e) {
+                /* No android.permission.VIBRATE (or it was revoked): silence the
+                   buzz, never the game - this runs inside dispatchTouchEvent. */
+                cfg.haptics = false;
+            } catch (RuntimeException e) {
+                cfg.haptics = false;
+            }
         }
     }
 

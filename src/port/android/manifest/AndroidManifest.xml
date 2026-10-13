@@ -8,6 +8,12 @@
          through PlatformHttp (HttpURLConnection), and the framework checks the
          permission when the socket is opened.
 
+         VIBRATE is not optional: the keypad buzzes on a press, and on a device
+         that HAS a vibrator an undeclared vibrate() throws SecurityException
+         from inside dispatchTouchEvent - which kills the game on the first
+         keycap the player touches.  The two call sites catch it as well,
+         because a permission can also be revoked under a running app.
+
          The Bluetooth pair below is for javax.bluetooth (JSR 82).  Android 12
          split the old pair into three runtime permissions, so a device running
          12 or newer needs BLUETOOTH_SCAN and BLUETOOTH_CONNECT granted at run
@@ -18,6 +24,9 @@
          a radio, grant them once with
          `adb shell pm grant com.lucinhu.nj2me android.permission.BLUETOOTH_CONNECT`
          (same for BLUETOOTH_SCAN). -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <uses-permission android:name="android.permission.BLUETOOTH"
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"

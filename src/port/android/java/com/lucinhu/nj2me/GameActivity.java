@@ -141,7 +141,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     public static void vibrateDevice(int ms) {
         Vibrator v = vibrator;
         if (v != null && v.hasVibrator()) {
-            v.vibrate(ms);
+            try {
+                v.vibrate(ms);
+            } catch (SecurityException e) {
+                /* a MIDlet may ask for vibration the app is not allowed to give;
+                   the request is dropped rather than thrown back at the VM */
+            } catch (RuntimeException e) {
+            }
         }
     }
 
