@@ -474,6 +474,16 @@ typedef struct wav_info {
  */
 static int wav_parse(const nj_u1 *b, nj_u4 len, wav_info *out)
 {
+#if !NJ_ENABLE_WAV
+    /*
+     * -DNJ_ENABLE_WAV=0: no RIFF reader in this build.  Returning 0 sends the
+     * file down the same path as an unknown container, where the port's
+     * audio_decode hook gets a chance at it and the refusal names WAV rather
+     * than pretending the file is malformed.
+     */
+    (void)b; (void)len; (void)out;
+    return 0;
+#else
     nj_u4 p;
     int have_fmt = 0;
     int have_data = 0;
@@ -531,6 +541,7 @@ static int wav_parse(const nj_u1 *b, nj_u4 len, wav_info *out)
     out->bits = bits;
     out->frames = data_len / (nj_u4)(chan * (bits / 8));
     return out->frames > 0u;
+#endif /* NJ_ENABLE_WAV */
 }
 
 /*
@@ -995,7 +1006,14 @@ static const char *sniff_media(const nj_u1 *b, nj_u4 len)
         return "MIDI";
     }
     if (len >= 4u && b[0] == 'R' && b[1] == 'I' && b[2] == 'F' && b[3] == 'F') {
+#if NJ_ENABLE_WAV
         return "RIFF, but not a PCM WAV";
+#else
+        /* No RIFF reader in this build, so this is a WAV until the port's
+         * audio_decode hook says otherwise: calling it malformed would send a
+         * MIDlet looking for a bug in its own asset. */
+        return "WAV";
+#endif
     }
     /*
      * Wideband first: "#!AMR-WB\n" starts with "#!AMR" too, and the two are
@@ -1050,6 +1068,13 @@ static const char *media_refusal(const char *what)
     }
     if (strcmp(what, "AMR-WB") == 0) {
         return "this runtime decodes AMR narrowband, not wideband" NJ_MEXC_DATA;
+    }
+    if (strcmp(what, "WAV") == 0) {
+#if NJ_ENABLE_WAV
+        return "this WAV file holds no PCM samples" NJ_MEXC_DATA;
+#else
+        return "this build has no WAV reader; the port must decode it" NJ_MEXC_DATA;
+#endif
     }
     if (strcmp(what, "MP3") == 0) {
         return "this runtime has no MPEG audio decoder" NJ_MEXC_DATA;

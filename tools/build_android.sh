@@ -3,6 +3,8 @@
 # Build libnj2me.so with the Android NDK, for every ABI the SDK ships.
 #
 #     tools/build_android.sh [--abi arm64-v8a] [--api 21] [--out DIR] [--no-midi]
+#                              [--no-png] [--no-jpeg] [--no-gif] [--no-inflate]
+#                              [--no-wav] [--no-amr]
 #
 # This is a REAL cross-build with the real NDK toolchain, not a stub-header
 # compile: nj_port_android.c includes <jni.h>, exports the JNI entry points
@@ -24,6 +26,7 @@ OUT="${NJ_ANDROID_OUT:-$ROOT/build/android}"
 ABIS="arm64-v8a armeabi-v7a x86 x86_64"
 SCREEN=""     # e.g. 176x208; empty leaves the runtime's default (240x320)
 NO_MIDI=0     # 1 drops the built-in MIDI renderer (see --no-midi below)
+NO_CODECS=""  # space-separated codec names to cut (see --no-<codec> below)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -32,6 +35,8 @@ while [ $# -gt 0 ]; do
         --out)  OUT="$2"; shift 2 ;;
         --screen) SCREEN="$2"; shift 2 ;;
         --no-midi) NO_MIDI=1; shift ;;
+        --no-png|--no-jpeg|--no-gif|--no-inflate|--no-wav|--no-amr)
+            NO_CODECS="$NO_CODECS ${1#--no-}"; shift ;;
         -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
@@ -106,9 +111,30 @@ fi
 # the provider: a fallback is only consulted for what the built-in face cannot
 # draw.
 FEATURE_DEFS="-DNJ_PIXFMT=NJ_PIXFMT_RGB565 \
--DNJ_ENABLE_PNG=1 -DNJ_ENABLE_JPEG=1 -DNJ_ENABLE_RMS=1 -DNJ_ENABLE_IO=1 \
+-DNJ_ENABLE_PNG=1 -DNJ_ENABLE_JPEG=1 -DNJ_ENABLE_GIF=1 -DNJ_ENABLE_INFLATE=1 \
+-DNJ_ENABLE_WAV=1 -DNJ_ENABLE_RMS=1 -DNJ_ENABLE_IO=1 \
 -DNJ_ENABLE_FLOAT=1 -DNJ_ENABLE_M3G=1 -DNJ_ENABLE_MASCOT=1 -DNJ_ENABLE_TTF=1 \
 -DNJ_ENABLE_FONT_CJK=0"
+
+# --no-png / --no-jpeg / --no-gif / --no-inflate / --no-wav / --no-amr: cut one
+# built-in decoder out of the library.  On Android that is a real choice rather
+# than a loss, because the port installs the platform's own decoders behind the
+# built-ins (BitmapFactory for images, zlib for DEFLATE, MediaCodec for audio),
+# and the registry falls through to them the moment the built-in one is gone.
+# The switch is what makes the two mechanisms compose: a smaller library with
+# no behaviour change on a device that has the codec, and an honest refusal on
+# one that does not.
+for _c in $NO_CODECS; do
+    case "$_c" in
+        png)     FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_PNG=0" ;;
+        jpeg)    FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_JPEG=0" ;;
+        gif)     FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_GIF=0" ;;
+        inflate) FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_INFLATE=0" ;;
+        wav)     FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_WAV=0" ;;
+        amr)     FEATURE_DEFS="$FEATURE_DEFS -DNJ_ENABLE_AMR=0" ;;
+        *) echo "unknown codec: $_c" >&2; exit 2 ;;
+    esac
+done
 
 # --no-midi: drop the built-in MIDI renderer (src/midp/nj_midi.c, ~11 KB of
 # text per ABI).  Android plays .mid through the platform's own Sonivox synth
@@ -168,7 +194,7 @@ for abi in $ABIS; do
     # device - which is exactly what happened with src/runner/nj_run.c.
     if ! "$cc" -shared -Wl,--gc-sections -Wl,--no-undefined \
             -Wl,-soname,libnj2me.so \
-            -o "$dir/libnj2me.so" $objs -llog -landroid -lOpenSLES -lm 2>"$dir/err"; then
+            -o "$dir/libnj2me.so" $objs -llog -landroid -lOpenSLES -lz -lm 2>"$dir/err"; then
         echo "  $abi: link failed"
         head -5 "$dir/err"
         fail=1

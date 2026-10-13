@@ -196,6 +196,15 @@ nj_app *nj_app_open(nj_vm *vm, const void *data, nj_u4 size)
         nj_host_free(vm, app);
         return NULL;
     }
+    /*
+     * A port with a decompressor gets to read the JAR: every class and every
+     * resource in it is a compressed entry, so this is the hook that decides
+     * how fast a game loads - and with -DNJ_ENABLE_INFLATE=0 it is the only
+     * way to read a deflated entry at all.
+     */
+    if (vm->port != NULL && vm->port->inflate_raw != NULL) {
+        nj_zip_set_inflate(app->zip, vm->port->inflate_raw, vm->port->ud);
+    }
 
     /* ---- manifest ---- */
     {

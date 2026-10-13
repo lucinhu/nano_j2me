@@ -55,6 +55,16 @@ option(NJ_SANITIZE       "Build with ASan + UBSan"          OFF)
 set(NJ_ENABLE_JPEG  1 CACHE STRING "Built-in baseline JPEG decoder")
 set(NJ_ENABLE_TTF   1 CACHE STRING "TrueType text (0 = bitmap faces only)")
 set(NJ_ENABLE_PNG   1 CACHE STRING "Built-in PNG decoder")
+# GIF is a MIDP 1.0 requirement and 34 corpus titles ship one, but a port whose
+# platform decodes it (Android's BitmapFactory) can leave it out.
+set(NJ_ENABLE_GIF   1 CACHE STRING "Built-in GIF decoder")
+# DEFLATE: every compressed JAR entry and every PNG IDAT goes through it.  A
+# port with zlib of its own implements nj_port.inflate_raw/nj_port.inflate and
+# turns this off; a build with it off can still open a JAR of stored entries.
+set(NJ_ENABLE_INFLATE 1 CACHE STRING "Built-in DEFLATE decompressor (0 = port hooks only)")
+# The RIFF/WAVE reader.  With it off a WAV goes to nj_port.audio_decode (the
+# same hook AMR and MP3 already use) and is refused by name otherwise.
+set(NJ_ENABLE_WAV   1 CACHE STRING "Built-in PCM WAV reader (0 = platform codec)")
 set(NJ_ENABLE_RMS   1 CACHE STRING "RecordStore persistence")
 set(NJ_ENABLE_IO    1 CACHE STRING "java.io and javax.microedition.io")
 set(NJ_ENABLE_AMR   1 CACHE STRING "Built-in AMR narrowband speech decoder")
@@ -158,6 +168,9 @@ endif()
 target_compile_definitions(nj2me PUBLIC
   NJ_PIXFMT=${NJ_PIXFMT}
   NJ_ENABLE_PNG=${NJ_ENABLE_PNG}
+  NJ_ENABLE_GIF=${NJ_ENABLE_GIF}
+  NJ_ENABLE_INFLATE=${NJ_ENABLE_INFLATE}
+  NJ_ENABLE_WAV=${NJ_ENABLE_WAV}
   NJ_ENABLE_JPEG=${NJ_ENABLE_JPEG}
   NJ_ENABLE_RMS=${NJ_ENABLE_RMS}
   NJ_ENABLE_IO=${NJ_ENABLE_IO}

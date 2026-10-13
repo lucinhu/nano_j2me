@@ -426,6 +426,24 @@ typedef struct nj_port {
     nj_status (*inflate)(void *ud, const nj_u1 *in, nj_u4 in_len,
                          nj_u1 *out, nj_u4 out_len);
 
+    /*
+     * Inflate one RAW DEFLATE stream (RFC 1951) - the form a zip entry holds.
+     *
+     * The zip reader calls this for every compressed entry, which on a JAR
+     * means every class and every resource, so a platform that has zlib should
+     * implement it: the built-in decompressor is about 3 KB of code and a
+     * platform's is usually faster as well.  Same contract as `inflate` above
+     * (the caller knows the uncompressed length from the zip directory and
+     * sizes the buffer), and NJ_ERR_UNSUPPORTED when the port has none.
+     *
+     * With -DNJ_ENABLE_INFLATE=0 this hook is the ONLY way to read a deflated
+     * JAR: a build without it can still open a JAR whose entries are stored
+     * uncompressed, and reports a compressed entry as unreadable instead of
+     * guessing at its contents.
+     */
+    nj_status (*inflate_raw)(void *ud, const nj_u1 *in, nj_u4 in_len,
+                             nj_u1 *out, nj_u4 out_len);
+
     int   fps_cap;        /* 0 => uncapped */
     const char *rms_dir;  /* where RecordStore files live (hosted ports) */
 

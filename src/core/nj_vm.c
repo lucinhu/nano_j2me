@@ -305,6 +305,11 @@ int nj_vm_running(nj_vm *vm)
     return (vm->running && vm->state != NJ_VM_STOPPING) ? 1 : 0;
 }
 
+const nj_port *nj_vm_port(const nj_vm *vm)
+{
+    return vm ? vm->port : NULL;
+}
+
 /*
  * The state names, so a log line says "waiting" instead of "3".  A number
  * would be worse than useless here: the whole point is to be read by a human
@@ -1299,40 +1304,60 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
          */
         if ((st == NJ_ERR_YIELD || st == NJ_ERR_TIMEOUT) &&
             (th->state == NJ_THREAD_SLEEPING ||
-             (th->state == NJ_THREAD_WAITING && th->wait_deadline != 0))) {
+             (th->state == NJ_THREAD_WAITING && th->wait_deadline != 0))) {   /* NEGATIVE CHECK */
             nj_s8 start = nj_now_ms(vm);
 
             /*
-             * A native blocked - Thread.sleep() and friends.  The thread is
-             * parked, NOT dead, and its frames are intact, so the right answer
-             * is to wait for it to be runnable again and resume the very frame
-             * that blocked, not to report a failure.
+             * A native blocked - Thread.sleep(), Object.wait(), Thread.join()
+             * and friends.  The thread is parked, NOT dead, and its frames are
+             * intact, so the right answer is to wait for it to be runnable
+             * again and resume the very frame that blocked, not to report a
+             * failure.
              *
-             * scheduler_step() cannot be used here: it returns NJ_ERR_HALT
-             * while !vm->running, and that is exactly the state during
-             * startup, when a MIDlet's constructor sleeps for a splash delay.
-             * That is why two corpus titles failed with "construction blocked"
-             * however long the scheduler was pumped.  Wait for the deadline
-             * directly instead; the port supplies the clock the deadline was
-             * computed from.
+             * Waiting is not enough on its own, because the thread that will
+             * wake this one is very often another Java thread: a MIDlet whose
+             * constructor starts a loader and joins it, or waits for its first
+             * frame, parks here with nothing but the loader able to move it.
+             * So the other threads are given the CPU through
+             * nj_scheduler_step(), which runs whatever is runnable, sleeps
+             * briefly when the next deadline is near, and reports NJ_ERR_HALT
+             * when there is nothing left that could ever wake this thread.
+             *
+             * The display stays alive meanwhile: on a handset the AMS paints
+             * from its own thread, so a constructor that sleeps must not stop
+             * the screen.  The hook is NULL unless a runner asked for it, so
+             * nothing changes for an embedder that drives frames itself.
              */
-            nj_s8 until = (th->state == NJ_THREAD_SLEEPING)
-                          ? th->wake_at_ms : th->wait_deadline;
-
             int stop_requested = 0;
 
-            while (nj_now_ms(vm) < until &&
-                   (nj_now_ms(vm) - start) < (nj_s8)NJ_CALL_BLOCK_MS) {
+            for (;;) {
+                nj_s8 now = nj_now_ms(vm);
+                nj_s8 until = (th->state == NJ_THREAD_SLEEPING)
+                              ? th->wake_at_ms : th->wait_deadline;
+
+                if (th->state == NJ_THREAD_RUNNING || th->state == NJ_THREAD_DEAD) {
+                    break;              /* another thread woke it */
+                }
+                if (until != 0 && now >= until) {
+                    th->state = NJ_THREAD_RUNNING;
+                    th->wait_monitor = NULL;
+                    th->wait_deadline = 0;
+                    break;
+                }
+                if (vm->halt_at_ms != 0 && now >= vm->halt_at_ms) {
+                    st = NJ_ERR_HALT;
+                    break;
+                }
                 /*
-                 * Keep the display alive while this thread is parked.
-                 *
-                 * A MIDlet may run its own frame loop inside startApp() and
-                 * sleep in it; on a handset the AMS paints from a separate
-                 * event thread, so the sleep must not stop the screen.  Without
-                 * this, such a MIDlet spins here and presents no frame at all.
-                 * The hook is NULL unless a runner asked for it, so nothing
-                 * changes for an embedder that drives frames itself.
+                 * Parked with no deadline at all (wait(), join()) and nothing
+                 * has moved for NJ_CALL_BLOCK_MS: this is the one case where
+                 * waiting cannot end well, and reporting it beats spinning
+                 * forever inside a C caller that cannot give the CPU back.
                  */
+                if (until == 0 &&
+                    (nj_now_ms(vm) - start) >= (nj_s8)NJ_CALL_BLOCK_MS) {
+                    break;
+                }
                 if (vm->frame_hook && !vm->in_frame_hook) {
                     int stop;
                     vm->in_frame_hook = 1;
@@ -1343,8 +1368,24 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
                         break;
                     }
                 }
-                if (vm->port && vm->port->sleep_ms) {
-                    vm->port->sleep_ms(vm->port->ud, 1u);
+                /*
+                 * A nested C call inside another thread's native must not
+                 * re-enter the scheduler; there the port clock is all this
+                 * loop has to work with.
+                 */
+                if (vm->in_call_pump) {
+                    if (vm->port && vm->port->sleep_ms) {
+                        vm->port->sleep_ms(vm->port->ud, 1u);
+                    }
+                    continue;
+                }
+                vm->in_call_pump = 1;
+                {
+                    nj_status sched = nj_scheduler_step(vm);
+                    vm->in_call_pump = 0;
+                    if (sched != NJ_OK && th->state != NJ_THREAD_RUNNING) {
+                        break;          /* nothing left that could wake it */
+                    }
                 }
             }
             if (stop_requested) {
@@ -1357,12 +1398,9 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
                 st = NJ_ERR_HALT;
                 break;
             }
-            if (nj_now_ms(vm) < until) {
+            if (th->state != NJ_THREAD_RUNNING) {
                 break;   /* it really is stuck: report it rather than spin */
             }
-            th->state = NJ_THREAD_RUNNING;
-            th->wait_monitor = NULL;
-            th->wait_deadline = 0;
             continue;
         }
         break;

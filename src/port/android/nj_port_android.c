@@ -37,6 +37,7 @@
 #include "nj2me/nj_port.h"
 #include "nj2me/nj_types.h"
 #include "nj2me/nj.h"          /* nj_run, nj_port_shutdown */
+#include "nj2me/nj_codec.h"    /* nj_codec_register, nj_codec_image_new */
 
 #include <string.h>
 #include <stdlib.h>
@@ -52,6 +53,7 @@
 #include <pthread.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <zlib.h>              /* DEFLATE, for JAR entries and .m3g sections */
 
 /*
  * Two audio devices, one mixer, one APK.
@@ -354,6 +356,21 @@ typedef struct android_state {
     jmethodID midi_time_mid;
     jmethodID midi_volume_mid;
     jmethodID midi_done_mid;
+
+    /*
+     * The platform's codecs, reached through one small Java class each:
+     * PlatformImage wraps BitmapFactory (PNG/JPEG/GIF/BMP/WebP) and
+     * PlatformAudio wraps MediaExtractor + MediaCodec (AMR, MP3, AAC, WAV).
+     * Both hand back byte arrays, so nothing here has to know what a Bitmap or
+     * a MediaCodec is - and neither is required: with no class resolved the
+     * providers simply are not installed and the runtime decodes what it can.
+     */
+    jclass    image_class;
+    jmethodID image_info_mid;
+    jmethodID image_decode_mid;
+    jclass    audio_class;
+    jmethodID audio_info_mid;
+    jmethodID audio_decode_mid;
 } android_state;
 
 #define AS(ud) ((android_state *)(ud))
@@ -2271,6 +2288,365 @@ static void android_shutdown(void *ud)
 }
 
 /* ------------------------------------------------------------------ */
+/* Platform codecs: DEFLATE, images, sampled audio                     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * DEFLATE, from the platform's zlib.
+ *
+ * A JAR entry is raw DEFLATE and a PNG's IDAT is DEFLATE behind the zlib
+ * wrapper, and the runtime carries its own inflate for both.  zlib has been in
+ * the NDK sysroot at every API level this port supports, so the port hands the
+ * work over and a build can leave the built-in one out (NJ_ENABLE_INFLATE=0)
+ * without losing JAR loading or PNG.
+ *
+ * Both callers know the uncompressed length before they start - a zip entry's
+ * central directory says it, a .m3g section declares it - so the stream is
+ * driven with Z_FINISH into a buffer of exactly that size, and a short result
+ * is reported as corruption rather than as success.
+ */
+static nj_status android_inflate_common(const nj_u1 *in, nj_u4 in_len,
+                                        nj_u1 *out, nj_u4 out_len, int window)
+{
+    z_stream zs;
+    int rc;
+
+    if (!in || !out || in_len == 0u || out_len == 0u) {
+        return NJ_ERR;
+    }
+    memset(&zs, 0, sizeof(zs));
+    zs.next_in = (Bytef *)(void *)in;
+    zs.avail_in = (uInt)in_len;
+    zs.next_out = (Bytef *)out;
+    zs.avail_out = (uInt)out_len;
+    if (inflateInit2(&zs, window) != Z_OK) {
+        return NJ_ERR_NOMEM;
+    }
+    rc = inflate(&zs, Z_FINISH);
+    if (rc != Z_STREAM_END || zs.total_out != (uLong)out_len) {
+        inflateEnd(&zs);
+        return NJ_ERR_FORMAT;
+    }
+    inflateEnd(&zs);
+    return NJ_OK;
+}
+
+static nj_status android_inflate(void *ud, const nj_u1 *in, nj_u4 in_len,
+                                 nj_u1 *out, nj_u4 out_len)
+{
+    (void)ud;
+    return android_inflate_common(in, in_len, out, out_len, 15);
+}
+
+static nj_status android_inflate_raw(void *ud, const nj_u1 *in, nj_u4 in_len,
+                                     nj_u1 *out, nj_u4 out_len)
+{
+    (void)ud;
+    return android_inflate_common(in, in_len, out, out_len, -15);
+}
+
+/*
+ * Images, from BitmapFactory.
+ *
+ * BitmapFactory decodes PNG, JPEG, GIF (first frame), BMP and WebP on every
+ * API level this port supports.  BMP and WebP are formats the runtime has no
+ * decoder for at all, so on Android they simply work; PNG, JPEG and GIF are
+ * already covered.
+ *
+ * It is registered one step BELOW the built-in providers (priority -1 against
+ * their 0) and that is deliberate: Android's own PNG path is known to mishandle
+ * palette images with a tRNS chunk - it is why J2ME-Loader re-decodes PNG in
+ * pure Java instead of trusting BitmapFactory - while this runtime's PNG
+ * decoder handles them.  So the built-in decoder keeps PNG/JPEG/GIF, the
+ * platform fills the formats nothing else can read, and a build with
+ * -DNJ_ENABLE_PNG=0 (and so on) falls through to the platform automatically.  A
+ * port that would rather have BitmapFactory first can register it again at
+ * NJ_CODEC_PRIO_PLATFORM.
+ *
+ * The bytes cross into Java and the pixels come back as an RGBA byte array.
+ * Doing the pixel copy in Java keeps this file free of jnigraphics and of the
+ * two traps that locking a Bitmap brings: ARGB_8888 is premultiplied, and an
+ * ImageDecoder bitmap can be hardware-backed and not lockable at all.
+ */
+static int android_image_accepts(const void *data, nj_u4 size)
+{
+    const nj_u1 *p = (const nj_u1 *)data;
+
+    if (!p || size < 12u) {
+        return 0;
+    }
+    if (p[0] == 0x89u && p[1] == 'P' && p[2] == 'N' && p[3] == 'G') {
+        return 1;
+    }
+    if (p[0] == 0xFFu && p[1] == 0xD8u && p[2] == 0xFFu) {
+        return 1;
+    }
+    if (p[0] == 'G' && p[1] == 'I' && p[2] == 'F') {
+        return 1;
+    }
+    if (p[0] == 'B' && p[1] == 'M') {
+        return 1;
+    }
+    if (p[0] == 'R' && p[1] == 'I' && p[2] == 'F' && p[3] == 'F' &&
+        p[8] == 'W' && p[9] == 'E' && p[10] == 'B' && p[11] == 'P') {
+        return 1;
+    }
+    return 0;
+}
+
+static nj_image *android_image_decode(const nj_codec_req *req)
+{
+    const nj_port *port;
+    android_state *s;
+    JNIEnv *env;
+    jbyteArray in = NULL, px = NULL;
+    jintArray meta = NULL;
+    jbyte *elems = NULL;
+    jint dims[3];
+    jsize nbytes;
+    nj_image *img;
+    nj_u4 *dst;
+    nj_u4 i;
+    int w, h, alpha;
+
+    if (!req || !req->data || req->size == 0u || !req->alloc || !req->vm) {
+        return NULL;
+    }
+    port = nj_vm_port(req->vm);
+    s = (port && port->ud) ? AS(port->ud) : NULL;
+    if (!s || !s->image_class || !s->image_info_mid || !s->image_decode_mid) {
+        return NULL;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return NULL;
+    }
+    in = (*env)->NewByteArray(env, (jsize)req->size);
+    if (!in) {
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
+    (*env)->SetByteArrayRegion(env, in, 0, (jsize)req->size,
+                               (const jbyte *)(const void *)req->data);
+
+    meta = (jintArray)(*env)->CallStaticObjectMethod(env, s->image_class,
+                                                     s->image_info_mid, in);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        meta = NULL;
+    }
+    if (meta) {
+        if ((*env)->GetArrayLength(env, meta) < 3) {
+            (*env)->DeleteLocalRef(env, meta);
+            meta = NULL;
+        }
+    }
+    if (!meta) {
+        (*env)->DeleteLocalRef(env, in);
+        if (req->err) {
+            *req->err = "the platform could not read this image";
+        }
+        return NULL;
+    }
+    (*env)->GetIntArrayRegion(env, meta, 0, 3, dims);
+    (*env)->DeleteLocalRef(env, meta);
+    w = (int)dims[0];
+    h = (int)dims[1];
+    alpha = (int)dims[2];
+    if (w <= 0 || h <= 0 || w > 16384 || h > 16384) {
+        (*env)->DeleteLocalRef(env, in);
+        if (req->err) {
+            *req->err = "the platform reported an unusable image size";
+        }
+        return NULL;
+    }
+
+    px = (jbyteArray)(*env)->CallStaticObjectMethod(env, s->image_class,
+                                                    s->image_decode_mid, in,
+                                                    (jint)w, (jint)h);
+    (*env)->DeleteLocalRef(env, in);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        px = NULL;
+    }
+    if (!px) {
+        if (req->err) {
+            *req->err = "the platform could not decode this image";
+        }
+        return NULL;
+    }
+    nbytes = (*env)->GetArrayLength(env, px);
+    if ((nj_u4)nbytes != (nj_u4)w * (nj_u4)h * 4u) {
+        (*env)->DeleteLocalRef(env, px);
+        if (req->err) {
+            *req->err = "the platform returned the wrong number of pixels";
+        }
+        return NULL;
+    }
+    elems = (*env)->GetByteArrayElements(env, px, NULL);
+    if (!elems) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteLocalRef(env, px);
+        return NULL;
+    }
+
+    img = nj_codec_image_new(req, w, h, NJ_PIXFMT_ARGB8888, alpha ? 1 : 0);
+    if (!img) {
+        (*env)->ReleaseByteArrayElements(env, px, elems, JNI_ABORT);
+        (*env)->DeleteLocalRef(env, px);
+        return NULL;
+    }
+    dst = img->pixels;
+    for (i = 0u; i < (nj_u4)w * (nj_u4)h; i++) {
+        nj_u4 a = (nj_u4)(nj_u1)elems[i * 4u + 3u];
+        nj_u4 v = ((nj_u4)(nj_u1)elems[i * 4u] << 16) |
+                  ((nj_u4)(nj_u1)elems[i * 4u + 1u] << 8) |
+                  (nj_u4)(nj_u1)elems[i * 4u + 2u];
+        if (!alpha) {
+            /* A JPEG or a 24-bit BMP has no alpha channel; BitmapFactory hands
+             * back 0xFF for it, but a codec that does not is not worth a
+             * transparent game. */
+            a = 0xFFu;
+        }
+        dst[i] = (a << 24) | v;
+    }
+    (*env)->ReleaseByteArrayElements(env, px, elems, JNI_ABORT);
+    (*env)->DeleteLocalRef(env, px);
+    return img;
+}
+
+static const nj_codec nj_codec_android_image = {
+    "android-bitmap",
+    { NJ_CODEC_FMT_PNG | NJ_CODEC_FMT_JPEG | NJ_CODEC_FMT_GIF |
+      NJ_CODEC_FMT_BMP | NJ_CODEC_FMT_WEBP,
+      NJ_CODEC_CAN_ARGB8888, NJ_CODEC_SCALE_1, 0u, 1, 0 },
+    android_image_accepts,
+    NULL,                 /* no info(): it would need the JNI state, and a
+                           * bounds probe is not worth a round trip */
+    android_image_decode,
+    NULL, NULL, NULL
+};
+
+/*
+ * Sampled audio, from MediaCodec.
+ *
+ * The runtime decodes WAV itself and AMR with its own tables; MP3, AAC, AMR-WB
+ * and anything else the platform has a decoder for reach the mixer through
+ * this hook instead.  It is the same two-call shape the HAL documents: with
+ * out == NULL the platform is asked how many PCM bytes the file holds, and the
+ * runtime then allocates exactly that and asks again.
+ *
+ * The result is signed 16-bit little-endian PCM, which is what pcm_write()
+ * takes, at whatever rate the decoder produces - 8 kHz for AMR, 44.1 kHz for
+ * MP3 - and the port's mixer already resamples.
+ */
+static nj_status android_audio_decode(void *ud, const nj_u1 *in, nj_u4 in_len,
+                                      nj_u1 *out, nj_u4 out_cap, nj_u4 *out_len,
+                                      nj_u4 *sample_rate, nj_u4 *channels)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jbyteArray data = NULL, pcm = NULL;
+    jintArray meta = NULL;
+    jbyte *elems = NULL;
+    jint info[4];
+    jsize nbytes;
+
+    if (!s || !in || in_len == 0u || !out_len) {
+        return NJ_ERR;
+    }
+    if (!s->audio_class || !s->audio_info_mid || !s->audio_decode_mid) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    data = (*env)->NewByteArray(env, (jsize)in_len);
+    if (!data) {
+        (*env)->ExceptionClear(env);
+        return NJ_ERR;
+    }
+    (*env)->SetByteArrayRegion(env, data, 0, (jsize)in_len,
+                               (const jbyte *)(const void *)in);
+
+    if (!out) {
+        /* First call: how big is it, and what does it play at? */
+        meta = (jintArray)(*env)->CallStaticObjectMethod(
+            env, s->audio_class, s->audio_info_mid, data);
+        (*env)->DeleteLocalRef(env, data);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            return NJ_ERR_UNSUPPORTED;
+        }
+        if (!meta || (*env)->GetArrayLength(env, meta) < 4) {
+            if (meta) {
+                (*env)->DeleteLocalRef(env, meta);
+            }
+            return NJ_ERR_UNSUPPORTED;
+        }
+        (*env)->GetIntArrayRegion(env, meta, 0, 4, info);
+        (*env)->DeleteLocalRef(env, meta);
+        if (info[0] <= 0 || info[1] <= 0 || info[3] <= 0) {
+            return NJ_ERR_UNSUPPORTED;
+        }
+        *out_len = (nj_u4)info[3];
+        if (sample_rate) {
+            *sample_rate = (nj_u4)info[0];
+        }
+        if (channels) {
+            *channels = (nj_u4)info[1];
+        }
+        return NJ_OK;
+    }
+
+    /* Second call: the PCM itself. */
+    pcm = (jbyteArray)(*env)->CallStaticObjectMethod(env, s->audio_class,
+                                                     s->audio_decode_mid, data);
+    (*env)->DeleteLocalRef(env, data);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return NJ_ERR_UNSUPPORTED;
+    }
+    if (!pcm) {
+        return NJ_ERR_UNSUPPORTED;
+    }
+    nbytes = (*env)->GetArrayLength(env, pcm);
+    if (nbytes <= 0 || (nj_u4)nbytes > out_cap) {
+        (*env)->DeleteLocalRef(env, pcm);
+        return NJ_ERR_UNSUPPORTED;
+    }
+    elems = (*env)->GetByteArrayElements(env, pcm, NULL);
+    if (!elems) {
+        (*env)->ExceptionClear(env);
+        (*env)->DeleteLocalRef(env, pcm);
+        return NJ_ERR;
+    }
+    memcpy(out, elems, (size_t)nbytes);
+    (*env)->ReleaseByteArrayElements(env, pcm, elems, JNI_ABORT);
+    (*env)->DeleteLocalRef(env, pcm);
+    *out_len = (nj_u4)nbytes;
+    return NJ_OK;
+}
+
+/*
+ * install_codecs(): called by the runner once the VM exists.  Only the image
+ * provider needs installing - the inflate and audio_decode hooks are plain
+ * nj_port fields, so the runtime finds them on its own.
+ */
+static void android_install_codecs(void *ud, nj_vm *vm)
+{
+    android_state *s = AS(ud);
+
+    if (!s || !vm) {
+        return;
+    }
+    if (s->image_class && s->image_info_mid && s->image_decode_mid) {
+        nj_codec_register(vm, &nj_codec_android_image, -1);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Construction and the public configuration entry points              */
 /* ------------------------------------------------------------------ */
 /*
@@ -2343,6 +2719,14 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     out->midi_time = android_midi_time;
     out->midi_volume = android_midi_volume;
     out->midi_finished = android_midi_finished;
+    /*
+     * The platform's codecs.  install_codecs() is called once the VM exists;
+     * the other three are plain fields the runtime reads when it needs them.
+     */
+    out->install_codecs = android_install_codecs;
+    out->inflate = android_inflate;
+    out->inflate_raw = android_inflate_raw;
+    out->audio_decode = android_audio_decode;
     out->log = android_log;
     out->shutdown = android_shutdown;
     out->fps_cap = 30;
@@ -2714,6 +3098,61 @@ Java_com_example_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
         }
     }
 
+    /*
+     * The platform's image and audio codecs, behind PlatformImage.java and
+     * PlatformAudio.java.  Resolved here for the same reason as the two above,
+     * and optional in the same way: a missing class means the provider is not
+     * installed and the runtime decodes whatever it can by itself.
+     */
+    {
+        jclass icls = (*env)->FindClass(env, "com/example/nj2me/PlatformImage");
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            icls = NULL;
+        }
+        if (icls) {
+            jmethodID iinfo = (*env)->GetStaticMethodID(env, icls, "info",
+                                                        "([B)[I");
+            jmethodID idec = (*env)->GetStaticMethodID(env, icls, "decode",
+                                                       "([BII)[B");
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                iinfo = NULL;
+                idec = NULL;
+            }
+            if (iinfo && idec) {
+                s->image_class = (jclass)(*env)->NewGlobalRef(env, icls);
+                s->image_info_mid = iinfo;
+                s->image_decode_mid = idec;
+            }
+            (*env)->DeleteLocalRef(env, icls);
+        }
+    }
+    {
+        jclass acls = (*env)->FindClass(env, "com/example/nj2me/PlatformAudio");
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            acls = NULL;
+        }
+        if (acls) {
+            jmethodID ainfo = (*env)->GetStaticMethodID(env, acls, "info",
+                                                        "([B)[I");
+            jmethodID adec = (*env)->GetStaticMethodID(env, acls, "decode",
+                                                       "([B)[B");
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                ainfo = NULL;
+                adec = NULL;
+            }
+            if (ainfo && adec) {
+                s->audio_class = (jclass)(*env)->NewGlobalRef(env, acls);
+                s->audio_info_mid = ainfo;
+                s->audio_decode_mid = adec;
+            }
+            (*env)->DeleteLocalRef(env, acls);
+        }
+    }
+
     win = ANativeWindow_fromSurface(env, surface);
     nj_port_android_set_window(&a->port, win);
     if (win) {
@@ -2992,6 +3431,20 @@ Java_com_example_nj2me_GameActivity_nativeDestroy(JNIEnv *env, jobject thiz,
         /* Only after the run thread is joined: it is the thread that fills it. */
         free(s->glyph_cache);
         s->glyph_cache = NULL;
+    }
+    if (s && s->image_class) {
+        (*env)->DeleteGlobalRef(env, s->image_class);
+        s->image_class = NULL;
+        s->image_info_mid = NULL;
+        s->image_decode_mid = NULL;
+    }
+    if (s && s->audio_class) {
+        /* PlatformAudio keeps no decoder alive between calls: every decode
+         * releases its codec and extractor before it returns. */
+        (*env)->DeleteGlobalRef(env, s->audio_class);
+        s->audio_class = NULL;
+        s->audio_info_mid = NULL;
+        s->audio_decode_mid = NULL;
     }
     nj_port_shutdown(&a->port);
     free(a);

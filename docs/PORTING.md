@@ -429,6 +429,46 @@ that deliberately also claims PNG and proves that
 Copy its shape when you add a codec: a provider that is only tested through the
 built-in path has not been tested at all.
 
+### The other two codec hooks
+
+Images are not the only thing a platform decodes better than portable C, so
+there are two plain `nj_port` fields beside `install_codecs`:
+
+| Hook | What it decodes | Called for |
+|---|---|---|
+| `inflate` | one zlib stream (RFC 1950) | `.m3g` sections |
+| `inflate_raw` | one raw DEFLATE stream (RFC 1951) | **every compressed zip entry**, which on a JAR means every class and every resource |
+| `audio_decode` | a sampled-audio container, into signed 16-bit LE PCM | anything the runtime has no decoder for, and — since it is offered first — AMR and WAV as well |
+
+`inflate_raw` is the one with the widest reach: a JAR is read through it on
+every class load, so a platform with zlib (Android has had it in the NDK
+sysroot since API 21) should implement it and can then build with
+`-DNJ_ENABLE_INFLATE=0`, dropping about 3 KB of code *and* PNG's IDAT path
+still works because PNG calls the same hook.
+
+`audio_decode` is the two-call shape the header documents: call it with
+`out == NULL` to be told how many PCM bytes the file holds and at what rate and
+channel count, allocate exactly that, call it again to fill the buffer. A port
+that answers `NJ_ERR_UNSUPPORTED` leaves the runtime to its own decoders and
+then to its own refusal, which names the format.
+
+**What a platform provider should NOT do** is hold a decoder open across calls
+or render audio itself: `pcm_write()` already mixes tone and sampled audio at
+whatever rate it is given (8 kHz AMR and 44.1 kHz MP3 both go through the same
+resampler), so a decoder's only job is to hand back PCM.
+
+### Worked example: Android
+
+The Android port fills all of them, and each one is optional — the port still
+builds and runs against an app that has none of the Java classes:
+
+| Hook | Implementation |
+|---|---|
+| `install_codecs` | `PlatformImage.java` wraps `BitmapFactory`, so BMP and WebP (which this runtime cannot read at all) decode on Android. It is registered at priority `-1`, *below* the built-in providers, because BitmapFactory mishandles palette PNGs with `tRNS` and the built-in PNG decoder does not |
+| `inflate` / `inflate_raw` | the platform's `zlib`, driven with `Z_FINISH` into a buffer of the declared size |
+| `audio_decode` | `PlatformAudio.java` drives `MediaCodec` directly — **not** `MediaExtractor`, which on the API 36 emulator fails with `Service media.extractor didn't start` in an app process |
+| `midi_open` … | `MidiPlayer.java` hands the file to the platform's own General MIDI synthesizer (Sonivox, behind `MediaPlayer`) |
+
 ## Text: built-in bitmaps or a TrueType file
 
 By default every glyph comes from six generated bitmap faces checked into

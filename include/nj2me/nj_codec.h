@@ -62,6 +62,9 @@ extern "C" {
 #define NJ_CODEC_FMT_BMP   0x0008u
 #define NJ_CODEC_FMT_WBMP  0x0010u
 #define NJ_CODEC_FMT_RAW   0x0020u
+/* WebP: no built-in decoder anywhere in this runtime - it is here so that a
+ * platform provider (Android's BitmapFactory reads it) has a name to report. */
+#define NJ_CODEC_FMT_WEBP  0x0040u
 
 /*
  * Pixel layouts.
@@ -120,6 +123,12 @@ typedef struct nj_image_info {
 typedef struct nj_codec_req {
     const void *data;
     nj_u4       size;
+
+    /* The VM this decode belongs to.  A provider installed by a port needs it
+     * to reach the platform (nj_vm_port(req->vm) -> port->ud); a provider that
+     * only uses its allocator hooks can ignore it.  NULL for a decode that was
+     * not started by the VM. */
+    struct nj_vm *vm;
 
     /* Requested geometry.  0 means "native size".  A provider that cannot
      * scale must either decode natively (and the caller resamples) or refuse;
@@ -285,6 +294,16 @@ nj_image *nj_jpeg_decode(const nj_codec_req *req);
  * Registered at the lowest priority so that Image.createImage of a JPEG on a
  * build without any JPEG decoder explains itself. */
 extern const nj_codec nj_codec_jpeg_unavailable;
+
+/* The same idea for the other containers this runtime can be built without,
+ * plus BMP, which has no built-in decoder in any configuration.  Each one
+ * sniffs its own magic and fails with a sentence that names the format, so a
+ * build with the decoder cut out says "no PNG decoder in this build" instead
+ * of "unrecognised image format" - and a platform provider registered at
+ * NJ_CODEC_PRIO_PLATFORM shadows it. */
+extern const nj_codec nj_codec_png_unavailable;
+extern const nj_codec nj_codec_gif_unavailable;
+extern const nj_codec nj_codec_bmp_unavailable;
 
 /* Install the built-in providers into a VM.  Called by nj_vm_create(). */
 void nj_codecs_register_builtins(nj_vm *vm);

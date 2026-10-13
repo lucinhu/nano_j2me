@@ -77,7 +77,7 @@ usually skip, and they are exactly the parts old games use.
 | `javax.microedition.lcdui.game` | **done** |
 | `java.util`, `java.io`, RMS | **done** |
 | Software rasterizer | **done** |
-| PNG and baseline JPEG decoders, bitmap fonts | **done**, behind a pluggable codec registry |
+| Decoders: PNG, JPEG, GIF, DEFLATE, WAV, AMR, MIDI, bitmap fonts | **done**, each behind its own switch (`NJ_ENABLE_*`) and all behind a pluggable registry, so a port can cut one or replace it with the platform's |
 | Ports: headless (reference) | **done** |
 | Ports: SDL2 | **done** |
 | Ports: Android (NDK + JNI) | **done** — one APK for Android 5.0 (API 21) and up, 4 ABIs, a launcher that shows each game's own name and icon and opens `.jar` files from a file manager, three configurable floating keypad layouts, sound through AAudio or OpenSL ES with MIDI handed to the phone's own synth, multi-touch, and auto-detected screen size; 1.57 MiB for all four ABIs, runs on an API 21 emulator, an API 36 emulator and a phone |

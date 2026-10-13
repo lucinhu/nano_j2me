@@ -296,6 +296,7 @@ static void req_init(nj_codec_req *req, nj_vm *vm, const void *data,
     memset(req, 0, sizeof(*req));
     req->data = data;
     req->size = size;
+    req->vm = vm;
     req->alloc = vm_alloc;
     req->dealloc = vm_dealloc;
     req->ud = vm;
@@ -402,6 +403,89 @@ const nj_codec nj_codec_png_software = {
     NULL, NULL, NULL
 };
 
+/* ------------------------------------------------------------------ */
+/* "This build cannot decode that" providers                           */
+/* ------------------------------------------------------------------ */
+/*
+ * One per container the runtime can be built without, plus BMP, which has no
+ * built-in decoder in any configuration.  They sit at NJ_CODEC_PRIO_FALLBACK,
+ * so a platform provider wins, and they exist so that a MIDlet is told WHICH
+ * format is missing instead of being told its artwork is unrecognisable: a
+ * game that is told the truth can fall back to another asset, and a log line
+ * distinguishes a cut decoder from a corrupt file.
+ */
+static int png_accepts_magic(const void *data, nj_u4 size)
+{
+    /* Spelled out rather than calling png_accepts(), which only exists when
+     * NJ_ENABLE_PNG is 1 - and this provider is registered exactly when it
+     * is 0. */
+    static const nj_u1 magic[8] = { 0x89u, 'P', 'N', 'G', 0x0Du, 0x0Au,
+                                    0x1Au, 0x0Au };
+    if (size < 8u) {
+        return 0;
+    }
+    return memcmp(data, magic, 8u) == 0;
+}
+
+static nj_image *png_unavailable_decode(const nj_codec_req *req)
+{
+    image_fail(req, "this build has no PNG decoder; install one with "
+                    "nj_codec_register() (see include/nj2me/nj_codec.h)");
+    return NULL;
+}
+
+static int gif_accepts_magic(const void *data, nj_u4 size)
+{
+    const nj_u1 *p = (const nj_u1 *)data;
+    if (size < 6u) {
+        return 0;
+    }
+    return p[0] == 'G' && p[1] == 'I' && p[2] == 'F' && p[3] == '8' &&
+           (p[4] == '7' || p[4] == '9') && p[5] == 'a';
+}
+
+static nj_image *gif_unavailable_decode(const nj_codec_req *req)
+{
+    image_fail(req, "this build has no GIF decoder; install one with "
+                    "nj_codec_register() (see include/nj2me/nj_codec.h)");
+    return NULL;
+}
+
+static int bmp_accepts_magic(const void *data, nj_u4 size)
+{
+    const nj_u1 *p = (const nj_u1 *)data;
+    return size >= 2u && p[0] == 'B' && p[1] == 'M';
+}
+
+static nj_image *bmp_unavailable_decode(const nj_codec_req *req)
+{
+    image_fail(req, "this runtime has no BMP decoder; a port can install one "
+                    "with nj_codec_register() (the Android port registers "
+                    "BitmapFactory, which reads BMP)");
+    return NULL;
+}
+
+const nj_codec nj_codec_png_unavailable = {
+    "png-unavailable",
+    { NJ_CODEC_FMT_PNG, NJ_CODEC_CAN_ARGB8888, NJ_CODEC_SCALE_1, 0u, 0, 0 },
+    png_accepts_magic, NULL, png_unavailable_decode,
+    NULL, NULL, NULL
+};
+
+const nj_codec nj_codec_gif_unavailable = {
+    "gif-unavailable",
+    { NJ_CODEC_FMT_GIF, NJ_CODEC_CAN_ARGB8888, NJ_CODEC_SCALE_1, 0u, 0, 0 },
+    gif_accepts_magic, NULL, gif_unavailable_decode,
+    NULL, NULL, NULL
+};
+
+const nj_codec nj_codec_bmp_unavailable = {
+    "bmp-unavailable",
+    { NJ_CODEC_FMT_BMP, NJ_CODEC_CAN_ARGB8888, NJ_CODEC_SCALE_1, 0u, 0, 0 },
+    bmp_accepts_magic, NULL, bmp_unavailable_decode,
+    NULL, NULL, NULL
+};
+
 const nj_codec nj_codec_jpeg_unavailable = {
     "jpeg-unavailable",
     { NJ_CODEC_FMT_JPEG, NJ_CODEC_CAN_ARGB8888, NJ_CODEC_SCALE_1,
@@ -441,9 +525,15 @@ void nj_codecs_register_builtins(nj_vm *vm)
     }
 #if NJ_ENABLE_PNG
     (void)nj_codec_register(vm, &nj_codec_png_software, NJ_CODEC_PRIO_BUILTIN);
+#else
+    (void)nj_codec_register(vm, &nj_codec_png_unavailable,
+                            NJ_CODEC_PRIO_FALLBACK);
 #endif
 #if NJ_ENABLE_GIF
     (void)nj_codec_register(vm, &nj_codec_gif_software, NJ_CODEC_PRIO_BUILTIN);
+#else
+    (void)nj_codec_register(vm, &nj_codec_gif_unavailable,
+                            NJ_CODEC_PRIO_FALLBACK);
 #endif
 #if NJ_ENABLE_JPEG
     (void)nj_codec_register(vm, &nj_codec_jpeg_software, NJ_CODEC_PRIO_BUILTIN);
@@ -454,4 +544,11 @@ void nj_codecs_register_builtins(nj_vm *vm)
     (void)nj_codec_register(vm, &nj_codec_jpeg_unavailable,
                             NJ_CODEC_PRIO_FALLBACK);
 #endif
+    /*
+     * BMP has no built-in decoder in ANY configuration: the runtime never had
+     * one, so this provider is what a MIDlet sees when a port does not supply
+     * one.  It is registered last so a platform provider wins by priority.
+     */
+    (void)nj_codec_register(vm, &nj_codec_bmp_unavailable,
+                            NJ_CODEC_PRIO_FALLBACK);
 }

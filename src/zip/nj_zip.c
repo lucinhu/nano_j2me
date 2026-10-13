@@ -56,6 +56,16 @@ struct nj_zip {
     void         *(*mem_alloc)(void *ud, nj_size n);
     void          (*mem_free)(void *ud, void *p);
     void          *mem_ud;
+
+    /*
+     * The decompressor, when the port supplied one (nj_zip_set_inflate).  A
+     * JAR is mostly compressed entries, so this is the hot path of loading a
+     * game: a platform with zlib in ROM gets to use it, and a build with
+     * -DNJ_ENABLE_INFLATE=0 has nothing else.
+     */
+    nj_status    (*inflate)(void *ud, const nj_u1 *in, nj_u4 in_len,
+                            nj_u1 *out, nj_u4 out_len);
+    void          *inflate_ud;
 };
 
 /* ------------------------------------------------------------------ */
@@ -355,6 +365,38 @@ void nj_zip_close(nj_zip *z)
     }
 }
 
+void nj_zip_set_inflate(nj_zip *z,
+                        nj_status (*fn)(void *ud, const nj_u1 *in,
+                                        nj_u4 in_len, nj_u1 *out,
+                                        nj_u4 out_len),
+                        void *ud)
+{
+    if (z == NULL) {
+        return;
+    }
+    z->inflate = fn;
+    z->inflate_ud = ud;
+}
+
+/*
+ * Inflate one entry's DEFLATE stream.
+ *
+ * The port's hook goes first when there is one: it is the only decompressor a
+ * build with -DNJ_ENABLE_INFLATE=0 has, and on a platform that has zlib it is
+ * both smaller and faster than ours.  The uncompressed length is known from
+ * the directory either way, so the destination is always big enough and
+ * neither path has to report a size back.
+ */
+static nj_status zip_inflate(const nj_zip *z, const void *src, nj_u4 src_len,
+                             void *dst, nj_u4 dst_len)
+{
+    if (z->inflate != NULL) {
+        return z->inflate(z->inflate_ud, (const nj_u1 *)src, src_len,
+                          (nj_u1 *)dst, dst_len);
+    }
+    return nj_inflate_raw(src, src_len, dst, &dst_len);
+}
+
 /* ------------------------------------------------------------------ */
 /* Lookup                                                              */
 /* ------------------------------------------------------------------ */
@@ -504,17 +546,22 @@ nj_s4 nj_zip_extract(const nj_zip *z, const nj_zip_entry *e,
         if (buf_size < e->uncomp_size) {
             return NJ_ERR_OOM;
         }
-        st = nj_inflate_raw(z->data + off, e->comp_size, buf, &produced);
+        st = zip_inflate(z, z->data + off, e->comp_size, buf, e->uncomp_size);
         if (st == NJ_ERR_OOM) {
             return NJ_ERR_OOM;
         }
         if (st != NJ_OK) {
             return NJ_ERR_FORMAT;
         }
-        if (produced != e->uncomp_size) {
+        /*
+         * A port hook fills exactly the size it was given; the built-in one
+         * reports what it produced, and anything but the directory's number
+         * means the directory lied.
+         */
+        if (z->inflate == NULL && produced != e->uncomp_size) {
             return NJ_ERR_FORMAT;        /* central directory lied */
         }
-        return (nj_s4)produced;
+        return (nj_s4)e->uncomp_size;
     }
 }
 
@@ -553,7 +600,14 @@ void *nj_zip_extract_alloc(const nj_zip *z, const nj_zip_entry *e,
         if (e->comp_size != e->uncomp_size) {
             return NULL;
         }
-    } else {
+    } else if (z->inflate == NULL) {
+        /*
+         * A dry run of the built-in decompressor validates the stream and
+         * confirms the directory's length before anything is allocated.  A
+         * port hook cannot be asked to measure without producing output, so
+         * with one installed the check is left to nj_zip_extract below, which
+         * fails the same way and frees the buffer on its way out.
+         */
         nj_u4 need = 0;
         nj_status st = nj_inflate_raw(z->data + off, e->comp_size, NULL, &need);
         if (st != NJ_OK && st != NJ_ERR_OOM) {

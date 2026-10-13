@@ -62,7 +62,7 @@
 | `javax.microedition.lcdui.game` | **完成** |
 | `java.util`、`java.io`、RMS | **完成** |
 | 软件光栅化器 | **完成** |
-| PNG 与基线 JPEG 解码、点阵字体 | **完成**，走可插拔的编解码注册表 |
+| 解码器：PNG、JPEG、GIF、DEFLATE、WAV、AMR、MIDI、点阵字体 | **完成**，每个都有自己的开关（`NJ_ENABLE_*`），并且都走可插拔注册表，所以移植可以裁掉一个、也可以换成平台自己的实现 |
 | 移植：headless（参考实现） | **完成** |
 | 移植：SDL2 | **完成** |
 | 移植：Android（NDK + JNI） | **完成** —— 一个 APK 支持 Android 5.0（API 21）及以上、四种 ABI；启动器会显示每个游戏自己的名字和图标，也能从文件管理器直接打开 `.jar`；三套可配置的悬浮按键布局；AAudio 或 OpenSL ES 出声，MIDI 交给手机自带的合成器；多点触控；自动识别游戏分辨率。四种 ABI 合计 1.57 MiB，在 API 21 模拟器、API 36 模拟器和真机上都跑过 |

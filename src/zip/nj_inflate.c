@@ -40,6 +40,13 @@
 #define NJ_CLEN_MAX     19   /* code-length alphabet size         */
 #define NJ_LEN_SYMS     29   /* length symbols 257..285           */
 
+/*
+ * Everything between here and the CRC table exists only to decompress, so
+ * -DNJ_ENABLE_INFLATE=0 drops it and keeps the checksums, which the zip
+ * reader and the PNG decoder still validate with.
+ */
+#if NJ_ENABLE_INFLATE
+
 /* Length codes 257..285: base length and number of extra bits. */
 static const nj_u2 s_len_base[NJ_LEN_SYMS] = {
     3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
@@ -67,6 +74,8 @@ static const nj_u1 s_dist_extra[NJ_DIST_MAX] = {
 static const nj_u1 s_clen_order[NJ_CLEN_MAX] = {
     16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
 };
+
+#endif /* NJ_ENABLE_INFLATE */
 
 /*
  * CRC-32 (IEEE 802.3, reflected polynomial 0xEDB88320), 256-entry
@@ -160,6 +169,8 @@ typedef struct {
 
 /* Make sure at least `need` bits are buffered (missing bytes read as zero and
  * latch the sticky error flag). */
+#if NJ_ENABLE_INFLATE
+
 static void bits_fill(nj_bits *b, int need)
 {
     while (b->cnt < need) {
@@ -596,6 +607,8 @@ static nj_status inflate_core(const nj_u1 *src, nj_u4 src_len,
     return NJ_OK;
 }
 
+#endif /* NJ_ENABLE_INFLATE */
+
 /* ------------------------------------------------------------------ */
 /* Checksums                                                           */
 /* ------------------------------------------------------------------ */
@@ -659,6 +672,8 @@ nj_u4 nj_adler32(const void *data, nj_u4 len)
  * satisfy the checksum; nj_inflate_zlib() therefore retries as raw DEFLATE
  * whenever the zlib interpretation fails to decode.
  */
+#if NJ_ENABLE_INFLATE
+
 static int zlib_header(const nj_u1 *p, nj_u4 len)
 {
     nj_u4 h;
@@ -775,3 +790,33 @@ nj_status nj_inflate_zlib_size(const void *src, nj_u4 src_len, nj_u4 *out_size)
     *out_size = produced;
     return NJ_OK;
 }
+
+#else /* !NJ_ENABLE_INFLATE */
+
+/*
+ * A build with no decompressor of its own: every entry point reports that it
+ * cannot, and the zip reader and the PNG decoder fall back to the port's
+ * nj_port.inflate_raw / nj_port.inflate hooks.  The stubs are here rather than
+ * in a separate translation unit so that the callers need no #if of their own.
+ */
+nj_status nj_inflate_raw(const void *src, nj_u4 src_len,
+                         void *dst, nj_u4 *dst_len)
+{
+    (void)src; (void)src_len; (void)dst; (void)dst_len;
+    return NJ_ERR_UNSUPPORTED;
+}
+
+nj_status nj_inflate_zlib(const void *src, nj_u4 src_len,
+                          void *dst, nj_u4 *dst_len)
+{
+    (void)src; (void)src_len; (void)dst; (void)dst_len;
+    return NJ_ERR_UNSUPPORTED;
+}
+
+nj_status nj_inflate_zlib_size(const void *src, nj_u4 src_len, nj_u4 *out_size)
+{
+    (void)src; (void)src_len; (void)out_size;
+    return NJ_ERR_UNSUPPORTED;
+}
+
+#endif /* NJ_ENABLE_INFLATE */

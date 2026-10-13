@@ -359,6 +359,16 @@ void nj_vm_stop_reason(nj_vm *vm, nj_s4 exit_code, const char *why);
  */
 int  nj_vm_set_frame_hook(nj_vm *vm, int (*fn)(nj_vm *vm, void *ud), void *ud);
 
+/*
+ * The port this VM was created with, or NULL for a bare VM.
+ *
+ * It exists for the callbacks that receive no port of their own - a codec
+ * provider's decode(), a font provider's glyph_lookup() - and still have to
+ * reach the platform: the port's `ud` is where a port keeps its state, and
+ * nj_codec_req carries the VM for exactly this reason.
+ */
+const nj_port *nj_vm_port(const nj_vm *vm);
+
 /* Is the VM still running?  0 once the MIDlet has exited or asked to stop.
  * The runner needs this to drive the frame loop itself (see --run-frames). */
 int   nj_vm_running(nj_vm *vm);
@@ -595,6 +605,17 @@ typedef struct nj_m3g_fields {
      */
 #define NJ_M3G_MAX_REFS 16u
     nj_u4 refs[NJ_M3G_MAX_REFS];
+    /*
+     * The children past the inline ones, copied out of the section buffer and
+     * released once the scene graph has been built.
+     *
+     * A Group or a World can name many more children than fit inline - one
+     * World in 毁灭战士3_10598 names 155 - and dropping the rest is not a small
+     * loss: the title looks its model up by userID, does not find it among the
+     * first sixteen, and calls addChild(null), which is that title failing to
+     * start.  NULL when the list fits inline.
+     */
+    nj_u4 *extra;
     nj_u4 nrefs_total;
     const nj_u1 *data;   /* a VertexArray's bytes, inside the section buffer */
     nj_u4 data_len;      /* how many of them there are */
@@ -675,6 +696,9 @@ nj_u4 nj_m3g_collect_meshes(nj_vm *vm, nj_ref root, nj_ref *out, nj_u4 cap);
    matrix, and fill the triangles they make.  Returns how many were filled. */
 nj_u4 nj_m3g_raster_mesh(nj_vm *vm, struct nj_gfx *g, nj_ref mesh,
                          const float m[16], int w, int h, nj_u4 argb);
+
+/* The k'th reference of an object whose list may run past the inline ones. */
+nj_u4 nj_m3g_ref_at(const nj_m3g_fields *f, nj_u4 k);
 
 nj_status nj_m3g_load_geometry(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
                                nj_ref arr);

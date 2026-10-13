@@ -408,6 +408,28 @@ The renderer also got ~32% faster in this round (measured on three corpus songs:
 981x -> 1424x realtime for the slowest case at 22050 Hz), which matters on the
 microcontroller ports where it is the only synth there is.
 
+### What each decoder costs, and how to stop paying it
+
+Every decoder is behind a switch, all on by default except JPEG (which the
+CMake build turns on and the header does not). The numbers below are host
+`gcc -Os` text bytes for the translation unit, so they are the cost of the code
+and not of a `.so`; the Android library carries all of them.
+
+| Switch | Translation unit | On | Off | What it buys |
+| --- | --- | --- | --- | --- |
+| `NJ_ENABLE_PNG` | `nj_png.o` | 5,000 | 519 | PNG, every colour type and `tRNS` |
+| `NJ_ENABLE_JPEG` | `nj_jpeg.o` | 6,844 | 36 | baseline JPEG |
+| `NJ_ENABLE_GIF` | `nj_gif.o` | 2,940 | ~0 | GIF (first frame) |
+| `NJ_ENABLE_INFLATE` | `nj_inflate.o` | 7,176 | 2,968 | DEFLATE: every zip entry, and PNG's IDAT |
+| `NJ_ENABLE_WAV` | (inside `nj_lib_media.o`) | — | — | the RIFF reader |
+| `NJ_ENABLE_AMR` | `nj_amr.o` | 8,204 + 26,983 rodata | 0 | AMR-NB, all eight modes |
+| `NJ_ENABLE_MIDI` | `nj_midi.o` | 10,531 | ~0 | the synthesiser and `MIDIControl` |
+
+The built-in decoders and a platform's are not exclusive: cut the built-in one
+and the provider installed through `nj_port.install_codecs` answers instead of
+a refusal, which is how the Android port reads BMP and WebP - two formats this
+runtime has never had a decoder for.
+
 ### The bug that only running found
 
 The first APK installed, started, and died:

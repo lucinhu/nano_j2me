@@ -1084,6 +1084,124 @@ static void manifest_ok(const char *data, nj_u4 len, const char *attr, const cha
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* The port's own DEFLATE                                              */
+/* ------------------------------------------------------------------ */
+/*
+ * A port with zlib hands nj_zip_set_inflate() its decompressor and every
+ * compressed entry goes through it.  That hook is what lets a build drop
+ * NJ_ENABLE_INFLATE altogether, so it needs a test that can tell it apart from
+ * the built-in path: a hook that counts, and a hook that refuses.
+ *
+ * The refusal case matters more than the success case.  If the zip reader
+ * quietly fell back to the built-in decompressor whenever the port said no,
+ * then a build with NJ_ENABLE_INFLATE=0 would appear to work while the port's
+ * hook was never actually consulted - which is the kind of bug that only shows
+ * up on the platform it was written for.
+ */
+static int g_hook_calls;
+static int g_hook_fail;
+
+static nj_status hook_inflate(void *ud, const nj_u1 *in, nj_u4 in_len,
+                              nj_u1 *out, nj_u4 out_len)
+{
+    nj_u4 len = out_len;
+    (void)ud;
+
+    g_hook_calls++;
+    if (g_hook_fail) {
+        return NJ_ERR_FORMAT;
+    }
+    return nj_inflate_raw(in, in_len, out, &len);
+}
+
+static void test_port_inflate(void)
+{
+    nj_u4 img_len = 0;
+    nj_u1 *img = read_fixture("sample.jar", &img_len);
+    nj_zip *z;
+    const nj_zip_entry *e;
+    nj_u1 *got;
+    nj_u4 i;
+
+    CHECK(img != NULL);
+    if (!img) {
+        return;
+    }
+    g_arena_used = 0;
+    z = nj_zip_open(img, img_len, &g_arena_za);
+    CHECK(z != NULL);
+    if (!z) {
+        free(img);
+        return;
+    }
+
+    /* Find a compressed entry: the hook is only consulted for method 8. */
+    e = NULL;
+    for (i = 0u; i < (nj_u4)nj_zip_count(z); i++) {
+        const nj_zip_entry *c = nj_zip_entry_at(z, (int)i);
+        if (c && c->method == 8u && c->uncomp_size > 0u) {
+            e = c;
+            break;
+        }
+    }
+    CHECK_MSG(e != NULL, "the fixture has a deflated entry");
+    if (!e) {
+        nj_zip_close(z);
+        free(img);
+        return;
+    }
+
+    got = (nj_u1 *)malloc((size_t)e->uncomp_size);
+    CHECK(got != NULL);
+    if (!got) {
+        nj_zip_close(z);
+        free(img);
+        return;
+    }
+
+    /* With no hook, the built-in decompressor answers. */
+    g_hook_calls = 0;
+    CHECK_S4(nj_zip_extract(z, e, got, e->uncomp_size), (long)e->uncomp_size,
+             "built-in extract");
+    CHECK_U4(g_hook_calls, 0u, "no hook installed, no hook call");
+
+    /* With a hook, the hook answers - and only the hook. */
+    nj_zip_set_inflate(z, hook_inflate, NULL);
+    memset(got, 0, (size_t)e->uncomp_size);
+    CHECK_S4(nj_zip_extract(z, e, got, e->uncomp_size), (long)e->uncomp_size,
+             "port extract");
+    CHECK_U4(g_hook_calls, 1u, "the port hook was called once");
+
+    /* A refusing port must fail the extraction, not fall back: otherwise a
+     * build with no built-in inflate would work on a port whose hook is
+     * broken, and only on that port. */
+    g_hook_fail = 1;
+    CHECK_MSG(nj_zip_extract(z, e, got, e->uncomp_size) != NJ_OK,
+              "a refusing hook fails the extraction");
+    g_hook_fail = 0;
+
+    /* And the size query must not call it at all: the directory already knows
+     * the length, and the hook allocates nothing. */
+    g_hook_calls = 0;
+    CHECK_S4(nj_zip_extract(z, e, NULL, 0), (long)e->uncomp_size, "size query");
+    CHECK_U4(g_hook_calls, 0u, "a size query does not inflate");
+
+    /* Passing NULL goes back to the built-in decompressor. */
+    nj_zip_set_inflate(z, NULL, NULL);
+    g_hook_calls = 0;
+    CHECK_S4(nj_zip_extract(z, e, got, e->uncomp_size), (long)e->uncomp_size,
+             "built-in extract again");
+    CHECK_U4(g_hook_calls, 0u, "hook removed");
+
+    free(got);
+    nj_zip_close(z);
+    free(img);
+    /* The arena is a bump allocator with no free(); rewinding it here is what
+     * the other arena users do, and the final check in main() proves it. */
+    g_arena_used = 0;
+}
+
 static void test_manifest(void)
 {
     nj_u4 len = 0;
@@ -1194,6 +1312,8 @@ int main(int argc, char **argv)
     test_zip_extract_alloc();
     section("zip malformed archives");
     test_zip_errors();
+    section("port-supplied DEFLATE (nj_zip_set_inflate)");
+    test_port_inflate();
     section("jar manifest parser");
     test_manifest();
 

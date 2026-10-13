@@ -50,6 +50,23 @@ typedef struct nj_zip_alloc {
 nj_zip *nj_zip_open(const void *data, nj_u4 size, const nj_zip_alloc *alloc);
 void    nj_zip_close(nj_zip *z);
 
+/*
+ * Hand the archive a DEFLATE decompressor to use instead of the built-in one.
+ *
+ * `fn` has the shape of nj_port.inflate_raw: it inflates one raw DEFLATE
+ * stream into a caller-sized buffer and returns NJ_ERR_UNSUPPORTED when it
+ * cannot.  The zip directory always states the uncompressed length, so no
+ * size probe is needed and the port never allocates.  Pass NULL to go back to
+ * the built-in decompressor - which is what a build with
+ * -DNJ_ENABLE_INFLATE=0 does not have, so there a compressed entry can only be
+ * read through this hook.
+ */
+void nj_zip_set_inflate(nj_zip *z,
+                        nj_status (*fn)(void *ud, const nj_u1 *in,
+                                        nj_u4 in_len, nj_u1 *out,
+                                        nj_u4 out_len),
+                        void *ud);
+
 int                   nj_zip_count(const nj_zip *z);
 const nj_zip_entry   *nj_zip_entry_at(const nj_zip *z, int index);
 const nj_zip_entry   *nj_zip_find(const nj_zip *z, const char *name);

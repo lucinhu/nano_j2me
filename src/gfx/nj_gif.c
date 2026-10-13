@@ -40,6 +40,14 @@
 
 #include <string.h>
 
+/*
+ * -DNJ_ENABLE_GIF=0: the decoder is not compiled in at all.  The descriptor
+ * stays, because nj_codec.c names it, but with NULL hooks - so it never
+ * matches, and the "unavailable" provider registered there tells the MIDlet
+ * what happened instead of calling its artwork unrecognisable.
+ */
+#if NJ_ENABLE_GIF
+
 /* GIF's own hard limits.  The dictionary cannot exceed 12-bit codes. */
 #define GIF_MAX_CODES   4096
 #define GIF_MAX_CODE_BITS 12
@@ -599,3 +607,28 @@ const nj_codec nj_codec_gif_software = {
     gif_accepts, gif_info, gif_decode,
     NULL, NULL, NULL
 };
+
+#else /* !NJ_ENABLE_GIF */
+
+nj_image *nj_gif_decode(const void *data, nj_u4 size,
+                        void *(*alloc)(void *, nj_size), void *ud,
+                        void  (*dealloc)(void *, void *),
+                        const char **err)
+{
+    (void)data; (void)size; (void)alloc; (void)ud; (void)dealloc;
+    if (err != NULL) {
+        *err = "GIF support not built";
+    }
+    return NULL;
+}
+
+/* A valid descriptor that never matches: accepts() is NULL. */
+const nj_codec nj_codec_gif_software = {
+    "gif-software",
+    { NJ_CODEC_FMT_GIF, NJ_CODEC_CAN_ARGB8888, NJ_CODEC_SCALE_1,
+      0u, 0, 0 },
+    NULL, NULL, NULL,
+    NULL, NULL, NULL
+};
+
+#endif /* NJ_ENABLE_GIF */
