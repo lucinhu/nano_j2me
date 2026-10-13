@@ -101,3 +101,69 @@ With those in place 毁灭战士3_10598 starts and runs - 120 frames, no uncaugh
 exception, `m3g=2` - and `tris=0` is still the reading, so the open question is
 no longer "does the runtime get there" but "which triangle of these meshes
 should have been drawn".
+
+## The array `Loader.load()` returns (2026-10-14)
+
+3D拉力赛-进化汉化版_6366 was reported frozen on its way into a race. It reads
+the loader's result the way JSR 184 invites - `(World) Loader.load(path)[0]` -
+and the loader was handing back `Object3D[nobj + 1]` with slot 0 unused and
+every object in the file behind it. Slot 0 was therefore always null, the
+`checkcast World` on it threw, the race screen's constructor aborted half
+finished and every later `paint()` threw again: 324 NullPointerExceptions in a
+700-frame run.
+
+The specification is explicit - "the root level objects in the file; in other
+words, those objects that are not referenced by any other objects ... guaranteed
+not to contain any null objects" - so the loader now keeps that table (slot
+i + 1 holds object i, which is what a reference resolves against and what
+`World._nj_all` exposes) and returns a second array of the roots only, a World
+first. Which objects are roots needs the same per-file reference reading the
+child linking uses, so that reading moved into `m3g_ref_mode_of()` and both
+callers share it. A reference from an object to itself, and a reference to a
+World, are not marks: two corpus files read their World's trailing pair back as
+"camera 0, background = the World's own number", and nothing in the format can
+hold a World.
+
+Measured on that title's `/res/arc.m3g` with a probe MIDlet: before,
+`len=16 nulls=2 worlds=1 [0]=null`; after, `len=11 nulls=0 worlds=1
+firstWorld=0 [0]=World`. Commit `b37580f`.
+
+## Where that title stops now: a Mesh has no submeshes
+
+The next call is `Mesh.getAppearance(0)`, and the loader does not link a Mesh's
+submeshes (the comment above `m3g_build_objects` has listed that as outstanding
+all along). The symptom is honest and not a freeze:
+
+```
+thrown: java/lang/IndexOutOfBoundsException at
+    javax/microedition/m3g/Mesh.getAppearance(I)… pc=0: no submeshes
+```
+
+Its layout was measured before writing anything, and it did **not** pin down.
+Across the corpus, 975 `.m3g` files were loaded by one probe
+(`/tmp/m3gscan`, assets extracted from the 18 corpus JARs that ship any), which
+decoded 2,906 Meshes. A Mesh looks like this - 4 bytes of userID, the Node
+fields, then what reads like `[vertexBuffer][submeshCount]` followed by 8 bytes
+per submesh:
+
+| offset | contents | evidence |
+|---|---|---|
+| 0x00 | userID | u32, matches `find()` |
+| 0x0C | enable bits, translation, scale, orientation | floats land in sane ranges |
+| 0x35 | three flag bytes | `00 01 01` in the title's four meshes |
+| 0x38 | `FFFFFFFF` | constant in every dump |
+| 0x3E | a reference | 8, 10, 14, 20 in that title - object numbers |
+| 0x42 | submesh count | 1 mostly; 2, 3, 9 seen |
+| 0x46 | 8 bytes per submesh | two references: index buffer, appearance |
+
+Of the 2,024 Meshes whose bytes fit in the dump, 1,723 satisfy
+`len == 0x46 + 8 * count` exactly. The other 301 do not, and their byte at
+0x42 reads as 27, 304, 305 or `0xFFFFFF`, which is a count of nothing - so for
+those the layout is shifted, or they carry fields this reading does not know
+about, and one rule cannot cover both. Guessing the rule that fits 85% means
+loading a submesh list that belongs to another object: a title would draw the
+wrong model instead of none, which is the worse failure. What it needs is the
+treatment `World` got - one layout accepted only when every field of every
+object in the corpus agrees - and then `_nj_subs`, `_nj_ib`, `_nj_vb` and
+`_nj_nsub` filled the way `mesh_set_base()` fills them.
+
