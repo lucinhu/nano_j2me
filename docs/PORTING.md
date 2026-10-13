@@ -220,6 +220,12 @@ The port fills in `display_init`/`display_present`, `input_poll`, `input_push`,
   synth (`MediaPlayer`, which is Sonivox EAS), which is why a phone gets the
   platform's timbres and a game's `getDuration()`/`getMediaTime()`/looping still
   behave - the remaining seven hooks back the same `Player` state machine.
+  Two more hooks are optional and only matter to a synth that can take single
+  events: `midi_short_event` and `midi_long_event`, which is what
+  `MIDIControl.shortMidiEvent()`/`longMidiEvent()` become. A port that leaves
+  them `NULL` is not broken - the runtime takes the song over from the platform
+  player on the first such call, which is what Android does. A port that wants
+  to drop the built-in renderer altogether builds with `-DNJ_ENABLE_MIDI=0`.
 - **`device_property` is a real hook, and its platform answer is now reachable.**
   It is asked for every key the runtime does not answer itself, which is how a
   port publishes its own identity - `"nano_j2me/headless"`, `"nano_j2me/sdl2"`,

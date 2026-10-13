@@ -381,12 +381,32 @@ watches the frames it is handed and reports the box that changes, so a title
 that really uses 128x128 is not left floating in a 240x320 field. Sound is one
 mixer that both synthesises the runtime's tone sequences and plays its PCM,
 wired to AAudio or to OpenSL ES depending on the phone, and MIDI is handed to
-the platform's own synthesiser rather than played by the runtime's. Installed on an API 36
+the platform's own synthesiser rather than played by the runtime's (a game that
+then sends single MIDI events through `MIDIControl` moves the song to the
+runtime's renderer, which costs nothing until it happens). Installed on an API 36
 emulator, on an API 21 emulator (Android 5.0: it starts, lists, plays, and takes
 both key and touch input) and on a Redmi Note 12 Turbo, the library loads, the
 surface is created and a real MIDlet draws through the built-in LCDUI - [screenshot](images/android-maze.png), `maze.jar` at 320x640.
 [images/android-alert.png](images/android-alert.png) is the same port rendering
 an Alert, which is what the size-gated titles do (below).
+
+### What the MIDI renderer costs, and how to stop paying it
+
+The Android library links the runtime's synthesiser because a phone's own synth
+(Sonivox, behind `MediaPlayer`) plays a `.mid` far better than sixteen generated
+timbres do - but the moment a game sends `MIDIControl` events, the song has to
+move to the renderer, so both have to be in the same `.so`. Building with
+`--no-midi` (`-DNJ_ENABLE_MIDI=0`) drops the renderer, the injection API and
+`MIDIControl` together:
+
+| x86_64, API 21 | `.so` | APK |
+| --- | --- | --- |
+| with the MIDI renderer | 1,100,768 | 505,928 |
+| `--no-midi` | 1,082,088 | 497,736 |
+
+The renderer also got ~32% faster in this round (measured on three corpus songs:
+981x -> 1424x realtime for the slowest case at 22050 Hz), which matters on the
+microcontroller ports where it is the only synth there is.
 
 ### The bug that only running found
 

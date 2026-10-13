@@ -249,6 +249,7 @@ the decoder itself by `tests/test_amr.c` (119 assertions).
 | WAV | RIFF/WAVE PCM, 8- and 16-bit, mono and stereo, from a stream or a JAR resource |
 | AMR | AMR-NB (`#!AMR`) speech in all eight modes, 4.75–12.2 kbit/s, decoded by the runtime itself into 8 kHz mono PCM — no host codec, no dependency. Behind `NJ_ENABLE_AMR`, on by default; `=0` gives the file back to `nj_port.audio_decode`, and AMR-WB is still refused by name |
 | MIDI | Standard MIDI Files, type 0 and 1, played by the runtime's own synthesiser: 16 timbres, channel volume (CC7) and expression (CC11), pitch bend, sustain pedal, channel 10 percussion, 22050 Hz mono or stereo. A file that contains a second `MThd` chunk is two files glued together and only the first is played — every other player does the same, and merging them lets the second file's tempo land on tick 0 |
+| `MIDIControl` | all of it: `setChannelVolume`/`getChannelVolume`, `setProgram`, `getProgram` (both spellings), `shortMidiEvent`, `longMidiEvent`, `getBankList`, `getProgramList`, `getProgramName`, `getKeyName`, `isBankQuerySupported`. It is offered for a MIDI `Player` only, and works whether the platform's synth or the runtime's renderer is playing |
 
 **`Controllable.getControl` takes either spelling.** The javadoc asks for
 "either ... the fully-qualified name of the class; or if the package of the
@@ -265,6 +266,23 @@ turned into a null.
 `NJ_ERR_TIMEOUT` and the interpreter suspends that thread, exactly as
 `Thread.sleep()` does. Sleeping the C thread instead would freeze every other
 thread in the VM, which for a game means the picture stops.
+
+**A port's synth plays the file until a game sends it an event.** `MIDIControl`
+cannot be honoured by a synth that only takes whole files - Android's
+`MediaPlayer` is one - so the first `shortMidiEvent`/`longMidiEvent`/
+`setProgram`/`setChannelVolume` call moves the song to the runtime's renderer,
+seeking to the position the platform player had reached; a port whose synth
+*can* take single events (the two optional hooks `midi_short_event` and
+`midi_long_event`) keeps playing instead. The takeover is logged, because the
+timbres change audibly and a listener deserves to know why.
+
+**The renderer can be left out.** `NJ_ENABLE_MIDI=0` (CMake variable, or
+`-DNJ_ENABLE_MIDI=0` for the hand-built Android library) removes the synthesiser
+and the injection API with it: a `.mid` then becomes a silent `Player` unless
+the port's `midi_open` takes it, and `MIDIControl` disappears (there is nothing
+left to send events to). On Android it saves 18,680 bytes of `.so` per ABI
+(x86_64: 1,100,768 -> 1,082,088) and 8,192 bytes of the single-ABI APK
+(505,928 -> 497,736).
 
 **MIDI is rendered, not delegated.** The runtime's synthesiser is deliberately
 small — sixteen generated timbres, one-pole envelopes, no samples — and it is
