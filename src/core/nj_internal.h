@@ -489,6 +489,17 @@ struct nj_vm {
     nj_u1        *screen_pixels;  /* the framebuffer itself, host-allocated */
     nj_u4         midp_flags;     /* NJ_MIDP_* capability bits             */
     nj_u1         repaint_pending;
+    /* Set by nj_midp_paint(), and cleared once per frame by the runner.  A
+     * title that paints synchronously - repaint() followed by
+     * serviceRepaints() - has already drawn the frame, so the runner must not
+     * paint again on top of it: the extra paint arrives after the title has
+     * cleared the state its paint() reads (仙魔飞行棋_417's
+     * mobile/k.e(I)V: f = state; repaint(); serviceRepaints(); f = 0;), and
+     * the title's own "clear the screen, then draw the current state" then
+     * leaves the screen blank.  A title that never paints synchronously keeps
+     * the runner's per-frame paint, which is the only thing that animates it
+     * (炸弹人_10311 never calls repaint() in its loop). */
+    nj_u1         painted_in_frame;
     /* Set while a paint is being delivered.  serviceRepaints() paints
      * synchronously, and a callSerially() runnable drained at the top of a
      * paint may itself ask for a repaint; without this the second one would

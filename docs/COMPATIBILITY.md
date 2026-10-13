@@ -139,6 +139,44 @@ one of these eight moves the whole number.
 
 
 
+### MIDP paints on request
+
+The runtime used to paint the current displayable on every frame, whether the
+application had asked for it or not.  That is not what MIDP specifies, and the
+difference shows in a title that publishes the state its `paint()` reads in a
+field and clears it again right after forcing the paint:
+
+```java
+state = 1;
+canvas.repaint();
+canvas.serviceRepaints();   // paint() runs here, with state == 1
+state = 0;
+```
+
+`paint()` clears the screen and then draws whatever `state` describes, so any
+later paint in the same frame finds `state == 0` and leaves the screen blank.
+`仙魔飞行棋_417`'s `mobile/k.e(I)V` is exactly this (`f = state; repaint();
+serviceRepaints(); f = 0;`), and its board stayed black for a whole run while the
+runtime reported a paint for every frame.
+
+Two things were wrong:
+
+* `Canvas.repaint()` with no arguments was routed through the four-argument
+  form, which reads `x/y/w/h` out of argument slots `repaint()` does not have.
+  It read a width of zero, took that as an empty region and requested nothing,
+  so the matching `serviceRepaints()` had nothing to service.  It now requests
+  the whole canvas.
+* the runner painted again in a frame the application had already painted.  It
+  now skips its own paint for that frame (`vm->painted_in_frame`) and keeps it
+  for every other one: a title that never paints synchronously is still drawn by
+  the runner, which is the only thing that draws it at all (`炸弹人_10311` never
+  calls `repaint()` from its loop).
+
+`tests/repaintdemo/RepaintDemo.java` and `tools/check_repaint.sh` (ctest
+`check_repaint`) hold the idiom: a worker thread runs it for the whole length of
+the run and the check requires the last presented frame to still be the red
+block it drew inside the window.  Reverting either half makes the check fail.
+
 ### A title is allowed to ask how much memory it has
 
 `Runtime.totalMemory()` is a real question with a real answer, and one title

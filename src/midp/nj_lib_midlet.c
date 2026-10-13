@@ -312,15 +312,38 @@ nj_status nj_midp_frame(nj_vm *vm)
                 nj_exception_describe(vm));
         nj_clear_exception(vm);
     }
-    if (nj_midp_paint(vm) == NJ_OK) {
-        vm->frames++;
-        nj_surface *s = nj_midp_screen(vm);
-        if (s && vm->port && vm->port->display_present) {
-            vm->port->display_present(vm->port->ud, 0, 0, s->width, s->height);
+    /*
+     * A title that painted synchronously this frame - repaint() followed by
+     * serviceRepaints() - has already drawn and presented the frame, so do not
+     * paint on top of it.  MIDP paints on request, and the state a title
+     * publishes for its paint() only lives across that request: 仙魔飞行棋_417
+     * keeps its paint state in mobile/k.f and does
+     *
+     *     f = state; repaint(); serviceRepaints(); f = 0;
+     *
+     * so a second, unconditional paint in the same frame finds f back at 0 and
+     * wipes what the title just drew.
+     *
+     * A title that never paints synchronously keeps the per-frame paint: it is
+     * the only thing that draws it at all (炸弹人_10311 never calls repaint()
+     * from its loop).
+     */
+    if (!vm->painted_in_frame) {
+        if (nj_midp_paint(vm) == NJ_OK) {
+            vm->frames++;
+            nj_surface *s = nj_midp_screen(vm);
+            if (s && vm->port && vm->port->display_present) {
+                vm->port->display_present(vm->port->ud, 0, 0, s->width, s->height);
+            }
+            vm->repaint_pending = 0u;
+            vm->frames_presented++;
         }
-        vm->repaint_pending = 0u;
-        vm->frames_presented++;
+    } else {
+        /* The application's own paint is this frame.  Keep the frame clock and
+         * the pacing; the screen already shows what it drew. */
+        vm->frames++;
     }
+    vm->painted_in_frame = 0u;
 
     if (vm->state != NJ_VM_STOPPING) {
         frame_pace(vm, frame_start);

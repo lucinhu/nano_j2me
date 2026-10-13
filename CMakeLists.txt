@@ -346,6 +346,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_clipdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_m3gdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_boxdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_repaintdemo_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -630,6 +631,16 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_boxing.sh
                      ${NJ_FIXTURES}/boxdemo.jar)
+    # MIDP paints on request: repaint() with no arguments must request the
+    # whole canvas, and the runner must not paint again in a frame the
+    # application has already painted.  仙魔飞行棋_417 keeps its paint state in
+    # mobile/k.f and clears it right after serviceRepaints(), so the second
+    # paint found f == 0 and left a black map for the whole run.
+    add_test(NAME check_repaint
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_repaint.sh
+                     ${NJ_FIXTURES}/repaintdemo.jar)
     add_test(NAME check_constant_value
              COMMAND ${CMAKE_COMMAND} -E env
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>

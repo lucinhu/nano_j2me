@@ -3530,7 +3530,39 @@ NJFN(c_repaint)
 
 NJFN(c_repaint_all)
 {
-    return c_repaint(vm, th, args, ret);
+    /*
+     * Canvas.repaint() with no arguments asks for the WHOLE canvas.  It must
+     * not be routed through the four-argument form: that one reads x/y/w/h out
+     * of the native argument slots, and repaint() has no arguments, so it was
+     * reading whatever the caller's frame happened to hold - typically zeros,
+     * and a width or height of zero means "empty region, no repaint is
+     * requested".  The pending request was then never set, so the matching
+     * serviceRepaints() had nothing to service.
+     *
+     * That is not a harmless no-op.  The common MIDP idiom is to publish the
+     * paint state in a field, repaint, force the paint with serviceRepaints()
+     * and clear the field afterwards:
+     *
+     *     f = state; repaint(); serviceRepaints(); f = 0;
+     *
+     * With no repaint pending, serviceRepaints() returned immediately, the
+     * field was cleared, and the runner's own per-frame paint then found the
+     * cleared field and drew nothing: a title that rendered its map from
+     * paint() stayed black for the whole run while the runtime reported a
+     * paint for every frame (仙魔飞行棋_417's mobile/k.e(I)V).
+     */
+    nj_ref self = NJ_THIS(args);
+    nj_ref cur = nj_midp_current(vm);
+
+    NJ_UNUSED(th);
+    NJ_UNUSED(ret);
+    if (cur != self) {
+        /* MIDP silently ignores repaint() on a Displayable that is not shown,
+         * and it must NOT become visible as a side effect. */
+        return NJ_OK;
+    }
+    nj_midp_repaint(vm);
+    return NJ_OK;
 }
 
 NJFN(c_serviceRepaints)
@@ -4793,16 +4825,20 @@ int nj_midp_pointer(nj_vm *vm, int x, int y, int kind)
 /* ================================================================== */
 nj_status nj_midp_paint(nj_vm *vm)
 {
+    if (!vm) {
+        return NJ_ERR;
+    }
     vm->paints++;
+    /* Remember that this frame has been painted: the runner paints on top of
+     * whatever the application did only when the application did not paint
+     * itself (see the frame hook in nj_lib_midlet.c). */
+    vm->painted_in_frame = 1u;
     nj_ref d;
     nj_surface *scr;
     nj_ref buf = NULL;
     nj_surface buf_surf;
     int w, h;
 
-    if (!vm) {
-        return NJ_ERR;
-    }
     /*
      * MIDP's callSerially() contract is "run before the next paint", so the
      * queue is drained here, at the top of the frame.
