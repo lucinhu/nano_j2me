@@ -128,7 +128,15 @@ nj_class *nj_class_lookup(nj_vm *vm, const char *name);
 nj_ref    nj_class_object(nj_vm *vm, const char *name);   /* java.lang.Class */
 
 /* Resolve a field by name.  `desc` may be NULL to match by name only.
- * Returns NULL when the field does not exist (no exception is raised). */
+ * Returns NULL when the field does not exist (no exception is raised).
+ *
+ * `cls`, `name` and `desc` must KEEP THEIR ADDRESS and their text for as long
+ * as the VM lives: the lookup remembers a hit by comparing the three POINTERS
+ * (a graphics title resolves 1.4 million fields in 400 frames, and the call
+ * sites spell these as literals).  A caller that hands in a reused buffer - a
+ * loop parsing names into the same array - gets the FIRST field it looked up
+ * back for every later name, because the address matches and the text is never
+ * re-read.  Names from a class file, or any string literal, are fine. */
 nj_field *nj_field_lookup(nj_vm *vm, const char *cls, const char *name,
                           const char *desc, int is_static);
 

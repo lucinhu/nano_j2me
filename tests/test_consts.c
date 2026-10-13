@@ -27,6 +27,33 @@
 static int checks;
 static int fails;
 
+/*
+ * nj_field_lookup() caches its hits by POINTER - it is called 1.4 million times
+ * during 400 frames of a graphics title, and the call sites spell the names as
+ * literals - so a name must live at the same address with the same text on
+ * every call.  This test parses them out of a reused line buffer, which made
+ * every constant after the first read back as the first one: the cache slot
+ * matched on the address of the buffer, whose TEXT had changed underneath it.
+ * Keep one stable copy per name instead.
+ */
+static char *stable(const char *s)
+{
+    static char *keep[4096];
+    static unsigned n;
+    char *p;
+
+    if (n >= 4096u) {
+        return (char *)s;
+    }
+    p = (char *)malloc(strlen(s) + 1u);
+    if (!p) {
+        return (char *)s;
+    }
+    strcpy(p, s);
+    keep[n++] = p;
+    return p;
+}
+
 static void ok(int cond, const char *what)
 {
     checks++;
@@ -93,6 +120,9 @@ int main(int argc, char **argv)
         for (dot = cls; *dot; dot++) {
             if (*dot == '.') { *dot = '/'; }
         }
+
+        cls = stable(cls);
+        name = stable(name);
 
         if (is_text) {
             /* HttpConnection.GET/POST/HEAD: javac inlines the stub's text at
