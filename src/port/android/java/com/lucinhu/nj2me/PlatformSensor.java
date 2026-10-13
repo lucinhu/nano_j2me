@@ -147,6 +147,65 @@ final class PlatformSensor {
                     new String[]{"proximity"}),
     };
 
+    /*
+     * ---------------------------------------------------------------------
+     * The game's sensor setting
+     * ---------------------------------------------------------------------
+     *
+     * A phone without an accelerometer and a game that steers by tilting want
+     * opposite things from the same API, and a player can ask for either:
+     *
+     *   mode 0   the hardware, exactly as before
+     *   mode 1   one simulated accelerometer, lying flat on the table
+     *   mode 2   the same, leaning left
+     *   mode 3   the same, leaning right
+     *   mode 4   no sensors at all: a game that only works with one is a game
+     *            that must be able to say so
+     *
+     * The simulated sensor answers under its own url, so a MIDlet that writes
+     * the name down (or reads it from list()) opens it the same way it opens
+     * the real one.  Its handle is a constant: there is no listener to
+     * register, no sample to wait for, and closing it twice is closing it once.
+     */
+    private static int mode;
+    private static final long SIM_HANDLE = 1L;
+    private static final String SIM_URL =
+            "sensor:acceleration;context=user;model=simulated";
+    private static final String[] AXES = { "axis_x", "axis_y", "axis_z" };
+    /** Gravity, in m/s^2, for the three tilts a player can pick. */
+    private static final double[][] SIM_TILT = {
+            { 0.0, 0.0, 9.81 },
+            { -7.0, 0.0, 7.0 },
+            { 7.0, 0.0, 7.0 },
+    };
+
+    /** The player's per-game setting; the port calls this before the VM runs. */
+    static synchronized void setMode(int m) {
+        mode = (m >= 0 && m <= 4) ? m : 0;
+    }
+
+    static synchronized int mode() {
+        return mode;
+    }
+
+    private static boolean simulated() {
+        return mode >= 1 && mode <= 3;
+    }
+
+    /** The simulated accelerometer, described exactly like a real one. */
+    private static String simLine() {
+        StringBuilder sb = new StringBuilder(SIM_URL);
+        sb.append('\t').append("acceleration");
+        sb.append('\t').append("user");
+        sb.append('\t').append("simulated");
+        sb.append('\t').append("10");
+        for (int i = 0; i < AXES.length; i++) {
+            sb.append(i == 0 ? '\t' : ',');
+            sb.append(AXES[i]).append(":m/s^2:-19.6133:19.6133:0.001");
+        }
+        return sb.toString();
+    }
+
     private PlatformSensor() {
     }
 
@@ -191,6 +250,13 @@ final class PlatformSensor {
      * is the answer a phone without them should get.
      */
     static String[] list() {
+        if (mode == 4) {
+            logOnce("list-sim-off", "this game's settings turn the sensors off");
+            return new String[0];
+        }
+        if (simulated()) {
+            return new String[] { simLine() };
+        }
         if (appContext == null || manager == null) {
             logOnce("list-none", "no sensors are available: init() has not run,"
                     + " or this device has no sensor service");
@@ -237,6 +303,22 @@ final class PlatformSensor {
      * no SensorConnector for it.
      */
     static synchronized long open(String url, int periodMs) {
+        if (mode == 4) {
+            logOnce("open-sim-off", "this game's settings turn the sensors off");
+            return 0L;
+        }
+        if (simulated()) {
+            /* One sensor on offer, so a url for anything else is the same
+             * answer as a phone without that part: no SensorConnector. */
+            if (!"acceleration".equals(quantityOf(url))) {
+                logOnce("open-sim-other", "the simulated sensor is an"
+                        + " accelerometer; the url asks for something else");
+                return 0L;
+            }
+            Log.i(TAG, "sensor: opening the simulated accelerometer (tilt "
+                    + mode + ")");
+            return SIM_HANDLE;
+        }
         if (appContext == null || manager == null) {
             logOnce("open-none", "a sensor cannot be opened before init(), or"
                     + " this device has no sensor service");
@@ -317,6 +399,11 @@ final class PlatformSensor {
      * sample over the one it came from.
      */
     static synchronized double[] latest(long handle) {
+        if (handle == SIM_HANDLE && simulated()) {
+            double[] tilt = SIM_TILT[mode - 1];
+            return new double[] { tilt[0], tilt[1], tilt[2],
+                                  System.currentTimeMillis() };
+        }
         Entry entry = OPEN.get(Long.valueOf(handle));
         if (entry == null) {
             return null;
@@ -342,6 +429,9 @@ final class PlatformSensor {
      * was never opened, or was already closed, does nothing.
      */
     static synchronized void close(long handle) {
+        if (handle == SIM_HANDLE) {
+            return;
+        }
         Entry entry = OPEN.remove(Long.valueOf(handle));
         if (entry == null || manager == null) {
             return;
@@ -359,6 +449,12 @@ final class PlatformSensor {
      * and answered by list() itself so that the two can never disagree.
      */
     static synchronized int count() {
+        if (mode == 4) {
+            return 0;
+        }
+        if (simulated()) {
+            return 1;
+        }
         return list().length;
     }
 

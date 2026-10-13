@@ -126,6 +126,22 @@ final class PlatformHttp {
     }
 
     /* Called once from the Activity, before the VM can ask for a connection. */
+    /** 1 = the game may use the network, 0 = the player's setting says no. */
+    private static int allowed = 1;
+
+    /**
+     * The player's per-game network setting; the port calls this before the
+     * VM starts, and every exchange after that obeys it.
+     *
+     * <p>A refused request answers 0 like any other failure, which the C side
+     * turns into the IOException a MIDlet expects from a connection that could
+     * not be made.  Refusing here rather than at the socket keeps a game that
+     * was told "no network" from waiting out a connect timeout first.
+     */
+    static synchronized void setAllowed(boolean on) {
+        allowed = on ? 1 : 0;
+    }
+
     static synchronized void init(Context context) {
         try {
             if (context != null) {
@@ -149,6 +165,11 @@ final class PlatformHttp {
      */
     static synchronized long request(String url, String method, String headers,
                                      byte[] body) {
+        if (allowed == 0) {
+            Log.i(TAG, "http: " + url + " refused - this game's settings say"
+                    + " no network");
+            return 0L;
+        }
         if (!ready()) {
             return 0L;
         }

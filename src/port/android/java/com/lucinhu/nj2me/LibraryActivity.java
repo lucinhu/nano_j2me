@@ -579,6 +579,19 @@ public class LibraryActivity extends Activity {
                         startEditor(e);
                     }
                 }));
+        box.addView(rowAction(Md3.IC_IMPORT, "联网",
+                e.net != 0 ? "允许（默认）" : "已禁止", new Runnable() {
+                    @Override
+                    public void run() {
+                        netDialog(e);
+                    }
+                }));
+        box.addView(rowAction(Md3.IC_INFO, "传感器", sensorHint(e.sensor), new Runnable() {
+                    @Override
+                    public void run() {
+                        sensorDialog(e);
+                    }
+                }));
         box.addView(Md3.divider(this));
         box.addView(Md3.dangerRow(this, Md3.IC_DELETE, "删除", new View.OnClickListener() {
             @Override
@@ -592,6 +605,77 @@ public class LibraryActivity extends Activity {
         showBox(box, "关闭");
     }
 
+
+    /** The sensor setting in one line: what the game will find. */
+    private static String sensorHint(int mode) {
+        switch (mode) {
+            case 1:
+                return "模拟：平放";
+            case 2:
+                return "模拟：左倾";
+            case 3:
+                return "模拟：右倾";
+            case 4:
+                return "关闭（游戏看不到传感器）";
+            default:
+                return "用手机的传感器";
+        }
+    }
+
+    /**
+     * The per-game network switch.
+     *
+     * <p>Some MIDlets open a connection in startApp() and wait for it; on a
+     * phone with no data that is a splash screen that never ends.  A player who
+     * knows the game is single-player can say so here, and every connection it
+     * opens then fails at once, which is the answer the game is already written
+     * to handle.
+     */
+    private void netDialog(final JarStore.Entry e) {
+        String[] labels = { "允许联网（默认）", "禁止联网" };
+        String[] hints = { "游戏可以像在手机上一样上网",
+                           "连接直接失败，游戏走它自己的断网提示" };
+        Md3.chooser(this, Md3.IC_IMPORT, "联网", e.title, labels, hints,
+                e.net != 0 ? 0 : 1, new Md3.Choice() {
+                    @Override
+                    public void picked(int which, AlertDialog d) {
+                        e.net = (which == 0) ? 1 : 0;
+                        JarStore.write(LibraryActivity.this, e);
+                        toast(e.net != 0 ? "已允许联网（下次启动生效）"
+                                         : "已禁止联网（下次启动生效）");
+                    }
+                });
+    }
+
+    /**
+     * The per-game sensor switch: the hardware, one simulated accelerometer, or
+     * nothing at all.
+     *
+     * <p>JSR 256 games fall into two groups and neither is served by the plain
+     * hardware answer: one needs an accelerometer that a phone without one does
+     * not have, the other steers by tilt and needs one that holds still while
+     * the player uses the keys.
+     */
+    private void sensorDialog(final JarStore.Entry e) {
+        String[] labels = { "用手机的传感器（默认）", "模拟：平放", "模拟：左倾",
+                            "模拟：右倾", "关闭传感器" };
+        String[] hints = {
+                "有就真的读，没有就没有",
+                "提供一个加速度计，一直朝上",
+                "提供一个加速度计，向左倒",
+                "提供一个加速度计，向右倒",
+                "游戏看不到任何传感器" };
+        int checked = (e.sensor >= 0 && e.sensor <= 4) ? e.sensor : 0;
+        Md3.chooser(this, Md3.IC_INFO, "传感器", e.title, labels, hints, checked,
+                new Md3.Choice() {
+                    @Override
+                    public void picked(int which, AlertDialog d) {
+                        e.sensor = which;
+                        JarStore.write(LibraryActivity.this, e);
+                        toast("传感器：" + sensorHint(which) + "（下次启动生效）");
+                    }
+                });
+    }
 
     private void screenDialog(final JarStore.Entry e) {
         final int[] notes = { 0, 0, 1, 1, 2, 3, 3, 4, 4 };

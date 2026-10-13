@@ -80,6 +80,16 @@ final class PlatformSocket {
     }
 
     /** Kept for symmetry with the other bridges: nothing to hold here yet. */
+    /** 1 = the game may use the network, 0 = the player's setting says no. */
+    private static int allowed = 1;
+
+    /** The player's per-game network setting; see PlatformHttp.setAllowed(). */
+    static synchronized void setAllowed(boolean on) {
+        allowed = on ? 1 : 0;
+        Log.i(TAG, "socket: network " + (on ? "allowed" : "refused")
+                + " by this game's settings");
+    }
+
     static void init(Context context) {
         if (context != null) {
             /* A socket does not need a Context; the call exists so that the
@@ -93,6 +103,11 @@ final class PlatformSocket {
      * "socket://host:port" URL exactly as the MIDlet wrote it.
      */
     static synchronized long connect(String url, int timeoutMs) {
+        if (allowed == 0) {
+            Log.i(TAG, "socket: " + url + " refused - this game's settings say"
+                    + " no network");
+            return 0L;
+        }
         String host = null;
         int port = -1;
         try {

@@ -241,6 +241,16 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         if (se != null && se.speed > 0) {
             speed = se.speed;
         }
+        /*
+         * The player's two per-game switches.  They are statics on the
+         * platform bridges because that is where the MIDlet's connections end
+         * up, and they are set here - before the VM exists - so no game can
+         * get a connection or a sensor the settings deny.
+         */
+        boolean net = (se == null) || se.net != 0;
+        PlatformHttp.setAllowed(net);
+        PlatformSocket.setAllowed(net);
+        PlatformSensor.setMode(se == null ? 0 : se.sensor);
 
         FrameLayout root = new FrameLayout(this);
         surfaceView = new SurfaceView(this);

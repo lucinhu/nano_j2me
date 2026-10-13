@@ -56,6 +56,26 @@ final class JarStore {
         int heapMB = DEF_HEAP_MB;
         /** Game speed in percent of real time: 100 is real time. */
         int speed = 100;
+        /**
+         * 1 = this game may use the network, 0 = the player turned it off.
+         *
+         * <p>A denied connection is refused with an ordinary failure, the way
+         * a phone with no signal fails: a MIDlet that cannot reach the network
+         * is a game that shows its "no connection" screen, not a game that
+         * hangs or crashes.
+         */
+        int net = 1;
+        /**
+         * Which sensors the game gets: 0 = the phone's own, 1 = a simulated
+         * accelerometer lying flat, 2 = leaning left, 3 = leaning right,
+         * 4 = none at all.
+         *
+         * <p>Worth a setting because the two cases that break a JSR 256 game
+         * are a phone that has no accelerometer and a game that reads the tilt
+         * to steer: the first needs one invented, the second needs one that
+         * holds still.
+         */
+        int sensor = 0;
         long size;
         long touched;
 
@@ -192,6 +212,10 @@ final class JarStore {
                         e.heapMB = parseInt(v, DEF_HEAP_MB);
                     } else if (k.equals("speed")) {
                         e.speed = parseInt(v, 100);
+                    } else if (k.equals("net")) {
+                        e.net = parseFlag(v, 1);
+                    } else if (k.equals("sensor")) {
+                        e.sensor = parseInt(v, 0);
                     } else if (k.equals("view")) {
                         e.viewMode = parseInt(v, 0);
                     } else if (k.equals("zoom")) {
@@ -231,6 +255,7 @@ final class JarStore {
                         + "w=" + e.w + "\nh=" + e.h
                         + "\nheap=" + e.heapMB + "\nview=" + e.viewMode
                         + "\nspeed=" + e.speed
+                        + "\nnet=" + e.net + "\nsensor=" + e.sensor
                         + "\nzoom=" + e.zoom + "\npanx=" + e.panX
                         + "\npany=" + e.panY + "\ndetw=" + e.detW
                         + "\ndeth=" + e.detH + "\n";
@@ -469,6 +494,22 @@ final class JarStore {
      * that uses this: a screen of 0x0 or a heap of 0 MB is a broken sidecar, and
      * the view mode's default is 0 anyway.
      */
+    /**
+     * A 0/1 switch, where zero is a value and not a missing one.
+     *
+     * <p>{@link #parseInt} answers the default for anything that is not
+     * positive, which is right for a canvas size and wrong for "net=0": the
+     * one setting whose whole point is being zero is the one that must not be
+     * read as absent.
+     */
+    private static int parseFlag(String v, int def) {
+        try {
+            return Integer.parseInt(v.trim()) == 0 ? 0 : 1;
+        } catch (NumberFormatException e) {
+            return def;
+        }
+    }
+
     private static int parseInt(String v, int def) {
         try {
             int n = Integer.parseInt(v.trim());

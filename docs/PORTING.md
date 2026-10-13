@@ -283,7 +283,7 @@ parks that thread in `idle()` instead of letting it spin against a dead surface.
 
 ### The shell around the game
 
-Eleven things in that shell are worth copying, because each one is a rule a plain
+Twelve things in that shell are worth copying, because each one is a rule a plain
 "put a SurfaceView in an Activity" port gets wrong:
 
 - **The name comes from the jar, not from the file.** `JarName.of(File)` reads
@@ -444,6 +444,18 @@ Eleven things in that shell are worth copying, because each one is a rule a plai
   at all - and the stroke and glyph inside that scaled canvas must be given in
   grid units too, or the scale multiplies them and a 1.7-unit ring fills its own
   hole.
+
+- **A switch has to be enforced where the MIDlet's connection is made.** The
+  library's per-game card owns two settings, and neither is a permission: the
+  network switch is enforced inside `PlatformHttp.request` and
+  `PlatformSocket.connect` (an immediate `0`, plus a line in the log naming the
+  setting), and the sensor switch is enforced in `PlatformSensor`, where
+  "simulate" hands the MIDlet a synthetic `sensor:` URL instead of opening a
+  real one and "off" makes `open()` fail and `count()` answer zero. They are
+  applied by `GameActivity.onCreate` before the VM exists, so no MIDlet can
+  reach a device the settings deny - and the sidecar value is read with
+  `parseFlag()`, not `parseInt()`, because `parseInt()` treats anything that is
+  not positive as "missing", which is exactly wrong for `net=0`.
 
 ## Worked example: a bare-metal board
 
