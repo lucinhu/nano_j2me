@@ -1028,6 +1028,64 @@ public class M3GDemo extends MIDlet {
                 }
             }
         });
+
+        run("linear filtering blends between texels", new Runnable() {
+            public void run() {
+                /* A two-by-two texture: red on the left, blue on the right.
+                 * Along the scan line the texture coordinate crosses from one
+                 * texel to the other, and that crossing is the one place where
+                 * the two filters must disagree - NEAREST can only ever answer
+                 * one of the two colours, LINEAR answers the colours between
+                 * them.  The check counts the in-between pixels rather than
+                 * naming one, because where exactly the crossing lands is the
+                 * rasteriser's business. */
+                Image2D image = new Image2D(Image2D.RGBA, 2, 2, new byte[] {
+                    (byte) 0xFF, 0, 0, (byte) 0xFF, 0, 0, (byte) 0xFF, (byte) 0xFF,
+                    (byte) 0xFF, 0, 0, (byte) 0xFF, 0, 0, (byte) 0xFF, (byte) 0xFF });
+
+                int[] row = new int[32];
+                int[] blends = new int[2];
+                int i, x;
+                for (i = 0; i < 2; i++) {
+                    Image img = Image.createImage(32, 32);
+                    Graphics g = img.getGraphics();
+                    g.setColor(0x000000);
+                    g.fillRect(0, 0, 32, 32);
+
+                    Appearance app = new Appearance();
+                    Material mat = new Material();
+                    mat.setColor(Material.DIFFUSE, 0x00FFFFFF);
+                    app.setMaterial(mat);
+                    Texture2D tex = new Texture2D(image);
+                    tex.setBlending(Texture2D.FUNC_REPLACE);
+                    if (i == 1) {
+                        tex.setFiltering(Texture2D.FILTER_LINEAR,
+                                         Texture2D.FILTER_LINEAR);
+                    }
+                    app.setTexture(0, tex);
+
+                    Graphics3D g3d = Graphics3D.getInstance();
+                    g3d.bindTarget(g);
+                    g3d.setViewport(0, 0, 32, 32);
+                    g3d.setCamera(new Camera(), new Transform());
+                    g3d.render(tex_tri(), null, app, new Transform(), -1);
+                    g3d.releaseTarget();
+
+                    img.getRGB(row, 0, 32, 0, 14, 32, 1);
+                    for (x = 0; x < 32; x++) {
+                        int r = (row[x] >> 16) & 0xFF, b = row[x] & 0xFF;
+                        if (r > 0 && r < 0xFF && b > 0 && b < 0xFF) {
+                            blends[i]++;
+                        }
+                    }
+                }
+
+                check("NEAREST answers one texel colour or the other, never both",
+                      blends[0] == 0);
+                check("LINEAR answers the colours between the two texels",
+                      blends[1] > 0);
+            }
+        });
     }
 
     /* An Appearance whose material is one opaque colour. */

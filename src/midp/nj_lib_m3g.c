@@ -4495,6 +4495,24 @@ nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
                 nj_rput(vm, o, m3g_fof(vm, NJ_C_TEX2D, "_nj_img",
                                        "L" NJ_C_IMAGE2D ";"), img);
             }
+            /*
+             * The sampling settings travel with the texture, not with the
+             * image: a title that authors FILTER_LINEAR in its file gets the
+             * sampler asked for it, and one that leaves them out keeps the
+             * JSR defaults the constructor already wrote (NEAREST, REPEAT).
+             */
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_TEX2D, "_nj_blend", "I"),
+                    (nj_s4)(f->b & 0xFFu));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_TEX2D, "_nj_wrapS", "I"),
+                    (nj_s4)((f->b >> 8) & 0xFFu));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_TEX2D, "_nj_wrapT", "I"),
+                    (nj_s4)((f->b >> 16) & 0xFFu));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_TEX2D, "_nj_filtLevel", "I"),
+                    (nj_s4)((f->b >> 24) & 0xFFu));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_TEX2D, "_nj_filtImage", "I"),
+                    (nj_s4)f->c);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_TEX2D, "_nj_blendcolor", "I"),
+                    (nj_s4)f->a);
             break;
         }
         case NJ_M3G_T_SPRITE: {
@@ -7863,6 +7881,7 @@ typedef struct {
     int cull;                  /* 160 CULL_BACK, 161 CULL_FRONT, 162 none */
     int winding;               /* 168 CCW, 169 CW */
     int texfunc;               /* 224 ADD .. 228 REPLACE; 227 MODULATE */
+    int filt_image;            /* 128 NEAREST (the default) / 129 LINEAR */
     int blend;                 /* CompositingMode: 64 ALPHA .. 68 REPLACE */
     int athresh;               /* the alpha test, 0..255 */
     int awrite;                /* alphaWriteEnable */
@@ -7957,6 +7976,16 @@ static nj_u4 sw_blend(nj_u4 src, nj_u4 dst, int mode, int awrite)
     return (oa << 24) | (r << 16) | (g << 8) | b;
 }
 
+/* One texel as 0xAARRGGBB, for the filter below. */
+static nj_u4 sw_texel_pack(const m3g_sw *sw, int u, int v)
+{
+    const nj_u1 *p = sw->tex + ((nj_size)v * (nj_size)sw->tex_w + (nj_size)u) *
+                                (nj_size)sw->tex_bpp;
+    nj_u4 a = (sw->tex_bpp == 4) ? (nj_u4)p[3] : 255u;
+
+    return (a << 24) | ((nj_u4)p[0] << 16) | ((nj_u4)p[1] << 8) | (nj_u4)p[2];
+}
+
 static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
 {
     float fs, ft;
@@ -7982,17 +8011,61 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
         if (ft < 0.0f) { ft += 1.0f; }
         if (ft >= 1.0f) { ft = 0.999f; }
     }
-    u = (int)(fs * (float)(sw->tex_w - 1) + 0.5f);
-    v = (int)(ft * (float)(sw->tex_h - 1) + 0.5f);
-    if (u < 0) { u = 0; }
-    if (u >= sw->tex_w) { u = sw->tex_w - 1; }
-    if (v < 0) { v = 0; }
-    if (v >= sw->tex_h) { v = sw->tex_h - 1; }
-    p = sw->tex + ((nj_size)v * (nj_size)sw->tex_w + (nj_size)u) *
-                  (nj_size)sw->tex_bpp;
-    tr = p[0]; tg = p[1]; tb = p[2];
-    if (sw->tex_bpp == 4) {
-        ta = p[3];               /* 100 rgB: four bytes per texel */
+    if ((sw->filt_image == 209 || sw->filt_image == 129) &&
+        sw->tex_w > 1 && sw->tex_h > 1) {
+        /*
+         * FILTER_LINEAR: the four texels around the sample point, weighted by
+         * the distance to each.  The weights are 8-bit and sum to 65536, so
+         * the blend is integer and the result is exact at the texel centres -
+         * which is why a magnified texture stops showing the blocky steps the
+         * nearest filter leaves, and why a minified one stops sparkling.
+         */
+        float x = fs * (float)(sw->tex_w - 1);
+        float y = ft * (float)(sw->tex_h - 1);
+        int u0 = (int)x, v0 = (int)y, u1, v1, fu, fv;
+        nj_u4 c00, c10, c01, c11, w00, w10, w01, w11;
+
+        if (u0 < 0) { u0 = 0; }
+        if (u0 >= sw->tex_w) { u0 = sw->tex_w - 1; }
+        if (v0 < 0) { v0 = 0; }
+        if (v0 >= sw->tex_h) { v0 = sw->tex_h - 1; }
+        fu = (int)((x - (float)u0) * 256.0f + 0.5f);
+        fv = (int)((y - (float)v0) * 256.0f + 0.5f);
+        if (fu < 0) { fu = 0; }
+        if (fu > 256) { fu = 256; }
+        if (fv < 0) { fv = 0; }
+        if (fv > 256) { fv = 256; }
+        u1 = (u0 + 1 < sw->tex_w) ? u0 + 1 : u0;
+        v1 = (v0 + 1 < sw->tex_h) ? v0 + 1 : v0;
+        c00 = sw_texel_pack(sw, u0, v0);
+        c10 = sw_texel_pack(sw, u1, v0);
+        c01 = sw_texel_pack(sw, u0, v1);
+        c11 = sw_texel_pack(sw, u1, v1);
+        w00 = (nj_u4)(256 - fu) * (nj_u4)(256 - fv);
+        w10 = (nj_u4)fu * (nj_u4)(256 - fv);
+        w01 = (nj_u4)(256 - fu) * (nj_u4)fv;
+        w11 = (nj_u4)fu * (nj_u4)fv;
+        tr = (nj_u1)(((((c00 >> 16) & 0xFFu) * w00 + ((c10 >> 16) & 0xFFu) * w10 +
+                       ((c01 >> 16) & 0xFFu) * w01 + ((c11 >> 16) & 0xFFu) * w11) >> 16) & 0xFFu);
+        tg = (nj_u1)(((((c00 >> 8) & 0xFFu) * w00 + ((c10 >> 8) & 0xFFu) * w10 +
+                       ((c01 >> 8) & 0xFFu) * w01 + ((c11 >> 8) & 0xFFu) * w11) >> 16) & 0xFFu);
+        tb = (nj_u1)((((c00 & 0xFFu) * w00 + (c10 & 0xFFu) * w10 +
+                       (c01 & 0xFFu) * w01 + (c11 & 0xFFu) * w11) >> 16) & 0xFFu);
+        ta = (nj_u1)(((((c00 >> 24) & 0xFFu) * w00 + ((c10 >> 24) & 0xFFu) * w10 +
+                       ((c01 >> 24) & 0xFFu) * w01 + ((c11 >> 24) & 0xFFu) * w11) >> 16) & 0xFFu);
+    } else {
+        u = (int)(fs * (float)(sw->tex_w - 1) + 0.5f);
+        v = (int)(ft * (float)(sw->tex_h - 1) + 0.5f);
+        if (u < 0) { u = 0; }
+        if (u >= sw->tex_w) { u = sw->tex_w - 1; }
+        if (v < 0) { v = 0; }
+        if (v >= sw->tex_h) { v = sw->tex_h - 1; }
+        p = sw->tex + ((nj_size)v * (nj_size)sw->tex_w + (nj_size)u) *
+                      (nj_size)sw->tex_bpp;
+        tr = p[0]; tg = p[1]; tb = p[2];
+        if (sw->tex_bpp == 4) {
+            ta = p[3];           /* 100 rgba: four bytes per texel */
+        }
     }
     /* FUNC_REPLACE and FUNC_DECAL take the texture's own colour; FUNC_MODULATE
        (the JSR default) tints it with the material colour, which is what the
@@ -9086,6 +9159,8 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                                m3g_fof(vm, NJ_C_TEX2D, "_nj_wrapT", "I"));
                 r.sw.texfunc = (int)nj_iget(vm, tex,
                                 m3g_fof(vm, NJ_C_TEX2D, "_nj_blend", "I"));
+                r.sw.filt_image = (int)nj_iget(vm, tex,
+                                  m3g_fof(vm, NJ_C_TEX2D, "_nj_filtImage", "I"));
                 if (im2) {
                     nj_ref px = nj_rget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
                                                          "_nj_pixels", "[B"));

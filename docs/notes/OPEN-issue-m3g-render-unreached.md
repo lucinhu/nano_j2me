@@ -361,10 +361,12 @@ asphalt pair, which is why the track is dark rather than white.
 
 What the picture still does not have, in the order it would show:
 
-  - **no mipmaps and no bilinear filtering.**  A receding textured plane
-    sampled nearest is exactly the noise the track shows.  `Texture2D`'s
-    `imageFilter`/`levelFilter` are not read into the class at all, so this
-    needs a field before it needs a sampler.
+  - **no mipmaps.**  `imageFilter` is read and bilinear filtering is
+    implemented (see below); a level chain is not, because the M3G file format
+    gives `Texture2D` one `Image2D` and nothing to select a level from, so
+    `levelFilter` degenerates to the base image.  A receding textured plane
+    therefore still aliases: bilinear helps magnification and the near field,
+    and only a level chain would help the far field.
   - **one texture unit.**  `FUNC_ADD` and `FUNC_BLEND` need a second.
   - **per-vertex, not per-fragment, lighting** - visible only where a light
     sits close to a large triangle.
@@ -372,6 +374,30 @@ What the picture still does not have, in the order it would show:
     purpose, and the four corpus titles whose own code throws
     (`反恐精英2正式版_5836`, `炸弹人_10311`, `战争艺术2之全球联盟中文版_1918`,
     plus `1945空战英雄_6105`'s Nokia-only check) are unrelated to this path.
+
+## The sampling settings, and the two numbers that mean the same thing
+
+`Texture2D` carries its sampling settings in the file and in the class, and
+until this round only the class half existed: `setFiltering()`/`setWrapping()`
+wrote `_nj_filtLevel`/`_nj_filtImage`/`_nj_wrapS`/`_nj_wrapT` and the sampler
+read them, but a `.m3g` file's own values were decoded and then dropped.  The
+link step now writes all six (`blending`, `wrappingS`, `wrappingT`,
+`levelFilter`, `imageFilter`, `blendColor`), and `sw_texel()` implements
+bilinear filtering for `imageFilter == LINEAR`: the four texels around the
+sample point, weighted 8-bit by distance, so the weights sum to 65536 and the
+blend is exact at the texel centres.
+
+One trap is worth recording.  This runtime publishes
+`Texture2D.FILTER_LINEAR = 209` and `FILTER_NEAREST = 210`, while the M3G file
+format's own `imageFilter` value for linear is 129 (the JSR 184 javadoc's
+number).  A fixture compiled against the runtime's constants therefore calls
+`setFiltering(209, 209)` while a file authored elsewhere carries 129, and a
+sampler that tests for one of them silently ignores the other.  The sampler
+accepts both, and `tools/m3gdemo/M3GDemo.java` pins the behaviour: a two-by-two
+red/blue texture, rendered once with each filter, and the check counts the
+in-between pixels - NEAREST must produce none, LINEAR must produce some.  The
+check is deliberately a count over a scan line rather than one named pixel,
+because where the texel crossing lands on screen is the rasteriser's business.
 
 Corpus regression over the 395 titles at 176x208: **390 passed, 5 failed**,
 against the 388/7 the docs recorded before this work; `都市摩天楼_6192`, which
