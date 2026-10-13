@@ -272,9 +272,18 @@ read that times out is not an end. With no hooks the URL is refused by name
 (`this build has no socket support; the port must supply it`), which is what
 the desktop build does and what `tools/check_socket.sh` asserts.
 
-Datagrams, server sockets, OBEX, the push registry and JSR 82 Bluetooth are
-**not** implemented: `Connector.open` raises `ConnectionNotFoundException`
-naming the scheme.
+Datagrams, server sockets, OBEX and the push registry are **not**
+implemented: `Connector.open` raises `ConnectionNotFoundException` naming the
+scheme.  JSR 82 Bluetooth is implemented for discovery, as described above; the
+part that is missing there is RFCOMM/L2CAP connections on a port that has not
+written the hooks, and L2CAP is a byte stream rather than a datagram service
+(`L2CAPConnection.receive()` reads, it does not wait for a packet boundary).
+
+Bluetooth Low Energy has **no** Java ME standard API at all: JSR 82 predates it
+by a decade, and the vendor extensions that exist (`com.nokia.mid.bt.*` and
+friends) are not in any collected title.  A port that wants BLE would add it as
+its own extension beside `javax.bluetooth`, the same way the camera and the
+accelerometer arrived in this runtime: classes here, hardware there.
 
 ### javax.microedition.lcdui
 
