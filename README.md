@@ -1,5 +1,7 @@
 # nano_j2me
 
+**English** | [简体中文](README.zh-CN.md)
+
 A J2ME (CLDC 1.1 / MIDP 2.0) runtime written in plain C99, built to be embedded.
 
 It runs MIDlet suites — the `.jar` games written for feature phones — on
