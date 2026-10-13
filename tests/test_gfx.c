@@ -990,6 +990,42 @@ static void test_images(tctx *t)
     PX(t, &ts, 1, 0, C_WHITE, "ROP_PAINT skips transparent pixels");
     PX(t, &ts, 0, 0, buf[0], "ROP_PAINT writes opaque pixels");
 
+    /* An ARGB8888 image onto a 16-bit surface has its own copy loop - 浴火银河2
+     * 完整版_7689 paints a screenful of them every frame - so hold it to the
+     * same rule as the general loop: an opaque pixel replaces, a translucent
+     * one blends, a transparent one is left alone, and SET copies all three. */
+    {
+        nj_u4 abuf[4];
+        nj_image aimg;
+        tsurf s16;
+        nj_gfx g16;
+
+        ts_init(&s16, 4, 1, NJ_PIXFMT_RGB565, 0, C_BLACK);
+        nj_gfx_init(&g16, &s16.s);
+        abuf[0] = C_RED;
+        abuf[1] = 0x80FF0000u;              /* half transparent */
+        abuf[2] = 0x00000000u;              /* invisible */
+        abuf[3] = C_GREEN;
+        aimg.width = 4;
+        aimg.height = 1;
+        aimg.format = NJ_PIXFMT_ARGB8888;
+        aimg.pixels = abuf;
+        aimg.has_alpha = 1;
+
+        nj_gfx_draw_image_rop(&g16, &aimg, 0, 0, 0, 0, 4, 1, NJ_ROP_PAINT,
+                              NJ_TRANS_NONE);
+        PX(t, &s16, 0, 0, C_RED, "ARGB8888 onto RGB565: opaque is copied");
+        PX(t, &s16, 1, 0, 0xFF840000u, "ARGB8888 onto RGB565: half red blends");
+        PX(t, &s16, 2, 0, C_BLACK, "ARGB8888 onto RGB565: transparent is skipped");
+        PX(t, &s16, 3, 0, C_GREEN, "ARGB8888 onto RGB565: the next pixel too");
+
+        ts_clear(&s16, C_BLACK);
+        nj_gfx_draw_image_rop(&g16, &aimg, 0, 0, 0, 0, 4, 1, NJ_ROP_SET,
+                              NJ_TRANS_NONE);
+        PX(t, &s16, 2, 0, C_BLACK, "ARGB8888 onto RGB565: ROP_SET writes it too");
+        ts_free(&s16);
+    }
+
     /* Translation applies to image blits too. */
     ts_clear(&ts, C_WHITE);
     nj_gfx_translate(&g, 3, 4);

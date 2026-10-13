@@ -1868,6 +1868,48 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
     }
 
     /*
+     * ARGB8888 sprites onto a 16-bit screen: 浴火银河2完整版_7689 paints a
+     * screenful of them every frame, and until this branch existed every one
+     * of those pixels went through the general loop below - two function calls
+     * (nj_src_pixel and nj_gfx_blend_pixel) per pixel to rediscover that an
+     * alpha of 255 means "replace".  Same rule as the ARGB-to-ARGB branch: an
+     * opaque pixel goes through the destination format, a translucent one is
+     * blended, a transparent one is left alone, and SET copies whatever the
+     * source holds.
+     */
+    if (transform == NJ_TRANS_NONE && mask == NULL && !xor_on
+        && alpha == 255 && src_format == NJ_PIXFMT_ARGB8888
+        && g->surf->format != NJ_PIXFMT_ARGB8888 && bpp != 4) {
+        int first = (int)(cx0 - X0);
+        int n = (int)(cx1 - cx0 + 1);
+        int i;
+        nj_u1 *dst = (nj_u1 *)g->surf->pixels;
+
+        for (Y = cy0; Y <= cy1; Y++) {
+            int j = (int)(Y - Y0);
+            const nj_u1 *sp = src
+                + (nj_s8)(sy + j) * src_stride_bytes
+                + (nj_s8)(sx + first) * src_bpp;
+            nj_u1 *dp = dst + (nj_s8)Y * g->surf->stride
+                      + (nj_s8)cx0 * bpp;
+
+            for (i = 0; i < n; i++) {
+                nj_u4 c = nj_word_get(sp, 0);
+                int sa = (int)((c >> 24) & 0xFFu);
+
+                if (rop == NJ_ROP_SET || sa >= 255) {
+                    nj_dst_pixel(dp, bpp, g->surf->format, c);
+                } else if (sa > 0) {
+                    nj_gfx_blend_pixel(g->surf, (int)cx0 + i, (int)Y, c, 255);
+                }
+                sp += src_bpp;
+                dp += bpp;
+            }
+        }
+        return;
+    }
+
+    /*
      * An ARGB8888 source under rop PAINT cannot be copied blindly, but most
      * titles paint opaque images: 合金弹头4(完美汉化版) drawRegions a full
      * screen of decoded ARGB8888 onto an ARGB8888 surface every frame, and

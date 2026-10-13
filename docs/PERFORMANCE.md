@@ -579,3 +579,45 @@ those rot.  It is a mode of the existing fixture, run by hand:
 --prop nj2me.bench=4000 tests/fixtures/m3gdemo.jar` prints
 `M3G BENCH triangles=4000 ms=41`.  The same jar on the older binary is the
 other arm, which is how the table above was produced.
+
+## The blit a 2D title spends its frame in: 1.58x across eight titles
+
+`nj_region_draw` had three fast paths - same format, cross-format, and
+ARGB8888 onto ARGB8888 - and every one of them was written from a profile of a
+title that happened to hit it.  An ARGB8888 source blitted onto a **16-bit**
+screen hit none of them: the general loop asked `nj_src_pixel()` and then either
+`nj_raw_set()` or `nj_gfx_blend_pixel()` once per pixel, three function calls to
+rediscover that an alpha of 255 means "replace".  A decoded PNG is an ARGB8888
+buffer and most collected titles draw onto an RGB565 surface, so this was the
+common case, not an exotic one.
+
+The new branch is the ARGB-to-ARGB rule with the destination format left open: an
+opaque pixel goes through `nj_dst_pixel()`, a translucent one through
+`nj_gfx_blend_pixel()`, a transparent one is skipped, and `ROP_SET` copies all
+three.  Same-tree binaries (one build with the branch, one without), CPU time
+from the runner's `stats:` line, `taskset -c 3`, 400 frames uncapped, minimum of
+three alternating runs:
+
+| title | before | after | speed-up |
+| --- | ---: | ---: | ---: |
+| `帝国时代3-亚洲王朝_6288` | 0.095 s | 0.035 s | 2.71x |
+| `开心农场_240` | 0.082 s | 0.031 s | 2.65x |
+| `仙魔飞行棋_417` | 0.107 s | 0.044 s | 2.43x |
+| `浴火银河2完整版_7689` | 0.121 s | 0.059 s | 2.05x |
+| `炸弹人_10311` | 0.082 s | 0.041 s | 2.00x |
+| `合金弹头4(完美汉化版)_4053` | 0.145 s | 0.073 s | 1.99x |
+| `实况足球经理2009_10609` | 1.170 s | 0.831 s | 1.41x |
+| `模拟人生2_10762` | 0.280 s | 0.203 s | 1.38x |
+| **total** | **2.082 s** | **1.317 s** | **1.58x** |
+
+How it was checked, because a blit is only "faster" until a pixel moves:
+
+* `tests/test_gfx.c` gained the case (an ARGB8888 row onto an RGB565 surface:
+  opaque copies, half-transparent blends to `0xFF840000`, transparent is
+  skipped, `ROP_SET` writes it too) - 276 assertions, and the same 276 pass with
+  the branch disabled, so the new loop and the general loop agree on the case.
+* three titles dumped through `--dump-frames` are byte-for-byte identical
+  between the two binaries (`合金弹头4(完美汉化版)_4053`, `炸弹人_10311`,
+  `开心农场_240`), with the same binary run twice as the control.
+* the corpus sweep is re-run with the new binary; every verdict and colour count
+  is expected to match the previous sweep exactly.
