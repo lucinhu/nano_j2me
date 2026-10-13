@@ -610,6 +610,22 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_field_shadow.sh
                      ${NJ_FIXTURES}/fielddemo.jar)
+    # The SDL2 port grew an F5 snapshot key, but a headless test cannot press a
+    # key: the runner's --save-state/--load-state flags reach the same
+    # nj_vm_save_file()/nj_vm_load_file() calls.  tests/savestate/run.sh runs
+    # the SDL2 port twice under the dummy video and audio drivers and asserts
+    # the second process RESUMED the MIDlet - fielddemo prints its startApp
+    # banner exactly once, so a restart would print a second one.  It also
+    # checks that a file which is not a snapshot is refused without costing the
+    # caller the run.
+    if(SDL2_FOUND)
+        add_test(NAME check_sdl2_savestate
+                 COMMAND ${CMAKE_COMMAND} -E env
+                         NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                         ${CMAKE_CURRENT_SOURCE_DIR}/tests/savestate/run.sh
+                         ${NJ_FIXTURES}/fielddemo.jar)
+        set_tests_properties(check_sdl2_savestate PROPERTIES TIMEOUT 120)
+    endif()
     # JVMS 5.5 step 4: a static field with a ConstantValue attribute takes its
     # value before <clinit> runs, and javac leaves such a field out of <clinit>
     # entirely.  20 static fields across 11 collected titles are read by a
