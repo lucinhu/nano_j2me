@@ -59,6 +59,8 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
 
     private View toolbar;
     private TextView barPill;
+    /* The dialog whose rows are live right now, so a row can close it. */
+    private AlertDialog openBox;
 
     /**
      * The window as the game will paint it.
@@ -199,36 +201,34 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
      * The gestures, told once, instead of a strip of small print along the
      * bottom that was in the way of the keys the player was placing.
      */
+    /**
+     * The gestures, told once, instead of a strip of small print along the
+     * bottom that was in the way of the keys the player was placing.
+     */
     private void showTip() {
         if (getSharedPreferences("pad", MODE_PRIVATE).getBoolean("tipOff", false)) {
             return;
         }
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(24), 0, dp(24), 0);
-
-        TextView lines = new TextView(this);
-        lines.setText("拖动空白：移动游戏画面\n"
-                + "双指：缩放画面\n"
-                + "长按空白：添加按键\n"
-                + "拖动按键：摆位置 · 双指按按键：改大小\n"
-                + "长按按键：改键 / 删除\n"
-                + "滑杆：按键在游戏里的透明度\n"
-                + "淡黄框：避开刘海 / 挖孔的可用区\n"
-                + "工具条的 ▴ 把它收起来，点顶部「▾ 工具条」再打开");
-        Md3.type(lines, 13f, Md3.onSurfaceVariant, false);
-        lines.setLineSpacing(dp(4), 1f);
-        box.addView(lines);
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.title(this, "调整画面和按键"));
+        box.addView(Md3.supporting(this, "这一页同时管两件事：游戏画面放在哪，按键摆在哪。"),
+                Md3.gap(this, 6));
+        box.addView(Md3.section(this, "画面", "拖动空白处移动 · 双指缩放"), Md3.gap(this, 16));
+        box.addView(Md3.section(this, "按键", "长按空白添加 · 拖动摆位置 · 双指按按键改大小"),
+                Md3.gap(this, 16));
+        box.addView(Md3.section(this, "长按按键", "改键 / 复制 / 删除"), Md3.gap(this, 16));
+        box.addView(Md3.section(this, "滑杆", "按键在游戏里的透明度"), Md3.gap(this, 16));
+        box.addView(Md3.section(this, "淡黄框", "避开刘海 / 挖孔的可用区"), Md3.gap(this, 16));
+        box.addView(Md3.section(this, "工具条", "点 ▴ 收起来，点顶部「▾ 工具条」再打开"),
+                Md3.gap(this, 16));
 
         final CheckBox never = new CheckBox(this);
         never.setText("不再提示");
         never.setTextColor(Md3.onSurface);
         never.setButtonTintList(android.content.res.ColorStateList.valueOf(Md3.primary));
-        never.setPadding(0, dp(8), 0, 0);
-        box.addView(never);
+        box.addView(never, Md3.gap(this, 16));
 
         Md3.show(new AlertDialog.Builder(this)
-                .setCustomTitle(Md3.headline(this, "调整画面和按键", "怎么操作"))
                 .setView(box)
                 .setPositiveButton("知道了", new DialogInterface.OnClickListener() {
                     @Override
@@ -240,6 +240,7 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
                     }
                 }), this);
     }
+
 
     /** Puts the toolbar away so the top of the screen can hold a key. */
     /** The transparency slider's readout, in the editor and nowhere else. */
@@ -427,74 +428,82 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
      * the port does: the fit decides the base scale, it does not take the
      * picture away from the finger that moved it.
      */
+    /**
+     * How the picture is fitted, and the two ways to place it.
+     *
+     * <p>Picking a fit keeps the player's zoom and offset, because that is what
+     * the port does: the fit decides the base scale, it does not take the
+     * picture away from the finger that moved it.
+     */
     private void viewDialog() {
         final int[] modes = { PictureFit.MODE_INT, PictureFit.MODE_FILL, PictureFit.MODE_AUTO };
         final int shown = viewMode == PictureFit.MODE_CUSTOM ? PictureFit.MODE_INT : viewMode;
-        /* three fits, then 居中, then - when the port has measured a canvas -
-         * the offer to adopt it as this game's resolution */
         final boolean adopt = detW > 0;
-        String[] items = new String[modes.length + (adopt ? 2 : 1)];
-        String[] names = { "整数倍缩放（默认，像素最清晰）",
-                "铺满屏幕（放到最大，不裁画面）",
-                "适配画面（只画 MIDlet 真正画到的那块）" };
-        for (int i = 0; i < names.length; i++) {
-            items[i] = (modes[i] == shown ? "\u2713 " : "      ") + names[i];
-        }
-        items[3] = "居中（偏移归零，缩放回到 1.0）";
+        int n = modes.length + (adopt ? 3 : 2);
+        String[] labels = new String[n];
+        String[] hints = new String[n];
+        labels[0] = "整数倍缩放";
+        hints[0] = "默认，像素最清晰，边上留黑边";
+        labels[1] = "铺满屏幕";
+        hints[1] = "放到最大，不裁画面";
+        labels[2] = "适配画面";
+        hints[2] = "只画 MIDlet 真正画到的那块";
+        labels[3] = "微调位置";
+        hints[3] = "用方向按钮一点点挪";
+        labels[4] = "居中";
+        hints[4] = "偏移归零，缩放回到 1.0";
         if (adopt) {
-            items[4] = "用 " + detW + "x" + detH + " 作为分辨率（端口测到的）";
+            labels[5] = "用 " + detW + "x" + detH + " 作为分辨率";
+            hints[5] = "端口测到的画布大小，下次启动生效";
         }
-        Md3.show(new AlertDialog.Builder(this)
-            .setCustomTitle(Md3.headline(this, "游戏画面 · 当前：" + viewName(shown),
-                    viewName(shown) + " " + zoomText() + " · 偏移 " + panText()
-                    + " · 可挪 " + Math.round(maxPanX) + "/" + Math.round(maxPanY)
-                    + "\n拖动画面空白处也能挪，双指缩放"))
-            .setItems(items, new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface d, int which) {
-                    if (which < modes.length) {
-                        viewMode = modes[which];
-                    } else if (which == 3) {
-                        viewZoom = 1f;
-                        viewPanX = 0f;
-                        viewPanY = 0f;
-                    } else {
-                        adoptDetected();
+        int checked = shown == modes[1] ? 1 : (shown == modes[2] ? 2 : 0);
+        Md3.chooser(this, Md3.IC_SCREEN, "游戏画面",
+                "当前：" + viewName(shown) + " " + zoomText() + " · 偏移 " + panText()
+                        + " · 可挪 ±" + Math.round(maxPanX) + "/±" + Math.round(maxPanY),
+                labels, hints, checked, new Md3.Choice() {
+                    @Override
+                    public void picked(int which, AlertDialog d) {
+                        if (which < modes.length) {
+                            viewMode = modes[which];
+                        } else if (which == 3) {
+                            nudgeDialog();
+                            return;
+                        } else if (which == 4) {
+                            viewZoom = 1f;
+                            viewPanX = 0f;
+                            viewPanY = 0f;
+                        } else {
+                            adoptDetected();
+                        }
+                        frame.invalidate();
                     }
-                    frame.invalidate();
-                }
-            })
-            .setPositiveButton("微调位置", new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface d, int w) {
-                    nudgeDialog();
-                }
-            })
-            .setNegativeButton("关闭", null), this);
+                });
     }
 
+
+    /** Arrow buttons, for placing the picture when a drag is too coarse. */
     /** Arrow buttons, for placing the picture when a drag is too coarse. */
     private void nudgeDialog() {
         final int step = Math.max(4,
                 Math.round(Math.min(pad.getWidth(), pad.getHeight()) * 0.02f));
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.title(this, "微调位置"));
+        final TextView info = Md3.supporting(this, "");
+        box.addView(info, Md3.gap(this, 6));
+
         LinearLayout grid = new LinearLayout(this);
         grid.setOrientation(LinearLayout.VERTICAL);
-        grid.setPadding(dp(24), dp(4), dp(24), dp(12));
-
-        final TextView info = new TextView(this);
-        info.setPadding(dp(24), dp(8), dp(24), dp(8));
-        grid.addView(info);
-
         grid.addView(nudgeRow(new String[] { null, "\u2191", null }, step, info));
         grid.addView(nudgeRow(new String[] { "\u2190", "居中", "\u2192" }, step, info));
         grid.addView(nudgeRow(new String[] { null, "\u2193", null }, step, info));
+        box.addView(grid, Md3.gap(this, 12));
         updateNudge(info, step);
 
         Md3.show(new AlertDialog.Builder(this)
-            .setCustomTitle(Md3.headline(this, "微调位置", "每按一次移动 " + step + " 像素"))
-            .setView(grid)
+            .setView(box)
             .setNegativeButton("关闭", null), this);
     }
+
 
     /**
      * One row of the nudge cross: an arrow, 居中, or the gap where the cross
@@ -575,31 +584,65 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
         finish();
     }
 
+    /* ------------------------------------------------------------- dialogs */
+
+    /** Shows a body built with the Md3 anatomy; its rows act through rowAction. */
+    private AlertDialog showBox(LinearLayout box, String negative) {
+        openBox = Md3.show(new AlertDialog.Builder(this)
+                .setView(box)
+                .setNegativeButton(negative, null), this);
+        return openBox;
+    }
+
+    /** A 56dp dialog row that closes the open dialog and then does its work. */
+    private LinearLayout rowAction(int icon, String label, String hint, final Runnable action) {
+        return Md3.row(this, icon, label, hint, false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (openBox != null) {
+                    openBox.dismiss();
+                }
+                action.run();
+            }
+        });
+    }
+
     /* ----------------------------------------------------- pad edit callbacks */
 
     @Override
     public void onKeyLongPress(final PadConfig.Key key) {
-        final String[] actions = { "改键", "复制", "删除" };
-        Md3.show(new AlertDialog.Builder(this)
-            .setCustomTitle(Md3.headline(this, KeyCatalog.labelOf(key.code),
-                    "这个按键要做什么"))
-            .setItems(actions, new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface d, int which) {
-                    if (which == 0) {
-                        pickKey(key, 0, 0);
-                    } else if (which == 1) {
-                        work.keys.add(new PadConfig.Key(key.code,
-                                clamp01(key.x + 0.04f), clamp01(key.y + 0.04f),
-                                key.w, key.h));
-                        refresh();
-                    } else {
-                        work.keys.remove(key);
-                        refresh();
-                    }
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.title(this, KeyCatalog.labelOf(key.code)));
+        box.addView(Md3.supporting(this, "这个按键要做什么"), Md3.gap(this, 6));
+        box.addView(rowAction(Md3.IC_KEYS, "改键", "换成别的 MIDP 按键", new Runnable() {
+            @Override
+            public void run() {
+                pickKey(key, 0, 0);
+            }
+        }), Md3.gap(this, 12));
+        box.addView(rowAction(Md3.IC_RENAME, "复制一个", "在旁边再放一个同样的键", new Runnable() {
+            @Override
+            public void run() {
+                work.keys.add(new PadConfig.Key(key.code,
+                        clamp01(key.x + 0.04f), clamp01(key.y + 0.04f),
+                        key.w, key.h));
+                refresh();
+            }
+        }));
+        box.addView(Md3.divider(this));
+        box.addView(Md3.dangerRow(this, Md3.IC_DELETE, "删除这个键", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (openBox != null) {
+                    openBox.dismiss();
                 }
-            }), this, true);
+                work.keys.remove(key);
+                refresh();
+            }
+        }));
+        showBox(box, "关闭");
     }
+
 
     @Override
     public void onEmptyLongPress(float nx, float ny) {
@@ -613,36 +656,50 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
      * that a game using digits gets twelve keys where a D-pad was, and keeping
      * both would leave the old layout sitting under the new one.
      */
+    /**
+     * Swap in one of the built-in layouts.
+     *
+     * <p>This replaces every key rather than merging: the point of a preset is
+     * that a game gets the whole pad it needs, and keeping the old keys would
+     * leave them sitting under the new ones.
+     */
     private void layoutDialog() {
         final int[] ids = PadConfig.PRESET_IDS;
-        String[] names = new String[ids.length];
+        String[] labels = new String[ids.length];
+        String[] hints = new String[ids.length];
+        int checked = -1;
         for (int i = 0; i < ids.length; i++) {
-            names[i] = (ids[i] == work.preset ? "\u2713 " : "      ")
-                    + PadConfig.presetName(ids[i]) + " · " + PadConfig.presetHint(ids[i]);
+            labels[i] = PadConfig.presetName(ids[i]);
+            hints[i] = PadConfig.presetHint(ids[i]);
+            if (ids[i] == work.preset) {
+                checked = i;
+            }
         }
-        Md3.show(new AlertDialog.Builder(this)
-            .setCustomTitle(Md3.headline(this,
-                    "悬浮按键布局", "当前：" + PadConfig.presetName(work.preset)))
-            .setItems(names, new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface d, int which) {
-                    work.applyPreset(PadConfig.byId(ids[which]));
-                    pad.setConfig(work);
-                    pad.invalidate();
-                }
-            }), this, true);
+        Md3.chooser(this, Md3.IC_KEYS, "悬浮按键布局",
+                "整套换掉现在的按键（当前：" + PadConfig.presetName(work.preset) + "）",
+                labels, hints, checked, new Md3.Choice() {
+                    @Override
+                    public void picked(int which, AlertDialog d) {
+                        work.applyPreset(PadConfig.byId(ids[which]));
+                        pad.setConfig(work);
+                        pad.invalidate();
+                    }
+                });
     }
 
+
+    /** Add a key here, or re-point an existing one. */
     /** Add a key here, or re-point an existing one. */
     private void pickKey(final PadConfig.Key existing, final float nx, final float ny) {
         final List<KeyCatalog.Item> items = KeyCatalog.items();
         String[] labels = new String[items.size()];
         for (int i = 0; i < items.size(); i++) {
-            labels[i] = items.get(i).label + "  (code " + items.get(i).code + ")";
+            labels[i] = items.get(i).label + "　(" + items.get(i).code + ")";
         }
         Md3.show(new AlertDialog.Builder(this)
             .setCustomTitle(Md3.headline(this,
-                    existing == null ? "添加按键" : "改成哪个键", null))
+                    existing == null ? "添加按键" : "改成哪个键",
+                    "括号里是 MIDlet 收到的按键编号"))
             .setItems(labels, new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int which) {
@@ -658,21 +715,27 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
             }), this, true);
     }
 
+
     private static float clamp01(float v) {
         return v < 0f ? 0f : (v > 0.9f ? 0.9f : v);
     }
 
     private void confirmDiscard() {
-        Md3.show(new AlertDialog.Builder(this)
-            .setCustomTitle(Md3.headline(this, "放弃这次修改？", "改动还没有保存"))
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.title(this, "放弃这次修改？"));
+        box.addView(Md3.supporting(this, "这一页的按键和画面位置都还没保存。"), Md3.gap(this, 6));
+        AlertDialog d = Md3.show(new AlertDialog.Builder(this)
             .setPositiveButton("放弃", new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int w) {
                     finish();
                 }
             })
-            .setNegativeButton("继续编辑", null), this);
+            .setNegativeButton("继续编辑", null)
+            .setView(box), this);
+        Md3.errorButton(d, DialogInterface.BUTTON_POSITIVE);
     }
+
 
     /* ------------------------------------------- the sink the pad talks to */
 

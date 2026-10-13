@@ -5,7 +5,13 @@ import android.content.Context;
 import android.content.res.Configuration;
 import android.content.res.ColorStateList;
 import android.content.res.Resources;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
@@ -17,6 +23,7 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Toast;
 
 /**
  * Material 3, drawn with the framework alone.
@@ -448,7 +455,7 @@ final class Md3 {
         box.setOrientation(LinearLayout.VERTICAL);
         TextView h = new TextView(ctx);
         h.setText(title);
-        type(h, 22f, onSurface, false);
+        type(h, 24f, onSurface, false);
         box.addView(h);
         if (body != null && body.length() > 0) {
             TextView b = new TextView(ctx);
@@ -543,6 +550,435 @@ final class Md3 {
         t.setHintTextColor(onSurfaceVariant);
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
         t.setPadding(dp(ctx, 16), dp(ctx, 14), dp(ctx, 16), dp(ctx, 14));
+    }
+
+
+    /* --------------------------------------------- dialog anatomy, part 2 */
+
+    /*
+     * A Material 3 dialog is not a title, a wall of text and two buttons.  It
+     * has a shape: a 24sp headline, supporting text at 14sp in a quieter
+     * colour, content that is either prose or a list of 56dp rows with leading
+     * icons, and its actions along the bottom as text buttons.  The pieces
+     * below are that shape, so every dialog in the app is built from the same
+     * four or five calls instead of from whatever the framework defaults to.
+     */
+
+    /** A vertical container for dialog content. The container pads, not this. */
+    static LinearLayout body(Context ctx) {
+        LinearLayout box = new LinearLayout(ctx);
+        box.setOrientation(LinearLayout.VERTICAL);
+        return box;
+    }
+
+    /** The dialog headline: Material 3's headline-small. */
+    static TextView title(Context ctx, String text) {
+        TextView t = new TextView(ctx);
+        t.setText(text);
+        type(t, 24f, onSurface, false);
+        t.setLineSpacing(dp(ctx, 4), 1f);
+        return t;
+    }
+
+    /** A headline with a leading glyph, which is how the shell names a screen. */
+    static LinearLayout titleWith(Context ctx, int kind, String text) {
+        LinearLayout line = new LinearLayout(ctx);
+        line.setOrientation(LinearLayout.HORIZONTAL);
+        line.setGravity(Gravity.CENTER_VERTICAL);
+        if (kind != 0) {
+            line.addView(icon(ctx, kind, onSurfaceVariant));
+            TextView t = title(ctx, text);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            lp.leftMargin = dp(ctx, 12);
+            line.addView(t, lp);
+        } else {
+            line.addView(title(ctx, text), new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
+        return line;
+    }
+
+    /** Supporting text: 14sp onSurfaceVariant, with room to breathe. */
+    static TextView supporting(Context ctx, String text) {
+        TextView t = new TextView(ctx);
+        t.setText(text);
+        type(t, 14f, onSurfaceVariant, false);
+        t.setLineSpacing(dp(ctx, 6), 1f);
+        return t;
+    }
+
+    /**
+     * One labelled block of prose: a 12sp label in the accent colour over a
+     * 14sp body.  Labels are what turns a paragraph into instructions.
+     */
+    static LinearLayout section(Context ctx, String label, String text) {
+        LinearLayout box = body(ctx);
+        if (label != null && label.length() > 0) {
+            TextView l = new TextView(ctx);
+            l.setText(label);
+            type(l, 12f, primary, true);
+            l.setLetterSpacing(0.06f);
+            box.addView(l);
+        }
+        TextView b = supporting(ctx, text);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        if (label != null && label.length() > 0) {
+            lp.topMargin = dp(ctx, 2);
+        }
+        box.addView(b, lp);
+        return box;
+    }
+
+    /**
+     * A command the player is meant to type somewhere else.  It sits in its own
+     * filled container - text a reader cannot select is text they cannot use -
+     * and one tap copies it, because "adb push ..." on a phone is otherwise a
+     * transcription exercise.
+     */
+    static TextView command(final Context ctx, final String text) {
+        final TextView t = new TextView(ctx);
+        t.setText(text);
+        type(t, 13f, onSurface, false);
+        t.setTypeface(Typeface.MONOSPACE);
+        t.setBackground(round(ctx, surfaceContainerHighest, SHAPE_S));
+        t.setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10));
+        t.setTextIsSelectable(true);
+        t.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                ClipboardManager cm = (ClipboardManager)
+                        ctx.getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    cm.setPrimaryClip(ClipData.newPlainText("nano_j2me", text));
+                    Toast.makeText(ctx, "已复制", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+        return t;
+    }
+
+    /** A 1dp rule between rows of a list dialog. */
+    static View divider(Context ctx) {
+        View v = new View(ctx);
+        v.setBackgroundColor(outlineVariant);
+        v.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, dp(ctx, 0.5f))));
+        return v;
+    }
+
+    /**
+     * A list row: 56dp tall, leading icon in onSurfaceVariant, 16sp label in
+     * onSurface, and - when this row is the chosen one - a check mark at the
+     * trailing edge in the accent colour, which is how Material 3 marks a
+     * single-choice list.  The state layer covers the whole row.
+     */
+    static LinearLayout row(Context ctx, int kind, String label, String hint) {
+        return row(ctx, kind, label, hint, onSurface, false, null);
+    }
+
+    static LinearLayout row(Context ctx, int kind, String label, String hint,
+                            boolean selected, View.OnClickListener click) {
+        return row(ctx, kind, label, hint, onSurface, selected, click);
+    }
+
+    static LinearLayout row(Context ctx, int kind, String label, String hint,
+                            int color, boolean selected, View.OnClickListener click) {
+        LinearLayout row = new LinearLayout(ctx);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(ctx, hint == null ? 56 : 64));
+        row.setPadding(dp(ctx, 16), dp(ctx, 8), dp(ctx, 16), dp(ctx, 8));
+        row.setBackground(ripple(ctx, Color.TRANSPARENT, SHAPE_S,
+                color == error ? error : onSurfaceVariant));
+        if (kind != 0) {
+            LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            ip.rightMargin = dp(ctx, 16);
+            row.addView(icon(ctx, kind, selected ? primary : (color == onSurface ? onSurfaceVariant : color)), ip);
+        }
+        LinearLayout text = body(ctx);
+        TextView t = new TextView(ctx);
+        t.setText(label);
+        type(t, 16f, selected ? primary : color, false);
+        text.addView(t);
+        if (hint != null && hint.length() > 0) {
+            TextView h = new TextView(ctx);
+            h.setText(hint);
+            type(h, 12f, onSurfaceVariant, false);
+            LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            hp.topMargin = dp(ctx, 2);
+            text.addView(h, hp);
+        }
+        row.addView(text, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        if (selected) {
+            LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            cp.leftMargin = dp(ctx, 12);
+            row.addView(icon(ctx, IC_CHECK, primary), cp);
+        }
+        if (click != null) {
+            row.setOnClickListener(click);
+        }
+        return row;
+    }
+
+    static LinearLayout row(Context ctx, int kind, String label, boolean selected,
+                            View.OnClickListener click) {
+        return row(ctx, kind, label, null, onSurface, selected, click);
+    }
+
+    /** A row whose action cannot be undone: label, icon and state layer in error. */
+    static LinearLayout dangerRow(Context ctx, int kind, String label,
+                                  View.OnClickListener click) {
+        return row(ctx, kind, label, null, error, false, click);
+    }
+
+    /** Layout parameters for a block with `topDp` above it. */
+    static LinearLayout.LayoutParams gap(Context ctx, int topDp) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(ctx, topDp);
+        return lp;
+    }
+
+    /** What a single-choice dialog does with the row the player picked. */
+    interface Choice {
+        void picked(int which, AlertDialog dialog);
+    }
+
+    /**
+     * A single-choice list, which is most of this app's dialogs: a headline, a
+     * supporting line, one 56dp row per option - the current one marked with a
+     * trailing check and in the accent colour - and a 关闭 button.  The rows
+     * close the dialog before they act, so an action that opens another dialog
+     * does not stack two of them.
+     */
+    static AlertDialog chooser(final Context ctx, int iconKind, String headline,
+                               String support, String[] labels, String[] hints,
+                               int checked, final Choice choice) {
+        LinearLayout box = body(ctx);
+        box.addView(titleWith(ctx, iconKind, headline));
+        if (support != null && support.length() > 0) {
+            box.addView(supporting(ctx, support), gap(ctx, 6));
+        }
+        final AlertDialog[] holder = new AlertDialog[1];
+        for (int i = 0; i < labels.length; i++) {
+            final int which = i;
+            String hint = (hints != null && i < hints.length) ? hints[i] : null;
+            LinearLayout row = row(ctx, 0, labels[i], hint, i == checked, null);
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    AlertDialog d = holder[0];
+                    if (d != null) {
+                        d.dismiss();
+                    }
+                    choice.picked(which, d);
+                }
+            });
+            box.addView(row, gap(ctx, i == 0 ? 12 : 0));
+        }
+        holder[0] = show(new AlertDialog.Builder(ctx)
+                .setView(box)
+                .setNegativeButton("关闭", null), ctx);
+        return holder[0];
+    }
+
+    /** The destructive action of a dialog: an error-coloured text button. */
+    static void errorButton(AlertDialog d, int which) {
+        TextView b = d.getButton(which);
+        if (b != null) {
+            b.setTextColor(error);
+        }
+    }
+
+    /* --------------------------------------------------------------- icons */
+
+    /*
+     * Material 3 list rows lead with a glyph.  These are drawn rather than
+     * fetched: the platform's own set is Material 2, and the icon fonts this
+     * app renders for the MIDlets have no arrow glyphs at all.  Each path is
+     * written in a 24x24 grid and scaled to the density, so one icon looks the
+     * same at any size.
+     */
+
+    static final int IC_PLAY = 1;
+    static final int IC_SCREEN = 2;
+    static final int IC_MEMORY = 3;
+    static final int IC_RENAME = 4;
+    static final int IC_KEYS = 5;
+    static final int IC_DELETE = 6;
+    static final int IC_TUNE = 7;
+    static final int IC_INFO = 8;
+    static final int IC_POWER = 9;
+    static final int IC_FULLSCREEN = 10;
+    static final int IC_SORT = 11;
+    static final int IC_IMPORT = 12;
+    static final int IC_HELP = 13;
+    static final int IC_CHECK = 14;
+
+    static View icon(Context ctx, int kind, int color) {
+        return new Icon(ctx, kind, color, dp(ctx, 24));
+    }
+
+    private static final class Icon extends View {
+        private final int kind;
+        private final int size;
+        private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint glyph = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path path = new Path();
+        private final RectF r = new RectF();
+
+        Icon(Context ctx, int kind, int color, int size) {
+            super(ctx);
+            this.kind = kind;
+            this.size = size;
+            line.setStyle(Paint.Style.STROKE);
+            /* The canvas is scaled to the 24-unit grid below, so the stroke and
+             * the glyph are given in grid units too - in device pixels they
+             * would come out multiplied by that scale and the ring would fill
+             * its own hole. */
+            line.setStrokeWidth(1.7f);
+            line.setStrokeCap(Paint.Cap.ROUND);
+            line.setStrokeJoin(Paint.Join.ROUND);
+            line.setColor(color);
+            fill.setStyle(Paint.Style.FILL);
+            fill.setColor(color);
+            glyph.setColor(color);
+            glyph.setTextAlign(Paint.Align.CENTER);
+            glyph.setTextSize(13f);
+            glyph.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        }
+
+        @Override
+        protected void onMeasure(int widthSpec, int heightSpec) {
+            setMeasuredDimension(size, size);
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            c.save();
+            c.scale(size / 24f, size / 24f);
+            path.reset();
+            switch (kind) {
+                case IC_PLAY:
+                    path.moveTo(8, 5);
+                    path.lineTo(19, 12);
+                    path.lineTo(8, 19);
+                    path.close();
+                    c.drawPath(path, fill);
+                    break;
+                case IC_SCREEN:
+                    r.set(3, 5, 21, 17);
+                    c.drawRoundRect(r, 2, 2, line);
+                    c.drawLine(9, 20, 15, 20, line);
+                    break;
+                case IC_MEMORY:
+                    r.set(6, 6, 18, 18);
+                    c.drawRoundRect(r, 1.5f, 1.5f, line);
+                    c.drawLine(6, 3.5f, 6, 6, line);
+                    c.drawLine(10, 3.5f, 10, 6, line);
+                    c.drawLine(14, 3.5f, 14, 6, line);
+                    c.drawLine(18, 3.5f, 18, 6, line);
+                    c.drawLine(6, 18, 6, 20.5f, line);
+                    c.drawLine(10, 18, 10, 20.5f, line);
+                    c.drawLine(14, 18, 14, 20.5f, line);
+                    c.drawLine(18, 18, 18, 20.5f, line);
+                    break;
+                case IC_RENAME:
+                    path.moveTo(4, 20);
+                    path.lineTo(5.5f, 15);
+                    path.lineTo(15, 5.5f);
+                    path.lineTo(18.5f, 9);
+                    path.lineTo(9, 18.5f);
+                    path.close();
+                    c.drawPath(path, fill);
+                    break;
+                case IC_KEYS:
+                    r.set(3, 3, 11, 11);
+                    c.drawRoundRect(r, 2, 2, fill);
+                    r.set(13, 3, 21, 11);
+                    c.drawRoundRect(r, 2, 2, fill);
+                    r.set(3, 13, 11, 21);
+                    c.drawRoundRect(r, 2, 2, fill);
+                    r.set(13, 13, 21, 21);
+                    c.drawRoundRect(r, 2, 2, fill);
+                    break;
+                case IC_DELETE:
+                    c.drawLine(4, 7, 20, 7, line);
+                    c.drawLine(9, 4.5f, 15, 4.5f, line);
+                    r.set(6, 7, 18, 20.5f);
+                    c.drawRoundRect(r, 2, 2, line);
+                    c.drawLine(10, 10.5f, 10, 17, line);
+                    c.drawLine(14, 10.5f, 14, 17, line);
+                    break;
+                case IC_TUNE:
+                    c.drawLine(4, 7, 20, 7, line);
+                    c.drawLine(4, 12, 20, 12, line);
+                    c.drawLine(4, 17, 20, 17, line);
+                    c.drawCircle(15, 7, 2.4f, fill);
+                    c.drawCircle(9, 12, 2.4f, fill);
+                    c.drawCircle(16, 17, 2.4f, fill);
+                    break;
+                case IC_INFO:
+                    r.set(3.5f, 3.5f, 20.5f, 20.5f);
+                    c.drawOval(r, line);
+                    c.drawCircle(12, 7.5f, 1.4f, fill);
+                    c.drawLine(12, 11, 12, 17, line);
+                    break;
+                case IC_POWER:
+                    r.set(4.5f, 5, 19.5f, 20);
+                    c.drawArc(r, -60, 300, false, line);
+                    c.drawLine(12, 3, 12, 12, line);
+                    break;
+                case IC_FULLSCREEN:
+                    c.drawLine(4, 9, 4, 4, line);
+                    c.drawLine(4, 4, 9, 4, line);
+                    c.drawLine(15, 4, 20, 4, line);
+                    c.drawLine(20, 4, 20, 9, line);
+                    c.drawLine(20, 15, 20, 20, line);
+                    c.drawLine(20, 20, 15, 20, line);
+                    c.drawLine(9, 20, 4, 20, line);
+                    c.drawLine(4, 20, 4, 15, line);
+                    break;
+                case IC_SORT:
+                    c.drawLine(4, 7, 20, 7, line);
+                    c.drawLine(4, 12, 15, 12, line);
+                    c.drawLine(4, 17, 10, 17, line);
+                    break;
+                case IC_IMPORT:
+                    c.drawLine(12, 4, 12, 15, line);
+                    c.drawLine(8, 11, 12, 15, line);
+                    c.drawLine(16, 11, 12, 15, line);
+                    c.drawLine(4, 15, 4, 20, line);
+                    c.drawLine(4, 20, 20, 20, line);
+                    c.drawLine(20, 20, 20, 15, line);
+                    break;
+                case IC_HELP:
+                    r.set(3.5f, 3.5f, 20.5f, 20.5f);
+                    c.drawOval(r, line);
+                    c.drawText("?", 12, 16.8f, glyph);
+                    break;
+                case IC_CHECK:
+                    c.drawLine(5, 12.5f, 10, 17.5f, line);
+                    c.drawLine(10, 17.5f, 19, 6.5f, line);
+                    break;
+                default:
+                    break;
+            }
+            c.restore();
+        }
     }
 
     static int dp(Context ctx, float v) {

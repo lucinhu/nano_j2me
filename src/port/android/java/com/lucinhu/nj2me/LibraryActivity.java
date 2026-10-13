@@ -58,6 +58,8 @@ public class LibraryActivity extends Activity {
     /* The library remembers the order the player likes (see sortDialog()); the
      * default is the one a launcher would use, most recently played first. */
     private int sortMode;
+    /* The dialog whose rows are live right now, so a row can close it. */
+    private AlertDialog openBox;
     private static final String[] SORT_NAMES =
             { "最近运行", "名称", "文件大小", "最近导入" };
 
@@ -358,23 +360,20 @@ public class LibraryActivity extends Activity {
     }
 
     private void sortDialog() {
-        String[] labels = new String[SORT_NAMES.length];
-        for (int i = 0; i < SORT_NAMES.length; i++) {
-            labels[i] = (i == sortMode ? "\u2713 " : "      ") + SORT_NAMES[i];
-        }
-        Md3.show(new AlertDialog.Builder(this)
-                .setCustomTitle(Md3.headline(this, "排序方式",
-                        "当前：" + SORT_NAMES[sortMode]))
-                .setItems(labels, new DialogInterface.OnClickListener() {
+        Md3.chooser(this, Md3.IC_SORT, "排序方式",
+                "列表里 " + items.size() + " 个游戏的顺序"
+                        + (all.size() != items.size() ? "（一共有 " + all.size() + " 个）" : ""),
+                SORT_NAMES, null, sortMode, new Md3.Choice() {
                     @Override
-                    public void onClick(DialogInterface d, int which) {
+                    public void picked(int which, AlertDialog d) {
                         sortMode = which;
                         getSharedPreferences("lib", MODE_PRIVATE).edit()
                                 .putInt("sort", sortMode).apply();
                         applyFilter();
                     }
-                }), this, true);
+                });
     }
+
 
     private class EntryAdapter extends BaseAdapter {
         @Override
@@ -507,95 +506,151 @@ public class LibraryActivity extends Activity {
     }
 
     /** After importing, ask the two questions that decide whether it will run. */
+    /** After importing, ask the two questions that decide whether it will run. */
     private void offload(final JarStore.Entry e) {
-        Md3.show(new AlertDialog.Builder(this)
-            .setCustomTitle(Md3.headline(this, e.title, null))
-            .setMessage("导入成功。这个游戏的屏幕分辨率是多少？")
-            .setPositiveButton("用 240x320", new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface d, int w) {
-                    e.w = 240;
-                    e.h = 320;
-                    JarStore.write(LibraryActivity.this, e);
-                    reload();
-                    launch(e);
-                }
-            })
-            .setNeutralButton("改分辨率", new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface d, int w) {
-                    screenDialog(e);
-                }
-            })
-            .setNegativeButton("稍后", new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface d, int w) {
-                    reload();
-                }
-            })
-            , this);
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.title(this, "导入成功"));
+        box.addView(Md3.supporting(this, e.title + "　" + e.jar.getName()
+                + "\n它在手机上应该占多大一块屏幕？"), Md3.gap(this, 6));
+        box.addView(rowAction(Md3.IC_PLAY, "用 240x320 开始", null, new Runnable() {
+            @Override
+            public void run() {
+                e.w = 240;
+                e.h = 320;
+                JarStore.write(LibraryActivity.this, e);
+                reload();
+                launch(e);
+            }
+        }), Md3.gap(this, 12));
+        box.addView(rowAction(Md3.IC_SCREEN, "挑一个分辨率",
+                "2005 年前后的游戏多是 176x208 或 240x320", new Runnable() {
+                    @Override
+                    public void run() {
+                        screenDialog(e);
+                    }
+                }));
+        box.addView(rowAction(Md3.IC_TUNE, "先摆一摆按键",
+                "把按键放到顺手的位置，再开始游戏", new Runnable() {
+                    @Override
+                    public void run() {
+                        startEditor(e);
+                    }
+                }));
+        showBox(box, "稍后");
     }
 
+
+    /** Everything that can be done to one game, in one card. */
     private void options(final JarStore.Entry e) {
-        final String[] actions = { "运行", "修改分辨率", "修改内存", "改名", "调整画面和按键", "删除" };
-        Md3.show(new AlertDialog.Builder(this)
-            .setCustomTitle(Md3.headline(this, e.title, null))
-            .setItems(actions, new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface d, int which) {
-                    switch (which) {
-                        case 0: launch(e); break;
-                        case 1: screenDialog(e); break;
-                        case 2: heapDialog(e); break;
-                        case 3: renameDialog(e); break;
-                        case 4:
-                            /* the one screen where the picture and the keys are
-                             * placed together, so it needs to know the game */
-                            Intent it = new Intent(LibraryActivity.this, PadEditActivity.class);
-                            it.putExtra("jar", e.jar.getName());
-                            it.putExtra("w", e.w);
-                            it.putExtra("h", e.h);
-                            startActivity(it);
-                            break;
-                        default: deleteDialog(e); break;
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.title(this, e.title));
+        box.addView(Md3.supporting(this, (e.detText() != null ? e.detText() : e.w + "x" + e.h)
+                + " · " + e.sizeText() + "\n" + e.jar.getName()), Md3.gap(this, 6));
+        box.addView(rowAction(Md3.IC_PLAY, "开始游戏", null, new Runnable() {
+            @Override
+            public void run() {
+                launch(e);
+            }
+        }), Md3.gap(this, 12));
+        box.addView(Md3.divider(this));
+        box.addView(rowAction(Md3.IC_SCREEN, "画布大小", e.w + "x" + e.h, new Runnable() {
+            @Override
+            public void run() {
+                screenDialog(e);
+            }
+        }));
+        box.addView(rowAction(Md3.IC_MEMORY, "Java 堆", e.heapMB + " MB", new Runnable() {
+            @Override
+            public void run() {
+                heapDialog(e);
+            }
+        }));
+        box.addView(rowAction(Md3.IC_RENAME, "显示名字",
+                e.titleSet ? "你自己改的名字" : "jar 里写的游戏名", new Runnable() {
+                    @Override
+                    public void run() {
+                        renameDialog(e);
                     }
+                }));
+        box.addView(rowAction(Md3.IC_TUNE, "调整画面和按键",
+                "拖动画面、摆放按键，都在这一页", new Runnable() {
+                    @Override
+                    public void run() {
+                        startEditor(e);
+                    }
+                }));
+        box.addView(Md3.divider(this));
+        box.addView(Md3.dangerRow(this, Md3.IC_DELETE, "删除", new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (openBox != null) {
+                    openBox.dismiss();
                 }
-            })
-            , this, true);
+                deleteDialog(e);
+            }
+        }));
+        showBox(box, "关闭");
     }
+
 
     private void screenDialog(final JarStore.Entry e) {
-        final String[] labels = new String[JarStore.PRESETS.length + 1];
+        final int[] notes = { 0, 0, 1, 1, 2, 3, 3, 4, 4 };
+        String[] labels = new String[JarStore.PRESETS.length + 1];
+        String[] hints = new String[JarStore.PRESETS.length + 1];
+        int checked = -1;
         for (int i = 0; i < JarStore.PRESETS.length; i++) {
-            labels[i] = JarStore.PRESETS[i][0] + "x" + JarStore.PRESETS[i][1];
+            int w = JarStore.PRESETS[i][0];
+            int h = JarStore.PRESETS[i][1];
+            labels[i] = w + "x" + h;
+            hints[i] = SCREEN_NOTES[notes[i]];
+            if (e.w == w && e.h == h) {
+                checked = i;
+            }
         }
         labels[JarStore.PRESETS.length] = "自定义…";
-        Md3.show(new AlertDialog.Builder(this)
-            .setCustomTitle(Md3.headline(this, "画布大小（决定 MIDlet 看到的画面）", null))
-            .setItems(labels, new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface d, int which) {
-                    if (which < JarStore.PRESETS.length) {
-                        e.w = JarStore.PRESETS[which][0];
-                        e.h = JarStore.PRESETS[which][1];
-                        JarStore.write(LibraryActivity.this, e);
-                        reload();
-                    } else {
-                        customScreenDialog(e);
+        hints[JarStore.PRESETS.length] = "自己填宽和高（32 ~ 4096）";
+        Md3.chooser(this, Md3.IC_SCREEN, "画布大小",
+                "MIDlet 看到的就是这么大的一块画布（现在是 " + e.w + "x" + e.h + "）",
+                labels, hints, checked, new Md3.Choice() {
+                    @Override
+                    public void picked(int which, AlertDialog d) {
+                        if (which < JarStore.PRESETS.length) {
+                            e.w = JarStore.PRESETS[which][0];
+                            e.h = JarStore.PRESETS[which][1];
+                            JarStore.write(LibraryActivity.this, e);
+                            reload();
+                        } else {
+                            customScreenDialog(e);
+                        }
                     }
-                }
-            })
-            , this, true);
+                });
     }
+
+    private static final String[] SCREEN_NOTES = {
+        "很小的方块屏",
+        "早期翻盖机",
+        "S60 一代，很常见",
+        "S60 二代，很常见",
+        "方块屏（诺基亚 5500 一类）",
+        "QVGA 竖屏，最常见",
+        "QVGA 横屏",
+        "后来的大屏竖屏",
+        "更晚的大屏",
+    };
+
 
     private void customScreenDialog(final JarStore.Entry e) {
         final EditText input = new EditText(this);
         input.setInputType(InputType.TYPE_CLASS_TEXT);
         input.setText(e.w + "x" + e.h);
         Md3.field(input, this);
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.titleWith(this, Md3.IC_SCREEN, "自定义画布"));
+        box.addView(Md3.supporting(this, "格式：宽x高，例如 176x208（32 ~ 4096）。"
+                + "MIDlet 会按这个大小排版，游戏画错位时再调。"), Md3.gap(this, 6));
+        box.addView(input, Md3.gap(this, 16));
         Md3.show(new AlertDialog.Builder(this)
-            .setCustomTitle(Md3.headline(this, "宽x高", null))
-            .setView(input)
+            .setView(box)
             .setPositiveButton("确定", new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int w) {
@@ -620,34 +675,47 @@ public class LibraryActivity extends Activity {
             , this);
     }
 
+
     private void heapDialog(final JarStore.Entry e) {
         final int[] sizes = { 4, 8, 16, 24, 32, 64 };
         String[] labels = new String[sizes.length];
+        String[] hints = new String[sizes.length];
+        int checked = -1;
         for (int i = 0; i < sizes.length; i++) {
             labels[i] = sizes[i] + " MB";
+            hints[i] = (i == 0) ? "只够最小的游戏"
+                    : (i == sizes.length - 1 ? "除非游戏特别大，否则用不上" : null);
+            if (e.heapMB == sizes[i]) {
+                checked = i;
+            }
         }
-        Md3.show(new AlertDialog.Builder(this)
-            .setCustomTitle(Md3.headline(this, "Java 堆大小（当前 " + e.heapMB + "MB）", null))
-            .setItems(labels, new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface d, int which) {
-                    e.heapMB = sizes[which];
-                    JarStore.write(LibraryActivity.this, e);
-                    reload();
-                }
-            })
-            , this, true);
+        Md3.chooser(this, Md3.IC_MEMORY, "Java 堆大小",
+                "MIDlet 能用多少内存（现在是 " + e.heapMB + "MB）。"
+                        + "游戏报 OutOfMemory 就调大一点。",
+                labels, hints, checked, new Md3.Choice() {
+                    @Override
+                    public void picked(int which, AlertDialog d) {
+                        e.heapMB = sizes[which];
+                        JarStore.write(LibraryActivity.this, e);
+                        reload();
+                    }
+                });
     }
+
 
     private void renameDialog(final JarStore.Entry e) {
         final EditText input = new EditText(this);
         input.setInputType(InputType.TYPE_CLASS_TEXT);
         input.setText(e.title);
         Md3.field(input, this);
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.titleWith(this, Md3.IC_RENAME, "显示名字"));
+        box.addView(Md3.supporting(this, "只改列表和工具栏上显示的名字，不动 jar 文件。"
+                + "「用游戏名」可以改回 jar 里写的名字。"), Md3.gap(this, 6));
+        box.addView(input, Md3.gap(this, 16));
         Md3.show(new AlertDialog.Builder(this)
-            .setCustomTitle(Md3.headline(this, "显示名字", null))
-            .setView(input)
-            .setPositiveButton("确定", new DialogInterface.OnClickListener() {
+            .setView(box)
+            .setPositiveButton("保存", new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int w) {
                     String t = input.getText().toString().trim();
@@ -676,10 +744,14 @@ public class LibraryActivity extends Activity {
             , this);
     }
 
+
     private void deleteDialog(final JarStore.Entry e) {
-        Md3.show(new AlertDialog.Builder(this)
-            .setCustomTitle(Md3.headline(this, "删除 " + e.title + "？", null))
-            .setMessage("会一起删掉它的设置和存档目录名。")
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.title(this, "删除 " + e.title + "？"));
+        box.addView(Md3.supporting(this, "会删掉这个 jar，以及它的设置和存档目录名。"
+                + "这一步不能撤销。"), Md3.gap(this, 6));
+        AlertDialog d = Md3.show(new AlertDialog.Builder(this)
+            .setView(box)
             .setPositiveButton("删除", new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int w) {
@@ -689,7 +761,9 @@ public class LibraryActivity extends Activity {
             })
             .setNegativeButton("取消", null)
             , this);
+        Md3.errorButton(d, DialogInterface.BUTTON_POSITIVE);
     }
+
 
     /** The overflow: keypad layout, add a jar, and how to get jars in. */
     private TextView menuButton() {
@@ -705,47 +779,110 @@ public class LibraryActivity extends Activity {
         return t;
     }
 
+    /** The overflow: keypad layout, sorting, adding jars, and the help card. */
     private void menu() {
         final boolean immersive = Ui.immersive(this);
-        Md3.show(new AlertDialog.Builder(this)
-                .setItems(new String[] { "按键布局",
-                                immersive ? "沉浸模式：开（游戏全屏）" : "沉浸模式：关（显示状态栏）",
-                                "排序方式：" + SORT_NAMES[sortMode],
-                                "添加 JAR", "怎么放游戏进来" },
-                        new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(DialogInterface d, int which) {
-                                if (which == 0) {
-                                    startActivity(new Intent(LibraryActivity.this,
-                                            PadEditActivity.class));
-                                } else if (which == 1) {
-                                    Ui.setImmersive(LibraryActivity.this, !immersive);
-                                    toast(!immersive
-                                            ? "沉浸模式已打开：游戏里隐藏状态栏和导航栏"
-                                            : "沉浸模式已关闭：游戏里显示状态栏");
-                                } else if (which == 2) {
-                                    sortDialog();
-                                } else if (which == 3) {
-                                    pickJar();
-                                } else {
-                                    help();
-                                }
-                            }
-                        })
-                , this, true);
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.title(this, "Nano J2ME"));
+        box.addView(Md3.supporting(this, "已导入 " + all.size() + " 个游戏"
+                + (query.length() > 0 ? "，筛出 " + items.size() + " 个" : "")), Md3.gap(this, 6));
+        box.addView(rowAction(Md3.IC_KEYS, "按键布局",
+                "默认布局，所有游戏共用", new Runnable() {
+                    @Override
+                    public void run() {
+                        startActivity(new Intent(LibraryActivity.this, PadEditActivity.class));
+                    }
+                }), Md3.gap(this, 12));
+        box.addView(rowAction(Md3.IC_FULLSCREEN, immersive ? "沉浸模式：开" : "沉浸模式：关",
+                immersive ? "游戏里隐藏状态栏和导航栏" : "游戏里显示状态栏", new Runnable() {
+                    @Override
+                    public void run() {
+                        Ui.setImmersive(LibraryActivity.this, !immersive);
+                        toast(!immersive
+                                ? "沉浸模式已打开：游戏里隐藏状态栏和导航栏"
+                                : "沉浸模式已关闭：游戏里显示状态栏");
+                    }
+                }));
+        box.addView(rowAction(Md3.IC_SORT, "排序方式", SORT_NAMES[sortMode], new Runnable() {
+            @Override
+            public void run() {
+                sortDialog();
+            }
+        }));
+        box.addView(Md3.divider(this));
+        box.addView(rowAction(Md3.IC_IMPORT, "添加 JAR", "从文件管理器里挑一个 .jar", new Runnable() {
+            @Override
+            public void run() {
+                pickJar();
+            }
+        }));
+        box.addView(rowAction(Md3.IC_HELP, "怎么放游戏进来", null, new Runnable() {
+            @Override
+            public void run() {
+                help();
+            }
+        }));
+        showBox(box, "关闭");
     }
 
+
     private void help() {
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.titleWith(this, Md3.IC_HELP, "怎么放游戏进来"));
+        box.addView(Md3.supporting(this, "三种方式，挑一种就行。"), Md3.gap(this, 6));
+        box.addView(Md3.section(this, "一 · 直接添加",
+                "点右下角的「+」，在文件管理器里选一个 .jar。"), Md3.gap(this, 16));
+        box.addView(Md3.section(this, "二 · 从文件管理器打开",
+                "在任意文件管理器里点开 .jar，选「Nano J2ME」。"
+                        + "之后这个后缀就默认用它打开。"), Md3.gap(this, 16));
+        box.addView(Md3.section(this, "三 · 用电脑推送",
+                "手机连上电脑，在电脑上执行（点一下可以复制）："), Md3.gap(this, 16));
+        box.addView(Md3.command(this, "adb push 游戏.jar "
+                + JarStore.dir(this).getAbsolutePath() + "/"), Md3.gap(this, 8));
+        box.addView(Md3.section(this, "提示",
+                "长按列表里的游戏可以改分辨率、内存、名字、按键；"
+                        + "点右上角的 ⋮ 可以排序、切换沉浸模式。"), Md3.gap(this, 16));
         Md3.show(new AlertDialog.Builder(this)
-                .setCustomTitle(Md3.headline(this, "怎么放游戏进来", null))
-                .setMessage("「添加 JAR」从文件管理器里挑一个 .jar，也可以直接在别的文件管理器里"
-                        + "点开 .jar，选 Nano J2ME。\n\n"
-                        + "用电脑推送：\nadb push 游戏.jar "
-                        + JarStore.dir(this).getAbsolutePath() + "/\n\n"
-                        + "长按列表里的游戏可以改分辨率、内存和名字。")
+                .setView(box)
                 .setPositiveButton("知道了", null)
                 , this);
     }
+
+
+    /**
+     * Shows a dialog whose body was built with the Md3 anatomy.  The rows of
+     * such a body act through {@link #rowAction}, which closes this dialog
+     * first, so an action that opens another dialog never stacks two of them.
+     */
+    private AlertDialog showBox(LinearLayout box, String negative) {
+        openBox = Md3.show(new AlertDialog.Builder(this)
+                .setView(box)
+                .setNegativeButton(negative, null), this);
+        return openBox;
+    }
+
+    /** A 56dp dialog row that closes the open dialog and then does its work. */
+    private LinearLayout rowAction(int icon, String label, String hint, final Runnable action) {
+        return Md3.row(this, icon, label, hint, false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (openBox != null) {
+                    openBox.dismiss();
+                }
+                action.run();
+            }
+        });
+    }
+
+    /** Opens the one screen where the picture and the keypad are placed. */
+    private void startEditor(JarStore.Entry e) {
+        Intent it = new Intent(this, PadEditActivity.class);
+        it.putExtra("jar", e.jar.getName());
+        it.putExtra("w", e.w);
+        it.putExtra("h", e.h);
+        startActivity(it);
+    }
+
 
     /** The one action that always makes sense: bring a game in. */
     private TextView addButton() {

@@ -283,7 +283,7 @@ parks that thread in `idle()` instead of letting it spin against a dead surface.
 
 ### The shell around the game
 
-Ten things in that shell are worth copying, because each one is a rule a plain
+Eleven things in that shell are worth copying, because each one is a rule a plain
 "put a SurfaceView in an Activity" port gets wrong:
 
 - **The name comes from the jar, not from the file.** `JarName.of(File)` reads
@@ -392,6 +392,22 @@ Ten things in that shell are worth copying, because each one is a rule a plain
   in both schemes (`Md3.OVERLAY`, `overlayButton()`, `overlayHandle()`): it sits
   on a black game, and a bright bar there is worse than the black system bars
   this shell used to have. The picture itself is never restyled.
+- **A dialog is built, not configured.** The framework's `AlertDialog` cannot be
+  made to look like Material 3 from a theme, so `Md3` supplies the card's
+  anatomy and every screen assembles a body out of it: `body()` + `title()` or
+  `titleWith(icon)` (24sp), `supporting()` (14sp) for the line that says what the
+  choice costs, `section(label, text)` for an explained paragraph, `command()` for
+  a chip that copies a shell command when tapped, `divider()`, and `row()` - a
+  56dp (64dp with a hint) list item with a 24dp leading icon, a state layer, and a
+  trailing check when it is the current choice. `chooser()` turns the six
+  single-choice dialogs of this app into one call, and `dangerRow()` /
+  `errorButton()` keep the destructive action in the error role instead of
+  letting every action shout in the accent colour. The fourteen icons those rows
+  lead with are drawn in a 24x24 grid (`Icon`, a `View` that scales its canvas)
+  because the platform's own set is Material 2 and this build links no resources
+  at all - and the stroke and glyph inside that scaled canvas must be given in
+  grid units too, or the scale multiplies them and a 1.7-unit ring fills its own
+  hole.
 
 ## Worked example: a bare-metal board
 

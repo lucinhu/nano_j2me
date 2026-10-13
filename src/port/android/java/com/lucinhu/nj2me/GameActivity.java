@@ -634,23 +634,33 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * tapped, leaves nothing on screen when it is dismissed, and the game
      * underneath keeps running.
      */
+    /**
+     * The in-game panel, opened by the handle in the corner or by Back.  It is
+     * a Material 3 card rather than a strip across the top: the picture keeps
+     * the whole screen, nothing is covered while the player plays, and 退出 is
+     * one deliberate tap inside a dialog instead of a button next to the game.
+     */
     private void showPanel() {
-        LinearLayout box = new LinearLayout(this);
-        box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(8), 0, dp(8), dp(4));
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.title(this, jarTitle));
+        box.addView(Md3.supporting(this, screenW + "x" + screenH
+                + (detW > 0 ? " · 画面 " + detW + "x" + detH : "")), Md3.gap(this, 6));
 
-        TextView adjust = panelButton("调整画面和按键");
-        TextView toggle = panelButton(status.getVisibility() == View.VISIBLE
-                ? "隐藏状态信息" : "显示状态信息");
-        TextView quit = panelButton("退出游戏");
-        box.addView(adjust);
+        final boolean shown = status.getVisibility() == View.VISIBLE;
+        LinearLayout adjust = Md3.row(this, Md3.IC_TUNE, "调整画面和按键",
+                "拖动画面、摆放按键，都在这一页", false, null);
+        LinearLayout toggle = Md3.row(this, Md3.IC_INFO,
+                shown ? "隐藏状态信息" : "显示状态信息",
+                shown ? "收起帧率、缩放这些数字" : "看帧率、缩放和测到的画面大小", false, null);
+        LinearLayout quit = Md3.dangerRow(this, Md3.IC_POWER, "退出游戏", null);
+
+        box.addView(adjust, Md3.gap(this, 12));
+        box.addView(Md3.divider(this));
         box.addView(toggle);
+        box.addView(Md3.divider(this));
         box.addView(quit);
 
-        String sub = screenW + "x" + screenH
-                + (detW > 0 ? " · 画面 " + detW + "x" + detH : "");
         final AlertDialog dlg = Md3.show(new AlertDialog.Builder(this)
-                .setCustomTitle(Md3.headline(this, jarTitle, sub))
                 .setView(box)
                 .setNegativeButton("关闭", null), this);
 
@@ -672,8 +682,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         toggle.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                status.setVisibility(status.getVisibility() == View.VISIBLE
-                        ? View.GONE : View.VISIBLE);
+                status.setVisibility(shown ? View.GONE : View.VISIBLE);
                 refreshStatus();
                 dlg.dismiss();
             }
@@ -691,16 +700,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         });
     }
 
-    private TextView panelButton(String label) {
-        TextView t = new TextView(this);
-        t.setText(label);
-        Md3.textButton(t, this);
-        t.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        t.setPadding(dp(12), 0, dp(12), 0);
-        t.setLayoutParams(new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
-        return t;
-    }
+
+
 
     private void refreshStatus() {
         String s;
