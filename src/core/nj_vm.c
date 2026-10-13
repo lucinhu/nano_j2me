@@ -187,6 +187,9 @@ static nj_status vm_setup(nj_vm *vm, const nj_port *port, nj_size heap_bytes)
     }
     vm->running = 1u;
     vm->verbose = 2u;      /* error + warn + info; debug needs opting in */
+    /* The runner paints the first frames; an application paint resets the idle
+     * counter and teaches the hook its cadence (see nj_lib_midlet.c). */
+    vm->app_paint_period = 1u;
 #if NJ_ENABLE_DEBUG
     vm->trace = (nj_u1)nj_trace_enabled(vm);
     vm->trace_filter = getenv("NJ_TRACE");

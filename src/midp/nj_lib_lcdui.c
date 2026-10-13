@@ -4887,6 +4887,7 @@ nj_status nj_midp_paint(nj_vm *vm)
      * itself (see the frame hook in nj_lib_midlet.c). */
     if (vm->in_paint) {
         vm->app_painted = 1u;   /* serviceRepaints() asked for this one */
+        vm->app_painted_frame = 1u;
     }
     vm->painted_in_frame = 1u;
     nj_ref d;
