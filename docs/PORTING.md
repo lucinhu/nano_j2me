@@ -283,7 +283,7 @@ parks that thread in `idle()` instead of letting it spin against a dead surface.
 
 ### The shell around the game
 
-Five things in that shell are worth copying, because each one is a rule a plain
+Six things in that shell are worth copying, because each one is a rule a plain
 "put a SurfaceView in an Activity" port gets wrong:
 
 - **The name comes from the jar, not from the file.** `JarName.of(File)` reads
@@ -326,6 +326,21 @@ Five things in that shell are worth copying, because each one is a rule a plain
   key under a camera hole is still where it is drawn, and the editor paints the
   amber border so the player can see why a key refuses to move further. The
   library's ⋮ menu owns the switch (`ui`/`immersive`, on by default).
+- **The Material 3 look is hand-rolled, and the bars are not black.** No AndroidX
+  or Material Components: `Md3` is ~500 lines of colour roles, shapes, ripple and
+  type over the framework alone, which costs ~4 KB of dex instead of the 3.3 MB a
+  shrunk `com.google.android.material` would add (the measured comparison is in
+  the commit that added it). The scheme follows the system's night mode, and on
+  API 31+ it is read from the wallpaper palette through the framework's own
+  `android.R.color.system_*` resources - public, so no `R.java` is involved.
+  `Ui.drawBehindBars()` makes the library edge-to-edge: the status and navigation
+  bars take the app's surface colour with icons flipped to match
+  (`APPEARANCE_LIGHT_*` on API 30+, `SYSTEM_UI_FLAG_LIGHT_*` below), and the
+  library then pads itself with `Ui.insets(win, true)` because the bars are real
+  space again. A `Theme.Material` dialog is dark-on-dark under a light palette,
+  so `Md3.show()` recolours the message and each list row - colours only, never
+  padding or text size, because restyling metrics after the dialog has been
+  measured clips its last row.
 
 ## Worked example: a bare-metal board
 

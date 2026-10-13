@@ -70,9 +70,15 @@ if [ -n "$PUSH" ]; then
     [ -f "$PUSH" ] || { echo "no jar at $PUSH" >&2; exit 2; }
     # mkdir first: the directory under Android/data belongs to the app and is
     # only created once the app has run, but the shell user may create it too,
-    # which is what makes one-command testing possible.
-    "$ADB" shell mkdir -p "/sdcard/Android/data/$PKG/files/jars" || exit 1
-    "$ADB" push "$PUSH" "/sdcard/Android/data/$PKG/files/jars/" || exit 1
+    # which is what makes one-command testing possible.  A directory created
+    # that way is owned by root/shell with mode 2770, and the app then sees an
+    # EMPTY library - the jar is there but unreadable.  chmod it open; the app
+    # is the only reader, and only its own directory is touched.
+    DIR="/sdcard/Android/data/$PKG/files/jars"
+    "$ADB" shell mkdir -p "$DIR" || exit 1
+    "$ADB" shell chmod 0777 "$DIR" >/dev/null 2>&1 \
+        || echo "note: could not chmod $DIR - if the library looks empty, launch the app once and push again" >&2
+    "$ADB" push "$PUSH" "$DIR/" || exit 1
 fi
 
 # 1. The native side, once per ABI.

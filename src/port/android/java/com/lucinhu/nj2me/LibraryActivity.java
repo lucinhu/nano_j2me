@@ -6,9 +6,6 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
-import android.graphics.drawable.Drawable;
-import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.StateListDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
@@ -63,21 +60,33 @@ public class LibraryActivity extends Activity {
          * and the keypad layout behind the menu.  Fewer things on screen, and
          * the one thing you came for is bigger.
          */
+        /* Material 3 starts here: the palette is read once, before any view is
+         * built, because every colour below comes out of it. */
+        Md3.init(this);
+        /* The theme's window is black, which a light scheme would flash on the
+         * way in: the window wears the palette from the first frame. */
+        getWindow().setBackgroundDrawable(new ColorDrawable(Md3.surface));
+
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(rgb(14, 14, 18));          /* #0E0E12 */
+        root.setBackgroundColor(Md3.surface);
 
         LinearLayout column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
 
+        /* A small top app bar: flat on the surface, a 22sp title over a 12sp
+         * subtitle, and one icon button.  No divider, no elevation - Material 3
+         * separates by colour, not by a line. */
         final LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(16), dp(10), dp(4), dp(10));
+        header.setPadding(dp(16), dp(8), dp(4), dp(8));
+        Md3.appBar(header);
 
         LinearLayout titles = new LinearLayout(this);
         titles.setOrientation(LinearLayout.VERTICAL);
-        TextView title = tv("Nano J2ME", 19f, 0xFFFFFFFF, true);
-        headerCount = tv("", 11.5f, 0xFF8A9099, false);
+        TextView title = tv("Nano J2ME", 22f, Md3.onSurface, false);
+        Md3.type(title, 22f, Md3.onSurface, true);
+        headerCount = tv("", 12f, Md3.onSurfaceVariant, false);
         titles.addView(title);
         titles.addView(headerCount);
         header.addView(titles, new LinearLayout.LayoutParams(0,
@@ -87,9 +96,12 @@ public class LibraryActivity extends Activity {
         column.addView(header);
 
         list = new ListView(this);
-        list.setDivider(new ColorDrawable(0xFF1C1C22));
-        list.setDividerHeight(1);
-        list.setPadding(0, 0, 0, dp(84));          /* keep the last row clear of the add button */
+        /* Material 3 lists have no dividers - the rows sit on the surface and
+         * the wash of a press is the only thing that moves. */
+        list.setDivider(null);
+        list.setDividerHeight(0);
+        list.setSelector(new ColorDrawable(Color.TRANSPARENT));
+        list.setPadding(0, dp(8), 0, dp(96));      /* keep the last row clear of the add button */
         list.setClipToPadding(false);
         list.setVerticalScrollBarEnabled(false);
         list.setOverScrollMode(View.OVER_SCROLL_NEVER);
@@ -114,10 +126,10 @@ public class LibraryActivity extends Activity {
         /* The list shows the empty view by itself; the scroll view is only here
          * so that the six lines of it fit on a short screen. */
         ScrollView emptyBox = new ScrollView(this);
-        empty = tv("", 13f, 0xFF6A6F78, false);
+        empty = tv("", 14f, Md3.onSurfaceVariant, false);
         empty.setGravity(Gravity.CENTER);
-        empty.setLineSpacing(dp(4), 1f);
-        empty.setPadding(dp(22), dp(22), dp(22), dp(22));
+        empty.setLineSpacing(dp(6), 1f);
+        empty.setPadding(dp(24), dp(24), dp(24), dp(24));
         emptyBox.addView(empty, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         emptyBox.setVisibility(View.GONE);
@@ -132,21 +144,29 @@ public class LibraryActivity extends Activity {
 
         setContentView(root);
         /*
-         * A notch is a hole the framework cannot move out of the way: on the
-         * library the title and the add button are padded past it.  This screen
-         * keeps its status bar - it is a list, and a list is not a game - so
-         * only the cutout insets are counted, never the bars the framework
-         * already kept the window clear of.
+         * The app bar colour runs under the status bar and the surface under
+         * the navigation bar, so neither is the black stripe the theme would
+         * otherwise leave there.  The bars stay visible; only the window
+         * behind them becomes ours.
+         */
+        Ui.drawBehindBars(this, Md3.lightSurface());
+        /*
+         * A notch is a hole the framework cannot move out of the way, and the
+         * status and navigation bars are now covered by this screen's own
+         * colours: the title, the add button and the last row are padded past
+         * all of them.  This screen keeps the bars themselves - it is a list,
+         * and a list is not a game - so `true` here means "the window really
+         * does reach under them", which is what drawBehindBars just set up.
          */
         root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
             @Override
             public WindowInsets onApplyWindowInsets(View v, WindowInsets in) {
-                int[] e = Ui.insets(in, false);
-                header.setPadding(dp(16) + e[0], dp(10) + e[1], dp(4) + e[2], dp(10));
+                int[] e = Ui.insets(in, true);
+                header.setPadding(dp(16) + e[0], dp(8) + e[1], dp(4) + e[2], dp(8));
                 FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) fab.getLayoutParams();
-                lp.setMargins(0, 0, dp(18) + e[2], dp(18) + e[3]);
+                lp.setMargins(0, 0, dp(16) + e[2], dp(16) + e[3]);
                 fab.setLayoutParams(lp);
-                list.setPadding(0, 0, 0, dp(84) + e[3]);
+                list.setPadding(0, dp(8), 0, dp(96) + e[3]);
                 return in;
             }
         });
@@ -276,24 +296,27 @@ public class LibraryActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(rowBackground());
-        row.setPadding(dp(16), dp(10), dp(16), dp(10));
-        row.setMinimumHeight(dp(64));
+        /* No container: a Material 3 list row is the surface itself, and the
+         * press is a 12% wash of the content colour over it. */
+        row.setBackground(Md3.row(this));
+        row.setPadding(dp(16), dp(12), dp(16), dp(12));
+        row.setMinimumHeight(dp(72));
 
         ImageView icon = new ImageView(this);
-        row.addView(icon, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        row.addView(icon, new LinearLayout.LayoutParams(dp(44), dp(44)));
 
         LinearLayout text = new LinearLayout(this);
         text.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        tp.leftMargin = dp(14);
+        tp.leftMargin = dp(16);
         row.addView(text, tp);
 
-        TextView name = tv("", 15f, 0xFFF2F2F5, true);
+        TextView name = tv("", 16f, Md3.onSurface, false);
+        Md3.type(name, 16f, Md3.onSurface, true);
         name.setSingleLine(true);
         name.setEllipsize(TextUtils.TruncateAt.END);
-        TextView sub = tv("", 12f, 0xFF8A9099, false);
+        TextView sub = tv("", 12f, Md3.onSurfaceVariant, false);
         sub.setSingleLine(true);
         sub.setEllipsize(TextUtils.TruncateAt.END);
         text.addView(name);
@@ -305,7 +328,7 @@ public class LibraryActivity extends Activity {
     }
 
     private void bindRow(ViewGroup row, JarStore.Entry e) {
-        ((ImageView) row.getChildAt(0)).setImageBitmap(JarIcons.forEntry(e, dp(42)));
+        ((ImageView) row.getChildAt(0)).setImageBitmap(JarIcons.forEntry(e, dp(44)));
 
         LinearLayout text = (LinearLayout) row.getChildAt(1);
         /* The MIDlet's own name, or - for a jar that declares none - the file's.
@@ -320,14 +343,6 @@ public class LibraryActivity extends Activity {
         String det = e.detText();
         String size = (det != null) ? det + " · " : e.w + "x" + e.h + " · ";
         ((TextView) text.getChildAt(1)).setText(size + e.jar.getName() + " · " + e.sizeText());
-    }
-
-    /** A row lights up while it is pressed; there is no card behind it any more. */
-    private Drawable rowBackground() {
-        StateListDrawable s = new StateListDrawable();
-        s.addState(new int[] { android.R.attr.state_pressed }, rect(null, null, rgb(32, 32, 42), 0));
-        s.addState(new int[0], rect(null, null, rgb(14, 14, 18), 0));
-        return s;
     }
 
     /* --------------------------------------------------------------- actions */
@@ -382,8 +397,8 @@ public class LibraryActivity extends Activity {
 
     /** After importing, ask the two questions that decide whether it will run. */
     private void offload(final JarStore.Entry e) {
-        new AlertDialog.Builder(this)
-            .setTitle(e.title)
+        Md3.show(new AlertDialog.Builder(this)
+            .setCustomTitle(Md3.headline(this, e.title, null))
             .setMessage("导入成功。这个游戏的屏幕分辨率是多少？")
             .setPositiveButton("用 240x320", new DialogInterface.OnClickListener() {
                 @Override
@@ -407,13 +422,13 @@ public class LibraryActivity extends Activity {
                     reload();
                 }
             })
-            .show();
+            , this);
     }
 
     private void options(final JarStore.Entry e) {
         final String[] actions = { "运行", "修改分辨率", "修改内存", "改名", "按键布局", "删除" };
-        new AlertDialog.Builder(this)
-            .setTitle(e.title)
+        Md3.show(new AlertDialog.Builder(this)
+            .setCustomTitle(Md3.headline(this, e.title, null))
             .setItems(actions, new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int which) {
@@ -432,7 +447,7 @@ public class LibraryActivity extends Activity {
                     }
                 }
             })
-            .show();
+            , this, true);
     }
 
     private void screenDialog(final JarStore.Entry e) {
@@ -441,8 +456,8 @@ public class LibraryActivity extends Activity {
             labels[i] = JarStore.PRESETS[i][0] + "x" + JarStore.PRESETS[i][1];
         }
         labels[JarStore.PRESETS.length] = "自定义…";
-        new AlertDialog.Builder(this)
-            .setTitle("画布大小（决定 MIDlet 看到的画面）")
+        Md3.show(new AlertDialog.Builder(this)
+            .setCustomTitle(Md3.headline(this, "画布大小（决定 MIDlet 看到的画面）", null))
             .setItems(labels, new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int which) {
@@ -456,15 +471,16 @@ public class LibraryActivity extends Activity {
                     }
                 }
             })
-            .show();
+            , this, true);
     }
 
     private void customScreenDialog(final JarStore.Entry e) {
         final EditText input = new EditText(this);
         input.setInputType(InputType.TYPE_CLASS_TEXT);
         input.setText(e.w + "x" + e.h);
-        new AlertDialog.Builder(this)
-            .setTitle("宽x高")
+        Md3.field(input, this);
+        Md3.show(new AlertDialog.Builder(this)
+            .setCustomTitle(Md3.headline(this, "宽x高", null))
             .setView(input)
             .setPositiveButton("确定", new DialogInterface.OnClickListener() {
                 @Override
@@ -487,7 +503,7 @@ public class LibraryActivity extends Activity {
                 }
             })
             .setNegativeButton("取消", null)
-            .show();
+            , this);
     }
 
     private void heapDialog(final JarStore.Entry e) {
@@ -496,8 +512,8 @@ public class LibraryActivity extends Activity {
         for (int i = 0; i < sizes.length; i++) {
             labels[i] = sizes[i] + " MB";
         }
-        new AlertDialog.Builder(this)
-            .setTitle("Java 堆大小（当前 " + e.heapMB + "MB）")
+        Md3.show(new AlertDialog.Builder(this)
+            .setCustomTitle(Md3.headline(this, "Java 堆大小（当前 " + e.heapMB + "MB）", null))
             .setItems(labels, new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface d, int which) {
@@ -506,15 +522,16 @@ public class LibraryActivity extends Activity {
                     reload();
                 }
             })
-            .show();
+            , this, true);
     }
 
     private void renameDialog(final JarStore.Entry e) {
         final EditText input = new EditText(this);
         input.setInputType(InputType.TYPE_CLASS_TEXT);
         input.setText(e.title);
-        new AlertDialog.Builder(this)
-            .setTitle("显示名字")
+        Md3.field(input, this);
+        Md3.show(new AlertDialog.Builder(this)
+            .setCustomTitle(Md3.headline(this, "显示名字", null))
             .setView(input)
             .setPositiveButton("确定", new DialogInterface.OnClickListener() {
                 @Override
@@ -542,12 +559,12 @@ public class LibraryActivity extends Activity {
                 }
             })
             .setNegativeButton("取消", null)
-            .show();
+            , this);
     }
 
     private void deleteDialog(final JarStore.Entry e) {
-        new AlertDialog.Builder(this)
-            .setTitle("删除 " + e.title + "？")
+        Md3.show(new AlertDialog.Builder(this)
+            .setCustomTitle(Md3.headline(this, "删除 " + e.title + "？", null))
             .setMessage("会一起删掉它的设置和存档目录名。")
             .setPositiveButton("删除", new DialogInterface.OnClickListener() {
                 @Override
@@ -557,14 +574,14 @@ public class LibraryActivity extends Activity {
                 }
             })
             .setNegativeButton("取消", null)
-            .show();
+            , this);
     }
 
     /** The overflow: keypad layout, add a jar, and how to get jars in. */
     private TextView menuButton() {
-        TextView t = tv("⋮", 20f, 0xFFD8DCE3, false);
-        t.setGravity(Gravity.CENTER);
-        t.setPadding(dp(12), dp(2), dp(12), dp(2));
+        TextView t = tv("⋮", 22f, Md3.onSurfaceVariant, false);
+        Md3.iconButton(t, this);
+        t.setLayoutParams(new LinearLayout.LayoutParams(dp(48), dp(48)));
         t.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -576,7 +593,7 @@ public class LibraryActivity extends Activity {
 
     private void menu() {
         final boolean immersive = Ui.immersive(this);
-        new AlertDialog.Builder(this)
+        Md3.show(new AlertDialog.Builder(this)
                 .setItems(new String[] { "按键布局",
                                 immersive ? "沉浸模式：开（游戏全屏）" : "沉浸模式：关（显示状态栏）",
                                 "添加 JAR", "怎么放游戏进来" },
@@ -598,27 +615,25 @@ public class LibraryActivity extends Activity {
                                 }
                             }
                         })
-                .show();
+                , this, true);
     }
 
     private void help() {
-        new AlertDialog.Builder(this)
-                .setTitle("怎么放游戏进来")
+        Md3.show(new AlertDialog.Builder(this)
+                .setCustomTitle(Md3.headline(this, "怎么放游戏进来", null))
                 .setMessage("「添加 JAR」从文件管理器里挑一个 .jar，也可以直接在别的文件管理器里"
                         + "点开 .jar，选 Nano J2ME。\n\n"
                         + "用电脑推送：\nadb push 游戏.jar "
                         + JarStore.dir(this).getAbsolutePath() + "/\n\n"
                         + "长按列表里的游戏可以改分辨率、内存和名字。")
                 .setPositiveButton("知道了", null)
-                .show();
+                , this);
     }
 
     /** The one action that always makes sense: bring a game in. */
     private TextView addButton() {
-        TextView t = tv("+", 26f, 0xFFFFFFFF, false);
-        t.setGravity(Gravity.CENTER);
-        t.setIncludeFontPadding(false);
-        t.setBackground(circle());
+        TextView t = tv("+", 24f, Md3.onPrimaryContainer, false);
+        Md3.fab(t, this, 56f, Md3.SHAPE_L);
         t.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -628,18 +643,10 @@ public class LibraryActivity extends Activity {
         return t;
     }
 
-    private Drawable circle() {
-        StateListDrawable s = new StateListDrawable();
-        s.addState(new int[] { android.R.attr.state_pressed },
-                rect(null, null, rgb(23, 83, 200), dp(28)));
-        s.addState(new int[0], rect(null, null, rgb(47, 111, 237), dp(28)));
-        return s;
-    }
-
     private FrameLayout.LayoutParams fabParams() {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(56), dp(56));
         lp.gravity = Gravity.BOTTOM | Gravity.END;
-        lp.setMargins(0, 0, dp(18), dp(18));
+        lp.setMargins(0, 0, dp(16), dp(16));
         return lp;
     }
 
@@ -655,27 +662,6 @@ public class LibraryActivity extends Activity {
             t.setTypeface(t.getTypeface(), android.graphics.Typeface.BOLD);
         }
         return t;
-    }
-
-    /**
-     * A rounded rectangle, or a rounded gradient when {@code colors} has two
-     * entries.  {@code size} is the corner radius in pixels and {@code 0} means
-     * square, which is what an unpadded row background wants.
-     */
-    private Drawable rect(int[] colors, GradientDrawable.Orientation dir, int color, int size) {
-        GradientDrawable g = new GradientDrawable();
-        if (colors != null && colors.length > 1) {
-            g.setOrientation(dir);
-            g.setColors(colors);
-        } else {
-            g.setColor(color);
-        }
-        g.setCornerRadius(size);
-        return g;
-    }
-
-    private static int rgb(int r, int g, int b) {
-        return Color.rgb(r, g, b);
     }
 
     private void toast(String s) {

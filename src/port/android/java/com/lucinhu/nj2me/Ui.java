@@ -3,6 +3,7 @@ package com.lucinhu.nj2me;
 import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.graphics.Color;
 import android.os.Build;
 import android.view.DisplayCutout;
 import android.view.View;
@@ -106,6 +107,54 @@ final class Ui {
                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                        | View.SYSTEM_UI_FLAG_FULLSCREEN
                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
+            }
+            decor.setSystemUiVisibility(flags);
+        }
+    }
+
+    /**
+     * Draws the app's own colour behind the system bars instead of leaving them
+     * their default black stripe, the way a modern list screen does: the bars
+     * stay visible - the clock, the gesture pill - but the window is laid out
+     * behind them.
+     *
+     * <p>Callers must pad their content with {@link #insets}(win, true): the
+     * framework no longer shrinks the window, so its edges are real.
+     */
+    static void drawBehindBars(Activity a, boolean lightBackground) {
+        Window w = a.getWindow();
+        edgeToEdge(w);
+        w.setStatusBarColor(Color.TRANSPARENT);
+        w.setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= 29) {
+            w.setStatusBarContrastEnforced(false);
+            w.setNavigationBarContrastEnforced(false);
+        }
+        final View decor = w.getDecorView();
+        final boolean darkIcons = lightBackground;
+        if (Build.VERSION.SDK_INT >= 30) {
+            w.setDecorFitsSystemWindows(false);
+            decor.post(new Runnable() {
+                @Override
+                public void run() {
+                    android.view.WindowInsetsController c = decor.getWindowInsetsController();
+                    if (c == null) {
+                        return;
+                    }
+                    int mask = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                             | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                    c.setSystemBarsAppearance(darkIcons ? mask : 0, mask);
+                }
+            });
+        } else {
+            int flags = View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                      | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                      | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+            if (darkIcons && Build.VERSION.SDK_INT >= 23) {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
+            if (darkIcons && Build.VERSION.SDK_INT >= 26) {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
             }
             decor.setSystemUiVisibility(flags);
         }
