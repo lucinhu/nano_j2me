@@ -34,3 +34,29 @@ for t in "${titles[@]}"; do
   [ "$rc" -eq 0 ] && [ -z "$bad" ] || fail=$((fail+1))
 done
 echo "titles that did not run cleanly: $fail"
+
+# ---------------------------------------------------------------------------
+# A second pass that reaches the rasteriser.  Most of these titles keep their
+# 3D behind menus a headless key script never opens, so the first pass proves
+# "no exception" and nothing more.  浴火银河2完整版_7689 does render, and it is
+# the title the three real-jar defects were found with: scripted to its engine
+# it must report triangles.  A regression there (a viewport of 0x0, a loader
+# that parses nothing, a PNG the decoder refuses) shows up as tris=0.
+# ---------------------------------------------------------------------------
+DEEP_KEYS="${NJ_M3G_DEEP_KEYS:-60:fire,90:down,140:fire,200:fire,260:down,320:fire,400:fire,500:fire}"
+DEEP_TITLE="${NJ_M3G_DEEP_TITLE:-浴火银河2完整版_7689.jar}"
+DEEP_FRAMES="${NJ_M3G_DEEP_FRAMES:-560}"
+if [ -f "$DEEP_TITLE" ]; then
+  out=$(timeout 300 "$BIN" --port headless --heap 24 --size 240x320 --fps 30 \
+        --run-frames "$DEEP_FRAMES" --keys "$DEEP_KEYS" --stats "$DEEP_TITLE" 2>&1)
+  tris=$(printf '%s\n' "$out" | grep -o 'tris=[0-9]*' | tail -1 | cut -d= -f2)
+  stats=$(printf '%s\n' "$out" | grep -o 'frames=[0-9]* paints=[0-9]* gfx=[0-9]* tris=[0-9]* m3g=[0-9]*' | tail -1)
+  printf '%-46s deep %s\n' "$DEEP_TITLE" "${stats:-no stats}"
+  if [ "${tris:-0}" -gt 0 ]; then
+    echo "the rasteriser was reached: $tris triangles"
+  else
+    echo "FAIL the rasteriser was never reached (tris=$tris)"
+    fail=$((fail+1))
+  fi
+fi
+exit $((fail > 0))
