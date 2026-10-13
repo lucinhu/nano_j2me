@@ -321,6 +321,65 @@ nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
  * else comes back with its userID and nothing else, which is honest: the
  * caller can tell "not decoded yet" from "decoded to zero".
  */
+/*
+ * How many bytes one texel takes in the file, by the JSR's own format
+ * numbers: 96 ALPHA, 97 LUMINANCE, 98 LUMINANCE_ALPHA, 99 RGB, 100 RGBA.
+ */
+static nj_u4 m3g_image_bpp(nj_u4 fmt)
+{
+    switch (fmt) {
+    case 96u:
+    case 97u:
+        return 1u;
+    case 98u:
+        return 2u;
+    case 99u:
+        return 3u;
+    default:
+        return 4u;
+    }
+}
+
+/*
+ * One texel of the file, as the four bytes the rasteriser samples: red,
+ * green, blue and alpha, in that order.
+ */
+static void m3g_image_texel(nj_u4 fmt, const nj_u1 *s, nj_u1 *out)
+{
+    switch (fmt) {
+    case 96u:                       /* alpha only: white, and the alpha */
+        out[0] = 0xFFu;
+        out[1] = 0xFFu;
+        out[2] = 0xFFu;
+        out[3] = s[0];
+        break;
+    case 97u:                       /* luminance: grey */
+        out[0] = s[0];
+        out[1] = s[0];
+        out[2] = s[0];
+        out[3] = 0xFFu;
+        break;
+    case 98u:                       /* luminance and alpha */
+        out[0] = s[0];
+        out[1] = s[0];
+        out[2] = s[0];
+        out[3] = s[1];
+        break;
+    case 99u:                       /* rgb */
+        out[0] = s[0];
+        out[1] = s[1];
+        out[2] = s[2];
+        out[3] = 0xFFu;
+        break;
+    default:                        /* rgba */
+        out[0] = s[0];
+        out[1] = s[1];
+        out[2] = s[2];
+        out[3] = s[3];
+        break;
+    }
+}
+
 nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
                                nj_m3g_fields *out, char *err, nj_u4 errcap)
 {
@@ -397,27 +456,49 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
             out->a = out->nrefs;
         }
         break;
-    case NJ_M3G_T_IMAGE2D:
+    case NJ_M3G_T_IMAGE2D: {
         /*
-         * format and width as u16 at 12 and 14, then two bytes that are zero
-         * in all 1054 objects in the corpus, then the height as u16 at 18.
-         * Measured: reading the height at 16 gave 0 for every texture in the
-         * corpus while the file's own width and height disagreed (a 256x256
-         * texture came back as 256 wide and 0 high).
+         * Measured over every Image2D the corpus ships (35 in the stored
+         * sections, and the shape holds for each one exactly): the format is
+         * one byte at 12, isMutable at 13, the width a u32 at 14, the height a
+         * u32 at 18 and the size of the palette a u32 at 22.  Thirty bytes of
+         * header, then the palette when there is one, then the pixels - one
+         * byte per pixel when the image is paletted, and otherwise as many
+         * bytes per pixel as the format says.  The reading is accepted only
+         * when it consumes the object exactly; anything else is left
+         * undecoded, so an untextured surface still draws.
          */
-        if (len < NJ_M3G_OBJECT_HEADER + 8u) {
-            M3G_FAIL("an Image2D is %lu byte(s)", (unsigned long)len);
+        nj_u4 fmt, bpp, pal;
+
+        if (len < 30u) {
+            out->decoded = 0u;
+            return NJ_OK;
         }
-        out->a = (nj_u4)data[12] | ((nj_u4)data[13] << 8);
-        out->b = (nj_u4)data[14] | ((nj_u4)data[15] << 8);
-        out->c = (nj_u4)data[18] | ((nj_u4)data[19] << 8);
-        if (!((out->a == 0u) || (out->a >= 96u && out->a <= 100u)) ||
-            out->b > 4096u || out->c > 4096u) {
-            M3G_FAIL("an Image2D holds format=%lu %lux%lu",
-                     (unsigned long)out->a, (unsigned long)out->b,
-                     (unsigned long)out->c);
+        fmt = data[12];
+        bpp = m3g_image_bpp(fmt);
+        out->a = fmt;
+        out->b = le32(data + 14u);
+        out->c = le32(data + 18u);
+        pal = le32(data + 22u);
+        if (out->b == 0u || out->b > 4096u || out->c == 0u || out->c > 4096u) {
+            out->decoded = 0u;
+            return NJ_OK;
         }
+        if (pal == 0u) {
+            if (len != 30u + out->b * out->c * bpp) {
+                out->decoded = 0u;
+                return NJ_OK;
+            }
+        } else if (pal % bpp != 0u || pal > 4u * 1024u ||
+                   len != 30u + pal + out->b * out->c) {
+            out->decoded = 0u;
+            return NJ_OK;
+        }
+        out->d = pal;
+        out->data = data + 30u;
+        out->data_len = len - 30u;
         break;
+    }
     case NJ_M3G_T_WORLD:
         /*
          * A World is a Group, but its children do not sit at the end of its
@@ -4255,6 +4336,58 @@ nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
                                            descs[k]), r);
                 }
             }
+            break;
+        }
+        case NJ_M3G_T_IMAGE2D: {
+            /*
+             * The pixels are handed to the Java object as RGBA, whatever the
+             * file's own format was, because that is the shape the texture
+             * sampler reads.  A paletted image is expanded through its
+             * palette on the way.
+             */
+            nj_u4 w = f->b, h = f->c, pal = f->d;
+            nj_u4 bpp = m3g_image_bpp(f->a);
+            nj_u4 n = w * h;
+            nj_u1 *dst;
+            nj_ref px;
+            nj_u4 k;
+
+            if (n == 0u || n > 4096u * 4096u || f->data == NULL ||
+                f->data_len < pal) {
+                break;
+            }
+            px = nj_array_new(vm, "B", n * 4u);
+            if (!px) {
+                break;
+            }
+            nj_root(vm, px);
+            dst = (nj_u1 *)nj_array_data(px);
+            if (pal > 0u) {
+                nj_u4 entries = pal / bpp;
+                const nj_u1 *pt = f->data;
+                const nj_u1 *ix = f->data + pal;
+
+                for (k = 0u; k < n; k++) {
+                    nj_u4 e = ix[k];
+
+                    if (e < entries) {
+                        m3g_image_texel(f->a, pt + (nj_size)e * bpp, dst + k * 4u);
+                    } else {
+                        dst[k * 4u] = 0u;
+                        dst[k * 4u + 1u] = 0u;
+                        dst[k * 4u + 2u] = 0u;
+                        dst[k * 4u + 3u] = 0xFFu;
+                    }
+                }
+            } else {
+                for (k = 0u; k < n; k++) {
+                    m3g_image_texel(f->a, f->data + (nj_size)k * bpp, dst + k * 4u);
+                }
+            }
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I"), 100);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"), (nj_s4)w);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"), (nj_s4)h);
+            nj_rput(vm, o, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"), px);
             break;
         }
         case NJ_M3G_T_MATERIAL:

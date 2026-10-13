@@ -248,6 +248,45 @@ output.  The frame comes from
 `./build/nj2me --port headless --heap 16 --size 240x320 --fps 30 --run-frames
 1500 --dump-frames ... --keys ... tests/games/3D拉力赛-进化汉化版_6366.jar`.)
 
+## The Image2D pixels are decoded, and the textures the game uses are not in them
+
+The `Image2D` payload is now decoded (thirty bytes of header: the format at 12,
+the width a u32 at 14, the height a u32 at 18 and the palette size at 22, then
+the palette when there is one and then the pixels - one byte each when the
+image is paletted, otherwise as many bytes per texel as the format says).  The
+reading was measured against every one of the 35 Image2D objects in the stored
+sections of the corpus, and it consumes each of them exactly; the pixels are
+handed to the Java object as RGBA so the sampler can read them.
+
+That was necessary and it was not sufficient, and the trace says why.  With a
+temporary print in `jr_setup` during the rally title's race:
+
+    TEX   app=1 tex=1 img=1
+    TEXPX px=0 w=16  h=16  fmt=99 tpos=0 tcount=0 tcomp=0
+    TEXPX px=0 w=128 h=128 fmt=99 tpos=0 tcount=0 tcomp=0
+
+The appearance is there, its Texture2D is there, its Image2D is there - and
+`_nj_pixels` is NULL, with the format and the size set.  Those two sizes are
+exactly the two shapes the corpus stores as files, which is what made the
+mistake easy: the objects are not the file's images.  They are created by the
+title at runtime through `new Image2D(int format, Object image)` with an LCDUI
+`Image`, and that path stores the LCDUI image in `_nj_image` and leaves
+`_nj_pixels` alone (`src/midp/nj_lib_m3g.c`, the constructor branch that calls
+`Image.getWidth()`/`getHeight()` and then returns).
+
+So the next piece is one of these two, and the first is the smaller one:
+
+  - fill `_nj_pixels` when an Image2D is built from an LCDUI Image, converting
+    that image's pixels to RGBA once, at construction; or
+  - teach `jr_setup` to read the LCDUI image's pixels when `_nj_pixels` is
+    NULL, which needs a way to reach them from the M3G module.
+
+`tpos=0 tcount=0 tcomp=0` in the same trace is the second half of the same
+problem and it is separate: the meshes this title draws carry no texture
+coordinates, so even with pixels in hand the sampler would have nothing to
+sample by.  That has to be measured before it is written, the way every other
+layout in this file was.
+
 ## What is still missing, and it is one thing
 
 The World path now runs the full pipeline, and the objects it names are

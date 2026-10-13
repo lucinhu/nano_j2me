@@ -369,11 +369,26 @@ int main(void)
         ok(nj_m3g_decode_object(pm, sizeof(pm), 8u, &f, err, sizeof(err)) != NJ_OK, "a shading mode that does not exist is refused");
 
         {
-            nj_u1 img[12u + 8u];
+            /*
+             * An Image2D is thirty bytes of header and then its pixels: the
+             * format at 12, the width a u32 at 14, the height a u32 at 18 and
+             * the palette size at 22.  A shape that does not consume the
+             * object exactly is left undecoded rather than refused, so an
+             * untextured surface still draws - the corpus check counts a
+             * refusal as a failure.
+             */
+            nj_u1 img[30u + 4u * 2u * 3u];
             memset(img, 0, sizeof(img));
-            img[12] = 99u; img[14] = 128u; img[18] = 64u;   /* RGBA8 128x64 */
+            img[12] = 99u;                  /* RGB */
+            img[14] = 4u;                   /* width, u32 at 14 */
+            img[18] = 2u;                   /* height, u32 at 18 */
             ok(nj_m3g_decode_object(img, sizeof(img), 10u, &f, err, sizeof(err)) == NJ_OK, "an Image2D decodes");
-            ok(f.a == 99u && f.b == 128u && f.c == 64u, "its format, width and height come out");
+            ok(f.decoded == 1u && f.a == 99u && f.b == 4u && f.c == 2u, "its format, width and height come out");
+            ok(f.d == 0u, "and an image with no palette says so");
+            img[22] = 3u;                   /* a palette that is not whole texels */
+            memset(&f, 0, sizeof(f));
+            ok(nj_m3g_decode_object(img, sizeof(img), 10u, &f, err, sizeof(err)) == NJ_OK &&
+               f.decoded == 0u, "a palette that is not a whole number of texels is left undecoded");
         }
         {
             nj_u1 va[12u + 4u];
