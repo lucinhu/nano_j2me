@@ -421,6 +421,7 @@ struct nj_vm {
     int      (*frame_hook)(nj_vm *vm, void *ud);
     void       *frame_hook_ud;
     int         in_frame_hook;  /* re-entrancy guard: the hook may call back in */
+    int         in_call_pump;   /* re-entrancy guard: a blocked C call is pumping */
 
     /* seeded identity hash */
     nj_u4      hash_seed;

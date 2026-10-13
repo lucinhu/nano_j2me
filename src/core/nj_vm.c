@@ -1304,7 +1304,7 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
          */
         if ((st == NJ_ERR_YIELD || st == NJ_ERR_TIMEOUT) &&
             (th->state == NJ_THREAD_SLEEPING ||
-             (th->state == NJ_THREAD_WAITING && th->wait_deadline != 0))) {   /* NEGATIVE CHECK */
+             th->state == NJ_THREAD_WAITING)) {
             nj_s8 start = nj_now_ms(vm);
 
             /*
