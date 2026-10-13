@@ -165,7 +165,7 @@ if [ "${SLOW_SECS:-0}" != "0" ]; then
     echo "slow starters: a title still without a picture gets ${SLOW_SECS}s of its own clock"
 fi
 if [ "${DEVICE_RETRY:-0}" != "0" ]; then
-    echo "device: a title that did not start is tried once as a ${DEVICE_RETRY} handset"
+    echo "device retry: a title that drew nothing is tried once as a ${DEVICE_RETRY} handset"
 fi
 echo
 # THR and IO come from the port, not from the pixels.  A title that saves a

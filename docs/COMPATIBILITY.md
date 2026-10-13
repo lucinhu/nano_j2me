@@ -116,13 +116,17 @@ pass: more time cannot help them.
 ### Where the collected 395 stand
 
 `NJ_FRAMES=600 NJ_TIMEOUT=25 tools/run_game_corpus.sh` over `tests/games`, with
-the long re-run, the paced re-run, the wall-clock re-run and the two heap
-re-runs below: **390 passed, 5 failed** (390/5 was measured before the
-wall-clock pass, which takes `反恐精英2正式版_5836` from a flat frame to 84
-colours on its own: run that title alone with `NJ_SLOW_SECS=40` to see it). The
-sweeps before it were 374/21 (before the pacing retry), 376/19, 381/14, 384/11,
-385/10, 386/9, 387/8, 389/6 and 390/5, and every drop came from a bug the
-corpus itself pointed at rather than from a title being excused.
+the long re-run, the paced re-run, the wall-clock re-run, the device re-run and
+the two heap re-runs below: **393 passed, 2 failed**.  The two are
+`鲁宾逊漂流记汉化BT版_4677` (a truncated JAR: 286,534 bytes with no
+end-of-central-directory record, which python's `zipfile` refuses as well) and
+`实况足球经理2009_10609`, which is flaky rather than broken.  The sweeps before
+it were 374/21 (before the pacing retry), 376/19, 381/14, 384/11, 385/10,
+386/9, 387/8, 389/6, 390/5 and 393/2, and every drop came from a bug the corpus
+itself pointed at rather than from a title being excused.  The last drop was
+three passes at once: the pacing re-run (six titles draw only at 30 fps), the
+wall-clock re-run (a loading bar paced by the title's own clock) and the device
+re-run (`1945空战英雄_6105` runs as a Nokia 6230).
 
 ### The six that still fail, and what each one turned out to be
 
@@ -163,10 +167,12 @@ format` per attempt, all for the same resource), then retries with its own
 `h.b(byte[],100)`, and that decrypted buffer is a valid PNG this runtime decodes
 without a further error.
 
-Four of the five that remain are the title's own defect, its own dead code or its
-own loading loop (`1945空战英雄_6105`, `鲁宾逊漂流记汉化BT版_4677`,
-`灌篮高手-爆发!樱木_7947`, `战争艺术2之全球联盟中文版_1918`), and
-`午夜台球圣诞中文版_8677` computes a negative length in its own resource decoder.
+Every row in that table has since been re-run with the passes above, and four of
+the five pass: `1945空战英雄_6105` as a Nokia handset, `灌篮高手-爆发!樱木_7947`
+and `战争艺术2之全球联盟中文版_1918` when paced, `午夜台球圣诞中文版_8677` the
+same way (the negative length is in a later menu, not in the first screen).  What
+is left is `鲁宾逊漂流记汉化BT版_4677`, whose central directory was never written,
+and the flaky football manager below.
 
 `实况足球经理2009_10609` deserves a note of its own, because its row changes
 between sweeps: it draws a nine colour screen at 176x208 and a flat one at
