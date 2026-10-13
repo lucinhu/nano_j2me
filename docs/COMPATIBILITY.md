@@ -211,6 +211,29 @@ presented frame to hold it.  Against the pre-fix runtime the same check reports
 the run and the check requires the last presented frame to still be the red
 block it drew inside the window.  Reverting either half makes the check fail.
 
+A `GameCanvas` that flushes is the third case, and the one a player reported
+twice.  Its buffer is not double buffered: the title draws a whole frame into
+it, calls `flushGraphics()`, and starts drawing the next frame into the same
+pixels.  The runner painting that canvas once per frame therefore copies
+whatever is in the buffer at that moment - and if the title is halfway through
+the next frame, the screen gets a frame that is part filled with the new frame
+and part left over from the previous one.  Terrain drawn in blocks shows up as
+blocks appearing and disappearing behind the character, which is
+`鲁宾逊漂流记汉化版_702`'s flicker (its `data.k` game canvas flushes once per pass
+of its own loop).  `flushGraphics()` now marks the frame as the application's
+own (`vm->painted_in_frame`, `vm->app_painted`, `vm->app_painted_frame`, the
+same bookkeeping `serviceRepaints()` uses), so the runner does not paint the
+same buffer again in that frame; the adaptive rule still takes the frames back
+if the title stops flushing.
+
+`tests/flushdemo/FlushDemo.java` and `tools/check_flushdemo.sh` (ctest
+`check_flushdemo`) pin it: the worker paints the top quarter of its frame one
+pixel at a time, sleeps 45 ms across a frame boundary, finishes the frame and
+flushes, alternating the whole screen between blue and red.  Every presented
+frame must be one colour.  Against the pre-fix runtime the check reports 38 torn
+frames out of 60, the worst holding 9152 pixels of the other colour; with the
+fix, zero.
+
 ### A mutable image is white, and always opaque
 
 MIDP 2.0 says of `Image.createImage(int, int)`: "Every pixel within the newly

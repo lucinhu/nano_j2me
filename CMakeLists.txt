@@ -351,6 +351,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_repaintdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_alphademo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_savedgfx_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flushdemo_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -655,6 +656,21 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_savedgfx.sh
                      ${NJ_FIXTURES}/savedgfx.jar)
+    # A GameCanvas that draws whole frames into its own buffer and calls
+    # flushGraphics() has presented that frame: the runner must not paint the
+    # same buffer again in the same frame.  The buffer is not double buffered,
+    # so a second paint copies whatever is there at that moment, and a title
+    # halfway through the next frame shows up torn - the block shaped flicker a
+    # player reported for 鲁宾逊漂流记汉化版_702, whose game canvas flushes once
+    # per pass of its own loop.  tests/flushdemo pins it down: the worker paints
+    # the top quarter of the frame, sleeps across a frame boundary, finishes,
+    # and flushes, so a runtime that paints by itself presents a frame holding
+    # both colours.
+    add_test(NAME check_flushdemo
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_flushdemo.sh
+                     ${NJ_FIXTURES}/flushdemo.jar)
     add_test(NAME check_constant_value
              COMMAND ${CMAKE_COMMAND} -E env
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>

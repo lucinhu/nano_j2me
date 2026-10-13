@@ -2763,6 +2763,25 @@ static void gc_flush_region(nj_vm *vm, nj_ref self, nj_ref gobj,
     } else {
         gc_blit(vm, buf, dst, x, y, x, y, w, h, 0, 0, dst->width,
                 dst->height);
+        /*
+         * flushGraphics() IS this frame's presentation: the application has
+         * finished drawing a frame into its off-screen buffer and pushed it to
+         * the display.  The runner must not paint the same GameCanvas again in
+         * this frame, because that buffer is NOT double buffered - a paint
+         * taken while the title is already drawing the next frame copies a half
+         * drawn one, and the blocks that have not been redrawn yet flicker.
+         * That is what a player saw behind the character in
+         * 鲁宾逊漂流记汉化版_702, whose game canvas flushes once in every pass of
+         * its own loop, so the runner's paint landed in the middle of the next
+         * frame every time.
+         *
+         * The adaptive rule in the frame hook takes over if the title stops
+         * flushing (its thread dies, or it only flushes when something
+         * changed), so a quiet GameCanvas still gets its frames.
+         */
+        vm->painted_in_frame = 1u;
+        vm->app_painted = 1u;
+        vm->app_painted_frame = 1u;
     }
     vm->repaint_pending = 1u;
 }
