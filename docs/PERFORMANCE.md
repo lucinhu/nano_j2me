@@ -431,3 +431,59 @@ The same profile was used to price two things NOT adopted:
     Duplicating it there grows the hottest function in the runtime for a few
     percent; left as a function call on purpose.
 
+
+## The rasteriser: per-pixel overhead a sprite title pays every frame
+
+The bytecode-side work above was measured on `tests/fixtures/bench.jar`, which
+is compute bound on purpose.  A profiled real title looks different: 3000 frames
+of 合金弹头4(完美汉化版)_4053 under gprof (`-O2 -g -pg`, pinned to one core)
+spent
+
+    46.85%  nj_region_draw          3,217 calls
+    15.32%  nj_plot           230,630,400 calls
+    12.61%  nj_gfx_blend_pixel 230,630,400 calls
+
+and the two 230-million-call functions are the interesting part: a run of pixels
+of ONE colour was being drawn by calling `nj_plot()` per pixel, which called
+`nj_gfx_blend_pixel()` per pixel, which re-asked the surface for its format and
+re-checked its bounds per pixel - to discover, per pixel, that a fully opaque
+colour replaces the destination.  `nj_span()` now does the obvious thing when
+the colour is opaque (pack the colour once, then store 2/4 bytes or three
+channel bytes per pixel), which is what the non-blending branch already did for
+every other blend mode.
+
+`nj_region_draw()` had the same shape one level up: the general loop asks
+`nj_trans_inverse()`, tests the mask, scales the coverage and calls
+`nj_src_pixel()`/`nj_raw_set()` once per pixel even when the caller asked for an
+untransformed, unmasked, fully opaque blit.  Three fast paths were added in
+front of it, all requiring `transform == NJ_TRANS_NONE`, no mask, no XOR and
+`alpha == 255`:
+
+  * an identical source and destination format copies whole rows with `memcpy`;
+  * an opaque source in another format converts per pixel in a loop that has
+    hoisted the destination format and the clip arithmetic out;
+  * an ARGB8888 source under `rop PAINT` copies the opaque pixels and calls the
+    blender only for the translucent ones (this is the case 合金弹头4 hits: a
+    full screen of decoded ARGB8888, every pixel opaque).
+
+Measured the usual way - CPU time, one core, alternating arms, both binaries
+built once from the same revision, 600 frames uncapped:
+
+    title                          before              after
+    合金弹头4(完美汉化版)_4053      0.351 0.354 0.350   0.246 0.247 0.246   -30%
+    仙魔飞行棋_417                 0.224               0.143               -36%
+    疯狂企鹅中文版_10228           11.463              8.953               -22%
+    模拟人生3中文版_6162           0.308               0.244               -21%
+
+炸弹人_10311, 战争艺术2之全球联盟中文版_1918 and 实况足球经理2009_10609 are
+unchanged to the millisecond: they do not blit like that, which is the expected
+shape of the result.  The compute fixture is unchanged too - `bench.jar` min
+0.167 s, 633.0 M bytecodes/s, inside the 2.4% spread of its own baseline - so
+the interpreter itself was not touched.
+
+What makes this safe to believe is that the rendering is identical, not that the
+tests pass: the same titles were run against both binaries with
+`--dump-frames` and the PPMs are byte-for-byte equal (nine titles at 60 frames,
+plus eighteen of twenty sampled corpus titles - the two that differ, book4 and
+宇宙战机_10521, differ between two runs of the SAME binary as well, because they
+animate on wall-clock time).  ctest is 61/61 on the same tree.

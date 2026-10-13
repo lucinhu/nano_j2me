@@ -751,12 +751,51 @@ static void nj_span(nj_gfx *g, int x0, int x1, int y, nj_u4 argb)
     if (x1 < x0) {
         return;
     }
-    if (!g->use_xor && g->blend != NJ_BLEND_SRC_OVER) {
+    /*
+     * A fully opaque colour leaves every pixel of the run at `argb` whatever
+     * the blend mode is, so the run is a fill - and nj_plot() plus
+     * nj_gfx_blend_pixel() would re-ask the surface for its format and
+     * re-check its bounds once per pixel to discover that.  nj_span showed up
+     * as 74% of the rasteriser time in a profiled run of
+     * 合金弹头4(完美汉化版)_4053 (230M calls through nj_plot and
+     * nj_gfx_blend_pixel for 3000 frames), so write the bytes here.
+     */
+    if (!g->use_xor
+        && (g->blend != NJ_BLEND_SRC_OVER || ((argb >> 24) & 0xFFu) == 255u)) {
         int bpp = nj_surface_bpp(g->surf);
         nj_u4 packed = nj_surface_format_color(g->surf->format, argb);
+        nj_u1 *p = (nj_u1 *)g->surf->pixels + (nj_s8)y * g->surf->stride
+                 + (nj_s8)x0 * bpp;
 
-        for (x = x0; x <= x1; x++) {
-            nj_raw_set(g->surf, x, y, bpp, packed);
+        if (bpp == 2) {
+            nj_u2 v = (nj_u2)packed;
+
+            for (x = x0; x <= x1; x++) {
+                memcpy(p, &v, sizeof v);
+                p += 2;
+            }
+        } else if (bpp == 4) {
+            nj_u4 v = packed;
+
+            for (x = x0; x <= x1; x++) {
+                memcpy(p, &v, sizeof v);
+                p += 4;
+            }
+        } else if (bpp == 3) {
+            nj_u1 r = (nj_u1)((packed >> 16) & 0xFFu);
+            nj_u1 gg = (nj_u1)((packed >> 8) & 0xFFu);
+            nj_u1 b = (nj_u1)(packed & 0xFFu);
+
+            for (x = x0; x <= x1; x++) {
+                p[0] = r;
+                p[1] = gg;
+                p[2] = b;
+                p += 3;
+            }
+        } else {
+            for (x = x0; x <= x1; x++) {
+                nj_raw_set(g->surf, x, y, bpp, packed);
+            }
         }
         return;
     }
@@ -1620,6 +1659,24 @@ static nj_u4 nj_src_pixel(const nj_u1 *base, nj_s8 off, int format)
     return nj_word_get(base, off / 4);
 }
 
+/* Destination pixel at `p` from 0xAARRGGBB, in the surface's own format. */
+static void nj_dst_pixel(nj_u1 *p, int bpp, int format, nj_u4 argb)
+{
+    if (bpp == 2) {
+        nj_u2 v = (nj_u2)nj_surface_format_color(format, argb);
+
+        memcpy(p, &v, sizeof v);
+    } else if (bpp == 4) {
+        nj_u4 v = argb;
+
+        memcpy(p, &v, sizeof v);
+    } else {
+        p[0] = (nj_u1)((argb >> 16) & 0xFFu);
+        p[1] = (nj_u1)((argb >> 8) & 0xFFu);
+        p[2] = (nj_u1)(argb & 0xFFu);
+    }
+}
+
 /* Destination size of a transformed region: 90/270 swap width and height. */
 static void nj_trans_size(int transform, int sw, int sh, int *tw, int *th)
 {
@@ -1731,6 +1788,114 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
     cx1 = nj_min64(X0 + tw - 1, (nj_s8)g->clip_x + g->clip_w - 1);
     cy1 = nj_min64(Y0 + th - 1, (nj_s8)g->clip_y + g->clip_h - 1);
     if (cx0 > cx1 || cy0 > cy1) {
+        return;
+    }
+
+    /*
+     * The common case by a wide margin is a sprite blit: no transform, no
+     * mask, full opacity, and a source whose format is the destination's, so
+     * every pixel of the row lands unchanged.  The general loop below asks
+     * nj_trans_inverse(), nj_src_pixel() and nj_raw_set() once per pixel (and
+     * nj_gfx_blend_pixel() whenever alpha is below 255); a title that blits a
+     * full screen every frame lives in there - nj_region_draw was 44% of a
+     * profiled run of 合金弹头4(完美汉化版)_4053, with 59M pixels through
+     * nj_gfx_blend_pixel - so copy whole rows instead.
+     *
+     * An RGB565 or RGB888 source carries no alpha at all, which is why PAINT
+     * and SET are the same write here; an ARGB8888 source can only be copied
+     * when the caller asked for SET, because PAINT has to blend the pixels
+     * whose alpha is below 255.
+     */
+    if (transform == NJ_TRANS_NONE && mask == NULL && !xor_on
+        && src_format == g->surf->format && src_bpp == bpp
+        && alpha == 255
+        && (src_format != NJ_PIXFMT_ARGB8888 || rop == NJ_ROP_SET)) {
+        int row_bytes = (int)(cx1 - cx0 + 1) * bpp;
+        int first = (int)(cx0 - X0);
+        nj_u1 *dst = (nj_u1 *)g->surf->pixels;
+
+        for (Y = cy0; Y <= cy1; Y++) {
+            int j = (int)(Y - Y0);
+            const nj_u1 *srow = src
+                + (nj_s8)(sy + j) * src_stride_bytes
+                + (nj_s8)(sx + first) * src_bpp;
+            nj_u1 *drow = dst + (nj_s8)Y * g->surf->stride
+                        + (nj_s8)cx0 * bpp;
+
+            memcpy(drow, srow, (size_t)row_bytes);
+        }
+        return;
+    }
+
+    /*
+     * Same run, but the source is in another pixel format: 合金弹头4(完美汉化版)
+     * blits a full screen of decoded ARGB8888 onto an RGB565 surface every
+     * frame, which is 76800 calls to nj_src_pixel() and nj_raw_set() per frame
+     * through the general loop below.  The conversions still happen per pixel,
+     * but nothing else does: no inverse transform, no clip arithmetic, no
+     * surface checks, no format switch per pixel for the destination.
+     */
+    if (transform == NJ_TRANS_NONE && mask == NULL && !xor_on
+        && src_format != NJ_PIXFMT_ARGB8888 && alpha == 255) {
+        int first = (int)(cx0 - X0);
+        int n = (int)(cx1 - cx0 + 1);
+        int i;
+        nj_u1 *dst = (nj_u1 *)g->surf->pixels;
+
+        for (Y = cy0; Y <= cy1; Y++) {
+            int j = (int)(Y - Y0);
+            const nj_u1 *sp = src
+                + (nj_s8)(sy + j) * src_stride_bytes
+                + (nj_s8)(sx + first) * src_bpp;
+            nj_u1 *dp = dst + (nj_s8)Y * g->surf->stride + (nj_s8)cx0 * bpp;
+
+            for (i = 0; i < n; i++) {
+                nj_dst_pixel(dp, bpp, g->surf->format,
+                             nj_src_pixel(sp, 0, src_format));
+                sp += src_bpp;
+                dp += bpp;
+            }
+        }
+        return;
+    }
+
+    /*
+     * An ARGB8888 source under rop PAINT cannot be copied blindly, but most
+     * titles paint opaque images: 合金弹头4(完美汉化版) drawRegions a full
+     * screen of decoded ARGB8888 onto an ARGB8888 surface every frame, and
+     * every one of those pixels has alpha 255 - so the general loop below
+     * spends its time rediscovering that.  Read the pixel, take the copy when
+     * it is opaque, and blend only where the image really is translucent.
+     */
+    if (transform == NJ_TRANS_NONE && mask == NULL && !xor_on
+        && alpha == 255 && src_format == NJ_PIXFMT_ARGB8888
+        && g->surf->format == NJ_PIXFMT_ARGB8888 && src_bpp == bpp
+        && rop != NJ_ROP_SET) {
+        int first = (int)(cx0 - X0);
+        int n = (int)(cx1 - cx0 + 1);
+        int i;
+        nj_u1 *dst = (nj_u1 *)g->surf->pixels;
+
+        for (Y = cy0; Y <= cy1; Y++) {
+            int j = (int)(Y - Y0);
+            const nj_u1 *sp = src
+                + (nj_s8)(sy + j) * src_stride_bytes
+                + (nj_s8)(sx + first) * src_bpp;
+            nj_u1 *dp = dst + (nj_s8)Y * g->surf->stride + (nj_s8)cx0 * bpp;
+
+            for (i = 0; i < n; i++) {
+                nj_u4 c = nj_word_get(sp, 0);
+                int sa = (int)((c >> 24) & 0xFFu);
+
+                if (sa >= 255) {
+                    memcpy(dp, &c, sizeof c);
+                } else if (sa > 0) {
+                    nj_gfx_blend_pixel(g->surf, (int)cx0 + i, (int)Y, c, 255);
+                }
+                sp += 4;
+                dp += 4;
+            }
+        }
         return;
     }
 
