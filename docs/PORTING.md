@@ -91,6 +91,34 @@ Note the shape: **the port fills in a caller-owned struct**. There is
 deliberately no `const nj_port *nj_port_mine(void)` accessor, because that would
 require a shared static instance.
 
+### The one thing a UI thread may not do: touch the VM
+
+A port that draws its own controls over the game — the SDL2 reference port has
+an on-screen keypad and a speed badge in its window — will want to change a
+runtime setting from inside an event handler. It must not. `input_poll` is the
+only hook that runs at the top of a frame, on the VM's own thread, so a handler
+writes a number into the port's state and the next frame applies it:
+
+```c
+/* in the event handler, during present(): */
+s->speed_percent = 200;                 /* nothing else */
+
+/* top of input_poll(), once per frame: */
+if (s->vm && s->speed_percent != s->speed_applied) {
+    nj_vm_set_speed(s->vm, s->speed_percent);
+    s->speed_applied = s->speed_percent;
+}
+```
+
+The VM pointer itself comes from `install_codecs(ud, vm)`, the one hook called
+right after the VM exists and before the built-in codecs are registered; a port
+with no codecs of its own still implements it just to remember the VM. The same
+rule covers snapshots — `nj_vm_save_file()` at the top of a frame, never from a
+handler, because the object arena, every Java stack and the scheduler have to be
+in a state the blob can record with no native call in flight. And note what a
+port cannot do at all: loading a snapshot is only valid *before* the MIDlet is
+constructed, which is the runner's business (`--load-state`), not a hotkey's.
+
 ## Worked example: ESP32-S3
 
 An ESP32-S3 with 8 MB of PSRAM and a 240×320 SPI panel is the target this

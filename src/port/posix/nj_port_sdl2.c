@@ -7,8 +7,18 @@
  * to handle a texture whose pitch differs from width*bytes_per_pixel, how to
  * do integer-only upscaling, and how to translate a keyboard into MIDP keys.
  * A microcontroller port does the same three things against an SPI panel.
+ *
+ * The window also carries an overlay: the on-screen keypad (see the key table
+ * below) and one control that is not a key - a small rounded badge, top
+ * centre, showing the game speed as "1.0x".  Clicking the badge or pressing F3
+ * cycles 1.0x -> 1.5x -> 2.0x -> 3.0x -> 0.5x, and F5 takes a save-state
+ * snapshot.  Both use the same rule: the overlay only writes a number, and the
+ * next frame applies it (sdl_input_poll), because nothing outside the VM's own
+ * thread may touch the VM.  sdl_install_codecs() is where the VM pointer comes
+ * from.
  */
 #include "nj2me/nj_port.h"
+#include "nj2me/nj_vm.h"       /* speed + save-state, applied on the frame */
 
 #include "nj_sdl2_font.h"
 #include "nj2me/nj_types.h"
@@ -26,6 +36,11 @@
  * shortcut, * and # as extra fire buttons, the soft keys for the command bar,
  * and A/B/C/D for whatever the game likes.  An overlay with only a D-pad would
  * run a platformer and nothing else.
+ *
+ * The keys are not the whole overlay.  Above them sits the speed badge, drawn
+ * with the same fill_round()/draw_label() helpers, and it is hit-tested before
+ * the keypad and before the game: a click on the badge is neither a keypress
+ * nor a pointer press inside the MIDlet, and a click anywhere else is neither.
  */
 enum {
     NJ_SDL2_BTN_UP = 0, NJ_SDL2_BTN_DOWN, NJ_SDL2_BTN_LEFT, NJ_SDL2_BTN_RIGHT,
@@ -145,7 +160,38 @@ typedef struct sdl_state {
     SDL_Rect btn[NJ_SDL2_NBTN];
     int      btn_n;
     int      btn_held;      /* index into btn[], or -1 */
+
+    /*
+     * The speed badge.
+     *
+     * `speed_percent` is what the badge says and the only thing the UI writes;
+     * `speed_applied` is what the VM has been told.  They are separate because
+     * the VM may only be touched from its own thread, at the top of a frame -
+     * the click that changes the speed happens inside SDL_PollEvent, during
+     * presentation, so the value has to wait for the next frame.  That is also
+     * why `vm` is captured in install_codecs(): a port never creates the VM, it
+     * is handed to it once.
+     */
+    nj_vm *vm;
+    int    speed_percent;
+    int    speed_applied;   /* 0 until the VM has been told; then == speed */
+    int    speed_held;      /* the badge is under the pointer / finger */
+    SDL_Rect speed_btn;     /* the badge, in window pixels; w==0: off screen */
+
+    /*
+     * Save state.  The port cannot see the JAR path (nj_port has no such
+     * field), so F5 saves to NJ_SDL2_STATE and says so when it is unset.
+     * Loading is deliberately not offered: a snapshot has to be restored
+     * before the MIDlet is constructed, which only the runner can do
+     * (--load-state), never a hotkey in a running VM.
+     */
+    const char *state_path; /* NJ_SDL2_STATE, or NULL */
+    int         save_req;   /* F5 was pressed; served on the next frame */
 } sdl_state;
+
+/* The speeds the badge cycles through, in percent. */
+static const int sdl2_speeds[] = { 100, 150, 200, 300, 50 };
+#define SDL2_NSPEEDS ((int)(sizeof(sdl2_speeds) / sizeof(sdl2_speeds[0])))
 
 
 #define SS(ud) ((sdl_state *)(ud))
@@ -380,8 +426,17 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
     sdl_log(NULL, 2,
             "keys: arrows=up/down/left/right  Enter/Space=fire  F1=soft-left"
             "  Esc/F2=soft-right  Backspace=clear  0-9 * #  "
-            "Z/X/C/V=game A/B/C/D  mouse: click and drag"
+            "Z/X/C/V=game A/B/C/D  mouse: click and drag  F12/Tab=keypad"
+            "  click the speed badge / F3=game speed  F5=save state"
             "  (NJ_SDL_GRAB=1 if the window cannot be focused)");
+    if (s->state_path && s->state_path[0]) {
+        char msg[256];
+        SDL_snprintf(msg, sizeof(msg), "state: F5 writes %s", s->state_path);
+        sdl_log(NULL, 2, msg);
+    } else {
+        sdl_log(NULL, 2, "state: F5 needs NJ_SDL2_STATE=<file> - the port is "
+                         "not told the JAR path, so it cannot pick one");
+    }
 
     *w = s->width;
     *h = s->height;
@@ -455,6 +510,7 @@ static void sdl_layout(sdl_state *s)
         s->game_dst.w = s->width;
         s->game_dst.h = s->height;
         s->btn_n = 0;
+        s->speed_btn.x = s->speed_btn.y = s->speed_btn.w = s->speed_btn.h = 0;
         return;
     }
 
@@ -472,6 +528,43 @@ static void sdl_layout(sdl_state *s)
     s->game_dst.y = (win_h - s->game_dst.h) / 2;
     s->scale = scale;
 
+    /*
+     * Sizes for everything in the overlay, computed before the keypad's own
+     * early return because the speed badge is not part of the keypad and stays
+     * on screen when the keys are hidden.  Clamped rather than proportional
+     * alone, so the keys stay tappable in a small window and do not turn into
+     * billboards in a large one.
+     */
+    bs = win_h / 11;   if (bs > 56) { bs = 56; }   if (bs < 16) { bs = 16; }
+    ks = bs * 9 / 10;  if (ks > 48) { ks = 48; }   if (ks < 14) { ks = 14; }
+    gs = bs * 4 / 5;   if (gs > 44) { gs = 44; }   if (gs < 14) { gs = 14; }
+    pad = bs / 4;      if (pad < 4) { pad = 4; }
+    gap = pad;
+
+    /*
+     * The speed badge: a rounded plate at the top, between the two soft keys
+     * (the corners and the middle of the top edge are taken), centred on the
+     * window and vertically centred on the soft keys.  Small - it shows two or
+     * three characters - but never smaller than a fingertip-sized 14px, and it
+     * sits on the letterbox bar, not on the game.
+     *
+     * In a window too narrow for the middle the clamp below parks it over a
+     * soft key, which is the least bad option: it is hit-tested first, so the
+     * soft key loses those pixels rather than the badge being unreachable.
+     */
+    {
+        int bh = bs * 2 / 3;
+        if (bh > 36) { bh = 36; }
+        if (bh < 14) { bh = 14; }
+
+        s->speed_btn.w = bh * 2;
+        s->speed_btn.h = bh;
+        s->speed_btn.x = (win_w - s->speed_btn.w) / 2;
+        s->speed_btn.y = pad + (bs - bh) / 2;
+        if (s->speed_btn.x < 0) { s->speed_btn.x = 0; }
+        if (s->speed_btn.y < 0) { s->speed_btn.y = 0; }
+    }
+
     if (!s->keys_visible) {
         s->btn_n = 0;
         return;
@@ -483,16 +576,7 @@ static void sdl_layout(sdl_state *s)
      *   left   the D-pad cross, and the four game keys under it
      *   right  the twelve-key phone pad, CLEAR under it, volume/power above it
      *   top    the two soft keys
-     *
-     * Sizes are clamped rather than proportional alone, so the keys stay
-     * tappable in a small window and do not turn into billboards in a large one.
      */
-    bs = win_h / 11;   if (bs > 56) { bs = 56; }   if (bs < 16) { bs = 16; }
-    ks = bs * 9 / 10;  if (ks > 48) { ks = 48; }   if (ks < 14) { ks = 14; }
-    gs = bs * 4 / 5;   if (gs > 44) { gs = 44; }   if (gs < 14) { gs = 14; }
-    pad = bs / 4;      if (pad < 4) { pad = 4; }
-    gap = pad;
-
     /* ---- left: the cross ---- */
     dx = pad;
     dy = win_h - pad - 3 * bs - gap - 2 * gs;
@@ -632,6 +716,32 @@ static void fill_round(SDL_Renderer *r, int cx, int cy, int rad)
 }
 
 /*
+ * Two glyphs the shared font does not carry, kept here rather than added to
+ * nj_sdl2_font.h because only this port's speed badge needs them: the decimal
+ * point and the lowercase x of "1.5x".  Same 5x7 column-major encoding, bit 0
+ * is the top row.
+ */
+static const sdl2_glyph sdl2_extra_font[] = {
+    { '.', { 0x00, 0x00, 0x60, 0x60, 0x00 } },
+    { 'x', { 0x44, 0x28, 0x10, 0x28, 0x44 } }
+};
+#define SDL2_EXTRA_FONT_N \
+    ((int)(sizeof(sdl2_extra_font) / sizeof(sdl2_extra_font[0])))
+
+/* The glyph for a character, or NULL when the font has none. */
+static const sdl2_glyph *sdl_glyph(char ch)
+{
+    int k;
+    for (k = 0; k < SDL2_FONT_N; k++) {
+        if (sdl2_font[k].ch == ch) { return &sdl2_font[k]; }
+    }
+    for (k = 0; k < SDL2_EXTRA_FONT_N; k++) {
+        if (sdl2_extra_font[k].ch == ch) { return &sdl2_extra_font[k]; }
+    }
+    return NULL;
+}
+
+/*
  * A label, centred, at the largest integer scale that fits the button.
  *
  * Integer for the same reason the game is: a 5x7 font scaled by 7.3 is a
@@ -660,11 +770,7 @@ static void draw_label(SDL_Renderer *r, const SDL_Rect *b, const char *text)
     oy = b->y + (b->h - th) / 2;
 
     for (i = 0; i < len; i++) {
-        const sdl2_glyph *g = NULL;
-        int k;
-        for (k = 0; k < SDL2_FONT_N; k++) {
-            if (sdl2_font[k].ch == text[i]) { g = &sdl2_font[k]; break; }
-        }
+        const sdl2_glyph *g = sdl_glyph(text[i]);
         if (g) {
             int col, row;
             for (col = 0; col < SDL2_GLYPH_W; col++) {
@@ -755,6 +861,154 @@ static int sdl_key_at(sdl_state *s, int x, int y)
     return -1;
 }
 
+/*
+ * The vertical half-height of a rounded rect at column x: full radius along the
+ * straight middle, shrinking over the two caps.  Integer maths, the same trick
+ * fill_round() uses, so no fpu or libm is needed.
+ */
+static int round_half(int x, int lc, int rc, int rad)
+{
+    int dx = 0;
+    int dy = rad;
+
+    if (x < lc) { dx = lc - x; }
+    else if (x > rc) { dx = x - rc; }
+    while (dy > 0 && dx * dx + dy * dy > rad * rad) { dy--; }
+    return dy;
+}
+
+/*
+ * A rounded rect, filled.  Drawn one pixel column at a time rather than as a
+ * middle rect plus two circles: the plate is translucent, and overlapping
+ * shapes would blend twice and show seams through the badge.
+ */
+static void fill_rounded(SDL_Renderer *r, const SDL_Rect *b, int rad)
+{
+    SDL_Rect col;
+    int i, cy, lc, rc;
+
+    if (rad < 1 || b->w < 4 || b->h < 4) {
+        SDL_RenderFillRect(r, b);
+        return;
+    }
+    if (rad > b->w / 2) { rad = b->w / 2; }
+    if (rad > b->h / 2) { rad = b->h / 2; }
+
+    cy = b->y + b->h / 2;
+    lc = b->x + rad;                    /* centre column of the left cap  */
+    rc = b->x + b->w - 1 - rad;         /* centre column of the right cap */
+
+    for (i = 0; i < b->w; i++) {
+        int dy = round_half(b->x + i, lc, rc, rad);
+        col.x = b->x + i;
+        col.y = cy - dy;
+        col.w = 1;
+        col.h = dy * 2 + 1;
+        SDL_RenderFillRect(r, &col);
+    }
+}
+
+/* The outline of the same shape: the same spans, top and bottom pixel only. */
+static void draw_round_rect(SDL_Renderer *r, const SDL_Rect *b, int rad)
+{
+    int i, cy, lc, rc;
+
+    if (rad < 1 || b->w < 4 || b->h < 4) {
+        SDL_RenderDrawRect(r, b);
+        return;
+    }
+    if (rad > b->w / 2) { rad = b->w / 2; }
+    if (rad > b->h / 2) { rad = b->h / 2; }
+
+    cy = b->y + b->h / 2;
+    lc = b->x + rad;
+    rc = b->x + b->w - 1 - rad;
+
+    for (i = 0; i < b->w; i++) {
+        int dy = round_half(b->x + i, lc, rc, rad);
+        SDL_RenderDrawPoint(r, b->x + i, cy - dy);
+        SDL_RenderDrawPoint(r, b->x + i, cy + dy);
+    }
+    if (rad < b->h / 2) {               /* corners smaller than half the height */
+        SDL_RenderDrawLine(r, b->x, cy - rad, b->x, cy + rad);
+        SDL_RenderDrawLine(r, b->x + b->w - 1, cy - rad, b->x + b->w - 1, cy + rad);
+    }
+}
+
+/* "1.0x", "1.5x", ... from a percentage. */
+static void sdl_speed_label(int percent, char *out, int out_n)
+{
+    if (percent < 0) { percent = 0; }
+    SDL_snprintf(out, (size_t)out_n, "%d.%dx",
+                 percent / 100, (percent % 100) / 10);
+}
+
+/*
+ * The speed badge.  Drawn exactly like a keycap - translucent plate, dark
+ * outline, dark label - because it is one more thing lying on somebody's game,
+ * and it is the one overlay control that stays when the keypad is hidden.
+ * Disabled (greyed) until the VM has been captured, which only happens if a
+ * MIDlet is actually running.
+ */
+static void sdl_draw_speed(sdl_state *s)
+{
+    const SDL_Rect *b = &s->speed_btn;
+    char label[16];
+    int held = s->speed_held;
+    int rad;
+    Uint8 alpha;
+
+    if (b->w <= 0 || b->h <= 0) {
+        return;
+    }
+    rad = b->h / 2;
+    alpha = (Uint8)(s->vm ? (held ? 200 : 96) : 48);
+
+    SDL_SetRenderDrawBlendMode(s->renderer, SDL_BLENDMODE_BLEND);
+
+    SDL_SetRenderDrawColor(s->renderer, 250, 250, 250, alpha);
+    fill_rounded(s->renderer, b, rad);
+
+    SDL_SetRenderDrawColor(s->renderer, 25, 25, 25,
+                           (Uint8)(s->vm ? (held ? 255 : 170) : 120));
+    draw_round_rect(s->renderer, b, rad);
+
+    sdl_speed_label(s->speed_percent, label, (int)sizeof(label));
+    SDL_SetRenderDrawColor(s->renderer, 20, 20, 20,
+                           (Uint8)(s->vm ? 235 : 140));
+    draw_label(s->renderer, b, label);
+
+    SDL_SetRenderDrawBlendMode(s->renderer, SDL_BLENDMODE_NONE);
+}
+
+/*
+ * Is this window point on the badge?  Tested before the keypad and before the
+ * game area: a click on the badge is neither a keypress nor a pointer event,
+ * and a click anywhere else is not the badge.
+ */
+static int sdl_speed_at(sdl_state *s, int x, int y)
+{
+    const SDL_Rect *b = &s->speed_btn;
+    return b->w > 0 && b->h > 0 &&
+           x >= b->x && x < b->x + b->w &&
+           y >= b->y && y < b->y + b->h;
+}
+
+/* 1.0x -> 1.5x -> 2.0x -> 3.0x -> 0.5x -> 1.0x.  Only sets state: the frame
+ * applies it (see sdl_input_poll). */
+static void sdl_speed_cycle(sdl_state *s)
+{
+    int i, next = 0;
+
+    for (i = 0; i < SDL2_NSPEEDS; i++) {
+        if (sdl2_speeds[i] == s->speed_percent) {
+            next = (i + 1) % SDL2_NSPEEDS;
+            break;
+        }
+    }
+    s->speed_percent = sdl2_speeds[next];
+}
+
 static void sdl_display_present(void *ud, int x, int y, int w, int h)
 {
     sdl_state *s = SS(ud);
@@ -793,6 +1047,25 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
                     }
                     sdl_layout(s);
                 }
+                break;
+            }
+            /*
+             * F3 cycles the speed badge.  Not F2: that is the soft-right key,
+             * and an overlay hotkey that eats a key the game wants is a bug.
+             */
+            if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
+                ev.key.keysym.sym == SDLK_F3) {
+                sdl_speed_cycle(s);
+                break;
+            }
+            /*
+             * F5 asks for a save-state snapshot.  It only sets a flag: the
+             * snapshot itself is taken by input_poll, at the top of a frame, on
+             * the VM's own thread.
+             */
+            if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
+                ev.key.keysym.sym == SDLK_F5) {
+                s->save_req = 1;
                 break;
             }
             switch (ev.key.keysym.sym) {
@@ -851,7 +1124,23 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
         case SDL_MOUSEBUTTONUP:
             if (ev.button.button == SDL_BUTTON_LEFT) {
                 /*
-                 * The on-screen keys come first.  A press that lands on one is
+                 * The speed badge comes first of all.  It is a control, not a
+                 * key and not a click: hit-testing it before the keypad keeps
+                 * the two from overlapping, and before the game keeps a tap on
+                 * it from reaching the MIDlet.
+                 */
+                if (ev.type == SDL_MOUSEBUTTONDOWN) {
+                    if (sdl_speed_at(s, ev.button.x, ev.button.y)) {
+                        sdl_speed_cycle(s);
+                        s->speed_held = 1;
+                        break;
+                    }
+                } else if (s->speed_held) {
+                    s->speed_held = 0;
+                    break;
+                }
+                /*
+                 * The on-screen keys come next.  A press that lands on one is
                  * a key press, not a pointer press - otherwise every tap on the
                  * D-pad would ALSO be reported to a MIDlet as a click at that
                  * spot, and a game with a pointer UI would react to both.
@@ -884,10 +1173,12 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
              * window is not a finger on a panel, and reporting it as a drag
              * would give every MIDlet a stream of phantom moves.
              *
-             * And not at all while an on-screen key is held: the finger that is
-             * pressing "right" is not dragging across the game.
+             * And not at all while an on-screen key or the speed badge is held:
+             * the finger that is pressing "right" or tapping the badge is not
+             * dragging across the game.
              */
-            if ((ev.motion.state & SDL_BUTTON_LMASK) != 0 && s->btn_held < 0) {
+            if ((ev.motion.state & SDL_BUTTON_LMASK) != 0 &&
+                s->btn_held < 0 && !s->speed_held) {
                 int gx, gy;
                 sdl_to_game(s, ev.motion.x, ev.motion.y, &gx, &gy);
                 sdl_push_pointer(s, gx, gy, NJ_EV_POINTER_MOVE);
@@ -912,6 +1203,18 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
             wx = (int)(ev.tfinger.x * (float)ww);
             wy = (int)(ev.tfinger.y * (float)wh);
 
+            if (ev.type == SDL_FINGERDOWN) {
+                if (sdl_speed_at(s, wx, wy)) {
+                    sdl_speed_cycle(s);
+                    s->speed_held = 1;
+                    break;
+                }
+            } else if (s->speed_held) {
+                if (ev.type == SDL_FINGERUP) {
+                    s->speed_held = 0;
+                }
+                break;
+            }
             if (ev.type == SDL_FINGERDOWN) {
                 int hit = sdl_key_at(s, wx, wy);
                 if (hit >= 0) {
@@ -956,6 +1259,7 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
     SDL_RenderClear(s->renderer);
     SDL_RenderCopy(s->renderer, s->texture, NULL, &s->game_dst);
     sdl_draw_keys(s);
+    sdl_draw_speed(s);
 
     /*
      * Optional proof-of-presentation capture.
@@ -1211,9 +1515,70 @@ static int sdl_input_push(void *ud, const nj_event *ev)
     return 1;
 }
 
+/*
+ * Take the snapshot the F5 key asked for.
+ *
+ * Called from sdl_input_poll - the VM's own thread, at the top of a frame, with
+ * the object arena, every Java stack and the scheduler in a state the blob can
+ * record and no native call in flight.  Loading is deliberately not offered:
+ * a snapshot has to be restored BEFORE the MIDlet is constructed, which only
+ * the runner can do (--load-state), never a hotkey in a running VM.
+ */
+static void sdl_save_state(sdl_state *s)
+{
+    char msg[256];
+    int rc;
+
+    if (!s->vm) {
+        sdl_log(s, 1, "state: no VM yet, nothing to save");
+        return;
+    }
+    if (!s->state_path || !s->state_path[0]) {
+        sdl_log(s, 1, "state: set NJ_SDL2_STATE=<file> to use the F5 snapshot "
+                      "(the port is not told the JAR path, so it cannot choose "
+                      "one for you)");
+        return;
+    }
+    rc = nj_vm_can_save(s->vm) ? nj_vm_save_file(s->vm, s->state_path)
+                               : NJ_ERR_STATE;
+    SDL_snprintf(msg, sizeof(msg), "state: save to %s -> %d%s",
+                 s->state_path, rc,
+                 rc == NJ_OK ? "  (resume it with --load-state)" : "");
+    sdl_log(s, rc == NJ_OK ? 2 : 1, msg);
+}
+
 static int sdl_input_poll(void *ud, nj_event *ev)
 {
     sdl_state *s = SS(ud);
+
+    /*
+     * Port settings the overlay asked for, applied HERE and nowhere else.
+     *
+     * input_poll is the one hook that runs at the top of every frame, on the
+     * VM's own thread; the click or the keypress that requested the change came
+     * out of SDL_PollEvent during presentation, which is a different moment in
+     * the frame and (on a port with a UI thread) a different thread.  So the UI
+     * writes a number, and this function is the only place the VM is touched.
+     */
+    if (s->vm && s->speed_percent > 0 && s->speed_percent != s->speed_applied) {
+        nj_vm_set_speed(s->vm, s->speed_percent);
+        s->speed_applied = s->speed_percent;
+        /*
+         * Logged because the multiplier is invisible in a screenshot: the frame
+         * counter is what the port can draw, not what the MIDlet's clock says.
+         * This line is the evidence that the game really sped up.
+         */
+        {
+            char msg[96];
+            SDL_snprintf(msg, sizeof(msg), "speed: MIDlet time runs at %d%%",
+                         s->speed_percent);
+            sdl_log(s, 2, msg);
+        }
+    }
+    if (s->save_req) {
+        s->save_req = 0;
+        sdl_save_state(s);
+    }
 
     if (s->qh == s->qt) {
         return 0;
@@ -1221,6 +1586,26 @@ static int sdl_input_poll(void *ud, nj_event *ev)
     *ev = s->queue[s->qh];
     s->qh = (s->qh + 1) % (int)(sizeof(s->queue) / sizeof(s->queue[0]));
     return 1;
+}
+
+/*
+ * install_codecs(): the one hook that is handed the VM once it exists.
+ *
+ * This port installs no codecs of its own - the SDL2 build has no platform
+ * image or audio decoder to register - but the hook is still the only chance to
+ * remember the VM, and both the speed badge and the F5 snapshot need it.
+ * speed_applied is cleared so the first frame pushes the speed this port was
+ * configured with instead of assuming the VM's default.
+ */
+static void sdl_install_codecs(void *ud, nj_vm *vm)
+{
+    sdl_state *s = SS(ud);
+
+    if (!s || !vm) {
+        return;
+    }
+    s->vm = vm;
+    s->speed_applied = 0;
 }
 
 static void sdl_shutdown(void *ud)
@@ -1282,6 +1667,25 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
     }
     s->btn_held = -1;
 
+    /*
+     * The speed badge.  There is no VM yet - install_codecs() is where that
+     * arrives - so this only records what to ask for; the first frame applies
+     * it.  NJ_SDL2_SPEED=<percent> starts at a chosen speed, clamped the same
+     * way nj_vm_set_speed() clamps it.
+     */
+    {
+        const char *sv = SDL_getenv("NJ_SDL2_SPEED");
+        s->speed_percent = 100;
+        if (sv && *sv) {
+            int p = SDL_atoi(sv);
+            if (p < 10) { p = 10; }
+            if (p > 800) { p = 800; }
+            s->speed_percent = p;
+        }
+    }
+    /* F5 saves here; unset means F5 explains itself and saves nothing. */
+    s->state_path = SDL_getenv("NJ_SDL2_STATE");
+
     s->capture = SDL_getenv("NJ_SDL2_CAPTURE");
     s->capture_n = 0;
     s->capture_every = 1;
@@ -1314,6 +1718,9 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
     out->display_present = sdl_display_present;
     out->input_poll = sdl_input_poll;
     out->input_push = sdl_input_push;
+    /* No codecs to install, but this is how the port gets the VM it must not
+     * touch except from input_poll (the speed badge and the F5 snapshot). */
+    out->install_codecs = sdl_install_codecs;
     out->shutdown = sdl_shutdown;
     out->fps_cap = 30;
     return NJ_OK;
