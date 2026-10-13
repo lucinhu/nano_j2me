@@ -1506,6 +1506,20 @@ int nj_vm_set_frame_hook(nj_vm *vm, int (*fn)(nj_vm *vm, void *ud), void *ud)
     return 0;
 }
 
+/*
+ * Install the port's own glyph source for characters the built-in faces
+ * cannot draw.  See include/nj2me/nj_vm.h for the slot layout.
+ */
+int nj_vm_set_fallback_fonts(nj_vm *vm, const nj_font *const *fonts, int count)
+{
+    if (!vm || !fonts || count <= 0) {
+        return -1;
+    }
+    nj_fontset_init(&vm->fonts);
+    nj_fontset_set_fallback_slots(&vm->fonts, fonts, count);
+    return 0;
+}
+
 
 nj_ref nj_vm_new_midlet(nj_vm *vm, const char *class_name, nj_ref *out_exc)
 {

@@ -69,6 +69,24 @@ nj_u4   nj_vm_destroy(nj_vm *vm);
  */
 int     nj_vm_use_font_file(nj_vm *vm, const char *path);
 
+/*
+ * Install the port's own glyph source, for a platform whose text stack is
+ * reachable only through an API rather than a font file.
+ *
+ * `fonts` is indexed by size_index(size) * NJ_FONT_SLOT_STYLES + bold - small,
+ * medium, large, each plain then bold - and each face is borrowed, not copied,
+ * so it must outlive the VM.  A NULL entry leaves that slot alone.  The faces
+ * are consulted for characters the built-in bitmap faces cannot draw, and the
+ * renderer blends them when they set `coverage`.
+ *
+ * Install before the MIDlet starts, and before nj_vm_use_font_file(): a
+ * TrueType face rebuilds the slots and gives each one its own fallback chain.
+ *
+ * Returns 0, or -1 if vm or fonts is NULL or count is not positive.
+ */
+int     nj_vm_set_fallback_fonts(nj_vm *vm, const nj_font *const *fonts,
+                                 int count);
+
 nj_status nj_vm_start_app(nj_vm *vm, nj_ref midlet);  /* calls MIDlet.startApp() */
 /*
  * Create a MIDlet instance.

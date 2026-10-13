@@ -433,6 +433,24 @@ void nj_fontset_set_fallback(nj_fontset *fs, const nj_font *fb)
     }
 }
 
+void nj_fontset_set_fallback_slots(nj_fontset *fs, const nj_font *const *fonts,
+                                   int count)
+{
+    int i;
+
+    if (fs == NULL || fonts == NULL) {
+        return;
+    }
+    if (!fs->initialized) {
+        nj_fontset_init(fs);
+    }
+    for (i = 0; i < count && i < fs->count && i < NJ_FONTSET_SLOTS; i++) {
+        if (fonts[i] != NULL) {
+            fs->fonts[i].fallback = fonts[i];
+        }
+    }
+}
+
 int nj_font_char_width(const nj_font *f, nj_u2 ch)
 {
     return char_width_depth(f, ch, 0);

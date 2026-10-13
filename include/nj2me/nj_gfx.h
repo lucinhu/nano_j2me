@@ -138,6 +138,23 @@ void          nj_fontset_init(nj_fontset *fs);
 const nj_font *nj_fontset_get(nj_fontset *fs, int size, int style);
 void          nj_fontset_set_fallback(nj_fontset *fs, const nj_font *fb);
 
+/*
+ * Install a fallback per slot, for a port whose glyphs live outside the
+ * runtime: the platform's text API, a system font, a server.
+ *
+ * `fonts` is indexed by size_index(size) * NJ_FONT_SLOT_STYLES + bold, so the
+ * caller can give the large face a bigger provider cell than the small one -
+ * one shared fallback cannot, because it is never told which size asked.
+ * A NULL entry leaves that slot alone, and a count below NJ_FONTSET_SLOTS
+ * only fills the first `count` slots.
+ *
+ * Install this before any TrueType face: nj_fontset_use_ttf() rebuilds the
+ * slots and gives each one its own fallback chain.
+ */
+void          nj_fontset_set_fallback_slots(nj_fontset *fs,
+                                            const nj_font *const *fonts,
+                                            int count);
+
 /* The immutable bitmap table behind a given (size, style) pair.  Exposed so a
  * port can build its own nj_font if it wants a different registry lifetime.
  * Never NULL. */

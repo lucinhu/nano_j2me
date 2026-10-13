@@ -132,6 +132,7 @@ typedef struct ttf_sub {
 struct nj_ttf {
     const nj_u1 *data;
     nj_u4 len;
+    nj_u4 dir;          /* table directory: 0, or a face inside a collection */
     double scale;       /* pixels per font unit */
     int px_size;
     int upem;
@@ -318,11 +319,11 @@ nj_size nj_ttf_sizeof(int cache_glyphs)
 static int ttf_find_table(const nj_ttf *t, nj_u4 tag, ttf_slice *out)
 {
     nj_u4 ntab, i;
-    if (!ttf_u2(t, 4u, &ntab)) {
+    if (!ttf_u2(t, t->dir + 4u, &ntab)) {
         return 0;
     }
     for (i = 0; i < ntab; i++) {
-        nj_u4 rec = 12u + i * 16u;
+        nj_u4 rec = t->dir + 12u + i * 16u;
         nj_u4 tg, off, len;
         if (!ttf_u4v(t, rec, &tg)) {
             break;              /* directory ran off the end: stop looking */
@@ -348,17 +349,17 @@ static int ttf_find_table(const nj_ttf *t, nj_u4 tag, ttf_slice *out)
 static int ttf_check_directory(const nj_ttf *t)
 {
     nj_u4 ntab, i;
-    if (!ttf_u2(t, 4u, &ntab)) {
+    if (!ttf_u2(t, t->dir + 4u, &ntab)) {
         return 0;
     }
     if (ntab > 4096u) {
         return 0;
     }
-    if (!ttf_in(t, 12u, ntab * 16u)) {
+    if (!ttf_in(t, t->dir + 12u, ntab * 16u)) {
         return 0;
     }
     for (i = 0; i < ntab; i++) {
-        nj_u4 rec = 12u + i * 16u;
+        nj_u4 rec = t->dir + 12u + i * 16u;
         nj_u4 off, len;
         if (!ttf_u4v(t, rec + 8u, &off) || !ttf_u4v(t, rec + 12u, &len)) {
             return 0;
@@ -1846,6 +1847,123 @@ static int ttf_check_loca(const nj_ttf *t)
     return 1;
 }
 
+/*
+ * Collections ('.ttc')
+ * --------------------
+ *
+ * A collection packs one set of glyphs for several languages into a single
+ * file and shares the tables between them: only the table directory differs
+ * per face, and every offset inside it is absolute, so a face is just a
+ * different starting point.  Android ships no standalone CJK .ttf at all -
+ * its only sans CJK font is NotoSansCJK-Regular.ttc with the JP, KR, SC, TC
+ * and HK faces - so reading a collection is the difference between Chinese
+ * MIDlet text and blank boxes on a phone.
+ *
+ * Which face is a judgement call, and the index is not portable: the five
+ * faces above are ordered JP first, but a vendor is free to reorder them.
+ * The family name is the stable part, so faces are ranked by it and
+ * Simplified Chinese wins.  The JP and SC faces cover the same code points;
+ * they differ in the shapes of a few hundred ideographs, and a Chinese
+ * MIDlet asking for 直 wants the SC one.
+ */
+static int ttf_name_has(const char *hay, const char *needle)
+{
+    nj_size i, n = strlen(needle);
+    if (n == 0u || strlen(hay) < n) {
+        return 0;
+    }
+    for (i = 0; hay[i] != '\0'; i++) {
+        nj_size j = 0;
+        while (j < n) {
+            char a = hay[i + j];
+            char b = needle[j];
+            if (a >= 'a' && a <= 'z') {
+                a = (char)(a - 'a' + 'A');
+            }
+            if (b >= 'a' && b <= 'z') {
+                b = (char)(b - 'a' + 'A');
+            }
+            if (a != b || a == '\0') {
+                break;
+            }
+            j++;
+        }
+        if (j == n) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* 4 = Simplified Chinese, 2 = another Chinese face, 1 = anything else. */
+static int ttf_face_rank(const nj_u1 *data, nj_u4 len, nj_u4 dir)
+{
+    nj_ttf tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    tmp.data = data;
+    tmp.len = len;
+    tmp.dir = dir;
+    if (!ttf_find_table(&tmp, NJ_TTF_TAG('n', 'a', 'm', 'e'), &tmp.name)) {
+        return 1;
+    }
+    ttf_read_name(&tmp);
+    if (ttf_name_has(tmp.namebuf, "SC") || ttf_name_has(tmp.namebuf, "Hans") ||
+        ttf_name_has(tmp.namebuf, "Simplified") || ttf_name_has(tmp.namebuf, "GB")) {
+        return 4;
+    }
+    if (ttf_name_has(tmp.namebuf, "TC") || ttf_name_has(tmp.namebuf, "HK") ||
+        ttf_name_has(tmp.namebuf, "Traditional")) {
+        return 2;
+    }
+    return 1;
+}
+
+/* The table directory of the best face, or 0 if this is not a collection. */
+static int ttf_collection_dir(const nj_u1 *data, nj_u4 len, nj_u4 *out)
+{
+    nj_u4 nfaces, i, best_dir = 0u;
+    int best_rank = 0;
+    nj_ttf tmp;
+
+    memset(&tmp, 0, sizeof(tmp));
+    tmp.data = data;
+    tmp.len = len;
+    if (!ttf_u4v(&tmp, 8u, &nfaces)) {
+        return 0;
+    }
+    if (nfaces == 0u || nfaces > 64u) {
+        return 0;                   /* not a collection we can believe */
+    }
+    if (!ttf_in(&tmp, 12u, nfaces * 4u)) {
+        return 0;
+    }
+    for (i = 0; i < nfaces; i++) {
+        nj_u4 dir, version;
+        int rank;
+        if (!ttf_u4v(&tmp, 12u + 4u * i, &dir)) {
+            return 0;
+        }
+        /* The face must start with its own sfnt version, which is also the
+         * cheapest proof that the offset is a table directory at all. */
+        if (!ttf_u4v(&tmp, dir, &version)) {
+            continue;
+        }
+        if (version != 0x00010000u && version != 0x74727565u) {
+            continue;
+        }
+        rank = ttf_face_rank(data, len, dir);
+        if (best_dir == 0u || rank > best_rank) {
+            best_dir = dir;
+            best_rank = rank;
+        }
+    }
+    if (best_dir == 0u) {
+        return 0;
+    }
+    *out = best_dir;
+    return 1;
+}
+
 nj_ttf *nj_ttf_open(void *mem, nj_size mem_bytes,
                     const nj_u1 *data, nj_u4 len, int px_size)
 {    nj_ttf *t;
@@ -1901,6 +2019,16 @@ nj_ttf *nj_ttf_open(void *mem, nj_size mem_bytes,
     /* Directory, then the tables we cannot do without. */
     if (!ttf_u4v(t, 0u, &version)) {
         return NULL;
+    }
+    if (version == NJ_TTF_TAG('t', 't', 'c', 'f')) {
+        nj_u4 dir;
+        if (!ttf_collection_dir(data, len, &dir)) {
+            return NULL;
+        }
+        t->dir = dir;
+        if (!ttf_u4v(t, dir, &version)) {
+            return NULL;
+        }
     }
     if (version != 0x00010000u && version != 0x74727565u) {
         return NULL;            /* including 'OTTO': no glyf outlines here */
