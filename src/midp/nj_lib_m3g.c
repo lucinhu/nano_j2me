@@ -5041,6 +5041,49 @@ NJFN(m3g_img2d_init_obj)
         if (f) {
             nj_field_write_int(vm, self, f, h);
         }
+        /*
+         * The LCDUI image keeps its pixels as ARGB ints in "imgPixels", and
+         * the sampler reads bytes in RGBA order: convert once, here, rather
+         * than at every sample.  This is the path a title takes when it wraps
+         * a PNG it loaded itself - the rally title builds its textures this
+         * way, which is why decoding the file's own Image2D payload was not
+         * enough to put a picture on the track.
+         */
+        if (w > 0 && h > 0 && (nj_size)w * (nj_size)h <= 4096u * 4096u) {
+            nj_field *pxf = nj_field_lookup(vm, "javax/microedition/lcdui/Image",
+                                            "imgPixels", "[I", 0);
+            nj_ref src = pxf ? nj_field_read_ref(vm, o, pxf) : 0;
+            nj_u4 n = (nj_u4)w * (nj_u4)h;
+
+            if (src && nj_array_length(src) >= n) {
+                const nj_s4 *sp = (const nj_s4 *)nj_array_data(src);
+                nj_ref dst = nj_array_new(vm, "B", n * 4u);
+
+                if (dst) {
+                    nj_u1 *dp;
+                    nj_u4 i;
+
+                    nj_root(vm, dst);
+                    dp = (nj_u1 *)nj_array_data(dst);
+                    for (i = 0u; i < n; i++) {
+                        nj_u4 c = (nj_u4)sp[i];
+
+                        dp[i * 4u] = (nj_u1)((c >> 16) & 0xFFu);
+                        dp[i * 4u + 1u] = (nj_u1)((c >> 8) & 0xFFu);
+                        dp[i * 4u + 2u] = (nj_u1)(c & 0xFFu);
+                        dp[i * 4u + 3u] = (nj_u1)((c >> 24) & 0xFFu);
+                    }
+                    f = nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_fmt", "I", 0);
+                    if (f) {
+                        nj_field_write_int(vm, self, f, 100);
+                    }
+                    f = nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B", 0);
+                    if (f) {
+                        nj_field_write_ref(vm, self, f, dst);
+                    }
+                }
+            }
+        }
         return NJ_OK;
     }
     f = nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B", 0);
