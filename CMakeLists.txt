@@ -100,6 +100,7 @@ set(NJ_SOURCES
   src/core/nj_builtins.c
   src/core/nj_device.c
   src/core/nj_detect.c
+  src/core/nj_save.c
   # ---- java.lang, in C ----
   src/core/nj_lib_object.c
   src/core/nj_lib_string.c
@@ -808,6 +809,12 @@ nj_add_test(test_clip tests/test_clip.c)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_detect.c)
     nj_add_test(test_detect tests/test_detect.c)
     nj_add_test(test_speed tests/test_speed.c)
+  endif()
+
+  # Save state / restore state: runs the fielddemo fixture in one VM, saves it
+  # mid-run and resumes it in a second VM in the same process.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_save.c)
+    nj_add_test(test_save tests/test_save.c)
   endif()
 
   foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib)

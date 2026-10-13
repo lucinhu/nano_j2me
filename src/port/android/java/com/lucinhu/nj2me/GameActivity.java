@@ -69,6 +69,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private String jarPath = "";   /* absolute: what the port opens */
     private String jarName = "";   /* file name: the JarStore key */
     private String jarTitle = "";
+    private String statePath;      /* the snapshot to restore, or null */
     private int screenW = JarStore.DEF_W;
     private int screenH = JarStore.DEF_H;
     private int heapMB = JarStore.DEF_HEAP_MB;
@@ -136,6 +137,17 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * frame; the VM is never touched from this thread.
      */
     private static native void nativeSetSpeed(long handle, int percent);
+
+    /*
+     * State save/restore.  The VM runs on its own thread, so the UI thread only
+     * ever asks: nativeSetRestore() is read once, before the MIDlet starts,
+     * and nativeSaveState() leaves a request that the VM thread performs at its
+     * next frame boundary and then waits for - a frame is a few milliseconds,
+     * and an answer that says "saved" when nothing was written is worse than a
+     * slow one.
+     */
+    private static native void nativeSetRestore(long handle, String path);
+    private static native int nativeSaveState(long handle, String path);
 
     private static native void nativeQuit(long handle);
 
@@ -213,6 +225,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             jarPath = jarName;
         }
         jarTitle = it.getStringExtra("title");
+        statePath = it.getStringExtra("state");
         screenW = it.getIntExtra("w", JarStore.DEF_W);
         screenH = it.getIntExtra("h", JarStore.DEF_H);
         heapMB = it.getIntExtra("heap", JarStore.DEF_HEAP_MB);
@@ -398,6 +411,12 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                                       JarStore.fsRoot(this).getAbsolutePath());
             if (handle != 0) {
                 nativeSetSpeed(handle, speed);
+                if (statePath != null) {
+                    /* Read on the VM thread before the MIDlet starts: a
+                     * restored VM resumes mid-method, so there is nothing to
+                     * start. */
+                    nativeSetRestore(handle, statePath);
+                }
             }
                 if (handle == 0) {
                     Log.e(TAG, "port creation failed");
@@ -678,6 +697,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 shown ? "收起帧率、缩放这些数字" : "看帧率、缩放和测到的画面大小", false, null);
         LinearLayout fast = Md3.row(this, Md3.IC_PLAY, "游戏速度",
                 speedText() + " · 慢动作到三倍速", false, null);
+        LinearLayout save = Md3.row(this, Md3.IC_MEMORY, "保存状态",
+                "把这一局的进度存下来，回到游戏卡片里选「恢复进度」", false, null);
         LinearLayout quit = Md3.dangerRow(this, Md3.IC_POWER, "退出游戏", null);
 
         box.addView(adjust, Md3.gap(this, 12));
@@ -685,6 +706,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(toggle);
         box.addView(Md3.divider(this));
         box.addView(fast);
+        box.addView(Md3.divider(this));
+        box.addView(save);
         box.addView(Md3.divider(this));
         box.addView(quit);
 
@@ -722,6 +745,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 speedDialog();
             }
         });
+        save.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                dlg.dismiss();
+                saveState();
+            }
+        });
         quit.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -733,6 +763,29 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 }
             }
         });
+    }
+
+    /**
+     * Asks the VM thread for a snapshot and reports what actually happened.
+     * A snapshot is only possible between frames and outside a native call -
+     * the port refuses the rest - so this can fail, and saying so beats a
+     * toast that promises a file nobody wrote.
+     */
+    private void saveState() {
+        int rc;
+        String path = JarStore.stateFile(this, jarName).getAbsolutePath();
+        synchronized (lock) {
+            if (handle == 0) {
+                toast("游戏还没跑起来，稍等一下再存");
+                return;
+            }
+            rc = nativeSaveState(handle, path);
+        }
+        if (rc == 0) {
+            toast("已保存进度，下次在游戏卡片里选「恢复进度」");
+        } else {
+            toast("这次没能保存（错误 " + rc + "）");
+        }
     }
 
     /** "1.0x" for the current speed, for a row's hint. */

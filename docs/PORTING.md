@@ -283,7 +283,7 @@ parks that thread in `idle()` instead of letting it spin against a dead surface.
 
 ### The shell around the game
 
-Twelve things in that shell are worth copying, because each one is a rule a plain
+Thirteen things in that shell are worth copying, because each one is a rule a plain
 "put a SurfaceView in an Activity" port gets wrong:
 
 - **The name comes from the jar, not from the file.** `JarName.of(File)` reads
@@ -456,6 +456,26 @@ Twelve things in that shell are worth copying, because each one is a rule a plai
   reach a device the settings deny - and the sidecar value is read with
   `parseFlag()`, not `parseInt()`, because `parseInt()` treats anything that is
   not positive as "missing", which is exactly wrong for `net=0`.
+
+- **A game can be put away and picked up.** `nj_vm_save()` writes the whole
+  machine - the arena image, the statics, the interned strings, every thread's
+  Java stack and the frame it stopped in - and `nj_vm_load()` reads it back into
+  a fresh VM with the same JAR attached. It is small here for one reason worth
+  stating: this runtime has no mutable global state and exactly one OS thread
+  executes Java, and Java threads are cooperative fibres that park by returning
+  from the interpreter, so no C stack is ever suspended and a snapshot is a data
+  structure rather than a process. Two things make it work in practice: the
+  loader re-derives every host cache (class and field memos, `cp_cache`,
+  resolved and linked classes) instead of imaging it, and the class list is
+  matched by name *and* by ABI - instance size, field and method counts, statics
+  order - so a rebuilt JAR is refused instead of half-applied. What a snapshot
+  cannot carry is a live native handle: a MIDlet sitting inside `socket`,
+  `sensor`, `bluetooth`, a `Player` or the framebuffer has no C state to image,
+  so `nj_vm_can_save()` refuses while any native frame is on the stack, and the
+  port drops the rest on load and lets the next call fail the way a closed
+  connection does. One layout detail is easy to miss: an array's payload and an
+  embedded string live at `object + sizeof(nj_object)`, so those two pointers are
+  baked into the image and the loader recomputes them rather than copying them.
 
 ## Worked example: a bare-metal board
 

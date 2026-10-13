@@ -880,6 +880,42 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
         port.log(port.user, 2, buf);
     }
 
+    /*
+     * ---- resume a snapshot, if asked ----
+     *
+     * Loading happens here and not earlier because the classes have to come
+     * from the JAR: the loader resolves every saved class by name against
+     * vm->source, which nj_app_open() has just installed.  It happens before
+     * the MIDlet is created and started because the restored threads are
+     * already sitting inside startApp() (or inside paint(), or inside a
+     * Thread.run()) - constructing and starting a MIDlet on top of that would
+     * run the application twice.
+     */
+    if (opts->load_state_path != NULL && opts->load_state_path[0] != '\0') {
+        if (nj_vm_load_file(vm, opts->load_state_path) == NJ_OK) {
+            if (port.log) {
+                char buf[320];
+                snprintf(buf, sizeof(buf), "resumed %s from %s",
+                         class_name, opts->load_state_path);
+                port.log(port.user, 2, buf);
+            }
+            goto resumed;
+        }
+        /*
+         * A snapshot that will not load is not fatal: the caller asked for a
+         * convenience, and a stale or foreign file must not cost them the run.
+         * Say so and start the MIDlet normally - the VM is left untouched by a
+         * refused load (nj_vm_load() either installs everything or nothing).
+         */
+        if (port.log) {
+            char buf[384];
+            snprintf(buf, sizeof(buf),
+                     "cannot resume from %s; starting the MIDlet instead",
+                     opts->load_state_path);
+            port.log(port.user, 0, buf);
+        }
+    }
+
     /* ---- the MIDlet ---- */
     midlet = nj_vm_new_midlet(vm, class_name, &exc);
     if (!midlet) {
@@ -1007,6 +1043,7 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
         }
     }
 
+resumed:
     /* ---- the frame loop ---- */
     {
         nj_status st;
@@ -1055,6 +1092,38 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
                 key_script_tick(&port, &keys, nj_vm_frames(vm));
                 st = nj_midp_frame(vm);
                 attempted++;
+                /*
+                 * --save-state: one snapshot, written at a frame boundary and
+                 * then forgotten, so the run continues with the same timing it
+                 * would have had without the flag.  A frame boundary is the
+                 * only safe place: every thread is parked between frames, no
+                 * native call is on a thread's stack and no paint is half done,
+                 * which is exactly what nj_vm_can_save() checks.
+                 */
+                if (opts->save_state_path != NULL &&
+                    opts->save_state_path[0] != '\0' &&
+                    attempted == (nj_u8)(opts->save_state_frame > 0u
+                                             ? opts->save_state_frame : 1u)) {
+                    nj_status src = NJ_ERR_STATE;
+
+                    /* nj_vm_can_save() is non-zero when a snapshot is possible. */
+                    if (nj_vm_can_save(vm) != 0) {
+                        src = nj_vm_save_file(vm, opts->save_state_path);
+                    }
+                    if (port.log) {
+                        char buf[384];
+                        if (src == NJ_OK) {
+                            snprintf(buf, sizeof(buf), "saved state to %s after "
+                                     "%llu frame(s)", opts->save_state_path,
+                                     (unsigned long long)attempted);
+                        } else {
+                            snprintf(buf, sizeof(buf), "cannot save state to "
+                                     "%s (%d); the run continues",
+                                     opts->save_state_path, src);
+                        }
+                        port.log(port.user, src == NJ_OK ? 2 : 0, buf);
+                    }
+                }
                 if (st != NJ_OK) {
                     break;
                 }
@@ -1110,7 +1179,7 @@ done:
             snprintf(buf, sizeof(buf),
                      "stats: frames=%lu paints=%lu gfx=%lu tris=%lu m3g=%lu time=%.3fs fps=%.1f "
                      "bytecodes=%lu (%.2f M/s) natives=%lu "
-                     "heap=%lu/%lu bytes cpcache=%lu/%lu",
+                     "heap=%lu/%lu bytes cpcache=%lu/%lu findcache=%lu/%lu",
                      (unsigned long)s.frames, (unsigned long)s.paints,
                      (unsigned long)s.gfx_calls, (unsigned long)s.tris,
                      (unsigned long)s.m3g_renders, secs,
@@ -1120,7 +1189,9 @@ done:
                      (unsigned long)s.native_calls,
                      (unsigned long)s.heap_used, (unsigned long)s.heap_peak,
                      (unsigned long)s.cp_cache_hits,
-                     (unsigned long)s.cp_cache_misses);
+                     (unsigned long)s.cp_cache_misses,
+                     (unsigned long)s.find_hits,
+                     (unsigned long)s.find_misses);
             port.log(port.user, 2, buf);
 
             /*

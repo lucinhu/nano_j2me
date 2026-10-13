@@ -16,6 +16,8 @@
 #ifndef NJ_VM_H
 #define NJ_VM_H
 
+#include <stdio.h>   /* FILE, for nj_vm_save()/nj_vm_load() */
+
 #include "nj_types.h"
 #include "nj_port.h"
 
@@ -320,6 +322,8 @@ typedef struct nj_vm_stats {
     nj_u2   classes;
     nj_u2   threads;
     nj_u2   cp_cache_entries;
+    nj_u8   find_hits;
+    nj_u8   find_misses;
     nj_u4   cp_cache_hits;
     nj_u4   cp_cache_misses;
     nj_u2   natives;
@@ -364,6 +368,48 @@ void nj_vm_get_stats(nj_vm *vm, nj_vm_stats *out);
 void nj_vm_set_speed(nj_vm *vm, int percent);
 
 int nj_vm_speed(const nj_vm *vm);
+
+/*
+ * Save and restore the state of a running VM ("save state").
+ *
+ * nj_vm_save() photographs the whole Java world: the object arena, the static
+ * fields, the interned string table, the MIDlet and the current Displayable,
+ * every live thread with its bytecode frames and operand stacks, the game
+ * clock and the speed multiplier.  nj_vm_load() rebuilds all of it in a fresh
+ * VM that has the same JAR attached, so a MIDlet interrupted mid-level
+ * continues where it stopped - in this process or in a later one.
+ *
+ * Classes are identified by NAME and re-resolved from the JAR the caller
+ * attached to the fresh VM, so the blob carries no host pointers and no class
+ * file bytes.  If the attached JAR does not produce the same classes, or the
+ * same field offsets and static slot assignment, the blob is refused
+ * (NJ_ERR_FORMAT) rather than half-applied.  The screen geometry must match
+ * too.
+ *
+ * A blob is not portable across a changed JAR, a different NJ_MAX_* build, a
+ * different pointer size or a different endianness: all four are checked.
+ *
+ * WHAT A RESTORE CANNOT BRING BACK
+ * Native handles owned by the port - sockets, Bluetooth connections, sensor
+ * channels, audio, the framebuffer - and any MIDlet running its own native
+ * thread, cannot be represented.  After a successful load the restored MIDlet
+ * may hold dead native handles; the port must drop them (close sockets, stop
+ * players, re-open sensors) before the MIDlet runs again.  A blob is only
+ * taken when no native call is in flight, so the Java side always resumes at a
+ * point the port can re-establish.
+ *
+ * nj_vm_can_save() returns non-zero when a snapshot is possible right now; it
+ * is cheap and side-effect free, so a UI can grey out its "save" item.
+ * nj_vm_save() returns NJ_OK or NJ_ERR_STATE when the VM cannot be saved.
+ * nj_vm_load() consumes a blob and returns NJ_OK, NJ_ERR_FORMAT (corrupt,
+ * truncated, wrong ABI, wrong JAR) or NJ_ERR_NOMEM.  A failed load leaves the
+ * VM unusable: create a fresh one and try again.
+ */
+int  nj_vm_can_save(const nj_vm *vm);
+int  nj_vm_save(nj_vm *vm, FILE *f);
+int  nj_vm_load(nj_vm *vm, FILE *f);
+int  nj_vm_save_file(nj_vm *vm, const char *path);
+int  nj_vm_load_file(nj_vm *vm, const char *path);
 
 /*
  * Diagnostic: describe where every live thread currently is.
@@ -792,6 +838,13 @@ nj_u4 nj_m3g_raster_tri(struct nj_gfx *g, const float xy[6], nj_u4 argb);
 /* Walk a scene graph from `root` and collect the Meshes under it, in the
    order the graph gives them.  Returns how many there are, which may be more
    than `cap`; only the first `cap` are written. */
+/*
+ * The same walk as nj_m3g_collect_meshes(), and for each mesh the matrix that
+ * takes its vertices to world space (the product of the Group transforms
+ * above it).  mats may be NULL when only the meshes are wanted.
+ */
+nj_u4 nj_m3g_collect_meshes_m(nj_vm *vm, nj_ref root, nj_ref *out, float *mats,
+                              nj_u4 cap);
 nj_u4 nj_m3g_collect_meshes(nj_vm *vm, nj_ref root, nj_ref *out, nj_u4 cap);
 
 /* Draw a Mesh: read its VertexBuffer's positions, project them through the

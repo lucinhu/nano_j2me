@@ -607,6 +607,8 @@ static void nj_gc_mark_roots(nj_vm *vm)
      * list's next-pointer.  Two were missing:
      *
      *   media_players  the Vector of running Players
+     *   sensor_conns   the sensor connections with a DataListener installed
+     *   bt_jobs        the Bluetooth jobs a listener is waiting on
      *   entry_this     (below) the receiver of a thread's bottom frame
      *
      * The second one is what a corpus title tripped over: its paint() called a
@@ -615,6 +617,14 @@ static void nj_gc_mark_roots(nj_vm *vm)
      * emulator inside nj_method_lookup with no hint of the cause.
      */
     nj_gc_mark_object(vm, vm->media_players);
+    /*
+     * These two are held for the same reason as media_players: the listener
+     * callbacks are pumped from the frame loop, so nothing on the Java side
+     * keeps the Vector of sensor connections or the Bluetooth job objects
+     * alive between frames.
+     */
+    nj_gc_mark_object(vm, vm->sensor_conns);
+    nj_gc_mark_object(vm, vm->bt_jobs);
 
     /* temporary + registered C roots */
     for (i = 0; i < vm->nroots; i++) {

@@ -335,6 +335,21 @@ typedef struct android_state {
     int   speed_applied;
     int   det_raw_same;
 
+    /*
+     * State snapshots.  The same rule as the speed: the UI thread leaves a
+     * request (a path plus a flag) and the run thread serves it at the top of a
+     * frame, which is a point where the VM is between frames and outside every
+     * native call.  save_done/save_rc are the answer the UI thread waits for,
+     * under lock, so "saved" is never printed for a file nobody wrote.
+     */
+    char  save_path[512];
+    int   save_req;
+    int   save_busy;
+    int   save_done;
+    int   save_rc;
+    char  restore_path[512];
+    int   restore;
+
     nj_event queue[256];
     int   qh, qt;
 
@@ -1098,6 +1113,38 @@ static int android_input_poll(void *ud, nj_event *ev)
     if (s->speed_percent > 0 && s->speed_percent != s->speed_applied && s->vm) {
         nj_vm_set_speed(s->vm, s->speed_percent);
         s->speed_applied = s->speed_percent;
+        /*
+         * Logged because the multiplier is invisible in a screenshot: the
+         * frame counter is what the device can draw, not what the MIDlet's
+         * clock says, so a player reporting "3x does nothing" has nothing to
+         * point at.  This line is that evidence.
+         */
+        __android_log_print(ANDROID_LOG_INFO, "nj2me",
+                            "speed: MIDlet time runs at %d%%", s->speed_percent);
+    }
+    /*
+     * A snapshot the player asked for.  Taken here and not in the JNI call
+     * because this is the VM's own thread at the top of a frame: the object
+     * arena, every Java stack and the scheduler are all in a state the blob can
+     * record, and no native call is in flight.
+     */
+    pthread_mutex_lock(&s->lock);
+    if (s->save_req) {
+        s->save_req = 0;
+        s->save_busy = 1;
+        pthread_mutex_unlock(&s->lock);
+        {
+            int rc = s->vm ? nj_vm_save_file(s->vm, s->save_path) : NJ_ERR_STATE;
+            __android_log_print(rc == NJ_OK ? ANDROID_LOG_INFO : ANDROID_LOG_WARN,
+                                "nj2me", "state: save to %s -> %d", s->save_path, rc);
+            pthread_mutex_lock(&s->lock);
+            s->save_rc = rc;
+            s->save_busy = 0;
+            s->save_done = 1;
+            pthread_mutex_unlock(&s->lock);
+        }
+    } else {
+        pthread_mutex_unlock(&s->lock);
     }
     pthread_mutex_lock(&s->lock);
     if (s->qh != s->qt) {
@@ -4261,12 +4308,13 @@ int nj_port_android_stats(const nj_port *port, char *buf, nj_size cap)
     n = snprintf(buf, cap,
                  "screen=%dx%d window=%dx%d scale=%.2f frames=%ld keys=%d "
                  "ptr=%d paused=%d view=%d zoom=%.2f det=%dx%d@%d,%d f=%d%s "
-                 "audio=%s",
+                 "speed=%d audio=%s",
                  s->width, s->height, s->win_w, s->win_h, (double)s->view_scale,
                  s->frames_presented, s->key_events, s->ptr_events,
                  s->paused, s->view_mode, (double)s->view_zoom,
                  s->det_w, s->det_h, s->det_x, s->det_y, s->det_frames,
                  s->det_done ? "" : "?",
+                 s->speed_applied > 0 ? s->speed_applied : 100,
                  a ? (a->failed ? "failed"
                                 : (a->stream_paused ? "paused" : "on")) : "off");
     if (n > 0 && n < (int)cap && a && a->stream) {
@@ -4319,6 +4367,19 @@ static void *android_main_thread(void *arg)
     if (s && s->glyph_mid && s->face_ptrs[0]) {
         a->opts.fallback_fonts = s->face_ptrs;
         a->opts.fallback_count = NJ_FONTSET_SLOTS;
+    }
+    /*
+     * Resume instead of starting, when the player picked "恢复进度".  The
+     * runner loads the blob right after it has created the VM and attached the
+     * jar, and a successful load replaces the MIDlet start: the restored thread
+     * resumes in the middle of a method.
+     */
+    if (s) {
+        pthread_mutex_lock(&s->lock);
+        if (s->restore && s->restore_path[0] != '\0') {
+            a->opts.load_state_path = s->restore_path;
+        }
+        pthread_mutex_unlock(&s->lock);
     }
     (void)nj_run(&a->port, &a->opts);
     if (s && s->run_attached && s->jvm) {
@@ -4918,6 +4979,74 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetSpeed(JNIEnv *env, jobject thiz,
             s->speed_percent = (int)percent;
         }
     }
+}
+
+/*
+ * State snapshots, from the UI thread's side.
+ *
+ * Restore is only remembered here: the run thread reads it before the MIDlet
+ * starts, because a restored VM resumes in the middle of a method - there is
+ * nothing to start.
+ */
+JNIEXPORT void JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeSetRestore(JNIEnv *env, jobject thiz,
+                                                     jlong handle, jstring path)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    android_state *s;
+    (void)thiz;
+    if (!a || !(s = AS(a->port.ud))) {
+        return;
+    }
+    pthread_mutex_lock(&s->lock);
+    s->restore = android_jstr(env, path, s->restore_path, sizeof(s->restore_path));
+    pthread_mutex_unlock(&s->lock);
+}
+
+/*
+ * Save leaves the path for the run thread and waits for its answer.  Bounded,
+ * because reporting "saved" before the file exists is worse than reporting a
+ * timeout: the player would quit and lose the game twice.
+ */
+JNIEXPORT jint JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeSaveState(JNIEnv *env, jobject thiz,
+                                                    jlong handle, jstring path)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    android_state *s;
+    char pathbuf[512];
+    int waited = 0;
+    int rc = NJ_ERR_STATE;
+    (void)thiz;
+    if (!a || !(s = AS(a->port.ud))) {
+        return NJ_ERR_STATE;
+    }
+    if (!android_jstr(env, path, pathbuf, sizeof(pathbuf))) {
+        return NJ_ERR_STATE;
+    }
+    pthread_mutex_lock(&s->lock);
+    if (s->save_req || s->save_busy) {
+        pthread_mutex_unlock(&s->lock);
+        return NJ_ERR_STATE;      /* one snapshot at a time */
+    }
+    snprintf(s->save_path, sizeof(s->save_path), "%s", pathbuf);
+    s->save_done = 0;
+    s->save_req = 1;
+    pthread_mutex_unlock(&s->lock);
+
+    while (waited < 4000) {
+        pthread_mutex_lock(&s->lock);
+        if (s->save_done) {
+            rc = s->save_rc;
+            s->save_done = 0;
+            pthread_mutex_unlock(&s->lock);
+            return rc;
+        }
+        pthread_mutex_unlock(&s->lock);
+        usleep(5000);
+        waited += 5;
+    }
+    return NJ_ERR_STATE;
 }
 
 /*

@@ -490,6 +490,15 @@ public class LibraryActivity extends Activity {
     }
 
     private void launch(JarStore.Entry e) {
+        launch(e, false);
+    }
+
+    /**
+     * @param restore true to hand the game its saved snapshot: the port loads it
+     *                before the MIDlet starts, so the game resumes where the
+     *                player left it instead of at the title screen.
+     */
+    private void launch(JarStore.Entry e, boolean restore) {
         JarStore.touch(this, e);
         Intent it = new Intent(this, GameActivity.class);
         it.putExtra("jar", e.jar.getName());
@@ -502,10 +511,13 @@ public class LibraryActivity extends Activity {
         it.putExtra("zoom", e.zoom);
         it.putExtra("panx", e.panX);
         it.putExtra("pany", e.panY);
+        if (restore) {
+            it.putExtra("state",
+                    JarStore.stateFile(this, e.jar.getName()).getAbsolutePath());
+        }
         startActivity(it);
     }
 
-    /** After importing, ask the two questions that decide whether it will run. */
     /** After importing, ask the two questions that decide whether it will run. */
     private void offload(final JarStore.Entry e) {
         LinearLayout box = Md3.body(this);
@@ -552,6 +564,18 @@ public class LibraryActivity extends Activity {
                 launch(e);
             }
         }), Md3.gap(this, 12));
+        if (JarStore.hasState(this, e.jar.getName())) {
+            /* Only offered when there is something to go back to: a row that
+             * starts the game at the title screen while calling itself "resume"
+             * is worse than no row at all. */
+            box.addView(rowAction(Md3.IC_PLAY, "恢复进度",
+                    "接着上次保存的地方继续玩", new Runnable() {
+                        @Override
+                        public void run() {
+                            launch(e, true);
+                        }
+                    }));
+        }
         box.addView(Md3.divider(this));
         box.addView(rowAction(Md3.IC_SCREEN, "画布大小", e.w + "x" + e.h, new Runnable() {
             @Override
@@ -592,6 +616,16 @@ public class LibraryActivity extends Activity {
                         sensorDialog(e);
                     }
                 }));
+        if (JarStore.hasState(this, e.jar.getName())) {
+            box.addView(dangerAction(Md3.IC_DELETE, "删除存档", new Runnable() {
+                @Override
+                public void run() {
+                    JarStore.deleteState(LibraryActivity.this, e.jar.getName());
+                    toast("已删除存档");
+                    options(e);
+                }
+            }));
+        }
         box.addView(Md3.divider(this));
         box.addView(Md3.dangerRow(this, Md3.IC_DELETE, "删除", new View.OnClickListener() {
             @Override
@@ -948,6 +982,19 @@ public class LibraryActivity extends Activity {
     /** A 56dp dialog row that closes the open dialog and then does its work. */
     private LinearLayout rowAction(int icon, String label, String hint, final Runnable action) {
         return Md3.row(this, icon, label, hint, false, new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                if (openBox != null) {
+                    openBox.dismiss();
+                }
+                action.run();
+            }
+        });
+    }
+
+    /** Like rowAction(), in the error colour - for the things that destroy. */
+    private LinearLayout dangerAction(int icon, String label, final Runnable action) {
+        return Md3.dangerRow(this, icon, label, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 if (openBox != null) {

@@ -27,6 +27,9 @@ static void usage(const char *argv0)
 "  --rms-dir <path>     where RecordStore files are kept\n"
 "  --fps <n>            frame rate cap (default: 30; 0 = uncapped)\n"
 "  --run-frames <n>     stop after n presented frames (for benchmarks)\n"
+"  --save-state <file>  write a VM snapshot at a frame boundary and keep going\n"
+"  --save-state-frame <n>  which frame boundary to snapshot (default: 1)\n"
+"  --load-state <file>  resume a snapshot instead of starting the MIDlet\n"
         "  --fs-dir <path>      root for file:// (JSR 75); no filesystem by default\n"
 "  --stats              print bytecode and frame counters at the end\n"
 "  --device <name>      answer System.getProperty() as this handset\n"
@@ -94,6 +97,9 @@ typedef struct cli {
     const char *keys;
     const char *font;
     const char *device_name;
+    const char *save_state;
+    const char *load_state;
+    int         save_frame;
 } cli;
 
 /*
@@ -232,6 +238,16 @@ int main(int argc, char **argv)
             c.where = 1;
         } else if (strcmp(a, "--run-frames") == 0 && i + 1 < argc) {
             c.run_frames = atoi(argv[++i]);
+        } else if (strcmp(a, "--save-state") == 0 && i + 1 < argc) {
+            c.save_state = argv[++i];
+            c.save_frame = 1;
+        } else if (strcmp(a, "--save-state-frame") == 0 && i + 1 < argc) {
+            c.save_frame = atoi(argv[++i]);
+            if (c.save_frame < 1) {
+                c.save_frame = 1;
+            }
+        } else if (strcmp(a, "--load-state") == 0 && i + 1 < argc) {
+            c.load_state = argv[++i];
         } else if (a[0] == '-') {
             fprintf(stderr, "unknown option: %s\n", a);
             usage(argv[0]);
@@ -328,6 +344,9 @@ int main(int argc, char **argv)
     opts.font_path = c.font;
     opts.props = nprops > 0 ? props : NULL;
     opts.nprops = nprops;
+    opts.load_state_path = c.load_state;
+    opts.save_state_path = c.save_state;
+    opts.save_state_frame = (nj_u4)(c.save_frame > 0 ? c.save_frame : 0);
 
     st = (nj_status)nj_run(&port, &opts);
 

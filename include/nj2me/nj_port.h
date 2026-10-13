@@ -786,6 +786,24 @@ typedef struct nj_run_opts {
      */
     const nj_device_prop *props;
     int         nprops;
+
+    /*
+     * Resume a saved VM instead of starting the MIDlet normally: nj_run()
+     * attaches the JAR, loads this snapshot and then leaves the MIDlet alone,
+     * because the restored thread state is already sitting inside startApp()
+     * (or wherever the snapshot was taken).  NULL runs as usual.  A snapshot
+     * that cannot be restored - a different JAR, a truncated file - is logged
+     * and the run falls back to a normal MIDlet start rather than failing:
+     * resuming is a convenience, not a promise the caller can lose a run over.
+     */
+    const char *load_state_path;
+
+    /*
+     * Write one snapshot at the frame boundary given by save_state_frame and
+     * keep running.  0 means "do not save".
+     */
+    const char *save_state_path;
+    nj_u4       save_state_frame;
 } nj_run_opts;
 
 /*

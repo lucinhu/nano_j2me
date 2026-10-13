@@ -133,6 +133,24 @@ final class JarStore {
         return d;
     }
 
+    /**
+     * Where a saved state for this game lives: next to the jar it belongs to,
+     * so a snapshot travels with the jar it came from and deleting the game
+     * takes its snapshot with it.
+     */
+    static File stateFile(Context ctx, String jar) {
+        return new File(dir(ctx), jar + ".state");
+    }
+
+    static boolean hasState(Context ctx, String jar) {
+        File f = stateFile(ctx, jar);
+        return f.isFile() && f.length() > 0;
+    }
+
+    static void deleteState(Context ctx, String jar) {
+        stateFile(ctx, jar).delete();
+    }
+
     /** Directory the MIDlet sees as its file:// root, and where RMS goes. */
     static File fsRoot(Context ctx) {
         File d = new File(ctx.getFilesDir(), "fs");
