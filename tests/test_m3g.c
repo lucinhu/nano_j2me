@@ -295,6 +295,40 @@ int main(void)
               "attenuation round trips through an array");
 
         /*
+         * The three float fields.  This is the block that matters: the class
+         * declared _nj_intensity and _nj_spotAngle as ints while every native
+         * looked them up as floats, so constructing a Light raised
+         * InternalError, and make() returned a non-null object anyway - the
+         * other checks in this block passed on a Light whose constructor had
+         * thrown.  浴火银河2 is what noticed.  So: assert no exception is
+         * pending, not just that the ref is non-null.
+         */
+        check(!nj_has_exception(vm),
+              "Light.<init> returns without an exception");
+        nj_clear_exception(vm);
+
+        a[0].f = 0.75f;
+        call(vm, l, CLS("Light"), "setIntensity", "(F)V", a, NULL);
+        call(vm, l, CLS("Light"), "getIntensity", "()F", NULL, &r);
+        check(!nj_has_exception(vm), "setIntensity is bound to its field");
+        check(r.f == 0.75f, "intensity round trips");
+        nj_clear_exception(vm);
+
+        a[0].f = 30.0f;
+        call(vm, l, CLS("Light"), "setSpotAngle", "(F)V", a, NULL);
+        call(vm, l, CLS("Light"), "getSpotAngle", "()F", NULL, &r);
+        check(!nj_has_exception(vm), "setSpotAngle is bound to its field");
+        check(r.f == 30.0f, "spot angle round trips");
+        nj_clear_exception(vm);
+
+        a[0].f = 2.5f;
+        call(vm, l, CLS("Light"), "setSpotExponent", "(F)V", a, NULL);
+        call(vm, l, CLS("Light"), "getSpotExponent", "()F", NULL, &r);
+        check(!nj_has_exception(vm), "setSpotExponent is bound to its field");
+        check(r.f == 2.5f, "spot exponent round trips");
+        nj_clear_exception(vm);
+
+        /*
          * The static constants are looked up but not read back: this test has
          * no safe way to read a static field, and doing it the obvious way
          * (nj_field_read_int with a NULL receiver) dereferences obj + offset

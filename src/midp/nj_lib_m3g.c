@@ -3061,8 +3061,8 @@ NJFN(m3g_load_bytes)
 static const nj_builtin_field light_fields[] = {
     { "_nj_mode",       "I",  0 },
     { "_nj_color",      "I",  0 },
-    { "_nj_intensity",  "I",  0 },
-    { "_nj_spotAngle",  "I",  0 },
+    { "_nj_intensity",  "F",  0 },
+    { "_nj_spotAngle",  "F",  0 },
     { "_nj_spotExp",    "F",  0 },
     { "_nj_atten",      "[F", 0 },
     /* The mode constants, static and final: the values a title inlined when
@@ -3100,8 +3100,13 @@ static nj_field *light_f(nj_vm *vm, const char *name, const char *desc)
     nj_field *f = nj_field_lookup(vm, NJ_C_LIGHT, name, desc, 0);
 
     if (!f) {
-        nj_throw(vm, "java/lang/InternalError",
-                 "the Light class is missing a field this native needs");
+        /* Name the field: "a field this native needs" is true and useless, and
+         * it is what made 浴火银河2's InternalError take a rebuild to place. */
+        char msg[128];
+
+        snprintf(msg, sizeof(msg),
+                 "Light has no field %s of type %s", name, desc);
+        nj_throw(vm, "java/lang/InternalError", msg);
     }
     return f;
 }
