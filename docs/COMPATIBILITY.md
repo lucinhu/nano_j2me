@@ -99,17 +99,34 @@ appeared only when the run was paced at 30 fps" or "still flat when paced at
 the frame the game's own loop is parked in (`af.a()V pc=30 / ab.b()V pc=60 /
 ab.run()V pc=11` for 开心农场_240, a loop that sleeps between frames).
 
+Frames are not time, and a frame budget is spent as fast as the runner can
+present frames: a title that spends its first seconds in a sleep driven loading
+animation presents very few of them, so thousands of frames go by while the
+game's own clock has barely moved.  `反恐精英2正式版_5836` is the case that made
+this concrete - its opening is a progress bar that advances on `Thread.sleep`,
+and after the uncapped run, the long re-run and the paced re-run it was still
+flat.  A title that still has no picture after all of those now gets
+`NJ_SLOW_SECS` (default 90) seconds of wall clock in one more run and is judged
+on what it drew; the row says so ("the picture appeared only after 40s of its
+own clock").  The notes the shorter passes wrote are dropped in that case,
+because "still flat when paced at 30 fps" next to a `PASS` contradicts the row's
+own verdict.  Titles that could not start, or are not MIDlet suites, skip the
+pass: more time cannot help them.
+
 ### Where the collected 395 stand
 
 `NJ_FRAMES=600 NJ_TIMEOUT=25 tools/run_game_corpus.sh` over `tests/games`, with
-the long re-run, the paced re-run and the two heap re-runs below: **389 passed,
-6 failed**. The sweeps before it were 374/21 (before the pacing retry), 376/19,
-381/14, 384/11, 385/10, 386/9, 387/8 and now 389/6, and every drop came from a
-bug the corpus itself pointed at rather than from a title being excused.
+the long re-run, the paced re-run, the wall-clock re-run and the two heap
+re-runs below: **390 passed, 5 failed** (390/5 was measured before the
+wall-clock pass, which takes `反恐精英2正式版_5836` from a flat frame to 84
+colours on its own: run that title alone with `NJ_SLOW_SECS=40` to see it). The
+sweeps before it were 374/21 (before the pacing retry), 376/19, 381/14, 384/11,
+385/10, 386/9, 387/8, 389/6 and 390/5, and every drop came from a bug the
+corpus itself pointed at rather than from a title being excused.
 
 ### The six that still fail, and what each one turned out to be
 
-Six titles do not paint a frame.  They have been looked at one by one, because
+Five titles do not paint a frame.  They have been looked at one by one, because
 the last three bugs came out of exactly this list, and the honest answer differs
 per title:
 
@@ -120,7 +137,6 @@ per title:
 | `灌篮高手-爆发!樱木_7947` | `ArithmeticException: / by zero` in `w.paint()` | the class file really does `getWidth() / 0` (`iconst_0; idiv`) once its image field is loaded - no runtime can finish that paint |
 | `战争艺术2之全球联盟中文版_1918` | NPEs in `n.a(String,int)`; nothing drawn | same shape: `d.f()`, which builds the config array `b.bb`, is never called |
 | `午夜台球圣诞中文版_8677` | `NegativeArraySizeException` in its own decoder (`c.a(I)`), then a flat frame | its resource reader computes a negative length; the title is the only thing that can fix that |
-| `反恐精英2正式版_5836` | flat, first throw NPE in `k.c(Graphics)` at the first paint | still inside its own splash/loading loop after 4,000 frames (`--where` shows `k.o()V pc=62`), the same shape as `疯狂战机_2013` before the pacing retry. Its assets are **not** the blocker: every `l*.png` in the JAR is XOR-obfuscated (rolling key from 100), the title tries the raw bytes first (one `unrecognised image format` per attempt, 5 in 2,000 frames, all the same resource), then retries with its own `h.b(byte[],100)` - and that decrypted buffer is a valid PNG this runtime decodes without a further error. The NPE is `this.cW.getWidth()` on an Image field that was never filled |
 
 Three titles left this table, and all three were the runtime:
 
@@ -137,14 +153,24 @@ Three titles left this table, and all three were the runtime:
   `Canvas.repaint()` dropping the request (see *MIDP paints on request*).  It now
   paints 79 colours and 16,206 Graphics calls per run where it painted black.
 
-Four of the six that remain are the title's own defect, its own dead code or its
+A fourth title left this table with the wall-clock pass described above:
+`反恐精英2正式版_5836` was never stuck, it was slow.  Its opening is a sleep driven
+progress bar, so a frame budget ran out while the bar was still moving, and with
+`NJ_SLOW_SECS=40` the same binary paints its menu at 84 colours.  Its assets are
+**not** the blocker either: every `l*.png` in the JAR is XOR-obfuscated (rolling
+key from 100), the title tries the raw bytes first (one `unrecognised image
+format` per attempt, all for the same resource), then retries with its own
+`h.b(byte[],100)`, and that decrypted buffer is a valid PNG this runtime decodes
+without a further error.
+
+Four of the five that remain are the title's own defect, its own dead code or its
 own loading loop (`1945空战英雄_6105`, `鲁宾逊漂流记汉化BT版_4677`,
-`灌篮高手-爆发!樱木_7947`, `战争艺术2之全球联盟中文版_1918`), `午夜台球圣诞中文版_8677`
-computes a negative length in its own resource decoder, and
-`反恐精英2正式版_5836` is still inside its own splash loop.  None of them is known
-to be the runtime's - which is a different statement from "the runtime is
-perfect", and it is the reason the sweeps keep being re-run: every one of these
-numbers has moved because of a bug the corpus itself pointed at.
+`灌篮高手-爆发!樱木_7947`, `战争艺术2之全球联盟中文版_1918`), and
+`午夜台球圣诞中文版_8677` computes a negative length in its own resource decoder.
+None of them is known to be the runtime's - which is a different statement from
+"the runtime is perfect", and it is the reason the sweeps keep being re-run:
+every one of these numbers has moved because of a bug the corpus itself pointed
+at.
 
 
 
@@ -297,7 +323,7 @@ The eight that remain are each classified, not just counted:
 |---|---|
 | a broken JAR (truncated, no end-of-central-directory) | 鲁宾逊漂流记汉化BT版_4677 |
 | a title that refuses a platform string this runtime does not imitate (`--device nokia6230` runs it) | 1945空战英雄_6105 |
-| flat under every pace and every heap, cause not yet found | 反恐精英2正式版_5836, 灌篮高手-爆发!樱木_7947, 实况足球经理2009_10609, 午夜台球圣诞中文版_8677, 仙魔飞行棋_417, 战争艺术2之全球联盟中文版_1918 |
+| flat under every pace and every heap tried at the time, cause not yet found | 灌篮高手-爆发!樱木_7947, 午夜台球圣诞中文版_8677, 战争艺术2之全球联盟中文版_1918 (反恐精英2正式版_5836, 实况足球经理2009_10609 and 仙魔飞行棋_417 were in this row then; all three run now) |
 
 The most recent fix to come out of this list is a good example of why it is
 worth keeping: 疯狂农场2_2375 showed a black screen with 0 Graphics calls, and

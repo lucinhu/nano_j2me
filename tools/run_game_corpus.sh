@@ -25,7 +25,8 @@
 #
 # Environment: NJ_BIN, NJ_GAMES, NJ_HEAP, NJ_SIZES, NJ_TIMEOUT, NJ_FRAMES,
 # NJ_LONG_FRAMES, NJ_MIN_COLOURS, NJ_FPS, NJ_POKE, NJ_CORPUS_WORK, NJ_DEVICE,
-# NJ_PACED_FPS, NJ_PACED_FRAMES, NJ_HEAP_RETRY, NJ_HEAP_BIG.
+# NJ_PACED_FPS, NJ_PACED_FRAMES, NJ_HEAP_RETRY, NJ_HEAP_BIG,
+# NJ_SLOW_SECS.
 # This sweep is deliberately sequential: every title gets the machine, so a
 # frame count means the same thing for all of them.  tools/corpus_fatal.sh is
 # the parallel one when all you need is "does anything crash".
@@ -98,6 +99,14 @@ LONG_FRAMES="${NJ_LONG_FRAMES:-$((FRAMES * 4))}"
 # time.  NJ_PACED_FPS=0 switches the retry off.
 PACED_FPS="${NJ_PACED_FPS:-30}"
 PACED_FRAMES="${NJ_PACED_FRAMES:-300}"
+# Frames are not time.  A title whose opening seconds are a loading animation
+# paced by its own Thread.sleep paints only a few frames per second, so a frame
+# budget of thousands goes by in a moment and the sweep ends up judging the
+# loading bar.  反恐精英2正式版_5836 opens with exactly that, and needs about ten
+# seconds of its own clock before anything else appears.  A title that still
+# has no picture after the retries above gets this many seconds of wall clock
+# and is judged on whatever it drew.  NJ_SLOW_SECS=0 switches the pass off.
+SLOW_SECS="${NJ_SLOW_SECS:-90}"
 STRICT_MOTION="${NJ_STRICT_MOTION:-0}"
 
 while [ $# -gt 0 ]; do
@@ -142,6 +151,9 @@ echo "device: ${DEVICE:-(generic)}   heap: ${HEAP} MB (small retry ${HEAP_RETRY:
 # pace before it is recorded.
 if [ "$FPS" = "0" ] && [ "$PACED_FPS" != "0" ]; then
     echo "pacing: uncapped ($FRAMES frames), unpainted verdicts re-run at $PACED_FPS fps"
+fi
+if [ "${SLOW_SECS:-0}" != "0" ]; then
+    echo "slow starters: a title still without a picture gets ${SLOW_SECS}s of its own clock"
 else
     echo "pacing: $FPS fps"
 fi
@@ -440,6 +452,61 @@ for jar in "${JARS[@]}"; do
         fi
     fi
 
+    # Frames are not time.  A frame budget is spent as fast as the runner can
+    # present frames, and a title that spends its first seconds in a sleep
+    # driven loading animation presents very few of them: thousands of frames
+    # pass in a fraction of a second while the game's own clock has barely
+    # moved.  反恐精英2正式版_5836 draws a progress bar for about ten seconds
+    # before its menu appears, which is why every earlier pass called it flat.
+    # This pass gives such a title real seconds and judges what it drew.
+    slow=""
+    if [ "${SLOW_SECS:-0}" != "0" ] && [ "$used" != "(no size accepted)" ]; then
+        IFS='|' read -r sstatus sframes scols schanged snote <<<"$verdict"
+        sretry=0
+        case "$snote" in
+            "could not start"*|"not a MIDlet suite"*) sretry=0 ;;
+            *)
+                case "$sstatus" in
+                    PASS|SKIP) sretry=0 ;;
+                    *) [ "$scols" -lt "$MIN_COLOURS" ] && sretry=1 ;;
+                esac
+                ;;
+        esac
+        if [ "$sretry" = "1" ]; then
+            size="$used"
+            : > "$log"
+            rm -f "$out"/*.ppm
+            t0=$SECONDS
+            timeout "$SLOW_SECS" "$BIN" --port headless --heap "$HEAP" \
+                    --size "$size" --fps "$PACED_FPS" --run-frames 100000000 \
+                    --stats --dump-frames "$out/" --dump-every 20 \
+                    "${DARGS[@]}" \
+                    "${KARGS[@]}" \
+                    "$jar" >"$log" 2>&1
+            elapsed=$((SECONDS - t0))
+            if ! grep -q "Screen too" "$log"; then
+                sv="$(verdict_for)"
+                case "$sv" in
+                    *"flat frame"*|*"nothing was ever presented"*)
+                        slow="still flat after ${elapsed}s of its own clock" ;;
+                    FAIL*)
+                        slow="still failed after ${elapsed}s of its own clock" ;;
+                    *)
+                        slow="the picture appeared only after ${elapsed}s of its own clock"
+                        # This pass is the better explanation of a picture that
+                        # the shorter passes could not see, so the notes they
+                        # wrote ("still flat when paced") would now contradict
+                        # the row's own PASS.
+                        paced=""
+                        heapbig=""
+                        heapretry=""
+                        ;;
+                esac
+                verdict="$sv"
+            fi
+        fi
+    fi
+
     # Still without a picture, and the sweep is running the title with a heap no
     # handset of the period had.  A MIDlet is entitled to ask how much memory it
     # has (`Runtime.totalMemory()`) and to refuse to run when the answer is not
@@ -570,6 +637,9 @@ for jar in "${JARS[@]}"; do
     fi
     if [ -n "$paced" ]; then
         if [ -n "$note" ]; then note="$note; $paced"; else note="$paced"; fi
+    fi
+    if [ -n "$slow" ]; then
+        if [ -n "$note" ]; then note="$note; $slow"; else note="$slow"; fi
     fi
     case "$status" in
         PASS|SKIP) ;;
