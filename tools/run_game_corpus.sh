@@ -19,7 +19,14 @@
 # it fatal when the corpus is known to be animated.
 #
 # Usage:
-#   tools/run_game_corpus.sh [--dir DIR] [--size WxH] [--timeout SECS] [--jobs N]
+#   tools/run_game_corpus.sh [--dir DIR] [--size WxH] [--timeout SECS]
+#                            [--bin PATH] [--min-colours N] [--strict-motion]
+#
+# Environment: NJ_BIN, NJ_GAMES, NJ_HEAP, NJ_SIZES, NJ_TIMEOUT, NJ_FRAMES,
+# NJ_LONG_FRAMES, NJ_MIN_COLOURS, NJ_FPS, NJ_POKE, NJ_CORPUS_WORK.
+# This sweep is deliberately sequential: every title gets the machine, so a
+# frame count means the same thing for all of them.  tools/corpus_fatal.sh is
+# the parallel one when all you need is "does anything crash".
 #
 # Exits non-zero if any title fails, so it can be a CI gate.
 set -uo pipefail
@@ -115,6 +122,22 @@ declare -A KEYS=(
 keys_for() {
     printf '%s' "${KEYS[$1]:-}"
 }
+
+# Where a title's frames are dumped while it is being measured.
+#
+# Each title's directory is deleted when the title is finished, so a sweep that
+# runs to the end leaves nothing behind.  A sweep that is KILLED does not get
+# that far - and the default temp directory is /tmp, which on this machine is a
+# tmpfs with a *user quota*.  Enough leftover PPM dumps and every later write
+# in the session fails with EDQUOT, shell tools included: that is not a
+# hypothesis, it is what a killed sweep did here.  So the dumps go under the
+# repository (a real filesystem), and a trap removes the current one on any
+# exit, signal included, so a kill costs nothing but the run.
+WORK="${NJ_CORPUS_WORK:-$ROOT/.corpus-work}"
+mkdir -p "$WORK" || exit 2
+out=""
+cleanup() { if [ -n "$out" ]; then rm -rf "$out"; fi; }
+trap cleanup EXIT INT TERM
 
 # Every title that has no script of its own gets this one.
 #
@@ -224,7 +247,7 @@ for jar in "${JARS[@]}"; do
     elif [ -n "$POKE" ]; then
         KARGS=(--keys "$POKE")
     fi
-    out="$(mktemp -d)"
+    out="$(mktemp -d -p "$WORK")"
     log="$out/log.txt"
 
     # One run of this title at the size already chosen in $size, dumping every

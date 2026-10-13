@@ -47,3 +47,8 @@ __pycache__/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Frame dumps from a corpus sweep: the tool keeps them under the repository so
+# that a sweep cannot fill /tmp (a tmpfs with a user quota) and take every
+# other write in the session down with it.
+.corpus-work/
