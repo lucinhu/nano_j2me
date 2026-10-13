@@ -15,7 +15,12 @@ dir="$(mktemp -d)"
 trap 'rm -rf "$dir"' EXIT
 cp "$JAR" "$dir/"
 
-out="$(NJ_FRAMES="${NJ_FRAMES:-20}" NJ_SIZES="240x320" NJ_MIN_COLOURS=2 \
+# The corpus tool dumps every fortieth present, so the run has to present more
+# than forty frames for the verdict to see any picture at all.  It used to be
+# twenty, which was enough while a frame was presented twice (the paint path
+# and the frame hook both called the port); now that the frame boundary
+# presents once, the fixture needs 120 frames to be measured at all.
+out="$(NJ_FRAMES="${NJ_FRAMES:-120}" NJ_SIZES="240x320" NJ_MIN_COLOURS=2 \
         "$ROOT/tools/run_game_corpus.sh" --dir "$dir" 2>/dev/null \
         | grep flatdemo || true)"
 echo "$out"

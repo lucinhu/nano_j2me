@@ -177,15 +177,70 @@ Two things were wrong:
   so the matching `serviceRepaints()` had nothing to service.  It now requests
   the whole canvas.
 * the runner painted again in a frame the application had already painted.  It
-  now skips its own paint for that frame (`vm->painted_in_frame`) and keeps it
-  for every other one: a title that never paints synchronously is still drawn by
-  the runner, which is the only thing that draws it at all (`炸弹人_10311` never
-  calls `repaint()` from its loop).
+  now skips its own paint for that frame (`vm->painted_in_frame`).  That was not
+  enough, because the two painters did not take turns evenly: `合金弹头2013BT版_678`
+  paints itself every second frame, and on the frames in between the runner
+  painted the same canvas with the title's own `paint()` - at a different camera
+  position, because the title's state had moved on.  The screen alternated
+  between two scenes every frame: exactly the "scenery behind the character
+  flickers" a player reported.  Measured over 900 dumped frames, 362 of 898
+  frame pairs showed the two-frame cycle before and **0** after.
+* so the runner now stops painting altogether once the APPLICATION has painted
+  by itself (`vm->app_painted`, set when a paint runs with `vm->in_paint` already
+  set, i.e. from `serviceRepaints()`).  A title that paints itself is left to
+  paint itself, which is what a device does; the runner only paints before the
+  first application paint, which is what draws a title that never asks for one
+  (`炸弹人_10311` never calls `repaint()` from its loop, and relies on exactly
+  that).
+
+The frame boundary also moved.  `present()` used to happen at the end of the
+paint path, which is not the end of the drawing: a title that keeps the
+`Graphics` from `paint()` and draws with it afterwards - out of spec, but
+universal - had its scenery presented only by luck.  The canvas mirror now lives
+in `nj_midp_present()`, called once per frame by the hook in
+`nj_lib_midlet.c` after everything that frame drew, and it mirrors the current
+plain `Canvas`'s buffer (a `GameCanvas` and a `Screen` keep their own, earlier
+path).  `tests/savedgfx/SavedGfx.java` and `tools/check_savedgfx.sh` (ctest
+`check_savedgfx`) pin it: the fixture draws a red block through the saved
+`Graphics` after `serviceRepaints()` returns, and the check requires the last
+presented frame to hold it.  Against the pre-fix runtime the same check reports
+0 red pixels.
 
 `tests/repaintdemo/RepaintDemo.java` and `tools/check_repaint.sh` (ctest
 `check_repaint`) hold the idiom: a worker thread runs it for the whole length of
 the run and the check requires the last presented frame to still be the red
 block it drew inside the window.  Reverting either half makes the check fail.
+
+### A mutable image is white, and always opaque
+
+MIDP 2.0 says of `Image.createImage(int, int)`: "Every pixel within the newly
+created image is white", and "Every pixel within a mutable image is always fully
+opaque."  Neither held: the pixel array was allocated and never filled, so a
+fresh mutable image was transparent black (`0x00000000`), and a translucent
+source drawn into it kept its alpha.  A title that builds a scene off-screen and
+blits it back therefore saw through the parts it had not painted.  The array is
+now filled with white when a mutable image is created, and the blend keeps an
+opaque destination opaque (which is what the alpha composition already did once
+the destination was not transparent to begin with).
+
+`tests/alphademo/AlphaDemo.java` and `tools/check_alphademo.sh` (ctest
+`check_alphademo`) hold the rule: `fresh`, `drawn`, `blend`, `rgbkeep` and `copy`
+are read back through `Image.getRGB()` and compared field by field - before the
+fix, `fresh=0` and `drawn=0x80800000`; after, `fresh=0xffffffff` and
+`drawn=0xffff7f7f`.
+
+### The MIDlet clock is not the scheduler's tick count
+
+`nj_now_ms()` folds the port's millisecond clock into `vm->scheduler_ticks`, and
+`nj_yield()` and the end of `scheduler_step()` each incremented that same
+counter - so every scheduler pass added a millisecond of MIDlet time on top of
+real time.  A busy title gained about 30 ms of clock per 5 ms frame, the
+runner's frame pacer measured every frame as over budget and never slept, and
+`--fps 30` ran `合金弹头2013BT版_678` at 154 fps (2,479 fps uncapped): every
+countdown, animation and `Thread.sleep()` in every title was scaled by the same
+factor.  Both increments are gone; `tests/test_speed.c` pins it with "a
+scheduler pass does not move the clock" (5,000 `nj_yield()` calls leave
+`nj_now_ms()` unchanged) and the same title now runs at 30.0 fps.
 
 ### A title is allowed to ask how much memory it has
 

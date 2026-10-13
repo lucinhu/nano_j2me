@@ -35,7 +35,6 @@
  * the port with display_present().
  */
 #include "nj_midp.h"
-#include <stdio.h>
 #include <stdlib.h>
 #include "nj2me/nj_gfx.h"
 #include "nj2me/nj_png.h"
@@ -308,6 +307,25 @@ static nj_ref img_alloc(nj_vm *vm, int w, int h, int mutable)
         return NULL;
     }
     px = nj_root(vm, px);
+    if (mutable) {
+        /*
+         * MIDP 2.0, Image.createImage(int width, int height): "Every pixel
+         * within the newly created image is white", and of the class: "Every
+         * pixel within a mutable image is always fully opaque."  A Java int[]
+         * arrives zeroed, which is transparent BLACK.  A title builds its
+         * scenery in one of these: it draws a background into part of it,
+         * blends sprites over it, then blits it - and against black the
+         * sprites come out dark while the pixels it never touched see through
+         * to whatever is behind the image.  合金弹头2013BT版_678 re-blends
+         * into the same buffer every frame, so that read as scenery that
+         * flickers between the two.
+         */
+        nj_u4 *mp = (nj_u4 *)px->u.bytes;
+        nj_size n = (nj_size)w * (nj_size)h, k;
+        for (k = 0; k < n; k++) {
+            mp[k] = 0xFFFFFFFFu;
+        }
+    }
     nj_field_write_int(vm, img, fw, w);
     nj_field_write_int(vm, img, fh, h);
     nj_field_write_int(vm, img, fm, mutable ? 1 : 0);
@@ -558,9 +576,42 @@ void nj_midp_repaint(nj_vm *vm)
     }
 }
 
-static void screen_present(nj_vm *vm)
+void nj_midp_present(nj_vm *vm)
 {
-    if (vm && vm->port && vm->port->display_present && vm->screen.pixels) {
+
+    if (!vm) {
+        return;
+    }
+    {
+        /*
+         * Mirror the current Canvas' buffer onto the screen HERE, at the frame
+         * boundary, rather than at the end of nj_midp_paint().  A title may
+         * keep the Graphics that paint() handed it and go on drawing with it
+         * after returning; a blit taken at the end of paint() can never show
+         * that drawing, and the pixels it wrote are then overwritten by the
+         * next paint.  合金弹头2013BT版_678 loses its foreground scenery layer
+         * on alternate frames for exactly that reason.
+         *
+         * canvas_ensure_buffer() is deliberately not called: a present must not
+         * change the canvas' geometry, it only shows what is already there.
+         */
+        nj_ref cur = nj_midp_current(vm);
+
+        if (cur && isa(vm, cur, NJ_C_CANVAS) && !isa(vm, cur, NJ_C_GAMECANVAS)
+            && vm->screen.pixels) {
+            nj_surface *scr = nj_midp_screen(vm);
+            nj_ref buf = rget(vm, cur, NJ_C_CANVAS, F_C_BUFFER, D_IMAGE);
+            nj_image view;
+
+            if (scr && buf && img_view(vm, buf, &view)) {
+                nj_gfx blit;
+                nj_gfx_init(&blit, scr);
+                nj_gfx_draw_image(&blit, &view, 0, 0, 0, 0, view.width,
+                                  view.height);
+            }
+        }
+    }
+    if (vm->port && vm->port->display_present && vm->screen.pixels) {
         vm->port->display_present(vm->port->ud, 0, 0, vm->screen.width,
                                   vm->screen.height);
     }
@@ -3530,6 +3581,7 @@ NJFN(c_repaint)
 
 NJFN(c_repaint_all)
 {
+
     /*
      * Canvas.repaint() with no arguments asks for the WHOLE canvas.  It must
      * not be routed through the four-argument form: that one reads x/y/w/h out
@@ -3567,6 +3619,7 @@ NJFN(c_repaint_all)
 
 NJFN(c_serviceRepaints)
 {
+
     /*
      * MIDP: "serviceRepaints() forces any pending repaints to be serviced ...
      * it blocks until all pending repaint requests have been processed."
@@ -4832,6 +4885,9 @@ nj_status nj_midp_paint(nj_vm *vm)
     /* Remember that this frame has been painted: the runner paints on top of
      * whatever the application did only when the application did not paint
      * itself (see the frame hook in nj_lib_midlet.c). */
+    if (vm->in_paint) {
+        vm->app_painted = 1u;   /* serviceRepaints() asked for this one */
+    }
     vm->painted_in_frame = 1u;
     nj_ref d;
     nj_surface *scr;
@@ -4851,7 +4907,6 @@ nj_status nj_midp_paint(nj_vm *vm)
     d = nj_midp_current(vm);
     if (!d) {
         nj_surface_fill(scr, 0xFF000000u);
-        screen_present(vm);
         vm->repaint_pending = 0u;
         return NJ_OK;
     }
@@ -4901,15 +4956,11 @@ nj_status nj_midp_paint(nj_vm *vm)
             }
             return NJ_ERR;
         }
-        if (nj_midp_surface(vm, buf, &buf_surf)) {
-            nj_gfx blit;
-            nj_image view;
-            if (img_view(vm, buf, &view)) {
-                nj_gfx_init(&blit, scr);
-                nj_gfx_draw_image(&blit, &view, 0, 0, 0, 0, view.width,
-                                  view.height);
-            }
-        }
+        /*
+         * No blit here.  The buffer is mirrored onto the screen by
+         * nj_midp_present() at the frame boundary, because a title may keep
+         * drawing through the Graphics paint() was given after it returns.
+         */
     } else if (isa(vm, d, NJ_C_GAMECANVAS)) {
         /*
          * The game package owns GameCanvas; this is only the fallback path for
@@ -4946,6 +4997,9 @@ nj_status nj_midp_paint(nj_vm *vm)
             nj_image view;
             nj_gfx_init(&g, &buf_surf);
             displayable_render(vm, &g, d);
+            /* A Screen has no buffer field of its own - canvas_ensure_buffer
+             * returns a fresh image for it - so the screen must be updated
+             * here, before the temporary is dropped. */
             if (img_view(vm, buf, &view)) {
                 nj_gfx blit;
                 nj_gfx_init(&blit, scr);
@@ -4954,7 +5008,6 @@ nj_status nj_midp_paint(nj_vm *vm)
             }
         }
     }
-    screen_present(vm);
     vm->repaint_pending = 0u;
     return NJ_OK;
 }

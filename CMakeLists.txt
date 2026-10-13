@@ -349,6 +349,8 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_m3gdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_boxdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_repaintdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_alphademo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_savedgfx_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -643,11 +645,30 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_repaint.sh
                      ${NJ_FIXTURES}/repaintdemo.jar)
+    # A title may keep the Graphics paint() handed it and draw through it from
+    # its own thread (out of spec, and 合金弹头2013BT版_678 does it with the
+    # scenery behind the character).  Whatever is in the canvas buffer when the
+    # frame ends has to be what the screen shows, so the buffer is copied at
+    # the frame boundary, not at the end of paint().
+    add_test(NAME check_savedgfx
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_savedgfx.sh
+                     ${NJ_FIXTURES}/savedgfx.jar)
     add_test(NAME check_constant_value
              COMMAND ${CMAKE_COMMAND} -E env
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_constant_value.sh
                      ${NJ_FIXTURES}/cvdemo.jar)
+    # A mutable Image is white and fully opaque (MIDP 2.0).  A Java int[] starts
+    # zeroed - transparent black - so a title that builds its scenery off-screen
+    # blended its sprites against black and let the untouched pixels see
+    # through: 合金弹头2013BT版_678's scenery read as flickering patches.
+    add_test(NAME check_alphademo
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_alphademo.sh
+                     ${NJ_FIXTURES}/alphademo.jar)
     add_test(NAME check_corpus_size_retry
              COMMAND ${CMAKE_COMMAND} -E env
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_corpus_size_retry.sh

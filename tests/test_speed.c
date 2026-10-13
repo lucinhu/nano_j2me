@@ -106,6 +106,26 @@ int main(void)
     nj_vm_set_speed(vm, 5000);
     eq("a speed above the ceiling is clamped", nj_vm_speed(vm), 800);
 
+    /* A scheduler pass is not a millisecond.
+     *
+     * nj_yield() and the end of scheduler_step() each used to do
+     * `vm->scheduler_ticks++`, and nj_now_ms() folds the port's millisecond
+     * clock into that same counter - so every scheduler pass moved the
+     * MIDlet's clock forward ON TOP of real time.  A busy title gained about
+     * 30 ms of MIDlet time per 5 ms frame, the runner's frame pacer measured
+     * every frame as over budget and never slept, and `--fps 30` ran
+     * 合金弹头2013BT版_678 at 154 fps with every countdown and animation in it
+     * scaled by the same factor.  The clock is the port's clock, and nothing
+     * else may advance it.
+     */
+    nj_vm_set_speed(vm, 100);
+    fake_now = 20000u;
+    base = nj_now_ms(vm);
+    for (i = 0; i < 5000; i++) {
+        nj_yield(vm);
+    }
+    eq("a scheduler pass does not move the clock", nj_now_ms(vm) - base, 0);
+
     /* The fold: the port's 32-bit clock wraps, and the MIDlet must not see
      * time go backwards when it does. */
     nj_vm_set_speed(vm, 100);

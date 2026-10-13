@@ -221,6 +221,13 @@ nj_status nj_midp_set_current(nj_vm *vm, nj_ref d);
 /* The framebuffer the runtime draws the UI into (owned by the MIDP layer). */
 nj_surface *nj_midp_screen(nj_vm *vm);
 
+/*
+ * Show the screen on the port.  The frame hook calls this once per frame,
+ * after everything that frame drew - present()ing from inside the paint path
+ * shows a half-drawn frame (see nj_lib_midlet.c's frame hook).
+ */
+void nj_midp_present(nj_vm *vm);
+
 /* Request a repaint of the current Displayable on the next frame. */
 void nj_midp_repaint(nj_vm *vm);
 

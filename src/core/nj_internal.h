@@ -334,6 +334,7 @@ struct nj_vm {
     /* constant-pool resolution cache */
     nj_cpentry *cp_cache;
     nj_u2       cp_cache_size;
+
     nj_u2       cp_cache_used;
     nj_u2       cp_cache_limit;   /* rehash threshold */
     nj_u4       cp_cache_hits;
@@ -518,6 +519,13 @@ struct nj_vm {
      * the runner's per-frame paint, which is the only thing that animates it
      * (炸弹人_10311 never calls repaint() in its loop). */
     nj_u1         painted_in_frame;
+    /*
+     * Set when a paint ran because the APPLICATION asked for it (a
+     * repaint()/serviceRepaints() pair), rather than because the runner paints
+     * a frame of its own.  A title that paints itself is left to paint itself:
+     * the runner's extra paint would show a frame the title never asked for.
+     */
+    nj_u1         app_painted;
     /* Set while a paint is being delivered.  serviceRepaints() paints
      * synchronously, and a callSerially() runnable drained at the top of a
      * paint may itself ask for a repaint; without this the second one would

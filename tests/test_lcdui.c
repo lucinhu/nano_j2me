@@ -281,7 +281,10 @@ static void test_image(nj_vm *vm, const blob *png, const blob *png_alpha)
         a[6] = iref(8);
         OK(nj_call(vm, img, NJ_C_IMAGE, "getRGB", "([IIIIIII)V", a, NULL) == NJ_OK);
         first = (nj_u4)nj_array_get_int(rgb, 0u);
-        OK_MSG(first == 0u, "expected 0x00000000, got 0x%08X", first);
+        /* MIDP 2.0, Image.createImage(int,int): "Every pixel within the newly
+         * created image is white."  A mutable image therefore starts opaque
+         * white, not transparent black. */
+        OK_MSG(first == 0xFFFFFFFFu, "expected 0xFFFFFFFF, got 0x%08X", first);
     }
 
     /* ---- getGraphics + getRGB round-trip ---- */
@@ -1035,8 +1038,13 @@ static void test_graphics(nj_vm *vm)
                    "drawImage LEFT|TOP pixel = 0x%08X", img_pixel(vm, dst, 5, 4));
             OK_MSG(img_pixel(vm, dst, 8, 6) == 0xFFCC2200u,
                    "drawImage covered its whole 4x3 box");
-            OK_MSG(img_pixel(vm, dst, 9, 6) == 0u, "drawImage overran its box");
-            OK_MSG(img_pixel(vm, dst, 4, 4) == 0u, "drawImage started too early");
+            /* Untouched pixels of a mutable image are the white it started
+             * with - "Every pixel within a mutable image is always fully
+             * opaque" - so a pixel outside the drawn box stays 0xFFFFFFFF. */
+            OK_MSG(img_pixel(vm, dst, 9, 6) == 0xFFFFFFFFu,
+                   "drawImage overran its box");
+            OK_MSG(img_pixel(vm, dst, 4, 4) == 0xFFFFFFFFu,
+                   "drawImage started too early");
             /* horizontally centred at (9,0): Graphics.HCENTER | Graphics.TOP */
             ia[0] = sref(src);
             ia[1] = iref(9);
@@ -2263,11 +2271,11 @@ static void test_screen(nj_vm *vm)
             OK(nj_call(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", a, NULL) == NJ_OK);
             OK_MSG(img_pixel(vm, img, 9, 5) == 0xFF00A000u,
                    "paint-path pixel = 0x%08X", img_pixel(vm, img, 9, 5));
-            OK_MSG(img_pixel(vm, img, 7, 5) == 0u,
+            OK_MSG(img_pixel(vm, img, 7, 5) == 0xFFFFFFFFu,
                    "paint-path fill leaked left");
-            OK_MSG(img_pixel(vm, img, 18, 5) == 0u,
+            OK_MSG(img_pixel(vm, img, 18, 5) == 0xFFFFFFFFu,
                    "paint-path fill leaked right");
-            OK_MSG(img_pixel(vm, img, 9, 10) == 0u,
+            OK_MSG(img_pixel(vm, img, 9, 10) == 0xFFFFFFFFu,
                    "paint-path fill leaked below");
         }
     }

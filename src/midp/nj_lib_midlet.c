@@ -341,21 +341,25 @@ nj_status nj_midp_frame(nj_vm *vm)
      * the only thing that draws it at all (炸弹人_10311 never calls repaint()
      * from its loop).
      */
-    if (!vm->painted_in_frame) {
-        if (nj_midp_paint(vm) == NJ_OK) {
-            vm->frames++;
-            nj_surface *s = nj_midp_screen(vm);
-            if (s && vm->port && vm->port->display_present) {
-                vm->port->display_present(vm->port->ud, 0, 0, s->width, s->height);
-            }
-            vm->repaint_pending = 0u;
-            vm->frames_presented++;
-        }
-    } else {
-        /* The application's own paint is this frame.  Keep the frame clock and
-         * the pacing; the screen already shows what it drew. */
-        vm->frames++;
+    if (!vm->painted_in_frame && !vm->app_painted) {
+        (void)nj_midp_paint(vm);
     }
+    /*
+     * ONE present per frame, after everything this frame drew.
+     *
+     * It used to happen at the end of the paint path, which is not the end of
+     * the drawing: 合金弹头2013BT版_678 paints its HUD inside paint() and then
+     * keeps drawing with the Graphics it kept from paint() (the out-of-spec
+     * but universal habit), so the mid-paint present showed the frame with the
+     * scenery layer missing and the previous frame's ground left in the band it
+     * would have covered - visible as scenery flickering every other present.
+     * The port is told once per frame instead, which is also what a device
+     * does: present() shows the finished frame.
+     */
+    vm->frames++;
+    nj_midp_present(vm);
+    vm->repaint_pending = 0u;
+    vm->frames_presented++;
     vm->painted_in_frame = 0u;
 
     if (vm->state != NJ_VM_STOPPING) {

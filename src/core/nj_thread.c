@@ -210,9 +210,18 @@ void nj_yield(nj_vm *vm)
         vm->cur->wakeup_seq |= 0u;   /* no-op, keeps the intent readable */
         vm->cur->state = NJ_THREAD_RUNNING;
     }
-    if (vm) {
-        vm->scheduler_ticks++;
-    }
+    /*
+     * No clock here.  This used to do `vm->scheduler_ticks++`, and the same
+     * line sits at the end of scheduler_step: together they added a
+     * millisecond to the MIDlet's clock on every scheduler pass, on top of
+     * the port's own millisecond clock that nj_now_ms folds into the same
+     * counter.  A busy title then saw its clock run many times faster than
+     * the wall clock - 合金弹头2013BT版_678 gained roughly 30 ms of MIDlet
+     * time per 5 ms frame - so the runner's frame pacer measured every frame
+     * as over budget, never slept, and ran the title at 154 fps under
+     * `--fps 30` (2479 fps uncapped).  Every countdown, animation and sleep
+     * in every title was scaled by the same factor.
+     */
 }
 
 /* ------------------------------------------------------------------ */
@@ -502,7 +511,6 @@ static nj_status scheduler_step(nj_vm *vm)
             port_idle(vm);
         }
     }
-    vm->scheduler_ticks++;
     return NJ_OK;
 }
 

@@ -604,6 +604,37 @@ static const trans_case TRANS_TABLE[] = {
 #define NTRANS ((int)(sizeof(TRANS_TABLE) / sizeof(TRANS_TABLE[0])))
 
 /* ------------------------------------------------------------------ */
+/* Field lookup by content, not by pointer                             */
+/* ------------------------------------------------------------------ */
+static void test_field_lookup_memo(nj_vm *vm)
+{
+    /*
+     * nj_field_lookup() has to answer by comparing the STRINGS, even though
+     * nj_class_find() remembers classes by the address of the name a call site
+     * hands it (that cache verifies with strcmp for exactly this reason).  A
+     * name built at run time, equal but somewhere else in memory, must find the
+     * same field; a different descriptor must not; and a static request must
+     * not be answered with an instance field.
+     */
+    char name[8];
+    char desc[4];
+    nj_field *lit = nj_field_lookup(vm, "java/lang/Integer", "value", "I", 0);
+    nj_field *built;
+
+    CHECK(lit != NULL, "the literal lookup finds Integer.value");
+    memcpy(name, "value", 6u);
+    memcpy(desc, "I", 2u);
+    built = nj_field_lookup(vm, "java/lang/Integer", name, desc, 0);
+    CHECK(built == lit, "a name built at run time finds the same field");
+    CHECK(nj_field_lookup(vm, "java/lang/Integer", "value", "I", 0) == lit,
+          "the second lookup answers the field the linker resolved");
+    CHECK(nj_field_lookup(vm, "java/lang/Integer", "value", "J", 0) == NULL,
+          "a different descriptor finds no field");
+    CHECK(nj_field_lookup(vm, "java/lang/Integer", "value", "I", 1) == NULL,
+          "a static request is not answered with an instance field");
+}
+
+/* ------------------------------------------------------------------ */
 /* 1. Sprite frames and sequences                                      */
 /* ------------------------------------------------------------------ */
 static void test_sprite_frames(nj_vm *vm)
@@ -1700,6 +1731,7 @@ static void test_gamecanvas(nj_vm *vm)
 /* ------------------------------------------------------------------ */
 static void run_suite(nj_vm *vm)
 {
+    test_field_lookup_memo(vm);
     test_sprite_frames(vm);
     test_reference_pixel(vm);
     test_sprite_paint(vm);
