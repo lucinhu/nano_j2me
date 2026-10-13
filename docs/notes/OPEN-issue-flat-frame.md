@@ -479,3 +479,23 @@ never-completing billing request lives), or the runtime breaks something in its
 data decode that the game swallows. The next step is to read the state index `B`
 holds when `i()` throws: it is a plain static field, so a debugger settles it in
 one run.
+
+### Resolved: it was the runtime after all (same day)
+
+The "reads the state index `B`" experiment never happened, because the cause
+turned out to be reachable from a different title with a field access to
+compare against. 疯狂农场2_2375 lost a `static Vector b` whose superclass
+declared an *instance* `Vector b`: resolving a Fieldref by asking for the
+instance variant first linked its `getstatic`/`putstatic` to the instance
+offset, and both accesses then did nothing at all - a static read off a NULL
+receiver, a static write dropped on the floor - silently. `5919ad0` resolves a
+field by name and descriptor through the class chain (JVMS 5.4.3.2) and makes
+the interpreter refuse a static/instance mismatch by name instead of accessing
+nothing.
+
+That fix took this title, 模拟人生3中文版_6162 and 疯狂农场2_2375 off the flat
+list in one sweep (384 passed / 11 failed, from 381/14). It is worth keeping the
+two lessons: a field that goes missing is invisible in the game's own code, and
+"the game is stuck in its own flow" was the wrong conclusion here twice - both
+titles had a runtime bug that their state machines then reported as a null
+somewhere else.

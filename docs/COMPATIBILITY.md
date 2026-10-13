@@ -96,6 +96,33 @@ appeared only when the run was paced at 30 fps" or "still flat when paced at
 the frame the game's own loop is parked in (`af.a()V pc=30 / ab.b()V pc=60 /
 ab.run()V pc=11` for 开心农场_240, a loop that sleeps between frames).
 
+### Where the collected 395 stand
+
+`NJ_FRAMES=600 NJ_TIMEOUT=25 tools/run_game_corpus.sh` over `tests/games`, with
+the long re-run and the paced re-run above: **384 passed, 11 failed**. The
+sweeps before it were 374/21 (before the pacing retry), 376/19, 381/14 and now
+384/11, and every drop came from a bug the corpus itself pointed at rather than
+from a title being excused.
+
+The eleven that remain are each classified, not just counted:
+
+| kind | titles |
+|---|---|
+| a broken JAR (truncated, no end-of-central-directory) | 鲁宾逊漂流记汉化BT版_4677 |
+| a title that refuses a platform string this runtime does not imitate (`--device nokia6230` runs it) | 1945空战英雄_6105 |
+| Java heap genuinely too small for the title at `--heap 16` | 愤怒的小鸟-高清版_2353 |
+| flat under every pace, cause not yet found | 反恐精英2正式版_5836, 灌篮高手-爆发!樱木_7947, 模拟人生2_10762, 实况足球经理2009_10609, 午夜台球圣诞中文版_8677, 仙魔飞行棋_417, 有女倾城破解版_11525, 战争艺术2之全球联盟中文版_1918 |
+
+The most recent fix to come out of this list is a good example of why it is
+worth keeping: 疯狂农场2_2375 showed a black screen with 0 Graphics calls, and
+the reason was that its class `h` declares a static `Vector b` while its
+superclass declares an instance field of the same name and descriptor, so the
+resolver linked `getstatic`/`putstatic` to the instance offset and both accesses
+silently did nothing. Fixing field resolution the way JVMS 5.4.3.2 specifies
+took that title, 疯狂企鹅中文版_10228 and 模拟人生3中文版_6162 off the flat list
+in the same sweep. Two of those had been written down as "the game is stuck in
+its own flow", which is exactly the conclusion this list exists to avoid.
+
 All three parse and link with zero failures. Tumbleweed is the demanding one: it
 uses `GameCanvas`, `LayerManager`, `Sprite` with frame animation, `TiledLayer`,
 `Font` metrics, `Image` loading from the JAR, a background game-loop thread, and
@@ -182,10 +209,30 @@ UTF-8 via `readUTF`/`writeUTF`), `ByteArrayInputStream`,
 
 ### javax.microedition.io
 
-`Connector.open` for `file://` only. Networking raises
-`ConnectionNotFoundException` rather than pretending: there is no socket stack
-on a bare-metal target, and a game that silently gets a null stream from
-`http://` is harder to diagnose than one that throws.
+`Connector.open` for `file://` and `http://`/`https://`.
+
+`HttpConnection` is complete for what a MIDlet uses: the URL accessors,
+`setRequestMethod`/`getRequestMethod`, `setRequestProperty`/`getRequestProperty`,
+`getResponseCode`/`getResponseMessage`, `getHeaderField` (by name and by
+index) with `getHeaderFieldKey`, `getType`/`getEncoding`/`getLength`, and
+`openInputStream`/`openOutputStream`. The request is made when the MIDlet
+first asks for a response, and the response body is buffered whole - which is
+what the API's shape implies and what these titles do with it (99 of the 436
+titles in `tests/games` name `HttpConnection`).
+
+The socket work belongs to the port: `nj_port.http_request` is one synchronous
+call that takes the URL, method, request headers and body and returns the
+status, response headers and body. With no hook installed - a bare-metal
+target, or an Android build whose `PlatformHttp` did not resolve - `http://` is
+still refused for real, but by name: `IOException: this build has no HTTP
+support; the port must supply it`. On Android the hook is `HttpURLConnection`
+and the app declares `INTERNET` plus a cleartext-permitted network security
+config (MIDlet URLs predate TLS, and a per-host allowlist cannot be written
+for software that hard-codes hosts from 2005).
+
+Sockets, datagrams, server sockets, OBEX and the push registry are **not**
+implemented: `Connector.open` raises `ConnectionNotFoundException` naming the
+scheme.
 
 ### javax.microedition.lcdui
 
@@ -377,7 +424,7 @@ the runtime answered that key before consulting the port.
 | `System.exit` | stops the VM cleanly and the code reaches the host |
 | `Class.forName` | works for classes the archive actually contains plus the built-in library |
 | Reflection | absent, as in CLDC |
-| Networking | `file://` only |
+| Networking | `file://` and `http://`/`https://` through the port; sockets, datagrams and OBEX are absent |
 | `TimeZone` | UTC only |
 | Locale | `en-US` fixed; `toLowerCase`/`toUpperCase` are ASCII-only |
 | Fonts | three built-in bitmap sizes from Liberation Mono; CJK needs a glyph provider installed through the font fallback hook |
