@@ -25,7 +25,7 @@
 #
 # Environment: NJ_BIN, NJ_GAMES, NJ_HEAP, NJ_SIZES, NJ_TIMEOUT, NJ_FRAMES,
 # NJ_LONG_FRAMES, NJ_MIN_COLOURS, NJ_FPS, NJ_POKE, NJ_CORPUS_WORK, NJ_DEVICE,
-# NJ_PACED_FPS, NJ_PACED_FRAMES, NJ_HEAP_RETRY.
+# NJ_PACED_FPS, NJ_PACED_FRAMES, NJ_HEAP_RETRY, NJ_HEAP_BIG.
 # This sweep is deliberately sequential: every title gets the machine, so a
 # frame count means the same thing for all of them.  tools/corpus_fatal.sh is
 # the parallel one when all you need is "does anything crash".
@@ -57,6 +57,13 @@ HEAP="${NJ_HEAP:-16}"
 # paints nothing at the sweep's heap, ask once more with the heap a phone of
 # the period actually had.  NJ_HEAP_RETRY=0 switches the retry off.
 HEAP_RETRY="${NJ_HEAP_RETRY:-4}"
+
+# The other direction, for the opposite reason.  A title that cannot get an
+# array it asks for throws OutOfMemoryError and never reaches its first frame:
+# 愤怒的小鸟-高清版_2353 peaks at 16.5 MB of the 16 it is given and runs at
+# --heap 32.  Phones of the period shipped 1-4 MB, so the SMALL retry below is
+# the faithful one; this one is simply a bigger handset, and the row says so.
+HEAP_BIG="${NJ_HEAP_BIG:-32}"
 DIR="${NJ_GAMES:-$ROOT/tests/games}"
 # Titles gate themselves on the screen size and the gates differ: Tumbleweed
 # refuses anything larger than 250 in either axis ("Screen too large") and
@@ -129,7 +136,7 @@ fail=0
 # Which handset every title is being told it is on.  Printed because it changes
 # what a row MEANS: a title that only starts under a Nokia profile has been
 # shown to work on its Nokia path, not to work in general.
-echo "device: ${DEVICE:-(generic)}   heap: ${HEAP} MB (retry ${HEAP_RETRY:-off})"
+echo "device: ${DEVICE:-(generic)}   heap: ${HEAP} MB (small retry ${HEAP_RETRY:-off}, big retry ${HEAP_BIG:-off})"
 # Printed because it changes what a "flat frame" row means: the titles are run
 # uncapped, and a verdict with no colour on screen is re-checked at a phone's
 # pace before it is recorded.
@@ -436,6 +443,42 @@ for jar in "${JARS[@]}"; do
     # startApp when the total is above 6 MB, and at --heap 4 it runs and draws
     # 627 graphics calls.  The packet data gateway of the era was 1-4 MB, so a
     # smaller heap is the FAITHFUL run, not a workaround for a runtime defect.
+    # A title that ran out of heap is not a title that declined to draw, and a
+    # SMALLER heap cannot cure it - so this runs before the retry below.
+    heapbig=""
+    if [ "${HEAP_BIG:-0}" != "0" ] && [ "$HEAP" != "$HEAP_BIG" ] && \
+       [ "$used" != "(no size accepted)" ]; then
+        IFS='|' read -r bstatus bframes bcols bchanged bnote <<<"$verdict"
+        bretry=0
+        case "$bnote" in
+            *OutOfMemoryError*) bretry=1 ;;
+        esac
+        case "$bstatus" in
+            PASS|SKIP) bretry=0 ;;
+        esac
+        if [ "$bretry" = "1" ]; then
+            heap_saved="$HEAP"
+            HEAP="$HEAP_BIG"
+            size="$used"
+            run_here 40 "$FRAMES" 2 "$FPS"
+            HEAP="$heap_saved"
+            if ! grep -q "Screen too" "$log"; then
+                bv="$(verdict_for)"
+                case "$bv" in
+                    *OutOfMemoryError*)
+                        heapbig="still out of memory at ${HEAP_BIG} MB" ;;
+                    *"flat frame"*|*"nothing was ever presented"*)
+                        heapbig="ran at ${HEAP_BIG} MB but still drew nothing" ;;
+                    FAIL*)
+                        heapbig="still failed at ${HEAP_BIG} MB" ;;
+                    *)
+                        heapbig="the title needed a ${HEAP_BIG} MB heap" ;;
+                esac
+                verdict="$bv"
+            fi
+        fi
+    fi
+
     heapretry=""
     if [ "${HEAP_RETRY:-0}" != "0" ] && [ "$HEAP" != "$HEAP_RETRY" ] && \
        [ "$used" != "(no size accepted)" ]; then
@@ -515,6 +558,9 @@ for jar in "${JARS[@]}"; do
     # that says "flat" after a paced run is a statement about the title; a row
     # that only became flat once it was paced says the uncapped run never gave
     # the game a chance to draw.
+    if [ -n "$heapbig" ]; then
+        if [ -n "$note" ]; then note="$note; $heapbig"; else note="$heapbig"; fi
+    fi
     if [ -n "$heapretry" ]; then
         if [ -n "$note" ]; then note="$note; $heapretry"; else note="$heapretry"; fi
     fi
