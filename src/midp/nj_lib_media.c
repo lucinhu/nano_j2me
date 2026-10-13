@@ -1721,6 +1721,7 @@ NJFN(player_getControl)
     nj_ref want = NJ_ARG_REF(args, 0);
     const nj_u2 *c;
     int n;
+    int i;
     const char *cls = NULL;
 
     if (!want) {
@@ -1729,7 +1730,25 @@ NJFN(player_getControl)
     }
     c = nj_string_chars(want);
     n = (int)nj_string_len(want);
-    /* The argument is the unqualified interface name, per MIDP. */
+    /*
+     * Controllable.getControl takes either the fully qualified class name or
+     * the bare one ("...if the package of the class is not given, the package
+     * javax.microedition.media.control is assumed"), so both spellings have to
+     * work.  Only the bare one used to: 开心农场_240 asks for
+     * "javax.microedition.media.control.VolumeControl", got NULL back, and
+     * died with NullPointerException at g.b(I)Z pc=65 - it checkcasts the
+     * result (which succeeds on null) and calls setLevel on it.  A title
+     * cannot work around that, so the last dot-separated component is what
+     * gets compared here.  A name in somebody else's package is accepted too;
+     * refusing it would only turn a working call into a null.
+     */
+    for (i = n - 1; i >= 0; i--) {
+        if (c[i] == '.') {
+            c += i + 1;
+            n -= i + 1;
+            break;
+        }
+    }
     if (n == 11 && c[0] == 'T' && c[1] == 'o' && c[2] == 'n' && c[3] == 'e') {
         /*
          * ToneControl only exists on a tone Player.  Returning one for a WAV

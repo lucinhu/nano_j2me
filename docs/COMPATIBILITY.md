@@ -80,6 +80,22 @@ picture changes, because a title is allowed to be static. Current result: 7
 passed, 0 failed.  The later chapters all build to `book.jar`, so they are
 stored by chapter.
 
+A sweep runs the titles **uncapped** (`--fps 0`), so 600 frames can cost a tenth
+of a second of wall clock - and a title whose own loop is paced by
+`Thread.sleep` has barely executed when its pixels are read. That is a claim
+about the harness, not about the title: `开心农场_240` was written down as a
+blank screen (0 colours, 4 Graphics calls, 1750 bytecodes over 600 frames) and
+draws a 61-colour screen once its frames are 33 ms apart. `纯爱物语3之梦想之翼_5112`,
+`新三国志_10225` and `PC正版-使命召唤5_7199` are the same story. So a verdict
+that still has no colour on screen after the longer re-run is checked once more,
+paced at `NJ_PACED_FPS` (default 30 - the frame rate of the phones being
+imitated) for `NJ_PACED_FRAMES` (default 300, ten seconds of the game's own
+time), and the row records which pace its verdict came from: "the picture
+appeared only when the run was paced at 30 fps" or "still flat when paced at
+30 fps". `--where` is the diagnostic that explains such a row, since it names
+the frame the game's own loop is parked in (`af.a()V pc=30 / ab.b()V pc=60 /
+ab.run()V pc=11` for 开心农场_240, a loop that sleeps between frames).
+
 All three parse and link with zero failures. Tumbleweed is the demanding one: it
 uses `GameCanvas`, `LayerManager`, `Sprite` with frame animation, `TiledLayer`,
 `Font` metrics, `Image` loading from the JAR, a background game-loop thread, and
@@ -233,6 +249,17 @@ the decoder itself by `tests/test_amr.c` (119 assertions).
 | WAV | RIFF/WAVE PCM, 8- and 16-bit, mono and stereo, from a stream or a JAR resource |
 | AMR | AMR-NB (`#!AMR`) speech in all eight modes, 4.75–12.2 kbit/s, decoded by the runtime itself into 8 kHz mono PCM — no host codec, no dependency. Behind `NJ_ENABLE_AMR`, on by default; `=0` gives the file back to `nj_port.audio_decode`, and AMR-WB is still refused by name |
 | MIDI | Standard MIDI Files, type 0 and 1, played by the runtime's own synthesiser: 16 timbres, channel volume (CC7) and expression (CC11), pitch bend, sustain pedal, channel 10 percussion, 22050 Hz mono or stereo. A file that contains a second `MThd` chunk is two files glued together and only the first is played — every other player does the same, and merging them lets the second file's tempo land on tick 0 |
+
+**`Controllable.getControl` takes either spelling.** The javadoc asks for
+"either ... the fully-qualified name of the class; or if the package of the
+class is not given, the package `javax.microedition.media.control` is assumed",
+and titles use both. Only the short form used to match, so
+`getControl("javax.microedition.media.control.VolumeControl")` answered `NULL`;
+`开心农场_240` then died with `NullPointerException at g.b(I)Z pc=65`, because a
+`checkcast` on `null` succeeds and the `setLevel` that follows does not. The
+last dot-separated component is what gets compared now, so both spellings reach
+the same control and a name in somebody else's package is accepted rather than
+turned into a null.
 
 `TONE_BLOCKING` blocks the CALLING JAVA THREAD cooperatively: it returns
 `NJ_ERR_TIMEOUT` and the interpreter suspends that thread, exactly as

@@ -383,3 +383,61 @@ trying to prefecth the sound", so the flat frame is downstream of an earlier
 init failure.  The next thing to find is that title's **first** throw: the
 40-frame run raises none at all, and the corpus run (whole key set, 8000
 frames) is the one that reaches it.
+
+## The sweep was running the titles faster than any phone (2026-10-13)
+
+A sweep runs uncapped (`--fps 0`): 600 frames of a light title cost a tenth of a
+second of wall clock. That is what makes 395 titles finish in minutes, and it is
+also a way to record a blank screen for a title that was never given time to
+draw one.
+
+`开心农场_240` (`com.auer.title.GameMidlet`, `happy_farm 1.30.04`) is the case
+that proves it, because the two runs differ in nothing but the pace:
+
+| run | bytecodes | gfx | colours |
+|---|---|---|---|
+| 600 frames, uncapped (0.075 s) | 1750 | 4 | 0 |
+| 600 frames, `--fps 30` (19.9 s) | 48262 | 918 | 61 |
+
+`--where` names the reason: the game's own thread is parked in
+
+    af.a()V pc=30
+    ab.b()V pc=60
+    ab.run()V pc=11
+
+and `af.a()` is
+
+    while (!this.a) { d(); f(); a(this.a_Graphics); Thread.sleep(this.a_J); }
+
+so the loop's pace is the game's `Thread.sleep`, and an uncapped host never lets
+it come round. Nothing was wrong with the runtime, the pixels or the pipeline;
+the harness was measuring a game that had run for 75 ms.
+
+The same one-variable test on the rest of the flat-frame list separates the
+titles that only needed time from the titles that really do not paint:
+
+| title | paced 300 frames @30 fps | bytecodes |
+|---|---|---|
+| 开心农场_240 | 61 colours | 24088 |
+| 纯爱物语3之梦想之翼_5112 | 69 colours | 856836 |
+| 新三国志_10225 | 10 colours | 21150 |
+| PC正版-使命召唤5_7199 | 61 colours | 7975847 |
+| 反恐精英2正式版_5836 | 1 colour | 11132085 |
+| 疯狂企鹅中文版_10228 | 1 colour | 3477701 |
+| 疯狂农场2_2375 | 1 colour, **gfx=0** | 16557054 |
+| 模拟人生3中文版_6162 | 1 colour, **gfx=0** | 2039905 |
+| 仙魔飞行棋_417 | 1 colour | 397392 |
+
+The bottom half is the same evidence as before, now with the harness
+explanation removed: `gfx=0` means `paint()` asked for nothing (the game is
+waiting for something of its own), `gfx>0` with one colour means it drew into a
+surface that stayed uniform. The `Thread.sleep`-paced explanation is gone for
+all of them, which is what made the earlier rows worth re-reading.
+
+`tools/run_game_corpus.sh` carries the fix: any verdict that still has no colour
+on screen after the long re-run is run once more at `NJ_PACED_FPS` (default 30)
+for `NJ_PACED_FRAMES` (default 300 - ten seconds of the game's own time), and
+the row records which pace it came from ("the picture appeared only when the run
+was paced at 30 fps" / "still flat when paced at 30 fps"). In a twelve-title
+check set that turned three FAILs into PASSes (纯爱物语3之梦想之翼_5112,
+新三国志_10225, PC正版-使命召唤5_7199) and left the genuinely flat ones flat.

@@ -464,7 +464,7 @@ static void test_media(nj_vm *vm)
 {
     nj_value a[2];
     nj_value ret;
-    nj_ref player, ctl, uri;
+    nj_ref player, ctl, ctl2, uri;
 
     uri = nj_string_new(vm, "tone://");
     OK_MSG(uri != NULL, "a tone locator can be built");
@@ -544,6 +544,35 @@ static void test_media(nj_vm *vm)
                    "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
                    a, &ret) == NJ_OK && ret.r != NULL,
            "the Player answers Controllable.getControl");
+    /*
+     * The other spelling.  getControl takes the fully qualified class name or
+     * the bare one, and 开心农场_240 asks with the long form: the match against
+     * the bare name returned NULL, the game's checkcast passed on that null
+     * (the JVM spec says it must) and its setLevel threw NullPointerException
+     * at g.b(I)Z pc=65.  A unit test that only ever wrote "VolumeControl"
+     * could not have found this; the corpus did.
+     */
+    a[0] = vref(nj_string_new(vm,
+               "javax.microedition.media.control.VolumeControl"));
+    ret.bits = 0u;
+    OK_MSG(nj_call(vm, player, PLAYER, "getControl",
+                   "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
+                   a, &ret) == NJ_OK && ret.r != NULL,
+           "the fully qualified control name finds the control");
+    ctl2 = ret.r;
+    if (ctl2 != NULL) {
+        a[0] = vint(40);
+        ret.bits = 0u;
+        OK(nj_call(vm, ctl2, VOLUME, "setLevel", "(I)I", a, &ret) == NJ_OK);
+        OK_MSG(ret.i == 40, "and it drives the same player, got %d", ret.i);
+    }
+    a[0] = vref(nj_string_new(vm,
+               "javax.microedition.media.control.ToneControl"));
+    ret.bits = 0u;
+    OK_MSG(nj_call(vm, player, PLAYER, "getControl",
+                   "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
+                   a, &ret) == NJ_OK && ret.r != NULL,
+           "and so does the fully qualified tone control name");
     clean(vm, "Controllable");
     clean(vm, "media controls");
 }

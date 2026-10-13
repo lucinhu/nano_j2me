@@ -24,10 +24,21 @@
 #                            [--device NAME]
 #
 # Environment: NJ_BIN, NJ_GAMES, NJ_HEAP, NJ_SIZES, NJ_TIMEOUT, NJ_FRAMES,
-# NJ_LONG_FRAMES, NJ_MIN_COLOURS, NJ_FPS, NJ_POKE, NJ_CORPUS_WORK, NJ_DEVICE.
+# NJ_LONG_FRAMES, NJ_MIN_COLOURS, NJ_FPS, NJ_POKE, NJ_CORPUS_WORK, NJ_DEVICE,
+# NJ_PACED_FPS, NJ_PACED_FRAMES.
 # This sweep is deliberately sequential: every title gets the machine, so a
 # frame count means the same thing for all of them.  tools/corpus_fatal.sh is
 # the parallel one when all you need is "does anything crash".
+#
+# Titles run UNCAPPED by default (NJ_FPS=0), which is what makes a sweep of 395
+# titles finish in minutes - but it also means 600 frames can be a tenth of a
+# second of wall clock.  A title whose own loop is paced by Thread.sleep has
+# barely executed by the time its pixels are read, and it is then written down
+# as "flat frame" although nothing about it is flat: 开心农场_240 draws nothing
+# at 8000 fps and a 61-colour screen once its frames are 33 ms apart.  So a
+# verdict that still has no colour on screen after the long re-run gets one more
+# run, paced at NJ_PACED_FPS (default 30) - the frame rate of the phones being
+# imitated.  Three of the twelve titles in a check set passed only that way.
 #
 # Exits non-zero if any title fails, so it can be a CI gate.
 set -uo pipefail
@@ -66,6 +77,13 @@ FRAMES="${NJ_FRAMES:-8000}"
 # which budget the verdict came from.
 LONG_FRAMES="${NJ_LONG_FRAMES:-$((FRAMES * 4))}"
 [ "$LONG_FRAMES" -ge 4000 ] || LONG_FRAMES=4000
+# A second re-run, this time paced.  The long re-run above gives a title more
+# FRAMES, but at uncapped speed those frames cost almost no wall clock, and a
+# title that sleeps 100 ms per loop iteration spends the whole run inside one
+# sleep.  PACED_FRAMES frames at PACED_FPS is ten seconds of the game's own
+# time.  NJ_PACED_FPS=0 switches the retry off.
+PACED_FPS="${NJ_PACED_FPS:-30}"
+PACED_FRAMES="${NJ_PACED_FRAMES:-300}"
 STRICT_MOTION="${NJ_STRICT_MOTION:-0}"
 
 while [ $# -gt 0 ]; do
@@ -105,6 +123,14 @@ fail=0
 # what a row MEANS: a title that only starts under a Nokia profile has been
 # shown to work on its Nokia path, not to work in general.
 echo "device: ${DEVICE:-(generic)}"
+# Printed because it changes what a "flat frame" row means: the titles are run
+# uncapped, and a verdict with no colour on screen is re-checked at a phone's
+# pace before it is recorded.
+if [ "$FPS" = "0" ] && [ "$PACED_FPS" != "0" ]; then
+    echo "pacing: uncapped ($FRAMES frames), unpainted verdicts re-run at $PACED_FPS fps"
+else
+    echo "pacing: $FPS fps"
+fi
 echo
 # THR and IO come from the port, not from the pixels.  A title that saves a
 # high score and one that silently fails to are the same sequence of frames,
@@ -277,12 +303,13 @@ for jar in "${JARS[@]}"; do
     # hand-written copy of this command line is a second thing to get wrong.
     # $2 overrides the frame budget and the wall-clock bound together, so a long
     # re-run cannot be cut off by a timeout that was sized for the short one.
+    # $4 overrides the frame rate, which is what the pacing retry changes.
     run_here() {
         : > "$log"
         rm -f "$out"/*.ppm
         timeout "$((SECS * ${3:-1}))" "$BIN" --port headless --heap "$HEAP" \
                 --size "$size" \
-                --fps "$FPS" --run-frames "${2:-$FRAMES}" --stats \
+                --fps "${4:-$FPS}" --run-frames "${2:-$FRAMES}" --stats \
                 --dump-frames "$out/" --dump-every "$1" \
                 "${DARGS[@]}" \
                 "${KARGS[@]}" \
@@ -344,6 +371,57 @@ for jar in "${JARS[@]}"; do
             ;;
     esac
 
+    # Still without a picture, and every run so far went as fast as the host
+    # could go.  Ask once more with the frames spaced out: the same observation,
+    # taken while the game's own clock was allowed to advance.  The row says
+    # which pace the verdict came from, because "flat at 8000 fps" and "flat at
+    # 30 fps" are different claims - the first is about the harness, the second
+    # about the title.
+    paced=""
+    if [ "$FPS" = "0" ] && [ "$PACED_FPS" != "0" ] && [ "$used" != "(no size accepted)" ]; then
+        # Any failure that put no colour on the screen is worth one paced run,
+        # not just the rows whose wording says "flat frame".  开心农场_240 was
+        # written off by an uncapped run that dumped 30 frames, none of them
+        # coloured, because the game's own loop had not been given a second of
+        # wall clock yet.  A title that never started, or is not a MIDlet suite,
+        # has nothing to gain from more time.
+        IFS='|' read -r vstatus vframes vcols vchanged vnote <<<"$verdict"
+        pretry=0
+        case "$vnote" in
+            "could not start"*|"not a MIDlet suite"*) pretry=0 ;;
+            *)
+                case "$vstatus" in
+                    PASS|SKIP) pretry=0 ;;
+                    *) if [ "$vcols" -lt "$MIN_COLOURS" ]; then pretry=1; fi ;;
+                esac
+                ;;
+        esac
+        if [ "$pretry" = "1" ]; then
+            size="$used"
+            pdi=$((PACED_FRAMES / 5))
+            [ "$pdi" -ge 1 ] || pdi=1
+            run_here "$pdi" "$PACED_FRAMES" 4 "$PACED_FPS"
+            if ! grep -q "Screen too" "$log"; then
+                pv="$(verdict_for)"
+                case "$pv" in
+                    *"flat frame"*|*"nothing was ever presented"*)
+                        # Two runs of different lengths, at two paces, agree.
+                        paced="still flat when paced at $PACED_FPS fps"
+                        ;;
+                    FAIL*)
+                        # The paced run failed for a reason of its own, and the
+                        # row describes THAT run.
+                        paced="still failed when paced at $PACED_FPS fps"
+                        ;;
+                    *)
+                        paced="the picture appeared only when the run was paced at $PACED_FPS fps"
+                        ;;
+                esac
+                verdict="$pv"
+            fi
+        fi
+    fi
+
     # Read the port's own report BEFORE deleting the temp dir it lives in.
     # It did live after the rm once, and every title then reported "?" - which
     # looked like a missing observation rather than a missing file.
@@ -384,6 +462,13 @@ for jar in "${JARS[@]}"; do
             note="$note$longrun"
             ;;
     esac
+    # Which pace the verdict came from, when that is not the default one.  A row
+    # that says "flat" after a paced run is a statement about the title; a row
+    # that only became flat once it was paced says the uncapped run never gave
+    # the game a chance to draw.
+    if [ -n "$paced" ]; then
+        if [ -n "$note" ]; then note="$note; $paced"; else note="$paced"; fi
+    fi
     case "$status" in
         PASS|SKIP) ;;
         *) [ -n "$thrown" ] && note="$note; first throw: $thrown" ;;

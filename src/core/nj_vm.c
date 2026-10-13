@@ -39,6 +39,15 @@ void nj_logf(nj_vm *vm, int level, const char *fmt, ...)
     char buf[320];
     va_list ap;
 
+    /*
+     * A NULL format is a caller's mistake, and vsnprintf does not survive it.
+     * GCC says so at -O3 under NJ_SANITIZE ("null format string"), which used
+     * to stop the sanitizer build - the one build whose whole job is to catch
+     * this kind of thing - before it started.  Return instead of calling.
+     */
+    if (fmt == NULL) {
+        return;
+    }
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
