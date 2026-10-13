@@ -201,7 +201,7 @@ only way to exercise that path on a phone that has AAudio.
 The port fills in `display_init`/`display_present`, `input_poll`, `input_push`,
 `now`, `dir_open`/`dir_next`/`dir_close`, `tone_play`/`tone_stop`,
 `pcm_open`/`pcm_write`/`pcm_close`/`pcm_free`, `device_property`, `vibrate` and
-`idle`. Two of those are worth copying:
+`idle`. Three of those are worth copying:
 
 - **Directories, but not files.** `dir_open`/`dir_next`/`dir_close` are real
   (`dirent` + `stat`), because the runtime has no fallback for them and
@@ -213,6 +213,13 @@ The port fills in `display_init`/`display_present`, `input_poll`, `input_push`,
   `XDG_DATA_HOME`/`HOME` when a port leaves them `NULL`, which on Android means
   the record store lands in `/`. They are pushed in as absolute paths from
   `Context.getFilesDir()` before the VM thread starts.
+- **MIDI is taken over wholesale, not streamed.** The runtime can render a
+  `.mid` itself, so the port's job is only to say whether it has something
+  better: `midi_open` hands back a handle and a duration, or `NULL` to leave the
+  file to the built-in synthesiser. Android answers with the platform's own
+  synth (`MediaPlayer`, which is Sonivox EAS), which is why a phone gets the
+  platform's timbres and a game's `getDuration()`/`getMediaTime()`/looping still
+  behave - the remaining seven hooks back the same `Player` state machine.
 
 Five details are Android-specific and each one cost a debugging session:
 

@@ -65,7 +65,7 @@
 | PNG 与基线 JPEG 解码、点阵字体 | **完成**，走可插拔的编解码注册表 |
 | 移植：headless（参考实现） | **完成** |
 | 移植：SDL2 | **完成** |
-| 移植：Android（NDK + JNI） | **完成** —— 一个 APK 支持 Android 5.0（API 21）及以上、四种 ABI；启动器会显示每个游戏自己的名字和图标，也能从文件管理器直接打开 `.jar`；三套可配置的悬浮按键布局；AAudio 或 OpenSL ES 出声；多点触控；自动识别游戏分辨率。四种 ABI 合计 1.57 MiB，在 API 21 模拟器、API 36 模拟器和真机上都跑过 |
+| 移植：Android（NDK + JNI） | **完成** —— 一个 APK 支持 Android 5.0（API 21）及以上、四种 ABI；启动器会显示每个游戏自己的名字和图标，也能从文件管理器直接打开 `.jar`；三套可配置的悬浮按键布局；AAudio 或 OpenSL ES 出声，MIDI 交给手机自带的合成器；多点触控；自动识别游戏分辨率。四种 ABI 合计 1.57 MiB，在 API 21 模拟器、API 36 模拟器和真机上都跑过 |
 | 移植：ESP32-S3（ESP-IDF，Xtensa） | **完成** —— 真实的 IDF 构建，能在 QEMU 里跑起一个 MIDlet |
 | 移植：ESP32-C3（ESP-IDF，RISC-V） | 能编译、链接、启动；跑虚拟机需要 PSRAM |
 | 测试套件 | **52/52 通过**（`ctest`） |

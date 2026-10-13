@@ -15,7 +15,7 @@ to be one of the gaps listed here, and knowing which one saves an afternoon.
 | JSR 75 (FileConnection/PIM) | `FileConnection`, sandboxed to `--fs-dir`, and `RecordStore`; the PIM half (`ContactList`) is not implemented |
 | JSR 82 (Bluetooth) | classes present; every operation refuses with `BluetoothStateException`, because there is no radio — a MIDlet that is told "no radio" keeps working, one that is told "no such class" does not |
 | JSR 120/205 (messaging) | classes present; connections refuse the same way |
-| JSR 135 (Mobile Media) | tone and sampled PCM playback, WAV from a stream or a JAR resource, and AMR narrowband decoded by the runtime itself; no video. MP3 and every other format still plug in through `nj_port.audio_decode` |
+| JSR 135 (Mobile Media) | tone and sampled PCM playback, WAV from a stream or a JAR resource, MIDI rendered by the runtime itself, and AMR narrowband decoded by the runtime itself; no video. MP3 and every other format still plug in through `nj_port.audio_decode` |
 | JSR 184 (Mobile 3D Graphics) | the classes, scene graph, transform maths, and the member surface real titles use, behind `NJ_ENABLE_M3G`. **No rasterizer and no `.m3g` container parser**, so nothing collected here renders 3D through it (see below) |
 | Mascot Capsule Micro3D v3 | classes, fixed-point transform maths and a real triangle rasterizer, behind `NJ_ENABLE_MASCOT`. **No collected title reaches the rasterizer**, so it is exercised only by its own unit test (see below) |
 
@@ -201,7 +201,7 @@ exception it would get from `openRecordStore` either way.
 These are the player's saves, not project files - never commit them. `*.rms` is
 gitignored for that reason.
 
-## javax.microedition.m3g
+## javax.microedition.media
 
 Implemented, and tested end to end by `tests/test_audio.c` (38 assertions)
 driving `tests/fixtures/audiodemo.jar`, built by `tools/make_audio_jar.sh`;
@@ -216,11 +216,28 @@ the decoder itself by `tests/test_amr.c` (119 assertions).
 | `VolumeControl` | `setLevel`/`getLevel`/`setMute`/`isMuted` |
 | WAV | RIFF/WAVE PCM, 8- and 16-bit, mono and stereo, from a stream or a JAR resource |
 | AMR | AMR-NB (`#!AMR`) speech in all eight modes, 4.75–12.2 kbit/s, decoded by the runtime itself into 8 kHz mono PCM — no host codec, no dependency. Behind `NJ_ENABLE_AMR`, on by default; `=0` gives the file back to `nj_port.audio_decode`, and AMR-WB is still refused by name |
+| MIDI | Standard MIDI Files, type 0 and 1, played by the runtime's own synthesiser: 16 timbres, channel volume (CC7) and expression (CC11), pitch bend, sustain pedal, channel 10 percussion, 22050 Hz mono or stereo. A file that contains a second `MThd` chunk is two files glued together and only the first is played — every other player does the same, and merging them lets the second file's tempo land on tick 0 |
 
 `TONE_BLOCKING` blocks the CALLING JAVA THREAD cooperatively: it returns
 `NJ_ERR_TIMEOUT` and the interpreter suspends that thread, exactly as
 `Thread.sleep()` does. Sleeping the C thread instead would freeze every other
 thread in the VM, which for a game means the picture stops.
+
+**MIDI is rendered, not delegated.** The runtime's synthesiser is deliberately
+small — sixteen generated timbres, one-pole envelopes, no samples — and it is
+what plays a `.mid` on every port that has no synthesiser of its own. A port
+that *does* have one can take the whole file over: `midi_open` returning a
+handle is the port saying "I have this", and `NULL` leaves the file to the
+runtime, exactly like `audio_decode` does for a container. The rest of the hooks
+(`midi_start`, `midi_stop`, `midi_close`, `midi_seek`, `midi_time`,
+`midi_volume`, `midi_finished`) then back the same `Player` state machine, so
+`getDuration()`, `getMediaTime()`, `setLoopCount()` and `VolumeControl` keep
+working without the media layer knowing which of the two is playing. On Android
+the platform's own synth (Sonivox EAS, behind `MediaPlayer`) plays the file, so
+a phone gets the platform's timbres while a microcontroller still gets the
+built-in ones. `tests/fixtures/mididemo.jar` (`tools/make_mididemo_jar.sh`)
+covers the runtime path, and `tests/test_midi.c` asserts among other things that
+a glued second sequence is ignored rather than merged.
 
 **Not implemented, and refused by name rather than silently:** `http://` and
 `rtsp://` raise `MediaException` naming the protocol, as does AMR wideband. There
