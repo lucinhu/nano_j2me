@@ -311,7 +311,17 @@ Ten things in that shell are worth copying, because each one is a rule a plain
   where the diagonals carry the digit codes 1/3/7/9 a second time because that is
   what they are on a phone; the preset list stayed at what a player can tell
   apart instead of one entry per key combination. Editor and game load the same
-  blob, so a layout tweaked in game is the one the editor opens.
+  blob, so a layout tweaked in game is the one the editor opens. A cap carries an
+  optional second code (`Key.code2`): 经典手机's diagonals press two directions
+  at once, because a MIDlet steering with `Canvas.getKeyStates()` needs both bits
+  held to walk diagonally - a single digit code would never move it. The digits
+  those keys carry on a handset are the block to the left, which is what makes
+  the trade affordable, and a pad saved before the change is rewritten on load
+  (`upgradeClassicDiagonals`: the four corner codes on the right half only, so
+  the digit block keeps its 1/3/7/9). The caps' transparency is the editor's
+  slider - default `PadConfig.opacity = 0.50`, a percentage beside the thumb, and
+  the caps preview the game's alpha while the thumb is held, since the editor
+  otherwise paints them solid in order to be placeable.
 - **One adjustment page, not two.** `PadEditActivity` is where both the keycaps
   and the picture are placed: an empty-space drag moves the picture, two fingers
   scale it, and 画面 chooses the fit - plus a first-run card that says so, because

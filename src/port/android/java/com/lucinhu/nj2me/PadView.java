@@ -70,6 +70,7 @@ class PadView extends View {
     private Sink sink;
     private EditListener editListener;
     private boolean editing;
+    private boolean previewOpacity;
     private boolean barShowing;      /* the game's control bar owns the screen */
     private boolean adjusting;      /* empty space moves the picture, not the game */
     private float adjustX, adjustY; /* last finger position while dragging it */
@@ -176,6 +177,16 @@ class PadView extends View {
 
     void setEditListener(EditListener l) {
         this.editListener = l;
+    }
+
+    /**
+     * Draw the caps the way the game will, for as long as the editor's
+     * transparency slider is held.  Editing otherwise paints them solid: a key
+     * you cannot see is a key you cannot place.
+     */
+    void setPreviewOpacity(boolean on) {
+        previewOpacity = on;
+        invalidate();
     }
 
     void setEditing(boolean editing) {
@@ -491,14 +502,14 @@ class PadView extends View {
         if (editing) {
             drawEditorGuides(c, w, h);
         }
-        int base = editing ? 255 : (int) (cfg.opacity * 255f);
+        int base = (editing && !previewOpacity) ? 255 : (int) (cfg.opacity * 255f);
         text.setTextSize(Math.max(14f, Math.min(w, h) * 0.022f));
         for (int i = 0; i < cfg.keys.size(); i++) {
             PadConfig.Key k = cfg.keys.get(i);
             /* Every key under a finger lights up, not just the last one
              * pressed: with two thumbs on a D-pad the player has to be able to
              * see both. */
-            boolean down = selected == k || padPress.isPressed(k.code);
+            boolean down = selected == k || padPress.isPressed(k.code, k.code2);
             cfg.rectOf(k, box);
             rect.set(box.x * w, box.y * h, (box.x + box.w) * w, (box.y + box.h) * h);
             float r = Math.min(rect.width(), rect.height()) * 0.22f;
@@ -525,7 +536,7 @@ class PadView extends View {
             icon.setColor(Color.argb(ink, 20, 20, 20));
             text.setColor(Color.argb(ink, 20, 20, 20));
 
-            if (!drawKeyIcon(c, k.code, cx, cy, s)) {
+            if (!drawKeyIcon(c, k.code, k.code2, cx, cy, s)) {
                 Paint.FontMetrics fm = text.getFontMetrics();
                 float ty = cy - (fm.ascent + fm.descent) / 2f;
                 c.drawText(KeyCatalog.labelOf(k.code), cx, ty, text);
@@ -539,11 +550,52 @@ class PadView extends View {
             if (editing && k == selected) {
                 text.setTextSize(Math.max(12f, Math.min(w, h) * 0.018f));
                 Paint.FontMetrics fm = text.getFontMetrics();
-                c.drawText(KeyCatalog.labelOf(k.code), cx,
+                c.drawText(label(k), cx,
                            rect.bottom + (fm.descent - fm.ascent), text);
                 text.setTextSize(Math.max(14f, Math.min(w, h) * 0.022f));
             }
         }
+    }
+
+    private static boolean isArrow(int code) {
+        return code == 19 || code == 20 || code == 21 || code == 22;
+    }
+
+    private static float dirX(int code) {
+        return code == 21 ? -1f : (code == 22 ? 1f : 0f);
+    }
+
+    private static float dirY(int code) {
+        return code == 19 ? -1f : (code == 20 ? 1f : 0f);
+    }
+
+    /** One triangle pointed along (dx, dy): a straight arrow, or a diagonal. */
+    private boolean drawArrow(Canvas c, float cx, float cy, float s, float dx, float dy,
+                              float halfWidth) {
+        float len = (float) Math.sqrt(dx * dx + dy * dy);
+        if (len < 0.5f) {
+            return false;
+        }
+        dx /= len;
+        dy /= len;
+        float bx = cx - dx * s * 0.62f;
+        float by = cy - dy * s * 0.62f;
+        shape.reset();
+        shape.moveTo(cx + dx * s * 1.22f, cy + dy * s * 1.22f);
+        shape.lineTo(bx - dy * s * halfWidth, by + dx * s * halfWidth);
+        shape.lineTo(bx + dy * s * halfWidth, by - dx * s * halfWidth);
+        shape.close();
+        icon.setStyle(Paint.Style.FILL);
+        c.drawPath(shape, icon);
+        return true;
+    }
+
+    /** What the editor prints under a selected cap: 左上, not 左. */
+    private static String label(PadConfig.Key k) {
+        if (isArrow(k.code) && isArrow(k.code2)) {
+            return (dirX(k.code) < 0 ? "左" : "右") + (dirY(k.code) < 0 ? "上" : "下");
+        }
+        return KeyCatalog.labelOf(k.code);
     }
 
     /*
@@ -555,44 +607,20 @@ class PadView extends View {
      * same picture on every phone.  Digits, *, # and A-D stay text - they are
      * their own icon, and translating them would be the bug.
      */
-    private boolean drawKeyIcon(Canvas c, int code, float cx, float cy, float s) {
+    private boolean drawKeyIcon(Canvas c, int code, int code2, float cx, float cy, float s) {
+        if (isArrow(code)) {
+            /*
+             * A diagonal cap presses two directions, so it draws the arrow
+             * between them - one triangle pointed along the sum, which is also
+             * how the four straight arrows are drawn.
+             */
+            float dx = dirX(code) + dirX(code2);
+            float dy = dirY(code) + dirY(code2);
+            /* a wide wedge at 45 degrees reads as a sideways triangle; a narrow
+               one reads as the corner it is */
+            return drawArrow(c, cx, cy, s, dx, dy, (code2 != 0) ? 0.52f : 0.78f);
+        }
         switch (code) {
-            case 19:                                   /* up */
-                shape.reset();
-                shape.moveTo(cx, cy - s);
-                shape.lineTo(cx + s, cy + s);
-                shape.lineTo(cx - s, cy + s);
-                shape.close();
-                icon.setStyle(Paint.Style.FILL);
-                c.drawPath(shape, icon);
-                return true;
-            case 20:                                   /* down */
-                shape.reset();
-                shape.moveTo(cx, cy + s);
-                shape.lineTo(cx + s, cy - s);
-                shape.lineTo(cx - s, cy - s);
-                shape.close();
-                icon.setStyle(Paint.Style.FILL);
-                c.drawPath(shape, icon);
-                return true;
-            case 21:                                   /* left */
-                shape.reset();
-                shape.moveTo(cx - s, cy);
-                shape.lineTo(cx + s, cy - s);
-                shape.lineTo(cx + s, cy + s);
-                shape.close();
-                icon.setStyle(Paint.Style.FILL);
-                c.drawPath(shape, icon);
-                return true;
-            case 22:                                   /* right */
-                shape.reset();
-                shape.moveTo(cx + s, cy);
-                shape.lineTo(cx - s, cy - s);
-                shape.lineTo(cx - s, cy + s);
-                shape.close();
-                icon.setStyle(Paint.Style.FILL);
-                c.drawPath(shape, icon);
-                return true;
             case 23:                                   /* fire: 23, and its aliases */
             case 66:
             case 62:

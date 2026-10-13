@@ -188,6 +188,37 @@ public final class PadPressTest {
         Check.eq("and a key works again once the flood is gone", r.take(), "[key+20]");
         Check.isTrue("with the press tracked", p.isPressed(DOWN));
 
+        Check.section("a diagonal cap presses two directions at once");
+        PadConfig dia = PadConfig.blank();
+        dia.keys.add(new PadConfig.Key(21, 19, 0.10f, 0.80f, 0.20f, 0.10f));  /* ↖ */
+        dia.keys.add(new PadConfig.Key(21, 0.40f, 0.80f, 0.20f, 0.10f));      /* ← */
+        dia.keys.add(new PadConfig.Key(19, 0.70f, 0.80f, 0.20f, 0.10f));      /* ↑ */
+        p = new PadPress(dia, r);
+        p.down(1, 0.15f, 0.85f);
+        Check.eq("the touch sends both halves", r.take(), "[key+21, key+19]");
+        Check.isTrue("both are held", p.isPressed(21) && p.isPressed(19));
+        Check.isTrue("and the cap knows it is the diagonal", p.isPressed(21, 19));
+        Check.isTrue("while the plain ← cap does not light up", !p.isPressed(21, 0));
+        p.up(1, 0.15f, 0.85f);
+        Check.eq("lifting sends both back up", r.take(), "[key-21, key-19]");
+        Check.isTrue("and nothing is left down", !p.isPressed(21) && !p.isPressed(19));
+
+        p.down(1, 0.15f, 0.85f);
+        r.take();
+        p.down(2, 0.45f, 0.85f);                       /* a second thumb on ← */
+        Check.eq("a half another finger already holds is not pressed twice",
+                 r.take(), "[]");
+        p.up(2, 0.45f, 0.85f);
+        Check.eq("and that finger cannot release it", r.take(), "[]");
+        Check.isTrue("← is still held by the diagonal", p.isPressed(21));
+        p.up(1, 0.15f, 0.85f);
+        Check.eq("the diagonal lets both go at the end", r.take(), "[key-21, key-19]");
+
+        p.down(1, 0.15f, 0.85f);
+        r.take();
+        p.cancel();
+        Check.eq("cancel releases every half exactly once", r.take(), "[key-21, key-19]");
+
         Check.section("a key held across a config change");
         p = new PadPress(cfg(), r);
         p.down(1, NX_DOWN, NY);

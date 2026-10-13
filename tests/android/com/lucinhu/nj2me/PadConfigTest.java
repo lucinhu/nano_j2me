@@ -132,6 +132,45 @@ public final class PadConfigTest {
         c.setSafeArea(0f, 0f, 1.2f, 1f);
         Check.eq("one outside the view falls back too", c.safeRight(), 1.0f);
 
+        Check.section("the classic handset's diagonals are two keys at once");
+        PadConfig classic = PadConfig.byId(PadConfig.PRESET_CLASSIC);
+        int[][] pairs = { { 21, 19 }, { 22, 19 }, { 21, 20 }, { 22, 20 } };
+        for (int[] pair : pairs) {
+            boolean found = false;
+            for (int i = 0; i < classic.keys.size(); i++) {
+                PadConfig.Key k = classic.keys.get(i);
+                if (k.code == pair[0] && k.code2 == pair[1]) {
+                    found = true;
+                }
+            }
+            Check.isTrue("经典手机 has a " + pair[0] + "+" + pair[1] + " diagonal", found);
+        }
+        int combos = 0;
+        for (int i = 0; i < classic.keys.size(); i++) {
+            if (classic.keys.get(i).code2 != 0) {
+                combos++;
+            }
+        }
+        Check.eq("exactly the four diagonals are combos", combos, 4);
+        PadConfig.Key diag = classic.keys.get(classic.keys.size() - 1);
+        Check.eq("a copy keeps the second code", diag.copy().code2, diag.code2);
+        Check.eq("a key with no combo copies as one", classic.keys.get(0).copy().code2, 0);
+        Check.eq("an untouched keypad is半透明", PadConfig.defaults().opacity, 0.50f);
+
+        Check.section("a saved 经典手机 picks up the two-key diagonals");
+        PadConfig old = PadConfig.blank();
+        old.keys.add(new PadConfig.Key(8, 0.010f, 0.560f, 0.155f, 0.098f));   /* 1, left */
+        old.keys.add(new PadConfig.Key(8, 0.506f, 0.664f, 0.155f, 0.098f));   /* ↖, right */
+        old.keys.add(new PadConfig.Key(23, 0.667f, 0.768f, 0.155f, 0.098f));  /* fire */
+        PadConfig.upgradeClassicDiagonals(old.keys);
+        Check.eq("the digit block keeps its 1", old.keys.get(0).code, 8);
+        Check.eq("and stays a single key", old.keys.get(0).code2, 0);
+        Check.eq("the corner key becomes left", old.keys.get(1).code, 21);
+        Check.eq("plus up", old.keys.get(1).code2, 19);
+        Check.eq("the fire button is untouched", old.keys.get(2).code, 23);
+        PadConfig.upgradeClassicDiagonals(old.keys);
+        Check.eq("running it twice changes nothing", old.keys.get(1).code2, 19);
+
         Check.section("a fresh layout is the whole view");
         c = PadConfig.blank();
         Check.eq("no notch, no reserved edges",

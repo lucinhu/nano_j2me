@@ -242,6 +242,11 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
     }
 
     /** Puts the toolbar away so the top of the screen can hold a key. */
+    /** The transparency slider's readout, in the editor and nowhere else. */
+    private String pctText() {
+        return Math.round(work.opacity * 100f) + "%";
+    }
+
     private void setToolbarVisible(boolean visible) {
         if (toolbar != null) {
             toolbar.setVisibility(visible ? View.VISIBLE : View.GONE);
@@ -306,25 +311,36 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
                 android.graphics.PorterDuff.Mode.SRC_IN);
         slider.setMax(85);
         slider.setProgress(Math.round(work.opacity * 100f) - 5);
+        final TextView pct = new TextView(this);
+        Md3.type(pct, 12f, Md3.onSurfaceVariant, false);
+        pct.setGravity(Gravity.CENTER);
+        pct.setText(pctText());
+        pct.setPadding(dp(8), 0, 0, 0);
         slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
                 work.opacity = (progress + 5) / 100f;
+                pct.setText(pctText());
                 pad.setConfig(work);
             }
 
             @Override
             public void onStartTrackingTouch(SeekBar sb) {
+                /* The editor paints the caps solid so they can be placed, so a
+                 * slider moved without this appears to do nothing at all. */
+                pad.setPreviewOpacity(true);
             }
 
             @Override
             public void onStopTrackingTouch(SeekBar sb) {
+                pad.setPreviewOpacity(false);
             }
         });
         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         slp.setMargins(dp(8), 0, 0, 0);
         bar.addView(slider, slp);
+        bar.addView(pct);
 
         /* The strip can get out of the way: a player who wants a key along the
          * very top of the screen should not have to place it under the tools

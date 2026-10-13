@@ -20,10 +20,25 @@ final class PadConfig {
     /** One keycap.  x/y is the top-left corner, w/h the size, all 0..1. */
     static final class Key {
         int code;
+        /**
+         * A second code that goes down and up with the first (0 = none).
+         *
+         * <p>The diagonals of 经典手机 press two directions at once, the way a
+         * stick moves: a MIDlet that steers with {@code Canvas.getKeyStates()}
+         * needs both bits held to walk diagonally.  The digit the same key
+         * carries on a handset is in the block to the left, so a game that
+         * wants the phone's own 1/3/7/9 still has it.
+         */
+        int code2;
         float x, y, w, h;
 
         Key(int code, float x, float y, float w, float h) {
+            this(code, 0, x, y, w, h);
+        }
+
+        Key(int code, int code2, float x, float y, float w, float h) {
             this.code = code;
+            this.code2 = code2;
             this.x = x;
             this.y = y;
             this.w = w;
@@ -31,7 +46,7 @@ final class PadConfig {
         }
 
         Key copy() {
-            return new Key(code, x, y, w, h);
+            return new Key(code, code2, x, y, w, h);
         }
     }
 
@@ -45,7 +60,9 @@ final class PadConfig {
     static final int PRESET_COUNT = 7;
 
     final List<Key> keys = new ArrayList<Key>();
-    float opacity = 0.30f;      /* how solid an idle keycap is */
+    float opacity = 0.50f;      /* how solid an idle keycap is; the
+                                 * default is半透明, the slider in the
+                                 * editor owns the rest */
     boolean grid = true;        /* guide lines in the editor */
     boolean snap = true;        /* round dragged keys to the grid */
     boolean haptics = true;     /* short buzz on a key press */
@@ -175,23 +192,26 @@ final class PadConfig {
                                w, h));
         }
 
-        int[] cluster = {
-            82, 0, 4,          /* 左软键 · · 右软键 */
-            8, 19, 10,         /* ↖ 上 ↗ */
-            21, 23, 22,        /* 左 火力 右 */
-            14, 20, 16         /* ↙ 下 ↘ */
-        };
-        for (int i = 0; i < cluster.length; i++) {
-            if (cluster[i] == 0) {
-                continue;
-            }
-            int col = i % 3;
-            int row = i / 3;
-            p.keys.add(new Key(cluster[i],
-                               rx + col * (w + gap),
-                               y0 + row * (h + gap),
-                               w, h));
-        }
+        /* Right block: the soft keys along the top, then the eight-way
+         * cluster with the fire button in the middle.
+         *
+         * The diagonals press BOTH directions at once.  That is what a stick
+         * does, and it is what a MIDlet reading Canvas.getKeyStates() needs -
+         * with a single digit code it would never see a diagonal walk.  The
+         * digits themselves are one block to the left, so a game that asks for
+         * the phone's '1' still gets it. */
+        float sx = w + gap, sy = h + gap;
+        p.keys.add(new Key(82, rx, y0, w, h));                          /* L */
+        p.keys.add(new Key(4, rx + 2 * sx, y0, w, h));                  /* R */
+        p.keys.add(new Key(21, 19, rx, y0 + sy, w, h));                 /* ↖ */
+        p.keys.add(new Key(19, rx + sx, y0 + sy, w, h));                /* ↑ */
+        p.keys.add(new Key(22, 19, rx + 2 * sx, y0 + sy, w, h));        /* ↗ */
+        p.keys.add(new Key(21, rx, y0 + 2 * sy, w, h));                 /* ← */
+        p.keys.add(new Key(23, rx + sx, y0 + 2 * sy, w, h));            /* ● */
+        p.keys.add(new Key(22, rx + 2 * sx, y0 + 2 * sy, w, h));        /* → */
+        p.keys.add(new Key(21, 20, rx, y0 + 3 * sy, w, h));             /* ↙ */
+        p.keys.add(new Key(20, rx + sx, y0 + 3 * sy, w, h));            /* ↓ */
+        p.keys.add(new Key(22, 20, rx + 2 * sx, y0 + 3 * sy, w, h));    /* ↘ */
         return p;
     }
 
@@ -443,11 +463,12 @@ final class PadConfig {
             String rec = blob.substring(i, end);
             i = end + 1;
             String[] f = rec.split(",");
-            if (f.length != 5) {
+            if (f.length != 5 && f.length != 6) {
                 continue;
             }
             try {
                 p.keys.add(new Key(Integer.parseInt(f[0]),
+                                   f.length == 6 ? Integer.parseInt(f[5]) : 0,
                                    Float.parseFloat(f[1]), Float.parseFloat(f[2]),
                                    Float.parseFloat(f[3]), Float.parseFloat(f[4])));
             } catch (NumberFormatException e) {
@@ -457,6 +478,7 @@ final class PadConfig {
         if (p.keys.isEmpty()) {
             return defaults();
         }
+        upgradeClassicDiagonals(p.keys);
         p.opacity = sp.getFloat("opacity", p.opacity);
         p.grid = sp.getBoolean("grid", p.grid);
         p.snap = sp.getBoolean("snap", p.snap);
@@ -470,7 +492,14 @@ final class PadConfig {
         for (int i = 0; i < keys.size(); i++) {
             Key k = keys.get(i);
             sb.append(k.code).append(',').append(fmt(k.x)).append(',').append(fmt(k.y))
-              .append(',').append(fmt(k.w)).append(',').append(fmt(k.h)).append(';');
+              .append(',').append(fmt(k.w)).append(',').append(fmt(k.h));
+            if (k.code2 != 0) {
+                /* written only when it is used: a pad with no combos keeps the
+                 * old five-field record, so nothing else has to learn a new
+                 * format */
+                sb.append(',').append(k.code2);
+            }
+            sb.append(';');
         }
         ctx.getSharedPreferences("pad", Context.MODE_PRIVATE).edit()
            .putString("keys", sb.toString())
@@ -549,6 +578,46 @@ final class PadConfig {
         snap = other.snap;
         haptics = other.haptics;
         preset = other.preset;
+    }
+
+    /**
+     * 经典手机 first shipped its diagonals as the digit codes a handset puts on
+     * those keys (8/10/14/16 = 1/3/7/9).  They press two directions at once
+     * now, so a pad saved before that change is rewritten in place: the
+     * geometry the player arranged is kept, only the meaning of the four
+     * corner keys changes.
+     *
+     * <p>The digit block on the left is left alone - it is the same four codes
+     * and it is the reason the diagonals can afford to stop being digits.  The
+     * two blocks are told apart by x: classic() puts the right one at 0.506.
+     */
+    static void upgradeClassicDiagonals(List<Key> keys) {
+        for (int i = 0; i < keys.size(); i++) {
+            Key k = keys.get(i);
+            if (k.x < 0.5f || k.code2 != 0) {
+                continue;
+            }
+            switch (k.code) {
+                case 8:                                     /* ↖ */
+                    k.code = 21;
+                    k.code2 = 19;
+                    break;
+                case 10:                                    /* ↗ */
+                    k.code = 22;
+                    k.code2 = 19;
+                    break;
+                case 14:                                    /* ↙ */
+                    k.code = 21;
+                    k.code2 = 20;
+                    break;
+                case 16:                                    /* ↘ */
+                    k.code = 22;
+                    k.code2 = 20;
+                    break;
+                default:
+                    break;
+            }
+        }
     }
 
     private static String fmt(float v) {

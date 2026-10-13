@@ -52,6 +52,7 @@ final class PadPress {
 
     private final int[] ids = new int[MAX_POINTERS];
     private final int[] codes = new int[MAX_POINTERS];   /* 0 while free */
+    private final int[] codes2 = new int[MAX_POINTERS];  /* the combo half */
     private final float[] lastX = new float[MAX_POINTERS];
     private final float[] lastY = new float[MAX_POINTERS];
     private int count;
@@ -77,7 +78,7 @@ final class PadPress {
     boolean down(int id, float nx, float ny) {
         PadConfig.Key k = keyAt(nx, ny);
         if (k != null) {
-            return pressCode(id, k.code, nx, ny);
+            return pressCode(id, k.code, k.code2, nx, ny);
         }
         /* Every finger is tracked, even the ones holding nothing: a finger the
          * game never saw may still slide onto a keycap later. */
@@ -100,9 +101,9 @@ final class PadPress {
         remember(at, nx, ny);
         PadConfig.Key k = keyAt(nx, ny);
         if (codes[at] != 0) {
-            if (k != null && k.code != codes[at]) {
+            if (k != null && (k.code != codes[at] || k.code2 != codes2[at])) {
                 releaseCode(at);
-                pressCode(id, k.code, nx, ny);
+                pressCode(id, k.code, k.code2, nx, ny);
             } else if (k == null) {
                 releaseCode(at);
             }
@@ -114,14 +115,14 @@ final class PadPress {
                  * pointer up, because from here the finger is steering the pad. */
                 touch(id, 2, nx, ny);
                 gameId = -1;
-                pressCode(id, k.code, nx, ny);
+                pressCode(id, k.code, k.code2, nx, ny);
             } else {
                 touch(id, 1, nx, ny);
             }
         } else if (k != null) {
             /* A second finger, one the game never saw: it can still work the
              * pad without disturbing the pointer the game is following. */
-            pressCode(id, k.code, nx, ny);
+            pressCode(id, k.code, k.code2, nx, ny);
         }
     }
 
@@ -147,20 +148,26 @@ final class PadPress {
      * MIDlet that walks into a wall until the next tap.
      */
     void cancel() {
+        /* Release every code that is down exactly once, combos included: the
+         * first finger holding it sends the key-up, the others are just
+         * fingers.  A key the pad fails to release is a key stuck down in the
+         * MIDlet, which is worse than a stray press. */
         for (int i = 0; i < count; i++) {
-            int code = codes[i];
-            if (code == 0) {
-                continue;
-            }
-            boolean first = true;
-            for (int j = 0; j < i; j++) {
-                if (codes[j] == code) {
-                    first = false;
-                    break;
+            for (int half = 0; half < 2; half++) {
+                int code = half == 0 ? codes[i] : codes2[i];
+                if (code == 0) {
+                    continue;
                 }
-            }
-            if (first) {
-                key(code, false);
+                boolean first = true;
+                for (int j = 0; j < i; j++) {
+                    if (codes[j] == code || codes2[j] == code) {
+                        first = false;
+                        break;
+                    }
+                }
+                if (first) {
+                    key(code, false);
+                }
             }
         }
         if (gameId >= 0) {
@@ -178,7 +185,17 @@ final class PadPress {
     /** True while the pad is holding this Android key code down. */
     boolean isPressed(int code) {
         for (int i = 0; i < count; i++) {
-            if (codes[i] == code) {
+            if (codes[i] == code || codes2[i] == code) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** True only for the exact cap: ← must not light up when ↑ is held. */
+    boolean isPressed(int code, int code2) {
+        for (int i = 0; i < count; i++) {
+            if (codes[i] == code && codes2[i] == code2) {
                 return true;
             }
         }
@@ -202,13 +219,24 @@ final class PadPress {
      * <p>False when there was no room to follow the finger: a press the pad
      * cannot track is a press it could never release, so it is not sent.
      */
-    private boolean pressCode(int id, int code, float nx, float ny) {
+    private boolean pressCode(int id, int code, int code2, float nx, float ny) {
+        /* "fresh" is per code, not per finger: a finger landing on the ↖
+         * diagonal while another thumb already holds ← must not send a second
+         * key-down for ←, or the MIDlet sees a key it never got a key-up for. */
         boolean fresh = !isPressed(code);
+        boolean fresh2 = code2 != 0 && !isPressed(code2);
         if (!occupy(id, code, nx, ny)) {
             return false;
         }
+        int at = indexOf(id);
+        if (at >= 0) {
+            codes2[at] = code2;
+        }
         if (fresh) {
             key(code, true);
+        }
+        if (fresh2) {
+            key(code2, true);
         }
         return true;
     }
@@ -216,9 +244,14 @@ final class PadPress {
     /** Let this slot's key go, unless another finger is still holding it. */
     private void releaseCode(int at) {
         int code = codes[at];
+        int code2 = codes2[at];
         codes[at] = 0;
+        codes2[at] = 0;
         if (code != 0 && !isPressed(code)) {
             key(code, false);
+        }
+        if (code2 != 0 && !isPressed(code2)) {
+            key(code2, false);
         }
     }
 
@@ -240,6 +273,7 @@ final class PadPress {
         int at = indexOf(id);
         if (at >= 0) {
             codes[at] = code;
+            codes2[at] = 0;
             remember(at, nx, ny);
             return true;
         }
@@ -248,6 +282,7 @@ final class PadPress {
         }
         ids[count] = id;
         codes[count] = code;
+        codes2[count] = 0;
         lastX[count] = nx;
         lastY[count] = ny;
         count++;
@@ -263,10 +298,12 @@ final class PadPress {
         for (int i = at; i < count; i++) {
             ids[i] = ids[i + 1];
             codes[i] = codes[i + 1];
+            codes2[i] = codes2[i + 1];
             lastX[i] = lastX[i + 1];
             lastY[i] = lastY[i + 1];
         }
         codes[count] = 0;
+        codes2[count] = 0;
     }
 
     private void key(int code, boolean down) {
