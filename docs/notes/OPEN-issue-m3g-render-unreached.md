@@ -345,3 +345,34 @@ textures, not lighting.  So the next piece is the `Image2D` pixel payload:
 Everything downstream of that is already in place: the Appearance's
 `_nj_tex0`, the Texture2D's `_nj_img`, the VertexBuffer's texture coordinates
 and scale/bias, and `sw_tri`'s sampler with its alpha test and blending.
+
+## Where the picture stands (after the pixel payload landed)
+
+The rally title now draws its scene the way the file and the API describe it:
+geometry through the rasteriser with depth and culling, the World's own
+`Background` cleared first (the white sky is that background's colour - the
+title calls `setColor(0xFFFFFF)`, so a white sky is its data, not a missing
+clear), each mesh's Material, and its textures sampled through the texture
+coordinates its own `VertexBuffer` carries.  Measured on the run that reaches
+the race: 9 `VertexBuffer`s decoded, every one of them 68 bytes with one
+texture unit (`texn=1`), and the sampler bound a 128x128 and a 16x16 RGBA
+image whose first texels are (0x12,0x16,0x1f) and (0x02,0x08,0x0e) - a dark
+asphalt pair, which is why the track is dark rather than white.
+
+What the picture still does not have, in the order it would show:
+
+  - **no mipmaps and no bilinear filtering.**  A receding textured plane
+    sampled nearest is exactly the noise the track shows.  `Texture2D`'s
+    `imageFilter`/`levelFilter` are not read into the class at all, so this
+    needs a field before it needs a sampler.
+  - **one texture unit.**  `FUNC_ADD` and `FUNC_BLEND` need a second.
+  - **per-vertex, not per-fragment, lighting** - visible only where a light
+    sits close to a large triangle.
+  - the ten 90-byte `Texture2D` objects of the corpus are still undecoded on
+    purpose, and the four corpus titles whose own code throws
+    (`反恐精英2正式版_5836`, `炸弹人_10311`, `战争艺术2之全球联盟中文版_1918`,
+    plus `1945空战英雄_6105`'s Nokia-only check) are unrelated to this path.
+
+Corpus regression over the 395 titles at 176x208: **390 passed, 5 failed**,
+against the 388/7 the docs recorded before this work; `都市摩天楼_6192`, which
+the `CompositingMode` descriptor mismatch had broken, is back.
