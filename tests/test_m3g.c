@@ -559,8 +559,10 @@ int main(void)
 
     /*
      * TriangleStripArray stores what its constructors are handed.  The
-     * rasteriser does not exist yet, so "it did not crash" is not evidence
-     * that anything was kept; these read it back.
+     * constructor is (int[] indices, int[] stripLengths) - the indices come
+     * FIRST - and getting that order wrong made every vertex index a strip
+     * length (which this test used to encode, because it asserted the
+     * runtime's order rather than the specification's).
      */
     {
         nj_value a[4];
@@ -575,7 +577,7 @@ int main(void)
             for (i = 0; i < 3; i++) {
                 ((nj_s4 *)lens->u.bytes)[i] = 3;
             }
-            a[0].r = lens; a[1].r = idx;
+            a[0].r = idx; a[1].r = lens;
             call(vm, tsa, CLS("TriangleStripArray"), "<init>", "([I[I)V", a,
                  NULL);
             call(vm, tsa, CLS("TriangleStripArray"), "getStripCount", "()I",

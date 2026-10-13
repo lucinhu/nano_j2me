@@ -597,9 +597,10 @@ failing in:
 its constructor - first `addChild(null)`, then
 `NoSuchMethodError: javax/microedition/m3g/Group.postRotate(FFFF)V`, then
 `construction of Doom/Doom blocked` - and now runs: 120 frames, no uncaught
-exception, `m3g=2`, `tris=0`.  The `tris=0` is the honest part of that
-sentence: the scene is built and `render()` is called, and nothing is
-rasterised, so its 3D view stays empty.
+exception, `m3g=2`, `tris=0`.  The `tris=0` was the honest part of that
+sentence: the scene is built and `render()` is called, and nothing was
+rasterised, so its 3D view stayed empty.  That is no longer true - see
+"### The geometry reaches the target" below.
 
 ### A declared member is not a working member
 
@@ -634,6 +635,39 @@ were not exotic:
 Most of them were a line or two.  The lesson is the one this file keeps
 recording: a member that exists can still be a member that lies, and only a
 caller that uses the answer finds out.
+
+The fixture prints `M3G checks=110 failures=0` since the rasteriser round below
+added two checks that read pixels back off the target.
+
+### The geometry reaches the target
+
+`Graphics3D.render(VertexBuffer, IndexBuffer, Appearance, Transform[, int])`
+used to answer without drawing (the `World` overload was the only one with a
+path).  It now transforms the vertices - view matrix from the camera, the
+projection from the camera's own fields (a camera whose angles were never set is
+the JSR's default perspective: 45 degrees, aspect 1, near 1, far 1000), the
+model matrix from the `Transform` - and draws every triangle through
+`nj_m3g_project` + the target's `Graphics.fillTriangle`, with the viewport
+origin honoured (it used to be dropped, which put a viewport that was not at
+(0, 0) in the wrong place).
+
+What is honest about it: positions are read from the `VertexArray` as BYTE,
+SHORT or FIXED (the last divided by 65536) with the `setPositions` scale and
+bias applied; the fill colour is the appearance's `Material.DIFFUSE` when there
+is one and the average of the per-vertex colours otherwise; indices come from an
+explicit `IndexBuffer`, from a `TriangleStripArray`'s strip lengths, or from
+consecutive vertex triples.  There is no depth buffer, no back-face culling, no
+texture mapping, no perspective-correct interpolation and no lighting: the
+triangle's colour is flat, so a textured level renders as coloured polygons.
+The `--stats` line carries `tris=` so a title can be checked for it, and
+`tests/m3gdemo/M3GDemo.java` asserts two pixels of a rendered triangle and two
+of a strip.
+
+One real bug came out of wiring it: `new TriangleStripArray(indices,
+stripLengths)` stored the **indices** array as the strip lengths (the
+constructor's arguments were swapped), so every strip was one vertex long and
+no triangle was ever assembled.  `tests/test_m3g.c` had encoded the same
+mistake, which is why it passed.
 
 ### A float stored in an array came back as 1.06535e9
 

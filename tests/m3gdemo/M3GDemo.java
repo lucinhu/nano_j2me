@@ -1,6 +1,7 @@
 import javax.microedition.lcdui.Canvas;
 import javax.microedition.lcdui.Display;
 import javax.microedition.lcdui.Graphics;
+import javax.microedition.lcdui.Image;
 import javax.microedition.m3g.AnimationController;
 import javax.microedition.m3g.AnimationTrack;
 import javax.microedition.m3g.Appearance;
@@ -415,6 +416,89 @@ public class M3GDemo extends MIDlet {
                 c.serviceRepaints();
                 ok("a render through a bound Graphics returned");
                 ok("the image is still usable " + (img.getWidth() == 8));
+            }
+        });
+
+        /* A strip, with the indices given explicitly: the constructor used
+         * to store the index array as the strip lengths, so this is the
+         * check that says which array is which. */
+        run("a triangle strip uses its explicit indices", new Runnable() {
+            public void run() {
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                VertexBuffer vb = new VertexBuffer();
+                VertexArray pos = new VertexArray(4, 3, 2);
+                pos.set(0, 4, new short[] { -2, 2, -5, 2, 2, -5,
+                                            -2, -2, -5, 2, -2, -5 });
+                vb.setPositions(pos, 1.0f, null);
+                IndexBuffer ib = new TriangleStripArray(
+                        new int[] { 0, 1, 2, 3 }, new int[] { 4 });
+
+                Appearance app = new Appearance();
+                Material mat = new Material();
+                mat.setColor(Material.DIFFUSE, 0x0000FF00);
+                app.setMaterial(mat);
+
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(vb, ib, app, new Transform());
+                g3d.releaseTarget();
+
+                int[] upper = new int[1];
+                int[] lower = new int[1];
+                img.getRGB(upper, 0, 1, 12, 12, 1, 1);
+                img.getRGB(lower, 0, 1, 20, 20, 1, 1);
+                check("the first strip triangle is drawn",
+                      upper[0] == 0xFF00FF00);
+                check("the second strip triangle is drawn",
+                      lower[0] == 0xFF00FF00);
+            }
+        });
+
+        /* render() used to answer 0 without drawing: the modern JSR call had
+         * no path at all, while render(World) went through the graphics
+         * layer.  This asks for one triangle and looks for its pixels. */
+        run("Graphics3D.render draws the triangles it is given", new Runnable() {
+            public void run() {
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                VertexBuffer vb = new VertexBuffer();
+                VertexArray pos = new VertexArray(3, 3, 2);
+                /* In front of the default camera (45 degrees, near 1): z = -5
+                 * puts the triangle inside the frustum. */
+                pos.set(0, 3, new short[] { -2, -2, -5, 2, -2, -5, 0, 2, -5 });
+                vb.setPositions(pos, 1.0f, null);
+
+                Appearance app = new Appearance();
+                Material mat = new Material();
+                mat.setColor(Material.DIFFUSE, 0x00FF0000);
+                app.setMaterial(mat);
+
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                /* render() is void in this API: what it drew is read back
+                 * from the target, which is also how a title sees it. */
+                g3d.render(vb, null, app, new Transform(), -1);
+                g3d.releaseTarget();
+
+                int[] inside = new int[1];
+                int[] corner = new int[1];
+                img.getRGB(inside, 0, 1, 16, 16, 1, 1);
+                img.getRGB(corner, 0, 1, 1, 1, 1, 1);
+                check("the triangle reached the target",
+                      inside[0] == 0xFFFF0000);
+                check("the corner it does not cover is untouched",
+                      corner[0] == 0xFF000000);
             }
         });
 

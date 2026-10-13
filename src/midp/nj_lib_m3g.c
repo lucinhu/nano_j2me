@@ -4163,8 +4163,19 @@ static const nj_builtin_field tsa_fields[] = {
 NJFN(m3g_tsa_init_lengths)
 {
     nj_ref self = NJ_THIS(args);
-    nj_ref lens = NJ_ARG_REF(args, 0);
+    nj_ref idx = NJ_ARG_REF(args, 0);
+    nj_ref lens = NJ_ARG_REF(args, 1);
 
+    /*
+     * TriangleStripArray(int[] indices, int[] stripLengths): the first array
+     * is the indices, the second the lengths.  Storing the first as the
+     * lengths - which is what this did - made every vertex index a strip
+     * length, so a strip drew the wrong triangles or none at all.
+     */
+    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_IBUF, "_nj_ib_data", "[I", 0),
+            idx);
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_IBUF, "_nj_ib_count", "I", 0),
+            (nj_s4)(idx ? idx->length : 0));
     nj_rput(vm, self, nj_field_lookup(vm, NJ_C_TSA, "_nj_lengths", "[I", 0),
             lens);
     nj_iput(vm, self, nj_field_lookup(vm, NJ_C_TSA, "_nj_strips", "I", 0),
@@ -6393,14 +6404,323 @@ M3G_F_GET(m3g_g3d_getDepthRangeNear, NJ_C_G3D, "_nj_drnear")
 M3G_F_GET(m3g_g3d_getDepthRangeFar, NJ_C_G3D, "_nj_drfar")
 
 /*
- * render(): the JSR's answer is the number of triangles drawn.  This
- * runtime has no rasteriser for m3g geometry, so the honest answer is 0 -
- * and 0 is also what a title draws with when its geometry is off screen,
- * which is why it does not throw.
+ * The JSR's render(VertexBuffer, IndexBuffer, Appearance, Transform, int) is
+ * the path a modern title uses: the camera, the viewport and the target come
+ * from the Graphics3D, the vertices from the buffer, and the index buffer
+ * decides which three of them form a triangle.  Until this existed the call
+ * answered 0 without drawing anything, which is the honest answer of a
+ * runtime with no rasteriser - and also indistinguishable from a scene that
+ * is off screen, which is why it needed fixing rather than documenting.
+ *
+ * What it does now: the full pipeline (model transform, camera view,
+ * projection, viewport), a triangle list or a triangle strip, the material's
+ * diffuse colour or the buffer's per-vertex colours, and the pixels through
+ * the same Java call the World path uses (Graphics.fillTriangle).  What it
+ * does NOT do yet, and says so here rather than in a failure: no depth buffer
+ * (triangles land in submission order), no back-face culling, no texture, no
+ * lighting.  render() answers the number of triangles it drew.
  */
+typedef struct {
+    nj_vm *vm;
+    const nj_s2 *pos;
+    const nj_s2 *col;
+    nj_s4 pcomp, pfirst, ptype, pcount, ccomp, cfirst, ccount;
+    float pfac;                   /* VertexBuffer's scale (stored as _nj_bias) */
+    float pbias[4];               /* ... and its bias (stored as _nj_scale) */
+    float mvp[16];
+    int vx, vy, vw, vh;
+    m3g_java_target jt;
+    nj_u4 dif;
+    nj_u4 drawn;
+} m3g_jr;
+
+static void jr_vertex(m3g_jr *r, nj_u4 v, float xy[2])
+{
+    float p[4];
+    nj_u4 k;
+    const nj_s2 *s;
+
+    p[0] = p[1] = p[2] = 0.0f;
+    p[3] = 1.0f;
+    if (!r->pos || v >= (nj_u4)r->pcount) {
+        xy[0] = xy[1] = 0.0f;
+        return;
+    }
+    s = r->pos + ((nj_size)r->pfirst + (nj_size)v) * (nj_size)r->pcomp;
+    for (k = 0u; k < 4u && k < (nj_u4)r->pcomp; k++) {
+        float raw = (float)s[k];
+
+        /* A 4-byte component is 16.16 fixed point; the short store keeps the
+           integer half, and that is what a render can honestly use. */
+        if (r->ptype == 2) { raw = (float)(raw / 65536.0f); }
+        p[k] = raw * r->pfac + r->pbias[k];
+    }
+    nj_m3g_project(r->mvp, p, r->vw, r->vh, xy);
+}
+
+static nj_u4 jr_colour(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
+{
+    nj_u4 i;
+
+    if (r->dif != 0xFFFFFFFFu) {
+        return r->dif;
+    }
+    if (!r->col || r->ccomp < 4) {
+        return 0xFFFFFFFFu;
+    }
+    /* No lighting and no Gouraud: the average of the three vertices is the
+       one colour a flat filler can carry, and it is honest about both. */
+    {
+        nj_u4 sum[4] = { 0u, 0u, 0u, 0u };
+        nj_u4 v[3];
+        v[0] = a; v[1] = b; v[2] = c;
+        for (i = 0u; i < 3u; i++) {
+            const nj_s2 *s = r->col +
+                ((nj_size)r->cfirst + (nj_size)v[i]) * (nj_size)r->ccomp;
+            nj_u4 k;
+            if (v[i] >= (nj_u4)r->ccount) { return 0xFFFFFFFFu; }
+            for (k = 0u; k < 4u; k++) {
+                sum[k] += (nj_u4)(nj_u1)(s[k] & 0xFF);
+            }
+        }
+        return ((sum[0] / 3u) << 24) | ((sum[1] / 3u) << 16) |
+               ((sum[2] / 3u) << 8) | (sum[3] / 3u);
+    }
+}
+
+static void jr_triangle(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
+{
+    float xy[6];
+
+    if (a == b || b == c || a == c) {
+        return;                    /* a degenerate triangle draws nothing */
+    }
+    jr_vertex(r, a, xy + 0);
+    jr_vertex(r, b, xy + 2);
+    jr_vertex(r, c, xy + 4);
+    if (emit_to_java(&r->jt, xy, jr_colour(r, a, b, c)) != 0u) {
+        r->drawn++;
+    }
+}
+
+static void jr_strip(m3g_jr *r, const nj_s4 *idx, nj_s4 count, nj_s4 first)
+{
+    nj_s4 i;
+
+    for (i = 0; i + 3 <= count; i++) {
+        nj_s4 v0 = idx ? idx[i] : (first + i);
+        nj_s4 v1 = idx ? idx[i + 1] : (first + i + 1);
+        nj_s4 v2 = idx ? idx[i + 2] : (first + i + 2);
+
+        jr_triangle(r, (nj_u4)v0, (nj_u4)v1, (nj_u4)v2);
+    }
+}
+
+static void jr_list(m3g_jr *r, const nj_s4 *idx, nj_s4 count, nj_s4 first)
+{
+    nj_s4 i;
+
+    for (i = 0; i + 3 <= count; i += 3) {
+        nj_s4 v0 = idx ? idx[i] : (first + i);
+        nj_s4 v1 = idx ? idx[i + 1] : (first + i + 1);
+        nj_s4 v2 = idx ? idx[i + 2] : (first + i + 2);
+
+        jr_triangle(r, (nj_u4)v0, (nj_u4)v1, (nj_u4)v2);
+    }
+}
+
+static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
+                           nj_ref app, nj_ref xf)
+{
+    nj_ref target, g, cam, arr, d, mat;
+    const char *cn;
+    nj_s4 nverts, icount = 0, ifirst = 0;
+    const nj_s4 *idx = NULL, *lens = NULL;
+    nj_s4 nstrip = 0;
+    float view[16], proj[16], model[16];
+    m3g_jr r;
+
+    if (!vm || !self || !vb) {
+        return 0u;
+    }
+    target = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_target",
+                                       "Ljava/lang/Object;"));
+    if (!target || !nj_heap_owns(vm, target)) {
+        return 0u;                            /* nothing bound, nothing drawn */
+    }
+    g = target;
+    cn = nj_ref_class_name(g);
+    if (!cn || strcmp(cn, "javax/microedition/lcdui/Graphics") != 0) {
+        nj_value got;
+        if (!cn || strcmp(cn, "javax/microedition/lcdui/Image") != 0) {
+            return 0u;                        /* neither a Graphics nor an Image */
+        }
+        got.r = 0;
+        if (nj_call(vm, g, "javax/microedition/lcdui/Image", "getGraphics",
+                    "()Ljavax/microedition/lcdui/Graphics;", NULL, &got) != NJ_OK
+            || !got.r) {
+            return 0u;
+        }
+        g = got.r;
+    }
+
+    r.vm = vm;
+    r.vx = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vx", "I"));
+    r.vy = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vy", "I"));
+    r.vw = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vw", "I"));
+    r.vh = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vh", "I"));
+    if (r.vw <= 0 || r.vh <= 0) {
+        nj_value got;                         /* no setViewport: the whole target */
+        got.i = 0;
+        if (nj_call(vm, g, "javax/microedition/lcdui/Graphics", "getWidth",
+                    "()I", NULL, &got) != NJ_OK || got.i <= 0) {
+            return 0u;
+        }
+        r.vw = (int)got.i;
+        got.i = 0;
+        if (nj_call(vm, g, "javax/microedition/lcdui/Graphics", "getHeight",
+                    "()I", NULL, &got) != NJ_OK || got.i <= 0) {
+            return 0u;
+        }
+        r.vh = (int)got.i;
+        r.vx = r.vy = 0;
+    }
+
+    memset(view, 0, sizeof(view));
+    memset(model, 0, sizeof(model));
+    view[0] = view[5] = view[10] = view[15] = 1.0f;
+    model[0] = model[5] = model[10] = model[15] = 1.0f;
+    arr = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_cam_m", "[F"));
+    if (arr && nj_array_length(arr) >= (nj_s4)(sizeof(float) * 16u)) {
+        memcpy(view, nj_array_data(arr), sizeof(float) * 16u);
+    }
+    cam = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_camera",
+                                    "L" NJ_C_CAMERA ";"));
+    /* cam_proj_fill, not m3g_cam_projection: a Camera that never had its
+       angles set is the JSR's default perspective (45 degrees, aspect 1,
+       near 1, far 1000), and the viewport origin is added by the emitter
+       rather than baked into the matrix. */
+    if (!cam_proj_fill(vm, cam, proj)) {
+        return 0u;                            /* a camera this runtime cannot use */
+    }
+    if (xf) {
+        d = nj_rget(vm, xf, m3g_fof(vm, NJ_C_XFORM, "_nj_m", "[F"));
+        if (d && nj_array_length(d) >= (nj_s4)(sizeof(float) * 16u)) {
+            memcpy(model, nj_array_data(d), sizeof(float) * 16u);
+        }
+    }
+    m3g_mat_mul(r.mvp, view, proj);
+    m3g_mat_mul(r.mvp, r.mvp, model);
+
+    /* The vertex buffer's positions.  setPositions(vb, scale, bias) stores the
+       scalar in _nj_bias and the per-component bias in _nj_scale. */
+    d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_positions",
+                                "L" NJ_C_VARR ";"));
+    if (!d) {
+        return 0u;
+    }
+    arr = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+    if (!arr) {
+        return 0u;
+    }
+    r.pos    = (const nj_s2 *)nj_array_data(arr);
+    r.pcomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
+    r.pfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
+    r.ptype  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
+    r.pcount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_count", "I"));
+    nverts   = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+    if (!r.pos || r.pcomp < 2 || nverts <= 0) {
+        return 0u;
+    }
+    if (r.pcount <= 0 || r.pcount > nverts) { r.pcount = nverts; }
+    r.pfac = bits2f(nj_iget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_bias", "F")));
+    if (!(r.pfac > 0.0f) && !(r.pfac < 0.0f)) { r.pfac = 1.0f; }
+    {
+        nj_ref b = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_scale", "[F"));
+        nj_u4 k;
+        for (k = 0u; k < 4u; k++) { r.pbias[k] = 0.0f; }
+        if (b && nj_array_length(b) >= 4) {
+            memcpy(r.pbias, nj_array_data(b), sizeof(float) * 4u);
+        }
+    }
+
+    /* Colours, and the material that overrides them. */
+    r.col = NULL;
+    r.ccomp = r.cfirst = r.ccount = 0;
+    d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_colors", "L" NJ_C_VARR ";"));
+    if (d) {
+        nj_ref cd = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+        if (cd) {
+            r.col    = (const nj_s2 *)nj_array_data(cd);
+            r.ccomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
+            r.cfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
+            r.ccount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+        }
+    }
+    r.dif = 0xFFFFFFFFu;
+    mat = app ? nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_mat",
+                                         "L" NJ_C_MAT ";")) : 0;
+    if (mat) {
+        r.dif = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_dif", "I"));
+    }
+
+    /* The index buffer.  A TriangleStripArray carries strip lengths; a plain
+       IndexBuffer is a list.  Neither carries a vertex count, so a strip with
+       lengths walks its own count and a list walks the vertex range. */
+    if (ib) {
+        nj_field *f;
+
+        /* The object's own class decides which fields exist: a strip has
+           lengths, a plain IndexBuffer does not. */
+        cn = nj_ref_class_name(ib);
+        if (!cn) { cn = NJ_C_IBUF; }
+        f = nj_field_lookup(vm, cn, "_nj_ib_data", "[I", 0);
+        if (f) {
+            nj_ref a = nj_rget(vm, ib, f);
+            if (a) { idx = (const nj_s4 *)nj_array_data(a); }
+        }
+        f = nj_field_lookup(vm, cn, "_nj_ib_count", "I", 0);
+        if (f) { icount = nj_iget(vm, ib, f); }
+        f = nj_field_lookup(vm, cn, "_nj_lengths", "[I", 0);
+        if (f) {
+            nj_ref a = nj_rget(vm, ib, f);
+            if (a) {
+                lens = (const nj_s4 *)nj_array_data(a);
+                nstrip = (nj_s4)a->length;
+            }
+        }
+        f = nj_field_lookup(vm, cn, "_nj_first", "I", 0);
+        if (f) { ifirst = nj_iget(vm, ib, f); }
+    }
+
+    r.jt.vm = vm;
+    r.jt.g = g;
+    r.jt.ox = r.vx;
+    r.jt.oy = r.vy;
+    r.drawn = 0u;
+
+    if (nstrip > 0 && lens) {
+        nj_s4 i, base = ifirst;
+
+        for (i = 0; i < nstrip; i++) {
+            jr_strip(&r, idx, lens[i], base);
+            base += lens[i];
+        }
+    } else if (idx && icount > 0) {
+        jr_list(&r, idx, icount, ifirst);
+    } else {
+        jr_list(&r, NULL, r.pcount, ifirst);
+    }
+    vm->tris += (nj_u8)r.drawn;
+    vm->m3g_renders++;
+    return r.drawn;
+}
+
 NJFN(m3g_g3d_render5)
 {
-    ret->i = 0;
+    ret->i = (nj_s4)m3g_render_jr(vm, NJ_THIS(args), NJ_ARG_REF(args, 0),
+                                  NJ_ARG_REF(args, 1), NJ_ARG_REF(args, 2),
+                                  NJ_ARG_REF(args, 3));
     return NJ_OK;
 }
 NJFN(m3g_g3d_getCamera)
