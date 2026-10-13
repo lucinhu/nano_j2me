@@ -148,7 +148,7 @@ nj_status nj_invoke_native(nj_vm *vm, nj_thread *th, nj_method *target,
         }
     }
     if (!fn) {
-        nj_frame_pop(vm, th);
+        nj_frame_pop_fast(th);
         (void)nj_throw(vm, "java/lang/UnsatisfiedLinkError", target->name);
         return NJ_ERR;
     }
@@ -157,7 +157,7 @@ nj_status nj_invoke_native(nj_vm *vm, nj_thread *th, nj_method *target,
     vm->native_depth++;
     st = fn(vm, th, args, ret);
     vm->native_depth--;
-    nj_frame_pop(vm, th);
+    nj_frame_pop_fast(th);
 
     if (st != NJ_OK && st != NJ_ERR_TIMEOUT && !vm->exception) {
         (void)nj_throw(vm, "java/lang/RuntimeException", target->name);
@@ -893,7 +893,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             nj_s4 v_ = (--sp)->i;
             nj_s4 i_ = (--sp)->i;
             nj_ref a_ = (--sp)->r;
-            if (!a_ || !nj_heap_owns_object(vm, a_)) THROW("java/lang/NullPointerException", NULL);
+            if (!a_ || !nj_heap_owns_object_fast(vm, a_)) THROW("java/lang/NullPointerException", NULL);
             if (a_->kind != NJ_OBJ_ARRAY || (nj_u4)i_ >= a_->length)
                 THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
             switch (op) {
@@ -909,7 +909,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             sp -= 2; v_ = sp[0].j;
             { nj_s4 i_ = (--sp)->i;
               nj_ref a_ = (--sp)->r;
-              if (!a_ || !nj_heap_owns_object(vm, a_)) THROW("java/lang/NullPointerException", NULL);
+              if (!a_ || !nj_heap_owns_object_fast(vm, a_)) THROW("java/lang/NullPointerException", NULL);
               if (a_->kind != NJ_OBJ_ARRAY || (nj_u4)i_ >= a_->length)
                   THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
               ((nj_s8 *)a_->u.bytes)[i_] = v_; }
@@ -919,7 +919,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             sp -= 2; v_ = sp[0].j;
             { nj_s4 i_ = (--sp)->i;
               nj_ref a_ = (--sp)->r;
-              if (!a_ || !nj_heap_owns_object(vm, a_)) THROW("java/lang/NullPointerException", NULL);
+              if (!a_ || !nj_heap_owns_object_fast(vm, a_)) THROW("java/lang/NullPointerException", NULL);
               if (a_->kind != NJ_OBJ_ARRAY || (nj_u4)i_ >= a_->length)
                   THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
               memcpy(&((double *)a_->u.bytes)[i_], &v_, 8u); }
@@ -928,7 +928,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             nj_ref v_ = (--sp)->r;
             nj_s4 i_ = (--sp)->i;
             nj_ref a_ = (--sp)->r;
-            if (!a_ || !nj_heap_owns_object(vm, a_)) THROW("java/lang/NullPointerException", NULL);
+            if (!a_ || !nj_heap_owns_object_fast(vm, a_)) THROW("java/lang/NullPointerException", NULL);
             if (a_->kind != NJ_OBJ_ARRAY || a_->aflags != NJ_ARRAY_T_REF ||
                 (nj_u4)i_ >= a_->length)
                 THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
@@ -944,7 +944,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
              * reference array, so ArrayStoreException is both the safe answer
              * and the correct one.
              */
-            if (v_ && !nj_heap_owns_object(vm, v_)) {
+            if (v_ && !nj_heap_owns_object_fast(vm, v_)) {
                 THROW("java/lang/ArrayStoreException", NULL);
             }
             if (v_ && v_->cls && a_->cls && a_->cls->component_cls &&
@@ -1251,7 +1251,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             nj_value rv_ = (rv);                                           \
             nj_value *rsp_ = fr->locals;                                   \
             SAVE();                                                        \
-            nj_frame_pop(vm, th);                                          \
+            nj_frame_pop_fast(th);                                          \
             if (th->nframes <= stop_depth) {                               \
                 th->ret_value = rv_;                                       \
                 return NJ_OK;                                              \
@@ -1298,7 +1298,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             {
                 nj_value *rsp_ = fr->locals;
                 SAVE();
-                nj_frame_pop(vm, th);
+                nj_frame_pop_fast(th);
                 if (th->nframes <= stop_depth) {
                     th->ret_value.bits = 0u;
                     return NJ_OK;
@@ -1348,7 +1348,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
              */
             if (e->kind == NJ_LINK_FIELD_STATIC) {
                 SAVE();
-                if (nj_class_init(vm, f->owner) != NJ_OK) {
+                if (nj_class_init_lazy(vm, f->owner) != NJ_OK) {
                     if (!vm->exception) {
                         (void)nj_throw(vm, "java/lang/NoClassDefFoundError",
                                        f->owner->name);
@@ -1401,7 +1401,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
              * operand stack across the initialiser so the GC can see it. */
             if (e->kind == NJ_LINK_FIELD_STATIC) {
                 SAVE();
-                if (nj_class_init(vm, f->owner) != NJ_OK) {
+                if (nj_class_init_lazy(vm, f->owner) != NJ_OK) {
                     if (!vm->exception) {
                         (void)nj_throw(vm, "java/lang/NoClassDefFoundError",
                                        f->owner->name);
@@ -1574,7 +1574,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                  * nj_heap_owns_object() checks the block's magic as well as its
                  * address, which is what the collector checks before tracing.
                  */
-                if (!nj_heap_owns_object(vm, recv)) {
+                if (!nj_heap_owns_object_fast(vm, recv)) {
                     THROW("java/lang/VerifyError",
                           "receiver is not an object reference");
                 }
@@ -1595,7 +1595,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                      * while to find.
                      */
                     SAVE();
-                        (void)nj_class_init(vm, recv->cls);
+                        (void)nj_class_init_lazy(vm, recv->cls);
                         dm = nj_method_lookup(recv->cls, target->name,
                                               target->desc);
                     }
@@ -1680,7 +1680,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                  * the init can run Java code, and the bridge needs a current
                  * saved sp to place its frame above the live stack. */
                 SAVE();
-                if (nj_class_init(vm, target->owner) != NJ_OK) {
+                if (nj_class_init_lazy(vm, target->owner) != NJ_OK) {
                     if (!vm->exception) {
                         (void)nj_throw(vm, "java/lang/NoClassDefFoundError",
                                        target->owner->name);
@@ -1727,7 +1727,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
              * stack of the calling method and destroyed the array reference
              * and loop counter sitting there. */
             SAVE();
-            if (nj_class_init(vm, c) != NJ_OK) goto do_unwind;
+            if (nj_class_init_lazy(vm, c) != NJ_OK) goto do_unwind;
             o = nj_new_instance(vm, c);
             if (!o) THROW("java/lang/OutOfMemoryError", NULL);
             sp->r = o; sp++;

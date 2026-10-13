@@ -39,9 +39,12 @@ identical on every run, so the work is the same everywhere.
 | Build | Run 1 | Run 2 | Run 3 |
 |---|---|---|---|
 | Release (-O3 -DNDEBUG) | 563.4 M/s | 549.6 M/s | 549.6 M/s |
+| Release, after the three inlined checks below (2026-10-13) | 644.6 M/s | - | - |
 
-549-563 million bytecodes per second. At 5036 MHz that is about **9 cycles per
-bytecode**, which is a normal figure for a switch-dispatch interpreter with no
+549-563 million bytecodes per second originally; 644.6 M/s after the inlining
+described in "Three checks the interpreter asks millions of times" below. At
+5036 MHz the first figure is about **9 cycles per bytecode** and the second
+about **7.8**, which is a normal range for a switch-dispatch interpreter with no
 register allocation and no superinstructions.
 
 ## Frame rate
@@ -384,3 +387,47 @@ The instrument that DID matter here is the benchmark's own output line,
 dispatch conversion from a subtle one: the bytecode total stopped being usable
 the moment a fused pair started executing two instructions while counting one,
 which is why the total is 105717067 rather than 112117067.
+
+## Three checks the interpreter asks millions of times: about 5.7%
+
+A `gprof` run over the benchmark (built `-O2 -g -pg`, run on the fixture, flat
+profile) says the loop itself is 68% of the samples and everything else is
+per-call overhead spread thin - except that the call COUNTS are enormous:
+
+| called from the loop | calls per bench run |
+|---|---|
+| `nj_heap_owns_object` (every reference operand about to be dereferenced) | 4,801,320 |
+| `nj_class_init` (every `new`, static field access, static invoke) | 4,802,000 |
+| `nj_frame_pop` (every return, every native call) | 4,801,413 |
+
+All three are a handful of instructions behind an external function call.  They
+are now `static inline` in `nj_internal.h` (`nj_heap_owns_object_fast`,
+`nj_class_init_lazy`, `nj_frame_pop_fast`) with the out-of-line versions kept in
+`nj_heap.c`/`nj_thread.c` for callers that want a symbol, and the interpreter
+calls the inline ones.  `nj_class_init_lazy` is the one that changes shape
+rather than just moving: a class that has reached `NJ_CLASS_READY` never needs
+the call at all, so the common path is a load and a predictable branch.
+
+Measured the way the rest of this file measures - CPU time, pinned to one core,
+minimum of N, alternating arms, two binaries built once:
+
+    A (before)   min 0.174 s    top3 0.174 0.174 0.175    607.6 M bytecodes/s
+    B (after)    min 0.164 s    top3 0.164 0.164 0.166    644.6 M bytecodes/s
+
+**5.7%**, with the bytecode total identical at 105,717,067 on both arms, so the
+work done is the same and only the overhead moved.  ctest on the same tree is
+58/59 (the one failure is the concurrent MIDI work's `test_consts`, unrelated).
+
+The same profile was used to price two things NOT adopted:
+
+  * **Link-time optimisation** (`-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON`, which
+    would have inlined these and more automatically): min 0.174 s against a
+    0.176 s baseline in ten interleaved runs - about 1%, inside the noise this
+    instrument reports, for a build-system change that affects every port.  Not
+    worth it; the three explicit inlines are what the profile actually asked for.
+  * **Inlining `nj_frame_push`**, the other half of the 4.8M frame pairs: its
+    body validates two overflow conditions and zeroes the locals the arguments
+    did not fill, and it is called from two sites inside the one huge switch.
+    Duplicating it there grows the hottest function in the runtime for a few
+    percent; left as a function call on purpose.
+

@@ -573,6 +573,114 @@ struct nj_vm {
 /* ------------------------------------------------------------------ */
 /* Heap / GC (nj_heap.c)                                               */
 /* ------------------------------------------------------------------ */
+
+/*
+ * The arena block header, exposed so the interpreter can inline the
+ * live-object check below.
+ *
+ * An allocation is preceded by a 16-byte header whose second word is a magic
+ * number; the sweep clears that word when it frees a block, and the free list
+ * then writes its next pointer over the payload's first word.  So a dangling
+ * reference looks like an object whose `cls` is a heap address (or NULL), and
+ * reading the magic is what tells the two apart.
+ */
+#define NJ_BLOCK_MAGIC   0x4E4A424Bu   /* 'NJBK' */
+#define NJ_BLOCK_HDR     16u           /* sizeof(nj_block), 16-byte aligned */
+
+typedef struct nj_block {
+    nj_u4 size;    /* total bytes of this block, header included */
+    nj_u4 magic;
+} nj_block;
+
+/* Is this pointer inside the Java arena at all?  Nearly free, and sound:
+ * every object lives in [base, base+bump), so anything outside is provably
+ * not one.  See the long note on nj_heap_owns() in nj_heap.c. */
+static inline int nj_in_arena(nj_vm *vm, const void *p)
+{
+    const nj_u1 *q = (const nj_u1 *)p;
+
+    if (!q || !vm->heap.base) {
+        return 0;
+    }
+    if (q < vm->heap.base || q >= vm->heap.base + vm->heap.bump) {
+        return 0;
+    }
+    /* Objects are NJ_OBJ_ALIGN-aligned; a stray int is unlikely to be, and the
+     * alignment test rejects most garbage before it reaches ->kind. */
+    if (((nj_size)(uintptr_t)q & (NJ_OBJ_ALIGN - 1u)) != 0u) {
+        return 0;
+    }
+    return 1;
+}
+
+/*
+ * Is this pointer a LIVE object, or merely an address inside the arena?
+ *
+ * Inlined because the interpreter asks it on every reference-typed operand it
+ * is about to dereference, and on the fixtures that is millions of times per
+ * run; the magic load is a word the allocator touched a moment ago, so it is
+ * in cache.  nj_heap_owns_object() in nj_heap.c is the same check as an
+ * out-of-line function, for callers that prefer a symbol.
+ */
+static inline int nj_heap_owns_object_fast(nj_vm *vm, const void *p)
+{
+    const nj_u1 *q = (const nj_u1 *)p;
+    const nj_block *b;
+    const nj_object *o;
+
+    if (!nj_in_arena(vm, p)) {
+        return 0;
+    }
+    if (q < vm->heap.base + NJ_BLOCK_HDR) {
+        return 0;               /* the arena's own header, not a payload */
+    }
+    b = (const nj_block *)(const void *)(q - NJ_BLOCK_HDR);
+    if (b->magic != NJ_BLOCK_MAGIC) {
+        return 0;               /* freed, or an interior pointer */
+    }
+    o = (const nj_object *)p;
+    if (o->kind > NJ_OBJ_THROW || o->size < sizeof(nj_object)) {
+        return 0;               /* a payload, but not a live object header */
+    }
+    return 1;
+}
+
+/*
+ * Run <clinit> only when it has not run yet.
+ *
+ * A class reaches NJ_CLASS_READY after its own initialisation and stays there,
+ * so this is one load and a predictable branch on the overwhelming majority of
+ * calls - where a plain nj_class_init() would be a function call per `new`,
+ * per static field access and per static invoke.
+ */
+nj_status nj_class_init(nj_vm *vm, nj_class *c);
+
+static inline nj_status nj_class_init_lazy(nj_vm *vm, nj_class *c)
+{
+    if (c && c->state >= NJ_CLASS_READY) {
+        return NJ_OK;
+    }
+    return nj_class_init(vm, c);
+}
+
+/*
+ * Pop the current frame.
+ *
+ * A decrement and a store, done on every return from a Java method and every
+ * native call; nj_frame_pop() in nj_thread.c keeps the same body for callers
+ * that prefer a symbol (and for the "no statics" build, which counts the
+ * function's own object file).
+ */
+void nj_frame_pop(nj_vm *vm, nj_thread *th);
+
+static inline void nj_frame_pop_fast(nj_thread *th)
+{
+    if (th->nframes > 0) {
+        th->nframes--;
+        th->top = th->frames[th->nframes].locals;
+    }
+}
+
 nj_status nj_heap_init(nj_vm *vm, void *block, nj_size size);
 void      nj_heap_destroy(nj_vm *vm);
 void     *nj_alloc(nj_vm *vm, nj_size bytes);         /* raw, zeroed */

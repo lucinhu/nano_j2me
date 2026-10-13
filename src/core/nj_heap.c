@@ -53,20 +53,13 @@
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
 /* ------------------------------------------------------------------ */
-#define NJ_BLOCK_MAGIC   0x4E4A424Bu   /* 'NJBK' */
+/* NJ_BLOCK_MAGIC, NJ_BLOCK_HDR and nj_block live in nj_internal.h: the
+ * interpreter inlines the live-object check and needs the header layout. */
 #define NJ_BLOCK_FREE    0x00000000u
-#define NJ_BLOCK_HDR     16u           /* sizeof(nj_block), 16-byte aligned  */
-/* NJ_OBJ_ALIGN is public (nj_config.h): a port's allocator has to honour it. */
 
 #define NJ_BIN_STEP      16u
 #define NJ_MIN_SPLIT     32u           /* don't split below this            */
 #define NJ_MIN_BLOCK     (NJ_BLOCK_HDR + 16u)
-
-typedef struct nj_block {
-    nj_u4 size;    /* total bytes of this block, header included */
-    nj_u4 magic;
-    /* payload follows; when free, the first payload word is the next link */
-} nj_block;
 
 #define NJ_BLOCK_PAYLOAD(b) ((void *)((nj_u1 *)(b) + NJ_BLOCK_HDR))
 #define NJ_BLOCK_NEXT(b)    ((nj_block *)((nj_u1 *)(b) + (b)->size))
@@ -492,20 +485,7 @@ static void nj_gc_mark_children(nj_vm *vm, nj_object *o)
  */
 static int nj_is_heap_ptr(nj_vm *vm, const void *p)
 {
-    const nj_u1 *q = (const nj_u1 *)p;
-
-    if (!q || !vm->heap.base) {
-        return 0;
-    }
-    if (q < vm->heap.base || q >= vm->heap.base + vm->heap.bump) {
-        return 0;
-    }
-    /* Objects are 16-byte aligned; a stray int is unlikely to be, and the
-     * alignment test rejects most garbage before it reaches ->kind. */
-    if (((nj_size)(uintptr_t)q & (NJ_OBJ_ALIGN - 1u)) != 0u) {
-        return 0;
-    }
-    return 1;
+    return nj_in_arena(vm, p);
 }
 
 static void nj_gc_mark_object(nj_vm *vm, nj_object *o)
@@ -581,25 +561,7 @@ int nj_heap_owns(nj_vm *vm, const void *p)
  */
 int nj_heap_owns_object(nj_vm *vm, const void *p)
 {
-    const nj_u1 *q = (const nj_u1 *)p;
-    const nj_block *b;
-    const nj_object *o;
-
-    if (!nj_is_heap_ptr(vm, p)) {
-        return 0;
-    }
-    if (q < vm->heap.base + NJ_BLOCK_HDR) {
-        return 0;               /* the arena's own header, not a payload */
-    }
-    b = (const nj_block *)(const void *)(q - NJ_BLOCK_HDR);
-    if (b->magic != NJ_BLOCK_MAGIC) {
-        return 0;               /* freed, or an interior pointer */
-    }
-    o = (const nj_object *)p;
-    if (o->kind > NJ_OBJ_THROW || o->size < sizeof(nj_object)) {
-        return 0;               /* a payload, but not a live object header */
-    }
-    return 1;
+    return nj_heap_owns_object_fast(vm, p);
 }
 
 void nj_gc_mark_ref(nj_vm *vm, nj_ref r)
