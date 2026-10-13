@@ -102,14 +102,14 @@ ab.run()V pc=11` for 开心农场_240, a loop that sleeps between frames).
 ### Where the collected 395 stand
 
 `NJ_FRAMES=600 NJ_TIMEOUT=25 tools/run_game_corpus.sh` over `tests/games`, with
-the long re-run, the paced re-run and the two heap re-runs below: **386 passed,
-9 failed**. The sweeps before it were 374/21 (before the pacing retry), 376/19,
-381/14, 384/11, 385/10 and now 386/9, and every drop came from a bug the corpus
-itself pointed at rather than from a title being excused.
+the long re-run, the paced re-run and the two heap re-runs below: **387 passed,
+8 failed**. The sweeps before it were 374/21 (before the pacing retry), 376/19,
+381/14, 384/11, 385/10, 386/9 and now 387/8, and every drop came from a bug the
+corpus itself pointed at rather than from a title being excused.
 
-### The nine that still fail, and what each one turned out to be
+### The eight that still fail, and what each one turned out to be
 
-Nine titles do not paint a frame.  They have been looked at one by one, because
+Eight titles do not paint a frame.  They have been looked at one by one, because
 the eighth and ninth of the last three bugs came out of exactly this list, and
 the honest answer differs per title:
 
@@ -122,13 +122,20 @@ the honest answer differs per title:
 | `战争艺术2之全球联盟中文版_1918` | NPEs in `n.a(String,int)`; nothing drawn | same shape: `d.f()`, which builds the config array `b.bb`, is never called |
 | `午夜台球圣诞中文版_8677` | `NegativeArraySizeException` in its own decoder (`c.a(I)`), then a flat frame | its resource reader computes a negative length; the title is the only thing that can fix that |
 | `反恐精英2正式版_5836` | flat, first throw NPE in `k.c(Graphics)` at the first paint | still inside its own splash/loading loop after 4,000 frames (`--where` shows `k.o()V pc=62`), the same shape as `疯狂战机_2013` before the pacing retry. Its assets are **not** the blocker: every `l*.png` in the JAR is XOR-obfuscated (rolling key from 100), the title tries the raw bytes first (one `unrecognised image format` per attempt, 5 in 2,000 frames, all the same resource), then retries with its own `h.b(byte[],100)` - and that decrypted buffer is a valid PNG this runtime decodes without a further error. The NPE is `this.cW.getWidth()` on an Image field that was never filled |
-| `模拟人生2_10762` | flat, paint() makes no Graphics call at all; NPE in `root/SimsApp.q(Z)` | not root-caused |
 | `仙魔飞行棋_417` | flat, no exception at all | it draws through the `Graphics` it captured in `paint()` and only ever clears there; the title's own timing decides when that thread draws |
 
-Six of the nine are the title's own defect or its own dead code, and two are not
-root-caused; none of them is known to be the runtime's.  That is a different
-statement from "the runtime is perfect", and it is the reason the sweeps keep
-being re-run: a fix that moves one of these nine moves the whole number.
+`模拟人生2_10762` used to be in this table, as the one row nobody could explain:
+its `paint()` made no Graphics call at all and its game thread returned before
+the first frame.  It was the runtime after all - a wrapper class without
+`toString()` sent the game looking for a JAR entry named
+`global_data/java.lang.Integer@c1803e7` (see *A missing override is not a link
+error*), and it now passes.
+
+Seven of the eight are the title's own defect, its own dead code or its own
+loading loop, and one (`仙魔飞行棋_417`) is not root-caused; none of them is
+known to be the runtime's.  That is a different statement from "the runtime is
+perfect", and it is the reason the sweeps keep being re-run: a fix that moves
+one of these eight moves the whole number.
 
 
 
@@ -158,13 +165,13 @@ This is the same class of finding as the platform string: the runtime is not
 wrong, the title made a decision about its world, and the honest way to run it
 is to give it the world it was written for.
 
-The nine that remain are each classified, not just counted:
+The eight that remain are each classified, not just counted:
 
 | kind | titles |
 |---|---|
 | a broken JAR (truncated, no end-of-central-directory) | 鲁宾逊漂流记汉化BT版_4677 |
 | a title that refuses a platform string this runtime does not imitate (`--device nokia6230` runs it) | 1945空战英雄_6105 |
-| flat under every pace and every heap, cause not yet found | 反恐精英2正式版_5836, 灌篮高手-爆发!樱木_7947, 模拟人生2_10762, 实况足球经理2009_10609, 午夜台球圣诞中文版_8677, 仙魔飞行棋_417, 战争艺术2之全球联盟中文版_1918 |
+| flat under every pace and every heap, cause not yet found | 反恐精英2正式版_5836, 灌篮高手-爆发!樱木_7947, 实况足球经理2009_10609, 午夜台球圣诞中文版_8677, 仙魔飞行棋_417, 战争艺术2之全球联盟中文版_1918 |
 
 The most recent fix to come out of this list is a good example of why it is
 worth keeping: 疯狂农场2_2375 showed a black screen with 0 Graphics calls, and
