@@ -1044,17 +1044,15 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
              */
             nj_u8 attempted = 0u;
             for (;;) {
-                nj_vm_stats s;
                 if (!nj_vm_running(vm)) {
                     break;
                 }
-                nj_vm_get_stats(vm, &s);
                 if (opts->run_frames > 0u &&
                     (attempted >= (nj_u8)opts->run_frames ||
-                     s.frames >= (nj_u8)opts->run_frames)) {
+                     nj_vm_frames(vm) >= (nj_u8)opts->run_frames)) {
                     break;
                 }
-                key_script_tick(&port, &keys, s.frames);
+                key_script_tick(&port, &keys, nj_vm_frames(vm));
                 st = nj_midp_frame(vm);
                 attempted++;
                 if (st != NJ_OK) {

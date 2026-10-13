@@ -481,6 +481,14 @@ shape of the result.  The compute fixture is unchanged too - `bench.jar` min
 0.167 s, 633.0 M bytecodes/s, inside the 2.4% spread of its own baseline - so
 the interpreter itself was not touched.
 
+One more per-frame cost came out of the same profile, and it is not in the
+rasteriser at all: the runner's frame loop asked for the whole `nj_vm_stats`
+snapshot once per frame to compare `frames` against `--run-frames`, and that
+snapshot computes the bytes in use - `nj_heap_used_bytes()` walks every block in
+the Java heap.  `nj_vm_frames()` now answers the one field the loop wants
+(2% on 合金弹头4, and the walk grows with the number of live objects, so it is
+worth more on a title with a fuller heap).
+
 What makes this safe to believe is that the rendering is identical, not that the
 tests pass: the same titles were run against both binaries with
 `--dump-frames` and the PPMs are byte-for-byte equal (nine titles at 60 frames,

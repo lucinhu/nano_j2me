@@ -411,6 +411,17 @@ const nj_port *nj_vm_port(const nj_vm *vm);
  * The runner needs this to drive the frame loop itself (see --run-frames). */
 int   nj_vm_running(nj_vm *vm);
 
+/*
+ * Frames presented so far.
+ *
+ * The runner checks this once per frame to enforce --run-frames, and asking
+ * for the whole nj_vm_stats snapshot there is not the same thing: the
+ * snapshot computes the bytes in use, which walks every block in the Java
+ * heap (nj_heap_used_bytes).  That is 10% of a graphics title's frame time
+ * for a number the loop does not look at.
+ */
+nj_u8 nj_vm_frames(nj_vm *vm);
+
 /* The size of one VM instance.  An embedder sizing a static arena needs it:
  * the arena the port hands out has to hold this AND the Java heap. */
 nj_size nj_vm_sizeof(void);
@@ -548,6 +559,14 @@ extern const nj_builtin_class nj_lib_http_classes[];
 extern const int nj_lib_http_class_count;
 extern const nj_native_entry nj_lib_http_table[];
 extern const int nj_lib_http_count;
+
+/* Built by nj_lib_sensor.c (JSR 256, javax.microedition.sensor).  The five
+ * implementation classes are the objects the interfaces describe; the sensors
+ * themselves come from the port's optional sensor_* hooks. */
+extern const nj_builtin_class nj_lib_sensor_classes[];
+extern const int nj_lib_sensor_class_count;
+extern const nj_native_entry nj_lib_sensor_table[];
+extern const int nj_lib_sensor_count;
 
 /* JSR 120/205, Wireless Messaging.  Messages go out through optional port
  * hooks; a port without them has the API and gets the exception the spec

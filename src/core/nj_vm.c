@@ -305,6 +305,11 @@ int nj_vm_running(nj_vm *vm)
     return (vm->running && vm->state != NJ_VM_STOPPING) ? 1 : 0;
 }
 
+nj_u8 nj_vm_frames(nj_vm *vm)
+{
+    return vm ? vm->frames : 0u;
+}
+
 const nj_port *nj_vm_port(const nj_vm *vm)
 {
     return vm ? vm->port : NULL;
