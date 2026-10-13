@@ -151,6 +151,13 @@ nj_status nj_midp_destroy_app(nj_vm *vm, int unconditional)
     if (!vm) {
         return NJ_ERR;
     }
+
+    /* Let go of the sensors first: a connection still open when the MIDlet
+     * ends would otherwise leave the port's hardware running (an Android
+     * SensorEventListener keeps waking the process up).  This runs even when
+     * destroyApp() itself never returns - the runner cuts that short. */
+    nj_sensor_shutdown(vm);
+
     app = vm->app;
     if (!app) {
         return NJ_OK;
@@ -279,6 +286,11 @@ nj_status nj_midp_frame(nj_vm *vm)
      * pcm_write() accepts everything finished on the first push and this costs
      * one call. */
     nj_media_frame(vm);
+
+    /* Deliver sensor samples to any DataListener, at the same once-per-frame
+     * cadence: a listener is a poll with a callback attached, and the spec
+     * gives no better clock than the program's own frame. */
+    nj_sensor_frame(vm);
 
     /* ---- paint ---- */
     /*

@@ -860,10 +860,90 @@ nj_status nj_port_headless(nj_port *out)
     return nj_port_headless_ex(out, 0, 0, 0, NULL);
 }
 
+/* ------------------------------------------------------------------ */
+/* A synthetic accelerometer                                           */
+/* ------------------------------------------------------------------ */
+/*
+ * The JSR 256 path has to be testable on a machine that has no sensors at
+ * all, and this is one: without a fake, every desktop run of the sensor
+ * fixture would only prove that an empty findSensors() returns an empty array.
+ *
+ * The values are fixed rather than derived from the clock, because the
+ * fixture asserts on them and a test that reads different numbers on every
+ * run is not a test.  A port with real hardware overrides all four hooks.
+ */
+#define HL_ACCEL_URL "sensor:acceleration;contextType=user;model=headless"
+
+static int hl_sensor_list(void *ud, nj_sensor_desc *out, int max)
+{
+    nj_sensor_desc *d;
+
+    (void)ud;
+    if (max <= 0) {
+        return 0;
+    }
+    if (!out) {
+        return 1;                      /* the count alone */
+    }
+    d = &out[0];
+    memset(d, 0, sizeof(*d));
+    d->url = HL_ACCEL_URL;
+    d->quantity = "acceleration";
+    d->context = "user";
+    d->model = "headless";
+    d->channels = 3;
+    d->channel_names[0] = "axis_x";
+    d->channel_names[1] = "axis_y";
+    d->channel_names[2] = "axis_z";
+    d->units[0] = "m/s^2";
+    d->units[1] = "m/s^2";
+    d->units[2] = "m/s^2";
+    d->min_values[0] = -20.0;
+    d->min_values[1] = -20.0;
+    d->min_values[2] = -20.0;
+    d->max_values[0] = 20.0;
+    d->max_values[1] = 20.0;
+    d->max_values[2] = 20.0;
+    d->resolutions[0] = 0.001;
+    d->resolutions[1] = 0.001;
+    d->resolutions[2] = 0.001;
+    d->max_rate_hz = 100;
+    return 1;
+}
+
+static void *hl_sensor_open(void *ud, const char *url, nj_u4 period_ms)
+{
+    (void)period_ms;
+    if (!ud || !url || strncmp(url, "sensor:acceleration", 19) != 0) {
+        return NULL;
+    }
+    /* The fake keeps no state, so the handle is the port's own pointer - which
+     * also gives sensor_read something non-NULL to check. */
+    return ud;
+}
+
+static int hl_sensor_read(void *ud, void *handle, double *values,
+                          int max_values)
+{
+    (void)ud;
+    if (!handle || !values || max_values < 3) {
+        return 0;
+    }
+    values[0] = 1.5;
+    values[1] = -2.25;
+    values[2] = 9.75;
+    return 3;
+}
+
+static void hl_sensor_close(void *ud, void *handle)
+{
+    (void)ud;
+    (void)handle;                      /* nothing to release */
+}
+
 nj_status nj_port_headless_ex(nj_port *out, int width, int height,
                               int dump_every, const char *dump_prefix)
-{
-    nj_headless_state *s;
+{    nj_headless_state *s;
 
     if (!out) {
         return NJ_ERR;
@@ -903,6 +983,10 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     out->file_remove = hl_file_remove;
     out->file_exists = hl_file_exists;
     out->input_push = hl_input_push;
+    out->sensor_list = hl_sensor_list;
+    out->sensor_open = hl_sensor_open;
+    out->sensor_read = hl_sensor_read;
+    out->sensor_close = hl_sensor_close;
     out->tone_play = hl_tone_play;
     out->tone_stop = hl_tone_stop;
     out->pcm_open = hl_pcm_open;

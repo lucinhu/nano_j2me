@@ -897,6 +897,130 @@ CLASSES = {
         "interface": True,
         "methods": ["void playerUpdate(javax.microedition.media.Player, String, Object)"],
     },
+    # ---- JSR 256, the sensor API -------------------------------------------
+    # Zero of the 436 corpus titles use it; it is here because it is the only
+    # standard way a MIDlet reaches an accelerometer, and a phone has one.
+    "javax/microedition/sensor/SensorManager": {
+        # A class, not an interface: the emitter writes only what it is given,
+        # so every method here has to spell out "public static".
+        "methods": [
+            "public static javax.microedition.sensor.SensorInfo[] findSensors(java.lang.String)",
+            "public static javax.microedition.sensor.SensorInfo[] findSensors(java.lang.String, java.lang.String)",
+            "public static javax.microedition.sensor.SensorConnection getSensorConnection(javax.microedition.sensor.SensorInfo)",
+            "public static void addSensorListener(javax.microedition.sensor.SensorListener, javax.microedition.sensor.SensorInfo)",
+            "public static void addSensorListener(javax.microedition.sensor.SensorListener, java.lang.String)",
+            "public static void removeSensorListener(javax.microedition.sensor.SensorListener)",
+        ],
+    },
+    "javax/microedition/sensor/SensorInfo": {
+        "interface": True,
+        "constants": {
+            "CONN_EMBEDDED": "1", "CONN_REMOTE": "2",
+            "CONN_SHORT_RANGE_WIRELESS": "4", "CONN_WIRED": "8",
+            "CONTEXT_TYPE_USER": '"user"', "CONTEXT_TYPE_AMBIENT": '"ambient"',
+            "CONTEXT_TYPE_DEVICE": '"device"', "CONTEXT_TYPE_VEHICLE": '"vehicle"',
+            "PROP_IS_CONTROLLABLE": '"controllable"',
+            "PROP_IS_REPORTING_ERRORS": '"errorsReported"',
+            "PROP_LATITUDE": '"latitude"', "PROP_LOCATION": '"location"',
+            "PROP_LONGITUDE": '"longitude"', "PROP_MAX_RATE": '"maxSamplingRate"',
+            "PROP_PERMISSION": '"permission"', "PROP_VENDOR": '"vendor"',
+            "PROP_VERSION": '"version"',
+        },
+        "methods": [
+            "java.lang.String getUrl()", "java.lang.String getQuantity()",
+            "java.lang.String getContextType()", "java.lang.String getModel()",
+            "int getConnectionType()",
+            "javax.microedition.sensor.ChannelInfo[] getChannelInfos()",
+            "int getMaxBufferSize()", "boolean isAvailable()",
+            "boolean isAvailabilityPushSupported()",
+            "boolean isConditionPushSupported()",
+            "java.lang.String getProperty(java.lang.String)",
+            "java.lang.String[] getPropertyNames()",
+            "java.lang.String getDescription()",
+        ],
+    },
+    "javax/microedition/sensor/SensorConnection": {
+        "interface": True, "extends": "javax.microedition.io.Connection",
+        "constants": {"STATE_OPENED": "1", "STATE_LISTENING": "2",
+                      "STATE_CLOSED": "4"},
+        "methods": [
+            "javax.microedition.sensor.SensorInfo getSensorInfo()",
+            "javax.microedition.sensor.Data[] getData(int)",
+            "javax.microedition.sensor.Data[] getData(int, long, boolean, boolean, boolean)",
+            "void setDataListener(javax.microedition.sensor.DataListener, int)",
+            "void setDataListener(javax.microedition.sensor.DataListener, int, long, boolean, boolean, boolean)",
+            "void removeDataListener()",
+            "javax.microedition.sensor.Channel getChannel(javax.microedition.sensor.ChannelInfo)",
+            "int[] getErrorCodes()", "java.lang.String getErrorText(int)",
+            "int getState()",
+        ],
+    },
+    "javax/microedition/sensor/ChannelInfo": {
+        "interface": True,
+        "constants": {"TYPE_DOUBLE": "1", "TYPE_INT": "2", "TYPE_OBJECT": "4"},
+        "methods": [
+            "java.lang.String getName()", "int getDataType()", "float getScale()",
+            "java.lang.String getUnit()", "float getAccuracy()",
+            "javax.microedition.sensor.MeasurementRange[] getMeasurementRanges()",
+        ],
+    },
+    "javax/microedition/sensor/MeasurementRange": {
+        "methods": [
+            "public MeasurementRange(float, float, float)",
+            "public float getSmallestValue()", "public float getLargestValue()",
+            "public float getResolution()",
+        ],
+    },
+    "javax/microedition/sensor/Data": {
+        "interface": True,
+        "methods": [
+            "javax.microedition.sensor.ChannelInfo getChannelInfo()",
+            "double[] getDoubleValues()", "int[] getIntValues()",
+            "java.lang.Object[] getObjectValues()", "long getTimestamp(int)",
+            "float getUncertainty(int)", "boolean isValid(int)",
+        ],
+    },
+    "javax/microedition/sensor/DataListener": {
+        "interface": True,
+        "methods": ["void dataReceived(javax.microedition.sensor.SensorConnection, javax.microedition.sensor.Data[], boolean)"],
+    },
+    "javax/microedition/sensor/DataAndErrorListener": {
+        "interface": True, "extends": "javax.microedition.sensor.DataListener",
+        "methods": ["void errorReceived(javax.microedition.sensor.SensorConnection, int, long)"],
+    },
+    "javax/microedition/sensor/SensorListener": {
+        "interface": True,
+        "methods": ["void sensorAvailable(javax.microedition.sensor.SensorInfo)",
+                    "void sensorUnavailable(javax.microedition.sensor.SensorInfo)"],
+    },
+    "javax/microedition/sensor/Channel": {
+        "interface": True,
+        "methods": [
+            "javax.microedition.sensor.ChannelInfo getChannelInfo()",
+            "java.lang.String getChannelUrl()",
+            "void addCondition(javax.microedition.sensor.ConditionListener, javax.microedition.sensor.Condition)",
+            "void removeCondition(javax.microedition.sensor.ConditionListener, javax.microedition.sensor.Condition)",
+            "javax.microedition.sensor.Condition[] getConditions(javax.microedition.sensor.ConditionListener)",
+            "void removeAllConditions()",
+            "void removeConditionListener(javax.microedition.sensor.ConditionListener)",
+            # Not in the 1.2 javadoc: this runtime keeps the sample rate on the
+            # channel object rather than behind a SampleRateControl.
+            "void setSampleRate(float)", "float getSampleRate()",
+            "float[] getSampleRates()",
+        ],
+    },
+    "javax/microedition/sensor/Condition": {
+        "interface": True,
+        "constants": {"OP_EQUALS": '"eq"', "OP_GREATER_THAN": '"gt"',
+                      "OP_GREATER_THAN_OR_EQUALS": '"ge"',
+                      "OP_LESS_THAN": '"lt"',
+                      "OP_LESS_THAN_OR_EQUALS": '"le"'},
+        "methods": ["boolean isMet(double)", "boolean isMet(java.lang.Object)"],
+    },
+    "javax/microedition/sensor/ConditionListener": {
+        "interface": True,
+        "methods": ["void conditionMet(javax.microedition.sensor.SensorConnection, javax.microedition.sensor.Data, javax.microedition.sensor.Condition)"],
+    },
 }
 
 RETURNING = {

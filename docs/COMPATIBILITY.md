@@ -14,6 +14,7 @@ to be one of the gaps listed here, and knowing which one saves an afternoon.
 | MIDP 1.0 | implemented — every 1.0 call exists in 2.0 |
 | JSR 75 (FileConnection/PIM) | `FileConnection`, sandboxed to `--fs-dir`, and `RecordStore`; the PIM half (`ContactList`) is not implemented |
 | JSR 82 (Bluetooth) | classes present; every operation refuses with `BluetoothStateException`, because there is no radio — a MIDlet that is told "no radio" keeps working, one that is told "no such class" does not |
+| JSR 256 (Sensor) | implemented: `findSensors`, `getSensorConnection`, channels, measurement ranges and data listeners, with the sensors themselves supplied by the port (`nj_port.sensor_list/open/read/close`). A port that has none reports none. Conditions are not evaluated — `addCondition` raises `UnsupportedOperationException` — and availability push answers `false` |
 | JSR 120/205 (messaging) | classes present; connections refuse the same way |
 | JSR 135 (Mobile Media) | tone and sampled PCM playback, WAV from a stream or a JAR resource, MIDI rendered by the runtime itself (or by the platform's synthesizer through the port's MIDI hooks), and AMR narrowband decoded by the runtime itself; no video. MP3, AAC and anything else the platform can decode arrive through `nj_port.audio_decode`, which is what the Android port does with MediaCodec |
 | JSR 184 (Mobile 3D Graphics) | the classes, the scene graph, the transform maths, a `.m3g` container parser and the member surface real titles use, behind `NJ_ENABLE_M3G`. **No collected title rasterises a triangle through it** (`tris=0`), so each of them is judged by its 2D interface (see below) |
@@ -21,10 +22,12 @@ to be one of the gaps listed here, and knowing which one saves an afternoon.
 
 Anything not implemented raises. That is deliberate: a
 `java.lang.NoSuchMethodError` naming the method is a five-minute fix, whereas a
-silently-ignored call is a two-day one. The one exception is a radio or a
-sensor that does not exist on the host: those classes are present and refuse at
-run time, because "this device has no Bluetooth" is a normal answer a MIDlet is
-written to handle, while "this build has no Bluetooth class" is not.
+silently-ignored call is a two-day one. The one exception is a radio that does
+not exist on the host: those classes are present and refuse at run time,
+because "this device has no Bluetooth" is a normal answer a MIDlet is written
+to handle, while "this build has no Bluetooth class" is not. A sensor is the
+same story one step further: the package works, and what a port cannot see is
+simply not in `findSensors()`.
 
 Modules a platform may want to leave out entirely are switched off with a
 compile-time macro rather than by editing the tables, so the same source builds

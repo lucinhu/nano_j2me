@@ -430,6 +430,25 @@ and the provider installed through `nj_port.install_codecs` answers instead of
 a refusal, which is how the Android port reads BMP and WebP - two formats this
 runtime has never had a decoder for.
 
+### What the sensor package costs
+
+JSR 256 is the one API in this tree with no switch, and deliberately so: the
+four `nj_port.sensor_*` hooks are what decide whether a device has sensors, and
+a port that leaves them NULL gets the package answering "nothing here" at no
+runtime cost. The code itself is small enough not to be worth a macro — host
+`gcc -Os`:
+
+| Translation unit | `.text` | `.rodata` |
+| --- | --- | --- |
+| `nj_lib_sensor.o` | 9,492 | 5,493 |
+
+For comparison, the MIDI renderer is 10,531 bytes of text and AMR is 8,204 plus
+26,983 of tables, and both of those do have switches. What a sensor costs at
+run time is the port's, not the runtime's: on Android the handles are
+`SensorEventListener`s, and `nj_sensor_shutdown()` unregisters them when the
+MIDlet ends, so a game that leaves a connection open does not leave the
+accelerometer waking the process.
+
 ### The bug that only running found
 
 The first APK installed, started, and died:

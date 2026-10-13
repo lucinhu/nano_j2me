@@ -110,6 +110,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_util.c
   src/midp/nj_lib_io.c
   src/midp/nj_lib_http.c
+  src/midp/nj_lib_sensor.c
   src/midp/nj_lib_lcdui.c
   src/midp/nj_lib_game.c
   src/midp/nj_lib_rms.c
@@ -400,6 +401,9 @@ if(NJ_BUILD_TESTS)
   add_custom_command(TARGET nj_fixtures POST_BUILD
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_const_jar.sh
     COMMENT "stub constant fixture")
+  add_custom_command(TARGET nj_fixtures POST_BUILD
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_sensor_jar.sh
+    COMMENT "JSR 256 sensor fixture")
   # The TrueType fixtures are hand-built by a script (there is no system font
   # we could legally check in): deterministic, so re-running is a no-op.
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_ttf_fixture.py)
@@ -484,6 +488,17 @@ else()
   message(WARNING "no zlib: nj_m3g_probe cannot inflate compressed .m3g sections")
 endif()
   nj_add_test(test_wireless tests/test_wireless.c)
+
+  # JSR 256 end to end: SensorManager -> SensorInfo -> SensorConnection ->
+  # getData() and a DataListener.  The listener is the half no other test can
+  # reach, because dataReceived() is driven by the frame pump.  The headless
+  # port's synthetic accelerometer makes the numbers assertable.
+  if(EXISTS ${NJ_FIXTURES}/sensordemo.jar)
+    add_test(NAME check_sensor
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_sensor.sh
+                     $<TARGET_FILE:nj2me-cli> ${NJ_FIXTURES}/sensordemo.jar)
+    set_tests_properties(check_sensor PROPERTIES TIMEOUT 120)
+  endif()
 
   # What the PORT observed, not what the VM counted: threads, GC, audio and
   # file activity on one machine-readable line.  Skipped without a fixture.

@@ -351,6 +351,34 @@
 #  define NJ_SCHED_QUANTUM 20000
 #endif
 
+/*
+ * JSR 256 (javax.microedition.sensor) shape limits.
+ *
+ * Both are compile-time because they size arrays inside nj_sensor_desc, which
+ * a port fills in: a sensor with more channels than this cannot be described,
+ * and a device with more sensors than this reports the first N.  Four channels
+ * covers every sensor a phone has (the widest is a three-axis accelerometer,
+ * plus a scalar for a rotation vector's accuracy); sixteen sensors covers the
+ * lot with room to spare, and costs about 2.5 KB of descriptors on the stack
+ * of the call that asks.
+ */
+#ifndef NJ_SENSOR_MAX_CHANNELS
+#  define NJ_SENSOR_MAX_CHANNELS 4
+#endif
+#ifndef NJ_SENSOR_MAX_DESCRIPTORS
+#  define NJ_SENSOR_MAX_DESCRIPTORS 16
+#endif
+/*
+ * How long a sensor url may be.  The url is the port's own spelling - JSR 256
+ * only says it identifies the sensor - and in practice it carries the model
+ * name, which is why this is bigger than a "sensor:acceleration" would need:
+ * a handset model name is long, and a URL that does not fit is a connection
+ * that cannot be opened.
+ */
+#ifndef NJ_SENSOR_MAX_URL
+#  define NJ_SENSOR_MAX_URL 128
+#endif
+
 /* Pixel format produced by the internal rasterizer. */
 #define NJ_PIXFMT_RGB565 0
 #define NJ_PIXFMT_RGB888 1

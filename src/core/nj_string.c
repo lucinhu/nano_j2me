@@ -99,6 +99,8 @@ int nj_utf16_to_utf8(const nj_u2 *src, int src_len, char *dst, int dst_cap)
 {
     int i;
     int n = 0;
+    int written = 0;    /* bytes stored in dst, always a whole number of
+                         * characters and never the terminator's slot */
 
     if (!src) {
         return 0;
@@ -123,18 +125,21 @@ int nj_utf16_to_utf8(const nj_u2 *src, int src_len, char *dst, int dst_cap)
             buf[2] = (nj_u1)(0x80u | (c & 0x3Fu));
             len = 3;
         }
-        if (dst) {
+        if (dst && n + len < dst_cap) {
+            /* Only whole characters are ever stored, and never the last byte:
+             * that one is kept for the terminator, so a caller that ignores
+             * the return value still hands out a valid, terminated string
+             * instead of a truncated one with stack garbage behind it. */
             int k;
             for (k = 0; k < len; k++) {
-                if (n + k < dst_cap) {
-                    dst[n + k] = (char)buf[k];
-                }
+                dst[n + k] = (char)buf[k];
             }
+            written = n + len;
         }
         n += len;
     }
-    if (dst && n < dst_cap) {
-        dst[n] = '\0';
+    if (dst && dst_cap > 0) {
+        dst[written] = '\0';
     }
     return n;
 }

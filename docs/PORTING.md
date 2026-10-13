@@ -584,6 +584,7 @@ builds and runs against an app that has none of the Java classes:
 | `audio_decode` | `PlatformAudio.java` drives `MediaCodec` directly — **not** `MediaExtractor`, which on the API 36 emulator fails with `Service media.extractor didn't start` in an app process |
 | `midi_open` … | `MidiPlayer.java` hands the file to the platform's own General MIDI synthesizer (Sonivox, behind `MediaPlayer`) |
 | `http_request` | `PlatformHttp.java` wraps `HttpURLConnection`; the app declares `INTERNET` and permits cleartext, because a MIDlet's URL is `http://` |
+| `sensor_list` … `sensor_close` | `PlatformSensor.java` over `android.hardware.Sensor`: eight Android sensor types are mapped onto the quantities a MIDlet asks for, and every open handle is one registered listener |
 
 `tools/make_platformimg_jar.sh` builds the fixture that holds those hooks to
 account: one MIDlet that feeds the runtime five assets — `pic.bmp`, `pic.webp`,
@@ -621,6 +622,57 @@ PLATFORM pic.png FAILED java.io.IOException: cannot decode image: 102 bytes
 
 is what a `-DNJ_ENABLE_PNG=0` build answers, instead of the same "cannot decode
 image" a corrupt file gets.
+
+## Sensors: the JSR 256 hooks
+
+`javax.microedition.sensor` is a standard package with no standard source of
+data: JSR 256 says a sensor is identified by a URL the platform invents. Four
+optional fields carry the whole package, and each answers a question rather
+than describing a mechanism:
+
+| Hook | The question it answers |
+|---|---|
+| `sensor_list(ud, out, max)` | which sensors exist, and what each one measures |
+| `sensor_open(ud, url, period_ms)` | a handle for one of them, sampled at about that rate |
+| `sensor_read(ud, handle, values, max)` | the latest sample, one double per channel — 0 if there is none yet |
+| `sensor_close(ud, handle)` | stop sampling and release the handle |
+
+`nj_sensor_desc` is what a port fills in for one sensor: url, quantity,
+context type, model, a channel count, and per channel a name, a unit
+(`m/s^2`, `lx`, `hPa`), a measurement range and a resolution. The strings are
+borrowed for the duration of the call only; the runtime copies what it keeps.
+
+`sensor_read` is called from two places — `SensorConnection.getData()` and the
+frame pump, once per emulated frame — so it must be cheap and must never
+block: it returns what the sensor last reported, and 0 when nothing has been
+reported yet. The one call allowed to wait is the long form of `getData()`,
+which carries a timeout; the runtime sleeps in small steps until a sample
+arrives or the timeout runs out. That matters on a platform like Android,
+where a sensor only ever hands a value to a listener: the first synchronous
+read after `open()` legitimately has nothing to return, and a MIDlet that
+wants a reading asks for the long form.
+
+Leave the hooks NULL and `SensorManager.findSensors()` finds nothing: the
+package is present and answers "no sensors on this device", which is an answer
+a MIDlet written for a handset is prepared to hear. Conditions are the one
+part of JSR 256 this runtime does not evaluate — `Channel.addCondition()`
+raises `UnsupportedOperationException` instead of silently never firing — and
+availability push is not supported, so `isAvailabilityPushSupported()` answers
+`false` and the listener interfaces exist to be compiled against.
+
+The fixture works on a machine with no sensors at all, because the headless
+port has a synthetic accelerometer:
+
+    build/nj2me --port headless --run-frames 200 tests/fixtures/sensordemo.jar
+
+`tools/check_sensor.sh` is that run with every line checked; the fixture is
+this module's test, so there is no separate unit test for it. On Android,
+where the data really comes from hardware:
+
+    adb emu sensor set acceleration 1.5:-2.25:9.75
+
+is what makes the emulator's accelerometer report the values the fixture then
+prints.
 
 ## Text: built-in bitmaps or a TrueType file
 

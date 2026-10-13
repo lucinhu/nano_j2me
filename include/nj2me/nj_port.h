@@ -125,6 +125,35 @@ typedef struct nj_audio_tone {
     nj_u2 duration_ms;
 } nj_audio_tone;
 
+/*
+ * One sensor a port can offer, in the vocabulary javax.microedition.sensor
+ * (JSR 256) uses.  The runtime copies everything it needs out of this struct
+ * when it builds a SensorInfo, so a port may keep the storage in whatever
+ * shape suits it - a table of string literals in .rodata, or the heap block it
+ * allocated at init.
+ *
+ * The strings are borrowed for the duration of the call that produced the
+ * struct only; the runtime interns what it keeps.
+ *
+ * A port that cannot see any sensors leaves all four hooks NULL.  That is not
+ * an error: SensorManager.findSensors() then returns an empty array, and a
+ * MIDlet that needs the accelerometer says so itself instead of reading a
+ * fabricated zero.
+ */
+typedef struct nj_sensor_desc {
+    const char *url;          /* "sensor:acceleration;context=user;model=x"  */
+    const char *quantity;     /* "acceleration", "luminance", ...            */
+    const char *context;      /* "user" | "ambient" | "device" | "vehicle"   */
+    const char *model;
+    int         channels;     /* 1..NJ_SENSOR_MAX_CHANNELS                   */
+    const char *channel_names[NJ_SENSOR_MAX_CHANNELS];
+    const char *units[NJ_SENSOR_MAX_CHANNELS];
+    double      min_values[NJ_SENSOR_MAX_CHANNELS];
+    double      max_values[NJ_SENSOR_MAX_CHANNELS];
+    double      resolutions[NJ_SENSOR_MAX_CHANNELS];
+    nj_u4       max_rate_hz;  /* 0 when the port does not know               */
+} nj_sensor_desc;
+
 /* ------------------------------------------------------------------ */
 /* The port vtable                                                     */
 /* ------------------------------------------------------------------ */
@@ -480,6 +509,40 @@ typedef struct nj_port {
                               int *status, char *rheaders, nj_size rheaders_cap,
                               nj_u1 **out_body, nj_u4 *out_len,
                               void *(*alloc)(void *aud, nj_u4 n), void *aud);
+
+    /*
+     * Sensors - the whole of JSR 256, in four calls.
+     *
+     * JSR 256 is a pull API with a push face: a MIDlet either asks for a
+     * sample or registers a listener and is handed one every period.  Both are
+     * the same thing underneath - read the newest value the device has - and
+     * that is what these hooks are.  The runtime owns the pacing, the
+     * listener bookkeeping and the Data objects; the port only has to know
+     * what the hardware just measured.
+     *
+     *   sensor_list     describe every sensor the device has, up to `max`.
+     *                   Returns how many were written; out == NULL asks for
+     *                   the count alone.  Descriptors are read once per
+     *                   findSensors() call and copied.
+     *   sensor_open     start measuring the sensor whose url matches.  Returns
+     *                   a handle, or NULL when the device cannot (no
+     *                   permission, sensor busy).  period_ms is a hint.
+     *   sensor_read     copy the newest sample into `values` (one per channel)
+     *                   and return the channel count, 0 when nothing has been
+     *                   measured yet.  Never blocks: a port whose only source
+     *                   is an event callback returns 0 until the first event
+     *                   arrives.  The value is a snapshot, not a queue.
+     *   sensor_close    stop measuring and release the handle.  Called when a
+     *                   MIDlet closes the connection, and by the port's own
+     *                   shutdown() for any handle still open.
+     *
+     * A port that has no sensors leaves all four NULL and nothing is
+     * fabricated: findSensors() returns an empty array.
+     */
+    int   (*sensor_list)(void *ud, nj_sensor_desc *out, int max);
+    void *(*sensor_open)(void *ud, const char *url, nj_u4 period_ms);
+    int   (*sensor_read)(void *ud, void *handle, double *values, int max_values);
+    void  (*sensor_close)(void *ud, void *handle);
 
     int   fps_cap;        /* 0 => uncapped */
     const char *rms_dir;  /* where RecordStore files live (hosted ports) */

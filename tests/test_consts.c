@@ -66,6 +66,7 @@ int main(int argc, char **argv)
         char *eq, *dot, *cls, *name;
         long want;
         int value;
+        int is_text;
 
         while (*line && (line[strlen(line) - 1u] == '\n' ||
                          line[strlen(line) - 1u] == '\r')) {
@@ -75,7 +76,13 @@ int main(int argc, char **argv)
         eq = strrchr(line, '=');
         if (!eq) { continue; }
         *eq = '\0';
-        want = strtol(eq + 1, NULL, 10);
+        {
+            char *end = NULL;
+            want = strtol(eq + 1, &end, 10);
+            /* "GET" is not a number, and the runtime holds the text itself:
+             * a String constant is compared as text, not as a value. */
+            is_text = (end == eq + 1 || *end != '\0');
+        }
 
         /* "a.b.C.NAME" -> class "a/b/C", field "NAME" */
         dot = strrchr(line, '.');
@@ -85,6 +92,37 @@ int main(int argc, char **argv)
         cls = line;
         for (dot = cls; *dot; dot++) {
             if (*dot == '.') { *dot = '/'; }
+        }
+
+        if (is_text) {
+            /* HttpConnection.GET/POST/HEAD: javac inlines the stub's text at
+             * every call site, so a runtime whose own text differs compares
+             * every incoming method name against the wrong string. */
+            nj_field *fs = nj_field_lookup(vm, cls, name,
+                                           "Ljava/lang/String;", 1);
+            char got[128];
+
+            if (!fs) {
+                if (mism < 200) {
+                    printf("  the stubs declare %s.%s, the runtime has no such "
+                           "field\n", cls, name);
+                }
+                mism++;
+                n++;
+                continue;
+            }
+            got[0] = '\0';
+            (void)nj_string_to_utf8(nj_field_read_ref(vm, NULL, fs), got,
+                                    (int)sizeof(got));
+            if (strcmp(got, eq + 1) != 0) {
+                if (mism < 200) {
+                    printf("  %s.%s: the stubs say \"%s\", the runtime holds "
+                           "\"%s\"\n", cls, name, eq + 1, got);
+                }
+                mism++;
+            }
+            n++;
+            continue;
         }
 
         {

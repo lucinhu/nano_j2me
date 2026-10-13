@@ -354,6 +354,25 @@ nj_ref nj_http_new(nj_vm *vm, const char *url);
 nj_status nj_http_late_init(nj_vm *vm);
 
 /*
+ * JSR 256 sensors.
+ *
+ * nj_sensor_frame() is the pump: it reads any connection that has a
+ * DataListener installed and calls dataReceived() on it, once per emulated
+ * frame, next to nj_media_frame() above.  A MIDlet that only polls with
+ * getData() never registers here and the call costs one NULL check.
+ *
+ * nj_sensor_shutdown() closes every connection still open, so a port's sensor
+ * hardware is released even when the MIDlet never called close(); the VM calls
+ * it on the way out.
+ *
+ * nj_sensor_late_init() writes the interfaces' static final values, for the
+ * same reason the rest of the package has one.
+ */
+void nj_sensor_frame(nj_vm *vm);
+void nj_sensor_shutdown(nj_vm *vm);
+nj_status nj_sensor_late_init(nj_vm *vm);
+
+/*
  * Fill a triangle through a MIDlet's own javax.microedition.lcdui.Graphics.
  *
  * The Mascot Capsule rasterizer lives in another file and cannot reach

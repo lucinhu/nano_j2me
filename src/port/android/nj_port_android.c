@@ -389,6 +389,31 @@ typedef struct android_state {
     jmethodID http_headers_mid;
     jmethodID http_body_mid;
     jmethodID http_close_mid;
+
+    /*
+     * JSR 256 sensors.  PlatformSensor decides which of this device's sensors
+     * are worth offering (it maps Android sensor types onto the quantities a
+     * MIDlet asks for by name) and keeps one listener per open handle, so the
+     * runtime only ever holds an opaque long.
+     *
+     * The text of each list() line is parsed into these buffers rather than
+     * into the heap, because nj_sensor_desc borrows its strings for the
+     * duration of nj_port.sensor_list() only - and the runtime copies what it
+     * keeps.  The buffers are sized by the same limits the runtime enforces
+     * (16 descriptors, 4 channels), so a device with more sensors loses the
+     * extras instead of overrunning anything.
+     */
+    jclass    sensor_class;
+    jmethodID sensor_list_mid;
+    jmethodID sensor_open_mid;
+    jmethodID sensor_read_mid;
+    jmethodID sensor_close_mid;
+    char      sensor_url[NJ_SENSOR_MAX_DESCRIPTORS][NJ_SENSOR_MAX_URL];
+    char      sensor_quantity[NJ_SENSOR_MAX_DESCRIPTORS][24];
+    char      sensor_context[NJ_SENSOR_MAX_DESCRIPTORS][16];
+    char      sensor_model[NJ_SENSOR_MAX_DESCRIPTORS][48];
+    char      sensor_names[NJ_SENSOR_MAX_DESCRIPTORS][NJ_SENSOR_MAX_CHANNELS][16];
+    char      sensor_units[NJ_SENSOR_MAX_DESCRIPTORS][NJ_SENSOR_MAX_CHANNELS][16];
 } android_state;
 
 #define AS(ud) ((android_state *)(ud))
@@ -2842,6 +2867,264 @@ fail:
 }
 
 /* ------------------------------------------------------------------ */
+/* JSR 256 sensors                                                     */
+/* ------------------------------------------------------------------ */
+/*
+ * One line of PlatformSensor.list() is six tab-separated fields:
+ *
+ *   url \t quantity \t context \t model \t maxRateHz \t channel,channel,...
+ *
+ * and one channel is five colon-separated fields:
+ *
+ *   name:unit:min:max:resolution
+ *
+ * Everything is copied into the state's buffers: the Java string is released
+ * before this returns, while the runtime reads the descriptors after it does,
+ * and it is documented to borrow them only for the call - so the copy has to
+ * outlive the call by at least as long as the buffers do.
+ */
+static void android_copy_field(char *dst, nj_size cap, const char *src)
+{
+    nj_size i = 0u;
+
+    if (!dst || cap == 0u) {
+        return;
+    }
+    if (src) {
+        while (src[i] != '\0' && i + 1u < cap) {
+            dst[i] = src[i];
+            i++;
+        }
+    }
+    dst[i] = '\0';
+}
+
+/*
+ * Fill one descriptor from the parsed fields.  The channel list is the part
+ * that has to be right: a MIDlet reads one value per channel and shows the
+ * unit and the range next to it.
+ */
+static void android_sensor_fill(android_state *s, int index, char *const *tab,
+                                nj_sensor_desc *out)
+{
+    char *spec;
+
+    memset(out, 0, sizeof(*out));
+    android_copy_field(s->sensor_url[index], sizeof(s->sensor_url[index]),
+                       tab[0]);
+    android_copy_field(s->sensor_quantity[index],
+                       sizeof(s->sensor_quantity[index]), tab[1]);
+    android_copy_field(s->sensor_context[index],
+                       sizeof(s->sensor_context[index]), tab[2]);
+    android_copy_field(s->sensor_model[index], sizeof(s->sensor_model[index]),
+                       tab[3]);
+    out->url = s->sensor_url[index];
+    out->quantity = s->sensor_quantity[index];
+    out->context = s->sensor_context[index];
+    out->model = s->sensor_model[index];
+    out->max_rate_hz = (nj_u4)(tab[4] ? strtoul(tab[4], NULL, 10) : 0ul);
+
+    spec = tab[5];
+    while (spec && *spec && out->channels < NJ_SENSOR_MAX_CHANNELS) {
+        char *end = strchr(spec, ',');
+        char *part[5];
+        int n = 0;
+        char *p = spec;
+        int c = out->channels;
+
+        if (end) {
+            *end = '\0';
+        }
+        part[n++] = p;
+        while (*p && n < 5) {
+            if (*p == ':') {
+                *p = '\0';
+                part[n++] = p + 1;
+            }
+            p++;
+        }
+        while (n < 5) {
+            part[n++] = NULL;
+        }
+        android_copy_field(s->sensor_names[index][c],
+                           sizeof(s->sensor_names[index][c]), part[0]);
+        android_copy_field(s->sensor_units[index][c],
+                           sizeof(s->sensor_units[index][c]), part[1]);
+        out->channel_names[c] = s->sensor_names[index][c];
+        out->units[c] = s->sensor_units[index][c];
+        out->min_values[c] = part[2] ? strtod(part[2], NULL) : 0.0;
+        out->max_values[c] = part[3] ? strtod(part[3], NULL) : 0.0;
+        out->resolutions[c] = part[4] ? strtod(part[4], NULL) : 0.0;
+        out->channels++;
+        spec = end ? end + 1 : NULL;
+    }
+}
+
+static int android_sensor_list(void *ud, nj_sensor_desc *out, int max)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jobjectArray arr;
+    jsize n, i;
+    int count = 0;
+
+    if (!s || !s->sensor_class || !s->sensor_list_mid) {
+        return 0;                   /* no bridge: findSensors() is empty */
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return 0;
+    }
+    arr = (jobjectArray)(*env)->CallStaticObjectMethod(env, s->sensor_class,
+                                                       s->sensor_list_mid);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return 0;
+    }
+    if (!arr) {
+        return 0;
+    }
+    n = (*env)->GetArrayLength(env, arr);
+    if (!out || max <= 0) {
+        (*env)->DeleteLocalRef(env, arr);
+        return (int)n;              /* the count alone */
+    }
+    for (i = 0; i < n && count < max; i++) {
+        jstring js = (jstring)(*env)->GetObjectArrayElement(env, arr, i);
+        const char *utf;
+        char line[512];
+        char *tab[6];
+        char *p;
+        int k = 0;
+
+        if (!js || (*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            if (js) { (*env)->DeleteLocalRef(env, js); }
+            continue;
+        }
+        utf = (*env)->GetStringUTFChars(env, js, NULL);
+        if (!utf) {
+            (*env)->ExceptionClear(env);
+            (*env)->DeleteLocalRef(env, js);
+            continue;
+        }
+        android_copy_field(line, sizeof(line), utf);
+        (*env)->ReleaseStringUTFChars(env, js, utf);
+        (*env)->DeleteLocalRef(env, js);
+
+        tab[k++] = line;
+        for (p = line; *p && k < 6; p++) {
+            if (*p == '\t') {
+                *p = '\0';
+                tab[k++] = p + 1;
+            }
+        }
+        while (k < 6) {
+            tab[k++] = NULL;
+        }
+        if (!tab[0] || !tab[0][0] || !tab[1] || !tab[1][0]) {
+            continue;               /* a line without a url is not a sensor */
+        }
+        android_sensor_fill(s, count, tab, &out[count]);
+        count++;
+    }
+    (*env)->DeleteLocalRef(env, arr);
+    return count;
+}
+
+static void *android_sensor_open(void *ud, const char *url, nj_u4 period_ms)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jstring ju;
+    jlong h;
+
+    if (!s || !s->sensor_class || !s->sensor_open_mid || !url) {
+        return NULL;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return NULL;
+    }
+    ju = (*env)->NewStringUTF(env, url);
+    if (!ju) {
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
+    h = (*env)->CallStaticLongMethod(env, s->sensor_class, s->sensor_open_mid,
+                                     ju, (jint)(period_ms ? period_ms : 100u));
+    (*env)->DeleteLocalRef(env, ju);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return NULL;
+    }
+    /* 0 is the Java side's "this device has no such sensor", which is a
+     * refusal, not a handle. */
+    return h == 0 ? NULL : (void *)(intptr_t)h;
+}
+
+static int android_sensor_read(void *ud, void *handle, double *values,
+                               int max_values)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jdoubleArray ja;
+    jsize n;
+    int take;
+
+    if (!s || !s->sensor_class || !s->sensor_read_mid || !handle || !values) {
+        return 0;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return 0;
+    }
+    ja = (jdoubleArray)(*env)->CallStaticObjectMethod(
+        env, s->sensor_class, s->sensor_read_mid, (jlong)(intptr_t)handle);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return 0;
+    }
+    if (!ja) {
+        return 0;                   /* nothing measured yet */
+    }
+    n = (*env)->GetArrayLength(env, ja);
+    /* The last element is the event timestamp, not a channel. */
+    take = (int)n - 1;
+    if (take > max_values) {
+        take = max_values;
+    }
+    if (take > 0) {
+        (*env)->GetDoubleArrayRegion(env, ja, 0, (jsize)take, values);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            take = 0;
+        }
+    }
+    (*env)->DeleteLocalRef(env, ja);
+    return take;
+}
+
+static void android_sensor_close(void *ud, void *handle)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+
+    if (!s || !s->sensor_class || !s->sensor_close_mid || !handle) {
+        return;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return;
+    }
+    (*env)->CallStaticVoidMethod(env, s->sensor_class, s->sensor_close_mid,
+                                 (jlong)(intptr_t)handle);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Construction and the public configuration entry points              */
 /* ------------------------------------------------------------------ */
 /*
@@ -2928,6 +3211,17 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
      * network stack gives, and the runtime refuses http:// by name either way.
      */
     out->http_request = android_http_request;
+    /*
+     * JSR 256.  All four are set for the same reason as http_request: with no
+     * PlatformSensor the list comes back empty - SensorManager.findSensors()
+     * finds nothing on a device that has no bridge - rather than the runtime
+     * claiming the package is missing.  A MIDlet that asks for a sensor it
+     * cannot have gets the spec's ConnectionNotFoundException either way.
+     */
+    out->sensor_list = android_sensor_list;
+    out->sensor_open = android_sensor_open;
+    out->sensor_read = android_sensor_read;
+    out->sensor_close = android_sensor_close;
     out->log = android_log;
     out->shutdown = android_shutdown;
     out->fps_cap = 30;
@@ -3436,6 +3730,47 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
         }
     }
 
+    {
+        /*
+         * PlatformSensor.java, for JSR 256.  It needs a Context only to ask
+         * the SensorManager what the device has, so a missing class simply
+         * leaves the hook answering "no sensors" - the same answer a device
+         * without an accelerometer gives.
+         */
+        jclass scls = (*env)->FindClass(env, "com/lucinhu/nj2me/PlatformSensor");
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+            scls = NULL;
+        }
+        if (scls) {
+            jmethodID slist = (*env)->GetStaticMethodID(
+                env, scls, "list", "()[Ljava/lang/String;");
+            jmethodID sopen = (*env)->GetStaticMethodID(
+                env, scls, "open", "(Ljava/lang/String;I)J");
+            jmethodID sread = (*env)->GetStaticMethodID(env, scls, "latest",
+                                                        "(J)[D");
+            jmethodID sclose = (*env)->GetStaticMethodID(env, scls, "close",
+                                                         "(J)V");
+            if ((*env)->ExceptionCheck(env)) {
+                (*env)->ExceptionClear(env);
+                slist = NULL;
+            }
+            if (slist && sopen && sread && sclose) {
+                s->sensor_class = (jclass)(*env)->NewGlobalRef(env, scls);
+                s->sensor_list_mid = slist;
+                s->sensor_open_mid = sopen;
+                s->sensor_read_mid = sread;
+                s->sensor_close_mid = sclose;
+            } else {
+                __android_log_print(ANDROID_LOG_WARN, "nj2me",
+                                    "sensor: PlatformSensor is present but its "
+                                    "list API is not; findSensors() will come "
+                                    "back empty for this run");
+            }
+            (*env)->DeleteLocalRef(env, scls);
+        }
+    }
+
     win = ANativeWindow_fromSurface(env, surface);
     nj_port_android_set_window(&a->port, win);
     if (win) {
@@ -3774,6 +4109,17 @@ Java_com_lucinhu_nj2me_GameActivity_nativeDestroy(JNIEnv *env, jobject thiz,
         s->http_headers_mid = NULL;
         s->http_body_mid = NULL;
         s->http_close_mid = NULL;
+    }
+    if (s && s->sensor_class) {
+        /* Handles are closed by nj_sensor_shutdown() when the MIDlet ends; a
+         * sensor the MIDlet left open would keep the Java listener awake, so
+         * the runtime - not this teardown - is responsible for closing them. */
+        (*env)->DeleteGlobalRef(env, s->sensor_class);
+        s->sensor_class = NULL;
+        s->sensor_list_mid = NULL;
+        s->sensor_open_mid = NULL;
+        s->sensor_read_mid = NULL;
+        s->sensor_close_mid = NULL;
     }
     nj_port_shutdown(&a->port);
     free(a);

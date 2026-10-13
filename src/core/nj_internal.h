@@ -396,6 +396,14 @@ struct nj_vm {
     nj_ref     media_players;
 
     /*
+     * The sensor connections that have a DataListener installed.  Same reason
+     * as media_players above: the listener's dataReceived() has to be called
+     * from the frame pump, and nothing else holds those objects.  NULL until a
+     * MIDlet listens, so a program with no sensors never pays for it.
+     */
+    nj_ref     sensor_conns;
+
+    /*
      * Log throttling.  A MIDlet can call Throwable.printStackTrace() as often
      * as it likes, and one in the corpus does it on every frame of its failure
      * path: 24 MB and 594,000 lines in ten seconds.  On a handset that is a
