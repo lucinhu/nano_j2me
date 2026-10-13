@@ -16,6 +16,16 @@
  * next frame applies it (sdl_input_poll), because nothing outside the VM's own
  * thread may touch the VM.  sdl_install_codecs() is where the VM pointer comes
  * from.
+ *
+ * The keypad is pressed the way a finger presses a phone pad: hold the mouse
+ * button (or put a finger down) on it and slide.  While a press is in
+ * progress, moving from one cap to the next releases the first and presses the
+ * second, moving off onto empty space releases it, and letting go of the button
+ * ends it (sdl_pointer_to()).  A mouse moving with NO button held does nothing
+ * at all - it is not a finger, and neither the keypad nor the game hears from
+ * it.  A press that started inside the game area and slides onto a cap presses
+ * that cap too, and sliding back off releases it, which is the same rule from
+ * the other side.
  */
 #include "nj2me/nj_port.h"
 #include "nj2me/nj_vm.h"       /* speed + save-state, applied on the frame */
@@ -41,6 +51,12 @@
  * with the same fill_round()/draw_label() helpers, and it is hit-tested before
  * the keypad and before the game: a click on the badge is neither a keypress
  * nor a pointer press inside the MIDlet, and a click anywhere else is neither.
+ *
+ * The keys are pressed by HOLDING a button down and pointing at them, or by a
+ * finger - a press has to be in progress, exactly as on the Android pad, so a
+ * mouse merely moving across the window presses nothing at all.  The keyboard
+ * mapping below is the same set of keys on physical buttons and is unchanged by
+ * any of this.
  */
 enum {
     NJ_SDL2_BTN_UP = 0, NJ_SDL2_BTN_DOWN, NJ_SDL2_BTN_LEFT, NJ_SDL2_BTN_RIGHT,
@@ -159,7 +175,17 @@ typedef struct sdl_state {
     SDL_Rect game_dst;      /* the letterboxed game area, in window pixels */
     SDL_Rect btn[NJ_SDL2_NBTN];
     int      btn_n;
-    int      btn_held;      /* index into btn[], or -1 */
+    int      btn_held;      /* the cap being held down, or -1 */
+    /*
+     * True between a press that landed in the GAME area and its release.
+     *
+     * A press is what makes the pointer mean anything: with the mouse button up
+     * (or no finger down) the pointer is just a pointer, and this flag is the
+     * other half of that rule - it remembers that the press went DOWN on the
+     * game, so only then do moves and the release become pointer events for the
+     * MIDlet.  A press that began on a cap never does.
+     */
+    int      game_drag;
 
     /*
      * The speed badge.
@@ -175,7 +201,7 @@ typedef struct sdl_state {
     nj_vm *vm;
     int    speed_percent;
     int    speed_applied;   /* 0 until the VM has been told; then == speed */
-    int    speed_held;      /* the badge is under the pointer / finger */
+    int    speed_held;      /* the button / finger went down on the badge */
     SDL_Rect speed_btn;     /* the badge, in window pixels; w==0: off screen */
 
     /*
@@ -426,7 +452,8 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
     sdl_log(NULL, 2,
             "keys: arrows=up/down/left/right  Enter/Space=fire  F1=soft-left"
             "  Esc/F2=soft-right  Backspace=clear  0-9 * #  "
-            "Z/X/C/V=game A/B/C/D  mouse: click and drag  F12/Tab=keypad"
+            "Z/X/C/V=game A/B/C/D  mouse: hold the button and slide onto a key"
+            " to press it (a bare move presses nothing)  F12/Tab=keypad"
             "  click the speed badge / F3=game speed  F5=save state"
             "  (NJ_SDL_GRAB=1 if the window cannot be focused)");
     if (s->state_path && s->state_path[0]) {
@@ -1009,6 +1036,45 @@ static void sdl_speed_cycle(sdl_state *s)
     s->speed_percent = sdl2_speeds[next];
 }
 
+/* Let go of the cap the pointer is holding, if it is holding one. */
+static void sdl_release_held(sdl_state *s)
+{
+    if (s->btn_held >= 0) {
+        sdl_push_key(s, sdl2_keys[s->btn_held].key, 0);
+        s->btn_held = -1;
+    }
+}
+
+/*
+ * Move the press that is in progress to wherever the pointer is now.
+ *
+ * Called ONLY while a press is in progress - the mouse button is down, or a
+ * finger is on the panel - because a press is what makes the pointer mean
+ * something.  A mouse sweeping across the window with no button held is not a
+ * finger and must press nothing; that is the whole difference between this and
+ * a hover.
+ *
+ * While a press is in progress the position decides which cap is down: sliding
+ * from one cap to the next releases the first and presses the second, moving
+ * off onto empty space releases it, and the speed badge takes priority over
+ * whatever cap is under it.  The game is not consulted here at all - only caps
+ * are hit-tested, so a drag crossing the picture stays silent unless it is the
+ * game's own drag (see `game_drag`).
+ */
+static void sdl_pointer_to(sdl_state *s, int x, int y)
+{
+    int want = sdl_speed_at(s, x, y) ? -1 : sdl_key_at(s, x, y);
+
+    if (want == s->btn_held) {
+        return;             /* already pressed, or already nothing: no events */
+    }
+    sdl_release_held(s);
+    if (want >= 0) {
+        sdl_push_key(s, sdl2_keys[want].key, 1);
+        s->btn_held = want;
+    }
+}
+
 static void sdl_display_present(void *ud, int x, int y, int w, int h)
 {
     sdl_state *s = SS(ud);
@@ -1020,6 +1086,15 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
     while (SDL_PollEvent(&ev)) {
         nj_event e;
         memset(&e, 0, sizeof(e));
+        if (getenv("NJ_SDL2_EVDBG")) {
+            if (ev.type == SDL_MOUSEMOTION) {
+                SDL_Log("EV motion state=%d xy=%d,%d", (int)ev.motion.state,
+                        ev.motion.x, ev.motion.y);
+            } else if (ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEBUTTONUP) {
+                SDL_Log("EV button type=%u xy=%d,%d", (unsigned)ev.type,
+                        ev.button.x, ev.button.y);
+            }
+        }
         switch (ev.type) {
         case SDL_QUIT:
             e.type = NJ_EV_QUIT;
@@ -1039,11 +1114,10 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
             if ((ev.key.keysym.sym == SDLK_F12 || ev.key.keysym.sym == SDLK_TAB)) {
                 if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0) {
                     s->keys_visible = !s->keys_visible;
-                    if (!s->keys_visible && s->btn_held >= 0) {
+                    if (!s->keys_visible) {
                         /* Hiding them while one is held would leave the key
                          * stuck down, because the release would never come. */
-                        sdl_push_key(s, sdl2_keys[s->btn_held].key, 0);
-                        s->btn_held = -1;
+                        sdl_release_held(s);
                     }
                     sdl_layout(s);
                 }
@@ -1124,10 +1198,16 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
         case SDL_MOUSEBUTTONUP:
             if (ev.button.button == SDL_BUTTON_LEFT) {
                 /*
-                 * The speed badge comes first of all.  It is a control, not a
-                 * key and not a click: hit-testing it before the keypad keeps
-                 * the two from overlapping, and before the game keeps a tap on
-                 * it from reaching the MIDlet.
+                 * A press is what makes the pointer mean anything, so the button
+                 * going down is where the keypad wakes up: the badge first (it
+                 * is a control, not a key and not a click), then the cap under
+                 * the press, and only then the game.
+                 *
+                 * While the button stays down, motion carries the press from cap
+                 * to cap (sdl_pointer_to).  Letting go releases whatever cap is
+                 * still held and ends the MIDlet's drag if it had one; a press
+                 * that landed on a cap was never a pointer press, so the MIDlet
+                 * never hears about it at all.
                  */
                 if (ev.type == SDL_MOUSEBUTTONDOWN) {
                     if (sdl_speed_at(s, ev.button.x, ev.button.y)) {
@@ -1135,53 +1215,76 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
                         s->speed_held = 1;
                         break;
                     }
-                } else if (s->speed_held) {
-                    s->speed_held = 0;
-                    break;
-                }
-                /*
-                 * The on-screen keys come next.  A press that lands on one is
-                 * a key press, not a pointer press - otherwise every tap on the
-                 * D-pad would ALSO be reported to a MIDlet as a click at that
-                 * spot, and a game with a pointer UI would react to both.
-                 */
-                if (ev.type == SDL_MOUSEBUTTONDOWN) {
-                    int hit = sdl_key_at(s, ev.button.x, ev.button.y);
-                    if (hit >= 0) {
-                        sdl_push_key(s, sdl2_keys[hit].key, 1);
-                        s->btn_held = hit;
+                    sdl_pointer_to(s, ev.button.x, ev.button.y);
+                    if (s->btn_held >= 0) {
+                        /* A press that lands on a cap is a key press, not a
+                         * pointer press - otherwise every tap on the D-pad
+                         * would ALSO be reported to a MIDlet as a click at that
+                         * spot, and a game with a pointer UI would react to
+                         * both. */
                         break;
                     }
-                } else if (s->btn_held >= 0) {
-                    sdl_push_key(s, sdl2_keys[s->btn_held].key, 0);
-                    s->btn_held = -1;
-                    break;
-                }
-                {
-                    int gx, gy;
-                    sdl_to_game(s, ev.button.x, ev.button.y, &gx, &gy);
-                    sdl_push_pointer(s, gx, gy,
-                                     (ev.type == SDL_MOUSEBUTTONDOWN)
-                                         ? NJ_EV_POINTER_DOWN
-                                         : NJ_EV_POINTER_UP);
+                    s->game_drag = 1;
+                    {
+                        int gx, gy;
+                        sdl_to_game(s, ev.button.x, ev.button.y, &gx, &gy);
+                        sdl_push_pointer(s, gx, gy, NJ_EV_POINTER_DOWN);
+                    }
+                } else {
+                    s->speed_held = 0;
+                    sdl_release_held(s);
+                    if (!s->game_drag) {
+                        break;      /* the press never reached the game */
+                    }
+                    s->game_drag = 0;
+                    {
+                        int gx, gy;
+                        sdl_to_game(s, ev.button.x, ev.button.y, &gx, &gy);
+                        sdl_push_pointer(s, gx, gy, NJ_EV_POINTER_UP);
+                    }
                 }
             }
             break;
         case SDL_MOUSEMOTION:
             /*
-             * Only while a button is held.  A desktop mouse sweeping across the
-             * window is not a finger on a panel, and reporting it as a drag
-             * would give every MIDlet a stream of phantom moves.
+             * Nothing at all while the button is up.  A mouse crossing the
+             * window is not a finger on a panel: pressing caps nobody touched
+             * would be bad enough, and reporting the moves would give every
+             * MIDlet a stream of phantom drags.
              *
-             * And not at all while an on-screen key or the speed badge is held:
-             * the finger that is pressing "right" or tapping the badge is not
-             * dragging across the game.
+             * With the button down the press follows the pointer - onto a cap,
+             * off a cap, from one cap to the next, and back into the game area
+             * for the drag the press started there.
              */
-            if ((ev.motion.state & SDL_BUTTON_LMASK) != 0 &&
-                s->btn_held < 0 && !s->speed_held) {
+            if ((ev.motion.state & SDL_BUTTON_LMASK) == 0) {
+                break;
+            }
+            if (s->speed_held) {
+                if (sdl_speed_at(s, ev.motion.x, ev.motion.y)) {
+                    break;                  /* still on the badge */
+                }
+                s->speed_held = 0;          /* dragged off it: press over */
+            }
+            sdl_pointer_to(s, ev.motion.x, ev.motion.y);
+            if (s->btn_held >= 0) {
+                break;              /* this press belongs to the keypad */
+            }
+            if (s->game_drag) {
                 int gx, gy;
                 sdl_to_game(s, ev.motion.x, ev.motion.y, &gx, &gy);
                 sdl_push_pointer(s, gx, gy, NJ_EV_POINTER_MOVE);
+            }
+            break;
+        case SDL_WINDOWEVENT:
+            /*
+             * The pointer left the window, so nothing is under it any more and
+             * nothing may stay pressed: without this a cap held down by a drag
+             * that wandered out of the window would stay down until the pointer
+             * came back and crossed it again, which is a stuck key.
+             */
+            if (ev.window.event == SDL_WINDOWEVENT_LEAVE) {
+                sdl_release_held(s);
+                s->speed_held = 0;
             }
             break;
         /*
@@ -1203,37 +1306,51 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
             wx = (int)(ev.tfinger.x * (float)ww);
             wy = (int)(ev.tfinger.y * (float)wh);
 
-            if (ev.type == SDL_FINGERDOWN) {
-                if (sdl_speed_at(s, wx, wy)) {
-                    sdl_speed_cycle(s);
-                    s->speed_held = 1;
+            /*
+             * A finger is lifted, so it is holding nothing any more: this is
+             * where touch differs from the mouse, which keeps its cap pressed
+             * while the pointer stays on it.  The MIDlet is only told about a
+             * release if it was told about the press (game_drag).
+             */
+            if (ev.type == SDL_FINGERUP) {
+                s->speed_held = 0;
+                sdl_release_held(s);
+                if (!s->game_drag) {
                     break;
                 }
-            } else if (s->speed_held) {
-                if (ev.type == SDL_FINGERUP) {
-                    s->speed_held = 0;
-                }
+                s->game_drag = 0;
+                sdl_to_game(s, wx, wy, &gx, &gy);
+                sdl_push_pointer(s, gx, gy, NJ_EV_POINTER_UP);
                 break;
             }
-            if (ev.type == SDL_FINGERDOWN) {
-                int hit = sdl_key_at(s, wx, wy);
-                if (hit >= 0) {
-                    sdl_push_key(s, sdl2_keys[hit].key, 1);
-                    s->btn_held = hit;
-                    break;
+
+            if (ev.type == SDL_FINGERDOWN && sdl_speed_at(s, wx, wy)) {
+                sdl_speed_cycle(s);
+                s->speed_held = 1;
+                break;
+            }
+            if (s->speed_held) {
+                if (sdl_speed_at(s, wx, wy)) {
+                    break;                  /* still on the badge */
                 }
-            } else if (s->btn_held >= 0) {
-                if (ev.type == SDL_FINGERUP) {
-                    sdl_push_key(s, sdl2_keys[s->btn_held].key, 0);
-                    s->btn_held = -1;
-                }
+                s->speed_held = 0;          /* slid off it: press over */
+            }
+
+            /* A finger that is down is a press in progress, so the position
+             * decides which cap it holds - exactly as for the mouse. */
+            sdl_pointer_to(s, wx, wy);
+            if (s->btn_held >= 0) {
+                /* Sliding from cap to cap presses and releases as it goes; a
+                 * finger resting on one is not on the game. */
                 break;
             }
             sdl_to_game(s, wx, wy, &gx, &gy);
-            sdl_push_pointer(s, gx, gy,
-                             (ev.type == SDL_FINGERDOWN) ? NJ_EV_POINTER_DOWN :
-                             (ev.type == SDL_FINGERUP)   ? NJ_EV_POINTER_UP :
-                                                           NJ_EV_POINTER_MOVE);
+            if (ev.type == SDL_FINGERDOWN) {
+                s->game_drag = 1;
+                sdl_push_pointer(s, gx, gy, NJ_EV_POINTER_DOWN);
+            } else if (s->game_drag) {
+                sdl_push_pointer(s, gx, gy, NJ_EV_POINTER_MOVE);
+            }
             break;
         }
         default:
