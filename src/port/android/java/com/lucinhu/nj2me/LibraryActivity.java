@@ -28,6 +28,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -475,6 +476,14 @@ public class LibraryActivity extends Activity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == FontPicker.REQUEST) {
+            if (res == RESULT_OK && data != null && data.getData() != null) {
+                String path = FontPicker.install(this, data.getData());
+                toast(path == null ? "这个文件不是字体，还是用系统字体" : "字体已更换，游戏里的字会用它");
+                displayDialog();
+            }
+            return;
+        }
         if (req != REQ_PICK || res != RESULT_OK || data == null || data.getData() == null) {
             return;
         }
@@ -927,6 +936,12 @@ public class LibraryActivity extends Activity {
                 sortDialog();
             }
         }));
+        box.addView(rowAction(Md3.IC_TUNE, "显示设置", displaySummary(), new Runnable() {
+            @Override
+            public void run() {
+                displayDialog();
+            }
+        }));
         box.addView(Md3.divider(this));
         box.addView(rowAction(Md3.IC_IMPORT, "添加 JAR", "从文件管理器里挑一个 .jar", new Runnable() {
             @Override
@@ -941,6 +956,94 @@ public class LibraryActivity extends Activity {
             }
         }));
         showBox(box, "关闭");
+    }
+
+    /** One line that says what the two switches and the font are set to. */
+    private String displaySummary() {
+        String aa = (Settings.fontAntiAlias(this) ? "字体平滑" : "字体不平滑")
+                + "，" + (Settings.pictureAntiAlias(this) ? "画面平滑" : "画面不平滑");
+        String f = Settings.fontFile(this);
+        return f == null ? aa + "，系统字体" : aa + "，字体：" + new File(f).getName();
+    }
+
+    /**
+     * The display settings, reachable without a game running: both
+     * anti-aliasing switches, the replaceable font, and the sweep that drops
+     * the glyphs this session never asked for.  The game's own panel shows the
+     * same rows because there the result is one tap away; these live in the
+     * display prefs, so setting them here is the same setting.
+     */
+    private void displayDialog() {
+        final boolean fontAa = Settings.fontAntiAlias(this);
+        final boolean picAa = Settings.pictureAntiAlias(this);
+        final String path = Settings.fontFile(this);
+        LinearLayout box = Md3.body(this);
+        box.addView(Md3.title(this, "显示设置"));
+        box.addView(Md3.supporting(this, "随时可改；正在运行的游戏回到游戏画面时用上"),
+                Md3.gap(this, 6));
+        final AlertDialog d = Md3.show(new AlertDialog.Builder(this)
+                .setView(Md3.scroller(this, box))
+                .setNegativeButton("关闭", null), this);
+        box.addView(rowAction(Md3.IC_SCREEN, fontAa ? "字体反锯齿：开" : "字体反锯齿：关",
+                "关掉以后小字更硬，也更快", new Runnable() {
+                    @Override
+                    public void run() {
+                        Settings.setFontAntiAlias(LibraryActivity.this, !fontAa);
+                        d.dismiss();
+                        toast(!fontAa ? "字体反锯齿已打开" : "字体反锯齿已关闭");
+                        displayDialog();
+                    }
+                }), Md3.gap(this, 12));
+        box.addView(rowAction(Md3.IC_IMPORT, path == null ? "更换字体…" : "更换字体…（现在：" + new File(path).getName() + "）",
+                path == null ? "挑一个 .ttf / .otf，游戏里的字就用它" : "再挑一个就换掉现在这个", new Runnable() {
+                    @Override
+                    public void run() {
+                        FontPicker.pick(LibraryActivity.this);
+                    }
+                }));
+        if (path != null) {
+            box.addView(rowAction(Md3.IC_DELETE, "换回系统字体", new File(path).getName(),
+                    new Runnable() {
+                        @Override
+                        public void run() {
+                            FontPicker.reset(LibraryActivity.this);
+                            d.dismiss();
+                            toast("已换回系统字体");
+                            displayDialog();
+                        }
+                    }));
+        }
+        box.addView(rowAction(Md3.IC_DELETE, "只保留用到的字",
+                glyphSummary(), new Runnable() {
+                    @Override
+                    public void run() {
+                        int[] before = GlyphSource.stats();
+                        int[] r = GlyphSource.trimToUsed();
+                        d.dismiss();
+                        toast(before[0] <= 0
+                                ? "还没有字形可清理：先玩一下游戏"
+                                : "字形缓存 " + r[1] + " → " + r[2] + " 个 · "
+                                        + FontKit.size(r[3]) + " → " + FontKit.size(r[4]));
+                        displayDialog();
+                    }
+                }));
+        box.addView(rowAction(Md3.IC_FULLSCREEN, picAa ? "画面反锯齿：开" : "画面反锯齿：关",
+                picAa ? "放大画面时平滑，边角不锯齿" : "放大画面时保留硬像素（更快）", new Runnable() {
+                    @Override
+                    public void run() {
+                        Settings.setPictureAntiAlias(LibraryActivity.this, !picAa);
+                        d.dismiss();
+                        toast(!picAa ? "画面反锯齿已打开" : "画面反锯齿已关闭");
+                        displayDialog();
+                    }
+                }), Md3.gap(this, 12));
+    }
+
+    /** What the glyph cache holds right now, for the sweep row. */
+    private String glyphSummary() {
+        int[] s = GlyphSource.stats();
+        return s[0] <= 0 ? "先玩一下游戏，再回来清理"
+                : "字形缓存 " + s[0] + " 个 · " + FontKit.size(s[1]);
     }
 
 

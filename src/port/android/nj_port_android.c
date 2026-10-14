@@ -234,6 +234,7 @@ static nj_u4 android_millis(void *ud);
 typedef struct android_glyph_slot {
     nj_u2 ch;
     int   cell;
+    int   bold;                    /* the style the glyph was drawn in */
     int   w, h;
     nj_u1 rows[ANDROID_GLYPH_CELL_MAX * ANDROID_GLYPH_CELL_MAX];
 } android_glyph_slot;
@@ -248,6 +249,7 @@ typedef struct android_glyph_face {
     nj_font face;                  /* borrowed by the runtime, never freed */
     struct android_state *state;
     int   cell;                    /* the cell Java is asked to fill */
+    int   bold;                    /* this slot is the bold style */
     int   last_w;                  /* what the last lookup returned */
 } android_glyph_face;
 
@@ -290,6 +292,8 @@ typedef struct android_state {
     int   view_mode;               /* NJ_VIEW_* */
     float view_zoom;               /* multiplier on the fit scale, every mode */
     float view_dx, view_dy;        /* extra offset, window pixels, every mode */
+    int   view_filter;             /* 0 = nearest, 1 = bilinear (fractional) */
+    int   glyph_flush;             /* UI asked for the glyph cache to be dropped */
     int   view_limits_valid;       /* a frame has published the pan limits */
     int   view_max_pan_x, view_max_pan_y;  /* how far the pan may reach */
     long  frames_presented;
@@ -731,6 +735,119 @@ static nj_u4 android_pixel(const android_state *s, int wide, int lx, int ly)
 }
 
 /*
+ * The same pixel android_pixel() packed, back in three 8-bit channels.
+ *
+ * Only the anti-aliased path needs this: mixing two pixels means mixing their
+ * channels, and the packing differs between an RGBA_8888 window and a 5-6-5
+ * one.  The expansion replicates the top bits, exactly as android_pixel()
+ * does, so a round trip through here is lossless in both formats.
+ */
+static void android_channels(nj_u4 c, int wide, nj_u4 *r, nj_u4 *g, nj_u4 *b)
+{
+    if (wide) {
+        *r = c & 0xffu;
+        *g = (c >> 8) & 0xffu;
+        *b = (c >> 16) & 0xffu;
+    } else {
+        nj_u4 r5 = (c >> 11) & 0x1fu;
+        nj_u4 g6 = (c >> 5) & 0x3fu;
+        nj_u4 b5 = c & 0x1fu;
+
+        *r = (r5 << 3) | (r5 >> 2);
+        *g = (g6 << 2) | (g6 >> 4);
+        *b = (b5 << 3) | (b5 >> 2);
+    }
+}
+
+static nj_u4 android_pack(int wide, nj_u4 r, nj_u4 g, nj_u4 b)
+{
+    if (wide) {
+        return 0xff000000u | ((b & 0xffu) << 16) | ((g & 0xffu) << 8)
+               | (r & 0xffu);
+    }
+    return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+}
+
+/*
+ * Bilinear sample of the logical screen, in source coordinates.
+ *
+ * This is what the picture anti-aliasing switch buys: at a fractional scale a
+ * 240-pixel-wide screen stretched over 1080 pixels has four and a half output
+ * pixels per source pixel, and nearest neighbour makes every source pixel a
+ * visible slab.  Mixing the four neighbours softens the slabs at the cost of
+ * being the only per-pixel multiply in the presenter - which is why it is a
+ * switch the player owns and not the default.
+ *
+ * fx/fy are in logical pixels and already carry the detection crop; the
+ * half-pixel offset puts the sample at the centre of the output pixel, the
+ * usual convention, so a 1:1 stretch is the identity and turning the switch on
+ * with a whole-number scale (which never reaches here) would change nothing.
+ */
+static nj_u4 android_sample_linear(const android_state *s, int wide,
+                                   float fx, float fy, int sx0, int sy0,
+                                   int sw, int sh)
+{
+    int x0, y0, x1, y1, wx, wy, lastx, lasty;
+    nj_u4 r00, g00, b00, r10, g10, b10, r01, g01, b01, r11, g11, b11;
+    nj_u4 rt, gt, bt, rb, gb, bb, r, g, b;
+
+    if (sw < 1 || sh < 1) {
+        return 0u;
+    }
+    if (!(fx >= 0.0f)) {
+        fx = 0.0f;                  /* also catches NaN from a zero scale */
+    }
+    if (!(fy >= 0.0f)) {
+        fy = 0.0f;
+    }
+    lastx = sx0 + sw - 1;
+    lasty = sy0 + sh - 1;
+    if (fx < (float)sx0) {
+        fx = (float)sx0;
+    } else if (fx > (float)lastx) {
+        fx = (float)lastx;
+    }
+    if (fy < (float)sy0) {
+        fy = (float)sy0;
+    } else if (fy > (float)lasty) {
+        fy = (float)lasty;
+    }
+    x0 = (int)fx;
+    y0 = (int)fy;
+    x1 = (x0 + 1 <= lastx) ? x0 + 1 : x0;
+    y1 = (y0 + 1 <= lasty) ? y0 + 1 : y0;
+    wx = (int)((fx - (float)x0) * 256.0f);
+    wy = (int)((fy - (float)y0) * 256.0f);
+    if (wx < 0) {
+        wx = 0;
+    } else if (wx > 255) {
+        wx = 255;
+    }
+    if (wy < 0) {
+        wy = 0;
+    } else if (wy > 255) {
+        wy = 255;
+    }
+
+    android_channels(android_pixel(s, wide, x0, y0), wide, &r00, &g00, &b00);
+    android_channels(android_pixel(s, wide, x1, y0), wide, &r10, &g10, &b10);
+    android_channels(android_pixel(s, wide, x0, y1), wide, &r01, &g01, &b01);
+    android_channels(android_pixel(s, wide, x1, y1), wide, &r11, &g11, &b11);
+
+    rt = (r00 * (nj_u4)(256 - wx) + r10 * (nj_u4)wx) >> 8;
+    gt = (g00 * (nj_u4)(256 - wx) + g10 * (nj_u4)wx) >> 8;
+    bt = (b00 * (nj_u4)(256 - wx) + b10 * (nj_u4)wx) >> 8;
+    rb = (r01 * (nj_u4)(256 - wx) + r11 * (nj_u4)wx) >> 8;
+    gb = (g01 * (nj_u4)(256 - wx) + g11 * (nj_u4)wx) >> 8;
+    bb = (b01 * (nj_u4)(256 - wx) + b11 * (nj_u4)wx) >> 8;
+
+    r = (rt * (nj_u4)(256 - wy) + rb * (nj_u4)wy) >> 8;
+    g = (gt * (nj_u4)(256 - wy) + gb * (nj_u4)wy) >> 8;
+    b = (bt * (nj_u4)(256 - wy) + bb * (nj_u4)wy) >> 8;
+    return android_pack(wide, r, g, b);
+}
+
+/*
  * Grow the box of pixels the MIDlet has painted, one present at a time.
  *
  * This is the answer to "what resolution is this game, really?".  A title
@@ -845,12 +962,45 @@ static void android_detect(android_state *s)
     }
 }
 
+/*
+ * Throw away every cached glyph.
+ *
+ * The cache key says nothing about the typeface or the anti-aliasing it was
+ * drawn with, because it did not have to: the UI used to be unable to change
+ * either.  Now it can, so the UI asks for this instead (it sets the word, the
+ * frame does the work) and the next paint rasterises with the new settings.
+ */
+static void android_glyph_cache_flush(android_state *s)
+{
+    android_glyph_cache *c = s->glyph_cache;
+    int i;
+
+    if (!c) {
+        return;
+    }
+    for (i = 0; i < ANDROID_GLYPH_CACHE; i++) {
+        memset(&c->slot[i], 0, sizeof c->slot[i]);
+    }
+    c->next = 0;
+}
+
 static void android_display_present(void *ud, int x, int y, int w, int h)
 {
     android_state *s = AS(ud);
     ANativeWindow *win;
     ANativeWindow_Buffer buf;
     (void)x; (void)y; (void)w; (void)h;
+
+    /*
+     * A settings change (font file, anti-aliasing) asks for the glyph cache to
+     * be dropped.  Doing it here rather than in the setter keeps the cache the
+     * run thread's alone, the same way the speed word is the UI's to write and
+     * the frame's to apply.
+     */
+    if (s->glyph_flush) {
+        s->glyph_flush = 0;
+        android_glyph_cache_flush(s);
+    }
 
     /*
      * Take a reference for the duration of the frame rather than holding the
@@ -1068,6 +1218,29 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
                         }
                     }
                 }
+            } else if (s->view_filter) {
+                /* Fractional scale, smoothed (画面反锯齿 on): mix the four
+                 * neighbours of every output pixel.  Whole-number scales stay
+                 * on the branch above, because a block of a solid colour is
+                 * exact and no filter can improve it. */
+                int dy;
+                for (dy = cy0; dy < cy1; dy++) {
+                    nj_u1 *drow = (nj_u1 *)buf.bits
+                                  + (size_t)(oy + dy) * (size_t)buf.stride * bpp;
+                    float fy = (float)sy0 + ((float)dy + 0.5f) / scale - 0.5f;
+                    int dx;
+                    for (dx = cx0; dx < cx1; dx++) {
+                        float fx = (float)sx0 + ((float)dx + 0.5f) / scale
+                                   - 0.5f;
+                        nj_u4 px = android_sample_linear(s, wide, fx, fy,
+                                                         sx0, sy0, sw, sh);
+                        if (wide) {
+                            ((nj_u4 *)drow)[ox + dx] = px;
+                        } else {
+                            ((nj_u2 *)drow)[ox + dx] = (nj_u2)px;
+                        }
+                    }
+                }
             } else {
                 /* Fractional scale (铺满 and 自定义): nearest neighbour, one
                  * destination pixel at a time.  A J2ME screen is small and a
@@ -1229,7 +1402,19 @@ static const android_keymap_entry k_keymap[] = {
     { 29, NJ_KEY_GAME_A,    "A"      },   /* KEYCODE_A             */
     { 30, NJ_KEY_GAME_B,    "B"      },
     { 31, NJ_KEY_GAME_C,    "C"      },
-    { 32, NJ_KEY_GAME_D,    "D"      }
+    { 32, NJ_KEY_GAME_D,    "D"      },
+    /*
+     * Volume.  These two exist for the on-screen pad: a player whose volume
+     * rocker the game has swallowed, or whose phone sits in a grip that covers
+     * it, can put 音量+ / 音量- on the pad and press them like any other key.
+     * The runtime hands them to the MIDlet as keyPressed(24) / keyPressed(25),
+     * the codes MIDP phones used for a volume key, so a title that implements
+     * its own volume gets it.  The hardware rocker keeps doing what it has
+     * always done here (GameActivity.dispatchKeyEvent): it changes the phone's
+     * volume, because no J2ME title can be allowed to take that away.
+     */
+    { 24, NJ_KEY_VOLUP,     "Vol+"   },   /* KEYCODE_VOLUME_UP     */
+    { 25, NJ_KEY_VOLDOWN,   "Vol-"   }    /* KEYCODE_VOLUME_DOWN   */
 };
 
 #define KEYMAP_N ((int)(sizeof(k_keymap) / sizeof(k_keymap[0])))
@@ -1517,7 +1702,7 @@ static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
     c->calls++;
     for (i = 0; i < ANDROID_GLYPH_CACHE; i++) {
         if (c->slot[i].w > 0 && c->slot[i].cell == gf->cell &&
-            c->slot[i].ch == ch) {
+            c->slot[i].bold == gf->bold && c->slot[i].ch == ch) {
             slot = &c->slot[i];
             c->hits++;
             break;
@@ -1530,7 +1715,8 @@ static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
             return NULL;
         }
         arr = (jbyteArray)(*env)->CallStaticObjectMethod(
-            env, s->glyph_class, s->glyph_mid, (jint)ch, (jint)gf->cell);
+            env, s->glyph_class, s->glyph_mid,
+            (jint)ch, (jint)gf->cell, (jint)gf->bold);
         if ((*env)->ExceptionCheck(env)) {
             (*env)->ExceptionClear(env);
             c->failed++;
@@ -1560,6 +1746,7 @@ static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
         c->next = (c->next + 1) % ANDROID_GLYPH_CACHE;
         slot->ch = ch;
         slot->cell = gf->cell;
+        slot->bold = gf->bold;
         slot->w = ww;
         slot->h = hh;
         memcpy(slot->rows, tmp + 2, (size_t)(ww * hh));
@@ -1581,11 +1768,31 @@ static int android_glyph_advance(void *ud, nj_u2 ch)
 }
 
 /*
- * Build one fallback face per slot out of the built-in face of that slot.
+ * Build one platform face per slot out of the built-in face of that slot.
  *
  * The copy is the point: MIDP layout is measured against Font.getHeight(), so
  * a provider face that reported its own metrics would re-flow every screen the
  * MIDlet had already laid out.  Only the glyph hook changes.
+ *
+ * The copied face's fixed cell is then emptied, and that is the other half of
+ * the point.  A face whose cell covers ASCII is asked for the cell's advance
+ * first (nj_font.c char_width_depth) and drawn from the cell's bitmap, so with
+ * the range intact every ASCII character was charged the bundled bitmap face's
+ * fixed 8-pixel width and inked from its 1-bit table, while the platform only
+ * ever drew the wide glyphs the cell could not reach.  With the range empty the
+ * provider answers both questions for every character, which is what makes the
+ * phone's typeface the only typeface on screen.
+ *
+ * That only holds once the face is installed as the *slot* (nj_run_opts
+ * .primary_fonts): a fallback is consulted after the cell and would never see
+ * an ASCII character at all.
+ *
+ * The consequence to know about: a character the platform refuses (returns
+ * null) used to fall back to the bundled bitmap glyph; now it falls back to
+ * nothing, because this face has no fallback of its own.  For the MIDP
+ * repertoire that is the right trade - the platform draws all of it - and a
+ * missing glyph shows as a blank of the right width rather than an 8-pixel
+ * bitmap from a face that was supposed to be replaced.
  */
 static void android_glyph_init(android_state *s)
 {
@@ -1615,10 +1822,13 @@ static void android_glyph_init(android_state *s)
         gf->face.glyph_advance = android_glyph_advance;
         gf->face.coverage = 1;      /* the platform rasterises antialiased */
         gf->face.fallback = NULL;   /* this face IS the end of the chain */
+        gf->face.first_char = 1;    /* empty range: every glyph comes from Java */
+        gf->face.last_char = 0;
         gf->state = s;
         gf->cell = b->glyph_h > 0 && b->glyph_h <= ANDROID_GLYPH_CELL_MAX
                        ? b->glyph_h
                        : 12;
+        gf->bold = style == NJ_FONT_STYLE_BOLD;
         gf->last_w = 0;
         s->face_ptrs[i] = &gf->face;
     }
@@ -4038,6 +4248,7 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     s->view_mode = NJ_VIEW_INT;
     s->view_scale = 1.0f;
     s->view_zoom = 1.0f;
+    s->view_filter = 0;            /* nearest: what every port has always done */
 
     memset(out, 0, sizeof(*out));
     out->name = "android";
@@ -4363,8 +4574,17 @@ static void *android_main_thread(void *arg)
      * nativeCreate because the faces live in this run's state: two Activities
      * in one process must not share a glyph cache, and a finished run must not
      * leave a face pointing at a freed cache.
+     *
+     * Primary, not fallback: a fallback is only consulted for characters the
+     * built-in cell cannot draw, so with the faces behind the slot every ASCII
+     * character was still measured and inked by the bundled bitmap face - the
+     * Latin the player sees has to come from the phone's typeface too, which
+     * means replacing the slot.  The same faces are repeated as the fallback,
+     * so a glyph the platform itself cannot draw still ends up here.
      */
     if (s && s->glyph_mid && s->face_ptrs[0]) {
+        a->opts.primary_fonts = s->face_ptrs;
+        a->opts.primary_count = NJ_FONTSET_SLOTS;
         a->opts.fallback_fonts = s->face_ptrs;
         a->opts.fallback_count = NJ_FONTSET_SLOTS;
     }
@@ -4474,6 +4694,11 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
      * The platform's text stack, for the characters the built-in bitmap faces
      * cannot draw.  Resolved here, on the UI thread, while a class loader is
      * unambiguously the app's; the run thread only calls the cached method.
+     *
+     * (int codePoint, int px, int bold) -> coverage rows.  The style is passed
+     * rather than inferred because the runtime answers bold from a second
+     * bitmap table of its own; a platform face that was not told would draw
+     * the plain glyph twice.
      */
     {
         jclass gcls = (*env)->FindClass(env, "com/lucinhu/nj2me/GlyphSource");
@@ -4483,7 +4708,7 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
         }
         if (gcls) {
             jmethodID gmid = (*env)->GetStaticMethodID(env, gcls, "render",
-                                                       "(II)[B");
+                                                       "(III)[B");
             if ((*env)->ExceptionCheck(env)) {
                 (*env)->ExceptionClear(env);
                 gmid = NULL;
@@ -4977,6 +5202,48 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetSpeed(JNIEnv *env, jobject thiz,
         android_state *s = AS(a->port.ud);
         if (s) {
             s->speed_percent = (int)percent;
+        }
+    }
+}
+
+/*
+ * Picture anti-aliasing: 1 = mix the neighbours at a fractional scale, 0 =
+ * nearest neighbour (what every port has always done).
+ *
+ * Written by the UI thread, read by the present loop.  No lock for the same
+ * reason the speed word above has none: it is one aligned int, and the worst
+ * case of a torn read is a single frame drawn with the other filter.
+ */
+JNIEXPORT void JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeSetFilter(JNIEnv *env, jobject thiz,
+                                                    jlong handle, jint linear)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    (void)env; (void)thiz;
+    if (a) {
+        android_state *s = AS(a->port.ud);
+        if (s) {
+            s->view_filter = linear ? 1 : 0;
+        }
+    }
+}
+
+/*
+ * Drop every glyph the port has cached, so the next paint uses the typeface
+ * and anti-aliasing the settings now say.  Remembered here, carried out at the
+ * top of the next frame (see android_display_present): the cache belongs to the
+ * run thread.
+ */
+JNIEXPORT void JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeGlyphReset(JNIEnv *env, jobject thiz,
+                                                     jlong handle)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    (void)env; (void)thiz;
+    if (a) {
+        android_state *s = AS(a->port.ud);
+        if (s) {
+            s->glyph_flush = 1;
         }
     }
 }

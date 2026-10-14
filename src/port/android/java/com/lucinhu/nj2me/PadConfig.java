@@ -435,6 +435,16 @@ final class PadConfig {
             g.add(p.keys, DIGITS[i],
                   dx + (i % 3) * step, dy + (i / 3) * step, cap, cap);
         }
+        /*
+         * Volume, because this preset is "everything a pad can hold": the pad
+         * can carry 音量+ / 音量-, and pressing them hands the MIDlet the
+         * platform's own volume key codes.  They sit above the digit block, in
+         * the column its right edge leaves free - the hardware rocker is still
+         * the phone's (see GameActivity.dispatchKeyEvent), so this is the only
+         * way a game that implements its own volume gets a key for it.
+         */
+        g.addRight(p.keys, 24, 0.0f, 0.72f, cap, cap);
+        g.addRight(p.keys, 25, 0.0f, 0.835f, cap, cap);
         return p;
     }
 

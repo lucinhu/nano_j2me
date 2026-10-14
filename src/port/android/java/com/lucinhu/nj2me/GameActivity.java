@@ -97,6 +97,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     /* 沉浸模式: the player's setting, plus where the notch and bars are. */
     private boolean immersive;
     private int speed = 100;      /* game speed, percent of real time */
+    private int pictureAA;        /* 0 nearest, 1 bilinear: 画面反锯齿 */
     private int insetL, insetT, insetR, insetB;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -138,6 +139,17 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      * frame; the VM is never touched from this thread.
      */
     private static native void nativeSetSpeed(long handle, int percent);
+
+    /**
+     * Picture anti-aliasing: 1 mixes the neighbours when the picture is scaled
+     * by a fraction (铺满, 自定义), 0 is the solid-block nearest neighbour every
+     * port has always drawn.  Like the speed word above, it is applied by the
+     * present loop on its next frame.
+     */
+    private static native void nativeSetFilter(long handle, int linear);
+
+    /** Drop the glyphs the port has cached (new typeface or anti-aliasing). */
+    private static native void nativeGlyphReset(long handle);
 
     /*
      * State save/restore.  The VM runs on its own thread, so the UI thread only
@@ -265,6 +277,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         PlatformHttp.setAllowed(net);
         PlatformSocket.setAllowed(net);
         PlatformSensor.setMode(se == null ? 0 : se.sensor);
+
+        /*
+         * The player's display settings, applied before the VM exists: the
+         * glyph source is read from the VM thread on the very first frame of
+         * text, so the font and its anti-aliasing have to be in place by then.
+         */
+        applyDisplaySettings();
 
         FrameLayout root = new FrameLayout(this);
         this.root = root;
@@ -451,6 +470,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         positionHandle();
         reloadView();
         autoLayoutIfFresh();
+        applyDisplaySettings();
         MidiPlayer.resumeAll();
         applyView();
         ui.removeCallbacks(statusTick);
@@ -513,6 +533,10 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                                       JarStore.fsRoot(this).getAbsolutePath());
             if (handle != 0) {
                 nativeSetSpeed(handle, speed);
+                nativeSetFilter(handle, pictureAA);
+                /* A new MIDlet: its own vocabulary is what the subset row will
+                 * keep, so the previous game's stops being recorded here. */
+                GlyphSource.beginRun();
                 if (statePath != null) {
                     /* Read on the VM thread before the MIDlet starts: a
                      * restored VM resumes mid-method, so there is nothing to
@@ -603,10 +627,14 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         int code = ev.getKeyCode();
         boolean down = ev.getAction() == KeyEvent.ACTION_DOWN;
         /*
-         * Volume is the system's, not the MIDlet's.  A MIDP key set has no
-         * volume key, so forwarding these left the player with no way to turn
-         * the sound down - and the stream that matters here is music, which is
-         * what a game's soundtrack plays on.
+         * The hardware rocker stays the system's.  The pad can now carry 音量+
+         * / 音量- (PadConfig.full(), or any preset the player edits), and those
+         * two go to the MIDlet like every other pad key - but a physical key
+         * that the framework, the player's muscle memory and every other app
+         * agree means "the phone's volume" is not a key a J2ME title gets to
+         * swallow.  A game that wants its own volume has the pad keys, which
+         * is exactly what item 4 of this round asked for; the documented
+         * decision is that the rocker is never forwarded.
          */
         if (code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN
                 || code == KeyEvent.KEYCODE_VOLUME_MUTE) {
@@ -770,6 +798,48 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         android.widget.Toast.makeText(this, s, android.widget.Toast.LENGTH_SHORT).show();
     }
 
+    /**
+     * Push the player's display settings into the two places that need them.
+     *
+     * <p>The font ones go to {@link GlyphSource}, which the VM thread calls
+     * through JNI - set here (before the MIDlet starts) and again in
+     * {@code onResume}, because the player can change them from the panel and
+     * come back.  The picture filter goes to the native port, which reads it in
+     * its present loop.
+     */
+    private void applyDisplaySettings() {
+        /*
+         * The Java cache is emptied inside these two when something changed;
+         * the port's own cache is keyed without the typeface or the
+         * anti-aliasing, so it has to be dropped too or the old glyphs keep
+         * being drawn.
+         */
+        GlyphSource.setAntiAlias(Settings.fontAntiAlias(this));
+        GlyphSource.setFontFile(Settings.fontFile(this));
+        pictureAA = Settings.pictureAntiAlias(this) ? 1 : 0;
+        synchronized (lock) {
+            if (handle != 0) {
+                nativeSetFilter(handle, pictureAA);
+                nativeGlyphReset(handle);
+            }
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request != FontPicker.REQUEST) {
+            return;
+        }
+        if (result != RESULT_OK || data == null || data.getData() == null) {
+            return;
+        }
+        String path = FontPicker.install(this, data.getData());
+        applyDisplaySettings();
+        Log.i(TAG, path != null ? "font: using " + path : "font: not a font file");
+        toast(path != null ? "字体已更换" : "这个文件不是字体，还是用系统字体");
+    }
+
     /* ----------------------------------------------------------------- panel */
 
     /**
@@ -806,6 +876,33 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 padConfig.menuVisible
                         ? "把角上的 ≡ 收起来；按返回键还能打开这个面板"
                         : "把角上的 ≡ 放回来", false, null);
+        /*
+         * 文字 and 画面 anti-aliasing, and the font.  The switches are the
+         * player's, not this game's, so they are the same rows the library's
+         * menu offers - and they change what the VM thread reads, so they are
+         * written through Settings and re-applied here.
+         */
+        final boolean fontAA = Settings.fontAntiAlias(this);
+        final boolean picAA = Settings.pictureAntiAlias(this);
+        final String fontPath = Settings.fontFile(this);
+        int[] glyphs = GlyphSource.stats();
+        LinearLayout fontAaRow = Md3.row(this, Md3.IC_KEYS,
+                fontAA ? "关闭文字反锯齿" : "打开文字反锯齿",
+                fontAA ? "文字边缘现在是平滑的；关掉是掌机的硬边像素"
+                       : "文字边缘现在没有平滑；打开更接近现在的手机",
+                fontAA, null);
+        LinearLayout fontRow = Md3.row(this, Md3.IC_IMPORT, "更换字体…",
+                fontPath == null ? "MIDlet 的文字现在由系统字体绘制；点这里挑一个字体文件"
+                                 : "当前：" + new java.io.File(fontPath).getName()
+                                   + "（长按换回系统字体）",
+                false, null);
+        LinearLayout subsetRow = Md3.row(this, Md3.IC_TUNE, "只保留这个游戏用到的字",
+                "字形缓存 " + glyphs[0] + " 个 · " + FontKit.size(glyphs[1]), false, null);
+        LinearLayout picAaRow = Md3.row(this, Md3.IC_SCREEN,
+                picAA ? "关闭画面反锯齿" : "打开画面反锯齿",
+                picAA ? "画面现在会做平滑；关掉是原来的方块像素"
+                      : "画面缩放时是方块锯齿；铺满和自定义时打开更平滑",
+                picAA, null);
         LinearLayout save = Md3.row(this, Md3.IC_MEMORY, "保存状态",
                 "把这一局的进度存下来，回到游戏卡片里选「恢复进度」", false, null);
         LinearLayout quit = Md3.dangerRow(this, Md3.IC_POWER, "退出游戏", null);
@@ -815,6 +912,14 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(toggle);
         box.addView(Md3.divider(this));
         box.addView(fast);
+        box.addView(Md3.divider(this));
+        box.addView(fontAaRow);
+        box.addView(Md3.divider(this));
+        box.addView(fontRow);
+        box.addView(Md3.divider(this));
+        box.addView(subsetRow);
+        box.addView(Md3.divider(this));
+        box.addView(picAaRow);
         box.addView(Md3.divider(this));
         box.addView(menuRow);
         box.addView(Md3.divider(this));
@@ -854,6 +959,63 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             public void onClick(View v) {
                 dlg.dismiss();
                 speedDialog();
+            }
+        });
+        fontAaRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Settings.setFontAntiAlias(GameActivity.this, !fontAA);
+                applyDisplaySettings();
+                Log.i(TAG, "font: anti-alias " + (fontAA ? "off" : "on"));
+                dlg.dismiss();
+                toast(!fontAA ? "文字反锯齿已打开" : "文字反锯齿已关闭");
+            }
+        });
+        fontRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                dlg.dismiss();
+                FontPicker.pick(GameActivity.this);
+            }
+        });
+        /* Long-press is the way back: the row's hint says so, and a reset that
+         * needs no confirmation cannot lose anything - the picked file is a
+         * copy, and the player still has the original. */
+        fontRow.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                if (Settings.fontFile(GameActivity.this) == null) {
+                    return false;
+                }
+                FontPicker.reset(GameActivity.this);
+                applyDisplaySettings();
+                Log.i(TAG, "font: back to the system typeface");
+                dlg.dismiss();
+                toast("已换回系统字体");
+                return true;
+            }
+        });
+        subsetRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                /* What the run has actually drawn, and what dropping the rest
+                 * of the cache bought - reported, not promised. */
+                int[] r = GlyphSource.trimToUsed();
+                Log.i(TAG, "font: subset " + r[1] + " -> " + r[2] + " glyphs, "
+                        + r[3] + " -> " + r[4] + " bytes");
+                toast("字形缓存 " + r[1] + " → " + r[2] + " 个 · "
+                        + FontKit.size(r[3]) + " → " + FontKit.size(r[4]));
+                dlg.dismiss();
+            }
+        });
+        picAaRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Settings.setPictureAntiAlias(GameActivity.this, !picAA);
+                applyDisplaySettings();
+                Log.i(TAG, "picture: anti-alias " + (picAA ? "off" : "on"));
+                dlg.dismiss();
+                toast(!picAA ? "画面反锯齿已打开" : "画面反锯齿已关闭");
             }
         });
         menuRow.setOnClickListener(new View.OnClickListener() {

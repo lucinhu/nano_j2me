@@ -89,6 +89,24 @@ int     nj_vm_use_font_file(nj_vm *vm, const char *path);
 int     nj_vm_set_fallback_fonts(nj_vm *vm, const nj_font *const *fonts,
                                  int count);
 
+/*
+ * Install the port's own glyph source as the slots themselves.
+ *
+ * Where nj_vm_set_fallback_fonts() answers only for characters the built-in
+ * bitmap faces cannot draw, this one replaces those faces: the port's ink and
+ * the port's advances are used for the whole range, ASCII and CJK alike, which
+ * is what a platform whose system typeface should be the only typeface needs.
+ *
+ * Same slot layout, same borrowing rules (the faces must outlive the VM) and
+ * the same install window.  A slot keeps any fallback it already had, so both
+ * calls can be used together: the port's face as the slot, the built-in bitmap
+ * faces no longer in the way behind it.
+ *
+ * Returns 0, or -1 if vm or fonts is NULL or count is not positive.
+ */
+int     nj_vm_set_primary_fonts(nj_vm *vm, const nj_font *const *fonts,
+                                int count);
+
 nj_status nj_vm_start_app(nj_vm *vm, nj_ref midlet);  /* calls MIDlet.startApp() */
 /*
  * Create a MIDlet instance.

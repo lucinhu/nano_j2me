@@ -308,12 +308,15 @@ const nj_font *nj_midp_font_for(nj_vm *vm, nj_ref font_obj);
 #define NJ_MIDP_KEY_SOFT2    (-7)
 #define NJ_MIDP_KEY_SOFT3    (-8)
 #define NJ_MIDP_KEY_CLEAR    (-8)
-
 /*
- * The volume keys, which MIDP never had.  The port forwards the platform's own
- * codes (Android's KEYCODE_VOLUME_UP/DOWN are 24 and 25) rather than inventing
- * negative ones: they cannot collide with a MIDP key code (digits are 48..57,
- * everything else is negative).
+ * Volume keys, for a pad that carries them.
+ *
+ * MIDP never defined a key code for volume - the handset owned that key - so
+ * there is no old value to be faithful to.  The port forwards Android's own
+ * codes (KEYCODE_VOLUME_UP = 24, KEYCODE_VOLUME_DOWN = 25) rather than
+ * inventing a negative one: a title written against this port can recognise
+ * them, and they cannot collide with a MIDP code (digits are 48..57, the rest
+ * negative).
  */
 #define NJ_MIDP_KEY_VOLUP    24
 #define NJ_MIDP_KEY_VOLDOWN  25

@@ -105,6 +105,10 @@ final class KeyCatalog {
             case 4:  return "右软键";
             case 82: return "左软键";
             case 67: return "清除";
+            /* The two the pad can carry that the handset did not have a MIDP
+             * code for: they arrive as the platform's own volume key codes. */
+            case 24: return "音量+";
+            case 25: return "音量-";
             case 17: return "*";
             case 18: return "#";
             default:

@@ -155,6 +155,23 @@ void          nj_fontset_set_fallback_slots(nj_fontset *fs,
                                             const nj_font *const *fonts,
                                             int count);
 
+/*
+ * Install the port's faces as the slots themselves, rather than behind them.
+ *
+ * A fallback only answers for characters the built-in cell cannot draw.  A
+ * platform that draws Latin better than the bundled bitmap can - and should
+ * draw every character - needs to be the slot: same indexing, same NULL and
+ * count rules, but the built-in face of that slot is replaced, so both the
+ * advances and the ink come from the port.
+ *
+ * The slot keeps whatever fallback it already had, so a face installed here
+ * can still leave a chain behind it.  The face's own metrics - height, ascent,
+ * descent - become the slot's, so install before the MIDlet builds a screen.
+ */
+void          nj_fontset_set_primary_slots(nj_fontset *fs,
+                                           const nj_font *const *fonts,
+                                           int count);
+
 /* The immutable bitmap table behind a given (size, style) pair.  Exposed so a
  * port can build its own nj_font if it wants a different registry lifetime.
  * Never NULL. */

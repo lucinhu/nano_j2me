@@ -757,6 +757,19 @@ typedef struct nj_run_opts {
     const char *font_path;
 
     /*
+     * Faces for slots the platform's own text stack should *be*, not just
+     * answer behind.  A fallback is only consulted for characters the built-in
+     * cell cannot draw, so a port whose system typeface should draw Latin too
+     * has to replace the slot itself; that is what this pair does.
+     *
+     * Same indexing, same lifetime and the same install window as
+     * fallback_fonts.  Installed first, so a slot can be the platform's face
+     * and still keep a fallback chain behind it.
+     */
+    const nj_font *const *primary_fonts;
+    int         primary_count;
+
+    /*
      * Fallback faces for glyphs no built-in face can draw - how a port hands
      * the runtime the platform's own text stack instead of shipping a font.
      *

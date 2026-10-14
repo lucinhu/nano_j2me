@@ -1635,6 +1635,20 @@ int nj_vm_set_fallback_fonts(nj_vm *vm, const nj_font *const *fonts, int count)
     return 0;
 }
 
+/*
+ * Install the port's own glyph source as the slots, for a platform whose
+ * typeface should draw every character.  See include/nj2me/nj_vm.h.
+ */
+int nj_vm_set_primary_fonts(nj_vm *vm, const nj_font *const *fonts, int count)
+{
+    if (!vm || !fonts || count <= 0) {
+        return -1;
+    }
+    nj_fontset_init(&vm->fonts);
+    nj_fontset_set_primary_slots(&vm->fonts, fonts, count);
+    return 0;
+}
+
 
 nj_ref nj_vm_new_midlet(nj_vm *vm, const char *class_name, nj_ref *out_exc)
 {

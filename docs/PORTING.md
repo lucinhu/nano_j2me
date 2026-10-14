@@ -506,6 +506,50 @@ Thirteen things in that shell are worth copying, because each one is a rule a pl
   checks every preset on four screen shapes, and `PadConfigTest` checks that the
   first run is handset-sized and that the menu place survives the blob.
 
+- **Text comes from the platform, and the port is the last one to decide that.**
+  The rasteriser already consults the glyph provider first, but *measurement* did
+  not: `nj_font.c` returns the built-in cell's width for anything inside
+  `first_char..last_char`, which is exactly the ASCII range - so Latin text was
+  measured as if it came from the bundled bitmap and drawn with the phone's
+  glyphs, and a proportional face came out with every advance wrong. Emptying
+  that cell in `android_glyph_init()` (`first_char = 1, last_char = 0`) is only
+  half of it, and the half that does nothing on its own: `nj_fontset_set_
+  fallback_slots()` puts the port's faces in `.fallback`, so the primary slot -
+  and its cell - is still the built-in copy, and the empty cell is never asked.
+  The other half is a new additive hook, `nj_vm_set_primary_fonts()` (reached
+  through `nj_run_opts.primary_fonts`), which installs the port's faces *as* the
+  slots and leaves the built-in face as their `fallback` - so the platform
+  answers for ordinary text and the bundled table still catches what it cannot
+  draw. Bold is plumbed through the same path (`android_glyph_face.bold` -> the
+  Java `render()` call), and both bold and smoothing are cache-key bits; the
+  port's own 96-slot copy is keyed without either, so `nativeGlyphReset()` is
+  what makes a settings change visible - the UI sets a word, the frame clears.
+
+- **A font is a file, and a cache is a promise about memory.** `GlyphSource`
+  caches rasterised coverage in an `LruCache` sized in *entries*, which says
+  nothing about bytes - so it also reports `{entries, bytes}` and
+  `trimToUsed()` drops every glyph the current run never asked for, which is what
+  makes "keep only the characters this game uses" a real operation instead of a
+  slogan. Replacement is a copy into `filesDir` (`FontKit.storeName()` names it,
+  never the picker), a pref, and a `Typeface.createFromFile()` that throws its way
+  back to the system face; the library's 显示设置 dialog and the game's panel show
+  the same rows because they read the same prefs. Picture smoothing is the other
+  half and it has to live in the presenter: whole-number scales are a block copy
+  and stay exact, and only the fractional path samples - nearest, or a bilinear
+  tap when `android_state.view_filter` says so. Both switches reach the port the
+  way the speed does (the UI writes an int in `nativeSetFilter()`, the run thread
+  reads it), because a view setting is not worth a data race.
+
+- **A pad key can carry a code MIDP never had.** The on-screen pad can hold
+  音量+ / 音量- (`PadConfig.full()`), and those two are forwarded as the
+  platform's own key codes 24/25, labelled in `KeyCatalog`. The hardware rocker
+  is *not*: it stays the system's, which is a decision written down in
+  `GameActivity.dispatchKeyEvent` - every other app and the player's muscle
+  memory agree on what that key means, and a J2ME title is not going to take it
+  away. Two files outside the port directory had to agree on the code
+  (`nj_midp.h` and `nj_key_to_midp()`), which is the real lesson: a new key is a
+  runtime-wide constant, not a port detail.
+
 - **A switch has to be enforced where the MIDlet's connection is made.** The
   library's per-game card owns two settings, and neither is a permission: the
   network switch is enforced inside `PlatformHttp.request` and

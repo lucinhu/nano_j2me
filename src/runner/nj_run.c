@@ -832,6 +832,16 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
      * the built-in typeface is the right behaviour, but doing it silently
      * would present a wrong-looking screen as if it were what was asked for.
      */
+    if (opts->primary_fonts != NULL && opts->primary_count > 0) {
+        /*
+         * The port's own faces as the slots.  Unlike a fallback these answer
+         * for every character, Latin included, so the bundled bitmap faces
+         * step aside and the platform's typeface is the only one the MIDlet
+         * sees.  Installed before the fallback so the latter lands behind the
+         * slot rather than being the slot.
+         */
+        nj_vm_set_primary_fonts(vm, opts->primary_fonts, opts->primary_count);
+    }
     if (opts->fallback_fonts != NULL && opts->fallback_count > 0) {
         /*
          * The port's own glyph source, installed before font_path because a

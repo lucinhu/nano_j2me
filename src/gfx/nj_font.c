@@ -451,6 +451,31 @@ void nj_fontset_set_fallback_slots(nj_fontset *fs, const nj_font *const *fonts,
     }
 }
 
+void nj_fontset_set_primary_slots(nj_fontset *fs, const nj_font *const *fonts,
+                                  int count)
+{
+    int i;
+
+    if (fs == NULL || fonts == NULL) {
+        return;
+    }
+    if (!fs->initialized) {
+        nj_fontset_init(fs);
+    }
+    for (i = 0; i < count && i < fs->count && i < NJ_FONTSET_SLOTS; i++) {
+        const nj_font *fb;
+
+        if (fonts[i] == NULL) {
+            continue;
+        }
+        /* The chain already behind this slot survives the swap: a port can be
+         * the slot for every character and still leave a fallback under it. */
+        fb = fs->fonts[i].fallback;
+        fs->fonts[i] = *fonts[i];
+        fs->fonts[i].fallback = fb;
+    }
+}
+
 int nj_font_char_width(const nj_font *f, nj_u2 ch)
 {
     return char_width_depth(f, ch, 0);
