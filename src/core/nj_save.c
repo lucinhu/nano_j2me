@@ -1426,9 +1426,18 @@ static int apply_recordsB(nj_vm *vm, nj_sreader *r)
             }
             break;
         case NJ_SR_STACK:
+            /*
+             * The bound is the thread's own stack, not th->top.  top is only
+             * the allocation frontier: when a frame returns, nj_frame_pop()
+             * leaves top at that frame's locals, and the caller then pushes
+             * its own operands above it.  Those slots are part of the image
+             * (save_threads walks each frame up to its sp), so a slot inside
+             * stack_mem..stack_end is fair game - rejecting it here is what
+             * made every restore of a real game fail with NJ_ERR_FORMAT.
+             */
             if (b >= (nj_u4)NJ_MAX_STACK_SLOTS ||
-                vm->threads[a]->stack_mem + b >= vm->threads[a]->top) {
-                return 0;            /* outside the saved live stack */
+                vm->threads[a]->stack_mem + b >= vm->threads[a]->stack_end) {
+                return 0;            /* outside the thread's stack */
             }
             vm->threads[a]->stack_mem[b].r = ref_at(vm, v);
             break;
