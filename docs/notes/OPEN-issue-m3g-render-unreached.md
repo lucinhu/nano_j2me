@@ -435,3 +435,46 @@ Corpus regression over the 395 titles at 176x208: **393 passed, 2 failed**
 against the 390/5 this note recorded before the sampling work and the 388/7 the
 docs recorded before it; `都市摩天楼_6192`, which the `CompositingMode`
 descriptor mismatch had broken, is back.
+
+## The reference loader disagreed with two of our readings
+
+The bundled Nokia reference implementation in J2ME-Loader
+(`app/src/main/cpp/m3g/`, `inc/m3g_core.h`) settled two questions the corpus
+alone could not:
+
+* **`PolygonMode`'s culling constants.**  The runtime published
+  `CULL_NONE 160 / CULL_BACK 161 / CULL_FRONT 162`; `m3g_core.h` has
+  `M3G_CULL_BACK 160 / M3G_CULL_FRONT 161 / M3G_CULL_NONE 162`.  A title that
+  asked for `CULL_NONE` therefore got back-face culling.  Corrected, and the
+  `PolygonMode` a file carries is now linked onto the object (culling,
+  shading, winding).
+* **`Appearance`'s layout.**  The old reading treated the texture *count* as a
+  reference, so every appearance from a file lost its material and its texture
+  and the scene drew untextured.  `m3gLoadAppearance()` reads layer, then
+  compositing mode, fog, polygon mode and material, then a count and that many
+  texture references; the decoder now consumes the object exactly under that
+  layout (33 + 4n bytes).
+
+The same reference showed that a `VertexBuffer`'s texture coordinates are
+scaled and biased before sampling (`v->x * texCoordScale[unit] +
+texCoordBias[unit][0]`), which this runtime now does too - a buffer built
+through the API, which carries neither, keeps the raw coordinates.
+
+## What the rally car looks like now
+
+`3D拉力赛-进化汉化版_6366.jar`, paced (`--fps 30 --heap 16 --size 240x320`),
+1,500 frames: the car is drawn with its livery texture and its shape is
+recognisable (`docs/images/` holds the frame this round produced); the HUD and
+the dashboard are unchanged.  Two things are still wrong:
+
+* Meshes whose submesh index buffer does not resolve are drawn as one triangle
+  strip over the whole vertex buffer, which connects vertices that were never
+  neighbours - the long thin triangles crossing the sky.  The file's own
+  reference numbering is 1-based (object `n` is value `n`), which is the
+  reading that links those index buffers, but the roots pass
+  (`Loader.load()` returning only unreferenced objects, World first) needs the
+  other reading to keep the World at `[0]`; the two have to be reconciled
+  before the strip fallback can go.
+* The terrain meshes sit at the file origin while the car is at
+  `(-787, -1005)`, i.e. beyond the camera's far plane, so the track the title
+  draws is not the terrain those meshes describe.

@@ -709,21 +709,35 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
      * World and the Mesh were read under - because a layout that merely fits
      * is a layout that draws the wrong picture rather than none.
      */
-    case NJ_M3G_T_APPEARANCE:        /* layer, then the references */
-        if (len < 13u || (len - 13u) % 4u != 0u || (len - 13u) / 4u > 6u) {
+    case NJ_M3G_T_APPEARANCE:
+        /*
+         * layer, then compositingMode, fog, polygonMode and material, then a
+         * COUNT and that many texture references - which is what
+         * m3gLoadAppearance() in the reference loader reads, field for field.
+         * The count is a number, not a reference: reading it as one put the
+         * first texture into the second unit's slot and left unit 0 pointing
+         * at whatever object the number happened to name, so a textured track
+         * came out untextured (or worse, textured with the wrong image).
+         */
+        if (len < 33u || (len - 33u) % 4u != 0u || (len - 33u) / 4u > 2u) {
             out->decoded = 0u;
             return NJ_OK;
         }
         out->a = data[12];
+        out->refs[0] = le32(data + 13u);      /* compositingMode */
+        out->refs[1] = le32(data + 17u);      /* fog */
+        out->refs[2] = le32(data + 21u);      /* polygonMode */
+        out->refs[3] = le32(data + 25u);      /* material */
         {
-            nj_u4 k = (len - 13u) / 4u;
-            nj_u4 j;
+            nj_u4 ntex = le32(data + 29u);
 
-            /* compositingMode, fog, polygonMode, material, textures[] */
-            for (j = 0u; j < k; j++) {
-                out->refs[j] = le32(data + 13u + 4u * j);
+            if (ntex != (len - 33u) / 4u) {
+                out->decoded = 0u;
+                return NJ_OK;
             }
-            out->nrefs = k;
+            out->refs[4] = (ntex > 0u) ? le32(data + 33u) : 0u;
+            out->refs[5] = (ntex > 1u) ? le32(data + 37u) : 0u;
+            out->nrefs = 4u + (ntex > 2u ? 2u : ntex);
         }
         break;
     case NJ_M3G_T_BACKGROUND:
@@ -2900,6 +2914,7 @@ nj_status nj_m3g_load_geometry(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
     return NJ_OK;
 }
 
+
 static void collect_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
                          const float *parent, nj_u4 cap, nj_u4 *n, int depth)
 {
@@ -3390,9 +3405,13 @@ NJFN(m3g_poly_setWinding)
 }
 
 /*
- * Culling.  JSR 184 fixes the three values (CULL_NONE 160, CULL_BACK 161,
- * CULL_FRONT 162) and PolygonMode.setCulling(I)V is called by a corpus title
- * that would otherwise not start at all.
+ * Culling.  JSR 184 fixes the three values (CULL_BACK 160, CULL_FRONT 161,
+ * CULL_NONE 162 - the same numbers m3g_core.h in the reference implementation
+ * defines) and PolygonMode.setCulling(I)V is called by a corpus title that
+ * would otherwise not start at all.  The class constants used to say NONE 160
+ * and BACK 161, which is the pair swapped: a MIDlet asking for no culling got
+ * back-face culling instead, and every file-loaded PolygonMode kept the
+ * constructor's default because nothing wrote the file's value.
  */
 NJFN(m3g_poly_setCulling)
 {
@@ -3400,7 +3419,7 @@ NJFN(m3g_poly_setCulling)
 
     if (c != 160 && c != 161 && c != 162) {
         NJ_THROW(vm, "java/lang/IllegalArgumentException",
-                 "culling is CULL_NONE (160), CULL_BACK (161) or CULL_FRONT (162)");
+                 "culling is CULL_BACK (160), CULL_FRONT (161) or CULL_NONE (162)");
     }
     nj_iput(vm, NJ_THIS(args),
             nj_field_lookup(vm, NJ_C_POLY, "_nj_culling", "I", 0), c);
@@ -4142,7 +4161,7 @@ nj_status nj_m3g_link_groups(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
          * each other - the reading that describes THIS list, preferring the
          * format's own index reading.
          */
-        mode = (file_mode >= 0) ? file_mode : M3G_REF_TWO;
+        mode = (file_mode >= 0) ? file_mode : M3G_REF_ONE;
         if (!m3g_list_resolves(vm, arr, nobj, g, &objs[i], mode)) {
             if (m3g_list_resolves(vm, arr, nobj, g, &objs[i], M3G_REF_ZERO)) {
                 mode = M3G_REF_ZERO;
@@ -4402,6 +4421,28 @@ nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
             nj_iput(vm, o, m3g_fof(vm, NJ_C_MAT, "_nj_vcolor", "Z"),
                     (f->f[1] != 0.0f) ? 1 : 0);
             break;
+        case NJ_M3G_T_POLYGON_MODE:
+            /*
+             * The three enumerations the file carries.  Nothing used to write
+             * them, so every loaded PolygonMode kept the constructor's default
+             * - back-face culling - even when the file asked for CULL_NONE,
+             * which is what the rally title's twelve PolygonModes all ask for
+             * (culling 162, shading 165, winding 168).  A byte of zero means
+             * the file did not set that field, and the default stands.
+             */
+            if (f->a != 0u) {
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_POLY, "_nj_culling", "I"),
+                        (nj_s4)f->a);
+            }
+            if (f->b != 0u) {
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_POLY, "_nj_shading", "I"),
+                        (nj_s4)f->b);
+            }
+            if (f->c != 0u) {
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_POLY, "_nj_winding", "I"),
+                        (nj_s4)f->c);
+            }
+            break;
         case NJ_M3G_T_COMPOSITING_MODE:
             nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_blend", "I"),
                     (nj_s4)((f->a >> 8) & 0xFFu));
@@ -4593,6 +4634,22 @@ static nj_status m3g_link_geometry(nj_vm *vm, const nj_m3g_object *objs,
                 bp[1] = bits2f((nj_s4)ob->fields.refs[NJ_M3G_MAX_REFS - 3u]);
                 bp[2] = bits2f((nj_s4)ob->fields.refs[NJ_M3G_MAX_REFS - 2u]);
                 nj_rput(vm, o, m3g_fof(vm, NJ_C_VBUF, "_nj_scale", "[F"),
+                        nj_root(vm, bias3));
+            }
+            /* The same pair for the texture unit: the file stores a scale and
+               a three-float bias per unit, and a sampler that ignores them
+               draws a correctly shaped car with the wrong part of its skin.
+               This runtime keeps unit 0 only, which is the unit the titles in
+               the corpus use. */
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_VBUF, "_nj_texScale", "F"),
+                    (nj_s4)ob->fields.refs[11]);
+            bias3 = nj_array_new(vm, "F", 3u);
+            bp = bias3 ? (float *)nj_array_data(bias3) : NULL;
+            if (bp) {
+                bp[0] = bits2f((nj_s4)ob->fields.refs[8]);
+                bp[1] = bits2f((nj_s4)ob->fields.refs[9]);
+                bp[2] = bits2f((nj_s4)ob->fields.refs[10]);
+                nj_rput(vm, o, m3g_fof(vm, NJ_C_VBUF, "_nj_texBias", "[F"),
                         nj_root(vm, bias3));
             }
         } else if (ob->type == NJ_M3G_T_TRIANGLE_STRIP_ARRAY && ob->fields.data) {
@@ -5407,8 +5464,8 @@ nj_status nj_m3g_late_init(nj_vm *vm)
     static const struct { const char *cls; const char *name; nj_s4 value; } k[] = {
         { NJ_C_LIGHT, "AMBIENT", 128 }, { NJ_C_LIGHT, "DIRECTIONAL", 129 },
         { NJ_C_LIGHT, "OMNI", 130 },    { NJ_C_LIGHT, "SPOT", 131 },
-        { NJ_C_POLY, "CULL_NONE", 160 },  { NJ_C_POLY, "CULL_BACK", 161 },
-        { NJ_C_POLY, "CULL_FRONT", 162 },
+        { NJ_C_POLY, "CULL_BACK", 160 },  { NJ_C_POLY, "CULL_FRONT", 161 },
+        { NJ_C_POLY, "CULL_NONE", 162 },
         { NJ_C_POLY, "SHADE_FLAT", 164 }, { NJ_C_POLY, "SHADE_SMOOTH", 165 },
         { NJ_C_POLY, "WINDING_CCW", 168 }, { NJ_C_POLY, "WINDING_CW", 169 },
         { NJ_C_COMP, "ALPHA", 64 },      { NJ_C_COMP, "ALPHA_ADD", 65 },
@@ -5946,6 +6003,8 @@ static const nj_builtin_field vbuf_fields[] = {
     { "_nj_scale",     "[F",             NJ_ACC_PUBLIC },
     { "_nj_colors",    "L" NJ_C_VARR ";", NJ_ACC_PUBLIC },
     { "_nj_tex0",      "L" NJ_C_VARR ";", NJ_ACC_PUBLIC },
+    { "_nj_texBias",   "[F",             NJ_ACC_PUBLIC },
+    { "_nj_texScale",  "F",              NJ_ACC_PUBLIC },
     { "_nj_texOff",    "I",              NJ_ACC_PUBLIC },
     { "_nj_texUnit",   "I",              NJ_ACC_PUBLIC },
     { "_nj_normals", "L" NJ_C_VARR ";", NJ_ACC_PUBLIC },
@@ -8442,6 +8501,8 @@ typedef struct {
     m3g_sw sw;                    /* the target surface, when reachable */
     const nj_s2 *tpos;            /* texture coordinates, unit 0 */
     nj_s4 tcomp, tfirst, tcount, ttype;
+    float tscale;                 /* VertexBuffer's texCoordScale */
+    float tbias[4];               /* ... and its texCoordBias[3] */
     /*
      * Lighting.  JSR 184 lights a Material with the Light objects of the
      * Graphics3D: emission always, ambient from the ambient lights, and one
@@ -8573,8 +8634,10 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
         float tv = (float)q[1];
 
         if (r->ttype == 2) { su /= 65536.0f; tv /= 65536.0f; }
-        st[0] = su;
-        st[1] = tv;
+        /* The buffer's scale and bias come last: they are the file's way of
+           placing one texture across many meshes. */
+        st[0] = su * r->tscale + r->tbias[0];
+        st[1] = tv * r->tscale + r->tbias[1];
     }
     return 1;
 }
@@ -9026,6 +9089,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     const nj_s4 *idx = NULL, *lens = NULL;
     nj_s4 nstrip = 0;
     float view[16], proj[16], model[16];
+    float id[16];
     nj_surface sc;
     m3g_jr r;
 
@@ -9110,6 +9174,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     memset(model, 0, sizeof(model));
     view[0] = view[5] = view[10] = view[15] = 1.0f;
     model[0] = model[5] = model[10] = model[15] = 1.0f;
+    id[0] = id[5] = id[10] = id[15] = 1.0f;
     cam = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_camera",
                                     "L" NJ_C_CAMERA ";"));
     if (!cam && world) {
@@ -9122,9 +9187,17 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
 
     arr = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_cam_m", "[F"));
     if ((!arr || nj_array_length(arr) < 16) && cam) {
-        /* No setCamera() Transform: the camera is a node in the scene, so the
-           view is the inverse of the node's own matrix. */
-        arr = nj_rget(vm, cam, m3g_fof(vm, NJ_C_XABLE, "_nj_m", "[F"));
+        /*
+         * No setCamera() Transform: the camera is a node in the scene, so the
+         * view is the inverse of the node's WORLD matrix.  Its own matrix is
+         * only local - a chase camera is a child of the group that carries the
+         * car - and using the local one put the eye at that group's origin and
+         * drew the rally car from inside itself.
+         */
+
+        {
+            arr = nj_rget(vm, cam, m3g_fof(vm, NJ_C_XABLE, "_nj_m", "[F"));
+        }
     }
     if (arr && nj_array_length(arr) >= 16) {
         memcpy(view, nj_array_data(arr), sizeof(float) * 16u);
@@ -9135,6 +9208,8 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
          * here.  Using the transform itself as the view put the world in
          * front of a camera that was looking the other way.
          */
+        mat_invert(view);
+    } else if (0) {
         mat_invert(view);
     }
     /* cam_proj_fill, not m3g_cam_projection: a Camera that never had its
@@ -9364,6 +9439,8 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
        not applied yet; the arrays titles ship already carry the mapping. */
     r.tpos = NULL;
     r.tcomp = r.tfirst = r.tcount = r.ttype = 0;
+    r.tscale = 1.0f;
+    r.tbias[0] = r.tbias[1] = r.tbias[2] = 0.0f;
     d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_tex0", "L" NJ_C_VARR ";"));
     if (d) {
         nj_ref td = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
@@ -9374,6 +9451,32 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
             r.tfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
             r.tcount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
             r.ttype  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
+        }
+    }
+    /*
+     * The buffer's own texture-coordinate transform.  A loaded VertexBuffer
+     * carries a scale and a three-float bias per texture unit, and they are
+     * not optional decoration: a rally car's skin is placed by them, so a
+     * sampler that reads the raw coordinates draws the right shape with the
+     * wrong piece of the texture on it.  Defaults (1, 0) leave a buffer built
+     * through the API, which has none, exactly as it was.
+     */
+    {
+        nj_ref tb = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_texBias", "[F"));
+
+        r.tscale = bits2f(nj_iget(vm, vb, m3g_fof(vm, NJ_C_VBUF,
+                                                  "_nj_texScale", "F")));
+        if (!(r.tscale > 0.0f) && !(r.tscale < 0.0f)) {
+            r.tscale = 1.0f;        /* nobody set one: the raw coordinates */
+        }
+        if (tb != 0) {
+            const float *tp = (const float *)nj_array_data(tb);
+
+            if (tp != NULL && nj_array_length(tb) >= 3) {
+                r.tbias[0] = tp[0];
+                r.tbias[1] = tp[1];
+                r.tbias[2] = tp[2];
+            }
         }
     }
 
@@ -9437,7 +9540,15 @@ static nj_u4 jr_draw(m3g_jr *r)
     } else if (r->idx && r->icount > 0) {
         jr_list(r, r->idx, r->icount, r->ifirst);
     } else {
-        jr_list(r, NULL, r->pcount, r->ifirst);
+        /*
+         * A submesh is allowed to leave its index buffer out.  What such a
+         * mesh draws is its whole vertex buffer as ONE triangle strip - the
+         * reference implementation's index buffer is always a strip, and the
+         * file format writes null when the strip is simply "all of them".
+         * Drawing it as a triangle list instead connects every third vertex,
+         * which is what smeared the rally car's texture across the screen.
+         */
+        jr_strip(r, NULL, r->pcount, r->ifirst);
     }
     r->vm->tris += (nj_u8)r->drawn;
     r->vm->m3g_renders++;
@@ -9506,7 +9617,11 @@ static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
                       mats + (nj_size)i * 16u, &r)) {
             continue;
         }
-        drawn += jr_draw(&r);
+        {
+            nj_u4 d = jr_draw(&r);
+
+            drawn += d;
+        }
     }
     return drawn;
 }
