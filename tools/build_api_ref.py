@@ -96,6 +96,19 @@ CLASSES = [
     ("midp-2.0", "javax/microedition/io/OutputConnection"),
     ("midp-2.0", "javax/microedition/io/StreamConnection"),
     ("midp-2.0", "javax/microedition/io/HttpConnection"),
+    # The Nokia UI API, because it is the one vendor extension the collected
+    # titles call in numbers: 83 of the 395 reference FullCanvas, 74
+    # DirectGraphics, 73 DirectUtils and 14 Sound.  A vendor class that is
+    # missing is caught by the title (it wraps the call in a try), but a vendor
+    # METHOD that is missing is a NoSuchMethodError in the middle of a frame -
+    # the same silent-gap shape as java.lang.Integer.toString().
+    ("Nokia_UI_API_1_1", "com/nokia/mid/ui/FullCanvas"),
+    ("Nokia_UI_API_1_1", "com/nokia/mid/ui/DirectGraphics"),
+    ("Nokia_UI_API_1_1", "com/nokia/mid/ui/DirectUtils"),
+    ("Nokia_UI_API_1_1", "com/nokia/mid/ui/DeviceControl"),
+    ("Nokia_UI_API_1_1", "com/nokia/mid/ui/DirectGraphicsImplemented"),
+    ("Nokia_UI_API_1_1", "com/nokia/mid/sound/Sound"),
+    ("Nokia_UI_API_1_1", "com/nokia/mid/sound/SoundListener"),
 ]
 
 PRIMITIVE = {

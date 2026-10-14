@@ -798,6 +798,91 @@ CLASSES = {
         "methods": ["protected FullCanvas()",
                     "protected FullCanvas(boolean)"],
     },
+    # The Nokia drawing extensions.  DirectGraphics is a Graphics in disguise -
+    # DirectUtils.getDirectGraphics() hands the same object back - and it is how
+    # a title writes pixels itself: 74 of the collected titles call it, 73 call
+    # DirectUtils, and the two are what a sprite engine uses when it wants to
+    # touch the frame buffer directly.
+    "com/nokia/mid/ui/DirectGraphics": {
+        "interface": True,
+        "constants": {"FLIP_HORIZONTAL": "0x2000", "FLIP_VERTICAL": "0x4000",
+                      "ROTATE_90": "90", "ROTATE_180": "180",
+                      "ROTATE_270": "270",
+                      "TYPE_BYTE_1_GRAY": "1", "TYPE_BYTE_1_GRAY_VERTICAL": "2",
+                      "TYPE_BYTE_2_GRAY": "3", "TYPE_BYTE_4_GRAY": "4",
+                      "TYPE_BYTE_8_GRAY": "5", "TYPE_BYTE_332_RGB": "6",
+                      "TYPE_USHORT_4444_ARGB": "7", "TYPE_USHORT_444_RGB": "8",
+                      "TYPE_USHORT_555_RGB": "9", "TYPE_USHORT_565_RGB": "10",
+                      "TYPE_INT_888_RGB": "11", "TYPE_INT_8888_ARGB": "12"},
+        "methods": [
+            "void setARGBColor(int)",
+            "int getNativePixelFormat()",
+            "void drawImage(javax.microedition.lcdui.Image, int, int, int, int)",
+            "void drawImage(int[], int, int, int, int)",
+            "void drawTriangle(int, int, int, int, int, int, int)",
+            "void fillTriangle(int, int, int, int, int, int, int)",
+            "void drawPolygon(int[], int, int[], int, int, int)",
+            "void fillPolygon(int[], int, int[], int, int, int)",
+            "void drawPixels(short[], boolean, int, int, int, int, int, int, int, int)",
+            "void drawPixels(int[], boolean, int, int, int, int, int, int, int, int)",
+            "void drawPixels(byte[], byte[], int, int, int, int, int, int, int, int)",
+            "void getPixels(short[], int, int, int, int, int, int, int)",
+            "void getPixels(int[], int, int, int, int, int, int, int)",
+            "void getPixels(byte[], byte[], int, int, int, int, int, int, int)",
+            "int getAlphaComponent()",
+        ],
+    },
+    "com/nokia/mid/ui/DirectUtils": {
+        "methods": [
+            "public static javax.microedition.lcdui.Image createImage(int, int)",
+            "public static javax.microedition.lcdui.Image createImage(int, int, int)",
+            "public static javax.microedition.lcdui.Image createImage(byte[], int, int)",
+            "public static com.nokia.mid.ui.DirectGraphics getDirectGraphics(javax.microedition.lcdui.Graphics)",
+        ],
+    },
+    # The side effects: vibration, the notification lights, the backlight.  Ten
+    # titles call DeviceControl, and on a device every call is a side effect
+    # with nothing to observe afterwards - which is exactly why a stub is
+    # enough to compile against.
+    "com/nokia/mid/ui/DeviceControl": {
+        "methods": [
+            "public static void setLights(int, int)",
+            "public static void setLights(int, int, int)",
+            "public static void flashLights(long)",
+            "public static void flashLights(int)",
+            "public static void vibrate(int)",
+            "public static void startVibra(int, long)",
+            "public static void stopVibra()",
+            "public static void setScreenState(boolean)",
+        ],
+    },
+    # The Nokia sound API: the Series 40 way to play a tone or a WAV before
+    # MIDP 2.0's Manager existed.  Fourteen titles call it.
+    "com/nokia/mid/sound/SoundListener": {
+        "interface": True,
+        "methods": ["void soundStateChanged(com.nokia.mid.sound.Sound, int)"],
+    },
+    "com/nokia/mid/sound/Sound": {
+        "constants": {"FORMAT_TONE": "1", "FORMAT_WAV": "5",
+                      "SOUND_PLAYING": "1", "SOUND_STOPPED": "0",
+                      "SOUND_UNINITIALIZED": "-1"},
+        "methods": [
+            "public Sound(int, long)",
+            "public Sound(byte[], int)",
+            "public void init(int, long)",
+            "public void init(byte[], int)",
+            "public void play(int)",
+            "public void stop()",
+            "public void resume()",
+            "public void release()",
+            "public void setGain(int)",
+            "public int getGain()",
+            "public int getState()",
+            "public void setSoundListener(com.nokia.mid.sound.SoundListener)",
+            "public static int getConcurrentSoundCount(int)",
+            "public static int[] getSupportedFormats()",
+        ],
+    },
     # The Nokia multipoint-touch extension.  One listener interface with two
     # callbacks: a device either has a multitouch panel or it does not, and a
     # Canvas that implements this and never receives a callback behaves exactly

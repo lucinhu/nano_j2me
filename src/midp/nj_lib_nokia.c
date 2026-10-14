@@ -228,6 +228,69 @@ NJFN(nokia_snd_getState)
     return NJ_OK;
 }
 
+/*
+ * resume(): carry on with a sound that is not playing.  This runtime has no
+ * paused state of its own - play() is what the port's audio path answers to -
+ * so a sound that is not playing is started again, which is what a game that
+ * calls resume() is asking for.
+ */
+NJFN(nokia_snd_resume)
+{
+    nj_field *f = snd_field(vm, "state");
+    nj_s4 st = f ? nj_field_read_int(vm, NJ_THIS(args), f) : 0;
+
+    if (st == 1) {                  /* SOUND_PLAYING */
+        return NJ_OK;
+    }
+    if (f) {
+        nj_field_write_int(vm, NJ_THIS(args), f, 1);   /* SOUND_PLAYING */
+    }
+    snd_notify(vm, NJ_THIS(args), 1);
+    return NJ_OK;
+}
+
+NJFN(nokia_snd_getGain)
+{
+    nj_field *f = snd_field(vm, "gain");
+    ret->i = f ? nj_field_read_int(vm, NJ_THIS(args), f) : 0;
+    return NJ_OK;
+}
+
+/*
+ * getConcurrentSoundCount(int format): how many sounds of that format can play
+ * at once.  The port's audio hook is a single mixer, so the honest answer is
+ * one - a game reads this to decide whether the music has to stop before a
+ * sound effect.
+ */
+NJFN(nokia_snd_concurrent)
+{
+    (void)args;
+    ret->i = 1;
+    return NJ_OK;
+}
+
+/*
+ * getSupportedFormats(): the Nokia format constants init() accepts.
+ * FORMAT_TONE (1) and FORMAT_WAV (5) are both real here - the port has a tone
+ * path and a PCM path - so both are advertised.
+ */
+NJFN(nokia_snd_formats)
+{
+    nj_ref a = nj_int_array_new(vm, 2u);
+    nj_s4 *p;
+
+    if (!a) {
+        return nj_throw_oom(vm);
+    }
+    p = (nj_s4 *)a->u.bytes;
+    if (p) {
+        p[0] = 1;                   /* FORMAT_TONE */
+        p[1] = 5;                   /* FORMAT_WAV  */
+    }
+    ret->r = a;
+    return NJ_OK;
+}
+
 #define M(name, desc, flags) { name, desc, flags }
 
 static const nj_builtin_method mplisten_methods[] = {
@@ -270,6 +333,10 @@ static const nj_builtin_method sound_methods[] = {
     M("stop",          "()V",   0),
     M("setGain",       "(I)V",  0),
     M("getState",      "()I",   0),
+    M("resume",       "()V",   0),
+    M("getGain",      "()I",   0),
+    M("getConcurrentSoundCount", "(I)I", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("getSupportedFormats", "()[I", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     /* Only one game in the corpus calls this, and it implements the
      * listener itself: the interface has to exist or that class cannot
      * even be loaded. */
@@ -394,6 +461,24 @@ NJFN(nokia_du_createImage2)
 }
 
 /*
+ * createImage(byte[] data, int offset, int length): the vendor spelling of
+ * Image.createImage(data, offset, length).  A title hands Nokia the same bytes
+ * it would hand MIDP, so this goes straight to the MIDP path rather than
+ * through a second decoder that could disagree with it.
+ */
+NJFN(nokia_du_createImage)
+{
+    nj_value a[3];
+
+    a[0] = args[0];
+    a[1] = args[1];
+    a[2] = args[2];
+    ret->r = nj_call_ref(vm, NULL, NJ_DU_IMAGE_CLS, "createImage",
+                         "([BII)" NJ_DU_IMAGE_DESC, a);
+    return ret->r ? NJ_OK : NJ_ERR;
+}
+
+/*
  * getDirectGraphics(Graphics) returns that same Graphics - see the note above
  * the interface table for why that is the whole implementation.
  */
@@ -422,17 +507,23 @@ static const nj_builtin_method dgraphics_methods[] = {
     M("getNativePixelFormat", "()I",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
     M("drawImage",  "(L" NJ_C_IMAGE ";IIII)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
     M("fillTriangle", "(IIIIIII)V",     NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("drawTriangle", "(IIIIIII)V",     NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
     M("drawPolygon", "([II[IIII)V",     NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
     M("fillPolygon", "([II[IIII)V",     NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
     M("drawPixels",  "([SZIIIIIIII)V",  NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
     M("getPixels",   "([SIIIIIII)V",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
     M("getPixels", "([IIIIIIII)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
-    M("drawImage",   "([IIII)V",        NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
+    M("drawImage",   "([IIII)V",        NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("drawPixels",  "([IZIIIIIIII)V",  NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("drawPixels",  "([B[BIIIIIIII)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("getPixels",   "([B[BIIIIIII)V",  NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
+    M("getAlphaComponent", "()I",       NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT)
 };
 
 static const nj_builtin_method dutils_methods[] = {
     M("createImage", "(II)Ljavax/microedition/lcdui/Image;", NJ_ACC_STATIC),
     M("createImage", "(III)Ljavax/microedition/lcdui/Image;", NJ_ACC_STATIC),
+    M("createImage", "([BII)Ljavax/microedition/lcdui/Image;", NJ_ACC_STATIC),
     M("getDirectGraphics",
       "(Ljavax/microedition/lcdui/Graphics;)L" NJ_C_DGRAPHICS ";",
       NJ_ACC_STATIC)
@@ -456,6 +547,9 @@ static const nj_builtin_method devctl_methods[] = {
     M("setLights",       "(III)V", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("flashLights",     "(I)V",   NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("vibrate",         "(I)V",   NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("startVibra",      "(IJ)V",  NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("stopVibra",       "()V",    NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("flashLights",     "(J)V",   NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("setScreenState",  "(Z)V",   NJ_ACC_STATIC | NJ_ACC_PUBLIC)
 };
 
@@ -464,6 +558,38 @@ NJFN(nokia_dc_ok)
     (void)vm;
     (void)args;
     (void)ret;
+    return NJ_OK;
+}
+
+/*
+ * startVibra(frequency, duration) / stopVibra(): the Nokia UI API's second
+ * shape for the side effect vibrate() performs.  The frequency argument has no
+ * meaning for a port whose hook takes milliseconds, so it is ignored, and
+ * stopVibra() is a zero-length buzz.  The light calls stay no-ops for the
+ * reason above the table: a game that flashes on a hit is playable without the
+ * light, and refusing the call would take the whole game down for a missing
+ * lamp.
+ */
+NJFN(nokia_dc_startVibra)
+{
+    nj_s4 ms = NJ_ARG_INT(args, 1);
+
+    if (ms < 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "negative duration");
+    }
+    if (vm->port && vm->port->vibrate) {
+        vm->port->vibrate(vm->port->ud, (int)ms);
+    }
+    return NJ_OK;
+}
+
+NJFN(nokia_dc_stopVibra)
+{
+    (void)args;
+    if (vm->port && vm->port->vibrate) {
+        vm->port->vibrate(vm->port->ud, 0);
+    }
     return NJ_OK;
 }
 
@@ -522,6 +648,9 @@ const nj_native_entry nj_lib_nokia_table[] = {
     { NJ_C_DEVCTL, "setLights",      "(III)V", nokia_dc_ok },
     { NJ_C_DEVCTL, "flashLights",    "(I)V",   nokia_dc_ok },
     { NJ_C_DEVCTL, "vibrate",        "(I)V",   nokia_dc_ok },
+    { NJ_C_DEVCTL, "startVibra",     "(IJ)V",  nokia_dc_startVibra },
+    { NJ_C_DEVCTL, "stopVibra",      "()V",    nokia_dc_stopVibra },
+    { NJ_C_DEVCTL, "flashLights",    "(J)V",   nokia_dc_ok },
     { NJ_C_DEVCTL, "setScreenState", "(Z)V",   nokia_dc_ok },
     { NJ_C_VKEYBOARD, "hideOpenKeypadCommand", "(Z)V", nokia_vk_hide },
     { NJ_C_VKEYBOARD, "showOpenKeypadCommand", "(Z)V", nokia_vk_show },
@@ -544,6 +673,10 @@ const nj_native_entry nj_lib_nokia_table[] = {
     { NJ_C_SOUND, "stop",    "()V",   nokia_snd_stop },
     { NJ_C_SOUND, "setGain", "(I)V",  nokia_snd_setGain },
     { NJ_C_SOUND, "getState","()I",   nokia_snd_getState },
+    { NJ_C_SOUND, "resume",   "()V",  nokia_snd_resume },
+    { NJ_C_SOUND, "getGain",  "()I",  nokia_snd_getGain },
+    { NJ_C_SOUND, "getConcurrentSoundCount", "(I)I", nokia_snd_concurrent },
+    { NJ_C_SOUND, "getSupportedFormats",     "()[I", nokia_snd_formats },
     { NJ_C_SOUND, "release", "()V",   nokia_snd_stop },
     { NJ_C_FSDETAIL, "getUrl",  "()Ljava/lang/String;", nokia_fsd_getUrl },
     { NJ_C_FSDETAIL, "getName", "()Ljava/lang/String;", nokia_fsd_getName },
@@ -551,6 +684,8 @@ const nj_native_entry nj_lib_nokia_table[] = {
       nokia_du_createImage2 },
     { NJ_C_DUTILS, "createImage", "(III)" NJ_DU_IMAGE_DESC,
       nokia_du_createImage3 },
+    { NJ_C_DUTILS, "createImage", "([BII)" NJ_DU_IMAGE_DESC,
+      nokia_du_createImage },
     { NJ_C_DUTILS, "getDirectGraphics",
       "(Ljavax/microedition/lcdui/Graphics;)L" NJ_C_DGRAPHICS ";",
       nokia_du_getDirectGraphics },

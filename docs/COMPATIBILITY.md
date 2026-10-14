@@ -480,9 +480,20 @@ kept working (the identity string was a plausible-looking resource name), and
 it is why this round stopped reading the corpus and started reading the
 specification.
 
-`tools/build_api_ref.py` downloads the CLDC 1.1 and MIDP 2.0 javadoc pages and
-writes `tools/data/api-core.txt`: 943 members over 77 classes, one
-`class name (args)` line each.  `tools/api_audit.py` then parses this runtime's
+`tools/build_api_ref.py` downloads the CLDC 1.1 and MIDP 2.0 javadoc pages,
+plus the **Nokia UI API**, and writes `tools/data/api-core.txt`: 982 members
+over 83 classes, one `class name (args)` line each.  The Nokia pages are there
+because that vendor surface is the one the corpus leans on hardest - 83 titles
+reference `FullCanvas`, 74 `DirectGraphics`, 73 `DirectUtils`, 14 `Sound` and
+10 `DeviceControl` - and the first audit of those seven classes found thirteen
+missing members, one per family: `drawTriangle`, both `drawPixels` overloads,
+the `byte[]`/`byte[][]` `getPixels` and `getAlphaComponent` on
+`DirectGraphics`; `createImage(byte[], int, int)` on `DirectUtils`;
+`flashLights(long)`, `startVibra(int, long)` and `stopVibra()` on
+`DeviceControl`; and `resume`, `getGain`, `getConcurrentSoundCount(int)` and
+`getSupportedFormats()` on `Sound`.  A title that hits one of those loses the
+frame it was drawing, and `DirectUtils.createImage(byte[], int, int)` is the
+one a PNG-based title cannot work around at all.  `tools/api_audit.py` then parses this runtime's
 own builtin tables the way the compiler does - macro expansion, the class
 table, every `M(...)` row, the registration table, the superclass walk - and
 reports what cannot resolve.  It runs as the `check_api_audit` ctest, so it now
@@ -491,7 +502,22 @@ fails the build the moment a member disappears again, and
 `HttpConnection` members that belong to the HTTP lane) and is checked in both
 directions: a line that starts resolving is a failure too.
 
-The first honest run said 81 members.  They were filled in two batches
+Two things about that list are worth keeping.  The flags are not part of it:
+`Sound.getSupportedFormats()` and `Sound.getConcurrentSoundCount(int)` are
+static in the API and this runtime first declared them as instance methods,
+which the audit cannot see (it compares names and argument lists) and which a
+title would meet as an `IncompatibleClassChangeError` on the
+`invokestatic`.  And a member that exists but does nothing useful is not a gap
+either, which is why the vendor calls have a fixture: `tests/nokiademo` drives
+`DirectUtils.createImage(16, 16, ...)` and `createImage(byte[], int, int)` (the
+jar carries a real two-by-two PNG), checks that the triangle's top edge came out
+red where it was drawn and white where it was not, that a `byte[]` pixel reads
+back as its own grey and an ARGB `int` survives the round trip, and that
+`Sound` plays, keeps gain, resumes, lists two formats and one channel.
+`tools/check_nokiademo.sh` is that fixture's assertions and runs as the
+`check_nokiademo` ctest.
+
+The first honest run of the CLDC/MIDP audit said 81 members.  They were filled in two batches
 (java.io: Reader/Writer/InputStreamReader/OutputStreamWriter/PrintStream;
 core: String.valueOf/intern, Thread(String), Class.isAssignableFrom,
 Throwable.printStackTrace(PrintStream), Calendar.before/after, Display colours,

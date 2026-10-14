@@ -3390,6 +3390,13 @@ static int nj_key_to_midp(int key)
     case NJ_KEY_GAME_B: return NJ_MIDP_KEY_GAME_B;
     case NJ_KEY_GAME_C: return NJ_MIDP_KEY_GAME_C;
     case NJ_KEY_GAME_D: return NJ_MIDP_KEY_GAME_D;
+    /*
+     * Volume, for a pad key that carries one.  The MIDlet is told the code the
+     * platform's own volume key would have had, which is the only sensible
+     * answer for a key MIDP itself never had.
+     */
+    case NJ_KEY_VOLUP:   return NJ_MIDP_KEY_VOLUP;
+    case NJ_KEY_VOLDOWN: return NJ_MIDP_KEY_VOLDOWN;
     default: return 0;
     }
 }
@@ -9197,6 +9204,211 @@ NJFN(dg_getPixelsInt)
     return dg_get_pixels(vm, args, ret, 4);
 }
 
+/*
+ * drawTriangle(x1, y1, x2, y2, x3, y3, argb): the outline of a triangle in the
+ * direct colour.  Three lines, because that is what the picture is - the filled
+ * form is fillTriangle() above.
+ */
+NJFN(dg_drawTriangle)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 x1 = NJ_ARG_INT(args, 0);
+    nj_s4 y1 = NJ_ARG_INT(args, 1);
+    nj_s4 x2 = NJ_ARG_INT(args, 2);
+    nj_s4 y2 = NJ_ARG_INT(args, 3);
+    nj_s4 x3 = NJ_ARG_INT(args, 4);
+    nj_s4 y3 = NJ_ARG_INT(args, 5);
+    nj_gfx g;
+    nj_surface sc;
+
+    if (!gfx_load(vm, self, &g, &sc)) {
+        return NJ_ERR;
+    }
+    nj_gfx_set_color(&g, (nj_u4)NJ_ARG_INT(args, 6));
+    nj_gfx_line(&g, x1, y1, x2, y2);
+    nj_gfx_line(&g, x2, y2, x3, y3);
+    nj_gfx_line(&g, x3, y3, x1, y1);
+    gfx_store(vm, self, &g);
+    return NJ_OK;
+}
+
+/*
+ * drawPixels(int[], boolean, offset, scanlength, x, y, w, h, manipulation,
+ * format): the int[] overload of the call above.  The format says how to read
+ * each int - 8888 is ARGB, 888 is RGB, anything else is a packed 565 value,
+ * which is what the surface holds anyway.
+ */
+NJFN(dg_drawPixelsInt)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref px = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 2);
+    nj_s4 scan = NJ_ARG_INT(args, 3);
+    nj_s4 x = NJ_ARG_INT(args, 4);
+    nj_s4 y = NJ_ARG_INT(args, 5);
+    nj_s4 w = NJ_ARG_INT(args, 6);
+    nj_s4 h = NJ_ARG_INT(args, 7);
+    nj_s4 fmt = NJ_ARG_INT(args, 9);
+    nj_gfx g;
+    nj_surface sc;
+    nj_s4 row, col;
+    const nj_s4 *pix;
+
+    if (!px) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (!gfx_load(vm, self, &g, &sc)) {
+        return NJ_ERR;
+    }
+    pix = (const nj_s4 *)px->u.bytes;
+    for (row = 0; row < h; row++) {
+        for (col = 0; col < w; col++) {
+            nj_s4 idx = off + row * scan + col;
+            nj_u4 v;
+            if (idx < 0 || (nj_u4)idx >= px->length) {
+                continue;
+            }
+            v = (nj_u4)pix[idx];
+            if (fmt == NJ_DG_TYPE_INT_8888_ARGB) {
+                /* as given */
+            } else if (fmt == NJ_DG_TYPE_INT_888_RGB) {
+                v |= 0xFF000000u;
+            } else {
+                v = 0xFF000000u
+                    | (((v >> 11) & 0x1Fu) << 19)
+                    | (((v >> 5) & 0x3Fu) << 10)
+                    | ((v & 0x1Fu) << 3);
+            }
+            nj_gfx_set_color(&g, v);
+            nj_gfx_pixel(&g, x + col, y + row);
+        }
+    }
+    gfx_store(vm, self, &g);
+    return NJ_OK;
+}
+
+/*
+ * drawPixels(byte[] pixels, byte[] transparency, offset, scanlength, x, y, w,
+ * h, manipulation, format): the same call with one byte per pixel.  Nokia's
+ * byte formats are grey scales and palettes, and this runtime keeps no palette
+ * state, so a byte is drawn as the grey level of the same value: exact for the
+ * grey formats, visibly wrong for a palette - the same trade the short[]
+ * overload above makes, and better than an exception in the middle of a frame.
+ */
+NJFN(dg_drawPixelsBytes)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref px = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 2);
+    nj_s4 scan = NJ_ARG_INT(args, 3);
+    nj_s4 x = NJ_ARG_INT(args, 4);
+    nj_s4 y = NJ_ARG_INT(args, 5);
+    nj_s4 w = NJ_ARG_INT(args, 6);
+    nj_s4 h = NJ_ARG_INT(args, 7);
+    nj_gfx g;
+    nj_surface sc;
+    nj_s4 row, col;
+    const nj_u1 *pix;
+
+    if (!px) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (!gfx_load(vm, self, &g, &sc)) {
+        return NJ_ERR;
+    }
+    pix = (const nj_u1 *)px->u.bytes;
+    for (row = 0; row < h; row++) {
+        for (col = 0; col < w; col++) {
+            nj_s4 idx = off + row * scan + col;
+            nj_u1 v;
+            if (idx < 0 || (nj_u4)idx >= px->length) {
+                continue;
+            }
+            v = pix[idx];
+            nj_gfx_set_color(&g, 0xFF000000u | ((nj_u4)v << 16)
+                             | ((nj_u4)v << 8) | (nj_u4)v);
+            nj_gfx_pixel(&g, x + col, y + row);
+        }
+    }
+    gfx_store(vm, self, &g);
+    return NJ_OK;
+}
+
+/*
+ * getPixels(byte[] pixels, byte[] transparency, offset, scanlength, x, y, w,
+ * h, format): the read side of the byte overload, answering the grey level of
+ * each pixel (Rec. 601 weights), which is what a byte-format title asked for.
+ */
+static nj_status dg_get_pixels_bytes(nj_vm *vm, nj_value *args)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref dest = NJ_ARG_REF(args, 0);
+    nj_s4 offset = NJ_ARG_INT(args, 2);
+    nj_s4 scan = NJ_ARG_INT(args, 3);
+    nj_s4 x = NJ_ARG_INT(args, 4);
+    nj_s4 y = NJ_ARG_INT(args, 5);
+    nj_s4 w = NJ_ARG_INT(args, 6);
+    nj_s4 h = NJ_ARG_INT(args, 7);
+    nj_gfx g;
+    nj_surface sc;
+    nj_s4 j, i;
+
+    if (!gfx_load(vm, self, &g, &sc)) {
+        return NJ_ERR;
+    }
+    if (!dest) {
+        NJ_THROW(vm, "java/lang/NullPointerException",
+                 "the destination array is null");
+    }
+    if (w <= 0 || h <= 0) {
+        return NJ_OK;
+    }
+    if (offset < 0 || scan < w) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "offset and scanlength are too small for the pixels asked for");
+    }
+    if ((nj_s8)offset + (nj_s8)(h - 1) * scan + (w - 1)
+        >= (nj_s8)dest->length) {
+        NJ_THROW(vm, "java/lang/ArrayIndexOutOfBoundsException",
+                 "the destination array is too small for the pixels asked for");
+    }
+    for (j = 0; j < h; j++) {
+        for (i = 0; i < w; i++) {
+            nj_u4 argb = nj_surface_format_color(sc.format,
+                                                 nj_surface_get(&sc, x + i,
+                                                                y + j));
+            nj_u4 grey = ((argb >> 16) & 0xFFu) * 77u
+                       + ((argb >> 8) & 0xFFu) * 151u
+                       + (argb & 0xFFu) * 28u;
+            ((nj_u1 *)dest->u.bytes)[offset + j * scan + i] = (nj_u1)(grey >> 8);
+        }
+    }
+    return NJ_OK;
+}
+
+NJFN(dg_getPixelsBytes)
+{
+    return dg_get_pixels_bytes(vm, args);
+}
+
+/*
+ * getAlphaComponent(): the alpha channel the direct colour draws with.  The
+ * DirectGraphics colour is ARGB, so this is its top byte - a game saves the
+ * blend it had and puts it back afterwards.
+ */
+NJFN(dg_getAlphaComponent)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_gfx g;
+    nj_surface sc;
+
+    if (!gfx_load(vm, self, &g, &sc)) {
+        return NJ_ERR;
+    }
+    ret->i = (nj_s4)((nj_gfx_get_color(&g) >> 24) & 0xFFu);
+    return NJ_OK;
+}
+
 #define M(name, desc, flags) { name, desc, flags }
 #define FLD(name, desc, flags) { name, desc, flags }
 
@@ -9363,11 +9575,16 @@ static const nj_builtin_method graphics_methods[] = {
     M("getNativePixelFormat", "()I",    NJ_ACC_PUBLIC),
     M("drawImage",  "(L" NJ_C_IMAGE ";IIII)V", NJ_ACC_PUBLIC),
     M("fillTriangle", "(IIIIIII)V",     NJ_ACC_PUBLIC),
+    M("drawTriangle", "(IIIIIII)V",     NJ_ACC_PUBLIC),
     M("drawPolygon", "([II[IIII)V",     NJ_ACC_PUBLIC),
     M("fillPolygon", "([II[IIII)V",     NJ_ACC_PUBLIC),
     M("drawPixels",  "([SZIIIIIIII)V",  NJ_ACC_PUBLIC),
     M("getPixels",   "([SIIIIIII)V",    NJ_ACC_PUBLIC),
     M("getPixels",      "([IIIIIIII)V", NJ_ACC_PUBLIC),
+    M("drawPixels",        "([IZIIIIIIII)V", NJ_ACC_PUBLIC),
+    M("drawPixels",        "([B[BIIIIIIII)V", NJ_ACC_PUBLIC),
+    M("getPixels",         "([B[BIIIIIII)V",  NJ_ACC_PUBLIC),
+    M("getAlphaComponent", "()I",              NJ_ACC_PUBLIC),
 };
 
 /* ---- Displayable / Canvas ---- */
@@ -10218,11 +10435,16 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_GRAPHICS, "getNativePixelFormat", "()I",    dg_getNativePixelFormat },
     { NJ_C_GRAPHICS, "drawImage", "(L" NJ_C_IMAGE ";IIII)V", dg_drawImage },
     { NJ_C_GRAPHICS, "fillTriangle", "(IIIIIII)V", dg_fillTriangle },
+    { NJ_C_GRAPHICS, "drawTriangle", "(IIIIIII)V", dg_drawTriangle },
     { NJ_C_GRAPHICS, "drawPolygon", "([II[IIII)V", dg_drawPolygon },
     { NJ_C_GRAPHICS, "fillPolygon", "([II[IIII)V", dg_fillPolygon },
     { NJ_C_GRAPHICS, "drawPixels",  "([SZIIIIIIII)V", dg_drawPixels },
     { NJ_C_GRAPHICS, "getPixels",   "([SIIIIIII)V",   dg_getPixels },
     { NJ_C_GRAPHICS, "getPixels",   "([IIIIIIII)V",   dg_getPixelsInt },
+    { NJ_C_GRAPHICS, "drawPixels",  "([IZIIIIIIII)V", dg_drawPixelsInt },
+    { NJ_C_GRAPHICS, "drawPixels",  "([B[BIIIIIIII)V", dg_drawPixelsBytes },
+    { NJ_C_GRAPHICS, "getPixels",   "([B[BIIIIIII)V",  dg_getPixelsBytes },
+    { NJ_C_GRAPHICS, "getAlphaComponent", "()I",       dg_getAlphaComponent },
     { NJ_C_GRAPHICS, "drawRoundRect", "(IIIIII)V", g_drawRoundRect },
     { NJ_C_GRAPHICS, "fillRoundRect", "(IIIIII)V", g_fillRoundRect },
     { NJ_C_GRAPHICS, "drawArc", "(IIIIII)V", g_drawArc },

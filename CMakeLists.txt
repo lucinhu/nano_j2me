@@ -352,6 +352,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_alphademo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_savedgfx_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flushdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_nokiademo_jar.sh
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
       COMMENT "keysdemo.jar, blockdemo.jar (input-effect fixtures)")
   endif()
@@ -701,6 +702,17 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_alphademo.sh
                      ${NJ_FIXTURES}/alphademo.jar)
+    # The Nokia UI API is the vendor surface the corpus leans on hardest:
+    # 83 titles reference FullCanvas, 74 DirectGraphics, 73 DirectUtils, 14
+    # Sound and 10 DeviceControl.  A vendor class that is missing is caught by
+    # the title and worked around, but a vendor METHOD that is missing is a
+    # NoSuchMethodError in the middle of a frame - which is what the audit of
+    # the javadoc turned up (thirteen of them, one per family).
+    add_test(NAME check_nokiademo
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_nokiademo.sh
+                     ${NJ_FIXTURES}/nokiademo.jar)
     add_test(NAME check_corpus_size_retry
              COMMAND ${CMAKE_COMMAND} -E env
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_corpus_size_retry.sh
