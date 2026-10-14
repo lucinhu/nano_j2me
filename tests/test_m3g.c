@@ -414,6 +414,35 @@ int main(void)
             call(vm, g3, CLS("Graphics3D"), "addLight",
                  "(L" CLS("Light") ";L" CLS("Transform") ";)I", a, &r);
             check(r.i == 1, "the second addLight is index 1");
+            {
+                nj_ref values = nj_array_new(vm, "F", 16);
+                float *v = (float *)nj_array_data(values);
+                nj_ref out = make(vm, CLS("Transform"));
+
+                memset(v, 0, 16 * sizeof(float));
+                v[0] = v[5] = v[10] = v[15] = 1.0f;
+                v[3] = 7.0f; v[7] = -4.0f; v[11] = 2.0f;
+                a[0].r = values;
+                call(vm, xf, CLS("Transform"), "set", "([F)V", a, NULL);
+                a[0].i = 1; a[1].r = lit; a[2].r = xf;
+                call(vm, g3, CLS("Graphics3D"), "setLight",
+                     "(IL" CLS("Light") ";L" CLS("Transform") ";)V", a, NULL);
+                a[0].i = 1; a[1].r = out;
+                call(vm, g3, CLS("Graphics3D"), "getLight",
+                     "(IL" CLS("Transform") ";)L" CLS("Light") ";", a, &r);
+                check(r.r == lit, "getLight returns the selected light");
+                a[0].r = values;
+                call(vm, out, CLS("Transform"), "get", "([F)V", a, NULL);
+                check(v[3] == 7.0f && v[7] == -4.0f && v[11] == 2.0f,
+                      "getLight preserves its transform");
+                a[0].i = 0; a[1].r = out;
+                call(vm, g3, CLS("Graphics3D"), "getLight",
+                     "(IL" CLS("Transform") ";)L" CLS("Light") ";", a, &r);
+                a[0].r = values;
+                call(vm, out, CLS("Transform"), "get", "([F)V", a, NULL);
+                check(v[0] == 1.0f && v[3] == 0.0f && v[7] == 0.0f,
+                      "other light transforms remain independent");
+            }
         }
 
         if (poly) {
@@ -1250,6 +1279,61 @@ int main(void)
             check(lit2 > 0, "and a World's own active camera draws it too");
         }
     }
+    nj_clear_exception(vm);
+    /* A background image is sampled through its crop, with independent
+       repeat/border modes on the two axes. */
+    {
+        nj_value a[6], r;
+        nj_ref target, graphics, bg = make(vm, CLS("Background"));
+        nj_ref g3 = make(vm, CLS("Graphics3D"));
+        nj_ref image2d = nj_object_new(vm, CLS("Image2D"));
+        nj_ref bytes = nj_array_new(vm, "B", 12);
+        const nj_u1 colors[12] = {255,0,0, 0,255,0, 0,0,255, 255,255,0};
+        nj_ref target_pixels;
+        const nj_u4 *p;
+
+        memcpy(nj_array_data(bytes), colors, sizeof(colors));
+        a[0].i = 99; a[1].i = 2; a[2].i = 2; a[3].r = bytes;
+        check(nj_call_special(vm, image2d, CLS("Image2D"), "<init>",
+              "(III[B)V", a, &r) == NJ_OK, "background RGB image constructs");
+        a[0].i = 4; a[1].i = 4;
+        nj_call_static(vm, "javax/microedition/lcdui/Image", "createImage",
+                       "(II)Ljavax/microedition/lcdui/Image;", a, &r);
+        target = r.r;
+        call(vm, target, "javax/microedition/lcdui/Image", "getGraphics",
+             "()Ljavax/microedition/lcdui/Graphics;", NULL, &r);
+        graphics = r.r;
+        a[0].r = graphics;
+        call(vm, g3, CLS("Graphics3D"), "bindTarget", "(Ljava/lang/Object;)V", a, NULL);
+        a[0].i = 0; a[1].i = 0; a[2].i = 4; a[3].i = 4;
+        call(vm, g3, CLS("Graphics3D"), "setViewport", "(IIII)V", a, NULL);
+        a[0].r = image2d;
+        call(vm, bg, CLS("Background"), "setImage", "(L" CLS("Image2D") ";)V", a, NULL);
+        a[0].i = -1; a[1].i = 0; a[2].i = 4; a[3].i = 4;
+        call(vm, bg, CLS("Background"), "setCrop", "(IIII)V", a, NULL);
+        a[0].i = 33; a[1].i = 32;
+        call(vm, bg, CLS("Background"), "setImageMode", "(II)V", a, NULL);
+        a[0].r = bg;
+        call(vm, g3, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V", a, NULL);
+        target_pixels = nj_rget(vm, target, nj_field_lookup(vm,
+            "javax/microedition/lcdui/Image", "imgPixels", "[I", 0));
+        p = (const nj_u4 *)nj_array_data(target_pixels);
+        check(p[0] == 0xFF00FF00u && p[1] == 0xFFFF0000u &&
+              p[2] == p[0] && p[3] == p[1], "background repeats a negative horizontal crop");
+        check(p[4] == 0xFFFFFF00u && p[5] == 0xFF0000FFu,
+              "background preserves RGB channel order");
+        check(p[8] == 0xFF000000u && p[15] == 0xFF000000u,
+              "background border uses clear colour outside the image");
+        a[0].i = 0;
+        call(vm, bg, CLS("Background"), "setColorClearEnable", "(Z)V", a, NULL);
+        nj_iput(vm, g3, nj_field_lookup(vm, CLS("Graphics3D"), "_nj_zframe", "I", 0), 77);
+        a[0].r = bg;
+        call(vm, g3, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V", a, NULL);
+        check(nj_iget(vm, g3, nj_field_lookup(vm, CLS("Graphics3D"), "_nj_zframe", "I", 0)) == -1,
+              "depth clears even when colour clear is disabled");
+        check(p[0] == 0xFF00FF00u, "disabled colour clear preserves the target");
+    }
+
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
     /* The file format calls type 18 Sprite; the titles call the class

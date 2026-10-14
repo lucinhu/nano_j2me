@@ -34,6 +34,10 @@ nj_status nj_m3g_objects_probe(const nj_u1 *p, nj_u4 n, nj_u4 *count,
                                nj_u1 *types, nj_u4 type_count,
                                char *err, nj_u4 errcap);
 
+/* Scan payloads use tracked host allocations; the loader's result cleanup is
+ * private, so release the same allocations directly in these scanner tests. */
+void nj_host_free(nj_vm *vm, void *p);
+
 static int checks, failures;
 static char err[256];
 static nj_u1 buf[512];
@@ -201,6 +205,161 @@ static void objects_in_a_compressed_section(void)
     nj_vm_destroy(vm);
 }
 
+/* A Texture2D has two transform flags, then twelve sampler bytes.  Use a
+ * multi-byte image index and distinct sampler bytes to expose offset errors. */
+static nj_u4 texture_object(int at, int transformed)
+{
+    int data = at + 5;
+    int base = data + (transformed ? 54 : 14);
+    nj_u4 size = object(at, 17u, transformed ? 66u : 26u, 0u);
+
+    if (transformed) {
+        buf[data + 12] = 1u;
+        put32le(0x40000000u, data + 13);  /* translation: 2, -3, 4 */
+        put32le(0xc0400000u, data + 17);
+        put32le(0x40800000u, data + 21);
+        put32le(0x3f800000u, data + 25);  /* scale: 1, 600, 1 */
+        put32le(0x44160000u, data + 29);
+        put32le(0x3f800000u, data + 33);
+        put32le(0x42b40000u, data + 37);  /* angle: 90; axis: 0, 0, 1 */
+        put32le(0x3f800000u, data + 49);
+    }
+    put32le(0x01020304u, base);
+    buf[base + 4] = 0x12u; buf[base + 5] = 0x34u; buf[base + 6] = 0x56u;
+    buf[base + 7] = 224u;                /* FUNC_MODULATE */
+    buf[base + 8] = 240u;                /* WRAP_CLAMP */
+    buf[base + 9] = 241u;                /* WRAP_REPEAT */
+    buf[base + 10] = 208u;               /* FILTER_BASE_LEVEL */
+    buf[base + 11] = 210u;               /* FILTER_LINEAR */
+    return size;
+}
+
+static void texture_fields(void)
+{
+    nj_m3g_fields f;
+    int transformed;
+
+    for (transformed = 0; transformed <= 1; transformed++) {
+        nj_u4 size = texture_object(0, transformed);
+        nj_status st = nj_m3g_decode_object(buf + 5, size - 5u, 17u,
+                                           &f, err, sizeof(err));
+        ok(st == NJ_OK && f.decoded == 1u,
+           transformed ? "a 66-byte component-transform Texture2D decodes"
+                       : "a 26-byte untransformed Texture2D decodes");
+        ok(f.nrefs == 1u && f.refs[0] == 0x01020304u,
+           "Texture2D reads its image index after both transform flags");
+        ok(f.a == 0xff123456u && f.b == 0xd0f1f0e0u && f.c == 210u,
+           "Texture2D reads blend color, function, wrapping and filters after the image");
+        ok(f.owned_data == NULL, "direct Texture2D decoding borrows its payload");
+        if (transformed) {
+            ok(f.data == buf + 18 && f.data_len == 40u,
+               "Texture2D exposes exactly the forty component-transform bytes");
+            if (f.data && f.data_len == 40u) {
+                ok(memcmp(f.data, buf + 18, 40u) == 0 &&
+                   le32_at(f.data + 12) == 0x3f800000u &&
+                   le32_at(f.data + 16) == 0x44160000u &&
+                   le32_at(f.data + 20) == 0x3f800000u,
+                   "Texture2D preserves component scale 1, 600, 1");
+            }
+        } else {
+            ok(f.data == NULL && f.data_len == 0u,
+               "an untransformed Texture2D claims no component-transform bytes");
+        }
+    }
+}
+
+/* The scanner frees its inflated scratch buffer before returning.  Assert
+ * ownership before reading payloads, so a regression fails without a dangling
+ * pointer read.  Both the index data and its strip-length tail must survive. */
+static void compressed_geometry_payloads(void)
+{
+    nj_port port;
+    nj_vm *vm;
+    nj_m3g_object objs[3];
+    nj_u1 raw[150], comp[256];
+    uLongf zlen = sizeof(comp);
+    nj_u4 raw_len, n, count = 0u, sections = 0u, i;
+    nj_status st;
+    int owns_strips, owns_transform;
+
+    memset(objs, 0, sizeof(objs));
+    raw_len = object(0, 11u, 43u, 0u);
+    buf[17] = 130u;                     /* UInt16 indices */
+    put32le(7u, 18);
+    for (i = 0u; i < 7u; i++) {
+        static const nj_u1 indices[7] = { 0u, 1u, 2u, 2u, 3u, 4u, 5u };
+        buf[22u + 2u * i] = indices[i];
+    }
+    put32le(2u, 36);                    /* strip count after fourteen index bytes */
+    put32le(3u, 40);
+    put32le(4u, 44);
+    raw_len += texture_object((int)raw_len, 0);
+    raw_len += texture_object((int)raw_len, 1);
+    memcpy(raw, buf, raw_len);
+    if (compress(comp, &zlen, raw, raw_len) != Z_OK) {
+        ok(0, "zlib compresses geometry and Texture2D fixtures");
+        return;
+    }
+
+    start();
+    section(12, 0u, 0u, 5u, 0u);
+    section(30, 1u, raw_len, (nj_u4)zlen, 0u);
+    memcpy(buf + 39, comp, zlen);
+    n = 39u + (nj_u4)zlen + 4u;
+    if (nj_port_headless(&port) != NJ_OK) { ok(0, "a headless port exists"); return; }
+    vm = nj_vm_create(&port, 1u << 20);
+    if (!vm) { ok(0, "a VM exists"); return; }
+
+    st = nj_m3g_scan_objects(vm, buf, n, objs, 3u, &count, &sections,
+                             err, sizeof(err));
+    ok(st == NJ_OK && count == 3u && sections == 2u,
+       "the actual scanner inflates a section with geometry and both Texture2D layouts");
+    memset(buf, 0xa5, sizeof(buf));      /* the input container is no longer usable */
+    if (st == NJ_OK && count == 3u) {
+        const nj_m3g_fields *f = &objs[0].fields;
+        ok(objs[0].type == 11u && f->decoded == 1u &&
+           f->a == 130u && f->b == 7u && f->c == 2u,
+           "the scanned TriangleStripArray retains encoding, index and strip counts");
+        ok(f->data_len == 26u && f->ref_off == 31u,
+           "TriangleStripArray payload includes indices, strip count and both lengths");
+        owns_strips = f->owned_data != NULL && f->data == f->owned_data;
+        ok(owns_strips, "TriangleStripArray owns its bytes after inflated scratch is freed");
+        if (owns_strips && f->data_len == 26u) {
+            ok(memcmp(f->data, raw + 22, 26u) == 0,
+               "all TriangleStripArray payload bytes survive scanner return");
+            ok(le32_at(f->data + 14) == 2u && le32_at(f->data + 18) == 3u &&
+               le32_at(f->data + 22) == 4u,
+               "retained TriangleStripArray data still contains strip count and lengths");
+        }
+        for (i = 1u; i < 3u; i++) {
+            f = &objs[i].fields;
+            ok(objs[i].type == 17u && f->decoded == 1u &&
+               f->nrefs == 1u && f->refs[0] == 0x01020304u,
+               "scanned Texture2D keeps its image reference after section release");
+        }
+        ok(objs[1].fields.data == NULL && objs[1].fields.owned_data == NULL &&
+           objs[1].fields.data_len == 0u,
+           "scanning an untransformed Texture2D invents no transform");
+        f = &objs[2].fields;
+        owns_transform = f->owned_data != NULL && f->data == f->owned_data;
+        ok(owns_transform && f->data_len == 40u,
+           "scanned Texture2D owns its forty transform bytes after scratch is freed");
+        if (owns_transform && f->data_len == 40u) {
+            ok(memcmp(f->data, raw + 97, 40u) == 0,
+               "scanned Texture2D retains translation, scale, angle and axis exactly");
+            ok(le32_at(f->data + 12) == 0x3f800000u &&
+               le32_at(f->data + 16) == 0x44160000u &&
+               le32_at(f->data + 20) == 0x3f800000u,
+               "scanned Texture2D retains component scale 1, 600, 1");
+        }
+    }
+    for (i = 0u; i < 3u; i++) {
+        nj_host_free(vm, objs[i].fields.owned_data);
+        nj_host_free(vm, objs[i].fields.extra);
+    }
+    nj_vm_destroy(vm);
+}
+
 int main(void)
 {
     nj_u4 clen;
@@ -348,6 +507,8 @@ int main(void)
     }
 
     objects_in_a_compressed_section();
+    texture_fields();
+    compressed_geometry_payloads();
 
     /* ---- the object layer: fields read out of a decoded object ---------- */
     {

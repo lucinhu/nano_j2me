@@ -1629,6 +1629,9 @@ int nj_vm_load(nj_vm *vm, FILE *f)
         name[len] = '\0';
         c = resolve_saved_class(vm, name);
         if (!c) {
+            if (getenv("NJ_SAVE_DEBUG")) {
+                fprintf(stderr, "nj_vm_load: no class named \"%s\"\n", name);
+            }
             NJ_LOAD_FAIL(NJ_ERR_FORMAT);   /* JAR does not match */
         }
         for (j = 0u; j < i; j++) {

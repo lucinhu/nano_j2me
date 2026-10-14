@@ -786,7 +786,7 @@ static nj_class *array_class(nj_vm *vm, const char *desc)
 /* ------------------------------------------------------------------ */
 /* Loading from the class source                                        */
 /* ------------------------------------------------------------------ */
-nj_class *nj_class_resolve(nj_vm *vm, const char *internal_name)
+static nj_class *class_resolve_from_source(nj_vm *vm, const char *internal_name)
 {
     nj_class *c;
     char buf[256];
@@ -828,6 +828,21 @@ nj_class *nj_class_resolve(nj_vm *vm, const char *internal_name)
         if (!c) {
             return NULL;
         }
+    }
+    return c;
+}
+
+/*
+ * The one way to name a class.  The built-in table and the JAR are asked
+ * first, and only when both have no answer does the engine get a say - for a
+ * class the engine makes for itself, which no JAR holds.
+ */
+nj_class *nj_class_resolve(nj_vm *vm, const char *internal_name)
+{
+    nj_class *c = class_resolve_from_source(vm, internal_name);
+
+    if (!c && vm && vm->class_hook) {
+        c = vm->class_hook(vm, internal_name);
     }
     return c;
 }

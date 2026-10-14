@@ -3036,6 +3036,28 @@ static nj_class *timer_helper_class(nj_vm *vm)
                          (nj_u4)sizeof(nj_timer_helper_class));
 }
 
+/*
+ * The timer's pump class is built here, not in the JAR, so a saved state that
+ * names it has to be able to ask for it by name - otherwise resuming any
+ * title that ever started a timer fails as if the JAR were the wrong one.
+ */
+static nj_class *util_class_hook(nj_vm *vm, const char *internal_name)
+{
+    if (strcmp(internal_name, NJ_TIMER_HELPER_CLASS) == 0) {
+        return timer_helper_class(vm);
+    }
+    return NULL;
+}
+
+nj_status nj_util_late_init(nj_vm *vm)
+{
+    if (!vm) {
+        return NJ_ERR;
+    }
+    vm->class_hook = util_class_hook;
+    return NJ_OK;
+}
+
 NJFN(tt_init)
 {
     nj_ref t = NJ_THIS(args);

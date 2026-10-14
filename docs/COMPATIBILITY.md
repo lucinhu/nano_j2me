@@ -17,7 +17,7 @@ to be one of the gaps listed here, and knowing which one saves an afternoon.
 | JSR 256 (Sensor) | implemented: `findSensors`, `getSensorConnection`, channels, measurement ranges and data listeners, with the sensors themselves supplied by the port (`nj_port.sensor_list/open/read/close`). A port that has none reports none. Conditions are not evaluated — `addCondition` raises `UnsupportedOperationException` — and availability push answers `false` |
 | JSR 120/205 (messaging) | classes present; connections refuse the same way |
 | JSR 135 (Mobile Media) | tone and sampled PCM playback, WAV from a stream or a JAR resource, MIDI rendered by the runtime itself (or by the platform's synthesizer through the port's MIDI hooks), and AMR narrowband decoded by the runtime itself; no video. MP3, AAC and anything else the platform can decode arrive through `nj_port.audio_decode`, which is what the Android port does with MediaCodec |
-| JSR 184 (Mobile 3D Graphics) | the classes, the scene graph, the transform maths, a `.m3g` container parser, the member surface real titles use, and a software rasteriser with a depth buffer, perspective-correct texturing (nearest, bilinear, and a level chain built from the image for minified surfaces), back-face culling and per-vertex lighting — all behind `NJ_ENABLE_M3G`. `浴火银河2完整版_7689` renders its 3D scenes through it (thousands of triangles, `tris=` in `--stats`), and `3D拉力赛-进化汉化版_6366` now draws its race: the car with its livery, the road under it and the HUD on top, 62,083 triangles in 1,500 paced frames (`docs/images/rally3d-race.png`); the rest of the collected titles keep their 3D behind menus, so each of them is judged by its 2D interface (see below) |
+| JSR 184 (Mobile 3D Graphics) | the classes, the scene graph, the transform maths, a `.m3g` container parser, the member surface real titles use, and a software rasteriser with a depth buffer, perspective-correct texturing (nearest, bilinear, and a level chain built from the image for minified surfaces), back-face culling and per-vertex lighting — all behind `NJ_ENABLE_M3G`. `浴火银河2完整版_7689` renders its 3D scenes through it (thousands of triangles, `tris=` in `--stats`), and `3D拉力赛-进化汉化版_6366` now draws its race with blue sky and mountains, textured road and markings, rear car livery and the HUD: 120,397 triangles in 2,700 paced frames, including acceleration and steering (`docs/images/rally3d-race.png`); the rest of the collected titles keep their 3D behind menus, so each of them is judged by its 2D interface (see below) |
 | Mascot Capsule Micro3D v3 | classes, fixed-point transform maths and a real triangle rasterizer, behind `NJ_ENABLE_MASCOT`. **No collected title reaches the rasterizer**, so it is exercised only by its own unit test (see below) |
 
 Anything not implemented raises. That is deliberate: a
@@ -1100,28 +1100,19 @@ across the triangle:
   transform, `OMNI` lights sit at the transform's origin, `SPOT` adds the
   `spotAngle` cone and the `spotExponent` falloff, and attenuation is
   `1 / (a0 + a1 d + a2 d^2)` with the JSR's `(1, 0, 0)` default.
-- `Material.VERTEX_COLORS` multiplies the vertex colour into the ambient and
-  diffuse terms.
-- A `VertexBuffer` with no normals is not lit at all: the material's diffuse
-  colour is used flat, which is what an unlit appearance means.  A title that
-  never calls `setLight` keeps its geometry unlit and flat, exactly as before.
-  The last part is a rule of its own, and the World path learned it the hard
-  way: `3D拉力赛-进化汉化版_6366` never adds a light - no class of it calls
-  `Graphics3D.addLight` - but every mesh of it carries a Material, so the JSR's
-  own condition (a Material plus normals) turned lighting on, and with an empty
-  light array the equation leaves the material's emissive colour, which is
-  black.  Its track was a black silhouette on a white sky.  Lighting now also
-  requires something to light with, `r.nlights > 0`, which is the same picture
-  a buffer with no normals already gets.
+- `Material.VERTEX_COLORS` replaces the ambient and diffuse material colours
+  with the vertex colour. RGB arrays get opaque alpha; RGBA arrays retain it.
+- A `VertexBuffer` with no normals is not lit. The renderer also keeps geometry
+  unlit when no lights are collected. World rendering collects `Light` nodes
+  from the scene graph as well as supporting explicit `Graphics3D.addLight`.
+  Rally's World contains an ambient light with intensity 1.9.
 
-The World path (`render(World)`) draws through this same pipeline: each
-collected mesh keeps the world matrix the walk accumulated for it, its own
-`VertexBuffer` and first-submesh `Appearance`, and a World that carries a
-`Background` has its viewport cleared to that background's colour before the
-meshes are drawn - the clear is the same native `Graphics3D.clear()` a title
-would have called, so there is one implementation of it.  The title above sets
-a white background of its own, which is why its sky is white: that is the
-title's data, not a missing clear.
+The World path (`render(World)`) uses the same mesh pipeline and composes each
+mesh's accumulated world transform. Its `Background` clears the viewport and
+draws the image with crop and repeat/border modes. Rally references external
+PNG images relative to its M3G resource: these supply both sky and track
+textures. A white sky or road in earlier captures was a loader/background gap.
+Depth clearing is independent of the colour-clear flag.
 
 The two conventions are the part worth remembering, because getting them
 crossed is silent:

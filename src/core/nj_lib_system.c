@@ -483,6 +483,7 @@ nj_status nj_rms_late_init(nj_vm *vm);
 nj_status nj_m3g_late_init(nj_vm *vm);
 nj_status nj_http_late_init(nj_vm *vm);
 nj_status nj_sensor_late_init(nj_vm *vm);
+nj_status nj_util_late_init(nj_vm *vm);
 nj_status nj_bt_late_init(nj_vm *vm);
 nj_status nj_socket_late_init(nj_vm *vm);
 
@@ -504,6 +505,11 @@ nj_status nj_lib_late_init(nj_vm *vm)
      * declared here rather than included, and a NULL-returning no-op in a
      * build without LCDUI is fine.
      */
+    /* The C class library owns the classes it builds itself, and this is
+     * where it says so before anything can ask for one by name. */
+    if (nj_util_late_init(vm) != NJ_OK) {
+        return NJ_ERR;
+    }
     if (nj_lcdui_late_init(vm) != NJ_OK) {
         return NJ_ERR;
     }

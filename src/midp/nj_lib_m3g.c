@@ -39,6 +39,8 @@
 #include "nj_midp.h"
 
 #include <stdio.h>
+#include <stdlib.h>
+
 #include <math.h>
 #include <string.h>
 
@@ -235,6 +237,12 @@ static void m3g_node_matrix(const nj_u1 *d, float *m)
     len = sqrtf(ax * ax + ay * ay + az * az);
     if (!(len > 0.0f)) { ax = 0.0f; ay = 0.0f; az = 1.0f; len = 1.0f; }
     ax /= len; ay /= len; az /= len;
+    /*
+     * The file's angle is in degrees, the same unit postRotate() takes: the
+     * meshes of the corpus carry 0, 90.00 and 90.39 there, and 90.39 radians
+     * would be a 5178 degree turn.
+     */
+    ang *= 3.14159265358979f / 180.0f;
     sn = sinf(ang); cs = cosf(ang); om = 1.0f - cs;
     r[0] = om * ax * ax + cs;      r[1] = om * ax * ay - sn * az;
     r[2] = om * ax * az + sn * ay; r[3] = om * ax * ay + sn * az;
@@ -389,8 +397,12 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
     if (!data || !out) { M3G_FAIL("no object bytes"); }
     memset(out, 0, sizeof(*out));
     if (type == NJ_M3G_TYPE_EXTERNAL_REF) {
-        /* a bare string, no header: nothing to decode and nothing wrong */
-        out->decoded = 0u;
+        if (len == 0u || data[len - 1u] != 0u) {
+            M3G_FAIL("an external reference has no terminating zero");
+        }
+        out->data = data;
+        out->data_len = len;
+        out->decoded = 1u;
         return NJ_OK;
     }
     if (len < NJ_M3G_OBJECT_HEADER) {
@@ -404,10 +416,17 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
      * then the transform).  It is remembered as a pointer into the section
      * buffer - the same shape a VertexArray's bytes are kept in - and the
      * object builder turns it into the Java matrix.
+     *
+     * Measured: the transform begins at byte 13, right after the enable byte.
+     * Every Mesh of fo.m3g/ny.m3g/Att.m3g that carries one reads a coherent
+     * translation, unit scale and a 90 degree axis rotation there, and reads
+     * 1e11-sized float noise three bytes later - so byte 13 is where the file
+     * puts it and the flags are not in between.
      */
-    if (m3g_type_is_node(type) && len >= NJ_M3G_OBJECT_HEADER + 44u &&
+    if ((m3g_type_is_node(type) || type == NJ_M3G_T_TEXTURE2D) &&
+        len >= NJ_M3G_OBJECT_HEADER + 44u &&
         (data[12] & 0x01u)) {
-        out->data = data + NJ_M3G_OBJECT_HEADER + 4u;
+        out->data = data + NJ_M3G_OBJECT_HEADER + 1u;
         out->data_len = 40u;
     }
 
@@ -675,7 +694,7 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
                         out->b = n;
                         out->c = nstrip;
                         out->data = data + 17u;
-                        out->data_len = isz * n;
+                        out->data_len = len - 17u;
                         out->ref_off = at;   /* where the strip lengths sit */
                         out->decoded = 1u;
                     }
@@ -838,17 +857,12 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
         out->f[1] = (data[29] != 0u) ? 1.0f : 0.0f;   /* vertexColorTracking */
         break;
     case NJ_M3G_T_TEXTURE2D: {
-        nj_u4 base = m3g_xform_data(data, len);
+        nj_u4 base = m3g_xform_data(data, len) + 2u;
 
-        /*
-         * The corpus holds this type in three shapes: 932 of 26 bytes, 182 of
-         * 66 (the same object with a component transform) and 10 of 90, whose
-         * extra 24 bytes are not accounted for.  The first two are read; the
-         * third is left undecoded, because a reading that does not consume the
-         * object exactly is a reading that would put a texture in the wrong
-         * place, and an untextured surface still draws.
-         */
-        if (len != base + 14u) {
+        /* Component-transform flag + optional 40 bytes + general-transform
+           flag precede the image reference.  Both flags occupy a byte even
+           when false; the sampler payload itself is twelve bytes. */
+        if (len != base + 12u) {
             out->decoded = 0u;
             return NJ_OK;
         }
@@ -913,6 +927,8 @@ static void m3g_free_refs(nj_vm *vm, nj_m3g_object *objs, nj_u4 nobj)
     nj_u4 i;
 
     for (i = 0u; i < nobj; i++) {
+        nj_host_free(vm, objs[i].fields.owned_data);
+        objs[i].fields.owned_data = NULL;
         if (objs[i].fields.extra != NULL) {
             nj_host_free(vm, objs[i].fields.extra);
             objs[i].fields.extra = NULL;
@@ -998,6 +1014,12 @@ nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
                                   ? 0u : le32(body + at + 5u);
                 {
                     nj_m3g_fields *f = &out[nobj].fields;
+                    if (f->data && f->data_len) {
+                        f->owned_data = (nj_u1 *)nj_host_alloc(vm, f->data_len);
+                        if (!f->owned_data) { M3G_SCAN_FAIL("out of host memory for object data"); }
+                        memcpy(f->owned_data, f->data, f->data_len);
+                        f->data = f->owned_data;
+                    }
                     if (f->nrefs_total > (nj_u4)NJ_M3G_MAX_REFS) {
                         nj_u4 want = f->nrefs_total - (nj_u4)NJ_M3G_MAX_REFS;
                         nj_u4 *more = (nj_u4 *)nj_host_alloc(
@@ -2140,15 +2162,22 @@ NJFN(m3g_xf_transpose)
 /* ---- Node ---------------------------------------------------------- */
 NJFN(m3g_render_set)
 {
-    nj_field *f = nj_field_lookup(vm, NJ_C_NODE, "_nj_render", "Z", 0);
-    nj_iput(vm, NJ_THIS(args), f, NJ_ARG_INT(args, 0) ? 1 : 0);
+    int on = NJ_ARG_INT(args, 0) ? 1 : 0;
+
+    nj_iput(vm, NJ_THIS(args),
+            nj_field_lookup(vm, NJ_C_NODE, "_nj_render", "Z", 0), on);
+    /* The scene graph walk reads this one, so that a node nobody has spoken
+       about keeps rendering: see node_fields. */
+    nj_iput(vm, NJ_THIS(args),
+            nj_field_lookup(vm, NJ_C_NODE, "_nj_hidden", "Z", 0), on ? 0 : 1);
     return NJ_OK;
 }
 
 NJFN(m3g_render_get)
 {
-    ret->i = nj_iget(vm, NJ_THIS(args),
-                     nj_field_lookup(vm, NJ_C_NODE, "_nj_render", "Z", 0)) ? 1 : 0;
+    nj_field *h = nj_field_lookup(vm, NJ_C_NODE, "_nj_hidden", "Z", 0);
+
+    ret->i = (h && nj_iget(vm, NJ_THIS(args), h)) ? 0 : 1;
     return NJ_OK;
 }
 
@@ -2778,12 +2807,62 @@ NJFN(m3g_setCamera)
     return NJ_OK;
 }
 
-/*
- * clear(Background): the one thing this module genuinely does to a surface
- * today.  It is real - the colour is written through the port's own
- * Graphics - and it is also what makes a title's 2D interface visible over
- * the empty 3D view instead of the two fighting.
- */
+/* The Background image covers the viewport through its crop rectangle.
+   BORDER uses the clear colour outside the image; REPEAT wraps each axis. */
+static void m3g_background_image(nj_vm *vm, nj_ref bg, nj_ref target,
+                                  int vx, int vy, int vw, int vh)
+{
+    nj_ref image = nj_rget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_img", "L" NJ_C_IMAGE2D ";"));
+    nj_ref pixels, dst_image = NULL;
+    nj_surface scratch, *surface;
+    const char *cls = nj_ref_class_name(target);
+    int iw, ih, cw, ch, cx, cy, mx, my, fmt, bpp, x, y;
+    const nj_u1 *src;
+
+    if (!image || !target || !cls) { return; }
+    pixels = nj_rget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"));
+    iw = nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"));
+    ih = nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"));
+    fmt = nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I"));
+    bpp = fmt == 100 ? 4 : fmt == 99 ? 3 : 0;
+    if (!pixels || !bpp || iw <= 0 || ih <= 0 ||
+        (nj_size)iw * ih * bpp > nj_array_length(pixels)) { return; }
+    if (strcmp(cls, "javax/microedition/lcdui/Image") == 0) {
+        dst_image = target;
+    } else if (strcmp(cls, "javax/microedition/lcdui/Graphics") == 0) {
+        dst_image = nj_rget(vm, target, m3g_fof(vm, cls, "gTarget", "Ljavax/microedition/lcdui/Image;"));
+    } else { return; }
+    surface = nj_midp_surface(vm, dst_image, &scratch);
+    if (!surface || surface->format != NJ_PIXFMT_ARGB8888) { return; }
+    if (vw <= 0 || vh <= 0) { vx = vy = 0; vw = surface->width; vh = surface->height; }
+    cx = nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cropX", "I"));
+    cy = nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cropY", "I"));
+    cw = nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cropW", "I"));
+    ch = nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cropH", "I"));
+    mx = nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_immode", "I"));
+    my = nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_immodeY", "I"));
+    if (cw <= 0 || ch <= 0) { return; }
+    src = (const nj_u1 *)nj_array_data(pixels);
+    for (y = 0; y < vh; y++) {
+        int sy = cy + (int)(((double)y + 0.5) * ch / vh);
+        nj_u4 *row;
+        if (vy + y < 0 || vy + y >= surface->height) { continue; }
+        if (my == 33) { sy = ((sy % ih) + ih) % ih; }
+        if (sy < 0 || sy >= ih) { continue; }
+        row = (nj_u4 *)((nj_u1 *)surface->pixels + (nj_size)(vy + y) * surface->stride);
+        for (x = 0; x < vw; x++) {
+            int sx = cx + (int)(((double)x + 0.5) * cw / vw);
+            const nj_u1 *p;
+            if (vx + x < 0 || vx + x >= surface->width) { continue; }
+            if (mx == 33) { sx = ((sx % iw) + iw) % iw; }
+            if (sx < 0 || sx >= iw) { continue; }
+            p = src + ((nj_size)sy * iw + sx) * bpp;
+            row[vx + x] = 0xFF000000u | ((nj_u4)p[0] << 16) |
+                          ((nj_u4)p[1] << 8) | p[2];
+        }
+    }
+}
+
 NJFN(m3g_clear)
 {
     nj_ref bg = NJ_ARG_REF(args, 0);
@@ -2793,6 +2872,9 @@ NJFN(m3g_clear)
 
     if (!bg) {
         return NJ_OK;
+    }
+    if (nj_iget(vm, bg, nj_field_lookup(vm, NJ_C_BG, "_nj_dclear", "Z", 0))) {
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), -1);
     }
     if (!nj_iget(vm, bg, nj_field_lookup(vm, NJ_C_BG, "_nj_cclear", "Z", 0))) {
         return NJ_OK;               /* the title asked for no colour clear */
@@ -2820,16 +2902,7 @@ NJFN(m3g_clear)
         a[0].i = vx; a[1].i = vy; a[2].i = vw; a[3].i = vh;
         (void)nj_call(vm, target, "javax/microedition/lcdui/Graphics", "fillRect",
                       "(IIII)V", a, &n);
-    }
-    /*
-     * clear() clears the DEPTH buffer too, not only the colour: without this
-     * a second render() into the same target in the same frame is rejected by
-     * the depth test against the first one's depths, and the scene keeps the
-     * colours of the first render.  _nj_zframe is the frame stamp the depth
-     * buffer is cleared with; -1 means "clear before the next triangle".
-     */
-    if (nj_iget(vm, bg, nj_field_lookup(vm, NJ_C_BG, "_nj_dclear", "Z", 0))) {
-        nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), -1);
+        m3g_background_image(vm, bg, target, vx, vy, vw, vh);
     }
     return NJ_OK;
 }
@@ -2932,6 +3005,20 @@ static void collect_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
 
     if (!o || depth > 32) {          /* a graph a file made cannot be a loop */
         return;
+    }
+    /*
+     * A Node the title switched off takes its children with it, which is what
+     * setRenderingEnable() means.  Nothing else in this runtime consults the
+     * flag, so without this a mesh a title hid on purpose is still drawn -
+     * the rally title hides meshes that way and its 3D view showed a patch of
+     * flat tyre texture over the car because of it.
+     */
+    {
+        nj_field *hf = nj_field_lookup(vm, NJ_C_NODE, "_nj_hidden", "Z", 0);
+
+        if (hf && nj_iget(vm, o, hf)) {
+            return;
+        }
     }
     cn = nj_ref_class_name(o);
     /*
@@ -3281,6 +3368,7 @@ static void collect_lights_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
                                 const float *parent, nj_u4 cap, nj_u4 *n,
                                 int depth);
 
+
 NJFN(m3g_render)
 {
     nj_ref self = NJ_THIS(args);
@@ -3544,41 +3632,22 @@ NJFN(m3g_poly_getCulling)
     return NJ_OK;
 }
 
-/*
- * The light list.  Nothing is lit - there is no rasteriser yet - so this
- * keeps the LENGTH of the list and nothing else: addLight() returns the index
- * the caller expects and resetLights() empties it.  setLight()/getLight() are
- * deliberately NOT declared: a method that accepts a light and forgets it is
- * the half-implementation this project keeps refusing to ship, and no title in
- * the corpus calls them.
- */
+/* Both entry points store the light and a flat 16-float world transform. */
+NJFN(m3g_g3d_setLight);
 NJFN(m3g_g3d_addLight)
 {
     nj_ref self = NJ_THIS(args);
-    nj_field *f = nj_field_lookup(vm, NJ_C_G3D, "_nj_nlights", "I", 0);
-    nj_s4 n = nj_iget(vm, self, f);
-    nj_ref lights = nj_rget(vm, self,
-                            m3g_fof(vm, NJ_C_G3D, "_nj_lights",
-                                    "[L" NJ_C_LIGHT ";"));
+    nj_s4 n = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I"));
+    nj_value set_args[4], ignored;
+    nj_status st;
 
-    /*
-     * The list itself: addLight used to count the lights and drop them, so
-     * getLight() answered an index error for a light that had just been
-     * added.  Eight is the JSR 184 limit, so the list is allocated once and
-     * never grows.
-     */
-    if (!lights) {
-        lights = nj_object_array_new(vm, NJ_C_LIGHT, 8u);
-        if (!lights) {
-            return nj_throw_oom(vm);
-        }
-        nj_rput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lights",
-                                  "[L" NJ_C_LIGHT ";"), lights);
-    }
-    if (n >= 0 && n < (nj_s4)lights->length) {
-        nj_array_set_ref(lights, (nj_u4)n, NJ_ARG_REF(args, 0));
-    }
-    nj_iput(vm, self, f, n + 1);
+    memset(set_args, 0, sizeof(set_args));
+    set_args[0].r = self;
+    set_args[1].i = n;
+    set_args[2].r = NJ_ARG_REF(args, 0);
+    set_args[3].r = NJ_ARG_REF(args, 1);
+    st = m3g_g3d_setLight(vm, th, set_args + 1, &ignored);
+    if (st != NJ_OK) { return st; }
     ret->i = n;
     return NJ_OK;
 }
@@ -4822,8 +4891,43 @@ static nj_status m3g_link_geometry(nj_vm *vm, const nj_m3g_object *objs,
  * handed an interior pointer of a Java array to the host allocator - harmless
  * only because nj_host_free checks its own header magic and gives up).
  */
+static nj_status m3g_external_image(nj_vm *vm, const char *base,
+                                    const char *name, nj_ref *result)
+{
+    char path[512];
+    const char *slash = base ? strrchr(base, '/') : NULL;
+    nj_u4 mark = nj_root_mark(vm);
+    nj_value a[2], got;
+    nj_ref image, image2d, str;
+    nj_status st;
+    size_t prefix = (name[0] != '/' && slash) ? (size_t)(slash - base + 1) : 0u;
+
+    if (prefix + strlen(name) >= sizeof(path)) {
+        return nj_throw(vm, "java/io/IOException", "external image path too long");
+    }
+    if (prefix) { memcpy(path, base, prefix); }
+    strcpy(path + prefix, name);
+    str = nj_root(vm, nj_string_new(vm, path));
+    a[0].r = str;
+    image = nj_call_ref(vm, NULL, "javax/microedition/lcdui/Image", "createImage",
+                       "(Ljava/lang/String;)Ljavax/microedition/lcdui/Image;", a);
+    if (!image) {
+        nj_root_release(vm, mark);
+        return NJ_ERR;
+    }
+    nj_root(vm, image);
+    image2d = nj_root(vm, nj_object_new(vm, NJ_C_IMAGE2D));
+    if (!image2d) { nj_root_release(vm, mark); return nj_throw_oom(vm); }
+    a[0].i = 100; a[1].r = image;
+    st = nj_call_special(vm, image2d, NJ_C_IMAGE2D, "<init>",
+                         "(ILjava/lang/Object;)V", a, &got);
+    *result = image2d;
+    nj_root_release(vm, mark);
+    return st;
+}
+
 static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
-                                   nj_value *ret)
+                                   const char *base, nj_value *ret)
 {
     /*
      * It is a container, so build the objects it holds.  One Java object
@@ -4834,12 +4938,9 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
      * than remembered: an earlier version of the table in the corpus tool
      * had 11 as IndexBuffer when the specification says TriangleStripArray.
      *
-     * What is NOT done here is linking: a Group's children, a Mesh's
-     * submeshes, an Appearance's textures are all object references in the
-     * file, and reading them needs the object table and the reference
-     * rules.  Until that exists the objects come back empty, which is
-     * honest - and it is why a title that loads a model still draws
-     * nothing.
+     * Keep every object in the one-based reference table, including external
+     * images, then link scene members in a second pass. Only unreferenced
+     * roots are returned to the caller.
      */
     nj_m3g_object *objs;
     nj_u4 nobj = 0u, nsec = 0u, i;
@@ -4877,8 +4978,20 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
     for (i = 0u; i < nobj; i++) {
         const char *cls = m3g_class_of(objs[i].type);
         nj_u4 inner;
-        nj_ref o;
+        nj_ref o = 0;
 
+        if (objs[i].type == NJ_M3G_TYPE_EXTERNAL_REF && objs[i].fields.data) {
+            nj_status st = m3g_external_image(vm, base,
+                (const char *)objs[i].fields.data, &o);
+            if (st != NJ_OK) {
+                nj_root_release(vm, mark);
+                m3g_free_refs(vm, objs, nobj);
+                nj_host_free(vm, objs);
+                return st;
+            }
+            nj_array_set_ref(arr, i + 1u, o);
+            continue;
+        }
         if (!cls) { continue; }   /* a reserved type: the slot stays empty */
         inner = nj_root_mark(vm);
         o = nj_object_new(vm, cls);
@@ -4892,10 +5005,23 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
                  * object of a loaded scene sits at the origin, which is what a
                  * World drawn with no model matrices looks like - the camera
                  * and the track end up in the same place.
+                 *
+                 * The matrix array is allocated here because no Java
+                 * constructor runs for an object that came out of a file: the
+                 * field is declared on Transformable and its <init> is what
+                 * allocates it for a title-built node, so without this the
+                 * transform of every loaded Mesh, Group, Camera and Light was
+                 * read and then dropped.
                  */
-                nj_ref m = nj_rget(vm, o, nj_field_lookup(vm, NJ_C_XABLE, "_nj_m",
-                                                          "[F", 0));
+                nj_field *mf = nj_field_lookup(vm, NJ_C_XABLE, "_nj_m", "[F", 0);
+                nj_ref m = mf ? nj_rget(vm, o, mf) : 0;
 
+                if (!m) {
+                    m = mat_new(vm);
+                    if (m && mf) {
+                        nj_rput(vm, o, mf, m);
+                    }
+                }
                 if (m && nj_array_length(m) >= 16) {
                     float xf[16];
 
@@ -5114,7 +5240,7 @@ NJFN(m3g_load)
      * same defect this comment is about.
      */
     {
-        nj_status st = m3g_build_objects(vm, (const nj_u1 *)data, len, ret);
+        nj_status st = m3g_build_objects(vm, (const nj_u1 *)data, len, cname, ret);
 
         nj_host_free(vm, data);
         return st;
@@ -5360,7 +5486,7 @@ NJFN(m3g_load_bytes)
                         "the data is not a .m3g container "
                         "(wrong file identifier)");
     }
-    return m3g_build_objects(vm, (const nj_u1 *)b, n, ret);
+    return m3g_build_objects(vm, (const nj_u1 *)b, n, NULL, ret);
 }
 
 #define M(name, desc, flags) { name, desc, flags }
@@ -5616,6 +5742,14 @@ static const nj_builtin_field xform_fields[] = {
 };
 static const nj_builtin_field node_fields[] = {
     { "_nj_render", "Z", NJ_ACC_PUBLIC },
+    /*
+     * The rendering enable flag with the default the spec gives it.  A Java
+     * boolean field starts out false, and JSR 184 says a Node renders until
+     * setRenderingEnable(false) says otherwise - so the flag the walk asks
+     * about is this one, which is set only when a title speaks.  _nj_render
+     * stays for isRenderingEnabled() and for anything that reads the field.
+     */
+    { "_nj_hidden", "Z", NJ_ACC_PUBLIC },
     { "_nj_alpha",  "F", NJ_ACC_PUBLIC },
     { "_nj_parent", "L" NJ_C_NODE ";", NJ_ACC_PUBLIC },
     { "_nj_scope",  "I", NJ_ACC_PUBLIC },
@@ -8533,7 +8667,10 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                 nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
                 nj_u4 c, ca;
 
-                if (key <= 0 || key <= sw->z[o]) {
+                if (key <= 0) {
+                    continue;
+                }
+                if (key <= sw->z[o]) {
                     continue;
                 }
                 if (gouraud) {
@@ -8610,10 +8747,12 @@ typedef struct {
     const nj_s4 *lens;            /* a strip array's strip lengths */
     nj_s4 nstrip;
     nj_s4 ifirst;
-    m3g_sw sw;                    /* the target surface, when reachable */
+    m3g_sw sw;
+    nj_surface scratch;        /* the target view sw.surf points into */                    /* the target surface, when reachable */
     const nj_s2 *tpos;            /* texture coordinates, unit 0 */
     nj_s4 tcomp, tfirst, tcount, ttype;
     float tscale;                 /* VertexBuffer's texCoordScale */
+    const float *tmat;            /* Texture2D component/general transform */
     float tbias[4];               /* ... and its texCoordBias[3] */
     /*
      * Lighting.  JSR 184 lights a Material with the Light objects of the
@@ -8754,6 +8893,11 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
            placing one texture across many meshes. */
         st[0] = su * r->tscale + r->tbias[0];
         st[1] = tv * r->tscale + r->tbias[1];
+        if (r->tmat) {
+            float u = st[0], vtex = st[1];
+            st[0] = r->tmat[0] * u + r->tmat[1] * vtex + r->tmat[3];
+            st[1] = r->tmat[4] * u + r->tmat[5] * vtex + r->tmat[7];
+        }
     }
     return 1;
 }
@@ -8864,7 +9008,9 @@ static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
        terms add up. */
     for (i = 0; i < r->nlights; i++) {
         nj_ref lt = nj_array_get_ref(r->lights, (nj_u4)i);
-        nj_ref xf = r->lmats ? nj_array_get_ref(r->lmats, (nj_u4)i) : 0;
+        const float *xf = (r->lmats &&
+            nj_array_length(r->lmats) >= (nj_u4)(i + 1) * 16u)
+            ? (const float *)nj_array_data(r->lmats) + (nj_size)i * 16u : NULL;
         nj_field *fm, *fi, *fc, *fa, *fsa, *fse;
         nj_u4 col;
         float inten, att[3] = { 1.0f, 0.0f, 0.0f }, spot = 1.0f;
@@ -8906,8 +9052,8 @@ static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
             float le[4];
             float dx, dy, dz;
 
-            if (xf && nj_array_length(xf) >= 16) {
-                const float *m = (const float *)nj_array_data(xf);
+            if (xf) {
+                const float *m = xf;
                 /* The transform's origin and z axis, read the way
                    nj_m3g_project() reads a matrix (the same convention the
                    camera's own matrix is applied with, so a light and the
@@ -9198,7 +9344,7 @@ static void jr_triangle_v(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
 {
     const float near_eps = 0.05f;
     const jr_vtx *src[3];
-    const jr_vtx *poly[4];
+    jr_vtx poly[8];
     jr_vtx cut[3];
     float d[3];
     int inside[3];
@@ -9210,34 +9356,37 @@ static void jr_triangle_v(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
         inside[k] = (d[k] >= near_eps);
         nin += inside[k];
     }
-    if (nin == 3) {
-        jr_emit(r, v0, v1, v2);
-        return;
-    }
     if (nin == 0) {
         return;
     }
-    for (k = 0; k < 3; k++) {
-        int j = (k + 1) % 3;
+    if (nin == 3) {
+        poly[0] = *v0;
+        poly[1] = *v1;
+        poly[2] = *v2;
+        n = 3;
+    } else {
+        for (k = 0; k < 3; k++) {
+            int j = (k + 1) % 3;
 
-        if (inside[k]) {
-            poly[n++] = src[k];
-        }
-        if (inside[k] != inside[j]) {
-            float t = (near_eps - d[k]) / (d[j] - d[k]);
+            if (inside[k]) {
+                poly[n++] = *src[k];
+            }
+            if (inside[k] != inside[j]) {
+                float t = (near_eps - d[k]) / (d[j] - d[k]);
 
-            if (t < 0.0f) { t = 0.0f; }
-            if (t > 1.0f) { t = 1.0f; }
-            jr_blend(r, src[k], src[j], t, &cut[k]);
-            poly[n++] = &cut[k];
+                if (t < 0.0f) { t = 0.0f; }
+                if (t > 1.0f) { t = 1.0f; }
+                jr_blend(r, src[k], src[j], t, &cut[k]);
+                poly[n++] = cut[k];
+            }
         }
     }
     if (n < 3) {
         return;
     }
-    jr_emit(r, poly[0], poly[1], poly[2]);
-    if (n == 4) {
-        jr_emit(r, poly[0], poly[2], poly[3]);
+    jr_emit(r, &poly[0], &poly[1], &poly[2]);
+    for (k = 3; k < n; k++) {
+        jr_emit(r, &poly[0], &poly[k - 1], &poly[k]);
     }
 }
 
@@ -9310,7 +9459,6 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     nj_s4 nstrip = 0;
     float view[16], proj[16], model[16];
     float id[16];
-    nj_surface sc;
     m3g_jr r;
 
     memset(&r, 0, sizeof(r));
@@ -9367,7 +9515,12 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                                            "Ljavax/microedition/lcdui/Image;", 0);
             if (gf) { img = nj_rget(vm, target, gf); }
         }
-        s = nj_midp_surface(vm, img, &sc);
+        /*
+         * The view must outlive this call: jr_draw runs after jr_setup has
+         * returned, and a scratch living on jr_setup's own frame turns into
+         * whatever the next call puts there.  It lives in the draw state.
+         */
+        s = nj_midp_surface(vm, img, &r.scratch);
         /*
          * The software rasteriser writes 32-bit pixels, so a 16-bit target
          * cannot go through it - and a renderer that quietly dropped every
@@ -9488,6 +9641,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         }
     }
 
+
     /* Colours, and the material that overrides them. */
     r.col = NULL;
     r.ccomp = r.cfirst = r.ccount = 0;
@@ -9547,16 +9701,9 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     }
     if (!r.lights) { r.nlights = 0; }
     /*
-     * Lighting needs a Material, normals, and something to light with.  The
-     * last part is not in the JSR's own condition and it is what the rally
-     * title needs: it never adds a light - it calls neither
-     * Graphics3D.addLight nor anything else that fills the array - so the
-     * lighting equation would leave every one of its meshes at the material's
-     * emissive colour, which is black, and the track would be a silhouette.
-     * With no lights in the scene there is nothing to light with, so the
-     * surface is drawn unlit: its own colours, or the material's diffuse, or
-     * its texture.  That is also the picture a title gets when its buffer
-     * carries no normals, so it is one rule, not two.
+     * Lighting uses the Material, normals and collected lights. Without
+     * normals or lights this renderer keeps the surface's unlit colours.
+     * World rendering collects Light nodes separately from addLight calls.
      */
     r.lit = (mat != 0 && r.nrm != NULL && r.ncomp >= 3 && r.nlights > 0);
     r.fog = 0;
@@ -9621,6 +9768,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
             if (tex) {
                 nj_ref im2 = nj_rget(vm, tex, m3g_fof(vm, NJ_C_TEX2D, "_nj_img",
                                                       "L" NJ_C_IMAGE2D ";"));
+                r.tmat = mat_of(vm, tex, NJ_C_XABLE, "_nj_m");
                 r.sw.wrap_s = (int)nj_iget(vm, tex,
                                m3g_fof(vm, NJ_C_TEX2D, "_nj_wrapS", "I"));
                 r.sw.wrap_t = (int)nj_iget(vm, tex,
@@ -9744,7 +9892,18 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     r.jt.g = g;
     r.jt.ox = r.vx;
     r.jt.oy = r.vy;
-    r.drawn = 0u;    *out = r;
+    r.drawn = 0u;
+    *out = r;
+    /*
+     * sw.surf is the one field that points into the draw state itself: the
+     * scratch above, filled by nj_midp_surface().  Copying the struct leaves
+     * it aimed at this frame, which is dead the moment jr_setup returns - the
+     * rasteriser then writes the picture into whatever the next call puts
+     * there.  It has to follow the copy.
+     */
+    if (r.sw.surf == &r.scratch) {
+        out->sw.surf = &out->scratch;
+    }
     return 1;
 }
 
@@ -9826,6 +9985,13 @@ static void collect_lights_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
     if (!o || depth > 32) {
         return;
     }
+    {
+        nj_field *hf = nj_field_lookup(vm, NJ_C_NODE, "_nj_hidden", "Z", 0);
+
+        if (hf && nj_iget(vm, o, hf)) {
+            return;              /* a light under a hidden node lights nothing */
+        }
+    }
     cn = nj_ref_class_name(o);
     memcpy(model, parent, sizeof(model));
     m = nj_rget(vm, o, nj_field_lookup(vm, NJ_C_XABLE, "_nj_m", "[F", 0));
@@ -9862,6 +10028,7 @@ static void collect_lights_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
         }
     }
 }
+
 
 /*
  * Draw every mesh the walk collected, each with its own matrix, vertex buffer,
@@ -9901,11 +10068,7 @@ static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
                       mats + (nj_size)i * 16u, &r)) {
             continue;
         }
-        {
-            nj_u4 d = jr_draw(&r);
-
-            drawn += d;
-        }
+        drawn += jr_draw(&r);
     }
     return drawn;
 }
@@ -9978,24 +10141,35 @@ NJFN(m3g_g3d_setLight)
     }
     lights = m3g_g3d_slot(vm, self, "_nj_lights", "L" NJ_C_LIGHT ";",
                               "[L" NJ_C_LIGHT ";", index);
-    mats = m3g_g3d_slot(vm, self, "_nj_lmats", "[F", "[F", index);
-    if (!lights || !mats) {
+    {
+        nj_ref old = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lmats", "[F"));
+        nj_u4 count = (nj_u4)(index + 1) * NJ_MF;
+
+        mats = old;
+        if (!mats || nj_array_length(mats) < count) {
+            mats = nj_array_new(vm, "F", count);
+            if (!mats) { return nj_throw_oom(vm); }
+            if (old) {
+                memcpy(nj_array_data(mats), nj_array_data(old),
+                       (nj_size)nj_array_length(old) * sizeof(float));
+            }
+            nj_rput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lmats", "[F"), mats);
+        }
+    }
+    if (!lights) {
         return nj_throw_oom(vm);
     }
     nj_array_set_ref(lights, (nj_u4)index, NJ_ARG_REF(args, 1));
-    if (NJ_ARG_REF(args, 2)) {
-        nj_ref m = mat_new(vm);
+    {
+        float *dst = (float *)nj_array_data(mats) + (nj_size)index * NJ_MF;
 
         src = mat_of(vm, NJ_ARG_REF(args, 2), NJ_C_XFORM, "_nj_m");
-        if (!m) {
-            return nj_throw_oom(vm);
-        }
         if (src) {
-            memcpy((float *)m->u.bytes, src, sizeof(float) * NJ_MF);
+            memcpy(dst, src, sizeof(float) * NJ_MF);
+        } else {
+            memset(dst, 0, sizeof(float) * NJ_MF);
+            dst[0] = dst[5] = dst[10] = dst[15] = 1.0f;
         }
-        nj_array_set_ref(mats, (nj_u4)index, m);
-    } else {
-        nj_array_set_ref(mats, (nj_u4)index, NULL);
     }
     if (nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I")) < index + 1) {
         nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I"), index + 1);

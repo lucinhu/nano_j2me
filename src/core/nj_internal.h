@@ -324,6 +324,15 @@ struct nj_vm {
     const char *find_key[NJ_CLASS_FIND_SLOTS];
     nj_class   *find_cls[NJ_CLASS_FIND_SLOTS];
 
+    /*
+     * A class the engine itself creates on demand - the MIDlet timer's pump
+     * thread is the one that exists - is not in the JAR, so nj_class_resolve()
+     * has nothing to load it from by name.  The module that owns such a class
+     * installs this hook and answers for it; without it a snapshot naming that
+     * class cannot be resumed, and the load reports a JAR mismatch instead.
+     */
+    nj_class *(*class_hook)(nj_vm *vm, const char *internal_name);
+
     /* frequently used classes (filled lazily, keeps hot paths hash-free) */
     nj_class  *cls_string;
     nj_class  *cls_class;

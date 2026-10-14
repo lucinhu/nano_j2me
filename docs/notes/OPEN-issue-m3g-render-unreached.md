@@ -1,4 +1,9 @@
-# OPEN: no title reaches `Graphics3D.render()`, and the instrument lied about it
+# M3G rendering investigation: Rally race and wheel textures restored
+
+Current status: Rally renders its race and original wheel textures. The full
+CTest suite passes 78/78; the 395-title compatibility corpus remains 393 passed
+and 2 failed (the same baseline failures). Earlier sections preserve the
+investigation history; the final section corrects the white-scene diagnosis.
 
 ## What was believed
 
@@ -542,13 +547,38 @@ carries the car, so its own matrix is only local.  `Graphics3D.setCamera`'s
 Transform still wins when a title uses it; the node's own matrix remains the
 fallback for a camera that is not in the World's graph at all.
 
-Measured on `tests/games/3D拉力赛-进化汉化版_6366.jar` (1,500 paced frames,
-`--heap 16`, 240x320): every mesh's world placement and projected box.  The car
-and its parts sit at (-787, -1005) and the camera at (-788.8, -1009.8, 1.7) -
-about five units behind it, which is why a 3.3-unit car fills 209x87 px of the
-screen.  The three large terrain meshes sit at the file origin, and the car is
-inside their extent ((-882,-1403)..(536,1044)): the scene is consistent, and
-the ground is drawn - it is the material colour, and with no light in the scene
-this runtime draws it unlit, so it comes out the same near-white as the sky the
-title itself clears to.  That, and not a missing mesh, is what "the scene is not
-displayed" is looking at.
+The earlier 1,500-frame placement trace established that the camera and meshes
+occupy a consistent scene. Its explanation of the white ground and sky was
+incorrect: Rally's World does contain an ambient light (intensity 1.9), and its
+Background and track textures reference external PNG resources.
+
+### Rally: external textures, sky and wheel validation
+
+A fresh 2,700-frame run at 240x320, `--heap 16 --fps 30`, now draws the blue
+sky, snow mountains, textured road, rear car and HUD. Accelerating and steering
+reaches 124 km/h. It records 120,397 triangles and 8,384 M3G calls. Timer task
+exceptions are still caught by the game/runtime and are not claimed fixed.
+
+The loader now resolves external image URIs relative to the M3G resource while
+preserving reference-table numbering. Texture2D's image reference follows both
+Transformable fields; its component transform is applied to texture coordinates
+after VertexBuffer scale/bias. Borrowed decoded payloads are copied before
+inflated sections are freed, including TriangleStripArray's strip-length tail.
+The World camera, mesh references and strip indices are linked correctly, hidden
+nodes are skipped, and near-plane clipping retains triangles crossing the view.
+Background crop, repeat/border and independent depth clearing are implemented.
+Material defaults, RGB/RGBA vertex colours and World light records were aligned
+with the renderer's representation.
+
+The road's longitudinal grey bands are present in the original `road_new.png`.
+An isolated side view of the original `fo.m3g` body (user ID 12) and wheel mesh
+(user ID 22), using the game's 0.032 scale and original Ford skin/wheel image,
+shows the wheel rims with normal culling. This verifies the wheel texture path;
+it is a controlled model view, not a screenshot taken during the race.
+
+![Rally race](../images/rally3d-race.png)
+![Original car and wheel side view](../images/rally3d-wheels.png)
+
+Regression fixtures cover compressed payload ownership and strip tails,
+Texture2D reference offsets/component scale, and Background crop/repeat/border
+plus depth clearing. The full CTest suite passes 78/78.

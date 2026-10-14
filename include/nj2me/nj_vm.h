@@ -794,7 +794,8 @@ typedef struct nj_m3g_fields {
      */
     nj_u4 *extra;
     nj_u4 nrefs_total;
-    const nj_u1 *data;   /* a VertexArray's bytes, inside the section buffer */
+    const nj_u1 *data;   /* decoded bytes, borrowed by decode_object */
+    nj_u1 *owned_data;   /* scan_objects copy; freed with the scan result */
     nj_u4 data_len;      /* how many of them there are */
     nj_u1 decoded;
 } nj_m3g_fields;
