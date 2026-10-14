@@ -287,7 +287,12 @@ not enough - an animated logo flips thousands of pixels too, in thin streaks
 (`波斯王子之武者之心_8424` is `two=2123px` with a largest connected piece of
 243), while a tear is one piece of thousands - so the verdict uses the largest
 connected `blob`.  `NJ_KEYS` drives
-a title past its menu, and `tools/frame_health.py` does the counting.
+a title past its menu, and `tools/frame_health.py` does the counting.  A run over all 395 titles with no input flags fifteen; eight of
+them re-checked with the blob rule are four tears and three suspects, and
+reading the frames shows what they are: an animated logo, a screen blanked
+for exactly one frame between two identical ones (`男摄影师_11003`), a
+loading spinner that blinks.  None of them is the runtime's - the two that
+were are the ones 08c7c26 fixed.
 
 ### A mutable image is white, and always opaque
 
