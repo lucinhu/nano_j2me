@@ -663,8 +663,14 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
                 nj_u4 at = 17u + isz * n;
                 if (at + 4u <= len) {
                     nj_u4 nstrip = le32(data + at);
-                    if (nstrip >= 1u && nstrip <= 64u &&
-                        at + 4u + 4u * nstrip == len) {
+                    /*
+                     * The exact-consumption test is the real validator: a
+                     * strip count is bounded by what is left of the object.
+                     * The rally title's terrain carries 242, 262 and 320
+                     * strips in one array, so an earlier ceiling of 64 threw
+                     * away exactly the meshes that make up the ground.
+                     */
+                    if (nstrip >= 1u && at + 4u + 4u * nstrip == len) {
                         out->a = enc;
                         out->b = n;
                         out->c = nstrip;
@@ -9040,9 +9046,9 @@ static void jr_strip(m3g_jr *r, const nj_s4 *idx, nj_s4 count, nj_s4 first)
     nj_s4 i;
 
     for (i = 0; i + 3 <= count; i++) {
-        nj_s4 v0 = idx ? idx[i] : (first + i);
-        nj_s4 v1 = idx ? idx[i + 1] : (first + i + 1);
-        nj_s4 v2 = idx ? idx[i + 2] : (first + i + 2);
+        nj_s4 v0 = idx ? idx[first + i] : (first + i);
+        nj_s4 v1 = idx ? idx[first + i + 1] : (first + i + 1);
+        nj_s4 v2 = idx ? idx[first + i + 2] : (first + i + 2);
 
         /* A strip walks its vertices in order, so consecutive triangles come
            out with OPPOSITE winding unless the odd ones swap their first two
@@ -9060,9 +9066,9 @@ static void jr_list(m3g_jr *r, const nj_s4 *idx, nj_s4 count, nj_s4 first)
     nj_s4 i;
 
     for (i = 0; i + 3 <= count; i += 3) {
-        nj_s4 v0 = idx ? idx[i] : (first + i);
-        nj_s4 v1 = idx ? idx[i + 1] : (first + i + 1);
-        nj_s4 v2 = idx ? idx[i + 2] : (first + i + 2);
+        nj_s4 v0 = idx ? idx[first + i] : (first + i);
+        nj_s4 v1 = idx ? idx[first + i + 1] : (first + i + 1);
+        nj_s4 v2 = idx ? idx[first + i + 2] : (first + i + 2);
 
         jr_triangle(r, (nj_u4)v0, (nj_u4)v1, (nj_u4)v2);
     }

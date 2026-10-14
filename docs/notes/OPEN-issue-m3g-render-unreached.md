@@ -478,3 +478,34 @@ the dashboard are unchanged.  Two things are still wrong:
 * The terrain meshes sit at the file origin while the car is at
   `(-787, -1005)`, i.e. beyond the camera's far plane, so the track the title
   draws is not the terrain those meshes describe.
+
+## The strip array was read with a ceiling, and drawn from index zero
+
+The round that produced `docs/images/rally3d-race.png` found two defects in the
+TriangleStripArray path, and both of them hid the other:
+
+* The decoder refused any array with more than 64 strips.  The rally title's
+  terrain carries 70, 242, 262 and 320 strips in a single array, so exactly the
+  meshes that make up the ground were left undecoded, which sent every one of
+  them down the "no index buffer" fallback.  The ceiling was an artefact of a
+  partial measurement: the exact-consumption test (`at + 4 + 4 * nstrip == len`)
+  is the real validator, because a strip count is bounded by what is left of
+  the object.
+* `jr_strip()` read `idx[i]` instead of `idx[first + i]`.  `first` is where the
+  strip begins in the index array, so every strip of an array re-read the first
+  one; with 320 strips that drew the same few triangles 320 times.  The fix is
+  in both `jr_strip()` and `jr_list()`.
+
+Measured on `3D拉力赛-进化汉化版_6366.jar`, 1,500 paced frames, `--heap 16`:
+
+| | triangles | colours in the frame |
+|---|---|---|
+| before | 1,385 | 82 |
+| after | 62,083 | 183 |
+
+The frame is now the car seen from behind with its Castrol livery, the grey
+road surface it sits on, the white sky the title's own `Background` asks for,
+and the HUD (`Lap Time`, `Total Time`, the minimap arrow and the speedometer)
+on top.  The dotted lines that remain in the sky are the terrain strips that
+are still placed at the file origin instead of along the track - the next
+piece, and the last one this note knows about.
