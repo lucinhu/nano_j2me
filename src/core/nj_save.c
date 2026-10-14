@@ -72,6 +72,8 @@
 #define NJ_SAVE_VERSION   1u
 #define NJ_SAVE_ENDIAN    0x01020304u
 #define NJ_SAVE_HDR_SIZE  176u
+/* the largest blob worth believing: arena + stacks + statics + records */
+#define NJ_SAVE_BLOB_MAX ((nj_u8)NJ_MAX_HEAP + (nj_u8)NJ_MAX_THREADS * (nj_u8)NJ_MAX_STACK_SLOTS * 8u + 4u * 1024u * 1024u)
 #define NJ_SAVE_NONE      0xFFFFFFFFu   /* NULL arena offset / no thread   */
 #define NJ_SAVE_NO_CLASS  0xFFFFu       /* NULL nj_class                   */
 #define NJ_SAVE_NAME_MAX  1024u
@@ -795,6 +797,35 @@ static int save_threads(nj_vm *vm, nj_swriter *w)
             return 0;
         }
         used = (nj_u4)(th->top - th->stack_mem);
+        if (th->nframes < 0 || th->nframes > NJ_MAX_FRAMES) {
+            return 0;
+        }
+        /*
+         * th->top is only the frame-allocation frontier and it can lag BEHIND
+         * a live operand stack: nj_frame_pop() sets top to the locals of the
+         * frame that just returned, and the caller then pushes operands above
+         * it into the same slots.  Saving top bytes only would drop those
+         * operands - the restored program then ran on a stack with zeros where
+         * its operands were.  The image has to reach the highest slot any live
+         * frame can read: its sp, or its locals.
+         */
+        for (f = 0; f < th->nframes; f++) {
+            nj_frame *fr = &th->frames[f];
+            nj_u4 need;
+
+            if (!fr->sp || !fr->locals || fr->sp < th->stack_mem ||
+                fr->sp > th->stack_end || fr->locals < th->stack_mem ||
+                fr->locals > th->stack_end) {
+                return 0;
+            }
+            need = (nj_u4)(fr->sp - th->stack_mem);
+            if ((nj_u4)(fr->locals - th->stack_mem) > need) {
+                need = (nj_u4)(fr->locals - th->stack_mem);
+            }
+            if (need > used) {
+                used = need;
+            }
+        }
         if (used > (nj_u4)NJ_MAX_STACK_SLOTS ||
             th->nframes < 0 || th->nframes > NJ_MAX_FRAMES) {
             return 0;
@@ -908,8 +939,18 @@ static int save_records_b(nj_vm *vm, nj_swriter *w)
             if (end < fr->sp) {
                 end = fr->sp;
             }
-            if (end > th->top) {
-                end = th->top;        /* never read past the live stack */
+            if (end > fr->sp) {
+                /*
+                 * The live operand stack ends at this frame's own sp, NOT at
+                 * th->top.  top is only the frame-allocation frontier and
+                 * nj_frame_pop() deliberately leaves it behind: it points at
+                 * the locals of the frame that just returned, and the caller
+                 * then pushes fresh operands above it.  Clamping to top
+                 * dropped the record that translates exactly those operands,
+                 * so a restored run read an object pointer out of the saving
+                 * process's address space and took SIGSEGV inside nj_exec.
+                 */
+                end = fr->sp;
             }
             for (p = fr->locals; p < end; p++) {
                 if (!is_live_obj(vm, p->r)) {
@@ -1013,7 +1054,17 @@ int nj_vm_save(nj_vm *vm, FILE *f)
         return st;
     }
     for (i = 0u; i < vm->nclasses; i++) {
-        abi = class_abi_hash(abi, vm->classes[i]);
+        nj_class *c = vm->classes[i];
+        /*
+         * Only a linked class has a layout worth checking: an unlinked one has
+         * instance_size 0 and no static slot numbers yet, so the two sides of
+         * a save/load could never agree on its numbers.  It holds nothing in
+         * the image either - the loader re-links it lazily when the restored
+         * program actually asks for it.
+         */
+        if (c && c->state >= NJ_CLASS_LINKED) {
+            abi = class_abi_hash(abi, c);
+        }
     }
     arena_crc = nj_crc_update(0u, vm->heap.base, vm->heap.bump);
     /* Reading the clock folds the port's millis into scheduler_ticks; do it
@@ -1045,7 +1096,15 @@ int nj_vm_save(nj_vm *vm, FILE *f)
          */
         nj_u4 sbase = NJ_SAVE_NONE;
 
-        if (c) {
+        /*
+         * Only a LINKED class has had its static slots handed out.  A class
+         * that was merely loaded when the snapshot was taken still has every
+         * field offset at 0, which would make it look like the class owning
+         * slots 0..n and send the loader down the wrong link order.  It has
+         * no statics and no instances in the image, so it is left for lazy
+         * linking, exactly as it was.
+         */
+        if (c && c->state >= NJ_CLASS_LINKED) {
             nj_u2 f;
             for (f = 0u; f < c->field_count; f++) {
                 if ((c->fields[f].flags & NJ_ACC_STATIC) != 0u &&
@@ -1411,8 +1470,12 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     nj_u4 screen_w, screen_h, pixfmt, frames_presented, speed, midp_flags;
     nj_u4 abi, packed, exc_pc, app_cls, next_tid, stored_crc, i, t;
     nj_u4 max_id = 0u;
+    nj_value *statics_old = NULL;   /* the caller's slots, for the fail path */
+    nj_u4 statics_old_n = 0u;
+    nj_u8 old_heap_size = 0u;
     nj_s8 delta;
     int installed = 0;
+    int threads_installed = 0;
     int rc = NJ_ERR_FORMAT;
 
     if (!vm || !f || !vm->statics) {
@@ -1430,7 +1493,14 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     if (flen < 0) {
         return NJ_ERR_UNSUPPORTED;
     }
-    if ((nj_u8)flen > (nj_u8)NJ_MAX_HEAP + 65536u) {
+    /*
+     * Sanity cap, not a heap cap: the blob carries the arena image plus every
+     * live thread's stack image (NJ_MAX_STACK_SLOTS slots each), the statics
+     * and the slot records - so a legitimate snapshot of a full heap is
+     * several megabytes larger than the heap itself.  Anything past this is a
+     * file that is not a snapshot, and is refused before it is buffered.
+     */
+    if ((nj_u8)flen > NJ_SAVE_BLOB_MAX) {
         return NJ_ERR_FORMAT;
     }
     if (fseek(f, 0L, SEEK_SET) != 0) {
@@ -1586,18 +1656,22 @@ int nj_vm_load(nj_vm *vm, FILE *f)
         nj_u2 idx = order[i];
         nj_class *c = map[idx];
 
+        /*
+         * A class that was merely LOADED when the snapshot was taken had never
+         * been linked there, so it owns no static slots.  Linking it here
+         * would hand out slots that the saved VM gave to another class, and in
+         * a different order - every static slot after it would then be wrong.
+         * It is left loaded and linked on demand, exactly as it was, which is
+         * also what makes an unlinked class harmless in the image: it has no
+         * statics and no instances to restore.
+         */
+        if (cstate[idx] < NJ_CLASS_LINKED) {
+            continue;
+        }
         if (c->state < NJ_CLASS_LINKED) {
             if (nj_class_link(vm, c) != NJ_OK) {
                 NJ_LOAD_FAIL(NJ_ERR_FORMAT);   /* class cannot be linked */
             }
-        }
-        /*
-         * Restore the saved class state, so a class whose <clinit> had already
-         * run is not initialized a second time - that would reset the static
-         * fields the image below is about to restore.
-         */
-        if ((nj_u2)c->state < cstate[idx]) {
-            c->state = (nj_u1)cstate[idx];
         }
     }
     /* Now that the classes are laid out, verify them against the saved ABI. */
@@ -1610,9 +1684,11 @@ int nj_vm_load(nj_vm *vm, FILE *f)
             nj_u2 mcount = cinfo[i * 4u + 2u];
             nj_u2 is_arr = cinfo[i * 4u + 3u];
 
-            if (map[i]->instance_size != inst || map[i]->field_count != fcount ||
+            if (map[i]->field_count != fcount ||
                 map[i]->method_count != mcount ||
-                (nj_u2)map[i]->is_array != is_arr) {
+                (nj_u2)map[i]->is_array != is_arr ||
+                (cstate[i] >= NJ_CLASS_LINKED &&
+                 map[i]->instance_size != inst)) {
                 if (getenv("NJ_SAVE_DEBUG")) {
                     fprintf(stderr, "  class %s: saved inst=%u f=%u m=%u arr=%u"
                             " have inst=%u f=%u m=%u arr=%u state=%u\n",
@@ -1625,7 +1701,9 @@ int nj_vm_load(nj_vm *vm, FILE *f)
                 }
                 NJ_LOAD_FAIL(NJ_ERR_FORMAT);   /* the JAR does not match */
             }
-            h = class_abi_hash(h, map[i]);
+            if (cstate[i] >= NJ_CLASS_LINKED) {
+                h = class_abi_hash(h, map[i]);
+            }
         }
         if (h != abi) {
             NJ_LOAD_FAIL(NJ_ERR_FORMAT);      /* layout changed */
@@ -1638,6 +1716,23 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     /* Static slots, verbatim.  From here until the arena image is in place no
      * code may allocate from the Java heap: those slots still hold pointers
      * into the arena that is about to be replaced. */
+    if (vm->nstatics > 0u) {
+        /*
+         * Keep the caller's slots so that a failure below can put them back.
+         * Without this a refused load left half of them holding offsets into
+         * the arena that was then dropped, and the VM the caller falls back to
+         * ("cannot resume, start the MIDlet instead") was full of dangling
+         * pointers - the fallback start died in a Java method that read one.
+         */
+        statics_old_n = vm->nstatics;
+        statics_old = (nj_value *)nj_host_alloc(vm, (nj_size)statics_old_n *
+                                                   (nj_size)sizeof(nj_value));
+        if (!statics_old) {
+            NJ_LOAD_FAIL(NJ_ERR_NOMEM);
+        }
+        memcpy(statics_old, vm->statics,
+               (size_t)statics_old_n * sizeof(nj_value));
+    }
     for (i = 0u; i < nstatics; i++) {
         nj_u8 bits;
         if (!sr_u64(&rd, &bits)) {
@@ -1646,6 +1741,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
         memcpy(&vm->statics[i], &bits, sizeof(bits));
     }
     vm->gc_disabled = 1u;
+    old_heap_size = heap_size;
 
     /* A new arena, then drop the old one.  Allocating first means a failure
      * here leaves the running VM intact. */
@@ -1780,6 +1876,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
         nj_thread_destroy(vm, vm->threads[0]);
     }
     vm->cur = NULL;
+    threads_installed = 1;
     for (t = 0u; t < nthreads; t++) {
         nj_thread *th;
         nj_u4 scalars, prio, exit_value, stop_depth, in_c_call, id;
@@ -1845,9 +1942,23 @@ int nj_vm_load(nj_vm *vm, FILE *f)
             }
             (void)pad1;
             (void)pad2;
-            if (lo > used || so > used || spo > used || slo > used ||
-                abo > used || abo > lo || lo > spo || so > spo ||
-                spo > slo || (mo != NJ_SAVE_NONE && mo >= vm->heap.bump)) {
+            /*
+             * Locals and the live operand stack have to lie inside the image
+             * that was just copied (used slots), and the frame's own bounds
+             * have to be monotonically ordered inside the thread's stack.
+             *
+             * stack_limit is deliberately NOT compared with `used`: a callee
+             * that has returned leaves th->top at its own locals, which is
+             * below the caller's stack_limit, so a live frame may have room
+             * above the copied image.  That room is inside the thread's stack
+             * block (freshly allocated and zeroed) and is exactly the space
+             * the frame is allowed to grow into.  sp is the bound that
+             * matters: everything live is at or below it.
+             */
+            if (lo > used || spo > used ||
+                abo > lo || lo > so || so > spo || spo > slo ||
+                slo > (nj_u4)NJ_MAX_STACK_SLOTS ||
+                (mo != NJ_SAVE_NONE && mo >= vm->heap.bump)) {
                 NJ_LOAD_FAIL(NJ_ERR_FORMAT);
             }
             fr = &th->frames[f];
@@ -1922,6 +2033,21 @@ int nj_vm_load(nj_vm *vm, FILE *f)
             NJ_LOAD_FAIL(NJ_ERR_FORMAT);      /* a surface with no geometry */
         }
     }
+    /*
+     * Last of all, mark the classes whose <clinit> had already run in the
+     * saved VM as READY, so a restored program does not initialize them a
+     * second time and reset the statics that were just restored.  This has to
+     * wait until nothing below can fail: a refused load used to leave classes
+     * looking initialized while their <clinit> had never run in THIS VM, and
+     * the caller's fallback start then died on the first static field it read.
+     */
+    for (i = 0u; i < nclasses; i++) {
+        if ((nj_u2)map[i]->state < cstate[i]) {
+            map[i]->state = (nj_u1)cstate[i];
+        }
+    }
+    nj_host_free(vm, statics_old);
+    statics_old = NULL;
     vm->gc_disabled = 0u;
     nj_host_free(vm, map);
     map = NULL;
@@ -1944,6 +2070,22 @@ int nj_vm_load(nj_vm *vm, FILE *f)
 
 fail:
     vm->gc_disabled = 0u;
+    /*
+     * Put the caller's static slots back exactly as they were.  What the
+     * loader wrote into them is either an offset into an arena that is about
+     * to be dropped or a value out of a blob it has just refused.
+     */
+    if (statics_old) {
+        memcpy(vm->statics, statics_old,
+               (size_t)statics_old_n * sizeof(nj_value));
+        vm->nstatics = statics_old_n;
+        nj_host_free(vm, statics_old);
+        statics_old = NULL;
+    }
+    /* Linking a class can raise an exception; it belongs to a refused load. */
+    vm->exception = NULL;
+    vm->exception_method = NULL;
+    vm->exception_pc = 0u;
     if (installed) {
         /* The arena holds a half-applied image: drop it whole rather than
          * leave the VM with pointers into a mix of two heaps. */
@@ -1955,6 +2097,32 @@ fail:
         vm->heap.bump = 0u;
         vm->heap.used = 0u;
         vm->heap.external = 0u;
+    }
+    if (threads_installed) {
+        /*
+         * The threads now in the VM were read out of the blob and their refs
+         * point into the arena that was just dropped.  A caller is allowed to
+         * ignore a refused load and start the MIDlet from scratch (nj_run()
+         * does), so leave it the one fresh main thread a new VM would have.
+         */
+        while (vm->nthreads > 0u) {
+            nj_thread_destroy(vm, vm->threads[0]);
+        }
+        vm->cur = nj_thread_create(vm, NULL, 1);
+    }
+    if (installed) {
+        /*
+         * Leave the VM usable: every caller may fall back to starting the
+         * MIDlet normally, and a VM with no arena at all would fail every
+         * allocation instead.  A fresh, empty arena of the same size is the
+         * VM it would have had if no snapshot had ever been offered.
+         */
+        nj_size hs = (nj_size)(old_heap_size ? old_heap_size
+                                             : (nj_u8)NJ_MAX_HEAP);
+        if (nj_heap_init(vm, NULL, hs) != NJ_OK) {
+            vm->heap.base = NULL;
+            vm->heap.size = 0u;
+        }
     }
     if (cinfo) {
         nj_host_free(vm, cinfo);

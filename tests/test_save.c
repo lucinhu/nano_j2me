@@ -31,6 +31,14 @@
 
 static int checks;
 static int failures;
+
+/*
+ * The thread/frame VM A was in when the snapshot was taken, so the checks
+ * after the load can compare the restored one with it (stack-image test).
+ */
+static nj_u2 saved_thread_idx;
+static int   saved_nframes = -1;
+static nj_u4 saved_sp_off;
 static nj_u4 fake_now;
 
 #define CHECK(cond, what)                                                   \
@@ -48,6 +56,7 @@ static nj_u4 fake_now;
 #define STATE_PATH  "/tmp/nj2me_test_state.bin"
 #define BAD_PATH    "/tmp/nj2me_test_state_bad_crc.bin"
 #define GEN2_PATH   "/tmp/nj2me_test_state_gen2.bin"
+#define UNLINKED_PATH "/tmp/nj2me_test_state_unlinked.bin"
 #define DISPLAY_GRACE 90
 
 static nj_u4 fake_millis(void *ud)
@@ -339,6 +348,35 @@ int main(void)
     }
     CHECK(nj_vm_can_save(vm_a) == 1, "accepts again once the flags are clear");
 
+    /*
+     * Regression: th->top is only the frame-allocation frontier, not a
+     * high-water mark.  nj_frame_pop() leaves it at the locals of the frame
+     * that just returned and the caller then pushes operands ABOVE it, so a
+     * live operand stack can sit past th->top.  A snapshot that imaged only
+     * th->top slots dropped those operands, and the next save of the restored
+     * VM refused to load at all because a frame's sp pointed past its image
+     * (a real game hit exactly that).  Leave this VM in that state.
+     */
+    {
+        nj_u2 ti;
+        for (ti = 0u; ti < vm_a->nthreads; ti++) {
+            nj_thread *t = vm_a->threads[ti];
+
+            if (t && t->nframes > 0) {
+                nj_frame *fr = &t->frames[t->nframes - 1];
+
+                saved_thread_idx = ti;
+                saved_nframes = t->nframes;
+                saved_sp_off = (nj_u4)(fr->sp - t->stack_mem);
+                if (fr->locals > t->stack_mem && fr->locals < fr->sp) {
+                    t->top = fr->locals;   /* what a returned callee leaves */
+                }
+                CHECK(t->top <= fr->sp, "the thread is in the stale-top state");
+                break;
+            }
+        }
+    }
+
     /* ---- save ------------------------------------------------------- */
     CHECK(nj_vm_save_file(vm_a, STATE_PATH) == NJ_OK, "nj_vm_save_file()");
     CHECK(nj_vm_save_file(vm_a, "/nonexistent-dir/nope.bin") != NJ_OK,
@@ -380,6 +418,20 @@ int main(void)
           "the restored String is the same object as the interned literal");
     CHECK(b_b != b_a, "the arena really moved (a new object address)");
     CHECK(nj_string_len(s_b0) == 5u, "nj_string_len() works on restored data");
+
+    /* the stale-top thread came back with its operand stack pointer intact */
+    if (saved_nframes > 0 && saved_thread_idx < vm_b->nthreads) {
+        nj_thread *t = vm_b->threads[saved_thread_idx];
+
+        CHECK(t != NULL && t->nframes == saved_nframes,
+              "the restored thread kept its frame chain");
+        if (t && t->nframes == saved_nframes) {
+            nj_frame *fr = &t->frames[saved_nframes - 1];
+
+            CHECK((nj_u4)(fr->sp - t->stack_mem) == saved_sp_off,
+                  "the restored frame's operand stack pointer is intact");
+        }
+    }
 
     /* (2) it can allocate, and run more frames */
     /* nj_alloc() is the heap allocator: the free lists must have been rebuilt
@@ -445,6 +497,72 @@ int main(void)
     }
 
 after_vm_b:
+    /*
+     * Regression: a class that was merely LOADED when the snapshot was taken.
+     * A real game carries one - 仙剑奇侠传 has pal/e, a class the verifier
+     * resolved and the program never used - and its entry has instance_size 0
+     * and no static slots at all.  Linking it again on load handed out static
+     * slots the saved VM had given to other classes, and comparing its saved
+     * instance_size (0) against the freshly linked one refused the whole blob,
+     * so the restored game never started.  Forge that entry and check that the
+     * load succeeds and leaves the class exactly as it was.
+     */
+    {
+        nj_class *victim = NULL;
+        nj_u2 vi;
+
+        for (vi = 0u; vi < vm_a->nclasses; vi++) {
+            nj_class *c = vm_a->classes[vi];
+
+            if (c && !c->is_array && c->state >= NJ_CLASS_LINKED &&
+                strcmp(c->name, "FieldParent") == 0) {
+                victim = c;
+                break;
+            }
+        }
+        CHECK(victim != NULL, "found a class to present as never-linked");
+        if (victim) {
+            nj_u1 keep_state = victim->state;
+            nj_u2 keep_size = victim->instance_size;
+            nj_vm *vm_g = NULL;
+
+            victim->state = NJ_CLASS_LOADED;
+            victim->instance_size = 0u;
+            CHECK(nj_vm_save_file(vm_a, UNLINKED_PATH) == NJ_OK,
+                  "saved a blob holding a never-linked class");
+            victim->state = keep_state;
+            victim->instance_size = keep_size;
+
+            vm_g = nj_vm_create(&port, HEAP_BYTES);
+            CHECK(vm_g != NULL, "VM for the never-linked class test");
+            if (vm_g) {
+                nj_app *app_g = nj_app_open(vm_g, jar, jar_len);
+                int ok = (app_g != NULL &&
+                          nj_vm_load_file(vm_g, UNLINKED_PATH) == NJ_OK);
+
+                CHECK(ok, "a blob with a never-linked class loads");
+                if (ok) {
+                    /*
+                     * FieldParent is the superclass of a class the MIDlet does
+                     * use, so linking can still reach it - what matters is that
+                     * the load did not refuse the blob over a class the saved
+                     * VM had never linked, and that the restored VM runs.
+                     */
+                    nj_u4 before = vm_g->frames_presented;
+
+                    CHECK(nj_heap_free_bytes(vm_g) > 0u,
+                          "the restored VM has a usable heap");
+                    (void)nj_midp_frame(vm_g);
+                    CHECK(vm_g->frames_presented >= before,
+                          "the restored VM still runs a frame");
+                }
+                if (app_g) {
+                    nj_app_close(vm_g, app_g);
+                }
+                nj_vm_destroy(vm_g);
+            }
+        }
+    }
     /* (3) a damaged CRC is refused */
     CHECK(corrupt_one_byte(STATE_PATH, BAD_PATH), "produced a corrupted copy");
     vm_c = nj_vm_create(&port, HEAP_BYTES);
@@ -505,6 +623,7 @@ after_vm_b:
     nj_port_shutdown(&port);
     remove(STATE_PATH);
     remove(GEN2_PATH);
+    remove(UNLINKED_PATH);
     remove(BAD_PATH);
     free(jar);
     free(other);
