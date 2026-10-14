@@ -493,7 +493,18 @@ the `byte[]`/`byte[][]` `getPixels` and `getAlphaComponent` on
 `DeviceControl`; and `resume`, `getGain`, `getConcurrentSoundCount(int)` and
 `getSupportedFormats()` on `Sound`.  A title that hits one of those loses the
 frame it was drawing, and `DirectUtils.createImage(byte[], int, int)` is the
-one a PNG-based title cannot work around at all.  `tools/api_audit.py` then parses this runtime's
+one a PNG-based title cannot work around at all.
+
+The scan that says whether any of it matters to a title is
+`tools/scan_api_gaps.sh`: it runs every collected title for 400 uncapped frames
+and greps for `NoSuchMethodError`, `NoSuchFieldError`, `ClassNotFoundException`,
+`UnsatisfiedLinkError` and `AbstractMethodError`.  Over all 395 titles it finds
+ten titles with a missing member and **not one `NoSuchMethodError` or
+`NoSuchFieldError`** - every line is a title asking `Class.forName` for a vendor
+class inside its own `try`, which is a title looking for an emulator it is not
+running on, not a gap in this runtime.
+
+`tools/api_audit.py` then parses this runtime's
 own builtin tables the way the compiler does - macro expansion, the class
 table, every `M(...)` row, the registration table, the superclass walk - and
 reports what cannot resolve.  It runs as the `check_api_audit` ctest, so it now
