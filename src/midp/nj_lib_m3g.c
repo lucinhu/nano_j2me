@@ -3000,6 +3000,75 @@ nj_u4 nj_m3g_collect_meshes(nj_vm *vm, nj_ref root, nj_ref *out, nj_u4 cap)
 }
 
 /*
+ * The camera's matrix RELATIVE TO THE WORLD: the product of the chain from
+ * the World down to the camera node.  A chase camera is a child of the group
+ * that carries the car, so its own matrix is only local, and using it puts
+ * the eye where that group sits - which drew the rally title's world from the
+ * wrong side of the car.  The reference implementation does the same thing
+ * (m3gGetTransformTo(world, camera)), which is why it insists the camera be a
+ * child of the World being rendered.
+ *
+ * The composition order is mat_mul()'s: the child's own matrix applied first,
+ * then its ancestors', which is "clip = P * V * M * v" read from the leaf up.
+ */
+static int cam_walk(nj_vm *vm, nj_ref o, nj_ref cam, float *out, int depth)
+{
+    const char *cn;
+    nj_ref kids, m;
+    nj_value v;
+    nj_u4 len, i;
+
+    if (!o || depth > 32) {
+        return 0;
+    }
+    if (o == cam) {
+        memset(out, 0, sizeof(float) * 16u);
+        out[0] = out[5] = out[10] = out[15] = 1.0f;
+        return 1;
+    }
+    cn = nj_ref_class_name(o);
+    if (cn == NULL || (strcmp(cn, NJ_C_GROUP) != 0 &&
+                       strcmp(cn, NJ_C_WORLD) != 0)) {
+        return 0;                /* a Camera, a Light, a Sprite: no children */
+    }
+    kids = nj_rget(vm, o, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
+                                          "L" NJ_C_VECTOR ";", 0));
+    if (!kids) {
+        return 0;
+    }
+    v.i = 0;
+    if (nj_call(vm, kids, NJ_C_VECTOR, "size", "()I", NULL, &v) != NJ_OK) {
+        return 0;
+    }
+    len = (nj_u4)v.i;
+    for (i = 0u; i < len; i++) {
+        nj_value a, r;
+        nj_ref child;
+        float sub[16], own[16];
+
+        a.i = (nj_s4)i;
+        r.r = 0;
+        if (nj_call(vm, kids, NJ_C_VECTOR, "elementAt",
+                    "(I)Ljava/lang/Object;", &a, &r) != NJ_OK || !r.r) {
+            continue;
+        }
+        child = r.r;
+        if (!cam_walk(vm, child, cam, sub, depth + 1)) {
+            continue;
+        }
+        memset(own, 0, sizeof(own));
+        own[0] = own[5] = own[10] = own[15] = 1.0f;
+        m = nj_rget(vm, child, nj_field_lookup(vm, NJ_C_XABLE, "_nj_m", "[F", 0));
+        if (m && nj_array_length(m) >= 16) {
+            memcpy(own, nj_array_data(m), sizeof(own));
+        }
+        mat_mul(own, sub, out);
+        return 1;
+    }
+    return 0;
+}
+
+/*
  * The same walk, and for each mesh the matrix that takes its vertices to
  * world space: the product of every Group transform above it.  A renderer
  * needs that matrix, and recomputing it per mesh would mean walking the
@@ -8495,6 +8564,7 @@ typedef struct {
     float pfac;                   /* VertexBuffer's scale (stored as _nj_bias) */
     float pbias[4];               /* ... and its bias (stored as _nj_scale) */
     float mvp[16];
+    float proj[16];               /* clip = proj * (camera space) */
     int vx, vy, vw, vh;
     m3g_java_target jt;
     nj_u4 dif;
@@ -8596,11 +8666,15 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
      * The eye-space position, which the lights need.  mv is view * model in
      * the Java layout jr_project reads (translation in m[3], m[7], m[11]).
      */
-    if (r->lit || r->fog) {
-        pe[0] = r->mv[0] * p[0] + r->mv[1] * p[1] + r->mv[2]  * p[2] + r->mv[3];
-        pe[1] = r->mv[4] * p[0] + r->mv[5] * p[1] + r->mv[6]  * p[2] + r->mv[7];
-        pe[2] = r->mv[8] * p[0] + r->mv[9] * p[1] + r->mv[10] * p[2] + r->mv[11];
-    }
+    /*
+     * The camera-space position, which the lights and the fog need - and the
+     * near-plane clip, which is what keeps a ground plane that passes behind
+     * the camera from projecting to hundreds of thousands of pixels.  It is
+     * computed for every vertex, lit or not, because the clip needs it.
+     */
+    pe[0] = r->mv[0] * p[0] + r->mv[1] * p[1] + r->mv[2]  * p[2] + r->mv[3];
+    pe[1] = r->mv[4] * p[0] + r->mv[5] * p[1] + r->mv[6]  * p[2] + r->mv[7];
+    pe[2] = r->mv[8] * p[0] + r->mv[9] * p[1] + r->mv[10] * p[2] + r->mv[11];
     if (r->lit && r->nrm && v < (nj_u4)r->ncount && r->ncomp >= 3) {
         const nj_s2 *q = r->nrm +
             ((nj_size)r->nfirst + (nj_size)v) * (nj_size)r->ncomp;
@@ -8929,71 +9003,105 @@ static void jr_fog(m3g_jr *r, const float pe[3], float col[3])
     }
 }
 
-static void jr_triangle(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
+/*
+ * One vertex, ready to rasterise: its screen position, its texture
+ * coordinates, its camera-space position and normal (what the lighting and
+ * the near-plane clip need), and the colour it carries.
+ */
+typedef struct {
+    float xy[2];
+    float inv;                     /* 1 / w */
+    float st[2];
+    float pe[3];                   /* camera space: z is negative in front */
+    float ne[3];
+    nj_u4 rgb;
+} jr_vtx;
+
+static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
 {
-    float xy[6], inv[3], st[6];
-    float pe[3][3], ne[3][3];
-    nj_u4 rgb[3];
+    float col[3];
     nj_u4 argb;
 
-    if (a == b || b == c || a == c) {
-        return;                    /* a degenerate triangle draws nothing */
-    }
-    if (!jr_vertex(r, a, xy + 0, &inv[0], st + 0, pe[0], ne[0]) ||
-        !jr_vertex(r, b, xy + 2, &inv[1], st + 2, pe[1], ne[1]) ||
-        !jr_vertex(r, c, xy + 4, &inv[2], st + 4, pe[2], ne[2])) {
-        return;
+    o->xy[0] = o->xy[1] = 0.0f;
+    o->inv = 0.0f;
+    o->st[0] = o->st[1] = 0.0f;
+    o->pe[0] = o->pe[1] = o->pe[2] = 0.0f;
+    o->ne[0] = o->ne[1] = o->ne[2] = 0.0f;
+    o->rgb = 0u;
+    if (!jr_vertex(r, v, o->xy, &o->inv, o->st, o->pe, o->ne)) {
+        return 0;
     }
     if (r->lit) {
-        /* Lighting is per vertex (Gouraud): the filler interpolates the three
-           colours the equation produced.  A flat material gives the same
-           colour three times, and the filler notices that. */
-        nj_u4 vi[3];
-        int k;
+        nj_u4 vc = 0xFFFFFFFFu;
 
-        vi[0] = a; vi[1] = b; vi[2] = c;
-        for (k = 0; k < 3; k++) {
-            float col[3];
-            nj_u4 vc = 0xFFFFFFFFu;
+        if (r->col && r->ccomp >= 4 && v < (nj_u4)r->ccount) {
+            const nj_s2 *s = r->col +
+                ((nj_size)r->cfirst + (nj_size)v) * (nj_size)r->ccomp;
 
-            if (r->col && r->ccomp >= 4 && vi[k] < (nj_u4)r->ccount) {
-                const nj_s2 *s = r->col +
-                    ((nj_size)r->cfirst + (nj_size)vi[k]) * (nj_size)r->ccomp;
-
-                vc = ((nj_u4)(nj_u1)(s[0] & 0xFF) << 16) |
-                     ((nj_u4)(nj_u1)(s[1] & 0xFF) << 8) |
-                     (nj_u4)(nj_u1)(s[2] & 0xFF);
-            }
-            jr_lit(r, pe[k], ne[k], vc, col);
-            jr_fog(r, pe[k], col);
-            rgb[k] = ((nj_u4)(col[0] + 0.5f) << 16) |
-                     ((nj_u4)(col[1] + 0.5f) << 8) |
-                     (nj_u4)(col[2] + 0.5f);
+            vc = ((nj_u4)(nj_u1)(s[0] & 0xFF) << 16) |
+                 ((nj_u4)(nj_u1)(s[1] & 0xFF) << 8) |
+                 (nj_u4)(nj_u1)(s[2] & 0xFF);
         }
-        argb = 0xFF000000u | rgb[0];   /* the Java path has no gradients */
+        jr_lit(r, o->pe, o->ne, vc, col);
+        jr_fog(r, o->pe, col);
     } else {
-        argb = jr_colour(r, a, b, c);
-        rgb[0] = rgb[1] = rgb[2] = argb & 0x00FFFFFFu;
-        if (r->fog) {
-            /* Fog makes the three vertices differ even when nothing is lit,
-               so the filler's gradient path takes over. */
-            float base[3];
-            int k;
-
-            base[0] = (float)((argb >> 16) & 0xFFu);
-            base[1] = (float)((argb >> 8) & 0xFFu);
-            base[2] = (float)(argb & 0xFFu);
-            for (k = 0; k < 3; k++) {
-                float col[3];
-
-                col[0] = base[0]; col[1] = base[1]; col[2] = base[2];
-                jr_fog(r, pe[k], col);
-                rgb[k] = ((nj_u4)(col[0] + 0.5f) << 16) |
-                         ((nj_u4)(col[1] + 0.5f) << 8) |
-                         (nj_u4)(col[2] + 0.5f);
-            }
-        }
+        argb = jr_colour(r, v, v, v);
+        col[0] = (float)((argb >> 16) & 0xFFu);
+        col[1] = (float)((argb >> 8) & 0xFFu);
+        col[2] = (float)(argb & 0xFFu);
+        jr_fog(r, o->pe, col);
     }
+    o->rgb = ((nj_u4)(col[0] + 0.5f) << 16) |
+             ((nj_u4)(col[1] + 0.5f) << 8) |
+             (nj_u4)(col[2] + 0.5f);
+    return 1;
+}
+
+/*
+ * A point on the near plane.  Every attribute is linear in camera space, so
+ * the cut vertex is a weighted sum of the two ends - and its screen position
+ * comes from projecting the interpolated camera-space point, not from
+ * interpolating two projected ones (which is not linear).
+ */
+static void jr_blend(m3g_jr *r, const jr_vtx *a, const jr_vtx *b, float t,
+                     jr_vtx *o)
+{
+    float c0[3], c1[3];
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        o->st[i] = a->st[i] + (b->st[i] - a->st[i]) * t;
+    }
+    for (i = 0; i < 3; i++) {
+        o->pe[i] = a->pe[i] + (b->pe[i] - a->pe[i]) * t;
+        o->ne[i] = a->ne[i] + (b->ne[i] - a->ne[i]) * t;
+    }
+    c0[0] = (float)((a->rgb >> 16) & 0xFFu);
+    c0[1] = (float)((a->rgb >> 8) & 0xFFu);
+    c0[2] = (float)(a->rgb & 0xFFu);
+    c1[0] = (float)((b->rgb >> 16) & 0xFFu);
+    c1[1] = (float)((b->rgb >> 8) & 0xFFu);
+    c1[2] = (float)(b->rgb & 0xFFu);
+    o->rgb = ((nj_u4)(c0[0] + (c1[0] - c0[0]) * t + 0.5f) << 16) |
+             ((nj_u4)(c0[1] + (c1[1] - c0[1]) * t + 0.5f) << 8) |
+             (nj_u4)(c0[2] + (c1[2] - c0[2]) * t + 0.5f);
+    jr_project(r->proj, o->pe, r->vw, r->vh, o->xy, &o->inv);
+}
+
+static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
+                    const jr_vtx *v2)
+{
+    float xy[6], st[6], inv[3];
+    nj_u4 rgb[3];
+
+    xy[0] = v0->xy[0]; xy[1] = v0->xy[1];
+    xy[2] = v1->xy[0]; xy[3] = v1->xy[1];
+    xy[4] = v2->xy[0]; xy[5] = v2->xy[1];
+    st[0] = v0->st[0]; st[1] = v0->st[1];
+    st[2] = v1->st[0]; st[3] = v1->st[1];
+    st[4] = v2->st[0]; st[5] = v2->st[1];
+    inv[0] = v0->inv; inv[1] = v1->inv; inv[2] = v2->inv;
+    rgb[0] = v0->rgb; rgb[1] = v1->rgb; rgb[2] = v2->rgb;
     if (r->sw.surf) {
         /* How many texels does one pixel cover?  The triangle's screen area
            and its area in texture space answer that, and the answer picks the
@@ -9036,9 +9144,79 @@ static void jr_triangle(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
         }
         return;
     }
-    if (emit_to_java(&r->jt, xy, argb) != 0u) {
+    if (emit_to_java(&r->jt, xy, 0xFF000000u | v0->rgb) != 0u) {
         r->drawn++;
     }
+}
+
+/*
+ * The near-plane clip.  A racing title's ground passes under and behind the
+ * camera every frame; without the clip the vertices behind the eye project to
+ * enormous coordinates - one measured ground mesh spanned 338,000 pixels -
+ * and the triangles that make up the road are thrown away, which is what
+ * "the scene is not there" looked like.  A triangle with one vertex behind
+ * the eye becomes one or two triangles, cut at the plane.
+ */
+static void jr_triangle_v(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
+                          const jr_vtx *v2)
+{
+    const float near_eps = 0.05f;
+    const jr_vtx *src[3];
+    const jr_vtx *poly[4];
+    jr_vtx cut[3];
+    float d[3];
+    int inside[3];
+    int n = 0, nin = 0, k;
+
+    src[0] = v0; src[1] = v1; src[2] = v2;
+    for (k = 0; k < 3; k++) {
+        d[k] = -src[k]->pe[2];
+        inside[k] = (d[k] >= near_eps);
+        nin += inside[k];
+    }
+    if (nin == 3) {
+        jr_emit(r, v0, v1, v2);
+        return;
+    }
+    if (nin == 0) {
+        return;
+    }
+    for (k = 0; k < 3; k++) {
+        int j = (k + 1) % 3;
+
+        if (inside[k]) {
+            poly[n++] = src[k];
+        }
+        if (inside[k] != inside[j]) {
+            float t = (near_eps - d[k]) / (d[j] - d[k]);
+
+            if (t < 0.0f) { t = 0.0f; }
+            if (t > 1.0f) { t = 1.0f; }
+            jr_blend(r, src[k], src[j], t, &cut[k]);
+            poly[n++] = &cut[k];
+        }
+    }
+    if (n < 3) {
+        return;
+    }
+    jr_emit(r, poly[0], poly[1], poly[2]);
+    if (n == 4) {
+        jr_emit(r, poly[0], poly[2], poly[3]);
+    }
+}
+
+static void jr_triangle(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
+{
+    jr_vtx v[3];
+
+    if (a == b || b == c || a == c) {
+        return;                    /* a degenerate triangle draws nothing */
+    }
+    if (!jr_fetch(r, a, &v[0]) || !jr_fetch(r, b, &v[1]) ||
+        !jr_fetch(r, c, &v[2])) {
+        return;
+    }
+    jr_triangle_v(r, &v[0], &v[1], &v[2]);
 }
 
 static void jr_strip(m3g_jr *r, const nj_s4 *idx, nj_s4 count, nj_s4 first)
@@ -9193,15 +9371,22 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
 
     arr = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_cam_m", "[F"));
     if ((!arr || nj_array_length(arr) < 16) && cam) {
-        /*
-         * No setCamera() Transform: the camera is a node in the scene, so the
-         * view is the inverse of the node's WORLD matrix.  Its own matrix is
-         * only local - a chase camera is a child of the group that carries the
-         * car - and using the local one put the eye at that group's origin and
-         * drew the rally car from inside itself.
-         */
+        float cw[16];
+        int gotw = 0;
 
-        {
+        /*
+         * No setCamera() Transform: the camera is a node in the scene, and
+         * what places it is its matrix relative to the World - the chain from
+         * the World down to it, because a chase camera is a child of the
+         * group that carries the car.  The node's own matrix is the fallback
+         * for a scene where the camera is not in the World's graph at all.
+         */
+        gotw = (world && cam_walk(vm, world, cam, cw, 0)) ? 1 : 0;
+        if (gotw) {
+            memcpy(view, cw, sizeof(view));
+            mat_invert(view);
+            arr = NULL;
+        } else {
             arr = nj_rget(vm, cam, m3g_fof(vm, NJ_C_XABLE, "_nj_m", "[F"));
         }
     }
@@ -9214,8 +9399,6 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
          * here.  Using the transform itself as the view put the world in
          * front of a camera that was looking the other way.
          */
-        mat_invert(view);
-    } else if (0) {
         mat_invert(view);
     }
     /* cam_proj_fill, not m3g_cam_projection: a Camera that never had its
@@ -9231,6 +9414,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     /* All three matrices are Java ones, so they multiply with mat_mul() (the
        row-major product) and not with m3g_mat_mul(), whose convention is the
        file loader's: clip = P * V * M * v, and mv = V * M for the lights. */
+    memcpy(r.proj, proj, sizeof(r.proj));
     mat_mul(proj, view, r.mvp);
     mat_mul(r.mvp, model, r.mvp);
     memcpy(r.view, view, sizeof(r.view));

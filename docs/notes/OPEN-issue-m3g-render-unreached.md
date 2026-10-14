@@ -509,3 +509,46 @@ and the HUD (`Lap Time`, `Total Time`, the minimap arrow and the speedometer)
 on top.  The dotted lines that remain in the sky are the terrain strips that
 are still placed at the file origin instead of along the track - the next
 piece, and the last one this note knows about.
+
+## The near plane, and where the camera really is
+
+Two things the rally title's picture needed, both found by measuring rather than
+by looking.
+
+**A triangle that crosses the eye plane is now clipped.**  A racing game's
+ground passes under and behind the camera every frame.  Projecting a vertex at
+or behind the eye divides by a `w` near zero, so one measured mesh spanned
+338,000 pixels, and the triangles that make up the road were thrown away
+entirely - which is what "the scene is not there" looks like.  `jr_triangle`
+was split into `jr_fetch` (one vertex: screen position, texture coordinates,
+camera-space position and normal, colour), `jr_blend` (a point on the near
+plane, interpolated in camera space and *then* projected - a projected point is
+not a linear blend of projected points), `jr_emit` (the rasteriser call) and
+`jr_triangle_v`, which is Sutherland-Hodgman against `z = -0.05` in camera
+space.  All three vertices in front: unchanged.  None: dropped.  Otherwise the
+3- or 4-vertex polygon is emitted as one or two triangles.
+
+The first attempt made everything vanish (`tris=0`), because `jr_vertex` filled
+the camera-space position only when the scene had lights or fog - an unlit
+scene left it at zero, so every vertex looked like it was behind the eye.  It
+is computed for every vertex now.
+
+**The camera is placed by its chain from the World.**  `cam_walk()` walks
+`_nj_kids` from the World down to the camera node and composes each child's
+`_nj_m` under its ancestors', which is the reference implementation's
+`m3gGetTransformTo(world, camera)` - and the reason it insists the camera be a
+child of the World being rendered.  A chase camera is a child of the group that
+carries the car, so its own matrix is only local.  `Graphics3D.setCamera`'s
+Transform still wins when a title uses it; the node's own matrix remains the
+fallback for a camera that is not in the World's graph at all.
+
+Measured on `tests/games/3D拉力赛-进化汉化版_6366.jar` (1,500 paced frames,
+`--heap 16`, 240x320): every mesh's world placement and projected box.  The car
+and its parts sit at (-787, -1005) and the camera at (-788.8, -1009.8, 1.7) -
+about five units behind it, which is why a 3.3-unit car fills 209x87 px of the
+screen.  The three large terrain meshes sit at the file origin, and the car is
+inside their extent ((-882,-1403)..(536,1044)): the scene is consistent, and
+the ground is drawn - it is the material colour, and with no light in the scene
+this runtime draws it unlit, so it comes out the same near-white as the sky the
+title itself clears to.  That, and not a missing mesh, is what "the scene is not
+displayed" is looking at.
