@@ -228,7 +228,13 @@ static nj_u4 android_millis(void *ud);
  * optimisation to add later - a screen of Chinese text would otherwise cross
  * the JNI boundary thousands of times a frame.
  */
-#define ANDROID_GLYPH_CELL_MAX 16
+/*
+ * The largest cell asked for, in pixels.  It has to cover the LARGE face
+ * (12 x 20): at 16 the port both rasterised large text at 16 px and handed the
+ * runtime a 16-row bitmap for a face whose ascent is 16, so every large glyph
+ * sat four rows above the baseline and lost its descender.
+ */
+#define ANDROID_GLYPH_CELL_MAX 32
 #define ANDROID_GLYPH_CACHE    96
 
 typedef struct android_glyph_slot {
@@ -1716,7 +1722,8 @@ static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
         }
         arr = (jbyteArray)(*env)->CallStaticObjectMethod(
             env, s->glyph_class, s->glyph_mid,
-            (jint)ch, (jint)gf->cell, (jint)gf->bold);
+            (jint)ch, (jint)gf->cell, (jint)gf->bold,
+            (jint)gf->face.ascent);
         if ((*env)->ExceptionCheck(env)) {
             (*env)->ExceptionClear(env);
             c->failed++;
@@ -4708,7 +4715,7 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
         }
         if (gcls) {
             jmethodID gmid = (*env)->GetStaticMethodID(env, gcls, "render",
-                                                       "(III)[B");
+                                                       "(IIII)[B");
             if ((*env)->ExceptionCheck(env)) {
                 (*env)->ExceptionClear(env);
                 gmid = NULL;

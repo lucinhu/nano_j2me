@@ -63,9 +63,41 @@ public final class TextDemo extends MIDlet {
             /* One em in a box, so a screenshot carries its own ruler. */
             int em = plain.getHeight();
             g.setColor(0xFF008000);
-            g.drawRect(6, y + em + 6, em, em);
+            g.drawRect(180, y + em + 6, em, em);
             g.setColor(0xFF000000);
-            g.drawString("em", 6 + em + 4, y + em + 6, Graphics.TOP | Graphics.LEFT);
+            g.drawString("em", 180 + em + 4, y + em + 6, Graphics.TOP | Graphics.LEFT);
+
+            /*
+             * The baseline probe: a row of single glyphs of very different
+             * heights, all anchored TOP at the same y, with a red hairline
+             * drawn exactly on the row's baseline
+             * (y + getBaselinePosition()).  Every glyph without a descender has
+             * to touch that line; "g" is the one that may hang below it.  A
+             * face that centres each glyph's own ink box instead of placing it
+             * on the baseline makes these float, which is the bug this fixture
+             * exists to catch - and it is visible in the picture, not just in
+             * the numbers.
+             */
+            baselineRow(g, Font.getFont(Font.FACE_SYSTEM, Font.STYLE_PLAIN,
+                    Font.SIZE_SMALL), y + em + 12, "iWg|汉.x");
+            baselineRow(g, Font.getFont(Font.FACE_SYSTEM, Font.STYLE_PLAIN,
+                    Font.SIZE_MEDIUM), y + em + 12 + 13 + 6, "iWg|汉.x");
+            baselineRow(g, Font.getFont(Font.FACE_SYSTEM, Font.STYLE_PLAIN,
+                    Font.SIZE_LARGE), y + em + 12 + 13 + 6 + 16 + 6, "iWg|汉.x");
+        }
+
+        private void baselineRow(Graphics g, Font f, int top, String glyphs) {
+            g.setFont(f);
+            int baseline = top + f.getBaselinePosition();
+            g.setColor(0xFFD00000);
+            g.drawLine(2, baseline, getWidth() - 3, baseline);
+            g.setColor(0xFF000000);
+            int pen = 6;
+            for (int i = 0; i < glyphs.length(); i++) {
+                g.drawString(glyphs.substring(i, i + 1), pen, top,
+                        Graphics.TOP | Graphics.LEFT);
+                pen += f.stringWidth(glyphs.substring(i, i + 1)) + 5;
+            }
         }
     }
 
@@ -87,6 +119,13 @@ public final class TextDemo extends MIDlet {
         System.out.println("TEXT probe space width=" + plain.stringWidth(" "));
         System.out.println("TEXT bold \"WWW\" width=" + bold.stringWidth("WWW")
                 + " plain=" + plain.stringWidth("WWW"));
+        for (int si = 0; si < 3; si++) {
+            int size = si == 0 ? Font.SIZE_SMALL
+                    : (si == 1 ? Font.SIZE_MEDIUM : Font.SIZE_LARGE);
+            Font f = Font.getFont(Font.FACE_SYSTEM, Font.STYLE_PLAIN, size);
+            System.out.println("TEXT size=" + si + " height=" + f.getHeight()
+                    + " baseline=" + f.getBaselinePosition());
+        }
         System.out.println("TEXT height plain=" + plain.getHeight()
                 + " bold=" + bold.getHeight());
         final Screen screen = new Screen(plain, bold);

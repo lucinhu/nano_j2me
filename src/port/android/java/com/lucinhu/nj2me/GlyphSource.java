@@ -4,7 +4,6 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.util.LruCache;
 
@@ -189,8 +188,11 @@ final class GlyphSource {
      * @param bold non-zero when the style is bold; the runtime's own faces
      *             answer bold from a second table, so the platform has to be
      *             told rather than left to fake it
+     * @param ascent rows between the top of the cell and the text baseline, as
+     *               the runtime's face reports it: the bitmap has to place its
+     *               ink against that row, and the same row for every glyph
      */
-    static byte[] render(int cp, int px, int bold) {
+    static byte[] render(int cp, int px, int bold, int ascent) {
         if (px <= 0 || px > 32) {
             return null;
         }
@@ -202,7 +204,7 @@ final class GlyphSource {
             if (hit != null) {
                 return hit;
             }
-            byte[] made = rasterise(cp, px, b, aa);
+            byte[] made = rasterise(cp, px, b, aa, ascent);
             if (made != null) {
                 CACHE.put(key, made);
                 if (USED.size() < FontKit.MAX_USED) {
@@ -213,7 +215,8 @@ final class GlyphSource {
         }
     }
 
-    private static byte[] rasterise(int cp, int px, boolean bold, boolean aa) {
+    private static byte[] rasterise(int cp, int px, boolean bold, boolean aa,
+                                    int ascent) {
         if (!Character.isValidCodePoint(cp)) {
             return null;
         }
@@ -233,13 +236,17 @@ final class GlyphSource {
         int h = px;
 
         /*
-         * Centre the ink in the cell vertically: the runtime draws a glyph so
-         * that its cell sits on the text baseline, and a face whose ink hangs
-         * off the bottom of its cell would look like a broken font.
+         * The baseline is a property of the face, not of the glyph.
+         *
+         * The runtime draws the bitmap so that its row `ascent` lands on the
+         * text baseline (`blit_glyph()` in nj_text.c: top = baseline -
+         * face->ascent), so the ink has to be placed against that row - the
+         * same row for every glyph of a size.  Centring each glyph's own ink
+         * box instead made every character with a different ink height float:
+         * a full stop sat four rows above the line while a hanzi touched it,
+         * which is what "文字没有位于同一条基线上" was.
          */
-        Rect bounds = new Rect();
-        p.getTextBounds(s, 0, s.length(), bounds);
-        float baseline = (h - bounds.height()) / 2.0f - bounds.top;
+        float baseline = ascent > 0 ? ascent : h * 0.75f;
 
         Bitmap bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(bm);
