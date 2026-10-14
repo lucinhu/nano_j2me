@@ -3277,6 +3277,9 @@ nj_u4 nj_m3g_raster_mesh(nj_vm *vm, struct nj_gfx *g, nj_ref mesh,
  */
 static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
                             nj_ref *meshes, float *mats, nj_u4 n);
+static void collect_lights_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
+                                const float *parent, nj_u4 cap, nj_u4 *n,
+                                int depth);
 
 NJFN(m3g_render)
 {
@@ -3340,6 +3343,39 @@ NJFN(m3g_render)
      * its materials, textures, lighting, fog, culling and depth - before
      * this, a World was drawn as flat white triangles with no transform.
      */
+    /*
+     * A scene whose lights are nodes in it lights itself: fill the
+     * Graphics3D's light list from the graph when the title never called
+     * addLight.  Done once per render, before any mesh is set up.
+     */
+    if (nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I")) == 0) {
+        nj_ref lrefs[16];
+        float lmat[16 * 16];
+        float ident[16];
+        nj_u4 ln = 0u;
+
+        memset(ident, 0, sizeof(ident));
+        ident[0] = ident[5] = ident[10] = ident[15] = 1.0f;
+        collect_lights_walk(vm, root, lrefs, lmat, ident, 16u, &ln, 0);
+        if (ln > 0u) {
+            nj_ref arr = nj_object_array_new(vm, NJ_C_LIGHT, ln);
+            nj_ref fm = nj_array_new(vm, "F", ln * 16u);
+            nj_u4 li;
+
+            for (li = 0u; li < ln; li++) {
+                nj_array_set_ref(arr, li, lrefs[li]);
+                memcpy((float *)nj_array_data(fm) + (nj_size)li * 16u,
+                       lmat + (nj_size)li * 16u, sizeof(float) * 16u);
+            }
+            nj_root(vm, arr);
+            nj_root(vm, fm);
+            nj_rput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lights",
+                                      "[L" NJ_C_LIGHT ";"), arr);
+            nj_rput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lmats", "[F"), fm);
+            nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I"),
+                    (nj_s4)ln);
+        }
+    }
     n = nj_m3g_collect_meshes_m(vm, root, meshes, mats, 64u);
     (void)m3g_world_draw(vm, self, root, meshes, mats, n);
     return NJ_OK;
@@ -9767,6 +9803,64 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
         return 0u;
     }
     return jr_draw(&r);
+}
+
+/*
+ * The lights that live in the scene graph.  A file-authored scene carries its
+ * Light as a child of a Group or of the World, and the reference
+ * implementation lights a World from exactly those nodes; the JSR's own list
+ * (Graphics3D.addLight) is the other way a title can do it.  Without this the
+ * rally title - whose every .m3g file holds one Light - was drawn with no
+ * light at all, which left its track the material's emissive colour.
+ */
+static void collect_lights_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
+                                const float *parent, nj_u4 cap, nj_u4 *n,
+                                int depth)
+{
+    const char *cn;
+    nj_ref kids, m;
+    nj_value v;
+    nj_u4 len, i;
+    float model[16];
+
+    if (!o || depth > 32) {
+        return;
+    }
+    cn = nj_ref_class_name(o);
+    memcpy(model, parent, sizeof(model));
+    m = nj_rget(vm, o, nj_field_lookup(vm, NJ_C_XABLE, "_nj_m", "[F", 0));
+    if (m && nj_array_length(m) >= 16) {
+        mat_mul(parent, (const float *)nj_array_data(m), model);
+    }
+    if (cn != NULL && strcmp(cn, NJ_C_LIGHT) == 0) {
+        if (*n < cap) {
+            out[*n] = o;
+            if (mats) { memcpy(mats + (*n) * 16u, model, sizeof(model)); }
+        }
+        (*n)++;
+        return;
+    }
+    if (cn == NULL || (strcmp(cn, NJ_C_GROUP) != 0 &&
+                       strcmp(cn, NJ_C_WORLD) != 0)) {
+        return;                  /* a Camera, a Mesh, a Sprite: no children */
+    }
+    kids = nj_rget(vm, o, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
+                                          "L" NJ_C_VECTOR ";", 0));
+    if (!kids) { return; }
+    v.i = 0;
+    if (nj_call(vm, kids, NJ_C_VECTOR, "size", "()I", NULL, &v) != NJ_OK) {
+        return;
+    }
+    len = (nj_u4)v.i;
+    for (i = 0u; i < len; i++) {
+        nj_value a, r;
+        a.i = (nj_s4)i;
+        r.r = 0;
+        if (nj_call(vm, kids, NJ_C_VECTOR, "elementAt",
+                    "(I)Ljava/lang/Object;", &a, &r) == NJ_OK) {
+            collect_lights_walk(vm, r.r, out, mats, model, cap, n, depth + 1);
+        }
+    }
 }
 
 /*
