@@ -1181,11 +1181,41 @@ static void test_graphics(nj_vm *vm)
         ra[4] = iref(12);
         ra[5] = iref(2);
         ra[6] = iref(2);
+        ra[7] = iref(0);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", ra,
+                   NULL) == NJ_OK);
+        OK_MSG(img_pixel(vm, img, 15, 12) == 0xFFFF8000u,
+               "drawRGB ignores alpha when requested = 0x%08X",
+               img_pixel(vm, img, 15, 12));
+        nj_array_set_int(rgb, 0u, (nj_s4)0x00FF00FFu);
+        nj_array_set_int(rgb, 1u, (nj_s4)0x80000000u);
+        nj_array_set_int(rgb, 2u, (nj_s4)0xFF123456u);
         ra[7] = iref(1);
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", ra,
                    NULL) == NJ_OK);
         OK_MSG(img_pixel(vm, img, 15, 12) == 0xFFFF8000u,
-               "drawRGB = 0x%08X", img_pixel(vm, img, 15, 12));
+               "drawRGB transparent colour key leaves destination intact");
+        OK_MSG(img_pixel(vm, img, 16, 12) == 0xFF007F40u,
+               "drawRGB blends half alpha = 0x%08X", img_pixel(vm, img, 16, 12));
+        OK_MSG(img_pixel(vm, img, 15, 13) == 0xFF123456u,
+               "drawRGB copies opaque ARGB pixels");
+        ra[1] = iref(2);
+        ra[2] = iref(-2);
+        ra[3] = iref(20);
+        ra[7] = iref(0);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", ra,
+                   NULL) == NJ_OK);
+        OK_MSG(img_pixel(vm, img, 20, 12) == 0xFF123456u &&
+               img_pixel(vm, img, 20, 13) == 0xFFFF00FFu,
+               "drawRGB supports negative scanlength");
+        ra[1] = iref(3);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", ra,
+                   NULL) != NJ_OK);
+        OK(exc_is(vm, "java/lang/ArrayIndexOutOfBoundsException"));
+        ra[1] = iref(0);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", ra,
+                   NULL) != NJ_OK);
+        OK(exc_is(vm, "java/lang/ArrayIndexOutOfBoundsException"));
     }
 
     /* ---- XOR mode ---- */

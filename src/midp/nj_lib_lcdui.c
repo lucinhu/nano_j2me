@@ -1725,8 +1725,9 @@ NJFN(g_drawRGB)
     nj_s4 w = NJ_ARG_INT(args, 5);
     nj_s4 h = NJ_ARG_INT(args, 6);
     nj_s4 alpha = NJ_ARG_INT(args, 7);
-    nj_u1 *rgb;
+    nj_u4 *rgb;
     nj_size n;
+    nj_image view;
     nj_gfx g;
     nj_surface sc;
     nj_status st;
@@ -1737,34 +1738,27 @@ NJFN(g_drawRGB)
     if (w < 0 || h < 0) {
         return nj_throw(vm, "java/lang/IllegalArgumentException", "negative size");
     }
-    if (scan != 0 && w > 0) {
-        nj_s4 rows = (h > 0) ? (h - 1) : 0;
-        nj_s4 need = rows * scan + w;
-        if (scan > 0) {
-            if (offset < 0 || (nj_u4)(offset + need) > arr->length) {
-                return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException",
-                                "rgb data too short");
-            }
-        } else {
-            if (offset < 0 || (nj_u4)(offset + need) > arr->length) {
-                return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException",
-                                "rgb data too short");
-            }
-        }
-    } else if (offset < 0 || (nj_u4)offset > arr->length) {
-        return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
-    }
     if (w == 0 || h == 0) {
         return NJ_OK;
     }
+    {
+        nj_s8 first = offset;
+        nj_s8 last = first + (nj_s8)(h - 1) * scan;
+        nj_s8 low = first < last ? first : last;
+        nj_s8 high = (first > last ? first : last) + w;
+        if (low < 0 || high > arr->length) {
+            return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException",
+                            "rgb data too short");
+        }
+        if ((nj_size)w > (nj_size)-1 / sizeof(nj_u4) / (nj_size)h) {
+            return nj_throw_oom(vm);
+        }
+    }
 
-    /*
-     * nj_gfx takes a tightly packed RGB byte buffer, so repack the Java int[]
-     * into one.  The buffer is a host allocation and is released on every exit
-     * path, including the error paths below.
-     */
-    n = (nj_size)w * (nj_size)h * 3u;
-    rgb = (nj_u1 *)nj_host_alloc(vm, n);
+    /* Retain ARGB: dropping alpha here turns transparent sprite backgrounds
+     * (for example Asphalt 6's 0x00FF00FF colour key) into solid magenta. */
+    n = (nj_size)w * (nj_size)h * sizeof(nj_u4);
+    rgb = (nj_u4 *)nj_host_alloc(vm, n);
     if (!rgb) {
         return nj_throw_oom(vm);
     }
@@ -1773,10 +1767,8 @@ NJFN(g_drawRGB)
         for (row = 0; row < h; row++) {
             for (col = 0; col < w; col++) {
                 nj_u4 p = (nj_u4)nj_array_get_int(arr, (nj_u4)(offset + row * scan + col));
-                nj_u1 *d = rgb + ((nj_size)row * (nj_size)w + (nj_size)col) * 3u;
-                d[0] = (nj_u1)((p >> 16) & 0xFFu);
-                d[1] = (nj_u1)((p >> 8) & 0xFFu);
-                d[2] = (nj_u1)(p & 0xFFu);
+                rgb[(nj_size)row * (nj_size)w + (nj_size)col] =
+                    alpha ? p : (p | 0xFF000000u);
             }
         }
     }
@@ -1785,16 +1777,14 @@ NJFN(g_drawRGB)
         return NJ_ERR;
     }
     st = NJ_OK;
-    {
-        /*
-         * NJ_ROP_SET copies the pixels (processAlpha == false); PAINT blends
-         * them, which is what processAlpha == true asks for.
-         */
-        int rop = alpha ? NJ_ROP_PAINT : NJ_ROP_SET;
-        nj_gfx_draw_rgb(&g, rgb, (int)w * 3, 0xFF,
-                        (int)x, (int)y, 0, 0, (int)w, (int)h, rop,
-                        NJ_TRANS_NONE);
-    }
+    view.width = (int)w;
+    view.height = (int)h;
+    view.format = NJ_PIXFMT_ARGB8888;
+    view.pixels = rgb;
+    view.has_alpha = alpha != 0;
+    nj_gfx_draw_region(&g, &view, 0, 0, (int)w, (int)h,
+                       NJ_TRANS_NONE, 0, 0, NULL,
+                       (int)x, (int)y, NJ_ROP_PAINT);
     gfx_store(vm, self, &g);
     nj_host_free(vm, rgb);
     return st;
