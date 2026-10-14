@@ -119,6 +119,15 @@ in a state the blob can record with no native call in flight. And note what a
 port cannot do at all: loading a snapshot is only valid *before* the MIDlet is
 constructed, which is the runner's business (`--load-state`), not a hotkey's.
 
+A snapshot has to cover what a *live* frame can still read, which is more than
+the allocation frontier: when a frame returns, `nj_frame_pop()` leaves
+`thread->top` at that frame's locals, and the caller then pushes its own
+operands above it. The image therefore reaches each frame's `sp`, and a
+restored slot is legal anywhere inside `stack_mem..stack_end`. Saving only
+`top` produced blobs that loaded into a program running on zeros — the
+reason `NJ_SAVE_VERSION` is 2 and a version-1 blob is refused rather than
+restored.
+
 ## Worked example: ESP32-S3
 
 An ESP32-S3 with 8 MB of PSRAM and a 240×320 SPI panel is the target this

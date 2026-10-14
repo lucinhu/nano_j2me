@@ -69,7 +69,14 @@
 /* Blob constants                                                      */
 /* ------------------------------------------------------------------ */
 #define NJ_SAVE_MAGIC     0x53534A4Eu   /* 'N' 'J' 'S' 'S' */
-#define NJ_SAVE_VERSION   1u
+/*
+ * 2: the image grew a live frame's operand slots above the allocation
+ * frontier (see save_threads and the NJ_SR_STACK bound in apply_recordsB).
+ * A version-1 blob cannot be repaired - it simply does not contain those
+ * slots - so it is refused instead of restored into a program running on
+ * zeros.
+ */
+#define NJ_SAVE_VERSION   2u
 #define NJ_SAVE_ENDIAN    0x01020304u
 #define NJ_SAVE_HDR_SIZE  176u
 /* the largest blob worth believing: arena + stacks + statics + records */
