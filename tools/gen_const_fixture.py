@@ -30,6 +30,26 @@ def load_stubs():
     return mod.CLASSES
 
 
+def int_literal(text):
+    """The value as an int, or None when it is not an integer literal.
+
+    Hex shows up in the stubs - Nokia's DirectGraphics.FLIP_HORIZONTAL is
+    0x2000 - and the old digits-only test filed those as text, which wrote
+    "null" into the expectation and then compared an int field against a String
+    one.  The runtime was right and the check could not see it.
+    """
+    t = text.strip()
+    if t[-1:] in ("l", "L"):
+        t = t[:-1]
+    t = t.replace("_", "")
+    for base in (0, 10):
+        try:
+            return int(t, base)
+        except ValueError:
+            continue
+    return None
+
+
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "."
     classes = load_stubs()
@@ -69,14 +89,14 @@ def main():
                 # branch below assumes of anything non-numeric.
                 lines.append('        p("%s.%s", %s.%s);' % (java, name, java, name))
                 expected.append("%s.%s=%s" % (java, name, value[1:-1]))
-            elif value == "null" or not (value.lstrip("-").isdigit()):
+            elif value == "null" or int_literal(value) is None:
                 lines.append('        p("%s.%s", String.valueOf(%s.%s));'
                              % (java, name, java, name))
                 expected.append("%s.%s=%s" % (java, name, "null"))
             else:
                 lines.append('        p("%s.%s", String.valueOf((int)%s.%s));'
                              % (java, name, java, name))
-                expected.append("%s.%s=%s" % (java, name, value.rstrip("L")))
+                expected.append("%s.%s=%d" % (java, name, int_literal(value)))
 
     src = """package consts;
 

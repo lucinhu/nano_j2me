@@ -100,10 +100,31 @@ nj_status nj_nokia_late_init(nj_vm *vm)
      * the runtime answers 0 never notices it is being lied to.
      */
     nokia_const_int(vm, NJ_C_SOUND, "FORMAT_TONE", 1);
-    nokia_const_int(vm, NJ_C_SOUND, "FORMAT_WAV", 2);
+    nokia_const_int(vm, NJ_C_SOUND, "FORMAT_WAV", 5);   /* the spec value; the
+                                                         * formats array below
+                                                         * has always answered 5 */
     nokia_const_int(vm, NJ_C_SOUND, "SOUND_STOPPED", 0);
     nokia_const_int(vm, NJ_C_SOUND, "SOUND_PLAYING", 1);
     nokia_const_int(vm, NJ_C_SOUND, "SOUND_UNPLAYABLE", 2);
+    nokia_const_int(vm, NJ_C_SOUND, "SOUND_UNINITIALIZED", -1);
+
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "FLIP_HORIZONTAL", 0x2000);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "FLIP_VERTICAL", 0x4000);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "ROTATE_90", 90);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "ROTATE_180", 180);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "ROTATE_270", 270);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_1_GRAY", 1);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_1_GRAY_VERTICAL", 2);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_2_GRAY", 3);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_4_GRAY", 4);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_8_GRAY", 5);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_BYTE_332_RGB", 6);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_4444_ARGB", 7);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_444_RGB", 8);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_555_RGB", 9);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_565_RGB", 10);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_INT_888_RGB", 11);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_INT_8888_ARGB", 12);
 
     {
         const char *fc = "com/nokia/mid/ui/FullCanvas";
@@ -316,7 +337,8 @@ static const nj_builtin_field sound_fields[] = {
     { "FORMAT_WAV",    "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
     { "SOUND_STOPPED", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
     { "SOUND_PLAYING", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
-    { "SOUND_UNPLAYABLE", "I", NJ_ACC_STATIC | NJ_ACC_FINAL }
+    { "SOUND_UNPLAYABLE", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SOUND_UNINITIALIZED", "I", NJ_ACC_STATIC | NJ_ACC_FINAL }
 };
 
 static const nj_builtin_method sound_methods[] = {
@@ -502,6 +524,26 @@ NJFN(nokia_du_getDirectGraphics)
  * Graphics in nj_lib_lcdui.c, which is the file that can reach the nj_gfx
  * primitives.  So the object a caller gets back must BE a Graphics, and it is.
  */
+static const nj_builtin_field dgraphics_fields[] = {
+    { "FLIP_HORIZONTAL", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "FLIP_VERTICAL",   "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ROTATE_90",       "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ROTATE_180",      "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ROTATE_270",      "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_BYTE_1_GRAY",           "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_BYTE_1_GRAY_VERTICAL",  "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_BYTE_2_GRAY",           "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_BYTE_4_GRAY",           "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_BYTE_8_GRAY",           "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_BYTE_332_RGB",          "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_USHORT_4444_ARGB",      "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_USHORT_444_RGB",        "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_USHORT_555_RGB",        "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_USHORT_565_RGB",        "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_INT_888_RGB",           "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_INT_8888_ARGB",         "I", NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+
 static const nj_builtin_method dgraphics_methods[] = {
     M("setARGBColor",         "(I)V",   NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
     M("getNativePixelFormat", "()I",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
@@ -630,7 +672,9 @@ const nj_builtin_class nj_lib_nokia_classes[] = {
       (nj_u2)(sizeof(fsdetail_methods) / sizeof(fsdetail_methods[0])) },
     { NJ_C_DGRAPHICS, NULL,
       NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
-      NULL, 0u, dgraphics_methods,
+      dgraphics_fields,
+      (nj_u2)(sizeof(dgraphics_fields) / sizeof(dgraphics_fields[0])),
+      dgraphics_methods,
       (nj_u2)(sizeof(dgraphics_methods) / sizeof(dgraphics_methods[0])) },
     { NJ_C_DUTILS, "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, dutils_methods,
