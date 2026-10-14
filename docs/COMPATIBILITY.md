@@ -282,7 +282,11 @@ the pixels that flip back and forth - equal two frames apart, different from
 the frame between - which the corpus sweep cannot see at its fortieth-present
 sampling rate.  `鲁宾逊漂流记汉化版_702` with the pointer script that reaches its
 map is `two=7164px worst=4632 verdict=flicker` against the runtime before
-`08c7c26` and `two=0px verdict=static` against the fixed one; `NJ_KEYS` drives
+`08c7c26` and `two=0px verdict=static` against the fixed one.  Size alone is
+not enough - an animated logo flips thousands of pixels too, in thin streaks
+(`波斯王子之武者之心_8424` is `two=2123px` with a largest connected piece of
+243), while a tear is one piece of thousands - so the verdict uses the largest
+connected `blob`.  `NJ_KEYS` drives
 a title past its menu, and `tools/frame_health.py` does the counting.
 
 ### A mutable image is white, and always opaque
