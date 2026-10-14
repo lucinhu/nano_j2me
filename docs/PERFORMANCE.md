@@ -665,3 +665,47 @@ line before.  The full test suite passes with both changes, three titles dumped
 with `--dump-frames` are byte-for-byte identical between the two binaries with
 the same binary run twice as the control, and the corpus sweep still stands at
 389 passed / 6 failed.
+
+## The copy behind a transform
+
+`合金弹头2013BT版_678` blits a 120x320 rotated column and a 21x19 mirrored
+sprite every frame, and the profile of a 600-frame run put
+`nj_region_draw` at 56% of its own CPU with 10.8 million calls to
+`nj_src_pixel` - one per pixel of those two blits.  None of the existing fast
+paths covered them: they all require `transform == NONE`, so every one of those
+54,000 pixels a frame went through `nj_trans_inverse()` plus two round trips
+through the format switches (`nj_src_pixel` to read, `nj_dst_pixel` to write)
+to be copied unchanged.
+
+The new branch keeps the inverse transform per pixel - it is a switch on a
+value the caller fixed - and copies the pixel, because a source in the
+destination's own format under full opacity and `ROP_SET` cannot be changed by
+the round trip.  It sits after the untransformed copy, so the common case still
+takes the row-wise `memcpy`, and it inherits the same conditions (no mask, no
+xor, alpha 255, `ARGB8888` only under `ROP_SET`).
+
+Correctness was checked the way the earlier rasteriser work was: four titles
+dumped with `--dump-frames` and compared byte-for-byte between the two
+binaries, with the same binary run twice as the control - `合金弹头4(完美汉化版)_4053`
+identical, and the three that differ differ by exactly as much against
+themselves (they animate on wall-clock time; the control shows it).
+
+Measured the way the other rounds were (CPU time of the process, not wall
+clock, `taskset -c 3`, 1500 frames at 30 fps with the same key script, best of
+two runs), the whole change is worth what the profile said it would be - the
+copy is a few percent of these titles' frames, and 27% of one of them:
+
+| title | before | after | speed-up |
+| --- | ---: | ---: | ---: |
+| `合金弹头2013BT版_678` | 0.514 s | 0.503 s | 1.02x |
+| `炸弹人_10311` | 0.625 s | 0.561 s | 1.11x |
+| `合金弹头4(完美汉化版)_4053` | 0.121 s | 0.117 s | 1.03x |
+| `仙魔飞行棋_417` | 2.418 s | 2.425 s | 1.00x |
+| **total** | **3.677 s** | **3.607 s** | **1.02x** |
+
+The number to read is the profile, not this table: a title only gains when its
+frame is mostly that copy, and at 6000 frames `合金弹头2013BT版_678` (by then in
+the level, not in its menu) went from 1.535 s to 1.202 s, 1.28x.  A 6000-frame
+A/B of `仙魔飞行棋_417` first read as a 19% regression and turned out to be the
+two runs reaching different scenes: repeated at 1500 frames it is 1.03x-1.05x,
+which is why the table above uses one frame budget for both sides.

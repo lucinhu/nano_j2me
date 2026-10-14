@@ -1836,6 +1836,36 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
     }
 
     /*
+     * That copy, through a transform.  合金弹头2013BT版_678 blits a 120x320
+     * rotated column and a 21x19 mirrored sprite every frame, and every one of
+     * those 54,000 pixels a frame went through nj_trans_inverse() plus two
+     * format switches (nj_src_pixel and nj_dst_pixel) to be copied unchanged.
+     * Ask the inverse transform per pixel - it is a switch on a constant the
+     * caller fixed - and copy the pixel.
+     */
+    if (mask == NULL && !xor_on && alpha == 255
+        && src_format == g->surf->format && src_bpp == bpp
+        && (src_format != NJ_PIXFMT_ARGB8888 || rop == NJ_ROP_SET)) {
+        nj_u1 *dst = (nj_u1 *)g->surf->pixels;
+
+        for (Y = cy0; Y <= cy1; Y++) {
+            int j = (int)(Y - Y0);
+
+            for (X = cx0; X <= cx1; X++) {
+                int i = (int)(X - X0);
+                int u, v;
+
+                nj_trans_inverse(transform, i, j, sw, sh, &u, &v);
+                memcpy(dst + (nj_s8)Y * g->surf->stride + (nj_s8)X * bpp,
+                       src + (nj_s8)(sy + v) * src_stride_bytes
+                           + (nj_s8)(sx + u) * src_bpp,
+                       (size_t)src_bpp);
+            }
+        }
+        return;
+    }
+
+    /*
      * Same run, but the source is in another pixel format: 合金弹头4(完美汉化版)
      * blits a full screen of decoded ARGB8888 onto an RGB565 surface every
      * frame, which is 76800 calls to nj_src_pixel() and nj_raw_set() per frame
