@@ -89,6 +89,17 @@ final class JarStore {
         float zoom = 1.0f;
         float panX, panY;
         int detW, detH;
+        /**
+         * Whether the picture is where the PLAYER put it.
+         *
+         * <p>Not the same question as "are these the default numbers": a player
+         * who picks 整数倍 and leaves the pan alone stores exactly what a game
+         * that was never adjusted stores.  So the first run of a game may
+         * choose a picture that clears the keypad, and from the moment anyone
+         * moves, zooms or saves one that choice is theirs and is never touched
+         * again.
+         */
+        boolean viewSet;
 
         String sizeText() {
             if (size >= 1024 * 1024) {
@@ -246,6 +257,8 @@ final class JarStore {
                         e.detW = parseInt(v, 0);
                     } else if (k.equals("deth")) {
                         e.detH = parseInt(v, 0);
+                    } else if (k.equals("viewset")) {
+                        e.viewSet = parseFlag(v, 0) != 0;
                     }
                 }
                 /*
@@ -276,7 +289,12 @@ final class JarStore {
                         + "\nnet=" + e.net + "\nsensor=" + e.sensor
                         + "\nzoom=" + e.zoom + "\npanx=" + e.panX
                         + "\npany=" + e.panY + "\ndetw=" + e.detW
-                        + "\ndeth=" + e.detH + "\n";
+                        + "\ndeth=" + e.detH
+                        /* Written only once it is true: a sidecar from before
+                         * the flag existed has no line, and that is exactly
+                         * "the player has not chosen a picture yet". */
+                        + (e.viewSet ? "\nviewset=1" : "")
+                        + "\n";
             os.write(text.getBytes("UTF-8"));
             os.close();
         } catch (IOException ioe) {

@@ -195,6 +195,84 @@ public final class PadConfigTest {
         PadConfig.upgradeClassicDiagonals(old.keys);
         Check.eq("running it twice changes nothing", old.keys.get(1).code2, 19);
 
+        Check.section("the first pad is the size of the handset it copies");
+        PadConfig first = PadConfig.byId(PadConfig.PRESET_DPAD, 1080, 1920);
+        PadConfig handset = PadConfig.byId(PadConfig.PRESET_CLASSIC, 1080, 1920);
+        float firstCap = 0f;
+        float handsetCap = 0f;
+        for (int i = 0; i < first.keys.size(); i++) {
+            firstCap = Math.max(firstCap, first.keys.get(i).w);
+        }
+        for (int i = 0; i < handset.keys.size(); i++) {
+            handsetCap = Math.max(handsetCap, handset.keys.get(i).w);
+        }
+        PadConfig.Key fire = null;
+        PadConfig.Key capKey = null;
+        for (int i = 0; i < first.keys.size(); i++) {
+            PadConfig.Key k = first.keys.get(i);
+            if (k.code == 23) {
+                fire = k;
+            }
+            if (k.code == 19) {
+                capKey = k;
+            }
+        }
+        /*
+         * The rule the player asked for: the pad they meet first is the size
+         * of the old phone's keypad, not a screen-filling bar.  The old 确定
+         * button was 0.30 x 0.20 u - more than twice a keycap in each
+         * direction - so the fire button is checked against the caps too.
+         */
+        Check.isTrue("a keycap is about a tenth of the screen wide",
+                firstCap > 0.09f && firstCap < 0.18f);
+        Check.isTrue("it is within a fifth of the handset's keycap",
+                firstCap > handsetCap * 0.8f && firstCap < handsetCap * 1.25f);
+        Check.isTrue("the fire button is a keycap, not a bar",
+                fire != null && capKey != null
+                        && Math.abs(fire.w - capKey.w) < 1e-4f
+                        && Math.abs(fire.h - capKey.h) < 1e-4f);
+        Check.isTrue("and it is square on the screen",
+                fire != null && Math.abs(fire.w * 1080f - fire.h * 1920f) < 2f);
+        Check.isTrue("nothing on the first pad is wider than the keycap",
+                firstCap > 0f && firstCap <= handsetCap * 1.25f);
+
+        Check.section("the menu button has a place and a switch");
+        PadConfig pad = PadConfig.defaults();
+        Check.eq("a fresh pad shows the menu button", pad.menuVisible, true);
+        Check.isTrue("and puts it out of the way",
+                pad.menuX > 0.5f && pad.menuX < 1f && pad.menuY >= 0f && pad.menuY < 0.5f);
+        pad.menuX = 0.2f;
+        pad.menuY = 0.7f;
+        pad.menuVisible = false;
+        PadConfig back = PadConfig.parse(pad.blob());
+        Check.isTrue("the place survives a save",
+                back != null && close(back.menuX, 0.2f) && close(back.menuY, 0.7f));
+        Check.eq("and so does the switch", back.menuVisible, false);
+        PadConfig older = PadConfig.parse("8,0.1,0.6,0.13,0.07;");
+        Check.isTrue("a sidecar from before the key still loads", older != null);
+        Check.eq("with the button shown", older.menuVisible, true);
+        PadConfig copied = pad.copy();
+        Check.isTrue("a copy carries the place and the switch",
+                close(copied.menuX, 0.2f) && close(copied.menuY, 0.7f)
+                        && !copied.menuVisible);
+        PadConfig into = PadConfig.blank();
+        into.replaceWith(pad);
+        Check.isTrue("replaceWith carries them too",
+                close(into.menuX, 0.2f) && !into.menuVisible);
+        PadConfig insets = PadConfig.defaults();
+        insets.setSafeArea(0.10f, 0.05f, 0.95f, 0.90f);
+        insets.menuX = 0f;
+        insets.menuY = 0f;
+        insets.clampMenuInto(0.11f, 0.06f);
+        Check.isTrue("the handle cannot be dragged under the notch",
+                insets.menuX >= 0.10f - 1e-4f && insets.menuY >= 0.05f - 1e-4f);
+        insets.menuX = 1f;
+        insets.menuY = 1f;
+        insets.clampMenuInto(0.11f, 0.06f);
+        Check.isTrue("nor off the bottom-right corner",
+                insets.menuX + 0.11f <= 0.95f + 1e-4f
+                        && insets.menuY + 0.06f <= 0.90f + 1e-4f);
+
         Check.section("a fresh layout is the whole view");
         c = PadConfig.blank();
         Check.eq("no notch, no reserved edges",

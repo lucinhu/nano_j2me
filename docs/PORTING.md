@@ -473,6 +473,39 @@ Thirteen things in that shell are worth copying, because each one is a rule a pl
   grid units too, or the scale multiplies them and a 1.7-unit ring fills its own
   hole.
 
+- **The first run has to look like a phone the player knows.** The pad the app
+  opens with used to be its own design: a 0.30 x 0.20 fire key - 324 x 216 px on
+  a 1080 x 1920 screen, the widest thing on the glass - over a 0.115 cross, which
+  is not what any handset this runtime emulates ever had. `PadConfig.defaults()`
+  now borrows `classic()`'s numbers (a 0.135 cap on a 0.143 step), so the cross,
+  the fire key and the two soft keys are ~146 px squares at 1080 x 1920, and the
+  picture is moved out of their way instead of the keys being shrunk around it:
+  `AutoLayout.fit()` cuts the inset-safe area into vertical slabs at every key
+  edge, keeps the tallest free band, and turns the largest whole-number scale
+  that fits that band into a view request (`NJ_VIEW_CUSTOM` with
+  `zoom = scale / base` and `dx, dy` = band centre minus window centre) - the
+  presenter multiplies *every* mode's scale by the zoom and centres the result,
+  so an integer scale anywhere in the window is expressible in a mode that
+  already exists, with no new `nj_port` call. On 1080 x 1920 with a 240 x 320
+  MIDlet that is 3x at `(0, -376)`, ending 79 px above the top of the cross.
+  Whether the app may place the picture at all is remembered separately: the
+  sidecar's `viewset` flag is set the moment the player saves, pans or zooms a
+  picture of their own, because "these numbers are still the defaults" and "the
+  player never chose" are different questions - someone who picks 整数倍 and
+  leaves the pan alone writes exactly what a fresh game writes.
+
+- **The ≡ handle is config, not chrome.** Its place lives in `PadConfig`
+  (`menuX`, `menuY`, `menuVisible`, in the same blob as the keys, with an old
+  blob simply having no `menu=` record), `positionHandle()` clamps it into the
+  system insets so it can never hide under a notch, and hiding it leaves the
+  panel reachable through Back. In the editor it is drawn and dragged like a key
+  (same grid snap); the editor's own toolbar covers the top strip, which is
+  exactly where the default corner place sits, so dragging it starts with ▴
+  (the tip says so). The tests that keep this honest are pure Java and run
+  without a device: `AutoLayoutTest` mirrors the presenter's arithmetic and
+  checks every preset on four screen shapes, and `PadConfigTest` checks that the
+  first run is handset-sized and that the menu place survives the blob.
+
 - **A switch has to be enforced where the MIDlet's connection is made.** The
   library's per-game card owns two settings, and neither is a permission: the
   network switch is enforced inside `PlatformHttp.request` and

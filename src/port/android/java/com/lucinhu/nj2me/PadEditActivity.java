@@ -222,6 +222,8 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
         box.addView(Md3.section(this, "淡黄框", "避开刘海 / 挖孔的可用区"), Md3.gap(this, 16));
         box.addView(Md3.section(this, "工具条", "点 ▴ 收起来，点顶部「▾ 工具条」再打开"),
                 Md3.gap(this, 16));
+        box.addView(Md3.section(this, "≡ 菜单按钮", "拖到顺手的地方；压在工具条下面时先点 ▴ 收起工具条"),
+                Md3.gap(this, 16));
 
         final CheckBox never = new CheckBox(this);
         never.setText("不再提示");
@@ -297,6 +299,17 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
                 save();
             }
         }));
+        bar.addView(button(menuLabel(), new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                /* Hide or show the ≡ handle.  It is placed by dragging it on
+                 * the pad, so this is only the switch; the position stays. */
+                work.menuVisible = !work.menuVisible;
+                ((TextView) v).setText(menuLabel());
+                pad.setConfig(work);
+                pad.invalidate();
+            }
+        }));
         bar.addView(button("取消", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -354,6 +367,11 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
             }
         }));
         return bar;
+    }
+
+    /** "≡开" while the handle is shown, "≡关" while it is hidden. */
+    private String menuLabel() {
+        return work.menuVisible ? "\u2261\u5f00" : "\u2261\u5173";
     }
 
     private TextView button(String label, View.OnClickListener click) {
@@ -581,6 +599,11 @@ public class PadEditActivity extends Activity implements PadView.EditListener, P
             entry.zoom = viewZoom;
             entry.panX = viewPanX;
             entry.panY = viewPanY;
+            /* Saving from the editor counts as choosing the picture, even if
+             * the player only touched the keys: this screen shows the picture
+             * and the pad together, so they have seen what they are saving
+             * and the first-run fit must not move it later. */
+            entry.viewSet = true;
             JarStore.write(this, entry);
             toast("已保存：按键和画面位置");
         } else {

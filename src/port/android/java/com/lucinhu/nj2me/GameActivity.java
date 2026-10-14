@@ -65,6 +65,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private PadConfig padConfig;
     private TextView status;
     private TextView handleButton;
+    private FrameLayout root;      /* the whole window: the handle is placed in it */
 
     private String jarPath = "";   /* absolute: what the port opens */
     private String jarName = "";   /* file name: the JarStore key */
@@ -266,6 +267,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         PlatformSensor.setMode(se == null ? 0 : se.sensor);
 
         FrameLayout root = new FrameLayout(this);
+        this.root = root;
         surfaceView = new SurfaceView(this);
         surfaceView.getHolder().addCallback(this);
         root.addView(surfaceView, new FrameLayout.LayoutParams(
@@ -292,7 +294,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         handleButton.setText("≡");
         Md3.overlayHandle(handleButton, this);
         FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(dp(40), dp(40));
-        hlp.gravity = Gravity.TOP | Gravity.END;
+        /* Where it sits comes from the pad config, not from gravity: the player
+         * moves it in the editor and hides it from the panel. */
+        hlp.gravity = Gravity.TOP | Gravity.START;
         root.addView(handleButton, hlp);
         handleButton.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -316,6 +320,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             }
         });
         root.requestApplyInsets();
+        positionHandle();
     }
 
     /** Keeps the controls out of the cutout and the system bars. */
@@ -332,11 +337,106 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             status.setPadding(dp(8) + insetL, dp(4), dp(8) + insetR, dp(4) + insetB);
         }
         if (handleButton != null) {
-            FrameLayout.LayoutParams lp =
-                (FrameLayout.LayoutParams) handleButton.getLayoutParams();
-            lp.topMargin = insetT;
-            lp.rightMargin = insetR;
-            handleButton.setLayoutParams(lp);
+            positionHandle();
+        }
+    }
+
+    /**
+     * Puts the ≡ handle where the player left it, out of the cutout and on the
+     * window.
+     *
+     * <p>The position is stored as a fraction of the window, so it means the
+     * same thing after a rotation; the size is in dp, so the clamp has to be
+     * done in pixels.  Hiding it is a config flag, which is why this is also
+     * what the panel's 显示菜单按钮 row calls: the handle can never be hidden
+     * without a way back.
+     */
+    private void positionHandle() {
+        if (handleButton == null || padConfig == null) {
+            return;
+        }
+        handleButton.setVisibility(padConfig.menuVisible ? View.VISIBLE : View.GONE);
+        int w = windowW();
+        int h = windowH();
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+        int size = dp(Math.round(PadConfig.MENU_DP));
+        int maxX = Math.max(0, w - insetR - size);
+        int maxY = Math.max(0, h - insetB - size);
+        int x = Math.round(padConfig.menuX * w);
+        int y = Math.round(padConfig.menuY * h);
+        x = Math.min(Math.max(x, Math.min(insetL, maxX)), maxX);
+        y = Math.min(Math.max(y, Math.min(insetT, maxY)), maxY);
+        FrameLayout.LayoutParams lp =
+            (FrameLayout.LayoutParams) handleButton.getLayoutParams();
+        lp.gravity = Gravity.TOP | Gravity.START;
+        lp.leftMargin = x;
+        lp.topMargin = y;
+        lp.rightMargin = 0;
+        lp.bottomMargin = 0;
+        handleButton.setLayoutParams(lp);
+    }
+
+    /** The window in pixels: the laid-out root, or the display before that. */
+    private int windowW() {
+        if (root != null && root.getWidth() > 0) {
+            return root.getWidth();
+        }
+        return getResources().getDisplayMetrics().widthPixels;
+    }
+
+    private int windowH() {
+        if (root != null && root.getHeight() > 0) {
+            return root.getHeight();
+        }
+        return getResources().getDisplayMetrics().heightPixels;
+    }
+
+    /**
+     * The first run of a game gets a picture that is not under the pad.
+     *
+     * <p>Only the first: as soon as the player has a picture setting of their
+     * own - moved it, zoomed it, or saved anything from the editor - that is
+     * what runs, and this makes no difference at all.  The result is not
+     * written to the sidecar on purpose: it is a property of this window and
+     * this pad, and the next launch works it out again.
+     */
+    private void autoLayoutIfFresh() {
+        JarStore.Entry e = (jarName != null && jarName.length() > 0)
+                ? JarStore.byName(this, jarName) : null;
+        if (e != null && e.viewSet) {
+            return;
+        }
+        int w = windowW();
+        int h = windowH();
+        AutoLayout.Fit fit = AutoLayout.fit(w, h, screenW, screenH,
+                insetL / (float) w, insetT / (float) h,
+                (w - insetR) / (float) w, (h - insetB) / (float) h,
+                padConfig.keys);
+        if (fit == null) {
+            return;
+        }
+        viewMode = fit.mode;
+        viewZoom = fit.zoom;
+        viewPanX = fit.panX;
+        viewPanY = fit.panY;
+        if (e != null) {
+            /* Publish the numbers we are about to run with, so the editor
+             * previews the same picture the game shows and saving from it does
+             * not snap the picture back to the centred fit.  viewSet stays
+             * false: this is still the app's choice, so the next launch may
+             * work it out again - for a pad the player has since edited, for
+             * instance - right up to the moment they move or save a picture. */
+            e.viewMode = viewMode;
+            e.zoom = viewZoom;
+            e.panX = viewPanX;
+            e.panY = viewPanY;
+            JarStore.write(this, e);
+        }
+        if (fit.scale > 1) {
+            Log.i(TAG, "picture: " + fit.scale + "x in the pad-free band ("
+                    + Math.round(fit.panX) + "," + Math.round(fit.panY) + ")");
         }
     }
 
@@ -348,7 +448,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
          * we were away - it is the one screen where both are set up. */
         padConfig.replaceWith(PadConfig.forGame(this, jarName));
         pad.setConfig(padConfig);
+        positionHandle();
         reloadView();
+        autoLayoutIfFresh();
         MidiPlayer.resumeAll();
         applyView();
         ui.removeCallbacks(statusTick);
@@ -654,6 +756,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         e.zoom = viewZoom;
         e.panX = viewPanX;
         e.panY = viewPanY;
+        /* The player moved it: from here on the first-run fit keeps out. */
+        e.viewSet = true;
         if (detW > 0) {
             e.detW = detW;
             e.detH = detH;
@@ -697,6 +801,11 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 shown ? "收起帧率、缩放这些数字" : "看帧率、缩放和测到的画面大小", false, null);
         LinearLayout fast = Md3.row(this, Md3.IC_PLAY, "游戏速度",
                 speedText() + " · 慢动作到三倍速", false, null);
+        LinearLayout menuRow = Md3.row(this, Md3.IC_KEYS,
+                padConfig.menuVisible ? "隐藏菜单按钮" : "显示菜单按钮",
+                padConfig.menuVisible
+                        ? "把角上的 ≡ 收起来；按返回键还能打开这个面板"
+                        : "把角上的 ≡ 放回来", false, null);
         LinearLayout save = Md3.row(this, Md3.IC_MEMORY, "保存状态",
                 "把这一局的进度存下来，回到游戏卡片里选「恢复进度」", false, null);
         LinearLayout quit = Md3.dangerRow(this, Md3.IC_POWER, "退出游戏", null);
@@ -706,6 +815,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(toggle);
         box.addView(Md3.divider(this));
         box.addView(fast);
+        box.addView(Md3.divider(this));
+        box.addView(menuRow);
         box.addView(Md3.divider(this));
         box.addView(save);
         box.addView(Md3.divider(this));
@@ -743,6 +854,19 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             public void onClick(View v) {
                 dlg.dismiss();
                 speedDialog();
+            }
+        });
+        menuRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                /* Hidden is a setting, not a one-way door: the panel is open
+                 * right now, and Back opens it again whenever the handle is
+                 * gone. */
+                padConfig.menuVisible = !padConfig.menuVisible;
+                positionHandle();
+                PadConfig.saveForGame(GameActivity.this, jarName, padConfig);
+                dlg.dismiss();
+                toast(padConfig.menuVisible ? "菜单按钮已显示" : "菜单按钮已隐藏，按返回键打开面板");
             }
         });
         save.setOnClickListener(new View.OnClickListener() {

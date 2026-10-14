@@ -76,6 +76,11 @@ class PadView extends View {
     private float adjustX, adjustY; /* last finger position while dragging it */
     private float adjustSpread;     /* two-finger distance while pinching it */
     private PadConfig.Key selected;
+    /* The editor's drag of the ≡ handle: the offset between the finger and the
+     * handle's top-left corner, so it does not jump under the thumb. */
+    private boolean menuDrag;
+    private float menuDx, menuDy;
+    private final RectF menuBox = new RectF();
 
     /*
      * Which key each active finger holds, when a key is released, and which
@@ -266,6 +271,48 @@ class PadView extends View {
         return cfg.hit(px / getWidth(), py / getHeight());
     }
 
+    /**
+     * The ≡ handle's rectangle, in pixels.
+     *
+     * <p>Square, because it is round on the screen and a circle in a square box
+     * is what drawRoundRect wants; clamped to a quarter of the shorter side so
+     * it stays usable in a small window.
+     */
+    private void menuRect(RectF out) {
+        float size = menuSize();
+        out.set(cfg.menuX * getWidth(), cfg.menuY * getHeight(),
+                cfg.menuX * getWidth() + size, cfg.menuY * getHeight() + size);
+    }
+
+    private float menuSize() {
+        float dp = PadConfig.MENU_DP * getResources().getDisplayMetrics().density;
+        return Math.min(dp, Math.min(getWidth(), getHeight()) * 0.25f);
+    }
+
+    private boolean menuHit(float px, float py) {
+        if (getWidth() <= 0 || getHeight() <= 0) {
+            return false;
+        }
+        menuRect(menuBox);
+        return menuBox.contains(px, py);
+    }
+
+    /**
+     * Puts the handle where the finger is.
+     *
+     * <p>Snapped like a key when the pad is set to snap, and clamped so it
+     * cannot be dragged into the screen cutout or off the window.
+     */
+    private void moveMenu(float nx, float ny) {
+        if (cfg.snap) {
+            nx = Math.round(nx / PadConfig.GRID_STEP) * PadConfig.GRID_STEP;
+            ny = Math.round(ny / PadConfig.GRID_STEP) * PadConfig.GRID_STEP;
+        }
+        cfg.menuX = nx;
+        cfg.menuY = ny;
+        cfg.clampMenuInto(menuSize() / getWidth(), menuSize() / getHeight());
+    }
+
     @Override
     public boolean onTouchEvent(MotionEvent ev) {
         if (barShowing) {
@@ -282,6 +329,19 @@ class PadView extends View {
                 int id = ev.getPointerId(idx);
                 float x = ev.getX(idx);
                 float y = ev.getY(idx);
+                if (editing && menuHit(x, y)) {
+                    /* The handle wins over a key under it, exactly as the
+                     * running game gives it priority over the pad. */
+                    menuDrag = true;
+                    selected = null;
+                    longFired = false;
+                    pressX = x;
+                    pressY = y;
+                    menuDx = cfg.menuX - x / getWidth();
+                    menuDy = cfg.menuY - y / getHeight();
+                    invalidate();
+                    return true;
+                }
                 PadConfig.Key k = keyAt(x, y);
                 if (adjusting && !editing && k == null) {
                     /* Empty space is the picture itself: remember where the
@@ -333,6 +393,12 @@ class PadView extends View {
                     if (movedPastSlop(ev)) {
                         disarmLongPress();
                     }
+                    if (menuDrag) {
+                        moveMenu(ev.getX(0) / getWidth() + menuDx,
+                                 ev.getY(0) / getHeight() + menuDy);
+                        invalidate();
+                        return true;
+                    }
                     if (selected != null && !longFired) {
                         if (ev.getPointerCount() >= 2) {
                             pinch(ev, selected);
@@ -362,6 +428,7 @@ class PadView extends View {
                 int id = ev.getPointerId(idx);
                 if (editing) {
                     disarmLongPress();
+                    menuDrag = false;
                     if (ev.getPointerCount() <= 2) {
                         pinchStartDist = 0f;
                         adjustSpread = 0f;
@@ -377,6 +444,7 @@ class PadView extends View {
             }
             case MotionEvent.ACTION_CANCEL: {
                 disarmLongPress();
+                menuDrag = false;
                 releaseAll();
                 return true;
             }
@@ -563,6 +631,47 @@ class PadView extends View {
                 text.setTextSize(Math.max(14f, Math.min(w, h) * 0.022f));
             }
         }
+        if (editing) {
+            drawMenuHandle(c);
+        }
+    }
+
+    /**
+     * The ≡ handle, drawn where the running game will show it.
+     *
+     * <p>Drawn even while it is hidden, dimmed: hiding it is a setting and this
+     * editor is the only place to put it back, so a control the player cannot
+     * see here is a control they cannot place.  Dragging it turns it blue, the
+     * same cue a dragged key gets.
+     */
+    private void drawMenuHandle(Canvas c) {
+        menuRect(menuBox);
+        float r = menuBox.width() * 0.24f;
+        int base = cfg.menuVisible ? 235 : 90;
+
+        fill.setColor(Color.argb(base, 250, 250, 250));
+        c.drawRoundRect(menuBox, r, r, fill);
+
+        stroke.setColor(Color.argb(Math.min(255, base + 20), 40, 40, 40));
+        c.drawRoundRect(menuBox, r, r, stroke);
+        if (menuDrag) {
+            stroke.setColor(Color.argb(255, 0, 140, 255));
+            stroke.setStrokeWidth(4f);
+            c.drawRoundRect(menuBox, r, r, stroke);
+            stroke.setStrokeWidth(2f);
+        }
+
+        float cx = menuBox.centerX();
+        float cy = menuBox.centerY();
+        float s = menuBox.width() * 0.30f;
+        float step = menuBox.width() * 0.15f;
+        icon.setColor(Color.argb(Math.min(255, base + 150), 20, 20, 20));
+        icon.setStyle(Paint.Style.STROKE);
+        icon.setStrokeWidth(Math.max(2f, menuBox.width() * 0.07f));
+        for (int i = -1; i <= 1; i++) {
+            c.drawLine(cx - s, cy + i * step, cx + s, cy + i * step, icon);
+        }
+        icon.setStyle(Paint.Style.FILL);
     }
 
     private static boolean isArrow(int code) {

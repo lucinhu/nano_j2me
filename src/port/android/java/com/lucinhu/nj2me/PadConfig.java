@@ -79,6 +79,24 @@ final class PadConfig {
     static final float GRID_STEP = 0.01f;
 
     /*
+     * The ≡ handle: where it sits, and whether it is on screen at all.
+     *
+     * It is the way into the menu, so it has to be movable - a MIDlet may
+     * paint something the player wants to see right there - and hideable, for
+     * a game that wants every pixel.  Neither may lose it: the editor's
+     * toolbar and the in-game panel can both put it back.
+     *
+     * The position is in window fractions like the keys, so the spot the
+     * player chose survives a rotation; only the size stays in dp, because
+     * that is what a finger needs.  The default is the top-right corner the
+     * handle has always been pinned to.
+     */
+    static final float MENU_DP = 40f;
+    float menuX = 0.88f;
+    float menuY = 0.0f;
+    boolean menuVisible = true;
+
+    /*
      * Where keycaps may be drawn: the display cutout and the system bars eat
      * into the window on most modern phones.  Fractions, like everything else
      * here, and deliberately not saved with the layout - it is a property of
@@ -298,13 +316,31 @@ final class PadConfig {
         PadConfig p = new PadConfig();
         p.preset = PRESET_DPAD;
         Grid g = new Grid(winW, winH);
-        final float cap = 0.115f;      /* ~124 px on a 1080p phone */
-        final float step = 0.125f;
+        /*
+         * The same keycap 经典手机 uses, and the same step between them.
+         *
+         * This is the layout every player meets first, and it used to be built
+         * around one huge 确定 button (0.30 x 0.20 u - 324 x 216 px on a 1080p
+         * phone) with soft keys more than twice as wide as a keycap.  A thumb
+         * cannot tell a 216 px button from a 146 px one, and the big one
+         * covers the picture the pad is supposed to leave alone; the first
+         * thing a player does is open the editor and shrink it, which is what
+         * "第一次进入游戏时那个按键不要调成这么大" was about.
+         *
+         * The arrangement is unchanged: the cross bottom-left, 火力 to its
+         * right, the soft keys in the top corners.
+         */
+        final float cap = 0.135f;      /* ~146 px on a 1080p phone, as 经典手机 */
+        final float step = 0.143f;
+        final float left = 0.012f;
+        final float y0 = 1.06f;
 
-        g.cross(p.keys, 0.045f, 1.34f, cap, step);
-        g.add(p.keys, 23, 0.66f, 1.44f, 0.30f, 0.20f);     /* 确定 / 火力 */
-        g.add(p.keys, 82, 0.045f, 0.045f, 0.34f, 0.10f);   /* 左软键 */
-        g.addRight(p.keys, 4, 0.045f, 0.045f, 0.34f, 0.10f);
+        g.cross(p.keys, left, y0, cap, step);
+        /* One cap clear of the cross, at the height of its side keys, so the
+         * fire button reads as "next to the d-pad" rather than "over it". */
+        g.add(p.keys, 23, left + 2 * step + cap + 0.04f, y0 + step, cap, cap);
+        g.add(p.keys, 82, left, 0.045f, cap, cap);                 /* 左软键 */
+        g.addRight(p.keys, 4, left, 0.045f, cap, cap);             /* 右软键 */
         return p;
     }
 
@@ -650,11 +686,24 @@ final class PadConfig {
             }
             sb.append(';');
         }
+        /*
+         * The ≡ handle rides along as one more record.  A blob written before
+         * it existed simply has no such record, and then the defaults stand -
+         * which is why the old five-field key format did not have to change.
+         */
+        sb.append("menu=").append(fmt(menuX)).append(',').append(fmt(menuY))
+          .append(',').append(menuVisible ? 1 : 0).append(';');
         return sb.toString();
     }
 
-    /** Reads back what blob() wrote; null when there is nothing stored. */
-    private static PadConfig parse(String blob) {
+    /**
+     * Reads back what blob() wrote; null when there is nothing stored.
+     *
+     * <p>Package-private like blob() itself: the sidecar format is a promise to
+     * the next version of the app, so the off-device test round-trips it
+     * directly instead of going through a Context.
+     */
+    static PadConfig parse(String blob) {
         if (blob == null || blob.length() == 0) {
             return null;
         }
@@ -667,6 +716,21 @@ final class PadConfig {
             }
             String rec = blob.substring(i, end);
             i = end + 1;
+            /* The handle's record is not a key: three fields, the first of
+             * them labelled, so a key record can never be mistaken for it. */
+            if (rec.startsWith("menu=")) {
+                String[] m = rec.split(",");
+                if (m.length == 3) {
+                    try {
+                        p.menuX = clamp01(Float.parseFloat(m[0].substring(5)));
+                        p.menuY = clamp01(Float.parseFloat(m[1]));
+                        p.menuVisible = Integer.parseInt(m[2]) != 0;
+                    } catch (NumberFormatException e) {
+                        /* hand-edited: keep the defaults */
+                    }
+                }
+                continue;
+            }
             String[] f = rec.split(",");
             if (f.length != 5 && f.length != 6) {
                 continue;
@@ -819,6 +883,26 @@ final class PadConfig {
         k.y = fit(k.y, k.h, safeT, safeB);
     }
 
+    /**
+     * Moves the ≡ handle inside the safe area (the editor's drag).
+     *
+     * <p>The size is passed in as fractions because the handle is a fixed
+     * number of dp, not a fraction of the window: on a small screen it is a
+     * larger slice of the width, and the clamp has to know that or it would
+     * leave half of it under the notch.
+     */
+    void clampMenuInto(float wFrac, float hFrac) {
+        menuX = fit(menuX, wFrac, safeL, safeR);
+        menuY = fit(menuY, hFrac, safeT, safeB);
+    }
+
+    private static float clamp01(float v) {
+        if (v < 0f) {
+            return 0f;
+        }
+        return v > 1f ? 1f : v;
+    }
+
     /** Key under a normalized point, topmost first (the last one drawn wins). */
     Key hit(float nx, float ny) {
         for (int i = keys.size() - 1; i >= 0; i--) {
@@ -842,6 +926,9 @@ final class PadConfig {
         p.snap = snap;
         p.haptics = haptics;
         p.preset = preset;
+        p.menuX = menuX;
+        p.menuY = menuY;
+        p.menuVisible = menuVisible;
         return p;
     }
 
@@ -855,6 +942,9 @@ final class PadConfig {
         snap = other.snap;
         haptics = other.haptics;
         preset = other.preset;
+        menuX = other.menuX;
+        menuY = other.menuY;
+        menuVisible = other.menuVisible;
     }
 
     /**
