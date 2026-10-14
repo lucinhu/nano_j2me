@@ -309,6 +309,15 @@ const nj_font *nj_midp_font_for(nj_vm *vm, nj_ref font_obj);
 #define NJ_MIDP_KEY_SOFT3    (-8)
 #define NJ_MIDP_KEY_CLEAR    (-8)
 
+/*
+ * The volume keys, which MIDP never had.  The port forwards the platform's own
+ * codes (Android's KEYCODE_VOLUME_UP/DOWN are 24 and 25) rather than inventing
+ * negative ones: they cannot collide with a MIDP key code (digits are 48..57,
+ * everything else is negative).
+ */
+#define NJ_MIDP_KEY_VOLUP    24
+#define NJ_MIDP_KEY_VOLDOWN  25
+
 /* Game action bits, as returned by GameCanvas.getKeyStates(). */
 #define NJ_GAME_UP     0x0002
 #define NJ_GAME_LEFT   0x0004
