@@ -1196,6 +1196,53 @@ NJFN(str_valueOf_float)
     return ret->r ? NJ_OK : nj_throw_oom(vm);
 }
 
+/* String.valueOf(double): the text Double.toString writes, from the one
+ * decimal formatter the runtime owns (nj_fmt_double; see nj_lib_boxing.c). */
+NJFN(str_valueOf_double)
+{
+    char buf[40];
+    nj_fmt_double(buf, sizeof(buf), NJ_ARG_DOUBLE(args, 0));
+    ret->r = nj_string_new(vm, buf);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+/* String.valueOf(char[], int, int): the copy of String.valueOf(char[]) over a
+ * checked window of the array. */
+NJFN(str_valueOf_chars_range)
+{
+    nj_ref arr = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 cnt = NJ_ARG_INT(args, 2);
+    nj_ref s;
+
+    if (!arr) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (off < 0 || cnt < 0 || (nj_u4)off + (nj_u4)cnt > arr->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    s = nj_string_new(vm, "");
+    if (!s) {
+        return nj_throw_oom(vm);
+    }
+    if (str_install(vm, s, (const nj_u2 *)arr->u.bytes + off,
+                    (nj_u4)cnt) != NJ_OK) {
+        return nj_throw_oom(vm);
+    }
+    ret->r = s;
+    return NJ_OK;
+}
+
+/* String.intern(): the runtime already interns its string literals and every
+ * string it builds for a constant-pool entry, so an interned string is the
+ * canonical one and there is no separate pool to add the receiver to.  Keeping
+ * the receiver is what the caller asked for. */
+NJFN(str_intern)
+{
+    ret->r = NJ_THIS(args);
+    return NJ_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* java.lang.StringBuffer                                              */
 /* ------------------------------------------------------------------ */
@@ -1749,6 +1796,78 @@ NJFN(sbld_insert_chars)
                         "(ILjava/lang/String;)Ljava/lang/StringBuilder;");
 }
 
+/* ------------------------------------------------------------------ */
+/* Members of the J2SE StringBuffer that no collected title calls and  */
+/* that the API audit reports as missing.  Each is one String.valueOf  */
+/* away from the String form the class already has, so they share      */
+/* these two helpers.                                                  */
+/* ------------------------------------------------------------------ */
+static int insert_value(nj_vm *vm, nj_value *args, nj_value *ret,
+                        const char *cls_desc, const char *value_desc)
+{
+    nj_value a[2];
+    nj_ref s;
+    nj_u4 mark;
+    nj_status st;
+
+    mark = nj_root_mark(vm);
+    s = nj_call_ref(vm, 0, "java/lang/String", "valueOf", value_desc, &args[1]);
+    if (!s) {
+        nj_root_release(vm, mark);
+        return NJ_ERR;
+    }
+    s = nj_root(vm, s);
+    a[0].i = NJ_ARG_INT(args, 0);
+    a[1].r = s;
+    st = nj_call(vm, NJ_THIS(args), "java/lang/StringBuffer", "insert",
+                 cls_desc, a, ret);
+    nj_root_release(vm, mark);
+    return st;
+}
+
+#define SB_INSERT_VALUE(name, vdesc)                                         \
+    NJFN(name)                                                               \
+    {                                                                        \
+        return insert_value(vm, args, ret,                                   \
+                            "(ILjava/lang/String;)Ljava/lang/StringBuffer;", \
+                            vdesc);                                          \
+    }
+
+SB_INSERT_VALUE(sb_insert_obj,    "(Ljava/lang/Object;)Ljava/lang/String;")
+SB_INSERT_VALUE(sb_insert_bool,   "(Z)Ljava/lang/String;")
+SB_INSERT_VALUE(sb_insert_int,    "(I)Ljava/lang/String;")
+SB_INSERT_VALUE(sb_insert_long,   "(J)Ljava/lang/String;")
+SB_INSERT_VALUE(sb_insert_float,  "(F)Ljava/lang/String;")
+SB_INSERT_VALUE(sb_insert_double, "(D)Ljava/lang/String;")
+
+/* append(char[]) is append(char[], 0, length). */
+static int append_chars_all(nj_vm *vm, nj_value *args, nj_value *ret,
+                            const char *cls, const char *desc)
+{
+    nj_ref arr = NJ_ARG_REF(args, 1);
+    nj_value a[3];
+
+    if (!arr) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    a[0].r = arr;
+    a[1].i = 0;
+    a[2].i = (nj_s4)nj_array_length(arr);
+    return nj_call(vm, NJ_THIS(args), cls, "append", desc, a, ret);
+}
+
+NJFN(sb_append_chars_array)
+{
+    return append_chars_all(vm, args, ret, "java/lang/StringBuffer",
+                            "([CII)Ljava/lang/StringBuffer;");
+}
+
+NJFN(sbld_append_chars_array)
+{
+    return append_chars_all(vm, args, ret, "java/lang/StringBuilder",
+                            "([CII)Ljava/lang/StringBuilder;");
+}
+
 NJFN(sb_insert_str)
 {
     nj_ref sb = NJ_THIS(args);
@@ -1874,7 +1993,10 @@ static const nj_builtin_method string_methods[] = {
     M("valueOf",           "(Z)Ljava/lang/String;",            NJ_ACC_STATIC),
     M("valueOf",           "(C)Ljava/lang/String;",            NJ_ACC_STATIC),
     M("valueOf",           "(F)Ljava/lang/String;",            NJ_ACC_STATIC),
-    M("valueOf",           "([C)Ljava/lang/String;",           NJ_ACC_STATIC)
+    M("valueOf",           "(D)Ljava/lang/String;",            NJ_ACC_STATIC),
+    M("valueOf",           "([C)Ljava/lang/String;",           NJ_ACC_STATIC),
+    M("valueOf",           "([CII)Ljava/lang/String;",         NJ_ACC_STATIC),
+    M("intern",            "()Ljava/lang/String;",             0)
 };
 
 /*
@@ -1902,6 +2024,7 @@ static const nj_builtin_method stringbuilder_methods[] = {
     M("append",           "(F)Ljava/lang/StringBuilder;",         0),
     M("append",           "(D)Ljava/lang/StringBuilder;",         0),
     M("append",           "([CII)Ljava/lang/StringBuilder;",      0),
+    M("append",           "([C)Ljava/lang/StringBuilder;",        0),
     M("reverse",          "()Ljava/lang/StringBuilder;",          0),
     M("delete",           "(II)Ljava/lang/StringBuilder;",        0),
     M("deleteCharAt",     "(I)Ljava/lang/StringBuilder;",         0),
@@ -1936,12 +2059,19 @@ static const nj_builtin_method stringbuffer_methods[] = {
     M("append",           "(F)Ljava/lang/StringBuffer;",         0),
     M("append",           "(D)Ljava/lang/StringBuffer;",         0),
     M("append",           "([CII)Ljava/lang/StringBuffer;",      0),
+    M("append",           "([C)Ljava/lang/StringBuffer;",        0),
     M("reverse",          "()Ljava/lang/StringBuffer;",          0),
     M("delete",           "(II)Ljava/lang/StringBuffer;",        0),
     M("deleteCharAt",     "(I)Ljava/lang/StringBuffer;",         0),
     M("insert",           "(ILjava/lang/String;)Ljava/lang/StringBuffer;", 0),
     M("insert",           "(IC)Ljava/lang/StringBuffer;",        0),
-    M("insert",           "(I[C)Ljava/lang/StringBuffer;",       0)
+    M("insert",           "(I[C)Ljava/lang/StringBuffer;",       0),
+    M("insert",           "(IZ)Ljava/lang/StringBuffer;", 0),
+    M("insert",           "(II)Ljava/lang/StringBuffer;", 0),
+    M("insert",           "(IJ)Ljava/lang/StringBuffer;", 0),
+    M("insert",           "(IF)Ljava/lang/StringBuffer;", 0),
+    M("insert",           "(ID)Ljava/lang/StringBuffer;", 0),
+    M("insert",           "(ILjava/lang/Object;)Ljava/lang/StringBuffer;", 0),
 };
 
 /*
@@ -2027,7 +2157,10 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/String", "valueOf",          "(Z)Ljava/lang/String;",   str_valueOf_bool },
     { "java/lang/String", "valueOf",          "(C)Ljava/lang/String;",   str_valueOf_char },
     { "java/lang/String", "valueOf",          "(F)Ljava/lang/String;",   str_valueOf_float },
+    { "java/lang/String", "valueOf",          "(D)Ljava/lang/String;",   str_valueOf_double },
     { "java/lang/String", "valueOf",          "([C)Ljava/lang/String;",  str_valueOf_chars },
+    { "java/lang/String", "valueOf",          "([CII)Ljava/lang/String;", str_valueOf_chars_range },
+    { "java/lang/String", "intern",           "()Ljava/lang/String;",   str_intern },
 
     { "java/lang/StringBuffer", "<init>",         "()V",                    sb_init },
     { "java/lang/StringBuffer", "<init>",         "(I)V",                   sb_init_int },
@@ -2048,6 +2181,7 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/StringBuffer", "append",         "(F)Ljava/lang/StringBuffer;", sb_append_float },
     { "java/lang/StringBuffer", "append",         "(D)Ljava/lang/StringBuffer;", sb_append_double },
     { "java/lang/StringBuffer", "append",         "([CII)Ljava/lang/StringBuffer;", sb_append_chars_range },
+    { "java/lang/StringBuffer", "append",         "([C)Ljava/lang/StringBuffer;", sb_append_chars_array },
     { "java/lang/StringBuffer", "reverse",        "()Ljava/lang/StringBuffer;", sb_reverse },
     { "java/lang/StringBuffer", "delete",         "(II)Ljava/lang/StringBuffer;", sb_delete },
     { "java/lang/StringBuffer", "deleteCharAt",   "(I)Ljava/lang/StringBuffer;", sb_deleteCharAt },
@@ -2055,6 +2189,12 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/StringBuffer", "getChars",        "(II[CI)V",               sb_getChars },
     { "java/lang/StringBuffer", "insert",         "(IC)Ljava/lang/StringBuffer;", sb_insert_char },
     { "java/lang/StringBuffer", "insert",         "(I[C)Ljava/lang/StringBuffer;", sb_insert_chars },
+    { "java/lang/StringBuffer", "insert",         "(IZ)Ljava/lang/StringBuffer;", sb_insert_bool },
+    { "java/lang/StringBuffer", "insert",         "(II)Ljava/lang/StringBuffer;", sb_insert_int },
+    { "java/lang/StringBuffer", "insert",         "(IJ)Ljava/lang/StringBuffer;", sb_insert_long },
+    { "java/lang/StringBuffer", "insert",         "(IF)Ljava/lang/StringBuffer;", sb_insert_float },
+    { "java/lang/StringBuffer", "insert",         "(ID)Ljava/lang/StringBuffer;", sb_insert_double },
+    { "java/lang/StringBuffer", "insert",         "(ILjava/lang/Object;)Ljava/lang/StringBuffer;", sb_insert_obj },
 
     /* StringBuilder: the covariant descriptors javac emits.  Same natives as
      * StringBuffer - the return type is OBJECT either way. */
@@ -2077,6 +2217,7 @@ const nj_native_entry nj_lib_string_table[] = {
     { "java/lang/StringBuilder", "append",       "(F)Ljava/lang/StringBuilder;", sb_append_float },
     { "java/lang/StringBuilder", "append",       "(D)Ljava/lang/StringBuilder;", sb_append_double },
     { "java/lang/StringBuilder", "append",       "([CII)Ljava/lang/StringBuilder;", sb_append_chars_range },
+    { "java/lang/StringBuilder", "append",       "([C)Ljava/lang/StringBuilder;", sbld_append_chars_array },
     { "java/lang/StringBuilder", "reverse",      "()Ljava/lang/StringBuilder;", sb_reverse },
     { "java/lang/StringBuilder", "delete",       "(II)Ljava/lang/StringBuilder;", sb_delete },
     { "java/lang/StringBuilder", "deleteCharAt", "(I)Ljava/lang/StringBuilder;", sb_deleteCharAt },

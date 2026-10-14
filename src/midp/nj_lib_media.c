@@ -98,6 +98,7 @@ static void midi_free(void *ud, void *p)
 /* Player fields.  Everything the C side needs, on the object. */
 #define F_P_STATE    "pState"      /* I */
 #define F_P_KIND     "pKind"       /* I: 0 tone, 1 sampled */
+#define F_P_TYPE     "pType"       /* Ljava/lang/String; declared/known MIME */
 #define F_P_DURATION "pDuration"   /* J microseconds */
 #define F_P_TIME     "pMediaTime"  /* J microseconds */
 #define F_P_LOOP     "pLoopCount"  /* I */
@@ -1089,6 +1090,58 @@ static const char *media_refusal(const char *what)
 }
 
 /* Build a Player from an already-parsed source. */
+/*
+ * The value Player.getContentType() reports.
+ *
+ * A caller that declared a type gets that exact string back - the MIDP javadoc
+ * promises "the content type of this Player", and Manager.createPlayer(stream,
+ * type) is where that type comes from.  A caller that declared nothing gets the
+ * container the sniffer found, translated into its MIME spelling.  The set is
+ * small and closed, and anything the sniffer cannot name is refused later
+ * anyway, so the fallback is the WAV family this runtime advertises in
+ * Manager.getSupportedContentTypes().
+ */
+static const char *mime_for_container(const char *what)
+{
+    if (!what) {
+        return "audio/x-wav";
+    }
+    if (strcmp(what, "MIDI") == 0) {
+        return "audio/midi";
+    }
+    if (strcmp(what, "AMR") == 0) {
+        return "audio/amr";
+    }
+    if (strcmp(what, "AMR-WB") == 0) {
+        return "audio/amr-wb";
+    }
+    if (strcmp(what, "MP3") == 0) {
+        return "audio/mpeg";
+    }
+    if (strcmp(what, "MP4") == 0) {
+        return "audio/mp4";
+    }
+    return "audio/x-wav";
+}
+
+/*
+ * Store a MIME type on a Player.
+ *
+ * The type is metadata: if the string cannot be allocated the Player must still
+ * play, so the exception is cleared and getContentType() answers with the
+ * runtime's own default instead of handing the title a null.
+ */
+static void player_set_type(nj_vm *vm, nj_ref p, const char *mime)
+{
+    nj_ref s = nj_string_new(vm, mime);
+
+    if (!s) {
+        nj_clear_exception(vm);
+        return;
+    }
+    w_r(vm, p, F_P_TYPE, "Ljava/lang/String;", s);
+}
+
 static nj_ref player_new(nj_vm *vm, int kind)
 {
     nj_ref p = nj_object_new(vm, NJ_C_PLAYER);
@@ -1121,7 +1174,6 @@ NJFN(media_createPlayer_stream)
     wav_info wi;
     nj_u4 mark;
 
-    (void)type;                 /* the content type is advisory: we sniff */
     if (!in) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "stream is null");
@@ -1164,6 +1216,13 @@ NJFN(media_createPlayer_stream)
      * the free list's next pointer (NULL, so it read as "class == 0").
      */
     p = nj_root(vm, p);
+    if (type) {
+        w_r(vm, p, F_P_TYPE, "Ljava/lang/String;", type);
+    } else {
+        player_set_type(vm, p,
+                        mime_for_container(sniff_media(barray_bytes(data),
+                                                       barray_len(data))));
+    }
     if (!wav_parse(barray_bytes(data), barray_len(data), &wi)) {
         const char *what = sniff_media(barray_bytes(data), barray_len(data));
 
@@ -1479,6 +1538,7 @@ NJFN(media_createPlayer_url)
          * collect on a heap that is nearly full.
          */
         p = nj_root(vm, p);
+        player_set_type(vm, p, "audio/x-tone-seq");
         for (i = 5; i < n && c[i] != (nj_u2)'/'; i++) {
             /* skip the "://" or ":" */
         }
@@ -1962,6 +2022,25 @@ NJFN(player_getControls)
     }
     (void)at;
     ret->r = arr;
+    return NJ_OK;
+}
+
+NJFN(player_getContentType)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref t = r_r(vm, self, F_P_TYPE, "Ljava/lang/String;");
+
+    if (!t) {
+        /* Every creation path fills this in; a NULL can only mean the metadata
+         * allocation failed when the Player was built, in which case the honest
+         * answer is the container this runtime can actually play. */
+        t = nj_string_new(vm, "audio/x-wav");
+        if (!t) {
+            return nj_throw_oom(vm);
+        }
+        w_r(vm, self, F_P_TYPE, "Ljava/lang/String;", t);
+    }
+    ret->r = t;
     return NJ_OK;
 }
 
@@ -2739,6 +2818,7 @@ nj_status nj_media_late_init(nj_vm *vm)
 static const nj_builtin_field player_fields[] = {
     FLD(F_P_STATE,    "I", 0),
     FLD(F_P_KIND,     "I", 0),
+    FLD(F_P_TYPE,     "Ljava/lang/String;", 0),
     FLD(F_P_DURATION, "J", 0),
     FLD(F_P_TIME,     "J", 0),
     FLD(F_P_LOOP,     "I", 0),
@@ -2797,7 +2877,8 @@ static const nj_builtin_method player_methods[] = {
     M("setMediaTime", "(J)J", 0),
     M("getControl",  "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
       0),
-    M("getControls", "()[Ljavax/microedition/media/Control;", 0)
+    M("getControls", "()[Ljavax/microedition/media/Control;", 0),
+    M("getContentType", "()Ljava/lang/String;", 0)
 };
 
 static const nj_builtin_field ctl_fields[] = {
@@ -2966,6 +3047,7 @@ const nj_native_entry nj_lib_media_table[] = {
     { NJ_C_PLAYER, "getControl",
       "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
       player_getControl },
+    { NJ_C_PLAYER, "getContentType", "()Ljava/lang/String;", player_getContentType },
     { NJ_C_PLAYER, "getControls",
       "()[Ljavax/microedition/media/Control;", player_getControls },
 

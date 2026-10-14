@@ -1,0 +1,11 @@
+# Members the CLDC 1.1 / MIDP 2.0 reference declares and this runtime does not
+# implement, on purpose.  tools/api_audit.py fails when it finds a member that
+# is neither implemented nor listed here, and also when a line here starts
+# resolving (the list is checked in both directions).
+#
+# class<space>name<space>arg-descriptor
+#
+# The HTTP connection's own lane (JSR 75): getHeaderFieldInt/Date are declared
+# by the split javax/microedition/io module, which a concurrent session owns.
+javax/microedition/io/HttpConnection getHeaderFieldInt (Ljava/lang/String;I)
+javax/microedition/io/HttpConnection getHeaderFieldDate (Ljava/lang/String;J)

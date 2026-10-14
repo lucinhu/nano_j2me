@@ -1064,6 +1064,9 @@ int         nj_string_hash(nj_ref s);
 nj_ref      nj_string_concat(nj_vm *vm, nj_ref a, nj_ref b);
 nj_status   nj_string_set_chars(nj_vm *vm, nj_ref s, const nj_u2 *chars, nj_u4 len);
 nj_s4       nj_identity_hash(nj_vm *vm, nj_ref o);
+/* Java's decimal form for a float or a double ("1.0", "NaN", "Infinity").
+   Shared by Float/Double.toString and String.valueOf(double). */
+void        nj_fmt_double(char *buf, size_t cap, double v);
 
 /* ------------------------------------------------------------------ */
 /* Threads (nj_thread.c)                                               */

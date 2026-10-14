@@ -1038,6 +1038,15 @@ NJFN(g_getColor)
     return NJ_OK;
 }
 
+/* Graphics.getDisplayColor(int): the nearest colour the display can show for
+ * the requested one.  Every pixel format this runtime has is true colour (see
+ * disp_isColor), so the argument is already displayable. */
+NJFN(g_getDisplayColor)
+{
+    ret->i = NJ_ARG_INT(args, 0);
+    return NJ_OK;
+}
+
 NJFN(g_getRedComponent)
 {
     ret->i = (nj_s4)(((nj_u4)fget(vm, NJ_THIS(args), G_CLS, F_G_COLOR, D_INT)
@@ -2747,6 +2756,31 @@ NJFN(cmd_init_long)
     fput(vm, self, NJ_C_COMMAND, "cmdLongLabel", D_INT, 1);
     rput(vm, self, NJ_C_COMMAND, "cmdLong", D_STR, longl);
     fput(vm, self, NJ_C_COMMAND, "cmdMnemonic", D_INT, NJ_ARG_INT(args, 3));
+    return NJ_OK;
+}
+
+/*
+ * Command(String label, String longLabel, int commandType, int priority)
+ *   args: [0] label, [1] longLabel, [2] commandType, [3] priority
+ * Both labels are kept: getLabel() answers with the short one and
+ * getLongLabel() with the long one.  A null longLabel means "no long form" and
+ * leaves getLongLabel() falling back to the short label.
+ */
+NJFN(cmd_init_labels)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref label = NJ_ARG_REF(args, 0);
+    nj_ref longl = NJ_ARG_REF(args, 1);
+
+    if (!label) {
+        return nj_throw(vm, "java/lang/NullPointerException", "label is null");
+    }
+    fput(vm, self, NJ_C_COMMAND, "cmdType", D_INT, NJ_ARG_INT(args, 2));
+    rput(vm, self, NJ_C_COMMAND, "cmdLabel", D_STR, label);
+    fput(vm, self, NJ_C_COMMAND, "cmdPriority", D_INT, NJ_ARG_INT(args, 3));
+    fput(vm, self, NJ_C_COMMAND, "cmdLongLabel", D_INT, longl ? 1 : 0);
+    rput(vm, self, NJ_C_COMMAND, "cmdLong", D_STR, longl);
+    fput(vm, self, NJ_C_COMMAND, "cmdMnemonic", D_INT, 0);
     return NJ_OK;
 }
 
@@ -5262,6 +5296,57 @@ NJFN(disp_getBestImageHeight)
 }
 
 /*
+ * getColor(int colorSpecifier): the colour the device paints each of the six
+ * documented screen parts with.  The palette below IS the one the runtime
+ * paints with, so a game that themes itself from these values matches the
+ * system screens instead of guessing.
+ */
+static const nj_u4 disp_palette[6] = {
+    UI_BG,      /* COLOR_BACKGROUND             */
+    UI_TEXT,    /* COLOR_FOREGROUND             */
+    UI_SEL_BG,  /* COLOR_HIGHLIGHTED_BACKGROUND */
+    UI_SEL_FG,  /* COLOR_HIGHLIGHTED_FOREGROUND */
+    UI_BORDER,  /* COLOR_BORDER                 */
+    UI_BORDER   /* COLOR_HIGHLIGHTED_BORDER     */
+};
+
+NJFN(disp_getColor)
+{
+    nj_s4 spec = NJ_ARG_INT(args, 0);
+
+    if (spec < 0 || spec > 5) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "invalid color specifier");
+    }
+    ret->i = (nj_s4)(disp_palette[spec] & 0x00FFFFFFu);   /* 0x00RRGGBB */
+    return NJ_OK;
+}
+
+/* The boolean spelling of the same query, which some compile stubs declare:
+ * "does the device support this colour".  Every specifier above is supported,
+ * and an invalid one throws exactly as the int form does. */
+NJFN(disp_getColor_bool)
+{
+    nj_s4 spec = NJ_ARG_INT(args, 0);
+
+    if (spec < 0 || spec > 5) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "invalid color specifier");
+    }
+    ret->i = 1;
+    return NJ_OK;
+}
+
+/* getBorderStyle(boolean highlighted): this runtime draws a solid border in
+ * both states (Graphics.SOLID is 0), so that is the honest answer. */
+NJFN(disp_getBorderStyle)
+{
+    NJ_UNUSED(args);
+    ret->i = 0;   /* Graphics.SOLID */
+    return NJ_OK;
+}
+
+/*
  * callSerially(Runnable): the runnable is queued in a Java Vector and executed
  * at the start of the next frame, which is exactly the guarantee MIDP gives -
  * "after the current event has been processed, before the next paint".
@@ -5740,6 +5825,43 @@ NJFN(ii_init)
     rput(vm, self, NJ_C_IMAGEITEM, "iiAlt", D_STR, alt);
     fput(vm, self, NJ_C_IMAGEITEM, "iiLayout", D_INT, layout);
     rput(vm, self, NJ_C_IMAGEITEM, "iiAlt2", D_STR, NULL);
+    /* -1: no explicit appearance mode, so getAppearanceMode() derives it from
+     * the layout directives the way it always has. */
+    fput(vm, self, NJ_C_IMAGEITEM, "iiAppearance", D_INT, -1);
+    rput(vm, self, NJ_C_ITEM, "itImage", D_IMAGE, img);
+    return vm->exception ? NJ_ERR : NJ_OK;
+}
+
+/*
+ * ImageItem(String label, Image img, int layout, String altText,
+ *           int appearanceMode)
+ *   args: [0] label, [1] img, [2] layout, [3] altText, [4] appearanceMode
+ * PLAIN / HYPERLINK / BUTTON (= 0 / 1 / 2, the values StringItem declares).
+ */
+NJFN(ii_init_app)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref label = NJ_ARG_REF(args, 0);
+    nj_ref img = NJ_ARG_REF(args, 1);
+    nj_s4 layout = NJ_ARG_INT(args, 2);
+    nj_ref alt = NJ_ARG_REF(args, 3);
+    nj_s4 mode = NJ_ARG_INT(args, 4);
+
+    (void)item_init(vm, th, args, ret);
+    if (!alt) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "altText is null");
+    }
+    if (mode < 0 || mode > 2) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "unknown appearance mode");
+    }
+    rput(vm, self, NJ_C_ITEM, "itLabel", D_STR, label);
+    rput(vm, self, NJ_C_IMAGEITEM, "iiImage", D_IMAGE, img);
+    rput(vm, self, NJ_C_IMAGEITEM, "iiAlt", D_STR, alt);
+    fput(vm, self, NJ_C_IMAGEITEM, "iiLayout", D_INT, layout);
+    rput(vm, self, NJ_C_IMAGEITEM, "iiAlt2", D_STR, NULL);
+    fput(vm, self, NJ_C_IMAGEITEM, "iiAppearance", D_INT, mode);
     rput(vm, self, NJ_C_ITEM, "itImage", D_IMAGE, img);
     return vm->exception ? NJ_ERR : NJ_OK;
 }
@@ -5791,8 +5913,16 @@ NJFN(ii_setLayout)
 
 NJFN(ii_getAppearanceMode)
 {
-    nj_s4 l = fget(vm, NJ_THIS(args), NJ_C_IMAGEITEM, "iiLayout", D_INT);
-    ret->i = (l == 1) ? 1 : ((l == 2) ? 2 : 0);
+    nj_s4 a = fget(vm, NJ_THIS(args), NJ_C_IMAGEITEM, "iiAppearance", D_INT);
+
+    if (a >= 0) {
+        ret->i = a;
+        return NJ_OK;
+    }
+    /* Built through the four-argument constructor: the appearance follows the
+     * layout directives, which is what this method has always answered. */
+    a = fget(vm, NJ_THIS(args), NJ_C_IMAGEITEM, "iiLayout", D_INT);
+    ret->i = (a == 1) ? 1 : ((a == 2) ? 2 : 0);
     return NJ_OK;
 }
 
@@ -6396,6 +6526,13 @@ NJFN(tf_delete)
 NJFN(tf_njText)
 {
     ret->r = rget(vm, NJ_THIS(args), NJ_C_TEXTFIELD, "tfText", D_STR);
+    return NJ_OK;
+}
+
+/* TextField.getCaretPosition(): the same insertion point, from tfCursor. */
+NJFN(tf_getCaretPosition)
+{
+    ret->i = fget(vm, NJ_THIS(args), NJ_C_TEXTFIELD, "tfCursor", D_INT);
     return NJ_OK;
 }
 
@@ -8478,6 +8615,14 @@ NJFN(tb_getTicker)
     return d_getTicker(vm, th, args, ret);
 }
 
+/* TextBox.getCaretPosition(): the insertion point the text machinery keeps in
+ * tbCursor, or 0 when the field was never written. */
+NJFN(tb_getCaretPosition)
+{
+    ret->i = fget(vm, NJ_THIS(args), NJ_C_TEXTBOX, "tbCursor", D_INT);
+    return NJ_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* Alert and AlertType                                                 */
 /* ------------------------------------------------------------------ */
@@ -9211,6 +9356,7 @@ static const nj_builtin_method graphics_methods[] = {
     M("drawRegion",     "(L" NJ_C_IMAGE ";IIIIIIIII)V", 0),
     M("drawRGB",        "([IIIIIIIZ)V", 0),
     M("copyArea",       "(IIIIIII)V", 0),
+    M("getDisplayColor", "(I)I", 0),
 
     /* com.nokia.mid.ui.DirectGraphics, reached through the interface. */
     M("setARGBColor",         "(I)V",   NJ_ACC_PUBLIC),
@@ -9374,6 +9520,7 @@ static const nj_builtin_field command_fields[] = {
 static const nj_builtin_method command_methods[] = {
     M("<init>", "(Ljava/lang/String;II)V", 0),
     M("<init>", "(Ljava/lang/String;III)V", 0),
+    M("<init>", "(Ljava/lang/String;Ljava/lang/String;II)V", 0),
     M("getCommandType", "()I", 0),
     M("getLabel",       "()Ljava/lang/String;", 0),
     M("getLongLabel",   "()Ljava/lang/String;", 0),
@@ -9474,6 +9621,7 @@ static const nj_builtin_field imageitem_fields[] = {
     FLD("iiAlt",    D_STR,   0),
     FLD("iiAlt2",   D_STR,   0),
     FLD("iiLayout", D_INT,   0),
+    FLD("iiAppearance", D_INT, 0),
     FLD("LAYOUT_DEFAULT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("LAYOUT_LEFT",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("LAYOUT_RIGHT",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
@@ -9484,6 +9632,7 @@ static const nj_builtin_field imageitem_fields[] = {
 
 static const nj_builtin_method imageitem_methods[] = {
     M("<init>", "(Ljava/lang/String;L" NJ_C_IMAGE ";ILjava/lang/String;)V", 0),
+    M("<init>", "(Ljava/lang/String;L" NJ_C_IMAGE ";ILjava/lang/String;I)V", 0),
     M("getImage",   "()L" NJ_C_IMAGE ";", 0),
     M("setImage",   "(L" NJ_C_IMAGE ";)V", 0),
     M("getAltText", "()Ljava/lang/String;", 0),
@@ -9623,7 +9772,8 @@ static const nj_builtin_method textfield_methods[] = {
     M("setInitialInputMode", "(Ljava/lang/String;)V", 0),
     M("getInitialInputMode", "()Ljava/lang/String;", 0),
     M("njText",   "()Ljava/lang/String;", 0),
-    M("njHeight", "(I)I", 0)
+    M("njHeight", "(I)I", 0),
+    M("getCaretPosition", "()I", 0)
 };
 
 static const nj_builtin_field datefield_fields[] = {
@@ -9767,7 +9917,8 @@ static const nj_builtin_method textbox_methods[] = {
     M("setConstraints",  "(I)V", 0),
     M("setInitialInputMode", "(Ljava/lang/String;)V", 0),
     M("setTicker",       "(L" NJ_C_TICKER ";)V", 0),
-    M("getTicker",       "()L" NJ_C_TICKER ";", 0)
+    M("getTicker",       "()L" NJ_C_TICKER ";", 0),
+    M("getCaretPosition", "()I", 0)
 };
 
 /* ---- Alert / AlertType ---- */
@@ -9826,7 +9977,14 @@ static const nj_builtin_field display_fields[] = {
     FLD("sDisplay",   D_DISPLAYS, NJ_ACC_STATIC),
     FLD("LIST_ELEMENT",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("TEXT_ELEMENT",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
-    FLD("IMAGE_ELEMENT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+    FLD("IMAGE_ELEMENT", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    /* The six parts of the screen getColor() can be asked about. */
+    FLD("COLOR_BACKGROUND",             D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("COLOR_FOREGROUND",             D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("COLOR_HIGHLIGHTED_BACKGROUND", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("COLOR_HIGHLIGHTED_FOREGROUND", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("COLOR_BORDER",                 D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("COLOR_HIGHLIGHTED_BORDER",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
 };
 
 static const nj_builtin_method display_methods[] = {
@@ -9851,7 +10009,12 @@ static const nj_builtin_method display_methods[] = {
     M("vibrate",     "(I)Z", NJ_ACC_STATIC),
     M("vibrate",     "(I)Z", 0),
     M("getBestImageWidth",  "(I)I", 0),
-    M("getBestImageHeight", "(I)I", 0)
+    M("getBestImageHeight", "(I)I", 0),
+    /* MIDP 2.0 colour queries.  getColor is also declared in the boolean shape
+     * some stubs emit, so the VM resolves whichever form the caller wrote. */
+    M("getColor",       "(I)I", 0),
+    M("getColor",       "(I)Z", 0),
+    M("getBorderStyle", "(Z)I", 0)
 };
 
 /* ---- Screen: the abstract parent of the "content" Displayables ---- */
@@ -10031,6 +10194,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_GRAPHICS, "setColor", "(I)V", g_setColor },
     { NJ_C_GRAPHICS, "setColor", "(III)V", g_setColorRGB },
     { NJ_C_GRAPHICS, "getColor", "()I", g_getColor },
+    { NJ_C_GRAPHICS, "getDisplayColor", "(I)I", g_getDisplayColor },
     { NJ_C_GRAPHICS, "getRedComponent", "()I", g_getRedComponent },
     { NJ_C_GRAPHICS, "getGreenComponent", "()I", g_getGreenComponent },
     { NJ_C_GRAPHICS, "getBlueComponent", "()I", g_getBlueComponent },
@@ -10124,6 +10288,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_COMMAND, "getLongLabel", "()Ljava/lang/String;", cmd_getLongLabel },
     { NJ_C_COMMAND, "getPriority", "()I", cmd_getPriority },
     { NJ_C_COMMAND, "compareTo", "(L" NJ_C_COMMAND ";)I", cmd_compareTo },
+    { NJ_C_COMMAND, "<init>", "(Ljava/lang/String;Ljava/lang/String;II)V", cmd_init_labels },
 
     { NJ_C_TICKER, "<init>", "(Ljava/lang/String;)V", ticker_init },
     { NJ_C_TICKER, "getString", "()Ljava/lang/String;", ticker_getString },
@@ -10171,6 +10336,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_IMAGEITEM, "getAppearanceMode", "()I", ii_getAppearanceMode },
     { NJ_C_IMAGEITEM, "njText", "()Ljava/lang/String;", ii_njText },
     { NJ_C_IMAGEITEM, "njHeight", "(I)I", ii_njHeight },
+    { NJ_C_IMAGEITEM, "<init>", "(Ljava/lang/String;L" NJ_C_IMAGE ";ILjava/lang/String;I)V", ii_init_app },
 
     { NJ_C_GAUGE, "<init>", "(Ljava/lang/String;ZII)V", gauge_init },
     { NJ_C_GAUGE, "setValue", "(I)V", gauge_setValue },
@@ -10226,6 +10392,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_TEXTFIELD, "getInitialInputMode", "()Ljava/lang/String;", tf_getInitialInputMode },
     { NJ_C_TEXTFIELD, "njText", "()Ljava/lang/String;", tf_njText },
     { NJ_C_TEXTFIELD, "njHeight", "(I)I", tf_njHeight },
+    { NJ_C_TEXTFIELD, "getCaretPosition", "()I", tf_getCaretPosition },
 
     { NJ_C_DATEFIELD, "<init>", "(Ljava/lang/String;I)V", df_init },
     { NJ_C_DATEFIELD, "<init>", "(Ljava/lang/String;ILjava/util/TimeZone;)V", df_init_zone },
@@ -10302,6 +10469,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_TEXTBOX, "setInitialInputMode", "(Ljava/lang/String;)V", tb_setInitialInputMode },
     { NJ_C_TEXTBOX, "setTicker", "(L" NJ_C_TICKER ";)V", tb_setTicker },
     { NJ_C_TEXTBOX, "getTicker", "()L" NJ_C_TICKER ";", tb_getTicker },
+    { NJ_C_TEXTBOX, "getCaretPosition", "()I", tb_getCaretPosition },
 
     { NJ_C_ALERT, "<init>", "(Ljava/lang/String;)V", alert_init1 },
     { NJ_C_ALERT, "<init>", "(Ljava/lang/String;Ljava/lang/String;L" NJ_C_IMAGE ";L" NJ_C_ALERTTYPE ";)V", alert_init4 },
@@ -10345,7 +10513,10 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_DISPLAY, "vibrate", "(I)Z", disp_vibrate },
     { NJ_C_DISPLAY, "vibrate", "(I)Z", disp_vibrate },
     { NJ_C_DISPLAY, "getBestImageWidth", "(I)I", disp_getBestImageWidth },
-    { NJ_C_DISPLAY, "getBestImageHeight", "(I)I", disp_getBestImageHeight }
+    { NJ_C_DISPLAY, "getBestImageHeight", "(I)I", disp_getBestImageHeight },
+    { NJ_C_DISPLAY, "getColor", "(I)I", disp_getColor },
+    { NJ_C_DISPLAY, "getColor", "(I)Z", disp_getColor_bool },
+    { NJ_C_DISPLAY, "getBorderStyle", "(Z)I", disp_getBorderStyle }
 };
 const int nj_lib_lcdui_count =
     (int)(sizeof(nj_lib_lcdui_table) / sizeof(nj_lib_lcdui_table[0]));
@@ -10618,6 +10789,12 @@ nj_status nj_lcdui_late_init(nj_vm *vm)
     lcdui_const_int(vm, NJ_C_DISPLAY, "LIST_ELEMENT",  0);
     lcdui_const_int(vm, NJ_C_DISPLAY, "TEXT_ELEMENT",  1);
     lcdui_const_int(vm, NJ_C_DISPLAY, "IMAGE_ELEMENT", 2);
+    lcdui_const_int(vm, NJ_C_DISPLAY, "COLOR_BACKGROUND",             0);
+    lcdui_const_int(vm, NJ_C_DISPLAY, "COLOR_FOREGROUND",             1);
+    lcdui_const_int(vm, NJ_C_DISPLAY, "COLOR_HIGHLIGHTED_BACKGROUND", 2);
+    lcdui_const_int(vm, NJ_C_DISPLAY, "COLOR_HIGHLIGHTED_FOREGROUND", 3);
+    lcdui_const_int(vm, NJ_C_DISPLAY, "COLOR_BORDER",                 4);
+    lcdui_const_int(vm, NJ_C_DISPLAY, "COLOR_HIGHLIGHTED_BORDER",     5);
 
     /* ---- the AlertType singletons and the List select command ---- */
     lcdui_alert_type(vm, "INFO",         0);

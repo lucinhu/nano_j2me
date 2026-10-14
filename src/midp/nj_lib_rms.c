@@ -613,6 +613,7 @@ static nj_ref rs_open_common(nj_vm *vm, nj_ref name, int create_if_missing)
     }
     rs_seti(vm, rs, NJ_F_RS_NEXTID, 1);
     rs_seti(vm, rs, NJ_F_RS_OPEN, 1);
+    rs_seti(vm, rs, "rsMode", 0);          /* AUTHMODE_PRIVATE */
 
     if (exists) {
         rs_load(vm, rs);
@@ -655,7 +656,44 @@ NJFN(rs_open_auth)
      * AUTHMODE_PRIVATE both mean "this one process" here; `writable` decides
      * whether an existing store may be written, which is enforced per record
      * write by the store itself. */
-    return NJ_CALL(rs_open, vm, th, args, ret);
+    nj_status st = NJ_CALL(rs_open, vm, th, args, ret);
+
+    if (st == NJ_OK && ret->r) {
+        /* Remember which authmode the store was opened with, so getMode() can
+         * answer it.  Only the two documented constants are meaningful here. */
+        nj_s4 mode = NJ_ARG_INT(args, 2);
+        if (mode == 0 || mode == 1) {
+            rs_seti(vm, ret->r, "rsMode", mode);
+        }
+    }
+    return st;
+}
+
+/*
+ * setMode(int authmode, boolean writable) - the MIDP 1.0 access-mode setter.
+ * authmode is about other suites in other processes, which cannot exist in this
+ * runtime (see rs_open_auth), so this validates the constant and remembers it;
+ * `writable` is enforced per record write by the store itself.
+ */
+NJFN(rs_setMode)
+{
+    nj_s4 mode = NJ_ARG_INT(args, 0);
+
+    if (mode != 0 && mode != 1) {      /* AUTHMODE_PRIVATE / AUTHMODE_ANY */
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "invalid authmode");
+    }
+    rs_seti(vm, NJ_THIS(args), "rsMode", mode);
+    return NJ_OK;
+}
+
+/* getMode(): the MIDP 1.0 reader for what setMode() stored.  MIDP 2.0 dropped
+ * it in favour of the four-argument openRecordStore, but a title built against
+ * the older API still calls it. */
+NJFN(rs_getMode)
+{
+    ret->i = rs_geti(vm, NJ_THIS(args), "rsMode");
+    return NJ_OK;
 }
 
 NJFN(rs_open_named)
@@ -1276,7 +1314,11 @@ static const nj_builtin_field recordstore_fields[] = {
     FLD(NJ_F_RS_IDS,      "Ljava/util/Vector;",  0),
     FLD(NJ_F_RS_NEXTID,   "I",                   0),
     FLD(NJ_F_RS_OPEN,     "Z",                   0),
-    FLD(NJ_F_RS_MODIFIED, "Z",                   0)
+    FLD(NJ_F_RS_MODIFIED, "Z",                   0),
+    FLD("rsMode",         "I",                   0),
+    /* The two access modes setMode() accepts. */
+    FLD("AUTHMODE_PRIVATE", "I", NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("AUTHMODE_ANY",     "I", NJ_ACC_STATIC | NJ_ACC_FINAL)
 };
 
 static const nj_builtin_method recordstore_methods[] = {
@@ -1293,6 +1335,8 @@ static const nj_builtin_method recordstore_methods[] = {
     M("deleteRecordStore", "(Ljava/lang/String;)V", NJ_ACC_STATIC),
     M("listRecordStores", "()[Ljava/lang/String;", NJ_ACC_STATIC),
     M("getName",           "()Ljava/lang/String;", 0),
+    M("setMode",           "(IZ)V", 0),
+    M("getMode",           "()I", 0),
     M("getNumRecords",     "()I", 0),
     M("getSize",           "()I", 0),
     M("getSizeAvailable",  "()I", 0),
@@ -1408,6 +1452,8 @@ const nj_native_entry nj_lib_rms_table[] = {
     { NJ_C_RECORDSTORE, "deleteRecordStore", "(Ljava/lang/String;)V", rs_delete },
     { NJ_C_RECORDSTORE, "listRecordStores", "()[Ljava/lang/String;", rs_listNames },
     { NJ_C_RECORDSTORE, "getName",         "()Ljava/lang/String;", rs_getName },
+    { NJ_C_RECORDSTORE, "setMode",         "(IZ)V", rs_setMode },
+    { NJ_C_RECORDSTORE, "getMode",         "()I", rs_getMode },
     { NJ_C_RECORDSTORE, "getNumRecords",   "()I", rs_getNumRecords },
     { NJ_C_RECORDSTORE, "getSize",         "()I", rs_getSize },
     { NJ_C_RECORDSTORE, "getSizeAvailable","()I", rs_getSizeAvailable },
@@ -1459,6 +1505,12 @@ static const struct { const char *name; nj_s4 value; } rcomp_consts[] = {
     { "EQUIVALENT",  0 }
 };
 
+/* RecordStore's MIDP 1.0 access modes, written by setMode()/getMode(). */
+static const struct { const char *name; nj_s4 value; } rs_consts[] = {
+    { "AUTHMODE_PRIVATE", 0 },
+    { "AUTHMODE_ANY",     1 }
+};
+
 nj_status nj_rms_late_init(nj_vm *vm)
 {
     size_t i;
@@ -1468,6 +1520,13 @@ nj_status nj_rms_late_init(nj_vm *vm)
                                       "I", 1);
         if (f) {
             nj_field_write_int(vm, NULL, f, rcomp_consts[i].value);
+        }
+    }
+    for (i = 0; i < sizeof(rs_consts) / sizeof(rs_consts[0]); i++) {
+        nj_field *f = nj_field_lookup(vm, NJ_C_RECORDSTORE, rs_consts[i].name,
+                                      "I", 1);
+        if (f) {
+            nj_field_write_int(vm, NULL, f, rs_consts[i].value);
         }
     }
     return NJ_OK;

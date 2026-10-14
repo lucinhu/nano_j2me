@@ -466,6 +466,64 @@ static void test_skips(nj_vm *vm)
 }
 
 /* ------------------------------------------------------------------ */
+/* 5: DataOutputStream.writeChars(String)                               */
+/* ------------------------------------------------------------------ */
+static void test_write_chars(nj_vm *vm)
+{
+    static const nj_u2 units[3] = { 0x0048u, 0x0069u, 0x00E9u };  /* H i é */
+    nj_ref baos, dos, bais, dis, bytes;
+    nj_value a[2];
+    nj_s4 n;
+
+    baos = construct(vm, BAOS, "()V", NULL, "ByteArrayOutputStream()");
+    OK(baos != NULL);
+    a[0] = vref(baos);
+    dos = construct(vm, DOS, "(Ljava/io/OutputStream;)V", a,
+                    "DataOutputStream(baos)");
+    OK(dos != NULL);
+    clean(vm, "new DataOutputStream for writeChars");
+
+    /*
+     * CLDC 1.1: each character is one 16-bit unit, high byte first - no length
+     * prefix and no modified UTF-8, which is what writeUTF does.  灵异村庄
+     * _11169 builds its save record with this method; it used to be missing
+     * entirely, so the call resolved up to the DataOutput interface and threw
+     * NoSuchMethodError inside the title's own helper.
+     */
+    a[0] = vref(nj_string_new_chars(vm, units, 3));
+    OK(a[0].r != NULL);
+    OK(nj_call(vm, dos, DOS, "writeChars", "(Ljava/lang/String;)V", a, NULL)
+       == NJ_OK);
+    clean(vm, "writeChars");
+
+    n = nj_call_int(vm, baos, BAOS, "size", "()I", NULL);
+    OK_MSG(n == 6, "three characters wrote %d bytes, expected 6", (int)n);
+
+    bytes = nj_call_ref(vm, baos, BAOS, "toByteArray", "()[B", NULL);
+    OK(bytes != NULL);
+    a[0] = vref(bytes);
+    bais = construct(vm, BAIS, "([B)V", a, "ByteArrayInputStream(bytes)");
+    OK(bais != NULL);
+    a[0] = vref(bais);
+    dis = construct(vm, DIS, "(Ljava/io/InputStream;)V", a,
+                    "DataInputStream(bais)");
+    OK(dis != NULL);
+    clean(vm, "new DataInputStream for writeChars");
+    /* readChar is declared "()C", so the lookup has to name that descriptor:
+     * asking for "()I" is a NoSuchMethodError, which is what the first version
+     * of this test proved by accident. */
+    OK_MSG(nj_call_int(vm, dis, DIS, "readChar", "()C", NULL) == 0x0048,
+           "the first unit must read back as H");
+    OK_MSG(nj_call_int(vm, dis, DIS, "readChar", "()C", NULL) == 0x0069,
+           "the second unit must read back as i");
+    OK_MSG(nj_call_int(vm, dis, DIS, "readChar", "()C", NULL) == 0x00E9,
+           "the third unit must read back as e-acute, not as modified UTF-8");
+    OK_MSG(nj_call_int(vm, dis, DIS, "read", "()I", NULL) == -1,
+           "and the stream must be at its end after three units");
+    clean(vm, "writeChars round trip");
+}
+
+/* ------------------------------------------------------------------ */
 /* 6: media - VolumeControl.setLevel and Player.setMediaTime            */
 /* ------------------------------------------------------------------ */
 #define MEDIA_MGR "javax/microedition/media/Manager"
@@ -1971,7 +2029,7 @@ static void test_player_survives_collection(nj_vm *vm)
     a[1].r = NULL;
     ret.bits = 0u;
     OK_MSG(nj_call_static(vm, MEDIA_MGR, "createPlayer",
-                          "(Ljava/io/InputStream;Ljava/lang/String;)L" 
+                          "(Ljava/io/InputStream;Ljava/lang/String;)L"
                           "javax/microedition/media/Player;", a, &ret) == NJ_OK,
            "createPlayer on a heap that has to collect mid-call");
     OK_MSG(ret.r != NULL, "a Player for 400000 frames of 8-bit PCM");
@@ -2933,6 +2991,198 @@ static void test_dump_frames_directory(nj_vm *vm)
     clean(vm, "frame dump prefix");
 }
 
+/*
+ * The CLDC/MIDP members tools/api_audit.py used to report as unresolvable:
+ * String's double/slice valueOf and intern(), Class.isAssignableFrom,
+ * Thread(String), the MIDP 2.0 four-argument Command constructor, the caret
+ * reader TextBox and TextField share, Player.getContentType and RecordStore's
+ * MIDP 1.0 setMode/getMode pair.
+ */
+static void test_njlib_gaps(nj_vm *vm)
+{
+    const char STR[] = "java/lang/String";
+    const char CLS[] = "java/lang/Class";
+    const char THR[] = "java/lang/Thread";
+    const char CMD[] = "javax/microedition/lcdui/Command";
+    const char TB[] = "javax/microedition/lcdui/TextBox";
+    const char TF[] = "javax/microedition/lcdui/TextField";
+    const char RS[] = "javax/microedition/rms/RecordStore";
+    const char OPEN4[] = "(Ljava/lang/String;ZIZ)L"
+                         "javax/microedition/rms/RecordStore;";
+    const char CTOR_TB[] = "(Ljava/lang/String;Ljava/lang/String;II)V";
+    nj_value a[4];
+    nj_value ret;
+    nj_ref s, arr, thr, cmd, tb, tf, rs;
+
+    /* String.valueOf(double) has to be Double.toString's formatting - a "%g"
+     * would answer "1" where Java says "1.0". */
+    memset(a, 0, sizeof(a));
+    a[0].d = 1.0;
+    ret.bits = 0u;
+    OK(nj_call_static(vm, STR, "valueOf", "(D)Ljava/lang/String;",
+                      a, &ret) == NJ_OK);
+    OK_MSG(ret.r != NULL && nj_string_equals_utf8(ret.r, "1.0"),
+           "String.valueOf(1.0) is \"1.0\"");
+
+    a[0].d = -2.5;
+    ret.bits = 0u;
+    OK(nj_call_static(vm, STR, "valueOf", "(D)Ljava/lang/String;",
+                      a, &ret) == NJ_OK);
+    OK_MSG(ret.r != NULL && nj_string_equals_utf8(ret.r, "-2.5"),
+           "String.valueOf(-2.5) is \"-2.5\"");
+
+    /* valueOf(char[], int, int) copies exactly the requested slice. */
+    arr = nj_char_array_new(vm, 4u);
+    OK(arr != NULL);
+    if (arr) {
+        nj_array_set_int(arr, 0u, 'a');
+        nj_array_set_int(arr, 1u, 'b');
+        nj_array_set_int(arr, 2u, 'c');
+        nj_array_set_int(arr, 3u, 'd');
+        memset(a, 0, sizeof(a));
+        a[0] = vref(arr);
+        a[1] = vint(1);
+        a[2] = vint(2);
+        ret.bits = 0u;
+        OK(nj_call_static(vm, STR, "valueOf", "([CII)Ljava/lang/String;",
+                          a, &ret) == NJ_OK);
+        OK_MSG(ret.r != NULL && nj_string_equals_utf8(ret.r, "bc"),
+               "String.valueOf({'a','b','c','d'}, 1, 2) is \"bc\"");
+    }
+
+    /* intern() answers the receiver: the runtime's literals are interned
+     * already, so there is no table to consult. */
+    s = nj_string_new(vm, "interned");
+    OK(s != NULL);
+    ret.bits = 0u;
+    OK(nj_call(vm, s, STR, "intern", "()Ljava/lang/String;", NULL, &ret) ==
+       NJ_OK);
+    OK_MSG(ret.r == s, "String.intern() returns the receiver");
+
+    /* Class.isAssignableFrom: the argument is the "from" side. */
+    {
+        nj_ref strc = nj_class_object(vm, "java/lang/String");
+        nj_ref objc = nj_class_object(vm, "java/lang/Object");
+
+        a[0] = vref(strc);
+        OK_MSG(nj_call_int(vm, objc, CLS, "isAssignableFrom",
+                           "(Ljava/lang/Class;)Z", a) == 1,
+               "Object.class.isAssignableFrom(String.class)");
+        a[0] = vref(objc);
+        OK_MSG(nj_call_int(vm, strc, CLS, "isAssignableFrom",
+                           "(Ljava/lang/Class;)Z", a) == 0,
+               "String.class.isAssignableFrom(Object.class) is false");
+    }
+
+    /* Thread(String) stores its name the way the Runnable form does. */
+    a[0] = vref(nj_string_new(vm, "worker"));
+    thr = construct(vm, THR, "(Ljava/lang/String;)V", a, "Thread(\"worker\")");
+    if (thr != NULL) {
+        s = nj_call_ref(vm, thr, THR, "getName", "()Ljava/lang/String;", NULL);
+        OK_MSG(s != NULL && nj_string_equals_utf8(s, "worker"),
+               "new Thread(\"worker\").getName()");
+    }
+
+    /* Command(String shortLabel, String longLabel, int type, int priority) -
+     * the MIDP 2.0 constructor, which is not the device's 4-arg overload. */
+    a[0] = vref(nj_string_new(vm, "Go"));
+    a[1] = vref(nj_string_new(vm, "Go long"));
+    a[2] = vint(1);                     /* Command.SCREEN */
+    a[3] = vint(7);
+    cmd = construct(vm, CMD, "(Ljava/lang/String;Ljava/lang/String;II)V", a,
+                    "Command(\"Go\", \"Go long\", 1, 7)");
+    if (cmd != NULL) {
+        s = nj_call_ref(vm, cmd, CMD, "getLabel", "()Ljava/lang/String;", NULL);
+        OK_MSG(s != NULL && nj_string_equals_utf8(s, "Go"),
+               "getLabel() is the short label");
+        s = nj_call_ref(vm, cmd, CMD, "getLongLabel",
+                        "()Ljava/lang/String;", NULL);
+        OK_MSG(s != NULL && nj_string_equals_utf8(s, "Go long"),
+               "getLongLabel() is the long one");
+        OK_MSG(nj_call_int(vm, cmd, CMD, "getPriority", "()I", NULL) == 7,
+               "and getPriority() is the fourth argument");
+    }
+
+    /* TextBox and TextField share the text machinery, so setString() leaves
+     * the caret at the end of the new text. */
+    a[0] = vref(nj_string_new(vm, "title"));
+    a[1].r = NULL;
+    a[2] = vint(10);
+    a[3] = vint(0);
+    tb = construct(vm, TB, CTOR_TB, a, "TextBox for the caret");
+    if (tb != NULL) {
+        a[0] = vref(nj_string_new(vm, "abc"));
+        OK(nj_call(vm, tb, TB, "setString", "(Ljava/lang/String;)V", a,
+                   NULL) == NJ_OK);
+        OK_MSG(nj_call_int(vm, tb, TB, "getCaretPosition", "()I", NULL) == 3,
+               "TextBox.getCaretPosition() follows the text");
+    }
+    a[0] = vref(nj_string_new(vm, "title"));
+    a[1].r = NULL;
+    a[2] = vint(10);
+    a[3] = vint(0);
+    tf = construct(vm, TF, CTOR_TB, a, "TextField for the caret");
+    if (tf != NULL) {
+        a[0] = vref(nj_string_new(vm, "abcd"));
+        OK(nj_call(vm, tf, TF, "setString", "(Ljava/lang/String;)V", a,
+                   NULL) == NJ_OK);
+        OK_MSG(nj_call_int(vm, tf, TF, "getCaretPosition", "()I", NULL) == 4,
+               "TextField.getCaretPosition() uses the same reader");
+    }
+
+    /* Player.getContentType(): a tone locator player knows its own type. */
+    a[0] = vref(nj_string_new(vm, "tone://"));
+    ret.bits = 0u;
+    if (nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                       "(Ljava/lang/String;)Ljavax/microedition/media/Player;",
+                       a, &ret) == NJ_OK && ret.r != NULL) {
+        s = nj_call_ref(vm, ret.r, PLAYER, "getContentType",
+                        "()Ljava/lang/String;", NULL);
+        OK_MSG(s != NULL && nj_string_equals_utf8(s, "audio/x-tone-seq"),
+               "a tone Player reports audio/x-tone-seq");
+    } else {
+        g_fail++;
+        fprintf(stderr, "FAIL test_lib.c: createPlayer(tone://) for "
+                "getContentType\n");
+        nj_clear_exception(vm);
+    }
+
+    /* RecordStore's MIDP 1.0 access mode: setMode() stores what getMode()
+     * reads back, and only the two documented constants are accepted. */
+    {
+        nj_field *f = nj_field_lookup(vm, RS, "AUTHMODE_ANY", "I", 1);
+
+        OK_MSG(f != NULL && nj_field_read_int(vm, NULL, f) == 1,
+               "RecordStore.AUTHMODE_ANY is 1");
+    }
+    a[0] = vref(nj_string_new(vm, "njlib_setmode"));
+    a[1] = vint(1);                     /* create if necessary */
+    a[2] = vint(0);                     /* AUTHMODE_PRIVATE */
+    a[3] = vint(1);                     /* writable */
+    ret.bits = 0u;
+    if (nj_call_static(vm, RS, "openRecordStore", OPEN4, a, &ret) == NJ_OK) {
+        rs = ret.r;
+        OK_MSG(nj_call_int(vm, rs, RS, "getMode", "()I", NULL) == 0,
+               "a privately opened store reports AUTHMODE_PRIVATE");
+        a[0] = vint(1);
+        a[1] = vint(1);
+        OK(nj_call(vm, rs, RS, "setMode", "(IZ)V", a, NULL) == NJ_OK);
+        OK_MSG(nj_call_int(vm, rs, RS, "getMode", "()I", NULL) == 1,
+               "and setMode(AUTHMODE_ANY, true) round-trips");
+        a[0] = vint(9);
+        a[1] = vint(1);
+        OK_MSG(nj_call(vm, rs, RS, "setMode", "(IZ)V", a, NULL) != NJ_OK,
+               "an authmode that is neither constant is refused");
+        nj_clear_exception(vm);
+    } else {
+        g_fail++;
+        fprintf(stderr, "FAIL test_lib.c: openRecordStore for setMode\n");
+        nj_clear_exception(vm);
+    }
+
+    clean(vm, "the audited class-library members");
+}
+
 int main(void)
 {
     nj_port port;
@@ -2970,6 +3220,7 @@ int main(void)
     test_read_utf_static(vm);
     test_read_fully(vm);
     test_skips(vm);
+    test_write_chars(vm);
     test_media(vm);
     test_strings(vm);
     test_numbers(vm);
@@ -2998,6 +3249,7 @@ int main(void)
     test_class_relative_resource(vm);
     test_invokestatic_resolution(vm);
     test_array_assignability(vm);
+    test_njlib_gaps(vm);
     test_dump_frames_directory(vm);
 
     nj_vm_destroy(vm);

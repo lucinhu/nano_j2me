@@ -200,6 +200,27 @@ NJFN(obj_wait_timeout)
     return nj_vm_monitor_wait(vm, th, o, ms);
 }
 
+/* wait(long, int): the nanosecond part is a refinement this runtime has no
+ * clock for, so the timeout is the millisecond part.  The range check is the
+ * one the javadoc states: the nanoseconds must be 0..999999. */
+NJFN(obj_wait_timeout_ns)
+{
+    nj_ref o = NJ_THIS(args);
+    nj_s8 ms;
+    nj_s4 ns;
+
+    if (!o) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    ms = NJ_ARG_LONG(args, 0);
+    ns = NJ_ARG_INT(args, 1);
+    if (ms < 0 || ns < 0 || ns > 999999) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "timeout value is negative or nanoseconds out of range");
+    }
+    return nj_vm_monitor_wait(vm, th, o, ms);
+}
+
 /* ------------------------------------------------------------------ */
 /* java.lang.Class                                                     */
 /* ------------------------------------------------------------------ */
@@ -412,6 +433,24 @@ NJFN(class_isInstance)
     return NJ_OK;
 }
 
+/* Class.isAssignableFrom(Class cls): true when a cls may be used where the
+ * receiver is expected.  The hierarchy walk is the same one isInstance and
+ * checkcast use (nj_class_is_assignable); the argument, not the receiver, is
+ * the "from" side. */
+NJFN(class_isAssignableFrom)
+{
+    nj_class *to = NJ_CLASS_OF(args);
+    nj_ref a = NJ_ARG_REF(args, 0);
+    nj_class *from;
+
+    if (!a) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    from = (a->kind == NJ_OBJ_CLASS) ? a->u.mirror : NULL;
+    ret->i = (to && from && nj_class_is_assignable(from, to)) ? 1 : 0;
+    return NJ_OK;
+}
+
 NJFN(class_getSuperclass)
 {
     nj_class *c = NJ_CLASS_OF(args);
@@ -548,51 +587,149 @@ NJFN(throwable_fillInStackTrace)
  * "DCTuxedo.b(I)V pc=2017" and showed the throw was inside the game's own
  * catch block.
  */
-static void trace_sink(void *ud, const char *line)
+/* Where a stack trace goes: the log for printStackTrace(), a caller-supplied
+ * PrintStream for printStackTrace(PrintStream). */
+typedef struct {
+    nj_vm *vm;
+    nj_ref stream;      /* NULL = the log */
+} trace_out;
+
+/* nj_vm_describe_threads() prefixes every line for the --where flag and indents
+ * the frames behind it.  A stack trace has its own indentation, and the first
+ * line merely names the thread: both sinks below want the frame text alone. */
+static const char *trace_frame(const char *line)
 {
-    nj_vm *vm = (nj_vm *)ud;
     const char *p = line;
 
-    /* nj_vm_describe_threads() prefixes every line for the --where flag, and
-     * indents the frames behind it.  A stack trace has its own indentation. */
     if (p[0]=='w'&&p[1]=='h'&&p[2]=='e'&&p[3]=='r'&&p[4]=='e'&&p[5]==':'&&p[6]==' ') {
         p += 7;
     }
     while (*p == ' ') {
         p++;
     }
-    /* Its first line names the thread; a stack trace has no use for it. */
     if (p[0]=='t'&&p[1]=='h'&&p[2]=='r'&&p[3]=='e'&&p[4]=='a'&&p[5]=='d'&&p[6]==' ') {
-        return;
+        return NULL;
     }
-    nj_logf(vm, 1, "    at %s", p);
+    return p;
 }
 
-NJFN(throwable_printStackTrace)
+/* Append `src` to dst[at..cap) and return the new length. */
+static nj_u4 trace_app(char *dst, nj_u4 at, nj_u4 cap, const char *src)
 {
-    nj_ref o = NJ_THIS(args);
+    while (*src && at + 1u < cap) {
+        dst[at++] = *src++;
+    }
+    return at;
+}
+
+static void trace_line(trace_out *out, const char *text)
+{
+    if (!out->stream) {
+        nj_logf(out->vm, 1, "%s", text);
+        return;
+    }
+    {
+        nj_value a[1];
+        nj_ref s = nj_string_new(out->vm, text);
+        if (!s) {
+            /* Out of memory while reporting: say nothing rather than replace
+             * the caller's exception with ours. */
+            return;
+        }
+        a[0].r = s;
+        (void)nj_call(out->vm, out->stream, "java/io/PrintStream", "println",
+                      "(Ljava/lang/String;)V", a, NULL);
+    }
+}
+
+static void trace_sink(void *ud, const char *line)
+{
+    trace_out *out = (trace_out *)ud;
+    const char *p = trace_frame(line);
+
+    if (p) {
+        nj_logf(out->vm, 1, "    at %s", p);
+    }
+}
+
+static void trace_stream_sink(void *ud, const char *line)
+{
+    trace_out *out = (trace_out *)ud;
+    const char *p = trace_frame(line);
+    char buf[256];
+    nj_u4 i;
+
+    if (!p) {
+        return;
+    }
+    i = trace_app(buf, 0u, sizeof(buf), "    at ");
+    (void)trace_app(buf, i, sizeof(buf), p);
+    trace_line(out, buf);
+}
+
+/* The shared body of printStackTrace() and printStackTrace(PrintStream): the
+ * header line then the live call chain, to the log when `stream` is NULL and to
+ * that stream otherwise. */
+static nj_status throwable_trace(nj_vm *vm, nj_ref o, nj_ref stream)
+{
     nj_field *f = fld_detailMessage(vm);
     nj_ref msg = f ? nj_field_read_ref(vm, o, f) : NULL;
     char name[192];
     char text[256];
+    char head[512];
+    trace_out out;
+    nj_u4 i;
 
     name[0] = '\0';
     if (o && o->cls && o->cls->name) {
-        nj_u4 i = 0u;
+        nj_u4 n = 0u;
         const char *p = o->cls->name;
-        while (*p && i + 1u < sizeof(name)) {
-            name[i++] = (*p == '/') ? '.' : *p;
+        while (*p && n + 1u < sizeof(name)) {
+            name[n++] = (*p == '/') ? '.' : *p;
             p++;
         }
-        name[i] = '\0';
+        name[n] = '\0';
     }
     text[0] = '\0';
     if (msg) {
         nj_string_to_utf8(msg, text, (int)sizeof(text));
     }
-    nj_logf(vm, 1, "exception: %s%s%s", name, text[0] ? ": " : "", text);
-    nj_vm_describe_threads(vm, trace_sink, vm);
+    i = trace_app(head, 0u, sizeof(head), "exception: ");
+    i = trace_app(head, i, sizeof(head), name);
+    if (text[0]) {
+        i = trace_app(head, i, sizeof(head), ": ");
+        i = trace_app(head, i, sizeof(head), text);
+    }
+    head[i] = '\0';
+
+    out.vm = vm;
+    out.stream = stream;
+    trace_line(&out, head);
+    /* The log sink formats each frame straight from the walk (so a long frame
+     * line is never truncated); the stream sink has to build the String first. */
+    if (stream) {
+        nj_vm_describe_threads(vm, trace_stream_sink, &out);
+    } else {
+        nj_vm_describe_threads(vm, trace_sink, &out);
+    }
     return NJ_OK;
+}
+
+NJFN(throwable_printStackTrace)
+{
+    return throwable_trace(vm, NJ_THIS(args), NULL);
+}
+
+/* Throwable.printStackTrace(PrintStream): the same trace, written to the given
+ * stream instead of the log. */
+NJFN(throwable_printStackTrace_stream)
+{
+    nj_ref stream = NJ_ARG_REF(args, 0);
+
+    if (!stream) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    return throwable_trace(vm, NJ_THIS(args), stream);
 }
 
 /* ------------------------------------------------------------------ */
@@ -609,7 +746,8 @@ static const nj_builtin_method object_methods[] = {
     M("notify",     "()V",                  NJ_ACC_FINAL),
     M("notifyAll",  "()V",                  NJ_ACC_FINAL),
     M("wait",       "()V",                  NJ_ACC_FINAL),
-    M("wait",       "(J)V",                 NJ_ACC_FINAL)
+    M("wait",       "(J)V",                 NJ_ACC_FINAL),
+    M("wait",       "(JI)V",                NJ_ACC_FINAL)
 };
 
 static const nj_builtin_method class_methods[] = {
@@ -619,6 +757,7 @@ static const nj_builtin_method class_methods[] = {
     M("isArray",        "()Z",                                  0),
     M("isInterface",    "()Z",                                  0),
     M("isInstance",     "(Ljava/lang/Object;)Z",                0),
+    M("isAssignableFrom", "(Ljava/lang/Class;)Z",                 0),
     M("getSuperclass",  "()Ljava/lang/Class;",                  0),
     M("forName",        "(Ljava/lang/String;)Ljava/lang/Class;", NJ_ACC_STATIC),
     M("newInstance",    "()Ljava/lang/Object;",                 0),
@@ -635,7 +774,8 @@ static const nj_builtin_method throwable_methods[] = {
     M("getMessage",          "()Ljava/lang/String;",                0),
     M("toString",            "()Ljava/lang/String;",                0),
     M("fillInStackTrace",    "()Ljava/lang/Throwable;",             0),
-    M("printStackTrace",     "()V",                                 0)
+    M("printStackTrace",     "()V",                                 0),
+    M("printStackTrace",     "(Ljava/io/PrintStream;)V",            0)
 };
 
 /* Every exception type below is a plain subclass with the two constructors. */
@@ -717,6 +857,7 @@ const nj_native_entry nj_lib_object_table[] = {
     { "java/lang/Object",    "notifyAll",         "()V",                   obj_notifyAll },
     { "java/lang/Object",    "wait",              "()V",                   obj_wait },
     { "java/lang/Object",    "wait",              "(J)V",                  obj_wait_timeout },
+    { "java/lang/Object",    "wait",              "(JI)V",                 obj_wait_timeout_ns },
 
     { "java/lang/Class",     "getName",           "()Ljava/lang/String;",  class_getName },
     { "java/lang/Class",     "getResourceAsStream",
@@ -724,6 +865,7 @@ const nj_native_entry nj_lib_object_table[] = {
     { "java/lang/Class",     "isArray",           "()Z",                   class_isArray },
     { "java/lang/Class",     "isInterface",       "()Z",                   class_isInterface },
     { "java/lang/Class",     "isInstance",        "(Ljava/lang/Object;)Z", class_isInstance },
+    { "java/lang/Class",     "isAssignableFrom",  "(Ljava/lang/Class;)Z", class_isAssignableFrom },
     { "java/lang/Class",     "getSuperclass",     "()Ljava/lang/Class;",   class_getSuperclass },
     { "java/lang/Class",     "forName",           "(Ljava/lang/String;)Ljava/lang/Class;", class_forName },
     { "java/lang/Class",     "newInstance",       "()Ljava/lang/Object;",  class_newInstance },
@@ -734,7 +876,8 @@ const nj_native_entry nj_lib_object_table[] = {
     { "java/lang/Throwable", "getMessage",        "()Ljava/lang/String;",         throwable_getMessage },
     { "java/lang/Throwable", "toString",          "()Ljava/lang/String;",         throwable_toString },
     { "java/lang/Throwable", "fillInStackTrace",  "()Ljava/lang/Throwable;",      throwable_fillInStackTrace },
-    { "java/lang/Throwable", "printStackTrace",   "()V",                          throwable_printStackTrace }
+    { "java/lang/Throwable", "printStackTrace",   "()V",                          throwable_printStackTrace },
+    { "java/lang/Throwable", "printStackTrace",   "(Ljava/io/PrintStream;)V",      throwable_printStackTrace_stream }
 };
 const int nj_lib_object_count =
     (int)(sizeof(nj_lib_object_table) / sizeof(nj_lib_object_table[0]));

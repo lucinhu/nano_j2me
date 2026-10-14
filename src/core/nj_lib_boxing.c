@@ -896,7 +896,7 @@ NJFN(long_hashCode)
  * answered "java.lang.Float@1f2a3b" and a Hashtable keyed on Floats bucketed
  * by identity.
  */
-static void boxing_fmt_double(char *buf, size_t cap, double v)
+void nj_fmt_double(char *buf, size_t cap, double v)
 {
 #if NJ_USE_LIBC
     size_t n;
@@ -941,7 +941,7 @@ NJFN(float_toString_obj)
     nj_s4 bits = f ? (nj_s4)nj_field_read_bits32(vm, NJ_THIS(args), f) : 0;
     char buf[48];
 
-    boxing_fmt_double(buf, sizeof(buf), (double)float_from_bits(bits));
+    nj_fmt_double(buf, sizeof(buf), (double)float_from_bits(bits));
     ret->r = nj_string_new(vm, buf);
     return ret->r ? NJ_OK : nj_throw_oom(vm);
 }
@@ -950,7 +950,7 @@ NJFN(float_toString_v)
 {
     char buf[48];
 
-    boxing_fmt_double(buf, sizeof(buf), (double)NJ_ARG_FLOAT(args, 0));
+    nj_fmt_double(buf, sizeof(buf), (double)NJ_ARG_FLOAT(args, 0));
     ret->r = nj_string_new(vm, buf);
     return ret->r ? NJ_OK : nj_throw_oom(vm);
 }
@@ -1002,7 +1002,7 @@ NJFN(double_toString_obj)
     nj_s8 bits = f ? (nj_s8)nj_field_read_bits64(vm, NJ_THIS(args), f) : 0;
     char buf[48];
 
-    boxing_fmt_double(buf, sizeof(buf), double_from_bits(bits));
+    nj_fmt_double(buf, sizeof(buf), double_from_bits(bits));
     ret->r = nj_string_new(vm, buf);
     return ret->r ? NJ_OK : nj_throw_oom(vm);
 }
@@ -1011,7 +1011,7 @@ NJFN(double_toString_v)
 {
     char buf[48];
 
-    boxing_fmt_double(buf, sizeof(buf), NJ_ARG_DOUBLE(args, 0));
+    nj_fmt_double(buf, sizeof(buf), NJ_ARG_DOUBLE(args, 0));
     ret->r = nj_string_new(vm, buf);
     return ret->r ? NJ_OK : nj_throw_oom(vm);
 }

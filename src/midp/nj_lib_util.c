@@ -1423,6 +1423,16 @@ NJFN(ht_toString)
     return ret->r ? NJ_OK : nj_throw_oom(vm);
 }
 
+/* protected void rehash(): grows the bucket array and re-places every live
+ * entry.  This Hashtable grows on its own - ht_put() calls ht_grow() when the
+ * load factor is crossed - so an explicit rehash() has nothing left to do.
+ * (A caller cannot observe the difference: the table is never smaller than it
+ * needs to be.) */
+NJFN(ht_rehash)
+{
+    return NJ_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* java.util.HashtableEnumerator                                       */
 /* ------------------------------------------------------------------ */
@@ -2759,6 +2769,65 @@ NJFN(cal_isLenient)
     return NJ_OK;
 }
 
+/* Calendar.before(Object) and after(Object): the millisecond comparison, with
+ * the argument checked to be a Calendar first - the javadoc asks for a
+ * ClassCastException otherwise. */
+static nj_status cal_arg(nj_vm *vm, nj_value *args, nj_ref *out)
+{
+    nj_ref b = NJ_ARG_REF(args, 0);
+    nj_class *cc;
+
+    if (!b) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    cc = nj_class_lookup(vm, CAL_CLS);
+    if (!cc || !nj_class_is_assignable(b->cls, cc)) {
+        return nj_throw(vm, "java/lang/ClassCastException", NULL);
+    }
+    *out = b;
+    return NJ_OK;
+}
+
+NJFN(cal_before)
+{
+    nj_ref b = NULL;                /* set by cal_arg() on the OK path */
+
+    if (cal_arg(vm, args, &b) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->i = (cal_millis(vm, NJ_THIS(args)) < cal_millis(vm, b)) ? 1 : 0;
+    return NJ_OK;
+}
+
+NJFN(cal_after)
+{
+    nj_ref b = NULL;                /* set by cal_arg() on the OK path */
+
+    if (cal_arg(vm, args, &b) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->i = (cal_millis(vm, NJ_THIS(args)) > cal_millis(vm, b)) ? 1 : 0;
+    return NJ_OK;
+}
+
+/*
+ * protected void computeFields() and protected void computeTime(): both exist
+ * so a subclass can turn the millisecond value into fields (or back) at a
+ * chosen moment.  Here a Calendar *is* one long - calMillis - and every reader
+ * (get, getTime, toString, add, ...) splits it on demand through
+ * cal_to_fields(), so the cached field state java.util.Calendar would refresh
+ * is always consistent already and there is nothing to recompute.
+ */
+NJFN(cal_computeFields)
+{
+    return NJ_OK;
+}
+
+NJFN(cal_computeTime)
+{
+    return NJ_OK;
+}
+
 NJFN(cal_toString)
 {
     nj_ref c = NJ_THIS(args);
@@ -3368,7 +3437,8 @@ static const nj_builtin_method hashtable_methods[] = {
     M("clear",          "()V",                                 0),
     M("keys",           "()Ljava/util/Enumeration;",           0),
     M("elements",       "()Ljava/util/Enumeration;",           0),
-    M("toString",       "()Ljava/lang/String;",                0)
+    M("toString",       "()Ljava/lang/String;",                0),
+    M("rehash",         "()V",                                 NJ_ACC_PROTECTED)
 };
 
 static const nj_builtin_field random_fields[] = {
@@ -3500,7 +3570,11 @@ static const nj_builtin_method calendar_methods[] = {
     M("getTimeZone",       "()Ljava/util/TimeZone;",           0),
     M("setTimeZone",       "(Ljava/util/TimeZone;)V",          0),
     M("isLenient",         "()Z",                              0),
-    M("toString",          "()Ljava/lang/String;",             0)
+    M("toString",          "()Ljava/lang/String;",             0),
+    M("before",            "(Ljava/lang/Object;)Z",            0),
+    M("after",             "(Ljava/lang/Object;)Z",            0),
+    M("computeFields",     "()V",                              NJ_ACC_PROTECTED),
+    M("computeTime",       "()V",                              NJ_ACC_PROTECTED)
 };
 
 static const nj_builtin_method stack_methods[] = {
@@ -3682,6 +3756,7 @@ const nj_native_entry nj_lib_util_table[] = {
     { "java/util/Hashtable", "keys",          "()Ljava/util/Enumeration;", ht_keys },
     { "java/util/Hashtable", "elements",      "()Ljava/util/Enumeration;", ht_elements },
     { "java/util/Hashtable", "toString",      "()Ljava/lang/String;",   ht_toString },
+    { "java/util/Hashtable", "rehash",        "()V",                    ht_rehash },
 
     { "java/util/Random", "<init>",       "()V",   rnd_init },
     { "java/util/Random", "<init>",       "(J)V",  rnd_init_seed },
@@ -3744,6 +3819,10 @@ const nj_native_entry nj_lib_util_table[] = {
     { "java/util/Calendar", "setTimeZone",     "(Ljava/util/TimeZone;)V",      cal_setTimeZone },
     { "java/util/Calendar", "isLenient",       "()Z",                          cal_isLenient },
     { "java/util/Calendar", "toString",        "()Ljava/lang/String;",         cal_toString },
+    { "java/util/Calendar", "before",          "(Ljava/lang/Object;)Z",        cal_before },
+    { "java/util/Calendar", "after",           "(Ljava/lang/Object;)Z",        cal_after },
+    { "java/util/Calendar", "computeFields",   "()V",                          cal_computeFields },
+    { "java/util/Calendar", "computeTime",     "()V",                          cal_computeTime },
 
     { "java/util/Stack", "<init>", "()V",                                     stack_init },
     { "java/util/Stack", "push",   "(Ljava/lang/Object;)Ljava/lang/Object;",  stack_push },

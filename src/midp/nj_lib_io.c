@@ -41,10 +41,24 @@
 #define NJ_C_OSW      "java/io/OutputStreamWriter"
 
 /* Defined further down, next to the other stream helpers; the tables are
- * emitted before them. */
+ * emitted before them.
+ *
+ * The isr_ and osw_ bodies are the Reader/Writer ones: the wrapped stream lives
+ * in the base class's field, so the same body serves a Reader and an
+ * InputStreamReader (see the note above the class rows), and rd_mark,
+ * rd_mark_supported and rd_reset are shared the same way.  wr_write_str_range
+ * is Writer.write(String,int,int), which OutputStreamWriter inherits. */
 NJFN(isr_init); NJFN(isr_read); NJFN(isr_range); NJFN(isr_ready);
 NJFN(isr_close);
 NJFN(osw_init); NJFN(osw_write); NJFN(osw_range); NJFN(osw_flush);
+NJFN(rd_mark); NJFN(rd_mark_supported); NJFN(rd_reset); NJFN(wr_write_str_range);
+NJFN(wr_close);
+NJFN(ps_init); NJFN(ps_check_error); NJFN(ps_set_error);
+NJFN(ps_write_bytes_range);
+NJFN(ps_print_bool); NJFN(ps_print_long); NJFN(ps_print_float);
+NJFN(ps_print_double); NJFN(ps_print_chars); NJFN(ps_print_obj);
+NJFN(ps_println_char); NJFN(ps_println_long); NJFN(ps_println_float);
+NJFN(ps_println_double); NJFN(ps_println_chars);
 
 /* ------------------------------------------------------------------ */
 /* java.io.InputStream                                                 */
@@ -642,6 +656,45 @@ NJFN(dos_write_char)
     b[0] = (nj_u1)((v >> 8) & 0xFF);
     b[1] = (nj_u1)(v & 0xFF);
     return dos_raw(vm, dos_out(vm, NJ_THIS(args)), b, 2);
+}
+
+/*
+ * writeChars(String) writes each UTF-16 unit as two bytes, high byte first:
+ * no modified UTF-8 and no length prefix, which is what CLDC 1.1 specifies and
+ * what DataInputStream.readChar reads back.  灵异村庄_11169 builds its save
+ * record with it - the member was missing, the call resolved up to the
+ * DataOutput interface and threw NoSuchMethodError inside the title's own
+ * helper, which its catch turned into a failed destroyApp.  One stream write
+ * for the whole string, because a save record is written once per high score
+ * and a per-character write would be one call into the OutputStream each.
+ */
+NJFN(dos_writeChars)
+{
+    nj_ref s = NJ_ARG_REF(args, 0);
+    nj_ref out;
+    nj_u1 *tmp;
+    nj_u4 i;
+    nj_status st;
+
+    if (!s) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    out = dos_out(vm, NJ_THIS(args));
+    if (s->length == 0u) {
+        return NJ_OK;
+    }
+    tmp = (nj_u1 *)nj_host_alloc(vm, (nj_size)s->length * 2u);
+    if (!tmp) {
+        return nj_throw_oom(vm);
+    }
+    for (i = 0u; i < s->length; i++) {
+        nj_u4 c = nj_string_chars(s)[i];
+        tmp[i * 2u] = (nj_u1)((c >> 8) & 0xFFu);
+        tmp[i * 2u + 1u] = (nj_u1)(c & 0xFFu);
+    }
+    st = dos_raw(vm, out, tmp, (nj_s4)(s->length * 2u));
+    nj_host_free(vm, tmp);
+    return st;
 }
 
 /*
@@ -1462,6 +1515,7 @@ static const nj_builtin_method dos_methods[] = {
     M("writeByte",       "(I)V", 0),
     M("writeShort",      "(I)V", 0),
     M("writeChar",       "(I)V", 0),
+    M("writeChars",      "(Ljava/lang/String;)V", 0),
     M("writeInt",        "(I)V", 0),
     M("writeLong",       "(J)V", 0),
     M("writeFloat",      "(F)V", 0),
@@ -1526,7 +1580,7 @@ static nj_ref strm_field(nj_vm *vm, nj_ref o, const char *cls, const char *name,
 NJFN(isr_init)
 {
     nj_ref self = NJ_THIS(args);
-    nj_field *f = nj_field_lookup(vm, NJ_C_ISR, "isrIn",
+    nj_field *f = nj_field_lookup(vm, NJ_C_READER, "rdIn",
                                   "Ljava/io/InputStream;", 0);
     nj_ref in = NJ_ARG_REF(args, 0);
     if (!in) {
@@ -1540,7 +1594,7 @@ NJFN(isr_init)
 
 NJFN(isr_read)
 {
-    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_ISR, "isrIn",
+    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_READER, "rdIn",
                            "Ljava/io/InputStream;");
     nj_value r;
     if (!in) {
@@ -1558,7 +1612,7 @@ NJFN(isr_read)
 
 NJFN(isr_ready)
 {
-    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_ISR, "isrIn",
+    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_READER, "rdIn",
                            "Ljava/io/InputStream;");
     nj_value r;
     if (!in) {
@@ -1577,7 +1631,7 @@ NJFN(isr_ready)
 
 NJFN(isr_close)
 {
-    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_ISR, "isrIn",
+    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_READER, "rdIn",
                            "Ljava/io/InputStream;");
     if (in) {
         nj_value a[4];
@@ -1590,7 +1644,7 @@ NJFN(isr_close)
 NJFN(osw_init)
 {
     nj_ref self = NJ_THIS(args);
-    nj_field *f = nj_field_lookup(vm, NJ_C_OSW, "oswOut",
+    nj_field *f = nj_field_lookup(vm, NJ_C_WRITER, "wrOut",
                                   "Ljava/io/OutputStream;", 0);
     nj_ref out = NJ_ARG_REF(args, 0);
     if (!out) {
@@ -1604,7 +1658,7 @@ NJFN(osw_init)
 
 NJFN(osw_write)
 {
-    nj_ref out = strm_field(vm, NJ_THIS(args), NJ_C_OSW, "oswOut",
+    nj_ref out = strm_field(vm, NJ_THIS(args), NJ_C_WRITER, "wrOut",
                             "Ljava/io/OutputStream;");
     nj_value a[4];
     if (!out) {
@@ -1628,7 +1682,7 @@ NJFN(osw_write)
  */
 NJFN(osw_range)
 {
-    nj_ref out = strm_field(vm, NJ_THIS(args), NJ_C_OSW, "oswOut",
+    nj_ref out = strm_field(vm, NJ_THIS(args), NJ_C_WRITER, "wrOut",
                             "Ljava/io/OutputStream;");
     nj_ref chars = NJ_ARG_REF(args, 0);
     nj_s4 off = NJ_ARG_INT(args, 1);
@@ -1656,7 +1710,7 @@ NJFN(osw_range)
 
 NJFN(isr_range)
 {
-    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_ISR, "isrIn",
+    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_READER, "rdIn",
                            "Ljava/io/InputStream;");
     nj_ref chars = NJ_ARG_REF(args, 0);
     nj_s4 off = NJ_ARG_INT(args, 1);
@@ -1695,7 +1749,7 @@ NJFN(isr_range)
 
 NJFN(osw_flush)
 {
-    nj_ref out = strm_field(vm, NJ_THIS(args), NJ_C_OSW, "oswOut",
+    nj_ref out = strm_field(vm, NJ_THIS(args), NJ_C_WRITER, "wrOut",
                             "Ljava/io/OutputStream;");
     if (out) {
         nj_value a[4];
@@ -1704,8 +1758,6 @@ NJFN(osw_flush)
     }
     return NJ_OK;
 }
-
-#define RM(name, desc, flags) { name, desc, flags }
 
 /*
  * The concrete half of java.io.Reader and java.io.Writer.
@@ -1719,6 +1771,8 @@ NJFN(osw_flush)
  *
  * Every one of them goes through the abstract method rather than doing the
  * work here, which is what makes a subclass's implementation take effect.
+ * (The tables that declare these methods use M(...) directly; see the note
+ * above reader_methods for why there is no private row macro any more.)
  */
 static nj_s4 ch_len(nj_ref a)
 {
@@ -1831,58 +1885,397 @@ NJFN(wr_write_str)
     return NJ_OK;
 }
 
-static const nj_builtin_field isr_fields[] = {
-    { "isrIn", "Ljava/io/InputStream;", 0 }
+/*
+ * Writer.close(): the mirror of isr_close, over the Writer slot, so a bare
+ * Writer, an OutputStreamWriter and (through the inherited field) any
+ * subclass all close what they were handed.
+ */
+NJFN(wr_close)
+{
+    nj_ref out = strm_field(vm, NJ_THIS(args), NJ_C_WRITER, "wrOut",
+                            "Ljava/io/OutputStream;");
+    if (out) {
+        nj_value a[4];
+        a[0].bits = 0u;
+        (void)nj_call(vm, out, NJ_C_OSTREAM, "close", "()V", a, NULL);
+    }
+    return NJ_OK;
+}
+
+/*
+ * mark()/markSupported()/reset(), and the range form of write(String).  The
+ * three Reader methods are concrete in CLDC, and this runtime's character
+ * streams wrap a byte stream and remember nothing: markSupported() is false,
+ * mark() has nothing to record, and reset() refuses with the IOException the
+ * specification names.  write(String,int,int) is the slice form of
+ * write(String); it is the one Writer method OutputStreamWriter does not
+ * inherit a body for, so the body lives here and serves both.
+ */
+NJFN(rd_mark_supported)
+{
+    ret->i = 0;
+    return NJ_OK;
+}
+
+NJFN(rd_mark)
+{
+    (void)NJ_ARG_INT(args, 0);   /* nothing is remembered, on purpose */
+    return NJ_OK;
+}
+
+NJFN(rd_reset)
+{
+    return nj_throw(vm, "java/io/IOException", "mark/reset not supported");
+}
+
+NJFN(wr_write_str_range)
+{
+    nj_value a[3];
+    nj_ref s = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 len = NJ_ARG_INT(args, 2);
+    nj_ref c;
+    nj_u2 *p;
+    nj_s4 i;
+
+    if (!s) {
+        return nj_throw(vm, "java/lang/NullPointerException", "string is null");
+    }
+    if (off < 0 || len < 0 || (nj_u4)(off + len) > nj_string_len(s)) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException",
+                        "string index out of range");
+    }
+    if (len == 0) {
+        return NJ_OK;   /* an empty slice must not need an array at all */
+    }
+    /* Copy the slice straight into the char[] the range form takes; going
+     * through String.substring would allocate twice for the same characters. */
+    c = nj_char_array_new(vm, (nj_u4)len);
+    if (!c) {
+        return NJ_ERR;
+    }
+    p = (nj_u2 *)nj_array_data(c);
+    if (!p) {
+        return NJ_ERR;
+    }
+    for (i = 0; i < len; i++) {
+        p[i] = nj_string_chars(s)[off + i];
+    }
+    a[0].r = c;
+    a[1].i = 0;
+    a[2].i = len;
+    if (nj_call(vm, NJ_THIS(args), NJ_C_WRITER, "write", "([CII)V", a, NULL)
+        != NJ_OK) {
+        return NJ_ERR;
+    }
+    return NJ_OK;
+}
+
+/*
+ * The stream slot Reader and Writer own.  CLDC's abstract classes declare a
+ * protected lock object instead; this runtime has no locking object to store
+ * (nothing here synchronises), so the same slot keeps the stream the
+ * constructor was handed.  InputStreamReader and OutputStreamWriter inherit
+ * it rather than declaring a second field, and that is what lets one body
+ * serve a Reader and an InputStreamReader, or a Writer and an
+ * OutputStreamWriter.
+ */
+static const nj_builtin_field rd_fields[] = {
+    { "rdIn", "Ljava/io/InputStream;", 0 }
 };
-static const nj_builtin_field osw_fields[] = {
-    { "oswOut", "Ljava/io/OutputStream;", 0 }
+static const nj_builtin_field wr_fields[] = {
+    { "wrOut", "Ljava/io/OutputStream;", 0 }
 };
 
 /*
- * Reader and Writer are abstract in CLDC, and so is most of what they declare.
- * The flag matters: without it a call to one of these looks like a method that
- * simply has no implementation and reports UnsatisfiedLinkError, when the
- * honest answer is AbstractMethodError - the subclass was supposed to provide
- * it.  InputStreamReader and OutputStreamWriter do provide all of them.
+ * Reader and Writer are abstract classes in CLDC, and this runtime registers
+ * them as concrete rows because a builtin table has one shape.  Their methods
+ * are concrete here wherever the specification gives them a body: read(),
+ * read(char[]), read(char[],int,int), ready(), skip(long), close(), mark(),
+ * markSupported() and reset() for Reader, and the write family, flush() and
+ * close() for Writer.  The storage above makes those bodies real rather than
+ * formal - a Reader built over an InputStream reads that stream, exactly as an
+ * InputStreamReader does.
  *
- * Four Reader and three Writer methods are abstract; read(char[]), skip(long),
- * write(int), write(char[]) and write(String) are concrete in the spec and
- * still need implementations - see the TODO in tests/test_natives.c.
+ * The rows are written with M(...) rather than a private brace macro on
+ * purpose: tools/m3g_api_audit.py reads method tables by looking for M(
+ * entries, so a wrapper macro hides the whole table from the audit and every
+ * member of it is reported as a member this runtime cannot resolve.  The table
+ * is the interface - it has to be legible to the tool that checks it.
  */
 static const nj_builtin_method reader_methods[] = {
-    RM("close",  "()V",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
-    RM("read",   "()I",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
-    RM("read",   "([C)I",  NJ_ACC_PUBLIC),
-    RM("read",   "([CII)I", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
-    RM("ready",  "()Z",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
-    RM("skip",   "(J)J",   NJ_ACC_PUBLIC)
+    M("<init>", "(Ljava/lang/Object;)V", NJ_ACC_PROTECTED),
+    M("close",  "()V",     NJ_ACC_PUBLIC),
+    M("mark",   "(I)V",    NJ_ACC_PUBLIC),
+    M("markSupported", "()Z", NJ_ACC_PUBLIC),
+    M("read",   "()I",     NJ_ACC_PUBLIC),
+    M("read",   "([C)I",   NJ_ACC_PUBLIC),
+    M("read",   "([CII)I", NJ_ACC_PUBLIC),
+    M("ready",  "()Z",     NJ_ACC_PUBLIC),
+    M("reset",  "()V",     NJ_ACC_PUBLIC),
+    M("skip",   "(J)J",    NJ_ACC_PUBLIC)
 };
 static const nj_builtin_method writer_methods[] = {
-    RM("close",  "()V",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
-    RM("flush",  "()V",    NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
-    RM("write",  "(I)V",   NJ_ACC_PUBLIC),
-    RM("write",  "([C)V",  NJ_ACC_PUBLIC),
-    RM("write",  "([CII)V", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT),
-    RM("write",  "(Ljava/lang/String;)V", NJ_ACC_PUBLIC)
+    M("<init>", "(Ljava/lang/Object;)V", NJ_ACC_PROTECTED),
+    M("close",  "()V",     NJ_ACC_PUBLIC),
+    M("flush",  "()V",     NJ_ACC_PUBLIC),
+    M("write",  "(I)V",    NJ_ACC_PUBLIC),
+    M("write",  "([C)V",   NJ_ACC_PUBLIC),
+    M("write",  "([CII)V", NJ_ACC_PUBLIC),
+    M("write",  "(Ljava/lang/String;)V", NJ_ACC_PUBLIC),
+    M("write",  "(Ljava/lang/String;II)V", NJ_ACC_PUBLIC)
 };
 static const nj_builtin_method isr_methods[] = {
-    RM("<init>", "(L" NJ_C_ISTREAM ";)V", NJ_ACC_PUBLIC),
-    RM("<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V",
+    M("<init>", "(L" NJ_C_ISTREAM ";)V", NJ_ACC_PUBLIC),
+    M("<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V",
        NJ_ACC_PUBLIC),
-    RM("read",   "()I", NJ_ACC_PUBLIC),
-    RM("read",   "([CII)I", NJ_ACC_PUBLIC),
-    RM("ready",  "()Z", NJ_ACC_PUBLIC),
-    RM("close",  "()V", NJ_ACC_PUBLIC)
+    M("read",   "()I", NJ_ACC_PUBLIC),
+    M("read",   "([CII)I", NJ_ACC_PUBLIC),
+    M("skip",   "(J)J", NJ_ACC_PUBLIC),
+    M("ready",  "()Z", NJ_ACC_PUBLIC),
+    M("markSupported", "()Z", NJ_ACC_PUBLIC),
+    M("mark",   "(I)V", NJ_ACC_PUBLIC),
+    M("reset",  "()V", NJ_ACC_PUBLIC),
+    M("close",  "()V", NJ_ACC_PUBLIC)
 };
 static const nj_builtin_method osw_methods[] = {
-    RM("<init>", "(L" NJ_C_OSTREAM ";)V", NJ_ACC_PUBLIC),
-    RM("<init>", "(L" NJ_C_OSTREAM ";Ljava/lang/String;)V",
+    M("<init>", "(L" NJ_C_OSTREAM ";)V", NJ_ACC_PUBLIC),
+    M("<init>", "(L" NJ_C_OSTREAM ";Ljava/lang/String;)V",
        NJ_ACC_PUBLIC),
-    RM("write",  "(I)V", NJ_ACC_PUBLIC),
-    RM("write",  "([CII)V", NJ_ACC_PUBLIC),
-    RM("flush",  "()V", NJ_ACC_PUBLIC),
-    RM("close",  "()V", NJ_ACC_PUBLIC)
+    M("write",  "(I)V", NJ_ACC_PUBLIC),
+    M("write",  "([CII)V", NJ_ACC_PUBLIC),
+    M("write",  "(Ljava/lang/String;II)V", NJ_ACC_PUBLIC),
+    M("flush",  "()V", NJ_ACC_PUBLIC),
+    M("close",  "()V", NJ_ACC_PUBLIC)
 };
+
+/* ------------------------------------------------------------------ */
+/* java.io.PrintStream                                                 */
+/* ------------------------------------------------------------------ */
+/*
+ * PrintStream's class row belongs to the core module - System.out and
+ * System.err are created there with it - but the native registry is keyed by
+ * class name, method name and descriptor across every module
+ * (src/core/nj_native.c), so these bodies bind to that class without touching
+ * the row.  A method the core table did not declare simply has no native to
+ * bind to; nothing here depends on one being there.
+ *
+ * EVERY OVERLOAD FORMATS THE WAY THE CLASS ALREADY DID.  The value goes
+ * through the runtime's own String.valueOf, which is Integer/Long/Float/
+ * Double's own toString, and the resulting String is handed to print(String)
+ * or println(String) - the two methods whose output path already existed.  So
+ * there is one formatter and one way to the port log, not a second one.
+ *
+ * checkError(), setError() and the stream given to the constructor need
+ * somewhere to live: they use the instance fields "psError" and "psOut" on the
+ * class.  Every lookup below is NULL-safe, so a build whose PrintStream has no
+ * such field still runs - checkError() then reports false, setError() has
+ * nothing to record and write(byte[],int,int) goes to the log, which is what
+ * System.out can honestly do.
+ */
+static nj_field *ps_field(nj_vm *vm, const char *name, const char *desc)
+{
+    return nj_field_lookup(vm, "java/io/PrintStream", name, desc, 0);
+}
+
+/* Hand an already formatted string to the method that existed before. */
+static nj_status ps_hand_over(nj_vm *vm, nj_ref self, nj_ref s, int newline)
+{
+    nj_value a[1];
+
+    if (!s) {
+        return NJ_ERR;      /* formatting threw; the exception is pending */
+    }
+    a[0].r = s;
+    return nj_call(vm, self, "java/io/PrintStream",
+                   newline ? "println" : "print", "(Ljava/lang/String;)V",
+                   a, NULL);
+}
+
+/* Format one argument with String.valueOf(...) and hand the result over. */
+static nj_status ps_fmt(nj_vm *vm, nj_ref self, const char *value_of_desc,
+                        nj_value *a, int newline)
+{
+    nj_value r;
+
+    r.r = NULL;
+    if (nj_call_static(vm, "java/lang/String", "valueOf", value_of_desc,
+                       a, &r) != NJ_OK) {
+        return NJ_ERR;
+    }
+    return ps_hand_over(vm, self, r.r, newline);
+}
+
+NJFN(ps_init)
+{
+    nj_ref out = NJ_ARG_REF(args, 0);
+    nj_field *f = ps_field(vm, "psOut", "Ljava/io/OutputStream;");
+
+    if (!out) {
+        return nj_throw(vm, "java/lang/NullPointerException", "out is null");
+    }
+    if (f) {
+        nj_field_write_ref(vm, NJ_THIS(args), f, out);
+    }
+    return NJ_OK;
+}
+
+NJFN(ps_check_error)
+{
+    nj_field *f = ps_field(vm, "psError", "Z");
+
+    /* checkError() flushes first, so a stream that only failed on the last
+     * buffered byte still reports the error. */
+    if (nj_call(vm, NJ_THIS(args), "java/io/PrintStream", "flush", "()V",
+                NULL, NULL) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->i = (f && nj_field_read_int(vm, NJ_THIS(args), f) != 0) ? 1 : 0;
+    return NJ_OK;
+}
+
+NJFN(ps_set_error)
+{
+    nj_field *f = ps_field(vm, "psError", "Z");
+
+    if (f) {
+        nj_field_write_int(vm, NJ_THIS(args), f, 1);
+    }
+    return NJ_OK;
+}
+
+/*
+ * write(byte[],int,int).  A PrintStream built over a stream writes to that
+ * stream - it is the only way the object the title handed over can ever be
+ * observed - while System.out, built with none, falls back to write(int),
+ * the path its println has always used.
+ */
+NJFN(ps_write_bytes_range)
+{
+    nj_ref b = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 len = NJ_ARG_INT(args, 2);
+    nj_ref out = strm_field(vm, NJ_THIS(args), "java/io/PrintStream", "psOut",
+                            "Ljava/io/OutputStream;");
+    nj_s4 i;
+
+    if (!b) {
+        return nj_throw(vm, "java/lang/NullPointerException", "buffer is null");
+    }
+    if (off < 0 || len < 0 || (nj_u4)(off + len) > b->length) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    if (out) {
+        nj_value a[4];
+        a[0].r = b;
+        a[1].i = off;
+        a[2].i = len;
+        return nj_call(vm, out, NJ_C_OSTREAM, "write", "([BII)V", a, NULL);
+    }
+    for (i = 0; i < len; i++) {
+        nj_value a[1];
+        a[0].i = (nj_s4)(((nj_u1 *)b->u.bytes)[off + i] & 0xFFu);
+        if (nj_call(vm, NJ_THIS(args), "java/io/PrintStream", "write", "(I)V",
+                    a, NULL) != NJ_OK) {
+            return NJ_ERR;
+        }
+    }
+    return NJ_OK;
+}
+
+NJFN(ps_print_bool)
+{
+    nj_value a[1];
+
+    a[0].i = NJ_ARG_INT(args, 0) ? 1 : 0;
+    return ps_fmt(vm, NJ_THIS(args), "(Z)Ljava/lang/String;", a, 0);
+}
+
+NJFN(ps_print_long)
+{
+    nj_value a[1];
+
+    a[0].j = NJ_ARG_LONG(args, 0);
+    return ps_fmt(vm, NJ_THIS(args), "(J)Ljava/lang/String;", a, 0);
+}
+
+NJFN(ps_print_float)
+{
+    nj_value a[1];
+
+    a[0].f = NJ_ARG_FLOAT(args, 0);
+    return ps_fmt(vm, NJ_THIS(args), "(F)Ljava/lang/String;", a, 0);
+}
+
+NJFN(ps_print_double)
+{
+    nj_value a[1];
+
+    a[0].d = NJ_ARG_DOUBLE(args, 0);
+    return ps_fmt(vm, NJ_THIS(args), "(D)Ljava/lang/String;", a, 0);
+}
+
+NJFN(ps_print_chars)
+{
+    nj_value a[1];
+
+    a[0].r = NJ_ARG_REF(args, 0);
+    return ps_fmt(vm, NJ_THIS(args), "([C)Ljava/lang/String;", a, 0);
+}
+
+NJFN(ps_print_obj)
+{
+    nj_ref o = NJ_ARG_REF(args, 0);
+    nj_ref s;
+
+    if (!o) {
+        s = nj_string_new(vm, "null");
+    } else {
+        s = nj_call_ref(vm, o, "java/lang/Object", "toString",
+                        "()Ljava/lang/String;", NULL);
+    }
+    return ps_hand_over(vm, NJ_THIS(args), s, 0);
+}
+
+NJFN(ps_println_char)
+{
+    nj_value a[1];
+
+    a[0].i = NJ_ARG_INT(args, 0);
+    return ps_fmt(vm, NJ_THIS(args), "(C)Ljava/lang/String;", a, 1);
+}
+
+NJFN(ps_println_long)
+{
+    nj_value a[1];
+
+    a[0].j = NJ_ARG_LONG(args, 0);
+    return ps_fmt(vm, NJ_THIS(args), "(J)Ljava/lang/String;", a, 1);
+}
+
+NJFN(ps_println_float)
+{
+    nj_value a[1];
+
+    a[0].f = NJ_ARG_FLOAT(args, 0);
+    return ps_fmt(vm, NJ_THIS(args), "(F)Ljava/lang/String;", a, 1);
+}
+
+NJFN(ps_println_double)
+{
+    nj_value a[1];
+
+    a[0].d = NJ_ARG_DOUBLE(args, 0);
+    return ps_fmt(vm, NJ_THIS(args), "(D)Ljava/lang/String;", a, 1);
+}
+
+NJFN(ps_println_chars)
+{
+    nj_value a[1];
+
+    a[0].r = NJ_ARG_REF(args, 0);
+    return ps_fmt(vm, NJ_THIS(args), "([C)Ljava/lang/String;", a, 1);
+}
 
 /*
  * Connector.READ / WRITE / READ_WRITE.  A MIDlet writes Connector.READ when it
@@ -1974,20 +2367,20 @@ const nj_builtin_class nj_lib_io_classes[] = {
       (nj_u2)(sizeof(streamnotifier_methods) / sizeof(streamnotifier_methods[0])) },
     { NJ_C_READER, "java/lang/Object",
       NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
-      NULL, 0u, reader_methods,
+      rd_fields, (nj_u2)(sizeof(rd_fields) / sizeof(rd_fields[0])),
+      reader_methods,
       (nj_u2)(sizeof(reader_methods) / sizeof(reader_methods[0])) },
     { NJ_C_WRITER, "java/lang/Object",
       NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
-      NULL, 0u, writer_methods,
+      wr_fields, (nj_u2)(sizeof(wr_fields) / sizeof(wr_fields[0])),
+      writer_methods,
       (nj_u2)(sizeof(writer_methods) / sizeof(writer_methods[0])) },
     { NJ_C_ISR, NJ_C_READER, NJ_ACC_PUBLIC,
-      isr_fields,
-      (nj_u2)(sizeof(isr_fields) / sizeof(isr_fields[0])),
+      NULL, 0u,   /* the stream slot is Reader's own ("rdIn") */
       isr_methods,
       (nj_u2)(sizeof(isr_methods) / sizeof(isr_methods[0])) },
     { NJ_C_OSW, NJ_C_WRITER, NJ_ACC_PUBLIC,
-      osw_fields,
-      (nj_u2)(sizeof(osw_fields) / sizeof(osw_fields[0])),
+      NULL, 0u,   /* the stream slot is Writer's own ("wrOut") */
       osw_methods,
       (nj_u2)(sizeof(osw_methods) / sizeof(osw_methods[0])) },
     { "java/io/InputStream", "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
@@ -2039,11 +2432,29 @@ const int nj_lib_io_class_count =
     (int)(sizeof(nj_lib_io_classes) / sizeof(nj_lib_io_classes[0]));
 
 const nj_native_entry nj_lib_io_table[] = {
+    /*
+     * Reader and Writer carry the concrete bodies the specification gives
+     * them (see reader_methods); the stream slot they own is what makes those
+     * bodies work, and the subclasses below inherit both.
+     */
+    { NJ_C_READER, "<init>", "(Ljava/lang/Object;)V", isr_init },
+    { NJ_C_READER, "close",  "()V",                 isr_close },
+    { NJ_C_READER, "mark",   "(I)V",                rd_mark },
+    { NJ_C_READER, "markSupported", "()Z",          rd_mark_supported },
+    { NJ_C_READER, "read",   "()I",                 isr_read },
     { NJ_C_READER, "read",  "([C)I",                rd_read_chars },
-    { NJ_C_READER, "skip",  "(J)J",                 rd_skip },
+    { NJ_C_READER, "read",   "([CII)I",             isr_range },
+    { NJ_C_READER, "ready",  "()Z",                 isr_ready },
+    { NJ_C_READER, "reset",  "()V",                 rd_reset },
+    { NJ_C_READER, "skip",   "(J)J",                rd_skip },
+    { NJ_C_WRITER, "<init>", "(Ljava/lang/Object;)V", osw_init },
+    { NJ_C_WRITER, "close",  "()V",                 wr_close },
+    { NJ_C_WRITER, "flush",  "()V",                 osw_flush },
     { NJ_C_WRITER, "write", "(I)V",                 wr_write_int },
     { NJ_C_WRITER, "write", "([C)V",                wr_write_chars },
+    { NJ_C_WRITER, "write", "([CII)V",              osw_range },
     { NJ_C_WRITER, "write", "(Ljava/lang/String;)V", wr_write_str },
+    { NJ_C_WRITER, "write", "(Ljava/lang/String;II)V", wr_write_str_range },
     { "java/io/InputStream", "<init>",        "()V", is_close },
     { "java/io/InputStream", "read",          "()I", is_read_abstract },
     { "java/io/InputStream", "read",          "([B)I", is_read_bytes },
@@ -2119,6 +2530,7 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/DataOutputStream", "writeByte",    "(I)V", dos_write },
     { "java/io/DataOutputStream", "writeShort",   "(I)V", dos_write_short },
     { "java/io/DataOutputStream", "writeChar",    "(I)V", dos_write_char },
+    { "java/io/DataOutputStream", "writeChars",   "(Ljava/lang/String;)V", dos_writeChars },
     { "java/io/DataOutputStream", "writeInt",     "(I)V", dos_write_int },
     { "java/io/DataOutputStream", "writeLong",    "(J)V", dos_write_long },
     { "java/io/DataOutputStream", "writeFloat",   "(F)V", dos_write_float },
@@ -2132,14 +2544,19 @@ const nj_native_entry nj_lib_io_table[] = {
     { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V", isr_init },
     { NJ_C_ISR, "read",  "()I", isr_read },
     { NJ_C_ISR, "read",  "([CII)I", isr_range },
+    { NJ_C_ISR, "skip",  "(J)J", rd_skip },
     { NJ_C_ISR, "ready", "()Z", isr_ready },
+    { NJ_C_ISR, "mark",  "(I)V", rd_mark },
+    { NJ_C_ISR, "markSupported", "()Z", rd_mark_supported },
+    { NJ_C_ISR, "reset", "()V", rd_reset },
     { NJ_C_ISR, "close", "()V", isr_close },
     { NJ_C_OSW, "<init>", "(L" NJ_C_OSTREAM ";)V", osw_init },
     { NJ_C_OSW, "<init>", "(L" NJ_C_OSTREAM ";Ljava/lang/String;)V", osw_init },
     { NJ_C_OSW, "write", "(I)V", osw_write },
     { NJ_C_OSW, "write", "([CII)V", osw_range },
+    { NJ_C_OSW, "write", "(Ljava/lang/String;II)V", wr_write_str_range },
     { NJ_C_OSW, "flush", "()V", osw_flush },
-    { NJ_C_OSW, "close", "()V", osw_flush },
+    { NJ_C_OSW, "close", "()V", wr_close },
     { "javax/microedition/io/Connector", "open", "(Ljava/lang/String;)Ljavax/microedition/io/Connection;", connector_open },
     { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";)V", isr_init },
     { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V", isr_init },
@@ -2149,7 +2566,31 @@ const nj_native_entry nj_lib_io_table[] = {
     { "javax/microedition/io/Connector", "openInputStream", "(Ljava/lang/String;)Ljava/io/InputStream;", connector_open },
     { "javax/microedition/io/Connector", "openOutputStream", "(Ljava/lang/String;)Ljava/io/OutputStream;", connector_open },
     { "javax/microedition/io/Connector", "openDataInputStream", "(Ljava/lang/String;)Ljava/io/DataInputStream;", connector_open },
-    { "javax/microedition/io/Connector", "openDataOutputStream", "(Ljava/lang/String;)Ljava/io/DataOutputStream;", connector_open }
+    { "javax/microedition/io/Connector", "openDataOutputStream", "(Ljava/lang/String;)Ljava/io/DataOutputStream;", connector_open },
+
+    /*
+     * PrintStream.  The class row and the eleven natives that write to the
+     * port log live in the core module; these are the members the reference
+     * declares and the runtime did not resolve.  Registering a native for a
+     * method a table does not declare is legal - the registry is a lookup
+     * table, not a second declaration - so these bind the moment the row
+     * exists, and are simply unused until then.
+     */
+    { "java/io/PrintStream", "<init>",     "(Ljava/io/OutputStream;)V", ps_init },
+    { "java/io/PrintStream", "checkError", "()Z", ps_check_error },
+    { "java/io/PrintStream", "setError",   "()V", ps_set_error },
+    { "java/io/PrintStream", "write",      "([BII)V", ps_write_bytes_range },
+    { "java/io/PrintStream", "print",      "(Z)V", ps_print_bool },
+    { "java/io/PrintStream", "print",      "(J)V", ps_print_long },
+    { "java/io/PrintStream", "print",      "(F)V", ps_print_float },
+    { "java/io/PrintStream", "print",      "(D)V", ps_print_double },
+    { "java/io/PrintStream", "print",      "([C)V", ps_print_chars },
+    { "java/io/PrintStream", "print",      "(Ljava/lang/Object;)V", ps_print_obj },
+    { "java/io/PrintStream", "println",    "(C)V", ps_println_char },
+    { "java/io/PrintStream", "println",    "(J)V", ps_println_long },
+    { "java/io/PrintStream", "println",    "(F)V", ps_println_float },
+    { "java/io/PrintStream", "println",    "(D)V", ps_println_double },
+    { "java/io/PrintStream", "println",    "([C)V", ps_println_chars }
 };
 const int nj_lib_io_count =
     (int)(sizeof(nj_lib_io_table) / sizeof(nj_lib_io_table[0]));

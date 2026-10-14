@@ -93,6 +93,31 @@ NJFN(thread_init_runnable_name)
     return NJ_OK;
 }
 
+NJFN(thread_init_name)
+{
+    nj_field *f;
+    nj_status st = NJ_CALL(thread_init, vm, th, args, ret);
+    if (st != NJ_OK) {
+        return st;
+    }
+    f = fld(vm, "name", "Ljava/lang/String;");
+    if (f) {
+        nj_field_write_ref(vm, NJ_THIS(args), f, NJ_ARG_REF(args, 0));
+    }
+    return NJ_OK;
+}
+
+/* protected void checkAccess(): there is no SecurityManager in this runtime,
+ * so nothing can ever be denied and the check has nothing to do. */
+NJFN(thread_checkAccess)
+{
+    NJ_UNUSED(vm);
+    NJ_UNUSED(th);
+    NJ_UNUSED(args);
+    NJ_UNUSED(ret);
+    return NJ_OK;
+}
+
 NJFN(thread_currentThread)
 {
     nj_thread *t = vm->cur;
@@ -358,6 +383,7 @@ static const nj_builtin_method thread_methods[] = {
     M("<init>",               "()V",                                        0),
     M("<init>",               "(Ljava/lang/Runnable;)V",                    0),
     M("<init>",               "(Ljava/lang/Runnable;Ljava/lang/String;)V",  0),
+    M("<init>",               "(Ljava/lang/String;)V",                       0),
     M("currentThread",        "()Ljava/lang/Thread;",                       NJ_ACC_STATIC),
     M("sleep",                "(J)V",                                       NJ_ACC_STATIC),
     M("yield",                "()V",                                        NJ_ACC_STATIC),
@@ -371,7 +397,8 @@ static const nj_builtin_method thread_methods[] = {
     M("getPriority",          "()I",                                        0),
     M("setPriority",          "(I)V",                                       0),
     M("interrupt",            "()V",                                        0),
-    M("toString",             "()Ljava/lang/String;",                       0)
+    M("toString",             "()Ljava/lang/String;",                       0),
+    M("checkAccess",          "()V",                                        NJ_ACC_PROTECTED)
 };
 
 static const nj_builtin_method runnable_methods[] = {
@@ -394,6 +421,7 @@ const nj_native_entry nj_lib_thread_table[] = {
     { "java/lang/Thread", "<init>",                 "()V",                        thread_init },
     { "java/lang/Thread", "<init>",                 "(Ljava/lang/Runnable;)V",    thread_init_runnable },
     { "java/lang/Thread", "<init>",                 "(Ljava/lang/Runnable;Ljava/lang/String;)V", thread_init_runnable_name },
+    { "java/lang/Thread", "<init>",                 "(Ljava/lang/String;)V",      thread_init_name },
     { "java/lang/Thread", "currentThread",          "()Ljava/lang/Thread;",       thread_currentThread },
     { "java/lang/Thread", "sleep",                  "(J)V",                       thread_sleep },
     { "java/lang/Thread", "yield",                  "()V",                        thread_yield },
@@ -407,7 +435,8 @@ const nj_native_entry nj_lib_thread_table[] = {
     { "java/lang/Thread", "getPriority",            "()I",                        thread_getPriority },
     { "java/lang/Thread", "setPriority",            "(I)V",                       thread_setPriority },
     { "java/lang/Thread", "interrupt",              "()V",                        thread_interrupt },
-    { "java/lang/Thread", "toString",               "()Ljava/lang/String;",       thread_toString }
+    { "java/lang/Thread", "toString",               "()Ljava/lang/String;",       thread_toString },
+    { "java/lang/Thread", "checkAccess",            "()V",                        thread_checkAccess }
 };
 const int nj_lib_thread_count =
     (int)(sizeof(nj_lib_thread_table) / sizeof(nj_lib_thread_table[0]));

@@ -816,6 +816,14 @@ nj_add_test(test_clip tests/test_clip.c)
     set_tests_properties(check_m3g_api PROPERTIES
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 120)
   endif()
+  # The core API audit: every CLDC 1.1 / MIDP 2.0 member the reference declares
+  # has to resolve in this runtime's own tables, or be listed as an accepted
+  # gap in tools/data/api-allow.txt.  A missing member is not a link error at
+  # run time - it is a NoSuchMethodError the title hits later.
+  add_test(NAME check_api_audit
+           COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/api_audit.py)
+  set_tests_properties(check_api_audit PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 120)
 
   # ... and the surface has to behave, not merely exist.  M3GDemo calls every
   # API area and prints one summary line; check_m3gdemo.sh asserts it.
@@ -870,7 +878,8 @@ nj_add_test(test_clip tests/test_clip.c)
     nj_add_test(test_save tests/test_save.c)
   endif()
 
-  foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib)
+  foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib
+                      test_ioapi)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${extra_test}.c)
       nj_add_test(${extra_test} tests/${extra_test}.c)
     endif()

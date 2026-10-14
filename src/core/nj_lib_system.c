@@ -230,8 +230,75 @@ NJFN(sys_getProperty)
  * Output is routed through the port's log callback, so on a microcontroller a
  * MIDlet's System.out.println lands on the serial console and on the desktop it
  * lands on stderr.  Nothing is buffered, so a crash cannot swallow output.
+ *
+ * A PrintStream a title made itself wraps an OutputStream, and then the port log
+ * is the wrong destination: `new PrintStream(baos)` is how a lot of titles build
+ * a string or write a text record.  Every byte a PrintStream prints goes through
+ * ps_emit(), which is the single place that decides between the wrapped stream
+ * and the log.
  */
-static void ps_write_chars(nj_vm *vm, const nj_u2 *s, nj_u4 n)
+static nj_ref ps_stream_of(nj_vm *vm, nj_ref self)
+{
+    nj_field *f = nj_field_lookup(vm, "java/io/PrintStream", "psOut",
+                                  "Ljava/io/OutputStream;", 0);
+    return (f && self) ? nj_field_read_ref(vm, self, f) : (nj_ref)NULL;
+}
+
+static void ps_mark_error(nj_vm *vm, nj_ref self)
+{
+    nj_field *f = nj_field_lookup(vm, "java/io/PrintStream", "psError", "Z", 0);
+    if (f && self) {
+        nj_field_write_int(vm, self, f, 1);
+    }
+}
+
+/* 1 when the bytes went to the wrapped stream, 0 when there is none.  An
+ * IOException from the stream is swallowed and remembered instead: that is
+ * PrintStream's contract (checkError() is the only way to hear about it), and a
+ * title that prints into a closed stream must not die on the print. */
+static int ps_emit(nj_vm *vm, nj_ref self, const char *bytes, nj_u4 n)
+{
+    nj_ref out = ps_stream_of(vm, self);
+    nj_ref arr;
+    nj_value a[3];
+    nj_value r;
+
+    if (!out) {
+        return 0;
+    }
+    if (n == 0u) {
+        return 1;
+    }
+    arr = nj_byte_array_new(vm, n);
+    if (!arr) {
+        ps_mark_error(vm, self);
+        return 1;
+    }
+    memcpy(nj_array_data(arr), bytes, n);
+    a[0].r = arr;
+    a[1].i = 0;
+    a[2].i = (nj_s4)n;
+    r.bits = 0u;
+    if (nj_call(vm, out, "java/io/OutputStream", "write", "([BII)V", a, &r) != NJ_OK ||
+        vm->exception != NULL) {
+        vm->exception = NULL;
+        ps_mark_error(vm, self);
+    }
+    return 1;
+}
+
+static void ps_log(nj_vm *vm, const char *buf)
+{
+    if (vm->port && vm->port->log) {
+        vm->port->log(vm->port->user, 2, buf);
+    } else {
+#if NJ_USE_LIBC
+        fputs(buf, stderr);
+#endif
+    }
+}
+
+static void ps_write_chars(nj_vm *vm, nj_ref self, const nj_u2 *s, nj_u4 n)
 {
     char buf[256];
     nj_u4 i = 0u;
@@ -246,23 +313,31 @@ static void ps_write_chars(nj_vm *vm, const nj_u2 *s, nj_u4 n)
         i++;
         if (out + 2u >= sizeof(buf) || i == n) {
             buf[out] = '\0';
-            if (vm->port && vm->port->log) {
-                vm->port->log(vm->port->user, 2, buf);
-            } else {
-#if NJ_USE_LIBC
-                fputs(buf, stderr);
-#endif
+            if (!ps_emit(vm, self, buf, out)) {
+                ps_log(vm, buf);
             }
             out = 0u;
         }
     }
 }
 
+/* write(int) is a byte, not a character: it must not turn 0xA0 into '?'. */
+static void ps_write_byte(nj_vm *vm, nj_ref self, unsigned v)
+{
+    char b = (char)(v & 0xFFu);
+    if (!ps_emit(vm, self, &b, 1u)) {
+        char buf[2];
+        buf[0] = b;
+        buf[1] = '\0';
+        ps_log(vm, buf);
+    }
+}
+
 NJFN(ps_println)
 {
-    ps_write_chars(vm, NULL, 0);
-    if (vm->port && vm->port->log) {
-        vm->port->log(vm->port->user, 2, "");
+    nj_ref self = NJ_THIS(args);
+    if (!ps_emit(vm, self, "\n", 1u)) {
+        ps_log(vm, "");
     }
     return NJ_OK;
 }
@@ -271,10 +346,10 @@ NJFN(ps_println_str)
 {
     nj_ref s = NJ_ARG_REF(args, 0);
     if (s) {
-        ps_write_chars(vm, nj_string_chars(s), nj_string_len(s));
+        ps_write_chars(vm, NJ_THIS(args), nj_string_chars(s), nj_string_len(s));
     } else {
         static const nj_u2 null_s[] = { 'n', 'u', 'l', 'l' };
-        ps_write_chars(vm, null_s, 4u);
+        ps_write_chars(vm, NJ_THIS(args), null_s, 4u);
     }
     NJ_CALL(ps_println, vm, th, args, ret);
     return NJ_OK;
@@ -284,7 +359,7 @@ NJFN(ps_print_str)
 {
     nj_ref s = NJ_ARG_REF(args, 0);
     if (s) {
-        ps_write_chars(vm, nj_string_chars(s), nj_string_len(s));
+        ps_write_chars(vm, NJ_THIS(args), nj_string_chars(s), nj_string_len(s));
     }
     return NJ_OK;
 }
@@ -298,14 +373,14 @@ NJFN(ps_println_obj)
 
     if (!o) {
         static const nj_u2 null_s[] = { 'n', 'u', 'l', 'l' };
-        ps_write_chars(vm, null_s, 4u);
+        ps_write_chars(vm, NJ_THIS(args), null_s, 4u);
     } else {
         nj_ref s = nj_call_ref(vm, o, "java/lang/Object", "toString",
                                "()Ljava/lang/String;", NULL);
         if (!s) {
             return NJ_ERR;
         }
-        ps_write_chars(vm, nj_string_chars(s), nj_string_len(s));
+        ps_write_chars(vm, NJ_THIS(args), nj_string_chars(s), nj_string_len(s));
     }
     return NJ_CALL(ps_println, vm, th, args, ret);
 }
@@ -316,9 +391,9 @@ NJFN(ps_println_bool)
     static const nj_u2 false_s[] = { 'f', 'a', 'l', 's', 'e' };
 
     if (NJ_ARG_INT(args, 0)) {
-        ps_write_chars(vm, true_s, 4u);
+        ps_write_chars(vm, NJ_THIS(args), true_s, 4u);
     } else {
-        ps_write_chars(vm, false_s, 5u);
+        ps_write_chars(vm, NJ_THIS(args), false_s, 5u);
     }
     return NJ_CALL(ps_println, vm, th, args, ret);
 }
@@ -326,12 +401,18 @@ NJFN(ps_println_bool)
 NJFN(ps_println_int)
 {
     nj_ref s = nj_string_new_from_int(vm, NJ_ARG_INT(args, 0));
-    nj_value a1[1];
+
     if (!s) {
         return nj_throw_oom(vm);
     }
-    a1[0].r = s;
-    return NJ_CALL(ps_println_str, vm, th, a1, ret);
+    /* No delegation to ps_println_str here: that native reads its receiver from
+     * the argument block (NJ_THIS), and a synthetic one-element array has no
+     * receiver slot, so the call would read below the array. */
+    ps_write_chars(vm, NJ_THIS(args), nj_string_chars(s), nj_string_len(s));
+    if (!ps_emit(vm, NJ_THIS(args), "\n", 1u)) {
+        ps_log(vm, "");
+    }
+    return NJ_OK;
 }
 
 NJFN(ps_print_int)
@@ -340,21 +421,20 @@ NJFN(ps_print_int)
     if (!s) {
         return nj_throw_oom(vm);
     }
-    ps_write_chars(vm, nj_string_chars(s), nj_string_len(s));
+    ps_write_chars(vm, NJ_THIS(args), nj_string_chars(s), nj_string_len(s));
     return NJ_OK;
 }
 
 NJFN(ps_print_char)
 {
     nj_u2 c = (nj_u2)NJ_ARG_INT(args, 0);
-    ps_write_chars(vm, &c, 1u);
+    ps_write_chars(vm, NJ_THIS(args), &c, 1u);
     return NJ_OK;
 }
 
 NJFN(ps_write_int)
 {
-    nj_u2 c = (nj_u2)(NJ_ARG_INT(args, 0) & 0xFF);
-    ps_write_chars(vm, &c, 1u);
+    ps_write_byte(vm, NJ_THIS(args), (unsigned)NJ_ARG_INT(args, 0));
     return NJ_OK;
 }
 
@@ -493,16 +573,43 @@ static const nj_builtin_method system_methods[] = {
     M("getProperty",       "(Ljava/lang/String;)Ljava/lang/String;", NJ_ACC_STATIC)
 };
 
+/* A PrintStream wraps an OutputStream.  System.out and System.err are made by
+ * the runtime with no stream at all (psOut stays null) and write through the
+ * port log; a title that makes its own PrintStream gets the stream it passed.
+ * psError is what checkError() answers: a write that failed.  The natives live
+ * in src/midp/nj_lib_io.c with the rest of java.io - the native registry binds
+ * by class name, method name and descriptor, so a class row here and its
+ * implementation there are the same thing to the linker. */
+static const nj_builtin_field printstream_fields[] = {
+    { "psOut",   "Ljava/io/OutputStream;", 0 },
+    { "psError", "Z",                      0 }
+};
+
 static const nj_builtin_method printstream_methods[] = {
+    M("<init>",   "(Ljava/io/OutputStream;)V", NJ_ACC_PUBLIC),
     M("println",  "()V",                    0),
     M("println",  "(Ljava/lang/String;)V",  0),
     M("println",  "(Ljava/lang/Object;)V",  0),
     M("println",  "(I)V",                   0),
     M("println",  "(Z)V",                   0),
+    M("println",  "(C)V",                   0),
+    M("println",  "(J)V",                   0),
+    M("println",  "(F)V",                   0),
+    M("println",  "(D)V",                   0),
+    M("println",  "([C)V",                  0),
     M("print",    "(Ljava/lang/String;)V",  0),
     M("print",    "(C)V",                   0),
     M("print",    "(I)V",                   0),
+    M("print",    "(Z)V",                   0),
+    M("print",    "(J)V",                   0),
+    M("print",    "(F)V",                   0),
+    M("print",    "(D)V",                   0),
+    M("print",    "([C)V",                  0),
+    M("print",    "(Ljava/lang/Object;)V",  0),
     M("write",    "(I)V",                   0),
+    M("write",    "([BII)V",                0),
+    M("checkError", "()Z",                  NJ_ACC_PUBLIC),
+    M("setError", "()V",                    NJ_ACC_PROTECTED),
     M("flush",    "()V",                    0),
     M("close",    "()V",                    0)
 };
@@ -522,7 +629,9 @@ const nj_builtin_class nj_lib_system_classes[] = {
       system_methods,
       (nj_u2)(sizeof(system_methods) / sizeof(system_methods[0])) },
     { "java/io/PrintStream", "java/lang/Object", NJ_ACC_PUBLIC,
-      NULL, 0u, printstream_methods,
+      printstream_fields,
+      (nj_u2)(sizeof(printstream_fields) / sizeof(printstream_fields[0])),
+      printstream_methods,
       (nj_u2)(sizeof(printstream_methods) / sizeof(printstream_methods[0])) },
     { "java/lang/Runtime", "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, runtime_methods,

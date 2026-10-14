@@ -470,6 +470,48 @@ cross-class rule (`new Integer(5).equals(new Long(5L))` is false) and the
 float/double cases above; the negative check is the same fixture against the
 pre-fix runtime, which prints `java.lang.Integer@e85f125` for `new Integer(34795)`.
 
+### Every member the reference declares, or a line saying why not
+
+A missing builtin member is not a link error: the class loads, the call sites
+in other classes resolve nothing, and the title dies later with a
+`NoSuchMethodError` that names a method the javadoc says exists.  That is how
+`java.lang.Integer.toString()` went missing for ten rounds while 65 titles
+kept working (the identity string was a plausible-looking resource name), and
+it is why this round stopped reading the corpus and started reading the
+specification.
+
+`tools/build_api_ref.py` downloads the CLDC 1.1 and MIDP 2.0 javadoc pages and
+writes `tools/data/api-core.txt`: 943 members over 77 classes, one
+`class name (args)` line each.  `tools/api_audit.py` then parses this runtime's
+own builtin tables the way the compiler does - macro expansion, the class
+table, every `M(...)` row, the registration table, the superclass walk - and
+reports what cannot resolve.  It runs as the `check_api_audit` ctest, so it now
+fails the build the moment a member disappears again, and
+`tools/data/api-allow.txt` names the gaps that are accepted on purpose (two
+`HttpConnection` members that belong to the HTTP lane) and is checked in both
+directions: a line that starts resolving is a failure too.
+
+The first honest run said 81 members.  They were filled in two batches
+(java.io: Reader/Writer/InputStreamReader/OutputStreamWriter/PrintStream;
+core: String.valueOf/intern, Thread(String), Class.isAssignableFrom,
+Throwable.printStackTrace(PrintStream), Calendar.before/after, Display colours,
+TextBox/TextField.getCaretPosition, the five-argument Command and ImageItem
+constructors, RecordStore.setMode, Player.getContentType, StringBuffer's
+missing insert overloads and Object.wait(long,int)).  java.io mattered most:
+`new PrintStream(new ByteArrayOutputStream())` used to write to the port log
+and nowhere else, because PrintStream's own class row lives in
+`src/core/nj_lib_system.c` while the natives lived in the io module - the
+registry is keyed by (class, name, descriptor), so the bodies bind across
+modules but the *declaration* has to be in the file that owns the class.
+
+The audit's own blind spots are worth knowing: 35 of the 50 java.io rows were
+false positives, because `reader_methods[]` and friends were written with a
+private `RM(...)` macro that only knew `M(...)`; and a table that is empty
+because nobody can parse it looks exactly like a table with nothing in it.
+`-v` prints the other direction (members this runtime declares that the
+reference does not list: the Mascot Capsule, m3g and JSR 75 extensions), which
+is how a typo in a descriptor shows up.
+
 ### java.util
 
 `Vector`, `Hashtable`, `Random` (the 48-bit LCG, so sequences match a real
