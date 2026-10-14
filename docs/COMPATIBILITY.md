@@ -276,6 +276,15 @@ frame must be one colour.  Against the pre-fix runtime the check reports 38 torn
 frames out of 60, the worst holding 9152 pixels of the other colour; with the
 fix, zero.
 
+The runtime-side way to look for this class of defect is
+`tools/scan_frame_health.sh`: it runs a title with `--dump-every 1` and counts
+the pixels that flip back and forth - equal two frames apart, different from
+the frame between - which the corpus sweep cannot see at its fortieth-present
+sampling rate.  `鲁宾逊漂流记汉化版_702` with the pointer script that reaches its
+map is `two=7164px worst=4632 verdict=flicker` against the runtime before
+`08c7c26` and `two=0px verdict=static` against the fixed one; `NJ_KEYS` drives
+a title past its menu, and `tools/frame_health.py` does the counting.
+
 ### A mutable image is white, and always opaque
 
 MIDP 2.0 says of `Image.createImage(int, int)`: "Every pixel within the newly
