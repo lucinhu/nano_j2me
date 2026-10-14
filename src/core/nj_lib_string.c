@@ -1844,7 +1844,7 @@ SB_INSERT_VALUE(sb_insert_double, "(D)Ljava/lang/String;")
 static int append_chars_all(nj_vm *vm, nj_value *args, nj_value *ret,
                             const char *cls, const char *desc)
 {
-    nj_ref arr = NJ_ARG_REF(args, 1);
+    nj_ref arr = NJ_ARG_REF(args, 0);
     nj_value a[3];
 
     if (!arr) {

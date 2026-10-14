@@ -123,6 +123,30 @@ int main(void)
                   "(ZILjava/lang/String;II)Z", a, &r) == NJ_OK && r.i == 1,
           "control: \"hello world\" matches itself at 0 and 6");
 
+    /* Metal Slug 4 appends char[] while painting its HUD. */
+    {
+        const char *classes[] = {"java/lang/StringBuffer", "java/lang/StringBuilder"};
+        const char *descs[] = {"([C)Ljava/lang/StringBuffer;", "([C)Ljava/lang/StringBuilder;"};
+        int k;
+        for (k = 0; k < 2; k++) {
+            nj_ref sb = nj_object_new(vm, classes[k]);
+            nj_ref chars = nj_array_new(vm, "C", 2);
+            nj_u2 *data = (nj_u2 *)nj_array_data(chars);
+            nj_value values[2] = {{0}, {0}};
+            data[0] = 'A'; data[1] = 0x4e2d;
+            check(nj_call(vm, sb, classes[k], "<init>", "()V", NULL, NULL) == NJ_OK,
+                  "create character buffer");
+            values[0].r = chars;
+            check(nj_call(vm, sb, classes[k], "append", descs[k], values, &r) == NJ_OK && r.r == sb,
+                  "append(char[]) returns receiver");
+            check(nj_call(vm, sb, classes[k], "length", "()I", NULL, &r) == NJ_OK && r.i == 2,
+                  "append(char[]) copies entire array");
+            values[0].i = 1;
+            check(nj_call(vm, sb, classes[k], "charAt", "(I)C", values, &r) == NJ_OK && r.i == 0x4e2d,
+                  "append(char[]) preserves Unicode");
+        }
+    }
+
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
 
