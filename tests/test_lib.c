@@ -181,6 +181,33 @@ static nj_ref dis_over(nj_vm *vm, nj_ref in)
                      "DataInputStream(InputStream)");
 }
 
+/* A missing JAR resource can be wrapped in DataInputStream.  Primitive
+ * reads must report the null stream, not try a static InputStream.read(). */
+static void test_null_data_input(nj_vm *vm)
+{
+    static const struct { const char *name; const char *desc; } methods[] = {
+        { "readUTF", "()Ljava/lang/String;" },
+        { "readInt", "()I" },
+        { "readUnsignedShort", "()I" }
+    };
+    nj_ref dis = dis_over(vm, NULL);
+    nj_value ret;
+    unsigned i;
+
+    OK(dis != NULL);
+    if (!dis) { return; }
+    for (i = 0; i < sizeof(methods) / sizeof(methods[0]); ++i) {
+        const char *message;
+        OK(nj_call(vm, dis, DIS, methods[i].name, methods[i].desc,
+                   NULL, &ret) != NJ_OK);
+        message = nj_exception_describe(vm);
+        OK_MSG(message && strstr(message, "NullPointerException"),
+               "%s on a null stream raises NullPointerException (got %s)",
+               methods[i].name, message ? message : "no exception");
+        nj_clear_exception(vm);
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* 1 + 5: round trip through the whole stack                           */
 /* ------------------------------------------------------------------ */
@@ -308,6 +335,24 @@ static void test_round_trip(nj_vm *vm)
             OK_MSG(ret.d == -2.25, "readDouble gave %g, expected -2.25", ret.d);
         }
         clean(vm, "float/double round trip");
+    }
+    /* Sprite links use 0xff as -1.  Returning 255 makes Metal Slug 4
+     * recurse into a nonexistent sprite; unsigned reads still return 255. */
+    {
+        unsigned char values[] = { 0x7f, 0x80, 0xff, 0x7f, 0x80, 0xff };
+        nj_ref stream = dis_over(vm, bais_over(vm, values, sizeof(values)));
+        OK(nj_call_int(vm, stream, DIS, "readByte", "()B", NULL) == 127);
+        OK(nj_call_int(vm, stream, DIS, "readByte", "()B", NULL) == -128);
+        OK(nj_call_int(vm, stream, DIS, "readByte", "()B", NULL) == -1);
+        OK(nj_call_int(vm, stream, DIS, "readUnsignedByte", "()I", NULL) == 127);
+        OK(nj_call_int(vm, stream, DIS, "readUnsignedByte", "()I", NULL) == 128);
+        OK(nj_call_int(vm, stream, DIS, "readUnsignedByte", "()I", NULL) == 255);
+        OK(nj_call(vm, stream, DIS, "readByte", "()B", NULL, &ret) != NJ_OK);
+        OK(nj_has_exception(vm));
+        nj_clear_exception(vm);
+        OK(nj_call(vm, stream, DIS, "readUnsignedByte", "()I", NULL, &ret) != NJ_OK);
+        OK(nj_has_exception(vm));
+        nj_clear_exception(vm);
     }
     clean(vm, "DataInputStream reads");
 }
@@ -3258,3 +3303,4 @@ int main(void)
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
+    test_null_data_input(vm);

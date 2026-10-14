@@ -801,7 +801,14 @@ NJFN(dos_init)
 
 static nj_s4 dis_one(nj_vm *vm, nj_ref in)
 {
-    nj_s4 c = nj_call_int(vm, in, NJ_C_ISTREAM, "read", "()I", NULL);
+    nj_s4 c;
+    /* nj_call treats a NULL receiver as a static call.  A missing resource
+     * wrapped in DataInputStream must fail as a null dereference instead. */
+    if (!in) {
+        nj_throw(vm, "java/lang/NullPointerException", "null input stream");
+        return -2;
+    }
+    c = nj_call_int(vm, in, NJ_C_ISTREAM, "read", "()I", NULL);
     if (vm->exception) {
         return -2;
     }
@@ -810,6 +817,24 @@ static nj_s4 dis_one(nj_vm *vm, nj_ref in)
         return -2;
     }
     return c;
+}
+
+NJFN(dis_read_byte)
+{
+    nj_ref in = dis_in(vm, NJ_THIS(args));
+    int c = dis_one(vm, in);
+    if (c < 0) return NJ_ERR;
+    ret->i = c >= 128 ? c - 256 : c;
+    return NJ_OK;
+}
+
+NJFN(dis_read_unsigned_byte)
+{
+    nj_ref in = dis_in(vm, NJ_THIS(args));
+    int c = dis_one(vm, in);
+    if (c < 0) return NJ_ERR;
+    ret->i = c;
+    return NJ_OK;
 }
 
 NJFN(dis_read)
@@ -1081,7 +1106,7 @@ static nj_s4 utf_next(nj_vm *vm, nj_ref src, int via_interface)
     if (nj_call(vm, src, "java/io/DataInput", "readByte", "()B", NULL, &r) != NJ_OK) {
         return -1;
     }
-    return r.i;
+    return r.i & 0xff;
 }
 
 /* Decode `len` modified-UTF-8 bytes from `src` into a new String. */
@@ -2509,8 +2534,8 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/DataInputStream", "readFully",        "([BII)V", dis_readFully },
     { "java/io/DataInputStream", "skipBytes",        "(I)I", dis_skip_bytes },
     { "java/io/DataInputStream", "readBoolean",      "()Z", dis_read_boolean },
-    { "java/io/DataInputStream", "readByte",         "()B", dis_read },
-    { "java/io/DataInputStream", "readUnsignedByte", "()I", dis_read },
+    { "java/io/DataInputStream", "readByte",         "()B", dis_read_byte },
+    { "java/io/DataInputStream", "readUnsignedByte", "()I", dis_read_unsigned_byte },
     { "java/io/DataInputStream", "readShort",        "()S", dis_read_short },
     { "java/io/DataInputStream", "readUnsignedShort","()I", dis_read_unsigned_short },
     { "java/io/DataInputStream", "readChar",         "()C", dis_read_char },
