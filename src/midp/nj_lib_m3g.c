@@ -37,6 +37,7 @@
  */
 #include "nj_internal.h"
 #include "nj_midp.h"
+#include "nj2me/nj_inflate.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -968,10 +969,6 @@ nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
          */
         if (off == NJ_M3G_HEADER || ulen == 0u) { off += clen; continue; }
         if (p[off] == 1u) {
-            if (!vm || !vm->port || !vm->port->inflate) {
-                M3G_FAIL("the section at %lu is compressed and this port has no inflate hook",
-                         (unsigned long)off);
-            }
             if (ulen > scratch_cap) {
                 nj_host_free(vm, scratch);
                 scratch = (nj_u1 *)nj_host_alloc(vm, (nj_size)ulen);
@@ -981,8 +978,17 @@ nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
                                   (unsigned long)ulen);
                 }
             }
-            st = vm->port->inflate(vm->port->ud, p + off + NJ_M3G_SECTION,
-                                   body_len, scratch, ulen);
+            if (vm && vm->port && vm->port->inflate) {
+                st = vm->port->inflate(vm->port->ud, p + off + NJ_M3G_SECTION,
+                                       body_len, scratch, ulen);
+            } else {
+                nj_u4 decoded_len = ulen;
+                st = nj_inflate_zlib(p + off + NJ_M3G_SECTION, body_len,
+                                     scratch, &decoded_len);
+                if (st == NJ_OK && decoded_len != ulen) {
+                    st = NJ_ERR_FORMAT;
+                }
+            }
             if (st != NJ_OK) {
                 M3G_SCAN_FAIL("the section at %lu did not inflate to the %lu byte(s) it declares",
                               (unsigned long)off, (unsigned long)ulen);

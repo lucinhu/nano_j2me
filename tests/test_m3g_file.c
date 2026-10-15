@@ -199,8 +199,16 @@ static void objects_in_a_compressed_section(void)
     }
 
     port.inflate = NULL;
+    st = nj_m3g_scan_objects(vm, buf, n, objs, 8u, &count, NULL, err, sizeof(err));
+#if NJ_ENABLE_INFLATE
+    ok(st == NJ_OK && count == 2u && objs[0].user_id == 0x04030201u,
+       "built-in inflate decodes compressed objects without a port hook");
+    put32le(17u, 35);
     st = nj_m3g_scan_objects(vm, buf, n, NULL, 0u, &count, NULL, err, sizeof(err));
-    ok(st != NJ_OK, "without an inflate hook a compressed section is refused");
+    ok(st != NJ_OK, "built-in inflate rejects a mismatched decoded section length");
+#else
+    ok(st != NJ_OK, "without any decompressor a compressed section is refused");
+#endif
 
     nj_vm_destroy(vm);
 }
