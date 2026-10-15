@@ -1124,16 +1124,37 @@ int main(void)
         check(c.i == 2, "and its component size");
 
         data = nj_rget(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_data", "[S", 0));
-        /* nj_array_length() counts BYTES - three shorts are six of them.  The
-           probe that found this printed len=6 for what the code believed was
-           three values. */
-        check(data != 0 && nj_array_length(data) == 6u,
+        /* Array length counts components, independent of their byte width. */
+        check(data != 0 && nj_array_length(data) == 3u,
               "the short[] holds one value per vertex");
         if (data) {
             nj_s2 *sh = (nj_s2 *)nj_array_data(data);
             check(sh != NULL && sh[0] == (nj_s2)0x0100 && sh[1] == (nj_s2)0x0200 &&
                   sh[2] == (nj_s2)0x0300,
                   "and they are the numbers the file held, little-endian");
+        }
+        {
+            const nj_u1 byte_delta[6] = {120, 10, 20, 30, 250, 246};
+            const nj_u1 short_delta[12] = {248,127, 10,0, 20,0, 30,0, 250,255, 246,255};
+            const nj_s2 expected[2][6] = {{120,10,-116,40,-122,30},
+                                         {32760,10,-32756,40,-32762,30}};
+            int size, j;
+            for (size = 1; size <= 2; size++) {
+                objs[0].fields.a = (nj_u4)size;
+                objs[0].fields.b = 2u;
+                objs[0].fields.c = 1u;
+                objs[0].fields.data = size == 1 ? byte_delta : short_delta;
+                objs[0].fields.data_len = 6u * (nj_u4)size;
+                check(nj_m3g_load_geometry(vm, objs, 1u, arr) == NJ_OK,
+                      "delta encoded vertex components load");
+                data = nj_rget(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_data", "[S", 0));
+                check(data && nj_array_length(data) == 6u,
+                      "loaded array counts components rather than encoded bytes");
+                for (j = 0; j < 6; j++) {
+                    check(data && ((nj_s2 *)nj_array_data(data))[j] == expected[size - 1][j],
+                          "vertex deltas accumulate per component with source-width overflow");
+                }
+            }
         }
     }
     /* ---- a Mesh reaches the screen ------------------------------------- */

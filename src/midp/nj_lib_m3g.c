@@ -2971,7 +2971,7 @@ nj_status nj_m3g_load_geometry(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
         per = (nj_u4)objs[i].fields.a * (nj_u4)objs[i].fields.b;
         if (per == 0u) { continue; }
         nverts = objs[i].fields.data_len / per;
-        n = nverts * per;
+        n = nverts * (nj_u4)objs[i].fields.b;
         if (n == 0u) { continue; }
 
         values = nj_array_new(vm, "S", n);
@@ -2987,6 +2987,12 @@ nj_status nj_m3g_load_geometry(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
             shorts[k] = (objs[i].fields.a == 2u)
                       ? (nj_s2)((nj_u2)p[k * 2u] | ((nj_u2)p[k * 2u + 1u] << 8))
                       : (nj_s2)(nj_s1)p[k];
+            if (objs[i].fields.c == 1u) {
+                nj_s4 prev = k < objs[i].fields.b ? 0 : shorts[k - objs[i].fields.b];
+                nj_s4 sum = prev + shorts[k];
+                shorts[k] = objs[i].fields.a == 1u
+                          ? (nj_s2)(nj_s1)(nj_u1)sum : (nj_s2)(nj_u2)sum;
+            }
         }
         nj_iput(vm, o, nj_field_lookup(vm, NJ_C_VARR, "_nj_numVerts", "I", 0),
                 (nj_s4)nverts);
