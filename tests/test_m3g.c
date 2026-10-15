@@ -1446,6 +1446,37 @@ int main(void)
                           "depth test and depth write independently control occlusion");
                 }
             }
+            /* Moving stored coordinates away and restoring them with the
+               API's three-component bias must preserve the rendered image. */
+            {
+                nj_ref bias = nj_array_new(vm, "F", 3u);
+                nj_u4 expected[256];
+                nj_s2 *d = (nj_s2 *)nj_array_data(data);
+                float *b = (float *)nj_array_data(bias);
+                a[0].r = clear_bg;
+                call(vm, g3d, CLS("Graphics3D"), "clear",
+                     "(L" CLS("Background") ";)V", a, NULL);
+                a[0].r = mesh; a[1].r = xf;
+                call(vm, g3d, CLS("Graphics3D"), "render",
+                     "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+                memcpy(expected, nj_array_data(pixels), sizeof(expected));
+                check((expected[9 * 16 + 6] & 0xFFFFFFu) == 0x00FF00u,
+                      "position bias baseline draws the green triangle");
+                b[0] = 2000.0f; b[1] = -1000.0f; b[2] = -300.0f;
+                for (k = 0; k < 9; k++) { d[k] = pos[k] - (nj_s2)b[k % 3]; }
+                a[0].r = va; a[1].f = 1.0f; a[2].r = bias;
+                check(nj_call(vm, vb, CLS("VertexBuffer"), "setPositions",
+                      "(L" CLS("VertexArray") ";F[F)V", a, NULL) == NJ_OK,
+                      "position bias accepts three components");
+                a[0].r = clear_bg;
+                call(vm, g3d, CLS("Graphics3D"), "clear",
+                     "(L" CLS("Background") ";)V", a, NULL);
+                a[0].r = mesh; a[1].r = xf;
+                call(vm, g3d, CLS("Graphics3D"), "render",
+                     "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+                check(memcmp(expected, nj_array_data(pixels), sizeof(expected)) == 0,
+                      "render applies all three position bias components");
+            }
         }
     }
     nj_clear_exception(vm);

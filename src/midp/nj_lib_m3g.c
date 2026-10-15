@@ -9642,8 +9642,8 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         nj_ref b = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_scale", "[F"));
         nj_u4 k;
         for (k = 0u; k < 4u; k++) { r.pbias[k] = 0.0f; }
-        if (b && nj_array_length(b) >= 4) {
-            memcpy(r.pbias, nj_array_data(b), sizeof(float) * 4u);
+        if (b && nj_array_length(b) >= 3) {
+            memcpy(r.pbias, nj_array_data(b), sizeof(float) * 3u);
         }
     }
 
