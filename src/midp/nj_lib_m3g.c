@@ -2195,6 +2195,7 @@ NJFN(m3g_alpha_set)
     nj_iput(vm, NJ_THIS(args),
             nj_field_lookup(vm, NJ_C_NODE, "_nj_alpha", "F", 0),
             f2bits(NJ_ARG_FLOAT(args, 0)));
+    nj_iput(vm, NJ_THIS(args), m3g_fof(vm, NJ_C_NODE, "_nj_alphaSet", "Z"), 1);
     return NJ_OK;
 }
 
@@ -3008,7 +3009,8 @@ nj_status nj_m3g_load_geometry(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
 
 
 static void collect_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
-                         const float *parent, nj_u4 cap, nj_u4 *n, int depth)
+                         const float *parent, nj_u4 cap, nj_u4 *n, int depth,
+                         int apply_own)
 {
     const char *cn;
     nj_ref kids, m;
@@ -3043,7 +3045,7 @@ static void collect_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
      */
     memcpy(model, parent, sizeof(model));
     m = nj_rget(vm, o, nj_field_lookup(vm, NJ_C_XABLE, "_nj_m", "[F", 0));
-    if (m && nj_array_length(m) >= 16) {
+    if (apply_own && m && nj_array_length(m) >= 16) {
         mat_mul(parent, (const float *)nj_array_data(m), model);
     }
     /*
@@ -3059,7 +3061,9 @@ static void collect_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
      */
     if (cn != NULL && (strcmp(cn, NJ_C_MESH) == 0 ||
                        strcmp(cn, NJ_C_MORPH) == 0 ||
-                       strcmp(cn, NJ_C_SKIN) == 0)) {
+                       strcmp(cn, NJ_C_SKIN) == 0 ||
+                       strcmp(cn, NJ_C_SPRITE3D) == 0 ||
+                       strcmp(cn, NJ_C_M3G_SPRITE) == 0)) {
         if (*n < cap) {
             out[*n] = o;
             if (mats) { memcpy(mats + (*n) * 16u, model, sizeof(model)); }
@@ -3069,7 +3073,7 @@ static void collect_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
     }
     if (cn == NULL || (strcmp(cn, NJ_C_GROUP) != 0 &&
                        strcmp(cn, NJ_C_WORLD) != 0)) {
-        return;                  /* a Camera, a Light, a Sprite: no children */
+        return;                  /* a Camera or a Light: no children */
     }
     kids = nj_rget(vm, o, nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
                                           "L" NJ_C_VECTOR ";", 0));
@@ -3087,7 +3091,7 @@ static void collect_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
                     "(I)Ljava/lang/Object;", &a, &r) != NJ_OK) {
             continue;
         }
-        collect_walk(vm, r.r, out, mats, model, cap, n, depth + 1);
+        collect_walk(vm, r.r, out, mats, model, cap, n, depth + 1, 1);
     }
 }
 
@@ -3185,7 +3189,7 @@ nj_u4 nj_m3g_collect_meshes_m(nj_vm *vm, nj_ref root, nj_ref *out, float *mats,
     }
     memset(id, 0, sizeof(id));
     id[0] = id[5] = id[10] = id[15] = 1.0f;
-    collect_walk(vm, root, out, mats, id, cap, &n, 0);
+    collect_walk(vm, root, out, mats, id, cap, &n, 0, 1);
     return n;
 }
 
@@ -3382,7 +3386,9 @@ static void collect_lights_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
                                 int depth);
 
 
-NJFN(m3g_render)
+static nj_status m3g_render_scene(nj_vm *vm, nj_thread *th NJ_MAYBE_UNUSED,
+                                  nj_value *args, nj_value *ret NJ_MAYBE_UNUSED,
+                                  int node_render)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref root = NJ_ARG_REF(args, 0);
@@ -3424,7 +3430,8 @@ NJFN(m3g_render)
      * one implementation of "fill the viewport with the background colour"
      * and the World path is not a second one.
      */
-    {
+    if (nj_ref_class_name(root) &&
+        strcmp(nj_ref_class_name(root), NJ_C_WORLD) == 0) {
         nj_ref bg = nj_rget(vm, root, m3g_fof(vm, NJ_C_WORLD, "_nj_bg",
                                               "L" NJ_C_BG ";"));
 
@@ -3477,9 +3484,31 @@ NJFN(m3g_render)
                     (nj_s4)ln);
         }
     }
-    n = nj_m3g_collect_meshes_m(vm, root, meshes, mats, 64u);
+    if (node_render) {
+        float identity[16];
+        float *given = mat_of(vm, NJ_ARG_REF(args, 1), NJ_C_XFORM, "_nj_m");
+
+        mat_identity(identity);
+        n = 0u;
+        /* render(Node, Transform) replaces the root's local transform;
+           descendants retain their transforms relative to that root. */
+        collect_walk(vm, root, meshes, mats, given ? given : identity,
+                     64u, &n, 0, 0);
+    } else {
+        n = nj_m3g_collect_meshes_m(vm, root, meshes, mats, 64u);
+    }
     (void)m3g_world_draw(vm, self, root, meshes, mats, n);
     return NJ_OK;
+}
+
+NJFN(m3g_render)
+{
+    return m3g_render_scene(vm, th, args, ret, 0);
+}
+
+NJFN(m3g_render_node)
+{
+    return m3g_render_scene(vm, th, args, ret, 1);
 }
 
 /*
@@ -3907,14 +3936,23 @@ NJFN(m3g_tex_setWrapping)
 /* ---- Sprite3D ------------------------------------------------------ */
 /*
  * A Sprite3D is an image with an appearance, anchored at its node's origin.
- * The constructor is the only member the collected titles call, so the three
- * setters are declared with it - a title that sets the crop or swaps the
- * image finds a method that records it rather than a link error.
+ * A new image resets the crop to its full extent.  The raster path uses the
+ * same fields for API-created Sprite3D nodes and the loader's Sprite alias.
  */
 NJFN(m3g_sprite_init)
 {
     nj_ref self = NJ_THIS(args);
+    nj_ref image = NJ_ARG_REF(args, 1);
 
+    if (!image) {
+        NJ_THROW(vm, "java/lang/NullPointerException", "Sprite3D image");
+    }
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_cropX", "I"), 0);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_cropY", "I"), 0);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_cropW", "I"),
+            nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I")));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_cropH", "I"),
+            nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I")));
     nj_iput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_scaled", "Z"),
             NJ_ARG_INT(args, 0) ? 1 : 0);
     nj_rput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_img",
@@ -3926,10 +3964,19 @@ NJFN(m3g_sprite_init)
 
 NJFN(m3g_sprite_setImage)
 {
-    nj_rput(vm, NJ_THIS(args),
-            nj_field_lookup(vm, NJ_C_SPRITE3D, "_nj_img",
-                            "L" NJ_C_IMAGE2D ";", 0),
-            NJ_ARG_REF(args, 0));
+    nj_ref self = NJ_THIS(args), image = NJ_ARG_REF(args, 0);
+
+    if (!image) {
+        NJ_THROW(vm, "java/lang/NullPointerException", "Sprite3D image");
+    }
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_img",
+                             "L" NJ_C_IMAGE2D ";"), image);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_cropX", "I"), 0);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_cropY", "I"), 0);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_cropW", "I"),
+            nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I")));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_cropH", "I"),
+            nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I")));
     return NJ_OK;
 }
 
@@ -5801,6 +5848,7 @@ static const nj_builtin_field node_fields[] = {
      */
     { "_nj_hidden", "Z", NJ_ACC_PUBLIC },
     { "_nj_alpha",  "F", NJ_ACC_PUBLIC },
+    { "_nj_alphaSet", "Z", NJ_ACC_PUBLIC },
     { "_nj_parent", "L" NJ_C_NODE ";", NJ_ACC_PUBLIC },
     { "_nj_scope",  "I", NJ_ACC_PUBLIC },
     { "_nj_pick",   "Z", NJ_ACC_PUBLIC },
@@ -8214,6 +8262,11 @@ typedef struct {
     int athresh;               /* the alpha test, 0..255 */
     int awrite;                /* alphaWriteEnable */
     int dtest, dwrite;          /* independent CompositingMode depth controls */
+    int sprite;                /* sprite-only post-texture alpha and fog */
+    int sprite_alpha;
+    int sprite_l, sprite_t, sprite_r, sprite_b;
+    float sprite_fog;
+    nj_u4 sprite_fog_colour;
 } m3g_sw;
 
 #define M3G_SW_BACK  160
@@ -8509,8 +8562,17 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
         ta = (nj_u1)(((((c00 >> 24) & 0xFFu) * w00 + ((c10 >> 24) & 0xFFu) * w10 +
                        ((c01 >> 24) & 0xFFu) * w01 + ((c11 >> 24) & 0xFFu) * w11) >> 16) & 0xFFu);
     } else {
-        u = (int)(fs * (float)(sw->tex_w - 1) + 0.5f);
-        v = (int)(ft * (float)(sw->tex_h - 1) + 0.5f);
+        if (sw->sprite) {
+            u = (int)(fs * (float)sw->tex_w);
+            v = (int)(ft * (float)sw->tex_h);
+            if (u < sw->sprite_l) { u = sw->sprite_l; }
+            if (u >= sw->sprite_r) { u = sw->sprite_r - 1; }
+            if (v < sw->sprite_t) { v = sw->sprite_t; }
+            if (v >= sw->sprite_b) { v = sw->sprite_b - 1; }
+        } else {
+            u = (int)(fs * (float)(sw->tex_w - 1) + 0.5f);
+            v = (int)(ft * (float)(sw->tex_h - 1) + 0.5f);
+        }
         if (u < 0) { u = 0; }
         if (u >= sw->tex_w) { u = sw->tex_w - 1; }
         if (v < 0) { v = 0; }
@@ -8685,6 +8747,23 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                 nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
                 nj_u4 c, ca;
 
+                if (sw->sprite) {
+                    const float xx[3] = { x0, x1, x2 };
+                    const float yy[3] = { y0, y1, y2 };
+                    int edge, outside = 0;
+                    for (edge = 0; edge < 3; edge++) {
+                        int next = (edge + 1) % 3;
+                        float dx = xx[next] - xx[edge], dy = yy[next] - yy[edge];
+                        float e = dx * ((float)py + 0.5f - yy[edge]) -
+                                  dy * ((float)px + 0.5f - xx[edge]);
+                        if (area < 0.0f) { e = -e; dx = -dx; dy = -dy; }
+                        if (e < 0.0f || (e == 0.0f &&
+                            !(dy < 0.0f || (dy == 0.0f && dx > 0.0f)))) {
+                            outside = 1; break;
+                        }
+                    }
+                    if (outside) { continue; }
+                }
                 if (key <= 0) {
                     continue;
                 }
@@ -8701,6 +8780,19 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                 }
                 if (has_tex) {
                     c = sw_texel(sw, ph / pg, pk / pg, c);
+                }
+                if (sw->sprite) {
+                    nj_u4 a = ((c >> 24) * (nj_u4)sw->sprite_alpha + 127u) / 255u;
+                    float f = sw->sprite_fog;
+                    int ch;
+                    nj_u4 fogged = a << 24;
+                    for (ch = 0; ch < 3; ch++) {
+                        int shift = 16 - 8 * ch;
+                        float value = (float)((c >> shift) & 255u) * f +
+                            (float)((sw->sprite_fog_colour >> shift) & 255u) * (1.0f - f);
+                        fogged |= (nj_u4)(value + 0.5f) << shift;
+                    }
+                    c = fogged;
                 }
                 ca = (c >> 24) & 0xFFu;
                 /* The alpha test is a test on the fragment, so a discarded
@@ -9338,7 +9430,7 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
             }
         }
         /* The rasteriser writes the pixels: depth, texture, culling. */
-        if (sw_tri(&r->sw, xy, inv, st, r->sw.tex != NULL && r->tpos != NULL,
+        if (sw_tri(&r->sw, xy, inv, st, r->sw.tex != NULL && (r->tpos != NULL || r->sw.sprite),
                    rgb) != 0u) {
             r->drawn++;
         }
@@ -9470,7 +9562,7 @@ static void jr_list(m3g_jr *r, const nj_s4 *idx, nj_s4 count, nj_s4 first)
 static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                     nj_ref world, const float *model_in, m3g_jr *out)
 {
-    nj_ref target, g, cam, arr, d, mat;
+    nj_ref target, g, cam, arr, d, mat = 0;
     const char *cn;
     nj_s4 nverts, icount = 0, ifirst = 0;
     const nj_s4 *idx = NULL, *lens = NULL;
@@ -9492,13 +9584,15 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         if (!cn || strcmp(cn, "javax/microedition/lcdui/Image") != 0) {
             return 0;                        /* neither a Graphics nor an Image */
         }
-        got.r = 0;
-        if (nj_call(vm, g, "javax/microedition/lcdui/Image", "getGraphics",
-                    "()Ljavax/microedition/lcdui/Graphics;", NULL, &got) != NJ_OK
-            || !got.r) {
-            return 0;
-        }
-        g = got.r;
+        if (vb) {
+            got.r = 0;
+            if (nj_call(vm, g, "javax/microedition/lcdui/Image", "getGraphics",
+                        "()Ljavax/microedition/lcdui/Graphics;", NULL, &got) != NJ_OK
+                || !got.r) {
+                return 0;
+            }
+            g = got.r;
+        } /* Sprites draw to the native surface without a Java Graphics. */
     }
 
     r.vm = vm;
@@ -9508,9 +9602,15 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     r.vh = (int)nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vh", "I"));
     if (r.vw <= 0 || r.vh <= 0) {
         int tw = 0, th = 0;           /* no setViewport: the whole target */
-        if (m3g_target_graphics(vm, g, &tw, &th) == 0 || tw <= 0 || th <= 0) {
+        if (!vb && cn && strcmp(cn, "javax/microedition/lcdui/Image") == 0) {
+            nj_surface scratch;
+            nj_surface *surface = nj_midp_surface(vm, target, &scratch);
+            if (!surface) { return 0; }
+            tw = surface->width; th = surface->height;
+        } else if (m3g_target_graphics(vm, g, &tw, &th) == 0) {
             return 0;
         }
+        if (tw <= 0 || th <= 0) { return 0; }
         r.vx = r.vy = 0;
         r.vw = tw;
         r.vh = th;
@@ -9568,7 +9668,8 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     id[0] = id[5] = id[10] = id[15] = 1.0f;
     cam = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_camera",
                                     "L" NJ_C_CAMERA ";"));
-    if (!cam && world) {
+    if (!cam && world && nj_ref_class_name(world) &&
+        strcmp(nj_ref_class_name(world), NJ_C_WORLD) == 0) {
         /* World.setActiveCamera() is the other way a title names its camera,
            and the corpus uses it: without this fallback a World rendered
            through the Graphics3D's own (unset) camera draws nothing. */
@@ -9629,86 +9730,88 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
 
     /* The vertex buffer's positions.  setPositions(vb, scale, bias) stores the
        scalar in _nj_bias and the per-component bias in _nj_scale. */
-    d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_positions",
-                                "L" NJ_C_VARR ";"));
-    if (!d) {
-        return 0;
-    }
-    arr = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
-    if (!arr) {
-        return 0;
-    }
-    r.pos    = (const nj_s2 *)nj_array_data(arr);
-    r.pcomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
-    r.pfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
-    r.ptype  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
-    r.pcount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_count", "I"));
-    nverts   = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
-    if (!r.pos || r.pcomp < 2 || nverts <= 0) {
-        return 0;
-    }
-    if (r.pcount <= 0 || r.pcount > nverts) { r.pcount = nverts; }
-    r.pfac = bits2f(nj_iget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_bias", "F")));
-    if (!(r.pfac > 0.0f) && !(r.pfac < 0.0f)) { r.pfac = 1.0f; }
-    {
-        nj_ref b = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_scale", "[F"));
-        nj_u4 k;
-        for (k = 0u; k < 4u; k++) { r.pbias[k] = 0.0f; }
-        if (b && nj_array_length(b) >= 3) {
-            memcpy(r.pbias, nj_array_data(b), sizeof(float) * 3u);
+    if (vb) {
+        d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_positions",
+                                    "L" NJ_C_VARR ";"));
+        if (!d) {
+            return 0;
         }
-    }
+        arr = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+        if (!arr) {
+            return 0;
+        }
+        r.pos    = (const nj_s2 *)nj_array_data(arr);
+        r.pcomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
+        r.pfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
+        r.ptype  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
+        r.pcount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_count", "I"));
+        nverts   = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+        if (!r.pos || r.pcomp < 2 || nverts <= 0) {
+            return 0;
+        }
+        if (r.pcount <= 0 || r.pcount > nverts) { r.pcount = nverts; }
+        r.pfac = bits2f(nj_iget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_bias", "F")));
+        if (!(r.pfac > 0.0f) && !(r.pfac < 0.0f)) { r.pfac = 1.0f; }
+        {
+            nj_ref b = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_scale", "[F"));
+            nj_u4 k;
+            for (k = 0u; k < 4u; k++) { r.pbias[k] = 0.0f; }
+            if (b && nj_array_length(b) >= 3) {
+                memcpy(r.pbias, nj_array_data(b), sizeof(float) * 3u);
+            }
+        }
 
 
-    /* Colours, and the material that overrides them. */
-    r.col = NULL;
-    r.ccomp = r.cfirst = r.ccount = 0;
-    d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_colors", "L" NJ_C_VARR ";"));
-    if (d) {
-        nj_ref cd = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
-        if (cd) {
-            r.col    = (const nj_s2 *)nj_array_data(cd);
-            r.ccomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
-            r.cfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
-            r.ccount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+        /* Colours, and the material that overrides them. */
+        r.col = NULL;
+        r.ccomp = r.cfirst = r.ccount = 0;
+        d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_colors", "L" NJ_C_VARR ";"));
+        if (d) {
+            nj_ref cd = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+            if (cd) {
+                r.col    = (const nj_s2 *)nj_array_data(cd);
+                r.ccomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
+                r.cfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
+                r.ccount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+            }
         }
-    }
-    r.dif = 0xFFFFFFFFu;
-    mat = app ? nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_mat",
-                                         "L" NJ_C_MAT ";")) : 0;
-    if (mat) {
-        r.dif = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_dif", "I"));
-    }
-    /*
-     * The rest of the material and the lights.  A surface is lit when the
-     * appearance carries a Material and the buffer carries normals - that is
-     * the JSR's own condition, and it is why an unlit buffer keeps its own
-     * colours.  Nothing here reads the light list unless lighting is on.
-     */
-    r.emi = r.amb = r.spc = 0u;
-    r.shin = 0.0f;
-    r.vcolor = 0;
-    if (mat) {
-        r.emi = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_emi", "I"));
-        r.amb = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_amb", "I"));
-        r.spc = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_spec", "I"));
-        r.shin = bits2f(nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_shininess", "F")));
-        r.vcolor = (int)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_vcolor", "Z"));
-    }
-    r.nrm = NULL;
-    r.ncomp = r.nfirst = r.ncount = r.ntype = 0;
-    d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_normals", "L" NJ_C_VARR ";"));
-    if (d) {
-        nj_ref nd = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+        r.dif = 0xFFFFFFFFu;
+        mat = app ? nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_mat",
+                                             "L" NJ_C_MAT ";")) : 0;
+        if (mat) {
+            r.dif = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_dif", "I"));
+        }
+        /*
+         * The rest of the material and the lights.  A surface is lit when the
+         * appearance carries a Material and the buffer carries normals - that is
+         * the JSR's own condition, and it is why an unlit buffer keeps its own
+         * colours.  Nothing here reads the light list unless lighting is on.
+         */
+        r.emi = r.amb = r.spc = 0u;
+        r.shin = 0.0f;
+        r.vcolor = 0;
+        if (mat) {
+            r.emi = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_emi", "I"));
+            r.amb = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_amb", "I"));
+            r.spc = (nj_u4)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_c_spec", "I"));
+            r.shin = bits2f(nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_shininess", "F")));
+            r.vcolor = (int)nj_iget(vm, mat, m3g_fof(vm, NJ_C_MAT, "_nj_vcolor", "Z"));
+        }
+        r.nrm = NULL;
+        r.ncomp = r.nfirst = r.ncount = r.ntype = 0;
+        d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_normals", "L" NJ_C_VARR ";"));
+        if (d) {
+            nj_ref nd = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
 
-        if (nd) {
-            r.nrm    = (const nj_s2 *)nj_array_data(nd);
-            r.ncomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
-            r.nfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
-            r.ncount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
-            r.ntype  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
+            if (nd) {
+                r.nrm    = (const nj_s2 *)nj_array_data(nd);
+                r.ncomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
+                r.nfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
+                r.ncount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+                r.ntype  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
+            }
         }
-    }
+    } /* Mesh vertex and material state; sprites supply their own vertices. */
     r.lights = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lights",
                                          "[L" NJ_C_LIGHT ";"));
     r.lmats = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lmats", "[F"));
@@ -9760,7 +9863,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         nj_ref pm = nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_pm",
                                              "L" NJ_C_POLY ";"));
 
-        if (pm) {
+        if (vb && pm) {
             r.sw.cull = (int)nj_iget(vm, pm,
                           m3g_fof(vm, NJ_C_POLY, "_nj_culling", "I"));
             r.sw.winding = (int)nj_iget(vm, pm,
@@ -9789,7 +9892,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         {
             nj_ref tex = nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_tex0",
                                                   "L" NJ_C_TEX2D ";"));
-            if (tex) {
+            if (vb && tex) {
                 nj_ref im2 = nj_rget(vm, tex, m3g_fof(vm, NJ_C_TEX2D, "_nj_img",
                                                       "L" NJ_C_IMAGE2D ";"));
                 r.tmat = mat_of(vm, tex, NJ_C_XABLE, "_nj_m");
@@ -9839,45 +9942,48 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     r.tcomp = r.tfirst = r.tcount = r.ttype = 0;
     r.tscale = 1.0f;
     r.tbias[0] = r.tbias[1] = r.tbias[2] = 0.0f;
-    d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_tex0", "L" NJ_C_VARR ";"));
-    if (d) {
-        nj_ref td = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+    if (vb) {
+        d = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_tex0", "L" NJ_C_VARR ";"));
+        if (d) {
+            nj_ref td = nj_rget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
 
-        if (td) {
-            r.tpos   = (const nj_s2 *)nj_array_data(td);
-            r.tcomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
-            r.tfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
-            r.tcount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
-            r.ttype  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
+            if (td) {
+                r.tpos   = (const nj_s2 *)nj_array_data(td);
+                r.tcomp  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
+                r.tfirst = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
+                r.tcount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+                r.ttype  = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
+            }
         }
-    }
-    /*
-     * The buffer's own texture-coordinate transform.  A loaded VertexBuffer
-     * carries a scale and a three-float bias per texture unit, and they are
-     * not optional decoration: a rally car's skin is placed by them, so a
-     * sampler that reads the raw coordinates draws the right shape with the
-     * wrong piece of the texture on it.  Defaults (1, 0) leave a buffer built
-     * through the API, which has none, exactly as it was.
-     */
-    {
-        nj_ref tb = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_texBias", "[F"));
+        /*
+         * The buffer's own texture-coordinate transform.  A loaded VertexBuffer
+         * carries a scale and a three-float bias per texture unit, and they are
+         * not optional decoration: a rally car's skin is placed by them, so a
+         * sampler that reads the raw coordinates draws the right shape with the
+         * wrong piece of the texture on it.  Defaults (1, 0) leave a buffer built
+         * through the API, which has none, exactly as it was.
+         */
+        {
+            nj_ref tb = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_texBias", "[F"));
 
-        r.tscale = bits2f(nj_iget(vm, vb, m3g_fof(vm, NJ_C_VBUF,
-                                                  "_nj_texScale", "F")));
-        if (!(r.tscale > 0.0f) && !(r.tscale < 0.0f)) {
-            r.tscale = 1.0f;        /* nobody set one: the raw coordinates */
-        }
-        if (tb != 0) {
-            const float *tp = (const float *)nj_array_data(tb);
+            r.tscale = bits2f(nj_iget(vm, vb, m3g_fof(vm, NJ_C_VBUF,
+                                                      "_nj_texScale", "F")));
+            if (!(r.tscale > 0.0f) && !(r.tscale < 0.0f)) {
+                r.tscale = 1.0f;        /* nobody set one: the raw coordinates */
+            }
+            if (tb != 0) {
+                const float *tp = (const float *)nj_array_data(tb);
 
-            if (tp != NULL && nj_array_length(tb) >= 2) {
-                r.tbias[0] = tp[0];
-                r.tbias[1] = tp[1];
-                if (nj_array_length(tb) >= 3) {
-                    r.tbias[2] = tp[2];
+                if (tp != NULL && nj_array_length(tb) >= 2) {
+                    r.tbias[0] = tp[0];
+                    r.tbias[1] = tp[1];
+                    if (nj_array_length(tb) >= 3) {
+                        r.tbias[2] = tp[2];
+                    }
                 }
             }
         }
+
     }
 
     /* The index buffer.  A TriangleStripArray carries strip lengths; a plain
@@ -10062,6 +10168,135 @@ static void collect_lights_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
  * materials, textures, lighting, fog, culling and depth: before this, a World
  * was drawn as flat white triangles with no transform at all.
  */
+/* Sprite geometry is made on the C stack.  NULL vb selects only the common
+ * camera, surface, compositing and fog state, never mesh appearance textures. */
+static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
+                        const float *model)
+{
+    nj_ref image = nj_rget(vm, sprite, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_img",
+                                              "L" NJ_C_IMAGE2D ";"));
+    nj_ref app = nj_rget(vm, sprite, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_app",
+                                            "L" NJ_C_APPEAR ";"));
+    nj_ref pixels, ancestor;
+    nj_s4 iw, ih, fmt, cx, cy, cw, ch;
+    nj_s8 aw, ah, left, top, right, bottom;
+    m3g_jr r;
+    jr_vtx v[4];
+    float origin[3], center[2], inv, alpha = 1.0f;
+    double halfw, halfh, x0, x1, y0, y1, sx0, sx1, sy0, sy1;
+    double u0, u1, t0, t1;
+    int k, scaled, flipx, flipy;
+
+    if (!image || !app) { return 0u; }
+    iw = nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"));
+    ih = nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"));
+    fmt = nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I"));
+    pixels = nj_rget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"));
+    if (iw <= 0 || ih <= 0 || (fmt != 99 && fmt != 100) || !pixels) { return 0u; }
+    /* Divide before multiplying: dimensions and array bounds are untrusted. */
+    if ((nj_size)iw > (nj_size)nj_array_length(pixels) / (fmt == 100 ? 4u : 3u) /
+                      (nj_size)ih) { return 0u; }
+    cx = nj_iget(vm, sprite, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_cropX", "I"));
+    cy = nj_iget(vm, sprite, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_cropY", "I"));
+    cw = nj_iget(vm, sprite, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_cropW", "I"));
+    ch = nj_iget(vm, sprite, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_cropH", "I"));
+    flipx = cw < 0; flipy = ch < 0;
+    aw = flipx ? -(nj_s8)cw : (nj_s8)cw;
+    ah = flipy ? -(nj_s8)ch : (nj_s8)ch;
+    if (!aw || !ah) { return 0u; }
+    left = cx > 0 ? cx : 0; top = cy > 0 ? cy : 0;
+    right = (nj_s8)cx + aw; bottom = (nj_s8)cy + ah;
+    if (right > iw) { right = iw; }
+    if (bottom > ih) { bottom = ih; }
+    if (right <= left || bottom <= top) { return 0u; }
+    if (!jr_setup(vm, self, 0, 0, app, world, model, &r) || !r.sw.surf) {
+        return 0u;
+    }
+    origin[0] = r.mv[3]; origin[1] = r.mv[7]; origin[2] = r.mv[11];
+    jr_project(r.proj, origin, r.vw, r.vh, center, &inv);
+    if (!isfinite(inv) || inv <= 0.0f || !isfinite(center[0]) ||
+        !isfinite(center[1]) || !isfinite(origin[2])) { return 0u; }
+    scaled = nj_iget(vm, sprite, m3g_fof(vm, NJ_C_SPRITE3D, "_nj_scaled", "Z"));
+    if (scaled) {
+        float extent[3], projected[2], wi;
+        double hx = 0.5 * sqrt((double)r.mv[0]*r.mv[0] +
+                              (double)r.mv[4]*r.mv[4] + (double)r.mv[8]*r.mv[8]);
+        double hy = 0.5 * sqrt((double)r.mv[1]*r.mv[1] +
+                              (double)r.mv[5]*r.mv[5] + (double)r.mv[9]*r.mv[9]);
+        memcpy(extent, origin, sizeof(extent));
+        extent[0] += (float)hx;
+        jr_project(r.proj, extent, r.vw, r.vh, projected, &wi);
+        if (!(wi > 0.0f)) { return 0u; }
+        halfw = fabs((double)projected[0] - center[0]);
+        memcpy(extent, origin, sizeof(extent));
+        extent[1] += (float)hy;
+        jr_project(r.proj, extent, r.vw, r.vh, projected, &wi);
+        if (!(wi > 0.0f)) { return 0u; }
+        halfh = fabs((double)projected[1] - center[1]);
+    } else {
+        halfw = 0.5 * (double)aw;
+        halfh = 0.5 * (double)ah;
+    }
+    /* The full crop, including portions outside the image, defines size.
+     * Flips reverse sampling; the crop intersection retains its placement. */
+    x0 = center[0] + halfw * (2.0 * ((double)left - cx) / aw - 1.0);
+    x1 = center[0] + halfw * (2.0 * ((double)right - cx) / aw - 1.0);
+    y0 = center[1] + halfh * (2.0 * ((double)top - cy) / ah - 1.0);
+    y1 = center[1] + halfh * (2.0 * ((double)bottom - cy) / ah - 1.0);
+    if (!isfinite(x0) || !isfinite(x1) || !isfinite(y0) || !isfinite(y1) ||
+        x1 <= x0 || y1 <= y0) { return 0u; }
+    /* Clip the rectangle before float-to-int raster bounds conversions, and
+     * interpolate its UVs so huge off-screen crops cannot overflow them. */
+    sx0 = fmax(x0, fmax(0.0, -(double)r.vx));
+    sx1 = fmin(x1, fmin((double)r.vw, (double)r.sw.surf->width - r.vx));
+    sy0 = fmax(y0, fmax(0.0, -(double)r.vy));
+    sy1 = fmin(y1, fmin((double)r.vh, (double)r.sw.surf->height - r.vy));
+    if (sx1 <= sx0 || sy1 <= sy0) { return 0u; }
+    u0 = flipx ? (double)right / iw : (double)left / iw;
+    u1 = flipx ? (double)left / iw : (double)right / iw;
+    t0 = flipy ? (double)bottom / ih : (double)top / ih;
+    t1 = flipy ? (double)top / ih : (double)bottom / ih;
+    r.sw.sprite = 1;
+    r.sw.tex = (const nj_u1 *)nj_array_data(pixels);
+    r.sw.tex_w = iw; r.sw.tex_h = ih; r.sw.tex_bpp = fmt == 100 ? 4 : 3;
+    r.sw.sprite_l = (int)left; r.sw.sprite_t = (int)top;
+    r.sw.sprite_r = (int)right; r.sw.sprite_b = (int)bottom;
+    r.sw.wrap_s = r.sw.wrap_t = 240; r.sw.filt_image = 128;
+    r.sw.texfunc = 228; r.sw.cull = 162; r.sw.sprite_fog = 1.0f;
+    r.sw.sprite_fog_colour = r.fog_colour;
+    if (r.fog) {
+        float depth = fabsf(origin[2]);
+        float span = r.fog_far - r.fog_near;
+        float f = r.fog_mode == 81 ? (span > 0.0f ? (r.fog_far-depth)/span : 1.0f)
+                                   : expf(-r.fog_density * depth);
+        r.sw.sprite_fog = isfinite(f) ? fminf(1.0f, fmaxf(0.0f, f)) : 1.0f;
+    }
+    ancestor = sprite;
+    for (k = 0; ancestor && k <= 32; k++) {
+        if (nj_iget(vm, ancestor, m3g_fof(vm, NJ_C_NODE, "_nj_alphaSet", "Z"))) {
+            float a = bits2f(nj_iget(vm, ancestor, m3g_fof(vm, NJ_C_NODE, "_nj_alpha", "F")));
+            alpha *= isfinite(a) ? fminf(1.0f, fmaxf(0.0f, a)) : 1.0f;
+        }
+        if (ancestor == world) { break; }
+        ancestor = nj_rget(vm, ancestor, m3g_fof(vm, NJ_C_NODE, "_nj_parent", "L" NJ_C_NODE ";"));
+    }
+    r.sw.sprite_alpha = (int)(alpha * 255.0f + 0.5f);
+    memset(v, 0, sizeof(v));
+    for (k = 0; k < 4; k++) {
+        double x = (k == 1 || k == 2) ? sx1 : sx0;
+        double y = k >= 2 ? sy1 : sy0;
+        v[k].xy[0] = (float)(x + r.vx); v[k].xy[1] = (float)(y + r.vy);
+        v[k].inv = inv;
+        v[k].st[0] = (float)(u0 + (u1-u0) * ((x-x0)/(x1-x0)));
+        v[k].st[1] = (float)(t0 + (t1-t0) * ((y-y0)/(y1-y0)));
+        memcpy(v[k].pe, origin, sizeof(origin));
+        v[k].rgb = 0xFFFFFFu;
+    }
+    jr_triangle_v(&r, &v[0], &v[1], &v[2]);
+    jr_triangle_v(&r, &v[0], &v[2], &v[3]);
+    return r.drawn;
+}
+
 static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
                             nj_ref *meshes, float *mats, nj_u4 n)
 {
@@ -10071,6 +10306,11 @@ static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
         nj_ref vb, ib = 0, app = 0, subs;
         m3g_jr r;
 
+        const char *cn = nj_ref_class_name(meshes[i]);
+        if (cn && (strcmp(cn, NJ_C_SPRITE3D) == 0 || strcmp(cn, NJ_C_M3G_SPRITE) == 0)) {
+            drawn += jr_sprite(vm, self, meshes[i], root, mats + (nj_size)i * 16u);
+            continue;
+        }
         vb = nj_rget(vm, meshes[i], nj_field_lookup(vm, NJ_C_MESH, "_nj_vb",
                                                     "L" NJ_C_VBUF ";", 0));
         if (!vb) {
@@ -10635,7 +10875,7 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_G3D, "clear",         "(L" NJ_C_BG ";)V",       m3g_clear },
     { NJ_C_G3D, "render",        "(L" NJ_C_WORLD ";)V",    m3g_render },
     { NJ_C_G3D, "render",
-      "(L" NJ_C_NODE ";L" NJ_C_XFORM ";)V", m3g_render },
+      "(L" NJ_C_NODE ";L" NJ_C_XFORM ";)V", m3g_render_node },
     { NJ_C_G3D, "resetLights",   "()V",                    m3g_g3d_resetLights },
     { NJ_C_G3D, "addLight",      "(L" NJ_C_LIGHT ";L" NJ_C_XFORM ";)I", m3g_g3d_addLight },
     { NJ_C_LOADER, "load", "(Ljava/lang/String;)[L" NJ_C_O3D ";", m3g_load },

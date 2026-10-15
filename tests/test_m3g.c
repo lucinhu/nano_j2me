@@ -1661,6 +1661,146 @@ int main(void)
         check(p[0] == 0xFF00FF00u, "disabled colour clear preserves the target");
     }
 
+    /* Animated characters submit camera-facing Sprite3D children through a
+       Group. Check pixels, crop orientation and compositing on that path. */
+    {
+        nj_value a[8], r;
+        nj_ref g3 = make(vm, CLS("Graphics3D"));
+        nj_ref camera = make(vm, CLS("Camera"));
+        nj_ref identity = make(vm, CLS("Transform"));
+        nj_ref model = make(vm, CLS("Transform"));
+        nj_ref group = make(vm, CLS("Group"));
+        nj_ref app = make(vm, CLS("Appearance"));
+        nj_ref cm = make(vm, CLS("CompositingMode"));
+        nj_ref bg = make(vm, CLS("Background"));
+        nj_ref sprite = nj_object_new(vm, CLS("Sprite3D"));
+        nj_ref image = nj_object_new(vm, CLS("Image2D"));
+        nj_ref bytes = nj_array_new(vm, "B", 16);
+        nj_ref target, pixels;
+        const nj_u1 colors[16] = {255,0,0,255, 0,255,0,255,
+                                  0,0,255,255, 255,255,0,255};
+        const nj_u4 *p;
+        int k, count;
+        memcpy(nj_array_data(bytes), colors, sizeof(colors));
+        a[0].i = 100; a[1].i = 2; a[2].i = 2; a[3].r = bytes;
+        check(nj_call_special(vm, image, CLS("Image2D"), "<init>",
+              "(III[B)V", a, &r) == NJ_OK, "sprite RGBA image constructs");
+        a[0].i = 1; a[1].r = image; a[2].r = app;
+        check(nj_call_special(vm, sprite, CLS("Sprite3D"), "<init>",
+              "(ZL" CLS("Image2D") ";L" CLS("Appearance") ";)V", a, &r) == NJ_OK,
+              "scaled Sprite3D constructs");
+        call(vm, sprite, CLS("Sprite3D"), "getCropWidth", "()I", NULL, &r);
+        check(r.i == 2, "sprite constructor initializes the image crop");
+        a[0].r = sprite;
+        call(vm, group, CLS("Group"), "addChild", "(L" CLS("Node") ";)V", a, NULL);
+        a[0].r = cm;
+        call(vm, app, CLS("Appearance"), "setCompositingMode",
+             "(L" CLS("CompositingMode") ";)V", a, NULL);
+        a[0].i = 16; a[1].i = 16;
+        nj_call_static(vm, "javax/microedition/lcdui/Image", "createImage",
+                       "(II)Ljavax/microedition/lcdui/Image;", a, &r);
+        target = r.r;
+        call(vm, target, "javax/microedition/lcdui/Image", "getGraphics",
+             "()Ljavax/microedition/lcdui/Graphics;", NULL, &r);
+        a[0].r = r.r;
+        call(vm, g3, CLS("Graphics3D"), "bindTarget", "(Ljava/lang/Object;)V", a, NULL);
+        a[0].i = 0; a[1].i = 0; a[2].i = 16; a[3].i = 16;
+        call(vm, g3, CLS("Graphics3D"), "setViewport", "(IIII)V", a, NULL);
+        a[0].f = 2; a[1].f = 1; a[2].f = 1; a[3].f = 10;
+        call(vm, camera, CLS("Camera"), "setParallel", "(FFFF)V", a, NULL);
+        a[0].r = camera; a[1].r = identity;
+        call(vm, g3, CLS("Graphics3D"), "setCamera",
+             "(L" CLS("Camera") ";L" CLS("Transform") ";)V", a, NULL);
+        a[0].f = 0; a[1].f = 0; a[2].f = -2;
+        call(vm, model, CLS("Transform"), "postTranslate", "(FFF)V", a, NULL);
+        /* render(Node, Transform) replaces the root's local transform. */
+        a[0].f = 100; a[1].f = 0; a[2].f = 0;
+        call(vm, group, CLS("Group"), "setTranslation", "(FFF)V", a, NULL);
+        pixels = nj_rget(vm, target, nj_field_lookup(vm,
+            "javax/microedition/lcdui/Image", "imgPixels", "[I", 0));
+        p = (const nj_u4 *)nj_array_data(pixels);
+        for (k = 0; k < 3; k++) {
+            a[0].r = bg;
+            call(vm, g3, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V", a, NULL);
+            a[0].i = 0; a[1].i = 0; a[2].i = k == 1 ? -2 : 2; a[3].i = 2;
+            call(vm, sprite, CLS("Sprite3D"), "setCrop", "(IIII)V", a, NULL);
+            if (k == 2) {
+                /* A billboard must not disappear when its node turns edge-on. */
+                a[0].f = 90; a[1].f = 0; a[2].f = 1; a[3].f = 0;
+                call(vm, sprite, CLS("Sprite3D"), "setOrientation", "(FFFF)V", a, NULL);
+            }
+            a[0].r = group; a[1].r = model;
+            call(vm, g3, CLS("Graphics3D"), "render",
+                 "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+            check((p[5 * 16 + 5] & 0xFFFFFFu) == (k == 1 ? 0x00FF00u : 0xFF0000u) &&
+                  (p[10 * 16 + 10] & 0xFFFFFFu) == (k == 1 ? 0x0000FFu : 0xFFFF00u),
+                  "sprite group renders image crop, horizontal flip and billboard orientation");
+        }
+        a[0].r = bg;
+        call(vm, g3, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V", a, NULL);
+        a[0].f = 0.5f;
+        call(vm, cm, CLS("CompositingMode"), "setAlphaThreshold", "(F)V", a, NULL);
+        a[0].f = 0;
+        call(vm, group, CLS("Node"), "setAlphaFactor", "(F)V", a, NULL);
+        a[0].r = group; a[1].r = model;
+        call(vm, g3, CLS("Graphics3D"), "render",
+             "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+        count = 0;
+        for (k = 0; k < 256; k++) if (p[k] & 0xFFFFFFu) count++;
+        check(count == 0, "explicit zero parent alpha hides the sprite");
+        a[0].f = 1;
+        call(vm, group, CLS("Node"), "setAlphaFactor", "(F)V", a, NULL);
+        /* Transparent texels are discarded by the appearance alpha threshold. */
+        ((nj_u1 *)nj_array_data(bytes))[3] = 0;
+        a[0].i = 100; a[1].i = 2; a[2].i = 2; a[3].r = bytes;
+        nj_call_special(vm, image, CLS("Image2D"), "<init>", "(III[B)V", a, &r);
+        a[0].f = 0.5f;
+        call(vm, cm, CLS("CompositingMode"), "setAlphaThreshold", "(F)V", a, NULL);
+        a[0].r = bg;
+        call(vm, g3, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V", a, NULL);
+        a[0].r = group; a[1].r = model;
+        call(vm, g3, CLS("Graphics3D"), "render",
+             "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+        check((p[5 * 16 + 5] & 0xFFFFFFu) == 0 &&
+              (p[5 * 16 + 10] & 0xFFFFFFu) == 0x00FF00u,
+              "sprite transparency obeys appearance alpha threshold");
+        a[0].r = bg;
+        call(vm, g3, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V", a, NULL);
+        a[0].i = 0; a[1].i = 0; a[2].i = 0; a[3].i = 2;
+        call(vm, sprite, CLS("Sprite3D"), "setCrop", "(IIII)V", a, NULL);
+        a[0].r = group; a[1].r = model;
+        call(vm, g3, CLS("Graphics3D"), "render",
+             "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+        count = 0;
+        for (k = 0; k < 256; k++) if (p[k] & 0xFFFFFFu) count++;
+        check(count == 0, "zero-width sprite crop emits no pixels");
+        a[0].r = image;
+        call(vm, sprite, CLS("Sprite3D"), "setImage", "(L" CLS("Image2D") ";)V", a, NULL);
+        call(vm, sprite, CLS("Sprite3D"), "getCropWidth", "()I", NULL, &r);
+        check(r.i == 2, "setImage restores the complete sprite crop");
+        a[0].r = bg;
+        call(vm, g3, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V", a, NULL);
+        a[0].i = 0; a[1].r = image; a[2].r = app;
+        nj_call_special(vm, sprite, CLS("Sprite3D"), "<init>",
+                        "(ZL" CLS("Image2D") ";L" CLS("Appearance") ";)V", a, &r);
+        a[0].r = group; a[1].r = model;
+        call(vm, g3, CLS("Graphics3D"), "render",
+             "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+        count = 0;
+        for (k = 0; k < 256; k++) if (p[k] & 0xFFFFFFu) count++;
+        check(count == 3, "unscaled sprite keeps its two-by-two pixel extent");
+        a[0].r = bg;
+        call(vm, g3, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V", a, NULL);
+        a[0].i = 100; a[1].i = 100; a[2].i = 2; a[3].i = 2;
+        call(vm, sprite, CLS("Sprite3D"), "setCrop", "(IIII)V", a, NULL);
+        a[0].r = group; a[1].r = model;
+        call(vm, g3, CLS("Graphics3D"), "render",
+             "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+        count = 0;
+        for (k = 0; k < 256; k++) if (p[k] & 0xFFFFFFu) count++;
+        check(count == 0, "sprite crop outside the image emits no pixels");
+    }
+
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
     /* The file format calls type 18 Sprite; the titles call the class

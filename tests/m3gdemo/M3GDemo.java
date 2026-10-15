@@ -168,7 +168,8 @@ public class M3GDemo extends MIDlet {
 
         run("Transformable.preRotate", new Runnable() {
             public void run() {
-                Sprite3D s = new Sprite3D(false, null, null);
+                Sprite3D s = new Sprite3D(false,
+                    new Image2D(Image2D.RGB, 1, 1, new byte[] { 0, 0, 0 }), null);
                 s.preRotate(90.0f, 0.0f, 0.0f, 1.0f);
                 Transform t = new Transform();
                 s.getTransform(t);
