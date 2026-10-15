@@ -546,6 +546,24 @@ int main(void)
             ok(nj_m3g_decode_object(img, sizeof(img), 10u, &f, err, sizeof(err)) == NJ_OK, "an Image2D decodes");
             ok(f.decoded == 1u && f.a == 99u && f.b == 4u && f.c == 2u, "its format, width and height come out");
             ok(f.d == 0u, "and an image with no palette says so");
+            {
+                nj_u1 indexed[40] = {0};
+                indexed[12] = 100u;
+                indexed[14] = 2u; indexed[18] = 1u;
+                indexed[22] = 8u;
+                indexed[26] = 17u; indexed[27] = 34u;
+                indexed[28] = 51u; indexed[29] = 255u;
+                indexed[30] = 68u; indexed[31] = 85u;
+                indexed[32] = 102u; indexed[33] = 128u;
+                indexed[34] = 2u; /* pixel byte count follows the palette */
+                indexed[38] = 0u; indexed[39] = 1u;
+                ok(nj_m3g_decode_object(indexed, sizeof(indexed), 10u, &f, err, sizeof(err)) == NJ_OK && f.decoded,
+                   "a paletted RGBA image decodes");
+                ok(f.d == 8u && f.data == indexed + 26u &&
+                   f.data[0] == 17u && f.data[7] == 128u &&
+                   f.data[f.d + 4u] == 0u && f.data[f.d + 5u] == 1u,
+                   "palette bytes precede the pixel count and indices");
+            }
             img[22] = 3u;                   /* a palette that is not whole texels */
             memset(&f, 0, sizeof(f));
             ok(nj_m3g_decode_object(img, sizeof(img), 10u, &f, err, sizeof(err)) == NJ_OK &&

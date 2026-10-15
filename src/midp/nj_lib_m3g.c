@@ -516,8 +516,9 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
             return NJ_OK;
         }
         out->d = pal;
-        out->data = data + 30u;
-        out->data_len = len - 30u;
+        /* The pixel byte count follows the palette, not its size field. */
+        out->data = data + (pal ? 26u : 30u);
+        out->data_len = len - (pal ? 26u : 30u);
         break;
     }
     case NJ_M3G_T_WORLD:
@@ -4566,7 +4567,7 @@ nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
             if (pal > 0u) {
                 nj_u4 entries = pal / bpp;
                 const nj_u1 *pt = f->data;
-                const nj_u1 *ix = f->data + pal;
+                const nj_u1 *ix = f->data + pal + 4u;
 
                 for (k = 0u; k < n; k++) {
                     nj_u4 e = ix[k];
