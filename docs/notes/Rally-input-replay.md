@@ -21,7 +21,25 @@ SDL2 captures confirm the pause menu and the changed final car position. Three
 intermediate captures (`after-restart`, `accelerating`, `left`) are identical,
 showing 70 km/h at 10.81 seconds. Their repeated pixels do not establish smooth
 presentation, even though the run records 3,650 paints. The cause of the repeated
-X11 captures remains unresolved.
+X11 captures remained unresolved at that point.
+
+A subsequent `rally-sdl-readback-017` replay uses the same 416-event script and
+reads the SDL renderer backbuffer directly with `SDL_RenderReadPixels`, after
+texture upload and drawing, before presentation. The owned SDL window is resized
+to 240x320 to limit capture overhead. All 3,650 frames are read back; nineteen
+selected captures are retained. The eleven samples at 2,600 through 3,600 all
+have distinct pixel hashes. Frame 3,000 shows 57 km/h at 13.55 seconds; frame
+3,300 shows 76 km/h at 23.50 seconds after steering toward the left shoulder;
+frame 3,600 shows 10 km/h at 33.44 seconds, facing the fence. The run exits normally
+at 30.1 FPS (121.242 seconds). These observations confirm changing images in the
+SDL renderer during driving after restart. The earlier repeated X11 screenshots
+are insufficient evidence of an SDL rendering freeze; their cause is still
+unknown.
+
+The direct readback evidence is under
+`.local-tools/debug-runs/rally-sdl-readback-017/`: `command.json`, `captures.json`,
+`runtime.log`, and selected PNGs in `frames/`. Each retained capture has a pixel
+SHA-256 in the manifest. Intermediate PPMs were removed after processing.
 
 Evidence is under `.local-tools/debug-runs/rally-newtimer-015/`, including
 `keys.txt`, both runtime logs, headless frames and SDL2 captures.
