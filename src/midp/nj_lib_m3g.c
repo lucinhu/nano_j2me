@@ -10498,7 +10498,7 @@ const nj_builtin_class nj_lib_m3g_classes[] = {
       poly_fields, M3G_N(poly_fields), poly_methods, M3G_N(poly_methods) },
     { NJ_C_COMP, NJ_C_O3D, NJ_ACC_PUBLIC,
       comp_fields, M3G_N(comp_fields), comp_methods, M3G_N(comp_methods) },
-    { NJ_C_TEX2D, NJ_C_O3D, NJ_ACC_PUBLIC,
+    { NJ_C_TEX2D, NJ_C_XABLE, NJ_ACC_PUBLIC,
       tex2d_fields, M3G_N(tex2d_fields), tex2d_methods, M3G_N(tex2d_methods) },
     { NJ_C_MESH, NJ_C_NODE, NJ_ACC_PUBLIC,
       mesh_fields, M3G_N(mesh_fields), mesh_methods, M3G_N(mesh_methods) },

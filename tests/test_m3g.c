@@ -395,6 +395,30 @@ int main(void)
             call(vm, tex, CLS("Texture2D"), "getImage",
                  "()L" CLS("Image2D") ";", NULL, &r);
             check(r.r == img, "Texture2D.setImage and getImage agree");
+
+            /* Rally's road repeats 600 times along V.  Texture2D must inherit
+               Transformable's storage as well as its methods; otherwise the
+               matrix field aliases the image or sampler fields. */
+            if (xf) {
+                nj_ref matrix = nj_array_new(vm, "F", 16u);
+                float *v = (float *)nj_array_data(matrix);
+
+                check(matrix != 0, "a texture transform output array allocates");
+                a[0].f = 1.0f; a[1].f = 600.0f; a[2].f = 1.0f;
+                call(vm, tex, CLS("Texture2D"), "setScale", "(FFF)V", a, NULL);
+                a[0].r = xf;
+                call(vm, tex, CLS("Texture2D"), "getCompositeTransform",
+                     "(L" CLS("Transform") ";)V", a, NULL);
+                if (v) {
+                    a[0].r = matrix;
+                    call(vm, xf, CLS("Transform"), "get", "([F)V", a, NULL);
+                    check(v[0] == 1.0f && v[5] == 600.0f && v[10] == 1.0f,
+                          "Texture2D preserves its inherited 600-fold V scale");
+                }
+                call(vm, tex, CLS("Texture2D"), "getImage",
+                     "()L" CLS("Image2D") ";", NULL, &r);
+                check(r.r == img, "texture transform storage does not alias its image");
+            }
         }
 
         if (app && tex) {
