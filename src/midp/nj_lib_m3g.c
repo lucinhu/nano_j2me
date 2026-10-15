@@ -9870,10 +9870,12 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         if (tb != 0) {
             const float *tp = (const float *)nj_array_data(tb);
 
-            if (tp != NULL && nj_array_length(tb) >= 3) {
+            if (tp != NULL && nj_array_length(tb) >= 2) {
                 r.tbias[0] = tp[0];
                 r.tbias[1] = tp[1];
-                r.tbias[2] = tp[2];
+                if (nj_array_length(tb) >= 3) {
+                    r.tbias[2] = tp[2];
+                }
             }
         }
     }

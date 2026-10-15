@@ -1554,6 +1554,31 @@ int main(void)
                               == expected[c][mode], "texture wrapping clamps or repeats each axis");
                     }
                 }
+                /* Two-component UV arrays accept a two-float bias. */
+                {
+                    nj_ref bias = nj_array_new(vm, "F", 2u);
+                    const float offsets[3][2] = {{0.75f,0.75f},{0.0f,0.75f},{0.75f,0.0f}};
+                    const nj_u4 colors_with_bias[3] = {0xFFFFFFu,0x0000FFu,0x00FF00u};
+                    memset(nj_array_data(coords), 0, 6u * sizeof(nj_s2));
+                    a[0].i = 0; a[1].i = 3; a[2].r = coords;
+                    call(vm, uv, CLS("VertexArray"), "set", "(II[S)V", a, NULL);
+                    a[0].i = 240; a[1].i = 240;
+                    call(vm, texture, CLS("Texture2D"), "setWrapping", "(II)V", a, NULL);
+                    for (c = 0; c < 3; c++) {
+                        memcpy(nj_array_data(bias), offsets[c], sizeof(offsets[c]));
+                        a[0].i = 0; a[1].r = uv; a[2].f = 0.5f; a[3].r = bias;
+                        call(vm, vb, CLS("VertexBuffer"), "setTexCoords",
+                             "(IL" CLS("VertexArray") ";F[F)V", a, NULL);
+                        a[0].r = clear_bg;
+                        call(vm, g3d, CLS("Graphics3D"), "clear",
+                             "(L" CLS("Background") ";)V", a, NULL);
+                        a[0].r = mesh; a[1].r = xf;
+                        call(vm, g3d, CLS("Graphics3D"), "render",
+                             "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+                        check((((nj_u4 *)nj_array_data(pixels))[9 * 16 + 6] & 0xFFFFFFu)
+                              == colors_with_bias[c], "two-component texture bias offsets each axis");
+                    }
+                }
             }
         }
     }
