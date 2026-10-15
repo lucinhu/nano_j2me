@@ -98,17 +98,19 @@ static unsigned long hash_frames(const char *dir)
 }
 
 /* Run one MIDlet with a key script and report what happened. */
-static int run(const char *jar, const char *keys, capture *cap, int frames)
+static int run_capture(const char *jar, const char *keys, capture *cap, int frames,
+                       const char *dump_dir, int logging)
 {
     nj_port port;
     nj_run_opts opts;
     int rc;
 
     memset(cap, 0, sizeof(*cap));
-    if (nj_port_headless_ex(&port, 176, 208, 0, NULL) != NJ_OK) {
+    if (nj_port_headless_ex(&port, 176, 208, dump_dir ? 20 : 0,
+                            dump_dir) != NJ_OK) {
         return -1;
     }
-    port.log = cap_log;
+    port.log = logging ? cap_log : NULL;
     port.user = cap;
     port.fps_cap = 0;
 
@@ -122,6 +124,11 @@ static int run(const char *jar, const char *keys, capture *cap, int frames)
     /* The port belongs to the caller, so the observations survive the run. */
     nj_port_shutdown(&port);
     return rc;
+}
+
+static int run(const char *jar, const char *keys, capture *cap, int frames)
+{
+    return run_capture(jar, keys, cap, frames, NULL, 1);
 }
 
 int main(int argc, char **argv)
@@ -245,6 +252,46 @@ int main(int argc, char **argv)
        "the log stays bounded however loudly the MIDlet complains");
     if (cap.lines >= 100000) {
         printf("  log lines: %d\n", cap.lines);
+    }
+
+    /* ---- 4. invalid scripts deliver no partial input ---- */
+    {
+        char script[12000];
+        const char *q;
+        int events = 0;
+        unsigned long baseline = hash_frames("/tmp/nj_poke_a");
+
+        snprintf(script, sizeof(script), "%s,bad", ALL_KEYS);
+        rc = run_capture(argv[1], script, &cap, 300, "/tmp/nj_poke_b/", 1);
+        ok(rc == NJ_OK || rc == 1, "malformed input does not prevent startup");
+        ok(strstr(cap.buf, "THE WHOLE SCRIPT IS IGNORED") != NULL,
+           "a malformed suffix reports rejection");
+        ok(hash_frames("/tmp/nj_poke_b") == baseline,
+           "a malformed suffix delivers none of its valid prefix");
+
+        strcpy(script, ALL_KEYS);
+        for (q = ALL_KEYS; *q; q++) {
+            if (*q == ':') { events++; }
+        }
+        while (events++ < 512) { strcat(script, ",10000:fire"); }
+        strcat(script, ", \n# a full script may end with comments\n");
+        rc = run(argv[1], script, &cap, 2);
+        ok((rc == NJ_OK || rc == 1) &&
+           strstr(cap.buf, "THE WHOLE SCRIPT IS IGNORED") == NULL,
+           "512 events followed by separators and comments are accepted");
+
+        strcat(script, "10000:fire");
+        rc = run_capture(argv[1], script, &cap, 300, "/tmp/nj_poke_b/", 1);
+        ok(rc == NJ_OK || rc == 1, "oversized input does not prevent startup");
+        ok(strstr(cap.buf, "at most 512") != NULL,
+           "the 513th event reports the script limit");
+        ok(hash_frames("/tmp/nj_poke_b") == baseline,
+           "an oversized script delivers none of its valid prefix");
+
+        rc = run_capture(argv[1], script, &cap, 300, "/tmp/nj_poke_b/", 0);
+        ok((rc == NJ_OK || rc == 1) &&
+           hash_frames("/tmp/nj_poke_b") == baseline,
+           "script rejection also clears input without a log callback");
     }
 
     printf("\n%d checks, %d failures\n%s\n", checks, fails,

@@ -422,7 +422,7 @@ static int key_script_parse(const char *spec, key_script *ks)
     /* Whitespace and newlines separate entries, and '#' starts a comment that
      * runs to the end of the line.  A script that is meant to be READ - and to
      * be edited when a game's menu moves - cannot be one long line. */
-    while (*p && ks->n < NJ_KEY_SCRIPT_MAX) {
+    while (*p) {
         nj_u8 frame = 0u;
         int len = 0;
         nj_u1 key = 0;
@@ -437,6 +437,10 @@ static int key_script_parse(const char *spec, key_script *ks)
         }
         if (!*p) {
             break;
+        }
+        /* Reject extra events after separators/comments, never truncate them. */
+        if (ks->n >= NJ_KEY_SCRIPT_MAX) {
+            return -1;
         }
         while (*p >= '0' && *p <= '9') {
             frame = frame * 10u + (nj_u8)(*p - '0');
@@ -1040,12 +1044,15 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
             }
             key_script_parse(NULL, &keys);
         } else {
-            if (key_script_parse(kspec, &keys) < 0 && port.log) {
-                port.log(port.user, 0,
-                         "--keys: expected frame:key pairs such as "
-                         "\"20:fire,60:left\" or \"20:53,60:35\", or @file for "
-                         "a script - THE WHOLE SCRIPT IS IGNORED, so this "
-                         "session will run with no input at all");
+            if (key_script_parse(kspec, &keys) < 0) {
+                key_script_parse(NULL, &keys);
+                if (port.log) {
+                    port.log(port.user, 0,
+                             "--keys: expected at most 512 frame:key pairs such as "
+                             "\"20:fire,60:left\" or \"20:53,60:35\", or @file for "
+                             "a script - THE WHOLE SCRIPT IS IGNORED, so this "
+                             "session will run with no input at all");
+                }
             }
             if (kspec && kspec != opts->keys) {
                 free(kspec);
