@@ -140,6 +140,11 @@ public class HelloWorld {
          * bytecode, which is what this fixture is.
          */
         boolean wideOk = true;
+        // dconst_1 must push IEEE-754 1.0, not the integer bit pattern 1.
+        // A runtime operand prevents javac from folding the reciprocal.
+        double reciprocal = 1.0 / root;
+        wideOk = wideOk && reciprocal > 0.707 && reciprocal < 0.708;
+        wideOk = wideOk && Double.doubleToLongBits(1.0) == 4607182418800017408L;
         wideOk = wideOk && (Math.max(0L, 60L) == 60L);
         wideOk = wideOk && (Math.max(5L, 7L) == 7L);
         wideOk = wideOk && (Math.min(5L, 7L) == 5L);

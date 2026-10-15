@@ -771,7 +771,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         case 0x0c: sp->f = 1.0f; sp++; break;
         case 0x0d: sp->f = 2.0f; sp++; break;
         case 0x0e: PUSH_W(0); break;                       /* dconst_0 */
-        case 0x0f: PUSH_W(1); break;                       /* dconst_1 */
+        case 0x0f: sp[0].d = 1.0; sp[1].bits = 0u;
+                   sp += 2; break;                       /* dconst_1 */
         /* SUPERINSTRUCTION: push-constant followed by iand.  The benchmark's
          * inner loop does it four times per iteration (sipush 255, sipush 511,
          * bipush 127, ldc 65535 - every one followed by iand), and it is what a
