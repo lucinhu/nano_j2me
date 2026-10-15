@@ -268,7 +268,18 @@ dump above (one colour in the presented frames), the chain is closed:
 No runtime defect is demonstrated for this title, and the probe was removed and
 the worktree discarded after the run.
 
-## 合金弹头4(完美汉化版)_4053 — the game's own table index, and byte-exact resources
+## 合金弹头4(完美汉化版)_4053 — signed byte decoding repaired
+
+**Update:** the earlier game-side attribution below is superseded.
+`DataInputStream.readByte()` returned unsigned values for bytes 0x80–0xFF.
+The signed-byte correction in `edc3344`, together with the `append(char[])`
+argument correction in `db749b2`, lets the original JAR reach the jungle stage
+with Lina, 100 health and four lives. A 1200-frame headless replay exits normally;
+the repeating `ad.a(...) pc=33` exception and the native crash do not recur in
+that replay. FreeJ2ME Plus reaches the same stage. This establishes startup and
+level rendering; movement and SDL2 verification are tracked separately.
+
+The investigation below is retained as historical evidence of the symptom.
 
 This one is flat *and* draws: `--run-frames 1500 --stats` reports
 `paints=1502 gfx=4506`, exactly **three Graphics calls per paint**, and the
