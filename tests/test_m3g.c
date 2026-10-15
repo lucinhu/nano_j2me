@@ -1477,6 +1477,63 @@ int main(void)
                 check(memcmp(expected, nj_array_data(pixels), sizeof(expected)) == 0,
                       "render applies all three position bias components");
             }
+            /* Out-of-range UVs distinguish the public CLAMP enum (240) from
+               REPEAT (241), independently on S and T. */
+            {
+                nj_ref uv = nj_object_new(vm, CLS("VertexArray"));
+                nj_ref coords = nj_array_new(vm, "S", 6u);
+                nj_ref rgb = nj_array_new(vm, "B", 12u);
+                nj_ref image = nj_object_new(vm, CLS("Image2D"));
+                nj_ref texture = nj_object_new(vm, CLS("Texture2D"));
+                const nj_u1 colors[12] = {255,0,0, 0,255,0,
+                                         0,0,255, 255,255,255};
+                const nj_s2 cases[4][2] = {{-1,0},{2,0},{0,-1},{0,2}};
+                const nj_u4 expected[4][2] = {{0xFF0000,0x00FF00},
+                    {0x00FF00,0xFF0000},{0xFF0000,0x0000FF},
+                    {0x0000FF,0xFF0000}};
+                int c, mode, vertex;
+                memcpy(nj_array_data(rgb), colors, sizeof(colors));
+                a[0].i = 3; a[1].i = 2; a[2].i = 2;
+                check(nj_call_special(vm, uv, CLS("VertexArray"), "<init>",
+                      "(III)V", a, NULL) == NJ_OK, "wrapping UV array constructs");
+                a[0].i = 99; a[1].i = 2; a[2].i = 2; a[3].r = rgb;
+                check(nj_call_special(vm, image, CLS("Image2D"), "<init>",
+                      "(III[B)V", a, NULL) == NJ_OK, "wrapping texture image constructs");
+                a[0].r = image;
+                call(vm, texture, CLS("Texture2D"), "<init>",
+                     "(L" CLS("Image2D") ";)V", a, NULL);
+                a[0].i = 228;
+                call(vm, texture, CLS("Texture2D"), "setBlending", "(I)V", a, NULL);
+                a[0].i = 208; a[1].i = 208;
+                call(vm, texture, CLS("Texture2D"), "setFiltering", "(II)V", a, NULL);
+                a[0].i = 0; a[1].r = texture;
+                call(vm, app, CLS("Appearance"), "setTexture",
+                     "(IL" CLS("Texture2D") ";)V", a, NULL);
+                a[0].i = 0; a[1].r = uv; a[2].f = 0.5f; a[3].r = 0;
+                call(vm, vb, CLS("VertexBuffer"), "setTexCoords",
+                     "(IL" CLS("VertexArray") ";F[F)V", a, NULL);
+                for (c = 0; c < 4; c++) {
+                    nj_s2 *values = (nj_s2 *)nj_array_data(coords);
+                    for (vertex = 0; vertex < 3; vertex++) {
+                        values[vertex * 2] = cases[c][0];
+                        values[vertex * 2 + 1] = cases[c][1];
+                    }
+                    a[0].i = 0; a[1].i = 3; a[2].r = coords;
+                    call(vm, uv, CLS("VertexArray"), "set", "(II[S)V", a, NULL);
+                    for (mode = 0; mode < 2; mode++) {
+                        a[0].i = 240 + mode; a[1].i = 240 + mode;
+                        call(vm, texture, CLS("Texture2D"), "setWrapping", "(II)V", a, NULL);
+                        a[0].r = clear_bg;
+                        call(vm, g3d, CLS("Graphics3D"), "clear",
+                             "(L" CLS("Background") ";)V", a, NULL);
+                        a[0].r = mesh; a[1].r = xf;
+                        call(vm, g3d, CLS("Graphics3D"), "render",
+                             "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+                        check((((nj_u4 *)nj_array_data(pixels))[9 * 16 + 6] & 0xFFFFFFu)
+                              == expected[c][mode], "texture wrapping clamps or repeats each axis");
+                    }
+                }
+            }
         }
     }
     nj_clear_exception(vm);

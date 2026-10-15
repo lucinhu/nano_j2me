@@ -8446,14 +8446,14 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
     if (!sw->tex || sw->tex_w <= 0 || sw->tex_h <= 0) {
         return argb;
     }
-    if (sw->wrap_s == 32) {            /* WRAP_CLAMP */
+    if (sw->wrap_s == 240) {            /* WRAP_CLAMP */
         fs = s < 0.0f ? 0.0f : (s > 1.0f ? 1.0f : s);
     } else {                           /* WRAP_REPEAT (the default) */
         fs = s - (float)(nj_s4)s;
         if (fs < 0.0f) { fs += 1.0f; }
         if (fs >= 1.0f) { fs = 0.999f; }
     }
-    if (sw->wrap_t == 32) {
+    if (sw->wrap_t == 240) {
         ft = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
     } else {
         ft = t - (float)(nj_s4)t;
