@@ -5006,6 +5006,28 @@ static nj_status m3g_external_image(nj_vm *vm, const char *base,
     strcpy(path + prefix, name);
     str = nj_root(vm, nj_string_new(vm, path));
     a[0].r = str;
+    /* An external URI may name another M3G container, not just a PNG.
+     * Stranded 2 keeps its shared texture objects in all_3d_texture.m3g. */
+    {
+        nj_app *app = (nj_app *)vm->loader_ud;
+        nj_u4 size = 0u;
+        void *bytes = app ? nj_app_resource(vm, app, path, &size) : NULL;
+        int container = bytes && size >= 12u &&
+            memcmp(bytes, "\xabJSR184\xbb\r\n\x1a\n", 12u) == 0;
+        if (bytes) { nj_host_free(vm, bytes); }
+        if (container) {
+            nj_ref loaded = nj_call_ref(vm, NULL, NJ_C_LOADER, "load",
+                "(Ljava/lang/String;)[L" NJ_C_O3D ";", a);
+            if (!loaded || nj_array_length(loaded) == 0u) {
+                nj_root_release(vm, mark);
+                return vm->exception ? NJ_ERR :
+                    nj_throw(vm, "java/io/IOException", "empty external M3G");
+            }
+            *result = nj_array_get_ref(loaded, 0u);
+            nj_root_release(vm, mark);
+            return NJ_OK;
+        }
+    }
     image = nj_call_ref(vm, NULL, "javax/microedition/lcdui/Image", "createImage",
                        "(Ljava/lang/String;)Ljavax/microedition/lcdui/Image;", a);
     if (!image) {

@@ -25,7 +25,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <zlib.h>
-#include "nj2me/nj.h"
+#include "nj_internal.h"
 
 nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
                                  nj_u1 *ids, nj_u4 id_count,
@@ -368,6 +368,88 @@ static void compressed_geometry_payloads(void)
     nj_vm_destroy(vm);
 }
 
+/* A stored ZIP entry exercises external resources through a real app. */
+static void zip32(nj_u1 *p, nj_u4 v)
+{
+    p[0] = (nj_u1)v; p[1] = (nj_u1)(v >> 8);
+    p[2] = (nj_u1)(v >> 16); p[3] = (nj_u1)(v >> 24);
+}
+
+static void external_container(void)
+{
+    static const char uri[] = "shared/textures.m3g";
+    nj_u1 zip[1024];
+    nj_u4 n, cd, end, crc, outer;
+    nj_port port;
+    nj_vm *vm;
+    nj_app *app;
+    nj_ref bytes, roots, image;
+    nj_value args[2], ret;
+    nj_status st;
+
+    start();
+    section(12, 0u, 5u, 5u, 0u);
+    object(21, 0u, 0u, 0u);
+    n = 30u + section(30, 0u, 53u, 53u, 0u);
+    object(39, 10u, 48u, 0u);
+    put32le(73u, 44);
+    buf[56] = 99u; /* immutable RGB, no palette */
+    put32le(3u, 58); put32le(2u, 62);
+    put32le(18u, 70);
+    memset(buf + 74, 0x35, 18u);
+    memset(zip, 0, sizeof(zip));
+    crc = (nj_u4)crc32(0u, buf, n);
+    zip32(zip, 0x04034b50u); zip[4] = 20u;
+    zip32(zip + 14, crc); zip32(zip + 18, n); zip32(zip + 22, n);
+    zip[26] = (nj_u1)(sizeof(uri) - 1u);
+    memcpy(zip + 30, uri, sizeof(uri) - 1u);
+    memcpy(zip + 30 + sizeof(uri) - 1u, buf, n);
+    cd = 30u + sizeof(uri) - 1u + n;
+    zip32(zip + cd, 0x02014b50u); zip[cd + 4] = 20u; zip[cd + 6] = 20u;
+    zip32(zip + cd + 16, crc); zip32(zip + cd + 20, n); zip32(zip + cd + 24, n);
+    zip[cd + 28] = (nj_u1)(sizeof(uri) - 1u);
+    memcpy(zip + cd + 46, uri, sizeof(uri) - 1u);
+    end = cd + 46u + sizeof(uri) - 1u;
+    zip32(zip + end, 0x06054b50u); zip[end + 8] = 1u; zip[end + 10] = 1u;
+    zip32(zip + end + 12, end - cd); zip32(zip + end + 16, cd);
+    if (nj_port_headless(&port) != NJ_OK) { ok(0, "external-resource port"); return; }
+    vm = nj_vm_create(&port, 1u << 20);
+    if (!vm) { ok(0, "external-resource VM"); return; }
+    app = nj_app_open(vm, zip, end + 22u);
+    ok(app != NULL, "shared M3G resource opens as an application");
+    if (!app) { nj_vm_destroy(vm); return; }
+    start();
+    section(12, 0u, 5u, 5u, 0u);
+    object(21, 0u, 0u, 0u);
+    outer = 30u + section(30, 0u, 5u + sizeof(uri), 5u + sizeof(uri), 0u);
+    object(39, 255u, sizeof(uri), 0u);
+    memcpy(buf + 44, uri, sizeof(uri));
+    bytes = nj_root(vm, nj_array_new(vm, "B", outer));
+    ok(bytes != NULL, "referring M3G byte array exists");
+    if (bytes) {
+        memcpy(bytes->u.bytes, buf, outer);
+        args[0].r = bytes; args[1].i = 0;
+        ret.r = NULL;
+        st = nj_call(vm, NULL, "javax/microedition/m3g/Loader", "load",
+                     "([BI)[Ljavax/microedition/m3g/Object3D;", args, &ret);
+        ok(st == NJ_OK && !vm->exception, "Loader resolves an external M3G container");
+        roots = st == NJ_OK ? nj_root(vm, ret.r) : NULL;
+        ok(roots && nj_array_length(roots) == 1u, "external container returns its root");
+        image = roots && nj_array_length(roots) ? nj_array_get_ref(roots, 0u) : NULL;
+        ok(image != NULL, "external root is a live object");
+        if (image) {
+            st = nj_call(vm, image, "javax/microedition/m3g/Image2D", "getWidth", "()I", NULL, &ret);
+            ok(st == NJ_OK && ret.i == 3, "external Image2D retains width");
+            st = nj_call(vm, image, "javax/microedition/m3g/Image2D", "getHeight", "()I", NULL, &ret);
+            ok(st == NJ_OK && ret.i == 2, "external Image2D retains height");
+            st = nj_call(vm, image, "javax/microedition/m3g/Object3D", "getUserID", "()I", NULL, &ret);
+            ok(st == NJ_OK && ret.i == 73, "external Image2D retains identity");
+        }
+    }
+    nj_app_close(vm, app);
+    nj_vm_destroy(vm);
+}
+
 int main(void)
 {
     nj_u4 clen;
@@ -515,6 +597,7 @@ int main(void)
     }
 
     objects_in_a_compressed_section();
+    external_container();
     texture_fields();
     compressed_geometry_payloads();
 
