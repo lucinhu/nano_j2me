@@ -1713,7 +1713,28 @@ static void test_gamecanvas(nj_vm *vm)
           (0x0002 | 0x0040 | 0x0020 | 0x0200 | 0x0400 | 0x0800 | 0x1000),
           "every game key maps to its documented MIDP bit");
 
-    /* suppressKeyEvents leaves the latch for the Canvas key handlers. */
+    /* Drive the common port event path, including simultaneous directions. */
+    CHECK(nj_midp_set_current(vm, c) == NJ_OK, "show polling canvas");
+    nj_midp_key(vm, NJ_KEY_UP, 1);
+    nj_midp_key(vm, NJ_KEY_RIGHT, 1);
+    CHECK(i0(vm, c, NJ_C_GAMECANVAS, "getKeyStates", "()I") == 0x0022,
+          "held directions appear together");
+    CHECK(i0(vm, c, NJ_C_GAMECANVAS, "getKeyStates", "()I") == 0x0022,
+          "held directions survive repeated polls without OS repeat");
+    nj_midp_key(vm, NJ_KEY_UP, 0);
+    CHECK(i0(vm, c, NJ_C_GAMECANVAS, "getKeyStates", "()I") == 0x0020,
+          "releasing one direction preserves the other");
+    nj_midp_key(vm, NJ_KEY_RIGHT, 0);
+    CHECK(i0(vm, c, NJ_C_GAMECANVAS, "getKeyStates", "()I") == 0,
+          "release stops movement");
+    nj_midp_key(vm, NJ_KEY_FIRE, 1);
+    nj_midp_key(vm, NJ_KEY_FIRE, 0);
+    CHECK(i0(vm, c, NJ_C_GAMECANVAS, "getKeyStates", "()I") == 0x0100,
+          "quick tap between polls is latched once");
+    CHECK(i0(vm, c, NJ_C_GAMECANVAS, "getKeyStates", "()I") == 0,
+          "quick tap is consumed on the first poll");
+
+    /* Callback suppression does not change polling semantics. */
     {
         nj_ref cs = mk_gamecanvas(vm, 1);
         CHECK(cs != NULL, "GameCanvas(true)");
@@ -1721,8 +1742,17 @@ static void test_gamecanvas(nj_vm *vm)
              NJ_GAME_UP | NJ_GAME_FIRE);
         CHECK(i0(vm, cs, NJ_C_GAMECANVAS, "getKeyStates", "()I") == 0x0102,
               "a suppressed canvas reports UP|FIRE");
-        CHECK(i0(vm, cs, NJ_C_GAMECANVAS, "getKeyStates", "()I") == 0x0102,
-              "suppressKeyEvents keeps the latch across reads");
+        CHECK(i0(vm, cs, NJ_C_GAMECANVAS, "getKeyStates", "()I") == 0,
+              "suppressed canvas also consumes its latch");
+        CHECK(nj_midp_set_current(vm, cs) == NJ_OK, "show suppressed canvas");
+        nj_midp_key(vm, NJ_KEY_DOWN, 1);
+        CHECK(i0(vm, cs, NJ_C_GAMECANVAS, "getKeyStates", "()I") == 0x0040,
+              "suppressed canvas polls held keys");
+        CHECK(i0(vm, cs, NJ_C_GAMECANVAS, "getKeyStates", "()I") == 0x0040,
+              "suppressed canvas keeps held keys across polls");
+        nj_midp_key(vm, NJ_KEY_DOWN, 0);
+        CHECK(i0(vm, cs, NJ_C_GAMECANVAS, "getKeyStates", "()I") == 0,
+              "suppressed canvas stops on release");
     }
 }
 

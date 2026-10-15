@@ -2540,13 +2540,10 @@ NJFN(gc_init)
 /*
  * Key state.
  *
- * NJ_F_C_KEYS ("cKeys") is the sticky bitmap the LCDUI key path maintains: a
- * press ORs in its NJ_GAME_* bit, a release clears it, so a press+release
- * between two reads is still seen once.  Reading consumes the latched bits
- * (MIDP: "Calling this method has the side effect of clearing any latched
- * state"), except when the GameCanvas was created with suppressKeyEvents, in
- * which case Canvas keeps delivering the ordinary key events and the latch is
- * left alone for the canvas' own keyPressed/keyReleased handlers.
+ * NJ_F_C_KEYS records presses since the previous poll; NJ_F_C_HELD records
+ * keys still down. Return their union and consume only the press latch, so
+ * both sustained holds and a quick press+release between polls are visible.
+ * suppressKeyEvents controls callbacks, not polling or latch consumption.
  *
  * The value RETURNED must use the MIDP bit values, because a MIDlet's compiler
  * inlined them: UP_PRESSED 0x0002, LEFT_PRESSED 0x0004, RIGHT_PRESSED 0x0020,
@@ -2574,11 +2571,8 @@ NJFN(gc_getKeyStates)
 {
     nj_ref self = NJ_THIS(args);
     int raw = (int)fgi(vm, self, NJ_C_CANVAS, NJ_F_C_KEYS, D_INT);
-    int suppress = (int)fgi(vm, self, NJ_C_GAMECANVAS, NJ_F_GC_SUPPRESS, D_BOOL);
-
-    if (!suppress) {
-        fsi(vm, self, NJ_C_CANVAS, NJ_F_C_KEYS, D_INT, 0);
-    }
+    raw |= (int)fgi(vm, self, NJ_C_CANVAS, NJ_F_C_HELD, D_INT);
+    fsi(vm, self, NJ_C_CANVAS, NJ_F_C_KEYS, D_INT, 0);
     ret->i = gc_midp_bits(raw);
     return NJ_OK;
 }

@@ -3343,8 +3343,8 @@ NJFN(d_getKeyName)
         break;
     }
     if (!name) {
-        ret->r = NULL;
-        return NJ_OK;
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "unknown key code");
     }
     ret->r = nj_string_new(vm, name);
     return ret->r ? NJ_OK : nj_throw_oom(vm);
@@ -3444,15 +3444,15 @@ static int midp_key_state_bit(nj_s4 code)
 static int game_action_to_key(int action)
 {
     switch (action) {
-    case NJ_GAME_UP:    return NJ_MIDP_KEY_UP;
-    case NJ_GAME_DOWN:  return NJ_MIDP_KEY_DOWN;
-    case NJ_GAME_LEFT:  return NJ_MIDP_KEY_LEFT;
-    case NJ_GAME_RIGHT: return NJ_MIDP_KEY_RIGHT;
-    case NJ_GAME_FIRE:  return NJ_MIDP_KEY_FIRE;
-    case NJ_GAME_A:     return NJ_MIDP_KEY_GAME_A;
-    case NJ_GAME_B:     return NJ_MIDP_KEY_GAME_B;
-    case NJ_GAME_C:     return NJ_MIDP_KEY_GAME_C;
-    case NJ_GAME_D:     return NJ_MIDP_KEY_GAME_D;
+    case 1:  return NJ_MIDP_KEY_UP;
+    case 6:  return NJ_MIDP_KEY_DOWN;
+    case 2:  return NJ_MIDP_KEY_LEFT;
+    case 5:  return NJ_MIDP_KEY_RIGHT;
+    case 8:  return NJ_MIDP_KEY_FIRE;
+    case 9:  return NJ_MIDP_KEY_GAME_A;
+    case 10: return NJ_MIDP_KEY_GAME_B;
+    case 11: return NJ_MIDP_KEY_GAME_C;
+    case 12: return NJ_MIDP_KEY_GAME_D;
     default:            return 0;
     }
 }
@@ -3485,6 +3485,7 @@ NJFN(c_init)
     fput(vm, self, NJ_C_CANVAS, F_C_WIDTH, D_INT, 0);
     fput(vm, self, NJ_C_CANVAS, F_C_HEIGHT, D_INT, 0);
     fput(vm, self, NJ_C_CANVAS, F_C_KEYS, D_INT, 0);
+    fput(vm, self, NJ_C_CANVAS, NJ_F_C_HELD, D_INT, 0);
     fput(vm, self, NJ_C_CANVAS, F_C_VISIBLE, D_BOOL, 0);
     fput(vm, self, NJ_C_CANVAS, F_C_PRESSED, D_BOOL, 0);
     return vm->exception ? NJ_ERR : NJ_OK;
@@ -4728,15 +4729,15 @@ static int canvas_visible(nj_vm *vm, nj_ref canvas)
 /*
  * Keep the sticky key bitmap in step: GameCanvas.getKeyStates() reads it.
  *
- * LATCHING, not level-triggered.  MIDP says a key's bit is 1 "if the key is
- * currently down or has been pressed at least once since the last time this
- * method was called", so a press and release inside one frame must still be
- * seen.  The bit is therefore SET here on press and cleared by
- * GameCanvas.getKeyStates() when it consumes the mask - never on release. */
+ * Keep two bitmaps: current holds and presses latched since the last poll.
+ * A release clears only the held bitmap; getKeyStates() consumes only the
+ * latch. A quick tap remains visible once, and a hold survives every poll. */
 
 static void canvas_keys_update(nj_vm *vm, nj_ref canvas, int code, int down)
 {
     int mask;
+
+    nj_s4 held;
 
     if (!canvas) {
         return;
@@ -4745,10 +4746,10 @@ static void canvas_keys_update(nj_vm *vm, nj_ref canvas, int code, int down)
     if (mask == 0) {
         return;
     }
-    if (!down) {
-        return;   /* release keeps the latched bit */
-    }
-    {
+    held = fget(vm, canvas, NJ_C_CANVAS, NJ_F_C_HELD, D_INT);
+    fput(vm, canvas, NJ_C_CANVAS, NJ_F_C_HELD, D_INT,
+         down ? held | mask : held & ~mask);
+    if (down) {
         nj_s4 keys = fget(vm, canvas, NJ_C_CANVAS, F_C_KEYS, D_INT);
         fput(vm, canvas, NJ_C_CANVAS, F_C_KEYS, D_INT, keys | mask);
     }
@@ -9616,13 +9617,14 @@ static const nj_builtin_method displayable_methods[] = {
     M("getCommandListener", "()L" NJ_C_COMMANDLISTENER ";", 0),
     M("isShown",          "()Z", 0),
     M("sizeChanged",      "(II)V", 0),
-    M("getKeyName",       "(I)Ljava/lang/String;", NJ_ACC_STATIC),
+    M("getKeyName",       "(I)Ljava/lang/String;", 0),
     M("setFullScreenMode", "(Z)V", 0),
     M("isFullScreenMode", "()Z", 0)
 };
 
 static const nj_builtin_field canvas_fields[] = {
     FLD(F_C_KEYS,    D_INT,   0),
+    FLD(NJ_F_C_HELD, D_INT,   0),
     FLD(F_C_VISIBLE, D_BOOL,  0),
     FLD(F_C_PRESSED, D_BOOL,  0),
     FLD("KEY_NUM0",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
@@ -9688,16 +9690,11 @@ static const nj_builtin_method canvas_methods[] = {
     M("hasPointerEvents",  "()Z", 0),
     M("hasPointerMotionEvents", "()Z", 0),
     M("hasRepeatEvents",   "()Z", 0),
-    /*
-     * STATIC, as MIDP declares them, and the flag is not decoration:
-     * nj_invoke_native() decides where a method's arguments start from it, so
-     * a static call to a method marked instance reads them from one slot above
-     * the stack top.  The symptom was a VerifyError about operand stack
-     * underflow inside the CALLER, several instructions after the call.
-     */
-    M("getGameAction",     "(I)I", NJ_ACC_STATIC),
-    M("getKeyCode",        "(I)I", NJ_ACC_STATIC),
-    M("getKeyName",        "(I)Ljava/lang/String;", NJ_ACC_STATIC),
+    /* MIDP instance methods: consume the receiver and skip it when passing
+     * arguments to their native implementations. */
+    M("getGameAction",     "(I)I", 0),
+    M("getKeyCode",        "(I)I", 0),
+    M("getKeyName",        "(I)Ljava/lang/String;", 0),
     M("repaint",           "()V", 0),
     M("repaint",           "(IIII)V", 0),
     M("serviceRepaints",   "()V", 0),

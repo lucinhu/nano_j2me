@@ -2311,6 +2311,48 @@ static void test_screen(nj_vm *vm)
     }
 }
 
+static void test_canvas_key_methods(nj_vm *vm)
+{
+    static const char *names[] = { "getGameAction", "getKeyCode", "getKeyName" };
+    static const char *descs[] = { "(I)I", "(I)I", "(I)Ljava/lang/String;" };
+    nj_class *cls = nj_class_lookup(vm, NJ_C_CANVAS);
+    nj_ref canvas = construct(vm, NJ_C_CANVAS, "()V", NULL);
+    nj_value a[1], r;
+    int ok = 0;
+    unsigned i;
+    OK(cls != NULL && canvas != NULL);
+    if (!cls || !canvas) { return; }
+    for (i = 0; i < 3; ++i) {
+        nj_method *m = nj_method_lookup(cls, names[i], descs[i]);
+        OK_MSG(m && !(m->flags & NJ_ACC_STATIC), "%s must consume its receiver", names[i]);
+    }
+    {
+        static const int actions[] = { 1, 2, 5, 6, 8, 9, 10, 11, 12 };
+        static const int codes[] = {
+            NJ_MIDP_KEY_UP, NJ_MIDP_KEY_LEFT, NJ_MIDP_KEY_RIGHT,
+            NJ_MIDP_KEY_DOWN, NJ_MIDP_KEY_FIRE, NJ_MIDP_KEY_GAME_A,
+            NJ_MIDP_KEY_GAME_B, NJ_MIDP_KEY_GAME_C, NJ_MIDP_KEY_GAME_D
+        };
+        for (i = 0; i < sizeof(actions) / sizeof(actions[0]); ++i) {
+            a[0] = iref(codes[i]);
+            OK(call_int(vm, canvas, NJ_C_CANVAS, "getGameAction", "(I)I", a, &ok) == actions[i] && ok);
+            a[0] = iref(actions[i]);
+            OK(call_int(vm, canvas, NJ_C_CANVAS, "getKeyCode", "(I)I", a, &ok) == codes[i] && ok);
+        }
+    }
+    a[0] = iref(NJ_MIDP_KEY_LEFT);
+    OK(nj_call(vm, canvas, NJ_C_CANVAS, "getKeyName", "(I)Ljava/lang/String;", a, &r) == NJ_OK);
+    OK(r.r != NULL);
+    if (r.r) {
+        char text[16];
+        nj_string_to_utf8(r.r, text, (int)sizeof(text));
+        OK(strcmp(text, "LEFT") == 0);
+    }
+    a[0] = iref(-12345);
+    OK(nj_call(vm, canvas, NJ_C_CANVAS, "getKeyName", "(I)Ljava/lang/String;", a, &r) != NJ_OK);
+    OK(exc_is(vm, "java/lang/IllegalArgumentException"));
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -2349,6 +2391,7 @@ static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
     test_command(vm);
     test_widgets(vm);
     test_screen(vm);
+    test_canvas_key_methods(vm);
 
     /* createImage(String) needs a loaded application. */
     if (app) {

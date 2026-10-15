@@ -104,7 +104,8 @@
 #define NJ_F_C_BUFFER    "cBuffer"     /* Image backing store */
 #define NJ_F_C_WIDTH     "cWidth"      /* I */
 #define NJ_F_C_HEIGHT    "cHeight"     /* I */
-#define NJ_F_C_KEYS      "cKeys"       /* I  sticky key state bitmap */
+#define NJ_F_C_KEYS      "cKeys"       /* I  latched presses since last poll */
+#define NJ_F_C_HELD      "cHeld"       /* I  keys still physically down */
 #define NJ_F_C_VISIBLE   "cVisible"    /* Z  showNotify/drawNotify delivered */
 #define NJ_F_C_PRESSED   "cPressed"    /* Z  a key is currently down */
 
