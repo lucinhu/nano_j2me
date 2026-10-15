@@ -840,6 +840,36 @@ int main(void)
         call(vm, mesh, CLS("Mesh"), "getAppearance",
              "(I)L" CLS("Appearance") ";", a, &r);
         check(r.r == other, "and it is the appearance that was set");
+        {
+            nj_ref ib2 = make(vm, CLS("TriangleStripArray"));
+            nj_ref ibs = nj_object_array_new(vm, CLS("IndexBuffer"), 2u);
+            nj_ref apps = nj_object_array_new(vm, CLS("Appearance"), 2u);
+            nj_array_set_ref(ibs, 0u, ib);
+            nj_array_set_ref(ibs, 1u, ib2);
+            nj_array_set_ref(apps, 1u, app);
+            a[0].r = vb; a[1].r = ibs; a[2].r = apps;
+            call(vm, mesh, CLS("Mesh"), "<init>",
+                 "(L" CLS("VertexBuffer") ";[L" CLS("IndexBuffer") ";[L" CLS("Appearance") ";)V", a, NULL);
+            a[0].i = 1;
+            call(vm, mesh, CLS("Mesh"), "getIndexBuffer", "(I)L" CLS("IndexBuffer") ";", a, &r);
+            check(r.r == ib2, "the second constructor submesh keeps its own buffer");
+            call(vm, mesh, CLS("Mesh"), "getAppearance", "(I)L" CLS("Appearance") ";", a, &r);
+            check(r.r == app, "a null appearance does not shift the next slot");
+            a[0].i = 0;
+            call(vm, mesh, CLS("Mesh"), "getAppearance", "(I)L" CLS("Appearance") ";", a, &r);
+            check(r.r == 0, "a null appearance stays null");
+            objs[0].fields.b = 2u;
+            objs[0].fields.nrefs_total = 4u;
+            objs[0].fields.refs[1] = 0u;
+            objs[0].fields.refs[2] = 6u;
+            objs[0].fields.refs[3] = 7u;
+            check(nj_m3g_link_meshes(vm, objs, 6u, arr) == NJ_OK, "two serialized submeshes link");
+            a[0].i = 1;
+            call(vm, mesh, CLS("Mesh"), "getIndexBuffer", "(I)L" CLS("IndexBuffer") ";", a, &r);
+            check(r.r == ib, "the second serialized buffer is retained");
+            call(vm, mesh, CLS("Mesh"), "getAppearance", "(I)L" CLS("Appearance") ";", a, &r);
+            check(r.r == app, "serialized null appearances preserve later slots");
+        }
     }
     /* ---- an Appearance is handed the material the file names ---------- */
     {

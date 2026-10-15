@@ -4007,8 +4007,16 @@ NJFN(m3g_mesh_getVertexBuffer)
 
 NJFN(m3g_mesh_getIndexBuffer)
 {
-    ret->r = nj_rget(vm, NJ_THIS(args), nj_field_lookup(vm, NJ_C_MESH, "_nj_ib",
-                                                        "L" NJ_C_IBUF ";", 0));
+    nj_ref self = NJ_THIS(args);
+    nj_s4 index = NJ_ARG_INT(args, 0);
+    nj_ref ibs = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_MESH, "_nj_ibs",
+                                                "[L" NJ_C_IBUF ";", 0));
+    if (index < 0 || index >= get_submesh_count(vm, self)) {
+        NJ_THROW(vm, "java/lang/IndexOutOfBoundsException", "invalid submesh");
+    }
+    ret->r = ibs ? nj_array_get_ref(ibs, (nj_u4)index) :
+        nj_rget(vm, self, nj_field_lookup(vm, NJ_C_MESH, "_nj_ib",
+                                       "L" NJ_C_IBUF ";", 0));
     return NJ_OK;
 }
 
@@ -4428,7 +4436,7 @@ nj_status nj_m3g_link_meshes(nj_vm *vm, const nj_m3g_object *objs,
         mode = M3G_REF_TWO;
     }
     for (i = 0u; i < nobj; i++) {
-        nj_ref mesh, subs;
+        nj_ref mesh, subs, ibs;
         nj_u4 k, nsub;
 
         if (objs[i].type != NJ_M3G_T_MESH || objs[i].fields.decoded == 0u) {
@@ -4442,6 +4450,12 @@ nj_status nj_m3g_link_meshes(nj_vm *vm, const nj_m3g_object *objs,
         nj_rput(vm, mesh, m3g_fof(vm, NJ_C_MESH, "_nj_vb",
                                   "L" NJ_C_VBUF ";"),
                 m3g_resolve_ref(vm, arr, nobj, mesh, objs[i].fields.a, mode));
+        ibs = nj_object_array_new(vm, NJ_C_IBUF, nsub);
+        if (!ibs) {
+            return nj_throw_oom(vm);
+        }
+        nj_rput(vm, mesh, m3g_fof(vm, NJ_C_MESH, "_nj_ibs",
+                                 "[L" NJ_C_IBUF ";"), ibs);
         subs = nj_object_new(vm, NJ_C_VECTOR);
         if (!subs) {
             continue;
@@ -4459,9 +4473,7 @@ nj_status nj_m3g_link_meshes(nj_vm *vm, const nj_m3g_object *objs,
                 nj_rput(vm, mesh, m3g_fof(vm, NJ_C_MESH, "_nj_ib",
                                           "L" NJ_C_IBUF ";"), ib);
             }
-            if (!app) {
-                continue;
-            }
+            nj_array_set_ref(ibs, k, ib);
             av[0].r = app;
             nj_call(vm, subs, NJ_C_VECTOR, "addElement",
                     "(Ljava/lang/Object;)V", av, NULL);
@@ -5887,6 +5899,7 @@ static const nj_builtin_field sprite_fields[] = {
 static const nj_builtin_field mesh_fields[] = {
     { "_nj_vb",   "L" NJ_C_VBUF ";", NJ_ACC_PUBLIC },
     { "_nj_ib",   "L" NJ_C_IBUF ";", NJ_ACC_PUBLIC },
+    { "_nj_ibs",  "[L" NJ_C_IBUF ";", NJ_ACC_PUBLIC },
     { "_nj_subs", "L" NJ_C_VECTOR ";", NJ_ACC_PUBLIC },
     { "_nj_nsub", "I",                NJ_ACC_PUBLIC }
 };
@@ -7177,24 +7190,26 @@ M3G_I_GET(m3g_ray_getSubmeshIndex, NJ_C_RAY, "_nj_submesh")
 static void mesh_set_base(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
                           nj_ref app)
 {
-    nj_ref subs = nj_object_new(vm, NJ_C_VECTOR);
+    nj_ref subs;
 
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_ibs", "[L" NJ_C_IBUF ";"), 0);
+    subs = nj_object_new(vm, NJ_C_VECTOR);
     nj_rput(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_vb", "L" NJ_C_VBUF ";"), vb);
     nj_rput(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_ib", "L" NJ_C_IBUF ";"), ib);
     if (!subs) {
         return;
     }
     nj_call(vm, subs, NJ_C_VECTOR, "<init>", "()V", NULL, NULL);
-    if (app) {
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_subs", "L" NJ_C_VECTOR ";"),
+            subs);
+    if (ib) {
         nj_value a[1];
 
         a[0].r = app;
         nj_call(vm, subs, NJ_C_VECTOR, "addElement", "(Ljava/lang/Object;)V",
                 a, NULL);
     }
-    nj_rput(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_subs", "L" NJ_C_VECTOR ";"),
-            subs);
-    nj_iput(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_nsub", "I"), app ? 1 : 0);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_nsub", "I"), ib ? 1 : 0);
 }
 
 NJFN(m3g_mesh_init)
@@ -7204,32 +7219,36 @@ NJFN(m3g_mesh_init)
     return NJ_OK;
 }
 
-/* The array form: one index buffer and one appearance per submesh, as long
-   as the shorter of the two arrays.  Mesh keeps the first index buffer,
-   because a Mesh has one - the rest belong to submeshes this runtime does
-   not draw separately yet. */
+/* Copy each submesh slot; null appearances retain their positions. */
+static nj_status mesh_set_arrays(nj_vm *vm, nj_ref self, nj_ref vb,
+                                  nj_ref ibs, nj_ref apps)
+{
+    nj_u4 k, nsub = ibs ? nj_array_length(ibs) : 0u;
+    nj_ref copy, subs;
+    mesh_set_base(vm, self, vb, nsub ? nj_array_get_ref(ibs, 0u) : 0,
+                  apps && nj_array_length(apps) ? nj_array_get_ref(apps, 0u) : 0);
+    copy = nj_object_array_new(vm, NJ_C_IBUF, nsub);
+    if (!copy) return nj_throw_oom(vm);
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_ibs", "[L" NJ_C_IBUF ";"), copy);
+    subs = nj_rget(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_subs", "L" NJ_C_VECTOR ";"));
+    if (!subs) return nj_throw_oom(vm);
+    if (nj_call(vm, subs, NJ_C_VECTOR, "removeAllElements", "()V", NULL, NULL) != NJ_OK)
+        return NJ_ERR;
+    for (k = 0u; k < nsub; k++) {
+        nj_value a;
+        nj_array_set_ref(copy, k, nj_array_get_ref(ibs, k));
+        a.r = apps && k < nj_array_length(apps) ? nj_array_get_ref(apps, k) : 0;
+        if (nj_call(vm, subs, NJ_C_VECTOR, "addElement", "(Ljava/lang/Object;)V", &a, NULL) != NJ_OK)
+            return NJ_ERR;
+    }
+    set_submesh_count(vm, self, (nj_s4)nsub);
+    return NJ_OK;
+}
+
 NJFN(m3g_mesh_init_arrays)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_ref vb = NJ_ARG_REF(args, 0);
-    nj_ref ibs = NJ_ARG_REF(args, 1);
-    nj_ref apps = NJ_ARG_REF(args, 2);
-    nj_ref ib = 0, app = 0;
-    nj_u4 nsub;
-
-    if (ibs && nj_array_length(ibs) > 0) {
-        ib = nj_array_get_ref(ibs, 0u);
-    }
-    if (apps && nj_array_length(apps) > 0) {
-        app = nj_array_get_ref(apps, 0u);
-    }
-    mesh_set_base(vm, self, vb, ib, app);
-    nsub = (nj_u4)(apps ? nj_array_length(apps) : 0);
-    if (ibs && (nj_u4)nj_array_length(ibs) < nsub) {
-        nsub = (nj_u4)nj_array_length(ibs);
-    }
-    nj_iput(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_nsub", "I"), (nj_s4)nsub);
-    return NJ_OK;
+    return mesh_set_arrays(vm, NJ_THIS(args), NJ_ARG_REF(args, 0),
+                           NJ_ARG_REF(args, 1), NJ_ARG_REF(args, 2));
 }
 
 /* ------------------------------------------------------------------ */
@@ -7310,7 +7329,7 @@ NJFN(m3g_morph_init_arrays)
     }
     morph_set_targets(vm, self, NJ_ARG_REF(args, 0), NJ_ARG_REF(args, 1),
                       ib, app);
-    return NJ_OK;
+    return mesh_set_arrays(vm, self, NJ_ARG_REF(args, 0), ibs, apps);
 }
 
 NJFN(m3g_morph_getTarget)
@@ -7387,15 +7406,9 @@ NJFN(m3g_skin_init_arrays)
     nj_ref self = NJ_THIS(args);
     nj_ref ibs = NJ_ARG_REF(args, 1);
     nj_ref apps = NJ_ARG_REF(args, 2);
-    nj_ref ib = 0, app = 0;
 
-    if (ibs && nj_array_length(ibs) > 0) {
-        ib = nj_array_get_ref(ibs, 0u);
-    }
-    if (apps && nj_array_length(apps) > 0) {
-        app = nj_array_get_ref(apps, 0u);
-    }
-    mesh_set_base(vm, self, NJ_ARG_REF(args, 0), ib, app);
+    if (mesh_set_arrays(vm, self, NJ_ARG_REF(args, 0), ibs, apps) != NJ_OK)
+        return NJ_ERR;
     nj_rput(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_skeleton",
                               "L" NJ_C_GROUP ";"), NJ_ARG_REF(args, 3));
     return NJ_OK;
@@ -10055,21 +10068,28 @@ static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
                                                     "L" NJ_C_IBUF ";", 0));
         subs = nj_rget(vm, meshes[i], nj_field_lookup(vm, NJ_C_MESH, "_nj_subs",
                                                       "L" NJ_C_VECTOR ";", 0));
-        if (subs) {
-            nj_value a0, rr;
-
-            a0.i = 0;
-            rr.r = 0;
-            if (nj_call(vm, subs, NJ_C_VECTOR, "elementAt",
-                        "(I)Ljava/lang/Object;", &a0, &rr) == NJ_OK) {
-                app = rr.r;
+        {
+            nj_ref ibs = nj_rget(vm, meshes[i], m3g_fof(vm, NJ_C_MESH,
+                                     "_nj_ibs", "[L" NJ_C_IBUF ";"));
+            nj_s4 k, count = get_submesh_count(vm, meshes[i]);
+            for (k = 0; k < count; k++) {
+                nj_value a0, rr;
+                app = 0;
+                if (ibs) ib = nj_array_get_ref(ibs, (nj_u4)k);
+                if (subs) {
+                    a0.i = k;
+                    rr.r = 0;
+                    if (nj_call(vm, subs, NJ_C_VECTOR, "elementAt",
+                                "(I)Ljava/lang/Object;", &a0, &rr) != NJ_OK)
+                        continue;
+                    app = rr.r;
+                }
+                if (!app || !ib) continue;
+                if (jr_setup(vm, self, vb, ib, app, root,
+                             mats + (nj_size)i * 16u, &r))
+                    drawn += jr_draw(&r);
             }
         }
-        if (!jr_setup(vm, self, vb, ib, app, root,
-                      mats + (nj_size)i * 16u, &r)) {
-            continue;
-        }
-        drawn += jr_draw(&r);
     }
     return drawn;
 }
