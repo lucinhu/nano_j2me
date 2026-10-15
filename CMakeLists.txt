@@ -882,6 +882,7 @@ nj_add_test(test_clip tests/test_clip.c)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_detect.c)
     nj_add_test(test_detect tests/test_detect.c)
     nj_add_test(test_speed tests/test_speed.c)
+    nj_add_test(test_timer tests/test_timer.c)
   endif()
 
   # Save state / restore state: runs the fielddemo fixture in one VM, saves it

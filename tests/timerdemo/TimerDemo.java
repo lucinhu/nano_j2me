@@ -44,7 +44,9 @@ public class TimerDemo extends MIDlet {
      * makes the old bug fire, the other half being the repeated notify. */
     static class Doorbell extends Thread {
         public void run() {
-            for (int i = 0; i < 500 && !taskDone; i++) {
+            /* Keep notifying for the whole capture. Returning after the first
+             * callback leaves its next periodic invocation without a notifier. */
+            for (int i = 0; i < 5000 && paints < 30; i++) {
                 synchronized (LOCK) {
                     if (taskParked) {
                         LOCK.notify();

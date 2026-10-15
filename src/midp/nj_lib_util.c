@@ -2949,12 +2949,7 @@ NJFN(stack_search)
 #define TT_EXECUTED  2
 #define TT_CANCELLED 3
 
-/*
- * A cancelled (or idle) timer parks its helper thread instead of letting the
- * Java loop return: a finished green thread stays RUNNING with an empty stack
- * and would keep the scheduler spinning, so the thread parks in the SLEEPING
- * state, where the scheduler simply waits for its deadline.
- */
+/* Empty active timers remain reusable; queue changes wake their helper. */
 #define NJ_TIMER_IDLE_MS 600000
 
 static nj_field *tt_ftime(nj_vm *vm)   { return fld(vm, TT_CLS, "taskTime", "J"); }
@@ -3078,12 +3073,8 @@ NJFN(tt_cancel)
 {
     nj_ref t = NJ_THIS(args);
 
-    if (tt_state(vm, t) == TT_SCHEDULED) {
-        nj_field_write_int(vm, t, tt_fstate(vm), TT_CANCELLED);
-        ret->i = 1;
-    } else {
-        ret->i = 0;
-    }
+    ret->i = (tt_state(vm, t) == TT_SCHEDULED);
+    nj_field_write_int(vm, t, tt_fstate(vm), TT_CANCELLED);
     return NJ_OK;
 }
 
@@ -3093,6 +3084,43 @@ NJFN(tt_scheduledExecutionTime)
 
     ret->j = f ? nj_field_read_long(vm, NJ_THIS(args), f) : 0;
     return NJ_OK;
+}
+
+/* Queue mutations must interrupt an idle or later-deadline sleep. */
+static void timer_wake(nj_vm *vm, nj_ref timer)
+{
+    nj_ref helper = rget(vm, timer, tm_fhelper(vm));
+    nj_u2 i;
+    if (!helper) {
+        return;
+    }
+    for (i = 0u; i < vm->nthreads; i++) {
+        nj_thread *t = vm->threads[i];
+        if (t && t->obj == helper && t->state == NJ_THREAD_SLEEPING) {
+            t->wake_at_ms = nj_now_ms(vm);
+            t->state = NJ_THREAD_RUNNING;
+            break;
+        }
+    }
+}
+
+/* Cancel the whole queue and release its references, including on failure. */
+static void timer_stop(nj_vm *vm, nj_ref timer)
+{
+    nj_ref tasks = rget(vm, timer, tm_ftasks(vm));
+    nj_s4 n = tasks ? vec_count(vm, tasks) : 0;
+    nj_field_write_int(vm, timer, tm_fcancel(vm), 1);
+    while (n > 0) {
+        nj_ref data = vec_data(vm, tasks);
+        nj_ref task;
+        --n;
+        task = data ? nj_array_get_ref(data, (nj_u4)n) : NULL;
+        if (task && tt_state(vm, task) == TT_SCHEDULED) {
+            nj_field_write_int(vm, task, tt_fstate(vm), TT_CANCELLED);
+        }
+        vec_remove_at(vm, tasks, n);
+    }
+    timer_wake(vm, timer);
 }
 
 /* The body of the helper thread: run due tasks, then sleep until the next. */
@@ -3113,9 +3141,13 @@ NJFN(timer_pump)
     }
     tasks = nj_field_read_ref(vm, timer, tm_ftasks(vm));
     if (fget(vm, timer, tm_fcancel(vm), 0) != 0 || !tasks) {
-        ret->i = 1;
-        (void)nj_thread_sleep(vm, th, NJ_TIMER_IDLE_MS);
-        return NJ_ERR_TIMEOUT;
+        nj_ref helper = rget(vm, timer, tm_fhelper(vm));
+        nj_field *f = fld(vm, NJ_TIMER_HELPER_CLASS, "timer", "Ljava/lang/Object;");
+        if (helper && f) {
+            nj_field_write_ref(vm, helper, f, NULL);
+        }
+        ret->i = 0;
+        return NJ_OK;
     }
     data = vec_data(vm, tasks);
     n = vec_count(vm, tasks);
@@ -3174,7 +3206,7 @@ NJFN(timer_pump)
             nj_ref exc = nj_take_exception(vm);
             nj_logf(vm, 1, "TimerTask.run() threw %s: timer cancelled",
                     (exc && exc->cls) ? exc->cls->name : "an exception");
-            nj_field_write_int(vm, timer, tm_fcancel(vm), 1);
+            timer_stop(vm, timer);
         }
         return NJ_OK;
     }
@@ -3188,6 +3220,20 @@ NJFN(timer_init)
     nj_method *run;
     nj_thread *nt;
     nj_field *f;
+    nj_u2 i;
+
+    /* These internal helpers cannot be joined or restarted by Java callers.
+     * Reap only completed helpers, outside their nested native C stacks. */
+    for (i = 0u; i < vm->nthreads;) {
+        nj_thread *old = vm->threads[i];
+        if (old && old != th && old->state == NJ_THREAD_DEAD &&
+            !old->in_c_call && old->nframes == 0 && old->obj &&
+            strcmp(old->obj->cls->name, NJ_TIMER_HELPER_CLASS) == 0) {
+            nj_thread_destroy(vm, old);
+        } else {
+            i++;
+        }
+    }
 
     if (!tm_ftasks(vm) || !tm_fcancel(vm)) {
         return nj_throw(vm, "java/lang/InternalError", "Timer layout");
@@ -3272,7 +3318,13 @@ static nj_status timer_add(nj_vm *vm, nj_ref timer, nj_ref task, nj_s8 when,
     nj_field_write_long(vm, task, tt_fexec(vm), 0);
     nj_field_write_ref(vm, task, tt_ftimer(vm), timer);
     nj_field_write_int(vm, task, tt_fstate(vm), TT_SCHEDULED);
-    return vec_append(vm, tasks, task);
+    {
+        nj_status st = vec_append(vm, tasks, task);
+        if (st == NJ_OK) {
+            timer_wake(vm, timer);
+        }
+        return st;
+    }
 }
 
 NJFN(timer_schedule)
@@ -3315,25 +3367,7 @@ NJFN(timer_schedule_rate)
 
 NJFN(timer_cancel)
 {
-    nj_ref t = NJ_THIS(args);
-    nj_ref tasks = rget(vm, t, tm_ftasks(vm));
-    nj_ref data;
-    nj_s4 i, n;
-
-    if (tm_fcancel(vm)) {
-        nj_field_write_int(vm, t, tm_fcancel(vm), 1);
-    }
-    if (!tasks || !tt_fstate(vm)) {
-        return NJ_OK;
-    }
-    data = vec_data(vm, tasks);
-    n = vec_count(vm, tasks);
-    for (i = 0; i < n; i++) {
-        nj_ref task = data ? nj_array_get_ref(data, (nj_u4)i) : NULL;
-        if (task && tt_state(vm, task) == TT_SCHEDULED) {
-            nj_field_write_int(vm, task, tt_fstate(vm), TT_CANCELLED);
-        }
-    }
+    timer_stop(vm, NJ_THIS(args));
     return NJ_OK;
 }
 

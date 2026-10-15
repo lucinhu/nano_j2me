@@ -488,6 +488,13 @@ static nj_status scheduler_step(nj_vm *vm)
                         (unsigned)t->id,
                         desc ? desc : (e && e->cls ? e->cls->name : "?"));
             }
+        } else if (st == NJ_OK && !t->is_main && t->nframes == 0 &&
+                   t->obj && t->obj->cls &&
+                   strcmp(t->obj->cls->name, "nj2me/util/TimerThread") == 0) {
+            /* Internal timer helpers must finish so cancelled timers can be
+             * reclaimed. Ordinary Java thread completion is left unchanged
+             * until nested constructor waits have their own regression. */
+            t->state = NJ_THREAD_DEAD;
         } else if (st != NJ_OK && st != NJ_ERR_YIELD && st != NJ_ERR_TIMEOUT) {
             return st;
         }
