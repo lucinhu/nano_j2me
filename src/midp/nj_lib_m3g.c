@@ -3739,21 +3739,46 @@ NJFN(m3g_varr_init)
         return NJ_OK;                                                         \
     }
 
-/*
- * VertexArray.set(int, int, short[]), also from 急速公路狂飙－新年版_84.  The
- * three arguments are kept together so the range means something later.
- */
+/* Vertex data belongs to the VertexArray; callers may reuse their buffers. */
+static nj_status m3g_varr_set_values(nj_vm *vm, nj_ref self, nj_ref src,
+                                    nj_s4 first, nj_s4 count, int bytes)
+{
+    nj_s4 vertices = nj_iget(vm, self,
+        nj_field_lookup(vm, NJ_C_VARR, "_nj_numVerts", "I", 0));
+    nj_s4 comp = nj_iget(vm, self,
+        nj_field_lookup(vm, NJ_C_VARR, "_nj_numComp", "I", 0));
+    nj_field *field = nj_field_lookup(vm, NJ_C_VARR, "_nj_data", "[S", 0);
+    nj_ref dst;
+    nj_s4 i, total;
+
+    if (!src) {
+        NJ_THROW(vm, "java/lang/NullPointerException", "null vertex values");
+    }
+    if (comp < 1 || comp > 4 || first < 0 || count < 0 ||
+        first > vertices || count > vertices - first ||
+        (nj_u8)count * (nj_u8)comp > src->length) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException", "invalid vertex range");
+    }
+    dst = nj_rget(vm, self, field);
+    if (!dst) {
+        dst = nj_short_array_new(vm, (nj_u4)vertices * (nj_u4)comp);
+        if (!dst) { return nj_throw_oom(vm); }
+        nj_rput(vm, self, field, dst);
+    }
+    total = count * comp;
+    for (i = 0; i < total; i++) {
+        ((nj_s2 *)nj_array_data(dst))[first * comp + i] = bytes
+            ? (nj_s2)((const nj_s1 *)nj_array_data(src))[i]
+            : ((const nj_s2 *)nj_array_data(src))[i];
+    }
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_first", "I", 0), 0);
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_count", "I", 0), vertices);
+    return NJ_OK;
+}
 NJFN(m3g_varr_set_short)
 {
-    nj_ref self = NJ_THIS(args);
-
-    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_data", "[S", 0),
-            NJ_ARG_REF(args, 2));
-    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_first", "I", 0),
-            NJ_ARG_INT(args, 0));
-    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VARR, "_nj_count", "I", 0),
-            NJ_ARG_INT(args, 1));
-    return NJ_OK;
+    return m3g_varr_set_values(vm, NJ_THIS(args), NJ_ARG_REF(args, 2),
+                              NJ_ARG_INT(args, 0), NJ_ARG_INT(args, 1), 0);
 }
 
 NJ_M3G_VARR_GET(m3g_varr_getVertexCount,    "_nj_numVerts")
@@ -6234,9 +6259,9 @@ NJFN(m3g_vbuf_setTexCoords_ff)
             NJ_ARG_INT(args, 0));
     nj_rput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_tex0",
                                       "L" NJ_C_VARR ";", 0), NJ_ARG_REF(args, 1));
-    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_bias", "F", 0),
+    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_texScale", "F", 0),
             f2bits(NJ_ARG_FLOAT(args, 2)));
-    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_scale", "[F", 0),
+    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_texBias", "[F", 0),
             NJ_ARG_REF(args, 3));
     return NJ_OK;
 }
@@ -7975,42 +8000,8 @@ static nj_ref m3g_varr_data(nj_vm *vm, nj_ref self)
 }
 NJFN(m3g_varr_set_bytes)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_ref src = NJ_ARG_REF(args, 2);
-    nj_s4 first = NJ_ARG_INT(args, 0);
-    nj_s4 count = NJ_ARG_INT(args, 1);
-    /*
-     * Components PER VERTEX, not the width of one: _nj_compSize is the byte
-     * width the constructor derived the component type from (1, 2 or 4), and
-     * the stored array holds _nj_numComp of them per vertex.  Using the width
-     * here copied a third of the bytes a normal array needs, which is how
-     * "set the normals" ended up filling one vertex in three.
-     */
-    nj_s4 comp = nj_iget(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
-    nj_s4 total = count * (comp > 0 ? comp : 1);
-    nj_ref dst;
-    nj_s4 i;
-
-    if (!src || total <= 0) {
-        return NJ_OK;
-    }
-    dst = nj_short_array_new(vm, (nj_u4)total);
-    if (!dst) {
-        return nj_throw_oom(vm);
-    }
-    for (i = 0; i < total && i < (nj_s4)src->length; i++) {
-        ((nj_s2 *)dst->u.bytes)[i] = (nj_s2)(nj_s1)src->u.bytes[i];
-    }
-    nj_rput(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"), dst);
-    /*
-     * _nj_ctype is NOT touched: the component type was fixed by the
-     * constructor from the component size, and set() only copies values.
-     * Clobbering it here made `new VertexArray(3, 4, 2)` answer BYTE.
-     */
-    nj_iput(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"), count);
-    nj_iput(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"), first);
-    nj_iput(vm, self, m3g_fof(vm, NJ_C_VARR, "_nj_count", "I"), count);
-    return NJ_OK;
+    return m3g_varr_set_values(vm, NJ_THIS(args), NJ_ARG_REF(args, 2),
+                              NJ_ARG_INT(args, 0), NJ_ARG_INT(args, 1), 1);
 }
 M3G_I_GET(m3g_varr_getComponentType, NJ_C_VARR, "_nj_ctype")
 NJFN(m3g_varr_get_short)

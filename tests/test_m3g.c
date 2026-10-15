@@ -1012,6 +1012,77 @@ int main(void)
         check(nj_surface_get(&s, 15, 15) == bg_outside,
               "while the pixels outside it are still the background");
     }
+    /* VertexArray.set copies its input and preserves other vertices. */
+    {
+        nj_ref va = make(vm, CLS("VertexArray"));
+        nj_ref src = nj_short_array_new(vm, 6u);
+        nj_ref out = nj_short_array_new(vm, 6u);
+        nj_ref bv = make(vm, CLS("VertexArray"));
+        nj_ref bs = nj_byte_array_new(vm, 4u);
+        nj_value a[3], r;
+        nj_s2 *p = (nj_s2 *)nj_array_data(src);
+        int i;
+
+        for (i = 0; i < 6; i++) { p[i] = (nj_s2)(i + 1); }
+        a[0].i = 3; a[1].i = 2; a[2].i = 2;
+        call(vm, va, CLS("VertexArray"), "<init>", "(III)V", a, NULL);
+        a[0].i = 0; a[1].i = 3; a[2].r = src;
+        call(vm, va, CLS("VertexArray"), "set", "(II[S)V", a, NULL);
+        p[0] = 99; p[1] = 88;
+        a[0].i = 1; a[1].i = 1;
+        call(vm, va, CLS("VertexArray"), "set", "(II[S)V", a, NULL);
+        a[0].i = 0; a[1].i = 3; a[2].r = out;
+        call(vm, va, CLS("VertexArray"), "get", "(II[S)V", a, NULL);
+        p = (nj_s2 *)nj_array_data(out);
+        check(p[0] == 1 && p[1] == 2, "set copies values before caller reuses input");
+        check(p[2] == 99 && p[3] == 88 && p[4] == 5 && p[5] == 6,
+              "partial short update preserves the remaining vertices");
+        call(vm, va, CLS("VertexArray"), "getVertexCount", "()I", NULL, &r);
+        check(r.i == 3, "partial update preserves vertex count");
+
+        a[0].i = 2; a[1].i = 2; a[2].i = 1;
+        call(vm, bv, CLS("VertexArray"), "<init>", "(III)V", a, NULL);
+        ((nj_s1 *)nj_array_data(bs))[0] = -5;
+        ((nj_s1 *)nj_array_data(bs))[1] = 7;
+        ((nj_s1 *)nj_array_data(bs))[2] = 8;
+        ((nj_s1 *)nj_array_data(bs))[3] = 9;
+        a[0].i = 0; a[1].i = 2; a[2].r = bs;
+        call(vm, bv, CLS("VertexArray"), "set", "(II[B)V", a, NULL);
+        ((nj_s1 *)nj_array_data(bs))[0] = -11;
+        ((nj_s1 *)nj_array_data(bs))[1] = 12;
+        a[0].i = 1; a[1].i = 1;
+        call(vm, bv, CLS("VertexArray"), "set", "(II[B)V", a, NULL);
+        a[0].i = 0; a[1].i = 2; a[2].r = bs;
+        call(vm, bv, CLS("VertexArray"), "get", "(II[B)V", a, NULL);
+        check(((nj_s1 *)nj_array_data(bs))[0] == -5 &&
+              ((nj_s1 *)nj_array_data(bs))[1] == 7 &&
+              ((nj_s1 *)nj_array_data(bs))[2] == -11 &&
+              ((nj_s1 *)nj_array_data(bs))[3] == 12,
+              "partial byte update preserves vertices and signed components");
+    }
+    /* Texture mapping must not rescale geometry (Stranded2 terrain). */
+    {
+        nj_ref vb = make(vm, CLS("VertexBuffer"));
+        nj_ref pb = nj_array_new(vm, "F", 3u);
+        nj_ref tb = nj_array_new(vm, "F", 3u);
+        nj_value a[4];
+        a[0].r = NULL; a[1].f = 1.0f; a[2].r = pb;
+        call(vm, vb, CLS("VertexBuffer"), "setPositions",
+             "(L" CLS("VertexArray") ";F[F)V", a, NULL);
+        a[0].i = 0; a[1].r = NULL; a[2].f = 1.0f / 256.0f; a[3].r = tb;
+        call(vm, vb, CLS("VertexBuffer"), "setTexCoords",
+             "(IL" CLS("VertexArray") ";F[F)V", a, NULL);
+        check(nj_iget(vm, vb, nj_field_lookup(vm, CLS("VertexBuffer"),
+                  "_nj_bias", "F", 0)) == 0x3f800000 &&
+              nj_rget(vm, vb, nj_field_lookup(vm, CLS("VertexBuffer"),
+                  "_nj_scale", "[F", 0)) == pb,
+              "texture coordinates preserve position scale and bias");
+        check(nj_iget(vm, vb, nj_field_lookup(vm, CLS("VertexBuffer"),
+                  "_nj_texScale", "F", 0)) == 0x3b800000 &&
+              nj_rget(vm, vb, nj_field_lookup(vm, CLS("VertexBuffer"),
+                  "_nj_texBias", "[F", 0)) == tb,
+              "texture coordinates retain their own scale and bias");
+    }
     /* ---- a file's VertexArray bytes reach the Java object -------------- */
     {
         /*
