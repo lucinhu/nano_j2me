@@ -8201,6 +8201,7 @@ typedef struct {
     int blend;                 /* CompositingMode: 64 ALPHA .. 68 REPLACE */
     int athresh;               /* the alpha test, 0..255 */
     int awrite;                /* alphaWriteEnable */
+    int dtest, dwrite;          /* independent CompositingMode depth controls */
 } m3g_sw;
 
 #define M3G_SW_BACK  160
@@ -8675,7 +8676,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                 if (key <= 0) {
                     continue;
                 }
-                if (key <= sw->z[o]) {
+                if (sw->dtest && key <= sw->z[o]) {
                     continue;
                 }
                 if (gouraud) {
@@ -8696,7 +8697,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                 if (sw->athresh > 0 && (nj_s4)ca < sw->athresh) {
                     continue;
                 }
-                sw->z[o] = key;
+                if (sw->dwrite) { sw->z[o] = key; }
                 if (sw->blend == 68) {              /* REPLACE */
                     *drow = sw->awrite ? c
                                        : ((c & 0x00FFFFFFu) | (*drow & 0xFF000000u));
@@ -9741,6 +9742,8 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     r.sw.blend = 64;
     r.sw.athresh = 0;
     r.sw.awrite = 1;
+    r.sw.dtest = 1;
+    r.sw.dwrite = 1;
     if (app) {
         nj_ref pm = nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_pm",
                                              "L" NJ_C_POLY ";"));
@@ -9756,6 +9759,10 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                                                  "L" NJ_C_COMP ";"));
 
             if (cm) {
+                r.sw.dtest = (int)nj_iget(vm, cm,
+                              m3g_fof(vm, NJ_C_COMP, "_nj_dtest", "I"));
+                r.sw.dwrite = (int)nj_iget(vm, cm,
+                               m3g_fof(vm, NJ_C_COMP, "_nj_dwrite", "I"));
                 r.sw.blend = (int)nj_iget(vm, cm,
                               m3g_fof(vm, NJ_C_COMP, "_nj_blend", "I"));
                 r.sw.awrite = (int)nj_iget(vm, cm,

@@ -1379,6 +1379,74 @@ int main(void)
             }
             check(lit2 > 0, "and a World's own active camera draws it too");
         }
+        /* Near red and far green cover the same pixels. Turning off either
+           the first draw's depth write or the second draw's depth test must
+           let the far surface replace the near one. */
+        {
+            nj_ref app = make(vm, CLS("Appearance"));
+            nj_ref cm = make(vm, CLS("CompositingMode"));
+            nj_ref material = make(vm, CLS("Material"));
+            nj_ref clear_bg = make(vm, CLS("Background"));
+            nj_ref ib = nj_object_new(vm, CLS("TriangleStripArray"));
+            nj_ref lengths = nj_array_new(vm, "I", 1u);
+            nj_ref pixels = nj_rget(vm, img, nj_field_lookup(vm,
+                "javax/microedition/lcdui/Image", "imgPixels", "[I", 0));
+            int write, test;
+            a[0].r = cam; a[1].r = xf;
+            call(vm, g3d, CLS("Graphics3D"), "setCamera",
+                 "(L" CLS("Camera") ";L" CLS("Transform") ";)V", a, NULL);
+            ((nj_s4 *)nj_array_data(lengths))[0] = 3;
+            a[0].i = 0; a[1].r = lengths;
+            check(nj_call_special(vm, ib, CLS("TriangleStripArray"), "<init>",
+                  "(I[I)V", a, &r) == NJ_OK, "depth regression triangle constructs");
+            a[0].r = cm;
+            call(vm, app, CLS("Appearance"), "setCompositingMode",
+                 "(L" CLS("CompositingMode") ";)V", a, NULL);
+            a[0].r = material;
+            call(vm, app, CLS("Appearance"), "setMaterial",
+                 "(L" CLS("Material") ";)V", a, NULL);
+            a[0].r = vb; a[1].r = ib; a[2].r = app;
+            check(nj_call_special(vm, mesh, CLS("Mesh"), "<init>",
+                  "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                  CLS("Appearance") ";)V", a, &r) == NJ_OK,
+                  "depth regression mesh constructs");
+            for (write = 0; write <= 1; write++) {
+                for (test = 0; test <= 1; test++) {
+                    nj_s2 *d = (nj_s2 *)nj_array_data(data);
+                    const nj_u4 *p;
+                    a[0].r = clear_bg;
+                    call(vm, g3d, CLS("Graphics3D"), "clear",
+                         "(L" CLS("Background") ";)V", a, NULL);
+                    a[0].i = 1;
+                    call(vm, cm, CLS("CompositingMode"), "setDepthTestEnable", "(Z)V", a, NULL);
+                    a[0].i = write;
+                    call(vm, cm, CLS("CompositingMode"), "setDepthWriteEnable", "(Z)V", a, NULL);
+                    for (k = 0; k < 9; k++) { d[k] = pos[k] / 2; }
+                    a[0].i = 2048; a[1].i = (nj_s4)0xFFFF0000u;
+                    call(vm, material, CLS("Material"), "setColor", "(II)V", a, NULL);
+                    a[0].r = mesh; a[1].r = xf;
+                    call(vm, g3d, CLS("Graphics3D"), "render",
+                         "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+                    p = (const nj_u4 *)nj_array_data(pixels);
+                    check((p[9 * 16 + 6] & 0xFFFFFFu) == 0xFF0000u,
+                          "near surface covers the overlap pixel");
+                    a[0].i = test;
+                    call(vm, cm, CLS("CompositingMode"), "setDepthTestEnable", "(Z)V", a, NULL);
+                    a[0].i = 1;
+                    call(vm, cm, CLS("CompositingMode"), "setDepthWriteEnable", "(Z)V", a, NULL);
+                    for (k = 0; k < 9; k++) { d[k] = pos[k]; }
+                    a[0].i = 2048; a[1].i = (nj_s4)0xFF00FF00u;
+                    call(vm, material, CLS("Material"), "setColor", "(II)V", a, NULL);
+                    a[0].r = mesh; a[1].r = xf;
+                    call(vm, g3d, CLS("Graphics3D"), "render",
+                         "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+                    p = (const nj_u4 *)nj_array_data(pixels);
+                    check((p[9 * 16 + 6] & 0xFFFFFFu) ==
+                          (write && test ? 0xFF0000u : 0x00FF00u),
+                          "depth test and depth write independently control occlusion");
+                }
+            }
+        }
     }
     nj_clear_exception(vm);
     /* A background image is sampled through its crop, with independent
