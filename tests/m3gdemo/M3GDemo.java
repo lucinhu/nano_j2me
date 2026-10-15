@@ -285,9 +285,16 @@ public class M3GDemo extends MIDlet {
 
         run("VertexArray and VertexBuffer", new Runnable() {
             public void run() {
-                VertexArray va = new VertexArray(3, 4, 2);
-                byte[] data = new byte[3 * 4 * 2];
+                VertexArray va = new VertexArray(4, 3, 2);
+                short[] data = new short[4 * 3];
                 va.set(0, 4, data);
+                boolean invalidRange = false;
+                try {
+                    va.set(1, 4, data);
+                } catch (IllegalArgumentException expected) {
+                    invalidRange = true;
+                }
+                check("a write beyond the vertex count is rejected", invalidRange);
                 /* the third argument is the component SIZE in bytes and the
                  * type is derived from it (JSR 184: BYTE 0, SHORT 1, FIXED 2) */
                 check("a two-byte component is a SHORT (type="
