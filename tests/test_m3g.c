@@ -60,6 +60,124 @@ static void call(nj_vm *vm, nj_ref o, const char *cls, const char *name,
     }
 }
 
+/* Exercise camera clipping through the same mutable Image / Graphics3D API
+ * as the scene rendering tests. Positions use half-unit shorts so z=-0.5 is
+ * represented exactly, and rejected geometry must leave BOTH buffers alone. */
+static void clip_draw(nj_vm *vm, nj_ref g3d, nj_ref vb, nj_ref ib, nj_ref app,
+                      nj_ref data, const nj_s2 pos[9], nj_u4 colour)
+{
+    nj_value a[5];
+
+    memcpy(nj_array_data(data), pos, 9 * sizeof(*pos));
+    a[0].i = (nj_s4)colour;
+    call(vm, vb, CLS("VertexBuffer"), "setDefaultColor", "(I)V", a, NULL);
+    a[0].r = vb; a[1].r = ib; a[2].r = app; a[3].r = 0; a[4].i = 0;
+    call(vm, g3d, CLS("Graphics3D"), "render",
+         "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+         CLS("Appearance") ";L" CLS("Transform") ";I)V", a, NULL);
+}
+
+static void test_camera_clip(nj_vm *vm)
+{
+    const nj_s2 background[9] = {-12,-12,-6, 12,-12,-6, 0,12,-6};
+    const nj_s2 crossing[9] = {-2,-2,-4, 2,-2,-4, 0,2,2};
+    const nj_s2 legal[9] = {-2,-2,-4, 2,-2,-4, 0,2,-4};
+    const nj_s2 before_near[9] = {-2,-2,-1, 2,-2,-1, 0,2,-1};
+    const nj_s2 beyond_far[9] = {-20,-20,-40, 20,-20,-40, 0,20,-40};
+    nj_ref g3d = nj_object_new(vm, CLS("Graphics3D"));
+    nj_ref cam = make(vm, CLS("Camera")), xf = make(vm, CLS("Transform"));
+    nj_ref va = nj_object_new(vm, CLS("VertexArray"));
+    nj_ref vb = make(vm, CLS("VertexBuffer"));
+    nj_ref app = make(vm, CLS("Appearance")), poly = make(vm, CLS("PolygonMode"));
+    nj_ref bg = make(vm, CLS("Background"));
+    nj_ref ib = nj_object_new(vm, CLS("TriangleStripArray"));
+    nj_ref lengths = nj_array_new(vm, "I", 1u);
+    nj_ref data = nj_array_new(vm, "S", 9u), img, pixels, depth;
+    nj_value a[8], r;
+    int mode, rejected, k;
+
+    a[0].i = 240; a[1].i = 320; r.r = 0;
+    check(nj_call_static(vm, "javax/microedition/lcdui/Image", "createImage",
+          "(II)Ljavax/microedition/lcdui/Image;", a, &r) == NJ_OK && r.r,
+          "camera clip mutable image constructs");
+    img = r.r;
+    a[0].i = 3; a[1].i = 3; a[2].i = 2;
+    check(nj_call_special(vm, va, CLS("VertexArray"), "<init>", "(III)V", a, NULL) == NJ_OK,
+          "camera clip vertex array constructs");
+    a[0].i = 0; a[1].i = 3; a[2].r = data;
+    call(vm, va, CLS("VertexArray"), "set", "(II[S)V", a, NULL);
+    /* VertexArray.set copies its input; mutate its backing array per draw. */
+    data = nj_rget(vm, va, nj_field_lookup(vm, CLS("VertexArray"), "_nj_data", "[S", 0));
+    a[0].r = va; a[1].f = 0.5f; a[2].r = 0;
+    call(vm, vb, CLS("VertexBuffer"), "setPositions", "(L" CLS("VertexArray") ";F[F)V", a, NULL);
+    ((nj_s4 *)nj_array_data(lengths))[0] = 3;
+    a[0].i = 0; a[1].r = lengths;
+    check(nj_call_special(vm, ib, CLS("TriangleStripArray"), "<init>", "(I[I)V", a, NULL) == NJ_OK,
+          "camera clip index buffer constructs");
+    a[0].i = 162;
+    call(vm, poly, CLS("PolygonMode"), "setCulling", "(I)V", a, NULL);
+    a[0].r = poly;
+    call(vm, app, CLS("Appearance"), "setPolygonMode", "(L" CLS("PolygonMode") ";)V", a, NULL);
+    call(vm, img, "javax/microedition/lcdui/Image", "getGraphics",
+         "()Ljavax/microedition/lcdui/Graphics;", NULL, &r);
+    a[0].r = r.r;
+    call(vm, g3d, CLS("Graphics3D"), "bindTarget", "(Ljava/lang/Object;)V", a, NULL);
+    a[0].i = 0; a[1].i = 0; a[2].i = 240; a[3].i = 320;
+    call(vm, g3d, CLS("Graphics3D"), "setViewport", "(IIII)V", a, NULL);
+    pixels = nj_rget(vm, img, nj_field_lookup(vm, "javax/microedition/lcdui/Image", "imgPixels", "[I", 0));
+
+    for (mode = 0; mode < 3; mode++) {
+        const nj_u4 *p;
+        cam = make(vm, CLS("Camera"));
+        a[0].f = mode == 2 ? 4.0f : 90.0f;
+        a[1].f = 1.0f; a[2].f = 1.0f; a[3].f = 10.0f;
+        call(vm, cam, CLS("Camera"), mode == 2 ? "setParallel" : "setPerspective", "(FFFF)V", a, NULL);
+        if (mode == 1) {
+            a[0].r = xf;
+            call(vm, cam, CLS("Camera"), "getProjection", "(L" CLS("Transform") ";)I", a, &r);
+            call(vm, cam, CLS("Camera"), "setGeneric", "(L" CLS("Transform") ";)V", a, NULL);
+        }
+        a[0].r = cam; a[1].r = 0;
+        call(vm, g3d, CLS("Graphics3D"), "setCamera", "(L" CLS("Camera") ";L" CLS("Transform") ";)V", a, NULL);
+        a[0].r = bg;
+        call(vm, g3d, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V", a, NULL);
+        clip_draw(vm, g3d, vb, ib, app, data, background, 0xFF0000FFu);
+        p = (const nj_u4 *)nj_array_data(pixels);
+        check((p[160 * 240 + 120] & 0xFFFFFFu) == 0x0000FFu,
+              "legal background renders with camera projection");
+        if (mode != 2) {
+            clip_draw(vm, g3d, vb, ib, app, data, crossing, 0xFF808080u);
+            check((p[160 * 240 + 120] & 0xFFFFFFu) == 0x0000FFu,
+                  "near-plane crossing leaves the centre blue");
+            check((p[212 * 240 + 120] & 0xFFFFFFu) == 0x0000FFu &&
+                  (p[220 * 240 + 120] & 0xFFFFFFu) == 0x808080u &&
+                  (p[239 * 240 + 120] & 0xFFFFFFu) == 0x808080u &&
+                  (p[241 * 240 + 120] & 0xFFFFFFu) == 0x0000FFu,
+                  "near-plane crossing retains only the bottom trapezoid");
+        }
+        for (rejected = 0; rejected < 2; rejected++) {
+            int colour_clean = 1, depth_clean = 1;
+            const nj_u4 *z;
+            a[0].r = bg;
+            call(vm, g3d, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V", a, NULL);
+            clip_draw(vm, g3d, vb, ib, app, data,
+                      rejected ? beyond_far : before_near, 0xFF808080u);
+            depth = nj_rget(vm, g3d, nj_field_lookup(vm, CLS("Graphics3D"), "_nj_zbuf", "[I", 0));
+            z = depth ? (const nj_u4 *)nj_array_data(depth) : NULL;
+            for (k = 0; k < 240 * 320; k++) {
+                if ((p[k] & 0xFFFFFFu) != 0) { colour_clean = 0; }
+                if (!z || z[k] != 0) { depth_clean = 0; }
+            }
+            check(colour_clean, rejected ? "beyond far writes no colour" : "before near writes no colour");
+            check(depth_clean, rejected ? "beyond far writes no depth" : "before near writes no depth");
+            clip_draw(vm, g3d, vb, ib, app, data, legal, 0xFF00FF00u);
+            check((p[160 * 240 + 120] & 0xFFFFFFu) == 0x00FF00u,
+                  "legal geometry still renders after rejected geometry");
+        }
+    }
+    call(vm, g3d, CLS("Graphics3D"), "releaseTarget", "()V", NULL, NULL);
+}
+
 int main(void)
 {
     nj_port port;
@@ -1316,6 +1434,7 @@ int main(void)
         check(nj_m3g_collect_meshes(vm, cam, found, 4u) == 0u,
               "and a camera is not walked as a container");
     }
+    test_camera_clip(vm);
     /* ---- render() really draws the world into the bound target --------- */
     {
         nj_ref img, gr, cam, xf, world, grp, mesh, va, vb, data, rgb, one, g3d;

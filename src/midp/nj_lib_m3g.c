@@ -2755,6 +2755,15 @@ static int cam_proj_fill(nj_vm *vm, nj_ref self, float *out)
         out[11] = -(2.0f * far * near) / (far - near);
         out[14] = -1.0f;
         out[15] = 0.0f;
+    } else {
+        float height = bits2f(nj_iget(vm, self,
+            nj_field_lookup(vm, NJ_C_CAMERA, "_nj_height", "I", 0)));
+
+        if (height == 0.0f) { height = 2.0f; }
+        out[0] = 2.0f / (height * aspect);
+        out[5] = 2.0f / height;
+        out[10] = -2.0f / (far - near);
+        out[11] = -(far + near) / (far - near);
     }
     return 1;
 }
@@ -9484,7 +9493,7 @@ static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
 }
 
 /*
- * A point on the near plane.  Every attribute is linear in camera space, so
+ * A point on a clip plane.  Every attribute is linear in camera space, so
  * the cut vertex is a weighted sum of the two ends - and its screen position
  * comes from projecting the interpolated camera-space point, not from
  * interpolating two projected ones (which is not linear).
@@ -9575,62 +9584,58 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
     }
 }
 
-/*
- * The near-plane clip.  A racing title's ground passes under and behind the
- * camera every frame; without the clip the vertices behind the eye project to
- * enormous coordinates - one measured ground mesh spanned 338,000 pixels -
- * and the triangles that make up the road are thrown away, which is what
- * "the scene is not there" looked like.  A triangle with one vertex behind
- * the eye becomes one or two triangles, cut at the plane.
- */
+/* The projection's depth half-spaces, in camera coordinates. Using the
+ * actual z and w rows also handles parallel and caller-supplied projections. */
+static float jr_clip_distance(const float m[16], const jr_vtx *v, int plane)
+{
+    const float *p = v->pe;
+    float z = m[8] * p[0] + m[9] * p[1] + m[10] * p[2] + m[11];
+    float w = m[12] * p[0] + m[13] * p[1] + m[14] * p[2] + m[15];
+
+    return plane == 0 ? w + z : w - z;
+}
+
+/* Clip before rasterisation: jr_project only divides x/y by w. Clipping a
+ * convex polygon against one plane adds at most one vertex, so a triangle
+ * needs at most four vertices after near and five after far. Both workspaces
+ * are bounded stack arrays; jr_blend interpolates attributes and reprojects
+ * every new camera-space intersection. */
 static void jr_triangle_v(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
                           const jr_vtx *v2)
 {
-    const float near_eps = 0.05f;
-    const jr_vtx *src[3];
-    jr_vtx poly[8];
-    jr_vtx cut[3];
-    float d[3];
-    int inside[3];
-    int n = 0, nin = 0, k;
+    jr_vtx poly[2][5];
+    int n = 3, plane, k;
 
-    src[0] = v0; src[1] = v1; src[2] = v2;
-    for (k = 0; k < 3; k++) {
-        d[k] = -src[k]->pe[2];
-        inside[k] = (d[k] >= near_eps);
-        nin += inside[k];
-    }
-    if (nin == 0) {
-        return;
-    }
-    if (nin == 3) {
-        poly[0] = *v0;
-        poly[1] = *v1;
-        poly[2] = *v2;
-        n = 3;
-    } else {
-        for (k = 0; k < 3; k++) {
-            int j = (k + 1) % 3;
+    poly[0][0] = *v0; poly[0][1] = *v1; poly[0][2] = *v2;
+    for (plane = 0; plane < 2; plane++) {
+        const jr_vtx *src = poly[plane];
+        jr_vtx *dst = poly[1 - plane];
+        int count = 0;
 
-            if (inside[k]) {
-                poly[n++] = *src[k];
+        for (k = 0; k < n; k++) {
+            int j = (k + 1) % n;
+            float d0 = jr_clip_distance(r->proj, &src[k], plane);
+            float d1 = jr_clip_distance(r->proj, &src[j], plane);
+            int in0 = d0 >= 0.0f, in1 = d1 >= 0.0f;
+
+            if (in0) {
+                dst[count++] = src[k];
             }
-            if (inside[k] != inside[j]) {
-                float t = (near_eps - d[k]) / (d[j] - d[k]);
+            if (in0 != in1) {
+                float t = d0 / (d0 - d1);
 
                 if (t < 0.0f) { t = 0.0f; }
                 if (t > 1.0f) { t = 1.0f; }
-                jr_blend(r, src[k], src[j], t, &cut[k]);
-                poly[n++] = cut[k];
+                jr_blend(r, &src[k], &src[j], t, &dst[count++]);
             }
         }
+        n = count;
+        if (n < 3) {
+            return;
+        }
     }
-    if (n < 3) {
-        return;
-    }
-    jr_emit(r, &poly[0], &poly[1], &poly[2]);
-    for (k = 3; k < n; k++) {
-        jr_emit(r, &poly[0], &poly[k - 1], &poly[k]);
+    for (k = 2; k < n; k++) {
+        jr_emit(r, &poly[0][0], &poly[0][k - 1], &poly[0][k]);
     }
 }
 
