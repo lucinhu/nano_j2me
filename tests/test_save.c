@@ -324,6 +324,166 @@ done:
     if (state) { fclose(state); }
 }
 
+/* Native resources cannot cross an arena snapshot, even for a Player which
+ * has not started and is absent from media_players.  Deliberately invalid
+ * pointer bytes make an accidental close deterministic instead of depending
+ * on a previous process's allocator layout. */
+#define TEST_PLAYER "javax/microedition/media/Player"
+static int restored_media_host_calls;
+static void restored_media_handle(void *ud, void *handle)
+{
+    (void)ud;
+    (void)handle;
+    restored_media_host_calls++;
+}
+static void restored_media_pcm(void *ud)
+{
+    (void)ud;
+    restored_media_host_calls++;
+}
+static void media_test_int(nj_vm *vm, nj_ref p, const char *name,
+                           const char *desc, int value)
+{
+    nj_field *f = find_field(vm, TEST_PLAYER, name, desc, 0);
+    CHECK(f != NULL, "Player test field exists");
+    if (f) { nj_field_write_int_fast(vm, p, f, value); }
+}
+static void media_test_ref(nj_vm *vm, nj_ref p, const char *name,
+                           const char *desc, nj_ref value)
+{
+    nj_field *f = find_field(vm, TEST_PLAYER, name, desc, 0);
+    CHECK(f != NULL, "Player reference test field exists");
+    if (f) { nj_field_write_ref(vm, p, f, value); }
+}
+static void test_restored_media(nj_port *base, const nj_u1 *jar, nj_u4 jar_len)
+{
+    nj_port port = *base;
+    nj_vm *source = NULL, *target = NULL;
+    nj_app *source_app = NULL, *target_app = NULL;
+    nj_ref players[4] = {NULL, NULL, NULL, NULL};
+    nj_ref handles[4] = {NULL, NULL, NULL, NULL};
+    nj_ref roots = NULL, vector, tones, sequence;
+    FILE *state = tmpfile();
+    int i;
+    void *poison = (void *)(uintptr_t)1u;
+
+    port.midi_stop = restored_media_handle;
+    port.midi_close = restored_media_handle;
+    port.pcm_close = restored_media_pcm;
+    /* No new device is available in this test; any close targets the stale
+     * pre-snapshot ownership, not a legitimately reopened output device. */
+    port.pcm_open = NULL;
+    source = nj_vm_create(&port, HEAP_BYTES);
+    CHECK(source && state, "media snapshot setup");
+    if (!source || !state) { goto done; }
+    CHECK(start_fixture(source, jar, jar_len, &source_app),
+          "media snapshot fixture starts");
+    source->gc_disabled = 1u;
+    vector = field_child_b(source);
+    roots = nj_array_new(source, "Ljava/lang/Object;", 4u);
+    CHECK(vector && roots, "media snapshot root vector exists");
+    if (!vector || !roots) { goto done; }
+    nj_field_write_ref(source, vector,
+        find_field(source, "java/util/Vector", "elementData",
+                   "[Ljava/lang/Object;", 0), roots);
+    nj_field_write_int_fast(source, vector,
+        find_field(source, "java/util/Vector", "elementCount", "I", 0), 4);
+    for (i = 0; i < 4; i++) {
+        players[i] = nj_object_new(source, TEST_PLAYER);
+        handles[i] = nj_array_new(source, "B", i == 0 ? 16384u + sizeof(void *) : 16u);
+        CHECK(players[i] && handles[i], "media snapshot Player allocated");
+        if (!players[i] || !handles[i]) { goto done; }
+        roots->u.refs[i] = players[i];
+        memcpy(handles[i]->u.bytes, &poison, sizeof(poison));
+        media_test_int(source, players[i], "pState", "I", i == 0 ? 300 : 400);
+        media_test_int(source, players[i], "pKind", "I", i == 3 ? 0 : 1);
+        media_test_int(source, players[i], "pFrames", "I", 8);
+        media_test_int(source, players[i], "pOpen", "Z", 1);
+        media_test_int(source, players[i], "pLoopCount", "I", 1);
+        if (i < 3) {
+            media_test_ref(source, players[i], "pData", "[B", handles[i]);
+        }
+    }
+    media_test_int(source, players[0], "pStream", "Z", 1);
+    media_test_int(source, players[1], "pPlat", "Z", 1);
+    media_test_ref(source, players[1], "pMidi", "[B", handles[1]);
+    tones = nj_array_new(source, "I", 2u);
+    sequence = nj_array_new(source, "B", 2u);
+    CHECK(tones && sequence, "heap-only tone resources exist");
+    media_test_ref(source, players[3], "pSeq", "[B", sequence);
+    media_test_ref(source, players[3], "pTones", "[I", tones);
+    media_test_int(source, players[3], "pNTones", "I", 1);
+    /* No Player is registered, including the unstarted MIDI stream. */
+    CHECK(source->media_players == NULL, "Players are outside pump registry");
+    source->gc_disabled = 0u;
+    restored_media_host_calls = 0;
+    CHECK(nj_vm_save(source, state) == NJ_OK, "save Player native handle snapshot");
+    CHECK(restored_media_host_calls == 0, "save does not stop source audio");
+    CHECK(obj_ref_field(source, players[0], TEST_PLAYER, "pData", "[B") == handles[0]
+          && obj_int_field(source, players[0], TEST_PLAYER, "pStream", "Z") == 1,
+          "save preserves source stream ownership");
+    CHECK(obj_ref_field(source, players[1], TEST_PLAYER, "pMidi", "[B") == handles[1]
+          && obj_int_field(source, players[1], TEST_PLAYER, "pPlat", "Z") == 1
+          && obj_int_field(source, players[2], TEST_PLAYER, "pOpen", "Z") == 1,
+          "save preserves source platform and PCM ownership");
+    target = nj_vm_create(&port, HEAP_BYTES);
+    CHECK(target != NULL, "media restore VM exists");
+    if (!target) { goto done; }
+    target_app = nj_app_open(target, jar, jar_len);
+    CHECK(target_app != NULL, "media restore attaches fixture");
+    rewind(state);
+    CHECK(nj_vm_load(target, state) == NJ_OK, "load Player native handle snapshot");
+    CHECK(restored_media_host_calls == 0, "load never closes saved host pointers");
+    CHECK(target->media_players == NULL, "restored audio pump starts empty");
+    for (i = 0; i < 4; i++) {
+        nj_ref p = vector_at(target, field_child_b(target), (nj_u4)i);
+        CHECK(p && obj_int_field(target, p, TEST_PLAYER, "pOpen", "Z") == 0
+              && obj_int_field(target, p, TEST_PLAYER, "pStream", "Z") == 0
+              && obj_int_field(target, p, TEST_PLAYER, "pPlat", "Z") == 0,
+              "all restored Players forget external ownership");
+        if (!p) { continue; }
+        if (i < 2) {
+            CHECK(obj_ref_field(target, p, TEST_PLAYER, "pData", "[B") == NULL
+                  && obj_ref_field(target, p, TEST_PLAYER, "pMidi", "[B") == NULL,
+                  "restored native songs forget pointer containers");
+            CHECK(nj_call(target, p, TEST_PLAYER, "start", "()V", NULL, NULL) == NJ_OK,
+                  "restored native song can start silently");
+            CHECK(nj_call(target, p, TEST_PLAYER, "stop", "()V", NULL, NULL) == NJ_OK,
+                  "restored native song can stop safely");
+        } else if (i == 2) {
+            nj_ref pcm = obj_ref_field(target, p, TEST_PLAYER, "pData", "[B");
+            CHECK(pcm && pcm->length == 16u
+                  && memcmp(pcm->u.bytes, &poison, sizeof(poison)) == 0,
+                  "restore preserves ordinary PCM bytes");
+        } else {
+            CHECK(obj_ref_field(target, p, TEST_PLAYER, "pSeq", "[B") != NULL
+                  && obj_ref_field(target, p, TEST_PLAYER, "pTones", "[I") != NULL
+                  && obj_int_field(target, p, TEST_PLAYER, "pNTones", "I") == 1,
+                  "restore preserves heap-only tone sequence");
+        }
+        CHECK(nj_call(target, p, TEST_PLAYER, "deallocate", "()V", NULL, NULL) == NJ_OK,
+              "restored Player deallocates without stale handle");
+        CHECK(nj_call(target, p, TEST_PLAYER, "close", "()V", NULL, NULL) == NJ_OK,
+              "restored Player closes without stale handle");
+    }
+    CHECK(restored_media_host_calls == 0, "restored lifecycle never uses old host resources");
+    CHECK(nj_gc_run(target) == NJ_OK, "GC after restored Player teardown succeeds");
+ done:
+    /* These source fixtures intentionally contain invalid pointers.  Forget
+     * them only AFTER checking save left the source unchanged. */
+    if (source) {
+        for (i = 0; i < 4; i++) {
+            if (players[i]) { nj_media_restore_object(source, players[i]); }
+        }
+        source->media_players = NULL;
+    }
+    if (target_app) { nj_app_close(target, target_app); }
+    nj_vm_destroy(target);
+    if (source_app) { nj_app_close(source, source_app); }
+    nj_vm_destroy(source);
+    if (state) { fclose(state); }
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -660,6 +820,7 @@ after_vm_b:
     }
 
     test_large_heap(&port, jar, jar_len);
+    test_restored_media(&port, jar, jar_len);
 
     /* ---- teardown ---------------------------------------------------- */
     if (app_a) {

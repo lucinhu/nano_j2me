@@ -238,6 +238,48 @@ static void w_r(nj_vm *vm, nj_ref o, const char *name, const char *desc,
 }
 
 /*
+ * A restored arena contains byte arrays with pointers from another process.
+ * Forget them without closing or dereferencing them.  Called for EVERY arena
+ * object before restore enables GC, including Players never registered by
+ * start().  Native songs become silent, empty sampled Players: closing them
+ * here would make the game's next start() throw instead of resuming.  PCM and
+ * tone data live entirely in the arena and survive, with device output stopped.
+ * This only edits the destination VM; saving must leave its source playing.
+ */
+void nj_media_restore_object(nj_vm *vm, nj_ref player)
+{
+    nj_class *c;
+
+    if (!player || player->kind != NJ_OBJ_PLAIN) {
+        return;
+    }
+    for (c = player->cls; c; c = c->super) {
+        if (strcmp(c->name, NJ_C_PLAYER) == 0) {
+            int native_song = r_z(vm, player, F_P_STREAM) ||
+                              r_z(vm, player, F_P_PLAT);
+            if (native_song) {
+                w_r(vm, player, F_P_DATA, "[B", NULL);
+                w_z(vm, player, F_P_MUTED, 1);
+                w_i(vm, player, F_P_KIND, 1);
+                w_i(vm, player, F_P_FRAMES, 0);
+                w_j(vm, player, F_P_TIME, 0);
+                w_j(vm, player, F_P_DURATION, 0);
+            }
+            w_r(vm, player, F_P_MIDI, "[B", NULL);
+            w_z(vm, player, F_P_STREAM, 0);
+            w_z(vm, player, F_P_PLAT, 0);
+            w_z(vm, player, F_P_OPEN, 0);
+            w_i(vm, player, F_P_PUSHED, 0);
+            w_i(vm, player, F_P_LOOPDONE, 0);
+            if (r_i(vm, player, F_P_STATE) == 400) {
+                w_i(vm, player, F_P_STATE, 300);
+            }
+            return;
+        }
+    }
+}
+
+/*
  * Control fields are looked up on the CONTROL's class, not on Player.
  *
  * The r_r/w_r helpers above are hardcoded to NJ_C_PLAYER because almost every

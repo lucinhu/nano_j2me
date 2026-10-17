@@ -728,9 +728,12 @@ static int hl_display_init(void *ud, int *w, int *h, int *stride, void **pixels)
 #else
     s->stride = s->width * 2;
 #endif
-    s->pixels = calloc(1u, (size_t)s->stride * (size_t)s->height);
+    /* The port owns one display, also when another VM restores onto it. */
     if (!s->pixels) {
-        return -1;
+        s->pixels = calloc(1u, (size_t)s->stride * (size_t)s->height);
+        if (!s->pixels) {
+            return -1;
+        }
     }
     *w = s->width;
     *h = s->height;

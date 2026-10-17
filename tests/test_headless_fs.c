@@ -89,6 +89,24 @@ int main(int argc, char **argv)
     port.fps_cap = 0;
     port.rms_dir = RMS_DIR;
 
+    /* Reusing the port for another VM must not replace or leak its display. */
+    {
+        int w1 = 0, h1 = 0, stride1 = 0, w2 = 0, h2 = 0, stride2 = 0;
+        void *pixels1 = NULL, *pixels2 = NULL;
+        int fmt1 = port.display_init(port.ud, &w1, &h1, &stride1, &pixels1);
+        int fmt2;
+        ok(fmt1 >= 0 && pixels1 != NULL, "display initializes successfully");
+        if (pixels1) { ((unsigned char *)pixels1)[0] = 0x5a; }
+        fmt2 = port.display_init(port.ud, &w2, &h2, &stride2, &pixels2);
+        ok(fmt2 == fmt1 && pixels2 == pixels1 && pixels2 != NULL,
+           "repeated display initialization keeps the owned buffer");
+        ok(w1 == 176 && h1 == 208 && w2 == w1 && h2 == h1 && stride2 == stride1,
+           "repeated display initialization keeps its geometry");
+        ok(pixels2 && ((unsigned char *)pixels2)[0] == 0x5a,
+           "repeated display initialization preserves live pixels");
+        if (pixels2) { ((unsigned char *)pixels2)[0] = 0; }
+    }
+
     memset(&opts, 0, sizeof(opts));
     opts.jar_path = argv[1];
     opts.heap_bytes = 4u * 1024u * 1024u;

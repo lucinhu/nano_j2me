@@ -1196,6 +1196,10 @@ int       nj_trace_enabled(nj_vm *vm);
 #endif
 void      nj_logf(nj_vm *vm, int level, const char *fmt, ...);
 
+/* Forget nonportable Player handles in a restored object, without closing them.
+ * The loader calls this after reference fixups and before enabling GC. */
+void      nj_media_restore_object(nj_vm *vm, nj_ref object);
+
 /*
  * NOTE: there is intentionally no nj_vm_current()/nj_vm_set_current().
  * The runtime keeps zero mutable global state, so several nj_vm instances can

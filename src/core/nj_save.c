@@ -65,6 +65,17 @@
 #include <stdlib.h>   /* getenv, for NJ_SAVE_DEBUG */
 #include <string.h>
 
+/* Restore walks all objects: unstarted Players are absent from the audio pump
+ * registry but can still own native MIDI streams.  No saved handle may reach
+ * resumed Java code or the first GC sweep. */
+static int restore_native_object(nj_vm *vm, nj_ref object, nj_u4 offset, void *ud)
+{
+    (void)offset;
+    (void)ud;
+    nj_media_restore_object(vm, object);
+    return 1;
+}
+
 /* ------------------------------------------------------------------ */
 /* Blob constants                                                      */
 /* ------------------------------------------------------------------ */
@@ -2055,6 +2066,12 @@ int nj_vm_load(nj_vm *vm, FILE *f)
             NJ_LOAD_FAIL(NJ_ERR_FORMAT);      /* a surface with no geometry */
         }
     }
+    if (arena_walk(vm, restore_native_object, NULL, NULL) != NJ_OK) {
+        goto fail;
+    }
+    /* Playback resources are deliberately not part of a snapshot. */
+    vm->media_players = NULL;
+
     /*
      * Last of all, mark the classes whose <clinit> had already run in the
      * saved VM as READY, so a restored program does not initialize them a
