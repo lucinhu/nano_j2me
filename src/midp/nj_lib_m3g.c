@@ -176,12 +176,13 @@ static nj_u4 m3g_node_data(const nj_u1 *data, nj_u4 len)
  */
 #define NJ_M3G_TYPE_EXTERNAL_REF 255u
 /*
- * Every object's data starts with twelve bytes before its own fields: the
- * userID, then eight bytes that are zero in all 36859 objects in the corpus.
- * Measured the same way as everything else here - the first attempt assumed
- * eight and read a PolygonMode's culling as 0 instead of 162.
+ * An Object3D header has at least twelve bytes: userID, animation-track
+ * count, and user-parameter count. Nonempty lists extend it; type decoders
+ * use offsets relative to this minimum after m3g_object_header_size skips
+ * those lists. Header objects and external references have their own layout.
  */
 #define NJ_M3G_OBJECT_HEADER     12u
+#define NJ_M3G_T_ANIMATION_TRACK  2u
 #define NJ_M3G_T_GROUP        9u
 #define NJ_M3G_T_POLYGON_MODE     8u
 #define NJ_M3G_T_IMAGE2D         10u
@@ -400,6 +401,29 @@ static void m3g_image_texel(nj_u4 fmt, const nj_u1 *s, nj_u1 *out)
     }
 }
 
+/* Object3D: userID, AnimationTrack indices, then length-prefixed user
+ * parameters. Subtraction bounds each count before multiplying or advancing. */
+static nj_u4 m3g_object_header_size(const nj_u1 *data, nj_u4 len)
+{
+    nj_u4 at, count, i;
+    if (len < 12u) { return 0u; }
+    count = le32(data + 4u);
+    if (count > (len - 12u) / 4u) { return 0u; }
+    at = 8u + 4u * count;
+    count = le32(data + at);
+    at += 4u;
+    if (count > (len - at) / 8u) { return 0u; }
+    for (i = 0u; i < count; i++) {
+        nj_u4 size;
+        if (len - at < 8u) { return 0u; }
+        size = le32(data + at + 4u);
+        at += 8u;
+        if (size > len - at) { return 0u; }
+        at += size;
+    }
+    return at;
+}
+
 nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
                                nj_m3g_fields *out, char *err, nj_u4 errcap)
 {
@@ -420,6 +444,15 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
                  (unsigned)type, (unsigned long)len);
     }
     out->user_id = le32(data);
+    {
+        nj_u4 header = m3g_object_header_size(data, len);
+        if (!header) { M3G_FAIL("truncated Object3D header"); }
+        /* The type decoders address their payload relative to the minimal
+         * twelve-byte header. Keep those offsets while skipping variable
+         * animation/user data; no payload copy is needed. */
+        data += header - NJ_M3G_OBJECT_HEADER;
+        len -= header - NJ_M3G_OBJECT_HEADER;
+    }
     /*
      * A Node's transform sits at byte 16 when bit 0 of the enable byte says so
      * (byte 12 is the enable byte, 13-15 the alpha/picking/rendering flags,
@@ -441,6 +474,12 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
     }
 
     switch (type) {
+    case NJ_M3G_T_ANIMATION_TRACK: /* sequence, controller, property */
+        if (len < 24u) { M3G_FAIL("truncated AnimationTrack"); }
+        out->refs[0] = le32(data + 12u);
+        out->refs[1] = le32(data + 16u);
+        out->nrefs = 2u;
+        break;
     case NJ_M3G_T_POLYGON_MODE:      /* three enumeration bytes */
         if (len < NJ_M3G_OBJECT_HEADER + 3u) {
             M3G_FAIL("a PolygonMode is %lu byte(s)", (unsigned long)len);
@@ -941,6 +980,9 @@ static void m3g_free_refs(nj_vm *vm, nj_m3g_object *objs, nj_u4 nobj)
     for (i = 0u; i < nobj; i++) {
         nj_host_free(vm, objs[i].fields.owned_data);
         objs[i].fields.owned_data = NULL;
+        nj_host_free(vm, objs[i].fields.animation_refs);
+        objs[i].fields.animation_refs = NULL;
+        objs[i].fields.nanimation_refs = 0u;
         if (objs[i].fields.extra != NULL) {
             nj_host_free(vm, objs[i].fields.extra);
             objs[i].fields.extra = NULL;
@@ -1031,6 +1073,28 @@ nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
                                   ? 0u : le32(body + at + 5u);
                 {
                     nj_m3g_fields *f = &out[nobj].fields;
+                    nj_u4 header = type == NJ_M3G_TYPE_EXTERNAL_REF ? 0u
+                        : m3g_object_header_size(body + at + 5u, olen);
+                    /* Report initialized entries even on a later allocation or
+                     * framing failure, so callers can release every owned list. */
+                    if (count) { *count = nobj + 1u; }
+                    if (header) {
+                        nj_u4 k, tracks = le32(body + at + 9u);
+                        if (tracks) {
+                            f->animation_refs = (nj_u4 *)nj_host_alloc(
+                                vm, (nj_size)tracks * sizeof(nj_u4));
+                            if (!f->animation_refs) {
+                                M3G_SCAN_FAIL("out of host memory for animation references");
+                            }
+                            f->nanimation_refs = tracks;
+                            for (k = 0u; k < tracks; k++) {
+                                f->animation_refs[k] = le32(body + at + 13u + 4u * k);
+                            }
+                        }
+                        /* ref_off is relative to the decoder's adjusted data;
+                         * overflow children are copied from the original bytes. */
+                        if (f->nrefs_total) { f->ref_off += header - 12u; }
+                    }
                     if (f->data && f->data_len) {
                         f->owned_data = (nj_u1 *)nj_host_alloc(vm, f->data_len);
                         if (!f->owned_data) { M3G_SCAN_FAIL("out of host memory for object data"); }
@@ -5119,6 +5183,11 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
         nj_host_free(vm, objs);
         return nj_throw(vm, "java/io/IOException", err);
     }
+    if (nobj > cap) {
+        m3g_free_refs(vm, objs, cap);
+        nj_host_free(vm, objs);
+        return nj_throw(vm, "java/io/IOException", "too many M3G objects");
+    }
     if (nobj == 0u) {
         m3g_free_refs(vm, objs, nobj);
         nj_host_free(vm, objs);
@@ -5293,9 +5362,16 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
         }
         for (i = 0u; i < nobj; i++) {
             nj_u4 k;
-            for (k = 0u; k < objs[i].fields.nrefs; k++) {
-                m3g_mark_ref(is_ref, objs, nobj, mode, objs[i].fields.refs[k],
-                             i + 1u);
+            const nj_m3g_fields *f = &objs[i].fields;
+            nj_u4 total = f->nrefs_total ? f->nrefs_total : f->nrefs;
+            for (k = 0u; k < total; k++) {
+                m3g_mark_ref(is_ref, objs, nobj, mode, nj_m3g_ref_at(f, k), i + 1u);
+            }
+            for (k = 0u; k < f->nanimation_refs; k++) {
+                m3g_mark_ref(is_ref, objs, nobj, mode, f->animation_refs[k], i + 1u);
+            }
+            if (objs[i].type == NJ_M3G_T_MESH) {
+                m3g_mark_ref(is_ref, objs, nobj, mode, f->a, i + 1u);
             }
             if (objs[i].type == NJ_M3G_T_WORLD) {
                 /* the World's own two references are read the same way */

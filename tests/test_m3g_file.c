@@ -26,6 +26,7 @@
 #include <string.h>
 #include <zlib.h>
 #include "nj_internal.h"
+#include "nj2me/nj.h"
 
 nj_status nj_m3g_late_init(nj_vm *vm);
 
@@ -42,7 +43,7 @@ void nj_host_free(nj_vm *vm, void *p);
 
 static int checks, failures;
 static char err[256];
-static nj_u1 buf[512];
+static nj_u1 buf[1024];
 static nj_u1 ids[8];
 
 static const nj_u1 ident[12] = {
@@ -213,6 +214,7 @@ static void objects_in_a_compressed_section(void)
 #endif
 
     nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
 }
 
 /* A Texture2D has two transform flags, then twelve sampler bytes.  Use a
@@ -368,6 +370,34 @@ static void compressed_geometry_payloads(void)
         nj_host_free(vm, objs[i].fields.extra);
     }
     nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+}
+
+static void object_header_bounds(void)
+{
+    nj_u1 data[38];
+    nj_m3g_fields f;
+    memset(data, 0, sizeof(data));
+    data[0] = 73u;
+    data[4] = 1u; data[8] = 4u; /* one AnimationTrack */
+    data[12] = 1u; data[16] = 9u; data[20] = 3u; /* one user parameter */
+    data[24] = 0xa1u; data[25] = 0xa2u; data[26] = 0xa3u;
+    data[27] = 1u; data[28] = 3u; data[30] = 2u; /* VertexArray: 2 x 3 bytes */
+    memset(data + 32, 0x35, 6u);
+    ok(nj_m3g_decode_object(data, sizeof(data), 20u, &f, err, sizeof(err)) == NJ_OK &&
+       f.user_id == 73u && f.a == 1u && f.b == 3u && f.data_len == 6u &&
+       f.data && f.data[0] == 0x35u,
+       "animation and user parameters preserve VertexArray payload offsets");
+    data[4] = 0xffu; data[5] = 0xffu; data[6] = 0xffu; data[7] = 0xffu;
+    ok(nj_m3g_decode_object(data, sizeof(data), 20u, &f, err, sizeof(err)) == NJ_ERR_FORMAT,
+       "overflowing animation count is rejected before reading indices");
+    data[4] = 1u; data[5] = 0u; data[6] = 0u; data[7] = 0u;
+    data[20] = 0xffu; data[21] = 0xffu; data[22] = 0xffu; data[23] = 0xffu;
+    ok(nj_m3g_decode_object(data, sizeof(data), 20u, &f, err, sizeof(err)) == NJ_ERR_FORMAT,
+       "oversized user parameter is rejected before advancing payload");
+    data[12] = 2u; data[20] = 3u; data[21] = 0u; data[22] = 0u; data[23] = 0u;
+    ok(nj_m3g_decode_object(data, 27u, 20u, &f, err, sizeof(err)) == NJ_ERR_FORMAT,
+       "truncated user parameter table is rejected");
 }
 
 #if NJ_ENABLE_M3G
@@ -376,6 +406,118 @@ static void zip32(nj_u1 *p, nj_u4 v)
 {
     p[0] = (nj_u1)v; p[1] = (nj_u1)(v >> 8);
     p[2] = (nj_u1)(v >> 16); p[3] = (nj_u1)(v >> 24);
+}
+
+/* All geometry and animation objects are referenced; only the Group is a
+ * Loader root. File indices include the header object (first object is 2). */
+static void referenced_roots(void)
+{
+    nj_u4 at = 39u, n, data;
+    nj_port port;
+    nj_vm *vm;
+    nj_ref bytes, roots, group, mesh;
+    nj_value args[2], ret;
+    nj_status st;
+
+    start();
+    section(12, 0u, 5u, 5u, 0u);
+    object(21, 0u, 0u, 0u);
+    at += object((int)at, 19u, 12u, 0u); /* KeyframeSequence */
+    at += object((int)at, 1u, 12u, 0u);  /* AnimationController */
+    data = at + 5u;
+    at += object((int)at, 2u, 24u, 0u);  /* AnimationTrack */
+    put32le(2u, (int)data + 12); put32le(3u, (int)data + 16);
+    put32le(256u, (int)data + 20);
+    at += object((int)at, 21u, 48u, 0u); /* VertexBuffer */
+    at += object((int)at, 11u, 21u, 0u); /* TriangleStripArray */
+    at += object((int)at, 3u, 33u, 0u);  /* Appearance */
+    data = at + 5u;
+    at += object((int)at, 14u, 38u, 0u); /* Mesh */
+    put32le(0xffffffffu, (int)data + 16);
+    put32le(5u, (int)data + 22); put32le(1u, (int)data + 26);
+    put32le(6u, (int)data + 30); put32le(7u, (int)data + 34);
+    data = at + 5u;
+    at += object((int)at, 9u, 34u, 0u);  /* Group with one animation track */
+    put32le(73u, (int)data);
+    put32le(1u, (int)data + 4); put32le(4u, (int)data + 8);
+    put32le(1u, (int)data + 26); put32le(8u, (int)data + 30);
+    n = at + 4u;
+    buf[30] = 0u; put32le(n - 30u, 31); put32le(at - 39u, 35);
+    put32le(0u, (int)at);
+    if (nj_port_headless(&port) != NJ_OK) { ok(0, "root fixture port"); return; }
+    vm = nj_vm_create(&port, 1u << 20);
+    if (!vm) { ok(0, "root fixture VM"); return; }
+    bytes = nj_root(vm, nj_array_new(vm, "B", n));
+    ok(bytes != NULL, "root fixture byte array exists");
+    if (bytes) {
+        memcpy(bytes->u.bytes, buf, n);
+        args[0].r = bytes; args[1].i = 0; ret.r = NULL;
+        st = nj_call(vm, NULL, "javax/microedition/m3g/Loader", "load",
+                     "([BI)[Ljavax/microedition/m3g/Object3D;", args, &ret);
+        ok(st == NJ_OK && !vm->exception, "Loader accepts geometry with animation references");
+        roots = st == NJ_OK ? nj_root(vm, ret.r) : NULL;
+        ok(roots && nj_array_length(roots) == 1u,
+           "referenced geometry, tracks, sequences and controllers are not Loader roots");
+        group = roots && nj_array_length(roots) == 1u ? nj_array_get_ref(roots, 0u) : NULL;
+        if (group) {
+            st = nj_call(vm, group, "javax/microedition/m3g/Object3D", "getUserID", "()I", NULL, &ret);
+            ok(st == NJ_OK && ret.i == 73, "the sole root retains the Group identity");
+            st = nj_call(vm, group, "javax/microedition/m3g/Group", "getChildCount", "()I", NULL, &ret);
+            ok(st == NJ_OK && ret.i == 1, "variable Object3D header preserves Group children");
+            args[0].i = 0;
+            st = nj_call(vm, group, "javax/microedition/m3g/Group", "getChild",
+                         "(I)Ljavax/microedition/m3g/Node;", args, &ret);
+            mesh = st == NJ_OK ? ret.r : NULL;
+            ok(mesh != NULL, "Group still links its Mesh");
+            if (mesh) {
+                st = nj_call(vm, mesh, "javax/microedition/m3g/Mesh", "getVertexBuffer",
+                             "()Ljavax/microedition/m3g/VertexBuffer;", NULL, &ret);
+                ok(st == NJ_OK && ret.r != NULL, "Mesh retains its referenced VertexBuffer");
+            }
+        }
+    }
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+}
+
+static void overflow_roots(void)
+{
+    nj_u4 at = 39u, data, i, n, children = NJ_M3G_MAX_REFS + 1u;
+    nj_port port;
+    nj_vm *vm;
+    nj_ref bytes, roots;
+    nj_value args[2], ret;
+    nj_status st;
+    start();
+    section(12, 0u, 5u, 5u, 0u); object(21, 0u, 0u, 0u);
+    for (i = 0u; i < children; i++) { at += object((int)at, 9u, 26u, 0u); }
+    data = at + 5u;
+    at += object((int)at, 9u, 26u + 4u * children, 0u);
+    put32le(children, (int)data + 22);
+    for (i = 0u; i < children; i++) { put32le(i + 2u, (int)data + 26 + (int)i * 4); }
+    n = at + 4u;
+    buf[30] = 0u; put32le(n - 30u, 31); put32le(at - 39u, 35); put32le(0u, (int)at);
+    if (nj_port_headless(&port) != NJ_OK) { ok(0, "overflow fixture port"); return; }
+    vm = nj_vm_create(&port, 1u << 20);
+    if (!vm) { ok(0, "overflow fixture VM"); nj_port_shutdown(&port); return; }
+    bytes = nj_root(vm, nj_array_new(vm, "B", n));
+    ok(bytes != NULL, "overflow fixture byte array exists");
+    if (bytes) {
+        memcpy(bytes->u.bytes, buf, n);
+        args[0].r = bytes; args[1].i = 0; ret.r = NULL;
+        st = nj_call(vm, NULL, "javax/microedition/m3g/Loader", "load",
+                     "([BI)[Ljavax/microedition/m3g/Object3D;", args, &ret);
+        roots = st == NJ_OK ? nj_root(vm, ret.r) : NULL;
+        ok(st == NJ_OK && roots && nj_array_length(roots) == 1u,
+           "Group overflow children are referenced, not additional Loader roots");
+        if (roots && nj_array_length(roots) == 1u) {
+            st = nj_call(vm, nj_array_get_ref(roots, 0u), "javax/microedition/m3g/Group",
+                         "getChildCount", "()I", NULL, &ret);
+            ok(st == NJ_OK && ret.i == (nj_s4)children, "Group keeps all overflow children");
+        }
+    }
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
 }
 
 static void external_container(void)
@@ -451,6 +593,7 @@ static void external_container(void)
     }
     nj_app_close(vm, app);
     nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
 }
 #endif
 
@@ -459,6 +602,7 @@ int main(void)
     nj_u4 clen;
 
     printf("test_m3g_file: the .m3g container and its objects\n");
+    object_header_bounds();
 
     /* A file shaped like the real ones: identifier, one stored section. */
     start();
@@ -603,6 +747,8 @@ int main(void)
     objects_in_a_compressed_section();
 #if NJ_ENABLE_M3G
     external_container();
+    referenced_roots();
+    overflow_roots();
 #else
     ok(nj_lib_m3g_class_count == 0, "disabled M3G registers no classes");
     ok(nj_lib_m3g_count == 0, "disabled M3G registers no natives");

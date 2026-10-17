@@ -794,6 +794,11 @@ typedef struct nj_m3g_fields {
      */
     nj_u4 *extra;
     nj_u4 nrefs_total;
+    /* Object3D animation tracks are independent of each type's reference
+     * slots (some also hold scalar bits). Allocated only for animated objects;
+     * owned by the scan result, like extra and owned_data. */
+    nj_u4 *animation_refs;
+    nj_u4 nanimation_refs;
     const nj_u1 *data;   /* decoded bytes, borrowed by decode_object */
     nj_u1 *owned_data;   /* scan_objects copy; freed with the scan result */
     nj_u4 data_len;      /* how many of them there are */
