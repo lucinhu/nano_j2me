@@ -8871,6 +8871,7 @@ typedef struct {
     int vx, vy, vw, vh;
     m3g_java_target jt;
     nj_u4 dif;
+    nj_u4 default_colour;
     nj_u4 drawn;
     const nj_s4 *idx;             /* the index buffer, when the mesh has one */
     nj_s4 icount;
@@ -9039,11 +9040,10 @@ static nj_u4 jr_colour(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
     if (r->dif != 0xFFFFFFFFu) {
         return r->dif | 0xFF000000u;   /* a material colour is opaque */
     }
-    if (!r->col || r->ccomp < 4) {
-        return 0xFFFFFFFFu;
+    if (!r->col || r->ccomp < 3) {
+        return r->default_colour;
     }
-    /* No lighting and no Gouraud: the average of the three vertices is the
-       one colour a flat filler can carry, and it is honest about both. */
+    /* VertexArray colours are RGB or RGBA, with opaque alpha for RGB. */
     {
         nj_u4 sum[4] = { 0u, 0u, 0u, 0u };
         nj_u4 v[3];
@@ -9052,13 +9052,14 @@ static nj_u4 jr_colour(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
             const nj_s2 *s = r->col +
                 ((nj_size)r->cfirst + (nj_size)v[i]) * (nj_size)r->ccomp;
             nj_u4 k;
-            if (v[i] >= (nj_u4)r->ccount) { return 0xFFFFFFFFu; }
-            for (k = 0u; k < 4u; k++) {
+            if (v[i] >= (nj_u4)r->ccount) { return r->default_colour; }
+            for (k = 0u; k < (nj_u4)r->ccomp && k < 4u; k++) {
                 sum[k] += (nj_u4)(nj_u1)(s[k] & 0xFF);
             }
+            if (r->ccomp == 3) { sum[3] += 255u; }
         }
-        return ((sum[0] / 3u) << 24) | ((sum[1] / 3u) << 16) |
-               ((sum[2] / 3u) << 8) | (sum[3] / 3u);
+        return ((sum[3] / 3u) << 24) | ((sum[0] / 3u) << 16) |
+               ((sum[1] / 3u) << 8) | (sum[2] / 3u);
     }
 }
 
@@ -9344,9 +9345,9 @@ static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
         return 0;
     }
     if (r->lit) {
-        nj_u4 vc = 0xFFFFFFFFu;
+        nj_u4 vc = r->default_colour;
 
-        if (r->col && r->ccomp >= 4 && v < (nj_u4)r->ccount) {
+        if (r->col && r->ccomp >= 3 && v < (nj_u4)r->ccount) {
             const nj_s2 *s = r->col +
                 ((nj_size)r->cfirst + (nj_size)v) * (nj_size)r->ccomp;
 
@@ -9795,6 +9796,8 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                 r.ccount = nj_iget(vm, d, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
             }
         }
+        r.default_colour = (nj_u4)nj_iget(vm, vb,
+                                  m3g_fof(vm, NJ_C_VBUF, "_nj_defColor", "I"));
         r.dif = 0xFFFFFFFFu;
         mat = app ? nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_mat",
                                              "L" NJ_C_MAT ";")) : 0;

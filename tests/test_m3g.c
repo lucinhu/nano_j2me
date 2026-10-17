@@ -1387,6 +1387,70 @@ int main(void)
         }
         check(lit > 0, "render() put pixels into the target image");
 
+        /* Unlit colours use the buffer default or RGB(A) vertex order. */
+        {
+            nj_ref colours = make(vm, CLS("VertexArray"));
+            nj_ref channels = nj_array_new(vm, "S", 12u);
+            nj_ref pixels = nj_rget(vm, img, nj_field_lookup(vm,
+                "javax/microedition/lcdui/Image", "imgPixels", "[I", 0));
+            const nj_u4 expected[3] = { 0x2468ACu, 0x3579BDu, 0x468ACEu };
+            nj_ref colour_app = make(vm, CLS("Appearance"));
+            nj_ref colour_bg = make(vm, CLS("Background"));
+            nj_ref indices = nj_object_new(vm, CLS("TriangleStripArray"));
+            nj_ref strips = nj_array_new(vm, "I", 1u);
+            int mode;
+            ((nj_s4 *)nj_array_data(strips))[0] = 3;
+            a[0].i = 0; a[1].r = strips;
+            check(nj_call_special(vm, indices, CLS("TriangleStripArray"), "<init>",
+                  "(I[I)V", a, &r) == NJ_OK, "colour triangle constructs");
+            a[0].r = vb; a[1].r = indices; a[2].r = colour_app;
+            check(nj_call_special(vm, mesh, CLS("Mesh"), "<init>",
+                  "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                  CLS("Appearance") ";)V", a, &r) == NJ_OK, "colour mesh constructs");
+            check(colours && channels && pixels, "vertex colour fixtures exist");
+            if (colours && channels && pixels) {
+                for (mode = 0; mode < 3; mode++) {
+                    int components = mode == 1 ? 3 : 4;
+                    nj_s2 *ch = (nj_s2 *)nj_array_data(channels);
+                    for (k = 0; k < 3; k++) {
+                        ch[k * components] = (nj_s2)(expected[mode] >> 16);
+                        ch[k * components + 1] = (nj_s2)((expected[mode] >> 8) & 255u);
+                        ch[k * components + 2] = (nj_s2)(expected[mode] & 255u);
+                        if (components == 4) { ch[k * components + 3] = 255; }
+                    }
+                    nj_iput(vm, colours, nj_field_lookup(vm, CLS("VertexArray"),
+                        "_nj_numVerts", "I", 0), 3);
+                    nj_iput(vm, colours, nj_field_lookup(vm, CLS("VertexArray"),
+                        "_nj_numComp", "I", 0), components);
+                    nj_rput(vm, colours, nj_field_lookup(vm, CLS("VertexArray"),
+                        "_nj_data", "[S", 0), channels);
+                    a[0].i = (nj_s4)(0xFF000000u | expected[0]);
+                    call(vm, vb, CLS("VertexBuffer"), "setDefaultColor", "(I)V", a, NULL);
+                    a[0].r = mode ? colours : NULL;
+                    call(vm, vb, CLS("VertexBuffer"), "setColors",
+                         "(L" CLS("VertexArray") ";)V", a, NULL);
+                    a[0].r = colour_bg;
+                    call(vm, g3d, CLS("Graphics3D"), "clear",
+                         "(L" CLS("Background") ";)V", a, NULL);
+                    a[0].r = cam; a[1].r = xf;
+                    call(vm, g3d, CLS("Graphics3D"), "setCamera",
+                         "(L" CLS("Camera") ";L" CLS("Transform") ";)V", a, NULL);
+                    a[0].r = mesh; a[1].r = xf;
+                    call(vm, g3d, CLS("Graphics3D"), "render",
+                         "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+                    check((((nj_u4 *)nj_array_data(pixels))[9 * 16 + 6] & 0xFFFFFFu)
+                          == expected[mode], mode == 0 ? "unlit mesh uses default colour" :
+                          mode == 1 ? "RGB vertex colours override the default" :
+                                      "RGBA vertex colours preserve RGB channel order");
+                }
+                a[0].r = NULL;
+                call(vm, vb, CLS("VertexBuffer"), "setColors",
+                     "(L" CLS("VertexArray") ";)V", a, NULL);
+                a[0].i = (nj_s4)0xFFFFFFFFu;
+                call(vm, vb, CLS("VertexBuffer"), "setDefaultColor", "(I)V", a, NULL);
+            }
+        }
+
         /*
          * The other way a title names the camera: World.setActiveCamera().
          * The corpus uses this one and never calls Graphics3D.setCamera() at
