@@ -84,6 +84,23 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private int imeSession, imeSequence, imeSentCursor;
     private String imeSentText = "";
     private TextSnapshot imeSnapshot;
+    private boolean imeShowPending, imeRestartPending;
+    private final Runnable imeShow = new Runnable() {
+        @Override public void run() {
+            if (!imeShowPending || !imeActive || imePaused || finishing || imeEditor == null) { return; }
+            /* A visible editor can acquire view focus before its window has
+             * input focus. Keep the request until onWindowFocusChanged retries. */
+            if (imeEditor.getWindowToken() == null || !imeEditor.hasWindowFocus()) { return; }
+            if (!imeEditor.requestFocus()) { return; }
+            InputMethodManager manager = (InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
+            if (manager == null) { return; }
+            if (imeRestartPending) {
+                manager.restartInput(imeEditor);
+                imeRestartPending = false;
+            }
+            imeShowPending = !manager.showSoftInput(imeEditor, InputMethodManager.SHOW_IMPLICIT);
+        }
+    };
     private final Runnable imePublish = new Runnable() {
         @Override public void run() { publishIme(); }
     };
@@ -501,12 +518,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     protected void onResume() {
         super.onResume();
         imePaused = false;
-        if (imeActive && imeEditor != null) {
-            imeEditor.setVisibility(View.VISIBLE);
-            imeEditor.requestFocus();
-            InputMethodManager manager = (InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
-            if (manager != null) { manager.showSoftInput(imeEditor, InputMethodManager.SHOW_IMPLICIT); }
-        }
+        if (imeActive && imeEditor != null) { requestIme(true); }
         applyFullscreen();
         /* The editor may have changed the layout or moved the picture while
          * we were away - it is the one screen where both are set up. */
@@ -752,7 +764,20 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         }
     }
 
+    private void requestIme(boolean restart) {
+        if (!imeActive || imePaused || finishing || imeEditor == null) { return; }
+        imeShowPending = true;
+        imeRestartPending |= restart;
+        imeEditor.setVisibility(View.VISIBLE);
+        imeEditor.requestFocus();
+        ui.removeCallbacks(imeShow);
+        /* Run after visibility/focus changes reach the view root. */
+        imeEditor.post(imeShow);
+    }
+
     private void hideIme() {
+        imeShowPending = imeRestartPending = false;
+        ui.removeCallbacks(imeShow);
         ui.removeCallbacks(imePublish);
         if (imeEditor == null) { return; }
         InputMethodManager manager = (InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
@@ -804,13 +829,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             imeSentText = snapshot.text; imeSentCursor = cursor;
             imeEditor.setVisibility(View.VISIBLE);
             imeEditor.requestFocus();
-            if (newSession) {
-                InputMethodManager manager = (InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
-                if (manager != null) {
-                    manager.restartInput(imeEditor);
-                    manager.showSoftInput(imeEditor, InputMethodManager.SHOW_IMPLICIT);
-                }
-            }
+            if (newSession) { requestIme(true); }
         } finally { imeApplying = false; }
     }
 
@@ -1394,6 +1413,10 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
             applyFullscreen();
+            if (imeShowPending) {
+                ui.removeCallbacks(imeShow);
+                ui.post(imeShow);
+            }
         }
     }
 

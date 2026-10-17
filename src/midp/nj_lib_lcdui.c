@@ -4886,11 +4886,60 @@ int nj_midp_pointer(nj_vm *vm, int x, int y, int kind)
         nj_midp_repaint(vm);
         return 1;
     }
-    /*
-     * A non-Canvas Displayable has no pointer methods, so a tap can only mean
-     * one thing there: activate the focused item, exactly as the fire key
-     * does.  A drag on a menu is not an activation.
-     */
+    /* Built-in editors must focus the row under the finger. Treating a tap
+     * as FIRE on the old focus could submit a registration Form instead of
+     * opening its TextField (and never selected its password field). Use the
+     * renderer's measurements, including title/ticker and row gaps. */
+    if (kind == NJ_POINTER_DOWN &&
+        (isa(vm, d, NJ_C_FORM) || isa(vm, d, NJ_C_TEXTBOX))) {
+        nj_surface *s = nj_midp_screen(vm);
+        nj_gfx g;
+        ui_frame uf;
+        nj_ref it = NULL;
+        if (!s || x < 0 || x >= s->width || y < 0 || y >= s->height) {
+            return 0;
+        }
+        nj_gfx_init(&g, s);
+        ui_setup(vm, &g, d, &uf);
+        if (y >= uf.content_y && y < uf.content_y + uf.content_h) {
+            if (isa(vm, d, NJ_C_TEXTBOX)) {
+                it = d;
+            } else {
+                nj_ref items = rget(vm, d, NJ_C_FORM, "fmItems", D_ITEMARR);
+                nj_s4 n = fget(vm, d, NJ_C_FORM, "fmCount", D_INT);
+                nj_s4 i;
+                int row_y = uf.content_y;
+                for (i = 0; items && i < n && (nj_u4)i < items->length; i++) {
+                    int h;
+                    it = nj_array_get_ref(items, (nj_u4)i);
+                    h = form_line_height(vm, it, &uf);
+                    if (y >= row_y && y < row_y + h - UI_ROW_GAP) {
+                        fput(vm, d, NJ_C_FORM, "fmIndex", D_INT, i);
+                        break;
+                    }
+                    row_y += h;
+                    it = NULL;
+                }
+            }
+            if (!it) { return 0; }
+            if (isa(vm, it, NJ_C_TEXTFIELD) || isa(vm, it, NJ_C_TEXTBOX)) {
+                nj_ref disp = nj_midp_display(vm);
+                /* A new session also reopens an IME dismissed with Android
+                 * Back, even when the same editor and text remain focused. */
+                if (disp) { rput(vm, disp, NJ_C_DISPLAY, "dpImeFocus", D_ITEM, NULL); }
+                nj_midp_text_input_sync(vm);
+                nj_midp_repaint(vm);
+                return 1;
+            }
+            nj_midp_text_input_sync(vm);
+            (void)form_item_activate(vm, d);
+            nj_midp_repaint(vm);
+            return 1;
+        }
+        /* Title/ticker taps do not activate a Form command. */
+        if (y < s->height - UI_BAR_H) { return 0; }
+    }
+    /* A drag on a menu is not an activation. */
     if (kind == NJ_POINTER_DOWN) {
         int consumed = screen_activate(vm, d);
         nj_midp_repaint(vm);

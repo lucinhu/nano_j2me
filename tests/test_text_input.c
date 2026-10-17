@@ -192,6 +192,49 @@ static void runtime_test(void)
     nj_midp_text_input_sync(vm);
     CHECK(snapshot.length == 2 && snapshot.text[0] == 0x65b0);
     CHECK(vm->exception == NULL);
+    /* Registration forms often begin with instructions, not an editor. A
+     * tap must select the actual row, and tapping it again must reopen an
+     * IME dismissed with Back rather than trigger the Form's default command. */
+    args[0].r = string(vm, "Register");
+    form = make(vm, NJ_C_FORM, "(Ljava/lang/String;)V", args);
+    args[0].r = string(vm, ""); args[1].r = string(vm, "Instructions");
+    other = make(vm, NJ_C_STRINGITEM, "(Ljava/lang/String;Ljava/lang/String;)V", args);
+    field = widget(vm, NJ_C_TEXTFIELD, 64, 0, "user");
+    field2 = widget(vm, NJ_C_TEXTFIELD, 64, 0x10000, "secret");
+    args[0].r = other;
+    CHECK(nj_call(vm, form, NJ_C_FORM, "append", "(Ljavax/microedition/lcdui/Item;)I", args, NULL) == NJ_OK);
+    args[0].r = field;
+    CHECK(nj_call(vm, form, NJ_C_FORM, "append", "(Ljavax/microedition/lcdui/Item;)I", args, NULL) == NJ_OK);
+    args[0].r = field2;
+    CHECK(nj_call(vm, form, NJ_C_FORM, "append", "(Ljavax/microedition/lcdui/Item;)I", args, NULL) == NJ_OK);
+    current(vm, form);
+    CHECK(!snapshot.active);
+    CHECK(nj_midp_paint(vm) == NJ_OK);
+    {
+        int y, user_y = -1, pass_y = -1;
+        /* Locate drawn rows without coupling the test to font metrics. */
+        for (y = 21; y < 200; y++) {
+            (void)nj_midp_pointer(vm, 12, y, NJ_POINTER_DOWN);
+            if (snapshot.active && snapshot.length == 4 && user_y < 0) { user_y = y; }
+            if (snapshot.active && snapshot.constraints == 0x10000u) { pass_y = y; break; }
+        }
+        CHECK(user_y >= 0 && pass_y > user_y);
+        session = snapshot.session;
+        CHECK(nj_midp_pointer(vm, 12, pass_y, NJ_POINTER_DOWN));
+        CHECK(snapshot.active && snapshot.constraints == 0x10000u && snapshot.session != session);
+        CHECK(!commit(vm, "X", session));
+        session = snapshot.session;
+        CHECK(!nj_midp_pointer(vm, 12, user_y, NJ_POINTER_MOVE));
+        CHECK(!nj_midp_pointer(vm, 12, user_y, NJ_POINTER_UP));
+        CHECK(snapshot.session == session);
+        CHECK(nj_midp_pointer(vm, 12, user_y, NJ_POINTER_DOWN));
+        CHECK(snapshot.active && snapshot.constraints == 0 && snapshot.length == 4);
+        CHECK(commit(vm, "\xe4\xb8\xad", snapshot.session));
+        CHECK(!nj_midp_pointer(vm, 12, 0, NJ_POINTER_DOWN));
+        CHECK(!nj_midp_pointer(vm, -1, user_y, NJ_POINTER_DOWN));
+        CHECK(nj_midp_current(vm) == form);
+    }
+    CHECK(vm->exception == NULL);
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
 }
