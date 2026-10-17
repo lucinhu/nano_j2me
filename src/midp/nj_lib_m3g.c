@@ -212,9 +212,18 @@ static int m3g_type_is_node(nj_u1 type)
            type == 15u || type == 16u || type == 18u || type == 22u;
 }
 
-static float bits2f(nj_s4 bits);
+/* The standalone container decoder also reads floats with M3G disabled. */
+static float bits2f(nj_s4 i)
+{
+    union { float f; nj_s4 i; } u;
+    u.i = i;
+    return u.f;
+}
+
+#if NJ_ENABLE_M3G
 static void m3g_image_dirty(nj_vm *vm, nj_ref img);
 static nj_ref m3g_image_mips(nj_vm *vm, nj_ref img);
+#endif
 
 /*
  * A Node's transform, as the file stores it: translation (3 floats), scale
@@ -1121,7 +1130,7 @@ nj_status nj_m3g_objects_probe(const nj_u1 *p, nj_u4 n, nj_u4 *count,
  * time instead of failing to link with no explanation.
  */
 #ifdef NJ_ENABLE_FLOAT
-#if !NJ_ENABLE_FLOAT
+#if NJ_ENABLE_M3G && !NJ_ENABLE_FLOAT
 #error "JSR 184 needs libm: build with NJ_ENABLE_FLOAT=1 or NJ_ENABLE_M3G=0"
 #endif
 #endif
@@ -1194,13 +1203,6 @@ static nj_s4 f2bits(float f)
     union { float f; nj_s4 i; } u;
     u.f = f;
     return u.i;
-}
-
-static float bits2f(nj_s4 i)
-{
-    union { float f; nj_s4 i; } u;
-    u.i = i;
-    return u.f;
 }
 
 static nj_ref mat_new(nj_vm *vm);
@@ -5572,8 +5574,6 @@ NJFN(m3g_img2d_set)
     return NJ_OK;
 }
 
-#endif /* NJ_ENABLE_M3G */
-
 /* ------------------------------------------------------------------ */
 /* Tables                                                              */
 /* ------------------------------------------------------------------ */
@@ -5845,8 +5845,6 @@ nj_status nj_m3g_late_init(nj_vm *vm)
     }
     return NJ_OK;
 }
-
-#if NJ_ENABLE_M3G
 
 static const nj_builtin_field o3d_fields[] = {
     { "_nj_userID", "I", NJ_ACC_PUBLIC },

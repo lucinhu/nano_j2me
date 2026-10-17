@@ -27,6 +27,8 @@
 #include <zlib.h>
 #include "nj_internal.h"
 
+nj_status nj_m3g_late_init(nj_vm *vm);
+
 nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
                                  nj_u1 *ids, nj_u4 id_count,
                                  char *err, nj_u4 errcap);
@@ -368,6 +370,7 @@ static void compressed_geometry_payloads(void)
     nj_vm_destroy(vm);
 }
 
+#if NJ_ENABLE_M3G
 /* A stored ZIP entry exercises external resources through a real app. */
 static void zip32(nj_u1 *p, nj_u4 v)
 {
@@ -449,6 +452,7 @@ static void external_container(void)
     nj_app_close(vm, app);
     nj_vm_destroy(vm);
 }
+#endif
 
 int main(void)
 {
@@ -597,7 +601,13 @@ int main(void)
     }
 
     objects_in_a_compressed_section();
+#if NJ_ENABLE_M3G
     external_container();
+#else
+    ok(nj_lib_m3g_class_count == 0, "disabled M3G registers no classes");
+    ok(nj_lib_m3g_count == 0, "disabled M3G registers no natives");
+    ok(nj_m3g_late_init(NULL) == NJ_OK, "disabled M3G late init is a no-op");
+#endif
     texture_fields();
     compressed_geometry_payloads();
 
