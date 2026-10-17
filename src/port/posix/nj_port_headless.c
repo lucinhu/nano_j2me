@@ -28,6 +28,9 @@
 #include "nj2me/nj_port.h"
 #include "nj2me/nj_types.h"
 #include "nj2me/nj.h"
+#if NJ_HAVE_POSIX_NETWORK
+#include "nj_posix_network.h"
+#endif
 
 #include <sys/mman.h>
 #include <dirent.h>
@@ -39,6 +42,9 @@
 #include <time.h>
 
 typedef struct nj_headless_state {
+#if NJ_HAVE_POSIX_NETWORK
+    nj_posix_network network;
+#endif
     int    width;
     int    height;
     int    stride;
@@ -819,6 +825,9 @@ static void hl_shutdown(void *ud)
         free(s->pixels);
         s->pixels = NULL;
     }
+#if NJ_HAVE_POSIX_NETWORK
+    nj_posix_network_destroy(&s->network);
+#endif
     free(s);
 }
 
@@ -1290,6 +1299,51 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
 /* ------------------------------------------------------------------ */
 /* Helpers used by the test harness and by embedders with their own loop */
 /* ------------------------------------------------------------------ */
+#if NJ_HAVE_POSIX_NETWORK
+static nj_status hl_http_request(void *ud, const char *url, const char *method,
+    const char *headers, const nj_u1 *body, nj_u4 body_len, int *status,
+    char *rheaders, nj_size rheaders_cap, nj_u1 **out_body, nj_u4 *out_len,
+    void *(*alloc_fn)(void *, nj_u4), void *aud)
+{
+    return nj_posix_http_request(&HS(ud)->network, url, method, headers, body,
+        body_len, status, rheaders, rheaders_cap, out_body, out_len, alloc_fn, aud);
+}
+static void *hl_socket_connect(void *ud, const char *url, nj_u4 timeout,
+    nj_socket_info *info, char *err, nj_size cap)
+{
+    return nj_posix_socket_connect(&HS(ud)->network, url, timeout, info, err, cap);
+}
+static int hl_socket_read(void *ud, void *h, nj_u1 *buf, int len, nj_u4 timeout)
+{ return nj_posix_socket_read(&HS(ud)->network, h, buf, len, timeout); }
+static int hl_socket_write(void *ud, void *h, const nj_u1 *buf, int len)
+{ return nj_posix_socket_write(&HS(ud)->network, h, buf, len); }
+static int hl_socket_available(void *ud, void *h)
+{ return nj_posix_socket_available(&HS(ud)->network, h); }
+static void hl_socket_close(void *ud, void *h)
+{ nj_posix_socket_close(&HS(ud)->network, h); }
+#endif
+
+nj_status nj_port_headless_enable_network(nj_port *port)
+{
+#if NJ_HAVE_POSIX_NETWORK
+    nj_status st;
+    if (!port || !port->name || strcmp(port->name, "headless") || !port->ud)
+        return NJ_ERR;
+    st = nj_posix_network_init(&HS(port->ud)->network);
+    if (st != NJ_OK) return st;
+    port->http_request = hl_http_request;
+    port->socket_connect = hl_socket_connect;
+    port->socket_read = hl_socket_read;
+    port->socket_write = hl_socket_write;
+    port->socket_close = hl_socket_close;
+    port->socket_available = hl_socket_available;
+    return NJ_OK;
+#else
+    (void)port;
+    return NJ_ERR_UNSUPPORTED;
+#endif
+}
+
 void nj_port_headless_set_dump(void *ud, const char *prefix, int every)
 {
     nj_headless_state *s = HS(ud);

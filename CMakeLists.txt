@@ -221,6 +221,24 @@ if(NJ_BUILD_EMBEDDED_PORTS)
     src/port/esp32/nj_port_esp32.c)
 endif()
 
+set(NJ_POSIX_NETWORK_ENABLED OFF)
+option(NJ_BUILD_POSIX_NETWORK "Enable desktop HTTP/HTTPS/TCP with libcurl" ON)
+if(NJ_BUILD_POSIX_NETWORK AND UNIX AND NOT ANDROID)
+  find_package(PkgConfig QUIET)
+  if(PkgConfig_FOUND)
+    pkg_check_modules(NJ_CURL QUIET IMPORTED_TARGET libcurl>=7.85)
+  endif()
+  if(NJ_CURL_FOUND)
+    set(NJ_POSIX_NETWORK_ENABLED ON)
+    target_sources(nj2me PRIVATE src/port/posix/nj_posix_network.c)
+    target_link_libraries(nj2me PUBLIC PkgConfig::NJ_CURL)
+    target_compile_definitions(nj2me PUBLIC NJ_HAVE_POSIX_NETWORK=1)
+    message(STATUS "POSIX network: enabled (${NJ_CURL_VERSION})")
+  else()
+    message(STATUS "POSIX network: disabled - libcurl >= 7.85 development files unavailable")
+  endif()
+endif()
+
 if(NJ_BUILD_SDL2)
   find_package(PkgConfig QUIET)
   if(PkgConfig_FOUND)
@@ -452,6 +470,15 @@ if(NJ_BUILD_TESTS)
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 180)
   endif()
 
+  if(NJ_POSIX_NETWORK_ENABLED AND NJ_BUILD_SDL2 AND SDL2_FOUND AND NJ_PYTHON)
+    add_executable(test_posix_network tests/test_posix_network.c)
+    target_link_libraries(test_posix_network PRIVATE nj2me)
+    add_test(NAME test_posix_network
+      COMMAND ${NJ_PYTHON} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_posix_network.py
+              $<TARGET_FILE:test_posix_network>)
+    set_tests_properties(test_posix_network PROPERTIES TIMEOUT 25 SKIP_RETURN_CODE 77)
+  endif()
+
   # ---- helper: one test executable, linked against the runtime ----
   function(nj_add_test name source)
     add_executable(${name} ${source})
@@ -483,6 +510,10 @@ if(NJ_BUILD_TESTS)
 
   # ---- the memory contract and the class library ----
   nj_add_test(test_lifecycle tests/test_lifecycle.c)
+  nj_add_test(test_text_input tests/test_text_input.c)
+  if(SDL2_FOUND)
+    target_include_directories(test_text_input PRIVATE ${SDL2_INCLUDE_DIRS})
+  endif()
   # Every method a C-implemented class declares must have a native behind it.
   # Three such bindings were missing and each one only surfaced when a real
   # game called it; this walks the whole class library instead of waiting.
@@ -506,6 +537,7 @@ else()
   message(WARNING "no zlib: nj_m3g_probe cannot inflate compressed .m3g sections")
 endif()
   nj_add_test(test_wireless tests/test_wireless.c)
+  nj_add_test(test_socket_api tests/test_socket_api.c)
 
   # JSR 256 end to end: SensorManager -> SensorInfo -> SensorConnection ->
   # getData() and a DataListener.  The listener is the half no other test can
@@ -883,6 +915,7 @@ nj_add_test(test_clip tests/test_clip.c)
     nj_add_test(test_detect tests/test_detect.c)
     nj_add_test(test_speed tests/test_speed.c)
     nj_add_test(test_timer tests/test_timer.c)
+    nj_add_test(test_thread_lifecycle tests/test_thread_lifecycle.c)
   endif()
 
   # Save state / restore state: runs the fielddemo fixture in one VM, saves it

@@ -84,6 +84,10 @@ static void test_camera_clip(nj_vm *vm)
     const nj_s2 legal[9] = {-2,-2,-4, 2,-2,-4, 0,2,-4};
     const nj_s2 before_near[9] = {-2,-2,-1, 2,-2,-1, 0,2,-1};
     const nj_s2 beyond_far[9] = {-20,-20,-40, 20,-20,-40, 0,20,-40};
+    const nj_s2 positive_background[9] = {-12,-12,6, 12,-12,6, 0,12,6};
+    const nj_s2 positive_legal[9] = {-2,-2,4, 2,-2,4, 0,2,4};
+    const nj_s2 before_zero[9] = {-2,-2,1, 2,-2,1, 0,2,1};
+    const nj_s2 before_negative[9] = {-2,-2,24, 2,-2,24, 0,2,24};
     nj_ref g3d = nj_object_new(vm, CLS("Graphics3D"));
     nj_ref cam = make(vm, CLS("Camera")), xf = make(vm, CLS("Transform"));
     nj_ref va = nj_object_new(vm, CLS("VertexArray"));
@@ -126,12 +130,24 @@ static void test_camera_clip(nj_vm *vm)
     call(vm, g3d, CLS("Graphics3D"), "setViewport", "(IIII)V", a, NULL);
     pixels = nj_rget(vm, img, nj_field_lookup(vm, "javax/microedition/lcdui/Image", "imgPixels", "[I", 0));
 
-    for (mode = 0; mode < 3; mode++) {
+    for (mode = 0; mode < 7; mode++) {
         const nj_u4 *p;
+        int parallel = mode == 2 || mode >= 4;
+        const nj_s2 *near_pos = mode == 5 ? before_zero :
+                               mode == 6 ? before_negative : before_near;
+        const nj_s2 *far_pos = mode == 6 ? before_near : beyond_far;
+        const nj_s2 *legal_pos = mode == 6 ? positive_legal : legal;
         cam = make(vm, CLS("Camera"));
-        a[0].f = mode == 2 ? 4.0f : 90.0f;
-        a[1].f = 1.0f; a[2].f = 1.0f; a[3].f = 10.0f;
-        call(vm, cam, CLS("Camera"), mode == 2 ? "setParallel" : "setPerspective", "(FFFF)V", a, NULL);
+        if (mode >= 3) {
+            call(vm, xf, CLS("Transform"), "setIdentity", "()V", NULL, NULL);
+            a[0].r = xf;
+            call(vm, cam, CLS("Camera"), "setGeneric", "(L" CLS("Transform") ";)V", a, NULL);
+        }
+        a[0].f = parallel ? 4.0f : 90.0f;
+        a[1].f = 1.0f;
+        a[2].f = mode == 5 ? 0.0f : mode == 6 ? -10.0f : 1.0f;
+        a[3].f = mode == 6 ? 0.0f : 10.0f;
+        call(vm, cam, CLS("Camera"), parallel ? "setParallel" : "setPerspective", "(FFFF)V", a, NULL);
         if (mode == 1) {
             a[0].r = xf;
             call(vm, cam, CLS("Camera"), "getProjection", "(L" CLS("Transform") ";)I", a, &r);
@@ -141,11 +157,12 @@ static void test_camera_clip(nj_vm *vm)
         call(vm, g3d, CLS("Graphics3D"), "setCamera", "(L" CLS("Camera") ";L" CLS("Transform") ";)V", a, NULL);
         a[0].r = bg;
         call(vm, g3d, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V", a, NULL);
-        clip_draw(vm, g3d, vb, ib, app, data, background, 0xFF0000FFu);
+        clip_draw(vm, g3d, vb, ib, app, data,
+                  mode == 6 ? positive_background : background, 0xFF0000FFu);
         p = (const nj_u4 *)nj_array_data(pixels);
         check((p[160 * 240 + 120] & 0xFFFFFFu) == 0x0000FFu,
               "legal background renders with camera projection");
-        if (mode != 2) {
+        if (!parallel) {
             clip_draw(vm, g3d, vb, ib, app, data, crossing, 0xFF808080u);
             check((p[160 * 240 + 120] & 0xFFFFFFu) == 0x0000FFu,
                   "near-plane crossing leaves the centre blue");
@@ -161,7 +178,7 @@ static void test_camera_clip(nj_vm *vm)
             a[0].r = bg;
             call(vm, g3d, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V", a, NULL);
             clip_draw(vm, g3d, vb, ib, app, data,
-                      rejected ? beyond_far : before_near, 0xFF808080u);
+                      rejected ? far_pos : near_pos, 0xFF808080u);
             depth = nj_rget(vm, g3d, nj_field_lookup(vm, CLS("Graphics3D"), "_nj_zbuf", "[I", 0));
             z = depth ? (const nj_u4 *)nj_array_data(depth) : NULL;
             for (k = 0; k < 240 * 320; k++) {
@@ -170,12 +187,41 @@ static void test_camera_clip(nj_vm *vm)
             }
             check(colour_clean, rejected ? "beyond far writes no colour" : "before near writes no colour");
             check(depth_clean, rejected ? "beyond far writes no depth" : "before near writes no depth");
-            clip_draw(vm, g3d, vb, ib, app, data, legal, 0xFF00FF00u);
+            clip_draw(vm, g3d, vb, ib, app, data, legal_pos, 0xFF00FF00u);
             check((p[160 * 240 + 120] & 0xFFFFFFu) == 0x00FF00u,
                   "legal geometry still renders after rejected geometry");
         }
     }
     call(vm, g3d, CLS("Graphics3D"), "releaseTarget", "()V", NULL, NULL);
+}
+
+/* Parallel near/far may be zero or negative; zero is a parameter value,
+ * not the implicit perspective camera's request for constructor defaults. */
+static void test_parallel_zero_planes(nj_vm *vm)
+{
+    const float planes[2][2] = {{0.0f, 10.0f}, {-10.0f, 0.0f}};
+    nj_ref cam = make(vm, CLS("Camera")), xf = make(vm, CLS("Transform"));
+    nj_ref arr = nj_array_new(vm, "F", 16u);
+    nj_value a[4];
+    int k;
+
+    for (k = 0; k < 2; k++) {
+        const float *m;
+        float near = planes[k][0], far = planes[k][1];
+        a[0].f = 4.0f; a[1].f = 2.0f; a[2].f = near; a[3].f = far;
+        call(vm, cam, CLS("Camera"), "setParallel", "(FFFF)V", a, NULL);
+        a[0].r = xf;
+        call(vm, cam, CLS("Camera"), "getProjection", "(L" CLS("Transform") ";)I", a, NULL);
+        a[0].r = arr;
+        call(vm, xf, CLS("Transform"), "get", "([F)V", a, NULL);
+        m = (const float *)nj_array_data(arr);
+        check(fabsf(m[0] - 0.25f) < 0.00001f && fabsf(m[5] - 0.5f) < 0.00001f,
+              "parallel height and aspect retain their scale");
+        check(fabsf(-near * m[10] + m[11] + 1.0f) < 0.00001f,
+              "parallel near plane maps to clip z=-w even when zero");
+        check(fabsf(-far * m[10] + m[11] - 1.0f) < 0.00001f,
+              "parallel far plane maps to clip z=w even when zero");
+    }
 }
 
 int main(void)
@@ -1435,6 +1481,7 @@ int main(void)
               "and a camera is not walked as a container");
     }
     test_camera_clip(vm);
+    test_parallel_zero_planes(vm);
     /* ---- render() really draws the world into the bound target --------- */
     {
         nj_ref img, gr, cam, xf, world, grp, mesh, va, vb, data, rgb, one, g3d;

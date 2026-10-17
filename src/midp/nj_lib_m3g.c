@@ -2651,6 +2651,7 @@ NJFN(m3g_setPerspective)
     nj_ref self = NJ_THIS(args);
     nj_iput(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_persp", "Z", 0), 1);
     nj_iput(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_parallel", "Z", 0), 0);
+    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_generic", "[F", 0), 0);
     {
         static const char *names[4] = { "_nj_fovy", "_nj_aspect", "_nj_near", "_nj_far" };
         int i;
@@ -2667,6 +2668,7 @@ NJFN(m3g_setParallel)
     nj_ref self = NJ_THIS(args);
     nj_iput(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_parallel", "Z", 0), 1);
     nj_iput(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_persp", "Z", 0), 0);
+    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_generic", "[F", 0), 0);
     {
         static const char *names[4] = { "_nj_height", "_nj_aspect", "_nj_near", "_nj_far" };
         int i;
@@ -2710,6 +2712,8 @@ NJFN(m3g_cam_setGeneric)
 static int cam_proj_fill(nj_vm *vm, nj_ref self, float *out)
 {
     float f, aspect, near, far, fov;
+    int perspective = nj_iget(vm, self,
+        nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_persp", "Z", 0));
 
     {
         nj_ref g = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA,
@@ -2719,8 +2723,7 @@ static int cam_proj_fill(nj_vm *vm, nj_ref self, float *out)
             return 1;
         }
     }
-    if (!nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_persp",
-                                           "Z", 0)) &&
+    if (!perspective &&
         !nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_is_parallel",
                                            "Z", 0))) {
         return 0;
@@ -2737,12 +2740,14 @@ static int cam_proj_fill(nj_vm *vm, nj_ref self, float *out)
     }
     near = bits2f(nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_near",
                                                     "I", 0)));
-    if (near == 0.0f) {
+    /* Only the implicit perspective camera uses zero as a default sentinel.
+     * Parallel cameras permit zero and negative clipping distances. */
+    if (perspective && near == 0.0f) {
         near = 1.0f;
     }
     far = bits2f(nj_iget(vm, self, nj_field_lookup(vm, NJ_C_CAMERA, "_nj_far",
                                                    "I", 0)));
-    if (far == 0.0f) {
+    if (perspective && far == 0.0f) {
         far = 1000.0f;
     }
     mat_identity(out);

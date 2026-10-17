@@ -658,15 +658,30 @@ NJFN(socket_skip)
     return NJ_OK;
 }
 
-/*
- * available() is what has already arrived.  There is no hook for "how much is
- * waiting", and inventing one would mean a port that cannot answer reports a
- * number the MIDlet would believe; 0 is always true, and a MIDlet that needs
- * data calls read(), which waits.
- */
+/* Polling clients must see bytes that have arrived without consuming them.
+ * A port without a byte-count hook may conservatively answer zero, but closed
+ * streams still fail just like read(), including when the connection closed. */
 NJFN(socket_available)
 {
-    ret->i = 0;
+    const nj_port *port = nj_vm_port(vm);
+    nj_ref conn = stream_conn(vm, NJ_C_SOCKIN, NJ_THIS(args), F_SCLOSED,
+                              "the stream is closed");
+    nj_s8 h;
+    int n;
+
+    if (conn == NULL) {
+        return NJ_ERR;
+    }
+    h = socket_handle(vm, conn);
+    if (h == 0) {
+        return io_fail(vm, "the connection is closed");
+    }
+    n = (port != NULL && port->socket_available != NULL)
+            ? port->socket_available(port->ud, (void *)(intptr_t)h) : 0;
+    if (n < 0) {
+        return io_fail(vm, "cannot query available socket bytes");
+    }
+    ret->i = (nj_s4)n;
     return NJ_OK;
 }
 

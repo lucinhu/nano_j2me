@@ -68,6 +68,10 @@ nj_status nj_midp_destroy_app(nj_vm *vm, int unconditional);
 nj_status nj_port_headless_ex(nj_port *out, int width, int height,
                               int dump_every, const char *dump_prefix);
 
+/* Opt in to host HTTP/HTTPS/TCP in the headless port. Default is offline.
+ * Returns NJ_ERR_UNSUPPORTED when the desktop network backend is disabled. */
+nj_status nj_port_headless_enable_network(nj_port *port);
+
 /* Change the frame dump of a headless port that is already running.  A
  * prefix that names an existing directory dumps inside it. */
 void nj_port_headless_set_dump(void *ud, const char *prefix, int every);

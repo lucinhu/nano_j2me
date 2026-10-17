@@ -27,6 +27,18 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.EditText;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.text.InputType;
+import android.text.InputFilter;
+import android.text.method.PasswordTransformationMethod;
+import android.view.inputmethod.BaseInputConnection;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputConnectionWrapper;
+import android.view.inputmethod.InputMethodManager;
+import java.lang.ref.WeakReference;
 
 /**
  * Hosts one MIDlet: surface, input, keypad overlay, control bar.
@@ -66,6 +78,15 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private TextView status;
     private TextView handleButton;
     private FrameLayout root;      /* the whole window: the handle is placed in it */
+    private static volatile WeakReference<GameActivity> textActivity = new WeakReference<>(null);
+    private ImeEditor imeEditor;
+    private boolean imeApplying, imeActive, imePaused;
+    private int imeSession, imeSequence, imeSentCursor;
+    private String imeSentText = "";
+    private TextSnapshot imeSnapshot;
+    private final Runnable imePublish = new Runnable() {
+        @Override public void run() { publishIme(); }
+    };
 
     private String jarPath = "";   /* absolute: what the port opens */
     private String jarName = "";   /* file name: the JarStore key */
@@ -118,6 +139,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     private static native void nativeRun(long handle);
 
     private static native void nativeKey(long handle, int keyCode, boolean down);
+    private static native boolean nativeText(long handle, int session, int sequence,
+                                              String text, int cursor);
 
     private static native void nativeTouch(long handle, int id, int phase,
                                            float x, float y);
@@ -192,6 +215,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        textActivity = new WeakReference<>(this);
         /*
          * The platform MIDI synthesizer writes the file it is given into the
          * app cache, so it needs a Context before the VM can ask for music.
@@ -324,6 +348,20 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             }
         });
 
+        imeEditor = new ImeEditor(this);
+        imeEditor.setVisibility(View.GONE);
+        imeEditor.setTextColor(Color.BLACK);
+        imeEditor.setBackgroundColor(Color.WHITE);
+        imeEditor.setHint("输入文字");
+        FrameLayout.LayoutParams imeLayout = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM);
+        root.addView(imeEditor, imeLayout);
+        imeEditor.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { }
+            @Override public void afterTextChanged(Editable value) { scheduleIme(); }
+        });
         setContentView(root);
         /*
          * A notch is a hole in the panel the framework cannot move out of the
@@ -462,6 +500,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     @Override
     protected void onResume() {
         super.onResume();
+        imePaused = false;
+        if (imeActive && imeEditor != null) {
+            imeEditor.setVisibility(View.VISIBLE);
+            imeEditor.requestFocus();
+            InputMethodManager manager = (InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
+            if (manager != null) { manager.showSoftInput(imeEditor, InputMethodManager.SHOW_IMPLICIT); }
+        }
         applyFullscreen();
         /* The editor may have changed the layout or moved the picture while
          * we were away - it is the one screen where both are set up. */
@@ -484,6 +529,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
 
     @Override
     protected void onPause() {
+        publishIme();
+        imePaused = true;
+        hideIme();
         /* Park the VM before the surface goes away: a MIDlet that keeps ticking
          * behind a locked screen burns battery and gains nothing. */
         saveView();
@@ -502,6 +550,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
     @Override
     protected void onDestroy() {
         finishing = true;
+        hideIme();
+        if (textActivity.get() == this) { textActivity = new WeakReference<>(null); }
         /* The VM is gone by now, but a Player it left started is not: the shell
          * closes every MediaPlayer it opened, or the music outlives the game. */
         MidiPlayer.closeAll();
@@ -620,6 +670,150 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         finish();
     }
 
+    /* Native text is exchanged as Java UTF-16, never JNI modified UTF-8. */
+    private static final class TextSnapshot {
+        final long owner;
+        final boolean active, multiline;
+        final int session, sequence, constraints, max, cursor;
+        final String text;
+        TextSnapshot(long owner, boolean active, int session, int sequence, int constraints,
+                     boolean multiline, String text, int max, int cursor) {
+            this.owner = owner; this.active = active; this.session = session;
+            this.sequence = sequence; this.constraints = constraints; this.multiline = multiline;
+            this.text = text; this.max = max; this.cursor = cursor;
+        }
+    }
+
+    /** JNI worker callback: all widget and keyboard work stays on the UI thread. */
+    public static void updateNativeText(long owner, boolean active, int session, int sequence,
+            int constraints, boolean multiline, String text, int max, int cursor) {
+        final GameActivity activity = textActivity.get();
+        if (activity == null) { return; }
+        final TextSnapshot snapshot = new TextSnapshot(owner, active, session, sequence,
+                constraints, multiline, text, max, cursor);
+        activity.ui.post(new Runnable() {
+            @Override public void run() {
+                synchronized (activity.lock) {
+                    if (activity.handle != snapshot.owner || activity.finishing) { return; }
+                }
+                activity.applyIme(snapshot);
+            }
+        });
+    }
+
+    private final class ImeEditor extends EditText {
+        ImeEditor(Context context) { super(context); }
+        @Override protected void onSelectionChanged(int start, int end) {
+            super.onSelectionChanged(start, end);
+            scheduleIme();
+        }
+        @Override public InputConnection onCreateInputConnection(EditorInfo info) {
+            InputConnection connection = super.onCreateInputConnection(info);
+            if (connection == null) { return null; }
+            return new InputConnectionWrapper(connection, false) {
+                @Override public boolean finishComposingText() {
+                    boolean result = super.finishComposingText(); scheduleIme(); return result;
+                }
+                @Override public boolean commitText(CharSequence text, int cursor) {
+                    boolean result = super.commitText(text, cursor); scheduleIme(); return result;
+                }
+                @Override public boolean endBatchEdit() {
+                    boolean result = super.endBatchEdit(); scheduleIme(); return result;
+                }
+            };
+        }
+    }
+
+    private void scheduleIme() {
+        if (imeApplying || !imeActive || imePaused || finishing) { return; }
+        ui.removeCallbacks(imePublish);
+        ui.post(imePublish);
+    }
+
+    private void publishIme() {
+        if (!imeActive || imePaused || imeApplying || imeEditor == null || finishing) { return; }
+        Editable editable = imeEditor.getText();
+        if (BaseInputConnection.getComposingSpanStart(editable) >= 0 ||
+                BaseInputConnection.getComposingSpanEnd(editable) >= 0) { return; }
+        String text = editable.toString();
+        int cursor = Math.max(0, imeEditor.getSelectionEnd());
+        if (text.equals(imeSentText) && cursor == imeSentCursor) { return; }
+        boolean accepted = false;
+        synchronized (lock) {
+            if (handle != 0) {
+                accepted = nativeText(handle, imeSession, imeSequence + 1, text, cursor);
+            }
+        }
+        if (accepted) {
+            ++imeSequence; imeSentText = text; imeSentCursor = cursor;
+        } else if (!finishing && handle != 0) {
+            /* Queue pressure is temporary; keep the latest complete edit. */
+            ui.postDelayed(imePublish, 32);
+        }
+    }
+
+    private void hideIme() {
+        ui.removeCallbacks(imePublish);
+        if (imeEditor == null) { return; }
+        InputMethodManager manager = (InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
+        if (manager != null) { manager.hideSoftInputFromWindow(imeEditor.getWindowToken(), 0); }
+        imeEditor.clearFocus();
+        imeEditor.setVisibility(View.GONE);
+    }
+
+    private void applyIme(TextSnapshot snapshot) {
+        boolean newSession = imeSession != snapshot.session;
+        imeSnapshot = snapshot;
+        imeActive = snapshot.active;
+        if (!imeActive || imePaused) { hideIme(); return; }
+        if (!newSession && (snapshot.sequence < imeSequence ||
+                !imeEditor.getText().toString().equals(imeSentText) ||
+                imeEditor.getSelectionEnd() != imeSentCursor)) { return; }
+        imeApplying = true;
+        try {
+            if (newSession) {
+                ui.removeCallbacks(imePublish);
+                imeSession = snapshot.session;
+                imeSequence = snapshot.sequence;
+                int kind = snapshot.constraints & 0xffff;
+                boolean password = (snapshot.constraints & 0x10000) != 0;
+                int type = InputType.TYPE_CLASS_TEXT;
+                if (kind == 2) { type = InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_SIGNED; }
+                else if (kind == 5) { type = InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_SIGNED | InputType.TYPE_NUMBER_FLAG_DECIMAL; }
+                else if (kind == 3) { type = InputType.TYPE_CLASS_PHONE; }
+                else if (kind == 1) { type |= InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS; }
+                else if (kind == 4) { type |= InputType.TYPE_TEXT_VARIATION_URI; }
+                else if (snapshot.multiline) { type |= InputType.TYPE_TEXT_FLAG_MULTI_LINE; }
+                if (password || (snapshot.constraints & (0x80000 | 0x40000)) != 0) {
+                    type |= InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
+                }
+                if (kind == 0 && (snapshot.constraints & 0x100000) != 0) { type |= InputType.TYPE_TEXT_FLAG_CAP_WORDS; }
+                if (kind == 0 && (snapshot.constraints & 0x200000) != 0) { type |= InputType.TYPE_TEXT_FLAG_CAP_SENTENCES; }
+                imeEditor.setInputType(type);
+                imeEditor.setSingleLine(!snapshot.multiline || kind != 0);
+                imeEditor.setTransformationMethod(password ? PasswordTransformationMethod.getInstance() : null);
+                imeEditor.setImeOptions(EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_FLAG_NO_FULLSCREEN |
+                        (snapshot.multiline ? EditorInfo.IME_ACTION_NONE : EditorInfo.IME_ACTION_DONE));
+                imeEditor.setFilters(new InputFilter[] { new InputFilter.LengthFilter(Math.max(1, snapshot.max)) });
+            }
+            /* Do not discard OS composing spans when a delayed acknowledgement
+             * contains exactly the text already present in the editor. */
+            if (!imeEditor.getText().toString().equals(snapshot.text)) { imeEditor.setText(snapshot.text); }
+            int cursor = Math.max(0, Math.min(snapshot.cursor, imeEditor.length()));
+            if (imeEditor.getSelectionEnd() != cursor) { imeEditor.setSelection(cursor); }
+            imeSentText = snapshot.text; imeSentCursor = cursor;
+            imeEditor.setVisibility(View.VISIBLE);
+            imeEditor.requestFocus();
+            if (newSession) {
+                InputMethodManager manager = (InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
+                if (manager != null) {
+                    manager.restartInput(imeEditor);
+                    manager.showSoftInput(imeEditor, InputMethodManager.SHOW_IMPLICIT);
+                }
+            }
+        } finally { imeApplying = false; }
+    }
+
     /* ---------------------------------------------------------------- input */
 
     @Override
@@ -647,6 +841,22 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                     : AudioManager.ADJUST_TOGGLE_MUTE);
             am.adjustStreamVolume(AudioManager.STREAM_MUSIC, dir, AudioManager.FLAG_SHOW_UI);
             return true;
+        }
+        if (imeActive && !imePaused && imeEditor != null && imeEditor.hasFocus()) {
+            if (code == KeyEvent.KEYCODE_BACK) {
+                if (!down) {
+                    InputMethodManager manager = (InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
+                    if (manager != null) { manager.hideSoftInputFromWindow(imeEditor.getWindowToken(), 0); }
+                }
+                return true;
+            }
+            if (ev.getUnicodeChar() != 0 || code == KeyEvent.KEYCODE_DEL ||
+                    code == KeyEvent.KEYCODE_FORWARD_DEL || code == KeyEvent.KEYCODE_ENTER ||
+                    (code >= KeyEvent.KEYCODE_DPAD_UP && code <= KeyEvent.KEYCODE_DPAD_CENTER) ||
+                    code == KeyEvent.KEYCODE_MOVE_HOME || code == KeyEvent.KEYCODE_MOVE_END ||
+                    ev.getAction() == KeyEvent.ACTION_MULTIPLE) {
+                return super.dispatchKeyEvent(ev);
+            }
         }
         if (down && ev.getRepeatCount() > 0) {
             return true;        /* MIDP has no key repeat; a held key is held */

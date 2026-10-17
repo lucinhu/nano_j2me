@@ -34,6 +34,7 @@ static void usage(const char *argv0)
 "  --save-state-frame <n>  which frame boundary to snapshot (default: 1)\n"
 "  --load-state <file>  resume a snapshot instead of starting the MIDlet\n"
         "  --fs-dir <path>      root for file:// (JSR 75); no filesystem by default\n"
+"  --network            enable HTTP/HTTPS/TCP for the headless port\n"
 "  --stats              print bytecode and frame counters at the end\n"
 "  --device <name>      answer System.getProperty() as this handset\n"
 "  --prop <key>=<value> answer one more property (repeatable)\n"
@@ -95,6 +96,7 @@ typedef struct cli {
     int         height;
     unsigned    heap_mb;
     int         stats;
+    int         network;
     int         where;
     int         run_frames;
     const char *keys;
@@ -235,6 +237,8 @@ int main(int argc, char **argv)
             props[nprops].key = prop_key[nprops];
             props[nprops].value = prop_val[nprops];
             nprops++;
+        } else if (strcmp(a, "--network") == 0) {
+            c.network = 1;
         } else if (strcmp(a, "--stats") == 0) {
             c.stats = 1;
         } else if (strcmp(a, "--where") == 0) {
@@ -318,6 +322,15 @@ int main(int argc, char **argv)
     } else {
         fprintf(stderr, "unknown port: %s\n", c.port_name);
         return 2;
+    }
+
+    if (c.network && strcmp(c.port_name, "headless") == 0) {
+        st = nj_port_headless_enable_network(&port);
+        if (st != NJ_OK) {
+            fprintf(stderr, "this build has no desktop network backend\n");
+            nj_port_shutdown(&port);
+            return 2;
+        }
     }
 
     port.width = c.width;

@@ -264,6 +264,7 @@ nj_status nj_midp_frame(nj_vm *vm)
     frame_start = nj_now_ms(vm);
 
     /* ---- input ---- */
+    nj_midp_text_input_sync(vm);
     if (vm->port && vm->port->input_poll) {
         int guard = 0;
         while (guard++ < 256 && vm->port->input_poll(vm->port->ud, &ev)) {
@@ -273,9 +274,15 @@ nj_status nj_midp_frame(nj_vm *vm)
             case NJ_EV_POINTER_DOWN: (void)nj_midp_pointer(vm, ev.x, ev.y, NJ_POINTER_DOWN); break;
             case NJ_EV_POINTER_UP:   (void)nj_midp_pointer(vm, ev.x, ev.y, NJ_POINTER_UP);   break;
             case NJ_EV_POINTER_MOVE: (void)nj_midp_pointer(vm, ev.x, ev.y, NJ_POINTER_MOVE); break;
+            case NJ_EV_TEXT_INPUT:
+            case NJ_EV_TEXT_EDIT:
+            case NJ_EV_TEXT_REPLACE:
+                ev.text[NJ_TEXT_INPUT_BYTES - 1] = '\0';
+                (void)nj_midp_text_event(vm, &ev); break;
             case NJ_EV_QUIT:         vm->running = 0u; break;
             default: break;
             }
+            nj_midp_text_input_sync(vm);
         }
     }
     if (!vm->running) {

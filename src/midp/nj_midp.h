@@ -236,6 +236,14 @@ void nj_midp_repaint(nj_vm *vm);
  * `down` is 1 for press, 0 for release.  Returns 1 if it was consumed. */
 int nj_midp_key(nj_vm *vm, int key, int down);
 
+/* Native committed UTF-8 and scalar-safe editing for the focused text widget.
+ * Return 1 when consumed; unsupported focus, invalid text or constraints return
+ * 0 without changing contents. Preedit is owned entirely by the native IME. */
+int nj_midp_text(nj_vm *vm, const char *utf8);
+int nj_midp_text_edit(nj_vm *vm, int edit);
+void nj_midp_text_input_sync(nj_vm *vm);
+int nj_midp_text_event(nj_vm *vm, const nj_event *event);
+
 /*
  * Pointer events, in device pixels.  These three values are the whole reason
  * the parameter is not called `down` any more: NJ_EV_POINTER_MOVE used to be

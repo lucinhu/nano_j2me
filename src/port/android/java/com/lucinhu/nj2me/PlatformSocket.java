@@ -60,16 +60,29 @@ final class PlatformSocket {
     private static final String TAG = "nj2me";
 
     /*
-     * The Android per-connection cap as seen from the runtime's read loop.
-     * A MIDlet's read() blocks with no timeout of its own, so the C side asks
-     * for a slice and comes back; 30 s is a hung server, not a slow one.
+     * Bound each Java read allocation/work request. The runtime can retry
+     * partial reads; timeoutMs controls the separate blocking-time limit.
      */
     private static final int MAX_BYTES = 1 << 20;
 
     private static final class Entry {
-        Socket socket;
-        InputStream in;
-        OutputStream out;
+        final Socket socket;
+        final InputStream in;
+        final OutputStream out;
+        final Object readLock = new Object();
+        final Object writeLock = new Object();
+
+        Entry(Socket socket) throws java.io.IOException {
+            this.socket = socket;
+            in = socket.getInputStream();
+            out = socket.getOutputStream();
+        }
+    }
+
+    /* Never hold the map monitor during blocking I/O: reads must not prevent
+     * a writer, another connection, or close() from making progress. */
+    private static synchronized Entry lookup(long id) {
+        return OPEN.get(Long.valueOf(id));
     }
 
     private static final HashMap<Long, Entry> OPEN = new HashMap<Long, Entry>();
@@ -79,9 +92,8 @@ final class PlatformSocket {
     private PlatformSocket() {
     }
 
-    /** Kept for symmetry with the other bridges: nothing to hold here yet. */
     /** 1 = the game may use the network, 0 = the player's setting says no. */
-    private static int allowed = 1;
+    private static volatile int allowed = 1;
 
     /** The player's per-game network setting; see PlatformHttp.setAllowed(). */
     static synchronized void setAllowed(boolean on) {
@@ -102,7 +114,7 @@ final class PlatformSocket {
      * Connect, and answer the id the other statics take.  The URL is a
      * "socket://host:port" URL exactly as the MIDlet wrote it.
      */
-    static synchronized long connect(String url, int timeoutMs) {
+    static long connect(String url, int timeoutMs) {
         if (allowed == 0) {
             Log.i(TAG, "socket: " + url + " refused - this game's settings say"
                     + " no network");
@@ -120,12 +132,30 @@ final class PlatformSocket {
             if (slash >= 0) {
                 rest = rest.substring(0, slash);
             }
-            int colon = rest.lastIndexOf(':');
+            int parameters = rest.indexOf(';');
+            if (parameters >= 0) {
+                rest = rest.substring(0, parameters);
+            }
+            int colon;
+            if (rest.startsWith("[")) {
+                int bracket = rest.indexOf(']');
+                if (bracket <= 1 || bracket + 1 >= rest.length()
+                        || rest.charAt(bracket + 1) != ':') {
+                    return 0;
+                }
+                host = rest.substring(1, bracket);
+                colon = bracket + 1;
+            } else {
+                colon = rest.indexOf(':');
+                if (colon != rest.lastIndexOf(':')) {
+                    return 0; // IPv6 literals require brackets.
+                }
+                host = colon > 0 ? rest.substring(0, colon) : null;
+            }
             if (colon <= 0 || colon + 1 >= rest.length()) {
                 Log.w(TAG, "socket: cannot read a host and port out of " + url);
                 return 0;
             }
-            host = rest.substring(0, colon);
             port = Integer.parseInt(rest.substring(colon + 1));
         } catch (Throwable t) {
             Log.w(TAG, "socket: cannot read a host and port out of " + url + ": " + t);
@@ -136,8 +166,9 @@ final class PlatformSocket {
             return 0;
         }
 
+        Socket s = null;
         try {
-            Socket s = new Socket();
+            s = new Socket();
             /*
              * TCP_NODELAY: a J2ME game sends small messages and waits for an
              * answer, which is the case Nagle's algorithm turns into a delay.
@@ -145,29 +176,30 @@ final class PlatformSocket {
             s.setTcpNoDelay(true);
             s.setKeepAlive(true);
             s.connect(new InetSocketAddress(host, port), timeoutMs > 0 ? timeoutMs : 30000);
-            Entry e = new Entry();
-            e.socket = s;
-            e.in = s.getInputStream();
-            e.out = s.getOutputStream();
-            long id;
-            synchronized (PlatformSocket.class) {
-                id = next++;
-                OPEN.put(Long.valueOf(id), e);
-            }
+            Entry e = new Entry(s);
             Log.i(TAG, "socket: connected to " + host + ":" + port
                     + " from " + s.getLocalAddress().getHostAddress() + ":" + s.getLocalPort());
-            return id;
+            synchronized (PlatformSocket.class) {
+                long id = next++;
+                OPEN.put(Long.valueOf(id), e);
+                return id;
+            }
         } catch (Throwable t) {
-            if (!loggedFailure) {
-                loggedFailure = true;
-                Log.w(TAG, "socket: cannot connect to " + host + ":" + port + ": " + t);
+            if (s != null) {
+                try { s.close(); } catch (Throwable ignored) { }
+            }
+            synchronized (PlatformSocket.class) {
+                if (!loggedFailure) {
+                    loggedFailure = true;
+                    Log.w(TAG, "socket: cannot connect to " + host + ":" + port + ": " + t);
+                }
             }
             return 0;
         }
     }
 
-    static synchronized String address(long id) {
-        Entry e = OPEN.get(Long.valueOf(id));
+    static String address(long id) {
+        Entry e = lookup(id);
         if (e == null || e.socket == null) {
             return null;
         }
@@ -178,13 +210,13 @@ final class PlatformSocket {
         }
     }
 
-    static synchronized int port(long id) {
-        Entry e = OPEN.get(Long.valueOf(id));
+    static int port(long id) {
+        Entry e = lookup(id);
         return e == null ? 0 : e.socket.getPort();
     }
 
-    static synchronized String localAddress(long id) {
-        Entry e = OPEN.get(Long.valueOf(id));
+    static String localAddress(long id) {
+        Entry e = lookup(id);
         if (e == null || e.socket == null) {
             return null;
         }
@@ -195,8 +227,8 @@ final class PlatformSocket {
         }
     }
 
-    static synchronized int localPort(long id) {
-        Entry e = OPEN.get(Long.valueOf(id));
+    static int localPort(long id) {
+        Entry e = lookup(id);
         return e == null ? 0 : e.socket.getLocalPort();
     }
 
@@ -205,59 +237,72 @@ final class PlatformSocket {
      * is the size of the MIDlet's own buffer, so a game that reads four bytes
      * at a time costs four bytes a call.
      */
-    static synchronized int read(long id, byte[] buf, int len, int timeoutMs) {
-        Entry e = OPEN.get(Long.valueOf(id));
-        if (e == null || e.in == null) {
+    static int read(long id, byte[] buf, int len, int timeoutMs) {
+        Entry e = lookup(id);
+        if (e == null || buf == null || len < 0 || len > buf.length) {
             return -2;
         }
-        if (buf == null || len <= 0) {
+        if (len == 0) {
             return 0;
         }
-        if (len > MAX_BYTES) {
-            len = MAX_BYTES;
-        }
-        try {
-            e.socket.setSoTimeout(timeoutMs > 0 ? timeoutMs : 30000);
-            int n = e.in.read(buf, 0, len);
-            return n;   /* -1 is the peer's end of stream, and is passed on */
-        } catch (SocketTimeoutException te) {
-            return 0;   /* nothing arrived: not an error, and not an end */
-        } catch (Throwable t) {
-            return -2;
+        len = Math.min(len, MAX_BYTES);
+        synchronized (e.readLock) {
+            try {
+                e.socket.setSoTimeout(timeoutMs > 0 ? timeoutMs : 30000);
+                return e.in.read(buf, 0, len); // -1 is EOF.
+            } catch (SocketTimeoutException te) {
+                return 0; // A timeout is neither EOF nor failure.
+            } catch (Throwable t) {
+                return -2;
+            }
         }
     }
 
-    static synchronized int write(long id, byte[] buf, int len) {
-        Entry e = OPEN.get(Long.valueOf(id));
-        if (e == null || e.out == null || buf == null) {
+    static int write(long id, byte[] buf, int len) {
+        Entry e = lookup(id);
+        if (e == null || buf == null || len < 0 || len > buf.length) {
             return -1;
         }
-        if (len <= 0) {
+        if (len == 0) {
             return 0;
         }
+        synchronized (e.writeLock) {
+            try {
+                e.out.write(buf, 0, len);
+                e.out.flush();
+                return len;
+            } catch (Throwable t) {
+                return -1;
+            }
+        }
+    }
+
+    /** Nonblocking count; do not wait for a pending read's monitor. */
+    static int available(long id) {
+        Entry e = lookup(id);
+        if (e == null) {
+            return -1;
+        }
         try {
-            e.out.write(buf, 0, len);
-            e.out.flush();
-            return len;
+            return e.in.available();
         } catch (Throwable t) {
             return -1;
         }
     }
 
-    static synchronized void close(long id) {
-        Entry e = OPEN.remove(Long.valueOf(id));
+    static void close(long id) {
+        Entry e;
+        synchronized (PlatformSocket.class) {
+            e = OPEN.remove(Long.valueOf(id));
+        }
         if (e == null) {
             return;
         }
+        // Never acquire the I/O monitors: Socket.close interrupts blocked I/O.
         try {
-            if (e.socket != null) {
-                e.socket.close();
-            }
+            e.socket.close();
         } catch (Throwable t) {
             /* Closing a socket that is already gone is not worth a line. */
         }
-        e.in = null;
-        e.out = null;
-        e.socket = null;
     }
 }

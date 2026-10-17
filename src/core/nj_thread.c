@@ -488,13 +488,22 @@ static nj_status scheduler_step(nj_vm *vm)
                         (unsigned)t->id,
                         desc ? desc : (e && e->cls ? e->cls->name : "?"));
             }
-        } else if (st == NJ_OK && !t->is_main && t->nframes == 0 &&
-                   t->obj && t->obj->cls &&
-                   strcmp(t->obj->cls->name, "nj2me/util/TimerThread") == 0) {
-            /* Internal timer helpers must finish so cancelled timers can be
-             * reclaimed. Ordinary Java thread completion is left unchanged
-             * until nested constructor waits have their own regression. */
-            t->state = NJ_THREAD_DEAD;
+        } else if (st == NJ_OK && !t->is_main && t->started &&
+                   t->nframes == 0 && t->obj) {
+            nj_field *f = nj_field_lookup(vm, "java/lang/Thread", "alive", "Z", 0);
+            /* nj_exec has returned from the worker's bottom Java frame. A
+             * nested C invocation is excluded above by in_c_call. Publish
+             * completion to isAlive()/join(), but retain the legacy scheduler
+             * state: constructor frame-hook pumps currently depend on its idle
+             * timing (Doom/Doom's untimed startup wait in particular). */
+            if (f && nj_field_read_int(vm, t->obj, f)) {
+                nj_field_write_int(vm, t->obj, f, 0);
+                (void)nj_vm_monitor_notify(vm, t->obj, 1);
+            }
+            if (t->obj->cls &&
+                strcmp(t->obj->cls->name, "nj2me/util/TimerThread") == 0) {
+                t->state = NJ_THREAD_DEAD;
+            }
         } else if (st != NJ_OK && st != NJ_ERR_YIELD && st != NJ_ERR_TIMEOUT) {
             return st;
         }

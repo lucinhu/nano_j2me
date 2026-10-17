@@ -31,6 +31,9 @@
 #include "nj2me/nj_vm.h"       /* speed + save-state, applied on the frame */
 
 #include "nj_sdl2_font.h"
+#ifdef NJ_HAVE_POSIX_NETWORK
+#include "nj_posix_network.h"
+#endif
 #include "nj2me/nj_types.h"
 
 #include <SDL.h>
@@ -126,6 +129,9 @@ static const sdl2_key_def sdl2_keys[NJ_SDL2_NBTN] = {
 };
 
 typedef struct sdl_state {
+#ifdef NJ_HAVE_POSIX_NETWORK
+    nj_posix_network network;
+#endif
     SDL_Window   *window;
     SDL_Renderer *renderer;
     SDL_Texture  *texture;
@@ -139,6 +145,9 @@ typedef struct sdl_state {
 
     nj_event queue[256];
     int  qh, qt;
+    int ime_active, ime_composing, ime_multiline;
+    nj_u4 ime_session;
+    nj_u1 ime_keys[SDL_NUM_SCANCODES]; /* swallow matching key-up after focus moves */
 
     int  quit;
     int  have_scale_arg;
@@ -1075,6 +1084,24 @@ static void sdl_pointer_to(sdl_state *s, int x, int y)
     }
 }
 
+static int sdl_input_push(void *ud, const nj_event *ev);
+
+static void sdl_text_input(void *ud, const nj_text_input_state *state)
+{
+    sdl_state *s = SS(ud);
+    if (s->ime_session != state->session || s->ime_active != state->active) {
+        SDL_StopTextInput();
+        SDL_FlushEvent(SDL_TEXTINPUT);
+        SDL_FlushEvent(SDL_TEXTEDITING);
+        s->ime_composing = 0;
+        s->ime_session = state->session;
+        s->ime_active = state->active;
+        if (s->ime_active) { SDL_StartTextInput(); }
+    }
+    s->ime_multiline = state->multiline;
+    if (s->ime_active) { SDL_SetTextInputRect(&s->game_dst); }
+}
+
 static void sdl_display_present(void *ud, int x, int y, int w, int h)
 {
     sdl_state *s = SS(ud);
@@ -1093,9 +1120,66 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
             s->qt = (s->qt + 1) % (int)(sizeof(s->queue) / sizeof(s->queue[0]));
             s->quit = 1;
             break;
+        case SDL_TEXTEDITING:
+            /* Preedit belongs to the OS IME. Never append it to the MIDP value. */
+            if (s->ime_active) { s->ime_composing = ev.edit.text[0] != '\0'; }
+            break;
+        case SDL_TEXTINPUT:
+            if (s->ime_active) {
+                e.type = NJ_EV_TEXT_INPUT;
+                e.text_session = s->ime_session;
+                memcpy(e.text, ev.text.text, sizeof(e.text));
+                e.text[sizeof(e.text) - 1] = '\0';
+                (void)sdl_input_push(s, &e);
+                s->ime_composing = 0;
+            }
+            break;
         case SDL_KEYDOWN:
         case SDL_KEYUP: {
             int k = -1;
+            SDL_Keycode sym = ev.key.keysym.sym;
+            int scan = (int)ev.key.keysym.scancode;
+            int consumed = 0, edit = 0;
+            if (ev.type == SDL_KEYUP && scan >= 0 && scan < SDL_NUM_SCANCODES && s->ime_keys[scan]) {
+                s->ime_keys[scan] = 0;
+                break;
+            }
+            if (s->ime_active) {
+                switch (sym) {
+                case SDLK_BACKSPACE: edit = NJ_TEXT_BACKSPACE; break;
+                case SDLK_DELETE: edit = NJ_TEXT_DELETE; break;
+                case SDLK_LEFT: edit = NJ_TEXT_LEFT; break;
+                case SDLK_RIGHT: edit = NJ_TEXT_RIGHT; break;
+                case SDLK_HOME: edit = NJ_TEXT_HOME; break;
+                case SDLK_END: edit = NJ_TEXT_END; break;
+                default: break;
+                }
+                consumed = edit || (sym >= 32 && sym < 127) ||
+                           (sym >= SDLK_KP_1 && sym <= SDLK_KP_PERIOD) ||
+                           (s->ime_composing && (sym == SDLK_RETURN || sym == SDLK_KP_ENTER ||
+                            sym == SDLK_ESCAPE || sym == SDLK_UP || sym == SDLK_DOWN));
+                if (s->ime_multiline && (sym == SDLK_RETURN || sym == SDLK_KP_ENTER)) {
+                    consumed = 1;
+                    if (ev.type == SDL_KEYDOWN && !s->ime_composing) {
+                        e.type = NJ_EV_TEXT_INPUT;
+                        e.text_session = s->ime_session;
+                        e.text[0] = '\n';
+                        (void)sdl_input_push(s, &e);
+                    }
+                }
+                if (consumed) {
+                    if (ev.type == SDL_KEYDOWN) {
+                        if (scan >= 0 && scan < SDL_NUM_SCANCODES) { s->ime_keys[scan] = 1; }
+                        if (edit && !s->ime_composing) {
+                            e.type = NJ_EV_TEXT_EDIT;
+                            e.text_session = s->ime_session;
+                            e.key = (nj_u1)edit;
+                            (void)sdl_input_push(s, &e);
+                        }
+                    }
+                    break;
+                }
+            }
 
             /*
              * F12 or Tab shows and hides the on-screen keys.  Not F1: that is
@@ -1716,6 +1800,38 @@ static void sdl_install_codecs(void *ud, nj_vm *vm)
     s->speed_applied = 0;
 }
 
+#ifdef NJ_HAVE_POSIX_NETWORK
+static nj_status sdl_http_request(void *ud, const char *url, const char *method,
+    const char *headers, const nj_u1 *body, nj_u4 body_len, int *status,
+    char *rheaders, nj_size cap, nj_u1 **out_body, nj_u4 *out_len,
+    void *(*alloc)(void *, nj_u4), void *aud)
+{
+    return nj_posix_http_request(&SS(ud)->network, url, method, headers,
+        body, body_len, status, rheaders, cap, out_body, out_len, alloc, aud);
+}
+static void *sdl_socket_connect(void *ud, const char *url, nj_u4 timeout,
+    nj_socket_info *info, char *err, nj_size cap)
+{
+    return nj_posix_socket_connect(&SS(ud)->network, url, timeout, info, err, cap);
+}
+static int sdl_socket_read(void *ud, void *h, nj_u1 *buf, int len, nj_u4 timeout)
+{
+    return nj_posix_socket_read(&SS(ud)->network, h, buf, len, timeout);
+}
+static int sdl_socket_available(void *ud, void *h)
+{
+    return nj_posix_socket_available(&SS(ud)->network, h);
+}
+static int sdl_socket_write(void *ud, void *h, const nj_u1 *buf, int len)
+{
+    return nj_posix_socket_write(&SS(ud)->network, h, buf, len);
+}
+static void sdl_socket_close(void *ud, void *h)
+{
+    nj_posix_socket_close(&SS(ud)->network, h);
+}
+#endif
+
 static void sdl_shutdown(void *ud)
 {
     sdl_state *s = SS(ud);
@@ -1723,6 +1839,7 @@ static void sdl_shutdown(void *ud)
     if (!s) {
         return;
     }
+    SDL_StopTextInput();
     if (s->texture) {
         SDL_DestroyTexture(s->texture);
     }
@@ -1732,6 +1849,9 @@ static void sdl_shutdown(void *ud)
     if (s->window) {
         SDL_DestroyWindow(s->window);
     }
+#ifdef NJ_HAVE_POSIX_NETWORK
+    nj_posix_network_destroy(&s->network);
+#endif
     free(s->pixels);
     free(s);
     SDL_Quit();
@@ -1811,6 +1931,16 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
     s->port = out;
     out->name = "sdl2";
     out->ud = s;
+#ifdef NJ_HAVE_POSIX_NETWORK
+    if (nj_posix_network_init(&s->network) == NJ_OK) {
+        out->http_request = sdl_http_request;
+        out->socket_connect = sdl_socket_connect;
+        out->socket_read = sdl_socket_read;
+        out->socket_write = sdl_socket_write;
+        out->socket_available = sdl_socket_available;
+        out->socket_close = sdl_socket_close;
+    }
+#endif
     out->millis = sdl_millis;
     out->sleep_ms = sdl_sleep_ms;
     out->idle = sdl_idle;
@@ -1826,6 +1956,8 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
     out->display_present = sdl_display_present;
     out->input_poll = sdl_input_poll;
     out->input_push = sdl_input_push;
+    out->text_input = sdl_text_input;
+    SDL_StopTextInput();
     /* No codecs to install, but this is how the port gets the VM it must not
      * touch except from input_poll (the speed badge and the F5 snapshot). */
     out->install_codecs = sdl_install_codecs;

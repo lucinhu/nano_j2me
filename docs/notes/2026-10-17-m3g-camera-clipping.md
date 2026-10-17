@@ -18,7 +18,7 @@
 
 同时补齐 `cam_proj_fill` 的平行投影矩阵：按 height/aspect 缩放 x/y，并用 near/far 生成 z 行。旧实现的单位矩阵会使合法 z=-2 Sprite 被新的正确裁剪规则拒绝；现有 Sprite 回归验证此次矩阵修复。没有改变正交投影的深度比较算法。
 
-最终验证：
+前一轮裁剪主体的历史验证（保留原记录；不是本轮重新执行的全量检查）：
 
 | 项目 | 结果 |
 | --- | --- |
@@ -35,6 +35,18 @@ CLI text 从 2108950 增至 2109958 字节（+1008），data/bss 保持 155848/6
 
 日志与截图位于 `.local-tools/debug-runs/nfs-clip-20261017/`，灰块来源调试位于 `.local-tools/debug-runs/nfs-render-20261017/`。原版游戏 JAR 与用户 RMS 不变。
 
+## 相机投影切换与零裁剪面的收尾验证
+
+本轮在独立 `build-camera` 构建中重新执行，接管时实际结果为 `test_m3g` 288 checks / 2 failures，`test_m3g_file` 97 checks / 0 failures；不是前述历史 266 / 19 的旧裁剪实现。两个失败均为平行投影的零 near/far 被 `cam_proj_fill` 错当成透视相机默认值。
+
+`setPerspective` / `setParallel` 现在清除 `_nj_generic`，使同一 Camera 从 generic 切换后真正使用新投影。`cam_proj_fill` 仅在透视模式下把零 near/far 回退到构造默认值，平行模式保留零或负距离；已使用既有 `perspective` 局部变量，消除 unused 警告。齐次 near/far 裁剪主体保持不变。
+
+回归扩展到七种渲染路径：透视、等价 generic、平行、generic→透视、generic→平行、平行 near=0/far=10，以及平行 near=-10/far=0。除矩阵端点外，零/负裁剪面也实际绘制三角形，检查越界面既不写颜色也不写深度，且合法面仍可渲染。最终 `test_m3g` 为 **302 checks / 0 failures**，`test_m3g_file` 为 **97 checks / 0 failures**，定向 CTest **2/2** 通过；本轮未重跑全量 CTest 或关闭 M3G 构建。
+
+本轮原版极品飞车 SHA-256 为 `d2eebdceab913587043c2ab3209596e5dc64eac66a15ffeeceb98e31c40ffd00`。以 headless、240×320、8 MiB 堆、30 fps、新隔离 RMS，使用 `360:fire,540:soft1,720:fire,900:fire,1050:fire` 回放 1200 帧：304032 个三角形、11548 次 M3G 操作、40.059 秒、30.0 fps；退出状态 0，日志无未捕获异常。第 1050 与 1200 帧均可见车辆、道路、城市建筑及“按向下或8键刹车”的教程 1/7，速度由 71 增至 97；验证到教程行驶阶段，没有验证完成全部教程或全游戏。
+
+最新日志、实验 RMS 和截图位于 `.local-tools/debug-runs/nfs-camera-final-20261017/`，重点截图为 `frames/01050.png` 与 `frames/01200.png`。第 750 帧 `frames/00750.png` 仍存在已记录的灰色填充块，因此本轮仍不把灰块归因于裁剪。原版 JAR 和用户存档未更改，所有后台任务已收集。
+
 ## 后续边界
 
-本轮不处理灰块保留原因、正交深度插值或半像素采样。另外，既有 `setPerspective` / `setParallel` 没有清除 `_nj_generic`；本次三种投影用例分别创建 Camera，因此没有覆盖同一 Camera 从 generic 切换投影的语义。平行投影零 near 值的默认回退也保留为后续 API 边界问题。
+本轮不处理灰块保留原因、正交深度插值、半像素采样或其他 Camera API 参数校验。不能用限帧达到 30 fps 作为无限速性能结论。

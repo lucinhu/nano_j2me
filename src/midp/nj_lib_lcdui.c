@@ -4421,15 +4421,9 @@ static int form_item_key(nj_vm *vm, nj_ref form, int delta)
         return 1;
     }
     if (isa(vm, it, NJ_C_TEXTFIELD)) {
-        nj_s4 len = 0;
-        nj_ref s = rget(vm, it, NJ_C_TEXTFIELD, "tfText", D_STR);
-        if (s) {
-            len = (nj_s4)nj_string_len(s);
-        }
-        len += delta;
-        if (len < 0) { len = 0; }
-        fput(vm, it, NJ_C_TEXTFIELD, "tfCursor", D_INT, len);
-        return 1;
+        /* Up/down traverses Form items. Native editor left/right owns the
+         * caret; trapping traversal here made a focused field inescapable. */
+        return 0;
     }
     if (isa(vm, it, NJ_C_DATEFIELD)) {
         nj_s8 t = df_millis(vm, it);
@@ -5478,10 +5472,7 @@ NJFN(item_addCommand)
         return nj_throw(vm, "java/lang/NullPointerException", "command is null");
     }
     t = fget(vm, c, NJ_C_COMMAND, "cmdType", D_INT);
-    if (fget(vm, self, NJ_C_ITEM, "itCmdType", D_INT) != -1 && t != 2) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "an Item accepts only ITEM commands");
-    }
+    /* MIDP recommends ITEM commands, but permits other command types. */
     fput(vm, self, NJ_C_ITEM, "itCmdType", D_INT, t);
     return NJ_OK;
 }
@@ -5504,12 +5495,6 @@ NJFN(item_setDefaultCommand)
     nj_ref self = NJ_THIS(args);
     nj_ref c = NJ_ARG_REF(args, 0);
 
-    if (c) {
-        if (fget(vm, c, NJ_C_COMMAND, "cmdType", D_INT) != 2) {
-            return nj_throw(vm, "java/lang/IllegalArgumentException",
-                            "default command must be an ITEM command");
-        }
-    }
     rput(vm, self, NJ_C_ITEM, "itDefaultCmd", D_CMD, c);
     return NJ_OK;
 }
@@ -5687,10 +5672,6 @@ NJFN(si_addCommand)
 
     if (!c) {
         return nj_throw(vm, "java/lang/NullPointerException", "command is null");
-    }
-    if (fget(vm, c, NJ_C_COMMAND, "cmdType", D_INT) != 2) {
-        return nj_throw(vm, "java/lang/IllegalStateException",
-                        "StringItem accepts only ITEM commands");
     }
     rput(vm, self, NJ_C_STRINGITEM, "siCmd", D_CMD, c);
     return NJ_OK;
@@ -6105,12 +6086,13 @@ static int tf_is_valid_char(nj_s4 constraints, nj_u2 ch)
 
 static int tf_allowed(nj_s4 constraints, const nj_u2 *s, int n)
 {
-    int i;
+    int i, dots = 0;
+    int kind = constraints & 0xFFFF;
 
     for (i = 0; i < n; i++) {
-        if (!tf_is_valid_char(constraints, s[i])) {
-            return 0;
-        }
+        if (!tf_is_valid_char(constraints, s[i])) { return 0; }
+        if ((kind == 2 || kind == 5) && s[i] == '-' && i != 0) { return 0; }
+        if (kind == 5 && s[i] == '.' && ++dots > 1) { return 0; }
     }
     return 1;
 }
@@ -8324,6 +8306,231 @@ static nj_status tb_sync(nj_vm *vm, nj_ref self, const nj_u2 *s, int n)
     return NJ_OK;
 }
 
+/* Resolve focus on every event: a native editor never retains a Java object. */
+static nj_ref text_focus(nj_vm *vm, int *box)
+{
+    nj_ref d = nj_midp_current(vm);
+    *box = 0;
+    if (isa(vm, d, NJ_C_TEXTBOX)) { *box = 1; return d; }
+    if (isa(vm, d, NJ_C_FORM)) {
+        nj_ref items = rget(vm, d, NJ_C_FORM, "fmItems", D_ITEMARR);
+        nj_s4 at = fget(vm, d, NJ_C_FORM, "fmIndex", D_INT);
+        if (items && at >= 0 && (nj_u4)at < items->length) {
+            nj_ref it = nj_array_get_ref(items, (nj_u4)at);
+            if (isa(vm, it, NJ_C_TEXTFIELD)) { return it; }
+        }
+    }
+    return NULL;
+}
+
+void nj_midp_text_input_sync(nj_vm *vm)
+{
+    int box;
+    nj_ref it, disp, str;
+    const char *cls;
+    nj_text_input_state state;
+    if (!vm || !vm->port || !vm->port->text_input) { return; }
+    memset(&state, 0, sizeof(state));
+    disp = nj_midp_display(vm);
+    if (!disp) { return; }
+    it = text_focus(vm, &box);
+    cls = box ? NJ_C_TEXTBOX : NJ_C_TEXTFIELD;
+    if (it) {
+        state.constraints = (nj_u4)fget(vm, it, cls,
+                                 box ? "tbConstraints" : "tfConstraints", D_INT);
+        state.max_length = fget(vm, it, cls, box ? "tbMax" : "tfMax", D_INT);
+        if (state.constraints & 0x20000u) { it = NULL; }
+    }
+    state.session = (nj_u4)fget(vm, disp, NJ_C_DISPLAY, "dpImeSession", D_INT);
+    if (it != rget(vm, disp, NJ_C_DISPLAY, "dpImeFocus", D_ITEM) ||
+        state.constraints != (nj_u4)fget(vm, disp, NJ_C_DISPLAY, "dpImeConstraints", D_INT) ||
+        state.max_length != fget(vm, disp, NJ_C_DISPLAY, "dpImeMax", D_INT)) {
+        if (++state.session == 0u) { ++state.session; }
+        rput(vm, disp, NJ_C_DISPLAY, "dpImeFocus", D_ITEM, it);
+        fput(vm, disp, NJ_C_DISPLAY, "dpImeSession", D_INT, (nj_s4)state.session);
+        fput(vm, disp, NJ_C_DISPLAY, "dpImeSequence", D_INT, 0);
+        fput(vm, disp, NJ_C_DISPLAY, "dpImeConstraints", D_INT, (nj_s4)state.constraints);
+        fput(vm, disp, NJ_C_DISPLAY, "dpImeMax", D_INT, state.max_length);
+    }
+    state.active = it != NULL;
+    state.multiline = box;
+    state.sequence = (nj_u4)fget(vm, disp, NJ_C_DISPLAY, "dpImeSequence", D_INT);
+    str = it ? rget(vm, it, cls, box ? "tbText" : "tfText", D_STR) : NULL;
+    state.length = str ? (int)nj_string_len(str) : 0;
+    state.text = str ? nj_string_chars(str) : NULL;
+    state.cursor = it ? fget(vm, it, cls, box ? "tbCursor" : "tfCursor", D_INT) : 0;
+    vm->port->text_input(vm->port->ud, &state);
+}
+
+static int text_high(nj_u2 c) { return c >= 0xD800u && c <= 0xDBFFu; }
+static int text_low(nj_u2 c) { return c >= 0xDC00u && c <= 0xDFFFu; }
+
+/* Strict standard UTF-8, unlike the modified UTF-8 used by Java class files.
+ * Reject the entire commit if malformed; never expose a partial composition. */
+static int text_decode(const char *s, nj_u2 *out)
+{
+    const unsigned char *p = (const unsigned char *)s;
+    int n = 0, bytes = 0;
+    if (!s) { return -1; }
+    while (*p) {
+        nj_u4 cp, min;
+        int more, k;
+        unsigned char c = *p++;
+        if (++bytes >= NJ_TEXT_INPUT_BYTES) { return -1; }
+        if (c < 0x80u) { cp = c; min = 0; more = 0; }
+        else if (c >= 0xC2u && c <= 0xDFu) { cp = c & 31u; min = 0x80u; more = 1; }
+        else if (c >= 0xE0u && c <= 0xEFu) { cp = c & 15u; min = 0x800u; more = 2; }
+        else if (c >= 0xF0u && c <= 0xF4u) { cp = c & 7u; min = 0x10000u; more = 3; }
+        else { return -1; }
+        for (k = 0; k < more; k++) {
+            if ((*p & 0xC0u) != 0x80u || ++bytes >= NJ_TEXT_INPUT_BYTES) { return -1; }
+            cp = (cp << 6) | (*p++ & 63u);
+        }
+        if (cp < min || cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu)) { return -1; }
+        if (cp < 32u && cp != '\n') { return -1; }
+        if (cp <= 0xFFFFu) { out[n++] = (nj_u2)cp; }
+        else {
+            cp -= 0x10000u;
+            out[n++] = (nj_u2)(0xD800u | (cp >> 10));
+            out[n++] = (nj_u2)(0xDC00u | (cp & 1023u));
+        }
+    }
+    return n;
+}
+
+static int text_change(nj_vm *vm, const nj_u2 *insert, int count, int edit)
+{
+    int box, len, at, begin, end, newlen;
+    nj_ref it, str;
+    const char *cls, *cursor;
+    nj_s4 constraints, max;
+    const nj_u2 *old;
+    nj_u2 *buf;
+    nj_status st;
+    nj_u4 mark;
+    if (!vm) { return 0; }
+    it = text_focus(vm, &box);
+    if (!it) { return 0; }
+    cls = box ? NJ_C_TEXTBOX : NJ_C_TEXTFIELD;
+    cursor = box ? "tbCursor" : "tfCursor";
+    constraints = fget(vm, it, cls, box ? "tbConstraints" : "tfConstraints", D_INT);
+    if (constraints & 0x20000) { return 0; }
+    str = rget(vm, it, cls, box ? "tbText" : "tfText", D_STR);
+    len = str ? (int)nj_string_len(str) : 0;
+    old = str ? nj_string_chars(str) : NULL;
+    at = fget(vm, it, cls, cursor, D_INT);
+    if (at < 0) { at = 0; }
+    if (at > len) { at = len; }
+    if (at > 0 && at < len && text_high(old[at-1]) && text_low(old[at])) { at--; }
+    begin = end = at;
+    switch (edit) {
+    case NJ_TEXT_LEFT:
+    case NJ_TEXT_BACKSPACE:
+        if (begin > 0) {
+            begin--;
+            if (begin > 0 && text_low(old[begin]) && text_high(old[begin-1])) { begin--; }
+        }
+        at = begin;
+        break;
+    case NJ_TEXT_RIGHT:
+    case NJ_TEXT_DELETE:
+        if (end < len) {
+            end++;
+            if (end < len && text_high(old[end-1]) && text_low(old[end])) { end++; }
+        }
+        if (edit == NJ_TEXT_RIGHT) { at = end; }
+        break;
+    case NJ_TEXT_HOME: at = 0; break;
+    case NJ_TEXT_END: at = len; break;
+    case -1: begin = 0; end = len; break; /* complete native editor replacement */
+    case 0: break;
+    default: return 0;
+    }
+    if (edit > 0 && edit != NJ_TEXT_BACKSPACE && edit != NJ_TEXT_DELETE) {
+        fput(vm, it, cls, cursor, D_INT, at);
+        nj_midp_repaint(vm);
+        return 1;
+    }
+    max = fget(vm, it, cls, box ? "tbMax" : "tfMax", D_INT);
+    if (count > max - (len - (end - begin))) { return 0; }
+    newlen = len - (end - begin) + count;
+    if (newlen == len && !count && begin == end) { return 1; }
+    buf = (nj_u2 *)nj_host_alloc(vm, (nj_size)(newlen + 1) * sizeof(nj_u2));
+    if (!buf) { (void)nj_throw_oom(vm); return 0; }
+    if (begin) { memcpy(buf, old, (nj_size)begin * sizeof(nj_u2)); }
+    if (count) { memcpy(buf + begin, insert, (nj_size)count * sizeof(nj_u2)); }
+    if (len > end) { memcpy(buf + begin + count, old + end, (nj_size)(len-end) * sizeof(nj_u2)); }
+    if (!tf_allowed(constraints, buf, newlen)) { nj_host_free(vm, buf); return 0; }
+    if ((constraints & 0xFFFF) == 5) {
+        int i, dots = 0;
+        for (i = 0; i < newlen; i++) {
+            if ((buf[i] == '-' && i != 0) || (buf[i] == '.' && ++dots > 1)) {
+                nj_host_free(vm, buf); return 0;
+            }
+        }
+    }
+    mark = nj_root_mark(vm);
+    nj_root(vm, it);
+    st = box ? tb_sync(vm, it, buf, newlen) : tf_sync(vm, it, buf, newlen);
+    nj_host_free(vm, buf);
+    if (st == NJ_OK) {
+        fput(vm, it, cls, cursor, D_INT, begin + count);
+        if (!box) { item_state_changed(vm, it); }
+        nj_midp_repaint(vm);
+    }
+    nj_root_release(vm, mark);
+    return st == NJ_OK;
+}
+
+int nj_midp_text(nj_vm *vm, const char *utf8)
+{
+    nj_u2 chars[NJ_TEXT_INPUT_BYTES];
+    int n = text_decode(utf8, chars);
+    return n > 0 ? text_change(vm, chars, n, 0) : 0;
+}
+
+int nj_midp_text_edit(nj_vm *vm, int edit)
+{
+    return edit > 0 ? text_change(vm, NULL, 0, edit) : 0;
+}
+
+int nj_midp_text_event(nj_vm *vm, const nj_event *event)
+{
+    nj_ref disp, it;
+    int box, i, ok;
+    nj_u4 session, sequence;
+    if (!vm || !event) { return 0; }
+    disp = nj_midp_display(vm);
+    it = text_focus(vm, &box);
+    if (!disp || !it || it != rget(vm, disp, NJ_C_DISPLAY, "dpImeFocus", D_ITEM)) { return 0; }
+    session = (nj_u4)fget(vm, disp, NJ_C_DISPLAY, "dpImeSession", D_INT);
+    if (!event->text_session || event->text_session != session) { return 0; }
+    if (event->type == NJ_EV_TEXT_INPUT) { return nj_midp_text(vm, event->text); }
+    if (event->type == NJ_EV_TEXT_EDIT) { return nj_midp_text_edit(vm, event->key); }
+    if (event->type != NJ_EV_TEXT_REPLACE) { return 0; }
+    sequence = (nj_u4)fget(vm, disp, NJ_C_DISPLAY, "dpImeSequence", D_INT);
+    if (!event->text_sequence || event->text_sequence <= sequence) { return 0; }
+    /* Acknowledge rejected input as well, so Android restores the valid value. */
+    fput(vm, disp, NJ_C_DISPLAY, "dpImeSequence", D_INT, (nj_s4)event->text_sequence);
+    if (event->text_length < 0 || (event->text_length && !event->text_utf16) ||
+        event->text_cursor < 0 || event->text_cursor > event->text_length) { return 0; }
+    for (i = 0; i < event->text_length; i++) {
+        nj_u2 c = event->text_utf16[i];
+        if ((c < 32u && c != '\n') || text_low(c)) { return 0; }
+        if (text_high(c) && (++i >= event->text_length || !text_low(event->text_utf16[i]))) { return 0; }
+    }
+    i = event->text_cursor;
+    if (i > 0 && i < event->text_length && text_high(event->text_utf16[i-1]) &&
+        text_low(event->text_utf16[i])) { return 0; }
+    ok = text_change(vm, event->text_utf16, event->text_length, -1);
+    /* ItemStateListener may have moved focus: never update the new widget. */
+    if (ok && it == text_focus(vm, &box)) {
+        fput(vm, it, box ? NJ_C_TEXTBOX : NJ_C_TEXTFIELD,
+             box ? "tbCursor" : "tfCursor", D_INT, event->text_cursor);
+    }
+    return ok;
+}
+
 NJFN(tb_getString)
 {
     ret->r = rget(vm, NJ_THIS(args), NJ_C_TEXTBOX, "tbText", D_STR);
@@ -10178,6 +10385,11 @@ static const nj_builtin_field display_fields[] = {
     FLD(F_DISP_CUR,   D_DISPLAY,  0),
     FLD(F_DISP_ALERT, D_DISPLAY,  0),
     FLD("dpQueue",    D_VECTOR,   0),
+    FLD("dpImeFocus", D_ITEM, 0),
+    FLD("dpImeSession", D_INT, 0),
+    FLD("dpImeSequence", D_INT, 0),
+    FLD("dpImeConstraints", D_INT, 0),
+    FLD("dpImeMax", D_INT, 0),
     FLD("sDisplay",   D_DISPLAYS, NJ_ACC_STATIC),
     FLD("LIST_ELEMENT",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("TEXT_ELEMENT",  D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),

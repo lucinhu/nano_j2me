@@ -362,6 +362,11 @@ typedef struct android_state {
 
     nj_event queue[256];
     int   qh, qt;
+    nj_u2 *ime_polled_text; /* released by the next input_poll */
+    nj_u2 *ime_text;
+    nj_text_input_state ime_state;
+    jlong ime_owner;
+    jmethodID ime_mid;
 
     /* observations, for nj_port_android_stats() */
     int   key_events, ptr_events;
@@ -488,6 +493,7 @@ typedef struct android_state {
     jmethodID socket_local_mid;
     jmethodID socket_local_port_mid;
     jmethodID socket_read_mid;
+    jmethodID socket_available_mid;
     jmethodID socket_write_mid;
     jmethodID socket_close_mid;
 
@@ -1326,8 +1332,11 @@ static int android_input_poll(void *ud, nj_event *ev)
         pthread_mutex_unlock(&s->lock);
     }
     pthread_mutex_lock(&s->lock);
+    free(s->ime_polled_text);
+    s->ime_polled_text = NULL;
     if (s->qh != s->qt) {
         *ev = s->queue[s->qh];
+        if (ev->type == NJ_EV_TEXT_REPLACE) { s->ime_polled_text = (nj_u2 *)ev->text_utf16; }
         s->qh = (s->qh + 1) % (int)(sizeof(s->queue) / sizeof(s->queue[0]));
         have = 1;
     }
@@ -1347,6 +1356,17 @@ static int android_push_locked(android_state *s, const nj_event *ev)
         return 0;
     }
     s->queue[s->qt] = *ev;
+    if (ev->type == NJ_EV_TEXT_REPLACE) {
+        nj_u2 *copy = NULL;
+        if (ev->text_length < 0 || ev->text_length > 1048576 ||
+            (ev->text_length && !ev->text_utf16)) { return 0; }
+        if (ev->text_length) {
+            copy = (nj_u2 *)malloc((size_t)ev->text_length * sizeof(*copy));
+            if (!copy) { return 0; }
+            memcpy(copy, ev->text_utf16, (size_t)ev->text_length * sizeof(*copy));
+        }
+        s->queue[s->qt].text_utf16 = copy;
+    }
     s->qt = next;
     return 1;
 }
@@ -1684,6 +1704,44 @@ static JNIEnv *android_run_env(android_state *s)
     }
     s->run_env = env;
     return env;
+}
+
+static void android_text_input(void *ud, const nj_text_input_state *state)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jstring value;
+    nj_u2 *copy = NULL;
+    int same;
+    if (!s->ime_mid || !s->activity_class || !(env = android_run_env(s))) { return; }
+    pthread_mutex_lock(&s->lock);
+    same = s->ime_state.session == state->session && s->ime_state.active == state->active &&
+        s->ime_state.sequence == state->sequence && s->ime_state.constraints == state->constraints &&
+        s->ime_state.max_length == state->max_length && s->ime_state.multiline == state->multiline &&
+        s->ime_state.cursor == state->cursor && s->ime_state.length == state->length &&
+        (!state->length || (s->ime_text && !memcmp(s->ime_text, state->text,
+                                   (size_t)state->length * sizeof(*copy))));
+    pthread_mutex_unlock(&s->lock);
+    if (same) { return; }
+    if (state->length) {
+        copy = (nj_u2 *)malloc((size_t)state->length * sizeof(*copy));
+        if (!copy) { return; }
+        memcpy(copy, state->text, (size_t)state->length * sizeof(*copy));
+    }
+    value = (*env)->NewString(env, (const jchar *)state->text, (jsize)state->length);
+    if (!value) { free(copy); if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); } return; }
+    (*env)->CallStaticVoidMethod(env, s->activity_class, s->ime_mid, s->ime_owner,
+        (jboolean)state->active, (jint)state->session, (jint)state->sequence,
+        (jint)state->constraints, (jboolean)state->multiline, value,
+        (jint)state->max_length, (jint)state->cursor);
+    (*env)->DeleteLocalRef(env, value);
+    if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); free(copy); return; }
+    pthread_mutex_lock(&s->lock);
+    free(s->ime_text);
+    s->ime_text = copy;
+    s->ime_state = *state;
+    s->ime_state.text = copy;
+    pthread_mutex_unlock(&s->lock);
 }
 
 static const nj_u1 *android_glyph_lookup(void *ud, nj_u2 ch, int *w, int *h)
@@ -2747,6 +2805,13 @@ static void android_shutdown(void *ud)
         return;
     }
     android_audio_close(s);
+    while (s->qh != s->qt) {
+        nj_event *event = &s->queue[s->qh];
+        if (event->type == NJ_EV_TEXT_REPLACE) { free((void *)event->text_utf16); }
+        s->qh = (s->qh + 1) % 256;
+    }
+    free(s->ime_polled_text);
+    free(s->ime_text);
     pthread_mutex_destroy(&s->lock);
     free(s->shadow);
     free(s->det_prev);
@@ -3649,16 +3714,16 @@ static int android_socket_read(void *ud, void *handle, nj_u1 *buf, int len,
     jint n;
 
     if (!s || !s->socket_class || !s->socket_read_mid || !handle || !buf || len <= 0) {
-        return -1;
+        return -2;
     }
     env = android_run_env(s);
     if (!env) {
-        return -1;
+        return -2;
     }
     ja = (*env)->NewByteArray(env, (jsize)len);
     if (!ja) {
         (*env)->ExceptionClear(env);
-        return -1;
+        return -2;
     }
     n = (*env)->CallStaticIntMethod(env, s->socket_class, s->socket_read_mid,
                                     (jlong)(intptr_t)handle, ja, (jint)len,
@@ -3666,7 +3731,7 @@ static int android_socket_read(void *ud, void *handle, nj_u1 *buf, int len,
     if ((*env)->ExceptionCheck(env)) {
         (*env)->ExceptionClear(env);
         (*env)->DeleteLocalRef(env, ja);
-        return -1;
+        return -2;
     }
     if (n > 0) {
         if (n > len) {
@@ -3675,10 +3740,31 @@ static int android_socket_read(void *ud, void *handle, nj_u1 *buf, int len,
         (*env)->GetByteArrayRegion(env, ja, 0, n, (jbyte *)buf);
         if ((*env)->ExceptionCheck(env)) {
             (*env)->ExceptionClear(env);
-            n = -1;
+            n = -2;
         }
     }
     (*env)->DeleteLocalRef(env, ja);
+    return (int)n;
+}
+
+static int android_socket_available(void *ud, void *handle)
+{
+    android_state *s = AS(ud);
+    JNIEnv *env;
+    jint n;
+    if (!s || !s->socket_class || !s->socket_available_mid || !handle) {
+        return -1;
+    }
+    env = android_run_env(s);
+    if (!env) {
+        return -1;
+    }
+    n = (*env)->CallStaticIntMethod(env, s->socket_class, s->socket_available_mid,
+                                  (jlong)(intptr_t)handle);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+        return -1;
+    }
     return (int)n;
 }
 
@@ -4267,6 +4353,7 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     out->display_init = android_display_init;
     out->display_present = android_display_present;
     out->input_poll = android_input_poll;
+    out->text_input = android_text_input;
     out->input_push = android_input_push;
     out->dir_open = android_dir_open;
     out->dir_next = android_dir_next;
@@ -4325,6 +4412,7 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
      */
     out->socket_connect = android_socket_connect;
     out->socket_read = android_socket_read;
+    out->socket_available = android_socket_available;
     out->socket_write = android_socket_write;
     out->socket_close = android_socket_close;
     /*
@@ -4680,7 +4768,8 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
      * survives this call; nativeDestroy() releases it.
      */
     {
-        jclass cls = (*env)->GetObjectClass(env, thiz);
+        /* nativeCreate is static: thiz is already the GameActivity class. */
+        jclass cls = (jclass)thiz;
         if (cls) {
             jmethodID mid = (*env)->GetStaticMethodID(env, cls, "vibrateDevice",
                                                       "(I)V");
@@ -4688,11 +4777,12 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
                 (*env)->ExceptionClear(env);
                 mid = NULL;
             }
-            if (mid) {
-                s->activity_class = (jclass)(*env)->NewGlobalRef(env, cls);
-                s->vibrate_mid = mid;
-            }
-            (*env)->DeleteLocalRef(env, cls);
+            s->activity_class = (jclass)(*env)->NewGlobalRef(env, cls);
+            s->vibrate_mid = mid;
+            s->ime_mid = (*env)->GetStaticMethodID(env, cls, "updateNativeText",
+                "(JZIIIZLjava/lang/String;II)V");
+            if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); s->ime_mid = NULL; }
+            s->ime_owner = (jlong)(intptr_t)a;
         }
     }
     (*env)->GetJavaVM(env, &s->jvm);
@@ -5030,6 +5120,8 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
                 env, kcls, "localPort", "(J)I");
             jmethodID kread = (*env)->GetStaticMethodID(
                 env, kcls, "read", "(J[BII)I");
+            jmethodID kavail = (*env)->GetStaticMethodID(
+                env, kcls, "available", "(J)I");
             jmethodID kwrite = (*env)->GetStaticMethodID(
                 env, kcls, "write", "(J[BI)I");
             jmethodID kclose = (*env)->GetStaticMethodID(env, kcls, "close", "(J)V");
@@ -5038,7 +5130,7 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
                 kconn = NULL;
             }
             if (kconn && kaddr && kport && kladdr && klport && kread && kwrite
-                && kclose) {
+                && kavail && kclose) {
                 s->socket_class = (jclass)(*env)->NewGlobalRef(env, kcls);
                 s->socket_connect_mid = kconn;
                 s->socket_address_mid = kaddr;
@@ -5046,6 +5138,7 @@ Java_com_lucinhu_nj2me_GameActivity_nativeCreate(JNIEnv *env, jobject thiz,
                 s->socket_local_mid = kladdr;
                 s->socket_local_port_mid = klport;
                 s->socket_read_mid = kread;
+                s->socket_available_mid = kavail;
                 s->socket_write_mid = kwrite;
                 s->socket_close_mid = kclose;
             } else {
@@ -5133,6 +5226,36 @@ Java_com_lucinhu_nj2me_GameActivity_nativeKey(JNIEnv *env, jobject thiz,
     if (a) {
         nj_port_android_push_key(&a->port, (int)keyCode, down ? 1 : 0);
     }
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeText(JNIEnv *env, jclass cls,
+    jlong handle, jint session, jint sequence, jstring text, jint cursor)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    android_state *s;
+    nj_event event;
+    const jchar *chars;
+    int taken;
+    (void)cls;
+    if (!a || !text) { return JNI_FALSE; }
+    s = AS(a->port.ud);
+    memset(&event, 0, sizeof(event));
+    event.type = NJ_EV_TEXT_REPLACE;
+    event.text_session = (nj_u4)session;
+    event.text_sequence = (nj_u4)sequence;
+    event.text_length = (int)(*env)->GetStringLength(env, text);
+    event.text_cursor = (int)cursor;
+    if (event.text_length > 1048576) { return JNI_FALSE; }
+    chars = (*env)->GetStringChars(env, text, NULL);
+    if (!chars) { if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); } return JNI_FALSE; }
+    event.text_utf16 = (const nj_u2 *)chars;
+    pthread_mutex_lock(&s->lock);
+    taken = s->ime_state.active && s->ime_state.session == event.text_session &&
+            android_push_locked(s, &event);
+    pthread_mutex_unlock(&s->lock);
+    (*env)->ReleaseStringChars(env, text, chars);
+    return taken ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
@@ -5547,6 +5670,7 @@ Java_com_lucinhu_nj2me_GameActivity_nativeDestroy(JNIEnv *env, jobject thiz,
         s->socket_local_mid = NULL;
         s->socket_local_port_mid = NULL;
         s->socket_read_mid = NULL;
+        s->socket_available_mid = NULL;
         s->socket_write_mid = NULL;
         s->socket_close_mid = NULL;
     }

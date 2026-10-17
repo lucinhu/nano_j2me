@@ -64,7 +64,10 @@ typedef enum nj_event_type {
     NJ_EV_POINTER_DOWN,
     NJ_EV_POINTER_UP,
     NJ_EV_POINTER_MOVE,
-    NJ_EV_QUIT          /* window closed / power off request */
+    NJ_EV_QUIT,         /* window closed / power off request */
+    NJ_EV_TEXT_INPUT,   /* committed UTF-8 only, never IME preedit */
+    NJ_EV_TEXT_EDIT,    /* key is nj_text_edit */
+    NJ_EV_TEXT_REPLACE  /* complete UTF-16 editor contents and caret */
 } nj_event_type;
 
 /*
@@ -85,11 +88,37 @@ typedef enum nj_key {
     NJ_KEY_COUNT
 } nj_key;
 
+/* Editing commands are separate from handset keys. */
+typedef enum nj_text_edit {
+    NJ_TEXT_BACKSPACE = 1, NJ_TEXT_DELETE, NJ_TEXT_LEFT, NJ_TEXT_RIGHT,
+    NJ_TEXT_HOME, NJ_TEXT_END
+} nj_text_edit;
+
+#define NJ_TEXT_INPUT_BYTES 32
+
 typedef struct nj_event {
     nj_u1 type;   /* nj_event_type */
     nj_u1 key;    /* nj_key, for key/pointer events */
     nj_s2 x, y;   /* pointer coordinates in *device* pixels */
+    /* NUL terminated; split longer commits at UTF-8 character boundaries. */
+    char text[NJ_TEXT_INPUT_BYTES];
+    nj_u4 text_session; /* required for native text events; rejects expired focus */
+    nj_u4 text_sequence; /* increasing within a replacement editor session */
+    /* REPLACE only: owned by the port, valid until its next input_poll call.
+     * length/cursor are UTF-16 code units, matching MIDP maxSize/caret APIs. */
+    const nj_u2 *text_utf16;
+    int text_length, text_cursor;
 } nj_event;
+
+/* Snapshot pointers are borrowed only for the duration of text_input().
+ * sequence acknowledges even rejected replacements, allowing the port to
+ * restore authoritative contents without overwriting newer pending edits. */
+typedef struct nj_text_input_state {
+    int active, multiline;
+    nj_u4 constraints, session, sequence;
+    int max_length, length, cursor;
+    const nj_u2 *text;
+} nj_text_input_state;
 
 /* ------------------------------------------------------------------ */
 /* Time-of-day / calendar (optional; used by java.util.Date/Calendar)  */
@@ -637,6 +666,10 @@ typedef struct nj_port {
                          nj_u4 timeout_ms);
     int   (*socket_write)(void *ud, void *handle, const nj_u1 *buf, int len);
     void  (*socket_close)(void *ud, void *handle);
+    /* Optional, nonblocking byte count for InputStream.available().
+     * Return >= 0 bytes readable without waiting, or < 0 on an I/O error.
+     * Ports without this hook conservatively report zero. */
+    int   (*socket_available)(void *ud, void *handle);
 
     /*
      * Bluetooth, for javax.bluetooth (JSR 82) - nine of the 436 titles in the
@@ -716,6 +749,13 @@ typedef struct nj_port {
      * and FileConnection then refuses to open anything.
      */
     const char *fs_dir;
+
+    /* Optional native IME activation, called on the VM thread. Repeated calls
+     * with identical state must be harmless. constraints uses MIDP TextField
+     * flags (including PASSWORD); inactive means no editable widget has focus.
+     * A port must submit committed text via NJ_EV_TEXT_INPUT, and suppress
+     * duplicate printable handset keys while native text entry is active. */
+    void (*text_input)(void *ud, const nj_text_input_state *state);
 } nj_port;
 
 /* ------------------------------------------------------------------ */

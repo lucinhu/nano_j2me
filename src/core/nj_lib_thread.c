@@ -279,8 +279,9 @@ NJFN(thread_join)
     nj_s4 id = f ? nj_field_read_int(vm, o, f) : 0;
     nj_u2 i;
 
-    if (id == 0) {
-        return NJ_OK;   /* never started: nothing to wait for */
+    f = fld(vm, "alive", "Z");
+    if (id == 0 || (f && !nj_field_read_int(vm, o, f))) {
+        return NJ_OK;   /* never started, or run() has already returned */
     }
     for (i = 0u; i < vm->nthreads; i++) {
         nj_thread *t = vm->threads[i];

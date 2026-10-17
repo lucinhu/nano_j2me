@@ -1,8 +1,21 @@
 # OPEN: a thread whose `run()` returned stays RUNNING
 
-Status: unfixed on purpose. Tried and reverted (2026-10-14) because the correct
-fix regressed `毁灭战士3_10598`; the analysis is written down so the next
-attempt starts from the measurement instead of the symptom.
+Status (2026-10-17): normal Java `run()` completion now clears the existing
+`alive` field and wakes joiners; `join()` on an already completed worker returns
+immediately. Ordinary empty-stack workers retain their legacy scheduler state
+and idle/pump timing. Full DEAD-state reclamation and finished-program detection
+remain open. The earlier state-changing attempt was reverted (2026-10-14)
+because it regressed `毁灭战士3_10598`; the historical analysis below explains
+why the new fix deliberately preserves scheduling.
+
+The regression in `tests/test_thread_lifecycle.c` covers a sleeping worker's
+`isAlive()` transition, joining a completed worker, a C-invoked constructor
+joining a child, and a C-invoked constructor waiting for a Runnable child's
+notification. The real Doom JAR completes construction and runs 360 frames
+without `construction ... blocked`; screenshots still show its existing static
+star field. Townsmen 6's loader now completes, and the original 208x320 JAR
+reaches its title, campaign map and village dialogue with working input. See
+`2026-10-17-townsmen-loader.md` for replay evidence and remaining limits.
 
 ## Symptom
 
