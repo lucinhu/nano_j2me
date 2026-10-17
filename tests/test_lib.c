@@ -1427,6 +1427,78 @@ static void test_static_field_init(nj_vm *vm)
  * string form; only (name) and (name, create) were declared, so eight titles
  * died in startApp with NoSuchMethodError before they read a single record.
  */
+static void test_rms_listing(const nj_port *base, int libc_backend)
+{
+    const char *RS = "javax/microedition/rms/RecordStore";
+    const char *OPEN = "(Ljava/lang/String;Z)Ljavax/microedition/rms/RecordStore;";
+    nj_port port = *base;
+    nj_vm *vm;
+    nj_value a[2], ret;
+    nj_ref store;
+    char dir[512], ignored[560];
+    FILE *fp;
+    int pass;
+
+    snprintf(dir, sizeof(dir), "%s/list-%s", base->rms_dir,
+             libc_backend ? "libc" : "port");
+    (void)mkdir(dir, 0777);
+    port.rms_dir = dir;
+    if (libc_backend) {
+        port.file_open = NULL;
+        port.file_remove = NULL;
+        port.file_exists = NULL;
+        port.dir_open = NULL;
+        port.dir_next = NULL;
+        port.dir_close = NULL;
+    }
+    vm = nj_vm_create(&port, 2u * 1024u * 1024u);
+    OK_MSG(vm != NULL, "create RMS listing VM");
+    if (!vm) { return; }
+    a[0] = vref(nj_string_new(vm, "farm.save"));
+    (void)nj_call_static(vm, RS, "deleteRecordStore", "(Ljava/lang/String;)V", a, NULL);
+    nj_clear_exception(vm);
+    snprintf(ignored, sizeof(ignored), "%s/ignored.rms", dir);
+    (void)mkdir(ignored, 0777);
+    snprintf(ignored, sizeof(ignored), "%s/unrelated.txt", dir);
+    fp = fopen(ignored, "wb");
+    if (fp) { fclose(fp); }
+    OK(nj_call_static(vm, RS, "listRecordStores", "()[Ljava/lang/String;", NULL, &ret) == NJ_OK);
+    OK_MSG(ret.r == NULL, "no stores returns null; directories and unrelated files excluded");
+    a[0] = vref(nj_string_new(vm, "farm.save"));
+    a[1] = vint(1);
+    OK(nj_call_static(vm, RS, "openRecordStore", OPEN, a, &ret) == NJ_OK);
+    store = ret.r;
+    OK(nj_call(vm, store, RS, "closeRecordStore", "()V", NULL, NULL) == NJ_OK);
+    /* Listing must not depend on open handles or an in-memory name cache. */
+    for (pass = 0; pass < 2; pass++) {
+        OK(nj_call_static(vm, RS, "listRecordStores", "()[Ljava/lang/String;", NULL, &ret) == NJ_OK);
+        OK_MSG(ret.r && ret.r->length == 1u &&
+               nj_string_equals_utf8(ret.r->u.refs[0], "farm.save"),
+               "closed store listed with its original name, including after VM restart");
+        if (pass == 0) {
+            nj_vm_destroy(vm);
+            vm = nj_vm_create(&port, 2u * 1024u * 1024u);
+            OK(vm != NULL);
+            if (!vm) { return; }
+        }
+    }
+    a[0] = vref(nj_string_new(vm, "farm.save"));
+    a[1] = vint(0);
+    OK(nj_call_static(vm, RS, "openRecordStore", OPEN, a, &ret) == NJ_OK);
+    OK_MSG(ret.r != NULL, "listed store can be reopened without creation");
+    OK(nj_call(vm, ret.r, RS, "closeRecordStore", "()V", NULL, NULL) == NJ_OK);
+    a[0] = vref(nj_string_new(vm, "farm.save"));
+    OK(nj_call_static(vm, RS, "deleteRecordStore", "(Ljava/lang/String;)V", a, NULL) == NJ_OK);
+    OK(nj_call_static(vm, RS, "listRecordStores", "()[Ljava/lang/String;", NULL, &ret) == NJ_OK);
+    OK_MSG(ret.r == NULL, "deleted store disappears from listing");
+    clean(vm, "RMS listing");
+    nj_vm_destroy(vm);
+    (void)remove(ignored);
+    snprintf(ignored, sizeof(ignored), "%s/ignored.rms", dir);
+    (void)remove(ignored);
+    (void)remove(dir);
+}
+
 static void test_rms_overloads(nj_vm *vm)
 {
     static const char *RS = "javax/microedition/rms/RecordStore";
@@ -1461,6 +1533,57 @@ static void test_rms_overloads(nj_vm *vm)
     OK_MSG(got != NULL && nj_string_equals_utf8(got, "njlib_overloads"),
            "the store knows its own name");
     clean(vm, "asking the store its name");
+
+    /* HighSpeed 3D creates empty placeholder records before initializing its
+     * defaults.  MIDP getRecord(int) must return null for these, not byte[0]. */
+    {
+        nj_s4 id;
+        nj_ref data = nj_byte_array_new(vm, 1u);
+        nj_ref empty = nj_byte_array_new(vm, 0u);
+        OK_MSG(data != NULL && empty != NULL, "RMS empty-record fixtures");
+        if (data && empty) {
+            data->u.bytes[0] = 73u;
+            a[0] = vref(NULL); a[1] = vint(0); a[2] = vint(0);
+            OK_MSG(nj_call(vm, rs, RS, "addRecord", "([BII)I", a, &ret)
+                       == NJ_OK, "add a null-data empty record");
+            id = ret.i;
+            a[0] = vint(id);
+            ret.r = data;
+            OK_MSG(nj_call(vm, rs, RS, "getRecord", "(I)[B", a, &ret)
+                       == NJ_OK && ret.r == NULL,
+                   "an empty record returns null");
+            OK_MSG(nj_call_int(vm, rs, RS, "getRecordSize", "(I)I", a) == 0,
+                   "an empty record has size zero");
+            a[1] = vref(data); a[2] = vint(1);
+            OK_MSG(nj_call(vm, rs, RS, "getRecord", "(I[BI)I", a, &ret)
+                       == NJ_OK && ret.i == 0 && data->u.bytes[0] == 73u,
+                   "buffer overload copies zero bytes for an empty record");
+            a[0] = vint(id); a[1] = vref(data);
+            a[2] = vint(0); a[3] = vint(1);
+            OK_MSG(nj_call(vm, rs, RS, "setRecord", "(I[BII)V", a, NULL)
+                       == NJ_OK, "initialize the placeholder record");
+            got = nj_call_ref(vm, rs, RS, "getRecord", "(I)[B", a);
+            OK_MSG(got && got != data && got->length == 1u &&
+                       got->u.bytes[0] == 73u,
+                   "a nonempty record still returns an independent copy");
+            a[1] = vref(empty); a[3] = vint(0);
+            OK_MSG(nj_call(vm, rs, RS, "setRecord", "(I[BII)V", a, NULL)
+                       == NJ_OK, "clear a record using a zero-length array");
+            ret.r = data;
+            OK_MSG(nj_call(vm, rs, RS, "getRecord", "(I)[B", a, &ret)
+                       == NJ_OK && ret.r == NULL,
+                   "a cleared record returns null");
+            a[0] = vref(empty); a[1] = vint(0); a[2] = vint(0);
+            OK_MSG(nj_call(vm, rs, RS, "addRecord", "([BII)I", a, &ret)
+                       == NJ_OK, "add an empty-array record");
+            a[0] = vint(ret.i);
+            ret.r = data;
+            OK_MSG(nj_call(vm, rs, RS, "getRecord", "(I)[B", a, &ret)
+                       == NJ_OK && ret.r == NULL,
+                   "an empty-array record also returns null");
+            clean(vm, "reading empty RMS records");
+        }
+    }
 
     /* The same store through MIDP 1.0's (name, vendor, suite). */
     a[0] = vref(nm);
@@ -2163,6 +2286,61 @@ static void test_eight_bit_wav_is_widened(nj_vm *vm)
                    data->u.bytes[2], data->u.bytes[3]);
         }
     }
+}
+
+/* Music in Angry Birds exceeds 4 MB. The whole track, including the last
+ * sample, must survive loading rather than becoming a truncated Player. */
+static void test_large_wav(void)
+{
+    const nj_u4 frames = 5u * 1024u * 1024u;
+    nj_port port;
+    nj_vm *large;
+    nj_u1 *wav;
+    nj_ref bytes, in, pcm;
+    nj_value args[2], ret;
+    nj_u4 mark;
+    nj_field *f;
+    memset(&port, 0, sizeof(port));
+    if (nj_port_headless(&port) != NJ_OK) {
+        OK_MSG(0, "headless port for large WAV");
+        return;
+    }
+    large = nj_vm_create(&port, 24u * 1024u * 1024u);
+    OK_MSG(large != NULL, "24 MB VM for large WAV");
+    if (!large) { nj_port_shutdown(&port); return; }
+    mark = nj_root_mark(large);
+    wav = wav_of(frames);
+    bytes = nj_root(large, nj_byte_array_new(large, frames + 44u));
+    OK_MSG(wav && bytes, "large WAV input");
+    if (wav && bytes) {
+        memcpy(bytes->u.bytes, wav, frames + 44u);
+        args[0].r = bytes;
+        in = nj_root(large, construct(large, BAIS, "([B)V", args,
+                                     "large WAV stream"));
+        args[0].r = in;
+        args[1].r = NULL;
+        ret.r = NULL;
+        OK_MSG(nj_call_static(large, MEDIA_MGR, "createPlayer",
+                             "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                             "javax/microedition/media/Player;", args, &ret)
+               == NJ_OK && ret.r != NULL, "load WAV beyond 4 MB");
+        if (ret.r) {
+            f = nj_field_lookup(large, PLAYER, "pData", "[B", 0);
+            pcm = nj_field_read_ref(large, ret.r, f);
+            OK_MSG(pcm && pcm->length == frames * 2u,
+                   "all large WAV samples are retained");
+            if (pcm && pcm->length == frames * 2u) {
+                OK_MSG(pcm->u.bytes[frames * 2u - 2u] == 0u &&
+                       pcm->u.bytes[frames * 2u - 1u] ==
+                           (nj_u1)(wav[frames + 43u] ^ 0x80u),
+                       "last sample survives beyond the old limit");
+            }
+        }
+    }
+    free(wav);
+    nj_root_release(large, mark);
+    nj_vm_destroy(large);
+    nj_port_shutdown(&port);
 }
 
 /* A .mid handed to createPlayer() is rendered to PCM, not turned into a
@@ -3261,6 +3439,7 @@ int main(void)
         return 2;
     }
 
+    test_null_data_input(vm);
     test_round_trip(vm);
     test_read_utf_static(vm);
     test_read_fully(vm);
@@ -3273,6 +3452,8 @@ int main(void)
     test_random(vm);
     test_static_field_init(vm);
     test_rms_overloads(vm);
+    test_rms_listing(&port, 0);
+    test_rms_listing(&port, 1);
     test_constructor_arg_window(vm);
     test_connector_open_mode(vm);
     test_alloc_gives_up(vm);
@@ -3285,6 +3466,7 @@ int main(void)
     test_long_to_string(vm);
     test_player_survives_collection(vm);
     test_eight_bit_wav_is_widened(vm);
+    test_large_wav();
     test_midi_player_is_pcm(vm);
     test_midi_long_song_streams(vm);
     test_midi_too_big_for_heap();
@@ -3303,4 +3485,3 @@ int main(void)
     printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
-    test_null_data_input(vm);

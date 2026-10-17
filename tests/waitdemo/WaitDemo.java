@@ -47,6 +47,13 @@ public class WaitDemo extends MIDlet implements Runnable {
     }
 
     public void run() {
+        String delay = System.getProperty("fixture.wait.ms");
+        if (delay != null) {
+            try {
+                Thread.sleep(Integer.parseInt(delay));
+            } catch (InterruptedException e) {
+            }
+        }
         synchronized (LOCK) {
             ready = true;
             LOCK.notifyAll();

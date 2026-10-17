@@ -418,6 +418,25 @@ int main(void)
                 call(vm, tex, CLS("Texture2D"), "getImage",
                      "()L" CLS("Image2D") ";", NULL, &r);
                 check(r.r == img, "texture transform storage does not alias its image");
+                {
+                    nj_ref clone;
+                    call(vm, tex, CLS("Object3D"), "duplicate",
+                         "()L" CLS("Object3D") ";", NULL, &r);
+                    clone = r.r;
+                    check(clone && clone != tex, "duplicate creates a distinct texture");
+                    call(vm, clone, CLS("Texture2D"), "getImage",
+                         "()L" CLS("Image2D") ";", NULL, &r);
+                    check(r.r == img, "a duplicate texture retains the shared image");
+                    a[0].f = 2.0f; a[1].f = 3.0f; a[2].f = 4.0f;
+                    call(vm, clone, CLS("Texture2D"), "setScale", "(FFF)V", a, NULL);
+                    a[0].r = xf;
+                    call(vm, tex, CLS("Texture2D"), "getCompositeTransform",
+                         "(L" CLS("Transform") ";)V", a, NULL);
+                    a[0].r = matrix;
+                    call(vm, xf, CLS("Transform"), "get", "([F)V", a, NULL);
+                    check(v && v[5] == 600.0f,
+                          "changing a duplicate texture leaves the source transform intact");
+                }
             }
         }
 
@@ -428,6 +447,22 @@ int main(void)
             call(vm, app, CLS("Appearance"), "getTexture",
                  "(I)L" CLS("Texture2D") ";", a, &r);
             check(r.r == tex, "Appearance.setTexture and getTexture agree");
+            {
+                nj_ref clone;
+                call(vm, app, CLS("Object3D"), "duplicate",
+                     "()L" CLS("Object3D") ";", NULL, &r);
+                clone = r.r;
+                a[0].i = 0;
+                call(vm, clone, CLS("Appearance"), "getTexture",
+                     "(I)L" CLS("Texture2D") ";", a, &r);
+                check(r.r == tex, "a duplicate appearance retains its texture");
+                a[1].r = 0;
+                call(vm, clone, CLS("Appearance"), "setTexture",
+                     "(IL" CLS("Texture2D") ";)V", a, NULL);
+                call(vm, app, CLS("Appearance"), "getTexture",
+                     "(I)L" CLS("Texture2D") ";", a, &r);
+                check(r.r == tex, "changing duplicate texture slots leaves the source intact");
+            }
         }
 
         if (g3 && lit && xf) {

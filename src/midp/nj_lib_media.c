@@ -924,8 +924,25 @@ static nj_ref read_stream(nj_vm *vm, nj_ref in, nj_u4 cap)
     if (!in) {
         return NULL;
     }
-    if (cap > grow) {
-        cap = cap;              /* the caller's ceiling, applied as it grows */
+    if (cap < grow) {
+        grow = cap;
+    }
+    /* available() is only a sizing hint; a stream may legitimately return 0.
+     * Resource streams already know their size. Avoid a chain of large copies
+     * for music tracks, while still reading arbitrary streams through EOF. */
+    {
+        nj_value available;
+        if (nj_call(vm, in, "java/io/InputStream", "available", "()I",
+                    NULL, &available) == NJ_OK) {
+            if (available.i > 0 && (nj_u4)available.i > grow) {
+                grow = (nj_u4)available.i;
+                /* Leave room for the EOF read without doubling the buffer. */
+                if (grow < cap) grow++;
+                if (grow > cap) grow = cap;
+            }
+        } else {
+            nj_clear_exception(vm);
+        }
     }
     buf = nj_byte_array_new(vm, grow);
     if (!buf) {
@@ -966,6 +983,7 @@ static nj_ref read_stream(nj_vm *vm, nj_ref in, nj_u4 cap)
                 break;          /* keep what we have */
             }
             memcpy(nb->u.bytes, buf->u.bytes, (size_t)got);
+            nj_root_release(vm, mark);
             buf = nj_root(vm, nb);
             grow = want;
         }
@@ -1179,7 +1197,10 @@ NJFN(media_createPlayer_stream)
                         "stream is null");
     }
     mark = nj_root_mark(vm);
-    data = read_stream(vm, in, 4u * 1024u * 1024u);
+    /* Media competes with the game's objects in the configured Java heap.
+     * A fixed 4 MB ceiling silently cut valid long WAV tracks short. */
+    data = read_stream(vm, in, (nj_u4)(vm->heap.size > 0x7fffffffu
+                                    ? 0x7fffffffu : vm->heap.size));
     if (!data) {
         nj_root_release(vm, mark);
         return nj_throw(vm, NJ_C_MEXC, "empty stream");

@@ -550,6 +550,38 @@ nj_status nj_scheduler_step(nj_vm *vm)
     return st;
 }
 
+/* Give background computation a bounded share of a display frame.  A
+ * bytecode quantum is a fairness boundary, not a reason to sleep until the
+ * next video frame: software renderers often need many quanta per image.
+ * Stop when the application presents, blocks, or uses its host-time budget.
+ * The round limit also bounds ports with a coarse or stationary clock. */
+nj_status nj_scheduler_frame(nj_vm *vm, nj_u4 budget_ms)
+{
+    nj_s8 start = nj_now_ms(vm);
+    unsigned rounds = 0u;
+    nj_status st;
+    do {
+        nj_u2 i;
+        int runnable = 0;
+        st = nj_scheduler_step(vm);
+        if (st != NJ_OK || !vm->running || vm->painted_in_frame ||
+            ++rounds >= 256u ||
+            nj_now_ms(vm) - start >= (nj_s8)budget_ms) {
+            break;
+        }
+        for (i = 0; i < vm->nthreads; ++i) {
+            nj_thread *th = vm->threads[i];
+            if (th && th->state == NJ_THREAD_RUNNING && th->nframes &&
+                !th->in_c_call) {
+                runnable = 1;
+                break;
+            }
+        }
+        if (!runnable) break;
+    } while (1);
+    return st;
+}
+
 /* Run the scheduler until every thread is dead or `budget_ms` elapses. */
 nj_status nj_scheduler_run_until_idle(nj_vm *vm, nj_u4 budget_ms)
 {

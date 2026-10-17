@@ -1204,10 +1204,51 @@ nj_method *nj_method_lookup(nj_class *c, const char *name, const char *desc)
  * invokestatic, which used to raise "invokestatic on an instance method"
  * once per frame and never let the title finish.
  */
+/* CLDC interfaces have abstract instance methods only.  Walk their graph
+ * once per resolution, including the super link used by built-in interfaces.
+ * The visited bitmap also bounds work on diamonds and malformed cycles. */
+static nj_method *method_lookup_interface_walk(nj_class *c, const char *name,
+                                               const char *desc, nj_u1 *seen)
+{
+    nj_u2 i;
+    nj_method *m;
+    nj_u4 byte;
+    nj_u1 bit;
+
+    if (!c || c->id >= NJ_MAX_CLASSES) {
+        return NULL;
+    }
+    byte = (nj_u4)c->id >> 3;
+    bit = (nj_u1)(1u << (c->id & 7u));
+    if ((seen[byte] & bit) != 0u) {
+        return NULL;
+    }
+    seen[byte] |= bit;
+
+    if ((c->flags & NJ_ACC_INTERFACE) != 0u) {
+        for (i = 0u; i < c->method_count; i++) {
+            m = &c->methods[i];
+            if ((m->flags & NJ_ACC_PUBLIC) != 0u &&
+                (m->flags & (NJ_ACC_STATIC | NJ_ACC_PRIVATE)) == 0u &&
+                strcmp(m->name, name) == 0 && strcmp(m->desc, desc) == 0) {
+                return m;
+            }
+        }
+    }
+    for (i = 0u; i < c->ninterfaces; i++) {
+        m = method_lookup_interface_walk(c->interfaces[i], name, desc, seen);
+        if (m) {
+            return m;
+        }
+    }
+    return method_lookup_interface_walk(c->super, name, desc, seen);
+}
+
 static nj_method *method_lookup_named(nj_class *c, const char *name,
                                       const char *desc)
 {
     nj_class *k;
+    nj_u1 seen[(NJ_MAX_CLASSES + 7u) / 8u];
 
     for (k = c; k; k = k->super) {
         nj_u2 i;
@@ -1218,7 +1259,13 @@ static nj_method *method_lookup_named(nj_class *c, const char *name,
             }
         }
     }
-    return NULL;
+    /* Constructors and class initializers are never inherited from an
+     * interface.  Static/private methods are excluded by the graph walk. */
+    if (name[0] == '<') {
+        return NULL;
+    }
+    memset(seen, 0, sizeof(seen));
+    return method_lookup_interface_walk(c, name, desc, seen);
 }
 
 static nj_field *field_lookup_walk(nj_class *c, const char *name,

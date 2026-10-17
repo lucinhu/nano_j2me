@@ -644,6 +644,8 @@ static void mkdir_p(const char *path)
 typedef struct run_hook_ctx {
     nj_u8 budget;   /* 0 = no frame budget */
     nj_u8 drawn;
+    const nj_port *port;
+    key_script *keys;
 } run_hook_ctx;
 
 static int run_frame_hook(nj_vm *vm, void *ud)
@@ -653,6 +655,7 @@ static int run_frame_hook(nj_vm *vm, void *ud)
     if (!nj_vm_running(vm)) {
         return 1;
     }
+    key_script_tick(ctx->port, ctx->keys, nj_vm_frames(vm));
     (void)nj_midp_frame(vm);
     ctx->drawn++;
     /*
@@ -783,6 +786,31 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
         return 2;
     }
 
+    /* Input must also be available while a constructor pumps frames. */
+    key_script keys;
+    {
+        nj_size klen = 0u;
+        char *kspec = key_script_load(opts->keys, &klen);
+        if (opts->keys && !kspec) {
+            if (port.log) {
+                port.log(port.user, 0, "--keys: cannot read the script file");
+            }
+            key_script_parse(NULL, &keys);
+        } else {
+            if (key_script_parse(kspec, &keys) < 0) {
+                key_script_parse(NULL, &keys);
+                if (port.log) {
+                    port.log(port.user, 0,
+                             "--keys: expected at most 512 frame:key pairs such as "
+                             "\"20:fire,60:left\" or \"20:53,60:35\", or @file for "
+                             "a script - THE WHOLE SCRIPT IS IGNORED, so this "
+                             "session will run with no input at all");
+                }
+            }
+            if (kspec && kspec != opts->keys) free(kspec);
+        }
+    }
+
     /* ---- the VM ---- */
     run_hook_ctx hook_ctx;
 
@@ -796,12 +824,13 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
      * registered here and not at the frame loop: startApp() runs before the
      * loop is reached, so the sleeps happen first.
      *
-     * Only on the path that is already driving frames; an embedder that calls
-     * nj_midp_run() drives its own.
+     * The runner also owns interactive startup frames with no frame limit.
      */
-    if (vm && (opts->run_frames > 0u || (opts->keys && opts->keys[0]))) {
+    if (vm) {
         hook_ctx.budget = opts->run_frames;
         hook_ctx.drawn = 0u;
+        hook_ctx.port = &port;
+        hook_ctx.keys = &keys;
         nj_vm_set_frame_hook(vm, run_frame_hook, &hook_ctx);
     }
     if (!vm) {
@@ -1034,31 +1063,6 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
      * The key script is loaded HERE, not inside the frame loop, so its lifetime
      * is the whole run and the loop below can just tick it.
      */
-    key_script keys;
-    {
-        nj_size klen = 0u;
-        char *kspec = key_script_load(opts->keys, &klen);
-        if (opts->keys && !kspec) {
-            if (port.log) {
-                port.log(port.user, 0, "--keys: cannot read the script file");
-            }
-            key_script_parse(NULL, &keys);
-        } else {
-            if (key_script_parse(kspec, &keys) < 0) {
-                key_script_parse(NULL, &keys);
-                if (port.log) {
-                    port.log(port.user, 0,
-                             "--keys: expected at most 512 frame:key pairs such as "
-                             "\"20:fire,60:left\" or \"20:53,60:35\", or @file for "
-                             "a script - THE WHOLE SCRIPT IS IGNORED, so this "
-                             "session will run with no input at all");
-                }
-            }
-            if (kspec && kspec != opts->keys) {
-                free(kspec);
-            }
-        }
-    }
 
 resumed:
     /* ---- the frame loop ---- */

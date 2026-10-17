@@ -492,8 +492,9 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
          * Measured over every Image2D the corpus ships (35 in the stored
          * sections, and the shape holds for each one exactly): the format is
          * one byte at 12, isMutable at 13, the width a u32 at 14, the height a
-         * u32 at 18 and the size of the palette a u32 at 22.  Thirty bytes of
-         * header, then the palette when there is one, then the pixels - one
+         * u32 at 18 and the size of the palette a u32 at 22.  The palette
+         * starts at 26, followed by the pixel byte count and then the pixels.
+         * Pixels use one
          * byte per pixel when the image is paletted, and otherwise as many
          * bytes per pixel as the format says.  The reading is accepted only
          * when it consumes the object exactly; anything else is left
@@ -1692,33 +1693,69 @@ NJFN(m3g_find)
     return NJ_OK;
 }
 
-/*
- * duplicate(): a shallow copy of the object itself, with no children and no
- * parent, which is what the JSR asks for and what titles rely on when they
- * clone a Mesh to give it its own appearance.
- */
-NJFN(m3g_duplicate)
+/* Duplicate instance state, retaining referenced M3G resources while giving
+ * internal arrays and slot vectors their own storage.  Node copies are detached
+ * from the source parent; a Group's descendants are duplicated below. */
+static nj_ref m3g_copy_object(nj_vm *vm, nj_ref self, unsigned depth)
 {
-    nj_ref self = NJ_THIS(args);
     nj_ref copy;
-
-    if (!self || !self->cls) {
-        ret->r = 0;
-        return NJ_OK;
-    }
-    copy = nj_object_new(vm, self->cls->name);
-    if (!copy) {
-        return nj_throw_oom(vm);
-    }
-    {
-        float *d = mat_of(vm, copy, NJ_C_XABLE, "_nj_m");
-        float *s = mat_of(vm, self, NJ_C_XABLE, "_nj_m");
-        if (d && s) {
-            memcpy(d, s, sizeof(float) * NJ_MF);
+    nj_class *cls;
+    if (!self || !self->cls || depth > 64u) { return 0; }
+    copy = nj_root(vm, nj_object_new(vm, self->cls->name));
+    if (!copy) { return 0; }
+    memcpy((nj_u1 *)copy + sizeof(nj_object),
+           (const nj_u1 *)self + sizeof(nj_object),
+           self->cls->instance_size - sizeof(nj_object));
+    for (cls = self->cls; cls; cls = cls->super) {
+        nj_u2 i;
+        for (i = 0; i < cls->field_count; i++) {
+            nj_field *f = &cls->fields[i];
+            nj_ref src, dst;
+            if (f->flags & NJ_ACC_STATIC) { continue; }
+            if (strcmp(f->name, "_nj_parent") == 0) {
+                nj_rput(vm, copy, f, 0);
+            } else if (f->desc[0] == '[') {
+                src = nj_rget(vm, self, f);
+                if (!src) { continue; }
+                dst = nj_array_new(vm, f->desc + 1, nj_array_length(src));
+                if (!dst) { return 0; }
+                memcpy(nj_array_data(dst), nj_array_data(src),
+                       src->size - (nj_size)((nj_u1 *)src->u.bytes - (nj_u1 *)src));
+                nj_rput(vm, copy, f, dst);
+            } else if (strcmp(f->desc, "L" NJ_C_VECTOR ";") == 0) {
+                nj_value count, a[2], item;
+                nj_s4 k;
+                src = nj_rget(vm, self, f);
+                if (!src) { continue; }
+                dst = nj_root(vm, nj_object_new(vm, NJ_C_VECTOR));
+                if (!dst || nj_call(vm, dst, NJ_C_VECTOR, "<init>", "()V", NULL, NULL) != NJ_OK) { return 0; }
+                nj_rput(vm, copy, f, dst);
+                if (nj_call(vm, src, NJ_C_VECTOR, "size", "()I", NULL, &count) != NJ_OK) { return 0; }
+                for (k = 0; k < count.i; k++) {
+                    a[0].i = k;
+                    if (nj_call(vm, src, NJ_C_VECTOR, "elementAt", "(I)Ljava/lang/Object;", a, &item) != NJ_OK) { return 0; }
+                    if (strcmp(f->name, "_nj_kids") == 0 && item.r) {
+                        nj_field *parent;
+                        item.r = m3g_copy_object(vm, item.r, depth + 1u);
+                        if (!item.r) { return 0; }
+                        parent = nj_field_lookup(vm, NJ_C_NODE, "_nj_parent", "L" NJ_C_NODE ";", 0);
+                        nj_rput(vm, item.r, parent, copy);
+                    }
+                    a[0].r = item.r;
+                    if (nj_call(vm, dst, NJ_C_VECTOR, "addElement", "(Ljava/lang/Object;)V", a, NULL) != NJ_OK) { return 0; }
+                }
+            }
         }
     }
-    ret->r = copy;
-    return NJ_OK;
+    return copy;
+}
+
+NJFN(m3g_duplicate)
+{
+    nj_u4 mark = nj_root_mark(vm);
+    ret->r = m3g_copy_object(vm, NJ_THIS(args), 0u);
+    nj_root_release(vm, mark);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
 }
 
 /*

@@ -10,6 +10,9 @@
 #include <string.h>
 #include <stdlib.h>
 
+#define NJ_CLI_HEAP_MB ((NJ_MAX_HEAP / (1024u * 1024u)) < 64u \
+                        ? 64u : (NJ_MAX_HEAP / (1024u * 1024u)))
+
 static void usage(const char *argv0)
 {
     printf(
@@ -73,7 +76,7 @@ static void usage(const char *argv0)
 "  %s --port headless --dump-frames out/ game.jar\n"
 "  %s --port sdl2 --scale 3 --heap 8 game.jar\n",
         argv0,
-        (unsigned)(NJ_MAX_HEAP / (1024u * 1024u)),
+        (unsigned)NJ_CLI_HEAP_MB,
         NJ_SCREEN_WIDTH, NJ_SCREEN_HEIGHT,
         argv0, argv0, argv0);
 }
@@ -156,7 +159,7 @@ int main(int argc, char **argv)
     c.fps = 30;
     c.width = NJ_SCREEN_WIDTH;
     c.height = NJ_SCREEN_HEIGHT;
-    c.heap_mb = (unsigned)(NJ_MAX_HEAP / (1024u * 1024u));
+    c.heap_mb = (unsigned)NJ_CLI_HEAP_MB;
 #if NJ_HAVE_SDL2
     c.port_name = "sdl2";
 #else

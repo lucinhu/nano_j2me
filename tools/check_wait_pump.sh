@@ -64,5 +64,24 @@ else
     say 1 "the run painted ${frames:-0} frames, expected at least 30"
 fi
 
+# A sleeping worker can legitimately take longer than the bridge's old 5s cap.
+long_out="$(timeout 30 "$BIN" --port headless --heap 8 --fps 30 \
+    --prop fixture.wait.ms=6000 --run-frames 220 "$JAR" 2>&1)"
+long_rc=$?
+[ "$long_rc" = 0 ]; say $? "the six-second constructor wait exits cleanly"
+case "$long_out" in
+    *"WAIT painted=5 ready=true"*) say 0 "the long wait resumes and paints" ;;
+    *) say 1 "the long wait failed to resume" ;;
+esac
+
+cancel_out="$(timeout 15 "$BIN" --port headless --heap 8 --fps 30 \
+    --prop fixture.wait.ms=6000 --run-frames 30 "$JAR" 2>&1)"
+cancel_rc=$?
+[ "$cancel_rc" = 0 ]; say $? "frame-budget cancellation ends the constructor pump"
+case "$cancel_out" in
+    *"WAIT ready=true"*) say 1 "construction continued after cancellation" ;;
+    *) say 0 "the cancelled constructor did not start the MIDlet" ;;
+esac
+
 [ "$fail" = 0 ] && echo "PASS: a MIDlet whose constructor waits for another thread starts"
 exit "$fail"

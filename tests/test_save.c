@@ -273,6 +273,57 @@ static int start_fixture(nj_vm *vm, const nj_u1 *jar, nj_u4 jar_len,
     return nj_midp_current(vm) != NULL;
 }
 
+/* A desktop caller can select a heap larger than the embedded default.
+ * Its snapshot must round-trip, without expanding a smaller caller's budget. */
+static void test_large_heap(const nj_port *port, const nj_u1 *jar, nj_u4 jar_len)
+{
+    const nj_size capacity = (nj_size)NJ_MAX_HEAP + 48u * 1024u * 1024u;
+    nj_vm *source = nj_vm_create(port, capacity);
+    nj_vm *target = NULL;
+    nj_app *source_app = NULL, *target_app = NULL;
+    FILE *state = tmpfile();
+    CHECK(source != NULL && state != NULL, "large-heap snapshot setup");
+    if (!source || !state) { goto done; }
+    CHECK(start_fixture(source, jar, jar_len, &source_app),
+          "large-heap fixture starts");
+    CHECK(nj_vm_save(source, state) == NJ_OK,
+          "save an explicitly configured large heap");
+    target = nj_vm_create(port, HEAP_BYTES);
+    CHECK(target != NULL, "smaller restore VM exists");
+    if (target) {
+        target_app = nj_app_open(target, jar, jar_len);
+        CHECK(target_app != NULL, "smaller restore VM attaches fixture");
+        rewind(state);
+        CHECK(nj_vm_load(target, state) == NJ_ERR_FORMAT,
+              "a snapshot cannot enlarge the caller's heap budget");
+        CHECK(target->heap.size == HEAP_BYTES,
+              "refused large restore preserves the smaller heap");
+        if (target_app) { nj_app_close(target, target_app); }
+        nj_vm_destroy(target);
+        target = NULL;
+        target_app = NULL;
+    }
+    target = nj_vm_create(port, capacity);
+    CHECK(target != NULL, "large restore VM exists");
+    if (target) {
+        target_app = nj_app_open(target, jar, jar_len);
+        CHECK(target_app != NULL, "large restore VM attaches fixture");
+        rewind(state);
+        CHECK(nj_vm_load(target, state) == NJ_OK,
+              "restore an explicitly configured large heap");
+        CHECK(target->heap.size == capacity,
+              "large restored heap retains its capacity");
+        CHECK(str_eq(vector_at(target, field_child_b(target), 0u), "first"),
+              "large snapshot restores observable Java state");
+    }
+done:
+    if (target_app) { nj_app_close(target, target_app); }
+    nj_vm_destroy(target);
+    if (source_app) { nj_app_close(source, source_app); }
+    nj_vm_destroy(source);
+    if (state) { fclose(state); }
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -607,6 +658,8 @@ after_vm_b:
         CHECK(nj_vm_load_file(vm_a, BAD_PATH) != NJ_OK,
               "a truncated blob is refused");
     }
+
+    test_large_heap(&port, jar, jar_len);
 
     /* ---- teardown ---------------------------------------------------- */
     if (app_a) {

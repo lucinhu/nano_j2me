@@ -1089,6 +1089,7 @@ nj_status  nj_frame_push(nj_vm *vm, nj_thread *th, nj_method *m,
 void       nj_frame_pop(nj_vm *vm, nj_thread *th);
 nj_status  nj_scheduler_run(nj_vm *vm);
 nj_status  nj_scheduler_step(nj_vm *vm);
+nj_status  nj_scheduler_frame(nj_vm *vm, nj_u4 budget_ms);
 nj_status  nj_scheduler_run_until_idle(nj_vm *vm, nj_u4 budget_ms);
 nj_s8      nj_now_ms(nj_vm *vm);
 void       nj_vm_stop(nj_vm *vm, nj_s4 exit_code);

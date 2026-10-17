@@ -1,10 +1,51 @@
-# OPEN: an interface-typed reference cannot reach java.lang.Object
+# Interface method resolution: Object methods and inherited declarations
 
-Status: unfixed. Found while implementing
-`javax.microedition.io.HttpConnection` (2026-10-13). Nothing in the runtime
-depends on it working, and the fix touches method resolution, which is the one
-place a mistake breaks every title at once — so it is written down rather than
-patched in a hurry.
+Status (2026-10-16): inherited interface method resolution fixed and covered by
+`tests/test_resolution.c`. The Object-method symptom below was not reproducible
+in the current runtime: `getClass`, `hashCode`, `equals` and `toString` already
+resolve through a parsed interface's `java/lang/Object` super link. The original
+2026-10-13 investigation is preserved below as historical context.
+
+## Verified fix and regression
+
+A Java fixture declares `Root.value()I`, `Left extends Root`, `Right extends
+Root`, `Leaf extends Left, Right`, and a concrete `Impl implements Leaf`.
+`javac --release 8 -g:none` emits `invokeinterface resolve/Leaf.value:()I` even
+though Leaf has no declaration of its own. The embedded test lowers the class
+version to 48; it uses no Java 8 language features and needs no JDK at test time.
+
+Before the fix, both the ordinary call and the null-receiver case failed with:
+
+```
+java.lang.NoSuchMethodError: resolve/Leaf.value()I @ resolve.Probe.throughLeaf+5
+```
+
+`method_lookup_named()` now falls back to the interface graph after searching
+the class/superclass declarations. It follows parsed interface lists and the
+super links used by built-in interfaces. A visited bitmap avoids repeated
+visits in diamonds and cycles. Inherited static/private methods and methods
+with a different descriptor cannot satisfy the reference. Existing class-chain
+precedence and the constant-pool/receiver caches remain in use.
+
+The regression executes two inherited calls (result 84), Object-method calls
+(including overridden `hashCode` and `toString`), and a null receiver caught as
+`NullPointerException`. Fresh VMs also verify that inherited static/private
+methods and a mismatched descriptor fail symbolic resolution. No HTTP union
+method tables were removed. Java 8 default-method conflict resolution is outside
+this CLDC fix.
+
+Validation: `cmake --build build -j4` succeeded and CTest passed 80/80 tests
+(147.22 seconds). A paced 240×320 headless replay of 《3D版田园物语》 ran
+480 frames at 30 fps with isolated RMS data, reached the title menu and advanced
+opening story text, then exited with status 0. Its log still contains five
+`DataInputStream.readUTF` null-input-stream exceptions; this replay is a startup
+and input regression, not proof of complete game compatibility. Logs and sampled
+frames are under `.local-tools/debug-runs/interface-resolution-20261016/`.
+
+## Historical report (2026-10-13)
+
+Found while implementing `javax.microedition.io.HttpConnection`. The following
+symptom, cause and proposed work describe that earlier investigation.
 
 ## Symptom
 

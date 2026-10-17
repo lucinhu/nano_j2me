@@ -79,8 +79,12 @@
 #define NJ_SAVE_VERSION   2u
 #define NJ_SAVE_ENDIAN    0x01020304u
 #define NJ_SAVE_HDR_SIZE  176u
+/* Explicit heaps may exceed the library default. Loading may use that
+ * caller-selected capacity, but cannot request an arbitrary larger arena. */
+#define NJ_SAVE_HEAP_MAX(vm) ((nj_u8)(vm)->heap.size > (nj_u8)NJ_MAX_HEAP \
+                             ? (nj_u8)(vm)->heap.size : (nj_u8)NJ_MAX_HEAP)
 /* the largest blob worth believing: arena + stacks + statics + records */
-#define NJ_SAVE_BLOB_MAX ((nj_u8)NJ_MAX_HEAP + (nj_u8)NJ_MAX_THREADS * (nj_u8)NJ_MAX_STACK_SLOTS * 8u + 4u * 1024u * 1024u)
+#define NJ_SAVE_BLOB_MAX(vm) (NJ_SAVE_HEAP_MAX(vm) + (nj_u8)NJ_MAX_THREADS * (nj_u8)NJ_MAX_STACK_SLOTS * 8u + 4u * 1024u * 1024u)
 #define NJ_SAVE_NONE      0xFFFFFFFFu   /* NULL arena offset / no thread   */
 #define NJ_SAVE_NO_CLASS  0xFFFFu       /* NULL nj_class                   */
 #define NJ_SAVE_NAME_MAX  1024u
@@ -1048,8 +1052,7 @@ int nj_vm_save(nj_vm *vm, FILE *f)
     if (!nj_vm_can_save(vm)) {
         return NJ_ERR_STATE;
     }
-    if (vm->heap.size > (nj_size)NJ_MAX_HEAP ||
-        vm->heap.bump > vm->heap.size || vm->heap.bump < NJ_BLOCK_HDR ||
+    if (vm->heap.bump > vm->heap.size || vm->heap.bump < NJ_BLOCK_HDR ||
         vm->nstatics > (nj_u4)NJ_MAX_STATICS ||
         vm->ninterned > (nj_u2)NJ_MAX_INTERNED ||
         vm->nclasses > (nj_u2)NJ_MAX_CLASSES) {
@@ -1516,7 +1519,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
      * several megabytes larger than the heap itself.  Anything past this is a
      * file that is not a snapshot, and is refused before it is buffered.
      */
-    if ((nj_u8)flen > NJ_SAVE_BLOB_MAX) {
+    if ((nj_u8)flen > NJ_SAVE_BLOB_MAX(vm)) {
         return NJ_ERR_FORMAT;
     }
     if (fseek(f, 0L, SEEK_SET) != 0) {
@@ -1584,7 +1587,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     (void)saved_ms;
     (void)pixfmt;   /* geometry is only checked, never applied */
 
-    if (heap_size < 4096u || heap_size > (nj_u8)NJ_MAX_HEAP ||
+    if (heap_size < 4096u || heap_size > NJ_SAVE_HEAP_MAX(vm) ||
         heap_size > 0xFFFFFFFFu || heap_bump < NJ_BLOCK_HDR ||
         heap_bump > heap_size || nclasses == 0u ||
         nclasses > (nj_u4)NJ_MAX_CLASSES || nstatics > (nj_u4)NJ_MAX_STATICS ||

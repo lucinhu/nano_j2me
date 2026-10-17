@@ -744,8 +744,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         _Pragma("GCC diagnostic pop")                                  \
     } while (0)
 #else
-/* Without the extension, a converted handler simply returns to the loop top. */
-#define DISPATCH() continue
+/* Converted handlers bypass the switch tail, so they must poll here too. */
+#define DISPATCH() { CHECK_QUANTUM(); continue; }
 #endif
 
     L_slow:

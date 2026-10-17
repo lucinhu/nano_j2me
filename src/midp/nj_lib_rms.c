@@ -48,6 +48,11 @@
 #if NJ_USE_LIBC
 #  include <string.h>
 #  include <stdio.h>
+#  if !defined(_WIN32)
+#    include <dirent.h>
+#    include <sys/stat.h>
+#    include <errno.h>
+#  endif
 #endif
 
 #define NJFN(name) NJ_NATIVE_FN(name)
@@ -902,7 +907,13 @@ NJFN(rs_getRecord)
     }
     {
         nj_ref rec = vec_at(vm, recs, idx);
-        nj_ref copy = nj_byte_array_new(vm, rec ? rec->length : 0u);
+        nj_ref copy;
+        /* MIDP getRecord(int) returns null for an existing empty record. */
+        if (!rec || rec->length == 0u) {
+            ret->r = NULL;
+            return NJ_OK;
+        }
+        copy = nj_byte_array_new(vm, rec->length);
         if (!copy) {
             return nj_throw_oom(vm);
         }
@@ -1043,11 +1054,132 @@ NJFN(rs_deleteRecord)
 
 NJFN(rs_listNames)
 {
-    /* Enumerating the directory would need a port hook this runtime does not
-     * have; an empty array is honest, and every game that calls this treats an
-     * empty result as "no saves yet". */
-    ret->r = nj_object_array_new(vm, "java/lang/String", 0u);
-    return ret->r ? NJ_OK : nj_throw_oom(vm);
+    const nj_port *port = vm->port;
+    const char *dir = (port && port->rms_dir) ? port->rms_dir : ".";
+    void *handle = NULL;
+    nj_ref names, result;
+    nj_u4 mark;
+    nj_s4 count, i;
+    int next, is_dir;
+    char name[256];
+    nj_status st = NJ_OK;
+    int use_port = port && port->dir_open && port->dir_next && port->dir_close;
+#if NJ_USE_LIBC && !defined(_WIN32)
+    DIR *host_dir = NULL;
+#endif
+
+    /* MIDP returns null when no stores exist.  Walk the same directory used
+     * by rs_path(), including closed stores from earlier VM sessions. */
+    ret->r = NULL;
+    if (use_port) {
+        if (port->dir_open(port->ud, dir, &handle) != 0) {
+            return NJ_OK;
+        }
+    } else {
+#if NJ_USE_LIBC && !defined(_WIN32)
+        /* SDL2 uses libc for RMS files and does not supply directory hooks. */
+        if (port && port->file_open) {
+            return NJ_OK; /* A custom file backend must supply its own listing. */
+        }
+        host_dir = opendir(dir);
+        if (!host_dir) {
+            return NJ_OK;
+        }
+#else
+        return NJ_OK;
+#endif
+    }
+    mark = nj_root_mark(vm);
+    names = nj_object_new(vm, "java/util/Vector");
+    if (!nj_root(vm, names)) {
+        st = nj_throw_oom(vm);
+        goto done;
+    }
+    if (nj_call_special(vm, names, "java/util/Vector", "<init>", "()V",
+                        NULL, NULL) != NJ_OK) {
+        st = NJ_ERR;
+        goto done;
+    }
+    for (;;) {
+        nj_size len;
+        nj_ref s;
+        if (use_port) {
+            next = port->dir_next(port->ud, handle, name, sizeof(name), &is_dir);
+        } else {
+#if NJ_USE_LIBC && !defined(_WIN32)
+            struct dirent *entry;
+            struct stat info;
+            char path[768];
+            errno = 0;
+            entry = readdir(host_dir);
+            next = entry ? 1 : (errno ? -1 : 0);
+            if (entry) {
+                if (strlen(entry->d_name) >= sizeof(name)) {
+                    continue;
+                }
+                strcpy(name, entry->d_name);
+                if (snprintf(path, sizeof(path), "%s/%s", dir, name) >=
+                        (int)sizeof(path) || stat(path, &info) != 0 ||
+                        !S_ISREG(info.st_mode)) {
+                    continue;
+                }
+                is_dir = 0;
+            }
+#else
+            next = 0;
+#endif
+        }
+        if (next != 1) {
+            break;
+        }
+        len = strlen(name);
+        if (is_dir || len <= 4u || strcmp(name + len - 4u, ".rms") != 0) {
+            continue;
+        }
+        name[len - 4u] = '\0';
+        s = nj_string_new(vm, name);
+        if (!s || !vec_add(vm, names, s)) {
+            st = vm->exception ? NJ_ERR : nj_throw_oom(vm);
+            goto done;
+        }
+    }
+    if (next < 0) {
+        st = nj_throw(vm, "javax/microedition/rms/RecordStoreException",
+                      "cannot list record stores");
+        goto done;
+    }
+    count = vec_size(vm, names);
+    if (vm->exception) {
+        st = NJ_ERR;
+        goto done;
+    }
+    if (count == 0) {
+        goto done;
+    }
+    result = nj_object_array_new(vm, "java/lang/String", (nj_u4)count);
+    if (!nj_root(vm, result)) {
+        st = nj_throw_oom(vm);
+        goto done;
+    }
+    for (i = 0; i < count; i++) {
+        result->u.refs[i] = vec_at(vm, names, i);
+        if (vm->exception) {
+            st = NJ_ERR;
+            goto done;
+        }
+    }
+    ret->r = result;
+done:
+    if (use_port) {
+        port->dir_close(port->ud, handle);
+    }
+#if NJ_USE_LIBC && !defined(_WIN32)
+    else {
+        closedir(host_dir);
+    }
+#endif
+    nj_root_release(vm, mark);
+    return st;
 }
 
 NJFN(rs_listener_noop)

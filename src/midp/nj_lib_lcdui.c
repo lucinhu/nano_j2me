@@ -5003,7 +5003,7 @@ nj_status nj_midp_paint(nj_vm *vm)
         if (buf) {
             nj_ref g = gfx_new(vm, buf);
             if (g) {
-                (void)canvas_call_paint(vm, d, g);
+                (void)canvas_call_paint_rooted(vm, d, g);
                 nj_clear_exception(vm);
             }
             if (nj_midp_surface(vm, buf, &buf_surf)) {

@@ -1756,6 +1756,92 @@ static void test_gamecanvas(nj_vm *vm)
     }
 }
 
+/* A GameCanvas may override paint() and start its timer in showNotify().
+ * Exercise the runner's paint entry without a key event delivering visibility
+ * first, and collect during showNotify to check the pending Graphics root. */
+static int gc_visible_phase, gc_size_calls, gc_show_calls, gc_paint_calls;
+
+static nj_status gc_test_size(nj_vm *vm, nj_thread *th,
+                              nj_value *args, nj_value *ret)
+{
+    nj_surface *scr = nj_midp_screen(vm);
+    (void)th; (void)ret;
+    CHECK(gc_visible_phase == 0, "sizeChanged precedes showNotify");
+    CHECK(scr && args[0].i == scr->width && args[1].i == scr->height,
+          "GameCanvas receives the display size");
+    gc_visible_phase = 1;
+    gc_size_calls++;
+    return NJ_OK;
+}
+
+static nj_status gc_test_show(nj_vm *vm, nj_thread *th,
+                              nj_value *args, nj_value *ret)
+{
+    (void)th; (void)args; (void)ret;
+    CHECK(gc_visible_phase == 1, "showNotify follows sizeChanged");
+    gc_visible_phase = 2;
+    gc_show_calls++;
+    (void)nj_gc_collect(vm);
+    return NJ_OK;
+}
+
+static nj_status gc_test_paint(nj_vm *vm, nj_thread *th,
+                               nj_value *args, nj_value *ret)
+{
+    nj_ref g = args[0].r;
+    (void)th; (void)ret;
+    CHECK(gc_visible_phase >= 2, "GameCanvas is shown before paint");
+    CHECK(nj_heap_owns_object(vm, g), "Graphics survives showNotify collection");
+    if (nj_heap_owns_object(vm, g)) {
+        v1(vm, g, NJ_C_GRAPHICS, "setColor", "(I)V", 0x00FF00);
+        v4(vm, g, NJ_C_GRAPHICS, "fillRect", "(IIII)V", 0, 0, 1, 1);
+    }
+    gc_visible_phase = 3;
+    gc_paint_calls++;
+    return NJ_OK;
+}
+
+static void test_gamecanvas_visibility(nj_vm *vm)
+{
+    static const nj_builtin_method methods[] = {
+        { "sizeChanged", "(II)V", NJ_ACC_PROTECTED },
+        { "showNotify", "()V", NJ_ACC_PROTECTED },
+        { "paint", "(" D_GFX ")V", NJ_ACC_PUBLIC }
+    };
+    static const nj_builtin_class fixture = {
+        "test/VisibleGameCanvas", NJ_C_GAMECANVAS, NJ_ACC_PUBLIC,
+        NULL, 0u, methods, 3u
+    };
+    nj_class *cls = nj_class_create_builtin(vm, &fixture);
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref c;
+    nj_value a;
+    CHECK(cls != NULL, "GameCanvas visibility fixture class");
+    if (!cls) { return; }
+    cls->methods[0].native = gc_test_size;
+    cls->methods[1].native = gc_test_show;
+    cls->methods[2].native = gc_test_paint;
+    c = nj_root(vm, nj_object_new(vm, fixture.name));
+    CHECK(c != NULL, "GameCanvas visibility fixture object");
+    if (!c) { nj_root_release(vm, mark); return; }
+    a.i = 0;
+    CHECK(nj_call_special(vm, c, NJ_C_GAMECANVAS, "<init>", "(Z)V", &a,
+                          NULL) == NJ_OK, "initialize visibility canvas");
+    gc_visible_phase = gc_size_calls = gc_show_calls = gc_paint_calls = 0;
+    CHECK(nj_midp_set_current(vm, c) == NJ_OK, "select visibility canvas");
+    CHECK(gc_show_calls == 0, "setCurrent defers showNotify to event delivery");
+    CHECK(nj_midp_paint(vm) == NJ_OK, "paint newly selected GameCanvas");
+    CHECK(gc_size_calls == 1 && gc_show_calls == 1 && gc_paint_calls == 1,
+          "first paint delivers sizeChanged, showNotify and paint once");
+    CHECK((nj_surface_get(nj_midp_screen(vm), 0, 0) & 0x00FFFFFFu) == 0x00FF00u,
+          "GameCanvas override paints the display after showNotify");
+    CHECK(nj_midp_paint(vm) == NJ_OK, "paint visible GameCanvas again");
+    CHECK(gc_size_calls == 1 && gc_show_calls == 1 && gc_paint_calls == 2,
+          "subsequent paint does not repeat visibility notifications");
+    CHECK(!nj_has_exception(vm), "visibility callbacks finish without exception");
+    nj_root_release(vm, mark);
+}
+
 /* ------------------------------------------------------------------ */
 /* The suite                                                           */
 /* ------------------------------------------------------------------ */
@@ -1769,6 +1855,7 @@ static void run_suite(nj_vm *vm)
     test_tiledlayer(vm);
     test_layermanager(vm);
     test_gamecanvas(vm);
+    test_gamecanvas_visibility(vm);
 }
 
 /* ------------------------------------------------------------------ */

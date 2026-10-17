@@ -278,6 +278,55 @@ static void test_frame_thread_ownership(void)
     nj_port_shutdown(&port);
 }
 
+static nj_u4 stationary_clock(void *ud) { (void)ud; return 0u; }
+
+static void test_frame_compute_budget(void)
+{
+    static const nj_u1 code[] = { 0x84, 0x00, 0x01, 0xa7, 0xff, 0xfd };
+    nj_port port;
+    nj_vm *vm;
+    nj_thread *a, *b;
+    nj_method method;
+    nj_s4 first, one_round;
+    CHECK(nj_port_headless_ex(&port, 240, 320, 0, NULL) == NJ_OK, "port");
+    port.millis = stationary_clock;
+    vm = nj_vm_create(&port, 1024u * 1024u);
+    CHECK(vm != NULL, "budget VM");
+    if (!vm) { nj_port_shutdown(&port); return; }
+    memset(&method, 0, sizeof(method));
+    method.name = "compute";
+    method.desc = "()V";
+    method.code = code;
+    method.code_len = sizeof(code);
+    method.max_locals = 1;
+    method.max_stack = 1;
+    a = nj_thread_create(vm, NULL, 0);
+    b = nj_thread_create(vm, NULL, 0);
+    CHECK(a && b, "two compute threads");
+    if (a && b) {
+        CHECK(nj_frame_push(vm, a, &method, a->top, 0) == NJ_OK, "first loop");
+        CHECK(nj_frame_push(vm, b, &method, b->top, 0) == NJ_OK, "second loop");
+        a->state = b->state = NJ_THREAD_RUNNING;
+        vm->running = 1;
+        CHECK(nj_scheduler_frame(vm, 0u) == NJ_OK, "one scheduling round");
+        first = a->frames[0].locals[0].i;
+        one_round = first;
+        CHECK(first > 0, "compute progressed");
+        CHECK(nj_scheduler_frame(vm, 8u) == NJ_OK, "bounded stationary clock");
+        CHECK(a->frames[0].locals[0].i > first, "multiple quanta per frame");
+        CHECK_EQ(a->frames[0].locals[0].i, b->frames[0].locals[0].i,
+                 "both threads get equal quanta");
+        CHECK(nj_thread_self(vm) == nj_thread_main(vm), "host thread restored");
+        first = a->frames[0].locals[0].i;
+        vm->painted_in_frame = 1;
+        CHECK(nj_scheduler_frame(vm, 8u) == NJ_OK, "present stops extra rounds");
+        CHECK_EQ(a->frames[0].locals[0].i, first + one_round,
+                 "a presented frame gets only one round");
+    }
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+}
+
 int main(void)
 {
     printf("== nano_j2me lifecycle and memory contract ==\n");
@@ -287,6 +336,7 @@ int main(void)
     test_failure_recovery();
     test_heap_stability();
     test_frame_thread_ownership();
+    test_frame_compute_budget();
 
     printf("\nchecks: %d  failures: %d\n", checks, failures);
     if (failures == 0) {

@@ -284,7 +284,7 @@ nj_status nj_midp_frame(nj_vm *vm)
 
     /* ---- background threads ---- */
     {
-        nj_status st = nj_scheduler_step(vm);
+        nj_status st = nj_scheduler_frame(vm, 8u);
         if (st != NJ_OK && st != NJ_ERR_HALT && st != NJ_ERR_YIELD &&
             st != NJ_ERR_TIMEOUT) {
             return st;

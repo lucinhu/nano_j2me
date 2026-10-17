@@ -312,6 +312,28 @@ are read back through `Image.getRGB()` and compared field by field - before the
 fix, `fresh=0` and `drawn=0x80800000`; after, `fresh=0xffffffff` and
 `drawn=0xffff7f7f`.
 
+### GameCanvas polling retains keys until release
+
+`GameCanvas.getKeyStates()` now combines keys that remain held with presses
+latched since the previous poll, clearing only the latch. Previously the first
+poll consumed a held direction, so games such as `3D版田园物语_6744` moved once
+and then stopped until another press event arrived. SDL keyboard, SDL touch pad,
+and Android touch controls share this input state. Callback suppression does
+not change the polling behavior. `test_game` covers repeated polls, simultaneous
+directions, release, quick taps, and suppressed callbacks.
+
+Fresh SDL2 runs of the original farm JAR reached the yard. Holding the keyboard
+Down key moved the character continuously, and releasing it stopped movement.
+A separate replay injected one SDL mouse-down on the virtual Up key, followed
+by mouse-up 1.5 seconds later; the character walked to the house and triggered
+its dialogue. Android's keypad decision tests pass, and APKs build for
+arm64-v8a and x86_64 with zero writable static data. On an x86_64 Android
+emulator, a separately packaged test app loaded the original JAR with isolated
+storage and reached the yard. One continuous 2.2-second touch on Down moved
+the character through multiple positions; release stopped movement, confirmed
+by two subsequent captures. This verifies Android touch input through the Java
+keypad and shared native polling state; physical-device gameplay is untested.
+
 ### The MIDlet clock is not the scheduler's tick count
 
 `nj_now_ms()` folds the port's millisecond clock into `vm->scheduler_ticks`, and
@@ -324,6 +346,23 @@ countdown, animation and `Thread.sleep()` in every title was scaled by the same
 factor.  Both increments are gone; `tests/test_speed.c` pins it with "a
 scheduler pass does not move the clock" (5,000 `nj_yield()` calls leave
 `nj_now_ms()` unchanged) and the same title now runs at 30.0 fps.
+
+Software-rendered 3D games also need more than one bytecode quantum per
+video frame. The MIDlet loop now runs fair scheduler rounds for up to 8 ms,
+stopping on presentation, blocked threads, or 256 rounds. This avoids
+artificially limiting Java rendering to one quantum per 30 Hz tick, while
+keeping input polling and rendering bounded. `test_lifecycle` checks the
+round cap and presentation stop; the portable interpreter dispatch also
+checks its quantum on fast opcode paths.
+
+The original `3D坦克对战1944_7139.jar` and
+`3D孤胆枪手2010_4634.jar` were replayed after the change. The shooter reaches
+its corridor battle in SDL2, accepts held controls, and has no uncaught
+exception in the bounded run. Its green touch controls are also present in
+FreeJ2ME-Plus. This is a startup and gameplay smoke test, not a complete
+playthrough. The motorcycle game's null-canvas TimerTask exception also
+occurs in FreeJ2ME-Plus; correcting Timer lifecycle does not repair that
+application-level initialization race.
 
 ### The passes reach further than the table did
 
@@ -360,17 +399,22 @@ heap is the faithful run, and the sweep now asks once more with
 nothing. The row says which run the verdict came from: "the picture appeared
 only with a 4 MB heap".
 
-The same question has an opposite answer, and the sweep asks that one too:
-愤怒的小鸟-高清版_2353 dies of `OutOfMemoryError` inside
-`Class.getResourceAsStream` at the default 16 MB — it peaks at 16.5 MB — and runs
-when it is given 32 (`NJ_HEAP_BIG`). That is not a faithful handset either; it is
-the other end of the same range, and the row says which one it took: "the title
-needed a 32 MB heap". The order matters: a title that ran out of heap is asked
-for more room *before* it is asked to manage with less.
+The same question has an opposite answer. 愤怒的小鸟-高清版_2353
+ships a 13,059,116-byte music WAV; its WAV sample data totals about 16.6 MB.
+The desktop CLI now defaults to at least 64 MB of Java heap so these resources
+and the game state fit together. `--heap` still overrides that default, and the
+embedded/library heap default is unchanged. An out-of-heap sweep result should
+be retried with more room before trying a smaller handset-sized heap.
 
-This is the same class of finding as the platform string: the runtime is not
-wrong, the title made a decision about its world, and the honest way to run it
-is to give it the world it was written for.
+Further gameplay testing exposed runtime defects too: Canvas key methods had
+incorrect static metadata, and media input stopped at 4 MB. The key methods
+now consume their instance receiver correctly; media loading uses the stream's
+available-byte hint, releases superseded growth buffers, and permits input up
+to the heap limit. A 5 MB WAV regression verifies every decoded sample, including
+the last one. An SDL2 run of the original JAR reached the first-level slingshot
+with directional/fire input and opened stereo 44,100 Hz audio, completing 1,200
+frames without an uncaught exception or `OutOfMemoryError`. This verifies the
+start and early gameplay path, not a complete playthrough.
 
 The eight that remain are each classified, not just counted:
 
@@ -573,6 +617,12 @@ is how a typo in a descriptor shows up.
 device), `Date`, `Calendar`, `TimeZone` (UTC), `Stack`, `Enumeration`,
 `Timer`/`TimerTask` (driven by the VM scheduler, so background timers work),
 `NoSuchElementException`, `EmptyStackException`.
+
+Timer queue changes wake idle helpers and interrupt later deadlines. Cancelling
+a Timer, or an uncaught exception in its task, clears its queue and terminates
+its helper; completed internal helpers are reclaimed when creating another
+Timer. Cancelling a TimerTask before scheduling permanently invalidates it.
+The deterministic `test_timer` and parked-callback fixture cover these paths.
 
 `Calendar` does real calendar arithmetic; `TimeZone` is UTC-only, so a game that
 displays local time will show UTC.
@@ -947,14 +997,20 @@ failing in:
    the file's own object table when the child list does not name the object a
    title asks for.
 
-`毁灭战士3_10598` is the title this was written against.  It used to stop in
-its constructor - first `addChild(null)`, then
-`NoSuchMethodError: javax/microedition/m3g/Group.postRotate(FFFF)V`, then
-`construction of Doom/Doom blocked` - and now runs: 120 frames, no uncaught
-exception, `m3g=2`, `tris=0`.  The `tris=0` was the honest part of that
-sentence: the scene is built and `render()` is called, and nothing was
-rasterised, so its 3D view stayed empty.  That is no longer true - see
-"### The geometry reaches the target" below.
+`毁灭战士3_10598` is the title this was written against. Earlier failures
+included `addChild(null)` and
+`NoSuchMethodError: javax/microedition/m3g/Group.postRotate(FFFF)V`.
+A historical 120-frame probe observed `m3g=2`, `tris=0`, but ended before the
+constructor timeout and did not establish successful startup. The MIDlet starts
+worker threads and joins them inside its constructor; the old C-to-Java bridge
+aborted an indefinite blocking call after five seconds, even when the worker was
+sleeping until a later deadline. The bridge now keeps pumping while another Java
+thread can run or wake, and runner input is available during construction.
+A fresh 1000-frame run reaches the main menu with 358 paints and 339540 triangles,
+without the constructor error or an uncaught exception. The wait fixture checks
+a six-second worker, cancellation during construction, and the existing deadlock
+case. Gameplay beyond this menu remains unverified; the geometry improvements
+below are separate evidence.
 
 ### A declared member is not a working member
 
@@ -1112,6 +1168,9 @@ mesh's accumulated world transform. Its `Background` clears the viewport and
 draws the image with crop and repeat/border modes. Rally references external
 PNG images relative to its M3G resource: these supply both sky and track
 textures. A white sky or road in earlier captures was a loader/background gap.
+Texture2D now inherits Transformable storage and methods; Rally's `(1, 600, 1)`
+texture scale restores asphalt detail and yellow road markings instead of
+longitudinal grey bands. A fresh 2,450-frame race confirms the fix at 101 km/h.
 Depth clearing is independent of the colour-clear flag.
 
 The two conventions are the part worth remembering, because getting them

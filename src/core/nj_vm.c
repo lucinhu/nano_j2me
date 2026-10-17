@@ -1415,15 +1415,28 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
                     st = NJ_ERR_HALT;
                     break;
                 }
-                /*
-                 * Parked with no deadline at all (wait(), join()) and nothing
-                 * has moved for NJ_CALL_BLOCK_MS: this is the one case where
-                 * waiting cannot end well, and reporting it beats spinning
-                 * forever inside a C caller that cannot give the CPU back.
-                 */
-                if (until == 0 &&
-                    (nj_now_ms(vm) - start) >= (nj_s8)NJ_CALL_BLOCK_MS) {
-                    break;
+                /* An indefinite join may span the entire game. A worker
+                 * that can run or wake later still has a way to finish it;
+                 * only a wait with no such worker gets the deadlock timeout. */
+                if (until == 0) {
+                    nj_u4 i;
+                    int can_progress = 0;
+                    if (!vm->in_call_pump) {
+                        for (i = 0; i < vm->nthreads; i++) {
+                            nj_thread *other = vm->threads[i];
+                            if (!other || other == th || other->in_c_call ||
+                                other->nframes == 0) continue;
+                            if (other->state == NJ_THREAD_RUNNING ||
+                                other->state == NJ_THREAD_SLEEPING ||
+                                (other->state == NJ_THREAD_WAITING &&
+                                 other->wait_deadline != 0)) {
+                                can_progress = 1;
+                                break;
+                            }
+                        }
+                    }
+                    if (can_progress) start = now;
+                    else if (now - start >= (nj_s8)NJ_CALL_BLOCK_MS) break;
                 }
                 if (vm->frame_hook && !vm->in_frame_hook) {
                     int stop;

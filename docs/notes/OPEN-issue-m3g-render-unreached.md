@@ -1,7 +1,7 @@
 # M3G rendering investigation: Rally race and wheel textures restored
 
 Current status: Rally renders its race and original wheel textures. The full
-CTest suite passes 78/78; the 395-title compatibility corpus remains 393 passed
+CTest suite passes 79/79; the 395-title compatibility corpus remains 393 passed
 and 2 failed (the same baseline failures). Earlier sections preserve the
 investigation history; the final section corrects the white-scene diagnosis.
 
@@ -570,7 +570,13 @@ Background crop, repeat/border and independent depth clearing are implemented.
 Material defaults, RGB/RGBA vertex colours and World light records were aligned
 with the renderer's representation.
 
-The road's longitudinal grey bands are present in the original `road_new.png`.
+The earlier explanation of longitudinal grey bands was incorrect. The road
+texture contains asphalt detail and yellow markings. Its authored Texture2D
+component scale is `(1, 600, 1)`, but Texture2D was incorrectly declared as an
+Object3D subclass. Declaring its actual Transformable parent gives the loader
+valid matrix storage and restores the repeated asphalt texture and yellow lines.
+A fresh 2,450-frame race at 240x320, `--heap 16 --fps 30`, confirms the correction
+at 101 km/h; the regression also checks inherited scale and image storage.
 An isolated side view of the original `fo.m3g` body (user ID 12) and wheel mesh
 (user ID 22), using the game's 0.032 scale and original Ford skin/wheel image,
 shows the wheel rims with normal culling. This verifies the wheel texture path;
@@ -581,4 +587,123 @@ it is a controlled model view, not a screenshot taken during the race.
 
 Regression fixtures cover compressed payload ownership and strip tails,
 Texture2D reference offsets/component scale, and Background crop/repeat/border
-plus depth clearing. The full CTest suite passes 78/78.
+plus depth clearing. That rendering checkpoint passed 78/78 CTest cases;
+the road and Timer follow-up below passes 79/79, including the new Timer test.
+
+### Rally follow-up: Timer task failures and helper lifecycle
+
+The remaining exceptions are `NullPointerException` in `f.run()V` and
+`g.run()V`, both at bytecode offset 6. Each callback reads a static reference
+from `Rally` and calls the old canvas's `repaint()`. The game's screen transition
+explicitly clears those references while leaving the old tasks scheduled; its
+bytecode contains no corresponding `Timer.cancel()` call. The runtime retains
+Java's exception behavior: an uncaught task exception stops that Timer.
+
+The investigation found separate runtime lifecycle bugs. Cancelled helpers
+previously slept for 600,000 ms and retained their task queues; a normally
+returning internal Timer helper stayed runnable with an empty stack. Helpers now exit after
+cancellation, release the timer reference and clear the queue, including when a
+task throws. Completed internal Timer helpers are reclaimed before allocating
+another helper, preserving the records of ordinary Java threads. Inserting a
+task wakes an idle helper or interrupts a later deadline. Cancelling a task
+before its first schedule now makes it permanently unschedulable.
+
+`test_timer` uses a controlled clock to check idle wakeup, earlier deadline
+insertion, cancellation before scheduling, exception isolation between two
+Timers, queue cleanup and 64 create/cancel cycles. The parked-callback fixture
+now keeps its notifier alive for the full 30-frame capture: previously it exited
+after the first invocation and left the next periodic callback without a
+notifier, a deadlock hidden by the unfinished worker state.
+
+A fresh Rally replay at 240x320, `--heap 16 --fps 30`, completed 2,450 frames
+and exited with status 0. The race screenshot shows 101 km/h with the blue sky,
+snow mountains, road, rear car and HUD. The run recorded 103,511 triangles,
+6,384 M3G calls and four thread records. The two stale-canvas exceptions remain
+visible in the log; their underlying game callbacks are not claimed repaired.
+
+Final verification after the Texture2D inheritance correction and scoped Timer
+helper completion passes all 79 CTest cases. The 395-title compatibility sweep
+reports 393 passed and 2 failed, matching the baseline: Robinson is not a usable
+MIDlet suite, and Football Manager 2009 still draws a flat frame. Doom 3 passes
+again. The normal-return completion change applies only to internal Timer helpers;
+ordinary Java thread completion remains outside this repair.
+
+A subsequent menu/restart replay completed 4,300 frames in both ports at
+240x320, 16 MB heap and 30 FPS, using isolated RMS directories. SDL2 recorded
+30.1 FPS; headless recorded 30.2 FPS. Headless captures show pause, return to the
+stage selection, re-entry into the race, and renewed acceleration to 112 km/h.
+Both runs end with three thread records. `Timer cancelled` exceptions also escape
+into the host frame loop during this sequence; the later race recovers, so the
+successful replay does not establish exception-free menu transitions.
+
+FreeJ2ME-Plus (baca76a4dda6f30abac67fb4a3db009eed05f91c), running the same
+original JAR with isolated saves and controlled logical menu inputs, also reports
+stale-canvas `NullPointerException` in the game's Timer callbacks. In this
+reference run, championship initialization remains at the loading screen after
+the `g.run` failure. It confirms the callback failure independently, but supplies
+no successful race/restart comparison for this sequence. The remaining game
+exceptions are documented rather than suppressed. The Timer changes and their
+fixtures are committed as `dde50cb`; the focused Timer/wait/M3G suite passes 8/8.
+
+### Follow-up: texture wrapping, vertex decoding, and two-component UV bias
+
+The shared renderer follow-up is split into three commits: `146ce12` honors the
+public CLAMP enum (240), `00225df` decodes per-component vertex deltas with
+byte/short overflow and allocates the decoded array by component count, and
+`f3a7e37` applies a two-component texture-coordinate bias. The last repair explains
+the large dark surfaces in Stranded 2's research room: its `ad` helper constructs
+`float[2] {0.5019531f, 0.5019531f}`, but the renderer previously ignored any bias
+shorter than three components. Both S and T now receive their offsets; the third
+component remains optional.
+
+The room replay after the UV repair shows the tiled floor, walls, beds, door and
+control panel with their distinct textures. The materials now agree with the
+previous FreeJ2ME-Plus room capture, allowing for camera position and lighting
+variation. Headless and SDL2 each completed 1,650 frames, including dialogue
+advance and a right input; SDL2 recorded 30.0 FPS and no uncaught exception.
+This verifies the opening room rather than the complete game. Isolated RMS
+initialization still reports handled missing-store and invalid-record exceptions.
+Evidence is under `.local-tools/debug-runs/stranded2-uvbias2-001/` and
+`.local-tools/debug-runs/stranded2-uvbias2-sdl-001/`.
+
+The Rally replay with these shared renderer changes again completed 4,300 frames
+in each port (SDL2 30.1 FPS, headless 30.2 FPS). Its last headless capture shows
+the re-entered snowy race at 112 km/h. The previously recorded stale Timer callback
+and `Timer cancelled` exceptions remain; this replay establishes continued driving,
+not exception-free transitions. Evidence is under
+`.local-tools/debug-runs/rally-delta-headless-001/` and
+`.local-tools/debug-runs/rally-delta-sdl-001/`.
+
+Final verification after all three repairs: 220 M3G checks with zero failures and
+79/79 CTest cases passed. No commits were pushed.
+
+### Follow-up: inherited texture storage and post-dialogue rendering
+
+Commit `0203598` independently records the Texture2D superclass correction:
+Texture2D extends Transformable, including its instance storage. The regression
+sets the road scale to `(1, 600, 1)`, verifies its composite matrix, and checks
+that the image reference remains intact. The seven M3G/Timer CTest cases passed.
+
+A fresh isolated Stranded replay reached 2,250 frames at 30.2 FPS, with no
+uncaught exception. The opening dialogue ended and the normal HUD appeared;
+room materials remained correct. However, screenshots at frames 1,800, 2,100
+and 2,250 do not establish movement. At this same room stage, the reference
+capture shows the player beside the green lockers while the native capture
+does not. Character rendering remains under investigation; this is not a
+completed gameplay validation. Evidence: `.local-tools/debug-runs/stranded2-room-exit-002/`
+and `.local-tools/debug-runs/stranded2-ref-continue-005/fire-23.png`.
+
+### Rally Timer provenance: cancelled timer reuse
+
+The original JAR's disassembly establishes the later scheduling failure as well
+as the initial stale callback. `Rally.c()` sets `Rally.f` to null and schedules a
+new `f` task on the existing static `Rally.j`; `Rally.e()` also clears `Rally.e`
+and `Rally.f`. Tasks `b.run()` and `f.run()` unconditionally dereference those
+fields to repaint. An uncaught callback exception terminates that Timer, so a
+subsequent `Rally.b()` or `Rally.c()` call to `Rally.j.schedule(task, 0L, 40L)`
+correctly fails with `IllegalStateException: Timer cancelled`. `Rally.d()` creates
+a replacement Timer, which explains how later transitions can recover. None of
+these methods cancels the old task before clearing its canvas. This identifies
+a game lifecycle defect; restarting a cancelled Timer inside the library would
+break Timer semantics. Disassembly evidence is in
+`.local-tools/debug-runs/rally-timer-audit-008/callbacks.txt`.
