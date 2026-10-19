@@ -496,6 +496,55 @@ static void test_font_cjk_table(void)
         }
     }
 
+    /* Stranded II's menu exposed whole-glyph jumps under target-size MONO
+     * hinting: 始/绍/关/出 ended one pixel above 游/戏/设. These full-height
+     * Han outlines share a bottom edge at both em sizes. Preserve natural
+     * top-edge differences (especially at 15 px), rather than fitting boxes. */
+    {
+        static const nj_u2 menu[] = {
+            0x5F00u, 0x59CBu, 0x6E38u, 0x620Fu, 0x8BBEu, 0x7F6Eu,
+            0x4ECBu, 0x7ECDu, 0x5173u, 0x4E8Eu, 0x9000u, 0x51FAu
+        };
+        const nj_font *faces[] = { small, medium, large };
+        int face, ch;
+        for (face = 0; face < 3; face++) {
+            const nj_font *f = faces[face];
+            for (ch = 0; ch < (int)(sizeof(menu) / sizeof(menu[0])); ch++) {
+                int w = 0, h = 0, top = -1, bottom = -1, x, y;
+                const nj_u1 *bits = f->glyph_lookup(f->glyph_ud, menu[ch], &w, &h);
+                CHECK(bits != NULL, "menu glyph U+%04X is present", menu[ch]);
+                if (!bits) continue;
+                for (y = 0; y < h; y++) {
+                    for (x = 0; x < w; x++) {
+                        if (bits[y * ((w + 7) / 8) + (x >> 3)] & (0x80u >> (x & 7))) {
+                            if (top < 0) top = y;
+                            bottom = y;
+                        }
+                    }
+                }
+                CHECK_EQ_INT(bottom, f->glyph_ascent, "menu Han bottom stays on shared row");
+                CHECK(top >= f->glyph_ascent - (face == 2 ? 13 : 9) &&
+                      top <= f->glyph_ascent - (face == 2 ? 12 : 9),
+                      "menu glyph U+%04X has stable height (top %d)", menu[ch], top);
+            }
+        }
+    }
+
+    /* Shared downsampling must not erase thin symbols. */
+    {
+        static const nj_u2 symbols[] = { 0x2016u, 0xFF3Fu };
+        const nj_font *faces[] = { small, large };
+        int face, ch;
+        for (face = 0; face < 2; face++) {
+            for (ch = 0; ch < 2; ch++) {
+                int w = 0, h = 0;
+                const nj_u1 *bits = faces[face]->glyph_lookup(NULL, symbols[ch], &w, &h);
+                CHECK(bits && glyph_ink(bits, w, h) > 0,
+                      "thin glyph U+%04X retains ink", symbols[ch]);
+            }
+        }
+    }
+
     /* U+3000 IDEOGRAPHIC SPACE is the one blank cell in the table: it must
      * advance a full cell and draw nothing. */
     {

@@ -10,8 +10,8 @@ ascent for these cells independently of the Latin line metrics.
 
 The checked-in tables are const 1bpp rows, MSB first, with stride
 ((width + 7) // 8) * height. Coverage is all 7445 GB2312 code points,
-sorted for runtime binary search. FreeType monochrome hinting retains thin
-strokes; rules that disappear entirely use a greyscale threshold fallback.
+sorted for runtime binary search. A shared supersampling grid avoids integer
+pixel jumps from target-size monochrome hinting, while retaining 1bpp storage.
 
 The output is deterministic: same font file + same Pillow/FreeType build =
 byte-identical header on every run.  Nothing here depends on the clock, the
@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import functools
 import os
 import sys
 
@@ -56,10 +57,9 @@ FACES = (
     {"tag": "16", "w": 16, "h": 20, "px": 15, "ascent": 16},
 )
 
-# Greyscale fallback: pixel coverage (0..255) at or above which a pixel is
-# inked.  Only used for glyphs whose monochrome rasterisation comes back
-# empty although their outline has ink (the dashed box-drawing rules, whose
-# 1 px dashes the monochrome rasteriser rounds away).
+# All glyphs use the same finer grid and coverage threshold. A threshold below
+# 50% retains thin strokes and dashed rules without target-size MONO hinting.
+RASTER_SCALE = 4
 GRAY_THRESHOLD = 96
 
 # Canvas padding around the pen origin: generous next to the ~1 em ink reach
@@ -133,74 +133,43 @@ def canvas_size(px):
     return 2 * PAD + px
 
 
-def mono_raster(font, ch, px):
-    """Rasterise `ch` with FreeType's monochrome rasteriser.
+@functools.lru_cache(maxsize=4)
+def supersampled_font(font):
+    return font.font_variant(size=font.size * RASTER_SCALE)
 
-    Returns (box, pixels), both in pen coordinates (the pen is the baseline
-    origin, +y downwards): `box` is (left, top, right, bottom) with right and
-    bottom exclusive, `pixels` the inked (x, y) points.  (None, None) means
-    the rasteriser produced no ink at all.
 
-    Drawing into a mode "1" image is what makes PIL ask FreeType for
-    FT_LOAD_TARGET_MONO: hinted, grid-fitted, 1 bit per pixel - exactly the
-    rasterisation the panels want.
+def raster(font, ch, px):
+    """Rasterise on a shared finer grid, then threshold to runtime 1bpp.
+
+    Target-size MONO hinting moves whole Han outlines by an integer pixel
+    (e.g. 始/绍/关/出 at 11 px). Supersampling limits hinting to a fraction
+    of a target pixel. Scale the entire canvas, including the pen origin;
+    never translate or fit individual glyph bounding boxes.
     """
     side = canvas_size(px)
-    img = Image.new("1", (side, side), 0)
-    ImageDraw.Draw(img).text((PAD, PAD), ch, font=font, fill=1, anchor="ls")
+    img = Image.new("L", (side * RASTER_SCALE, side * RASTER_SCALE), 0)
+    origin = PAD * RASTER_SCALE
+    ImageDraw.Draw(img).text((origin, origin), ch,
+                            font=supersampled_font(font), fill=255, anchor="ls")
+    img = img.resize((side, side), Image.Resampling.LANCZOS)
+    img = img.point(lambda value: 255 if value >= GRAY_THRESHOLD else 0)
     box = img.getbbox()
+    mode = "gray"
     if box is None:
-        return None, None
+        # Hairline symbols such as U+2016 and U+FF3F can fall below the
+        # threshold. Retain their hinted 1bpp strokes, without moving them.
+        img = Image.new("1", (side, side), 0)
+        ImageDraw.Draw(img).text((PAD, PAD), ch, font=font, fill=1, anchor="ls")
+        box = img.getbbox()
+        mode = "mono-fallback"
+        if box is None:
+            return None, None, "blank"
     load = img.load()
     pixels = [(x - PAD, y - PAD)
               for y in range(box[1], box[3])
               for x in range(box[0], box[2])
               if load[x, y]]
-    return (box[0] - PAD, box[1] - PAD, box[2] - PAD, box[3] - PAD), pixels
-
-
-def gray_raster(font, ch, px, threshold):
-    """Greyscale render of `ch`, thresholded at `threshold`/255 coverage.
-
-    Same coordinate convention as mono_raster(); (None, None) when nothing
-    reaches the threshold.
-    """
-    side = canvas_size(px)
-    img = Image.new("L", (side, side), 0)
-    ImageDraw.Draw(img).text((PAD, PAD), ch, font=font, fill=255, anchor="ls")
-    load = img.load()
-    pixels = []
-    left = top = 1 << 30
-    right = bottom = -(1 << 30)
-    for y in range(side):
-        for x in range(side):
-            if load[x, y] >= threshold:
-                pixels.append((x - PAD, y - PAD))
-                left = min(left, x - PAD)
-                top = min(top, y - PAD)
-                right = max(right, x - PAD + 1)
-                bottom = max(bottom, y - PAD + 1)
-    if not pixels:
-        return None, None
-    return (left, top, right, bottom), pixels
-
-
-def raster(font, ch, px):
-    """Rasterise one glyph, preferring monochrome.
-
-    Returns (box, pixels, mode) with mode in {"mono", "gray", "blank"}.
-    """
-    box, pixels = mono_raster(font, ch, px)
-    if box is not None:
-        return box, pixels, "mono"
-    outline = font.getbbox(ch, anchor="ls")
-    if outline is None or outline[2] <= outline[0] or outline[3] <= outline[1]:
-        # No outline ink at all: a space-like glyph, blank at every size.
-        return None, None, "blank"
-    box, pixels = gray_raster(font, ch, px, GRAY_THRESHOLD)
-    if box is None:
-        return None, None, "blank"
-    return box, pixels, "gray"
+    return tuple(value - PAD for value in box), pixels, mode
 
 
 def blit(pixels, x_off, y_off, w, h):
@@ -353,14 +322,11 @@ def emit_header(font_info, codepoints, faces, stats, path):
              face["row_bytes"], face["stride"], count, len(face["table"])))
         w(" *   rendered at a %d px em with the shared cell window offset "
           "(%d, %d)." % (face["px"], face["x_off"], face["y_off"]))
-    w(" * Glyphs come from FreeType's monochrome (FT_LOAD_TARGET_MONO)")
-    w(" * rasteriser. Every glyph uses the shared baseline above; no individual")
-    w(" * resizing or vertical centring is applied (%d clipped)." % len(stats["clipped"]))
-    w(" * %d thin dashed rule cell(s) that monochrome mode drops (%s) are"
-      % (len(stats["gray"]),
-         ", ".join("%dx%s: %d" % (face["w"], face["h"], n)
-                   for face, n in zip(faces, stats["gray_by_face"]))))
-    w(" * rendered greyscale and thresholded at %d/255." % GRAY_THRESHOLD)
+    w(" * Glyphs use a shared %dx greyscale grid, reduced with Lanczos and" % RASTER_SCALE)
+    w(" * thresholded at %d/255 into the same 1bpp cells." % GRAY_THRESHOLD)
+    w(" * Hairline symbols that fall below this threshold retain MONO strokes.")
+    w(" * Every glyph uses the shared baseline above; no individual resizing")
+    w(" * or vertical centring is applied (%d clipped)." % len(stats["clipped"]))
     w(" * %d glyph(s) are blank: %s."
       % (len(stats["empty"]),
          ", ".join("U+%04X" % cp for cp in stats["empty"]) if stats["empty"]
