@@ -1,6 +1,6 @@
 # 孤岛余生2 N97 原JAR实际推进验证（2026-10-19）
 
-本轮使用现有 build/nj2me，不构建、不改C源码/测试/原JAR/原有存档、不提交。目标是确认实际游戏流程与后续按键响应，exit 0仅记录进程退出。N97版本与CU928版本不同，本轮以指定SHA为准。
+初轮使用现有 build/nj2me，不构建、不改C源码/测试/原JAR/原有存档；后续另行集成快照时钟修复，构建与验证记录见末节。目标是确认实际游戏流程与后续按键响应，exit 0仅记录进程退出。N97版本与CU928版本不同，各轮以指定SHA为准。
 
 - 原JAR：`/home/lucinhu/Downloads/jar/孤岛余生2时间之谜汉化版_诺基亚 N97系列(360×640)-665244.jar`。
 - JAR SHA-256：`ab374c0705d779e1e44cc1bd4c26ce573430ed3bb7b88b633d37165d07db22a1`。
@@ -22,4 +22,35 @@
 
 本轮四个后台job（menu、newgame、movement、interior）均已通过job_output收集完毕，无遗留运行任务。
 
-最终结论：已超过标题/菜单，进入新游戏对白、丛林角色地图及室内剧情，fire/soft1推进对白，soft2打开暂停菜单，证明进入实际场景后仍响应输入。方向键未确认角色移动；保存退出再载入未验证；战斗或完整任务可玩未验证。
+初轮结论：已超过标题/菜单，进入新游戏对白、丛林角色地图及室内剧情，fire/soft1推进对白，soft2打开暂停菜单，证明进入实际场景后仍响应输入。初轮短按没有确认角色移动；保存退出再载入未验证；战斗或完整任务可玩未验证。
+
+## SDL2 持键与真实窗口验证补充
+
+后续使用 `1b20a08` 构建，binary SHA-256 `ee99418d5a7193de9ab8a04881fa3dede57e03fce399de9f8553950998ccaf51`，原JAR SHA保持不变。`SDL_VIDEODRIVER=x11`，`--port sdl2 --size 360x640 --heap 16 --fps 30`，独立新RMS。通过[独立窗口脚本](../../.local-tools/debug-runs/island-n97-control-20261019/sdl_probe.py)启动并仅操作该进程的窗口；完整启动参数、按键down/up时间和二进制SHA保存在[manifest](../../.local-tools/debug-runs/island-n97-control-20261019/sdl-movement-fresh/manifest.json)。截图来自窗口实际呈现，窗口为720×1280，游戏分辨率为360×640。
+
+初始脚本按键与上文interior组到3300帧一致；118秒后依次发送Up保持1秒、Return保持0.15秒、Up保持2.5秒、Right保持1秒、Escape保持0.15秒，每次释放后再截图。已逐张打开检查：
+
+- [操作前](../../.local-tools/debug-runs/island-n97-control-20261019/sdl-movement-fresh/01-interior-before.png)：人物在床边；首次短Up及Return后的图片相同，不能以这两次输入证明移动。
+- [第二次持续Up后](../../.local-tools/debug-runs/island-n97-control-20261019/sdl-movement-fresh/04-after-held-up.png)：人物从床边上移至正上方绿色门前，确认净位移；随后Right没有可见净位移，未据此判断右向输入失效或地图碰撞根因。
+- [Escape后](../../.local-tools/debug-runs/island-n97-control-20261019/sdl-movement-fresh/06-menu.png)：打开暂停菜单，证明移动之后仍响应输入。
+
+[运行日志](../../.local-tools/debug-runs/island-n97-control-20261019/sdl-movement-fresh/runtime.log)记录3886帧、1967次paint、129.098秒、30.1fps，9条新RMS初始化caught，与初轮同类；无uncaught或frame-loop escape，destroyApp正常返回。脚本主动终止所拥有的进程，exit0只记录收尾，不作为交互证明。此处已确认SDL2持续方向输入导致人物上移和后续暂停；仍未验证走出房间、战斗、完整任务或保存重开。
+
+## 混合触摸/按键回放修复
+
+审查[nj_run.c](../../src/runner/nj_run.c)时发现，触摸事件会直接递增松键游标，可能跳过此前按键待发送的KEY_UP，使脚本中的方向键一直保持按下。改为只推进按下游标，由原有松键循环按顺序跳过触摸项并释放按键。[test_poke.c](../../tests/test_poke.c)新增真实输入事件捕获，覆盖同帧按键加点按、松键帧触摸、拖动中夹入按键，检查事件顺序及按键/触摸释放次数。完整及ASan/UBSan回归结果见下节。
+
+## 快照跨端口时钟修复与集成验证
+
+headless 在3490帧保存[室内快照](../../.local-tools/debug-runs/island-n97-control-20261019/seed/interior.njs)，SHA-256 `1d07325814034fb0b15fd3bfdc16fbb564bec998668950252a4802a918ad0e2f`。旧构建将它恢复到SDL2后，日志虽显示resumed，293帧、10.286秒却没有绘图调用，不能视为成功恢复。根因是恢复时平移了VM时钟，却未同步线程sleep/wait及Java对象中的Timer绝对时间；headless与SDL2时钟起点不同，原期限因此变成很长的等待。
+
+[nj_save.c](../../src/core/nj_save.c)改为保留快照中的MIDlet虚拟时刻，把它锚定到当前端口原始时钟。sleep、timed wait、无限等待的0哨兵、halt及Java Timer仍在原虚拟时间轴上；快照格式保持v2。[test_save.c](../../tests/test_save.c)新增原始时钟起点 `0/500/50000000` × 速度 `100%/200%` 六组回归，检查Java currentTimeMillis连续、时间增量、剩余延迟、实际调度唤醒、过期立即唤醒、无限等待与源VM未变。共267项检查、0失败。
+
+集成构建为[build-lead/nj2me](../../build-lead/nj2me)，SHA-256 `4c2f702d50b3fabe78bebd9f5fa5891acc83440458505b515b116db68ef67342`；原JAR不变。恢复同一快照后：
+
+- [原生按键窗口回放](../../.local-tools/debug-runs/island-n97-control-20261019/sdl_snapshot_probe.py)与[动作时间/参数](../../.local-tools/debug-runs/island-n97-control-20261019/sdl-snapshot-fixed/manifest.json)：已查看[恢复房间](../../.local-tools/debug-runs/island-n97-control-20261019/sdl-snapshot-fixed/01-interior-restored.png)和[Up后](../../.local-tools/debug-runs/island-n97-control-20261019/sdl-snapshot-fixed/02-after-up.png)，人物确实上移。[日志](../../.local-tools/debug-runs/island-n97-control-20261019/sdl-snapshot-fixed/runtime.log)记录384帧、192次paint、60970次gfx、13.304秒，destroyApp返回。该组后续Escape未打开暂停菜单，原因尚未确认，不能记为原生Escape恢复后通过。
+- 追加[SDL2脚本回放](../../.local-tools/debug-runs/island-n97-control-20261019/sdl_snapshot_pause.py)：`--load-state .../seed/interior.njs --keys '90:soft2' --run-frames 240`，同一快照、相同构建、独立RMS。[实际窗口截图](../../.local-tools/debug-runs/island-n97-control-20261019/sdl-snapshot-pause/after-scripted-soft2.png)明确显示“暂停菜单/返回游戏/游戏设置/介绍说明/主菜单”，确认恢复后仍能分发soft2并响应。截图中间有白底区域，未判定菜单背景绘制无缺陷。[完整参数/hash/退出记录](../../.local-tools/debug-runs/island-n97-control-20261019/sdl-snapshot-pause/result.json)保留。
+
+[完整CTest](../../.local-tools/debug-runs/island-n97-control-20261019/ctest-integrated.log)84/84通过；[ASan/UBSan检查](../../.local-tools/debug-runs/island-n97-control-20261019/ctest-asan.log)覆盖save/poke/thread_lifecycle，3/3通过。默认[build/nj2me](../../build/nj2me)也已同步重建，SHA-256 `e712ea6cf551052d562ea88c94b2c735feffeca84b7e04f26f35bf8772978c3f`，默认构建的test_save/test_poke均通过。所有窗口均由脚本启动和回收，截图仅来自其所属窗口。
+
+另将SDL2 fresh组产生的RMS复制到独立实验目录，分别在新进程运行1200/1500帧：[重启读取记录](../../.local-tools/debug-runs/island-n97-control-20261019/rms-restart/result.json)、[额外确认记录](../../.local-tools/debug-runs/island-n97-control-20261019/rms-slots/result.json)。三份RMS文件hash保持不变，未再出现新RMS初始化异常；画面分别到主菜单和“第一章”加载。此证据只能说明已有RMS可读取，尚未证明游戏进度保存后恢复至原位置。
