@@ -81,7 +81,12 @@
  * exactly as it was before.
  */
 #if NJ_ENABLE_FONT_CJK
+#if NJ_ENABLE_FONT_CJK_AA
+#include "nj_font_cjk_aa.h"
+#else
 #include "nj_font_cjk.h"
+#define NJ_CJK_COVERAGE 0
+#endif
 
 static int cjk_index_of(const nj_u2 *index, nj_u2 count, nj_u2 ch)
 {
@@ -146,9 +151,9 @@ static int cjk_advance_16(void *ud, nj_u2 ch)
                ? 0 : NJ_CJK_16_W;
 }
 
-/* These tables are bitmaps, so their coverage is 0. */
-#define CJK_WIDE_12 cjk_lookup_12, 0, NULL, cjk_advance_12, NULL, NJ_CJK_12_ASCENT
-#define CJK_WIDE_16 cjk_lookup_16, 0, NULL, cjk_advance_16, NULL, NJ_CJK_16_ASCENT
+/* The provider format does not change the fixed Latin bitmap format. */
+#define CJK_WIDE_12 cjk_lookup_12, NJ_CJK_COVERAGE, NULL, cjk_advance_12, NULL, NJ_CJK_12_ASCENT
+#define CJK_WIDE_16 cjk_lookup_16, NJ_CJK_COVERAGE, NULL, cjk_advance_16, NULL, NJ_CJK_16_ASCENT
 #else
 /* No table compiled in: the wide-glyph fields stay empty and a hanzi keeps
  * the placeholder advance it had before this existed. */

@@ -492,6 +492,66 @@ static void test_provider_baseline(tctx *t)
     }
 }
 
+/* Odd widths, unused tail bits, mixed fixed/provider glyphs and clipping
+ * must give the same pixels as an unpacked coverage provider. */
+static const nj_u1 *packed_lookup(void *ud, nj_u2 ch, int *w, int *h)
+{
+    if (ch == 'A') return NULL;
+    *w = 5; *h = 3;
+    return (const nj_u1 *)ud;
+}
+
+static void test_packed_coverage(tctx *t)
+{
+    static const nj_u1 packed[] = { 0x1b, 0xff, 0xe4, 0x7f, 0x5a, 0x3f };
+    static const nj_u1 unpacked[] = {
+        0, 85, 170, 255, 255, 255, 170, 85, 0, 85, 85, 85, 170, 170, 0
+    };
+    static const nj_u1 latin[] = { 0x80, 0, 0x80 };
+    static const nj_u2 text[] = { 'A', 0x4e2d };
+    static const int formats[] = { NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888, NJ_PIXFMT_ARGB8888 };
+    int fmt, variant;
+    for (fmt = 0; fmt < 3; fmt++) {
+        for (variant = 0; variant < 6; variant++) {
+            int clip = variant & 1;
+            int mode = variant / 2;
+            tsurf a, b;
+            nj_gfx ga, gb;
+            nj_font f;
+            memset(&f, 0, sizeof f);
+            f.height = f.ascent = 3;
+            f.first_char = f.last_char = 'A';
+            f.glyph_w = 1; f.glyph_h = 3; f.bitmap = latin;
+            f.glyph_lookup = packed_lookup;
+            f.coverage = 2; f.glyph_ud = (void *)packed;
+            ts_init(&a, 16, 12, formats[fmt], 8, C_WHITE);
+            ts_init(&b, 16, 12, formats[fmt], 8, C_WHITE);
+            nj_gfx_init(&ga, &a.s); nj_gfx_init(&gb, &b.s);
+            nj_gfx_set_color(&ga, mode == 1 ? 0x80000000u : C_BLACK);
+            nj_gfx_set_color(&gb, mode == 1 ? 0x80000000u : C_BLACK);
+            if (mode == 2) {
+                nj_gfx_set_xor(&ga, 0xFFFF0000u);
+                nj_gfx_set_xor(&gb, 0xFFFF0000u);
+            }
+            if (clip) {
+                nj_gfx_set_clip(&ga, 4, 3, 3, 1);
+                nj_gfx_set_clip(&gb, 4, 3, 3, 1);
+            }
+            nj_gfx_set_font(&ga, &f);
+            nj_gfx_draw_text(&ga, text, 2, 2, 2, NJ_ANCHOR_TOP);
+            f.coverage = 1; f.glyph_ud = (void *)unpacked;
+            nj_gfx_set_font(&gb, &f);
+            nj_gfx_draw_text(&gb, text, 2, 2, 2, NJ_ANCHOR_TOP);
+            CHECK(t, memcmp(a.buf, b.buf, (size_t)a.s.stride * a.s.height) == 0);
+            if (!clip && mode == 0) {
+                CHECK(t, px(&a, 2, 2) == C_BLACK); /* fixed Latin remains 1bpp */
+                CHECK(t, px(&a, 4, 2) != C_WHITE && px(&a, 4, 2) != C_BLACK);
+            }
+            ts_free(&a); ts_free(&b);
+        }
+    }
+}
+
 /* ------------------------------------------------------------------ */
 int main(void)
 {
@@ -506,6 +566,7 @@ int main(void)
     test_bitmap_unchanged(&t);
     test_full_coverage_plot(&t);
     test_provider_baseline(&t);
+    test_packed_coverage(&t);
 
     printf("\ntest_font_coverage: %u assertions, %u failures -> %s\n",
            t.checks, t.fails, t.fails == 0u ? "PASS" : "FAIL");

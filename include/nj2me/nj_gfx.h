@@ -71,15 +71,17 @@ typedef struct nj_font {
      * Optional glyph provider, for anything the fixed table cannot hold: a wide
      * face, a CJK font, or a TrueType face rasterised on demand.
      *
-     * The rows it returns are 1bpp (MSB first, (w+7)/8 bytes per row) unless
-     * `coverage` is set, in which case they are one byte per pixel of coverage
-     * and the renderer blends.  Coverage exists because thresholding an
+     * With coverage=0, provider rows are 1bpp, MSB first, (w+7)/8 bytes.
+     * coverage=1 uses one coverage byte (0..255) per pixel. coverage=2 packs
+     * four 2-bit samples per byte, MSB first, (w+3)/4 bytes per row; values
+     * 0..3 map to 0, 85, 170, 255. The fixed bitmap table always stays 1bpp.
+     * The renderer blends coverage because thresholding an
      * antialiased rasteriser deletes thin strokes: a hinted-away stem is two
      * columns at about 50%, and a 1bpp cut through it loses the stem entirely
      * from "1", "l", "i" and "t".
      */
     const nj_u1 *(*glyph_lookup)(void *ud, nj_u2 ch, int *w, int *h);
-    int   coverage;      /* 0 = 1bpp rows, 1 = 8bpp coverage rows */
+    int   coverage;      /* 0 = 1bpp rows, 1 = 8bpp, 2 = packed 2bpp coverage */
     void *glyph_ud;
     /* Optional advance metric override (proportional wide glyphs). */
     int (*glyph_advance)(void *ud, nj_u2 ch);

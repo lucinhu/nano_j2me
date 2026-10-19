@@ -91,6 +91,7 @@ static void glyph_lookup(const nj_font *f, nj_u2 ch, glyph *out, int depth)
     }
 
     if (ch >= f->first_char && ch <= f->last_char && f->bitmap) {
+        out->coverage = 0; /* The fixed table remains 1bpp, independent of its hook. */
         out->bits = f->bitmap +
                     (nj_size)(ch - f->first_char) * f_row_bytes(f->glyph_w) *
                         (nj_size)f->glyph_h;
@@ -135,8 +136,8 @@ static void blit_glyph(nj_gfx *g, const nj_font *f, const glyph *gl,
 
     if (gl->coverage) {
         /*
-         * One byte per pixel.  Blending per pixel is the only option: a
-         * coverage of 128 has no 1bpp equivalent, and cutting at 128 is
+         * Unpacked 8bpp or packed 2bpp coverage. Blending preserves partial
+         * samples: a coverage of 128 has no 1bpp equivalent, and cutting at 128 is
          * precisely what deletes the thin strokes of "1", "l", "i" and "t"
          * when an antialiased rasteriser is fed through a bitmap one.
          *
@@ -144,12 +145,16 @@ static void blit_glyph(nj_gfx *g, const nj_font *f, const glyph *gl,
          * average glyph's box, so this costs less than it looks.
          */
         for (y = 0; y < gl->h; y++) {
-            const nj_u1 *row = gl->bits + (nj_size)y * gl->w;
+            const int stride = gl->coverage == 2 ? (gl->w + 3) / 4 : gl->w;
+            const nj_u1 *row = gl->bits + (nj_size)y * stride;
             int x;
 
             for (x = 0; x < gl->w; x++) {
-                if (row[x] != 0u) {
-                    nj_gfx_blend_coverage(g, pen_x + x, top + y, row[x]);
+                int alpha = gl->coverage == 2
+                    ? ((row[x >> 2] >> (6 - 2 * (x & 3))) & 3u) * 85
+                    : row[x];
+                if (alpha != 0) {
+                    nj_gfx_blend_coverage(g, pen_x + x, top + y, alpha);
                 }
             }
         }

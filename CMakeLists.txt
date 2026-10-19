@@ -54,6 +54,7 @@ option(NJ_SANITIZE       "Build with ASan + UBSan"          OFF)
 
 set(NJ_ENABLE_JPEG  1 CACHE STRING "Built-in baseline JPEG decoder")
 set(NJ_ENABLE_TTF   1 CACHE STRING "TrueType text (0 = bitmap faces only)")
+set(NJ_ENABLE_FONT_CJK_AA 1 CACHE STRING "Four-level built-in CJK coverage (0 = monochrome)")
 set(NJ_ENABLE_PNG   1 CACHE STRING "Built-in PNG decoder")
 # GIF is a MIDP 1.0 requirement and 34 corpus titles ship one, but a port whose
 # platform decodes it (Android's BitmapFactory) can leave it out.
@@ -173,6 +174,7 @@ endif()
 
 target_compile_definitions(nj2me PUBLIC
   NJ_PIXFMT=${NJ_PIXFMT}
+  NJ_ENABLE_FONT_CJK_AA=${NJ_ENABLE_FONT_CJK_AA}
   NJ_ENABLE_PNG=${NJ_ENABLE_PNG}
   NJ_ENABLE_GIF=${NJ_ENABLE_GIF}
   NJ_ENABLE_INFLATE=${NJ_ENABLE_INFLATE}

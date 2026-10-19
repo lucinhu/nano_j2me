@@ -138,8 +138,8 @@ def supersampled_font(font):
     return font.font_variant(size=font.size * RASTER_SCALE)
 
 
-def raster(font, ch, px):
-    """Rasterise on a shared finer grid, then threshold to runtime 1bpp.
+def raster(font, ch, px, bpp=1):
+    """Rasterise on a shared finer grid, then quantize to runtime 1/2bpp.
 
     Target-size MONO hinting moves whole Han outlines by an integer pixel
     (e.g. 始/绍/关/出 at 11 px). Supersampling limits hinting to a fraction
@@ -152,7 +152,10 @@ def raster(font, ch, px):
     ImageDraw.Draw(img).text((origin, origin), ch,
                             font=supersampled_font(font), fill=255, anchor="ls")
     img = img.resize((side, side), Image.Resampling.LANCZOS)
-    img = img.point(lambda value: 255 if value >= GRAY_THRESHOLD else 0)
+    if bpp == 2:
+        img = img.point(lambda value: (value * 3 + 127) // 255)
+    else:
+        img = img.point(lambda value: 1 if value >= GRAY_THRESHOLD else 0)
     box = img.getbbox()
     mode = "gray"
     if box is None:
@@ -165,7 +168,8 @@ def raster(font, ch, px):
         if box is None:
             return None, None, "blank"
     load = img.load()
-    pixels = [(x - PAD, y - PAD)
+    pixels = [(x - PAD, y - PAD,
+               (3 if bpp == 2 else 1) if mode == "mono-fallback" else load[x, y])
               for y in range(box[1], box[3])
               for x in range(box[0], box[2])
               if load[x, y]]
@@ -175,17 +179,17 @@ def raster(font, ch, px):
 def blit(pixels, x_off, y_off, w, h):
     """Place `pixels` into a w x h cell at (x_off, y_off), clipping if needed.
 
-    Returns (rows, dropped): rows is the h x w 0/1 bitmap, dropped the number
+    Returns (rows, dropped): rows holds h x w quantized samples, dropped the number
     of inked pixels that fell outside the cell (0 for every glyph the face
     sizes actually produce).
     """
     rows = [[0] * w for _ in range(h)]
     dropped = 0
-    for x, y in pixels:
+    for x, y, value in pixels:
         cx = x + x_off
         cy = y + y_off
         if 0 <= cx < w and 0 <= cy < h:
-            rows[cy][cx] = 1
+            rows[cy][cx] = value
         else:
             dropped += 1
     return rows, dropped
@@ -195,17 +199,18 @@ def blank_rows(w, h):
     return [[0] * w for _ in range(h)]
 
 
-def pack_glyph(rows, w):
-    """Pack one cell's rows MSB-first, row_bytes = (w + 7) / 8."""
-    row_bytes = (w + 7) // 8
+def pack_glyph(rows, w, bpp=1):
+    """Pack one cell MSB-first, rounding each row to complete bytes."""
+    per_byte = 8 // bpp
+    row_bytes = (w + per_byte - 1) // per_byte
     out = bytearray()
     for row in rows:
         for byte_index in range(row_bytes):
             value = 0
-            for bit in range(8):
-                x = byte_index * 8 + bit
-                if x < w and row[x]:
-                    value |= 0x80 >> bit
+            for bit in range(per_byte):
+                x = byte_index * per_byte + bit
+                if x < w:
+                    value |= row[x] << (8 - bpp * (bit + 1))
             out.append(value)
     return bytes(out)
 
@@ -213,16 +218,16 @@ def pack_glyph(rows, w):
 # --------------------------------------------------------------------------
 # Cell window + one face
 # --------------------------------------------------------------------------
-def glyph_cell(font, ch, w, h, x_off, y_off, px):
+def glyph_cell(font, ch, w, h, x_off, y_off, px, bpp=1):
     """Place every glyph at the face baseline; never resize an outlier."""
-    box, pixels, mode = raster(font, ch, px)
+    box, pixels, mode = raster(font, ch, px, bpp)
     if box is None:
         return blank_rows(w, h), "blank"
     rows, dropped = blit(pixels, x_off, y_off, w, h)
     return rows, "clipped" if dropped else mode
 
 
-def build_face(family_info, codepoints, spec, stats):
+def build_face(family_info, codepoints, spec, stats, bpp=1):
     """Rasterise one face; returns the packed table and its metrics."""
     w = spec["w"]
     h = spec["h"]
@@ -230,14 +235,14 @@ def build_face(family_info, codepoints, spec, stats):
     font = ImageFont.truetype(family_info["path"], base_px)
     # Only horizontal placement is derived from the full coverage envelope.
     # Vertical placement is a font-wide baseline shared with Latin drawing.
-    boxes = [raster(font, chr(cp), base_px)[0] for cp in codepoints]
+    boxes = [raster(font, chr(cp), base_px, bpp)[0] for cp in codepoints]
     boxes = [box for box in boxes if box is not None]
     x_off = -min(box[0] for box in boxes)
     y_off = spec["ascent"]
 
     blob = bytearray()
     for cp in codepoints:
-        rows, mode = glyph_cell(font, chr(cp), w, h, x_off, y_off, base_px)
+        rows, mode = glyph_cell(font, chr(cp), w, h, x_off, y_off, base_px, bpp)
         modes = stats["modes"]
         modes[mode] = modes.get(mode, 0) + 1
         if mode == "blank":
@@ -248,7 +253,7 @@ def build_face(family_info, codepoints, spec, stats):
             stats["clipped"].append(cp)
         if not any(any(row) for row in rows):
             stats["empty"].append(cp)
-        blob += pack_glyph(rows, w)
+        blob += pack_glyph(rows, w, bpp)
 
     return {
         "tag": spec["tag"],
@@ -258,8 +263,8 @@ def build_face(family_info, codepoints, spec, stats):
         "ascent": y_off,
         "x_off": x_off,
         "y_off": y_off,
-        "row_bytes": (w + 7) // 8,
-        "stride": ((w + 7) // 8) * h,
+        "row_bytes": (w * bpp + 7) // 8,
+        "stride": ((w * bpp + 7) // 8) * h,
         "table": bytes(blob),
     }
 
@@ -283,14 +288,14 @@ def c_index(codepoints):
     return "\n".join(lines)
 
 
-def emit_header(font_info, codepoints, faces, stats, path):
+def emit_header(font_info, codepoints, faces, stats, path, bpp=1):
     count = len(codepoints)
     face12 = faces[0]
     face16 = faces[1]
     out = []
     w = out.append
     w("/*")
-    w(" * nano_j2me - nj_font_cjk.h  --  GENERATED FILE, DO NOT EDIT.")
+    w(" * nano_j2me - %s  --  GENERATED FILE, DO NOT EDIT." % os.path.basename(path))
     w(" *")
     w(" * Produced by tools/gen_cjk_font.py from:")
     w(" *   %s" % font_info["path"])
@@ -308,10 +313,9 @@ def emit_header(font_info, codepoints, faces, stats, path):
     w(" * the runtime binary-searches it and the bitmap offset of a code point")
     w(" * is its index times the stride.")
     w(" *")
-    w(" * Glyph layout (frozen contract, same as nj_font_data.h):")
-    w(" *   1 bit per pixel, MSB first, one byte per 8 horizontal pixels,")
+    w(" * Glyph layout: %d bit(s) per pixel, MSB first." % bpp)
     w(" *   rows packed with NO padding:")
-    w(" *       row_bytes = (glyph_w + 7) / 8")
+    w(" *       row_bytes = (glyph_w * %d + 7) / 8" % bpp)
     w(" *       stride    = row_bytes * glyph_h")
     w(" *       glyph cell = bitmap + index_of(code_point) * stride")
     w(" *")
@@ -323,7 +327,10 @@ def emit_header(font_info, codepoints, faces, stats, path):
         w(" *   rendered at a %d px em with the shared cell window offset "
           "(%d, %d)." % (face["px"], face["x_off"], face["y_off"]))
     w(" * Glyphs use a shared %dx greyscale grid, reduced with Lanczos and" % RASTER_SCALE)
-    w(" * thresholded at %d/255 into the same 1bpp cells." % GRAY_THRESHOLD)
+    if bpp == 1:
+        w(" * thresholded at %d/255 into 1bpp cells." % GRAY_THRESHOLD)
+    else:
+        w(" * quantised to packed 2bpp coverage (0, 85, 170, 255).")
     w(" * Hairline symbols that fall below this threshold retain MONO strokes.")
     w(" * Every glyph uses the shared baseline above; no individual resizing")
     w(" * or vertical centring is applied (%d clipped)." % len(stats["clipped"]))
@@ -332,7 +339,7 @@ def emit_header(font_info, codepoints, faces, stats, path):
          ", ".join("U+%04X" % cp for cp in stats["empty"]) if stats["empty"]
          else "none"))
     w(" *")
-    w(" * Regenerate with:   python3 tools/gen_cjk_font.py")
+    w(" * Regenerate with: python3 tools/gen_cjk_font.py --bpp %d --header %s" % (bpp, path))
     w(" * Deterministic: the same face and the same Pillow/FreeType build")
     w(" * produce a byte-identical header - nothing depends on the clock,")
     w(" * the locale, the filesystem order or dict iteration order.")
@@ -341,6 +348,7 @@ def emit_header(font_info, codepoints, faces, stats, path):
     w("#define NJ_FONT_CJK_H")
     w("")
     w('#include "nj2me/nj_types.h"')
+    w("#define NJ_CJK_COVERAGE %d" % (2 if bpp == 2 else 0))
     w("")
     w("/* This header defines file-scope objects: include it from nj_font.c only. */")
     w("")
@@ -388,6 +396,7 @@ def main(argv=None):
     ap.add_argument("--font", help="CJK font file to use")
     ap.add_argument("--header", default=HEADER_PATH,
                     help="output header path (default: %(default)s)")
+    ap.add_argument("--bpp", type=int, choices=(1, 2), default=1, help="bits per pixel: mono or four coverage levels")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
 
@@ -406,7 +415,7 @@ def main(argv=None):
     for spec in FACES:
         stat = {"modes": {}, "blank": [], "gray": [],
                 "clipped": [], "empty": []}
-        face = build_face(font_info, codepoints, spec, stat)
+        face = build_face(font_info, codepoints, spec, stat, args.bpp)
         faces.append(face)
         stats.append(stat)
 
@@ -427,7 +436,7 @@ def main(argv=None):
     if merged["clipped"]:
         raise RuntimeError("shared font window clips glyphs: %s" % merged["clipped"])
 
-    nbytes = emit_header(font_info, codepoints, faces, merged, args.header)
+    nbytes = emit_header(font_info, codepoints, faces, merged, args.header, args.bpp)
     if not args.quiet:
         for face, stat in zip(faces, stats):
             print("%s face      : cell %dx%d, em %d px, window (%d, %d), "

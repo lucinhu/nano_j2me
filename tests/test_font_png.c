@@ -408,16 +408,23 @@ static void test_font_fallback(void)
  * tools/gen_cjk_font.py).  Skips itself when the build has the table off, so
  * an embedded configuration that trims it still passes.
  */
-static int glyph_ink(const nj_u1 *bits, int w, int h)
+static int glyph_sample(const nj_u1 *bits, int w, int x, int y, int coverage)
 {
-    const int row_bytes = (w + 7) / 8;
+    if (coverage == 2) {
+        return ((bits[y * ((w + 3) / 4) + (x >> 2)] >> (6 - 2 * (x & 3))) & 3u) * 85;
+    }
+    return ((bits[y * ((w + 7) / 8) + (x >> 3)] >> (7 - (x & 7))) & 1u) * 255;
+}
+
+static int glyph_ink(const nj_u1 *bits, int w, int h, int coverage)
+{
     int y;
     int x;
     int ink = 0;
 
     for (y = 0; y < h; y++) {
         for (x = 0; x < w; x++) {
-            if ((bits[y * row_bytes + (x >> 3)] >> (7 - (x & 7))) & 1u) {
+            if (glyph_sample(bits, w, x, y, coverage)) {
                 ink++;
             }
         }
@@ -482,15 +489,25 @@ static void test_font_cjk_table(void)
         if (bits == NULL) {
             continue;
         }
-        ink = glyph_ink(bits, w, h);
+        ink = glyph_ink(bits, w, h, small->coverage);
         CHECK(ink >= 6 && ink <= 120, "U+%04X ink is %d, expected a real glyph",
               hanzi[i], ink);
+        if (small->coverage == 2) {
+            int x, y, partial = 0;
+            for (y = 0; y < h; y++) {
+                for (x = 0; x < w; x++) {
+                    int v = glyph_sample(bits, w, x, y, small->coverage);
+                    if (v > 0 && v < 255) partial++;
+                }
+            }
+            CHECK(partial > 0, "U+%04X lost its antialiased edges", hanzi[i]);
+        }
 
         if (i > 0) {
             const nj_u1 *prev = small->glyph_lookup(small->glyph_ud, hanzi[i - 1],
                                                     &w, &h);
             CHECK(prev != NULL &&
-                      memcmp(prev, bits, (size_t)((w + 7) / 8) * (size_t)h) != 0,
+                      memcmp(prev, bits, (size_t)((w * (small->coverage == 2 ? 2 : 1) + 7) / 8) * (size_t)h) != 0,
                   "U+%04X and U+%04X decoded to the same rows", hanzi[i - 1],
                   hanzi[i]);
         }
@@ -516,7 +533,7 @@ static void test_font_cjk_table(void)
                 if (!bits) continue;
                 for (y = 0; y < h; y++) {
                     for (x = 0; x < w; x++) {
-                        if (bits[y * ((w + 7) / 8) + (x >> 3)] & (0x80u >> (x & 7))) {
+                        if (glyph_sample(bits, w, x, y, f->coverage) >= 170) {
                             if (top < 0) top = y;
                             bottom = y;
                         }
@@ -539,7 +556,7 @@ static void test_font_cjk_table(void)
             for (ch = 0; ch < 2; ch++) {
                 int w = 0, h = 0;
                 const nj_u1 *bits = faces[face]->glyph_lookup(NULL, symbols[ch], &w, &h);
-                CHECK(bits && glyph_ink(bits, w, h) > 0,
+                CHECK(bits && glyph_ink(bits, w, h, faces[face]->coverage) > 0,
                       "thin glyph U+%04X retains ink", symbols[ch]);
             }
         }
@@ -557,7 +574,7 @@ static void test_font_cjk_table(void)
         bits = small->glyph_lookup(small->glyph_ud, 0x3000u, &w, &h);
         CHECK(bits != NULL, "lookup missed U+3000");
         if (bits != NULL) {
-            CHECK_EQ_INT(glyph_ink(bits, w, h), 0, "ideographic space ink");
+            CHECK_EQ_INT(glyph_ink(bits, w, h, small->coverage), 0, "ideographic space ink");
         }
     }
 
