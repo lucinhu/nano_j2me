@@ -34,6 +34,8 @@
 #define NJ_FONT_DATA_FIRST 0x20u
 #define NJ_FONT_DATA_LAST  0xFFu
 #define NJ_FONT_DATA_CHARS 224u
+/* Coverage of the rows this header defines: 0 = 1bpp, 2 = packed 2bpp. */
+#define NJ_FONT_DATA_COVERAGE 0
 
 /* ---------------- SMALL: 6 x 13 (ascent 10, descent 3) ---------------- */
 #define NJ_FONT_SMALL_W        6

@@ -90,16 +90,30 @@ COVERAGE = tuple(range(0x20, 0x7F)) + tuple(range(0xA0, 0x100))
 # actually is, so the accented capitals of Latin-1 (which reach a couple of
 # pixels above the cap line) and the deepest descenders both fit inside the
 # cell and nothing is ever clipped.
+#
+# The AA table (--bpp 2) reuses these committed metrics instead of the
+# measured AA envelope: the supersampled Liberation Mono glyphs are smaller
+# than the hinted mono ones (e.g. SMALL ink ascent 9), and keeping the same
+# ascent/descent/width means the MIDP line layout is identical whichever
+# table a build selects.
 SIZES = (
-    {"tag": "small", "macro": "SMALL", "size": 8, "px": 10, "cell_w": 6},
-    {"tag": "medium", "macro": "MEDIUM", "size": 0, "px": 13, "cell_w": 8},
-    {"tag": "large", "macro": "LARGE", "size": 16, "px": 18, "cell_w": 12},
+    {"tag": "small", "macro": "SMALL", "size": 8, "px": 10, "cell_w": 6,
+     "ascent": 10, "descent": 3},
+    {"tag": "medium", "macro": "MEDIUM", "size": 0, "px": 13, "cell_w": 8,
+     "ascent": 12, "descent": 4},
+    {"tag": "large", "macro": "LARGE", "size": 16, "px": 18, "cell_w": 12,
+     "ascent": 16, "descent": 4},
 )
 
 STYLES = (("p", "plain", 0), ("b", "bold", 1))
 
 # Rendering canvas padding around the pen origin.
 PAD = 48
+
+# AA pipeline constants (tools/gen_cjk_font.py uses the same ones): render at
+# RASTER_SCALE x with FreeType's greyscale rasteriser, Lanczos back down, then
+# quantise to four coverage levels (0, 85, 170, 255) packed 2 bits per pixel.
+RASTER_SCALE = 4
 
 
 # --------------------------------------------------------------------------
@@ -151,20 +165,33 @@ def sha256_file(path):
 # --------------------------------------------------------------------------
 # Rasterisation
 # --------------------------------------------------------------------------
-def render_glyph(font, ch):
+def render_glyph(font, ch, bpp=1):
     """Rasterise one character with the baseline at y = PAD.
 
-    The canvas is bilevel, which makes ImageDraw ask FreeType for a
+    bpp=1: the canvas is bilevel, which makes ImageDraw ask FreeType for a
     FT_LOAD_TARGET_MONO bitmap: the hinted, 1 bit per pixel rasterisation the
     panel actually wants.  A greyscale render plus a coverage threshold does
     NOT work here - at 10..18 px a hinted-away stem covers two columns at ~50%
     each and a 128 threshold deletes it outright ('1' and 'l' lose their stem,
     the accented capitals lose the accent).
+
+    bpp=2: render at RASTER_SCALE x with the greyscale rasteriser, Lanczos
+    back to the target size and quantise to four coverage levels.  The
+    supersampling limits hinting to a fraction of a target pixel, so thin
+    strokes keep partial coverage instead of being cut on/off.
     """
-    canvas = Image.new("1", (PAD * 2 + 96, PAD * 2 + 96), 0)
-    ImageDraw.Draw(canvas).text((PAD, PAD), ch, font=font, fill=1,
-                                anchor="ls")
-    return canvas
+    width = PAD * 2 + 96
+    if bpp == 1:
+        canvas = Image.new("1", (width, width), 0)
+        ImageDraw.Draw(canvas).text((PAD, PAD), ch, font=font, fill=1,
+                                    anchor="ls")
+        return canvas
+    ss = Image.new("L", (width * RASTER_SCALE, width * RASTER_SCALE), 0)
+    ImageDraw.Draw(ss).text((PAD * RASTER_SCALE, PAD * RASTER_SCALE), ch,
+                            font=font.font_variant(size=font.size * RASTER_SCALE),
+                            fill=255, anchor="ls")
+    img = ss.resize((width, width), Image.Resampling.LANCZOS)
+    return img.point(lambda v: (v * 3 + 127) // 255)
 
 
 def inked_bbox(canvas):
@@ -172,7 +199,7 @@ def inked_bbox(canvas):
     return canvas.getbbox()
 
 
-def measure_envelope(font):
+def measure_envelope(font, bpp=1):
     """Ink envelope of the whole coverage set, in pixels from the pen origin.
 
     Returns (ascent, descent, left, right): the tallest reach above the
@@ -184,7 +211,7 @@ def measure_envelope(font):
     left = 0
     right = 0
     for cp in COVERAGE:
-        box = inked_bbox(render_glyph(font, chr(cp)))
+        box = inked_bbox(render_glyph(font, chr(cp), bpp))
         if box is None:
             continue
         top = max(top, PAD - box[1])
@@ -194,8 +221,8 @@ def measure_envelope(font):
     return top, bottom, left, right
 
 
-def glyph_bitmap(font, ch, ascent, descent, cell_w):
-    """One glyph as `ascent + descent` rows of `cell_w` 0/1 ints.
+def glyph_bitmap(font, ch, ascent, descent, cell_w, bpp=1):
+    """One glyph as `ascent + descent` rows of `cell_w` coverage ints.
 
     The widest glyphs of the face (Y, _, Y-diaeresis, yen, macron and the
     vulgar fractions) are designed with a negative left side bearing so that
@@ -206,11 +233,13 @@ def glyph_bitmap(font, ch, ascent, descent, cell_w):
     from the origin and are left exactly where the face puts them, so the
     fixed pitch of the face is preserved.
 
+    Values are 0/1 for bpp=1 and 0..3 (four coverage levels) for bpp=2.
+
     Raises RuntimeError when the ink still leaves the cell: that means the
     metrics in SIZES are wrong and the table would silently clip glyphs.
     """
     height = ascent + descent
-    canvas = render_glyph(font, ch)
+    canvas = render_glyph(font, ch, bpp)
     box = inked_bbox(canvas)
     rows = [[0] * cell_w for _ in range(height)]
     if box is None:
@@ -228,22 +257,24 @@ def glyph_bitmap(font, ch, ascent, descent, cell_w):
     pixels = canvas.load()
     for y in range(box[1], box[3]):
         for x in range(box[0], box[2]):
-            if pixels[x, y]:
-                rows[y - PAD + ascent][x - PAD + x_off] = 1
+            value = pixels[x, y]
+            if value:
+                rows[y - PAD + ascent][x - PAD + x_off] = value
     return rows
 
 
-def pack_glyph(rows, cell_w):
-    """Pack one glyph's rows MSB-first, row_bytes = (cell_w + 7) / 8."""
-    row_bytes = (cell_w + 7) // 8
+def pack_glyph(rows, cell_w, bpp=1):
+    """Pack one glyph's rows MSB-first, rounding each row to whole bytes."""
+    per_byte = 8 // bpp
+    row_bytes = (cell_w + per_byte - 1) // per_byte
     out = bytearray()
     for row in rows:
         for byte_index in range(row_bytes):
             value = 0
-            for bit in range(8):
-                x = byte_index * 8 + bit
-                if x < cell_w and row[x]:
-                    value |= 0x80 >> bit
+            for bit in range(per_byte):
+                x = byte_index * per_byte + bit
+                if x < cell_w:
+                    value |= row[x] << (8 - bpp * (bit + 1))
             out.append(value)
     return bytes(out)
 
@@ -263,10 +294,11 @@ def check_glyphs(tag, style, glyphs):
             raise RuntimeError(
                 "%s/%s: glyph %r rasterised blank - the size is too small or "
                 "the mono rasteriser dropped a stem" % (tag, style, ch))
-    # '|' is a bare vertical stem: every inked row must be the same 1..2 px
-    # wide run.  Anything else means the rasteriser is splitting a stroke
-    # across two columns (which is what makes a stem disappear at 1bpp).
-    stem = {sum(row) for row in glyphs[ord("|")] if any(row)}
+    # '|' is a bare vertical stem: every inked row must be the same narrow
+    # run (counted in pixels, whatever the coverage format).  Anything else
+    # means the rasteriser is splitting a stroke across two columns (which is
+    # what makes a stem disappear at 1bpp).
+    stem = {sum(1 for v in row if v) for row in glyphs[ord("|")] if any(row)}
     if len(stem) != 1 or not stem <= {1, 2, 3}:
         raise RuntimeError(
             "%s/%s: '|' stroke widths are %s px, expected one uniform 1..3 px "
@@ -293,7 +325,7 @@ def c_bytes(data, indent="    "):
     return "\n".join(lines)
 
 
-def build_size(family, paths, spec):
+def build_size(family, paths, spec, bpp=1):
     """Render both styles of one size; returns a dict with tables + metrics."""
     px = spec["px"]
     cell_w = spec["cell_w"]
@@ -302,12 +334,20 @@ def build_size(family, paths, spec):
     for suffix, style, _bit in STYLES:
         font = ImageFont.truetype(paths[suffix], px)
         faces[suffix] = font
-        envelopes[suffix] = measure_envelope(font)
+        envelopes[suffix] = measure_envelope(font, bpp)
 
-    ascent = max(envelopes[s][0] for s, _, _ in STYLES)
-    descent = max(envelopes[s][1] for s, _, _ in STYLES)
-    ink_left = min(envelopes[s][2] for s, _, _ in STYLES)
     ink_right = max(envelopes[s][3] for s, _, _ in STYLES)
+    if bpp == 1:
+        ascent = max(envelopes[s][0] for s, _, _ in STYLES)
+        descent = max(envelopes[s][1] for s, _, _ in STYLES)
+    else:
+        # AA keeps the committed MIDP metrics: the supersampled face sits
+        # inside them (SMALL ink ascent 9 <= 10) and line layout must stay
+        # identical to the monochrome build.  glyph_bitmap still refuses to
+        # clip anything, so a bad size fails generation instead of silently
+        # cutting strokes.
+        ascent = spec["ascent"]
+        descent = spec["descent"]
     height = ascent + descent
     if max(0, ink_right) > cell_w:
         raise RuntimeError(
@@ -320,13 +360,13 @@ def build_size(family, paths, spec):
         for cp in range(FIRST_CHAR, LAST_CHAR + 1):
             if cp in COVERAGE:
                 glyphs[cp] = glyph_bitmap(faces[suffix], chr(cp),
-                                          ascent, descent, cell_w)
+                                          ascent, descent, cell_w, bpp)
             else:
                 glyphs[cp] = [[0] * cell_w for _ in range(height)]
         check_glyphs(spec["tag"], style, glyphs)
         blob = bytearray()
         for cp in range(FIRST_CHAR, LAST_CHAR + 1):
-            blob += pack_glyph(glyphs[cp], cell_w)
+            blob += pack_glyph(glyphs[cp], cell_w, bpp)
         tables[suffix] = (bytes(blob), glyphs)
 
     return {
@@ -338,17 +378,19 @@ def build_size(family, paths, spec):
         "height": height,
         "ascent": ascent,
         "descent": descent,
-        "row_bytes": (cell_w + 7) // 8,
+        "row_bytes": (cell_w * bpp + 7) // 8,
         "tables": tables,
     }
 
 
-def emit_header(family, font_info, sizes, path):
+def emit_header(family, font_info, sizes, path, bpp=1):
     row_bytes_max = max(s["row_bytes"] for s in sizes)
+    coverage = 2 if bpp == 2 else 0
     out = []
     w = out.append
     w("/*")
-    w(" * nano_j2me - nj_font_data.h  --  GENERATED FILE, DO NOT EDIT.")
+    w(" * nano_j2me - %s  --  GENERATED FILE, DO NOT EDIT."
+      % os.path.basename(path))
     w(" *")
     w(" * Produced by tools/gen_fonts.py from %s:" % family)
     for suffix, label, _bit in STYLES:
@@ -357,9 +399,14 @@ def emit_header(family, font_info, sizes, path):
         w(" *         sha256 %s" % info["sha256"])
     w(" *")
     w(" * Glyph layout (frozen contract, see nj_gfx.h):")
-    w(" *   1 bit per pixel, MSB first, one byte per 8 horizontal pixels,")
-    w(" *   rows packed with NO padding:")
-    w(" *       row_bytes    = (glyph_w + 7) / 8")
+    if bpp == 1:
+        w(" *   1 bit per pixel, MSB first, one byte per 8 horizontal pixels,")
+        w(" *   rows packed with NO padding:")
+        w(" *       row_bytes    = (glyph_w + 7) / 8")
+    else:
+        w(" *   2 bits per pixel of coverage (0, 85, 170, 255), MSB first,")
+        w(" *   rows packed with NO padding:")
+        w(" *       row_bytes    = (glyph_w * 2 + 7) / 8")
     w(" *       glyph stride = row_bytes * glyph_h")
     w(" *       glyph ch     = bitmap + (ch - NJ_FONT_DATA_FIRST) * stride")
     w(" *")
@@ -367,11 +414,20 @@ def emit_header(family, font_info, sizes, path):
     w(" * 0x7F..0x9F is present as blank cells so the lookup stays a plain")
     w(" * array index.")
     w(" *")
-    w(" * Regenerate with:   python3 tools/gen_fonts.py")
-    w(" * Glyphs come from FreeType's monochrome (FT_LOAD_TARGET_MONO)")
-    w(" * rasteriser, so stems are hinted onto the pixel grid; the cell")
-    w(" * metrics are the measured ink envelope of every covered glyph in")
-    w(" * both styles, which is what makes the faces clip-free.")
+    if bpp == 1:
+        w(" * Regenerate with:   python3 tools/gen_fonts.py")
+        w(" * Glyphs come from FreeType's monochrome (FT_LOAD_TARGET_MONO)")
+        w(" * rasteriser, so stems are hinted onto the pixel grid; the cell")
+        w(" * metrics are the measured ink envelope of every covered glyph in")
+        w(" * both styles, which is what makes the faces clip-free.")
+    else:
+        w(" * Regenerate with:   python3 tools/gen_fonts.py --bpp 2 "
+          "--header src/gfx/nj_font_data_aa.h")
+        w(" * Glyphs are rendered at %dx with FreeType's greyscale rasteriser,"
+          % RASTER_SCALE)
+        w(" * reduced with Lanczos and quantised to four coverage levels; the")
+        w(" * cell metrics are the committed monochrome ones, so line layout")
+        w(" * is identical whichever table a build links.")
     w(" */")
     w("#ifndef NJ_FONT_DATA_H")
     w("#define NJ_FONT_DATA_H")
@@ -383,6 +439,8 @@ def emit_header(family, font_info, sizes, path):
     w("#define NJ_FONT_DATA_FIRST 0x%02Xu" % FIRST_CHAR)
     w("#define NJ_FONT_DATA_LAST  0x%02Xu" % LAST_CHAR)
     w("#define NJ_FONT_DATA_CHARS %du" % CHAR_COUNT)
+    w("/* Coverage of the rows this header defines: 0 = 1bpp, 2 = packed 2bpp. */")
+    w("#define NJ_FONT_DATA_COVERAGE %d" % coverage)
     w("")
     for spec in sizes:
         macro = spec["macro"]
@@ -442,8 +500,8 @@ SAMPLE_LINES = (
 )
 
 
-def render_text(glyphs, text, cell_w, height, scale):
-    """Blit a string with the packed 1bpp cells at `scale`x, black on white."""
+def render_text(glyphs, text, cell_w, height, scale, bpp=1):
+    """Blit a string with the packed cells at `scale`x, ink on white."""
     img = Image.new("L", (max(1, len(text) * cell_w) * scale, height * scale), 255)
     for index, ch in enumerate(text):
         cp = ord(ch)
@@ -454,14 +512,16 @@ def render_text(glyphs, text, cell_w, height, scale):
             row = rows[y]
             for x in range(cell_w):
                 if row[x]:
+                    # 1bpp is black; 2bpp coverage 1..3 maps to gray 170..0.
+                    shade = 0 if bpp == 1 else 255 - row[x] * 85
                     for sy in range(scale):
                         for sx in range(scale):
                             img.putpixel((index * cell_w * scale + x * scale + sx,
-                                          y * scale + sy), 0)
+                                          y * scale + sy), shade)
     return img
 
 
-def build_specimen(sizes, path, label_ttf, scale=4):
+def build_specimen(sizes, path, label_ttf, scale=4, bpp=1):
     label_font = ImageFont.truetype(label_ttf, 15)
     pad = 10
     title_h = 22
@@ -482,9 +542,9 @@ def build_specimen(sizes, path, label_ttf, scale=4):
     for block in blocks:
         spec = block["spec"]
         caption = ("%s %s   cell %dx%d   ascent %d  descent %d   "
-                   "(rendered from the packed 1bpp table at %dx)"
+                   "(rendered from the packed %dbpp table at %dx)"
                    % (spec["macro"], block["label"], spec["cell_w"],
-                      spec["height"], spec["ascent"], spec["descent"], scale))
+                      spec["height"], spec["ascent"], spec["descent"], bpp, scale))
         draw.text((pad, y + 4), caption, font=label_font, fill=0)
         y += title_h
         baseline = y + spec["ascent"] * scale
@@ -492,7 +552,7 @@ def build_specimen(sizes, path, label_ttf, scale=4):
                   fill=210)
         for line_index, line in enumerate(SAMPLE_LINES):
             strip = render_text(block["glyphs"], line, spec["cell_w"],
-                                spec["height"], scale)
+                                spec["height"], scale, bpp)
             sheet.paste(strip, (pad, y + line_index * spec["height"] * scale))
         y += block["h"] + pad
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -505,12 +565,20 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--regular", help="regular TTF to use")
     ap.add_argument("--bold", help="bold TTF to use")
-    ap.add_argument("--header", default=HEADER_PATH,
-                    help="output header path (default: %(default)s)")
+    ap.add_argument("--header", default=None,
+                    help="output header path (default: nj_font_data.h, or "
+                         "nj_font_data_aa.h with --bpp 2)")
     ap.add_argument("--specimen", default=SPECIMEN_PATH,
                     help="output specimen PNG (default: %(default)s)")
+    ap.add_argument("--bpp", type=int, choices=(1, 2), default=1,
+                    help="bits per pixel: 1 = mono (default), 2 = antialiased")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
+
+    if args.header is None:
+        args.header = os.path.join(
+            REPO_ROOT, "src", "gfx",
+            "nj_font_data.h" if args.bpp == 1 else "nj_font_data_aa.h")
 
     family, regular, bold = pick_font_files(args.regular, args.bold)
     paths = {"p": regular, "b": bold}
@@ -521,8 +589,8 @@ def main(argv=None):
         print("  plain     : %s" % regular)
         print("  bold      : %s" % bold)
 
-    sizes = [build_size(family, paths, spec) for spec in SIZES]
-    nbytes, _ = emit_header(family, font_info, sizes, args.header)
+    sizes = [build_size(family, paths, spec, args.bpp) for spec in SIZES]
+    nbytes, _ = emit_header(family, font_info, sizes, args.header, args.bpp)
     if not args.quiet:
         print("header      : %s (%d bytes)" % (args.header, nbytes))
         for spec in sizes:
@@ -531,7 +599,7 @@ def main(argv=None):
                   % (spec["tag"], spec["cell_w"], spec["height"],
                      spec["ascent"], spec["descent"], total))
 
-    size = build_specimen(sizes, args.specimen, regular)
+    size = build_specimen(sizes, args.specimen, regular, bpp=args.bpp)
     if not args.quiet:
         print("specimen    : %s (%dx%d)" % (args.specimen, size[0], size[1]))
     return 0

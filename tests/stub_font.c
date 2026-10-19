@@ -43,6 +43,7 @@ static const nj_font stub_font = {
     0, 0,
     STUB_ADVANCE, 8,
     NULL,                   /* no fixed bitmap */
+    0,                      /* bitmap_coverage (unused: no bitmap) */
     NULL,                   /* no glyph_lookup: the stub draws via primitives */
     0,                      /* coverage: 1bpp rows (unused by this stub) */
     NULL,                   /* glyph_ud */

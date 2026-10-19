@@ -20,6 +20,11 @@
  *      glyph stride = row_bytes * glyph_h
  *      glyph ch     = bitmap + (ch - first_char) * stride
  *
+ * Two more formats may arrive from the hook or from an antialiased fixed
+ * table, selected by the face's coverage value: 1 means one unpacked byte
+ * per pixel, 2 means packed 2bpp coverage (4 pixels per byte, MSB first,
+ * values 0..3 scaled to 0/85/170/255).  blit_glyph decodes each accordingly.
+ *
  * ---------------------------------------------------------------------------
  * MIDP ANCHOR SEMANTICS
  * ---------------------------------------------------------------------------
@@ -41,18 +46,22 @@
 /* Glyph access                                                        */
 /* ------------------------------------------------------------------ */
 typedef struct glyph {
-    const nj_u1 *bits;   /* 1bpp rows, or 8bpp coverage rows        */
+    const nj_u1 *bits;   /* 1bpp rows, packed 2bpp, or 8bpp coverage  */
     const nj_font *src;  /* the face that supplied `bits`           */
     int w;
     int h;
     int advance;         /* how far the pen moves after this glyph   */
-    int coverage;        /* 1 = one byte per pixel, 0 = 1bpp rows    */
+    int coverage;        /* 0 = 1bpp, 2 = packed 2bpp, 1 = 8bpp      */
     int ascent;          /* baseline row of the resolved bitmap      */
 } glyph;
 
-static int f_row_bytes(int w)
+/* Bytes per glyph row in the FIXED table, which is 1bpp (coverage 0) or
+ * packed 2bpp (coverage 2) depending on which generated header the build
+ * selected.  The unpacked 8bpp path never comes through here: it only
+ * arrives from a glyph_lookup hook and computes its own stride. */
+static int f_row_bytes(int w, int coverage)
 {
-    return (w + 7) / 8;
+    return coverage == 2 ? (w * 2 + 7) / 8 : (w + 7) / 8;
 }
 
 /*
@@ -91,9 +100,13 @@ static void glyph_lookup(const nj_font *f, nj_u2 ch, glyph *out, int depth)
     }
 
     if (ch >= f->first_char && ch <= f->last_char && f->bitmap) {
-        out->coverage = 0; /* The fixed table remains 1bpp, independent of its hook. */
+        /* The fixed table declares its own format: monochrome builds stay
+         * 1bpp, antialiased builds carry packed 2bpp rows (bitmap_coverage
+         * from nj_font.c's generated header). */
+        out->coverage = f->bitmap_coverage;
         out->bits = f->bitmap +
-                    (nj_size)(ch - f->first_char) * f_row_bytes(f->glyph_w) *
+                    (nj_size)(ch - f->first_char) *
+                        f_row_bytes(f->glyph_w, f->bitmap_coverage) *
                         (nj_size)f->glyph_h;
         return;
     }
@@ -123,7 +136,7 @@ static void glyph_lookup(const nj_font *f, nj_u2 ch, glyph *out, int depth)
 static void blit_glyph(nj_gfx *g, const nj_font *f, const glyph *gl,
                        int pen_x, int baseline_y)
 {
-    int row_bytes = f_row_bytes(gl->w);
+    int row_bytes = (gl->w + 7) / 8;   /* 1bpp branch only */
     /* The baseline comes from the face that supplied the glyph, not from the
      * face the caller asked: a fallback with different metrics would otherwise
      * be drawn at the wrong height. */

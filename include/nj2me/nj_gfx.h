@@ -46,8 +46,13 @@ typedef struct nj_surface {
 /* Font                                                                */
 /* ------------------------------------------------------------------ */
 /*
- * A bitmap font.  Glyphs are 1 bit per pixel, row-major, MSB first, one byte
- * per 8 horizontal pixels:  row_bytes = (glyph_w + 7) / 8.
+ * A bitmap font.  Fixed-table glyphs are 1 bit per pixel by default:
+ * row-major, MSB first, one byte per 8 horizontal pixels,
+ * row_bytes = (glyph_w + 7) / 8.  When a build selects an antialiased fixed
+ * table (bitmap_coverage == 2, the desktop CMake default) the rows instead
+ * pack four 2-bit coverage samples per byte, MSB first, values 0..3 mapping
+ * to 0, 85, 170, 255, and row_bytes = (glyph_w * 2 + 7) / 8.  Either way the
+ * advance stays exactly one cell, so line layout is identical.
  *
  * `glyph_lookup` optionally overrides the fixed-pitch bitmap for characters
  * outside [first_char, last_char] - this is how the CJK provider hooks in.
@@ -66,6 +71,8 @@ typedef struct nj_font {
     int   glyph_w;       /* fixed cell width  */
     int   glyph_h;
     const nj_u1 *bitmap; /* (last-first+1) * glyph_h * row_bytes */
+    /* Coverage of `bitmap` rows: 0 = 1bpp, 2 = packed 2bpp. */
+    int   bitmap_coverage;
 
     /*
      * Optional glyph provider, for anything the fixed table cannot hold: a wide
@@ -74,7 +81,8 @@ typedef struct nj_font {
      * With coverage=0, provider rows are 1bpp, MSB first, (w+7)/8 bytes.
      * coverage=1 uses one coverage byte (0..255) per pixel. coverage=2 packs
      * four 2-bit samples per byte, MSB first, (w+3)/4 bytes per row; values
-     * 0..3 map to 0, 85, 170, 255. The fixed bitmap table always stays 1bpp.
+     * 0..3 map to 0, 85, 170, 255. The fixed bitmap table uses its own
+     * `bitmap_coverage` field, not this provider field.
      * The renderer blends coverage because thresholding an
      * antialiased rasteriser deletes thin strokes: a hinted-away stem is two
      * columns at about 50%, and a 1bpp cut through it loses the stem entirely

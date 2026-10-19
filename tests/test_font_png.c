@@ -111,7 +111,9 @@ static void counting_free(void *ud, void *p)
 /* ------------------------------------------------------------------ */
 static int count_ink_rows(const nj_font *f, nj_u2 ch)
 {
-    int row_bytes = (f->glyph_w + 7) / 8;
+    int row_bytes = f->bitmap_coverage == 2
+                        ? (f->glyph_w * 2 + 7) / 8
+                        : (f->glyph_w + 7) / 8;
     const nj_u1 *bits;
     int y;
     int x;
@@ -124,7 +126,9 @@ static int count_ink_rows(const nj_font *f, nj_u2 ch)
            (size_t)row_bytes * (size_t)f->glyph_h;
     for (y = 0; y < f->glyph_h; y++) {
         for (x = 0; x < f->glyph_w; x++) {
-            if ((bits[y * row_bytes + (x >> 3)] >> (7 - (x & 7))) & 1u) {
+            if (f->bitmap_coverage == 2
+                    ? ((bits[y * row_bytes + (x >> 2)] >> (6 - 2 * (x & 3))) & 3u)
+                    : ((bits[y * row_bytes + (x >> 3)] >> (7 - (x & 7))) & 1u)) {
                 total++;
             }
         }
@@ -201,6 +205,26 @@ static void test_font_builtin_table(void)
             /* Sub-byte depths must never touch the next cell over. */
             CHECK(count_ink_rows(f, 0x7Fu) == 0, "U+007F should be blank");
             CHECK(count_ink_rows(f, 0x80u) == 0, "U+0080 should be blank");
+
+            /* An antialiased fixed table must really carry partial edges,
+             * not just the old on/off stems at two bits wide. */
+            CHECK(f->bitmap_coverage == 0 || f->bitmap_coverage == 2,
+                  "builtin fixed table coverage %d", f->bitmap_coverage);
+            if (f->bitmap_coverage == 2) {
+                const int rb = (f->glyph_w * 2 + 7) / 8;
+                const nj_u1 *bits = f->bitmap +
+                    (size_t)('A' - f->first_char) *
+                        (size_t)rb * (size_t)f->glyph_h;
+                int x, y, partial = 0;
+                for (y = 0; y < f->glyph_h; y++) {
+                    for (x = 0; x < f->glyph_w; x++) {
+                        int v = ((bits[y * rb + (x >> 2)] >> (6 - 2 * (x & 3)))
+                                 & 3u) * 85;
+                        if (v > 0 && v < 255) partial++;
+                    }
+                }
+                CHECK(partial > 0, "'A' has no antialiased edge pixels");
+            }
         }
     }
 

@@ -151,6 +151,7 @@ static const nj_font s_cov_font = {
     0u, 0u,                              /* first_char, last_char */
     4, 4,                                /* glyph_w, glyph_h */
     NULL,                                /* bitmap */
+    0,                                   /* bitmap_coverage */
     cover_lookup,
     1,                                   /* coverage */
     NULL,                                /* glyph_ud */
@@ -293,6 +294,7 @@ static const nj_font s_fb_font = {
     0u, 0u,
     2, 2,
     NULL,
+    0,
     fb_lookup,
     1,
     NULL,
@@ -310,6 +312,7 @@ static const nj_font s_empty_font = {
     0u, 0u,
     4, 4,
     NULL,
+    0,
     none_lookup,
     1,
     NULL,
@@ -367,7 +370,7 @@ static void test_fallback_ascent(tctx *t)
 }
 
 /* ------------------------------------------------------------------ */
-/* [4] The bitmap path did not become antialiased                      */
+/* [4] The bitmap path honours the fixed table's declared format       */
 /* ------------------------------------------------------------------ */
 static void test_bitmap_unchanged(tctx *t)
 {
@@ -380,7 +383,7 @@ static void test_bitmap_unchanged(tctx *t)
     int intermediate = 0;
     int ink = 0;
 
-    printf("[4] a bitmap face still writes opaque pixels only\n");
+    printf("[4] the fixed table writes pixels in its declared coverage\n");
 
     ts_init(&ts, 64, 24, NJ_PIXFMT_ARGB8888, 0, C_WHITE);
     nj_gfx_init(&g, &ts.s);
@@ -399,8 +402,13 @@ static void test_bitmap_unchanged(tctx *t)
         }
     }
     /* A coverage value would have leaked here if glyph_lookup()'s caller
-     * ignored the face's `coverage` flag and blended a 1bpp row. */
-    CHECK(t, intermediate == 0);
+     * ignored the face's coverage flags; and the antialiased table must
+     * actually blend edges instead of thresholding them away. */
+    if (f->bitmap_coverage == 0) {
+        CHECK(t, intermediate == 0);
+    } else {
+        CHECK(t, intermediate > 0);
+    }
     CHECK(t, ink > 0);   /* and something was actually drawn */
 
     ts_free(&ts);

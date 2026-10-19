@@ -233,8 +233,12 @@
 #ifndef NJ_ENABLE_FONT_CJK
 #  define NJ_ENABLE_FONT_CJK 1
 #endif
-/* Four-level CJK coverage adds about 407 KiB of const data, no heap use.
- * Desktop CMake enables it; embedded users opt in explicitly. */
+/* Four-level CJK and Latin coverage (packed 2bpp rows) adds about 434 KiB
+ * of const data, no heap use. Desktop CMake enables it; embedded users opt
+ * in explicitly. When on, both src/gfx/nj_font_cjk_aa.h (tools/
+ * gen_cjk_font.py --bpp 2) and src/gfx/nj_font_data_aa.h (tools/
+ * gen_fonts.py --bpp 2) replace their monochrome tables; cell metrics and
+ * line layout are identical either way. */
 #ifndef NJ_ENABLE_FONT_CJK_AA
 #  define NJ_ENABLE_FONT_CJK_AA 0
 #endif
