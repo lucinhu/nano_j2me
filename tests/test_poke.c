@@ -36,7 +36,25 @@ static void ok(int cond, const char *what)
     }
 }
 
-typedef struct capture { char buf[65536]; size_t n; int lines; } capture;
+typedef struct capture {
+    char buf[65536];
+    size_t n;
+    int lines;
+    nj_event input[64];
+    int input_count;
+} capture;
+
+/* Observe the events the runner actually delivers, retaining the real port. */
+static capture *input_capture;
+static int (*port_input_push)(void *ud, const nj_event *ev);
+
+static int cap_input_push(void *ud, const nj_event *ev)
+{
+    if (input_capture->input_count < 64) {
+        input_capture->input[input_capture->input_count++] = *ev;
+    }
+    return port_input_push(ud, ev);
+}
 
 static void cap_log(void *user, int level, const char *msg)
 {
@@ -113,6 +131,9 @@ static int run_capture(const char *jar, const char *keys, capture *cap, int fram
     port.log = logging ? cap_log : NULL;
     port.user = cap;
     port.fps_cap = 0;
+    input_capture = cap;
+    port_input_push = port.input_push;
+    port.input_push = cap_input_push;
 
     memset(&opts, 0, sizeof(opts));
     opts.jar_path = jar;
@@ -293,6 +314,49 @@ int main(int argc, char **argv)
            hash_frames("/tmp/nj_poke_b") == baseline,
            "script rejection also clears input without a log callback");
     }
+
+    /* ---- 5. mixing touch and keypad input must not leave a key held ---- */
+    rc = run(argv[1],
+             "20:right 20:pressed@30,40 20:released@30,40 23:fire",
+             &cap, 60);
+    ok((rc == NJ_OK || rc == 1) && cap.input_count == 6,
+       "a simultaneous key and touch tap deliver both releases exactly once");
+    ok(cap.input_count == 6 &&
+       cap.input[0].type == NJ_EV_KEY_DOWN &&
+       cap.input[0].key == NJ_KEY_RIGHT &&
+       cap.input[1].type == NJ_EV_POINTER_DOWN &&
+       cap.input[1].x == 30 && cap.input[1].y == 40 &&
+       cap.input[2].type == NJ_EV_POINTER_UP &&
+       cap.input[3].type == NJ_EV_KEY_UP &&
+       cap.input[3].key == NJ_KEY_RIGHT &&
+       cap.input[4].type == NJ_EV_KEY_DOWN &&
+       cap.input[4].key == NJ_KEY_FIRE &&
+       cap.input[5].type == NJ_EV_KEY_UP &&
+       cap.input[5].key == NJ_KEY_FIRE,
+       "touch preserves the pending key release and the next key tap");
+
+    rc = run(argv[1], "20:right 21:pressed@30,40 24:released@30,40",
+             &cap, 60);
+    ok((rc == NJ_OK || rc == 1) && cap.input_count == 4 &&
+       cap.input[0].type == NJ_EV_KEY_DOWN &&
+       cap.input[1].type == NJ_EV_POINTER_DOWN &&
+       cap.input[2].type == NJ_EV_KEY_UP &&
+       cap.input[2].key == NJ_KEY_RIGHT &&
+       cap.input[3].type == NJ_EV_POINTER_UP,
+       "a touch on the release frame does not cancel the key release");
+
+    rc = run(argv[1],
+             "20:pressed@30,40 20:right 20:dragged@35,45 24:released@35,45",
+             &cap, 60);
+    ok((rc == NJ_OK || rc == 1) && cap.input_count == 5 &&
+       cap.input[0].type == NJ_EV_POINTER_DOWN &&
+       cap.input[1].type == NJ_EV_KEY_DOWN &&
+       cap.input[2].type == NJ_EV_POINTER_MOVE &&
+       cap.input[3].type == NJ_EV_KEY_UP &&
+       cap.input[3].key == NJ_KEY_RIGHT &&
+       cap.input[4].type == NJ_EV_POINTER_UP &&
+       cap.input[4].x == 35 && cap.input[4].y == 45,
+       "a drag around a key tap retains one key release and one touch release");
 
     printf("\n%d checks, %d failures\n%s\n", checks, fails,
            fails == 0 ? "PASS" : "FAIL");

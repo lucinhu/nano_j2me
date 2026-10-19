@@ -569,7 +569,8 @@ static void key_script_tick(const nj_port *port, key_script *ks, nj_u8 frame)
             ev.x = ks->px[i];
             ev.y = ks->py[i];
             ks->next_down++;
-            ks->next_up++;      /* nothing to release later */
+            /* The release cursor may still point at an earlier key.  Let
+             * the release loop skip pointer entries after that key is up. */
         } else {
             ev.type = (nj_u1)NJ_EV_KEY_DOWN;
             ev.key = ks->key[i];
