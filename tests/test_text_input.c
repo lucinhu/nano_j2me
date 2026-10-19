@@ -251,6 +251,50 @@ static void push_sdl(SDL_Event *event)
     event->window.windowID = SDL_GetWindowID(window);
     CHECK(SDL_PeepEvents(event, 1, SDL_ADDEVENT, 0, 0) == 1);
 }
+static void sdl_key_repeat_test(nj_port *port)
+{
+    static const struct {
+        SDL_Keycode symbol;
+        SDL_Scancode scan;
+        int key;
+    } cases[] = {
+        {SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, NJ_KEY_SOFT_RIGHT},
+        {SDLK_F2, SDL_SCANCODE_F2, NJ_KEY_SOFT_RIGHT},
+        {SDLK_UP, SDL_SCANCODE_UP, NJ_KEY_UP},
+        {SDLK_RETURN, SDL_SCANCODE_RETURN, NJ_KEY_FIRE}
+    };
+    nj_event input;
+    SDL_Event event;
+    int i, press, repeat, count;
+    static const nj_u1 expected[] = {
+        NJ_EV_KEY_DOWN, NJ_EV_KEY_REPEAT, NJ_EV_KEY_REPEAT,
+        NJ_EV_KEY_REPEAT, NJ_EV_KEY_UP
+    };
+    for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+        /* Preserve the distinction and order through the port queue. MIDP
+         * applies different repeat policies to Canvas and built-in screens. */
+        for (press = 0; press < 2; press++) {
+            memset(&event, 0, sizeof(event));
+            event.type = SDL_KEYDOWN;
+            event.key.keysym.sym = cases[i].symbol;
+            event.key.keysym.scancode = cases[i].scan;
+            push_sdl(&event);
+            event.key.repeat = 1;
+            for (repeat = 0; repeat < 3; repeat++) { push_sdl(&event); }
+            event.type = SDL_KEYUP;
+            event.key.repeat = 0;
+            push_sdl(&event);
+            port->display_present(port->ud, 0, 0, 240, 320);
+            count = 0;
+            while (port->input_poll(port->ud, &input)) {
+                CHECK(input.key == cases[i].key);
+                CHECK(count < (int)sizeof(expected) && input.type == expected[count]);
+                count++;
+            }
+            CHECK(count == (int)sizeof(expected));
+        }
+    }
+}
 static void sdl_test(void)
 {
     nj_port port;
@@ -271,9 +315,26 @@ static void sdl_test(void)
         CHECK(port.display_init(port.ud, &width, &height, &stride, &pixels) >= 0);
         CHECK(pixels != NULL && width > 0 && height > 0);
     }
+    sdl_key_repeat_test(&port);
     memset(&state, 0, sizeof(state)); state.active = 1; state.session = 7;
     port.text_input(port.ud, &state);
     CHECK(SDL_IsTextInputActive());
+    /* Native editing keeps desktop autorepeat: holding Backspace must delete
+     * more than one character, without also sending game key presses. */
+    memset(&event, 0, sizeof(event)); event.type = SDL_KEYDOWN;
+    event.key.keysym.sym = SDLK_BACKSPACE;
+    event.key.keysym.scancode = SDL_SCANCODE_BACKSPACE;
+    push_sdl(&event);
+    event.key.repeat = 1; push_sdl(&event); push_sdl(&event);
+    event.type = SDL_KEYUP; event.key.repeat = 0; push_sdl(&event);
+    port.display_present(port.ud, 0, 0, 240, 320);
+    while (port.input_poll(port.ud, &input)) {
+        CHECK(input.type == NJ_EV_TEXT_EDIT && input.key == NJ_TEXT_BACKSPACE &&
+              input.text_session == 7);
+        edits++;
+    }
+    CHECK(edits == 3);
+    edits = 0;
     if (compat) {
         fprintf(stderr, "SDL2-compat %u.%u.%u: synthetic text event replay skipped (SDL3 translator crash); activation/deactivation tested\n", version.major, version.minor, version.patch);
         state.active = 0; port.text_input(port.ud, &state);
@@ -517,9 +578,111 @@ static void max_size_test(void)
     }
     nj_vm_destroy(vm); nj_port_shutdown(&port);
 }
+static int key_presses, key_releases;
+static nj_status capture_press(nj_vm *vm, nj_thread *th, nj_value *args, nj_value *ret)
+{
+    (void)vm; (void)th; (void)args; (void)ret;
+    key_presses++;
+    return NJ_OK;
+}
+static nj_status capture_release(nj_vm *vm, nj_thread *th, nj_value *args, nj_value *ret)
+{
+    (void)vm; (void)th; (void)args; (void)ret;
+    key_releases++;
+    return NJ_OK;
+}
+static void key_frame(nj_vm *vm, nj_u1 type, int key)
+{
+    nj_event event;
+    memset(&event, 0, sizeof(event));
+    event.type = type; event.key = (nj_u1)key;
+    nj_port_push_event(vm->port, &event);
+    /* Stop after input dispatch so this frame need not implement paint. Keep
+     * the VM running while Java callbacks and widget handlers execute. */
+    event.type = NJ_EV_QUIT;
+    nj_port_push_event(vm->port, &event);
+    CHECK(nj_midp_frame(vm) == NJ_OK && !vm->exception);
+    vm->running = 1u;
+}
+static void repeat_policy_test(void)
+{
+    static const nj_builtin_method methods[] = {
+        {"keyPressed", "(I)V", NJ_ACC_PUBLIC},
+        {"keyReleased", "(I)V", NJ_ACC_PUBLIC}
+    };
+    static const nj_builtin_class fixture = {
+        "test/RepeatCanvas", NJ_C_CANVAS, NJ_ACC_PUBLIC,
+        NULL, 0u, methods, 2u
+    };
+    static const int keys[] = {NJ_KEY_SOFT_RIGHT, NJ_KEY_UP, NJ_KEY_FIRE};
+    nj_port port;
+    nj_vm *vm;
+    nj_class *cls;
+    nj_ref canvas, list, form, gauge, game;
+    nj_value args[4], ret;
+    int i, j;
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    vm = nj_vm_create(&port, 4u * 1024u * 1024u);
+    CHECK(vm != NULL); if (!vm) { nj_port_shutdown(&port); return; }
+    cls = nj_class_create_builtin(vm, &fixture);
+    CHECK(cls != NULL); if (!cls) { nj_vm_destroy(vm); nj_port_shutdown(&port); return; }
+    cls->methods[0].native = capture_press;
+    cls->methods[1].native = capture_release;
+    canvas = nj_root(vm, nj_object_new(vm, fixture.name));
+    CHECK(canvas != NULL);
+    CHECK(nj_call_special(vm, canvas, NJ_C_CANVAS, "<init>", "()V", NULL, NULL) == NJ_OK);
+    current(vm, canvas);
+    CHECK(nj_call(vm, canvas, NJ_C_CANVAS, "hasRepeatEvents", "()Z", NULL, &ret) == NJ_OK && !ret.i);
+    for (i = 0; i < (int)(sizeof(keys) / sizeof(keys[0])); i++) {
+        key_presses = key_releases = 0;
+        key_frame(vm, NJ_EV_KEY_DOWN, keys[i]);
+        for (j = 0; j < 3; j++) { key_frame(vm, NJ_EV_KEY_REPEAT, keys[i]); }
+        CHECK(key_presses == 1 && key_releases == 0);
+        key_frame(vm, NJ_EV_KEY_UP, keys[i]);
+        CHECK(key_presses == 1 && key_releases == 1);
+        key_frame(vm, NJ_EV_KEY_DOWN, keys[i]);
+        key_frame(vm, NJ_EV_KEY_UP, keys[i]);
+        CHECK(key_presses == 2 && key_releases == 2);
+    }
+    args[0].i = 1;
+    game = make(vm, NJ_C_GAMECANVAS, "(Z)V", args);
+    current(vm, game);
+    key_frame(vm, NJ_EV_KEY_DOWN, NJ_KEY_UP);
+    key_frame(vm, NJ_EV_KEY_REPEAT, NJ_KEY_UP);
+    CHECK(nj_call(vm, game, NJ_C_GAMECANVAS, "getKeyStates", "()I", NULL, &ret) == NJ_OK && ret.i == 2);
+    CHECK(nj_call(vm, game, NJ_C_GAMECANVAS, "getKeyStates", "()I", NULL, &ret) == NJ_OK && ret.i == 2);
+    key_frame(vm, NJ_EV_KEY_UP, NJ_KEY_UP);
+    key_frame(vm, NJ_EV_KEY_REPEAT, NJ_KEY_UP);
+    CHECK(nj_call(vm, game, NJ_C_GAMECANVAS, "getKeyStates", "()I", NULL, &ret) == NJ_OK && !ret.i);
+    args[0].r = string(vm, "Repeat"); args[1].i = 3;
+    list = make(vm, NJ_C_LIST, "(Ljava/lang/String;I)V", args);
+    for (i = 0; i < 6; i++) {
+        args[0].r = string(vm, "Row");
+        CHECK(nj_call(vm, list, NJ_C_LIST, "append", "(Ljava/lang/String;)I", args, NULL) == NJ_OK);
+    }
+    current(vm, list);
+    key_frame(vm, NJ_EV_KEY_DOWN, NJ_KEY_DOWN);
+    for (i = 0; i < 3; i++) { key_frame(vm, NJ_EV_KEY_REPEAT, NJ_KEY_DOWN); }
+    key_frame(vm, NJ_EV_KEY_UP, NJ_KEY_DOWN);
+    CHECK(nj_call(vm, list, NJ_C_LIST, "getSelectedIndex", "()I", NULL, &ret) == NJ_OK && ret.i == 4);
+    args[0].r = string(vm, "Form");
+    form = make(vm, NJ_C_FORM, "(Ljava/lang/String;)V", args);
+    args[0].r = string(vm, "Level"); args[1].i = 1; args[2].i = 100; args[3].i = 0;
+    gauge = make(vm, NJ_C_GAUGE, "(Ljava/lang/String;ZII)V", args);
+    args[0].r = gauge;
+    CHECK(nj_call(vm, form, NJ_C_FORM, "append", "(Ljavax/microedition/lcdui/Item;)I", args, NULL) == NJ_OK);
+    current(vm, form);
+    key_frame(vm, NJ_EV_KEY_DOWN, NJ_KEY_DOWN);
+    CHECK(nj_call(vm, gauge, NJ_C_GAUGE, "getValue", "()I", NULL, &ret) == NJ_OK && ret.i == 5);
+    for (i = 0; i < 3; i++) { key_frame(vm, NJ_EV_KEY_REPEAT, NJ_KEY_DOWN); }
+    key_frame(vm, NJ_EV_KEY_UP, NJ_KEY_DOWN);
+    CHECK(nj_call(vm, gauge, NJ_C_GAUGE, "getValue", "()I", NULL, &ret) == NJ_OK && ret.i == 20);
+    nj_vm_destroy(vm); nj_port_shutdown(&port);
+}
 int main(void)
 {
     runtime_test();
+    repeat_policy_test();
     item_command_test();
     editor_command_test();
     max_size_test();

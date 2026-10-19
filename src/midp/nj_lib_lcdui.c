@@ -4874,6 +4874,20 @@ int nj_midp_key(nj_vm *vm, int key, int down)
     return consumed;
 }
 
+int nj_midp_key_repeat(nj_vm *vm, int key)
+{
+    nj_ref d;
+    if (!vm || !(d = nj_midp_current(vm))) {
+        return 0;
+    }
+    /* Keep host repeat for List/Form navigation, but honor Canvas's advertised
+     * hasRepeatEvents() == false without changing its held/latch state. */
+    if (isa(vm, d, NJ_C_CANVAS)) {
+        return 1;
+    }
+    return nj_midp_key(vm, key, 1);
+}
+
 int nj_midp_pointer(nj_vm *vm, int x, int y, int kind)
 {
     nj_ref d;

@@ -67,7 +67,8 @@ typedef enum nj_event_type {
     NJ_EV_QUIT,         /* window closed / power off request */
     NJ_EV_TEXT_INPUT,   /* committed UTF-8 only, never IME preedit */
     NJ_EV_TEXT_EDIT,    /* key is nj_text_edit */
-    NJ_EV_TEXT_REPLACE  /* complete UTF-16 editor contents and caret */
+    NJ_EV_TEXT_REPLACE, /* complete UTF-16 editor contents and caret */
+    NJ_EV_KEY_REPEAT    /* host autorepeat; distinct from a physical press */
 } nj_event_type;
 
 /*

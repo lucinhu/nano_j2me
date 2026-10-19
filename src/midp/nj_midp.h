@@ -236,6 +236,10 @@ void nj_midp_repaint(nj_vm *vm);
  * `down` is 1 for press, 0 for release.  Returns 1 if it was consumed. */
 int nj_midp_key(nj_vm *vm, int key, int down);
 
+/* Host autorepeat navigates built-in screens. Canvas.hasRepeatEvents() is false,
+ * so Canvas/GameCanvas must not receive extra presses or update held keys. */
+int nj_midp_key_repeat(nj_vm *vm, int key);
+
 /* Native committed UTF-8 and scalar-safe editing for the focused text widget.
  * Return 1 when consumed; unsupported focus, invalid text or constraints return
  * 0 without changing contents. Preedit is owned entirely by the native IME. */

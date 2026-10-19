@@ -1217,6 +1217,9 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
                 s->save_req = 1;
                 break;
             }
+            /* Preserve autorepeat as a distinct event. MIDP suppresses it for
+             * Canvas but keeps built-in List/Form navigation repeatable. Native
+             * text editing above handles its own repeated edit operations. */
             switch (ev.key.keysym.sym) {
             case SDLK_UP:     k = NJ_KEY_UP;     break;
             case SDLK_DOWN:   k = NJ_KEY_DOWN;   break;
@@ -1248,8 +1251,9 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
             default: break;
             }
             if (k >= 0) {
-                e.type = (ev.type == SDL_KEYDOWN) ? NJ_EV_KEY_DOWN
-                                                  : NJ_EV_KEY_UP;
+                e.type = (ev.type == SDL_KEYDOWN)
+                    ? (ev.key.repeat ? NJ_EV_KEY_REPEAT : NJ_EV_KEY_DOWN)
+                    : NJ_EV_KEY_UP;
                 e.key = (nj_u1)k;
                 s->queue[s->qt] = e;
                 s->qt = (s->qt + 1) %
