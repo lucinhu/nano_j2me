@@ -33,6 +33,7 @@
  * Exit code 0 on PASS, non-zero otherwise.
  */
 #include "nj2me/nj.h"
+#include "nj_internal.h"   /* nj_class_create_builtin: the fixture Runnable */
 #include "nj2me/nj_gfx.h"
 #include "nj2me/nj_png.h"
 #include "nj2me/nj_codec.h"
@@ -2373,6 +2374,77 @@ static void test_canvas_key_methods(nj_vm *vm)
 }
 
 /* ------------------------------------------------------------------ */
+/* callSerially: a self-requeuing runnable runs once per frame         */
+/* ------------------------------------------------------------------ */
+/*
+ * 僵尸危机2_4349's pump (i.run) draws, waits out its own 40ms frame
+ * interval, then Display.callSerially(this) to do it again.  A drain that
+ * picked up runnables queued *during* the drain executed the whole chain in
+ * one paint - 64 x 40ms = 2.56s per frame, 0.4fps, corpus timeout.  MIDP says
+ * callSerially runs "before the NEXT paint", so each frame must run the
+ * queued runnable exactly once and leave its re-queue for the next frame.
+ */
+static int cl_runs;
+
+NJ_NATIVE_FN(cl_self_requeue)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_value a[1];
+
+    (void)th;
+    (void)ret;
+    cl_runs++;
+    a[0].r = self;
+    (void)nj_call(vm, nj_midp_display(vm), NJ_C_DISPLAY, "callSerially",
+                  "(Ljava/lang/Runnable;)V", a, NULL);
+    return vm->exception ? NJ_ERR : NJ_OK;
+}
+
+static void test_callserially_once_per_frame(nj_vm *vm)
+{
+    static const nj_builtin_method methods[] = {
+        { "run", "()V", NJ_ACC_PUBLIC }
+    };
+    static const nj_builtin_class fixture = {
+        "test/SelfRequeue", "java/lang/Object", NJ_ACC_PUBLIC,
+        NULL, 0u, methods, 1u
+    };
+    nj_class *cls;
+    nj_ref disp;
+    nj_ref r;
+    nj_value a[1];
+    int i;
+
+    disp = nj_midp_display(vm);
+    OK(disp != NULL);
+    /* test_canvas_key_methods leaves a bare Canvas (abstract paint) current;
+     * paint() would then fail for reasons unrelated to the drain. */
+    OK(nj_midp_set_current(vm, NULL) == NJ_OK);
+    cls = nj_class_create_builtin(vm, &fixture);
+    OK(cls != NULL);
+    if (!disp || !cls) { return; }
+    cls->methods[0].native = cl_self_requeue;
+    r = nj_object_new(vm, "test/SelfRequeue");
+    OK(r != NULL);
+    if (!r) { return; }
+    cl_runs = 0;
+
+    a[0].r = r;
+    OK(nj_call(vm, disp, NJ_C_DISPLAY, "callSerially",
+               "(Ljava/lang/Runnable;)V", a, NULL) == NJ_OK);
+    OK_MSG(cl_runs == 0, "callSerially does not run the runnable inline");
+
+    for (i = 1; i <= 3; i++) {
+        OK_MSG(nj_midp_paint(vm) == NJ_OK,
+               "frame %d with a queued runnable paints", i);
+        OK_MSG(cl_runs == i,
+               "frame %d: self-requeuing runnable ran %d time(s), want %d",
+               i, cl_runs, i);
+    }
+    OK_MSG(!nj_has_exception(vm), "drain finishes without exception");
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
@@ -2411,6 +2483,7 @@ static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
     test_widgets(vm);
     test_screen(vm);
     test_canvas_key_methods(vm);
+    test_callserially_once_per_frame(vm);
 
     /* createImage(String) needs a loaded application. */
     if (app) {

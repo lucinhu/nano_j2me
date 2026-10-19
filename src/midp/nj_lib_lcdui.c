@@ -5482,28 +5482,53 @@ NJFN(disp_callSerially)
     return vm->exception ? NJ_ERR : NJ_OK;
 }
 
-/* Run and clear the pending callSerially queue.  Called once per frame by the
- * frame pump; harmless when empty. */
+/* Run the pending callSerially queue.  Called once per frame by the frame
+ * pump; harmless when empty. */
 static void display_drain_queue(nj_vm *vm)
 {
     nj_ref disp = nj_midp_display(vm);
     nj_ref q;
     int guard = 0;
+    nj_s4 pending;
+    nj_s4 done = 0;
 
     if (!disp) {
         return;
     }
     q = rget(vm, disp, NJ_C_DISPLAY, "dpQueue", D_VECTOR);
-    while (q && guard++ < 64) {
-        nj_s4 n = nj_call_int(vm, q, "java/util/Vector", "size", "()I", NULL);
+    if (!q) {
+        return;
+    }
+    /*
+     * Snapshot the queue length: only runnables queued BEFORE this drain run
+     * now.  A runnable that re-queues itself must wait for the next frame -
+     * callSerially is "after the current event has been processed, before the
+     * next paint", and a re-queue happens during the current event.
+     *
+     * Running it in the same drain instead turned the queue into a chain: the
+     * classic per-frame pump (僵尸危机2_4349's i.run() does repaint, draws,
+     * spins out its own 40ms frame interval in Thread.yield, then
+     * callSerially(this)) executed all 64 guarded passes inside ONE paint,
+     * and one frame took 64 x 40ms = 2.56s while the harness managed 0.4fps
+     * and never reached its frame budget before the corpus timed out.
+     * Element 0 stays the oldest entry, so the first `pending` removals take
+     * exactly the pre-drain runnables; anything appended lands after them.
+     */
+    pending = nj_call_int(vm, q, "java/util/Vector", "size", "()I", NULL);
+    while (done < pending && guard++ < 64) {
         nj_ref r;
-        if (n <= 0) {
-            break;
-        }
         r = nj_call_ref(vm, q, "java/util/Vector", "elementAt",
                         "(I)Ljava/lang/Object;", &(nj_value){ .i = 0 });
+        if (vm->exception) {
+            nj_clear_exception(vm);
+            break;
+        }
         (void)nj_call(vm, q, "java/util/Vector", "removeElementAt", "(I)V",
                       &(nj_value){ .i = 0 }, NULL);
+        if (vm->exception) {
+            nj_clear_exception(vm);
+            break;
+        }
         if (!r) {
             break;
         }
@@ -5512,6 +5537,7 @@ static void display_drain_queue(nj_vm *vm)
             nj_clear_exception(vm);
             break;
         }
+        done++;
     }
 }
 
