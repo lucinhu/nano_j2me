@@ -54,3 +54,22 @@ headless 在3490帧保存[室内快照](../../.local-tools/debug-runs/island-n97
 [完整CTest](../../.local-tools/debug-runs/island-n97-control-20261019/ctest-integrated.log)84/84通过；[ASan/UBSan检查](../../.local-tools/debug-runs/island-n97-control-20261019/ctest-asan.log)覆盖save/poke/thread_lifecycle，3/3通过。默认[build/nj2me](../../build/nj2me)也已同步重建，SHA-256 `e712ea6cf551052d562ea88c94b2c735feffeca84b7e04f26f35bf8772978c3f`，默认构建的test_save/test_poke均通过。所有窗口均由脚本启动和回收，截图仅来自其所属窗口。
 
 另将SDL2 fresh组产生的RMS复制到独立实验目录，分别在新进程运行1200/1500帧：[重启读取记录](../../.local-tools/debug-runs/island-n97-control-20261019/rms-restart/result.json)、[额外确认记录](../../.local-tools/debug-runs/island-n97-control-20261019/rms-slots/result.json)。三份RMS文件hash保持不变，未再出现新RMS初始化异常；画面分别到主菜单和“第一章”加载。此证据只能说明已有RMS可读取，尚未证明游戏进度保存后恢复至原位置。
+
+## 原生软键与自动存档闭环（2026-10-20复核）
+
+以下补充使用同一原N97 JAR，固定[实验二进制](../../.local-tools/debug-runs/island-save-followup-20261019/pinned-nj2me) SHA-256 `e00faa8628ca78e3ec0554ee9e72b0bb107267811d7c39820f43a60a25bd5356`，360×640、16 MiB、30 fps。每次复用的都是实验RMS副本，原始JAR与用户存档保持不变。
+
+SDL2恢复室内快照后，通过真实窗口发送Escape，再发送Escape，画面依次为[暂停菜单](../../.local-tools/debug-runs/island-n97-followup-20261019/repeat-controlled-after/02-after-Escape.png)和[恢复房间](../../.local-tools/debug-runs/island-n97-followup-20261019/repeat-controlled-after/03-after-Escape.png)；F2也完成相同的暂停/返回流程。[参数、SHA及动作时间](../../.local-tools/debug-runs/island-n97-followup-20261019/repeat-controlled-after/manifest.json)与[SDL事件日志](../../.local-tools/debug-runs/island-n97-followup-20261019/repeat-controlled-after/runtime.log)保留。这补齐了恢复后原生软键的响应证据；上轮孤立Escape未响应的原因仍未确定。该实验使用早期重复键过滤构建，最终Canvas/GameCanvas与List/Form分流由提交`159e4d3`的[专门回归报告](2026-10-20-host-key-repeat.md)覆盖；两组截图相同不能证明重复键修复前后存在可见差异。暂停菜单中央白底仍待对照。
+
+游戏帮助提示进入新区域时自动保存。沿室内右下绿色箭头走出房间后，[300帧室外基地](../../.local-tools/debug-runs/island-save-followup-20261019/pinned-exit/frames/00300.png)出现，同时游戏进度槽`stranded2_1.rms`从18字节变为5761字节，SHA-256 `47e14ad9465d0c071c5ddb6ccfc9b7933532dada5de7a494c7676b60ae57311e`。配置槽528字节和空槽18字节保持原hash。[完整命令、保存前后文件大小/hash及退出记录](../../.local-tools/debug-runs/island-save-followup-20261019/pinned-exit/result.json)记录300帧、10.399秒、退出0。本组使用快照作为走出房间的起点，随后另起全新进程验证游戏自己的RMS载入。
+
+冷启动组只复制上述三份RMS，[完整启动参数](../../.local-tools/debug-runs/island-save-followup-20261019/lead-pinned-restart/command.json)没有`--load-state`。`--save-state`只在末尾1979帧输出诊断快照，不参与启动。启动确认键为120/300/450/660/840/1020/1200/1380/1500帧fire；1680至1710帧每2帧left；1830与1920帧soft2。已逐张检查：
+
+| 阶段 | 实际结果 | 截图 |
+|---|---|---|
+| 1650帧冷启动继续 | 从游戏RMS回到室外基地门前，人物约x176 | [载入存档](../../.local-tools/debug-runs/island-save-followup-20261019/lead-pinned-restart/frames/01650.png) |
+| 1740帧后续输入 | 人物左移至约x110，确认载入后仍可操作 | [移动后](../../.local-tools/debug-runs/island-save-followup-20261019/lead-pinned-restart/frames/01740.png) |
+| 1860帧soft2后 | 打开暂停菜单 | [暂停](../../.local-tools/debug-runs/island-save-followup-20261019/lead-pinned-restart/frames/01860.png) |
+| 1950帧再次soft2后 | 返回同一基地与移动后的位置 | [返回游戏](../../.local-tools/debug-runs/island-save-followup-20261019/lead-pinned-restart/frames/01950.png) |
+
+[冷启动结果与hash](../../.local-tools/debug-runs/island-save-followup-20261019/lead-pinned-restart/result.json)及[日志](../../.local-tools/debug-runs/island-save-followup-20261019/lead-pinned-restart/runtime.log)记录1980帧、65.725秒、1059次paint、309706次gfx、退出0，destroyApp正常返回，无thrown/uncaught或frame-loop escape。三份RMS的最终hash与启动副本相同。此次证据确认N97版进入新区域自动保存、退出后冷启动继续，以及继续后的移动/暂停/返回；床上休息保存、战斗、完整任务、Android存档闭环及其他孤岛变体的保存继续仍未验证。
