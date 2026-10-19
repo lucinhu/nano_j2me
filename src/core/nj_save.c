@@ -1033,7 +1033,7 @@ static void save_header(nj_u1 *h, nj_vm *vm, nj_u4 abi, nj_u4 arena_crc,
                      ((nj_u4)vm->painted_in_frame << 8) |
                      ((nj_u4)vm->state << 16) |
                      ((nj_u4)vm->running << 24));
-    put_u64(h + 120, midlet_ms);                  /* the MIDlet clock (info) */
+    put_u64(h + 120, midlet_ms);                  /* saved MIDlet epoch     */
     put_u64(h + 128, (nj_u8)vm->scheduler_ticks); /* the folded port clock  */
     put_u64(h + 136, (nj_u8)vm->speed_virtual);
     put_u64(h + 144, (nj_u8)vm->speed_real);
@@ -1495,7 +1495,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     nj_u1 old_external = 0u;
     nj_u4 magic, version, hdr_size, ptr_size, endian;
     nj_u8 heap_size, heap_bump, heap_used, heap_peak, saved_ms;
-    nj_u8 sched, sv, sr, halt;
+    nj_u8 halt;
     nj_u4 arena_crc, nclasses, nstatics, ninterned, nthreads, cur_idx;
     nj_u4 screen_w, screen_h, pixfmt, frames_presented, speed, midp_flags;
     nj_u4 abi, packed, exc_pc, app_cls, next_tid, stored_crc, i, t;
@@ -1503,7 +1503,6 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     nj_value *statics_old = NULL;   /* the caller's slots, for the fail path */
     nj_u4 statics_old_n = 0u;
     nj_u8 old_heap_size = 0u;
-    nj_s8 delta;
     int installed = 0;
     int threads_installed = 0;
     int rc = NJ_ERR_FORMAT;
@@ -1588,14 +1587,10 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     abi = get_u32(hdr + 112);
     packed = get_u32(hdr + 116);
     saved_ms = get_u64(hdr + 120);
-    sched = get_u64(hdr + 128);
-    sv = get_u64(hdr + 136);
-    sr = get_u64(hdr + 144);
     halt = get_u64(hdr + 152);
     exc_pc = get_u32(hdr + 160);
     app_cls = get_u32(hdr + 164);
     next_tid = get_u32(hdr + 168);
-    (void)saved_ms;
     (void)pixfmt;   /* geometry is only checked, never applied */
 
     if (heap_size < 4096u || heap_size > NJ_SAVE_HEAP_MAX(vm) ||
@@ -2022,19 +2017,18 @@ int nj_vm_load(nj_vm *vm, FILE *f)
         NJ_LOAD_FAIL(NJ_ERR_FORMAT);          /* trailing bytes */
     }
 
-    /*
-     * Clock: the port's folded counter is shifted by however much real time
-     * passed while the blob was on disk, so a saved game resumes "now" instead
-     * of firing every timer that expired in the meantime.
-     */
-    delta = nj_now_ms(vm) - (nj_s8)sched;
-    vm->scheduler_ticks = (nj_s8)sched + delta;
-    vm->speed_virtual = (nj_s8)sv + delta;
-    vm->speed_real = (nj_s8)sr + delta;
+    /* Keep the saved MIDlet epoch, including sleep/wait deadlines and Java
+     * Timer timestamps. Only the raw port clock's origin changes on restore:
+     * CLOCK_MONOTONIC and SDL ticks need not have a common epoch. Shifting the
+     * virtual clock alone strands those deadlines; shifting individual fields
+     * would miss Java timestamps and could turn a timed wait into sentinel 0.
+     * nj_now_ms() folds the current port counter into scheduler_ticks. The old
+     * raw/scale anchors remain in the v2 header for format compatibility. */
+    (void)nj_now_ms(vm);
+    vm->speed_real = vm->scheduler_ticks;
+    vm->speed_virtual = (nj_s8)saved_ms;
     vm->speed_percent = (speed >= 10u && speed <= 800u) ? (int)speed : 100;
-    if (halt != 0u) {
-        vm->halt_at_ms = (nj_s8)halt + delta;
-    }
+    vm->halt_at_ms = (nj_s8)halt;
     vm->exception_pc = exc_pc;
     vm->app_class = (app_cls == NJ_SAVE_NO_CLASS || app_cls >= nclasses)
                         ? NULL : map[app_cls];

@@ -484,6 +484,118 @@ static void test_restored_media(nj_port *base, const nj_u1 *jar, nj_u4 jar_len)
     if (state) { fclose(state); }
 }
 
+/* A restored MIDlet keeps its virtual epoch even when the new port uses
+ * another raw-clock origin (CLOCK_MONOTONIC versus SDL_GetTicks). */
+static void test_clock_restore(nj_port *port, const nj_u1 *jar, nj_u4 jar_len)
+{
+    static const nj_u4 origins[] = { 0u, 500u, 50000000u };
+    static const int speeds[] = { 100, 200 };
+    unsigned oi, si;
+    for (oi = 0; oi < sizeof(origins) / sizeof(origins[0]); oi++) {
+        for (si = 0; si < 2u; si++) {
+            nj_vm *source = NULL, *target = NULL;
+            nj_app *source_app = NULL, *target_app = NULL;
+            nj_thread *sleeper, *timed, *untimed, *expired;
+            nj_u2 sleep_idx, timed_idx, untimed_idx, expired_idx, i;
+            nj_s8 saved, source_virtual, source_real;
+            nj_value result;
+            FILE *state = tmpfile();
+            fake_now = 1000000u;
+            source = nj_vm_create(port, HEAP_BYTES);
+            CHECK(state && source, "clock restore source and stream exist");
+            if (!state || !source) { goto done; }
+            CHECK(start_fixture(source, jar, jar_len, &source_app),
+                  "clock source fixture starts");
+            nj_vm_set_speed(source, speeds[si]);
+            fake_now += 50u;
+            saved = nj_now_ms(source);
+            sleep_idx = source->nthreads;
+            sleeper = nj_thread_create(source, NULL, 0);
+            timed_idx = source->nthreads;
+            timed = nj_thread_create(source, NULL, 0);
+            untimed_idx = source->nthreads;
+            untimed = nj_thread_create(source, NULL, 0);
+            expired_idx = source->nthreads;
+            expired = nj_thread_create(source, NULL, 0);
+            CHECK(sleeper && timed && untimed && expired, "clock test threads exist");
+            if (!sleeper || !timed || !untimed || !expired) { goto done; }
+            CHECK(nj_thread_sleep(source, sleeper, 200) == NJ_ERR_TIMEOUT,
+                  "clock source parks sleeper");
+            timed->state = expired->state = untimed->state = NJ_THREAD_WAITING;
+            timed->wait_deadline = saved + 200;
+            expired->wait_deadline = saved - 1;
+            untimed->wait_deadline = 0;
+            source->halt_at_ms = saved + 5000;
+            CHECK(nj_vm_save(source, state) == NJ_OK, "clock snapshot saves");
+            CHECK(nj_now_ms(source) == saved && sleeper->wake_at_ms == saved + 200
+                  && timed->wait_deadline == saved + 200,
+                  "saving leaves source time and deadlines unchanged");
+
+            source_virtual = source->speed_virtual;
+            source_real = source->speed_real;
+            fake_now = origins[oi];
+            target = nj_vm_create(port, HEAP_BYTES);
+            CHECK(target != NULL, "clock restore target exists");
+            if (!target) { goto done; }
+            target_app = nj_app_open(target, jar, jar_len);
+            CHECK(target_app != NULL, "clock target attaches fixture");
+            rewind(state);
+            {
+                nj_status loaded = nj_vm_load(target, state);
+                CHECK(loaded == NJ_OK, "clock snapshot loads");
+                if (loaded != NJ_OK) { goto done; }
+            }
+            CHECK(nj_now_ms(target) == saved, "restore preserves MIDlet virtual time");
+            CHECK(nj_call(target, NULL, "java/lang/System", "currentTimeMillis", "()J",
+                          NULL, &result) == NJ_OK && result.j == saved,
+                  "Java currentTimeMillis continues at saved virtual time");
+            CHECK(target->speed_percent == speeds[si]
+                  && target->halt_at_ms == saved + 5000,
+                  "restore preserves speed and virtual halt deadline");
+            sleeper = target->threads[sleep_idx];
+            timed = target->threads[timed_idx];
+            untimed = target->threads[untimed_idx];
+            expired = target->threads[expired_idx];
+            CHECK(sleeper->wake_at_ms - nj_now_ms(target) == 200
+                  && timed->wait_deadline - nj_now_ms(target) == 200,
+                  "sleep and timed wait retain remaining delay across epochs");
+            CHECK(expired->wait_deadline == saved - 1 && untimed->wait_deadline == 0,
+                  "expired timed wait stays distinct from untimed sentinel");
+            /* Freeze bytecode execution, but exercise real scheduler wakeups. */
+            for (i = 0; i < target->nthreads; i++) { target->threads[i]->in_c_call = 1; }
+            (void)nj_scheduler_step(target);
+            CHECK(expired->state == NJ_THREAD_RUNNING && expired->wait_deadline == 0,
+                  "already expired timed wait wakes immediately");
+            CHECK(sleeper->state == NJ_THREAD_SLEEPING && timed->state == NJ_THREAD_WAITING
+                  && untimed->state == NJ_THREAD_WAITING,
+                  "future and untimed waits remain parked on first scheduler step");
+            fake_now += (nj_u4)(10000 / speeds[si]);
+            CHECK(nj_now_ms(target) == saved + 100,
+                  "restored speed scales elapsed raw time");
+            (void)nj_scheduler_step(target);
+            CHECK(sleeper->state == NJ_THREAD_SLEEPING && timed->state == NJ_THREAD_WAITING,
+                  "sleep and timed wait remain parked before their deadline");
+            fake_now += (nj_u4)(10000 / speeds[si]);
+            (void)nj_scheduler_step(target);
+            CHECK(sleeper->state == NJ_THREAD_RUNNING && timed->state == NJ_THREAD_RUNNING,
+                  "sleep and timed wait wake at preserved deadline");
+            CHECK(untimed->state == NJ_THREAD_WAITING && untimed->wait_deadline == 0,
+                  "untimed wait remains indefinite after clock migration");
+            CHECK(source->threads[sleep_idx]->wake_at_ms == saved + 200
+                  && source->threads[sleep_idx]->state == NJ_THREAD_SLEEPING
+                  && source->speed_virtual == source_virtual && source->speed_real == source_real
+                  && source->speed_percent == speeds[si],
+                  "restoring another VM leaves source state unchanged");
+        done:
+            if (target_app) { nj_app_close(target, target_app); }
+            nj_vm_destroy(target);
+            if (source_app) { nj_app_close(source, source_app); }
+            nj_vm_destroy(source);
+            if (state) { fclose(state); }
+        }
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
@@ -821,6 +933,7 @@ after_vm_b:
 
     test_large_heap(&port, jar, jar_len);
     test_restored_media(&port, jar, jar_len);
+    test_clock_restore(&port, jar, jar_len);
 
     /* ---- teardown ---------------------------------------------------- */
     if (app_a) {
