@@ -8,20 +8,18 @@
 #     setFullScreenMode(true);
 #
 # and the runtime threw IllegalStateException "setFullScreenMode() on a
-# visible Displayable" before the game ever painted a frame.  Displayable
-# .setFullScreenMode() is required to throw while the Displayable is visible,
-# so the runtime was not wrong to have that rule - it was wrong about WHEN the
-# Displayable becomes visible.  setCurrent() was delivering showNotify()
-# synchronously, so the Canvas was "visible" the instant setCurrent() returned.
-# On a real device setCurrent() returns first and showNotify() arrives later,
-# which is what makes the two-line sequence above legal there.
+# visible Displayable" before the game ever painted a frame.  The runtime
+# delivered showNotify() synchronously and used that state to reject the mode
+# change.  Keep showNotify() deferred until presentation, while isShown() already
+# identifies the current Displayable.  Launch wrappers query isShown() before
+# the first paint and otherwise incorrectly resume their MIDlet a second time.
 #
 # The fixture reproduces the exact sequence and prints what it observed, so
 # the ordering is asserted from the outside instead of being assumed:
 #
-#   FSORDER current shown=false     <- not visible yet, so the change is legal
-#   FSORDER full=true               <- and it took effect
-#   FSORDER painted shown=true full=true
+#   FSORDER current shown=true shows=0  <- selected, callback still deferred
+#   FSORDER full=true                  <- mode change remains legal
+#   FSORDER painted shown=true full=true shows=1
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -51,15 +49,17 @@ public class FsOrder extends MIDlet {
     static boolean done;
 
     static class FsCanvas extends Canvas {
+        int shows;
+        protected void showNotify() { shows++; }
         FsCanvas() {
             Display.getDisplay(FsOrder.self).setCurrent(this);
-            System.out.println("FSORDER current shown=" + isShown());
+            System.out.println("FSORDER current shown=" + isShown() + " shows=" + shows);
             setFullScreenMode(true);
             System.out.println("FSORDER full=" + isFullScreenMode());
         }
         protected void paint(Graphics g) {
             System.out.println("FSORDER painted shown=" + isShown()
-                               + " full=" + isFullScreenMode());
+                               + " full=" + isFullScreenMode() + " shows=" + shows);
             g.setColor(0x102030);
             g.fillRect(0, 0, getWidth(), getHeight());
             /* One frame is the whole story; a MIDlet that never exits would

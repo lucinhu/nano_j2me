@@ -40,7 +40,7 @@ native-ime提供独立build-ime/nj2me，SHA-256 `ebb421a66aa7dbc521eb9c2805009da
 
 截图实际通过read_image检查了三张既有contact（覆盖27唯一），两个旧40秒末帧，以及本次全部15张contact（各6帧或实际可得帧）。完整PPM与PNG均保留。jar08新测没有PPM，contact为空灰底，明确记为无帧。没有把exit 0、帧数或caught thrown当作可玩证明。未执行存档重启，结果不覆盖保存/继续兼容性。
 
-主要进展：狂野飙车4进入比赛且继续更新；极品飞车16、都市赛车6确认后续菜单选择响应；孤岛01/10到主菜单，乱世Q三国到章节选择。帝国时代3的早期黑屏及文明5的logo不是最终停点，延长后分别到主菜单和音效询问。修复前代表家园6版本60秒仍法国旗；线程修复后8/8版本均进入村庄对白。孤岛CU928版60秒仍省略号。
+主要进展：狂野飙车4进入比赛且继续更新；极品飞车16、都市赛车6确认后续菜单选择响应；孤岛01/10到主菜单，乱世Q三国到章节选择。帝国时代3的早期黑屏及文明5的logo不是最终停点，延长后分别到主菜单和音效询问。修复前代表家园6版本60秒仍法国旗；线程修复后8/8版本均进入村庄对白。孤岛N97版在isShown/startApp修复后已进入丛林与室内剧情，soft1推进对白、soft2打开暂停菜单；CU928版旧构建60秒省略号记录仍待修复后回归。
 
 ## 全29文件记录
 
@@ -56,14 +56,14 @@ native-ime提供独立build-ime/nj2me，SHA-256 `ebb421a66aa7dbc521eb9c2805009da
 | jar-06 / [app.jar](</home/lucinhu/Downloads/jar/app.jar>) | UC浏览器 / 240x320 | [UC v9.0初始化/测试网络](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-06/result.json>) | 无新增；尚未确认后续按键响应或可玩场景 |
 | jar-07 / [乱世Q三国.jar](</home/lucinhu/Downloads/jar/乱世Q三国.jar>) | 乱世Q三国 / 240x320 | [是否开启音乐](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-07/result.json>) | [音效→标题→主菜单→章节剧情选择；末次down未见明显选择变化](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-07-contact.png>) |
 | jar-08 / [仙镜OL-羊羊得意_诺基亚 N97系列(360×640)-1121281.jar](</home/lucinhu/Downloads/jar/仙镜OL-羊羊得意_诺基亚 N97系列(360×640)-1121281.jar>) | 仙镜online / 360x640 | [联网方式确定/返回提示](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-08/result.json>) | [--network后HTTP request failed；40秒超时，无新帧；不作在线成功判断](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-08-contact.png>) |
-| jar-09 / [侠义OL-八龙聚首_诺基亚 N97系列(360×640)-871204.jar](</home/lucinhu/Downloads/jar/侠义OL-八龙聚首_诺基亚 N97系列(360×640)-871204.jar>) | xyOnline / 360x640 | [请检查设备网络连接提示](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-09/result.json>) | [--network后可从标题推进到注册协议，再到游客注册表；未填写/提交账户，无在线游玩证据](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-09-contact.png>) |
+| jar-09 / [侠义OL-八龙聚首_诺基亚 N97系列(360×640)-871204.jar](</home/lucinhu/Downloads/jar/侠义OL-八龙聚首_诺基亚 N97系列(360×640)-871204.jar>) | xyOnline / 360x640 | [请检查设备网络连接提示](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-09/result.json>) | [2026-10-19修复后：桌面原JAR触摸打开编辑Form、返回并重开；独立Android API21实例弹出系统IME，test5678确认回显、复开保留，追加ZZ后取消不覆盖旧值，再开IME成功；原手机/中文IME待复测，未提交注册或验证在线游玩](</home/lucinhu/workspace/c/nano_j2me/docs/notes/2026-10-17-xy-ime.md>) |
 | jar-10 / [孤岛余生2时间之谜.jar](</home/lucinhu/Downloads/jar/孤岛余生2时间之谜.jar>) | Stranded 2 serviak / 240x320 | [英文语言选择](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-10/result.json>) | [语言→音效→Glu→标题→英文主菜单；有白底/菜单背景异常，尚未开始场景](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-10-contact.png>) |
 | jar-11 / [孤岛余生2时间之谜汉化版.jar](</home/lucinhu/Downloads/jar/孤岛余生2时间之谜汉化版.jar>) | 孤岛余生2 / 240x320 | [中文语言选择](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-01/result.json>) | 与jar-01字节相同，复用01：[语言→音效→Glu→标题→中文主菜单；输入推进已观察，尚未开始场景](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-01-contact.png>) |
 | jar-12 / [孤岛余生2时间之谜汉化版_大显 CU928系列(240×320)-637190.jar](</home/lucinhu/Downloads/jar/孤岛余生2时间之谜汉化版_大显 CU928系列(240×320)-637190.jar>) | 孤岛余生2 / 240x320 | [MINISOYO logo](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-12/result.json>) | [60秒停黑底省略号；fire/soft1/fire后仍未见菜单](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-12-long-contact.png>) |
 | jar-13 / [孤岛余生2时间之谜汉化版_诺基亚 E60系列(352×416)-676805.jar](</home/lucinhu/Downloads/jar/孤岛余生2时间之谜汉化版_诺基亚 E60系列(352×416)-676805.jar>) | 孤岛余生2 / 352x416 | [MINISOYO logo](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-13/result.json>) | 无新增；尚未确认后续按键响应或可玩场景 |
 | jar-14 / [孤岛余生2时间之谜汉化版_诺基亚 E62系列(320×240)-664471.jar](</home/lucinhu/Downloads/jar/孤岛余生2时间之谜汉化版_诺基亚 E62系列(320×240)-664471.jar>) | 孤岛余生2 / 320x240 | [MINISOYO logo](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-14/result.json>) | 无新增；尚未确认后续按键响应或可玩场景 |
 | jar-15 / [孤岛余生2时间之谜汉化版_诺基亚 N73系列(240×320)-631579.jar](</home/lucinhu/Downloads/jar/孤岛余生2时间之谜汉化版_诺基亚 N73系列(240×320)-631579.jar>) | 孤岛余生2 / 240x320 | [中文语言选择](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-01/result.json>) | 与jar-01字节相同，复用01：[语言→音效→Glu→标题→中文主菜单；输入推进已观察，尚未开始场景](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-01-contact.png>) |
-| jar-16 / [孤岛余生2时间之谜汉化版_诺基亚 N97系列(360×640)-665244.jar](</home/lucinhu/Downloads/jar/孤岛余生2时间之谜汉化版_诺基亚 N97系列(360×640)-665244.jar>) | 孤岛余生2 / 360x640 | [MINISOYO logo](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-16/result.json>) | 无新增；尚未确认后续按键响应或可玩场景 |
+| jar-16 / [孤岛余生2时间之谜汉化版_诺基亚 N97系列(360×640)-665244.jar](</home/lucinhu/Downloads/jar/孤岛余生2时间之谜汉化版_诺基亚 N97系列(360×640)-665244.jar>) | 孤岛余生2 / 360x640 | [MINISOYO logo](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-16/result.json>) | [2026-10-19原N97版：标题→新游戏对白→丛林→室内→soft2暂停已验证；fire/soft1推进对白、soft2打开暂停菜单；方向移动/战斗/保存未验证](</home/lucinhu/workspace/c/nano_j2me/docs/notes/2026-10-19-island2-gameplay.md>) |
 | jar-17 / [家园6之革命完美汉化版_摩托罗拉 A1000系列(208x320).jar](</home/lucinhu/Downloads/jar/家园6之革命完美汉化版_摩托罗拉 A1000系列(208x320).jar>) | Townsmen 6 / 208x320 | [法国旗/请稍候加载（18旋转显示；24无文字）](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-17/result.json>) | [修复后60秒：标题→战役地图→村庄对白，按键推进](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/townsmen-loader-20261017/variants/v1/contact.png>) |
 | jar-18 / [家园6之革命完美汉化版_摩托罗拉 A760系列(240x320).jar](</home/lucinhu/Downloads/jar/家园6之革命完美汉化版_摩托罗拉 A760系列(240x320).jar>) | Townsmen 6 / 240x320 | [法国旗/请稍候加载（18旋转显示；24无文字）](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-18/result.json>) | [修复后60秒：标题→战役地图→村庄对白，按键推进；A760仍旋转显示](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/townsmen-loader-20261017/variants/v2/contact.png>) |
 | jar-19 / [家园6之革命完美汉化版_索爱 K700系列(176x220).jar](</home/lucinhu/Downloads/jar/家园6之革命完美汉化版_索爱 K700系列(176x220).jar>) | Townsmen 6 / 176x220 | [法国旗/请稍候加载（18旋转显示；24无文字）](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-19/result.json>) | [修复后60秒：标题→战役地图→村庄对白，按键推进](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/townsmen-loader-20261017/variants/v3/contact.png>) |
@@ -103,7 +103,7 @@ native-ime提供独立build-ime/nj2me，SHA-256 `ebb421a66aa7dbc521eb9c2805009da
 ## 网络与异常细节
 
 - 旧仙镜/侠义日志明确是`this build has no HTTP support; the port must supply it`，不能据此判断服务器已失效。新仙镜在`HttpImpl.getResponseCode()I`记录`the HTTP request failed`并打印游戏捕获的异常堆栈；40秒无帧。未得到响应内容，不能推断DNS、服务器、代理或连接哪个环节失败。
-- 新侠义到注册协议和游客注册表仅证明流程画面与按键推进；未提交凭据、未创建账号、未验证在线战斗。网易云仅列表高亮响应，未验证搜索结果或播放。
+- 侠义2026-10-19已在原JAR的独立Android实例验证本地账号编辑、确认回显、取消保留旧值和重开IME；未提交凭据、未创建账号、未验证在线战斗，原手机中文IME待复测。网易云搜索Form已可打开/返回，未验证搜索结果或播放。
 - City Bloxx旧日志：`thrown: java/lang/RuntimeException at o.a(IZ)V pc=15: containsKey`，随后`run ended: the MIDlet called System.exit()`，frames=0。早先getResourceAsStream、label is null等也是原日志内容，不将它们未经定位归为同一根因。
 - 极品飞车14新日志有`java/lang/NullPointerException at ah.<init>(Lcom/ea/nfs10/MonkeyApp;)V pc=518/526`与`ah.w()V pc=460/468`的thrown记录，但没有uncaught；画面到教程询问，随后超时。
 - 新RMS下RecordStoreNotFoundException、InvalidRecordIDException等thrown不等于线程终止；原始日志均保留。
@@ -115,7 +115,7 @@ native-ime提供独立build-ime/nj2me，SHA-256 `ebb421a66aa7dbc521eb9c2805009da
 - [本次10条30秒回放结果](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/results.json>)。
 - [本次5条60秒回放结果](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/extended-results.json>)。
 
-剩余：孤岛三个其他MINISOYO变体只保留6秒基线；家园6八个版本已分别完成修复后60秒交互回放。UC仅保留基线；远古帝国2第5轮已推进至战役地图与对白，并修复恢复快照后的音频资源崩溃，画面与战斗操作仍待验证。主菜单成功不等于完整可玩；比赛证据不等于完成一局。
+剩余：孤岛CU928/E60/E62三个MINISOYO变体尚待isShown修复后回归（CU928另有旧构建60秒省略号记录）；家园6八个版本已分别完成修复后60秒交互回放。UC仅保留基线；远古帝国2第5轮已推进至战役地图与对白，并修复恢复快照后的音频资源崩溃，画面与战斗操作仍待验证。主菜单成功不等于完整可玩；比赛证据不等于完成一局。
 
 ## 既有27唯一基线执行与异常边界
 

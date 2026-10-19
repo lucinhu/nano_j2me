@@ -2947,7 +2947,7 @@ static nj_ref cmd_snapshot(nj_vm *vm, nj_ref displayable, int *out_count)
     return arr;
 }
 
-/* The command that the left soft key should invoke: highest priority first. */
+/* Legacy Canvas command ordering: highest priority first. */
 static nj_ref cmd_default(nj_vm *vm, nj_ref displayable, int *out_index)
 {
     nj_ref arr;
@@ -2988,6 +2988,60 @@ static nj_ref cmd_default(nj_vm *vm, nj_ref displayable, int *out_index)
         *out_index = best;
     }
     return nj_array_get_ref(arr, (nj_u4)best);
+}
+
+/* Built-in screens reserve the right soft key for a dismiss command. Keep
+ * priority ordering within each group, so an equal-priority CANCEL cannot
+ * hide OK (as in the registration editor used by Xiayi OL). Rendering and
+ * dispatch use this same assignment; Canvas key conventions remain separate. */
+static void screen_commands(nj_vm *vm, nj_ref displayable,
+                            nj_ref *left, nj_ref *right)
+{
+    int n = 0, i;
+    nj_ref arr = cmd_snapshot(vm, displayable, &n);
+    nj_ref best[2] = {NULL, NULL};
+    nj_s4 priority[2] = {0, 0}, type[2] = {0, 0};
+
+    *left = *right = NULL;
+    if (!arr) {
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        nj_ref c = nj_array_get_ref(arr, (nj_u4)i);
+        nj_s4 p, t;
+        int dismiss;
+        if (!c) { continue; }
+        p = fget(vm, c, NJ_C_COMMAND, "cmdPriority", D_INT);
+        t = fget(vm, c, NJ_C_COMMAND, "cmdType", D_INT);
+        dismiss = (t == 2 || t == 3 || t == 6 || t == 7);
+        if (!best[dismiss] || p < priority[dismiss] ||
+            (p == priority[dismiss] && t < type[dismiss])) {
+            best[dismiss] = c;
+            priority[dismiss] = p;
+            type[dismiss] = t;
+        }
+    }
+    *left = best[0] ? best[0] : best[1];
+    *right = best[0] ? best[1] : NULL;
+    if (*right) {
+        return;
+    }
+    /* With no opposite group, expose the next command on the right. A lone
+     * command remains reachable from either key. */
+    for (i = 0; i < n; i++) {
+        nj_ref c = nj_array_get_ref(arr, (nj_u4)i);
+        nj_s4 p, t;
+        if (!c || c == *left) { continue; }
+        p = fget(vm, c, NJ_C_COMMAND, "cmdPriority", D_INT);
+        t = fget(vm, c, NJ_C_COMMAND, "cmdType", D_INT);
+        if (!*right || p < priority[0] ||
+            (p == priority[0] && t < type[0])) {
+            *right = c;
+            priority[0] = p;
+            type[0] = t;
+        }
+    }
+    if (!*right) { *right = *left; }
 }
 
 /* Deliver commandAction(Command, Displayable) to the listener. */
@@ -3058,13 +3112,11 @@ static int canvas_command_activate(nj_vm *vm, nj_ref d, int key)
     return command_dispatch(vm, d, c);
 }
 
-static int command_default_activate(nj_vm *vm, nj_ref displayable)
+static int screen_command_activate(nj_vm *vm, nj_ref displayable, int right_key)
 {
-    nj_ref c = cmd_default(vm, displayable, NULL);
-    if (!c) {
-        return 0;
-    }
-    return command_dispatch(vm, displayable, c);
+    nj_ref left, right;
+    screen_commands(vm, displayable, &left, &right);
+    return command_dispatch(vm, displayable, right_key ? right : left);
 }
 
 /* Deliver itemCommandAction(Command, Item). */
@@ -3214,10 +3266,9 @@ NJFN(d_removeCommand)
     nj_ref v = cmd_vector(vm, self);
     nj_value a[1];
 
-    if (!c) {
-        return nj_throw(vm, "java/lang/NullPointerException", "command is null");
-    }
-    if (!v) {
+    /* MIDP permits null and absent commands here. Games commonly clear
+     * optional commands before building a new editor/displayable. */
+    if (!c || !v) {
         return NJ_OK;
     }
     a[0].r = c;
@@ -3270,11 +3321,12 @@ NJFN(d_isShown)
         ret->i = 0;
         return NJ_OK;
     }
-    if (isa(vm, self, NJ_C_CANVAS)) {
-        ret->i = fget(vm, self, NJ_C_CANVAS, F_C_VISIBLE, D_BOOL) ? 1 : 0;
-    } else {
-        ret->i = 1;
-    }
+    /* This runtime has one foreground Display and no obscuring system screen.
+     * Current-screen identity therefore determines isShown(), including before
+     * the first paint delivers showNotify(). F_C_VISIBLE tracks that callback
+     * separately: using it here made startup wrappers resume an application a
+     * second time immediately after setCurrent(), before its loader finished. */
+    ret->i = 1;
     return NJ_OK;
 }
 
@@ -3937,21 +3989,18 @@ static void ui_title(nj_vm *vm, nj_gfx *g, nj_ref title, int w, int scroll)
 static void ui_softkeys(nj_vm *vm, nj_gfx *g, nj_ref displayable, int w,
                         const ui_frame *uf)
 {
-    int n = 0;
-    nj_ref arr = cmd_snapshot(vm, displayable, &n);
-    int i;
+    nj_ref commands[2];
+    int col;
     int y = g->surf->height - UI_BAR_H;
-    int col = 0;
+    screen_commands(vm, displayable, &commands[0], &commands[1]);
+    if (commands[0] == commands[1]) { commands[1] = NULL; }
 
     nj_gfx_set_color(g, UI_SOFT_BG);
     nj_gfx_fill_rect(g, 0, y, w, UI_BAR_H);
     nj_gfx_set_color(g, UI_BORDER);
     nj_gfx_line(g, 0, y, w - 1, y);
-    if (!arr || n <= 0) {
-        return;
-    }
-    for (i = 0; i < n && col < 3; i++) {
-        nj_ref c = nj_array_get_ref(arr, (nj_u4)i);
+    for (col = 0; col < 2; col++) {
+        nj_ref c = commands[col];
         nj_ref label;
         int lw;
         int x;
@@ -3965,17 +4014,12 @@ static void ui_softkeys(nj_vm *vm, nj_gfx *g, nj_ref displayable, int w,
         }
         lw = text_width(vm, uf->small, label);
         if (lw > w / 2 - 4) {
-            break;
+            continue;
         }
         x = (col == 0) ? UI_PAD : (w - UI_PAD - lw);
         nj_gfx_set_color(g, UI_TEXT);
         text_draw(g, label, x, y + (UI_BAR_H - uf->small_h) / 2 + 1,
                   NJ_ANCHOR_LEFT | NJ_ANCHOR_TOP);
-        if (col == 0) {
-            col = 1;
-        } else {
-            col = 2;
-        }
     }
 }
 
@@ -4347,8 +4391,7 @@ static int ui_is_down(int action)
 
 static int ui_is_fire(int action)
 {
-    return (action == NJ_MIDP_KEY_FIRE || action == NJ_GAME_FIRE ||
-            action == NJ_MIDP_KEY_SOFT2) ? 1 : 0;
+    return (action == NJ_MIDP_KEY_FIRE || action == NJ_GAME_FIRE) ? 1 : 0;
 }
 
 static int screen_move(nj_vm *vm, nj_ref d, int delta)
@@ -4517,7 +4560,7 @@ static int screen_activate(nj_vm *vm, nj_ref d)
         }
         return 0;
     }
-    return command_default_activate(vm, d);
+    return screen_command_activate(vm, d, 0);
 }
 
 /*
@@ -4551,8 +4594,13 @@ static int displayable_key(nj_vm *vm, nj_ref d, int action, int down)
     if (ui_is_fire(action)) {
         return screen_activate(vm, d);
     }
-    if (action == NJ_MIDP_KEY_SOFT1) {
-        return command_default_activate(vm, d);
+    if (action == NJ_MIDP_KEY_SOFT1 || action == NJ_MIDP_KEY_SOFT2) {
+        if (screen_command_activate(vm, d, action == NJ_MIDP_KEY_SOFT2)) {
+            return 1;
+        }
+        /* Preserve selection/dismissal for implicit Lists and Alerts that
+         * have no explicit command assigned to this key. */
+        return screen_activate(vm, d);
     }
     return 0;
 }
@@ -5728,7 +5776,11 @@ NJFN(si_addCommand)
 
 NJFN(si_removeCommand)
 {
-    rput(vm, NJ_THIS(args), NJ_C_STRINGITEM, "siCmd", D_CMD, NULL);
+    nj_ref self = NJ_THIS(args);
+    nj_ref c = NJ_ARG_REF(args, 0);
+    if (c && c == rget(vm, self, NJ_C_STRINGITEM, "siCmd", D_CMD)) {
+        rput(vm, self, NJ_C_STRINGITEM, "siCmd", D_CMD, NULL);
+    }
     return NJ_OK;
 }
 
@@ -6386,6 +6438,7 @@ NJFN(tf_setMaxSize)
     }
     rput(vm, self, NJ_C_TEXTFIELD, "tfChars", D_CHARR, chars);
     fput(vm, self, NJ_C_TEXTFIELD, "tfMax", D_INT, max);
+    ret->i = max;
     return NJ_OK;
 }
 
@@ -8704,6 +8757,7 @@ NJFN(tb_setMaxSize)
     }
     rput(vm, self, NJ_C_TEXTBOX, "tbChars", D_CHARR, chars);
     fput(vm, self, NJ_C_TEXTBOX, "tbMax", D_INT, max);
+    ret->i = max;
     return NJ_OK;
 }
 
@@ -10226,7 +10280,7 @@ static const nj_builtin_method textfield_methods[] = {
     M("delete",          "(II)V", 0),
     M("size",            "()I", 0),
     M("getMaxSize",      "()I", 0),
-    M("setMaxSize",      "(I)V", 0),
+    M("setMaxSize",      "(I)I", 0),
     M("getConstraints",  "()I", 0),
     M("setConstraints",  "(I)V", 0),
     M("setInitialInputMode", "(Ljava/lang/String;)V", 0),
@@ -10372,7 +10426,7 @@ static const nj_builtin_method textbox_methods[] = {
     M("delete",          "(II)V", 0),
     M("size",            "()I", 0),
     M("getMaxSize",      "()I", 0),
-    M("setMaxSize",      "(I)V", 0),
+    M("setMaxSize",      "(I)I", 0),
     M("getConstraints",  "()I", 0),
     M("setConstraints",  "(I)V", 0),
     M("setInitialInputMode", "(Ljava/lang/String;)V", 0),
@@ -10855,7 +10909,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_TEXTFIELD, "delete", "(II)V", tf_delete },
     { NJ_C_TEXTFIELD, "size", "()I", tf_size },
     { NJ_C_TEXTFIELD, "getMaxSize", "()I", tf_getMaxSize },
-    { NJ_C_TEXTFIELD, "setMaxSize", "(I)V", tf_setMaxSize },
+    { NJ_C_TEXTFIELD, "setMaxSize", "(I)I", tf_setMaxSize },
     { NJ_C_TEXTFIELD, "getConstraints", "()I", tf_getConstraints },
     { NJ_C_TEXTFIELD, "setConstraints", "(I)V", tf_setConstraints },
     { NJ_C_TEXTFIELD, "setInitialInputMode", "(Ljava/lang/String;)V", tf_setInitialInputMode },
@@ -10933,7 +10987,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_TEXTBOX, "delete", "(II)V", tb_delete },
     { NJ_C_TEXTBOX, "size", "()I", tb_size },
     { NJ_C_TEXTBOX, "getMaxSize", "()I", tb_getMaxSize },
-    { NJ_C_TEXTBOX, "setMaxSize", "(I)V", tb_setMaxSize },
+    { NJ_C_TEXTBOX, "setMaxSize", "(I)I", tb_setMaxSize },
     { NJ_C_TEXTBOX, "getConstraints", "()I", tb_getConstraints },
     { NJ_C_TEXTBOX, "setConstraints", "(I)V", tb_setConstraints },
     { NJ_C_TEXTBOX, "setInitialInputMode", "(Ljava/lang/String;)V", tb_setInitialInputMode },

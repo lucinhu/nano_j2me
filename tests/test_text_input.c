@@ -323,7 +323,8 @@ static void item_command_test(void)
 {
     nj_port port;
     nj_vm *vm;
-    nj_ref field, item;
+    nj_ref field, item, form, command, other, commands;
+    nj_field *slot;
     nj_value args[3], ret;
     int types[] = {1, 2, 8}, i;
     CHECK(nj_port_headless(&port) == NJ_OK);
@@ -350,12 +351,178 @@ static void item_command_test(void)
     CHECK(nj_call(vm, item, NJ_C_STRINGITEM, "addCommand", "(Ljavax/microedition/lcdui/Command;)V", args, NULL) != NJ_OK);
     CHECK(vm->exception && !strcmp(vm->exception->cls->name, "java/lang/NullPointerException"));
     vm->exception = NULL;
+    /* A Canvas opens an editor Form after clearing optional (possibly null)
+     * commands. Null removal must not abort construction or erase commands. */
+    args[0].r = string(vm, "editor");
+    form = make(vm, NJ_C_FORM, "(Ljava/lang/String;)V", args);
+    args[0].r = NULL;
+    CHECK(nj_call(vm, form, NJ_C_DISPLAYABLE, "removeCommand", "(Ljavax/microedition/lcdui/Command;)V", args, NULL) == NJ_OK);
+    args[0].r = string(vm, "OK"); args[1].i = 4; args[2].i = 0;
+    command = make(vm, NJ_C_COMMAND, "(Ljava/lang/String;II)V", args);
+    other = make(vm, NJ_C_COMMAND, "(Ljava/lang/String;II)V", args);
+    args[0].r = command;
+    CHECK(nj_call(vm, form, NJ_C_DISPLAYABLE, "addCommand", "(Ljavax/microedition/lcdui/Command;)V", args, NULL) == NJ_OK);
+    CHECK(nj_call(vm, item, NJ_C_STRINGITEM, "addCommand", "(Ljavax/microedition/lcdui/Command;)V", args, NULL) == NJ_OK);
+    for (i = 0; i < 2; i++) {
+        args[0].r = i ? other : NULL;
+        CHECK(nj_call(vm, form, NJ_C_DISPLAYABLE, "removeCommand", "(Ljavax/microedition/lcdui/Command;)V", args, NULL) == NJ_OK);
+        CHECK(nj_call(vm, field, NJ_C_ITEM, "removeCommand", "(Ljavax/microedition/lcdui/Command;)V", args, NULL) == NJ_OK);
+        CHECK(nj_call(vm, item, NJ_C_STRINGITEM, "removeCommand", "(Ljavax/microedition/lcdui/Command;)V", args, NULL) == NJ_OK);
+        slot = nj_field_lookup(vm, NJ_C_DISPLAYABLE, NJ_F_D_COMMANDS, "Ljava/util/Vector;", 0);
+        commands = nj_field_read_ref(vm, form, slot);
+        CHECK(commands != NULL);
+        CHECK(nj_call(vm, commands, "java/util/Vector", "size", "()I", NULL, &ret) == NJ_OK && ret.i == 1);
+        slot = nj_field_lookup(vm, NJ_C_STRINGITEM, "siCmd", "Ljavax/microedition/lcdui/Command;", 0);
+        CHECK(nj_field_read_ref(vm, item, slot) == command);
+    }
+    args[0].r = command;
+    CHECK(nj_call(vm, item, NJ_C_STRINGITEM, "removeCommand", "(Ljavax/microedition/lcdui/Command;)V", args, NULL) == NJ_OK);
+    CHECK(nj_field_read_ref(vm, item, slot) == NULL);
+    CHECK(nj_call(vm, form, NJ_C_DISPLAYABLE, "removeCommand", "(Ljavax/microedition/lcdui/Command;)V", args, NULL) == NJ_OK);
+    CHECK(nj_call(vm, commands, "java/util/Vector", "size", "()I", NULL, &ret) == NJ_OK && ret.i == 0);
+    args[0].r = NULL;
+    CHECK(nj_call(vm, form, NJ_C_DISPLAYABLE, "addCommand", "(Ljavax/microedition/lcdui/Command;)V", args, NULL) != NJ_OK);
+    CHECK(vm->exception && !strcmp(vm->exception->cls->name, "java/lang/NullPointerException"));
+    vm->exception = NULL;
+    nj_vm_destroy(vm); nj_port_shutdown(&port);
+}
+static nj_ref dispatched_command, dispatched_screen;
+static int command_calls;
+static nj_status capture_command(nj_vm *vm, nj_thread *th,
+                                 nj_value *args, nj_value *ret)
+{
+    (void)vm; (void)th; (void)ret;
+    dispatched_command = args[0].r;
+    dispatched_screen = args[1].r;
+    command_calls++;
+    return NJ_OK;
+}
+static nj_ref new_command(nj_vm *vm, const char *label, int type, int priority)
+{
+    nj_value args[3];
+    args[0].r = string(vm, label); args[1].i = type; args[2].i = priority;
+    return make(vm, NJ_C_COMMAND, "(Ljava/lang/String;II)V", args);
+}
+static void check_command_key(nj_vm *vm, int key, nj_ref screen, nj_ref command)
+{
+    int before = command_calls;
+    CHECK(nj_midp_key(vm, key, 1));
+    CHECK(command_calls == before + 1 && dispatched_command == command &&
+          dispatched_screen == screen);
+    (void)nj_midp_key(vm, key, 0);
+    CHECK(command_calls == before + 1 && !vm->exception);
+}
+static void editor_command_test(void)
+{
+    static const nj_builtin_method methods[] = {
+        {"commandAction", "(Ljavax/microedition/lcdui/Command;Ljavax/microedition/lcdui/Displayable;)V", NJ_ACC_PUBLIC}
+    };
+    static const nj_builtin_class fixture = {
+        "test/EditorCommands", "java/lang/Object", NJ_ACC_PUBLIC,
+        NULL, 0u, methods, 1u
+    };
+    nj_port port;
+    nj_vm *vm;
+    nj_class *cls;
+    nj_ref listener, confirm, cancel, field, screen;
+    nj_value arg;
+    int i;
+    const nj_u2 chinese[] = {0x4e2d, 0x6587};
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    port.text_input = capture;
+    vm = nj_vm_create(&port, 4u * 1024u * 1024u);
+    CHECK(vm != NULL); if (!vm) { nj_port_shutdown(&port); return; }
+    cls = nj_class_create_builtin(vm, &fixture);
+    CHECK(cls != NULL); if (!cls) { nj_vm_destroy(vm); nj_port_shutdown(&port); return; }
+    cls->methods[0].native = capture_command;
+    listener = nj_root(vm, nj_object_new(vm, fixture.name));
+    CHECK(listener != NULL);
+    confirm = new_command(vm, "OK", 4, 1);
+    cancel = new_command(vm, "Back", 3, 1);
+    for (i = 0; i < 2; i++) {
+        field = widget(vm, i ? NJ_C_TEXTBOX : NJ_C_TEXTFIELD, 32, 0, "");
+        screen = field;
+        if (!i) {
+            arg.r = string(vm, "Account");
+            screen = make(vm, NJ_C_FORM, "(Ljava/lang/String;)V", &arg);
+            arg.r = field;
+            CHECK(nj_call(vm, screen, NJ_C_FORM, "append", "(Ljavax/microedition/lcdui/Item;)I", &arg, NULL) == NJ_OK);
+        }
+        /* Xiayi uses CANCEL and OK at the same priority. Check both
+         * insertion orders and ensure the right key never fires OK. */
+        arg.r = i ? confirm : cancel;
+        CHECK(nj_call(vm, screen, NJ_C_DISPLAYABLE, "addCommand", "(Ljavax/microedition/lcdui/Command;)V", &arg, NULL) == NJ_OK);
+        arg.r = i ? cancel : confirm;
+        CHECK(nj_call(vm, screen, NJ_C_DISPLAYABLE, "addCommand", "(Ljavax/microedition/lcdui/Command;)V", &arg, NULL) == NJ_OK);
+        arg.r = listener;
+        CHECK(nj_call(vm, screen, NJ_C_DISPLAYABLE, "setCommandListener", "(Ljavax/microedition/lcdui/CommandListener;)V", &arg, NULL) == NJ_OK);
+        current(vm, screen);
+        CHECK(commit(vm, "\xe4\xb8\xad\xe6\x96\x87", snapshot.session));
+        check_command_key(vm, NJ_KEY_SOFT_LEFT, screen, confirm);
+        expect(vm, field, i ? NJ_C_TEXTBOX : NJ_C_TEXTFIELD, chinese, 2);
+        check_command_key(vm, NJ_KEY_SOFT_RIGHT, screen, cancel);
+        check_command_key(vm, NJ_KEY_FIRE, screen, confirm);
+        /* Removing one command must not leave the remaining command
+         * unreachable. Then cover two positive commands with priorities. */
+        arg.r = cancel;
+        CHECK(nj_call(vm, screen, NJ_C_DISPLAYABLE, "removeCommand", "(Ljavax/microedition/lcdui/Command;)V", &arg, NULL) == NJ_OK);
+        check_command_key(vm, NJ_KEY_SOFT_LEFT, screen, confirm);
+        check_command_key(vm, NJ_KEY_SOFT_RIGHT, screen, confirm);
+        arg.r = new_command(vm, "Help", 5, 0);
+        CHECK(nj_call(vm, screen, NJ_C_DISPLAYABLE, "addCommand", "(Ljavax/microedition/lcdui/Command;)V", &arg, NULL) == NJ_OK);
+        check_command_key(vm, NJ_KEY_SOFT_LEFT, screen, arg.r);
+        check_command_key(vm, NJ_KEY_SOFT_RIGHT, screen, confirm);
+    }
+    nj_vm_destroy(vm); nj_port_shutdown(&port);
+}
+static void max_size_test(void)
+{
+    nj_port port;
+    nj_vm *vm;
+    const char *classes[] = {NJ_C_TEXTFIELD, NJ_C_TEXTBOX};
+    const nj_u2 text[] = {'o', 'l', 'd', 0x4e2d};
+    int i;
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    port.text_input = capture;
+    vm = nj_vm_create(&port, 4u * 1024u * 1024u);
+    CHECK(vm != NULL); if (!vm) { nj_port_shutdown(&port); return; }
+    for (i = 0; i < 2; i++) {
+        nj_ref editor = widget(vm, classes[i], 4, 0, "old");
+        nj_ref displayable = editor;
+        nj_value arg, ret;
+        nj_u4 session;
+        if (i == 0) {
+            arg.r = string(vm, "editor");
+            displayable = make(vm, NJ_C_FORM, "(Ljava/lang/String;)V", &arg);
+            arg.r = editor;
+            CHECK(nj_call(vm, displayable, NJ_C_FORM, "append", "(Ljavax/microedition/lcdui/Item;)I", &arg, NULL) == NJ_OK);
+        }
+        current(vm, displayable);
+        session = snapshot.session;
+        arg.i = 12;
+        /* Real games link to int setMaxSize(int), then use the editor. */
+        CHECK(nj_call(vm, editor, classes[i], "setMaxSize", "(I)I", &arg, &ret) == NJ_OK && ret.i == 12);
+        CHECK(nj_call(vm, editor, classes[i], "getMaxSize", "()I", NULL, &ret) == NJ_OK && ret.i == 12);
+        nj_midp_text_input_sync(vm);
+        CHECK(snapshot.active && snapshot.max_length == 12 && snapshot.session != session);
+        CHECK(!commit(vm, "X", session));
+        CHECK(commit(vm, "\xe4\xb8\xad", snapshot.session));
+        expect(vm, editor, classes[i], text, 4);
+        arg.i = 0;
+        CHECK(nj_call(vm, editor, classes[i], "setMaxSize", "(I)I", &arg, &ret) != NJ_OK);
+        CHECK(vm->exception && !strcmp(vm->exception->cls->name, "java/lang/IllegalArgumentException"));
+        vm->exception = NULL;
+        CHECK(nj_call(vm, editor, classes[i], "getMaxSize", "()I", NULL, &ret) == NJ_OK && ret.i == 12);
+        expect(vm, editor, classes[i], text, 4);
+    }
     nj_vm_destroy(vm); nj_port_shutdown(&port);
 }
 int main(void)
 {
     runtime_test();
     item_command_test();
+    editor_command_test();
+    max_size_test();
 #ifdef NJ_HAVE_SDL2
     sdl_test();
 #endif

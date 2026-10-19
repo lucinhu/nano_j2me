@@ -2016,7 +2016,7 @@ static void test_widgets(nj_vm *vm)
         OK_MSG(exc_is(vm, "java/lang/IllegalArgumentException"),
                "URL TextBox accepted a space");
         a[0] = iref(32);
-        (void)nj_call(vm, tb, NJ_C_TEXTBOX, "setMaxSize", "(I)V", a, NULL);
+        OK(call_int(vm, tb, NJ_C_TEXTBOX, "setMaxSize", "(I)I", a, &ok) == 32 && ok);
         OK(call_int(vm, tb, NJ_C_TEXTBOX, "getMaxSize", "()I", NULL, &ok) == 32 && ok);
     }
 
@@ -2244,7 +2244,26 @@ static void test_screen(nj_vm *vm)
                         NULL, &ok) == 1 && ok);
             OK(call_int(vm, canvas, NJ_C_CANVAS, "hasPointerEvents", "()Z",
                         NULL, &ok) == ((vm->midp_flags & NJ_MIDP_HAS_POINTER) ? 1 : 0) && ok);
+            OK(call_int(vm, canvas, NJ_C_DISPLAYABLE, "isShown", "()Z",
+                        NULL, &ok) == 0 && ok);
             OK(nj_midp_set_current(vm, canvas) == NJ_OK);
+            /* Launch wrappers query isShown immediately after setCurrent.
+             * Delaying it until the first paint can start the MIDlet twice. */
+            OK(call_int(vm, canvas, NJ_C_DISPLAYABLE, "isShown", "()Z",
+                        NULL, &ok) == 1 && ok);
+            OK(call_int(vm, form, NJ_C_DISPLAYABLE, "isShown", "()Z",
+                        NULL, &ok) == 0 && ok);
+            OK(nj_call(vm, canvas, NJ_C_CANVAS, "setFullScreenMode", "(Z)V",
+                       (nj_value[]){ iref(1) }, NULL) == NJ_OK);
+            OK(nj_midp_set_current(vm, NULL) == NJ_OK);
+            OK(call_int(vm, canvas, NJ_C_DISPLAYABLE, "isShown", "()Z",
+                        NULL, &ok) == 0 && ok);
+            OK(nj_midp_set_current(vm, form) == NJ_OK);
+            OK(call_int(vm, form, NJ_C_DISPLAYABLE, "isShown", "()Z",
+                        NULL, &ok) == 1 && ok);
+            OK(nj_midp_set_current(vm, canvas) == NJ_OK);
+            OK(call_int(vm, canvas, NJ_C_DISPLAYABLE, "isShown", "()Z",
+                        NULL, &ok) == 1 && ok);
             /* paint() is abstract on Canvas: a subclass that never overrides it
              * must fail loudly rather than draw a blank frame. */
             OK_MSG(nj_midp_paint(vm) != NJ_OK,

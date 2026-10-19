@@ -1,21 +1,18 @@
 /*
  * nano_j2me - tests/test_fullscreen.c
  *
- * When does a Canvas become "visible"?
+ * Selecting a Canvas and delivering its visibility callback are separate.
  *
- * Displayable.setFullScreenMode() has to throw IllegalStateException while the
- * Displayable is visible, so the answer decides whether this sequence - which
- * 开心农场 runs inside its Canvas constructor, and which is legal on the
- * handsets these titles were written for - works or dies before the first
- * frame:
+ * 开心农场 runs this legal sequence inside its Canvas constructor; the mode
+ * change must succeed before its first frame:
  *
  *     Display.getDisplay(midlet).setCurrent(this);
  *     setFullScreenMode(true);
  *
  * The runtime used to deliver showNotify() synchronously from setCurrent(), so
- * the Canvas was visible the instant setCurrent() returned and the mode change
- * threw.  It now leaves showNotify() to the frame that shows the Canvas, which
- * is the order a real device has.
+ * the mode change threw.  Keep showNotify() deferred until presentation, but
+ * report isShown() immediately for the current Displayable: launch wrappers
+ * otherwise call startApp() again before their first frame.
  *
  * The fixture (tools/make_fsorder_jar.sh) prints what it observed, so this is
  * an assertion about the ordering rather than about a screenshot.
@@ -116,17 +113,17 @@ int main(int argc, char **argv)
     CHECK(strstr(cap.buf, "setFullScreenMode() on a visible Displayable") == NULL,
           "the ordering rule was not violated");
 
-    /* setCurrent() must NOT have shown it: that is what makes the change legal. */
-    CHECK(strstr(cap.buf, "FSORDER current shown=false") != NULL,
-          "setCurrent() returned with the Canvas not yet visible");
+    /* Selection is observable before the deferred presentation callback. */
+    CHECK(strstr(cap.buf, "FSORDER current shown=true shows=0") != NULL,
+          "the current Canvas is shown before its deferred showNotify()");
 
     /* And the mode change must have taken effect. */
     CHECK(strstr(cap.buf, "FSORDER full=true") != NULL,
           "the Canvas is in full-screen mode");
 
-    /* By paint time it IS visible - showNotify() still runs before paint(). */
-    CHECK(strstr(cap.buf, "FSORDER painted shown=true full=true") != NULL,
-          "the Canvas is visible by the time paint() runs, and still full screen");
+    /* showNotify() still runs exactly once before the first paint(). */
+    CHECK(strstr(cap.buf, "FSORDER painted shown=true full=true shows=1") != NULL,
+          "the full-screen Canvas receives showNotify() before its first paint");
 
     if (failures) {
         printf("--- runtime output ---\n%s\n", cap.buf);
