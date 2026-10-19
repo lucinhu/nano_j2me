@@ -440,6 +440,58 @@ static void test_full_coverage_plot(tctx *t)
     ts_free(&ts);
 }
 
+/* A wide bitmap has extra rows above/below its baseline. Its storage height
+ * must not shift it relative to fixed Latin glyphs, including in a fallback. */
+static const nj_u1 *baseline_lookup(void *ud, nj_u2 ch, int *w, int *h)
+{
+    static const nj_u1 bits[6] = { 0, 0, 0, 255, 0, 255 };
+    (void)ud;
+    if (ch != 0x3400u) return NULL;
+    *w = 1;
+    *h = 6;
+    return bits;
+}
+
+static void test_provider_baseline(tctx *t)
+{
+    static const nj_u1 latin[4] = { 0, 255, 0, 0 };
+    static const nj_u2 text[2] = { 'A', 0x3400u };
+    static const int anchors[4] = { NJ_ANCHOR_TOP, NJ_ANCHOR_BOTTOM, 64,
+                                  NJ_ANCHOR_VCENTER };
+    static const int ys[4] = { 10, 14, 12, 12 };
+    int coverage, fallback, a;
+    for (coverage = 0; coverage <= 1; coverage++) {
+        for (fallback = 0; fallback <= 1; fallback++) {
+            nj_font f, wide;
+            memset(&f, 0, sizeof f);
+            f.height = 4; f.ascent = 2; f.descent = 2;
+            f.first_char = f.last_char = 'A';
+            f.glyph_w = 1; f.glyph_h = 4; f.bitmap = latin;
+            f.coverage = coverage;
+            wide = f;
+            wide.glyph_lookup = baseline_lookup;
+            wide.glyph_ascent = 4;
+            if (fallback) f.fallback = &wide;
+            else { f.glyph_lookup = baseline_lookup; f.glyph_ascent = 4; }
+            for (a = 0; a < 4; a++) {
+                tsurf ts;
+                nj_gfx g;
+                ts_init(&ts, 16, 24, NJ_PIXFMT_ARGB8888, 0, C_WHITE);
+                nj_gfx_init(&g, &ts.s);
+                nj_gfx_set_font(&g, &f);
+                nj_gfx_set_color(&g, C_BLACK);
+                nj_gfx_draw_text(&g, text, 2, 2, ys[a], anchors[a]);
+                CHECK(t, px(&ts, 2, 11) == C_BLACK);
+                CHECK(t, px(&ts, 3, 11) == C_BLACK);
+                CHECK(t, px(&ts, 3, 13) == C_BLACK);
+                CHECK(t, px(&ts, 3, 15) == C_WHITE);
+                CHECK(t, nj_font_string_width(&f, text, 2) == 2);
+                ts_free(&ts);
+            }
+        }
+    }
+}
+
 /* ------------------------------------------------------------------ */
 int main(void)
 {
@@ -453,6 +505,7 @@ int main(void)
     test_fallback_ascent(&t);
     test_bitmap_unchanged(&t);
     test_full_coverage_plot(&t);
+    test_provider_baseline(&t);
 
     printf("\ntest_font_coverage: %u assertions, %u failures -> %s\n",
            t.checks, t.fails, t.fails == 0u ? "PASS" : "FAIL");

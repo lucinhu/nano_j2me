@@ -47,6 +47,7 @@ typedef struct glyph {
     int h;
     int advance;         /* how far the pen moves after this glyph   */
     int coverage;        /* 1 = one byte per pixel, 0 = 1bpp rows    */
+    int ascent;          /* baseline row of the resolved bitmap      */
 } glyph;
 
 static int f_row_bytes(int w)
@@ -72,12 +73,14 @@ static void glyph_lookup(const nj_font *f, nj_u2 ch, glyph *out, int depth)
     out->h = f->glyph_h;
     out->advance = f->glyph_w;
     out->coverage = f->coverage;
+    out->ascent = f->ascent;
 
     if (f->glyph_lookup) {
         int w = 0, h = 0;
         const nj_u1 *bits = f->glyph_lookup(f->glyph_ud, ch, &w, &h);
         if (bits && w > 0 && h > 0) {
             out->bits = bits;
+            out->ascent = f->glyph_ascent ? f->glyph_ascent : f->ascent;
             out->w = w;
             out->h = h;
             out->advance = f->glyph_advance
@@ -123,8 +126,7 @@ static void blit_glyph(nj_gfx *g, const nj_font *f, const glyph *gl,
     /* The baseline comes from the face that supplied the glyph, not from the
      * face the caller asked: a fallback with different metrics would otherwise
      * be drawn at the wrong height. */
-    const nj_font *face = gl->src ? gl->src : f;
-    int top = baseline_y - face->ascent;
+    int top = baseline_y - gl->ascent;
     int y;
 
     if (!gl->bits || gl->w <= 0 || gl->h <= 0) {

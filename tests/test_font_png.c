@@ -442,6 +442,16 @@ static void test_font_cjk_table(void)
           "medium has no CJK provider");
     CHECK(large != NULL && large->glyph_lookup != NULL,
           "large has no CJK provider");
+    CHECK_EQ_INT(small->glyph_ascent, 12, "small provider baseline");
+    CHECK_EQ_INT(medium->glyph_ascent, 12, "shared small/medium bitmap baseline");
+    CHECK_EQ_INT(large->glyph_ascent, 16, "large provider baseline");
+    {
+        int w = 0, h = 0;
+        const nj_u1 *bits = large->glyph_lookup(large->glyph_ud, 0xFF47u, &w, &h);
+        CHECK(bits != NULL, "fullwidth g keeps its descender");
+        CHECK_EQ_INT(w, 16, "large fullwidth glyph width");
+        CHECK_EQ_INT(h, 20, "large storage preserves accents and descenders");
+    }
 
     for (i = 0; i < 4; i++) {
         CHECK_EQ_INT(nj_font_char_width(small, hanzi[i]), 12, "small hanzi advance");
@@ -468,7 +478,7 @@ static void test_font_cjk_table(void)
         bits = small->glyph_lookup(small->glyph_ud, hanzi[i], &w, &h);
         CHECK(bits != NULL, "lookup missed U+%04X", hanzi[i]);
         CHECK_EQ_INT(w, 12, "glyph width");
-        CHECK_EQ_INT(h, 12, "glyph height");
+        CHECK_EQ_INT(h, 16, "glyph storage height preserves descenders");
         if (bits == NULL) {
             continue;
         }

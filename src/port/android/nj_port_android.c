@@ -1883,6 +1883,7 @@ static void android_glyph_init(android_state *s)
         gf->face = *b;
         gf->face.name = "android-system";
         gf->face.glyph_lookup = android_glyph_lookup;
+        gf->face.glyph_ascent = 0;  /* Java raster uses the face's own ascent. */
         gf->face.glyph_ud = gf;
         gf->face.glyph_advance = android_glyph_advance;
         gf->face.coverage = 1;      /* the platform rasterises antialiased */

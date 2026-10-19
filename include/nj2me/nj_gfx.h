@@ -88,6 +88,10 @@ typedef struct nj_font {
      * glyphs the fixed cell cannot represent (CJK).  Chainable: the fallback
      * may itself have a fallback.  NULL = no fallback. */
     const struct nj_font *fallback;
+    /* Baseline row of glyph_lookup cells; 0 uses ascent. Fixed bitmaps always
+     * use ascent. Allows wide cells to preserve descenders without changing
+     * the MIDP line height or the baseline of Latin text. */
+    int   glyph_ascent;
 } nj_font;
 
 #define NJ_FONT_STYLE_PLAIN  0

@@ -1,55 +1,17 @@
 #!/usr/bin/env python3
 """nano_j2me - CJK (GB2312) bitmap font table generator.
 
-Renders the two cells the runtime's wide-glyph hook asks for - a 12x12 face
-for SMALL/MEDIUM text and a 16x16 face for LARGE - from a system Source Han
-Sans / Noto Sans CJK face and emits
+Renders GB2312 glyphs from Source Han Sans CN Regular / Noto Sans CJK.
+The 12- and 16-pixel advances retain their existing em sizes (11 and 15).
+Storage cells have extra vertical space (16 and 20 rows) so accented letters,
+descenders and box rules keep the same baseline as ideographs. No glyph is
+individually resized or vertically centred. The runtime uses the emitted
+ascent for these cells independently of the Latin line metrics.
 
-    src/gfx/nj_font_cjk.h      the 1bpp glyph tables (checked in, const)
-
-Glyph layout - the same frozen contract as nj_font_data.h:
-
-    1 bit per pixel, MSB first, one byte per 8 horizontal pixels, rows packed
-    with no padding at the end of a row:
-
-        row_bytes    = (glyph_w + 7) / 8
-        glyph stride = row_bytes * glyph_h
-        glyph `cp`   = bitmap + index_of(cp) * stride
-
-Coverage is the whole GB2312 charset: every byte pair 0xA1A1..0xF7FE that
-Python's 'gb2312' codec decodes (7445 code points - both hanzi levels plus the
-symbol rows: CJK punctuation, full-width forms, kana, Greek, Cyrillic, the
-box-drawing rules and the pinyin row).  The few unassigned slots are skipped.
-
-The table is sorted by code point and the index is therefore strictly
-ascending, which is what lets the runtime binary-search it.
-
-Rasterisation notes (they are what makes the 1bpp cells legible):
-
-  * The glyphs come from FreeType's monochrome (FT_LOAD_TARGET_MONO)
-    rasteriser at an em one pixel smaller than the cell (11 px for the 12x12
-    face, 15 px for 16x16).  That is the size at which the measured ink
-    envelope of the GB2312 hanzi - which is what sets the cell window - fits
-    the cell exactly, so nothing is ever cut off.  A greyscale render plus a
-    coverage threshold is a poor substitute here: at 11 px a Light stem
-    covers ~40% of a pixel, so any sane threshold either deletes the stroke
-    or smears the glyph.
-  * The cell window is derived from the data, not hard-coded: the generator
-    measures the ink envelope of the covered U+4E00..U+9FFF ideographs at the
-    render size and centres that envelope in the cell.  Every glyph is placed
-    through the same window, so the face's relative positions (a low comma, a
-    centred ideograph, a full-width form) survive.
-  * Unicode order is not GB2312 order: the GB2312 hanzi are sorted by pinyin
-    while Unicode sorts them by radical/stroke, so the emitted index is a
-    sorted permutation, not the decode order.
-  * A handful of glyphs reach outside that window anyway (the full-width
-    Latin/Greek/Cyrillic descenders and the box-drawing junctions, which are
-    drawn to the edge of the em).  Those are re-rendered a pixel or two
-    smaller and centred in the cell, so their ink stays complete instead of
-    being clipped.
-  * A few thin dashed box-drawing rules vanish entirely in monochrome mode;
-    those (and only those) fall back to a greyscale render thresholded at
-    GRAY_THRESHOLD.
+The checked-in tables are const 1bpp rows, MSB first, with stride
+((width + 7) // 8) * height. Coverage is all 7445 GB2312 code points,
+sorted for runtime binary search. FreeType monochrome hinting retains thin
+strokes; rules that disappear entirely use a greyscale threshold fallback.
 
 The output is deterministic: same font file + same Pillow/FreeType build =
 byte-identical header on every run.  Nothing here depends on the clock, the
@@ -73,10 +35,10 @@ except ImportError:  # pragma: no cover - environment problem, not a code path
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HEADER_PATH = os.path.join(REPO_ROOT, "src", "gfx", "nj_font_cjk.h")
 
-# Source faces in preference order: Source Han Sans CN Light (SIL OFL 1.1)
+# Source faces in preference order: Source Han Sans CN Regular (SIL OFL 1.1)
 # first, then the Noto CJK fallback.
 FONT_CANDIDATES = (
-    "/usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Light.otf",
+    "/usr/share/fonts/adobe-source-han-sans/SourceHanSansCN-Regular.otf",
     "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
 )
 
@@ -85,21 +47,14 @@ FONT_CANDIDATES = (
 GB_FIRST_ROW, GB_LAST_ROW = 0xA1, 0xF7
 GB_FIRST_CELL, GB_LAST_CELL = 0xA1, 0xFE
 
-# The ideographs whose ink envelope defines the cell window.
-HANZI_FIRST, HANZI_LAST = 0x4E00, 0x9FFF
-
 # --------------------------------------------------------------------------
-# Faces.  `px` is the em size handed to FreeType; one pixel below the cell is
-# the largest em whose hanzi envelope still fits (see the module docstring).
+# Faces. `px` is the em size handed to FreeType. Storage height includes
+# accents and descenders; advance width and em size stay independent of it.
 # --------------------------------------------------------------------------
 FACES = (
-    {"tag": "12", "w": 12, "h": 12, "px": 11},
-    {"tag": "16", "w": 16, "h": 16, "px": 15},
+    {"tag": "12", "w": 12, "h": 16, "px": 11, "ascent": 12},
+    {"tag": "16", "w": 16, "h": 20, "px": 15, "ascent": 16},
 )
-
-# Smallest em a shrinking glyph may be re-rendered at before the generator
-# gives up and clips it (which does not happen with the faces above).
-MIN_PX = 6
 
 # Greyscale fallback: pixel coverage (0..255) at or above which a pixel is
 # inked.  Only used for glyphs whose monochrome rasterisation comes back
@@ -289,72 +244,13 @@ def pack_glyph(rows, w):
 # --------------------------------------------------------------------------
 # Cell window + one face
 # --------------------------------------------------------------------------
-def hanzi_window(font, codepoints, px, w, h):
-    """Cell offset that centres the hanzi ink envelope in the cell.
-
-    The window is measured, never guessed: the envelope of the covered
-    U+4E00..U+9FFF glyphs at the render size is what the cell must contain,
-    and every glyph goes through the same offset so relative positions are
-    preserved.
-    """
-    left = top = 1 << 30
-    right = bottom = -(1 << 30)
-    for cp in codepoints:
-        if not (HANZI_FIRST <= cp <= HANZI_LAST):
-            continue
-        box, _pixels = mono_raster(font, chr(cp), px)
-        if box is None:
-            continue
-        left = min(left, box[0])
-        top = min(top, box[1])
-        right = max(right, box[2])
-        bottom = max(bottom, box[3])
-    if left > right or top > bottom:
-        raise RuntimeError("no hanzi ink found - wrong font?")
-    span_w = right - left
-    span_h = bottom - top
-    if span_w > w or span_h > h:
-        raise RuntimeError(
-            "hanzi ink envelope %dx%d does not fit the %dx%d cell - render "
-            "at a smaller em" % (span_w, span_h, w, h))
-    return (w - span_w) // 2 - left, (h - span_h) // 2 - top
-
-
-def fits(box, x_off, y_off, w, h):
-    return (box[0] + x_off >= 0 and box[1] + y_off >= 0 and
-            box[2] + x_off <= w and box[3] + y_off <= h)
-
-
-def glyph_cell(fonts, ch, w, h, x_off, y_off, base_px):
-    """One glyph as (rows, mode).
-
-    mode is "mono"/"gray" for the common case, "shrunk" when the glyph had
-    to be re-rendered smaller and centred (its ink would not fit the shared
-    window), "blank" for a space-like code point, and "clipped" if even the
-    smallest render did not fit (a hard failure the caller reports).
-    """
-    box, pixels, mode = raster(fonts[base_px], ch, base_px)
+def glyph_cell(font, ch, w, h, x_off, y_off, px):
+    """Place every glyph at the face baseline; never resize an outlier."""
+    box, pixels, mode = raster(font, ch, px)
     if box is None:
         return blank_rows(w, h), "blank"
-    if fits(box, x_off, y_off, w, h):
-        rows, _dropped = blit(pixels, x_off, y_off, w, h)
-        return rows, mode
-
-    # Does not fit the shared window: shrink until it does and centre the
-    # ink in the cell, which keeps the whole glyph instead of clipping its
-    # descender.  This is a small minority (the full-width Latin/Greek/
-    # Cyrillic descenders and a few accented letters).
-    for px in range(base_px - 1, MIN_PX - 1, -1):
-        box, pixels, mode = raster(fonts[px], ch, px)
-        if box is None:
-            break
-        if box[2] - box[0] <= w and box[3] - box[1] <= h:
-            cx = (w - (box[2] - box[0])) // 2 - box[0]
-            cy = (h - (box[3] - box[1])) // 2 - box[1]
-            rows, _dropped = blit(pixels, cx, cy, w, h)
-            return rows, "shrunk"
-    rows, _dropped = blit(pixels, x_off, y_off, w, h)
-    return rows, "clipped"
+    rows, dropped = blit(pixels, x_off, y_off, w, h)
+    return rows, "clipped" if dropped else mode
 
 
 def build_face(family_info, codepoints, spec, stats):
@@ -362,21 +258,21 @@ def build_face(family_info, codepoints, spec, stats):
     w = spec["w"]
     h = spec["h"]
     base_px = spec["px"]
-    fonts = {}
-    for px in range(base_px, MIN_PX - 1, -1):
-        fonts[px] = ImageFont.truetype(family_info["path"], px)
-
-    x_off, y_off = hanzi_window(fonts[base_px], codepoints, base_px, w, h)
+    font = ImageFont.truetype(family_info["path"], base_px)
+    # Only horizontal placement is derived from the full coverage envelope.
+    # Vertical placement is a font-wide baseline shared with Latin drawing.
+    boxes = [raster(font, chr(cp), base_px)[0] for cp in codepoints]
+    boxes = [box for box in boxes if box is not None]
+    x_off = -min(box[0] for box in boxes)
+    y_off = spec["ascent"]
 
     blob = bytearray()
     for cp in codepoints:
-        rows, mode = glyph_cell(fonts, chr(cp), w, h, x_off, y_off, base_px)
+        rows, mode = glyph_cell(font, chr(cp), w, h, x_off, y_off, base_px)
         modes = stats["modes"]
         modes[mode] = modes.get(mode, 0) + 1
         if mode == "blank":
             stats["blank"].append(cp)
-        elif mode == "shrunk":
-            stats["shrunk"].append(cp)
         elif mode == "gray":
             stats["gray"].append(cp)
         elif mode == "clipped":
@@ -390,6 +286,7 @@ def build_face(family_info, codepoints, spec, stats):
         "w": w,
         "h": h,
         "px": base_px,
+        "ascent": y_off,
         "x_off": x_off,
         "y_off": y_off,
         "row_bytes": (w + 7) // 8,
@@ -429,6 +326,8 @@ def emit_header(font_info, codepoints, faces, stats, path):
     w(" * Produced by tools/gen_cjk_font.py from:")
     w(" *   %s" % font_info["path"])
     w(" *   sha256 %s" % font_info["sha256"])
+    w(" * Source Han Sans CN glyphs: Copyright Adobe, SIL Open Font License 1.1.")
+    w(" * See docs/licenses/source-han-sans-OFL.txt for attribution and licence.")
     w(" *")
     w(" * Coverage: the GB2312 charset - every byte pair 0xA1A1..0xF7FE that")
     w(" * Python's 'gb2312' codec decodes, both levels plus the symbol rows")
@@ -455,14 +354,8 @@ def emit_header(font_info, codepoints, faces, stats, path):
         w(" *   rendered at a %d px em with the shared cell window offset "
           "(%d, %d)." % (face["px"], face["x_off"], face["y_off"]))
     w(" * Glyphs come from FreeType's monochrome (FT_LOAD_TARGET_MONO)")
-    w(" * rasteriser, so strokes are hinted onto the pixel grid; the cell")
-    w(" * window is the measured ink envelope of the covered ideographs.")
-    w(" * %d glyph cell(s) whose ink reaches past that window are re-rendered"
-      % len(stats["shrunk"]))
-    w(" * smaller and centred (%s), never clipped (%d clipped);"
-      % (", ".join("%dx%s: %d" % (face["w"], face["h"], n)
-                   for face, n in zip(faces, stats["shrunk_by_face"])),
-         len(stats["clipped"])))
+    w(" * rasteriser. Every glyph uses the shared baseline above; no individual")
+    w(" * resizing or vertical centring is applied (%d clipped)." % len(stats["clipped"]))
     w(" * %d thin dashed rule cell(s) that monochrome mode drops (%s) are"
       % (len(stats["gray"]),
          ", ".join("%dx%s: %d" % (face["w"], face["h"], n)
@@ -487,9 +380,10 @@ def emit_header(font_info, codepoints, faces, stats, path):
     w("")
     for face in faces:
         tag = face["tag"]
-        w("/* ---------------- %s x %s ---------------- */" % (tag, tag))
+        w("/* ---------------- %d x %d ---------------- */" % (face["w"], face["h"]))
         w("#define NJ_CJK_%s_W        %d" % (tag, face["w"]))
         w("#define NJ_CJK_%s_H        %d" % (tag, face["h"]))
+        w("#define NJ_CJK_%s_ASCENT   %d" % (tag, face["ascent"]))
         w("#define NJ_CJK_%s_ROWBYTES %d" % (tag, face["row_bytes"]))
         w("#define NJ_CJK_%s_STRIDE   %d" % (tag, face["stride"]))
         w("#define NJ_CJK_%s_COUNT    %du" % (tag, count))
@@ -544,27 +438,28 @@ def main(argv=None):
     faces = []
     stats = []
     for spec in FACES:
-        stat = {"modes": {}, "blank": [], "shrunk": [], "gray": [],
+        stat = {"modes": {}, "blank": [], "gray": [],
                 "clipped": [], "empty": []}
         face = build_face(font_info, codepoints, spec, stat)
         faces.append(face)
         stats.append(stat)
 
-    # One combined report: the header documents blank/shrunk/gray glyphs of
+    # One combined report: the header documents blank/gray glyphs of
     # both faces, and both faces share the same coverage.
-    merged = {"modes": {}, "blank": [], "shrunk": [], "gray": [],
+    merged = {"modes": {}, "blank": [], "gray": [],
               "clipped": [], "empty": []}
     for stat in stats:
         for key, value in stat["modes"].items():
             merged["modes"][key] = merged["modes"].get(key, 0) + value
-        merged["shrunk"] += stat["shrunk"]
         merged["gray"] += stat["gray"]
         merged["clipped"] += stat["clipped"]
     merged["empty"] = sorted(set(stats[0]["empty"]) | set(stats[1]["empty"]))
     # The counts in the banner are sums over both faces, so record the
     # per-face split as well (the header quotes both).
-    merged["shrunk_by_face"] = [len(stat["shrunk"]) for stat in stats]
     merged["gray_by_face"] = [len(stat["gray"]) for stat in stats]
+
+    if merged["clipped"]:
+        raise RuntimeError("shared font window clips glyphs: %s" % merged["clipped"])
 
     nbytes = emit_header(font_info, codepoints, faces, merged, args.header)
     if not args.quiet:
@@ -581,7 +476,6 @@ def main(argv=None):
             print("  blanks    : %d %s"
                   % (len(stat["empty"]),
                      ["U+%04X" % cp for cp in stat["empty"]] or ""))
-            print("  shrunk    : %d" % len(stat["shrunk"]))
             print("  clipped   : %d" % len(stat["clipped"]))
         print("header      : %s (%d bytes)" % (args.header, nbytes))
     return 0
