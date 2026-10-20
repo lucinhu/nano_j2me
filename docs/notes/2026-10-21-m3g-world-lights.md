@@ -90,11 +90,32 @@ ceiling, door frame, crosshair, ammo HUD (image
   (`.local-tools/debug-runs/rally-lights-fix/rally-3300.png`), so the
   per-World light set did not regress a single-World title.
 
-The level is also interactive now: after New Game, holding UP for 800 ms
-changed the view (`g0.ppm` vs `g1.ppm`, distinct hashes) and then LEFT changed
-it again (`g2.ppm`); a later FIRE press left the sampled frame unchanged after
-release, so firing visuals were not confirmed. Evidence frames are in the same
-directory (`doom-lights-fix/g0..g3.ppm`).
+The level is also playable. To verify it end to end, the menu is entered with a
+short Down press (200 ms) followed by Fire (100 ms), which lands on New Game; a
+900-frame headless replay with an isolated RMS and a 30 FPS clock then sent
+movement input through a debug-only bridge (`apps/nj2me_main.c` plus a
+control-file driver, uncommitted, under `.local-tools/debug-runs/`):
+
+| action after New Game | pixels changed | distinct colours |
+| --- | --- | --- |
+| start of play (`b0`) | - | 255 |
+| hold UP 700 ms (`b1`) | 47,973 | 129 |
+| hold DOWN 700 ms (`b2`) | 38,187 | 226 |
+| hold RIGHT 500 ms (`b3`) | 69,444 | 134 |
+| hold LEFT 500 ms (`b4`) | 69,448 | 226 |
+
+Turning right and then left returns to the same view: `b2` and `b4` differ in
+only 36 pixels, inside a small strip of the ceiling, and the replays are
+deterministic. The run finished with `frames=900 paints=360 gfx=5342
+tris=144203 m3g=53621 time=33.665s fps=26.7`, exit status 0 and no uncaught
+exception. Screenshots show the textured corridor, a dark room, a door frame
+with an EXIT sign, the crosshair and the ammo counter
+(`doom-gameplay-round18/f0.png` and `f4.png`).
+
+Firing before the player has a weapon or ammunition leaves the frame unchanged;
+the HUD reads `0 0`, so there is no muzzle flash to draw. That is game state,
+not a renderer or input defect. The earlier, shorter probe in
+`doom-lights-fix/` reported the same behaviour with less evidence.
 
 ## Regression test
 

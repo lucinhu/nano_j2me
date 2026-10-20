@@ -1024,8 +1024,9 @@ failing in:
 
 1. the classes and the scene graph, so a title runs at all and can draw its
    2D interface around an empty 3D view - **done**;
-2. the transform stack and camera - **done**; the rasteriser is partial, and
-   no collected title reaches a triangle through it yet;
+2. the transform stack and camera - **done**; the software rasteriser draws
+   textured, lit geometry for real titles (`3D拉力赛-进化汉化版` and
+   `毁灭战士3` both render their race scene and level);
 3. `Loader.load()` and the `.m3g` container, for the titles that read a
    resource rather than build their scene from code - **done**: sections
    (including zlib-compressed ones), the object table, a `World`'s children
@@ -1045,8 +1046,19 @@ thread can run or wake, and runner input is available during construction.
 A fresh 1000-frame run reaches the main menu with 358 paints and 339540 triangles,
 without the constructor error or an uncaught exception. The wait fixture checks
 a six-second worker, cancellation during construction, and the existing deadlock
-case. Gameplay beyond this menu remains unverified; the geometry improvements
-below are separate evidence.
+case. Gameplay is verified as well: pressing Down then Fire on the menu enters
+New Game, and the level draws its textured corridor, dark rooms, door frames,
+crosshair and ammo HUD. In a 900-frame headless replay (isolated RMS, 30 FPS)
+holding UP and then DOWN changed the view (47,973 and 38,187 pixels), holding
+RIGHT and then LEFT changed it symmetrically (69,444 and 69,448 pixels; the
+returned view differs in only 36 pixels), and the run finished with `frames=900
+paints=360 tris=144203 m3g=53621 time=33.665s fps=26.7`, exit status 0 and no
+uncaught exception. Firing the pistol before the player has a weapon or
+ammunition produced no visible change; that is game state, not a renderer
+defect. Evidence frames are under
+`.local-tools/debug-runs/doom-gameplay-round18/`; the per-World lighting repair
+behind the picture is described in
+`docs/notes/2026-10-21-m3g-world-lights.md`.
 
 ### A declared member is not a working member
 
