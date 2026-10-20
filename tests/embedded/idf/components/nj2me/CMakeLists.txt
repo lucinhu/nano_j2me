@@ -37,6 +37,7 @@ idf_component_register(
         "${NJ_ROOT}/src/midp/nj_lib_rms.c"
         "${NJ_ROOT}/src/midp/nj_lib_midlet.c"
         "${NJ_ROOT}/src/midp/nj_lib_media.c"
+        "${NJ_ROOT}/src/midp/nj_lib_sax.c"
         "${NJ_ROOT}/src/midp/nj_lib_content.c
   src/midp/nj_lib_nokia.c
   src/midp/nj_lib_fc.c"

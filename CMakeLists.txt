@@ -68,6 +68,7 @@ set(NJ_ENABLE_INFLATE 1 CACHE STRING "Built-in DEFLATE decompressor (0 = port ho
 set(NJ_ENABLE_WAV   1 CACHE STRING "Built-in PCM WAV reader (0 = platform codec)")
 set(NJ_ENABLE_RMS   1 CACHE STRING "RecordStore persistence")
 set(NJ_ENABLE_IO    1 CACHE STRING "java.io and javax.microedition.io")
+set(NJ_ENABLE_SAX   1 CACHE STRING "Streaming non-validating SAX XML reader")
 set(NJ_ENABLE_AMR   1 CACHE STRING "Built-in AMR narrowband speech decoder")
 # The built-in MIDI renderer.  A port whose platform plays MIDI itself (Android
 # hands the file to the system synthesizer) can drop it: what is lost is the
@@ -124,6 +125,7 @@ set(NJ_SOURCES
   src/midp/nj_midi.c
   src/midp/nj_amr.c
   src/midp/nj_lib_content.c
+  src/midp/nj_lib_sax.c
   src/midp/nj_lib_nokia.c
   src/midp/nj_lib_fc.c
   src/midp/nj_lib_wireless.c
@@ -182,6 +184,7 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_JPEG=${NJ_ENABLE_JPEG}
   NJ_ENABLE_RMS=${NJ_ENABLE_RMS}
   NJ_ENABLE_IO=${NJ_ENABLE_IO}
+  NJ_ENABLE_SAX=${NJ_ENABLE_SAX}
   NJ_ENABLE_AMR=${NJ_ENABLE_AMR}
   NJ_ENABLE_MIDI=${NJ_ENABLE_MIDI}
   NJ_ENABLE_FLOAT=${NJ_ENABLE_FLOAT}
@@ -927,7 +930,7 @@ nj_add_test(test_clip tests/test_clip.c)
   endif()
 
   foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib
-                      test_ioapi test_resolution)
+                      test_ioapi test_resolution test_sax)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${extra_test}.c)
       nj_add_test(${extra_test} tests/${extra_test}.c)
     endif()

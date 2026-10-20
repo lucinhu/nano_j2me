@@ -925,6 +925,97 @@ static nj_value static_from_string(nj_vm *vm, const char *cls, const char *name,
     return r;
 }
 
+/* Angry Birds' XMLLevel$LevelHandler.startElement parses XML attributes with
+ * Float.parseFloat(String); the missing declaration stopped it at pc 592.
+ * Check the returned bits so negative zero and subnormal rounding matter. */
+static void test_float_parse(nj_vm *vm)
+{
+    static const struct { const char *text; nj_u4 bits; } values[] = {
+        { "3.5", 0x40600000u }, { "-12.75", 0xC14C0000u },
+        { "+.5", 0x3F000000u }, { "2.", 0x40000000u },
+        { "1.25e2", 0x42FA0000u }, { "-125E-2", 0xBFA00000u },
+        { "0.1", 0x3DCCCCCDu }, { "16777217", 0x4B800000u },
+        { "0", 0u }, { "-0.0", 0x80000000u },
+        { "-0e999999", 0x80000000u },
+        { "\t\r\n +1.5f \037", 0x3FC00000u },
+        { "2F", 0x40000000u }, { "3d", 0x40400000u },
+        { "4D", 0x40800000u },
+        { "Infinity", 0x7F800000u }, { "+Infinity", 0x7F800000u },
+        { " -Infinity\n", 0xFF800000u },
+        { "NaN", 0x7FC00000u }, { "+NaN", 0x7FC00000u },
+        { "-NaN", 0x7FC00000u },
+        { "3.4028235e38", 0x7F7FFFFFu },
+        { "3.4028236e38", 0x7F800000u },
+        { "-3.4028236e38", 0xFF800000u },
+        { "1e999999", 0x7F800000u },
+        { "-1e999999", 0xFF800000u },
+        { "1.17549435e-38", 0x00800000u },
+        { "1.4e-45", 1u }, { "7.1e-46", 1u },
+        { "7e-46", 0u }, { "-7e-46", 0x80000000u },
+        { "1e-999999", 0u }, { "-1e-999999", 0x80000000u }
+    };
+    static const char *invalid[] = {
+        "", " \t\n", "+", "-", ".", "1e", "1e+", "1e-",
+        "1.2.3", "1e2e3", "1 2", "1 f", "f", "1ff", "1dF",
+        "1,5", "1x", "nan", "inf", "infinity", "NaNf", "InfinityD",
+        "--1", "++1", "+-1", "1\302\240", "\302\2401"
+    };
+    nj_value a[2], r;
+    unsigned i;
+
+    for (i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+        int threw;
+        nj_u4 bits;
+        r = static_from_string(vm, FLOATW, "parseFloat",
+                               "(Ljava/lang/String;)F", values[i].text, &threw);
+        a[0] = r;
+        bits = 0u;
+        if (!threw && nj_call_static(vm, FLOATW, "floatToIntBits", "(F)I",
+                                     a, &r) == NJ_OK) {
+            bits = (nj_u4)r.i;
+        }
+        OK_MSG(!threw && bits == values[i].bits,
+               "Float.parseFloat(\"%s\") bits %08x, expected %08x",
+               values[i].text, (unsigned)bits, (unsigned)values[i].bits);
+        clean(vm, "Float.parseFloat valid literal");
+    }
+    for (i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        const char *message;
+        a[0] = vref(nj_string_new(vm, invalid[i]));
+        OK(nj_call_static(vm, FLOATW, "parseFloat", "(Ljava/lang/String;)F",
+                          a, &r) != NJ_OK);
+        message = nj_exception_describe(vm);
+        OK_MSG(message && strstr(message, "NumberFormatException"),
+               "Float.parseFloat(\"%s\") raises NumberFormatException (got %s)",
+               invalid[i], message ? message : "no exception");
+        nj_clear_exception(vm);
+    }
+    /* trim() includes U+0000 but an embedded NUL must not terminate a parse. */
+    {
+        static const nj_u2 padded[] = { 0u, '1', '.', '5', 0x20u, 0u };
+        static const nj_u2 embedded[] = { '1', 0u, '5' };
+        const char *message;
+        a[0] = vref(nj_string_new_chars(vm, padded, 6));
+        OK(nj_call_static(vm, FLOATW, "parseFloat", "(Ljava/lang/String;)F",
+                          a, &r) == NJ_OK && r.f == 1.5f);
+        clean(vm, "Float.parseFloat trims NUL");
+        a[0] = vref(nj_string_new_chars(vm, embedded, 3));
+        OK(nj_call_static(vm, FLOATW, "parseFloat", "(Ljava/lang/String;)F",
+                          a, &r) != NJ_OK);
+        message = nj_exception_describe(vm);
+        OK(message && strstr(message, "NumberFormatException"));
+        nj_clear_exception(vm);
+        a[0] = vref(NULL);
+        OK(nj_call_static(vm, FLOATW, "parseFloat", "(Ljava/lang/String;)F",
+                          a, &r) != NJ_OK);
+        message = nj_exception_describe(vm);
+        OK_MSG(message && strstr(message, "NullPointerException"),
+               "Float.parseFloat(null) raises NullPointerException (got %s)",
+               message ? message : "no exception");
+        nj_clear_exception(vm);
+    }
+}
+
 static void test_numbers(nj_vm *vm)
 {
     nj_value a[2];
@@ -3448,6 +3539,7 @@ int main(void)
     test_media(vm);
     test_strings(vm);
     test_numbers(vm);
+    test_float_parse(vm);
     test_boxing_valueof_radix(vm);
     test_random(vm);
     test_static_field_init(vm);

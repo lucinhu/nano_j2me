@@ -523,9 +523,134 @@ NJFN(Double_isInfinite_d)
     return NJ_OK;
 }
 
-/* A decimal literal, without strtod: the freestanding build has no libc to
- * borrow one from, and this is four lines of arithmetic for the ordinary
- * "3.14", "-1.5e3", ".5" shapes a game parses out of a config file. */
+/* The decimal arithmetic previously in Double.valueOf(String), shared with
+ * Float.parseFloat without strtod or a libc dependency.  This remains a small
+ * CLDC decimal parser, not a correctly-rounded general conversion: repeated
+ * double operations can round near a midpoint, and very long significands can
+ * overflow the accumulator/scale before an exponent compensates for them. */
+static nj_status parse_decimal(nj_vm *vm, const nj_u2 *p, nj_u4 i, nj_u4 end,
+                               double *out)
+{
+    int neg = 0, any = 0;
+    double d = 0.0, scale = 1.0;
+    int exp = 0;
+
+    if (i < end && (p[i] == '+' || p[i] == '-')) {
+        neg = (p[i] == '-');
+        i++;
+    }
+    for (; i < end && p[i] >= '0' && p[i] <= '9'; i++) {
+        d = d * 10.0 + (double)(p[i] - '0');
+        any = 1;
+    }
+    if (i < end && p[i] == '.') {
+        i++;
+        for (; i < end && p[i] >= '0' && p[i] <= '9'; i++) {
+            scale *= 10.0;
+            d = d * 10.0 + (double)(p[i] - '0');
+            any = 1;
+        }
+    }
+    if (!any) {
+        return nj_throw(vm, "java/lang/NumberFormatException", NULL);
+    }
+    d /= scale;
+    if (i < end && (p[i] == 'e' || p[i] == 'E')) {
+        int eneg = 0;
+        int eany = 0;
+        i++;
+        if (i < end && (p[i] == '+' || p[i] == '-')) {
+            eneg = (p[i] == '-');
+            i++;
+        }
+        for (; i < end && p[i] >= '0' && p[i] <= '9'; i++) {
+            if (exp < 10000) {
+                exp = exp * 10 + (int)(p[i] - '0');
+            }
+            eany = 1;
+        }
+        if (!eany) {
+            return nj_throw(vm, "java/lang/NumberFormatException", NULL);
+        }
+        if (eneg) {
+            exp = -exp;
+        }
+    }
+    if (i != end) {
+        return nj_throw(vm, "java/lang/NumberFormatException", NULL);
+    }
+    while (exp > 0) {
+        d *= 10.0;
+        exp--;
+    }
+    while (exp < 0) {
+        d /= 10.0;
+        exp++;
+    }
+    *out = neg ? -d : d;
+    return NJ_OK;
+}
+
+static int decimal_token(const nj_u2 *p, nj_u4 i, nj_u4 end, const char *token)
+{
+    while (i < end && *token && p[i] == (nj_u2)*token) {
+        i++;
+        token++;
+    }
+    return i == end && *token == '\0';
+}
+
+/* XMLLevel$LevelHandler.startElement in 愤怒的小鸟_383 calls this at pc 592.
+ * Java's trim is exactly U+0000..U+0020; suffixes apply to numbers only, so
+ * NaNf and InfinityD still raise NumberFormatException. */
+NJFN(Float_parseFloat)
+{
+    nj_ref s = NJ_ARG_REF(args, 0);
+    const nj_u2 *p;
+    nj_u4 begin = 0u, end, i;
+    int neg = 0;
+    double d;
+
+    if (!s) {
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    p = nj_string_chars(s);
+    end = s->length;
+    while (begin < end && p[begin] <= 0x20u) { begin++; }
+    while (end > begin && p[end - 1u] <= 0x20u) { end--; }
+    i = begin;
+    if (i < end && (p[i] == '+' || p[i] == '-')) {
+        neg = p[i] == '-';
+        i++;
+    }
+    if (decimal_token(p, i, end, "NaN")) {
+        ret->f = float_from_bits(0x7FC00000);
+        return NJ_OK;
+    }
+    if (decimal_token(p, i, end, "Infinity")) {
+        ret->f = float_from_bits((nj_s4)(neg ? 0xFF800000u : 0x7F800000u));
+        return NJ_OK;
+    }
+    if (end > i && (p[end - 1u] == 'f' || p[end - 1u] == 'F' ||
+                    p[end - 1u] == 'd' || p[end - 1u] == 'D')) {
+        end--;
+    }
+    if (parse_decimal(vm, p, begin, end, &d) != NJ_OK) {
+        return NJ_ERR;
+    }
+    /* Avoid an out-of-range C narrowing conversion.  Half an ulp above
+     * Float.MAX_VALUE rounds to infinity; the values below it round down. */
+    if (d > 3.4028234663852886e38 || d < -3.4028234663852886e38) {
+        double magnitude = neg ? -d : d;
+        nj_u4 bits = magnitude >= 3.4028235677973366e38
+                   ? 0x7F800000u : 0x7F7FFFFFu;
+        ret->f = float_from_bits((nj_s4)(bits | (neg ? 0x80000000u : 0u)));
+    } else {
+        ret->f = (float)d;
+    }
+    return NJ_OK;
+}
+
 NJFN(Double_valueOf_str)
 {
     nj_ref s = NJ_ARG_REF(args, 0);
@@ -541,74 +666,20 @@ NJFN(Double_valueOf_str)
      * the runtime is: an uninitialised half looks like a pointer to the GC.
      */
     nj_value a1[3];
-    const nj_u2 *p;
-    nj_u4 i = 0u;
-    int neg = 0, any = 0;
-    double d = 0.0, scale = 1.0;
-    int exp = 0;
+    double d;
     nj_ref o;
 
     if (!s) {
         return nj_throw(vm, "java/lang/NumberFormatException", "null");
     }
-    p = nj_string_chars(s);
-    if (i < s->length && (p[i] == '+' || p[i] == '-')) {
-        neg = (p[i] == '-');
-        i++;
-    }
-    for (; i < s->length && p[i] >= '0' && p[i] <= '9'; i++) {
-        d = d * 10.0 + (double)(p[i] - '0');
-        any = 1;
-    }
-    if (i < s->length && p[i] == '.') {
-        i++;
-        for (; i < s->length && p[i] >= '0' && p[i] <= '9'; i++) {
-            scale *= 10.0;
-            d = d * 10.0 + (double)(p[i] - '0');
-            any = 1;
-        }
-    }
-    if (!any) {
-        return nj_throw(vm, "java/lang/NumberFormatException", NULL);
-    }
-    d /= scale;
-    if (i < s->length && (p[i] == 'e' || p[i] == 'E')) {
-        int eneg = 0;
-        int eany = 0;
-        i++;
-        if (i < s->length && (p[i] == '+' || p[i] == '-')) {
-            eneg = (p[i] == '-');
-            i++;
-        }
-        for (; i < s->length && p[i] >= '0' && p[i] <= '9'; i++) {
-            if (exp < 10000) {
-                exp = exp * 10 + (int)(p[i] - '0');
-            }
-            eany = 1;
-        }
-        if (!eany) {
-            return nj_throw(vm, "java/lang/NumberFormatException", NULL);
-        }
-        if (eneg) {
-            exp = -exp;
-        }
-    }
-    if (i != s->length) {
-        return nj_throw(vm, "java/lang/NumberFormatException", NULL);
-    }
-    while (exp > 0) {
-        d *= 10.0;
-        exp--;
-    }
-    while (exp < 0) {
-        d /= 10.0;
-        exp++;
+    if (parse_decimal(vm, nj_string_chars(s), 0u, s->length, &d) != NJ_OK) {
+        return NJ_ERR;
     }
     o = nj_object_new(vm, "java/lang/Double");
     if (!o) {
         return nj_throw_oom(vm);
     }
-    a1[0].d = neg ? -d : d;
+    a1[0].d = d;
     a1[1].bits = 0u;   /* the upper half of the two-slot value */
     if (nj_call_special(vm, o, "java/lang/Double", "<init>", "(D)V", a1, NULL)
         != NJ_OK) {
@@ -1388,6 +1459,7 @@ static const nj_builtin_method Float_methods[] = {
     M("isInfinite", "(F)Z", NJ_ACC_STATIC),
     M("intBitsToFloat", "(I)F", NJ_ACC_STATIC),
     M("floatToIntBits", "(F)I", NJ_ACC_STATIC),
+    M("parseFloat",     "(Ljava/lang/String;)F", NJ_ACC_STATIC),
     M("valueOf",        "(F)Ljava/lang/Float;", NJ_ACC_STATIC),
     M("toString",       "()Ljava/lang/String;", 0),
     M("toString",       "(F)Ljava/lang/String;", NJ_ACC_STATIC),
@@ -1498,6 +1570,7 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Float",     "isInfinite",   "(F)Z", Float_isInfinite_v },
     { "java/lang/Float",     "intBitsToFloat", "(I)F", Float_intBitsToFloat },
     { "java/lang/Float",     "floatToIntBits", "(F)I", Float_floatToIntBits },
+    { "java/lang/Float",     "parseFloat", "(Ljava/lang/String;)F", Float_parseFloat },
     { "java/lang/Double",    "longBitsToDouble", "(J)D", Double_longBitsToDouble },
     { "java/lang/Double",    "doubleToLongBits", "(D)J", Double_doubleToLongBits },
 

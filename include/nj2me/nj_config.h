@@ -115,6 +115,11 @@
 #ifndef NJ_ENABLE_IO            /* javax.microedition.io + java.io */
 #  define NJ_ENABLE_IO 1
 #endif
+/* Optional streaming XML parser. Desktop CMake enables it; small standalone
+ * ports opt in explicitly. Zero removes the SAX and parser classes. */
+#ifndef NJ_ENABLE_SAX
+#  define NJ_ENABLE_SAX 0
+#endif
 #ifndef NJ_ENABLE_MEDIA         /* javax.microedition.media (tone only) */
 #  define NJ_ENABLE_MEDIA 0
 #endif

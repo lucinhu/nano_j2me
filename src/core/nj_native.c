@@ -44,6 +44,7 @@ static const nj_native_table nj_tables[] = {
     { nj_lib_midlet_table,  &nj_lib_midlet_count  },
     { nj_lib_media_table,   &nj_lib_media_count   },
     { nj_lib_content_table, &nj_lib_content_count },
+    { nj_lib_sax_table,     &nj_lib_sax_count     },
     { nj_lib_nokia_table,   &nj_lib_nokia_count   },
     { nj_lib_wireless_table, &nj_lib_wireless_count },
     { nj_lib_m3g_table, &nj_lib_m3g_count },

@@ -24,6 +24,7 @@ const nj_builtin_source nj_builtin_sources[] = {
     { nj_lib_midlet_classes, &nj_lib_midlet_class_count },
     { nj_lib_media_classes,  &nj_lib_media_class_count  },
     { nj_lib_content_classes, &nj_lib_content_class_count },
+    { nj_lib_sax_classes,     &nj_lib_sax_class_count     },
     { nj_lib_nokia_classes,  &nj_lib_nokia_class_count  },
     { nj_lib_fc_classes,     &nj_lib_fc_class_count     },
     { nj_lib_http_classes,   &nj_lib_http_class_count   },
@@ -111,5 +112,5 @@ nj_status nj_builtins_register_all(nj_vm *vm)
         nj_logf(vm, 0, "builtin class library is missing java/lang/Object");
         return NJ_ERR;
     }
-    return NJ_OK;
+    return nj_lib_sax_init(vm);
 }

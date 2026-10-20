@@ -462,6 +462,28 @@ Specifically supported:
 
 ## API coverage
 
+### Streaming XML (optional SAX subset)
+
+`NJ_ENABLE_SAX=1` provides `SAXParserFactory.newInstance()`,
+`newSAXParser()`, `SAXParser.parse(InputStream, DefaultHandler)`, the document,
+element, text and processing-instruction callbacks, and the `Attributes` query
+methods. Attribute snapshots remain valid if a handler retains them. UTF-8 and
+UTF-16 LE/BE streams, XML declarations, comments, CDATA, predefined entities and
+numeric character references are supported. Stream and callback exceptions are
+propagated unchanged, including when a UTF-16 surrogate spans a failed read.
+
+This is a non-validating, namespace-disabled parser: qualified names and `xmlns`
+attributes are preserved, while URI/local-name queries are empty. Requesting
+validation or namespace processing is rejected by `newSAXParser()`. DTDs,
+external entities, DOM and the wider JSR-172 web-services APIs are not implemented.
+There are explicit limits of 64 nested elements, 128 attributes per element,
+65,536 UTF-16 units per token and 1,048,576 decoded characters per document.
+
+Desktop CMake enables this subset by default; `-DNJ_ENABLE_SAX=0` removes its
+classes and reader. Standalone ports default to disabled. See the
+[Angry Birds SAX investigation](notes/2026-10-20-sax-angry-birds.md) for original
+JAR validation, memory use and measured binary costs.
+
 ### java.lang
 
 | Class | Status |

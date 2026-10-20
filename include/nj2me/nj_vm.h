@@ -634,6 +634,12 @@ extern const int nj_lib_content_class_count;
 extern const nj_native_entry nj_lib_content_table[];
 extern const int nj_lib_content_count;
 
+extern const nj_builtin_class nj_lib_sax_classes[];
+extern const int nj_lib_sax_class_count;
+extern const nj_native_entry nj_lib_sax_table[];
+extern const int nj_lib_sax_count;
+nj_status nj_lib_sax_init(nj_vm *vm);
+
 extern const nj_builtin_class nj_lib_fc_classes[];
 extern const int nj_lib_fc_class_count;
 extern const nj_native_entry nj_lib_fc_table[];
