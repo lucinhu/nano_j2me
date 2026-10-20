@@ -1,10 +1,10 @@
 # 下载 JAR corpus 兼容性复核（2026-10-17）
 
-## 2026-10-20 更新：City Bloxx 实际落块与 UC 诊断
+## 2026-10-20 更新：City Bloxx 实际落块与 UC 修复
 
 City Bloxx 使用原 JAR、`nokia6230` 和全新 RMS，在 SDL2 下实际落下首块，后续数字 5 操作仍响应；F2 返回带 Continue quick game 的菜单，Return 再回吊车场景。已检查截图及实际 down/up 日志；完整一局、稳定多层堆叠和存档重启尚未验证。详见 [City Bloxx 操作与证据](2026-10-20-city-bloxx.md)。
 
-RTC 与 Java 时间构造路径修复后，原 UC JAR 已到测试网络，受控失败代理收到 4 次 POST；SDL 实际按键能进入取消状态，但主菜单与浏览仍未通过。后续调用诊断确认首次启动先测试网络、后初始化命令；重试失败后的错误提示使用尚未建立的 `n.k`，异常跳过后半段初始化；本地 FreeJ2ME HTTP 返回固定状态与 null 流，不能作为真实网络对照。时钟修复批次全套 84/84 测试及相关 ASan/UBSan 3/3 通过，同一二进制恢复 N97 旧快照后移动、暂停、返回已复核；此次补充诊断没有新增生产代码修改。详见 [UC 修复与诊断](2026-10-20-uc-browser.md)。
+UC 在时钟修复基础上继续推进：受控分配响应暴露内置页面解析调用缺失的 `Integer.shortValue()S`，补齐后同一原 JAR 完整显示中文欢迎协议，桌面原生按键进入空白页、打开主菜单、移动选中项并关闭菜单。分配响应为按字节码本地构造的 41 字节测试数据；HTTP 503 对照仍卡在“取消操作中…”，实际网页与输入法未验证。全套 CTest 85/85 通过，`Integer.shortValue` 边界回归 13 组由 752/26 失败转为 778/0 通过。详见 [UC 修复与诊断](2026-10-20-uc-browser.md)。
 
 ## 历史更新：家园6八个版本已越过加载等待
 
@@ -59,7 +59,7 @@ native-ime提供独立build-ime/nj2me，SHA-256 `ebb421a66aa7dbc521eb9c2805009da
 | jar-03 / [app(2).jar](</home/lucinhu/Downloads/jar/app(2).jar>) | 网易云音乐 / 240x320 | [网易云音乐主列表](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-03/result.json>) | 修复前[菜单高亮但搜索页构造抛异常](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-03-contact.png>)；native-ime修复后亲自复测[搜索Form成功打开](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar03-item-fixed/frames/00300.png>)，soft2返回主列表；无thrown/uncaught，未验证提交搜索/播放 |
 | jar-04 / [app(3).jar](</home/lucinhu/Downloads/jar/app(3).jar>) | 帝国时代3（正版） / 240x320 | [黑屏](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-04/result.json>) | [已有40秒音效提示；本次60秒到任务/战役/保存游戏主菜单，down将任务高亮变战役；未开任务](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-04-long-contact.png>) |
 | jar-05 / [app(4).jar](</home/lucinhu/Downloads/jar/app(4).jar>) | 文明5双城之战(汉化) / 240x320 | [Gameloft logo](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-05/result.json>) | [早期60秒仍停音效询问](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-05-long-contact.png>)；第5轮原JAR进入文明战役→美利坚/华盛顿→保卫家园→地图智者对白，暂停/恢复响应；[命令、截图与时序限制](</home/lucinhu/workspace/c/nano_j2me/docs/notes/2026-10-17-civ5-replay.md>)。未验证单位移动、完整回合或保存继续，短按响应时序根因仍未确认 |
-| jar-06 / [app.jar](</home/lucinhu/Downloads/jar/app.jar>) | UC浏览器 / 240x320 | [UC v9.0初始化/测试网络](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-06/result.json>)；[2026-10-20停滞排查](2026-10-20-uc-browser.md) | 2026-10-20 RTC 修复后已越过动态数据，原 JAR 到“测试网络”；受控 HTTP 503 代理收到 4 次 POST，SDL Escape 后到“取消操作中…”且后续输入仍未进菜单。调用日志确认首次启动的网络失败提示先于命令初始化，使用空 `n.k` 抛异常并跳过后续初始化；FreeJ2ME 本地 HTTP 为桩实现，不能作真实网络对照。主菜单/编辑/实际浏览仍待验证 |
+| jar-06 / [app.jar](</home/lucinhu/Downloads/jar/app.jar>) | UC浏览器 / 240x320 | [欢迎页的中文显示、空白页与主菜单（受控响应，2026-10-20）](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-sdl/01-welcome.png>)；[早期初始化/测试网络](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-06/result.json>) | 2026-10-20 RTC 修复后越过动态数据；再从受控分配响应定位并补齐 `Integer.shortValue()S`，原 JAR 现完整显示中文欢迎协议，桌面原生 F1 确定后进入含地址/搜索/历史/帮助的空白页，F1 打开主菜单、Down 移动选中项、F2 关闭菜单。分配响应为本地按字节码构造的 41 字节测试数据，不来自旧 UC 服务；HTTP 503 对照仍停在“取消操作中…”。实际网页、搜索、地址编辑与输入法仍待验证，详见 [UC 修复与诊断](2026-10-20-uc-browser.md) |
 | jar-07 / [乱世Q三国.jar](</home/lucinhu/Downloads/jar/乱世Q三国.jar>) | 乱世Q三国 / 240x320 | [是否开启音乐](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-07/result.json>) | [音效→标题→主菜单→章节剧情选择；末次down未见明显选择变化](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-07-contact.png>) |
 | jar-08 / [仙镜OL-羊羊得意_诺基亚 N97系列(360×640)-1121281.jar](</home/lucinhu/Downloads/jar/仙镜OL-羊羊得意_诺基亚 N97系列(360×640)-1121281.jar>) | 仙镜online / 360x640 | [联网方式确定/返回提示](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-08/result.json>) | [--network后HTTP request failed；40秒超时，无新帧；不作在线成功判断](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-08-contact.png>) |
 | jar-09 / [侠义OL-八龙聚首_诺基亚 N97系列(360×640)-871204.jar](</home/lucinhu/Downloads/jar/侠义OL-八龙聚首_诺基亚 N97系列(360×640)-871204.jar>) | xyOnline / 360x640 | [请检查设备网络连接提示](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-09/result.json>) | [2026-10-19修复后：桌面原JAR触摸打开编辑Form、返回并重开；独立Android API21实例弹出系统IME，test5678确认回显、复开保留，追加ZZ后取消不覆盖旧值，再开IME成功；原手机/中文IME待复测，未提交注册或验证在线游玩](</home/lucinhu/workspace/c/nano_j2me/docs/notes/2026-10-17-xy-ime.md>) |
@@ -121,7 +121,7 @@ native-ime提供独立build-ime/nj2me，SHA-256 `ebb421a66aa7dbc521eb9c2805009da
 - [本次10条30秒回放结果](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/results.json>)。
 - [本次5条60秒回放结果](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/extended-results.json>)。
 
-剩余：孤岛CU928/E60/E62三个MINISOYO变体已完成isShown修复后回归，均到实际室内并响应soft2；N97已验证SDL2持续Up净位移、跨端口快照恢复、恢复后原生Escape/F2暂停/返回，以及进入新区域自动保存、冷启动RMS继续和后续移动/暂停/返回。各版战斗与完整任务、其他三个变体的保存继续及Android存档闭环仍待验证。家园6八个版本已分别完成修复后60秒交互回放。UC 的 RTC 修复已越过动态数据并在受控 HTTP 503 代理发出 4 次 POST，但取消仍停滞；调用诊断已确认首次启动先测试网络、后初始化命令，重试失败的提示使用尚未建立的 n.k，异常跳过后续初始化；成功协议响应和正常菜单路径仍待验证。本地 FreeJ2ME HTTP 为桩实现，不能据其相似画面判定网络行为一致或远端服务失效；远古帝国2第5轮已推进至战役地图与对白，并修复恢复快照后的音频资源崩溃，画面与战斗操作仍待验证。主菜单成功不等于完整可玩；比赛证据不等于完成一局。
+剩余：孤岛CU928/E60/E62三个MINISOYO变体已完成isShown修复后回归，均到实际室内并响应soft2；N97已验证SDL2持续Up净位移、跨端口快照恢复、恢复后原生Escape/F2暂停/返回，以及进入新区域自动保存、冷启动RMS继续和后续移动/暂停/返回。各版战斗与完整任务、其他三个变体的保存继续及Android存档闭环仍待验证。家园6八个版本已分别完成修复后60秒交互回放。UC 的 RTC 修复已越过动态数据；受控分配响应后又补齐 `Integer.shortValue()S`，原 JAR 能完整显示中文欢迎协议、进入空白页并打开主菜单、移动选中项、关闭菜单，但这些是一次性本地构造响应的结果，HTTP 503 下取消仍停滞，实际网页、地址编辑与输入法仍待验证。本地 FreeJ2ME HTTP 为桩实现，不能据其相似画面判定网络行为一致或远端服务失效；远古帝国2第5轮已推进至战役地图与对白，并修复恢复快照后的音频资源崩溃，画面与战斗操作仍待验证。主菜单成功不等于完整可玩；比赛证据不等于完成一局。
 
 ## 既有27唯一基线执行与异常边界
 

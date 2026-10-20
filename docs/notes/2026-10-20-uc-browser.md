@@ -1,10 +1,43 @@
-# UC 浏览器时钟兼容性修复（2026-10-20）
+# UC 浏览器时钟与 Integer.shortValue 兼容性修复（2026-10-20）
 
-本轮已修复 UC 停在“初始化:动态数据”的本地阻断。原 JAR 现能进入“初始化:测试网络[第1次]”，受控代理收到 4 次 POST。取消后仍停在“取消操作中…”，主菜单、网页浏览及输入尚未验证。
+RTC 修复后，进一步从受控响应中定位并补齐 `Integer.shortValue()S`。同一原 JAR 现在能完整显示中文欢迎页，桌面原生 F1 确认后进入空白页，继续 F1 打开主菜单、Down 移动选中项、F2 关闭菜单。此结果使用本地构造的分配响应；HTTP 503 下仍停在取消流程，实际网页浏览和地址输入尚未通过。
 
 原 [app.jar](</home/lucinhu/Downloads/jar/app.jar>) 为 UC 9.0.0，530861 字节，SHA-256 `38e7c3f7a9d06c8f6d04d4e6f83b33dda787fa7191445e619c4d9d11c3bcb3a2`。所有实验使用独立新 RMS；原 JAR 运行前后哈希一致，未改用户存档。
 
-## 根因与修复
+## 后续：受控分配响应与 Integer.shortValue
+
+仅 HTTP 200 不足以通过网络测试。[空响应对照](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/http200-empty/result.json>) 收到 4 次 POST，每次都在外层 `DataInputStream.readUTF()` 处遇到 EOF，随后进入原来的空命令失败路径。
+
+按原 JAR 字节码构造的 [41 字节响应](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/derived-assignment/assignment.bin>) SHA-256 为 `e4ea0b6c768c4e588aed995aad79811e07739c5801fd979733bfda860d9b4c72`，可由 [生成脚本](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/make_assignment.py>) 重建。外层为 `writeUTF("data")`、大端有符号 short 长度 33、33 字节负载；内层为两个长度前缀 ASCII 字符串 `assign`、`uc-fixture.invalid:80`，以 `[238,185,233,179,129,142,151,167]` 循环 XOR，加上校验值 `0x25` 分别与前两个密钥字节 XOR 的两字节尾部。它满足分配解析器的非空及冒号检查，是本地派生测试数据，未宣称来自旧 UC 服务。
+
+[分配响应基线](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/http200-assignment/result.json>) 将请求减为 2 次，并进入 `n.e()V`，从而越过之前的命令初始化阻断。但内置页面解析在 `al.a(Lan;I[B)Z pc=201` 抛出 `java/lang/NoSuchMethodError: java/lang/Integer.shortValue()S`；[第 240 帧](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/http200-assignment/frames/00240.png>) 只有空白页与地址、历史、帮助控件。
+
+修复在 [Integer 实现](</home/lucinhu/workspace/c/nano_j2me/src/core/nj_lib_boxing.c#L42>) 同时补上实例方法声明和 native 绑定，返回低 16 位的有符号值，保留原始 Integer。实现不分配内存，不引入依赖。新增 [13 组边界测试](</home/lucinhu/workspace/c/nano_j2me/tests/test_lib.c#L3018>) 覆盖正负边界、回绕、高位混入与 int 极值，并检查调用状态、异常和原值；旧实现为 [752 passed, 26 failed](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-red-test.log>)，补齐后 [778 passed, 0 failed](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-green-test.log>)。当前全套 [CTest 85/85 通过](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-ctest.log>)。
+
+在同一个 `25ef93f` 诊断基线中只覆盖该 boxing 文件后，二进制 SHA-256 为 `76d40a1bd2eef214a3e7c5fd6c7c3e2515f841931bf7c7afd35b78725d57055e`。同一原 JAR、同一响应、全新 RMS、240×320、16 MiB、30fps，已显示 [完整中文欢迎协议](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/http200-assignment-shortvalue-v2/frames/00240.png>)。[条件及结果](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/http200-assignment-shortvalue-v2/result.json>) 记录 2 次 POST、241 帧和 8.031 秒；第 240 帧的 soft2 此时对应“退出”，应用调用 `notifyDestroyed()` 正常退出，不能把缺少第 450 帧误判为崩溃。第一次命名为 `http200-assignment-shortvalue` 的隔离构建没有实际带入补丁，其结果已标记排除，采用核对源文件后的 `v2` 重跑证据。
+
+### 桌面原生按键验证
+
+当前 [桌面构建](</home/lucinhu/workspace/c/nano_j2me/build/nj2me>) SHA-256 `1f784eef59da9b5e5f9dede637d0541afd3272dc2c716aa320bbd1ab964f1fef`，来源为 `de6d5c8` 加 boxing 修复。新 RMS，原 JAR 不变，240×320、16 MiB、30fps；所有 HTTP 请求由 loopback fixture 直接回答，不转发。按 PID 与标题共同定位 SDL 窗口，采集实际渲染缓冲与按键 down/up。
+
+| 操作 | 已检查的结果 |
+|---|---|
+| 启动 | [中文欢迎协议](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-sdl/01-welcome.png>) |
+| F1 确定 | [进入含地址、搜索、历史和帮助的空白页](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-sdl/02-after-confirm.png>) |
+| 再按 F1 | [主菜单打开，选中“1.打开”](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-sdl/03-menu.png>) |
+| Down | [选中项移到“2.窗口”](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-sdl/04-menu-down.png>) |
+| F2 关闭菜单，再按 Return | [仍显示空白页](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-sdl/06-after-return.png>)；未打开地址编辑器 |
+| 后续 F2 | [底部“切换”焦点变化](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-sdl/07-followup.png>)；不作为输入法通过证据 |
+
+[完整命令、哈希、动作和截图帧号](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-sdl/manifest.json>)、[SDL 输入及运行日志](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-sdl/runtime.log>)、[2 次 POST](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-sdl/proxy-requests.json>) 保留。运行 518 帧、17.618 秒、29.4fps，随后受控结束；JAR 前后 SHA 一致。日志中不再有 `Integer.shortValue` 的缺失方法异常，但仍有资源解析相关的已捕获异常；最后 F2 后记录 `NullPointerException at l.a(Lan;I)V pc=23`，因此不把本轮菜单操作扩大为所有交互通过。
+
+### 当前边界
+
+分配响应被 fixture 同样用于第二次 `usquery.php` 请求，它并不是有效的下游资源协议响应。`bi.v()V` 调用 `bd.a(Hashtable)Z` 后丢弃返回值，并在方法返回时标记该阶段成功；不能以此证明远端资源安装成功。欢迎页来自 JAR 内置资源，实际网页、搜索、地址编辑、输入法、冷启动状态和 Android 回归仍待验证。
+
+同一当前二进制另跑 [HTTP 503 对照](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-http503/result.json>)：4 次 POST，300 帧、9.979 秒，soft2 后 [仍停在取消操作中](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-http503/frames/00300.png>)；日志仍有 `Displayable.addCommand` 的 `command is null`。该取消停滞没有被本轮方法补齐修复，远端服务可用性也未据此判定。
+
+## 历史：时钟根因与修复
 
 UC 初始化路径存在当前时间条件。模拟器原先将端口启动后的单调计数作为 Java 时间，桌面 `System.currentTimeMillis()` 因而落在 1970 年附近；`new Date()` 与新建 Calendar 又分别默认到零。加载器在进度 3/99 之后没有进入 HTTP worker，只有进度线程 `ah.run()` 按 300ms 睡眠轮询。
 

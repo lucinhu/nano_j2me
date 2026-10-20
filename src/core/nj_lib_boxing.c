@@ -39,6 +39,16 @@ NJFN(int_intValue)
     return NJ_OK;
 }
 
+NJFN(int_shortValue)
+{
+    nj_field *f = vf(vm, "java/lang/Integer", "I");
+    nj_s4 value = f ? nj_field_read_int(vm, NJ_THIS(args), f) : 0;
+    nj_u4 low = (nj_u4)value & 0xFFFFu;
+    /* Java narrows to 16 bits, then sign-extends into an operand stack int. */
+    ret->i = low >= 0x8000u ? (nj_s4)low - 0x10000 : (nj_s4)low;
+    return NJ_OK;
+}
+
 /*
  * Integer.hashCode() is the value it wraps, which is what a Hashtable keyed on
  * Integers needs.  The method was declared in Integer_methods but never bound,
@@ -1383,6 +1393,7 @@ static const nj_builtin_method Integer_methods[] = {
     M("<init>",        "(I)V", 0),
     M("intValue",      "()I",  0),
     M("byteValue",     "()B",  0),
+    M("shortValue",    "()S",  0),
     M("parseInt",      "(Ljava/lang/String;)I", NJ_ACC_STATIC),
     M("parseInt",      "(Ljava/lang/String;I)I", NJ_ACC_STATIC),
     M("toString",      "(I)Ljava/lang/String;", NJ_ACC_STATIC),
@@ -1502,6 +1513,7 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Integer",   "parseInt",     "(Ljava/lang/String;)I", int_parseInt },
     { "java/lang/Integer",   "parseInt",     "(Ljava/lang/String;I)I", int_parseInt_radix },
     { "java/lang/Integer",   "byteValue",    "()B",                   int_byteValue },
+    { "java/lang/Integer",   "shortValue",   "()S",                   int_shortValue },
     { "java/lang/Integer",   "valueOf",      "(Ljava/lang/String;)Ljava/lang/Integer;", int_valueOf_str },
     { "java/lang/Integer",   "valueOf",      "(Ljava/lang/String;I)Ljava/lang/Integer;", int_valueOf_str_radix },
     { "java/lang/Integer",   "hashCode",     "()I",                   int_hashCode },

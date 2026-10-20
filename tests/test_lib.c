@@ -3013,6 +3013,38 @@ static void test_gc_ignores_freed_slot(nj_vm *vm)
     clean(vm, "stale pointer in a scanned slot");
 }
 
+/* UC Browser's bundled page parser calls Integer.shortValue().  Narrowing
+ * keeps the low 16 bits and sign-extends them, including out-of-range ints. */
+static void test_integer_short_value(nj_vm *vm)
+{
+    static const struct { nj_s4 value; nj_s4 expected; } cases[] = {
+        { 0, 0 }, { 1, 1 }, { -1, -1 },
+        { 32767, 32767 }, { 32768, -32768 },
+        { 65535, -1 }, { 65536, 0 },
+        { -32768, -32768 }, { -32769, 32767 }, { -65536, 0 },
+        { 0x12348001, -32767 }, { 2147483647, -1 },
+        { -2147483647 - 1, 0 }
+    };
+    unsigned i;
+
+    for (i = 0u; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        nj_value a[1], r;
+        nj_ref o;
+        a[0] = vint(cases[i].value);
+        o = construct(vm, INTEGER, "(I)V", a, "Integer for shortValue");
+        r.bits = 0u;
+        OK_MSG(o && nj_call(vm, o, INTEGER, "shortValue", "()S", NULL, &r)
+                      == NJ_OK && r.i == cases[i].expected,
+               "Integer(%ld).shortValue() is %ld (got %ld)",
+               (long)cases[i].value, (long)cases[i].expected, (long)r.i);
+        clean(vm, "Integer.shortValue");
+        OK_MSG(o && nj_call_int(vm, o, INTEGER, "intValue", "()I", NULL)
+                      == cases[i].value,
+               "shortValue leaves the wrapped int unchanged");
+        clean(vm, "Integer after shortValue");
+    }
+}
+
 /*
  * Integer.valueOf(String, int) and Long.valueOf(String)/valueOf(String, int).
  * CLDC 1.1 declares the radix forms next to parseInt/parseLong, and only the
@@ -3619,6 +3651,7 @@ int main(void)
     test_media(vm);
     test_strings(vm);
     test_numbers(vm);
+    test_integer_short_value(vm);
     test_float_parse(vm);
     test_boxing_valueof_radix(vm);
     test_random(vm);
