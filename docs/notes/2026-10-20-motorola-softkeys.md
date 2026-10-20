@@ -38,7 +38,30 @@ Evidence is retained under `.local-tools/debug-runs/ancient-softkeys-round16/`. 
 
 `menu-headless` also saves a VM snapshot at frame 2,460, advances the remaining story with softkeys, and reaches the mission objective and unit-control tutorial. Its initial caught `h.<init>(String,int)` NullPointerException and absent-store exceptions match earlier runs; they do not terminate the game thread.
 
-`restored-headless` and `restored-sdl2` load that snapshot without selecting a device on the command line. Softkeys still advance the tutorial, and both runs reach the game-created save overwrite confirmation. They run 944/941 frames at 30.2/29.7 fps. Repeated downward input during the tutorial encounters a caught `ArrayIndexOutOfBoundsException` at `e.b(II)V pc=5` in both ports; subsequent menus still respond. That game-side boundary case remains to be investigated. The captures do not establish combat, mission completion, or a cold restart from a game-created RMS slot.
+`restored-headless` and `restored-sdl2` load that snapshot without selecting a device on the command line. Softkeys still advance the tutorial, and both runs reach the game-created save overwrite confirmation. They run 944/941 frames at 30.2/29.7 fps.
+
+Follow-up runs under `.local-tools/debug-runs/ancient-rms-round17/save-headless` and `save-sdl2` actually confirm the overwrite, and both show `游戏已存档`. Their independent RMS copies contain the same 128-byte `save.rms`, SHA-256 `12e46dc7e3a6ae90d3453fec187c59a98ca49501c06041a7268990f2b0682b78`. The bytes match the copied initial record because the same turn state was saved again; matching hashes alone are not proof of a changed game state.
+
+`cold-load-headless` and `cold-load-sdl2` then start fresh processes with their respective test RMS copies, explicitly select `motorola-e398`, and do not pass `--load-state`. Both navigate to `读取游戏`, show the populated `SLOT 1/3` with `殿之入侵者` and `current turn: 1`, load the map, move the cursor, and open the map command menu. The submenu uses left/right navigation: after skipping the intro with 64 right-softkey presses, press `5` once, `right` once, `5` to open the slots, then `5` to load the first slot. Down does not change the wheel selection. The headless run completes 1,508 frames in 49.953 s at 30.2 fps; SDL2 completes 1,511 frames in 50.344 s at 30.0 fps. Neither run reports an uncaught exception. This establishes lookup, reading and continued input after a cold RMS restart on both port backends.
+
+The caught `ArrayIndexOutOfBoundsException` at `e.b(II)V pc=5` is an invalid game audio ID. An independent local exception interposer records the call as `e.b(11, 1)` from `i.c()V`, with caller resume PC 5194. Original bytecode at `i.c()` PCs 5188–5191 pushes the literal 11 and invokes `e.b(int,int)`. That method reads `b:[Z` with `baload` at PC 4; this boolean array is sized from the game's nine-entry sound-name table. Its own `java/lang/Exception` handler covers that read and returns normally at PCs 131–132. Subsequent save menus remain usable. Java array bounds should therefore remain enforced; suppressing the exception in the VM would conceal an invalid sound index in the original game. Enemy movement also calls `e.e(I)V` with the literal sound ID 10: `i.c(Lc;)V` pushes 10 at PC 0 and invokes it at PC 2. The callee accesses the same nine-entry `b:[Z` at PC 4, with local `java/lang/Exception` handlers `[0,8)` and `[9,44)` targeting PC 45 (`pop; return`). The observed thrown PC 5 is the position after that failing array read. The original game catches this invalid audio index as well; movement and subsequent turns continue. These audio-exception captures alone do not establish combat or mission completion.
+
+### Movement and combat follow-up
+
+Separate bounded runs in `ancient-rms-round17/combat-*` through `combat9-*` continue from the loaded first mission on both ports. They select the commander, move it from (3,6) to (4,6), end the turn, allow the enemy units to move and reach the next turn with 60 income. After the turn banner finishes fading, they move the commander from (4,6) to (4,4), select `攻击`, target the enemy at (5,4), and play the attack and counterattack animation through its return to the map.
+
+The local interposer reads existing game objects at each framebuffer checkpoint; it does not write game fields or bypass input handling. `combat8-headless` records the commander health changing from 100 to 89 and the targeted enemy from 100 to 44. `combat8-sdl2` records 100 to 89 and 100 to 40 respectively. Those values remain in the `combat9-*` map checkpoints, which also display the next unit-control tutorial. Damage rolls differ between these independent game instances, so these runs are behavioral checks, not pixel-equality comparisons. The other enemy remains at 100 health. Both continuations exit normally, with no uncaught exception.
+
+The final steps use the local checkpoint build linked with the production library and start from each port's own preceding snapshot, retaining the same isolated RMS copies. Controls use 50 ms key presses separated by waits at 30 fps. A first attempt sent direction input while the new-turn banner was fading, leaving the cursor on an empty tile and opening the map menu; the per-step captures exposed that replay error. Waiting for the banner before selecting the commander resolves it without changing emulator input behavior. The earlier fresh-process `cold-load-*` runs establish cold RMS loading separately from these snapshot-assisted combat continuations.
+
+| Run | Frames | Paints | Elapsed | Observed rate |
+|---|---:|---:|---:|---:|
+| `combat8-headless` | 258 | 129 | 8.589 s | 30.0 fps |
+| `combat8-sdl2` | 257 | 128 | 8.854 s | 29.0 fps |
+| `combat9-headless` | 290 | 145 | 9.657 s | 30.0 fps |
+| `combat9-sdl2` | 289 | 145 | 9.865 s | 29.3 fps |
+
+The framebuffer evidence includes `combat8-headless/03-after-attack.png` for the battle scene and `combat9-headless/02-map-after-combat.png` for the returned map and tutorial, with corresponding SDL2 captures. This verifies one movement/turn/combat sequence and subsequent tutorial progression; mission victory and a complete campaign remain unverified.
 
 ## Resource cost
 
