@@ -84,22 +84,20 @@ fi
 
 # The feature switches, spelled out exactly as CMakeLists.txt passes them.
 #
-# This is not decoration.  nj_config.h nests its NJ_THREADED_DISPATCH default
-# INSIDE the `#ifndef NJ_PIXFMT` block (include/nj2me/nj_config.h:268-286), so a
-# build that does not define NJ_PIXFMT - which is what this script used to do -
-# silently gets NJ_THREADED_DISPATCH 1, the computed-goto interpreter, while
-# every desktop build gets 0 and the portable switch.  Two builds of the same
-# sources then disagree about how the interpreter is written, and the threaded
-# path is the one with a live miscompile: tests/fixtures/keysdemo.jar throws
+# NJ_PIXFMT is spelled out here so the .so is the same runtime configuration
+# that CMake, ctest, tools/run_game_corpus.sh and docs/PERFORMANCE.md were
+# measured on.  A build that leaves the pixel format to nj_config.h's default is
+# supported (the default is unconditional), but naming every switch keeps the
+# comparison honest.
 #
-#     java.lang.VerifyError at KeysDemo$Pad.<init>()V pc=14:
-#     receiver is not an object reference
-#
-# under the threaded dispatch and runs perfectly under the switch.  Defining
-# NJ_PIXFMT here is therefore what makes the .so behave like the runtime the
-# corpus, the tests and docs/PERFORMANCE.md were measured on.
-#
-# See docs/notes/OPEN-issue-threaded-dispatch.md.
+# NJ_THREADED_DISPATCH is no longer selected by accident.  Its default used to
+# be nested inside the `#ifndef NJ_PIXFMT` guard, so a hand build like this one
+# silently got the computed-goto interpreter while every CMake build got the
+# switch - and the threaded interpreter was broken (a double fetch:
+# docs/notes/OPEN-issue-threaded-dispatch.md).  The block is now independent,
+# the default is an explicit 0, and tools/check_threaded_dispatch.sh compiles
+# both bodies under `ctest`.  This script therefore leaves the switch on, like
+# every other build.
 #
 # NJ_ENABLE_FONT_CJK=0 is the other deliberate departure from a desktop build.
 # The built-in wide-glyph table is 7445 GB2312 characters at 12x12 and 16x16 -

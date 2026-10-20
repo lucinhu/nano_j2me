@@ -731,6 +731,23 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_constant_value.sh
                      ${NJ_FIXTURES}/cvdemo.jar)
+    # The threaded (computed-goto) interpreter is a SECOND implementation of all
+    # 256 opcodes, and nothing in a default build compiles it - so it rots
+    # silently.  It did: a converted handler's DISPATCH() fetches the next
+    # opcode, but the table sent unconverted opcodes to L_slow, which fetched a
+    # second time, so every converted-to-unconverted transition lost one byte.
+    # keysdemo (invokespecial, then aload_0) surfaced it as
+    # "VerifyError: receiver is not an object reference".  The default build
+    # never ran it because the dispatch default was nested inside
+    # `#ifndef NJ_PIXFMT`: CMake defines a pixel format and got the switch,
+    # while a hand build got the threaded interpreter.
+    # tools/check_threaded_dispatch.sh builds BOTH interpreters from source,
+    # requires equal bytecode counts on the fixture, and probes nj_config.h so
+    # the default stays the portable switch with or without NJ_PIXFMT.
+    add_test(NAME check_threaded_dispatch
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_threaded_dispatch.sh
+                     ${NJ_FIXTURES}/keysdemo.jar)
+    set_tests_properties(check_threaded_dispatch PROPERTIES TIMEOUT 300)
     # A mutable Image is white and fully opaque (MIDP 2.0).  A Java int[] starts
     # zeroed - transparent black - so a title that builds its scenery off-screen
     # blended its sprites against black and let the untouched pixels see

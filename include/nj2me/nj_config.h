@@ -399,6 +399,7 @@
 #define NJ_PIXFMT_ARGB8888 2
 #ifndef NJ_PIXFMT
 #  define NJ_PIXFMT NJ_PIXFMT_RGB565
+#endif
 
 /*
  * Threaded (computed-goto) interpreter dispatch.
@@ -406,15 +407,26 @@
  * GCC and Clang both support taking the address of a label; nothing else
  * guaranteed to build this project does.  When it is 0 the interpreter uses
  * the portable switch and loses speed, not correctness - see the note in
- * nj_interp.c.  A caller may force it off to measure the difference.
+ * nj_interp.c.
+ *
+ * DEFAULT OFF, and explicitly so.  Every number in docs/PERFORMANCE.md and
+ * every ctest run has been measured on the switch interpreter; the threaded
+ * body is a second implementation of the same 256 opcodes and needs to prove
+ * itself against that baseline before it becomes the default (see
+ * tools/check_threaded_dispatch.sh, which exercises it on every `ctest`).
+ *
+ * This block used to sit INSIDE the `#ifndef NJ_PIXFMT` guard above, so any
+ * build that did not happen to define a pixel format (a hand-compile, an
+ * early Android script) defaulted it to 1 while CMake's builds got 0.  The two
+ * interpreters then disagreed about which one was tested, and the threaded one
+ * was broken: a converted handler's DISPATCH() already fetches the next
+ * opcode, but the table sent unconverted opcodes to L_slow, which fetched
+ * again.  tests/fixtures/keysdemo.jar turned the resulting off-by-one byte
+ * into "receiver is not an object reference".  Keep the define independent of
+ * NJ_PIXFMT, and keep the default 0.
  */
-#if !defined(NJ_THREADED_DISPATCH)
-#  if defined(__GNUC__) || defined(__clang__)
-#    define NJ_THREADED_DISPATCH 1
-#  else
-#    define NJ_THREADED_DISPATCH 0
-#  endif
-#endif
+#ifndef NJ_THREADED_DISPATCH
+#  define NJ_THREADED_DISPATCH 0
 #endif
 
 /* Assertions (always compiled out unless explicitly enabled). */

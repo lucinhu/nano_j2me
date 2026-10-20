@@ -229,15 +229,22 @@ over the top 20 is worth roughly 10-12%.
 
 A converted handler carries an `L_0xNN:` label before its `case`, ends with
 `DISPATCH()` instead of `break`, and its entry in `nj_dispatch[256]` points at
-that label.  An unconverted handler has no label, its entry points at `L_slow`,
-and it runs through the switch exactly as before.  **The two kinds coexist**, so
-the conversion is one opcode at a time and after EVERY one the benchmark must
-still report exactly 112,117,067 bytecodes - a mistake shows up as a wrong count,
-not as a subtle wrong answer.
+that label.  An unconverted handler has no label, its entry points at
+`L_haveop` - the switch entry immediately AFTER the single fetch - and it runs
+through the switch exactly as before.  **The two kinds coexist**, so the
+conversion is one opcode at a time and after EVERY one the benchmark must still
+report exactly 112,117,067 bytecodes - a mistake shows up as a wrong count, not
+as a subtle wrong answer.
 
-`NJ_THREADED_DISPATCH` is 0 on any compiler without the label-address extension
-and `DISPATCH()` is then just `continue`.  ESP32 (xtensa and riscv), Cortex-M and
-three Android ABIs are built by this project; they lose speed, not correctness.
+`NJ_THREADED_DISPATCH` is 0 in every build since 2026-10-21; it used to be
+selected automatically on GCC/Clang, but the block that did so was nested inside
+`#ifndef NJ_PIXFMT`, so `ctest`, the corpus runner and every number in this file
+were measured on the switch while a hand build quietly ran an interpreter with a
+double-fetch bug (`docs/notes/OPEN-issue-threaded-dispatch.md`).  It is now
+explicitly opt-in, and `tools/check_threaded_dispatch.sh` compiles both bodies
+under `ctest`.  `DISPATCH()` is then just `continue`; ESP32 (xtensa and riscv),
+Cortex-M and three Android ABIs built by this project lose speed, not
+correctness.
 
 ## The measurement was still wrong in one way, and it produced a false positive
 
