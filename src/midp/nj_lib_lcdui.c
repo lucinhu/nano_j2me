@@ -3722,8 +3722,18 @@ NJFN(c_serviceRepaints)
      * Painting here also presents, which is what the caller asked for.  The
      * guard keeps a callSerially() runnable drained inside the paint from
      * re-entering it.
+     *
+     * Only the first serviceRepaints() of a frame may paint.  A title whose
+     * own loop is `repaint(); serviceRepaints();` with no sleep - 扫雷行动
+     * (game-188) overrides flushGraphics() that way and spins - would
+     * otherwise paint 586 times per frame (one bytecode quantum), 0.4fps,
+     * corpus timeout.  The frame hook already presents exactly once per
+     * frame, so a second paint before it cannot be seen; FreeJ2ME coalesces
+     * the same way (repaint() stacks into needsRepaint, serviceRepaints()
+     * waits for the frame-driven paint).  repaint_pending stays set for the
+     * next frame's paint instead of being burned here.
      */
-    if (vm->repaint_pending && !vm->in_paint) {
+    if (vm->repaint_pending && !vm->in_paint && !vm->painted_in_frame) {
         vm->in_paint = 1u;
         (void)nj_midp_paint(vm);
         vm->in_paint = 0u;
