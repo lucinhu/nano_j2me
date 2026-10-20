@@ -204,31 +204,47 @@ Fixed in commit `290fe0f`.  `nj_midp_screen()` had two defects:
 
 Both are gone; the runtime now draws into the port's own framebuffer.
 
-# OPEN: Tumbleweed (tests/games/jump.jar) reports "Screen too small"
+# RESOLVED: Tumbleweed (tests/games/jump.jar) runs at its supported sizes
 
-The game loads, links, runs, and renders - its own error Alert appears with the
-title bar, the message text and the soft-key hint drawn by the built-in LCDUI
-renderer, which is a full-stack result in itself.  But it refuses at every size
-tried (176x208, 176x220, 240x320, 320x240), and 128x160 produced no frames
-within the timeout.
+The "Screen too small" Alert was the game's own size gate, not a runtime fault,
+and the support range is real: the MIDlet rejects both a small and a large
+handset.  Reproduced at four sizes under the headless port (240x320 default and
+176x208 host snapshot; 176x220 and 128x160 additionally):
 
-Worth checking, in order:
+| size     | result                                                      |
+|----------|-------------------------------------------------------------|
+| 128x160  | game's own Alert: `java.lang.Exception:Screen too small`     |
+| 176x208  | game runs: countdown ticks 0:57 -> 0:55, tumbleweeds animate |
+| 176x220  | game runs: countdown 0:57, score -2, tumbleweeds animate     |
+| 240x320  | game's own Alert: `java.lang.Exception:Screen too large`     |
 
-1. What the game actually compares.  `net.frog_parrot.jump` is published source
-   (tools/fetch_test_games.sh pulls it); read the check rather than guessing.
-   It may gate on a device property rather than on `getWidth()`.
-2. `Canvas.getWidth()`'s value at the moment the check runs.  It is lazily
-   initialised from the screen surface, so it needs the display to be up - which
-   it now is even before `startApp()`.
-3. Whether the game is reading an image resource whose decode failed, and
-   reporting the resulting zero size as a screen-size problem.  The fixture's
-   own PNG loading works, so this would be a JAR-path or resource-name issue.
+The refusal text is drawn by the built-in LCDUI Alert renderer, wrapped inside
+the panel (see the next section), so the "full-stack result" of the original
+observation is confirmed - only the interpretation ("it refuses at every size
+tried") was stale.  FreeJ2ME-Plus on the same host shows the identical split:
+`Screen too large` at 240x320 and the running game at 176x208.  The earlier
+"refuses at 176x208" reading predates the thread-lifecycle, paint and scheduler
+fixes that made the game's own game thread run (see the closed jump.jar entry
+below).
 
-# OPEN: Alert text does not wrap
+Evidence: `.local-tools/debug-runs/jump-sizes/{128x160,176x208,176x220,240x320}`
+(headless, PNG frames at 120/240) and `.local-tools/debug-runs/jump-ref`
+(FreeJ2ME-Plus reference shots at 240x320 and 176x208).
 
-The Alert above shows "java.lang.Except..." clipped at the right edge instead of
-wrapping onto the next line.  MIDP wraps Alert text.  `displayable_render()`'s
-Alert branch in src/midp/nj_lib_lcdui.c draws the string in one run.
+# RESOLVED: Alert text does not wrap
+
+`ui_text()` in src/midp/nj_lib_lcdui.c wraps every built-in panel's body text
+at the width it is given, breaking at the last space that fits and hard-breaking
+inside a word longer than a line.  All four widgets (Alert, Form, List,
+TextBox) go through it, so the fix covers the whole built-in UI rather than the
+Alert branch alone.  The same renderer is what draws Tumbleweed's
+`java.lang.Exception:Screen too large` message onto two lines today.
+
+Regression: `tests/test_lcdui.c` renders a one-line Alert and a three-line
+Alert (same constructor, same `AlertType`) and requires the wrapped body's
+vertical text span to be more than twice the one-line span.  The check fails
+(3 assertions, one per round) when the wrap is disabled, which is the old
+"draw the string in one run" behaviour.
 
 ---
 
@@ -339,36 +355,18 @@ After both fixes the limiter is honest:
 
     --fps 60   frames=60  time=0.988s  fps=60.7
 
-# OPEN: jump.jar's game thread does not exist at all under the headless port
+# RESOLVED: jump.jar's game thread exists and animates under the headless port
 
-Instrumenting `nj_scheduler_step` shows **one** thread in the table for the
-whole run:
+The single-thread observation was a symptom of the pre-fix thread lifecycle (a
+`Thread.start()` whose `run()` resolved to a native killed the thread instantly,
+and a game thread that was never created logged nothing).  After those fixes
+the headless port shows the game's own thread running: identical frame stepping
+under `--run-frames` changes the countdown (0:57 -> 0:55) and moves the
+tumbleweeds, with score changes when they are hit.  Evidence:
+`.local-tools/debug-runs/jump-sizes/176x208/frames/{00120,00240}.png`.
 
-    SCHED t=31589640 n=1: [0 st=1 wake=0 fr=0]
-
-`maze.jar` has two (main plus its game thread) and animates.  So
-`JumpCanvas.start()`'s thread is either never created or is destroyed
-immediately, and the frames are identical from the first to the last - the game
-is a still image under this port.
-
-Two things to reconcile before chasing it:
-
-1. Under the SDL2 port with the capture facility, `jump.jar` **did** animate
-   (score, countdown and enemies all visibly changed) - but that run was before
-   the clock fix, so the two are not comparable yet.  Re-run the SDL2 capture
-   first; if it still animates, the difference is in the port, not the game.
-2. A game thread that is never created is silent.  `Thread.start()` used to
-   kill the thread instantly when `run()` resolved to a native (fixed in an
-   earlier round) and that produced exactly this symptom - a permanently blank
-   or frozen screen with nothing logged.  Check whether a constructible failure
-   in that path is still unlogged: `thread_start` should never return without
-   either a live thread or a pending exception.
-
-`maze.jar` is the control: same publisher, same toolkit, same era, and its
-thread is scheduled normally.
-
-
----
+What remains genuinely open from that observation is only the test-cost question
+in the two follow-up notes at the end of this file; the game itself is fine.
 
 # OPEN (next): the MIDP stub generator drops `throws`
 

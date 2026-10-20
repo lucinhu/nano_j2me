@@ -2226,6 +2226,76 @@ static void test_screen(nj_vm *vm)
         OK_MSG(surface_colours(scr, NULL) >= 3, "an Alert frame is uniform");
     }
 
+    /* ---- MIDP wraps the Alert body text at the panel width ---------- */
+    /*
+     * A real game's error Alert used to run off the right edge ("java.lang.
+     * Except..." on a 176x208 screen) because the renderer drew the string in
+     * one run.  MIDP wraps it, so a one-line message and a three-line message
+     * must occupy visibly different heights in the content area.
+     */
+    {
+        nj_ref long_alert, short_alert, warning;
+        nj_value a[4];
+        int short_h = 0, long_h = 0, k, x, y;
+        int short_y0 = 1, short_y1 = -1, long_y0 = 1, long_y1 = -1;
+        const char *long_text =
+            "The quick brown fox jumps over the lazy dog. "
+            "The quick brown fox jumps over the lazy dog. "
+            "The quick brown fox jumps over the lazy dog.";
+
+        warning = static_ref(vm, NJ_C_ALERTTYPE, "WARNING", D_ALERTTYPE);
+        OK(warning != NULL);
+
+        a[0] = sref(str(vm, "Wrap"));
+        a[1] = sref(str(vm, "Hi"));
+        a[2].r = 0;
+        a[3] = sref(warning);
+        short_alert = construct(vm, NJ_C_ALERT,
+            "(Ljava/lang/String;Ljava/lang/String;" D_IMAGE D_ALERTTYPE ")V", a);
+
+        a[0] = sref(str(vm, "Wrap"));
+        a[1] = sref(str(vm, long_text));
+        a[2].r = 0;
+        a[3] = sref(warning);
+        long_alert = construct(vm, NJ_C_ALERT,
+            "(Ljava/lang/String;Ljava/lang/String;" D_IMAGE D_ALERTTYPE ")V", a);
+        OK(short_alert != NULL && long_alert != NULL);
+
+        for (k = 0; k < 2; k++) {
+            nj_ref which = k == 0 ? short_alert : long_alert;
+
+            if (!which) {
+                continue;
+            }
+            OK(nj_midp_set_current(vm, which) == NJ_OK);
+            OK(nj_midp_paint(vm) == NJ_OK);
+            /* Skip the title bar and the soft-key strip; only body text is
+               black on the Alert panel. */
+            for (y = 30; y < (int)scr->height - 30; y++) {
+                for (x = 0; x < (int)scr->width; x++) {
+                    nj_u4 c = nj_surface_get(scr, x, y);
+
+                    if ((c & 0xFFFFFFu) != 0u) {
+                        continue;
+                    }
+                    if (k == 0) {
+                        if (y < short_y0) { short_y0 = y; }
+                        if (y > short_y1) { short_y1 = y; }
+                    } else {
+                        if (y < long_y0) { long_y0 = y; }
+                        if (y > long_y1) { long_y1 = y; }
+                    }
+                }
+            }
+        }
+        short_h = short_y1 - short_y0 + 1;
+        long_h = long_y1 - long_y0 + 1;
+        OK_MSG(short_h > 0, "a one-line Alert draws body text");
+        OK_MSG(long_h > short_h * 2,
+               "a 3-line Alert wraps (%d px tall) instead of staying one line "
+               "(%d px)", long_h, short_h);
+    }
+
     /* ---- back to a Canvas-free Form is still fine ---- */
     OK(nj_midp_set_current(vm, form) == NJ_OK);
     OK(nj_midp_paint(vm) == NJ_OK);
