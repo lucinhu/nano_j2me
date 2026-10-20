@@ -94,6 +94,7 @@ static void midi_free(void *ud, void *p)
 #define NJ_C_TONE     "javax/microedition/media/control/ToneControl"
 #define NJ_C_VOLUME   "javax/microedition/media/control/VolumeControl"
 #define NJ_C_MIDICTL  "javax/microedition/media/control/MIDIControl"
+#define NJ_C_VIDEOC   "javax/microedition/media/control/VideoControl"
 
 /* Player fields.  Everything the C side needs, on the object. */
 #define F_P_STATE    "pState"      /* I */
@@ -1099,6 +1100,17 @@ static const char *sniff_media(const nj_u1 *b, nj_u4 len)
     if (len >= 2u && b[0] == 0xFFu && (b[1] & 0xE0u) == 0xE0u) {
         return "MP3";
     }
+    /*
+     * ISO base media: the 'ftyp' box is the first one a muxer writes, so its
+     * four characters at offset 4 are the container's signature whatever size
+     * the box declares.  The old test looked at the box's size byte instead,
+     * which named the 20-byte ftyp of the collection's .amr-named MP4s as
+     * "an unrecognised container" - 毁灭战士3's whole soundtrack arriving as
+     * an unknown format is exactly that mistake.
+     */
+    if (len >= 8u && b[4] == 'f' && b[5] == 't' && b[6] == 'y' && b[7] == 'p') {
+        return "MP4";
+    }
     if (len >= 4u && b[0] == 0x00u && b[1] == 0x00u && b[2] == 0x00u &&
         (b[3] == 0x0Cu || b[3] == 0x18u || b[3] == 0x20u)) {
         return "MP4";
@@ -1467,47 +1479,80 @@ NJFN(media_createPlayer_stream)
          * allocation and the decode allocates either, which is what keeps the
          * still-unrooted array safe from the collector.
          */
-        if (strcmp(what, "AMR") == 0) {
-            nj_u4 aframes = nj_amr_frames(barray_bytes(data), barray_len(data));
+        /*
+         * Both layouts: the bare "#!AMR\n" stream, and the same 20 ms frames
+         * inside an ISO base media (MP4/3GP) 'samr' track.  Everything after
+         * the frame count is identical - size the array once, decode into it -
+         * because the container wrapper answers the same shape as the stream.
+         *
+         * 毁灭战士3 names its theme "snd/d3theme.amr" and puts an MP4 under
+         * that name, as do several other titles: the sniffer looks at the ftyp
+         * box, so they arrive here as "MP4", not as a broken AMR stream.
+         */
+        if (strcmp(what, "AMR") == 0 || strcmp(what, "MP4") == 0) {
+            const int in_mp4 = (strcmp(what, "MP4") == 0);
+            const nj_u1 *src = barray_bytes(data);
+            nj_u4 src_len = barray_len(data);
+            nj_u4 aframes = in_mp4 ? nj_amr_mp4_frames(src, src_len)
+                                   : nj_amr_frames(src, src_len);
             nj_ref pcm = NULL;
 
             if (aframes > 0u) {
                 pcm = nj_byte_array_new(vm,
                                         aframes * (nj_u4)NJ_AMR_BLOCK * 2u);
             }
-            if (pcm != NULL &&
-                nj_amr_decode(barray_bytes(data), barray_len(data),
-                              pcm->u.bytes) == aframes) {
-                w_r(vm, p, F_P_DATA, "[B", pcm);
-                w_i(vm, p, F_P_RATE, (nj_s4)NJ_AMR_RATE);
-                w_i(vm, p, F_P_CHAN, 1);
-                w_i(vm, p, F_P_FRAMES, (nj_s4)(aframes * NJ_AMR_BLOCK));
-                w_j(vm, p, F_P_DURATION,
-                    (nj_s8)(aframes * NJ_AMR_BLOCK) * 1000000LL /
-                    (nj_s8)NJ_AMR_RATE);
-                nj_logf(vm, 3, "media: decoded %u AMR frames into %u PCM bytes",
-                        (unsigned)aframes,
-                        (unsigned)(aframes * (nj_u4)NJ_AMR_BLOCK * 2u));
-                nj_root_release(vm, mark);
-                ret->r = p;
-                return NJ_OK;
+            if (pcm != NULL) {
+                nj_u4 decoded =
+                    in_mp4 ? nj_amr_mp4_decode(src, src_len, pcm->u.bytes)
+                           : nj_amr_decode(src, src_len, pcm->u.bytes);
+
+                if (decoded == aframes) {
+                    w_r(vm, p, F_P_DATA, "[B", pcm);
+                    w_i(vm, p, F_P_RATE, (nj_s4)NJ_AMR_RATE);
+                    w_i(vm, p, F_P_CHAN, 1);
+                    w_i(vm, p, F_P_FRAMES, (nj_s4)(aframes * NJ_AMR_BLOCK));
+                    w_j(vm, p, F_P_DURATION,
+                        (nj_s8)(aframes * NJ_AMR_BLOCK) * 1000000LL /
+                        (nj_s8)NJ_AMR_RATE);
+                    nj_logf(vm, 3, "media: decoded %u AMR frames from %s into "
+                                   "%u PCM bytes",
+                            (unsigned)aframes,
+                            in_mp4 ? "an MP4 track" : "a stream",
+                            (unsigned)(aframes * (nj_u4)NJ_AMR_BLOCK * 2u));
+                    nj_root_release(vm, mark);
+                    ret->r = p;
+                    return NJ_OK;
+                }
             }
             /*
              * Nothing to play, or no room for the samples: a silent Player,
              * for the reason the MIDI branch above gives.  The byte array's
              * failure has already raised OutOfMemoryError, so drop that rather
              * than failing createPlayer().
+             *
+             * An MP4 with no readable AMR track is the exception: that is a
+             * container this runtime has no decoder for, and the refusal below
+             * says which one instead of presenting silence as success.  A bare
+             * AMR file, by contrast, is a sound effect that happens to be
+             * empty, and silence is the honest answer for it.
              */
-            if (nj_has_exception(vm)) {
-                nj_clear_exception(vm);
+            if (in_mp4 && aframes == 0u) {
+                if (nj_has_exception(vm)) {
+                    nj_clear_exception(vm);
+                }
+                nj_logf(vm, 3, "media: no AMR narrowband track in this MP4");
+            } else {
+                if (nj_has_exception(vm)) {
+                    nj_clear_exception(vm);
+                }
+                w_i(vm, p, F_P_KIND, 0);
+                nj_logf(vm, 3, "media: silent Player for %u bytes of %s "
+                               "(no narrowband frame)",
+                        (unsigned)barray_len(data), what);
+                nj_root_release(vm, mark);
+                ret->r = p;
+                return NJ_OK;
             }
-            w_i(vm, p, F_P_KIND, 0);
-            nj_logf(vm, 3, "media: silent Player for %u bytes of AMR "
-                           "(no narrowband frame)",
-                    (unsigned)barray_len(data));
-            nj_root_release(vm, mark);
-            ret->r = p;
-            return NJ_OK;
         }
 #endif /* NJ_ENABLE_AMR */
         nj_logf(vm, 3, "media: cannot play %s", what);
@@ -3034,6 +3079,29 @@ static const nj_builtin_method midictl_methods[] = {
     M("longMidiEvent",        "([BII)I", 0)
 };
 
+/* VideoControl is an interface a MIDlet may name and checkcast, and nothing
+ * more: this runtime decodes audio, not video.  The class has to exist anyway.
+ * 毁灭战士3 fetches its intro Player's control with
+ * `(VideoControl) p.getControl("VideoControl")` - the checkcast resolves this
+ * class even when the answer is null - and without it the whole MIDlet died on
+ * an uncaught NoClassDefFoundError the moment its 3gp audio track started
+ * decoding.  getControl() keeps returning null, the game's `catch (Exception)`
+ * takes the NPE that follows, and the intro is skipped instead of the game. */
+static const nj_builtin_method videocontrol_methods[] = {
+    M("initDisplayMode",     "(ILjava/lang/Object;)Ljava/lang/Object;",
+      NJ_ACC_ABSTRACT),
+    M("setDisplaySize",      "(II)V", NJ_ACC_ABSTRACT),
+    M("setDisplayFullScreen", "(Z)V", NJ_ACC_ABSTRACT),
+    M("setDisplayLocation",  "(II)V", NJ_ACC_ABSTRACT),
+    M("setVisible",          "(Z)V", NJ_ACC_ABSTRACT),
+    M("getDisplayWidth",     "()I", NJ_ACC_ABSTRACT),
+    M("getDisplayHeight",    "()I", NJ_ACC_ABSTRACT),
+    M("getSourceWidth",      "()I", NJ_ACC_ABSTRACT),
+    M("getSourceHeight",     "()I", NJ_ACC_ABSTRACT),
+    M("getSnapshot",         "(Ljava/lang/String;)Ljava/lang/Object;",
+      NJ_ACC_ABSTRACT)
+};
+
 #define NJ_MEDIA_EXC(name, super)                                             \
     { name, super, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
 
@@ -3080,6 +3148,13 @@ const nj_builtin_class nj_lib_media_classes[] = {
       midictl_fields,
       (nj_u2)(sizeof(midictl_fields) / sizeof(midictl_fields[0])), midictl_methods,
       (nj_u2)(sizeof(midictl_methods) / sizeof(midictl_methods[0])) },
+    /* An interface, so it carries no fields and no native bindings; its
+     * super slot names Control so a VideoControl is-a Control for the VM's
+     * subclass walk, exactly as Player's super slot names Controllable. */
+    { NJ_C_VIDEOC, NJ_C_CONTROL,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, videocontrol_methods,
+      (nj_u2)(sizeof(videocontrol_methods) / sizeof(videocontrol_methods[0])) },
     NJ_MEDIA_EXC(NJ_C_MEXC, "java/lang/Exception")
     /* A sentinel keeps the array non-empty for tooling that assumes arrays
      * rather than counting on the length macro. */

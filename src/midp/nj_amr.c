@@ -77,6 +77,7 @@
  */
 
 #include "nj_amr.h"
+#include "nj_amr_mp4.h"
 
 #include <stddef.h>   /* offsetof: the bit allocation tables are byte offsets */
 
@@ -1758,6 +1759,113 @@ nj_u4 nj_amr_decode(const void *data, nj_u4 size, nj_u1 *pcm)
     }
 
     return frames;
+}
+
+/*
+ * MP4/3GP: the same 20 ms frames, reached through a sample table instead of a
+ * magic prefix.  Both functions answer so nj_lib_media.c can treat a container
+ * exactly like a bare "#!AMR" file - ask for the count, size the byte array,
+ * decode into it.
+ *
+ * Frames are counted by walking each sample's own bytes, not by trusting stsz
+ * alone: the size table says how many bytes to hand over, and the mode byte at
+ * the front of each frame says how far to advance.  The two have to agree with
+ * damr's framesPerSample for the sample, or the track is refused.
+ */
+nj_u4 nj_amr_mp4_frames(const void *data, nj_u4 size)
+{
+    nj_amr_mp4 it;
+    const nj_u1 *sample;
+    nj_u4 bytes, total = 0u;
+
+    if (!nj_amr_mp4_open(&it, data, size)) {
+        return 0u;
+    }
+    for (;;) {
+        int got = nj_amr_mp4_next(&it, &sample, &bytes);
+        nj_u4 off = 0u, n = 0u;
+
+        if (got < 0) {
+            return 0u;
+        }
+        if (got == 0) {
+            break;
+        }
+        while (off < bytes) {
+            int mode = (sample[off] >> 3) & 0x0F;
+            nj_u4 len;
+
+            if (mode > NJ_AMR_MODE_SID && mode != NJ_AMR_MODE_NO_DATA) {
+                return 0u;
+            }
+            len = nj_amr_frame_len(mode);
+            if (len > bytes - off) {
+                return 0u;
+            }
+            off += len;
+            n++;
+        }
+        if (n != it.frames_per_sample) {
+            return 0u;
+        }
+        total += n;
+        if (total > NJ_AMR_MAX_FRAMES) {
+            return 0u;
+        }
+    }
+    return total;
+}
+
+nj_u4 nj_amr_mp4_decode(const void *data, nj_u4 size, nj_u1 *pcm)
+{
+    nj_amr_mp4 it;
+    nj_amr_state st;
+    const nj_u1 *sample;
+    nj_u4 bytes, total = 0u;
+
+    if (pcm == NULL || !nj_amr_mp4_open(&it, data, size)) {
+        return 0u;
+    }
+    nj_amr_state_init(&st);
+    for (;;) {
+        int got = nj_amr_mp4_next(&it, &sample, &bytes);
+        nj_u4 off = 0u, n = 0u;
+
+        if (got < 0) {
+            return 0u;
+        }
+        if (got == 0) {
+            break;
+        }
+        while (off < bytes && n < it.frames_per_sample) {
+            float block[NJ_AMR_BLOCK];
+            int mode = (sample[off] >> 3) & 0x0F;
+            nj_u4 len, i;
+
+            if (mode > NJ_AMR_MODE_SID && mode != NJ_AMR_MODE_NO_DATA) {
+                return 0u;
+            }
+            len = nj_amr_frame_len(mode);
+            if (len > bytes - off) {
+                return 0u;
+            }
+            nj_amr_decode_frame(&st, sample + off, bytes - off, block);
+            for (i = 0u; i < NJ_AMR_BLOCK; i++) {
+                nj_amr_put_s16(pcm + (nj_size)total * (nj_size)NJ_AMR_BLOCK * 2u +
+                               (nj_size)i * 2u, block[i]);
+            }
+            off += len;
+            n++;
+            total++;
+            if (total > NJ_AMR_MAX_FRAMES) {
+                return 0u;
+            }
+        }
+        if (n != it.frames_per_sample || off != bytes) {
+            return 0u;
+        }
+    }
+    return total;
 }
 
 #else  /* !NJ_ENABLE_AMR */

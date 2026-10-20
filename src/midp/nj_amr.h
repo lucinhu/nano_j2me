@@ -49,4 +49,18 @@ nj_u4 nj_amr_frames(const void *data, nj_u4 size);
  */
 nj_u4 nj_amr_decode(const void *data, nj_u4 size, nj_u1 *pcm);
 
+/*
+ * The same two questions for a file that holds the track in an ISO base media
+ * (MP4/3GP) container - a 'samr' track reached through its sample tables -
+ * rather than the "#!AMR\n" layout above.  Return values and PCM shape are
+ * identical; a file whose tables do not hold together is refused (zero).
+ *
+ * The file has to contain exactly one AMR narrowband track.  A sample may hold
+ * several 20 ms frames (damr's framesPerSample) and the sample's own bytes
+ * must agree with that number, so a size table that lies stops the walk
+ * instead of letting it decide how much of the next chunk to read.
+ */
+nj_u4 nj_amr_mp4_frames(const void *data, nj_u4 size);
+nj_u4 nj_amr_mp4_decode(const void *data, nj_u4 size, nj_u1 *pcm);
+
 #endif /* NJ_AMR_H */

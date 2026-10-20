@@ -124,6 +124,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_media.c
   src/midp/nj_midi.c
   src/midp/nj_amr.c
+  src/midp/nj_amr_mp4.c
   src/midp/nj_lib_content.c
   src/midp/nj_lib_sax.c
   src/midp/nj_lib_nokia.c
@@ -1014,6 +1015,13 @@ nj_add_test(test_clip tests/test_clip.c)
   # mode, against samples another implementation of the same standard produced.
   if(NJ_ENABLE_AMR AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_amr.c)
     nj_add_test(test_amr tests/test_amr.c)
+  endif()
+
+  # The same decoder reached through an MP4/3GP 'samr' track instead of the
+  # "#!AMR\n" layout: synthetic containers only, including the refusals that
+  # keep a hand-edited sample table from walking past its mdat.
+  if(NJ_ENABLE_AMR AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_amr_mp4.c)
+    nj_add_test(test_amr_mp4 tests/test_amr_mp4.c)
   endif()
 
   # ---- end to end: run a whole MIDlet and assert on what it rendered ----
