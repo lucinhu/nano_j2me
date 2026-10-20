@@ -44,9 +44,19 @@ java/lang/NullPointerException at javax/microedition/lcdui/Displayable.addComman
 
 保存的调用链为 `aa.a(Display,String,Displayable,int,int,Command)V pc=129` → `aa.a(Display,String,Displayable,int)V pc=11` → `aa.a(Display,String,Displayable)V pc=7` → `n.a(String,Displayable)V pc=23` → `n.p()V pc=11` → `bi.a(BZZ)I pc=1082` → `bi.v()V pc=48` → `bi.run()V pc=1302`。这里的调用者 PC 是调用后的保存位置；`aa` 中实际 `Alert.addCommand` 指令位于 126，不能将 `bi.o()V pc=29` 当成原始 addCommand 调用点。
 
-[aa 字节码](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/bytecode/aa.javap.txt>) 显示三参数重载传入默认正超时 3000，因此此路径选择 `n.k`；超时非正时才选择 `n.j`。可选的额外 Command 有空值检查，但这两个默认命令共用的 addCommand 调用没有检查。[n 字节码](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/bytecode/n.javap.txt>) 显示构造器未赋值这些字段，`n.e()V` 才建立命令；[g 字节码](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/bytecode/g.javap.txt>) 中 `g.a(ZZ)V pc=139` 调用它。运行时的空值与字节码共同定位了失败字段，但尚未解释命令初始化为何没有完成，不能据此宣布 UC 本身有缺陷或外部服务已失效。
+[aa 字节码](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/bytecode/aa.javap.txt>) 显示三参数重载传入默认正超时 3000，因此此路径选择 `n.k`；超时非正时才选择 `n.j`。可选的额外 Command 有空值检查，但这两个默认命令共用的 addCommand 调用没有检查。[n 字节码](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/bytecode/n.javap.txt>) 显示构造器未赋值这些字段，`n.e()V` 才建立命令；[g 字节码](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/bytecode/g.javap.txt>) 中 `g.a(ZZ)V pc=139` 调用它。截至这次异常栈诊断，运行时的空值与字节码只共同定位了失败字段，尚未解释命令初始化为何没有完成；后续顺序复核见下节。不能据此宣布 UC 本身有缺陷或外部服务已失效。
 
 随后 `bi.o()V pc=29` 和 `bi.run()V pc=1635` 的空引用发生在页面清理与异常恢复路径；前者调用未建立页面上的方法，后者访问空页面字段。它们是首个命令异常之后的次级失败，不能与正常命令回调混为一谈。450 帧结束时 `ah.run()V pc=22` 仍在睡眠轮询，后续输入没有推进菜单；日志没有 `uncaught exception`，这也不证明取消流程成功。MIDP 对 `addCommand(null)` 的异常检查保留，本轮不通过吞掉异常改变应用控制流。
+
+## 首次启动的初始化顺序复核
+
+在 `25ef93f` 的隔离副本中，仅给方法调用和异常加诊断，未改生产源码。诊断二进制 SHA-256 `eb6bd2dc39288244ab077c6bc73efafc7ed0becc02a87bc61cca9f7d138a3573`；原 JAR、全新 RMS、240×320、16 MiB、30fps、450 帧和相同后续输入，受控代理返回 HTTP 503。运行 15.064 秒、达到帧预算，JAR 前后哈希一致。[完整条件与结果](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-init-round15-20261020/trace-proxy503/result.json>)、[调用及异常日志](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-init-round15-20261020/trace-proxy503/runtime.log>) 和 [4 次请求](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-init-round15-20261020/trace-proxy503/proxy-requests.json>) 保留。检查末帧确认 soft2 后仍是[取消操作中](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-init-round15-20261020/trace-proxy503/frames/00450.png>)，后续 down/fire/soft1 未进菜单。
+
+运行日志先记录 `g.a()V`，再记录 `g.a(ZZ)Z(1,1)` 启动 worker，随后 `bi.run()V → bi.v()V`，接着就在 `bi.a(BZZ)I` 内触发上述空命令异常。在该异常之前没有 `bi.b(Z)V`、`g.c(Z)V`、`g.a(ZZ)V` 或 `n.e()V` 调用。必须区分返回 boolean 的 `g.a(ZZ)Z` 与返回 void 的 `g.a(ZZ)V`。
+
+与字节码交叉核对，首次启动的 `n.a(ZZ)V` 在调用 `g.a(ZZ)Z` 后返回；命令初始化在 worker 的后半段：`bi.v()V pc=492 → bi.b(Z)V → g.c(Z)V → g.a(ZZ)V pc=139 → n.e()V`。网络测试调用位于 `bi.v()V pc=45`，早于该初始化，且不在此方法局部异常区间 `[113,149)`、`[156,404)` 内。`bi.a(BZZ)I` 的重试失败分支在 pc=1079 调用 `n.p()V` 构造错误提示；此时 `n.k` 尚未建立，提示自身抛出的异常直接跳过后半段初始化，再进入已有的清理空引用路径。
+
+因此，本次受控失败条件下“默认命令为何为空”的上游顺序已经确认。MIDP 对 `addCommand(null)` 的拒绝符合接口约定，当前证据不支持修改它或异常展开规则。此结论仅覆盖 HTTP 503 失败路径；仍需要可核验的成功协议响应，才能区分服务返回数据与后续解析、界面初始化是否另有兼容性缺口。不能用这次失败代理推断远端服务已关闭，也不能声称主菜单已修复。
 
 ## 参考实现与未完成项
 
@@ -56,4 +66,4 @@ java/lang/NullPointerException at javax/microedition/lcdui/Displayable.addComman
 
 对历史提交的重建均复现过动态数据停滞，支持这是长期兼容性缺口；2026-10-17 共享构建曾发出 HTTP，但该二进制未保存，来源无法重建。撤回先前“确定来自某个未提交改动”的强推断，不能据此认定或排除特定提交回归。
 
-UC 取消后不回主菜单仍待修复；下一步需要定位 `n.e()V` 初始化未完成的上游分支，并以可核验的资源和网络响应重放。未验证主菜单、地址编辑、真实网页、账号服务；本轮没有 Android 真机运行或新 APK 交付。
+UC 取消后不回主菜单仍未通过；首次启动的失败提示早于命令初始化，已由调用日志与字节码交叉确认。下一步需要可核验的成功协议响应，才能继续检查资源解析与正常界面初始化。未验证主菜单、地址编辑、真实网页、账号服务；本轮没有 Android 真机运行或新 APK 交付。
