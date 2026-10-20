@@ -2434,6 +2434,86 @@ static void test_large_wav(void)
     nj_port_shutdown(&port);
 }
 
+/* A 16-bit WAV already uses the port's PCM format. Keeping the caller's
+ * stream, a private read buffer AND another PCM copy live at once made Angry
+ * Birds HD's 13 MB music track exhaust a 32 MB heap. A 6 MB fixture on a 16 MB
+ * heap distinguishes the two-copy peak from the old three-copy peak. */
+static void test_sixteen_bit_wav_heap(void)
+{
+    const nj_u4 samples = 6u * 1024u * 1024u;
+    nj_port port;
+    nj_vm *small;
+    nj_u1 *wav;
+    nj_ref bytes, in, pcm;
+    nj_value args[2], ret, duration;
+    nj_field *field;
+    nj_u4 mark, i;
+    int same = 1;
+
+    memset(&port, 0, sizeof(port));
+    if (nj_port_headless(&port) != NJ_OK) {
+        OK_MSG(0, "headless port for 16-bit WAV");
+        return;
+    }
+    small = nj_vm_create(&port, 16u * 1024u * 1024u);
+    OK_MSG(small != NULL, "16 MB VM for 6 MB stereo WAV");
+    if (!small) { nj_port_shutdown(&port); return; }
+    mark = nj_root_mark(small);
+    /* wav_of initially writes 8-bit mono. Retain its data bytes, but declare
+     * 16-bit stereo at 8000 Hz; append a JUNK chunk after the actual samples. */
+    wav = wav_of(samples + 12u);
+    bytes = nj_root(small, nj_byte_array_new(small, samples + 56u));
+    OK_MSG(wav && bytes, "16-bit WAV input");
+    if (wav && bytes) {
+        wav[22] = 2u;
+        wav[28] = 0x00u; wav[29] = 0x7Du; /* 32000 bytes per second */
+        wav[32] = 4u;
+        wav[34] = 16u;
+        for (i = 0u; i < 4u; i++) {
+            wav[40u + i] = (nj_u1)(samples >> (i * 8u));
+        }
+        memcpy(wav + 44u + samples, "JUNK\004\000\000\000tail", 12u);
+        memcpy(bytes->u.bytes, wav, samples + 56u);
+        args[0].r = bytes;
+        in = nj_root(small, construct(small, BAIS, "([B)V", args,
+                                     "16-bit WAV stream"));
+        args[0].r = in;
+        args[1].r = NULL;
+        ret.r = NULL;
+        OK_MSG(nj_call_static(small, MEDIA_MGR, "createPlayer",
+                             "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                             "javax/microedition/media/Player;", args, &ret)
+               == NJ_OK && ret.r != NULL,
+               "16-bit WAV loads without a third full-size allocation");
+        if (ret.r) {
+            ret.r = nj_root(small, ret.r);
+            field = nj_field_lookup(small, PLAYER, "pData", "[B", 0);
+            pcm = field ? nj_field_read_ref(small, ret.r, field) : NULL;
+            OK_MSG(pcm && pcm != bytes && pcm->length == samples,
+                   "PCM is private and excludes RIFF header and trailing JUNK");
+            if (pcm && pcm->length == samples) {
+                for (i = 0u; i < samples; i++) {
+                    if (pcm->u.bytes[i] != wav[44u + i]) { same = 0; break; }
+                }
+                OK_MSG(same, "all stereo samples retain their original bytes");
+                pcm->u.bytes[0] ^= 0xFFu;
+            }
+            OK_MSG(memcmp(bytes->u.bytes, wav, samples + 56u) == 0,
+                   "the caller's stream backing array is unchanged and unaliased");
+            duration.bits = 0u;
+            OK(nj_call(small, ret.r, PLAYER, "getDuration", "()J", NULL,
+                       &duration) == NJ_OK);
+            OK_MSG(duration.j == (nj_s8)(samples / 4u) * 1000000LL / 8000,
+                   "16-bit stereo duration uses complete frames");
+        }
+        nj_clear_exception(small);
+    }
+    free(wav);
+    nj_root_release(small, mark);
+    nj_vm_destroy(small);
+    nj_port_shutdown(&port);
+}
+
 /* A .mid handed to createPlayer() is rendered to PCM, not turned into a
  * silent Player.  105 of the 238 titles in tests/games/ reach the MIDI branch
  * within their first 200 frames, and the difference between the two outcomes
@@ -3559,6 +3639,7 @@ int main(void)
     test_player_survives_collection(vm);
     test_eight_bit_wav_is_widened(vm);
     test_large_wav();
+    test_sixteen_bit_wav_heap();
     test_midi_player_is_pcm(vm);
     test_midi_long_song_streams(vm);
     test_midi_too_big_for_heap();

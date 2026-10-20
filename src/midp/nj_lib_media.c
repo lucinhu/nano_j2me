@@ -1515,7 +1515,7 @@ NJFN(media_createPlayer_stream)
         return nj_throw(vm, NJ_C_MEXC, media_refusal(what));
     }
     /*
-     * Copy out JUST the data chunk.
+     * Keep JUST the data chunk.
      *
      * Storing the whole file and pushing from offset 0 plays the RIFF header as
      * audio: 8864 bytes at 16-bit mono is 4432 frames where the file holds
@@ -1536,14 +1536,15 @@ NJFN(media_createPlayer_stream)
          * 8-bit samples are UNSIGNED with 128 as silence, which is where the
          * -128 comes from.
          */
-        nj_u4 wide = (wi.bits == 8) ? want * 2u : want;
-        nj_ref pcm = nj_byte_array_new(vm, wide);
-        if (!pcm) {
-            nj_root_release(vm, mark);
-            return NJ_ERR;
-        }
+        nj_ref pcm;
         if (wi.bits == 8) {
-            const nj_u1 *src = barray_bytes(data) + off;
+            const nj_u1 *src;
+            pcm = nj_byte_array_new(vm, want * 2u);
+            if (!pcm) {
+                nj_root_release(vm, mark);
+                return NJ_ERR;
+            }
+            src = barray_bytes(data) + off;
             nj_u1 *dst = pcm->u.bytes;
             nj_u4 i;
             for (i = 0u; i < want; i++) {
@@ -1552,7 +1553,14 @@ NJFN(media_createPlayer_stream)
                 dst[i * 2u + 1u] = (nj_u1)((v >> 8) & 0xFF);
             }
         } else {
-            memcpy(pcm->u.bytes, barray_bytes(data) + off, (size_t)want);
+            /* read_stream owns this private copy, so 16-bit PCM can stay in
+             * the same allocation. Strip the container with an overlapping
+             * move and shorten the logical array to exclude trailing chunks.
+             * A third full-size copy made Angry Birds HD's 13 MB music track
+             * exhaust its 32 MB heap while the input stream was still live. */
+            pcm = data;
+            memmove(pcm->u.bytes, pcm->u.bytes + off, (size_t)want);
+            pcm->length = want;
         }
         w_r(vm, p, F_P_DATA, "[B", pcm);
     }

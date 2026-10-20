@@ -416,6 +416,14 @@ with directional/fire input and opened stereo 44,100 Hz audio, completing 1,200
 frames without an uncaught exception or `OutOfMemoryError`. This verifies the
 start and early gameplay path, not a complete playthrough.
 
+The same title also exposed a redundant full-size allocation for 16-bit WAV.
+The runtime now moves PCM to the start of its private stream buffer and reuses
+that allocation. The caller's stream backing array stays unchanged. The original
+JAR now reaches the first level and responds to pause/continue at `--heap 32M`,
+with 1,200-frame headless and SDL2 replays. A 6 MiB stereo regression on a 16 MiB
+heap checks the peak-memory case, every sample, RIFF/trailing-chunk removal,
+duration and input isolation; see the [WAV allocation note](notes/2026-10-20-wav-buffer-reuse.md).
+
 The eight that remain are each classified, not just counted:
 
 | kind | titles |
