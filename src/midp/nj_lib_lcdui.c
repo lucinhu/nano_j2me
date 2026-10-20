@@ -4670,13 +4670,17 @@ static int canvas_call(nj_vm *vm, nj_ref canvas, const char *name, int argc,
 }
 
 /* paint() takes a Graphics, so it needs its own descriptor. */
-static int canvas_call_paint(nj_vm *vm, nj_ref canvas, nj_ref g)
+static int canvas_call_paint(nj_vm *vm, nj_ref canvas, nj_ref g, int *why)
 {
     nj_value a[1];
     a[0].r = g;
-    int why = 0;
-    return canvas_call_abstract(vm, canvas, "paint",
-                                "(L" NJ_C_GRAPHICS ";)V", a, &why);
+    int local = 0;
+    int ok = canvas_call_abstract(vm, canvas, "paint",
+                                  "(L" NJ_C_GRAPHICS ";)V", a, &local);
+    if (why) {
+        *why = local;
+    }
+    return ok;
 }
 
 /*
@@ -4706,14 +4710,15 @@ static int canvas_visible(nj_vm *vm, nj_ref canvas);
  * (idx=-1, super=nil).  It looked like a bad class table; it was a live
  * reference nobody was holding.
  */
-static int canvas_call_paint_rooted(nj_vm *vm, nj_ref canvas, nj_ref g)
+static int canvas_call_paint_rooted(nj_vm *vm, nj_ref canvas, nj_ref g,
+                                    int *why)
 {
     nj_u4 mark = nj_root_mark(vm);
     int ok;
 
     g = nj_root(vm, g);
     (void)canvas_visible(vm, canvas);
-    ok = canvas_call_paint(vm, canvas, g);
+    ok = canvas_call_paint(vm, canvas, g, why);
     nj_root_release(vm, mark);
     return ok;
 }
@@ -5078,31 +5083,69 @@ nj_status nj_midp_paint(nj_vm *vm)
         if (!g) {
             return NJ_ERR;   /* names the class; not a silent blank frame */
         }
-        if (!canvas_call_paint_rooted(vm, d, g)) {
-            /*
-             * Leave a real exception pending if there is one: paint() is
-             * abstract on Canvas, so "method not implemented" is exactly what
-             * the caller must see.
-             *
-             * If there is NO exception, do not invent one.  The old code
-             * fabricated "AbstractMethodError: paint" here for any failure,
-             * including ones that have nothing to do with abstractness - which
-             * sent a whole debugging session after the wrong bug.  Say what is
-             * actually known instead.
-             */
-            if (!vm->exception) {
-                char mbuf[160];
-                nj_u4 n = 0u;
-                const char *q = "paint() on ";
-                const char *c = (d && d->cls) ? d->cls->name : "?";
-                const char *t = " failed without raising an exception";
-                while (*q && n + 1u < sizeof(mbuf)) { mbuf[n++] = *q++; }
-                while (*c && n + 1u < sizeof(mbuf)) { mbuf[n++] = *c++; }
-                while (*t && n + 1u < sizeof(mbuf)) { mbuf[n++] = *t++; }
-                mbuf[n] = '\0';
-                (void)nj_throw(vm, "java/lang/RuntimeException", mbuf);
+        {
+            int why = 0;
+            if (!canvas_call_paint_rooted(vm, d, g, &why)) {
+                /*
+                 * Leave a real exception pending if there is one: paint() is
+                 * abstract on Canvas, so "method not implemented" is exactly
+                 * what the caller must see.
+                 *
+                 * If there is NO exception, do not invent one.  The old code
+                 * fabricated "AbstractMethodError: paint" here for any failure,
+                 * including ones that have nothing to do with abstractness -
+                 * which sent a whole debugging session after the wrong bug.
+                 * Say what is actually known instead: the class and the
+                 * nj_status the call returned (NJ_ERR_HALT, NJ_ERR_NOMEM, ...)
+                 * are the two facts that discriminate the real causes.
+                 *
+                 * NJ_ERR_HALT (-3) is not a paint failure at all: it means the
+                 * RUN is ending (the frame budget ran out while this paint was
+                 * in flight, run_frame_hook returned stop and vm_invoke
+                 * abandoned the call).  Fabricating a RuntimeException there
+                 * made 火影忍者汉化版_10735 report "exception escaped into the
+                 * frame loop" on a normal, successful run - a fault where none
+                 * exists, at teardown, after the last frame.  Report it as the
+                 * benign stop it is and leave no exception for the caller.
+                 */
+                if (why == NJ_ERR_HALT) {
+                    if (vm->exception) {
+                        nj_clear_exception(vm);
+                    }
+                    return NJ_OK;
+                }
+                if (!vm->exception) {
+                    char mbuf[192];
+                    nj_u4 n = 0u;
+                    const char *q = "paint() on ";
+                    const char *c = (d && d->cls) ? d->cls->name : "?";
+                    const char *t = " failed without raising an exception (status ";
+                    char num[16];
+                    int ni = 0;
+                    int v = why;
+                    while (*q && n + 1u < sizeof(mbuf)) { mbuf[n++] = *q++; }
+                    while (*c && n + 1u < sizeof(mbuf)) { mbuf[n++] = *c++; }
+                    while (*t && n + 1u < sizeof(mbuf)) { mbuf[n++] = *t++; }
+                    if (v < 0) {
+                        if (n + 1u < sizeof(mbuf)) { mbuf[n++] = '-'; }
+                        v = -v;
+                    }
+                    if (v == 0) {
+                        num[ni++] = '0';
+                    }
+                    while (v > 0 && ni < (int)sizeof(num)) {
+                        num[ni++] = (char)('0' + (v % 10));
+                        v /= 10;
+                    }
+                    while (ni > 0 && n + 1u < sizeof(mbuf)) {
+                        mbuf[n++] = num[--ni];
+                    }
+                    if (n + 2u < sizeof(mbuf)) { mbuf[n++] = ')'; }
+                    mbuf[n] = '\0';
+                    (void)nj_throw(vm, "java/lang/RuntimeException", mbuf);
+                }
+                return NJ_ERR;
             }
-            return NJ_ERR;
         }
         /*
          * No blit here.  The buffer is mirrored onto the screen by
@@ -5118,7 +5161,7 @@ nj_status nj_midp_paint(nj_vm *vm)
         if (buf) {
             nj_ref g = gfx_new(vm, buf);
             if (g) {
-                (void)canvas_call_paint_rooted(vm, d, g);
+                (void)canvas_call_paint_rooted(vm, d, g, NULL);
                 nj_clear_exception(vm);
             }
             if (nj_midp_surface(vm, buf, &buf_surf)) {
