@@ -6,6 +6,16 @@ City Bloxx 使用原 JAR、`nokia6230` 和全新 RMS，在 SDL2 下实际落下�
 
 UC 在时钟修复基础上继续推进：受控分配响应暴露内置页面解析调用缺失的 `Integer.shortValue()S`，补齐后同一原 JAR 完整显示中文欢迎协议，桌面原生按键进入空白页、打开主菜单、移动选中项并关闭菜单。分配响应为按字节码本地构造的 41 字节测试数据；HTTP 503 对照仍卡在“取消操作中…”，实际网页与输入法未验证。全套 CTest 85/85 通过，`Integer.shortValue` 边界回归 13 组由 752/26 失败转为 778/0 通过。详见 [UC 修复与诊断](2026-10-20-uc-browser.md)。
 
+## 2026-10-21 更新：狂野飙车4 进入实际比赛
+
+原 JAR `狂野飙车4-亡命都市.jar`（SHA-256 `7d4369008c5d786e245c5c6aa6743451ee40d3238c6cd871a4b01793cbc39f85`，运行前后一致）在默认构建 `build/nj2me`（SHA-256 `544730ce1618c767ddf074d081d8cdd79c6504645e333431d852a4df413c4f52`，系统 sdl2-compat）的 SDL2 真窗口里越过标题与菜单进入实际比赛：
+
+- 按“打开声音吗？”→标题→快速游戏→赛道说明→比赛现场推进后，比赛画面出现 1/8 圈、`狂奔中` 状态、AI 车辆、金钱与速度 HUD；静止不按键时倒计时仍从 3 走到 1，速度达到 74 英里/时（[run5 倒计时 1 与 74 MPH](../../.local-tools/debug-runs/asphalt4-20261021/run5/09-idle-4.png)）。
+- 进入比赛后按住上键，速度由 20 升到 26 再到 59 英里/时；左右键持续按住后车辆离开道路来到草地边缘（[run4 比赛后段](../../.local-tools/debug-runs/asphalt4-20261021/run4/13-race-late.png)），说明方向输入进入游戏逻辑。
+- 回放使用只读测试垫片 `NJ_NET_FAIL`（`.local-tools/debug-runs/asphalt4-20261021/netfail.so`，仅拦截 libcurl 传输立即返回失败）跳过启动期的真实网络等待；不用垫片时菜单仍能推进，但赛道说明处会出现十余秒停顿（[run6](../../.local-tools/debug-runs/asphalt4-20261021/run6/06-after-down-12s.png)），与启动网络尝试一致。
+- 游戏自身在 `com/qq/sms/QQSMS.init/getInt/desString` 抛出的 `NumberFormatException`/`IllegalArgumentException: Length Not Double Num` 被其自身捕获并打印，不阻断比赛，不作为模拟器缺陷。
+- 边界：未完成整圈或冲线，未验证存档/重启、暂停菜单（F2 在本游戏比赛中未产生可见暂停界面）、Android；成绩与名次变化未逐帧核对。垫片只用于回放，不进入仓库源码。
+
 ## 历史更新：家园6八个版本已越过加载等待
 
 修复正常 Java 工作线程返回后 `isAlive()` 仍为真的问题后，jar-17 至 jar-24 全部使用原 JAR、独立新 RMS、30fps、60秒回放，均进入标题、战役地图和村庄对白，后续按键可推进。N73 另有语言选择；A760 仍有90度旋转显示问题。八个原 JAR 运行前后 SHA-256 全部相同。这里证明加载与初期交互已恢复，尚未验证完整关卡和存档重启。详见 [线程修复与逐版本记录](2026-10-17-townsmen-loader.md)。以下 FreeJ2ME 对照及早期加载失败记录保留为修复前历史证据。
@@ -80,7 +90,7 @@ native-ime提供独立build-ime/nj2me，SHA-256 `ebb421a66aa7dbc521eb9c2805009da
 | jar-24 / [家园6之革命完美汉化版_诺基亚 N73系列(240x320).jar](</home/lucinhu/Downloads/jar/家园6之革命完美汉化版_诺基亚 N73系列(240x320).jar>) | 家园6_光辉革命 / 240x320 | [法国旗/请稍候加载（18旋转显示；24无文字）](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-24/result.json>) | [修复后60秒：标题→战役地图→村庄对白，按键推进；含语言选择](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/townsmen-loader-20261017/variants/v8/contact.png>) |
 | jar-25 / [极品飞车14之热力追踪中文版.jar](</home/lucinhu/Downloads/jar/极品飞车14之热力追踪中文版.jar>) | 极品飞车：热力追踪 / 240x320 | [音效询问](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-25/result.json>) | [旧回放仅到教程询问并超时](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-25-contact.png>)；2026-10-20 原 JAR、全新 RMS、SDL2 真窗口已进入教程赛道并推进至 2/11，可见 42→121 英里/时；左右键送达后仍持续绘制，F2 打开暂停菜单，1474 帧 / 51.258 秒 / 28.8fps。[驾驶证据](2026-10-20-nfs-hot-pursuit.md)。未完成教程、正式赛事、暂停继续或保存重启 |
 | jar-26 / [极品飞车16：亡命狂飙.jar](</home/lucinhu/Downloads/jar/极品飞车16：亡命狂飙.jar>) | Need for Speed The Run / 240x320 | [ENABLE SOUND询问](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-26/result.json>) | [音效→EA→安全提示→主菜单；down将QUICK RACE变为THE RUN，后续菜单响应确认](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-26-contact.png>) |
-| jar-27 / [狂野飙车4-亡命都市.jar](</home/lucinhu/Downloads/jar/狂野飙车4-亡命都市.jar>) | 狂野飙车-亡命都市 / 240x320 | [打开声音吗？](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-27/result.json>) | [音效→标题→快速游戏→比赛说明→比赛现场；750帧起跑约1 MPH，900帧69 MPH；750:down后出现星光大道横幅，比赛画面继续更新，未验证转向/完整比赛](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-27-contact.png>) |
+| jar-27 / [狂野飙车4-亡命都市.jar](</home/lucinhu/Downloads/jar/狂野飙车4-亡命都市.jar>) | 狂野飙车-亡命都市 / 240x320 | [打开声音吗？](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-27/result.json>) | 旧回放：音效→标题→快速游戏→比赛说明→比赛现场（750帧起跑，900帧69 MPH）。2026-10-21 原 JAR、全新 RMS、SDL2 真窗口：倒计时 3→1 自动推进，速度 74 MPH，按住上键 20→26→59 MPH，左右键使车辆驶向路肩/草地，1/8 圈与 AI 车辆可见；F2 未见暂停界面。未完成整圈/冲线/存档。见[更新记录](#2026-10-21-更新狂野飙车4-进入实际比赛)。 |
 | jar-28 / [远古帝国2汉化版.jar](</home/lucinhu/Downloads/jar/远古帝国2汉化版.jar>) | Ancient Empires II / 240x320 | [人物与标题文字/加载](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-28/result.json>) | 第5轮推进故事、开始游戏菜单和任务说明；修复读取快照后 MIDI 旧指针崩溃，原快照按键回放到战役地图与求救对白。2026-10-20 只读核对确认 JAR 自带 FullCn 固定返回 128×116，132×176 标题图越出后续逻辑重绘区，可解释大屏下的标题残留；未据此改全局 Graphics。尚未做小尺寸冷启动对照，未验证单位移动、战斗或完整关卡。[复现及验证记录](</home/lucinhu/workspace/c/nano_j2me/docs/notes/2026-10-17-ancient-empires-replay.md>) |
 | jar-29 / [都市赛车6火线追击.jar](</home/lucinhu/Downloads/jar/都市赛车6火线追击.jar>) | Asphalt 6 Adrenaline / 240x320 | [ENABLE SOUND询问](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-29/result.json>) | [音效→标题→主菜单；down将INSTANT PLAY变为CAREER，fire尚未开赛](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-29-contact.png>) |
 
