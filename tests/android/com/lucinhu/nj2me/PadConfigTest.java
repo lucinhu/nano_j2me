@@ -114,8 +114,11 @@ public final class PadConfigTest {
             }
         }
         Check.eq("清空 really is empty", PadConfig.byId(PadConfig.PRESET_CUSTOM).keys.size(), 0);
-        Check.eq("the default layout is the D-pad preset",
-                 PadConfig.defaults().preset, PadConfig.PRESET_DPAD);
+        Check.eq("the default layout is the classic handset",
+                 PadConfig.defaults().preset, PadConfig.PRESET_CLASSIC);
+        Check.eq("and it is the whole handset layout, not a renamed one",
+                 PadConfig.defaults().blob(),
+                 PadConfig.byId(PadConfig.PRESET_CLASSIC).blob());
 
         Check.section("the topmost key is the one a touch lands on");
         PadConfig c = PadConfig.blank();

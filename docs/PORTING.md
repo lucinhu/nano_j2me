@@ -360,7 +360,9 @@ Thirteen things in that shell are worth copying, because each one is a rule a pl
   written for - twelve digits on the left, the eight-way cluster on the right,
   where the diagonals carry the digit codes 1/3/7/9 a second time because that is
   what they are on a phone; the preset list stayed at what a player can tell
-  apart instead of one entry per key combination. Editor and game load the same
+  apart instead of one entry per key combination. It is also the default
+  (`PadConfig.defaults()`): a fresh game starts from the handset keypad, while a
+  saved arrangement - per game or the shared one - still wins over it. Editor and game load the same
   blob, so a layout tweaked in game is the one the editor opens. A cap carries an
   optional second code (`Key.code2`): 经典手机's diagonals press two directions
   at once, because a MIDlet steering with `Canvas.getKeyStates()` needs both bits

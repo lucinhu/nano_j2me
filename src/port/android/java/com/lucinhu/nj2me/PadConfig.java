@@ -74,7 +74,7 @@ final class PadConfig {
      * key is dragged it is CUSTOM, and claiming otherwise would be a lie the
      * player could see.
      */
-    int preset = PRESET_DPAD;
+    int preset = PRESET_CLASSIC;
 
     static final float GRID_STEP = 0.01f;
 
@@ -303,33 +303,21 @@ final class PadConfig {
     };
 
     /**
-     * The layout a game gets before anyone has an opinion.  Everything sits in
-     * the bars above and below a 240x320 screen, because that is where there is
-     * nothing to cover: a MIDlet's own game area is the last place a control
-     * should be drawn.
+     * The direction-pad preset: a cross bottom-left, 火力 to its right, the soft
+     * keys in the top corners.
+     *
+     * <p>This is what a fresh game used to open with; 经典手机 is the default now
+     * (the player asked for the handset the titles were written for), and this
+     * stays in the picker for a title that wants a modern controller instead.
      */
-    static PadConfig defaults() {
-        return defaults(1080, 1920);
+    static PadConfig dpad() {
+        return dpad(1080, 1920);
     }
 
-    static PadConfig defaults(int winW, int winH) {
+    static PadConfig dpad(int winW, int winH) {
         PadConfig p = new PadConfig();
         p.preset = PRESET_DPAD;
         Grid g = new Grid(winW, winH);
-        /*
-         * The same keycap 经典手机 uses, and the same step between them.
-         *
-         * This is the layout every player meets first, and it used to be built
-         * around one huge 确定 button (0.30 x 0.20 u - 324 x 216 px on a 1080p
-         * phone) with soft keys more than twice as wide as a keycap.  A thumb
-         * cannot tell a 216 px button from a 146 px one, and the big one
-         * covers the picture the pad is supposed to leave alone; the first
-         * thing a player does is open the editor and shrink it, which is what
-         * "第一次进入游戏时那个按键不要调成这么大" was about.
-         *
-         * The arrangement is unchanged: the cross bottom-left, 火力 to its
-         * right, the soft keys in the top corners.
-         */
         final float cap = 0.135f;      /* ~146 px on a 1080p phone, as 经典手机 */
         final float step = 0.143f;
         final float left = 0.012f;
@@ -342,6 +330,25 @@ final class PadConfig {
         g.add(p.keys, 82, left, 0.045f, cap, cap);                 /* 左软键 */
         g.addRight(p.keys, 4, left, 0.045f, cap, cap);             /* 右软键 */
         return p;
+    }
+
+    /**
+     * The layout a game gets before anyone has an opinion: 经典手机, the handset
+     * the MIDlets were written for.  The player asked for it as the Android
+     * default after meeting 方向盘 first: a directional pad is a modern
+     * controller, while these titles expect twelve digits under one thumb and
+     * an eight-way cluster under the other, and the digit block is what makes
+     * a 2/4/6/8 walk and a 5 jump work on the first try.
+     *
+     * <p>This is only the default: a saved arrangement (per game or the shared
+     * one) still wins, so nobody's own pad is taken away by the change.
+     */
+    static PadConfig defaults() {
+        return defaults(1080, 1920);
+    }
+
+    static PadConfig defaults(int winW, int winH) {
+        return classic(winW, winH);
     }
 
     /**
@@ -571,6 +578,9 @@ final class PadConfig {
 
     /** The layout of a preset, for a window of this shape. */
     static PadConfig byId(int id, int winW, int winH) {
+        if (id == PRESET_DPAD) {
+            return dpad(winW, winH);
+        }
         if (id == PRESET_CLASSIC) {
             return classic(winW, winH);
         }
@@ -592,7 +602,7 @@ final class PadConfig {
         if (id == PRESET_CUSTOM) {
             return blank();
         }
-        return defaults(winW, winH);
+        return dpad(winW, winH);
     }
 
     /** The layout of a preset.  CUSTOM has no keys, by definition. */
