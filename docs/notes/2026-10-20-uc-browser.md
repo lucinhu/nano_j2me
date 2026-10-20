@@ -31,6 +31,12 @@ RTC 修复后，进一步从受控响应中定位并补齐 `Integer.shortValue()
 
 [完整命令、哈希、动作和截图帧号](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-sdl/manifest.json>)、[SDL 输入及运行日志](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-sdl/runtime.log>)、[2 次 POST](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-sdl/proxy-requests.json>) 保留。运行 518 帧、17.618 秒、29.4fps，随后受控结束；JAR 前后 SHA 一致。日志中不再有 `Integer.shortValue` 的缺失方法异常，但仍有资源解析相关的已捕获异常；最后 F2 后记录 `NullPointerException at l.a(Lan;I)V pc=23`，因此不把本轮菜单操作扩大为所有交互通过。
 
+### 冷启动读取已保存状态
+
+用当前 HEAD `ac24cd7` 的纯净源码（`git archive`）在隔离目录构建，二进制 SHA-256 `a821b5977760ff2f9de6fb9f8cce3bded06c242444000ce7afde3676642e5c33`；RMS 直接沿用上方 `1f784eef` 运行写出的存档副本，其余条件相同。再次启动时不再显示欢迎协议，[直接进入空白页](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-relaunch-clean/01-relaunch.png>)；F1 打开[选中“1.打开”的主菜单](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-relaunch-clean/02-menu.png>)，Down 移到[“2.窗口”](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-relaunch-clean/03-menu-down.png>)，F2 关闭后[回到同一空白页](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-response-round15-20261020/shortvalue-relaunch-clean/04-closed.png>)。共 2 次 POST，受控结束，JAR 哈希不变。
+
+该 RMS 目录实际写出 `B.rms`、`coreA.rms`、`G2.rms`、`V.rms`，说明“已接受协议”这类状态确实落盘并在新进程中被读回。这只能证明本次会话状态延续，不能推导历史记录、书签或网页缓存已完整实现。
+
 ### 当前边界
 
 分配响应被 fixture 同样用于第二次 `usquery.php` 请求，它并不是有效的下游资源协议响应。`bi.v()V` 调用 `bd.a(Hashtable)Z` 后丢弃返回值，并在方法返回时标记该阶段成功；不能以此证明远端资源安装成功。欢迎页来自 JAR 内置资源，实际网页、搜索、地址编辑、输入法、冷启动状态和 Android 回归仍待验证。
