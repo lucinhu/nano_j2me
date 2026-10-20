@@ -32,8 +32,28 @@ POSIX headless、SDL2 端口接入共用 RTC 实现；`Date()`、Calendar 两个
 
 同一修复二进制恢复原《孤岛余生 2》N97 室内快照：持续 Up 后角色上移，F2 打开暂停，Return 返回场景，随后 Escape/Return 再次暂停/返回。已检查 [移动后](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/02-after-Up.png>)、[暂停](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/03-after-F2.png>)、[恢复](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/04-after-Return.png>)，并有 [SDL 实际按键日志](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/runtime.log>)。暂停菜单中央白底仍存在。前两次窗口采集失败不计入通过证据；重跑在快照恢复后重新查询窗口，以免使用重建前的旧窗口 ID。
 
-## 历史判断修正与未完成项
+## 取消停滞的调用链诊断
 
-本地 FreeJ2ME-Plus `baca76a4` 曾在同 JAR 到达测试网络，取消后同样未进主菜单。对历史提交的重建均复现过动态数据停滞，支持这是长期兼容性缺口；2026-10-17 共享构建曾发出 HTTP，但该二进制未保存，来源无法重建。撤回先前“确定来自某个未提交改动”的强推断，不能据此认定或排除特定提交回归。
+在已提交的 RTC 修复上另建隔离诊断构建，仅为 `nj_throw` 增加完整帧栈输出；SHA-256 `a7f438f5b40dcabfe0269b937ab20f49df80ec796751602db436d36bb5554622`。原 JAR、全新 RMS、240×320、16 MiB、30fps、450 帧，脚本为 `240:soft2 300:down 330:fire 390:soft1`，本地代理返回 HTTP 503。该诊断没有成为生产代码修改。[运行条件](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/diagnostic-proxy503/manifest.json>)、[完整异常栈](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/diagnostic-proxy503/runtime.log>) 与 [后续输入后的取消画面](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/diagnostic-proxy503/frames/00450.png>) 可回查。
 
-UC 取消后不回主菜单仍待查。已有只读线索指向空 Command 回调路径，但尚无完成验证的修复；下一步应结合应用字节码和 MIDP 命令分发定位。未验证主菜单、地址编辑、真实网页、账号服务；本轮没有 Android 真机运行或新 APK 交付。
+首个相关异常为：
+
+```text
+java/lang/NullPointerException at javax/microedition/lcdui/Displayable.addCommand(Ljavax/microedition/lcdui/Command;)V pc=0: command is null
+```
+
+保存的调用链为 `aa.a(Display,String,Displayable,int,int,Command)V pc=129` → `aa.a(Display,String,Displayable,int)V pc=11` → `aa.a(Display,String,Displayable)V pc=7` → `n.a(String,Displayable)V pc=23` → `n.p()V pc=11` → `bi.a(BZZ)I pc=1082` → `bi.v()V pc=48` → `bi.run()V pc=1302`。这里的调用者 PC 是调用后的保存位置；`aa` 中实际 `Alert.addCommand` 指令位于 126，不能将 `bi.o()V pc=29` 当成原始 addCommand 调用点。
+
+[aa 字节码](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/bytecode/aa.javap.txt>) 显示三参数重载传入默认正超时 3000，因此此路径选择 `n.k`；超时非正时才选择 `n.j`。可选的额外 Command 有空值检查，但这两个默认命令共用的 addCommand 调用没有检查。[n 字节码](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/bytecode/n.javap.txt>) 显示构造器未赋值这些字段，`n.e()V` 才建立命令；[g 字节码](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/bytecode/g.javap.txt>) 中 `g.a(ZZ)V pc=139` 调用它。运行时的空值与字节码共同定位了失败字段，但尚未解释命令初始化为何没有完成，不能据此宣布 UC 本身有缺陷或外部服务已失效。
+
+随后 `bi.o()V pc=29` 和 `bi.run()V pc=1635` 的空引用发生在页面清理与异常恢复路径；前者调用未建立页面上的方法，后者访问空页面字段。它们是首个命令异常之后的次级失败，不能与正常命令回调混为一谈。450 帧结束时 `ah.run()V pc=22` 仍在睡眠轮询，后续输入没有推进菜单；日志没有 `uncaught exception`，这也不证明取消流程成功。MIDP 对 `addCommand(null)` 的异常检查保留，本轮不通过吞掉异常改变应用控制流。
+
+## 参考实现与未完成项
+
+本地 FreeJ2ME-Plus `baca76a4dda6f30abac67fb4a3db009eed05f91c` 使用同一原 JAR，等待 7 秒后发 soft2，随后 down/fire/soft1，最终同样停在 [取消画面](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/reference-proxy503/followup.png>)。[参考运行条件](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/reference-proxy503/manifest.json>) 记录了代理配置，但 [代理请求清单](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/uc-command-round14-20261020/reference-proxy503/proxy-requests.json>) 为空。
+
+这是参考实现的能力边界：[HttpConnectionImpl](</home/lucinhu/workspace/c/nano_j2me/.local-tools/freej2me-plus/src/javax/microedition/io/HttpConnectionImpl.java>) 的 `connect()` 仅记录日志，`getResponseCode()` 固定返回 200，普通 MIDP 的输入流和输出流返回 null（DoJa 分支才返回空输入流）。因此这次参考运行没有实际经过 HTTP 503 代理，不能作为真实网络行为或相同服务失败条件的独立对照。相似取消画面也不能证明两个模拟器失败原因相同。
+
+对历史提交的重建均复现过动态数据停滞，支持这是长期兼容性缺口；2026-10-17 共享构建曾发出 HTTP，但该二进制未保存，来源无法重建。撤回先前“确定来自某个未提交改动”的强推断，不能据此认定或排除特定提交回归。
+
+UC 取消后不回主菜单仍待修复；下一步需要定位 `n.e()V` 初始化未完成的上游分支，并以可核验的资源和网络响应重放。未验证主菜单、地址编辑、真实网页、账号服务；本轮没有 Android 真机运行或新 APK 交付。
