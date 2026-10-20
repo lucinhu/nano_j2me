@@ -1818,7 +1818,12 @@ static nj_s8 date_millis(nj_vm *vm, nj_ref d)
 
 NJFN(date_init)
 {
-    return NJ_OK;   /* millis is zero-initialised by the allocator */
+    nj_field *f = fld(vm, DATE_CLS, "millis", "J");
+    if (!f) {
+        return nj_throw(vm, "java/lang/InternalError", "Date layout");
+    }
+    nj_field_write_long(vm, NJ_THIS(args), f, nj_now_ms(vm));
+    return NJ_OK;
 }
 
 NJFN(date_init_ms)
@@ -2468,7 +2473,7 @@ NJFN(cal_init)
     nj_ref c = NJ_THIS(args);
 
     cal_constants(vm);
-    cal_set_millis(vm, c, 0);
+    cal_set_millis(vm, c, nj_now_ms(vm));
     if (cal_fzone(vm)) {
         nj_ref z = tz_make(vm, tz_port_offset(vm));
         if (!z) {
@@ -2485,7 +2490,7 @@ NJFN(cal_init_zone)
     nj_ref z = NJ_ARG_REF(args, 0);
 
     cal_constants(vm);
-    cal_set_millis(vm, c, 0);
+    cal_set_millis(vm, c, nj_now_ms(vm));
     if (!z) {
         z = tz_make(vm, 0);
         if (!z) {

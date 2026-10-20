@@ -224,6 +224,7 @@ nj_vm *nj_vm_create(const nj_port *port, nj_size heap_bytes)
         nj_vm_destroy(vm);
         return NULL;
     }
+    nj_clock_init(vm);
     vm->initialized = 1u;
     return vm;
 }

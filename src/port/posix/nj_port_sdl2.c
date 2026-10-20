@@ -27,7 +27,11 @@
  * that cap too, and sliding back off releases it, which is the same rule from
  * the other side.
  */
+#if !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "nj2me/nj_port.h"
+#include "nj_posix_clock.h"
 #include "nj2me/nj_vm.h"       /* speed + save-state, applied on the frame */
 
 #include "nj_sdl2_font.h"
@@ -1946,6 +1950,7 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
     }
 #endif
     out->millis = sdl_millis;
+    out->now = nj_posix_now;
     out->sleep_ms = sdl_sleep_ms;
     out->idle = sdl_idle;
     out->device_property = sdl_device_property;

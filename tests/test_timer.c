@@ -124,6 +124,26 @@ int main(void)
     CHECK(runs(vm, bad) == 1); CHECK(runs(vm, good) == 2);
     cancel(vm, other); step(vm);
 
+    /* A delay computed from Date uses the same clock as relative scheduling.
+     * This exercises schedule(task, delay), not the Date overload. */
+    {
+        nj_ref date = make(vm, "java/util/Date");
+        nj_value args[2];
+        CHECK(nj_call(vm, date, "java/util/Date", "getTime", "()J", NULL, &ret) == NJ_OK);
+        CHECK(ret.j == nj_now_ms(vm));
+        memset(args, 0, sizeof(args));
+        args[0].j = ret.j + 50;
+        CHECK(nj_call(vm, date, "java/util/Date", "setTime", "(J)V", args, NULL) == NJ_OK);
+        timer = make(vm, "java/util/Timer");
+        task = make(vm, "TimerFixture");
+        CHECK(nj_call(vm, date, "java/util/Date", "getTime", "()J", NULL, &ret) == NJ_OK);
+        CHECK(schedule(vm, timer, task, ret.j - nj_now_ms(vm), 0) == NJ_OK);
+        step(vm); CHECK(runs(vm, task) == 0);
+        clock_ms += 49; step(vm); CHECK(runs(vm, task) == 0);
+        clock_ms += 1; step(vm); CHECK(runs(vm, task) == 1);
+        cancel(vm, timer); step(vm);
+    }
+
     /* More than the VM thread limit worth of cancelled Timers must reuse the
      * internal helper capacity, without changing ordinary Java Thread records. */
     for (i = 0; i < NJ_MAX_THREADS * 2; i++) {

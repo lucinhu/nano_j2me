@@ -28,6 +28,7 @@
 #include "nj2me/nj_port.h"
 #include "nj2me/nj_types.h"
 #include "nj2me/nj.h"
+#include "nj_posix_clock.h"
 #if NJ_HAVE_POSIX_NETWORK
 #include "nj_posix_network.h"
 #endif
@@ -1238,6 +1239,7 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     out->name = "headless";
     out->ud = s;
     out->millis = hl_millis;
+    out->now = nj_posix_now;
     out->sleep_ms = hl_sleep_ms;
     out->idle = hl_idle;
     out->device_property = hl_device_property;

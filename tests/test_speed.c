@@ -38,6 +38,126 @@ static void eq(const char *what, nj_s8 got, nj_s8 want)
     }
 }
 
+static nj_datetime rtc;
+static int rtc_calls, rtc_ok;
+
+static int fake_rtc(void *ud, nj_datetime *out)
+{
+    (void)ud;
+    rtc_calls++;
+    *out = rtc;
+    return rtc_ok;
+}
+
+static void check_current_calendars(nj_vm *vm, nj_s8 expected)
+{
+    nj_value result, arg;
+    nj_ref zone;
+    int variant;
+
+    arg.r = nj_root(vm, nj_string_new(vm, "GMT"));
+    eq("GMT lookup succeeds", nj_call(vm, NULL, "java/util/TimeZone",
+       "getTimeZone", "(Ljava/lang/String;)Ljava/util/TimeZone;", &arg,
+       &result), NJ_OK);
+    zone = nj_root(vm, result.r);
+    for (variant = 0; variant < 2; variant++) {
+        nj_ref calendar, date;
+        arg.r = zone;
+        eq("Calendar.getInstance succeeds", nj_call(vm, NULL,
+           "java/util/Calendar", "getInstance", variant
+           ? "(Ljava/util/TimeZone;)Ljava/util/Calendar;"
+           : "()Ljava/util/Calendar;", variant ? &arg : NULL, &result), NJ_OK);
+        calendar = nj_root(vm, result.r);
+        eq("Calendar.getTime succeeds", nj_call(vm, calendar,
+           "java/util/Calendar", "getTime", "()Ljava/util/Date;", NULL,
+           &result), NJ_OK);
+        date = nj_root(vm, result.r);
+        eq("Calendar Date.getTime succeeds", nj_call(vm, date,
+           "java/util/Date", "getTime", "()J", NULL, &result), NJ_OK);
+        eq("a new Calendar captures the current instant", result.j, expected);
+    }
+}
+
+static void test_epoch_clock(nj_port *port)
+{
+    static const struct {
+        nj_datetime date;
+        nj_s8 expected;
+    } cases[] = {
+        {{1969, 11, 31, 23, 59, 59, 999, 3, 0}, -1},
+        {{1970, 0, 1, 0, 0, 0, 0, 4, 0}, 0},
+        {{2000, 1, 29, 12, 34, 56, 789, 2, 330}, 951807896789LL},
+        {{2026, 9, 20, 11, 21, 13, 456, 2, 480}, 1792466473456LL},
+        {{2038, 0, 19, 3, 14, 8, 1, 2, -210}, 2147496248001LL},
+        {{2100, 2, 1, 0, 0, 0, 0, 1, 0}, 4107542400000LL}
+    };
+    unsigned i;
+    port->now = fake_rtc;
+    rtc_ok = 1;
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        nj_vm *vm;
+        nj_value result;
+        nj_ref date;
+        int calls_after_calendar;
+        rtc = cases[i].date;
+        rtc_calls = 0;
+        fake_now = 12345;
+        vm = nj_vm_create(port, 1024u * 1024u);
+        eq("RTC VM exists", vm != NULL, 1);
+        if (!vm) { continue; }
+        eq("local RTC converts to UTC epoch", nj_now_ms(vm), cases[i].expected);
+        eq("RTC sampled once at creation", rtc_calls, 1);
+        vm->running = 1;
+        eq("System.currentTimeMillis succeeds", nj_call(vm, NULL,
+           "java/lang/System", "currentTimeMillis", "()J", NULL, &result), NJ_OK);
+        eq("Java reads the epoch", result.j, cases[i].expected);
+        date = nj_root(vm, nj_object_new(vm, "java/util/Date"));
+        eq("Date exists", date != NULL, 1);
+        eq("Date() succeeds", nj_call_special(vm, date, "java/util/Date",
+           "<init>", "()V", NULL, NULL), NJ_OK);
+        eq("Date.getTime succeeds", nj_call(vm, date, "java/util/Date",
+           "getTime", "()J", NULL, &result), NJ_OK);
+        eq("Date() captures the same current instant", result.j, cases[i].expected);
+        check_current_calendars(vm, cases[i].expected);
+        calls_after_calendar = rtc_calls;
+        rtc.year = 1980; /* A later host clock adjustment cannot move deadlines. */
+        fake_now += 25;
+        eq("RTC changes do not jump virtual time", nj_now_ms(vm), cases[i].expected + 25);
+        nj_vm_set_speed(vm, 200);
+        eq("changing epoch clock speed does not jump", nj_now_ms(vm), cases[i].expected + 25);
+        fake_now += 50;
+        eq("epoch clock still scales elapsed time", nj_now_ms(vm), cases[i].expected + 125);
+        eq("later clock reads do not resample RTC", rtc_calls, calls_after_calendar);
+        nj_vm_destroy(vm);
+    }
+    /* Reject an unavailable RTC and malformed calendar values without UB or
+     * silently accepting a normalized invalid date. */
+    for (i = 0; i < 10; i++) {
+        nj_vm *vm;
+        rtc = cases[3].date;
+        rtc_ok = i != 0;
+        switch (i) {
+        case 1: rtc.month = -1; break;
+        case 2: rtc.month = 12; break;
+        case 3: rtc.year = 0; break;
+        case 4: rtc.year = 2100; rtc.month = 1; rtc.day = 29; break;
+        case 5: rtc.hour = 24; break;
+        case 6: rtc.minute = 60; break;
+        case 7: rtc.second = 60; break;
+        case 8: rtc.millis = 1000; break;
+        case 9: rtc.tz_offset = 1440; break;
+        }
+        fake_now = 700;
+        vm = nj_vm_create(port, 1024u * 1024u);
+        eq("fallback VM exists", vm != NULL, 1);
+        if (vm) {
+            eq("unavailable or invalid RTC retains raw clock", nj_now_ms(vm), 700);
+            nj_vm_destroy(vm);
+        }
+    }
+    port->now = NULL;
+}
+
 int main(void)
 {
     nj_port port;
@@ -51,6 +171,7 @@ int main(void)
     }
     /* The whole point: this test owns the clock. */
     port.millis = fake_millis;
+    port.now = NULL; /* Explicitly exercise the no-RTC embedded fallback. */
 
     fake_now = 0u;
     vm = nj_vm_create(&port, 1024u * 1024u);
@@ -151,6 +272,7 @@ int main(void)
     }
 
     nj_vm_destroy(vm);
+    test_epoch_clock(&port);
     nj_port_shutdown(&port);
 
     printf("%d checks, %d failures\n", checks, fails);

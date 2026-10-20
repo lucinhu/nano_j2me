@@ -32,6 +32,43 @@
 /* ------------------------------------------------------------------ */
 /* Time                                                                */
 /* ------------------------------------------------------------------ */
+static int clock_epoch_ms(const nj_datetime *dt, nj_s8 *out)
+{
+    static const nj_u2 month_days[12] = {
+        0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334
+    };
+    static const nj_u1 month_length[12] = {
+        31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
+    };
+    nj_s8 y, days;
+    int leap, max_day;
+
+    /* Check every field used below before indexing or doing arithmetic. */
+    if (dt->year < 1 || dt->year > 9999 ||
+        dt->month < 0 || dt->month > 11 ||
+        dt->hour < 0 || dt->hour > 23 ||
+        dt->minute < 0 || dt->minute > 59 ||
+        dt->second < 0 || dt->second > 59 ||
+        dt->millis < 0 || dt->millis > 999 ||
+        dt->tz_offset <= -1440 || dt->tz_offset >= 1440) {
+        return 0;
+    }
+    leap = dt->year % 4 == 0 &&
+           (dt->year % 100 != 0 || dt->year % 400 == 0);
+    max_day = month_length[dt->month] + (dt->month == 1 && leap);
+    if (dt->day < 1 || dt->day > max_day) {
+        return 0;
+    }
+    y = (nj_s8)dt->year - 1;
+    /* Gregorian days before this year, relative to 1970-01-01. */
+    days = y * 365 + y / 4 - y / 100 + y / 400 - 719162;
+    days += month_days[dt->month] + (dt->month > 1 && leap) + dt->day - 1;
+    *out = days * 86400000 + (nj_s8)dt->hour * 3600000
+         + (nj_s8)dt->minute * 60000 + (nj_s8)dt->second * 1000
+         + dt->millis - (nj_s8)dt->tz_offset * 60000;
+    return 1;
+}
+
 nj_s8 nj_now_ms(nj_vm *vm)
 {
     nj_u4 ms;
@@ -76,6 +113,21 @@ nj_s8 nj_now_ms(nj_vm *vm)
             vm->speed_real = real;
         }
         return virt;
+    }
+}
+
+void nj_clock_init(nj_vm *vm)
+{
+    nj_datetime dt = {0};
+    nj_s8 epoch;
+
+    if (vm && vm->port && vm->port->now &&
+        vm->port->now(vm->port->ud, &dt) && clock_epoch_ms(&dt, &epoch)) {
+        /* Sample/fold the raw counter, then anchor once. Later reads use only
+         * millis, so host wall-clock adjustments cannot change deadlines. */
+        (void)nj_now_ms(vm);
+        vm->speed_real = vm->scheduler_ticks;
+        vm->speed_virtual = epoch;
     }
 }
 

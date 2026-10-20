@@ -1,6 +1,10 @@
 # 下载 JAR corpus 兼容性复核（2026-10-17）
 
-## 最终更新：家园6八个版本已越过加载等待
+## 2026-10-20 更新：UC 越过动态数据初始化
+
+RTC 与 Java 时间构造路径修复后，原 UC JAR 已到测试网络，受控失败代理收到 4 次 POST；SDL 实际按键能进入取消状态，但主菜单与浏览仍未通过。全套 84/84 测试及相关 ASan/UBSan 3/3 通过，同一二进制恢复 N97 旧快照后移动、暂停、返回已复核。详见 [UC 修复与证据](2026-10-20-uc-browser.md)。
+
+## 历史更新：家园6八个版本已越过加载等待
 
 修复正常 Java 工作线程返回后 `isAlive()` 仍为真的问题后，jar-17 至 jar-24 全部使用原 JAR、独立新 RMS、30fps、60秒回放，均进入标题、战役地图和村庄对白，后续按键可推进。N73 另有语言选择；A760 仍有90度旋转显示问题。八个原 JAR 运行前后 SHA-256 全部相同。这里证明加载与初期交互已恢复，尚未验证完整关卡和存档重启。详见 [线程修复与逐版本记录](2026-10-17-townsmen-loader.md)。以下 FreeJ2ME 对照及早期加载失败记录保留为修复前历史证据。
 
@@ -53,7 +57,7 @@ native-ime提供独立build-ime/nj2me，SHA-256 `ebb421a66aa7dbc521eb9c2805009da
 | jar-03 / [app(2).jar](</home/lucinhu/Downloads/jar/app(2).jar>) | 网易云音乐 / 240x320 | [网易云音乐主列表](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-03/result.json>) | 修复前[菜单高亮但搜索页构造抛异常](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-03-contact.png>)；native-ime修复后亲自复测[搜索Form成功打开](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar03-item-fixed/frames/00300.png>)，soft2返回主列表；无thrown/uncaught，未验证提交搜索/播放 |
 | jar-04 / [app(3).jar](</home/lucinhu/Downloads/jar/app(3).jar>) | 帝国时代3（正版） / 240x320 | [黑屏](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-04/result.json>) | [已有40秒音效提示；本次60秒到任务/战役/保存游戏主菜单，down将任务高亮变战役；未开任务](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-04-long-contact.png>) |
 | jar-05 / [app(4).jar](</home/lucinhu/Downloads/jar/app(4).jar>) | 文明5双城之战(汉化) / 240x320 | [Gameloft logo](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-05/result.json>) | [早期60秒仍停音效询问](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-05-long-contact.png>)；第5轮原JAR进入文明战役→美利坚/华盛顿→保卫家园→地图智者对白，暂停/恢复响应；[命令、截图与时序限制](</home/lucinhu/workspace/c/nano_j2me/docs/notes/2026-10-17-civ5-replay.md>)。未验证单位移动、完整回合或保存继续，短按响应时序根因仍未确认 |
-| jar-06 / [app.jar](</home/lucinhu/Downloads/jar/app.jar>) | UC浏览器 / 240x320 | [UC v9.0初始化/测试网络](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-06/result.json>)；[2026-10-20停滞排查](2026-10-20-uc-browser.md) | 当前固定二进制停在“初始化:动态数据”（进度3/99、无HTTP尝试），FreeJ2ME对照可到“测试网络”；方向/菜单/编辑仍待验证 |
+| jar-06 / [app.jar](</home/lucinhu/Downloads/jar/app.jar>) | UC浏览器 / 240x320 | [UC v9.0初始化/测试网络](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-06/result.json>)；[2026-10-20停滞排查](2026-10-20-uc-browser.md) | 2026-10-20 RTC 修复后已越过动态数据，原 JAR 到“测试网络”；受控 HTTP 503 代理收到 4 次 POST，SDL Escape 后到“取消操作中…”且后续输入仍未进菜单；主菜单/编辑/实际浏览仍待验证 |
 | jar-07 / [乱世Q三国.jar](</home/lucinhu/Downloads/jar/乱世Q三国.jar>) | 乱世Q三国 / 240x320 | [是否开启音乐](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-07/result.json>) | [音效→标题→主菜单→章节剧情选择；末次down未见明显选择变化](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-07-contact.png>) |
 | jar-08 / [仙镜OL-羊羊得意_诺基亚 N97系列(360×640)-1121281.jar](</home/lucinhu/Downloads/jar/仙镜OL-羊羊得意_诺基亚 N97系列(360×640)-1121281.jar>) | 仙镜online / 360x640 | [联网方式确定/返回提示](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-08/result.json>) | [--network后HTTP request failed；40秒超时，无新帧；不作在线成功判断](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-replay-20261017/jar-08-contact.png>) |
 | jar-09 / [侠义OL-八龙聚首_诺基亚 N97系列(360×640)-871204.jar](</home/lucinhu/Downloads/jar/侠义OL-八龙聚首_诺基亚 N97系列(360×640)-871204.jar>) | xyOnline / 360x640 | [请检查设备网络连接提示](</home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/download-corpus-20261017/jar-09/result.json>) | [2026-10-19修复后：桌面原JAR触摸打开编辑Form、返回并重开；独立Android API21实例弹出系统IME，test5678确认回显、复开保留，追加ZZ后取消不覆盖旧值，再开IME成功；原手机/中文IME待复测，未提交注册或验证在线游玩](</home/lucinhu/workspace/c/nano_j2me/docs/notes/2026-10-17-xy-ime.md>) |

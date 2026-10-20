@@ -73,3 +73,9 @@ SDL2恢复室内快照后，通过真实窗口发送Escape，再发送Escape，�
 | 1950帧再次soft2后 | 返回同一基地与移动后的位置 | [返回游戏](../../.local-tools/debug-runs/island-save-followup-20261019/lead-pinned-restart/frames/01950.png) |
 
 [冷启动结果与hash](../../.local-tools/debug-runs/island-save-followup-20261019/lead-pinned-restart/result.json)及[日志](../../.local-tools/debug-runs/island-save-followup-20261019/lead-pinned-restart/runtime.log)记录1980帧、65.725秒、1059次paint、309706次gfx、退出0，destroyApp正常返回，无thrown/uncaught或frame-loop escape。三份RMS的最终hash与启动副本相同。此次证据确认N97版进入新区域自动保存、退出后冷启动继续，以及继续后的移动/暂停/返回；床上休息保存、战斗、完整任务、Android存档闭环及其他孤岛变体的保存继续仍未验证。
+
+## RTC 补丁后的旧快照回归（2026-10-20）
+
+同一原 JAR、独立 RMS 副本与旧室内快照，使用 UC 时钟修复构建（SHA-256 `bde0bab93c5794a726a9c4f9eec1319b666ceca3b4ccdb48e16f759f04e0f806`）。[运行参数与动作时间](../../.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/manifest.json)保留。按 PID 和标题同时定位自有窗口，并在快照恢复后重新查询重建后的窗口 ID；此前两次使用旧窗口 ID 的采集失败不作为通过证据。
+
+已人工检查[原室内场景](../../.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/01-restored.png)、[持续 Up 后人物上移](../../.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/02-after-Up.png)、[F2 暂停](../../.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/03-after-F2.png)、[Return 返回](../../.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/04-after-Return.png)，随后 Escape/Return 又完成一次暂停/返回。截图取自 SDL 渲染缓冲；[实际 SDL 按键与退出日志](../../.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/runtime.log)记录 273 帧、9.518 秒、28.7fps、正常 teardown 与退出 0。原 JAR 与快照未改；本组验证 RTC 补丁没有破坏旧快照后的刷新与操作，未重跑新的游戏 RMS 保存闭环，暂停白底仍保留。

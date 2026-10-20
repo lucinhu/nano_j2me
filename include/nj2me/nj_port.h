@@ -317,7 +317,9 @@ typedef struct nj_port {
     /* Logging.  level: 0=error 1=warn 2=info 3=debug */
     void  (*log)(void *ud, int level, const char *msg);
 
-    /* Local wall clock.  Return 1 on success. */
+    /* Local wall clock with UTC offset; return 1 on success. Optional.
+     * Seeds the MIDlet epoch at VM creation; elapsed time uses millis thereafter.
+     * Without a valid RTC, the VM retains its monotonic-counter fallback. */
     int   (*now)(void *ud, nj_datetime *out);
 
     /* ---- persistent storage: RMS + JAR-from-flash ---- */
