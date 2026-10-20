@@ -38,6 +38,15 @@ The exact 600-frame reproduction above was rerun under GDB with a breakpoint on 
 
 A 1,200-frame follow-up used the same initial keys, followed by `660:fire,720:soft1,780:fire,840:right,900:down,960:fire,1020:soft1,1080:fire,1140:soft2`. It advanced to the battle map and a rescue dialogue, with 601 paints, two GCs, 1,338,320 used heap bytes and a normal exit in 40.097 seconds. Evidence: `fixed-map/runtime.log`, `fixed-map/contact.png`. Both runs use an 8 MiB Java heap, 30 fps and separate RMS. The existing caught NPE at `h.<init>` pc72 remains; no uncaught failure was observed. At 240x320 the game still draws in a smaller region with title remnants and misaligned areas. Unit movement, combat and completing a mission are unverified.
 
+Later verification (2026-10-20 and 2026-10-21) superseded the movement and
+combat part of that sentence. Running the original JAR with the explicit
+Motorola profile (`--device motorola-e398`, commit 9106b79) let the
+commander move from (4,6) to (4,4), the AI took its turn, and one attack
+exchange resolved (attacker 100 to 89, defender 100 to 44) before the game
+returned to the map, in both the headless and SDL2 ports. Mission
+completion and a full campaign remain unverified. See
+`docs/notes/2026-10-20-motorola-softkeys.md`.
+
 SDL2 dummy video/audio also ran the old snapshot for 600 frames and exited normally (`fixed-sdl/runtime.log`), but only 5,006 bytecodes and zero graphics calls were observed: this is insufficient evidence of restored interaction or audio cleanup. Cross-backend snapshot timing remains to investigate. Dummy output supplies no visual proof.
 
 Validation:

@@ -83,6 +83,27 @@ The mid-turn frame at `turn/frames/00700.png` shows the wall the player is
 turning past, the crosshair and the ammo HUD. Evidence is under
 `.local-tools/debug-runs/doom-heldkeys/`.
 
+## A title that only implements `keyPressed`
+
+`孤岛余生2时间之谜汉化版_7371.jar` (Stranded 2) never calls
+`getKeyStates()` or `keyRepeated()`; the whole 36-class suite only overrides
+`keyPressed(int)` and `keyReleased(int)`. Its movement is therefore one step
+per press, and a held key alone gives exactly one step. The script that walks
+it must tap:
+
+```
+120:fire,300:down,330:fire,1000:fire,1100:fire       # Chinese, music, title, new game
+1200:fire,...,5850:fire                              # advance chapter-one dialogue
+5950:right,5990:right,...,7300:right                 # walk right one step per tap
+```
+
+After the dialogue the opening room appears (`05850`), the camera pans with
+the character while the taps continue (about 33,000 changed pixels between
+samples 150 frames apart), and it settles once the furniture blocks the
+character (about 500 animation pixels). The run reached 8,100 frames at
+30.2 FPS with exit 0 and no uncaught exception. Evidence:
+`.local-tools/debug-runs/stranded-round2/taps/`.
+
 ## Limits
 
 - There is no key repeat: a title that expects repeated `keyPressed()` events

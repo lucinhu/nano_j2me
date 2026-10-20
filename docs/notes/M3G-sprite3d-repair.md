@@ -10,7 +10,20 @@ Validation on 2026-10-15:
 
 - All 79 CTests passed in 182.87 seconds. The final additional root-transform and parent-alpha assertions also passed the focused test_m3g check.
 - Stranded 2: isolated 240x320, 16 MB heap, 30 FPS, 2,250-frame headless and SDL2 runs. SDL2 measured 30.1 FPS with no uncaught exception. The player is visible at the lockers; room floor and objects render. A subsequent 2,700-frame SDL2 run measured 30.1 FPS with no uncaught exception. Holding Left and Right for three seconds moved the player and panned the camera; Down was blocked by the crates in front of the player. Earlier one-frame direction taps established facing changes but were insufficient to establish movement. The reference emulator also moves under sustained input, although these runs do not establish identical movement speed or frame timing. Saving and restarting to continue remain unverified.
-- Rally 3D: 4,300-frame headless and SDL2 replays at the same settings measured 30.2 and 30.1 FPS respectively. Captures show the pause menu, a subsequent race in cockpit view, and further third-person driving. Existing game Timer callbacks still raise NullPointerException, cancel the timer, and later trigger IllegalStateException on rescheduling; the replay recovers, so this is not reported as resolved.
+- Headless movement follow-up (2026-10-21): the tracked CLI now drives keys itself
+  (`--keys frame:key[:down|:up]`, commit 7b7a117), so this no longer needs the SDL2
+  window or an external X11 driver. Boot keys pick Chinese, answer the music prompt,
+  dismiss the title and start a new game; advancing the chapter-one dialogue reaches
+  the opening room at about frame 5,700 (`taps/05850.ppm`). Directional presses then
+  walk the character: samples 150 frames apart during a sequence of Right taps differ
+  by about 33,000 pixels because the camera pans with the player, and the difference
+  falls to about 500 animation pixels once the furniture blocks the character. The
+  JAR implements only `keyPressed`/`keyReleased` (no class references
+  `getKeyStates` or `keyRepeated`), so movement is one step per press: a held key
+  alone gives one step and repeated taps are the correct script. The run covered
+  8,100 frames, 30.2 FPS, 1,923,010 triangles and 206,314 M3G calls with exit 0 and
+  no uncaught exception. Evidence: `.local-tools/debug-runs/stranded-round2/taps/`.
+- Rally 3D: 4,300-frame headless and SDL2 replays at the same settings measured 30.2 and 30.1 FPS respectively. Captures show the pause menu, a subsequent race in cockpit view, and further third-person driving. Existing game Timer callbacks still raise NullPointerException, cancel the timer, and later trigger IllegalStateException on rescheduling; the replay recovers, so this is not reported as resolved. The reference emulator reports the same stale-canvas failures (`Cannot invoke "e.repaint()" because "Rally.e" is null`, and the same for `Rally.f` and `Rally.c`), which confirms the game's leaked-Timer lifecycle defect: our runtime cancels the timer exactly as Java does. `OPEN-issue-m3g-render-unreached.md` ("Rally Timer provenance") has the disassembly.
 
 Additional menu and RMS validation:
 

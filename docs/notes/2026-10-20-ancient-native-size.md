@@ -45,6 +45,15 @@ Useful retained images, relative to the validation directory:
 
 The logs contain no uncaught exception or OOM. They still report caught `java/lang/NullPointerException at h.<init>(Ljava/lang/String;I)V pc=72` and fresh-store `RecordStoreNotFoundException` throws. Each run ended because its frame budget expired; exit zero and continuing paints do not establish successful interaction.
 
-The game also maps raw key codes -21/-22 to its soft-key actions, while the generic runner supplies -6/-7 for `soft1`/`soft2`. This is an unresolved input candidate, not a demonstrated cause: numeric 5, fire and directional probes also left the visible panel unchanged. A same-size reference replay and tracing the blank dialogue's text/input path remain useful next checks.
+Later work closed the two gaps noted above. The raw-key mapping is now
+explicit: the Motorola profile (`--device motorola-e398`, commit 9106b79)
+reports -21/-22 for the left and right soft keys, so the game's own
+soft-key codes arrive unchanged. The blank dialogue was missing CJK glyph
+coverage, fixed by the translated CJK grid (commit de6d5c8): the original
+128x116 build now draws the Chinese dialogue text.
 
-The established result is native-size layout mitigation and cold-start arrival at the map. Dialogue text, unit control, combat, mission completion and save/restart remain unverified. The original JAR and user RMS were preserved.
+The established result is native-size layout mitigation, cold-start
+arrival at the map, and - under the explicit Motorola profile - unit
+movement, an AI turn and one combat exchange with a return to the map; see
+`docs/notes/2026-10-20-motorola-softkeys.md`. Mission completion and a full
+campaign remain unverified. The original JAR and user RMS were preserved.
