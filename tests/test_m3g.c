@@ -2066,6 +2066,215 @@ int main(void)
         check(count == 0, "sprite crop outside the image emits no pixels");
     }
 
+    /* ---- each World is lit by its own Light nodes --------------------- */
+    /*
+     * render(World) takes the Light nodes that are part of that World.  The
+     * first implementation collected them once and kept them on the
+     * Graphics3D, so the second World was lit by the first World's lights:
+     * Doom's menu spot light then rejected every vertex of the level and the
+     * 3D world stayed black behind a drawn HUD.  Two Worlds with one red and
+     * one green ambient light expose that: B must come out green.
+     */
+    {
+        nj_ref img = 0, gr = 0, g3d, cam, xf, va, vb, norms, data, ndata;
+        nj_ref app, mat, worldA, worldB, meshA, meshB, lightA, lightB;
+        nj_ref ibA, lengths, bg, pixels, rgb;
+        nj_value a[8], r;
+        nj_s2 pos[9], nrm[9];
+        int k;
+
+        pos[0] = -50;  pos[1] = -50;  pos[2] = -200;
+        pos[3] =  50;  pos[4] = -50;  pos[5] = -200;
+        pos[6] = -50;  pos[7] =  50;  pos[8] = -200;
+        for (k = 0; k < 3; k++) {
+            nrm[k * 3] = 0; nrm[k * 3 + 1] = 0; nrm[k * 3 + 2] = -127;
+        }
+
+        a[0].i = 16; a[1].i = 16; r.r = 0;
+        if (nj_call_static(vm, "javax/microedition/lcdui/Image", "createImage",
+                           "(II)Ljavax/microedition/lcdui/Image;", a, &r) == NJ_OK) {
+            img = r.r;
+        }
+        if (img) {
+            a[0].r = img; r.r = 0;
+            call(vm, img, "javax/microedition/lcdui/Image", "getGraphics",
+                 "()Ljavax/microedition/lcdui/Graphics;", a, &r);
+            gr = r.r;
+        }
+        check(img && gr, "a light-regression target image exists");
+        g3d = nj_object_new(vm, CLS("Graphics3D"));
+        check(g3d != 0, "a light-regression Graphics3D exists");
+        if (g3d) {
+            a[0].r = gr;
+            call(vm, g3d, CLS("Graphics3D"), "bindTarget",
+                 "(Ljava/lang/Object;)V", a, NULL);
+            a[0].i = 0; a[1].i = 0; a[2].i = 16; a[3].i = 16;
+            call(vm, g3d, CLS("Graphics3D"), "setViewport", "(IIII)V", a, NULL);
+        }
+        cam = make(vm, CLS("Camera"));
+        xf = make(vm, CLS("Transform"));
+        a[0].f = 60.0f; a[1].f = 1.0f; a[2].f = 1.0f; a[3].f = 1000.0f;
+        call(vm, cam, CLS("Camera"), "setPerspective", "(FFFF)V", a, NULL);
+        a[0].r = cam; a[1].r = xf;
+        call(vm, g3d, CLS("Graphics3D"), "setCamera",
+             "(L" CLS("Camera") ";L" CLS("Transform") ";)V", a, NULL);
+
+        va = make(vm, CLS("VertexArray"));
+        vb = make(vm, CLS("VertexBuffer"));
+        norms = make(vm, CLS("VertexArray"));
+        data = nj_array_new(vm, "S", 9u);
+        ndata = nj_array_new(vm, "S", 9u);
+        if (data) { memcpy(nj_array_data(data), pos, sizeof pos); }
+        if (ndata) { memcpy(nj_array_data(ndata), nrm, sizeof nrm); }
+        if (va && vb && norms && data && ndata) {
+            nj_iput(vm, va, nj_field_lookup(vm, CLS("VertexArray"),
+                                            "_nj_numVerts", "I", 0), 3);
+            nj_iput(vm, va, nj_field_lookup(vm, CLS("VertexArray"),
+                                            "_nj_numComp", "I", 0), 3);
+            nj_iput(vm, va, nj_field_lookup(vm, CLS("VertexArray"),
+                                            "_nj_compSize", "I", 0), 2);
+            nj_rput(vm, va, nj_field_lookup(vm, CLS("VertexArray"),
+                                            "_nj_data", "[S", 0), data);
+            nj_iput(vm, norms, nj_field_lookup(vm, CLS("VertexArray"),
+                                               "_nj_numVerts", "I", 0), 3);
+            nj_iput(vm, norms, nj_field_lookup(vm, CLS("VertexArray"),
+                                               "_nj_numComp", "I", 0), 3);
+            nj_iput(vm, norms, nj_field_lookup(vm, CLS("VertexArray"),
+                                               "_nj_compSize", "I", 0), 1);
+            nj_rput(vm, norms, nj_field_lookup(vm, CLS("VertexArray"),
+                                               "_nj_data", "[S", 0), ndata);
+            nj_rput(vm, vb, nj_field_lookup(vm, CLS("VertexBuffer"),
+                                            "_nj_positions",
+                                            "L" CLS("VertexArray") ";", 0), va);
+            nj_rput(vm, vb, nj_field_lookup(vm, CLS("VertexBuffer"),
+                                            "_nj_normals",
+                                            "L" CLS("VertexArray") ";", 0), norms);
+        }
+        app = make(vm, CLS("Appearance"));
+        mat = make(vm, CLS("Material"));
+        if (mat) {
+            a[0].i = 1024; a[1].i = (nj_s4)0xFFFFFFFFu;       /* AMBIENT white */
+            call(vm, mat, CLS("Material"), "setColor", "(II)V", a, NULL);
+            a[0].i = 2048; a[1].i = (nj_s4)0xFF000000u;       /* DIFFUSE black */
+            call(vm, mat, CLS("Material"), "setColor", "(II)V", a, NULL);
+            a[0].i = 4096; a[1].i = (nj_s4)0xFF000000u;       /* EMISSIVE black */
+            call(vm, mat, CLS("Material"), "setColor", "(II)V", a, NULL);
+            a[0].r = mat;
+            call(vm, app, CLS("Appearance"), "setMaterial",
+                 "(L" CLS("Material") ";)V", a, NULL);
+        }
+        lengths = nj_array_new(vm, "I", 1u);
+        if (lengths) { ((nj_s4 *)nj_array_data(lengths))[0] = 3; }
+        ibA = nj_object_new(vm, CLS("TriangleStripArray"));
+        if (ibA && lengths) {
+            a[0].i = 0; a[1].r = lengths;
+            nj_call_special(vm, ibA, CLS("TriangleStripArray"), "<init>",
+                            "(I[I)V", a, NULL);
+        }
+        worldA = make(vm, CLS("World"));
+        worldB = make(vm, CLS("World"));
+        {
+            nj_ref ibB = nj_object_new(vm, CLS("TriangleStripArray"));
+
+            if (ibB && lengths) {
+                a[0].i = 0; a[1].r = lengths;
+                nj_call_special(vm, ibB, CLS("TriangleStripArray"), "<init>",
+                                "(I[I)V", a, NULL);
+            }
+            meshA = make(vm, CLS("Mesh"));
+            meshB = make(vm, CLS("Mesh"));
+            if (meshA && vb && ibA && app) {
+                a[0].r = vb; a[1].r = ibA; a[2].r = app;
+                nj_call_special(vm, meshA, CLS("Mesh"), "<init>",
+                    "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                    CLS("Appearance") ";)V", a, NULL);
+            }
+            if (meshB && vb && ibB && app) {
+                a[0].r = vb; a[1].r = ibB; a[2].r = app;
+                nj_call_special(vm, meshB, CLS("Mesh"), "<init>",
+                    "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                    CLS("Appearance") ";)V", a, NULL);
+            }
+        }
+        lightA = make(vm, CLS("Light"));
+        lightB = make(vm, CLS("Light"));
+        if (lightA && lightB) {
+            a[0].i = 128;                                     /* AMBIENT */
+            call(vm, lightA, CLS("Light"), "setMode", "(I)V", a, NULL);
+            call(vm, lightB, CLS("Light"), "setMode", "(I)V", a, NULL);
+            a[0].i = (nj_s4)0xFFFF0000u;                      /* red */
+            call(vm, lightA, CLS("Light"), "setColor", "(I)V", a, NULL);
+            a[0].i = (nj_s4)0xFF00FF00u;                      /* green */
+            call(vm, lightB, CLS("Light"), "setColor", "(I)V", a, NULL);
+            a[0].f = 1.0f;
+            call(vm, lightA, CLS("Light"), "setIntensity", "(F)V", a, NULL);
+            call(vm, lightB, CLS("Light"), "setIntensity", "(F)V", a, NULL);
+        }
+        if (worldA && meshA && lightA) {
+            a[0].r = meshA;
+            call(vm, worldA, CLS("Group"), "addChild",
+                 "(L" CLS("Node") ";)V", a, NULL);
+            a[0].r = lightA;
+            call(vm, worldA, CLS("Group"), "addChild",
+                 "(L" CLS("Node") ";)V", a, NULL);
+        }
+        if (worldB && meshB && lightB) {
+            a[0].r = meshB;
+            call(vm, worldB, CLS("Group"), "addChild",
+                 "(L" CLS("Node") ";)V", a, NULL);
+            a[0].r = lightB;
+            call(vm, worldB, CLS("Group"), "addChild",
+                 "(L" CLS("Node") ";)V", a, NULL);
+        }
+        bg = make(vm, CLS("Background"));
+        if (bg) {
+            a[0].i = (nj_s4)0xFF000000u;
+            call(vm, bg, CLS("Background"), "setColor", "(I)V", a, NULL);
+        }
+        pixels = nj_rget(vm, img, nj_field_lookup(vm,
+            "javax/microedition/lcdui/Image", "imgPixels", "[I", 0));
+        rgb = nj_array_new(vm, "I", 256u);
+
+        if (g3d && worldA && worldB && bg && pixels && rgb) {
+            int i, a_red = 0, a_green = 0, b_red = 0, b_green = 0;
+
+            a[0].r = bg;
+            call(vm, g3d, CLS("Graphics3D"), "clear",
+                 "(L" CLS("Background") ";)V", a, NULL);
+            a[0].r = worldA;
+            call(vm, g3d, CLS("Graphics3D"), "render", "(L" CLS("World") ";)V",
+                 a, NULL);
+            {
+                const nj_u4 *q = (const nj_u4 *)nj_array_data(pixels);
+
+                for (i = 0; i < 256; i++) {
+                    nj_u4 c = q[i] & 0xFFFFFFu;
+                    if (c == 0xFF0000u) { a_red++; }
+                    else if (c == 0x00FF00u) { a_green++; }
+                }
+            }
+            a[0].r = bg;
+            call(vm, g3d, CLS("Graphics3D"), "clear",
+                 "(L" CLS("Background") ";)V", a, NULL);
+            a[0].r = worldB;
+            call(vm, g3d, CLS("Graphics3D"), "render", "(L" CLS("World") ";)V",
+                 a, NULL);
+            {
+                const nj_u4 *q = (const nj_u4 *)nj_array_data(pixels);
+
+                for (i = 0; i < 256; i++) {
+                    nj_u4 c = q[i] & 0xFFFFFFu;
+                    if (c == 0xFF0000u) { b_red++; }
+                    else if (c == 0x00FF00u) { b_green++; }
+                }
+            }
+            check(a_red > 0, "the first World is lit by its own red light");
+            check(a_green == 0, "the first World is not lit by the second's light");
+            check(b_green > 0, "the second World is lit by its own green light");
+            check(b_red == 0, "the first World's light does not leak into the second");
+        }
+    }
+
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
     /* The file format calls type 18 Sprite; the titles call the class

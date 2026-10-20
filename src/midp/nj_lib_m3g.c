@@ -3497,7 +3497,9 @@ nj_u4 nj_m3g_raster_mesh(nj_vm *vm, struct nj_gfx *g, nj_ref mesh,
  * lives with that pipeline further down this file and is declared here.
  */
 static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
-                            nj_ref *meshes, float *mats, nj_u4 n);
+                            nj_ref *meshes, float *mats, nj_u4 n,
+                            const nj_ref *slights, const float *slmats,
+                            nj_s4 snlights);
 static void collect_lights_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
                                 const float *parent, nj_u4 cap, nj_u4 *n,
                                 int depth);
@@ -3510,6 +3512,11 @@ static nj_status m3g_render_scene(nj_vm *vm, nj_thread *th NJ_MAYBE_UNUSED,
     nj_ref self = NJ_THIS(args);
     nj_ref root = NJ_ARG_REF(args, 0);
     nj_ref target, meshes[64];
+    nj_ref slights[16];
+    float slmats[16 * 16];
+    const nj_ref *slightp = NULL;
+    const float *smatp = NULL;
+    nj_s4 snlight = 0;
     nj_u4 n;
     float mats[64 * 16];
     nj_s4 vw, vh;
@@ -3569,11 +3576,32 @@ static nj_status m3g_render_scene(nj_vm *vm, nj_thread *th NJ_MAYBE_UNUSED,
      * this, a World was drawn as flat white triangles with no transform.
      */
     /*
+     * render(World) is lit by the Light nodes that are part of that World.
+     * It is a per-World set: two Worlds in one title do not share lights, a
+     * Light the title created and added to this World counts, and a light
+     * that was right for another World must not leak in.  Collect on every
+     * World render - the walk is cheap next to the raster - and keep the
+     * Graphics3D's own addLight list out of it.
+     */
+    if (nj_ref_class_name(root) &&
+        strcmp(nj_ref_class_name(root), NJ_C_WORLD) == 0) {
+        float ident[16];
+        nj_u4 ln = 0u;
+
+        memset(ident, 0, sizeof(ident));
+        ident[0] = ident[5] = ident[10] = ident[15] = 1.0f;
+        collect_lights_walk(vm, root, slights, slmats, ident, 16u, &ln, 0);
+        slightp = slights;
+        smatp = slmats;
+        snlight = (nj_s4)ln;
+    }
+    /*
      * A scene whose lights are nodes in it lights itself: fill the
      * Graphics3D's light list from the graph when the title never called
-     * addLight.  Done once per render, before any mesh is set up.
+     * addLight.  Not done for a World: its own set was collected above.
      */
-    if (nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I")) == 0) {
+    if (!slightp &&
+        nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I")) == 0) {
         nj_ref lrefs[16];
         float lmat[16 * 16];
         float ident[16];
@@ -3614,7 +3642,8 @@ static nj_status m3g_render_scene(nj_vm *vm, nj_thread *th NJ_MAYBE_UNUSED,
     } else {
         n = nj_m3g_collect_meshes_m(vm, root, meshes, mats, 64u);
     }
-    (void)m3g_world_draw(vm, self, root, meshes, mats, n);
+    (void)m3g_world_draw(vm, self, root, meshes, mats, n,
+                         slightp, smatp, snlight);
     return NJ_OK;
 }
 
@@ -9030,6 +9059,8 @@ typedef struct {
     float fog_density, fog_near, fog_far;
     nj_ref lights;                /* Graphics3D._nj_lights */
     nj_ref lmats;                 /* ... and one float[16] per light */
+    const nj_ref *slights;        /* the World's own Light nodes, when given */
+    const float *slmats;
     nj_s4 nlights;
     int lit;
     nj_u4 emi, amb, spc;          /* the material's other colours */
@@ -9243,7 +9274,8 @@ static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
 
     /* First pass: the ambient lights, whose colour is the ambient light. */
     for (i = 0; i < r->nlights; i++) {
-        nj_ref lt = nj_array_get_ref(r->lights, (nj_u4)i);
+        nj_ref lt = r->slights ? r->slights[i]
+                               : nj_array_get_ref(r->lights, (nj_u4)i);
         nj_field *fm = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_mode", "I", 0);
         nj_field *fi = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_intensity", "F", 0);
         nj_field *fc = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_color", "I", 0);
@@ -9265,10 +9297,14 @@ static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
     /* Second pass: everything else, brightest first is not needed - the
        terms add up. */
     for (i = 0; i < r->nlights; i++) {
-        nj_ref lt = nj_array_get_ref(r->lights, (nj_u4)i);
-        const float *xf = (r->lmats &&
-            nj_array_length(r->lmats) >= (nj_u4)(i + 1) * 16u)
-            ? (const float *)nj_array_data(r->lmats) + (nj_size)i * 16u : NULL;
+        nj_ref lt = r->slights ? r->slights[i]
+                               : nj_array_get_ref(r->lights, (nj_u4)i);
+        const float *xf = r->slmats
+            ? r->slmats + (nj_size)i * 16u
+            : ((r->lmats &&
+               nj_array_length(r->lmats) >= (nj_u4)(i + 1) * 16u)
+               ? (const float *)nj_array_data(r->lmats) + (nj_size)i * 16u
+               : NULL);
         nj_field *fm, *fi, *fc, *fa, *fsa, *fse;
         nj_u4 col;
         float inten, att[3] = { 1.0f, 0.0f, 0.0f }, spot = 1.0f;
@@ -9704,7 +9740,8 @@ static void jr_list(m3g_jr *r, const nj_s4 *idx, nj_s4 count, nj_s4 first)
  * the JSR answers with a render that draws nothing rather than an exception.
  */
 static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
-                    nj_ref world, const float *model_in, m3g_jr *out)
+                    nj_ref world, const nj_ref *slights, const float *slmats,
+                    nj_s4 snlights, const float *model_in, m3g_jr *out)
 {
     nj_ref target, g, cam, arr, d, mat = 0;
     const char *cn;
@@ -9967,6 +10004,17 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         r.nlights = (nj_s4)r.lights->length;
     }
     if (!r.lights) { r.nlights = 0; }
+    /*
+     * render(World) is lit by the Light nodes that belong to that World, not
+     * by whatever addLight() left on the Graphics3D and not by the lights of
+     * the World drawn before it.  The walk in m3g_render_scene() hands that
+     * set down here; the immediate-mode paths pass no override.
+     */
+    if (slights) {
+        r.slights = slights;
+        r.slmats = slmats;
+        r.nlights = snlights;
+    }
     /*
      * Lighting uses the Material, normals and collected lights. Without
      * normals or lights this renderer keeps the surface's unlit colours.
@@ -10236,7 +10284,7 @@ static nj_u4 m3g_render_jr(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib,
             memcpy(model, nj_array_data(d), sizeof(float) * 16u);
         }
     }
-    if (!jr_setup(vm, self, vb, ib, app, 0, model, &r)) {
+    if (!jr_setup(vm, self, vb, ib, app, 0, NULL, NULL, 0, model, &r)) {
         return 0u;
     }
     return jr_draw(&r);
@@ -10355,7 +10403,8 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
     if (right > iw) { right = iw; }
     if (bottom > ih) { bottom = ih; }
     if (right <= left || bottom <= top) { return 0u; }
-    if (!jr_setup(vm, self, 0, 0, app, world, model, &r) || !r.sw.surf) {
+    if (!jr_setup(vm, self, 0, 0, app, world, NULL, NULL, 0, model, &r) ||
+        !r.sw.surf) {
         return 0u;
     }
     origin[0] = r.mv[3]; origin[1] = r.mv[7]; origin[2] = r.mv[11];
@@ -10444,7 +10493,9 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
 }
 
 static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
-                            nj_ref *meshes, float *mats, nj_u4 n)
+                            nj_ref *meshes, float *mats, nj_u4 n,
+                            const nj_ref *slights, const float *slmats,
+                            nj_s4 snlights)
 {
     nj_u4 i, drawn = 0u;
 
@@ -10483,8 +10534,8 @@ static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
                     app = rr.r;
                 }
                 if (!app || !ib) continue;
-                if (jr_setup(vm, self, vb, ib, app, root,
-                             mats + (nj_size)i * 16u, &r))
+                if (jr_setup(vm, self, vb, ib, app, root, slights, slmats,
+                             snlights, mats + (nj_size)i * 16u, &r))
                     drawn += jr_draw(&r);
             }
         }
