@@ -1,5 +1,7 @@
 # Ancient Empires II: native-size cold-start validation
 
+Follow-up: [translated antialiased text](2026-10-20-ancient-dialogue-translation.md) fixes the blank dialogue below and verifies scrolling and a speaker transition. This note retains the earlier observations and limits.
+
 This follows the [earlier snapshot and rendering investigation](2026-10-17-ancient-empires-replay.md). The original `/home/lucinhu/Downloads/jar/远古帝国2汉化版.jar` remains unchanged, with SHA-256:
 
 ```text

@@ -560,6 +560,67 @@ static void test_packed_coverage(tctx *t)
     }
 }
 
+/* Translation must produce the same pixels as moving the text and clip in
+ * device coordinates. In Ancient Empires the dialogue is translated down by
+ * 77 pixels; missing this transform clips every antialiased glyph away. */
+static void test_translated_text(tctx *t)
+{
+    static const nj_u1 mono[] = { 0xf8, 0xe8, 0x58 };
+    static const nj_u1 packed[] = { 0x1b, 0xff, 0xe4, 0x7f, 0x5a, 0x3f };
+    static const nj_u1 unpacked[] = {
+        0, 85, 170, 255, 255, 255, 170, 85, 0, 85, 85, 85, 170, 170, 0
+    };
+    static const nj_u1 latin[] = { 0x80, 0, 0x80 };
+    static const nj_u2 text[] = { 'A', 0x4e2d };
+    static const int formats[] = { NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888, NJ_PIXFMT_ARGB8888 };
+    static const int offsets[][2] = { { 7, 9 }, { -5, -8 }, { 0, 77 } };
+    int fmt, coverage, offset, clip, mode;
+
+    printf("[8] translated text matches explicit device placement\n");
+    for (fmt = 0; fmt < 3; ++fmt) {
+        for (coverage = 0; coverage < 3; ++coverage) {
+            for (offset = 0; offset < 3; ++offset) {
+                for (clip = 0; clip < 2; ++clip) {
+                    for (mode = 0; mode < 3; ++mode) {
+                        tsurf a, b;
+                        nj_gfx ga, gb;
+                        nj_font f;
+                        int dx = offsets[offset][0], dy = offsets[offset][1];
+                        memset(&f, 0, sizeof f);
+                        f.height = f.ascent = 3;
+                        f.first_char = f.last_char = 'A';
+                        f.glyph_w = 1; f.glyph_h = 3; f.bitmap = latin;
+                        f.glyph_lookup = packed_lookup;
+                        f.coverage = coverage;
+                        f.glyph_ud = (void *)(coverage == 0 ? mono : coverage == 1 ? unpacked : packed);
+                        ts_init(&a, 32, 116, formats[fmt], 8, C_WHITE);
+                        ts_init(&b, 32, 116, formats[fmt], 8, C_WHITE);
+                        nj_gfx_init(&ga, &a.s); nj_gfx_init(&gb, &b.s);
+                        nj_gfx_set_font(&ga, &f); nj_gfx_set_font(&gb, &f);
+                        nj_gfx_set_color(&ga, mode == 1 ? 0x80000000u : C_BLACK);
+                        nj_gfx_set_color(&gb, mode == 1 ? 0x80000000u : C_BLACK);
+                        if (mode == 2) {
+                            nj_gfx_set_xor(&ga, 0xFFFF0000u);
+                            nj_gfx_set_xor(&gb, 0xFFFF0000u);
+                        }
+                        if (clip) {
+                            /* Set the clip before translating, as MIDP permits. */
+                            nj_gfx_set_clip(&ga, 14, 83, 3, 1);
+                            nj_gfx_set_clip(&gb, 14, 83, 3, 1);
+                        }
+                        nj_gfx_translate(&gb, dx, dy);
+                        nj_gfx_draw_text(&ga, text, 2, 12, 82, NJ_ANCHOR_TOP);
+                        nj_gfx_draw_text(&gb, text, 2, 12 - dx, 82 - dy, NJ_ANCHOR_TOP);
+                        CHECK(t, memcmp(a.buf, b.buf, (size_t)a.s.stride * a.s.height) == 0);
+                        CHECK(t, px(&a, 14, 83) != C_WHITE);
+                        ts_free(&a); ts_free(&b);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /* ------------------------------------------------------------------ */
 int main(void)
 {
@@ -575,6 +636,7 @@ int main(void)
     test_full_coverage_plot(&t);
     test_provider_baseline(&t);
     test_packed_coverage(&t);
+    test_translated_text(&t);
 
     printf("\ntest_font_coverage: %u assertions, %u failures -> %s\n",
            t.checks, t.fails, t.fails == 0u ? "PASS" : "FAIL");

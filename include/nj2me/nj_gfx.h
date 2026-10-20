@@ -337,8 +337,8 @@ void nj_gfx_draw_region(nj_gfx *g, const nj_image *src,
 void nj_gfx_blend_pixel(nj_surface *s, int x, int y, nj_u4 argb, int alpha);
 
 /*
- * Draw one pixel of the current colour at `coverage` (0..255), respecting the
- * clip.  Text drawn through a `coverage` font uses this; 255 goes down the
+ * Draw one pixel at user coordinates (x, y) with `coverage` (0..255),
+ * respecting translation and the clip.  Coverage fonts use this; 255 takes the
  * ordinary opaque path so a bitmap face is unaffected.
  */
 void nj_gfx_blend_coverage(nj_gfx *g, int x, int y, int coverage);

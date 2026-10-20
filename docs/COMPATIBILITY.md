@@ -945,6 +945,12 @@ Two tests pin it down, because the pixel layer and the MIDP layer can disagree:
 `check_clip_translate` fixture, which runs the four cases through a real MIDlet
 and also checks the `getClipX()` round trip above.
 
+Coverage glyphs now apply that same origin offset before device clipping. This
+restores translated Latin/CJK antialiased text, including the Chinese dialogue
+in Ancient Empires II at its native 128×116 size. The mixed-font pixel regression
+covers positive/negative translation, clipping, alpha and XOR across three
+surface formats; see the [game validation and resource measurements](notes/2026-10-20-ancient-dialogue-translation.md).
+
 ## Codec coverage
 
 Decoding goes through a registry

@@ -724,7 +724,8 @@ static void nj_plot(nj_gfx *g, int x, int y, nj_u4 argb)
 }
 
 /*
- * Blend the current colour at `coverage` (0..255), honouring the clip.
+ * Blend the current colour at `coverage` (0..255), honouring translation
+ * from user coordinates and the device clip.
  *
  * This is what an antialiased glyph needs and what nj_plot alone cannot give
  * it: coverage scales the colour's alpha per pixel instead of replacing the
@@ -741,6 +742,8 @@ void nj_gfx_blend_coverage(nj_gfx *g, int x, int y, int coverage)
     if (!g || coverage <= 0) {
         return;
     }
+    x = nj_gfx_dev_x(g, x);
+    y = nj_gfx_dev_y(g, y);
     if (!nj_in_clip(g, x, y)) {
         return;
     }
