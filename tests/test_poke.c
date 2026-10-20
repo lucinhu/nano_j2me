@@ -358,6 +358,40 @@ int main(int argc, char **argv)
        cap.input[4].x == 35 && cap.input[4].y == 45,
        "a drag around a key tap retains one key release and one touch release");
 
+    /* ---- 6. explicit key edges hold a direction across frames ---- */
+    /*
+     * Titles that steer with getKeyStates() need the key to STAY down.  An
+     * ordinary entry is released one frame after it is pressed, which is right
+     * for a menu tap and useless for movement, so `frame:key:down` and
+     * `frame:key:up` name the two edges.  The event COUNT is the assertion: an
+     * auto-released hold would deliver a fifth event between the down and the
+     * up, and a second up would deliver another.
+     */
+    rc = run(argv[1], "40:down:down,60:fire,80:down:up", &cap, 120);
+    ok(rc == NJ_OK || rc == 1, "a script with explicit key edges runs");
+    ok(cap.input_count == 4 &&
+       cap.input[0].type == NJ_EV_KEY_DOWN && cap.input[0].key == NJ_KEY_DOWN &&
+       cap.input[1].type == NJ_EV_KEY_DOWN && cap.input[1].key == NJ_KEY_FIRE &&
+       cap.input[2].type == NJ_EV_KEY_UP && cap.input[2].key == NJ_KEY_FIRE &&
+       cap.input[3].type == NJ_EV_KEY_UP && cap.input[3].key == NJ_KEY_DOWN,
+       "a held key stays down until its explicit up edge");
+
+    /* An up edge of its own is one event, not a tap with an automatic release. */
+    rc = run(argv[1], "10:left:up", &cap, 40);
+    ok((rc == NJ_OK || rc == 1) && cap.input_count == 1 &&
+       cap.input[0].type == NJ_EV_KEY_UP && cap.input[0].key == NJ_KEY_LEFT,
+       "an explicit up edge sends exactly one release");
+
+    /* A bad third field is rejected with the rest of the script, not guessed. */
+    {
+        char script[12000];
+        snprintf(script, sizeof(script), "%s,100:fire:sideways", ALL_KEYS);
+        rc = run_capture(argv[1], script, &cap, 60, "/tmp/nj_poke_b/", 1);
+    }
+    ok((rc == NJ_OK || rc == 1) &&
+       strstr(cap.buf, "THE WHOLE SCRIPT IS IGNORED") != NULL,
+       "an unknown key edge is rejected with the rest of the script");
+
     printf("\n%d checks, %d failures\n%s\n", checks, fails,
            fails == 0 ? "PASS" : "FAIL");
     return fails == 0 ? 0 : 1;

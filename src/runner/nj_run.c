@@ -268,6 +268,16 @@ static const char *exc_message(nj_vm *vm, nj_ref exc, char *buf, nj_size cap)
  */
 #define NJ_KEY_SCRIPT_MAX 512
 
+/*
+ * A key entry with no mode is a tap: down at its frame, up one frame later.
+ * `frame:key:down` and `frame:key:up` name the two edges instead, so a script
+ * can hold a direction for as long as a title that polls getKeyStates() needs.
+ * `down` is also a key name, which is why the mode needs its own colon field
+ * rather than another '@' form: `5:down` is still the down arrow.
+ */
+#define NJ_KEY_SCRIPT_EDGE_DOWN 1u
+#define NJ_KEY_SCRIPT_EDGE_UP   2u
+
 typedef struct key_script {
     nj_u8 frame[NJ_KEY_SCRIPT_MAX];
     nj_u1 key[NJ_KEY_SCRIPT_MAX];
@@ -278,6 +288,9 @@ typedef struct key_script {
      * tells the two apart; px/py are only read when it is set.
      */
     nj_u1 ptr_kind[NJ_KEY_SCRIPT_MAX];
+    /* 0 for an ordinary tap, else NJ_KEY_SCRIPT_EDGE_DOWN / _UP.  An explicit
+     * edge is never auto-released: the script says when the key comes up. */
+    nj_u1 edge[NJ_KEY_SCRIPT_MAX];
     nj_s2 px[NJ_KEY_SCRIPT_MAX];
     nj_s2 py[NJ_KEY_SCRIPT_MAX];
     int   n;
@@ -489,6 +502,7 @@ static int key_script_parse(const char *spec, key_script *ks)
                     return -1;
                 }
                 ks->ptr_kind[ks->n] = (nj_u1)kind;
+                ks->edge[ks->n] = 0;
                 ks->px[ks->n] = (nj_s2)x;
                 ks->py[ks->n] = (nj_s2)y;
                 ks->key[ks->n] = 0;
@@ -504,19 +518,42 @@ static int key_script_parse(const char *spec, key_script *ks)
                  * returned -1 and the runner carried on with no input.
                  * tests/test_poke caught it.
                  */
-                {
-                    int c;
-                    for (c = 0; c < len; c++) {
-                        if (p[c] == ',') {
-                            len = c;
-                            break;
-                        }
+                int name_len = len;
+                int edge = 0;
+                int c;
+                for (c = 0; c < name_len; c++) {
+                    if (p[c] == ',') {
+                        name_len = c;
+                        len = c;
+                        break;
                     }
                 }
-                if (!key_from_name(p, len, &key)) {
+                /*
+                 * `frame:key:down` / `frame:key:up`.  The name scan keeps the
+                 * colon because pointer coordinates are the only thing it must
+                 * not cut short, so split here, before the key lookup.  An
+                 * unknown third field is a script error, not a key name.
+                 */
+                for (c = 0; c < name_len; c++) {
+                    if (p[c] == ':') {
+                        int t = c + 1;
+                        int tlen = name_len - t;
+                        if (tlen == 4 && memcmp(p + t, "down", 4) == 0) {
+                            edge = (int)NJ_KEY_SCRIPT_EDGE_DOWN;
+                        } else if (tlen == 2 && memcmp(p + t, "up", 2) == 0) {
+                            edge = (int)NJ_KEY_SCRIPT_EDGE_UP;
+                        } else {
+                            return -1;
+                        }
+                        name_len = c;
+                        break;
+                    }
+                }
+                if (!key_from_name(p, name_len, &key)) {
                     return -1;
                 }
                 ks->ptr_kind[ks->n] = 0;
+                ks->edge[ks->n] = (nj_u1)edge;
                 ks->key[ks->n] = key;
             }
             ks->frame[ks->n] = frame;
@@ -541,10 +578,11 @@ static int key_script_parse(const char *spec, key_script *ks)
 }
 
 /*
- * Send whatever this frame is due.  A press is a key-down now and a key-up one
- * frame later: a key that goes down and never comes up leaves many games stuck
- * on it, and a press and release in the same frame is a key most of them never
- * see at all.
+ * Send whatever this frame is due.  An ordinary press is a key-down now and a
+ * key-up one frame later: a key that goes down and never comes up leaves many
+ * games stuck on it, and a press and release in the same frame is a key most of
+ * them never see at all.  `frame:key:down` and `frame:key:up` are the explicit
+ * edges instead: the down waits for the up, however many frames apart.
  */
 static void key_script_tick(const nj_port *port, key_script *ks, nj_u8 frame)
 {
@@ -572,14 +610,21 @@ static void key_script_tick(const nj_port *port, key_script *ks, nj_u8 frame)
             /* The release cursor may still point at an earlier key.  Let
              * the release loop skip pointer entries after that key is up. */
         } else {
-            ev.type = (nj_u1)NJ_EV_KEY_DOWN;
+            /*
+             * An explicit `up` entry is the release edge itself.  Its event
+             * type comes from the entry's own field; the release below must
+             * not send a second up.
+             */
+            ev.type = (nj_u1)(ks->edge[i] == NJ_KEY_SCRIPT_EDGE_UP
+                                  ? NJ_EV_KEY_UP : NJ_EV_KEY_DOWN);
             ev.key = ks->key[i];
             ks->next_down++;
         }
         (void)port->input_push(port->ud, &ev);
     }
     while (ks->next_up < ks->next_down) {
-        if (ks->ptr_kind[ks->next_up] != 0) {
+        if (ks->ptr_kind[ks->next_up] != 0 ||
+            ks->edge[ks->next_up] != 0) {
             ks->next_up++;
             continue;
         }
