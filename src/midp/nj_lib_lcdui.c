@@ -3381,7 +3381,8 @@ NJFN(d_getKeyName)
     case -5: name = "SELECT"; break;
     case -6: name = "SOFTKEY1"; break;
     case -7: name = "SOFTKEY2"; break;
-    case -21: name = "SOFTKEY3"; break;
+    case -21: name = vm->motorola_softkeys ? "SOFTKEY1" : "SOFTKEY3"; break;
+    case -22: if (vm->motorola_softkeys) { name = "SOFTKEY2"; } break;
     case 42: name = "*"; break;
     case 35: name = "#"; break;
     default:
@@ -3408,8 +3409,8 @@ NJFN(d_getKeyName)
 /*
  * Map between the port's NJ_KEY_* codes (the nj_key enum in nj_port.h, which
  * is what a port puts in nj_event.key and what --keys parses) and the MIDP key
- * codes a MIDlet sees.  This is the ONLY translation: everything downstream of
- * nj_midp_key() speaks MIDP codes.
+ * codes used by MIDP widgets. Canvas callbacks additionally apply the selected
+ * handset's soft-key convention after command dispatch in nj_midp_key().
  */
 static int nj_key_to_midp(int key)
 {
@@ -4852,6 +4853,13 @@ int nj_midp_key(nj_vm *vm, int key, int down)
         }
 
         if (code != 0) {
+            /* Commands and built-in widgets use the logical keys above. Only
+             * the Java Canvas receives handset-specific raw soft-key codes. */
+            if (vm->motorola_softkeys && key == NJ_KEY_SOFT_LEFT) {
+                code = -21;
+            } else if (vm->motorola_softkeys && key == NJ_KEY_SOFT_RIGHT) {
+                code = -22;
+            }
             a[0].i = code;
             if (!suppressed) {
                 (void)canvas_visible(vm, d);

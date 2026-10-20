@@ -849,6 +849,7 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
      * which of its code paths ever executes.  Installing a profile later would
      * be installing it after the decision.
      */
+    nj_vm_set_device(vm, opts->device);
     if (opts->props != NULL && opts->nprops > 0) {
         nj_vm_set_system_properties(vm, opts->props, (nj_u4)opts->nprops);
     }

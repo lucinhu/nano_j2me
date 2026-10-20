@@ -620,6 +620,79 @@ static void test_clock_restore(nj_port *port, const nj_u1 *jar, nj_u4 jar_len)
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
+/* Input conventions must survive a snapshot loaded into a fresh VM whose
+ * configured handset differs.  Zero flags also covers existing version-2
+ * snapshots; unknown bits are rejected before changing the target profile. */
+static void test_restored_softkeys(nj_port *port, const nj_u1 *jar, nj_u4 jar_len)
+{
+    int mode;
+    for (mode = 0; mode < 4; ++mode) {
+        nj_vm *source = NULL, *target = NULL;
+        nj_app *source_app = NULL, *target_app = NULL;
+        FILE *state = tmpfile();
+        int motorola = mode == 1 || mode == 3;
+        CHECK(state != NULL, "soft-key snapshot stream opens");
+        if (!state) { continue; }
+        source = nj_vm_create(port, HEAP_BYTES);
+        CHECK(source != NULL, "soft-key source VM creates");
+        if (!source) { goto done; }
+        nj_vm_set_device(source, motorola ? nj_device_find("motorola-e398") : NULL);
+        CHECK(start_fixture(source, jar, jar_len, &source_app),
+              "soft-key fixture starts");
+        if (!source_app) { goto done; }
+        if (mode == 3) {
+            /* fielddemo has no display; supply differing geometry to reach the
+             * loader's late validation after it has restored VM scalars. */
+            source->screen_w = 128;
+            source->screen_h = 116;
+        }
+        CHECK(nj_vm_save(source, state) == NJ_OK, "soft-key snapshot saves");
+        if (mode == 2) {
+            const unsigned char unsupported[4] = {255, 255, 255, 255};
+            CHECK(fseek(state, 20, SEEK_SET) == 0 &&
+                  fwrite(unsupported, 1, sizeof(unsupported), state) == sizeof(unsupported),
+                  "write unsupported snapshot flags");
+        }
+        target = nj_vm_create(port, HEAP_BYTES);
+        CHECK(target != NULL, "soft-key target VM creates");
+        if (!target) { goto done; }
+        nj_vm_set_device(target, motorola ? NULL : nj_device_find("motorola-e398"));
+        target_app = nj_app_open(target, jar, jar_len);
+        CHECK(target_app != NULL, "soft-key target class source opens");
+        if (!target_app) { goto done; }
+        if (mode == 3) {
+            CHECK(source->screen_w != 0 && source->screen_h != 0,
+                  "soft-key source has display geometry");
+            target->screen_w = source->screen_w + 1;
+            target->screen_h = source->screen_h;
+        }
+        rewind(state);
+        if (mode == 3) {
+            CHECK(nj_vm_load(target, state) == NJ_ERR_FORMAT,
+                  "different display geometry refuses snapshot late in load");
+            CHECK(target->motorola_softkeys == 0,
+                  "late snapshot failure leaves target input profile unchanged");
+        } else if (mode == 2) {
+            CHECK(nj_vm_load(target, state) == NJ_ERR_UNSUPPORTED,
+                  "unsupported snapshot flags refuse to load");
+            CHECK(target->motorola_softkeys == 1,
+                  "unsupported snapshot leaves the target input profile unchanged");
+        } else {
+            CHECK(nj_vm_load(target, state) == NJ_OK, "soft-key snapshot loads");
+            CHECK(target->motorola_softkeys == motorola,
+                  "snapshot restores its Canvas soft-key convention");
+        }
+        CHECK(source->motorola_softkeys == motorola,
+              "snapshot leaves source input profile unchanged");
+    done:
+        if (target_app) { nj_app_close(target, target_app); }
+        nj_vm_destroy(target);
+        if (source_app) { nj_app_close(source, source_app); }
+        nj_vm_destroy(source);
+        fclose(state);
+    }
+}
+
 int main(void)
 {
     nj_port port;
@@ -954,6 +1027,7 @@ after_vm_b:
 
     test_large_heap(&port, jar, jar_len);
     test_restored_media(&port, jar, jar_len);
+    test_restored_softkeys(&port, jar, jar_len);
     test_clock_restore(&port, jar, jar_len);
 
     /* ---- teardown ---------------------------------------------------- */

@@ -1002,7 +1002,7 @@ static void save_header(nj_u1 *h, nj_vm *vm, nj_u4 abi, nj_u4 arena_crc,
     put_u32(h + 8, NJ_SAVE_HDR_SIZE);
     put_u32(h + 12, (nj_u4)sizeof(void *));
     put_u32(h + 16, NJ_SAVE_ENDIAN);
-    put_u32(h + 20, 0u);                          /* flags: reserved */
+    put_u32(h + 20, vm->motorola_softkeys ? 1u : 0u); /* Canvas soft keys */
     put_u64(h + 24, (nj_u8)vm->heap.size);
     put_u64(h + 32, (nj_u8)vm->heap.bump);
     put_u64(h + 40, (nj_u8)vm->heap.used);
@@ -1493,7 +1493,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     nj_u1 *block = NULL;
     nj_u1 *old_base = NULL;
     nj_u1 old_external = 0u;
-    nj_u4 magic, version, hdr_size, ptr_size, endian;
+    nj_u4 magic, version, hdr_size, ptr_size, endian, flags;
     nj_u8 heap_size, heap_bump, heap_used, heap_peak, saved_ms;
     nj_u8 halt;
     nj_u4 arena_crc, nclasses, nstatics, ninterned, nthreads, cur_idx;
@@ -1563,7 +1563,8 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     hdr_size = get_u32(hdr + 8);
     ptr_size = get_u32(hdr + 12);
     endian = get_u32(hdr + 16);
-    if (magic != NJ_SAVE_MAGIC || version != NJ_SAVE_VERSION ||
+    flags = get_u32(hdr + 20);
+    if ((flags & ~1u) != 0u || magic != NJ_SAVE_MAGIC || version != NJ_SAVE_VERSION ||
         hdr_size != NJ_SAVE_HDR_SIZE || endian != NJ_SAVE_ENDIAN ||
         ptr_size != (nj_u4)sizeof(void *)) {
         NJ_LOAD_FAIL(NJ_ERR_UNSUPPORTED);
@@ -2099,6 +2100,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     nj_host_free(vm, cstate);
     nj_host_free(vm, csbase);
     nj_host_free(vm, map);
+    vm->motorola_softkeys = (nj_u1)(flags & 1u);
     return NJ_OK;
 
 fail:

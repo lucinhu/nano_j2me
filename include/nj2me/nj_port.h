@@ -831,8 +831,8 @@ typedef struct nj_run_opts {
     /*
      * System properties to answer on top of the runtime's own - the device the
      * MIDlet believes it is running on.  Borrowed, and the table must outlive
-     * the run; NULL is the "generic" profile (see nj2me/nj_device.h, which also
-     * has the built-in handset profiles and what they answer).
+     * the run.  Applied after device; NULL leaves that profile's properties
+     * intact (see nj2me/nj_device.h for the built-in handset profiles).
      *
      * Within the table the LAST match wins, so a caller installs a device
      * profile first and its own overrides after it.  A MIDlet asking for a key
@@ -860,6 +860,10 @@ typedef struct nj_run_opts {
      */
     const char *save_state_path;
     nj_u4       save_state_frame;
+
+    /* Borrowed handset profile, installed before props.  Besides properties,
+     * motorola-e398 selects Canvas soft-key codes -21/-22.  NULL is generic. */
+    const nj_device *device;
 } nj_run_opts;
 
 /*

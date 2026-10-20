@@ -505,6 +505,7 @@ struct nj_vm {
      */
     const nj_device_prop *sys_props;
     nj_u4                 nsys_props;
+    nj_u1                 motorola_softkeys; /* Canvas -21/-22, opted in by profile */
 
     /* where class bytes come from (JAR loader, flash partition, test fixture) */
     nj_class_source *source;

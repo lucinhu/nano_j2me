@@ -133,7 +133,7 @@ static const nj_device devices[] = {
       nokia6230_props, NJ_DEVICE_N(nokia6230_props) },
     { "sonyericsson-k750", "Sony Ericsson K750i (SonyEricsson platform, IMEI)",
       sonyericsson_props, NJ_DEVICE_N(sonyericsson_props) },
-    { "motorola-e398", "Motorola E398 (Motorola platform, IMEI)",
+    { "motorola-e398", "Motorola E398 (Motorola platform, IMEI, soft keys)",
       motorola_props, NJ_DEVICE_N(motorola_props) },
     { "samsung-sgh-e700", "Samsung SGH-E700 (SAMSUNG platform, IMEI)",
       samsung_props, NJ_DEVICE_N(samsung_props) },
@@ -186,6 +186,8 @@ void nj_vm_set_device(nj_vm *vm, const nj_device *device)
     }
     vm->sys_props = device->props;
     vm->nsys_props = device->count;
+    vm->motorola_softkeys = device->name != NULL &&
+                            strcmp(device->name, "motorola-e398") == 0;
 }
 
 void nj_vm_set_system_properties(nj_vm *vm, const nj_device_prop *props,

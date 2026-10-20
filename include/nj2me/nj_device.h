@@ -80,7 +80,12 @@ const nj_device *nj_device_default(void);            /* "generic" */
  *
  * nj_vm_set_device() installs one profile's table; nj_vm_set_system_properties()
  * installs an arbitrary one (device profile first, then overrides - last match
- * wins).  Setting either replaces what was there.
+ * wins). Setting either replaces the property table. The built-in
+ * motorola-e398 profile also selects -21/-22 for Canvas soft-key callbacks;
+ * other profiles (including NULL) restore the usual -6/-7 convention.
+ * nj_vm_set_system_properties() preserves that choice so property overrides
+ * can follow profile selection. Directional and numeric keys keep their
+ * normal MIDP codes; built-in widgets and Command dispatch use logical keys.
  */
 void nj_vm_set_device(nj_vm *vm, const nj_device *device);
 void nj_vm_set_system_properties(nj_vm *vm, const nj_device_prop *props,

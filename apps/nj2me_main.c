@@ -36,7 +36,7 @@ static void usage(const char *argv0)
         "  --fs-dir <path>      root for file:// (JSR 75); no filesystem by default\n"
 "  --network            enable HTTP/HTTPS/TCP for the headless port\n"
 "  --stats              print bytecode and frame counters at the end\n"
-"  --device <name>      answer System.getProperty() as this handset\n"
+"  --device <name>      select handset properties and key convention\n"
 "  --prop <key>=<value> answer one more property (repeatable)\n"
 "  --list-devices       print the built-in handsets and exit\n"
 "\n"
@@ -360,6 +360,7 @@ int main(int argc, char **argv)
     opts.font_path = c.font;
     opts.props = nprops > 0 ? props : NULL;
     opts.nprops = nprops;
+    opts.device = c.device_name ? nj_device_find(c.device_name) : NULL;
     opts.load_state_path = c.load_state;
     opts.save_state_path = c.save_state;
     opts.save_state_frame = (nj_u4)(c.save_frame > 0 ? c.save_frame : 0);

@@ -501,6 +501,7 @@ static void editor_command_test(void)
     confirm = new_command(vm, "OK", 4, 1);
     cancel = new_command(vm, "Back", 3, 1);
     for (i = 0; i < 2; i++) {
+        nj_vm_set_device(vm, i ? nj_device_find("motorola-e398") : NULL);
         field = widget(vm, i ? NJ_C_TEXTBOX : NJ_C_TEXTFIELD, 32, 0, "");
         screen = field;
         if (!i) {
@@ -578,16 +579,18 @@ static void max_size_test(void)
     }
     nj_vm_destroy(vm); nj_port_shutdown(&port);
 }
-static int key_presses, key_releases;
+static int key_presses, key_releases, pressed_code, released_code;
 static nj_status capture_press(nj_vm *vm, nj_thread *th, nj_value *args, nj_value *ret)
 {
-    (void)vm; (void)th; (void)args; (void)ret;
+    (void)vm; (void)th; (void)ret;
+    pressed_code = args[0].i;
     key_presses++;
     return NJ_OK;
 }
 static nj_status capture_release(nj_vm *vm, nj_thread *th, nj_value *args, nj_value *ret)
 {
-    (void)vm; (void)th; (void)args; (void)ret;
+    (void)vm; (void)th; (void)ret;
+    released_code = args[0].i;
     key_releases++;
     return NJ_OK;
 }
@@ -603,6 +606,94 @@ static void key_frame(nj_vm *vm, nj_u1 type, int key)
     nj_port_push_event(vm->port, &event);
     CHECK(nj_midp_frame(vm) == NJ_OK && !vm->exception);
     vm->running = 1u;
+}
+static void check_key_name(nj_vm *vm, nj_ref canvas, int code, const char *name)
+{
+    nj_value arg, ret = {0};
+    const nj_u2 *chars;
+    size_t i, len = strlen(name);
+    arg.i = code;
+    CHECK(nj_call(vm, canvas, NJ_C_CANVAS, "getKeyName", "(I)Ljava/lang/String;", &arg, &ret) == NJ_OK);
+    CHECK(ret.r != NULL && nj_string_len(ret.r) == len);
+    if (vm->exception || !ret.r || nj_string_len(ret.r) != len) { return; }
+    chars = nj_string_chars(ret.r);
+    for (i = 0; i < len; i++) { CHECK(chars[i] == (nj_u2)(unsigned char)name[i]); }
+}
+static void motorola_softkey_test(void)
+{
+    static const nj_builtin_method methods[] = {
+        {"keyPressed", "(I)V", NJ_ACC_PUBLIC},
+        {"keyReleased", "(I)V", NJ_ACC_PUBLIC},
+        {"commandAction", "(Ljavax/microedition/lcdui/Command;Ljavax/microedition/lcdui/Displayable;)V", NJ_ACC_PUBLIC}
+    };
+    static const nj_builtin_class fixture = {
+        "test/HandsetCanvas", NJ_C_CANVAS, NJ_ACC_PUBLIC,
+        NULL, 0u, methods, 3u
+    };
+    static const nj_device_prop override[] = {{"microedition.platform", "custom"}};
+    static const int keys[] = {NJ_KEY_SOFT_LEFT, NJ_KEY_SOFT_RIGHT, NJ_KEY_UP, NJ_KEY_FIRE, NJ_KEY_5};
+    static const int normal[] = {-6, -7, -1, -5, 53};
+    nj_port port;
+    nj_vm *vm;
+    nj_class *cls;
+    nj_ref canvas, confirm, cancel;
+    nj_value arg;
+    nj_u4 p;
+    int i, expected;
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    vm = nj_vm_create(&port, 4u * 1024u * 1024u);
+    CHECK(vm != NULL); if (!vm) { nj_port_shutdown(&port); return; }
+    cls = nj_class_create_builtin(vm, &fixture);
+    CHECK(cls != NULL); if (!cls) { nj_vm_destroy(vm); nj_port_shutdown(&port); return; }
+    cls->methods[0].native = capture_press;
+    cls->methods[1].native = capture_release;
+    cls->methods[2].native = capture_command;
+    canvas = nj_root(vm, nj_object_new(vm, fixture.name));
+    CHECK(canvas != NULL);
+    CHECK(nj_call_special(vm, canvas, NJ_C_CANVAS, "<init>", "()V", NULL, NULL) == NJ_OK);
+    current(vm, canvas);
+    for (p = 0; p < nj_device_count(); p++) {
+        const nj_device *device = nj_device_at(p);
+        int moto = strcmp(device->name, "motorola-e398") == 0;
+        nj_vm_set_device(vm, device);
+        /* CLI --prop installs a merged table after selecting a handset. */
+        nj_vm_set_system_properties(vm, override, 1u);
+        for (i = 0; i < (int)(sizeof(keys) / sizeof(keys[0])); i++) {
+            expected = moto && i < 2 ? -21 - i : normal[i];
+            key_presses = key_releases = 0;
+            key_frame(vm, NJ_EV_KEY_DOWN, keys[i]);
+            CHECK(key_presses == 1 && pressed_code == expected && key_releases == 0);
+            key_frame(vm, NJ_EV_KEY_REPEAT, keys[i]);
+            CHECK(key_presses == 1 && key_releases == 0);
+            key_frame(vm, NJ_EV_KEY_UP, keys[i]);
+            CHECK(key_releases == 1 && released_code == expected);
+        }
+        check_key_name(vm, canvas, moto ? -21 : -6, "SOFTKEY1");
+        check_key_name(vm, canvas, moto ? -22 : -7, "SOFTKEY2");
+        if (!moto) {
+            check_key_name(vm, canvas, -21, "SOFTKEY3");
+            arg.i = -22;
+            CHECK(nj_call(vm, canvas, NJ_C_CANVAS, "getKeyName", "(I)Ljava/lang/String;", &arg, NULL) != NJ_OK);
+            CHECK(vm->exception != NULL);
+            vm->exception = NULL;
+        }
+    }
+    nj_vm_set_device(vm, nj_device_find("motorola-e398"));
+    /* Canvas commands still receive logical left/right keys once per press.
+     * Canvas chooses the default by priority, unlike Form's command groups. */
+    confirm = new_command(vm, "OK", 4, 0);
+    cancel = new_command(vm, "Back", 3, 1);
+    arg.r = confirm;
+    CHECK(nj_call(vm, canvas, NJ_C_DISPLAYABLE, "addCommand", "(Ljavax/microedition/lcdui/Command;)V", &arg, NULL) == NJ_OK);
+    arg.r = cancel;
+    CHECK(nj_call(vm, canvas, NJ_C_DISPLAYABLE, "addCommand", "(Ljavax/microedition/lcdui/Command;)V", &arg, NULL) == NJ_OK);
+    arg.r = canvas;
+    CHECK(nj_call(vm, canvas, NJ_C_DISPLAYABLE, "setCommandListener", "(Ljavax/microedition/lcdui/CommandListener;)V", &arg, NULL) == NJ_OK);
+    check_command_key(vm, NJ_KEY_SOFT_LEFT, canvas, confirm);
+    check_command_key(vm, NJ_KEY_SOFT_RIGHT, canvas, cancel);
+    nj_vm_set_device(vm, NULL);
+    check_key_name(vm, canvas, -21, "SOFTKEY3");
+    nj_vm_destroy(vm); nj_port_shutdown(&port);
 }
 static void repeat_policy_test(void)
 {
@@ -683,6 +774,7 @@ int main(void)
 {
     runtime_test();
     repeat_policy_test();
+    motorola_softkey_test();
     item_command_test();
     editor_command_test();
     max_size_test();

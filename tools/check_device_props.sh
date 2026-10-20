@@ -6,7 +6,7 @@
 # "Nokia", and the corpus probes IMEI/IMSI spellings far more often than it
 # probes the platform at all (see nj2me/nj_device.h for the counts).  So the
 # runtime can be told which handset to be, and this test pins down what that
-# means - in four runs of one fixture:
+# means, including the selected handset's raw Canvas soft keys:
 #
 #   generic          the runtime's own facts, and no vendor keys invented
 #   nokia6230        that handset's table, including its own kbd answer
@@ -26,10 +26,14 @@ JAR="${1:-$ROOT/tests/fixtures/devicedemo.jar}"
 fail=0
 line=""
 
-# Run the fixture once and keep its DEV line.
+# Exercise the real CLI profile path, including both Canvas key callbacks.
 run() {
     log="$(mktemp)"
-    timeout 60 "$BIN" --port headless --run-frames 3 "$@" "$JAR" >"$log" 2>&1
+    if ! timeout 60 "$BIN" --port headless --run-frames 6 \
+        --keys '1:soft1 3:soft2' "$@" "$JAR" >"$log" 2>&1; then
+        echo "FAIL: emulator failed (args: $*)"; fail=1
+    fi
+    keys="$(grep '^KEY ' "$log" || true)"
     line="$(grep -m1 '^DEV ' "$log" || true)"
     rm -f "$log"
     case "$line" in
@@ -54,8 +58,23 @@ notnull() {
     esac
 }
 
+expect_keys() {
+    local left="$1" right="$2" phase expected
+    for phase in press release; do
+        for expected in "KEY $phase $left SOFTKEY1" "KEY $phase $right SOFTKEY2"; do
+            if ! grep -Fxq -- "$expected" <<<"$keys"; then
+                echo "FAIL: missing callback: $expected (observed: $keys)"; fail=1
+            fi
+        done
+    done
+    [ "$(printf '%s\n' "$keys" | wc -l)" -eq 4 ] || {
+        echo "FAIL: expected exactly four key callbacks: $keys"; fail=1;
+    }
+}
+
 echo "== generic (no --device): the runtime's own answers, no invented identity"
 run
+expect_keys -6 -7
 expect platform nano_j2me/headless "the port's own platform string did not survive"
 expect nokiaimei null "a Nokia IMEI was answered with no device profile installed"
 expect seimei null    "a Sony Ericsson IMEI was answered with no profile installed"
@@ -98,5 +117,20 @@ run --prop java.version=9.9-test
 expect javaversion 9.9-test "--prop could not override one of the runtime's own keys"
 expect platform nano_j2me/headless "the platform changed when only java.version was set"
 
+echo "== Motorola Canvas soft keys through --device"
+run --device motorola-e398
+expect platform Motorola-E398 "the Motorola profile did not reach the runner"
+expect_keys -21 -22
+
+echo "== property overrides preserve the selected Motorola input profile"
+run --device motorola-e398 --prop microedition.platform=custom-phone
+expect platform custom-phone "the caller's property override was lost"
+expect_keys -21 -22
+
+echo "== a platform string alone does not select Motorola input"
+run --prop microedition.platform=Motorola-E398
+expect platform Motorola-E398 "the standalone property override was lost"
+expect_keys -6 -7
+
 [ "$fail" = 0 ] || exit 1
-echo "PASS: the device profile answers a handset's keys, shadows nothing it should not, and a caller's own rows win"
+echo "PASS: handset properties, overrides and Canvas soft-key callbacks follow the selected device"

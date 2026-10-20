@@ -84,6 +84,14 @@ public class DeviceDemo extends MIDlet {
 }
 
 class V extends Canvas {
+    protected void keyPressed(int key) {
+        System.out.println("KEY press " + key + " " + getKeyName(key));
+    }
+
+    protected void keyReleased(int key) {
+        System.out.println("KEY release " + key + " " + getKeyName(key));
+    }
+
     protected void paint(Graphics g) {
         g.setColor(0xFFFFFF);
         g.fillRect(0, 0, getWidth(), getHeight());
