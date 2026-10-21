@@ -898,6 +898,12 @@ So the runtime can be told which handset it is on:
     build/nj2me --device nokia6230 game.jar          # answer as that phone
     build/nj2me --prop microedition.platform=Nokia6230/05.50 game.jar
 
+A gate can also live in the JAR rather than the code: `蹦球传说_7801` scans its
+own `META-INF/MANIFEST.MF` for `Nokia-Platform: Nokia*` and calls `System.exit`
+unless `microedition.platform` matches the pattern, so it boots (and plays)
+only as a Nokia handset. That behaviour is recorded in
+`docs/notes/2026-10-21-bounce-platform-gate.md`.
+
 `--prop key=value` may be repeated and wins over the profile. The profiles
 themselves live in `include/nj2me/nj_device.h` and `src/core/nj_device.c`, and
 carry the platform string plus the vendor's own IMEI/IMSI/network spellings —
