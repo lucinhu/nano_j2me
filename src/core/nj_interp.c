@@ -463,6 +463,49 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
     }
 #endif
 
+/*
+ * The type name to print for a receiver whose class is unknown.
+ *
+ * An array that a NATIVE created has no class at all: nj_new_array() is called
+ * with a NULL class by String.getBytes(), by StringBuilder's buffer and by
+ * the on-screen keypad's flag array, and only the interpreter's own `newarray`
+ * gives an array a class.  Dispatching an instance method on such an array
+ * therefore has to end in a named exception, not in a null dereference: the
+ * error path builds "X does not implement Y" from the receiver's class, and
+ * with no class that message cannot be built.
+ *
+ * The UC browser title is what found this.  It calls String.length() on an
+ * int[] - the emulator answers "NoSuchMethodError: [I does not implement
+ * java/lang/String.length", which is right - and then on a byte[] that
+ * String.getBytes() had just made, where the same code path dereferenced a
+ * NULL class and killed the emulator with SIGSEGV.  A phone answers both
+ * calls the same way, so the second one must not be fatal either.
+ *
+ * The array's element kind is enough to name it ("[B", "[Z", ...), and it is
+ * the same name the interpreter's `newarray` would have produced.
+ */
+static const char *nj_recv_type_name(const nj_object *o, char *buf, nj_u4 buflen)
+{
+    static const char prims[] = "ZBCSIJFD";   /* const: .rodata, no RAM */
+    nj_u4 k;
+
+    if (o && o->cls && o->cls->name) {
+        return o->cls->name;
+    }
+    if (o && o->kind == NJ_OBJ_ARRAY && buflen >= 3u) {
+        k = o->aflags;
+        buf[0] = '[';
+        buf[1] = (k >= 1u && k <= 8u) ? prims[k - 1u] : '?';
+        buf[2] = '\0';
+        return buf;
+    }
+    if (buflen >= 2u) {
+        buf[0] = '?';
+        buf[1] = '\0';
+    }
+    return "?";
+}
+
 nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
 {
     nj_frame *fr;
@@ -1910,7 +1953,21 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                           "receiver is not an object reference");
                 }
                 if (e->recv_cls != recv->cls || !e->ic_target) {
-                    nj_method *dm = nj_method_lookup(recv->cls, target->name,
+                    /*
+                     * A receiver with NO class at all - an array the runtime
+                     * created, which nj_new_array() made with a NULL class -
+                     * is still an Object, so the methods it has are the ones
+                     * of java/lang/Object.  A phone answers getBytes()
+                     * .toString() with "[B@1a2b3c"; answering
+                     * NoSuchMethodError here would be a difference no title
+                     * should have to notice.  (Before this, the lookup found
+                     * nothing and the error path then dereferenced the NULL
+                     * class: SIGSEGV, which is how the UC browser title took
+                     * the emulator down.)
+                     */
+                    nj_class *rc = recv->cls ? recv->cls
+                                              : nj_class_find(vm, "java/lang/Object");
+                    nj_method *dm = nj_method_lookup(rc, target->name,
                                                      target->desc);
                     if (!dm) {
                     /*
@@ -1926,8 +1983,8 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                      * while to find.
                      */
                     SAVE();
-                        (void)nj_class_init_lazy(vm, recv->cls);
-                        dm = nj_method_lookup(recv->cls, target->name,
+                        (void)nj_class_init_lazy(vm, rc);
+                        dm = nj_method_lookup(rc, target->name,
                                               target->desc);
                     }
                     if (!dm) {
@@ -1940,8 +1997,10 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                          */
                         if (!vm->exception) {
                             char mbuf[256];
+                            char cbuf[8];
                             nj_u4 mn = 0u;
-                            const char *q = recv->cls->name;
+                            const char *q = nj_recv_type_name(recv, cbuf,
+                                                             (nj_u4)sizeof(cbuf));
                             const char *w = " does not implement ";
                             while (q && *q && mn + 1u < sizeof(mbuf)) {
                                 mbuf[mn++] = *q++;
@@ -1979,8 +2038,10 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                 if (!target->code && (target->flags & NJ_ACC_ABSTRACT) != 0u) {
                     if (!vm->exception) {
                         char mbuf[256];
+                        char cbuf[8];
                         nj_u4 mn = 0u;
-                        const char *q = recv->cls->name;
+                        const char *q = nj_recv_type_name(recv, cbuf,
+                                                         (nj_u4)sizeof(cbuf));
                         while (q && *q && mn + 1u < sizeof(mbuf)) {
                             mbuf[mn++] = *q++;
                         }

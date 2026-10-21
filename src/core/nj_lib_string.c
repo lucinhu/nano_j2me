@@ -565,6 +565,10 @@ NJFN(str_equals)
         ret->i = 0;
         return NJ_OK;
     }
+    if (a->length == 0u) {
+        ret->i = 1;                       /* two empty strings are equal */
+        return NJ_OK;
+    }
     ret->i = (memcmp(nj_string_chars(a), nj_string_chars(b),
                      (nj_size)a->length * sizeof(nj_u2)) == 0) ? 1 : 0;
     return NJ_OK;
@@ -904,12 +908,45 @@ NJFN(str_toUpperCase)
     return NJ_OK;
 }
 
+/*
+ * Compare the first `n` characters of two strings.
+ *
+ * The C standard requires memcmp's pointers to be valid even when the length
+ * is zero, and this runtime stores an empty string as a NULL payload - and an
+ * argument that is not a String at all has no characters and no pointer.  Both
+ * make `memcmp(x, NULL, 0)` undefined behaviour; UBSan reports it as "null
+ * pointer passed as argument 2, which is declared to never be null".
+ *
+ * A title in the corpus (the UC browser) calls String.startsWith with an
+ * int[] - it is obfuscated code calling a String method on an array - and the
+ * undefined behaviour fired on every such call.
+ *
+ * Returns 1 when the characters are equal.
+ */
+static int nj_string_prefix_eq(const nj_ref a, const nj_ref b, nj_u4 n)
+{
+    const nj_u2 *ca;
+    const nj_u2 *cb;
+
+    if (n == 0u) {
+        return 1;                       /* every string starts with "" */
+    }
+    ca = nj_string_chars(a);
+    cb = nj_string_chars(b);
+    if (!ca || !cb) {
+        return 0;                       /* no characters to compare */
+    }
+    return memcmp(ca, cb, (nj_size)n * sizeof(nj_u2)) == 0 ? 1 : 0;
+}
+
 NJFN(str_startsWith)
 {
     nj_ref s = NJ_THIS(args);
     nj_ref p = NJ_ARG_REF(args, 0);
     nj_s4 off = NJ_ARG_INT(args, 1);
     nj_u4 pl;
+    const nj_u2 *sc;
+    const nj_u2 *pc;
 
     if (!p) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
@@ -919,8 +956,14 @@ NJFN(str_startsWith)
         ret->i = 0;
         return NJ_OK;
     }
-    ret->i = (memcmp(nj_string_chars(s) + off, nj_string_chars(p),
-                     (nj_size)pl * sizeof(nj_u2)) == 0) ? 1 : 0;
+    if (pl == 0u) {
+        ret->i = 1;
+        return NJ_OK;
+    }
+    sc = nj_string_chars(s) + off;
+    pc = nj_string_chars(p);
+    ret->i = (sc && pc &&
+              memcmp(sc, pc, (nj_size)pl * sizeof(nj_u2)) == 0) ? 1 : 0;
     return NJ_OK;
 }
 
@@ -938,8 +981,7 @@ NJFN(str_startsWith1)
         ret->i = 0;
         return NJ_OK;
     }
-    ret->i = (memcmp(nj_string_chars(s), nj_string_chars(p),
-                     (nj_size)pl * sizeof(nj_u2)) == 0) ? 1 : 0;
+    ret->i = nj_string_prefix_eq(s, p, pl);
     return NJ_OK;
 }
 
@@ -948,6 +990,8 @@ NJFN(str_endsWith)
     nj_ref s = NJ_THIS(args);
     nj_ref p = NJ_ARG_REF(args, 0);
     nj_u4 sl, pl;
+    const nj_u2 *sc;
+    const nj_u2 *pc;
 
     if (!p) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
@@ -958,8 +1002,14 @@ NJFN(str_endsWith)
         ret->i = 0;
         return NJ_OK;
     }
-    ret->i = (memcmp(nj_string_chars(s) + (sl - pl), nj_string_chars(p),
-                     (nj_size)pl * sizeof(nj_u2)) == 0) ? 1 : 0;
+    if (pl == 0u) {
+        ret->i = 1;                       /* every string ends with "" */
+        return NJ_OK;
+    }
+    sc = nj_string_chars(s) + (sl - pl);
+    pc = nj_string_chars(p);
+    ret->i = (sc && pc &&
+              memcmp(sc, pc, (nj_size)pl * sizeof(nj_u2)) == 0) ? 1 : 0;
     return NJ_OK;
 }
 

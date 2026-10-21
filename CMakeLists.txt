@@ -404,6 +404,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_boxdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_repaintdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_alphademo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_arrcls_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_savedgfx_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flushdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_nokiademo_jar.sh
@@ -797,6 +798,18 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_alphademo.sh
                      ${NJ_FIXTURES}/alphademo.jar)
+    # An array the runtime created has no class, and the empty string has no
+    # characters.  String.getBytes() hands out a byte[] that was never given a
+    # class, and a title calls methods on it: the UC browser title killed the
+    # emulator with SIGSEGV while it was building the message "X does not
+    # implement Y" from that missing class.  The empty string is stored as a
+    # NULL payload, and the C standard does not allow a NULL pointer to reach
+    # memcmp even for a length of zero.
+    add_test(NAME check_arrcls
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_arrcls.sh
+                     ${NJ_FIXTURES}/arrcls.jar)
     # The Nokia UI API is the vendor surface the corpus leans on hardest:
     # 83 titles reference FullCanvas, 74 DirectGraphics, 73 DirectUtils, 14
     # Sound and 10 DeviceControl.  A vendor class that is missing is caught by

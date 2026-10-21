@@ -73,6 +73,13 @@ snapshot as the measured one.
 | `蹦球传说_7801.jar` | its `q.<clinit>` reads the JAR's own `META-INF/MANIFEST.MF`, extracts the `Nokia-Platform:` value (`Nokia*`) and calls `System.exit(0)` unless `microedition.platform` matches it; with `--device nokia6230` at 176x208 it passes the story screen into gameplay (0/30 eggs, 0:05 timer, 30.2 fps, exit 0) — the default profile exits by the title's own check, same class as 1945 and consistent with the no-spoof policy | `docs/notes/2026-10-21-bounce-platform-gate.md`; `.local-tools/debug-runs/bounce-r8/` | this commit |
 | 僵尸危机2 (`game-087`) | the `callSerially` drain no longer starves the frame loop: one snapshot of the queue per paint, self-requeued runnables defer to the next frame; regression test fails on the old drain (64 runs on one paint) | `docs/notes/2026-10-20-callserially-drain.md`; `.local-tools/debug-runs/` | `134499f` |
 | HighSpeed3D (`RMS`) | an empty record (`addRecord(null,0,0)`) is returned as a zero-length array instead of `null`, restoring the menu; covered by the RMS tests | `docs/notes/2026-10-20-*` RMS notes | shipped before `cbe8633` |
+| Downloaded corpus (29 JARs, 27 unique SHA-256) | every one of the 29 files in `/home/lucinhu/Downloads/jar` was actually run and re-run, and each row records the furthest stage reached, a screenshot with its SHA-256, the exception text verbatim, a compatibility verdict (可用 / 部分可用 / 受限 / 外部阻塞 / 应用侧缺陷) and a runnable repro (headless `--keys` script, or the SDL2 `drive.py` plan). The matrix also lists the limits an emulator cannot fix: the MMORPG/login servers are down, accounts do not exist, UC's 41-byte response is a locally-built stand-in and not the real server's reply, and there is no real arm64 handset | `docs/notes/2026-10-22-corpus-29-compat-matrix.md`; `docs/notes/2026-10-17-download-corpus.md` | this commit |
+| Chinese text input, Android | the system Google Pinyin IME composes "ni hao" and the space key commits it; `GameActivity$ImeEditor` → `finishComposingText/commitText` → JNI `updateNativeText` → MIDP `TextField`, and the game's own 注册 form shows `游戏账号: 你好`. API 26 x86_64 emulator, APK SHA-256 `ad1b4f4d7fc312f5222fdcb2932daac8d021add23481b92a1dfff5ef779bc6ef`; no FATAL in logcat; the JAR's SHA-256 is unchanged | `docs/notes/2026-10-22-android-desktop-ime-regression.md`; `.local-tools/debug-runs/android-regress-20261022/` | this commit |
+| Chinese text input, desktop | the host fcitx5 5.1.23 (real IME, `Control+Space` → `nihao` → space) commits 你好 into the MIDP editor; the committed screenshot is byte-identical (SHA-256 `b5ccef81115db433…`) across the 2026-10-21, 2026-10-22a, 2026-10-22b and 2026-10-22c runs, the last three on a clean HEAD build. One run in four does not commit (the host IME context did not switch to pinyin), so the verdict must be read off the screenshot hash, not the exit code | `docs/notes/2026-10-22-android-desktop-ime-regression.md`; `.local-tools/debug-runs/desktop-ime-20261022/` | this commit |
+| Interpreter fast paths (other session, now committed) | **CORRECTION (2026-10-22):** the earlier claim that the working tree's `NJ_ENABLE_SUPERINSTR` + `NJ_ENABLE_JUMP_THREADING` break real titles was measured on an **intermediate** build, not on the tip. On a clean build of the committed tip (`2a6292e`, binary SHA-256 `4d2625ebf7dd…`) 孤岛余生2 runs 900 frames with exit 0, no uncaught throw, heap 2.59 MB and **142 distinct colours** in the last frame, and 都市赛车6 runs 1200 frames with exit 0 and 226,524 gfx calls - the other session reproduced the same numbers independently (commit `2e0f0b2`, `docs/PERFORMANCE.md`). The historical measurement and the isolation-build recipe are kept in the note | `docs/notes/2026-10-22-superinstr-regression.md`; `.local-tools/debug-runs/tipcheck-20261022/` | `2a6292e` |
+| Classless array dispatch (UC crash) | an array created by a **native** (`String.getBytes()`) has no class, and the `invokevirtual` dispatch used to build its "does not implement" message out of `recv->cls->name` - a null dereference that segfaulted UC while the MIDlet was painting (exit -11). Now a classless receiver is dispatched against `java/lang/Object`, the error message renders `[B`/`[I`/... from the element kind, and `Object.toString()` returns `"[B@…"`, which is what a handset returns. The check is `check_arrcls`: the fixture exits **139 on the old binary every time** and 0 on the new one, printing `[B@…` for both a heap array and a native array and a `ClassCastException` for a non-String argument | `docs/notes/2026-10-22-uc-null-class-crash.md`; `tests/arrcls/ArrClsDemo.java`, `tests/fixtures/arrcls.jar`, `tools/check_arrcls.sh` | this commit |
+| `String.startsWith`/`endsWith`/`equals` with an empty argument | UBSan reported `null pointer passed as argument 2, which is declared to never be null` in `src/core/nj_lib_string.c`: an empty prefix reached `memcmp(x, NULL, 0)`, which the C standard does not allow. The comparison is guarded now; the **observable** result is unchanged (an empty prefix still matches) - only the undefined behaviour is gone | `docs/notes/2026-10-22-uc-null-class-crash.md` | this commit |
+| Controlled network on Android | against a local proxy, a 503 makes the game show 请检查设备网络连接是否已经开启！ after 5 `GameComm` POSTs, while a 200 with an empty body produces only 2 POSTs and no error page - the failure path is distinguishable. Proves the request left the device and the response was consumed, **not** that any game server is alive | `docs/notes/2026-10-22-android-desktop-ime-regression.md` | this commit |
 
 Titles and platforms verified in the same repository before this ledger existed
 are summarised in `docs/COMPATIBILITY.md` and the dated notes; recent ones are
@@ -86,7 +93,7 @@ lives in the commit message and body, not in this table.
 
 | area | verdict | evidence |
 | --- | --- | --- |
-| Unit/assertion tests | **87/87** under ctest on a clean Release build (threaded-dispatch check included) | `/tmp/nj-def` build; `ctest` log |
+| Unit/assertion tests | **91/91** under ctest on the current build (the new `check_arrcls` is the 91st) | `/tmp/nj-def` build; `ctest` log |
 | Computed-goto interpreter | **fixed**: every dispatch-table entry reached `L_haveop` after a single fetch; converted and switch interpreters produce identical bytecode counts and byte-identical frames on `1945空战英雄_6105` | `tools/check_threaded_dispatch.sh`; `docs/notes/OPEN-issue-threaded-dispatch.md`; commit `3f0dd46` |
 | Key-script holds | `--keys` supports `frame:key:down` / `:up`; a held key stays down across frames, an explicit up edge releases once; mutation of the release pass fails two assertions | `tests/test_poke.c` (24 checks); `docs/notes/2026-10-21-key-script-holds.md`; commit `7b7a117` |
 | `DataInputStream` mark/reset | `mark`, `reset` and `markSupported` forward to the wrapped stream (FilterInputStream semantics); base `InputStream.reset` raises `IOException`, `mark` stays a no-op; binding `reset` back to the empty slot fails the tests | `tests/test_ioapi.c` (166 checks); `docs/notes/2026-10-21-datainput-rewind.md`; commit `239ccec` |
@@ -138,7 +145,35 @@ lives in the commit message and body, not in this table.
   verified; movement, one AI turn and one combat exchange are.
 * **Mascot Capsule** — no collected title reaches the rasteriser, so it is
   exercised only by its unit test; a real title using it is still missing.
-* **Host text input** — the Android side is verified against a real IME; other
-  ports are not.
+* **Host text input** — verified against a real IME on Android (Google Pinyin,
+  `docs/notes/2026-10-22-android-desktop-ime-regression.md`) and on the desktop
+  (fcitx5).  Two limits stand: the desktop port shows the pre-edit only through
+  the host's own candidate window - the composing text never enters the widget
+  (`src/port/posix/nj_port_sdl2.c:1128-1130` sets `ime_composing` only), and the
+  other ports (ESP32, bare metal) are still unverified.
+* **Registration / login / online play** — no account was created on any of the
+  online titles, so the MMORPG and UC flows stop before authentication.  The
+  servers are also unreachable from here; a locally built response is not the
+  server's answer.
 * **Finished-thread `DEAD` reclamation** — deferred: the shortcut regressed the
   Doom constructor wait. Ordinary worker join is verified.
+* **The downloaded corpus still has named open ends** (details and per-title
+  repro in `docs/notes/2026-10-22-corpus-29-compat-matrix.md`):
+  * 文明5 — the turn is **AP-driven** (the JAR's own help text says
+    「结束本轮移动,准备下一回合」 and 「每一个单位行动将花费行动点(AP)」), so there is
+    no guaranteed "end turn" button; the unit selection, the camera scroll, the
+    advisor panel and the pointer channel (events do arrive: `NJPTR kind=1/0`)
+    are verified, the **turn advance itself is not**. The touch hit test is
+    per-cell with strict inequalities and the game keeps a long-press timer, so
+    a synthetic click is not the same thing as a turn button.
+  * 家园6 — the village, the action menu, the residents panel and the tutorial
+    overlay are reached; **building, combat and a save/restart round trip are
+    not** yet verified.
+  * UC 浏览器 — the controlled chain reaches the URL editor and the real
+    homepage renders, but typing into **UC's own self-drawn address bar** is
+    not possible: the runtime's IME bridge covers MIDP `TextBox`/`TextField`
+    only (`src/midp/nj_lib_lcdui.c:8511-8566`). The crash that used to happen
+    while typing is fixed.
+  * 远古帝国2 — a cold start with repeated `fire` reaches the mission dialogue
+    and the village, but the **picture freezes after frame 44**; unit movement
+    and combat on this build are unverified.

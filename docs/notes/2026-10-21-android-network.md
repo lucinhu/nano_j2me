@@ -17,6 +17,13 @@
   直接以 `-n com.lucinhu.nj2me/.GameActivity -e jar xiayi.jar -e jarpath … -e title xyOnline
   --ei w 240 --ei h 320 --ei heap 16` 启动原版侠义 JAR
   （`bfa87c2046aa0d2b3847521ffdd34baf27a3de252b07031830d3b966eb2e66d2`，未修改）。
+  - **2026-10-22 更正**：上面这条 `am start … GameActivity` 在 API 26 上**跑不通**——
+    `GameActivity` 在 `src/port/android/manifest/AndroidManifest.xml` 里是
+    `android:exported="false"`，这台 shell 没有 `START_ANY_ACTIVITY`，会得到
+    `java.lang.SecurityException: Permission Denial: starting Intent { flg=0x10000000 cmp=com.lucinhu.nj2me/.GameActivity (has extras) } from null (pid=4508, uid=2000) not exported from uid 10078`。
+    正确做法是启动 `com.lucinhu.nj2me/.LibraryActivity` 再点条目；本轮按此路径复跑，
+    5 个 POST 与 2 个 POST 的结果与上文一致。见
+    [Android 与桌面原生中文输入 / 受控网络回归](2026-10-22-android-desktop-ime-regression.md)。
 - 系统连通性检查（gstatic/google/play 的 204）也会经由该全局代理，那是 Android 自己的
   请求，与游戏无关。
 

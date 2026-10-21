@@ -96,6 +96,30 @@ static nj_ref class_name_string(nj_vm *vm, nj_class *c)
     return nj_string_new(vm, buf);
 }
 
+/*
+ * The name of an object that has no class.
+ *
+ * An array the RUNTIME created - String.getBytes() hands one out - was made
+ * with a NULL class, so there is no class to take the name from.  The name
+ * still has to be the array's type: a phone prints "[B@1a2b3c" for it, and a
+ * title that prints an array in a log line should see the same thing.
+ */
+static nj_ref object_type_name(nj_vm *vm, const nj_object *o)
+{
+    static const char prims[] = "ZBCSIJFD";   /* const: .rodata, no RAM */
+    char buf[4];
+    nj_u4 k;
+
+    if (!o || o->kind != NJ_OBJ_ARRAY) {
+        return NULL;
+    }
+    k = o->aflags;
+    buf[0] = '[';
+    buf[1] = (k >= 1u && k <= 8u) ? prims[k - 1u] : '?';
+    buf[2] = '\0';
+    return nj_string_new(vm, buf);
+}
+
 nj_ref class_name_string_pub(nj_vm *vm, nj_class *c)
 {
     return class_name_string(vm, c);
@@ -116,7 +140,7 @@ NJFN(obj_toString)
     {
         nj_u4 mark = nj_root_mark(vm);
         nj_root(vm, o);
-        cn = class_name_string(vm, o->cls);
+        cn = o->cls ? class_name_string(vm, o->cls) : object_type_name(vm, o);
         if (!cn) {
             nj_root_release(vm, mark);
             return nj_throw_oom(vm);

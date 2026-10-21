@@ -486,6 +486,98 @@ Specifically supported:
 - modified UTF-8 (CESU-8) constants, including embedded NULs
 - class file attributes that matter (`Code`, `ConstantValue`); the rest skipped
 
+## The downloaded corpus: 29 JARs, stage by stage
+
+A second, independent set of real titles lives in `/home/lucinhu/Downloads/jar` -
+29 files, 27 unique SHA-256 (three of them are byte-identical). Every one of
+them has been **run**, and for each the reachable stage, a screenshot with its
+hash, the exception text verbatim, a compatibility verdict and a runnable
+repro are tabulated in
+[docs/notes/2026-10-22-corpus-29-compat-matrix.md](notes/2026-10-22-corpus-29-compat-matrix.md).
+The master log with the per-round evidence is
+[docs/notes/2026-10-17-download-corpus.md](notes/2026-10-17-download-corpus.md).
+
+The verdicts use one vocabulary, so they can be compared:
+
+| verdict | meaning |
+|---|---|
+| usable | a real game screen was reached and input advanced to a meaningful interaction point - **not** a completed playthrough |
+| partly usable | a real game was reached, but a named feature (turn advance, building, saving, a whole run) is still unverified |
+| limited | it starts, but the title's own logic or a platform check stops it; there is no matching defect in the runtime |
+| externally blocked | it needs a live server or an account; no amount of emulator work changes that |
+| title-side defect | the title throws and exits on its own; the reference emulator does the same |
+
+Four things in that corpus are **outside** what an emulator can fix, and are
+recorded as limits rather than gaps:
+
+1. **The servers are down.** The MMORPG and browser titles (仙镜OL, 侠义OL, UC)
+   point at endpoints that no longer answer. A *controlled* local proxy proves
+   that the request leaves the device and that the response is consumed - it
+   does not prove that any server is alive. 仙镜OL does not even go through the
+   HTTP proxy: a confirmed-live 503 proxy logged **zero** requests.
+2. **No accounts exist.** Registration, login, character creation and online
+   play were never performed. Chinese text appearing in an account field proves
+   the **input path**, not that the account works.
+3. **A controlled response is not the server's answer.** UC's 41-byte allocation
+   response is test data built locally from the bytecode; it only advances the
+   parse path.
+4. **No real handset.** All Android evidence comes from an API 26 x86_64
+   emulator. A real arm64 phone has a different IME and a different touch stack.
+
+Android text input was verified end to end against the **system Google Pinyin**
+(composing "ni hao", committing with the space key, and the game's own
+registration form then showing `游戏账号: 你好`), and on the desktop against
+**fcitx5** (`Control+Space`, `nihao`, space - the committed screenshot is
+byte-identical across four runs). One desktop run in four does not commit
+because the host IME context did not switch to pinyin, so that pass is judged
+from the screenshot hash, never from the exit code. The desktop pre-edit is
+**not** pushed into the widget (`src/port/posix/nj_port_sdl2.c:1128-1130` sets
+`ime_composing` only), so the candidate window is drawn by the host, not by
+the game. Details and hashes:
+[docs/notes/2026-10-22-android-desktop-ime-regression.md](notes/2026-10-22-android-desktop-ime-regression.md).
+
+## Fixes found by that corpus
+
+Running the corpus is what turned up the defects; these are the ones that were
+fixed and locked behind a test in this round.
+
+### An array with no class used to crash the interpreter
+
+UC's address editor segfaulted the runtime (exit -11) while the MIDlet was
+painting. The cause was not timing, network or the in-flight interpreter work:
+an array **created by a native** (`String.getBytes()` hands back a `byte[]` that
+the runtime allocates without a class) has `cls == NULL`, and the
+`invokevirtual` dispatch then built its "X does not implement Y" message out of
+that null pointer - `recv->cls->name`.
+
+Three changes, all of them "turn undefined behaviour into the answer a phone
+gives":
+
+- the error message now uses a helper that renders a classless array as
+  `[B`/`[I`/... from its element kind;
+- a classless receiver is dispatched against `java/lang/Object`, so
+  `getBytes().toString()` returns `"[B@1a2b3c"` - exactly what a handset
+  returns - instead of crashing;
+- `Object.toString()` uses the same naming for a classless array.
+
+The regression test is a two-line MIDlet (`tests/arrcls/ArrClsDemo.java`); its
+fixture JAR is **generated, not checked in** (`tests/fixtures/` is gitignored) by
+`tools/make_arrcls_jar.sh`, and `check_arrcls` in ctest exercises it. Before the
+fix it exits 139 every time; after the fix it exits 0 and prints `[B@...` for
+both a heap array and a native array, and a `ClassCastException` for a
+non-String argument.
+
+### `String.startsWith`/`endsWith`/`equals` on an empty argument
+
+UBSan flagged `null pointer passed as argument 2, which is declared to never
+be null` in `src/core/nj_lib_string.c`: with an empty prefix the code called
+`memcmp(x, NULL, 0)`, which the C standard does not allow. The comparison is
+now guarded; the **observable** result is unchanged (an empty prefix still
+matches), only the undefined behaviour is gone.
+
+Full write-up, backtrace, hashes and the boundaries:
+[docs/notes/2026-10-22-uc-null-class-crash.md](notes/2026-10-22-uc-null-class-crash.md).
+
 ## API coverage
 
 ### Streaming XML (optional SAX subset)
