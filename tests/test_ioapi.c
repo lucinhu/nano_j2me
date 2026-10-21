@@ -73,6 +73,8 @@ static int g_fail;
 #define ISR     "java/io/InputStreamReader"
 #define OSW     "java/io/OutputStreamWriter"
 #define BAIS    "java/io/ByteArrayInputStream"
+#define DIS     "java/io/DataInputStream"
+#define IS      "java/io/InputStream"
 #define BAOS    "java/io/ByteArrayOutputStream"
 
 #define CAP_MAX 4096
@@ -704,6 +706,85 @@ static void test_writer_base(nj_vm *vm)
     (void)stream_text_is(vm, baos, BAOS, "Writer wrote", "okayk");
 }
 
+/* ------------------------------------------------------------------ */
+/* 7: DataInputStream mark/reset/markSupported forward to the stream  */
+/* ------------------------------------------------------------------ */
+/*
+ * FilterInputStream forwards all three, and a title that rewinds a data
+ * stream depends on it.  实况足球经理2009_10609's resource unpacker (d.c)
+ * reads a packed container, fills its offset table, reset()s back to the
+ * start and skipBytes()s to the requested entry.  With reset() falling
+ * through to InputStream's no-op the entry began 44 bytes - the container
+ * header - too far in, d.E read entry sizes that did not fit the buffer it
+ * allocated, its string table stayed null and the title painted a flat
+ * frame forever.
+ */
+static void test_datainput_mark_reset(nj_vm *vm)
+{
+    nj_ref in = bais_over(vm, "ABCDEFGH");
+    nj_value a[2];
+    nj_value ret;
+    nj_ref dis;
+
+    OK_MSG(in != NULL, "ByteArrayInputStream for the rewind test");
+    if (!in) {
+        return;
+    }
+    a[0] = vref(in);
+    dis = construct(vm, DIS, "(Ljava/io/InputStream;)V", a,
+                    "DataInputStream(InputStream)");
+    if (!dis) {
+        return;
+    }
+
+    OK(nj_call(vm, dis, DIS, "readByte", "()B", NULL, &ret) == NJ_OK);
+    OK_MSG(ret.i == 65, "readByte() returned %d, want 'A'", (int)ret.i);
+
+    OK(nj_call(vm, dis, DIS, "markSupported", "()Z", NULL, &ret) == NJ_OK);
+    OK_MSG(ret.i == 1, "markSupported() must forward to the byte stream, got %d",
+           (int)ret.i);
+
+    /* reset() with no mark() rewinds to the start of the stream. */
+    OK(nj_call(vm, dis, DIS, "reset", "()V", NULL, NULL) == NJ_OK);
+    OK(nj_call(vm, dis, DIS, "readByte", "()B", NULL, &ret) == NJ_OK);
+    OK_MSG(ret.i == 65, "readByte() after reset() returned %d, want 'A'",
+           (int)ret.i);
+
+    /* An explicit mark() is where reset() returns to, and skipBytes() must
+     * not move the mark - the unpacker marks, skips to the entry and resets
+     * for the next one. */
+    OK(nj_call(vm, dis, DIS, "readByte", "()B", NULL, &ret) == NJ_OK);
+    OK_MSG(ret.i == 66, "readByte() returned %d, want 'B'", (int)ret.i);
+    a[0] = vint(0);
+    OK(nj_call(vm, dis, DIS, "mark", "(I)V", a, NULL) == NJ_OK);
+    a[0] = vint(5);
+    OK(nj_call(vm, dis, DIS, "skipBytes", "(I)I", a, &ret) == NJ_OK);
+    OK_MSG(ret.i == 5, "skipBytes(5) returned %d", (int)ret.i);
+    OK(nj_call(vm, dis, DIS, "reset", "()V", NULL, NULL) == NJ_OK);
+    OK(nj_call(vm, dis, DIS, "readByte", "()B", NULL, &ret) == NJ_OK);
+    OK_MSG(ret.i == 67, "readByte() after mark()/skipBytes()/reset() returned %d, want 'C'",
+           (int)ret.i);
+
+    /* A short skip stops at the end of the stream, it does not run past it. */
+    a[0] = vint(100);
+    OK(nj_call(vm, dis, DIS, "skipBytes", "(I)I", a, &ret) == NJ_OK);
+    OK_MSG(ret.i == 5, "skipBytes(100) near the end returned %d, want 5",
+           (int)ret.i);
+
+    /* A stream that does not implement marking must say so through reset(),
+     * not silently do nothing: that is what the CLDC InputStream does. */
+    {
+        nj_ref plain = nj_object_new(vm, IS);
+
+        OK_MSG(plain != NULL, "java/io/InputStream allocation");
+        if (plain) {
+            OK(nj_call(vm, plain, IS, "reset", "()V", NULL, NULL) != NJ_OK);
+            OK_MSG(nj_has_exception(vm), "reset() must raise IOException");
+            nj_clear_exception(vm);
+        }
+    }
+}
+
 int main(void)
 {
     nj_port port;
@@ -733,6 +814,7 @@ int main(void)
     test_reader_base(vm);
     test_writer(vm);
     test_writer_base(vm);
+    test_datainput_mark_reset(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

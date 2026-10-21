@@ -126,6 +126,18 @@ NJFN(is_mark_supported)
     return NJ_OK;
 }
 
+/* reset() on a stream that does not implement marking: the CLDC javadoc says
+ * "throws IOException - if this stream has not been marked or if the mark has
+ * been invalidated", and the reference implementation's InputStream answers
+ * "mark/reset not supported".  A stream that does support marking overrides
+ * this - ByteArrayInputStream does - so this is only reached when there really
+ * is no mark to return to, and the failure must be visible rather than an
+ * empty operation that silently leaves the stream where it is. */
+NJFN(is_reset)
+{
+    return nj_throw(vm, "java/io/IOException", "mark/reset not supported");
+}
+
 /* How much of a skip is read per call.  Big enough that skipping a few
  * kilobytes is a couple of reads, small enough to stay off the heap budget of
  * a phone. */
@@ -923,6 +935,56 @@ NJFN(dis_readFully_all)
 }
 
 /*
+ * mark()/reset()/markSupported() on a DataInputStream: FilterInputStream
+ * forwards all three to the stream it wraps, and a title that rewinds the
+ * stream depends on that.  实况足球经理2009_10609's resource unpacker (d.c)
+ * reads a packed container, fills its offset table, reset()s back to the
+ * start and skipBytes()s to the requested entry; with reset() falling through
+ * to InputStream's no-op (close()) the entry began at the wrong offset and
+ * d.E parsed sizes that did not fit its buffer - the loader aborted, its
+ * string table stayed null and the title stayed on a flat frame.
+ */
+NJFN(dis_mark)
+{
+    nj_ref in = dis_in(vm, NJ_THIS(args));
+    nj_value a1[3];
+
+    if (!in) {
+        return nj_throw(vm, "java/io/IOException", "no underlying stream");
+    }
+    memset(a1, 0, sizeof(a1));
+    a1[0].i = NJ_ARG_INT(args, 0);
+    return nj_call(vm, in, NJ_C_ISTREAM, "mark", "(I)V", a1, NULL);
+}
+
+NJFN(dis_reset)
+{
+    nj_ref in = dis_in(vm, NJ_THIS(args));
+
+    if (!in) {
+        return nj_throw(vm, "java/io/IOException", "no underlying stream");
+    }
+    return nj_call(vm, in, NJ_C_ISTREAM, "reset", "()V", NULL, NULL);
+}
+
+NJFN(dis_mark_supported)
+{
+    nj_ref in = dis_in(vm, NJ_THIS(args));
+    nj_value r;
+
+    if (!in) {
+        ret->i = 0;
+        return NJ_OK;
+    }
+    memset(&r, 0, sizeof(r));
+    if (nj_call(vm, in, NJ_C_ISTREAM, "markSupported", "()Z", NULL, &r) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->i = r.i ? 1 : 0;
+    return NJ_OK;
+}
+
+/*
  * skipBytes: an ATTEMPT, and a short count is the documented answer.  The
  * CLDC 1.1 DataInput javadoc is explicit - "Makes an attempt to skip over n
  * bytes ... However, it may skip over some smaller number of bytes, possibly
@@ -1525,6 +1587,9 @@ static const nj_builtin_method dis_methods[] = {
     M("readUTF",            "(Ljava/io/DataInput;)Ljava/lang/String;",
                             NJ_ACC_PUBLIC | NJ_ACC_STATIC),
     M("available",          "()I", 0),
+    M("mark",               "(I)V", 0),
+    M("reset",              "()V", 0),
+    M("markSupported",      "()Z", 0),
     M("close",              "()V", 0)
 };
 
@@ -2488,7 +2553,7 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/InputStream", "available",     "()I", is_available },
     { "java/io/InputStream", "close",         "()V", is_close },
     { "java/io/InputStream", "mark",          "(I)V", is_close },
-    { "java/io/InputStream", "reset",         "()V", is_close },
+    { "java/io/InputStream", "reset",         "()V", is_reset },
     { "java/io/InputStream", "markSupported", "()Z", is_mark_supported },
 
     { "java/io/OutputStream", "<init>", "()V", os_flush },
@@ -2546,6 +2611,9 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/DataInputStream", "readUTF",          "()Ljava/lang/String;", dis_readUTF },
     { "java/io/DataInputStream", "readUTF",          "(Ljava/io/DataInput;)Ljava/lang/String;", dis_readUTF_static },
     { "java/io/DataInputStream", "available",        "()I", dis_available },
+    { "java/io/DataInputStream", "mark",             "(I)V", dis_mark },
+    { "java/io/DataInputStream", "reset",            "()V", dis_reset },
+    { "java/io/DataInputStream", "markSupported",    "()Z", dis_mark_supported },
     { "java/io/DataInputStream", "close",            "()V", is_close },
 
     { "java/io/DataOutputStream", "<init>",       "(Ljava/io/OutputStream;)V", dos_init },
