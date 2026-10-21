@@ -153,6 +153,65 @@ SHA-256 `9f6325a76fb71857ee6b21606b5219771cf70df03e753b36e79fb1226f42d813`）
 现场看到的现象是：偶尔 `Control+Space` 没把上下文切到拼音，于是 `nihao` 只是英文字符、
 空格也没有候选可提交。
 
+### 桌面端在修复后的二进制上复跑（2026-10-22 07:49）
+
+修复后工作区二进制 `build/nj2me`，SHA-256
+`e8459c132b2ca9bb4f0230a902caf24f4f6147bdea942d3d2011cd39ba03e94f`，
+驱动 `python3 .local-tools/debug-runs/desktop-ime-20261022/run_desktop_ime.py xy-postfix-ime`
+→ `{"exit_code": 0, "sdl2_mapped": ["/usr/lib/libSDL2-2.0.so.0.3200.74"], "posts": 5}`；
+`06-committed.png` 与 `07-confirmed.png` 都是
+`b5ccef81115db43326d169368e36540258e1518844c2e1c8c80709e442e7e694`，
+与 2026-10-21 及本轮早先的证据**逐字节一致** → 核心修复没有影响输入链路。
+
+### 用带核心修复的 APK 复跑（第 5 次，2026-10-22 07:51–07:56）
+
+本轮把 UC 崩溃修复（commit `3d5b551`，`src/core/nj_interp.c` /
+`src/core/nj_lib_object.c` / `src/core/nj_lib_string.c`）一起编进 APK 再验一遍，
+确认核心改动没有碰坏中文输入链路。
+
+构建：从 `git archive HEAD`（= `3d5b551`）导出一棵干净树到
+`.local-tools/android-fix-20261022`，用树内的 `tools/build_android.sh` +
+`tools/build_android_apk.sh` 构建：
+
+| 产物 | 大小 | SHA-256 |
+|---|---|---|
+| `nj2me.apk` | 1,292,512 B | `a10061b9b2461ba0236785615baa830d7894fb0f35e10228242d3c9fcc8112c5` |
+| `lib/x86_64/libnj2me.so` | 1,560,392 B | — |
+| `lib/arm64-v8a/libnj2me.so` | 1,702,408 B | — |
+
+**签名坑（新增，值得记住）**：`tools/build_android_apk.sh` 用
+`$ROOT/build/android/debug.keystore` 签名，**文件不存在就现场生成一把新的**。
+在干净导出树里第一次构建时我预置的 keystore 没被用上，于是新 APK 签名与设备上
+已装的旧 APK 不同，`adb install -r` 直接报
+`INSTALL_FAILED_UPDATE_INCOMPATIBLE: Package com.lucinhu.nj2me signatures do not match`。
+把主仓的 `build/android/debug.keystore` 复制过去**重新签名**（不用重建 .so）即可覆盖安装。
+
+复现步骤与上一轮完全一致（LibraryActivity → 点游戏条目 → 长按「返回」→ 长按「游客注册」
+→ 长按「接受」→ 长按「游戏账号」→ `input text nihao` → `input keyevent 62` 提交 →
+`input keyevent 4` 收键盘 → `input keyevent 82` 触发 MIDP 左软键）。
+
+截图证据（目录 `.local-tools/debug-runs/android-fix-20261022/`）：
+
+| 截图 | SHA-256 | 内容 |
+|---|---|---|
+| `01-library.png` | `56df2c0742d258530ed0201007e9f2ff98653127e01f667d82692976ade36b2c` | 库界面（xyOnline 一项） |
+| `02-game-launch.png` | `dd2716ebe65e1d837f8c200ed7a9f373cde7e1b667fd79ed635970c10e9dd228` | 网络错误页（与上一轮 `05-game-proxy.png` 逐字节相同） |
+| `03-after-back.png` | `a44d9ff08ba4a32b8b2bd41d96315cb4ecc0fa2f87dfa81451c58be0a3a28f33` | 错误页被长按「返回」关掉，回到 splash |
+| `04-agreement.png` | `38f8fd2fed5b44ba3ea5708bc2f31565fceadd4a0ee25596344c65a1c9477546` | 注册协议页（与上一轮 `09-guest-menu.png` 逐字节相同） |
+| `05-register-form.png` | `9e313ddc816ef2993e906353b1f1dc45985cc67a6e148cf29388098795584307` | 游戏注册表单（画面键盘叠在下方，故与上一轮略有不同） |
+| `06-editor-ime.png` | `64617f27091832b524a4bc77299eb3c84b0d61574eab395c1d4944ba3658738f` | `ImeEditor` 获得焦点，拼音键盘弹出（与上一轮 `11-editor-ime.png` 逐字节相同） |
+| `07-pinyin-candidates.png` | `5f2e3f653c94f598c18e1ce10c136f0626b15424e2ef1f9228aaf91399f67067` | 「ni hao」+ 候选 你好/你/尼/泥/拟（与上一轮 `12-pinyin-candidates.png` 逐字节相同） |
+| `08-committed-space.png` | `f165acb0d3163bfd7f6514ba9fbff5137746720012b5e51fa2a75da76bc8a1fb` | 空格提交后编辑器显示「你好」 |
+| `09-editor-hidden.png` | `307aa3a821699285e19679cf75dba6b7ab47e4f1d8dd70620fc7c2798b63baa6` | `keyevent 4` 收掉软键盘 |
+| `10-after-menu.png` | `7577f4cbb298bd30e37f0d3f740d5aa9e3a2c900541d6420eaf2983073d63847` | **游戏注册表单显示「游戏账号: 你好」**（`read_image` 目视确认） |
+| `11-game-200.png` | `a44d9ff08ba4a32b8b2bd41d96315cb4ecc0fa2f87dfa81451c58be0a3a28f33` | 200 空 body 时**无**错误页，与 splash 同一哈希 |
+
+`dumpsys input_method` 现场：`mInputShown=true`、
+`mServedView=com.lucinhu.nj2me.GameActivity$ImeEditor{… 0,594-320,640}`。
+受控网络：503 → **5 个 POST**（body 各 48 B）；200 空 body → **2 个 POST**，无错误页。
+logcat 无 `FATAL EXCEPTION` / `UnsatisfiedLinkError`；JAR SHA-256 前后一致
+（`bfa87c2046aa0d2b3847521ffdd34baf27a3de252b07031830d3b966eb2e66d2`）。
+
 ## 受控网络的区分结果
 
 | 代理返回 | 记录的 GameComm 请求 | 游戏表现 |

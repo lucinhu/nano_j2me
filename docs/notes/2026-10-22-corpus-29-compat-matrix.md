@@ -82,12 +82,17 @@ python3 .local-tools/debug-runs/corpus-round20-20261021/drive.py \
 | jar-21 `家园6之革命完美汉化版_诺基亚 E60系列(320x240).jar` `70188d6f9801` | 320x240：语言/声音→主菜单→村庄+剧情对白 | `corpus-round20-20261021/jar21-menu/09-after-41s.png` | 同 jar-17 | 可用 | A：`--size 320x240 --run-frames 1800` |
 | jar-22 `家园6之革命完美汉化版_诺基亚 E62系列(320x240).jar` `a37915bf0860` | 320x240：语言/声音→主菜单→战役开场白 | `corpus-round20-20261021/jar22-menu/08-after-fire3.png` | 同 jar-17 | 可用 | A：`--size 320x240 --run-frames 1800` |
 | jar-23 `家园6之革命完美汉化版_诺基亚 N70系列(176x208).jar` `fb56034f8f54` | 176x208：语言/声音→主菜单→战役开场白 | `corpus-round20-20261021/jar23-menu/08-after-fire3.png` | 同 jar-17 | 可用 | A：`--size 176x208 --run-frames 1800` |
-| jar-24 `家园6之革命完美汉化版_诺基亚 N73系列(240x320).jar` `5a32a9881af0` | 240x320：家园6_光辉革命：标题→战役地图→村庄对白→**村庄内交互**：回车推进对白、`F1` 全屏面板、`Escape` 返回、方向键滚图、数字 `1`/`2` 打开村庄信息面板（人口 3+3、工人 3、进度条）、`F2` 暂停菜单、`*` 教程浮层、长按底部「行动菜单」可开居民/建造/其他三栏 | `corpus-round20-20261021/jar24-menu/09-after-41s.png` `3a2f6276e6c6` | 同 jar-17；菜单项 0 像素响应的真因是**进入村庄时教程模态页尚未结束，输入被教程吃掉** | 部分可用：建造/战斗/存档重启正在复核 | B：`--size 240x320 --frames 4000`，先按 `*` 关教程再长按行动菜单；见 [村庄内行动菜单](2026-10-22-townsmen6-village-ui.md) |
+| jar-24 `家园6之革命完美汉化版_诺基亚 N73系列(240x320).jar` `5a32a9881af0` | 240x320：家园6_光辉革命：标题→战役地图→村庄对白→**村庄内交互**（回车推进对白、`F1` 全屏面板、`Escape` 返回、方向键滚图、`1`/`2` 村庄信息面板、`F2` 暂停菜单、`*` 教程浮层）→**存档→退出→同一 `--rms-dir` 重启→读档：村庄完整恢复**（人口 20 / 6 人睡眠、市政厅+住房+采石场+伐木场，见 `R09.png`）。**决定性机制发现**：该版**完全不处理触摸**——javap 确认唯一游戏 Canvas 类 `t` 的 `pointerPressed/pointerReleased/pointerDragged` 全是 `0: return`，触摸恒为无操作，只能纯键盘（D-pad 移手形指针、Return/F1/5 确认、F2 取消/暂停）。**建造**：在途构建 `2f106198…` 上建成住房×3/采石场/水井/养鱼场（`z20.png` 建筑工人面板等），该二进制已被删除；用 HEAD 干净构建 `9f6325a7…` 在同一存档上重做**未复现**（行动菜单图标、建筑影子、地块绿/红高亮均不渲染，Fire 无效）→ **当前构建上建造未复现**。**战斗**：阻塞——「派遣」是纯触摸控件，且 `CN.CAMPAIGN.lng` 写明士兵只在关卡结束后加入、第一关目标链无战斗目标 | 读档 `townsmen6-bcs-20261022/runD/R09.png` `582e7d4c0c07`；建造 `runC/z20.png` `ae094c1442c4`；战斗面板 `runD/W3.png` `9d3b1746b32f` | 4 类 thrown（无 uncaught）：`java/lang/NullPointerException at g.a()V pc=34`、`javax/microedition/rms/RecordStoreNotFoundException at …RecordStore.openRecordStore(Ljava/lang/String;Z)… pc=0`、`java/lang/NullPointerException at g.a(I)Z pc=46`、`java/io/IOException at javax/microedition/lcdui/Image.createImage(Ljava/lang/String;)… pc=0: /s3.png`（`/s3.png` 是 JAR 自带资源缺失，非模拟器缺陷） | 部分可用：存档/读档已验证；**touch: unsupported / input: keyboard-only**；建造在当前构建未复现；战斗因应用侧纯触摸控件+关卡无战斗目标而阻塞 | B：进村 `Fire×5`（声音?→开始游戏→启动画面→剧情战役→继续游戏）；存档 `F2`→Down(关闭游戏)→Fire→Down(是)→Fire；读档同一 `--rms-dir` 重启再 `Fire×5`。见 [建造/战斗/存档复核](2026-10-22-townsmen6-build-combat-save.md) 与 [村庄内行动菜单](2026-10-22-townsmen6-village-ui.md) |
 | jar-25 `极品飞车14之热力追踪中文版.jar` `77d10a56e51a` | 极品飞车：热力追踪 / 240x320：音效→标题→教程赛道→2/11，42→73→114→121→101 MPH，左右转向改变车辆姿态，`F2` 打开暂停菜单（可见「继续赛事」）。**2026-10-22 复检**：开机「是否开启音效」提示**必须用 `F2`** 越过（`Return` 不行；用 `Return` 会整场卡在 splash），随后到主菜单→教程提示→「选择赛事」世界地图 | `nfs-hot-pursuit-drive-round15-20261020/11-steer-right.png` `be4122c74e6b` | `java/lang/NullPointerException at ah.<init>(Lcom/ea/nfs10/MonkeyApp;)V` ×2；`at ah.w()V` ×2（被捕获） | 部分可用：未完成教程赛/正式赛事/保存 | B：`--size 240x320 --frames 1600`，计划 fire→fire→soft1→right→left→F2；**开场用 `F2`**；见 [语料缺口巡检](2026-10-22-corpus-gap-sweep.md) 与 [驾驶证据](2026-10-20-nfs-hot-pursuit.md) |
 | jar-26 `极品飞车16：亡命狂飙.jar` `92c5f29e1d66` | NFS The Run / 240x320：PROLOGUE→NEW GAME 选车（SAN FRANCISCO/SPRINT/FORD MUSTANG GT BOSS 302）→**真实比赛**：隧道、路面、玩家车与前车、赛道标线与里程牌；HUD 进度/名次/对手距离/小地图/速度表 39→133 MPH，Up 提速、左右转向；可跑到结算页 `RESULTS / YOU LOSE… TIME: 04:55.8` | `nfs-cam-20261022/run4/02-race-2.png` `ce0b1d51d505` | 4 次 `ArrayIndexOutOfBoundsException at ad.a(Ljavax/microedition/lcdui/Graphics;IIIIIIZ)V pc=2672`（2D 精灵游标越界，下一帧恢复，与 3D 无因果）；启动期 `NullPointerException at af.<init>(…) pc=471/479`（被捕获）；55 次「all threads are waiting」 | 可用（3D 世界已修复，根因是**相机语义**不是帧时序：commit `1e47d9a`） | B：`--size 240x320 --frames 2400`，计划推进到选车→Return 起跑→hold up/left/right；见 [NFS 亡命狂飙 3D 定位](2026-10-21-nfs-the-run-m3g.md) 与 [NFS16 回归](2026-10-22-nfs16-regression.md) |
 | jar-27 `狂野飙车4-亡命都市.jar` `7d4369008c5d` | 狂野飙车-亡命都市 / 240x320：音效→标题→快速游戏→赛道说明→比赛（1/8 圈、`狂奔中`、AI 车辆、金钱与速度 HUD）；倒计时 3→1，静止即 74 MPH，按住上键 20→26→59 MPH，左右键使车辆驶向路肩/草地 | `asphalt4-20261021/run5/09-idle-4.png` `3ebdee1ee286` | 游戏自身 `com/qq/sms/QQSMS.init/getInt/desString` 抛 `NumberFormatException` / `IllegalArgumentException: Length Not Double Num`（被捕获，不阻断） | 部分可用：未完成整圈/冲线/存档 | B + 只读垫片 `netfail.so`：`--size 240x320 --frames 2400`，计划 hold up→hold left/right；见 [狂野飙车4](2026-10-17-download-corpus.md#2026-10-21-更新狂野飙车4-进入实际比赛) |
 | jar-28 `远古帝国2汉化版.jar` `778b6e881b56` | Ancient Empires II / 240x320：**冷启动 + 连续 `fire`**（1 s 一次、≥16 次）→ logo→教学提示（滚轴提示语）→任务对话（将军头像 + 剧情）→**村庄场景 + 救援对白**；第 44 帧之后画面不再变化。2026-10-22 早先的「冷启动只到标题」是**按键脚本不同**造成的（用 `fire/soft1/soft2/right/down` 混按、间隔 2 s），不是游戏更差；另有一份早先的「战役地图 + 求救对白」证据其实来自**快照续跑**（`ancient-empires-round5/fixed-map/runtime.log` 首行 `resumed b from …/campaign/resume.njs`），两者不要混为一谈 | `corpus-gap-20261022/head-jar28-ancient/04-after-fire16.png` `8117727ff2a5`；`…/08-after-fire32.png` `acc91ee14f68`；`…/11-after-fire44.png` `54b3ba4ebcdf`；接触表 `cs-jar28.png` `5a0e2976f2a4` | 读取快照后 MIDI 旧指针崩溃（已修）；`java/lang/NullPointerException at h.<init>(Ljava/lang/String;I)V pc=72: (no message)` ×3（与既往 `PLAYER_DEALLOCATE_HIT` 证据一致）；`RecordStoreNotFoundException` ×6；JAR 自带 `FullCn` 固定 128×116，而 `splash.png` 为 132×176，越出重绘区 | 部分可用：**画面在第 44 帧后冻结**，单位移动/战斗/完整关卡/存档未验证 | B + `plan-jar28.json`（`drive2.py`，连续 `fire` 1 s 一次共 60 次，2700 帧 / 89.8 s / 退出码 0）；见 [语料缺口巡检](2026-10-22-corpus-gap-sweep.md) 与 [远古帝国2 复现记录](2026-10-17-ancient-empires-replay.md) |
 | jar-29 `都市赛车6火线追击.jar` `323942169575` | Asphalt 6 / 240x320：音效→标题→NORMAL RACE/CHALLENGES 说明→比赛（1/8 圈、`WANTED`、1/3 挡、116→127 MPH、金钱 $1,084、AI 车辆），右转驶上右侧路肩 | `asphalt6-20261021/run2/12-race.png` `eab4f4d1c295` | 启动期 `MediaException: not a PCM WAV` 与游戏自身 `NullPointerException`（被捕获） | 部分可用：未跑完整圈/冲线/名次结算/存档 | B + `netfail.so`：`--size 240x320 --frames 4200`（2854 帧/68.8 s/41.5 fps），计划 down→fire→hold up→hold right；见 [都市赛车6](2026-10-17-download-corpus.md#2026-10-21-更新都市赛车6-进入实际比赛) |
+
+> **家园6（jar-17..jar-24）补充说明**：触摸不受支持这一点是在 **N73 版（jar-24）** 上用
+> javap 证实的（唯一游戏 Canvas 类 `t` 的三个指针方法都是 `0: return`），其余 7 个变体
+> 是同一款游戏的其它分辨率，**未逐个 javap**；因此「touch: unsupported」目前只对 jar-24
+> 是确证，对 jar-17..jar-23 是合理推断。存档/读档流程只在 jar-24 上实跑过。
 
 ## 外部限制：模拟器解决不了的部分
 
@@ -147,6 +152,20 @@ python3 .local-tools/debug-runs/corpus-round20-20261021/drive.py \
   （**该回归有约 1/4 的偶发失败率**，判定通过要看截图哈希而不是看退出码）。
 - **Android 受控网络**：503 → 5 个 `GameComm` POST（`xy.liujin.cn`×1、`xy.ljsy.net`×2、
   `117.135.140.227`×2，body 48 B）后弹网络错误页；200 空 body → 2 个 POST 且**无**错误页。
+- **Android 中文输入（带核心修复的 APK，第 5 轮）**：APK SHA-256
+  `a10061b9b2461ba0236785615baa830d7894fb0f35e10228242d3c9fcc8112c5`（含 commit
+  `3d5b551` 的 UC 崩溃修复），在 API 26 模拟器上走完
+  库 → 网络错误页 → 长按返回 → 游客注册 → 接受 → 游戏账号 → `input text nihao` →
+  空格提交 → 收键盘 → MENU 软键，最终表单显示**「游戏账号: 你好」**
+  （`android-fix-20261022/10-after-menu.png` `7577f4cbb298bd…`，`read_image` 目视确认）。
+  同一轮里 503 → 5 个 POST、200 空 body → 2 个 POST 且无错误页，与前几轮一致。
+  **新坑**：`tools/build_android_apk.sh` 在 `$ROOT/build/android/debug.keystore`
+  缺失时会现场生成新密钥，直接覆盖安装会报
+  `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，须把主仓的 keystore 复制过去重新签名。
+- **家园6 存档/读档（jar-24，N73 240x320）**：`F2` → 关闭游戏 → 存盘 → 退出后用**同一
+  `--rms-dir`** 重启 → 继续游戏，村庄**完整恢复**（`runD/R09.png` `582e7d4c0c07`，
+  人口 20 / 6 人睡眠）；存档文件 `Townsmen62.rms` 966 B（950 B 记录，头 `NJRS`）。
+  同时用 javap 证实该版**不注册任何指针处理**（触摸恒为无操作）。
 - **原 JAR 与用户存档**：本轮涉及的所有原 JAR 运行前后 SHA-256 一致；未清空任何用户 RMS。
 
 ## 复现自检清单
