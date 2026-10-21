@@ -2041,8 +2041,24 @@ NJFN(m3g_animate)
 NJFN(m3g_xable_setTransform)
 {
     float *d = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
-    float *s = mat_of(vm, NJ_ARG_REF(args, 0), NJ_C_XFORM, "_nj_m");
-    if (d && s) {
+    nj_ref xf = NJ_ARG_REF(args, 0);
+    float *s = mat_of(vm, xf, NJ_C_XFORM, "_nj_m");
+
+    if (!d) {
+        return NJ_OK;
+    }
+    if (!xf) {
+        /*
+         * setTransform(null) resets the node to the identity, which is what
+         * the JSR says and what a renderer uses to undo a temporary
+         * placement: The Run resets its track nodes this way before every
+         * World render.  Ignoring the null left the previous placement in
+         * place, so the race world stayed where a previous frame had moved
+         * it - far outside the camera - and the screen showed only the
+         * background clear.
+         */
+        mat_identity(d);
+    } else if (s) {
         memcpy(d, s, sizeof(float) * NJ_MF);
     }
     return NJ_OK;
@@ -2326,58 +2342,61 @@ NJFN(m3g_getTransformTo)
 {
     nj_ref target = NJ_ARG_REF(args, 0);
     float *out = mat_of(vm, NJ_ARG_REF(args, 1), NJ_C_XFORM, "_nj_m");
-    nj_ref chain_a[64], chain_b[64];
-    int na = 0, nb = 0, i, common;
+    nj_field *pf;
+    float wa[NJ_MF], wb[NJ_MF];
+    nj_ref a = NJ_THIS(args), b = target, ra = 0, rb = 0;
+    int depth;
 
     if (!out) {
         return NJ_OK;
     }
-    {
-        nj_ref p = NJ_THIS(args);
-        while (p && na < 64) {
-            chain_a[na++] = p;
-            p = nj_rget(vm, p, nj_field_lookup(vm, NJ_C_NODE, "_nj_parent",
-                                               "L" NJ_C_NODE ";", 0));
-        }
+    if (!target) {
+        ret->i = 0;              /* a title that passes null gets a false */
+        return NJ_OK;
     }
-    {
-        nj_ref p = target;
-        while (p && nb < 64) {
-            chain_b[nb++] = p;
-            p = nj_rget(vm, p, nj_field_lookup(vm, NJ_C_NODE, "_nj_parent",
-                                               "L" NJ_C_NODE ";", 0));
+    pf = nj_field_lookup(vm, NJ_C_NODE, "_nj_parent", "L" NJ_C_NODE ";", 0);
+    a = NJ_THIS(args);
+    b = target;
+    mat_identity(wa);
+    for (depth = 0; a && depth < 64; depth++) {
+        float *m = mat_of(vm, a, NJ_C_XABLE, "_nj_m");
+        if (m) {
+            float next[NJ_MF];
+            /* A parent's matrix multiplies on the left: world =
+               parent * ... * own, as M3G composes node transforms. */
+            mat_mul(m, wa, next);
+            memcpy(wa, next, sizeof(wa));
         }
+        ra = a;
+        a = nj_rget(vm, a, pf);
     }
-    common = -1;
-    for (i = 0; i < na && common < 0; i++) {
-        int j;
-        for (j = 0; j < nb; j++) {
-            if (chain_a[i] == chain_b[j]) {
-                common = i;
-                break;
-            }
+    mat_identity(wb);
+    for (depth = 0; b && depth < 64; depth++) {
+        float *m = mat_of(vm, b, NJ_C_XABLE, "_nj_m");
+        if (m) {
+            float next[NJ_MF];
+            mat_mul(m, wb, next);
+            memcpy(wb, next, sizeof(wb));
         }
+        rb = b;
+        b = nj_rget(vm, b, pf);
     }
-    if (common < 0) {
-        ret->i = 0;
+    if (!ra || ra != rb) {
+        ret->i = 0;              /* separate scene graphs: no answer */
         return NJ_OK;
     }
     /*
-     * Compose from this node down to the common ancestor, then from the
-     * target up to it inverted.  Only the common case - one node being an
-     * ancestor of the other - is needed by the titles that call this.
+     * This node's world matrix and the other node's world matrix give the
+     * answer outright: a point goes from this node's space to the world with
+     * wa, and from the world into the other node's space with the inverse of
+     * wb.  Composing the two chains up to a common ancestor and inverting
+     * only the target side is the same thing, and this form also covers
+     * siblings and cousins, which the ancestor-only case missed - the racing
+     * title asks for the transform between a wheel and the car body, and the
+     * old code returned a matrix missing the body's part of the chain.
      */
-    mat_identity(out);
-    for (i = 0; i < common; i++) {
-        float *m = mat_of(vm, chain_a[i], NJ_C_XABLE, "_nj_m");
-        float inv[NJ_MF];
-        if (!m) {
-            continue;
-        }
-        memcpy(inv, m, sizeof(inv));
-        mat_invert(inv);
-        mat_mul(out, inv, out);
-    }
+    mat_invert(wb);
+    mat_mul(wb, wa, out);
     ret->i = 1;
     return NJ_OK;
 }
@@ -9763,6 +9782,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                     nj_s4 snlights, const float *model_in, m3g_jr *out)
 {
     nj_ref target, g, cam, arr, d, mat = 0;
+    int world_cam = 0;
     const char *cn;
     nj_s4 nverts, icount = 0, ifirst = 0;
     const nj_s4 *idx = NULL, *lens = NULL;
@@ -9868,16 +9888,26 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     id[0] = id[5] = id[10] = id[15] = 1.0f;
     cam = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_camera",
                                     "L" NJ_C_CAMERA ";"));
-    if (!cam && world && nj_ref_class_name(world) &&
+    if (world && nj_ref_class_name(world) &&
         strcmp(nj_ref_class_name(world), NJ_C_WORLD) == 0) {
-        /* World.setActiveCamera() is the other way a title names its camera,
-           and the corpus uses it: without this fallback a World rendered
-           through the Graphics3D's own (unset) camera draws nothing. */
-        cam = nj_rget(vm, world, m3g_fof(vm, NJ_C_WORLD, "_nj_cam",
-                                         "L" NJ_C_CAMERA ";"));
+        /*
+         * World.setActiveCamera() names the camera for render(World), and it
+         * wins over one assigned with setCamera(): a title that has both (The
+         * Run does) sets the camera node's transform every frame and renders
+         * the World, and reading setCamera's older Transform instead left the
+         * camera where the last menu put it.  The World's camera is placed by
+         * its node chain, so setCamera's matrix must not be used for it.
+         */
+        nj_ref wc = nj_rget(vm, world, m3g_fof(vm, NJ_C_WORLD, "_nj_cam",
+                                               "L" NJ_C_CAMERA ";"));
+        if (wc) {
+            cam = wc;
+            world_cam = 1;
+        }
     }
 
-    arr = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_cam_m", "[F"));
+    arr = world_cam ? NULL
+                    : nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_cam_m", "[F"));
     if ((!arr || nj_array_length(arr) < 16) && cam) {
         float cw[16];
         int gotw = 0;

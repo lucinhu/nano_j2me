@@ -60,6 +60,21 @@ static void call(nj_vm *vm, nj_ref o, const char *cls, const char *name,
     }
 }
 
+static float xf_elem(nj_vm *vm, nj_ref xf, int i)
+{
+    nj_ref out = nj_array_new(vm, "F", 16);
+    nj_value a[1];
+    float v = -12345.0f;
+
+    if (!out || !xf) {
+        return v;
+    }
+    a[0].r = out;
+    call(vm, xf, CLS("Transform"), "get", "([F)V", a, NULL);
+    v = ((float *)out->u.bytes)[i];
+    return v;
+}
+
 /* Exercise camera clipping through the same mutable Image / Graphics3D API
  * as the scene rendering tests. Positions use half-unit shorts so z=-0.5 is
  * represented exactly, and rejected geometry must leave BOTH buffers alone. */
@@ -387,6 +402,82 @@ int main(void)
             call(vm, g, CLS("Object3D"), "find", "(I)L" CLS("Object3D") ";",
                  a, &n);
             check(n.r == child, "find(id) reaches a child");
+        }
+    }
+
+    printf("== setTransform(null) restores the identity ==\n");
+    {
+        nj_ref g = make(vm, CLS("Group"));
+        nj_ref t = make(vm, CLS("Transform"));
+        nj_field *mf = nj_field_lookup(vm, "javax/microedition/m3g/Transformable",
+                                       "_nj_m", "[F", 0);
+        nj_value a[4];
+
+        check(g && t && mf, "a Group, a Transform and its matrix");
+        if (g && t && mf) {
+            float *m;
+
+            a[0].f = 5.0f; a[1].f = 6.0f; a[2].f = 7.0f;
+            call(vm, t, CLS("Transform"), "postTranslate", "(FFF)V", a, NULL);
+            a[0].r = t;
+            call(vm, g, CLS("Node"), "setTransform",
+                 "(L" CLS("Transform") ";)V", a, NULL);
+            m = nj_rget(vm, g, mf) ? (float *)nj_array_data(nj_rget(vm, g, mf)) : NULL;
+            check(m && m[3] == 5.0f, "a Transform is copied into the node");
+
+            a[0].r = 0;
+            call(vm, g, CLS("Node"), "setTransform",
+                 "(L" CLS("Transform") ";)V", a, NULL);
+            m = nj_rget(vm, g, mf) ? (float *)nj_array_data(nj_rget(vm, g, mf)) : NULL;
+            check(m && m[0] == 1.0f && m[3] == 0.0f && m[5] == 1.0f &&
+                  m[7] == 0.0f && m[15] == 1.0f,
+                  "setTransform(null) puts the identity back");
+        }
+    }
+
+    printf("== getTransformTo walks both nodes ==\n");
+    {
+        nj_ref root = make(vm, CLS("Group"));
+        nj_ref a = make(vm, CLS("Group")), b = make(vm, CLS("Group"));
+        nj_ref xf = make(vm, CLS("Transform"));
+        nj_ref rel = make(vm, CLS("Group"));
+        nj_value av[4], n;
+
+        check(root && a && b && xf, "a scene graph and a Transform");
+        if (root && a && b && xf) {
+            av[0].r = a;
+            call(vm, root, CLS("Group"), "addChild", "(L" CLS("Node") ";)V", av, NULL);
+            av[0].r = b;
+            call(vm, root, CLS("Group"), "addChild", "(L" CLS("Node") ";)V", av, NULL);
+            av[0].f = 1.0f; av[1].f = 0.0f; av[2].f = 0.0f;
+            call(vm, a, CLS("Node"), "setTranslation", "(FFF)V", av, NULL);
+            av[0].f = 2.0f;
+            call(vm, b, CLS("Node"), "setTranslation", "(FFF)V", av, NULL);
+
+            av[0].r = b;
+            av[1].r = xf;
+            call(vm, a, CLS("Node"), "getTransformTo",
+                 "(L" CLS("Node") ";L" CLS("Transform") ";)Z", av, &n);
+            check(n.i == 1, "siblings in one graph answer true");
+            check(fabsf(xf_elem(vm, xf, 3) + 1.0f) < 1e-4f,
+                  "a's origin is at -1 in b's space (the body's part counts)");
+            check(fabsf(xf_elem(vm, xf, 7)) < 1e-4f &&
+                  fabsf(xf_elem(vm, xf, 11)) < 1e-4f,
+                  "the other axes are untouched");
+
+            /* Ancestor case: root -> a is a's translation inverted. */
+            av[0].r = a;
+            call(vm, root, CLS("Node"), "getTransformTo",
+                 "(L" CLS("Node") ";L" CLS("Transform") ";)Z", av, &n);
+            check(n.i == 1 && fabsf(xf_elem(vm, xf, 3) + 1.0f) < 1e-4f,
+                  "an ancestor query still lands on -1");
+
+            /* A node in another graph has no answer. */
+            av[0].r = rel;
+            av[1].r = xf;
+            call(vm, a, CLS("Node"), "getTransformTo",
+                 "(L" CLS("Node") ";L" CLS("Transform") ";)Z", av, &n);
+            check(n.i == 0, "nodes from different graphs answer false");
         }
     }
 
@@ -1679,11 +1770,32 @@ int main(void)
                  "(Ljava/lang/Object;)V", a, &r);
             a[0].i = 0; a[1].i = 0; a[2].i = 16; a[3].i = 16;
             call(vm, g2, CLS("Graphics3D"), "setViewport", "(IIII)V", a, &r);
-            /* No setCamera() on this one: the World carries the camera. */
+            /* The World carries the camera, and its active camera must win
+               over a setCamera() Transform: The Run sets both and re-places
+               the camera node every frame, so reading the stale Transform
+               from the last menu left the race world outside the view. */
             a[0].r = cam; r.r = 0;
             call(vm, world, CLS("World"), "setActiveCamera",
                  "(L" CLS("Camera") ";)V", a, &r);
+            {
+                nj_ref far_xf = make(vm, CLS("Transform"));
+                nj_value fa[3];
+                fa[0].f = 1000.0f; fa[1].f = 0.0f; fa[2].f = 0.0f;
+                call(vm, far_xf, CLS("Transform"), "setIdentity", "()V", NULL, NULL);
+                call(vm, far_xf, CLS("Transform"), "postTranslate",
+                     "(FFF)V", fa, NULL);
+                a[0].r = cam; a[1].r = far_xf; r.r = 0;
+                call(vm, g2, CLS("Graphics3D"), "setCamera",
+                     "(L" CLS("Camera") ";L" CLS("Transform") ";)V", a, &r);
+            }
 
+            /* Start from a blank target: the picture this render writes must
+               be its own, not pixels left by the render above. */
+            {
+                nj_ref pix = nj_rget(vm, img, nj_field_lookup(vm,
+                    "javax/microedition/lcdui/Image", "imgPixels", "[I", 0));
+                if (pix) { memset(nj_array_data(pix), 0, 16u * 16u * sizeof(nj_u4)); }
+            }
             a[0].r = world; r.r = 0;
             call(vm, g2, CLS("Graphics3D"), "render", "(L" CLS("World") ";)V",
                  a, &r);
@@ -1697,7 +1809,7 @@ int main(void)
                 px = (const nj_s4 *)nj_array_data(one);
                 for (k = 0; px && k < 256; k++) { if (px[k] != 0) { lit2++; } }
             }
-            check(lit2 > 0, "and a World's own active camera draws it too");
+            check(lit2 > 0, "a World's active camera draws it even after a stale setCamera()");
         }
         /* Near red and far green cover the same pixels. Turning off either
            the first draw's depth write or the second draw's depth test must
