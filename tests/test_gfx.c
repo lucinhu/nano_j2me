@@ -1071,6 +1071,56 @@ static void test_images(tctx *t)
         ts_free(&s16);
     }
 
+    /* The ARGB-to-ARGB shortcut blends in place as well, so it has to land on
+     * exactly the value the general nj_gfx_blend_pixel() path writes for any
+     * source alpha and any destination pixel: compare the same matrix. */
+    {
+        static const nj_u4 srcs[] = {
+            0x00000000u, 0xFF000000u, 0xFFFFFFFFu, 0xFF3366CCu,
+            0x80204060u, 0x7F123456u, 0xFE00FF00u, 0x01FF8000u,
+            /* The next eight sit on the rounding boundary: their channel sums
+             * are 128 modulo 255, where 127 and 126 round differently. */
+            0x80010000u, 0x80000100u, 0x80000001u, 0x7F000100u,
+            0x01000100u, 0x40008000u, 0xFE000100u, 0x20004000u
+        };
+        static const int alphas[] = {
+            0, 1, 64, 127, 128, 200, 254, 255,
+            128, 128, 128, 127, 1, 64, 254, 32
+        };
+        nj_u4 ibuf[16];
+        nj_image im2;
+        int k, row;
+
+        im2.width = 16;
+        im2.height = 1;
+        im2.format = NJ_PIXFMT_ARGB8888;
+        im2.pixels = ibuf;
+        im2.has_alpha = 1;
+        for (k = 0; k < 16; k++) {
+            ibuf[k] = (srcs[k] & 0x00FFFFFFu) | ((nj_u4)alphas[k] << 24);
+        }
+        for (row = 0; row < 2; row++) {
+            nj_u4 back = row == 0 ? C_BLACK : 0xFF3366CCu;
+            tsurf ref, wide;
+            nj_gfx gw;
+
+            ts_init(&ref, 16, 1, NJ_PIXFMT_ARGB8888, 0, back);
+            ts_init(&wide, 16, 1, NJ_PIXFMT_ARGB8888, 0, back);
+            nj_gfx_init(&gw, &wide.s);
+            nj_gfx_draw_image_rop(&gw, &im2, 0, 0, 0, 0, 16, 1,
+                                  NJ_ROP_PAINT, NJ_TRANS_NONE);
+            for (k = 0; k < 16; k++) {
+                nj_gfx_blend_pixel(&ref.s, k, 0, ibuf[k], 255);
+            }
+            for (k = 0; k < 16; k++) {
+                CHECK(t, nj_surface_get(&wide.s, k, 0) ==
+                             nj_surface_get(&ref.s, k, 0));
+            }
+            ts_free(&ref);
+            ts_free(&wide);
+        }
+    }
+
     /* Translation applies to image blits too. */
     ts_clear(&ts, C_WHITE);
     nj_gfx_translate(&g, 3, 4);
