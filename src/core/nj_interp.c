@@ -633,10 +633,14 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
      *
      *     BENCH sum=-136042548 s=5
      *
-     * which is the only instrument left that can tell a correct conversion
-     * from a subtle one.  It used to be the bytecode count, and that stopped
-     * working when bipush+iand became a superinstruction: a fused pair runs
-     * two instructions and counts one, so the total is 105717067 by design.
+     * which is the only cheap instrument that can tell a correct conversion
+     * from a subtle one.  The bytecode total is NOT such an instrument: a
+     * fused pair runs two instructions and counts one, so the number moves
+     * with every fusion - 105,717,067 with just the old const+iand case,
+     * 89,716,784 with the four families below (raw stream: 112,117,067).  For
+     * the same reason a wrong fused branch can leave `BENCH sum` intact; the
+     * oracle for the fused paths is tools/check_superinstr_digest.sh, which
+     * compares per-category hashes with the same code on a desktop JVM.
      *
      * The invoke family (0xb6-0xb9) sits behind one label because it always
      * shared one case body - which is exactly why it was the last thing

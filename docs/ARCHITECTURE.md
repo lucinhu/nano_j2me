@@ -410,6 +410,16 @@ hottest path in the program to serve a caller that does not exist.  The seam is
 the two call sites, and a comment there names them as such - which is worth more
 than a function that forwards its arguments.
 
+> **Revisited on request (2026-10-22).**  The project owner asked for the
+> structure a JIT would plug into, so both were built behind `NJ_ENABLE_ENGINE`
+> (default 0, one pointer in `nj_vm` when on) rather than left open:
+> `nj_exec()` now dispatches through `vm->engine` and the interpreter loop is
+> `nj_interp_run()`.  The reasoning above is why the default is off and why the
+> switch costs nothing when it is - the indirection exists only in the build
+> that has an engine to dispatch to.  The contract a real JIT must implement is
+> `docs/JIT.md`; the null engine and `tests/test_engine.c` are the proof that
+> the plumbing is inert.
+
 **Also refused: writing any part of a JIT.**  Not one line.  A half-built JIT is
 a second execution engine to keep correct, and this project's value is that its
 one engine is right.
