@@ -1023,6 +1023,51 @@ static void test_images(tctx *t)
         nj_gfx_draw_image_rop(&g16, &aimg, 0, 0, 0, 0, 4, 1, NJ_ROP_SET,
                               NJ_TRANS_NONE);
         PX(t, &s16, 2, 0, C_BLACK, "ARGB8888 onto RGB565: ROP_SET writes it too");
+
+        /* The per-pixel shortcut for that pair has to land on exactly the same
+         * value as the general nj_gfx_blend_pixel() path it replaces, for any
+         * source alpha and any destination pixel: compare a small matrix of
+         * colours and alphas against that reference. */
+        {
+            static const nj_u4 srcs[] = {
+                0x00000000u, 0xFF000000u, 0xFFFFFFFFu, 0xFF3366CCu,
+                0x80204060u, 0x7F123456u, 0xFE00FF00u, 0x01FF8000u
+            };
+            static const int alphas[] = { 0, 1, 64, 127, 128, 200, 254, 255 };
+            nj_u4 ibuf[8];
+            nj_image im2;
+            int k, row;
+
+            im2.width = 8;
+            im2.height = 1;
+            im2.format = NJ_PIXFMT_ARGB8888;
+            im2.pixels = ibuf;
+            im2.has_alpha = 1;
+            for (k = 0; k < 8; k++) {
+                ibuf[k] = (srcs[k] & 0x00FFFFFFu) |
+                          ((nj_u4)alphas[k] << 24);
+            }
+            for (row = 0; row < 2; row++) {
+                nj_u4 back = row == 0 ? C_BLACK : 0xFF3366CCu;
+                tsurf ref, wide;
+                nj_gfx gw;
+
+                ts_init(&ref, 8, 1, NJ_PIXFMT_RGB565, 0, back);
+                ts_init(&wide, 8, 1, NJ_PIXFMT_RGB565, 0, back);
+                nj_gfx_init(&gw, &wide.s);
+                nj_gfx_draw_image_rop(&gw, &im2, 0, 0, 0, 0, 8, 1,
+                                      NJ_ROP_PAINT, NJ_TRANS_NONE);
+                for (k = 0; k < 8; k++) {
+                    nj_gfx_blend_pixel(&ref.s, k, 0, ibuf[k], 255);
+                }
+                for (k = 0; k < 8; k++) {
+                    CHECK(t, nj_surface_get(&wide.s, k, 0) ==
+                                 nj_surface_get(&ref.s, k, 0));
+                }
+                ts_free(&ref);
+                ts_free(&wide);
+            }
+        }
         ts_free(&s16);
     }
 

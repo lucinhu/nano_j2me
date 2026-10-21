@@ -1762,6 +1762,45 @@ static void nj_trans_inverse(int transform, int i, int j, int sw, int sh,
  * transformed source, indexed by destination-local coordinates; a destination
  * pixel is written only where the mask pixel is not fully transparent.
  */
+/*
+ * One translucent ARGB8888 source pixel onto an RGB565 destination, with the
+ * exact arithmetic of nj_gfx_blend_pixel() at full source weight: read the
+ * destination, expand its five/six/five bits the way nj_surface_get() does,
+ * interpolate, and pack again the way nj_surface_format_color() does.  The
+ * caller supplies a row pointer it already clipped, so this does no bounds
+ * checks and no format switches.
+ *
+ * Doom 3 paints a screenful of a translucent ARGB image every frame - its
+ * 900-frame profile had 14.9 M nj_gfx_blend_pixel() calls, all from that one
+ * blit - and each of them went through three nested calls and a handle on the
+ * surface to rediscover the same format.
+ */
+static void nj_blend565(nj_u1 *dp, nj_u4 argb)
+{
+    nj_u2 v;
+    nj_u4 a, sr, sg, sb, dr, dg, db, nr, ng, nb;
+
+    memcpy(&v, dp, sizeof v);
+    {
+        nj_u4 r5 = (v >> 11) & 0x1Fu;
+        nj_u4 g6 = (v >> 5) & 0x3Fu;
+        nj_u4 b5 = v & 0x1Fu;
+
+        dr = (r5 << 3) | (r5 >> 2);
+        dg = (g6 << 2) | (g6 >> 4);
+        db = (b5 << 3) | (b5 >> 2);
+    }
+    a  = (argb >> 24) & 0xFFu;
+    sr = (argb >> 16) & 0xFFu;
+    sg = (argb >> 8) & 0xFFu;
+    sb = argb & 0xFFu;
+    nr = (sr * a + dr * (255u - a) + 127u) / 255u;
+    ng = (sg * a + dg * (255u - a) + 127u) / 255u;
+    nb = (sb * a + db * (255u - a) + 127u) / 255u;
+    v = (nj_u2)(((nr >> 3) << 11) | ((ng >> 2) << 5) | (nb >> 3));
+    memcpy(dp, &v, sizeof v);
+}
+
 static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                            int src_format, const nj_u1 *mask,
                            int mask_stride, int sx, int sy, int sw, int sh,
@@ -1917,6 +1956,42 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
         int n = (int)(cx1 - cx0 + 1);
         int i;
         nj_u1 *dst = (nj_u1 *)g->surf->pixels;
+        /*
+         * RGB565 is what both desktop ports present, and it is the format the
+         * branch above was written for: walk the rows with a two-byte
+         * destination pointer and inline the blend instead of calling
+         * nj_gfx_blend_pixel() per translucent pixel.  An opaque pixel and a
+         * PAINT via NJ_ROP_SET still take the same packed write as the
+         * general loop, so the pictures do not move.
+         */
+        if (g->surf->format == NJ_PIXFMT_RGB565) {
+            for (Y = cy0; Y <= cy1; Y++) {
+                int j = (int)(Y - Y0);
+                const nj_u1 *sp = src
+                    + (nj_s8)(sy + j) * src_stride_bytes
+                    + (nj_s8)(sx + first) * src_bpp;
+                nj_u1 *dp = dst + (nj_s8)Y * g->surf->stride
+                          + (nj_s8)cx0 * bpp;
+
+                for (i = 0; i < n; i++) {
+                    nj_u4 c = nj_word_get(sp, 0);
+                    int sa = (int)((c >> 24) & 0xFFu);
+
+                    if (rop == NJ_ROP_SET || sa >= 255) {
+                        nj_u2 v = (nj_u2)((((c >> 19) & 0x1Fu) << 11) |
+                                          (((c >> 10) & 0x3Fu) << 5) |
+                                          ((c >> 3) & 0x1Fu));
+
+                        memcpy(dp, &v, sizeof v);
+                    } else if (sa > 0) {
+                        nj_blend565(dp, c);
+                    }
+                    sp += src_bpp;
+                    dp += bpp;
+                }
+            }
+            return;
+        }
 
         for (Y = cy0; Y <= cy1; Y++) {
             int j = (int)(Y - Y0);
