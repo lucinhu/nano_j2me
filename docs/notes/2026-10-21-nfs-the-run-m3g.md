@@ -207,7 +207,38 @@ python3 drive.py --jar "/home/lucinhu/Downloads/jar/极品飞车16：亡命狂�
 - 本轮的“画了很多三角形”的窗口（`drawn=226..280`，`vp=0,80 240x240`）出现在
   过场/装载相位，不代表比赛画面；两者不能混为一谈。
 
-## 第 30/31/32/33 轮边界
+## 第 34 轮：验证已修复——重建二进制后比赛 3D 正常渲染
+
+**结论：本缺口的根因是相机语义，不是合成或清屏时序；修复已在 `1e47d9a`
+（`fix(m3g): render a World through its own camera and honour node transforms`，
+说明见 `docs/notes/2026-10-21-m3g-camera-semantics.md`）落地。前几轮看到的“纯橄榄色”
+是旧的离树副本/旧二进制造成的假象——那些副本抄自修复前的代码，仍在用
+`Graphics3D.setCamera()` 的菜单遗留变换当视图，所以比赛帧三角形几乎全在视锥外。**
+
+- 用当前 HEAD（`a94995e` 加 `cmake --build build`）重建默认二进制
+  `/home/lucinhu/workspace/c/nano_j2me/build/nj2me`
+  （SHA-256 `e8f88a2b761067ab3921de4f49d1d42a9ac6039c4694c10e502eca8a4a6856fe`），
+  以 `--port sdl2 --size 240x320 --fps 30 --heap 16` 实跑原版
+  `/home/lucinhu/Downloads/jar/极品飞车16：亡命狂飙.jar`（SHA-256 运行前后
+  `92c5f29e…` 不变）：进入比赛后画面正常——隧道内壁、路面、前车与玩家车（橙色
+  Mustang）、赛道标线与里程牌全部渲染，HUD（进度 4%、P3 433M / P2 417M / P1
+  412M、JACK、37 MPH、小地图）同时刷新：
+  `.local-tools/debug-runs/nfs-cam-20261022/run4/02-race-2.png`
+  （960×1280，SHA-256 `ce0b1d51d505a48cbeb3fa094cb91ff3285ce5bc3d5bfa79551d16f5a4f20bfd`）；
+  同场另两帧 `01-race.png`（`b95bc2783e11e71a…`）、`03-race-3.png`
+  （`5c8389b3edd950c9…`）显示车辆在隧道内前进、3D 视角随车移动。
+- 同一 HEAD 的 `git archive` 离树副本（只加 `NJ_CAM_SRC`/`NJ_CW` 日志、无逻辑改动）
+  实跑也一致：`NJCAMS frame=… worldcam=1 world=1 cam=…/Camera wc=…/Camera arr=0`
+  → 现在走的是 `World.setActiveCamera()` 节点链（`cam_walk`），相机世界坐标每帧
+  随车移动（`NJCWT frame=2167…2171 chainT=133.02…133.23,0.400,5.45…5.57`），
+  不再是旧的静态 setCamera 矩阵。其比赛截图
+  `.local-tools/debug-runs/nfs-cam-20261022/run3/02-race.png`（SHA-256
+  `58364136e3d21c5e…`）同样有完整 3D 世界。
+- 因此前文的“第 30/31/32/33 轮”探针数据只对**旧副本**成立，已全部作废；
+  本缺口按“已修复 + 截图回归”收口。仍未验证：完整一圈/冲线、存档、Android
+  真机——这些属于后续语料回归范围，不再是本缺口的一部分。
+
+## 第 30/31/32/33 轮边界（历史，已被第 34 轮取代）
 
 - 上述转储都在离树诊断构建里完成（`git archive HEAD` 抄出后只加日志与探针），
   主仓 `src/` 未改；修正尚未实现。
