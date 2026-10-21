@@ -250,6 +250,13 @@ counters, never on a loaded value - and so did the whole ctest suite; only a
 targeted digest test over branch/store/const/wide categories against a desktop
 JVM caught it.  The macros now use `njlb_*` names and the digest test is the
 reason to keep one around: `BENCH sum` proves the fixture, not the interpreter.
+`tools/check_superinstr_digest.sh` (ctest `check_superinstr_digest`) compiles a
+MIDlet that exercises each fused family, hashes every result into six
+per-category digests and requires them to equal the same code on the desktop
+JVM - values against a JVM, not counts against a constant, so it stays valid
+with the fusions off or extended.  Reintroducing the shadowing bug in a scratch
+worktree makes it fail (exit 1, three of seven digests differ) while the
+benchmark still prints the expected `BENCH sum`.
 
 ### RAM and switches
 
@@ -263,7 +270,8 @@ frame and are flushed in `SAVE()`.  `tools/check_no_statics.sh` passes.
     NJ_THREADED_DISPATCH      0   replicated interpreter body; no RAM
     NJ_ENABLE_ENGINE          0   pluggable engine/JIT hook; one pointer in nj_vm
 
-Verification on the frozen tree: 89/89 ctest, and the 8-title real-game set
+Verification on the frozen tree: 90/90 ctest (89 before the digest test landed),
+and the 8-title real-game set
 (pixels, stats, exceptions) reports 7 titles pixel-identical, 1 unstable by its
 own same-binary control, 0 failures; bytecode totals in game stats drop by the
 expected 5-15% and are INFO-only there.
