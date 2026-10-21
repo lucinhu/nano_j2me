@@ -2,7 +2,7 @@
 
 The runtime has exactly one place where Java bytecode execution begins.
 `nj_exec()` in `src/core/nj_engine.c` is that place: it either forwards to the
-portable interpreter (`nj_interp_run()` at `src/core/nj_interp.c:307`) or to an
+portable interpreter (`nj_interp_run()` at `src/core/nj_interp.c:466`) or to an
 installed *execution engine*.  An engine is any object that can execute a
 thread's Java frames and return the same observable effects as the interpreter.
 
@@ -39,8 +39,8 @@ Everything that runs Java enters through `nj_exec(vm, th, stop_depth)`:
         nj_vm_call / nj_vm_call_static / nj_vm_start_app
                   │
                   ▼
-   vm_invoke()  ── bridge loop ──────────────┐   src/core/nj_vm.c:1200-1512
-   nj_scheduler_step() ── scheduler ─────────┤   src/core/nj_thread.c:495-565
+   vm_invoke()  ── bridge loop ──────────────┐   src/core/nj_vm.c:1198-1505
+   nj_scheduler_step() ── scheduler ─────────┤   src/core/nj_thread.c:450-612
                   │                          │
                   ▼                          │
         nj_exec(vm, th, stop_depth)  ◄───────┘   src/core/nj_engine.c:93-103
@@ -76,7 +76,7 @@ an implementation detail of the portable path.
 
 `NJ_ENABLE_ENGINE` is defined in `include/nj2me/nj_config.h:450-464` and wired
 into the build at `CMakeLists.txt:107` (cache option), `:121` (source list) and
-`:205-213` (compile definition).  The default is `0`.
+`:207-213` (compile definition list).  The default is `0`.
 
 | | `NJ_ENABLE_ENGINE=0` (default) | `NJ_ENABLE_ENGINE=1` |
 |---|---|---|
@@ -112,7 +112,7 @@ ones; each is enforced today by the location cited.
 `int`, `float` or reference in its low 32 bits (`.i`/`.f`/`.r`, union members of
 the same 4 bytes) and a `long`/`double` in two consecutive 8-byte slots: payload
 in the **lower** slot, with the upper slot **always zero** (`PUSH_W` macro,
-`src/core/nj_interp.c:433`; `wide` opcode forms zero the high half the same
+`src/core/nj_interp.c:605`; `wide` opcode forms zero the high half the same
 way).  The GC scans operand stacks untyped and conservatively, so a non-zero
 high half would be a false reference candidate; never use it as scratch space.
 
@@ -147,7 +147,7 @@ caller with `total` argument slots at `sp` establishes:
 * `th->top = stack + max_stack`.
 
 `nj_frame_push()` is also the overflow gate: it throws `StackOverflowError`
-when `NJ_MAX_FRAMES` (`include/nj2me/nj_config.h:290-292`) would be exceeded or
+when `NJ_MAX_FRAMES` (`include/nj2me/nj_config.h:291-293`) would be exceeded or
 when the frame would not fit below `th->stack_end`.  An engine must use it (or
 reproduce it exactly) for every Java callee it pushes; scheduler and bridge
 code depend on `th->top` and `th->nframes` being truthful.
@@ -155,10 +155,15 @@ code depend on `th->top` and `th->nframes` being truthful.
 ### 3.3 `pc`/`sp` must be saved before anything can observe them
 
 The interpreter keeps `pc` and `sp` in C locals for speed and writes them back
-with `SAVE()` (`src/core/nj_interp.c:408`); `RELOAD()`
-(`src/core/nj_interp.c:409-416`) picks up a callee's state after a call returns.
+with `SAVE()` (`src/core/nj_interp.c:579`); `RELOAD()`
+(`src/core/nj_interp.c:580-590`) picks up a callee's state after a call returns.
 Every call that can run Java, allocate (and therefore GC), block, or be seen
-from C does `SAVE()` first.  The GC root scan
+from C does `SAVE()` first.  `SAVE()` also folds the batched instruction
+counter back into `vm->insns` (`INSN_FLUSH()`, `src/core/nj_interp.c:578`):
+the count is accumulated in a local (`insns_`, `src/core/nj_interp.c:478`)
+and written back on every save/return, so a caller always observes an exact
+count between `nj_exec()` calls, but it must never be read from inside the
+dispatch loop.  The GC root scan
 (`src/core/nj_heap.c:639-694`) is the strict reason:
 
 ```
@@ -177,7 +182,7 @@ reference the engine wants to keep across a safepoint must be written into its
 
 ### 3.4 Invocation and return
 
-`interp_invoke()` (`src/core/nj_interp.c:194-281`) is the call ABI:
+`interp_invoke()` (`src/core/nj_interp.c:194-263`) is the call ABI:
 
 * Java callee (`m->code != NULL`): push the frame with `nj_frame_push()` and
   return; the caller reloads and execution continues in the callee at `pc = 0`.
@@ -188,32 +193,32 @@ reference the engine wants to keep across a safepoint must be written into its
   `args = argbase + (static ? 0 : 1)` — the slot after `this` for instance
   methods.  The native frame is popped before returning.  A native that blocks
   returns `NJ_ERR_TIMEOUT` after setting the thread's wait state; the
-  interpreter turns that into `NJ_ERR_YIELD` (`src/core/nj_interp.c:1817-1820`)
+  interpreter turns that into `NJ_ERR_YIELD` (`src/core/nj_interp.c:2029-2032`)
   so `run()` never reports `NJ_ERR_TIMEOUT`.
 
-The return path is `DO_RETURN` (`src/core/nj_interp.c:1352-1380`): remember
+The return path is `DO_RETURN` (`src/core/nj_interp.c:1574-1592`): remember
 `fr->locals` (the caller's stack rewind point), save, pop, and
 — if `nframes <= stop_depth` — store the value in `th->ret_value` and return
 `NJ_OK`; otherwise reload the caller, set `sp = rsp` and push the result (wide
 values occupy two slots with a zeroed upper half).  The void-return case
-(`src/core/nj_interp.c:1397-1421`) is separate and pushes **nothing**; using
+(`src/core/nj_interp.c:1609-1633`) is separate and pushes **nothing**; using
 `DO_RETURN` with a zero value there corrupts the caller's stack by one slot per
 constructor call.  An engine that returns from a compiled frame into an
 interpreted caller has to reproduce this exact caller-side push.
 
 ### 3.5 Quantum and yield
 
-`NJ_SCHED_QUANTUM` is 20,000 (`include/nj2me/nj_config.h:362-366`).
-`CHECK_QUANTUM` (`src/core/nj_interp.c:435-439`) decrements once per dispatched
+`NJ_SCHED_QUANTUM` is 20,000 (`include/nj2me/nj_config.h:364-366`).
+`CHECK_QUANTUM` (`src/core/nj_interp.c:607-612`) decrements once per dispatched
 instruction; at zero it saves and returns `NJ_ERR_YIELD`.  `stop_depth` is the
 frame depth at which `run()` must stop and report `NJ_OK`, even if the quantum
 has not expired.
 
 ### 3.6 Exceptions
 
-`THROW()` (`src/core/nj_interp.c:422-432`) stores the throwing `pc` in the
-frame, then jumps to `do_unwind` (`src/core/nj_interp.c:2002-2019`).  Unwinding
-calls `interp_unwind()` (`src/core/nj_interp.c:65-131`), which searches handler
+`THROW()` (`src/core/nj_interp.c:599-603`) stores the throwing `pc` in the
+frame, then jumps to `do_unwind` (`src/core/nj_interp.c:2226-2243`).  Unwinding
+calls `interp_unwind()` (`src/core/nj_interp.c:65-134`), which searches handler
 tables from the innermost frame outward, matching `start_pc <= throw_pc <
 end_pc`, with `catch_cp == 0` meaning catch-all/finally, otherwise resolving the
 catch type and testing `nj_class_is_assignable()`.  On a match it stores the
@@ -236,34 +241,34 @@ virtual/interface dispatch does one pointer comparison: if
 `e->recv_cls != recv->cls || e->ic_target == NULL`, it resolves
 (`nj_method_lookup`, with `SAVE()` before `nj_class_init_lazy` because class
 initialisation runs Java through the bridge), then writes
-`e->recv_cls`/`e->ic_target` (`src/core/nj_interp.c:1684-1747`).  When a class is
-(re)resolved, `nj_class.c:1433-1434` and `:1486-1487` clear those two fields.
+`e->recv_cls`/`e->ic_target` (`src/core/nj_interp.c:1908-1971`).  When a class is
+(re)resolved, `src/core/nj_class.c:1433-1434` and `:1486-1487` clear those two fields.
 An engine that writes the same cache must be prepared for it to be cleared and
 must not resurrect a stale target without re-checking `recv_cls == recv->cls`.
 
 Receiver validation is part of the dispatch: `nj_heap_owns_object_fast(vm, recv)`
-must hold before dereferencing `recv->cls` (`src/core/nj_interp.c:1680`),
+must hold before dereferencing `recv->cls` (`src/core/nj_interp.c:1904`),
 otherwise the interpreter throws `VerifyError`.  There is **no bytecode
 verifier** in this VM; the interpreter is the de-facto verifier, checking
 operand-stack bounds and `pc` bounds at fetch (`NJ_FETCH_OP`,
-`src/core/nj_interp.c:764-790`) and per-opcode type assumptions.  Compiled code
+`src/core/nj_interp.c:936-966`) and per-opcode type assumptions.  Compiled code
 inherits that duty for the instructions it handles.
 
 ### 3.8 Monitors
 
-`monitorenter`/`monitorexit` (`src/core/nj_interp.c:1930-1940`) call
+`monitorenter`/`monitorexit` (`src/core/nj_interp.c:2142-2151`) call
 `nj_vm_monitor_enter/exit()` (`src/core/nj_thread.c:385-406`), which record the
 object in the **current top frame's** `monitor` field.  Scheduling is
 cooperative, so there is no lock word and no preemption inside a critical
 section; `wait()`/`notify()` set a thread's wait state and are found by scanning
-the thread table (`src/core/nj_thread.c:409-440`).  Note that
+the thread table (`src/core/nj_thread.c:409-445`).  Note that
 `NJ_ACC_SYNCHRONIZED` is defined in the class-file format but is referenced
 nowhere in `src/`: synchronized *methods* are not implemented, only the bytecode
 pair.  An engine must not advertise support for them.
 
 Monitor enter/exit use `vm->cur`.  The scheduler sets `vm->cur` before calling
-`run()` (`src/core/nj_thread.c:523`) and `vm_invoke()` assumes it is set for an
-existing thread (`src/core/nj_vm.c:1207-1215`); an engine may assume
+`run()` (`src/core/nj_thread.c:524`) and `vm_invoke()` assumes it is set for an
+existing thread (`src/core/nj_vm.c:1219-1224`); an engine may assume
 `vm->cur == th` on entry and must not change it.
 
 ### 3.9 The collector, handles, and roots
@@ -280,13 +285,13 @@ The heap is a non-moving mark-and-sweep arena (see
   a code-site constant table, a CPU register) is **not** a root.
 * To hold a temporary object across a call that can allocate, root it:
   `nj_u4 mark = nj_root_mark(vm); nj_root(vm, obj); ...; nj_root_release(vm, mark);`
-  (`src/core/nj_internal.h:765-811`).  The cheaper option is to keep it in a
+  (`src/core/nj_internal.h:806-815`).  The cheaper option is to keep it in a
   scan-covered frame slot — which is what the interpreter does.
 
 ### 3.10 Threads are green
 
 There is no preemption and no OS thread inside the VM.  The scheduler runs one
-thread at a time (`src/core/nj_thread.c:495-565`) and switches only when the
+thread at a time (`src/core/nj_thread.c:450-612`) and switches only when the
 current one yields (`run()` returns `NJ_ERR_YIELD`/`NJ_ERR_TIMEOUT`) or blocks in
 a native.  A compiled loop that does not yield starves every other thread and
 defers the bridge's `halt_at_ms` deadline check
@@ -352,7 +357,7 @@ returns `NJ_OK` immediately otherwise, and the engine must do the same) and with
 
 `run()` must never return `NJ_ERR_TIMEOUT` or `NJ_ERR_EXIT`; the interpreter
 does not, and the bridge loop maps statuses to its own policy
-(`src/core/nj_vm.c:1343-1508`).
+(`src/core/nj_vm.c:1343-1505`).
 
 If `run()` is installed but `ops` or `ops->run` is `NULL`, `nj_exec()` silently
 falls back to the interpreter (`src/core/nj_engine.c:93-103`).  That is a
@@ -383,14 +388,19 @@ Whatever an engine does internally, these counters and outputs must not drift:
 * `nj_vm_stats.insns` (`vm->insns`) — the same total as the interpreter in the
   same build.  The unit is "dispatched instruction", and the superinstruction
   feature is allowed to fuse two opcodes into one dispatch
-  (`src/core/nj_interp.c:441-480` in the pre-F01/F12 tree), so the number is a
+  (`src/core/nj_interp.c:614-649`), so the number is a
   configured-build property, not a property of the class file: it moves
   whenever a fusion is added or removed (the const+int-arith fusion alone
-  removes ~11.2M dispatches from `bench.jar`).  An engine must charge the same
+  removes ~11.2M dispatches from `bench.jar`; the change that introduced this
+seam measured 89,716,784 on `bench.jar`, which is a fact about that tree and
+not a contract value).  An engine must charge the same
   count as the interpreter for the same source, so the test compares
   engine-vs-interpreter within one build instead of pinning a constant.  An
   engine that deliberately fuses more than the interpreter changes the number
-  by design, and that must be documented with the fusion;
+  by design, and that must be documented with the fusion.  An engine that
+charges instructions must fold its accumulator into `vm->insns` before every
+return to `nj_exec()` (see §3.3); reading `vm->insns` from inside `run()` is
+not meaningful;
 * `native_calls` and the host allocation accounting around
   `nj_vm_create`/`nj_vm_destroy` (the test compares the released block count,
   990, across runs).
@@ -415,8 +425,8 @@ for individual methods.  An engine may therefore do one of two things:
    from compiled code directly, and hand a compiled method back to the
    interpreter when an interpreted caller calls it.  That needs one interpreter
    change: after `nj_frame_push()` of a Java callee in `interp_invoke()`
-   (`src/core/nj_interp.c:1816`, with state already published by the `SAVE()` at
-   `:1813`), ask the engine whether the callee has compiled code and, if so,
+   (`src/core/nj_interp.c:2028`; the caller's state is already published by the
+   `SAVE()` at `src/core/nj_interp.c:2027`), ask the engine whether the callee has compiled code and, if so,
    enter it.  The engine's normal `run()` handles the return.  That hook has not
    been added; it is the first thing a real JIT adds, and it should be a
    compile-time no-op (`#if NJ_ENABLE_ENGINE`) so the default build is untouched.
@@ -456,7 +466,7 @@ points:
    class, bind a native, take a monitor, or block.**  Mark the frame state with
    `SAVE()`-equivalent semantics first: the collector scans frame slots, and the
    bridge needs a truthful `sp` to place a C-bridge frame above the live stack
-   (see the comments at `src/core/nj_interp.c:1695-1716` and `:1808-1813`).
+   (see the comments at `src/core/nj_interp.c:2004-2009` and `:2021-2027`).
    A native that blocks must set the thread's wait state and return
    `NJ_ERR_TIMEOUT` to its caller, which becomes `NJ_ERR_YIELD` at the
    `run()` boundary.
@@ -518,8 +528,9 @@ The interface test is `tests/test_engine.c`.  It is registered with
   endif()
 ```
 
-(`CMakeLists.txt`, after `test_vm` at `:930-931`; fixtures are generated, hence
-the guard, matching the style used at `:911`.)
+(`CMakeLists.txt`, after the `test_vm` registration at `:940-941`; the engine
+test block itself is `:946-948`.  Fixtures are generated, hence the guard,
+matching the style used for the other generated fixtures, e.g. `:921`.)
 
 Plain interpreter build (the test compiles and self-skips):
 
@@ -563,7 +574,7 @@ null engine : startApp=0 insns=<N> natives=1170 released=990
 probe engine: runs=<thousands> yields=<thousands-1> insns=<N> released=990
 broken eng. : fell back to the interpreter, insns=<N>
 54 checks passed, 0 failed
-PASS: null and probe engines are byte-for-byte semantically identical to the interpreter
+PASS: null and probe engines are byte-for-byte semantically identical to the interpreter (<N> bytecodes, BENCH sum unchanged)
 ```
 
 The entry and instruction counts are not contract values — they depend on the
@@ -602,7 +613,7 @@ bash tools/check_no_statics.sh
    equivalence test.  No performance claim, zero default-build cost.
 2. **Per-method compiled entry table and the `interp_invoke` hook.**  Compile
    nothing yet; add the engine-owned map from `nj_method *` to code, the hook at
-   `src/core/nj_interp.c:1816`, and the engine→interpreter transfer contract of
+   `src/core/nj_interp.c:2028`, and the engine→interpreter transfer contract of
    §5.  Test it with a "compiled" method that immediately deopts.
 3. **Baseline compiler.**  Straight-line helper calls, all values in frame
    slots, per-method compilation on first call, unsupported methods stay
@@ -619,7 +630,7 @@ bash tools/check_no_statics.sh
    moving collector (would invalidate raw references), preemptive scheduling,
    and a persistent code cache across VM instances.
 
-The gate for every step is the same: `tests/test_engine.c` (and the existing 88
+The gate for every step is the same: `tests/test_engine.c` (and the existing 90
 ctest tests) must keep passing, and the default build must keep its zero-cost
 property.  A JIT that makes the interpreter build bigger or slower has broken
 the contract of this seam.
