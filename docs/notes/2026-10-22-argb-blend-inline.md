@@ -85,6 +85,56 @@ from the line/plot path (`nj_plot()`), not from this branch.
 (+184 B), `data`/`bss` unchanged.  Full `ctest` 87/87 (50.90 s); trim
 `-DNJ_WERROR=ON` build clean; `tools/check_no_statics.sh` passes.
 
+## Real-game coverage
+
+A temporary counter build (`-DNJ_GFX_DIAG`, not committed) counted the translucent
+pixels each inline path handles, over a 57-title sample: every seventh JAR in
+`tests/games/`, 240 frames each, 240x320, isolated RMS.  Ten titles reported
+counters at all (the others drew no translucent pixels of either kind in that
+window); **all ten had `blend565 = 0`**, and every one had ARGB-to-ARGB traffic:
+
+| title | ARGB8888 -> ARGB8888 translucent pixels, 240 frames |
+| --- | --- |
+| 浴火银河2瓦尔基里(汉化)_3067 | 20,148,950 |
+| 周末的沙滩_7453 | 1,766,400 |
+| 反恐精英2正式版_5836 | 1,208,261 |
+| 真三国无双横扫千军_12449 | 921,600 |
+| 三国杀2012_809 | 213,062 |
+| 美女滑雪胜地_2 | 92,640 |
+| three more titles | 57,840 / 54,900 / 6,501 / 2,035 |
+
+So the pair this round inlined is the one 2D-heavy titles actually use, while
+the ARGB-to-RGB565 shortcut from 2026-10-21 has no measured title yet: the scan
+found zero translucent pixels on that pair.  It stays because it is exercised by
+the equivalence test and is the correct fast path for a title that blits alpha
+sprites straight to the framebuffer, but its benefit is currently unmeasured.
+The comment above that branch still names 浴火银河2完整版_7689; that title's
+translucent layers go to its own ARGB surface (3,463,200 pixels in 600 frames,
+`blend565 = 0`), so read the comment as "this is the branch that would handle
+it", not as a measured workload.
+
+**Second A/B workload** - 浴火银河2瓦尔基里(汉化)_3067, 900 frames, same five
+interleaved pairs against the pre-change binary:
+
+| pair | before | after |
+| --- | --- | --- |
+| 1 | 2.304 | 1.677 |
+| 2 | 2.285 | 1.406 |
+| 3 | 2.014 | 1.563 |
+| 4 | 1.926 | 1.439 |
+| 5 | 2.107 | 1.741 |
+| mean | 2.127 | 1.565 |
+
+Every pair is negative: paired mean -0.562 s (**-26.4 %**).  All six dumped
+frames are byte-identical, and both sides run at the 30 fps cap (paints = 1..3
+in 900 frames - the title paints into its own ARGB surface while loading, which
+is exactly the blend traffic being measured).  Doom gains -6.1 % because its
+frame is dominated by 3D rasterisation; a title whose frame is dominated by 2D
+compositing gains an order of magnitude more.
+
+The same scan also explains the 2026-10-21 correction: the 14.9 M Doom pixels
+are the game's own ARGB surface, not the RGB565 framebuffer.
+
 ## Evidence
 
 `.local-tools/debug-runs/argb-blend-r13/` keeps the ten A/B logs, the six
