@@ -9053,6 +9053,14 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
  * (triangles land in submission order), no back-face culling, no texture, no
  * lighting.  render() answers the number of triangles it drew.
  */
+
+/*
+ * The JSR 184 caps a Graphics3D at eight lights; leave room for a title that
+ * sets a few more slots than that and clamp whatever is beyond.  This is the
+ * fixed size of the per-draw light table below.
+ */
+#define NJ_M3G_LIGHTS 16
+
 typedef struct {
     nj_vm *vm;
     const nj_s2 *pos;
@@ -9100,6 +9108,19 @@ typedef struct {
     const nj_ref *slights;        /* the World's own Light nodes, when given */
     const float *slmats;
     nj_s4 nlights;
+    /*
+     * The lights, read out of their Java objects once per draw.  jr_lit() runs
+     * per vertex and per light, and a profile of Doom 3 showed its six
+     * nj_field_lookup() calls and field reads there as the largest single cost
+     * in the 3D path (29.6 M lookups for 3.3 M vertices).  Mode 0 means "no
+     * light object at this index", which jr_lit() skips.
+     */
+    nj_u4 lmode[NJ_M3G_LIGHTS];
+    nj_u4 lcol[NJ_M3G_LIGHTS];
+    float lint[NJ_M3G_LIGHTS];
+    float latt[NJ_M3G_LIGHTS][3];
+    float lspot_angle[NJ_M3G_LIGHTS];
+    float lspot_exp[NJ_M3G_LIGHTS];
     int lit;
     nj_u4 emi, amb, spc;          /* the material's other colours */
     float shin;
@@ -9312,18 +9333,12 @@ static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
 
     /* First pass: the ambient lights, whose colour is the ambient light. */
     for (i = 0; i < r->nlights; i++) {
-        nj_ref lt = r->slights ? r->slights[i]
-                               : nj_array_get_ref(r->lights, (nj_u4)i);
-        nj_field *fm = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_mode", "I", 0);
-        nj_field *fi = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_intensity", "F", 0);
-        nj_field *fc = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_color", "I", 0);
         nj_u4 col;
         float inten;
 
-        if (!lt || !fm || !fi || !fc) { continue; }
-        if (nj_iget(r->vm, lt, fm) != 128) { continue; }   /* AMBIENT */
-        col = (nj_u4)nj_iget(r->vm, lt, fc);
-        inten = bits2f(nj_iget(r->vm, lt, fi));
+        if (r->lmode[i] != 128u) { continue; }   /* not an AMBIENT light */
+        col = r->lcol[i];
+        inten = r->lint[i];
         amb[0] += (float)((col >> 16) & 0xFFu) / 255.0f * inten;
         amb[1] += (float)((col >> 8) & 0xFFu) / 255.0f * inten;
         amb[2] += (float)(col & 0xFFu) / 255.0f * inten;
@@ -9335,44 +9350,24 @@ static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
     /* Second pass: everything else, brightest first is not needed - the
        terms add up. */
     for (i = 0; i < r->nlights; i++) {
-        nj_ref lt = r->slights ? r->slights[i]
-                               : nj_array_get_ref(r->lights, (nj_u4)i);
         const float *xf = r->slmats
             ? r->slmats + (nj_size)i * 16u
             : ((r->lmats &&
                nj_array_length(r->lmats) >= (nj_u4)(i + 1) * 16u)
                ? (const float *)nj_array_data(r->lmats) + (nj_size)i * 16u
                : NULL);
-        nj_field *fm, *fi, *fc, *fa, *fsa, *fse;
+        const float *att;
         nj_u4 col;
-        float inten, att[3] = { 1.0f, 0.0f, 0.0f }, spot = 1.0f;
+        float inten, spot = 1.0f;
         float lx, ly, lz, dist = 0.0f, ndl;
         float lr, lg, lb;
-        int mode;
+        int mode = (int)r->lmode[i];
 
-        if (!lt) { continue; }
-        fm  = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_mode", "I", 0);
-        fi  = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_intensity", "F", 0);
-        fc  = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_color", "I", 0);
-        fa  = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_atten", "[F", 0);
-        fsa = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_spotAngle", "F", 0);
-        fse = nj_field_lookup(r->vm, NJ_C_LIGHT, "_nj_spotExp", "F", 0);
-        if (!fm || !fi || !fc) { continue; }
-        mode = (int)nj_iget(r->vm, lt, fm);
-        if (mode == 128) { continue; }                        /* ambient, done above */
-        col   = (nj_u4)nj_iget(r->vm, lt, fc);
-        inten = bits2f(nj_iget(r->vm, lt, fi));
-        if (fa) {
-            nj_ref a = nj_rget(r->vm, lt, fa);
-
-            if (a && nj_array_length(a) >= 3) {
-                const float *pp = (const float *)nj_array_data(a);
-                att[0] = pp[0]; att[1] = pp[1]; att[2] = pp[2];
-            }
-        }
-        if (!(att[0] > 0.0f) && att[1] == 0.0f && att[2] == 0.0f) {
-            att[0] = 1.0f;                    /* the JSR default attenuation */
-        }
+        if (mode == 0) { continue; }             /* no light object at this index */
+        if (mode == 128) { continue; }           /* ambient, done above */
+        col   = r->lcol[i];
+        inten = r->lint[i];
+        att   = r->latt[i];
         /*
          * The light's transform is in world space.  A directional light
          * shines along the negative z axis of that transform; a positional
@@ -9424,10 +9419,10 @@ static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
                 if (dist > 0.0f) {
                     float cosang;
 
-                    if (mode == 131 && fsa) {             /* SPOT */
-                        float half_angle = bits2f(nj_iget(r->vm, lt, fsa)) * 0.5f;
+                    if (mode == 131) {                    /* SPOT */
+                        float half_angle = r->lspot_angle[i] * 0.5f;
                         float limit = (float)cos((double)(half_angle * 0.017453292f));
-                        float ex = bits2f(nj_iget(r->vm, lt, fse));
+                        float ex = r->lspot_exp[i];
 
                         cosang = (lx * dx + ly * dy + lz * dz) / dist;
                         if (cosang <= limit) {
@@ -10063,6 +10058,56 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
         r.slights = slights;
         r.slmats = slmats;
         r.nlights = snlights;
+    }
+    /*
+     * Read each light out of its Java object here, once, instead of inside
+     * jr_lit(): that function runs per vertex per light, and the field lookups
+     * and field reads dominated a profile of Doom 3.  Nothing between this
+     * point and the last triangle can change a Light, because no Java code runs
+     * while a native render does.
+     */
+    if (r.nlights > (nj_s4)NJ_M3G_LIGHTS) { r.nlights = (nj_s4)NJ_M3G_LIGHTS; }
+    {
+        nj_field *fm = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_mode", "I", 0);
+        nj_field *fi = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_intensity", "F", 0);
+        nj_field *fc = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_color", "I", 0);
+        nj_field *fa = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_atten", "[F", 0);
+        nj_field *fsa = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_spotAngle", "F", 0);
+        nj_field *fse = nj_field_lookup(vm, NJ_C_LIGHT, "_nj_spotExp", "F", 0);
+        nj_s4 i;
+
+        for (i = 0; i < r.nlights; i++) {
+            nj_ref lt = r.slights ? r.slights[i]
+                                  : nj_array_get_ref(r.lights, (nj_u4)i);
+
+            r.lmode[i] = 0u;
+            r.lcol[i] = 0xFFFFFFFFu;
+            r.lint[i] = 1.0f;
+            r.latt[i][0] = 1.0f; r.latt[i][1] = 0.0f; r.latt[i][2] = 0.0f;
+            r.lspot_angle[i] = 45.0f;
+            r.lspot_exp[i] = 0.0f;
+            if (!lt || !fm || !fi || !fc) { continue; }
+            r.lmode[i] = (nj_u4)nj_iget(vm, lt, fm);
+            r.lcol[i] = (nj_u4)nj_iget(vm, lt, fc);
+            r.lint[i] = bits2f(nj_iget(vm, lt, fi));
+            if (fa) {
+                nj_ref a = nj_rget(vm, lt, fa);
+
+                if (a && nj_array_length(a) >= 3) {
+                    const float *pp = (const float *)nj_array_data(a);
+
+                    r.latt[i][0] = pp[0];
+                    r.latt[i][1] = pp[1];
+                    r.latt[i][2] = pp[2];
+                }
+            }
+            if (!(r.latt[i][0] > 0.0f) && r.latt[i][1] == 0.0f &&
+                r.latt[i][2] == 0.0f) {
+                r.latt[i][0] = 1.0f;      /* the JSR default attenuation */
+            }
+            if (fsa) { r.lspot_angle[i] = bits2f(nj_iget(vm, lt, fsa)); }
+            if (fse) { r.lspot_exp[i] = bits2f(nj_iget(vm, lt, fse)); }
+        }
     }
     /*
      * Lighting uses the Material, normals and collected lights. Without
