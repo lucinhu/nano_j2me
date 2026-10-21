@@ -1279,6 +1279,11 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
          */
         case SDL_MOUSEBUTTONDOWN:
         case SDL_MOUSEBUTTONUP:
+#ifdef SDL_TOUCH_MOUSEID
+            if (ev.button.which == SDL_TOUCH_MOUSEID) {
+                break;              /* the finger path already delivered this */
+            }
+#endif
             if (ev.button.button == SDL_BUTTON_LEFT) {
                 /*
                  * A press is what makes the pointer mean anything, so the button
@@ -1339,6 +1344,11 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
              * off a cap, from one cap to the next, and back into the game area
              * for the drag the press started there.
              */
+#ifdef SDL_TOUCH_MOUSEID
+            if (ev.motion.which == SDL_TOUCH_MOUSEID) {
+                break;              /* the finger path already delivered this */
+            }
+#endif
             if ((ev.motion.state & SDL_BUTTON_LMASK) == 0) {
                 break;
             }
@@ -1876,6 +1886,17 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
         return NJ_ERR;
     }
     (void)title;
+    /*
+     * A touchscreen is also reported as a mouse by SDL: every finger produces a
+     * synthetic mouse click.  The port reads fingers and the mouse as two
+     * independent sources, so with the mirror left on one tap arrives as TWO
+     * pointer presses - and a MIDlet that toggles a selection on each press
+     * (the common idiom) sees select-then-deselect, i.e. the tap does nothing.
+     * A real mouse keeps working; only the touch mirror is turned off.
+     */
+#ifdef SDL_HINT_TOUCH_MOUSE_EVENTS
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+#endif
     /* SDL_INIT_AUDIO is requested but not required: a machine with no sound
      * card must still get a window, and the port reports the failure by leaving
      * the audio hooks to return -1. */

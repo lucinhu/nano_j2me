@@ -54,3 +54,24 @@ gcc -O1 -o vptr vptr.c
   `vptr` 的第三个参数就是按住毫秒数，做触摸 UI 时不要用默认的短按。
 - 后续可继续用它在文明5 里寻找回合按钮的真实坐标、在家园6 里点选村民（这些游戏需要点击；
   键盘回放无法替代）。
+
+## 2026-10-22 触摸→鼠标镜像去重（源码修复）
+
+上一节用宿主虚拟触摸屏验证指针时，日志里一次点击出现了**两次** `NJPTR kind=1`
+（pointerPressed）+ 一次 `kind=0`。这次把它修在端口里：
+
+- 原因：SDL2 默认开启 `SDL_HINT_TOUCH_MOUSE_EVENTS`，每个手指还会被镜像成一条合成
+  鼠标事件；`src/port/posix/nj_port_sdl2.c` 同时读 `SDL_FINGERDOWN/UP/MOTION` 和
+  `SDL_MOUSEBUTTONDOWN/UP`、`SDL_MOUSEMOTION`，于是同一次触摸被投递两遍。
+  对"按下即切换"的 MIDlet（常见写法）表现为选中又取消，等于没点。
+- 修复：`nj_port_sdl2()` 在 `SDL_Init` 之前把该 hint 置 0；另外在鼠标按键与移动分支里
+  忽略 `which == SDL_TOUCH_MOUSEID`（`/usr/include/SDL2/SDL_touch.h:61`）的合成事件，
+  双保险且不影响真实鼠标。
+- 验证：把同样补丁打到带 `NJ_MOUSE`/`NJ_PTR` 日志的诊断构建
+  （`.local-tools/debug-runs/nfs-cam-20261022/src/build/nj2me`，SHA-256 前缀 `7429b5e2`），
+  单次虚拟触摸（窗口 `(872,1188)` → 屏幕 `(1672,1348)`）后日志恰为
+  `NJPTR frame=2094 kind=1 x=217 y=296 cls=g` + `frame=2098 kind=0`，重复的按下消失。
+- 回归：默认构建 `build/nj2me` SHA-256 `3812919c…`，`ctest --test-dir build` 88/88 通过。
+- 边界：去重之后文明5 战役地图的点击**仍然** 0 像素变化（`NJPTR` 已送达），所以该作地图
+  交互不响应点击是游戏侧行为（或该 S60 构建只走按键），不能归因于重复投递；重复投递本身
+  对任何"按下切换"的 UI 都是真实缺陷，修复保留。
