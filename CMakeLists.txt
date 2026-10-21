@@ -778,6 +778,16 @@ endif()
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_threaded_dispatch.sh
                      ${NJ_FIXTURES}/keysdemo.jar)
     set_tests_properties(check_threaded_dispatch PROPERTIES TIMEOUT 300)
+    # The benchmark cannot see a wrong superinstruction: its branches are on
+    # constants, so a fused branch that tested an uninitialized operand still
+    # printed the expected `BENCH sum` (2026-10-22).  This compiles a digest
+    # MIDlet whose methods exercise each fused family, hashes every result into
+    # six per-category digests and compares them with the same code on a
+    # desktop JVM - values against a JVM, not counts against a constant.
+    add_test(NAME check_superinstr_digest
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_superinstr_digest.sh
+                     $<TARGET_FILE:nj2me-cli>)
+    set_tests_properties(check_superinstr_digest PROPERTIES TIMEOUT 300)
     # A mutable Image is white and fully opaque (MIDP 2.0).  A Java int[] starts
     # zeroed - transparent black - so a title that builds its scenery off-screen
     # blended its sprites against black and let the untouched pixels see
