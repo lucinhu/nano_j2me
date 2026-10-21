@@ -65,7 +65,7 @@ snapshot as the measured one.
 | Doom 3 audio | the MP4 container's `samr` track decodes: the theme is 6001 frames, the run reports `pcm_frames=960160` (= 6001×160); pistol cues 35/30 frames and `doom.3gp` 624 frames all open | `docs/notes/2026-10-21-doom-mp4-amr.md`; `8805928` | `8805928` |
 | Doom 3 lighting | each `World` is lit by its own `Light` nodes instead of reusing the first collected set; the level is no longer black, and the two-World regression test fails on the old code (`tests/test_m3g.c`) | `docs/notes/2026-10-21-m3g-world-lights.md`; `.local-tools/debug-runs/doom-lights-fix/` | `cbe8633` |
 | Ancient Empires 2 (`远古帝国2汉化版.jar`) | cold RMS load in a fresh process, commander move (4,6)→(4,4), AI turn, one attack exchange (100→89 and 100→44 HP) and return to the map, Chinese dialogue rendered, Motorola `-21`/`-22` raw softkeys; both headless and SDL2 ports | `.local-tools/debug-runs/ancient-rms-round17/`; `docs/notes/2026-10-20-motorola-softkeys.md` | `9106b79`, `de6d5c8`, `c6b1e9a` |
-| Stranded 2 (`孤岛余生2时间之谜汉化版_7371.jar`) | boot chain (language, music prompt, title, main menu, new game) into the opening room; right-taps move the character and pan the camera (33,085 px changed over 150 frames, then blocked by furniture); 8,100 framed run at 30.2 fps with 1,923,010 triangles. Saving writes store 0 = 528 B and stores 1/2 = 18 B each, but "load and continue" is **OPEN** | `.local-tools/debug-runs/stranded-round2/`, `stranded-save/` | `2ce09a3`, `7b7a117` |
+| Stranded 2 (`孤岛余生2时间之谜汉化版_7371.jar`) | boot chain (language, music prompt, title, main menu, new game) into the opening room; right-taps move the character and pan the camera (33,085 px changed over 150 frames, then blocked by furniture); 8,100 framed run at 30.2 fps with 1,923,010 triangles. A 6,200-frame boot now snapshots (`room.njs`, 15.5 MB, after the M3G `Image2D` root fix) and a fresh process resumes it at 29.9 fps. Saving still writes store 0 = 528 B and stores 1/2 = 18 B each, and "load and continue" is **OPEN**: neither 80 key taps in each of the four directions nor touch taps at the green door / lower-right floor / left door produced a room transition or an auto-save | `.local-tools/debug-runs/stranded-round2/`, `stranded-save/`, `stranded-r5/` | `2ce09a3`, `7b7a117`, `46d75fc` |
 | 3D Rally (`3D拉力赛-进化汉化版_6366.jar`) | race renders through the software rasteriser (car, road, snow, HUD; 120,397 triangles over 2,700 frames); its `TimerTask` NPE is the title leaking timer tasks — the reference prints `Cannot invoke "a.repaint()" because "Rally.f" is null` and dies the same way | `docs/notes/OPEN-issue-m3g-render-unreached.md`, `docs/notes/M3G-sprite3d-repair.md`; `docs/images/rally3d-race.png` | `cbe8633`, `2ce09a3` |
 | Tumbleweed (`jump.jar`) | plays at 176x208 and 176x220 (countdown, sprite, score); at 128x160/240x320 it shows its own "Screen too small/large" alert, byte-for-byte the same behaviour as the reference (verified both sizes) | `.local-tools/debug-runs/jump-sizes/`, `jump-ref/`; `tests/test_lcdui.c` Alert wrap test | `35eb1f2` |
 | `1945空战英雄_6105.jar` | its platform check demands a Nokia prefix; `--device nokia6230` boots to the mission menu (default profile intentionally does not spoof it; the reference does so by rewriting the literal) | `docs/notes/2026-10-20-corpus-game002-uwan-platform.md` | `4f5e3c1` |
@@ -90,6 +90,7 @@ lives in the commit message and body, not in this table.
 | `DataInputStream` mark/reset | `mark`, `reset` and `markSupported` forward to the wrapped stream (FilterInputStream semantics); base `InputStream.reset` raises `IOException`, `mark` stays a no-op; binding `reset` back to the empty slot fails the tests | `tests/test_ioapi.c` (166 checks); `docs/notes/2026-10-21-datainput-rewind.md`; commit `239ccec` |
 | M3G World lights | each World renders with its own Light nodes; regression test rejects the old shared-light behaviour | `tests/test_m3g.c`; `docs/notes/2026-10-21-m3g-world-lights.md`; commit `cbe8633` |
 | M3G rasteriser | textured/lit geometry for 3D Rally and Doom; depth, culling, perspective-correct texture and per-vertex lighting covered by `test_m3g`, `test_m3g_file`, `check_m3g_reals`, `check_m3g_api`, `check_m3gdemo` | `docs/COMPATIBILITY.md` JSR 184 section |
+| M3G `Image2D` ref roots | `Image2D(int, Object)` releases the ref root it takes while converting an LCDUI image to RGBA bytes; the leak pinned the array for the VM's life and made every snapshot of a title using the constructor refuse with `temp root held` (`NJ_ERR_STATE`); a regression assertion fails if the release is dropped | `tests/test_m3g.c` (309 checks); `docs/notes/2026-10-21-m3g-image2d-root-leak.md`; commit `46d75fc` |
 | CJK + Latin antialiased fonts | 4× supersample + Lanczos + packed 2bpp, mono build bit-identical text, `+438880 B` constants and zero heap; both fonts included only under `NJ_ENABLE_FONT_CJK_AA` | `docs/notes/2026-10-20-latin-font-aa.md`; commit `96cfb44` |
 | `callSerially` drain | snapshot of the queue per paint; self-requeue deferred to the next frame | `tests/test_lcdui.c`; commit `134499f` |
 | Alert body wrapping | `ui_text()` wraps at panel width; regression test fails if wrapping is disabled | `tests/test_lcdui.c`; commit `35eb1f2` |
@@ -109,9 +110,15 @@ lives in the commit message and body, not in this table.
 
 ## Open verification gaps
 
-* **Stranded 2** — loading a checkpoint and continuing gameplay is not verified;
-  the save slots are written, the "continue" entry point is not mapped. Also
-  whether a walk crosses a room boundary and triggers a checkpoint.
+* **Stranded 2** — loading a checkpoint and continuing gameplay is not
+  verified: the save slots are written (store 0 = 528 B, stores 1/2 = 18 B), no
+  checkpoint payload has been produced yet, so the "continue" path has nothing
+  to read. The opening room was explored from the snapshot - 80 key taps in
+  each of the four directions, and touch taps at the green door, the lower-right
+  floor and the left door - with no room transition and no auto-save. The N97
+  variant of the same title did auto-save when leaving the interior, so the
+  trigger exists in the game; where this 240x320 build puts its exit is the open
+  question.
 * **Doom 3** — a completed mission, or combat with an actual weapon, is not
   verified; the level and movement are.
 * **Ancient Empires 2** — mission completion and a full campaign are not
