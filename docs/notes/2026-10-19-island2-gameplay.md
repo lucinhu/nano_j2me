@@ -79,3 +79,12 @@ SDL2恢复室内快照后，通过真实窗口发送Escape，再发送Escape，�
 同一原 JAR、独立 RMS 副本与旧室内快照，使用 UC 时钟修复构建（SHA-256 `bde0bab93c5794a726a9c4f9eec1319b666ceca3b4ccdb48e16f759f04e0f806`）。[运行参数与动作时间](../../.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/manifest.json)保留。按 PID 和标题同时定位自有窗口，并在快照恢复后重新查询重建后的窗口 ID；此前两次使用旧窗口 ID 的采集失败不作为通过证据。
 
 已人工检查[原室内场景](../../.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/01-restored.png)、[持续 Up 后人物上移](../../.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/02-after-Up.png)、[F2 暂停](../../.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/03-after-F2.png)、[Return 返回](../../.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/04-after-Return.png)，随后 Escape/Return 又完成一次暂停/返回。截图取自 SDL 渲染缓冲；[实际 SDL 按键与退出日志](../../.local-tools/debug-runs/island-n97-followup-20261019/clock-bounded3-20261020/runtime.log)记录 273 帧、9.518 秒、28.7fps、正常 teardown 与退出 0。原 JAR 与快照未改；本组验证 RTC 补丁没有破坏旧快照后的刷新与操作，未重跑新的游戏 RMS 保存闭环，暂停白底仍保留。
+
+## N97 变体 2026-10-22 桌面 SDL2 复跑（IMA ADPCM 修复后）
+
+- 原 JAR 与上面各节相同（`..._诺基亚 N97系列(360×640)-665244.jar`，SHA-256 `ab374c0705d779e1e44cc1bd4c26ce573430ed3bb7b88b633d37165d07db22a1`）；默认 `build/nj2me` SHA-256 `3812919c687b070aadb457635d41bb47a807a3f49c57ffadfce28c5eca56109b`，`--size 360x640`、全新 RMS、窗口 720x1280，目录 `.local-tools/debug-runs/corpus-round20-20261021/stranded-n97/`。
+- 流程：开场 MINISOYO 闪屏（41 色）上连续 `Return` 四次（每次 5 秒）推进到**中文主菜单**（500 色，[r4.png](../../.local-tools/debug-runs/corpus-round20-20261021/stranded-n97/r4.png)：开始游戏/载入游戏/设置/帮助/关于/退出，默认选中“开始游戏”）；此时 `F1`/`F2` 无反应，**`F1` 在菜单上再次触发后进入第一幕丛林场景**（1293 色，[g3.png](../../.local-tools/debug-runs/corpus-round20-20261021/stranded-n97/g3.png)，SHA-256 前缀 `d53b6d49`）：角色、小路、HUD 血条/体力条、日期金钱、覆盖键盘。
+- 日志：`MediaException` **0 条**，`thrown:` 均为启动期 RMS 异常（被捕获）。
+- 运行收尾：进程按 15000 帧预算自然结束，`stats: frames=15000 paints=7516 fps=30.2 time=497.258s`、`threads=4 gc=2`、`exit status 0`（[run.log](../../.local-tools/debug-runs/corpus-round20-20261021/stranded-n97/run.log)）。
+- 边界：进入第一幕后按 `F2` 画面未变（该作推进对白用 `F2`/`space` 需在更靠后的对白态再试）；未验证移动/战斗/存档。
+
