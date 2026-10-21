@@ -2285,6 +2285,57 @@ int main(void)
         }
     }
 
+    /* Graphics3D.render(Node, Transform) on a scene whose Lights are nodes
+       collects them into the Graphics3D's own light list: the conversion
+       allocates two arrays and roots them while it fills them.  The roots have
+       to go once the fields hold the arrays - a root left behind pins them for
+       the life of the VM and makes every snapshot of that title refuse with
+       "temp root held", the same silent failure the Image2D constructor had.
+       No collected title takes this path yet (a root scan of all 26 M3G JARs
+       stayed at zero), which is exactly why the assertion is here: the failure
+       mode would otherwise surface as a mysterious cannot-save-state. */
+    {
+        nj_value a[8], r;
+        nj_ref g3 = make(vm, CLS("Graphics3D"));
+        nj_ref camera = make(vm, CLS("Camera"));
+        nj_ref identity = make(vm, CLS("Transform"));
+        nj_ref group = make(vm, CLS("Group"));
+        nj_ref light = make(vm, CLS("Light"));
+        nj_ref target;
+        const nj_field *fn;
+        nj_u4 roots_before;
+        int nlights;
+
+        a[0].r = light;
+        call(vm, group, CLS("Group"), "addChild", "(L" CLS("Node") ";)V", a, NULL);
+        a[0].i = 16; a[1].i = 16;
+        check(nj_call_static(vm, "javax/microedition/lcdui/Image", "createImage",
+                             "(II)Ljavax/microedition/lcdui/Image;", a, &r) == NJ_OK,
+              "the node-light target image constructs");
+        target = r.r;
+        call(vm, target, "javax/microedition/lcdui/Image", "getGraphics",
+             "()Ljavax/microedition/lcdui/Graphics;", NULL, &r);
+        a[0].r = r.r;
+        call(vm, g3, CLS("Graphics3D"), "bindTarget", "(Ljava/lang/Object;)V", a, NULL);
+        a[0].i = 0; a[1].i = 0; a[2].i = 16; a[3].i = 16;
+        call(vm, g3, CLS("Graphics3D"), "setViewport", "(IIII)V", a, NULL);
+        a[0].f = 2; a[1].f = 1; a[2].f = 1; a[3].f = 10;
+        call(vm, camera, CLS("Camera"), "setParallel", "(FFFF)V", a, NULL);
+        a[0].r = camera; a[1].r = identity;
+        call(vm, g3, CLS("Graphics3D"), "setCamera",
+             "(L" CLS("Camera") ";L" CLS("Transform") ";)V", a, NULL);
+
+        roots_before = nj_root_mark(vm);
+        a[0].r = group; a[1].r = identity;
+        call(vm, g3, CLS("Graphics3D"), "render",
+             "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+        fn = nj_field_lookup(vm, CLS("Graphics3D"), "_nj_nlights", "I", 0);
+        nlights = fn ? nj_field_read_int(vm, g3, fn) : 0;
+        check(nlights == 1, "render(Node) collects the scene's own Light node");
+        check(nj_root_mark(vm) == roots_before,
+              "render(Node) with scene lights leaves no ref root behind");
+    }
+
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
     /* The file format calls type 18 Sprite; the titles call the class

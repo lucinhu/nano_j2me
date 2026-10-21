@@ -3614,6 +3614,15 @@ static nj_status m3g_render_scene(nj_vm *vm, nj_thread *th NJ_MAYBE_UNUSED,
             nj_ref arr = nj_object_array_new(vm, NJ_C_LIGHT, ln);
             nj_ref fm = nj_array_new(vm, "F", ln * 16u);
             nj_u4 li;
+            /*
+             * The two arrays are temporary: they only have to survive the
+             * field writes below.  Rooting them without a matching release
+             * pins them - and everything they reference - for the life of the
+             * VM, and nj_vm_can_save() refuses to snapshot while any root is
+             * held, so a title taking this path would silently lose
+             * --save-state.  Same failure mode as the Image2D constructor.
+             */
+            nj_u4 mark = nj_root_mark(vm);
 
             for (li = 0u; li < ln; li++) {
                 nj_array_set_ref(arr, li, lrefs[li]);
@@ -3627,6 +3636,7 @@ static nj_status m3g_render_scene(nj_vm *vm, nj_thread *th NJ_MAYBE_UNUSED,
             nj_rput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_lmats", "[F"), fm);
             nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_nlights", "I"),
                     (nj_s4)ln);
+            nj_root_release(vm, mark);
         }
     }
     if (node_render) {
