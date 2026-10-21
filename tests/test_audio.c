@@ -228,6 +228,23 @@ int main(int argc, char **argv)
         ok(field(cap.buf, "AUDIO amrrefused=", v, sizeof(v)) == 0,
            "the AMR asset is no longer refused");
 
+        /*
+         * The third asset is IMA ADPCM - 8 kHz, mono, 4-bit, block align 256,
+         * four blocks.  A block yields 2 * (256 - 4) + 1 = 505 samples, so
+         * 4 * 505 = 2020 frames = 252500 microseconds.  Civilisation V ships
+         * its entire soundtrack in this format and used to get "not a PCM WAV"
+         * from createPlayer() once per frame inside paint(); the duration is
+         * the cheapest proof that the blocks were decoded rather than skipped.
+         */
+        ok(field(cap.buf, "AUDIO adpcm=", v, sizeof(v)) &&
+           strcmp(v, "252500") == 0,
+           "the IMA ADPCM WAV is decoded to 2020 PCM frames (252500 us)");
+        ok(field(cap.buf, "AUDIO adpcmstate=", v, sizeof(v)) &&
+           strcmp(v, "400") == 0,
+           "the IMA ADPCM Player reaches STARTED");
+        ok(field(cap.buf, "AUDIO adpcmrefused=", v, sizeof(v)) == 0,
+           "the IMA ADPCM asset is not refused");
+
         ok(field(cap.buf, "AUDIO http=", v, sizeof(v)) &&
            strcmp(v, "unsupported protocol: http") == 0,
            "an unsupported protocol is refused BY NAME, not silently");
@@ -253,16 +270,18 @@ int main(int argc, char **argv)
         ok(nj_port_headless_tone_stops(&port) >= 1,
            "the port was told to stop at least once");
         /*
-         * Two Players reach the device: the WAV, and the AMR the runtime
-         * decodes itself. Each opens it once, at its own rate - and the AMR is
-         * the second of the two, so the format below is its, not the WAV's.
-         * The WAV's own rate is asserted in the bounded round, where it is the
-         * only Player in the fixture.
+         * Three Players reach the device: the WAV, the AMR the runtime decodes
+         * itself, and the IMA ADPCM WAV decoded here. Each opens it once, at
+         * its own rate - and the ADPCM is the last of the three, so the format
+         * below is its, not the WAV's. The WAV's own rate is asserted in the
+         * bounded round, where it is the only Player in the fixture.
          */
-        ok(pcm_opens == 2, "each Player opened the PCM device exactly once");
-        ok(pcm_frames == 4410 + 640,
-           "4410 WAV frames and the AMR's 640 both reached the device");
-        ok(rate == 8000, "the AMR Player's device is opened at 8000 Hz");
+        ok(pcm_opens == 3, "each Player opened the PCM device exactly once");
+        ok(pcm_frames == 4410 + 640 + 2020,
+           "4410 WAV, the AMR's 640 and the ADPCM's 2020 frames all reached "
+           "the device");
+        ok(rate == 8000,
+           "the IMA ADPCM Player's device is opened at 8000 Hz");
         ok(chans == 1, "the device was opened mono, as the AMR is");
 
         /* The port is the caller's, so it is the caller's to close - and it has

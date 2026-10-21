@@ -35,6 +35,77 @@ hdr = (b'RIFF' + struct.pack('<I', 36 + len(samples)) + b'WAVE'
 open(sys.argv[1], 'wb').write(hdr + samples)
 PY
 
+# An IMA ADPCM WAV: 8 kHz, mono, 4-bit, block align 256, four blocks (2020
+# samples = 252500 us).  Civilisation V's whole soundtrack is in this format,
+# and before it was decoded the game threw "not a PCM WAV" from inside paint()
+# once per frame.  Written here by encoding a sine with the same step and index
+# tables the decoder in src/midp/nj_lib_media.c uses.
+python3 - "$WORK/classes/res/adpcm.wav" <<'PY'
+import math, struct, sys
+
+STEP = [7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,
+        73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,
+        408,449,494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,
+        1878,2066,2272,2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,
+        7132,7845,8630,9493,10442,11487,12635,13899,15289,16818,18500,20350,
+        22385,24623,27086,29794,32767]
+IDX = [-1,-1,-1,-1,2,4,6,8,-1,-1,-1,-1,2,4,6,8]
+
+RATE, BLOCK, BLOCKS = 8000, 256, 4
+per_block = 2 * (BLOCK - 4) + 1
+n = per_block * BLOCKS
+samples = [int(12000 * math.sin(2 * math.pi * 440.0 * i / RATE)) for i in range(n)]
+
+def clamp(v, lo, hi):
+    return lo if v < lo else hi if v > hi else v
+
+data = bytearray()
+pos = 0
+while pos < n:
+    chunk = samples[pos:pos + per_block]
+    pos += per_block
+    pred = chunk[0]
+    index = 0
+    data += struct.pack('<hBB', pred, index, 0)
+    nibbles = []
+    for target in chunk[1:]:
+        step = STEP[index]
+        diff = target - pred
+        sign = 0
+        if diff < 0:
+            sign = 8
+            diff = -diff
+        q = 0
+        if diff >= step:
+            q |= 4
+            diff -= step
+        if diff >= (step >> 1):
+            q |= 2
+            diff -= step >> 1
+        if diff >= (step >> 2):
+            q |= 1
+        delta = (step >> 3)
+        if q & 1:
+            delta += step >> 2
+        if q & 2:
+            delta += step >> 1
+        if q & 4:
+            delta += step
+        pred = clamp(pred - delta if sign else pred + delta, -32768, 32767)
+        index = clamp(index + IDX[q | sign], 0, 88)
+        nibbles.append(q | sign)
+    for i in range(0, len(nibbles) - 1, 2):
+        data.append(nibbles[i] | (nibbles[i + 1] << 4))
+    if len(nibbles) % 2:
+        data.append(nibbles[-1])
+
+hdr = (b'RIFF' + struct.pack('<I', 36 + len(data)) + b'WAVE'
+       + b'fmt ' + struct.pack('<IHHIIHH', 16, 0x11, 1, RATE, RATE // 2,
+                               BLOCK, 4)
+       + b'data' + struct.pack('<I', len(data)))
+open(sys.argv[1], 'wb').write(hdr + data)
+PY
+
 # An AMR file.  Four 4.75 kbit/s frames of silence: byte 0 of each frame is the
 # frame header (0x00 = mode 0, 13 bytes on the wire), and the sniffer has to
 # recognise "#!AMR" whether or not anything names it ".amr".  The runtime decodes
@@ -146,6 +217,28 @@ public class AudioDemo extends MIDlet implements PlayerListener {
                 }
             }
                 in.close();
+            }
+
+            /* 3b. The same Player path, but the JAR's second WAV is IMA
+             * ADPCM: the runtime has to decode it to PCM before the port
+             * ever sees it. */
+            InputStream adpcm = getClass().getResourceAsStream("/res/adpcm.wav");
+            if (adpcm == null) {
+                System.out.println("AUDIO adpcm=missing");
+            } else {
+                try {
+                    Player d = Manager.createPlayer(adpcm, "audio/x-wav");
+                    d.realize();
+                    d.prefetch();
+                    d.start();
+                    System.out.println("AUDIO adpcm=" + d.getDuration());
+                    System.out.println("AUDIO adpcmstate=" + d.getState());
+                    d.deallocate();
+                    d.close();
+                } catch (Exception e) {
+                    System.out.println("AUDIO adpcmrefused=" + e.getMessage());
+                }
+                adpcm.close();
             }
 
             /* 4. An unsupported protocol must be refused BY NAME. */

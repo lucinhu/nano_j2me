@@ -504,18 +504,163 @@ static int tone_parse(const nj_u1 *b, nj_u4 len, nj_audio_tone *out, int cap)
 /* ------------------------------------------------------------------ */
 typedef struct wav_info {
     const nj_u1 *data;
+    nj_u4        bytes;      /* bytes of sample data in the chunk */
     nj_u4        frames;
     int          rate;
     int          channels;
     int          bits;
+    int          adpcm;      /* 1: Microsoft IMA ADPCM (WAVE format 0x11) */
+    int          block;      /* ADPCM block alignment in bytes */
 } wav_info;
 
 /*
- * Parse RIFF/WAVE.  Only PCM (format 1) is accepted: a game shipping an ADPCM
- * or MP3-in-WAV file is rare enough that a clear MediaException beats an
- * almost-right noise.  Both chunk walks are bounded by the buffer, so a
- * truncated or hostile file cannot make this read past the end.
+ * Microsoft IMA ADPCM (WAVE format 0x11).
+ *
+ * 文明5's whole soundtrack arrives in this format: 8 kHz mono, 4-bit samples,
+ * 256-byte blocks.  The PCM-only reader below refused every one of them with
+ * "this WAV file holds no PCM samples", and the game's paint loop printed the
+ * MediaException every frame while it tried to start its sound.  A block is a
+ * 4-byte header per channel - one 16-bit sample and the step index - followed
+ * by nibbles; the first sample in a block is stored verbatim, so each block
+ * decodes to 2*(block - 4*channels)/channels + 1 frames.
  */
+static const int ima_index_table[16] = {
+    -1, -1, -1, -1, 2, 4, 6, 8,
+    -1, -1, -1, -1, 2, 4, 6, 8
+};
+static const int ima_step_table[89] = {
+        7,     8,     9,    10,    11,    12,    13,    14,
+       16,    17,    19,    21,    23,    25,    28,    31,
+       34,    37,    41,    45,    50,    55,    60,    66,
+       73,    80,    88,    97,   107,   118,   130,   143,
+      157,   173,   190,   209,   230,   253,   279,   307,
+      337,   371,   408,   449,   494,   544,   598,   658,
+      724,   796,   876,   963,  1060,  1166,  1282,  1411,
+     1552,  1707,  1878,  2066,  2272,  2499,  2749,  3024,
+     3327,  3660,  4026,  4428,  4871,  5358,  5894,  6484,
+     7132,  7845,  8630,  9493, 10442, 11487, 12635, 13899,
+    15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794,
+    32767
+};
+
+static int ima_decode(int nibble, int *step_index, int *predictor)
+{
+    int step = ima_step_table[*step_index];
+    int diff = step >> 3;
+    int pred = *predictor;
+
+    if (nibble & 1) {
+        diff += step >> 2;
+    }
+    if (nibble & 2) {
+        diff += step >> 1;
+    }
+    if (nibble & 4) {
+        diff += step;
+    }
+    if (nibble & 8) {
+        pred -= diff;
+    } else {
+        pred += diff;
+    }
+    if (pred > 32767) {
+        pred = 32767;
+    } else if (pred < -32768) {
+        pred = -32768;
+    }
+    *step_index += ima_index_table[nibble];
+    if (*step_index < 0) {
+        *step_index = 0;
+    } else if (*step_index > 88) {
+        *step_index = 88;
+    }
+    *predictor = pred;
+    return pred;
+}
+
+/* Decode whole IMA blocks into little-endian s16.  Returns frames written. */
+static nj_u4 wav_ima_decode(const nj_u1 *src, nj_u4 len, int channels,
+                            int block, nj_u1 *dst, nj_u4 dst_cap)
+{
+    nj_u4 frames = 0u;
+    nj_u4 pos = 0u;
+    int samples_per_block;
+    nj_u1 *out = dst;
+
+    if (channels < 1 || channels > 2 || block < 4 * channels + 4) {
+        return 0u;
+    }
+    samples_per_block = 2 * (block - 4 * channels) / channels + 1;
+    while (pos + (nj_u4)block <= len) {
+        int pred[2];
+        int idx[2];
+        int c;
+        int s;
+        const nj_u1 *p = src + pos;
+
+        for (c = 0; c < channels; c++) {
+            const nj_u1 *h = p + 4 * c;
+            pred[c] = (int)(nj_s2)((nj_u2)h[0] | ((nj_u2)h[1] << 8));
+            idx[c] = (int)h[2];
+            if (idx[c] > 88) {
+                idx[c] = 88;
+            }
+        }
+        for (c = 0; c < channels; c++) {
+            if (dst_cap - (nj_u4)(out - dst) < (nj_u4)(channels * 2)) {
+                return frames;
+            }
+            *out++ = (nj_u1)(pred[c] & 0xFF);
+            *out++ = (nj_u1)((pred[c] >> 8) & 0xFF);
+        }
+        frames++;
+        /*
+         * Sample bytes are grouped in 4-byte units: mono holds eight samples
+         * of the one channel, stereo alternates a left unit and a right unit.
+         */
+        for (s = 1; s < samples_per_block; s += 8) {
+            for (c = 0; c < channels; c++) {
+                const nj_u1 *q;
+                int k;
+
+                if (channels == 1) {
+                    q = p + 4 + ((s - 1) / 8) * 4;
+                } else {
+                    q = p + 8 + ((s - 1) / 8) * 8 + c * 4;
+                }
+                if (q + 4 > p + block) {
+                    break;
+                }
+                for (k = 0; k < 4; k++) {
+                    int nibbles[2];
+                    int n;
+
+                    nibbles[0] = (int)(q[k] & 0x0F);
+                    nibbles[1] = (int)((q[k] >> 4) & 0x0F);
+                    for (n = 0; n < 2; n++) {
+                        int v;
+                        if (((s - 1) / 8) * 8 + k * 2 + n >= samples_per_block - 1) {
+                            break;
+                        }
+                        v = ima_decode(nibbles[n], &idx[c], &pred[c]);
+                        if (dst_cap - (nj_u4)(out - dst) < 2u) {
+                            return frames;
+                        }
+                        *out++ = (nj_u1)(v & 0xFF);
+                        *out++ = (nj_u1)((v >> 8) & 0xFF);
+                        frames++;
+                    }
+                }
+            }
+        }
+        pos += (nj_u4)block;
+    }
+    return frames;
+}
+
+/* Parse RIFF/WAVE: PCM (format 1) and Microsoft IMA ADPCM (format 0x11).
+ * Both chunk walks are bounded by the buffer, so a truncated or hostile file
+ * cannot make this read past the end. */
 static int wav_parse(const nj_u1 *b, nj_u4 len, wav_info *out)
 {
 #if !NJ_ENABLE_WAV
@@ -536,6 +681,8 @@ static int wav_parse(const nj_u1 *b, nj_u4 len, wav_info *out)
     int rate = 0;
     int chan = 0;
     int bits = 0;
+    int block_align = 0;
+    int adpcm = 0;
 
     if (!b || len < 12u) {
         return 0;
@@ -563,9 +710,18 @@ static int wav_parse(const nj_u1 *b, nj_u4 len, wav_info *out)
                              | ((nj_u4)b[body + 6] << 16)
                              | ((nj_u4)b[body + 7] << 24));
                 bits = (int)(b[body + 14] | (b[body + 15] << 8));
+                /* blockAlign is at +12: 16 bytes is the whole chunk
+                 * for PCM, and an IMA ADPCM file needs it. */
+                block_align = (int)(b[body + 12] | (b[body + 13] << 8));
                 if (fmt == 1 && (chan == 1 || chan == 2)
                     && (bits == 8 || bits == 16) && rate > 0) {
                     have_fmt = 1;
+                    adpcm = 0;
+                } else if (fmt == 0x11 && (chan == 1 || chan == 2)
+                           && bits == 4 && rate > 0
+                           && block_align >= 4 * chan + 4) {
+                    have_fmt = 1;
+                    adpcm = 1;
                 }
             }
         } else if (id0 == 'd' && id1 == 'a' && id2 == 't' && id3 == 'a') {
@@ -580,10 +736,19 @@ static int wav_parse(const nj_u1 *b, nj_u4 len, wav_info *out)
         return 0;
     }
     out->data = b + data_off;
+    out->bytes = data_len;
     out->rate = rate;
     out->channels = chan;
     out->bits = bits;
-    out->frames = data_len / (nj_u4)(chan * (bits / 8));
+    out->adpcm = adpcm;
+    out->block = block_align;
+    if (adpcm) {
+        /* Whole blocks only; the last partial block is padding. */
+        out->frames = (data_len / (nj_u4)block_align)
+                    * (nj_u4)(2 * (block_align - 4 * chan) / chan + 1);
+    } else {
+        out->frames = data_len / (nj_u4)(chan * (bits / 8));
+    }
     return out->frames > 0u;
 #endif /* NJ_ENABLE_WAV */
 }
@@ -1568,7 +1733,36 @@ NJFN(media_createPlayer_stream)
      * by the same amount.  Slicing here means pcm_push() needs no idea what a
      * chunk is.
      */
-    {
+    if (wi.adpcm) {
+        /*
+         * IMA ADPCM is decoded once, here, exactly like MIDI is rendered once:
+         * after this the Player holds 16-bit PCM and the pump, the port hook
+         * and the duration maths know nothing about blocks or nibbles.
+         */
+        nj_u4 want = wi.frames * (nj_u4)wi.channels * 2u;
+        nj_ref pcm = nj_byte_array_new(vm, want);
+        nj_u4 got;
+
+        if (!pcm) {
+            nj_root_release(vm, mark);
+            return NJ_ERR;
+        }
+        got = wav_ima_decode(wi.data, wi.bytes, wi.channels, wi.block,
+                             pcm->u.bytes, want);
+        if (got == 0u) {
+            /* A block-aligned chunk with no playable block: stay silent
+             * rather than hand the port a byte array of zeroes. */
+            nj_logf(vm, 3, "media: IMA ADPCM blocks decoded to no frames");
+            nj_root_release(vm, mark);
+            return nj_throw(vm, NJ_C_MEXC, "this WAV file holds no PCM samples");
+        }
+        pcm->length = got * (nj_u4)wi.channels * 2u;
+        wi.frames = got;
+        wi.bits = 16;
+        nj_logf(vm, 3, "media: decoded IMA ADPCM into %u PCM bytes",
+                (unsigned)pcm->length);
+        w_r(vm, p, F_P_DATA, "[B", pcm);
+    } else {
         nj_u4 off = (nj_u4)(wi.data - barray_bytes(data));
         nj_u4 want = wi.frames * (nj_u4)wi.channels * (nj_u4)(wi.bits / 8);
 
