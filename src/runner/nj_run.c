@@ -735,6 +735,19 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     const char *class_name = NULL;
     int rc = 1;
     int stats = 0;
+    /*
+     * --save-state bookkeeping, for the run-end report.
+     *
+     * A snapshot is taken at a frame boundary, and there are titles that
+     * never reach one: Doom 3's MIDlet constructor joins the thread that runs
+     * the whole game, so the first native call consumes the entire budget and
+     * the frame loop below is never entered.  The old code then wrote nothing
+     * and said nothing, which reads exactly like a path bug; the run-end
+     * report now names the reason instead of leaving a silent hole.
+     */
+    int save_attempted = 0;
+    int save_written = 0;
+    int save_loop_entered = 0;
     char rms_path[512];
     rms_path[0] = '\0';
     nj_s8 nj_start_ms = 0;
@@ -1127,6 +1140,7 @@ resumed:
      * a key to get past its splash screen appeared to have no gameplay.
      */
     if (opts->run_frames > 0u || (opts->keys && opts->keys[0])) {
+            save_loop_entered = 1;
             /*
              * Run a fixed number of frames and stop.
              *
@@ -1174,9 +1188,13 @@ resumed:
                                              ? opts->save_state_frame : 1u)) {
                     nj_status src = NJ_ERR_STATE;
 
+                    save_attempted = 1;
                     /* nj_vm_can_save() is non-zero when a snapshot is possible. */
                     if (nj_vm_can_save(vm) != 0) {
                         src = nj_vm_save_file(vm, opts->save_state_path);
+                    }
+                    if (src == NJ_OK) {
+                        save_written = 1;
                     }
                     if (port.log) {
                         char buf[384];
@@ -1224,6 +1242,36 @@ resumed:
     }
 
 done:
+    /*
+     * Say why a snapshot was asked for and none was written.
+     *
+     * Silence here is worse than an error: the first thing a reader checks is
+     * whether the path was right, and the answer ("this title never returned
+     * to a frame boundary") is not visible anywhere else in the log.  The two
+     * reasons are worth separating - a blocked constructor is a limitation of
+     * what a snapshot can represent, a too-late boundary is a wrong request -
+     * because only the second one is the caller's to fix.
+     */
+    if (vm && opts->save_state_path != NULL && opts->save_state_path[0] != '\0' &&
+        !save_attempted && port.log) {
+        char whybuf[512];
+        if (!save_loop_entered) {
+            snprintf(whybuf, sizeof(whybuf),
+                     "warning: no snapshot was written to %s: this title never "
+                     "reached a frame boundary (its first native call consumed "
+                     "the whole run).  A snapshot cannot represent a live C "
+                     "stack frame, so there is nowhere to take it.",
+                     opts->save_state_path);
+        } else {
+            snprintf(whybuf, sizeof(whybuf),
+                     "warning: no snapshot was written to %s: the run ended "
+                     "before the requested frame boundary %d.  Ask for a "
+                     "boundary inside the run (--save-state-frame).",
+                     opts->save_state_path,
+                     (int)(opts->save_state_frame > 0 ? opts->save_state_frame : 1));
+        }
+        port.log(port.user, 0, whybuf);
+    }
     nj_end_ms = (nj_s8)(port.millis ? port.millis(port.ud) : 0u);
     /*
      * --stats: the numbers behind docs/PERFORMANCE.md.

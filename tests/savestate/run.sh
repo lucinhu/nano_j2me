@@ -130,5 +130,57 @@ n_field="$(printf '%s\n' "$bad_out" | grep -c 'FIELD before=')"
     "the MIDlet started normally instead ($n_field banner(s))"
 
 echo
+echo "== 4. a title that blocks in its constructor is never snapshotted, and says so"
+WAITJAR="$ROOT/tests/fixtures/waitdemo.jar"
+if [ -f "$WAITJAR" ]; then
+    blocked="$WORK/blocked.state"
+    blocked_out="$(run --port headless --heap 8 --fps 30 --run-frames 30 \
+                       --save-state "$blocked" --save-state-frame 5 \
+                       --prop fixture.wait.ms=3000 "$WAITJAR")"
+    blocked_rc=$?
+    echo "$blocked_out" | sed 's/^/   | /'
+    echo
+
+    [ "$blocked_rc" = 0 ]; say $? "the blocked run exits cleanly (exit $blocked_rc)"
+
+    case "$blocked_out" in
+        *"never reached a frame boundary"*)
+            say 0 "the runner explains why no snapshot was written" ;;
+        *) say 1 "the runner silently wrote no snapshot and said nothing" ;;
+    esac
+
+    if [ -e "$blocked" ]; then
+        say 1 "a snapshot was written for a run with no frame boundary"
+    else
+        say 0 "no snapshot file exists, matching the report"
+    fi
+else
+    echo "skip: no $WAITJAR"
+fi
+
+echo
+echo "== 5. a boundary beyond the run is reported, not silently skipped"
+late="$WORK/late.state"
+late_out="$(run --port sdl2 --run-frames 5 --save-state "$late" \
+                  --save-state-frame 50 "$JAR")"
+late_rc=$?
+echo "$late_out" | sed 's/^/   | /'
+echo
+
+[ "$late_rc" = 0 ]; say $? "the short run exits cleanly (exit $late_rc)"
+
+case "$late_out" in
+    *"before the requested frame boundary 50"*)
+        say 0 "the runner reports the boundary the run never reached" ;;
+    *) say 1 "a boundary beyond the run was skipped without a word" ;;
+esac
+
+if [ -e "$late" ]; then
+    say 1 "a snapshot was written without reaching its boundary"
+else
+    say 0 "no snapshot file exists for the unreached boundary"
+fi
+
+echo
 [ "$fail" = 0 ] && echo "PASS: the SDL2 port resumes a snapshot instead of restarting the MIDlet"
 exit "$fail"
