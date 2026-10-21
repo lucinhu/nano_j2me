@@ -746,7 +746,6 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
      * report now names the reason instead of leaving a silent hole.
      */
     int save_attempted = 0;
-    int save_written = 0;
     int save_loop_entered = 0;
     char rms_path[512];
     rms_path[0] = '\0';
@@ -1192,9 +1191,6 @@ resumed:
                     /* nj_vm_can_save() is non-zero when a snapshot is possible. */
                     if (nj_vm_can_save(vm) != 0) {
                         src = nj_vm_save_file(vm, opts->save_state_path);
-                    }
-                    if (src == NJ_OK) {
-                        save_written = 1;
                     }
                     if (port.log) {
                         char buf[384];

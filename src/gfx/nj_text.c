@@ -133,7 +133,7 @@ static void glyph_lookup(const nj_font *f, nj_u2 ch, glyph *out, int depth)
  * rasterizer's clipping, alpha blending and XOR behaviour for free instead of
  * reimplementing them here.
  */
-static void blit_glyph(nj_gfx *g, const nj_font *f, const glyph *gl,
+static void blit_glyph(nj_gfx *g, const glyph *gl,
                        int pen_x, int baseline_y)
 {
     int row_bytes = (gl->w + 7) / 8;   /* 1bpp branch only */
@@ -264,7 +264,7 @@ void nj_gfx_draw_text(nj_gfx *g, const nj_u2 *s, int len, int x, int y,
     for (i = 0; i < len; i++) {
         glyph gl;
         glyph_lookup(f, s[i], &gl, 0);
-        blit_glyph(g, f, &gl, pen, baseline);
+        blit_glyph(g, &gl, pen, baseline);
         pen += gl.advance;
     }
 

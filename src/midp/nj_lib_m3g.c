@@ -226,6 +226,7 @@ static void m3g_image_dirty(nj_vm *vm, nj_ref img);
 static nj_ref m3g_image_mips(nj_vm *vm, nj_ref img);
 #endif
 
+#if NJ_ENABLE_M3G
 /*
  * A Node's transform, as the file stores it: translation (3 floats), scale
  * (3 floats) and orientation (angle in radians followed by the axis), which
@@ -267,6 +268,8 @@ static void m3g_node_matrix(const nj_u1 *d, float *m)
     m[3] = tx; m[7] = ty; m[11] = tz;
     m[12] = m[13] = m[14] = 0.0f; m[15] = 1.0f;
 }
+#endif
+
 #define NJ_M3G_SECTION 9u
 #define NJ_M3G_SECTION_MIN 13u   /* nine byte header + four byte Adler32 */
 
@@ -361,6 +364,7 @@ static nj_u4 m3g_image_bpp(nj_u4 fmt)
     }
 }
 
+#if NJ_ENABLE_M3G
 /*
  * One texel of the file, as the four bytes the rasteriser samples: red,
  * green, blue and alpha, in that order.
@@ -400,6 +404,7 @@ static void m3g_image_texel(nj_u4 fmt, const nj_u1 *s, nj_u1 *out)
         break;
     }
 }
+#endif
 
 /* Object3D: userID, AnimationTrack indices, then length-prefixed user
  * parameters. Subtraction bounds each count before multiplying or advancing. */
@@ -972,6 +977,7 @@ nj_u4 nj_m3g_ref_at(const nj_m3g_fields *f, nj_u4 k)
     return (f->extra != NULL) ? f->extra[k - (nj_u4)NJ_M3G_MAX_REFS] : 0u;
 }
 
+#if NJ_ENABLE_M3G
 /* Release the per-object overflow lists of a scan result. */
 static void m3g_free_refs(nj_vm *vm, nj_m3g_object *objs, nj_u4 nobj)
 {
@@ -989,6 +995,7 @@ static void m3g_free_refs(nj_vm *vm, nj_m3g_object *objs, nj_u4 nobj)
         }
     }
 }
+#endif
 
 nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
                               nj_m3g_object *out, nj_u4 out_cap,

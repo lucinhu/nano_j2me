@@ -1222,7 +1222,14 @@ NJFN(local_set_discoverable)
 NJFN(local_get_property)
 {
     nj_bt_local l;
-    char key[32];
+    /*
+     * Long enough for every property name below.  32 was not: the longest,
+     * "bluetooth.sd.attr.retrievable.max", is 33 characters, so the copy
+     * truncated it and the strcmp could never match - the property was
+     * silently always null.  A trimmed build under -Werror says so
+     * (-Wstring-compare); an ordinary build did not.
+     */
+    char key[64];
     if (!bt_local_fill(vm, &l))
         return bt_state(vm, "this device has no Bluetooth radio");
     if (!btext(NJ_ARG_REF(args, 0), key, sizeof key)) {
