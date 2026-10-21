@@ -535,6 +535,19 @@ from the screenshot hash, never from the exit code. The desktop pre-edit is
 `ime_composing` only), so the candidate window is drawn by the host, not by
 the game. Details and hashes:
 [docs/notes/2026-10-22-android-desktop-ime-regression.md](notes/2026-10-22-android-desktop-ime-regression.md).
+The last round rebuilt the APK **with** the classless-array fix and walked the
+same path again on the emulator: the registration form still ends up reading
+`游戏账号: 你好` (APK `a10061b9b2461ba0`), and the controlled network still
+separates the two cases - 503 gives five `GameComm` POSTs and the error page,
+an empty 200 gives two POSTs and none.
+
+One title in the corpus is **keyboard-only by construction**: Townsmen 6 (the
+N73 build) registers no pointer handling at all - `javap` shows
+`pointerPressed`, `pointerReleased` and `pointerDragged` as `0: return` - so a
+synthetic touch can never drive it, and the only way in is the keyboard
+(D-pad moves the hand pointer, Return/F1/5 confirm, F2 cancels). The same
+title saves and reloads correctly: exit through the pause menu, restart on the
+same `--rms-dir`, and the village comes back whole.
 
 ## Fixes found by that corpus
 

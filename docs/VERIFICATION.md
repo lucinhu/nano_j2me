@@ -167,8 +167,16 @@ lives in the commit message and body, not in this table.
     per-cell with strict inequalities and the game keeps a long-press timer, so
     a synthetic click is not the same thing as a turn button.
   * 家园6 — the village, the action menu, the residents panel and the tutorial
-    overlay are reached; **building, combat and a save/restart round trip are
-    not** yet verified.
+    overlay are reached, and the **save/restart round trip is verified**: exit
+    through the pause menu, restart on the same `--rms-dir` and the village
+    comes back whole (`docs/notes/2026-10-22-townsmen6-build-combat-save.md`).
+    javap shows the N73 build registers **no pointer handling at all**
+    (`pointerPressed`/`pointerReleased`/`pointerDragged` are `0: return`), so the
+    title is keyboard-only and a touch route can never drive it. **Building**
+    was seen on an in-flight binary that no longer exists and does **not**
+    reproduce on the clean build, so it is recorded as unproven; **combat** is
+    blocked by a touch-only dispatch button and a campaign level with no combat
+    objective.
   * UC 浏览器 — the controlled chain reaches the URL editor and the real
     homepage renders, but typing into **UC's own self-drawn address bar** is
     not possible: the runtime's IME bridge covers MIDP `TextBox`/`TextField`
