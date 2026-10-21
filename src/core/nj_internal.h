@@ -19,6 +19,14 @@
 #include "nj2me/nj_codec.h"
 #include "nj2me/nj_device.h"
 
+#if NJ_ENABLE_ENGINE
+/*
+ * The pluggable execution-engine contract (install/uninstall API, plus the
+ * struct nj_vm::engine field below).  Self-contained; see docs/JIT.md.
+ */
+#include "nj_engine.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -587,6 +595,14 @@ struct nj_vm {
 
     /* native call depth */
     nj_u2      native_depth;
+
+#if NJ_ENABLE_ENGINE
+    /* Installed execution engine, or NULL for the portable interpreter.
+     * Consulted by nj_exec() on every entry and by nothing else; the VM never
+     * owns or destroys it.  This field - one pointer - is the entire RAM cost
+     * of NJ_ENABLE_ENGINE: a default build has no such field. */
+    struct nj_engine *engine;
+#endif
 
     /* ---- GC roots owned by C code (class library, ports) ---- */
     nj_ref    *roots;          /* temporary root stack (JNI-local style) */
@@ -1179,6 +1195,9 @@ nj_class *nj_class_create_builtin(nj_vm *vm, const nj_builtin_class *bc);
 /* Run one thread until it blocks, dies or the quantum expires.
  * The pending exception, if any, lives in vm->exception. */
 nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth);
+/* The portable interpreter loop.  nj_exec() forwards here when no pluggable
+ * execution engine is installed (or always, when NJ_ENABLE_ENGINE is 0). */
+nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth);
 nj_status nj_invoke_native(nj_vm *vm, nj_thread *th, nj_method *target,
                            nj_value *argbase, nj_u2 total, nj_value *ret);
 nj_status nj_vm_throw(nj_vm *vm, const char *class_name, const char *msg);

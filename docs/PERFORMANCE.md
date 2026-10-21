@@ -169,6 +169,105 @@ the same as the unfused one, so `stack_limit` stays valid.
 this benchmark, which is exactly the instrument whose absence let the shifted
 dispatch table survive several rounds.
 
+## The whole table converted, and four fused pairs: about 5% minimum, 7% median
+
+    baseline (frozen snapshot)   min 0.178 s   med 0.183 s
+    this session's build         min 0.169 s   med 0.170 s
+    gain                         ~5% min       ~7% median
+
+Fourteen interleaved runs, pinned to one core, minimum and median of the same
+runs.  The stages, each measured against the stage before it in the same
+session:
+
+    + full dispatch conversion, const+int-arith fusion    min 0.172   med 0.174
+    + load+branch, store+load, aload+null-branch, locals  min 0.169   med 0.170
+
+**The conversion is now the whole table, not a chosen batch.**  Every handler
+whose body ends in a plain `break;` carries an `L_0xNN:` label and ends with
+`DISPATCH()`; 198 of the 256 table slots point at a label and the rest at
+`L_haveop`.  Two handlers stay on the switch on purpose: `athrow` (its body
+ends in `goto do_unwind`) and `default` (it must keep throwing VerifyError for
+unused opcodes).  A handler whose last `break;` is followed by live code is
+never converted, which is the check that keeps this mechanical - the script
+refuses the group rather than guessing which `break` was the terminator.
+
+### The four fused pairs
+
+Each one peeks at `code[pc]` inside the handler, executes both instructions and
+dispatches once.  No bytecode is rewritten, so a branch onto either half still
+does the right thing, and the fused path's peak stack depth never exceeds the
+unfused one, so `stack_limit` stays valid.
+
+| fused pair | why | dynamic share it removes |
+|---|---|---|
+| const-push + int-arith (`iconst_m1..5`, `bipush`, `sipush`, `ldc`/`ldc_w` of an Integer) | every mask, shift, multiply and compare-by-constant | 100% of the games' `ishl`/`iushr`/`iand` consumers, 96.8% `irem`, 94.5% `imul`, 77.3% `isub`, 20.8% `iadd` |
+| `iload`/`iload_k` + `ifeq..ifle` | loop tests and guards load a local and branch on it | 8.3% of 1945's stream (measured on a real title) |
+| `aload`/`aload_k` + `ifnull`/`ifnonnull` | null guards | small, but free once the int form exists |
+| `istore_k` + `iload_k` (same slot) | `x = x op ...` reads the value back immediately | 4.28% of the fixture's stream |
+
+The push+consumer fusion generalises the earlier `bipush/sipush + iand` pair
+and replaces it; the old special case is gone.  Bytecode totals move with every
+fusion and are therefore only a sanity counter now: 112,117,067 before any
+fusion, 105,717,067 after push+iand, 94,516,867 after const+int-arith,
+89,716,784 after the three branch/store fusions.  `BENCH sum=-136042548 s=5`
+stayed identical at every step.
+
+### Replicated dispatch, re-measured on the fully converted table
+
+    fixture (bench.jar)        switch 0.171 / 0.174     threaded 0.198 / 0.201
+    call/loop microbenchmark   switch 0.657 / 0.660     threaded 0.617 / 0.622
+
+The fixture's inner loop is a few dozen instructions repeated millions of
+times; the indirect branch predictor handles that better than a computed goto
+per opcode, and the threaded body also duplicates the fetch.  A benchmark built
+around calls, interface dispatch and straight-line arithmetic - where each
+dispatch is a different target - prefers the replicated table by about 6%.
+`NJ_THREADED_DISPATCH` therefore stays 0: the fixture is this project's metric,
+and the embedded targets (xtensa, riscv, Cortex-M) have no computed goto at all.
+
+Jump threading (`NJ_ENABLE_JUMP_THREADING`) follows `goto`-to-`goto` chains
+without dispatching; the fixture has no chains, so it measures neutral there.
+It is kept because the profile found real titles whose hot loop ends in
+`goto; goto` sequences, and it costs one load and one compare per taken branch.
+
+### Two bugs the benchmark could not see
+
+**`DISPATCH()` is `continue` in the switch build, so a fusion must not be a
+`do { ... } while (0)`.**  The first version wrapped the fused body in the usual
+macro do-while; the `continue` then targeted the do-while, the handler fell
+through to its normal path and pushed its operand a second time.  The benchmark
+died with `VerifyError: operand stack overflow` at `bench/Bench.vcall(I)I pc=5`
+- loud enough, but only because the fixture executes that method four million
+times.
+
+**Macro-internal names must not collide with the call site.**  The branch fusion
+was `#define NJ_LOAD_BRANCH_INT(V) { ... nj_s4 v_ = (V); ... }`, called as
+`NJ_LOAD_BRANCH_INT(v_)`.  In C the scope of `v_` begins at the end of its
+declarator, so the initializer names the macro's OWN `v_`, not the caller's: the
+branch tested an uninitialized value.  Every condition behaved as if the operand
+were zero.  The benchmark still passed - its branches are on constants and
+counters, never on a loaded value - and so did the whole ctest suite; only a
+targeted digest test over branch/store/const/wide categories against a desktop
+JVM caught it.  The macros now use `njlb_*` names and the digest test is the
+reason to keep one around: `BENCH sum` proves the fixture, not the interpreter.
+
+### RAM and switches
+
+Nothing here adds a writable static or a heap allocation: the tables are
+`static const` (`.rodata`/`.data.rel.ro`), the fused paths use locals, and the
+instruction counter plus the cached `stack_limit` live in the interpreter's own
+frame and are flushed in `SAVE()`.  `tools/check_no_statics.sh` passes.
+
+    NJ_ENABLE_SUPERINSTR      1   fused pairs; code size only
+    NJ_ENABLE_JUMP_THREADING  1   goto-chain following; code size only
+    NJ_THREADED_DISPATCH      0   replicated interpreter body; no RAM
+    NJ_ENABLE_ENGINE          0   pluggable engine/JIT hook; one pointer in nj_vm
+
+Verification on the frozen tree: 89/89 ctest, and the 8-title real-game set
+(pixels, stats, exceptions) reports 7 titles pixel-identical, 1 unstable by its
+own same-binary control, 0 failures; bytecode totals in game stats drop by the
+expected 5-15% and are INFO-only there.
+
 ## Replicated dispatch: measured again properly, about 8%
 
 The earlier "~10%" was measured with a dispatch table that turned out to be

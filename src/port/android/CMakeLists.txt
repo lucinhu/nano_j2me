@@ -25,6 +25,7 @@ add_library(nj2me SHARED
     ${NJ_ROOT}/src/core/nj_vm.c
     ${NJ_ROOT}/src/core/nj_thread.c
     ${NJ_ROOT}/src/core/nj_interp.c
+    ${NJ_ROOT}/src/core/nj_engine.c
     ${NJ_ROOT}/src/core/nj_app.c
     ${NJ_ROOT}/src/core/nj_builtins.c
     ${NJ_ROOT}/src/core/nj_lib_object.c

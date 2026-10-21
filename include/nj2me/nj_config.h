@@ -429,6 +429,40 @@
 #  define NJ_THREADED_DISPATCH 0
 #endif
 
+/*
+ * Interpreter fast paths.
+ *
+ * All of these trade FLASH/CODE SIZE for dispatch work, never RAM: they fuse,
+ * fold or skip bytecode that the interpreter would otherwise dispatch again.
+ * The fused forms are recognised at run time from the bytecode stream and the
+ * instruction is still executed exactly as the JVM spec says - the code array
+ * is never rewritten, so a jar behaves identically with every switch below
+ * off.  A port with a tight flash budget can turn them off one by one.
+ *
+ *   NJ_ENABLE_SUPERINSTR       run the C-level semantics of a fused bytecode
+ *                              pair directly instead of dispatching its second
+ *                              opcode (e.g. `push const; iand`).  Saves one
+ *                              dispatch and one instruction-count bump.
+ *   NJ_ENABLE_JUMP_THREADING   when control flow lands on a goto, follow the
+ *                              chain to its final target without going back
+ *                              through the dispatch table.  J2ME compilers emit
+ *                              long if/goto chains; this flattens them.
+ *   NJ_ENABLE_ENGINE           build the pluggable execution-engine interface
+ *                              (see docs/JIT.md).  This is the only switch here
+ *                              that can add RAM: one pointer in nj_vm, plus
+ *                              whatever an installed engine allocates.  A
+ *                              default build has neither.
+ */
+#ifndef NJ_ENABLE_SUPERINSTR
+#  define NJ_ENABLE_SUPERINSTR 1
+#endif
+#ifndef NJ_ENABLE_JUMP_THREADING
+#  define NJ_ENABLE_JUMP_THREADING 1
+#endif
+#ifndef NJ_ENABLE_ENGINE
+#  define NJ_ENABLE_ENGINE 0
+#endif
+
 /* Assertions (always compiled out unless explicitly enabled). */
 #ifndef NJ_ASSERT_ENABLED
 #  define NJ_ASSERT_ENABLED 0

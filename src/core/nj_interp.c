@@ -299,7 +299,171 @@ static nj_ref interp_multianew(nj_vm *vm, nj_class *arr_cls,
 /* The main loop                                                       */
 /* ------------------------------------------------------------------ */
 
-nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
+/*
+ * The portable interpreter loop.  nj_exec() (nj_engine.c) is the entry point
+ * everyone else calls; it forwards here unless an execution engine is
+ * installed (see NJ_ENABLE_ENGINE and docs/JIT.md).
+ */
+#if NJ_ENABLE_SUPERINSTR
+/*
+ * FUSED `const-push; int-arith`, the generalisation of the old
+ * `bipush/sipush + iand` special case.
+ *
+ * A const-push opcode that is immediately followed by one of the int
+ * arithmetic opcodes listed in NJ_CONST_ARITH_BITS runs both in one dispatch:
+ * the constant is never pushed, the value it would have been the second
+ * operand of is already on top of the stack at sp[-1], and the result is
+ * written back there.  The consumer's opcode byte is consumed, so a throw
+ * raised here reports the same pc the standalone consumer would have.
+ *
+ * Stack order matters for the non-commutative cases: the stack holds
+ * `value1` below and the constant would have been on top, so this computes
+ * `value1 OP const` (and `value1 << const` for the shifts, with the JVM's
+ * five-bit shift-count mask).
+ *
+ * Returns 0 when the operation was folded in and 1 when a fused idiv/irem
+ * divides by zero.  The throw itself is left to the caller because THROW
+ * jumps to do_unwind, which only exists inside the interpreter loop.
+ */
+static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
+{
+    switch (op) {
+    case 0x60: sp[-1].i = (nj_s4)((nj_u4)sp[-1].i + (nj_u4)v); break; /* iadd */
+    case 0x64: sp[-1].i = (nj_s4)((nj_u4)sp[-1].i - (nj_u4)v); break; /* isub */
+    case 0x68: sp[-1].i = (nj_s4)((nj_u4)sp[-1].i * (nj_u4)v); break; /* imul */
+    case 0x6c:                                                        /* idiv */
+        if (v == 0) {
+            return 1;
+        }
+        sp[-1].i = (sp[-1].i == (nj_s4)0x80000000 && v == -1) ? sp[-1].i
+                                                            : (sp[-1].i / v);
+        break;
+    case 0x70:                                                        /* irem */
+        if (v == 0) {
+            return 1;
+        }
+        sp[-1].i = (v == -1) ? 0 : (sp[-1].i % v);
+        break;
+    case 0x78: sp[-1].i = (nj_s4)((nj_u4)sp[-1].i << ((nj_u4)v & 31u)); break;
+    case 0x7a: sp[-1].i = sp[-1].i >> ((nj_u4)v & 31u); break;
+    case 0x7c: sp[-1].i = (nj_s4)((nj_u4)sp[-1].i >> ((nj_u4)v & 31u)); break;
+    case 0x7e: sp[-1].i = sp[-1].i & v; break;                        /* iand */
+    case 0x80: sp[-1].i = sp[-1].i | v; break;                        /* ior */
+    case 0x82: sp[-1].i = sp[-1].i ^ v; break;                        /* ixor */
+    default: break;
+    }
+    return 0;
+}
+#endif
+
+#if NJ_ENABLE_SUPERINSTR
+/*
+ * Bit d of this mask is set for the int-arith opcode 0x60 + d that the fused
+ * const-push helper above handles.  Testing it costs a subtract, a compare
+ * and a shift on the hot path of every const-push opcode, which is why it is
+ * a mask rather than a 256-byte table.
+ */
+#define NJ_CONST_ARITH_BITS                                               \
+    ((1ULL << (0x60 - 0x60)) |  /* iadd */                                 \
+     (1ULL << (0x64 - 0x60)) |  /* isub */                                 \
+     (1ULL << (0x68 - 0x60)) |  /* imul */                                 \
+     (1ULL << (0x6c - 0x60)) |  /* idiv */                                 \
+     (1ULL << (0x70 - 0x60)) |  /* irem */                                 \
+     (1ULL << (0x78 - 0x60)) |  /* ishl */                                 \
+     (1ULL << (0x7a - 0x60)) |  /* ishr */                                 \
+     (1ULL << (0x7c - 0x60)) |  /* iushr */                                \
+     (1ULL << (0x7e - 0x60)) |  /* iand */                                 \
+     (1ULL << (0x80 - 0x60)) |  /* ior */                                  \
+     (1ULL << (0x82 - 0x60)))   /* ixor */
+/*
+ * Deliberately a bare block and not a do/while: DISPATCH() is `continue` in the
+ * portable build, and inside a do/while that `continue` would resume after the
+ * macro - pushing the constant that was just folded away - instead of jumping
+ * to the top of the interpreter loop.
+ */
+#define NJ_CONST_ARITH_FUSE(CONST)                                        \
+    {                                                                     \
+        nj_u4 d_ = (pc < code_len) ? ((nj_u4)code[pc] - 0x60u) : 64u;     \
+        if (d_ < 35u && ((NJ_CONST_ARITH_BITS >> d_) & 1u) != 0u) {       \
+            nj_u1 nx_ = code[pc];                                         \
+            pc++;                                                         \
+            if (nj_interp_const_arith(sp, nx_, (CONST)) != 0) {           \
+                THROW("java/lang/ArithmeticException", "/ by zero");      \
+            }                                                             \
+            DISPATCH();                                                   \
+        }                                                                 \
+    }
+
+/*
+ * `iload*; if<cond>` - the loaded value is consumed by the branch, so the
+ * push/pop round trip and one dispatch disappear.  Branch offsets are relative
+ * to the BRANCH opcode, not to the load, so its address is captured first.
+ * Like the fold above this is a bare block: DISPATCH() is `continue` in the
+ * portable build and must not be captured by a do/while.
+ */
+#define NJ_INT_BRANCH_TAKEN(BOP, V)                                       \
+    ((BOP) == 0x99u ? ((V) == 0) :                                        \
+     (BOP) == 0x9au ? ((V) != 0) :                                        \
+     (BOP) == 0x9bu ? ((V) < 0) :                                         \
+     (BOP) == 0x9cu ? ((V) >= 0) :                                        \
+     (BOP) == 0x9du ? ((V) > 0) : ((V) <= 0))
+
+#define NJ_LOAD_BRANCH_INT(V)                                             \
+    {                                                                     \
+        if (pc + 3u <= code_len && code[pc] >= 0x99u &&                   \
+            code[pc] <= 0x9eu) {                                          \
+            /* Names are prefixed because the caller's value is often called \
+             * v_/r_ too: `nj_s4 v_ = (V)` with V == v_ would initialise the \
+             * new v_ from ITSELF (its scope starts at its declarator), not \
+             * from the caller's value. */                                 \
+            nj_u4 njlb_pc_ = pc;                                          \
+            nj_s4 njlb_v_ = (V);                                          \
+            nj_u1 njlb_op_ = code[pc++];                                  \
+            nj_s2 njlb_off_ = S2();                                       \
+            if (NJ_INT_BRANCH_TAKEN(njlb_op_, njlb_v_)) {                 \
+                pc = (nj_u4)(nj_s4)((nj_s4)njlb_pc_ + njlb_off_);         \
+                JUMP_THREAD();                                            \
+            }                                                             \
+            DISPATCH();                                                   \
+        }                                                                 \
+    }
+
+/* `aload*; ifnull/ifnonnull` - same shape, on a reference. */
+#define NJ_LOAD_BRANCH_REF(V)                                             \
+    {                                                                     \
+        if (pc + 3u <= code_len &&                                        \
+            (code[pc] == 0xc6u || code[pc] == 0xc7u)) {                   \
+            nj_u4 njlb_pc_ = pc;                                          \
+            nj_ref njlb_r_ = (V);                                         \
+            nj_u1 njlb_op_ = code[pc++];                                  \
+            nj_s2 njlb_off_ = S2();                                       \
+            if ((njlb_op_ == 0xc6u) ? (njlb_r_ == NULL)                   \
+                                    : (njlb_r_ != NULL)) {                \
+                pc = (nj_u4)(nj_s4)((nj_s4)njlb_pc_ + njlb_off_);         \
+                JUMP_THREAD();                                            \
+            }                                                             \
+            DISPATCH();                                                   \
+        }                                                                 \
+    }
+
+/*
+ * `istore_k; iload_k` - the value is stored into the local and immediately
+ * loaded again, so the local write still happens but the pop/push pair and the
+ * second dispatch do not.  Only the SAME slot is fused: `istore_3; iload_1`
+ * would need two locals live at once and is not worth the branch.
+ */
+#define NJ_STORE_LOAD_FUSE(K)                                             \
+    {                                                                     \
+        if (pc + 1u <= code_len &&                                        \
+            code[pc] == (nj_u1)(0x1au + (nj_u1)(K))) {                    \
+            locals[K].bits = sp[-1].bits;                                 \
+            pc++;                                                         \
+            DISPATCH();                                                   \
+        }                                                                 \
+    }
+#endif
+
+nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
 {
     nj_frame *fr;
     nj_method *m;
@@ -310,6 +474,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
     nj_value *sp;
     nj_u4 pc;
     nj_u4 quantum = (nj_u4)NJ_SCHED_QUANTUM;
+    nj_value *stack_limit;   /* cached fr->stack_limit; refreshed by RELOAD() */
+    nj_u8 insns_ = 0u;       /* bytecodes dispatched by this activation */
 
     if (!vm || !th) {
         return NJ_ERR;
@@ -326,6 +492,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
     stack = fr->stack;
     sp = fr->sp;
     pc = fr->pc;
+    stack_limit = fr->stack_limit;
 
     if (!code) {
         return NJ_ERR_HALT;   /* a native frame never enters the interpreter */
@@ -345,11 +512,71 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
  * Branch offsets in a class file are relative to the address of the BRANCH
  * OPCODE, not to the pc after its operands.  All relative jumps therefore go
  * through op_pc, which the dispatch loop records before fetching the opcode.
+ *
+ * JUMP THREADING
+ *
+ * J2ME obfuscators and javac both leave long chains of `goto` between the
+ * branch that decided something and the code that does it: `ifeq L1` where L1
+ * is itself `goto L2` is a dispatch, a fetch, a quantum tick and an indirect
+ * branch spent on moving pc.  When a jump lands on an unconditional goto, the
+ * jump is followed here instead - up to NJ_JT_HOPS per dispatch - so a chain
+ * costs one dispatch instead of one per link.  The chain is never rewritten
+ * and no bytecode is patched, so a branch into the middle of a chain still
+ * behaves exactly as before.
+ *
+ * The hop limit bounds the time spent between quantum checks: `goto` to itself
+ * is an infinite loop, and without the limit it would spin here forever
+ * instead of yielding the thread.  With NJ_ENABLE_JUMP_THREADING 0 the macro
+ * is a no-op and this is exactly the interpreter that was measured before.
+ *
+ * pc is always in its "next instruction" state between dispatches, and the
+ * next fetch re-records op_pc, so following a chain cannot leave op_pc stale
+ * for the instruction that is finally dispatched.
  */
-#define JMP(o)      do { pc = (nj_u4)(nj_s4)((nj_s4)op_pc + (nj_s2)(o)); } while (0)
-#define JUMP_ABS(a) do { pc = (nj_u4)(a); } while (0)
+#if NJ_ENABLE_JUMP_THREADING
+#define NJ_JT_HOPS 8
+#define JUMP_THREAD() do {                                             \
+        int _jt;                                                       \
+        for (_jt = 0; _jt < NJ_JT_HOPS && pc < code_len; _jt++) {      \
+            nj_u4 _at = pc;                                            \
+            nj_u1 _jop = code[_at];                                    \
+            nj_s4 _rel;                                                \
+            if (_jop == 0xa7) {                                        \
+                if (_at + 3u > code_len) break;                        \
+                _rel = (nj_s2)(((nj_u2)code[_at + 1u] << 8) |          \
+                               (nj_u2)code[_at + 2u]);                 \
+            } else if (_jop == 0xc8) {                                 \
+                if (_at + 5u > code_len) break;                        \
+                _rel = (nj_s4)(((nj_u4)code[_at + 1u] << 24) |         \
+                               ((nj_u4)code[_at + 2u] << 16) |         \
+                               ((nj_u4)code[_at + 3u] << 8)  |         \
+                               (nj_u4)code[_at + 4u]);                 \
+            } else {                                                   \
+                break;                                                 \
+            }                                                          \
+            pc = (nj_u4)((nj_s4)_at + _rel);                           \
+        }                                                              \
+    } while (0)
+#else
+#define JUMP_THREAD() ((void)0)
+#endif
 
-#define SAVE() do { fr->pc = pc; fr->sp = sp; } while (0)
+#define JMP(o)      do {                                               \
+        pc = (nj_u4)(nj_s4)((nj_s4)op_pc + (nj_s2)(o));                \
+        JUMP_THREAD();                                                 \
+    } while (0)
+#define JUMP_ABS(a) do { pc = (nj_u4)(a); JUMP_THREAD(); } while (0)
+
+/*
+ * vm->insns counts every dispatched bytecode and is read by nj_vm_stats().
+ * Bumping it once per instruction is a load/add/store on the hottest path in
+ * the runtime; the count is accumulated in a local instead and folded back
+ * whenever the frame is saved, which every exit from the dispatch loop does.
+ * A caller that can observe vm->insns (stats are read between nj_exec calls,
+ * never from inside the loop) therefore always sees the exact count.
+ */
+#define INSN_FLUSH() do { vm->insns += insns_; insns_ = 0u; } while (0)
+#define SAVE() do { fr->pc = pc; fr->sp = sp; INSN_FLUSH(); } while (0)
 #define RELOAD() do {                                                  \
         fr = &th->frames[th->nframes - 1];                             \
         m = fr->m;                                                     \
@@ -357,6 +584,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         code_len = m->code_len;                                        \
         locals = fr->locals;                                           \
         stack = fr->stack;                                             \
+        stack_limit = fr->stack_limit;                                 \
         sp = fr->sp;                                                   \
         pc = fr->pc;                                                   \
     } while (0)
@@ -396,8 +624,12 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
      * table points at L_haveop, and it runs through the switch exactly as
      * before - with the opcode ALREADY FETCHED by the previous handler's
      * DISPATCH().
-     * The two kinds coexist, which is what makes this incremental.  After
-     * every conversion the benchmark must still print
+     * The two kinds coexist, which is what makes this incremental; today 198 of
+     * the 256 table slots are converted.  The eight left are the ones that do
+     * not end in a dispatchable `break`: `athrow` always unwinds, and
+     * `breakpoint`, `impdep1`, `impdep2` and the unused encodings 0xcb-0xfd
+     * only ever reach the switch's `default:`, which throws VerifyError.
+     * After every conversion the benchmark must still print
      *
      *     BENCH sum=-136042548 s=5
      *
@@ -441,32 +673,32 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
      */
 #if NJ_THREADED_DISPATCH
     __extension__ static const void *const nj_dispatch[256] = {
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0x00,
+        &&L_0x01,
+        &&L_0x02,
         &&L_0x03,
         &&L_0x03,
         &&L_0x03,
         &&L_0x03,
         &&L_0x03,
         &&L_0x03,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0x09,
+        &&L_0x0a,
+        &&L_0x0b,
+        &&L_0x0c,
+        &&L_0x0d,
+        &&L_0x0e,
+        &&L_0x0f,
         &&L_0x10,
         &&L_0x11,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0x12,
+        &&L_0x12,
+        &&L_0x14,
         &&L_0x15,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0x16,
+        &&L_0x17,
+        &&L_0x18,
+        &&L_0x19,
         &&L_0x1a,
         &&L_0x1a,
         &&L_0x1a,
@@ -475,150 +707,150 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         &&L_0x1e,
         &&L_0x1e,
         &&L_0x1e,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0x22,
+        &&L_0x22,
+        &&L_0x22,
+        &&L_0x22,
+        &&L_0x26,
+        &&L_0x26,
+        &&L_0x26,
+        &&L_0x26,
+        &&L_0x2a,
+        &&L_0x2a,
+        &&L_0x2a,
+        &&L_0x2a,
+        &&L_0x2e,
+        &&L_0x2f,
+        &&L_0x30,
+        &&L_0x31,
+        &&L_0x32,
+        &&L_0x33,
+        &&L_0x34,
+        &&L_0x35,
+        &&L_0x36,
+        &&L_0x37,
+        &&L_0x38,
+        &&L_0x39,
+        &&L_0x3a,
         &&L_0x3b,
         &&L_0x3b,
         &&L_0x3b,
         &&L_0x3b,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0x3f,
+        &&L_0x3f,
+        &&L_0x3f,
+        &&L_0x3f,
+        &&L_0x43,
+        &&L_0x43,
+        &&L_0x43,
+        &&L_0x43,
+        &&L_0x47,
+        &&L_0x47,
+        &&L_0x47,
+        &&L_0x47,
+        &&L_0x4b,
+        &&L_0x4b,
+        &&L_0x4b,
+        &&L_0x4b,
+        &&L_0x4f,
+        &&L_0x50,
+        &&L_0x4f,
+        &&L_0x52,
+        &&L_0x53,
+        &&L_0x4f,
+        &&L_0x4f,
+        &&L_0x4f,
+        &&L_0x57,
+        &&L_0x58,
+        &&L_0x59,
+        &&L_0x5a,
+        &&L_0x5b,
+        &&L_0x5c,
+        &&L_0x5d,
+        &&L_0x5e,
+        &&L_0x5f,
         &&L_0x60,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0x61,
+        &&L_0x62,
+        &&L_0x63,
+        &&L_0x64,
+        &&L_0x65,
+        &&L_0x66,
+        &&L_0x67,
         &&L_0x68,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0x69,
+        &&L_0x6a,
+        &&L_0x6b,
+        &&L_0x6c,
+        &&L_0x6d,
+        &&L_0x6e,
+        &&L_0x6f,
+        &&L_0x70,
+        &&L_0x71,
+        &&L_0x72,
+        &&L_0x73,
+        &&L_0x74,
+        &&L_0x75,
+        &&L_0x76,
+        &&L_0x77,
+        &&L_0x78,
+        &&L_0x79,
+        &&L_0x7a,
+        &&L_0x7b,
+        &&L_0x7c,
+        &&L_0x7d,
         &&L_0x7e,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0x7f,
+        &&L_0x80,
+        &&L_0x81,
         &&L_0x82,
-        &&L_haveop,
+        &&L_0x83,
         &&L_0x84,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0x85,
+        &&L_0x86,
+        &&L_0x87,
+        &&L_0x88,
+        &&L_0x89,
+        &&L_0x8a,
+        &&L_0x8b,
+        &&L_0x8c,
+        &&L_0x8d,
+        &&L_0x8e,
+        &&L_0x8f,
+        &&L_0x90,
+        &&L_0x91,
+        &&L_0x92,
+        &&L_0x93,
         &&L_0x94,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0x95,
+        &&L_0x95,
+        &&L_0x97,
+        &&L_0x97,
+        &&L_0x99,
+        &&L_0x9a,
+        &&L_0x9b,
+        &&L_0x9c,
+        &&L_0x9d,
+        &&L_0x9e,
         &&L_0x9f,
         &&L_0x9f,
         &&L_0x9f,
         &&L_0x9f,
         &&L_0x9f,
         &&L_0x9f,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0xa5,
+        &&L_0xa6,
         &&L_0xa7,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0xa8,
+        &&L_0xa9,
+        &&L_0xaa,
+        &&L_0xab,
         &&L_0xac,
-        &&L_haveop,
+        &&L_0xad,
         &&L_0xac,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0xad,
+        &&L_0xb0,
+        &&L_0xb1,
         &&L_0xb2,
         &&L_haveop,
         &&L_0xb2,
@@ -628,21 +860,21 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         &&L_invoke,
         &&L_invoke,
         &&L_haveop,
+        &&L_0xbb,
+        &&L_0xbc,
+        &&L_0xbd,
+        &&L_0xbe,
         &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
-        &&L_haveop,
+        &&L_0xc0,
+        &&L_0xc1,
+        &&L_0xc2,
+        &&L_0xc3,
+        &&L_0xc4,
+        &&L_0xc5,
+        &&L_0xc6,
+        &&L_0xc7,
+        &&L_0xc8,
+        &&L_0xc9,
         &&L_haveop,
         &&L_haveop,
         &&L_haveop,
@@ -720,7 +952,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
          * this is what stands between a malformed JAR and memory corruption,
          * and a loud VerifyError is the outcome this project wants.
          */                                                             \
-        if (sp > fr->stack_limit) {                                    \
+        if (sp > stack_limit) {                                        \
             THROW("java/lang/VerifyError",                            \
                   "operand stack overflow");                           \
         }                                                              \
@@ -730,7 +962,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         op = code[pc++];                                               \
         _Pragma("GCC diagnostic pop")                                  \
         (void)op_pc;                                                   \
-        vm->insns++;                                                   \
+        insns_++;                                                      \
     } while (0)
 
     /*
@@ -752,7 +984,15 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
 #define DISPATCH() { CHECK_QUANTUM(); continue; }
 #endif
 
+    /*
+     * The portable build re-enters the loop through this label; the threaded
+     * build has no label because every handler that can reach the top of the
+     * loop dispatches through the table itself, so only a fall-through needs
+     * the fetch below.
+     */
+#if !NJ_THREADED_DISPATCH
     L_slow:
+#endif
         NJ_FETCH_OP();
 #if NJ_ENABLE_DEBUG
         if (vm->trace) {
@@ -776,20 +1016,27 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         switch (op) {
 
         /* ================= constants ================= */
-        case 0x00: break;                                  /* nop */
-        case 0x01: sp->r = NULL; sp++; break;              /* aconst_null */
-        case 0x02: sp->i = -1; sp++; break;                /* iconst_m1 */
+        L_0x00: case 0x00: DISPATCH();                                  /* nop */
+        L_0x01: case 0x01: sp->r = NULL; sp++; DISPATCH();              /* aconst_null */
+        L_0x02: case 0x02:                               /* iconst_m1 */
+#if NJ_ENABLE_SUPERINSTR
+            NJ_CONST_ARITH_FUSE(-1);
+#endif
+            sp->i = -1; sp++; DISPATCH();
         L_0x03: case 0x03: case 0x04: case 0x05:
         case 0x06: case 0x07: case 0x08:                   /* iconst_0..5 */
+#if NJ_ENABLE_SUPERINSTR
+            NJ_CONST_ARITH_FUSE((nj_s4)op - 3);
+#endif
             sp->i = (nj_s4)op - 3; sp++; DISPATCH();
-        case 0x09: PUSH_W(0); break;                       /* lconst_0 */
-        case 0x0a: PUSH_W(1); break;                       /* lconst_1 */
-        case 0x0b: sp->f = 0.0f; sp++; break;
-        case 0x0c: sp->f = 1.0f; sp++; break;
-        case 0x0d: sp->f = 2.0f; sp++; break;
-        case 0x0e: PUSH_W(0); break;                       /* dconst_0 */
-        case 0x0f: sp[0].d = 1.0; sp[1].bits = 0u;
-                   sp += 2; break;                       /* dconst_1 */
+        L_0x09: case 0x09: PUSH_W(0); DISPATCH();                       /* lconst_0 */
+        L_0x0a: case 0x0a: PUSH_W(1); DISPATCH();                       /* lconst_1 */
+        L_0x0b: case 0x0b: sp->f = 0.0f; sp++; DISPATCH();
+        L_0x0c: case 0x0c: sp->f = 1.0f; sp++; DISPATCH();
+        L_0x0d: case 0x0d: sp->f = 2.0f; sp++; DISPATCH();
+        L_0x0e: case 0x0e: PUSH_W(0); DISPATCH();                       /* dconst_0 */
+        L_0x0f: case 0x0f: sp[0].d = 1.0; sp[1].bits = 0u;
+                   sp += 2; DISPATCH();                       /* dconst_1 */
         /* SUPERINSTRUCTION: push-constant followed by iand.  The benchmark's
          * inner loop does it four times per iteration (sipush 255, sipush 511,
          * bipush 127, ldc 65535 - every one followed by iand), and it is what a
@@ -802,29 +1049,19 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
          * problem: pc advances normally, a branch onto either instruction still
          * does the right thing, and the fused path's peak stack depth is the
          * same as the unfused one, so stack_limit stays valid. */
-        L_0x10: case 0x10: {                               /* bipush [+ iand] */
+        L_0x10: case 0x10: {                     /* bipush [+ int-arith] */
             nj_s4 v = S1();
-            if (pc < code_len && code[pc] == 0x7e) {
-                nj_s4 a;
-                pc++;
-                a = (--sp)->i;
-                sp->i = a & v;
-                sp++;
-                DISPATCH();
-            }
+#if NJ_ENABLE_SUPERINSTR
+            NJ_CONST_ARITH_FUSE(v);
+#endif
             sp->i = v; sp++; DISPATCH(); }
-        L_0x11: case 0x11: {                               /* sipush [+ iand] */
+        L_0x11: case 0x11: {                     /* sipush [+ int-arith] */
             nj_s4 v = S2();
-            if (pc < code_len && code[pc] == 0x7e) {
-                nj_s4 a;
-                pc++;
-                a = (--sp)->i;
-                sp->i = a & v;
-                sp++;
-                DISPATCH();
-            }
+#if NJ_ENABLE_SUPERINSTR
+            NJ_CONST_ARITH_FUSE(v);
+#endif
             sp->i = v; sp++; DISPATCH(); }
-        case 0x12: case 0x13: {                            /* ldc / ldc_w */
+        L_0x12: case 0x12: case 0x13: {                            /* ldc / ldc_w */
             nj_u2 idx = (op == 0x12) ? (nj_u2)U1() : U2();
             nj_value cst[2];
             nj_ref sr = NULL;
@@ -832,15 +1069,28 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             if (k < 0) {
                 THROW("java/lang/VerifyError", "bad ldc operand");
             }
+#if NJ_ENABLE_SUPERINSTR
+            /*
+             * Only an INTEGER constant may be folded: a float constant has the
+             * same shape in cst[0], and treating its bits as an int would turn
+             * `ldc 1.0f; iadd` into integer arithmetic.  nj_cp_const does not
+             * report the tag, so read the raw cp_info word here: its low nibble
+             * is the tag (the private NJ_CP_TAG in nj_class.c, which is why the
+             * mask is written out rather than named).
+             */
+            if (k == 0 && (nj_u1)(m->owner->cp_info[idx] & 0xFu) == NJ_CP_INTEGER) {
+                NJ_CONST_ARITH_FUSE(cst[0].i);
+            }
+#endif
             if (k == 1) {
                 sp->r = sr;
             } else {
                 sp->bits = cst[0].bits;   /* int or float: one slot */
             }
             sp++;
-            break;
+            DISPATCH();
         }
-        case 0x14: {                                       /* ldc2_w */
+        L_0x14: case 0x14: {                                       /* ldc2_w */
             nj_u2 idx = U2();
             nj_value cst[2];
             nj_ref sr = NULL;
@@ -850,25 +1100,47 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             sp[0] = cst[0];
             sp[1].bits = 0u;
             sp += 2;
-            break;
+            DISPATCH();
         }
 
         /* ================= loads ================= */
-        L_0x15: case 0x15: { nj_u2 i = (nj_u2)U1(); sp->bits = locals[i].bits; sp++; DISPATCH(); }
-        case 0x16: { nj_u2 i = (nj_u2)U1(); sp[0] = locals[i]; sp[1].bits=0u; sp+=2; break; }
-        case 0x17: { nj_u2 i = (nj_u2)U1(); sp->bits = locals[i].bits; sp++; break; }
-        case 0x18: { nj_u2 i = (nj_u2)U1(); sp[0] = locals[i]; sp[1].bits=0u; sp+=2; break; }
-        case 0x19: { nj_u2 i = (nj_u2)U1(); sp->r = locals[i].r; sp++; break; }
+        L_0x15: case 0x15: { nj_u2 i = (nj_u2)U1();
+            nj_s4 v_ = locals[i].i;
+#if NJ_ENABLE_SUPERINSTR
+            NJ_LOAD_BRANCH_INT(v_);
+#endif
+            sp->i = v_; sp++; DISPATCH(); }
+        L_0x16: case 0x16: { nj_u2 i = (nj_u2)U1(); sp[0] = locals[i]; sp[1].bits=0u; sp+=2; DISPATCH(); }
+        L_0x17: case 0x17: { nj_u2 i = (nj_u2)U1(); sp->bits = locals[i].bits; sp++; DISPATCH(); }
+        L_0x18: case 0x18: { nj_u2 i = (nj_u2)U1(); sp[0] = locals[i]; sp[1].bits=0u; sp+=2; DISPATCH(); }
+        L_0x19: case 0x19: { nj_u2 i = (nj_u2)U1();
+            nj_ref r_ = locals[i].r;
+#if NJ_ENABLE_SUPERINSTR
+            NJ_LOAD_BRANCH_REF(r_);
+#endif
+            sp->r = r_; sp++; DISPATCH(); }
         L_0x1a: case 0x1a: case 0x1b: case 0x1c: case 0x1d:  /* iload_0..3 */
-            sp->bits = locals[op - 0x1a].bits; sp++; DISPATCH();
+            {
+                nj_s4 v_ = locals[op - 0x1a].i;
+#if NJ_ENABLE_SUPERINSTR
+                NJ_LOAD_BRANCH_INT(v_);
+#endif
+                sp->i = v_; sp++; DISPATCH();
+            }
         L_0x1e: case 0x1e: case 0x1f: case 0x20: case 0x21:  /* lload_0..3 */
             sp[0] = locals[op - 0x1e]; sp[1].bits = 0u; sp += 2; DISPATCH();
-        case 0x22: case 0x23: case 0x24: case 0x25:        /* fload_0..3 */
-            sp->bits = locals[op - 0x22].bits; sp++; break;
-        case 0x26: case 0x27: case 0x28: case 0x29:        /* dload_0..3 */
-            sp[0] = locals[op - 0x26]; sp[1].bits = 0u; sp += 2; break;
-        case 0x2a: case 0x2b: case 0x2c: case 0x2d:        /* aload_0..3 */
-            sp->r = locals[op - 0x2a].r; sp++; break;
+        L_0x22: case 0x22: case 0x23: case 0x24: case 0x25:        /* fload_0..3 */
+            sp->bits = locals[op - 0x22].bits; sp++; DISPATCH();
+        L_0x26: case 0x26: case 0x27: case 0x28: case 0x29:        /* dload_0..3 */
+            sp[0] = locals[op - 0x26]; sp[1].bits = 0u; sp += 2; DISPATCH();
+        L_0x2a: case 0x2a: case 0x2b: case 0x2c: case 0x2d:        /* aload_0..3 */
+            {
+                nj_ref r_ = locals[op - 0x2a].r;
+#if NJ_ENABLE_SUPERINSTR
+                NJ_LOAD_BRANCH_REF(r_);
+#endif
+                sp->r = r_; sp++; DISPATCH();
+            }
 
         /* ================= array loads ================= */
 #define ARRAY_HEAD()                                                   \
@@ -878,51 +1150,63 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         if (arr_->kind != NJ_OBJ_ARRAY || (nj_u4)idx_ >= arr_->length) \
             THROW("java/lang/ArrayIndexOutOfBoundsException", NULL)
 
-        case 0x2e: { ARRAY_HEAD();                        /* iaload */
-            sp->i = nj_array_get_int(arr_, (nj_u4)idx_); sp++; break; }
-        case 0x2f: { ARRAY_HEAD();                        /* laload */
-            PUSH_W(((nj_s8 *)arr_->u.bytes)[idx_]); break; }
-        case 0x30: { ARRAY_HEAD();                        /* faload */
-            sp->f = ((float *)arr_->u.bytes)[idx_]; sp++; break; }
-        case 0x31: { ARRAY_HEAD();                        /* daload */
+        L_0x2e: case 0x2e: { ARRAY_HEAD();                        /* iaload */
+            sp->i = nj_array_get_int(arr_, (nj_u4)idx_); sp++; DISPATCH(); }
+        L_0x2f: case 0x2f: { ARRAY_HEAD();                        /* laload */
+            PUSH_W(((nj_s8 *)arr_->u.bytes)[idx_]); DISPATCH(); }
+        L_0x30: case 0x30: { ARRAY_HEAD();                        /* faload */
+            sp->f = ((float *)arr_->u.bytes)[idx_]; sp++; DISPATCH(); }
+        L_0x31: case 0x31: { ARRAY_HEAD();                        /* daload */
             { nj_s8 b; memcpy(&b, &((double *)arr_->u.bytes)[idx_], 8u);
-              PUSH_W(b); } break; }
-        case 0x32: { ARRAY_HEAD();                        /* aaload */
+              PUSH_W(b); } DISPATCH(); }
+        L_0x32: case 0x32: { ARRAY_HEAD();                        /* aaload */
             sp->r = (arr_->aflags == NJ_ARRAY_T_REF) ? arr_->u.refs[idx_] : NULL;
-            sp++; break; }
-        case 0x33: { ARRAY_HEAD();                        /* baload */
+            sp++; DISPATCH(); }
+        L_0x33: case 0x33: { ARRAY_HEAD();                        /* baload */
             sp->i = (arr_->aflags == NJ_ARRAY_T_BOOLEAN)
                         ? (((nj_u1 *)arr_->u.bytes)[idx_] ? 1 : 0)
                         : (nj_s4)(((nj_s1 *)arr_->u.bytes)[idx_]);
-            sp++; break; }
-        case 0x34: { ARRAY_HEAD();                        /* caload */
-            sp->i = (nj_s4)((nj_u2 *)arr_->u.bytes)[idx_]; sp++; break; }
-        case 0x35: { ARRAY_HEAD();                        /* saload */
-            sp->i = (nj_s4)((nj_s2 *)arr_->u.bytes)[idx_]; sp++; break; }
+            sp++; DISPATCH(); }
+        L_0x34: case 0x34: { ARRAY_HEAD();                        /* caload */
+            sp->i = (nj_s4)((nj_u2 *)arr_->u.bytes)[idx_]; sp++; DISPATCH(); }
+        L_0x35: case 0x35: { ARRAY_HEAD();                        /* saload */
+            sp->i = (nj_s4)((nj_s2 *)arr_->u.bytes)[idx_]; sp++; DISPATCH(); }
 
         /* ================= stores ================= */
-        case 0x36: { nj_u2 i = (nj_u2)U1(); locals[i].bits = (--sp)->bits; break; }
-        case 0x37: { nj_u2 i = (nj_u2)U1(); sp -= 2; locals[i] = sp[0];
-                     locals[i + 1u].bits = 0u; break; }
-        case 0x38: { nj_u2 i = (nj_u2)U1(); locals[i].bits = (--sp)->bits; break; }
-        case 0x39: { nj_u2 i = (nj_u2)U1(); sp -= 2; locals[i] = sp[0];
-                     locals[i + 1u].bits = 0u; break; }
-        case 0x3a: { nj_u2 i = (nj_u2)U1(); locals[i].r = (--sp)->r; break; }
+        L_0x36: case 0x36: { nj_u2 i = (nj_u2)U1();
+#if NJ_ENABLE_SUPERINSTR
+            if (i < 256u && pc + 1u <= code_len && code[pc] == 0x15u &&
+                code[pc + 1u] == (nj_u1)i) {
+                locals[i].bits = sp[-1].bits;
+                pc += 2u;
+                DISPATCH();
+            }
+#endif
+            locals[i].bits = (--sp)->bits; DISPATCH(); }
+        L_0x37: case 0x37: { nj_u2 i = (nj_u2)U1(); sp -= 2; locals[i] = sp[0];
+                     locals[i + 1u].bits = 0u; DISPATCH(); }
+        L_0x38: case 0x38: { nj_u2 i = (nj_u2)U1(); locals[i].bits = (--sp)->bits; DISPATCH(); }
+        L_0x39: case 0x39: { nj_u2 i = (nj_u2)U1(); sp -= 2; locals[i] = sp[0];
+                     locals[i + 1u].bits = 0u; DISPATCH(); }
+        L_0x3a: case 0x3a: { nj_u2 i = (nj_u2)U1(); locals[i].r = (--sp)->r; DISPATCH(); }
         L_0x3b: case 0x3b: case 0x3c: case 0x3d: case 0x3e:  /* istore_0..3 */
+#if NJ_ENABLE_SUPERINSTR
+            NJ_STORE_LOAD_FUSE(op - 0x3b);
+#endif
             locals[op - 0x3b].bits = (--sp)->bits; DISPATCH();
-        case 0x3f: case 0x40: case 0x41: case 0x42: {      /* lstore_0..3 */
+        L_0x3f: case 0x3f: case 0x40: case 0x41: case 0x42: {      /* lstore_0..3 */
             nj_u2 i = (nj_u2)(op - 0x3f);
-            sp -= 2; locals[i] = sp[0]; locals[i + 1u].bits = 0u; break; }
-        case 0x43: case 0x44: case 0x45: case 0x46:        /* fstore_0..3 */
-            locals[op - 0x43].bits = (--sp)->bits; break;
-        case 0x47: case 0x48: case 0x49: case 0x4a: {      /* dstore_0..3 */
+            sp -= 2; locals[i] = sp[0]; locals[i + 1u].bits = 0u; DISPATCH(); }
+        L_0x43: case 0x43: case 0x44: case 0x45: case 0x46:        /* fstore_0..3 */
+            locals[op - 0x43].bits = (--sp)->bits; DISPATCH();
+        L_0x47: case 0x47: case 0x48: case 0x49: case 0x4a: {      /* dstore_0..3 */
             nj_u2 i = (nj_u2)(op - 0x47);
-            sp -= 2; locals[i] = sp[0]; locals[i + 1u].bits = 0u; break; }
-        case 0x4b: case 0x4c: case 0x4d: case 0x4e:        /* astore_0..3 */
-            locals[op - 0x4b].r = (--sp)->r; break;
+            sp -= 2; locals[i] = sp[0]; locals[i + 1u].bits = 0u; DISPATCH(); }
+        L_0x4b: case 0x4b: case 0x4c: case 0x4d: case 0x4e:        /* astore_0..3 */
+            locals[op - 0x4b].r = (--sp)->r; DISPATCH();
 
         /* ================= array stores ================= */
-        case 0x4f: case 0x51: case 0x54: case 0x55: case 0x56: {
+        L_0x4f: case 0x4f: case 0x51: case 0x54: case 0x55: case 0x56: {
             nj_s4 v_ = (--sp)->i;
             nj_s4 i_ = (--sp)->i;
             nj_ref a_ = (--sp)->r;
@@ -943,8 +1227,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             case 0x55: ((nj_u2 *)a_->u.bytes)[i_] = (nj_u2)(v_ & 0xFFFF); break;
             default:   ((nj_s2 *)a_->u.bytes)[i_] = (nj_s2)v_; break;
             }
-            break; }
-        case 0x50: {                                       /* lastore */
+            DISPATCH(); }
+        L_0x50: case 0x50: {                                       /* lastore */
             nj_s8 v_;
             sp -= 2; v_ = sp[0].j;
             { nj_s4 i_ = (--sp)->i;
@@ -953,8 +1237,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
               if (a_->kind != NJ_OBJ_ARRAY || (nj_u4)i_ >= a_->length)
                   THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
               ((nj_s8 *)a_->u.bytes)[i_] = v_; }
-            break; }
-        case 0x52: {                                       /* dastore */
+            DISPATCH(); }
+        L_0x52: case 0x52: {                                       /* dastore */
             nj_s8 v_;
             sp -= 2; v_ = sp[0].j;
             { nj_s4 i_ = (--sp)->i;
@@ -963,8 +1247,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
               if (a_->kind != NJ_OBJ_ARRAY || (nj_u4)i_ >= a_->length)
                   THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);
               memcpy(&((double *)a_->u.bytes)[i_], &v_, 8u); }
-            break; }
-        case 0x53: {                                       /* aastore */
+            DISPATCH(); }
+        L_0x53: case 0x53: {                                       /* aastore */
             nj_ref v_ = (--sp)->r;
             nj_s4 i_ = (--sp)->i;
             nj_ref a_ = (--sp)->r;
@@ -992,133 +1276,133 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 THROW("java/lang/ArrayStoreException", NULL);
             }
             a_->u.refs[i_] = v_;
-            break; }
+            DISPATCH(); }
 
         /* ================= stack manipulation ================= */
-        case 0x57: sp--; break;                            /* pop */
-        case 0x58: sp -= 2; break;                         /* pop2 */
-        case 0x59: sp[0] = sp[-1]; sp++; break;            /* dup */
-        case 0x5a: {                                       /* dup_x1 */
+        L_0x57: case 0x57: sp--; DISPATCH();                            /* pop */
+        L_0x58: case 0x58: sp -= 2; DISPATCH();                         /* pop2 */
+        L_0x59: case 0x59: sp[0] = sp[-1]; sp++; DISPATCH();            /* dup */
+        L_0x5a: case 0x5a: {                                       /* dup_x1 */
             nj_value v2 = sp[-2], v1 = sp[-1];
             sp[-2] = v1; sp[-1] = v2; sp[0] = v1; sp++;
-            break; }
-        case 0x5b: {                                       /* dup_x2 */
+            DISPATCH(); }
+        L_0x5b: case 0x5b: {                                       /* dup_x2 */
             nj_value v3 = sp[-3], v2 = sp[-2], v1 = sp[-1];
             sp[-3] = v1; sp[-2] = v3; sp[-1] = v2; sp[0] = v1; sp++;
-            break; }
-        case 0x5c: sp[0] = sp[-2]; sp[1] = sp[-1]; sp += 2; break; /* dup2 */
-        case 0x5d: {                                       /* dup2_x1 */
+            DISPATCH(); }
+        L_0x5c: case 0x5c: sp[0] = sp[-2]; sp[1] = sp[-1]; sp += 2; DISPATCH(); /* dup2 */
+        L_0x5d: case 0x5d: {                                       /* dup2_x1 */
             nj_value v3 = sp[-3], v2 = sp[-2], v1 = sp[-1];
             sp[-3] = v2; sp[-2] = v1; sp[-1] = v3;
             sp[0] = v2; sp[1] = v1; sp += 2;
-            break; }
-        case 0x5e: {                                       /* dup2_x2 */
+            DISPATCH(); }
+        L_0x5e: case 0x5e: {                                       /* dup2_x2 */
             nj_value v4 = sp[-4], v3 = sp[-3], v2 = sp[-2], v1 = sp[-1];
             sp[-4] = v2; sp[-3] = v1; sp[-2] = v4; sp[-1] = v3;
             sp[0] = v2; sp[1] = v1; sp += 2;
-            break; }
-        case 0x5f: { nj_value t = sp[-1]; sp[-1] = sp[-2]; sp[-2] = t; break; }
+            DISPATCH(); }
+        L_0x5f: case 0x5f: { nj_value t = sp[-1]; sp[-1] = sp[-2]; sp[-2] = t; DISPATCH(); }
 
         /* ================= arithmetic ================= */
         L_0x60: case 0x60: { nj_s4 b = (--sp)->i, a = (--sp)->i;
                      sp->i = (nj_s4)((nj_u4)a + (nj_u4)b); sp++; DISPATCH(); }
-        case 0x61: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
+        L_0x61: case 0x61: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
                      sp[0].j = (nj_s8)((nj_u8)sp[0].j + (nj_u8)b);
-                     sp[1].bits = 0u; sp += 2; break; }
-        case 0x62: { float b = (--sp)->f, a = (--sp)->f;
-                     sp->f = a + b; sp++; break; }
-        case 0x63: { double a, b; sp -= 2;
+                     sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x62: case 0x62: { float b = (--sp)->f, a = (--sp)->f;
+                     sp->f = a + b; sp++; DISPATCH(); }
+        L_0x63: case 0x63: { double a, b; sp -= 2;
                      memcpy(&b, &sp[0].j, 8u); sp -= 2;
                      memcpy(&a, &sp[0].j, 8u);
                      a += b; memcpy(&sp[0].j, &a, 8u);
-                     sp[1].bits = 0u; sp += 2; break; }
-        case 0x64: { nj_s4 b = (--sp)->i, a = (--sp)->i;
-                     sp->i = (nj_s4)((nj_u4)a - (nj_u4)b); sp++; break; }
-        case 0x65: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
+                     sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x64: case 0x64: { nj_s4 b = (--sp)->i, a = (--sp)->i;
+                     sp->i = (nj_s4)((nj_u4)a - (nj_u4)b); sp++; DISPATCH(); }
+        L_0x65: case 0x65: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
                      sp[0].j = (nj_s8)((nj_u8)sp[0].j - (nj_u8)b);
-                     sp[1].bits = 0u; sp += 2; break; }
-        case 0x66: { float b = (--sp)->f, a = (--sp)->f;
-                     sp->f = a - b; sp++; break; }
-        case 0x67: { double a, b; sp -= 2;
+                     sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x66: case 0x66: { float b = (--sp)->f, a = (--sp)->f;
+                     sp->f = a - b; sp++; DISPATCH(); }
+        L_0x67: case 0x67: { double a, b; sp -= 2;
                      memcpy(&b, &sp[0].j, 8u); sp -= 2;
                      memcpy(&a, &sp[0].j, 8u);
                      a -= b; memcpy(&sp[0].j, &a, 8u);
-                     sp[1].bits = 0u; sp += 2; break; }
+                     sp[1].bits = 0u; sp += 2; DISPATCH(); }
         L_0x68: case 0x68: { nj_s4 b = (--sp)->i, a = (--sp)->i;
                      sp->i = (nj_s4)((nj_u4)a * (nj_u4)b); sp++; DISPATCH(); }
-        case 0x69: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
+        L_0x69: case 0x69: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
                      sp[0].j = (nj_s8)((nj_u8)sp[0].j * (nj_u8)b);
-                     sp[1].bits = 0u; sp += 2; break; }
-        case 0x6a: { float b = (--sp)->f, a = (--sp)->f;
-                     sp->f = a * b; sp++; break; }
-        case 0x6b: { double a, b; sp -= 2;
+                     sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x6a: case 0x6a: { float b = (--sp)->f, a = (--sp)->f;
+                     sp->f = a * b; sp++; DISPATCH(); }
+        L_0x6b: case 0x6b: { double a, b; sp -= 2;
                      memcpy(&b, &sp[0].j, 8u); sp -= 2;
                      memcpy(&a, &sp[0].j, 8u);
                      a *= b; memcpy(&sp[0].j, &a, 8u);
-                     sp[1].bits = 0u; sp += 2; break; }
-        case 0x6c: { nj_s4 b = (--sp)->i, a = (--sp)->i;
+                     sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x6c: case 0x6c: { nj_s4 b = (--sp)->i, a = (--sp)->i;
                      if (b == 0) THROW("java/lang/ArithmeticException", "/ by zero");
                      sp->i = (a == (nj_s4)0x80000000 && b == -1) ? a : (a / b);
-                     sp++; break; }
-        case 0x6d: { nj_s8 b, a; sp -= 2; b = sp[0].j; sp -= 2; a = sp[0].j;
+                     sp++; DISPATCH(); }
+        L_0x6d: case 0x6d: { nj_s8 b, a; sp -= 2; b = sp[0].j; sp -= 2; a = sp[0].j;
                      if (b == 0) THROW("java/lang/ArithmeticException", "/ by zero");
                      if (a == (nj_s8)0x8000000000000000LL && b == -1) {
                          sp[0].j = a;
                      } else {
                          sp[0].j = a / b;
                      }
-                     sp[1].bits = 0u; sp += 2; break; }
-        case 0x6e: { float b = (--sp)->f, a = (--sp)->f;
-                     sp->f = a / b; sp++; break; }
-        case 0x6f: { double a, b; sp -= 2;
+                     sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x6e: case 0x6e: { float b = (--sp)->f, a = (--sp)->f;
+                     sp->f = a / b; sp++; DISPATCH(); }
+        L_0x6f: case 0x6f: { double a, b; sp -= 2;
                      memcpy(&b, &sp[0].j, 8u); sp -= 2;
                      memcpy(&a, &sp[0].j, 8u);
                      a /= b; memcpy(&sp[0].j, &a, 8u);
-                     sp[1].bits = 0u; sp += 2; break; }
-        case 0x70: { nj_s4 b = (--sp)->i, a = (--sp)->i;
+                     sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x70: case 0x70: { nj_s4 b = (--sp)->i, a = (--sp)->i;
                      if (b == 0) THROW("java/lang/ArithmeticException", "/ by zero");
-                     sp->i = (b == -1) ? 0 : (a % b); sp++; break; }
-        case 0x71: { nj_s8 b, a; sp -= 2; b = sp[0].j; sp -= 2; a = sp[0].j;
+                     sp->i = (b == -1) ? 0 : (a % b); sp++; DISPATCH(); }
+        L_0x71: case 0x71: { nj_s8 b, a; sp -= 2; b = sp[0].j; sp -= 2; a = sp[0].j;
                      if (b == 0) THROW("java/lang/ArithmeticException", "/ by zero");
                      sp[0].j = (b == -1) ? 0 : (a % b);
-                     sp[1].bits = 0u; sp += 2; break; }
-        case 0x72: { float b = (--sp)->f, a = (--sp)->f;
-                     sp->f = (float)fmod((double)a, (double)b); sp++; break; }
-        case 0x73: { double a, b; sp -= 2;
+                     sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x72: case 0x72: { float b = (--sp)->f, a = (--sp)->f;
+                     sp->f = (float)fmod((double)a, (double)b); sp++; DISPATCH(); }
+        L_0x73: case 0x73: { double a, b; sp -= 2;
                      memcpy(&b, &sp[0].j, 8u); sp -= 2;
                      memcpy(&a, &sp[0].j, 8u);
                      a = fmod(a, b); memcpy(&sp[0].j, &a, 8u);
-                     sp[1].bits = 0u; sp += 2; break; }
-        case 0x74: sp[-1].i = -sp[-1].i; break;            /* ineg */
-        case 0x75: sp[-2].j = -sp[-2].j; break;            /* lneg */
-        case 0x76: sp[-1].f = -sp[-1].f; break;            /* fneg */
-        case 0x77: { double d; memcpy(&d, &sp[-2].j, 8u);
-                     d = -d; memcpy(&sp[-2].j, &d, 8u); break; }
+                     sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x74: case 0x74: sp[-1].i = -sp[-1].i; DISPATCH();            /* ineg */
+        L_0x75: case 0x75: sp[-2].j = -sp[-2].j; DISPATCH();            /* lneg */
+        L_0x76: case 0x76: sp[-1].f = -sp[-1].f; DISPATCH();            /* fneg */
+        L_0x77: case 0x77: { double d; memcpy(&d, &sp[-2].j, 8u);
+                     d = -d; memcpy(&sp[-2].j, &d, 8u); DISPATCH(); }
 
-        case 0x78: { nj_s4 n = (--sp)->i, v = (--sp)->i;
-                     sp->i = (nj_s4)((nj_u4)v << ((nj_u4)n & 31u)); sp++; break; }
-        case 0x79: { nj_s4 n = (--sp)->i; sp -= 2;
+        L_0x78: case 0x78: { nj_s4 n = (--sp)->i, v = (--sp)->i;
+                     sp->i = (nj_s4)((nj_u4)v << ((nj_u4)n & 31u)); sp++; DISPATCH(); }
+        L_0x79: case 0x79: { nj_s4 n = (--sp)->i; sp -= 2;
                      sp[0].j = (nj_s8)((nj_u8)sp[0].j << ((nj_u4)n & 63u));
-                     sp[1].bits = 0u; sp += 2; break; }
-        case 0x7a: { nj_s4 n = (--sp)->i, v = (--sp)->i;
-                     sp->i = v >> ((nj_u4)n & 31u); sp++; break; }
-        case 0x7b: { nj_s4 n = (--sp)->i; sp -= 2;
+                     sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x7a: case 0x7a: { nj_s4 n = (--sp)->i, v = (--sp)->i;
+                     sp->i = v >> ((nj_u4)n & 31u); sp++; DISPATCH(); }
+        L_0x7b: case 0x7b: { nj_s4 n = (--sp)->i; sp -= 2;
                      sp[0].j = sp[0].j >> ((nj_u4)n & 63u);
-                     sp[1].bits = 0u; sp += 2; break; }
-        case 0x7c: { nj_s4 n = (--sp)->i; nj_u4 v = (nj_u4)(--sp)->i;
-                     sp->i = (nj_s4)(v >> ((nj_u4)n & 31u)); sp++; break; }
-        case 0x7d: { nj_s4 n = (--sp)->i; sp -= 2;
+                     sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x7c: case 0x7c: { nj_s4 n = (--sp)->i; nj_u4 v = (nj_u4)(--sp)->i;
+                     sp->i = (nj_s4)(v >> ((nj_u4)n & 31u)); sp++; DISPATCH(); }
+        L_0x7d: case 0x7d: { nj_s4 n = (--sp)->i; sp -= 2;
                      sp[0].j = (nj_s8)((nj_u8)sp[0].j >> ((nj_u4)n & 63u));
-                     sp[1].bits = 0u; sp += 2; break; }
+                     sp[1].bits = 0u; sp += 2; DISPATCH(); }
         L_0x7e: case 0x7e: { nj_s4 b = (--sp)->i, a = (--sp)->i; sp->i = a & b; sp++; DISPATCH(); }
-        case 0x7f: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
-                     sp[0].j = sp[0].j & b; sp[1].bits = 0u; sp += 2; break; }
-        case 0x80: { nj_s4 b = (--sp)->i, a = (--sp)->i; sp->i = a | b; sp++; break; }
-        case 0x81: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
-                     sp[0].j = sp[0].j | b; sp[1].bits = 0u; sp += 2; break; }
+        L_0x7f: case 0x7f: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
+                     sp[0].j = sp[0].j & b; sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x80: case 0x80: { nj_s4 b = (--sp)->i, a = (--sp)->i; sp->i = a | b; sp++; DISPATCH(); }
+        L_0x81: case 0x81: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
+                     sp[0].j = sp[0].j | b; sp[1].bits = 0u; sp += 2; DISPATCH(); }
         L_0x82: case 0x82: { nj_s4 b = (--sp)->i, a = (--sp)->i; sp->i = a ^ b; sp++; DISPATCH(); }
-        case 0x83: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
-                     sp[0].j = sp[0].j ^ b; sp[1].bits = 0u; sp += 2; break; }
+        L_0x83: case 0x83: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
+                     sp[0].j = sp[0].j ^ b; sp[1].bits = 0u; sp += 2; DISPATCH(); }
         L_0x84: case 0x84: {                               /* iinc */
             nj_u2 i = (nj_u2)U1();
             nj_s1 c = S1();
@@ -1126,48 +1410,48 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             DISPATCH(); }
 
         /* ================= conversions ================= */
-        case 0x85: { nj_s4 v = (--sp)->i; PUSH_W((nj_s8)v); break; }
-        case 0x86: { nj_s4 v = (--sp)->i; sp->f = (float)v; sp++; break; }
-        case 0x87: { nj_s4 v = (--sp)->i; double d = (double)v;
-                     memcpy(&sp->j, &d, 8u); sp[1].bits = 0u; sp += 2; break; }
-        case 0x88: { sp -= 2; sp->i = (nj_s4)sp[0].j; sp++; break; }
-        case 0x89: { sp -= 2; sp->f = (float)sp[0].j; sp++; break; }
-        case 0x8a: { sp -= 2; { double d = (double)sp[0].j;
-                     memcpy(&sp[0].j, &d, 8u); sp[1].bits = 0u; sp += 2; } break; }
-        case 0x8b: { float f = (--sp)->f;                  /* f2i */
+        L_0x85: case 0x85: { nj_s4 v = (--sp)->i; PUSH_W((nj_s8)v); DISPATCH(); }
+        L_0x86: case 0x86: { nj_s4 v = (--sp)->i; sp->f = (float)v; sp++; DISPATCH(); }
+        L_0x87: case 0x87: { nj_s4 v = (--sp)->i; double d = (double)v;
+                     memcpy(&sp->j, &d, 8u); sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x88: case 0x88: { sp -= 2; sp->i = (nj_s4)sp[0].j; sp++; DISPATCH(); }
+        L_0x89: case 0x89: { sp -= 2; sp->f = (float)sp[0].j; sp++; DISPATCH(); }
+        L_0x8a: case 0x8a: { sp -= 2; { double d = (double)sp[0].j;
+                     memcpy(&sp[0].j, &d, 8u); sp[1].bits = 0u; sp += 2; } DISPATCH(); }
+        L_0x8b: case 0x8b: { float f = (--sp)->f;                  /* f2i */
                      if (f != f) sp->i = 0;
                      else if (f >= 2147483648.0f) sp->i = 0x7FFFFFFF;
                      else if (f <= -2147483904.0f) sp->i = (nj_s4)0x80000000;
                      else sp->i = (nj_s4)f;
-                     sp++; break; }
-        case 0x8c: { float f = (--sp)->f; PUSH_W((nj_s8)f); break; }
-        case 0x8d: { float f = (--sp)->f; double d = (double)f;
-                     memcpy(&sp->j, &d, 8u); sp[1].bits = 0u; sp += 2; break; }
-        case 0x8e: { double d; sp -= 2; memcpy(&d, &sp[0].j, 8u);
+                     sp++; DISPATCH(); }
+        L_0x8c: case 0x8c: { float f = (--sp)->f; PUSH_W((nj_s8)f); DISPATCH(); }
+        L_0x8d: case 0x8d: { float f = (--sp)->f; double d = (double)f;
+                     memcpy(&sp->j, &d, 8u); sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x8e: case 0x8e: { double d; sp -= 2; memcpy(&d, &sp[0].j, 8u);
                      if (d != d) sp->i = 0;
                      else if (d >= 2147483648.0) sp->i = 0x7FFFFFFF;
                      else if (d <= -2147483649.0) sp->i = (nj_s4)0x80000000;
                      else sp->i = (nj_s4)d;
-                     sp++; break; }
-        case 0x8f: { double d; sp -= 2; memcpy(&d, &sp[0].j, 8u);
-                     sp[0].j = (nj_s8)d; sp[1].bits = 0u; sp += 2; break; }
-        case 0x90: { double d; sp -= 2; memcpy(&d, &sp[0].j, 8u);
-                     sp->f = (float)d; sp++; break; }
-        case 0x91: sp[-1].i = (nj_s4)(nj_s1)sp[-1].i; break;   /* i2b */
-        case 0x92: sp[-1].i = (nj_s4)(nj_u2)sp[-1].i; break;   /* i2c */
-        case 0x93: sp[-1].i = (nj_s4)(nj_s2)sp[-1].i; break;   /* i2s */
+                     sp++; DISPATCH(); }
+        L_0x8f: case 0x8f: { double d; sp -= 2; memcpy(&d, &sp[0].j, 8u);
+                     sp[0].j = (nj_s8)d; sp[1].bits = 0u; sp += 2; DISPATCH(); }
+        L_0x90: case 0x90: { double d; sp -= 2; memcpy(&d, &sp[0].j, 8u);
+                     sp->f = (float)d; sp++; DISPATCH(); }
+        L_0x91: case 0x91: sp[-1].i = (nj_s4)(nj_s1)sp[-1].i; DISPATCH();   /* i2b */
+        L_0x92: case 0x92: sp[-1].i = (nj_s4)(nj_u2)sp[-1].i; DISPATCH();   /* i2c */
+        L_0x93: case 0x93: sp[-1].i = (nj_s4)(nj_s2)sp[-1].i; DISPATCH();   /* i2s */
 
         /* ================= comparisons ================= */
         L_0x94: case 0x94: { nj_s8 b, a; sp -= 2; b = sp[0].j; sp -= 2; a = sp[0].j;
                      sp->i = (a > b) ? 1 : ((a == b) ? 0 : -1); sp++; DISPATCH(); }
-        case 0x95: case 0x96: {                            /* fcmpl / fcmpg */
+        L_0x95: case 0x95: case 0x96: {                            /* fcmpl / fcmpg */
             float b = (--sp)->f, a = (--sp)->f;
             if (a > b) sp->i = 1;
             else if (a < b) sp->i = -1;
             else if (a == b) sp->i = 0;
             else sp->i = (op == 0x95) ? -1 : 1;
-            sp++; break; }
-        case 0x97: case 0x98: {                            /* dcmpl / dcmpg */
+            sp++; DISPATCH(); }
+        L_0x97: case 0x97: case 0x98: {                            /* dcmpl / dcmpg */
             double a, b;
             sp -= 2; memcpy(&b, &sp[0].j, 8u);
             sp -= 2; memcpy(&a, &sp[0].j, 8u);
@@ -1175,15 +1459,15 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             else if (a < b) sp->i = -1;
             else if (a == b) sp->i = 0;
             else sp->i = (op == 0x97) ? -1 : 1;
-            sp++; break; }
+            sp++; DISPATCH(); }
 
         /* ================= branches ================= */
-        case 0x99: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v == 0) JMP(o); break; }
-        case 0x9a: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v != 0) JMP(o); break; }
-        case 0x9b: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v < 0) JMP(o); break; }
-        case 0x9c: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v >= 0) JMP(o); break; }
-        case 0x9d: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v > 0) JMP(o); break; }
-        case 0x9e: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v <= 0) JMP(o); break; }
+        L_0x99: case 0x99: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v == 0) JMP(o); DISPATCH(); }
+        L_0x9a: case 0x9a: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v != 0) JMP(o); DISPATCH(); }
+        L_0x9b: case 0x9b: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v < 0) JMP(o); DISPATCH(); }
+        L_0x9c: case 0x9c: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v >= 0) JMP(o); DISPATCH(); }
+        L_0x9d: case 0x9d: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v > 0) JMP(o); DISPATCH(); }
+        L_0x9e: case 0x9e: { nj_s4 v = (--sp)->i; nj_s2 o = S2(); if (v <= 0) JMP(o); DISPATCH(); }
         L_0x9f: case 0x9f: case 0xa0: case 0xa1:
         case 0xa2: case 0xa3: case 0xa4: {
             nj_s4 b = (--sp)->i, a = (--sp)->i;
@@ -1199,30 +1483,30 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             }
             if (take) JMP(o);
             DISPATCH(); }
-        case 0xa5: {                                       /* if_acmpeq */
+        L_0xa5: case 0xa5: {                                       /* if_acmpeq */
             nj_ref b = (--sp)->r;
             nj_ref a = (--sp)->r;
             nj_s2 o = S2();
             if (a == b) JMP(o);
-            break; }
-        case 0xa6: {                                       /* if_acmpne */
+            DISPATCH(); }
+        L_0xa6: case 0xa6: {                                       /* if_acmpne */
             nj_ref b = (--sp)->r;
             nj_ref a = (--sp)->r;
             nj_s2 o = S2();
             if (a != b) JMP(o);
-            break; }
+            DISPATCH(); }
         L_0xa7: case 0xa7: { nj_s2 o = S2(); JMP(o); DISPATCH(); }  /* goto */
-        case 0xa8: {                                        /* jsr */
+        L_0xa8: case 0xa8: {                                        /* jsr */
             nj_s2 o = S2();
             sp->i = (nj_s4)pc;
             sp++;
             JMP(o);
-            break; }
-        case 0xa9: {                                        /* ret */
+            DISPATCH(); }
+        L_0xa9: case 0xa9: {                                        /* ret */
             nj_u2 i = (nj_u2)U1();
             pc = (nj_u4)locals[i].i;
-            break; }
-        case 0xaa: {                                        /* tableswitch */
+            DISPATCH(); }
+        L_0xaa: case 0xaa: {                                        /* tableswitch */
             nj_u4 base = op_pc;
             nj_s4 def, lo, hi, idx;
             /*
@@ -1249,8 +1533,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 pc = at;
                 { nj_s4 off = S4(); (void)save; JUMP_ABS(base + (nj_u4)off); }
             }
-            break; }
-        case 0xab: {                                        /* lookupswitch */
+            DISPATCH(); }
+        L_0xab: case 0xab: {                                        /* lookupswitch */
             nj_u4 base = op_pc;
             nj_s4 def, npairs, idx, i;
             /* Absolute alignment, for the same reason as tableswitch above. */
@@ -1274,7 +1558,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 }
                 JUMP_ABS(base + (found ? hit : (nj_u4)def));
             }
-            break; }
+            DISPATCH(); }
 
         /* ================= returns ================= */
         /*
@@ -1315,14 +1599,14 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
              * caller.  The break was reachable, and converting it is safe -
              * it was skipped for a round on the suspicion that it was not. */
             DISPATCH();
-        case 0xad: case 0xaf:                              /* lreturn dreturn */
+        L_0xad: case 0xad: case 0xaf:                              /* lreturn dreturn */
             sp -= 2;
             DO_RETURN(sp[0], 1);
-            break;
-        case 0xb0:                                         /* areturn */
+            DISPATCH();
+        L_0xb0: case 0xb0:                                         /* areturn */
             DO_RETURN(*(--sp), 0);
-            break;
-        case 0xb1:                                         /* return (void) */
+            DISPATCH();
+        L_0xb1: case 0xb1:                                         /* return (void) */
             /*
              * A void return must NOT push anything.  Reusing DO_RETURN with a
              * zero value looks harmless and is not: it leaves a spurious slot
@@ -1346,7 +1630,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 RELOAD();
                 sp = rsp_;
             }
-            break;
+            DISPATCH();
 
         /* ================= fields ================= */
         L_0xb2: case 0xb2: case 0xb4: {                    /* getstatic / getfield */
@@ -1756,7 +2040,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
         }
 
         /* ================= object creation ================= */
-        case 0xbb: {                                       /* new */
+        L_0xbb: case 0xbb: {                                       /* new */
             nj_u2 idx = U2();
             const char *cn = nj_cp_class_name(m->owner, idx);
             nj_class *c;
@@ -1774,8 +2058,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             o = nj_new_instance(vm, c);
             if (!o) THROW("java/lang/OutOfMemoryError", NULL);
             sp->r = o; sp++;
-            break; }
-        case 0xbc: {                                       /* newarray */
+            DISPATCH(); }
+        L_0xbc: case 0xbc: {                                       /* newarray */
             nj_u1 atype = U1();
             nj_s4 len = (--sp)->i;
             const char *d = NULL;
@@ -1795,8 +2079,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             a = nj_array_new_of(vm, d, (nj_u4)len);
             if (!a) goto do_unwind;
             sp->r = a; sp++;
-            break; }
-        case 0xbd: {                                       /* anewarray */
+            DISPATCH(); }
+        L_0xbd: case 0xbd: {                                       /* anewarray */
             nj_u2 idx = U2();
             nj_s4 len = (--sp)->i;
             const char *cn = nj_cp_class_name(m->owner, idx);
@@ -1817,12 +2101,12 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             a = nj_array_new_of(vm, buf, (nj_u4)len);
             if (!a) goto do_unwind;
             sp->r = a; sp++;
-            break; }
-        case 0xbe: {                                       /* arraylength */
+            DISPATCH(); }
+        L_0xbe: case 0xbe: {                                       /* arraylength */
             nj_ref a = (--sp)->r;
             if (!a) THROW("java/lang/NullPointerException", NULL);
             sp->i = (nj_s4)a->length; sp++;
-            break; }
+            DISPATCH(); }
         case 0xbf: {                                       /* athrow */
             nj_ref e = (--sp)->r;
             if (!e) THROW("java/lang/NullPointerException", NULL);
@@ -1830,7 +2114,7 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 vm->exception = e;
             }
             goto do_unwind; }
-        case 0xc0: {                                       /* checkcast */
+        L_0xc0: case 0xc0: {                                       /* checkcast */
             nj_u2 idx = U2();
             nj_ref o = sp[-1].r;
             if (o) {
@@ -1841,8 +2125,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                     THROW("java/lang/ClassCastException", cn);
                 }
             }
-            break; }
-        case 0xc1: {                                       /* instanceof */
+            DISPATCH(); }
+        L_0xc1: case 0xc1: {                                       /* instanceof */
             nj_u2 idx = U2();
             nj_ref o = (--sp)->r;
             if (!o) {
@@ -1854,18 +2138,18 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 sp->i = nj_class_is_assignable(o->cls, c) ? 1 : 0;
                 sp++;
             }
-            break; }
-        case 0xc2: {                                       /* monitorenter */
+            DISPATCH(); }
+        L_0xc2: case 0xc2: {                                       /* monitorenter */
             nj_ref o = (--sp)->r;
             if (!o) THROW("java/lang/NullPointerException", NULL);
             nj_vm_monitor_enter(vm, o);
-            break; }
-        case 0xc3: {                                       /* monitorexit */
+            DISPATCH(); }
+        L_0xc3: case 0xc3: {                                       /* monitorexit */
             nj_ref o = (--sp)->r;
             if (!o) THROW("java/lang/NullPointerException", NULL);
             nj_vm_monitor_exit(vm, o);
-            break; }
-        case 0xc4: {                                       /* wide */
+            DISPATCH(); }
+        L_0xc4: case 0xc4: {                                       /* wide */
             nj_u1 sub = U1();
             switch (sub) {
             case 0x15: { nj_u2 i = U2(); sp->bits = locals[i].bits; sp++; break; }
@@ -1885,8 +2169,8 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
             default:
                 THROW("java/lang/VerifyError", "bad wide opcode");
             }
-            break; }
-        case 0xc5: {                                       /* multianewarray */
+            DISPATCH(); }
+        L_0xc5: case 0xc5: {                                       /* multianewarray */
             nj_u2 idx = U2();
             nj_u1 dims = U1();
             const char *cn = nj_cp_class_name(m->owner, idx);
@@ -1916,19 +2200,19 @@ nj_status nj_exec(nj_vm *vm, nj_thread *th, int stop_depth)
                 goto do_unwind;
             }
             sp->r = a; sp++;
-            break; }
-        case 0xc6: { nj_ref v = (--sp)->r; nj_s2 o = S2(); if (!v) JMP(o); break; }
-        case 0xc7: { nj_ref v = (--sp)->r; nj_s2 o = S2(); if (v) JMP(o); break; }
-        case 0xc8: {                                       /* goto_w */
+            DISPATCH(); }
+        L_0xc6: case 0xc6: { nj_ref v = (--sp)->r; nj_s2 o = S2(); if (!v) JMP(o); DISPATCH(); }
+        L_0xc7: case 0xc7: { nj_ref v = (--sp)->r; nj_s2 o = S2(); if (v) JMP(o); DISPATCH(); }
+        L_0xc8: case 0xc8: {                                       /* goto_w */
             nj_s4 o = S4();
             JUMP_ABS((nj_u4)(nj_s4)((nj_s4)op_pc + o));
-            break; }
-        case 0xc9: {                                       /* jsr_w */
+            DISPATCH(); }
+        L_0xc9: case 0xc9: {                                       /* jsr_w */
             nj_s4 o = S4();
             sp->i = (nj_s4)pc;
             sp++;
             JUMP_ABS((nj_u4)(nj_s4)((nj_s4)op_pc + o));
-            break; }
+            DISPATCH(); }
 
         default:
             /* Includes 0xba breakpoint, 0xca/0xfe/0xff impdep. */

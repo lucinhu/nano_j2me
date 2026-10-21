@@ -95,6 +95,15 @@ set(NJ_ENABLE_GAME_PACKAGE 1 CACHE STRING "javax.microedition.lcdui.game")
 set(NJ_ENABLE_MEDIA 0 CACHE STRING "javax.microedition.media tone player")
 set(NJ_PIXFMT       "NJ_PIXFMT_RGB565" CACHE STRING
     "Framebuffer pixel format: NJ_PIXFMT_RGB565, NJ_PIXFMT_RGB888 or NJ_PIXFMT_ARGB8888")
+# Interpreter fast paths.  These trade code size for dispatch work, not RAM;
+# see the long comment in include/nj2me/nj_config.h.  The threaded-dispatch
+# switch selects the replicated (computed-goto) interpreter body, which is the
+# same 256 opcodes implemented a second time and must match the switch
+# interpreter bytecode for bytecode (tools/check_threaded_dispatch.sh).
+set(NJ_THREADED_DISPATCH 0 CACHE STRING "Use the computed-goto interpreter body (0 = portable switch)")
+set(NJ_ENABLE_SUPERINSTR 1 CACHE STRING "Run fused bytecode pairs in one dispatch (no RAM cost)")
+set(NJ_ENABLE_JUMP_THREADING 1 CACHE STRING "Follow goto chains without re-dispatching")
+set(NJ_ENABLE_ENGINE 0 CACHE STRING "Pluggable execution engine / JIT interface (adds one pointer)")
 
 # ---------------------------------------------------------------------
 # The runtime
@@ -108,6 +117,7 @@ set(NJ_SOURCES
   src/core/nj_vm.c
   src/core/nj_thread.c
   src/core/nj_interp.c
+  src/core/nj_engine.c
   src/core/nj_app.c
   src/core/nj_builtins.c
   src/core/nj_device.c
@@ -187,6 +197,10 @@ endif()
 
 target_compile_definitions(nj2me PUBLIC
   NJ_PIXFMT=${NJ_PIXFMT}
+  NJ_THREADED_DISPATCH=${NJ_THREADED_DISPATCH}
+  NJ_ENABLE_SUPERINSTR=${NJ_ENABLE_SUPERINSTR}
+  NJ_ENABLE_JUMP_THREADING=${NJ_ENABLE_JUMP_THREADING}
+  NJ_ENABLE_ENGINE=${NJ_ENABLE_ENGINE}
   NJ_ENABLE_FONT_CJK=${NJ_ENABLE_FONT_CJK}
   NJ_ENABLE_FONT_CJK_AA=${NJ_ENABLE_FONT_CJK_AA}
   NJ_ENABLE_PNG=${NJ_ENABLE_PNG}
@@ -859,6 +873,13 @@ nj_add_test(test_clip tests/test_clip.c)
   nj_add_test(test_blocked_init tests/test_blocked_init.c ${NJ_FIXTURES})
   nj_add_test(test_vm        tests/test_vm.c
               ${NJ_FIXTURES}/hello.jar HelloWorld "wideargs ok")
+
+  # The JIT engine seam: the null engine must be observationally identical to
+  # the interpreter, and an installed engine must actually be entered.  The test
+  # self-skips when NJ_ENABLE_ENGINE=0, so both configurations stay green.
+  if(EXISTS ${NJ_FIXTURES}/bench.jar)
+    nj_add_test(test_engine tests/test_engine.c ${NJ_FIXTURES}/bench.jar)
+  endif()
 
   # ---- the formats ----
   nj_add_test(test_zip       tests/test_zip.c ${NJ_FIXTURES})

@@ -17,6 +17,7 @@ idf_component_register(
         "../../core/nj_vm.c"
         "../../core/nj_thread.c"
         "../../core/nj_interp.c"
+        "../../core/nj_engine.c"
         "../../core/nj_app.c"
         "../../core/nj_builtins.c"
         "../../core/nj_lib_object.c"
