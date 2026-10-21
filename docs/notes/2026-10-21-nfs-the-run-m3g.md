@@ -1,5 +1,12 @@
 # 极品飞车16：亡命狂飙 3D 世界“纯橄榄色”的排查（2026-10-21）
 
+**后续（同日）：根因已找到并修复。** 不是合成，也不是纹理：比赛里游戏同时用了
+`Graphics3D.setCamera(H, I)`（`I` 是菜单遗留的变换）和 `World.setActiveCamera()`，
+旧实现让前者优先，相机因此停在菜单位姿，世界三角形 95% 以上落在视锥外。修复还
+包括 `Transform.setTransform(null)` 与 `Node.getTransformTo()` 的 JSR 184 语义。
+见 `docs/notes/2026-10-21-m3g-camera-semantics.md`；本文保留排查过程与已撤回的
+中间结论，末尾“下一步”一节已被该文取代。
+
 ## 更正：不是“缺少纹理映射”
 
 同日追加的证据推翻了早先的结论：JSR-184 的纹理采样在 `src/midp/nj_lib_m3g.c`
