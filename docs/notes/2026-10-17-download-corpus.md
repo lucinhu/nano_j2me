@@ -14,6 +14,7 @@ UC 在时钟修复基础上继续推进：受控分配响应暴露内置页面�
 - 但**3D 世界整片纯橄榄色**，只有 HUD/小地图/速度表在刷新——比赛逻辑在跑，赛道与车辆画面没有渲染出来；
 - 运行日志出现 4 次 `ArrayIndexOutOfBoundsException at ad.a(Ljavax/microedition/lcdui/Graphics;IIIIIIZ)V pc=2672`、启动期 `NullPointerException at af.<init>(...) pc=471/479`（被捕获），另有 55 次「all threads are waiting」；真正的 3D 场景缺失原因尚未定位，记为待查兼容性缺口（同机 Asphalt 6 的 3D 场景可正常渲染，说明不是全局 M3G 失效）。
 - 证据：`.local-tools/debug-runs/corpus-round20-20261021/nfsrun-live/`（起跑 `r-1.png` `0096090a0925821c…`、93MPH `r-2.png` `5fc6c02c1d95ddae…`、133MPH/20% `r-6.png` `57d2e7accad4a6e7…`）。
+- `--device nokia6230` 与 `--device sonyericsson-k750` 复测同样只有纯橄榄色底（`nfsrun-nokia6230/`、`nfsrun-sonyericsson-k750/`，起跑 2%/38MPH 与 live 运行一致），排除设备 profile 差异，指向渲染路径本身。
 
 ## 2026-10-21 更新：狂野飙车4 进入实际比赛
 
