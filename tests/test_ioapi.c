@@ -315,6 +315,28 @@ static void test_printstream_formats(nj_vm *vm)
     OK_MSG(g_cap_blank == 5, "println must end every line (%d blank logs)",
            g_cap_blank);
 
+    /* Non-ASCII text reaches the log as UTF-8, not as one '?' per rune: a
+     * title printing its own Chinese diagnostic used to arrive as "????",
+     * which made a caught exception's log unreadable exactly when it
+     * mattered.  The 4-byte row pins the surrogate-pair path too. */
+    cap_reset();
+    a[0] = vref(nj_string_new(vm, "\u6388\u6743\u8fc7\u671f"));
+    OK(nj_call(vm, ps, PS, "println", "(Ljava/lang/String;)V", a, NULL)
+       == NJ_OK);
+    {
+        nj_u2 pair[2];
+
+        pair[0] = 0xD83Du;
+        pair[1] = 0xDE00u;
+        a[0] = vref(nj_string_new_chars(vm, pair, 2));
+    }
+    OK(nj_call(vm, ps, PS, "println", "(Ljava/lang/String;)V", a, NULL)
+       == NJ_OK);
+    clean(vm, "PrintStream.println(String) with non-ASCII text");
+    OK_MSG(cap_is("\346\216\210\346\235\203\350\277\207\346\234\237"
+                  "\360\237\230\200"),
+           "println must log UTF-8 bytes, got \"%s\"", g_cap);
+
     /* The range form of write() on a stream-less PrintStream goes through
      * write(int), the byte-at-a-time path its println has always used. */
     cap_reset();

@@ -298,6 +298,11 @@ static void ps_log(nj_vm *vm, const char *buf)
     }
 }
 
+/* The log is a byte stream and every port writes UTF-8, so text goes out as
+ * UTF-8 rather than one '?' per rune.  A title that prints its own Chinese
+ * diagnostic ("\u6388\u6743\u8fc7\u671f") used to arrive as "????", which made a
+ * caught exception's log unreadable exactly when it mattered.  A lone
+ * surrogate has no UTF-8 form and becomes '?', as a charset encoder does. */
 static void ps_write_chars(nj_vm *vm, nj_ref self, const nj_u2 *s, nj_u4 n)
 {
     char buf[256];
@@ -305,18 +310,44 @@ static void ps_write_chars(nj_vm *vm, nj_ref self, const nj_u2 *s, nj_u4 n)
     nj_u4 out = 0u;
 
     while (i < n) {
-        if (s[i] < 0x80u) {
-            buf[out++] = (char)s[i];
-        } else {
-            buf[out++] = '?';
+        nj_u4 cp = s[i++];
+
+        if (cp >= 0xD800u && cp <= 0xDBFFu) {
+            if (i < n && s[i] >= 0xDC00u && s[i] <= 0xDFFFu) {
+                cp = 0x10000u + ((cp - 0xD800u) << 10) + ((nj_u4)s[i++] - 0xDC00u);
+            } else {
+                cp = '?';
+            }
+        } else if (cp >= 0xDC00u && cp <= 0xDFFFu) {
+            cp = '?';
         }
-        i++;
-        if (out + 2u >= sizeof(buf) || i == n) {
+        if (out + 4u >= sizeof(buf)) {
             buf[out] = '\0';
             if (!ps_emit(vm, self, buf, out)) {
                 ps_log(vm, buf);
             }
             out = 0u;
+        }
+        if (cp < 0x80u) {
+            buf[out++] = (char)cp;
+        } else if (cp < 0x800u) {
+            buf[out++] = (char)(0xC0u | (cp >> 6));
+            buf[out++] = (char)(0x80u | (cp & 0x3Fu));
+        } else if (cp < 0x10000u) {
+            buf[out++] = (char)(0xE0u | (cp >> 12));
+            buf[out++] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+            buf[out++] = (char)(0x80u | (cp & 0x3Fu));
+        } else {
+            buf[out++] = (char)(0xF0u | (cp >> 18));
+            buf[out++] = (char)(0x80u | ((cp >> 12) & 0x3Fu));
+            buf[out++] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+            buf[out++] = (char)(0x80u | (cp & 0x3Fu));
+        }
+    }
+    if (out > 0u) {
+        buf[out] = '\0';
+        if (!ps_emit(vm, self, buf, out)) {
+            ps_log(vm, buf);
         }
     }
 }
