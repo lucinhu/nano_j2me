@@ -858,6 +858,7 @@ int main(void)
         nj_ref i3 = make(vm, "javax/microedition/m3g/Image2D");
         nj_ref img = 0;
         nj_ref bytes = nj_byte_array_new(vm, 16);
+        nj_u4 roots_before;
         nj_value a2[2], ia[2], r;
         const nj_field *fw, *fh, *fp, *fi;
 
@@ -873,6 +874,7 @@ int main(void)
         fi = nj_field_lookup(vm, "javax/microedition/m3g/Image2D", "_nj_image",
                              "Ljavax/microedition/lcdui/Image;", 0);
 
+        roots_before = nj_root_mark(vm);
         a2[0].i = 10;
         a2[1].r = img;
         check(nj_call(vm, i2, "javax/microedition/m3g/Image2D", "<init>",
@@ -882,6 +884,14 @@ int main(void)
               "Image2D(format, Image) copies the size out of the image");
         check(fi && nj_field_read_ref(vm, i2, fi) == img,
               "Image2D(format, Image) keeps the image itself");
+        /* The conversion allocates the RGBA byte array and roots it while it
+         * writes; the root must go when the field holds the array.  A root
+         * left behind pins that array for the life of the VM and makes every
+         * snapshot of the VM refuse to save ("temp root held") - Stranded 2's
+         * boot creates several of these Images and could not be snapshotted
+         * until it was released. */
+        check(nj_root_mark(vm) == roots_before,
+              "Image2D(format, Image) leaves no ref root behind");
 
         a2[1].r = bytes;
         check(nj_call(vm, i3, "javax/microedition/m3g/Image2D", "<init>",

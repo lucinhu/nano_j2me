@@ -5660,6 +5660,7 @@ NJFN(m3g_img2d_init_obj)
                 nj_ref dst = nj_array_new(vm, "B", n * 4u);
 
                 if (dst) {
+                    nj_u4 mark = nj_root_mark(vm);
                     nj_u1 *dp;
                     nj_u4 i;
 
@@ -5681,6 +5682,7 @@ NJFN(m3g_img2d_init_obj)
                     if (f) {
                         nj_field_write_ref(vm, self, f, dst);
                     }
+                    nj_root_release(vm, mark);
                 }
             }
         }
