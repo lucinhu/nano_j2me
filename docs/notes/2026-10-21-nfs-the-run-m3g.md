@@ -74,6 +74,33 @@
    而不是继续在光栅器里找。
    实验记录：`.local-tools/debug-runs/nfs-pixfmt-20261021/`（`run4`、`run10`）。
 
+## 第 31 轮：M3G 画的就是 Canvas 后备缓冲，但上屏时被清屏帧覆盖
+
+第 30 轮把范围收到“渲染结果 → 屏幕”。这一轮给同一比赛帧的不同阶段加探针
+（仍在离树构建，主仓未改），把范围再收一步：
+
+1. **M3G 的目标就是当前 Canvas 的后备缓冲**。在 `jr_setup()` 取到表面后打印
+   Graphics 的 `gTarget` 与当前 Displayable 的 `cBuffer`：
+   `NJTG img=0x72425de0 surf=240x320 fmt=2 is_screen=0 cur=0x723ffad0
+   cbuf=0x72425de0 is_cbuf=1`，570 个采样全部 `is_cbuf=1`。
+   因此“世界画到离屏 Image、没人合成出来”这条不成立：世界直接画进了
+   `nj_midp_present()` 要上屏的那张缓冲。
+2. **上屏时刻缓冲里没有世界**。在 `nj_midp_present()` 镜像前同时转储
+   `cBuffer` 与屏幕（`NJPRESENT_DUMP`，启动 95 s 后每 40 帧采样）：
+   run14 的 12 对 `pbus`/`pdst` 都是 44 色，`(120,40)` 白（HUD）、
+   `(120,200)` 橄榄 `RGB(135,128,100)`——即 present 取到的就是
+   “橄榄底 + HUD”，而不是第 30 轮中途转储到的完整世界。
+3. **清屏是游戏自己做的**。给 `fillRect` 加 `NJ_FILL_TRACE`（只记 ≥200 像素的
+   边），比赛窗口里能看到整屏填充：`cBuffer` 上 `0,0 240x320` 的
+   `ff000000`（黑，344 次）与 `ff878064`（橄榄，167 次）。
+   所以橄榄色不是我们合成的默认色，而是游戏在同一条缓冲上的一次全屏清屏。
+4. **结论（本轮收窄）**：M3G 渲染正确、目标正确、present 也照常上屏；缺的是
+   帧的时序——同一帧里游戏先/后又用整屏清屏（黑/橄榄）覆盖了后备缓冲，而
+   我们恰好在“清屏已生效、3D 尚未画回”的时刻取帧上屏。下一步要把
+   “渲染 → 清屏 → present”放进同一个帧序号里比较（区分游戏自己线程的
+   `serviceRepaints()` 与 runner 的兜底 `paint()`），再决定修 present 时机
+   还是修兜底重绘。
+
 ## 已撤回的旧结论（同日早先，保留为排查史）
 
 比赛已经真的跑起来：HUD、名次、对手距离、小地图、速度表和左右转向都工作，
@@ -130,7 +157,7 @@ python3 drive.py --jar "/home/lucinhu/Downloads/jar/极品飞车16：亡命狂�
   `.local-tools/debug-runs/nfsrun-gap-20261021/`（`src/` 为 `git archive` 副本，
   `run1/`、`run2/` 为带 `NJ_THROW_STACK` / `NJ_M3G_LOG` 的两次运行）。
 
-## 第 30 轮边界
+## 第 30/31 轮边界
 
 - 上述转储都在离树诊断构建里完成（`git archive HEAD` 抄出后只加日志与探针），
   主仓 `src/` 未改；修正尚未实现。
