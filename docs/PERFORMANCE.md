@@ -80,25 +80,37 @@ Peak equal to used means the collector is not being forced to grow: the arena is
 allocated once at `nj_vm_create()` and the high-water mark is the live set, not
 a sequence of expansions. `tests/test_lifecycle.c` is what holds this to
 account across repeated create/run/destroy cycles.
-## ESP32-S3: measured on the real architecture under QEMU
+## ESP32-S3: measured on the real architecture
 
 The estimate that used to be here has been replaced by a measurement.  The
 runtime runs a MIDlet on **emulated ESP32-S3 hardware** (Xtensa LX7), inside
-ESP-IDF, booted through the real ROM and second-stage bootloader:
+ESP-IDF, booted through the real ROM and second-stage bootloader.  Two
+emulators are used, because they model different halves of the board.
+
+### QEMU's esp32s3: the internal-RAM profile
+
+QEMU cannot probe PSRAM (espressif/qemu#129), so this profile keeps the Java
+heap in the 356 KiB of internal SRAM.  It is what first proved the interpreter
+and the class library execute on Xtensa at all:
 
     I (85) nj2me:   after nj_vm_new_midlet classes=123 heap=2816/2816
     BENCH sum=-136042548 s=5
     I (9935) nj2me: frames=0 bytecodes=112117067 natives=1170 heap=88224/88224
     NJ2ME DONE rc=0 frames=0
 
-**112,117,067 bytecodes - the same count the desktop reports for the same
-fixture.**  That is the result worth having: the interpreter executes the same
-work on Xtensa as on x86-64, which says much more than a frame rate does.
+112,117,067 bytecodes **at the time** - the count the desktop reported then.
+The bytecode total stopped being usable as a comparand the moment a fused
+push-constant+iand superinstruction started executing two instructions while
+counting one (see "The instrument that DID matter" below), so the benchmark's
+own `BENCH sum=-136042548 s=5` line is what holds behaviour across machines;
+the count today is 105,717,067 everywhere.
 
-Reproduce:
+Reproduce (the PSRAM profile is the default in `sdkconfig.defaults`, so QEMU
+needs the override that turns PSRAM off):
 
     cd tests/embedded/idf
-    idf.py set-target esp32s3 build
+    idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.qemu" \
+        set-target esp32s3 build
     idf.py merge-bin -o flash.bin && truncate -s 4M flash.bin
     qemu-system-xtensa -machine esp32s3 -nographic \
         -drive file=flash.bin,if=mtd,format=raw \
@@ -113,6 +125,42 @@ is the right order of magnitude - which is still worth having, because the
 estimate it replaces (3.3-6.7 M/s, from 36-72 cycles per bytecode) was 2-3x too
 pessimistic.  The part of that estimate that was wrong is the cycles-per-bytecode
 penalty assumed for an in-order core, not the arithmetic around it.
+
+### Espressif's esp-emu: the 16 MB flash / 8 MB PSRAM board
+
+esp-emu models the parts QEMU does not: the octal PSRAM die, the flash chip
+size from the image header, and a much more detailed Xtensa core.  That is the
+board this port targets (16 MB flash, 8 MB PSRAM), so it is the measurement
+that matters:
+
+    I (96) esp_psram: Found 8MB PSRAM device
+    I (185) esp_psram: SPI SRAM memory test OK
+    I (215) nj2me: nano_j2me on esp32s3, free: psram 8189 KiB, internal 349 KiB
+    I (215) nj2me: pool 6144 KiB (psram)
+    I (235) nj2me:   after nj_vm_create     classes=252 heap=1968/1968
+    I (58195) nj2me: frames=0 bytecodes=105717067 natives=1170 heap=89536/89536
+    NJ2ME DONE rc=0 frames=0
+
+**105,717,067 bytecodes, exactly the desktop total**, and the whole class
+library materialises: 252 classes, where the same image on internal RAM failed
+to create about 120 built-in classes because the pool was only 308 KiB.  The
+`BENCH sum=-136042548 s=5` line matches too.  This is the cross-architecture
+claim the QEMU run could only make in the internal-RAM profile: on a board with
+PSRAM, with every decoder, the M3G/MASCOT class libraries and the full MIDP
+surface linked in, the interpreter does the same work as on x86-64.
+
+Reproduce:
+
+    tools/run_esp_emulator.sh
+
+The script builds the image, merges the bootloader, partition table and
+application into one flash image, boots it with `--psram-size 8M`, and passes
+when the UART log has `NJ2ME DONE rc=0`, a bytecode total and a PSRAM pool.  The
+guest clock reports 58.2 s for the run, about 1.8 M bytecodes per guest-second -
+another emulator figure, and a slower core model than QEMU's (real PSRAM
+latency, windowed-register stack effects).  The rate is the wrong thing to
+compare across emulators; the count and the benchmark's own sum are the right
+things.
 
 What the two real titles need per frame, measured at 176x208 and 60 fps over 600
 frames: `jump.jar` ~235 bytecodes, `maze.jar` ~378.  At 11 M/s that is 30,000 and
@@ -275,6 +323,18 @@ and the 8-title real-game set
 (pixels, stats, exceptions) reports 7 titles pixel-identical, 1 unstable by its
 own same-binary control, 0 failures; bytecode totals in game stats drop by the
 expected 5-15% and are INFO-only there.
+
+A concurrent session's matrix run reported two titles breaking with both fast
+paths on - 孤岛余生2 stuck at its splash with 1,350 caught throws and 3 colours
+in frame 900, 都市赛车6 never painting a frame - and read it as the two switches
+interacting.  That run sampled the intermediate tree between the two bugs above.
+Re-running its exact commands on the frozen tip gives baseline behaviour for
+every switch combination: 孤岛余生2 (900 frames, 240x320, `--network`, its key
+script) gives 9 caught throws, 0 uncaught, 142 colours in frame 900 and a
+2.59 MB heap for baseline, both-on, superinstr-off and jump-threading-off alike;
+都市赛车6 (300 frames) reaches the same 54-colour scene on baseline, both-on and
+superinstr-off, and that title's own run-to-run spread (17-79 M bytecodes and
+5-12 k gfx calls on the SAME binary) is its timing dependence, not the switches.
 
 ## Replicated dispatch: measured again properly, about 8%
 
