@@ -4,6 +4,11 @@ What a J2ME title can rely on, what it cannot, and why. This file is meant to be
 read *before* debugging a game: most "the emulator is broken" reports turn out
 to be one of the gaps listed here, and knowing which one saves an afternoon.
 
+The ledger of what has *already* been verified - real titles, subsystems and
+their evidence - is [docs/VERIFICATION.md](VERIFICATION.md). Check it before
+re-running a verification: a title listed there with its evidence does not need
+the pass repeated unless the code path it exercised changed.
+
 ## Profiles and configurations
 
 | | Status |
@@ -120,7 +125,12 @@ the long re-run, the paced re-run, the wall-clock re-run, the device re-run and
 the two heap re-runs below: **393 passed, 2 failed**.  The two are
 `鲁宾逊漂流记汉化BT版_4677` (a truncated JAR: 286,534 bytes with no
 end-of-central-directory record, which python's `zipfile` refuses as well) and
-`实况足球经理2009_10609`, which is flaky rather than broken.  The sweeps before
+`实况足球经理2009_10609`, which is flaky rather than broken.  A later sweep on
+a fresh corpus work directory (392 passed, 3 failed) added `乱世Q三国_1649`,
+whose own licence-time check prints `授权过期` and exits - the reference
+emulator does the same - so the 393/2 number above is stale rather than the
+runtime having regressed; the full snapshot and classification are in
+`docs/VERIFICATION.md`.  The sweeps before
 it were 374/21 (before the pacing retry), 376/19, 381/14, 384/11, 385/10,
 386/9, 387/8, 389/6, 390/5 and 393/2, and every drop came from a bug the corpus
 itself pointed at rather than from a title being excused.  The last drop was
