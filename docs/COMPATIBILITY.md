@@ -125,18 +125,21 @@ the long re-run, the paced re-run, the wall-clock re-run, the device re-run and
 the two heap re-runs below: **393 passed, 2 failed**.  The two are
 `鲁宾逊漂流记汉化BT版_4677` (a truncated JAR: 286,534 bytes with no
 end-of-central-directory record, which python's `zipfile` refuses as well) and
-`实况足球经理2009_10609`, which is flaky rather than broken.  A later sweep on
-a fresh corpus work directory (392 passed, 3 failed) added `乱世Q三国_1649`,
-whose own licence-time check prints `授权过期` and exits - the reference
-emulator does the same - so the 393/2 number above is stale rather than the
-runtime having regressed; the full snapshot and classification are in
-`docs/VERIFICATION.md`.  The sweeps before
-it were 374/21 (before the pacing retry), 376/19, 381/14, 384/11, 385/10,
-386/9, 387/8, 389/6, 390/5 and 393/2, and every drop came from a bug the corpus
-itself pointed at rather than from a title being excused.  The last drop was
-three passes at once: the pacing re-run (six titles draw only at 30 fps), the
-wall-clock re-run (a loading bar paced by the title's own clock) and the device
-re-run (`1945空战英雄_6105` runs as a Nokia 6230).
+`乱世Q三国_1649`, whose own licence-time check prints `授权过期` and exits -
+the reference emulator does the same.  A sweep on a fresh corpus work
+directory had counted `实况足球经理2009_10609` as a third failure, and the
+title was long described here as flaky; it was a runtime bug instead - a
+`DataInputStream` that could not rewind the stream it wraps
+(`docs/notes/2026-10-21-datainput-rewind.md`, commit `239ccec`) - and the fix
+moved it into the passing set.  The 392/3 sweep is history, and so is the
+older 393/2 one that preceded it; the full snapshot and classification are in
+`docs/VERIFICATION.md`.  The sweeps before them were 374/21 (before the pacing
+retry), 376/19, 381/14, 384/11, 385/10, 386/9, 387/8, 389/6, 390/5 and 393/2,
+and every drop came from a bug the corpus itself pointed at rather than from a
+title being excused.  The last drop was three passes at once: the pacing
+re-run (six titles draw only at 30 fps), the wall-clock re-run (a loading bar
+paced by the title's own clock) and the device re-run (`1945空战英雄_6105` runs
+as a Nokia 6230).
 
 ### The six that still fail, and what each one turned out to be
 
@@ -180,19 +183,24 @@ without a further error.
 Every row in that table has since been re-run with the passes above, and four of
 the five pass: `1945空战英雄_6105` as a Nokia handset, `灌篮高手-爆发!樱木_7947`
 and `战争艺术2之全球联盟中文版_1918` when paced, `午夜台球圣诞中文版_8677` the
-same way (the negative length is in a later menu, not in the first screen).  What
-is left is `鲁宾逊漂流记汉化BT版_4677`, whose central directory was never written,
-and the flaky football manager below.
+same way (the negative length is in a later menu, not in the first screen).
+What is left is `鲁宾逊漂流记汉化BT版_4677`, whose central directory was never
+written, and `乱世Q三国_1649`'s expired licence check.
 
-`实况足球经理2009_10609` deserves a note of its own, because its row changes
-between sweeps: it draws a nine colour screen at 176x208 and a flat one at
-320x240, and its own initialisation races - the `NullPointerException` in
-`d.T(int)` (its string cache) appears only in the runs where its loader thread
-did not finish first.  Two runs of the SAME binary on the same size can execute
-208 million or 15 million bytecodes, which is the title's timing, not the
-runtime's.  The tool's fallback name for it, "flat under every pace and every
-heap", is accurate per run and misleading across runs; the honest statement is
-that it draws when its own race goes its way.
+`实况足球经理2009_10609` used to deserve a paragraph of its own here, because
+its row changed between sweeps: it drew a nine colour screen at 176x208 and a
+flat one at 320x240, and its row said its own initialisation raced - the
+`NullPointerException` in `d.T(int)` (its string cache) appeared only in the
+runs where its loader thread did not finish first.  It looked like a title
+drawing only when its own race went its way.  It was not: its resource loader
+died at a `DataInputStream.reset()` that the runtime had bound to the empty
+close slot, so the stream never rewound and the loader read its packed
+container 44 bytes off.  Whether the title reached a stable state or died in
+that parse is what made runs differ.  With the rewind forwarded it boots
+deterministically to its sound dialog, main menu and player-creation screens
+(`docs/notes/2026-10-21-datainput-rewind.md`, commit `239ccec`).  The lesson is
+kept rather than the paragraph: a title whose failure depends on timing is
+still worth a second look at what the timing is racing.
 None of them is known to be the runtime's - which is a different statement from
 "the runtime is perfect", and it is the reason the sweeps keep being re-run:
 every one of these numbers has moved because of a bug the corpus itself pointed
@@ -440,7 +448,7 @@ The eight that remain are each classified, not just counted:
 |---|---|
 | a broken JAR (truncated, no end-of-central-directory) | 鲁宾逊漂流记汉化BT版_4677 |
 | a title that refuses a platform string this runtime does not imitate (`--device nokia6230` runs it) | 1945空战英雄_6105 |
-| flat under every pace and every heap tried at the time, cause not yet found | 灌篮高手-爆发!樱木_7947, 午夜台球圣诞中文版_8677, 战争艺术2之全球联盟中文版_1918 (反恐精英2正式版_5836, 实况足球经理2009_10609 and 仙魔飞行棋_417 were in this row then; all three run now) |
+| flat under every pace and every heap tried at the time, cause not yet found | 灌篮高手-爆发!樱木_7947, 午夜台球圣诞中文版_8677, 战争艺术2之全球联盟中文版_1918 (反恐精英2正式版_5836, 实况足球经理2009_10609 and 仙魔飞行棋_417 were in this row then; all three run now — the football manager only deterministically since the `DataInputStream` rewind fix, commit `239ccec`) |
 
 The most recent fix to come out of this list is a good example of why it is
 worth keeping: 疯狂农场2_2375 showed a black screen with 0 Graphics calls, and
