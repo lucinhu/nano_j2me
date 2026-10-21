@@ -93,6 +93,7 @@ lives in the commit message and body, not in this table.
 | M3G `Image2D` ref roots | `Image2D(int, Object)` releases the ref root it takes while converting an LCDUI image to RGBA bytes; the leak pinned the array for the VM's life and made every snapshot of a title using the constructor refuse with `temp root held` (`NJ_ERR_STATE`); a regression assertion fails if the release is dropped | `tests/test_m3g.c` (309 checks); `docs/notes/2026-10-21-m3g-image2d-root-leak.md`; commit `46d75fc` |
 | CJK + Latin antialiased fonts | 4× supersample + Lanczos + packed 2bpp, mono build bit-identical text, `+438880 B` constants and zero heap; both fonts included only under `NJ_ENABLE_FONT_CJK_AA` | `docs/notes/2026-10-20-latin-font-aa.md`; commit `96cfb44` |
 | `callSerially` drain | snapshot of the queue per paint; self-requeue deferred to the next frame | `tests/test_lcdui.c`; commit `134499f` |
+| VM snapshots | a snapshot can only be written at a frame boundary; a run that never reaches one (a title blocked in a native for its whole budget, e.g. Doom 3's constructor `join`) now reports **why** instead of silently writing nothing, and a boundary beyond the run is reported too. Regression: `waitdemo.jar` blocked constructor and a 5-frame run asking for boundary 50 | `tests/savestate/run.sh` (5 sections); `docs/notes/2026-10-21-snapshot-frame-boundary.md`; commit `8133cc4` |
 | Alert body wrapping | `ui_text()` wraps at panel width; regression test fails if wrapping is disabled | `tests/test_lcdui.c`; commit `35eb1f2` |
 | `System.out` text | output is UTF-8, so a title's own Chinese diagnostics are readable in the log (previously one `?` per character); lone surrogates and 4-byte code points covered by `test_ioapi` | `tests/test_ioapi.c` |
 
@@ -120,7 +121,10 @@ lives in the commit message and body, not in this table.
   trigger exists in the game; where this 240x320 build puts its exit is the open
   question.
 * **Doom 3** — a completed mission, or combat with an actual weapon, is not
-  verified; the level and movement are.
+  verified; the level and movement are. Mid-run snapshots are not possible:
+  the MIDlet constructor joins the game thread, so the first native call
+  consumes the whole run; the runner reports that instead of writing nothing
+  (`docs/notes/2026-10-21-snapshot-frame-boundary.md`).
 * **Ancient Empires 2** — mission completion and a full campaign are not
   verified; movement, one AI turn and one combat exchange are.
 * **Mascot Capsule** — no collected title reaches the rasteriser, so it is
