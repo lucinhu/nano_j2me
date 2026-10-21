@@ -324,6 +324,20 @@ and the 8-title real-game set
 own same-binary control, 0 failures; bytecode totals in game stats drop by the
 expected 5-15% and are INFO-only there.
 
+An independent verifier then rebuilt the frozen commit in a fresh worktree and
+re-ran the gates without trusting the numbers above: clean configure+build of
+the four configurations, 89/89 ctest (the 90th test in the working tree belongs
+to an unrelated workstream), interleaved A/B pinned to one core with 8 runs per
+arm (baseline min 0.186 / med 0.187 s vs tip 0.173 / 0.175 s, faster in 8 of 8
+rounds, +6.99% by min and +6.42% by median), byte-identical stats and `BENCH
+sum`, both structural scripts passing, 8-title game regression 0 FAIL (pixels
+identical where measurable), RAM unchanged (`.data` 16 B, `.bss` 6,688 B, bench
+heap 92,432/92,432) with flash +42,152 B (+1.40%) for the replicated table, and
+an engine-enabled build whose 54 checks pass while the default binary contains
+zero engine symbols.  The threaded body is semantically identical to the switch
+but ~8.8% slower on the fixture (0.173 -> 0.186 s), which is why it stays
+opt-in; the call/loop microbenchmark above still prefers it.
+
 A concurrent session's matrix run reported two titles breaking with both fast
 paths on - 孤岛余生2 stuck at its splash with 1,350 caught throws and 3 colours
 in frame 900, 都市赛车6 never painting a frame - and read it as the two switches
