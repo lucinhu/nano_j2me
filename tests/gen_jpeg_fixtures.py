@@ -676,7 +676,24 @@ def positive_fixtures():
 
     im = Image.frombytes("RGB", (35, 23), pattern_rgb(35, 23))
     add("progressive_35x23", _pil(im, quality=85, progressive=True),
-        "SOF2 progressive: accepts()==1, decode must fail cleanly")
+        "SOF2 progressive 4:2:0, 35x23 (Pillow's default progressive scans)")
+
+    # The other chroma layouts have a different coefficient grid and a
+    # different interleaving, and a greyscale file has single-component scans.
+    for sub, tag in ((0, "444"), (1, "422")):
+        im = Image.frombytes("RGB", (35, 23), pattern_rgb(35, 23))
+        add("progressive%s_35x23" % tag,
+            _pil(im, quality=85, progressive=True, subsampling=sub),
+            "SOF2 progressive 4:%s, 35x23"
+            % {"444": "4:4:4", "422": "4:2:2"}[tag])
+
+    im = Image.frombytes("L", (17, 13), gray_pattern(17, 13))
+    add("progressive_gray_17x13", _pil(im, quality=85, progressive=True),
+        "SOF2 progressive greyscale 17x13 (one component, DC and AC scans)")
+
+    im = Image.frombytes("RGB", (120, 90), pattern_rgb(120, 90))
+    add("progressive_120x90", _pil(im, quality=80, progressive=True),
+        "SOF2 progressive 4:2:0 120x90 (several MCU rows, many scans)")
 
 
 def _pil(im, **kw):
@@ -824,6 +841,16 @@ def negative_fixtures():
     r[i + 1] = 0xD3                       # expected RST0
     add("bad_restart", bytes(r), "wrong RSTn after the restart interval")
 
+    # A progressive scan whose band is impossible: Ss must not exceed Se.
+    prog = bytearray(FILES["progressive_35x23"])
+    i = prog.find(b"\xff\xda")
+    assert i > 0
+    ns = prog[i + 4]
+    prog[i + 5 + 2 * ns] = 5              # Ss
+    prog[i + 6 + 2 * ns] = 2              # Se
+    add("progressive_bad_band", bytes(prog),
+        "progressive scan with Ss > Se")
+
     # A scan with no frame header.
     d = bytearray(base)
     off = find_segment(d, 0xC0)
@@ -841,7 +868,7 @@ POSITIVE_EXTRA = []
 
 NEGATIVE = ("soi_only", "bad_huff_oversub", "bad_huff_allones", "len_past_eof",
             "zero_dim", "five_comp", "two_comp", "arith_sof9", "bad_restart",
-            "no_sof", "trunc_mid")
+            "no_sof", "trunc_mid", "progressive_bad_band")
 
 
 def main():

@@ -20,7 +20,8 @@
  *     hint exactly, keeps the mean brightness (the check that catches a wrong
  *     DC gain in the reduced IDCT) and stays close to a box downsample of
  *     Pillow's full-size decode;
- *   - progressive JPEG is *recognised* (accepts() == 1, info() works) and
+ *   - progressive JPEG decodes, including successive approximation and
+ *     refinement scans (bit-identical to Pillow's decoder within rounding);
  *     fails with a message that names the problem;
  *   - malformed input fails cleanly with a useful message: truncated scan,
  *     SOI only, over-subscribed Huffman table, a marker length past EOF, a
@@ -46,6 +47,22 @@
  * Usage: test_jpeg [fixture-dir]      (default tests/fixtures/jpeg)
  */
 #include "nj2me/nj.h"
+
+/* The decoder defaults to progressive support on; a build that compiles it out
+ * (-DNJ_ENABLE_JPEG_PROGRESSIVE=0) must still pass this file, so the
+ * expectation follows the build. */
+#ifndef NJ_ENABLE_JPEG_PROGRESSIVE
+#define NJ_ENABLE_JPEG_PROGRESSIVE 1
+#endif
+
+#if !NJ_ENABLE_JPEG_PROGRESSIVE
+/* Compiled out: the tests still verify that progressive files are refused
+ * with a message that names the feature. */
+static int progressive_name(const char *name)
+{
+    return name != NULL && strncmp(name, "progressive", 11) == 0;
+}
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -383,12 +400,6 @@ static void test_probe_and_decode(void)
 
         memset(&info, 0, sizeof(info));
         CHECK(nj_jpeg_info(data, (nj_u4)size, &info) == NJ_OK, "info()");
-        if (strcmp(fx->name, "progressive_35x23") == 0) {
-            /* Recognised, reported, and refused with a reason - checked in
-             * test_negative().  Only the header probe has to work. */
-            free(data);
-            continue;
-        }
         CHECK_EQ(info.width, fx->width, "probed width");
         CHECK_EQ(info.height, fx->height, "probed height");
         CHECK_EQ(info.has_alpha, 0, "JPEG has no alpha");
@@ -400,6 +411,15 @@ static void test_probe_and_decode(void)
 
         err = NULL;
         img = decode(data, size, &err);
+#if !NJ_ENABLE_JPEG_PROGRESSIVE
+        if (progressive_name(fx->name)) {
+            CHECK(img == NULL, "progressive refused when compiled out");
+            CHECK(err != NULL && strstr(err, "progressive") != NULL,
+                  "and the message names progressive");
+            free(data);
+            continue;
+        }
+#endif
         if (img == NULL) {
             printf("  FAIL %s: decode failed: %s\n", fx->name,
                    err ? err : "(no message)");
@@ -875,7 +895,7 @@ static void test_negative(void)
         { "arith_sof9", "arithmetic" },
         { "bad_restart", "restart" },
         { "no_sof", "frame header" },
-        { "progressive_35x23", "progressive" }
+        { "progressive_bad_band", "scan parameters" }
     };
     int i;
 
@@ -914,14 +934,22 @@ static void test_negative(void)
             free(img->pixels);
             free(img);
         } else {
+            const char *want = k_cases[i].needle;
+
             checks++;
             CHECK(err != NULL && err[0] != '\0',
                   "failure carries a message");
-            if (k_cases[i].needle != NULL) {
-                if (err == NULL || strstr(err, k_cases[i].needle) == NULL) {
+#if !NJ_ENABLE_JPEG_PROGRESSIVE
+            if (progressive_name(k_cases[i].name)) {
+                /* Compiled out: the scan is not reached, the frame header is
+                 * what gets refused. */
+                want = "progressive";
+            }
+#endif
+            if (want != NULL) {
+                if (err == NULL || strstr(err, want) == NULL) {
                     printf("  FAIL %s: message \"%s\" lacks \"%s\"\n",
-                           k_cases[i].name, err ? err : "(null)",
-                           k_cases[i].needle);
+                           k_cases[i].name, err ? err : "(null)", want);
                     failures++;
                     checks++;
                 } else {
@@ -1004,9 +1032,14 @@ static void test_registry(nj_vm *vm)
         nj_image *img;
         nj_image_info info;
 
-        if (!fx->positive || strcmp(fx->name, "progressive_35x23") == 0) {
+        if (!fx->positive) {
             continue;
         }
+#if !NJ_ENABLE_JPEG_PROGRESSIVE
+        if (progressive_name(fx->name)) {
+            continue;   /* refused by design; the direct loop checks it */
+        }
+#endif
         data = load_fixture(fx->name, "jpg", &size);
         if (data == NULL) {
             continue;
@@ -1057,22 +1090,43 @@ static void test_registry(nj_vm *vm)
         }
     }
 
-    /* Progressive: recognised by the registry, refused with a reason. */
+    /* Progressive: decoded through the registry, pixel-accurate against
+     * Pillow's own decode (the six-scan fixture above already checks this
+     * directly; this proves the registry path does not special-case it). */
     {
         unsigned char *data;
         long size;
+        long ref_size;
         const char *err = NULL;
         nj_image *img;
+        unsigned char *ref;
 
         data = load_fixture("progressive_35x23", "jpg", &size);
-        if (data != NULL) {
+        ref = load_fixture("progressive_35x23", "rgb", &ref_size);
+        if (data != NULL && ref != NULL) {
             CHECK(nj_codec_available(vm, data, (nj_u4)size) == 1,
-                  "progressive is claimed, so the failure is explained");
+                  "progressive is claimed by the registry");
             img = nj_image_decode_mem(vm, data, (nj_u4)size, &err);
-            CHECK(img == NULL, "progressive decode fails");
-            CHECK(err != NULL && strstr(err, "progressive") != NULL,
-                  "and the message says progressive");
+#if NJ_ENABLE_JPEG_PROGRESSIVE
+            CHECK(img != NULL, "progressive decodes through the registry");
+            if (img != NULL) {
+                int worst = 0;
+                long mae = image_mae(img, ref, &worst);
+
+                /* Same limit the positive-fixture loop uses (12): the
+                 * residual is the IDCT difference, not a scan-decode error. */
+                CHECK(mae <= 12, "progressive pixels match Pillow's decode");
+                /* The registry hands out VM-allocated pixels; nj_vm_destroy()
+                 * releases them (see the lifecycle test below). */
+            }
+#else
+            CHECK(img == NULL && err != NULL && strstr(err, "progressive") != NULL,
+                  "progressive refused through the registry when compiled out");
+#endif
             free(data);
+        }
+        if (ref != NULL) {
+            free(ref);
         }
     }
 }
@@ -1108,7 +1162,7 @@ static void test_lifecycle(void)
             long size;
             nj_image *img;
 
-            if (!fx->positive || strcmp(fx->name, "progressive_35x23") == 0) {
+            if (!fx->positive) {
                 continue;
             }
             data = load_fixture(fx->name, "jpg", &size);

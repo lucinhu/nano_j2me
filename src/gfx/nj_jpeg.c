@@ -107,8 +107,30 @@ nj_image *nj_jpeg_decode(const nj_codec_req *req);
 #define NJ_JPEG_MAX_DIM     8192
 
 #define NJ_JPEG_MAX_COMPS   4
-#define NJ_JPEG_MAX_SCANS   16     /* a legal sequential file needs one per
-                                    * component; more is a malformed file */
+#define NJ_JPEG_MAX_SCANS   64     /* a sequential file needs one per component;
+                                    * a progressive file holds one scan per
+                                    * component per successive-approximation
+                                    * step, and 64 covers every encoder seen */
+
+/*
+ * Progressive (SOF2) decoding.  It is on by default; a build that cannot
+ * spare the coefficient planes can compile it out with
+ * -DNJ_ENABLE_JPEG_PROGRESSIVE=0 and get exactly the old behaviour (SOF2 is
+ * then refused with a clear message, as before).
+ *
+ * The one real cost is the coefficient store: two bytes per coefficient for
+ * every block of every component, i.e. two bytes per sample for 4:4:4 and
+ * 1.5 bytes per sample for 4:2:0.  A 240x320 4:2:0 image needs ~150 KiB, held
+ * only while the scans are decoded and released before the image is returned.
+ * A hostile file cannot make that arbitrary: files needing more than
+ * NJ_JPEG_PROGRESSIVE_MAX_BYTES of coefficient store are refused up front.
+ */
+#ifndef NJ_ENABLE_JPEG_PROGRESSIVE
+#  define NJ_ENABLE_JPEG_PROGRESSIVE 1
+#endif
+#ifndef NJ_JPEG_PROGRESSIVE_MAX_BYTES
+#  define NJ_JPEG_PROGRESSIVE_MAX_BYTES (4u * 1024u * 1024u)
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Read-only tables                                                   */
@@ -209,6 +231,8 @@ typedef struct jp_comp {
     int    bw, bh;       /* real block grid (may be smaller than the plane) */
     int    pw, ph;       /* plane width/height in samples (MCU padded)      */
     nj_u1 *plane;        /* pw * ph bytes, row-major                        */
+    int    cw, ch;       /* coefficient grid: max(real blocks, MCU grid)    */
+    nj_s2 *coef;         /* cw * ch * 64 coefficients, progressive only     */
     int    pred;         /* DC predictor                                    */
     int    scanned;      /* covered by a scan                               */
 } jp_comp;
@@ -247,6 +271,11 @@ typedef struct jp_dec {
     int planes_ready;
     int truncated;               /* the scan ran out of entropy data        */
     int done;                    /* reached EOI                             */
+
+    int progressive;             /* SOF2: scans fill coefficient grids      */
+    int coef_ready;
+    int ss, se, ah, al;          /* current scan band / approximation       */
+    nj_s4 eobrun;                /* progressive AC end-of-band run left     */
 
     nj_u4 mcus_x, mcus_y;
     int   want_w, want_h;
@@ -517,6 +546,10 @@ static void jp_free(jp_dec *d)
             d->dealloc(d->ud, d->comp[i].plane);
             d->comp[i].plane = NULL;
         }
+        if (d->comp[i].coef != NULL) {
+            d->dealloc(d->ud, d->comp[i].coef);
+            d->comp[i].coef = NULL;
+        }
     }
     if (d->tabs != NULL) {
         d->dealloc(d->ud, d->tabs);
@@ -639,6 +672,18 @@ static const char *jp_parse_sof(jp_dec *d, const nj_u1 *seg, nj_u4 len)
         c->bh = (int)jp_ceil_div((nj_u4)(d->h * c->v), (nj_u4)(d->vmax * 8));
         c->pw = (int)(d->mcus_x * (nj_u4)c->h) * d->nkeep;
         c->ph = (int)(d->mcus_y * (nj_u4)c->v) * d->nkeep;
+        /* The coefficient grid has to hold both the real block grid (used
+         * by single-component scans) and the MCU-padded grid (used by
+         * interleaved scans, which decode whole MCUs including the padding
+         * blocks). */
+        c->cw = c->bw;
+        c->ch = c->bh;
+        if ((int)(d->mcus_x * (nj_u4)c->h) > c->cw) {
+            c->cw = (int)(d->mcus_x * (nj_u4)c->h);
+        }
+        if ((int)(d->mcus_y * (nj_u4)c->v) > c->ch) {
+            c->ch = (int)(d->mcus_y * (nj_u4)c->v);
+        }
     }
     d->seen_sof = 1;
     return NULL;
@@ -749,9 +794,31 @@ static const char *jp_parse_sos(jp_dec *d, const nj_u1 *seg, nj_u4 len)
     if (len < (nj_u4)(1 + 2 * ns + 3)) {
         return "truncated JPEG scan header";
     }
-    /* Ss/Se/Ah,Al: only a full sequential band is a baseline scan. */
-    if (seg[1 + 2 * ns] != 0u || seg[2 + 2 * ns] != 63u ||
-        seg[3 + 2 * ns] != 0u) {
+    /* Ss/Se/Ah,Al: a sequential scan covers the whole band with no
+     * successive approximation; a progressive scan carries a band and an
+     * approximation step (T.81 G.1.1.1.1). */
+    if (d->progressive) {
+        int ss = (int)seg[1 + 2 * ns];
+        int se = (int)seg[2 + 2 * ns];
+        int aa = (int)seg[3 + 2 * ns];
+        int ah = (aa >> 4) & 15;
+        int al = aa & 15;
+
+        if (ss > se || se > 63 || ah > 13 || al > 13) {
+            return "invalid progressive JPEG scan parameters";
+        }
+        if (ss == 0 && se != 0) {
+            return "invalid progressive JPEG DC scan band";
+        }
+        if (ss > 0 && ns != 1) {
+            return "progressive JPEG AC scans must be non-interleaved";
+        }
+        d->ss = ss;
+        d->se = se;
+        d->ah = ah;
+        d->al = al;
+    } else if (seg[1 + 2 * ns] != 0u || seg[2 + 2 * ns] != 63u ||
+               seg[3 + 2 * ns] != 0u) {
         return "only baseline sequential JPEG scans are supported";
     }
 
@@ -778,7 +845,14 @@ static const char *jp_parse_sos(jp_dec *d, const nj_u1 *seg, nj_u4 len)
                 return "duplicate component in JPEG scan";
             }
         }
-        if (!d->tabs->dc[td].defined || !d->tabs->ac[ta].defined) {
+        if (d->progressive) {
+            /* A DC scan needs the DC table only, an AC scan the AC table
+             * only: encoders leave the unused one undefined on purpose. */
+            if ((d->ss == 0 && !d->tabs->dc[td].defined) ||
+                (d->ss != 0 && !d->tabs->ac[ta].defined)) {
+                return "JPEG scan uses an undefined Huffman table";
+            }
+        } else if (!d->tabs->dc[td].defined || !d->tabs->ac[ta].defined) {
             return "JPEG scan uses an undefined Huffman table";
         }
         if (d->quant_ok[c->tq] == 0u) {
@@ -852,8 +926,16 @@ static const char *jp_next_scan(jp_dec *d)
             case 0xC1:                    /* extended sequential, 8-bit */
                 e = jp_parse_sof(d, seg, seglen);
                 break;
-            case 0xC2:
+            case 0xC2:                    /* progressive */
+#if NJ_ENABLE_JPEG_PROGRESSIVE
+                e = jp_parse_sof(d, seg, seglen);
+                if (e == NULL) {
+                    d->progressive = 1;
+                }
+                break;
+#else
                 return "progressive JPEG is not supported by this decoder";
+#endif
             case 0xC3:
                 return "lossless JPEG is not supported by this decoder";
             case 0xC5: case 0xC6: case 0xC7:
@@ -1110,6 +1192,10 @@ static int jp_decode_block(jp_dec *d, jp_bits *b, jp_comp *c, int bx, int by)
     return 0;
 }
 
+#if NJ_ENABLE_JPEG_PROGRESSIVE
+static const char *jp_decode_scan_prog(jp_dec *d);
+#endif
+
 static const char *jp_decode_scan(jp_dec *d)
 {
     jp_bits b;
@@ -1118,6 +1204,11 @@ static const char *jp_decode_scan(jp_dec *d)
     int expected_rst = 0xD0;
 
     d->truncated = 0;      /* per scan: each one ends with its own padding */
+#if NJ_ENABLE_JPEG_PROGRESSIVE
+    if (d->progressive) {
+        return jp_decode_scan_prog(d);
+    }
+#endif
     if (!d->planes_ready) {
         const char *e = jp_alloc_planes(d);
         if (e != NULL) {
@@ -1198,6 +1289,373 @@ static const char *jp_decode_scan(jp_dec *d)
     d->p = b.p;
     return NULL;
 }
+
+#if NJ_ENABLE_JPEG_PROGRESSIVE
+/* ------------------------------------------------------------------ */
+/* Progressive (SOF2) scans                                            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Progressive files describe the same blocks in several scans.  Each scan
+ * either sends the DC coefficient (successive approximation on the DC value)
+ * or a band of AC coefficients (first pass sends them at a reduced precision,
+ * later passes send one refinement bit per coefficient already present).  The
+ * coefficients therefore have to survive between scans: they are collected in
+ * one grid per component and the transform runs once at the end, through the
+ * same jp_idct_store() the sequential path uses.
+ */
+static const char *jp_alloc_coefs(jp_dec *d)
+{
+    nj_u8 total = 0;
+    int i;
+
+    for (i = 0; i < d->ncomp; i++) {
+        jp_comp *c = &d->comp[i];
+        nj_u8 blocks = (nj_u8)c->cw * (nj_u8)c->ch;
+
+        if (blocks == 0u) {
+            return "progressive JPEG has no blocks";
+        }
+        total += blocks * 128u;      /* 64 coefficients, 2 bytes each */
+    }
+    if (total > (nj_u8)NJ_JPEG_PROGRESSIVE_MAX_BYTES) {
+        return "progressive JPEG needs more coefficient memory than this "
+               "decoder allows";
+    }
+    for (i = 0; i < d->ncomp; i++) {
+        jp_comp *c = &d->comp[i];
+        nj_u8 bytes = (nj_u8)c->cw * (nj_u8)c->ch * 128u;
+
+        c->coef = (nj_s2 *)d->alloc(d->ud, (nj_size)bytes);
+        if (c->coef == NULL) {
+            return "out of memory for the progressive JPEG coefficients";
+        }
+        memset(c->coef, 0, (size_t)bytes);
+    }
+    d->coef_ready = 1;
+    return NULL;
+}
+
+/* One DC coefficient: first pass sends a difference, refinements send a bit. */
+static int jp_prog_dc_block(jp_dec *d, jp_bits *b, jp_comp *c, nj_s2 *cf)
+{
+    if (d->ah == 0) {
+        int t;
+        nj_s4 v;
+
+        if (jp_huff_decode(b, &d->tabs->dc[c->td], &t) != 0) {
+            return b->overrun ? 1 : -1;
+        }
+        if (t > 15) {
+            return -1;
+        }
+        c->pred = jp_clamp(c->pred + jp_receive_extend(b, t), -32767, 32767);
+        v = (nj_s4)c->pred << d->al;
+        cf[0] = (nj_s2)jp_clamp((int)v, -32767, 32767);
+    } else {
+        /*
+         * The DC point transform is an arithmetic shift (T.81 G.1.2.1:
+         * "the DC coefficient is processed by a point transform with Al"
+         * applied to the difference coding, which libjpeg - and therefore
+         * every encoder - implements as coef >> Al).  The low bits kept
+         * back by that shift are the low bits of the two's complement value,
+         * so a set refinement bit *adds* 2^Al for positive and negative
+         * coefficients alike.  AC coefficients are different: the Huffman
+         * code carries a sign and a magnitude, so their refinement is
+         * sign-magnitude (see jp_prog_ac_block()).
+         */
+        if (jp_get_bits(b, 1) != 0u) {
+            nj_s4 v = (nj_s4)cf[0] + ((nj_s4)1 << d->al);
+
+            cf[0] = (nj_s2)jp_clamp((int)v, -32767, 32767);
+        }
+        if (b->overrun) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * One AC band.  The first pass sends runs of zeros (RS = run/size) and
+ * end-of-band runs; refinements send one bit per coefficient that is already
+ * non-zero and can introduce a new coefficient at 1 << al.  Magnitudes are
+ * refined symmetrically (T.81 G.1.2.3): a positive coefficient gains +p1, a
+ * negative one loses p1.
+ */
+static int jp_prog_ac_block(jp_dec *d, jp_bits *b, jp_comp *c, nj_s2 *cf)
+{
+    const jp_huff *ac = &d->tabs->ac[c->ta];
+    const nj_s4 p1 = (nj_s4)1 << d->al;
+    int k = d->ss;
+
+    if (d->ah == 0) {
+        if (d->eobrun > 0) {
+            d->eobrun -= 1;
+            return 0;
+        }
+        while (k <= d->se) {
+            int s, r;
+
+            if (jp_huff_decode(b, ac, &s) != 0) {
+                return b->overrun ? 1 : -1;
+            }
+            r = s >> 4;
+            s &= 15;
+            if (s == 0) {
+                if (r != 15) {
+                    d->eobrun = (nj_s4)1 << r;
+                    if (r != 0) {
+                        d->eobrun += (nj_s4)jp_get_bits(b, r);
+                    }
+                    d->eobrun -= 1;
+                    break;
+                }
+                k += 16;
+                if (k > 64) {
+                    return -1;
+                }
+                continue;
+            }
+            k += r;
+            if (k > d->se) {
+                return -1;
+            }
+            {
+                nj_s4 v = (nj_s4)jp_receive_extend(b, s) << d->al;
+
+                cf[(int)s_zigzag[k]] = (nj_s2)jp_clamp((int)v, -32767, 32767);
+            }
+            k++;
+        }
+        return b->overrun ? 1 : 0;
+    }
+
+    /* Refinement.  A pending end-of-band run still refines the remaining
+     * coefficients in this band. */
+    if (d->eobrun > 0) {
+        for (; k <= d->se; k++) {
+            nj_s2 *q = &cf[(int)s_zigzag[k]];
+
+            if (*q != 0 && jp_get_bits(b, 1) != 0u) {
+                nj_s4 v = (nj_s4)*q + ((*q > 0) ? p1 : -p1);
+
+                *q = (nj_s2)jp_clamp((int)v, -32767, 32767);
+            }
+        }
+        if (b->overrun) {
+            return 1;
+        }
+        d->eobrun -= 1;
+        return 0;
+    }
+    while (k <= d->se) {
+        int s, r, run;
+        nj_s4 newval = 0;
+
+        if (jp_huff_decode(b, ac, &s) != 0) {
+            return b->overrun ? 1 : -1;
+        }
+        r = s >> 4;
+        s &= 15;
+        if (s == 0 && r != 15) {
+            d->eobrun = (nj_s4)1 << r;
+            if (r != 0) {
+                d->eobrun += (nj_s4)jp_get_bits(b, r);
+            }
+            d->eobrun -= 1;
+            for (; k <= d->se; k++) {
+                nj_s2 *q = &cf[(int)s_zigzag[k]];
+
+                if (*q != 0 && jp_get_bits(b, 1) != 0u) {
+                    nj_s4 v = (nj_s4)*q + ((*q > 0) ? p1 : -p1);
+
+                    *q = (nj_s2)jp_clamp((int)v, -32767, 32767);
+                }
+            }
+            return b->overrun ? 1 : 0;
+        }
+        if (s != 0 && s != 1) {
+            return -1;               /* a refinement can only add magnitude 1 */
+        }
+        /*
+         * T.81 G.1.2.3: when a refinement symbol introduces a new non-zero
+         * coefficient its *sign* bit comes immediately after the Huffman
+         * code, before the correction bits of the coefficients the run
+         * walks past.  Reading it after the walk consumes one bit too late
+         * and desynchronises the rest of the block.
+         */
+        if (s != 0 && jp_get_bits(b, 1) == 0u) {
+            newval = -p1;
+        } else if (s != 0) {
+            newval = p1;
+        }
+        run = (s == 0) ? 16 : r;      /* ZRL, or the zeros before a new value */
+        while (k <= d->se) {
+            nj_s2 *q = &cf[(int)s_zigzag[k]];
+
+            if (*q != 0) {
+                if (jp_get_bits(b, 1) != 0u) {
+                    nj_s4 v = (nj_s4)*q + ((*q > 0) ? p1 : -p1);
+
+                    *q = (nj_s2)jp_clamp((int)v, -32767, 32767);
+                }
+            } else if (run == 0) {
+                break;
+            } else {
+                run -= 1;
+            }
+            k++;
+        }
+        if (k > d->se) {
+            return -1;
+        }
+        if (s == 0) {
+            continue;                /* ZRL: keep decoding from here */
+        }
+        cf[(int)s_zigzag[k]] = (nj_s2)jp_clamp((int)newval, -32767, 32767);
+        k++;
+        if (b->overrun) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int jp_prog_block(jp_dec *d, jp_bits *b, jp_comp *c, int cx, int cy)
+{
+    nj_s2 *cf = c->coef +
+        ((nj_size)cy * (nj_size)c->cw + (nj_size)cx) * 64;
+    int r;
+
+    if (d->ss == 0) {
+        r = jp_prog_dc_block(d, b, c, cf);
+    } else {
+        r = jp_prog_ac_block(d, b, c, cf);
+    }
+    return r;
+}
+
+static const char *jp_decode_scan_prog(jp_dec *d)
+{
+    jp_bits b;
+    nj_u4 mx, my, mcu = 0u;
+    nj_u4 cols, rows, total;
+    int expected_rst = 0xD0;
+
+    d->truncated = 0;
+    d->eobrun = 0;
+    if (!d->coef_ready) {
+        const char *e = jp_alloc_coefs(d);
+
+        if (e != NULL) {
+            return e;
+        }
+    }
+    if (d->nscan == 1) {
+        /* A single-component scan is a plain block raster (T.81 A.2.3). */
+        cols = (nj_u4)d->scan[0]->bw;
+        rows = (nj_u4)d->scan[0]->bh;
+    } else {
+        cols = d->mcus_x;
+        rows = d->mcus_y;
+    }
+    total = cols * rows;
+    if (total == 0u) {
+        return "JPEG scan has no blocks";
+    }
+
+    jp_bits_init(&b, d->p, d->end);
+    for (my = 0u; my < rows && !d->truncated; my++) {
+        for (mx = 0u; mx < cols && !d->truncated; mx++, mcu++) {
+            int i;
+
+            if (d->restart_interval > 0 && mcu > 0u &&
+                (mcu % (nj_u4)d->restart_interval) == 0u) {
+                int r = jp_restart(&b, &expected_rst);
+
+                if (r == -2) {
+                    return "JPEG restart marker is out of sequence";
+                }
+                if (r != 0) {
+                    return "JPEG restart marker is missing";
+                }
+                for (i = 0; i < d->ncomp; i++) {
+                    d->comp[i].pred = 0;
+                }
+                d->eobrun = 0;
+            }
+            for (i = 0; i < d->nscan && !d->truncated; i++) {
+                jp_comp *c = d->scan[i];
+                int bh = (d->nscan == 1) ? 1 : c->h;
+                int bv = (d->nscan == 1) ? 1 : c->v;
+                int bxx, byy;
+
+                for (byy = 0; byy < bv && !d->truncated; byy++) {
+                    for (bxx = 0; bxx < bh && !d->truncated; bxx++) {
+                        int cx, cy, r;
+
+                        if (d->nscan == 1) {
+                            cx = (int)mx;
+                            cy = (int)my;
+                        } else {
+                            cx = (int)mx * c->h + bxx;
+                            cy = (int)my * c->v + byy;
+                        }
+                        r = jp_prog_block(d, &b, c, cx, cy);
+                        if (r < 0) {
+                            return "corrupt progressive JPEG scan data";
+                        }
+                        if (r > 0) {
+                            d->truncated = 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    d->p = b.p;
+    return NULL;
+}
+
+/*
+ * Turn the coefficient grids into the sample planes the sequential path also
+ * produces, then everything downstream (upsampling, colour conversion) is the
+ * same code.  jp_idct_store() keeps the encoded scale, so a progressive file
+ * requested at half or quarter size lands in the normal downscaled planes.
+ */
+static const char *jp_prog_reconstruct(jp_dec *d)
+{
+    const char *e = jp_alloc_planes(d);
+    int i;
+
+    if (e != NULL) {
+        return e;
+    }
+    for (i = 0; i < d->ncomp; i++) {
+        jp_comp *c = &d->comp[i];
+        int bx, by;
+
+        if (c->coef == NULL) {
+            continue;
+        }
+        for (by = 0; by < c->bh; by++) {
+            for (bx = 0; bx < c->bw; bx++) {
+                const nj_s2 *src =
+                    c->coef + ((nj_size)by * (nj_size)c->cw + (nj_size)bx) * 64;
+                nj_s4 coef[64];
+                int k;
+
+                for (k = 0; k < 64; k++) {
+                    coef[k] = (nj_s4)src[k];
+                }
+                jp_idct_store(d, coef, c, bx, by);
+            }
+        }
+    }
+    return NULL;
+}
+#endif /* NJ_ENABLE_JPEG_PROGRESSIVE */
 
 /* ------------------------------------------------------------------ */
 /* Colour conversion and output                                       */
@@ -1482,6 +1940,11 @@ nj_image *nj_jpeg_decode(const nj_codec_req *req)
             break;
         }
     }
+#if NJ_ENABLE_JPEG_PROGRESSIVE
+    if (err == NULL && d.progressive && !d.planes_ready) {
+        err = jp_prog_reconstruct(&d);
+    }
+#endif
     if (err == NULL) {
         int i;
 

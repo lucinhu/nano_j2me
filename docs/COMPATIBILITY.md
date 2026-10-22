@@ -2210,3 +2210,60 @@ so it is the title's timing, not the Alert timer.  A clean build of
 `bf418ce` from `git archive` also passes its suite (62/65 first pass, the
 three `build/nj2me`-path tests pass after the documented symlink; 65 rather
 than 101 because that archive build disables the libretro/SDL2 ports).
+
+## Progressive JPEG: decoded, with one real asset still failing (round 5, 2026-10-23)
+
+`丧尸危机2-自由之翼BT版_997` was the last title in the corpus that died with an
+uncaught decoder exception: `IOException: cannot decode image: 16693 bytes
+starting ff d8 ff e0: progressive JPEG is not supported by this decoder`.  The
+loader thread died and the title ran ~95% black.  The decoder only handled
+SOF0/SOF1.
+
+It now handles SOF2 as well: successive approximation (DC first/refine, AC
+first/refine with EOBRUN and ZRL), arbitrary scan bands (Ss/Se/Ah/Al), restart
+intervals, interleaved and non-interleaved scans, and the optimised Huffman
+tables encoders emit (DC and AC table selectors 0..3).  The scans fill a
+coefficient grid and the pixels are then produced by exactly the same inverse
+transform, upsampling and colour conversion the sequential path uses, so a
+progressive file and the same image encoded sequentially come out
+byte-identical (verified).
+
+Two bugs were found by that comparison, and both are worth recording because
+they are the classic ones:
+
+- the DC point transform of a refinement scan is an *arithmetic shift*, so the
+  refinement bit appends the low bit of the two's-complement value: for a
+  negative coefficient it still adds `1 << Al`, it does not subtract.  The
+  first implementation refined by sign and magnitude and produced -103 where
+  -101 was correct.
+- the symbol bit of a newly introduced refinement coefficient comes
+  **immediately after the Huffman code**, before the correction bits of the
+  coefficients the run walks over.  Reading it after the walk desynchronises
+  the whole scan; that was the second bug.
+
+Verification: `tests/test_jpeg.c` now decodes progressive fixtures instead of
+asserting that they fail (4:4:4 35x23, 4:2:2 35x23, grayscale 17x13, 120x90,
+each against Pillow's own decode at the same MAE limits as the sequential
+fixtures, plus a malformed-band negative case); a fuzz pass of 24 Pillow
+progressive images (sizes 13..320, quality 60..92, subsampling 0/1/2) and 10
+`optimize=True` images all decode to the same pixels as our sequential decoder;
+ASan+UBSan+LSan decode the whole fixture set with no findings; full ctest
+101/101.  Cost: a coefficient plane per component only while a progressive
+file is being decoded (2 bytes per coefficient; ~150 KiB for a 240x320
+4:2:0 image, freed before the image is returned), a 4 MiB cap so a hostile
+file cannot ask for more, and `#ifndef NJ_ENABLE_JPEG_PROGRESSIVE` (default 1)
+so a build can compile it out with `-DNJ_ENABLE_JPEG_PROGRESSIVE=0` and get
+the old refusal back.  The sequential path is untouched.  The object grows
+1,592 bytes of text; no data, no bss, no new globals.
+
+Known limitation, stated plainly: the title that motivated the work still
+fails.  Its asset is a *valid* progressive JPEG - libjpeg decodes it with no
+warnings - and our decoder's coefficient state matches libjpeg's exactly after
+scans 1..13, then diverges in the last scan (`Ah=1, Al=0`, AC refinement) at
+component Cr block (22,17) coefficient 7, and the scan aborts with "corrupt
+progressive JPEG scan data".  The fixture corpus (including an image with the
+identical 14-scan schedule produced by cjpeg) does not reproduce it.  Games
+still get a clean `IOException`, not a crash, and nothing that failed before
+decodes incorrectly now - the change is monotonic - but this asset remains an
+open bug in the AC-refinement path and the title stays unplayable until it is
+fixed.
