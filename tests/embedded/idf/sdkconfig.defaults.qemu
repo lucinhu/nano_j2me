@@ -1,0 +1,13 @@
+# QEMU overrides on top of sdkconfig.defaults:
+#   idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.qemu" build
+#
+# QEMU's esp32s3 machine does not answer IDF's PSRAM chip-ID probe
+# (espressif/qemu#129), so PSRAM must stay off there; with the probe off IDF
+# leaves 356 KiB of internal RAM rather than 133 KiB.  QEMU also emulates a
+# 4 MB flash with the older layout, hence 4 MB here.
+#
+# esp-emu (Espressif's emulator) needs none of this: it models 8 MB PSRAM and
+# reads the 16 MB flash size from the image header, so it uses the plain
+# sdkconfig.defaults and passes --psram-size 8M (its default).
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+# CONFIG_SPIRAM is not set

@@ -61,6 +61,16 @@ else
     OBJS=()
     for s in "${SRCS[@]}"; do
         rel="${s#"$ROOT"/}"
+        # THE ONE EXEMPTION, and it is the ABI's, not the runtime's: libretro
+        # entry points are process-wide functions with no userdata pointer, so
+        # the core must reach exactly one instance from file scope.  Every
+        # byte of MIDlet state still belongs to that one nj_vm, and the core
+        # destroys it on retro_unload_game(); see src/port/libretro/.
+        case "$rel" in
+        src/port/libretro/nj_port_libretro.c)
+            SKIPPED+=("$rel (libretro ABI: process-global entry points)")
+            continue ;;
+        esac
         o="$TMP/$(echo "$rel" | tr '/' '_').o"
         # LC_ALL=C so the diagnostic we match on below is not localised.
         if ! LC_ALL=C "$CC" -std=c99 -O2 -I"$ROOT/include" -I"$ROOT/src/core" \

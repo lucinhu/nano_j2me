@@ -1,4 +1,4 @@
-version: "0.1.0"
+version: "0.2.0"
 description: >-
   nano_j2me - a J2ME (CLDC 1.1 / MIDP 2.0) runtime in pure C.  Runs MIDlet game
   JARs from a flash partition against an SPI LCD, with no PSRAM requirement.

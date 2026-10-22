@@ -1,19 +1,22 @@
 /*
  * nano_j2me on an ESP32, under ESP-IDF.
  *
- * This is the image that runs in QEMU's esp32s3 and esp32c3 machines.  It uses
- * the bare-metal port from tests/embedded/ rather than nj_port_esp32.c on
+ * This is the image that runs on the ESP32-S3 under Espressif's emulator
+ * (esp-emu), and - with PSRAM switched off - under QEMU's esp32s3 machine.  It
+ * uses the bare-metal port from tests/embedded/ rather than nj_port_esp32.c on
  * purpose:
  *
- *   - nj_port_esp32.c drives an SPI panel over GPIO.  QEMU models neither the
- *     panel nor the wiring, so booting it there would prove nothing about it;
- *     it IS compiled against the real IDF headers as part of this component,
- *     which is a stronger check than a stub-header compile.
- *   - the bare port needs nothing but a framebuffer in RAM, so what QEMU
- *     exercises is exactly the part worth exercising: the interpreter, the
- *     class library, the scheduler and the GC, on the real instruction set.
+ *   - nj_port_esp32.c drives an SPI panel over GPIO.  Neither emulator models
+ *     the panel nor the wiring, so booting it there would prove nothing about
+ *     it; it IS compiled against the real IDF headers as part of this
+ *     component, which is a stronger check than a stub-header compile.
+ *   - the bare port needs nothing but a framebuffer in RAM, so what the
+ *     emulator exercises is exactly the part worth exercising: the
+ *     interpreter, the class library, the scheduler and the GC, on the real
+ *     instruction set.
  *
- * The output goes to UART0, which is the console QEMU is attached to.
+ * The board profile is the one in sdkconfig.defaults: 16 MB flash, 8 MB PSRAM.
+ * The output goes to UART0, which is the emulator's console.
  */
 #include "nj2me/nj.h"
 #include "nj2me/nj_port.h"
@@ -34,36 +37,41 @@ extern const unsigned int  nj_bare_jar_len;
 static const char *TAG = "nj2me";
 
 /*
- * Everything from internal SRAM, and small.
+ * The framebuffer stays in internal SRAM and small.
  *
- * On a real board the Java heap belongs in PSRAM and the framebuffer belongs in
- * a panel that DMAs from internal RAM - nj_port_esp32.c does both.  This image
- * is not that: it is here to prove the RUNTIME executes on the ESP32-S3's real
- * instruction set, so the framebuffer is 64x64 (16 KB) and both buffers are
- * sized to leave headroom in the 512 KB the part actually has.
+ * nj_port_esp32.c DMAs a panel out of internal RAM; this image only needs a
+ * scratch surface, so 64x64 (16 KB) is enough to prove the runtime renders.
  */
 /*
  * The pool comes from IDF's allocator, in PSRAM, 16-byte aligned.
  *
- * three things at once, which is why it is not a static array:
- *   - PSRAM, because internal SRAM cannot hold it (nj_port_esp32.c does the
- *     same on real hardware, and this is the same fix);
- *   - 16-byte alignment, which the Java arena requires for long/double fields
+ * It is not a static array because it must be three things at once:
+ *   - PSRAM, because internal SRAM cannot hold the Java heap;
+ *   - 16-byte aligned, which the Java arena requires for long/double fields
  *     and which nj_heap_init() can only reject - heap_caps_aligned_alloc()
  *     guarantees it rather than hoping the linker agreed;
- *   - enough room for all three consumers, which a hand-sized array got wrong.
+ *   - enough room for all three consumers (VM instance, Java arena, statics),
+ *     which a hand-sized array got wrong.
  */
 /*
- * The pool is sized from what is actually free, not from a constant.
+ * The pool is sized from what is actually free, and it prefers PSRAM.
  *
- * 340 KiB fits an ESP32-S3 (356 KiB free) and does not fit an ESP32-C3
- * (295 KiB free) - the two parts have different SRAM, and a hard-coded pool
- * that only fits the one on the developer's desk is the classic way to ship
- * something that works until it doesn't.  Leave a margin for IDF's own
- * allocations and take the rest.
+ * This board has 8 MB of PSRAM; the desktop hands nj_vm_create a 16 MB arena,
+ * so 6 MB of PSRAM is the equivalent here and leaves 2 MB to IDF.  Sizing the
+ * pool from internal RAM instead fails on the full class library: the 308 KiB
+ * it produced could not create ~120 built-in classes ("cannot create builtin
+ * class javax/microedition/media/Player" ...) before the main thread gave up,
+ * which reads as a class-library bug and is really an out-of-memory one.
+ *
+ * Without PSRAM (an ESP32-C3, or QEMU's esp32s3, which cannot probe PSRAM) fall
+ * back to internal RAM: 340 KiB fits an S3's 356 KiB free, less a margin for
+ * IDF's own allocations.  The two parts have different SRAM, so the constant is
+ * a cap rather than the size.
  */
-#define NJ_QEMU_POOL_MARGIN (48u * 1024u)
-#define NJ_QEMU_HEAP_MAX    (340u * 1024u)
+#define NJ_EMU_PSRAM_RESERVE (1u * 1024u * 1024u)
+#define NJ_EMU_PSRAM_POOL_MAX (6u * 1024u * 1024u)
+#define NJ_EMU_POOL_MARGIN   (48u * 1024u)
+#define NJ_EMU_HEAP_MAX      (340u * 1024u)
 
 static unsigned char g_port_state[28u * 1024u];
 
@@ -89,6 +97,14 @@ static void idf_free(void *ud, void *p)
 
 void app_main(void)
 {
+#if defined(NJ_UI_DEMO)
+    /* The emulator UI demo (display capture, injected keys, JAR from a
+     * simulated memory card): all of it lives in ui_demo.c, and it needs its
+     * own frame loop, so it takes over app_main completely. */
+    extern void ui_demo_main(void);
+    ui_demo_main();
+    return;
+#endif
     nj_port port;
     nj_vm *vm;
     nj_app *app;
@@ -123,40 +139,40 @@ void app_main(void)
     port.alloc = idf_alloc;
     port.free = idf_free;
 
-    /* The port needs slack beyond the arena it hands out. */
-
-    ESP_LOGI(TAG, "port.alloc=%p port.ud=%p display_init=%p",
-             (void *)(size_t)port.alloc, port.ud,
-             (void *)(size_t)port.display_init);
     /*
      * The pool handed to nj_vm_create has to cover THREE things, not one:
      * the VM instance (nj_vm_sizeof), the Java arena (this argument), and
-     * vm->statics - the interned-string and constant tables, which want about
-     * 32 KiB.  Sizing the pool as "sizeof(nj_vm) + java heap" leaves nothing
-     * for the third and fails with "statics failed", which is a puzzle the
-     * first time and obvious afterwards.
-     */
-    /*
-     * Size the pool from what is actually free.  340 KiB fits an ESP32-S3
-     * (356 KiB free) and does NOT fit an ESP32-C3 (295 KiB free) - the two
-     * parts have different SRAM, and a hard-coded pool that only fits the one
-     * on the desk is the classic way to ship something that works until it
-     * does not.
+     * vm->statics - the interned-string and constant tables.  Sizing the pool
+     * as "sizeof(nj_vm) + java heap" leaves nothing for the third and fails
+     * with "statics failed", which is a puzzle the first time and obvious
+     * afterwards.
      */
     {
+        size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
         size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-        pool = (free_internal > NJ_QEMU_POOL_MARGIN)
-                   ? (size_t)(free_internal - NJ_QEMU_POOL_MARGIN) : 0u;
-        if (pool > NJ_QEMU_HEAP_MAX) { pool = NJ_QEMU_HEAP_MAX; }
+        const char *where;
+
+        if (free_psram > NJ_EMU_PSRAM_RESERVE) {
+            pool = (size_t)(free_psram - NJ_EMU_PSRAM_RESERVE);
+            if (pool > NJ_EMU_PSRAM_POOL_MAX) { pool = NJ_EMU_PSRAM_POOL_MAX; }
+            where = "psram";
+        } else {
+            pool = (free_internal > NJ_EMU_POOL_MARGIN)
+                       ? (size_t)(free_internal - NJ_EMU_POOL_MARGIN) : 0u;
+            if (pool > NJ_EMU_HEAP_MAX) { pool = NJ_EMU_HEAP_MAX; }
+            where = "internal";
+        }
         pool &= ~(size_t)4095u;
-        ESP_LOGI(TAG, "pool %u KiB", (unsigned)(pool / 1024u));
+        ESP_LOGI(TAG, "pool %u KiB (%s)", (unsigned)(pool / 1024u), where);
     }
 
-    /* Leave a third of the pool for the statics, the native registry and the
-     * interned strings, which want about 32 KiB each. */
+    /* Half the pool for the statics, the native registry and the interned
+     * strings (a few hundred KiB with the full class library), half for the
+     * Java arena.  With PSRAM the arena is megabytes, which is what the full
+     * class library needs to materialise; the internal-RAM fallback keeps the
+     * old split. */
     {
-        nj_size arena = pool / 2u;   /* IDF's internal heap fragments; a smaller
-                                 * contiguous request is more likely to succeed */
+        nj_size arena = pool / 2u;
         ESP_LOGI(TAG, "sizeof(nj_vm)=%u, arena %u KiB, reserved %u KiB",
                  (unsigned)nj_vm_sizeof(), (unsigned)(arena / 1024u),
                  (unsigned)((pool - arena) / 1024u));
@@ -164,6 +180,7 @@ void app_main(void)
     }
     if (!vm) {
         ESP_LOGE(TAG, "nj_vm_create failed");
+        nj_port_bare_report(1, 0);
         return;
     }
 
@@ -202,10 +219,6 @@ void app_main(void)
             started = 1;
         }
     }
-    if (0) {
-    } else {
-        started = 1;
-    }
     if (started) {
         nj_vm_stats st0;
         while (nj_vm_running(vm) && nj_port_bare_frames(port.ud) < 600) {
@@ -224,7 +237,9 @@ void app_main(void)
                  (unsigned long)st0.heap_used, (unsigned long)st0.heap_peak);
     }
 
-    nj_app_close(vm, app);
+    if (app) {
+        nj_app_close(vm, app);
+    }
     (void)nj_vm_destroy(vm);
     nj_port_bare_report(rc, nj_port_bare_frames(port.ud));
     ESP_LOGI(TAG, "done rc=%d", rc);

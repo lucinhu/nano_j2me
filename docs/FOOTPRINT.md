@@ -125,12 +125,62 @@ rather than depending on a debugger:
 `tests/embedded/idf/` is a complete ESP-IDF project with the runtime as a
 component (`components/nj2me`). It builds, and it boots:
 
-    . ~/.espressif/v6.0.1/esp-idf/export.sh      # v6.0.1 matches the 15.2.0 toolchain
+    . ~/.espressif/tools/activate_idf_v6.0.1.sh   # v6.0.1 matches the 15.2.0 toolchain
     cd tests/embedded/idf && idf.py set-target esp32s3 build
-    idf.py merge-bin -o flash.bin && truncate -s 2M flash.bin
+
+The default profile is the board this port targets - 16 MB flash, 8 MB octal
+PSRAM - and `tools/run_esp_emulator.sh` boots that image under Espressif's
+esp-emu.  QEMU's esp32s3 machine cannot probe PSRAM (espressif/qemu#129), so a
+QEMU run turns it off and keeps the Java heap in internal RAM:
+
+    idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.qemu" \
+        set-target esp32s3 build
+    idf.py merge-bin -o flash.bin && truncate -s 4M flash.bin
     qemu-system-xtensa -machine esp32s3 -nographic \
         -drive file=flash.bin,if=mtd,format=raw \
         -global driver=timer.esp32s3.timg,property=wdt_disable,value=true
+
+### What esp-emu does and does not model: the UI demo
+
+esp-emu is a SoC emulator, not a board emulator.  It models the ESP32-S3 cores,
+PSRAM, flash, UART, USB-Serial-JTAG, timers, GDMA, GP-SPI, RMT, LEDC, PCNT,
+MCPWM, I2C and the GPIO pads.  It models **no LCD controller, no SD/MMC host,
+and no way to drive a GPIO input from the host**; its browser dashboard shows
+the console, cores, GPIO pad state, registers and memory, and nothing else.
+
+`-DNJ_UI_DEMO=1` (`tools/run_esp_emulator_ui.sh`) therefore reproduces the three
+software paths a handheld uses, with the emulator's facilities standing in only
+at the hardware edge:
+
+| layer | real board (`nj_port_esp32.c`) | esp-emu demo |
+|---|---|---|
+| display | SPI ST77xx: 240x320 RGB565, window command + row DMA | the same 240x320 RGB565 framebuffer; `display_present()` dumps it over UART0 as run-length encoded lines, `tools/decode_ui_frames.py` writes PNGs |
+| buttons | GPIO button matrix -> queue -> `input_poll()` | `esp-emu --inject` into UART0 RX (`K:fire:1`) -> the same queue -> `input_poll()` |
+| storage | SDMMC + FAT mounted at `/sdcard` | a SPIFFS partition mounted at `/sdcard`; the firmware's `fopen("/sdcard/game.jar")` and `fread()` are unchanged |
+
+    tools/run_esp_emulator_ui.sh
+    tools/run_esp_emulator_ui.sh --jar tests/games/1942空战_10403.jar \
+        --out build/esp-ui-demo-1942
+
+    PASS: ESP32-S3 image booted under esp-emu, mounted the simulated SD card,
+          read 1942空战_10403.jar from it, rendered 240x320 RGB565 frames,
+          delivered 4 injected key event(s) into Java, and the frame changed.
+
+`keysdemo.jar`, the default, proves the input path by colour: two captures
+taken before and after the injected keys differ, and no input means a
+byte-identical picture.  A real game proves it with its own screens: with
+`1942空战_10403.jar` the injected FIRE press moves the game from its sound
+prompt (`¿SONIDO?`) to the title menu, and both captures decode to real
+240x320 game pixels.  The PNGs are written to `--out` (default
+`build/esp-ui-demo/`), the UART log next to them.  Two captures from that run,
+decoded out of the UART stream:
+
+![1942 air combat asking whether sound is wanted](images/esp-emu-1942-sound.png)
+![1942 air combat title menu, reached after the injected FIRE press](images/esp-emu-1942-menu.png)
+
+The limitation, stated once: no emulator here shows a physical panel or reads a
+real SD card.  Those two rows are the software paths with the hardware edge
+replaced; all the code above the edge is the code the board runs.
 
 Everything compiles against real IDF headers - including `nj_port_esp32.c`,
 which is a stronger check than any stub-header compile - and QEMU runs the

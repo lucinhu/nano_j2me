@@ -838,7 +838,7 @@ static void hl_shutdown(void *ud)
 /* ------------------------------------------------------------------ */
 /* Construction                                                        */
 /* ------------------------------------------------------------------ */
-#if defined(NJ_USE_LIBC) && NJ_USE_LIBC
+#if defined(NJ_USE_LIBC) && NJ_USE_LIBC && defined(NJ_HAVE_ZLIB_H)
 #include <zlib.h>
 
 /*
@@ -1247,7 +1247,7 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     out->code_commit = hl_code_commit;
     out->code_free = hl_code_free;
     out->dir_open = hl_dir_open;
-#if defined(NJ_USE_LIBC) && NJ_USE_LIBC
+#if defined(NJ_USE_LIBC) && NJ_USE_LIBC && defined(NJ_HAVE_ZLIB_H)
     out->inflate = hl_inflate;
     out->inflate_raw = hl_inflate_raw;
 #endif

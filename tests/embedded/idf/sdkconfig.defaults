@@ -1,10 +1,35 @@
-# No SPIRAM: QEMU's esp32s3 PSRAM model does not answer IDF's chip-ID probe
-# (espressif/qemu#129 - still open, and NOT fixed by esp-develop 20260417 as
-# tested).  With SPIRAM on, IDF aborts at startup with "Failed to init external
-# RAM".  With it off, IDF leaves 356 KiB of internal RAM rather than 133 KiB,
-# because the PSRAM init itself is what consumes the difference.
+# The board this image targets: 16 MB flash and 8 MB octal PSRAM.
 #
-# The code keeps the PSRAM path - heap_caps_aligned_alloc(MALLOC_CAP_SPIRAM)
-# with an internal-RAM fallback - which is what a real board takes.
+# That is the memory a real ESP32-S3 handheld gives a J2ME runtime, and it is
+# what Espressif's emulator (esp-emu) models: it sizes the flash chip from the
+# image header, so CONFIG_ESPTOOLPY_FLASHSIZE_16MB is what the emulator sees,
+# and it provides a working 8 MB PSRAM chip (default --psram-size 8M).
+#
+# The Java heap goes in PSRAM (see main.c), so the 512 KB of internal SRAM is
+# left for IDF, the UART console and the framebuffer - the same split
+# nj_port_esp32.c uses on real hardware.  main.c still falls back to internal
+# RAM when the probe finds no PSRAM, which is what an ESP32-C3 build gets.
+#
+# A stock QEMU esp32s3 machine does NOT model PSRAM correctly
+# (espressif/qemu#129), so QEMU runs turn it off with
+# -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.qemu".
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# 16 MB flash.  The image is ~1.4 MB, so the 3 MB factory partition in
+# partitions.csv fits with room for the growing class library and codecs.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Octal PSRAM at 80 MHz: the common ESP32-S3 module (and what esp-emu models).
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# No task watchdog: this image runs bench.jar, a pure CPU benchmark, from
+# app_main without any RTOS yield for the whole ~105 M-bytecode workload, so
+# IDLE0 never runs and the task watchdog fires every 20 s.  (QEMU runs disable
+# the hardware watchdog from the machine command line for the same reason.)
+# A real port services the runtime's idle/sleep hooks and keeps the watchdog.
+CONFIG_ESP_TASK_WDT_EN=n

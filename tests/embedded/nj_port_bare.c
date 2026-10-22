@@ -388,6 +388,14 @@ void nj_port_bare_report(int rc, int frames)
     q = "\n";
     while (*q) { buf[n++] = *q++; }
     bare_puts(buf);
+    fflush(stderr);
+    /* Emulators stop the guest the instant the marker appears, which can cut
+     * the line above mid-write (fputc goes through a buffered stream under
+     * ESP-IDF).  Flush, then print a second marker the signal is about: an
+     * exit-on string has to be something that is only reachable once the
+     * result line is complete. */
+    bare_puts("NJ2ME END\n");
+    fflush(stderr);
 }
 
 nj_status nj_port_bare(nj_port *out, bare_state *st, void *heap, nj_size heap_bytes)

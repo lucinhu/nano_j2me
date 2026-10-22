@@ -1,0 +1,15 @@
+# Partition table for the 16 MB emulator board: 3 MB for the application.
+# The single-app table IDF generates for a 2 MB flash gives the app only 1 MB,
+# which the full runtime (every built-in class plus image/audio codecs) exceeds.
+# The image is ~1.4 MB, so 3 MB leaves room for the class library to keep
+# growing; a 16 MB flash has space to spare.
+# name,   type, subtype,  offset,   size
+nvs,      data, nvs,      0x9000,   0x6000,
+phy_init, data, phy,      0xf000,   0x1000,
+factory,  app,  factory,  0x10000,  0x300000,
+# A simulated "memory card": a data partition the UI demo mounts as a SPIFFS
+# (it ends at 0x400000, so the same table also fits the 4 MB flash QEMU profile)
+# filesystem at /sdcard.  esp-emu does not model an SD card controller, and a
+# real board would mount SDMMC+FAT at the same VFS path, so the demo's
+# fopen("/sdcard/game.jar") path is the one hardware uses too.
+storage,  data, spiffs,   0x310000, 0x0f0000,
