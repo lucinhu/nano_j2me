@@ -350,6 +350,48 @@ script) gives 9 caught throws, 0 uncaught, 142 colours in frame 900 and a
 superinstr-off, and that title's own run-to-run spread (17-79 M bytecodes and
 5-12 k gfx calls on the SAME binary) is its timing dependence, not the switches.
 
+## Five more folds, and a branch that read the wrong address
+
+    round-2 tip (a6c062b)         min 0.171 s   med 0.171 s
+    + five fused families         min 0.156 s   med 0.161 s
+    call/loop microbenchmark      0.596 / 0.601  ->  0.529 / 0.531
+
+Twelve interleaved runs per arm, pinned to one core, minimum and median; the
+fixture drops from 84,915,400 to 76,914,888 bytecodes, 9.4% of its dispatches.
+The five families, with the profile share that motivated each one:
+
+    iinc i; iload j, any slot      3.54% 1945 - round 2 only folded i == j
+    iload*; iload*; if_icmpXX      2.85% fixture, 4.77% 1942
+    ldc2_w; ladd|lsub|lmul         2.86% fixture
+    lload*; ladd|lsub|lmul         9.34% dark
+    iadd; istore_k; iload_k        the read-back the round-2 fold had pre-empted
+
+The last one is an accounting lesson rather than a new pattern: when the round-2
+`iadd; istore_k` fold landed it swallowed the first half of the older
+`istore_k; iload_k` fold, so 1.6 M dispatches that the histograms predicted never
+appeared in the total.  The chain now folds both halves itself, which is part of
+why this round's bytecode count falls by more than the four new patterns alone
+would explain.
+
+`iload*; iload*; if_icmpXX` decides the branch without materialising either
+operand, and it is where the round went wrong first.  The handler handed the
+fold the address of the second load instead of the branch, so the fold read the
+branch opcode and its two offset bytes from the wrong place and computed a jump
+target of 0xFFFFxxxx: `VerifyError ... code runs past the end of the method` at
+`bench/Bench.work(I)I pc=4294943258` - on a fixture that the digest test still
+passed, because no digest category had two loads feeding an if_icmp.  The fold
+now takes the branch address as an explicit argument, and the digest test grew
+five categories (two-load branches, long constants, loaded longs, a counter
+read-back from a different slot, and the sum/read-back chain) to 18 categories
+and 19 digest values.  That is the second bug the fixture could not see and the
+digest could; the first is in the section below.
+
+No bytecode is rewritten, so a branch onto either half of a fold still works, and
+no fused path has a deeper peak stack than the unfused pair.  `nj_interp.o` grows
+1,994 B of text (+5.6%) and `.bss` is unchanged at 6,688 B: every fold is
+read-only code.  ctest 92/92; the eight-title game set has every pixel sequence
+identical, 0 FAIL, three WARNs on stats fields that move with real-time pacing.
+
 ## Seven more fused pairs, and a peek that had to be merged
 
     round-1 tip (2a6292e)         min 0.168 s   med 0.170 s

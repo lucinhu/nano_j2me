@@ -25,6 +25,11 @@
 #  11  long-field loop chain         getfield(int) + i2l + lcmp + ifXX, with
 #                                    and without the aload_0 fold in front
 #  12  null receiver                the fused getfield must still throw NPE
+#  13  two loads + if_icmpXX         iload*; iload*; if_icmpXX, both encodings
+#  14  long constant arithmetic      ldc2_w + ladd/lsub/lmul
+#  15  loaded long arithmetic        lload/lload_k + ladd/lsub/lmul
+#  16  counter read-back, any slot   iinc i; iload j with i != j
+#  17  sum into a local, then read   iadd; istore_k; iload_k
 #
 # Exit status: 0 identical (or skipped: no javac/java), 1 any difference.
 # The interpreter's bytecode total drops when fusions are on, which is why this
@@ -49,7 +54,7 @@ package cond;
 /* Every method here is written so that javac emits the opcode pair the fused
  * handler recognises; the digest is order-sensitive. */
 public class CondCore {
-    static int[] hs = new int[13];
+    static int[] hs = new int[18];
 
     static void mix(int c, int v) { hs[c] = (hs[c] ^ v) * 0x01000193; }
 
@@ -157,6 +162,49 @@ public class CondCore {
         try { return h.i; } catch (NullPointerException e) { return -1; }
     }
 
+    /* 13: iload*; iload*; if_icmpXX (both the _k and the indexed encoding) */
+    static int ic_lt(int a, int b) { return a < b ? 1 : 2; }
+    static int ic_ge(int a, int b) { return a >= b ? 3 : 4; }
+    static int ic_eq(int a, int b) { return a == b ? 5 : 6; }
+    static int ic_ne(int a, int b) { return a != b ? 7 : 8; }
+    static int ic_gt(int a, int b) { return a > b ? 9 : 10; }
+    static int ic_le(int a, int b) { return a <= b ? 11 : 12; }
+    static int ic_idx(int a, int b, int c, int d, int e) {
+        return d > e ? 13 : 14;                       /* iload_3; iload 4 */
+    }
+    static int ic_loop(int a, int b) {
+        int s = 0;
+        for (int k = 0; k < 6; k++) { if (a < b) s += 1; else s += 2; a += 3; }
+        return s;
+    }
+
+    /* 14: ldc2_w + ladd/lsub/lmul */
+    static long lc_mul(long a) { return a * 6364136223846793005L; }
+    static long lc_add(long a) { return a + 1442695040888963407L; }
+    static long lc_sub(long a) { return a - 1234567890123L; }
+    static long lc_chain(long a) {
+        long r = a * 6364136223846793005L + 1442695040888963407L;
+        return r * 3L - 5L;
+    }
+
+    /* 15: lload/lload_k + ladd/lsub/lmul */
+    static long ll_add(long a, long b) { return a + b; }
+    static long ll_sub(long a, long b) { return a - b; }
+    static long ll_mul(long a, long b) { return a * b; }
+    static long ll_loop(long a, long b) {
+        long s = 0;
+        for (int k = 0; k < 5; k++) { s = s + a * b; a += 3; }
+        return s;
+    }
+
+    /* 16: iinc i; iload j  with i != j */
+    static int inc_x(int a, int b) { a++; return b; }
+    static int inc_y(int a, int b, int c, int d, int e) { e++; return a; }
+
+    /* 17: iadd; istore_k; iload_k */
+    static int add_st2(int a, int b) { int c = a + b; return c + 1; }
+    static int add_st3(int a, int b, int c, int d) { d = a + b; return d * 2; }
+
     public static int digest() {
         int[] xs = { 0, 1, -1, 2, -2, 100, -100, 255, 65535, -65536, 1234567,
                      Integer.MIN_VALUE, Integer.MAX_VALUE };
@@ -208,6 +256,17 @@ public class CondCore {
             mix(11, ch_gt(h, (long) x)); mix(11, ch_le((long) x, h));
             mix(11, ch_loop(h, (long) x));
             mix(12, gf_n(null)); mix(12, gf_n(h));
+            mix(13, ic_lt(x, 5)); mix(13, ic_ge(x, 5)); mix(13, ic_eq(x, 5));
+            mix(13, ic_ne(x, 5)); mix(13, ic_gt(x, 5)); mix(13, ic_le(x, 5));
+            mix(13, ic_idx(0, 0, 0, x, x + 1)); mix(13, ic_loop(x, x + 2));
+            mix(14, (int) lc_mul(x)); mix(14, (int) (lc_mul(x) >>> 32));
+            mix(14, (int) lc_add(x)); mix(14, (int) lc_sub(x));
+            mix(14, (int) lc_chain(x)); mix(14, (int) (lc_chain(x) >>> 32));
+            mix(15, (int) ll_add((long) x, 7L)); mix(15, (int) ll_sub((long) x, 7L));
+            mix(15, (int) ll_mul((long) x, 7L)); mix(15, (int) ll_loop((long) x, 3L));
+            mix(15, (int) (ll_loop((long) x, 3L) >>> 32));
+            mix(16, inc_x(x, x + 1)); mix(16, inc_y(x, 0, 0, 0, x + 2));
+            mix(17, add_st2(x, x + 1)); mix(17, add_st3(x, x + 1, 0, 0));
         }
         int all = 0x811c9dc5;
         for (int i = 0; i < hs.length; i++) all = (all ^ hs[i]) * 0x01000193;

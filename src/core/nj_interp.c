@@ -437,6 +437,16 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
                 NJ_BRANCH_INT_BODY(V);                                    \
             } else if ((nj_u1)(njlf_nx_ - 0x2eu) <= 7u) {                 \
                 NJ_ARRAY_LOAD_BODY(V);                                    \
+            } else if (njlf_nx_ == 0x15u && pc + 5u <= code_len &&        \
+                       (nj_u1)(code[pc + 2u] - 0x9fu) <= 5u) {            \
+                NJ_ILOAD_ILOAD_ICMP_BODY(V,                               \
+                                         locals[(nj_u2)code[pc + 1u]].i,  \
+                                         pc + 2u);                        \
+            } else if ((nj_u1)(njlf_nx_ - 0x1au) <= 3u &&                 \
+                       pc + 4u <= code_len &&                             \
+                       (nj_u1)(code[pc + 1u] - 0x9fu) <= 5u) {            \
+                NJ_ILOAD_ILOAD_ICMP_BODY(V, locals[njlf_nx_ - 0x1au].i,   \
+                                         pc + 1u);                        \
             }                                                             \
         }                                                                 \
     }
@@ -566,16 +576,15 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
 #define NJ_IINC_FUSE(I)                                                   \
     {                                                                     \
         nj_u2 njil_i_ = (I);                                              \
+        (void)njil_i_;                                                    \
         if (pc < code_len) {                                              \
             nj_u1 njil_nx_ = code[pc];                                    \
-            if (njil_nx_ == 0x15u && pc + 2u <= code_len &&               \
-                code[pc + 1u] == (nj_u1)njil_i_) {                        \
-                sp->i = locals[njil_i_].i; sp++;                          \
+            if (njil_nx_ == 0x15u && pc + 2u <= code_len) {               \
+                sp->i = locals[(nj_u2)code[pc + 1u]].i; sp++;             \
                 pc += 2u;                                                 \
                 DISPATCH();                                               \
-            } else if (njil_i_ < 4u &&                                    \
-                       njil_nx_ == (nj_u1)(0x1au + (nj_u1)njil_i_)) {     \
-                sp->i = locals[njil_i_].i; sp++;                          \
+            } else if ((nj_u1)(njil_nx_ - 0x1au) <= 3u) {                 \
+                sp->i = locals[njil_nx_ - 0x1au].i; sp++;                 \
                 pc++;                                                     \
                 DISPATCH();                                               \
             } else if (njil_nx_ == 0xa7u && pc + 3u <= code_len) {        \
@@ -595,8 +604,84 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
 #define NJ_IADD_ISTORE_FUSE(R)                                            \
     {                                                                     \
         if (pc < code_len && (nj_u1)(code[pc] - 0x3bu) <= 3u) {           \
-            locals[code[pc] - 0x3bu].i = (R);                             \
+            nj_u1 njis_k_ = (nj_u1)(code[pc] - 0x3bu);                    \
+            nj_s4 njis_v_ = (R);                                          \
+            locals[njis_k_].i = njis_v_;                                  \
             pc++;                                                         \
+            if (pc < code_len && code[pc] == (nj_u1)(0x1au + njis_k_)) {  \
+                sp->i = njis_v_; sp++;                                    \
+                pc++;                                                     \
+            }                                                             \
+            DISPATCH();                                                   \
+        }                                                                 \
+    }
+
+/* if_icmp<cond> condition, shared by the standalone handler's semantics and
+ * the load+load+branch fold.  A is the deeper operand, B the top one. */
+#define NJ_ICMP_TAKEN(OP, A, B)                                           \
+    ((OP) == 0x9fu ? ((A) == (B)) :                                       \
+     (OP) == 0xa0u ? ((A) != (B)) :                                       \
+     (OP) == 0xa1u ? ((A) <  (B)) :                                       \
+     (OP) == 0xa2u ? ((A) >= (B)) :                                       \
+     (OP) == 0xa3u ? ((A) >  (B)) : ((A) <= (B)))
+
+/* `iload*; iload*; if_icmp<cond>` - both operands are known, so the branch
+ * is decided without ever materialising them on the operand stack. */
+#define NJ_ILOAD_ILOAD_ICMP_BODY(A, B, AT)                                \
+    {                                                                     \
+        nj_u4 njib_at_ = (AT);                                            \
+        nj_u1 njib_op_ = code[njib_at_];                                  \
+        nj_s4 njib_a_ = (A);                                              \
+        nj_s4 njib_b_ = (B);                                              \
+        nj_s2 njib_off_;                                                  \
+        pc = njib_at_ + 1u;                                               \
+        njib_off_ = S2();                                                 \
+        if (NJ_ICMP_TAKEN(njib_op_, njib_a_, njib_b_)) {                  \
+            pc = (nj_u4)(nj_s4)((nj_s4)njib_at_ + njib_off_);             \
+            JUMP_THREAD();                                                \
+        }                                                                 \
+        DISPATCH();                                                       \
+    }
+
+/* `ldc2_w; ladd|lmul` - the constant has just been pushed, so the arithmetic
+ * runs straight on it. */
+#define NJ_LDC2_LONG_FUSE()                                               \
+    {                                                                     \
+        if (pc < code_len && (nj_u1)(code[pc] - 0x61u) <= 8u &&           \
+            (((nj_u1)(code[pc] - 0x61u)) & 3u) == 0u) {                   \
+            nj_u1 njl2_op_ = code[pc++];                                  \
+            nj_s8 njl2_b_;                                                \
+            sp -= 2; njl2_b_ = sp[0].j; sp -= 2;                          \
+            if (njl2_op_ == 0x69u) {                                      \
+                sp[0].j = (nj_s8)((nj_u8)sp[0].j * (nj_u8)njl2_b_);       \
+            } else if (njl2_op_ == 0x65u) {                               \
+                sp[0].j = (nj_s8)((nj_u8)sp[0].j - (nj_u8)njl2_b_);       \
+            } else {                                                      \
+                sp[0].j = (nj_s8)((nj_u8)sp[0].j + (nj_u8)njl2_b_);       \
+            }                                                             \
+            sp[1].bits = 0u; sp += 2;                                     \
+            DISPATCH();                                                   \
+        }                                                                 \
+    }
+
+/* `lload*; ladd|lsub|lmul` - the loaded long feeds the arithmetic directly. */
+#define NJ_LLOAD_LONG_FUSE(VAL)                                           \
+    {                                                                     \
+        if (pc < code_len &&                                              \
+            (nj_u1)(code[pc] - 0x61u) <= 8u &&                            \
+            (((nj_u1)(code[pc] - 0x61u)) & 3u) == 0u) {                   \
+            nj_u1 njll_op_ = code[pc++];                                  \
+            nj_s8 njll_b_;                                                \
+            sp[0] = (VAL); sp[1].bits = 0u; sp += 2;                      \
+            sp -= 2; njll_b_ = sp[0].j; sp -= 2;                          \
+            if (njll_op_ == 0x61u) {                                      \
+                sp[0].j = (nj_s8)((nj_u8)sp[0].j + (nj_u8)njll_b_);       \
+            } else if (njll_op_ == 0x65u) {                               \
+                sp[0].j = (nj_s8)((nj_u8)sp[0].j - (nj_u8)njll_b_);       \
+            } else {                                                      \
+                sp[0].j = (nj_s8)((nj_u8)sp[0].j * (nj_u8)njll_b_);       \
+            }                                                             \
+            sp[1].bits = 0u; sp += 2;                                     \
             DISPATCH();                                                   \
         }                                                                 \
     }
@@ -1439,6 +1524,9 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
             sp[0] = cst[0];
             sp[1].bits = 0u;
             sp += 2;
+#if NJ_ENABLE_SUPERINSTR
+            NJ_LDC2_LONG_FUSE();
+#endif
             DISPATCH();
         }
 
@@ -1449,7 +1537,11 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
             NJ_ILOAD_FUSE(v_);
 #endif
             sp->i = v_; sp++; DISPATCH(); }
-        L_0x16: case 0x16: { nj_u2 i = (nj_u2)U1(); sp[0] = locals[i]; sp[1].bits=0u; sp+=2; DISPATCH(); }
+        L_0x16: case 0x16: { nj_u2 i = (nj_u2)U1();
+#if NJ_ENABLE_SUPERINSTR
+            NJ_LLOAD_LONG_FUSE(locals[i]);
+#endif
+            sp[0] = locals[i]; sp[1].bits=0u; sp+=2; DISPATCH(); }
         L_0x17: case 0x17: { nj_u2 i = (nj_u2)U1(); sp->bits = locals[i].bits; sp++; DISPATCH(); }
         L_0x18: case 0x18: { nj_u2 i = (nj_u2)U1(); sp[0] = locals[i]; sp[1].bits=0u; sp+=2; DISPATCH(); }
         L_0x19: case 0x19: { nj_u2 i = (nj_u2)U1();
@@ -1467,6 +1559,9 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                 sp->i = v_; sp++; DISPATCH();
             }
         L_0x1e: case 0x1e: case 0x1f: case 0x20: case 0x21:  /* lload_0..3 */
+#if NJ_ENABLE_SUPERINSTR
+            NJ_LLOAD_LONG_FUSE(locals[op - 0x1eu]);
+#endif
             sp[0] = locals[op - 0x1e]; sp[1].bits = 0u; sp += 2; DISPATCH();
         L_0x22: case 0x22: case 0x23: case 0x24: case 0x25:        /* fload_0..3 */
             sp->bits = locals[op - 0x22].bits; sp++; DISPATCH();
