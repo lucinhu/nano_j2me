@@ -2555,7 +2555,7 @@ int main(void)
     test_parallel_zero_planes(vm);
     /* ---- render() really draws the world into the bound target --------- */
     {
-        nj_ref img, gr, cam, xf, world, grp, mesh, va, vb, data, rgb, one, g3d;
+        nj_ref img = 0, gr, cam, xf, world, grp, mesh, va, vb, data, rgb, one, g3d;
         nj_value a[8], r;
         nj_s2 pos[9];
         nj_s4 vp[4];
