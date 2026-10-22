@@ -14,14 +14,18 @@
  * What is deliberately ignored
  * ----------------------------
  *   Every ancillary chunk (gAMA, sRGB, pHYs, tEXt, iCCP, bKGD, sBIT, ...) is
- *   skipped after its CRC has been verified - refusing them would reject real
- *   game assets for no reason.
+ *   skipped without interpreting it - refusing them would reject real game
+ *   assets for no reason.  Chunk CRCs are verified only when the strict build
+ *   knob below is on (see "Chunk CRCs" further down): Java's ImageIO does not
+ *   verify them, and titles that patch palette bytes in place depend on that.
  *
  * Safety
  * ------
  *   This parser eats untrusted bytes out of game JARs:
  *     - every read is bounds checked against both the chunk and the file,
- *     - every chunk CRC is verified with nj_crc32(),
+ *     - the chunk walk itself is what validates a file: lengths, order,
+ *       required chunks, and the two-walk IDAT length cross-check (a stale
+ *       CRC cannot smuggle in a short or oversized chunk),
  *     - all size arithmetic is done in 64 bits before anything is multiplied
  *       or allocated, and the dimensions are capped at NJ_PNG_MAX_DIM,
  *     - unfiltering never writes outside the output image or the private
@@ -40,6 +44,21 @@
 
 #if NJ_USE_LIBC
 #include <stdlib.h>   /* malloc / free when the caller did not supply any */
+#endif
+
+/*
+ * Chunk CRCs
+ * ----------
+ * Java's PNG decoder (ImageIO) never verifies chunk CRCs, and real J2ME
+ * assets rely on that: a title can load a PNG, overwrite the PLTE payload
+ * with its own palette and hand the buffer straight back to
+ * Image.createImage(), leaving the original chunk CRC stale.  Rejecting those
+ * files makes a working game fail to load its art.  Set NJ_PNG_STRICT_CRC to
+ * 1 (for a fuzzing or hardening build) to make a CRC mismatch fatal again;
+ * the default matches the platform the games were written for.
+ */
+#ifndef NJ_PNG_STRICT_CRC
+#define NJ_PNG_STRICT_CRC 0
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -359,6 +378,13 @@ static const char *png_scan(const nj_u1 *d, nj_u4 size, png_info *info,
             return "PNG chunk runs past the end of the file";
         }
 
+        /*
+         * CRC verification is off by default: see "Chunk CRCs" at the top of
+         * the file.  A mismatch here means the file was patched in place (or
+         * damaged) after its CRCs were written; Java accepts both, and the
+         * chunk walk above already guarantees the payload is in bounds.
+         */
+#if NJ_PNG_STRICT_CRC
         if (verify_crc) {
             nj_u4 want = nj_crc32(type, len + 4u, 0u);
             nj_u4 have = be32(body + len);
@@ -366,6 +392,8 @@ static const char *png_scan(const nj_u1 *d, nj_u4 size, png_info *info,
                 return "PNG chunk CRC mismatch";
             }
         }
+#endif
+        (void)verify_crc;
 
         if (!seen_ihdr) {
             if (!type_is(type, "IHDR")) {

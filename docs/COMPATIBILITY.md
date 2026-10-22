@@ -2064,3 +2064,41 @@ none has been observed in normal-play sweeps, but "not reproduced" is not the
 same as "proven absent". The read-only investigations are under
 `.local-tools/debug-runs/compat-round9-20261022/string-anomaly/` and
 `gc-audit/`.
+
+## PNG chunk CRCs: the title that patches its own palette
+
+`仙魔飞行棋_417` stayed on its loading board forever: our log had 80 caught
+`IOException: cannot decode image: ... PNG chunk CRC mismatch`, each followed by
+80 `NullPointerException at Graphics.drawImage: image is null`. The asset
+itself is fine. The title's own loader (`mobile/g.class`,
+`a(String, byte[])`) walks the PNG chunk list and, on `PLTE`,
+`System.arraycopy`s its own palette straight over the payload before handing
+the same buffer to `Image.createImage()`. The stored CRC is then stale by
+design from the title's point of view - and Java's `ImageIO` never verifies PNG
+chunk CRCs, so the reference decodes it and the phone renders it.
+
+Our decoder verified every chunk CRC and rejected the file. It now matches the
+platform the games were written for: chunk CRCs are still parsed but a mismatch
+is not fatal by default. This is not "stop validating": the parser still walks
+every chunk with bounds checks against both the chunk and the file, enforces
+chunk order and required chunks, cross-checks the IDAT length in a two-walk
+pass, caps dimensions and filter arithmetic (see the "Safety" comment at the
+top of `src/gfx/nj_png.c`); a stale or damaged CRC cannot smuggle in a short or
+oversized chunk. A hardening or fuzzing build can restore the fatal check with
+`-DNJ_PNG_STRICT_CRC=1`.
+
+Verified on the title, same keys and 1,200 frames: pre-fix build 80 CRC
+mismatches + 80 decode failures + 80 null-image NPEs; fixed build 0/0/0, with
+`paints=1198` in both and frame 300 matching the reference at a mean channel
+difference of 4.7/255 (97.6% of pixels within 16). `tests/test_png.c` builds a
+synthetic palette PNG in memory, patches its `PLTE` payload, and asserts both
+that the patched file decodes with the patched colours and that truncated,
+out-of-bounds and otherwise malformed files are still rejected (14 checks).
+
+The title still stops advancing around frame 300 with zero decode exceptions:
+the board is drawn and the game then waits on a page transition/input timing
+path that the generic key script does not drive. That is a separate open item,
+not a decoder failure. Footprint: compile-time only, nothing is allocated and
+there are no new globals or stack use; the `nj_png.o` text segment gets 239
+bytes *smaller* because the default build compiles the strict check out
+(`-DNJ_PNG_STRICT_CRC=1` restores it).
