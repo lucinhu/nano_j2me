@@ -1406,20 +1406,24 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
     (void)nj_dispatch;      /* referenced once any opcode is converted */
 #endif
 
-/* Compile/execute only between bytecodes. Native blocks cannot call, allocate
- * or throw; SAVE before entering also makes port allocation callbacks observe
- * the precise frame. Counts consume the same scheduler quantum as dispatch. */
+/* Probe is metadata-only: cold/refused sites do not publish the frame. SAVE
+ * remains mandatory before compilation/port callbacks and native execution.
+ * Leaf blocks cannot allocate/call/throw, so an unsuccessful following probe
+ * can continue interpreting with pc/sp in registers until the next safepoint. */
 #if NJ_ENABLE_JIT && NJ_JIT_HOST_SUPPORTED
 #define NJ_TRY_JIT() do {                                              \
         if (vm->jit) {                                                 \
-            nj_u4 _jit_n;                                              \
-            SAVE();                                                    \
-            while ((_jit_n = nj_jit_try_block(vm, fr, &pc, &sp,         \
-                                               quantum)) != 0u) {      \
+            nj_jit_ticket _jit_ticket;                                 \
+            while (pc < code_len && nj_jit_opcode_candidate(code[pc]) && \
+                   nj_jit_probe(vm, fr, pc, sp, quantum, &_jit_ticket)) { \
+                nj_u4 _jit_n;                                          \
+                SAVE();                                                \
+                _jit_n = nj_jit_execute(vm, fr, &pc, &sp, quantum,      \
+                                         &_jit_ticket);                \
+                if (!_jit_n) break;                                    \
                 insns_ += _jit_n;                                      \
                 quantum -= _jit_n;                                     \
-                SAVE();                                                \
-                if (quantum == 0u) return NJ_ERR_YIELD;                 \
+                if (quantum == 0u) { SAVE(); return NJ_ERR_YIELD; }      \
             }                                                          \
         }                                                              \
     } while (0)

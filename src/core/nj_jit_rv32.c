@@ -20,11 +20,26 @@ enum {
     RV_SLOT_BYTES = 8
 };
 
+#if NJ_JIT_RV32_REG_CACHE
+/* These describe actual register values, never deferred memory writes. Each
+ * register remembers at most one 32-bit memory word and one exact constant. */
+typedef struct rv_cached {
+    unsigned base;
+    int offset;
+    int memory;
+    int known;
+    nj_u4 value;
+} rv_cached;
+#endif
+
 typedef struct rv_writer {
     nj_u1 *buf;
     nj_size used;
     nj_size capacity;
     int failed;
+#if NJ_JIT_RV32_REG_CACHE
+    rv_cached regs[2];
+#endif
 } rv_writer;
 
 typedef struct rv_bytecode {
@@ -35,6 +50,120 @@ typedef struct rv_bytecode {
     int change;
     nj_u4 length;
 } rv_bytecode;
+
+#if NJ_JIT_RV32_REG_CACHE
+static rv_cached *rv_reg(rv_writer *w, unsigned reg)
+{
+    return reg == RV_T0 ? &w->regs[0] :
+           (reg == RV_T1 ? &w->regs[1] : NULL);
+}
+
+static int rv_constant(rv_writer *w, unsigned reg, nj_u4 *value)
+{
+    rv_cached *c = rv_reg(w, reg);
+    if (reg == RV_ZERO) {
+        *value = 0u;
+        return 1;
+    }
+    if (!c || !c->known) return 0;
+    *value = c->value;
+    return 1;
+}
+
+static void rv_result(rv_writer *w, unsigned reg, int known, nj_u4 value)
+{
+    rv_cached *c = rv_reg(w, reg);
+    if (!c) return;
+    c->memory = 0;
+    c->known = known;
+    c->value = value;
+}
+
+static int rv_at(rv_writer *w, unsigned reg, unsigned base, int offset)
+{
+    rv_cached *c = rv_reg(w, reg);
+    return c && c->memory && c->base == base && c->offset == offset;
+}
+
+static nj_u4 rv_sar(nj_u4 value, unsigned shift)
+{
+    shift &= 31u;
+    if (shift == 0u) return value;
+    return (value >> shift) |
+           ((value & 0x80000000u) ? (0xffffffffu << (32u - shift)) : 0u);
+}
+
+static int rv_binary_constant(unsigned funct7, unsigned funct3,
+                              nj_u4 a, nj_u4 b, nj_u4 *value)
+{
+    if (funct7 == 1u) {
+        if (funct3 != 0u) return 0; /* Never fold DIV/REM. */
+        *value = a * b;
+    } else if (funct7 == 0x20u) {
+        if (funct3 == 0u) *value = a - b;
+        else if (funct3 == 5u) *value = rv_sar(a, b);
+        else return 0;
+    } else if (funct7 == 0u) {
+        switch (funct3) {
+        case 0u: *value = a + b; break;
+        case 1u: *value = a << (b & 31u); break;
+        case 4u: *value = a ^ b; break;
+        case 5u: *value = a >> (b & 31u); break;
+        case 6u: *value = a | b; break;
+        case 7u: *value = a & b; break;
+        default: return 0;
+        }
+    } else return 0;
+    return 1;
+}
+
+static void rv_record_i(rv_writer *w, unsigned funct3,
+                        unsigned rd, unsigned rs1, int immediate)
+{
+    nj_u4 value = 0u;
+    int known = rv_constant(w, rs1, &value);
+    if (known) {
+        if (funct3 == 0u) value += (nj_u4)immediate;
+        else if (funct3 == 1u) value <<= (unsigned)immediate & 31u;
+        else if (funct3 == 5u) {
+            if ((immediate & 0x400) != 0)
+                value = rv_sar(value, (unsigned)immediate);
+            else value >>= (unsigned)immediate & 31u;
+        } else known = 0;
+    }
+    rv_result(w, rd, known, value);
+}
+
+static void rv_record_store(rv_writer *w, unsigned opcode, unsigned funct3,
+                            unsigned rs, unsigned base, int offset)
+{
+    unsigned i;
+    int width = opcode == 0x27u && funct3 == 3u ? 8 : 4;
+    for (i = 0u; i < 2u; i++) {
+        rv_cached *c = &w->regs[i];
+        /* Distinct ABI bases may alias. Within one base, invalidate every
+         * intersecting word, including both halves of a floating double. */
+        if (c->memory && (c->base != base ||
+            (c->offset < offset + width && offset < c->offset + 4)))
+            c->memory = 0;
+    }
+    if (opcode == 0x23u) {
+        rv_cached *c = rv_reg(w, rs);
+        if (c) {
+            c->base = base;
+            c->offset = offset;
+            c->memory = 1;
+        }
+    }
+}
+#endif
+
+static int rv_imm12(int value)
+{
+    return value >= -2048 && value <= 2047;
+}
+
+static void rv_li(rv_writer *w, unsigned rd, nj_s4 value);
 
 static void rv_u32(rv_writer *w, nj_u4 word)
 {
@@ -65,14 +194,25 @@ static void rv_u16(rv_writer *w, nj_u2 word)
 static void rv_r(rv_writer *w, unsigned opcode, unsigned funct7,
                  unsigned funct3, unsigned rd, unsigned rs1, unsigned rs2)
 {
+#if NJ_JIT_RV32_REG_CACHE
+    nj_u4 a, b, value = 0u, previous;
+    int known = opcode == 0x33u && rv_constant(w, rs1, &a) &&
+                rv_constant(w, rs2, &b) &&
+                rv_binary_constant(funct7, funct3, a, b, &value);
+    if (known && (rv_imm12((nj_s4)value) ||
+        (rv_constant(w, rd, &previous) && previous == value))) {
+        /* At most one immediate instruction, or no instruction if unchanged.
+         * Keep the following store even when the arithmetic folds away. */
+        rv_li(w, rd, (nj_s4)value);
+        return;
+    }
+#endif
     rv_u32(w, ((nj_u4)funct7 << 25) | ((nj_u4)rs2 << 20) |
            ((nj_u4)rs1 << 15) | ((nj_u4)funct3 << 12) |
            ((nj_u4)rd << 7) | (nj_u4)opcode);
-}
-
-static int rv_imm12(int value)
-{
-    return value >= -2048 && value <= 2047;
+#if NJ_JIT_RV32_REG_CACHE
+    if (opcode == 0x33u) rv_result(w, rd, known, value);
+#endif
 }
 
 static void rv_i(rv_writer *w, unsigned opcode, unsigned funct3,
@@ -85,6 +225,10 @@ static void rv_i(rv_writer *w, unsigned opcode, unsigned funct3,
     rv_u32(w, (((nj_u4)immediate & 0xfffu) << 20) |
            ((nj_u4)rs1 << 15) | ((nj_u4)funct3 << 12) |
            ((nj_u4)rd << 7) | (nj_u4)opcode);
+#if NJ_JIT_RV32_REG_CACHE
+    if (opcode == 0x13u) rv_record_i(w, funct3, rd, rs1, immediate);
+    else if (opcode == 0x03u) rv_result(w, rd, 0, 0u);
+#endif
 }
 
 static void rv_addi(rv_writer *w, unsigned rd, unsigned rs1, int immediate)
@@ -95,11 +239,17 @@ static void rv_addi(rv_writer *w, unsigned rd, unsigned rs1, int immediate)
         if (rs1 == RV_ZERO) { /* c.li rd, imm */
             rv_u16(w, (nj_u2)(0x4001u | (rd << 7) |
                               ((imm & 0x20u) << 7) | ((imm & 31u) << 2)));
+#if NJ_JIT_RV32_REG_CACHE
+            rv_record_i(w, 0u, rd, rs1, immediate);
+#endif
             return;
         }
         if (rd == rs1 && immediate != 0) { /* c.addi rd, nzimm */
             rv_u16(w, (nj_u2)(0x0001u | (rd << 7) |
                               ((imm & 0x20u) << 7) | ((imm & 31u) << 2)));
+#if NJ_JIT_RV32_REG_CACHE
+            rv_record_i(w, 0u, rd, rs1, immediate);
+#endif
             return;
         }
     }
@@ -111,6 +261,10 @@ static void rv_li(rv_writer *w, unsigned rd, nj_s4 value)
 {
     int low;
     nj_u4 high;
+#if NJ_JIT_RV32_REG_CACHE
+    nj_u4 previous;
+    if (rv_constant(w, rd, &previous) && previous == (nj_u4)value) return;
+#endif
     if (rv_imm12(value)) {
         rv_addi(w, rd, RV_ZERO, value);
         return;
@@ -120,12 +274,31 @@ static void rv_li(rv_writer *w, unsigned rd, nj_s4 value)
     low = (int)((nj_u4)value & 0xfffu);
     if (low >= 2048) low -= 4096;
     rv_u32(w, high | ((nj_u4)rd << 7) | 0x37u); /* lui */
+#if NJ_JIT_RV32_REG_CACHE
+    rv_result(w, rd, 1, high);
+#endif
     if (low != 0) rv_addi(w, rd, rd, low);
 }
 
 static void rv_load(rv_writer *w, unsigned rd, unsigned base, int offset)
 {
-    rv_i(w, 0x03u, 2u, rd, base, offset); /* lw */
+#if NJ_JIT_RV32_REG_CACHE
+    unsigned other = rd == RV_T0 ? RV_T1 : RV_T0;
+    rv_cached *c;
+    if (rv_at(w, rd, base, offset)) return;
+    if (rv_at(w, other, base, offset))
+        rv_addi(w, rd, other, 0); /* copy the already-loaded word */
+    else
+#endif
+        rv_i(w, 0x03u, 2u, rd, base, offset); /* lw */
+#if NJ_JIT_RV32_REG_CACHE
+    c = rv_reg(w, rd);
+    if (c) {
+        c->base = base;
+        c->offset = offset;
+        c->memory = 1;
+    }
+#endif
 }
 
 static void rv_store_op(rv_writer *w, unsigned opcode, unsigned funct3,
@@ -140,6 +313,9 @@ static void rv_store_op(rv_writer *w, unsigned opcode, unsigned funct3,
     rv_u32(w, ((imm >> 5) << 25) | ((nj_u4)rs << 20) |
            ((nj_u4)base << 15) | ((nj_u4)funct3 << 12) |
            ((imm & 31u) << 7) | (nj_u4)opcode);
+#if NJ_JIT_RV32_REG_CACHE
+    rv_record_store(w, opcode, funct3, rs, base, offset);
+#endif
 }
 
 static void rv_store(rv_writer *w, unsigned rs, unsigned base, int offset)
@@ -253,6 +429,18 @@ static int rv_decode(const nj_method *m, nj_u4 pc, rv_bytecode *b)
         b->immediate = rv_s16(((unsigned)code[1] << 8) | code[2]);
         b->change = 1;
         return 1;
+    case 0x12: case 0x13: { /* numeric ldc/ldc_w, no resolution */
+        nj_u4 bits;
+        unsigned index;
+        b->length = op == 0x12u ? 2u : 3u;
+        if (left < b->length) return 0;
+        index = op == 0x12u ? code[1] :
+                ((unsigned)code[1] << 8) | code[2];
+        if (!nj_jit_numeric_constant(m, index, &bits)) return 0;
+        b->immediate = (nj_s4)bits;
+        b->change = 1;
+        return 1;
+    }
     case 0x57: case 0x58: /* pop/pop2 */
         b->need = op == 0x57u ? 1 : 2;
         b->change = -b->need;
@@ -316,13 +504,18 @@ static void rv_emit(rv_writer *w, const rv_bytecode *b, int delta)
     int top = delta * RV_SLOT_BYTES;
     int local = (int)b->local * RV_SLOT_BYTES;
     unsigned funct3 = 0u, funct7 = 0u;
+    unsigned push = RV_T0, lhs = RV_T0, rhs = RV_T1;
+#if NJ_JIT_RV32_REG_CACHE
+    /* Preserve the preceding operand instead of always overwriting t0. */
+    if (rv_at(w, RV_T0, RV_SP_ARG, top - RV_SLOT_BYTES)) push = RV_T1;
+#endif
     if (op >= 0x15u && op <= 0x19u) {
         if (b->change == 2) {
             rv_copy_slot(w, RV_SP_ARG, top, RV_LOCALS_ARG, local);
             rv_store(w, RV_ZERO, RV_SP_ARG, top + RV_SLOT_BYTES);
         } else {
-            rv_load(w, RV_T0, RV_LOCALS_ARG, local);
-            rv_store(w, RV_T0, RV_SP_ARG, top);
+            rv_load(w, push, RV_LOCALS_ARG, local);
+            rv_store(w, push, RV_SP_ARG, top);
         }
         return;
     }
@@ -343,9 +536,9 @@ static void rv_emit(rv_writer *w, const rv_bytecode *b, int delta)
         return; /* Only the C caller updates the Java sp/pc. */
     case 0x01: case 0x02: case 0x03: case 0x04: case 0x05:
     case 0x06: case 0x07: case 0x08: case 0x0b: case 0x0c: case 0x0d:
-    case 0x10: case 0x11:
-        rv_li(w, RV_T0, (nj_s4)b->immediate);
-        rv_store(w, RV_T0, RV_SP_ARG, top);
+    case 0x10: case 0x11: case 0x12: case 0x13:
+        rv_li(w, push, (nj_s4)b->immediate);
+        rv_store(w, push, RV_SP_ARG, top);
         return;
     case 0x09: case 0x0a:
         rv_li(w, RV_T0, (nj_s4)b->immediate);
@@ -448,12 +641,53 @@ static void rv_emit(rv_writer *w, const rv_bytecode *b, int delta)
         w->failed = 1;
         return;
     }
-    rv_load(w, RV_T0, RV_SP_ARG, top - 16);
-    rv_load(w, RV_T1, RV_SP_ARG, top - 8);
+#if NJ_JIT_RV32_REG_CACHE
+    if (rv_at(w, RV_T0, RV_SP_ARG, top - 8)) {
+        /* Do not destroy a cached right operand while loading the left one. */
+        lhs = RV_T1;
+        rhs = RV_T0;
+    }
+#endif
+    rv_load(w, lhs, RV_SP_ARG, top - 16);
+    rv_load(w, rhs, RV_SP_ARG, top - 8);
     /* RV32 shifts mask rs2 to 5 bits. DIV/REM also implement Java's
      * INT_MIN / -1 overflow result; C rejects zero divisors before entry. */
-    rv_r(w, 0x33u, funct7, funct3, RV_T0, RV_T0, RV_T1);
+    rv_r(w, 0x33u, funct7, funct3, RV_T0, lhs, rhs);
     rv_store(w, RV_T0, RV_SP_ARG, top - 16);
+}
+
+int nj_rv32_analyze(const nj_method *m, nj_u4 pc, nj_jit_block *out)
+{
+    nj_jit_block block;
+    if (!out) return 0;
+    memset(out, 0, sizeof(*out));
+    if (!m || !m->code || pc >= m->code_len ||
+        sizeof(nj_value) != RV_SLOT_BYTES) return 0;
+    memset(&block, 0, sizeof(block));
+    block.next_pc = pc;
+    while (block.next_pc < m->code_len && block.insns < NJ_JIT_MAX_BLOCK_INSNS) {
+        rv_bytecode b;
+        int delta, required, growth;
+        if (!rv_decode(m, block.next_pc, &b)) break;
+        if ((b.op == 0x6cu || b.op == 0x70u) && block.insns != 0u) break;
+        delta = block.stack_delta + b.change;
+        required = b.need - block.stack_delta;
+        if (required < block.min_stack) required = block.min_stack;
+        growth = delta > block.max_growth ? delta : block.max_growth;
+        if (required + growth > (int)m->max_stack) break;
+        block.next_pc += b.length;
+        block.insns++;
+        block.stack_delta = delta;
+        block.min_stack = required;
+        block.max_growth = growth;
+        if (b.op == 0x6cu || b.op == 0x70u) {
+            block.check_divisor = 1;
+            break;
+        }
+    }
+    if (block.insns == 0u) return 0;
+    *out = block;
+    return 1;
 }
 
 int nj_rv32_compile(const nj_method *m, nj_u4 pc, nj_u1 *buf,
@@ -474,6 +708,7 @@ int nj_rv32_compile(const nj_method *m, nj_u4 pc, nj_u1 *buf,
     if (capacity < return_size) return 0;
     memset(&block, 0, sizeof(block));
     block.next_pc = pc;
+    memset(&w, 0, sizeof(w));
     w.buf = buf;
     w.used = 0u;
     w.capacity = capacity - return_size; /* reserve a return before any byte */
@@ -481,7 +716,7 @@ int nj_rv32_compile(const nj_method *m, nj_u4 pc, nj_u1 *buf,
 
     while (block.next_pc < m->code_len && block.insns < NJ_JIT_MAX_BLOCK_INSNS) {
         rv_bytecode b;
-        nj_size checkpoint = w.used;
+        rv_writer checkpoint = w;
         int delta, required, growth;
         if (!rv_decode(m, block.next_pc, &b)) break;
         /* A throwing integer division may never follow mutations in a block,
@@ -495,9 +730,9 @@ int nj_rv32_compile(const nj_method *m, nj_u4 pc, nj_u1 *buf,
         rv_emit(&w, &b, block.stack_delta);
         if (w.failed) {
             /* Discard only this instruction. The reserved return overwrites
-             * its first bytes; no partial instruction enters the live block. */
-            w.used = checkpoint;
-            w.failed = 0;
+             * its first bytes; no partial instruction enters the live block.
+             * Restore register knowledge as well as the output position. */
+            w = checkpoint;
             break;
         }
         block.next_pc += b.length;

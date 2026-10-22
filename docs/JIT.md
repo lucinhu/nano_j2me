@@ -8,8 +8,9 @@ thread's Java frames and return the same observable effects as the interpreter.
 
 The tree includes opt-in **RV32 and ARM64 baseline JITs**: portable machine-code
 encoders sharing a bounded per-VM hot-block cache and interpreter dispatch
-integration. x86_64 currently uses the interpreter. There is no optimizing
-compiler, register allocator, or persistent code cache. The original engine
+integration. x86_64 currently uses the interpreter. RV32 has bounded temporary
+register reuse and integer constant propagation within each leaf block; there is
+no method-level optimizer, general register allocator, or persistent code cache. The original engine
 contract and future method-level designs below remain useful background; the
 implemented block compilers are described first.
 
@@ -64,10 +65,20 @@ add/subtract/negate, bitwise operations, shifts, narrowing, `iinc`, supported
 `wide` locals/`iinc`, `pop`/`pop2`, `dup`/`dup2`, and `swap`. Wide values and floating
 constants/locals are copied using integer instructions. The current direct local
 offsets support indices through 255 for single slots and 254 for wide slots.
-`ldc`, long arithmetic, conversions/comparisons, complex stack permutations,
-branches, calls, fields, arrays, allocation, monitors and exception handling stay
-in the interpreter. A block ends immediately before an unsupported operation;
-the next interpreter dispatch can enter another compiled block.
+Both backends support `ldc/ldc_w` for Integer and Float constants by reading
+validated raw constant-pool bytes, without resolution or allocation. Float bits
+can be loaded with hardware FP and `NJ_ENABLE_FLOAT` disabled. String/Class and
+wide constants, long arithmetic, conversions/comparisons, complex stack
+permutations, branches, calls, fields, arrays, allocation, monitors and exception
+handling stay in the interpreter. A block ends immediately before an unsupported
+operation; the next interpreter dispatch can enter another compiled block.
+
+`NJ_JIT_RV32_REG_CACHE=1` (default) tracks T0/T1 values across bytecodes, reuses
+redundant loads and folds supported integer operations with known operands.
+Stores are still emitted: all slot bytes, including dead stack-slot contents,
+retain interpreter semantics. Overlapping stores invalidate cached mappings;
+failed emission rolls back the entire writer state. Set the macro to `0` for
+an A/B comparison. ARM64 currently retains its original per-operation loads.
 
 ### ARM64 / AArch64
 
@@ -121,7 +132,13 @@ Both backends match Java's `INT_MIN / -1` overflow behavior. RV32 encodes RNE
 explicitly; ARM64 uses the temporary FPCR state described above. Negation preserves
 NaN payload bits on both targets.
 
-The interpreter saves PC/SP before any code allocation or execution. Native
+A conservative inline opcode filter skips known interpreter-only instructions.
+The remaining probe only touches bounded JIT metadata: it never allocates, frees,
+emits code, calls the port or enters Java. At the hot threshold, a decode-only
+scan rejects unsupported/short prefixes before `SAVE()`. The interpreter still
+saves exact PC/SP and instruction counts before compilation, executable-memory
+callbacks (including eviction/free), or native execution. A returned probe ticket
+must be consumed immediately; port callbacks must not re-enter the VM. Native
 bytecodes consume the scheduler quantum and are included in VM instruction
 statistics. While this JIT is installed, interpreter superinstruction fusions
 are bypassed from the first dispatch, including cold or refused blocks: warming
@@ -133,12 +150,23 @@ Tracing bypasses native execution so per-bytecode trace output remains available
 
 | Limit macro | Default | Meaning |
 |---|---:|---|
-| `NJ_JIT_CACHE_ENTRIES` | 64 | Fixed direct-mapped entries per VM; collisions evict |
-| `NJ_JIT_HOT_THRESHOLD` | 8 | Visits before attempting compilation |
+| `NJ_JIT_CACHE_ENTRIES` | 64 | Total executable-code entries per VM |
+| `NJ_JIT_CACHE_WAYS` | 2 | 1, 2 or 4 ways; entry count must be divisible by ways |
+| `NJ_JIT_SITE_ENTRIES` | 128 | Independent two-way heat/refusal history; even size |
+| `NJ_JIT_HOT_THRESHOLD` | 8 | Visits before decode-only eligibility analysis |
+| `NJ_JIT_MIN_BLOCK_INSNS` | 4 | Minimum bytecodes to compile; experiment with 1/4/8 |
 | `NJ_JIT_MAX_BLOCK_INSNS` | 32 | Maximum Java bytecodes in a block |
 | `NJ_JIT_MAX_CODE_BYTES` | 2048 | Maximum bytes per block; also compiler stack scratch |
 
-Failed compilation/allocation/commit is cached until eviction. A 64-entry cache
+Code replacement uses a per-set rotating victim updated after a hit (LRU for two
+ways, not a full LRU ordering for four). Negative decisions and hotness occupy a
+separate bounded table; code eviction does not erase a refusal. A displaced code
+site heats again while retaining its previous-compilation marker. Site-history
+eviction can still lose that marker. Unsupported/short/allocation/commit refusals
+remain cached until **site-history** eviction or disable/re-enable. Emission can
+shorten an analyzed prefix to fit the code buffer; the minimum length is checked
+again before allocation. The default minimum also leaves standalone integer
+division/remainder interpreted; set the minimum to 1 to compile those blocks. A 64-entry cache
 requests at most 128 KiB of code at default limits; OS page rounding and port
 headers are additional (POSIX commonly consumes one page per small block).
 Metadata belongs to the VM host allocator. Executable storage belongs to the
@@ -146,12 +174,36 @@ port and is freed on eviction, `nj_jit_disable()`, or VM destruction, even when
 an external engine temporarily replaced the JIT. Cached bytecode/method metadata
 must remain immutable, as in the current class loader.
 
-The public `nj_jit_enable`, `nj_jit_disable`, and `nj_jit_get_stats` APIs are in
-`include/nj2me/nj_jit.h` and available with `NJ_ENABLE_JIT=1`. Stats include compiled
-blocks, executed blocks, native bytecodes, refused blocks and live requested code
-bytes. Enable never replaces an external engine. Call enable/disable between VM
-execution entries. The built-in engine handle remains VM-owned after uninstall;
-external engines retain the original borrowed ownership contract.
+The public `nj_jit_enable`, `nj_jit_disable`, `nj_jit_set_mode`, and
+`nj_jit_get_stats` APIs are in `include/nj2me/nj_jit.h`, available with
+`NJ_ENABLE_JIT=1`. `NJ_JIT_MODE_EXECUTE` is the default. In
+`NJ_JIT_MODE_PROBE_ONLY`, the installed engine still probes, heats and analyzes
+sites, but never emits code, calls code-memory hooks or executes native blocks.
+Previously compiled code is retained. Enable never replaces an external engine.
+Change mode or enable/disable between VM execution entries. The built-in engine
+handle remains VM-owned after uninstall; external engines retain their original
+borrowed ownership contract.
+
+`NJ_JIT_STATS=1` (default) enables execution/native-bytecode and site-eviction
+counters. Hot counters use 32-bit pending batches, folded into 64-bit totals when
+an engine execution returns, normally at a scheduling quantum. The public getter
+includes pending values without forcing a flush, so a same-thread snapshot sees
+all completed operations. It is not a cross-thread synchronization API.
+`NJ_JIT_STATS=0` removes those per-probe/per-execution updates; compilation,
+refusal reasons, code eviction/recompilation, and live/peak code and metadata
+accounting remain available. Read `stats_enabled` before interpreting execution
+counts. Stats reset on disable/re-enable.
+
+`NJ_JIT_DETAILED_STATS=1` (default `0`, requires `STATS=1`) adds candidate queries,
+code hits, cold/negative/probe-only/budget/stack/divisor skips and an
+execution-weighted length histogram (1, 2–3, 4–7, 8–15, ≥16 bytecodes).
+`queries` excludes opcodes rejected by the inline filter; `code_hits` includes
+cached entries subsequently rejected by a guard. `recompiled_blocks` is a lower
+bound because evicting site history loses the previous-compilation marker.
+Memory byte counts exclude allocator/page overhead. Portable cycle counters are
+not provided; use target-specific profiling for compile/execute cycle attribution.
+The fixed-workload harness, measurement results and board reproduction procedure
+are in [JIT_PERFORMANCE.md](JIT_PERFORMANCE.md).
 
 Ports must implement writable allocation, executable commit (including instruction
 cache synchronization), and free with `port->ud`. Alignment is at least 4 bytes;
@@ -179,8 +231,11 @@ ctest --test-dir build-jit --output-on-failure -R 'test_jit|test_engine|test_lif
 `tests/test_jit_rv32.c` compares complete stack/local bytes against an independent
 reference, scans emitted instructions for disabled extensions, and checks
 capacity guards, inaccessible-page truncation, stack/local bounds, integer edge
-cases and floating rounding. The matrix covers RV32I, all extensions, no M, no A,
-no F/D, no D, no C and no LONG, plus rejected invalid configurations. It executes
+cases and floating rounding. Numeric constant-pool cases cover raw int/float
+bits, invalid/truncated offsets and unsupported object constants. Analysis and
+emission metadata are compared, including capacity rollback and local aliases.
+The matrix covers RV32I, all extensions, no M, no A, no F/D, no D, no C, no LONG,
+and register caching disabled, plus rejected invalid configurations. It executes
 the actual generated buffer under QEMU, rather than simulating encoder output.
 
 `tests/test_jit_arm64.c` checks the same block contract, plus full 64-bit reference

@@ -15,7 +15,39 @@ typedef struct nj_jit_stats {
     nj_u8 bytecodes;
     nj_u8 declined_blocks;
     nj_size code_bytes; /* requested bytes; port page rounding is additional */
+    nj_size peak_code_bytes;
+    nj_size metadata_bytes; /* fixed per-VM JIT allocation, excluding code */
+    nj_u8 code_evictions;
+    nj_u8 site_evictions;
+    /* Lower bound: counts recompiles only while site history is retained. */
+    nj_u8 recompiled_blocks;
+    nj_u8 unsupported_blocks;
+    nj_u8 short_blocks;
+    nj_u8 memory_failures;
+    nj_u8 commit_failures;
+    /* Detailed counters are zero unless NJ_JIT_DETAILED_STATS=1. */
+    nj_u8 queries;
+    nj_u8 code_hits;
+    nj_u8 cold_skips;
+    nj_u8 negative_hits;
+    nj_u8 probe_only_skips;
+    nj_u8 budget_skips;
+    nj_u8 stack_skips;
+    nj_u8 divisor_skips;
+    /* Execution-weighted lengths: 1, 2-3, 4-7, 8-15, >=16 bytecodes. */
+    nj_u8 block_lengths[5];
+    int stats_enabled;
+    int detailed_stats_enabled;
 } nj_jit_stats;
+
+typedef enum nj_jit_mode {
+    NJ_JIT_MODE_EXECUTE = 0,
+    /* Same probe/heat/analysis, but no emission, port callbacks or native calls.
+     * Existing code is retained. Useful for measuring installed-probe overhead. */
+    NJ_JIT_MODE_PROBE_ONLY = 1
+} nj_jit_mode;
+/* Change mode between VM execution entries. Requires an owned JIT. */
+nj_status nj_jit_set_mode(nj_vm *vm, nj_jit_mode mode);
 
 /* nj_vm_create tries this automatically when NJ_ENABLE_JIT=1. An unsupported
  * CPU or port returns NJ_ERR_UNSUPPORTED and leaves the interpreter available.

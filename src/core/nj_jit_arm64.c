@@ -242,6 +242,18 @@ static int a64_decode(const nj_method *m, nj_u4 pc, a64_bytecode *b)
         b->immediate = a64_s16(((unsigned)code[1] << 8) | code[2]);
         b->change = 1;
         return 1;
+    case 0x12: case 0x13: { /* numeric ldc/ldc_w, no resolution */
+        nj_u4 bits;
+        unsigned index;
+        b->length = op == 0x12u ? 2u : 3u;
+        if (left < b->length) return 0;
+        index = op == 0x12u ? code[1] :
+                ((unsigned)code[1] << 8) | code[2];
+        if (!nj_jit_numeric_constant(m, index, &bits)) return 0;
+        b->immediate = (nj_s4)bits;
+        b->change = 1;
+        return 1;
+    }
     case 0x57: case 0x58:
         b->need = op == 0x57u ? 1 : 2;
         b->change = -b->need;
@@ -328,7 +340,7 @@ static void a64_emit(a64_writer *w, const a64_bytecode *b, int delta)
         return;
     case 0x02: case 0x03: case 0x04: case 0x05:
     case 0x06: case 0x07: case 0x08: case 0x0b: case 0x0c: case 0x0d:
-    case 0x10: case 0x11:
+    case 0x10: case 0x11: case 0x12: case 0x13:
         a64_li32(w, A64_T0, (nj_u4)b->immediate);
         a64_store(w, A64_T0, A64_SP_ARG, top, 0);
         return;
@@ -450,6 +462,40 @@ static void a64_emit(a64_writer *w, const a64_bytecode *b, int delta)
     /* W-register shifts mask the count to five bits. SDIV wraps INT_MIN/-1
      * as Java requires; the C caller rejects a zero divisor before entry. */
     a64_store(w, A64_T0, A64_SP_ARG, top - 16, 0);
+}
+
+int nj_arm64_analyze(const nj_method *m, nj_u4 pc, nj_jit_block *out)
+{
+    nj_jit_block block;
+    if (!out) return 0;
+    memset(out, 0, sizeof(*out));
+    if (!m || !m->code || pc >= m->code_len ||
+        sizeof(nj_value) != A64_SLOT_BYTES) return 0;
+    memset(&block, 0, sizeof(block));
+    block.next_pc = pc;
+    while (block.next_pc < m->code_len && block.insns < NJ_JIT_MAX_BLOCK_INSNS) {
+        a64_bytecode b;
+        int delta, required, growth;
+        if (!a64_decode(m, block.next_pc, &b)) break;
+        if ((b.op == 0x6cu || b.op == 0x70u) && block.insns != 0u) break;
+        delta = block.stack_delta + b.change;
+        required = b.need - block.stack_delta;
+        if (required < block.min_stack) required = block.min_stack;
+        growth = delta > block.max_growth ? delta : block.max_growth;
+        if (required + growth > (int)m->max_stack) break;
+        block.next_pc += b.length;
+        block.insns++;
+        block.stack_delta = delta;
+        block.min_stack = required;
+        block.max_growth = growth;
+        if (b.op == 0x6cu || b.op == 0x70u) {
+            block.check_divisor = 1;
+            break;
+        }
+    }
+    if (block.insns == 0u) return 0;
+    *out = block;
+    return 1;
 }
 
 int nj_arm64_compile(const nj_method *m, nj_u4 pc, nj_u1 *buf,

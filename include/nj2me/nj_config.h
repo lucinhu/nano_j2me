@@ -553,9 +553,38 @@
 #  error "JIT feature macros must be 0 or 1"
 #endif
 
-/* Bounded per-VM cache and compilation work. No allocation when disabled. */
+/* Bounded per-VM caches. Site heat/refusals survive code-cache eviction. */
 #ifndef NJ_JIT_CACHE_ENTRIES
 #  define NJ_JIT_CACHE_ENTRIES 64
+#endif
+#ifndef NJ_JIT_CACHE_WAYS
+#  define NJ_JIT_CACHE_WAYS 2
+#endif
+#ifndef NJ_JIT_SITE_ENTRIES
+#  define NJ_JIT_SITE_ENTRIES 128
+#endif
+#ifndef NJ_JIT_MIN_BLOCK_INSNS
+#  define NJ_JIT_MIN_BLOCK_INSNS 4
+#endif
+/* Hot counters use 32-bit pending batches, folded at execution boundaries.
+ * STATS=0 removes all per-probe/per-execution statistics; slow compilation and
+ * memory accounting remain available. Detailed counts are opt-in. */
+#ifndef NJ_JIT_STATS
+#  define NJ_JIT_STATS 1
+#endif
+#ifndef NJ_JIT_DETAILED_STATS
+#  define NJ_JIT_DETAILED_STATS 0
+#endif
+#ifndef NJ_JIT_RV32_REG_CACHE
+#  define NJ_JIT_RV32_REG_CACHE 1
+#endif
+#if (NJ_JIT_STATS != 0 && NJ_JIT_STATS != 1) || \
+    (NJ_JIT_DETAILED_STATS != 0 && NJ_JIT_DETAILED_STATS != 1) || \
+    (NJ_JIT_RV32_REG_CACHE != 0 && NJ_JIT_RV32_REG_CACHE != 1)
+#  error "JIT feature macros must be 0 or 1"
+#endif
+#if NJ_JIT_DETAILED_STATS && !NJ_JIT_STATS
+#  error "NJ_JIT_DETAILED_STATS requires NJ_JIT_STATS=1"
 #endif
 #ifndef NJ_JIT_HOT_THRESHOLD
 #  define NJ_JIT_HOT_THRESHOLD 8
@@ -567,8 +596,13 @@
 #  define NJ_JIT_MAX_CODE_BYTES 2048
 #endif
 #if NJ_JIT_CACHE_ENTRIES < 1 || NJ_JIT_CACHE_ENTRIES > 4096 || \
+    (NJ_JIT_CACHE_WAYS != 1 && NJ_JIT_CACHE_WAYS != 2 && NJ_JIT_CACHE_WAYS != 4) || \
+    NJ_JIT_CACHE_ENTRIES % NJ_JIT_CACHE_WAYS != 0 || \
+    NJ_JIT_SITE_ENTRIES < 2 || NJ_JIT_SITE_ENTRIES > 8192 || \
+    NJ_JIT_SITE_ENTRIES % 2 != 0 || \
     NJ_JIT_HOT_THRESHOLD < 1 || NJ_JIT_HOT_THRESHOLD > 65535 || \
     NJ_JIT_MAX_BLOCK_INSNS < 1 || NJ_JIT_MAX_BLOCK_INSNS > 128 || \
+    NJ_JIT_MIN_BLOCK_INSNS < 1 || NJ_JIT_MIN_BLOCK_INSNS > NJ_JIT_MAX_BLOCK_INSNS || \
     NJ_JIT_MAX_CODE_BYTES < 64 || NJ_JIT_MAX_CODE_BYTES > 16384
 #  error "JIT cache/compilation limits are out of range"
 #endif

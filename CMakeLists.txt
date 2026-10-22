@@ -127,7 +127,13 @@ foreach(ext FP SIMD LSE)
     message(FATAL_ERROR "NJ_JIT_ARM64_${ext} must be AUTO, 0, or 1")
   endif()
 endforeach()
-set(NJ_JIT_CACHE_ENTRIES 64 CACHE STRING "Per-VM JIT cache slots")
+set(NJ_JIT_CACHE_ENTRIES 64 CACHE STRING "Per-VM JIT code cache slots")
+set(NJ_JIT_CACHE_WAYS 2 CACHE STRING "JIT code cache associativity: 1, 2, or 4")
+set(NJ_JIT_SITE_ENTRIES 128 CACHE STRING "Independent two-way JIT site history slots")
+set(NJ_JIT_MIN_BLOCK_INSNS 4 CACHE STRING "Minimum bytecodes worth compiling")
+set(NJ_JIT_STATS 1 CACHE STRING "Collect batched JIT execution counters")
+set(NJ_JIT_DETAILED_STATS 0 CACHE STRING "Collect probe reasons and execution-weighted block lengths")
+set(NJ_JIT_RV32_REG_CACHE 1 CACHE STRING "Reuse RV32 temporary register values within leaf blocks")
 set(NJ_JIT_HOT_THRESHOLD 8 CACHE STRING "Hits before compiling a bytecode block")
 set(NJ_JIT_MAX_BLOCK_INSNS 32 CACHE STRING "Maximum bytecodes per native block")
 set(NJ_JIT_MAX_CODE_BYTES 2048 CACHE STRING "Maximum native bytes per block")
@@ -246,6 +252,12 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_ENGINE=${NJ_ENABLE_ENGINE}
   NJ_ENABLE_JIT=${NJ_ENABLE_JIT}
   NJ_JIT_CACHE_ENTRIES=${NJ_JIT_CACHE_ENTRIES}
+  NJ_JIT_CACHE_WAYS=${NJ_JIT_CACHE_WAYS}
+  NJ_JIT_SITE_ENTRIES=${NJ_JIT_SITE_ENTRIES}
+  NJ_JIT_MIN_BLOCK_INSNS=${NJ_JIT_MIN_BLOCK_INSNS}
+  NJ_JIT_STATS=${NJ_JIT_STATS}
+  NJ_JIT_DETAILED_STATS=${NJ_JIT_DETAILED_STATS}
+  NJ_JIT_RV32_REG_CACHE=${NJ_JIT_RV32_REG_CACHE}
   NJ_JIT_HOT_THRESHOLD=${NJ_JIT_HOT_THRESHOLD}
   NJ_JIT_MAX_BLOCK_INSNS=${NJ_JIT_MAX_BLOCK_INSNS}
   NJ_JIT_MAX_CODE_BYTES=${NJ_JIT_MAX_CODE_BYTES}
@@ -665,6 +677,17 @@ if(NJ_BUILD_TESTS)
     target_compile_features(test_jit_rv32 PRIVATE c_std_11)
     nj_add_test(test_jit_arm64 tests/test_jit_arm64.c)
     target_compile_features(test_jit_arm64 PRIVATE c_std_11)
+    add_executable(test_jit_perf tests/test_jit_perf.c)
+    target_link_libraries(test_jit_perf PRIVATE nj2me)
+    target_compile_features(test_jit_perf PRIVATE c_std_11)
+    target_compile_definitions(test_jit_perf PRIVATE
+      NJ_TEST_JIT_PERF_JAR="${NJ_FIXTURES}/jitperf.jar")
+    # Generate explicitly with tools/check_jit_perf.sh --build-fixture-only.
+    # A missing fixture must not turn an ordinary source build into a JDK job.
+    if(EXISTS "${NJ_FIXTURES}/jitperf.jar")
+      add_test(NAME test_jit_perf COMMAND test_jit_perf)
+      set_tests_properties(test_jit_perf PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
   endif()
 
   # ---- the memory contract and the class library ----

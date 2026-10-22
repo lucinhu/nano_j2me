@@ -8,6 +8,8 @@
 #
 # The compiler's ISA is independent of JIT feature macros. Every generated
 # instruction is scanned, and each generated call verifies AAPCS64 preservation.
+# All rows exercise raw Integer/Float CP loads, scan/emission metadata agreement,
+# aliasing, and executable capacity prefixes; Float CP bits do not require FP.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE=auto

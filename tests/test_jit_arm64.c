@@ -55,6 +55,35 @@ static nj_method method(const nj_u1 *code, size_t length, unsigned locals)
     m.max_stack = STACK_SLOTS - BASE; m.max_locals = (nj_u2)locals;
     return m;
 }
+/* Compare the allocation-free scan against each emitted prefix. Capacity may
+ * shorten compilation, but must never change stack metadata for that prefix. */
+static void same_metadata(const nj_jit_block *a, const nj_jit_block *b)
+{
+    CHECK(a->next_pc == b->next_pc && a->insns == b->insns);
+    CHECK(a->stack_delta == b->stack_delta && a->min_stack == b->min_stack);
+    CHECK(a->max_growth == b->max_growth && a->check_divisor == b->check_divisor);
+}
+static int compile_checked(const nj_method *m, nj_u4 pc, nj_u1 *buf,
+                           nj_size capacity, nj_jit_block *out)
+{
+    nj_jit_block analysis, prefix;
+    int scanned = nj_arm64_analyze(m, pc, &analysis);
+    int emitted = nj_arm64_compile(m, pc, buf, capacity, out);
+    if (scanned) CHECK(analysis.size == 0 && analysis.insns > 0);
+    if (emitted) {
+        nj_method limited = *m;
+        CHECK(scanned && out->next_pc <= analysis.next_pc);
+        limited.code_len = out->next_pc;
+        CHECK(nj_arm64_analyze(&limited, pc, &prefix));
+        CHECK(prefix.size == 0);
+        same_metadata(out, &prefix);
+        if (out->next_pc == analysis.next_pc) same_metadata(out, &analysis);
+    } else if (buf && out && capacity >= NJ_JIT_MAX_CODE_BYTES) {
+        CHECK(!scanned); /* One supported instruction must fit the full buffer. */
+    }
+    return emitted;
+}
+
 static nj_u4 word(const nj_u1 *p)
 {
     return (nj_u4)p[0] | (nj_u4)p[1] << 8 |
@@ -205,8 +234,8 @@ static void invoke(const nj_u1 *code, size_t length, nj_value *sp, nj_value *loc
 #endif
 
 /* Java arithmetic wraps; signed division guards MIN/-1 before using C. */
-static int reference(const nj_u1 *code, size_t length, test_frame *f, int sp,
-                     unsigned *count)
+static int reference(const nj_u1 *code, size_t length, nj_value *stack,
+                     nj_value *locals, int sp, const nj_class *owner, unsigned *count)
 {
     size_t pc = 0;
     *count = 0;
@@ -225,62 +254,73 @@ static int reference(const nj_u1 *code, size_t length, test_frame *f, int sp,
         } else if (op >= 0x3bu && op <= 0x4eu) {
             index = (op - 0x3bu) % 4u; op = 0x36u + (op - 0x3bu) / 4u;
         }
-        if (op >= 0x02u && op <= 0x08u) f->stack[sp++].i = (int)op - 3;
+        if (op >= 0x02u && op <= 0x08u) stack[sp++].i = (int)op - 3;
         else if (op == 0x09u || op == 0x0au) {
-            f->stack[sp].j = op - 0x09u; f->stack[sp + 1].bits = 0; sp += 2;
-        } else if (op >= 0x0bu && op <= 0x0du) f->stack[sp++].f = (float)(op - 0x0bu);
+            stack[sp].j = op - 0x09u; stack[sp + 1].bits = 0; sp += 2;
+        } else if (op >= 0x0bu && op <= 0x0du) stack[sp++].f = (float)(op - 0x0bu);
         else if (op == 0x0eu || op == 0x0fu) {
-            f->stack[sp].d = (double)(op - 0x0eu); f->stack[sp + 1].bits = 0; sp += 2;
-        } else if (op == 0x10u) f->stack[sp++].i = (int8_t)code[pc++];
+            stack[sp].d = (double)(op - 0x0eu); stack[sp + 1].bits = 0; sp += 2;
+        } else if (op == 0x10u) stack[sp++].i = (int8_t)code[pc++];
         else if (op == 0x11u) {
             int v = (int)code[pc] * 256 + code[pc + 1]; pc += 2;
-            f->stack[sp++].i = (int16_t)v;
+            stack[sp++].i = (int16_t)v;
+        } else if (op == 0x12u || op == 0x13u) {
+            unsigned cp_index = code[pc++], off;
+            if (op == 0x13u) cp_index = cp_index * 256u + code[pc++];
+            CHECK(owner && owner->cp_info && owner->data);
+            CHECK(cp_index > 0 && cp_index < owner->cp_count);
+            off = owner->cp_info[cp_index] >> 4;
+            CHECK(off > 0 && off <= owner->data_len && owner->data_len - off >= 4);
+            /* Independent big-endian class-file read, with no resolver/helper. */
+            stack[sp++].bits = (nj_u4)owner->data[off] << 24 |
+                (nj_u4)owner->data[off + 1] << 16 |
+                (nj_u4)owner->data[off + 2] << 8 | owner->data[off + 3];
         } else if (op >= 0x15u && op <= 0x19u) {
             if (op == 0x16u || op == 0x18u) {
-                f->stack[sp] = f->locals[index]; f->stack[sp + 1].bits = 0; sp += 2;
-            } else if (op == 0x19u) f->stack[sp++].r = f->locals[index].r;
-            else f->stack[sp++].bits = f->locals[index].bits;
+                stack[sp] = locals[index]; stack[sp + 1].bits = 0; sp += 2;
+            } else if (op == 0x19u) stack[sp++].r = locals[index].r;
+            else stack[sp++].bits = locals[index].bits;
         } else if (op >= 0x36u && op <= 0x3au) {
             if (op == 0x37u || op == 0x39u) {
-                sp -= 2; f->locals[index] = f->stack[sp]; f->locals[index + 1].bits = 0;
-            } else if (op == 0x3au) f->locals[index].r = f->stack[--sp].r;
-            else f->locals[index].bits = f->stack[--sp].bits;
+                sp -= 2; locals[index] = stack[sp]; locals[index + 1].bits = 0;
+            } else if (op == 0x3au) locals[index].r = stack[--sp].r;
+            else locals[index].bits = stack[--sp].bits;
         } else if (op == 0x84u) {
             int increment;
             if (wide) {
                 increment = (int16_t)((unsigned)code[pc] * 256 + code[pc + 1]); pc += 2;
             } else increment = (int8_t)code[pc++];
-            f->locals[index].bits += (nj_u4)increment;
+            locals[index].bits += (nj_u4)increment;
         } else if (op == 0x57u) --sp;
         else if (op == 0x58u) sp -= 2;
-        else if (op == 0x59u) { f->stack[sp] = f->stack[sp - 1]; ++sp; }
+        else if (op == 0x59u) { stack[sp] = stack[sp - 1]; ++sp; }
         else if (op == 0x5cu) {
-            f->stack[sp] = f->stack[sp - 2]; f->stack[sp + 1] = f->stack[sp - 1]; sp += 2;
+            stack[sp] = stack[sp - 2]; stack[sp + 1] = stack[sp - 1]; sp += 2;
         } else if (op == 0x5fu) {
-            nj_value tmp = f->stack[sp - 1];
-            f->stack[sp - 1] = f->stack[sp - 2]; f->stack[sp - 2] = tmp;
+            nj_value tmp = stack[sp - 1];
+            stack[sp - 1] = stack[sp - 2]; stack[sp - 2] = tmp;
         } else if (op == 0x00u) { /* nop */ }
-        else if (op == 0x01u) f->stack[sp++].r = NULL;
-        else if (op == 0x74u) f->stack[sp - 1].bits = 0u - f->stack[sp - 1].bits;
+        else if (op == 0x01u) stack[sp++].r = NULL;
+        else if (op == 0x74u) stack[sp - 1].bits = 0u - stack[sp - 1].bits;
         else if (op >= 0x91u && op <= 0x93u) {
-            a = f->stack[sp - 1].bits;
-            f->stack[sp - 1].i = op == 0x91u ? (int8_t)a :
+            a = stack[sp - 1].bits;
+            stack[sp - 1].i = op == 0x91u ? (int8_t)a :
                                  op == 0x92u ? (uint16_t)a : (int16_t)a;
-        } else if (op == 0x76u) f->stack[sp - 1].bits ^= 0x80000000u;
+        } else if (op == 0x76u) stack[sp - 1].bits ^= 0x80000000u;
         else if (op == 0x77u) {
             uint64_t bits;
-            memcpy(&bits, &f->stack[sp - 2], 8); bits ^= UINT64_C(0x8000000000000000);
-            memcpy(&f->stack[sp - 2], &bits, 8);
+            memcpy(&bits, &stack[sp - 2], 8); bits ^= UINT64_C(0x8000000000000000);
+            memcpy(&stack[sp - 2], &bits, 8);
         } else if (op == 0x62u || op == 0x66u || op == 0x6au || op == 0x6eu) {
-            volatile float x = f->stack[sp - 2].f, y = f->stack[sp - 1].f;
+            volatile float x = stack[sp - 2].f, y = stack[sp - 1].f;
             float z = op == 0x62u ? x + y : op == 0x66u ? x - y : op == 0x6au ? x * y : x / y;
-            f->stack[sp - 2].f = z; --sp;
+            stack[sp - 2].f = z; --sp;
         } else if (op == 0x63u || op == 0x67u || op == 0x6bu || op == 0x6fu) {
-            volatile double x = f->stack[sp - 4].d, y = f->stack[sp - 2].d;
+            volatile double x = stack[sp - 4].d, y = stack[sp - 2].d;
             double z = op == 0x63u ? x + y : op == 0x67u ? x - y : op == 0x6bu ? x * y : x / y;
-            f->stack[sp - 4].d = z; f->stack[sp - 3].bits = 0; sp -= 2;
+            stack[sp - 4].d = z; stack[sp - 3].bits = 0; sp -= 2;
         } else {
-            a = f->stack[sp - 2].bits; b = f->stack[sp - 1].bits;
+            a = stack[sp - 2].bits; b = stack[sp - 1].bits;
             switch (op) {
             case 0x60: result = a + b; break;
             case 0x64: result = a - b; break;
@@ -302,7 +342,7 @@ static int reference(const nj_u1 *code, size_t length, test_frame *f, int sp,
             case 0x82: result = a ^ b; break;
             default: CHECK(!"oracle missing opcode"); result = 0;
             }
-            f->stack[sp - 2].bits = result; --sp;
+            stack[sp - 2].bits = result; --sp;
         }
         CHECK(sp >= 0 && sp < STACK_SLOTS);
     }
@@ -325,8 +365,9 @@ static void compare_frame(const test_frame *actual, const test_frame *expected)
     CHECK(!"generated code differs from oracle");
 }
 #endif
-static void program(const char *name, const nj_u1 *code, size_t length,
-                    unsigned local_count, int depth, const test_frame *initial)
+static void program_owned(const char *name, const nj_u1 *code, size_t length,
+                          unsigned local_count, int depth, const test_frame *initial,
+                          nj_class *owner)
 {
     nj_u1 generated[NJ_JIT_MAX_CODE_BYTES];
     nj_jit_block block;
@@ -335,11 +376,12 @@ static void program(const char *name, const nj_u1 *code, size_t length,
     unsigned count;
     int final_sp;
     test_name = name;
-    CHECK(nj_arm64_compile(&m, 0, generated, sizeof(generated), &block) == 1);
+    m.owner = owner;
+    CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block) == 1);
     CHECK(block.next_pc == length && block.size <= sizeof(generated));
     CHECK(block.min_stack <= depth && BASE + depth + block.max_growth <= STACK_SLOTS);
     inspect(generated, block.size);
-    final_sp = reference(code, length, &expected, BASE + depth, &count);
+    final_sp = reference(code, length, expected.stack, expected.locals, BASE + depth, owner, &count);
     CHECK(block.insns == count && block.stack_delta == final_sp - BASE - depth);
     ++compiled;
 #if EXECUTE_ARM64
@@ -351,17 +393,23 @@ static void program(const char *name, const nj_u1 *code, size_t length,
     }
 #endif
 }
+static void program(const char *name, const nj_u1 *code, size_t length,
+                    unsigned local_count, int depth, const test_frame *initial)
+{
+    program_owned(name, code, length, local_count, depth, initial, NULL);
+}
+
 static void declined(const char *name, const nj_u1 *code, size_t length, unsigned locals)
 {
     nj_u1 generated[NJ_JIT_MAX_CODE_BYTES], prefix[16];
     nj_jit_block block;
     nj_method m = method(code, length, locals);
     test_name = name;
-    CHECK(nj_arm64_compile(&m, 0, generated, sizeof(generated), &block) == 0);
+    CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block) == 0);
     CHECK(length + 1 <= sizeof(prefix));
     prefix[0] = 0x03; memcpy(prefix + 1, code, length);
     m.code = prefix; m.code_len = (nj_u4)length + 1;
-    CHECK(nj_arm64_compile(&m, 0, generated, sizeof(generated), &block) == 1);
+    CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block) == 1);
     CHECK(block.next_pc == 1 && block.insns == 1 && block.stack_delta == 1);
     CHECK(block.min_stack == 0 && block.max_growth == 1 && !block.check_divisor);
     inspect(generated, block.size);
@@ -504,12 +552,12 @@ static void capacity_case(const nj_u1 *code, size_t length, int depth)
     init_frame(&initial);
     initial.stack[BASE].bits = 0x3f800000u; initial.stack[BASE + 1].bits = 0x33800000u;
     test_name = "capacity, canaries, executable prefix and FPCR rollback";
-    CHECK(nj_arm64_compile(&m, 0, generated, NJ_JIT_MAX_CODE_BYTES, &block));
+    CHECK(compile_checked(&m, 0, generated, NJ_JIT_MAX_CODE_BYTES, &block));
     full_size = block.size;
     for (cap = 0; cap <= full_size + 4; ++cap) {
         int ok;
         memset(generated, 0xa5, sizeof(generated));
-        ok = nj_arm64_compile(&m, 0, generated + 16, (nj_size)cap, &block);
+        ok = compile_checked(&m, 0, generated + 16, (nj_size)cap, &block);
         for (i = 0; i < 16; ++i) CHECK(generated[i] == 0xa5);
         for (i = 16 + cap; i < sizeof(generated); ++i) CHECK(generated[i] == 0xa5);
         if (ok) {
@@ -518,7 +566,7 @@ static void capacity_case(const nj_u1 *code, size_t length, int depth)
             int final_sp;
             CHECK(block.size <= cap && block.insns > 0 && block.next_pc <= length);
             inspect(generated + 16, block.size);
-            final_sp = reference(code, block.next_pc, &expected, BASE + depth, &count);
+            final_sp = reference(code, block.next_pc, expected.stack, expected.locals, BASE + depth, NULL, &count);
             CHECK(block.insns == count && block.stack_delta == final_sp - BASE - depth);
 #if EXECUTE_ARM64
             {
@@ -584,39 +632,39 @@ static void test_boundaries(void)
 #endif
     test_name = "pc and argument validation";
     m = method(ops, sizeof(ops), 1);
-    CHECK(!nj_arm64_compile(&m, sizeof(ops), generated, sizeof(generated), &block));
-    CHECK(!nj_arm64_compile(&m, UINT32_MAX, generated, sizeof(generated), &block));
-    CHECK(!nj_arm64_compile(NULL, 0, generated, sizeof(generated), &block));
-    CHECK(!nj_arm64_compile(&m, 0, NULL, sizeof(generated), &block));
-    CHECK(!nj_arm64_compile(&m, 0, generated, sizeof(generated), NULL));
-    m.code = NULL; CHECK(!nj_arm64_compile(&m, 0, generated, sizeof(generated), &block));
+    CHECK(!compile_checked(&m, sizeof(ops), generated, sizeof(generated), &block));
+    CHECK(!compile_checked(&m, UINT32_MAX, generated, sizeof(generated), &block));
+    CHECK(!compile_checked(NULL, 0, generated, sizeof(generated), &block));
+    CHECK(!compile_checked(&m, 0, NULL, sizeof(generated), &block));
+    CHECK(!compile_checked(&m, 0, generated, sizeof(generated), NULL));
+    m.code = NULL; CHECK(!compile_checked(&m, 0, generated, sizeof(generated), &block));
     {
         static const nj_u1 code[] = {0x60,0x59,0x04,0x05,0x60,0x60,0x3b};
         m = method(code, sizeof(code), 1);
         test_name = "precise stack metadata";
-        CHECK(nj_arm64_compile(&m, 0, generated, sizeof(generated), &block));
+        CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
         CHECK(block.next_pc == sizeof(code));
         CHECK(block.min_stack == 2 && block.max_growth == 2 && block.stack_delta == -1);
         CHECK(!block.check_divisor);
         test_name = "method max_stack bounds";
-        m.max_stack = 1; CHECK(!nj_arm64_compile(&m, 0, generated, sizeof(generated), &block));
-        m.max_stack = 3; CHECK(nj_arm64_compile(&m, 0, generated, sizeof(generated), &block));
+        m.max_stack = 1; CHECK(!compile_checked(&m, 0, generated, sizeof(generated), &block));
+        m.max_stack = 3; CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
         CHECK(block.next_pc == 3 && block.insns == 3);
         CHECK(block.min_stack == 2 && block.max_growth == 1 && block.stack_delta == 1);
         m = method(ops, sizeof(ops), 1); m.max_stack = 0;
-        CHECK(!nj_arm64_compile(&m, 0, generated, sizeof(generated), &block));
+        CHECK(!compile_checked(&m, 0, generated, sizeof(generated), &block));
     }
     {
         nj_u1 code[NJ_JIT_MAX_BLOCK_INSNS + 7];
         memset(code, 0, sizeof(code)); m = method(code, sizeof(code), 0);
         test_name = "instruction budget";
-        CHECK(nj_arm64_compile(&m, 0, generated, sizeof(generated), &block));
+        CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
         CHECK(block.insns == NJ_JIT_MAX_BLOCK_INSNS && block.next_pc == NJ_JIT_MAX_BLOCK_INSNS);
     }
     {
         static const nj_u1 code[] = {0xac,0x05,0xac};
         m = method(code, sizeof(code), 0); test_name = "nonzero starting pc and unsupported tail";
-        CHECK(nj_arm64_compile(&m, 1, generated, sizeof(generated), &block));
+        CHECK(compile_checked(&m, 1, generated, sizeof(generated), &block));
         CHECK(block.next_pc == 2 && block.insns == 1);
         CHECK(block.stack_delta == 1 && block.min_stack == 0 && block.max_growth == 1);
     }
@@ -624,11 +672,11 @@ static void test_boundaries(void)
         nj_u1 first[] = {i ? 0x70 : 0x6c,0x04}, middle[] = {0x04,i ? 0x70 : 0x6c};
         test_name = "division isolation and zero guard contract";
         m = method(first, sizeof(first), 0);
-        CHECK(nj_arm64_compile(&m, 0, generated, sizeof(generated), &block));
+        CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
         CHECK(block.next_pc == 1 && block.insns == 1 && block.check_divisor == 1);
         CHECK(block.min_stack == 2 && block.stack_delta == -1 && block.max_growth == 0);
         m = method(middle, sizeof(middle), 0);
-        CHECK(nj_arm64_compile(&m, 0, generated, sizeof(generated), &block));
+        CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
         CHECK(block.next_pc == 1 && block.insns == 1 && block.check_divisor == 0);
         /* The VM owns the exception: never execute an unguarded zero divisor. */
     }
@@ -647,7 +695,7 @@ static void test_large_locals(void)
         nj_method m = method(code, sizeof(code), 65535);
         nj_jit_block block;
         test_name = "wide locals across address encoding limits";
-        CHECK(nj_arm64_compile(&m, 0, generated, sizeof(generated), &block));
+        CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
         CHECK(block.next_pc == sizeof(code) && block.insns == 5 && block.stack_delta == 0);
         inspect(generated, block.size); ++compiled;
 #if EXECUTE_ARM64
@@ -679,7 +727,7 @@ static void test_large_locals(void)
         nj_method m = method(code, sizeof(code), 65535);
         nj_jit_block block;
         test_name = "largest valid two-slot local with padding";
-        CHECK(nj_arm64_compile(&m, 0, generated, sizeof(generated), &block));
+        CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
         CHECK(block.next_pc == sizeof(code) && block.insns == 2 && block.stack_delta == 0);
         inspect(generated, block.size); ++compiled;
 #if EXECUTE_ARM64
@@ -722,7 +770,7 @@ static void test_fpcr(void)
         uint64_t old_fpcr = read_fpcr();
         init_frame(&f); f.stack[BASE].bits = cases[i].a; f.stack[BASE + 1].bits = cases[i].b;
         test_name = "fixed float RNE non-FTZ and FPCR restoration";
-        CHECK(nj_arm64_compile(&m, 0, generated, sizeof(generated), &block));
+        CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
         write_fpcr(UINT64_C(0x03400000));
         CHECK(read_fpcr() == UINT64_C(0x03400000));
         invoke(generated, block.size, &f.stack[BASE + (code == 0x76 ? 1 : 2)], f.locals);
@@ -746,7 +794,7 @@ static void test_fpcr(void)
             uint64_t got, old_fpcr = read_fpcr();
             init_frame(&f); memcpy(&f.stack[BASE], &dcases[i].a, 8); memcpy(&f.stack[BASE + 2], &dcases[i].b, 8);
             test_name = "fixed double RNE non-FTZ and FPCR restoration";
-            CHECK(nj_arm64_compile(&m, 0, generated, sizeof(generated), &block));
+            CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
             write_fpcr(UINT64_C(0x03400000));
             invoke(generated, block.size, &f.stack[BASE + (code == 0x77 ? 2 : 4)], f.locals);
             write_fpcr(old_fpcr);
@@ -755,6 +803,318 @@ static void test_fpcr(void)
     }
 #endif
 #endif
+}
+
+/* A raw class-file CP fixture: offsets point at the four-byte payload. */
+typedef struct constant_fixture {
+    nj_class owner;
+    nj_u4 info[260];
+    nj_u1 bytes[32];
+} constant_fixture;
+static void init_constants(constant_fixture *pool)
+{
+    memset(pool, 0, sizeof(*pool));
+    pool->owner.cp_info = pool->info; pool->owner.cp_count = 260;
+    pool->owner.data = pool->bytes; pool->owner.data_len = sizeof(pool->bytes);
+}
+static void put_constant(constant_fixture *pool, unsigned index, unsigned offset,
+                         unsigned tag, nj_u4 bits)
+{
+    CHECK(index < 260 && offset > 0 && offset + 4 <= sizeof(pool->bytes));
+    pool->info[index] = (offset << 4) | tag;
+    pool->bytes[offset] = (nj_u1)(bits >> 24);
+    pool->bytes[offset + 1] = (nj_u1)(bits >> 16);
+    pool->bytes[offset + 2] = (nj_u1)(bits >> 8);
+    pool->bytes[offset + 3] = (nj_u1)bits;
+}
+static void constant_declined(const char *name, nj_method *m)
+{
+    nj_u1 generated[NJ_JIT_MAX_CODE_BYTES], code[8];
+    nj_jit_block block;
+    nj_method prefix = *m;
+    test_name = name;
+    CHECK(!compile_checked(m, 0, generated, sizeof(generated), &block));
+    CHECK(m->code_len + 1 <= sizeof(code));
+    code[0] = 0x04; memcpy(code + 1, m->code, m->code_len);
+    prefix.code = code; prefix.code_len = m->code_len + 1;
+    CHECK(compile_checked(&prefix, 0, generated, sizeof(generated), &block));
+    CHECK(block.next_pc == 1 && block.insns == 1 && block.stack_delta == 1);
+    inspect(generated, block.size);
+}
+
+/* Retry every capacity and execute each accepted prefix. This checks rollback
+ * across a cached register update, a constant load, and FP/wide stores. */
+static void capacity_owned(const nj_u1 *code, size_t length, int depth,
+                           nj_class *owner, const test_frame *initial)
+{
+    nj_u1 generated[NJ_JIT_MAX_CODE_BYTES + 32];
+    nj_jit_block block;
+    nj_method m = method(code, length, 4);
+    size_t cap, full_size, i;
+    m.owner = owner;
+    test_name = "cached prefix capacity rollback";
+    CHECK(compile_checked(&m, 0, generated, NJ_JIT_MAX_CODE_BYTES, &block));
+    CHECK(block.next_pc == length); full_size = block.size;
+    CHECK(full_size + 4 <= NJ_JIT_MAX_CODE_BYTES);
+    for (cap = 0; cap <= full_size + 4; ++cap) {
+        int ok;
+        memset(generated, 0xa5, sizeof(generated));
+        ok = compile_checked(&m, 0, generated + 16, (nj_size)cap, &block);
+        for (i = 0; i < 16; ++i) CHECK(generated[i] == 0xa5);
+        for (i = 16 + cap; i < sizeof(generated); ++i) CHECK(generated[i] == 0xa5);
+        if (ok) {
+            test_frame expected = *initial;
+            unsigned count;
+            int end;
+            CHECK(block.size <= cap && block.insns > 0 && block.next_pc <= length);
+            inspect(generated + 16, block.size);
+            end = reference(code, block.next_pc, expected.stack, expected.locals,
+                            BASE + depth, owner, &count);
+            CHECK(block.insns == count && block.stack_delta == end - BASE - depth);
+#if EXECUTE_ARM64
+            {
+                test_frame actual = *initial;
+                invoke(generated + 16, block.size, &actual.stack[BASE + depth], actual.locals);
+                CHECK(memcmp(&actual, &expected, sizeof(actual)) == 0);
+            }
+#endif
+        }
+    }
+}
+static void test_numeric_constants(void)
+{
+    static const nj_u4 values[] = {0,1,UINT32_MAX,0x80000000u,0x7fffffffu,
+        1664525u,1013904223u,0x00000800u,0xfffff800u,0x7fc12345u,0x7fa12345u,
+        0xff800000u,0x3f800000u};
+    static const unsigned indices[] = {1,255,256,259};
+    constant_fixture pool;
+    test_frame f;
+    size_t i, j;
+    unsigned tag;
+    init_frame(&f);
+    for (tag = 3; tag <= 4; ++tag)
+        for (i = 0; i < sizeof(values)/sizeof(values[0]); ++i)
+            for (j = 0; j < sizeof(indices)/sizeof(indices[0]); ++j) {
+                nj_u1 code[8];
+                size_t length = 0;
+                unsigned index = indices[j];
+                init_constants(&pool); put_constant(&pool, index, 1, tag, values[i]);
+                if (index <= 255) { code[length++] = 0x12; code[length++] = (nj_u1)index; }
+                else {
+                    code[length++] = 0x13; code[length++] = (nj_u1)(index >> 8);
+                    code[length++] = (nj_u1)index;
+                }
+                code[length++] = 0x59; code[length++] = 0x3b;
+                code[length++] = 0x1a; code[length++] = 0x57;
+                /* Float entries use raw bits even when VM/hardware FP is off,
+                 * exactly as the interpreter's ldc implementation does. */
+                program_owned("ldc raw Integer/Float slots", code, length, 1, 0, &f, &pool.owner);
+            }
+    for (i = 0; i < 16; ++i) {
+        nj_u1 code[] = {0x12,1};
+        nj_method m = method(code, sizeof(code), 1);
+        init_constants(&pool); put_constant(&pool, 1, 1, 3, 0x12345678);
+        m.owner = &pool.owner;
+        switch (i) {
+        case 0: m.owner = NULL; break;
+        case 1: pool.owner.cp_info = NULL; break;
+        case 2: pool.owner.data = NULL; break;
+        case 3: pool.owner.cp_count = 0; break;
+        case 4: pool.owner.cp_count = 1; break;
+        case 5: code[1] = 0; break;
+        case 6: code[1] = 2; pool.owner.cp_count = 2; break;
+        case 7: pool.info[1] = 3; break; /* zero offset */
+        case 8: pool.info[1] = (32u << 4) | 3u; break;
+        case 9: pool.info[1] = (33u << 4) | 3u; break;
+        case 10: pool.info[1] = 0xfffffff3u; break;
+        case 11: pool.owner.data_len = 0; break;
+        case 12: pool.owner.data_len = 1; break;
+        case 13: pool.owner.data_len = 2; break;
+        case 14: pool.owner.data_len = 3; break;
+        case 15: pool.owner.data_len = 4; break;
+        }
+        constant_declined("invalid constant pool metadata", &m);
+    }
+    {
+        static const unsigned tags[] = {0,1,5,6,7,8,9,10,11,12,15};
+        static const nj_u1 code[] = {0x13,1,0};
+        nj_method m = method(code, sizeof(code), 1);
+        for (i = 0; i < sizeof(tags)/sizeof(tags[0]); ++i) {
+            init_constants(&pool); put_constant(&pool, 256, 1, tags[i], 0x12345678);
+            m.owner = &pool.owner;
+            constant_declined("unsupported CP tag requires interpreter", &m);
+        }
+    }
+    {
+        static const nj_u1 bad[][3] = {{0x12},{0x13},{0x13,1},
+                                      {0x13,0,0},{0x13,1,4},{0x13,0xff,0xff}};
+        static const unsigned lengths[] = {1,1,2,3,3,3};
+        for (i = 0; i < sizeof(lengths)/sizeof(lengths[0]); ++i) {
+            nj_method m = method(bad[i], lengths[i], 1);
+            init_constants(&pool); put_constant(&pool, 1, 1, 3, 0x12345678);
+            m.owner = &pool.owner;
+            constant_declined("truncated ldc or out-of-range wide CP index", &m);
+        }
+    }
+#if defined(__linux__)
+    {
+        long page = sysconf(_SC_PAGESIZE);
+        nj_u1 *mapping;
+        static const nj_u1 code[] = {0x12,1};
+        nj_method m = method(code, sizeof(code), 1);
+        test_name = "constant payload at inaccessible page";
+        CHECK(page > 0);
+        mapping = mmap(NULL, (size_t)page * 2, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK(mapping != MAP_FAILED);
+        CHECK(mprotect(mapping, (size_t)page, PROT_READ | PROT_WRITE) == 0);
+        init_constants(&pool); pool.info[1] = (1u << 4) | 3u;
+        m.owner = &pool.owner;
+        for (i = 0; i < 4; ++i) {
+            pool.owner.data = mapping + page - i - 1; pool.owner.data_len = (nj_u4)i + 1;
+            constant_declined("truncated CP payload against guard page", &m);
+        }
+        pool.owner.data = mapping + page - 5; pool.owner.data_len = 5;
+        memcpy(mapping + page - 4, "\x80\x00\x00\x01", 4);
+        program_owned("last four readable CP bytes", code, sizeof(code), 1, 0, &f, &pool.owner);
+        for (i = 1; i <= 2; ++i) {
+            nj_u1 *edge = mapping + page - i;
+            edge[0] = i == 1 ? 0x12 : 0x13;
+            if (i == 2) edge[1] = 1;
+            m.code = edge; m.code_len = (nj_u4)i;
+            constant_declined("truncated ldc operand against guard page", &m);
+        }
+        CHECK(munmap(mapping, (size_t)page * 2) == 0);
+    }
+#endif
+}
+
+static void test_analysis(void)
+{
+    static const nj_u1 code[] = {0x04,0xac};
+    nj_method m = method(code, sizeof(code), 1);
+    nj_jit_block block;
+    test_name = "analysis rejects invalid input and identifies short block";
+    CHECK(!nj_arm64_analyze(NULL, 0, &block));
+    CHECK(!nj_arm64_analyze(&m, 0, NULL));
+    CHECK(!nj_arm64_analyze(&m, sizeof(code), &block));
+    CHECK(!nj_arm64_analyze(&m, UINT32_MAX, &block));
+    CHECK(nj_arm64_analyze(&m, 0, &block));
+    CHECK(block.size == 0 && block.insns == 1 && block.next_pc == 1);
+    CHECK(block.min_stack == 0 && block.max_growth == 1 && block.stack_delta == 1);
+    CHECK(!block.check_divisor);
+    m.max_stack = 0; CHECK(!nj_arm64_analyze(&m, 0, &block));
+    m.code = NULL; CHECK(!nj_arm64_analyze(&m, 0, &block));
+}
+
+static void test_write_through(void)
+{
+    static const nj_u1 aliases[] = {0x04,0x3b,0x1a,0x05,0x60,0x3b,0x1a,
+                                    0x84,0,0xff,0x1a,0x60,0x3c,0x1b};
+    static const nj_u1 copies[] = {0x04,0x05,0x5f,0x5c,0x58,0x60,0x59,0x3b,0x1a,0x82};
+    static const nj_u1 overlap[] = {0x1a,0x04,0x60,0x3c,0x1b,0x3b,
+                                    0x84,0,1,0x1a,0x59,0x5f,0x57};
+    static const unsigned local_offsets[] = {0,BASE - 1,BASE,BASE + 1};
+    test_frame f;
+    size_t i;
+    init_frame(&f);
+    program("write-through local invalidation", aliases, sizeof(aliases), 4, 0, &f);
+    program("write-through complete-slot stack copies", copies, sizeof(copies), 4, 0, &f);
+    capacity_owned(aliases, sizeof(aliases), 0, NULL, &f);
+    capacity_owned(copies, sizeof(copies), 0, NULL, &f);
+    {
+        static const nj_u1 operators[] = {0x60,0x64,0x78,0x7a,0x7c,0x7e,0x80,0x82,0x68};
+        nj_u4 state = 0x913766abu;
+        size_t op, trial, local;
+        for (op = 0; op < sizeof(operators); ++op)
+            for (trial = 0; trial < 32; ++trial) {
+                nj_u1 code[] = {0x1a,0x1b,operators[op],0x1c,operators[op],
+                    0x1d,operators[op],0x3b,0x1a,0x59,operators[op]};
+                for (local = 0; local < 4; ++local) {
+                    state = state * 1664525u + 1013904223u;
+                    f.locals[local].bits = state;
+                }
+                program("cached operand order and random dependency chains", code, sizeof(code), 4, 0, &f);
+            }
+    }
+    for (i = 0; i < sizeof(local_offsets)/sizeof(local_offsets[0]); ++i) {
+        nj_u1 generated[NJ_JIT_MAX_CODE_BYTES];
+        nj_method m = method(overlap, sizeof(overlap), 4);
+        nj_jit_block block;
+        test_frame expected = f;
+        unsigned count;
+        int end;
+        test_name = "stack and locals base alias/partial overlap";
+        CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
+        CHECK(block.next_pc == sizeof(overlap)); inspect(generated, block.size);
+        end = reference(overlap, sizeof(overlap), expected.stack,
+                        expected.stack + local_offsets[i], BASE, NULL, &count);
+        CHECK(block.insns == count && block.stack_delta == end - BASE);
+        ++compiled;
+#if EXECUTE_ARM64
+        {
+            test_frame actual = f;
+            invoke(generated, block.size, actual.stack + BASE, actual.stack + local_offsets[i]);
+            CHECK(memcmp(&actual, &expected, sizeof(actual)) == 0);
+        }
+#endif
+    }
+#if NJ_ENABLE_LONG
+    {
+        static const nj_u1 wide[] = {0x0a,0x3f,0x1b,0x04,0x60,0x3c,
+                                     0x1e,0x5c,0x37,0,0x58,0x1b};
+        program("wide copy and low-half padding invalidation", wide, sizeof(wide), 4, 0, &f);
+        capacity_owned(wide, sizeof(wide), 0, NULL, &f);
+    }
+#endif
+#if NJ_JIT_ARM64_FP && NJ_ENABLE_FLOAT
+    {
+        static const nj_u1 fp[] = {0x0c,0x0d,0x62,0x59,0x3b,0x1a,0x60};
+        program("FP store invalidates cached integer bits", fp, sizeof(fp), 4, 0, &f);
+        capacity_owned(fp, sizeof(fp), 0, NULL, &f);
+    }
+#endif
+#if NJ_JIT_ARM64_FP && NJ_ENABLE_LONG && NJ_ENABLE_FLOAT
+    {
+        static const nj_u1 fp[] = {0x0f,0x0f,0x63,0x5c,0x47,0x26,0x63,0x58,0x1b};
+        program("double store invalidates both halves and padding", fp, sizeof(fp), 4, 0, &f);
+        capacity_owned(fp, sizeof(fp), 0, NULL, &f);
+    }
+#endif
+}
+
+static void test_constant_chain(void)
+{
+    static const nj_u1 chain[] = {
+        0x1a,0x12,1,0x68,0x13,1,0,0x60,0x3b,
+        0x1a,0x12,1,0x68,0x13,1,0,0x60,0x3b,
+        0x1a,0x12,1,0x68,0x13,1,0,0x60,0x3b};
+    constant_fixture pool;
+    test_frame f;
+    nj_u1 generated[NJ_JIT_MAX_CODE_BYTES];
+    nj_jit_block block;
+    nj_method m = method(chain, sizeof(chain), 4);
+    unsigned i, loads = 0, stores = 0;
+    size_t p;
+    init_constants(&pool);
+    put_constant(&pool, 1, 1, 3, 1664525u);
+    put_constant(&pool, 256, 5, 3, 1013904223u);
+    init_frame(&f);
+    for (i = 0; i < 64; ++i) {
+        f.locals[0].bits = i * 0x9e3779b9u;
+        program_owned("ldc multiply-add long block", chain, sizeof(chain), 4, 0, &f, &pool.owner);
+    }
+    capacity_owned(chain, sizeof(chain), 0, &pool.owner, &f);
+    m.owner = &pool.owner; test_name = "LCG emitted code sample";
+    CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
+    CHECK(block.next_pc == sizeof(chain) && block.insns == 18 && block.stack_delta == 0);
+    for (p = 0; p < block.size; p += 4) {
+        nj_u4 instruction = word(generated + p);
+        if ((instruction & 0x0a000000u) == 0x08000000u) {
+            if (instruction & 0x00400000u) ++loads; else ++stores;
+        }
+    }
+    printf("SAMPLE ARM64 insns=%u bytes=%lu loads=%u stores=%u\n",
+           block.insns, (unsigned long)block.size, loads, stores);
 }
 
 int main(int argc, char **argv)
@@ -771,6 +1131,7 @@ int main(int argc, char **argv)
     CHECK(sizeof(nj_ref) == 8);
 #endif
     test_integer(); test_float(); test_boundaries(); test_large_locals(); test_fpcr();
+    test_numeric_constants(); test_analysis(); test_write_through(); test_constant_chain();
     test_name = "extension coverage";
     CHECK(!NJ_JIT_ARM64_FP || !NJ_ENABLE_FLOAT || (seen_f && seen_fpcr));
     CHECK(!NJ_JIT_ARM64_FP || !NJ_ENABLE_FLOAT || !NJ_ENABLE_LONG || seen_d);

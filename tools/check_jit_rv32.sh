@@ -89,25 +89,29 @@ reject_config d-without-f 'NJ_JIT_RV32_D requires NJ_JIT_RV32_F=1' \
     -DNJ_ENABLE_JIT=1 -DNJ_JIT_RV32_D=1 -DNJ_JIT_RV32_F=0
 reject_config nonboolean 'JIT feature macros must be 0 or 1' \
     -DNJ_ENABLE_JIT=1 -DNJ_JIT_RV32_M=2
+reject_config nonboolean-cache 'JIT feature macros must be 0 or 1' \
+    -DNJ_ENABLE_JIT=1 -DNJ_JIT_RV32_REG_CACHE=2
 reject_config engine-disabled 'NJ_ENABLE_JIT requires NJ_ENABLE_ENGINE=1' \
     -DNJ_ENABLE_JIT=1 -DNJ_ENABLE_ENGINE=0
 
 # Disabling F necessarily disables D. A has no atomic lowering today, but its
 # separate row protects independence from M/F/D/C and still executes the blocks.
 ROWS=(
-    'rv32i 0 0 0 0 0 1'
-    'all 1 1 1 1 1 1'
-    'no-m 0 1 1 1 1 1'
-    'no-a 1 0 1 1 1 1'
-    'no-f 1 1 0 0 1 1'
-    'no-d 1 1 1 0 1 1'
-    'no-c 1 1 1 1 0 1'
-    'no-long 1 1 1 1 1 0'
+    'rv32i 0 0 0 0 0 1 1'
+    'all 1 1 1 1 1 1 1'
+    'no-m 0 1 1 1 1 1 1'
+    'no-a 1 0 1 1 1 1 1'
+    'no-f 1 1 0 0 1 1 1'
+    'no-d 1 1 1 0 1 1 1'
+    'no-c 1 1 1 1 0 1 1'
+    'no-long 1 1 1 1 1 0 1'
+    'no-cache 1 1 1 1 1 1 0'
 )
 for row in "${ROWS[@]}"; do
-    read -r name m a f d c long <<< "$row"
+    read -r name m a f d c long cache <<< "$row"
     DEFS=(-DNJ_JIT_RV32_M="$m" -DNJ_JIT_RV32_A="$a" -DNJ_JIT_RV32_F="$f"
-          -DNJ_JIT_RV32_D="$d" -DNJ_JIT_RV32_C="$c" -DNJ_ENABLE_LONG="$long")
+          -DNJ_JIT_RV32_D="$d" -DNJ_JIT_RV32_C="$c" -DNJ_ENABLE_LONG="$long"
+          -DNJ_JIT_RV32_REG_CACHE="$cache")
     "${HOST_CC[@]}" "${COMMON[@]}" "${DEFS[@]}" "${SOURCES[@]}" -o "$WORK/host-$name"
     "$WORK/host-$name" | tee "$WORK/host-$name.log"
     if [[ "$CAN_EXECUTE" == 1 ]]; then
@@ -116,8 +120,24 @@ for row in "${ROWS[@]}"; do
         "${RUNNER[@]}" "$WORK/rv32-$name" --require-execution | tee "$WORK/rv32-$name.log"
     fi
 done
+# Compare identical LCG blocks; these are instruction counts, not QEMU timings.
+read_sample() {
+    awk '$1 == "SAMPLE" && $2 == "RV32" {
+        for (i = 4; i <= 7; ++i) { split($i, value, "="); printf "%s ", value[2] }
+        print ""
+    }' "$1"
+}
+read -r on_insns on_bytes on_loads on_stores < <(read_sample "$WORK/host-all.log")
+read -r off_insns off_bytes off_loads off_stores < <(read_sample "$WORK/host-no-cache.log")
+if (( on_insns != 18 || off_insns != 18 || on_bytes > off_bytes ||
+      on_loads >= off_loads || on_stores != off_stores )); then
+    echo 'FAIL: register cache must reduce LCG loads while preserving every store and bytecode.' >&2
+    exit 1
+fi
+printf 'PASS LCG cache on/off: bytes %s/%s, loads %s/%s, stores %s/%s, bytecodes %s/%s\n' \
+    "$on_bytes" "$off_bytes" "$on_loads" "$off_loads" "$on_stores" "$off_stores" "$on_insns" "$off_insns"
 if [[ "$CAN_EXECUTE" == 1 ]]; then
-    echo 'PASS: all eight configurations executed real generated RV32 machine code.'
+    echo 'PASS: all nine configurations executed real generated RV32 machine code.'
 else
     echo 'PASS: host encoding/metadata and invalid-config checks only; RV32 execution SKIPPED.'
 fi
