@@ -1347,6 +1347,32 @@ int main(void)
                   "find() on a Mesh does not consult the World table");
             check(nj_take_exception(vm) == 0, "find() on a Mesh does not throw");
         }
+
+        /* The check above is a guard, not a reproducer: a bare Mesh has
+         * _nj_nsub == 0, so the old aliasing read would have fetched slot zero
+         * and survived.  Give the Mesh one submesh and the aliased value is a
+         * small non-zero integer - on the old code nj_array_length() then
+         * dereferences it and the VM dies, while the class check returns null
+         * before any World slot is read. */
+        {
+            nj_field *sub = nj_field_lookup(
+                vm, "javax/microedition/m3g/Mesh", "_nj_nsub", "I", 0);
+            nj_ref world = make(vm, CLS("World"));
+            nj_ref mesh = make(vm, CLS("Mesh"));
+
+            n.r = 0;
+            check(sub && world && mesh, "a Mesh, a World and its submesh count");
+            if (sub && world && mesh) {
+                nj_field_write_int(vm, mesh, sub, 1);
+                a[0].i = 4242;
+                call(vm, mesh, CLS("Object3D"), "find",
+                     "(I)L" CLS("Object3D") ";", a, &n);
+                check(n.r == 0,
+                      "find() on a Mesh with a submesh still answers null");
+                check(nj_take_exception(vm) == 0,
+                      "find() with a submesh does not throw");
+            }
+        }
     }
 
     printf("== setTransform(null) restores the identity ==\n");

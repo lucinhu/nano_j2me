@@ -1923,9 +1923,11 @@ there and ran cleanly. The core ended in `nj_array_length()` called from
 `Object3D.find(int)` is inherited by every node type, but the fallback that
 searches the file-wide object table reads `World._nj_all` — a field that
 exists only on `World`. The native read that slot out of whatever node called
-`find()`. On a `SkinnedMesh` the read landed past the object's own field
-slots, produced a value that was not a reference at all, and
-`nj_array_length()` dereferenced it. A debug print of the receiver confirmed
+`find()`. On a `SkinnedMesh` the read landed inside the object -- offline
+field-offset accounting puts `World._nj_all` at offset 192, which is
+`Mesh._nj_nsub` on the 240-byte `SkinnedMesh` instance -- so the submesh count
+(1) was handed to `nj_array_length()` as if it were an array reference, and the
+dereference crashed the VM. A debug print of the receiver confirmed
 the path (`DEBUG find_in_table receiver=javax/microedition/m3g/SkinnedMesh`,
 ten times in the 600-frame repro).
 
