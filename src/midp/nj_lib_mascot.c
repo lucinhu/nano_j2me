@@ -15,31 +15,17 @@
  * hundreds of times).  A float transform stack would disagree with the game's
  * own arithmetic, so everything below is integer.
  *
- * The member list is MEASURED, not guessed: javap over every class of both
- * titles gives 42 distinct member references under this package name.  The
- * constructors are the only thing added beyond that list, because a game has
- * to allocate the objects it names.
+ * The API surface follows calls in Devil May Cry and Galaxy on Fire, with
+ * independently generated fixtures and comparisons against FreeJ2ME-Plus.
+ * Integer wrapping, rounding, normalization and view transforms follow the
+ * reference Java arithmetic. FigureLayout exposes parallel scale/size and
+ * perspective FOV/width-height modes, with lazy identity-transform storage.
  *
- * WHAT IT DOES, AND WHAT IT DOES NOT DO
- * ------------------------------------
- * The scene arithmetic is real: integer rotations, matrix concatenation,
- * look-at, normalisation and the integer square root, all tested against a
- * libm oracle.  FigureLayout exposes the two projection modes the games use -
- * parallel-scale and perspective-FOV - and keeps the reference's defaults
- * (implicit identity affine, parallel 512/512 scale, centre 0,0); the other
- * two reference modes (parallel-size, perspective-WH) are not exposed because
- * no title in the corpus calls them.  renderPrimitives() draws solid points,
- * lines, triangles and quads through the public eleven-argument ABI, with the
- * reference's transform rounding, centre offsets, near/far clipping and
- * command colours; tests/test_mascot.c binds a real Image and checks the
- * pixels with Image.getRGB().
- *
- * Everything that needs data this runtime does not parse yet is refused
- * rather than approximated: textured and point-sprite primitives are
- * validated and then draw nothing (no colour is invented), Figure(String)/
- * renderFigure and ActionTable data are not read (MBAC/MTRA formats), and
- * ADD/SUB blending draws nothing because nj_gfx has no such operation.  A
- * wrong picture is harder to diagnose than no picture.
+ * nj_mascot_scene.inc connects compact MBAC/MTRA/BMP decoders to deferred
+ * model and primitive drawing. It transforms each model vertex once, reuses
+ * bounded heap buffers, and sorts submissions before rasterization at flush.
+ * nj_mascot_commands.inc handles the supported command-list subset; unsupported
+ * command types raise an exception. See docs/COMPATIBILITY.md for scope.
  *
  * TRIMMING
  * --------
@@ -51,19 +37,13 @@
 #include "nj_midp.h"
 
 #include <math.h>
+#include "nj_mascot_model.h"
+#include "nj_mascot_anim.h"
+#include "nj_mascot_raster.h"
 
 #if NJ_ENABLE_MASCOT
 
 #define NJFN(name) NJ_NATIVE_FN(name)
-
-/* Keep the per-triangle filler out of line: inlining it into the clipping
- * helper three times inflated that helper's C stack frame (measured with
- * -fstack-usage; the extra call per emitted triangle is noise). */
-#if defined(__GNUC__)
-#  define M3_NOINLINE __attribute__((noinline))
-#else
-#  define M3_NOINLINE
-#endif
 
 #define NJ_C_V3  "com/mascotcapsule/micro3d/v3/Vector3D"
 #define NJ_C_XF  "com/mascotcapsule/micro3d/v3/AffineTrans"
@@ -86,7 +66,9 @@
  * angle support does not cost FigureLayout another persistent field. */
 #define M3_PROJ_MODE_MASK 0xFF000000u
 #define M3_PROJ_PARALLEL  0x90000000u
+#define M3_PROJ_PARALLEL_SIZE 0x91000000u
 #define M3_PROJ_FOV       0x92000000u
+#define M3_PROJ_WH        0x93000000u
 #define M3_ANGLE_MASK     0x7FFu
 
 /* Reference default parallel scale (FigureLayout() uses 512,512). */
@@ -101,7 +83,7 @@
 /* ------------------------------------------------------------------ */
 
 /*
- * Integer square root, floor.
+ * Integer square root, floor (the public API rounds this result).
  *
  * Used by Util3D.sqrt() and by the normalisations, and it is a PLAIN integer
  * root: a game passes the SQUARED length (x*x+y*y+z*z, already scaled by
@@ -124,11 +106,15 @@ static nj_s4 m3_isqrt(nj_s8 v)
     return (nj_s4)x;
 }
 
-/* (a * b) / 4096 with a 64-bit product: 4096*4096 already overflows 32 bits. */
-static nj_s4 m3_mul(nj_s4 a, nj_s4 b)
-{
-    return (nj_s4)(((nj_s8)a * (nj_s8)b) / M3_ONE);
-}
+
+
+/* Shared Java-int arithmetic helpers, also used by scene submission. */
+static nj_s4 m3_i32(nj_u4 v);
+static nj_s4 m3_asr32(nj_s4 v, unsigned n);
+static void m3_unit(nj_s4 v[3]);
+static nj_s8 m3_shr12(nj_s8 v);
+static nj_s4 m3_dot12(const nj_s4 *m, const nj_s4 *v);
+static void m3_matmul(const nj_s4 a[12], const nj_s4 b[12], nj_s4 out[12]);
 
 /* Micro3D uses 4096 phases per turn and rounds sine to the nearest 1/4096.
  * Reflect a quarter-wave ROM table: no degree quantisation, integer divide,
@@ -233,6 +219,10 @@ static const nj_builtin_field v3_fields[] = {
 };
 
 static const nj_builtin_method v3_methods[] = {
+    M("set", "(L" NJ_C_V3 ";)V", 0),
+    M("innerProduct", "(L" NJ_C_V3 ";L" NJ_C_V3 ";)I", NJ_ACC_STATIC),
+    M("outerProduct", "(L" NJ_C_V3 ";L" NJ_C_V3 ";)L" NJ_C_V3 ";", NJ_ACC_STATIC),
+    M("outerProduct", "(L" NJ_C_V3 ";)V", 0),
     M("<init>", "()V", 0),
     M("<init>", "(III)V", 0),
     M("<init>", "(L" NJ_C_V3 ";)V", 0),
@@ -288,62 +278,70 @@ NJFN(mascot_v3_set)
  */
 NJFN(mascot_v3_unit)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_s4 x = m3_get(vm, self, "x");
-    nj_s4 y = m3_get(vm, self, "y");
-    nj_s4 z = m3_get(vm, self, "z");
-    nj_s4 len = m3_isqrt((nj_s8)x * x + (nj_s8)y * y + (nj_s8)z * z);
-
-    if (len == 0) {
-        return NJ_OK;
-    }
-    v3_put3(vm, self,
-            (nj_s4)(((nj_s8)x * M3_ONE) / len),
-            (nj_s4)(((nj_s8)y * M3_ONE) / len),
-            (nj_s4)(((nj_s8)z * M3_ONE) / len));
+    nj_ref self=NJ_THIS(args);
+    nj_s4 v[3]={m3_get(vm,self,"x"),m3_get(vm,self,"y"),m3_get(vm,self,"z")};
+    m3_unit(v);
+    v3_put3(vm,self,v[0],v[1],v[2]);
     return NJ_OK;
 }
 
-/*
- * innerProduct(v): the receiver is one of the two vectors, v is the other.
- *
- * This is an INSTANCE method -- the API is "a.innerProduct(b)" -- so the
- * argument list holds only b and the receiver comes from NJ_THIS().  Reading
- * two arguments here is what made a test crash: the second slot does not exist
- * and held whatever the caller had left there.
- */
+/* Vector products use ordinary Java ints, not 12.12 fixed-point products.
+ * Compute unsigned bits so overflow has the Java modulo-2^32 result. */
+static void m3_vector_read(nj_vm *vm, nj_ref o, nj_s4 v[3])
+{
+    v[0]=m3_get(vm,o,"x");v[1]=m3_get(vm,o,"y");v[2]=m3_get(vm,o,"z");
+}
+static void m3_cross(const nj_s4 a[3], const nj_s4 b[3], nj_s4 out[3])
+{
+    nj_s4 r[3];
+    r[0]=m3_i32((nj_u4)a[1]*(nj_u4)b[2]-(nj_u4)a[2]*(nj_u4)b[1]);
+    r[1]=m3_i32((nj_u4)a[2]*(nj_u4)b[0]-(nj_u4)a[0]*(nj_u4)b[2]);
+    r[2]=m3_i32((nj_u4)a[0]*(nj_u4)b[1]-(nj_u4)a[1]*(nj_u4)b[0]);
+    memcpy(out,r,sizeof(r));
+}
+static nj_status m3_vector_inner(nj_vm *vm,nj_ref a,nj_ref b,nj_value *ret)
+{
+    nj_s4 x[3],y[3];
+    if(!a||!b)return nj_throw(vm,"java/lang/NullPointerException","null vector");
+    m3_vector_read(vm,a,x);m3_vector_read(vm,b,y);
+    ret->i=m3_i32((nj_u4)x[0]*(nj_u4)y[0]+(nj_u4)x[1]*(nj_u4)y[1]+(nj_u4)x[2]*(nj_u4)y[2]);
+    return NJ_OK;
+}
+NJFN(mascot_v3_inner_static)
+{
+    return m3_vector_inner(vm,NJ_ARG_REF(args,0),NJ_ARG_REF(args,1),ret);
+}
+NJFN(mascot_v3_outer_static)
+{
+    nj_ref a=NJ_ARG_REF(args,0),b=NJ_ARG_REF(args,1),o;
+    nj_s4 x[3],y[3],v[3];
+    if(!a||!b)return nj_throw(vm,"java/lang/NullPointerException","null vector");
+    m3_vector_read(vm,a,x);m3_vector_read(vm,b,y);m3_cross(x,y,v);
+    o=nj_object_new(vm,NJ_C_V3);
+    if(!o)return NJ_ERR;
+    v3_put3(vm,o,v[0],v[1],v[2]);ret->r=o;return NJ_OK;
+}
+NJFN(mascot_v3_outer_in)
+{
+    nj_ref a=NJ_THIS(args),b=NJ_ARG_REF(args,0);
+    nj_s4 x[3],y[3],v[3];
+    if(!b)return nj_throw(vm,"java/lang/NullPointerException","null vector");
+    m3_vector_read(vm,a,x);m3_vector_read(vm,b,y);m3_cross(x,y,v);
+    v3_put3(vm,a,v[0],v[1],v[2]);return NJ_OK;
+}
 NJFN(mascot_v3_inner)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_ref b = NJ_ARG_REF(args, 0);
-
-    if (!self || !b) {
-        return nj_throw(vm, "java/lang/NullPointerException", "null vector");
-    }
-    ret->i = m3_mul(m3_get(vm, self, "x"), m3_get(vm, b, "x")) +
-             m3_mul(m3_get(vm, self, "y"), m3_get(vm, b, "y")) +
-             m3_mul(m3_get(vm, self, "z"), m3_get(vm, b, "z"));
-    return NJ_OK;
+    return m3_vector_inner(vm,NJ_THIS(args),NJ_ARG_REF(args,0),ret);
 }
 
 /* outerProduct(a, b): the result goes into the receiver. */
 NJFN(mascot_v3_outer)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_ref a = NJ_ARG_REF(args, 0);
-    nj_ref b = NJ_ARG_REF(args, 1);
-    nj_s4 ax, ay, az, bx, by, bz;
-
-    if (!a || !b) {
-        return nj_throw(vm, "java/lang/NullPointerException", "null vector");
-    }
-    ax = m3_get(vm, a, "x"); ay = m3_get(vm, a, "y"); az = m3_get(vm, a, "z");
-    bx = m3_get(vm, b, "x"); by = m3_get(vm, b, "y"); bz = m3_get(vm, b, "z");
-    v3_put3(vm, self,
-            m3_mul(ay, bz) - m3_mul(az, by),
-            m3_mul(az, bx) - m3_mul(ax, bz),
-            m3_mul(ax, by) - m3_mul(ay, bx));
-    return NJ_OK;
+    nj_ref a=NJ_ARG_REF(args,0),b=NJ_ARG_REF(args,1);
+    nj_s4 x[3],y[3],v[3];
+    if(!a||!b)return nj_throw(vm,"java/lang/NullPointerException","null vector");
+    m3_vector_read(vm,a,x);m3_vector_read(vm,b,y);m3_cross(x,y,v);
+    v3_put3(vm,NJ_THIS(args),v[0],v[1],v[2]);return NJ_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -366,6 +364,14 @@ static const char *const xf_name[M3_NXF] = {
 };
 
 static const nj_builtin_method xf_methods[] = {
+    M("set", "(L" NJ_C_XF ";)V", 0),
+    M("mul", "(L" NJ_C_XF ";L" NJ_C_XF ";)V", 0),
+    M("lookAt", "(L" NJ_C_V3 ";L" NJ_C_V3 ";L" NJ_C_V3 ";)V", 0),
+    M("setRotationX", "(I)V", 0),
+    M("setRotationY", "(I)V", 0),
+    M("setRotationZ", "(I)V", 0),
+    M("transform", "(L" NJ_C_V3 ";)L" NJ_C_V3 ";", 0),
+    M("transPoint", "(L" NJ_C_V3 ";)L" NJ_C_V3 ";", 0),
     M("<init>", "()V", 0),
     M("setIdentity", "()V", 0),
     M("rotationX", "(I)V", 0),
@@ -420,19 +426,7 @@ static void xf_identity(nj_s4 *m)
  */
 static void xf_concat(const nj_s4 *a, const nj_s4 *b, nj_s4 *out)
 {
-    int r, c;
-
-    for (r = 0; r < 3; r++) {
-        for (c = 0; c < 3; c++) {
-            out[r * 4 + c] = (nj_s4)(m3_mul(a[r * 4 + 0], b[0 * 4 + c]) +
-                                     m3_mul(a[r * 4 + 1], b[1 * 4 + c]) +
-                                     m3_mul(a[r * 4 + 2], b[2 * 4 + c]));
-        }
-        out[r * 4 + 3] = (nj_s4)(m3_mul(a[r * 4 + 0], b[3]) +
-                                 m3_mul(a[r * 4 + 1], b[7]) +
-                                 m3_mul(a[r * 4 + 2], b[11]) +
-                                 a[r * 4 + 3]);
-    }
+    m3_matmul(a,b,out);
 }
 
 NJFN(mascot_xf_init)
@@ -486,6 +480,9 @@ NJFN(mascot_xf_rot_x)
     nj_s4 m[M3_NXF];
 
     xf_identity(m);
+    m[3]=m3_get(vm,NJ_THIS(args),"m03");
+    m[7]=m3_get(vm,NJ_THIS(args),"m13");
+    m[11]=m3_get(vm,NJ_THIS(args),"m23");
     m[5] = c;  m[6] = -s;
     m[9] = s;  m[10] = c;
     xf_write(vm, NJ_THIS(args), m);
@@ -499,6 +496,9 @@ NJFN(mascot_xf_rot_y)
     nj_s4 m[M3_NXF];
 
     xf_identity(m);
+    m[3]=m3_get(vm,NJ_THIS(args),"m03");
+    m[7]=m3_get(vm,NJ_THIS(args),"m13");
+    m[11]=m3_get(vm,NJ_THIS(args),"m23");
     m[0] = c;  m[2] = s;
     m[8] = -s; m[10] = c;
     xf_write(vm, NJ_THIS(args), m);
@@ -512,90 +512,54 @@ NJFN(mascot_xf_rot_z)
     nj_s4 m[M3_NXF];
 
     xf_identity(m);
+    m[3]=m3_get(vm,NJ_THIS(args),"m03");
+    m[7]=m3_get(vm,NJ_THIS(args),"m13");
+    m[11]=m3_get(vm,NJ_THIS(args),"m23");
     m[0] = c;  m[1] = -s;
     m[4] = s;  m[5] = c;
     xf_write(vm, NJ_THIS(args), m);
     return NJ_OK;
 }
 
-/*
- * setViewTrans(position, lookAt, up): a right-handed look-at matrix.
- *
- * The basis vectors are normalised with the same integer square root the games
- * use for their own vectors, and the translation is -basis * position.  A
- * degenerate view (position == lookAt, or up parallel to the direction) leaves
- * the matrix untouched instead of dividing by zero.
- */
+/* `look` is a direction, not a point. The reference keeps an unscaled
+ * translation column; the basis dot product is rounded once after summing. */
 NJFN(mascot_xf_set_view)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_ref pos = NJ_ARG_REF(args, 0);
-    nj_ref at = NJ_ARG_REF(args, 1);
-    nj_ref up = NJ_ARG_REF(args, 2);
-    nj_s4 p[3], d[3], u[3], f[3], r[3], v[3], m[M3_NXF];
-    nj_s4 len;
+    nj_ref pos=NJ_ARG_REF(args,0),look=NJ_ARG_REF(args,1),up=NJ_ARG_REF(args,2);
+    nj_s4 p[3],d[3],u[3],r[3],v[3],m[M3_NXF];
     int i;
-
-    if (!pos || !at || !up) {
-        return nj_throw(vm, "java/lang/NullPointerException", "null vector");
-    }
-    p[0] = m3_get(vm, pos, "x"); p[1] = m3_get(vm, pos, "y"); p[2] = m3_get(vm, pos, "z");
-    d[0] = m3_get(vm, at, "x") - p[0];
-    d[1] = m3_get(vm, at, "y") - p[1];
-    d[2] = m3_get(vm, at, "z") - p[2];
-    u[0] = m3_get(vm, up, "x"); u[1] = m3_get(vm, up, "y"); u[2] = m3_get(vm, up, "z");
-
-    len = m3_isqrt((nj_s8)d[0] * d[0] + (nj_s8)d[1] * d[1] + (nj_s8)d[2] * d[2]);
-    if (len == 0) {
-        return NJ_OK;
-    }
-    for (i = 0; i < 3; i++) {
-        f[i] = (nj_s4)(((nj_s8)d[i] * M3_ONE) / len);
-    }
-
-    r[0] = m3_mul(f[1], u[2]) - m3_mul(f[2], u[1]);
-    r[1] = m3_mul(f[2], u[0]) - m3_mul(f[0], u[2]);
-    r[2] = m3_mul(f[0], u[1]) - m3_mul(f[1], u[0]);
-    len = m3_isqrt((nj_s8)r[0] * r[0] + (nj_s8)r[1] * r[1] + (nj_s8)r[2] * r[2]);
-    if (len == 0) {
-        return NJ_OK;
-    }
-    for (i = 0; i < 3; i++) {
-        r[i] = (nj_s4)(((nj_s8)r[i] * M3_ONE) / len);
-    }
-
-    v[0] = m3_mul(r[1], f[2]) - m3_mul(r[2], f[1]);
-    v[1] = m3_mul(r[2], f[0]) - m3_mul(r[0], f[2]);
-    v[2] = m3_mul(r[0], f[1]) - m3_mul(r[1], f[0]);
-
-    xf_identity(m);
-    m[0] = r[0]; m[1] = r[1]; m[2] = r[2];
-    m[4] = v[0]; m[5] = v[1]; m[6] = v[2];
-    m[8] = f[0]; m[9] = f[1]; m[10] = f[2];
-    m[3]  = (nj_s4)(-((nj_s8)r[0] * p[0] + (nj_s8)r[1] * p[1] + (nj_s8)r[2] * p[2]));
-    m[7]  = (nj_s4)(-((nj_s8)v[0] * p[0] + (nj_s8)v[1] * p[1] + (nj_s8)v[2] * p[2]));
-    m[11] = (nj_s4)(-((nj_s8)f[0] * p[0] + (nj_s8)f[1] * p[1] + (nj_s8)f[2] * p[2]));
-    xf_write(vm, self, m);
-    return NJ_OK;
+    if(!pos||!look||!up)return nj_throw(vm,"java/lang/NullPointerException","null vector");
+    m3_vector_read(vm,pos,p);m3_vector_read(vm,look,d);m3_vector_read(vm,up,u);
+    for(i=0;i<3;++i)p[i]=m3_i32(0u-(nj_u4)p[i]);
+    m3_cross(d,u,r);m3_unit(r);
+    m3_cross(d,r,v);m3_unit(v);
+    m3_unit(d);
+    for(i=0;i<3;++i){m[i]=r[i];m[4+i]=v[i];m[8+i]=d[i];}
+    m[3]=(nj_s4)m3_shr12(m3_dot12(r,p));
+    m[7]=(nj_s4)m3_shr12(m3_dot12(v,p));
+    m[11]=(nj_s4)m3_shr12(m3_dot12(d,p));
+    xf_write(vm,NJ_THIS(args),m);return NJ_OK;
 }
-
-NJFN(mascot_xf_transform)
+NJFN(mascot_xf_set)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_ref o = NJ_ARG_REF(args, 0);
-    nj_s4 m[M3_NXF], x, y, z;
-
-    if (!o) {
-        return nj_throw(vm, "java/lang/NullPointerException", "v is null");
-    }
-    xf_read(vm, self, m);
-    x = m3_get(vm, o, "x"); y = m3_get(vm, o, "y"); z = m3_get(vm, o, "z");
-    v3_put3(vm, o,
-            (nj_s4)(m3_mul(m[0], x) + m3_mul(m[1], y) + m3_mul(m[2], z) + m[3]),
-            (nj_s4)(m3_mul(m[4], x) + m3_mul(m[5], y) + m3_mul(m[6], z) + m[7]),
-            (nj_s4)(m3_mul(m[8], x) + m3_mul(m[9], y) + m3_mul(m[10], z) + m[11]));
-    return NJ_OK;
+    nj_ref a=NJ_ARG_REF(args,0);nj_s4 m[M3_NXF];
+    if(!a)return nj_throw(vm,"java/lang/NullPointerException","null transform");
+    xf_read(vm,a,m);xf_write(vm,NJ_THIS(args),m);return NJ_OK;
 }
+
+static nj_status m3_transform_java(nj_vm *vm,const nj_value *args,nj_value *ret,int copy)
+{
+    nj_ref o=NJ_ARG_REF(args,0),target;
+    nj_s4 m[M3_NXF],v[3],r[3];int i;
+    if(!o)return nj_throw(vm,"java/lang/NullPointerException","null vector");
+    xf_read(vm,NJ_THIS(args),m);m3_vector_read(vm,o,v);
+    for(i=0;i<3;++i)r[i]=m3_i32((nj_u4)m3_shr12(m3_dot12(m+i*4,v))+(nj_u4)m[i*4+3]);
+    target=copy?nj_object_new(vm,NJ_C_V3):o;
+    if(!target)return NJ_ERR;
+    v3_put3(vm,target,r[0],r[1],r[2]);ret->r=target;return NJ_OK;
+}
+NJFN(mascot_xf_transform){return m3_transform_java(vm,args,ret,0);}
+NJFN(mascot_xf_transform_copy){return m3_transform_java(vm,args,ret,1);}
 
 NJFN(mascot_xf_translation)
 {
@@ -636,8 +600,10 @@ NJFN(mascot_u3d_cos)
 
 NJFN(mascot_u3d_sqrt)
 {
-    ret->i = m3_isqrt(NJ_ARG_INT(args, 0));
-    return NJ_OK;
+    nj_u4 n=(nj_u4)NJ_ARG_INT(args,0);
+    nj_u4 r=(nj_u4)m3_isqrt((nj_s8)n);
+    if(r<65535u && n-r*r>r)++r;
+    ret->i=(nj_s4)r;return NJ_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -651,6 +617,13 @@ static const nj_builtin_method fig_methods[] = {
      * way and cannot proceed without it.
      */
     M("<init>", "([B)V", 0),
+    M("<init>", "(Ljava/lang/String;)V", 0),
+    M("dispose", "()V", 0),
+    M("getNumPattern", "()I", 0),
+    M("setPattern", "(I)V", 0),
+    M("getNumTextures", "()I", 0),
+    M("selectTexture", "(I)V", 0),
+    M("getTexture", "()L" NJ_C_TEX ";", 0),
     M("setTexture", "(L" NJ_C_TEX ";)V", 0),
     M("setTexture", "([L" NJ_C_TEX ";)V", 0),
     M("setPosture", "(L" NJ_C_AT ";II)V", 0),
@@ -664,7 +637,9 @@ static const nj_builtin_field fig_fields[] = {
     { "_tbl", "L" NJ_C_AT ";", 0 },
     { "_lay", "L" NJ_C_FL ";", 0 },
     { "_a", "I", 0 },
-    { "_b", "I", 0 }
+    { "_b", "I", 0 },
+    { "_pattern", "I", 0 },
+    { "_selected", "I", 0 }
 };
 
 static const nj_builtin_method fl_methods[] = {
@@ -672,6 +647,8 @@ static const nj_builtin_method fl_methods[] = {
     M("setAffineTrans", "(L" NJ_C_XF ";)V", 0),
     M("getAffineTrans", "()L" NJ_C_XF ";", 0),
     M("setPerspective", "(III)V", 0),
+    M("setPerspective", "(IIII)V", 0),
+    M("setParallelSize", "(II)V", 0),
     M("setCenter", "(II)V", 0),
     M("setScale", "(II)V", 0)
 };
@@ -691,7 +668,9 @@ static const nj_builtin_method tex_methods[] = {
      * Texture(byte[] data, boolean alphaBlend): the data is a raw texture
      * bitmap whose layout the games know and this runtime does not.
      */
-    M("<init>", "([BZ)V", 0)
+    M("<init>", "([BZ)V", 0),
+    M("<init>", "(Ljava/lang/String;Z)V", 0),
+    M("dispose", "()V", 0)
 };
 
 static const nj_builtin_field tex_fields[] = {
@@ -721,9 +700,13 @@ static const nj_builtin_method fx_methods[] = {
      */
     M("<init>", "(L" NJ_C_LIG ";IZL" NJ_C_TEX ";)V", 0),
     M("setLight", "(L" NJ_C_LIG ";)V", 0),
+    M("getLight", "()L" NJ_C_LIG ";", 0),
     M("setSphereMap", "(L" NJ_C_TEX ";)V", 0),
     M("setShading", "(I)V", 0),
-    M("setSemiTransparentEnabled", "(Z)V", 0)
+    M("setSemiTransparentEnabled", "(Z)V", 0),
+    M("setShadingType", "(I)V", 0),
+    M("setToonParams", "(III)V", 0),
+    M("setThreshold", "(III)V", 0)
 };
 
 static const nj_builtin_field fx_fields[] = {
@@ -736,6 +719,11 @@ static const nj_builtin_method at_methods[] = {
     M("<init>", "([BII)V", 0),
     /* The same model data, handed over whole rather than as a slice. */
     M("<init>", "([B)V", 0),
+    M("<init>", "(Ljava/lang/String;)V", 0),
+    M("dispose", "()V", 0),
+    M("getNumAction", "()I", 0),
+    M("getNumActions", "()I", 0),
+    M("getNumFrames", "(I)I", 0),
     M("getNumFrame", "(I)I", 0),
     M("getFrameValue", "(II)I", 0)
 };
@@ -745,12 +733,8 @@ static const nj_builtin_field at_fields[] = {
     { "_n", "I", 0 }, { "_pat", "I", 0 }
 };
 
-/* See mascot_fig_data: the pose table's bytes are kept, not understood. */
-NJFN(mascot_at_data)
-{
-    m3_set_ref(vm, NJ_THIS(args), "_data", "[B", NJ_ARG_REF(args, 0));
-    return NJ_OK;
-}
+/* Model and action payloads use compact, pointer-free blobs owned by Java arrays. */
+
 
 static const nj_builtin_method g3d_methods[] = {
     M("<init>", "()V", 0),
@@ -758,12 +742,24 @@ static const nj_builtin_method g3d_methods[] = {
     M("release", "(Ljavax/microedition/lcdui/Graphics;)V", 0),
     M("flush", "()V", 0),
     M("renderPrimitives", "(L" NJ_C_TEX ";IIL" NJ_C_FL ";L" NJ_C_FX ";II[I[I[I[I)V", 0),
-    M("renderFigure", "(L" NJ_C_FIG ";IIL" NJ_C_FL ";L" NJ_C_FX ";)V", 0)
+    M("drawCommandList", "(L" NJ_C_TEX ";IIL" NJ_C_FL ";L" NJ_C_FX ";[I)V", 0),
+    M("drawCommandList", "([L" NJ_C_TEX ";IIL" NJ_C_FL ";L" NJ_C_FX ";[I)V", 0),
+    M("renderFigure", "(L" NJ_C_FIG ";IIL" NJ_C_FL ";L" NJ_C_FX ";)V", 0),
+    M("drawFigure", "(L" NJ_C_FIG ";IIL" NJ_C_FL ";L" NJ_C_FX ";)V", 0)
 };
 
 static const nj_builtin_field g3d_fields[] = {
-    { "_g", "Ljavax/microedition/lcdui/Graphics;", 0 }
+    { "_g", "Ljavax/microedition/lcdui/Graphics;", 0 },
+    { "_queue", "[B", 0 },
+    { "_order", "[I", 0 },
+    { "_scratch", "[B", 0 },
+    { "_textures", "[Ljava/lang/Object;", 0 },
+    { "_count", "I", 0 },
+    { "_nt", "I", 0 },
+    { "_clip", "J", 0 }
 };
+
+static nj_status m3_scene_primitives(nj_vm *vm, const nj_value *args);
 
 /* Empty constructors: the classes above have no state of their own to set up. */
 NJFN(mascot_noop)
@@ -786,33 +782,13 @@ NJFN(mascot_noop)
  * keep what was given, and say plainly what is missing rather than inventing a
  * model that would make the picture wrong in a way nobody can debug.
  */
-NJFN(mascot_fig_data)
-{
-    m3_set_ref(vm, NJ_THIS(args), "_data", "[B", NJ_ARG_REF(args, 0));
-    return NJ_OK;
-}
 
-NJFN(mascot_fig_tex)
-{
-    m3_set_ref(vm, NJ_THIS(args), "_tex", "L" NJ_C_TEX ";", NJ_ARG_REF(args, 0));
-    return NJ_OK;
-}
 
-NJFN(mascot_fig_texs)
-{
-    m3_set_ref(vm, NJ_THIS(args), "_texs", "[L" NJ_C_TEX ";", NJ_ARG_REF(args, 0));
-    return NJ_OK;
-}
 
-NJFN(mascot_fig_posture)
-{
-    nj_ref self = NJ_THIS(args);
 
-    m3_set_ref(vm, self, "_tbl", "L" NJ_C_AT ";", NJ_ARG_REF(args, 0));
-    m3_set(vm, self, "_a", NJ_ARG_INT(args, 1));
-    m3_set(vm, self, "_b", NJ_ARG_INT(args, 2));
-    return NJ_OK;
-}
+
+
+
 
 NJFN(mascot_fig_layout)
 {
@@ -913,6 +889,26 @@ NJFN(mascot_fl_perspective)
     return NJ_OK;
 }
 
+/* The active projection's dimensions share the existing scale slots. */
+NJFN(mascot_fl_parallel_size)
+{
+    m3_set(vm, NJ_THIS(args), "_sx", NJ_ARG_INT(args, 0));
+    m3_set(vm, NJ_THIS(args), "_sy", NJ_ARG_INT(args, 1));
+    m3_set(vm, NJ_THIS(args), "_p", (nj_s4)M3_PROJ_PARALLEL_SIZE);
+    return NJ_OK;
+}
+NJFN(mascot_fl_perspective_size)
+{
+    nj_s4 near_z=NJ_ARG_INT(args,0),far_z=NJ_ARG_INT(args,1);
+    nj_s4 w=NJ_ARG_INT(args,2),h=NJ_ARG_INT(args,3);
+    nj_ref self=NJ_THIS(args);
+    if(near_z<1 || near_z>=far_z || far_z>32767 || w<0 || h<0)
+        return nj_throw(vm,"java/lang/IllegalArgumentException","invalid perspective size");
+    m3_set(vm,self,"_near",near_z);m3_set(vm,self,"_far",far_z);
+    m3_set(vm,self,"_sx",w);m3_set(vm,self,"_sy",h);
+    m3_set(vm,self,"_p",(nj_s4)M3_PROJ_WH);
+    return NJ_OK;
+}
 NJFN(mascot_fl_center)
 {
     nj_ref self = NJ_THIS(args);
@@ -981,14 +977,7 @@ NJFN(mascot_tex_from_size)
  * _w/_h stay 0: inventing a size from the array length would be a guess, and a
  * wrong texture size is harder to notice than an obviously empty one.
  */
-NJFN(mascot_tex_init_bytes)
-{
-    nj_ref self = NJ_THIS(args);
 
-    m3_set_ref(vm, self, "_data", "[B", NJ_ARG_REF(args, 0));
-    m3_set(vm, self, "_blend", NJ_ARG_INT(args, 1) ? 1 : 0);
-    return NJ_OK;
-}
 
 NJFN(mascot_lig_init)
 {
@@ -1038,17 +1027,18 @@ NJFN(mascot_fx_light)
     return NJ_OK;
 }
 
+NJFN(mascot_fx_get_light)
+{
+    ret->r=m3_ref(vm,NJ_THIS(args),"_lig","L" NJ_C_LIG ";");
+    return NJ_OK;
+}
 NJFN(mascot_fx_sphere)
 {
     m3_set_ref(vm, NJ_THIS(args), "_sph", "L" NJ_C_TEX ";", NJ_ARG_REF(args, 0));
     return NJ_OK;
 }
 
-NJFN(mascot_fx_shading)
-{
-    m3_set(vm, NJ_THIS(args), "_sh", NJ_ARG_INT(args, 0));
-    return NJ_OK;
-}
+
 
 NJFN(mascot_fx_semi)
 {
@@ -1057,14 +1047,7 @@ NJFN(mascot_fx_semi)
 }
 
 /* ActionTable */
-NJFN(mascot_at_init)
-{
-    nj_ref self = NJ_THIS(args);
 
-    m3_set(vm, self, "_n", 0);
-    m3_set(vm, self, "_pat", 0);
-    return NJ_OK;
-}
 
 /*
  * getNumFrame / getFrameValue report 0.
@@ -1073,31 +1056,14 @@ NJFN(mascot_at_init)
  * "no frames" rather than inventing a pose.  A game asking for a frame gets
  * the rest pose, which is the pose it already drew.
  */
-NJFN(mascot_at_num_frame)
-{
-    ret->i = 0;
-    return NJ_OK;
-}
 
-NJFN(mascot_at_frame_value)
-{
-    ret->i = 0;
-    return NJ_OK;
-}
+
+
 
 /* Graphics3D */
-NJFN(mascot_g3d_bind)
-{
-    m3_set_ref(vm, NJ_THIS(args), "_g", "Ljavax/microedition/lcdui/Graphics;",
-               NJ_ARG_REF(args, 0));
-    return NJ_OK;
-}
 
-NJFN(mascot_g3d_release)
-{
-    m3_set_ref(vm, NJ_THIS(args), "_g", "Ljavax/microedition/lcdui/Graphics;", 0);
-    return NJ_OK;
-}
+
+
 
 /* ------------------------------------------------------------------ */
 /* Graphics3D: the primitive rasterizer                               */
@@ -1136,35 +1102,9 @@ NJFN(mascot_g3d_release)
  * of being divided by a clamped z (that clamp turned a vertex behind the
  * camera into a huge wrong triangle).
  *
- * What the picture is and what it is not, said plainly:
- *   - solid triangles, quads, lines and points are implemented and clipped
- *     against the near and far planes;
- *   - colours come from the command flags, never invented: an untextured
- *     primitive with no colour data draws nothing (the reference returns
- *     too), an invalid colour or normal type raises IllegalArgumentException;
- *   - textured and point-sprite primitives are validated, then draw nothing:
- *     the runtime has no Micro3D texture sampler (the Texture bytes are a raw
- *     bitmap format this project cannot read yet), and painting them with an
- *     invented colour would be a wrong picture, not a partial one;
- *   - lighting is not implemented.  When a command asks for it (normal data
- *     present, PATTR_LIGHTING set and the effect carries a Light) the call
- *     draws nothing, because painting the flat command colour would be a
- *     wrong picture; without that flag normals are accepted and ignored, as
- *     the reference does for unlit materials;
- *   - HALF blend is approximated with 128/256 source-over alpha (the
- *     reference rounds exactly half of each channel; 128/255 is close but
- *     not bit-identical, so tests assert the approximation explicitly);
- *     ADD and SUB have no equivalent in nj_gfx, so submissions that ask for
- *     them under an effect with semi-transparency enabled draw nothing -
- *     drawing them opaque would be a wrong picture reported as supported;
- *   - primitives are painted in framebuffer coordinates: the bound
- *     Graphics' translate and clip are ignored (the reference renders into
- *     its own framebuffer, not into Java Graphics user space), and there is
- *     no depth buffer - primitives are painted in submission order, which
- *     matches the reference's order for the single-pass calls the corpus
- *     makes.
- * renderFigure stays a no-op: Figure carries model bytes whose format this
- * runtime does not parse, so there is no geometry to draw for it.
+ * Model decoding, animated poses, deferred sorting and indexed-texture
+ * rendering are implemented in nj_mascot_scene.inc and the pure decoder /
+ * raster modules. No depth buffer or writable global renderer state is used.
  */
 
 /* Primitive type, from the command word's top byte. */
@@ -1232,7 +1172,7 @@ static nj_s4 m3_dot12(const nj_s4 *m, const nj_s4 *v)
     acc += (nj_u4)m[1] * (nj_u4)v[1];
     acc += (nj_u4)m[2] * (nj_u4)v[2];
     acc += 2048u;
-    return (nj_s4)acc;
+    return m3_i32(acc);
 }
 
 /* Narrow to the nj_gfx coordinate type without wrapping a malformed vertex;
@@ -1276,68 +1216,15 @@ static void m3_clip_cross(const m3_vtx *a, const m3_vtx *b, nj_s8 plane,
 /* Sutherland-Hodgman against one z plane.  keep_ge keeps z >= plane,
  * otherwise z <= plane.  Returns the number of output vertices; the caller
  * passes a buffer big enough for n + 1 entries. */
-static int m3_clip_plane(const m3_vtx *in, int n, nj_s8 plane, int keep_ge,
-                         m3_vtx *out)
-{
-    int i, on = 0;
 
-    for (i = 0; i < n; i++) {
-        const m3_vtx *a = &in[i];
-        const m3_vtx *b = &in[(i + 1) % n];
-        int a_in = keep_ge ? (a->z >= plane) : (a->z <= plane);
-        int b_in = keep_ge ? (b->z >= plane) : (b->z <= plane);
-
-        if (a_in) {
-            out[on++] = *a;
-        }
-        if (a_in != b_in) {
-            m3_clip_cross(a, b, plane, &out[on++]);
-        }
-    }
-    return on;
-}
 
 /* Clip one eye-space triangle against the near then the far plane, taking
  * the vertices by pointer (no input copy).  A triangle clipped by one plane
  * has at most 4 vertices, so 5 output slots cover both planes.  Returns 0
  * when nothing is left, otherwise the polygon vertex count (3..5). */
-static int m3_clip3(const m3_vtx *a, const m3_vtx *b, const m3_vtx *c,
-                    nj_s8 plane, int keep_ge, m3_vtx out[4])
-{
-    const m3_vtx *in[3];
-    int i, on = 0;
 
-    in[0] = a;
-    in[1] = b;
-    in[2] = c;
-    for (i = 0; i < 3; i++) {
-        const m3_vtx *p = in[i];
-        const m3_vtx *q = in[(i + 1) % 3];
-        int p_in = keep_ge ? (p->z >= plane) : (p->z <= plane);
-        int q_in = keep_ge ? (q->z >= plane) : (q->z <= plane);
 
-        if (p_in) {
-            out[on++] = *p;
-        }
-        if (p_in != q_in) {
-            m3_clip_cross(p, q, plane, &out[on++]);
-        }
-    }
-    return on;
-}
 
-static int m3_clip_tri(const m3_vtx *a, const m3_vtx *b, const m3_vtx *c,
-                       nj_s8 near_z, nj_s8 far_z,
-                       m3_vtx out[M3_MAX_CLIP_VERTS])
-{
-    m3_vtx mid[4];
-    int n = m3_clip3(a, b, c, near_z, 1, mid);
-
-    if (n < 3) {
-        return 0;
-    }
-    return m3_clip_plane(mid, n, far_z, 0, out);
-}
 
 /* Clip one line segment against the near and far planes in eye space.
  * Returns 0 when the whole segment is outside. */
@@ -1369,34 +1256,10 @@ static int m3_clip_line(m3_vtx *a, m3_vtx *b, nj_s8 near_z, nj_s8 far_z)
 }
 
 /* Project one transformed vertex to framebuffer coordinates. */
-static void m3_project(const m3_vtx *v, int perspective, nj_s4 kx, nj_s4 ky,
-                       nj_s4 cx, nj_s4 cy, nj_s4 *ox, nj_s4 *oy)
-{
-    nj_s8 px, py;
 
-    if (perspective) {
-        px = (v->x * (nj_s8)kx) / v->z + cx;
-        py = (v->y * (nj_s8)ky) / v->z + cy;
-    } else {
-        px = m3_shr12(v->x * (nj_s8)kx) + cx;
-        py = m3_shr12(v->y * (nj_s8)ky) + cy;
-    }
-    *ox = m3_s4_of(px);
-    *oy = m3_s4_of(py);
-}
 
 /* Project and fill one already-clipped triangle. */
-static M3_NOINLINE void m3_fill_tri(nj_gfx *g, const m3_vtx *a,
-                        const m3_vtx *b, const m3_vtx *c, int perspective,
-                        nj_s4 kx, nj_s4 ky, nj_s4 cx, nj_s4 cy)
-{
-    nj_s4 x1, y1, x2, y2, x3, y3;
 
-    m3_project(a, perspective, kx, ky, cx, cy, &x1, &y1);
-    m3_project(b, perspective, kx, ky, cx, cy, &x2, &y2);
-    m3_project(c, perspective, kx, ky, cx, cy, &x3, &y3);
-    nj_gfx_triangle(g, x1, y1, x2, y2, x3, y3, 1);
-}
 
 /* Draw one transformed triangle in perspective mode, clipping it first.
  * Each triangle is clipped on its own so a quad keeps the reference's
@@ -1404,19 +1267,7 @@ static M3_NOINLINE void m3_fill_tri(nj_gfx *g, const m3_vtx *a,
  * the quad as one polygon and fanning the result would silently move the
  * diagonal (and show with HALF blend).  Returns the number of triangles
  * emitted (0 when the triangle is entirely outside the view volume). */
-static int m3_draw_clipped_tri(nj_gfx *g, const m3_vtx *a, const m3_vtx *b,
-                               const m3_vtx *c, nj_s8 near_z, nj_s8 far_z,
-                               nj_s4 kx, nj_s4 ky, nj_s4 cx, nj_s4 cy)
-{
-    m3_vtx cut[M3_MAX_CLIP_VERTS];
-    int n = m3_clip_tri(a, b, c, near_z, far_z, cut);
-    int j;
 
-    for (j = 0; j + 2 < n; j++) {
-        m3_fill_tri(g, &cut[0], &cut[j + 1], &cut[j + 2], 1, kx, ky, cx, cy);
-    }
-    return n >= 3 ? n - 2 : 0;
-}
 
 /* Validate that `a` is an int[] with at least `need` elements. */
 static int m3_int_array_ok(nj_ref a, nj_s4 need)
@@ -1427,296 +1278,11 @@ static int m3_int_array_ok(nj_ref a, nj_s4 need)
 
 NJFN(mascot_g3d_renderPrimitives)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_ref g, layout, fx, texture, verts, uvs, colors, xf;
-    nj_s4 m[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    nj_s4 command, count, prim, color_type, vtx_per, i;
-    nj_s4 px, py, cx, cy, sx, sy, near_z, far_z, angle;
-    nj_u4 proj;
-    nj_s4 kx = 0, ky = 0;
-    int perspective = 0;
-    int need_uv, blend = 0, semi, bm;
-    nj_u4 color = 0u;
-    const nj_s4 *vp;
-    const nj_s4 *cp = NULL;
-    nj_gfx gfx;
-    nj_surface scratch;
-    nj_s4 fbw, fbh;
-
-    g = m3_ref(vm, self, "_g", "Ljavax/microedition/lcdui/Graphics;");
-    texture = NJ_ARG_REF(args, 0);
-    px = NJ_ARG_INT(args, 1);
-    py = NJ_ARG_INT(args, 2);
-    layout = NJ_ARG_REF(args, 3);
-    fx = NJ_ARG_REF(args, 4);
-    command = NJ_ARG_INT(args, 5);
-    count = NJ_ARG_INT(args, 6);
-    verts = NJ_ARG_REF(args, 7);
-    uvs = NJ_ARG_REF(args, 9);
-    colors = NJ_ARG_REF(args, 10);
-
-    /* Reference order: required objects, count, reserved command bits, then
-     * "is anything bound"; the per-flag array checks come after that. */
-    if (!layout || !fx || !verts) {
-        return nj_throw(vm, "java/lang/NullPointerException",
-                        "renderPrimitives: layout, effect and vertexCoords are required");
-    }
-    if (count <= 0 || count > 255) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "renderPrimitives: numPrimitives is out of range");
-    }
-    if ((command & 0x00FF0000) != 0) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "renderPrimitives: reserved command bits are set");
-    }
-    if (!g) {
-        return nj_throw(vm, "java/lang/IllegalStateException",
-                        "renderPrimitives: no Graphics is bound");
-    }
-
-    prim = command & M3_PRIM_MASK;
-    need_uv = ((command & M3_PDATA_UV) != 0) || (prim == M3_PRIM_SPRITES);
-
-    if (need_uv && (!texture || !uvs)) {
-        return nj_throw(vm, "java/lang/NullPointerException",
-                        "renderPrimitives: texture data is required for this command");
-    }
-    if (((command & M3_PDATA_NORMAL_MASK) != 0) && !NJ_ARG_REF(args, 8)) {
-        return nj_throw(vm, "java/lang/NullPointerException",
-                        "renderPrimitives: normals are required for this command");
-    }
-    if (((command & M3_PDATA_COLOR_MASK) == M3_PDATA_COLOR_FACE) && !colors) {
-        return nj_throw(vm, "java/lang/NullPointerException",
-                        "renderPrimitives: per-face colours are required for this command");
-    }
-
-    switch (prim) {
-    case M3_PRIM_POINTS:  vtx_per = 1; break;
-    case M3_PRIM_LINES:   vtx_per = 2; break;
-    case M3_PRIM_TRIS:    vtx_per = 3; break;
-    case M3_PRIM_QUADS:   vtx_per = 4; break;
-    case M3_PRIM_SPRITES: vtx_per = 1; break;
-    default:
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "renderPrimitives: unknown primitive type");
-    }
-
-    /* Interleaved x,y,z per vertex, count primitives.  A caller that hands
-     * over a short array gets the same exception the reference's int[]
-     * indexing would have raised. */
-    if (!m3_int_array_ok(verts, count * vtx_per * 3)) {
-        return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException",
-                        "renderPrimitives: vertexCoords is too short");
-    }
-
-    /* Texture coordinates win over colours, exactly as in the reference. */
-    color_type = need_uv ? 0 : (command & M3_PDATA_COLOR_MASK);
-
-    if (need_uv) {
-        /*
-         * The reference samples the Texture here.  This runtime cannot: the
-         * texture data is a raw Micro3D bitmap whose layout is not read by
-         * this project.  Validate the buffers a renderer would index (so a
-         * malformed call still fails the same way), then draw nothing rather
-         * than painting an invented colour.
-         */
-        if (!m3_int_array_ok(uvs, count * vtx_per * 2)) {
-            return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException",
-                            "renderPrimitives: textureCoords is too short");
-        }
-        (void)texture;
-        return NJ_OK;
-    }
-
-    if (color_type == M3_PDATA_COLOR_BAD) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "renderPrimitives: invalid colour data type");
-    }
-    if ((prim == M3_PRIM_TRIS || prim == M3_PRIM_QUADS) &&
-        (command & M3_PDATA_NORMAL_MASK) == M3_PDATA_NORMAL_BAD) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "renderPrimitives: invalid normal data type");
-    }
-    if (color_type == 0) {
-        return NJ_OK;               /* nothing to colour: reference draws nothing */
-    }
-    if (color_type == M3_PDATA_COLOR_CMD) {
-        if (!m3_int_array_ok(colors, 1)) {
-            return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException",
-                            "renderPrimitives: colors is too short");
-        }
-    } else if (color_type != M3_PDATA_COLOR_FACE) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "renderPrimitives: invalid colour data type");
-    } else if (!m3_int_array_ok(colors, count)) {
-        return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException",
-                        "renderPrimitives: per-face colors is too short");
-    }
-    /* Lighting is not implemented.  The reference only applies it when the
-     * command carries normal data, PATTR_LIGHTING is set and the effect has
-     * a light; in that case the honest result is no picture, not the flat
-     * command colour pretending to be a lit surface.  Commands without that
-     * combination behave exactly like unlit materials in the reference. */
-    if ((command & M3_PATTR_LIGHTING) != 0 &&
-        (command & M3_PDATA_NORMAL_MASK) != 0 &&
-        m3_ref(vm, fx, "_lig", "L" NJ_C_LIG ";") != 0) {
-        return NJ_OK;
-    }
-
-    cp = (const nj_s4 *)nj_array_data(colors);
-    vp = (const nj_s4 *)nj_array_data(verts);
-
-    /* ---- figure layout: affine transform, projection, centre ---- */
-    xf = m3_ref(vm, layout, "_xf", "L" NJ_C_XF ";");
-    if (xf) {
-        xf_read(vm, xf, m);
-    } else {
-        /* No matrix stored means identity: the layout allocates nothing on
-         * construction, and setAffineTrans(null) is a reset to this. */
-        xf_identity(m);
-    }
-    sx = m3_get(vm, layout, "_sx");
-    sy = m3_get(vm, layout, "_sy");
-    near_z = m3_get(vm, layout, "_near");
-    far_z = m3_get(vm, layout, "_far");
-    proj = (nj_u4)m3_get(vm, layout, "_p");
-    angle = (nj_s4)(proj & M3_ANGLE_MASK);
-    /* Java int addition wraps; doing this in signed C would be undefined for
-     * a caller that sets an extreme centre.  The projection below then culls
-     * the result out of the framebuffer like any other off-screen point. */
-    cx = (nj_s4)((nj_u4)m3_get(vm, layout, "_cx") + (nj_u4)px);
-    cy = (nj_s4)((nj_u4)m3_get(vm, layout, "_cy") + (nj_u4)py);
-
-    /* ---- one Graphics load for the whole batch: no per-triangle field
-     *      traffic, and nothing is stored back, so the caller's Graphics
-     *      colour/position state does not change. ---- */
-    if (!nj_midp_gfx_load(vm, g, &gfx, &scratch)) {
-        return NJ_OK;               /* not a usable Graphics */
-    }
-    fbw = gfx.surf ? (nj_s4)gfx.surf->width : 0;
-    fbh = gfx.surf ? (nj_s4)gfx.surf->height : 0;
-    if (fbw <= 0 || fbh <= 0) {
-        return NJ_OK;
-    }
-    /* The reference paints framebuffer coordinates, not Graphics user space:
-     * the loaded translate is already folded into the clip, so drop it from
-     * this local copy (it is never stored back). */
-    gfx.translate_x = 0;
-    gfx.translate_y = 0;
-    /* Micro3D renders into its own framebuffer: Java Graphics setClip() must
-     * not crop the 3D picture, so the batch draws against the whole surface.
-     * (The load above read the clip; it is replaced here in the local copy
-     * only and never stored back.) */
-    nj_gfx_set_clip(&gfx, 0, 0, (int)fbw, (int)fbh);
-
-    if ((proj & M3_PROJ_MODE_MASK) == (M3_PROJ_FOV & M3_PROJ_MODE_MASK)) {
-        double scale;
-
-        if (near_z >= far_z || near_z < 1 || far_z > 32767 ||
-            angle < 1 || angle > 2047) {
-            return NJ_OK;           /* no valid perspective to project with */
-        }
-        scale = 0.5 / tan(((double)angle) / 4096.0 * 3.14159265358979323846);
-        kx = (nj_s4)(((double)fbw) * scale);
-        ky = kx;
-        perspective = 1;
-    } else {
-        /* Parallel projection: the layout scale IS the 12.12 multiplier. */
-        kx = sx;
-        ky = sy;
-    }
-
-    /* Effect transparency only matters for the material blend bits. */
-    semi = m3_get(vm, fx, "_semi") != 0;
-    bm = semi ? (command & M3_PATTR_BLEND_MASK) : 0;
-    if (bm == M3_PATTR_BLEND_ADD || bm == M3_PATTR_BLEND_SUB) {
-        /* nj_gfx has no additive/subtractive blend.  The reference would
-         * draw these primitives, so the honest result is no picture, not an
-         * opaque approximation that claims support it does not have. */
-        return NJ_OK;
-    }
-    if (bm == M3_PATTR_BLEND_HALF) {
-        blend = 1;
-        nj_gfx_set_blend(&gfx, NJ_BLEND_SRC_OVER);
-    } else {
-        nj_gfx_set_blend(&gfx, NJ_BLEND_NONE);
-    }
-
-    for (i = 0; i < count; i++) {
-        const nj_s4 *base = vp + i * vtx_per * 3;
-        m3_vtx v[4];
-        int j;
-
-        if (color_type == M3_PDATA_COLOR_CMD) {
-            color = 0xFF000000u | (((nj_u4)cp[0]) & 0x00FFFFFFu);
-        } else {
-            color = 0xFF000000u | (((nj_u4)cp[i]) & 0x00FFFFFFu);
-        }
-        if (blend) {
-            color = (color & 0x00FFFFFFu) | 0x80000000u;
-        }
-        nj_gfx_set_color(&gfx, color);
-
-        if (prim == M3_PRIM_POINTS) {
-            nj_s4 x, y;
-
-            m3_xform(m, base, &v[0]);
-            if (perspective &&
-                (v[0].z < near_z || v[0].z > far_z)) {
-                continue;
-            }
-            m3_project(&v[0], perspective, kx, ky, cx, cy, &x, &y);
-            if (x < 0 || x >= fbw || y < 0 || y >= fbh) {
-                continue;
-            }
-            nj_gfx_pixel(&gfx, x, y);
-        } else if (prim == M3_PRIM_LINES) {
-            nj_s4 x1, y1, x2, y2;
-
-            m3_xform(m, base, &v[0]);
-            m3_xform(m, base + 3, &v[1]);
-            if (perspective && !m3_clip_line(&v[0], &v[1], near_z, far_z)) {
-                continue;
-            }
-            m3_project(&v[0], perspective, kx, ky, cx, cy, &x1, &y1);
-            m3_project(&v[1], perspective, kx, ky, cx, cy, &x2, &y2);
-            /* Reference culls a segment only when BOTH endpoints are outside
-             * the same framebuffer bound; nj_gfx clips the rest. */
-            if ((x1 < 0 && x2 < 0) || (x1 >= fbw && x2 >= fbw) ||
-                (y1 < 0 && y2 < 0) || (y1 >= fbh && y2 >= fbh)) {
-                continue;
-            }
-            nj_gfx_line(&gfx, x1, y1, x2, y2);
-        } else {
-            /* Triangles and quads.  A quad is two triangles with the
-             * reference's (0,1,3)/(1,2,3) split, not a triangle strip. */
-            for (j = 0; j < (int)vtx_per; j++) {
-                m3_xform(m, base + j * 3, &v[j]);
-            }
-            /* Quad split first, clip second: each of the reference's two
-             * triangles is clipped independently, never as one polygon. */
-            {
-                int nt = (vtx_per == 4) ? 2 : 1;
-                int t;
-
-                for (t = 0; t < nt; t++) {
-                    const m3_vtx *ta = &v[t == 0 ? 0 : 1];
-                    const m3_vtx *tb = &v[t == 0 ? 1 : 2];
-                    const m3_vtx *tc = &v[vtx_per == 4 ? 3 : 2];
-
-                    if (perspective) {
-                        vm->tris += (nj_u8)m3_draw_clipped_tri(
-                            &gfx, ta, tb, tc, near_z, far_z, kx, ky, cx, cy);
-                    } else {
-                        m3_fill_tri(&gfx, ta, tb, tc, 0, kx, ky, cx, cy);
-                        vm->tris++;
-                    }
-                }
-            }
-        }
-    }
-    return NJ_OK;
+    return m3_scene_primitives(vm, args);
 }
+
+#include "nj_mascot_scene.inc"
+#include "nj_mascot_commands.inc"
 
 /* ------------------------------------------------------------------ */
 /* Tables                                                             */
@@ -1755,6 +1321,18 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_V3, "<init>", "(L" NJ_C_V3 ";)V", mascot_v3_init_copy },
     { NJ_C_V3, "set", "(III)V", mascot_v3_set },
     { NJ_C_V3, "unit", "()V", mascot_v3_unit },
+    { NJ_C_V3, "set", "(L" NJ_C_V3 ";)V", mascot_v3_init_copy },
+    { NJ_C_V3, "innerProduct", "(L" NJ_C_V3 ";L" NJ_C_V3 ";)I", mascot_v3_inner_static },
+    { NJ_C_V3, "outerProduct", "(L" NJ_C_V3 ";L" NJ_C_V3 ";)L" NJ_C_V3 ";", mascot_v3_outer_static },
+    { NJ_C_V3, "outerProduct", "(L" NJ_C_V3 ";)V", mascot_v3_outer_in },
+    { NJ_C_XF, "set", "(L" NJ_C_XF ";)V", mascot_xf_set },
+    { NJ_C_XF, "mul", "(L" NJ_C_XF ";L" NJ_C_XF ";)V", mascot_xf_multiply },
+    { NJ_C_XF, "lookAt", "(L" NJ_C_V3 ";L" NJ_C_V3 ";L" NJ_C_V3 ";)V", mascot_xf_set_view },
+    { NJ_C_XF, "setRotationX", "(I)V", mascot_xf_rot_x },
+    { NJ_C_XF, "setRotationY", "(I)V", mascot_xf_rot_y },
+    { NJ_C_XF, "setRotationZ", "(I)V", mascot_xf_rot_z },
+    { NJ_C_XF, "transform", "(L" NJ_C_V3 ";)L" NJ_C_V3 ";", mascot_xf_transform_copy },
+    { NJ_C_XF, "transPoint", "(L" NJ_C_V3 ";)L" NJ_C_V3 ";", mascot_xf_transform_copy },
     { NJ_C_V3, "innerProduct", "(L" NJ_C_V3 ";)I", mascot_v3_inner },
     { NJ_C_V3, "outerProduct", "(L" NJ_C_V3 ";L" NJ_C_V3 ";)V", mascot_v3_outer },
 
@@ -1776,16 +1354,18 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_U3D, "cos", "(I)I", mascot_u3d_cos },
 
     { NJ_C_FIG, "<init>", "()V", mascot_noop },
-    { NJ_C_FIG, "<init>", "([B)V", mascot_fig_data },
-    { NJ_C_FIG, "setTexture", "(L" NJ_C_TEX ";)V", mascot_fig_tex },
-    { NJ_C_FIG, "setTexture", "([L" NJ_C_TEX ";)V", mascot_fig_texs },
-    { NJ_C_FIG, "setPosture", "(L" NJ_C_AT ";II)V", mascot_fig_posture },
+    { NJ_C_FIG, "<init>", "([B)V", mascot_scene_fig_bytes },
+    { NJ_C_FIG, "setTexture", "(L" NJ_C_TEX ";)V", mascot_scene_fig_tex },
+    { NJ_C_FIG, "setTexture", "([L" NJ_C_TEX ";)V", mascot_scene_fig_texs },
+    { NJ_C_FIG, "setPosture", "(L" NJ_C_AT ";II)V", mascot_scene_fig_posture },
     { NJ_C_FIG, "setLayout", "(L" NJ_C_FL ";)V", mascot_fig_layout },
 
     { NJ_C_FL, "<init>", "()V", mascot_fl_init },
     { NJ_C_FL, "setAffineTrans", "(L" NJ_C_XF ";)V", mascot_fl_xf },
     { NJ_C_FL, "getAffineTrans", "()L" NJ_C_XF ";", mascot_fl_get_xf },
     { NJ_C_FL, "setPerspective", "(III)V", mascot_fl_perspective },
+    { NJ_C_FL, "setPerspective", "(IIII)V", mascot_fl_perspective_size },
+    { NJ_C_FL, "setParallelSize", "(II)V", mascot_fl_parallel_size },
     { NJ_C_FL, "setCenter", "(II)V", mascot_fl_center },
     { NJ_C_FL, "setScale", "(II)V", mascot_fl_scale },
 
@@ -1793,7 +1373,7 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_TEX, "<init>", "(" M3_IMG ")V", mascot_tex_from_image },
     { NJ_C_TEX, "<init>", "(" M3_IMG "II)V", mascot_tex_from_image },
 
-    { NJ_C_TEX, "<init>", "([BZ)V", mascot_tex_init_bytes },
+    { NJ_C_TEX, "<init>", "([BZ)V", mascot_scene_tex_bytes },
     { NJ_C_FX, "<init>", "(L" NJ_C_LIG ";IZL" NJ_C_TEX ";)V", mascot_fx_init },
     { NJ_C_LIG, "<init>", "()V", mascot_noop },
     { NJ_C_LIG, "<init>", "(L" NJ_C_V3 ";II)V", mascot_lig_init },
@@ -1801,24 +1381,45 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_LIG, "setAmbIntensity", "(I)V", mascot_lig_amb },
     { NJ_C_LIG, "setDirIntensity", "(I)V", mascot_lig_dif },
 
-    { NJ_C_FX, "<init>", "()V", mascot_noop },
+    { NJ_C_FX, "<init>", "()V", mascot_scene_fx_default },
     { NJ_C_FX, "setLight", "(L" NJ_C_LIG ";)V", mascot_fx_light },
+    { NJ_C_FX, "getLight", "()L" NJ_C_LIG ";", mascot_fx_get_light },
     { NJ_C_FX, "setSphereMap", "(L" NJ_C_TEX ";)V", mascot_fx_sphere },
-    { NJ_C_FX, "setShading", "(I)V", mascot_fx_shading },
+    { NJ_C_FX, "setShading", "(I)V", mascot_scene_fx_shading },
     { NJ_C_FX, "setSemiTransparentEnabled", "(Z)V", mascot_fx_semi },
 
-    { NJ_C_AT, "<init>", "([BII)V", mascot_at_init },
-    { NJ_C_AT, "<init>", "([B)V", mascot_at_data },
-    { NJ_C_AT, "getNumFrame", "(I)I", mascot_at_num_frame },
-    { NJ_C_AT, "getFrameValue", "(II)I", mascot_at_frame_value },
+    { NJ_C_AT, "<init>", "([BII)V", mascot_scene_at_slice },
+    { NJ_C_AT, "<init>", "([B)V", mascot_scene_at_bytes },
+    { NJ_C_AT, "getNumFrame", "(I)I", mascot_scene_at_frames },
+    { NJ_C_AT, "getFrameValue", "(II)I", mascot_scene_at_pattern },
 
     { NJ_C_G3D, "<init>", "()V", mascot_noop },
-    { NJ_C_G3D, "bind", "(Ljavax/microedition/lcdui/Graphics;)V", mascot_g3d_bind },
-    { NJ_C_G3D, "release", "(Ljavax/microedition/lcdui/Graphics;)V", mascot_g3d_release },
-    { NJ_C_G3D, "flush", "()V", mascot_noop },
+    { NJ_C_G3D, "bind", "(Ljavax/microedition/lcdui/Graphics;)V", mascot_scene_bind },
+    { NJ_C_G3D, "release", "(Ljavax/microedition/lcdui/Graphics;)V", mascot_scene_release },
+    { NJ_C_G3D, "flush", "()V", mascot_scene_flush },
+    { NJ_C_G3D, "drawCommandList", "(L" NJ_C_TEX ";IIL" NJ_C_FL ";L" NJ_C_FX ";[I)V", mascot_cmd_draw_list },
+    { NJ_C_G3D, "drawCommandList", "([L" NJ_C_TEX ";IIL" NJ_C_FL ";L" NJ_C_FX ";[I)V", mascot_cmd_draw_list_array },
     { NJ_C_G3D, "renderPrimitives",
       "(L" NJ_C_TEX ";IIL" NJ_C_FL ";L" NJ_C_FX ";II[I[I[I[I)V", mascot_g3d_renderPrimitives },
-    { NJ_C_G3D, "renderFigure", "(L" NJ_C_FIG ";IIL" NJ_C_FL ";L" NJ_C_FX ";)V", mascot_noop }
+    { NJ_C_G3D, "renderFigure", "(L" NJ_C_FIG ";IIL" NJ_C_FL ";L" NJ_C_FX ";)V", mascot_scene_figure },
+    { NJ_C_G3D, "drawFigure", "(L" NJ_C_FIG ";IIL" NJ_C_FL ";L" NJ_C_FX ";)V", mascot_scene_draw_figure },
+    { NJ_C_FIG, "<init>", "(Ljava/lang/String;)V", mascot_scene_fig_resource },
+    { NJ_C_FIG, "dispose", "()V", mascot_scene_fig_dispose },
+    { NJ_C_FIG, "getNumPattern", "()I", mascot_scene_fig_patterns },
+    { NJ_C_FIG, "setPattern", "(I)V", mascot_scene_fig_pattern },
+    { NJ_C_FIG, "getNumTextures", "()I", mascot_scene_fig_tex_count },
+    { NJ_C_FIG, "selectTexture", "(I)V", mascot_scene_fig_tex_select },
+    { NJ_C_FIG, "getTexture", "()L" NJ_C_TEX ";", mascot_scene_fig_tex_get },
+    { NJ_C_AT, "<init>", "(Ljava/lang/String;)V", mascot_scene_at_resource },
+    { NJ_C_AT, "dispose", "()V", mascot_scene_dispose_data },
+    { NJ_C_AT, "getNumAction", "()I", mascot_scene_at_count },
+    { NJ_C_AT, "getNumActions", "()I", mascot_scene_at_count },
+    { NJ_C_AT, "getNumFrames", "(I)I", mascot_scene_at_frames },
+    { NJ_C_TEX, "<init>", "(Ljava/lang/String;Z)V", mascot_scene_tex_resource },
+    { NJ_C_TEX, "dispose", "()V", mascot_scene_dispose_data },
+    { NJ_C_FX, "setShadingType", "(I)V", mascot_scene_fx_shading },
+    { NJ_C_FX, "setToonParams", "(III)V", mascot_scene_fx_toon },
+    { NJ_C_FX, "setThreshold", "(III)V", mascot_scene_fx_toon }
 };
 
 const int nj_lib_mascot_count =

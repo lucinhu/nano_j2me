@@ -132,6 +132,7 @@ set(NJ_JIT_HOT_THRESHOLD 8 CACHE STRING "Hits before compiling a bytecode block"
 set(NJ_JIT_MAX_BLOCK_INSNS 32 CACHE STRING "Maximum bytecodes per native block")
 set(NJ_JIT_MAX_CODE_BYTES 2048 CACHE STRING "Maximum native bytes per block")
 set(NJ_MASCOT_FAST_FIELDS 1 CACHE STRING "Use Micro3D receiver classes directly for field access (no cache)")
+set(NJ_MASCOT_MAX_QUEUED_TRIANGLES 16384 CACHE STRING "Maximum deferred Micro3D primitives per Graphics3D")
 
 # ---------------------------------------------------------------------
 # The runtime
@@ -183,6 +184,9 @@ set(NJ_SOURCES
   src/midp/nj_lib_wireless.c
   src/midp/nj_lib_m3g.c
   src/midp/nj_lib_mascot.c
+  src/midp/nj_mascot_model.c
+  src/midp/nj_mascot_anim.c
+  src/midp/nj_mascot_raster.c
   # ---- graphics ----
   src/gfx/nj_gfx.c
   src/gfx/nj_text.c
@@ -247,6 +251,7 @@ target_compile_definitions(nj2me PUBLIC
   NJ_JIT_MAX_CODE_BYTES=${NJ_JIT_MAX_CODE_BYTES}
   NJ_M3G_FAST_PATHS=${NJ_M3G_FAST_PATHS}
   NJ_MASCOT_FAST_FIELDS=${NJ_MASCOT_FAST_FIELDS}
+  NJ_MASCOT_MAX_QUEUED_TRIANGLES=${NJ_MASCOT_MAX_QUEUED_TRIANGLES}
   NJ_ENABLE_FONT_CJK=${NJ_ENABLE_FONT_CJK}
   NJ_ENABLE_FONT_CJK_AA=${NJ_ENABLE_FONT_CJK_AA}
   NJ_ENABLE_PNG=${NJ_ENABLE_PNG}
@@ -674,6 +679,11 @@ if(NJ_BUILD_TESTS)
   nj_add_test(test_natives   tests/test_natives.c)
   nj_add_test(test_m3g       tests/test_m3g.c)
   nj_add_test(test_mascot    tests/test_mascot.c)
+  nj_add_test(test_mascot_scene tests/test_mascot_scene.c)
+  nj_add_test(test_mascot_model tests/test_mascot_model.c)
+  nj_add_test(test_mascot_anim  tests/test_mascot_anim.c)
+  nj_add_test(test_mascot_raster tests/test_mascot_raster.c)
+  nj_add_test(test_mascot_commands tests/test_mascot_commands.c)
   nj_add_test(test_string    tests/test_string.c)
   nj_add_test(test_m3g_file tests/test_m3g_file.c)
 

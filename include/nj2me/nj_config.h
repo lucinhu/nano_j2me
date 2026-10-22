@@ -607,6 +607,15 @@
 #  define NJ_MASCOT_FAST_FIELDS 1
 #endif
 
+/* Deferred Micro3D rendering grows its queue on demand. This caps queued
+ * primitives per Graphics3D (64 bytes/primitive, plus a 4-byte sort index;
+ * allocated buffers round up to powers of two). Lower the cap for small heaps;
+ * exhaustion throws OutOfMemoryError instead of silently dropping geometry.
+ * No queue is allocated until rendering is requested. */
+#ifndef NJ_MASCOT_MAX_QUEUED_TRIANGLES
+#  define NJ_MASCOT_MAX_QUEUED_TRIANGLES 16384u
+#endif
+
 /* Assertions (always compiled out unless explicitly enabled). */
 #ifndef NJ_ASSERT_ENABLED
 #  define NJ_ASSERT_ENABLED 0

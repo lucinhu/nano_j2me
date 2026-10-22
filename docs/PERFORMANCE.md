@@ -599,10 +599,11 @@ matches. An earlier run of the same baseline binary exhibits the same timer
 variation. Native/bytecode counts vary slightly with that clock too, so this
 replay verifies behaviour and visuals, not game FPS improvement.
 
-Micro3D remains a separate compatibility limitation: the deeper Devil May Cry
-replay reaches a missing `Figure(String)` constructor, and `renderFigure` is
-still unimplemented. Its menu/intro cannot measure Micro3D rendering throughput.
-The corrected scope is recorded in `docs/COMPATIBILITY.md`.
+At this stage Micro3D remained a separate compatibility limitation: the deeper
+Devil May Cry replay reached a missing `Figure(String)` constructor, and
+`renderFigure` was unimplemented. The later model-rendering pass below addresses
+that gap. The menu/intro results in this section are not a Micro3D throughput
+measurement.
 
 Local evidence is under `.local-tools/debug-runs/perf-round5-3d-20261022/`:
 `final-ab/results.json` and its logs/images, `measure-renderer.py`,
@@ -674,9 +675,9 @@ figures do not claim the entire pass is RAM-neutral.
 Local source snapshots, all raw measurements, the independent math oracle,
 and section/stack comparisons are under
 `.local-tools/debug-runs/compat-round6-20261022/lead/` (`measure-math-v2.py`,
-`math-bench-v2.c`, `math-ab-v2.json`, `math-footprint.json`). The original Micro3D model/animation
-rendering gaps still prevent using Devil May Cry gameplay as a performance
-benchmark; see `docs/COMPATIBILITY.md` for the exact supported subset.
+`math-bench-v2.c`, `math-ab-v2.json`, `math-footprint.json`). These measurements
+predate model/animation rendering support; they do not measure the subsequent
+Devil May Cry gameplay path or its corrected matrix arithmetic.
 
 ### Integrated compatibility costs and checks
 
@@ -749,6 +750,116 @@ speed baseline, so no game FPS gain is inferred. The complete replay and a
 screenshot are documented in `docs/COMPATIBILITY.md`; independent configuration,
 sanitizer and final texture-delta results are retained in
 `.local-tools/debug-runs/compat-round6-20261022/verify/`.
+
+## Micro3D models, animation and deferred rendering (2026-10-22)
+
+The next pass makes the model-rendering path usable. The original `7b12084`
+executable could not construct DMC's resource-backed Figures and emitted no
+model triangles. That is a compatibility baseline, not a valid speed baseline.
+The clean verification control is `7a13dad`, which also contains the intervening
+RV32/ARM64 JIT work with JIT disabled. Only the Micro3D overlay is compared here;
+concurrent uncommitted JIT changes are excluded from the clean builds.
+
+The implementation reduces repeated work and avoids expanding assets into a
+large object graph:
+
+* MBAC positions, normals and polygon tuples remain 16-bit values in one
+  offset-based blob. Dante's 18,757-byte model becomes a 32,440-byte blob.
+* MTRA keeps packed source curves plus small action/bone indices. It uses binary
+  search for keys and evaluates the requested pose instead of retaining every
+  frame's matrices. The largest DMC sample is 123,445 bytes encoded and 137,969
+  bytes stored; the main Dante sample is 98,175 and 112,699 bytes respectively.
+* A submitted model transforms each vertex once. One reusable scratch array per
+  Graphics3D holds 32 bytes per vertex and 48 bytes per bone. Successive Figures
+  share it rather than each retaining a transformed copy.
+* The queue stores a 64-byte primitive record. Sorting uses 4-byte indices,
+  with an iterative heapsort and submission order as the tie breaker. It moves
+  indices rather than full records and requires no recursive sort stack.
+* Texture decoding retains palette indices for model textures. Rasterization
+  uses fixed-point coordinates/attributes without allocating per pixel or
+  triangle. The normal model path has no depth buffer.
+
+These are implementation properties, not a measured percentage speedup. The
+60/150-second paced game replays check interaction and rendering; their frame
+counts do not establish unthrottled throughput or MCU performance.
+
+Buffers grow geometrically on demand and remain attached to Graphics3D for
+reuse. `flush`/`release` clear queued items and texture references; they do not
+shrink allocated scratch/queue buffers. With the default
+`NJ_MASCOT_MAX_QUEUED_TRIANGLES=16384`, queue records can occupy 1 MiB and sort
+indices 64 KiB at capacity, before array headers, scratch, textures and models.
+This is an upper bound, not an allocation at startup. A smaller cap bounds that
+part of the working set but can make complex frames throw `OutOfMemoryError`.
+The field-lookup switch and `NJ_ENABLE_MASCOT=0` remain available.
+
+The pure parsers, rasterizer and scene state introduce no writable globals.
+Model/animation/texture blobs use offsets or raw values, with owning Java array
+references for GC. Native pointers temporarily spanning buffer growth rely on
+the current non-moving collector; a future moving collector must reacquire them
+after allocation. No claim of whole-runtime RAM neutrality follows from these
+choices: the newly supported APIs and rendering state have real storage costs.
+
+### Measured storage and stack costs
+
+Independent x86-64 Release builds use the same clean `7a13dad` base and an
+18-file frozen overlay. JIT is disabled in both. These are host ELF sizes,
+not an MCU flash measurement:
+
+| Resource | Control | Model-rendering build | Change |
+|---|---:|---:|---:|
+| `.text` | 1,066,922 B | 1,144,554 B | +77,632 B |
+| `.rodata` | 1,160,480 B | 1,164,032 B | +3,552 B |
+| Relocation-read-only tables | 158,912 B | 161,056 B | +2,144 B |
+| `.data` / `.bss` | 16 / 6,688 B | 16 / 6,688 B | 0 |
+| Executable file | 3,048,952 B | 3,146,200 B | +97,248 B |
+| Host allocations after creating a 2 MiB VM | 2,637,008 B | 2,639,840 B | +2,832 B |
+| Java heap used/peak at that point | 2,224 / 2,224 B | 2,224 / 2,224 B | 0 |
+
+The additional host allocation is API registration metadata: native bindings
+increase from 1,760 to 1,795, with the same 260 classes and 878 live host blocks.
+Graphics3D instance payload grows from 48 to 96 bytes; Figure grows from 96 to
+112 bytes. ActionTable, Texture, Effect3D, Light, Vector3D, FigureLayout and
+AffineTrans retain their previous payload sizes. Asset blobs and reusable
+render buffers are separate, demand-driven Java heap allocations. The
+4,500-frame Galaxy on Fire run uses/peaks at 2,598,144/2,602,064 bytes; the
+1,800-frame DMC movement run uses/peaks at 2,295,184/3,002,928 bytes. Neither can
+be compared as a memory optimization against the old non-rendering path.
+
+Compiler stack-usage files give a largest single Micro3D function frame of
+1,056 bytes, up from 720. The largest inspected Micro3D helper-chain subtotal
+is 1,904 bytes, up from 768, along primitive submission and buffer growth.
+Other subtotals include model submission at 1,440 bytes, `drawFigure` at 1,488,
+and flush/rasterization at 1,104. There is no recursive sort or variable-length
+stack allocation. These are native helper subtotals, not whole-VM stack peaks;
+allocator/GC and interpreter callers need additional margin. Embedded hardware
+stack margins have not been measured. The library-off switch removes the Java
+Micro3D path; the field-access switch alone does not remove these new costs.
+
+### Validation and practical limits
+
+All 99 default ctests pass. The first run passed 94; five shell tests assumed
+`<source>/build/nj2me` despite an out-of-tree build. Adding a scratch-only link
+to the exact tested executable made those five pass, without a source change.
+Clean builds also cover fast-fields-off, Micro3D-off, float-off/M3G-off, and the
+combined float/fast-fields configuration. The focused default suites pass
+233 API checks, 127 scene checks, 4,513 model checks, 71 raster checks and 36
+command-list checks, plus the animation suite, 548 M3G checks and 146 demo
+checks. Targeted ASan/UBSan runs report no findings. The no-writable-statics
+check passes for 63 objects.
+
+The 27-value desktop-JVM digest remains identical. The interpreter benchmark
+still prints `BENCH sum=-136042548 s=5`, executes 70,514,376 dispatches and uses
+92,432/92,432 heap bytes. This establishes interpreter regression invariants;
+it does not establish a Micro3D throughput improvement.
+
+Local evidence lives under `.local-tools/debug-runs/micro3d-round7-20261022/`:
+`model/REPORT.md`, `anim/REPORT.md`, `raster/`, `api/REPORT-task31.md`,
+`games/DMC-CANDIDATE2.md`, `games/GOF-CANDIDATE3.md` and
+`verify/REPORT-round7.md`. Both original game JARs are unchanged. DMC reaches
+3D combat, directional movement and attack, then death and retry. Galaxy on
+Fire reaches rendered space flight after its introductory sequence. Mission
+completion and save/continue are outside this evidence. See
+`docs/COMPATIBILITY.md` for gameplay limits and the supported command-list subset.
 
 ## Three VM bugs the differential harness found, and none is about speed
 

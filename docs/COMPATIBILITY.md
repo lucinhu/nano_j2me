@@ -23,12 +23,13 @@ the pass repeated unless the code path it exercised changed.
 | JSR 120/205 (messaging) | classes present; connections refuse the same way |
 | JSR 135 (Mobile Media) | tone and sampled PCM playback, WAV from a stream or a JAR resource, MIDI rendered by the runtime itself (or by the platform's synthesizer through the port's MIDI hooks), and AMR narrowband decoded by the runtime itself; no video. MP3, AAC and anything else the platform can decode arrive through `nj_port.audio_decode`, which is what the Android port does with MediaCodec |
 | JSR 184 (Mobile 3D Graphics) | the classes, the scene graph, the transform maths, a `.m3g` container parser, the member surface real titles use, and a software rasteriser with a depth buffer, perspective-correct texturing (nearest, bilinear, and a level chain built from the image for minified surfaces), back-face culling and per-vertex lighting — all behind `NJ_ENABLE_M3G`. `浴火银河2完整版_7689` renders its 3D scenes through it (thousands of triangles, `tris=` in `--stats`), and `3D拉力赛-进化汉化版_6366` now draws its race with blue sky and mountains, textured road and markings, rear car livery and the HUD: 120,397 triangles in 2,700 paced frames, including acceleration and steering (`docs/images/rally3d-race.png`); the rest of the collected titles keep their 3D behind menus, so each of them is judged by its 2D interface (see below) |
-| Mascot Capsule Micro3D v3 | partial, behind `NJ_ENABLE_MASCOT`: fixed-point transform maths and an untextured primitive renderer with pixel tests. Full Figure model/animation and texture rendering remain gaps. Short startup runs do not reach the renderer; deeper Devil May Cry replay reaches a missing Figure constructor before gameplay (see below) |
+| Mascot Capsule Micro3D v3 | behind `NJ_ENABLE_MASCOT`: MBAC model loading, MTRA skeletal animation, indexed BMP textures, fixed-point transforms, lighting, depth-sorted deferred rendering and primitive drawing. Devil May Cry reaches interactive combat; see the replay evidence and command-list limitations below |
 
 A missing class or member raises a named linkage error. A present member does
 not guarantee complete behavior: some optional APIs still contain stubs, and
-unsupported Micro3D draw modes currently produce no pixels. The API-specific
-notes below identify those gaps. Bluetooth classes instead report unavailable
+Micro3D's command-list interpreter supports a documented subset. Unsupported
+command types raise `UnsupportedOperationException`. The API-specific notes
+below identify those gaps. Bluetooth classes instead report unavailable
 hardware at run time, and sensors absent from a port are omitted from
 `findSensors()`.
 
@@ -1646,7 +1647,9 @@ reports a comforting nothing:
   titles that can reach that code were re-run at it rather than re-sweeping all
   395.
 
-## The Mascot Capsule rasterizer cannot be validated by this corpus
+## Micro3D: startup probes versus actual gameplay
+
+### Historical probes, before model rendering was implemented
 
 Four collected titles reference `com.mascotcapsule.micro3d.v3`:
 鬼泣3D中文版_3376, 生化危机3D(CAPCOM经典)_3671, 浴火银河_10189, 浴火银河_3621.
@@ -1673,8 +1676,8 @@ A deeper replay on 2026-10-22 reaches mission 1 loading in
 `com/mascotcapsule/micro3d/v3/Figure.<init>(Ljava/lang/String;)V` in
 `DevilMayCry_J_Canvas.st_init__reloadBac(I)V` at pc 155. The 1,800-frame,
 30-FPS run ends on `paintState_Error`, with `tris=0` and `m3g=0`.
-This is an API compatibility blocker before real 3D gameplay; the current
-`renderFigure` implementation is also a no-op. The software primitive path
+This was an API compatibility blocker before real 3D gameplay; at that revision
+`renderFigure` was also a no-op. The software primitive path
 has unit-test coverage, but these runs establish neither Micro3D gameplay
 support nor a game performance improvement. Logs, input scripts and frames
 are preserved locally under
@@ -1695,9 +1698,115 @@ an allocation. `getAffineTrans()` materializes and stores that mutable identity
 only when Java requests it; repeated calls return the same object, and
 `setAffineTrans(null)` resets the layout to identity.
 
-The supported blend modes are opaque and a HALF approximation using alpha
-128/255. This renderer has no depth buffer, sorting or back-face culling.
-Textured primitives, point sprites, lighting and ADD/SUB blending still produce
-no pixels after validation. Figure/MBAC model decoding, MTRA animation,
-`renderFigure` and queued flush remain unsupported. Correct primitive pixels
-do not establish that the model-based games above are playable.
+That intermediate renderer supported opaque and approximate HALF blending,
+but still lacked models, textures, lighting and sorting. The model-rendering
+pass below supersedes those limitations.
+
+### Model rendering and API completion (2026-10-22)
+
+The runtime now decodes MBAC v2–v5 models and MTRA v2–v5 animation tables from
+byte arrays or JAR resource names. `Figure.setPosture` evaluates the bone pose
+and dynamic pattern at a 16.16 frame value. `ActionTable.getNumFrames` returns
+that same fixed-point unit. Texture loading supports uncompressed 8-bit indexed
+BMPs with CORE/INFO40 headers, padded model textures and 64×64 environment maps.
+It does not provide a general PNG/JPEG `Texture` decoder.
+
+`renderFigure` and `renderPrimitives` submit transformed, clipped primitives to
+a queue. `flush` draws them far to near; equal-depth items retain submission
+order. `drawFigure` submits and flushes. Bind captures the Graphics clip;
+rendering does not overwrite the Java Graphics fields. Model and primitive
+quads preserve their different reference diagonals. The rasterizer supports
+texture colour keys, opaque/HALF/ADD/SUB blending, smooth and toon lighting,
+environment maps and point sprites. This is painter sorting, not a depth buffer;
+intersecting polygons have the same ordering limitations as the reference.
+
+The API additions include resource constructors and disposal, model patterns
+and texture selection, action counts and frame queries, vector copy and static
+products, `AffineTrans.lookAt`, copy/multiply/rotation aliases, `Effect3D.getLight`,
+parallel-size and perspective-width/height projection. Correct Java integer
+wrapping, vector normalization, view translation and matrix rounding matter:
+loading the same models with the old transform arithmetic produced unusable
+camera/character positions.
+
+`drawCommandList` supports both Texture and Texture[] overloads. Its implemented
+commands are VERSION, END, NOP, FLUSH and LINES, including per-command/per-face
+colours. The payload starts immediately after the command word; there is no
+stored offset word. END leaves queued items for explicit `flush`. Other known
+command types throw `UnsupportedOperationException`; unknown commands and
+truncated payloads are rejected. Array-of-transforms selection and the remaining
+state-changing command-list operations are not implemented. Degenerate zero-size
+parallel/width-height projections currently produce no draw; the reference can
+retain a previously valid projection. Cross-architecture save-state portability
+for the native-endian decoded blobs has not been established.
+
+The decoders and renderer follow the MIT-licensed FreeJ2ME-Plus implementation
+at `baca76a4dda6f30abac67fb4a3db009eed05f91c`; notices are retained in the source.
+Independent comparisons cover all 26 DMC models and 17 DMC animations, all 25
+Galaxy on Fire animations, and 44 texture/raster outputs. Hand-built fixtures
+exercise errors, source ownership, GC lifetime, deferred drawing, snapshots,
+sorting, blending and pixels. These checks do not establish full API conformance
+or completion of either game.
+
+Memory is allocated on demand: compact model/animation/texture blobs, reusable
+vertex/bone scratch, a primitive queue and sort indices. Queue and scratch
+buffers remain attached to Graphics3D for reuse; there is no depth buffer. `NJ_MASCOT_MAX_QUEUED_TRIANGLES` defaults to
+16384 and limits each Graphics3D queue; lowering it reduces the maximum queue
+budget but may cause `OutOfMemoryError` in complex scenes. Exceeding the limit
+never silently discards geometry. `NJ_ENABLE_MASCOT=0` removes the optional Java
+library; `NJ_MASCOT_FAST_FIELDS=0` selects the general field lookup path.
+
+### Devil May Cry: interactive combat verified
+
+The original `鬼泣3D中文版_3376.jar` (SHA-256
+`ddc43800481c4ea831c81abcde3788d5981437f7ceefa81df31853f4dd51fd63`)
+now reaches mission 1 combat. Paced 240×320 headless replays with fresh RMS
+verify title/menu/mission selection, the briefing, animated Dante and enemies,
+directional movement and turning, attack, death, and retry back into combat.
+Two 1,800-frame runs emitted 381,180 and 410,366 triangles; the 4,500-frame
+extended replay emitted 1,468,142 and exercised death/retry. A separate 900-frame
+smoke on the final clean-build executable again reached the battle scene,
+movement and attack (121,693 triangles, no uncaught exception). These counts
+show that model rendering actually ran; they are not a speed comparison.
+
+![Dante attacking during the verified mission-1 replay](images/dmc-micro3d-combat.png)
+
+Only the already-caught startup `EOFException` was logged; there was no uncaught
+exception, missing-method error or incompatible-class error in those runs.
+The game polls `GameCanvas.getKeyStates()`, so directional input needs explicit
+`frame:key:down` / `frame:key:up` holds. A one-frame tap can be missed. Both the
+reference and our runtime were driven into gameplay; their real-time sequences
+are not expected to have identical full-frame hashes.
+
+This establishes a working initial gameplay loop, not completion of the game.
+The pause-menu flow on the final candidate, opening the arena door, bosses,
+mission completion and save/continue have not been verified. The reproducible
+commands, held-input scripts, logs and death/retry evidence are recorded locally
+in `.local-tools/debug-runs/micro3d-round7-20261022/games/DMC-CANDIDATE2.md`.
+
+### Galaxy on Fire: space-flight scene verified
+
+The original `浴火银河_10189.jar` (SHA-256
+`513d3558b7d0edc119f632e62188e4639d1a6d02fc653f21a9456a6e908f5618`)
+also runs its Micro3D model path. A 4,500-frame, 30 FPS replay with fresh RMS
+passes the introduction and dialogue into the flight scene: ship, stations,
+asteroids, HUD and waypoint distances render, and menu/dialogue input advances
+the game. All 50 sampled frames contain content. It emits 732,695 triangles,
+with no uncaught exception, missing method or incompatible-class error. Its
+first-run missing-RMS exceptions are caught by the game. A separate 2,400-frame
+replay on the final clean-build executable again reaches flight (369,561
+triangles). Left/right holds visibly bank and turn the ship, unlike the earlier
+run without directional input; no claim is made about flight-model accuracy.
+
+![Galaxy on Fire ship and waypoint during the verified replay](images/gof-micro3d-flight.png)
+
+The planet's appearance and the fighter's framing differ in some wall-clock
+comparisons with FreeJ2ME-Plus. Those comparisons also show different waypoint
+distances, so the camera/game states are not identical. A bounded review found
+no confirmed projection or clipping cause; these observations remain unresolved,
+not a claim of pixel equivalence. Mission completion, combat success and saving
+have not been established by this replay. This is the original Galaxy on Fire
+Micro3D title, separate from the M3G-based Galaxy on Fire 2 discussed above.
+
+Reproduction, input scripts and comparison images are under
+`.local-tools/debug-runs/micro3d-round7-20261022/games/GOF-CANDIDATE3.md`;
+the bounded visual review is in `gof-audit/REPORT.md` under the same round directory.
