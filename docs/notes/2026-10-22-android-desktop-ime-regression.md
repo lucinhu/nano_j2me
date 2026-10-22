@@ -242,3 +242,33 @@ logcat 无 `FATAL EXCEPTION` / `UnsatisfiedLinkError`；JAR SHA-256 前后一致
 4. **没有真实 arm64 手机**：所有 Android 证据来自 API 26 x86_64 模拟器；
    真机的输入法与触摸行为可能不同。
 5. **Socket / HTTPS / UC 真实响应语法**在 Android 上仍未验证。
+
+## 用带 getKeyChar() 修复的 APK 复跑（第 6 次，2026-10-22 09:20–09:24）
+
+本轮运行时新增了 `Displayable.getKeyChar()`（见
+[getKeyChar 与自绘输入框](2026-10-22-keychar-and-canvas-text.md)），
+`nj_event` 增加了 `key_char` 字段，Android 的 JNI 桥**没有**填它（自绘 Canvas
+在 Android 上仍收不到字符），所以这一步只是确认**没有把已有的中文输入路径弄坏**。
+
+- APK：`build/android-classic/nj2me.apk` 1,292,512 B，SHA-256
+  `f9537fb3f83b085b97cb41f81cd8779e07e585cf667d5674eb567c6d9c63ee74`
+  （含 `ea0b7fa` 的 getKeyChar 修复）；`lib/x86_64/libnj2me.so` 1,563,656 B、
+  `lib/arm64-v8a/libnj2me.so` 1,706,696 B（NDK 30.0.16248370，API 21）。
+- `adb -s emulator-5560 install -r -t …` → Success（模拟器 `OpenHV_API26_googleapis`
+  仍在运行，全局代理仍是 `10.0.2.2:8000`，宿主代理在 127.0.0.1:8000 监听）。
+- 流程：LibraryActivity → 点 (160,165) → 长按 返回 (218,185) → 长按 游客注册
+  (160,283) → 长按 接受 (68,331) → 长按 游戏账号 (175,73) → `input text nihao`
+  → `input keyevent 62`（空格提交）→ `input keyevent 4`（收键盘）→
+  `input keyevent 82`（MENU = MIDP 左软键）。
+- 截图（`.local-tools/debug-runs/android-keychar-20261022/`）：
+
+  | 文件 | SHA-256 | 内容 | 与上一轮的关系 |
+  |---|---|---|---|
+  | `01-game.png` | `a44d9ff08ba4a32b8b2bd41d96315cb4ecc0fa2f87dfa81451c58be0a3a28f33` | splash | 与上一轮 `03-after-back.png` **逐字节一致** |
+  | `02-agreement.png` | `38f8fd2fed5b44ba3ea5708bc2f31565fceadd4a0ee25596344c65a1c9477546` | 注册协议 | 与上一轮 `04-agreement.png` **逐字节一致** |
+  | `03-form.png` | `9e313ddc816ef2993e906353b1f1dc45985cc67a6e148cf29388098795584307` | 游戏注册表单 | 与上一轮 `05-register-form.png` **逐字节一致** |
+  | `04-after-menu.png` | `46fc730bc67bb1ba8824517ae69920380f063fde070a7296fe395ec23bbca28a` | **游戏账号: 你好** | 与上一轮 `15-after-menu.png` **逐字节一致** |
+
+  最后一帧已用 `read_image` 目视确认：注册表单的「游戏账号」一栏是 **你好**。
+- 边界不变：仍然没有注册/登录成功，没有真机（arm64 手机）验证，
+  Android 侧自绘输入框收不到字符。
