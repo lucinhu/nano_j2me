@@ -350,9 +350,9 @@ script) gives 9 caught throws, 0 uncaught, 142 colours in frame 900 and a
 superinstr-off, and that title's own run-to-run spread (17-79 M bytecodes and
 5-12 k gfx calls on the SAME binary) is its timing dependence, not the switches.
 
-## Two VM bugs the differential harness found, and neither is about speed
+## Three VM bugs the differential harness found, and none is about speed
 
-A 5,555-case differential harness (`.local-tools/debug-runs/interp-diff-20261022/`)
+A 6,505-case differential harness (`.local-tools/debug-runs/interp-diff-20261022/`)
 runs the same classes on this VM and on a desktop HotSpot and compares every
 labelled value.  It reported nine mismatches, in two families, and neither was
 in a fused path:
@@ -382,13 +382,28 @@ the initialiser had run.  `nj_class_init()` now wraps a non-Error failure
 that state for a ready class.  The state reuses the existing byte and was
 already serialised as a `u16`, so neither RAM nor the save-state format moved.
 
-After the fixes the harness prints `ALL 5555 CASES MATCH` (9 mismatches before),
-the digest test still prints 19 identical values, `BENCH sum=-136042548 s=5` and
-`bytecodes=76,914,888` are unchanged, ctest is 92/92, and on the eight-title
-game set the two arms built from the same tree dump byte-identical frames -
-including 暗黑启示录2, whose frame-60 md5 is identical across three runs per arm.
-The harness compares values rather than frame counts, which is why it can see
-this class of bug at all.
+**A class literal was a `VerifyError`.**  `ldc` of a `CONSTANT_Class` is how
+`Foo.class` reaches the operand stack.  The `ldc` handler asks `nj_cp_const()`
+for the constant, that function knew INTEGER/FLOAT/LONG/DOUBLE/STRING only, and
+the handler turned the refusal into `VerifyError: bad ldc operand` - so
+`static Object o = Core.class;` and `synchronized (Core.class)` failed to load
+at all.  The constant-pool resolver did not have to grow: `nj_class_object()`
+already builds and caches the `java.lang.Class` mirror that `Object.getClass()`
+returns, so the new case resolves the class *without* running its `<clinit>`
+(a class literal is not an active use, JLS 12.4.1) and pushes that same mirror,
+which is what `==` comparisons against `getClass()` expect.  The digest test
+grew a class-literal category - identity, `getClass()`, `synchronized`, and a
+literal of a class whose initialiser throws, which must stay lazy - and now
+prints 20 identical values.
+
+After the fixes the harness prints `ALL 6505 CASES MATCH` (9 mismatches before),
+the digest test prints 20 identical values, `BENCH sum=-136042548 s=5` and
+`bytecodes=76,914,888` are unchanged, ctest is 92/92, a 395-title smoke run has
+the same five fatal titles as the arm built before the fixes, and on the
+eight-title game set the two arms built from the same tree dump byte-identical
+frames - including 暗黑启示录2, whose frame-60 md5 is identical across three runs
+per arm.  The harness compares values rather than frame counts, which is why it
+can see this class of bug at all.
 
 ## Five more folds, and a branch that read the wrong address
 

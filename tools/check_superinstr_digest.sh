@@ -54,7 +54,7 @@ package cond;
 /* Every method here is written so that javac emits the opcode pair the fused
  * handler recognises; the digest is order-sensitive. */
 public class CondCore {
-    static int[] hs = new int[18];
+    static int[] hs = new int[19];
 
     static void mix(int c, int v) { hs[c] = (hs[c] ^ v) * 0x01000193; }
 
@@ -205,6 +205,24 @@ public class CondCore {
     static int add_st2(int a, int b) { int c = a + b; return c + 1; }
     static int add_st3(int a, int b, int c, int d) { d = a + b; return d * 2; }
 
+    /* 18: ldc of a CONSTANT_Class.  The class literal has to hand back the
+     * same mirror object Object.getClass() returns, and resolving it must not
+     * run the class initializer: only the first active use does that. */
+    static class Lit { int tag = 3; }
+    static Object lit_obj = Lit.class;
+    static int lit_ident() { return (Lit.class == Lit.class) ? 1 : 0; }
+    static int lit_stored() { return (lit_obj == Lit.class) ? 2 : 0; }
+    static int lit_getclass() { return (new Lit()).getClass() == Lit.class ? 3 : 0; }
+    static int lit_sync() { synchronized (Lit.class) { return 4; } }
+    static class Boom { static int x = 1; static { if (x == 1) throw new RuntimeException("boom"); } }
+    static int lit_lazy() {
+        Object k = Boom.class;                 /* must not initialize Boom */
+        if (k == null) return 0;
+        try { return Boom.x + 10; }
+        catch (ExceptionInInitializerError e) { return 5; }
+        catch (NoClassDefFoundError e) { return 5; }
+    }
+
     public static int digest() {
         int[] xs = { 0, 1, -1, 2, -2, 100, -100, 255, 65535, -65536, 1234567,
                      Integer.MIN_VALUE, Integer.MAX_VALUE };
@@ -267,6 +285,8 @@ public class CondCore {
             mix(15, (int) (ll_loop((long) x, 3L) >>> 32));
             mix(16, inc_x(x, x + 1)); mix(16, inc_y(x, 0, 0, 0, x + 2));
             mix(17, add_st2(x, x + 1)); mix(17, add_st3(x, x + 1, 0, 0));
+            mix(18, lit_ident()); mix(18, lit_stored()); mix(18, lit_getclass());
+            mix(18, lit_sync()); mix(18, lit_lazy());
         }
         int all = 0x811c9dc5;
         for (int i = 0; i < hs.length; i++) all = (all ^ hs[i]) * 0x01000193;

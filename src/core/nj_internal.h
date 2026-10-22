@@ -826,6 +826,13 @@ void      nj_gc_unregister_root(nj_vm *vm, nj_ref *slot);
 nj_class *nj_class_load(nj_vm *vm, const char *internal_name, const nj_u1 *bytes, nj_u4 len);
 nj_class *nj_class_find(nj_vm *vm, const char *internal_name);
 nj_class *nj_class_resolve(nj_vm *vm, const char *internal_name); /* load if needed */
+/*
+ * The java.lang.Class mirror for a named class, created on first use.  A
+ * class literal (ldc of CONSTANT_Class), Object.getClass() and
+ * Class.forName() must all return the same object, because titles compare
+ * them with ==.
+ */
+nj_ref      nj_class_object(nj_vm *vm, const char *name);
 nj_class *nj_class_find_or_create_array(nj_vm *vm, nj_class *elem, int dims);
 nj_status nj_class_link(nj_vm *vm, nj_class *c);
 nj_status nj_cp_cache_init(nj_vm *vm, nj_u2 size);

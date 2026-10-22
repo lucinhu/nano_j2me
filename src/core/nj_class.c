@@ -1628,6 +1628,28 @@ int nj_cp_const(nj_vm *vm, nj_class *c, nj_u2 index, int allow_string,
             *out_ref = (nj_ref)e->target;
             return 1;
         }
+    case NJ_CP_CLASS:
+        /*
+         * `ldc` of a CONSTANT_Class is a class literal.  Resolving it must load
+         * the class but must not run its <clinit>: the JLS only initializes on
+         * first active use, and `synchronized (Foo.class)` is not one.
+         */
+        if (!allow_string) {
+            return -1;
+        }
+        {
+            const char *cn = nj_cp_class_name(c, index);
+            nj_ref mirror;
+            if (!cn) {
+                return -1;
+            }
+            mirror = nj_class_object(vm, cn);
+            if (!mirror) {
+                return -1;
+            }
+            *out_ref = mirror;
+            return 1;
+        }
     default:
         return -1;
     }
