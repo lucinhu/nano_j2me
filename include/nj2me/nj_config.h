@@ -463,6 +463,13 @@
 #  define NJ_ENABLE_ENGINE 0
 #endif
 
+/* M3G common-case raster/clip paths. No persistent storage; native stack use
+ * depends on the compiler (see docs/PERFORMANCE.md). Disable for the general
+ * implementation when code size or native stack headroom is more important. */
+#ifndef NJ_M3G_FAST_PATHS
+#  define NJ_M3G_FAST_PATHS 1
+#endif
+
 /* Assertions (always compiled out unless explicitly enabled). */
 #ifndef NJ_ASSERT_ENABLED
 #  define NJ_ASSERT_ENABLED 0

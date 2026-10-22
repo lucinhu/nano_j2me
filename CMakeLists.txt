@@ -83,6 +83,7 @@ set(NJ_ENABLE_MIDI  1 CACHE STRING "Built-in MIDI renderer (0 = platform only)")
 # still linked every libm transcendental.  A configuration option that lies is
 # worse than one that is missing.
 set(NJ_ENABLE_M3G 1 CACHE STRING "Build JSR 184 (Mobile 3D Graphics)")
+set(NJ_M3G_FAST_PATHS 1 CACHE STRING "Specialize common M3G raster/clip paths (no persistent RAM)")
 set(NJ_ENABLE_MASCOT 1 CACHE STRING "Build Mascot Capsule Micro3D v3")
 set(NJ_ENABLE_FLOAT 1 CACHE STRING "libm transcendentals for java.lang.Math")
 # The rest of the switches nj_config.h documents.  These used to be reachable
@@ -210,6 +211,7 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_SUPERINSTR=${NJ_ENABLE_SUPERINSTR}
   NJ_ENABLE_JUMP_THREADING=${NJ_ENABLE_JUMP_THREADING}
   NJ_ENABLE_ENGINE=${NJ_ENABLE_ENGINE}
+  NJ_M3G_FAST_PATHS=${NJ_M3G_FAST_PATHS}
   NJ_ENABLE_FONT_CJK=${NJ_ENABLE_FONT_CJK}
   NJ_ENABLE_FONT_CJK_AA=${NJ_ENABLE_FONT_CJK_AA}
   NJ_ENABLE_PNG=${NJ_ENABLE_PNG}

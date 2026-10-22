@@ -350,6 +350,269 @@ script) gives 9 caught throws, 0 uncaught, 142 colours in frame 900 and a
 superinstr-off, and that title's own run-to-run spread (17-79 M bytecodes and
 5-12 k gfx calls on the SAME binary) is its timing dependence, not the switches.
 
+## Three continuations and a cheaper return (round 4, 2026-10-22)
+
+This round starts at `c78acb1`, after the previous fusion rounds and correctness
+fixes. Execution is still interpreted: the engine seam is unchanged and no
+machine code is generated. The retained changes are:
+
+| Path | Work removed |
+|---|---|
+| Constant + integer arithmetic + `ireturn` | Reuse the ordinary return handler immediately after successful arithmetic; remove the return fetch/dispatch. |
+| `lconst_0/1; lcmp[; if<cond>]` | Compare directly against 0 or 1, retaining the existing comparison/branch fold and avoiding the constant's two-slot materialisation. |
+| `iinc; iload*; if<cond>` | Keep the unary-branch fold when the increment consumes the load; read the selected local after the increment, including different local indices. |
+| Ordinary Java returns, including void/wide/reference | Flush the instruction counter, pop using the current frame's already-loaded `locals`, and reload the caller. Saving the dying frame's `pc/sp` and rechecking that it exists are unnecessary here. |
+
+The new folds are bounded, peek without rewriting bytecode, and use the existing
+`NJ_ENABLE_SUPERINSTR` switch. A branch can still enter any original instruction.
+The long-constant and increment/load chains check the temporary stack capacity
+that their unfused instructions would require, falling back when necessary.
+Arithmetic exceptions are raised before looking at the following return. Return
+simplification introduces no allocation or scheduler/engine callback between
+popping the frame and restoring the caller (or returning at `stop_depth`).
+
+### Same-session measurements
+
+Both binaries were built in the existing Release build with identical options,
+portable switch dispatch, and the existing `-O2` override for the interpreter.
+Measurements pin one core, alternate AB/BA, discard one warm-up per arm, and
+retain every later sample. CPU time includes user + system time for the whole
+process; wall time includes process startup and teardown. Lower is better.
+
+| Workload / metric | Baseline min / median (s) | Round 4 min / median (s) | Time reduction min / median |
+|---|---|---|---|
+| `bench.jar`, CPU, 24 runs/arm | 0.162274 / 0.168005 | 0.158164 / 0.163389 | 2.53% / 2.75% |
+| `bench.jar`, wall, same runs | 0.163168 / 0.168868 | 0.159033 / 0.164222 | 2.53% / 2.75% |
+| Call/arithmetic microbenchmark, CPU, 8 runs/arm | 0.536655 / 0.539574 | 0.521190 / 0.523765 | 2.88% / 2.93% |
+
+An independent rerun of the same frozen binaries used the existing shell
+harness (user CPU time, millisecond resolution, one warm-up, pinned CPU 2,
+AB/BA). Over 16 runs/arm, the fixture's minimum/median fell from
+0.156/0.161 s to 0.153/0.157 s (1.92%/2.48%), with the candidate faster in
+14/16 pairs. Over 12 runs/arm, the microbenchmark fell from 0.531/0.535 s
+to 0.517/0.520 s (2.64%/2.80%), faster in all 12 pairs. These independently
+support a roughly 2–3% reduction on these workloads; the fixture's 4.5%/3.9%
+within-arm spread makes its minimum alone a weak signal.
+
+These are compute-workload measurements on this x86-64 host, not game FPS or
+an embedded-target speed claim. The microbenchmark's integer-comparison phase
+went from a 12 ms median to 13 ms, while its call and long-arithmetic phases
+improved; individual short phases have millisecond clock resolution.
+
+`BENCH sum=-136042548 s=5`, 1,170 native calls and the 92,432/92,432-byte heap
+used/peak remain unchanged. Dispatches fall from 76,914,888 to 70,514,376
+(8.32%): 4,800,000 removed return dispatches and 1,600,512 removed long-constant
+comparison dispatches. The increment/load/branch continuation has no hits in
+this fixture. Dispatch counts are not a speed measure or a raw JVM instruction
+count. The existing quantum is also dispatch-based, so fusion changes its
+bytecode granularity while retaining a bounded interval between polls.
+
+### Rejected experiments and footprint
+
+Inlining frame-push made the fixture 3.10% / 3.53% slower by CPU minimum/median.
+Skipping an earlier save for already-initialised static-call owners was neutral
+at the minimum and 0.79% slower at the median. A further constant/arithmetic/
+bitwise continuation removed another 1,600,000 dispatches but was 2.38% / 2.26%
+slower than the retained candidate in a 20-run/arm comparison. All three were
+reverted; those timings are separate paired experiments, not additive deltas.
+
+No VM/thread/frame fields, writable tables, allocations or per-method caches
+were added. In the matching frozen executables, GNU `size` text (code plus
+read-only sections) grows by 1,568 bytes, 2,727,950 to 2,729,518; its aggregate
+data stays 160,432 bytes and BSS stays 6,688 bytes. Section-level inspection
+confirms writable `.data` is 16 bytes and `.bss` is 6,688 bytes in both;
+`.text` grows 1,472 bytes and `.rodata` grows 96 bytes. Matching x86-64 `-O2`
+`-fstack-usage` builds report a 528-byte `nj_interp_run` C stack frame before
+and after. The final executable's file length happens to stay unchanged because
+of linker alignment. These figures apply to the measured host/compiler.
+Fusion can be disabled with `-DNJ_ENABLE_SUPERINSTR=0`; the return simplification
+needs no extra RAM switch.
+`NJ_ENABLE_ENGINE=0` remains the default; enabling the pre-existing engine
+interface still adds its documented per-VM pointer only.
+
+### Correctness checks
+
+The working-tree Release build passes all 92 CTest tests. The repository digest
+script now checks 27 values (one aggregate plus 26 categories) against the same
+classes on desktop HotSpot, including throwing arithmetic, live caller
+operands, increment/read of different local slots, long-comparison loops and
+integer wraparound. Both frozen binaries match all 27 values. The larger
+standalone differential harness also matches all 6,505 labelled cases on the
+candidate. Another 82 cases in a hand-assembled, HotSpot-verified class test
+branches entering the middle of the new patterns, comparisons without a
+following branch, and end-of-method peeks; all match.
+
+Independent clean builds cover default switch dispatch, threaded dispatch,
+superinstructions/jump-threading both disabled, and engine support enabled.
+All four pass the 27-value digest and the benchmark result/heap checks. The
+threaded-dispatch equivalence check and no-writable-statics check pass; the
+engine build passes all 54 engine-interface checks. The independent default
+CTest run needed five reruns after fixing fixture scripts' hard-coded build
+path, plus an isolated rerun of the load-sensitive flush test; all six passed.
+The main-tree 92/92 run above needed no reruns. An eight-pair comparison of the
+independent rebuild with the frozen final binary also matches every checked
+observable, including dispatch counts.
+
+The eight-title game replay uses two runs per binary, isolated RMS directories,
+fixed input scripts and 240/360-frame budgets. All eight titles' sampled frames
+are pixel-identical across binaries, with no new exception signatures. The
+harness reports **4 PASS, 4 WARN, 0 FAIL**: 1945空战英雄, 模拟人生2,
+帝国时代3-亚洲王朝 and 暗黑启示录2 have paint/native/heap-counter differences at
+the fixed frame budget (for example, 1945 paints 136 versus 137 times with
+identical sampled frames). The other four are 3D版田园物语, 合金弹头4,
+实况足球经理2009 and 仙魔飞行棋. These replays are compatibility checks;
+the timing-dependent counters are not used to claim a game speedup.
+
+The transient-stack-capacity guards are also reviewed statically; legal
+javac-generated code does not exercise the malformed-stack fallback. This
+work does not add a bytecode verifier or claim memory safety for invalid
+class files.
+
+Local reproducibility artifacts are under
+`.local-tools/debug-runs/interp-round4-20261022/`: frozen baseline/final binaries,
+`measure.py`, all A/B samples and a read-only candidate-profile report. They are
+excluded from version control. Baseline binary SHA-256 is
+`98c73cbb46c722a112499edc0e858b551d429e76b2c0a2cd0efefc42504be511`;
+final is `8d0a2a06250bbcb1ad1b20cf6ed018ea1281112da84723c998b4849bcefb66df`.
+
+## M3G flat fill, linear filtering and clipping (2026-10-22)
+
+This round starts from the preceding interpreter result, with its 70,514,376
+benchmark dispatches. Three further interpreter experiments were rejected:
+field-address calculation before the type switch slowed benchmark/micro CPU
+medians by 1.72%/2.19%; moving abstract-target validation off the virtual-cache
+hit path gave +0.55%/-0.11%; and an extra dispatch entry that skipped a redundant
+stack comparison slowed them by 18.89%/18.46%. Each comparison alternated A/B,
+with 24 benchmark and 10 micro runs per arm. All candidates passed the 27-value
+JVM digest, but none justified a source change. The JIT engine interface and
+previous interpreter optimizations remain as before this round.
+
+The retained changes are in `src/midp/nj_lib_m3g.c`:
+
+- Opaque flat triangles select a short pixel loop outside the inner loop. It
+  retains independent depth-test/depth-write controls, strict depth ties and
+  the original floating-point depth expression and stepping order. Sprites,
+  Gouraud colours, texture sampling and nontrivial compositing use the general
+  loop.
+- Linear filtering reads the four source pixels' channels directly, avoiding
+  four ARGB packs followed by channel extraction. Coordinates, wrap rules,
+  8-bit weights and final shifts are unchanged; RGB textures still have alpha
+  255, and RGBA alpha is filtered with the same weights.
+- Triangles inside both depth planes go directly to emission. The test uses
+  the same projection-distance expressions and comparisons as the clipper;
+  crossing triangles still use the original clipping and interpolation path.
+
+All three are controlled by `NJ_M3G_FAST_PATHS`, default **1** in the config
+header and CMake. Configure with `-DNJ_M3G_FAST_PATHS=0` to use the general
+paths. There are no new persistent fields, caches, buffers or allocations.
+This is exact rendering work reduction, with no lower-resolution framebuffer,
+filter-quality change or reciprocal approximation.
+
+### Paired full-call measurements
+
+The old M3GDemo's 4,000 submissions repeat one triangle at the same depth;
+after the first draw it mostly measures depth rejection. The new local Java
+fixture separately measures six workloads through `Graphics3D.render`: 2,000
+submissions into a 240x320 Image, sloped depth, 49,229 covered pixels, and a
+64x64 RGBA texture where applicable. Except for the rejection case, depth
+comparison and writing are disabled so every submission actually shades.
+The alpha case changes 43,006 pixels because transparent fragments are tested.
+
+Release GCC 16.2.1, `-O3` for M3G, CPU 4, alternating AB/BA, one warm-up pair
+excluded, **10 measured runs per arm per workload**. The render timer includes
+Java/native calls; process CPU additionally includes startup, fixture setup
+and checksum work. Figures below are medians, with time reductions rather
+than throughput increases:
+
+| Workload | Render before → after (ms) | Render time reduction | Whole-process CPU before → after (ms) | CPU time reduction |
+|---|---:|---:|---:|---:|
+| Repeated depth rejection | 69 → 55 | 20.29% | 86.484 → 71.653 | 17.15% |
+| Opaque flat fill | 96 → 57 | 40.63% | 112.929 → 73.769 | 34.68% |
+| Nearest texture | 673 → 663 | 1.49% | 690.496 → 679.892 | 1.54% |
+| Linear texture | 1,966 → 1,428 | 27.37% | 1,979.461 → 1,442.576 | 27.12% |
+| Gouraud fill | 153 → 152 | 0.65% | 169.781 → 169.635 | 0.09% |
+| Alpha texture | 1,286.5 → 1,273 | 1.05% | 1,302.955 → 1,288.369 | 1.12% |
+
+The substantial gains are flat fill and linear filtering; the other shading
+paths are effectively unchanged at this scale. These are controlled workloads,
+not a claim of the same percentage improvement in game FPS. Early rejection
+samples show warm-up/frequency variation, so the complete sample series is
+retained; its render minima are 68 → 54 ms. Flat and linear render minima are
+95 → 56 ms and 1,959 → 1,425 ms respectively.
+
+### Rendering equivalence and footprint
+
+All timed runs retain the same pixel digest and changed-pixel count; complete
+PPM images also match between binaries for all six workloads. Dispatches,
+native calls, drawing counters, cache counters and heap used/peak match in
+each pair. Heap used/peak is 1,235,424 bytes for flat/reject, 1,235,712 for
+Gouraud and 1,274,448 for textured cases, unchanged by the optimization.
+
+A separate C differential probe compiles against the frozen old renderer,
+the new fast paths, and the new code with the macro disabled. All three agree
+on 120,000 sampler outputs, 12,000 randomized raster colour/depth digests and
+10,000 clipping/rendering colour/depth/drawn-count results. Coverage includes
+RGB/RGBA, both linear-filter aliases, 1-pixel texture dimensions, negative
+repeat coordinates, clamp edges, alpha/compositing states, independent depth
+controls, culling, sprites and perspective/parallel/generic depth planes.
+This is regression equivalence to the existing renderer, not a claim that
+every M3G feature is implemented. The persistent M3G unit test adds 65 checks:
+56 exact RGB/RGBA linear-filter pixels, six flat colour/depth cases, two exact
+clip-plane cases and one RGBA construction check. Both frozen libraries pass
+all 386 checks. The full main build passes **92/92 CTest tests**, and the final
+interpreter still matches the desktop JVM on all 27 digest values. Independent
+clean builds with the M3G macro on and off each pass all seven M3G-related CTest
+gates, M3GDemo's 146 checks and all six workload image comparisons. A separate
+ASan/UBSan build passes the 386 M3G checks, 97 container checks and M3GDemo with
+no sanitizer reports; this sanitizer run covers M3G, not the whole test suite.
+
+Matching frozen executables keep `.data` at 16 bytes, `.bss` at 6,688 bytes,
+`.data.rel.ro` at 158,560 bytes and `.rodata` at 1,157,344 bytes. `.text` grows
+1,280 bytes; including unwind metadata, GNU `size` text grows 1,424 bytes.
+File length grows 4,128 bytes because of section alignment. The macro allows
+small-flash builds to omit the specialized paths.
+
+Native C stack use changes with this compiler. `-fstack-usage` and disassembly
+show that the old `jr_triangle_v` inlined emission into a 992-byte frame. The
+new version uses a 576-byte frame and a separate 496-byte `jr_emit`: the
+inside-plane path tail-calls the emitter, while the clipping path calls it
+normally, for a conservative 1,072-byte combined peak (**+80 bytes** on that
+path). All other 365 function frame sizes agree; the existing largest frame,
+`m3g_render_scene`, remains 7,664 bytes. Persistent RAM is unchanged, but builds
+with a tight native stack budget should account for this target-specific
+80-byte increase or use `NJ_M3G_FAST_PATHS=0`. An independent macro-off build
+restores the 992-byte inlined frame and has no separate `jr_emit` call.
+Embedded stack margins were not measured on hardware in this round.
+
+### Real 3D game replay
+
+Rally Evolution (`3D拉力赛-进化汉化版_6366.jar`) runs for 3,650 frames at 30 fps
+per arm, with the same scripted controls and fresh RMS directories. Both reach
+the actual race, draw the car/track/HUD and respond to controls. Both report
+141,002 triangles, 16,368 M3G calls and heap used/peak 3,203,136/5,459,824 bytes.
+Both exit normally with the same four pre-existing thrown exceptions (RMS and
+cancelled TimerTasks), with no new exception category or uncaught failure.
+
+Of 36 sampled frames, 22 are byte-identical. The other 14 differ only in
+25–89 pixels of the real-time "Total Time" HUD digits; the rendered 3D scene
+matches. An earlier run of the same baseline binary exhibits the same timer
+variation. Native/bytecode counts vary slightly with that clock too, so this
+replay verifies behaviour and visuals, not game FPS improvement.
+
+Micro3D remains a separate compatibility limitation: the deeper Devil May Cry
+replay reaches a missing `Figure(String)` constructor, and `renderFigure` is
+still unimplemented. Its menu/intro cannot measure Micro3D rendering throughput.
+The corrected scope is recorded in `docs/COMPATIBILITY.md`.
+
+Local evidence is under `.local-tools/debug-runs/perf-round5-3d-20261022/`:
+`final-ab/results.json` and its logs/images, `measure-renderer.py`,
+`scout/M3GPerf.java`, `probes/results.json`, the probe sources,
+`verify/REPORT-round5.md` with independent build/stack/sanitizer/game evidence,
+and `interp/REPORT.md` for the rejected interpreter experiments. Frozen baseline
+SHA-256 is `8d0a2a06250bbcb1ad1b20cf6ed018ea1281112da84723c998b4849bcefb66df`;
+candidate `filter/nj2me` is
+`d6d28bcdaba4ba240e678e26ba5e2dac5e23859f858a6d0d95d53915d96c95f7`.
+
 ## Three VM bugs the differential harness found, and none is about speed
 
 A 6,505-case differential harness (`.local-tools/debug-runs/interp-diff-20261022/`)

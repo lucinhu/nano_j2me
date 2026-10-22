@@ -390,6 +390,10 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
             if (nj_interp_const_arith(sp, nx_, (CONST)) != 0) {           \
                 THROW("java/lang/ArithmeticException", "/ by zero");      \
             }                                                             \
+            if (pc < code_len && code[pc] == 0xacu) {                    \
+                pc++;                                                     \
+                goto do_fused_ireturn;                                     \
+            }                                                             \
             DISPATCH();                                                   \
         }                                                                 \
     }
@@ -571,8 +575,20 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
         }                                                                 \
     }
 
-/* `iinc i, c; iload i` (and the iload_0..3 form), and `iinc; goto` - one
- * peek decides between the counter read-back and the loop back edge. */
+/* Keep the unary-branch fold when iinc consumes the following iload. */
+#define NJ_IINC_LOAD_BODY(V)                                             \
+    {                                                                     \
+        nj_s4 njil_v_ = (V);                                              \
+        if (sp < stack_limit && pc + 3u <= code_len &&                   \
+            (nj_u1)(code[pc] - 0x99u) <= 5u) {                            \
+            NJ_BRANCH_INT_BODY(njil_v_);                                  \
+        }                                                                 \
+        sp->i = njil_v_; sp++;                                            \
+        DISPATCH();                                                       \
+    }
+
+/* `iinc i, c; iload j[; if<cond>]` (also iload_0..3), and `iinc; goto`.
+ * Read j after the increment, including when j is the incremented slot. */
 #define NJ_IINC_FUSE(I)                                                   \
     {                                                                     \
         nj_u2 njil_i_ = (I);                                              \
@@ -580,13 +596,12 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
         if (pc < code_len) {                                              \
             nj_u1 njil_nx_ = code[pc];                                    \
             if (njil_nx_ == 0x15u && pc + 2u <= code_len) {               \
-                sp->i = locals[(nj_u2)code[pc + 1u]].i; sp++;             \
+                nj_u2 njil_slot_ = code[pc + 1u];                         \
                 pc += 2u;                                                 \
-                DISPATCH();                                               \
+                NJ_IINC_LOAD_BODY(locals[njil_slot_].i);                   \
             } else if ((nj_u1)(njil_nx_ - 0x1au) <= 3u) {                 \
-                sp->i = locals[njil_nx_ - 0x1au].i; sp++;                 \
                 pc++;                                                     \
-                DISPATCH();                                               \
+                NJ_IINC_LOAD_BODY(locals[njil_nx_ - 0x1au].i);             \
             } else if (njil_nx_ == 0xa7u && pc + 3u <= code_len) {        \
                 nj_u4 njig_at_ = pc;                                      \
                 nj_s2 njig_off_;                                          \
@@ -682,6 +697,23 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
                 sp[0].j = (nj_s8)((nj_u8)sp[0].j * (nj_u8)njll_b_);       \
             }                                                             \
             sp[1].bits = 0u; sp += 2;                                     \
+            DISPATCH();                                                   \
+        }                                                                 \
+    }
+
+/* `lconst_0/1; lcmp[; if<cond>]`: retain the existing lcmp/branch
+ * fold after consuming lcmp, without materialising the constant's two slots. */
+#define NJ_LCONST_CMP_FUSE(V)                                             \
+    {                                                                     \
+        if (pc < code_len && code[pc] == 0x94u &&                         \
+            stack_limit - sp >= 2) {                                      \
+            nj_s8 njlc_a_ = sp[-2].j;                                     \
+            nj_s8 njlc_b_ = (V);                                         \
+            pc++;                                                         \
+            sp -= 2;                                                      \
+            sp->i = njlc_a_ > njlc_b_ ? 1 : (njlc_a_ == njlc_b_ ? 0 : -1);\
+            NJ_LCMP_BRANCH_FUSE();                                        \
+            sp++;                                                         \
             DISPATCH();                                                   \
         }                                                                 \
     }
@@ -1453,8 +1485,16 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
             NJ_CONST_ARITH_FUSE((nj_s4)op - 3);
 #endif
             sp->i = (nj_s4)op - 3; sp++; DISPATCH();
-        L_0x09: case 0x09: PUSH_W(0); DISPATCH();                       /* lconst_0 */
-        L_0x0a: case 0x0a: PUSH_W(1); DISPATCH();                       /* lconst_1 */
+        L_0x09: case 0x09:                                            /* lconst_0 */
+#if NJ_ENABLE_SUPERINSTR
+            NJ_LCONST_CMP_FUSE(0);
+#endif
+            PUSH_W(0); DISPATCH();
+        L_0x0a: case 0x0a:                                            /* lconst_1 */
+#if NJ_ENABLE_SUPERINSTR
+            NJ_LCONST_CMP_FUSE(1);
+#endif
+            PUSH_W(1); DISPATCH();
         L_0x0b: case 0x0b: sp->f = 0.0f; sp++; DISPATCH();
         L_0x0c: case 0x0c: sp->f = 1.0f; sp++; DISPATCH();
         L_0x0d: case 0x0d: sp->f = 2.0f; sp++; DISPATCH();
@@ -2025,12 +2065,17 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
          *   3. reload the caller and push the result at that rewind point.
          * Skipping step 1 makes the caller's stack grow by one slot per call,
          * which shows up much later as a bogus value on the operand stack.
+         * The current frame exists and is about to die: reuse its locals for
+         * the pop, and flush counters without saving its now-dead pc/sp. No
+         * allocation, scheduler call or engine handoff occurs before RELOAD
+         * (or the stop_depth return), so no observer needs that frame saved.
          */
 #define DO_RETURN(rv, wide) do {                                       \
             nj_value rv_ = (rv);                                           \
             nj_value *rsp_ = fr->locals;                                   \
-            SAVE();                                                        \
-            nj_frame_pop_fast(th);                                          \
+            INSN_FLUSH();                                                  \
+            th->top = rsp_;                                                \
+            th->nframes--;                                                 \
             if (th->nframes <= stop_depth) {                               \
                 th->ret_value = rv_;                                       \
                 return NJ_OK;                                              \
@@ -2047,6 +2092,9 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         } while (0)
 
         L_0xac: case 0xac: case 0xae:                      /* ireturn freturn */
+#if NJ_ENABLE_SUPERINSTR
+        do_fused_ireturn:
+#endif
             DO_RETURN(*(--sp), 0);
             /* DO_RETURN either returns outright or RELOADs into the CALLER's
              * frame, in which case this is an ordinary dispatch: pc and code
@@ -2076,8 +2124,9 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
              */
             {
                 nj_value *rsp_ = fr->locals;
-                SAVE();
-                nj_frame_pop_fast(th);
+                INSN_FLUSH();
+                th->top = rsp_;
+                th->nframes--;
                 if (th->nframes <= stop_depth) {
                     th->ret_value.bits = 0u;
                     return NJ_OK;

@@ -207,6 +207,31 @@ static void test_camera_clip(nj_vm *vm)
                   "legal geometry still renders after rejected geometry");
         }
     }
+    /* With an identity generic projection, z=-1 and z=+1 are exact clip
+       boundaries. Vertices on either plane remain inside, including when
+       the renderer bypasses clipping for a wholly contained triangle. */
+    {
+        const nj_s2 on_plane[2][9] = {
+            {-1,-1,-2, 1,-1,-2, 0,1,-2},
+            {-1,-1, 2, 1,-1, 2, 0,1, 2}
+        };
+        const nj_u4 *p = (const nj_u4 *)nj_array_data(pixels);
+        int plane;
+        call(vm, xf, CLS("Transform"), "setIdentity", "()V", NULL, NULL);
+        a[0].r = xf;
+        call(vm, cam, CLS("Camera"), "setGeneric", "(L" CLS("Transform") ";)V", a, NULL);
+        a[0].r = cam; a[1].r = 0;
+        call(vm, g3d, CLS("Graphics3D"), "setCamera",
+             "(L" CLS("Camera") ";L" CLS("Transform") ";)V", a, NULL);
+        for (plane = 0; plane < 2; plane++) {
+            a[0].r = bg;
+            call(vm, g3d, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V", a, NULL);
+            clip_draw(vm, g3d, vb, ib, app, data, on_plane[plane], 0xFF2468ACu);
+            check(p[160 * 240 + 120] == 0xFF2468ACu && (p[0] & 0xFFFFFFu) == 0,
+                  plane ? "triangle on far plane keeps its colour and extent" :
+                          "triangle on near plane keeps its colour and extent");
+        }
+    }
     call(vm, g3d, CLS("Graphics3D"), "releaseTarget", "()V", NULL, NULL);
 }
 
@@ -1878,6 +1903,45 @@ int main(void)
                           "depth test and depth write independently control occlusion");
                 }
             }
+            /* Coplanar opaque triangles keep the first colour until depth
+               testing is disabled, for both ALPHA and REPLACE compositing. */
+            {
+                const int blends[2] = {64, 68};
+                int blend;
+                for (blend = 0; blend < 2; blend++) {
+                    const nj_u4 *p = (const nj_u4 *)nj_array_data(pixels);
+                    a[0].i = blends[blend];
+                    call(vm, cm, CLS("CompositingMode"), "setBlending", "(I)V", a, NULL);
+                    a[0].r = clear_bg;
+                    call(vm, g3d, CLS("Graphics3D"), "clear",
+                         "(L" CLS("Background") ";)V", a, NULL);
+                    a[0].i = 2048; a[1].i = (nj_s4)0xFFFF0000u;
+                    call(vm, material, CLS("Material"), "setColor", "(II)V", a, NULL);
+                    a[0].r = mesh; a[1].r = xf;
+                    call(vm, g3d, CLS("Graphics3D"), "render",
+                         "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+                    check(p[9 * 16 + 6] == 0xFFFF0000u,
+                          "opaque flat triangle writes red and full alpha");
+                    a[0].i = 2048; a[1].i = (nj_s4)0xFF00FF00u;
+                    call(vm, material, CLS("Material"), "setColor", "(II)V", a, NULL);
+                    a[0].r = mesh; a[1].r = xf;
+                    call(vm, g3d, CLS("Graphics3D"), "render",
+                         "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+                    check(p[9 * 16 + 6] == 0xFFFF0000u,
+                          "equal depth keeps the first opaque flat triangle");
+                    a[0].i = 0;
+                    call(vm, cm, CLS("CompositingMode"), "setDepthTestEnable", "(Z)V", a, NULL);
+                    a[0].r = mesh; a[1].r = xf;
+                    call(vm, g3d, CLS("Graphics3D"), "render",
+                         "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+                    check(p[9 * 16 + 6] == 0xFF00FF00u,
+                          "disabled depth test lets the coplanar green triangle replace red");
+                    a[0].i = 1;
+                    call(vm, cm, CLS("CompositingMode"), "setDepthTestEnable", "(Z)V", a, NULL);
+                }
+                a[0].i = 64;
+                call(vm, cm, CLS("CompositingMode"), "setBlending", "(I)V", a, NULL);
+            }
             /* Moving stored coordinates away and restoring them with the
                API's three-component bias must preserve the rendered image. */
             {
@@ -1988,6 +2052,92 @@ int main(void)
                              "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
                         check((((nj_u4 *)nj_array_data(pixels))[9 * 16 + 6] & 0xFFFFFFu)
                               == colors_with_bias[c], "two-component texture bias offsets each axis");
+                    }
+                }
+                /* LINEAR samples are explicit colours, not a second copy of
+                   the sampler. The 2x2 corners are red, green / blue, white.
+                   At (1/2,1/2), each RGB channel averages to 127.5 (127 after
+                   truncation). At (1/4,3/4), the corner shares are 3,1,9,3
+                   sixteenths: RGB=(95,63,191). RGBA corner alphas 0,64,128,240
+                   average to 108 and 121 at those two points respectively.
+                   Constant UVs keep these checks independent of interpolation
+                   across the triangle; REPLACE exposes the sampled alpha. */
+                {
+                    const nj_u1 rgba_colors[16] = {255,0,0,0, 0,255,0,64,
+                                                  0,0,255,128, 255,255,255,240};
+                    const int filters[2] = {129, 209};
+                    const struct {
+                        nj_s2 s, t; /* quarter units */
+                        int wrap_s, wrap_t;
+                        nj_u4 rgb, rgba;
+                        const char *name;
+                    } samples[] = {
+                        { 2, 2,240,240,0xFF7F7F7Fu,0x6C7F7F7Fu,"centre average"},
+                        { 1, 3,240,240,0xFF5F3FBFu,0x795F3FBFu,"unequal corner shares"},
+                        {-1, 3,240,240,0xFF3F00BFu,0x603F00BFu,"clamped left edge"},
+                        { 5, 1,240,240,0xFF3FFF3Fu,0x6C3FFF3Fu,"clamped right edge"},
+                        { 1,-2,240,240,0xFFBF3F00u,0x10BF3F00u,"clamped top edge"},
+                        { 3, 5,240,240,0xFFBFBFFFu,0xD4BFBFFFu,"clamped bottom edge"},
+                        {-1,-1,240,240,0xFFFF0000u,0x00FF0000u,"clamped red corner"},
+                        { 5, 5,240,240,0xFFFFFFFFu,0xF0FFFFFFu,"clamped white corner"},
+                        {-3, 3,241,240,0xFF5F3FBFu,0x795F3FBFu,"negative repeat S"},
+                        { 1,-1,240,241,0xFF5F3FBFu,0x795F3FBFu,"negative repeat T"},
+                        {-7,-5,241,241,0xFF5F3FBFu,0x795F3FBFu,"negative repeat both axes"},
+                        {-4,-4,241,241,0xFFFF0000u,0x00FF0000u,"negative whole repeat"},
+                        {-1,-1,240,241,0xFF3F00BFu,0x603F00BFu,"clamp S and repeat T"},
+                        {-1, 5,241,240,0xFFBFBFFFu,0xD4BFBFFFu,"repeat S and clamp T"}
+                    };
+                    nj_ref rgba = nj_array_new(vm, "B", sizeof(rgba_colors));
+                    nj_ref rgba_image = nj_object_new(vm, CLS("Image2D"));
+                    int format, filter;
+                    size_t sample;
+                    memcpy(nj_array_data(rgba), rgba_colors, sizeof(rgba_colors));
+                    a[0].i = 100; a[1].i = 2; a[2].i = 2; a[3].r = rgba;
+                    check(nj_call_special(vm, rgba_image, CLS("Image2D"), "<init>",
+                          "(III[B)V", a, NULL) == NJ_OK, "linear RGBA texture image constructs");
+                    a[0].i = 68;
+                    call(vm, cm, CLS("CompositingMode"), "setBlending", "(I)V", a, NULL);
+                    a[0].i = 1;
+                    call(vm, cm, CLS("CompositingMode"), "setAlphaWriteEnable", "(Z)V", a, NULL);
+                    a[0].f = 0.0f;
+                    call(vm, cm, CLS("CompositingMode"), "setAlphaThreshold", "(F)V", a, NULL);
+                    a[0].i = 0; a[1].r = uv; a[2].f = 0.25f; a[3].r = 0;
+                    call(vm, vb, CLS("VertexBuffer"), "setTexCoords",
+                         "(IL" CLS("VertexArray") ";F[F)V", a, NULL);
+                    for (format = 0; format < 2; format++) {
+                        a[0].r = format ? rgba_image : image;
+                        call(vm, texture, CLS("Texture2D"), "setImage",
+                             "(L" CLS("Image2D") ";)V", a, NULL);
+                        for (filter = 0; filter < 2; filter++) {
+                            a[0].i = 208; a[1].i = filters[filter];
+                            call(vm, texture, CLS("Texture2D"), "setFiltering", "(II)V", a, NULL);
+                            for (sample = 0; sample < sizeof(samples) / sizeof(samples[0]); sample++) {
+                                nj_s2 *values = (nj_s2 *)nj_array_data(coords);
+                                nj_u4 want = format ? samples[sample].rgba : samples[sample].rgb;
+                                nj_u4 got;
+                                char label[160];
+                                for (vertex = 0; vertex < 3; vertex++) {
+                                    values[vertex * 2] = samples[sample].s;
+                                    values[vertex * 2 + 1] = samples[sample].t;
+                                }
+                                a[0].i = 0; a[1].i = 3; a[2].r = coords;
+                                call(vm, uv, CLS("VertexArray"), "set", "(II[S)V", a, NULL);
+                                a[0].i = samples[sample].wrap_s; a[1].i = samples[sample].wrap_t;
+                                call(vm, texture, CLS("Texture2D"), "setWrapping", "(II)V", a, NULL);
+                                a[0].r = clear_bg;
+                                call(vm, g3d, CLS("Graphics3D"), "clear",
+                                     "(L" CLS("Background") ";)V", a, NULL);
+                                a[0].r = mesh; a[1].r = xf;
+                                call(vm, g3d, CLS("Graphics3D"), "render",
+                                     "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+                                got = ((const nj_u4 *)nj_array_data(pixels))[9 * 16 + 6];
+                                snprintf(label, sizeof(label),
+                                         "LINEAR %d %s %s: expected %08X, got %08X",
+                                         filters[filter], format ? "RGBA" : "RGB", samples[sample].name,
+                                         (unsigned)want, (unsigned)got);
+                                check(got == want, label);
+                            }
+                        }
                     }
                 }
             }

@@ -1595,13 +1595,17 @@ the same build:
 
     PROBE renderPrimitives ENTERED   x2      (test_mascot, 40 checks / 0 failures)
 
-So `tris=0` is the **correct** reading here: there is nothing to rasterize.
-The disassembly references are dead paths -- `javap` counts references in the
-bytecode, not executions, and this is the second time in this project that
-distinction mattered.
+So `tris=0` describes those **60-frame runs** correctly. It does not prove
+that the referenced methods are dead paths throughout gameplay.
 
-What this means for the module: the Mascot code is exercised only by its own
-unit test, not by any real title, so it is held to the same standard as the
-`.m3g` container parser -- implemented, tested against the API as documented,
-and **not** claimed to work on real software, because nothing collected here
-reaches it.
+A deeper replay on 2026-10-22 reaches mission 1 loading in
+`鬼泣_3376.jar`, then logs six `NoSuchMethodError` failures for
+`com/mascotcapsule/micro3d/v3/Figure.<init>(Ljava/lang/String;)V` in
+`DevilMayCry_J_Canvas.st_init__reloadBac(I)V` at pc 155. The 1,800-frame,
+30-FPS run ends on `paintState_Error`, with `tris=0` and `m3g=0`.
+This is an API compatibility blocker before real 3D gameplay; the current
+`renderFigure` implementation is also a no-op. The software primitive path
+has unit-test coverage, but these runs establish neither Micro3D gameplay
+support nor a game performance improvement. Logs, input scripts and frames
+are preserved locally under
+`.local-tools/debug-runs/perf-round5-3d-20261022/scout/dmc-deep/`.

@@ -8698,6 +8698,7 @@ static const nj_u1 *m3g_mip_level(const nj_u1 *mips, int w, int h, int lv,
     return p;
 }
 
+#if !NJ_M3G_FAST_PATHS
 /* One texel as 0xAARRGGBB, for the filter below. */
 static nj_u4 sw_texel_pack(const m3g_sw *sw, int u, int v)
 {
@@ -8707,6 +8708,7 @@ static nj_u4 sw_texel_pack(const m3g_sw *sw, int u, int v)
 
     return (a << 24) | ((nj_u4)p[0] << 16) | ((nj_u4)p[1] << 8) | (nj_u4)p[2];
 }
+#endif
 
 static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
 {
@@ -8745,7 +8747,12 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
         float x = fs * (float)(sw->tex_w - 1);
         float y = ft * (float)(sw->tex_h - 1);
         int u0 = (int)x, v0 = (int)y, u1, v1, fu, fv;
-        nj_u4 c00, c10, c01, c11, w00, w10, w01, w11;
+        nj_u4 w00, w10, w01, w11;
+#if NJ_M3G_FAST_PATHS
+        const nj_u1 *p00, *p10, *p01, *p11;
+#else
+        nj_u4 c00, c10, c01, c11;
+#endif
 
         if (u0 < 0) { u0 = 0; }
         if (u0 >= sw->tex_w) { u0 = sw->tex_w - 1; }
@@ -8759,14 +8766,30 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
         if (fv > 256) { fv = 256; }
         u1 = (u0 + 1 < sw->tex_w) ? u0 + 1 : u0;
         v1 = (v0 + 1 < sw->tex_h) ? v0 + 1 : v0;
-        c00 = sw_texel_pack(sw, u0, v0);
-        c10 = sw_texel_pack(sw, u1, v0);
-        c01 = sw_texel_pack(sw, u0, v1);
-        c11 = sw_texel_pack(sw, u1, v1);
         w00 = (nj_u4)(256 - fu) * (nj_u4)(256 - fv);
         w10 = (nj_u4)fu * (nj_u4)(256 - fv);
         w01 = (nj_u4)(256 - fu) * (nj_u4)fv;
         w11 = (nj_u4)fu * (nj_u4)fv;
+#if NJ_M3G_FAST_PATHS
+        /* Filter the stored channels directly; packing four ARGB words only
+         * to unpack them again adds work to every linear sample. Preserve
+         * the original weights and final shift, including RGB's alpha=255. */
+        p00 = sw->tex + ((nj_size)v0 * (nj_size)sw->tex_w + (nj_size)u0) *
+                        (nj_size)sw->tex_bpp;
+        p10 = p00 + (nj_size)(u1 - u0) * (nj_size)sw->tex_bpp;
+        p01 = p00 + (nj_size)(v1 - v0) * (nj_size)sw->tex_w * (nj_size)sw->tex_bpp;
+        p11 = p01 + (nj_size)(u1 - u0) * (nj_size)sw->tex_bpp;
+        tr = (p00[0] * w00 + p10[0] * w10 + p01[0] * w01 + p11[0] * w11) >> 16;
+        tg = (p00[1] * w00 + p10[1] * w10 + p01[1] * w01 + p11[1] * w11) >> 16;
+        tb = (p00[2] * w00 + p10[2] * w10 + p01[2] * w01 + p11[2] * w11) >> 16;
+        if (sw->tex_bpp == 4) {
+            ta = (p00[3] * w00 + p10[3] * w10 + p01[3] * w01 + p11[3] * w11) >> 16;
+        }
+#else
+        c00 = sw_texel_pack(sw, u0, v0);
+        c10 = sw_texel_pack(sw, u1, v0);
+        c01 = sw_texel_pack(sw, u0, v1);
+        c11 = sw_texel_pack(sw, u1, v1);
         tr = (nj_u1)(((((c00 >> 16) & 0xFFu) * w00 + ((c10 >> 16) & 0xFFu) * w10 +
                        ((c01 >> 16) & 0xFFu) * w01 + ((c11 >> 16) & 0xFFu) * w11) >> 16) & 0xFFu);
         tg = (nj_u1)(((((c00 >> 8) & 0xFFu) * w00 + ((c10 >> 8) & 0xFFu) * w10 +
@@ -8775,6 +8798,7 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
                        (c01 & 0xFFu) * w01 + (c11 & 0xFFu) * w11) >> 16) & 0xFFu);
         ta = (nj_u1)(((((c00 >> 24) & 0xFFu) * w00 + ((c10 >> 24) & 0xFFu) * w10 +
                        ((c01 >> 24) & 0xFFu) * w01 + ((c11 >> 24) & 0xFFu) * w11) >> 16) & 0xFFu);
+#endif
     } else {
         if (sw->sprite) {
             u = (int)(fs * (float)sw->tex_w);
@@ -8835,6 +8859,10 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     float r0f = 0.0f, g0f = 0.0f, b0f = 0.0f;
     float r1f = 0.0f, g1f = 0.0f, b1f = 0.0f;
     float r2f = 0.0f, g2f = 0.0f, b2f = 0.0f;
+#if NJ_M3G_FAST_PATHS
+    int flat_opaque = !has_tex && !gouraud && !sw->sprite && sw->awrite &&
+                      sw->athresh <= 255 && (sw->blend == 64 || sw->blend == 68);
+#endif
 
     if (!sw->surf || !sw->z || !sw->surf->pixels) {
         return 0u;
@@ -8956,6 +8984,22 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
             rbc += dxb * skip;
             o = (nj_size)(py - sw->vy) * (nj_size)sw->vw + (nj_size)(xl - sw->vx);
             drow = dst + (nj_size)py * (nj_size)sw->surf->width + (nj_size)xl;
+#if NJ_M3G_FAST_PATHS
+            /* The opaque, flat case needs only one interpolant. Keep its
+             * expression and stepping order identical to the general loop:
+             * reassociating the depth arithmetic can change a tie. */
+            if (flat_opaque) {
+                for (px = xl; px <= xr; px++, o++, drow++, pg += dxg) {
+                    nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
+
+                    if (key > 0 && (!sw->dtest || key > sw->z[o])) {
+                        if (sw->dwrite) { sw->z[o] = key; }
+                        *drow = flat;
+                        drawn = 1u;
+                    }
+                }
+            } else
+#endif
             for (px = xl; px <= xr; px++, o++, drow++, pg += dxg, ph += dxh,
                      pk += dxk, rr += dxr, rgc += dxgc, rbc += dxb) {
                 nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
@@ -9680,6 +9724,21 @@ static void jr_triangle_v(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
     jr_vtx poly[2][5];
     int n = 3, plane, k;
 
+#if NJ_M3G_FAST_PATHS
+    /* Most submitted triangles are already inside both depth planes. The
+     * clipping passes would only copy these vertices, in this same order.
+     * Keep the original comparisons (including points exactly on a plane)
+     * and leave every crossing triangle to the general clipper below. */
+    if (jr_clip_distance(r->proj, v0, 0) >= 0.0f &&
+        jr_clip_distance(r->proj, v1, 0) >= 0.0f &&
+        jr_clip_distance(r->proj, v2, 0) >= 0.0f &&
+        jr_clip_distance(r->proj, v0, 1) >= 0.0f &&
+        jr_clip_distance(r->proj, v1, 1) >= 0.0f &&
+        jr_clip_distance(r->proj, v2, 1) >= 0.0f) {
+        jr_emit(r, v0, v1, v2);
+        return;
+    }
+#endif
     poly[0][0] = *v0; poly[0][1] = *v1; poly[0][2] = *v2;
     for (plane = 0; plane < 2; plane++) {
         const jr_vtx *src = poly[plane];
