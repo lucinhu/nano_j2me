@@ -861,6 +861,64 @@ Fire reaches rendered space flight after its introductory sequence. Mission
 completion and save/continue are outside this evidence. See
 `docs/COMPATIBILITY.md` for gameplay limits and the supported command-list subset.
 
+## Micro3D triangle setup without the divides it never reads (round 8, 2026-10-22)
+
+The Micro3D software rasteriser prepares five attribute ramps for every
+triangle - texture `u`/`v`, smooth shading `s`, and the two environment-map
+coordinates - and it did that unconditionally. A flat, untextured, non-env
+primitive, which is what a large part of the model corpus submits for effects
+and HUD geometry, never reads any of those ramps, so twenty divisions per
+triangle (`src/midp/nj_mascot_raster.c`, `nj_mascot_raster_triangle`) were
+computed and discarded.
+
+Each derivative is now guarded by the same flag the row filler already tests
+before reading it: `has_tex` for `u`/`v`, `smooth` for `s`, `env_smooth` for the
+environment pair. Inactive ramps are written as zero. Every active-path
+derivative, all rounding, the `dx_*` edge steps, and the flat vertex-0 attribute
+values are unchanged, so the visible output is identical by construction, not by
+tolerance.
+
+### Independent measurement
+
+An independent run re-derived the effect on the frozen Galaxy on Fire fighter
+asset (original JAR, fixed posture and projection, 220 triangles) with an
+interleaved ABBA of 12 pairs per case pinned to one core, comparing process CPU
+time per triangle and the framebuffer hash of every arm. All hashes matched.
+Reductions are min / median:
+
+| Framebuffer / span | Reduction | Framebuffer / span | Reduction |
+|---|---:|---|---:|
+| ARGB8888, 80 px | 6.39% / 7.46% | ARGB8888, 180 px | 2.07% / 2.28% |
+| RGB565, 80 px | 6.96% / 6.61% | RGB565, 180 px | 2.62% / 2.15% |
+| RGB888, 80 px | 7.57% / 6.75% | RGB888, 180 px | 2.64% / 2.94% |
+
+The first bounded scout measurement on the same asset reported 3.89-7.20%,
+consistent in direction and magnitude. This is a bounded native-renderer
+measurement of triangle setup and fill; it is not a whole-game FPS result, and
+the titles in the corpus that submit textured, smoothly shaded models see less
+than the flat path above.
+
+### Correctness and cost
+
+* 3,000/3,000 randomized differential cases produce identical framebuffer
+  hashes (draw and low-level triangle entry points), return codes and blend
+  results across RGB565/RGB888/ARGB8888, all material flags, blends 0-3, full/
+  inset/offset/empty/zero-area clips, degenerate triangles and +/-32768 extreme
+  vertices.
+* The committed golden raster test is byte-identical: 71 checks, 0 failures.
+* Focused ASan/UBSan/LSan runs, 600 cases each, report nothing.
+* Linked default-build ELF: `.text` +576 B (isolated object +608 B), `.rodata`,
+  `.data` and `.bss` unchanged, no symbols added or removed, executable size
+  unchanged at 3,146,200 B. The single `nj_mascot_raster_triangle` frame grows
+  928 -> 960 B (+32); `draw` is unchanged at 224 B. No persistent RAM, no new
+  buffers, no new fields.
+* The change is unconditional because it is semantics-preserving; there is no
+  switch to turn off, and disabling it would only restore the wasted divides.
+
+Evidence: `.local-tools/debug-runs/compat-round8-20261022/verify-raster/REPORT-raster-round8.md`
+(independent verification, raw logs and objects), `scout-perf/REPORT.md`
+(candidate discovery and first measurement), `scout-perf/reproduce.sh`.
+
 ## Three VM bugs the differential harness found, and none is about speed
 
 A 6,505-case differential harness (`.local-tools/debug-runs/interp-diff-20261022/`)

@@ -979,25 +979,28 @@ void nj_mascot_raster_triangle(nj_surface *dst,
             return;
         }
 
-        /* Long edge (a -> c) and short edge (a -> b / b -> c). */
+        /* Long edge (a -> c) and short edge (a -> b / b -> c).
+         * The row filler never reads inactive attributes. Avoid their divides
+         * on every edge and scanline derivative, while leaving active rounding
+         * and the flat vertex-0 attributes unchanged. */
         temp = cy - ay;
         dx_start = ((cx - ax) * MR_FP_ONE) / temp;
-        du_start = (cu - au) / temp;
-        dv_start = (cv - av) / temp;
-        ds_start = (cs - as) / temp;
-        deu_start = (ceu - aeu) / temp;
-        dev_start = (cev - aev) / temp;
+        du_start = has_tex ? (cu - au) / temp : 0;
+        dv_start = has_tex ? (cv - av) / temp : 0;
+        ds_start = smooth ? (cs - as) / temp : 0;
+        deu_start = st.env_smooth ? (ceu - aeu) / temp : 0;
+        dev_start = st.env_smooth ? (cev - aev) / temp : 0;
 
         dx_end = 0;
         du_end = dv_end = ds_end = deu_end = dev_end = 0;
         if (by != ay) {
             temp_i = by - ay;
             dx_end = ((bx - ax) * MR_FP_ONE) / temp_i;
-            du_end = (bu - au) / temp_i;
-            dv_end = (bv - av) / temp_i;
-            ds_end = (bs - as) / temp_i;
-            deu_end = (beu - aeu) / temp_i;
-            dev_end = (bev - aev) / temp_i;
+            du_end = has_tex ? (bu - au) / temp_i : 0;
+            dv_end = has_tex ? (bv - av) / temp_i : 0;
+            ds_end = smooth ? (bs - as) / temp_i : 0;
+            deu_end = st.env_smooth ? (beu - aeu) / temp_i : 0;
+            dev_end = st.env_smooth ? (bev - aev) / temp_i : 0;
         }
 
         /* Scanline derivatives across the segment (symmetric ceil). */
@@ -1020,11 +1023,11 @@ void nj_mascot_raster_triangle(nj_surface *dst,
         } else {
             temp += 1;
         }
-        du_across = (u_start - u_end) / temp;
-        dv_across = (v_start - v_end) / temp;
-        ds_across = (s_start - s_end) / temp;
-        deu_across = (eu_start - eu_end) / temp;
-        dev_across = (ev_start - ev_end) / temp;
+        du_across = has_tex ? (u_start - u_end) / temp : 0;
+        dv_across = has_tex ? (v_start - v_end) / temp : 0;
+        ds_across = smooth ? (s_start - s_end) / temp : 0;
+        deu_across = st.env_smooth ? (eu_start - eu_end) / temp : 0;
+        dev_across = st.env_smooth ? (ev_start - ev_end) / temp : 0;
 
         x_end = x_start = ax * MR_FP_ONE;
         u_end = u_start = au;
@@ -1113,11 +1116,11 @@ void nj_mascot_raster_triangle(nj_surface *dst,
             ev_end = bev;
             temp_i = cy - by;
             dx_end = ((cx - bx) * MR_FP_ONE) / temp_i;
-            du_end = (cu - bu) / temp_i;
-            dv_end = (cv - bv) / temp_i;
-            ds_end = (cs - bs) / temp_i;
-            deu_end = (ceu - beu) / temp_i;
-            dev_end = (cev - bev) / temp_i;
+            du_end = has_tex ? (cu - bu) / temp_i : 0;
+            dv_end = has_tex ? (cv - bv) / temp_i : 0;
+            ds_end = smooth ? (cs - bs) / temp_i : 0;
+            deu_end = st.env_smooth ? (ceu - beu) / temp_i : 0;
+            dev_end = st.env_smooth ? (cev - bev) / temp_i : 0;
             y_start = by;
             y_end = cy;
         }
