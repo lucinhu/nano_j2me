@@ -17,7 +17,7 @@
 #  built and is what the tests use).
 # =====================================================================
 cmake_minimum_required(VERSION 3.16)
-project(nano_j2me VERSION 0.1.0 LANGUAGES C)
+project(nano_j2me VERSION 0.2.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -45,6 +45,7 @@ option(NJ_FIXTURES_FETCH_GAMES
 by default because a build should not depend on GitHub being reachable; the
 tests that need those titles skip themselves when they are absent." OFF)
 option(NJ_BUILD_CLI      "Build the command-line runner"    ON)
+option(NJ_BUILD_LIBRETRO "Build the libretro core for RetroArch" ON)
 option(NJ_BUILD_SDL2     "Build the SDL2 desktop port"      ON)
 option(NJ_BUILD_EMBEDDED_PORTS
        "Also compile the Android and ESP32 port sources (they stub themselves \
@@ -180,7 +181,15 @@ target_include_directories(nj2me
 # so the library needs zlib when it is there.  A build without zlib still
 # compiles: the hook is then simply not filled in.
 find_package(ZLIB)
-if(ZLIB_FOUND)
+
+# The headless port also *includes* <zlib.h> for its inflate hooks, so a
+# cross-build needs the header for the target, not the host's.  Ask the
+# target compiler instead of guessing from ZLIB_FOUND: `zig cc -target ...`
+# has no zlib headers in its sysroot and must simply build the hooks out.
+include(CheckIncludeFile)
+check_include_file(zlib.h NJ_HAVE_ZLIB_H)
+if(ZLIB_FOUND AND NJ_HAVE_ZLIB_H)
+  target_compile_definitions(nj2me PRIVATE NJ_HAVE_ZLIB_H=1)
   target_link_libraries(nj2me PUBLIC ZLIB::ZLIB)
 endif()
 
@@ -308,6 +317,53 @@ endif()
 
 install(TARGETS nj2me ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(DIRECTORY include/nj2me DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+# ---------------------------------------------------------------------
+# libretro core
+#
+# A shared object any libretro frontend can load: RetroArch, Lakka,
+# RetroDECK, or the test harness in tests/test_libretro_frontend.c.  It links
+# runtime, so the archive has to be position independent.  The libretro ABI
+# reaches its entry points without a userdata pointer, which is why the single
+# process-wide core instance lives in src/port/libretro/ - see the documented
+# exemption in tools/check_no_statics.sh.
+# ---------------------------------------------------------------------
+if(NJ_BUILD_LIBRETRO)
+  set_target_properties(nj2me PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+  add_library(nano_j2me_libretro SHARED
+    src/port/libretro/nj_port_libretro.c)
+  target_include_directories(nano_j2me_libretro PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/port/libretro)
+  target_link_libraries(nano_j2me_libretro PRIVATE nj2me)
+  target_compile_options(nano_j2me_libretro PRIVATE -Wall -Wextra -Werror=format)
+  if(NOT MSVC)
+    target_compile_options(nano_j2me_libretro PRIVATE -fvisibility=hidden)
+  endif()
+  # The archive carries the optional SDL2 and curl ports; a frontend must not
+  # inherit their shared libraries, so let the linker drop what no symbol uses.
+  if(UNIX AND NOT APPLE)
+    target_link_options(nano_j2me_libretro PRIVATE -Wl,--as-needed)
+  endif()
+
+  # RetroArch loads cores by bare name (<core>_libretro.so), so no "lib"
+  # prefix; the .info beside it is what makes the core appear in its menu.
+  set_target_properties(nano_j2me_libretro PROPERTIES
+    OUTPUT_NAME nano_j2me_libretro
+    PREFIX ""
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/libretro
+    # A Windows core is a .dll (RUNTIME), and a macOS core a .dylib
+    # (LIBRARY); keep whichever artifact the host produces in one place.
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/libretro
+    ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/libretro)
+
+  install(TARGETS nano_j2me_libretro
+          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/libretro
+          RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}/libretro)
+  install(FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/port/libretro/nano_j2me_libretro.info
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/libretro)
+endif()
 
 # ---------------------------------------------------------------------
 # Tests
@@ -1162,6 +1218,43 @@ if(NJ_BASH)
     add_test(NAME no_statics
              COMMAND ${NJ_BASH}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_no_statics.sh)
+  endif()
+endif()
+
+# ---------------------------------------------------------------------
+# The libretro core is exercised through its real ABI: the mock frontend in
+# tests/test_libretro_frontend.c dlopen()s the shared object, plays the part of
+# RetroArch, and asserts on what the core reported, drew and played.
+# tools/check_libretro_frontend.sh compiles it (with the same CFLAGS a frontend
+# would use) and runs the matrix; the target below only exists so a compile
+# error is a build error, not a mysterious test failure.
+# ---------------------------------------------------------------------
+if(NJ_BUILD_TESTS AND NJ_BUILD_LIBRETRO AND UNIX
+   AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_libretro_frontend.c)
+  add_executable(test_libretro_frontend tests/test_libretro_frontend.c)
+  target_include_directories(test_libretro_frontend PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/port/libretro)
+  target_link_libraries(test_libretro_frontend PRIVATE ${CMAKE_DL_LIBS})
+
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_libretro_frontend.sh)
+    # The harness executable dlopen()s the core.  When the core is built with
+    # -DNJ_SANITIZE=ON the harness must be built with the same flags: an
+    # ASan-instrumented .so can only be loaded by a process whose ASan runtime
+    # came first, and a plain executable would fail with "ASan runtime does not
+    # come first in initial library list".
+    if(NJ_SANITIZE)
+      set(NJ_HARNESS_CFLAGS "-fsanitize=address,undefined -fno-omit-frame-pointer")
+    else()
+      set(NJ_HARNESS_CFLAGS "")
+    endif()
+    add_test(NAME test_libretro_frontend
+             COMMAND ${CMAKE_COMMAND} -E env
+                     CORE=$<TARGET_FILE:nano_j2me_libretro>
+                     "HARNESS_CFLAGS=${NJ_HARNESS_CFLAGS}"
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_libretro_frontend.sh)
+    set_tests_properties(test_libretro_frontend PROPERTIES
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      TIMEOUT 300)
   endif()
 endif()
 
