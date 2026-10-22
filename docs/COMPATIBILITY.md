@@ -2100,10 +2100,19 @@ synthetic palette PNG in memory, patches its `PLTE` payload, and asserts both
 that the patched file decodes with the patched colours and that truncated,
 out-of-bounds and otherwise malformed files are still rejected (14 checks).
 
-The title still stops advancing around frame 300 with zero decode exceptions:
-the board is drawn and the game then waits on a page transition/input timing
-path that the generic key script does not drive. That is a separate open item,
-not a decoder failure. Footprint: compile-time only, nothing is allocated and
+The 300-frame "stall" that followed the CRC fix was a replay-script
+limitation, not a decoder or runtime defect: this title is an interactive
+board game that waits for a **pointer tap** on the board (the 掷骰 dice).
+`--keys` can already drive that path - `pressed@X,Y` / `released@X,Y` are
+pointer edges - and with `450:pressed@130,205 456:released@130,205` (repeated
+every 200 frames, plus FIRE) every dumped frame after 400 differs: frame 400
+is the dice-roll animation, frame 600 the board after the roll and frame
+1,200 the board with the moved piece, `paints=1,197`, no caught or uncaught
+exception. The lesson is worth keeping because the same shape will look like
+a hang in the next sweep: a title that never reads `getKeyStates()` and only
+responds to taps needs pointer entries in its script, and the generic
+key-only sweep script cannot tell "waiting for a tap" from "stuck".
+Footprint: compile-time only, nothing is allocated and
 there are no new globals or stack use; the `nj_png.c.o` object is 1,071 bytes
 *smaller* on the Release flags because the default compiles the strict check
 out (`-DNJ_PNG_STRICT_CRC=1` restores it).
