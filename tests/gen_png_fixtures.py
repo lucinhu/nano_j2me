@@ -527,7 +527,9 @@ def build_negatives(out_dir, quiet):
     idx = good.index(b"IDAT") + 8
     bad[idx] ^= 0xFF
     log("  neg_bad_crc")
-    add_negative(out_dir, "neg_bad_crc", bytes(bad), "CRC")
+    # The default decoder ignores chunk CRCs (Java parity), so the damaged
+    # IDAT surfaces as a DEFLATE error; a strict build reports the stale CRC.
+    add_negative(out_dir, "neg_bad_crc", bytes(bad), "DEFLATE")
 
     # Bad signature.
     bad = bytearray(good)

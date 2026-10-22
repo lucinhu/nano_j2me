@@ -831,7 +831,15 @@ static void test_png_negatives(const char *dir)
         CHECK(img == NULL, "%s: decoder accepted a broken file", name);
         CHECK(err != NULL, "%s: failure without an error message", name);
         if (err != NULL) {
-            CHECK(strstr(err, expect) != NULL,
+            /* neg_bad_crc damages an IDAT byte and leaves the stored CRC stale:
+             * the default (Java-parity, CRC-lenient) build rejects it as a bad
+             * DEFLATE stream, a -DNJ_PNG_STRICT_CRC=1 build as a CRC mismatch. */
+            int msg_ok = strstr(err, expect) != NULL;
+
+            if (!msg_ok && strcmp(name, "neg_bad_crc") == 0) {
+                msg_ok = strstr(err, "CRC") != NULL;
+            }
+            CHECK(msg_ok,
                   "%s: error %.*s does not mention '%s'", name, 120, err,
                   expect);
         }

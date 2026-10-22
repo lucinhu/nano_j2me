@@ -1947,7 +1947,7 @@ exception (550 checks pass). The repro and core are under
 
 `3D激爆拳击_8805` stayed on `LOADING` for a whole 1,200-frame replay
 (`tris=0`, 251 paints, four identical dumps) while FreeJ2ME-Plus reached its
-`SELECT BOXER` screen. Our log had 70 caught
+`SELECT BOXER` screen. Our log had 66-70 caught (run-dependent)
 `IndexOutOfBoundsException: ... this runtime keeps 64 bone links`:
 `SkinnedMesh.addTransform` recorded each bone link in a fixed 64-slot Java
 array and refused the 65th, and this title's rigs need more (its largest
@@ -1963,16 +1963,20 @@ count untouched; `addTransform(null)` still throws `NullPointerException` and a
 corrupt negative count is refused.
 
 Verified on the title: true pre-fix build (parent commit) 70 bone exceptions
-with `tris=0`, `m3g=0` and 234 paints; fixed build 0 bone exceptions, 706
-paints, 36,288 triangles, 216 `m3g` calls, no uncaught exception. The replay
+with `tris=0`, `m3g=0` and 226-234 paints; fixed build 0 bone exceptions and
+650-711 paints, 22,848-36,288 triangles, 136-216 `m3g` calls across runs
+(the title's frame work is timing-coupled; `tris>0`, `m3g>0`, the loading
+stages and the zero bone exceptions reproduce every run), no uncaught
+exception. The replay
 now advances from `LOADING` through `SELECT BOXER` to the `TRIVIA` screen, but
 the match screen is still not reached: the boxer models fail through 46
 pre-existing M3G `Loader.load` exceptions
 (`section uses compression scheme 171; only 0/1 exist`) and the resulting NPE
 flood. That is a separate container-format gap, recorded here rather than
 implied fixed. `tests/test_m3g.c` gained 16 checks (0 bones, 64-fit, 65th
-accepted, 200 links, null/negative) and is 569 checks now. Footprint: +396 B of
-`.text`, no `.data`/`.bss`, `addTransform` stack frame 256 -> 272 B.
+accepted, 200 links, null/negative) and is 569 checks now. Footprint: +640 B of
+`.text` measured on the fixed build, no `.data`/`.bss`, `addTransform` stack
+frame 240 -> 272 B.
 
 ## The reference that became an `Image`: an interned-literal GC bug
 
