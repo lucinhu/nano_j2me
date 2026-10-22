@@ -2113,3 +2113,36 @@ chunk whose payload we read (PLTE, tRNS) can deliver corrupted palette bytes
 and plausible-looking wrong colours, while corruption inside IDAT is still
 caught by the zlib and scanline checks. That is Java parity by design, and a
 hardening build restores the fatal check.
+
+## The key editor the corpus expects (round 2, 2026-10-23)
+
+`三国杀2．2美化版_1347` opened a MIDP `TextBox` ("创建用户", null, 10, 0) and
+never got past it: the reference runtime's `TextBox` edits text from the key
+pad (UP/DOWN cycle a character set, FIRE or NUM5 insert the selected
+character, `*` deletes, `#` inserts a space), so three FIRE taps type `aaa`
+and the 确定 command creates the character.  We had no such path at all -
+text could only arrive through hosted IME events - so `getString()` stayed
+empty and the title looped on "角色名不能为空".
+
+`displayable_key()` now gives a focused `TextBox` or `Form` `TextField` first
+refusal, with the reference's semantics: UP/DOWN cycle the selected
+character of the current set, FIRE/NUM5 insert-or-replace at the caret, `*`
+deletes at the caret, `#` inserts a space (refused only for the exact
+NUMERIC|EMAILADDR|PHONENUMBER|DECIMAL constraint union), LEFT/RIGHT move the
+caret and sync the selection, UNEDITABLE refuses, and `maxSize`/constraints
+reuse the existing edit funnel.  Soft keys, non-editable screens and every
+key the editor does not take reach the Commands exactly as before; two old
+test expectations changed because the reference gives FIRE and DOWN to the
+editor on editable screens.
+
+Verified: `test_text_input` 1,023 checks / 0 failures, `test_lcdui` 2,889
+assertions / 0 failed, full ctest 101/101; on the title, frame 300 shows
+`提示 / CONFIRMATION / 创建角色 aaa 成功`, the same text as the reference
+frame.  Footprint: the `nj_lib_lcdui.c.o` object grows 2,352 bytes of text and
+64 bytes of data, with no heap, no new globals and no bss.
+
+Still missing on that screen: `Alert` timeout auto-dismiss.  The title sets a
+1000 ms timeout on its success alert; the reference dismisses it and returns
+to the menu, ours keeps it up (the baseline's error alert was equally stuck),
+so the title cannot get back to its menu yet.  That is tracked separately and
+is not part of the key editor.

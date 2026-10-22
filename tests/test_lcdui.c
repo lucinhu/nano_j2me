@@ -2216,6 +2216,167 @@ static void test_screen(nj_vm *vm)
         }
     }
 
+    /* ---- TextBox: key-driven editor (reference parity) ---- */
+    /*
+     * FreeJ2ME-Plus TextBox.screenKeyPressed is the ground truth the corpus was
+     * written for: UP/DOWN cycle one 8-bit character set whose first entry is
+     * 'a', FIRE or NUM5 replaces the character under the caret (appending at
+     * the end), '*' deletes the character under the caret, '#' inserts a space
+     * and LEFT/RIGHT move the caret.  三国杀2．2美化版_1347 types its user name
+     * with FIRE taps only, so this path is what unblocks its "创建用户" screen.
+     */
+    {
+        nj_ref tb = construct(vm, NJ_C_TEXTBOX,
+                              "(Ljava/lang/String;Ljava/lang/String;II)V",
+                              (nj_value[]){ sref(str(vm, "T")),
+                                            sref(NULL), iref(10), iref(0) });
+        nj_ref s;
+        OK(tb != NULL);
+        if (tb) {
+            OK(nj_midp_set_current(vm, tb) == NJ_OK);
+            OK(nj_midp_paint(vm) == NJ_OK);
+            OK_MSG(nj_midp_key(vm, NJ_KEY_FIRE, 1) == 1,
+                   "FIRE not consumed on a TextBox");
+            OK(nj_midp_key(vm, NJ_KEY_FIRE, 0) == 1);
+            s = call_ref(vm, tb, NJ_C_TEXTBOX, "getString",
+                         "()Ljava/lang/String;", NULL, &ok);
+            OK_MSG(s != NULL && ok && nj_string_equals_utf8(s, "a"),
+                   "first FIRE did not insert the charset head 'a'");
+            OK(call_int(vm, tb, NJ_C_TEXTBOX, "getCaretPosition", "()I",
+                        NULL, &ok) == 1 && ok);
+            (void)nj_midp_key(vm, NJ_KEY_FIRE, 1);
+            (void)nj_midp_key(vm, NJ_KEY_FIRE, 1);
+            s = call_ref(vm, tb, NJ_C_TEXTBOX, "getString",
+                         "()Ljava/lang/String;", NULL, &ok);
+            OK_MSG(s != NULL && ok && nj_string_equals_utf8(s, "aaa"),
+                   "three FIRE taps did not type \"aaa\"");
+            OK(call_int(vm, tb, NJ_C_TEXTBOX, "getCaretPosition", "()I",
+                        NULL, &ok) == 3 && ok);
+            /* UP moves the selection to 'b'; FIRE at the end appends it. */
+            (void)nj_midp_key(vm, NJ_KEY_UP, 1);
+            (void)nj_midp_key(vm, NJ_KEY_FIRE, 1);
+            s = call_ref(vm, tb, NJ_C_TEXTBOX, "getString",
+                         "()Ljava/lang/String;", NULL, &ok);
+            OK_MSG(s != NULL && ok && nj_string_equals_utf8(s, "aaab"),
+                   "UP did not cycle the character set to 'b'");
+        }
+    }
+    /* A fresh TextBox selects 'a', so UP then FIRE types 'b'. */
+    {
+        nj_ref tb = construct(vm, NJ_C_TEXTBOX,
+                              "(Ljava/lang/String;Ljava/lang/String;II)V",
+                              (nj_value[]){ sref(str(vm, "T")), sref(NULL),
+                                            iref(10), iref(0) });
+        nj_ref s;
+        OK(tb != NULL);
+        if (tb) {
+            OK(nj_midp_set_current(vm, tb) == NJ_OK);
+            (void)nj_midp_key(vm, NJ_KEY_UP, 1);
+            (void)nj_midp_key(vm, NJ_KEY_FIRE, 1);
+            s = call_ref(vm, tb, NJ_C_TEXTBOX, "getString",
+                         "()Ljava/lang/String;", NULL, &ok);
+            OK_MSG(s != NULL && ok && nj_string_equals_utf8(s, "b"),
+                   "UP + FIRE did not insert 'b'");
+        }
+    }
+    /* '*' deletes the character under the caret; '#' inserts a space there. */
+    {
+        nj_ref tb = construct(vm, NJ_C_TEXTBOX,
+                              "(Ljava/lang/String;Ljava/lang/String;II)V",
+                              (nj_value[]){ sref(str(vm, "T")),
+                                            sref(str(vm, "ab")), iref(10), iref(0) });
+        nj_ref s;
+        OK(tb != NULL);
+        if (tb) {
+            OK(nj_midp_set_current(vm, tb) == NJ_OK);
+            /* The caret starts after "ab": move it onto 'b' and delete it. */
+            (void)nj_midp_key(vm, NJ_KEY_LEFT, 1);
+            (void)nj_midp_key(vm, NJ_KEY_STAR, 1);
+            s = call_ref(vm, tb, NJ_C_TEXTBOX, "getString",
+                         "()Ljava/lang/String;", NULL, &ok);
+            OK_MSG(s != NULL && ok && nj_string_equals_utf8(s, "a"),
+                   "'*' did not delete the character under the caret");
+            (void)nj_midp_key(vm, NJ_KEY_RIGHT, 1);
+            (void)nj_midp_key(vm, NJ_KEY_POUND, 1);
+            s = call_ref(vm, tb, NJ_C_TEXTBOX, "getString",
+                         "()Ljava/lang/String;", NULL, &ok);
+            OK_MSG(s != NULL && ok && nj_string_equals_utf8(s, "a "),
+                   "'#' did not insert a space");
+        }
+    }
+    /* maxSize holds: a third FIRE at the end of a full TextBox changes none. */
+    {
+        nj_ref tb = construct(vm, NJ_C_TEXTBOX,
+                              "(Ljava/lang/String;Ljava/lang/String;II)V",
+                              (nj_value[]){ sref(str(vm, "T")), sref(NULL),
+                                            iref(2), iref(0) });
+        nj_ref s;
+        OK(tb != NULL);
+        if (tb) {
+            OK(nj_midp_set_current(vm, tb) == NJ_OK);
+            (void)nj_midp_key(vm, NJ_KEY_FIRE, 1);
+            (void)nj_midp_key(vm, NJ_KEY_FIRE, 1);
+            (void)nj_midp_key(vm, NJ_KEY_FIRE, 1);
+            s = call_ref(vm, tb, NJ_C_TEXTBOX, "getString",
+                         "()Ljava/lang/String;", NULL, &ok);
+            OK_MSG(s != NULL && ok && nj_string_equals_utf8(s, "aa"),
+                   "maxSize was not respected by the key editor");
+        }
+    }
+    /* An UNEDITABLE TextBox keeps its Commands: FIRE must not insert text. */
+    {
+        nj_ref tb = construct(vm, NJ_C_TEXTBOX,
+                              "(Ljava/lang/String;Ljava/lang/String;II)V",
+                              (nj_value[]){ sref(str(vm, "T")),
+                                            sref(str(vm, "read only")),
+                                            iref(10), iref(0x20000) });
+        nj_ref s;
+        OK(tb != NULL);
+        if (tb) {
+            OK(nj_midp_set_current(vm, tb) == NJ_OK);
+            (void)nj_midp_key(vm, NJ_KEY_FIRE, 1);
+            s = call_ref(vm, tb, NJ_C_TEXTBOX, "getString",
+                         "()Ljava/lang/String;", NULL, &ok);
+            OK_MSG(s != NULL && ok && nj_string_equals_utf8(s, "read only"),
+                   "an UNEDITABLE TextBox accepted an edit");
+        }
+    }
+    /* A focused Form TextField uses the same editor, including RIGHT-appends. */
+    {
+        nj_ref form2 = construct(vm, NJ_C_FORM, "(Ljava/lang/String;)V",
+                                 (nj_value[]){ sref(str(vm, "Form")) });
+        nj_ref tf = construct(vm, NJ_C_TEXTFIELD,
+                              "(Ljava/lang/String;Ljava/lang/String;II)V",
+                              (nj_value[]){ sref(str(vm, "name")),
+                                            sref(str(vm, "")), iref(10), iref(0) });
+        nj_ref s;
+        OK(form2 != NULL && tf != NULL);
+        if (form2 && tf) {
+            nj_value fa[1];
+            fa[0] = sref(tf);
+            OK(call_int(vm, form2, NJ_C_FORM, "append", "(L" NJ_C_ITEM ";)I",
+                        fa, &ok) == 0 && ok);
+            OK(nj_midp_set_current(vm, form2) == NJ_OK);
+            (void)nj_midp_key(vm, NJ_KEY_FIRE, 1);
+            (void)nj_midp_key(vm, NJ_KEY_UP, 1);
+            (void)nj_midp_key(vm, NJ_KEY_FIRE, 1);
+            /* RIGHT at the end of a TextField appends the selected character. */
+            (void)nj_midp_key(vm, NJ_KEY_RIGHT, 1);
+            s = call_ref(vm, tf, NJ_C_TEXTFIELD, "getString",
+                         "()Ljava/lang/String;", NULL, &ok);
+            OK_MSG(s != NULL && ok && nj_string_equals_utf8(s, "abb"),
+                   "focused TextField editor did not type \"abb\"");
+            OK(call_int(vm, tf, NJ_C_TEXTFIELD, "getCaretPosition", "()I",
+                        NULL, &ok) == 3 && ok);
+            (void)nj_midp_key(vm, NJ_KEY_LEFT, 1);
+            (void)nj_midp_key(vm, NJ_KEY_STAR, 1);
+            s = call_ref(vm, tf, NJ_C_TEXTFIELD, "getString",
+                         "()Ljava/lang/String;", NULL, &ok);
+            OK_MSG(s != NULL && ok && nj_string_equals_utf8(s, "ab"),
+                   "TextField '*' did not delete the caret character");
+        }
+    }
+
     /* ---- Alert ---- */
     alert = construct(vm, NJ_C_ALERT, "(Ljava/lang/String;)V",
                       (nj_value[]){ sref(str(vm, "Low battery")) });

@@ -83,6 +83,13 @@ static void constraint(nj_vm *vm, nj_ref ref, int value)
     CHECK(nj_call(vm, ref, NJ_C_TEXTBOX, "setConstraints", "(I)V", &arg, NULL) == NJ_OK);
     nj_midp_text_input_sync(vm);
 }
+static void constraint_cls(nj_vm *vm, nj_ref ref, const char *cls, int value)
+{
+    nj_value arg;
+    arg.i = value;
+    CHECK(nj_call(vm, ref, cls, "setConstraints", "(I)V", &arg, NULL) == NJ_OK);
+    nj_midp_text_input_sync(vm);
+}
 static void runtime_test(void)
 {
     nj_port port;
@@ -181,6 +188,16 @@ static void runtime_test(void)
     CHECK(snapshot.active && !snapshot.multiline);
     session = snapshot.session;
     CHECK(commit(vm, "\xe4\xb8\xad", session));
+    /* A focused TextField owns the editing keys, like the reference runtime:
+     * DOWN widens the character selection instead of leaving the item, so the
+     * native session survives the press. */
+    CHECK(nj_midp_key(vm, NJ_KEY_DOWN, 1));
+    nj_midp_text_input_sync(vm);
+    CHECK(snapshot.active && snapshot.session == session);
+    expect(vm, field, NJ_C_TEXTFIELD, chinese, 1);
+    /* Making the focused field UNEDITABLE hands DOWN back to the Form's item
+     * traversal: focus moves to the second row and the old session retires. */
+    constraint_cls(vm, field, NJ_C_TEXTFIELD, 0x20000);
     CHECK(nj_midp_key(vm, NJ_KEY_DOWN, 1));
     nj_midp_text_input_sync(vm);
     CHECK(snapshot.session != session);
@@ -543,8 +560,9 @@ static void editor_command_test(void)
     nj_class *cls;
     nj_ref listener, confirm, cancel, field, screen;
     nj_value arg;
-    int i;
+    int i, before;
     const nj_u2 chinese[] = {0x4e2d, 0x6587};
+    const nj_u2 typed[] = {0x4e2d, 0x6587, 'a'};
     CHECK(nj_port_headless(&port) == NJ_OK);
     port.text_input = capture;
     vm = nj_vm_create(&port, 4u * 1024u * 1024u);
@@ -579,7 +597,19 @@ static void editor_command_test(void)
         check_command_key(vm, NJ_KEY_SOFT_LEFT, screen, confirm);
         expect(vm, field, i ? NJ_C_TEXTBOX : NJ_C_TEXTFIELD, chinese, 2);
         check_command_key(vm, NJ_KEY_SOFT_RIGHT, screen, cancel);
+        /* An editable screen gives FIRE to the editor: the selected character
+         * is inserted at the caret and no command runs (reference practice -
+         * TextBox/TextField keyPressed consumes it; commands stay on the soft
+         * keys). */
+        before = command_calls;
+        CHECK(nj_midp_key(vm, NJ_KEY_FIRE, 1));
+        CHECK(command_calls == before && !vm->exception);
+        expect(vm, field, i ? NJ_C_TEXTBOX : NJ_C_TEXTFIELD, typed, 3);
+        /* Once the editor is UNEDITABLE, FIRE is the default command again,
+         * exactly as it was before the key editor landed. */
+        constraint_cls(vm, field, i ? NJ_C_TEXTBOX : NJ_C_TEXTFIELD, 0x20000);
         check_command_key(vm, NJ_KEY_FIRE, screen, confirm);
+        constraint_cls(vm, field, i ? NJ_C_TEXTBOX : NJ_C_TEXTFIELD, 0);
         /* Removing one command must not leave the remaining command
          * unreachable. Then cover two positive commands with priorities. */
         arg.r = cancel;

@@ -4616,6 +4616,8 @@ static int screen_activate(nj_vm *vm, nj_ref d)
  * Deliver a key to the current non-Canvas Displayable.  Returns 1 when the
  * screen consumed it.
  */
+static int text_editor_key(nj_vm *vm, nj_ref d, int action);
+
 static int displayable_key(nj_vm *vm, nj_ref d, int action, int down)
 {
     if (!down) {
@@ -4623,6 +4625,12 @@ static int displayable_key(nj_vm *vm, nj_ref d, int action, int down)
     }
     if (!d) {
         return 0;
+    }
+    /* A focused TextBox/TextField owns the editing keys, as on the reference
+     * runtime.  Keys the editor does not take (soft keys and the rest) still
+     * reach the Commands below. */
+    if (text_editor_key(vm, d, action)) {
+        return 1;
     }
     if (ui_is_up(action)) {
         if (isa(vm, d, NJ_C_FORM)) {
@@ -6472,6 +6480,7 @@ NJFN(tf_init)
     fput(vm, self, NJ_C_TEXTFIELD, "tfConstraints", D_INT, constraints);
     fput(vm, self, NJ_C_TEXTFIELD, "tfCursor", D_INT,
          (nj_s4)nj_string_len(text));
+    fput(vm, self, NJ_C_TEXTFIELD, "tfSelChar", D_INT, 0);
     fput(vm, self, NJ_C_TEXTFIELD, "tfInputMode", D_INT, -1);
     rput(vm, self, NJ_C_TEXTFIELD, "tfInputModeName", D_STR, NULL);
     return vm->exception ? NJ_ERR : NJ_OK;
@@ -8569,6 +8578,7 @@ NJFN(tb_init)
     fput(vm, self, NJ_C_TEXTBOX, "tbMax", D_INT, max);
     fput(vm, self, NJ_C_TEXTBOX, "tbConstraints", D_INT, constraints);
     fput(vm, self, NJ_C_TEXTBOX, "tbCursor", D_INT, (nj_s4)nj_string_len(text));
+    fput(vm, self, NJ_C_TEXTBOX, "tbSelChar", D_INT, 0);
     fput(vm, self, NJ_C_TEXTBOX, "tbInputMode", D_INT, -1);
     rput(vm, self, NJ_C_TEXTBOX, "tbInputModeName", D_STR, NULL);
     rput(vm, self, NJ_C_TEXTBOX, "tbBuffer", D_IMAGE, NULL);
@@ -8690,6 +8700,15 @@ static int text_decode(const char *s, nj_u2 *out)
     return n;
 }
 
+/*
+ * Key-editor commands, private to this file (the port's nj_text_edit codes
+ * stay 1-6).  They mirror what the reference runtime's TextBox/TextField
+ * editor does when FIRE/'*' is pressed: the character under the caret is
+ * replaced or removed, and a character at the end of the text is appended.
+ */
+#define TEXT_EDIT_REPLACE_ONE 101  /* replace the caret character, else append */
+#define TEXT_EDIT_DELETE_AT   102  /* remove the caret character */
+
 static int text_change(nj_vm *vm, const nj_u2 *insert, int count, int edit)
 {
     int box, len, at, begin, end, newlen;
@@ -8734,11 +8753,17 @@ static int text_change(nj_vm *vm, const nj_u2 *insert, int count, int edit)
         break;
     case NJ_TEXT_HOME: at = 0; break;
     case NJ_TEXT_END: at = len; break;
+    case TEXT_EDIT_REPLACE_ONE:   /* FIRE / NUM5 / '#' */
+    case TEXT_EDIT_DELETE_AT:     /* '*' */
+        begin = end = at;
+        if (end < len) { end++; }
+        break;
     case -1: begin = 0; end = len; break; /* complete native editor replacement */
     case 0: break;
     default: return 0;
     }
-    if (edit > 0 && edit != NJ_TEXT_BACKSPACE && edit != NJ_TEXT_DELETE) {
+    if (edit > 0 && edit != NJ_TEXT_BACKSPACE && edit != NJ_TEXT_DELETE
+        && edit != TEXT_EDIT_REPLACE_ONE && edit != TEXT_EDIT_DELETE_AT) {
         fput(vm, it, cls, cursor, D_INT, at);
         nj_midp_repaint(vm);
         return 1;
@@ -8766,12 +8791,175 @@ static int text_change(nj_vm *vm, const nj_u2 *insert, int count, int edit)
     st = box ? tb_sync(vm, it, buf, newlen) : tf_sync(vm, it, buf, newlen);
     nj_host_free(vm, buf);
     if (st == NJ_OK) {
-        fput(vm, it, cls, cursor, D_INT, begin + count);
+        if (edit == TEXT_EDIT_DELETE_AT) {
+            fput(vm, it, cls, cursor, D_INT, at > 0 ? at - 1 : 0);
+        } else {
+            fput(vm, it, cls, cursor, D_INT, begin + count);
+        }
         if (!box) { item_state_changed(vm, it); }
         nj_midp_repaint(vm);
     }
     nj_root_release(vm, mark);
     return st == NJ_OK;
+}
+
+/*
+ * The reference runtime's key-driven editor (FreeJ2ME-Plus TextBox.java
+ * screenKeyPressed / TextField.java keyPressed) is the behaviour the corpus
+ * was written against: UP/DOWN cycle one 8-bit character set, FIRE or NUM5
+ * replaces the character under the caret (appending at the end), '*' removes
+ * the character under the caret, '#' inserts a space, and LEFT/RIGHT move the
+ * caret.  The selection starts at index 0, so three FIRE taps type "aaa" -
+ * exactly what 三国杀2．2美化版_1347's "创建用户" TextBox needs before 确定.
+ *
+ * Only the default input-mode table is used: no key moves charSetIdx in the
+ * reference; only setInputMode() does.
+ */
+static const char text_charset_default[] =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    "!@#$%~^<.,;?/[]{}>&*()-_+'\"|`\n";
+
+static int text_charset_len(void)
+{
+    return (int)(sizeof(text_charset_default) - 1u);
+}
+
+static int text_sel_char_get(nj_vm *vm, nj_ref it, int box)
+{
+    const char *cls = box ? NJ_C_TEXTBOX : NJ_C_TEXTFIELD;
+    const char *fld = box ? "tbSelChar" : "tfSelChar";
+    int n = text_charset_len();
+    nj_s4 v = fget(vm, it, cls, fld, D_INT);
+    if (v < 0 || v >= n) {
+        v = 0;
+    }
+    return (int)v;
+}
+
+static void text_sel_char_put(nj_vm *vm, nj_ref it, int box, int v)
+{
+    fput(vm, it, box ? NJ_C_TEXTBOX : NJ_C_TEXTFIELD,
+         box ? "tbSelChar" : "tfSelChar", D_INT, v);
+}
+
+/* After a caret move the reference points the selection at the character the
+ * caret now sits on, when that character is in the set. */
+static void text_sel_char_sync(nj_vm *vm, nj_ref it, int box,
+                               const nj_u2 *s, int len, int at)
+{
+    int i, n = text_charset_len();
+    if (!s || at < 0 || at >= len) {
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        if ((nj_u2)(unsigned char)text_charset_default[i] == s[at]) {
+            text_sel_char_put(vm, it, box, i);
+            return;
+        }
+    }
+}
+
+/*
+ * Try a key against the focused text editor.  Returns 1 when the editor owned
+ * it; 0 lets the key reach the command/soft-key handling exactly as before.
+ */
+static int text_editor_key(nj_vm *vm, nj_ref d, int action)
+{
+    int box = 0, at, len, sel, moved = 0;
+    nj_ref it, str;
+    const char *cls, *cursor;
+    const nj_u2 *s;
+    nj_s4 constraints;
+    nj_u2 ch;
+
+    if (!vm || !d) {
+        return 0;
+    }
+    if (!isa(vm, d, NJ_C_TEXTBOX) && !isa(vm, d, NJ_C_FORM)) {
+        return 0;
+    }
+    it = text_focus(vm, &box);
+    if (!it) {
+        return 0;
+    }
+    cls = box ? NJ_C_TEXTBOX : NJ_C_TEXTFIELD;
+    constraints = fget(vm, it, cls,
+                       box ? "tbConstraints" : "tfConstraints", D_INT);
+    if ((constraints & 0x20000) != 0) {
+        return 0;   /* UNEDITABLE: the keys belong to the Commands */
+    }
+    cursor = box ? "tbCursor" : "tfCursor";
+    str = rget(vm, it, cls, box ? "tbText" : "tfText", D_STR);
+    len = str ? (int)nj_string_len(str) : 0;
+    s = str ? nj_string_chars(str) : NULL;
+    at = fget(vm, it, cls, cursor, D_INT);
+    if (at < 0) { at = 0; }
+    if (at > len) { at = len; }
+    sel = text_sel_char_get(vm, it, box);
+
+    switch (action) {
+    case NJ_MIDP_KEY_UP:
+        sel = (sel + 1) % text_charset_len();
+        break;
+    case NJ_MIDP_KEY_DOWN:
+        sel = (sel - 1 + text_charset_len()) % text_charset_len();
+        break;
+    case NJ_MIDP_KEY_LEFT:
+        if (at <= 0) {
+            return 0;   /* reference: no movement, key falls through */
+        }
+        at--;
+        if (at > 0 && text_low(s[at]) && text_high(s[at - 1])) {
+            at--;
+        }
+        fput(vm, it, cls, cursor, D_INT, at);
+        text_sel_char_sync(vm, it, box, s, len, at);
+        moved = 1;
+        break;
+    case NJ_MIDP_KEY_RIGHT:
+        if (at < len) {
+            at++;
+            if (at < len && text_high(s[at - 1]) && text_low(s[at])) {
+                at++;
+            }
+            fput(vm, it, cls, cursor, D_INT, at);
+            text_sel_char_sync(vm, it, box, s, len, at);
+            moved = 1;
+        } else if (!box) {
+            /* TextField's keyPressed also inserts on RIGHT at the end. */
+            ch = (nj_u2)(unsigned char)text_charset_default[sel];
+            (void)text_change(vm, &ch, 1, TEXT_EDIT_REPLACE_ONE);
+        } else {
+            return 0;   /* TextBox: no movement, key falls through */
+        }
+        break;
+    case NJ_MIDP_KEY_FIRE:
+    case NJ_MIDP_KEY_NUM5:
+        ch = (nj_u2)(unsigned char)text_charset_default[sel];
+        (void)text_change(vm, &ch, 1, TEXT_EDIT_REPLACE_ONE);
+        break;
+    case NJ_MIDP_KEY_STAR:
+        (void)text_change(vm, NULL, 0, TEXT_EDIT_DELETE_AT);
+        break;
+    case NJ_MIDP_KEY_POUND:
+        /* Reference: the space is refused only for the exact union constraint
+         * NUMERIC|EMAILADDR|PHONENUMBER|DECIMAL (7); every other text
+         * constraint accepts one. */
+        if (constraints == 7) {
+            return 0;
+        }
+        ch = ' ';
+        (void)text_change(vm, &ch, 1, 0);
+        break;
+    default:
+        return 0;
+    }
+    text_sel_char_put(vm, it, box, sel);
+    if (moved && !box) {
+        item_state_changed(vm, it);
+    }
+    nj_midp_repaint(vm);
+    return 1;
 }
 
 int nj_midp_text(nj_vm *vm, const char *utf8)
@@ -10427,6 +10615,7 @@ static const nj_builtin_field textfield_fields[] = {
     FLD("tfMax",         D_INT,   0),
     FLD("tfConstraints", D_INT,   0),
     FLD("tfCursor",      D_INT,   0),
+    FLD("tfSelChar",     D_INT,   0),
     FLD("tfInputMode",   D_INT,   0),
     FLD("tfInputModeName", D_STR, 0),
     FLD("ANY",         D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
@@ -10590,6 +10779,7 @@ static const nj_builtin_field textbox_fields[] = {
     FLD("tbMax",         D_INT,   0),
     FLD("tbConstraints", D_INT,   0),
     FLD("tbCursor",      D_INT,   0),
+    FLD("tbSelChar",     D_INT,   0),
     FLD("tbInputMode",   D_INT,   0),
     FLD("tbInputModeName", D_STR, 0),
     FLD("tbBuffer",      D_IMAGE, 0),
