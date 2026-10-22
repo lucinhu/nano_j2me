@@ -13,6 +13,10 @@
 # its own loop.
 #
 #   FLUSH loop=<n>          the worker flushed n frames
+#
+# 120 frames, not 60: an ASan/Debug build runs the fixture ~2.6x slower, and
+# with a 60-frame budget it only reached 8 worker flushes (the check wants 10).
+# The worker's frame is deliberately slow, so the loop count follows wall time.
 #   every presented frame is ONE colour (no frame holds both)
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -26,7 +30,7 @@ DUMP="$(mktemp -d)"
 trap 'rm -rf "$DUMP"' EXIT
 
 out="$(timeout 90 "$BIN" --port headless --heap 8 --size 176x208 --fps 30 \
-        --run-frames 60 --dump-frames "$DUMP/" --dump-every 1 --stats \
+        --run-frames 120 --dump-frames "$DUMP/" --dump-every 1 --stats \
         "$JAR" 2>&1)"
 rc=$?
 

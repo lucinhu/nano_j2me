@@ -2448,10 +2448,9 @@ int main(void)
               "render(Node) with scene lights leaves no ref root behind");
     }
 
-    nj_vm_destroy(vm);
-    nj_port_shutdown(&port);
     /* The file format calls type 18 Sprite; the titles call the class
-       Sprite3D.  Both have to be loadable. */
+       Sprite3D.  Both have to be loadable.  These run before the VM is
+       destroyed - a lookup on a destroyed VM reads freed memory. */
     check(nj_class_lookup(vm, "javax/microedition/m3g/Sprite") != NULL,
           "javax/microedition/m3g/Sprite is not registered");
     check(nj_class_lookup(vm, "javax/microedition/m3g/Sprite3D") != NULL,
@@ -2460,6 +2459,9 @@ int main(void)
           "javax/microedition/m3g/MorphingMesh is not registered");
     check(nj_class_lookup(vm, "javax/microedition/m3g/SkinnedMesh") != NULL,
           "javax/microedition/m3g/SkinnedMesh is not registered");
+
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
     printf("%d checks, %d failures\n", checks, failures);
     if (failures) {
         printf("FAILED (%d failures)\n", failures);

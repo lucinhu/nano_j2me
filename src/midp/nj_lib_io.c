@@ -2283,9 +2283,10 @@ NJFN(ps_print_bool)
 
 NJFN(ps_print_long)
 {
-    nj_value a[1];
+    nj_value a[2];
 
     a[0].j = NJ_ARG_LONG(args, 0);
+    a[1].bits = 0u;      /* the upper half of the two-slot value */
     return ps_fmt(vm, NJ_THIS(args), "(J)Ljava/lang/String;", a, 0);
 }
 
@@ -2299,9 +2300,10 @@ NJFN(ps_print_float)
 
 NJFN(ps_print_double)
 {
-    nj_value a[1];
+    nj_value a[2];
 
     a[0].d = NJ_ARG_DOUBLE(args, 0);
+    a[1].bits = 0u;      /* the upper half of the two-slot value */
     return ps_fmt(vm, NJ_THIS(args), "(D)Ljava/lang/String;", a, 0);
 }
 
@@ -2337,9 +2339,10 @@ NJFN(ps_println_char)
 
 NJFN(ps_println_long)
 {
-    nj_value a[1];
+    nj_value a[2];
 
     a[0].j = NJ_ARG_LONG(args, 0);
+    a[1].bits = 0u;      /* the upper half of the two-slot value */
     return ps_fmt(vm, NJ_THIS(args), "(J)Ljava/lang/String;", a, 1);
 }
 
@@ -2353,9 +2356,10 @@ NJFN(ps_println_float)
 
 NJFN(ps_println_double)
 {
-    nj_value a[1];
+    nj_value a[2];
 
     a[0].d = NJ_ARG_DOUBLE(args, 0);
+    a[1].bits = 0u;      /* the upper half of the two-slot value */
     return ps_fmt(vm, NJ_THIS(args), "(D)Ljava/lang/String;", a, 1);
 }
 

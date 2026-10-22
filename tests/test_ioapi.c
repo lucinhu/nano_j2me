@@ -265,7 +265,7 @@ static void test_printstream_formats(nj_vm *vm)
     nj_ref ps = nj_object_new(vm, PS);
     nj_ref obj = nj_string_new(vm, "obj");
     nj_ref chars = chars_of(vm, "hi");
-    nj_value a[2];
+    nj_value a[4];
     nj_value ret;
 
     OK_MSG(ps != NULL, "PrintStream allocation");
