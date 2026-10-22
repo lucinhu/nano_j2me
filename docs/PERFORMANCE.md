@@ -1901,7 +1901,7 @@ Correctness: `test_gfx` 324, `test_clip` 15, `test_directgraphics` 34,
 digest unchanged. No new state: RAM, stack and the public surface are
 untouched.
 
-## Round-2 summary: what the five changes add up to (fixtures, not FPS)
+## Round-2 summary: what the round adds up to (fixtures, not FPS)
 
 The individual sections above each measure one change against its parent. This
 one measures the round as a whole: the round-8 binary
@@ -1921,6 +1921,13 @@ rewrite alone, and the interpreter benchmark `bench.jar` is unchanged as
 always (`BENCH sum=-136042548`, 70,514,376 bytecodes, heap 92,432/92,432), which
 is the point: these changes remove per-call bookkeeping from native-heavy
 paths, not bytecodes from the interpreter.
+
+Correctness work landed in the same round and is written up in
+`docs/COMPATIBILITY.md` rather than here: the 512-literal intern table that
+let a cached constant-pool string be collected (and the two StringBuilder
+temporaries that were never rooted), the 64-bone cap that hung a boxing
+title on its loading screen, PNG stale-CRC parity, and the keypad
+`TextBox`/`TextField` editor.  None of them is a speed claim.
 
 What this is not: an FPS claim. Paced real-game replays are wall-clock
 dependent, so two runs of the same binary can differ in bytecodes and
