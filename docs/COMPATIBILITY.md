@@ -1943,6 +1943,37 @@ a `Mesh` for an id after a `World` exists and requires a `null` answer with no
 exception (550 checks pass). The repro and core are under
 `.local-tools/debug-runs/compat-round9-20261022/deep2/` and `crash-repro3/`.
 
+## The 64-bone limit that hung a boxing title on its loading screen
+
+`3D激爆拳击_8805` stayed on `LOADING` for a whole 1,200-frame replay
+(`tris=0`, 251 paints, four identical dumps) while FreeJ2ME-Plus reached its
+`SELECT BOXER` screen. Our log had 70 caught
+`IndexOutOfBoundsException: ... this runtime keeps 64 bone links`:
+`SkinnedMesh.addTransform` recorded each bone link in a fixed 64-slot Java
+array and refused the 65th, and this title's rigs need more (its largest
+built by our run had 535 links across 14 rosters; 5,197 calls in total).
+
+The roster is still a per-receiver Java `Object[]` - the capacity is the array
+length, so no VM state is added - but the first `addTransform` now allocates
+the old 64 slots exactly as before, and a larger rig doubles it
+(128/256/512/1024) before publishing the new array. A rig with 64 or fewer
+bones takes the same single allocation and behaves byte-identically; an
+allocation failure throws `OutOfMemoryError` and leaves the old roster and
+count untouched; `addTransform(null)` still throws `NullPointerException` and a
+corrupt negative count is refused.
+
+Verified on the title: true pre-fix build (parent commit) 70 bone exceptions
+with `tris=0`, `m3g=0` and 234 paints; fixed build 0 bone exceptions, 706
+paints, 36,288 triangles, 216 `m3g` calls, no uncaught exception. The replay
+now advances from `LOADING` through `SELECT BOXER` to the `TRIVIA` screen, but
+the match screen is still not reached: the boxer models fail through 46
+pre-existing M3G `Loader.load` exceptions
+(`section uses compression scheme 171; only 0/1 exist`) and the resulting NPE
+flood. That is a separate container-format gap, recorded here rather than
+implied fixed. `tests/test_m3g.c` gained 16 checks (0 bones, 64-fit, 65th
+accepted, 200 links, null/negative) and is 569 checks now. Footprint: +396 B of
+`.text`, no `.data`/`.bss`, `addTransform` stack frame 256 -> 272 B.
+
 ## The reference that became an `Image`: an interned-literal GC bug
 
 The round-9 title sweep left one defect open rather than explained away, and

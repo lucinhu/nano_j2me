@@ -1166,6 +1166,124 @@ static void test_image2d_set(nj_vm *vm)
     }
 }
 
+/*
+ * SkinnedMesh.addTransform used to fill a fixed 64-slot Object[] and throw
+ * IndexOutOfBoundsException on the 65th entry.  A real title
+ * (3D激爆拳击_8805) builds rigs of several hundred links at load time; the
+ * exception was caught by the game, which then waited on its LOADING screen
+ * forever.  The roster now starts at those same 64 slots and doubles, so the
+ * <=64-bone case keeps its single allocation and larger rigs are accepted.
+ * These checks pin the boundary, the growth (old entries survive) and the
+ * "no bones = no allocation" edge, in the same style as the rest of the file:
+ * after the VM-side native ran, the Java fields the game would see must hold
+ * exactly what the calls asked for.
+ */
+static void test_skinned_mesh_bones(nj_vm *vm)
+{
+    static const char *skin = CLS("SkinnedMesh");
+    nj_value a[4];
+    nj_ref mesh = nj_object_new(vm, skin);
+    nj_ref node;
+    nj_ref roster;
+    nj_field *fb;
+    nj_field *fn;
+    nj_status st;
+    nj_s4 i;
+
+    printf("== the SkinnedMesh bone roster grows past 64 ==\n");
+    check(mesh != 0, "new SkinnedMesh object");
+    memset(a, 0, sizeof(a));
+    a[3].r = make(vm, CLS("Group"));
+    call(vm, mesh, skin, "<init>",
+         "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+         CLS("Appearance") ";L" CLS("Group") ";)V", a, NULL);
+    nj_clear_exception(vm);
+
+    fb = nj_field_lookup(vm, skin, "_nj_bones",
+                         "[L" "javax/microedition/m3g/Node" ";", 0);
+    fn = nj_field_lookup(vm, skin, "_nj_nbones", "I", 0);
+    check(fb != 0 && fn != 0, "SkinnedMesh keeps a bone roster and a count");
+    if (!fb || !fn) {
+        return;
+    }
+
+    roster = nj_rget(vm, mesh, fb);
+    check(roster == 0 && nj_iget(vm, mesh, fn) == 0,
+          "a fresh SkinnedMesh holds no bones and allocates no roster");
+
+    node = make(vm, CLS("Group"));
+    check(node != 0, "the first bone node constructs");
+    a[0].r = node;
+    a[1].i = 0;
+    a[2].i = 1;
+    a[3].i = 0;
+    st = nj_call(vm, mesh, skin, "addTransform",
+                 "(L" CLS("Node") ";III)V", a, NULL);
+    check(st == NJ_OK, "addTransform records the first bone");
+    roster = nj_rget(vm, mesh, fb);
+    check(nj_iget(vm, mesh, fn) == 1 &&
+          nj_array_length(roster) == 64u &&
+          nj_array_get_ref(roster, 0u) == node,
+          "the first bone fits the old 64-slot allocation");
+
+    for (i = 1; i < 64; i++) {
+        (void)nj_call(vm, mesh, skin, "addTransform",
+                      "(L" CLS("Node") ";III)V", a, NULL);
+    }
+    roster = nj_rget(vm, mesh, fb);
+    check(nj_iget(vm, mesh, fn) == 64 && nj_array_length(roster) == 64u,
+          "64 bones still fit the initial allocation");
+    check(nj_array_get_ref(roster, 0u) == node &&
+          nj_array_get_ref(roster, 63u) == node,
+          "all 64 slots name the recorded node");
+
+    /* The regression proper: entry 65 used to throw and the game never got
+       its rig recorded, so it sat on LOADING. */
+    st = nj_call(vm, mesh, skin, "addTransform",
+                 "(L" CLS("Node") ";III)V", a, NULL);
+    roster = nj_rget(vm, mesh, fb);
+    check(st == NJ_OK, "the 65th addTransform is accepted");
+    check(nj_iget(vm, mesh, fn) == 65 &&
+          nj_array_length(roster) == 128u &&
+          nj_array_get_ref(roster, 64u) == node,
+          "the roster doubled once and kept the 65th bone");
+    check(nj_array_get_ref(roster, 0u) == node &&
+          nj_array_get_ref(roster, 63u) == node,
+          "growing the roster keeps the old entries");
+
+    for (i = 65; i < 200; i++) {
+        (void)nj_call(vm, mesh, skin, "addTransform",
+                      "(L" CLS("Node") ";III)V", a, NULL);
+    }
+    roster = nj_rget(vm, mesh, fb);
+    check(nj_iget(vm, mesh, fn) == 200 && nj_array_length(roster) == 256u,
+          "a 200-bone rig doubles twice and records every link");
+    check(nj_array_get_ref(roster, 199u) == node,
+          "the last recorded bone is still addressable");
+
+    /* Null receiver still fails the way the reference API says. */
+    a[0].r = 0;
+    st = nj_call(vm, mesh, skin, "addTransform",
+                 "(L" CLS("Node") ";III)V", a, NULL);
+    check(st != NJ_OK && nj_exception_describe(vm) != NULL &&
+          strstr(nj_exception_describe(vm), "NullPointerException") != NULL,
+          "addTransform(null) still throws NullPointerException");
+    check(nj_iget(vm, mesh, fn) == 200,
+          "a rejected addTransform leaves the count alone");
+    nj_clear_exception(vm);
+
+    /* A corrupt count is refused without touching the roster. */
+    nj_field_write_int(vm, mesh, fn, -1);
+    a[0].r = node;
+    st = nj_call(vm, mesh, skin, "addTransform",
+                 "(L" CLS("Node") ";III)V", a, NULL);
+    check(st != NJ_OK &&
+          strstr(nj_exception_describe(vm), "IndexOutOfBoundsException") != NULL,
+          "a negative bone count is refused instead of read out of bounds");
+    nj_clear_exception(vm);
+    nj_field_write_int(vm, mesh, fn, 200);
+}
+
 int main(void)
 {
     nj_port port;
@@ -3544,6 +3662,10 @@ int main(void)
     }
 
     test_image2d_set(vm);
+
+    /* Bone rosters are per receiver and grow on demand; the old fixed
+       64-entry table threw on the 65th link. */
+    test_skinned_mesh_bones(vm);
 
     /* The file format calls type 18 Sprite; the titles call the class
        Sprite3D.  Both have to be loadable.  These run before the VM is

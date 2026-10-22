@@ -7751,7 +7751,6 @@ M3G_I_GET(m3g_morph_getTargetCount, NJ_C_MORPH, "_nj_nmorph")
 /* ------------------------------------------------------------------ */
 /* SkinnedMesh                                                         */
 /* ------------------------------------------------------------------ */
-#define NJ_M3G_BONES 64
 
 static const nj_builtin_field skin_fields[] = {
     { "_nj_skeleton", "L" NJ_C_GROUP ";",  0 },
@@ -7798,10 +7797,19 @@ NJFN(m3g_skin_init_arrays)
  * addTransform records which node drives which bone.  Nothing skins a vertex
  * yet, so the table is what the getters answer from: getBoneTransform hands
  * back the node's own transform and getBoneVertices answers zero, which says
- * "this runtime does not skin" instead of inventing vertices.  The table is
- * a fixed 64 entries because a bone count is bounded by the file format
- * (255) and a title that exceeds 64 is better refused than silently cut.
+ * "this runtime does not skin" instead of inventing vertices.
+ *
+ * The roster is a growable per-SkinnedMesh Java Object[], not a fixed table:
+ * the M3G API puts no 64-bone bound on a rig, and a real title
+ * (3D激爆拳击_8805) used to hang on its loading screen because the mesh it
+ * builds needs more than 64 links.  The capacity is the Java array length,
+ * so no C-side VM state is added; the first addTransform allocates
+ * NJ_M3G_BONES_INIT entries exactly as before (one allocation, never touched
+ * again for rigs that fit) and a larger rig doubles it from there.  A failed
+ * allocation leaves the mesh's roster and count unchanged.
  */
+#define NJ_M3G_BONES_INIT 64
+
 NJFN(m3g_skin_addTransform)
 {
     nj_ref self = NJ_THIS(args);
@@ -7809,24 +7817,49 @@ NJFN(m3g_skin_addTransform)
     nj_ref bones = nj_rget(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_bones",
                                              "[L" NJ_C_NODE ";"));
     nj_s4 n = nj_iget(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_nbones", "I"));
+    nj_u4 cap;
 
     if (!node) {
         NJ_THROW(vm, "java/lang/NullPointerException", "addTransform(null)");
         return NJ_ERR;
     }
+    if (n < 0) {
+        NJ_THROW(vm, "java/lang/IndexOutOfBoundsException",
+                 "negative bone count");
+        return NJ_ERR;
+    }
     if (!bones) {
         bones = nj_object_array_new(vm, "javax/microedition/m3g/Node",
-                                    (nj_u4)NJ_M3G_BONES);
+                                    (nj_u4)NJ_M3G_BONES_INIT);
         if (!bones) {
             return nj_throw_oom(vm);
         }
         nj_rput(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_bones",
                                   "[L" NJ_C_NODE ";"), bones);
     }
-    if (n >= (nj_s4)NJ_M3G_BONES) {
-        NJ_THROW(vm, "java/lang/IndexOutOfBoundsException",
-                 "this runtime keeps 64 bone links");
-        return NJ_ERR;
+    cap = nj_array_length(bones);
+    if ((nj_u4)n >= cap) {
+        /* Grow before publishing: on OOM the old roster stays reachable and
+           _nj_nbones keeps pointing at the same valid prefix. */
+        nj_u4 want = cap < (nj_u4)NJ_M3G_BONES_INIT
+                         ? (nj_u4)NJ_M3G_BONES_INIT
+                         : cap * 2u;
+        nj_ref grown;
+        nj_u4 i;
+
+        if (want <= cap || want > 0x7fffffffu) {
+            return nj_throw_oom(vm);    /* doubling would overflow */
+        }
+        grown = nj_object_array_new(vm, "javax/microedition/m3g/Node", want);
+        if (!grown) {
+            return nj_throw_oom(vm);
+        }
+        for (i = 0; i < cap && i < (nj_u4)n; i++) {
+            nj_array_set_ref(grown, i, nj_array_get_ref(bones, i));
+        }
+        nj_rput(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_bones",
+                                  "[L" NJ_C_NODE ";"), grown);
+        bones = grown;
     }
     nj_array_set_ref(bones, (nj_u4)n, node);
     nj_iput(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_nbones", "I"), n + 1);
