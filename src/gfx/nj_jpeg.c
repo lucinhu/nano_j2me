@@ -1490,7 +1490,17 @@ static int jp_prog_ac_block(jp_dec *d, jp_bits *b, jp_comp *c, nj_s2 *cf)
         } else if (s != 0) {
             newval = p1;
         }
-        run = (s == 0) ? 16 : r;      /* ZRL, or the zeros before a new value */
+        /*
+         * T.81 G.1.2.3 walk.  `r` counts the *zero* coefficients this symbol
+         * still has to pass, so the walk stops at the (r+1)-th zero: that is
+         * the newly non-zero coefficient for s != 0, and the 16th zero of a
+         * ZRL (r == 15) for s == 0.  Corrections apply to already-non-zero
+         * coefficients met on the way; a ZRL that reaches its 16th zero next
+         * to a non-zero coefficient must stop *there*, because that
+         * coefficient's correction bit belongs to the next symbol's walk (it
+         * is read after the next Huffman code), not to this one.
+         */
+        run = r;
         while (k <= d->se) {
             nj_s2 *q = &cf[(int)s_zigzag[k]];
 
@@ -1501,7 +1511,7 @@ static int jp_prog_ac_block(jp_dec *d, jp_bits *b, jp_comp *c, nj_s2 *cf)
                     *q = (nj_s2)jp_clamp((int)v, -32767, 32767);
                 }
             } else if (run == 0) {
-                break;
+                break;                /* target zero of this symbol */
             } else {
                 run -= 1;
             }
@@ -1511,7 +1521,8 @@ static int jp_prog_ac_block(jp_dec *d, jp_bits *b, jp_comp *c, nj_s2 *cf)
             return -1;
         }
         if (s == 0) {
-            continue;                /* ZRL: keep decoding from here */
+            k += 1;                   /* ZRL ends on its 16th zero */
+            continue;
         }
         cf[(int)s_zigzag[k]] = (nj_s2)jp_clamp((int)newval, -32767, 32767);
         k++;

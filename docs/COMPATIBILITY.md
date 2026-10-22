@@ -2211,7 +2211,7 @@ so it is the title's timing, not the Alert timer.  A clean build of
 three `build/nj2me`-path tests pass after the documented symlink; 65 rather
 than 101 because that archive build disables the libretro/SDL2 ports).
 
-## Progressive JPEG: decoded, with one real asset still failing (round 5, 2026-10-23)
+## Progressive JPEG: decoded, and the last asset fixed (round 5/7, 2026-10-23)
 
 `丧尸危机2-自由之翼BT版_997` was the last title in the corpus that died with an
 uncaught decoder exception: `IOException: cannot decode image: 16693 bytes
@@ -2256,17 +2256,32 @@ so a build can compile it out with `-DNJ_ENABLE_JPEG_PROGRESSIVE=0` and get
 the old refusal back.  The sequential path is untouched.  The object grows
 1,592 bytes of text; no data, no bss, no new globals.
 
-Known limitation, stated plainly: the title that motivated the work still
-fails.  Its asset is a *valid* progressive JPEG - libjpeg decodes it with no
-warnings - and our decoder's coefficient state matches libjpeg's exactly after
-scans 1..13, then diverges in the last scan (`Ah=1, Al=0`, AC refinement) at
-component Cr block (22,17) coefficient 7, and the scan aborts with "corrupt
-progressive JPEG scan data".  The fixture corpus (including an image with the
-identical 14-scan schedule produced by cjpeg) does not reproduce it.  Games
-still get a clean `IOException`, not a crash, and nothing that failed before
-decodes incorrectly now - the change is monotonic - but this asset remains an
-open bug in the AC-refinement path and the title stays unplayable until it is
-fixed.
+The third bug was in the refinement *walk*, and it is the one the title's asset
+found.  In an AC refinement scan a ZRL (`s == 0, r == 15`) skips sixteen zero
+coefficients.  If the coefficient immediately after those sixteen zeros is
+already non-zero, the walk must stop **at the 16th zero** and leave that
+coefficient to the next symbol, because its correction bit is read after the
+next Huffman code (T.81 G.1.2.3).  The first implementation "finished" the ZRL
+by consuming the correction bits of every following non-zero until it found a
+zero, i.e. it read one bit that belongs to the next symbol **before** that
+symbol's Huffman code, and the rest of the scan desynchronised.  It only
+triggers when a ZRL happens to end next to a non-zero coefficient, which is why
+every earlier check passed - the four Pillow progressive fixtures, the 24 fuzz
+images and even a cjpeg image with the identical 14-scan schedule never produced
+that shape on the images used.  The fix makes `r` count the zeros still to
+skip, so the loop stops at the (r+1)-th zero and a ZRL resumes after it.
+
+The regression for it is a real fixture rather than a note:
+`tests/fixtures/jpeg/progressive_scans_240x320.jpg`, produced by `cjpeg
+-progressive -scans <the 14-scan script> -sample 1x1` on seeded noise
+(`tests/gen_jpeg_fixtures.py`, only generated where `cjpeg` exists).  The
+decoder before the fix rejects that file with "corrupt progressive JPEG scan
+data"; the fixed decoder decodes it and matches Pillow's own decode at
+MAE 0.84/255, the same residual every sequential fixture has.  On the title the
+decode error is gone (no `cannot decode image` line at all), the loader thread
+survives, and the game now reaches its own title screen with the difficulty
+menu; pixels for the previously-failing buffer match Pillow's decode, so the
+scan is decoded correctly, not merely "without an error".
 
 ## A key-only replay script misclassifies tap-driven titles (round 6, 2026-10-23)
 

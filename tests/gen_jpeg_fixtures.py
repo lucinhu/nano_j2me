@@ -39,8 +39,11 @@ import hashlib
 import math
 import os
 import random
+import shutil
 import struct
+import subprocess
 import sys
+import tempfile
 
 from PIL import Image
 
@@ -694,6 +697,73 @@ def positive_fixtures():
     im = Image.frombytes("RGB", (120, 90), pattern_rgb(120, 90))
     add("progressive_120x90", _pil(im, quality=80, progressive=True),
         "SOF2 progressive 4:2:0 120x90 (several MCU rows, many scans)")
+
+    _add_cjpeg_progressive()
+
+
+# The scan script libjpeg's own progressive mode uses, in cjpeg's -scans
+# syntax: DC first, AC first over two bands per component, then the two
+# successive-approximation passes.  This is the script of the game asset that
+# first exposed the AC-refinement walk bug, reproduced on synthetic noise.
+CJPEG_SCAN_SCRIPT = """\
+0,1,2: 0-0, 0, 1;
+0: 1-5, 0, 2;
+1: 1-5, 0, 2;
+2: 1-5, 0, 2;
+0: 6-63, 0, 2;
+1: 6-63, 0, 2;
+2: 6-63, 0, 2;
+0: 1-63, 2, 1;
+1: 1-63, 2, 1;
+2: 1-63, 2, 1;
+0,1,2: 0-0, 1, 0;
+0: 1-63, 1, 0;
+1: 1-63, 1, 0;
+2: 1-63, 1, 0;
+"""
+
+
+def _add_cjpeg_progressive():
+    """A cjpeg-built progressive file that exercises the AC-refinement walk.
+
+    With this scan script on high-entropy input, a zero-run length code (ZRL)
+    ends immediately before a coefficient that is already non-zero.  T.81
+    G.1.2.3 puts that coefficient's correction bit *after* the next Huffman
+    code, so a decoder that consumes it while finishing the ZRL desynchronises
+    the rest of the scan.  Pillow's own progressive encoder does not produce
+    this shape at these sizes, so the fixture comes from cjpeg when the binary
+    is installed; where it is not, the fixture is simply absent (the rest of
+    the suite does not depend on it).
+    """
+    exe = shutil.which("cjpeg")
+    if exe is None:
+        return False
+    rng = random.Random(0x5EED)
+    width, height = 240, 320
+    im = Image.frombytes("RGB", (width, height),
+                         bytes(rng.randrange(256)
+                               for _ in range(width * height * 3)))
+    with tempfile.TemporaryDirectory() as tmp:
+        png = os.path.join(tmp, "noise.png")
+        im.save(png)
+        scans = os.path.join(tmp, "scans.txt")
+        with open(scans, "w") as f:
+            f.write(CJPEG_SCAN_SCRIPT)
+        out = os.path.join(tmp, "out.jpg")
+        r = subprocess.run([exe, "-progressive", "-quality", "85",
+                            "-sample", "1x1", "-scans", scans,
+                            "-outfile", out, png],
+                           capture_output=True)
+        if r.returncode != 0:
+            print("cjpeg fixture skipped: %s" % r.stderr.decode()[:120],
+                  file=sys.stderr)
+            return False
+        with open(out, "rb") as f:
+            data = f.read()
+    add("progressive_scans_240x320", data,
+        "cjpeg -progressive, 14-scan script on seeded noise: AC refinement "
+        "walk where a ZRL ends next to an already non-zero coefficient")
+    return True
 
 
 def _pil(im, **kw):
