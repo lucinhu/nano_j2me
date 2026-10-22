@@ -469,11 +469,10 @@ typedef struct nj_port {
      * put generated code in it, and there is no way to express "give me memory
      * I can execute" through the existing hooks.
      *
-     * NOTHING CALLS THESE YET, and that is the point of adding them now.  A
-     * port is a published contract: a capability added later means every port
-     * - desktop, Android, ESP32, Cortex-M - has to be revisited and every
-     * out-of-tree port breaks.  Adding it now costs one line per port and a
-     * NULL check in a caller that does not exist yet.
+     * The optional baseline JIT calls these with port->ud. code_alloc must
+     * return writable memory aligned to at least 4 bytes. After a successful
+     * commit the JIT never writes it again. These callbacks must not re-enter
+     * Java execution or change/install/destroy an engine on the current VM.
      *
      * A port that cannot supply executable memory leaves all three NULL, and a
      * JIT would fall back to the interpreter.  That is an honest answer, not a

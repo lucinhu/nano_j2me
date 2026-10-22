@@ -459,8 +459,96 @@
 #ifndef NJ_ENABLE_JUMP_THREADING
 #  define NJ_ENABLE_JUMP_THREADING 1
 #endif
+/* Baseline JIT is opt-in. An enabled JIT also needs the engine seam. */
+#ifndef NJ_ENABLE_JIT
+#  define NJ_ENABLE_JIT 0
+#endif
 #ifndef NJ_ENABLE_ENGINE
-#  define NJ_ENABLE_ENGINE 0
+#  define NJ_ENABLE_ENGINE NJ_ENABLE_JIT
+#endif
+#if NJ_ENABLE_JIT && !NJ_ENABLE_ENGINE
+#  error "NJ_ENABLE_JIT requires NJ_ENABLE_ENGINE=1"
+#endif
+
+/* These switches constrain GENERATED instructions, not the C compiler's ISA.
+ * Defaults follow -march. Explicit overrides must match the actual CPU. A is
+ * exposed for future atomic lowering; the cooperative VM needs no AMOs today.
+ * F/D=0 keeps Java floating point in the interpreter, not disabled in Java.
+ * D requires F; C=0 emits only 32-bit instructions. See docs/JIT.md. */
+#ifndef NJ_JIT_RV32_M
+#  if defined(__riscv_mul) && defined(__riscv_div)
+#    define NJ_JIT_RV32_M 1
+#  else
+#    define NJ_JIT_RV32_M 0
+#  endif
+#endif
+#ifndef NJ_JIT_RV32_A
+#  if defined(__riscv_atomic)
+#    define NJ_JIT_RV32_A 1
+#  else
+#    define NJ_JIT_RV32_A 0
+#  endif
+#endif
+#ifndef NJ_JIT_RV32_F
+#  if defined(__riscv_flen) && __riscv_flen >= 32
+#    define NJ_JIT_RV32_F 1
+#  else
+#    define NJ_JIT_RV32_F 0
+#  endif
+#endif
+#ifndef NJ_JIT_RV32_D
+#  if NJ_JIT_RV32_F && defined(__riscv_flen) && __riscv_flen >= 64
+#    define NJ_JIT_RV32_D 1
+#  else
+#    define NJ_JIT_RV32_D 0
+#  endif
+#endif
+#ifndef NJ_JIT_RV32_C
+#  if defined(__riscv_compressed)
+#    define NJ_JIT_RV32_C 1
+#  else
+#    define NJ_JIT_RV32_C 0
+#  endif
+#endif
+#if (NJ_ENABLE_JIT != 0 && NJ_ENABLE_JIT != 1) || \
+    (NJ_JIT_RV32_M != 0 && NJ_JIT_RV32_M != 1) || \
+    (NJ_JIT_RV32_A != 0 && NJ_JIT_RV32_A != 1) || \
+    (NJ_JIT_RV32_F != 0 && NJ_JIT_RV32_F != 1) || \
+    (NJ_JIT_RV32_D != 0 && NJ_JIT_RV32_D != 1) || \
+    (NJ_JIT_RV32_C != 0 && NJ_JIT_RV32_C != 1)
+#  error "JIT feature macros must be 0 or 1"
+#endif
+#if NJ_JIT_RV32_D && !NJ_JIT_RV32_F
+#  error "NJ_JIT_RV32_D requires NJ_JIT_RV32_F=1"
+#endif
+
+/* Bounded per-VM cache and compilation work. No allocation when disabled. */
+#ifndef NJ_JIT_CACHE_ENTRIES
+#  define NJ_JIT_CACHE_ENTRIES 64
+#endif
+#ifndef NJ_JIT_HOT_THRESHOLD
+#  define NJ_JIT_HOT_THRESHOLD 8
+#endif
+#ifndef NJ_JIT_MAX_BLOCK_INSNS
+#  define NJ_JIT_MAX_BLOCK_INSNS 32
+#endif
+#ifndef NJ_JIT_MAX_CODE_BYTES
+#  define NJ_JIT_MAX_CODE_BYTES 2048
+#endif
+#if NJ_JIT_CACHE_ENTRIES < 1 || NJ_JIT_CACHE_ENTRIES > 4096 || \
+    NJ_JIT_HOT_THRESHOLD < 1 || NJ_JIT_HOT_THRESHOLD > 65535 || \
+    NJ_JIT_MAX_BLOCK_INSNS < 1 || NJ_JIT_MAX_BLOCK_INSNS > 128 || \
+    NJ_JIT_MAX_CODE_BYTES < 64 || NJ_JIT_MAX_CODE_BYTES > 16384
+#  error "JIT cache/compilation limits are out of range"
+#endif
+
+/* The encoder can be tested on any host; only RV32 ILP32 may execute it. */
+#if defined(__riscv) && defined(__riscv_xlen) && __riscv_xlen == 32 && \
+    !defined(__riscv_abi_rve) && \
+    (!defined(__BYTE_ORDER__) || __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+#  define NJ_JIT_HOST_RV32 1
+#else
+#  define NJ_JIT_HOST_RV32 0
 #endif
 
 /* M3G common-case raster/clip paths. No persistent storage; native stack use

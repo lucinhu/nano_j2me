@@ -9,6 +9,7 @@
  * complete teardown.  There is no file-scope mutable state anywhere here.
  */
 #include "nj_internal.h"
+#include "nj2me/nj_jit.h"
 
 #if NJ_USE_LIBC
 #  include <stdio.h>
@@ -226,6 +227,10 @@ nj_vm *nj_vm_create(const nj_port *port, nj_size heap_bytes)
     }
     nj_clock_init(vm);
     vm->initialized = 1u;
+#if NJ_ENABLE_JIT
+    /* A missing backend or executable allocator is an interpreter fallback. */
+    (void)nj_jit_enable(vm);
+#endif
     return vm;
 }
 
@@ -241,6 +246,9 @@ nj_u4 nj_vm_destroy(nj_vm *vm)
     port = vm->port;
     vm->running = 0u;
     vm->state = NJ_VM_DEAD;
+#if NJ_ENABLE_JIT
+    nj_jit_disable(vm);
+#endif
 
     for (i = 0u; i < vm->nthreads; i++) {
         nj_thread_destroy(vm, vm->threads[i]);

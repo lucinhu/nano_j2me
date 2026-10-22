@@ -196,6 +196,10 @@ static int run_bench(const unsigned char *jar, nj_u4 jar_len,
         return 1;
     }
 
+#if NJ_ENABLE_JIT
+    /* This test compares borrowed engines to the pure interpreter. */
+    nj_jit_disable(vm);
+#endif
 #if NJ_ENABLE_ENGINE
     if (engine) {
         OK(nj_engine_current(vm) == NULL);

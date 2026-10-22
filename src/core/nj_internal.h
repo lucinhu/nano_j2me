@@ -601,10 +601,14 @@ struct nj_vm {
 
 #if NJ_ENABLE_ENGINE
     /* Installed execution engine, or NULL for the portable interpreter.
-     * Consulted by nj_exec() on every entry and by nothing else; the VM never
-     * owns or destroys it.  This field - one pointer - is the entire RAM cost
-     * of NJ_ENABLE_ENGINE: a default build has no such field. */
+     * Borrowed slot; external engines retain their owner's lifetime. The
+     * optional built-in JIT is owned separately below and checks this slot at
+     * dispatch. NJ_ENABLE_ENGINE alone adds only this pointer. */
     struct nj_engine *engine;
+#endif
+#if NJ_ENABLE_JIT
+    /* Owned built-in JIT, separate from the borrowed execution-engine slot. */
+    struct nj_jit *jit;
 #endif
 
     /* ---- GC roots owned by C code (class library, ports) ---- */

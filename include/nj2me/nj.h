@@ -18,6 +18,7 @@
 #include "nj_types.h"
 #include "nj_port.h"
 #include "nj_vm.h"
+#include "nj_jit.h"
 #include "nj_app.h"
 #include "nj_device.h"
 

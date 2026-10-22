@@ -30,6 +30,9 @@
  * can host several VMs in one process.
  */
 #include "nj_internal.h"
+#if NJ_ENABLE_JIT
+#include "nj_jit_internal.h"
+#endif
 
 /*
  * WHICH DISPATCH IS COMPILED decides whether the L_* labels exist.
@@ -358,6 +361,20 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
 
 #if NJ_ENABLE_SUPERINSTR
 /*
+ * The built-in JIT counts each bytecode in a native block. Keep its cold and
+ * declined paths on the same accounting by disabling every fusion entry while
+ * that engine is installed. Merely owning a cache is not enough: uninstalling
+ * the JIT or installing an external engine must restore the usual fusions.
+ * nj_jit's first member is its nj_engine base, so their addresses are equal.
+ */
+#if NJ_ENABLE_JIT && NJ_JIT_HOST_RV32
+#define NJ_FUSION_ALLOWED                                                \
+    (!vm->jit || (const void *)vm->engine != (const void *)vm->jit)
+#else
+#define NJ_FUSION_ALLOWED 1
+#endif
+
+/*
  * Bit d of this mask is set for the int-arith opcode 0x60 + d that the fused
  * const-push helper above handles.  Testing it costs a subtract, a compare
  * and a shift on the hot path of every const-push opcode, which is why it is
@@ -376,13 +393,13 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
      (1ULL << (0x80 - 0x60)) |  /* ior */                                  \
      (1ULL << (0x82 - 0x60)))   /* ixor */
 /*
- * Deliberately a bare block and not a do/while: DISPATCH() is `continue` in the
+ * Deliberately an if block and not a do/while: DISPATCH() is `continue` in the
  * portable build, and inside a do/while that `continue` would resume after the
  * macro - pushing the constant that was just folded away - instead of jumping
  * to the top of the interpreter loop.
  */
 #define NJ_CONST_ARITH_FUSE(CONST)                                        \
-    {                                                                     \
+    if (NJ_FUSION_ALLOWED) {                                               \
         nj_u4 d_ = (pc < code_len) ? ((nj_u4)code[pc] - 0x60u) : 64u;     \
         if (d_ < 35u && ((NJ_CONST_ARITH_BITS >> d_) & 1u) != 0u) {       \
             nj_u1 nx_ = code[pc];                                         \
@@ -402,8 +419,8 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
  * `iload*; if<cond>` - the loaded value is consumed by the branch, so the
  * push/pop round trip and one dispatch disappear.  Branch offsets are relative
  * to the BRANCH opcode, not to the load, so its address is captured first.
- * Like the fold above this is a bare block: DISPATCH() is `continue` in the
- * portable build and must not be captured by a do/while.
+ * Like the fold above this has no enclosing loop: DISPATCH() is `continue` in
+ * the portable build and must not be captured by a do/while.
  */
 #define NJ_INT_BRANCH_TAKEN(BOP, V)                                       \
     ((BOP) == 0x99u ? ((V) == 0) :                                        \
@@ -433,7 +450,7 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
     }
 
 #define NJ_ILOAD_FUSE(V)                                                  \
-    {                                                                     \
+    if (NJ_FUSION_ALLOWED) {                                               \
         if (pc < code_len) {                                              \
             nj_u1 njlf_nx_ = code[pc];                                    \
             if ((nj_u1)(njlf_nx_ - 0x99u) <= 5u &&                        \
@@ -471,7 +488,7 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
     }
 
 #define NJ_ALOAD_FUSE(R)                                                  \
-    {                                                                     \
+    if (NJ_FUSION_ALLOWED) {                                               \
         if (pc < code_len) {                                              \
             nj_u1 njlf_nx_ = code[pc];                                    \
             if ((njlf_nx_ == 0xc6u || njlf_nx_ == 0xc7u) &&               \
@@ -490,7 +507,7 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
  * would need two locals live at once and is not worth the branch.
  */
 #define NJ_STORE_LOAD_FUSE(K)                                             \
-    {                                                                     \
+    if (NJ_FUSION_ALLOWED) {                                               \
         if (pc + 1u <= code_len &&                                        \
             code[pc] == (nj_u1)(0x1au + (nj_u1)(K))) {                    \
             locals[K].bits = sp[-1].bits;                                 \
@@ -508,7 +525,7 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
  * still happen (native code and debuggers can read a frame's locals at any
  * safepoint).  Only the dispatch in the middle disappears.
  *
- * All of them are bare blocks for the same reason as the round 1 folds:
+ * None has an enclosing loop, for the same reason as the round 1 folds:
  * DISPATCH() is `continue` in the portable build, and a do/while would
  * capture it.  Macro-internal names are prefixed because an initialiser that
  * shadows the caller's variable silently reads itself.
@@ -590,7 +607,7 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
 /* `iinc i, c; iload j[; if<cond>]` (also iload_0..3), and `iinc; goto`.
  * Read j after the increment, including when j is the incremented slot. */
 #define NJ_IINC_FUSE(I)                                                   \
-    {                                                                     \
+    if (NJ_FUSION_ALLOWED) {                                               \
         nj_u2 njil_i_ = (I);                                              \
         (void)njil_i_;                                                    \
         if (pc < code_len) {                                              \
@@ -617,7 +634,7 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
 /* `iadd; istore_k` - both operands are already popped, so the sum goes
  * straight into the local and nothing is pushed back. */
 #define NJ_IADD_ISTORE_FUSE(R)                                            \
-    {                                                                     \
+    if (NJ_FUSION_ALLOWED) {                                               \
         if (pc < code_len && (nj_u1)(code[pc] - 0x3bu) <= 3u) {           \
             nj_u1 njis_k_ = (nj_u1)(code[pc] - 0x3bu);                    \
             nj_s4 njis_v_ = (R);                                          \
@@ -661,7 +678,7 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
 /* `ldc2_w; ladd|lmul` - the constant has just been pushed, so the arithmetic
  * runs straight on it. */
 #define NJ_LDC2_LONG_FUSE()                                               \
-    {                                                                     \
+    if (NJ_FUSION_ALLOWED) {                                               \
         if (pc < code_len && (nj_u1)(code[pc] - 0x61u) <= 8u &&           \
             (((nj_u1)(code[pc] - 0x61u)) & 3u) == 0u) {                   \
             nj_u1 njl2_op_ = code[pc++];                                  \
@@ -681,7 +698,7 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
 
 /* `lload*; ladd|lsub|lmul` - the loaded long feeds the arithmetic directly. */
 #define NJ_LLOAD_LONG_FUSE(VAL)                                           \
-    {                                                                     \
+    if (NJ_FUSION_ALLOWED) {                                               \
         if (pc < code_len &&                                              \
             (nj_u1)(code[pc] - 0x61u) <= 8u &&                            \
             (((nj_u1)(code[pc] - 0x61u)) & 3u) == 0u) {                   \
@@ -704,7 +721,7 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
 /* `lconst_0/1; lcmp[; if<cond>]`: retain the existing lcmp/branch
  * fold after consuming lcmp, without materialising the constant's two slots. */
 #define NJ_LCONST_CMP_FUSE(V)                                             \
-    {                                                                     \
+    if (NJ_FUSION_ALLOWED) {                                               \
         if (pc < code_len && code[pc] == 0x94u &&                         \
             stack_limit - sp >= 2) {                                      \
             nj_s8 njlc_a_ = sp[-2].j;                                     \
@@ -720,7 +737,7 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
 
 /* `lcmp; if<cond>` - the comparison result is consumed by the branch. */
 #define NJ_LCMP_BRANCH_FUSE()                                             \
-    {                                                                     \
+    if (NJ_FUSION_ALLOWED) {                                               \
         if (pc + 3u <= code_len && code[pc] >= 0x99u &&                   \
             code[pc] <= 0x9eu) {                                          \
             nj_u4 njcb_at_ = pc;                                          \
@@ -742,7 +759,7 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
  * `b`, so the long below it on the stack is `a`.
  */
 #define NJ_GETFIELD_CHAIN_INT()                                           \
-    {                                                                     \
+    if (NJ_FUSION_ALLOWED) {                                               \
         if (pc + 5u <= code_len && code[pc] == 0x85u &&                   \
             code[pc + 1u] == 0x94u && code[pc + 2u] >= 0x99u &&           \
             code[pc + 2u] <= 0x9eu) {                                     \
@@ -1389,7 +1406,28 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
     (void)nj_dispatch;      /* referenced once any opcode is converted */
 #endif
 
+/* Compile/execute only between bytecodes. Native blocks cannot call, allocate
+ * or throw; SAVE before entering also makes port allocation callbacks observe
+ * the precise frame. Counts consume the same scheduler quantum as dispatch. */
+#if NJ_ENABLE_JIT && NJ_JIT_HOST_RV32
+#define NJ_TRY_JIT() do {                                              \
+        if (vm->jit) {                                                 \
+            nj_u4 _jit_n;                                              \
+            SAVE();                                                    \
+            while ((_jit_n = nj_jit_try_block(vm, fr, &pc, &sp,         \
+                                               quantum)) != 0u) {      \
+                insns_ += _jit_n;                                      \
+                quantum -= _jit_n;                                     \
+                SAVE();                                                \
+                if (quantum == 0u) return NJ_ERR_YIELD;                 \
+            }                                                          \
+        }                                                              \
+    } while (0)
+#else
+#define NJ_TRY_JIT() ((void)0)
+#endif
 #define NJ_FETCH_OP() do {                                             \
+        NJ_TRY_JIT();                                                  \
         if (pc >= code_len) {                                          \
             THROW("java/lang/VerifyError",                            \
                   "code runs past the end of the method");            \
@@ -1649,8 +1687,8 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         /* ================= stores ================= */
         L_0x36: case 0x36: { nj_u2 i = (nj_u2)U1();
 #if NJ_ENABLE_SUPERINSTR
-            if (i < 256u && pc + 1u <= code_len && code[pc] == 0x15u &&
-                code[pc + 1u] == (nj_u1)i) {
+            if (NJ_FUSION_ALLOWED && i < 256u && pc + 2u <= code_len &&
+                code[pc] == 0x15u && code[pc + 1u] == (nj_u1)i) {
                 locals[i].bits = sp[-1].bits;
                 pc += 2u;
                 DISPATCH();

@@ -69,7 +69,8 @@ struct nj_engine;
  *          `engine` back so an implementation can recover a larger struct it
  *          embeds (see NJ_ENGINE_FROM) without a global lookup.
  * destroy  optional; releases whatever the instance owns.  Never called by the
- *          VM - the caller that created the instance owns it.  Use
+ *          VM for external engines; the built-in JIT has separate VM ownership.
+ *          The creator owns an external instance. Use
  *          nj_engine_destroy() for the dispatch.  NULL is valid (the null
  *          engine is a shared const object and has nothing to release).
  */
@@ -105,8 +106,9 @@ struct nj_engine {
  * nj_exec() call; a caller inside the runtime (a native that calls back into
  * Java) is safe, because dispatch is re-read on every entry.
  *
- * The VM does not destroy engines: nj_vm_destroy() leaves no dangling
- * allocation of its own, but the engine instance belongs to its owner.
+ * The VM does not destroy external engines. The optional built-in JIT is a
+ * separate VM-owned allocation: uninstalling it does not transfer ownership,
+ * and its handle becomes invalid on nj_jit_disable() or nj_vm_destroy().
  */
 nj_status nj_engine_install(struct nj_vm *vm, struct nj_engine *engine);
 

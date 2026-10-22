@@ -23,6 +23,8 @@ idf_component_register(
         "${NJ_ROOT}/src/core/nj_thread.c"
         "${NJ_ROOT}/src/core/nj_interp.c"
         "${NJ_ROOT}/src/core/nj_engine.c"
+        "${NJ_ROOT}/src/core/nj_jit.c"
+        "${NJ_ROOT}/src/core/nj_jit_rv32.c"
         "${NJ_ROOT}/src/core/nj_app.c"
         "${NJ_ROOT}/src/core/nj_device.c"
         "${NJ_ROOT}/src/core/nj_builtins.c"

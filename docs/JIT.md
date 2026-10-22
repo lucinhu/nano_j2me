@@ -6,13 +6,138 @@ portable interpreter (`nj_interp_run()` at `src/core/nj_interp.c:466`) or to an
 installed *execution engine*.  An engine is any object that can execute a
 thread's Java frames and return the same observable effects as the interpreter.
 
-This document is the contract for such engines.  It describes the seam, what
-the interpreter guarantees, what an engine is required to preserve, and what
-was deliberately left for later.  It also states honestly what does **not**
-exist yet: there is no JIT, no template compiler, no register allocator and no
-compiled-code cache in this tree.  What exists is the seam, a null engine that
-proves it is transparent, and a test that pins the benchmark result to the
-bytecode.
+The tree now includes an opt-in **RV32 baseline JIT**: a portable machine-code
+encoder, bounded per-VM hot-block cache, and interpreter dispatch integration.
+ARM64 and x86_64 currently use the interpreter. There is no optimizing compiler,
+register allocator, or persistent code cache. The original engine contract and
+future method-level designs below remain useful background; the implemented
+block compiler is described first.
+
+## RV32 baseline JIT: configuration and scope
+
+Enable `NJ_ENABLE_JIT=1` (default `0`). CMake also enables `NJ_ENABLE_ENGINE`;
+direct compiler builds default the engine switch to the JIT switch and reject
+an explicitly disabled engine with an enabled JIT. `nj_vm_create()` tries to
+install the JIT automatically. It executes only on little-endian RV32 with the
+standard ILP32 register set (not RV32E), and only when all three executable-memory
+callbacks exist. Unsupported hosts and ports continue interpreted execution.
+There is no runtime CPU probing; explicit extension settings must match the CPU.
+
+| Macro | Default from compiler ISA | Generated code when enabled |
+|---|---|---|
+| `NJ_JIT_RV32_M` | `__riscv_mul` and `__riscv_div` | `mul`, `div`, `rem` for Java int |
+| `NJ_JIT_RV32_A` | `__riscv_atomic` | Reserved capability; no AMOs needed by the current cooperative VM |
+| `NJ_JIT_RV32_F` | `__riscv_flen >= 32` | Float add/subtract/multiply/divide/negate |
+| `NJ_JIT_RV32_D` | F enabled and `__riscv_flen >= 64` | Double add/subtract/multiply/divide/negate |
+| `NJ_JIT_RV32_C` | `__riscv_compressed` | Compressed immediate loads/adds and return |
+
+Macros accept `0` or `1`. CMake also accepts `AUTO` (default), meaning leave the
+macro undefined so the header derives it from the compiler target. D requires F;
+`D=1,F=0` is a compile error. With F disabled and D left AUTO, D defaults off.
+The switches constrain JIT output only: use the toolchain's `-march`/`-mabi` to
+constrain the VM, libc and other compiled C code. Java operations whose machine
+extension is disabled fall back to the interpreter. Bitwise float/double slot
+copies can still use RV32I loads/stores. Float arithmetic lowering additionally
+requires `NJ_ENABLE_FLOAT`; double and long-slot lowering require `NJ_ENABLE_LONG`.
+
+For example, using an RV32 toolchain file (set its compiler and deployment ISA):
+
+```sh
+cmake -S . -B build-rv32 -DCMAKE_TOOLCHAIN_FILE=/path/to/rv32-toolchain.cmake \
+  -DNJ_ENABLE_JIT=1 -DNJ_JIT_RV32_M=1 -DNJ_JIT_RV32_A=0 \
+  -DNJ_JIT_RV32_F=0 -DNJ_JIT_RV32_D=0 -DNJ_JIT_RV32_C=1 \
+  -DNJ_BUILD_SDL2=OFF -DNJ_BUILD_POSIX_NETWORK=OFF
+cmake --build build-rv32 -j
+```
+
+A direct C build can use `-DNJ_ENABLE_JIT=1` and the same feature defines. Include
+`src/core/nj_jit.c` and `src/core/nj_jit_rv32.c` in the source list. The Android,
+ESP-IDF and embedded-test component lists include them; they compile empty when
+the JIT is disabled. These lists do not imply new ARM64 or Xtensa backends.
+
+The RV32I path covers integer constants, local load/store (including references),
+add/subtract/negate, bitwise operations, shifts, narrowing, `iinc`, supported
+`wide` locals/`iinc`, `pop`/`pop2`, `dup`/`dup2`, and `swap`. Wide values and floating
+constants/locals are copied using integer instructions. The current direct local
+offsets support indices through 255 for single slots and 254 for wide slots.
+`ldc`, long arithmetic, conversions/comparisons, complex stack permutations,
+branches, calls, fields, arrays, allocation, monitors and exception handling stay
+in the interpreter. A block ends immediately before an unsupported operation;
+the next interpreter dispatch can enter another compiled block.
+
+Each generated function is a bounded leaf with ABI
+`void block(nj_value *incoming_sp, nj_value *locals)`. It only changes frame slots,
+uses caller-saved registers, and never calls, allocates, yields, or changes Java
+control flow. The C entry checks stack consumption/growth and scheduling budget
+before calling. Integer division/remainder is a one-bytecode block with a C zero
+divisor check, so the interpreter raises the usual exception at the original PC.
+RV32 DIV/REM match Java's `INT_MIN / -1` overflow behavior. Floating arithmetic
+encodes RNE explicitly; negation preserves NaN payload bits.
+
+The interpreter saves PC/SP before any code allocation or execution. Native
+bytecodes consume the scheduler quantum and are included in VM instruction
+statistics. While this JIT is installed, interpreter superinstruction fusions
+are bypassed from the first dispatch, including cold or refused blocks: warming
+up must not change the quantum charged for a bytecode sequence. Goto-chain
+threading retains the interpreter's existing counting policy. Therefore counts
+can differ from a separate interpreter-only run with superinstructions enabled;
+compare program results, or disable superinstructions for count comparisons.
+Tracing bypasses native execution so per-bytecode trace output remains available.
+
+| Limit macro | Default | Meaning |
+|---|---:|---|
+| `NJ_JIT_CACHE_ENTRIES` | 64 | Fixed direct-mapped entries per VM; collisions evict |
+| `NJ_JIT_HOT_THRESHOLD` | 8 | Visits before attempting compilation |
+| `NJ_JIT_MAX_BLOCK_INSNS` | 32 | Maximum Java bytecodes in a block |
+| `NJ_JIT_MAX_CODE_BYTES` | 2048 | Maximum bytes per block; also compiler stack scratch |
+
+Failed compilation/allocation/commit is cached until eviction. A 64-entry cache
+requests at most 128 KiB of code at default limits; OS page rounding and port
+headers are additional (POSIX commonly consumes one page per small block).
+Metadata belongs to the VM host allocator. Executable storage belongs to the
+port and is freed on eviction, `nj_jit_disable()`, or VM destruction, even when
+an external engine temporarily replaced the JIT. Cached bytecode/method metadata
+must remain immutable, as in the current class loader.
+
+The public `nj_jit_enable`, `nj_jit_disable`, and `nj_jit_get_stats` APIs are in
+`include/nj2me/nj_jit.h` and available with `NJ_ENABLE_JIT=1`. Stats include compiled
+blocks, executed blocks, native bytecodes, refused blocks and live requested code
+bytes. Enable never replaces an external engine. Call enable/disable between VM
+execution entries. The built-in engine handle remains VM-owned after uninstall;
+external engines retain the original borrowed ownership contract.
+
+Ports must implement writable allocation, executable commit (including instruction
+cache synchronization), and free with `port->ud`. Alignment is at least 4 bytes;
+callbacks must not re-enter Java or mutate engines on the same VM. The existing
+POSIX headless port provides W^X allocation. ESP32 currently leaves these hooks
+NULL: an ESP32-C3/C6 deployment needs a board-specific executable-memory/cache
+implementation before native execution can be enabled; it otherwise falls back.
+
+### RV32 validation
+
+```sh
+# Portable encoding, feature scanning and metadata plus actual RV32 execution.
+# Requires Zig or a riscv32-linux compiler and qemu-riscv32 (or an RV32 Linux host).
+tools/check_jit_rv32.sh --require-execution
+# Explicitly allow encoding-only validation on hosts without those tools:
+tools/check_jit_rv32.sh --encoding-only
+
+cmake -S . -B build-jit -DNJ_ENABLE_JIT=1
+cmake --build build-jit -j
+ctest --test-dir build-jit --output-on-failure -R 'test_jit|test_engine|test_lifecycle'
+```
+
+`tests/test_jit_rv32.c` compares complete stack/local bytes against an independent
+reference, scans emitted instructions for disabled extensions, and checks
+capacity guards, inaccessible-page truncation, stack/local bounds, integer edge
+cases and floating rounding. The matrix covers RV32I, all extensions, no M, no A,
+no F/D, no D, no C and no LONG, plus rejected invalid configurations. It executes
+the actual generated buffer under QEMU, rather than simulating encoder output.
+`tests/test_jit.c` checks VM dispatch, stack/divisor guards, quantum accounting,
+code-memory failures and teardown; `test_lifecycle` checks two-thread fairness.
+For full cross-built CTest runs set `CMAKE_CROSSCOMPILING_EMULATOR` in the toolchain
+file. QEMU validates instruction semantics, not physical-board cache coherence
+or performance. No speedup claim is made by this first backend.
 
 **A note on the record.**  `docs/ARCHITECTURE.md:344-414` ("Is a JIT possible?
 What was left open, and what was not") deliberately *refused* to add an engine
@@ -333,11 +458,11 @@ only ever sees the base pointer.
 * `nj_engine_current(vm)` — the installed engine or `NULL`.
 * `nj_engine_destroy(engine)` — calls `ops->destroy`; a `NULL` engine or an
   engine without a destroy hook is a no-op.
-* The VM **never** owns or destroys an engine.  `nj_vm_destroy()` does not touch
-  it.  If an engine keeps pointers into a VM, uninstall and destroy it before
-  destroying the VM; a stateful engine should be created per VM.  The one
-  built-in engine (`nj_engine_null()`, `src/core/nj_engine.c:45-48`) is a shared
-  read-only singleton and must not be modified or destroyed.
+* External engines remain caller-owned. If an external engine keeps pointers
+  into a VM, uninstall and destroy it before destroying the VM. The null engine
+  (`nj_engine_null()`) is a shared read-only singleton. The baseline JIT is a
+  separate VM-owned allocation: VM destruction frees it even after uninstall
+  or replacement, and any previously returned handle then becomes invalid.
 * There is one engine slot per VM.  There is no stacking, no fallback chain and
   no notification when an engine is replaced mid-run.
 
@@ -609,19 +734,16 @@ bash tools/check_no_statics.sh
 
 ## 9. Roadmap, in the order the code can absorb it
 
-1. **Seam only (this change).**  `nj_exec()`, null engine, install/uninstall,
-   equivalence test.  No performance claim, zero default-build cost.
-2. **Per-method compiled entry table and the `interp_invoke` hook.**  Compile
-   nothing yet; add the engine-owned map from `nj_method *` to code, the hook at
-   `src/core/nj_interp.c:2028`, and the engine→interpreter transfer contract of
-   §5.  Test it with a "compiled" method that immediately deopts.
-3. **Baseline compiler.**  Straight-line helper calls, all values in frame
-   slots, per-method compilation on first call, unsupported methods stay
-   interpreted.  Pin benchmark output on the compiled path; add a second
-   equivalence test that runs the whole benchmark compiled and compares output
-   (the bytecode count will legitimately change if the engine fuses more than
-   the interpreter; record the fusion and the new count in this document and
-   update the test's comparison policy rather than hiding the difference).
+1. **Completed: engine seam.** `nj_exec()`, null engine, install/uninstall,
+   equivalence test; default builds do not carry engine or JIT state.
+2. **Completed: RV32 baseline blocks.** The bounded `(method, pc)` cache and
+   dispatch hook described above keep every value in frame slots. Unsupported
+   bytecodes use the interpreter. This replaces the original proposal to start
+   with per-method helper-call compilation.
+3. **Next: more backends and bytecode coverage.** Add ARM64/x86_64 emitters behind
+   the same block contract, then extend RV32 lowering with result equivalence
+   and scheduler/exception tests. Per-method compiled entry and `interp_invoke`
+   hooks remain optional later work; they require the transfer contract in §5.
 4. **Superinstruction/fusion and IC fast paths.**  Preserve the counter
    semantics or update the reference.
 5. **Register allocation with stack maps.**  Required before mid-method deopt is

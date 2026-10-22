@@ -105,7 +105,25 @@ set(NJ_PIXFMT       "NJ_PIXFMT_RGB565" CACHE STRING
 set(NJ_THREADED_DISPATCH 0 CACHE STRING "Use the computed-goto interpreter body (0 = portable switch)")
 set(NJ_ENABLE_SUPERINSTR 1 CACHE STRING "Run fused bytecode pairs in one dispatch (no RAM cost)")
 set(NJ_ENABLE_JUMP_THREADING 1 CACHE STRING "Follow goto chains without re-dispatching")
-set(NJ_ENABLE_ENGINE 0 CACHE STRING "Pluggable execution engine / JIT interface (adds one pointer)")
+set(NJ_ENABLE_ENGINE 0 CACHE STRING "Pluggable execution engine interface")
+set(NJ_ENABLE_JIT 0 CACHE STRING "Enable the RV32 baseline JIT (implies engine interface)")
+if(NOT NJ_ENABLE_JIT MATCHES "^[01]$")
+  message(FATAL_ERROR "NJ_ENABLE_JIT must be 0 or 1")
+endif()
+if(NJ_ENABLE_JIT)
+  set(NJ_ENABLE_ENGINE 1)
+endif()
+foreach(ext M A F D C)
+  set(NJ_JIT_RV32_${ext} "AUTO" CACHE STRING "Generated RV32 ${ext} instructions: AUTO, 0, or 1")
+  set_property(CACHE NJ_JIT_RV32_${ext} PROPERTY STRINGS AUTO 0 1)
+  if(NOT NJ_JIT_RV32_${ext} MATCHES "^(AUTO|0|1)$")
+    message(FATAL_ERROR "NJ_JIT_RV32_${ext} must be AUTO, 0, or 1")
+  endif()
+endforeach()
+set(NJ_JIT_CACHE_ENTRIES 64 CACHE STRING "Per-VM JIT cache slots")
+set(NJ_JIT_HOT_THRESHOLD 8 CACHE STRING "Hits before compiling a bytecode block")
+set(NJ_JIT_MAX_BLOCK_INSNS 32 CACHE STRING "Maximum bytecodes per native block")
+set(NJ_JIT_MAX_CODE_BYTES 2048 CACHE STRING "Maximum native bytes per block")
 set(NJ_MASCOT_FAST_FIELDS 1 CACHE STRING "Use Micro3D receiver classes directly for field access (no cache)")
 
 # ---------------------------------------------------------------------
@@ -121,6 +139,8 @@ set(NJ_SOURCES
   src/core/nj_thread.c
   src/core/nj_interp.c
   src/core/nj_engine.c
+  src/core/nj_jit.c
+  src/core/nj_jit_rv32.c
   src/core/nj_app.c
   src/core/nj_builtins.c
   src/core/nj_device.c
@@ -212,6 +232,11 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_SUPERINSTR=${NJ_ENABLE_SUPERINSTR}
   NJ_ENABLE_JUMP_THREADING=${NJ_ENABLE_JUMP_THREADING}
   NJ_ENABLE_ENGINE=${NJ_ENABLE_ENGINE}
+  NJ_ENABLE_JIT=${NJ_ENABLE_JIT}
+  NJ_JIT_CACHE_ENTRIES=${NJ_JIT_CACHE_ENTRIES}
+  NJ_JIT_HOT_THRESHOLD=${NJ_JIT_HOT_THRESHOLD}
+  NJ_JIT_MAX_BLOCK_INSNS=${NJ_JIT_MAX_BLOCK_INSNS}
+  NJ_JIT_MAX_CODE_BYTES=${NJ_JIT_MAX_CODE_BYTES}
   NJ_M3G_FAST_PATHS=${NJ_M3G_FAST_PATHS}
   NJ_MASCOT_FAST_FIELDS=${NJ_MASCOT_FAST_FIELDS}
   NJ_ENABLE_FONT_CJK=${NJ_ENABLE_FONT_CJK}
@@ -235,6 +260,12 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_M3G=${NJ_ENABLE_M3G}
   NJ_ENABLE_MASCOT=${NJ_ENABLE_MASCOT}
   NJ_ENABLE_TTF=${NJ_ENABLE_TTF})
+
+foreach(ext M A F D C)
+  if(NOT NJ_JIT_RV32_${ext} STREQUAL "AUTO")
+    target_compile_definitions(nj2me PUBLIC NJ_JIT_RV32_${ext}=${NJ_JIT_RV32_${ext}})
+  endif()
+endforeach()
 
 if(NJ_SANITIZE)
   target_compile_options(nj2me PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
@@ -605,6 +636,15 @@ if(NJ_BUILD_TESTS)
     set_tests_properties(${name} PROPERTIES
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
   endfunction()
+
+  # The encoder runs on every host; native calls are gated by RV32 at runtime.
+  nj_add_test(test_jit tests/test_jit.c)
+  if(NJ_ENABLE_JIT)
+    # Respect the deployment ISA here. The separate matrix script deliberately
+    # enables other extensions only inside a suitable RV32 execution harness.
+    nj_add_test(test_jit_rv32 tests/test_jit_rv32.c)
+    target_compile_features(test_jit_rv32 PRIVATE c_std_11)
+  endif()
 
   # ---- the memory contract and the class library ----
   nj_add_test(test_lifecycle tests/test_lifecycle.c)
