@@ -32,7 +32,8 @@ gracefully when left `NULL`.
 | `shutdown` | release port-owned state | nothing |
 
 RecordStore writes an optional 16-byte `NJMT` timestamp trailer after its v1
-records. New stores and successful mutations retain `getLastModified()` across
+records, and an optional append-only `NJBG` section before that trailer for
+records longer than 64 KiB (files without long records stay byte-for-byte v1). New stores and successful mutations retain `getLastModified()` across
 VM restarts without a filesystem metadata hook. A legacy file without that
 trailer reports **0 (unknown)** through `file_*`, since this callback interface
 has no stat/mtime operation; the direct libc fallback can use host mtime. Supply

@@ -927,15 +927,30 @@ for port file hooks, which have no metadata callback. A successful mutation
 writes the timestamp trailer. Unknown, truncated or extra trailer bytes do not
 prevent reading the records.
 
+Records longer than 65535 bytes used to be silently truncated to their low
+16 bits on disk: a 134044-byte database came back as 2972 bytes, with no
+exception, and the next save wrote a 2988-byte store. The v1 record area still
+writes `0` as such a record's length and appends the payload in an `NJBG`
+section between the records and the timestamp trailer: `NJBG`, big-endian u32
+version 1, big-endian u32 count, then per record a big-endian u2 id, u2 zero and
+u32 length followed by the bytes. Old readers stop after the declared records,
+so the one long record comes back empty - the truncation they always did - and
+every other record still loads; an old build rewriting the store loses only
+that record. A store with no long records is byte-for-byte v1, because the
+section is omitted entirely.
+
 The timestamp replaces an unused boolean field. Packing the private access
 mode into a boolean slot reuses alignment padding: the measured host RecordStore
 instance remains 80 bytes. Its public `getMode()I`/`setMode(IZ)V` API is unchanged.
 I/O failures do not advance the timestamp; short writes are reported as
 `RecordStoreException`. Store rewrites still truncate the destination directly:
 they are **not atomic**, so this does not add power-loss protection or transaction
-rollback. `tests/test_rms.c` covers 365 assertions including a separate old-format
+rollback. `tests/test_rms.c` covers 563 assertions including a separate old-format
 decoder, malformed trailers, clock advancement, restart, closed stores, access
-mode changes and injected write-open failure.
+mode changes, injected write-open failure, and records of 65535/65536/134044
+bytes that round-trip, re-save, shrink, and survive a file truncated inside the
+long payload (only that record is lost; the ones after its placeholder still
+load).
 
 **The runner derives that directory per game**, because the old default - the
 working directory - had two problems. It littered: a repository accumulated 45

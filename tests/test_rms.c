@@ -27,6 +27,13 @@
  *      writes) is fed to the new reader.  Missing, truncated, unknown-version
  *      and extra-byte trailers each fall back to the file's mtime; none of
  *      them loses a record.
+ *   5. Records over 65535 bytes.  The u2 record header cannot hold the length,
+ *      so the payload moves to an overflow section and the header keeps zero.
+ *      A 134044-byte record (the one a title's database really writes) must
+ *      come back whole after a restart, the old decoder must still see every
+ *      other record where it expects it, the section must disappear again when
+ *      nothing needs it, and a file cut off inside the payload must lose only
+ *      that record.
  *
  * The test owns its clock: nj_port.millis/now are replaced before each VM is
  * created, so the expected values are exact constants and not "whatever the
@@ -478,6 +485,10 @@ typedef struct old_view {
     nj_u4 next_id;
     nj_u4 first_id;
     char first[64];
+    /* First eight records, in file order, so a test can prove that a record
+     * after an oversized one still decodes where an old reader expects it. */
+    nj_u4 ids[8];
+    nj_u4 lens[8];
 } old_view;
 
 static nj_u2 rd_u2(FILE *fp, int *ok)
@@ -537,6 +548,10 @@ static void old_v1_decode(const char *path, old_view *out)
         nj_u4 len = rd_u2(fp, &ok);
         if (!ok) {
             break;
+        }
+        if ((size_t)i < sizeof(out->ids) / sizeof(out->ids[0])) {
+            out->ids[i] = id;
+            out->lens[i] = len;
         }
         if (i == 0) {
             nj_u4 take = len < sizeof(out->first) - 1u
@@ -1251,6 +1266,338 @@ static void test_old_decoder_reads_new_file(const nj_port *base,
 }
 
 /* ------------------------------------------------------------------ */
+/* Case 7: records longer than 65535 bytes survive a restart           */
+/* ------------------------------------------------------------------ */
+#define MID_N   65535u
+#define OVER_N  65536u
+#define BIG_N   134044u
+
+static void pattern_fill(nj_u1 *p, nj_u4 n, nj_u4 seed)
+{
+    nj_u4 i;
+    for (i = 0u; i < n; i++) {
+        p[i] = (nj_u1)((i * 31u + seed * 707u + 11u) & 0xFFu);
+    }
+}
+
+/* Read a record back and compare length and bytes. */
+static void expect_record(nj_vm *vm, nj_ref store, nj_s4 id, const void *want,
+                          nj_u4 want_n, const char *where)
+{
+    nj_value a[1], ret;
+    nj_status st;
+    nj_ref arr;
+
+    a[0] = vint(id);
+    ret.bits = 0u;
+    st = nj_call(vm, store, RS, "getRecord", "(I)[B", a, &ret);
+    /* MIDP getRecord(int) answers null for an existing empty record, so an
+     * empty record is "no exception and no array", not a zero-length array;
+     * a missing id throws InvalidRecordIDException instead. */
+    if (want_n == 0u) {
+        OK_MSG(st == NJ_OK && !nj_has_exception(vm) &&
+               (ret.r == NULL || ret.r->length == 0u),
+               "%s: record %ld is empty (exception: %s)", where, (long)id,
+               nj_has_exception(vm) ? nj_exception_describe(vm) : "none");
+        if (nj_has_exception(vm)) {
+            nj_clear_exception(vm);
+        }
+        return;
+    }
+    OK_MSG(st == NJ_OK && !nj_has_exception(vm) && ret.r != NULL,
+           "%s: getRecord(%ld) (exception: %s)", where, (long)id,
+           nj_has_exception(vm) ? nj_exception_describe(vm) : "none");
+    if (st != NJ_OK || nj_has_exception(vm) || !ret.r) {
+        if (nj_has_exception(vm)) {
+            nj_clear_exception(vm);
+        }
+        return;
+    }
+    arr = ret.r;
+    OK_MSG(arr->length == want_n,
+           "%s: record %ld is %lu bytes, want %lu", where, (long)id,
+           (unsigned long)arr->length, (unsigned long)want_n);
+    if (arr->length == want_n) {
+        OK_MSG(memcmp(arr->u.bytes, want, want_n) == 0u,
+               "%s: record %ld bytes match", where, (long)id);
+    }
+}
+
+static int file_contains(const char *path, const char *needle)
+{
+    FILE *fp = fopen(path, "rb");
+    unsigned char buf[4096];
+    size_t keep = strlen(needle);
+    size_t got;
+    int found = 0;
+
+    if (!fp || keep == 0u || keep >= sizeof(buf)) {
+        if (fp) {
+            fclose(fp);
+        }
+        return 0;
+    }
+    got = fread(buf, 1u, sizeof(buf), fp);
+    while (got >= keep) {
+        size_t i;
+        for (i = 0u; i + keep <= got; i++) {
+            if (memcmp(buf + i, needle, keep) == 0) {
+                found = 1;
+            }
+        }
+        if (found) {
+            break;
+        }
+        memmove(buf, buf + (got - keep + 1u), keep - 1u);
+        got = (keep - 1u) + fread(buf + (keep - 1u), 1u,
+                                  sizeof(buf) - (keep - 1u), fp);
+    }
+    fclose(fp);
+    return found;
+}
+
+/* Rewrite the file with only its first n bytes, the way a power cut would. */
+static void truncate_file_to(const char *path, long n)
+{
+    FILE *in = fopen(path, "rb");
+    unsigned char *buf = NULL;
+    long size;
+    int ok = 1;
+
+    if (!in || n < 0) {
+        if (in) {
+            fclose(in);
+        }
+        return;
+    }
+    if (fseek(in, 0, SEEK_END) != 0) {
+        ok = 0;
+        size = 0;
+    } else {
+        size = ftell(in);
+    }
+    if (ok && size > n) {
+        if (fseek(in, 0, SEEK_SET) != 0) {
+            ok = 0;
+        }
+        if (n > 0) {
+            buf = (unsigned char *)malloc((size_t)n);
+            if (!buf || fread(buf, 1u, (size_t)n, in) != (size_t)n) {
+                ok = 0;
+            }
+        }
+    } else {
+        ok = 0;
+    }
+    fclose(in);
+    if (ok) {
+        FILE *out = fopen(path, "wb");
+        if (out) {
+            if (n > 0 && fwrite(buf, 1u, (size_t)n, out) != (size_t)n) {
+                ok = 0;
+            }
+            fclose(out);
+        }
+    }
+    free(buf);
+}
+
+static void test_large_records(const nj_port *base, const char *dir)
+{
+    const char *name = "big.sav";
+    char path[1200];
+    nj_port port = make_port(base, dir, 1);
+    nj_vm *vm;
+    nj_ref store;
+    nj_u1 *mid = NULL;
+    nj_u1 *over = NULL;
+    nj_u1 *big = NULL;
+    nj_u1 *grown = NULL;
+    nj_u1 half[BIG_N / 2];
+    old_view view;
+    nj_s8 saved;
+    nj_s4 id;
+
+    store_path(path, sizeof(path), dir, name);
+    (void)remove(path);
+
+    mid = (nj_u1 *)malloc(MID_N);
+    over = (nj_u1 *)malloc(OVER_N);
+    big = (nj_u1 *)malloc(BIG_N);
+    grown = (nj_u1 *)malloc(OVER_N);
+    if (!mid || !over || !big || !grown) {
+        free(mid); free(over); free(big); free(grown);
+        g_fail++;
+        fprintf(stderr, "FAIL large: cannot allocate test buffers\n");
+        return;
+    }
+    pattern_fill(mid, MID_N, 1u);
+    pattern_fill(over, OVER_N, 2u);
+    pattern_fill(big, BIG_N, 3u);
+    pattern_fill(grown, OVER_N, 4u);
+    pattern_fill(half, (nj_u4)sizeof(half), 5u);
+
+    clock_reset();
+    vm = vm_new(&port);
+    if (!vm) {
+        free(mid); free(over); free(big); free(grown);
+        return;
+    }
+    store = open_store(vm, name, 1, "large/create");
+    if (!store) {
+        clean(vm, "large/create");
+        nj_vm_destroy(vm);
+        free(mid); free(over); free(big); free(grown);
+        return;
+    }
+
+    /* One record either side of the u2 length limit, the biggest one from the
+     * title that exposed the bug, and a small record after them all. */
+    id = add_bytes(vm, store, "start", 5u, "large/add-start");
+    OK_MSG(id == 1, "large: first id is 1, got %ld", (long)id);
+    id = add_bytes(vm, store, mid, MID_N, "large/add-65535");
+    OK_MSG(id == 2, "large: second id is 2, got %ld", (long)id);
+    clock_advance(1000u);
+    id = add_bytes(vm, store, over, OVER_N, "large/add-65536");
+    OK_MSG(id == 3, "large: third id is 3, got %ld", (long)id);
+    clock_advance(1000u);
+    id = add_bytes(vm, store, big, BIG_N, "large/add-134044");
+    OK_MSG(id == 4, "large: fourth id is 4, got %ld", (long)id);
+    id = add_bytes(vm, store, "end", 3u, "large/add-end");
+    OK_MSG(id == 5, "large: fifth id is 5, got %ld", (long)id);
+
+    expect_record(vm, store, 1, "start", 5u, "large/same-vm");
+    expect_record(vm, store, 2, mid, MID_N, "large/same-vm");
+    expect_record(vm, store, 3, over, OVER_N, "large/same-vm");
+    expect_record(vm, store, 4, big, BIG_N, "large/same-vm");
+    expect_record(vm, store, 5, "end", 3u, "large/same-vm");
+    saved = EPOCH_2040_MS + 2000;
+    expect_lm(vm, store, saved, "large/before-close");
+    close_store(vm, store, "large/close");
+    clean(vm, "large/before-restart");
+    nj_vm_destroy(vm);
+
+    /* Restart: the whole point.  Before this format extension the writer kept
+     * only the low 16 bits of the length and the reload dropped 131072 bytes
+     * of the 134044-byte record without a word. */
+    clock_advance(500000u);
+    vm = vm_new(&port);
+    if (!vm) {
+        free(mid); free(over); free(big); free(grown);
+        return;
+    }
+    store = open_store(vm, name, 0, "large/restart");
+    if (store) {
+        OK_MSG(num_records(vm, store, "large/restart") == 5,
+               "large: five records after the restart, got %ld",
+               (long)num_records(vm, store, "large/restart"));
+        expect_record(vm, store, 1, "start", 5u, "large/restart");
+        expect_record(vm, store, 2, mid, MID_N, "large/restart");
+        expect_record(vm, store, 3, over, OVER_N, "large/restart");
+        expect_record(vm, store, 4, big, BIG_N, "large/restart");
+        expect_record(vm, store, 5, "end", 3u, "large/restart");
+        expect_lm(vm, store, saved, "large/restart");
+
+        /* The old decoder must still see every record in the record area,
+         * with the oversized ones as empty placeholders and the records after
+         * them exactly where it expects. */
+        old_v1_decode(path, &view);
+        OK_MSG(view.ok, "large: the old v1 decoder accepts the file");
+        OK_MSG(view.count == 5, "large: old decoder sees 5 records, got %d",
+               view.count);
+        OK_MSG(view.lens[0] == 5u && view.lens[1] == MID_N &&
+               view.lens[2] == 0u && view.lens[3] == 0u &&
+               view.lens[4] == 3u,
+               "large: old decoder lengths %lu/%lu/%lu/%lu/%lu",
+               (unsigned long)view.lens[0], (unsigned long)view.lens[1],
+               (unsigned long)view.lens[2], (unsigned long)view.lens[3],
+               (unsigned long)view.lens[4]);
+        OK_MSG(view.ids[4] == 5u && strcmp(view.first, "start") == 0,
+               "large: old decoder record ids/order unchanged");
+        OK_MSG(!view.has_trailer,
+               "large: an old decoder does not find the trailer behind the "
+               "overflow section (it falls back to mtime)");
+        OK_MSG(file_contains(path, "NJBG"),
+               "large: the file carries the overflow section");
+
+        /* Shrink the biggest record and grow a small one past the limit; the
+         * overflow section must follow the data, not the record order. */
+        set_bytes(vm, store, 4, "tiny", 4u, "large/shrink");
+        set_bytes(vm, store, 2, grown, OVER_N, "large/grow");
+        delete_record(vm, store, 3, "large/delete");
+        expect_record(vm, store, 2, grown, OVER_N, "large/after-grow");
+        close_store(vm, store, "large/close-2");
+    }
+    clean(vm, "large/mutate");
+    nj_vm_destroy(vm);
+
+    clock_advance(1000u);
+    vm = vm_new(&port);
+    if (!vm) {
+        free(mid); free(over); free(big); free(grown);
+        return;
+    }
+    store = open_store(vm, name, 0, "large/restart-2");
+    if (store) {
+        OK_MSG(num_records(vm, store, "large/restart-2") == 4,
+               "large: four records after grow/shrink/delete");
+        expect_record(vm, store, 2, grown, OVER_N, "large/restart-2");
+        expect_record(vm, store, 4, "tiny", 4u, "large/restart-2");
+        expect_record(vm, store, 5, "end", 3u, "large/restart-2");
+
+        /* All records small again: the overflow section must disappear, so a
+         * store that never needed it is byte-for-byte the old format. */
+        set_bytes(vm, store, 2, "small", 5u, "large/shrink-all");
+        close_store(vm, store, "large/close-3");
+        OK_MSG(!file_contains(path, "NJBG"),
+               "large: no overflow section once no record needs one");
+        old_v1_decode(path, &view);
+        OK_MSG(view.ok && view.count == 4 && view.lens[1] == 5u,
+               "large: the plain file still decodes as version 1 records");
+    }
+    clean(vm, "large/shrink-all");
+    nj_vm_destroy(vm);
+
+    /* A file cut off inside the overflow payload: the records survive, the
+     * truncated one comes back empty, nothing crashes. */
+    vm = vm_new(&port);
+    if (!vm) {
+        free(mid); free(over); free(big); free(grown);
+        return;
+    }
+    store = open_store(vm, name, 0, "large/truncate-prep");
+    if (store) {
+        set_bytes(vm, store, 4, half, (nj_u4)sizeof(half), "large/regrow");
+        close_store(vm, store, "large/close-4");
+    }
+    clean(vm, "large/truncate-prep");
+    nj_vm_destroy(vm);
+    truncate_file_to(path, file_size(path) - 1000);
+
+    vm = vm_new(&port);
+    if (!vm) {
+        free(mid); free(over); free(big); free(grown);
+        return;
+    }
+    store = open_store(vm, name, 0, "large/truncated");
+    if (store) {
+        OK_MSG(num_records(vm, store, "large/truncated") == 4,
+               "large: records before a truncated payload still load");
+        expect_record(vm, store, 1, "start", 5u, "large/truncated");
+        expect_record(vm, store, 4, NULL, 0u, "large/truncated");
+        close_store(vm, store, "large/close-5");
+    }
+    clean(vm, "large/truncated");
+    nj_vm_destroy(vm);
+
+    (void)remove(path);
+    free(mid);
+    free(over);
+    free(big);
+    free(grown);
+}
+
+/* ------------------------------------------------------------------ */
 /* Case 7: the port's file hooks (not the libc fallback)               */
 /* ------------------------------------------------------------------ */
 static void test_port_backend(const nj_port *base, const char *dir)
@@ -1333,6 +1680,7 @@ int main(void)
         test_closed_and_delete(&base_port, dir);
         test_legacy_and_variants(&base_port, dir);
         test_old_decoder_reads_new_file(&base_port, dir);
+        test_large_records(&base_port, dir);
     }
     snprintf(dir, sizeof(dir), "%s/getlastmodified-fault", base_dir);
     mkdir_p(dir);

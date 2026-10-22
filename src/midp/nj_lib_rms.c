@@ -54,6 +54,22 @@
  * which would be a lie that games comparing it against the wall clock act on.
  * The next mutation appends the trailer and the value becomes exact.
  *
+ * A record longer than 65535 bytes cannot carry its length in the u2 record
+ * header, so the header stores length 0 and the payload moves into an
+ * overflow section between the records and the trailer:
+ *
+ *      "NJBG"          4 bytes   overflow tag
+ *      bigVersion      u32       currently 1
+ *      bigCount        u32
+ *      per big record: u2 id, u2 reserved (0), u32 length, length bytes
+ *
+ * An older build keeps reading the record area - that one record comes back
+ * empty, which is the same silent truncation it did before this section
+ * existed - and never looks at the overflow, so every other record is
+ * exactly where it was and parses correctly.  A build from before the trailer
+ * ignores both sections the same way.  The section is omitted entirely when
+ * no record is long, so ordinary stores stay byte-for-byte what they were.
+ *
  * ---------------------------------------------------------------------------
  * I/O
  * ---------------------------------------------------------------------------
@@ -91,6 +107,15 @@
 #define NJ_RS_TRAILER3 'T'
 #define NJ_RS_TRAILER_VERSION 1u
 #define NJ_RS_TRAILER_SIZE 16u   /* tag 4 + version 4 + timestamp 8 */
+/* Optional record-overflow section: payloads that do not fit the u2 length in
+ * the record area.  Same append-only trick as the trailer. */
+#define NJ_RS_BIG0 'N'
+#define NJ_RS_BIG1 'J'
+#define NJ_RS_BIG2 'B'
+#define NJ_RS_BIG3 'G'
+#define NJ_RS_BIG_VERSION 1u
+#define NJ_RS_BIG_MAX 4096u      /* implausible counts are treated as corrupt */
+#define NJ_RS_RECORD_MAX (1024u * 1024u)  /* sanity bound on one record */
 /* The timestamp field.  It replaces the old rsModified boolean, which was
  * written by every save and read by nobody. */
 #define NJ_F_RS_LASTMOD "rsLastModified"   /* J */
@@ -539,16 +564,12 @@ static int r_u8(rs_reader *r, nj_s8 *out)
  * trailer version to reuse the tag: an old reader will ignore it rather than
  * misinterpret it.
  */
-static int r_trailer(rs_reader *r, nj_s8 *ts)
+static int r_trailer(rs_reader *r, const nj_u1 tag[4], nj_s8 *ts)
 {
-    nj_u1 tag[4];
     nj_u4 version;
     nj_s8 value;
     nj_u1 extra;
 
-    if (r_bytes(r, tag, 4u) != 4u) {
-        return 0;
-    }
     if (tag[0] != NJ_RS_TRAILER0 || tag[1] != NJ_RS_TRAILER1 ||
         tag[2] != NJ_RS_TRAILER2 || tag[3] != NJ_RS_TRAILER3) {
         return 0;
@@ -564,6 +585,88 @@ static int r_trailer(rs_reader *r, nj_s8 *ts)
     }
     *ts = value;
     return 1;
+}
+
+/* Put an overflow payload where its record was read.  The record area holds a
+ * zero-length placeholder for it, matched by id. */
+static int rs_replace_record(nj_vm *vm, nj_ref recs, nj_ref ids, nj_s4 id,
+                             nj_ref rec)
+{
+    nj_s4 n = vec_size(vm, ids), i;
+
+    for (i = 0; i < n; i++) {
+        nj_ref ido = vec_at(vm, ids, i);
+        if (ido && nj_call_int(vm, ido, "java/lang/Integer", "intValue",
+                               "()I", NULL) == id) {
+            return vec_set(vm, recs, i, rec);
+        }
+    }
+    return 0;
+}
+
+/* The record-overflow body, after its 4-byte tag has been read. */
+static int r_big(rs_reader *r, nj_vm *vm, nj_ref recs, nj_ref ids)
+{
+    nj_u4 version, count, i;
+
+    if (!r_u4(r, &version) || version != NJ_RS_BIG_VERSION) {
+        return 0;
+    }
+    if (!r_u4(r, &count) || count > NJ_RS_BIG_MAX) {
+        return 0;
+    }
+    for (i = 0u; i < count; i++) {
+        nj_u4 id = r_u2(r);
+        nj_u4 len;
+        nj_ref rec;
+
+        (void)r_u2(r);   /* reserved, written as 0 */
+        if (!r_u4(r, &len)) {
+            return 0;
+        }
+        if (len <= 0xFFFFu || len > NJ_RS_RECORD_MAX) {
+            return 0;    /* only lengths the record header cannot hold */
+        }
+        rec = nj_byte_array_new(vm, len);
+        if (!rec) {
+            return 0;
+        }
+        if (r_bytes(r, rec->u.bytes, len) != len) {
+            return 0;
+        }
+        if (!rs_replace_record(vm, recs, ids, (nj_s4)id, rec)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * The optional tail sections, in the order this build writes them: any number
+ * of record-overflow sections, then the trailer, which must be the last bytes
+ * in the file.  An unrecognised tag ends the search, exactly like r_trailer()'s
+ * strictness: the records already loaded stay, only the timestamp falls back.
+ */
+static int r_sections(rs_reader *r, nj_vm *vm, nj_ref recs, nj_ref ids,
+                      nj_s8 *ts)
+{
+    nj_u1 tag[4];
+    int have_ts = 0;
+
+    while (r_bytes(r, tag, 4u) == 4u) {
+        if (tag[0] == NJ_RS_BIG0 && tag[1] == NJ_RS_BIG1 &&
+            tag[2] == NJ_RS_BIG2 && tag[3] == NJ_RS_BIG3) {
+            if (!r_big(r, vm, recs, ids)) {
+                return have_ts;
+            }
+            continue;
+        }
+        if (r_trailer(r, tag, ts)) {
+            have_ts = 1;
+        }
+        return have_ts;
+    }
+    return have_ts;
 }
 
 static void r_close(rs_reader *r)
@@ -609,6 +712,7 @@ static nj_status rs_save(nj_vm *vm, nj_ref rs, int mutated)
     char path[320];
     rs_writer w;
     nj_s4 n, i;
+    nj_u4 big;
     nj_s8 ts;
 
     if (!name || !recs || !ids) {
@@ -642,6 +746,16 @@ static nj_status rs_save(nj_vm *vm, nj_ref rs, int mutated)
     n = vec_size(vm, recs);
     w_u2(&w, (nj_u4)n);
 
+    /* Records whose length does not fit the u2 header go into the overflow
+     * section written after the record area; count them first. */
+    big = 0u;
+    for (i = 0; i < n; i++) {
+        nj_ref rec = vec_at(vm, recs, i);
+        if (rec && rec->length > 0xFFFFu) {
+            big++;
+        }
+    }
+
     for (i = 0; i < n; i++) {
         nj_ref rec = vec_at(vm, recs, i);
         nj_ref ido = vec_at(vm, ids, i);
@@ -650,8 +764,34 @@ static nj_status rs_save(nj_vm *vm, nj_ref rs, int mutated)
         nj_u4 len = rec ? rec->length : 0u;
 
         w_u2(&w, (nj_u4)id);
-        w_u2(&w, len);
-        if (rec && len > 0u) {
+        w_u2(&w, len > 0xFFFFu ? 0u : len);
+        if (rec && len > 0u && len <= 0xFFFFu) {
+            w_bytes(&w, rec->u.bytes, len);
+        }
+    }
+
+    if (big > 0u) {
+        nj_u1 tag[4];
+        tag[0] = NJ_RS_BIG0; tag[1] = NJ_RS_BIG1;
+        tag[2] = NJ_RS_BIG2; tag[3] = NJ_RS_BIG3;
+        w_bytes(&w, tag, 4u);
+        w_u4(&w, NJ_RS_BIG_VERSION);
+        w_u4(&w, big);
+        for (i = 0; i < n; i++) {
+            nj_ref rec = vec_at(vm, recs, i);
+            nj_ref ido = vec_at(vm, ids, i);
+            nj_s4 id;
+            nj_u4 len;
+
+            if (!rec || rec->length <= 0xFFFFu) {
+                continue;
+            }
+            id = ido ? nj_call_int(vm, ido, "java/lang/Integer", "intValue",
+                                   "()I", NULL) : 0;
+            len = rec->length;
+            w_u2(&w, (nj_u4)id);
+            w_u2(&w, 0u);
+            w_u4(&w, len);
             w_bytes(&w, rec->u.bytes, len);
         }
     }
@@ -724,7 +864,7 @@ static void rs_load(nj_vm *vm, nj_ref rs)
         nj_ref rec;
         nj_ref ido;
 
-        if (len > 1024u * 1024u) {
+        if (len > NJ_RS_RECORD_MAX) {
             break;
         }
         rec = nj_byte_array_new(vm, len);
@@ -743,7 +883,7 @@ static void rs_load(nj_vm *vm, nj_ref rs)
         }
     }
     parsed_all = (i == count);
-    if (parsed_all && r_trailer(&r, &last_modified)) {
+    if (parsed_all && r_sections(&r, vm, recs, ids, &last_modified)) {
         has_trailer = 1;
     }
     r_close(&r);
