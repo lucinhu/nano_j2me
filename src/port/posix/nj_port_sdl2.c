@@ -150,6 +150,8 @@ typedef struct sdl_state {
     nj_event queue[256];
     int  qh, qt;
     int ime_active, ime_composing, ime_multiline;
+    int ime_preedit;   /* the host IME is composing: its text is not ours yet */
+    int text_always;  /* keep the host's text input on for a Canvas editor */
     nj_u4 ime_session;
     nj_u1 ime_keys[SDL_NUM_SCANCODES]; /* swallow matching key-up after focus moves */
 
@@ -423,6 +425,21 @@ static int sdl_display_init(void *ud, int *w, int *h, int *stride, void **px)
      * arithmetic and leaves the renderer in window coordinates.
      */
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+
+    /*
+     * The host's text input follows the MIDP editor by default.  NJ_SDL2_TEXT=always
+     * turns it on from the start, which is what a Canvas that draws its own
+     * editor needs: it has no MIDP TextField, so the characters the user types
+     * would otherwise never be produced.
+     */
+    {
+        const char *text_mode = getenv("NJ_SDL2_TEXT");
+
+        s->text_always = (text_mode && text_mode[0] != '\0' &&
+                          strcmp(text_mode, "0") != 0 &&
+                          strcmp(text_mode, "always") != 0) ? 1 : 0;
+        if (s->text_always) { SDL_StartTextInput(); }
+    }
 
     s->texture = SDL_CreateTexture(s->renderer, sdl_pixel_format(NJ_PIXFMT),
                                    SDL_TEXTUREACCESS_STREAMING,
@@ -1090,17 +1107,120 @@ static void sdl_pointer_to(sdl_state *s, int x, int y)
 
 static int sdl_input_push(void *ud, const nj_event *ev);
 
+/*
+ * A character the user typed, delivered as a key press.
+ *
+ * A Canvas that draws its own editor has no MIDP TextField to type into, so
+ * the runtime never saw a character at all: the host's letters were dropped
+ * and the title's editor stayed empty.  The character travels as a key press
+ * that carries it, and Displayable.getKeyChar() hands it to the MIDlet.
+ *
+ * The key code is the character itself: a keypad has no key for a letter, and
+ * a Canvas that switches on keyPressed(int) wants to see the character it
+ * typed.  Characters that already have a key of their own (the digits, '*',
+ * '#' and the four letters the desktop maps to the game buttons) are not sent
+ * here - they were already delivered as key presses by the key handler.
+ */
+static void sdl_push_char(sdl_state *s, nj_u4 ch)
+{
+    nj_event e;
+
+    if (ch == 0u || ch > 0x10FFFFu) {
+        return;
+    }
+    memset(&e, 0, sizeof(e));
+    e.type = NJ_EV_KEY_DOWN;
+    e.key = (nj_u1)NJ_KEY_NONE;
+    e.key_char = ch;
+    s->queue[s->qt] = e;
+    s->qt = (s->qt + 1) % (int)(sizeof(s->queue) / sizeof(s->queue[0]));
+    e.type = NJ_EV_KEY_UP;
+    s->queue[s->qt] = e;
+    s->qt = (s->qt + 1) % (int)(sizeof(s->queue) / sizeof(s->queue[0]));
+}
+
+/* The characters the key handler already delivers as key presses. */
+static int sdl_char_has_key(nj_u4 ch)
+{
+    if (ch >= '0' && ch <= '9') {
+        return 1;
+    }
+    switch (ch) {
+    case '*': case '#': case ' ': case '\n': case '\r': case '\t':
+    case 'z': case 'x': case 'c': case 'v':   /* the game buttons */
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* One UTF-8 sequence to one code point.  Returns the bytes used, 0 at the end. */
+static int sdl_utf8_next(const char *p, nj_u4 *out)
+{
+    unsigned char c = (unsigned char)p[0];
+    int n, i;
+    nj_u4 v;
+
+    if (c == 0) {
+        return 0;
+    }
+    if (c < 0x80u) {
+        *out = c;
+        return 1;
+    }
+    if ((c & 0xE0u) == 0xC0u) { n = 2; v = c & 0x1Fu; }
+    else if ((c & 0xF0u) == 0xE0u) { n = 3; v = c & 0x0Fu; }
+    else if ((c & 0xF8u) == 0xF0u) { n = 4; v = c & 0x07u; }
+    else { *out = c; return 1; }
+    for (i = 1; i < n; i++) {
+        unsigned char cc = (unsigned char)p[i];
+        if ((cc & 0xC0u) != 0x80u) {
+            *out = c;
+            return 1;
+        }
+        v = (v << 6) | (cc & 0x3Fu);
+    }
+    *out = v;
+    return n;
+}
+
+static void sdl_push_text(sdl_state *s, const char *text)
+{
+    const char *p = text;
+
+    while (p && *p) {
+        nj_u4 ch = 0;
+        int n = sdl_utf8_next(p, &ch);
+        if (n == 0) {
+            break;
+        }
+        p += n;
+        if (!sdl_char_has_key(ch)) {
+            sdl_push_char(s, ch);
+        }
+    }
+}
+
 static void sdl_text_input(void *ud, const nj_text_input_state *state)
 {
     sdl_state *s = SS(ud);
     if (s->ime_session != state->session || s->ime_active != state->active) {
-        SDL_StopTextInput();
+        /*
+         * The host's text input follows the MIDP editor, so a game that never
+         * shows a TextField is not interrupted by the host's IME.
+         *
+         * NJ_SDL2_TEXT=always keeps it on anyway: a Canvas that draws its own
+         * editor has no MIDP TextField to type into, and the characters the
+         * user types - including a Chinese one from the host's IME - reach it
+         * only through the text input.
+         */
+        if (!s->text_always) { SDL_StopTextInput(); }
         SDL_FlushEvent(SDL_TEXTINPUT);
         SDL_FlushEvent(SDL_TEXTEDITING);
         s->ime_composing = 0;
         s->ime_session = state->session;
         s->ime_active = state->active;
-        if (s->ime_active) { SDL_StartTextInput(); }
+        if (s->ime_active || s->text_always) { SDL_StartTextInput(); }
     }
     s->ime_multiline = state->multiline;
     if (s->ime_active) { SDL_SetTextInputRect(&s->game_dst); }
@@ -1126,7 +1246,8 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
             break;
         case SDL_TEXTEDITING:
             /* Preedit belongs to the OS IME. Never append it to the MIDP value. */
-            if (s->ime_active) { s->ime_composing = ev.edit.text[0] != '\0'; }
+            s->ime_preedit = ev.edit.text[0] != '\0';
+            if (s->ime_active) { s->ime_composing = s->ime_preedit; }
             break;
         case SDL_TEXTINPUT:
             if (s->ime_active) {
@@ -1135,6 +1256,19 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
                 memcpy(e.text, ev.text.text, sizeof(e.text));
                 e.text[sizeof(e.text) - 1] = '\0';
                 (void)sdl_input_push(s, &e);
+                s->ime_composing = 0;
+            } else if (!s->ime_preedit) {
+                /*
+                 * No MIDP TextField has the focus, so the characters belong to
+                 * the MIDlet itself: a Canvas that draws its own editor gets
+                 * them as key presses that carry the character.
+                 *
+                 * While the host IME is still composing, its text is not ours:
+                 * what arrives then is the keyboard's own letters, and the
+                 * characters come later with the commit.  Delivering both would
+                 * type "nihao" and then "你好".
+                 */
+                sdl_push_text(s, ev.text.text);
                 s->ime_composing = 0;
             }
             break;
@@ -1262,6 +1396,17 @@ static void sdl_display_present(void *ud, int x, int y, int w, int h)
                 s->queue[s->qt] = e;
                 s->qt = (s->qt + 1) %
                         (int)(sizeof(s->queue) / sizeof(s->queue[0]));
+            } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
+                       !s->ime_active && !SDL_IsTextInputActive() &&
+                       sym >= 32 && sym < 127) {
+                /*
+                 * A printable key with no key of its own - a letter, most of
+                 * the time.  A Canvas that draws its own editor wants the
+                 * character, and the host's text input is off (there is no MIDP
+                 * editor to type into), so the key itself is the only place the
+                 * character can come from.
+                 */
+                sdl_push_char(s, (nj_u4)sym);
             }
             break;
         }

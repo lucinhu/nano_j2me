@@ -405,6 +405,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_repaintdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_alphademo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_arrcls_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_keychardemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_savedgfx_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_flushdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_nokiademo_jar.sh
@@ -810,6 +811,15 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_arrcls.sh
                      ${NJ_FIXTURES}/arrcls.jar)
+    # Displayable.getKeyChar() - the character of the key that was pressed.
+    # The runtime had no getKeyChar() at all, so a Canvas that draws its own
+    # editor (and asks for the character in keyPressed()) got a
+    # NoSuchMethodError on the first key press and lost the input.
+    add_test(NAME check_keychar
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_keychar.sh
+                     ${NJ_FIXTURES}/keychardemo.jar)
     # The Nokia UI API is the vendor surface the corpus leans on hardest:
     # 83 titles reference FullCanvas, 74 DirectGraphics, 73 DirectUtils, 14
     # Sound and 10 DeviceControl.  A vendor class that is missing is caught by

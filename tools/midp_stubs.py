@@ -94,6 +94,11 @@ CLASSES = {
             "public boolean isFullScreenMode()",
             "public int getWidth()",
             "public int getHeight()",
+            # The character of the key that was pressed.  MIDP declares it
+            # final, so a subclass cannot narrow it and a title that declares
+            # its own getKeyChar() would not compile against the real API
+            # either.
+            "public final int getKeyChar()",
             # PROTECTED in MIDP, not public: a subclass that declares it
             # protected - which is what every MIDlet does, because that is the
             # signature the API documents - cannot narrow a public method, and

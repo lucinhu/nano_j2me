@@ -118,6 +118,7 @@
 #define F_D_LISTENER NJ_F_D_LISTENER
 #define F_D_COMMANDS NJ_F_D_COMMANDS
 #define F_D_FULL     NJ_F_D_FULLSCRN
+#define F_D_KEYCHAR  NJ_F_D_KEYCHAR
 
 #define F_C_BUFFER   NJ_F_C_BUFFER
 #define F_C_WIDTH    NJ_F_C_WIDTH
@@ -4813,7 +4814,46 @@ static void canvas_keys_update(nj_vm *vm, nj_ref canvas, int code, int down)
     }
 }
 
+/*
+ * The character a key code stands for.
+ *
+ * MIDP's keypad is twelve keys, so the characters it can produce are the ten
+ * digits, '*' and '#'; every other key has none.  A port that knows what the
+ * user actually typed passes that in instead (see nj_midp_key_char).
+ */
+static int midp_key_char(int code)
+{
+    if (code >= 48 && code <= 57) {
+        return code;               /* '0' .. '9' */
+    }
+    if (code == 42) {
+        return '*';
+    }
+    if (code == 35) {
+        return '#';
+    }
+    return 0;
+}
+
+/*
+ * Displayable.getKeyChar(): the character of the key that was pressed.
+ *
+ * The runtime had no getKeyChar() at all, so a title that asked for it - which
+ * is what a Canvas that draws its own editor does - got a NoSuchMethodError on
+ * the first key press and the input was lost.
+ */
+NJFN(d_getKeyChar)
+{
+    ret->i = fget(vm, NJ_THIS(args), NJ_C_DISPLAYABLE, NJ_F_D_KEYCHAR, D_INT);
+    return NJ_OK;
+}
+
 int nj_midp_key(nj_vm *vm, int key, int down)
+{
+    return nj_midp_key_char(vm, key, down, 0u);
+}
+
+int nj_midp_key_char(nj_vm *vm, int key, int down, nj_u4 ch)
 {
     nj_ref d;
     int code;
@@ -4832,6 +4872,18 @@ int nj_midp_key(nj_vm *vm, int key, int down)
         /* Not a key we know: pass the raw value on so a Canvas can still see
          * it through getKeyCode()/getGameAction(). */
         code = (key > 0 && key < 0x10000) ? key : 0;
+    }
+    if (code == 0 && ch != 0u && ch < 0x10000u) {
+        /* A typed character with no key of its own: the character IS the code.
+         * A Canvas that draws its own editor expects to see the key it
+         * pressed, and there is no keypad key for a letter. */
+        code = (int)ch;
+    }
+    if (down) {
+        /* Remember the character for getKeyChar().  The port's character wins:
+         * it is what the user actually typed. */
+        fput(vm, d, NJ_C_DISPLAYABLE, NJ_F_D_KEYCHAR, D_INT,
+             ch != 0u ? (int)ch : midp_key_char(code));
     }
 
     if (isa(vm, d, NJ_C_CANVAS)) {
@@ -10011,7 +10063,8 @@ static const nj_builtin_field displayable_fields[] = {
     FLD(F_D_TICKER,   D_TICKER, 0),
     FLD(F_D_LISTENER, D_CL,     0),
     FLD(F_D_COMMANDS, D_VECTOR, 0),
-    FLD(F_D_FULL,     D_BOOL,   0)
+    FLD(F_D_FULL,     D_BOOL,   0),
+    FLD(F_D_KEYCHAR,  D_INT,    0)
 };
 
 static const nj_builtin_method displayable_methods[] = {
@@ -10029,6 +10082,7 @@ static const nj_builtin_method displayable_methods[] = {
     M("isShown",          "()Z", 0),
     M("sizeChanged",      "(II)V", 0),
     M("getKeyName",       "(I)Ljava/lang/String;", 0),
+    M("getKeyChar",       "()I", 0),
     M("setFullScreenMode", "(Z)V", 0),
     M("isFullScreenMode", "()Z", 0)
 };
@@ -10879,6 +10933,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_DISPLAYABLE, "isShown", "()Z", d_isShown },
     { NJ_C_DISPLAYABLE, "sizeChanged", "(II)V", d_sizeChanged },
     { NJ_C_DISPLAYABLE, "getKeyName", "(I)Ljava/lang/String;", d_getKeyName },
+    { NJ_C_DISPLAYABLE, "getKeyChar", "()I", d_getKeyChar },
     { NJ_C_DISPLAYABLE, "setFullScreenMode", "(Z)V", d_setFullScreenMode },
     { NJ_C_DISPLAYABLE, "isFullScreenMode", "()Z", d_isFullScreenMode },
 

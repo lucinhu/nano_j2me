@@ -99,6 +99,7 @@
 #define NJ_F_D_LISTENER  "dListener"   /* CommandListener */
 #define NJ_F_D_COMMANDS  "dCommands"   /* Vector   */
 #define NJ_F_D_FULLSCRN  "dFullScreen" /* Z        */
+#define NJ_F_D_KEYCHAR   "dKeyChar"    /* I  character of the last key press */
 
 /* Canvas */
 #define NJ_F_C_BUFFER    "cBuffer"     /* Image backing store */
@@ -235,6 +236,18 @@ void nj_midp_repaint(nj_vm *vm);
 /* Deliver a key event (NJ_KEY_*) to the current Canvas/GameCanvas.
  * `down` is 1 for press, 0 for release.  Returns 1 if it was consumed. */
 int nj_midp_key(nj_vm *vm, int key, int down);
+
+/*
+ * The same, for a press that carries a character.
+ *
+ * A port that has a real keyboard or a real IME can tell the runtime *what
+ * was typed*, not just which button was hit: `ch` is the Unicode code point
+ * (0 when the press carries none).  The character is what
+ * Displayable.getKeyChar() answers, and a Canvas that draws its own editor
+ * needs it - without it the runtime could only report the keypad's own
+ * characters, which a desktop keyboard never sends.
+ */
+int nj_midp_key_char(nj_vm *vm, int key, int down, nj_u4 ch);
 
 /* Host autorepeat navigates built-in screens. Canvas.hasRepeatEvents() is false,
  * so Canvas/GameCanvas must not receive extra presses or update held keys. */

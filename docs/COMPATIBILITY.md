@@ -564,6 +564,23 @@ reached only from the touch path, the Canvas ignores pointers, and the keyboard
 resolves grid coordinates only, so the "dispatch" button cannot be pressed
 without a touch.
 
+### A Canvas that draws its own editor had no way to receive a character
+
+MIDP 2.0 puts `getKeyChar()` on `Displayable`: "Gets the character representing
+the key that was pressed."  The runtime did not have it at all, so a title
+that asked for the character got a `NoSuchMethodError` on the first key press
+and the input was lost.  It answers now, with the MIDP keypad table (`KEY_NUM5`
+is `'5'`, `KEY_STAR` is `'*'`, `KEY_FIRE` has none), and a port may hand over
+the character the user really typed.
+
+That second half is what a Canvas needs when it draws its own editor instead
+of using a MIDP `TextField`: the desktop port now delivers typed characters to
+such a Canvas - ASCII through the key path, and a host-IME commit through the
+text path (`NJ_SDL2_TEXT=always`), so `a` arrives as `code=97 char=97` and
+fcitx5 pinyin `nihao` + space arrives as U+4F60 and U+597D.  The IME's preedit
+never leaks, so an editor does not receive `nihao` and then the two Chinese
+characters.  The cost is 136 bytes.
+
 ## Fixes found by that corpus
 
 Running the corpus is what turned up the defects; these are the ones that were

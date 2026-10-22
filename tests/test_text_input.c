@@ -295,6 +295,61 @@ static void sdl_key_repeat_test(nj_port *port)
         }
     }
 }
+/*
+ * A Canvas that draws its own editor.
+ *
+ * It has no MIDP TextField, so the runtime never saw a character at all: the
+ * host's letters were dropped and the title's editor stayed empty.  The
+ * characters now travel as key presses that carry them, and
+ * Displayable.getKeyChar() hands them to the MIDlet.
+ */
+static void sdl_canvas_char_test(nj_port *port, int compat)
+{
+    nj_event input;
+    SDL_Event event;
+    nj_u4 chars[8];
+    int n = 0, i;
+
+    /* A letter the host keyboard sends: it has no key of its own, so the key
+     * press is the only place the character can come from. */
+    memset(&event, 0, sizeof(event));
+    event.type = SDL_KEYDOWN;
+    event.key.keysym.sym = SDLK_q;
+    event.key.keysym.scancode = SDL_SCANCODE_Q;
+    push_sdl(&event);
+    event.type = SDL_KEYUP;
+    push_sdl(&event);
+    port->display_present(port->ud, 0, 0, 240, 320);
+    while (port->input_poll(port->ud, &input)) {
+        if (input.type == NJ_EV_KEY_DOWN) {
+            CHECK(input.key_char == (nj_u4)'q');
+            if (n < 8) { chars[n++] = input.key_char; }
+        }
+    }
+    CHECK(n == 1 && chars[0] == (nj_u4)'q');
+
+    if (compat) {
+        /* SDL2-compat's event translator crashes on a synthetic text event. */
+        return;
+    }
+    /* A commit from the host's IME: one key press per character. */
+    memset(&event, 0, sizeof(event));
+    event.type = SDL_TEXTINPUT;
+    memcpy(event.text.text, "\xe4\xb8\xad", 3);          /* U+4E2D */
+    memcpy(event.text.text + 3, "\xe6\x96\x87", 3);      /* U+6587 */
+    push_sdl(&event);
+    port->display_present(port->ud, 0, 0, 240, 320);
+    n = 0;
+    while (port->input_poll(port->ud, &input)) {
+        if (input.type == NJ_EV_KEY_DOWN) {
+            CHECK(input.key_char == (n == 0 ? 0x4E2Du : 0x6587u));
+            if (n < 8) { chars[n++] = input.key_char; }
+        }
+    }
+    CHECK(n == 2 && chars[0] == 0x4E2Du && chars[1] == 0x6587u);
+    for (i = 0; i < n; i++) { (void)chars[i]; }
+}
+
 static void sdl_test(void)
 {
     nj_port port;
@@ -377,6 +432,7 @@ static void sdl_test(void)
     CHECK(!port.input_poll(port.ud, &input));
     state.active = 0; port.text_input(port.ud, &state);
     CHECK(!SDL_IsTextInputActive());
+    sdl_canvas_char_test(&port, compat);
     nj_port_shutdown(&port);
 }
 #endif

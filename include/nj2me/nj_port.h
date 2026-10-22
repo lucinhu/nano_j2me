@@ -105,6 +105,11 @@ typedef struct nj_event {
     char text[NJ_TEXT_INPUT_BYTES];
     nj_u4 text_session; /* required for native text events; rejects expired focus */
     nj_u4 text_sequence; /* increasing within a replacement editor session */
+    /* Key events only: the character the press carried (0 = none).  A port
+     * with a real keyboard or IME sets it; the runtime answers it through
+     * Displayable.getKeyChar() so a Canvas that draws its own editor can see
+     * what was typed. */
+    nj_u4 key_char;
     /* REPLACE only: owned by the port, valid until its next input_poll call.
      * length/cursor are UTF-16 code units, matching MIDP maxSize/caret APIs. */
     const nj_u2 *text_utf16;

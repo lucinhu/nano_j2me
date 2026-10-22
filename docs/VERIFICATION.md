@@ -80,6 +80,7 @@ snapshot as the measured one.
 | Interpreter fast paths (other session, now committed) | **CORRECTION (2026-10-22):** the earlier claim that the working tree's `NJ_ENABLE_SUPERINSTR` + `NJ_ENABLE_JUMP_THREADING` break real titles was measured on an **intermediate** build, not on the tip. On a clean build of the committed tip (`2a6292e`, binary SHA-256 `4d2625ebf7dd…`) 孤岛余生2 runs 900 frames with exit 0, no uncaught throw, heap 2.59 MB and **142 distinct colours** in the last frame, and 都市赛车6 runs 1200 frames with exit 0 and 226,524 gfx calls - the other session reproduced the same numbers independently (commit `2e0f0b2`, `docs/PERFORMANCE.md`). The historical measurement and the isolation-build recipe are kept in the note | `docs/notes/2026-10-22-superinstr-regression.md`; `.local-tools/debug-runs/tipcheck-20261022/` | `2a6292e` |
 | Classless array dispatch (UC crash) | an array created by a **native** (`String.getBytes()`) has no class, and the `invokevirtual` dispatch used to build its "does not implement" message out of `recv->cls->name` - a null dereference that segfaulted UC while the MIDlet was painting (exit -11). Now a classless receiver is dispatched against `java/lang/Object`, the error message renders `[B`/`[I`/... from the element kind, and `Object.toString()` returns `"[B@…"`, which is what a handset returns. The check is `check_arrcls`: the fixture exits **139 on the old binary every time** and 0 on the new one, printing `[B@…` for both a heap array and a native array and a `ClassCastException` for a non-String argument | `docs/notes/2026-10-22-uc-null-class-crash.md`; `tests/arrcls/ArrClsDemo.java`, `tests/fixtures/arrcls.jar`, `tools/check_arrcls.sh` | this commit |
 | `String.startsWith`/`endsWith`/`equals` with an empty argument | UBSan reported `null pointer passed as argument 2, which is declared to never be null` in `src/core/nj_lib_string.c`: an empty prefix reached `memcmp(x, NULL, 0)`, which the C standard does not allow. The comparison is guarded now; the **observable** result is unchanged (an empty prefix still matches) - only the undefined behaviour is gone | `docs/notes/2026-10-22-uc-null-class-crash.md` | this commit |
+| `Displayable.getKeyChar()` and Canvas text input | the runtime had **no** `getKeyChar()` at all, so a title that asked for the character of the key that was pressed got `NoSuchMethodError` on the first key press and lost the input. It now answers the MIDP keypad table (`KEY_NUM5` -> `'5'`, `KEY_STAR` -> `'*'`, `KEY_FIRE` -> none) and a port can hand over the character the user really typed (`nj_event.key_char`). The desktop port delivers typed characters to a Canvas that draws its own editor: ASCII through the key path, and a host-IME commit through the text path (`NJ_SDL2_TEXT=always`) - `a` -> `code=97 char=97`, fcitx5 pinyin `nihao` + space -> `code=20320 char=20320` (U+4F60) and `code=22909 char=22909` (U+597D). The IME's preedit does not leak, so an editor does not receive `nihao` and then `你好`. The check is `check_keychar` (the 92nd test) plus a new case in `test_text_input`; the cost is **+136 bytes** | `docs/notes/2026-10-22-keychar-and-canvas-text.md`; `tests/keychardemo/KeyCharDemo.java`, `tools/check_keychar.sh` | this commit |
 | Controlled network on Android | against a local proxy, a 503 makes the game show 请检查设备网络连接是否已经开启！ after 5 `GameComm` POSTs, while a 200 with an empty body produces only 2 POSTs and no error page - the failure path is distinguishable. Proves the request left the device and the response was consumed, **not** that any game server is alive | `docs/notes/2026-10-22-android-desktop-ime-regression.md` | this commit |
 
 Titles and platforms verified in the same repository before this ledger existed
@@ -94,7 +95,7 @@ lives in the commit message and body, not in this table.
 
 | area | verdict | evidence |
 | --- | --- | --- |
-| Unit/assertion tests | **91/91** under ctest on the current build (the new `check_arrcls` is the 91st) | `/tmp/nj-def` build; `ctest` log |
+| Unit/assertion tests | **92/92** under ctest on the current build (the new `check_keychar` is the 92nd) | `ctest` log |
 | Computed-goto interpreter | **fixed**: every dispatch-table entry reached `L_haveop` after a single fetch; converted and switch interpreters produce identical bytecode counts and byte-identical frames on `1945空战英雄_6105` | `tools/check_threaded_dispatch.sh`; `docs/notes/OPEN-issue-threaded-dispatch.md`; commit `3f0dd46` |
 | Key-script holds | `--keys` supports `frame:key:down` / `:up`; a held key stays down across frames, an explicit up edge releases once; mutation of the release pass fails two assertions | `tests/test_poke.c` (24 checks); `docs/notes/2026-10-21-key-script-holds.md`; commit `7b7a117` |
 | `DataInputStream` mark/reset | `mark`, `reset` and `markSupported` forward to the wrapped stream (FilterInputStream semantics); base `InputStream.reset` raises `IOException`, `mark` stays a no-op; binding `reset` back to the empty slot fails the tests | `tests/test_ioapi.c` (166 checks); `docs/notes/2026-10-21-datainput-rewind.md`; commit `239ccec` |
@@ -198,9 +199,14 @@ lives in the commit message and body, not in this table.
     has no combat objective.
   * UC 浏览器 — the controlled chain reaches the URL editor and the real
     homepage renders, but typing into **UC's own self-drawn address bar** is
-    not possible: the runtime's IME bridge covers MIDP `TextBox`/`TextField`
-    only (`src/midp/nj_lib_lcdui.c:8511-8566`). The crash that used to happen
-    while typing is fixed.
+    still not shown to work: the runtime's IME bridge covers MIDP
+    `TextBox`/`TextField` only (`src/midp/nj_lib_lcdui.c:8511-8566`), and UC's
+    own classes never call `getKeyChar` (no reference in the unpacked classes),
+    so they read raw key codes instead. The runtime now **can** hand a typed
+    character to a Canvas (`Displayable.getKeyChar()`, plus a key press that
+    carries the character), which is what such an editor needs, but whether UC
+    renders it has not been run yet. The crash that used to happen while
+    typing is fixed.
   * 远古帝国2 — a cold start with repeated `fire` reaches the mission dialogue
     and the village, but the **picture freezes after frame 44**; unit movement
     and combat on this build are unverified.
