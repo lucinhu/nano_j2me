@@ -127,10 +127,16 @@ NJFN(midlet_getAppProperty)
 
 NJFN(midlet_platformRequest)
 {
-    /* No browser, no dialler, no messaging stack: report honestly. */
+    /*
+     * No browser, no dialler, no messaging stack.  MIDP 2.0 lets a platform
+     * that cannot handle the URL return false, and that is what the reference
+     * VM does; the old UnsupportedOperationException was a non-declared
+     * runtime exception that killed any title not wrapping the call.
+     * Three corpus titles call this and continue on false.
+     */
     NJ_UNUSED(args);
-    return nj_throw(vm, "java/lang/UnsupportedOperationException",
-                    "platformRequest");
+    ret->i = 0;
+    return NJ_OK;
 }
 
 NJFN(midlet_checkPermission)

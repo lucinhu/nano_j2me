@@ -1810,3 +1810,71 @@ Micro3D title, separate from the M3G-based Galaxy on Fire 2 discussed above.
 Reproduction, input scripts and comparison images are under
 `.local-tools/debug-runs/micro3d-round7-20261022/games/GOF-CANDIDATE3.md`;
 the bounded visual review is in `gof-audit/REPORT.md` under the same round directory.
+
+### Round-8 sweep: three stalled titles cleared, one more title played
+
+The next pass re-ran the riskiest stalled corpus states against FreeJ2ME-Plus
+with the same logical input, using the frozen `fe974fc` executable, 30 FPS,
+240×320, fresh RMS and pinned core. The point was to separate our defects from
+title behaviour, and three titles came back as **not ours**:
+
+* `3D台球之王_5014` reaches its "开启音效" (enable sound) dialog and stops there
+  for every key tried (fire, soft1/soft2, digits, d-pad). The reference build
+  driven with the same logical taps stays on the same dialog with identical
+  frames. The dialog wants pointer/numeric-specific input that neither runtime
+  synthesises, so no runtime change is warranted.
+* `灌篮高手-爆发!樱木_7947` logs repeated caught `ArithmeticException: / by zero`
+  in `w.paint()`. The reference prints the very same exception from the same
+  paint path and advances through the same screens, so the division is
+  title-internal and already handled by the game.
+* `战争艺术2之全球联盟中文版_1918` reaches its menus, difficulty screen and
+  campaign story, with 11 caught NPEs in `n.a(String,int)` and one caught
+  `EOFException` from `DataInputStream.readUTF`. The NPE is an `aaload` on a
+  config array the title never initialises because it reads
+  `/GMG/GMG_settings.txt`, and the original JAR has 64 entries and no such file.
+  A 1,200-frame run reaches the story with 415 paints, 0 uncaught exceptions and
+  exit status 0. This is a title fallback, not a missing runtime API.
+
+One more corpus title was verified into gameplay rather than cleared:
+`3D城市桌球_8299` (`Pool2`, Biliardo 3D Urban Tour 1.5.9, SHA-256
+`83dc363657b78fbc306a801fb035fbeceed9fc8649f6ebd7fb395ae84233a791`) now runs
+menu → GAME MODE → practice/quick play → the rendered table with cue, balls and
+power meter, driven by menu taps and a short directional hold. A 1,200-frame
+paced replay paints 601 frames, 44,923 Graphics calls and 20,534 triangles with
+296 M3G render calls and 3,632,960/3,633,440 heap bytes used/peak; the only
+logged exception is the first-run `RecordStoreNotFoundException` the game
+catches itself. The replay
+commands, logs and frames are under
+`.local-tools/debug-runs/compat-round8-20261022/city-play/`. This is a different
+title from the stalled `3D台球之王_5014` above.
+
+The evidence for the three cleared titles is in
+`.local-tools/debug-runs/compat-round8-20261022/games/ROUND8-SCOUT.md` and the
+per-title directories next to it, including the reference runs and the
+stage-by-stage comparison sheet `round8-compare.png`.
+
+### A whole-corpus API sweep, and one non-declared exception
+
+A 395-title sweep (every JAR in `tests/games/`, 240 frames each at 30 FPS,
+240×320, fresh RMS, eight workers) found **no accidental missing API at all**:
+zero `NoSuchMethodError`, `NoSuchFieldError`, `NoClassDefFoundError` and
+`AbstractMethodError`, and zero uncaught exceptions escaping any title. The only
+`UnsupportedOperationException`s were four titles hitting our two intentional
+refusals, both caught by the games: `com.nokia.mid.ui.FileSelect.launch` (the
+reference VM does not even have that class) and `MIDlet.platformRequest`.
+
+`platformRequest` was the one worth changing. Three titles call it
+(`LOVExLOVE恋爱学院_4424`, `圣百合女子学园-纯色序曲_4875`,
+`恋色狂想之魔女恋歌_4899`) and our binding threw
+`UnsupportedOperationException` - an exception the method does not declare and
+that a title not wrapping the call cannot survive. MIDP 2.0's "the platform has
+no capability for this URL" outcome is a `false` return, and that is what the
+reference VM does; the runtime now does the same. Re-running the three titles
+shows the exception gone,
+exit status 0, the same paint counts (240/92/91) and no uncaught exception; the
+only change is which branch of each title's own no-browser handling runs. The
+240-frame frame dump differs between the two arms on two of the three titles,
+but it also differs between two runs of the *same* binary, so that is the
+titles' wall-clock animation, not the change. The sweep's limits are recorded in
+its report: a 240-frame startup window without deep gameplay input, so it cannot
+speak for late-game code paths.
