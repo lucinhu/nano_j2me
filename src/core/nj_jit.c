@@ -21,7 +21,17 @@ struct nj_jit {
     nj_jit_entry entries[NJ_JIT_CACHE_ENTRIES];
 };
 
+/* The cache, scheduling and code-memory lifecycle are shared. Selecting a
+ * backend here never changes the interpreter/frame contract. */
 #if NJ_JIT_HOST_RV32
+#  define NJ_JIT_COMPILE nj_rv32_compile
+#  define NJ_JIT_ENGINE_NAME "riscv32-baseline"
+#elif NJ_JIT_HOST_ARM64
+#  define NJ_JIT_COMPILE nj_arm64_compile
+#  define NJ_JIT_ENGINE_NAME "arm64-baseline"
+#endif
+
+#if NJ_JIT_HOST_SUPPORTED
 static nj_status jit_run(struct nj_engine *engine, nj_vm *vm,
                          nj_thread *th, int stop_depth)
 {
@@ -35,7 +45,7 @@ static void jit_destroy(struct nj_engine *engine)
     nj_jit_disable(jit->vm);
 }
 
-static const nj_engine_ops jit_ops = { "riscv32-baseline", jit_run, jit_destroy };
+static const nj_engine_ops jit_ops = { NJ_JIT_ENGINE_NAME, jit_run, jit_destroy };
 #endif
 
 nj_status nj_jit_enable(nj_vm *vm)
@@ -43,7 +53,7 @@ nj_status nj_jit_enable(nj_vm *vm)
     if (!vm) return NJ_ERR;
     if (vm->jit && vm->engine == &vm->jit->base) return NJ_OK;
     if (vm->engine) return NJ_ERR;
-#if NJ_JIT_HOST_RV32
+#if NJ_JIT_HOST_SUPPORTED
     if (!vm->port || !vm->port->code_alloc || !vm->port->code_commit ||
         !vm->port->code_free) return NJ_ERR_UNSUPPORTED;
     if (!vm->jit) {
@@ -85,7 +95,7 @@ int nj_jit_get_stats(const nj_vm *vm, nj_jit_stats *out)
     return vm && vm->jit;
 }
 
-#if NJ_JIT_HOST_RV32
+#if NJ_JIT_HOST_SUPPORTED
 static void jit_compile(struct nj_jit *jit, nj_jit_entry *e)
 {
     nj_u1 bytes[NJ_JIT_MAX_CODE_BYTES];
@@ -94,7 +104,7 @@ static void jit_compile(struct nj_jit *jit, nj_jit_entry *e)
     /* A refusal (including executable-memory failure) is negatively cached.
      * No retry storm on every dispatch in a memory-constrained port. */
     e->declined = 1;
-    if (!nj_rv32_compile(e->method, e->pc, bytes, sizeof(bytes), &e->block)) {
+    if (!NJ_JIT_COMPILE(e->method, e->pc, bytes, sizeof(bytes), &e->block)) {
         jit->stats.declined_blocks++;
         return;
     }
@@ -125,13 +135,13 @@ static void jit_compile(struct nj_jit *jit, nj_jit_entry *e)
 nj_u4 nj_jit_try_block(nj_vm *vm, nj_frame *fr, nj_u4 *pc,
                        nj_value **sp, nj_u4 budget)
 {
-#if NJ_JIT_HOST_RV32
+#if NJ_JIT_HOST_SUPPORTED
     struct nj_jit *jit = vm->jit;
     nj_jit_entry *e;
     nj_u4 slot;
     typedef void (*block_fn)(nj_value *, nj_value *);
     block_fn fn;
-    /* The code/data pointer representation is the RV32 psABI's flat address. */
+    /* Supported native ABIs use the same flat code/data address size. */
     typedef char pointer_size_check[sizeof(fn) == sizeof(void *) ? 1 : -1];
     (void)sizeof(pointer_size_check);
     if (!jit || vm->engine != &jit->base || !fr->m || !fr->m->code ||

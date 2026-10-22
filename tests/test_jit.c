@@ -11,7 +11,7 @@
     fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); exit(1); \
 } } while (0)
 
-#if NJ_ENABLE_JIT && NJ_JIT_HOST_RV32
+#if NJ_ENABLE_JIT && NJ_JIT_HOST_SUPPORTED
 /* Test instrumentation only; production has no writable static state. */
 static void *(*real_alloc)(void *, nj_size);
 static int (*real_commit)(void *, void *, nj_size);
@@ -134,7 +134,7 @@ static void guards(void)
     m.name = "jitDivide"; m.desc = "()I";
     m.code = divide; m.code_len = sizeof(divide); m.max_stack = 2;
     fr.m = &m; fr.locals = locals; fr.stack = values; fr.stack_limit = values + 2;
-#if NJ_JIT_RV32_M
+#if NJ_JIT_HOST_ARM64 || NJ_JIT_RV32_M
     for (i = 0; i <= NJ_JIT_HOT_THRESHOLD; ++i) {
         values[0].i = (-2147483647 - 1); values[1].i = -1;
         sp = values + 2; pc = 0;
@@ -201,7 +201,7 @@ int main(void)
     nj_jit_disable(vm);
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
-#if NJ_JIT_HOST_RV32
+#if NJ_JIT_HOST_SUPPORTED
     {
         result a = run_loop(0, 0), b = run_loop(1, 0);
         result c = run_loop(1, 1), d = run_loop(1, 2);
@@ -209,7 +209,7 @@ int main(void)
         CHECK(a.a == c.a && a.b == c.b && a.pc == c.pc && a.insns == c.insns);
         CHECK(a.a == d.a && a.b == d.b && a.pc == d.pc && a.insns == d.insns);
         guards();
-        puts("PASS JIT runtime: RV32 native execution, quanta, guards, ownership, failures");
+        puts("PASS JIT runtime: native execution, quanta, guards, ownership, failures");
     }
 #else
     CHECK(nj_port_headless(&port) == NJ_OK);

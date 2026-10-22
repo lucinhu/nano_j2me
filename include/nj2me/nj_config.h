@@ -522,6 +522,37 @@
 #  error "NJ_JIT_RV32_D requires NJ_JIT_RV32_F=1"
 #endif
 
+/* AArch64 scalar FP is separate from Advanced SIMD. The current backend uses
+ * scalar float/double only; SIMD and LSE are reserved capability switches and
+ * do not enable vector/atomic lowering. Turning FP off preserves Java FP via
+ * the interpreter. As with RV32, these macros constrain JIT output only. */
+#ifndef NJ_JIT_ARM64_FP
+#  if defined(__aarch64__) && defined(__ARM_FP) && (__ARM_FP & 12) == 12
+#    define NJ_JIT_ARM64_FP 1
+#  else
+#    define NJ_JIT_ARM64_FP 0
+#  endif
+#endif
+#ifndef NJ_JIT_ARM64_SIMD
+#  if defined(__aarch64__) && defined(__ARM_NEON)
+#    define NJ_JIT_ARM64_SIMD 1
+#  else
+#    define NJ_JIT_ARM64_SIMD 0
+#  endif
+#endif
+#ifndef NJ_JIT_ARM64_LSE
+#  if defined(__aarch64__) && defined(__ARM_FEATURE_ATOMICS)
+#    define NJ_JIT_ARM64_LSE 1
+#  else
+#    define NJ_JIT_ARM64_LSE 0
+#  endif
+#endif
+#if (NJ_JIT_ARM64_FP != 0 && NJ_JIT_ARM64_FP != 1) || \
+    (NJ_JIT_ARM64_SIMD != 0 && NJ_JIT_ARM64_SIMD != 1) || \
+    (NJ_JIT_ARM64_LSE != 0 && NJ_JIT_ARM64_LSE != 1)
+#  error "JIT feature macros must be 0 or 1"
+#endif
+
 /* Bounded per-VM cache and compilation work. No allocation when disabled. */
 #ifndef NJ_JIT_CACHE_ENTRIES
 #  define NJ_JIT_CACHE_ENTRIES 64
@@ -542,7 +573,7 @@
 #  error "JIT cache/compilation limits are out of range"
 #endif
 
-/* The encoder can be tested on any host; only RV32 ILP32 may execute it. */
+/* Encoders can be tested on any host; execution requires a matching ABI. */
 #if defined(__riscv) && defined(__riscv_xlen) && __riscv_xlen == 32 && \
     !defined(__riscv_abi_rve) && \
     (!defined(__BYTE_ORDER__) || __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
@@ -550,6 +581,15 @@
 #else
 #  define NJ_JIT_HOST_RV32 0
 #endif
+/* LP64 flat pointers only. ARM64 ILP32 and pointer-authenticated arm64e ABIs
+ * need their own entry conventions and currently stay interpreted. */
+#if defined(__aarch64__) && defined(__LP64__) && !defined(__arm64e__) && \
+    (!defined(__BYTE_ORDER__) || __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+#  define NJ_JIT_HOST_ARM64 1
+#else
+#  define NJ_JIT_HOST_ARM64 0
+#endif
+#define NJ_JIT_HOST_SUPPORTED (NJ_JIT_HOST_RV32 || NJ_JIT_HOST_ARM64)
 
 /* M3G common-case raster/clip paths. No persistent storage; native stack use
  * depends on the compiler (see docs/PERFORMANCE.md). Disable for the general

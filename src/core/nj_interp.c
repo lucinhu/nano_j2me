@@ -367,7 +367,7 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
  * the JIT or installing an external engine must restore the usual fusions.
  * nj_jit's first member is its nj_engine base, so their addresses are equal.
  */
-#if NJ_ENABLE_JIT && NJ_JIT_HOST_RV32
+#if NJ_ENABLE_JIT && NJ_JIT_HOST_SUPPORTED
 #define NJ_FUSION_ALLOWED                                                \
     (!vm->jit || (const void *)vm->engine != (const void *)vm->jit)
 #else
@@ -1409,7 +1409,7 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
 /* Compile/execute only between bytecodes. Native blocks cannot call, allocate
  * or throw; SAVE before entering also makes port allocation callbacks observe
  * the precise frame. Counts consume the same scheduler quantum as dispatch. */
-#if NJ_ENABLE_JIT && NJ_JIT_HOST_RV32
+#if NJ_ENABLE_JIT && NJ_JIT_HOST_SUPPORTED
 #define NJ_TRY_JIT() do {                                              \
         if (vm->jit) {                                                 \
             nj_u4 _jit_n;                                              \

@@ -20,6 +20,7 @@ idf_component_register(
         "../../core/nj_engine.c"
         "../../core/nj_jit.c"
         "../../core/nj_jit_rv32.c"
+        "../../core/nj_jit_arm64.c"
         "../../core/nj_app.c"
         "../../core/nj_builtins.c"
         "../../core/nj_lib_object.c"

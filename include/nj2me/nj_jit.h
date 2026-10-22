@@ -20,7 +20,7 @@ typedef struct nj_jit_stats {
 /* nj_vm_create tries this automatically when NJ_ENABLE_JIT=1. An unsupported
  * CPU or port returns NJ_ERR_UNSUPPORTED and leaves the interpreter available.
  * An existing external engine is never replaced. No CPU probing is performed:
- * NJ_JIT_RV32_* must describe instructions available on the deployment CPU. */
+ * NJ_JIT_RV32_* / NJ_JIT_ARM64_* must match the deployment CPU. */
 nj_status nj_jit_enable(nj_vm *vm);
 /* Safe when disabled; restores interpreter only if this JIT is still installed.
  * Call between execution entries, not from code_alloc/code_commit callbacks. */

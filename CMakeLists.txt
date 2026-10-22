@@ -106,7 +106,7 @@ set(NJ_THREADED_DISPATCH 0 CACHE STRING "Use the computed-goto interpreter body 
 set(NJ_ENABLE_SUPERINSTR 1 CACHE STRING "Run fused bytecode pairs in one dispatch (no RAM cost)")
 set(NJ_ENABLE_JUMP_THREADING 1 CACHE STRING "Follow goto chains without re-dispatching")
 set(NJ_ENABLE_ENGINE 0 CACHE STRING "Pluggable execution engine interface")
-set(NJ_ENABLE_JIT 0 CACHE STRING "Enable the RV32 baseline JIT (implies engine interface)")
+set(NJ_ENABLE_JIT 0 CACHE STRING "Enable the RV32/ARM64 baseline JIT (implies engine interface)")
 if(NOT NJ_ENABLE_JIT MATCHES "^[01]$")
   message(FATAL_ERROR "NJ_ENABLE_JIT must be 0 or 1")
 endif()
@@ -118,6 +118,13 @@ foreach(ext M A F D C)
   set_property(CACHE NJ_JIT_RV32_${ext} PROPERTY STRINGS AUTO 0 1)
   if(NOT NJ_JIT_RV32_${ext} MATCHES "^(AUTO|0|1)$")
     message(FATAL_ERROR "NJ_JIT_RV32_${ext} must be AUTO, 0, or 1")
+  endif()
+endforeach()
+foreach(ext FP SIMD LSE)
+  set(NJ_JIT_ARM64_${ext} "AUTO" CACHE STRING "Generated ARM64 ${ext} instructions: AUTO, 0, or 1")
+  set_property(CACHE NJ_JIT_ARM64_${ext} PROPERTY STRINGS AUTO 0 1)
+  if(NOT NJ_JIT_ARM64_${ext} MATCHES "^(AUTO|0|1)$")
+    message(FATAL_ERROR "NJ_JIT_ARM64_${ext} must be AUTO, 0, or 1")
   endif()
 endforeach()
 set(NJ_JIT_CACHE_ENTRIES 64 CACHE STRING "Per-VM JIT cache slots")
@@ -141,6 +148,7 @@ set(NJ_SOURCES
   src/core/nj_engine.c
   src/core/nj_jit.c
   src/core/nj_jit_rv32.c
+  src/core/nj_jit_arm64.c
   src/core/nj_app.c
   src/core/nj_builtins.c
   src/core/nj_device.c
@@ -264,6 +272,12 @@ target_compile_definitions(nj2me PUBLIC
 foreach(ext M A F D C)
   if(NOT NJ_JIT_RV32_${ext} STREQUAL "AUTO")
     target_compile_definitions(nj2me PUBLIC NJ_JIT_RV32_${ext}=${NJ_JIT_RV32_${ext}})
+  endif()
+endforeach()
+
+foreach(ext FP SIMD LSE)
+  if(NOT NJ_JIT_ARM64_${ext} STREQUAL "AUTO")
+    target_compile_definitions(nj2me PUBLIC NJ_JIT_ARM64_${ext}=${NJ_JIT_ARM64_${ext}})
   endif()
 endforeach()
 
@@ -637,13 +651,15 @@ if(NJ_BUILD_TESTS)
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
   endfunction()
 
-  # The encoder runs on every host; native calls are gated by RV32 at runtime.
+  # Encoders run on every host; native calls require a matching architecture.
   nj_add_test(test_jit tests/test_jit.c)
   if(NJ_ENABLE_JIT)
-    # Respect the deployment ISA here. The separate matrix script deliberately
-    # enables other extensions only inside a suitable RV32 execution harness.
+    # Respect the deployment ISA here. Separate matrix scripts enable other
+    # extensions only inside a suitable native execution harness.
     nj_add_test(test_jit_rv32 tests/test_jit_rv32.c)
     target_compile_features(test_jit_rv32 PRIVATE c_std_11)
+    nj_add_test(test_jit_arm64 tests/test_jit_arm64.c)
+    target_compile_features(test_jit_arm64 PRIVATE c_std_11)
   endif()
 
   # ---- the memory contract and the class library ----

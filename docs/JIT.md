@@ -6,22 +6,25 @@ portable interpreter (`nj_interp_run()` at `src/core/nj_interp.c:466`) or to an
 installed *execution engine*.  An engine is any object that can execute a
 thread's Java frames and return the same observable effects as the interpreter.
 
-The tree now includes an opt-in **RV32 baseline JIT**: a portable machine-code
-encoder, bounded per-VM hot-block cache, and interpreter dispatch integration.
-ARM64 and x86_64 currently use the interpreter. There is no optimizing compiler,
-register allocator, or persistent code cache. The original engine contract and
-future method-level designs below remain useful background; the implemented
-block compiler is described first.
+The tree includes opt-in **RV32 and ARM64 baseline JITs**: portable machine-code
+encoders sharing a bounded per-VM hot-block cache and interpreter dispatch
+integration. x86_64 currently uses the interpreter. There is no optimizing
+compiler, register allocator, or persistent code cache. The original engine
+contract and future method-level designs below remain useful background; the
+implemented block compilers are described first.
 
-## RV32 baseline JIT: configuration and scope
+## Baseline JIT: configuration and scope
 
 Enable `NJ_ENABLE_JIT=1` (default `0`). CMake also enables `NJ_ENABLE_ENGINE`;
 direct compiler builds default the engine switch to the JIT switch and reject
 an explicitly disabled engine with an enabled JIT. `nj_vm_create()` tries to
-install the JIT automatically. It executes only on little-endian RV32 with the
-standard ILP32 register set (not RV32E), and only when all three executable-memory
-callbacks exist. Unsupported hosts and ports continue interpreted execution.
+install the matching JIT automatically. Native execution requires little-endian
+RV32 with the standard ILP32 register set (not RV32E), or little-endian AArch64
+with LP64 flat pointers (not ILP32 or arm64e). All three executable-memory
+callbacks must exist. Unsupported hosts and ports continue interpreted execution.
 There is no runtime CPU probing; explicit extension settings must match the CPU.
+
+### RV32
 
 | Macro | Default from compiler ISA | Generated code when enabled |
 |---|---|---|
@@ -51,9 +54,10 @@ cmake --build build-rv32 -j
 ```
 
 A direct C build can use `-DNJ_ENABLE_JIT=1` and the same feature defines. Include
-`src/core/nj_jit.c` and `src/core/nj_jit_rv32.c` in the source list. The Android,
-ESP-IDF and embedded-test component lists include them; they compile empty when
-the JIT is disabled. These lists do not imply new ARM64 or Xtensa backends.
+`src/core/nj_jit.c`, `src/core/nj_jit_rv32.c` and `src/core/nj_jit_arm64.c` in the
+source list. The Android, ESP-IDF and embedded-test component lists include them;
+they compile empty when the JIT is disabled. Execution still requires a supported
+CPU/ABI and executable-memory callbacks.
 
 The RV32I path covers integer constants, local load/store (including references),
 add/subtract/negate, bitwise operations, shifts, narrowing, `iinc`, supported
@@ -65,14 +69,57 @@ branches, calls, fields, arrays, allocation, monitors and exception handling sta
 in the interpreter. A block ends immediately before an unsupported operation;
 the next interpreter dispatch can enter another compiled block.
 
+### ARM64 / AArch64
+
+| Macro | Default from compiler ISA | Generated code when enabled |
+|---|---|---|
+| `NJ_JIT_ARM64_FP` | AArch64 with single/double support in `__ARM_FP` | Scalar float/double add/subtract/multiply/divide/negate |
+| `NJ_JIT_ARM64_SIMD` | AArch64 with `__ARM_NEON` | Reserved capability; no vector lowering yet |
+| `NJ_JIT_ARM64_LSE` | AArch64 with `__ARM_FEATURE_ATOMICS` | Reserved capability; no atomic lowering yet |
+
+These macros accept `0` or `1`; CMake also accepts `AUTO`. FP is independent of
+SIMD: setting SIMD to zero still permits scalar floating-point instructions.
+With FP disabled the encoder emits no FP instructions or FPCR accesses; Java
+float/double arithmetic runs in the interpreter. Slot copies and constants can
+still use integer instructions. Java feature flags `NJ_ENABLE_FLOAT` and
+`NJ_ENABLE_LONG` apply as for RV32. The macros constrain emitted code; the C
+compiler's `-march`/`-mcpu` settings separately govern the rest of the program.
+
+The ARM64 backend covers the same basic bytecodes as RV32 and uses base AArch64
+integer multiply/divide/remainder. It supports all valid 16-bit local indices
+(up to 65534 for one slot or 65533 for a two-slot value, within `max_locals`).
+References, including null, use full 64-bit slot accesses. Integer and float
+stores preserve the upper half of a slot, matching the interpreter's 32-bit
+`bits` member. Long/double payloads occupy 64 bits; only the low 32 bits of their
+second, padding slot are cleared. Unsupported operations use the interpreter.
+
+Floating arithmetic temporarily saves FPCR, selects round-to-nearest-even with
+subnormal values preserved and default-NaN mode disabled, then restores the
+caller's FPCR. Negation flips the sign bit to preserve NaN payloads. Generated
+blocks use caller-saved registers and never change the native stack pointer.
+Every entry starts with `BTI C` (a harmless hint on CPUs without BTI), allowing
+ports with guarded executable pages to use the same entry convention. Pointer
+authentication for the arm64e ABI is not supported.
+
+```sh
+cmake -S . -B build-arm64 -DCMAKE_TOOLCHAIN_FILE=/path/to/arm64-toolchain.cmake \
+  -DNJ_ENABLE_JIT=1 -DNJ_JIT_ARM64_FP=1 \
+  -DNJ_JIT_ARM64_SIMD=0 -DNJ_JIT_ARM64_LSE=0 \
+  -DNJ_BUILD_SDL2=OFF -DNJ_BUILD_POSIX_NETWORK=OFF
+cmake --build build-arm64 -j
+```
+
+### Shared runtime
+
 Each generated function is a bounded leaf with ABI
 `void block(nj_value *incoming_sp, nj_value *locals)`. It only changes frame slots,
 uses caller-saved registers, and never calls, allocates, yields, or changes Java
 control flow. The C entry checks stack consumption/growth and scheduling budget
 before calling. Integer division/remainder is a one-bytecode block with a C zero
 divisor check, so the interpreter raises the usual exception at the original PC.
-RV32 DIV/REM match Java's `INT_MIN / -1` overflow behavior. Floating arithmetic
-encodes RNE explicitly; negation preserves NaN payload bits.
+Both backends match Java's `INT_MIN / -1` overflow behavior. RV32 encodes RNE
+explicitly; ARM64 uses the temporary FPCR state described above. Negation preserves
+NaN payload bits on both targets.
 
 The interpreter saves PC/SP before any code allocation or execution. Native
 bytecodes consume the scheduler quantum and are included in VM instruction
@@ -113,14 +160,16 @@ POSIX headless port provides W^X allocation. ESP32 currently leaves these hooks
 NULL: an ESP32-C3/C6 deployment needs a board-specific executable-memory/cache
 implementation before native execution can be enabled; it otherwise falls back.
 
-### RV32 validation
+### Validation
 
 ```sh
-# Portable encoding, feature scanning and metadata plus actual RV32 execution.
-# Requires Zig or a riscv32-linux compiler and qemu-riscv32 (or an RV32 Linux host).
+# Portable encoding checks plus actual generated machine-code execution.
+# Requires Zig or the matching Linux cross-compiler and qemu-user (or native Linux).
 tools/check_jit_rv32.sh --require-execution
+tools/check_jit_arm64.sh --require-execution
 # Explicitly allow encoding-only validation on hosts without those tools:
 tools/check_jit_rv32.sh --encoding-only
+tools/check_jit_arm64.sh --encoding-only
 
 cmake -S . -B build-jit -DNJ_ENABLE_JIT=1
 cmake --build build-jit -j
@@ -133,11 +182,24 @@ capacity guards, inaccessible-page truncation, stack/local bounds, integer edge
 cases and floating rounding. The matrix covers RV32I, all extensions, no M, no A,
 no F/D, no D, no C and no LONG, plus rejected invalid configurations. It executes
 the actual generated buffer under QEMU, rather than simulating encoder output.
+
+`tests/test_jit_arm64.c` checks the same block contract, plus full 64-bit reference
+copies, large local offsets, exact slot-byte preservation, BTI entry encoding,
+callee-saved registers/native SP and caller FPCR preservation. Floating cases
+include nondefault rounding/flush modes, subnormal input/output, NaN payloads and
+negative zero. Its seven configurations are base, all, no FP, no SIMD, no LSE,
+no LONG and no FLOAT. Invalid nonboolean macros are rejected. The test calls each
+accepted capacity-limited prefix through executable memory and compares its
+result against an independent reference. Set `ARM64_CC`, `ARM64_CFLAGS` and
+`QEMU_AARCH64` to override compiler/runner discovery.
+
 `tests/test_jit.c` checks VM dispatch, stack/divisor guards, quantum accounting,
-code-memory failures and teardown; `test_lifecycle` checks two-thread fairness.
-For full cross-built CTest runs set `CMAKE_CROSSCOMPILING_EMULATOR` in the toolchain
-file. QEMU validates instruction semantics, not physical-board cache coherence
-or performance. No speedup claim is made by this first backend.
+code-memory failures and teardown on both native targets; `test_lifecycle` checks
+two-thread fairness. For full cross-built CTest runs set
+`CMAKE_CROSSCOMPILING_EMULATOR` in the toolchain file. QEMU validates instruction
+semantics, not physical-board cache coherence or performance. The BTI entry is
+executed in the tests, but kernel-enforced guarded pages are not part of that
+check. No hardware speedup claim is made by these backends.
 
 **A note on the record.**  `docs/ARCHITECTURE.md:344-414` ("Is a JIT possible?
 What was left open, and what was not") deliberately *refused* to add an engine
@@ -740,15 +802,18 @@ bash tools/check_no_statics.sh
    dispatch hook described above keep every value in frame slots. Unsupported
    bytecodes use the interpreter. This replaces the original proposal to start
    with per-method helper-call compilation.
-3. **Next: more backends and bytecode coverage.** Add ARM64/x86_64 emitters behind
-   the same block contract, then extend RV32 lowering with result equivalence
-   and scheduler/exception tests. Per-method compiled entry and `interp_invoke`
+3. **Completed: ARM64 baseline blocks.** AArch64 LP64 uses the same cache,
+   dispatch, exception and lifecycle contract, with full-width references and
+   independently configurable scalar FP. SIMD/LSE lowering remains future work.
+4. **Next: x86_64 and more bytecodes.** Add an x86_64 emitter behind the same
+   block contract, then extend lowering with result equivalence and
+   scheduler/exception tests. Per-method compiled entry and `interp_invoke`
    hooks remain optional later work; they require the transfer contract in §5.
-4. **Superinstruction/fusion and IC fast paths.**  Preserve the counter
+5. **Superinstruction/fusion and IC fast paths.** Preserve the counter
    semantics or update the reference.
-5. **Register allocation with stack maps.**  Required before mid-method deopt is
+6. **Register allocation with stack maps.** Required before mid-method deopt is
    safe; only then do speculative optimisations make sense.
-6. **Not now / not promised:** speculative inlining without a verifier, a
+7. **Not now / not promised:** speculative inlining without a verifier, a
    moving collector (would invalidate raw references), preemptive scheduling,
    and a persistent code cache across VM instances.
 
