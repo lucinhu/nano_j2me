@@ -524,6 +524,9 @@ nj_status nj_class_init(nj_vm *vm, nj_class *c)
     if (!vm || !c) {
         return NJ_ERR;
     }
+    if (c->state == NJ_CLASS_ERROR) {
+        return nj_throw(vm, "java/lang/NoClassDefFoundError", c->name);
+    }
     if (c->state >= NJ_CLASS_READY) {
         return NJ_OK;
     }
@@ -587,6 +590,22 @@ nj_status nj_class_init(nj_vm *vm, nj_class *c)
     if (clinit && clinit->code) {
         nj_status st = nj_call_static(vm, c->name, "<clinit>", "()V", NULL, NULL);
         if (st != NJ_OK) {
+            /*
+             * JVMS 5.5: an initialiser that throws anything but an Error is
+             * wrapped in ExceptionInInitializerError.  A link failure or a
+             * native error keeps the exception it already raised, and the
+             * class stays erroneous for every later attempt.
+             */
+            nj_ref orig = vm->exception;
+            if (orig != NULL && orig->cls != NULL) {
+                nj_class *ec = nj_class_lookup(vm, "java/lang/Error");
+                if (ec != NULL && !nj_class_is_subclass_of(orig->cls, ec)) {
+                    vm->exception = NULL;
+                    (void)nj_throw(vm, "java/lang/ExceptionInInitializerError",
+                                   c->name);
+                }
+            }
+            c->state = NJ_CLASS_ERROR;
             return st;
         }
     }

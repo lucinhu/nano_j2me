@@ -350,6 +350,46 @@ script) gives 9 caught throws, 0 uncaught, 142 colours in frame 900 and a
 superinstr-off, and that title's own run-to-run spread (17-79 M bytecodes and
 5-12 k gfx calls on the SAME binary) is its timing dependence, not the switches.
 
+## Two VM bugs the differential harness found, and neither is about speed
+
+A 5,555-case differential harness (`.local-tools/debug-runs/interp-diff-20261022/`)
+runs the same classes on this VM and on a desktop HotSpot and compares every
+labelled value.  It reported nine mismatches, in two families, and neither was
+in a fused path:
+
+    f2l / d2l of NaN, +-Inf and |x| >= 2^63     8 cases
+    <clinit> that throws a non-Error            1 case
+
+**`f2l` and `d2l` did not saturate.**  JLS 5.1.3: a float or double too large
+for a long converts to `Long.MAX_VALUE`, too small to `Long.MIN_VALUE`, NaN to
+0.  Both handlers did the C cast, which is undefined behaviour out of range and
+on x86-64 produces `Long.MIN_VALUE` for every one of those inputs - so
+`(long)1e30f` came out `-9223372036854775808` where the JVM gives
+`9223372036854775807`, and `(long)Float.NaN` the same instead of 0.  Both now
+test NaN and the two bounds before casting.  The fixture executes neither
+opcode, so no benchmark number moved; only the harness could see it.
+
+**A failed `<clinit>` must be wrapped, and must stay failed.**  JVMS 5.5: an
+initialiser that completes abruptly with anything that is not an `Error` is
+rethrown as `ExceptionInInitializerError`, and the class is left erroneous, so
+every later attempt throws `NoClassDefFoundError`.  The VM returned the raw
+exception instead, and because `nj_class_init()` sets `state = READY` before it
+runs `<clinit>`, a second access handed out the class's default statics as if
+the initialiser had run.  `nj_class_init()` now wraps a non-Error failure
+(`nj_class_is_subclass_of()` against `java/lang/Error`), records the new
+`NJ_CLASS_ERROR` state, and answers `NoClassDefFoundError` to later attempts;
+`nj_class_init_lazy()` tests `== NJ_CLASS_READY` so the fast path cannot mistake
+that state for a ready class.  The state reuses the existing byte and was
+already serialised as a `u16`, so neither RAM nor the save-state format moved.
+
+After the fixes the harness prints `ALL 5555 CASES MATCH` (9 mismatches before),
+the digest test still prints 19 identical values, `BENCH sum=-136042548 s=5` and
+`bytecodes=76,914,888` are unchanged, ctest is 92/92, and on the eight-title
+game set the two arms built from the same tree dump byte-identical frames -
+including 暗黑启示录2, whose frame-60 md5 is identical across three runs per arm.
+The harness compares values rather than frame counts, which is why it can see
+this class of bug at all.
+
 ## Five more folds, and a branch that read the wrong address
 
     round-2 tip (a6c062b)         min 0.171 s   med 0.171 s

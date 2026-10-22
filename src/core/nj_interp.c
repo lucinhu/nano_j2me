@@ -1865,7 +1865,13 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                      else if (f <= -2147483904.0f) sp->i = (nj_s4)0x80000000;
                      else sp->i = (nj_s4)f;
                      sp++; DISPATCH(); }
-        L_0x8c: case 0x8c: { float f = (--sp)->f; PUSH_W((nj_s8)f); DISPATCH(); }
+        L_0x8c: case 0x8c: { float f = (--sp)->f;                  /* f2l */
+                     nj_s8 r;
+                     if (f != f) r = 0;                       /* NaN -> 0 */
+                     else if (f >= 9223372036854775808.0f) r = 0x7FFFFFFFFFFFFFFFLL;
+                     else if (f <= -9223372036854775808.0f) r = (-0x7FFFFFFFFFFFFFFFLL - 1);
+                     else r = (nj_s8)f;
+                     PUSH_W(r); DISPATCH(); }
         L_0x8d: case 0x8d: { float f = (--sp)->f; double d = (double)f;
                      memcpy(&sp->j, &d, 8u); sp[1].bits = 0u; sp += 2; DISPATCH(); }
         L_0x8e: case 0x8e: { double d; sp -= 2; memcpy(&d, &sp[0].j, 8u);
@@ -1875,7 +1881,11 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                      else sp->i = (nj_s4)d;
                      sp++; DISPATCH(); }
         L_0x8f: case 0x8f: { double d; sp -= 2; memcpy(&d, &sp[0].j, 8u);
-                     sp[0].j = (nj_s8)d; sp[1].bits = 0u; sp += 2; DISPATCH(); }
+                     if (d != d) sp[0].j = 0;                 /* d2l: NaN -> 0 */
+                     else if (d >= 9223372036854775808.0) sp[0].j = 0x7FFFFFFFFFFFFFFFLL;
+                     else if (d <= -9223372036854775808.0) sp[0].j = (-0x7FFFFFFFFFFFFFFFLL - 1);
+                     else sp[0].j = (nj_s8)d;
+                     sp[1].bits = 0u; sp += 2; DISPATCH(); }
         L_0x90: case 0x90: { double d; sp -= 2; memcpy(&d, &sp[0].j, 8u);
                      sp->f = (float)d; sp++; DISPATCH(); }
         L_0x91: case 0x91: sp[-1].i = (nj_s4)(nj_s1)sp[-1].i; DISPATCH();   /* i2b */

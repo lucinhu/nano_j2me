@@ -122,6 +122,9 @@ typedef struct nj_cpentry {
 #define NJ_CLASS_LOADED  1
 #define NJ_CLASS_LINKED  2
 #define NJ_CLASS_READY   3
+/* <clinit> threw: JVMS 5.5 keeps the class erroneous, so every later attempt
+ * throws NoClassDefFoundError instead of handing out default statics. */
+#define NJ_CLASS_ERROR   4
 
 struct nj_class {
     const char *name;       /* internal, slash separated, e.g. java/lang/String */
@@ -762,7 +765,7 @@ nj_status nj_class_init(nj_vm *vm, nj_class *c);
 
 static inline nj_status nj_class_init_lazy(nj_vm *vm, nj_class *c)
 {
-    if (c && c->state >= NJ_CLASS_READY) {
+    if (c && c->state == NJ_CLASS_READY) {
         return NJ_OK;
     }
     return nj_class_init(vm, c);
