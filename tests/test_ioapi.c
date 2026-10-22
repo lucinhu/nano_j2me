@@ -25,6 +25,12 @@
  *   5. Reader and Writer themselves: this runtime registers them as concrete
  *      rows whose stream slot the subclasses inherit, so a title that builds
  *      one over a stream can read and write through it.
+ *   6. The Java-level fixture in tests/ioapi/: DataInput.readFloat and
+ *      DataOutput.writeFloat through an interface reference, Reader.lock and
+ *      the two protected Reader constructors, and inherited Reader defaults
+ *      (read(), skip(), and ready()'s false default).  These run real bytecode
+ *      because the bug was in constant-pool resolution, which C-level
+ *      nj_call() does not exercise.
  *
  * Usage:  test_ioapi
  * Exit code 0 on PASS, non-zero otherwise.
@@ -32,6 +38,8 @@
 #include "nj2me/nj.h"
 
 #include "nj_internal.h"
+
+#include "ioapi/ioapi_fixture.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -785,6 +793,126 @@ static void test_datainput_mark_reset(nj_vm *vm)
     }
 }
 
+
+/*
+ * ------------------------------------------------------------------ */
+/* Java-level fixture: constant-pool resolution and the Reader lock     */
+/* ------------------------------------------------------------------ */
+/*
+ * C-level nj_call() takes a class name and looks the method up by name.  The
+ * bugs the fixture covers are in constant-pool resolution instead:
+ *
+ *   - `invokeinterface java/io/DataInput.readFloat:()F` resolves the method
+ *     against the *interface* that declares it, not against the receiver.
+ *   - `getfield java/io/Reader.lock:Ljava/lang/Object;` resolves a protected
+ *     field declared by the superclass.
+ *
+ * So the fixture is real Java bytecode (tests/ioapi/*.java, compiled with
+ * javac --release 8 and embedded in ioapi_fixture.h).  The want values are a
+ * desktop HotSpot run of the same sources; tests/ioapi/README.md reproduces
+ * that oracle.
+ */
+#define IOAPI_PROBE "ioapi/IoApiProbe"
+#define IOAPI_LOCKR "ioapi/LockReader"
+#define IOAPI_RANGE "ioapi/RangeOnlyReader"
+
+struct ioapi_case {
+    const char *tag;        /* label IoApiDesktop prints for this value */
+    const char *cls;
+    const char *name;
+    nj_s4 want;
+};
+
+static const struct ioapi_case ioapi_probe_cases[] = {
+    { "io.f_read_known",     IOAPI_PROBE, "readFloatBits",        1069547520 },
+    { "io.f_read_negzero",   IOAPI_PROBE, "readFloatNegZeroBits", -2147483648 },
+    { "io.f_read_posinf",    IOAPI_PROBE, "readFloatPosInfBits",   2139095040 },
+    { "io.f_read_nan",       IOAPI_PROBE, "readFloatNanBits",      2143289344 },
+    { "io.f_read_eof",       IOAPI_PROBE, "readFloatEof",                31 },
+    { "io.f_read_trunc",     IOAPI_PROBE, "readFloatTruncatedEof",       34 },
+    { "io.d_read_pi",        IOAPI_PROBE, "readDoublePiBits",      340593891 },
+    { "io.d_read_negzero",   IOAPI_PROBE, "readDoubleNegZeroBits", -2147483648 },
+    { "io.d_read_neginf",    IOAPI_PROBE, "readDoubleNegInfBits",   -1048576 },
+    { "io.d_read_eof",       IOAPI_PROBE, "readDoubleEof",               37 },
+    { "io.o_write_floats",   IOAPI_PROBE, "writeFloatBytes",      1472412883 },
+    { "io.o_write_float_len", IOAPI_PROBE, "writeFloatLength",          12 },
+    { "io.o_write_doubles",  IOAPI_PROBE, "writeDoubleBytes",    -2051675269 },
+    { "io.o_write_chars",    IOAPI_PROBE, "writeCharsBytes",       15762444 },
+    { "io.roundtrip",        IOAPI_PROBE, "roundTripBits",       -1789919232 }
+};
+
+static const struct ioapi_case ioapi_lock_cases[] = {
+    { "io.r_lock_self",      IOAPI_LOCKR, "ctorNoArgSelf",          1 },
+    { "io.r_lock_explicit",  IOAPI_LOCKR, "ctorExplicitObject",     1 },
+    { "io.r_lock_null",      IOAPI_LOCKR, "ctorNullRejected",      41 },
+    { "io.r_sync_read",      IOAPI_LOCKR, "syncRead",         6382081 },
+    { "io.r_read_range",     IOAPI_LOCKR, "readRange",       33579363 }
+};
+
+static const struct ioapi_case ioapi_range_cases[] = {
+    /* A subclass that overrides only read(char[],int,int) must get working
+     * inherited read(), skip() and ready(); before the lock fix, read() and
+     * ready() treated the lock object as the stream.  Kept last because the
+     * broken read() recursed until the VM stack died. */
+    { "io.r_inherited_read",  IOAPI_RANGE, "inheritedRead",       81 },
+    { "io.r_inherited_read2", IOAPI_RANGE, "inheritedReadTwice", 20735 },
+    { "io.r_inherited_skip",  IOAPI_RANGE, "inheritedSkip",          1 },
+    /* 200 = the inherited CLDC ready() default returned false; 201 = true,
+     * 40 = it threw.  InputStreamReader keeps its real available() probe. */
+    { "io.r_inherited_ready", IOAPI_RANGE, "inheritedReady",       200 }
+};
+
+static void run_ioapi_cases(nj_vm *vm, const char *cls, const nj_u1 *bytes,
+                            nj_u4 len, const struct ioapi_case *cases,
+                            unsigned count)
+{
+    unsigned i;
+
+    if (!nj_class_load(vm, cls, bytes, len)) {
+        const char *d = nj_exception_describe(vm);
+        g_fail++;
+        fprintf(stderr, "FAIL %s: the fixture class is not loadable: %s\n",
+                cls, d ? d : "(no description)");
+        nj_clear_exception(vm);
+        return;
+    }
+    for (i = 0u; i < count; i++) {
+        const struct ioapi_case *c = &cases[i];
+        nj_value ret;
+        nj_status st;
+
+        ret.i = 0;
+        st = nj_call_static(vm, c->cls, c->name, "()I", NULL, &ret);
+        if (st != NJ_OK || nj_has_exception(vm)) {
+            const char *d = nj_exception_describe(vm);
+            g_fail++;
+            fprintf(stderr, "FAIL %s: %s.%s threw: %s\n", c->tag, c->cls,
+                    c->name, d ? d : "(no description)");
+            nj_clear_exception(vm);
+            continue;
+        }
+        OK_MSG(ret.i == c->want, "%s = %d, want %d (desktop HotSpot)",
+               c->tag, (int)ret.i, (int)c->want);
+    }
+}
+
+static void test_ioapi_java(nj_vm *vm)
+{
+    run_ioapi_cases(vm, IOAPI_PROBE, ioapi_IoApiProbe_class,
+                    (nj_u4)sizeof(ioapi_IoApiProbe_class), ioapi_probe_cases,
+                    (unsigned)(sizeof(ioapi_probe_cases)
+                               / sizeof(ioapi_probe_cases[0])));
+    run_ioapi_cases(vm, IOAPI_LOCKR, ioapi_LockReader_class,
+                    (nj_u4)sizeof(ioapi_LockReader_class), ioapi_lock_cases,
+                    (unsigned)(sizeof(ioapi_lock_cases)
+                               / sizeof(ioapi_lock_cases[0])));
+    run_ioapi_cases(vm, IOAPI_RANGE, ioapi_RangeOnlyReader_class,
+                    (nj_u4)sizeof(ioapi_RangeOnlyReader_class),
+                    ioapi_range_cases,
+                    (unsigned)(sizeof(ioapi_range_cases)
+                               / sizeof(ioapi_range_cases[0])));
+}
+
 int main(void)
 {
     nj_port port;
@@ -815,6 +943,7 @@ int main(void)
     test_writer(vm);
     test_writer_base(vm);
     test_datainput_mark_reset(vm);
+    test_ioapi_java(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

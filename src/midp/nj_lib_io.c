@@ -44,13 +44,16 @@
  * emitted before them.
  *
  * The isr_ and osw_ bodies are the Reader/Writer ones: the wrapped stream lives
- * in the base class's field, so the same body serves a Reader and an
+ * in the base class's lock field, so the same body serves a Reader and an
  * InputStreamReader (see the note above the class rows), and rd_mark,
- * rd_mark_supported and rd_reset are shared the same way.  wr_write_str_range
- * is Writer.write(String,int,int), which OutputStreamWriter inherits. */
+ * rd_mark_supported and rd_reset are shared the same way.  rd_ready is the
+ * generic Reader default (false); InputStreamReader keeps isr_ready and its
+ * real available() probe.  wr_write_str_range is Writer.write(String,int,int),
+ * which OutputStreamWriter inherits. */
 NJFN(isr_init); NJFN(isr_read); NJFN(isr_range); NJFN(isr_ready);
 NJFN(isr_close);
 NJFN(osw_init); NJFN(osw_write); NJFN(osw_range); NJFN(osw_flush);
+NJFN(rd_read); NJFN(rd_init_lock); NJFN(rd_ready);
 NJFN(rd_mark); NJFN(rd_mark_supported); NJFN(rd_reset); NJFN(wr_write_str_range);
 NJFN(wr_close);
 NJFN(ps_init); NJFN(ps_check_error); NJFN(ps_set_error);
@@ -1667,14 +1670,20 @@ static nj_ref strm_field(nj_vm *vm, nj_ref o, const char *cls, const char *name,
     return f ? nj_field_read_ref(vm, o, f) : NULL;
 }
 
+/*
+ * Reader(Object lock): CLDC's protected constructor that stores the caller's
+ * lock object in the field.  For a Reader built over a stream this runtime
+ * hands it the InputStream, which is why the same slot is also what the
+ * concrete read bodies read bytes from.
+ */
 NJFN(isr_init)
 {
     nj_ref self = NJ_THIS(args);
-    nj_field *f = nj_field_lookup(vm, NJ_C_READER, "rdIn",
-                                  "Ljava/io/InputStream;", 0);
+    nj_field *f = nj_field_lookup(vm, NJ_C_READER, "lock",
+                                  "Ljava/lang/Object;", 0);
     nj_ref in = NJ_ARG_REF(args, 0);
     if (!in) {
-        return nj_throw(vm, "java/lang/NullPointerException", "in is null");
+        return nj_throw(vm, "java/lang/NullPointerException", "lock is null");
     }
     if (f) {
         nj_field_write_ref(vm, self, f, in);
@@ -1682,10 +1691,29 @@ NJFN(isr_init)
     return NJ_OK;
 }
 
+/*
+ * Reader(): CLDC's protected no-argument constructor.  The lock object is the
+ * reader itself, which is exactly what a subclass synchronises on (the
+ * bundled de/enough/polish/io/StringReader does `getfield lock; monitorenter`
+ * in every method).  There is no wrapped stream; a subclass that only
+ * overrides read(char[],int,int) gets working inherited read()/skip() from
+ * rd_read/rd_skip, which dispatch back into the override.
+ */
+NJFN(rd_init_lock)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_field *f = nj_field_lookup(vm, NJ_C_READER, "lock",
+                                  "Ljava/lang/Object;", 0);
+    if (f) {
+        nj_field_write_ref(vm, self, f, self);
+    }
+    return NJ_OK;
+}
+
 NJFN(isr_read)
 {
-    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_READER, "rdIn",
-                           "Ljava/io/InputStream;");
+    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_READER, "lock",
+                           "Ljava/lang/Object;");
     nj_value r;
     if (!in) {
         return nj_throw(vm, "java/io/IOException", "stream is closed");
@@ -1702,8 +1730,8 @@ NJFN(isr_read)
 
 NJFN(isr_ready)
 {
-    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_READER, "rdIn",
-                           "Ljava/io/InputStream;");
+    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_READER, "lock",
+                           "Ljava/lang/Object;");
     nj_value r;
     if (!in) {
         ret->i = 0;
@@ -1721,8 +1749,8 @@ NJFN(isr_ready)
 
 NJFN(isr_close)
 {
-    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_READER, "rdIn",
-                           "Ljava/io/InputStream;");
+    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_READER, "lock",
+                           "Ljava/lang/Object;");
     if (in) {
         nj_value a[4];
         a[0].bits = 0u;
@@ -1800,8 +1828,8 @@ NJFN(osw_range)
 
 NJFN(isr_range)
 {
-    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_READER, "rdIn",
-                           "Ljava/io/InputStream;");
+    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_READER, "lock",
+                           "Ljava/lang/Object;");
     nj_ref chars = NJ_ARG_REF(args, 0);
     nj_s4 off = NJ_ARG_INT(args, 1);
     nj_s4 len = NJ_ARG_INT(args, 2);
@@ -1887,6 +1915,53 @@ NJFN(rd_read_chars)
         return NJ_ERR;
     }
     ret->i = r.i;
+    return NJ_OK;
+}
+
+/*
+ * Reader.read(): CLDC gives it the default body that reads one character by
+ * delegating to read(char[],int,int).  Going through the abstract method is
+ * what makes a subclass override take effect; it is also why a plain Reader
+ * built over an InputStream keeps reading, because the receiver's
+ * read(char[],int,int) row is isr_range.
+ */
+NJFN(rd_read)
+{
+    nj_ref one = nj_char_array_new(vm, 1u);
+    nj_value a[3];
+    nj_value r;
+    if (!one) {
+        return NJ_ERR;
+    }
+    a[0].r = one;
+    a[1].i = 0;
+    a[2].i = 1;
+    r.i = -1;
+    if (nj_call(vm, NJ_THIS(args), NJ_C_READER, "read", "([CII)I", a, &r)
+                != NJ_OK) {
+        return NJ_ERR;
+    }
+    if (r.i < 0) {
+        ret->i = -1;
+    } else {
+        ret->i = (nj_s4)((nj_u2 *)nj_array_data(one))[0];
+    }
+    return NJ_OK;
+}
+
+/*
+ * Reader.ready(): CLDC's default body, and it is "never ready" - a Reader that
+ * owns no stream cannot know that a character is available.  A subclass may
+ * override it; InputStreamReader does, through isr_ready's InputStream
+ * available() probe, and keeps its own binding in nj_lib_io_table.  This
+ * generic row must not be isr_ready: a plain Reader's lock is the reader
+ * itself, not an InputStream, so probing it would only raise and swallow a
+ * lookup error (de/enough/polish/io/StringReader and any javac-compiled
+ * Reader subclass inherit this default).
+ */
+NJFN(rd_ready)
+{
+    ret->i = 0;
     return NJ_OK;
 }
 
@@ -2062,16 +2137,17 @@ NJFN(wr_write_str_range)
 }
 
 /*
- * The stream slot Reader and Writer own.  CLDC's abstract classes declare a
- * protected lock object instead; this runtime has no locking object to store
- * (nothing here synchronises), so the same slot keeps the stream the
- * constructor was handed.  InputStreamReader and OutputStreamWriter inherit
- * it rather than declaring a second field, and that is what lets one body
- * serve a Reader and an InputStreamReader, or a Writer and an
- * OutputStreamWriter.
+ * Reader's protected lock object, which CLDC names lock.  The same slot does
+ * double duty in this runtime: Reader(Object lock) stores whatever it is
+ * handed, and an InputStreamReader is handed its stream, so the concrete read
+ * bodies can still read bytes out of it.  Reader() stores the reader itself,
+ * and a subclass synchronises on that (de/enough/polish/io/StringReader does
+ * `getfield lock; monitorenter`).  Writer's stream slot is unchanged.
  */
 static const nj_builtin_field rd_fields[] = {
-    { "rdIn", "Ljava/io/InputStream;", 0 }
+    /* CLDC declares Reader.lock protected; StringReader subclasses read it
+     * with getfield, so the access flags have to match the specification. */
+    { "lock", "Ljava/lang/Object;", NJ_ACC_PROTECTED }
 };
 static const nj_builtin_field wr_fields[] = {
     { "wrOut", "Ljava/io/OutputStream;", 0 }
@@ -2085,7 +2161,8 @@ static const nj_builtin_field wr_fields[] = {
  * markSupported() and reset() for Reader, and the write family, flush() and
  * close() for Writer.  The storage above makes those bodies real rather than
  * formal - a Reader built over an InputStream reads that stream, exactly as an
- * InputStreamReader does.
+ * InputStreamReader does - and it is also the protected lock object CLDC
+ * declares, which is why Reader() and Reader(Object) both exist.
  *
  * The rows are written with M(...) rather than a private brace macro on
  * purpose: tools/m3g_api_audit.py reads method tables by looking for M(
@@ -2094,6 +2171,7 @@ static const nj_builtin_field wr_fields[] = {
  * is the interface - it has to be legible to the tool that checks it.
  */
 static const nj_builtin_method reader_methods[] = {
+    M("<init>", "()V",     NJ_ACC_PROTECTED),
     M("<init>", "(Ljava/lang/Object;)V", NJ_ACC_PROTECTED),
     M("close",  "()V",     NJ_ACC_PUBLIC),
     M("mark",   "(I)V",    NJ_ACC_PUBLIC),
@@ -2411,6 +2489,11 @@ nj_status nj_io_late_init(nj_vm *vm)
  * The call is resolved through the interface, so the method set has to be
  * declared here; dispatch itself still happens on the receiver's class, where
  * DataInputStream and DataOutputStream already answer every one of them.
+ *
+ * readFloat/readDouble and writeFloat/writeDouble/writeChars were the rows
+ * missing until now: 急速公路狂飙－新年版_84 loads its track models by calling
+ * DataInput.readFloat through an interface reference, which died with
+ * NoSuchMethodError during track loading after the menus had already drawn.
  */
 static const nj_builtin_method datainput_methods[] = {
     M("readFully", "([B)V", NJ_ACC_ABSTRACT),
@@ -2424,6 +2507,8 @@ static const nj_builtin_method datainput_methods[] = {
     M("readChar", "()C", NJ_ACC_ABSTRACT),
     M("readInt", "()I", NJ_ACC_ABSTRACT),
     M("readLong", "()J", NJ_ACC_ABSTRACT),
+    M("readFloat", "()F", NJ_ACC_ABSTRACT),
+    M("readDouble", "()D", NJ_ACC_ABSTRACT),
     M("readUTF", "()Ljava/lang/String;", NJ_ACC_ABSTRACT)
 };
 
@@ -2437,6 +2522,9 @@ static const nj_builtin_method dataoutput_methods[] = {
     M("writeChar", "(I)V", NJ_ACC_ABSTRACT),
     M("writeInt", "(I)V", NJ_ACC_ABSTRACT),
     M("writeLong", "(J)V", NJ_ACC_ABSTRACT),
+    M("writeFloat", "(F)V", NJ_ACC_ABSTRACT),
+    M("writeDouble", "(D)V", NJ_ACC_ABSTRACT),
+    M("writeChars", "(Ljava/lang/String;)V", NJ_ACC_ABSTRACT),
     M("writeUTF", "(Ljava/lang/String;)V", NJ_ACC_ABSTRACT)
 };
 
@@ -2470,7 +2558,7 @@ const nj_builtin_class nj_lib_io_classes[] = {
       writer_methods,
       (nj_u2)(sizeof(writer_methods) / sizeof(writer_methods[0])) },
     { NJ_C_ISR, NJ_C_READER, NJ_ACC_PUBLIC,
-      NULL, 0u,   /* the stream slot is Reader's own ("rdIn") */
+      NULL, 0u,   /* the stream slot is Reader's own ("lock") */
       isr_methods,
       (nj_u2)(sizeof(isr_methods) / sizeof(isr_methods[0])) },
     { NJ_C_OSW, NJ_C_WRITER, NJ_ACC_PUBLIC,
@@ -2528,17 +2616,21 @@ const int nj_lib_io_class_count =
 const nj_native_entry nj_lib_io_table[] = {
     /*
      * Reader and Writer carry the concrete bodies the specification gives
-     * them (see reader_methods); the stream slot they own is what makes those
-     * bodies work, and the subclasses below inherit both.
+     * them (see reader_methods); the lock slot Reader owns doubles as the
+     * stream an InputStreamReader is built over, and the subclasses below
+     * inherit both.  ready() is the one method whose body differs between the
+     * two: a plain Reader answers false (rd_ready), an InputStreamReader
+     * probes the stream it wraps (isr_ready, bound by its own row below).
      */
+    { NJ_C_READER, "<init>", "()V",                 rd_init_lock },
     { NJ_C_READER, "<init>", "(Ljava/lang/Object;)V", isr_init },
     { NJ_C_READER, "close",  "()V",                 isr_close },
     { NJ_C_READER, "mark",   "(I)V",                rd_mark },
     { NJ_C_READER, "markSupported", "()Z",          rd_mark_supported },
-    { NJ_C_READER, "read",   "()I",                 isr_read },
+    { NJ_C_READER, "read",   "()I",                 rd_read },
     { NJ_C_READER, "read",  "([C)I",                rd_read_chars },
     { NJ_C_READER, "read",   "([CII)I",             isr_range },
-    { NJ_C_READER, "ready",  "()Z",                 isr_ready },
+    { NJ_C_READER, "ready",  "()Z",                 rd_ready },
     { NJ_C_READER, "reset",  "()V",                 rd_reset },
     { NJ_C_READER, "skip",   "(J)J",                rd_skip },
     { NJ_C_WRITER, "<init>", "(Ljava/lang/Object;)V", osw_init },
