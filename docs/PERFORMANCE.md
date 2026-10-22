@@ -1861,3 +1861,42 @@ RAM: one pointer per slot, so **+104 B per VM** (`nj_vm_sizeof()` 10,896 →
 11,000; the whole hot-field set is +192 B over the 10,808 baseline). Building
 with `-DNJ_ENABLE_HOT_FIELDS=0` restores 10,808 B and the per-call lookups.
 No writable statics, no allocation, no eBPF-style caches.
+
+## The little store every opaque glyph pixel made (round 2, 2026-10-22)
+
+After the Graphics slots took the name walk out of the drawing natives, the
+next profile of the same 2D fixture (`-pg` build, one frame set) put
+`nj_gfx_blend_pixel` at the top with 29.6 M calls, and `nj_plot` accounted for
+12.0 M of them. Every glyph interior and every short opaque fill handed
+`nj_plot` a colour with alpha 255 and `blend == SRC_OVER`, and `nj_plot` called
+the general blend routine anyway. That routine does its job correctly: for
+`a >= 255` it just stores the converted colour. But it reaches that store
+through a call, a surface validity check, two bounds checks, a per-pixel
+`(a * alpha + 127) / 255` division and a coverage clamp.
+
+`nj_plot` now takes the store directly when `blend == SRC_OVER` and the colour
+is opaque — exactly the bytes the `a >= 255` branch would write — and leaves
+the blended and XOR cases on their existing paths. `nj_plot`'s contract already
+requires the point to be inside the clip, which is what those bounds checks
+would confirm.
+
+Deterministic fixture (the same 1,100,002-call drawing workload as above,
+bytecodes 10,400,066 and sink `42382025` identical in every run, 8 interleaved
+runs per arm):
+
+| arm | CPU s (min / median) |
+| --- | --- |
+| clean HEAD ed6c170 | 0.3605 / 0.3626 |
+| opaque `nj_plot` store | 0.3467 / 0.3496 |
+
+**3.83% / 3.59%** less CPU. A paced real-game comparison on
+新西游记－格斗天王_1211 could not be used as evidence: the two arms diverged in
+workload (15.7–18.0 M vs 17.7–21.7 M bytecodes, because wall-clock-paced replay
+state differs run to run), so the honest claim is the deterministic one — it
+helps opaque glyph/fill pixels, and nothing else about the drawing path
+changed.
+
+Correctness: `test_gfx` 324, `test_clip` 15, `test_directgraphics` 34,
+`test_lcdui` pass, `ctest` 99/99, `bench.jar` invariants and the 27-value
+digest unchanged. No new state: RAM, stack and the public surface are
+untouched.

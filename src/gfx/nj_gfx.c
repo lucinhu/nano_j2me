@@ -715,6 +715,19 @@ static void nj_plot(nj_gfx *g, int x, int y, nj_u4 argb)
         nj_raw_set(g->surf, x, y, nj_surface_bpp(g->surf), v);
         return;
     }
+    /*
+     * An opaque source-over pixel is a plain store: nj_gfx_blend_pixel()
+     * reaches its "a >= 255" branch without touching the destination, but it
+     * gets there through a call, a surface validity check, two bounds checks,
+     * a per-pixel division and a coverage clamp.  Everything a glyph interior
+     * (or any opaque fill that is too short for nj_span) writes is opaque, so
+     * skip straight to the store.  The blended and XOR cases keep their path.
+     */
+    if (g->blend == NJ_BLEND_SRC_OVER && ((argb >> 24) & 0xFFu) == 255u) {
+        nj_raw_set(g->surf, x, y, nj_surface_bpp(g->surf),
+                   nj_surface_format_color(g->surf->format, argb));
+        return;
+    }
     if (g->blend == NJ_BLEND_SRC_OVER) {
         nj_gfx_blend_pixel(g->surf, x, y, argb, 255);
         return;
