@@ -168,7 +168,6 @@
 #define NJ_F_RS_IDS      "rsIds"       /* Vector of java/lang/Integer */
 #define NJ_F_RS_NEXTID   "rsNextId"    /* I */
 #define NJ_F_RS_OPEN     "rsOpen"      /* Z */
-#define NJ_F_RS_MODIFIED "rsModified"  /* Z */
 
 /* MIDlet */
 #define NJ_F_M_PROPERTIES "mProps"     /* Hashtable */
@@ -481,5 +480,20 @@ nj_status nj_bt_late_init(nj_vm *vm);
 int nj_midp_gfx_triangle(nj_vm *vm, nj_ref g_obj,
                          nj_s4 x1, nj_s4 y1, nj_s4 x2, nj_s4 y2,
                          nj_s4 x3, nj_s4 y3, nj_u4 argb);
+
+/*
+ * Load the semantic state of a MIDlet Graphics into an nj_gfx, exactly once.
+ *
+ * The batch renderer in nj_lib_mascot.c needs to draw many primitives through
+ * one bound Graphics.  Calling nj_midp_gfx_triangle() per triangle would load
+ * and store the Java field set on every primitive (and store, which mutates
+ * the caller's colour).  This is the read-only half of that mapping: it fills
+ * `*g` and the caller's scratch surface.  The caller draws through the nj_gfx
+ * without ever calling gfx_store(), so the bound Graphics is unchanged.
+ *
+ * Returns 0 when `g_obj` is not a Graphics over a usable surface.  `scratch`
+ * must outlive the nj_gfx because the surface view points into it.
+ */
+int nj_midp_gfx_load(nj_vm *vm, nj_ref g_obj, nj_gfx *g, nj_surface *scratch);
 
 #endif /* NJ_MIDP_H */

@@ -1265,6 +1265,17 @@ nj_status nj_m3g_objects_probe(const nj_u1 *p, nj_u4 n, nj_u4 *count,
 static nj_field *m3g_fof(nj_vm *vm, const char *cls, const char *name,
                          const char *desc);
 
+/* Keep mutability in the existing format word, not another per-image field.
+ * Pixel uploads must not change it, and every format consumer masks it out. */
+#define M3G_IMAGE_MUTABLE 0x100u
+#define M3G_IMAGE_FORMAT_MASK 0xffu
+static nj_s4 m3g_image_format(nj_vm *vm, nj_ref image)
+{
+    return (nj_s4)((nj_u4)nj_iget(vm, image,
+                   m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I")) &
+                   M3G_IMAGE_FORMAT_MASK);
+}
+
 /*
  * Floats live in int fields as their IEEE-754 bit patterns.  The public field
  * accessors are nj_field_read_int / nj_field_write_int, the storage is four
@@ -2974,7 +2985,7 @@ static void m3g_background_image(nj_vm *vm, nj_ref bg, nj_ref target,
     pixels = nj_rget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"));
     iw = nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"));
     ih = nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"));
-    fmt = nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I"));
+    fmt = m3g_image_format(vm, image);
     bpp = fmt == 100 ? 4 : fmt == 99 ? 3 : 0;
     if (!pixels || !bpp || iw <= 0 || ih <= 0 ||
         (nj_size)iw * ih * bpp > nj_array_length(pixels)) { return; }
@@ -5595,23 +5606,21 @@ static const char *m3g_class_of(nj_u1 type)
 }
 
 /* ---- Image2D ------------------------------------------------------- */
-/*
- * Three constructor forms, because the collected titles use a fourth shape
- * the specification does not define: Image2D(int, int, int), called by both
- * 极品飞车 builds.  A class that is missing a constructor is a dead MIDlet,
- * and the three ints are the same three the four-argument form takes, so the
- * extra form is recorded exactly like the standard one.
- */
+/* The standard three-int constructor creates a mutable image. Its storage
+ * is allocated lazily on the first upload; subsequent uploads reuse it. */
 NJFN(m3g_img2d_init3)
 {
     nj_ref self = NJ_THIS(args);
+    nj_s4 fmt = NJ_ARG_INT(args, 0);
+    nj_s4 w = NJ_ARG_INT(args, 1), h = NJ_ARG_INT(args, 2);
 
-    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_fmt", "I", 0),
-            NJ_ARG_INT(args, 0));
-    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_w", "I", 0),
-            NJ_ARG_INT(args, 1));
-    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_h", "I", 0),
-            NJ_ARG_INT(args, 2));
+    if (fmt < 96 || fmt > 100 || w <= 0 || h <= 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "image format or size");
+    }
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I"),
+            (nj_s4)((nj_u4)fmt | M3G_IMAGE_MUTABLE));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"), w);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"), h);
     return NJ_OK;
 }
 
@@ -5619,6 +5628,9 @@ NJFN(m3g_img2d_init_bytes)
 {
     nj_ref self = NJ_THIS(args);
 
+    if (NJ_ARG_INT(args, 0) < 96 || NJ_ARG_INT(args, 0) > 100) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "image format");
+    }
     nj_iput(vm, self, nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_fmt", "I", 0),
             NJ_ARG_INT(args, 0));
     nj_iput(vm, self, nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_w", "I", 0),
@@ -5649,6 +5661,9 @@ NJFN(m3g_img2d_init_obj)
     nj_ref o = NJ_ARG_REF(args, 1);
     const nj_field *f;
 
+    if (NJ_ARG_INT(args, 0) < 96 || NJ_ARG_INT(args, 0) > 100) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "image format");
+    }
     f = nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_fmt", "I", 0);
     if (f) {
         nj_field_write_int(vm, self, f, NJ_ARG_INT(args, 0));
@@ -5733,8 +5748,7 @@ NJFN(m3g_img2d_init_obj)
 
 NJFN(m3g_img2d_getFormat)
 {
-    ret->i = nj_iget(vm, NJ_THIS(args),
-                     nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_fmt", "I", 0));
+    ret->i = m3g_image_format(vm, NJ_THIS(args));
     return NJ_OK;
 }
 
@@ -5752,19 +5766,71 @@ NJFN(m3g_img2d_getHeight)
     return NJ_OK;
 }
 
+/* Image2D.set(x, y, width, height, pixels): copy a tightly packed rectangle,
+ * preserving format, dimensions, mutability and pixels outside the region. */
 NJFN(m3g_img2d_set)
 {
-    nj_ref self = NJ_THIS(args);
+    nj_ref self = NJ_THIS(args), src = NJ_ARG_REF(args, 4), px;
+    nj_s4 x = NJ_ARG_INT(args, 0), y = NJ_ARG_INT(args, 1);
+    nj_s4 w = NJ_ARG_INT(args, 2), h = NJ_ARG_INT(args, 3), iw, ih;
+    nj_u4 flags, fmt, bpp, mark, row;
+    nj_u8 required, total;
+    nj_size row_bytes;
+    nj_u1 *dst;
+    const nj_u1 *sp;
+    nj_field *pixels_field;
 
-    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_fmt", "I", 0),
-            NJ_ARG_INT(args, 0));
-    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_w", "I", 0),
-            NJ_ARG_INT(args, 1));
-    nj_iput(vm, self, nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_h", "I", 0),
-            NJ_ARG_INT(args, 2));
-    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B", 0),
-            NJ_ARG_REF(args, 3));
+    if (!src) {
+        return nj_throw(vm, "java/lang/NullPointerException", "image pixels");
+    }
+    flags = (nj_u4)nj_iget(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I"));
+    if (!(flags & M3G_IMAGE_MUTABLE)) {
+        return nj_throw(vm, "java/lang/IllegalStateException", "immutable Image2D");
+    }
+    fmt = flags & M3G_IMAGE_FORMAT_MASK;
+    iw = nj_iget(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"));
+    ih = nj_iget(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"));
+    /* Subtraction after bounds checks avoids overflowing x+w and y+h. */
+    if (fmt < 96u || fmt > 100u || x < 0 || y < 0 || x > iw || y > ih ||
+        w <= 0 || h <= 0 || w > iw - x || h > ih - y) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "image region");
+    }
+    bpp = m3g_image_bpp(fmt);
+    required = (nj_u8)(nj_u4)w * (nj_u4)h * bpp;
+    if (required > nj_array_length(src)) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "image pixels too short");
+    }
+    total = (nj_u8)(nj_u4)iw * (nj_u4)ih * bpp;
+    if (total > 0x7fffffffu) {
+        return nj_throw_oom(vm);
+    }
+    pixels_field = m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B");
+    px = nj_rget(vm, self, pixels_field);
+    if (px && nj_array_length(px) < total) {
+        return nj_throw(vm, "java/lang/IllegalStateException", "invalid image storage");
+    }
+    /* Native callers can hold their arguments only in C locals. Root both
+     * before allocating; acquire byte pointers after that allocation. */
+    mark = nj_root_mark(vm);
+    self = nj_root(vm, self);
+    src = nj_root(vm, src);
+    if (!px) {
+        px = nj_array_new(vm, "B", (nj_u4)total);
+        if (!px) {
+            nj_root_release(vm, mark);
+            return nj_throw_oom(vm);
+        }
+        nj_rput(vm, self, pixels_field, px);
+    }
+    dst = (nj_u1 *)nj_array_data(px);
+    sp = (const nj_u1 *)nj_array_data(src);
+    row_bytes = (nj_size)w * bpp;
+    for (row = 0u; row < (nj_u4)h; row++) {
+        nj_size offset = (((nj_size)y + row) * (nj_size)iw + (nj_size)x) * bpp;
+        memmove(dst + offset, sp + (nj_size)row * row_bytes, row_bytes);
+    }
     m3g_image_dirty(vm, self);
+    nj_root_release(vm, mark);
     return NJ_OK;
 }
 
@@ -8614,7 +8680,7 @@ static nj_ref m3g_image_mips(nj_vm *vm, nj_ref img)
     if (mips) {
         return mips;               /* built once, freed with the image */
     }
-    if (nj_iget(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I")) != 100) {
+    if (m3g_image_format(vm, img) != 100) {
         return 0;                  /* only RGBA pixels have a known layout */
     }
     w = nj_iget(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"));
@@ -10255,8 +10321,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                     nj_ref px = nj_rget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
                                                          "_nj_pixels", "[B"));
                     nj_ref mipref;
-                    nj_s4 fmt = nj_iget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
-                                                         "_nj_fmt", "I"));
+                    nj_s4 fmt = m3g_image_format(vm, im2);
 
                     r.sw.tex_w = (int)nj_iget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
                                                                "_nj_w", "I"));
@@ -10537,7 +10602,7 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
     if (!image || !app) { return 0u; }
     iw = nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"));
     ih = nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"));
-    fmt = nj_iget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I"));
+    fmt = m3g_image_format(vm, image);
     pixels = nj_rget(vm, image, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"));
     if (iw <= 0 || ih <= 0 || (fmt != 99 && fmt != 100) || !pixels) { return 0u; }
     /* Divide before multiplying: dimensions and array bounds are untrusted. */
@@ -10924,6 +10989,9 @@ NJFN(m3g_img2d_init_pixels)
 {
     nj_ref self = NJ_THIS(args);
 
+    if (NJ_ARG_INT(args, 0) < 96 || NJ_ARG_INT(args, 0) > 100) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "image format");
+    }
     nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I"),
             NJ_ARG_INT(args, 0));
     nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"),
@@ -10944,6 +11012,9 @@ NJFN(m3g_img2d_init_paletted)
 {
     nj_ref self = NJ_THIS(args);
 
+    if (NJ_ARG_INT(args, 0) < 96 || NJ_ARG_INT(args, 0) > 100) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "image format");
+    }
     nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I"),
             NJ_ARG_INT(args, 0));
     nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"),
@@ -10957,22 +11028,12 @@ NJFN(m3g_img2d_init_paletted)
             NJ_ARG_REF(args, 4));
     return NJ_OK;
 }
-/* An Image2D made from a MIDP Image cannot be written through. */
+/* Mutability is a constructor property, not whether an upload has occurred. */
 NJFN(m3g_img2d_isMutable)
 {
-    /*
-     * JSR 184: the constructors that take pixel data - or an lcdui Image -
-     * build an immutable image; the one that takes only a format and a size
-     * builds one whose pixels can still be set.  So the answer is "neither
-     * a pixel array nor an lcdui image is behind it".
-     */
-    nj_ref img = nj_rget(vm, NJ_THIS(args),
-                         m3g_fof(vm, NJ_C_IMAGE2D, "_nj_image",
-                                 "Ljavax/microedition/lcdui/Image;"));
-    nj_ref px = nj_rget(vm, NJ_THIS(args),
-                        m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"));
-
-    ret->i = (img == 0 && px == 0) ? 1 : 0;
+    nj_u4 flags = (nj_u4)nj_iget(vm, NJ_THIS(args),
+                                 m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I"));
+    ret->i = (flags & M3G_IMAGE_MUTABLE) != 0u;
     return NJ_OK;
 }
 

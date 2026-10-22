@@ -470,6 +470,15 @@
 #  define NJ_M3G_FAST_PATHS 1
 #endif
 
+/* Micro3D field access uses the receiver's existing linked class, avoiding a
+ * class-name lookup for each matrix/vector component. No cache or persistent
+ * RAM; compiler-dependent code size and native stack use can differ. Set 0
+ * to keep the general lookup path on targets with tighter code/stack budgets.
+ * Trigonometric accuracy and the public API are identical in either mode. */
+#ifndef NJ_MASCOT_FAST_FIELDS
+#  define NJ_MASCOT_FAST_FIELDS 1
+#endif
+
 /* Assertions (always compiled out unless explicitly enabled). */
 #ifndef NJ_ASSERT_ENABLED
 #  define NJ_ASSERT_ENABLED 0

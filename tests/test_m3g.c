@@ -264,6 +264,908 @@ static void test_parallel_zero_planes(nj_vm *vm)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* Image2D: mutable images and set(x, y, width, height, pixels)        */
+/* ------------------------------------------------------------------ */
+/*
+ * JSR 184's mutable Image2D is built from (format, width, height) and filled
+ * later with set(x, y, width, height, pixels).  The upload is a tightly
+ * packed row-major rectangle whose bytes are RGB/RGBA/... according to the
+ * image format, and the image owns a copy: the caller may reuse its array.
+ *
+ * The shipped runtime used to read set() as (format, width, height, pixels),
+ * so a game's set(0, 0, w, h, px) stored format 0, width 0 and an int
+ * argument masked into a ref.  The 3D viewport rendered black while the 2D
+ * HUD stayed correct - exactly the failure this section pins down.
+ *
+ * Format is read through getFormat(): mutability lives in bit 0x100 of the
+ * same word, so the raw _nj_fmt value is deliberately never asserted on.
+ * The white-box peeks below are limited to the private storage fields, which
+ * are the only way to see "storage is allocated lazily and reused" and
+ * "an upload invalidates the mip chain".
+ */
+static int i2d_threw(nj_vm *vm, nj_status st, const char *want_class)
+{
+    nj_ref exc = nj_take_exception(vm);
+    const char *name;
+
+    if (st == NJ_OK || !exc) {
+        return 0;
+    }
+    name = nj_ref_class_name(exc);
+    return name != NULL && strstr(name, want_class) != NULL;
+}
+
+static nj_ref i2d_new3(nj_vm *vm, int fmt, int w, int h, int *ok)
+{
+    nj_value a[3];
+    nj_ref img = nj_object_new(vm, CLS("Image2D"));
+
+    *ok = 0;
+    if (!img) {
+        return 0;
+    }
+    a[0].i = fmt; a[1].i = w; a[2].i = h;
+    *ok = nj_call_special(vm, img, CLS("Image2D"), "<init>", "(III)V",
+                          a, NULL) == NJ_OK;
+    return img;
+}
+
+/* Construct and report the exception class of a rejected (III) form. */
+static int i2d_new3_saw(nj_vm *vm, int fmt, int w, int h,
+                        const char *want_class)
+{
+    nj_value a[3];
+    nj_ref img = nj_object_new(vm, CLS("Image2D"));
+    nj_status st;
+
+    if (!img) {
+        return 0;
+    }
+    a[0].i = fmt; a[1].i = w; a[2].i = h;
+    st = nj_call_special(vm, img, CLS("Image2D"), "<init>", "(III)V", a, NULL);
+    return i2d_threw(vm, st, want_class);
+}
+
+static int i2d_new_bytes_saw(nj_vm *vm, int fmt, int w, int h, nj_ref px,
+                             const char *want_class)
+{
+    nj_value a[4];
+    nj_ref img = nj_object_new(vm, CLS("Image2D"));
+    nj_status st;
+
+    if (!img) {
+        return 0;
+    }
+    a[0].i = fmt; a[1].i = w; a[2].i = h; a[3].r = px;
+    st = nj_call_special(vm, img, CLS("Image2D"), "<init>", "(III[B)V",
+                         a, NULL);
+    return i2d_threw(vm, st, want_class);
+}
+
+static int i2d_new_paletted_saw(nj_vm *vm, int fmt, int w, int h,
+                                nj_ref px, nj_ref pal,
+                                const char *want_class)
+{
+    nj_value a[5];
+    nj_ref img = nj_object_new(vm, CLS("Image2D"));
+    nj_status st;
+
+    if (!img) {
+        return 0;
+    }
+    a[0].i = fmt; a[1].i = w; a[2].i = h; a[3].r = px; a[4].r = pal;
+    st = nj_call_special(vm, img, CLS("Image2D"), "<init>", "(III[B[B)V",
+                         a, NULL);
+    return i2d_threw(vm, st, want_class);
+}
+
+static int i2d_new_obj_saw(nj_vm *vm, int fmt, nj_ref obj,
+                           const char *want_class)
+{
+    nj_value a[2];
+    nj_ref img = nj_object_new(vm, CLS("Image2D"));
+    nj_status st;
+
+    if (!img) {
+        return 0;
+    }
+    a[0].i = fmt; a[1].r = obj;
+    st = nj_call_special(vm, img, CLS("Image2D"), "<init>",
+                         "(ILjava/lang/Object;)V", a, NULL);
+    return i2d_threw(vm, st, want_class);
+}
+
+static int i2d_new_bytes2_saw(nj_vm *vm, int fmt, int h, nj_ref px,
+                              const char *want_class)
+{
+    nj_value a[3];
+    nj_ref img = nj_object_new(vm, CLS("Image2D"));
+    nj_status st;
+
+    if (!img) {
+        return 0;
+    }
+    a[0].i = fmt; a[1].i = h; a[2].r = px;
+    st = nj_call_special(vm, img, CLS("Image2D"), "<init>", "(II[B)V",
+                         a, NULL);
+    return i2d_threw(vm, st, want_class);
+}
+
+static nj_ref i2d_new_bytes(nj_vm *vm, int fmt, int w, int h, nj_ref px,
+                            int *ok)
+{
+    nj_value a[4];
+    nj_ref img = nj_object_new(vm, CLS("Image2D"));
+
+    *ok = 0;
+    if (!img) {
+        return 0;
+    }
+    a[0].i = fmt; a[1].i = w; a[2].i = h; a[3].r = px;
+    *ok = nj_call_special(vm, img, CLS("Image2D"), "<init>", "(III[B)V",
+                          a, NULL) == NJ_OK;
+    return img;
+}
+
+static nj_ref i2d_new_paletted(nj_vm *vm, int fmt, int w, int h,
+                               nj_ref px, nj_ref pal, int *ok)
+{
+    nj_value a[5];
+    nj_ref img = nj_object_new(vm, CLS("Image2D"));
+
+    *ok = 0;
+    if (!img) {
+        return 0;
+    }
+    a[0].i = fmt; a[1].i = w; a[2].i = h; a[3].r = px; a[4].r = pal;
+    *ok = nj_call_special(vm, img, CLS("Image2D"), "<init>", "(III[B[B)V",
+                          a, NULL) == NJ_OK;
+    return img;
+}
+
+static nj_ref i2d_new_obj(nj_vm *vm, int fmt, nj_ref obj, int *ok)
+{
+    nj_value a[2];
+    nj_ref img = nj_object_new(vm, CLS("Image2D"));
+
+    *ok = 0;
+    if (!img) {
+        return 0;
+    }
+    a[0].i = fmt; a[1].r = obj;
+    *ok = nj_call_special(vm, img, CLS("Image2D"), "<init>",
+                          "(ILjava/lang/Object;)V", a, NULL) == NJ_OK;
+    return img;
+}
+
+static nj_ref i2d_new_bytes2(nj_vm *vm, int fmt, int w, nj_ref px, int *ok)
+{
+    nj_value a[3];
+    nj_ref img = nj_object_new(vm, CLS("Image2D"));
+
+    *ok = 0;
+    if (!img) {
+        return 0;
+    }
+    a[0].i = fmt; a[1].i = w; a[2].r = px;
+    *ok = nj_call_special(vm, img, CLS("Image2D"), "<init>", "(II[B)V",
+                          a, NULL) == NJ_OK;
+    return img;
+}
+
+static int i2d_set_ok(nj_vm *vm, nj_ref img, int x, int y, int w, int h,
+                      nj_ref px)
+{
+    nj_value a[5];
+
+    if (!img) {
+        return 0;
+    }
+    a[0].i = x; a[1].i = y; a[2].i = w; a[3].i = h; a[4].r = px;
+    return nj_call(vm, img, CLS("Image2D"), "set", "(IIII[B)V",
+                   a, NULL) == NJ_OK;
+}
+
+static int i2d_set_saw(nj_vm *vm, nj_ref img, int x, int y, int w, int h,
+                       nj_ref px, const char *want_class)
+{
+    nj_value a[5];
+    nj_status st;
+
+    if (!img) {
+        return 0;
+    }
+    a[0].i = x; a[1].i = y; a[2].i = w; a[3].i = h; a[4].r = px;
+    st = nj_call(vm, img, CLS("Image2D"), "set", "(IIII[B)V", a, NULL);
+    return i2d_threw(vm, st, want_class);
+}
+
+static int i2d_int(nj_vm *vm, nj_ref img, const char *name)
+{
+    nj_value r;
+
+    memset(&r, 0, sizeof(r));
+    if (!img || nj_call(vm, img, CLS("Image2D"), name, "()I", NULL, &r) != NJ_OK) {
+        return -12345;
+    }
+    return r.i;
+}
+
+static int i2d_mutable(nj_vm *vm, nj_ref img)
+{
+    nj_value r;
+
+    memset(&r, 0, sizeof(r));
+    if (!img || nj_call(vm, img, CLS("Image2D"), "isMutable", "()Z",
+                        NULL, &r) != NJ_OK) {
+        return -12345;
+    }
+    return r.i;
+}
+
+static nj_ref i2d_pixels(nj_vm *vm, nj_ref img)
+{
+    const nj_field *f;
+
+    if (!img) {
+        return 0;
+    }
+    f = nj_field_lookup(vm, CLS("Image2D"), "_nj_pixels", "[B", 0);
+    return f ? nj_rget(vm, img, f) : 0;
+}
+
+static nj_ref i2d_mips(nj_vm *vm, nj_ref img)
+{
+    const nj_field *f;
+
+    if (!img) {
+        return 0;
+    }
+    f = nj_field_lookup(vm, CLS("Image2D"), "_nj_mips", "[B", 0);
+    return f ? nj_rget(vm, img, f) : 0;
+}
+
+/* A deterministic byte pattern; the seed keeps formats distinguishable. */
+static void i2d_pattern(nj_u1 *p, int n, unsigned seed)
+{
+    int k;
+
+    for (k = 0; k < n; k++) {
+        p[k] = (nj_u1)((seed + (unsigned)k * 7u) & 0xFFu);
+    }
+}
+
+static int i2d_matches(nj_ref arr, const nj_u1 *want, int n)
+{
+    const nj_u1 *p;
+
+    if (!arr || nj_array_length(arr) < (nj_u4)n) {
+        return 0;
+    }
+    p = (const nj_u1 *)nj_array_data(arr);
+    return p != NULL && memcmp(p, want, (size_t)n) == 0;
+}
+
+/* Overwrite the block at (x, y), size w*h*bpp, from a patch pattern. */
+static void i2d_expect_patch(nj_u1 *want, int iw, int x, int y, int w, int h,
+                             int bpp, unsigned seed)
+{
+    int row, col, byte;
+
+    for (row = 0; row < h; row++) {
+        for (col = 0; col < w; col++) {
+            int src = (row * w + col) * bpp;
+            int dst = (((y + row) * iw) + (x + col)) * bpp;
+
+            for (byte = 0; byte < bpp; byte++) {
+                want[dst + byte] =
+                    (nj_u1)((seed + (unsigned)(src + byte) * 7u) & 0xFFu);
+            }
+        }
+    }
+}
+
+
+/*
+ * Does set() store (x, y, w, h, pixels) where it is supposed to?  This runs
+ * before the white-box storage checks so a runtime that still has the old ABI
+ * is reported by assertions instead of being dereferenced through a bogus ref.
+ */
+static int i2d_abi_ok(nj_vm *vm)
+{
+    nj_ref img;
+    nj_ref src = nj_byte_array_new(vm, 64u);
+    int ok = 0;
+
+    if (!src) {
+        return 0;
+    }
+    i2d_pattern((nj_u1 *)nj_array_data(src), 64, 0x31u);
+    img = i2d_new3(vm, 100, 4, 4, &ok);
+    if (!ok || !i2d_set_ok(vm, img, 0, 0, 4, 4, src)) {
+        return 0;
+    }
+    if (i2d_int(vm, img, "getFormat") != 100 ||
+        i2d_int(vm, img, "getWidth") != 4 ||
+        i2d_int(vm, img, "getHeight") != 4 ||
+        i2d_mutable(vm, img) != 1) {
+        return 0;
+    }
+    return i2d_pixels(vm, img) != 0 &&
+           nj_array_length(i2d_pixels(vm, img)) == 64u;
+}
+
+/* ------------------------------------------------------------------ */
+/* A textured quad that covers a 240x320 target, camera included.       */
+/*
+ * Parallel projection with a generic identity camera is the combination
+ * tests/test_m3g.c already uses for camera-clipping pixels: model units are
+ * clip units, so a quad spanning -1..1 paints the whole viewport, and the
+ * texture's 0..1 coordinates land on it in the obvious way.  The quad sits
+ * at z=-4, inside the 1..10 parallel near/far range.
+ */
+typedef struct {
+    nj_ref g3d, camera, xf, vb, ib, app, poly, bg, target, pixels;
+} i2d_canvas;
+
+static int i2d_canvas_init(nj_vm *vm, i2d_canvas *c)
+{
+    nj_value a[6], r;
+    nj_ref pos = nj_array_new(vm, "S", 12u);
+    nj_ref tc = nj_array_new(vm, "S", 8u);
+    nj_ref lens = nj_array_new(vm, "I", 1u);
+    nj_ref posva, tcva;
+    int ok = 1;
+
+    memset(c, 0, sizeof(*c));
+    if (!pos || !tc || !lens) {
+        return 0;
+    }
+    {
+        nj_s2 *p = (nj_s2 *)nj_array_data(pos);
+        nj_s2 *t = (nj_s2 *)nj_array_data(tc);
+
+        p[0] = -4; p[1] = -4; p[2] = -4;
+        p[3] =  4; p[4] = -4; p[5] = -4;
+        p[6] = -4; p[7] =  4; p[8] = -4;
+        p[9] =  4; p[10] = 4; p[11] = -4;
+        t[0] = 0; t[1] = 0;
+        t[2] = 64; t[3] = 0;
+        t[4] = 0; t[5] = 64;
+        t[6] = 64; t[7] = 64;
+    }
+    ((nj_s4 *)nj_array_data(lens))[0] = 4;
+
+    posva = nj_object_new(vm, CLS("VertexArray"));
+    tcva = nj_object_new(vm, CLS("VertexArray"));
+    c->vb = make(vm, CLS("VertexBuffer"));
+    c->ib = nj_object_new(vm, CLS("TriangleStripArray"));
+    c->app = make(vm, CLS("Appearance"));
+    c->poly = make(vm, CLS("PolygonMode"));
+    c->camera = make(vm, CLS("Camera"));
+    c->xf = make(vm, CLS("Transform"));
+    c->g3d = make(vm, CLS("Graphics3D"));
+    c->bg = make(vm, CLS("Background"));
+    if (!posva || !tcva || !c->vb || !c->ib || !c->app || !c->poly ||
+        !c->camera || !c->xf || !c->g3d || !c->bg) {
+        return 0;
+    }
+
+    a[0].i = 4; a[1].i = 3; a[2].i = 2;
+    ok = ok && nj_call_special(vm, posva, CLS("VertexArray"), "<init>",
+                               "(III)V", a, NULL) == NJ_OK;
+    a[0].i = 0; a[1].i = 4; a[2].r = pos;
+    ok = ok && nj_call(vm, posva, CLS("VertexArray"), "set", "(II[S)V",
+                       a, NULL) == NJ_OK;
+    a[0].r = posva; a[1].f = 0.5f; a[2].r = 0;
+    ok = ok && nj_call(vm, c->vb, CLS("VertexBuffer"), "setPositions",
+                       "(L" CLS("VertexArray") ";F[F)V", a, NULL) == NJ_OK;
+
+    a[0].i = 4; a[1].i = 2; a[2].i = 2;
+    ok = ok && nj_call_special(vm, tcva, CLS("VertexArray"), "<init>",
+                               "(III)V", a, NULL) == NJ_OK;
+    a[0].i = 0; a[1].i = 4; a[2].r = tc;
+    ok = ok && nj_call(vm, tcva, CLS("VertexArray"), "set", "(II[S)V",
+                       a, NULL) == NJ_OK;
+    a[0].i = 0; a[1].r = tcva; a[2].f = 1.0f / 64.0f; a[3].r = 0;
+    ok = ok && nj_call(vm, c->vb, CLS("VertexBuffer"), "setTexCoords",
+                       "(IL" CLS("VertexArray") ";F[F)V", a, NULL) == NJ_OK;
+
+    a[0].i = 0; a[1].r = lens;
+    ok = ok && nj_call_special(vm, c->ib, CLS("TriangleStripArray"), "<init>",
+                               "(I[I)V", a, NULL) == NJ_OK;
+
+    a[0].i = 160;   /* CULL_NONE: both windings render. */
+    ok = ok && nj_call(vm, c->poly, CLS("PolygonMode"), "setCulling",
+                       "(I)V", a, NULL) == NJ_OK;
+    a[0].r = c->poly;
+    ok = ok && nj_call(vm, c->app, CLS("Appearance"), "setPolygonMode",
+                       "(L" CLS("PolygonMode") ";)V", a, NULL) == NJ_OK;
+
+    ok = ok && nj_call(vm, c->xf, CLS("Transform"), "setIdentity",
+                       "()V", NULL, NULL) == NJ_OK;
+    a[0].r = c->xf;
+    ok = ok && nj_call(vm, c->camera, CLS("Camera"), "setGeneric",
+                       "(L" CLS("Transform") ";)V", a, NULL) == NJ_OK;
+    a[0].f = 4.0f; a[1].f = 1.0f; a[2].f = 1.0f; a[3].f = 10.0f;
+    ok = ok && nj_call(vm, c->camera, CLS("Camera"), "setParallel",
+                       "(FFFF)V", a, NULL) == NJ_OK;
+
+    memset(&r, 0, sizeof(r));
+    a[0].i = 240; a[1].i = 320;
+    ok = ok && nj_call_static(vm, "javax/microedition/lcdui/Image",
+                              "createImage",
+                              "(II)Ljavax/microedition/lcdui/Image;",
+                              a, &r) == NJ_OK && r.r != 0;
+    c->target = r.r;
+    a[0].r = c->target;
+    ok = ok && nj_call(vm, c->target, "javax/microedition/lcdui/Image",
+                       "getGraphics",
+                       "()Ljavax/microedition/lcdui/Graphics;", NULL, &r) == NJ_OK;
+    a[0].r = r.r;
+    ok = ok && nj_call(vm, c->g3d, CLS("Graphics3D"), "bindTarget",
+                       "(Ljava/lang/Object;)V", a, NULL) == NJ_OK;
+    a[0].i = 0; a[1].i = 0; a[2].i = 240; a[3].i = 320;
+    ok = ok && nj_call(vm, c->g3d, CLS("Graphics3D"), "setViewport",
+                       "(IIII)V", a, NULL) == NJ_OK;
+    a[0].r = c->camera; a[1].r = 0;
+    ok = ok && nj_call(vm, c->g3d, CLS("Graphics3D"), "setCamera",
+                       "(L" CLS("Camera") ";L" CLS("Transform") ";)V",
+                       a, NULL) == NJ_OK;
+    c->pixels = nj_rget(vm, c->target,
+                        nj_field_lookup(vm, "javax/microedition/lcdui/Image",
+                                        "imgPixels", "[I", 0));
+    return ok && c->pixels != 0;
+}
+
+static int i2d_canvas_draw(nj_vm *vm, i2d_canvas *c, nj_ref img)
+{
+    nj_value a[5];
+    nj_ref tex;
+    int ok = 1;
+
+    tex = nj_object_new(vm, CLS("Texture2D"));
+    if (!tex) {
+        return 0;
+    }
+    a[0].r = c->bg;
+    ok = ok && nj_call(vm, c->g3d, CLS("Graphics3D"), "clear",
+                       "(L" CLS("Background") ";)V", a, NULL) == NJ_OK;
+    a[0].r = img;
+    ok = ok && nj_call_special(vm, tex, CLS("Texture2D"), "<init>",
+                               "(L" CLS("Image2D") ";)V", a, NULL) == NJ_OK;
+    a[0].i = 228;   /* REPLACE: the texture colour is the pixel colour. */
+    ok = ok && nj_call(vm, tex, CLS("Texture2D"), "setBlending",
+                       "(I)V", a, NULL) == NJ_OK;
+    a[0].i = 240; a[1].i = 240;   /* WRAP_CLAMP */
+    ok = ok && nj_call(vm, tex, CLS("Texture2D"), "setWrapping",
+                       "(II)V", a, NULL) == NJ_OK;
+    a[0].i = 208; a[1].i = 208;   /* FILTER_BASE_LEVEL, NEAREST */
+    ok = ok && nj_call(vm, tex, CLS("Texture2D"), "setFiltering",
+                       "(II)V", a, NULL) == NJ_OK;
+    a[0].i = 0; a[1].r = tex;
+    ok = ok && nj_call(vm, c->app, CLS("Appearance"), "setTexture",
+                       "(IL" CLS("Texture2D") ";)V", a, NULL) == NJ_OK;
+    a[0].r = c->vb; a[1].r = c->ib; a[2].r = c->app; a[3].r = 0; a[4].i = 0;
+    ok = ok && nj_call(vm, c->g3d, CLS("Graphics3D"), "render",
+                       "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                       CLS("Appearance") ";L" CLS("Transform") ";I)V",
+                       a, NULL) == NJ_OK;
+    return ok;
+}
+
+static nj_u4 i2d_canvas_pixel(const i2d_canvas *c, int x, int y)
+{
+    const nj_u4 *p = (const nj_u4 *)nj_array_data(c->pixels);
+
+    return p[y * 240 + x] & 0xFFFFFFu;
+}
+
+/* ------------------------------------------------------------------ */
+/* The checks                                                          */
+/* ------------------------------------------------------------------ */
+static void test_image2d_set(nj_vm *vm)
+{
+    static const int formats[5] = {96, 97, 98, 99, 100};
+    static const int bpps[5] = {1, 1, 2, 3, 4};
+    nj_ref small8 = nj_byte_array_new(vm, 8u);
+    nj_ref zeros64 = nj_byte_array_new(vm, 64u);
+    int f, ok, abi;
+
+    if (small8) {
+        memset(nj_array_data(small8), 0, 8u);
+    }
+    if (zeros64) {
+        memset(nj_array_data(zeros64), 0, 64u);
+    }
+    abi = i2d_abi_ok(vm);
+    check(abi, "set() preserves image metadata and creates correctly sized storage");
+
+    printf("== Image2D mutable constructor, getters, lazy storage ==\n");
+    for (f = 0; f < 5; f++) {
+        nj_ref img = i2d_new3(vm, formats[f], 5, 4, &ok);
+
+        check(ok && img != 0, "mutable Image2D(fmt, 5, 4) constructs");
+        check(i2d_int(vm, img, "getFormat") == formats[f],
+              "getFormat returns the constructor format, not the mutable bit");
+        check(i2d_int(vm, img, "getWidth") == 5,
+              "getWidth returns the constructor width");
+        check(i2d_int(vm, img, "getHeight") == 4,
+              "getHeight returns the constructor height");
+        check(i2d_mutable(vm, img) == 1,
+              "the three-int constructor makes a mutable image");
+        check(i2d_pixels(vm, img) == 0,
+              "pixel storage is not allocated before the first set()");
+    }
+
+    check(i2d_new3_saw(vm, 95, 4, 4, "IllegalArgumentException"),
+          "Image2D(95, ...) is rejected");
+    check(i2d_new3_saw(vm, 101, 4, 4, "IllegalArgumentException"),
+          "Image2D(101, ...) is rejected");
+    check(i2d_new3_saw(vm, 356, 4, 4, "IllegalArgumentException"),
+          "Image2D(0x164, ...) cannot spoof the mutable bit through the format");
+    check(i2d_new3_saw(vm, 100, 0, 4, "IllegalArgumentException"),
+          "Image2D(100, 0, 4) is rejected");
+    check(i2d_new3_saw(vm, 100, 4, 0, "IllegalArgumentException"),
+          "Image2D(100, 4, 0) is rejected");
+    check(i2d_new3_saw(vm, 100, -1, 4, "IllegalArgumentException"),
+          "Image2D(100, -1, 4) is rejected");
+    check(i2d_new3_saw(vm, 100, 4, -1, "IllegalArgumentException"),
+          "Image2D(100, 4, -1) is rejected");
+
+    printf("== Image2D immutable constructors and format validation ==\n");
+    check(i2d_new_bytes_saw(vm, 95, 2, 2, small8, "IllegalArgumentException"),
+          "Image2D(byte[] form) rejects format 95");
+    check(i2d_new_paletted_saw(vm, 95, 2, 2, small8, small8,
+                               "IllegalArgumentException"),
+          "Image2D(palette form) rejects format 95");
+    check(i2d_new_obj_saw(vm, 95, small8, "IllegalArgumentException"),
+          "Image2D(Object form) rejects format 95");
+    check(i2d_new_bytes2_saw(vm, 95, 2, small8, "IllegalArgumentException"),
+          "Image2D(int, byte[]) form rejects format 95");
+    check(i2d_new_bytes_saw(vm, 356, 2, 2, small8,
+                            "IllegalArgumentException"),
+          "Image2D(byte[] form) rejects a spoofed format 0x164");
+    {
+        nj_ref pal = nj_byte_array_new(vm, 16u);
+        nj_ref i_bytes, i_pal, i_obj, i_b2;
+
+        if (pal) {
+            memset(nj_array_data(pal), 0, 16u);
+        }
+        i_bytes = i2d_new_bytes(vm, 100, 2, 2, small8, &ok);
+        i_pal = i2d_new_paletted(vm, 98, 2, 2, small8, pal, &ok);
+        i_obj = i2d_new_obj(vm, 100, small8, &ok);
+        i_b2 = i2d_new_bytes2(vm, 99, 2, small8, &ok);
+
+        check(i2d_mutable(vm, i_bytes) == 0, "Image2D(byte[] form) is immutable");
+        check(i2d_mutable(vm, i_pal) == 0, "Image2D(palette form) is immutable");
+        check(i2d_mutable(vm, i_obj) == 0, "Image2D(Object form) is immutable");
+        check(i2d_mutable(vm, i_b2) == 0, "Image2D(int, byte[]) form is immutable");
+
+        check(i2d_set_saw(vm, i_bytes, 0, 0, 1, 1, small8,
+                          "IllegalStateException"),
+              "set() on an Image2D(byte[]) is refused as immutable");
+        check(i2d_set_saw(vm, i_pal, 0, 0, 1, 1, small8,
+                          "IllegalStateException"),
+              "set() on an Image2D(palette) is refused as immutable");
+        check(i2d_set_saw(vm, i_obj, 0, 0, 1, 1, small8,
+                          "IllegalStateException"),
+              "set() on an Image2D(Object) is refused as immutable");
+        check(i2d_set_saw(vm, i_b2, 0, 0, 1, 1, small8,
+                          "IllegalStateException"),
+              "set() on an Image2D(int, byte[]) is refused as immutable");
+        check(i2d_set_saw(vm, i_bytes, 0, 0, 1, 1, 0,
+                          "NullPointerException"),
+              "a null pixel buffer is a NullPointerException, checked before mutability");
+    }
+
+    if (abi) {
+    printf("== set(x, y, w, h, pixels): ABI, storage reuse, own copy ==\n");
+    {
+        nj_ref img = i2d_new3(vm, 100, 4, 4, &ok);
+        nj_ref src = nj_byte_array_new(vm, 64u);
+        nj_ref ref1, patch, patch2, src3;
+        nj_u1 want[64], want2[64], want3[64];
+
+        check(ok, "mutable RGBA image for set() constructs");
+        i2d_pattern((nj_u1 *)nj_array_data(src), 64, 0x20u);
+        i2d_pattern(want, 64, 0x20u);
+        check(i2d_set_ok(vm, img, 0, 0, 4, 4, src),
+              "set(0, 0, 4, 4, 64 bytes) succeeds");
+        check(i2d_pixels(vm, img) != 0,
+              "the first set() allocates the image's own pixel storage");
+        check(nj_array_length(i2d_pixels(vm, img)) == 64u,
+              "RGBA 4x4 storage is 64 bytes");
+        check(i2d_matches(i2d_pixels(vm, img), want, 64),
+              "set() copies the source bytes row-major");
+        check(i2d_int(vm, img, "getFormat") == 100 &&
+              i2d_int(vm, img, "getWidth") == 4 &&
+              i2d_int(vm, img, "getHeight") == 4,
+              "set() leaves format, width and height alone");
+        check(i2d_mutable(vm, img) == 1,
+              "set() preserves the mutable flag");
+
+        ref1 = i2d_pixels(vm, img);
+        patch = nj_byte_array_new(vm, 16u);
+        i2d_pattern((nj_u1 *)nj_array_data(patch), 16, 0x77u);
+        check(i2d_set_ok(vm, img, 1, 1, 2, 2, patch),
+              "a sub-rectangle update succeeds");
+        check(i2d_pixels(vm, img) == ref1,
+              "a later set() reuses the storage allocated by the first one");
+        memcpy(want2, want, 64);
+        i2d_expect_patch(want2, 4, 1, 1, 2, 2, 4, 0x77u);
+        check(i2d_matches(i2d_pixels(vm, img), want2, 64),
+              "a sub-rectangle update changes only the covered bytes");
+        memset(nj_array_data(patch), 0xEE, 16u);
+        check(i2d_matches(i2d_pixels(vm, img), want2, 64),
+              "set() owns its copy: mutating the source afterwards does not alias");
+
+        patch2 = nj_byte_array_new(vm, 16u);
+        i2d_pattern((nj_u1 *)nj_array_data(patch2), 16, 0x33u);
+        check(i2d_set_ok(vm, img, 2, 2, 2, 2, patch2),
+              "a second, overlapping sub-rectangle update succeeds");
+        check(i2d_pixels(vm, img) == ref1,
+              "the second update still reuses the same storage");
+        memcpy(want3, want2, 64);
+        i2d_expect_patch(want3, 4, 2, 2, 2, 2, 4, 0x33u);
+        check(i2d_matches(i2d_pixels(vm, img), want3, 64),
+              "the second update overwrites exactly its rectangle");
+        check(i2d_int(vm, img, "getFormat") == 100 &&
+              i2d_mutable(vm, img) == 1,
+              "format and mutability survive repeated sub-rectangle updates");
+
+        src3 = nj_byte_array_new(vm, 64u);
+        i2d_pattern((nj_u1 *)nj_array_data(src3), 64, 0x44u);
+        check(i2d_set_ok(vm, img, 0, 0, 4, 4, src3),
+              "a full-image set() after sub-rectangles succeeds");
+        check(i2d_pixels(vm, img) == ref1 &&
+              i2d_matches(i2d_pixels(vm, img),
+                          (i2d_pattern((nj_u1 *)want, 64, 0x44u), want), 64),
+              "the full set() reuses storage and replaces every byte");
+    }
+
+    printf("== set() per format: row copy, preservation, own copy ==\n");
+    for (f = 0; f < 5; f++) {
+        int bpp = bpps[f];
+        int iw = 6, ih = 5, n = iw * ih * bpp, np = 3 * 2 * bpp;
+        nj_ref img = i2d_new3(vm, formats[f], iw, ih, &ok);
+        nj_ref src = nj_byte_array_new(vm, (nj_u4)n);
+        nj_ref patch = nj_byte_array_new(vm, (nj_u4)np);
+        nj_u1 want[6 * 5 * 4];
+
+        check(ok, "mutable image for the per-format set() checks constructs");
+        i2d_pattern((nj_u1 *)nj_array_data(src), n, 0x10u + (unsigned)f);
+        i2d_pattern(want, n, 0x10u + (unsigned)f);
+        check(i2d_set_ok(vm, img, 0, 0, iw, ih, src),
+              "a full-image set() succeeds for this format");
+        check(nj_array_length(i2d_pixels(vm, img)) == (nj_u4)n,
+              "storage size is width*height*bytes-per-pixel");
+        check(i2d_matches(i2d_pixels(vm, img), want, n),
+              "the bytes land row-major in the image storage");
+        memset(nj_array_data(src), 0xEE, (size_t)n);
+        check(i2d_matches(i2d_pixels(vm, img), want, n),
+              "the image owns its copy for this format");
+        i2d_pattern((nj_u1 *)nj_array_data(patch), np, 0x55u);
+        i2d_expect_patch(want, iw, 1, 2, 3, 2, bpp, 0x55u);
+        check(i2d_set_ok(vm, img, 1, 2, 3, 2, patch),
+              "a sub-rectangle set() succeeds for this format");
+        check(i2d_matches(i2d_pixels(vm, img), want, n),
+              "the sub-rectangle bytes count bytes-per-pixel");
+        memset(nj_array_data(patch), 0xEE, (size_t)np);
+        check(i2d_matches(i2d_pixels(vm, img), want, n),
+              "the sub-rectangle copy is owned for this format");
+        check(i2d_int(vm, img, "getFormat") == formats[f] &&
+              i2d_int(vm, img, "getWidth") == iw &&
+              i2d_int(vm, img, "getHeight") == ih &&
+              i2d_mutable(vm, img) == 1,
+              "format, size and mutability stay constant across set()");
+    }
+
+    }
+    if (!abi) {
+        printf("  SKIP: the storage checks need the corrected set() ABI\n");
+    }
+
+    printf("== set() rejects bad regions, short buffers and null ==\n");
+    {
+        nj_ref img = i2d_new3(vm, 100, 4, 4, &ok);
+        nj_ref short63 = nj_byte_array_new(vm, 63u);
+        nj_ref short15 = nj_byte_array_new(vm, 15u);
+        nj_ref src16 = nj_byte_array_new(vm, 16u);
+        nj_ref big65 = nj_byte_array_new(vm, 65u);
+
+        check(ok, "mutable RGBA image for the rejection checks constructs");
+        if (short63) { memset(nj_array_data(short63), 0, 63u); }
+        if (short15) { memset(nj_array_data(short15), 0, 15u); }
+        if (src16) { i2d_pattern((nj_u1 *)nj_array_data(src16), 16, 0x66u); }
+        if (big65) { i2d_pattern((nj_u1 *)nj_array_data(big65), 65, 0x22u); }
+
+        check(i2d_set_saw(vm, img, 0, 0, 4, 4, 0, "NullPointerException"),
+              "set() with a null pixel buffer throws NullPointerException");
+        check(i2d_set_saw(vm, img, -1, 0, 1, 1, zeros64,
+                          "IllegalArgumentException"),
+              "a negative x is rejected");
+        check(i2d_set_saw(vm, img, 0, -1, 1, 1, zeros64,
+                          "IllegalArgumentException"),
+              "a negative y is rejected");
+        check(i2d_set_saw(vm, img, 0, 0, 0, 1, zeros64,
+                          "IllegalArgumentException"),
+              "a zero width is rejected");
+        check(i2d_set_saw(vm, img, 0, 0, 1, 0, zeros64,
+                          "IllegalArgumentException"),
+              "a zero height is rejected");
+        check(i2d_set_saw(vm, img, 0, 0, -1, 1, zeros64,
+                          "IllegalArgumentException"),
+              "a negative width is rejected");
+        check(i2d_set_saw(vm, img, 0, 0, 1, -1, zeros64,
+                          "IllegalArgumentException"),
+              "a negative height is rejected");
+        check(i2d_set_saw(vm, img, 4, 0, 1, 1, zeros64,
+                          "IllegalArgumentException"),
+              "a left edge at the image width is rejected");
+        check(i2d_set_saw(vm, img, 5, 0, 1, 1, zeros64,
+                          "IllegalArgumentException"),
+              "an x beyond the image is rejected");
+        check(i2d_set_saw(vm, img, 0, 4, 1, 1, zeros64,
+                          "IllegalArgumentException"),
+              "a top edge at the image height is rejected");
+        check(i2d_set_saw(vm, img, 2, 0, 3, 1, zeros64,
+                          "IllegalArgumentException"),
+              "x + width beyond the image is rejected");
+        check(i2d_set_saw(vm, img, 0, 2, 1, 3, zeros64,
+                          "IllegalArgumentException"),
+              "y + height beyond the image is rejected");
+        check(i2d_set_saw(vm, img, 0, 0, 4, 4, short63,
+                          "IllegalArgumentException"),
+              "a buffer one byte short is rejected");
+        check(i2d_set_saw(vm, img, 0, 0, 2, 2, short15,
+                          "IllegalArgumentException"),
+              "a sub-rectangle buffer one byte short is rejected");
+        check(i2d_set_ok(vm, img, 0, 0, 2, 2, src16),
+              "a buffer of exactly the sub-rectangle size is accepted");
+        check(i2d_set_ok(vm, img, 0, 0, 4, 4, big65),
+              "a buffer longer than needed is accepted");
+        check(i2d_int(vm, img, "getFormat") == 100,
+              "the rejected calls left the image format intact");
+    }
+
+    printf("== set() extreme bounds: no overflow, no wild allocation ==\n");
+    {
+        nj_ref one = nj_byte_array_new(vm, 1u);
+        nj_ref four = nj_byte_array_new(vm, 4u);
+        nj_ref wide96 = i2d_new3(vm, 96, 65536, 65536, &ok);
+        nj_ref wide100 = i2d_new3(vm, 100, 65536, 65536, &ok);
+        nj_ref small = i2d_new3(vm, 100, 4, 4, &ok);
+
+        if (one) { memset(nj_array_data(one), 0, 1u); }
+        if (four) { memset(nj_array_data(four), 0, 4u); }
+
+        check(i2d_set_saw(vm, small, 0x7FFFFFFF, 0, 1, 1, zeros64,
+                          "IllegalArgumentException"),
+              "x = INT_MAX is rejected without overflowing x + width");
+        check(i2d_set_saw(vm, small, 0, 0x7FFFFFFF, 1, 1, zeros64,
+                          "IllegalArgumentException"),
+              "y = INT_MAX is rejected without overflowing y + height");
+        check(i2d_set_saw(vm, small, -0x7FFFFFFF - 1, 0, 1, 1, zeros64,
+                          "IllegalArgumentException"),
+              "x = INT_MIN is rejected without overflowing x + width");
+        check(i2d_set_saw(vm, small, 0, 0, 0x7FFFFFFF, 1, zeros64,
+                          "IllegalArgumentException"),
+              "width = INT_MAX is rejected without overflowing x + width");
+        check(i2d_set_saw(vm, small, 0, 0, 1, 0x7FFFFFFF, zeros64,
+                          "IllegalArgumentException"),
+              "height = INT_MAX is rejected without overflowing y + height");
+        check(i2d_set_saw(vm, wide96, 0, 0, 1, 1, one, "OutOfMemoryError"),
+              "a one-byte format whose full storage exceeds 2G reports OOM, not a crash");
+        check(i2d_set_saw(vm, wide100, 0, 0, 1, 1, four, "OutOfMemoryError"),
+              "an RGBA format whose full storage exceeds 2G reports OOM, not a crash");
+        check(i2d_pixels(vm, wide96) == 0 && i2d_pixels(vm, wide100) == 0,
+              "the OOM path leaves no half-built storage behind");
+    }
+
+    if (abi) {
+    printf("== set() detects storage that cannot hold the image ==\n");
+    {
+        nj_ref img = i2d_new3(vm, 100, 2, 2, &ok);
+        nj_ref src = nj_byte_array_new(vm, 16u);
+        nj_ref tiny = nj_byte_array_new(vm, 8u);
+        const nj_field *pf;
+
+        if (src) { i2d_pattern((nj_u1 *)nj_array_data(src), 16, 0x11u); }
+        if (tiny) { memset(nj_array_data(tiny), 0, 8u); }
+        check(ok && i2d_set_ok(vm, img, 0, 0, 2, 2, src),
+              "the image for the invalid-storage check has valid storage");
+        pf = nj_field_lookup(vm, CLS("Image2D"), "_nj_pixels", "[B", 0);
+        if (pf && tiny) {
+            nj_field_write_ref(vm, img, pf, tiny);
+        }
+        check(i2d_set_saw(vm, img, 0, 0, 1, 1, src, "IllegalStateException"),
+              "storage shorter than the image is reported, not overrun");
+    }
+
+    printf("== Image2D rendered pixels: RGB and RGBA textures ==\n");
+    {
+        i2d_canvas canvas;
+        nj_ref rgba1 = i2d_new3(vm, 100, 1, 1, &ok);
+        nj_ref rgb1 = i2d_new3(vm, 99, 1, 1, &ok);
+        nj_ref rgba2 = i2d_new3(vm, 100, 2, 1, &ok);
+        nj_ref single = nj_byte_array_new(vm, 4u);
+        nj_ref single_rgb = nj_byte_array_new(vm, 3u);
+        nj_ref two = nj_byte_array_new(vm, 8u);
+        nj_ref update = nj_byte_array_new(vm, 4u);
+        nj_ref immutable_img;
+        nj_u1 rgba_red[4] = {255, 0, 0, 255};
+        nj_u1 rgb_blue[3] = {0, 0, 255};
+        nj_u1 rgba_left_right[8] = {255, 0, 0, 255, 0, 255, 0, 255};
+        nj_u1 rgba_yellow[4] = {255, 255, 0, 255};
+        nj_u1 one_red[4] = {255, 0, 0, 255};
+        int canvas_ok;
+
+        memcpy(nj_array_data(single), rgba_red, 4u);
+        memcpy(nj_array_data(single_rgb), rgb_blue, 3u);
+        memcpy(nj_array_data(two), rgba_left_right, 8u);
+        memcpy(nj_array_data(update), rgba_yellow, 4u);
+
+        canvas_ok = i2d_canvas_init(vm, &canvas);
+        check(canvas_ok, "the textured-quad render harness initialises");
+        if (canvas_ok) {
+            check(i2d_set_ok(vm, rgba1, 0, 0, 1, 1, single),
+                  "a 1x1 RGBA mutable image accepts its pixel");
+            check(i2d_canvas_draw(vm, &canvas, rgba1),
+                  "drawing with a 1x1 RGBA texture succeeds");
+            check(i2d_canvas_pixel(&canvas, 40, 40) == 0xFF0000u &&
+                  i2d_canvas_pixel(&canvas, 200, 40) == 0xFF0000u &&
+                  i2d_canvas_pixel(&canvas, 40, 280) == 0xFF0000u &&
+                  i2d_canvas_pixel(&canvas, 120, 160) == 0xFF0000u &&
+                  i2d_canvas_pixel(&canvas, 200, 280) == 0xFF0000u,
+                  "the RGBA texel red reaches the rendered target");
+
+            check(i2d_set_ok(vm, rgb1, 0, 0, 1, 1, single_rgb),
+                  "a 1x1 RGB mutable image accepts its pixel");
+            check(i2d_canvas_draw(vm, &canvas, rgb1),
+                  "drawing with a 1x1 RGB texture succeeds");
+            check(i2d_canvas_pixel(&canvas, 40, 70) == 0x0000FFu &&
+                  i2d_canvas_pixel(&canvas, 200, 250) == 0x0000FFu,
+                  "the RGB texel blue reaches the rendered target");
+
+            check(i2d_set_ok(vm, rgba2, 0, 0, 2, 1, two),
+                  "a 2x1 RGBA image accepts two texels");
+            check(i2d_canvas_draw(vm, &canvas, rgba2),
+                  "drawing with a 2x1 RGBA texture succeeds");
+            check(i2d_canvas_pixel(&canvas, 60, 160) == 0xFF0000u &&
+                  i2d_canvas_pixel(&canvas, 180, 160) == 0x00FF00u,
+                  "the two texels land on the two halves of the quad");
+            check(i2d_mips(vm, rgba2) != 0,
+                  "rendering an RGBA texture builds its mip chain");
+
+            check(i2d_set_ok(vm, rgba2, 1, 0, 1, 1, update),
+                  "a sub-rectangle update of a texture succeeds");
+            check(i2d_mips(vm, rgba2) == 0,
+                  "an upload invalidates the cached mip chain");
+            check(i2d_canvas_draw(vm, &canvas, rgba2),
+                  "drawing after the texture update succeeds");
+            check(i2d_canvas_pixel(&canvas, 180, 160) == 0xFFFF00u,
+                  "the updated texel reaches the rendered target");
+            check(i2d_canvas_pixel(&canvas, 60, 160) == 0xFF0000u,
+                  "the untouched texel still renders its old colour");
+            check(i2d_mips(vm, rgba2) != 0,
+                  "the next render rebuilds the mip chain");
+
+            immutable_img = i2d_new_bytes(vm, 100, 1, 1, single, &ok);
+            memcpy(nj_array_data(single), one_red, 4u);
+            check(ok && i2d_mutable(vm, immutable_img) == 0,
+                  "an immutable RGBA image for rendering constructs");
+            check(i2d_canvas_draw(vm, &canvas, immutable_img),
+                  "drawing with an immutable RGBA texture succeeds");
+            check(i2d_canvas_pixel(&canvas, 120, 160) == 0xFF0000u,
+                  "an immutable RGBA texel renders too");
+        }
+    }
+    }
+}
+
 int main(void)
 {
     nj_port port;
@@ -644,7 +1546,7 @@ int main(void)
         memset(&r, 0, sizeof(r));
         memset(a, 0, sizeof(a));
 
-        a[0].i = 8; a[1].i = 8; a[2].i = 0;
+        a[0].i = 100; a[1].i = 8; a[2].i = 8;
         img = nj_object_new(vm, CLS("Image2D"));
         check(img != 0 &&
               nj_call_special(vm, img, CLS("Image2D"), "<init>", "(III)V", a, NULL) == NJ_OK,
@@ -814,7 +1716,7 @@ int main(void)
         memset(a, 0, sizeof(a));
         memset(&r, 0, sizeof(r));
 
-        a[0].i = 4; a[1].i = 4; a[2].i = 0;
+        a[0].i = 100; a[1].i = 4; a[2].i = 4;
         img = nj_object_new(vm, CLS("Image2D"));
         if (img && nj_call_special(vm, img, CLS("Image2D"), "<init>", "(III)V",
                                    a, NULL) != NJ_OK) {
@@ -991,7 +1893,7 @@ int main(void)
                              "Ljavax/microedition/lcdui/Image;", 0);
 
         roots_before = nj_root_mark(vm);
-        a2[0].i = 10;
+        a2[0].i = 100;
         a2[1].r = img;
         check(nj_call(vm, i2, "javax/microedition/m3g/Image2D", "<init>",
                       "(ILjava/lang/Object;)V", a2, &r) == NJ_OK && img != 0,
@@ -2597,6 +3499,8 @@ int main(void)
         check(nj_root_mark(vm) == roots_before,
               "render(Node) with scene lights leaves no ref root behind");
     }
+
+    test_image2d_set(vm);
 
     /* The file format calls type 18 Sprite; the titles call the class
        Sprite3D.  Both have to be loadable.  These run before the VM is

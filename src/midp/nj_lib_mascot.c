@@ -20,15 +20,26 @@
  * constructors are the only thing added beyond that list, because a game has
  * to allocate the objects it names.
  *
- * WHAT IT DOES NOT DO
- * -------------------
- * There is no rasterizer.  Graphics3D.bind/flush/renderPrimitives/renderFigure
- * accept their arguments and draw nothing.  That is deliberate and it is the
- * same rule the m3g module follows: a wrong picture is harder to diagnose than
- * no picture, so this module never invents pixels.  The scene arithmetic
- * (integer rotations, matrix concatenation, look-at, normalisation, integer
- * square root) is real and tested in tests/test_mascot.c, because that is the
- * part a game can observe through its own fields.
+ * WHAT IT DOES, AND WHAT IT DOES NOT DO
+ * ------------------------------------
+ * The scene arithmetic is real: integer rotations, matrix concatenation,
+ * look-at, normalisation and the integer square root, all tested against a
+ * libm oracle.  FigureLayout exposes the two projection modes the games use -
+ * parallel-scale and perspective-FOV - and keeps the reference's defaults
+ * (implicit identity affine, parallel 512/512 scale, centre 0,0); the other
+ * two reference modes (parallel-size, perspective-WH) are not exposed because
+ * no title in the corpus calls them.  renderPrimitives() draws solid points,
+ * lines, triangles and quads through the public eleven-argument ABI, with the
+ * reference's transform rounding, centre offsets, near/far clipping and
+ * command colours; tests/test_mascot.c binds a real Image and checks the
+ * pixels with Image.getRGB().
+ *
+ * Everything that needs data this runtime does not parse yet is refused
+ * rather than approximated: textured and point-sprite primitives are
+ * validated and then draw nothing (no colour is invented), Figure(String)/
+ * renderFigure and ActionTable data are not read (MBAC/MTRA formats), and
+ * ADD/SUB blending draws nothing because nj_gfx has no such operation.  A
+ * wrong picture is harder to diagnose than no picture.
  *
  * TRIMMING
  * --------
@@ -39,9 +50,20 @@
 #include "nj_internal.h"
 #include "nj_midp.h"
 
+#include <math.h>
+
 #if NJ_ENABLE_MASCOT
 
 #define NJFN(name) NJ_NATIVE_FN(name)
+
+/* Keep the per-triangle filler out of line: inlining it into the clipping
+ * helper three times inflated that helper's C stack frame (measured with
+ * -fstack-usage; the extra call per emitted triangle is noise). */
+#if defined(__GNUC__)
+#  define M3_NOINLINE __attribute__((noinline))
+#else
+#  define M3_NOINLINE
+#endif
 
 #define NJ_C_V3  "com/mascotcapsule/micro3d/v3/Vector3D"
 #define NJ_C_XF  "com/mascotcapsule/micro3d/v3/AffineTrans"
@@ -56,6 +78,19 @@
 
 /* 1.0 in Micro3D's fixed point. */
 #define M3_ONE 4096
+
+/* FigureLayout projection modes: the values are the public command
+ * constants, so a layout built by another implementation with the same
+ * values is understood here too.  The mode lives in the high byte of the
+ * stored word and the FOV angle shares the low 11 bits (valid 1..2047), so
+ * angle support does not cost FigureLayout another persistent field. */
+#define M3_PROJ_MODE_MASK 0xFF000000u
+#define M3_PROJ_PARALLEL  0x90000000u
+#define M3_PROJ_FOV       0x92000000u
+#define M3_ANGLE_MASK     0x7FFu
+
+/* Reference default parallel scale (FigureLayout() uses 512,512). */
+#define M3_DEFAULT_SCALE 512
 #define M3_IMG "Ljavax/microedition/lcdui/Image;"
 
 #define M(name, desc, flags) { name, desc, flags }
@@ -95,39 +130,29 @@ static nj_s4 m3_mul(nj_s4 a, nj_s4 b)
     return (nj_s4)(((nj_s8)a * (nj_s8)b) / M3_ONE);
 }
 
-/*
- * sin and cos for rotationX/Y/Z, without libm.
- *
- * The angle is in 4096ths of a full turn, which is what these calls take.
- * Bhaskara's approximation is used instead of a table: it is exact at 0, 90,
- * 180 and 270 degrees (where games put their right angles), within about 0.2%
- * in between, needs no data and no init step, and keeps this file building
- * when NJ_ENABLE_FLOAT=0 compiles the transcendental natives out.
+/* Micro3D uses 4096 phases per turn and rounds sine to the nearest 1/4096.
+ * Reflect a quarter-wave ROM table: no degree quantisation, integer divide,
+ * libm dependency or per-VM allocation. Unsigned phase reduction also makes
+ * negative angles and INT_MIN/INT_MAX well-defined (including cosine's shift).
  */
-static nj_s4 m3_sin_deg(nj_s4 deg)
-{
-    nj_s8 t, b;
-
-    deg %= 360;
-    if (deg < 0) {
-        deg += 360;
-    }
-    if (deg > 180) {
-        deg -= 360;   /* sin(-x) = -sin(x) */
-    }
-    t = (nj_s8)4 * deg * (180 - deg);
-    b = 40500 - (nj_s8)deg * (180 - deg);
-    return (nj_s4)((t * M3_ONE) / b);
-}
+#include "nj_mascot_sin.inc"
 
 static nj_s4 m3_sin(nj_s4 turn)
 {
-    return m3_sin_deg((nj_s4)(((nj_s8)turn * 360) / M3_ONE));
+    nj_u4 phase = (nj_u4)turn & 4095u;
+    nj_u4 index = phase & 1023u;
+    nj_s4 value;
+
+    if (phase & 1024u) {
+        index = 1024u - index;
+    }
+    value = m3_sin_quarter[index];
+    return (phase & 2048u) ? -value : value;
 }
 
 static nj_s4 m3_cos(nj_s4 turn)
 {
-    return m3_sin((nj_s4)(turn + M3_ONE / 4));
+    return m3_sin((nj_s4)(((nj_u4)turn + 1024u) & 4095u));
 }
 
 /* ------------------------------------------------------------------ */
@@ -135,21 +160,42 @@ static nj_s4 m3_cos(nj_s4 turn)
 /* ------------------------------------------------------------------ */
 
 /*
- * Every accessor below takes the class NAME from the object rather than from a
- * constant.  That is what would let these natives serve another spelling of
- * the same API (a flat com/mascotcapsule/, or Capcom's
- * com/capcom/mascotcapsule/) if a title needs it - the descriptors are
- * identical, only the package differs.
+ * Two lookups, one semantics.
+ *
+ * The slow one (NJ_MASCOT_FAST_FIELDS=0) takes the class NAME from the object
+ * and resolves it again for every component.  That is what would let these
+ * natives serve another spelling of the same API (a flat
+ * com/mascotcapsule/, or Capcom's com/capcom/mascotcapsule/) without an
+ * edit, and it is the pre-optimisation behaviour kept for A/B measurement.
+ *
+ * The fast one (default) uses the linked class the live receiver already
+ * owns: no name hashing, no resolve cache probe, no string compare per matrix
+ * component.  Both branches resolve the same class and the same fields for
+ * every object this module can see; only the path differs.  The class names
+ * above are still always correct - the compiled tables are untouched.
+ *
+ * The measured cost of the fast path is code size plus a 16-byte larger
+ * native frame (compiler-dependent), not persistent RAM, which is why it is
+ * a build switch.  nj_config.h owns the default.
  */
 static nj_field *m3_field(nj_vm *vm, nj_ref o, const char *name, const char *desc)
 {
+#if NJ_MASCOT_FAST_FIELDS
+    (void)vm;
+    return o && o->cls ? nj_field_lookup_in(o->cls, name, desc, 0) : NULL;
+#else
     const char *cls = nj_ref_class_name(o);
 
     if (!cls) {
         return NULL;
     }
     return nj_field_lookup(vm, cls, name, desc, 0);
+#endif
 }
+
+/* Defined with the renderer helpers further down; the FigureLayout getter
+ * above them needs the same field-by-receiver-class lookup. */
+static nj_ref m3_ref(nj_vm *vm, nj_ref o, const char *name, const char *desc);
 
 static nj_s4 m3_get(nj_vm *vm, nj_ref o, const char *name)
 {
@@ -571,8 +617,22 @@ NJFN(mascot_xf_translation)
 
 static const nj_builtin_method u3d_methods[] = {
     M("<init>", "()V", 0),
-    M("sqrt", "(I)I", NJ_ACC_PUBLIC | NJ_ACC_STATIC)
+    M("sqrt", "(I)I", NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("sin", "(I)I", NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("cos", "(I)I", NJ_ACC_PUBLIC | NJ_ACC_STATIC)
 };
+
+NJFN(mascot_u3d_sin)
+{
+    ret->i = m3_sin(NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
+
+NJFN(mascot_u3d_cos)
+{
+    ret->i = m3_cos(NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
 
 NJFN(mascot_u3d_sqrt)
 {
@@ -610,6 +670,7 @@ static const nj_builtin_field fig_fields[] = {
 static const nj_builtin_method fl_methods[] = {
     M("<init>", "()V", 0),
     M("setAffineTrans", "(L" NJ_C_XF ";)V", 0),
+    M("getAffineTrans", "()L" NJ_C_XF ";", 0),
     M("setPerspective", "(III)V", 0),
     M("setCenter", "(II)V", 0),
     M("setScale", "(II)V", 0)
@@ -760,19 +821,95 @@ NJFN(mascot_fig_layout)
 }
 
 /* FigureLayout */
+/*
+ * FigureLayout(): parallel projection at the reference's default 512/512
+ * scale, centre (0,0), and an IMPLICIT identity affine.  The old constructor
+ * was a no-op, so a layout that never called setScale() projected with zero
+ * magnification and every primitive collapsed onto the centre pixel.
+ *
+ * The identity AffineTrans is deliberately not allocated: `_xf == NULL` means
+ * "identity" to renderPrimitives, exactly like a zeroed transform in the
+ * reference's native path would.  getAffineTrans() materialises the object
+ * lazily and stores it, so Java code that does use the getter keeps the
+ * reference's stable, mutable identity instance; a layout that never asks
+ * (the common case) costs no extra heap.
+ */
+NJFN(mascot_fl_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    m3_set(vm, self, "_p", (nj_s4)M3_PROJ_PARALLEL);
+    m3_set(vm, self, "_sx", M3_DEFAULT_SCALE);
+    m3_set(vm, self, "_sy", M3_DEFAULT_SCALE);
+    return NJ_OK;
+}
+
+/*
+ * setAffineTrans(m): store the caller's matrix.  A null argument resets the
+ * layout to its implicit identity, the observable result of the reference's
+ * setAffineTrans(null) (FigureLayout.java:69), without keeping an object
+ * alive just to say "no transform".
+ */
 NJFN(mascot_fl_xf)
 {
     m3_set_ref(vm, NJ_THIS(args), "_xf", "L" NJ_C_XF ";", NJ_ARG_REF(args, 0));
     return NJ_OK;
 }
 
+/*
+ * getAffineTrans(): allocate the identity matrix on first use, store it and
+ * hand out that same object afterwards.  The reference stores an
+ * AffineTrans[] and returns affineArray[0], so callers can mutate the matrix
+ * and have the renderer see the change; returning a fresh object every time
+ * would break that contract.  On allocation failure nj_object_new() has
+ * already raised OutOfMemoryError and we return NJ_ERR.
+ */
+NJFN(mascot_fl_get_xf)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref xf = m3_ref(vm, self, "_xf", "L" NJ_C_XF ";");
+
+    if (!xf) {
+        xf = nj_object_new(vm, NJ_C_XF);
+        if (!xf) {
+            return NJ_ERR;      /* nj_object_new() raised OutOfMemoryError */
+        }
+        m3_set(vm, xf, "m00", M3_ONE);
+        m3_set(vm, xf, "m11", M3_ONE);
+        m3_set(vm, xf, "m22", M3_ONE);
+        m3_set_ref(vm, self, "_xf", "L" NJ_C_XF ";", xf);
+    }
+    ret->r = xf;
+    return NJ_OK;
+}
+
+/*
+ * setPerspective(zNear, zFar, angle), in that order.
+ *
+ * The old code stored arg0 as the projection scale, arg1 as near and arg2 as
+ * far, so the near plane was the game's near value shifted by one - exactly
+ * the kind of "looks almost right" bug a wrong picture hides.  The reference
+ * validates the triple and raises IllegalArgumentException; a bad plane would
+ * otherwise discard every primitive and look like an empty scene.
+ */
 NJFN(mascot_fl_perspective)
 {
     nj_ref self = NJ_THIS(args);
+    nj_s4 near_z = NJ_ARG_INT(args, 0);
+    nj_s4 far_z = NJ_ARG_INT(args, 1);
+    nj_s4 angle = NJ_ARG_INT(args, 2);
 
-    m3_set(vm, self, "_p", NJ_ARG_INT(args, 0));
-    m3_set(vm, self, "_near", NJ_ARG_INT(args, 1));
-    m3_set(vm, self, "_far", NJ_ARG_INT(args, 2));
+    if (near_z >= far_z || near_z < 1 || far_z > 32767 ||
+        angle < 1 || angle > 2047) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "setPerspective: invalid near/far/angle");
+    }
+    m3_set(vm, self, "_near", near_z);
+    m3_set(vm, self, "_far", far_z);
+    /* Mode in the high byte, angle in the low 11 bits: the validator above
+     * keeps angle inside 1..2047, so the two never collide. */
+    m3_set(vm, self, "_p",
+           (nj_s4)(M3_PROJ_FOV | ((nj_u4)angle & M3_ANGLE_MASK)));
     return NJ_OK;
 }
 
@@ -785,12 +922,14 @@ NJFN(mascot_fl_center)
     return NJ_OK;
 }
 
+/* setScale(x,y) also switches the layout back to parallel projection. */
 NJFN(mascot_fl_scale)
 {
     nj_ref self = NJ_THIS(args);
 
     m3_set(vm, self, "_sx", NJ_ARG_INT(args, 0));
     m3_set(vm, self, "_sy", NJ_ARG_INT(args, 1));
+    m3_set(vm, self, "_p", (nj_s4)M3_PROJ_PARALLEL);
     return NJ_OK;
 }
 
@@ -961,167 +1100,620 @@ NJFN(mascot_g3d_release)
 }
 
 /* ------------------------------------------------------------------ */
-/* Graphics3D: the rasterizer                                         */
+/* Graphics3D: the primitive rasterizer                               */
 /* ------------------------------------------------------------------ */
 /*
- * Mascot Capsule hands the vertices over directly: renderPrimitives receives
- * the coordinate arrays and a FigureLayout that carries both the affine
- * transform and the projection.  There is no scene graph to walk and no .m3g
- * container to parse, which is why the Micro3D rasterizer is written before
- * the JSR 184 one.
+ * Graphics3D.renderPrimitives is the whole draw path of this API in one call.
+ * The real argument list is measured from the corpus and matches javap:
  *
- * It transforms each vertex by the layout's affine matrix, projects it with
- * the layout's perspective and fills the resulting triangles through the
- * Graphics the game bound.  Everything is 4096 fixed point, which is what the
- * API uses and what xf_read already returns.
+ *   arg 0 texture             arg 6 numPrimitives
+ *   arg 1 x                   arg 7 vertexCoords[]: interleaved x,y,z ints
+ *   arg 2 y                   arg 8 normals[]       (may be null)
+ *   arg 3 FigureLayout        arg 9 textureCoords[] (may be null)
+ *   arg 4 Effect3D            arg10 colors[]        (may be null)
+ *   arg 5 command
  *
- * What it does not do, said plainly rather than hidden:
- *   - no texture sampling.  The games' Texture data is a raw bitmap whose
- *     layout is not documented and is not in a format this runtime reads, so
- *     every triangle is flat shaded from the effect's light intensities.
- *   - no depth buffer.  Triangles are painted in submission order, so a scene
- *     that relies on z ordering will look wrong where it overlaps itself.
- *   - renderFigure is still a no-op: a Figure carries posture tables and
- *     textures but this runtime has no model geometry for it.
- * With those limits it is still a real projection of the real vertices, so a
- * game's 3D content appears where before there was nothing at all.
+ * `count` is the number of PRIMITIVES, not the number of vertices: a quad
+ * consumes four vertices and a triangle three.  The old code read y as the
+ * count, three separate coordinate arrays as vertices, and treated the
+ * result as a triangle strip - none of which is this ABI.
+ *
+ * The command word carries the primitive type in bits 24..31, the
+ * per-primitive data flags in bits 8..13 (texture coordinates, colour type,
+ * normal type) and the material blend bits in 5..6.
+ *
+ * Everything below is integer like the rest of this API.  Each vertex is
+ * transformed by the layout's affine matrix (12.12 fixed point) and then
+ * projected into the bound Graphics' framebuffer:
+ *
+ *   parallel (setScale):      px = ((x * scaleX) >> 12) + centreX
+ *   perspective (setPerspective): px = (x * projScaleX) / z + centreX
+ *
+ * where centreX/Y = the layout's centre plus the x/y arguments of this call.
+ * The layout default centre is (0,0); nothing here invents a screen centre.
+ * For the FOV form projScaleX = fbWidth * 0.5 / tan(angle * PI / 4096), and
+ * primitives behind the eye are clipped against the near/far planes instead
+ * of being divided by a clamped z (that clamp turned a vertex behind the
+ * camera into a huge wrong triangle).
+ *
+ * What the picture is and what it is not, said plainly:
+ *   - solid triangles, quads, lines and points are implemented and clipped
+ *     against the near and far planes;
+ *   - colours come from the command flags, never invented: an untextured
+ *     primitive with no colour data draws nothing (the reference returns
+ *     too), an invalid colour or normal type raises IllegalArgumentException;
+ *   - textured and point-sprite primitives are validated, then draw nothing:
+ *     the runtime has no Micro3D texture sampler (the Texture bytes are a raw
+ *     bitmap format this project cannot read yet), and painting them with an
+ *     invented colour would be a wrong picture, not a partial one;
+ *   - lighting is not implemented.  When a command asks for it (normal data
+ *     present, PATTR_LIGHTING set and the effect carries a Light) the call
+ *     draws nothing, because painting the flat command colour would be a
+ *     wrong picture; without that flag normals are accepted and ignored, as
+ *     the reference does for unlit materials;
+ *   - HALF blend is approximated with 128/256 source-over alpha (the
+ *     reference rounds exactly half of each channel; 128/255 is close but
+ *     not bit-identical, so tests assert the approximation explicitly);
+ *     ADD and SUB have no equivalent in nj_gfx, so submissions that ask for
+ *     them under an effect with semi-transparency enabled draw nothing -
+ *     drawing them opaque would be a wrong picture reported as supported;
+ *   - primitives are painted in framebuffer coordinates: the bound
+ *     Graphics' translate and clip are ignored (the reference renders into
+ *     its own framebuffer, not into Java Graphics user space), and there is
+ *     no depth buffer - primitives are painted in submission order, which
+ *     matches the reference's order for the single-pass calls the corpus
+ *     makes.
+ * renderFigure stays a no-op: Figure carries model bytes whose format this
+ * runtime does not parse, so there is no geometry to draw for it.
  */
-#define M3_ONE 4096
 
-static nj_ref m3_get_ref(nj_vm *vm, nj_ref o, const char *cls,
-                         const char *name, const char *desc)
+/* Primitive type, from the command word's top byte. */
+#define M3_PRIM_MASK     0xFF000000u
+#define M3_PRIM_POINTS   0x01000000u
+#define M3_PRIM_LINES    0x02000000u
+#define M3_PRIM_TRIS     0x03000000u
+#define M3_PRIM_QUADS    0x04000000u
+#define M3_PRIM_SPRITES  0x05000000u
+
+/* Per-primitive data flags. */
+#define M3_PDATA_UV          0x3000
+#define M3_PDATA_COLOR_MASK  0x0C00
+#define M3_PDATA_COLOR_CMD   0x0400
+#define M3_PDATA_COLOR_FACE  0x0800
+#define M3_PDATA_COLOR_BAD   0x0C00
+#define M3_PDATA_NORMAL_MASK 0x0300
+#define M3_PDATA_NORMAL_BAD  0x0100
+#define M3_PATTR_LIGHTING    0x0001
+#define M3_PATTR_BLEND_MASK  0x0060
+#define M3_PATTR_BLEND_HALF  0x0020
+#define M3_PATTR_BLEND_ADD   0x0040
+#define M3_PATTR_BLEND_SUB   0x0060
+
+/* A triangle clipped by the near plane has at most 4 vertices, and clipping
+ * that result by the far plane adds at most one more, so 5 slots suffice. */
+#define M3_MAX_CLIP_VERTS 5
+
+typedef struct m3_vtx {
+    nj_s8 x;
+    nj_s8 y;
+    nj_s8 z;
+} m3_vtx;
+
+/* Read a reference field through the receiver's own class (see m3_field). */
+static nj_ref m3_ref(nj_vm *vm, nj_ref o, const char *name, const char *desc)
 {
-    const nj_field *f;
+    nj_field *f = m3_field(vm, o, name, desc);
 
-    if (!o) {
-        return 0;
-    }
-    f = nj_field_lookup(vm, cls, name, desc, 0);
     return f ? nj_field_read_ref(vm, o, f) : 0;
 }
 
-/* Light intensities are 0..4096; a light nobody configured shows mid grey
- * rather than black, because black is indistinguishable from "the projection
- * put it off screen". */
-static nj_u4 m3_shade(nj_vm *vm, nj_ref fx)
+/*
+ * Java's >> on a signed value is an arithmetic shift (floor division by
+ * 4096).  The C standard leaves right shift of a negative value
+ * implementation defined, so spell out the floor; the form below never
+ * negates a value that could be INT64_MIN, so it is defined for every input
+ * (the accumulator reaches that range with extreme int matrices).
+ */
+static nj_s8 m3_shr12(nj_s8 v)
 {
-    nj_ref lig;
-    nj_s4 v;
-
-    lig = m3_get_ref(vm, fx, NJ_C_FX, "_lig", "L" NJ_C_LIG ";");
-    if (!lig) {
-        return 0xC0C0C0u;
-    }
-    v = m3_get(vm, lig, "_amb") + m3_get(vm, lig, "_dif");
-    if (v <= 0) {
-        return 0xC0C0C0u;
-    }
-    if (v > M3_ONE) {
-        v = M3_ONE;
-    }
-    v = v * 255 / M3_ONE;
-    return ((nj_u4)v << 16) | ((nj_u4)v << 8) | (nj_u4)v;
+    return v >= 0 ? (v / M3_ONE) : -1 - (-(v + 1) / M3_ONE);
 }
 
-static void m3_project(const nj_s4 *m, nj_s4 kx, nj_s4 ky, nj_s4 cx, nj_s4 cy,
-                       nj_s4 x, nj_s4 y, nj_s4 z, nj_s4 *ox, nj_s4 *oy)
+/* m[0]*v[0] + m[1]*v[1] + m[2]*v[2] + 2048 for the 12.12 transform row.
+ * The reference evaluates this in Java int: every product and the sum wrap
+ * modulo 2^32.  Accumulating in nj_u4 reproduces exactly those bits (defined
+ * in C) and keeps the transform output inside int32, so the later clip and
+ * projection products cannot overflow int64.  Do not widen this to 64 bits:
+ * that would disagree with the reference for extreme legal inputs. */
+static nj_s4 m3_dot12(const nj_s4 *m, const nj_s4 *v)
 {
-    nj_s8 vx = ((nj_s8)m[0] * x + (nj_s8)m[1] * y + (nj_s8)m[2] * z) / M3_ONE + m[3];
-    nj_s8 vy = ((nj_s8)m[4] * x + (nj_s8)m[5] * y + (nj_s8)m[6] * z) / M3_ONE + m[7];
-    nj_s8 vz = ((nj_s8)m[8] * x + (nj_s8)m[9] * y + (nj_s8)m[10] * z) / M3_ONE + m[11];
+    nj_u4 acc = (nj_u4)m[0] * (nj_u4)v[0];
 
-    if (vz < 1) {
-        vz = 1;                     /* at or behind the eye: clamp, never divide by zero */
+    acc += (nj_u4)m[1] * (nj_u4)v[1];
+    acc += (nj_u4)m[2] * (nj_u4)v[2];
+    acc += 2048u;
+    return (nj_s4)acc;
+}
+
+/* Narrow to the nj_gfx coordinate type without wrapping a malformed vertex;
+ * nj_gfx clamps again internally before any 64-bit product. */
+static nj_s4 m3_s4_of(nj_s8 v)
+{
+    if (v > 2147483647LL) {
+        return 2147483647;
     }
-    *ox = (nj_s4)(cx + (nj_s8)kx * vx / vz);
-    *oy = (nj_s4)(cy + (nj_s8)ky * vy / vz);
+    if (v < -2147483647LL - 1) {
+        return -2147483647 - 1;
+    }
+    return (nj_s4)v;
+}
+
+/* Apply the 4x3 affine matrix to one vertex, with the reference's +2048/>>12
+ * rounding and then the translation column. */
+/* The Java reference adds the translation column in int arithmetic, so that
+ * addition wraps modulo 2^32 too; the result still fits int32 and is stored
+ * widened in m3_vtx to keep the clip/project helpers untouched. */
+static void m3_xform(const nj_s4 *m, const nj_s4 *v, m3_vtx *out)
+{
+    out->x = (nj_s4)((nj_u4)m3_shr12(m3_dot12(m, v)) + (nj_u4)m[3]);
+    out->y = (nj_s4)((nj_u4)m3_shr12(m3_dot12(m + 4, v)) + (nj_u4)m[7]);
+    out->z = (nj_s4)((nj_u4)m3_shr12(m3_dot12(m + 8, v)) + (nj_u4)m[11]);
+}
+
+/* Crossing of a->b with z == plane, interpolated with the same 12-bit fixed
+ * point fraction the reference line clipper uses. */
+static void m3_clip_cross(const m3_vtx *a, const m3_vtx *b, nj_s8 plane,
+                          m3_vtx *out)
+{
+    nj_s8 dz = b->z - a->z;
+    nj_s8 frac = (dz != 0) ? (((plane - a->z) * M3_ONE) / dz) : 0;
+
+    out->x = a->x + m3_shr12((b->x - a->x) * frac);
+    out->y = a->y + m3_shr12((b->y - a->y) * frac);
+    out->z = plane;
+}
+
+/* Sutherland-Hodgman against one z plane.  keep_ge keeps z >= plane,
+ * otherwise z <= plane.  Returns the number of output vertices; the caller
+ * passes a buffer big enough for n + 1 entries. */
+static int m3_clip_plane(const m3_vtx *in, int n, nj_s8 plane, int keep_ge,
+                         m3_vtx *out)
+{
+    int i, on = 0;
+
+    for (i = 0; i < n; i++) {
+        const m3_vtx *a = &in[i];
+        const m3_vtx *b = &in[(i + 1) % n];
+        int a_in = keep_ge ? (a->z >= plane) : (a->z <= plane);
+        int b_in = keep_ge ? (b->z >= plane) : (b->z <= plane);
+
+        if (a_in) {
+            out[on++] = *a;
+        }
+        if (a_in != b_in) {
+            m3_clip_cross(a, b, plane, &out[on++]);
+        }
+    }
+    return on;
+}
+
+/* Clip one eye-space triangle against the near then the far plane, taking
+ * the vertices by pointer (no input copy).  A triangle clipped by one plane
+ * has at most 4 vertices, so 5 output slots cover both planes.  Returns 0
+ * when nothing is left, otherwise the polygon vertex count (3..5). */
+static int m3_clip3(const m3_vtx *a, const m3_vtx *b, const m3_vtx *c,
+                    nj_s8 plane, int keep_ge, m3_vtx out[4])
+{
+    const m3_vtx *in[3];
+    int i, on = 0;
+
+    in[0] = a;
+    in[1] = b;
+    in[2] = c;
+    for (i = 0; i < 3; i++) {
+        const m3_vtx *p = in[i];
+        const m3_vtx *q = in[(i + 1) % 3];
+        int p_in = keep_ge ? (p->z >= plane) : (p->z <= plane);
+        int q_in = keep_ge ? (q->z >= plane) : (q->z <= plane);
+
+        if (p_in) {
+            out[on++] = *p;
+        }
+        if (p_in != q_in) {
+            m3_clip_cross(p, q, plane, &out[on++]);
+        }
+    }
+    return on;
+}
+
+static int m3_clip_tri(const m3_vtx *a, const m3_vtx *b, const m3_vtx *c,
+                       nj_s8 near_z, nj_s8 far_z,
+                       m3_vtx out[M3_MAX_CLIP_VERTS])
+{
+    m3_vtx mid[4];
+    int n = m3_clip3(a, b, c, near_z, 1, mid);
+
+    if (n < 3) {
+        return 0;
+    }
+    return m3_clip_plane(mid, n, far_z, 0, out);
+}
+
+/* Clip one line segment against the near and far planes in eye space.
+ * Returns 0 when the whole segment is outside. */
+static int m3_clip_line(m3_vtx *a, m3_vtx *b, nj_s8 near_z, nj_s8 far_z)
+{
+    m3_vtx t;
+
+    if (a->z < near_z && b->z < near_z) {
+        return 0;
+    }
+    if (a->z > far_z && b->z > far_z) {
+        return 0;
+    }
+    if (a->z < near_z) {
+        m3_clip_cross(a, b, near_z, &t);
+        *a = t;
+    } else if (b->z < near_z) {
+        m3_clip_cross(b, a, near_z, &t);
+        *b = t;
+    }
+    if (a->z > far_z) {
+        m3_clip_cross(a, b, far_z, &t);
+        *a = t;
+    } else if (b->z > far_z) {
+        m3_clip_cross(b, a, far_z, &t);
+        *b = t;
+    }
+    return 1;
+}
+
+/* Project one transformed vertex to framebuffer coordinates. */
+static void m3_project(const m3_vtx *v, int perspective, nj_s4 kx, nj_s4 ky,
+                       nj_s4 cx, nj_s4 cy, nj_s4 *ox, nj_s4 *oy)
+{
+    nj_s8 px, py;
+
+    if (perspective) {
+        px = (v->x * (nj_s8)kx) / v->z + cx;
+        py = (v->y * (nj_s8)ky) / v->z + cy;
+    } else {
+        px = m3_shr12(v->x * (nj_s8)kx) + cx;
+        py = m3_shr12(v->y * (nj_s8)ky) + cy;
+    }
+    *ox = m3_s4_of(px);
+    *oy = m3_s4_of(py);
+}
+
+/* Project and fill one already-clipped triangle. */
+static M3_NOINLINE void m3_fill_tri(nj_gfx *g, const m3_vtx *a,
+                        const m3_vtx *b, const m3_vtx *c, int perspective,
+                        nj_s4 kx, nj_s4 ky, nj_s4 cx, nj_s4 cy)
+{
+    nj_s4 x1, y1, x2, y2, x3, y3;
+
+    m3_project(a, perspective, kx, ky, cx, cy, &x1, &y1);
+    m3_project(b, perspective, kx, ky, cx, cy, &x2, &y2);
+    m3_project(c, perspective, kx, ky, cx, cy, &x3, &y3);
+    nj_gfx_triangle(g, x1, y1, x2, y2, x3, y3, 1);
+}
+
+/* Draw one transformed triangle in perspective mode, clipping it first.
+ * Each triangle is clipped on its own so a quad keeps the reference's
+ * (0,1,3)/(1,2,3) split even when part of it crosses a clip plane; clipping
+ * the quad as one polygon and fanning the result would silently move the
+ * diagonal (and show with HALF blend).  Returns the number of triangles
+ * emitted (0 when the triangle is entirely outside the view volume). */
+static int m3_draw_clipped_tri(nj_gfx *g, const m3_vtx *a, const m3_vtx *b,
+                               const m3_vtx *c, nj_s8 near_z, nj_s8 far_z,
+                               nj_s4 kx, nj_s4 ky, nj_s4 cx, nj_s4 cy)
+{
+    m3_vtx cut[M3_MAX_CLIP_VERTS];
+    int n = m3_clip_tri(a, b, c, near_z, far_z, cut);
+    int j;
+
+    for (j = 0; j + 2 < n; j++) {
+        m3_fill_tri(g, &cut[0], &cut[j + 1], &cut[j + 2], 1, kx, ky, cx, cy);
+    }
+    return n >= 3 ? n - 2 : 0;
+}
+
+/* Validate that `a` is an int[] with at least `need` elements. */
+static int m3_int_array_ok(nj_ref a, nj_s4 need)
+{
+    return a && a->kind == NJ_OBJ_ARRAY && a->aflags == NJ_ARRAY_T_INT &&
+           (nj_s4)a->length >= need;
 }
 
 NJFN(mascot_g3d_renderPrimitives)
 {
     nj_ref self = NJ_THIS(args);
-    nj_ref g, layout, fx, xf, xa, ya, za;
-    nj_s4 m[12];
-    nj_s4 p, sx, sy, cx, cy, kx, ky, count, i;
-    nj_u4 colour;
-    nj_value r;
+    nj_ref g, layout, fx, texture, verts, uvs, colors, xf;
+    nj_s4 m[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    nj_s4 command, count, prim, color_type, vtx_per, i;
+    nj_s4 px, py, cx, cy, sx, sy, near_z, far_z, angle;
+    nj_u4 proj;
+    nj_s4 kx = 0, ky = 0;
+    int perspective = 0;
+    int need_uv, blend = 0, semi, bm;
+    nj_u4 color = 0u;
+    const nj_s4 *vp;
+    const nj_s4 *cp = NULL;
+    nj_gfx gfx;
+    nj_surface scratch;
+    nj_s4 fbw, fbh;
 
-    g = m3_get_ref(vm, self, NJ_C_G3D, "_g", "Ljavax/microedition/lcdui/Graphics;");
-    if (!g) {
-        return NJ_OK;               /* nothing bound: draw nothing, quietly */
-    }
+    g = m3_ref(vm, self, "_g", "Ljavax/microedition/lcdui/Graphics;");
+    texture = NJ_ARG_REF(args, 0);
+    px = NJ_ARG_INT(args, 1);
+    py = NJ_ARG_INT(args, 2);
     layout = NJ_ARG_REF(args, 3);
     fx = NJ_ARG_REF(args, 4);
-    count = NJ_ARG_INT(args, 2);
-    xa = NJ_ARG_REF(args, 7);
-    ya = NJ_ARG_REF(args, 8);
-    za = NJ_ARG_REF(args, 9);
-    if (!layout || !xa || !ya || !za || count < 3) {
+    command = NJ_ARG_INT(args, 5);
+    count = NJ_ARG_INT(args, 6);
+    verts = NJ_ARG_REF(args, 7);
+    uvs = NJ_ARG_REF(args, 9);
+    colors = NJ_ARG_REF(args, 10);
+
+    /* Reference order: required objects, count, reserved command bits, then
+     * "is anything bound"; the per-flag array checks come after that. */
+    if (!layout || !fx || !verts) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "renderPrimitives: layout, effect and vertexCoords are required");
+    }
+    if (count <= 0 || count > 255) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "renderPrimitives: numPrimitives is out of range");
+    }
+    if ((command & 0x00FF0000) != 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "renderPrimitives: reserved command bits are set");
+    }
+    if (!g) {
+        return nj_throw(vm, "java/lang/IllegalStateException",
+                        "renderPrimitives: no Graphics is bound");
+    }
+
+    prim = command & M3_PRIM_MASK;
+    need_uv = ((command & M3_PDATA_UV) != 0) || (prim == M3_PRIM_SPRITES);
+
+    if (need_uv && (!texture || !uvs)) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "renderPrimitives: texture data is required for this command");
+    }
+    if (((command & M3_PDATA_NORMAL_MASK) != 0) && !NJ_ARG_REF(args, 8)) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "renderPrimitives: normals are required for this command");
+    }
+    if (((command & M3_PDATA_COLOR_MASK) == M3_PDATA_COLOR_FACE) && !colors) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "renderPrimitives: per-face colours are required for this command");
+    }
+
+    switch (prim) {
+    case M3_PRIM_POINTS:  vtx_per = 1; break;
+    case M3_PRIM_LINES:   vtx_per = 2; break;
+    case M3_PRIM_TRIS:    vtx_per = 3; break;
+    case M3_PRIM_QUADS:   vtx_per = 4; break;
+    case M3_PRIM_SPRITES: vtx_per = 1; break;
+    default:
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "renderPrimitives: unknown primitive type");
+    }
+
+    /* Interleaved x,y,z per vertex, count primitives.  A caller that hands
+     * over a short array gets the same exception the reference's int[]
+     * indexing would have raised. */
+    if (!m3_int_array_ok(verts, count * vtx_per * 3)) {
+        return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException",
+                        "renderPrimitives: vertexCoords is too short");
+    }
+
+    /* Texture coordinates win over colours, exactly as in the reference. */
+    color_type = need_uv ? 0 : (command & M3_PDATA_COLOR_MASK);
+
+    if (need_uv) {
+        /*
+         * The reference samples the Texture here.  This runtime cannot: the
+         * texture data is a raw Micro3D bitmap whose layout is not read by
+         * this project.  Validate the buffers a renderer would index (so a
+         * malformed call still fails the same way), then draw nothing rather
+         * than painting an invented colour.
+         */
+        if (!m3_int_array_ok(uvs, count * vtx_per * 2)) {
+            return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException",
+                            "renderPrimitives: textureCoords is too short");
+        }
+        (void)texture;
         return NJ_OK;
     }
 
-    for (i = 0; i < 12; i++) {
-        m[i] = (i % 4 == 3) ? 0 : ((i / 4 == i % 4) ? M3_ONE : 0);
+    if (color_type == M3_PDATA_COLOR_BAD) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "renderPrimitives: invalid colour data type");
     }
-    xf = m3_get_ref(vm, layout, NJ_C_FL, "_xf", "L" NJ_C_XF ";");
+    if ((prim == M3_PRIM_TRIS || prim == M3_PRIM_QUADS) &&
+        (command & M3_PDATA_NORMAL_MASK) == M3_PDATA_NORMAL_BAD) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "renderPrimitives: invalid normal data type");
+    }
+    if (color_type == 0) {
+        return NJ_OK;               /* nothing to colour: reference draws nothing */
+    }
+    if (color_type == M3_PDATA_COLOR_CMD) {
+        if (!m3_int_array_ok(colors, 1)) {
+            return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException",
+                            "renderPrimitives: colors is too short");
+        }
+    } else if (color_type != M3_PDATA_COLOR_FACE) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "renderPrimitives: invalid colour data type");
+    } else if (!m3_int_array_ok(colors, count)) {
+        return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException",
+                        "renderPrimitives: per-face colors is too short");
+    }
+    /* Lighting is not implemented.  The reference only applies it when the
+     * command carries normal data, PATTR_LIGHTING is set and the effect has
+     * a light; in that case the honest result is no picture, not the flat
+     * command colour pretending to be a lit surface.  Commands without that
+     * combination behave exactly like unlit materials in the reference. */
+    if ((command & M3_PATTR_LIGHTING) != 0 &&
+        (command & M3_PDATA_NORMAL_MASK) != 0 &&
+        m3_ref(vm, fx, "_lig", "L" NJ_C_LIG ";") != 0) {
+        return NJ_OK;
+    }
+
+    cp = (const nj_s4 *)nj_array_data(colors);
+    vp = (const nj_s4 *)nj_array_data(verts);
+
+    /* ---- figure layout: affine transform, projection, centre ---- */
+    xf = m3_ref(vm, layout, "_xf", "L" NJ_C_XF ";");
     if (xf) {
         xf_read(vm, xf, m);
+    } else {
+        /* No matrix stored means identity: the layout allocates nothing on
+         * construction, and setAffineTrans(null) is a reset to this. */
+        xf_identity(m);
     }
-
-    p = m3_get(vm, layout, "_p");
     sx = m3_get(vm, layout, "_sx");
     sy = m3_get(vm, layout, "_sy");
-    cx = m3_get(vm, layout, "_cx");
-    cy = m3_get(vm, layout, "_cy");
-    if (p == 0) {
-        p = M3_ONE;
-    }
-    if (sx == 0) {
-        sx = M3_ONE;
-    }
-    if (sy == 0) {
-        sy = M3_ONE;
-    }
-    if (cx == 0 && cy == 0) {
-        /* A title that never called setCenter still means the middle of the
-         * screen.  Without this every model lands in the top-left corner,
-         * which looks like a projection bug rather than a missing default. */
-        if (nj_call(vm, g, "javax/microedition/lcdui/Graphics", "getWidth", "()I", NULL, &r) == NJ_OK) {
-            cx = r.i / 2;
-        }
-        if (nj_call(vm, g, "javax/microedition/lcdui/Graphics", "getHeight", "()I", NULL, &r) == NJ_OK) {
-            cy = r.i / 2;
-        }
-    }
-    kx = (nj_s4)(((nj_s8)p * sx) / M3_ONE);
-    ky = (nj_s4)(((nj_s8)p * sy) / M3_ONE);
-    colour = m3_shade(vm, fx);
+    near_z = m3_get(vm, layout, "_near");
+    far_z = m3_get(vm, layout, "_far");
+    proj = (nj_u4)m3_get(vm, layout, "_p");
+    angle = (nj_s4)(proj & M3_ANGLE_MASK);
+    /* Java int addition wraps; doing this in signed C would be undefined for
+     * a caller that sets an extreme centre.  The projection below then culls
+     * the result out of the framebuffer like any other off-screen point. */
+    cx = (nj_s4)((nj_u4)m3_get(vm, layout, "_cx") + (nj_u4)px);
+    cy = (nj_s4)((nj_u4)m3_get(vm, layout, "_cy") + (nj_u4)py);
 
-    for (i = 0; i + 2 < count; i++) {
-        nj_s4 x1, y1, x2, y2, x3, y3;
+    /* ---- one Graphics load for the whole batch: no per-triangle field
+     *      traffic, and nothing is stored back, so the caller's Graphics
+     *      colour/position state does not change. ---- */
+    if (!nj_midp_gfx_load(vm, g, &gfx, &scratch)) {
+        return NJ_OK;               /* not a usable Graphics */
+    }
+    fbw = gfx.surf ? (nj_s4)gfx.surf->width : 0;
+    fbh = gfx.surf ? (nj_s4)gfx.surf->height : 0;
+    if (fbw <= 0 || fbh <= 0) {
+        return NJ_OK;
+    }
+    /* The reference paints framebuffer coordinates, not Graphics user space:
+     * the loaded translate is already folded into the clip, so drop it from
+     * this local copy (it is never stored back). */
+    gfx.translate_x = 0;
+    gfx.translate_y = 0;
+    /* Micro3D renders into its own framebuffer: Java Graphics setClip() must
+     * not crop the 3D picture, so the batch draws against the whole surface.
+     * (The load above read the clip; it is replaced here in the local copy
+     * only and never stored back.) */
+    nj_gfx_set_clip(&gfx, 0, 0, (int)fbw, (int)fbh);
 
-        /* The casts are the point: i and count are nj_s4, an array length is
-           nj_u4, and mixing them is what -Wsign-compare is for.  A Java array
-           cannot reach INT_MAX here. */
-        if (i + 2 >= (nj_s4)xa->length || i + 2 >= (nj_s4)ya->length ||
-            i + 2 >= (nj_s4)za->length) {
-            break;                  /* the arrays are shorter than the count says */
+    if ((proj & M3_PROJ_MODE_MASK) == (M3_PROJ_FOV & M3_PROJ_MODE_MASK)) {
+        double scale;
+
+        if (near_z >= far_z || near_z < 1 || far_z > 32767 ||
+            angle < 1 || angle > 2047) {
+            return NJ_OK;           /* no valid perspective to project with */
         }
-        m3_project(m, kx, ky, cx, cy, ((nj_s4 *)xa->u.bytes)[i],
-                   ((nj_s4 *)ya->u.bytes)[i], ((nj_s4 *)za->u.bytes)[i], &x1, &y1);
-        m3_project(m, kx, ky, cx, cy, ((nj_s4 *)xa->u.bytes)[i + 1],
-                   ((nj_s4 *)ya->u.bytes)[i + 1], ((nj_s4 *)za->u.bytes)[i + 1], &x2, &y2);
-        m3_project(m, kx, ky, cx, cy, ((nj_s4 *)xa->u.bytes)[i + 2],
-                   ((nj_s4 *)ya->u.bytes)[i + 2], ((nj_s4 *)za->u.bytes)[i + 2], &x3, &y3);
-        /*
-         * Count the triangle as soon as it has been PROJECTED, not when it has
-         * been filled.  Counting only successful fills hid the exact thing this
-         * instrument exists to detect: a rasterizer that runs every frame but
-         * puts every triangle off-screen reads as "tris=0", which is
-         * indistinguishable from a rasterizer that never runs at all.
-         */
-        vm->tris++;
-        (void)nj_midp_gfx_triangle(vm, g, x1, y1, x2, y2, x3, y3, colour);
+        scale = 0.5 / tan(((double)angle) / 4096.0 * 3.14159265358979323846);
+        kx = (nj_s4)(((double)fbw) * scale);
+        ky = kx;
+        perspective = 1;
+    } else {
+        /* Parallel projection: the layout scale IS the 12.12 multiplier. */
+        kx = sx;
+        ky = sy;
+    }
+
+    /* Effect transparency only matters for the material blend bits. */
+    semi = m3_get(vm, fx, "_semi") != 0;
+    bm = semi ? (command & M3_PATTR_BLEND_MASK) : 0;
+    if (bm == M3_PATTR_BLEND_ADD || bm == M3_PATTR_BLEND_SUB) {
+        /* nj_gfx has no additive/subtractive blend.  The reference would
+         * draw these primitives, so the honest result is no picture, not an
+         * opaque approximation that claims support it does not have. */
+        return NJ_OK;
+    }
+    if (bm == M3_PATTR_BLEND_HALF) {
+        blend = 1;
+        nj_gfx_set_blend(&gfx, NJ_BLEND_SRC_OVER);
+    } else {
+        nj_gfx_set_blend(&gfx, NJ_BLEND_NONE);
+    }
+
+    for (i = 0; i < count; i++) {
+        const nj_s4 *base = vp + i * vtx_per * 3;
+        m3_vtx v[4];
+        int j;
+
+        if (color_type == M3_PDATA_COLOR_CMD) {
+            color = 0xFF000000u | (((nj_u4)cp[0]) & 0x00FFFFFFu);
+        } else {
+            color = 0xFF000000u | (((nj_u4)cp[i]) & 0x00FFFFFFu);
+        }
+        if (blend) {
+            color = (color & 0x00FFFFFFu) | 0x80000000u;
+        }
+        nj_gfx_set_color(&gfx, color);
+
+        if (prim == M3_PRIM_POINTS) {
+            nj_s4 x, y;
+
+            m3_xform(m, base, &v[0]);
+            if (perspective &&
+                (v[0].z < near_z || v[0].z > far_z)) {
+                continue;
+            }
+            m3_project(&v[0], perspective, kx, ky, cx, cy, &x, &y);
+            if (x < 0 || x >= fbw || y < 0 || y >= fbh) {
+                continue;
+            }
+            nj_gfx_pixel(&gfx, x, y);
+        } else if (prim == M3_PRIM_LINES) {
+            nj_s4 x1, y1, x2, y2;
+
+            m3_xform(m, base, &v[0]);
+            m3_xform(m, base + 3, &v[1]);
+            if (perspective && !m3_clip_line(&v[0], &v[1], near_z, far_z)) {
+                continue;
+            }
+            m3_project(&v[0], perspective, kx, ky, cx, cy, &x1, &y1);
+            m3_project(&v[1], perspective, kx, ky, cx, cy, &x2, &y2);
+            /* Reference culls a segment only when BOTH endpoints are outside
+             * the same framebuffer bound; nj_gfx clips the rest. */
+            if ((x1 < 0 && x2 < 0) || (x1 >= fbw && x2 >= fbw) ||
+                (y1 < 0 && y2 < 0) || (y1 >= fbh && y2 >= fbh)) {
+                continue;
+            }
+            nj_gfx_line(&gfx, x1, y1, x2, y2);
+        } else {
+            /* Triangles and quads.  A quad is two triangles with the
+             * reference's (0,1,3)/(1,2,3) split, not a triangle strip. */
+            for (j = 0; j < (int)vtx_per; j++) {
+                m3_xform(m, base + j * 3, &v[j]);
+            }
+            /* Quad split first, clip second: each of the reference's two
+             * triangles is clipped independently, never as one polygon. */
+            {
+                int nt = (vtx_per == 4) ? 2 : 1;
+                int t;
+
+                for (t = 0; t < nt; t++) {
+                    const m3_vtx *ta = &v[t == 0 ? 0 : 1];
+                    const m3_vtx *tb = &v[t == 0 ? 1 : 2];
+                    const m3_vtx *tc = &v[vtx_per == 4 ? 3 : 2];
+
+                    if (perspective) {
+                        vm->tris += (nj_u8)m3_draw_clipped_tri(
+                            &gfx, ta, tb, tc, near_z, far_z, kx, ky, cx, cy);
+                    } else {
+                        m3_fill_tri(&gfx, ta, tb, tc, 0, kx, ky, cx, cy);
+                        vm->tris++;
+                    }
+                }
+            }
+        }
     }
     return NJ_OK;
 }
@@ -1180,6 +1772,8 @@ const nj_native_entry nj_lib_mascot_table[] = {
 
     { NJ_C_U3D, "<init>", "()V", mascot_noop },
     { NJ_C_U3D, "sqrt", "(I)I", mascot_u3d_sqrt },
+    { NJ_C_U3D, "sin", "(I)I", mascot_u3d_sin },
+    { NJ_C_U3D, "cos", "(I)I", mascot_u3d_cos },
 
     { NJ_C_FIG, "<init>", "()V", mascot_noop },
     { NJ_C_FIG, "<init>", "([B)V", mascot_fig_data },
@@ -1188,8 +1782,9 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_FIG, "setPosture", "(L" NJ_C_AT ";II)V", mascot_fig_posture },
     { NJ_C_FIG, "setLayout", "(L" NJ_C_FL ";)V", mascot_fig_layout },
 
-    { NJ_C_FL, "<init>", "()V", mascot_noop },
+    { NJ_C_FL, "<init>", "()V", mascot_fl_init },
     { NJ_C_FL, "setAffineTrans", "(L" NJ_C_XF ";)V", mascot_fl_xf },
+    { NJ_C_FL, "getAffineTrans", "()L" NJ_C_XF ";", mascot_fl_get_xf },
     { NJ_C_FL, "setPerspective", "(III)V", mascot_fl_perspective },
     { NJ_C_FL, "setCenter", "(II)V", mascot_fl_center },
     { NJ_C_FL, "setScale", "(II)V", mascot_fl_scale },

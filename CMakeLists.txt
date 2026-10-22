@@ -106,6 +106,7 @@ set(NJ_THREADED_DISPATCH 0 CACHE STRING "Use the computed-goto interpreter body 
 set(NJ_ENABLE_SUPERINSTR 1 CACHE STRING "Run fused bytecode pairs in one dispatch (no RAM cost)")
 set(NJ_ENABLE_JUMP_THREADING 1 CACHE STRING "Follow goto chains without re-dispatching")
 set(NJ_ENABLE_ENGINE 0 CACHE STRING "Pluggable execution engine / JIT interface (adds one pointer)")
+set(NJ_MASCOT_FAST_FIELDS 1 CACHE STRING "Use Micro3D receiver classes directly for field access (no cache)")
 
 # ---------------------------------------------------------------------
 # The runtime
@@ -212,6 +213,7 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_JUMP_THREADING=${NJ_ENABLE_JUMP_THREADING}
   NJ_ENABLE_ENGINE=${NJ_ENABLE_ENGINE}
   NJ_M3G_FAST_PATHS=${NJ_M3G_FAST_PATHS}
+  NJ_MASCOT_FAST_FIELDS=${NJ_MASCOT_FAST_FIELDS}
   NJ_ENABLE_FONT_CJK=${NJ_ENABLE_FONT_CJK}
   NJ_ENABLE_FONT_CJK_AA=${NJ_ENABLE_FONT_CJK_AA}
   NJ_ENABLE_PNG=${NJ_ENABLE_PNG}

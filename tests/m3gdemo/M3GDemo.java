@@ -258,8 +258,8 @@ public class M3GDemo extends MIDlet {
                 byte[] px = new byte[4 * 4 * 3];
                 Image2D img = new Image2D(Image2D.RGB, 4, 4, px);
                 check("a built image is not mutable", !img.isMutable());
-                Image2D mut = new Image2D(Image2D.RGB, 4, 4, null);
-                check("an image built from null is mutable", mut.isMutable());
+                Image2D mut = new Image2D(Image2D.RGB, 4, 4);
+                check("the size-only constructor builds a mutable image", mut.isMutable());
                 Texture2D t = new Texture2D(mut);
                 t.setBlendColor(0x00FF00);
                 check("the blend colour comes back", t.getBlendColor() == 0x00FF00);

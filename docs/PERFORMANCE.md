@@ -613,6 +613,143 @@ SHA-256 is `8d0a2a06250bbcb1ad1b20cf6ed018ea1281112da84723c998b4849bcefb66df`;
 candidate `filter/nj2me` is
 `d6d28bcdaba4ba240e678e26ba5e2dac5e23859f858a6d0d95d53915d96c95f7`.
 
+## Micro3D field access and trigonometry (2026-10-22)
+
+The next compatibility pass starts from `60a25d3`. Micro3D matrix and vector
+natives used the receiver's class name to look up its class again for every
+component. The receiver already points to that linked class. Calling the same
+field walker directly preserves inherited/shadowed-field lookup and removes
+repeated class-name hashing, without a cache or per-object storage.
+`NJ_MASCOT_FAST_FIELDS=1` selects this path; CMake and the config header both
+accept **0** for the general class-name path. The interpreter/JIT seam is
+unchanged by this work.
+
+There was also a correctness defect in rotations: the old sine approximation
+returned **-6144 instead of -4096 at -90 degrees**, quantised angles to whole
+degrees, and could overflow while forming cosine's phase at `INT_MAX`.
+A 1,025-entry unsigned-short quarter-wave table now supplies all 4,096 phases,
+with unsigned wrapping and reflection. It occupies **2,050 bytes of read-only
+constants**, does no runtime initialization and requires no floating-point
+runtime. The added `Util3D.sin(int)`/`cos(int)` APIs share it. A floating-point
+oracle checks every phase; rotations also cover negative and extreme integer
+arguments. The new math checks fail on the old implementation (8 failures) and
+pass on the corrected implementation (52/52 at this stage).
+
+### Isolated math measurements
+
+Release GCC 16.2.1, native module `-O3`, CPU 4, 12 measured runs per variant,
+forward/reverse order alternated, one warm-up excluded. The C harness exercises
+the public VM call bridge: 600,000 rotations alternating 0 and 90 degrees, then
+200,000 multiplications by a 90-degree rotation. The latter changes the matrix
+on every iteration and checks its expected sine/cosine components each time;
+rolling checksums also include the complete final matrix. These angles are
+correct on the old code too. Both checksums match in every arm (rotation
+6892164477519543683, multiplication 752192134875816851). This measures native
+API work, not game FPS or Java interpreter throughput. The earlier draft used
+an identity multiplier and a zero-valued checksum component; these replacement
+measurements use the stronger changing-matrix oracle.
+
+| Workload | Baseline CPU min / median (s) | Table + direct fields min / median (s) | Median time reduction |
+|---|---:|---:|---:|
+| Rotation | 0.233071 / 0.235290 | 0.119786 / 0.120692 | 48.71% |
+| Matrix multiplication | 0.222692 / 0.224923 | 0.106163 / 0.106482 | 52.66% |
+
+Attribution matters: the table **alone** slows this rotation workload by 8.18%
+(median 0.254529 s), and speeds multiplication by 0.46% (noise). It is retained
+for correct results, not claimed as a separate speed gain. The direct class
+lookup removes enough overhead to more than compensate. Heap used/peak is
+2,512/2,512 bytes in every measured arm; the optimization adds no writable
+globals, object fields, buffers or allocations.
+
+In isolated module objects, `.data` and `.bss` remain zero. Including the new
+math APIs, `.text` grows 3,241 bytes, read-only constants/strings 2,082 bytes,
+and relocation-read-only tables 96 bytes. GCC native frames for rotations and
+identity initialization change from 128 to 144 bytes; multiplication falls
+from 256 to 240 bytes. These are individual function frames, not a measurement
+of the whole call-chain stack. Tight targets can disable the direct-field
+optimization and should measure their own compiler's stack usage. API repairs
+elsewhere in this compatibility pass have separate state costs; these math
+figures do not claim the entire pass is RAM-neutral.
+
+Local source snapshots, all raw measurements, the independent math oracle,
+and section/stack comparisons are under
+`.local-tools/debug-runs/compat-round6-20261022/lead/` (`measure-math-v2.py`,
+`math-bench-v2.c`, `math-ab-v2.json`, `math-footprint.json`). The original Micro3D model/animation
+rendering gaps still prevent using Devil May Cry gameplay as a performance
+benchmark; see `docs/COMPATIBILITY.md` for the exact supported subset.
+
+### Integrated compatibility costs and checks
+
+The complete pass also repairs the Micro3D primitive call ABI and projection,
+adds the missing data-interface methods and Reader subclass behavior, and
+persists RMS modification times. These are correctness changes; a faster old
+renderer that reads the wrong arrays is not a valid rendering baseline.
+
+The final x86-64 Release executable, including the mutable-texture follow-up,
+compared with the frozen `60a25d3` build (host ELF sizes, not measured MCU flash):
+
+| Resource | Before | After | Change |
+|---|---:|---:|---:|
+| `.data` | 16 B | 16 B | 0 |
+| `.bss` | 6,688 B | 6,688 B | 0 |
+| `.text` | 1,054,826 B | 1,066,922 B | +12,096 B |
+| `.rodata` | 1,157,344 B | 1,160,384 B | +3,040 B |
+| Relocation-read-only tables | 158,560 B | 158,912 B | +352 B |
+| Executable file | 3,031,984 B | 3,048,952 B | +16,968 B |
+| Host allocations after creating a 2 MiB VM | 2,636,352 B | 2,637,008 B | +656 B |
+| Java heap used/peak at that point | 2,224 B | 2,224 B | 0 |
+
+The **656 bytes per VM** are additional API/class metadata, with the same 878
+live host blocks and 260 registered classes. This is a real RAM cost of the
+compatibility additions. It is separate from the cache-free field-access
+optimization. RecordStore (80 B), Reader/InputStreamReader (48 B), FigureLayout
+(96 B) and AffineTrans (128 B) keep their previous instance payload sizes.
+RecordStore packs its access flags into the existing field area; FigureLayout
+packs its projection mode/angle and uses a null transform as identity. A call to
+its newly supported `getAffineTrans()` creates a 144-byte heap allocation once
+(including the allocator header), so Java can mutate that identity object.
+
+Correct clipping also costs native stack: the primitive-rendering function's
+GCC frame is 720 B, versus 352 B in the old incorrect renderer. Its measured
+rendering helper chain reaches 760 B. These are not whole-VM stack peaks, and
+no embedded hardware stack margin has been measured. `NJ_MASCOT_FAST_FIELDS=0`
+only disables the field-access optimization; it does not undo the correctness
+repairs. Existing `NJ_ENABLE_MASCOT` and `NJ_ENABLE_RMS` switches still remove
+the corresponding optional libraries.
+
+Regression covers all **93 ctests**, the **27-value desktop-JVM digest**, and
+the benchmark checksum. The benchmark still executes **70,514,376 dispatches**
+with heap used/peak **92,432/92,432 B**. The focused suites cover 144 Micro3D,
+190 I/O, 365 RMS and 548 M3G checks. Tests include real `invokeinterface`
+bytecode, 32-bit wrapping transform arithmetic, primitive and texture pixels,
+malformed arguments, legacy RMS files, reopened timestamps and failed writes.
+Baseline negative controls fail the newly added behaviors.
+
+The final full run passed 92/93 immediately. The remaining demo assertion used
+an invalid null-pixel constructor as a mutable image; it now uses the standard
+three-int constructor. Both affected M3G tests pass after rebuilding the fixture.
+The added texture tests also verify repeated subrectangles, copy ownership,
+unchanged pixels, storage reuse, overflow rejection and mipmap invalidation.
+Independent clean builds cover the default, fast-fields-off, float-off/M3G-off
+and combined configurations. Targeted ASan/UBSan runs pass all four focused
+suites with no findings; a separate 104-check Image2D probe passes too. The six
+existing M3G rendering workloads retain identical full-frame pixel hashes.
+
+The repaired racing-game loader first exposed a separate `Image2D.set` ABI bug:
+only the race HUD drew because texture uploads read the wrong arguments. The
+follow-up copies uploaded subrectangles into owned pixel storage, preserves
+mutability across updates and invalidates cached mipmaps. It adds no Image2D
+field. First upload allocates the required pixel array; further updates reuse it.
+This is necessary texture storage, separate from the math optimization's costs.
+
+The final 1,800-frame replay with fresh RMS, acceleration and steering now draws
+the road, cars and scenery and responds to input, with no uncaught exception.
+Heap used/peak is 10,731,168/10,734,224 B in that run. A black scene is not a valid
+speed baseline, so no game FPS gain is inferred. The complete replay and a
+screenshot are documented in `docs/COMPATIBILITY.md`; independent configuration,
+sanitizer and final texture-delta results are retained in
+`.local-tools/debug-runs/compat-round6-20261022/verify/`.
+
 ## Three VM bugs the differential harness found, and none is about speed
 
 A 6,505-case differential harness (`.local-tools/debug-runs/interp-diff-20261022/`)

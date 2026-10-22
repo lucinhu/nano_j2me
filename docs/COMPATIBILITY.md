@@ -23,16 +23,14 @@ the pass repeated unless the code path it exercised changed.
 | JSR 120/205 (messaging) | classes present; connections refuse the same way |
 | JSR 135 (Mobile Media) | tone and sampled PCM playback, WAV from a stream or a JAR resource, MIDI rendered by the runtime itself (or by the platform's synthesizer through the port's MIDI hooks), and AMR narrowband decoded by the runtime itself; no video. MP3, AAC and anything else the platform can decode arrive through `nj_port.audio_decode`, which is what the Android port does with MediaCodec |
 | JSR 184 (Mobile 3D Graphics) | the classes, the scene graph, the transform maths, a `.m3g` container parser, the member surface real titles use, and a software rasteriser with a depth buffer, perspective-correct texturing (nearest, bilinear, and a level chain built from the image for minified surfaces), back-face culling and per-vertex lighting — all behind `NJ_ENABLE_M3G`. `浴火银河2完整版_7689` renders its 3D scenes through it (thousands of triangles, `tris=` in `--stats`), and `3D拉力赛-进化汉化版_6366` now draws its race with blue sky and mountains, textured road and markings, rear car livery and the HUD: 120,397 triangles in 2,700 paced frames, including acceleration and steering (`docs/images/rally3d-race.png`); the rest of the collected titles keep their 3D behind menus, so each of them is judged by its 2D interface (see below) |
-| Mascot Capsule Micro3D v3 | classes, fixed-point transform maths and a real triangle rasterizer, behind `NJ_ENABLE_MASCOT`. **No collected title reaches the rasterizer**, so it is exercised only by its own unit test (see below) |
+| Mascot Capsule Micro3D v3 | partial, behind `NJ_ENABLE_MASCOT`: fixed-point transform maths and an untextured primitive renderer with pixel tests. Full Figure model/animation and texture rendering remain gaps. Short startup runs do not reach the renderer; deeper Devil May Cry replay reaches a missing Figure constructor before gameplay (see below) |
 
-Anything not implemented raises. That is deliberate: a
-`java.lang.NoSuchMethodError` naming the method is a five-minute fix, whereas a
-silently-ignored call is a two-day one. The one exception is a radio that does
-not exist on the host: those classes are present and refuse at run time,
-because "this device has no Bluetooth" is a normal answer a MIDlet is written
-to handle, while "this build has no Bluetooth class" is not. A sensor is the
-same story one step further: the package works, and what a port cannot see is
-simply not in `findSensors()`.
+A missing class or member raises a named linkage error. A present member does
+not guarantee complete behavior: some optional APIs still contain stubs, and
+unsupported Micro3D draw modes currently produce no pixels. The API-specific
+notes below identify those gaps. Bluetooth classes instead report unavailable
+hardware at run time, and sensors absent from a port are omitted from
+`findSensors()`.
 
 Modules a platform may want to leave out entirely are switched off with a
 compile-time macro rather than by editing the tables, so the same source builds
@@ -818,9 +816,19 @@ displays local time will show UTC.
 UTF-8 via `readUTF`/`writeUTF`), `ByteArrayInputStream`,
 `ByteArrayOutputStream`, `PrintStream`, and the `IOException` hierarchy.
 
-`Reader`/`Writer` are **not** implemented. A title that uses
-`InputStreamReader` will fail; this is rare in practice because CLDC has no
-`java.io.Reader` at all, so a well-behaved MIDlet never refers to one.
+`Reader`, `Writer`, `InputStreamReader` and `OutputStreamWriter` are present.
+The reader base class provides protected `lock`, `Reader()` and `Reader(Object)`;
+subclasses can implement range reads and inherit single-character reads and
+skip. InputStreamReader retains its stream-based implementation. This is the
+subset exercised by the I/O fixtures and collected titles, not a claim that
+all desktop Java encodings or Reader/Writer behavior are implemented.
+
+`DataInput.readFloat/readDouble` and `DataOutput.writeFloat/writeDouble/writeChars`
+are declared on the interfaces as well as their stream implementations. This
+matters for real `invokeinterface` bytecode: the earlier missing interface rows
+stopped `急速公路狂飙－新年版_84` while loading a track, even though direct calls to
+DataInputStream worked. Compiled Java fixtures compare the values and exception
+paths with the desktop JVM, including signed zero, infinity, NaN and short input.
 
 ### javax.microedition.io
 
@@ -900,6 +908,33 @@ score survives a restart. `RecordEnumeration` is implemented; listeners are
 accepted and ignored.
 
 One file per store, named `<store>.rms`, in `nj_port.rms_dir`.
+
+`getLastModified()` has the MIDP descriptor `()J` and returns the stored last
+successful mutation time, in milliseconds. Creation, add, set and delete update
+it; reads and close/reopen do not. It survives a fresh VM, and a closed-store
+query throws `RecordStoreNotOpenException`. The VM anchors this clock to the
+port's `now` callback when available; ports without a wall clock cannot provide
+a meaningful epoch timestamp.
+
+The existing NJRS v1 header and record bytes remain unchanged. An optional
+16-byte trailer follows them: `NJMT`, big-endian u32 version 1, big-endian u64
+last-modified milliseconds. Old readers stop after the declared records, so
+they can still read new stores. An old build rewriting a store drops the
+metadata but preserves its records. Bare v1 stores load normally; their time
+falls back to filesystem mtime for the direct libc backend, or **0 (unknown)**
+for port file hooks, which have no metadata callback. A successful mutation
+writes the timestamp trailer. Unknown, truncated or extra trailer bytes do not
+prevent reading the records.
+
+The timestamp replaces an unused boolean field. Packing the private access
+mode into a boolean slot reuses alignment padding: the measured host RecordStore
+instance remains 80 bytes. Its public `getMode()I`/`setMode(IZ)V` API is unchanged.
+I/O failures do not advance the timestamp; short writes are reported as
+`RecordStoreException`. Store rewrites still truncate the destination directly:
+they are **not atomic**, so this does not add power-loss protection or transaction
+rollback. `tests/test_rms.c` covers 365 assertions including a separate old-format
+decoder, malformed trailers, clock advancement, restart, closed stores, access
+mode changes and injected write-open failure.
 
 **The runner derives that directory per game**, because the old default - the
 working directory - had two problems. It littered: a repository accumulated 45
@@ -1221,6 +1256,43 @@ defect. Evidence frames are under
 behind the picture is described in
 `docs/notes/2026-10-21-m3g-world-lights.md`.
 
+### Mutable texture uploads: from a black race scene to driving
+
+`急速公路狂飙－新年版_84` exposed two separate failures. Missing
+`DataInput.readFloat()` on the interface stopped track loading. Once that was
+repaired, the race HUD advanced but the road and cars stayed black:
+`Image2D.set(x, y, width, height, pixels)` read the coordinates as image metadata
+and the height as a reference, instead of copying the fifth argument's pixels.
+
+The upload now copies a tightly packed rectangle into owned storage, preserves
+pixels outside it, and invalidates any old mipmap. Repeated uploads reuse that
+storage. Mutability is a constructor property packed into the existing format
+word; it remains true after an upload, and `getFormat()` exposes only the format.
+No field is added to Image2D. Pixel storage is allocated on the first upload;
+new pixels outside a partial upload are zero. Bounds, short input, null input,
+immutable images and large allocation sizes have explicit error paths.
+
+A fresh 1,800-frame replay at 240x320, 30 FPS and a 16 MiB heap now shows the
+textured track, cars, trees and buildings. Holding acceleration and steering
+changes the vehicle position and view. It ends with no uncaught exception,
+254,677 triangles and 12,118 M3G render calls. Heap used/peak is
+10,731,168/10,734,224 bytes, including the texture data that the broken path never
+stored correctly. These are compatibility results, not a speed comparison with
+the black scene or a claim that a full race has been completed.
+
+![Road and car after mutable texture uploads were repaired](images/road-race-textures.png)
+
+Replay input (frame-based, fresh RMS):
+
+```text
+180:soft1 300:fire 420:fire 540:fire 660:fire 780:fire
+960:5 1020:fire 1140:2:down 1320:2:up 1325:6:down 1450:6:up
+1455:4:down 1550:4:up 1560:2:down 1780:2:up
+```
+
+Local logs, frame captures and the frozen executable are under
+`.local-tools/debug-runs/compat-round6-20261022/lead/road-texture/` and its parent.
+
 ### A declared member is not a working member
 
 The member list is not an impression: `tools/data/m3g-api-1.1.txt` is the JSR 184
@@ -1478,7 +1550,7 @@ link com/example/Game: interface this runtime does not provide: java/lang/Runnab
 Run `tools/nj_inspect game.jar --parse-only` first: if that is clean, the class
 files are fine and the problem is an API gap, which the message will name.
 
-## Mascot Capsule V3: measured, not yet implemented
+## Mascot Capsule V3: original API inventory
 
 JSR 184 is not the only 3D API in the collection.  Two titles call Mascot
 Capsule instead (鬼泣3D中文版_3376, 生化危机3D(CAPCOM经典)_3671), and `javap` over
@@ -1507,11 +1579,12 @@ Two details that change the estimate:
     A rasteriser here cannot be float-only and still match what the titles
     expect.
 
-Nothing of this is written yet; the measurement is recorded so the next round
-decides with a number instead of an impression, which is how JSR 184 was
-scoped.
+This was the inventory before implementation. Transform maths and a subset of
+primitive rendering now exist; it does not establish support for model loading,
+animation, textures, or every listed package alias. The later replay and
+compatibility notes below describe the remaining gaps.
 
-## Every collected title can now resolve what it asks for
+## Startup API sweep: coverage limits
 
 `tools/fetch_52emu_games.py` has collected 395 real titles.  A sweep over all of
 them (8 frames each, `--port headless`, 240x320, `--heap 16`) looks for the
@@ -1520,16 +1593,13 @@ runtime *naming* something it does not have:
     NoClassDefFoundError | NoSuchMethodError | NoSuchFieldError
     UnsatisfiedLinkError | ClassNotFoundException
 
-Result: **0 of 395**.  Not one title is stopped by a missing class, method,
-field or unbound native any more.
-
-This is worth stating precisely, because it is not the same as "395 titles
-work".  What it says is that the *static* surface -- the vocabulary of classes
-and members a MIDlet can name -- is complete for everything collected here.  A
-title can still fail on behaviour: drawing that does not reach the picture,
-`.m3g` containers this runtime declines to parse, Mascot Capsule models with no
-geometry parser, or the game's own bugs.  Those failures no longer look like
-"the emulator is missing X"; they look like "the emulator does X differently".
+Historical result: **0 of 395** reported one of those errors during the first
+eight frames. This is startup coverage, not a complete constant-pool resolution
+audit or proof that every member a title can name exists. Deeper replay later
+found missing `Figure(String)` and `DataInput.readFloat()` calls; executing an
+original game method also found the wrong `RecordStore.getLastModified()`
+descriptor. Missing APIs and behavioral gaps both remain possible beyond the
+paths exercised by this sweep.
 
 Re-run it with:
 
@@ -1609,3 +1679,25 @@ has unit-test coverage, but these runs establish neither Micro3D gameplay
 support nor a game performance improvement. Logs, input scripts and frames
 are preserved locally under
 `.local-tools/debug-runs/perf-round5-3d-20261022/scout/dmc-deep/`.
+
+### Primitive rendering repaired in the next pass
+
+The original primitive implementation read the call's y-offset as its count and
+mistook packed XYZ, normals and UV arrays for separate x/y/z arrays. The corrected
+11-argument ABI uses command/count at arguments 5/6 and packed XYZ at argument 7.
+Pixel tests exercise points, lines, triangles and quads, per-command/per-face
+colours, affine transforms, parallel scale and perspective FOV, and near/far
+clipping. Parallel scale 4096 means 1:1; the default 512 is 1/8. Drawing uses
+framebuffer coordinates and does not change the bound Java Graphics state.
+The batch loads that state once, instead of once per triangle. FigureLayout
+keeps its original object layout: an unset transform represents identity without
+an allocation. `getAffineTrans()` materializes and stores that mutable identity
+only when Java requests it; repeated calls return the same object, and
+`setAffineTrans(null)` resets the layout to identity.
+
+The supported blend modes are opaque and a HALF approximation using alpha
+128/255. This renderer has no depth buffer, sorting or back-face culling.
+Textured primitives, point sprites, lighting and ADD/SUB blending still produce
+no pixels after validation. Figure/MBAC model decoding, MTRA animation,
+`renderFigure` and queued flush remain unsupported. Correct primitive pixels
+do not establish that the model-based games above are playable.

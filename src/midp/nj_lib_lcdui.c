@@ -791,6 +791,20 @@ int nj_midp_gfx_triangle(nj_vm *vm, nj_ref g_obj,
     return 1;
 }
 
+/*
+ * Read-only batch variant: fill an nj_gfx from the bound Graphics once, so a
+ * bulk renderer can draw many primitives without the per-primitive field
+ * traffic and without writing anything back (the caller's Graphics must keep
+ * its colour/translate/clip).  See nj_midp.h.
+ */
+int nj_midp_gfx_load(nj_vm *vm, nj_ref g_obj, nj_gfx *g, nj_surface *scratch)
+{
+    if (!g || !scratch) {
+        return 0;
+    }
+    return gfx_load(vm, g_obj, g, scratch);
+}
+
 
 /* ---- construction ---- */
 NJFN(g_init)
