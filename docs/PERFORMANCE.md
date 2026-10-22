@@ -1821,3 +1821,43 @@ together the two changes put the fixture roughly 63% below the
 `NJ_ENABLE_HOT_FIELDS=0` arm.  The eleven slots cost 88 B
 per VM (`nj_vm_sizeof()` 10,896 on x86-64), still with no allocation and no
 writable globals, and `NJ_ENABLE_HOT_FIELDS=0` still restores 10,808 B.
+
+## The Graphics state that was re-resolved around every primitive (round 2, 2026-10-22)
+
+Every `Graphics` native in this runtime is the same three steps: serialise the
+Java object's fields into an `nj_gfx` on the C stack, run one primitive, write
+the mutated state back. The serialise step reads thirteen fields (`target`,
+`translateX/Y`, `clipX/Y/W/H`, `color`, `blend`, `stroke`, `font`, `xorMode`,
+`xorColor`) and the write-back touches eleven of them, each through
+`nj_field_lookup()`. That resolver first resolves the *class name* and then
+walks the class chain comparing field names, so a title drawing a few thousand
+primitives per second paid a name walk around every single one of them.
+
+The fix extends the per-VM hot-field slots (the earlier `ByteArray*` / `Font` /
+`Data*` work) with thirteen `Graphics` slots. The field pointers are resolved
+once per VM; the per-call path is one array index and a field read/write at a
+known offset.
+
+Deterministic measurement, no game timing involved: a fixture draws 100,000
+iterations of `fillRect`/`drawRect`/`drawLine`/`drawString`/`drawImage` with
+translate and clip churn after every iteration — 1,100,002 `Graphics` calls,
+10,400,066 bytecodes, sink `42382025` (identical in every run):
+
+| arm | CPU s (min / median, 8 runs each, interleaved ABBA) |
+| --- | --- |
+| clean HEAD 68a33f9 | 0.8362 / 0.8384 |
+| hot Graphics slots | 0.3595 / 0.3623 |
+
+That is **57.01% / 56.79%** less CPU on this drawing-bound workload. Unlike a
+game replay it proves only the drawing-call overhead, so treat it as a ceiling
+for paint-heavy 2D titles rather than a frame-rate claim.
+
+Correctness: `ctest` 99/99, `bench.jar` invariants and the 27-value digest
+unchanged, and 900-frame paced real-game replays of 午夜台球圣诞中文版_8677
+(444 paints) and 鬼泣3D中文版_3376 (682 paints, 149,462 triangles) exit 0 with
+no uncaught exception.
+
+RAM: one pointer per slot, so **+104 B per VM** (`nj_vm_sizeof()` 10,896 →
+11,000; the whole hot-field set is +192 B over the 10,808 baseline). Building
+with `-DNJ_ENABLE_HOT_FIELDS=0` restores 10,808 B and the per-call lookups.
+No writable statics, no allocation, no eBPF-style caches.

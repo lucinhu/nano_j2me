@@ -183,6 +183,13 @@ static nj_ref rget(nj_vm *vm, nj_ref o, const char *cls, const char *name,
     return f ? nj_field_read_ref(vm, o, f) : NULL;
 }
 
+static nj_ref rget_hot(nj_vm *vm, nj_ref o, int slot, const char *cls,
+                       const char *name, const char *desc)
+{
+    nj_field *f = nj_hot_field(vm, slot, cls, name, desc);
+    return f ? nj_field_read_ref(vm, o, f) : NULL;
+}
+
 static void rput(nj_vm *vm, nj_ref o, const char *cls, const char *name,
                  const char *desc, nj_ref v)
 {
@@ -678,7 +685,8 @@ const nj_font *nj_midp_font_for(nj_vm *vm, nj_ref font_obj)
 
 static const nj_font *gfx_font_of(nj_vm *vm, nj_ref g_obj)
 {
-    nj_ref fo = rget(vm, g_obj, G_CLS, F_G_FONT, D_FONT);
+    nj_ref fo = rget_hot(vm, g_obj, NJ_HF_G_FONT, G_CLS, F_G_FONT,
+                        D_FONT);
     return nj_midp_font_for(vm, fo);
 }
 
@@ -695,7 +703,7 @@ static int gfx_load(nj_vm *vm, nj_ref g_obj, nj_gfx *g, nj_surface *surf_scratch
     if (!vm || !g_obj) {
         return 0;
     }
-    target = rget(vm, g_obj, G_CLS, F_G_TGT, D_IMAGE);
+    target = rget_hot(vm, g_obj, NJ_HF_G_TGT, G_CLS, F_G_TGT, D_IMAGE);
     s = nj_midp_surface(vm, target, surf_scratch);
     if (!s) {
         return 0;
@@ -709,15 +717,15 @@ static int gfx_load(nj_vm *vm, nj_ref g_obj, nj_gfx *g, nj_surface *surf_scratch
     vm->gfx_calls++;
     nj_gfx_init(g, s);
 
-    tx = (int)fget(vm, g_obj, G_CLS, F_G_TX, D_INT);
-    ty = (int)fget(vm, g_obj, G_CLS, F_G_TY, D_INT);
+    tx = (int)fget_hot(vm, g_obj, NJ_HF_G_TX, G_CLS, F_G_TX, D_INT);
+    ty = (int)fget_hot(vm, g_obj, NJ_HF_G_TY, G_CLS, F_G_TY, D_INT);
     g->translate_x = tx;
     g->translate_y = ty;
 
-    cx = (int)fget(vm, g_obj, G_CLS, F_G_CX, D_INT);
-    cy = (int)fget(vm, g_obj, G_CLS, F_G_CY, D_INT);
-    cw = (int)fget(vm, g_obj, G_CLS, F_G_CW, D_INT);
-    ch = (int)fget(vm, g_obj, G_CLS, F_G_CH, D_INT);
+    cx = (int)fget_hot(vm, g_obj, NJ_HF_G_CX, G_CLS, F_G_CX, D_INT);
+    cy = (int)fget_hot(vm, g_obj, NJ_HF_G_CY, G_CLS, F_G_CY, D_INT);
+    cw = (int)fget_hot(vm, g_obj, NJ_HF_G_CW, G_CLS, F_G_CW, D_INT);
+    ch = (int)fget_hot(vm, g_obj, NJ_HF_G_CH, G_CLS, F_G_CH, D_INT);
     /*
      * No fallback here on purpose.  A non-positive size is an EMPTY clip, which
      * is what setClip() asked for, and gfx_new() has already written the whole
@@ -735,13 +743,13 @@ static int gfx_load(nj_vm *vm, nj_ref g_obj, nj_gfx *g, nj_surface *surf_scratch
      */
     nj_gfx_set_clip(g, cx, cy, cw, ch);
 
-    nj_gfx_set_color(g, (nj_u4)fget(vm, g_obj, G_CLS, F_G_COLOR, D_INT));
-    g->blend = (int)fget(vm, g_obj, G_CLS, F_G_BLEND, D_INT);
-    g->stroke = (int)fget(vm, g_obj, G_CLS, F_G_STROKE, D_INT);
+    nj_gfx_set_color(g, (nj_u4)fget_hot(vm, g_obj, NJ_HF_G_COLOR, G_CLS, F_G_COLOR, D_INT));
+    g->blend = (int)fget_hot(vm, g_obj, NJ_HF_G_BLEND, G_CLS, F_G_BLEND, D_INT);
+    g->stroke = (int)fget_hot(vm, g_obj, NJ_HF_G_STROKE, G_CLS, F_G_STROKE, D_INT);
     g->font = gfx_font_of(vm, g_obj);
-    if (fget(vm, g_obj, G_CLS, F_G_XOR, D_INT) != 0) {
+    if (fget_hot(vm, g_obj, NJ_HF_G_XOR, G_CLS, F_G_XOR, D_INT) != 0) {
         g->use_xor = 1;
-        g->xor_color = (nj_u4)fget(vm, g_obj, G_CLS, F_G_XORC, D_INT);
+        g->xor_color = (nj_u4)fget_hot(vm, g_obj, NJ_HF_G_XORC, G_CLS, F_G_XORC, D_INT);
     }
     return 1;
 }
@@ -754,29 +762,29 @@ static void gfx_store(nj_vm *vm, nj_ref g_obj, const nj_gfx *g)
     if (!vm || !g_obj || !g) {
         return;
     }
-    f = fld(vm, G_CLS, F_G_TX, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_TX, G_CLS, F_G_TX, D_INT);
     if (f) { nj_field_write_int(vm, g_obj, f, g->translate_x); }
-    f = fld(vm, G_CLS, F_G_TY, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_TY, G_CLS, F_G_TY, D_INT);
     if (f) { nj_field_write_int(vm, g_obj, f, g->translate_y); }
     /* The clip is kept in *user* space, so getClipX() reports what the caller
      * set even after a translate(). */
-    f = fld(vm, G_CLS, F_G_CX, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_CX, G_CLS, F_G_CX, D_INT);
     if (f) { nj_field_write_int(vm, g_obj, f, g->clip_x - g->translate_x); }
-    f = fld(vm, G_CLS, F_G_CY, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_CY, G_CLS, F_G_CY, D_INT);
     if (f) { nj_field_write_int(vm, g_obj, f, g->clip_y - g->translate_y); }
-    f = fld(vm, G_CLS, F_G_CW, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_CW, G_CLS, F_G_CW, D_INT);
     if (f) { nj_field_write_int(vm, g_obj, f, g->clip_w); }
-    f = fld(vm, G_CLS, F_G_CH, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_CH, G_CLS, F_G_CH, D_INT);
     if (f) { nj_field_write_int(vm, g_obj, f, g->clip_h); }
-    f = fld(vm, G_CLS, F_G_COLOR, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_COLOR, G_CLS, F_G_COLOR, D_INT);
     if (f) { nj_field_write_int(vm, g_obj, f, (nj_s4)g->color); }
-    f = fld(vm, G_CLS, F_G_BLEND, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_BLEND, G_CLS, F_G_BLEND, D_INT);
     if (f) { nj_field_write_int(vm, g_obj, f, g->blend); }
-    f = fld(vm, G_CLS, F_G_STROKE, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_STROKE, G_CLS, F_G_STROKE, D_INT);
     if (f) { nj_field_write_int(vm, g_obj, f, g->stroke); }
-    f = fld(vm, G_CLS, F_G_XOR, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_XOR, G_CLS, F_G_XOR, D_INT);
     if (f) { nj_field_write_int(vm, g_obj, f, g->use_xor ? 1 : 0); }
-    f = fld(vm, G_CLS, F_G_XORC, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_XORC, G_CLS, F_G_XORC, D_INT);
     if (f) { nj_field_write_int(vm, g_obj, f, (nj_s4)g->xor_color); }
 }
 
@@ -892,13 +900,13 @@ static void gfx_seed_clip(nj_vm *vm, nj_ref g, nj_ref target)
     if (w <= 0 || h <= 0) {
         return;
     }
-    f = fld(vm, G_CLS, F_G_CX, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_CX, G_CLS, F_G_CX, D_INT);
     if (f) { nj_field_write_int(vm, g, f, 0); }
-    f = fld(vm, G_CLS, F_G_CY, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_CY, G_CLS, F_G_CY, D_INT);
     if (f) { nj_field_write_int(vm, g, f, 0); }
-    f = fld(vm, G_CLS, F_G_CW, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_CW, G_CLS, F_G_CW, D_INT);
     if (f) { nj_field_write_int(vm, g, f, w); }
-    f = fld(vm, G_CLS, F_G_CH, D_INT, 0);
+    f = nj_hot_field(vm, NJ_HF_G_CH, G_CLS, F_G_CH, D_INT);
     if (f) { nj_field_write_int(vm, g, f, h); }
     (void)args;
 }

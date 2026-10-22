@@ -344,6 +344,22 @@ enum {
     NJ_HF_DIS_IN,       /* java/io/DataInputStream.in  Ljava/io/InputStream; */
     NJ_HF_DOS_OUT,      /* java/io/DataOutputStream.out Ljava/io/OutputStream; */
     NJ_HF_DOS_WRITTEN,  /* java/io/DataOutputStream.written I */
+    /* Graphics: gfx_load()/gfx_store() read and write the whole serialised
+     * state around every single drawing primitive, so these are the most
+     * often resolved fields left in a 2D paint loop. */
+    NJ_HF_G_TGT,        /* javax/microedition/lcdui/Graphics.target LImage; */
+    NJ_HF_G_TX,         /* .translateX I */
+    NJ_HF_G_TY,         /* .translateY I */
+    NJ_HF_G_CX,         /* .clipX I */
+    NJ_HF_G_CY,         /* .clipY I */
+    NJ_HF_G_CW,         /* .clipW I */
+    NJ_HF_G_CH,         /* .clipH I */
+    NJ_HF_G_COLOR,      /* .color I */
+    NJ_HF_G_BLEND,      /* .blend I */
+    NJ_HF_G_STROKE,     /* .stroke I */
+    NJ_HF_G_FONT,       /* .font LFont; */
+    NJ_HF_G_XOR,        /* .xorMode I */
+    NJ_HF_G_XORC,       /* .xorColor I */
     NJ_HF_COUNT
 };
 
