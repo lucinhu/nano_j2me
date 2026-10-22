@@ -1940,3 +1940,35 @@ drawn (the fight scene), and the other World-only reads
 a `Mesh` for an id after a `World` exists and requires a `null` answer with no
 exception (550 checks pass). The repro and core are under
 `.local-tools/debug-runs/compat-round9-20261022/deep2/` and `crash-repro3/`.
+
+## A wrong-type reference we do not ship yet: 时光樱花册－遗失之心_1009
+
+The round-9 title sweep left one defect open rather than unexplained away.
+In `时光樱花册－遗失之心_1009`, during a 1,200-frame paced replay with the
+generic key script at `--heap 16`, one call to the static helper
+`ae.a(String, boolean)` receives a `javax/microedition/lcdui/Image` where its
+parameter is statically a `String`. The first visible symptom is quiet: our
+`StringBuffer.append(String)` native
+(`src/core/nj_lib_string.c`, `sb_append_str`) does not check the class of its
+argument and prints nothing, so the game's `sndName === …` log line comes out
+empty. The next use of that reference is `invokevirtual String.compareTo` at
+bytecode offset 76 of `ae.a`, which fails with
+`NoSuchMethodError: javax/microedition/lcdui/Image does not implement
+java/lang/String.compareTo` (our message reports the fall-through pc, 79).
+
+This is our bug, not the title's behaviour: FreeJ2ME-Plus runs the same JAR
+and the same `ae.a` path without an exception, and all 132 `ae.a(String,
+boolean)` call sites pass either `ldc` string constants or elements of the
+`String[74][3]` table built in `ae.<clinit>` — none of them is reassigned in
+Java code. The occurrence is deterministic per heap size (`--heap 16` gives
+exactly one in two runs, `--heap 8` and `--heap 3` give none, running without
+the key script also gives none), which points at heap-layout or GC-dependent
+reference provenance rather than a race.
+
+The read-only investigation (repro, exact instruction, call-site census) is
+`.local-tools/debug-runs/compat-round9-20261022/string-anomaly/REPORT.md`.
+An instrumented-build hunt for the write that puts the `Image` into the
+`String` slot is still running; until it lands, treat this as a known defect
+rather than a fixed one. It is the only wrong-type reference observed in the
+round-9 sweeps, and it does not crash the VM — the exception is caught by the
+title's own frame loop, and the run continues.
