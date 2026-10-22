@@ -137,7 +137,7 @@ set(NJ_JIT_RV32_REG_CACHE 1 CACHE STRING "Reuse RV32 temporary register values w
 set(NJ_JIT_HOT_THRESHOLD 8 CACHE STRING "Hits before compiling a bytecode block")
 set(NJ_JIT_MAX_BLOCK_INSNS 32 CACHE STRING "Maximum bytecodes per native block")
 set(NJ_JIT_MAX_CODE_BYTES 2048 CACHE STRING "Maximum native bytes per block")
-set(NJ_ENABLE_HOT_FIELDS 1 CACHE STRING "Memoise hot Midp field lookups (+64 B per VM)")
+set(NJ_ENABLE_HOT_FIELDS 1 CACHE STRING "Memoise hot Midp field lookups (+192 B per VM for 24 slots)")
 set(NJ_MASCOT_FAST_FIELDS 1 CACHE STRING "Use Micro3D receiver classes directly for field access (no cache)")
 set(NJ_MASCOT_MAX_QUEUED_TRIANGLES 16384 CACHE STRING "Maximum deferred Micro3D primitives per Graphics3D")
 
@@ -694,6 +694,7 @@ if(NJ_BUILD_TESTS)
 
   # ---- the memory contract and the class library ----
   nj_add_test(test_lifecycle tests/test_lifecycle.c)
+  nj_add_test(test_string_intern tests/test_string_intern.c)
   nj_add_test(test_text_input tests/test_text_input.c)
   if(SDL2_FOUND)
     target_include_directories(test_text_input PRIVATE ${SDL2_INCLUDE_DIRS})

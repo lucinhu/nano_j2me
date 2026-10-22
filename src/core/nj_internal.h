@@ -471,9 +471,18 @@ struct nj_vm {
     const char *link_cls;          /* the class that failed to link */
     const char *link_missing;      /* what it could not resolve, or NULL */
 
-    /* interned strings */
-    nj_ref     interned[NJ_MAX_INTERNED];
-    nj_u2      ninterned;
+    /*
+     * Interned strings.  The table is a host allocation owned by the VM: it
+     * starts at NJ_MAX_INTERNED entries and doubles whenever a class-file
+     * literal arrives with the table full.  It used to be a fixed array and
+     * nj_intern() quietly returned an uninterned String once it filled up -
+     * the constant-pool caches then kept the address of a String that was no
+     * longer a GC root, the collector recycled it, and `ldc` pushed whatever
+     * object had taken its place.
+     */
+    nj_ref    *interned;           /* NULL until the first intern */
+    nj_u4      ninterned;
+    nj_u4      intern_cap;
 
     /* MIDlet state */
     nj_ref     app;             /* the MIDlet instance */
@@ -1168,6 +1177,9 @@ nj_u4       nj_string_len(nj_ref s);
 int         nj_utf8_to_utf16(const char *src, int src_len, nj_u2 *dst, int dst_cap);
 int         nj_utf16_to_utf8(const nj_u2 *src, int src_len, char *dst, int dst_cap);
 nj_ref      nj_intern(nj_vm *vm, nj_ref s);
+/* Make room for at least `count` interned strings; 0 when host memory runs out.
+ * Used by the state loader before it fills the table from a snapshot. */
+int         nj_intern_reserve(nj_vm *vm, nj_u4 count);
 int         nj_string_equals_cstr(nj_ref s, const char *cstr);
 int         nj_string_hash(nj_ref s);
 nj_ref      nj_string_concat(nj_vm *vm, nj_ref a, nj_ref b);

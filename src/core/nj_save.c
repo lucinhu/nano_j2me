@@ -547,7 +547,6 @@ int nj_vm_can_save(const nj_vm *vm_c)
     }
     if (vm->nthreads > (nj_u2)NJ_MAX_THREADS ||
         vm->nstatics > (nj_u4)NJ_MAX_STATICS ||
-        vm->ninterned > (nj_u2)NJ_MAX_INTERNED ||
         vm->nclasses > (nj_u2)NJ_MAX_CLASSES) {
         return 0;
     }
@@ -1065,7 +1064,6 @@ int nj_vm_save(nj_vm *vm, FILE *f)
     }
     if (vm->heap.bump > vm->heap.size || vm->heap.bump < NJ_BLOCK_HDR ||
         vm->nstatics > (nj_u4)NJ_MAX_STATICS ||
-        vm->ninterned > (nj_u2)NJ_MAX_INTERNED ||
         vm->nclasses > (nj_u2)NJ_MAX_CLASSES) {
         return NJ_ERR_STATE;
     }
@@ -1344,7 +1342,7 @@ static void reset_refs(nj_vm *vm)
     vm->media_players = NULL;
     vm->sensor_conns = NULL;
     vm->bt_jobs = NULL;
-    for (i = 0u; i < vm->ninterned && i < (nj_u2)NJ_MAX_INTERNED; i++) {
+    for (i = 0u; i < vm->ninterned; i += 1u) {
         vm->interned[i] = NULL;
     }
     vm->ninterned = 0u;
@@ -1605,7 +1603,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
         heap_size > 0xFFFFFFFFu || heap_bump < NJ_BLOCK_HDR ||
         heap_bump > heap_size || nclasses == 0u ||
         nclasses > (nj_u4)NJ_MAX_CLASSES || nstatics > (nj_u4)NJ_MAX_STATICS ||
-        ninterned > (nj_u4)NJ_MAX_INTERNED ||
+        ninterned > (nj_u4)(heap_bump / 8u) ||
         nthreads > (nj_u4)NJ_MAX_THREADS) {
         NJ_LOAD_FAIL(NJ_ERR_FORMAT);
     }
@@ -1827,6 +1825,9 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     }
 
     /* Interned strings. */
+    if (!nj_intern_reserve(vm, ninterned)) {
+        NJ_LOAD_FAIL(NJ_ERR_NOMEM);
+    }
     for (i = 0u; i < ninterned; i++) {
         nj_u4 off;
         if (!sr_u32(&rd, &off) ||
@@ -1835,7 +1836,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
         }
         vm->interned[i] = ref_at(vm, off);
     }
-    vm->ninterned = (nj_u2)ninterned;
+    vm->ninterned = ninterned;
 
     /* Every object: rebase its class (and Class mirror). */
     {

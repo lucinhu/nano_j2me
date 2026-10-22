@@ -364,22 +364,70 @@ nj_ref nj_string_concat(nj_vm *vm, nj_ref a, nj_ref b)
 /* ------------------------------------------------------------------ */
 /* Interning                                                           */
 /* ------------------------------------------------------------------ */
+
+/*
+ * Grow the intern table (or allocate it the first time).  Doubling keeps the
+ * total copying linear in the number of literals.  Returns 0 when the host
+ * allocator refuses; the caller must then NOT publish the string uninterned -
+ * a constant-pool cache would keep pointing at it after the collector recycled
+ * the block.
+ */
+static int intern_grow(nj_vm *vm)
+{
+    nj_u4 cap = vm->intern_cap ? vm->intern_cap * 2u : (nj_u4)NJ_MAX_INTERNED;
+    nj_ref *tbl;
+
+    if (cap <= vm->intern_cap) {
+        return 0;   /* the capacity is 32-bit: doubling overflowed */
+    }
+    tbl = (nj_ref *)nj_host_alloc(vm, (nj_size)cap * (nj_size)sizeof(nj_ref));
+    if (!tbl) {
+        return 0;
+    }
+    if (vm->ninterned != 0u) {
+        memcpy(tbl, vm->interned, (nj_size)vm->ninterned * sizeof(nj_ref));
+    }
+    if (vm->interned) {
+        nj_host_free(vm, vm->interned);
+    }
+    vm->interned = tbl;
+    vm->intern_cap = cap;
+    return 1;
+}
+
+int nj_intern_reserve(nj_vm *vm, nj_u4 count)
+{
+    while (vm->intern_cap < count) {
+        if (!intern_grow(vm)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 nj_ref nj_intern(nj_vm *vm, nj_ref s)
 {
-    nj_u2 i;
+    nj_u4 i;
 
     if (!vm || !s || s->kind != NJ_OBJ_STRING) {
         return s;
     }
-    for (i = 0; i < vm->ninterned; i++) {
+    for (i = 0; i < vm->ninterned; i += 1u) {
         nj_ref o = vm->interned[i];
         if (o && o->length == s->length &&
             memcmp(o->u.bytes, s->u.bytes, (nj_size)s->length * sizeof(nj_u2)) == 0) {
             return o;
         }
     }
-    if (vm->ninterned >= (nj_u2)NJ_MAX_INTERNED) {
-        return s;   /* table full: fall back to the uninterned instance */
+    if (vm->ninterned >= vm->intern_cap && !intern_grow(vm)) {
+        /*
+         * Falling back to an uninterned instance is not an option: a
+         * constant-pool cache would keep the address of a String the collector
+         * is free to recycle.  An allocation failure is reported as one.
+         */
+        (void)nj_throw(vm, "java/lang/OutOfMemoryError",
+                       "the interned string table could not grow");
+        return NULL;
     }
     vm->interned[vm->ninterned++] = s;
     return s;

@@ -1507,6 +1507,8 @@ NJFN(sb_append_obj)
     nj_ref o = NJ_ARG_REF(args, 0);
     nj_ref s;
     nj_value a1[3];
+    nj_u4 mark;
+    nj_status st;
 
     if (!o) {
         if (sb_append_cstr(vm, NJ_THIS(args), "null") != NJ_OK) {
@@ -1516,16 +1518,29 @@ NJFN(sb_append_obj)
         return NJ_OK;
     }
     a1[0].r = o;
+    /*
+     * toString() runs Java code and sb_append_chars() can grow the builder's
+     * array, so either call can allocate (and collect).  The String it
+     * returned must therefore be a root until its characters are copied; it
+     * used to be an unrooted C local, which GC stress showed being recycled
+     * between the call and the copy.
+     */
+    mark = nj_root_mark(vm);
     s = nj_call_ref(vm, o, "java/lang/Object", "toString",
                     "()Ljava/lang/String;", a1);
     if (vm->exception) {
+        nj_root_release(vm, mark);
         return NJ_ERR;
     }
     if (!s) {
+        nj_root_release(vm, mark);
         return nj_throw_oom(vm);
     }
-    if (sb_append_chars(vm, NJ_THIS(args), nj_string_chars(s),
-                        nj_string_len(s)) != NJ_OK) {
+    s = nj_root(vm, s);
+    st = sb_append_chars(vm, NJ_THIS(args), nj_string_chars(s),
+                         nj_string_len(s));
+    nj_root_release(vm, mark);
+    if (st != NJ_OK) {
         return NJ_ERR;
     }
     ret->r = NJ_THIS(args);
@@ -1534,12 +1549,18 @@ NJFN(sb_append_obj)
 
 NJFN(sb_append_int)
 {
+    nj_u4 mark = nj_root_mark(vm);
     nj_ref s = nj_string_new_from_int(vm, NJ_ARG_INT(args, 0));
     nj_status st;
+
     if (!s) {
+        nj_root_release(vm, mark);
         return nj_throw_oom(vm);
     }
+    /* sb_append_chars() may allocate; keep the decimal String alive. */
+    s = nj_root(vm, s);
     st = sb_append_chars(vm, NJ_THIS(args), nj_string_chars(s), nj_string_len(s));
+    nj_root_release(vm, mark);
     if (st == NJ_OK) {
         ret->r = NJ_THIS(args);
     }
@@ -1549,19 +1570,27 @@ NJFN(sb_append_int)
 NJFN(sb_append_long)
 {
     nj_value a1[3];
+    nj_value r;
+    nj_u4 mark;
+    nj_status st;
+
     a1[0].j = NJ_ARG_LONG(args, 0);
     a1[1].bits = 0u;
-    {
-        nj_value r;
-        r.bits = 0u;
-        if (nj_call_static(vm, "java/lang/String", "valueOf",
-                           "(J)Ljava/lang/String;", a1, &r) != NJ_OK) {
-            return NJ_ERR;
-        }
-        if (sb_append_chars(vm, NJ_THIS(args), nj_string_chars(r.r),
-                            nj_string_len(r.r)) != NJ_OK) {
-            return NJ_ERR;
-        }
+    r.bits = 0u;
+    mark = nj_root_mark(vm);
+    st = nj_call_static(vm, "java/lang/String", "valueOf",
+                        "(J)Ljava/lang/String;", a1, &r);
+    if (st != NJ_OK) {
+        nj_root_release(vm, mark);
+        return NJ_ERR;
+    }
+    /* sb_append_chars() may allocate; keep the decimal String alive. */
+    r.r = nj_root(vm, r.r);
+    st = sb_append_chars(vm, NJ_THIS(args), nj_string_chars(r.r),
+                         nj_string_len(r.r));
+    nj_root_release(vm, mark);
+    if (st != NJ_OK) {
+        return NJ_ERR;
     }
     ret->r = NJ_THIS(args);
     return NJ_OK;

@@ -38,6 +38,11 @@ static int failures;
  */
 static nj_u2 saved_thread_idx;
 static int   saved_nframes = -1;
+
+/* Extra literals interned before the save; the snapshot then carries more
+ * entries than the old fixed 512-slot table could hold. */
+#define EXTRA_INTERNED 600
+static nj_u4 saved_intern_base;
 static nj_u4 saved_sp_off;
 static nj_u4 fake_now;
 
@@ -794,6 +799,25 @@ int main(void)
         }
     }
 
+    /*
+     * (6) The interned string table is no longer a fixed 512-entry array: it
+     * grows on the VM heap and must stay a GC root (see the "interned string"
+     * part of docs/COMPATIBILITY.md).  Intern enough extra literals that the
+     * snapshot holds more than the old limit, so the load path has to grow the
+     * table while restoring instead of rejecting the blob.
+     */
+    saved_intern_base = vm_a->ninterned;
+    for (i = 0; i < EXTRA_INTERNED; i++) {
+        char text[32];
+
+        snprintf(text, sizeof text, "lead-intern-%d", i);
+        CHECK(nj_intern(vm_a, nj_new_string_utf8(vm_a, text, (int)strlen(text)))
+              != NULL, "extra literal interns past the old 512-entry limit");
+    }
+    CHECK(vm_a->ninterned == saved_intern_base + EXTRA_INTERNED,
+          "every distinct extra literal is interned");
+    CHECK(vm_a->ninterned > 512u, "the snapshot holds more than the old limit");
+
     /* ---- save ------------------------------------------------------- */
     CHECK(nj_vm_save_file(vm_a, STATE_PATH) == NJ_OK, "nj_vm_save_file()");
     CHECK(nj_vm_save_file(vm_a, "/nonexistent-dir/nope.bin") != NJ_OK,
@@ -835,6 +859,27 @@ int main(void)
           "the restored String is the same object as the interned literal");
     CHECK(b_b != b_a, "the arena really moved (a new object address)");
     CHECK(nj_string_len(s_b0) == 5u, "nj_string_len() works on restored data");
+
+    /* (6) the literals past the old 512-entry limit survived the round trip */
+    CHECK(vm_b->ninterned == saved_intern_base + EXTRA_INTERNED,
+          "the restored intern table kept every literal");
+    for (i = 0; i < EXTRA_INTERNED; i++) {
+        char text[32];
+        nj_ref lit = vm_b->interned[saved_intern_base + (nj_u4)i];
+
+        snprintf(text, sizeof text, "lead-intern-%d", i);
+        CHECK(str_eq(lit, text), "extra literal text survived the round trip");
+        CHECK(nj_intern(vm_b, nj_new_string_utf8(vm_b, text, (int)strlen(text)))
+              == lit, "extra literal kept its identity in the restored table");
+    }
+    CHECK(nj_gc_run(vm_b) == NJ_OK, "the restored intern table survives a collection");
+    for (i = 0; i < EXTRA_INTERNED; i += 137) {
+        char text[32];
+
+        snprintf(text, sizeof text, "lead-intern-%d", i);
+        CHECK(str_eq(vm_b->interned[saved_intern_base + (nj_u4)i], text),
+              "extra literal is still live after the restored VM collects");
+    }
 
     /* the stale-top thread came back with its operand stack pointer intact */
     if (saved_nframes > 0 && saved_thread_idx < vm_b->nthreads) {

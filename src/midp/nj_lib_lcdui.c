@@ -163,7 +163,9 @@ static nj_s4 fget(nj_vm *vm, nj_ref o, const char *cls, const char *name,
 static nj_s4 fget_hot(nj_vm *vm, nj_ref o, int slot, const char *cls,
                       const char *name, const char *desc)
 {
-    nj_field *f = nj_hot_field(vm, slot, cls, name, desc);
+    nj_field *f;
+    (void)slot; /* only used by the memo build */
+    f = nj_hot_field(vm, slot, cls, name, desc);
     return f ? nj_field_read_int(vm, o, f) : 0;
 }
 
@@ -186,7 +188,9 @@ static nj_ref rget(nj_vm *vm, nj_ref o, const char *cls, const char *name,
 static nj_ref rget_hot(nj_vm *vm, nj_ref o, int slot, const char *cls,
                        const char *name, const char *desc)
 {
-    nj_field *f = nj_hot_field(vm, slot, cls, name, desc);
+    nj_field *f;
+    (void)slot; /* only used by the memo build */
+    f = nj_hot_field(vm, slot, cls, name, desc);
     return f ? nj_field_read_ref(vm, o, f) : NULL;
 }
 

@@ -286,6 +286,11 @@ nj_u4 nj_vm_destroy(nj_vm *vm)
         nj_host_free(vm, vm->scratch_u2);
         vm->scratch_u2 = NULL;
     }
+    if (vm->interned) {
+        nj_host_free(vm, vm->interned);
+        vm->interned = NULL;
+        vm->intern_cap = 0u;
+    }
 
     /*
      * Releases the Java arena plus every remaining host allocation, which is

@@ -1943,34 +1943,93 @@ a `Mesh` for an id after a `World` exists and requires a `null` answer with no
 exception (550 checks pass). The repro and core are under
 `.local-tools/debug-runs/compat-round9-20261022/deep2/` and `crash-repro3/`.
 
-## A wrong-type reference we do not ship yet: 时光樱花册－遗失之心_1009
+## The reference that became an `Image`: an interned-literal GC bug
 
-The round-9 title sweep left one defect open rather than unexplained away.
+The round-9 title sweep left one defect open rather than explained away, and
+the investigation turned it into two VM bugs and a real fix.
+
 In `时光樱花册－遗失之心_1009`, during a 1,200-frame paced replay with the
 generic key script at `--heap 16`, one call to the static helper
-`ae.a(String, boolean)` receives a `javax/microedition/lcdui/Image` where its
-parameter is statically a `String`. The first visible symptom is quiet: our
-`StringBuffer.append(String)` native
-(`src/core/nj_lib_string.c`, `sb_append_str`) does not check the class of its
-argument and prints nothing, so the game's `sndName === …` log line comes out
-empty. The next use of that reference is `invokevirtual String.compareTo` at
-bytecode offset 76 of `ae.a`, which fails with
-`NoSuchMethodError: javax/microedition/lcdui/Image does not implement
-java/lang/String.compareTo` (our message reports the fall-through pc, 79).
+`ae.a(String, boolean)` received a `javax/microedition/lcdui/Image` where its
+parameter is statically a `String`. The first symptom was quiet: our
+`StringBuffer.append(String)` native does not check its argument's class, so
+the game's `sndName === …` log line came out empty. The next use of the
+reference, `invokevirtual String.compareTo` at bytecode offset 76 of `ae.a`,
+fails with `NoSuchMethodError: javax/microedition/lcdui/Image does not
+implement java/lang/String.compareTo` (our message reports the fall-through
+pc, 79). FreeJ2ME-Plus runs the same JAR and the same path without an
+exception, and all 132 `ae.a(String, boolean)` call sites pass either `ldc`
+constants or elements of a table built in `ae.<clinit>` that Java never
+reassigns - so this was ours.
 
-This is our bug, not the title's behaviour: FreeJ2ME-Plus runs the same JAR
-and the same `ae.a` path without an exception, and all 132 `ae.a(String,
-boolean)` call sites pass either `ldc` string constants or elements of the
-`String[74][3]` table built in `ae.<clinit>` — none of them is reassigned in
-Java code. The occurrence is deterministic per heap size (`--heap 16` gives
-exactly one in two runs, `--heap 8` and `--heap 3` give none, running without
-the key script also gives none), which points at heap-layout or GC-dependent
-reference provenance rather than a race.
+### What actually happened
 
-The read-only investigation (repro, exact instruction, call-site census) is
-`.local-tools/debug-runs/compat-round9-20261022/string-anomaly/REPORT.md`.
-An instrumented-build hunt for the write that puts the `Image` into the
-`String` slot is still running; until it lands, treat this as a known defect
-rather than a fixed one. It is the only wrong-type reference observed in the
-round-9 sweeps, and it does not crash the VM — the exception is caught by the
-title's own frame loop, and the run continues.
+1. `nj_intern()` kept a fixed 512-entry table (`NJ_MAX_INTERNED` in
+   `include/nj2me/nj_config.h`). When it filled up it returned the string
+   **uninterned** instead of failing.
+2. `nj_cp_resolve()` caches a `CONSTANT_String`'s `nj_ref` in the constant-pool
+   entry (`NJ_LINK_STRING`) and `nj_cp_const()` returned it later without
+   revalidating it. Constant-pool caches live in host memory and are not GC
+   roots.
+3. Only `vm->interned[]` was scanned by `nj_gc_mark_roots()`, so the
+   uninterned literal was collected while a cache still pointed at it, and the
+   arena block was handed to a new allocation - on this title, an `Image`.
+4. A later `ldc` handed that recycled object to the caller as a `String`.
+
+The title has **5,772** `CONSTANT_String` entries across 33 classes. An
+instrumented build printed "table full at 512 entries" with 1,612 uninterned
+literals, and a build with `-DNJ_MAX_INTERNED=4096` ran the same 1,200 frames
+with zero occurrences while doing identical gfx/bytecode work. A 600-literal
+minimal reproducer passes on desktop HotSpot and failed on our VM.
+
+### The fix
+
+The intern table is now a growable host array owned by the VM
+(`nj_ref *interned; nj_u4 ninterned; nj_u4 intern_cap;`), starting at the old
+512 entries and doubling when a class-file load interns more; if the host
+allocator refuses, interning throws `OutOfMemoryError` instead of publishing
+an uninterned String. The table stays a GC root through the existing
+`vm->interned[]` scan, and `nj_vm_destroy()` frees it. The snapshot format is
+unchanged (the header already stored `ninterned` as u32): the loader's sanity
+bound is now derived from the arena size and the restore loop grows the table
+before filling it, so a snapshot with more literals loads.
+
+### The second bug the same audit found
+
+The differential and GC-stress work behind that diagnosis forced a collection
+before allocations that happen while a native frame is on the stack, and
+`StringBuffer.append(Object)`, `append(int)` and `append(long)` were holding
+the produced `String` in an unrooted C local across `appendChars()` ->
+`ensureCapacity()` -> allocation. Under stress, `bench.jar` printed
+`BENCH sum=BENCH sum= s=5` and the I/O fixture's sink came back as
+`PHASE writ`: GC had recycled the temporary between its creation and the copy.
+All three now root the temporary (`nj_root_mark()`/`nj_root()`/
+`nj_root_release()`).
+
+### Verification
+
+- The title, same keys and 1,200 frames at `--heap 16`: pre-fix build 2
+  `NoSuchMethodError` lines, fixed build 0, with identical
+  `gfx=271301` and bytecodes (1,920,957,858 vs 1,920,956,191).
+- A current-source build with forced GC before every native-side allocation
+  now prints the correct `BENCH sum=-136042548` and the I/O fixture's correct
+  `sink=-153712844`; before the fix both were corrupted.
+- `tests/test_string_intern.c` (new, registered in ctest) interns 3,000
+  distinct strings, checks JLS identity for duplicates and that every entry
+  survives collections while dead temporaries are collected.
+- `tests/test_save.c` now interns 600 extra literals before saving, so the
+  snapshot carries more entries than the old limit; it checks the restored
+  table, identity and a collection after the load (2,492 checks).
+- Full ctest passes, and `bench.jar`/superinstruction digests are unchanged.
+
+### What is not proven
+
+The GC-stress audit ranked 84 further candidate sites that hold a reference
+across a possibly-allocating call
+(`.local-tools/debug-runs/compat-round9-20261022/gc-audit/scan-candidates.tsv`);
+only the three `StringBuffer` temporaries are fixed here. Stress builds of
+sampled titles still diverge, so more stress-only rooting bugs may remain -
+none has been observed in normal-play sweeps, but "not reproduced" is not the
+same as "proven absent". The read-only investigations are under
+`.local-tools/debug-runs/compat-round9-20261022/string-anomaly/` and
+`gc-audit/`.

@@ -601,6 +601,11 @@ Thirteen things in that shell are worth copying, because each one is a rule a pl
   connection does. One layout detail is easy to miss: an array's payload and an
   embedded string live at `object + sizeof(nj_object)`, so those two pointers are
   baked into the image and the loader recomputes them rather than copying them.
+  The interned-string table is host-side, not an arena image: the blob stores
+  `ninterned` plus one arena offset per entry, the loader grows the table to fit
+  (so a snapshot may carry more literals than the runtime's initial 512 slots)
+  and re-fills it, and a table that cannot be allocated is a load failure rather
+  than a silently shorter `==` history.
 
 ## Worked example: a bare-metal board
 
