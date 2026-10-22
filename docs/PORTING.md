@@ -605,7 +605,11 @@ Thirteen things in that shell are worth copying, because each one is a rule a pl
   `ninterned` plus one arena offset per entry, the loader grows the table to fit
   (so a snapshot may carry more literals than the runtime's initial 512 slots)
   and re-fills it, and a table that cannot be allocated is a load failure rather
-  than a silently shorter `==` history.
+  than a silently shorter `==` history. That growth makes compatibility one-way
+  for snapshots that carry more than 512 literal entries: a newer binary loads
+  an older snapshot, but an older binary refuses a newer one (it sees
+  `ninterned` above its fixed bound, reports a format error and, at the CLI,
+  starts fresh). Snapshots within the old limit remain interchangeable.
 
 ## Worked example: a bare-metal board
 
