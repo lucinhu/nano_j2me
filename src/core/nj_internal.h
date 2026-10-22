@@ -341,6 +341,9 @@ enum {
     NJ_HF_BAOS_COUNT,   /* java/io/ByteArrayOutputStream.count I */
     NJ_HF_FONT_STYLE,   /* javax/microedition/lcdui/Font.style I */
     NJ_HF_FONT_SIZE,    /* javax/microedition/lcdui/Font.size  I */
+    NJ_HF_DIS_IN,       /* java/io/DataInputStream.in  Ljava/io/InputStream; */
+    NJ_HF_DOS_OUT,      /* java/io/DataOutputStream.out Ljava/io/OutputStream; */
+    NJ_HF_DOS_WRITTEN,  /* java/io/DataOutputStream.written I */
     NJ_HF_COUNT
 };
 

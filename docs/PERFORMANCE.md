@@ -1806,3 +1806,15 @@ x86-64, `.data`/`.bss` are unchanged and the macro-off build keeps 10,808.
 `bench.jar` is byte-identical (`BENCH sum=-136042548`, 70,514,376 bytecodes,
 heap 92,432/92,432), the 27-value digest matches the desktop VM and the full
 `ctest` suite passes 99/99.
+
+Three more slots followed the same evidence one commit later: the 900-frame
+profile still showed 2.7 million class resolutions, now almost all from
+`DataInputStream.in`, `DataOutputStream.out` and
+`DataOutputStream.written`, which the data-stream natives read on every
+element.  With those three memoised (`NJ_HF_DIS_IN`, `NJ_HF_DOS_OUT`,
+`NJ_HF_DOS_WRITTEN`) the deterministic I/O fixture falls a further 11.73% /
+11.85% (min / median CPU, 4 runs per arm) from 0.4135/0.4144 s to
+0.3650/0.3654 s, bytecodes and sink again identical - 68.2% below the
+`NJ_ENABLE_HOT_FIELDS=0` arm for the same work.  The eleven slots cost 88 B
+per VM (`nj_vm_sizeof()` 10,896 on x86-64), still with no allocation and no
+writable globals, and `NJ_ENABLE_HOT_FIELDS=0` still restores 10,808 B.

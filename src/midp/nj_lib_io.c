@@ -545,8 +545,9 @@ NJFN(baos_toString)
 
 static nj_ref dos_out(nj_vm *vm, nj_ref self)
 {
-    return nj_field_read_ref(vm, self, fld(vm, DOS, "out",
-                                           "Ljava/io/OutputStream;"));
+    return nj_field_read_ref(vm, self,
+                             nj_hot_field(vm, NJ_HF_DOS_OUT, DOS, "out",
+                                          "Ljava/io/OutputStream;"));
 }
 
 /* Write raw bytes through the wrapped stream. */
@@ -781,8 +782,9 @@ NJFN(dos_size)
 
 static nj_ref dis_in(nj_vm *vm, nj_ref self)
 {
-    return nj_field_read_ref(vm, self, fld(vm, DIS, "in",
-                                           "Ljava/io/InputStream;"));
+    return nj_field_read_ref(vm, self,
+                             nj_hot_field(vm, NJ_HF_DIS_IN, DIS, "in",
+                                          "Ljava/io/InputStream;"));
 }
 
 /* DataInputStream(InputStream) and DataOutputStream(OutputStream).
@@ -797,8 +799,9 @@ static nj_ref dis_in(nj_vm *vm, nj_ref self)
  * alternating from run to run, which is what gave the game away. */
 NJFN(dis_init)
 {
-    nj_field_write_ref(vm, NJ_THIS(args), fld(vm, DIS, "in",
-                                              "Ljava/io/InputStream;"),
+    nj_field_write_ref(vm, NJ_THIS(args),
+                       nj_hot_field(vm, NJ_HF_DIS_IN, DIS, "in",
+                                    "Ljava/io/InputStream;"),
                        NJ_ARG_REF(args, 0));
     return NJ_OK;
 }
@@ -807,10 +810,13 @@ NJFN(dos_init)
 {
     nj_ref self = NJ_THIS(args);
 
-    nj_field_write_ref(vm, self, fld(vm, DOS, "out",
-                                     "Ljava/io/OutputStream;"),
+    nj_field_write_ref(vm, self,
+                       nj_hot_field(vm, NJ_HF_DOS_OUT, DOS, "out",
+                                    "Ljava/io/OutputStream;"),
                        NJ_ARG_REF(args, 0));
-    nj_field_write_int(vm, self, fld(vm, DOS, "written", "I"), 0);
+    nj_field_write_int(vm, self,
+                       nj_hot_field(vm, NJ_HF_DOS_WRITTEN, DOS, "written", "I"),
+                       0);
     return NJ_OK;
 }
 
