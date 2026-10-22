@@ -2267,3 +2267,45 @@ still get a clean `IOException`, not a crash, and nothing that failed before
 decodes incorrectly now - the change is monotonic - but this asset remains an
 open bug in the AC-refinement path and the title stays unplayable until it is
 fixed.
+
+## A key-only replay script misclassifies tap-driven titles (round 6, 2026-10-23)
+
+The headless `--keys` format replays pointer edges as `pressed@X,Y` and
+`released@X,Y`, but the sweep scripts used so far only pressed keys. That made
+several board and card titles look static: they wait for a tap, so a key-only
+script leaves them on one screen with almost no work done. Eight such titles
+were run twice with identical frame counts, heaps, cores and RNG seeds - once
+with a script that mixes keys and taps, once with keys only:
+
+| title | bytecodes with taps | bytecodes keys only | paints with taps / keys only |
+| --- | --- | --- | --- |
+| 3D台球之王_5014 | 752,774 | 130,137 | 313 / 138 |
+| 蓝白五子棋_9790 | 228,109,484 | 178,980,123 | 458 / 338 |
+| 国色天香斗地主_1364 | 20,577,234 | 19,913,562 | 200 / 200 |
+| 麻将象棋五子棋3合1_12014 | 4,678,592 | 11,993,396 | 600 / 600 |
+| 麻将三国_5157 | 199,499 | 183,498 | 165 / 184 |
+| 爆笑三国斗地主_10552 | 181,836 | 250,471 | 600 / 600 |
+| 电玩美女麻将_7260 | 1,370,473 | 1,370,551 | 600 / 600 |
+| 精品美女斗地主2013_104 | 168,385,160 | 181,191,994 | 155 / 257 |
+
+`3D台球之王_5014` is the clearest case: the key-only run never leaves the
+"是否开启音效" dialog (130 k bytecodes, one distinct dumped frame), while the
+tap script dismisses it and the title does 5.8x the work with two distinct
+frames. `蓝白五子棋_9790` places stones under taps (458 vs 338 paints, 3 vs 2
+distinct dumps). `麻将象棋五子棋3合1_12014` reaches four distinct screens
+instead of two. Two titles go the other way for an understood reason: a tap at
+the soft-key row can activate an exit/menu command, so `精品美女斗地主2013_104`
+ends early (362 of 600 frames) and `爆笑三国斗地主_10552` stays on its menu.
+
+No pointer path crash or uncaught exception appeared in any of the runs: the
+45 caught exceptions in `精品美女斗地主2013_104` are the title's own missing
+assets (`/img/d.png`, `/ani/ept.png` and friends are not in its JAR) and a
+title-side NPE in `af.e`, the same ones the key-only arm raises.
+
+Guidance for future sweeps: always mix taps into the script; treat "static
+under keys" as a finding only if taps also do nothing, and check early exits
+against the soft-key positions before calling a tap a regression.
+
+Raw logs, frames and the table are under
+`.local-tools/debug-runs/compat-round9-20261022/ptr-sweep/` (`summary.txt`,
+per-title `run.log`/`frames/`, plus the `keyonly-*` arms).
