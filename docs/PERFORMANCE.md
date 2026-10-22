@@ -1755,3 +1755,54 @@ and the stack frames are unchanged (`mr_fill_segment` 176 B, bounded
 code grows: object `.text` 15,195 -> 17,379 B, most of it the inlined pixel
 paths.  This is a host-side raster measurement, not a claim about game FPS;
 the game share above says how much of one title's CPU the rasteriser owns.
+
+## Eight field pointers the hot natives kept re-resolving (round 2, 2026-10-22)
+
+The class-name cache fix above removed the class lookup from every
+`nj_field_lookup(vm, "java/io/ByteArrayInputStream", …)`, but the walk that
+follows it — find the pkg/class, walk the field table, compare name and
+descriptor — still ran on every element of bulk I/O and every line of text.
+The 900-frame paced DMC replay attributed 6.17% of its CPU to
+`field_lookup_walk` alone, on top of `nj_field_lookup` 3.70%, with about 8
+million lookups: `bais_read` 2.58 M, `baos_write` 1.56 M, `font_for` 1.44 M,
+`baos_ensure` 1.04 M.  They only ever ask for eight fields:
+`ByteArrayInputStream.buf/pos/count/mark`,
+`ByteArrayOutputStream.buf/count`, `Font.style/size`.
+
+`nj_hot_field(vm, slot, cls, name, desc)` (`include/nj2me/nj_config.h`,
+`NJ_ENABLE_HOT_FIELDS`, default 1) memoises exactly those eight `nj_field *`
+per VM and leaves `nj_field_lookup()` untouched for everything else, so the
+resolved pointers — and therefore the semantics, including subclass field
+hiding — are identical to the uncached path.  The slots are cleared in
+`clear_host_caches()` when a save state is restored, because the restore
+rebuilds the class structures the pointers point into.  No allocation, no
+writable globals; `NJ_ENABLE_HOT_FIELDS=0` restores the per-call walk and the
+exact pre-change binary layout.
+
+Measured on the deterministic I/O fixture (`io-bench.jar`: 2 M
+`ByteArrayOutputStream.write(int)`, 0.5 M range writes, then three passes of 2 M
+`ByteArrayInputStream.read()` and 0.5 M `DataInputStream.readInt()`, one fixed
+sink), interleaved A/B, 6 runs per arm, CPU 2, child CPU time from
+`getrusage`:
+
+| arm | min CPU | median CPU |
+| --- | --- | --- |
+| `NJ_ENABLE_HOT_FIELDS=0` | 1.1493 s | 1.1508 s |
+| default (memo) | 0.4105 s | 0.4115 s |
+
+That is a 64.28% / 64.24% reduction with identical work — bytecodes
+92,006,066, natives 16,001,501 and the printed sink are the same in both
+arms — and the per-phase numbers fall together (write 112 -> 39 ms, range
+30 -> 12 ms, read 1,002 -> 354 ms).
+
+A paced real game agrees in direction but is only indicative, because its
+timing-dependent state means the two arms do slightly different work: a
+600-frame `鬼泣3D中文版_3376` replay cost 0.5859/0.6035 s CPU (min/median) with
+the memo off and 0.5085/0.5114 s with it on, i.e. 13.21% / 15.25% less, while
+the memo arm drew 1.5% *more* bytecodes and triangles.
+
+RAM: 64 bytes per VM (8 pointers).  `nj_vm_sizeof()` is 10,808 -> 10,872 B on
+x86-64, `.data`/`.bss` are unchanged and the macro-off build keeps 10,808.
+`bench.jar` is byte-identical (`BENCH sum=-136042548`, 70,514,376 bytecodes,
+heap 92,432/92,432), the 27-value digest matches the desktop VM and the full
+`ctest` suite passes 99/99.

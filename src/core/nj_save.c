@@ -1291,6 +1291,13 @@ static void clear_host_caches(nj_vm *vm)
         vm->find_key[i] = NULL;
         vm->find_cls[i] = NULL;
     }
+#if NJ_ENABLE_HOT_FIELDS
+    /* Memoised hot-field pointers point into class structures that this
+     * restore replaces, so drop them; each slot re-resolves on first use. */
+    for (i = 0u; i < (nj_u4)NJ_HF_COUNT; i++) {
+        vm->hot_field[i] = NULL;
+    }
+#endif
     /*
      * The per-field memo table is not part of every build of this VM yet, so
      * it is cleared under its own slot count: a build without the table simply

@@ -137,6 +137,7 @@ set(NJ_JIT_RV32_REG_CACHE 1 CACHE STRING "Reuse RV32 temporary register values w
 set(NJ_JIT_HOT_THRESHOLD 8 CACHE STRING "Hits before compiling a bytecode block")
 set(NJ_JIT_MAX_BLOCK_INSNS 32 CACHE STRING "Maximum bytecodes per native block")
 set(NJ_JIT_MAX_CODE_BYTES 2048 CACHE STRING "Maximum native bytes per block")
+set(NJ_ENABLE_HOT_FIELDS 1 CACHE STRING "Memoise hot Midp field lookups (+64 B per VM)")
 set(NJ_MASCOT_FAST_FIELDS 1 CACHE STRING "Use Micro3D receiver classes directly for field access (no cache)")
 set(NJ_MASCOT_MAX_QUEUED_TRIANGLES 16384 CACHE STRING "Maximum deferred Micro3D primitives per Graphics3D")
 
@@ -262,6 +263,7 @@ target_compile_definitions(nj2me PUBLIC
   NJ_JIT_MAX_BLOCK_INSNS=${NJ_JIT_MAX_BLOCK_INSNS}
   NJ_JIT_MAX_CODE_BYTES=${NJ_JIT_MAX_CODE_BYTES}
   NJ_M3G_FAST_PATHS=${NJ_M3G_FAST_PATHS}
+  NJ_ENABLE_HOT_FIELDS=${NJ_ENABLE_HOT_FIELDS}
   NJ_MASCOT_FAST_FIELDS=${NJ_MASCOT_FAST_FIELDS}
   NJ_MASCOT_MAX_QUEUED_TRIANGLES=${NJ_MASCOT_MAX_QUEUED_TRIANGLES}
   NJ_ENABLE_FONT_CJK=${NJ_ENABLE_FONT_CJK}

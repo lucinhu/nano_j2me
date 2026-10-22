@@ -641,6 +641,15 @@
 #  define NJ_MASCOT_FAST_FIELDS 1
 #endif
 
+/* Memoise the few field pointers that the hot Midp natives resolve on every
+ * element of bulk I/O or every text line (ByteArray{Input,Output}Stream and
+ * Font).  Costs 64 bytes per VM, no allocation and no writable globals; the
+ * resolved pointers are identical to what nj_field_lookup() returns.  Set 0
+ * to restore the per-call name lookup (the pre-cache behaviour). */
+#ifndef NJ_ENABLE_HOT_FIELDS
+#  define NJ_ENABLE_HOT_FIELDS 1
+#endif
+
 /* Deferred Micro3D rendering grows its queue on demand. This caps queued
  * primitives per Graphics3D (64 bytes/primitive, plus a 4-byte sort index;
  * allocated buffers round up to powers of two). Lower the cap for small heaps;

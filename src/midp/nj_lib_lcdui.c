@@ -158,6 +158,15 @@ static nj_s4 fget(nj_vm *vm, nj_ref o, const char *cls, const char *name,
     return f ? nj_field_read_int(vm, o, f) : 0;
 }
 
+/* fget() for the fields the text path reads on every line: the field pointer
+ * is resolved once per VM instead of once per call. */
+static nj_s4 fget_hot(nj_vm *vm, nj_ref o, int slot, const char *cls,
+                      const char *name, const char *desc)
+{
+    nj_field *f = nj_hot_field(vm, slot, cls, name, desc);
+    return f ? nj_field_read_int(vm, o, f) : 0;
+}
+
 static void fput(nj_vm *vm, nj_ref o, const char *cls, const char *name,
                  const char *desc, nj_s4 v)
 {
@@ -643,8 +652,10 @@ const nj_font *nj_midp_font_for(nj_vm *vm, nj_ref font_obj)
         return nj_fontset_get(&vm->fonts, NJ_FONT_SIZE_MEDIUM,
                               NJ_FONT_STYLE_PLAIN);
     }
-    style = (int)fget(vm, font_obj, NJ_C_FONT, F_FONT_STYLE, D_INT);
-    size = (int)fget(vm, font_obj, NJ_C_FONT, F_FONT_SIZE, D_INT);
+    style = (int)fget_hot(vm, font_obj, NJ_HF_FONT_STYLE, NJ_C_FONT,
+                          F_FONT_STYLE, D_INT);
+    size = (int)fget_hot(vm, font_obj, NJ_HF_FONT_SIZE, NJ_C_FONT,
+                         F_FONT_SIZE, D_INT);
     return nj_fontset_get(&vm->fonts, size, style);
 }
 

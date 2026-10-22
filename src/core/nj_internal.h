@@ -322,6 +322,28 @@ typedef struct nj_codec_reg {
 #define NJ_RESOLVE_METHOD 3u
 #define NJ_RESOLVE_FORMAT 4u
 
+/*
+ * Hot-field slots.
+ *
+ * A handful of native paths run once per byte of bulk I/O or per text line and
+ * used to resolve their field by (class, name, descriptor) on every call -
+ * about 8 million name walks in one 900-frame 3D title.  These slots memoise
+ * the resolved nj_field pointer per VM; the lookup itself is unchanged, only
+ * its repetition is removed.  Set NJ_ENABLE_HOT_FIELDS=0 to restore the
+ * per-call lookup for targets where the 64 bytes per VM matter more.  The
+ * slot numbers exist in either mode so the natives need no #if. */
+enum {
+    NJ_HF_BAIS_BUF,     /* java/io/ByteArrayInputStream.buf   [B */
+    NJ_HF_BAIS_POS,     /* java/io/ByteArrayInputStream.pos   I  */
+    NJ_HF_BAIS_COUNT,   /* java/io/ByteArrayInputStream.count I  */
+    NJ_HF_BAIS_MARK,    /* java/io/ByteArrayInputStream.mark  I  */
+    NJ_HF_BAOS_BUF,     /* java/io/ByteArrayOutputStream.buf  [B */
+    NJ_HF_BAOS_COUNT,   /* java/io/ByteArrayOutputStream.count I */
+    NJ_HF_FONT_STYLE,   /* javax/microedition/lcdui/Font.style I */
+    NJ_HF_FONT_SIZE,    /* javax/microedition/lcdui/Font.size  I */
+    NJ_HF_COUNT
+};
+
 struct nj_vm {
     nj_heap heap;
 
@@ -353,6 +375,12 @@ struct nj_vm {
     nj_class  *cls_object;
     nj_class  *cls_throwable;
     nj_class  *cls_object_array;
+
+#if NJ_ENABLE_HOT_FIELDS
+    /* See the slot enum above: lazily resolved field pointers for the hot
+     * Midp natives.  Never serialised; cleared when a save state is restored. */
+    nj_field  *hot_field[NJ_HF_COUNT];
+#endif
 
     /* constant-pool resolution cache */
     nj_cpentry *cp_cache;
@@ -787,6 +815,25 @@ static inline nj_status nj_class_init_lazy(nj_vm *vm, nj_class *c)
  * function's own object file).
  */
 void nj_frame_pop(nj_vm *vm, nj_thread *th);
+
+#if NJ_ENABLE_HOT_FIELDS
+/* Resolve a hot field once per VM.  The returned pointer is identical to what
+ * nj_field_lookup() would return; a failed lookup is retried on the next call
+ * rather than cached, so a class that was not loadable yet still works. */
+static inline nj_field *nj_hot_field(nj_vm *vm, int slot, const char *cls,
+                                     const char *name, const char *desc)
+{
+    nj_field *f = vm->hot_field[slot];
+    if (!f) {
+        f = nj_field_lookup(vm, cls, name, desc, 0);
+        vm->hot_field[slot] = f;
+    }
+    return f;
+}
+#else
+#define nj_hot_field(vm, slot, cls, name, desc) \
+    nj_field_lookup((vm), (cls), (name), (desc), 0)
+#endif
 
 static inline void nj_frame_pop_fast(nj_thread *th)
 {

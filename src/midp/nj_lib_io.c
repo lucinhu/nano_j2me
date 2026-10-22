@@ -280,11 +280,11 @@ NJFN(bais_init)
     if (!buf) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    nj_field_write_ref(vm, self, fld(vm, BAIS, "buf", "[B"), buf);
-    nj_field_write_int(vm, self, fld(vm, BAIS, "pos", "I"), 0);
-    nj_field_write_int(vm, self, fld(vm, BAIS, "count", "I"),
+    nj_field_write_ref(vm, self, nj_hot_field(vm, NJ_HF_BAIS_BUF, BAIS, "buf", "[B"), buf);
+    nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"), 0);
+    nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_COUNT, BAIS, "count", "I"),
                        buf ? (nj_s4)buf->length : 0);
-    nj_field_write_int(vm, self, fld(vm, BAIS, "mark", "I"), 0);
+    nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_MARK, BAIS, "mark", "I"), 0);
     return NJ_OK;
 }
 
@@ -294,9 +294,9 @@ NJFN(bais_init_range)
     if (st != NJ_OK) {
         return st;
     }
-    nj_field_write_int(vm, NJ_THIS(args), fld(vm, BAIS, "pos", "I"),
+    nj_field_write_int(vm, NJ_THIS(args), nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"),
                        NJ_ARG_INT(args, 1));
-    nj_field_write_int(vm, NJ_THIS(args), fld(vm, BAIS, "count", "I"),
+    nj_field_write_int(vm, NJ_THIS(args), nj_hot_field(vm, NJ_HF_BAIS_COUNT, BAIS, "count", "I"),
                        NJ_ARG_INT(args, 1) + NJ_ARG_INT(args, 2));
     return NJ_OK;
 }
@@ -304,24 +304,24 @@ NJFN(bais_init_range)
 NJFN(bais_read)
 {
     nj_ref self = NJ_THIS(args);
-    nj_ref buf = nj_field_read_ref(vm, self, fld(vm, BAIS, "buf", "[B"));
-    nj_s4 pos = nj_field_read_int(vm, self, fld(vm, BAIS, "pos", "I"));
-    nj_s4 count = nj_field_read_int(vm, self, fld(vm, BAIS, "count", "I"));
+    nj_ref buf = nj_field_read_ref(vm, self, nj_hot_field(vm, NJ_HF_BAIS_BUF, BAIS, "buf", "[B"));
+    nj_s4 pos = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"));
+    nj_s4 count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_COUNT, BAIS, "count", "I"));
 
     if (!buf || pos >= count) {
         ret->i = -1;
         return NJ_OK;
     }
     ret->i = (nj_s4)buf->u.bytes[pos];
-    nj_field_write_int(vm, self, fld(vm, BAIS, "pos", "I"), pos + 1);
+    nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"), pos + 1);
     return NJ_OK;
 }
 
 NJFN(bais_available)
 {
     nj_ref self = NJ_THIS(args);
-    ret->i = nj_field_read_int(vm, self, fld(vm, BAIS, "count", "I")) -
-             nj_field_read_int(vm, self, fld(vm, BAIS, "pos", "I"));
+    ret->i = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_COUNT, BAIS, "count", "I")) -
+             nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"));
     return NJ_OK;
 }
 
@@ -329,32 +329,32 @@ NJFN(bais_skip)
 {
     nj_ref self = NJ_THIS(args);
     nj_s8 want = NJ_ARG_LONG(args, 0);
-    nj_s4 pos = nj_field_read_int(vm, self, fld(vm, BAIS, "pos", "I"));
-    nj_s4 count = nj_field_read_int(vm, self, fld(vm, BAIS, "count", "I"));
+    nj_s4 pos = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"));
+    nj_s4 count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_COUNT, BAIS, "count", "I"));
     nj_s4 avail = count - pos;
     nj_s4 step = (want > avail) ? avail : (nj_s4)want;
 
     if (step < 0) {
         step = 0;
     }
-    nj_field_write_int(vm, self, fld(vm, BAIS, "pos", "I"), pos + step);
+    nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"), pos + step);
     ret->j = step;
     return NJ_OK;
 }
 
 NJFN(bais_mark)
 {
-    nj_field_write_int(vm, NJ_THIS(args), fld(vm, BAIS, "mark", "I"),
+    nj_field_write_int(vm, NJ_THIS(args), nj_hot_field(vm, NJ_HF_BAIS_MARK, BAIS, "mark", "I"),
                        nj_field_read_int(vm, NJ_THIS(args),
-                                         fld(vm, BAIS, "pos", "I")));
+                                         nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I")));
     return NJ_OK;
 }
 
 NJFN(bais_reset)
 {
-    nj_field_write_int(vm, NJ_THIS(args), fld(vm, BAIS, "pos", "I"),
+    nj_field_write_int(vm, NJ_THIS(args), nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"),
                        nj_field_read_int(vm, NJ_THIS(args),
-                                         fld(vm, BAIS, "mark", "I")));
+                                         nj_hot_field(vm, NJ_HF_BAIS_MARK, BAIS, "mark", "I")));
     return NJ_OK;
 }
 
@@ -376,8 +376,8 @@ NJFN(bais_close)
 
 static nj_status baos_ensure(nj_vm *vm, nj_ref self, nj_s4 need)
 {
-    nj_field *fb = fld(vm, BAOS, "buf", "[B");
-    nj_field *fc = fld(vm, BAOS, "count", "I");
+    nj_field *fb = nj_hot_field(vm, NJ_HF_BAOS_BUF, BAOS, "buf", "[B");
+    nj_field *fc = nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I");
     nj_ref buf = nj_field_read_ref(vm, self, fb);
     nj_s4 count = nj_field_read_int(vm, self, fc);
 
@@ -409,8 +409,8 @@ static nj_status baos_init_capacity(nj_vm *vm, nj_ref self, nj_u4 cap)
     if (!buf) {
         return nj_throw_oom(vm);
     }
-    nj_field_write_ref(vm, self, fld(vm, BAOS, "buf", "[B"), buf);
-    nj_field_write_int(vm, self, fld(vm, BAOS, "count", "I"), 0);
+    nj_field_write_ref(vm, self, nj_hot_field(vm, NJ_HF_BAOS_BUF, BAOS, "buf", "[B"), buf);
+    nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I"), 0);
     return NJ_OK;
 }
 
@@ -448,11 +448,11 @@ NJFN(baos_write)
     if (baos_ensure(vm, self, 1) != NJ_OK) {
         return NJ_ERR;
     }
-    buf = nj_field_read_ref(vm, self, fld(vm, BAOS, "buf", "[B"));
+    buf = nj_field_read_ref(vm, self, nj_hot_field(vm, NJ_HF_BAOS_BUF, BAOS, "buf", "[B"));
     {
-        nj_s4 count = nj_field_read_int(vm, self, fld(vm, BAOS, "count", "I"));
+        nj_s4 count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I"));
         buf->u.bytes[count] = (nj_u1)b;
-        nj_field_write_int(vm, self, fld(vm, BAOS, "count", "I"), count + 1);
+        nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I"), count + 1);
     }
     return NJ_OK;
 }
@@ -475,20 +475,20 @@ NJFN(baos_write_range)
     if (baos_ensure(vm, self, len) != NJ_OK) {
         return NJ_ERR;
     }
-    buf = nj_field_read_ref(vm, self, fld(vm, BAOS, "buf", "[B"));
-    count = nj_field_read_int(vm, self, fld(vm, BAOS, "count", "I"));
+    buf = nj_field_read_ref(vm, self, nj_hot_field(vm, NJ_HF_BAOS_BUF, BAOS, "buf", "[B"));
+    count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I"));
     if (len > 0) {
         memcpy(buf->u.bytes + count, src->u.bytes + off, (nj_size)len);
     }
-    nj_field_write_int(vm, self, fld(vm, BAOS, "count", "I"), count + len);
+    nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I"), count + len);
     return NJ_OK;
 }
 
 NJFN(baos_toByteArray)
 {
     nj_ref self = NJ_THIS(args);
-    nj_ref buf = nj_field_read_ref(vm, self, fld(vm, BAOS, "buf", "[B"));
-    nj_s4 count = nj_field_read_int(vm, self, fld(vm, BAOS, "count", "I"));
+    nj_ref buf = nj_field_read_ref(vm, self, nj_hot_field(vm, NJ_HF_BAOS_BUF, BAOS, "buf", "[B"));
+    nj_s4 count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I"));
     nj_ref out = nj_byte_array_new(vm, (nj_u4)count);
 
     if (!out) {
@@ -504,21 +504,21 @@ NJFN(baos_toByteArray)
 NJFN(baos_size)
 {
     ret->i = nj_field_read_int(vm, NJ_THIS(args),
-                               fld(vm, BAOS, "count", "I"));
+                               nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I"));
     return NJ_OK;
 }
 
 NJFN(baos_reset)
 {
-    nj_field_write_int(vm, NJ_THIS(args), fld(vm, BAOS, "count", "I"), 0);
+    nj_field_write_int(vm, NJ_THIS(args), nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I"), 0);
     return NJ_OK;
 }
 
 NJFN(baos_toString)
 {
     nj_ref self = NJ_THIS(args);
-    nj_ref buf = nj_field_read_ref(vm, self, fld(vm, BAOS, "buf", "[B"));
-    nj_s4 count = nj_field_read_int(vm, self, fld(vm, BAOS, "count", "I"));
+    nj_ref buf = nj_field_read_ref(vm, self, nj_hot_field(vm, NJ_HF_BAOS_BUF, BAOS, "buf", "[B"));
+    nj_s4 count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I"));
     nj_u2 *tmp = (nj_u2 *)nj_host_alloc(vm, ((nj_size)count + 1u) * sizeof(nj_u2));
     nj_ref out;
     nj_s4 i;
@@ -1513,8 +1513,8 @@ NJFN(fos_init)
     if (!buf) {
         return nj_throw_oom(vm);
     }
-    nj_field_write_ref(vm, self, fld(vm, BAOS, "buf", "[B"), buf);
-    nj_field_write_int(vm, self, fld(vm, BAOS, "count", "I"), 0);
+    nj_field_write_ref(vm, self, nj_hot_field(vm, NJ_HF_BAOS_BUF, BAOS, "buf", "[B"), buf);
+    nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I"), 0);
     nj_field_write_ref(vm, self, fld(vm, FOS, "path", "Ljava/lang/String;"),
                        path);
     return NJ_OK;
@@ -1530,8 +1530,8 @@ NJFN(fos_flush)
 
     path = nj_field_read_ref(vm, self,
                              fld(vm, FOS, "path", "Ljava/lang/String;"));
-    buf = nj_field_read_ref(vm, self, fld(vm, BAOS, "buf", "[B"));
-    count = nj_field_read_int(vm, self, fld(vm, BAOS, "count", "I"));
+    buf = nj_field_read_ref(vm, self, nj_hot_field(vm, NJ_HF_BAOS_BUF, BAOS, "buf", "[B"));
+    count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I"));
 
     if (!path || nj_string_to_utf8(path, host, (int)sizeof(host)) <= 0) {
         return nj_throw(vm, "java/io/IOException", "no path to write to");
