@@ -13,18 +13,23 @@
    JAR 内唯一的游戏 Canvas 类 `t` 的 `pointerPressed` / `pointerReleased` / `pointerDragged` 三个方法经 `javap` 确认全部是空实现（`0: return`），全 JAR 只有 `t` 引用 "pointer" 相关字符串。
    → 因此 `docs/notes/2026-10-22-townsmen6-village-ui.md` 第 3 轮"底部行动菜单能画出来、但任何按键/触摸都没有像素响应"的现象得到解释：**菜单是画出来了，但触摸事件根本不会被游戏接收**，uinput 虚拟触摸（`vptr`）永远无法驱动本游戏。
    → 本游戏**只能纯键盘操作**：方向键（等价数字键 2/4/6/8）在地图上移动一个"手形指针"，确认键 = Fire（Return）/ 左软键 F1 / 数字键 5，右软键 F2 = 取消/返回。
-3. 四项验收结论：
+3. 验收结论：
 
    | 验收项 | 结果 | 主要证据 |
    |---|---|---|
    | 1 教程（村民选择）完成 | **达成** | runC `c16.png`（教程"翠林满目"、蓝箭头指向伐木场），教程目标链一路推进到"人口膨胀" |
-   | 2 实际建成建筑 + 面板变化 | **达成（证据来自 runC 的在途二进制）** | runC `z18/z20/z22`（住房）、`z32/z33`（采石场）、`z48/z49`（水井）、`B4`（养鱼场） |
+   | 2 实际建成建筑 + 面板变化 | **达成（runC 在途二进制 + runF 当前构建各一组证据）** | runC `z18/z20/z22`（住房）、`z32/z33`（采石场）、`z48/z49`（水井）、`B4`（养鱼场）；**当前构建 `e8459c13…`：runF `P5.png`（绿色可建区 + 标签"住房"）→ `P6.png`（新建筑脚手架 + 其信息面板，标签"建筑工人"）** |
    | 3 战斗 | **阻塞（未达成）** | 战役法国地图可达、地区面板显示"国王士兵 3 / 红军士兵 5 / 派遣"，但"派遣"按钮无法用键盘激活；详见"兼容状态" |
    | 4 存档→退出→同一 --rms-dir 重启→继续 | **达成** | runC 写入 `Townsmen62.rms`（966 B），runD 用同一 `--rms-dir` 重启后 `R09.png` 恢复村庄 |
-   | 5 异常记录 | **达成** | runC / runD 全部异常均为游戏内部 `thrown`（已捕获），**无未捕获异常、无 MediaException** |
+   | 5 异常记录 | **达成** | runC / runD / runE / runG 四次会话的全部异常均为游戏内部 `thrown`（已捕获），**无未捕获异常、无 MediaException**（当前构建见 `runG/runtime.log`） |
 
-4. **重要保留意见**：验收 2 的建造证据全部来自 **runC 会话**，其二进制 SHA-256 `2f10619898453398d799138bd31d2fc2f99a0fd1665140540e1ad6d520a5dbfd`（带 `NJ_ENABLE_SUPERINSTR` + `NJ_ENABLE_JUMP_THREADING` 的在途构建）**已被其他会话从磁盘删除**（`/proc/<pid>/exe` 显示 `(deleted)`），无法再复现。
-   用 **HEAD 干净构建 `9f6325a7…`（runD/runE）** 在**同一存档**上重做建造流程时：行动菜单图标、放置模式的半透明建筑影子、地块绿色/红色高亮**均不渲染**，放置模式呈"无任何可见反馈"状态，按 Fire 无效。因此"建造"在 HEAD 构建上属于 **未复现** 状态，不能据此断定 HEAD 构建支持建造。
+4. **建造流程在当前构建上已复现（对第 4 条保留意见的修正）**：验收 2 的第一批证据来自 **runC 会话**，其二进制 SHA-256 `2f10619898453398d799138bd31d2fc2f99a0fd1665140540e1ad6d520a5dbfd`（带 `NJ_ENABLE_SUPERINSTR` + `NJ_ENABLE_JUMP_THREADING` 的在途构建）**已被其他会话从磁盘删除**（`/proc/<pid>/exe` 显示 `(deleted)`），无法再复现。
+   用 **HEAD 干净构建 `9f6325a7…`（runD/runE）** 重做建造流程时行动菜单图标、建筑影子、地块绿/红高亮均不渲染（该构建下"未复现"）。
+   但随后在 **当前工作区构建 `e8459c132b2ca9bb4f0230a902caf24f4f6147bdea942d3d2011cd39ba03e94f`（runF/runG）** 上用 runC 的存档副本重做，**建造完整复现**：
+   行动菜单 4 个图标正常绘制 → 建造菜单卡片（住房 + 3 星 + 绿色造价按钮 "3"）正常绘制 → 放置模式显示**绿色可建区**（`runF/P5.png`，底部标签"住房"）→ 移动指针到绿色格后按 Fire → **房屋落地**（原位置出现木质脚手架工地，`runF/P6.png`）并自动弹出该新建筑的信息面板（底部标签"建筑工人"，即需要指派建筑工人）。
+   ⇒ 结论：**建造（放置 + 落地）在当前构建上是可用的**；HEAD 干净构建 `9f6325a7…` 上的"未渲染"是该构建自身的渲染差异，不应据此判定"不支持建造"。
+5. **自由模式（自由建造）用键盘可以进入**（对第 5 条边界项的修正）：主菜单 → 开始游戏 → 启动画面 → 模式菜单 → 自由模式 → 进入**自由模式设置页**（`地图尺寸 / 水域面积 / 敌人数量` 三条滑块）→ 进入自由模式村庄地图（runG `P3.png` / `Q_left.png` / `Q_space.png`）。自由模式地图同样支持行动菜单与绿色/红色放置提示。
+6. **战斗仍然阻塞**，且阻塞原因现在是**可证明的**（不再是"没找到路径"）：`javap` 全量反编译证明，地区面板（含"派遣"按钮，类 `o`）只由**触摸路径**驱动，而唯一的游戏 Canvas 类 `t` 的 `pointerPressed/Released/Dragged` 全部是 `0: return`；键盘确认路径 `hg/HG.a(int,boolean)` 只会做"按当前指针格子做**网格**命中测试"（`s.k()/s.l()` → `s.a(II)Z` → `s.c()`），而战役地图实现 `v` 的 `a(II)Z` 只写入网格坐标 `g/h` 并做范围检查，**不存在任何屏幕像素级控件命中测试**。因此"派遣"按钮在纯键盘下不可达。
 
 ---
 
@@ -44,8 +49,25 @@ JAR SHA-256       5a32a9881af0c479c194a25c9180cf6471d0cb7f45777bbbebfdc58d3cca93
 
 | 二进制 | SHA-256 | 用途 |
 |---|---|---|
-| `build/nj2me`（会话期间被其他会话反复重建） | 运行中 runC：`2f10619898453398d799138bd31d2fc2f99a0fd1665140540e1ad6d520a5dbfd`（已被删除）<br>报告时刻：`e8459c132b2ca9bb4f0230a902caf24f4f6147bdea942d3d2011cd39ba03e94f` | runC 的建造证据由在途构建产生 |
+| `build/nj2me`（会话期间被其他会话反复重建） | 运行中 runC：`2f10619898453398d799138bd31d2fc2f99a0fd1665140540e1ad6d520a5dbfd`（已被删除）<br>runF/runG 运行期间且报告时刻：`e8459c132b2ca9bb4f0230a902caf24f4f6147bdea942d3d2011cd39ba03e94f` | runF/runG（当前构建，建造复现 + 自由模式） |
 | `.local-tools/head-build-20261022/build/nj2me`（HEAD 干净构建，= Lead 的基准） | `9f6325a76fb71857ee6b21606b5219771cf70df03e753b36e79fb1226f42d813` | runD（读档/战役地图）、runE（重做建造） |
+
+runF / runG（当前构建 + runC 存档的**副本**，`runC/rms` 本身未被改动）：
+
+```bash
+cd /home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/townsmen6-bcs-20261022
+BIN=/home/lucinhu/workspace/c/nano_j2me/build/nj2me
+JAR="/home/lucinhu/Downloads/jar/家园6之革命完美汉化版_诺基亚 N73系列(240x320).jar"
+sha256sum $BIN          # e8459c132b2ca9bb4f0230a902caf24f4f6147bdea942d3d2011cd39ba03e94f
+mkdir -p runF && rm -rf runF/rms && cp -a runC/rms runF/rms          # 副本，绝不动 runC/rms
+sha256sum runF/rms/*.rms > runF/manifest.txt
+sha256sum "$JAR" >> runF/manifest.txt ; date >> runF/manifest.txt
+rm -f cmd6.fifo && mkfifo cmd6.fifo
+setsid bash -c "cd $PWD && tail -f cmd6.fifo | python3 drive4.py \
+  --jar '$JAR' --size 240x320 --out runF --frames 400000 \
+  --bin $BIN --rms-dir $PWD/runF/rms > drive6.out 2>&1" < /dev/null > /dev/null 2>&1 &
+# runG 同理（--out runG --rms-dir $PWD/runG/rms，fifo 名 cmd7.fifo）
+```
 
 回放驱动（本次自建，位于本运行目录）：
 
@@ -114,7 +136,45 @@ HandyGames 启动画面              → Fire
 移动手形指针直到地块高亮为绿色  → Fire            # 放下建筑
 ```
 
-> 建造菜单里 Up/Down/Left/Right **不会**改变建筑种类（实测 5 次 Right + 5 次 Down 后仍是"住房"），
+### B2. 当前构建（`e8459c13…`）上的建造复现（runF，逐键记录自 `drive6.out`）
+
+```text
+村庄空地上                      → Fire        # 行动菜单：4 个图标围绕手形指针（runF/P1.png）
+行动菜单                        → Up          # 建造菜单卡片：住房 + 3 星 + 绿色造价按钮"3"（runF/F10.png）
+                                            #   注意：F1(✓) 在本构建上是 no-op（F11 与 F10 逐字节相同）；
+                                            #         Fire 不是"按下建造"，而是对当前指针格子做命中测试（F12）
+```
+
+放置并落地（runF 的实际成功路径，截图 P1→P6）：
+
+```text
+村庄空地上                      → Fire        # 行动菜单                                   → P1
+行动菜单                        → Up          # 无变化（该指针位置 Up 不进建造菜单）           → P2
+行动菜单                        → Fire        # 进入放置模式，指针落在矿石上 → 地块为**红色** → P3
+放置模式                        → Down ×3     # 移动指针                                   → P4
+放置模式                        → Left ×3     # 指针移到草地 → 地块变为**绿色可建区**          → P5
+放置模式                        → Fire        # **房屋落地**：原位置出现木质脚手架工地，
+                                            # 并自动弹出该新建筑的信息面板（标签"建筑工人"）→ P6
+```
+
+> 自由模式村庄里同样能看到放置提示：runG `Q_space.png` = 行动菜单打开时同时出现**绿色可建格 + 红色不可建格**（压在树林上）与手形指针；
+> `S1.png` / `S2.png` 逐字节相同 ⇒ 在**红色（非法）格**上按 Fire 什么也不会发生（游戏拒绝非法落点），这与"绿色格 + Fire ⇒ 落地"互为印证。
+
+### B3. 自由模式（自由建造）的键盘路径（runG）
+
+```text
+主菜单（开始游戏 高亮）          → Fire
+HandyGames 启动画面              → Fire
+模式菜单（剧情战役 高亮 / 自由模式）→ 选择"自由模式"
+自由模式设置页                   # 地图尺寸 / 水域面积 / 敌人数量 三条滑块（runG/P3.png）
+                                → Fire 进入自由模式村庄地图（runG/Q_left.png：水域、树林、城堡）
+村庄空地上                      → Fire        # 行动菜单 + 绿/红放置提示（runG/Q_space.png）
+```
+
+> `敌人数量` 滑块说明自由模式**可以配置敌军**，是本 JAR 唯一存在敌军的玩法入口；
+> 但滑块左右两侧的 `◀ / ▶` 是触摸型控件，且自由模式内的兵营/士兵链路本轮未走通（见"边界与未验证项"）。
+
+> 补充（runC 实测）：**剧情关卡**的建造菜单里 Up/Down/Left/Right **不会**改变建筑种类（实测 5 次 Right + 5 次 Down 后仍是"住房"），
 > 建筑种类由剧情关卡的目标固定。放下"采石场"必须落在灰色矿脉上，"水井"必须落在住宅区附近，"养鱼场"必须落在岸边。
 
 ### C. 存档（runC 实际执行，得到 `Townsmen62.rms`）
@@ -225,7 +285,39 @@ RMS 文件格式（nano_j2me 自有格式，文件头 16 字节）：
 | `…/runE/E07.png` | `e0b2ab8e3ff4a7d308ec8f291be8c5d282dbaa0d9dc13a73f1dc87caffcdcaa0` | 6 次 Left + Fire 之后：手形指针 bbox (228,324)-(303,399)（指针确实在移动，精灵只是**间歇绘制**；地图相机跟随会抵消大部分位移） |
 | `…/runE/runtime.log` | `cc3335180f2f87d902459925746ea27bd844e8ef457d173b516a89e2b3320786` | runE 运行日志（异常与 runD 完全相同） |
 
-### 4. 反编译证据（触摸被忽略）
+### 6. 建造复现（runF，当前构建 `e8459c13…` + `runF/rms` = `runC/rms` 的副本）
+
+| 绝对路径 | SHA-256 | 内容 |
+|---|---|---|
+| `…/runF/manifest.txt` | `d2171f72bd7bca3bcc1c3c4787282899645b99fe5b3ff831ded54ef060af459c` | 二进制/JAR/存档副本哈希 + 时间戳（2026-10-22 07:52:40 CST） |
+| `…/runF/F08.png` | `b442c5c6e1c2885f3b762d22b58fb6e317cfd244b7a2912533dc736b7bda2c56` | 用存档副本启动后**恢复的村庄**（第 29 天、人口 3、城堡 + 农舍 + 伐木场 + 水井 + 采石场 + 养鱼场） |
+| `…/runF/F09.png` | `c2ad59d985dad986acb0eb1fff88554f3d3db61a5745eb36d1be9b582ab9db37` | 空地上按 Fire → 行动菜单（底部羊皮纸标签"行动菜单"） |
+| `…/runF/F10.png` | `20d2dd800c431aa5645b2c2fe8dbb908d37a8fd7b99f7adb45039400fe893b15` | Up → **建造菜单卡片**（两座房屋插画 + 3 星 + 绿色造价按钮"3" + 标签"住房" + 游戏自带 ✓/✗ 软键） |
+| `…/runF/F11.png` | `20d2dd800c431aa5645b2c2fe8dbb908d37a8fd7b99f7adb45039400fe893b15` | 与 F10 **逐字节相同** ⇒ F1（左软键 ✓）在建造菜单里是 no-op |
+| `…/runF/F12.png` | `d226680c006ccb135c254f192950395f0482ab4a535144ff16bd09f9d70a74dd` | 建造菜单里按 Fire → 打开的是**当前指针格子上建筑的**信息面板（床位图标 + "Z 0"），即 Fire = 地图格子命中测试 |
+| `…/runF/P1.png` | `39c0ac694c68b0d661a2badc83571f04ebfefd6b1dec1899f2bc97fb373fbfab` | 行动菜单 **4 个图标完整绘制**（上=建造/黄色▲，左=住房/蓝色红顶/◀，右=粮仓麻袋/▶，下=金色穹顶/▼） |
+| `…/runF/P3.png` | `741d735bfe23b82e27cf86450030224c48e646de53ca06fe8d68e119cb112dea` | 放置模式：指针落在矿石上 → 地块为**红色**（不可建） |
+| `…/runF/P5.png` | `c4c91fdea6e9aa401091a397396f6d5760e3dcf74f570623cebe83083dc42fca` | 放置模式：指针移到草地 → 地块为**绿色可建区**（3592 px，bbox (552,732)-(902,902)），底部标签"住房" |
+| `…/runF/P6.png` | `3a340c6470dda1d98804a8f8c7442e2a0312039ebc093b36899bba770205f401` | **建造落地**：原绿色格位置出现木质脚手架工地（对比 P5 该处为空白草地，区域差异 18400 px），并弹出新建筑信息面板（人脸 + 空工人槽 + ✂/⬛/✓），底部标签"建筑工人" |
+| `…/runF/F15.png` | `4ecd4c1d2b941600f56cea1457c873a8a54517a0e69351ba977303326a9a67e8` | 建造菜单里按数字 5 → 回到地图（可见粉色"女村民 ×1"气泡与城堡上的 "!!" 提醒标记） |
+| `…/runF/F16.png` | `ced43ed291a0e8e75d494ce39dd10e81a27b52053fe2fcf6a7f334a6926a7d2d` | 房屋面板：绿色"2"（男）+ 粉色"1"（女）人口指示，手形指针停在 ✓ 上 |
+| `…/runF/runtime.log` | `aafa6ef6e8c85445819117f404c3438947d3577cc8b796b2ced9e236a2264933` | runF（当前构建）完整运行日志，异常见"异常"章 |
+
+### 7. 自由模式与菜单键位（runG，当前构建 + `runG/rms` = `runC/rms` 的副本）
+
+| 绝对路径 | SHA-256 | 内容 |
+|---|---|---|
+| `…/runG/manifest.txt` | `cc71b3d37bdde4539e45a9bf7f9f4d099f895b347182486a281be92209fb84de` | 二进制/JAR/存档副本哈希 + 时间戳（2026-10-22 08:12:23 CST） |
+| `…/runG/G2.png` | `5239bb65bfeeda270ae5d28a817b67148a0be8a38679dd02431f3a483900fffd` | 主菜单（开始游戏 / 选项设置 / 帮助指南 / 制作信息 / 退出游戏，选中项为红色且左侧有 ▶） |
+| `…/runG/M3.png` | `ad3e0e0a06baad0cad8c6b01ea9f6a13a0b4d9a42f48381955c04802ba40a6f3` | **模式菜单**：剧情战役（红色选中）/ 自由模式 |
+| `…/runG/P3.png` | `c0c2ea9291b5af59f15766d66e7150e929eca470141fcc7acb82b9b9fd755d1a` | **自由模式设置页**：地图尺寸 / 水域面积 / 敌人数量 三条滑块（每条左右各有一个触摸型 ◀ / ▶ 图标） |
+| `…/runG/Q_left.png` | `5d4b3be0afd2cbf2fc280a5c7fd8f67f734ab0147b709f3c97b599e17b941855` | **自由模式村庄地图**（水域、树林、城堡 + 3 星建筑信息卡） |
+| `…/runG/Q_space.png` | `2543d69503ed9bbc7886264ddc8947345de8be1738cf8c9474e4bd1ffe8aef42` | 自由模式空地上按 Fire → 行动菜单 + **绿色可建格 + 红色不可建格**（压树）+ 手形指针 |
+| `…/runG/S1.png` / `…/runG/S2.png` | `8da7decb2069bb1a5dbf82d1415dcd0a1175d82b62a3d035f24ebf865035f996`（两者相同） | 在**红色（非法）格**上按 Fire 前后逐字节相同 ⇒ 非法落点被拒绝 |
+| `…/runG/T7.png` | `e2cd9adaae6a7aa740cfaf2001418a9d308002754a62f9c4899d8373c9c7af33` | 自由模式放置提示的红/绿格细节（放大裁切见下） |
+| `…/runG/runtime.log` | `36c37a05163dcc89b3f48a71c35fce438db9eacfc79aecc9868ed4898af7d956` | runG（当前构建）完整运行日志，异常见"异常"章 |
+
+### 8. 反编译证据（触摸被忽略 + "派遣"按钮不可达的证明）
 
 ```text
 $ javap -c -p -classpath /tmp/townsmen-inspect/jarx t
@@ -235,6 +327,46 @@ $ javap -c -p -classpath /tmp/townsmen-inspect/jarx t
 ```
 
 `class t` 是全 JAR 唯一的游戏 Canvas（`paint` → `hg.HG.a(Graphics)`，`keyPressed` → `hg.HG.a(int,true)`）；广告 Canvas `AdvertTorpedoLi` 也没有指针处理。
+
+#### 8.1 "派遣"按钮为什么在纯键盘下不可达
+
+全量 `javap`（70936 行，落在 `/tmp/townsmen-inspect/ALL.txt`）给出的事实链：
+
+```text
+1) 触摸入口只有一个：
+   class t (extends javax.microedition.lcdui.Canvas)
+     protected void pointerPressed(int,int);      0: return
+     protected void pointerReleased(int,int);     0: return
+     protected void pointerDragged(int,int,int);  0: return
+   ⇒ 没有任何指针事件能进入游戏逻辑。
+
+2) 键盘确认路径（hg/HG.a(int,boolean) 的 case 6/7，javap 行 ~50513-50581）：
+     getstatic  a:Ls; invokeinterface s.k:()I; invokeinterface s.l:()I;
+     invokeinterface s.a:(II)Z; ifeq ...; invokeinterface s.c:()Z
+   ⇒ 键盘"确认"= 用当前指针的**格子坐标**做命中测试并激活，**不是**屏幕像素级控件命中。
+
+3) 界面 s 只有两个实现者：
+   final class r implements s   → 村庄界面
+   final class v implements s   → 法国战役地图界面（字段 g/h = 指针所在网格行列）
+
+4) 战役地图的命中测试 v.a(int,int)Z 只做网格判定：
+     putfield #45 (g:I); putfield #46 (h:I);
+     … 与 j.a.u.a / j.a.u.b（地图宽高）做范围检查
+   ⇒ 战役地图上**不存在任何"派遣"按钮的像素矩形命中测试**；
+      v.c() 只是按该网格单元的地区类型（16/80/96/112/128）做查表分支。
+
+5) 地区面板（"红军士兵 / 国王士兵 / 完成条件 / 胜利条件 / 部队 / 派遣"）由类 o 构建：
+     o."<init>"();  o.b(Ls;)V;  o.a(Ljava/lang/String;IIIII)V（带矩形区域的文字项）;
+     o.c(I)V; o.k()V; o.a(Lo)V; 以及 private static boolean a(int,int)（点-矩形命中）
+   其中 o.a(int,int) 只被 o.p() 调用 4 次 —— 这是**纯触摸**路径。
+
+6) 全 JAR 中 s.a:(II)Z 的调用点只有 2 处：
+     javap 行 47686（class a 的绘制路径 = 触摸命中）
+     javap 行 50545（键盘 handler）
+   ⇒ "派遣"按钮（类 o 的控件）只能经由 1) 的触摸路径被点击，而该路径是空实现。
+```
+
+**结论：战斗入口"派遣"是触摸专用控件，在本 JAR 上不存在键盘可达路径**（不是"没找到按键"，而是"代码里没有键盘分支"）。
 
 ---
 
@@ -278,6 +410,44 @@ INFO: thrown: javax/microedition/rms/RecordStoreNotFoundException at javax/micro
 INFO: thrown: java/lang/NullPointerException at g.a(I)Z pc=46: (no message)
 ```
 
+runF `runF/runtime.log`（**当前构建 `e8459c13…`**，第五次会话）逐条原文（4 条，全部 `thrown`）：
+
+```text
+INFO: thrown: java/lang/NullPointerException at g.a()V pc=34: (no message)
+INFO: thrown: javax/microedition/rms/RecordStoreNotFoundException at javax/microedition/rms/RecordStore.openRecordStore(Ljava/lang/String;Z)Ljavax/microedition/rms/RecordStore; pc=0: (no message)
+INFO: thrown: java/lang/NullPointerException at g.a(I)Z pc=46: (no message)
+INFO: thrown: javax/microedition/rms/RecordStoreNotFoundException at javax/microedition/rms/RecordStore.openRecordStore(Ljava/lang/String;Z)Ljavax/microedition/rms/RecordStore; pc=0: (no message)
+```
+
+```text
+runF: INFO: stats: frames=108746 paints=62734 gfx=7929329 tris=0 m3g=0 time=2382.085s fps=45.7 bytecodes=2744132227 (1.15 M/s) natives=16166690 heap=12949392/12956768 bytes cpcache=344464662/1627 findcache=0/0
+      INFO: teardown: calling destroyApp() / INFO: teardown: destroyApp() returned
+      nano_j2me: exit status 0
+```
+
+runG `runG/runtime.log`（**当前构建 `e8459c13…`**，第四次会话）逐条原文：
+
+```text
+INFO: thrown: java/lang/NullPointerException at g.a()V pc=34: (no message)
+INFO: thrown: java/io/IOException at javax/microedition/lcdui/Image.createImage(Ljava/lang/String;)Ljavax/microedition/lcdui/Image; pc=0: /s3.png
+INFO: thrown: javax/microedition/rms/RecordStoreNotFoundException at javax/microedition/rms/RecordStore.openRecordStore(Ljava/lang/String;Z)Ljavax/microedition/rms/RecordStore; pc=0: (no message)
+INFO: thrown: java/lang/NullPointerException at g.a(I)Z pc=46: (no message)
+INFO: thrown: javax/microedition/rms/RecordStoreNotFoundException at javax/microedition/rms/RecordStore.openRecordStore(Ljava/lang/String;Z)Ljavax/microedition/rms/RecordStore; pc=0: (no message)
+INFO: thrown: java/lang/NullPointerException at g.a(I)Z pc=46: (no message)
+```
+
+runG 会话收尾：
+
+```text
+WARN: run ended: the frame budget ran out (exit code 0)
+INFO: stats: frames=36461 paints=21534 gfx=2242438 tris=0 m3g=0 time=810.465s fps=45.0 bytecodes=691114320 (0.85 M/s) natives=5603753 heap=6187440/6193984 bytes cpcache=83951062/1721 findcache=0/0
+INFO: observed: threads=8 gc=15 tones=0 pcm_frames=0 file_opens=0 file_writes=0 file_reads=0 bytes_written=0
+INFO: teardown: calling destroyApp()
+INFO: teardown: destroyApp() returned
+INFO: released 3322 host blocks at teardown
+nano_j2me: exit status 0
+```
+
 会话收尾：
 
 ```text
@@ -314,7 +484,8 @@ runD: WARN: run ended: the frame budget ran out (exit code 0)
 | 村庄信息面板、城镇中心面板（人口/幸福/资源/工人槽位） | **works** | 指针 + 确认键可打开、可浏览 |
 | 帮助页 / 按键控制说明 / 帮助指南 | **works** | F1 打开上下文帮助；暂停菜单 → 帮助指南 → FIRE 打开各页 |
 | 教程流程（含村民/建筑选择） | **works**（runC 二进制） | 教程可逐页推进，目标链一路推进到"人口膨胀" |
-| 建造（放置模式 + 落地） | **partially works** | runC 在途二进制可建成 住房×3 / 采石场 / 水井 / 养鱼场（见证据 1）；**HEAD 干净构建 `9f6325a7…` 上未能重现**：行动菜单图标、建筑影子、地块绿/红高亮均不渲染，放置模式无可见反馈且 Fire 无效 |
+| 建造（放置模式 + 落地） | **works**（当前构建 `e8459c13…`） | runF 用存档副本完整复现：行动菜单 4 图标 → 建造菜单卡片 → 放置模式绿/红地块 → Fire 落地（`P1/F10/P5/P6`，新建筑带信息面板）。runC 在途二进制还额外建成 住房×3 / 采石场 / 水井 / 养鱼场。**唯一例外**：HEAD 干净构建 `9f6325a7…`（runD/runE）上图标、影子、地块高亮都不渲染，放置模式无可见反馈 |
+| 自由模式（自由建造，含"敌人数量"配置） | **partially works** | 键盘可达：模式菜单 → 自由模式 → 设置页（地图尺寸/水域面积/敌人数量）→ 自由村庄地图，放置提示（绿/红格）同样出现（runG `P3/Q_left/Q_space`）；但自由模式内的兵营/士兵/敌军链路未走通 |
 | 存档 / 读档 | **works** | 暂停菜单 → 关闭游戏 → 是 → 写入 `Townsmen6*.rms`；同 `--rms-dir` 重启后完整恢复村庄 |
 | 触摸输入 | **blocked（游戏侧）** | `t.pointerPressed/Released/Dragged` 全为空实现，游戏根本不处理触摸事件；模拟器无需修改 |
 | 战斗（战役地图派遣部队进入战斗） | **blocked** | 见下 |
@@ -338,19 +509,25 @@ runD: WARN: run ended: the frame budget ran out (exit code 0)
 3. **村庄里造不出兵营**。建造菜单的建筑种类由当前关卡目标固定（实测 Up/Down/Left/Right 均不改变），因此在第一关里无法建造军营/兵营，也就无法在村庄里生成士兵。
 4. 城镇中心面板只有工人槽位与人口/幸福指数（`E2.png`），没有"派遣士兵"行；游戏提示里"点击此建筑，选择士兵或演说家人数…派遣最多 5 个单位前往作战"指的是**战役地图上的地区面板**，不是村庄建筑。
 
-**结论：战斗阶段在本 JAR + nano_j2me + 纯键盘条件下无法进入，卡点是游戏本身只支持触摸派遣 + 需要先完成教程关以获得士兵/行动数。若后续需要突破，需要的方向是（a）用触摸注入无法解决（游戏不处理指针），（b）需要先在 HEAD 构建上打通"完成教程关剩余目标"（住房 → 人口膨胀 → 家有小猪 → 猪肉宴会），再在战役地图上用键盘找到派遣按钮的可达路径。**
+   → 因此"派遣"按钮在纯键盘下不可达（这是**代码层面的证明**，不是"没找到按键"）。
+5. **自由模式是唯一存在敌军的玩法入口**（runG 已验证可达）：自由模式设置页里就有"敌人数量"滑块。理论上若能在自由模式里建兵营、造士兵，再把士兵派往地图上的敌军，就能进入战斗；但本轮未走通该链路（自由模式设置页的 `◀/▶` 滑块按钮本身也是触摸控件，见"边界与未验证项"）。
+
+**结论：战斗阶段在本 JAR + nano_j2me + 纯键盘条件下无法进入，卡点是游戏本身只支持触摸派遣（代码层证明，见 8.1）+ 需要先完成教程关以获得士兵/行动数。若后续需要突破，方向是（a）用触摸注入无法解决（游戏不处理指针），（b）在**自由模式**里配置敌军并把兵营/士兵链路走通（该模式的"敌人数量"是唯一的敌军来源），或（c）在剧情模式里先完成教程关剩余目标拿到士兵与行动数，再在战役地图上用键盘找到派遣按钮的可达路径。**
 
 ---
 
 ## 边界与未验证项
 
 1. **仅验证了 N73 240×320 变体**。其余 7 个分辨率变体（A1000 208×320、A760 240×320、K700 176×220、K790 240×320、E60 320×240、E62 320×240、N70 176×208）**本轮未运行**；由于同一套代码逻辑只有分辨率不同，预计触摸被忽略的结论同样成立，但**未经实测**。
-2. **HEAD 干净构建上的"建造"未复现**。runC 用的二进制（`2f106198…`，带 SUPERINSTR/JUMP_THREADING 的在途构建）已被其他会话从磁盘删除，无法再做 A/B 对比；因此"建造 works"这一结论只对 runC 的二进制成立。若需要确认 HEAD 是否回归，需要重跑一次完整教程。
+2. **建造流程的二进制敏感性**（已澄清）：建造在 **runC 的在途二进制 `2f106198…`**（带 SUPERINSTR/JUMP_THREADING，已被其他会话从磁盘删除，无法再做 A/B 对比）与 **当前构建 `e8459c13…`（runF）** 上都能完成；只有 **HEAD 干净构建 `9f6325a7…`（runD/runE）** 上"图标 / 影子 / 地块高亮"不渲染、Fire 无效。
+   即：HEAD 构建上的"未复现"是**渲染差异**（可能是那一次构建本身的绘制回退），不能推广为"nano_j2me 不支持建造"。
+   若要彻底定位，需要在 HEAD 干净构建上重跑一次完整教程并对比同一存档。
 3. **战斗未验证**（阻塞原因见上），没有任何战斗画面证据。
 4. **runE 会话**（HEAD 构建 + 同一 `--rms-dir` 重新读档，用于重做建造）读档成功并测量了手形指针的位移，
    但**没有再次打开建造菜单**（会话为释放资源而主动结束，退出码 0），因此 HEAD 构建上的"建造"流程仍属**未复现**；
    其截图与日志仅作过程记录（见证据 5）。
-5. **自由模式（自由建造）未验证**：模式菜单里的 `自由模式` 用 Down 未能选中（方向键在该菜单不移动高亮），因此无法确认自由模式是否放开建筑种类限制、是否自带敌军。
+5. **自由模式（自由建造）只验证到"可达 + 有敌军配置项"**（runG）：模式菜单里 `自由模式` 可以进入，随后是"地图尺寸 / 水域面积 / 敌人数量"设置页，再进入自由模式村庄地图，放置提示（绿/红格）与剧情模式一致。
+   **未验证**：① 自由模式是否放开建筑种类限制（兵营能否建）；② "敌人数量"滑块只能用触摸 `◀ / ▶` 调整，键盘是否可改未验证（`Q_left`/`Q_space` 期间该滑块区域未响应任何按键）；③ 自由模式里敌军是否真的出现、能否交战；④ 自由模式的存档/读档。
 6. **其它未验证项**：帮助指南的"游戏规则/资源列表"未逐页读完；战役地图上其它地区（带王冠的国王领地）未被逐个点开；存档只验证了"村庄状态"这一条记录能正确回读，多个并存记录（`Townsmen60/61/62`）在重启后的选择逻辑未验证。
 7. **未修改任何源码**。本轮为纯验证任务：`src/`、`include/`、`tests/`、`CMakeLists.txt` 一行未改；未执行任何 git 写操作；原始 JAR 未修改（SHA-256 前后一致）；存档全部写在自建的 `runC/rms` 目录内，未触碰任何既有用户存档。
 

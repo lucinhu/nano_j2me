@@ -82,7 +82,7 @@ python3 .local-tools/debug-runs/corpus-round20-20261021/drive.py \
 | jar-21 `家园6之革命完美汉化版_诺基亚 E60系列(320x240).jar` `70188d6f9801` | 320x240：语言/声音→主菜单→村庄+剧情对白 | `corpus-round20-20261021/jar21-menu/09-after-41s.png` | 同 jar-17 | 可用 | A：`--size 320x240 --run-frames 1800` |
 | jar-22 `家园6之革命完美汉化版_诺基亚 E62系列(320x240).jar` `a37915bf0860` | 320x240：语言/声音→主菜单→战役开场白 | `corpus-round20-20261021/jar22-menu/08-after-fire3.png` | 同 jar-17 | 可用 | A：`--size 320x240 --run-frames 1800` |
 | jar-23 `家园6之革命完美汉化版_诺基亚 N70系列(176x208).jar` `fb56034f8f54` | 176x208：语言/声音→主菜单→战役开场白 | `corpus-round20-20261021/jar23-menu/08-after-fire3.png` | 同 jar-17 | 可用 | A：`--size 176x208 --run-frames 1800` |
-| jar-24 `家园6之革命完美汉化版_诺基亚 N73系列(240x320).jar` `5a32a9881af0` | 240x320：家园6_光辉革命：标题→战役地图→村庄对白→**村庄内交互**（回车推进对白、`F1` 全屏面板、`Escape` 返回、方向键滚图、`1`/`2` 村庄信息面板、`F2` 暂停菜单、`*` 教程浮层）→**存档→退出→同一 `--rms-dir` 重启→读档：村庄完整恢复**（人口 20 / 6 人睡眠、市政厅+住房+采石场+伐木场，见 `R09.png`）。**决定性机制发现**：该版**完全不处理触摸**——javap 确认唯一游戏 Canvas 类 `t` 的 `pointerPressed/pointerReleased/pointerDragged` 全是 `0: return`，触摸恒为无操作，只能纯键盘（D-pad 移手形指针、Return/F1/5 确认、F2 取消/暂停）。**建造**：在途构建 `2f106198…` 上建成住房×3/采石场/水井/养鱼场（`z20.png` 建筑工人面板等），该二进制已被删除；用 HEAD 干净构建 `9f6325a7…` 在同一存档上重做**未复现**（行动菜单图标、建筑影子、地块绿/红高亮均不渲染，Fire 无效）→ **当前构建上建造未复现**。**战斗**：阻塞——「派遣」是纯触摸控件，且 `CN.CAMPAIGN.lng` 写明士兵只在关卡结束后加入、第一关目标链无战斗目标 | 读档 `townsmen6-bcs-20261022/runD/R09.png` `582e7d4c0c07`；建造 `runC/z20.png` `ae094c1442c4`；战斗面板 `runD/W3.png` `9d3b1746b32f` | 4 类 thrown（无 uncaught）：`java/lang/NullPointerException at g.a()V pc=34`、`javax/microedition/rms/RecordStoreNotFoundException at …RecordStore.openRecordStore(Ljava/lang/String;Z)… pc=0`、`java/lang/NullPointerException at g.a(I)Z pc=46`、`java/io/IOException at javax/microedition/lcdui/Image.createImage(Ljava/lang/String;)… pc=0: /s3.png`（`/s3.png` 是 JAR 自带资源缺失，非模拟器缺陷） | 部分可用：存档/读档已验证；**touch: unsupported / input: keyboard-only**；建造在当前构建未复现；战斗因应用侧纯触摸控件+关卡无战斗目标而阻塞 | B：进村 `Fire×5`（声音?→开始游戏→启动画面→剧情战役→继续游戏）；存档 `F2`→Down(关闭游戏)→Fire→Down(是)→Fire；读档同一 `--rms-dir` 重启再 `Fire×5`。见 [建造/战斗/存档复核](2026-10-22-townsmen6-build-combat-save.md) 与 [村庄内行动菜单](2026-10-22-townsmen6-village-ui.md) |
+| jar-24 `家园6之革命完美汉化版_诺基亚 N73系列(240×320).jar` `5a32a9881af0` | 240x320：家园6_光辉革命：标题→战役地图→村庄对白→**村庄内交互**（回车推进对白、`F1` 全屏面板、`Escape` 返回、方向键滚图、`1`/`2` 村庄信息面板、`F2` 暂停菜单、`*` 教程浮层）→**建造（2026-10-22 复验，在当前构建 `e8459c13…` 上复现）**：`fire` 开行动菜单（4 个图标：建造▲/住房◀/粮仓▶/资源▼）→`fire` 进放置模式（红=不可建 / 绿=可建，绿色区 3592 px）→`down`×3 `left`×3 移到绿格→`fire` **房子落地**（出现木质脚手架工地 + 新建筑信息面板「建筑工人」）→**存档→退出→同一 `--rms-dir` 重启→读档：村庄完整恢复**（人口 20 / 6 人睡眠、市政厅+住房+采石场+伐木场，见 `R09.png`）。**自由模式键盘可达**：模式菜单→自由模式→设置页（地图尺寸 / 水域面积 / **敌人数量** 三条滑块）→自由村庄地图（同样有绿/红放置提示）。**决定性机制发现**：该版**完全不处理触摸**——javap 确认唯一游戏 Canvas 类 `t` 的 `pointerPressed/pointerReleased/pointerDragged` 全是 `0: return`，触摸恒为无操作，只能纯键盘（D-pad 移手形指针、Return/F1/5 确认、F2 取消/暂停）；建造菜单里 `F1` 是 **no-op**（`F11` 与 `F10` 逐字节相同），**Fire 是对当前指针格子做命中测试** | 读档 `townsmen6-bcs-20261022/runD/R09.png` `582e7d4c0c07`；建造菜单 `runF/F10.png` `20d2dd800c43`（住房+3 星+绿色造价「3」）；**房子落地 `runF/P6.png` `3a340c6470dd`**；绿格 `runF/P5.png` `c4c91fdea6e9`、红格 `runF/P3.png` `741d735bfe23`；自由模式设置页 `runG/P3.png` `c0c2ea9291b5`；自由村庄 `runG/Q_left.png` `5d4b3be0afd2` | 4 类 thrown（无 uncaught）：`java/lang/NullPointerException at g.a()V pc=34`、`javax/microedition/rms/RecordStoreNotFoundException at …RecordStore.openRecordStore(Ljava/lang/String;Z)… pc=0`、`java/lang/NullPointerException at g.a(I)Z pc=46`、`java/io/IOException at javax/microedition/lcdui/Image.createImage(Ljava/lang/String;)… pc=0: /s3.png`（`/s3.png` 是 JAR 自带资源缺失，非模拟器缺陷）；两次会话退出码 0、无 MediaException | 部分可用：**建造 ✔（当前构建）**、存档/读档 ✔、自由模式 ✔；**touch: unsupported / input: keyboard-only**；**战斗阻塞且有代码级证明**：地区面板（红军士兵/国王士兵/完成条件/胜利条件/部队/**派遣**）由类 `o` 构建，其点-矩形命中 `o.a(int,int)` 只被 `o.p()` 调用 = 纯触摸路径，键盘只做网格命中（`hg/HG.a(int,boolean)` → `s.k()/s.l()` → `s.a(II)Z`），战役地图实现 `v.a(II)Z` 只写网格坐标 ⇒「派遣」按钮在纯键盘下不可达；另 `CN.CAMPAIGN.lng` 写明士兵只在关卡结束后加入、第一关目标链无战斗目标 | B：进村 `Fire×5`；**建造**：`fire`→`up`→`fire`→`down`×3→`left`×3→`fire`；存档 `F2`→Down(关闭游戏)→Fire→Down(是)→Fire；读档同一 `--rms-dir` 重启再 `Fire×5`；见 [建造/战斗/存档复核](2026-10-22-townsmen6-build-combat-save.md) 与 [村庄内行动菜单](2026-10-22-townsmen6-village-ui.md) |
 | jar-25 `极品飞车14之热力追踪中文版.jar` `77d10a56e51a` | 极品飞车：热力追踪 / 240x320：音效→标题→教程赛道→2/11，42→73→114→121→101 MPH，左右转向改变车辆姿态，`F2` 打开暂停菜单（可见「继续赛事」）。**2026-10-22 复检**：开机「是否开启音效」提示**必须用 `F2`** 越过（`Return` 不行；用 `Return` 会整场卡在 splash），随后到主菜单→教程提示→「选择赛事」世界地图 | `nfs-hot-pursuit-drive-round15-20261020/11-steer-right.png` `be4122c74e6b` | `java/lang/NullPointerException at ah.<init>(Lcom/ea/nfs10/MonkeyApp;)V` ×2；`at ah.w()V` ×2（被捕获） | 部分可用：未完成教程赛/正式赛事/保存 | B：`--size 240x320 --frames 1600`，计划 fire→fire→soft1→right→left→F2；**开场用 `F2`**；见 [语料缺口巡检](2026-10-22-corpus-gap-sweep.md) 与 [驾驶证据](2026-10-20-nfs-hot-pursuit.md) |
 | jar-26 `极品飞车16：亡命狂飙.jar` `92c5f29e1d66` | NFS The Run / 240x320：PROLOGUE→NEW GAME 选车（SAN FRANCISCO/SPRINT/FORD MUSTANG GT BOSS 302）→**真实比赛**：隧道、路面、玩家车与前车、赛道标线与里程牌；HUD 进度/名次/对手距离/小地图/速度表 39→133 MPH，Up 提速、左右转向；**本轮跑完两圈，两次都到结算页 `RESULTS / YOU LOSE…`（TIME: 03:49.3 / 03:25.8）+ `RETRY EVENT / DO YOU WISH TO PLAY AGAIN?`** | `nfs-cam-20261022/run4/02-race-2.png` `ce0b1d51d505`；`nfs16-regress-20261022/run-head/z-dialog-490.png` `c580ec5be87f5501`（结算 03:49.3）、`z-results.png` `f4ad318c480ec992`（结算 03:25.8）、`race-476.png` `75d90b7d3edf9895`（红绿灯/格纹旗）、`race-1011.png` `1c99f9aa7a74a0eb`（YOU FINISHED LAST） | 4 次 `ArrayIndexOutOfBoundsException at ad.a(Ljavax/microedition/lcdui/Graphics;IIIIIIZ)V pc=2672`（2D 精灵游标越界，下一帧恢复，与 3D 无因果）；启动期 `NullPointerException at af.<init>(…) pc=471/479`（被捕获）；每圈 10 条 thrown / **0 条 uncaught**；55 次「all threads are waiting」 | 可用（3D 世界已修复，根因是**相机语义**不是帧时序：commit `1e47d9a`）。**量化**：3D 区（窗口 x∈[240,760)、y∈[0,900)）215–944 种颜色、每行 2–67 种，旧 bug 的橄榄平涂色 (135,128,100) 在 1509 张比赛帧里出现 **0.0000 次**；对照修复前平涂帧只有 27 种颜色、91.33 % 平涂、每行恒 1 色。HUD 进度 7→100 % 单调推进、速度 30→109 MPH、玩家车橙色像素质心随左右键在 302 px ↔ 553 px 之间移动 ⇒ 操控真的进了游戏逻辑 | B：`--size 240x320 --frames 12000`；`nfs16-regress-20261022/drive4.py`（自适应：按住 up 油门、左右转向、逐帧像素分类 race/paused/dialog/results）；见 [NFS 亡命狂飙 3D 定位](2026-10-21-nfs-the-run-m3g.md) 与 [NFS16 回归](2026-10-22-nfs16-regression.md) |
 | jar-27 `狂野飙车4-亡命都市.jar` `7d4369008c5d` | 狂野飙车-亡命都市 / 240x320：音效→标题→快速游戏→赛道说明→比赛（1/8 圈、`狂奔中`、AI 车辆、金钱与速度 HUD）；倒计时 3→1，静止即 74 MPH，按住上键 20→26→59 MPH，左右键使车辆驶向路肩/草地 | `asphalt4-20261021/run5/09-idle-4.png` `3ebdee1ee286` | 游戏自身 `com/qq/sms/QQSMS.init/getInt/desString` 抛 `NumberFormatException` / `IllegalArgumentException: Length Not Double Num`（被捕获，不阻断） | 部分可用：未完成整圈/冲线/存档 | B + 只读垫片 `netfail.so`：`--size 240x320 --frames 2400`，计划 hold up→hold left/right；见 [狂野飙车4](2026-10-17-download-corpus.md#2026-10-21-更新狂野飙车4-进入实际比赛) |
@@ -92,7 +92,14 @@ python3 .local-tools/debug-runs/corpus-round20-20261021/drive.py \
 > **家园6（jar-17..jar-24）补充说明**：触摸不受支持这一点是在 **N73 版（jar-24）** 上用
 > javap 证实的（唯一游戏 Canvas 类 `t` 的三个指针方法都是 `0: return`），其余 7 个变体
 > 是同一款游戏的其它分辨率，**未逐个 javap**；因此「touch: unsupported」目前只对 jar-24
-> 是确证，对 jar-17..jar-23 是合理推断。存档/读档流程只在 jar-24 上实跑过。
+> 是确证，对 jar-17..jar-23 是合理推断。存档/读档、建造、自由模式流程都只在 jar-24 上实跑过。
+>
+> **「建造未复现」是误判，已更正**：早先记的「在 HEAD 干净构建 `9f6325a7…` 上建造未复现」
+> （行动菜单图标、建筑影子、地块绿/红高亮都不渲染）其实是**那个构建的渲染差异**，不能用来
+> 判定游戏不支持建造；逐像素复核后在**当前构建 `e8459c13…`** 上完整复现了建造
+> （行动菜单 4 图标 `runF/P1.png`、建造卡片 `runF/F10.png`、绿/红放置提示 `runF/P5.png`/`P3.png`、
+> 房子落地 `runF/P6.png`）。判据是**像素差**（绿色可建格在下一帧变成脚手架工地，18400 px 差异），
+> 不是「打开了一个面板」。
 
 ## 外部限制：模拟器解决不了的部分
 
@@ -166,6 +173,24 @@ python3 .local-tools/debug-runs/corpus-round20-20261021/drive.py \
   `--rms-dir`** 重启 → 继续游戏，村庄**完整恢复**（`runD/R09.png` `582e7d4c0c07`，
   人口 20 / 6 人睡眠）；存档文件 `Townsmen62.rms` 966 B（950 B 记录，头 `NJRS`）。
   同时用 javap 证实该版**不注册任何指针处理**（触摸恒为无操作）。
+- **家园6 建造（jar-24）——在当前构建上复现并推翻早先的「未复现」**：早先的说法是
+  「在 HEAD 干净构建 `9f6325a7…` 上建造不生效」，逐像素复核后确认那是**该构建不渲染
+  行动菜单图标/建筑影子/地块高亮**（渲染差异），不是游戏不支持建造。在**当前构建
+  `e8459c13…`** 上按键序列 `fire`→`up`→`fire`→`down`×3→`left`×3→`fire` 完整复现：
+  行动菜单 4 图标（`runF/P1.png` `39c0ac694c68`）、建造卡片「住房+3 星+绿色造价 3」
+  （`runF/F10.png` `20d2dd800c43`）、放置模式红=不可建（`P3.png` `741d735bfe23`）/
+  绿=可建（`P5.png` `c4c91fdea6e9`，3592 px）、**`fire` 后房子落地**（`P6.png`
+  `3a340c6470dd`，脚手架工地 + 新建筑面板「建筑工人」）。另：建造菜单里 `F1` 是
+  **no-op**（`F11` 与 `F10` 逐字节相同），`Fire` 的语义是**对当前指针格子做命中测试**
+  （`F12.png` 打开该格建筑属性面板），红格上按 Fire 画面逐字节不变（`runG/S1.png`==`S2.png`）。
+- **家园6 自由模式与战斗（jar-24）**：自由模式**键盘可达**（`runG/P3.png` `c0c2ea9291b5`：
+  地图尺寸 / 水域面积 / **敌人数量** 三条滑块，是本 JAR 唯一有敌军的入口），自由村庄地图
+  同样出现绿/红放置提示（`runG/Q_left.png` `5d4b3be0afd2`、`Q_space.png` `2543d69503ed`）。
+  **战斗是代码级阻塞**：地区面板类 `o` 的点-矩形命中 `o.a(int,int)` 只被 `o.p()` 调用
+  （纯触摸路径），唯一 Canvas `t` 的三个指针方法都是 `0: return`，键盘只做**网格**命中
+  （`hg/HG.a(int,boolean)` case 6/7 → `s.k()/s.l()` → `s.a(II)Z`），战役地图实现
+  `v.a(II)Z` 只写网格坐标并做范围检查 ⇒ 全 JAR 不存在屏幕像素级控件命中测试，
+  「派遣」按钮在纯键盘下不可达。
 - **极品飞车16（jar-26）本轮完整回归**：两个二进制（干净 HEAD 构建 `9f6325a7…` 与
   工作区快照 `e8459c13…`）**都跑完两圈并两次到达结算页**
   （`RESULTS / YOU LOSE… TIME: 03:49.3` 与 `03:25.8`，随后

@@ -9,10 +9,11 @@
   路面与车道线、玩家橙色 Mustang、对手车、城市天际线与棕榈树、路口红绿灯、终点格纹旗。
 - **跑完整场比赛并进入结算页**：本轮共跑完 **两圈**，两次都到达 `RESULTS / YOU LOSE…` 结算屏
   （第一次 `TIME: 03:49.3`，第二次 `TIME: 03:25.8`），随后出现 `RETRY EVENT / DO YOU WISH TO PLAY AGAIN?`
-  对话框。这比此前「跑到 `TIME: 04:55.8`」的历史证据更进一步：**第一次跑完整整一圈并拿到结算屏**。
+  对话框。这比此前「跑到 `TIME: 04:55.8`」的历史证据更进一步：**第一次完整跑完一圈并拿到结算屏**。
 - **HUD 持续刷新且操控进入游戏逻辑**：进度条 7%→23%→48%→65%→94%→99%→100% 单调推进，
   名次/距离栏从 `P1 514M / P3 508M / P2 501M` 变到 `P2 49M / P1 48M / P3 48M`，
-  车速 30→93→105→109 MPH；玩家车在画面里的横向位置随左右方向键改变（302 px ↔ 553 px）。
+  车速在 30–109 MPH 之间持续变化（30→99→97→90→72→109→105）；玩家车在画面里的横向位置随左右方向键移动
+  （窗口 x 214…553 px 区间内摆动，点键后 2 秒内即改变方向）。
 - **异常**：两次运行各 **10 条 thrown、0 条 uncaught**（`uncaught exception in thread` 与
   `exception escaped into the frame loop` 均为 0）。全部 10 条 thrown 与此前旧跑完全一致，
   且都是游戏自己 catch 掉的启动期/2D 层异常。
@@ -68,15 +69,15 @@
 | 起点 7% | `/home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/nfs16-regress-20261022/run-head/race-001.png` | `3789d63438fdd51cee29d53e364a3ce9f1b97b3909b252a847abc010a0116bc2` | 215 | 0.0000 | 7 / 16 / 31 |
 | 23% | `…/run-head/race-101.png` | `770a3b63b5e6319de5fc7b6bbb24f815cec7f579fcf8a568ff97af70d098bb21` | 531 | 0.0000 | 8 / 33 / 61 |
 | 48% | `…/run-head/race-201.png` | `d11f83cda030beedd43171b02ac5210ed695d00ae9087cef0e9f825cb0731695` | 331 | 0.0000 | 8 / 18 / 44 |
-| 65% | `…/run-head/race-301.png` | `d205821b6e9d1ea6348c6b6e70a24875449e6e49cd663fef4876b070d28d4c89` | 320 | 0.0000 | 10 / 19 / 48 |
+| 65% | `…/run-head/race-301.png` | `d205821b6e9d1ea6348c6b6e70a24875449e6e49cd663fef4876b070d28d4c89` | 320 | 0.0000 | 8 / 19 / 48 |
 | 94%（并排对手车） | `…/run-head/race-451.png` | `2110f1f7f53dfbd93e0ee848e22bdc29ea4e41766b88c8fb38c65924f14cc9a1` | 649 | 0.0000 | 9 / 29 / 56 |
-| 99%（路口红绿灯/格纹旗） | `…/run-head/race-476.png` | `75d90b7d3edf98956404d43a24a9dd5d63828dc1be60eddfc3080ad9505176b3` | 678 | 0.0000 | 2 / 20 / 56 |
-| 100%（`YOU FINISHED LAST`） | `…/run-head/race-1011.png` | `1c99f9aa7a74a0ebdd00bac3bede24aa924acb0c1cb9c0002bb028adceb129f3` | 385 | 0.0000 | 1 / 20 / 38 |
+| 99%（路口红绿灯/格纹旗） | `…/run-head/race-476.png` | `75d90b7d3edf98956404d43a24a9dd5d63828dc1be60eddfc3080ad9505176b3` | 678 | 0.0000 | 2 / 20 / 57 |
+| 100%（`YOU FINISHED LAST`） | `…/run-head/race-1011.png` | `1c99f9aa7a74a0ebdd00bac3bede24aa924acb0c1cb9c0002bb028adceb129f3` | 385 | 0.0000 | 1 / 20 / 41 |
 | 在途工作区二进制 66% | `…/run-worktree/race-300.png` | `b858166dfcdcdc225ae54e40a716450ea181386c4a629549ee70606e6cc3df88` | 476 | 0.0000 | 14 / 22 / 52 |
 | **对照：修复前的平涂帧** | `/home/lucinhu/workspace/c/nano_j2me/.local-tools/debug-runs/nfs-pixfmt-20261021/live1/r5.png` | `51f7349e386c4b33483b383c6991da9297c6d1d328476f5d1e51452c3355d1b8` | **27** | **0.9133** | **1 / 1 / 10** |
 
 判别结论：旧 bug 帧的 3D 区只有 27 种颜色、每行恒为 1 种颜色（平涂）；
-本轮比赛帧每行有 2–67 种颜色、整区 215–944 种颜色，且**旧 bug 的橄榄平涂色
+本轮比赛帧每行有 1–61 种颜色（中位 16–33）、整区 215–944 种颜色，且**旧 bug 的橄榄平涂色
 (135,128,100) 在全部 1509 张比赛帧里出现 0.0000 次**（`measure.py` 逐帧核对）。
 注意游戏自己的 2D 面板底色是 (132,130,99)（RESULTS / 剧情提示面板用色），
 与 bug 平涂色 (135,128,100) 不是同一个颜色，两者已分开统计。
@@ -97,13 +98,13 @@
 
 | 时刻 | 事件 |
 |---|---|
-| 0–76 s | 序章：`ENABLE SOUND?` → 连按 `fire` 过场 → `NEW GAME`（LOCATION: SAN FRANCISCO / RACE TYPE: SPRINT，车型 FORD MUSTANG GT BOSS 302）→ 选车 → 起跑 |
-| 76 s | 比赛开始，`race-001` = 7% |
+| 0–80 s | 序章：`ENABLE SOUND?` → 连按 `fire` 过场 → `NEW GAME`（LOCATION: SAN FRANCISCO / RACE TYPE: SPRINT，车型 FORD MUSTANG GT BOSS 302）→ 选车 → 起跑 |
+| 80.5 s | 比赛开始，`race-001` = 7% |
 | 276 s | `race-476` = 99% |
 | 277 s | `race-479` 出现 `YOU FINISHED LAST` 横幅（100%） |
 | 282 s | `z-dialog-490.png` = 结算屏 `RESULTS / YOU LOSE… / TIME: 03:49.3` |
 | 284 s | `z-dialog-491.png` = `RETRY EVENT / DO YOU WISH TO PLAY AGAIN?` |
-| 285 s 起 | 第二圈重新开始（`race-503` 起，进度从 0 重新爬升） |
+| 290 s 起 | 第二圈重新开始（`race-503` 起，进度从 0 重新爬升） |
 | 495 s | `race-1011` = 100% + `YOU FINISHED LAST` |
 | 499.9 s | `z-results.png` = 结算屏 `RESULTS / YOU LOSE… / TIME: 03:25.8` |
 | 560 s | 帧预算耗尽，exit 0 |
@@ -125,18 +126,22 @@
 | 帧 | 进度 | 名次与距离 | 速度 |
 |---|---|---|---|
 | race-001 | 7% | P1 514M / P3 508M / P2 501M | 30 MPH |
-| race-101 | 23% | P3 1005M / P1 999M / P2 910M | — |
-| race-201 | 48% | P3 1184M / P1 1180M / P2 1098M | 93 MPH |
-| race-301 | 65% | P2 1289M / P3 1289M / P1 1289M | 72 MPH |
+| race-101 | 23% | P3 1005M / P1 999M / P2 910M | 99 MPH |
+| race-201 | 48% | P3 1184M / P1 1180M / P2 1098M | 97 MPH |
+| race-301 | 65% | P2 1289M / P3 1289M / P1 1289M | 90 MPH |
 | race-451 | 94% | P2 255M / P3 255M / P1 255M | 72 MPH |
 | race-476 | 99% | P2 84M / P3 84M / P1 84M | 109 MPH |
 | race-1011 | 100% | P2 49M / P1 48M / P3 48M | 105 MPH |
 
+（速度数字由 HUD 大号数字位逐位模板匹配读出，`race-451` 的第二位被模拟器按键浮层压住，
+该帧读作 `72`+浮层残影；其余各帧位形完整。）
+
 - 进度单调推进：`run-head` 进度条像素位置 51 → 87 → 143 → 183 → 251 → 263 → 267（0 → 100%），
   第二圈从 39 重新爬到 267；HUD 橙色占比从 0.054 升到 0.559。
 - 速度数字区域哈希在 1020 次采样里出现 **470 个不同值**，即速度显示一直在变（油门生效）。
-- 转向生效：把玩家车橙色像素的横向质心量出来，方向键点按前后在
-  **302 px ↔ 553 px** 之间移动（例如 387.8 → 465.0 紧跟一次 `right`；302.7 → 382.3 紧跟一次 `left`），
+- 转向生效：把玩家车橙色车身的横向质心量出来（`run-head` 168 帧可测），
+  它在窗口 x = 214…553 px 之间摆动；每次 `left` / `right` 点键后 2 秒内，
+  质心位移中位数分别为 3.2 px / 16.9 px，最大位移 216 px，
   说明左右输入真的进了游戏逻辑，不只是 HUD 在动。
 - 小地图（右上角）、JACK 队友条、格纹旗进度条也逐帧变化。
 

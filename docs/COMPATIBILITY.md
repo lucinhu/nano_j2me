@@ -549,6 +549,21 @@ synthetic touch can never drive it, and the only way in is the keyboard
 title saves and reloads correctly: exit through the pause menu, restart on the
 same `--rms-dir`, and the village comes back whole.
 
+The keyboard is enough to **build** too, and that was worth pinning down with
+pixels rather than with a panel that merely opened: `fire` opens the action
+menu (four icons), `fire` again enters placement mode (red = cannot build,
+green = can build), the D-pad moves the hand pointer onto a green plot and
+`fire` puts a house on it - the plot turns into a wooden scaffold and the new
+building's panel appears.  An earlier note claimed the build did not reproduce
+on a clean HEAD build; that turned out to be a *rendering* difference of that
+build (the action-menu icons, the building shadow and the plot highlight are
+not drawn there), not a statement about the title.  Free mode is reachable from
+the keyboard as well, and it is the only place this JAR has an enemy count -
+but **combat is blocked by construction**: the region panel's hit test is
+reached only from the touch path, the Canvas ignores pointers, and the keyboard
+resolves grid coordinates only, so the "dispatch" button cannot be pressed
+without a touch.
+
 ## Fixes found by that corpus
 
 Running the corpus is what turned up the defects; these are the ones that were
