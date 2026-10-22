@@ -1330,6 +1330,23 @@ int main(void)
                  a, &n);
             check(n.r == child, "find(id) reaches a child");
         }
+
+        /* Object3D.find() is inherited by every node type, but only a World
+         * carries the file-wide object table.  A Mesh must answer from the
+         * scene graph (null here) instead of reading the World-only slot: the
+         * old code read whatever sat at that offset and crashed the VM on a
+         * corpus fighting game. */
+        {
+            nj_ref world = make(vm, CLS("World"));
+            nj_ref mesh = make(vm, CLS("Mesh"));
+            n.r = 0;
+            a[0].i = 4242;
+            call(vm, mesh, CLS("Object3D"), "find", "(I)L" CLS("Object3D") ";",
+                 a, &n);
+            check(world && mesh && n.r == 0,
+                  "find() on a Mesh does not consult the World table");
+            check(nj_take_exception(vm) == 0, "find() on a Mesh does not throw");
+        }
     }
 
     printf("== setTransform(null) restores the identity ==\n");

@@ -1909,3 +1909,34 @@ contract. The limits are real: 40 of 395 titles, generic keys instead of
 title-specific scripts, no reference comparison, and later boss and ending paths
 still untested. The report and per-title logs are under
 `.local-tools/debug-runs/compat-round8-20261022/deep-sweep/`.
+
+## The crash `Object3D.find()` caused when the receiver was not a World
+
+The round-9 deep sweep of 40 more titles found one reachable native crash.
+`蓝牙真3D格斗_3424` (SHA-256
+`6d90379d1f1031285a59e32d63292597db95e9542dc4246b0c8bb0d48266edef`) died
+with `SIGSEGV` after about 12 seconds of paced play, when the key script
+turned the menu into the fight scene; without key input the same JAR never got
+there and ran cleanly. The core ended in `nj_array_length()` called from
+`m3g_find`.
+
+`Object3D.find(int)` is inherited by every node type, but the fallback that
+searches the file-wide object table reads `World._nj_all` — a field that
+exists only on `World`. The native read that slot out of whatever node called
+`find()`. On a `SkinnedMesh` the read landed past the object's own field
+slots, produced a value that was not a reference at all, and
+`nj_array_length()` dereferenced it. A debug print of the receiver confirmed
+the path (`DEBUG find_in_table receiver=javax/microedition/m3g/SkinnedMesh`,
+ten times in the 600-frame repro).
+
+The fix asks the receiver's own class whether it really is a `World` (a
+subclass check against the `World` class) before touching the file table;
+every other node answers from the scene graph only and returns `null` when the
+id is not there. The same 1,200-frame replay that crashed at about frame 375
+now runs to the end: exit status 0, no uncaught exception, 3,360 triangles
+drawn (the fight scene), and the other World-only reads
+(`getActiveCamera`, `getBackground`, the loader's write) stay bound to
+`World` itself or are already class-checked. `tests/test_m3g.c` now also asks
+a `Mesh` for an id after a `World` exists and requires a `null` answer with no
+exception (550 checks pass). The repro and core are under
+`.local-tools/debug-runs/compat-round9-20261022/deep2/` and `crash-repro3/`.

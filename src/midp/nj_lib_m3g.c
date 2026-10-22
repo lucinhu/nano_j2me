@@ -1747,11 +1747,26 @@ static nj_ref find_by_id(nj_vm *vm, nj_ref obj, nj_s4 id, int depth)
  */
 static nj_ref find_in_table(nj_vm *vm, nj_ref world, nj_s4 id)
 {
-    nj_field *uf = nj_field_lookup(vm, NJ_C_O3D, "_nj_userID", "I", 0);
-    nj_ref all = nj_rget(vm, world, nj_field_lookup(vm, NJ_C_WORLD, "_nj_all",
-                                                    "[L" NJ_C_O3D ";", 0));
+    nj_class *wc;
+    nj_field *uf;
+    nj_ref all;
     nj_u4 n, i;
 
+    /* Object3D.find() is inherited by every node type, but the file-wide
+     * object table lives only on World.  Reading its slot out of a Mesh or a
+     * Group used to fetch whatever happened to sit at that offset, and a title
+     * that calls find() on a node (rather than on the World) crashed the VM
+     * inside nj_array_length(). */
+    if (!vm || !world || !world->cls) {
+        return 0;
+    }
+    wc = nj_class_lookup(vm, NJ_C_WORLD);
+    if (!wc || !nj_class_is_subclass_of(world->cls, wc)) {
+        return 0;
+    }
+    uf = nj_field_lookup(vm, NJ_C_O3D, "_nj_userID", "I", 0);
+    all = nj_rget(vm, world, nj_field_lookup(vm, NJ_C_WORLD, "_nj_all",
+                                             "[L" NJ_C_O3D ";", 0));
     if (!all || !uf) {
         return 0;
     }
