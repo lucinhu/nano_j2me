@@ -18,13 +18,21 @@ typedef struct nj_jit_stats {
     nj_size peak_code_bytes;
     nj_size metadata_bytes; /* fixed per-VM JIT allocation, excluding code */
     nj_u8 code_evictions;
-    nj_u8 site_evictions;
-    /* Lower bound: counts recompiles only while site history is retained. */
+    /* Per-method probe maps are evicted least-recently-used when the arena is
+     * full. Only metadata goes away: compiled code stays in the code cache and
+     * a later recompile of the same (method, pc) reuses it. */
+    nj_u8 method_map_evictions;
+    /* Lower bound: counts recompiles only while a probe map still remembers
+     * that the site had been compiled before. */
     nj_u8 recompiled_blocks;
     nj_u8 unsupported_blocks;
     nj_u8 short_blocks;
     nj_u8 memory_failures;
     nj_u8 commit_failures;
+    /* Native blocks that exited to the interpreter at a guarded instruction
+     * (null receiver, bad array, zero divisor). The interpreter re-executes
+     * that bytecode, so Java-level behaviour is unchanged. */
+    nj_u8 faults;
     /* Detailed counters are zero unless NJ_JIT_DETAILED_STATS=1. */
     nj_u8 queries;
     nj_u8 code_hits;
@@ -33,7 +41,6 @@ typedef struct nj_jit_stats {
     nj_u8 probe_only_skips;
     nj_u8 budget_skips;
     nj_u8 stack_skips;
-    nj_u8 divisor_skips;
     /* Execution-weighted lengths: 1, 2-3, 4-7, 8-15, >=16 bytecodes. */
     nj_u8 block_lengths[5];
     int stats_enabled;

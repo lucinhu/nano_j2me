@@ -29,7 +29,20 @@ typedef struct test_frame {
     nj_value locals[LOCAL_SLOTS];
 } test_frame;
 static const char *test_name;
+/* Standalone contract tests use NULL by default; field/array cases install a
+ * minimal fake VM so the emitter can resolve CP entries without a runtime. */
+static nj_vm *jit_vm;
 static unsigned assertions, compiled, executed, seen_f, seen_d, seen_fpcr;
+
+static int analyze_method(const nj_method *m, nj_u4 pc, nj_jit_block *out)
+{
+    return nj_arm64_analyze(jit_vm, m, pc, out);
+}
+static int compile_method(const nj_method *m, nj_u4 pc, nj_u1 *buf,
+                          nj_size capacity, nj_jit_block *out)
+{
+    return nj_arm64_compile(jit_vm, m, pc, buf, capacity, out);
+}
 #define CHECK(c) do { ++assertions; if (!(c)) { \
     fprintf(stderr, "FAIL %s:%d [%s]: %s\n", __FILE__, __LINE__, \
             test_name ? test_name : "setup", #c); exit(1); } } while (0)
@@ -61,20 +74,28 @@ static void same_metadata(const nj_jit_block *a, const nj_jit_block *b)
 {
     CHECK(a->next_pc == b->next_pc && a->insns == b->insns);
     CHECK(a->stack_delta == b->stack_delta && a->min_stack == b->min_stack);
-    CHECK(a->max_growth == b->max_growth && a->check_divisor == b->check_divisor);
+    CHECK(a->max_growth == b->max_growth);
+    CHECK(a->nfaults == b->nfaults);
+    {
+        unsigned i;
+        for (i = 0; i < a->nfaults; ++i) {
+            CHECK(a->faults[i].pc_off == b->faults[i].pc_off);
+            CHECK(a->faults[i].sp_delta == b->faults[i].sp_delta);
+        }
+    }
 }
 static int compile_checked(const nj_method *m, nj_u4 pc, nj_u1 *buf,
                            nj_size capacity, nj_jit_block *out)
 {
     nj_jit_block analysis, prefix;
-    int scanned = nj_arm64_analyze(m, pc, &analysis);
-    int emitted = nj_arm64_compile(m, pc, buf, capacity, out);
+    int scanned = analyze_method(m, pc, &analysis);
+    int emitted = compile_method(m, pc, buf, capacity, out);
     if (scanned) CHECK(analysis.size == 0 && analysis.insns > 0);
     if (emitted) {
         nj_method limited = *m;
         CHECK(scanned && out->next_pc <= analysis.next_pc);
         limited.code_len = out->next_pc;
-        CHECK(nj_arm64_analyze(&limited, pc, &prefix));
+        CHECK(analyze_method(&limited, pc, &prefix));
         CHECK(prefix.size == 0);
         same_metadata(out, &prefix);
         if (out->next_pc == analysis.next_pc) same_metadata(out, &analysis);
@@ -120,12 +141,31 @@ static void inspect(const nj_u1 *code, size_t length)
         if ((insn & 0x1e000000u) == 0x0e000000u) CHECK(NJ_JIT_ARM64_SIMD);
         if ((insn & 0x3b000000u) == 0x08000000u ||
             (insn & 0x3f200c00u) == 0x38200000u) CHECK(NJ_JIT_ARM64_LSE);
-        CHECK((insn & 0x7c000000u) != 0x14000000u); /* b/bl */
-        CHECK((insn & 0xff000010u) != 0x54000000u); /* b.cond */
-        CHECK((insn & 0x7e000000u) != 0x34000000u); /* cbz/cbnz */
-        CHECK((insn & 0x7e000000u) != 0x36000000u); /* tbz/tbnz */
+        /* Fault guards are forward branches to an in-block exit stub. */
+        {
+            long target = -1;
+            if ((insn & 0xff000010u) == 0x54000000u) { /* b.cond */
+                long off = (long)((insn >> 5) & 0x7ffffu);
+                off = (off << 45) >> 45;
+                target = (long)p + off * 4;
+            } else if ((insn & 0x7e000000u) == 0x34000000u) { /* cbz/cbnz */
+                long off = (long)((insn >> 5) & 0x7ffffu);
+                off = (off << 45) >> 45;
+                target = (long)p + off * 4;
+            } else if ((insn & 0x7e000000u) == 0x36000000u) { /* tbz/tbnz */
+                long off = (long)((insn >> 5) & 0x3fffu);
+                off = (off << 50) >> 50;
+                target = (long)p + off * 4;
+            } else if ((insn & 0x7c000000u) == 0x14000000u) { /* b */
+                long off = (long)(insn & 0x3ffffffu);
+                off = (off << 38) >> 38;
+                target = (long)p + off * 4;
+            }
+            if (target >= 0) CHECK(target < (long)length && (target & 3) == 0);
+        }
+        CHECK((insn & 0xfc000000u) != 0x94000000u); /* bl */
         if ((insn & 0xfe000000u) == 0xd6000000u)
-            CHECK(insn == 0xd65f03c0u && p + 4 == length); /* ret x30 */
+            CHECK(insn == 0xd65f03c0u); /* ret x30 (main exit or fault stub) */
     }
     CHECK(word(code + length - 4) == 0xd65f03c0u);
     CHECK(saves <= 1 && restores == 2 * saves); /* clear once, restore once */
@@ -137,13 +177,14 @@ static size_t exec_size;
 /* Check every AAPCS64 callee-saved GPR and low 64 bits of v8..v15 around each
  * generated call. Save the harness's own registers before installing sentinels.
  * This out-of-line assembly avoids the compiler assuming preservation itself. */
-extern int arm64_check_abi(void (*fn)(nj_value *, nj_value *), nj_value *, nj_value *);
+extern int arm64_check_abi(nj_jit_fn fn, nj_value *, nj_value *, nj_u4 *);
 __asm__(
 ".text\n"
 ".align 2\n"
 ".type arm64_check_abi, %function\n"
 "arm64_check_abi:\n"
 "sub sp, sp, #176\n"
+"str x3, [sp, #168]\n"
 "stp x19, x20, [sp, #0]\n"
 "stp x21, x22, [sp, #16]\n"
 "stp x23, x24, [sp, #32]\n"
@@ -167,6 +208,8 @@ __asm__(
 "mov x0, x1\n"
 "mov x1, x2\n"
 "blr x16\n"
+"ldr x3, [sp, #168]\n"
+"str w0, [x3]\n"
 "mov w0, #0\n"
 ".irp n,19,20,21,22,23,24,25,26,27,28,29\n"
 "cmp x\\n, #\\n\n"
@@ -208,9 +251,10 @@ static void write_fpcr(uint64_t value)
 {
     __asm__ volatile("msr fpcr, %0" : : "r"(value) : "memory");
 }
-static void invoke(const nj_u1 *code, size_t length, nj_value *sp, nj_value *locals)
+static nj_u4 invoke(const nj_u1 *code, size_t length, nj_value *sp, nj_value *locals)
 {
-    void (*fn)(nj_value *, nj_value *);
+    nj_jit_fn fn;
+    nj_u4 result;
     uint64_t old_fpcr = read_fpcr();
     if (!exec_page) {
         long page = sysconf(_SC_PAGESIZE);
@@ -227,9 +271,10 @@ static void invoke(const nj_u1 *code, size_t length, nj_value *sp, nj_value *loc
     __builtin___clear_cache((char *)exec_page, (char *)exec_page + length);
     CHECK(sizeof(fn) == sizeof(exec_page));
     memcpy(&fn, &exec_page, sizeof(fn));
-    CHECK(arm64_check_abi(fn, sp, locals));
+    CHECK(arm64_check_abi(fn, sp, locals, &result));
     CHECK(read_fpcr() == old_fpcr);
     ++executed;
+    return result;
 }
 #endif
 
@@ -387,8 +432,9 @@ static void program_owned(const char *name, const nj_u1 *code, size_t length,
 #if EXECUTE_ARM64
     {
         test_frame actual = *initial;
-        if (block.check_divisor) CHECK(actual.stack[BASE + depth - 1].i != 0);
-        invoke(generated, block.size, &actual.stack[BASE + depth], actual.locals);
+        nj_u4 done = invoke(generated, block.size, &actual.stack[BASE + depth],
+                            actual.locals);
+        CHECK(done == block.insns);
         compare_frame(&actual, &expected);
     }
 #endif
@@ -411,9 +457,653 @@ static void declined(const char *name, const nj_u1 *code, size_t length, unsigne
     m.code = prefix; m.code_len = (nj_u4)length + 1;
     CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block) == 1);
     CHECK(block.next_pc == 1 && block.insns == 1 && block.stack_delta == 1);
-    CHECK(block.min_stack == 0 && block.max_growth == 1 && !block.check_divisor);
+    CHECK(block.min_stack == 0 && block.max_growth == 1 && block.nfaults == 0);
     inspect(generated, block.size);
 }
+
+/* ---- resolved operands, fault ABI ----------------------------------- */
+
+#if EXECUTE_ARM64
+static void expect_fault(nj_u4 word, unsigned index, unsigned completed)
+{
+    CHECK((word & NJ_JIT_FAULT_BIT) != 0u);
+    CHECK((word & NJ_JIT_FAULT_INDEX_MASK) == index);
+    CHECK(((word >> 8) & NJ_JIT_FAULT_COMPLETED_MASK) == completed);
+}
+#endif
+
+/* Run a block whose oracle is built by hand (field/array/fault cases). */
+static nj_u4 run_expect(const char *name, const nj_u1 *code, size_t length,
+                        unsigned local_count, int depth, nj_class *owner,
+                        const test_frame *initial, const test_frame *expected,
+                        nj_jit_block *out)
+{
+    nj_u1 generated[NJ_JIT_MAX_CODE_BYTES];
+    nj_method m = method(code, length, local_count);
+    nj_u4 ret = 0;
+    (void)initial;
+    (void)expected;
+    m.owner = owner;
+    test_name = name;
+    CHECK(compile_checked(&m, 0, generated, sizeof(generated), out) == 1);
+    CHECK(out->next_pc <= length);
+    inspect(generated, out->size);
+    ++compiled;
+#if EXECUTE_ARM64
+    {
+        test_frame actual = *initial;
+        ret = invoke(generated, out->size, &actual.stack[BASE + depth],
+                     actual.locals);
+        compare_frame(&actual, expected);
+    }
+#else
+    (void)depth;
+#endif
+    return ret;
+}
+
+static void declined_owned(const char *name, nj_class *owner,
+                           const nj_u1 *code, size_t length, unsigned locals)
+{
+    nj_u1 generated[NJ_JIT_MAX_CODE_BYTES];
+    nj_jit_block block;
+    nj_method m = method(code, length, locals);
+    m.owner = owner;
+    test_name = name;
+    CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block) == 0);
+    CHECK(block.nfaults == 0);
+}
+
+enum { FIELD_CACHE = 64, FIELD_OBJ_SIZE = 128 };
+typedef union field_object {
+    nj_u1 bytes[FIELD_OBJ_SIZE];
+    nj_u8 align;
+} field_object;
+typedef struct field_fixture {
+    nj_vm vm;
+    nj_class owner;
+    nj_field field;
+    nj_cpentry cache[FIELD_CACHE];
+    field_object object;
+} field_fixture;
+
+static unsigned field_offset(void)
+{
+    return (unsigned)((sizeof(nj_object) + 7u) & ~(size_t)7u);
+}
+
+static unsigned field_bytes(unsigned ptype)
+{
+    switch (ptype) {
+    case NJ_PT_BOOLEAN:
+    case NJ_PT_BYTE:   return 1u;
+    case NJ_PT_CHAR:
+    case NJ_PT_SHORT:  return 2u;
+    case NJ_PT_LONG:
+    case NJ_PT_DOUBLE:
+    case NJ_PT_OBJECT: return 8u;
+    default:           return 4u;
+    }
+}
+
+static nj_u4 field_low_value(const nj_u1 *p, unsigned ptype)
+{
+    switch (ptype) {
+    case NJ_PT_BOOLEAN:
+    case NJ_PT_BYTE:
+        return (nj_u4)(nj_s4)(nj_s1)p[0];
+    case NJ_PT_CHAR:
+        return (nj_u4)p[0] | (nj_u4)p[1] << 8;
+    case NJ_PT_SHORT:
+        return (nj_u4)(nj_s4)(nj_s2)((nj_u2)p[0] | (nj_u2)p[1] << 8);
+    default: {
+        nj_u4 v;
+        memcpy(&v, p, 4u);
+        return v;
+    }
+    }
+}
+
+static void field_fixture_init(field_fixture *fx, unsigned ptype, unsigned width,
+                               unsigned offset)
+{
+    nj_u4 slot;
+    memset(fx, 0, sizeof(*fx));
+    fx->vm.cp_cache = fx->cache;
+    fx->vm.cp_cache_size = FIELD_CACHE;
+    fx->owner.state = NJ_CLASS_LINKED;
+    fx->owner.instance_size = FIELD_OBJ_SIZE;
+    fx->field.owner = &fx->owner;
+    fx->field.ptype = (nj_u1)ptype;
+    fx->field.width = (nj_u1)width;
+    fx->field.offset = (nj_u2)offset;
+    slot = nj_cp_key_hash(&fx->owner, 1u) & (FIELD_CACHE - 1u);
+    fx->cache[slot].cls = &fx->owner;
+    fx->cache[slot].cp_index = 1u;
+    fx->cache[slot].kind = NJ_LINK_FIELD_INST;
+    fx->cache[slot].target = &fx->field;
+    fx->cache[slot].used = 1u;
+    memset(fx->object.bytes, 0xa5, sizeof(fx->object.bytes));
+    {
+        nj_object *o = (nj_object *)(void *)fx->object.bytes;
+        o->kind = NJ_OBJ_PLAIN;
+        o->size = FIELD_OBJ_SIZE;
+    }
+}
+
+static void field_code(nj_u1 *code, unsigned op)
+{
+    code[0] = (nj_u1)op;
+    code[1] = 0u;
+    code[2] = 1u;
+}
+
+static void field_read_case(const char *name, unsigned ptype, unsigned width,
+                            nj_u8 raw)
+{
+    field_fixture fx;
+    nj_u1 code[3];
+    nj_u1 before[FIELD_OBJ_SIZE];
+    test_frame initial, expected;
+    nj_jit_block block;
+    unsigned offset = field_offset();
+    int wide = width == 2u;
+    nj_u4 ret;
+    field_fixture_init(&fx, ptype, width, offset);
+    CHECK(nj_jit_instance_field(&fx.vm, &fx.owner, 1u) == &fx.field);
+    if (ptype == NJ_PT_OBJECT) {
+        nj_ref r = (nj_ref)(uintptr_t)raw;
+        memcpy(fx.object.bytes + offset, &r, sizeof(r));
+    } else {
+        memcpy(fx.object.bytes + offset, &raw, field_bytes(ptype));
+    }
+    memcpy(before, fx.object.bytes, sizeof(before));
+    field_code(code, 0xb4);
+    init_frame(&initial);
+    initial.stack[BASE].r = (nj_ref)(void *)fx.object.bytes;
+    expected = initial;
+    if (wide) {
+        memcpy(&expected.stack[BASE].bits, &raw, 8u);
+        expected.stack[BASE + 1u].bits &= ~(nj_u8)0xffffffffu;
+    } else if (ptype == NJ_PT_OBJECT) {
+        nj_ref r;
+        memcpy(&r, fx.object.bytes + offset, sizeof(r));
+        expected.stack[BASE].r = r;
+    } else {
+        expected.stack[BASE].bits =
+            (expected.stack[BASE].bits & (nj_u8)0xffffffff00000000u) |
+            (nj_u8)field_low_value(fx.object.bytes + offset, ptype);
+    }
+    jit_vm = &fx.vm;
+    ret = run_expect(name, code, sizeof(code), 1, 1, &fx.owner, &initial,
+                     &expected, &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 3 && block.insns == 1);
+    CHECK(block.stack_delta == (wide ? 1 : 0) && block.min_stack == 1);
+    CHECK(block.max_growth == (wide ? 1 : 0));
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_ARM64
+    CHECK(ret == 1);
+#endif
+    CHECK(memcmp(fx.object.bytes, before, sizeof(before)) == 0);
+    (void)ret;
+}
+
+static void field_write_case(const char *name, unsigned ptype, unsigned width,
+                             nj_u8 raw)
+{
+    field_fixture fx;
+    nj_u1 code[3];
+    nj_u1 expected_obj[FIELD_OBJ_SIZE];
+    test_frame initial, expected;
+    nj_jit_block block;
+    unsigned offset = field_offset();
+    unsigned bytes = field_bytes(ptype);
+    int wide = width == 2u;
+    int depth = 1 + (int)width;
+    nj_u4 ret;
+    field_fixture_init(&fx, ptype, width, offset);
+    CHECK(nj_jit_instance_field(&fx.vm, &fx.owner, 1u) == &fx.field);
+    memcpy(expected_obj, fx.object.bytes, sizeof(expected_obj));
+    memcpy(expected_obj + offset, &raw, bytes);
+    field_code(code, 0xb5);
+    init_frame(&initial);
+    initial.stack[BASE].r = (nj_ref)(void *)fx.object.bytes;
+    if (wide) {
+        memcpy(&initial.stack[BASE + 1].bits, &raw, 8u);
+    } else if (ptype == NJ_PT_OBJECT) {
+        nj_ref r = (nj_ref)(uintptr_t)raw;
+        memcpy(&initial.stack[BASE + 1].r, &r, sizeof(r));
+    } else {
+        initial.stack[BASE + 1].i = (nj_s4)(nj_u4)raw;
+    }
+    expected = initial;
+    jit_vm = &fx.vm;
+    ret = run_expect(name, code, sizeof(code), 1, depth, &fx.owner, &initial,
+                     &expected, &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 3 && block.insns == 1);
+    CHECK(block.stack_delta == -depth && block.min_stack == depth);
+    CHECK(block.max_growth == 0);
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_ARM64
+    CHECK(ret == 1);
+    CHECK(memcmp(fx.object.bytes, expected_obj, sizeof(expected_obj)) == 0);
+#else
+    (void)expected_obj;
+#endif
+    (void)ret;
+}
+
+static void field_fault_case(const char *name, unsigned op, int put)
+{
+    field_fixture fx;
+    nj_u1 code[3];
+    nj_u1 before[FIELD_OBJ_SIZE];
+    test_frame initial, expected;
+    nj_jit_block block;
+    unsigned offset = field_offset();
+    int depth = put ? 2 : 1;
+    nj_u4 ret;
+    field_fixture_init(&fx, NJ_PT_INT, 1u, offset);
+    memcpy(fx.object.bytes + offset, "\x11\x22\x33\x44", 4u);
+    memcpy(before, fx.object.bytes, sizeof(before));
+    field_code(code, op);
+    init_frame(&initial);
+    initial.stack[BASE].r = NULL;
+    if (put) initial.stack[BASE + 1].i = 0x55667788;
+    expected = initial;
+    jit_vm = &fx.vm;
+    ret = run_expect(name, code, sizeof(code), 1, depth, &fx.owner, &initial,
+                     &expected, &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 3 && block.insns == 1);
+    CHECK(block.stack_delta == (put ? -2 : 0) && block.min_stack == depth);
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_ARM64
+    expect_fault(ret, 0u, 0u);
+#endif
+    CHECK(memcmp(fx.object.bytes, before, sizeof(before)) == 0);
+    (void)ret;
+}
+
+static void field_decline_case(const char *name, int which)
+{
+    field_fixture fx;
+    nj_u1 code[3];
+    unsigned offset = field_offset();
+    unsigned slot;
+    field_fixture_init(&fx, NJ_PT_INT, 1u, offset);
+    slot = nj_cp_key_hash(&fx.owner, 1u) & (FIELD_CACHE - 1u);
+    field_code(code, 0xb4);
+    switch (which) {
+    case 0: fx.cache[slot].used = 0u; break;                 /* unresolved */
+    case 1: fx.cache[slot].kind = NJ_LINK_FIELD_STATIC; break;
+    case 2: fx.field.flags = NJ_ACC_STATIC; break;
+    case 3: fx.owner.state = NJ_CLASS_LOADED; break;        /* not linked */
+    case 4: fx.field.offset = (nj_u2)(sizeof(nj_object) - 1u); break;
+    case 5: fx.owner.instance_size = offset + 3u; break;    /* past end */
+    case 6: fx.field.ptype = 0xffu; break;
+    case 7: code[2] = 0u; break;                            /* cp index 0 */
+    case 8: fx.vm.cp_cache = NULL; fx.vm.cp_cache_size = 0u; break;
+    default: code[2] = 0u; break;                           /* truncated */
+    }
+    jit_vm = &fx.vm;
+    if (which == 9)
+        declined_owned(name, &fx.owner, code, 2u, 1);
+    else
+        declined_owned(name, &fx.owner, code, sizeof(code), 1);
+    jit_vm = NULL;
+}
+
+/* ---- int arrays ------------------------------------------------------ */
+
+enum { ARRAY_LEN = 8 };
+typedef struct array_fixture {
+    nj_vm vm;
+    nj_object arr;
+    nj_s4 ints[ARRAY_LEN];
+} array_fixture;
+
+static void array_fixture_init(array_fixture *fx, unsigned kind, unsigned aflags)
+{
+    unsigned i;
+    memset(fx, 0, sizeof(*fx));
+    for (i = 0; i < ARRAY_LEN; ++i)
+        fx->ints[i] = (nj_s4)(0x10203040u + i * 0x01010101u);
+    fx->arr.kind = (nj_u1)kind;
+    fx->arr.aflags = (nj_u2)aflags;
+    fx->arr.length = ARRAY_LEN;
+    fx->arr.size = (nj_u4)sizeof(fx->ints);
+    fx->arr.u.bytes = (nj_u1 *)(void *)fx->ints;
+}
+
+static void array_load_case(const char *name, array_fixture *fx, nj_ref ref,
+                            unsigned index, int fault)
+{
+    static const nj_u1 code[] = {0x2e};
+    test_frame initial, expected;
+    nj_jit_block block;
+    nj_u4 ret;
+    init_frame(&initial);
+    initial.stack[BASE].r = ref;
+    initial.stack[BASE + 1].i = (nj_s4)index;
+    expected = initial;
+    if (!fault) {
+        expected.stack[BASE].bits =
+            (expected.stack[BASE].bits & (nj_u8)0xffffffff00000000u) |
+            (nj_u8)(nj_u4)fx->ints[index];
+    }
+    jit_vm = &fx->vm;
+    ret = run_expect(name, code, sizeof(code), 1, 2, NULL, &initial, &expected,
+                     &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 1 && block.insns == 1);
+    CHECK(block.stack_delta == -1 && block.min_stack == 2);
+    CHECK(block.max_growth == 0);
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_ARM64
+    if (fault) expect_fault(ret, 0u, 0u);
+    else CHECK(ret == 1);
+#endif
+    (void)ret;
+}
+
+static void array_store_case(const char *name, array_fixture *fx, nj_ref ref,
+                             unsigned index, nj_s4 value, int fault)
+{
+    static const nj_u1 code[] = {0x4f};
+    test_frame initial, expected;
+    nj_jit_block block;
+    nj_s4 want[ARRAY_LEN];
+    unsigned i;
+    nj_u4 ret;
+    memcpy(want, fx->ints, sizeof(want));
+    if (!fault) want[index] = value;
+    init_frame(&initial);
+    initial.stack[BASE].r = ref;
+    initial.stack[BASE + 1].i = (nj_s4)index;
+    initial.stack[BASE + 2].i = value;
+    expected = initial;
+    jit_vm = &fx->vm;
+    ret = run_expect(name, code, sizeof(code), 1, 3, NULL, &initial, &expected,
+                     &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 1 && block.insns == 1);
+    CHECK(block.stack_delta == -3 && block.min_stack == 3);
+    CHECK(block.max_growth == 0);
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_ARM64
+    if (fault) expect_fault(ret, 0u, 0u);
+    else CHECK(ret == 1);
+#endif
+#if EXECUTE_ARM64
+    CHECK(memcmp(fx->ints, want, sizeof(want)) == 0);
+#else
+    (void)want;
+#endif
+    (void)i;
+    (void)ret;
+}
+
+static void array_length_case(const char *name, array_fixture *fx, nj_ref ref,
+                              int fault)
+{
+    static const nj_u1 code[] = {0xbe};
+    test_frame initial, expected;
+    nj_jit_block block;
+    nj_u4 ret;
+    init_frame(&initial);
+    initial.stack[BASE].r = ref;
+    expected = initial;
+    if (!fault) {
+        expected.stack[BASE].bits =
+            (expected.stack[BASE].bits & (nj_u8)0xffffffff00000000u) |
+            (nj_u8)fx->arr.length;
+    }
+    jit_vm = &fx->vm;
+    ret = run_expect(name, code, sizeof(code), 1, 1, NULL, &initial, &expected,
+                     &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 1 && block.insns == 1);
+    CHECK(block.stack_delta == 0 && block.min_stack == 1);
+    CHECK(block.max_growth == 0);
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_ARM64
+    if (fault) expect_fault(ret, 0u, 0u);
+    else CHECK(ret == 1);
+#endif
+    (void)ret;
+}
+
+/* ---- fault ABI ------------------------------------------------------- */
+
+static void test_faults(void)
+{
+    static const nj_u1 five[] = {
+        0xb4,0,1, 0xb4,0,1, 0xb4,0,1, 0xb4,0,1, 0xb4,0,1, 0x00,0xac
+    };
+    static const nj_u1 four[] = {
+        0xb4,0,1, 0xb4,0,1, 0xb4,0,1, 0xb4,0,1, 0x00,0xac
+    };
+#if EXECUTE_ARM64
+    static const nj_u1 two[] = {0xb4,0,1, 0x2a, 0xb4,0,1, 0xac};
+#endif
+    field_fixture fx;
+    nj_u1 generated[NJ_JIT_MAX_CODE_BYTES];
+    nj_jit_block block, analysis;
+    nj_method m;
+    unsigned i;
+
+    test_name = "record_fault bounds";
+    memset(&block, 0, sizeof(block));
+    for (i = 0; i < NJ_JIT_MAX_FAULTS; ++i)
+        CHECK(nj_jit_record_fault(&block, 10u, 10u + i, (int)i) == 1);
+    CHECK(block.nfaults == NJ_JIT_MAX_FAULTS);
+    CHECK(nj_jit_record_fault(&block, 10u, 99u, 0) == 0);
+    CHECK(!nj_jit_record_fault(NULL, 0u, 0u, 0));
+    memset(&block, 0, sizeof(block));
+    CHECK(!nj_jit_record_fault(&block, 5u, 4u, 0));
+    CHECK(!nj_jit_record_fault(&block, 0u, 0x10000u, 0));
+    CHECK(block.nfaults == 0);
+
+    test_name = "fault metadata stops at the budget";
+    field_fixture_init(&fx, NJ_PT_INT, 1u, field_offset());
+    jit_vm = &fx.vm;
+    {
+        /* A block may hold at most NJ_JIT_MAX_FAULTS guards. The four-getfield
+         * program saturates the default budget exactly; a larger configured
+         * budget compiles it whole. */
+        const unsigned nfour = NJ_JIT_MAX_FAULTS < 4 ? NJ_JIT_MAX_FAULTS : 4u;
+        const unsigned nfive = NJ_JIT_MAX_FAULTS < 5 ? NJ_JIT_MAX_FAULTS : 5u;
+        const unsigned four_insns = nfour == 4u ? 5u : nfour;
+        const unsigned four_next = nfour == 4u ? 13u : nfour * 3u;
+        /* 0xac is the terminal bytecode, not a JIT instruction: a complete
+         * block ends at the preceding 0x00 nop. */
+        const unsigned five_insns = nfive == 5u ? 6u : nfive;
+        const unsigned five_next = nfive == 5u ? 16u : nfive * 3u;
+
+        m = method(four, sizeof(four), 1);
+        m.owner = &fx.owner;
+        CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block) == 1);
+        CHECK(block.next_pc == four_next && block.insns == four_insns);
+        CHECK(block.nfaults == nfour);
+        for (i = 0; i < block.nfaults; ++i) {
+            CHECK(block.faults[i].pc_off == i * 3u);
+            CHECK(block.faults[i].sp_delta == 0);
+        }
+        m = method(five, sizeof(five), 1);
+        m.owner = &fx.owner;
+        CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block) == 1);
+        CHECK(block.next_pc == five_next && block.insns == five_insns);
+        CHECK(block.nfaults == nfive);
+        CHECK(nj_arm64_analyze(&fx.vm, &m, 0, &analysis));
+        CHECK(analysis.next_pc == five_next && analysis.insns == five_insns);
+    }
+    CHECK(analysis.nfaults == block.nfaults);
+    for (i = 0; i < block.nfaults; ++i) {
+        CHECK(analysis.faults[i].pc_off == block.faults[i].pc_off);
+        CHECK(analysis.faults[i].sp_delta == block.faults[i].sp_delta);
+    }
+    jit_vm = NULL;
+
+#if EXECUTE_ARM64
+    test_name = "div and rem zero divisor faults";
+    {
+        static const nj_u1 idiv[] = {0x6c,0xac};
+        static const nj_u1 irem[] = {0x70,0xac};
+        test_frame initial, expected;
+        nj_u4 ret;
+        int op;
+        field_fixture_init(&fx, NJ_PT_INT, 1u, field_offset());
+        jit_vm = &fx.vm;
+        for (op = 0; op < 2; ++op) {
+            init_frame(&initial);
+            initial.stack[BASE].i = 7;
+            initial.stack[BASE + 1].i = 0;
+            expected = initial;
+            ret = run_expect(op ? "irem zero" : "idiv zero", op ? irem : idiv,
+                             2u, 0, 2, NULL, &initial, &expected, &block);
+            CHECK(block.next_pc == 1u && block.insns == 1u);
+            CHECK(block.stack_delta == -1 && block.min_stack == 2);
+            CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+                  block.faults[0].sp_delta == 0);
+            expect_fault(ret, 0u, 0u);
+        }
+        jit_vm = NULL;
+    }
+
+    test_name = "second fault reports its index and completed count";
+    {
+        nj_object *o;
+        test_frame initial, expected;
+        nj_u4 ret;
+        field_fixture_init(&fx, NJ_PT_INT, 1u, field_offset());
+        memcpy(fx.object.bytes + field_offset(), "\x11\x22\x33\x44", 4u);
+        o = (nj_object *)(void *)fx.object.bytes;
+        init_frame(&initial);
+        initial.stack[BASE].r = (nj_ref)o;
+        initial.locals[0].r = NULL;
+        expected = initial;
+        expected.stack[BASE].bits =
+            (expected.stack[BASE].bits & (nj_u8)0xffffffff00000000u) |
+            0x44332211u;
+        expected.stack[BASE + 1].r = NULL;
+        jit_vm = &fx.vm;
+        ret = run_expect("second getfield fault", two, sizeof(two), 1, 1,
+                         &fx.owner, &initial, &expected, &block);
+        jit_vm = NULL;
+        CHECK(block.next_pc == 7u && block.insns == 3u);
+        CHECK(block.nfaults == 2);
+        CHECK(block.faults[0].pc_off == 0u && block.faults[0].sp_delta == 0);
+        CHECK(block.faults[1].pc_off == 4u && block.faults[1].sp_delta == 1);
+        expect_fault(ret, 1u, 2u);
+    }
+#endif
+}
+
+static void test_fields_arrays(void)
+{
+    unsigned offset = field_offset();
+    field_fixture fx;
+    array_fixture ax;
+    unsigned i;
+    nj_u1 code[3];
+
+    test_name = "field and array decline without a VM";
+    jit_vm = NULL;
+    field_code(code, 0xb4);
+    declined("getfield without vm", code, 3, 1);
+    field_code(code, 0xb5);
+    declined("putfield without vm", code, 3, 1);
+    {
+        static const nj_u1 ops[] = {0x2e,0x4f,0xbe};
+        for (i = 0; i < sizeof(ops); ++i)
+            declined("array opcode without vm", &ops[i], 1, 1);
+    }
+
+    test_name = "getfield primitive widths";
+    field_read_case("getfield boolean", NJ_PT_BOOLEAN, 1u, 0x81u);
+    field_read_case("getfield byte", NJ_PT_BYTE, 1u, 0x81u);
+    field_read_case("getfield char", NJ_PT_CHAR, 1u, 0xfffeu);
+    field_read_case("getfield short", NJ_PT_SHORT, 1u, 0x8001u);
+    field_read_case("getfield int", NJ_PT_INT, 1u, 0x80000001u);
+    field_read_case("getfield float", NJ_PT_FLOAT, 1u, 0x7fc12345u);
+    field_read_case("getfield long", NJ_PT_LONG, 2u, UINT64_C(0x8000000000000001));
+    field_read_case("getfield double", NJ_PT_DOUBLE, 2u,
+                    UINT64_C(0xf0123456789abcde));
+    field_read_case("getfield object", NJ_PT_OBJECT, 1u,
+                    UINT64_C(0x123456789abcdef0));
+
+    test_name = "putfield primitive widths";
+    field_write_case("putfield boolean", NJ_PT_BOOLEAN, 1u, 0x1234u);
+    field_write_case("putfield byte", NJ_PT_BYTE, 1u, 0x1234u);
+    field_write_case("putfield char", NJ_PT_CHAR, 1u, 0x12345u);
+    field_write_case("putfield short", NJ_PT_SHORT, 1u, 0x12345u);
+    field_write_case("putfield int", NJ_PT_INT, 1u, 0x89abcdefu);
+    field_write_case("putfield float", NJ_PT_FLOAT, 1u, 0x7fc12345u);
+    field_write_case("putfield long", NJ_PT_LONG, 2u, UINT64_C(0x0123456789abcdef));
+    field_write_case("putfield double", NJ_PT_DOUBLE, 2u,
+                     UINT64_C(0xfedcba9876543210));
+    field_write_case("putfield object", NJ_PT_OBJECT, 1u,
+                     UINT64_C(0x123456789abcdef0));
+
+    test_name = "field null receiver faults";
+    field_fault_case("getfield null receiver", 0xb4, 0);
+    field_fault_case("putfield null receiver", 0xb5, 1);
+    field_fault_case("getfield null receiver again", 0xb4, 0);
+
+    test_name = "field declines";
+    field_decline_case("getfield unresolved", 0);
+    field_decline_case("getfield static link", 1);
+    field_decline_case("getfield static field", 2);
+    field_decline_case("getfield owner unlinked", 3);
+    field_decline_case("getfield offset in header", 4);
+    field_decline_case("getfield offset past instance", 5);
+    field_decline_case("getfield unknown ptype", 6);
+    field_decline_case("getfield cp index zero", 7);
+    field_decline_case("getfield no cp cache", 8);
+    field_decline_case("getfield truncated", 9);
+    (void)fx;
+
+    test_name = "int array reads and writes";
+    array_fixture_init(&ax, NJ_OBJ_ARRAY, NJ_ARRAY_T_INT);
+    for (i = 0; i < ARRAY_LEN; ++i)
+        array_load_case("iaload", &ax, (nj_ref)&ax.arr, i, 0);
+    array_load_case("iaload first", &ax, (nj_ref)&ax.arr, 0, 0);
+    array_load_case("iaload last", &ax, (nj_ref)&ax.arr, ARRAY_LEN - 1, 0);
+    for (i = 0; i < 4; ++i)
+        array_store_case("iastore", &ax, (nj_ref)&ax.arr, i,
+                         (nj_s4)(0x55667788u + i), 0);
+    array_length_case("arraylength", &ax, (nj_ref)&ax.arr, 0);
+
+    test_name = "array faults leave state untouched";
+    array_load_case("iaload null", &ax, NULL, 0, 1);
+    array_store_case("iastore null", &ax, NULL, 0, 0x11223344, 1);
+    array_length_case("arraylength null", &ax, NULL, 1);
+    array_load_case("iaload index -1", &ax, (nj_ref)&ax.arr, UINT32_MAX, 1);
+    array_load_case("iaload index == length", &ax, (nj_ref)&ax.arr, ARRAY_LEN, 1);
+    array_store_case("iastore index -1", &ax, (nj_ref)&ax.arr, UINT32_MAX,
+                     0x11223344, 1);
+    array_store_case("iastore index == length", &ax, (nj_ref)&ax.arr, ARRAY_LEN,
+                     0x11223344, 1);
+    array_fixture_init(&ax, NJ_OBJ_ARRAY, NJ_ARRAY_T_BYTE);
+    array_load_case("iaload wrong array type", &ax, (nj_ref)&ax.arr, 0, 1);
+    array_store_case("iastore wrong array type", &ax, (nj_ref)&ax.arr, 0,
+                     0x11223344, 1);
+    array_fixture_init(&ax, NJ_OBJ_PLAIN, NJ_ARRAY_T_INT);
+    array_load_case("iaload not an array", &ax, (nj_ref)&ax.arr, 0, 1);
+    array_store_case("iastore not an array", &ax, (nj_ref)&ax.arr, 0,
+                     0x11223344, 1);
+    (void)offset;
+}
+
 static nj_u4 random_word(nj_u4 *state)
 {
     nj_u4 x = *state;
@@ -645,7 +1335,7 @@ static void test_boundaries(void)
         CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
         CHECK(block.next_pc == sizeof(code));
         CHECK(block.min_stack == 2 && block.max_growth == 2 && block.stack_delta == -1);
-        CHECK(!block.check_divisor);
+        CHECK(block.nfaults == 0);
         test_name = "method max_stack bounds";
         m.max_stack = 1; CHECK(!compile_checked(&m, 0, generated, sizeof(generated), &block));
         m.max_stack = 3; CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
@@ -673,11 +1363,12 @@ static void test_boundaries(void)
         test_name = "division isolation and zero guard contract";
         m = method(first, sizeof(first), 0);
         CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
-        CHECK(block.next_pc == 1 && block.insns == 1 && block.check_divisor == 1);
+        CHECK(block.next_pc == 1 && block.insns == 1 && block.nfaults == 1);
+        CHECK(block.faults[0].pc_off == 0 && block.faults[0].sp_delta == 0);
         CHECK(block.min_stack == 2 && block.stack_delta == -1 && block.max_growth == 0);
         m = method(middle, sizeof(middle), 0);
         CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
-        CHECK(block.next_pc == 1 && block.insns == 1 && block.check_divisor == 0);
+        CHECK(block.next_pc == 1 && block.insns == 1 && block.nfaults == 0);
         /* The VM owns the exception: never execute an unguarded zero divisor. */
     }
 }
@@ -994,16 +1685,16 @@ static void test_analysis(void)
     nj_method m = method(code, sizeof(code), 1);
     nj_jit_block block;
     test_name = "analysis rejects invalid input and identifies short block";
-    CHECK(!nj_arm64_analyze(NULL, 0, &block));
-    CHECK(!nj_arm64_analyze(&m, 0, NULL));
-    CHECK(!nj_arm64_analyze(&m, sizeof(code), &block));
-    CHECK(!nj_arm64_analyze(&m, UINT32_MAX, &block));
-    CHECK(nj_arm64_analyze(&m, 0, &block));
+    CHECK(!analyze_method(NULL, 0, &block));
+    CHECK(!analyze_method(&m, 0, NULL));
+    CHECK(!analyze_method(&m, sizeof(code), &block));
+    CHECK(!analyze_method(&m, UINT32_MAX, &block));
+    CHECK(analyze_method(&m, 0, &block));
     CHECK(block.size == 0 && block.insns == 1 && block.next_pc == 1);
     CHECK(block.min_stack == 0 && block.max_growth == 1 && block.stack_delta == 1);
-    CHECK(!block.check_divisor);
-    m.max_stack = 0; CHECK(!nj_arm64_analyze(&m, 0, &block));
-    m.code = NULL; CHECK(!nj_arm64_analyze(&m, 0, &block));
+    CHECK(block.nfaults == 0);
+    m.max_stack = 0; CHECK(!analyze_method(&m, 0, &block));
+    m.code = NULL; CHECK(!analyze_method(&m, 0, &block));
 }
 
 static void test_write_through(void)
@@ -1130,7 +1821,9 @@ int main(int argc, char **argv)
 #if EXECUTE_ARM64
     CHECK(sizeof(nj_ref) == 8);
 #endif
-    test_integer(); test_float(); test_boundaries(); test_large_locals(); test_fpcr();
+    test_integer(); test_float(); test_boundaries();
+    test_faults(); test_fields_arrays();
+    test_large_locals(); test_fpcr();
     test_numeric_constants(); test_analysis(); test_write_through(); test_constant_chain();
     test_name = "extension coverage";
     CHECK(!NJ_JIT_ARM64_FP || !NJ_ENABLE_FLOAT || (seen_f && seen_fpcr));

@@ -18,9 +18,10 @@
 #define NJ_TEST_JIT_PERF_JAR "tests/fixtures/jitperf.jar"
 #endif
 
-enum { MODE_INTERPRETER, MODE_PROBE, MODE_EXECUTE, MODE_COUNT, KERNEL_COUNT = 5 };
+enum { MODE_INTERPRETER, MODE_PROBE, MODE_EXECUTE, MODE_COUNT, KERNEL_COUNT = 6 };
 static const char *const mode_names[] = {"interpreter", "probe-only", "execute"};
-static const char *const kernels[] = {"locals", "constants", "fields", "arrays", "branches"};
+static const char *const kernels[] = {"locals", "constants", "fields", "arrays", "mixed",
+                                      "branches"};
 static const char *current_kernel = "setup", *current_mode = "setup";
 #define CHECK(condition) do { if (!(condition)) { \
     fprintf(stderr, "FAIL %s:%d kernel=%s mode=%s: %s\n", __FILE__, __LINE__, \
@@ -85,6 +86,19 @@ static nj_u4 expected_checksum(unsigned kernel, nj_u4 iterations)
         sum = 0;
         for (i = 0; i < iterations; ++i) { values[i & 63u] += i; sum ^= values[i & 63u]; }
         return sum ^ values[iterations & 63u];
+    case 4: {
+        nj_u4 box = 0, index;
+        for (i = 0; i < 32; ++i) values[i] = i * 7u + 1u;
+        sum = 0;
+        for (i = 0; i < iterations; ++i) {
+            index = i & 31u;
+            box += i;
+            values[index] += box;
+            sum ^= values[index] + box;
+            box ^= i << 2;
+        }
+        return sum ^ box ^ values[iterations & 31u];
+    }
     default:
         state = 0x13579bdfu; sum = 0;
         for (i = 0; i < iterations; ++i) {
@@ -202,6 +216,24 @@ cleanup:
     return status;
 }
 
+static void print_fallback(unsigned kernel, unsigned mode, const measurement *r)
+{
+    nj_u8 native = (mode == MODE_EXECUTE && r->jit.stats_enabled)
+                 ? r->jit.bytecodes : 0u;
+    nj_u8 fallback = r->java_insns > native ? r->java_insns - native : 0u;
+    double ratio = r->java_insns ? (double)fallback / (double)r->java_insns : 1.0;
+    printf("FALLBACK kernel=%s mode=%s native_bytecodes=%" PRIu64
+           " java_insns=%" PRIu64 " interpreter_bytecodes=%" PRIu64
+           " fallback_ratio=%.6f metadata_bytes=%lu code_bytes=%lu "
+           "peak_code_bytes=%lu total_bytes=%lu\n",
+           kernels[kernel], mode_names[mode], (uint64_t)native,
+           (uint64_t)r->java_insns, (uint64_t)fallback, ratio,
+           (unsigned long)r->jit.metadata_bytes,
+           (unsigned long)r->jit.code_bytes,
+           (unsigned long)r->jit.peak_code_bytes,
+           (unsigned long)(r->jit.metadata_bytes + r->jit.peak_code_bytes));
+}
+
 static void print_measurement(unsigned kernel, unsigned mode, nj_u4 iterations,
                              const measurement *r)
 {
@@ -216,18 +248,21 @@ static void print_measurement(unsigned kernel, unsigned mode, nj_u4 iterations,
     else printf("native_blocks=unavailable native_bytecodes=unavailable ");
 #define COUNTER(field) printf(#field "=%" PRIu64 " ", (uint64_t)s->field)
     COUNTER(compiled_blocks); COUNTER(declined_blocks);
-    COUNTER(code_evictions); COUNTER(site_evictions); COUNTER(recompiled_blocks);
+    COUNTER(code_evictions); COUNTER(method_map_evictions); COUNTER(recompiled_blocks);
     COUNTER(unsupported_blocks); COUNTER(short_blocks);
     COUNTER(memory_failures); COUNTER(commit_failures);
     if (s->detailed_stats_enabled || mode == MODE_INTERPRETER) {
         COUNTER(queries); COUNTER(code_hits); COUNTER(cold_skips); COUNTER(negative_hits);
-        COUNTER(probe_only_skips); COUNTER(budget_skips); COUNTER(stack_skips); COUNTER(divisor_skips);
+        COUNTER(probe_only_skips); COUNTER(budget_skips); COUNTER(stack_skips);
         printf("length_hist=%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 " ",
                (uint64_t)s->block_lengths[0], (uint64_t)s->block_lengths[1],
                (uint64_t)s->block_lengths[2], (uint64_t)s->block_lengths[3], (uint64_t)s->block_lengths[4]);
     } else printf("queries=unavailable code_hits=unavailable cold_skips=unavailable "
                   "negative_hits=unavailable probe_only_skips=unavailable budget_skips=unavailable "
-                  "stack_skips=unavailable divisor_skips=unavailable length_hist=unavailable ");
+                  "stack_skips=unavailable length_hist=unavailable ");
+    /* Faults are counted in every statistics configuration; only the detailed
+       probe/cold counters above are compiled out. */
+    COUNTER(faults);
 #undef COUNTER
     printf("metadata_bytes=%lu code_bytes=%lu peak_code_bytes=%lu "
            "code_alloc_attempts=%" PRIu64 " code_allocations=%" PRIu64
@@ -235,6 +270,7 @@ static void print_measurement(unsigned kernel, unsigned mode, nj_u4 iterations,
            (unsigned long)s->metadata_bytes, (unsigned long)s->code_bytes, (unsigned long)s->peak_code_bytes,
            (uint64_t)r->code.attempts, (uint64_t)r->code.allocations, (uint64_t)r->code.commits,
            (uint64_t)r->code.frees, (uint64_t)r->code.requested_bytes);
+    print_fallback(kernel, mode, r);
 }
 static nj_u1 *read_jar(const char *path, nj_u4 *length)
 {
@@ -288,14 +324,17 @@ int main(int argc, char **argv)
     if (require_execution && selected >= 0 && selected != MODE_EXECUTE) { usage(argv[0]); return 2; }
     jar = read_jar(jar_path, &jar_len);
     if (!jar) return 1;
-    printf("JIT_PERF iterations=%" PRIu32 " kernels=5 stats_build=%d detailed_build=%d "
+    printf("JIT_PERF iterations=%" PRIu32 " kernels=6 stats_build=%d detailed_build=%d "
            "length_bins=1,2-3,4-7,8-15,16+\n", (uint32_t)iterations, NJ_JIT_STATS, NJ_JIT_DETAILED_STATS);
     printf("JIT_CONFIG rv32=%d arm64=%d rv32_reg_cache=%d hot_threshold=%u "
-           "min_block=%u max_block=%u code_entries=%u code_ways=%u site_entries=%u max_code_bytes=%u\n",
+           "min_block=%u max_block=%u code_entries=%u code_ways=%u max_code_bytes=%u "
+           "method_entries=%u method_arena_bytes=%u max_faults=%u\n",
            NJ_JIT_HOST_RV32, NJ_JIT_HOST_ARM64, NJ_JIT_RV32_REG_CACHE,
            (unsigned)NJ_JIT_HOT_THRESHOLD, (unsigned)NJ_JIT_MIN_BLOCK_INSNS,
            (unsigned)NJ_JIT_MAX_BLOCK_INSNS, (unsigned)NJ_JIT_CACHE_ENTRIES,
-           (unsigned)NJ_JIT_CACHE_WAYS, (unsigned)NJ_JIT_SITE_ENTRIES, (unsigned)NJ_JIT_MAX_CODE_BYTES);
+           (unsigned)NJ_JIT_CACHE_WAYS, (unsigned)NJ_JIT_MAX_CODE_BYTES,
+           (unsigned)NJ_JIT_METHOD_ENTRIES, (unsigned)NJ_JIT_METHOD_ARENA_BYTES,
+           (unsigned)NJ_JIT_MAX_FAULTS);
     puts("TIMING first fixed-workload call after interpreted zero-iteration class warmup; "
          "includes JIT heat/compilation, excludes VM/JAR setup. QEMU time is not board performance; "
          "display/audio are outside this compute benchmark.");

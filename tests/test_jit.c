@@ -19,6 +19,9 @@ static void (*real_free)(void *, void *, nj_size);
 static unsigned allocations, frees, attempts, commits;
 static int fail_mode;
 static void *expected_ud;
+static void *forbidden_ud;
+static void *real_ud;
+static int ud_sentinel, user_sentinel;
 static nj_vm *active_vm;
 static const nj_method *active_method;
 static unsigned loop_insns;
@@ -35,27 +38,27 @@ static void check_saved_frame(void)
 static void *count_alloc(void *ud, nj_size n)
 {
     void *p;
-    CHECK(ud == expected_ud);
+    CHECK(ud == expected_ud && ud != forbidden_ud);
     check_saved_frame();
     attempts++;
     if (fail_mode == 1) return NULL;
-    p = real_alloc(ud, n);
+    p = real_alloc(real_ud, n);
     if (p) allocations++;
     return p;
 }
 static int count_commit(void *ud, void *p, nj_size n)
 {
-    CHECK(ud == expected_ud);
+    CHECK(ud == expected_ud && ud != forbidden_ud);
     check_saved_frame();
     commits++;
-    return fail_mode == 2 ? -1 : real_commit(ud, p, n);
+    return fail_mode == 2 ? -1 : real_commit(real_ud, p, n);
 }
 static void count_free(void *ud, void *p, nj_size n)
 {
-    CHECK(ud == expected_ud);
+    CHECK(ud == expected_ud && ud != forbidden_ud);
     check_saved_frame();
     frees++;
-    real_free(ud, p, n);
+    real_free(real_ud, p, n);
 }
 
 typedef struct result {
@@ -78,10 +81,18 @@ static result run_loop(int enabled, int fail)
     nj_method m;
     nj_jit_stats stats;
     result r;
+    void *saved_ud, *saved_user;
     int i;
     CHECK(nj_port_headless(&port) == NJ_OK);
-    expected_ud = port.ud;
-    port.user = &r; /* logging state must never reach executable-memory hooks */
+    saved_ud = port.ud;
+    saved_user = port.user;
+    real_ud = port.ud;
+    expected_ud = &ud_sentinel;
+    forbidden_ud = &user_sentinel;
+    /* The executable-memory callbacks must receive port->ud, never port->user;
+     * keep two distinct sentinels so either mix-up fails the CHECK in the hook. */
+    port.ud = &ud_sentinel;
+    port.user = &user_sentinel;
     real_alloc = port.code_alloc;
     real_commit = port.code_commit;
     real_free = port.code_free;
@@ -123,7 +134,8 @@ static result run_loop(int enabled, int fail)
     CHECK(r.insns == (nj_u8)NJ_SCHED_QUANTUM * 4u);
     if (enabled) {
         CHECK(nj_jit_get_stats(vm, &stats));
-        CHECK(stats.metadata_bytes > 0 && stats.stats_enabled == NJ_JIT_STATS);
+        CHECK(stats.metadata_bytes >= NJ_JIT_METHOD_ARENA_BYTES &&
+              stats.stats_enabled == NJ_JIT_STATS);
         CHECK(stats.detailed_stats_enabled == NJ_JIT_DETAILED_STATS);
         if (enabled == 2) {
             CHECK(attempts == 0 && commits == 0 && frees == 0);
@@ -163,6 +175,8 @@ static result run_loop(int enabled, int fail)
     }
     nj_vm_destroy(vm);
     CHECK(allocations == frees);
+    port.ud = saved_ud;
+    port.user = saved_user;
     nj_port_shutdown(&port);
     return r;
 }
@@ -176,6 +190,7 @@ static void guards(void)
     nj_method m;
     nj_frame fr;
     nj_value values[4], locals[1], *sp;
+    nj_jit_stats stats;
     nj_u4 pc, i, n;
     CHECK(nj_port_headless(&port) == NJ_OK);
     vm = nj_vm_create(&port, 1024u * 1024u);
@@ -196,8 +211,14 @@ static void guards(void)
     CHECK(values[0].i == (-2147483647 - 1));
     values[0].i = 7; values[1].i = 0;
     sp = values + 2; pc = 0;
-    CHECK(nj_jit_try_block(vm, &fr, &pc, &sp, 2) == 0);
+    n = nj_jit_try_block(vm, &fr, &pc, &sp, 2);
+    /* The C entry translates the block's fault word into a completed count:
+     * zero here means the interpreter must re-execute the first bytecode. */
+    CHECK(n == 0);
     CHECK(pc == 0 && sp == values + 2 && values[0].i == 7);
+#if NJ_JIT_STATS
+    CHECK(nj_jit_get_stats(vm, &stats) && stats.faults == 1);
+#endif
     values[1].i = 1;
     CHECK(nj_jit_try_block(vm, &fr, &pc, &sp, 0) == 0);
     sp = values + 1;
@@ -254,6 +275,7 @@ static void probe_contract(void)
     nj_vm *vm;
     unsigned i;
     nj_u4 pc;
+    void *saved_ud, *saved_user;
     memset(code, 0, sizeof(code));
     code[NJ_JIT_MIN_BLOCK_INSNS] = 0xb1;
     code[NJ_JIT_MIN_BLOCK_INSNS + 1] = 0x5a; /* unsupported dup_x1 */
@@ -268,14 +290,19 @@ static void probe_contract(void)
     fr.pc = 777; fr.sp = values + 3; /* stale published state is intentional */
     saved = fr;
     CHECK(nj_port_headless(&port) == NJ_OK);
-    expected_ud = port.ud;
+    saved_ud = port.ud;
+    saved_user = port.user;
+    real_ud = port.ud;
+    expected_ud = &ud_sentinel;
+    forbidden_ud = &user_sentinel;
+    port.ud = &ud_sentinel;
+    port.user = &user_sentinel;
     real_alloc = port.code_alloc; real_commit = port.code_commit; real_free = port.code_free;
     port.code_alloc = count_alloc; port.code_commit = count_commit; port.code_free = count_free;
     attempts = allocations = commits = frees = 0; fail_mode = 0;
     vm = nj_vm_create(&port, 1024u * 1024u);
     CHECK(vm && nj_jit_set_mode(vm, NJ_JIT_MODE_PROBE_ONLY) == NJ_OK);
-    /* Heat sites independently so the smallest two-entry history does not
-     * evict every cold site before its threshold. Keep the ready site last. */
+    /* Heat each per-method PC cell independently; keep the ready site last. */
     for (unsigned site = 0; site < 3u; ++site) {
         nj_u4 probe_pc = site < 2u ? NJ_JIT_MIN_BLOCK_INSNS + 1u + site : 0u;
 #if NJ_JIT_MIN_BLOCK_INSNS == 1
@@ -291,6 +318,11 @@ static void probe_contract(void)
     CHECK(nj_jit_get_stats(vm, &stats) && stats.unsupported_blocks == 1);
 #if NJ_JIT_MIN_BLOCK_INSNS > 1
     CHECK(stats.short_blocks == 1);
+#endif
+#if NJ_JIT_DETAILED_STATS
+    /* The unsupported site was probed several times after its refusal: every
+     * later probe must take the negative-cache path, not re-analyze. */
+    CHECK(stats.negative_hits >= 1);
 #endif
     CHECK(nj_jit_set_mode(vm, (nj_jit_mode)99) == NJ_ERR);
     CHECK(nj_jit_set_mode(vm, NJ_JIT_MODE_EXECUTE) == NJ_OK);
@@ -309,6 +341,8 @@ static void probe_contract(void)
     CHECK(attempts == 1 && frees == 0);
     nj_vm_destroy(vm);
     CHECK(allocations == frees);
+    port.ud = saved_ud;
+    port.user = saved_user;
     nj_port_shutdown(&port);
 }
 
@@ -316,7 +350,11 @@ static void cache_collisions(void)
 {
     enum { NSITES = NJ_JIT_CACHE_WAYS + 1 };
     nj_u4 pcs[NSITES], pc, count = 0, target, i, j;
-    nj_size size = (nj_size)NJ_JIT_CACHE_ENTRIES * (NJ_JIT_MIN_BLOCK_INSNS + 16u) * (NSITES + 1u);
+    /* The probe map holds one cell per bytecode offset from a fixed arena, so
+     * keep this synthetic method small enough to be mapped (and therefore
+     * JIT-eligible); the code cache is still exercised through hash collisions. */
+    enum { CODE_LEN = 512 };
+    nj_size size = CODE_LEN;
     nj_u1 *code = malloc(size);
     nj_method m;
     nj_frame fr;
@@ -369,9 +407,100 @@ static void cache_collisions(void)
     CHECK(nj_jit_get_stats(vm, &stats));
     CHECK(stats.compiled_blocks == NSITES + 1 && stats.code_evictions == 2);
 #if NJ_JIT_STATS
-    if (!stats.site_evictions) CHECK(stats.recompiled_blocks == 1);
+    /* Evicting code clears the site's map cell, so the reheat recompiles
+     * instead of reusing code; the small workload never overflows the map. */
+    CHECK(stats.method_map_evictions == 0);
+    CHECK(stats.recompiled_blocks == 0);
 #endif
     nj_vm_destroy(vm); nj_port_shutdown(&port); free(code);
+}
+
+/* Exercise the method-map arena and the code-reuse path that is only reachable
+ * after an LRU map eviction: the compiled code survives in the code cache while
+ * its probe cells are released, so a reheat must reuse -- not duplicate -- it. */
+static void method_maps(void)
+{
+    enum {
+        FILL_LEN = (int)(NJ_JIT_METHOD_ARENA_BYTES / 32),
+        CELLS = (int)(NJ_JIT_METHOD_ARENA_BYTES / 2),
+        FILL_COUNT = CELLS / FILL_LEN
+    };
+    nj_u1 *code;
+    nj_method *methods;
+    nj_method *a;
+    nj_port port;
+    nj_vm *vm;
+    nj_frame fr;
+    nj_value values[1], locals[1], *sp;
+    nj_jit_ticket ticket;
+    nj_jit_stats stats;
+    nj_u4 pc;
+    unsigned i;
+
+    if (NJ_JIT_METHOD_ENTRIES < FILL_COUNT + 1 ||
+        FILL_LEN < NJ_JIT_MIN_BLOCK_INSNS) {
+        /* A tiny method table cannot demonstrate arena LRU without also
+         * exercising table eviction, which is a different policy. */
+        puts("SKIP JIT method-map arena: method table too small");
+        return;
+    }
+    code = calloc((size_t)(FILL_COUNT + 1) * (size_t)FILL_LEN, 1);
+    methods = calloc((size_t)FILL_COUNT + 1u, sizeof(*methods));
+    CHECK(code && methods);
+    for (i = 0; i <= FILL_COUNT; ++i) {
+        methods[i].code = code + (size_t)i * (size_t)FILL_LEN;
+        methods[i].code_len = (nj_u4)FILL_LEN;
+        methods[i].max_stack = 0;
+    }
+    a = &methods[0];
+    memset(&fr, 0, sizeof(fr));
+    memset(values, 0, sizeof(values));
+    memset(locals, 0, sizeof(locals));
+    fr.m = a; fr.locals = locals; fr.stack = values; fr.stack_limit = values + 1;
+
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    vm = nj_vm_create(&port, 1024u * 1024u);
+    CHECK(vm && nj_jit_enable(vm) == NJ_OK);
+    for (i = 0; i <= NJ_JIT_HOT_THRESHOLD; ++i) {
+        pc = 0; sp = values;
+        (void)nj_jit_try_block(vm, &fr, &pc, &sp, 128);
+    }
+    CHECK(nj_jit_get_stats(vm, &stats));
+    CHECK(stats.compiled_blocks == 1 && stats.recompiled_blocks == 0);
+    CHECK(stats.method_map_evictions == 0 && stats.code_evictions == 0);
+
+    /* Probe-only maps each filler without emitting code. The arena holds
+     * CELLS entries, so the last filler evicts A's map. */
+    CHECK(nj_jit_set_mode(vm, NJ_JIT_MODE_PROBE_ONLY) == NJ_OK);
+    for (i = 1; i <= FILL_COUNT; ++i) {
+        fr.m = &methods[i];
+        CHECK(nj_jit_probe(vm, &fr, 0, values, 128, &ticket) == 0);
+    }
+    CHECK(nj_jit_get_stats(vm, &stats));
+    CHECK(stats.method_map_evictions == 1);
+    CHECK(stats.compiled_blocks == 1 && stats.recompiled_blocks == 0);
+    CHECK(stats.code_bytes > 0);
+
+    /* Reheat A in execute mode. Its map is gone, but its code entry is still
+     * present; jit_compile must find it and count a reuse instead of emitting a
+     * second block. Re-creating A's map evicts one filler (the second LRU). */
+    CHECK(nj_jit_set_mode(vm, NJ_JIT_MODE_EXECUTE) == NJ_OK);
+    fr.m = a;
+    for (i = 0; i <= NJ_JIT_HOT_THRESHOLD; ++i) {
+        pc = 0; sp = values;
+        (void)nj_jit_try_block(vm, &fr, &pc, &sp, 128);
+    }
+    CHECK(nj_jit_get_stats(vm, &stats));
+    CHECK(stats.method_map_evictions == 2);
+    CHECK(stats.recompiled_blocks == 1);
+    CHECK(stats.compiled_blocks == 1);
+    CHECK(stats.code_evictions == 0);
+    CHECK(stats.code_bytes > 0 && stats.code_bytes == stats.peak_code_bytes);
+
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+    free(methods);
+    free(code);
 }
 #endif
 
@@ -401,7 +530,8 @@ int main(void)
         guards();
         probe_contract();
         cache_collisions();
-        puts("PASS JIT runtime: probe/execute modes, SAVE, quanta, guards, cache, ownership, failures");
+        method_maps();
+        puts("PASS JIT runtime: probe/execute modes, SAVE, quanta, guards, method map, callbacks, cache, ownership, failures");
     }
 #else
     CHECK(nj_port_headless(&port) == NJ_OK);

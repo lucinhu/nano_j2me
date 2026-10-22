@@ -67,11 +67,27 @@ constants/locals are copied using integer instructions. The current direct local
 offsets support indices through 255 for single slots and 254 for wide slots.
 Both backends support `ldc/ldc_w` for Integer and Float constants by reading
 validated raw constant-pool bytes, without resolution or allocation. Float bits
-can be loaded with hardware FP and `NJ_ENABLE_FLOAT` disabled. String/Class and
-wide constants, long arithmetic, conversions/comparisons, complex stack
-permutations, branches, calls, fields, arrays, allocation, monitors and exception
-handling stay in the interpreter. A block ends immediately before an unsupported
-operation; the next interpreter dispatch can enter another compiled block.
+can be loaded with hardware FP and `NJ_ENABLE_FLOAT` disabled.
+
+Resolved instance fields compile to native `getfield`/`putfield` for every Java
+primitive and reference type. The CP cache must already hold a linked instance
+field; the probe reads it without resolving anything. `BOOLEAN`/`BYTE` widen
+with sign extension, `CHAR` with zero extension, `SHORT` with sign extension,
+`INT`/`FLOAT` move 32 bits (`FLOAT` as raw bits), references move one
+pointer-sized word (32 bits on RV32, 64 bits on LP64), and `LONG`/`DOUBLE` move
+64 bits with the padding slot's low 32 bits cleared.
+Integer arrays compile to native `iaload`/`iastore` only when the runtime array
+flags are exactly `NJ_ARRAY_T_INT`, and native `arraylength` pushes the array
+length. A null receiver, a non-int array, a non-array reference, an
+out-of-bounds index or a zero divisor makes the block return to the interpreter
+*before* the operation's first side effect; the interpreter then re-executes that
+exact bytecode, so the Java exception class, message and PC are unchanged.
+
+String/Class and wide constants, static fields, wide arrays (`aaload`,
+`baload`, ...), long arithmetic, conversions/comparisons, complex stack
+permutations, branches, calls, allocation, monitors and exception handling stay
+in the interpreter. A block ends immediately before an unsupported operation;
+the next interpreter dispatch can enter another compiled block.
 
 `NJ_JIT_RV32_REG_CACHE=1` (default) tracks T0/T1 values across bytecodes, reuses
 redundant loads and folds supported integer operations with known operands.
@@ -123,14 +139,24 @@ cmake --build build-arm64 -j
 ### Shared runtime
 
 Each generated function is a bounded leaf with ABI
-`void block(nj_value *incoming_sp, nj_value *locals)`. It only changes frame slots,
+`nj_u4 block(nj_value *incoming_sp, nj_value *locals)`. It only changes frame slots,
 uses caller-saved registers, and never calls, allocates, yields, or changes Java
-control flow. The C entry checks stack consumption/growth and scheduling budget
-before calling. Integer division/remainder is a one-bytecode block with a C zero
-divisor check, so the interpreter raises the usual exception at the original PC.
+control flow. A successful return is the number of bytecodes the block finished.
+If a runtime guard fails (null receiver, bad array, zero divisor), the block jumps
+to a fault exit that returns `0x80000000 | (completed << 8) | fault_index`, where
+`completed` counts the bytecodes finished before the faulting instruction and
+`fault_index` selects `faults[]` in the block metadata. The C entry restores PC to
+`entry_pc + faults[i].pc_off` and SP to `incoming_sp + faults[i].sp_delta`, then
+returns `completed`; the interpreter executes that bytecode again, so the Java
+exception, its PC and any class initialization behave exactly as in a purely
+interpreted run. A block that would need more than `NJ_JIT_MAX_FAULTS` guarded
+instructions ends before the next one. A failure with `completed == 0` also pins
+the site as refused, which prevents compile/fault churn.
+
+The C entry checks stack consumption/growth and scheduling budget before calling.
 Both backends match Java's `INT_MIN / -1` overflow behavior. RV32 encodes RNE
-explicitly; ARM64 uses the temporary FPCR state described above. Negation preserves
-NaN payload bits on both targets.
+explicitly; ARM64 uses the temporary FPCR state described above (the fault exit
+restores it too). Negation preserves NaN payload bits on both targets.
 
 A conservative inline opcode filter skips known interpreter-only instructions.
 The remaining probe only touches bounded JIT metadata: it never allocates, frees,
@@ -152,27 +178,36 @@ Tracing bypasses native execution so per-bytecode trace output remains available
 |---|---:|---|
 | `NJ_JIT_CACHE_ENTRIES` | 64 | Total executable-code entries per VM |
 | `NJ_JIT_CACHE_WAYS` | 2 | 1, 2 or 4 ways; entry count must be divisible by ways |
-| `NJ_JIT_SITE_ENTRIES` | 128 | Independent two-way heat/refusal history; even size |
+| `NJ_JIT_METHOD_ENTRIES` | 32 | Mapped methods; least-recently-used map is recycled |
+| `NJ_JIT_METHOD_ARENA_BYTES` | 4096 | Fixed probe-map arena (one 16-bit cell per bytecode) |
+| `NJ_JIT_MAX_FAULTS` | 4 | Guarded instructions per block before it must end |
 | `NJ_JIT_HOT_THRESHOLD` | 8 | Visits before decode-only eligibility analysis |
 | `NJ_JIT_MIN_BLOCK_INSNS` | 4 | Minimum bytecodes to compile; experiment with 1/4/8 |
 | `NJ_JIT_MAX_BLOCK_INSNS` | 32 | Maximum Java bytecodes in a block |
 | `NJ_JIT_MAX_CODE_BYTES` | 2048 | Maximum bytes per block; also compiler stack scratch |
 
-Code replacement uses a per-set rotating victim updated after a hit (LRU for two
-ways, not a full LRU ordering for four). Negative decisions and hotness occupy a
-separate bounded table; code eviction does not erase a refusal. A displaced code
-site heats again while retaining its previous-compilation marker. Site-history
-eviction can still lose that marker. Unsupported/short/allocation/commit refusals
-remain cached until **site-history** eviction or disable/re-enable. Emission can
-shorten an analyzed prefix to fit the code buffer; the minimum length is checked
-again before allocation. The default minimum also leaves standalone integer
-division/remainder interpreted; set the minimum to 1 to compile those blocks. A 64-entry cache
-requests at most 128 KiB of code at default limits; OS page rounding and port
-headers are additional (POSIX commonly consumes one page per small block).
-Metadata belongs to the VM host allocator. Executable storage belongs to the
-port and is freed on eviction, `nj_jit_disable()`, or VM destruction, even when
-an external engine temporarily replaced the JIT. Cached bytecode/method metadata
-must remain immutable, as in the current class loader.
+Heat, refusal and compiled state live in one per-method map: a 16-bit cell per
+bytecode offset (`0..0x3FFF` heat, `0x4000` refused, `0x6000|insns` analyzed and
+awaiting compilation, `0x8000|slot` compiled). The interpreter's current method is
+cached, so the steady-state probe is a pointer compare plus one array load: no
+hashing and no scan per bytecode. Maps come from a fixed arena. When it is full,
+the least recently used *method* map is destroyed and the arena is compacted;
+that drops metadata only, never compiled code. A later recompile of the same
+(method, pc) finds the surviving code-cache entry and reuses it instead of
+emitting a duplicate. Refused sites are never analyzed again until their map is
+recycled, and code eviction clears the site's cell so it starts cold again.
+Emission can shorten an analyzed prefix to fit the code buffer; the minimum
+length is checked again before allocation. Integer division/remainder compiles
+inline; a zero divisor is one more guarded instruction, so the interpreter
+raises the usual `ArithmeticException` at the original PC.
+A 64-entry cache requests at most 128 KiB of code at default limits; OS page
+rounding and port headers are additional (POSIX commonly consumes one page per
+small block). At default limits the JIT allocates about 8 KiB of host metadata
+per VM (code entries, method table and probe arena); `metadata_bytes` reports
+the exact size. Metadata belongs to the VM host allocator. Executable storage
+belongs to the port and is freed on eviction, `nj_jit_disable()`, or VM
+destruction, even when an external engine temporarily replaced the JIT. Cached
+bytecode/method metadata must remain immutable, as in the current class loader.
 
 The public `nj_jit_enable`, `nj_jit_disable`, `nj_jit_set_mode`, and
 `nj_jit_get_stats` APIs are in `include/nj2me/nj_jit.h`, available with
@@ -184,8 +219,8 @@ Change mode or enable/disable between VM execution entries. The built-in engine
 handle remains VM-owned after uninstall; external engines retain their original
 borrowed ownership contract.
 
-`NJ_JIT_STATS=1` (default) enables execution/native-bytecode and site-eviction
-counters. Hot counters use 32-bit pending batches, folded into 64-bit totals when
+`NJ_JIT_STATS=1` (default) enables execution/native-bytecode counters, fault
+follow-ups and method-map recycling counters. Hot counters use 32-bit pending batches, folded into 64-bit totals when
 an engine execution returns, normally at a scheduling quantum. The public getter
 includes pending values without forcing a flush, so a same-thread snapshot sees
 all completed operations. It is not a cross-thread synchronization API.
@@ -195,11 +230,12 @@ accounting remain available. Read `stats_enabled` before interpreting execution
 counts. Stats reset on disable/re-enable.
 
 `NJ_JIT_DETAILED_STATS=1` (default `0`, requires `STATS=1`) adds candidate queries,
-code hits, cold/negative/probe-only/budget/stack/divisor skips and an
+code hits, cold/negative/probe-only/budget/stack skips and an
 execution-weighted length histogram (1, 2–3, 4–7, 8–15, ≥16 bytecodes).
 `queries` excludes opcodes rejected by the inline filter; `code_hits` includes
 cached entries subsequently rejected by a guard. `recompiled_blocks` is a lower
-bound because evicting site history loses the previous-compilation marker.
+bound because recycling a method map forgets that a site was compiled before;
+the code-cache entry itself is reused rather than emitted twice.
 Memory byte counts exclude allocator/page overhead. Portable cycle counters are
 not provided; use target-specific profiling for compile/execute cycle attribution.
 The fixed-workload harness, measurement results and board reproduction procedure

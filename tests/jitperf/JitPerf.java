@@ -50,6 +50,25 @@ public final class JitPerf {
         return sum ^ values[iterations & 63];
     }
 
+    /** Field and int-array traffic in one loop: exercises native getfield,
+     *  putfield, iaload and iastore in the same block. */
+    public static int mixed(int iterations) {
+        Box box = new Box();
+        int[] values = new int[32];
+        int sum = 0;
+        for (int i = 0; i < 32; ++i) {
+            values[i] = i * 7 + 1;
+        }
+        for (int i = 0; i < iterations; ++i) {
+            int index = i & 31;
+            box.value = box.value + i;
+            values[index] = values[index] + box.value;
+            sum ^= values[index] + box.value;
+            box.value = box.value ^ (i << 2);
+        }
+        return sum ^ box.value ^ values[iterations & 31];
+    }
+
     public static int branches(int iterations) {
         int state = 0x13579bdf;
         int sum = 0;
@@ -73,6 +92,7 @@ public final class JitPerf {
         System.out.println("constants=" + Integer.toHexString(constants(iterations)));
         System.out.println("fields=" + Integer.toHexString(fields(iterations)));
         System.out.println("arrays=" + Integer.toHexString(arrays(iterations)));
+        System.out.println("mixed=" + Integer.toHexString(mixed(iterations)));
         System.out.println("branches=" + Integer.toHexString(branches(iterations)));
     }
 }

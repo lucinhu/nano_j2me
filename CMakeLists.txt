@@ -129,7 +129,9 @@ foreach(ext FP SIMD LSE)
 endforeach()
 set(NJ_JIT_CACHE_ENTRIES 64 CACHE STRING "Per-VM JIT code cache slots")
 set(NJ_JIT_CACHE_WAYS 2 CACHE STRING "JIT code cache associativity: 1, 2, or 4")
-set(NJ_JIT_SITE_ENTRIES 128 CACHE STRING "Independent two-way JIT site history slots")
+set(NJ_JIT_METHOD_ENTRIES 32 CACHE STRING "Per-VM JIT probe maps; LRU recycled")
+set(NJ_JIT_METHOD_ARENA_BYTES 4096 CACHE STRING "Fixed JIT probe-map arena in bytes")
+set(NJ_JIT_MAX_FAULTS 4 CACHE STRING "Guarded instructions recorded per native block")
 set(NJ_JIT_MIN_BLOCK_INSNS 4 CACHE STRING "Minimum bytecodes worth compiling")
 set(NJ_JIT_STATS 1 CACHE STRING "Collect batched JIT execution counters")
 set(NJ_JIT_DETAILED_STATS 0 CACHE STRING "Collect probe reasons and execution-weighted block lengths")
@@ -254,7 +256,9 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_JIT=${NJ_ENABLE_JIT}
   NJ_JIT_CACHE_ENTRIES=${NJ_JIT_CACHE_ENTRIES}
   NJ_JIT_CACHE_WAYS=${NJ_JIT_CACHE_WAYS}
-  NJ_JIT_SITE_ENTRIES=${NJ_JIT_SITE_ENTRIES}
+  NJ_JIT_METHOD_ENTRIES=${NJ_JIT_METHOD_ENTRIES}
+  NJ_JIT_METHOD_ARENA_BYTES=${NJ_JIT_METHOD_ARENA_BYTES}
+  NJ_JIT_MAX_FAULTS=${NJ_JIT_MAX_FAULTS}
   NJ_JIT_MIN_BLOCK_INSNS=${NJ_JIT_MIN_BLOCK_INSNS}
   NJ_JIT_STATS=${NJ_JIT_STATS}
   NJ_JIT_DETAILED_STATS=${NJ_JIT_DETAILED_STATS}

@@ -553,15 +553,30 @@
 #  error "JIT feature macros must be 0 or 1"
 #endif
 
-/* Bounded per-VM caches. Site heat/refusals survive code-cache eviction. */
+/* Bounded per-VM caches. Heat, refusals and compiled slots live in per-method
+ * probe maps, so they survive code-cache eviction without a hash lookup. */
 #ifndef NJ_JIT_CACHE_ENTRIES
 #  define NJ_JIT_CACHE_ENTRIES 64
 #endif
 #ifndef NJ_JIT_CACHE_WAYS
 #  define NJ_JIT_CACHE_WAYS 2
 #endif
-#ifndef NJ_JIT_SITE_ENTRIES
-#  define NJ_JIT_SITE_ENTRIES 128
+/* Probe maps: a fixed arena holds one 16-bit state word per bytecode offset of
+ * the methods that are currently interesting, plus a bounded method table.
+ * `NJ_JIT_METHOD_ENTRIES` caps concurrently mapped methods; the arena is
+ * refilled by evicting the least recently used method (metadata only, compiled
+ * code stays in the code cache). 4096 B of arena maps 2048 bytecode offsets,
+ * which covers ~20-30 typical game methods at once. */
+#ifndef NJ_JIT_METHOD_ENTRIES
+#  define NJ_JIT_METHOD_ENTRIES 32
+#endif
+#ifndef NJ_JIT_METHOD_ARENA_BYTES
+#  define NJ_JIT_METHOD_ARENA_BYTES 4096
+#endif
+/* A block may return to the interpreter at up to this many guarded
+ * instructions (null receiver, bad array, zero divisor). */
+#ifndef NJ_JIT_MAX_FAULTS
+#  define NJ_JIT_MAX_FAULTS 4
 #endif
 #ifndef NJ_JIT_MIN_BLOCK_INSNS
 #  define NJ_JIT_MIN_BLOCK_INSNS 4
@@ -595,12 +610,14 @@
 #ifndef NJ_JIT_MAX_CODE_BYTES
 #  define NJ_JIT_MAX_CODE_BYTES 2048
 #endif
-#if NJ_JIT_CACHE_ENTRIES < 1 || NJ_JIT_CACHE_ENTRIES > 4096 || \
+#if NJ_JIT_CACHE_ENTRIES < 1 || NJ_JIT_CACHE_ENTRIES > 256 || \
     (NJ_JIT_CACHE_WAYS != 1 && NJ_JIT_CACHE_WAYS != 2 && NJ_JIT_CACHE_WAYS != 4) || \
     NJ_JIT_CACHE_ENTRIES % NJ_JIT_CACHE_WAYS != 0 || \
-    NJ_JIT_SITE_ENTRIES < 2 || NJ_JIT_SITE_ENTRIES > 8192 || \
-    NJ_JIT_SITE_ENTRIES % 2 != 0 || \
-    NJ_JIT_HOT_THRESHOLD < 1 || NJ_JIT_HOT_THRESHOLD > 65535 || \
+    NJ_JIT_METHOD_ENTRIES < 1 || NJ_JIT_METHOD_ENTRIES > 256 || \
+    NJ_JIT_METHOD_ARENA_BYTES < 256 || NJ_JIT_METHOD_ARENA_BYTES > 65534 || \
+    NJ_JIT_METHOD_ARENA_BYTES % 2 != 0 || \
+    NJ_JIT_MAX_FAULTS < 1 || NJ_JIT_MAX_FAULTS > 16 || \
+    NJ_JIT_HOT_THRESHOLD < 1 || NJ_JIT_HOT_THRESHOLD > 16383 || \
     NJ_JIT_MAX_BLOCK_INSNS < 1 || NJ_JIT_MAX_BLOCK_INSNS > 128 || \
     NJ_JIT_MIN_BLOCK_INSNS < 1 || NJ_JIT_MIN_BLOCK_INSNS > NJ_JIT_MAX_BLOCK_INSNS || \
     NJ_JIT_MAX_CODE_BYTES < 64 || NJ_JIT_MAX_CODE_BYTES > 16384

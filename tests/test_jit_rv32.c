@@ -6,10 +6,37 @@
 #define _GNU_SOURCE
 #endif
 #include "nj_jit_internal.h"
+#include "nj2me/nj_jit.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* The check scripts link this encoder harness without the VM heap.  The JIT
+ * runtime only needs a plain allocation for its metadata in that mode. */
+#if defined(NJ_TEST_STANDALONE_JIT)
+void *nj_host_alloc(nj_vm *vm, nj_size n)
+{
+    (void)vm;
+    return malloc((size_t)n);
+}
+
+void nj_host_free(nj_vm *vm, void *p)
+{
+    (void)vm;
+    free(p);
+}
+
+/* The runtime's engine vtable is retained by nj_jit_enable even though this
+ * harness never enters the interpreter; provide the dispatch symbol. */
+nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
+{
+    (void)vm;
+    (void)th;
+    (void)stop_depth;
+    return NJ_ERR;
+}
+#endif
 
 #if defined(__linux__)
 #include <sys/mman.h>
@@ -34,6 +61,19 @@ typedef struct test_frame {
 static const char *test_name;
 static unsigned assertions, compiled, executed, seen_m, seen_f, seen_d, seen_c;
 static unsigned seen_cli, seen_caddi;
+/* NULL means "no VM": field and array opcodes have no operands to resolve and
+ * must be declined, exactly like a host-side encoder check. Field/array tests
+ * install a minimal fake VM with a resolved CP cache. */
+static nj_vm *jit_vm;
+static int analyze_method(const nj_method *m, nj_u4 pc, nj_jit_block *out)
+{
+    return nj_rv32_analyze(jit_vm, m, pc, out);
+}
+static int compile_method(const nj_method *m, nj_u4 pc, nj_u1 *buf,
+                          nj_size capacity, nj_jit_block *out)
+{
+    return nj_rv32_compile(jit_vm, m, pc, buf, capacity, out);
+}
 #define CHECK(c) do { ++assertions; if (!(c)) { \
     fprintf(stderr, "FAIL %s:%d [%s]: %s\n", __FILE__, __LINE__, \
             test_name ? test_name : "setup", #c); exit(1); } } while (0)
@@ -68,22 +108,27 @@ static nj_method method(const nj_u1 *code, size_t length, unsigned locals)
  * shorten compilation, but must never change stack metadata for that prefix. */
 static void same_metadata(const nj_jit_block *a, const nj_jit_block *b)
 {
+    unsigned i;
     CHECK(a->next_pc == b->next_pc && a->insns == b->insns);
     CHECK(a->stack_delta == b->stack_delta && a->min_stack == b->min_stack);
-    CHECK(a->max_growth == b->max_growth && a->check_divisor == b->check_divisor);
+    CHECK(a->max_growth == b->max_growth && a->nfaults == b->nfaults);
+    for (i = 0; i < a->nfaults; ++i) {
+        CHECK(a->faults[i].pc_off == b->faults[i].pc_off);
+        CHECK(a->faults[i].sp_delta == b->faults[i].sp_delta);
+    }
 }
 static int compile_checked(const nj_method *m, nj_u4 pc, nj_u1 *buf,
                            nj_size capacity, nj_jit_block *out)
 {
     nj_jit_block analysis, prefix;
-    int scanned = nj_rv32_analyze(m, pc, &analysis);
-    int emitted = nj_rv32_compile(m, pc, buf, capacity, out);
+    int scanned = analyze_method(m, pc, &analysis);
+    int emitted = compile_method(m, pc, buf, capacity, out);
     if (scanned) CHECK(analysis.size == 0 && analysis.insns > 0);
     if (emitted) {
         nj_method limited = *m;
         CHECK(scanned && out->next_pc <= analysis.next_pc);
         limited.code_len = out->next_pc;
-        CHECK(nj_rv32_analyze(&limited, pc, &prefix));
+        CHECK(analyze_method(&limited, pc, &prefix));
         CHECK(prefix.size == 0);
         same_metadata(out, &prefix);
         if (out->next_pc == analysis.next_pc) same_metadata(out, &analysis);
@@ -141,7 +186,17 @@ static void inspect(const nj_u1 *code, size_t length)
             if (op == 0x53u && (funct7 & ~1u) <= 0x0cu)
                 CHECK(funct3 == 0);
         }
-        CHECK(op != 0x63u && op != 0x6fu); /* no branches/calls */
+        CHECK(op != 0x6fu); /* no calls */
+        if (op == 0x63u) {
+            /* Fault guards are forward branches to an in-block exit stub. */
+            nj_s4 imm = (nj_s4)((((insn >> 31) & 1u) << 12) |
+                                (((insn >> 7) & 1u) << 11) |
+                                (((insn >> 25) & 0x3fu) << 5) |
+                                (((insn >> 8) & 0xfu) << 1));
+            imm = (imm << 19) >> 19;
+            CHECK(imm != 0);
+            CHECK((nj_size)((nj_s4)p + imm) < length);
+        }
         if (op == 0x67u) {
             CHECK(insn == 0x00008067u);
             last_return = 1;
@@ -156,10 +211,11 @@ static void inspect(const nj_u1 *code, size_t length)
 static void *exec_page;
 static size_t exec_size;
 
-static void invoke(const nj_u1 *code, size_t length, nj_value *sp,
-                   nj_value *locals)
+static nj_u4 invoke(const nj_u1 *code, size_t length, nj_value *sp,
+                    nj_value *locals)
 {
-    void (*fn)(nj_value *, nj_value *);
+    nj_u4 (*fn)(nj_value *, nj_value *);
+    nj_u4 result;
     if (!exec_page) {
         long page = sysconf(_SC_PAGESIZE);
         CHECK(page > 0);
@@ -175,8 +231,9 @@ static void invoke(const nj_u1 *code, size_t length, nj_value *sp,
     __builtin___clear_cache((char *)exec_page, (char *)exec_page + length);
     CHECK(sizeof(fn) == sizeof(exec_page));
     memcpy(&fn, &exec_page, sizeof(fn));
-    fn(sp, locals);
+    result = fn(sp, locals);
     ++executed;
+    return result;
 }
 #endif
 
@@ -313,6 +370,11 @@ static int reference(const nj_u1 *code, size_t length, nj_value *stack,
     return sp;
 }
 
+#if EXECUTE_RV32
+static void compare_frames(const char *name, const test_frame *actual,
+                           const test_frame *expected);
+#endif
+
 static void program_owned(const char *name, const nj_u1 *code, size_t length,
                           unsigned local_count, int depth, const test_frame *initial,
                           nj_class *owner)
@@ -338,19 +400,11 @@ static void program_owned(const char *name, const nj_u1 *code, size_t length,
 #if EXECUTE_RV32
     {
         test_frame actual = *initial;
-        size_t i;
-        if (block.check_divisor) CHECK(actual.stack[BASE + depth - 1].i != 0);
-        invoke(generated, block.size, &actual.stack[BASE + depth], actual.locals);
+        nj_u4 done = invoke(generated, block.size, &actual.stack[BASE + depth],
+                            actual.locals);
+        CHECK(done == block.insns);
         /* Compare all bytes, including untouched high halves and dead slots. */
-        if (memcmp(&actual, &expected, sizeof(actual)) != 0) {
-            const unsigned char *a = (const unsigned char *)&actual;
-            const unsigned char *b = (const unsigned char *)&expected;
-            for (i = 0; i < sizeof(actual); ++i) if (a[i] != b[i]) {
-                fprintf(stderr, "%s: frame byte %lu got %02x expected %02x\n",
-                        name, (unsigned long)i, a[i], b[i]); break;
-            }
-            CHECK(!"generated code differs from oracle");
-        }
+        compare_frames(name, &actual, &expected);
     }
 #endif
 }
@@ -377,9 +431,751 @@ static void declined(const char *name, const nj_u1 *code, size_t length,
     m.code_len = (nj_u4)length + 1;
     CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block) == 1);
     CHECK(block.next_pc == 1 && block.insns == 1 && block.stack_delta == 1);
-    CHECK(block.min_stack == 0 && block.max_growth == 1 && !block.check_divisor);
+    CHECK(block.min_stack == 0 && block.max_growth == 1 && !block.nfaults);
     inspect(generated, block.size);
 }
+
+
+#if EXECUTE_RV32
+static void compare_frames(const char *name, const test_frame *actual,
+                           const test_frame *expected)
+{
+    size_t i;
+    if (memcmp(actual, expected, sizeof(*actual)) == 0) return;
+    {
+        const unsigned char *a = (const unsigned char *)actual;
+        const unsigned char *b = (const unsigned char *)expected;
+        for (i = 0; i < sizeof(*actual); ++i) if (a[i] != b[i]) {
+            fprintf(stderr, "%s: frame byte %lu got %02x expected %02x\n",
+                    name, (unsigned long)i, a[i], b[i]);
+            break;
+        }
+    }
+    CHECK(!"generated code differs from oracle");
+}
+#endif
+
+/* Compile a block that must be declined. The VM (and its CP cache) is set by
+ * the caller; only field/array tests need one. */
+static void declined_owned(const char *name, nj_class *owner,
+                           const nj_u1 *code, size_t length, unsigned locals)
+{
+    nj_u1 generated[NJ_JIT_MAX_CODE_BYTES];
+    nj_jit_block block;
+    nj_method m = method(code, length, locals);
+    m.owner = owner;
+    test_name = name;
+    CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block) == 0);
+    CHECK(block.nfaults == 0);
+}
+
+/* Run a block whose oracle is built by hand (field/array/fault cases). */
+static nj_u4 run_expect(const char *name, const nj_u1 *code, size_t length,
+                        unsigned local_count, int depth, nj_class *owner,
+                        const test_frame *initial, const test_frame *expected,
+                        nj_jit_block *out)
+{
+    nj_u1 generated[NJ_JIT_MAX_CODE_BYTES];
+    nj_method m = method(code, length, local_count);
+    nj_u4 ret = 0;
+    (void)initial;
+    (void)expected;
+    m.owner = owner;
+    test_name = name;
+    CHECK(compile_checked(&m, 0, generated, sizeof(generated), out) == 1);
+    CHECK(out->next_pc <= length);
+    inspect(generated, out->size);
+    ++compiled;
+#if EXECUTE_RV32
+    {
+        test_frame actual = *initial;
+        ret = invoke(generated, out->size, &actual.stack[BASE + depth],
+                     actual.locals);
+        compare_frames(name, &actual, expected);
+    }
+#else
+    (void)depth;
+#endif
+    return ret;
+}
+
+#if EXECUTE_RV32
+static void expect_fault(nj_u4 word, unsigned index, unsigned completed)
+{
+    CHECK((word & NJ_JIT_FAULT_BIT) != 0u);
+    CHECK((word & NJ_JIT_FAULT_INDEX_MASK) == index);
+    CHECK(((word >> 8) & NJ_JIT_FAULT_COMPLETED_MASK) == completed);
+}
+#endif
+
+/* ---- instance fields ------------------------------------------------- */
+
+enum { FIELD_CACHE = 64, FIELD_OBJ_SIZE = 96 };
+
+typedef struct field_fixture {
+    nj_vm vm;
+    nj_class owner;
+    nj_cpentry cache[FIELD_CACHE];
+    nj_field field;
+    _Alignas(8) nj_u1 object[FIELD_OBJ_SIZE];
+} field_fixture;
+
+static unsigned field_offset(void)
+{
+    return ((unsigned)sizeof(nj_object) + 7u) & ~7u;
+}
+
+static unsigned field_bytes(unsigned ptype)
+{
+    switch (ptype) {
+    case NJ_PT_BOOLEAN:
+    case NJ_PT_BYTE:   return 1u;
+    case NJ_PT_CHAR:
+    case NJ_PT_SHORT:  return 2u;
+    case NJ_PT_LONG:
+    case NJ_PT_DOUBLE: return 8u;
+    default:           return 4u;
+    }
+}
+
+static void field_fixture_init(field_fixture *fx, unsigned ptype, unsigned width,
+                               unsigned offset)
+{
+    nj_u4 slot;
+    memset(fx, 0, sizeof(*fx));
+    fx->vm.cp_cache = fx->cache;
+    fx->vm.cp_cache_size = FIELD_CACHE;
+    fx->owner.state = NJ_CLASS_LINKED;
+    fx->owner.instance_size = (nj_u4)sizeof(fx->object);
+    fx->field.owner = &fx->owner;
+    fx->field.ptype = (nj_u1)ptype;
+    fx->field.width = (nj_u1)width;
+    fx->field.offset = (nj_u2)offset;
+    slot = nj_cp_key_hash(&fx->owner, 1u) & (FIELD_CACHE - 1u);
+    fx->cache[slot].cls = &fx->owner;
+    fx->cache[slot].cp_index = 1u;
+    fx->cache[slot].kind = NJ_LINK_FIELD_INST;
+    fx->cache[slot].target = &fx->field;
+    fx->cache[slot].used = 1u;
+    memset(fx->object, 0xa5, sizeof(fx->object));
+    {
+        nj_object *o = (nj_object *)(void *)fx->object;
+        o->kind = NJ_OBJ_PLAIN;
+        o->size = (nj_u4)sizeof(fx->object);
+    }
+}
+
+static void field_code(nj_u1 *code, unsigned op)
+{
+    code[0] = (nj_u1)op;
+    code[1] = 0u;
+    code[2] = 1u;
+}
+
+static void field_read_case(const char *name, unsigned ptype, unsigned width,
+                            nj_u8 raw)
+{
+    field_fixture fx;
+    nj_u1 code[3];
+    nj_u1 before[FIELD_OBJ_SIZE];
+    test_frame initial, expected;
+    nj_jit_block block;
+    unsigned offset = field_offset();
+    int wide = width == 2u;
+    nj_u4 ret;
+    field_fixture_init(&fx, ptype, width, offset);
+    CHECK(nj_jit_instance_field(&fx.vm, &fx.owner, 1u) == &fx.field);
+    memcpy(fx.object + offset, &raw, field_bytes(ptype));
+    memcpy(before, fx.object, sizeof(before));
+    field_code(code, 0xb4);
+    init_frame(&initial);
+    initial.stack[BASE].r = (nj_ref)(void *)fx.object;
+    expected = initial;
+    if (wide) {
+        memcpy(&expected.stack[BASE], &raw, 8u);
+        expected.stack[BASE + 1u].bits = 0u;
+    } else if (ptype == NJ_PT_BOOLEAN || ptype == NJ_PT_BYTE) {
+        expected.stack[BASE].i = (nj_s4)(nj_s1)raw;
+    } else if (ptype == NJ_PT_CHAR) {
+        expected.stack[BASE].i = (nj_s4)(nj_u2)raw;
+    } else if (ptype == NJ_PT_SHORT) {
+        expected.stack[BASE].i = (nj_s4)(nj_s2)raw;
+    } else if (ptype == NJ_PT_OBJECT) {
+        nj_ref r = (nj_ref)(uintptr_t)raw;
+        memcpy(&expected.stack[BASE].r, &r, sizeof(r));
+    } else {
+        expected.stack[BASE].i = (nj_s4)(nj_u4)raw;
+    }
+    jit_vm = &fx.vm;
+    ret = run_expect(name, code, sizeof(code), 1, 1, &fx.owner, &initial,
+                     &expected, &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 3 && block.insns == 1);
+    CHECK(block.stack_delta == (wide ? 1 : 0) && block.min_stack == 1);
+    CHECK(block.max_growth == (wide ? 1 : 0));
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_RV32
+    CHECK(ret == 1);
+#endif
+    CHECK(memcmp(fx.object, before, sizeof(before)) == 0);
+    (void)ret;
+}
+
+static void field_write_case(const char *name, unsigned ptype, unsigned width,
+                             nj_u8 raw)
+{
+    field_fixture fx;
+    nj_u1 code[3];
+    nj_u1 expected_obj[FIELD_OBJ_SIZE];
+    test_frame initial, expected;
+    nj_jit_block block;
+    unsigned offset = field_offset();
+    unsigned bytes = field_bytes(ptype);
+    int wide = width == 2u;
+    int depth = 1 + (int)width;
+    nj_u4 ret;
+    field_fixture_init(&fx, ptype, width, offset);
+    CHECK(nj_jit_instance_field(&fx.vm, &fx.owner, 1u) == &fx.field);
+    memcpy(expected_obj, fx.object, sizeof(expected_obj));
+    memcpy(expected_obj + offset, &raw, bytes);
+    field_code(code, 0xb5);
+    init_frame(&initial);
+    initial.stack[BASE].r = (nj_ref)(void *)fx.object;
+    if (wide) {
+        memcpy(&initial.stack[BASE + 1], &raw, 8u);
+    } else if (ptype == NJ_PT_OBJECT) {
+        nj_ref r = (nj_ref)(uintptr_t)raw;
+        memcpy(&initial.stack[BASE + 1].r, &r, sizeof(r));
+    } else {
+        initial.stack[BASE + 1].i = (nj_s4)(nj_u4)raw;
+    }
+    expected = initial;
+    jit_vm = &fx.vm;
+    ret = run_expect(name, code, sizeof(code), 1, depth, &fx.owner, &initial,
+                     &expected, &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 3 && block.insns == 1);
+    CHECK(block.stack_delta == -depth && block.min_stack == depth);
+    CHECK(block.max_growth == 0);
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_RV32
+    CHECK(ret == 1);
+    CHECK(memcmp(fx.object, expected_obj, sizeof(expected_obj)) == 0);
+#else
+    (void)expected_obj;
+#endif
+    (void)ret;
+}
+
+static void field_fault_case(const char *name, unsigned op, int put)
+{
+    field_fixture fx;
+    nj_u1 code[3];
+    nj_u1 before[FIELD_OBJ_SIZE];
+    test_frame initial, expected;
+    nj_jit_block block;
+    unsigned offset = field_offset();
+    int depth = put ? 2 : 1;
+    nj_u4 ret;
+    field_fixture_init(&fx, NJ_PT_INT, 1u, offset);
+    memcpy(fx.object + offset, "\x11\x22\x33\x44", 4u);
+    memcpy(before, fx.object, sizeof(before));
+    field_code(code, op);
+    init_frame(&initial);
+    initial.stack[BASE].r = NULL;
+    if (put) initial.stack[BASE + 1].i = 0x55667788;
+    expected = initial;
+    jit_vm = &fx.vm;
+    ret = run_expect(name, code, sizeof(code), 1, depth, &fx.owner, &initial,
+                     &expected, &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 3 && block.insns == 1);
+    CHECK(block.stack_delta == (put ? -2 : 0) && block.min_stack == depth);
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_RV32
+    expect_fault(ret, 0u, 0u);
+#endif
+    CHECK(memcmp(fx.object, before, sizeof(before)) == 0);
+    (void)ret;
+}
+
+static void field_decline_case(const char *name, int which)
+{
+    field_fixture fx;
+    nj_u1 code[3];
+    unsigned offset = field_offset();
+    unsigned slot;
+    field_fixture_init(&fx, NJ_PT_INT, 1u, offset);
+    slot = nj_cp_key_hash(&fx.owner, 1u) & (FIELD_CACHE - 1u);
+    field_code(code, 0xb4);
+    switch (which) {
+    case 0: /* no resolved entry */
+        fx.cache[slot].used = 0u;
+        break;
+    case 1: /* static link for getfield */
+        fx.cache[slot].kind = NJ_LINK_FIELD_STATIC;
+        break;
+    case 2: /* field declared static */
+        fx.field.flags = NJ_ACC_STATIC;
+        break;
+    case 3: /* owner is not linked yet */
+        fx.owner.state = NJ_CLASS_LOADED;
+        break;
+    case 4: /* payload starts inside the object header */
+        fx.field.offset = (nj_u2)(sizeof(nj_object) - 1u);
+        break;
+    case 5: /* payload runs past instance_size */
+        fx.owner.instance_size = offset + 3u;
+        break;
+    case 6: /* unknown primitive type */
+        fx.field.ptype = 0xffu;
+        break;
+    case 7: /* CP index 0 is invalid */
+        code[2] = 0u;
+        break;
+    case 8: /* no CP cache at all */
+        fx.vm.cp_cache = NULL;
+        fx.vm.cp_cache_size = 0u;
+        break;
+    default: /* truncated getfield operand */
+        code[2] = 0u;
+        break;
+    }
+    jit_vm = &fx.vm;
+    if (which == 9)
+        declined_owned(name, &fx.owner, code, 2u, 1);
+    else
+        declined_owned(name, &fx.owner, code, sizeof(code), 1);
+    jit_vm = NULL;
+}
+
+/* ---- int arrays ------------------------------------------------------ */
+
+enum { ARRAY_LEN = 8 };
+
+typedef struct array_fixture {
+    nj_vm vm;
+    nj_object arr;
+    nj_s4 ints[ARRAY_LEN];
+} array_fixture;
+
+static void array_fixture_init(array_fixture *fx, unsigned kind, unsigned aflags)
+{
+    unsigned i;
+    memset(fx, 0, sizeof(*fx));
+    for (i = 0; i < ARRAY_LEN; ++i)
+        fx->ints[i] = (nj_s4)(0x10203040u + i * 0x01010101u);
+    fx->arr.kind = (nj_u1)kind;
+    fx->arr.aflags = (nj_u2)aflags;
+    fx->arr.length = ARRAY_LEN;
+    fx->arr.size = (nj_u4)sizeof(fx->ints);
+    fx->arr.u.bytes = (nj_u1 *)(void *)fx->ints;
+}
+
+static void array_load_case(const char *name, array_fixture *fx, nj_ref ref,
+                            unsigned index, int fault)
+{
+    static const nj_u1 code[] = {0x2e};
+    test_frame initial, expected;
+    nj_jit_block block;
+    nj_u4 ret;
+    init_frame(&initial);
+    initial.stack[BASE].r = ref;
+    initial.stack[BASE + 1].i = (nj_s4)index;
+    expected = initial;
+    if (!fault) expected.stack[BASE].i = fx->ints[index];
+    jit_vm = &fx->vm;
+    ret = run_expect(name, code, sizeof(code), 1, 2, NULL, &initial, &expected,
+                     &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 1 && block.insns == 1);
+    CHECK(block.stack_delta == -1 && block.min_stack == 2);
+    CHECK(block.max_growth == 0);
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_RV32
+    if (fault) expect_fault(ret, 0u, 0u);
+    else CHECK(ret == 1);
+#endif
+    (void)ret;
+}
+
+static void array_store_case(const char *name, array_fixture *fx, nj_ref ref,
+                             unsigned index, nj_s4 value, int fault)
+{
+    static const nj_u1 code[] = {0x4f};
+    test_frame initial, expected;
+    nj_jit_block block;
+    nj_s4 want[ARRAY_LEN];
+    unsigned i;
+    nj_u4 ret;
+    memcpy(want, fx->ints, sizeof(want));
+    if (!fault) want[index] = value;
+    init_frame(&initial);
+    /* Java iastore order is arrayref, index, value: value on top. */
+    initial.stack[BASE].r = ref;
+    initial.stack[BASE + 1].i = (nj_s4)index;
+    initial.stack[BASE + 2].i = value;
+    expected = initial;
+    jit_vm = &fx->vm;
+    ret = run_expect(name, code, sizeof(code), 1, 3, NULL, &initial, &expected,
+                     &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 1 && block.insns == 1);
+    CHECK(block.stack_delta == -3 && block.min_stack == 3);
+    CHECK(block.max_growth == 0);
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_RV32
+    if (fault) expect_fault(ret, 0u, 0u);
+    else CHECK(ret == 1);
+    for (i = 0; i < ARRAY_LEN; ++i) CHECK(fx->ints[i] == want[i]);
+#else
+    (void)ret;
+    (void)want;
+    (void)i;
+#endif
+}
+
+static void array_length_case(const char *name, array_fixture *fx, nj_ref ref,
+                              int fault)
+{
+    static const nj_u1 code[] = {0xbe};
+    test_frame initial, expected;
+    nj_jit_block block;
+    nj_u4 ret;
+    init_frame(&initial);
+    initial.stack[BASE].r = ref;
+    expected = initial;
+    if (!fault) expected.stack[BASE].i = (nj_s4)fx->arr.length;
+    jit_vm = &fx->vm;
+    ret = run_expect(name, code, sizeof(code), 1, 1, NULL, &initial, &expected,
+                     &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 1 && block.insns == 1);
+    CHECK(block.stack_delta == 0 && block.min_stack == 1);
+    CHECK(block.max_growth == 0);
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_RV32
+    if (fault) expect_fault(ret, 0u, 0u);
+    else CHECK(ret == 1);
+#endif
+    (void)ret;
+}
+
+static void test_fields_arrays(void)
+{
+    unsigned offset = field_offset();
+    field_fixture fx;
+    array_fixture ax;
+    unsigned i;
+    nj_u1 code[3];
+
+    test_name = "field and array decline without a VM";
+    jit_vm = NULL;
+    field_code(code, 0xb4);
+    declined("getfield without vm", code, 3, 1);
+    field_code(code, 0xb5);
+    declined("putfield without vm", code, 3, 1);
+    {
+        static const nj_u1 ops[] = {0x2e,0x4f,0xbe};
+        for (i = 0; i < sizeof(ops); ++i)
+            declined("array opcode without vm", &ops[i], 1, 1);
+    }
+
+    test_name = "getfield primitive widths";
+    field_read_case("getfield boolean", NJ_PT_BOOLEAN, 1u, 0x81u);
+    field_read_case("getfield byte", NJ_PT_BYTE, 1u, 0x81u);
+    field_read_case("getfield char", NJ_PT_CHAR, 1u, 0xfffeu);
+    field_read_case("getfield short", NJ_PT_SHORT, 1u, 0x8001u);
+    field_read_case("getfield int", NJ_PT_INT, 1u, 0x80000001u);
+    field_read_case("getfield float", NJ_PT_FLOAT, 1u, 0x7fc12345u);
+    field_read_case("getfield long", NJ_PT_LONG, 2u, UINT64_C(0x8000000000000001));
+    field_read_case("getfield double", NJ_PT_DOUBLE, 2u,
+                    UINT64_C(0xf0123456789abcde));
+    field_read_case("getfield object", NJ_PT_OBJECT, 1u, 0x12345678u);
+
+    test_name = "putfield primitive widths";
+    field_write_case("putfield boolean", NJ_PT_BOOLEAN, 1u, 0x1234u);
+    field_write_case("putfield byte", NJ_PT_BYTE, 1u, 0x1234u);
+    field_write_case("putfield char", NJ_PT_CHAR, 1u, 0x12345u);
+    field_write_case("putfield short", NJ_PT_SHORT, 1u, 0x12345u);
+    field_write_case("putfield int", NJ_PT_INT, 1u, 0x89abcdefu);
+    field_write_case("putfield float", NJ_PT_FLOAT, 1u, 0x7fc12345u);
+    field_write_case("putfield long", NJ_PT_LONG, 2u, UINT64_C(0x0123456789abcdef));
+    field_write_case("putfield double", NJ_PT_DOUBLE, 2u,
+                     UINT64_C(0xfedcba9876543210));
+    field_write_case("putfield object", NJ_PT_OBJECT, 1u, 0x12345678u);
+
+    test_name = "field null receiver faults";
+    field_fault_case("getfield null receiver", 0xb4, 0);
+    field_fault_case("putfield null receiver", 0xb5, 1);
+    field_fault_case("getfield null receiver again", 0xb4, 0);
+
+    test_name = "field declines";
+    field_decline_case("getfield unresolved", 0);
+    field_decline_case("getfield static link", 1);
+    field_decline_case("getfield static field", 2);
+    field_decline_case("getfield owner unlinked", 3);
+    field_decline_case("getfield offset in header", 4);
+    field_decline_case("getfield offset past instance", 5);
+    field_decline_case("getfield unknown ptype", 6);
+    field_decline_case("getfield cp index zero", 7);
+    field_decline_case("getfield no cp cache", 8);
+    field_decline_case("getfield truncated", 9);
+    (void)fx;
+
+    test_name = "int array reads and writes";
+    array_fixture_init(&ax, NJ_OBJ_ARRAY, NJ_ARRAY_T_INT);
+    for (i = 0; i < ARRAY_LEN; ++i)
+        array_load_case("iaload", &ax, (nj_ref)&ax.arr, i, 0);
+    array_load_case("iaload first", &ax, (nj_ref)&ax.arr, 0, 0);
+    array_load_case("iaload last", &ax, (nj_ref)&ax.arr, ARRAY_LEN - 1, 0);
+    for (i = 0; i < 4; ++i)
+        array_store_case("iastore", &ax, (nj_ref)&ax.arr, i,
+                         (nj_s4)(0x55667788u + i), 0);
+    array_length_case("arraylength", &ax, (nj_ref)&ax.arr, 0);
+
+    test_name = "array faults leave state untouched";
+    array_load_case("iaload null", &ax, NULL, 0, 1);
+    array_store_case("iastore null", &ax, NULL, 0, 0x11223344, 1);
+    array_length_case("arraylength null", &ax, NULL, 1);
+    array_load_case("iaload index -1", &ax, (nj_ref)&ax.arr, UINT32_MAX, 1);
+    array_load_case("iaload index == length", &ax, (nj_ref)&ax.arr, ARRAY_LEN, 1);
+    array_store_case("iastore index -1", &ax, (nj_ref)&ax.arr, UINT32_MAX,
+                     0x11223344, 1);
+    array_store_case("iastore index == length", &ax, (nj_ref)&ax.arr, ARRAY_LEN,
+                     0x11223344, 1);
+    array_fixture_init(&ax, NJ_OBJ_ARRAY, NJ_ARRAY_T_BYTE);
+    array_load_case("iaload wrong array type", &ax, (nj_ref)&ax.arr, 0, 1);
+    array_store_case("iastore wrong array type", &ax, (nj_ref)&ax.arr, 0,
+                     0x11223344, 1);
+    array_fixture_init(&ax, NJ_OBJ_PLAIN, NJ_ARRAY_T_INT);
+    array_load_case("iaload not an array", &ax, (nj_ref)&ax.arr, 0, 1);
+    array_store_case("iastore not an array", &ax, (nj_ref)&ax.arr, 0,
+                     0x11223344, 1);
+    (void)offset;
+}
+
+/* ---- fault ABI ------------------------------------------------------- */
+
+static void test_faults(void)
+{
+    static const nj_u1 five[] = {
+        0xb4,0,1, 0xb4,0,1, 0xb4,0,1, 0xb4,0,1, 0xb4,0,1, 0x00,0xac
+    };
+    static const nj_u1 four[] = {
+        0xb4,0,1, 0xb4,0,1, 0xb4,0,1, 0xb4,0,1, 0x00,0xac
+    };
+#if EXECUTE_RV32
+    static const nj_u1 two[] = {0xb4,0,1, 0x2a, 0xb4,0,1, 0xac};
+#endif
+    field_fixture fx;
+    nj_u1 generated[NJ_JIT_MAX_CODE_BYTES];
+    nj_jit_block block, analysis;
+    nj_method m;
+    unsigned i;
+
+    test_name = "record_fault bounds";
+    memset(&block, 0, sizeof(block));
+    for (i = 0; i < NJ_JIT_MAX_FAULTS; ++i)
+        CHECK(nj_jit_record_fault(&block, 10u, 10u + i, (int)i) == 1);
+    CHECK(block.nfaults == NJ_JIT_MAX_FAULTS);
+    CHECK(nj_jit_record_fault(&block, 10u, 99u, 0) == 0);
+    CHECK(!nj_jit_record_fault(NULL, 0u, 0u, 0));
+    memset(&block, 0, sizeof(block));
+    CHECK(!nj_jit_record_fault(&block, 5u, 4u, 0));
+    CHECK(!nj_jit_record_fault(&block, 0u, 0x10000u, 0));
+    CHECK(block.nfaults == 0);
+
+    test_name = "fault metadata stops at the budget";
+    field_fixture_init(&fx, NJ_PT_INT, 1u, field_offset());
+    jit_vm = &fx.vm;
+    {
+        /* A block may hold at most NJ_JIT_MAX_FAULTS guards. The four-getfield
+         * program saturates the default budget exactly; a larger configured
+         * budget compiles it whole. */
+        const unsigned nfour = NJ_JIT_MAX_FAULTS < 4 ? NJ_JIT_MAX_FAULTS : 4u;
+        const unsigned nfive = NJ_JIT_MAX_FAULTS < 5 ? NJ_JIT_MAX_FAULTS : 5u;
+        const unsigned four_insns = nfour == 4u ? 5u : nfour;
+        const unsigned four_next = nfour == 4u ? 13u : nfour * 3u;
+        /* 0xac is the faulting program's terminal bytecode, not a JIT
+         * instruction: a complete block ends at the preceding 0x00 nop. */
+        const unsigned five_insns = nfive == 5u ? 6u : nfive;
+        const unsigned five_next = nfive == 5u ? 16u : nfive * 3u;
+
+        m = method(four, sizeof(four), 1);
+        m.owner = &fx.owner;
+        CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block) == 1);
+        CHECK(block.next_pc == four_next && block.insns == four_insns);
+        CHECK(block.nfaults == nfour);
+        for (i = 0; i < block.nfaults; ++i) {
+            CHECK(block.faults[i].pc_off == i * 3u);
+            CHECK(block.faults[i].sp_delta == 0);
+        }
+        m = method(five, sizeof(five), 1);
+        m.owner = &fx.owner;
+        CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block) == 1);
+        CHECK(block.next_pc == five_next && block.insns == five_insns);
+        CHECK(block.nfaults == nfive);
+        CHECK(nj_rv32_analyze(&fx.vm, &m, 0, &analysis));
+        CHECK(analysis.next_pc == five_next && analysis.insns == five_insns);
+        CHECK(analysis.nfaults == block.nfaults);
+        for (i = 0; i < block.nfaults; ++i) {
+            CHECK(analysis.faults[i].pc_off == block.faults[i].pc_off);
+            CHECK(analysis.faults[i].sp_delta == block.faults[i].sp_delta);
+        }
+    }
+    jit_vm = NULL;
+
+#if EXECUTE_RV32 && NJ_JIT_RV32_M
+    test_name = "div and rem zero divisor faults";
+    {
+        static const nj_u1 idiv[] = {0x6c,0xac};
+        static const nj_u1 irem[] = {0x70,0xac};
+        test_frame initial, expected;
+        nj_u4 ret;
+        int op;
+        field_fixture_init(&fx, NJ_PT_INT, 1u, field_offset());
+        jit_vm = &fx.vm;
+        for (op = 0; op < 2; ++op) {
+            init_frame(&initial);
+            initial.stack[BASE].i = 7;
+            initial.stack[BASE + 1].i = 0;
+            expected = initial;
+            ret = run_expect(op ? "irem zero" : "idiv zero", op ? irem : idiv,
+                             2u, 0, 2, NULL, &initial, &expected, &block);
+            CHECK(block.next_pc == 1u && block.insns == 1u);
+            CHECK(block.stack_delta == -1 && block.min_stack == 2);
+            CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+                  block.faults[0].sp_delta == 0);
+            expect_fault(ret, 0u, 0u);
+        }
+        jit_vm = NULL;
+    }
+#endif
+
+#if EXECUTE_RV32
+    test_name = "second fault reports its index and completed count";
+    {
+        nj_object *o;
+        test_frame initial, expected;
+        nj_u4 ret;
+        field_fixture_init(&fx, NJ_PT_INT, 1u, field_offset());
+        memcpy(fx.object + field_offset(), "\x11\x22\x33\x44", 4u);
+        o = (nj_object *)(void *)fx.object;
+        init_frame(&initial);
+        initial.stack[BASE].r = (nj_ref)o;
+        initial.locals[0].r = NULL;
+        expected = initial;
+        expected.stack[BASE].i = (nj_s4)0x44332211;
+        expected.stack[BASE + 1].r = NULL;
+        jit_vm = &fx.vm;
+        ret = run_expect("second getfield fault", two, sizeof(two), 1, 1,
+                         &fx.owner, &initial, &expected, &block);
+        jit_vm = NULL;
+        CHECK(block.next_pc == 7u && block.insns == 3u);
+        CHECK(block.nfaults == 2);
+        CHECK(block.faults[0].pc_off == 0u && block.faults[0].sp_delta == 0);
+        CHECK(block.faults[1].pc_off == 4u && block.faults[1].sp_delta == 1);
+        expect_fault(ret, 1u, 2u);
+    }
+#endif
+}
+
+#if EXECUTE_RV32 && NJ_ENABLE_ENGINE
+/* The direct invoke() oracle above bypasses nj_jit_execute, so it cannot see
+ * the SAVE-side fault ABI.  This fixture drives the real probe/execute path
+ * with a writable/executable code port. */
+static void *jit_code_alloc(void *ud, nj_size n)
+{
+    void *p;
+    (void)ud;
+    p = mmap(NULL, (size_t)n, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return p == MAP_FAILED ? NULL : p;
+}
+
+static int jit_code_commit(void *ud, void *p, nj_size n)
+{
+    (void)ud;
+    return mprotect(p, (size_t)n, PROT_READ | PROT_EXEC) == 0 ? 0 : -1;
+}
+
+static void jit_code_free(void *ud, void *p, nj_size n)
+{
+    (void)ud;
+    if (p) (void)munmap(p, (size_t)n);
+}
+
+static void test_runtime_fault_abi(void)
+{
+    static const nj_u1 two[] = {0xb4,0,1, 0x2a, 0xb4,0,1, 0x00, 0xac};
+    field_fixture fx;
+    nj_port port;
+    nj_method m;
+    test_frame actual, expected;
+    nj_frame fr;
+    nj_u4 pc = 0u, ret = 0u;
+    nj_value *sp;
+    nj_jit_stats stats;
+    unsigned i;
+
+    test_name = "runtime fault updates pc, sp and frame";
+    field_fixture_init(&fx, NJ_PT_INT, 1u, field_offset());
+    memcpy(fx.object + field_offset(), "\x11\x22\x33\x44", 4u);
+    memset(&port, 0, sizeof(port));
+    port.code_alloc = jit_code_alloc;
+    port.code_commit = jit_code_commit;
+    port.code_free = jit_code_free;
+    fx.vm.port = &port;
+    CHECK(nj_jit_enable(&fx.vm) == NJ_OK);
+
+    m = method(two, sizeof(two), 1);
+    m.owner = &fx.owner;
+    init_frame(&actual);
+    actual.stack[BASE].r = (nj_ref)(void *)fx.object;
+    actual.locals[0].r = NULL;
+    expected = actual;
+    expected.stack[BASE].i = (nj_s4)0x44332211;
+    expected.stack[BASE + 1u].r = NULL;
+
+    memset(&fr, 0, sizeof(fr));
+    fr.m = &m;
+    fr.locals = actual.locals;
+    fr.stack = &actual.stack[BASE];
+    fr.sp = fr.stack + 1;
+    fr.stack_limit = actual.stack + STACK_SLOTS;
+    sp = fr.sp;
+    for (i = 0; i <= NJ_JIT_HOT_THRESHOLD; ++i) {
+        fr.pc = pc;
+        ret = nj_jit_try_block(&fx.vm, &fr, &pc, &sp, 64u);
+        if (ret) break;
+    }
+
+    /* The second getfield faults after the first getfield and aload_0.  The
+     * runtime must publish the faulting bytecode and the entry sp plus the
+     * block's sp_delta, while returning only the completed count. */
+    CHECK(ret == 2u);
+    CHECK(pc == 4u);
+    CHECK(sp == fr.stack + 2);
+    CHECK(memcmp(&actual, &expected, sizeof(actual)) == 0);
+#if NJ_JIT_STATS
+    CHECK(nj_jit_get_stats(&fx.vm, &stats));
+    CHECK(stats.compiled_blocks == 1u);
+    CHECK(stats.executed_blocks == 1u);
+    CHECK(stats.faults == 1u);
+    CHECK(stats.bytecodes == 2u);
+#else
+    (void)stats;
+#endif
+    nj_jit_disable(&fx.vm);
+}
+#endif
 
 static void test_integer(void)
 {
@@ -564,7 +1360,7 @@ static void test_boundaries(void)
         CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
         CHECK(block.next_pc == sizeof(code));
         CHECK(block.min_stack == 2 && block.max_growth == 2 && block.stack_delta == -1);
-        CHECK(!block.check_divisor);
+        CHECK(block.nfaults == 0);
         test_name = "method max_stack bounds";
         m.max_stack = 1;
         CHECK(!compile_checked(&m, 0, generated, sizeof(generated), &block));
@@ -600,12 +1396,13 @@ static void test_boundaries(void)
         test_name = "division isolation and zero guard contract";
         m = method(first, sizeof(first), 0);
         CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
-        CHECK(block.next_pc == 1 && block.insns == 1 && block.check_divisor == 1);
+        CHECK(block.next_pc == 1 && block.insns == 1 && block.nfaults == 1);
+        CHECK(block.faults[0].pc_off == 0 && block.faults[0].sp_delta == 0);
         CHECK(block.min_stack == 2 && block.stack_delta == -1 && block.max_growth == 0);
         m = method(middle, sizeof(middle), 0);
         CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
-        CHECK(block.next_pc == 1 && block.insns == 1 && block.check_divisor == 0);
-        /* Zero is intentionally not sent to generated code: the VM owns throwing. */
+        CHECK(block.next_pc == 1 && block.insns == 1 && block.nfaults == 0);
+        /* A throwing division may not follow mutations; the VM owns throwing. */
     }
 #endif
 }
@@ -836,16 +1633,22 @@ static void test_analysis(void)
     nj_method m = method(code, sizeof(code), 1);
     nj_jit_block block;
     test_name = "analysis rejects invalid input and identifies short block";
-    CHECK(!nj_rv32_analyze(NULL, 0, &block));
-    CHECK(!nj_rv32_analyze(&m, 0, NULL));
-    CHECK(!nj_rv32_analyze(&m, sizeof(code), &block));
-    CHECK(!nj_rv32_analyze(&m, UINT32_MAX, &block));
-    CHECK(nj_rv32_analyze(&m, 0, &block));
+    CHECK(!nj_rv32_analyze(NULL, NULL, 0, &block));
+    CHECK(!nj_rv32_analyze(NULL, &m, 0, NULL));
+    CHECK(!nj_rv32_analyze(NULL, &m, sizeof(code), &block));
+    CHECK(!nj_rv32_analyze(NULL, &m, UINT32_MAX, &block));
+    CHECK(nj_rv32_analyze(NULL, &m, 0, &block));
     CHECK(block.size == 0 && block.insns == 1 && block.next_pc == 1);
     CHECK(block.min_stack == 0 && block.max_growth == 1 && block.stack_delta == 1);
-    CHECK(!block.check_divisor);
-    m.max_stack = 0; CHECK(!nj_rv32_analyze(&m, 0, &block));
-    m.code = NULL; CHECK(!nj_rv32_analyze(&m, 0, &block));
+    CHECK(block.nfaults == 0);
+    m.max_stack = 0; CHECK(!nj_rv32_analyze(NULL, &m, 0, &block));
+    m.code = NULL; CHECK(!nj_rv32_analyze(NULL, &m, 0, &block));
+    test_name = "new opcodes are candidates";
+    CHECK(nj_jit_opcode_candidate(0x2e));
+    CHECK(nj_jit_opcode_candidate(0x4f));
+    CHECK(nj_jit_opcode_candidate(0xb4));
+    CHECK(nj_jit_opcode_candidate(0xb5));
+    CHECK(nj_jit_opcode_candidate(0xbe));
 }
 
 static void test_write_through(void)
@@ -987,6 +1790,11 @@ int main(int argc, char **argv)
     test_integer();
     test_float();
     test_boundaries();
+    test_faults();
+#if EXECUTE_RV32 && NJ_ENABLE_ENGINE
+    test_runtime_fault_abi();
+#endif
+    test_fields_arrays();
     test_rounding();
     test_numeric_constants(); test_analysis(); test_write_through(); test_constant_chain();
     test_name = "extension coverage";
