@@ -2189,3 +2189,15 @@ the reference.
 Footprint: `nj_lib_lcdui.c` +1,627 B text and +32 B field data; the whole
 binary +2,024 B text; runtime RAM +4 B per Alert instance (one deadline), no
 heap, no new thread, no writable globals.
+
+Both screen-changing commits were probed against their parent on ten corpus
+titles (300 frames each, paced, identical key script and a fresh store per
+arm, parent built from `5699770`): 鬼泣3D, 1945, 合金弹头4, 午夜台球,
+仙魔飞行棋, 实况足球经理, 3D城市桌球 produced the same caught-exception
+sets and byte-identical dumped frames; 新西游记 and 浴火银河 differ only in
+their animation phase; 纽约人生 sometimes raises a caught
+`NullPointerException` from its own `g.c()` - 2 of 3 parent runs do the same,
+so it is the title's timing, not the Alert timer.  A clean build of
+`bf418ce` from `git archive` also passes its suite (62/65 first pass, the
+three `build/nj2me`-path tests pass after the documented symlink; 65 rather
+than 101 because that archive build disables the libretro/SDL2 ports).
