@@ -1900,3 +1900,38 @@ Correctness: `test_gfx` 324, `test_clip` 15, `test_directgraphics` 34,
 `test_lcdui` pass, `ctest` 99/99, `bench.jar` invariants and the 27-value
 digest unchanged. No new state: RAM, stack and the public surface are
 untouched.
+
+## Round-2 summary: what the five changes add up to (fixtures, not FPS)
+
+The individual sections above each measure one change against its parent. This
+one measures the round as a whole: the round-8 binary
+(sha256 `0858a1f0…`, before any of this work) against the round-2 tip built
+from HEAD, on the two deterministic fixtures, four interleaved runs per arm on
+a pinned core with child CPU from `RUSAGE_CHILDREN`. Every run of every arm
+reported the same bytecode count, native calls, heap figures and `PHASE`/sink
+output, so the two arms did identical work.
+
+| fixture (fixed work) | round-8 binary CPU s (min) | round-2 tip CPU s (min) | reduction |
+| --- | --- | --- | --- |
+| `io-bench.jar` (2 M `ByteArrayOutputStream.write(int)`, 0.5 M `write(byte[],int,int)`, 3x 2 M `ByteArrayInputStream.read()` + 0.5 M `DataInputStream.readInt()`) | 1.853 | 0.3595 | **80.6%** |
+| `gfx-bench.jar` (100 k iterations of a 2D drawing mix: fill/draw rect, line, string, image, clip and translate) | 1.283 | 0.3551 | **72.3%** |
+
+The Mascot triangle-fill fixture (`.local-tools/debug-runs/perf-round9-20261022/raster-bench`) measured **23.0%** for the fill-loop
+rewrite alone, and the interpreter benchmark `bench.jar` is unchanged as
+always (`BENCH sum=-136042548`, 70,514,376 bytecodes, heap 92,432/92,432), which
+is the point: these changes remove per-call bookkeeping from native-heavy
+paths, not bytecodes from the interpreter.
+
+What this is not: an FPS claim. Paced real-game replays are wall-clock
+dependent, so two runs of the same binary can differ in bytecodes and
+triangles; the round-2 real-game evidence is functional (a title that used to
+stall now plays, a save that used to truncate now round-trips) and the speed
+numbers are fixture numbers with identical work on both sides.
+
+Costs: 24 hot-field slots are **+192 B per VM** (`NJ_ENABLE_HOT_FIELDS=0`
+restores the old lookups exactly); the growable intern table is host memory
+that only grows for VMs with more than 512 literals; the raster fill rewrite
+adds no RAM and `mr_fill_segment`'s frame is 176 B; the bone roster growth is a
+Java `Object[]` whose capacity is the array length (rigs of 64 or fewer links
+allocate exactly what they did before). No writable static data was added
+(the no-statics check still passes over 63 objects).
