@@ -2,6 +2,12 @@
 
 [English](README.md) | **简体中文**
 
+[![最新发布](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
+[![许可](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
+[![测试](https://img.shields.io/badge/tests-92%20passing-brightgreen)](docs/VERIFICATION.md)
+[![sanitizer](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
+[![C99，零依赖](https://img.shields.io/badge/C99-no%20dependencies-informational)](#设计上的硬约束)
+
 用纯 **C99** 写的 J2ME（CLDC 1.1 / MIDP 2.0）运行时，为嵌入式而生。
 
 它能在任何有帧缓冲、有几百 KB 内存的东西上跑 MIDlet 套件——那些给功能机写的 `.jar` 游戏：Linux、Android、ESP32-S3，或者你手上正拿着的任何板子。
@@ -35,6 +41,48 @@
                     └──────────────────────────────────────────┘
 ```
 
+## 0.2.0 的新内容
+
+**0.2.0 把运行时带到了各处。** 以前它是一个桌面运行时；现在它同时是一个 RetroArch core、一个 Android 应用和一份 ESP32-S3 固件，而且原本就能跑的游戏跑得更快了。
+
+* **RetroArch / libretro core。** 一个原生共享库，自带画面、声音、手柄/键盘/触摸输入和 core options；六个预编译目标（Linux x86_64/aarch64/armv7、Android arm64-v8a/armeabi-v7a/x86_64），在 RetroArch 1.22.2 上验证通过。见 [在 RetroArch 里运行](#在-retroarch-里运行)。
+* **ESP32-S3。** 本仓库直接产出一个真实的 ESP-IDF 组件，在 Espressif 的 `esp-emu` 里跑起完整类库和一个 MIDlet；UI demo 把 240x320 的画面经 UART 解码成 PNG、把按键注入进去、从挂载的存储卡读 JAR。
+* **JSR-184（M3G）。** 完整的 `javax.microedition.m3g` API、`.m3g` 解析器，以及一个软件光栅化器：深度缓冲、透视校正纹理、mipmap 链、背面剔除、逐顶点光照。
+* **更快的解释器。** 更多融合的超指令（其摘要与桌面 JVM 逐条比对）、`--stats` 新增 `cpcache=<hits>/<misses>` 计数，原本渲染吃力的游戏不再吃力。
+* **Android 补齐。** `getKeyChar` 会返回中文输入法上屏的字符，platform 层的 HTTP/Socket 钩子，自绘的 Material 3 外壳，中文交给系统字体光栅化（点阵中文字体编译掉：省 1.3 MB），音频走 AAudio/OpenSL ES，MIDI 与 MediaCodec 解码交给系统。
+* **兼容性从 374/21 提升到 393/2**（真实游戏），并且 395 个里没有一个因缺类、缺方法、缺字段或缺 native 而停下。
+
+完整更新日志：[v0.2.0 发布说明](https://github.com/lucinhu/nano_j2me/releases/tag/v0.2.0)。
+
+## 截图
+
+**桌面，SDL2 移植。** 完整的十二键手机键盘由移植层画出来——因为只有方向键的话，除了平台跳跃游戏什么都玩不了。
+
+<p>
+<img src="docs/images/readme-sdl2-1942.png" width="240" height="320" alt="1942 空战：英吉利海峡上空的空战，带屏幕按键">
+<img src="docs/images/readme-sdl2-xianjian.png" width="240" height="320" alt="仙剑奇侠传：客栈场景与对白框">
+<img src="docs/images/readme-sdl2-aoe.png" width="240" height="320" alt="傲世三国志：群雄争霸的标题菜单">
+</p>
+
+**Android。** 启动器显示每个游戏自己的名字和图标；游戏里可以换用不同的悬浮按键布局。
+
+<p>
+<img src="docs/images/readme-android-launcher.png" width="200" height="400" alt="Nano J2ME 启动器列出四个游戏">
+<img src="docs/images/readme-android-game.png" width="200" height="400" alt="1942 空战在 Android 上，开火键被按下">
+</p>
+
+**RetroArch。** 同一个运行时以 libretro core 形式载入 RetroArch。
+
+<p>
+<img src="docs/images/readme-retroarch.png" width="360" height="480" alt="RetroArch 载入 nano_j2me core 并运行游戏">
+</p>
+
+**ESP32-S3。** 真实的 MIDlet 跑在 Espressif 的 `esp-emu` 里：内置 RAM 的板级配置，帧数据经 UART 流出并解码成这张 PNG。
+
+<p>
+<img src="docs/images/esp-emu-1942-menu.png" width="180" height="240" alt="1942 空战运行在模拟的 ESP32-S3 上">
+</p>
+
 ## 设计上的硬约束
 
 这些不是愿望，每一条都有测试或门禁守着。
@@ -62,17 +110,18 @@
 | `javax.microedition.lcdui.game` | **完成** |
 | `java.util`、`java.io`、RMS | **完成** |
 | `javax.microedition.io` | **完成** —— `file://`、`http(s)://`（走一个可选的 `http_request` 钩子，安卓移植里包的是 `HttpURLConnection`）以及 `socket://`（四个可选的 `socket_*` 钩子，走 TCP）；其他协议按名字明确拒绝 |
-| `javax.microedition.sensor`（JSR 256）| **完成** —— `findSensors`、连接、通道、量程和数据监听器都在，传感器本身由移植提供；Condition 是明确拒绝而不是假装支持 |
 | `javax.bluetooth`（JSR 82）| **发现部分完成** —— `LocalDevice`、`DiscoveryAgent`、`UUID`、`DeviceClass`、`DataElement`、`ServiceRecord`、`RemoteDevice`，走九个可选的 `bt_*` 钩子；RFCOMM/L2CAP 服务端由移植提供，没有无线电的移植得到的是 `BluetoothStateException` |
+| `javax.microedition.sensor`（JSR 256）| **完成** —— `findSensors`、连接、通道、量程和数据监听器都在，传感器本身由移植提供；Condition 是明确拒绝而不是假装支持 |
 | 软件光栅化器 | **完成** |
 | 解码器：PNG、JPEG、GIF、DEFLATE、WAV、AMR、MIDI、点阵字体 | **完成**，每个都有自己的开关（`NJ_ENABLE_*`），并且都走可插拔注册表，所以移植可以裁掉一个、也可以换成平台自己的实现 |
 | 移植：headless（参考实现） | **完成** |
 | 移植：SDL2 | **完成** |
-| 移植：Android（NDK + JNI） | **完成** —— 一个 APK 支持 Android 5.0（API 21）及以上、四种 ABI；启动器会显示每个游戏自己的名字和图标，也能从文件管理器直接打开 `.jar`；三套可配置的悬浮按键布局；AAudio 或 OpenSL ES 出声，MIDI 交给手机自带的合成器；多点触控；自动识别游戏分辨率。四种 ABI 合计 1.57 MiB，在 API 21 模拟器、API 36 模拟器和真机上都跑过 |
-| 移植：ESP32-S3（ESP-IDF，Xtensa） | **完成** —— 真实的 IDF 构建，能在 QEMU 里跑起一个 MIDlet |
+| 移植：libretro / RetroArch | **完成** —— 一个 RetroArch 当作 core 加载的原生共享库：RGB565 画面、重采样音频、手柄/键盘/触摸输入、用于机型档案/旋转/堆大小/按键绑定的 core options，以及按游戏分开的 RecordStore/FileConnection 存档。没有 JVM，没有子进程。见 [docs/LIBRETRO.md](docs/LIBRETRO.md) |
+| 移植：Android（NDK + JNI） | **完成** —— 一个 APK 支持 Android 5.0（API 21）及以上、四种 ABI；启动器会显示每个游戏自己的名字和图标，也能从文件管理器直接打开 `.jar`；三套可配置的悬浮按键布局；AAudio 或 OpenSL ES 出声，MIDI 交给手机自带的合成器；多点触控；自动识别游戏分辨率。四种 ABI 合计 2.28 MiB，在 API 21 模拟器和 API 36 模拟器上都跑过 |
+| 移植：ESP32-S3（ESP-IDF，Xtensa） | **完成** —— 真实的 IDF 构建；在 16 MB flash / 8 MB PSRAM 的板级配置下，通过 Espressif 的 `esp-emu` 跑起 ROM、完整类库和一个 MIDlet（`tools/run_esp_emulator.sh`：`BENCH sum=-136042548`，105,717,067 条字节码——桌面版的总数），内置 RAM 配置在 QEMU 下也能跑。`tools/run_esp_emulator_ui.sh` 还在同一个模拟器里演示了显示、输入和存储路径（240x320 帧解码成 PNG，按键经 UART 注入，JAR 从挂载的存储卡读取）。见 [docs/PERFORMANCE.md](docs/PERFORMANCE.md#esp32-s3-measured-on-the-real-architecture) 和 [docs/FOOTPRINT.md](docs/FOOTPRINT.md#what-esp-emu-does-and-does-not-model-the-ui-demo) |
 | 移植：ESP32-C3（ESP-IDF，RISC-V） | 能编译、链接、启动；跑虚拟机需要 PSRAM |
-| 测试套件 | **64 项测试**（`ctest`） |
-| Sanitizer 套件 | **11/11 通过**（ASan + UBSan + LSan，`tools/run_sanitized_tests.sh`） |
+| 测试套件 | **92 项测试**（`ctest`） |
+| Sanitizer 套件 | **92/92 通过**（ASan + UBSan + LSan，`tools/run_sanitized_tests.sh`） |
 
 端到端验证过的：**Tumbleweed**（`net.frog_parrot.jump.Jump`，Apress 2004）在 headless 移植上以 176x208 跑起来——滚动的地面、会动的精灵、实时分数和倒计时。详见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。
 
@@ -100,6 +149,24 @@ ctest --test-dir build --output-on-failure
 配置时加 `-DNJ_GENERATE_FIXTURES=ON` 可以恢复旧行为。
 
 headless 移植始终可用，测试套件用的就是它。装了 `libsdl2-dev`（或等价物）时，SDL2 移植会自动构建。
+
+libretro core 默认会构建成 `build/libretro/nano_j2me_libretro.so`（`-DNJ_BUILD_LIBRETRO=OFF` 可以关掉）。把它和它的 `.info` 文件一起复制进 RetroArch 的 `cores/` 目录，然后加载 `.jar`；操作、core options、存档位置和限制见 [docs/LIBRETRO.md](docs/LIBRETRO.md)。core 是分架构的，所以 `tools/build_libretro_cores.sh` 也能交叉构建 Android（arm64-v8a、armeabi-v7a、x86_64）和 ARM Linux（ARM64/ARMv7）上可直接安装的 core——用 `--list` 看目标列表。
+
+## 在 RetroArch 里运行
+
+每次发布都会带上六个 core，打包为 `nano_j2me-0.2.0-libretro-cores.tar.gz`，所以想试不需要交叉编译器。要构建本机的 core：
+
+```sh
+cmake -S . -B build -G Ninja
+cmake --build build --target nano_j2me_libretro -j
+```
+
+把 `nano_j2me_libretro.so` 和 `nano_j2me_libretro.info`（两者必须放在一起）复制进 RetroArch 的 `cores/` 目录，在 *Load Core* 里选 **Mobile - J2ME (nano_j2me)**，然后加载游戏的 `.jar`。core options 里可以设置机型档案、旋转、堆大小、声音和按键绑定；存档落在 `<RetroArch 存档目录>/nano_j2me/<游戏目录>/`。命令行直接跑就是：
+
+```sh
+retroarch -L ~/.config/retroarch/cores/nano_j2me_libretro.so game.jar
+```
+
 
 ## 屏幕按键
 
@@ -175,9 +242,10 @@ src/zip/           DEFLATE 解压与 ZIP/JAR 读取
 src/port/posix/    headless 与 SDL2 移植
 src/port/android/  NDK 移植
 src/port/esp32/    ESP-IDF 组件
+src/port/libretro/ libretro core（RetroArch）
 src/runner/        把移植层和 MIDlet 接起来的运行器
 tests/             基于断言的测试程序
-tools/             测试数据生成器与 no-statics 门禁
+tools/             测试数据生成器、跨平台构建脚本与门禁
 docs/              架构、移植、兼容性
 ```
 
@@ -187,6 +255,7 @@ docs/              架构、移植、兼容性
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) —— 虚拟机怎么工作、为什么这么设计
 - [docs/PORTING.md](docs/PORTING.md) —— 把它带到一块新板子上
+- [docs/LIBRETRO.md](docs/LIBRETRO.md) —— 在 RetroArch 里跑这个 core
 - [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) —— 实现了什么、没实现什么，以及每种失败会怎么报错
 
 ## 许可
