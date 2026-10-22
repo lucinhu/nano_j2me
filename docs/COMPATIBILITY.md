@@ -1878,3 +1878,19 @@ but it also differs between two runs of the *same* binary, so that is the
 titles' wall-clock animation, not the change. The sweep's limits are recorded in
 its report: a 240-frame startup window without deep gameplay input, so it cannot
 speak for late-game code paths.
+
+A deeper follow-up swept 40 of the most active titles from that pass for 1,200
+frames each (about 40 s past startup) with a generic interactive key script -
+fire, soft keys, 20-frame d-pad holds and digit 5. The result was again no new
+gaps: zero missing-member errors of any kind, zero uncaught exceptions and zero
+non-zero exits or timeouts across all 40 titles. 34 of the 40 end on a drawn
+screen; the other six are on black transition or loading screens at the sampled
+frame while still painting during the run. Four titles quit themselves through
+`notifyDestroyed()` when the generic keys landed on a quit menu item, and the
+exceptions the games catch are title-internal - a repeated
+`NumberFormatException` from `Integer.parseInt`, an array index error inside game
+code, and an `NPE` from `new ByteArrayInputStream(null)`, which is the documented
+contract. The limits are real: 40 of 395 titles, generic keys instead of
+title-specific scripts, no reference comparison, and later boss and ending paths
+still untested. The report and per-title logs are under
+`.local-tools/debug-runs/compat-round8-20261022/deep-sweep/`.
