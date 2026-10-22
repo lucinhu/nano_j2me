@@ -1694,3 +1694,64 @@ were already there, and `bench.jar` is unchanged (sum `-136042548`,
 70,514,376 bytecodes, heap 92,432/92,432).  99/99 ctest and all
 27 superinstruction-digest values pass.  The change is in
 `src/core/nj_class.c` and is three lines plus a comment.
+
+## The triangle fill loop that reloaded its own state (round 2, 2026-10-22)
+
+With the class-name lookups fixed (previous section), the gprof profile of
+`鬼泣3D中文版_3376` at 30 fps put the Micro3D rasteriser at about 22% of CPU:
+`mr_fill_segment` 14.08% self over a 30.2 s, 900-frame replay, plus a helper
+the compiler inlined into it that gprof then attributed to `mr_bmp_parse` with
+43.7 million calls - a symbol-attribution artifact, not the BMP parser.  A
+synthetic but deterministic benchmark for that file now exists:
+`bench.c` in `.local-tools/debug-runs/perf-round9-20261022/raster-bench/`
+draws 20,000 pseudo-random triangles per material configuration on a 240x320
+ARGB8888 surface through the public `nj_mascot_raster_draw()`, and prints CPU
+milliseconds plus an FNV hash of the framebuffer, so two builds can be
+compared by linking the same object against each library.
+
+Three changes to `src/midp/nj_mascot_raster.c`, each measured against the
+previous stage with 8 interleaved ABBA rounds per arm on CPU 2:
+
+1. the 15 per-pixel helpers (`mr_pixel_get/put`, palette fetch, texture shade,
+   flat/smooth colour, toon pick, env add, ...) are `static inline`, and the
+   blend switch moved into a `static inline mr_blend` that the public
+   `nj_mascot_blend_pixel` now delegates to.  Total -7.09% (replace -7.29%,
+   half -4.08%, colour -19.40%, flat -6.42%, env -5.59%).
+2. the fill loop copies every state field it reads into locals.  The pixel
+   stores go through an `unsigned char *`, which the compiler must assume can
+   alias the state struct, so before this every `st->` read inside the loop was
+   a fresh load.  The loop also walks a running `pp += bpp` pointer instead of
+   recomputing `y * stride + x * bpp` per pixel, and calls address-taking raw
+   get/put helpers.  Another -12.28% min on top.
+3. the little-endian word helpers (`mr_u16`, `mr_u32`, `mr_put_u16`,
+   `mr_put_u32`) use `memcpy` on a little-endian host and keep the portable
+   byte-wise form for big-endian ports.
+
+Cumulative, against the same library before the change (8 rounds per arm,
+every framebuffer hash identical):
+
+| configuration | before min | after min | reduction |
+| --- | ---: | ---: | ---: |
+| textured, smooth, replace | 147.2 ms | 115.6 ms | 21.44% |
+| textured, smooth, HALF | 186.5 ms | 140.8 ms | 24.52% |
+| flat colour, replace | 73.2 ms | 33.5 ms | 54.21% |
+| textured, flat, replace | 139.8 ms | 112.1 ms | 19.83% |
+| textured, smooth, env map | 186.9 ms | 162.9 ms | 12.86% |
+| total | 733.6 ms | 564.9 ms | 23.00% |
+
+Correctness, not just hashes: the 71-check `test_mascot_raster` golden suite is
+byte-identical, the differential harness from the round-8 raster work (random
+formats, flags, blends, clips, degenerate and out-of-range triangles) gives
+identical framebuffer, return-code and blend-pixel digests for 20,000 cases
+against the previous rasteriser, and 3,000 cases run clean under ASan+UBSan.
+`test_mascot`, `test_mascot_scene` and `test_mascot_commands` still pass
+(233 / 127 / 36 checks), and a 900-frame paced replay of `鬼泣3D中文版_3376`
+behaves as before (only the known caught boot `EOFException`, no uncaught
+exception, 104,032 triangles drawn).
+
+RAM: no new state or allocation; `.data` and `.bss` are 0 in the object file
+and the stack frames are unchanged (`mr_fill_segment` 176 B, bounded
+`nj_mascot_raster_triangle` 960 B, `nj_mascot_raster_draw` 224 B).  The host
+code grows: object `.text` 15,195 -> 17,379 B, most of it the inlined pixel
+paths.  This is a host-side raster measurement, not a claim about game FPS;
+the game share above says how much of one title's CPU the rasteriser owns.

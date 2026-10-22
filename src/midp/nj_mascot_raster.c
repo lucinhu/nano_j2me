@@ -29,37 +29,67 @@
 #define MR_FP      12
 #define MR_FP_ONE  (1 << MR_FP)
 
+/* The blobs and surface scans are little-endian by construction.  On a
+ * little-endian host the word helpers compile to a single load or store; the
+ * portable byte-wise form stays for big-endian ports. */
+#if defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) \
+    && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define MR_LE_HOST 1
+#endif
+
 /* Bit manipulation on little-endian host buffers (no alignment assumptions). */
-static nj_u2 mr_u16(const nj_u1 *p)
+static inline nj_u2 mr_u16(const nj_u1 *p)
 {
+#ifdef MR_LE_HOST
+    nj_u2 v;
+
+    memcpy(&v, p, sizeof v);
+    return v;
+#else
     return (nj_u2)((nj_u2)p[0] | ((nj_u2)p[1] << 8));
+#endif
 }
 
-static nj_u4 mr_u32(const nj_u1 *p)
+static inline nj_u4 mr_u32(const nj_u1 *p)
 {
+#ifdef MR_LE_HOST
+    nj_u4 v;
+
+    memcpy(&v, p, sizeof v);
+    return v;
+#else
     return (nj_u4)p[0] | ((nj_u4)p[1] << 8) | ((nj_u4)p[2] << 16)
          | ((nj_u4)p[3] << 24);
+#endif
 }
 
-static void mr_put_u16(nj_u1 *p, nj_u2 v)
+static inline void mr_put_u16(nj_u1 *p, nj_u2 v)
 {
+#ifdef MR_LE_HOST
+    memcpy(p, &v, sizeof v);
+#else
     p[0] = (nj_u1)(v & 0xFFu);
     p[1] = (nj_u1)((v >> 8) & 0xFFu);
+#endif
 }
 
-static void mr_put_u32(nj_u1 *p, nj_u4 v)
+static inline void mr_put_u32(nj_u1 *p, nj_u4 v)
 {
+#ifdef MR_LE_HOST
+    memcpy(p, &v, sizeof v);
+#else
     p[0] = (nj_u1)(v & 0xFFu);
     p[1] = (nj_u1)((v >> 8) & 0xFFu);
     p[2] = (nj_u1)((v >> 16) & 0xFFu);
     p[3] = (nj_u1)((v >> 24) & 0xFFu);
+#endif
 }
 
 /* ------------------------------------------------------------------ */
 /* Surface pixels                                                      */
 /* ------------------------------------------------------------------ */
 
-static nj_s4 mr_bpp_of(const nj_surface *s)
+static inline nj_s4 mr_bpp_of(const nj_surface *s)
 {
     switch (s->format) {
     case NJ_PIXFMT_RGB565:   return 2;
@@ -85,7 +115,7 @@ static int mr_surface_ok(const nj_surface *s)
 
 /* Reference-Rasterizer read of one pixel as ARGB8888 (565 expanded exactly
  * like nj_surface_get). */
-static nj_u4 mr_pixel_get(const nj_surface *s, nj_s4 x, nj_s4 y)
+static inline nj_u4 mr_pixel_get(const nj_surface *s, nj_s4 x, nj_s4 y)
 {
     const nj_u1 *p = (const nj_u1 *)s->pixels
                    + (nj_s8)y * s->stride + (nj_s8)x * mr_bpp_of(s);
@@ -109,7 +139,7 @@ static nj_u4 mr_pixel_get(const nj_surface *s, nj_s4 x, nj_s4 y)
     }
 }
 
-static void mr_pixel_put(nj_surface *s, nj_s4 x, nj_s4 y, nj_u4 argb)
+static inline void mr_pixel_put(nj_surface *s, nj_s4 x, nj_s4 y, nj_u4 argb)
 {
     nj_u1 *p = (nj_u1 *)s->pixels + (nj_s8)y * s->stride
              + (nj_s8)x * mr_bpp_of(s);
@@ -133,10 +163,55 @@ static void mr_pixel_put(nj_surface *s, nj_s4 x, nj_s4 y, nj_u4 argb)
     }
 }
 
+/* Variants of the two helpers above that take the already computed pixel
+ * address, for the inner fill loop: that loop walks a row with a running
+ * pointer, so it must not recompute y*stride + x*bpp for every pixel. */
+static inline nj_u4 mr_raw_get(const nj_u1 *p, nj_s4 fmt)
+{
+    switch (fmt) {
+    case NJ_PIXFMT_RGB565: {
+        nj_u4 v = mr_u16(p);
+        nj_u4 r = (v >> 11) & 0x1Fu;
+        nj_u4 g = (v >> 5) & 0x3Fu;
+        nj_u4 b = v & 0x1Fu;
+        r = (r << 3) | (r >> 2);
+        g = (g << 2) | (g >> 4);
+        b = (b << 3) | (b >> 2);
+        return 0xFF000000u | (r << 16) | (g << 8) | b;
+    }
+    case NJ_PIXFMT_RGB888:
+        return 0xFF000000u | ((nj_u4)p[0] << 16) | ((nj_u4)p[1] << 8)
+             | (nj_u4)p[2];
+    default:
+        return mr_u32(p);
+    }
+}
+
+static inline void mr_raw_put(nj_u1 *p, nj_u4 argb, nj_s4 fmt)
+{
+    switch (fmt) {
+    case NJ_PIXFMT_RGB565: {
+        nj_u4 r = (argb >> 16) & 0xFFu;
+        nj_u4 g = (argb >> 8) & 0xFFu;
+        nj_u4 b = argb & 0xFFu;
+        mr_put_u16(p, (nj_u2)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)));
+        break;
+    }
+    case NJ_PIXFMT_RGB888:
+        p[0] = (nj_u1)((argb >> 16) & 0xFFu);
+        p[1] = (nj_u1)((argb >> 8) & 0xFFu);
+        p[2] = (nj_u1)(argb & 0xFFu);
+        break;
+    default:
+        mr_put_u32(p, argb);
+        break;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Reference blendPixel                                                 */
 /* ------------------------------------------------------------------ */
-nj_u4 nj_mascot_blend_pixel(nj_u4 src, nj_u4 dst, nj_s4 blend)
+static inline nj_u4 mr_blend(nj_u4 src, nj_u4 dst, nj_s4 blend)
 {
     switch (blend) {
     case NJ_MR_BLEND_ADD: {
@@ -154,6 +229,11 @@ nj_u4 nj_mascot_blend_pixel(nj_u4 src, nj_u4 dst, nj_s4 blend)
     default:
         return 0xFF000000u | ((dst & src) + (((dst ^ src) >> 1) & 0x7F7F7Fu));
     }
+}
+
+nj_u4 nj_mascot_blend_pixel(nj_u4 src, nj_u4 dst, nj_s4 blend)
+{
+    return mr_blend(src, dst, blend);
 }
 
 void nj_mascot_raster_pixel(nj_surface *dst, nj_s4 x, nj_s4 y,
@@ -582,7 +662,7 @@ typedef struct mr_state {
 } mr_state;
 
 /* Reference flat colour formula: channel * (shade + 1) >> 5. */
-static nj_u4 mr_flat_color(nj_u4 color, nj_s8 shade12)
+static inline nj_u4 mr_flat_color(nj_u4 color, nj_s8 shade12)
 {
     nj_s4 shade = (nj_s4)(shade12 >> MR_FP);
     nj_u4 rgb = 0;
@@ -593,37 +673,16 @@ static nj_u4 mr_flat_color(nj_u4 color, nj_s8 shade12)
     return 0xFF000000u | rgb;
 }
 
-/* Reference smooth colour formula. */
-static nj_u4 mr_smooth_color(const mr_state *st, nj_s8 shade12)
-{
-    nj_s4 level = (nj_s4)(shade12 >> MR_FP);
-    nj_u4 rb = ((st->color_rb & 0x00FF00FFu) * (nj_u4)level)
-             & (0x00FF00FFu << 5);
-    nj_u4 g = ((st->color_g & 0x0000FF00u) * (nj_u4)level)
-            & (0x0000FF00u << 5);
-
-    return 0xFF000000u | ((rb | g) >> 5);
-}
-
 /* Toon: the reference compares (rawLight >> 4) against the threshold; a raw
  * light of L is shade12 = (L >> 2) << 7, so L >> 4 == shade12 >> 9. */
-static nj_s4 mr_toon_pick(const mr_state *st, nj_s8 shade12)
+static inline nj_s4 mr_toon_pick(const mr_state *st, nj_s8 shade12)
 {
     nj_s4 light4 = (nj_s4)(shade12 >> 9);
 
     return light4 <= st->toon_thr ? st->toon_lo : st->toon_hi;
 }
 
-/* Palette row (0..31) for textured paths. */
-static nj_s4 mr_tex_level(const mr_state *st, nj_s8 shade12, nj_s4 toon)
-{
-    if (toon) {
-        return mr_toon_pick(st, shade12) >> 3;
-    }
-    return (nj_s4)((shade12 >> MR_FP) & 0x1F);
-}
-
-static nj_u4 mr_pal_get(const nj_u1 *pal, nj_s4 index)
+static inline nj_u4 mr_pal_get(const nj_u1 *pal, nj_s4 index)
 {
     return mr_u32(pal + (nj_s8)index * 4);
 }
@@ -631,7 +690,7 @@ static nj_u4 mr_pal_get(const nj_u1 *pal, nj_s4 index)
 /* Reference Texture.generateShadedPalette(): channel * shade / 31 truncating,
  * alpha opaque.  The blob keeps only the 256 unshaded entries, so shading is
  * applied at sample time instead of pre-generating 32 rows. */
-static nj_u4 mr_tex_shade(nj_u4 pal, nj_s4 level)
+static inline nj_u4 mr_tex_shade(nj_u4 pal, nj_s4 level)
 {
     nj_u4 r, g, b;
 
@@ -647,24 +706,12 @@ static nj_u4 mr_tex_shade(nj_u4 pal, nj_s4 level)
     return 0xFF000000u | (r << 16) | (g << 8) | b;
 }
 
-static nj_u4 mr_env_add(nj_u4 color, nj_u4 env)
+static inline nj_u4 mr_env_add(nj_u4 color, nj_u4 env)
 {
     nj_u4 tmp = (((color + env - ((color ^ env) & 0x01010101u)) >> 8)
                  & 0x010101u) * 0xFFu;
 
     return 0xFF000000u | (color + env - tmp) | tmp;
-}
-
-static void mr_put_blend(const mr_state *st, nj_s4 x, nj_s4 y, nj_u4 color)
-{
-    if (st->blend == NJ_MR_BLEND_REPLACE) {
-        mr_pixel_put(st->dst, x, y, color);
-    } else {
-        mr_pixel_put(st->dst, x, y,
-                     nj_mascot_blend_pixel(color,
-                                           mr_pixel_get(st->dst, x, y),
-                                           st->blend));
-    }
 }
 
 /* Fill the rows of one clipped segment.  All coordinates are 12.12 fixed
@@ -683,21 +730,53 @@ static void mr_fill_segment(const mr_state *st,
     nj_s4 y;
     nj_s4 subpixel = 0;
 
+    /* The pixel stores below write through an unsigned char pointer, which the
+     * compiler must assume can alias *st.  Copying every field the inner loop
+     * reads into locals keeps them in registers instead of reloading them for
+     * each pixel, and lets the row walk keep a running pixel pointer instead
+     * of recomputing y*stride + x*bpp per pixel. */
+    const nj_s4 has_tex = st->has_tex;
+    const nj_s4 smooth = st->smooth;
+    const nj_s4 tex_shaded = st->tex_shaded;
+    const nj_s4 env_smooth = st->env_smooth;
+    const nj_s4 blend = st->blend;
+    const nj_s4 key_idx = st->key_idx;
+    const nj_s4 toon_on = st->toon_on;
+    const nj_s4 toon_thr = st->toon_thr;
+    const nj_s4 toon_hi = st->toon_hi;
+    const nj_s4 toon_lo = st->toon_lo;
+    const nj_s4 flat_level = st->flat_level;
+    const nj_s8 flat_shade = st->flat_shade;
+    const nj_u4 color = st->color;
+    const nj_u4 color_rb = st->color_rb;
+    const nj_u4 color_g = st->color_g;
+    const nj_u1 *t_raster = has_tex ? st->tex->raster : NULL;
+    const nj_u1 *t_palette = has_tex ? st->tex->palette : NULL;
+    const nj_s4 t_wbit = has_tex ? st->tex->width_bit : 0;
+    const nj_s4 t_mask = has_tex ? st->tex->len_mask : 0;
+    const nj_u1 *e_raster = env_smooth ? st->env->raster : NULL;
+    const nj_s4 e_wbit = env_smooth ? st->env->width_bit : 0;
+    const nj_s4 e_mask = env_smooth ? st->env->len_mask : 0;
+    const nj_s4 fmt = st->dst->format;
+    const nj_s4 bpp = mr_bpp_of(st->dst);
+    const nj_s8 stride = st->dst->stride;
+    nj_u1 *const base = (nj_u1 *)st->dst->pixels;
+
     /* "Corrected rounding to avoid texture seams": nudge the interpolators by
      * one subpixel in the direction they are moving.  Only the attributes the
      * reference interpolates get this. */
-    if (st->has_tex) {
+    if (has_tex) {
         if (du_row != 0) u += du_row > 0 ? 1 : -1;
         if (dv_row != 0) v += dv_row > 0 ? 1 : -1;
     }
-    if (st->smooth && ds_row != 0) {
+    if (smooth && ds_row != 0) {
         s += ds_row > 0 ? 1 : -1;
     }
-    if (st->env_smooth) {
+    if (env_smooth) {
         if (deu_row != 0) eu += deu_row > 0 ? 1 : -1;
         if (dev_row != 0) ev += dev_row > 0 ? 1 : -1;
     }
-    if (st->has_tex || st->smooth || st->env_smooth) {
+    if (has_tex || smooth || env_smooth) {
         subpixel = 1;
     }
 
@@ -708,19 +787,20 @@ static void mr_fill_segment(const mr_state *st,
         nj_s4 uu = (nj_s4)u, vv = (nj_s4)v, ss = (nj_s4)s;
         nj_s4 eeu = (nj_s4)eu, eev = (nj_s4)ev;
         nj_s4 px;
+        nj_u1 *pp;
 
         if (subpixel) {
             /* "Subpixel precision, ceil rounding". */
             nj_s4 t = MR_FP_ONE - (nj_s4)(x & (MR_FP_ONE - 1));
 
-            if (st->has_tex) {
+            if (has_tex) {
                 uu += (nj_s4)(((nj_s8)du * t) >> MR_FP);
                 vv += (nj_s4)(((nj_s8)dv * t) >> MR_FP);
             }
-            if (st->smooth) {
+            if (smooth) {
                 ss += (nj_s4)(((nj_s8)ds * t) >> MR_FP);
             }
-            if (st->env_smooth) {
+            if (env_smooth) {
                 eeu += (nj_s4)(((nj_s8)deu * t) >> MR_FP);
                 eev += (nj_s4)(((nj_s8)dev * t) >> MR_FP);
             }
@@ -728,14 +808,14 @@ static void mr_fill_segment(const mr_state *st,
         if (xl < clip_x1) {
             nj_s4 t = xl - clip_x1;
 
-            if (st->has_tex) {
+            if (has_tex) {
                 uu -= du * t;
                 vv -= dv * t;
             }
-            if (st->smooth) {
+            if (smooth) {
                 ss -= ds * t;
             }
-            if (st->env_smooth) {
+            if (env_smooth) {
                 eeu -= deu * t;
                 eev -= dev * t;
             }
@@ -744,58 +824,78 @@ static void mr_fill_segment(const mr_state *st,
         if (xr > clip_x2) {
             xr = clip_x2;
         }
+        /* xl >= clip_x1 >= 0 here, so the row start is inside the surface when
+         * the span is non-empty; empty spans keep a dummy pointer. */
+        pp = xl < xr ? base + (nj_s8)y * stride + (nj_s8)xl * bpp : base;
         for (px = xl; px < xr;
-             px++, uu += du, vv += dv, ss += ds, eeu += deu, eev += dev) {
+             px++, uu += du, vv += dv, ss += ds, eeu += deu, eev += dev,
+             pp += bpp) {
             nj_u4 pix;
-            nj_s4 toon = st->toon_on;
 
-            if (st->has_tex) {
-                const nj_s4 wbit = st->tex->width_bit;
-                nj_s4 ti = (nj_s4)st->tex->raster
-                    [(nj_s4)((((nj_u4)(vv >> MR_FP) << wbit)
-                              | (nj_u4)(uu >> MR_FP))
-                             & (nj_u4)st->tex->len_mask)];
+            if (has_tex) {
+                nj_s4 ti = (nj_s4)t_raster[
+                    (nj_s4)((((nj_u4)(vv >> MR_FP) << t_wbit)
+                             | (nj_u4)(uu >> MR_FP)) & (nj_u4)t_mask)];
 
-                if (ti == st->key_idx) {
+                if (ti == key_idx) {
                     continue;
                 }
-                pix = mr_pal_get(st->tex->palette, ti & 0xFF);
-                if (st->tex_shaded) {
-                    nj_s4 level = st->smooth
-                        ? mr_tex_level(st, ss, toon) : st->flat_level;
+                pix = mr_pal_get(t_palette, ti & 0xFF);
+                if (tex_shaded) {
+                    nj_s4 level;
 
+                    if (smooth) {
+                        level = toon_on
+                            ? ((ss >> 9) <= toon_thr ? toon_lo : toon_hi) >> 3
+                            : (nj_s4)((ss >> MR_FP) & 0x1F);
+                    } else {
+                        level = flat_level;
+                    }
                     pix = mr_tex_shade(pix, level);
                 }
-            } else if (st->smooth) {
-                if (toon) {
-                    nj_s4 col = mr_toon_pick(st, ss);
+            } else if (smooth) {
+                if (toon_on) {
+                    nj_s4 col = (ss >> 9) <= toon_thr ? toon_lo : toon_hi;
 
-                    pix = mr_flat_color(st->color, (nj_s8)col * 512);
+                    pix = mr_flat_color(color, (nj_s8)col * 512);
                 } else {
-                    pix = mr_smooth_color(st, ss);
+                    nj_s4 level = (nj_s4)(ss >> MR_FP);
+                    nj_u4 rb = ((color_rb & 0x00FF00FFu) * (nj_u4)level)
+                             & (0x00FF00FFu << 5);
+                    nj_u4 g = ((color_g & 0x0000FF00u) * (nj_u4)level)
+                            & (0x0000FF00u << 5);
+
+                    pix = 0xFF000000u | ((rb | g) >> 5);
                 }
             } else {
-                nj_s8 shade12 = st->flat_shade;
+                nj_s8 shade12 = flat_shade;
 
-                if (toon) {
-                    shade12 = (nj_s8)mr_toon_pick(st, shade12) * 512;
+                if (toon_on) {
+                    nj_s4 col = (shade12 >> 9) <= toon_thr
+                        ? toon_lo : toon_hi;
+
+                    shade12 = (nj_s8)col * 512;
                 }
-                pix = mr_flat_color(st->color, shade12);
+                pix = mr_flat_color(color, shade12);
             }
 
-            if (st->env_smooth) {
+            if (env_smooth) {
                 nj_s4 ei = (nj_s4)
-                    ((((nj_u4)(eev >> MR_FP) << st->env->width_bit)
+                    ((((nj_u4)(eev >> MR_FP) << e_wbit)
                       | (nj_u4)(eeu >> MR_FP))
-                     & (nj_u4)st->env->len_mask);
-                nj_u4 ep = mr_u32(st->env->raster + (nj_s8)ei * 4);
+                     & (nj_u4)e_mask);
+                nj_u4 ep = mr_u32(e_raster + (nj_s8)ei * 4);
 
                 if (ep != 0) {
                     pix = mr_env_add(pix, ep);
                 }
             }
 
-            mr_put_blend(st, px, y, pix);
+            if (blend == NJ_MR_BLEND_REPLACE) {
+                mr_raw_put(pp, pix, fmt);
+            } else {
+                mr_raw_put(pp, mr_blend(pix, mr_raw_get(pp, fmt), blend), fmt);
+            }
         }
         x += dx;
         x2 += dx2;
