@@ -2044,7 +2044,9 @@ static void test_widgets(nj_vm *vm)
         s = call_ref(vm, alert, NJ_C_ALERT, "getString", "()Ljava/lang/String;",
                      NULL, &ok);
         OK(s != NULL && nj_string_equals_utf8(s, "Low battery"));
-        OK(call_int(vm, alert, NJ_C_ALERT, "getTimeout", "()I", NULL, &ok) == 2000 && ok);
+        /* Alert.FOREVER (-2) is the MIDP default: an Alert is not a banner
+         * that disappears after two seconds unless the game asks for it. */
+        OK(call_int(vm, alert, NJ_C_ALERT, "getTimeout", "()I", NULL, &ok) == -2 && ok);
         a[0] = iref(5000);
         OK(nj_call(vm, alert, NJ_C_ALERT, "setTimeout", "(I)V", a, NULL) == NJ_OK);
         OK(call_int(vm, alert, NJ_C_ALERT, "getTimeout", "()I", NULL, &ok) == 5000 && ok);
@@ -2676,6 +2678,319 @@ static void test_callserially_once_per_frame(nj_vm *vm)
 }
 
 /* ------------------------------------------------------------------ */
+/* Alert auto-dismiss timer                                            */
+/* ------------------------------------------------------------------ */
+/*
+ * The timeout is a one-shot millisecond deadline owned by the Alert (the
+ * frame-pump equivalent of the reference Alert timer thread), so the tests
+ * drive it with a replacement clock rather than sleeping.
+ */
+static nj_u4 al_fake_ms;
+static int al_dispatch_calls;
+static nj_ref al_dispatch_command;
+static nj_ref al_dispatch_screen;
+
+static nj_u4 al_fake_millis(void *ud)
+{
+    (void)ud;
+    return al_fake_ms;
+}
+
+static nj_status al_capture_command(nj_vm *vm, nj_thread *th, nj_value *args,
+                                    nj_value *ret)
+{
+    (void)th;
+    (void)ret;
+    al_dispatch_calls++;
+    al_dispatch_command = NJ_ARG_REF(args, 0);
+    al_dispatch_screen = NJ_ARG_REF(args, 1);
+    return vm->exception ? NJ_ERR : NJ_OK;
+}
+
+static void test_alert_timeout(nj_vm *vm, nj_port *port)
+{
+    static const nj_builtin_method methods[] = {
+        { "commandAction",
+          "(L" NJ_C_COMMAND ";L" NJ_C_DISPLAYABLE ";)V", NJ_ACC_PUBLIC }
+    };
+    static const nj_builtin_class fixture = {
+        "test/AlertListener", "java/lang/Object", NJ_ACC_PUBLIC,
+        NULL, 0u, methods, 1u
+    };
+    nj_u4 (*saved_millis)(void *) = port->millis;
+    nj_ref display = nj_midp_display(vm);
+    nj_ref prev = NULL;
+    nj_value a[2];
+    int ok = 0;
+
+    OK(display != NULL);
+    OK_MSG(saved_millis != NULL, "headless port has no clock");
+    if (!display || !saved_millis) {
+        return;
+    }
+    prev = construct(vm, NJ_C_FORM, "(Ljava/lang/String;)V",
+                     (nj_value[]){ sref(str(vm, "game screen")) });
+    OK(prev != NULL);
+    if (!prev) {
+        return;
+    }
+    OK(nj_midp_set_current(vm, prev) == NJ_OK);
+
+    /* Deterministic clock: every timer below is driven by al_fake_ms. */
+    al_fake_ms = (nj_u4)nj_now_ms(vm);
+    port->millis = al_fake_millis;
+
+    /* (1) The default timeout is FOREVER: an Alert does not dismiss itself
+     * unless the game asks for a timeout. */
+    {
+        nj_ref alert = construct(vm, NJ_C_ALERT, "(Ljava/lang/String;)V",
+                                 (nj_value[]){ sref(str(vm, "Hang on")) });
+        OK(alert != NULL);
+        if (alert) {
+            OK(call_int(vm, alert, NJ_C_ALERT, "getTimeout", "()I", NULL,
+                        &ok) == -2 && ok);
+            a[0] = sref(alert);
+            a[1] = sref(prev);
+            OK(nj_call(vm, display, NJ_C_DISPLAY, "setCurrent",
+                       "(L" NJ_C_ALERT ";L" NJ_C_DISPLAYABLE ";)V", a,
+                       NULL) == NJ_OK);
+            OK(nj_midp_current(vm) == alert);
+            al_fake_ms += 60000u;
+            OK(nj_midp_paint(vm) == NJ_OK);
+            OK_MSG(nj_midp_current(vm) == alert,
+                   "an alert without a timeout dismissed itself");
+        }
+    }
+
+    /* (2) setTimeout(500): the frame that reaches the deadline returns to the
+     * screen the Alert was shown over, exactly once. */
+    {
+        nj_ref alert = construct(vm, NJ_C_ALERT, "(Ljava/lang/String;)V",
+                                 (nj_value[]){ sref(str(vm, "Loading")) });
+        OK(alert != NULL);
+        if (alert) {
+            a[0] = iref(500);
+            OK(nj_call(vm, alert, NJ_C_ALERT, "setTimeout", "(I)V", a,
+                       NULL) == NJ_OK);
+            a[0] = sref(alert);
+            a[1] = sref(prev);
+            OK(nj_call(vm, display, NJ_C_DISPLAY, "setCurrent",
+                       "(L" NJ_C_ALERT ";L" NJ_C_DISPLAYABLE ";)V", a,
+                       NULL) == NJ_OK);
+            OK(nj_midp_current(vm) == alert);
+            al_fake_ms += 499u;
+            OK(nj_midp_paint(vm) == NJ_OK);
+            OK_MSG(nj_midp_current(vm) == alert,
+                   "alert dismissed before its timeout");
+            al_fake_ms += 1u;
+            OK(nj_midp_paint(vm) == NJ_OK);
+            OK_MSG(nj_midp_current(vm) == prev,
+                   "alert did not restore the previous screen at its timeout");
+            al_fake_ms += 10000u;
+            OK(nj_midp_paint(vm) == NJ_OK);
+            OK_MSG(nj_midp_current(vm) == prev, "alert timeout fired twice");
+            OK(!vm->exception);
+        }
+    }
+
+    /* (3) Display.setCurrent(Alert) with one argument remembers the screen it
+     * covered, so the default command can return to it. */
+    {
+        nj_ref alert = construct(vm, NJ_C_ALERT, "(Ljava/lang/String;)V",
+                                 (nj_value[]){ sref(str(vm, "Cancel?")) });
+        OK(alert != NULL);
+        if (alert) {
+            OK(nj_midp_set_current(vm, prev) == NJ_OK);
+            al_fake_ms += 1000u;
+            a[0] = iref(300);
+            OK(nj_call(vm, alert, NJ_C_ALERT, "setTimeout", "(I)V", a,
+                       NULL) == NJ_OK);
+            a[0] = sref(alert);
+            OK(nj_call(vm, display, NJ_C_DISPLAY, "setCurrent",
+                       "(L" NJ_C_DISPLAYABLE ";)V", a, NULL) == NJ_OK);
+            OK(nj_midp_current(vm) == alert);
+            al_fake_ms += 299u;
+            OK(nj_midp_paint(vm) == NJ_OK);
+            OK_MSG(nj_midp_current(vm) == alert,
+                   "single-argument setCurrent(Alert) dismissed early");
+            al_fake_ms += 1u;
+            OK(nj_midp_paint(vm) == NJ_OK);
+            OK_MSG(nj_midp_current(vm) == prev,
+                   "single-argument setCurrent(Alert) forgot the previous "
+                   "screen");
+        }
+    }
+
+    /* (4) A timer that expires while the Alert is not shown does nothing (the
+     * reference thread checks isShown()); showing it later must not dismiss
+     * it immediately. */
+    {
+        nj_ref alert = construct(vm, NJ_C_ALERT, "(Ljava/lang/String;)V",
+                                 (nj_value[]){ sref(str(vm, "Late")) });
+        OK(alert != NULL);
+        if (alert) {
+            OK(nj_midp_set_current(vm, prev) == NJ_OK);
+            a[0] = iref(200);
+            OK(nj_call(vm, alert, NJ_C_ALERT, "setTimeout", "(I)V", a,
+                       NULL) == NJ_OK);
+            al_fake_ms += 5000u;
+            OK(nj_midp_paint(vm) == NJ_OK);
+            OK(nj_midp_current(vm) == prev);
+            a[0] = sref(alert);
+            a[1] = sref(prev);
+            OK(nj_call(vm, display, NJ_C_DISPLAY, "setCurrent",
+                       "(L" NJ_C_ALERT ";L" NJ_C_DISPLAYABLE ";)V", a,
+                       NULL) == NJ_OK);
+            al_fake_ms += 5000u;
+            OK(nj_midp_paint(vm) == NJ_OK);
+            OK_MSG(nj_midp_current(vm) == alert,
+                   "a stale alert timeout dismissed the alert on show");
+            OK(nj_midp_set_current(vm, prev) == NJ_OK);
+        }
+    }
+
+    /* (5) With a game CommandListener the timeout delivers the left command
+     * once on the event-thread equivalent and the listener owns navigation. */
+    {
+        nj_class *cls = nj_class_create_builtin(vm, &fixture);
+        nj_ref alert;
+        nj_ref cmd;
+        nj_ref listener;
+
+        OK(cls != NULL);
+        if (!cls) {
+            return;
+        }
+        cls->methods[0].native = al_capture_command;
+        listener = nj_object_new(vm, "test/AlertListener");
+        alert = construct(vm, NJ_C_ALERT, "(Ljava/lang/String;)V",
+                          (nj_value[]){ sref(str(vm, "Confirm")) });
+        cmd = construct(vm, NJ_C_COMMAND, "(Ljava/lang/String;II)V",
+                        (nj_value[]){ sref(str(vm, "OK")), iref(4), iref(1) });
+        OK(listener != NULL && alert != NULL && cmd != NULL);
+        if (listener && alert && cmd) {
+            a[0] = sref(cmd);
+            OK(nj_call(vm, alert, NJ_C_DISPLAYABLE, "addCommand",
+                       "(L" NJ_C_COMMAND ";)V", a, NULL) == NJ_OK);
+            a[0] = sref(listener);
+            OK(nj_call(vm, alert, NJ_C_DISPLAYABLE, "setCommandListener",
+                       "(L" NJ_C_COMMANDLISTENER ";)V", a, NULL) == NJ_OK);
+            a[0] = iref(400);
+            OK(nj_call(vm, alert, NJ_C_ALERT, "setTimeout", "(I)V", a,
+                       NULL) == NJ_OK);
+            a[0] = sref(alert);
+            a[1] = sref(prev);
+            OK(nj_call(vm, display, NJ_C_DISPLAY, "setCurrent",
+                       "(L" NJ_C_ALERT ";L" NJ_C_DISPLAYABLE ";)V", a,
+                       NULL) == NJ_OK);
+            al_dispatch_calls = 0;
+            al_dispatch_command = NULL;
+            al_dispatch_screen = NULL;
+            al_fake_ms += 401u;
+            OK(nj_midp_paint(vm) == NJ_OK);
+            OK_MSG(al_dispatch_calls == 1,
+                   "alert timeout delivered %d commands", al_dispatch_calls);
+            OK(al_dispatch_command == cmd);
+            OK(al_dispatch_screen == alert);
+            OK_MSG(nj_midp_current(vm) == alert,
+                   "the built-in listener overrode the game's listener");
+            al_fake_ms += 10000u;
+            OK(nj_midp_paint(vm) == NJ_OK);
+            OK_MSG(al_dispatch_calls == 1, "alert timeout fired twice");
+            OK(!vm->exception);
+        }
+    }
+
+    /* (6) Two game Commands make the Alert modal: setTimeout neither stores
+     * the timeout nor starts a timer (the reference "forced modal" rule). */
+    {
+        nj_ref alert = construct(vm, NJ_C_ALERT, "(Ljava/lang/String;)V",
+                                 (nj_value[]){ sref(str(vm, "Pick one")) });
+        nj_ref c1 = construct(vm, NJ_C_COMMAND, "(Ljava/lang/String;II)V",
+                              (nj_value[]){ sref(str(vm, "A")), iref(4),
+                                            iref(1) });
+        nj_ref c2 = construct(vm, NJ_C_COMMAND, "(Ljava/lang/String;II)V",
+                              (nj_value[]){ sref(str(vm, "B")), iref(1),
+                                            iref(2) });
+        OK(alert != NULL && c1 != NULL && c2 != NULL);
+        if (alert && c1 && c2) {
+            a[0] = sref(c1);
+            OK(nj_call(vm, alert, NJ_C_DISPLAYABLE, "addCommand",
+                       "(L" NJ_C_COMMAND ";)V", a, NULL) == NJ_OK);
+            a[0] = sref(c2);
+            OK(nj_call(vm, alert, NJ_C_DISPLAYABLE, "addCommand",
+                       "(L" NJ_C_COMMAND ";)V", a, NULL) == NJ_OK);
+            a[0] = iref(100);
+            OK(nj_call(vm, alert, NJ_C_ALERT, "setTimeout", "(I)V", a,
+                       NULL) == NJ_OK);
+            OK_MSG(call_int(vm, alert, NJ_C_ALERT, "getTimeout", "()I", NULL,
+                            &ok) == -2 && ok,
+                   "a modal alert stored a timeout");
+            a[0] = sref(alert);
+            a[1] = sref(prev);
+            OK(nj_call(vm, display, NJ_C_DISPLAY, "setCurrent",
+                       "(L" NJ_C_ALERT ";L" NJ_C_DISPLAYABLE ";)V", a,
+                       NULL) == NJ_OK);
+            al_fake_ms += 5000u;
+            OK(nj_midp_paint(vm) == NJ_OK);
+            OK_MSG(nj_midp_current(vm) == alert,
+                   "a modal alert was dismissed by a timeout");
+        }
+    }
+
+    /* (7) Argument validation matches the reference. */
+    {
+        nj_ref alert = construct(vm, NJ_C_ALERT, "(Ljava/lang/String;)V",
+                                 (nj_value[]){ sref(str(vm, "Args")) });
+        OK(alert != NULL);
+        if (alert) {
+            a[0] = sref(alert);
+            a[1].r = NULL;
+            OK(nj_call(vm, display, NJ_C_DISPLAY, "setCurrent",
+                       "(L" NJ_C_ALERT ";L" NJ_C_DISPLAYABLE ";)V", a,
+                       NULL) != NJ_OK);
+            OK(exc_is(vm, "java/lang/NullPointerException"));
+            nj_clear_exception(vm);
+            a[0].r = NULL;
+            a[1] = sref(prev);
+            OK(nj_call(vm, display, NJ_C_DISPLAY, "setCurrent",
+                       "(L" NJ_C_ALERT ";L" NJ_C_DISPLAYABLE ";)V", a,
+                       NULL) != NJ_OK);
+            OK(exc_is(vm, "java/lang/NullPointerException"));
+            nj_clear_exception(vm);
+            a[0] = sref(alert);
+            a[1] = sref(alert);   /* next must not be an Alert */
+            OK(nj_call(vm, display, NJ_C_DISPLAY, "setCurrent",
+                       "(L" NJ_C_ALERT ";L" NJ_C_DISPLAYABLE ";)V", a,
+                       NULL) != NJ_OK);
+            OK(exc_is(vm, "java/lang/IllegalArgumentException"));
+            nj_clear_exception(vm);
+            a[0] = iref(0);
+            OK(nj_call(vm, alert, NJ_C_ALERT, "setTimeout", "(I)V", a,
+                       NULL) != NJ_OK);
+            OK(exc_is(vm, "java/lang/IllegalArgumentException"));
+            nj_clear_exception(vm);
+            a[0] = iref(-1);
+            OK(nj_call(vm, alert, NJ_C_ALERT, "setTimeout", "(I)V", a,
+                       NULL) != NJ_OK);
+            OK(exc_is(vm, "java/lang/IllegalArgumentException"));
+            nj_clear_exception(vm);
+        }
+    }
+
+    /* Restore the real clock and leave no Alert on screen for the caller. */
+    port->millis = saved_millis;
+    OK(nj_midp_set_current(vm, NULL) == NJ_OK);
+    {
+        nj_field *f = nj_field_lookup(vm, NJ_C_DISPLAY, NJ_F_DISP_ALERT,
+                                      "L" NJ_C_DISPLAYABLE ";", 0);
+        if (f) {
+            nj_field_write_ref(vm, display, f, NULL);
+        }
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
@@ -2715,6 +3030,10 @@ static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
     test_screen(vm);
     test_canvas_key_methods(vm);
     test_callserially_once_per_frame(vm);
+    /* Last: it swaps the port clock for a fake one, and the restore leaves the
+     * modular clock one wrap ahead - harmless for everything above, so keep
+     * this the final test of the round. */
+    test_alert_timeout(vm, &port);
 
     /* createImage(String) needs a loaded application. */
     if (app) {

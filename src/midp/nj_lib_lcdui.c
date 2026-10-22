@@ -142,6 +142,10 @@
 /* Defined with the Display natives, used by the frame hook above them. */
 static void display_drain_queue(nj_vm *vm);
 
+/* Defined with the Alert natives, called from every frame boundary: the
+ * frame-pump equivalent of the reference Alert timeout thread. */
+static void alert_frame_check(nj_vm *vm);
+
 /* ------------------------------------------------------------------ */
 /* Small field helpers                                                 */
 /* ------------------------------------------------------------------ */
@@ -603,6 +607,9 @@ void nj_midp_present(nj_vm *vm)
     if (!vm) {
         return;
     }
+    /* Safety net for frames the runner did not paint itself: the Alert
+     * timeout still fires at the frame boundary. */
+    alert_frame_check(vm);
     {
         /*
          * Mirror the current Canvas' buffer onto the screen HERE, at the frame
@@ -3102,6 +3109,110 @@ static int command_dispatch(nj_vm *vm, nj_ref displayable, nj_ref command)
     return 1;
 }
 
+/* ------------------------------------------------------------------ */
+/* Alert auto-dismiss timer                                            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The reference keeps an Alert timeout in a Thread that sleeps for the timeout
+ * and then calls doLeftCommand() on the event thread (Alert.java).  There is no
+ * thread here: the absolute deadline lives in the Alert ("alDeadline", a
+ * modular u32 millisecond stamp, 0 = no timer) and every frame boundary
+ * compares it.  Same one-shot timer, same rules:
+ *
+ *   - setTimeout() itself starts the timer - NOT showing the Alert.  The
+ *     reference thread may wake while the Alert is not shown and does nothing
+ *     then (`if (isShown())`), so a deadline that has already passed when the
+ *     Alert is finally shown is consumed without dismissing it.
+ *   - A game CommandListener owns what happens when the timer fires; without
+ *     one the built-in listener restores the screen the Alert was shown over
+ *     (Mobile.getDisplay().setCurrent(nextScreen)).
+ *   - An Alert with two or more game Commands is "forced modal": setTimeout()
+ *     neither stores the timeout nor starts a timer.
+ */
+#define AL_F_DEADLINE "alDeadline"
+
+static nj_s4 alert_now(nj_vm *vm)
+{
+    return (nj_s4)(nj_u4)nj_now_ms(vm);
+}
+
+/* True when the deadline has been reached (modular millisecond compare). */
+static int alert_deadline_reached(nj_vm *vm, nj_s4 deadline)
+{
+    return deadline != 0 &&
+           (nj_s4)((nj_u4)alert_now(vm) - (nj_u4)deadline) >= 0;
+}
+
+/* Arm the timer, or clear it when timeout is FOREVER (negative). */
+static void alert_timer_arm(nj_vm *vm, nj_ref alert, nj_s4 timeout)
+{
+    nj_s4 at = 0;
+
+    if (timeout > 0) {
+        at = (nj_s4)((nj_u4)alert_now(vm) + (nj_u4)timeout);
+    }
+    fput(vm, alert, NJ_C_ALERT, AL_F_DEADLINE, D_INT, at);
+}
+
+/* Drop a deadline that expired while the Alert was not shown. */
+static void alert_timer_consume_stale(nj_vm *vm, nj_ref alert)
+{
+    nj_s4 deadline = fget(vm, alert, NJ_C_ALERT, AL_F_DEADLINE, D_INT);
+
+    if (alert_deadline_reached(vm, deadline)) {
+        fput(vm, alert, NJ_C_ALERT, AL_F_DEADLINE, D_INT, 0);
+    }
+}
+
+/* Fire the timeout of the Alert that is on screen, if it is due. */
+static void alert_frame_check(nj_vm *vm)
+{
+    nj_ref alert;
+    nj_ref next;
+    nj_ref disp;
+    nj_s4 deadline;
+
+    if (!vm || vm->exception) {
+        return;
+    }
+    alert = nj_midp_current(vm);
+    if (!alert || !isa(vm, alert, NJ_C_ALERT)) {
+        return;
+    }
+    deadline = fget(vm, alert, NJ_C_ALERT, AL_F_DEADLINE, D_INT);
+    if (!alert_deadline_reached(vm, deadline)) {
+        return;
+    }
+    /* One-shot: clear before running the listener, so an exception or a
+     * setCurrent() inside the callback cannot fire it twice. */
+    fput(vm, alert, NJ_C_ALERT, AL_F_DEADLINE, D_INT, 0);
+
+    if (rget(vm, alert, NJ_C_DISPLAYABLE, F_D_LISTENER, D_CL)) {
+        nj_ref left = NULL;
+        nj_ref right = NULL;
+
+        /* The reference calls doLeftCommand(); with fewer than three game
+         * commands that activates the left command. */
+        screen_commands(vm, alert, &left, &right);
+        if (left) {
+            (void)command_dispatch(vm, alert, left);
+        }
+        return;
+    }
+    /* No game listener: the built-in listener restores the previous screen. */
+    next = NULL;
+    disp = nj_midp_display(vm);
+    if (disp) {
+        next = rget(vm, disp, NJ_C_DISPLAY, F_DISP_ALERT, D_DISPLAY);
+    }
+    if (next && next != alert) {
+        (void)nj_midp_set_current(vm, next);
+    } else {
+        nj_midp_repaint(vm);
+    }
+}
+
 /* Activate the default command, if there is one. */
 /*
  * Activate a Canvas's command from a soft key.
@@ -5158,6 +5269,11 @@ nj_status nj_midp_paint(nj_vm *vm)
      * queue is drained here, at the top of the frame.
      */
     display_drain_queue(vm);
+    /* An Alert timeout that came due since the last frame is the frame-pump
+     * equivalent of the reference timer thread waking up on the event
+     * thread: dismiss before this frame paints, so the restored screen is
+     * what the frame shows. */
+    alert_frame_check(vm);
     scr = nj_midp_screen(vm);
     if (!scr) {
         return NJ_ERR;
@@ -5422,8 +5538,27 @@ NJFN(disp_getDisplay)
 
 NJFN(disp_setCurrent)
 {
-    nj_status st = nj_midp_set_current(vm, NJ_ARG_REF(args, 0));
-    return st;
+    nj_ref arg = NJ_ARG_REF(args, 0);
+
+    /*
+     * Display.setCurrent(Alert) remembers the current screen as the Alert's
+     * next screen before showing it (Display.java calls setNextScreen()), so
+     * the timeout/default command can return to it.  The two-argument form
+     * below does the same explicitly.
+     */
+    if (arg && isa(vm, arg, NJ_C_ALERT)) {
+        nj_ref disp = nj_midp_display(vm);
+        nj_ref cur = nj_midp_current(vm);
+
+        if (!disp) {
+            return NJ_ERR;
+        }
+        if (cur && cur != arg) {
+            rput(vm, disp, NJ_C_DISPLAY, F_DISP_ALERT, D_DISPLAY, cur);
+        }
+        alert_timer_consume_stale(vm, arg);
+    }
+    return nj_midp_set_current(vm, arg);
 }
 
 NJFN(disp_setCurrent_alert)
@@ -5431,19 +5566,23 @@ NJFN(disp_setCurrent_alert)
     nj_ref alert = NJ_ARG_REF(args, 0);
     nj_ref next = NJ_ARG_REF(args, 1);
     nj_ref disp = nj_midp_display(vm);
-    nj_ref d;
 
     if (!disp) {
         return NJ_ERR;
     }
-    if (next) {
-        rput(vm, disp, NJ_C_DISPLAY, F_DISP_ALERT, D_DISPLAY, next);
-    } else {
-        d = nj_midp_current(vm);
-        if (alert != d) {
-            rput(vm, disp, NJ_C_DISPLAY, F_DISP_ALERT, D_DISPLAY, d);
-        }
+    if (!alert) {
+        return nj_throw(vm, "java/lang/NullPointerException", "alert is null");
     }
+    if (!next) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "next displayable is null");
+    }
+    if (isa(vm, next, NJ_C_ALERT)) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "next must not be an Alert");
+    }
+    rput(vm, disp, NJ_C_DISPLAY, F_DISP_ALERT, D_DISPLAY, next);
+    alert_timer_consume_stale(vm, alert);
     return nj_midp_set_current(vm, alert);
 }
 
@@ -9325,8 +9464,9 @@ static nj_status alert_init_on(nj_vm *vm, nj_ref self, nj_value *args)
     rput(vm, self, NJ_C_ALERT, F_AL_IMAGE, D_IMAGE, img);
     rput(vm, self, NJ_C_ALERT, F_AL_TYPE,
          "Ljavax/microedition/lcdui/AlertType;", type);
-    fput(vm, self, NJ_C_ALERT, F_AL_TIMEOUT, D_INT, 2000);
-    fput(vm, self, NJ_C_ALERT, F_AL_INDEF, D_BOOL, 0);
+    fput(vm, self, NJ_C_ALERT, F_AL_TIMEOUT, D_INT, -2);
+    fput(vm, self, NJ_C_ALERT, F_AL_INDEF, D_BOOL, 1);
+    fput(vm, self, NJ_C_ALERT, AL_F_DEADLINE, D_INT, 0);
     rput(vm, self, NJ_C_ALERT, "alBuffer", D_IMAGE, NULL);
     return vm->exception ? NJ_ERR : NJ_OK;
 }
@@ -9403,12 +9543,20 @@ NJFN(alert_setTimeout)
     nj_ref self = NJ_THIS(args);
     nj_s4 t = NJ_ARG_INT(args, 0);
 
-    if (t == 0) {
+    /* Alert.FOREVER (-2) is the only non-positive timeout the reference
+     * accepts: `if (time <= 0 && time != FOREVER) throw`. */
+    if (t <= 0 && t != -2) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "timeout must not be zero");
+                        "timeout must be positive or Alert.FOREVER");
+    }
+    /* Two or more game Commands make the Alert modal: the reference's
+     * setTimeout() is then a no-op - it does not even store the timeout. */
+    if (cmd_count(vm, self) >= 2) {
+        return NJ_OK;
     }
     fput(vm, self, NJ_C_ALERT, F_AL_TIMEOUT, D_INT, t);
     fput(vm, self, NJ_C_ALERT, F_AL_INDEF, D_BOOL, (t < 0) ? 1 : 0);
+    alert_timer_arm(vm, self, t);
     return NJ_OK;
 }
 
@@ -10824,6 +10972,7 @@ static const nj_builtin_field alert_fields[] = {
     FLD(F_AL_IMAGE,   D_IMAGE, 0),
     FLD(F_AL_TIMEOUT, D_INT,   0),
     FLD(F_AL_INDEF,   D_BOOL,  0),
+    FLD(AL_F_DEADLINE, D_INT,  0),
     FLD("alIndicator", NJ_C_GAUGE, 0),
     FLD("alBuffer",   D_IMAGE, 0),
     FLD("sDefaultTimeout", D_INT, NJ_ACC_STATIC),

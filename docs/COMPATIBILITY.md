@@ -2146,3 +2146,46 @@ Still missing on that screen: `Alert` timeout auto-dismiss.  The title sets a
 to the menu, ours keeps it up (the baseline's error alert was equally stuck),
 so the title cannot get back to its menu yet.  That is tracked separately and
 is not part of the key editor.
+
+## The Alert that never left (round 2/4, 2026-10-23)
+
+With the key editor landed, `三国杀2．2美化版_1347` could type a name and create
+a character, and then it hung on the confirmation Alert: the title calls
+`Alert.setTimeout(1000)` and switches screens itself only when the user
+dismisses, so it expected the runtime to take the Alert away.  We had no Alert
+timer at all - `Display.setCurrent(Alert)` did not even remember the screen it
+replaced - so the Alert stayed forever and the game never reached its menu.
+
+The timer now mirrors the reference implementation:
+
+* `Alert`'s constructor installs the reference's `DISMISS_COMMAND` (removed
+  again as soon as the game adds a command, re-added when the list empties).
+* `Alert.setTimeout` validates like the reference (`t > 0` or `FOREVER == -2`,
+  otherwise `IllegalArgumentException`), and a forced-modal Alert (two or more
+  game commands) is not scheduled at all, which is what the reference does.
+* `Display.setCurrent(alert)` records the screen it replaces;
+  `Display.setCurrent(alert, next)` validates NPE/IAE like the reference.
+* At the frame boundary a current Alert whose deadline passed is dismissed
+  once: the game's `CommandListener` gets the left command if it installed
+  one, otherwise the display returns to the recorded previous screen.
+
+Verified: `test_lcdui` 3,108 assertions / 0 failed (was 2,889; new
+`test_alert_timeout` covers 499/500 ms boundaries, one-shot firing, the
+single-argument form, a deadline that expired while the Alert was hidden, the
+`CommandListener` path, forced-modal no-op behaviour, and the validation
+errors), `test_text_input` 1,023/0, sanitized build clean, full ctest 101/101.
+On the title, frame 300 is still the confirmation Alert, frame 450 is the main
+menu (`开始游戏 / 游戏设置 / 角色信息 / 创建角色 / 检查更新 / 推荐好友`) and
+frame 750 the game's own help submenu - the same stages as the reference
+screenshots; the remaining pixel differences are our built-in Alert skin and
+the device clock the title draws.
+
+Behaviour changes worth naming: the default Alert timeout is now
+`Alert.FOREVER` (ours was 2,000 ms), non-positive timeouts other than `FOREVER`
+throw, and a timeout set on a forced-modal Alert is ignored.  Texture of the
+built-in Alert frame (heading, countdown line) still differs cosmetically from
+the reference.
+
+Footprint: `nj_lib_lcdui.c` +1,627 B text and +32 B field data; the whole
+binary +2,024 B text; runtime RAM +4 B per Alert instance (one deadline), no
+heap, no new thread, no writable globals.
