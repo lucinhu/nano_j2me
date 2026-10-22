@@ -31,10 +31,28 @@
  *      count           u2
  *      per record:     u2 id, u2 length, length bytes
  *
+ * followed, optionally, by a trailer that older readers never look for:
+ *
+ *      "NJMT"          4 bytes   trailer tag
+ *      trailerVersion  u32        currently 1
+ *      lastModified    u64        epoch milliseconds of the last mutation
+ *
  * A file whose magic or version does not match is treated as absent rather
  * than as an error: losing one high-score table is better than refusing to
  * start the game, and a half-written file from a power cut is the realistic
  * way this happens on a phone.
+ *
+ * The trailer exists because RecordStore.getLastModified() has to answer with
+ * the time of the last *mutation*, not with the current time, and it has to
+ * survive a restart.  The records stay exactly where version 1 put them, so a
+ * build from before this trailer existed still reads (and rewrites) the store
+ * unchanged; if such a build rewrites it, the trailer is dropped and the
+ * timestamp falls back to "unknown" - the data, which is the part that must
+ * not be lost, is never touched.  A bare version 1 file is still read: the
+ * timestamp reported for it is the host file's modification time when the
+ * platform can stat the file, or 0 for "unknown" - never the current time,
+ * which would be a lie that games comparing it against the wall clock act on.
+ * The next mutation appends the trailer and the value becomes exact.
  *
  * ---------------------------------------------------------------------------
  * I/O
@@ -64,6 +82,18 @@
 #define NJ_RS_MAGIC2 'R'
 #define NJ_RS_MAGIC3 'S'
 #define NJ_RS_VERSION 1u
+/* Optional end-of-file trailer.  Version 1 records stay byte-for-byte what
+ * they were, so an older build can still read the file; it simply does not
+ * know the trailer is there. */
+#define NJ_RS_TRAILER0 'N'
+#define NJ_RS_TRAILER1 'J'
+#define NJ_RS_TRAILER2 'M'
+#define NJ_RS_TRAILER3 'T'
+#define NJ_RS_TRAILER_VERSION 1u
+#define NJ_RS_TRAILER_SIZE 16u   /* tag 4 + version 4 + timestamp 8 */
+/* The timestamp field.  It replaces the old rsModified boolean, which was
+ * written by every save and read by nobody. */
+#define NJ_F_RS_LASTMOD "rsLastModified"   /* J */
 
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                       */
@@ -113,6 +143,20 @@ static void rs_seti(nj_vm *vm, nj_ref rs, const char *name, nj_s4 v)
     }
     if (f) {
         nj_field_write_int(vm, rs, f, v);
+    }
+}
+
+static nj_s8 rs_getl(nj_vm *vm, nj_ref rs, const char *name)
+{
+    nj_field *f = rsf(vm, name, "J");
+    return f ? nj_field_read_long(vm, rs, f) : 0;
+}
+
+static void rs_setl(nj_vm *vm, nj_ref rs, const char *name, nj_s8 v)
+{
+    nj_field *f = rsf(vm, name, "J");
+    if (f) {
+        nj_field_write_long(vm, rs, f, v);
     }
 }
 
@@ -252,6 +296,7 @@ typedef struct rs_writer {
     FILE    *fp;        /* hosted fallback; the port's hooks win when present */
 #endif
     nj_u4    written;
+    int      failed;    /* a short write: the file is incomplete */
 } rs_writer;
 
 typedef struct rs_reader {
@@ -287,6 +332,28 @@ static void rs_path(nj_vm *vm, const char *name, char *out, nj_u4 cap)
     out[n] = '\0';
 }
 
+/*
+ * Modification time of a store file that predates the trailer, in epoch
+ * milliseconds.  This is a fallback, not a source of truth: it is only used
+ * when the file carries no trailer, and only for a host-backed file (rs_load
+ * returns 0 rather than calling this when the port supplies file hooks, since
+ * a port filesystem's names are not host paths).  A platform without stat()
+ * also gets 0, which means "unknown" - reporting the current time instead
+ * would make every old store look modified a moment ago.
+ */
+static nj_s8 rs_file_mtime_ms(const char *path)
+{
+#if NJ_USE_LIBC && !defined(_WIN32)
+    struct stat st;
+    if (stat(path, &st) == 0) {
+        return (nj_s8)st.st_mtime * 1000;
+    }
+#else
+    (void)path;
+#endif
+    return 0;
+}
+
 /* ---- writer ---- */
 static int w_open(nj_vm *vm, rs_writer *w, const char *path)
 {
@@ -307,17 +374,30 @@ static int w_open(nj_vm *vm, rs_writer *w, const char *path)
 #endif
 }
 
+/*
+ * Append bytes.  A port hook or the C library may accept only part of what it
+ * was given (or fail outright); that is recorded instead of being rounded up
+ * to success, so rs_save() can report the failure and keep the old timestamp.
+ */
 static void w_bytes(rs_writer *w, const void *p, nj_u4 n)
 {
+    if (w->failed || n == 0u) {
+        return;
+    }
     if (w->use_port) {
-        if (w->vm->port->file_write(w->vm->port->ud, &w->f, p, n) > 0) {
-            w->written += n;
+        nj_s4 put = w->vm->port->file_write(w->vm->port->ud, &w->f, p, n);
+        if (put < 0 || (nj_u4)put != n) {
+            w->failed = 1;
+            return;
         }
+        w->written += n;
     } else {
 #if NJ_USE_LIBC
-        if (fwrite(p, 1u, n, w->fp) == n) {
-            w->written += n;
+        if (fwrite(p, 1u, n, w->fp) != n) {
+            w->failed = 1;
+            return;
         }
+        w->written += n;
 #endif
     }
 }
@@ -330,17 +410,46 @@ static void w_u2(rs_writer *w, nj_u4 v)
     w_bytes(w, b, 2u);
 }
 
-static void w_close(rs_writer *w)
+static void w_u4(rs_writer *w, nj_u4 v)
 {
+    nj_u1 b[4];
+    b[0] = (nj_u1)((v >> 24) & 0xFFu);
+    b[1] = (nj_u1)((v >> 16) & 0xFFu);
+    b[2] = (nj_u1)((v >> 8) & 0xFFu);
+    b[3] = (nj_u1)(v & 0xFFu);
+    w_bytes(w, b, 4u);
+}
+
+static void w_u8(rs_writer *w, nj_s8 v)
+{
+    nj_u8 u = (nj_u8)v;
+    nj_u1 b[8];
+    int i;
+
+    for (i = 7; i >= 0; i--) {
+        b[i] = (nj_u1)(u & 0xFFu);
+        u >>= 8;
+    }
+    w_bytes(w, b, 8u);
+}
+
+/* Returns 1 when every byte reached the file and the handle closed cleanly. */
+static int w_close(rs_writer *w)
+{
+    int ok = !w->failed;
+
     if (w->use_port) {
         w->vm->port->file_close(w->vm->port->ud, &w->f);
     }
 #if NJ_USE_LIBC
     else if (w->fp) {
-        fclose(w->fp);
+        if (fclose(w->fp) != 0) {
+            ok = 0;
+        }
         w->fp = NULL;
     }
 #endif
+    return ok;
 }
 
 /* ---- reader ---- */
@@ -393,6 +502,70 @@ static nj_u4 r_u2(rs_reader *r)
     return ((nj_u4)b[0] << 8) | (nj_u4)b[1];
 }
 
+static int r_u4(rs_reader *r, nj_u4 *out)
+{
+    nj_u1 b[4];
+    if (r_bytes(r, b, 4u) != 4u) {
+        return 0;
+    }
+    *out = ((nj_u4)b[0] << 24) | ((nj_u4)b[1] << 16) |
+           ((nj_u4)b[2] << 8) | (nj_u4)b[3];
+    return 1;
+}
+
+static int r_u8(rs_reader *r, nj_s8 *out)
+{
+    nj_u1 b[8];
+    nj_u8 u = 0u;
+    int i;
+
+    if (r_bytes(r, b, 8u) != 8u) {
+        return 0;
+    }
+    for (i = 0; i < 8; i++) {
+        u = (u << 8) | (nj_u8)b[i];
+    }
+    *out = (nj_s8)u;
+    return 1;
+}
+
+/*
+ * Read the optional trailer at the end of the records.
+ *
+ * Accepted only when the remaining bytes are exactly one 16-byte version 1
+ * trailer.  An unknown tag or version, a short tail, or any bytes after the
+ * trailer each mean "no trailer here", and the caller falls back to the file's
+ * modification time.  That strictness is what makes it safe for a future
+ * trailer version to reuse the tag: an old reader will ignore it rather than
+ * misinterpret it.
+ */
+static int r_trailer(rs_reader *r, nj_s8 *ts)
+{
+    nj_u1 tag[4];
+    nj_u4 version;
+    nj_s8 value;
+    nj_u1 extra;
+
+    if (r_bytes(r, tag, 4u) != 4u) {
+        return 0;
+    }
+    if (tag[0] != NJ_RS_TRAILER0 || tag[1] != NJ_RS_TRAILER1 ||
+        tag[2] != NJ_RS_TRAILER2 || tag[3] != NJ_RS_TRAILER3) {
+        return 0;
+    }
+    if (!r_u4(r, &version) || version != NJ_RS_TRAILER_VERSION) {
+        return 0;
+    }
+    if (!r_u8(r, &value)) {
+        return 0;
+    }
+    if (r_bytes(r, &extra, 1u) != 0u) {
+        return 0;   /* trailing bytes: not a trailer this reader knows */
+    }
+    *ts = value;
+    return 1;
+}
+
 static void r_close(rs_reader *r)
 {
     if (r->use_port) {
@@ -411,11 +584,23 @@ static void r_close(rs_reader *r)
  *
  * The whole file is rewritten on every modification.  A high-score table is a
  * few hundred bytes and a title saves on level completion, not per frame, so
- * the simplicity is worth far more than an append-only scheme would be - and
- * a rewrite cannot leave a torn record behind if it is interrupted, because
- * the file is either the old one or the new one.
+ * the simplicity is worth far more than an append-only scheme would be.  This
+ * is NOT an atomic rewrite: w_open() truncates the existing file before the
+ * new bytes are written, so a crash or a full disk can leave a partial file
+ * (the loader treats an unreadable file as an empty store rather than refusing
+ * to start).  What this function does guarantee is narrower and was the bug
+ * the trailer started as: the in-memory timestamp is only published after the
+ * write actually succeeded, so a failed mutation cannot make a store look
+ * modified.
+ *
+ * `mutated` says whether this save follows a change (create, add, set, delete)
+ * or is just closeRecordStore() flushing.  Only a change advances the
+ * lastModified timestamp: closing a store must not make it look modified.  The
+ * trailer is omitted when the timestamp is unknown (0), so an untouched
+ * version 1 store stays a bare version 1 file until something actually
+ * changes.
  */
-static nj_status rs_save(nj_vm *vm, nj_ref rs)
+static nj_status rs_save(nj_vm *vm, nj_ref rs, int mutated)
 {
     nj_ref name = rs_get(vm, rs, NJ_F_RS_NAME, "Ljava/lang/String;");
     nj_ref recs = rs_get(vm, rs, NJ_F_RS_RECORDS, "Ljava/util/Vector;");
@@ -424,6 +609,7 @@ static nj_status rs_save(nj_vm *vm, nj_ref rs)
     char path[320];
     rs_writer w;
     nj_s4 n, i;
+    nj_s8 ts;
 
     if (!name || !recs || !ids) {
         return NJ_ERR;
@@ -432,6 +618,11 @@ static nj_status rs_save(nj_vm *vm, nj_ref rs)
         return NJ_ERR;
     }
     rs_path(vm, nbuf, path, (nj_u4)sizeof(path));
+
+    /* Read the old value, or the mutation time, but do not publish the new
+     * time yet: if the write below fails, the store was not modified and its
+     * lastModified must stay what it was. */
+    ts = mutated ? nj_now_ms(vm) : rs_getl(vm, rs, NJ_F_RS_LASTMOD);
 
     if (!w_open(vm, &w, path)) {
         return nj_throw(vm, "javax/microedition/rms/RecordStoreException",
@@ -464,9 +655,22 @@ static nj_status rs_save(nj_vm *vm, nj_ref rs)
             w_bytes(&w, rec->u.bytes, len);
         }
     }
-    w_close(&w);
 
-    rs_seti(vm, rs, NJ_F_RS_MODIFIED, 1);
+    if (ts != 0) {
+        nj_u1 tag[4];
+        tag[0] = NJ_RS_TRAILER0; tag[1] = NJ_RS_TRAILER1;
+        tag[2] = NJ_RS_TRAILER2; tag[3] = NJ_RS_TRAILER3;
+        w_bytes(&w, tag, 4u);
+        w_u4(&w, NJ_RS_TRAILER_VERSION);
+        w_u8(&w, ts);
+    }
+    if (!w_close(&w)) {
+        return nj_throw(vm, "javax/microedition/rms/RecordStoreException",
+                        "cannot write the record store file");
+    }
+    if (mutated) {
+        rs_setl(vm, rs, NJ_F_RS_LASTMOD, ts);
+    }
     return NJ_OK;
 }
 
@@ -482,6 +686,8 @@ static void rs_load(nj_vm *vm, nj_ref rs)
     rs_reader r;
     nj_u1 magic[4];
     nj_u4 version, next_id, count, i;
+    nj_s8 last_modified = 0;
+    int parsed_all, has_trailer = 0;
 
     if (!name || !recs || !ids) {
         return;
@@ -536,7 +742,23 @@ static void rs_load(nj_vm *vm, nj_ref rs)
             break;
         }
     }
+    parsed_all = (i == count);
+    if (parsed_all && r_trailer(&r, &last_modified)) {
+        has_trailer = 1;
+    }
     r_close(&r);
+
+    if (!has_trailer) {
+        /* A version 1 file from before the trailer existed.  Its records are
+         * still good; only the timestamp is unknown.  The file's mtime is the
+         * closest honest answer a hosted platform has.  With a port filesystem
+         * (a SPIFFS partition, a virtual filesystem with its own name space)
+         * there is no metadata hook, so report 0 = "unknown" instead of
+         * guessing from a host path that may not mean the same file. */
+        last_modified = (vm->port && vm->port->file_open)
+                      ? 0 : rs_file_mtime_ms(path);
+    }
+    rs_setl(vm, rs, NJ_F_RS_LASTMOD, last_modified);
 
     if (next_id == 0u || next_id == 0xFFFFu) {
         next_id = 1u;
@@ -623,7 +845,7 @@ static nj_ref rs_open_common(nj_vm *vm, nj_ref name, int create_if_missing)
     if (exists) {
         rs_load(vm, rs);
     } else {
-        (void)rs_save(vm, rs);   /* create the file eagerly, so it persists */
+        (void)rs_save(vm, rs, 1); /* create the file eagerly, so it persists */
         nj_clear_exception(vm);
     }
     return rs;
@@ -748,7 +970,7 @@ NJFN(rs_close)
         return nj_throw(vm, "javax/microedition/rms/RecordStoreNotOpenException",
                         NULL);
     }
-    if (rs_save(vm, rs) != NJ_OK) {
+    if (rs_save(vm, rs, 0) != NJ_OK) {
         return NJ_ERR;
     }
     rs_seti(vm, rs, NJ_F_RS_OPEN, 0);
@@ -809,7 +1031,13 @@ NJFN(rs_getSizeAvailable)
 
 NJFN(rs_getLastModified)
 {
-    ret->i = (nj_s4)(nj_now_ms(vm) & 0x7FFFFFFF);
+    nj_ref rs = NJ_THIS(args);
+
+    if (!rs_is_open(vm, rs)) {
+        return nj_throw(vm, "javax/microedition/rms/RecordStoreNotOpenException",
+                        NULL);
+    }
+    ret->j = rs_getl(vm, rs, NJ_F_RS_LASTMOD);
     return NJ_OK;
 }
 
@@ -871,7 +1099,7 @@ static nj_s4 rs_do_add(nj_vm *vm, nj_ref rs, nj_ref data, nj_s4 off, nj_s4 len)
     if (!ido || !vec_add(vm, recs, copy) || !vec_add(vm, ids, ido)) {
         return nj_throw_oom(vm);
     }
-    if (rs_save(vm, rs) != NJ_OK) {
+    if (rs_save(vm, rs, 1) != NJ_OK) {
         return NJ_ERR;
     }
     return id;
@@ -1027,7 +1255,7 @@ NJFN(rs_setRecord)
             return NJ_ERR;
         }
     }
-    return rs_save(vm, rs);
+    return rs_save(vm, rs, 1);
 }
 
 NJFN(rs_deleteRecord)
@@ -1049,7 +1277,7 @@ NJFN(rs_deleteRecord)
     if (!vec_del(vm, recs, idx) || !vec_del(vm, ids, idx)) {
         return NJ_ERR;
     }
-    return rs_save(vm, rs);
+    return rs_save(vm, rs, 1);
 }
 
 NJFN(rs_listNames)
@@ -1446,8 +1674,15 @@ static const nj_builtin_field recordstore_fields[] = {
     FLD(NJ_F_RS_IDS,      "Ljava/util/Vector;",  0),
     FLD(NJ_F_RS_NEXTID,   "I",                   0),
     FLD(NJ_F_RS_OPEN,     "Z",                   0),
-    FLD(NJ_F_RS_MODIFIED, "Z",                   0),
-    FLD("rsMode",         "I",                   0),
+    /* Neither access mode ever leaves 0/1 (openRecordStore's authmode and
+     * setMode() are both validated against the two constants), and the class
+     * library reads and writes them through rs_geti/rs_seti, which try "I"
+     * then "Z".  Keeping the two one-byte fields together puts the long on
+     * the same 8-byte boundary it needs and the int-sized hole that used to
+     * follow rsOpen is reused: the instance stays at its pre-timestamp size
+     * instead of growing by a whole 16-byte-aligned slot for one value. */
+    FLD("rsMode",         "Z",                   0),
+    FLD(NJ_F_RS_LASTMOD,  "J",                   0),
     /* The two access modes setMode() accepts. */
     FLD("AUTHMODE_PRIVATE", "I", NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("AUTHMODE_ANY",     "I", NJ_ACC_STATIC | NJ_ACC_FINAL)
@@ -1473,7 +1708,7 @@ static const nj_builtin_method recordstore_methods[] = {
     M("getSize",           "()I", 0),
     M("getSizeAvailable",  "()I", 0),
     M("getNextRecordID",   "()I", 0),
-    M("getLastModified",   "()I", 0),
+    M("getLastModified",   "()J", 0),
     M("getVersion",        "()I", 0),
     M("getRecordSize",     "(I)I", 0),
     M("addRecord",         "([BII)I", 0),
@@ -1590,7 +1825,7 @@ const nj_native_entry nj_lib_rms_table[] = {
     { NJ_C_RECORDSTORE, "getSize",         "()I", rs_getSize },
     { NJ_C_RECORDSTORE, "getSizeAvailable","()I", rs_getSizeAvailable },
     { NJ_C_RECORDSTORE, "getNextRecordID", "()I", rs_getNextRecordID },
-    { NJ_C_RECORDSTORE, "getLastModified", "()I", rs_getLastModified },
+    { NJ_C_RECORDSTORE, "getLastModified", "()J", rs_getLastModified },
     { NJ_C_RECORDSTORE, "getVersion",      "()I", rs_getVersion },
     { NJ_C_RECORDSTORE, "getRecordSize",   "(I)I", rs_getRecordSize },
     { NJ_C_RECORDSTORE, "addRecord",       "([BII)I", rs_addRecord },

@@ -557,7 +557,7 @@ CLASSES = {
             "public int getSizeAvailable() throws javax.microedition.rms.RecordStoreNotOpenException",
             "public int getRecordSize(int) throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreException",
             "public int getNextRecordID() throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreException",
-            "public int getLastModified() throws javax.microedition.rms.RecordStoreNotOpenException",
+            "public long getLastModified() throws javax.microedition.rms.RecordStoreNotOpenException",
             "public int getVersion() throws javax.microedition.rms.RecordStoreNotOpenException",
             "public int addRecord(byte[], int, int) throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreFullException, javax.microedition.rms.RecordStoreException",
             "public int addRecord(byte[], int, int, int) throws javax.microedition.rms.RecordStoreNotOpenException, javax.microedition.rms.RecordStoreFullException, javax.microedition.rms.RecordStoreException",

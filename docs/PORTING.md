@@ -24,12 +24,20 @@ gracefully when left `NULL`.
 | `alloc` / `free` | host memory | `malloc`/`free` |
 | `idle` | let the RTOS breathe | no-op |
 | `sleep_ms` | block for a while | `idle` |
-| `now` | wall-clock date and time | Java epoch |
+| `now` | wall-clock date and time; anchors Java milliseconds once at VM creation | unanchored monotonic time; no valid epoch guarantee |
 | `file_*` | RecordStore persistence | C library I/O |
 | `app_blob` | a JAR flashed into a partition | nothing |
 | `tone_play` / `tone_stop` | `Player` tones | silence |
 | `vibrate` | `Display.vibrate()` | no-op |
 | `shutdown` | release port-owned state | nothing |
+
+RecordStore writes an optional 16-byte `NJMT` timestamp trailer after its v1
+records. New stores and successful mutations retain `getLastModified()` across
+VM restarts without a filesystem metadata hook. A legacy file without that
+trailer reports **0 (unknown)** through `file_*`, since this callback interface
+has no stat/mtime operation; the direct libc fallback can use host mtime. Supply
+`now` for epoch-based timestamps, and make `file_write` report the actual byte
+count: short/failed writes are errors, not a successful saved mutation.
 
 ### Two pointers, two jobs
 

@@ -1076,7 +1076,7 @@ nj_add_test(test_clip tests/test_clip.c)
   endif()
 
   foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib
-                      test_ioapi test_resolution test_sax)
+                      test_ioapi test_resolution test_sax test_rms)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${extra_test}.c)
       nj_add_test(${extra_test} tests/${extra_test}.c)
     endif()
