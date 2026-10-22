@@ -2093,8 +2093,9 @@ oversized chunk. A hardening or fuzzing build can restore the fatal check with
 
 Verified on the title, same keys and 1,200 frames: pre-fix build 80 CRC
 mismatches + 80 decode failures + 80 null-image NPEs; fixed build 0/0/0, with
-`paints=1198` in both and frame 300 matching the reference at a mean channel
-difference of 4.7/255 (97.6% of pixels within 16). `tests/test_png.c` builds a
+`paints=1197-1198` in both (frame-boundary variance) and frame 300 matching
+the reference at a mean channel difference of 3.56/255 (99.1% of channel bytes
+within 16). `tests/test_png.c` builds a
 synthetic palette PNG in memory, patches its `PLTE` payload, and asserts both
 that the patched file decodes with the patched colours and that truncated,
 out-of-bounds and otherwise malformed files are still rejected (14 checks).
@@ -2103,6 +2104,12 @@ The title still stops advancing around frame 300 with zero decode exceptions:
 the board is drawn and the game then waits on a page transition/input timing
 path that the generic key script does not drive. That is a separate open item,
 not a decoder failure. Footprint: compile-time only, nothing is allocated and
-there are no new globals or stack use; the `nj_png.o` text segment gets 239
-bytes *smaller* because the default build compiles the strict check out
-(`-DNJ_PNG_STRICT_CRC=1` restores it).
+there are no new globals or stack use; the `nj_png.c.o` object is 1,071 bytes
+*smaller* on the Release flags because the default compiles the strict check
+out (`-DNJ_PNG_STRICT_CRC=1` restores it).
+
+This accepts what the reference accepts, nothing more: a stale CRC on a
+chunk whose payload we read (PLTE, tRNS) can deliver corrupted palette bytes
+and plausible-looking wrong colours, while corruption inside IDAT is still
+caught by the zlib and scanline checks. That is Java parity by design, and a
+hardening build restores the fatal check.

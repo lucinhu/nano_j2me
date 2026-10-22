@@ -16,8 +16,9 @@
  * colours, and the structural checks (bounds, chunk order, IEND, inflate
  * errors) must still reject genuinely malformed input.
  *
- * A strict build (cc -DNJ_PNG_STRICT_CRC=1) makes the stale-CRC file fail
- * again; that is a hardening knob, not the shipping default.
+ * A strict build (-DNJ_PNG_STRICT_CRC=1, passed through CMAKE_C_FLAGS) makes
+ * the stale-CRC file fail again; the stale-CRC check below is compiled for the
+ * policy the build selected, so a strict-build ctest run still passes.
  */
 
 #include "nj2me/nj.h"
@@ -210,6 +211,10 @@ int main(void)
 
     err = NULL;
     img = nj_png_decode(patched, off.len, NULL, NULL, NULL, &err);
+#if defined(NJ_PNG_STRICT_CRC) && NJ_PNG_STRICT_CRC
+    check(img == NULL && err != NULL,
+          "a strict build rejects the stale PLTE CRC");
+#else
     check(img != NULL,
           "a palette-patched PNG with a stale CRC still decodes (Java parity)");
     if (img != NULL) {
@@ -219,6 +224,7 @@ int main(void)
               "the patched palette colours are the ones that reach the pixels");
         nj_image_free(img, NULL, NULL);
     }
+#endif
 
     /* 3. structure is still enforced */
     err = NULL;
