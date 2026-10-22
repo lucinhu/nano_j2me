@@ -1787,13 +1787,15 @@ sink), interleaved A/B, 6 runs per arm, CPU 2, child CPU time from
 
 | arm | min CPU | median CPU |
 | --- | --- | --- |
-| `NJ_ENABLE_HOT_FIELDS=0` | 1.1493 s | 1.1508 s |
-| default (memo) | 0.4105 s | 0.4115 s |
+| `NJ_ENABLE_HOT_FIELDS=0` | 0.9686 s | 0.9742 s |
+| default (memo) | 0.4049 s | 0.4110 s |
 
-That is a 64.28% / 64.24% reduction with identical work — bytecodes
-92,006,066, natives 16,001,501 and the printed sink are the same in both
-arms — and the per-phase numbers fall together (write 112 -> 39 ms, range
-30 -> 12 ms, read 1,002 -> 354 ms).
+That is a 58.20% / 57.81% reduction with identical work — bytecodes
+92,006,066, natives 16,001,501, heap 9,344,752/9,344,752 and the printed sink
+are the same in all 24 runs.  (The first measurement of this change quoted
+64.28%; its macro-off arm had been built before the change landed and was not
+source-identical.  The table above is an independent rerun from two clean
+builds of the same commit, 12 interleaved runs per arm.)
 
 A paced real game agrees in direction but is only indicative, because its
 timing-dependent state means the two arms do slightly different work: a
@@ -1813,8 +1815,9 @@ profile still showed 2.7 million class resolutions, now almost all from
 `DataOutputStream.written`, which the data-stream natives read on every
 element.  With those three memoised (`NJ_HF_DIS_IN`, `NJ_HF_DOS_OUT`,
 `NJ_HF_DOS_WRITTEN`) the deterministic I/O fixture falls a further 11.73% /
-11.85% (min / median CPU, 4 runs per arm) from 0.4135/0.4144 s to
-0.3650/0.3654 s, bytecodes and sink again identical - 68.2% below the
-`NJ_ENABLE_HOT_FIELDS=0` arm for the same work.  The eleven slots cost 88 B
+11.85% (min / median CPU, 4 runs per arm, previous commit as the control)
+from 0.4135/0.4144 s to 0.3650/0.3654 s, bytecodes and sink again identical;
+together the two changes put the fixture roughly 63% below the
+`NJ_ENABLE_HOT_FIELDS=0` arm.  The eleven slots cost 88 B
 per VM (`nj_vm_sizeof()` 10,896 on x86-64), still with no allocation and no
 writable globals, and `NJ_ENABLE_HOT_FIELDS=0` still restores 10,808 B.
