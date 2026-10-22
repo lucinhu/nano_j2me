@@ -798,14 +798,22 @@ static nj_class *class_resolve_from_source(nj_vm *vm, const char *internal_name)
         return array_class(vm, internal_name);
     }
 
-    normalise_name(internal_name, buf, (nj_u4)sizeof(buf));
-    c = nj_class_find(vm, buf);
+    /* Ask nj_class_find with the CALLER's pointer first.  Its fast path is
+     * keyed on the address of the name, and the hot callers pass string
+     * literals ("java/io/ByteArrayInputStream" once per stream read), so they
+     * hit it.  Normalising into a stack buffer before the lookup threw that
+     * identity away: every such call then walked the class hash instead, which
+     * a Micro3D title's asset loader pays millions of times.  nj_class_find
+     * normalises internally and validates the hit with strcmp, so a dotted
+     * name or a reused stack buffer still gets a correct answer. */
+    c = nj_class_find(vm, internal_name);
     if (c) {
         return c;
     }
     if (!vm->source || !vm->source->load) {
         return NULL;
     }
+    normalise_name(internal_name, buf, (nj_u4)sizeof(buf));
     {
         nj_u1 *bytes = NULL;
         nj_u4 len = 0u;

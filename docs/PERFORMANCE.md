@@ -1647,3 +1647,50 @@ the level, not in its menu) went from 1.535 s to 1.202 s, 1.28x.  A 6000-frame
 A/B of `仙魔飞行棋_417` first read as a 19% regression and turned out to be the
 two runs reaching different scenes: repeated at 1500 frames it is 1.03x-1.05x,
 which is why the table above uses one frame budget for both sides.
+
+## The class-name cache that was never being hit (round 2, 2026-10-22)
+
+`nj_class_find` has a pointer-keyed fast path: the hot callers pass string
+literals ("java/io/ByteArrayInputStream" once per stream read), the same
+address arrives again and again, and a hit costs one pointer compare and one
+`strcmp` instead of a normalising copy, a hash and a bucket walk.  The cache
+was there, correct, and *never used by the one path that needed it most*:
+`class_resolve_from_source` normalised `internal_name` into a **stack**
+buffer and looked that up.  Every resolution therefore arrived at the same
+stack address, and one slot can only answer for one name at a time - an asset
+loader alternating `ByteArrayInputStream` and `ByteArrayOutputStream` evicted
+it on every call, so all of those lookups walked the class hash instead.
+
+The fix is to ask `nj_class_find` with the caller's own pointer first.
+`nj_class_find` normalises dotted names internally and validates every hit
+with `strcmp`, so a dotted name or a reused stack buffer still takes the slow
+path and gets the same answer; only the pointer identity of a literal is
+trusted, and only for a name that `strcmp` agrees with.
+
+What it is worth, on a workload built to be exactly reproducible
+(`IoBench`, `2,000,000` `ByteArrayOutputStream.write(int)`, `500,000`
+`write(byte[],0,4)` and three passes of `2,000,000` `ByteArrayInputStream.read()`
+plus `500,000` `DataInputStream.readInt()`): 92,006,066 bytecodes and
+16,001,501 natives, the same sink and the same bytecode count in both arms, so
+the two sides do identical work.  Five interleaved runs per arm on one core,
+CPU time of the process:
+
+| arm | min | median | reduction |
+| --- | ---: | ---: | ---: |
+| before | 1.9299 s | 1.9320 s | - |
+| after | 0.9918 s | 0.9972 s | 48.61% min, 48.39% median |
+
+On a real title the share is smaller because it also interprets and renders:
+`鬼泣3D中文版_3376` at 30 fps for 600 frames with the same key script went
+from 0.7345-0.8812 s of CPU to 0.6390-0.7187 s, which is 103.6 -> 84.1 ms of
+CPU per million bytecodes (about 19%).  That one is *indicative, not
+controlled*: the two arms did not do identical work - the slower arm was still
+loading when the faster one was fighting (`tris` 23,924-40,486 against a
+consistent ~40,000) - so the reproducible fixture above is the number to
+believe.
+
+No measurable cost, and no new state: the cache slots are the same ones that
+were already there, and `bench.jar` is unchanged (sum `-136042548`,
+70,514,376 bytecodes, heap 92,432/92,432).  99/99 ctest and all
+27 superinstruction-digest values pass.  The change is in
+`src/core/nj_class.c` and is three lines plus a comment.

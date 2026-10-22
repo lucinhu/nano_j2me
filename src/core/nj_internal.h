@@ -309,7 +309,10 @@ typedef struct nj_codec_reg {
 
 /* Slots in nj_class_find's pointer-keyed cache.  Four is enough to hold the
  * handful of names the library asks for once per call (every String creation,
- * every stream read); see the comment in nj_class_find for why it is safe. */
+ * every stream read); see the comment in nj_class_find for why it is safe.
+ * class_resolve_from_source hands nj_class_find the caller's own pointer, so a
+ * literal name hits this; it used to pass a normalised copy on the stack,
+ * which could only ever answer for one name. */
 #define NJ_CLASS_FIND_SLOTS 4
 
 /* Reasons a constant-pool entry failed to resolve. */
