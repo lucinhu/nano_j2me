@@ -350,6 +350,90 @@ script) gives 9 caught throws, 0 uncaught, 142 colours in frame 900 and a
 superinstr-off, and that title's own run-to-run spread (17-79 M bytecodes and
 5-12 k gfx calls on the SAME binary) is its timing dependence, not the switches.
 
+## Seven more fused pairs, and a peek that had to be merged
+
+    round-1 tip (2a6292e)         min 0.168 s   med 0.170 s
+    + seven fused pairs           min 0.169 s   med 0.171 s
+    + one peek per load instead   min 0.165 s   med 0.167 s
+    call/loop microbenchmark      0.612 / 0.615  ->  0.589 / 0.593
+
+Fourteen interleaved runs per arm, pinned to one core, minimum and median.  The
+middle line is why this section exists: the folds were correct, and the fixture
+still got *slower*, because of how they were written rather than what they do.
+
+### The folds
+
+Each one peeks at the next opcode inside the host handler, executes both
+instructions and dispatches once.  No bytecode is rewritten, so a branch onto
+either half still does the right thing, and the fused path's peak stack depth
+never exceeds the unfused one, so `stack_limit` stays valid.
+
+| fused sequence | why | dynamic share (title) |
+|---|---|---|
+| `aload_0; getfield` | receiver loaded and consumed immediately | 9.93% dark, 6.29% 1942, 5.14% 1945 |
+| `iload`/`iload_k; iaload..saload` | array element read | 4.37% 1942 (`iload; caload`), 3.50% 1945 (`iload_2; aaload`) |
+| `iinc; iload_k` (same slot) | counter read back right after it is bumped | 3.54% 1945 |
+| `iinc; goto` | loop tail | 1.43% fixture |
+| `iadd; istore_k` | accumulate into a local | 2.85% fixture |
+| `lcmp; if<cond>` | long compare and branch | 9.84% dark |
+| `getfield(int); i2l; lcmp; if<cond>` | the whole compare chain in one dispatch | 9.84% dark |
+
+The last two overlap on purpose.  The dark title's hot loop is
+`aload_0; getfield; i2l; lcmp; ifge; goto`; when the `aload_0` fold runs first,
+the chain fold still sees its `getfield` already consumed and folds the
+remaining four, so the loop head becomes one dispatch instead of five.  That is
+what makes the title's 600-frame bytecode total fall from 1.06-1.21 G to
+0.68-0.75 G.
+
+**A real-game bytecode total is not a measurement.**  The same binary on the
+same title with the same frame count produces 8.3 M and 22.4 M bytecodes on two
+30-frame runs, because the game branches on wall-clock timing; a pass over six
+titles found none that reproduces its own bytecode count.  The totals above are
+reported as what they are - evidence that the folds fire, not a speed claim.
+
+### The peek is paid on every execution, not only when the fold fires
+
+The first version of the load folds tested the branch case first and the array
+case second, each with its own `pc < code_len` test and its own read of
+`code[pc]`.  On the fixture that cost more than the folds saved: `iload_3` is
+10% of the fixture's instructions and almost never feeds an array load or a
+branch on a loaded value, so the peek was paid millions of times to fold
+nothing.  One read of `code[pc]` and two range tests turned the same folds into
+a win.
+
+### Two more bugs, and the test that caught the second only after it grew a witness
+
+**The constant-pool index was read twice.**  `NJ_GETFIELD_BODY(U2(), ...)`
+evaluated its index expression twice, and `U2()` advances `pc`, so the second
+read resolved a different constant-pool entry; the title that exercised the fold
+died with `NoClassDefFoundError`.
+
+**The chain fold left the operand stack two slots low.**  It decremented `sp`
+once more after reading the pair it had just popped, so every later instruction
+in the method worked against a stack pointer that pointed below the real top.
+The title crashed with SIGSEGV inside `nj_interp_run` (exit 139).  The digest
+test passed, because every method in it returned as soon as it had produced its
+value, and the corrupted stack was never read again.  What gives this bug a
+witness is a `ch_loop` category - a loop that keeps using the stack after the
+chain - plus the negative control: re-adding the extra `sp -= 2` makes three of
+the fourteen digests differ while `BENCH sum` still prints the expected value.
+The digest test now covers thirteen categories (int branches, null branches,
+store/load, const+arith, div/rem by zero, long/float, the round-2 families,
+`ch_loop`, null receivers) and compares fourteen values against a desktop JVM.
+
+### Switches, RAM, verification
+
+    NJ_ENABLE_SUPERINSTR=0   still builds, still passes the digest test, and
+                             prints the pre-fusion 112,117,067 bytecodes
+
+No writable static and no heap allocation: `.bss` is byte-identical (6,688 B),
+flash grows by 4,504 B of text and 1,056 B of read-only data, and
+`tools/check_no_statics.sh` passes over the same 57 objects.  ctest is 92/92 in
+this tree (90 before an unrelated workstream added two tests).  The eight-title
+game set reports every title's pixel sequence identical and 0 FAIL; three titles
+carry a WARN on stats fields (`paints`, `gfx`, `natives`) that move with
+real-time pacing, and the same-binary controls show the same spread.
+
 ## Replicated dispatch: measured again properly, about 8%
 
 The earlier "~10%" was measured with a dispatch table that turned out to be

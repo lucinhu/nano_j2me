@@ -408,41 +408,64 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
      (BOP) == 0x9cu ? ((V) >= 0) :                                        \
      (BOP) == 0x9du ? ((V) > 0) : ((V) <= 0))
 
-#define NJ_LOAD_BRANCH_INT(V)                                             \
+/* Names are prefixed because the caller's value is often called v_/r_ too:
+ * `nj_s4 v_ = (V)` with V == v_ would initialise the new v_ from ITSELF (its
+ * scope starts at its declarator), not from the caller's value.
+ *
+ * The BODY macros assume the peeked opcode and its operands have already been
+ * range-checked; the FUSE macros do one peek and dispatch to them, so a hot
+ * handler pays for one load of code[pc] instead of one per candidate. */
+#define NJ_BRANCH_INT_BODY(V)                                             \
     {                                                                     \
-        if (pc + 3u <= code_len && code[pc] >= 0x99u &&                   \
-            code[pc] <= 0x9eu) {                                          \
-            /* Names are prefixed because the caller's value is often called \
-             * v_/r_ too: `nj_s4 v_ = (V)` with V == v_ would initialise the \
-             * new v_ from ITSELF (its scope starts at its declarator), not \
-             * from the caller's value. */                                 \
-            nj_u4 njlb_pc_ = pc;                                          \
-            nj_s4 njlb_v_ = (V);                                          \
-            nj_u1 njlb_op_ = code[pc++];                                  \
-            nj_s2 njlb_off_ = S2();                                       \
-            if (NJ_INT_BRANCH_TAKEN(njlb_op_, njlb_v_)) {                 \
-                pc = (nj_u4)(nj_s4)((nj_s4)njlb_pc_ + njlb_off_);         \
-                JUMP_THREAD();                                            \
+        nj_u4 njlb_pc_ = pc;                                              \
+        nj_s4 njlb_v_ = (V);                                              \
+        nj_u1 njlb_op_ = code[pc++];                                      \
+        nj_s2 njlb_off_ = S2();                                           \
+        if (NJ_INT_BRANCH_TAKEN(njlb_op_, njlb_v_)) {                     \
+            pc = (nj_u4)(nj_s4)((nj_s4)njlb_pc_ + njlb_off_);             \
+            JUMP_THREAD();                                                \
+        }                                                                 \
+        DISPATCH();                                                       \
+    }
+
+#define NJ_ILOAD_FUSE(V)                                                  \
+    {                                                                     \
+        if (pc < code_len) {                                              \
+            nj_u1 njlf_nx_ = code[pc];                                    \
+            if ((nj_u1)(njlf_nx_ - 0x99u) <= 5u &&                        \
+                pc + 3u <= code_len) {                                    \
+                NJ_BRANCH_INT_BODY(V);                                    \
+            } else if ((nj_u1)(njlf_nx_ - 0x2eu) <= 7u) {                 \
+                NJ_ARRAY_LOAD_BODY(V);                                    \
             }                                                             \
-            DISPATCH();                                                   \
         }                                                                 \
     }
 
 /* `aload*; ifnull/ifnonnull` - same shape, on a reference. */
-#define NJ_LOAD_BRANCH_REF(V)                                             \
+#define NJ_BRANCH_REF_BODY(V)                                             \
     {                                                                     \
-        if (pc + 3u <= code_len &&                                        \
-            (code[pc] == 0xc6u || code[pc] == 0xc7u)) {                   \
-            nj_u4 njlb_pc_ = pc;                                          \
-            nj_ref njlb_r_ = (V);                                         \
-            nj_u1 njlb_op_ = code[pc++];                                  \
-            nj_s2 njlb_off_ = S2();                                       \
-            if ((njlb_op_ == 0xc6u) ? (njlb_r_ == NULL)                   \
-                                    : (njlb_r_ != NULL)) {                \
-                pc = (nj_u4)(nj_s4)((nj_s4)njlb_pc_ + njlb_off_);         \
-                JUMP_THREAD();                                            \
+        nj_u4 njlb_pc_ = pc;                                              \
+        nj_ref njlb_r_ = (V);                                             \
+        nj_u1 njlb_op_ = code[pc++];                                      \
+        nj_s2 njlb_off_ = S2();                                           \
+        if ((njlb_op_ == 0xc6u) ? (njlb_r_ == NULL)                       \
+                                : (njlb_r_ != NULL)) {                    \
+            pc = (nj_u4)(nj_s4)((nj_s4)njlb_pc_ + njlb_off_);             \
+            JUMP_THREAD();                                                \
+        }                                                                 \
+        DISPATCH();                                                       \
+    }
+
+#define NJ_ALOAD_FUSE(R)                                                  \
+    {                                                                     \
+        if (pc < code_len) {                                              \
+            nj_u1 njlf_nx_ = code[pc];                                    \
+            if ((njlf_nx_ == 0xc6u || njlf_nx_ == 0xc7u) &&               \
+                pc + 3u <= code_len) {                                    \
+                NJ_BRANCH_REF_BODY(R);                                    \
+            } else if (njlf_nx_ == 0xb4u && op == 0x2au) {                \
+                NJ_ALOAD0_GETFIELD_BODY(R);                               \
             }                                                             \
-            DISPATCH();                                                   \
         }                                                                 \
     }
 
@@ -461,7 +484,276 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
             DISPATCH();                                                   \
         }                                                                 \
     }
+
+/*
+ * ROUND 2 fusions.
+ *
+ * Every one of these keeps the exact semantics of the two (or four)
+ * instructions it replaces: the operand stack after the fused sequence is the
+ * same, the same exceptions are thrown at the same pc, and the local writes
+ * still happen (native code and debuggers can read a frame's locals at any
+ * safepoint).  Only the dispatch in the middle disappears.
+ *
+ * All of them are bare blocks for the same reason as the round 1 folds:
+ * DISPATCH() is `continue` in the portable build, and a do/while would
+ * capture it.  Macro-internal names are prefixed because an initialiser that
+ * shadows the caller's variable silently reads itself.
+ */
+
+/* `iload*; <array load>` - the index is consumed by the array load, so it is
+ * never pushed.  ARRAY_HEAD's checks are repeated here in njla_ form rather
+ * than reused, because that macro names its temporaries idx_/arr_ and would
+ * collide with the caller's value if the caller ever used those names. */
+#define NJ_ARRAY_LOAD_BODY(V)                                             \
+    {                                                                     \
+        {                                                                 \
+            nj_u1 njla_op_ = code[pc++];                                  \
+            nj_s4 njla_idx_ = (V);                                        \
+            nj_ref njla_arr_ = (--sp)->r;                                 \
+            if (!njla_arr_) {                                             \
+                THROW("java/lang/NullPointerException", NULL);            \
+            }                                                             \
+            if (njla_arr_->kind != NJ_OBJ_ARRAY ||                        \
+                (nj_u4)njla_idx_ >= njla_arr_->length) {                  \
+                THROW("java/lang/ArrayIndexOutOfBoundsException", NULL);  \
+            }                                                             \
+            switch (njla_op_) {                                           \
+            case 0x2e:                                                    \
+                sp->i = nj_array_get_int(njla_arr_, (nj_u4)njla_idx_);    \
+                sp++;                                                     \
+                break;                                                    \
+            case 0x2f:                                                    \
+                PUSH_W(((nj_s8 *)njla_arr_->u.bytes)[njla_idx_]);         \
+                break;                                                    \
+            case 0x30:                                                    \
+                sp->f = ((float *)njla_arr_->u.bytes)[njla_idx_];         \
+                sp++;                                                     \
+                break;                                                    \
+            case 0x31: {                                                  \
+                nj_s8 njla_b_;                                            \
+                memcpy(&njla_b_,                                          \
+                       &((double *)njla_arr_->u.bytes)[njla_idx_], 8u);   \
+                PUSH_W(njla_b_);                                          \
+            } break;                                                      \
+            case 0x32:                                                    \
+                sp->r = (njla_arr_->aflags == NJ_ARRAY_T_REF)             \
+                            ? njla_arr_->u.refs[njla_idx_] : NULL;        \
+                sp++;                                                     \
+                break;                                                    \
+            case 0x33:                                                    \
+                sp->i = (njla_arr_->aflags == NJ_ARRAY_T_BOOLEAN)         \
+                            ? (((nj_u1 *)njla_arr_->u.bytes)[njla_idx_]   \
+                                   ? 1 : 0)                               \
+                            : (nj_s4)(((nj_s1 *)njla_arr_->u.bytes)       \
+                                          [njla_idx_]);                   \
+                sp++;                                                     \
+                break;                                                    \
+            case 0x34:                                                    \
+                sp->i = (nj_s4)((nj_u2 *)njla_arr_->u.bytes)[njla_idx_];  \
+                sp++;                                                     \
+                break;                                                    \
+            default:                                                      \
+                sp->i = (nj_s4)((nj_s2 *)njla_arr_->u.bytes)[njla_idx_];  \
+                sp++;                                                     \
+                break;                                                    \
+            }                                                             \
+            DISPATCH();                                                   \
+        }                                                                 \
+    }
+
+/* `iinc i, c; iload i` (and the iload_0..3 form), and `iinc; goto` - one
+ * peek decides between the counter read-back and the loop back edge. */
+#define NJ_IINC_FUSE(I)                                                   \
+    {                                                                     \
+        nj_u2 njil_i_ = (I);                                              \
+        if (pc < code_len) {                                              \
+            nj_u1 njil_nx_ = code[pc];                                    \
+            if (njil_nx_ == 0x15u && pc + 2u <= code_len &&               \
+                code[pc + 1u] == (nj_u1)njil_i_) {                        \
+                sp->i = locals[njil_i_].i; sp++;                          \
+                pc += 2u;                                                 \
+                DISPATCH();                                               \
+            } else if (njil_i_ < 4u &&                                    \
+                       njil_nx_ == (nj_u1)(0x1au + (nj_u1)njil_i_)) {     \
+                sp->i = locals[njil_i_].i; sp++;                          \
+                pc++;                                                     \
+                DISPATCH();                                               \
+            } else if (njil_nx_ == 0xa7u && pc + 3u <= code_len) {        \
+                nj_u4 njig_at_ = pc;                                      \
+                nj_s2 njig_off_;                                          \
+                pc++;                                                     \
+                njig_off_ = S2();                                         \
+                pc = (nj_u4)(nj_s4)((nj_s4)njig_at_ + njig_off_);         \
+                JUMP_THREAD();                                            \
+                DISPATCH();                                               \
+            }                                                             \
+        }                                                                 \
+    }
+
+/* `iadd; istore_k` - both operands are already popped, so the sum goes
+ * straight into the local and nothing is pushed back. */
+#define NJ_IADD_ISTORE_FUSE(R)                                            \
+    {                                                                     \
+        if (pc < code_len && (nj_u1)(code[pc] - 0x3bu) <= 3u) {           \
+            locals[code[pc] - 0x3bu].i = (R);                             \
+            pc++;                                                         \
+            DISPATCH();                                                   \
+        }                                                                 \
+    }
+
+/* `lcmp; if<cond>` - the comparison result is consumed by the branch. */
+#define NJ_LCMP_BRANCH_FUSE()                                             \
+    {                                                                     \
+        if (pc + 3u <= code_len && code[pc] >= 0x99u &&                   \
+            code[pc] <= 0x9eu) {                                          \
+            nj_u4 njcb_at_ = pc;                                          \
+            nj_s4 njcb_v_ = sp->i;                                        \
+            nj_u1 njcb_op_ = code[pc++];                                  \
+            nj_s2 njcb_off_ = S2();                                       \
+            if (NJ_INT_BRANCH_TAKEN(njcb_op_, njcb_v_)) {                 \
+                pc = (nj_u4)(nj_s4)((nj_s4)njcb_at_ + njcb_off_);         \
+                JUMP_THREAD();                                            \
+            }                                                             \
+            DISPATCH();                                                   \
+        }                                                                 \
+    }
+
+/*
+ * `getfield <int>; i2l; lcmp; if<cond>` - the shape a `long` field read in a
+ * loop compiles to, and the hottest sequence in the dark title (about 30% of
+ * its stream).  The int field is sign-extended to the long that lcmp pops as
+ * `b`, so the long below it on the stack is `a`.
+ */
+#define NJ_GETFIELD_CHAIN_INT()                                           \
+    {                                                                     \
+        if (pc + 5u <= code_len && code[pc] == 0x85u &&                   \
+            code[pc + 1u] == 0x94u && code[pc + 2u] >= 0x99u &&           \
+            code[pc + 2u] <= 0x9eu) {                                     \
+            nj_u4 njgc_at_ = pc + 2u;                                     \
+            nj_s8 njgc_b_ = (nj_s8)(sp - 1)->i;                           \
+            nj_s8 njgc_a_;                                                \
+            nj_s4 njgc_c_;                                                \
+            nj_u1 njgc_op_;                                               \
+            nj_s2 njgc_off_;                                              \
+            sp--;                                                         \
+            sp -= 2;                                                      \
+            njgc_a_ = sp[0].j;                                            \
+            /* sp is left where lcmp would have left its result and the    \
+             * branch consumes it: exactly TWO slots down, not four.  One  \
+             * decrement too many let the operand stack walk below its     \
+             * buffer; the digest still matched because the method returned \
+             * immediately, and the dark title segfaulted minutes later. */\
+            njgc_c_ = (njgc_a_ > njgc_b_)                                 \
+                          ? 1 : ((njgc_a_ == njgc_b_) ? 0 : -1);          \
+            njgc_op_ = code[njgc_at_];                                    \
+            pc = njgc_at_ + 1u;                                           \
+            njgc_off_ = S2();                                             \
+            if (NJ_INT_BRANCH_TAKEN(njgc_op_, njgc_c_)) {                 \
+                pc = (nj_u4)(nj_s4)((nj_s4)njgc_at_ + njgc_off_);         \
+                JUMP_THREAD();                                            \
+            }                                                             \
+            DISPATCH();                                                   \
+        }                                                                 \
+    }
+
+/* `aload_0; getfield` - the receiver is loaded and immediately consumed, so
+ * the push/pop pair and one dispatch disappear.  Only slot 0 is folded: the
+ * profile says aload_0 is an order of magnitude hotter than the others and
+ * inlining this body four times would cost more in I-cache than it saves. */
+#define NJ_ALOAD0_GETFIELD_BODY(R)                                        \
+    {                                                                     \
+        pc++;                                                             \
+        sp->r = (R); sp++;                                                \
+        NJ_GETFIELD_BODY(U2(), 0);                                        \
+        DISPATCH();                                                       \
+    }
 #endif
+
+/*
+ * `getfield <int>; i2l; lcmp; if<cond>` is the one chain fold that has to
+ * live OUTSIDE the NJ_ENABLE_SUPERINSTR block: NJ_GETFIELD_BODY is shared by
+ * the plain handler, so it must exist even when the folds are switched off.
+ * This indirection keeps the fold itself optional.
+ */
+#if NJ_ENABLE_SUPERINSTR
+#define NJ_GETFIELD_CHAIN_MAYBE() NJ_GETFIELD_CHAIN_INT()
+#else
+#define NJ_GETFIELD_CHAIN_MAYBE() ((void)0)
+#endif
+
+/*
+ * The body of `getstatic`/`getfield`, shared by the standalone handler and by
+ * the `aload_0; getfield` fold so the two cannot drift apart.  IDX is the
+ * constant pool index (already read), IS_STATIC says which of the two opcodes
+ * this is.  Ends with the value pushed and without dispatching.
+ */
+#define NJ_GETFIELD_BODY(IDX, IS_STATIC)                                  \
+    {                                                                     \
+        /* The index is read ONCE: the call site passes U2(), which        \
+         * advances pc, so a second evaluation would resolve a different   \
+         * (and in the fold's case, arbitrary) constant pool entry. */     \
+        nj_u2 njgf_idx_ = (IDX);                                          \
+        nj_cpentry *njgf_e_ = NULL;                                       \
+        nj_ref njgf_o_ = NULL;                                            \
+        nj_field *njgf_f_;                                                \
+        if (!(IS_STATIC)) {                                               \
+            njgf_o_ = (--sp)->r;                                          \
+            if (!njgf_o_) {                                               \
+                THROW("java/lang/NullPointerException", NULL);            \
+            }                                                             \
+        }                                                                 \
+        njgf_e_ = nj_cp_hit(vm, m->owner, njgf_idx_);                     \
+        if ((!njgf_e_ &&                                                  \
+             (nj_cp_resolve(vm, m->owner, njgf_idx_, &njgf_e_) != NJ_OK ||\
+              !njgf_e_)) ||                                               \
+            !njgf_e_->target) {                                           \
+            if (!vm->exception) {                                         \
+                (void)nj_resolve_error(vm);                               \
+            }                                                             \
+            goto do_unwind;                                               \
+        }                                                                 \
+        njgf_f_ = (nj_field *)njgf_e_->target;                            \
+        if ((IS_STATIC) != (njgf_e_->kind == NJ_LINK_FIELD_STATIC)) {     \
+            THROW("java/lang/IncompatibleClassChangeError",               \
+                  (IS_STATIC) ? "getstatic names an instance field"       \
+                              : "getfield names a static field");         \
+        }                                                                 \
+        if (njgf_e_->kind == NJ_LINK_FIELD_STATIC) {                      \
+            SAVE();                                                       \
+            if (nj_class_init_lazy(vm, njgf_f_->owner) != NJ_OK) {        \
+                if (!vm->exception) {                                     \
+                    (void)nj_throw(vm, "java/lang/NoClassDefFoundError",  \
+                                   njgf_f_->owner->name);                 \
+                }                                                         \
+                goto do_unwind;                                           \
+            }                                                             \
+        }                                                                 \
+        switch (njgf_f_->ptype) {                                         \
+        case NJ_PT_LONG:                                                  \
+            sp[0].j = nj_field_read_long_fast(vm, njgf_o_, njgf_f_);      \
+            sp[1].bits = 0u; sp += 2;                                     \
+            break;                                                        \
+        case NJ_PT_DOUBLE:                                                \
+            sp[0].j =                                                     \
+                (nj_s8)nj_field_read_bits64_fast(vm, njgf_o_, njgf_f_);   \
+            sp[1].bits = 0u; sp += 2;                                     \
+            break;                                                        \
+        case NJ_PT_FLOAT:                                                 \
+            sp->i =                                                       \
+                (nj_s4)nj_field_read_bits32_fast(vm, njgf_o_, njgf_f_);   \
+            sp++;                                                         \
+            break;                                                        \
+        case NJ_PT_OBJECT:                                                \
+            sp->r = nj_field_read_ref_fast(vm, njgf_o_, njgf_f_);         \
+            sp++;                                                         \
+            break;                                                        \
+        default:                                                          \
+            sp->i = nj_field_read_int_fast(vm, njgf_o_, njgf_f_);         \
+            sp++;                                                         \
+            NJ_GETFIELD_CHAIN_MAYBE();                                    \
+            break;                                                        \
+        }                                                                 \
+    }
 
 /*
  * The type name to print for a receiver whose class is unknown.
@@ -1154,7 +1446,7 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         L_0x15: case 0x15: { nj_u2 i = (nj_u2)U1();
             nj_s4 v_ = locals[i].i;
 #if NJ_ENABLE_SUPERINSTR
-            NJ_LOAD_BRANCH_INT(v_);
+            NJ_ILOAD_FUSE(v_);
 #endif
             sp->i = v_; sp++; DISPATCH(); }
         L_0x16: case 0x16: { nj_u2 i = (nj_u2)U1(); sp[0] = locals[i]; sp[1].bits=0u; sp+=2; DISPATCH(); }
@@ -1163,14 +1455,14 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         L_0x19: case 0x19: { nj_u2 i = (nj_u2)U1();
             nj_ref r_ = locals[i].r;
 #if NJ_ENABLE_SUPERINSTR
-            NJ_LOAD_BRANCH_REF(r_);
+            NJ_ALOAD_FUSE(r_);
 #endif
             sp->r = r_; sp++; DISPATCH(); }
         L_0x1a: case 0x1a: case 0x1b: case 0x1c: case 0x1d:  /* iload_0..3 */
             {
                 nj_s4 v_ = locals[op - 0x1a].i;
 #if NJ_ENABLE_SUPERINSTR
-                NJ_LOAD_BRANCH_INT(v_);
+                NJ_ILOAD_FUSE(v_);
 #endif
                 sp->i = v_; sp++; DISPATCH();
             }
@@ -1184,7 +1476,7 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
             {
                 nj_ref r_ = locals[op - 0x2a].r;
 #if NJ_ENABLE_SUPERINSTR
-                NJ_LOAD_BRANCH_REF(r_);
+                NJ_ALOAD_FUSE(r_);
 #endif
                 sp->r = r_; sp++; DISPATCH();
             }
@@ -1352,7 +1644,11 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
 
         /* ================= arithmetic ================= */
         L_0x60: case 0x60: { nj_s4 b = (--sp)->i, a = (--sp)->i;
-                     sp->i = (nj_s4)((nj_u4)a + (nj_u4)b); sp++; DISPATCH(); }
+                     nj_s4 r_ = (nj_s4)((nj_u4)a + (nj_u4)b);
+#if NJ_ENABLE_SUPERINSTR
+                     NJ_IADD_ISTORE_FUSE(r_);
+#endif
+                     sp->i = r_; sp++; DISPATCH(); }
         L_0x61: case 0x61: { nj_s8 b; sp -= 2; b = sp[0].j; sp -= 2;
                      sp[0].j = (nj_s8)((nj_u8)sp[0].j + (nj_u8)b);
                      sp[1].bits = 0u; sp += 2; DISPATCH(); }
@@ -1454,6 +1750,9 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
             nj_u2 i = (nj_u2)U1();
             nj_s1 c = S1();
             locals[i].i += c;
+#if NJ_ENABLE_SUPERINSTR
+            NJ_IINC_FUSE(i);
+#endif
             DISPATCH(); }
 
         /* ================= conversions ================= */
@@ -1490,7 +1789,11 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
 
         /* ================= comparisons ================= */
         L_0x94: case 0x94: { nj_s8 b, a; sp -= 2; b = sp[0].j; sp -= 2; a = sp[0].j;
-                     sp->i = (a > b) ? 1 : ((a == b) ? 0 : -1); sp++; DISPATCH(); }
+                     sp->i = (a > b) ? 1 : ((a == b) ? 0 : -1);
+#if NJ_ENABLE_SUPERINSTR
+                     NJ_LCMP_BRANCH_FUSE();
+#endif
+                     sp++; DISPATCH(); }
         L_0x95: case 0x95: case 0x96: {                            /* fcmpl / fcmpg */
             float b = (--sp)->f, a = (--sp)->f;
             if (a > b) sp->i = 1;
@@ -1682,73 +1985,7 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         /* ================= fields ================= */
         L_0xb2: case 0xb2: case 0xb4: {                    /* getstatic / getfield */
             nj_u2 idx = U2();
-            nj_cpentry *e = NULL;
-            nj_ref o = NULL;
-            nj_field *f;
-            if (op == 0xb4) {
-                o = (--sp)->r;
-                if (!o) THROW("java/lang/NullPointerException", NULL);
-            }
-            e = nj_cp_hit(vm, m->owner, idx);
-            if ((!e && (nj_cp_resolve(vm, m->owner, idx, &e) != NJ_OK || !e))
-                || !e->target) {
-                if (!vm->exception) {
-                    (void)nj_resolve_error(vm);
-                }
-                goto do_unwind;
-            }
-            f = (nj_field *)e->target;
-            /*
-             * The opcode says whether the field is static; the field itself
-             * says what it is.  When they disagree the access used to read or
-             * write nothing at all - `getfield` with a static field read it
-             * off a NULL receiver, `putstatic` with an instance field dropped
-             * the value on the floor - and the only symptom was a field that
-             * stayed null somewhere else entirely.  Name it instead.
-             */
-            if ((op == 0xb2) != (e->kind == NJ_LINK_FIELD_STATIC)) {
-                THROW("java/lang/IncompatibleClassChangeError",
-                      (op == 0xb2) ? "getstatic names an instance field"
-                                   : "getfield names a static field");
-            }
-            /*
-             * Reading a static field is an active use of the class that
-             * DECLARES it, so its <clinit> has to have run.  Interfaces count:
-             * obfuscated titles park lookup tables in an interface and fill
-             * them from its static initialiser, and without this the table
-             * reads back null and the next iaload throws.
-             */
-            if (e->kind == NJ_LINK_FIELD_STATIC) {
-                SAVE();
-                if (nj_class_init_lazy(vm, f->owner) != NJ_OK) {
-                    if (!vm->exception) {
-                        (void)nj_throw(vm, "java/lang/NoClassDefFoundError",
-                                       f->owner->name);
-                    }
-                    goto do_unwind;
-                }
-            }
-            switch (f->ptype) {
-            case NJ_PT_LONG:
-                sp[0].j = nj_field_read_long_fast(vm, o, f);
-                sp[1].bits = 0u; sp += 2;
-                break;
-            case NJ_PT_DOUBLE:
-                /* A double field holds its bit pattern, and that is what the
-                 * operand stack carries; the typed accessor would convert. */
-                sp[0].j = (nj_s8)nj_field_read_bits64_fast(vm, o, f);
-                sp[1].bits = 0u; sp += 2;
-                break;
-            case NJ_PT_FLOAT:
-                sp->i = (nj_s4)nj_field_read_bits32_fast(vm, o, f); sp++;
-                break;
-            case NJ_PT_OBJECT:
-                sp->r = nj_field_read_ref_fast(vm, o, f); sp++;
-                break;
-            default:
-                sp->i = nj_field_read_int_fast(vm, o, f); sp++;
-                break;
-            }
+            NJ_GETFIELD_BODY(idx, (op == 0xb2u));
             DISPATCH(); }
         case 0xb3: case 0xb5: {                            /* putstatic / putfield */
             nj_u2 idx = U2();
