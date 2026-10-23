@@ -18,10 +18,10 @@
 #define NJ_TEST_JIT_PERF_JAR "tests/fixtures/jitperf.jar"
 #endif
 
-enum { MODE_INTERPRETER, MODE_PROBE, MODE_EXECUTE, MODE_COUNT, KERNEL_COUNT = 6 };
+enum { MODE_INTERPRETER, MODE_PROBE, MODE_EXECUTE, MODE_COUNT, KERNEL_COUNT = 8 };
 static const char *const mode_names[] = {"interpreter", "probe-only", "execute"};
 static const char *const kernels[] = {"locals", "constants", "fields", "arrays", "mixed",
-                                      "branches"};
+                                      "branches", "bytes", "matrix"};
 static const char *current_kernel = "setup", *current_mode = "setup";
 #define CHECK(condition) do { if (!(condition)) { \
     fprintf(stderr, "FAIL %s:%d kernel=%s mode=%s: %s\n", __FILE__, __LINE__, \
@@ -99,7 +99,7 @@ static nj_u4 expected_checksum(unsigned kernel, nj_u4 iterations)
         }
         return sum ^ box ^ values[iterations & 31u];
     }
-    default:
+    case 5:
         state = 0x13579bdfu; sum = 0;
         for (i = 0; i < iterations; ++i) {
             state = state * 1103515245u + 12345u;
@@ -108,6 +108,45 @@ static nj_u4 expected_checksum(unsigned kernel, nj_u4 iterations)
             else sum -= state & 1023u;
         }
         return sum ^ state;
+    case 6: {
+        /* JitPerf.bytes: signed-byte table plus a static int updated by
+           putstatic.  Byte semantics are explicit: truncate to eight bits,
+           then sign-extend back to int. */
+        nj_s1 tiles[1024];
+        nj_s4 tile_sum = 0;
+        for (i = 0; i < 1024u; ++i) tiles[i] = (nj_s1)(nj_u1)(i * 31u + 7u);
+        sum = 0;
+        for (i = 0; i < iterations; ++i) {
+            nj_u4 index = (i * 7u + sum) & 1023u;
+            nj_s4 v = (nj_s4)tiles[index];
+            v = (nj_s4)(nj_s1)(nj_u1)((nj_u4)v + (i & 31u));
+            tiles[index] = (nj_s1)(nj_u1)v;
+            sum = (sum + (nj_u4)v) ^ i;
+            tile_sum = (nj_s4)((nj_u4)tile_sum + (nj_u4)sum);
+        }
+        return sum ^ (nj_u4)tile_sum;
+    }
+    case 7: {
+        /* JitPerf.matrix: flattened 32x32 int grid; each iteration aaloads a
+           row and then does iaload/iastore through it. */
+        nj_u4 cells[32][32], j, v, *line;
+        unsigned row, column;
+        for (row = 0; row < 32u; ++row)
+            for (column = 0; column < 32u; ++column)
+                cells[row][column] = row * 37u + column * 11u + 5u;
+        sum = 0;
+        for (i = 0; i < iterations; ++i) {
+            line = cells[(i * 5u + sum) & 31u];
+            j = (i * 11u + sum) & 31u;
+            v = line[j];
+            v = (v + (i & 0xffffu)) ^ (sum >> 3);
+            line[j] = v;
+            sum += v;
+        }
+        return sum;
+    }
+    default:
+        return 0;
     }
 }
 
@@ -171,6 +210,9 @@ static int run_case(const nj_u1 *jar, nj_u4 jar_len, unsigned kernel,
      * mode starts with an empty JIT and identical class initialization. */
     check_call(vm, kernels[kernel], 0, &value);
     CHECK(value.bits == expected_checksum(kernel, 0));
+    /* Force the class initialiser (which fills the static tables) to run
+     * before the timed region; the kernel argument is ignored. */
+    check_call(vm, "warm", 0, &value);
     CHECK(result->code.attempts == 0 && result->code.commits == 0);
     if (mode != MODE_INTERPRETER) {
         nj_status enabled = nj_jit_enable(vm);
@@ -324,7 +366,7 @@ int main(int argc, char **argv)
     if (require_execution && selected >= 0 && selected != MODE_EXECUTE) { usage(argv[0]); return 2; }
     jar = read_jar(jar_path, &jar_len);
     if (!jar) return 1;
-    printf("JIT_PERF iterations=%" PRIu32 " kernels=6 stats_build=%d detailed_build=%d "
+    printf("JIT_PERF iterations=%" PRIu32 " kernels=8 stats_build=%d detailed_build=%d "
            "length_bins=1,2-3,4-7,8-15,16+\n", (uint32_t)iterations, NJ_JIT_STATS, NJ_JIT_DETAILED_STATS);
     printf("JIT_CONFIG rv32=%d arm64=%d rv32_reg_cache=%d hot_threshold=%u "
            "min_block=%u max_block=%u code_entries=%u code_ways=%u max_code_bytes=%u "

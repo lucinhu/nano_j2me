@@ -1064,6 +1064,675 @@ static void test_fields_arrays(void)
     (void)offset;
 }
 
+/* ---- static fields --------------------------------------------------- */
+
+enum { STATIC_CACHE = 64, STATIC_SLOTS = 8, STATIC_FIELD_SLOT = 2 };
+
+typedef struct static_fixture {
+    nj_vm vm;
+    nj_class owner;
+    nj_cpentry cache[STATIC_CACHE];
+    nj_field field;
+    _Alignas(8) nj_value statics[STATIC_SLOTS];
+} static_fixture;
+
+static void static_fixture_init(static_fixture *fx, unsigned ptype, unsigned width,
+                                unsigned state)
+{
+    nj_u4 slot;
+    memset(fx, 0, sizeof(*fx));
+    fx->vm.cp_cache = fx->cache;
+    fx->vm.cp_cache_size = STATIC_CACHE;
+    fx->vm.statics = fx->statics;
+    fx->vm.nstatics = STATIC_SLOTS;
+    fx->owner.state = (nj_u1)state;
+    fx->field.owner = &fx->owner;
+    fx->field.ptype = (nj_u1)ptype;
+    fx->field.width = (nj_u1)width;
+    fx->field.flags = NJ_ACC_STATIC;
+    fx->field.offset = (nj_u2)STATIC_FIELD_SLOT;
+    slot = nj_cp_key_hash(&fx->owner, 1u) & (STATIC_CACHE - 1u);
+    fx->cache[slot].cls = &fx->owner;
+    fx->cache[slot].cp_index = 1u;
+    fx->cache[slot].kind = NJ_LINK_FIELD_STATIC;
+    fx->cache[slot].target = &fx->field;
+    fx->cache[slot].used = 1u;
+    memset(fx->statics, 0xa5, sizeof(fx->statics));
+}
+
+static nj_u1 *static_slot(static_fixture *fx)
+{
+    return (nj_u1 *)(void *)&fx->statics[STATIC_FIELD_SLOT];
+}
+
+static void static_read_case(const char *name, unsigned ptype, unsigned width,
+                             nj_u8 raw)
+{
+    static_fixture fx;
+    nj_u1 code[3];
+    nj_u1 before[STATIC_SLOTS * sizeof(nj_value)];
+    test_frame initial, expected;
+    nj_jit_block block;
+    unsigned bytes = field_bytes(ptype);
+    int wide = width == 2u;
+    nj_u4 ret;
+
+    static_fixture_init(&fx, ptype, width, NJ_CLASS_READY);
+    CHECK(nj_jit_static_field(&fx.vm, &fx.owner, 1u) == &fx.field);
+    memcpy(static_slot(&fx), &raw, bytes);
+    memcpy(before, fx.statics, sizeof(before));
+    field_code(code, 0xb2);
+    init_frame(&initial);
+    expected = initial;
+    if (wide) {
+        memcpy(&expected.stack[BASE], &raw, 8u);
+        expected.stack[BASE + 1u].bits = 0u;
+    } else if (ptype == NJ_PT_BOOLEAN || ptype == NJ_PT_BYTE) {
+        expected.stack[BASE].i = (nj_s4)(nj_s1)raw;
+    } else if (ptype == NJ_PT_CHAR) {
+        expected.stack[BASE].i = (nj_s4)(nj_u2)raw;
+    } else if (ptype == NJ_PT_SHORT) {
+        expected.stack[BASE].i = (nj_s4)(nj_s2)raw;
+    } else {
+        expected.stack[BASE].bits = (nj_u4)raw;
+    }
+    jit_vm = &fx.vm;
+    ret = run_expect(name, code, sizeof(code), 1, 0, &fx.owner, &initial,
+                     &expected, &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 3 && block.insns == 1);
+    CHECK(block.stack_delta == (wide ? 2 : 1) && block.min_stack == 0);
+    CHECK(block.max_growth == (wide ? 2 : 1) && block.nfaults == 0);
+#if EXECUTE_RV32
+    expect_success(ret, &block, block.insns);
+#endif
+    CHECK(memcmp(fx.statics, before, sizeof(before)) == 0);
+    (void)ret;
+}
+
+static void static_write_case(const char *name, unsigned ptype, unsigned width,
+                              nj_u8 raw)
+{
+    static_fixture fx;
+    nj_u1 code[3];
+    nj_u1 want[STATIC_SLOTS * sizeof(nj_value)];
+    test_frame initial, expected;
+    nj_jit_block block;
+    unsigned bytes = field_bytes(ptype);
+    int wide = width == 2u;
+    int depth = (int)width;
+    nj_u4 ret;
+
+    static_fixture_init(&fx, ptype, width, NJ_CLASS_READY);
+    CHECK(nj_jit_static_field(&fx.vm, &fx.owner, 1u) == &fx.field);
+    memcpy(want, fx.statics, sizeof(want));
+    memcpy(want + STATIC_FIELD_SLOT * sizeof(nj_value), &raw, bytes);
+    field_code(code, 0xb3);
+    init_frame(&initial);
+    if (wide) memcpy(&initial.stack[BASE], &raw, 8u);
+    else initial.stack[BASE].bits = (nj_u4)raw;
+    expected = initial;
+    jit_vm = &fx.vm;
+    ret = run_expect(name, code, sizeof(code), 1, depth, &fx.owner, &initial,
+                     &expected, &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 3 && block.insns == 1);
+    CHECK(block.stack_delta == -depth && block.min_stack == depth);
+    CHECK(block.max_growth == 0 && block.nfaults == 0);
+#if EXECUTE_RV32
+    expect_success(ret, &block, block.insns);
+    CHECK(memcmp(fx.statics, want, sizeof(want)) == 0);
+#else
+    (void)want;
+#endif
+    (void)ret;
+}
+
+/* The class is linked but not initialised: the block carries a state guard.
+ * Executing it must fault without touching the slot; recompiling once the
+ * class is READY must drop the guard and perform the access. */
+static void static_guard_case(const char *name, unsigned op, int put)
+{
+    static_fixture fx;
+    nj_u1 code[3];
+    nj_u1 before[STATIC_SLOTS * sizeof(nj_value)];
+    test_frame initial, expected;
+    nj_jit_block guarded, ready;
+    int depth = put ? 1 : 0;
+    nj_u4 ret;
+
+    static_fixture_init(&fx, NJ_PT_INT, 1u, NJ_CLASS_LINKED);
+    CHECK(nj_jit_static_field(&fx.vm, &fx.owner, 1u) == &fx.field);
+    fx.statics[STATIC_FIELD_SLOT].bits = 0x11223344u;
+    memcpy(before, fx.statics, sizeof(before));
+    field_code(code, op);
+    init_frame(&initial);
+    if (put) initial.stack[BASE].bits = 0x55667788u;
+    expected = initial;
+    jit_vm = &fx.vm;
+    ret = run_expect(name, code, sizeof(code), 1, depth, &fx.owner, &initial,
+                     &expected, &guarded);
+    jit_vm = NULL;
+    CHECK(guarded.next_pc == 3 && guarded.insns == 1);
+    CHECK(guarded.stack_delta == (put ? -1 : 1) && guarded.min_stack == depth);
+    CHECK(guarded.max_growth == (put ? 0 : 1));
+    CHECK(guarded.nfaults == 1 && guarded.faults[0].pc_off == 0 &&
+          guarded.faults[0].sp_delta == 0);
+#if EXECUTE_RV32
+    expect_fault(ret, 0u, 0u);
+#endif
+    CHECK(memcmp(fx.statics, before, sizeof(before)) == 0);
+
+    fx.owner.state = NJ_CLASS_READY;
+    expected = initial;
+    if (!put) expected.stack[BASE].bits = 0x11223344u;
+    jit_vm = &fx.vm;
+    ret = run_expect(name, code, sizeof(code), 1, depth, &fx.owner, &initial,
+                     &expected, &ready);
+    jit_vm = NULL;
+    CHECK(ready.next_pc == 3 && ready.insns == 1 && ready.nfaults == 0);
+    CHECK(ready.stack_delta == (put ? -1 : 1) && ready.min_stack == depth);
+#if EXECUTE_RV32
+    expect_success(ret, &ready, ready.insns);
+    if (put) CHECK(fx.statics[STATIC_FIELD_SLOT].bits == 0x55667788u);
+    else CHECK(fx.statics[STATIC_FIELD_SLOT].bits == 0x11223344u);
+#endif
+    (void)ret;
+}
+
+/* A preceding instruction must be counted in the fault word (completed=1)
+ * while pc_off still names the guarded getstatic. */
+static void static_guard_completed_case(void)
+{
+    static_fixture fx;
+    static const nj_u1 code[] = {0x00, 0xb2, 0u, 1u};
+    test_frame initial, expected;
+    nj_jit_block block;
+    nj_u4 ret;
+
+    static_fixture_init(&fx, NJ_PT_INT, 1u, NJ_CLASS_LINKED);
+    init_frame(&initial);
+    expected = initial;
+    jit_vm = &fx.vm;
+    ret = run_expect("getstatic fault after nop", code, sizeof(code), 1, 0,
+                     &fx.owner, &initial, &expected, &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 4 && block.insns == 2);
+    CHECK(block.stack_delta == 1 && block.min_stack == 0 && block.max_growth == 1);
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 1 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_RV32
+    expect_fault(ret, 0u, 1u);
+#endif
+    (void)ret;
+}
+
+static void static_decline_case(const char *name, int which)
+{
+    static_fixture fx;
+    nj_u1 code[3];
+    unsigned slot;
+    static_fixture_init(&fx, NJ_PT_INT, 1u, NJ_CLASS_READY);
+    slot = nj_cp_key_hash(&fx.owner, 1u) & (STATIC_CACHE - 1u);
+    field_code(code, 0xb2);
+    switch (which) {
+    case 0: fx.cache[slot].used = 0u; break;
+    case 1: fx.cache[slot].kind = NJ_LINK_FIELD_INST; break;
+    case 2: fx.field.flags = 0u; break;
+    case 3: fx.owner.state = NJ_CLASS_LOADED; break;
+    case 4: fx.field.ptype = NJ_PT_LONG; fx.field.width = 2u;
+            fx.field.offset = (nj_u2)(STATIC_SLOTS - 1u); break;
+    case 5: fx.field.ptype = 0xffu; break;
+    case 6: fx.vm.statics = NULL; fx.vm.nstatics = 0u; break;
+    case 7: fx.cache[slot].target = NULL; break;
+    case 8: fx.vm.cp_cache = NULL; fx.vm.cp_cache_size = 0u; break;
+    default: break;
+    }
+    jit_vm = &fx.vm;
+    if (which == 9) declined_owned(name, &fx.owner, code, 2u, 1);
+    else declined_owned(name, &fx.owner, code, sizeof(code), 1);
+    jit_vm = NULL;
+}
+
+static void test_static_fields(void)
+{
+    test_name = "getstatic primitive widths";
+    static_read_case("getstatic boolean", NJ_PT_BOOLEAN, 1u, 0x81u);
+    static_read_case("getstatic byte", NJ_PT_BYTE, 1u, 0x81u);
+    static_read_case("getstatic char", NJ_PT_CHAR, 1u, 0xfffeu);
+    static_read_case("getstatic short", NJ_PT_SHORT, 1u, 0x8001u);
+    static_read_case("getstatic int", NJ_PT_INT, 1u, 0x80000001u);
+    static_read_case("getstatic float", NJ_PT_FLOAT, 1u, 0x7fc12345u);
+    static_read_case("getstatic long", NJ_PT_LONG, 2u,
+                     UINT64_C(0x8000000000000001));
+    static_read_case("getstatic double", NJ_PT_DOUBLE, 2u,
+                     UINT64_C(0xf0123456789abcde));
+    static_read_case("getstatic object", NJ_PT_OBJECT, 1u, 0x12345678u);
+
+    test_name = "putstatic primitive widths";
+    static_write_case("putstatic boolean", NJ_PT_BOOLEAN, 1u, 0x1234u);
+    static_write_case("putstatic byte", NJ_PT_BYTE, 1u, 0x1234u);
+    static_write_case("putstatic char", NJ_PT_CHAR, 1u, 0x12345u);
+    static_write_case("putstatic short", NJ_PT_SHORT, 1u, 0x12345u);
+    static_write_case("putstatic int", NJ_PT_INT, 1u, 0x89abcdefu);
+    static_write_case("putstatic float", NJ_PT_FLOAT, 1u, 0x7fc12345u);
+    static_write_case("putstatic long", NJ_PT_LONG, 2u,
+                      UINT64_C(0x0123456789abcdef));
+    static_write_case("putstatic double", NJ_PT_DOUBLE, 2u,
+                      UINT64_C(0xfedcba9876543210));
+    static_write_case("putstatic object", NJ_PT_OBJECT, 1u, 0x12345678u);
+
+    test_name = "uninitialised class guard";
+    static_guard_case("getstatic unready class", 0xb2, 0);
+    static_guard_case("putstatic unready class", 0xb3, 1);
+    static_guard_completed_case();
+
+    test_name = "static field declines";
+    static_decline_case("getstatic unresolved", 0);
+    static_decline_case("getstatic instance link", 1);
+    static_decline_case("getstatic non-static field", 2);
+    static_decline_case("getstatic owner loaded", 3);
+    static_decline_case("getstatic second slot past statics", 4);
+    static_decline_case("getstatic unknown ptype", 5);
+    static_decline_case("getstatic no statics", 6);
+    static_decline_case("getstatic null target", 7);
+    static_decline_case("getstatic no cp cache", 8);
+    static_decline_case("getstatic truncated", 9);
+}
+
+/* ---- typed arrays ---------------------------------------------------- */
+
+enum { TYPED_ARRAY_LEN = 8 };
+
+typedef struct typed_array_fixture {
+    nj_vm vm;
+    nj_object arr;
+    _Alignas(8) nj_u1 payload[TYPED_ARRAY_LEN * 8];
+} typed_array_fixture;
+
+static void typed_array_init(typed_array_fixture *fx, unsigned kind, unsigned aflags,
+                             unsigned length)
+{
+    memset(fx, 0, sizeof(*fx));
+    memset(fx->payload, 0xa5, sizeof(fx->payload));
+    fx->arr.kind = (nj_u1)kind;
+    fx->arr.aflags = (nj_u2)aflags;
+    fx->arr.length = length;
+    fx->arr.size = (nj_u4)sizeof(fx->payload);
+    fx->arr.u.bytes = fx->payload;
+}
+
+static void typed_put_u1(typed_array_fixture *fx, unsigned index, nj_u4 v)
+{
+    fx->payload[index] = (nj_u1)v;
+}
+
+static void typed_put_u2(typed_array_fixture *fx, unsigned index, nj_u4 v)
+{
+    nj_u2 x = (nj_u2)v;
+    memcpy(fx->payload + index * 2u, &x, 2u);
+}
+
+static void typed_put_ref(typed_array_fixture *fx, unsigned index, nj_ref ref)
+{
+    memcpy(fx->payload + index * sizeof(nj_ref), &ref, sizeof(ref));
+}
+
+static nj_u4 typed_ref_bits(const typed_array_fixture *fx, unsigned index)
+{
+    nj_ref ref;
+    memcpy(&ref, fx->payload + index * sizeof(nj_ref), sizeof(ref));
+    return (nj_u4)(uintptr_t)ref;
+}
+
+static void typed_load_case(const char *name, typed_array_fixture *fx, nj_ref ref,
+                            unsigned op, unsigned index, nj_u4 expected_bits,
+                            int fault)
+{
+    nj_u1 code[1];
+    test_frame initial, expected;
+    nj_jit_block block;
+    nj_u4 ret;
+
+    code[0] = (nj_u1)op;
+    init_frame(&initial);
+    initial.stack[BASE].r = ref;
+    initial.stack[BASE + 1].i = (nj_s4)index;
+    expected = initial;
+    if (!fault) expected.stack[BASE].bits = expected_bits;
+    jit_vm = &fx->vm;
+    ret = run_expect(name, code, sizeof(code), 1, 2, NULL, &initial, &expected,
+                     &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 1 && block.insns == 1);
+    CHECK(block.stack_delta == -1 && block.min_stack == 2);
+    CHECK(block.max_growth == 0);
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_RV32
+    if (fault) expect_fault(ret, 0u, 0u);
+    else expect_success(ret, &block, block.insns);
+#endif
+    (void)ret;
+}
+
+static void typed_store_case(const char *name, typed_array_fixture *fx, nj_ref ref,
+                             unsigned op, unsigned index, nj_u4 value,
+                             const nj_u1 *want, int fault)
+{
+    nj_u1 code[1];
+    nj_u1 before[sizeof(fx->payload)];
+    test_frame initial, expected;
+    nj_jit_block block;
+    nj_u4 ret;
+
+    memcpy(before, fx->payload, sizeof(before));
+    code[0] = (nj_u1)op;
+    init_frame(&initial);
+    initial.stack[BASE].r = ref;
+    initial.stack[BASE + 1].i = (nj_s4)index;
+    initial.stack[BASE + 2].bits = value;
+    expected = initial;
+    jit_vm = &fx->vm;
+    ret = run_expect(name, code, sizeof(code), 1, 3, NULL, &initial, &expected,
+                     &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 1 && block.insns == 1);
+    CHECK(block.stack_delta == -3 && block.min_stack == 3);
+    CHECK(block.max_growth == 0);
+    CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
+          block.faults[0].sp_delta == 0);
+#if EXECUTE_RV32
+    if (fault) expect_fault(ret, 0u, 0u);
+    else expect_success(ret, &block, block.insns);
+    CHECK(memcmp(fx->payload, fault ? before : want, sizeof(before)) == 0);
+#else
+    (void)want;
+    (void)before;
+#endif
+    (void)fault;
+    (void)ret;
+}
+
+static void test_typed_arrays(void)
+{
+    typed_array_fixture fx, want_fx;
+    unsigned i;
+    nj_u1 code53[1];
+
+    test_name = "new array opcodes decline without a VM";
+    {
+        static const nj_u1 ops[] = {0x32, 0x33, 0x34, 0x35, 0x54, 0x55, 0x56};
+        for (i = 0; i < sizeof(ops); ++i)
+            declined("array opcode without vm", &ops[i], 1, 1);
+    }
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_INT, TYPED_ARRAY_LEN);
+    code53[0] = 0x53;
+    jit_vm = &fx.vm;
+    declined_owned("aastore stays interpreter-only", NULL, code53, 1u, 1);
+    jit_vm = NULL;
+
+    test_name = "byte and boolean array access";
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_BYTE, TYPED_ARRAY_LEN);
+    {
+        static const nj_u1 vals[TYPED_ARRAY_LEN] =
+            {0x00, 0x7f, 0x80, 0xff, 0x81, 0x55, 0xaa, 0x01};
+        memcpy(fx.payload, vals, sizeof(vals));
+    }
+    typed_load_case("baload zero", &fx, (nj_ref)&fx.arr, 0x33, 0, 0x00000000u, 0);
+    typed_load_case("baload 127", &fx, (nj_ref)&fx.arr, 0x33, 1, 0x0000007fu, 0);
+    typed_load_case("baload -128", &fx, (nj_ref)&fx.arr, 0x33, 2, 0xffffff80u, 0);
+    typed_load_case("baload -1", &fx, (nj_ref)&fx.arr, 0x33, 3, 0xffffffffu, 0);
+    typed_load_case("baload -127", &fx, (nj_ref)&fx.arr, 0x33, 4, 0xffffff81u, 0);
+    want_fx = fx;
+    typed_put_u1(&want_fx, 3, 0x34u);
+    typed_store_case("bastore low byte", &fx, (nj_ref)&fx.arr, 0x54, 3, 0x1234u,
+                     want_fx.payload, 0);
+    want_fx = fx;
+    typed_put_u1(&want_fx, 5, 0xffu);
+    typed_store_case("bastore sign bits", &fx, (nj_ref)&fx.arr, 0x54, 5, 0x80ffu,
+                     want_fx.payload, 0);
+
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_BOOLEAN, TYPED_ARRAY_LEN);
+    {
+        static const nj_u1 vals[TYPED_ARRAY_LEN] = {0, 1, 1, 0, 1, 0, 0, 1};
+        memcpy(fx.payload, vals, sizeof(vals));
+    }
+    typed_load_case("baload boolean zero", &fx, (nj_ref)&fx.arr, 0x33, 0,
+                    0x00000000u, 0);
+    typed_load_case("baload boolean one", &fx, (nj_ref)&fx.arr, 0x33, 1,
+                    0x00000001u, 0);
+    want_fx = fx;
+    typed_put_u1(&want_fx, 2, 1u);
+    typed_store_case("bastore boolean true", &fx, (nj_ref)&fx.arr, 0x54, 2, 1u,
+                     want_fx.payload, 0);
+    want_fx = fx;
+    typed_put_u1(&want_fx, 3, 0u);
+    typed_store_case("bastore boolean false", &fx, (nj_ref)&fx.arr, 0x54, 3, 0u,
+                     want_fx.payload, 0);
+
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_BOOLEAN, TYPED_ARRAY_LEN);
+    {
+        /* The interpreter normalises every boolean load to 0 or 1 even when a
+           native write (or a stale image) stored another byte value. */
+        static const nj_u1 raw[TYPED_ARRAY_LEN] = {0, 1, 2, 0x80, 0xff, 0xfe, 0x7f, 0};
+        memcpy(fx.payload, raw, sizeof(raw));
+    }
+    typed_load_case("baload boolean normalises 2", &fx, (nj_ref)&fx.arr, 0x33, 2,
+                    0x00000001u, 0);
+    typed_load_case("baload boolean normalises 0x80", &fx, (nj_ref)&fx.arr, 0x33, 3,
+                    0x00000001u, 0);
+    typed_load_case("baload boolean normalises 0xff", &fx, (nj_ref)&fx.arr, 0x33, 4,
+                    0x00000001u, 0);
+    typed_load_case("baload boolean normalises 0x7f", &fx, (nj_ref)&fx.arr, 0x33, 6,
+                    0x00000001u, 0);
+
+    test_name = "char and short array access";
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_CHAR, TYPED_ARRAY_LEN);
+    for (i = 0; i < TYPED_ARRAY_LEN; ++i) typed_put_u2(&fx, i, i);
+    typed_put_u2(&fx, 2, 0x7fffu);
+    typed_put_u2(&fx, 3, 0x8000u);
+    typed_put_u2(&fx, 4, 0xffffu);
+    typed_load_case("caload zero extend", &fx, (nj_ref)&fx.arr, 0x34, 3,
+                    0x00008000u, 0);
+    typed_load_case("caload max", &fx, (nj_ref)&fx.arr, 0x34, 4,
+                    0x0000ffffu, 0);
+    want_fx = fx;
+    typed_put_u2(&want_fx, 1, 0x2345u);
+    typed_store_case("castore low 16", &fx, (nj_ref)&fx.arr, 0x55, 1, 0x12345u,
+                     want_fx.payload, 0);
+    want_fx = fx;
+    typed_put_u2(&want_fx, 5, 0xffffu);
+    typed_store_case("castore truncates", &fx, (nj_ref)&fx.arr, 0x55, 5, 0x1ffffu,
+                     want_fx.payload, 0);
+
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_SHORT, TYPED_ARRAY_LEN);
+    for (i = 0; i < TYPED_ARRAY_LEN; ++i) typed_put_u2(&fx, i, i);
+    typed_put_u2(&fx, 2, 0x7fffu);
+    typed_put_u2(&fx, 3, 0x8000u);
+    typed_put_u2(&fx, 4, 0xffffu);
+    typed_put_u2(&fx, 5, 0x8001u);
+    typed_load_case("saload sign extend min", &fx, (nj_ref)&fx.arr, 0x35, 3,
+                    0xffff8000u, 0);
+    typed_load_case("saload -1", &fx, (nj_ref)&fx.arr, 0x35, 4,
+                    0xffffffffu, 0);
+    typed_load_case("saload -32767", &fx, (nj_ref)&fx.arr, 0x35, 5,
+                    0xffff8001u, 0);
+    want_fx = fx;
+    typed_put_u2(&want_fx, 1, 0x2345u);
+    typed_store_case("sastore low 16", &fx, (nj_ref)&fx.arr, 0x56, 1, 0x12345u,
+                     want_fx.payload, 0);
+    want_fx = fx;
+    typed_put_u2(&want_fx, 6, 0x8001u);
+    typed_store_case("sastore keeps low bits", &fx, (nj_ref)&fx.arr, 0x56, 6,
+                     0x18001u, want_fx.payload, 0);
+
+    test_name = "reference array access";
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_REF, TYPED_ARRAY_LEN);
+    typed_put_ref(&fx, 0, (nj_ref)&fx.arr);
+    typed_put_ref(&fx, 1, NULL);
+    typed_load_case("aaload self", &fx, (nj_ref)&fx.arr, 0x32, 0,
+                    typed_ref_bits(&fx, 0), 0);
+    typed_load_case("aaload null element", &fx, (nj_ref)&fx.arr, 0x32, 1, 0u, 0);
+
+    test_name = "array guard faults";
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_BYTE, TYPED_ARRAY_LEN);
+    typed_load_case("baload null", &fx, NULL, 0x33, 0, 0u, 1);
+    typed_load_case("baload index -1", &fx, (nj_ref)&fx.arr, 0x33, UINT32_MAX,
+                    0u, 1);
+    typed_load_case("baload index == length", &fx, (nj_ref)&fx.arr, 0x33,
+                    TYPED_ARRAY_LEN, 0u, 1);
+    fx.arr.kind = NJ_OBJ_PLAIN;
+    typed_load_case("baload not an array", &fx, (nj_ref)&fx.arr, 0x33, 0, 0u, 1);
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_SHORT, TYPED_ARRAY_LEN);
+    typed_load_case("baload wrong element kind", &fx, (nj_ref)&fx.arr, 0x33, 0,
+                    0u, 1);
+    typed_store_case("bastore null", &fx, NULL, 0x54, 0, 0x11u, fx.payload, 1);
+    typed_store_case("bastore index == length", &fx, (nj_ref)&fx.arr, 0x54,
+                     TYPED_ARRAY_LEN, 0x11u, fx.payload, 1);
+    fx.arr.kind = NJ_OBJ_PLAIN;
+    typed_store_case("bastore not an array", &fx, (nj_ref)&fx.arr, 0x54, 0,
+                     0x11u, fx.payload, 1);
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_CHAR, TYPED_ARRAY_LEN);
+    typed_load_case("caload null", &fx, NULL, 0x34, 0, 0u, 1);
+    typed_load_case("caload index == length", &fx, (nj_ref)&fx.arr, 0x34,
+                    TYPED_ARRAY_LEN, 0u, 1);
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_SHORT, TYPED_ARRAY_LEN);
+    typed_load_case("caload wrong element kind", &fx, (nj_ref)&fx.arr, 0x34, 0,
+                    0u, 1);
+    typed_store_case("castore wrong element kind", &fx, (nj_ref)&fx.arr, 0x55, 0,
+                     0x11u, fx.payload, 1);
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_INT, TYPED_ARRAY_LEN);
+    typed_store_case("castore element kind mismatch", &fx, (nj_ref)&fx.arr, 0x55,
+                     0, 0x11u, fx.payload, 1);
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_SHORT, TYPED_ARRAY_LEN);
+    typed_load_case("saload null", &fx, NULL, 0x35, 0, 0u, 1);
+    typed_load_case("saload index == length", &fx, (nj_ref)&fx.arr, 0x35,
+                    TYPED_ARRAY_LEN, 0u, 1);
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_CHAR, TYPED_ARRAY_LEN);
+    typed_load_case("saload wrong element kind", &fx, (nj_ref)&fx.arr, 0x35, 0,
+                    0u, 1);
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_SHORT, TYPED_ARRAY_LEN);
+    typed_store_case("bastore element kind mismatch", &fx, (nj_ref)&fx.arr, 0x54,
+                     0, 0x11u, fx.payload, 1);
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_BYTE, TYPED_ARRAY_LEN);
+    typed_store_case("sastore wrong element kind", &fx, (nj_ref)&fx.arr, 0x56, 0,
+                     0x11u, fx.payload, 1);
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_CHAR, TYPED_ARRAY_LEN);
+    typed_store_case("sastore element kind mismatch", &fx, (nj_ref)&fx.arr, 0x56,
+                     0, 0x11u, fx.payload, 1);
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_INT, TYPED_ARRAY_LEN);
+    typed_load_case("aaload wrong element kind", &fx, (nj_ref)&fx.arr, 0x32, 0,
+                    0u, 1);
+    typed_load_case("aaload null", &fx, NULL, 0x32, 0, 0u, 1);
+    fx.arr.kind = NJ_OBJ_PLAIN;
+    typed_load_case("aaload not an array", &fx, (nj_ref)&fx.arr, 0x32, 0, 0u, 1);
+    typed_array_init(&fx, NJ_OBJ_ARRAY, NJ_ARRAY_T_REF, TYPED_ARRAY_LEN);
+    typed_load_case("aaload index -1", &fx, (nj_ref)&fx.arr, 0x32, UINT32_MAX,
+                    0u, 1);
+    typed_load_case("aaload index == length", &fx, (nj_ref)&fx.arr, 0x32,
+                    TYPED_ARRAY_LEN, 0u, 1);
+}
+
+/* Real int[][] traversal: aaload produces the row reference and iaload reads
+ * through it.  On RV32 a reference is four bytes, so only the low half of the
+ * array slot is written. */
+static void test_array_chain(void)
+{
+    enum { CHAIN_ROWS = 2, CHAIN_CELLS = 8 };
+    typedef struct chain_fixture {
+        nj_vm vm;
+        nj_object rows;
+        nj_ref row_refs[CHAIN_ROWS];
+        nj_object row;
+        nj_s4 cells[CHAIN_CELLS];
+    } chain_fixture;
+    static const nj_u1 code[] = {0x32, 0x06, 0x2e}; /* aaload; iconst_3; iaload */
+    chain_fixture fx;
+    test_frame initial, expected;
+    nj_jit_block block;
+    unsigned i;
+    nj_u4 ret;
+
+    memset(&fx, 0, sizeof(fx));
+    fx.rows.kind = NJ_OBJ_ARRAY;
+    fx.rows.aflags = NJ_ARRAY_T_REF;
+    fx.rows.length = CHAIN_ROWS;
+    fx.rows.size = (nj_u4)sizeof(fx.row_refs);
+    fx.rows.u.refs = fx.row_refs;
+    fx.row.kind = NJ_OBJ_ARRAY;
+    fx.row.aflags = NJ_ARRAY_T_INT;
+    fx.row.length = CHAIN_CELLS;
+    fx.row.size = (nj_u4)sizeof(fx.cells);
+    fx.row.u.bytes = (nj_u1 *)(void *)fx.cells;
+    for (i = 0; i < CHAIN_CELLS; ++i)
+        fx.cells[i] = (nj_s4)(0x1000u + i);
+    fx.row_refs[0] = &fx.row;
+    fx.row_refs[1] = NULL;
+
+    init_frame(&initial);
+    initial.stack[BASE].r = (nj_ref)&fx.rows;
+    initial.stack[BASE + 1].i = 0;
+    expected = initial;
+    expected.stack[BASE].bits = (nj_u4)fx.cells[3];
+    expected.stack[BASE + 1].bits = 3u;
+    jit_vm = &fx.vm;
+    ret = run_expect("aaload then iaload", code, sizeof(code), 1, 2, NULL,
+                     &initial, &expected, &block);
+    jit_vm = NULL;
+    CHECK(block.next_pc == 3 && block.insns == 3);
+    CHECK(block.stack_delta == -1 && block.min_stack == 2 && block.max_growth == 0);
+    CHECK(block.nfaults == 2);
+    CHECK(block.faults[0].pc_off == 0 && block.faults[0].sp_delta == 0);
+    CHECK(block.faults[1].pc_off == 2 && block.faults[1].sp_delta == 0);
+#if EXECUTE_RV32
+    CHECK(sizeof(nj_ref) == 4u);
+    expect_success(ret, &block, block.insns);
+#endif
+    (void)ret;
+}
+
+/* Analyze and compile must agree on stack/fault/pc metadata for a block that
+ * mixes static accesses with the new array opcodes, both with and without the
+ * class-initialisation guard. */
+static void test_new_metadata(void)
+{
+    /* Four guards at most, so the block also fits a 4-fault configuration:
+     * getstatic, aaload, iaload and putstatic. */
+    static const nj_u1 code[] = {
+        0xb2, 0, 1,     /* getstatic */
+        0x03,           /* iconst_0 */
+        0x32,           /* aaload */
+        0x03,           /* iconst_0 */
+        0x2e,           /* iaload */
+        0xb3, 0, 1      /* putstatic */
+    };
+    static_fixture fx;
+    nj_method m = method(code, sizeof(code), 1);
+    nj_u1 generated[NJ_JIT_MAX_CODE_BYTES];
+    nj_jit_block analysis, block;
+
+    static_fixture_init(&fx, NJ_PT_INT, 1u, NJ_CLASS_READY);
+    m.owner = &fx.owner;
+    jit_vm = &fx.vm;
+    test_name = "new opcode analyze/compile metadata";
+    CHECK(analyze_method(&m, 0, &analysis));
+    CHECK(compile_method(&m, 0, generated, sizeof(generated), &block));
+    same_metadata(&block, &analysis);
+    CHECK(block.next_pc == sizeof(code) && block.insns == 6);
+    CHECK(block.stack_delta == 0 && block.min_stack == 0 && block.max_growth == 2);
+    CHECK(block.nfaults == 2); /* aaload + iaload; class is READY */
+    inspect(generated, block.size);
+
+    fx.owner.state = NJ_CLASS_LINKED;
+    CHECK(analyze_method(&m, 0, &analysis));
+    CHECK(compile_method(&m, 0, generated, sizeof(generated), &block));
+    same_metadata(&block, &analysis);
+    CHECK(block.nfaults == 4); /* two static guards plus two array guards */
+    inspect(generated, block.size);
+    jit_vm = NULL;
+}
+
 /* ---- fault ABI ------------------------------------------------------- */
 
 static void test_faults(void)
@@ -2586,6 +3255,10 @@ int main(int argc, char **argv)
     test_runtime_fault_abi();
 #endif
     test_fields_arrays();
+    test_static_fields();
+    test_typed_arrays();
+    test_array_chain();
+    test_new_metadata();
     test_rounding();
     test_branches();
     test_loops();

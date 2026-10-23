@@ -63,7 +63,8 @@ typedef struct rv_cached {
 enum {
     RV_FIX_FAULT = 0u,   /* target is a fault-exit index          */
     RV_FIX_EXIT = 1u,    /* target is a block-exit index          */
-    RV_FIX_LABEL = 2u    /* target is an instruction (label) index */
+    RV_FIX_LABEL = 2u,   /* target is an instruction (label) index */
+    RV_FIX_SKIP = 3u     /* patched immediately to a local offset */
 };
 #define RV_MAX_FIXUPS 192u
 #define RV_MAX_LABELS ((unsigned)NJ_JIT_MAX_BLOCK_INSNS + 1u)
@@ -97,8 +98,9 @@ typedef struct rv_bytecode {
     int need;
     int change;
     nj_u4 length;
-    const nj_field *field;   /* getfield/putfield only */
+    const nj_field *field;   /* field opcodes only */
     int guarding;            /* instruction can fault at run time */
+    int static_guard;        /* getstatic/putstatic: class may be unready */
     int branch;              /* 0 none, 1 conditional, 2 unconditional */
     nj_u4 target;            /* absolute branch target pc */
 } rv_bytecode;
@@ -483,6 +485,16 @@ static void rv_patch_branch(nj_u1 *buf, const rv_fixup *f, nj_size target)
     buf[f->at + 3u] = (nj_u1)(word >> 24);
 }
 
+/* Branch over a short normalisation sequence inside one instruction.  The
+ * target is a byte offset already known here, so the fixup is patched at once
+ * and the block-level fixup pass ignores it. */
+static unsigned rv_emit_skip_nonzero(rv_writer *w, unsigned rs)
+{
+    unsigned index = w->nfixups;
+    rv_branch(w, 1u, rs, RV_ZERO, RV_FIX_SKIP, 0u); /* bne rs, zero */
+    return index;
+}
+
 static nj_u4 rv_fault_word(unsigned index, nj_u4 completed)
 {
     return NJ_JIT_FAULT_BIT |
@@ -517,6 +529,20 @@ static const nj_field *rv_field_operand(nj_vm *vm, const nj_method *m,
     else last = (nj_u4)(f->width == 2u ? 8u : 4u);
     if ((nj_u4)f->offset + last > 2047u) return NULL;
     return f;
+}
+
+/* Static fields need no displacement check: the emitter materialises the slot
+ * address itself, so only the class-initialisation state matters. */
+static int rv_static_operand(nj_vm *vm, const nj_method *m, nj_u4 index,
+                             rv_bytecode *b)
+{
+    const nj_field *f = nj_jit_static_field(vm, m->owner, index);
+    if (!f) return 0;
+    b->field = f;
+    /* READY is terminal, so a class that is already initialised needs no
+     * run-time check; otherwise the block faults back to the interpreter. */
+    b->static_guard = f->owner && f->owner->state != NJ_CLASS_READY;
+    return 1;
 }
 
 static int rv_decode(nj_vm *vm, const nj_method *m, nj_u4 pc, rv_bytecode *b)
@@ -628,7 +654,13 @@ static int rv_decode(nj_vm *vm, const nj_method *m, nj_u4 pc, rv_bytecode *b)
         b->change = -1;
         b->guarding = 1;
         return 1;
-    case 0x4f: /* iastore */
+    case 0x32: case 0x33: case 0x34: case 0x35: /* aaload/baload/caload/saload */
+        if (!vm) return 0;
+        b->need = 2;
+        b->change = -1;
+        b->guarding = 1;
+        return 1;
+    case 0x4f: case 0x54: case 0x55: case 0x56: /* iastore/bastore/castore/sastore */
         if (!vm) return 0;
         b->need = 3;
         b->change = -3;
@@ -686,6 +718,23 @@ static int rv_decode(nj_vm *vm, const nj_method *m, nj_u4 pc, rv_bytecode *b)
             b->change = b->field->width == 2u ? 1 : 0;
         }
         b->guarding = 1; /* null receiver */
+        return 1;
+    }
+    case 0xb2: case 0xb3: { /* getstatic / putstatic */
+        unsigned index;
+        int is_put = op == 0xb3u;
+        if (left < 3u) return 0;
+        b->length = 3u;
+        index = ((unsigned)code[1] << 8) | code[2];
+        if (!rv_static_operand(vm, m, index, b)) return 0;
+        if (is_put) {
+            b->need = (int)b->field->width;
+            b->change = -b->need;
+        } else {
+            b->need = 0;
+            b->change = (int)b->field->width;
+        }
+        b->guarding = b->static_guard;
         return 1;
     }
     case 0xbe: /* arraylength */
@@ -809,7 +858,62 @@ static void rv_field_load(rv_writer *w, const nj_field *f, int top,
     }
 }
 
-static void rv_emit(rv_writer *w, const rv_bytecode *b, int delta,
+/* The interpreter runs <clinit> on the first static access, which the JIT
+ * cannot do; a class that was not READY when this block was built gets a
+ * run-time state check that faults back to the interpreter, which initialises
+ * it and re-executes the bytecode.  A READY class never goes back, so blocks
+ * built after initialisation check nothing. */
+static void rv_static_prepare(rv_writer *w, const rv_bytecode *b,
+                              unsigned fault)
+{
+    if (!b->static_guard || !b->field || !b->field->owner) return;
+    rv_li(w, RV_T0, (nj_s4)(uintptr_t)b->field->owner);
+    rv_load_mem(w, RV_T1, 0u, RV_T0, (int)offsetof(nj_class, state));
+    rv_addi(w, RV_T1, RV_T1, -(int)NJ_CLASS_READY);
+    rv_guard_nonzero(w, RV_T1, fault);
+}
+
+/* Static slots live in vm->statics, which the block ABI does not pass in.  The
+ * array is allocated once per VM and the code cache dies with that VM, so the
+ * absolute address of the slot is a compile-time constant here. */
+static void rv_static_addr(rv_writer *w, nj_vm *vm, const nj_field *f)
+{
+    rv_li(w, RV_T0, (nj_s4)(uintptr_t)&vm->statics[f->offset]);
+#if NJ_JIT_RV32_REG_CACHE
+    rv_forget_memory(w); /* t0 becomes a dynamic base */
+#endif
+}
+
+/* Null, array-kind, length and element-kind guards shared by every array
+ * opcode, then the element address.  RV_T0 ends up holding that address and
+ * RV_T1/RV_T2 are scratch.  Guard order matches the interpreter: a null
+ * reference raises NPE before the index is even considered, and the element
+ * kind covers booleans and bytes with one range check. */
+static void rv_array_addr(rv_writer *w, int array_slot, int index_slot,
+                          unsigned shift, int lo, int hi, unsigned fault)
+{
+    rv_load_base(w, array_slot);
+    rv_guard_zero(w, RV_T0, fault);
+    rv_load(w, RV_T1, RV_SP_ARG, index_slot);
+    rv_load_mem(w, RV_T2, 0u, RV_T0, RV_OBJ_KIND);        /* lbu kind */
+    rv_addi(w, RV_T2, RV_T2, -(int)NJ_OBJ_ARRAY);
+    rv_guard_nonzero(w, RV_T2, fault);
+    rv_load_mem(w, RV_T2, 2u, RV_T0, RV_OBJ_LENGTH);      /* lw length */
+    rv_guard_geu(w, RV_T1, RV_T2, fault);
+    rv_load_mem(w, RV_T2, 5u, RV_T0, RV_OBJ_AFLAGS);      /* lhu aflags */
+    rv_addi(w, RV_T2, RV_T2, -lo);
+    if (lo == hi) {
+        rv_guard_nonzero(w, RV_T2, fault);
+    } else {
+        rv_li(w, RV_T3, hi - lo + 1);
+        rv_guard_geu(w, RV_T2, RV_T3, fault);
+    }
+    rv_load_mem(w, RV_T0, 2u, RV_T0, RV_OBJ_DATA);        /* lw data */
+    if (shift != 0u) rv_i(w, 0x13u, 1u, RV_T1, RV_T1, (int)shift);
+    rv_r(w, 0x33u, 0u, 0u, RV_T0, RV_T0, RV_T1);          /* &element */
+}
+
+static void rv_emit(nj_vm *vm, rv_writer *w, const rv_bytecode *b, int delta,
                     unsigned fault)
 {
     unsigned op = b->op;
@@ -919,47 +1023,58 @@ static void rv_emit(rv_writer *w, const rv_bytecode *b, int delta,
         return;
     }
 #endif
-    case 0x2e: { /* iaload: index, array -> value */
-        unsigned idx = RV_T1;
-        unsigned len = RV_T2;
-        rv_load_base(w, top - 16);
-        rv_guard_zero(w, RV_T0, fault);
-        rv_load(w, idx, RV_SP_ARG, top - RV_SLOT_BYTES);
-        rv_load_mem(w, len, 0u, RV_T0, RV_OBJ_KIND);       /* lbu kind */
-        rv_addi(w, len, len, -1);
-        rv_guard_nonzero(w, len, fault);
-        rv_load_mem(w, len, 2u, RV_T0, RV_OBJ_LENGTH);     /* lw length */
-        rv_guard_geu(w, idx, len, fault);
-        rv_load_mem(w, len, 5u, RV_T0, RV_OBJ_AFLAGS);     /* lhu aflags */
-        rv_addi(w, len, len, -(int)NJ_ARRAY_T_INT);
-        rv_guard_nonzero(w, len, fault);
-        rv_load_mem(w, len, 2u, RV_T0, RV_OBJ_DATA);       /* lw data */
-        rv_i(w, 0x13u, 1u, idx, idx, 2);                   /* slli idx, 2 */
-        rv_r(w, 0x33u, 0u, 0u, len, len, idx);             /* add */
-        rv_load_mem(w, idx, 2u, len, 0);                   /* lw value */
-        rv_store(w, idx, RV_SP_ARG, top - 16);
+    case 0x2e: /* iaload: index, array -> value */
+    case 0x32: /* aaload */
+    case 0x33: /* baload */
+    case 0x34: /* caload */
+    case 0x35: { /* saload */
+        unsigned f3 = 2u;      /* lw */
+        unsigned shift = 2u;
+        int lo = (int)NJ_ARRAY_T_INT, hi = lo;
+        switch (op) {
+        case 0x32: lo = hi = (int)NJ_ARRAY_T_REF; break;
+        case 0x33: lo = (int)NJ_ARRAY_T_BOOLEAN; hi = (int)NJ_ARRAY_T_BYTE;
+                   f3 = 0u; shift = 0u; break;           /* lb */
+        case 0x34: lo = hi = (int)NJ_ARRAY_T_CHAR; f3 = 5u; shift = 1u; break;
+        case 0x35: lo = hi = (int)NJ_ARRAY_T_SHORT; f3 = 1u; shift = 1u; break;
+        default: break;
+        }
+        rv_array_addr(w, top - 16, top - RV_SLOT_BYTES, shift, lo, hi, fault);
+        if (op == 0x33u) {
+            unsigned boolean_skip;
+            /* The interpreter normalises boolean elements to 0/1, while byte
+             * arrays expose the signed byte.  The aflags guard above left
+             * RV_T2 = aflags - BOOLEAN, i.e. zero for a boolean array. */
+            rv_load_mem(w, RV_T1, f3, RV_T0, 0);              /* lb */
+            boolean_skip = rv_emit_skip_nonzero(w, RV_T2);
+            rv_r(w, 0x33u, 0u, 3u, RV_T1, RV_ZERO, RV_T1);    /* sltu v,0 */
+            if (!w->failed) {
+                rv_patch_branch(w->buf, &w->fixups[boolean_skip], w->used);
+            }
+            rv_store(w, RV_T1, RV_SP_ARG, top - 16);
+        } else {
+            rv_load_mem(w, RV_T2, f3, RV_T0, 0);
+            rv_store(w, RV_T2, RV_SP_ARG, top - 16);
+        }
         return;
     }
-    case 0x4f: { /* iastore: array, index, value (value on top) */
-        unsigned idx = RV_T1;
-        unsigned len = RV_T2;
-        unsigned val = RV_T1;
-        rv_load_base(w, top - 24);
-        rv_guard_zero(w, RV_T0, fault);
-        rv_load(w, idx, RV_SP_ARG, top - 16);
-        rv_load_mem(w, len, 0u, RV_T0, RV_OBJ_KIND);
-        rv_addi(w, len, len, -1);
-        rv_guard_nonzero(w, len, fault);
-        rv_load_mem(w, len, 2u, RV_T0, RV_OBJ_LENGTH);
-        rv_guard_geu(w, idx, len, fault);
-        rv_load_mem(w, len, 5u, RV_T0, RV_OBJ_AFLAGS);
-        rv_addi(w, len, len, -(int)NJ_ARRAY_T_INT);
-        rv_guard_nonzero(w, len, fault);
-        rv_load_mem(w, len, 2u, RV_T0, RV_OBJ_DATA);
-        rv_i(w, 0x13u, 1u, idx, idx, 2);                   /* slli idx, 2 */
-        rv_r(w, 0x33u, 0u, 0u, len, len, idx);             /* add */
-        rv_load(w, val, RV_SP_ARG, top - RV_SLOT_BYTES);
-        rv_store_mem(w, 2u, val, len, 0);                  /* sw value */
+    case 0x4f: /* iastore */
+    case 0x54: /* bastore */
+    case 0x55: /* castore */
+    case 0x56: { /* sastore: array, index, value (value on top) */
+        unsigned f3 = 2u;      /* sw */
+        unsigned shift = 2u;
+        int lo = (int)NJ_ARRAY_T_INT, hi = lo;
+        switch (op) {
+        case 0x54: lo = (int)NJ_ARRAY_T_BOOLEAN; hi = (int)NJ_ARRAY_T_BYTE;
+                   f3 = 0u; shift = 0u; break;           /* sb */
+        case 0x55: lo = hi = (int)NJ_ARRAY_T_CHAR; f3 = 1u; shift = 1u; break;
+        case 0x56: lo = hi = (int)NJ_ARRAY_T_SHORT; f3 = 1u; shift = 1u; break;
+        default: break;
+        }
+        rv_array_addr(w, top - 24, top - 16, shift, lo, hi, fault);
+        rv_load(w, RV_T2, RV_SP_ARG, top - RV_SLOT_BYTES);
+        rv_store_mem(w, f3, RV_T2, RV_T0, 0);
         return;
     }
     case 0xbe: { /* arraylength */
@@ -967,6 +1082,54 @@ static void rv_emit(rv_writer *w, const rv_bytecode *b, int delta,
         rv_guard_zero(w, RV_T0, fault);
         rv_load_mem(w, RV_T1, 2u, RV_T0, RV_OBJ_LENGTH);
         rv_store(w, RV_T1, RV_SP_ARG, top - RV_SLOT_BYTES);
+        return;
+    }
+    case 0xb2: { /* getstatic -> value */
+        const nj_field *f = b->field;
+        if (!f || !vm) {
+            w->failed = 1;
+            return;
+        }
+        rv_static_prepare(w, b, fault);
+        rv_static_addr(w, vm, f);
+        if (f->width == 2u) {
+            rv_load_mem(w, RV_T1, 2u, RV_T0, 0);            /* low word  */
+            rv_store(w, RV_T1, RV_SP_ARG, top);
+            rv_load_mem(w, RV_T1, 2u, RV_T0, 4);            /* high word */
+            rv_store(w, RV_T1, RV_SP_ARG, top + 4);
+            rv_store(w, RV_ZERO, RV_SP_ARG, top + RV_SLOT_BYTES);
+        } else {
+            unsigned f3 = 2u; /* lw */
+            if (f->ptype == NJ_PT_BOOLEAN || f->ptype == NJ_PT_BYTE) f3 = 0u;
+            else if (f->ptype == NJ_PT_CHAR) f3 = 5u;
+            else if (f->ptype == NJ_PT_SHORT) f3 = 1u;
+            rv_load_mem(w, RV_T1, f3, RV_T0, 0);
+            rv_store(w, RV_T1, RV_SP_ARG, top);
+        }
+        return;
+    }
+    case 0xb3: { /* putstatic */
+        const nj_field *f = b->field;
+        int value_slot;
+        if (!f || !vm) {
+            w->failed = 1;
+            return;
+        }
+        value_slot = top - (int)f->width * RV_SLOT_BYTES;
+        rv_static_prepare(w, b, fault);
+        rv_static_addr(w, vm, f);
+        if (f->width == 2u) {
+            rv_load(w, RV_T1, RV_SP_ARG, value_slot);
+            rv_store_mem(w, 2u, RV_T1, RV_T0, 0);
+            rv_load(w, RV_T1, RV_SP_ARG, value_slot + 4);
+            rv_store_mem(w, 2u, RV_T1, RV_T0, 4);
+        } else {
+            unsigned f3 = 2u; /* sw */
+            if (f->ptype == NJ_PT_BOOLEAN || f->ptype == NJ_PT_BYTE) f3 = 0u;
+            else if (f->ptype == NJ_PT_CHAR || f->ptype == NJ_PT_SHORT) f3 = 1u;
+            rv_load(w, RV_T1, RV_SP_ARG, value_slot);
+            rv_store_mem(w, f3, RV_T1, RV_T0, 0);
+        }
         return;
     }
     case 0xb4: { /* getfield: receiver -> value */
@@ -1341,7 +1504,8 @@ static void rv_emit_branch(rv_writer *w, const rv_scan *s, unsigned insn)
     rv_branch(w, f3, rs1, rs2, kind, target);
 }
 
-static int rv_emit_block(rv_writer *w, const rv_scan *s, nj_size capacity)
+static int rv_emit_block(nj_vm *vm, rv_writer *w, const rv_scan *s,
+                         nj_size capacity)
 {
     const nj_jit_block *block = &s->block;
     nj_size label_at[NJ_JIT_MAX_BLOCK_INSNS];
@@ -1385,7 +1549,7 @@ static int rv_emit_block(rv_writer *w, const rv_scan *s, nj_size capacity)
         } else {
             unsigned fault = s->fault_of[i] == RV_NO_FAULT ?
                              0u : (unsigned)s->fault_of[i];
-            rv_emit(w, &s->ins[i], s->delta[i], fault);
+            rv_emit(vm, w, &s->ins[i], s->delta[i], fault);
             if (w->counter) rv_addi(w, RV_A3, RV_A3, 1);
         }
         if (w->failed) return 0;
@@ -1426,6 +1590,7 @@ static int rv_emit_block(rv_writer *w, const rv_scan *s, nj_size capacity)
     for (i = 0u; i < w->nfixups; ++i) {
         const rv_fixup *f = &w->fixups[i];
         nj_size target;
+        if (f->kind == RV_FIX_SKIP) continue; /* patched during emission */
         if (f->kind == RV_FIX_FAULT) {
             if (f->target >= block->nfaults) return 0;
             target = fault_at[f->target];
@@ -1463,7 +1628,7 @@ int nj_rv32_compile(nj_vm *vm, const nj_method *m, nj_u4 pc, nj_u1 *buf,
     w.capacity = capacity;
     w.failed = 0;
     w.nfixups = 0u;
-    if (!rv_emit_block(&w, &scan, capacity)) return 0;
+    if (!rv_emit_block(vm, &w, &scan, capacity)) return 0;
     if (w.used > capacity || w.failed) return 0;
     scan.block.size = w.used;
     *out = scan.block;

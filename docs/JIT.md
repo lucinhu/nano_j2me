@@ -76,9 +76,22 @@ with sign extension, `CHAR` with zero extension, `SHORT` with sign extension,
 `INT`/`FLOAT` move 32 bits (`FLOAT` as raw bits), references move one
 pointer-sized word (32 bits on RV32, 64 bits on LP64), and `LONG`/`DOUBLE` move
 64 bits with the padding slot's low 32 bits cleared.
-Integer arrays compile to native `iaload`/`iastore` only when the runtime array
-flags are exactly `NJ_ARRAY_T_INT`, and native `arraylength` pushes the array
-length. A null receiver, a non-int array, a non-array reference, an
+Resolved static fields compile to native `getstatic`/`putstatic` for every Java
+primitive and reference type, reading the linked field out of the CP cache like
+instance fields and addressing the slot through `vm->statics`. When the declaring
+class is not `NJ_CLASS_READY` at build time the block carries a runtime
+class-state guard: a not-yet-initialized class deoptimizes at the instruction, so
+the interpreter still runs `<clinit>` first. Once the class is ready the guard is
+dropped, because `READY` is terminal.
+
+Array element access compiles natively for `int` (`iaload`/`iastore`), `byte` and
+`boolean` (`baload`/`bastore`), `char` (`caload`/`castore`), `short`
+(`saload`/`sastore`) and references (`aaload`); native `arraylength` pushes the
+array length. The generated guard checks null, array kind and length before the
+element flags, in the same order as the interpreter. `baload`/`bastore` accept
+both boolean and byte arrays, the other typed accesses require the matching
+element flag, and `aaload` requires a reference array (a non-reference array is
+malformed bytecode and only deoptimizes). A null receiver, a mismatched array, an
 out-of-bounds index or a zero divisor makes the block return to the interpreter
 *before* the operation's first side effect; the interpreter then re-executes that
 exact bytecode, so the Java exception class, message and PC are unchanged.
@@ -94,11 +107,10 @@ and check the remaining scheduling budget before every iteration, so native
 execution always returns to the interpreter after at most `budget` bytecodes and
 cannot starve other threads or defer the bridge's deadline check.
 
-String/Class and wide constants, static fields, wide arrays (`aaload`,
-`baload`, ...), long arithmetic, conversions/comparisons, complex stack
-permutations, calls, allocation, monitors and exception handling stay in the
-interpreter. A block ends immediately before an unsupported operation; the next
-interpreter dispatch can enter another compiled block.
+String/Class and wide constants, long arithmetic, conversions/comparisons,
+complex stack permutations, calls, allocation, monitors and exception handling
+stay in the interpreter. A block ends immediately before an unsupported
+operation; the next interpreter dispatch can enter another compiled block.
 
 `NJ_JIT_RV32_REG_CACHE=1` (default) tracks T0/T1 values across bytecodes, reuses
 redundant loads and folds supported integer operations with known operands.
@@ -133,7 +145,10 @@ label. It supports all valid 16-bit local indices
 References, including null, use full 64-bit slot accesses. Integer and float
 stores preserve the upper half of a slot, matching the interpreter's 32-bit
 `bits` member. Long/double payloads occupy 64 bits; only the low 32 bits of their
-second, padding slot are cleared. Unsupported operations use the interpreter.
+second, padding slot are cleared. The static-field and typed-array coverage
+described above is RV32-only for now: the ARM64 encoder ends the block before
+`getstatic`, `putstatic` and the non-`int` array accesses, which then run in the
+interpreter. Unsupported operations use the interpreter.
 
 Floating arithmetic temporarily saves FPCR, selects round-to-nearest-even with
 subnormal values preserved and default-NaN mode disabled, then restores the

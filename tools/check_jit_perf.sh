@@ -110,8 +110,8 @@ fi
 # the new deopt/map counters and cross-mode checksum equality here, so a green
 # benchmark cannot hide a regressed fallback ratio or leaked executable memory.
 EXECUTIONS=$(grep -c '^RESULT ' "$LOG" || true)
-EXPECTED_RESULTS=6
-if [[ "$MODE" == all ]]; then EXPECTED_RESULTS=18; fi
+EXPECTED_RESULTS=8
+if [[ "$MODE" == all ]]; then EXPECTED_RESULTS=24; fi
 if [[ "$EXECUTIONS" != "$EXPECTED_RESULTS" ]]; then
     echo "FAIL perf: expected $EXPECTED_RESULTS RESULT lines, got $EXECUTIONS; log=$LOG" >&2
     exit 1
@@ -196,7 +196,7 @@ $1 == "FALLBACK" {
     }
 }
 END {
-    if (kernels != 6) { print "FAIL perf: expected 6 kernels, saw " kernels; bad = 1 }
+    if (kernels != 8) { print "FAIL perf: expected 8 kernels, saw " kernels; bad = 1 }
     # All available modes for a kernel must produce the identical checksum.
     for (k in kernel_seen) {
         ref = ""
@@ -210,8 +210,8 @@ END {
         }
     }
     printf "SUMMARY perf kernels=%d modes=%d results=%d execute_fallback_max=%.6f peak_footprint=%d\n",
-           kernels, mode_count, 6 * mode_count, max_fallback, max_mem
+           kernels, mode_count, 8 * mode_count, max_fallback, max_mem
     exit bad
 }' "$LOG"
 
-echo "PASS perf: six kernels match C oracles in every mode; map/deopt stats and fallback ratios checked; log=$LOG"
+echo "PASS perf: eight kernels match C oracles in every mode; map/deopt stats and fallback ratios checked; log=$LOG"

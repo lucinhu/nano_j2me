@@ -182,6 +182,9 @@ static inline int nj_jit_opcode_candidate(nj_u1 op)
            (op >= 0x36u && op <= 0x4eu) || (op >= 0x57u && op <= 0xa7u) ||
            (op >= 0x91u && op <= 0x93u) || op == 0xc4u ||
            op == 0x2eu || op == 0x4fu ||           /* iaload / iastore */
+           (op >= 0x32u && op <= 0x35u) ||         /* aaload .. saload */
+           (op >= 0x54u && op <= 0x56u) ||         /* bastore .. sastore */
+           op == 0xb2u || op == 0xb3u ||           /* getstatic / putstatic */
            op == 0xb4u || op == 0xb5u ||           /* getfield / putfield */
            op == 0xbeu ||                          /* arraylength */
            op == 0xc6u || op == 0xc7u;             /* ifnull / ifnonnull */
@@ -243,6 +246,48 @@ static inline const nj_field *nj_jit_instance_field(const nj_vm *vm,
     }
     if ((nj_u4)f->offset < (nj_u4)sizeof(nj_object) ||
         (nj_u4)f->offset + bytes > (nj_u4)f->owner->instance_size) {
+        return NULL;
+    }
+    return f;
+}
+
+/* Read-only resolved view of a static field for getstatic/putstatic.  A static
+ * access is only legal after the owning class is initialised: before that the
+ * interpreter has to run <clinit>, which can execute arbitrary Java.  A caller
+ * that sees NJ_CLASS_READY may emit a plain access (READY is terminal);
+ * otherwise it must emit a run-time state check that faults back to the
+ * interpreter.  The slot index was validated against vm->nstatics at link
+ * time, including the second slot of long/double. */
+static inline const nj_field *nj_jit_static_field(const nj_vm *vm,
+                                                  const nj_class *c,
+                                                  nj_u4 index)
+{
+    const nj_cpentry *e = nj_jit_cp_peek(vm, c, index);
+    const nj_field *f;
+    nj_u4 slots;
+
+    if (!e || e->kind != NJ_LINK_FIELD_STATIC || !e->target) {
+        return NULL;
+    }
+    f = (const nj_field *)e->target;
+    if ((f->flags & NJ_ACC_STATIC) == 0u || !f->owner ||
+        f->owner->state < NJ_CLASS_LINKED) {
+        return NULL;
+    }
+    switch (f->ptype) {
+    case NJ_PT_BOOLEAN:
+    case NJ_PT_BYTE:
+    case NJ_PT_CHAR:
+    case NJ_PT_SHORT:
+    case NJ_PT_INT:
+    case NJ_PT_FLOAT:
+    case NJ_PT_OBJECT: slots = 1u; break;
+    case NJ_PT_LONG:
+    case NJ_PT_DOUBLE: slots = 2u; break;
+    default:           return NULL;
+    }
+    if ((nj_u4)f->offset >= vm->nstatics ||
+        (nj_u4)f->offset + slots > vm->nstatics) {
         return NULL;
     }
     return f;

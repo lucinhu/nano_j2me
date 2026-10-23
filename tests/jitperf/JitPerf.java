@@ -4,6 +4,23 @@ package jitperf;
 public final class JitPerf {
     private JitPerf() {}
 
+    /* Static state for the bytes and matrix kernels. Both tables are filled
+       once during class initialisation, before any measured call. */
+    private static final byte[] tiles = new byte[1024];
+    private static int tileSum;
+    private static final int[][] grid = new int[32][32];
+
+    static {
+        for (int i = 0; i < tiles.length; ++i) {
+            tiles[i] = (byte) (i * 31 + 7);
+        }
+        for (int row = 0; row < 32; ++row) {
+            for (int column = 0; column < 32; ++column) {
+                grid[row][column] = row * 37 + column * 11 + 5;
+            }
+        }
+    }
+
     public static int locals(int iterations) {
         int a = 0x1234;
         int b = 0x5678;
@@ -85,6 +102,41 @@ public final class JitPerf {
         return sum ^ state;
     }
 
+    /** Static byte table with getstatic/putstatic and baload/bastore. */
+    public static int bytes(int iterations) {
+        int sum = 0;
+        for (int i = 0; i < iterations; ++i) {
+            int index = (i * 7 + sum) & 1023;
+            int value = tiles[index];
+            value = (byte) (value + (i & 31));
+            tiles[index] = (byte) value;
+            sum = (sum + value) ^ i;
+            tileSum = tileSum + sum;
+        }
+        return sum ^ tileSum;
+    }
+
+    /** Static int[][] traversal: aaload of the row, then iaload/iastore. */
+    public static int matrix(int iterations) {
+        int sum = 0;
+        for (int i = 0; i < iterations; ++i) {
+            int[] row = grid[(i * 5 + sum) & 31];
+            int column = (i * 11 + sum) & 31;
+            int value = row[column];
+            value = (value + (i & 0xffff)) ^ (sum >>> 3);
+            row[column] = value;
+            sum += value;
+        }
+        return sum;
+    }
+
+    /** Reads the static tables without mutating them.  The benchmark harness
+     *  calls this once before the timed region so the class initialiser, which
+     *  fills both tables, never runs inside a measured call. */
+    public static int warm(int ignored) {
+        return grid.length + tiles.length + tileSum + ignored;
+    }
+
     /** Optional independent desktop-JVM checksum cross-check. */
     public static void main(String[] args) {
         int iterations = args.length == 0 ? 20000 : Integer.parseInt(args[0]);
@@ -94,5 +146,7 @@ public final class JitPerf {
         System.out.println("arrays=" + Integer.toHexString(arrays(iterations)));
         System.out.println("mixed=" + Integer.toHexString(mixed(iterations)));
         System.out.println("branches=" + Integer.toHexString(branches(iterations)));
+        System.out.println("bytes=" + Integer.toHexString(bytes(iterations)));
+        System.out.println("matrix=" + Integer.toHexString(matrix(iterations)));
     }
 }
