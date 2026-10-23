@@ -1,9 +1,11 @@
 # Baseline JIT performance: measurements and reproduction
 
 This work responds to a second board report, against `fe974fc` — the commit
-that carried the previous probe/dispatch optimisation set. It landed in two
+that carried the previous probe/dispatch optimisation set. It landed in several
 steps: the probe map and field/array coverage first, then branch and loop
-compilation with the budgeted block ABI described below. The reporting device
+compilation with the budgeted block ABI, then wider block windows and static
+field / typed array coverage, and finally sparse probing (the interpreter probes
+only where a native block can start). The reporting device
 is an anonymous 32-bit embedded board with a 240×320 display. The harness runs
 five fixed kernels for 50,000 iterations and averages two fresh-VM rounds with
 superinstructions and threaded dispatch disabled in both modes, and JIT
@@ -51,6 +53,13 @@ fixed arena, plus a small method table.
   or any executable-memory callback, so a compiling site pays for one decode,
   not two. Probe-only mode still analyses, and an end-of-quantum budget still
   takes the analysing path so it can report `budget_skips`.
+- The interpreter now calls the probe only where a native block can start: at
+  pc 0, on the first bytecode of an activation, and after any opcode that can
+  end a block (branches, `ifnull`/`ifnonnull`, calls, allocation, switches,
+  long arithmetic, returns and throws). Straight-line interpretation pays no
+  probe at all; a finished native block probes its own exit pc, so window splits
+  and deopt resumes are unaffected. On call-heavy real-world bytecode this is
+  the largest single win in this revision (see "Sparse probing" below).
 - Methods whose body cannot fit the arena are never mapped and never JIT'd;
   refused sites stay refused until their map is recycled; code eviction clears
   the cell so the site starts cold again. When the arena is full the least
@@ -137,11 +146,13 @@ wraparound results. The runner checks code-memory
 allocation/free pairing and that probe-only performs no compilation, allocation
 or commit.
 
-Probe-only visits every interpreted bytecode, including sites skipped by an
-executed native block; its timing measures the installed probe path, and
-subtracting it from execute time is not an exact attribution. With the usual
-interpreter fusions enabled, installing the JIT changes counting policy before a
-site is hot; disable superinstructions for instruction-count comparisons.
+Probe-only now visits only block-start boundaries, not every interpreted
+bytecode: its timing measures the installed probe where a block could begin.
+Subtracting it from execute time is still not an exact attribution, because
+probe-only also visits boundaries that an executed native block would have
+skipped. With the usual interpreter fusions enabled, installing the JIT changes
+counting policy before a site is hot; disable superinstructions for
+instruction-count comparisons.
 
 The output line for execute mode includes `native_blocks`, `native_bytecodes`,
 `compiled_blocks`, `declined_blocks`, evictions, `faults`, `metadata_bytes`,
@@ -191,33 +202,62 @@ Steady state, 20,000 iterations:
 
 | Kernel | RV32 interpreter / probe / execute ms | RV32 exec/interp | RV32 probe/interp | ARM64 interpreter / probe / execute ms | ARM64 exec/interp | ARM64 probe/interp |
 |---|---:|---:|---:|---:|---:|---:|
-| Locals | 25.27 / 31.41 / 2.62 | 0.104 | 1.243 | 25.62 / 26.32 / 2.56 | 0.100 | 1.027 |
-| Constants | 9.21 / 18.17 / 0.48 | 0.052 | 1.974 | 7.82 / 14.86 / 0.43 | 0.055 | 1.900 |
-| Fields | 18.73 / 34.07 / 1.10 | 0.059 | 1.819 | 16.96 / 29.80 / 1.07 | 0.063 | 1.757 |
-| Arrays | 17.39 / 35.90 / 1.59 | 0.092 | 2.065 | 14.55 / 25.40 / 1.40 | 0.096 | 1.745 |
-| Mixed | 38.77 / 71.96 / 1.71 | 0.044 | 1.856 | 25.14 / 37.48 / 1.15 | 0.046 | 1.491 |
-| Branches | 17.14 / 35.83 / 0.89 | 0.052 | 2.091 | 8.31 / 16.21 / 0.49 | 0.059 | 1.952 |
-| Bytes | 31.74 / 60.55 / 1.46 | 0.046 | 1.908 | 14.94 / 29.08 / 16.39 | 1.098 | 1.947 |
-| Matrix | 24.76 / 42.19 / 0.91 | 0.037 | 1.704 | 16.49 / 31.33 / 27.78 | 1.685 | 1.900 |
+| Locals | 15.90 / 13.32 / 2.60 | 0.163 | 0.837 | 30.91 / 20.66 / 2.77 | 0.090 | 0.668 |
+| Constants | 7.82 / 10.21 / 0.40 | 0.051 | 1.306 | 9.05 / 11.87 / 0.46 | 0.051 | 1.311 |
+| Fields | 15.16 / 22.71 / 1.00 | 0.066 | 1.497 | 17.96 / 25.65 / 1.16 | 0.064 | 1.428 |
+| Arrays | 13.64 / 16.50 / 1.50 | 0.110 | 1.210 | 17.54 / 22.26 / 1.81 | 0.103 | 1.269 |
+| Mixed | 33.05 / 43.82 / 1.35 | 0.041 | 1.326 | 37.71 / 49.78 / 2.00 | 0.053 | 1.320 |
+| Branches | 13.31 / 17.94 / 0.63 | 0.047 | 1.347 | 18.25 / 24.35 / 0.94 | 0.052 | 1.334 |
+| Bytes | 24.90 / 33.11 / 1.45 | 0.058 | 1.330 | 31.50 / 42.91 / 35.03 | 1.112 | 1.362 |
+| Matrix | 25.47 / 30.43 / 1.21 | 0.048 | 1.195 | 29.72 / 31.04 / 24.21 | 0.815 | 1.045 |
 
-With whole-loop blocks the steady-state execute path is 10–27x faster than
-interpretation on these tight kernels. Probe-only stays 1.2–2.1x slower than the
-interpreter: it visits every bytecode through the probe and compiles nothing, so
-that ratio is the price of the installed probe rather than a JIT win. Bytes and
-matrix on ARM64 stay mostly interpreted: the ARM64 encoder does not yet emit
+With whole-loop blocks the steady-state execute path is 6–30x faster than
+interpretation on these tight kernels. Probe-only is now about as expensive as
+the interpreter itself (0.67–1.50x): sparse probing means one probe at each
+block-start boundary instead of one per bytecode, so the remaining ratio is
+mostly the dispatch difference of an installed engine. Bytes and matrix on ARM64
+stay mostly interpreted: the ARM64 encoder does not yet emit
 `getstatic`/`putstatic` or the non-`int` array accesses, so it ends the block
 before them (fallback ratios 0.359 and 0.845), and those rows are effectively
-interpreter measurements. Interpreted wall time varies
-with host load, so the absolute milliseconds and the ratio columns are
-directional: the ratios compare a probe or execute run against the interpreter
-run of the same process, but QEMU throttling still moves them by tens of percent
-between sessions. Do not subtract probe-only time from execute time for
-attribution either: probe-only also visits bytecodes skipped by a native block.
+interpreter measurements. Interpreted wall time varies with host load, so the
+absolute milliseconds and the ratio columns are directional: the ratios compare
+a probe or execute run against the interpreter run of the same process, but QEMU
+throttling still moves them by tens of percent between sessions.
+
+### Sparse probing
+
+Before this revision the interpreter called the probe for every candidate
+bytecode, even in straight-line code that could never start a block; on
+call-heavy real-world bytecode that was a large part of the board's +53%. The
+interpreter now probes only where a block can start: method entry, the first
+bytecode of an activation, and the bytecode after any opcode that can end a
+block (branches, `ifnull`/`ifnonnull`, calls, allocation, switches, long
+arithmetic, returns and throws). A finished native block still probes its own
+exit pc, so a window split or a deopt resume does not lose heat.
+
+Measured A/B in the same session with identical sources except the gate, RV32
+QEMU, 20,000 iterations, medians of three alternating runs:
+
+| Kernel | probe-only dense ms | probe-only sparse ms | dense probe/interp | sparse probe/interp |
+|---|---:|---:|---:|---:|
+| Locals | 32.21 | 15.13 | 1.377 | 0.999 |
+| Constants | 17.92 | 10.46 | 1.961 | 1.328 |
+| Fields | 33.32 | 23.02 | 1.781 | 1.506 |
+| Arrays | 36.63 | 16.54 | 2.002 | 1.204 |
+| Mixed | 72.81 | 43.94 | 1.789 | 1.323 |
+| Branches | 36.23 | 18.43 | 2.105 | 1.387 |
+| Bytes | 59.96 | 32.93 | 1.924 | 1.291 |
+| Matrix | 42.71 | 31.55 | 1.634 | 1.199 |
+
+Probe-only wall time roughly halved and its interpreter ratio fell from
+1.4–2.1x to 1.0–1.5x. The remaining probes are concentrated where real games
+actually interpret bytecode — call returns and branch targets — so the board,
+not QEMU, has to quantify the end-to-end effect.
 
 Execute-mode compiled footprint, RV32 / ARM64: locals 1 block and 238 / 364 code
 bytes; constants 1 and 150 / 220; fields 1 and 324 / 448; arrays 2 and 582 / 740;
-mixed 1 and 914 / 1200; branches 1 and 414 / 632; bytes 1 and 616 / 1548 (the
-ARM64 number is a prefix block that stops at `getstatic`); matrix 1 and 662 / 168
+mixed 1 and 914 / 1200; branches 1 and 414 / 632; bytes 1 and 616 / 292 (the
+ARM64 number is a prefix block that stops at `getstatic`); matrix 1 and 662 / 92
 (again a short ARM64 prefix). Every code allocation is freed, and
 `metadata_bytes` is 11,480 on RV32 and 12,648 on LP64 as noted above.
 
@@ -226,14 +266,14 @@ compiled code bytes):
 
 | Kernel | RV32 int / exec | RV32 ratio | RV32 bytes | ARM64 int / exec | ARM64 ratio | ARM64 bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| Locals | 0.74 / 2.65 | 3.579 | 238 | 0.75 / 2.78 | 3.687 | 364 |
-| Constants | 0.28 / 0.28 | 1.000 | 150 | 0.40 / 0.24 | 0.591 | 220 |
-| Fields | 0.49 / 0.64 | 1.283 | 324 | 0.56 / 0.61 | 1.098 | 448 |
-| Arrays | 0.48 / 0.94 | 1.975 | 582 | 0.46 / 1.02 | 2.229 | 740 |
-| Mixed | 0.99 / 0.59 | 0.601 | 914 | 0.93 / 0.64 | 0.683 | 1200 |
-| Branches | 0.48 / 0.21 | 0.439 | 414 | 0.49 / 0.27 | 0.553 | 632 |
-| Bytes | 0.86 / 0.66 | 0.768 | 616 | 0.82 / 1.19 | 1.456 | 364 |
-| Matrix | 0.85 / 0.47 | 0.560 | 662 | 0.79 / 1.49 | 1.893 | 92 |
+| Locals | 0.54 / 2.92 | 5.388 | 238 | 0.81 / 2.76 | 3.415 | 364 |
+| Constants | 0.25 / 0.29 | 1.159 | 150 | 0.28 / 0.21 | 0.762 | 220 |
+| Fields | 0.47 / 0.64 | 1.352 | 324 | 0.49 / 0.64 | 1.308 | 448 |
+| Arrays | 0.41 / 0.86 | 2.100 | 582 | 0.52 / 0.98 | 1.900 | 740 |
+| Mixed | 0.88 / 0.44 | 0.502 | 914 | 0.96 / 0.56 | 0.588 | 1200 |
+| Branches | 0.43 / 0.21 | 0.501 | 414 | 0.59 / 0.28 | 0.464 | 632 |
+| Bytes | 0.72 / 0.66 | 0.921 | 616 | 0.86 / 1.25 | 1.454 | 292 |
+| Matrix | 0.63 / 0.33 | 0.520 | 662 | 0.89 / 1.13 | 1.279 | 92 |
 
 At 500 iterations the loop kernels that keep a longer body per iteration
 (`mixed`, `branches`, `matrix` on RV32) are already ahead, while `locals`,

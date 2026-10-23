@@ -190,6 +190,22 @@ static inline int nj_jit_opcode_candidate(nj_u1 op)
            op == 0xc6u || op == 0xc7u;             /* ifnull / ifnonnull */
 }
 
+/* True when bytecode `op` can end a native block, so that the following pc is a
+ * plausible block entry: either the encoder never compiles it (calls, allocation,
+ * long arithmetic, switches, returns, throws ...) or it changes pc non-linearly
+ * (conditional branches, goto, ifnull/ifnonnull). Probing every straight-line
+ * bytecode instead would charge the interpreter an out-of-line probe for code
+ * that can never become an entry, which is most of what makes the probe path
+ * visible in profiles; a compiled block also ends on these opcodes, and the
+ * probe after a native block already covers capacity-split continuations. */
+static inline int nj_jit_probe_boundary(nj_u1 op)
+{
+    if (!nj_jit_opcode_candidate(op)) return 1;          /* block ends here */
+    /* branch, goto, wide and ifnull/ifnonnull are the candidates that may
+     * redirect pc or hide the next opcode */
+    return op >= 0x99u;
+}
+
 /* Read-only view of the per-VM constant-pool cache: this never resolves, never
  * bumps a counter and never enters Java, which is what the probe path needs.
  * A miss simply means the site stays interpreted until the interpreter has

@@ -206,6 +206,16 @@ explicitly; ARM64 uses the temporary FPCR state described above (the fault exit
 restores it too). Negation preserves NaN payload bits on both targets.
 
 A conservative inline opcode filter skips known interpreter-only instructions.
+Probing is also sparse in the interpreter: `nj_interp_run` only probes where a
+native block could legitimately start - at pc 0 (method entry), on the first
+bytecode of a fresh activation (entry, resume or snapshot restore), and after
+any opcode that can end a compiled block (conditional branches, goto,
+ifnull/ifnonnull, and everything the encoders do not compile such as calls,
+allocation, switches, long arithmetic, returns and throws). Straight-line
+interpretation therefore pays no probe at all, while loop headers, forward
+branch targets and the code after a call still heat normally. A native block
+that finishes probes its own exit pc from inside the same JIT entry path, so
+capacity-split continuations and deopt resumes stay covered.
 The remaining probe only touches bounded JIT metadata: it never allocates, frees,
 emits code, calls the port or enters Java. At the hot threshold the site becomes
 ready: in execute mode the probe omits the separate decode-only scan whenever

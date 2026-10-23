@@ -1120,6 +1120,17 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
      * conversion without costing anything, NOT because a speedup was
      * demonstrated - there is none to show on either instrument.
      */
+#if NJ_ENABLE_JIT && NJ_JIT_HOST_SUPPORTED
+    /*
+     * JIT probing state: the opcode that led here decides whether the next
+     * fetch may be a native entry (see NJ_JIT_PROBE_GATE).  have_prev is one
+     * frame activation's worth of history and starts clear, so the first
+     * bytecode after entry, resume or snapshot restore is always probed.
+     */
+    nj_u1 jit_prev_op = 0u;
+    int jit_have_prev = 0;
+#endif
+
     for (;;) {
         nj_u1 op;
         nj_u4 op_pc;
@@ -1427,11 +1438,25 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
             }                                                          \
         }                                                              \
     } while (0)
+/* Probing every bytecode would charge straight-line interpreted code for a JIT
+ * call that can never place a block there.  The gate allows the method entry
+ * (pc == 0), the first bytecode of a fresh activation, and the pc following an
+ * opcode that can end a block.  A native block that finishes probes its own
+ * exit pc inside NJ_TRY_JIT, so capacity splits and deopt resumes stay hot. */
+#define NJ_JIT_PROBE_GATE() do {                                       \
+        if (vm->jit && (pc == 0u || !jit_have_prev ||                  \
+                        nj_jit_probe_boundary(jit_prev_op))) {         \
+            NJ_TRY_JIT();                                              \
+        }                                                              \
+    } while (0)
+#define NJ_JIT_TRACK_OP(o) do { jit_prev_op = (o); jit_have_prev = 1; } while (0)
 #else
 #define NJ_TRY_JIT() ((void)0)
+#define NJ_JIT_PROBE_GATE() ((void)0)
+#define NJ_JIT_TRACK_OP(o) ((void)(o))
 #endif
 #define NJ_FETCH_OP() do {                                             \
-        NJ_TRY_JIT();                                                  \
+        NJ_JIT_PROBE_GATE();                                           \
         if (pc >= code_len) {                                          \
             THROW("java/lang/VerifyError",                            \
                   "code runs past the end of the method");            \
@@ -1459,6 +1484,7 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         op_pc = pc;                                                    \
         op = code[pc++];                                               \
         _Pragma("GCC diagnostic pop")                                  \
+        NJ_JIT_TRACK_OP(op);                                           \
         (void)op_pc;                                                   \
         insns_++;                                                      \
     } while (0)
