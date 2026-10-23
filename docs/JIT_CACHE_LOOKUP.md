@@ -1,5 +1,8 @@
 # Resolved-field cache lookup and JIT eviction accounting
 
+Later emitter work and rendering analysis are in [JIT_LOOP_ACCOUNTING.md](JIT_LOOP_ACCOUNTING.md).
+The runtime measurements below describe the earlier field-cache fix, not that follow-up.
+
 This branch is based on `36fefd2`. It changes cache correctness and accounting;
 the generated-code ABI, executable-memory callbacks and cache capacities stay
 compatible with that revision.
