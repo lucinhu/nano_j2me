@@ -20,6 +20,7 @@
 #include "nj_internal.h"   /* nj_field_lookup, to read what the loader wrote */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -1197,6 +1198,182 @@ static void test_image2d_set(nj_vm *vm)
         }
     }
     }
+}
+
+/*
+ * The textured span has two implementations: the general loop that walks the
+ * wrap and filter modes for every pixel, and the specialised WRAP_REPEAT +
+ * MODULATE loops that sample inline.  Both must write the same bytes, so this
+ * renders the same quad twice - once with WRAP_CLAMP, which the specialised
+ * loops do not take, and once with WRAP_REPEAT, which they do - and compares
+ * the whole target.  The texture coordinates cover exactly one repetition of a
+ * 2x2 texture, so the two modes cannot differ for a correct sampler.
+ *
+ * The draw goes through Graphics3D.render(VertexBuffer, IndexBuffer,
+ * Appearance, Transform, int), the same pipeline a World uses for its meshes,
+ * so it covers the rasteriser and not the Java-side fallback.
+ */
+static int i2d_canvas_render_tex(nj_vm *vm, i2d_canvas *c, nj_ref img,
+                                 nj_ref mat, int wrap)
+{
+    nj_value a[5];
+    nj_ref tex;
+    int ok = 1;
+
+    tex = nj_object_new(vm, CLS("Texture2D"));
+    if (!tex) {
+        return 0;
+    }
+    a[0].r = c->bg;
+    ok = ok && nj_call(vm, c->g3d, CLS("Graphics3D"), "clear",
+                       "(L" CLS("Background") ";)V", a, NULL) == NJ_OK;
+    a[0].r = img;
+    ok = ok && nj_call_special(vm, tex, CLS("Texture2D"), "<init>",
+                               "(L" CLS("Image2D") ";)V", a, NULL) == NJ_OK;
+    a[0].i = 227;                       /* FUNC_MODULATE */
+    ok = ok && nj_call(vm, tex, CLS("Texture2D"), "setBlending",
+                       "(I)V", a, NULL) == NJ_OK;
+    a[0].i = wrap; a[1].i = wrap;       /* 241 REPEAT, 240 CLAMP */
+    ok = ok && nj_call(vm, tex, CLS("Texture2D"), "setWrapping",
+                       "(II)V", a, NULL) == NJ_OK;
+    a[0].i = 208; a[1].i = 208;         /* FILTER_BASE_LEVEL, NEAREST */
+    ok = ok && nj_call(vm, tex, CLS("Texture2D"), "setFiltering",
+                       "(II)V", a, NULL) == NJ_OK;
+    a[0].r = mat;
+    ok = ok && nj_call(vm, c->app, CLS("Appearance"), "setMaterial",
+                       "(L" CLS("Material") ";)V", a, NULL) == NJ_OK;
+    a[0].i = 0; a[1].r = tex;
+    ok = ok && nj_call(vm, c->app, CLS("Appearance"), "setTexture",
+                       "(IL" CLS("Texture2D") ";)V", a, NULL) == NJ_OK;
+    a[0].r = c->vb; a[1].r = c->ib; a[2].r = c->app; a[3].r = 0; a[4].i = 0;
+    ok = ok && nj_call(vm, c->g3d, CLS("Graphics3D"), "render",
+                       "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                       CLS("Appearance") ";L" CLS("Transform") ";I)V",
+                       a, NULL) == NJ_OK;
+    return ok;
+}
+
+static void test_textured_span_variants(nj_vm *vm)
+{
+    /* Two texel colours that survive RGB565 losslessly, mixed with white and
+     * black so the set of colours in the target is unambiguous. */
+    static const nj_u1 texels[2 * 2 * 4] = {
+        255,   0,   0, 255,
+          0, 255,   0, 255,
+          0,   0, 255, 255,
+        255, 255, 255, 255
+    };
+    static const nj_u4 want[4] = { 0xFF0000u, 0x00FF00u, 0x0000FFu, 0xFFFFFFu };
+    i2d_canvas canvas;
+    nj_ref rgba, rgb, bytes, rgbbytes, mat;
+    nj_s4 *clamp_px = NULL;
+    int ok = 1, canvas_ok, k, found, distinct = 0, all_known = 1;
+
+    printf("== textured spans: WRAP_REPEAT and MODULATE match the general "
+           "loop ==\n");
+    rgba = i2d_new3(vm, 100, 2, 2, &ok);        /* ARGB8888 */
+    rgb  = i2d_new3(vm, 99, 2, 2, &ok);         /* RGB888 */
+    bytes = nj_byte_array_new(vm, 16u);
+    rgbbytes = nj_byte_array_new(vm, 12u);
+    mat = make(vm, CLS("Material"));
+    canvas_ok = i2d_canvas_init(vm, &canvas);
+    check(rgba && rgb && bytes && rgbbytes && mat && canvas_ok,
+          "the textures, a material and the render harness exist");
+    if (!rgba || !rgb || !bytes || !rgbbytes || !mat || !canvas_ok) {
+        return;
+    }
+    memcpy(nj_array_data(bytes), texels, sizeof(texels));
+    {
+        nj_u1 *t = (nj_u1 *)nj_array_data(rgbbytes);
+        int j;
+
+        for (j = 0; j < 4; j++) {
+            t[j * 3 + 0] = texels[j * 4 + 0];
+            t[j * 3 + 1] = texels[j * 4 + 1];
+            t[j * 3 + 2] = texels[j * 4 + 2];
+        }
+    }
+    check(i2d_set_ok(vm, rgba, 0, 0, 2, 2, bytes),
+          "a 2x2 RGBA texture accepts its four texels");
+    check(i2d_set_ok(vm, rgb, 0, 0, 2, 2, rgbbytes),
+          "and so does the 2x2 RGB one (three bytes per texel are read)");
+    /* A white diffuse keeps MODULATE an identity, so the expected colours are
+     * the texels themselves. */
+    {
+        nj_value a[2], r;
+
+        a[0].i = 2048;                  /* Material.DIFFUSE */
+        a[1].i = (nj_s4)0xFFFFFFFFu;
+        r.i = 0;
+        call(vm, mat, CLS("Material"), "setColor", "(II)V", a, &r);
+    }
+    clamp_px = (nj_s4 *)malloc(240u * 320u * sizeof(nj_s4));
+    check(clamp_px != NULL, "the comparison buffer exists");
+    if (!clamp_px) {
+        return;
+    }
+    check(i2d_canvas_render_tex(vm, &canvas, rgba, mat, 240),
+          "a CLAMP texture renders through the general loop");
+    memcpy(clamp_px, nj_array_data(canvas.pixels), 240u * 320u * sizeof(nj_s4));
+    check(i2d_canvas_render_tex(vm, &canvas, rgba, mat, 241),
+          "the same texture with REPEAT renders through the specialised loop");
+    {
+        const nj_s4 *now = (const nj_s4 *)nj_array_data(canvas.pixels);
+        int same = 1;
+
+        for (k = 0; k < 240 * 320; k++) {
+            if ((now[k] & 0xFFFFFF) != (clamp_px[k] & 0xFFFFFF)) {
+                same = 0;
+                break;
+            }
+        }
+        check(same, "the repeated draw is byte-identical to the clamped one");
+        /* One column at the right edge falls outside the quad, so the colour
+         * set is checked over the interior only. */
+        for (k = 0; k < 240 * 320; k++) {
+            int x = k % 240, y = k / 240, j;
+
+            if (x < 4 || x > 235 || y < 4 || y > 315) {
+                continue;
+            }
+            found = 0;
+            for (j = 0; j < 4; j++) {
+                if ((nj_u4)(now[k] & 0xFFFFFF) == want[j]) { found = 1; }
+            }
+            if (!found) { all_known = 0; }
+        }
+        for (k = 0; k < 4; k++) {
+            int seen = 0, y, x;
+
+            for (y = 4; y < 316 && !seen; y++) {
+                for (x = 4; x < 236; x++) {
+                    if ((nj_u4)(now[y * 240 + x] & 0xFFFFFF) == want[k]) {
+                        seen = 1;
+                        break;
+                    }
+                }
+            }
+            distinct += seen;
+        }
+        check(all_known, "every pixel is one of the four modulated texels");
+        check(distinct == 4, "and all four texels appear");
+    }
+    /* The RGB texture takes the three-byte texel path (alpha reads as 255). */
+    check(i2d_canvas_render_tex(vm, &canvas, rgb, mat, 241),
+          "an RGB texture renders through the specialised loop too");
+    {
+        const nj_s4 *now = (const nj_s4 *)nj_array_data(canvas.pixels);
+        int same = 1;
+
+        for (k = 0; k < 240 * 320; k++) {
+            if ((now[k] & 0xFFFFFF) != (clamp_px[k] & 0xFFFFFF)) {
+                same = 0;
+                break;
+            }
+        }
+        check(same, "an RGB texture writes the same pixels as the RGBA one");
+    }
+    free(clamp_px);
 }
 
 /*
@@ -3758,6 +3935,7 @@ int main(void)
     }
 
     test_image2d_set(vm);
+    test_textured_span_variants(vm);
 
     /* Bone rosters are per receiver and grow on demand; the old fixed
        64-entry table threw on the 65th link. */

@@ -2248,7 +2248,32 @@ the 27-value superinstruction digest and `BENCH sum=-136042548 s=5` unchanged.
 Limits: this is rasteriser time, not a frame rate - the title is paced at 30 fps
 and spends its remaining CPU elsewhere. LINEAR filtering, mip-mapped sampling,
 gouraud shading, sprites, `athresh`, RGB888 surfaces and non-REPEAT wrapping
-still take the general loop. There is no unit test in the tree that asserts
-pixels from this path yet; the evidence above is the bench's identical
-checksums plus the title's identical frames, both reproductions kept under
-`.local-tools/debug-runs/m3g-raster-round49-20261023/` (not in Git).
+still take the general loop.
+
+### The test that keeps the span honest (round 50, 2026-10-24)
+
+The round above could only say "looks right on a bench kept outside Git, and on
+one title's frames". `tests/test_m3g.c` now has `test_textured_span_variants()`,
+which renders the same 2x2-textured quad twice through
+`Graphics3D.render(VertexBuffer, IndexBuffer, Appearance, Transform, int)` - the
+pipeline a World's meshes use, so the rasteriser and not a Java fallback:
+
+1. once with `WRAP_CLAMP`, which the specialised loops deliberately do not take,
+   so the pixels come from the general loop;
+2. once with `WRAP_REPEAT`, which they do take.
+
+The texture coordinates cover exactly one repetition, so a correct sampler must
+produce the same image either way, and the check compares all 76,800 pixels of
+the 240x320 target byte for byte. It then asserts that every pixel in the
+interior is one of the four modulated texel colours and that all four appear, and
+repeats the comparison with an RGB (three-byte texel) texture to cover the
+`bpp == 3` branch, where a texel's alpha is 255 and the loop replaces.
+
+Rendering into an `Image2D`-backed target means the exercised loop is the
+ARGB8888 one: an `Image` used as a `Graphics3D` target is ARGB8888 here even
+though the display is RGB565, and `Image2D` has no RGB565 format. The RGB565 half
+is still covered only by the bench's identical checksums above.
+
+The test is not vacuous: changing the specialised loop's blue channel by one
+(`tb ^ 1u`) fails four of its assertions, and restoring the source brings the
+suite back to `test_m3g` 592 checks, 0 failures (11 more than before).
