@@ -2565,6 +2565,13 @@ and the soft key then walks into the paint path that reads the unloaded data.
 That points at the load itself (its thread or its completion condition), not at
 input timing, for the next investigation.
 
+A temporary bytecode sampler (every 500,000 executed bytecodes) was then run
+on the hanging case: in 30 s it printed only seven samples (3.5 M bytecodes)
+and the last one was a `paint(Graphics)` method at pc=97, after which no
+further bytecode ran. So the hang is not a Java-level loop - it stops inside
+something that paint calls (a native or a wait) with the interpreter idle.
+That is where the load completion, not the key timing, sits.
+
 A `-pg` profile of the first 400 frames (no keys) rules out a CPU-bound startup:
 the whole run samples 0.08 s of CPU, almost all of it `nj_region_draw`
 (559 calls) with `nj_gif_decode` called 189,215 times for the splash
