@@ -544,7 +544,28 @@ static void test_read_fully(nj_vm *vm)
     }
     nj_clear_exception(vm);
     OK(nj_array_get_int(dst, 0u) == 11 && nj_array_get_int(dst, 3u) == 44);
-    clean(vm, "readFully past the end");
+
+    /* Same contract through the range overload: only two bytes are left, so a
+     * four-byte request from offset 2 must end in EOFException as well. */
+    bais = bais_over(vm, data, 4u);
+    OK(bais != NULL);
+    dis = dis_over(vm, bais);
+    OK(dis != NULL);
+    dst = nj_byte_array_new(vm, 8u);
+    OK(dst != NULL);
+    a[0] = vref(dst);
+    a[1] = vint(2);
+    a[2] = vint(5);
+    OK(nj_call(vm, dis, DIS, "readFully", "([BII)V", a, NULL) != NJ_OK);
+    {
+        const char *d = nj_exception_describe(vm);
+
+        OK_MSG(d != NULL && strstr(d, "EOFException") != NULL,
+               "the range overload raises EOFException too: %s",
+               d ? d : "(no exception)");
+    }
+    nj_clear_exception(vm);
+    clean(vm, "readFully range past the end");
 }
 
 /* ------------------------------------------------------------------ */
