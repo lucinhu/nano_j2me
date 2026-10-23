@@ -779,3 +779,28 @@ CPU side: -5.2% on the opaque 240x320 ARGB-to-RGB565 blit loop and -6.7% to
 -9.2% of `毁灭战士3_10598`'s CPU over 6,000 paced frames, with byte-identical
 pixels - see
 [PERFORMANCE.md](PERFORMANCE.md#a-strips-vertices-are-transformed-three-times-not-once-round-51-2026-10-24).
+
+## Painted ARGB images skip what they overwrite (round 52, 2026-10-24)
+
+`nj_region_draw()`'s ARGB8888-to-ARGB8888 `NJ_ROP_PAINT` branch now decides
+per row whether the group loop is worth running, and inside it skips
+all-transparent groups, `memcpy`s all-opaque ones and falls back to the
+per-pixel code for mixed ones. Nothing is stored: the eight-pixel probe and the
+eight-pixel group are C stack in the row loop, and no destination buffer is
+allocated.
+
+| Build | Before | After |
+|---|---|---|
+| hosted Release, `nj_gfx.c` `.text` | 29,098 B | **30,698 B** (+1,600 B) |
+| hosted Release, `nj2me` executable `.text` | 2,905,966 B | **2,907,758 B** (+1,792 B) |
+| `.data` / `.bss` (executable) | 162,736 / 6,688 | **unchanged** |
+
+C stack grows by up to 64 B in `nj_region_draw()` (`nj_u4 probe[8]` and
+`nj_u4 grp[8]`). RAM is unchanged; the heap and the VM object are untouched.
+
+CPU side: -15% on an opaque 240x320 ARGB-to-ARGB blit, -28% with scattered
+translucency and -39% on an all-transparent one, +1.9% in the worst case
+(every pixel translucent), with byte-identical pixels. At title level the
+change is worth 1-1.5% of `毁灭战士3_10598`'s CPU - inside the noise floor of
+the 2D titles that were tried as controls - see
+[PERFORMANCE.md](PERFORMANCE.md#the-blits-whose-pixels-are-mostly-nothing-round-52-2026-10-24).

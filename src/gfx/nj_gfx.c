@@ -1840,7 +1840,26 @@ static nj_u4 nj_blend_argb(nj_u4 dst, nj_u4 src)
     return (na << 24) | (nr << 16) | (ng << 8) | nb;
 }
 
-/* Pixels converted per validation pass by the opaque blit loop. */
+/*
+ * One pixel of an ARGB8888 image painted (ROP PAINT) onto an ARGB8888 surface:
+ * a fully opaque pixel replaces, a translucent one is composited, and a
+ * transparent one leaves the destination alone.
+ */
+static inline void nj_paint_argb_pixel(nj_u1 *dp, nj_u4 c)
+{
+    int sa = (int)((c >> 24) & 0xFFu);
+
+    if (sa >= 255) {
+        memcpy(dp, &c, sizeof c);
+    } else if (sa > 0) {
+        nj_u4 d = nj_word_get(dp, 0);
+        nj_u4 o = nj_blend_argb(d, c);
+
+        memcpy(dp, &o, sizeof o);
+    }
+}
+
+/* Pixels converted per pass by the opaque and ARGB paint blit loops. */
 #define NJ_GFX_BLIT_GROUP 8
 
 static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
@@ -2108,7 +2127,6 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
         && rop != NJ_ROP_SET) {
         int first = (int)(cx0 - X0);
         int n = (int)(cx1 - cx0 + 1);
-        int i;
         nj_u1 *dst = (nj_u1 *)g->surf->pixels;
 
         for (Y = cy0; Y <= cy1; Y++) {
@@ -2117,21 +2135,100 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                 + (nj_s8)(sy + j) * src_stride_bytes
                 + (nj_s8)(sx + first) * src_bpp;
             nj_u1 *dp = dst + (nj_s8)Y * g->surf->stride + (nj_s8)cx0 * bpp;
+            nj_u4 probe[NJ_GFX_BLIT_GROUP];
+            int probe_n = 0;
+            int left = n;
+            int use_groups = 0;
 
-            for (i = 0; i < n; i++) {
-                nj_u4 c = nj_word_get(sp, 0);
-                int sa = (int)((c >> 24) & 0xFFu);
+            /*
+             * Two thirds of the pixels of such a painted image are fully
+             * transparent or fully opaque, and both are whole-group facts:
+             * OR the alpha bytes and a zero result means the whole group can
+             * be skipped, AND them and 0xFF means it can be copied 32 bytes at
+             * a time.  A row of a sprite is usually uniform in that respect,
+             * so one probe group decides the row; an image of soft-edged
+             * overlays, where every group would fail the probe, keeps the
+             * per-pixel loop and pays only eight reads for the probe.
+             */
+            if (n >= NJ_GFX_BLIT_GROUP) {
+                nj_u4 probe_and = 0xFFFFFFFFu;
+                nj_u4 probe_or = 0u;
+                int t;
 
-                if (sa >= 255) {
-                    memcpy(dp, &c, sizeof c);
-                } else if (sa > 0) {
-                    nj_u4 d = nj_word_get(dp, 0);
-                    nj_u4 o = nj_blend_argb(d, c);
+                for (t = 0; t < NJ_GFX_BLIT_GROUP; t++) {
+                    nj_u4 p = nj_word_get(sp + (nj_s8)t * 4, 0);
 
-                    memcpy(dp, &o, sizeof o);
+                    probe[t] = p;
+                    probe_and &= p;
+                    probe_or |= p;
                 }
-                sp += 4;
-                dp += 4;
+                probe_n = NJ_GFX_BLIT_GROUP;
+                use_groups = (((probe_or >> 24) & 0xFFu) == 0u)
+                          || (((probe_and >> 24) & 0xFFu) == 0xFFu);
+            }
+            if (!use_groups) {
+                int t;
+
+                for (t = 0; t < probe_n; t++) {
+                    nj_paint_argb_pixel(dp + (nj_s8)t * 4, probe[t]);
+                }
+                sp += (nj_s8)probe_n * 4;
+                dp += (nj_s8)probe_n * 4;
+                left -= probe_n;
+                while (left > 0) {
+                    nj_paint_argb_pixel(dp, nj_word_get(sp, 0));
+                    sp += 4;
+                    dp += 4;
+                    left--;
+                }
+                continue;
+            }
+            {
+                int mixed = 0;
+
+                while (left > 0) {
+                    nj_u4 grp[NJ_GFX_BLIT_GROUP];
+                    nj_u4 acc_and = 0xFFFFFFFFu;
+                    nj_u4 acc_or = 0u;
+                    int m = left > NJ_GFX_BLIT_GROUP ? NJ_GFX_BLIT_GROUP : left;
+                    int t;
+
+                    for (t = 0; t < m; t++) {
+                        grp[t] = nj_word_get(sp + (nj_s8)t * 4, 0);
+                        acc_and &= grp[t];
+                        acc_or |= grp[t];
+                    }
+                    if (((acc_or >> 24) & 0xFFu) == 0u) {
+                        /* every pixel is transparent: nothing to write */
+                    } else if (((acc_and >> 24) & 0xFFu) == 0xFFu) {
+                        memcpy(dp, grp, (size_t)m * 4u);
+                    } else {
+                        for (t = 0; t < m; t++) {
+                            nj_paint_argb_pixel(dp + (nj_s8)t * 4, grp[t]);
+                        }
+                        /*
+                         * A row whose probe passed but that keeps handing back
+                         * partial groups is a soft gradient, not an opaque
+                         * sprite: after a few, the plain loop is cheaper than
+                         * the group machinery.
+                         */
+                        if (++mixed > 4) {
+                            sp += (nj_s8)m * 4;
+                            dp += (nj_s8)m * 4;
+                            left -= m;
+                            break;
+                        }
+                    }
+                    sp += (nj_s8)m * 4;
+                    dp += (nj_s8)m * 4;
+                    left -= m;
+                }
+                while (left > 0) {
+                    nj_paint_argb_pixel(dp, nj_word_get(sp, 0));
+                    sp += 4;
+                    dp += 4;
+                    left--;
+                }
             }
         }
         return;

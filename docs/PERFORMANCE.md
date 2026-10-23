@@ -2386,3 +2386,80 @@ a second, so the percentage is noisier than the benchmark's.
 
 `.text` +1,112 B in `nj_gfx.c.o`; `grp[8]` is 32 B of C stack in the row loop;
 no field, no static, no buffer; `.data`/`.bss` unchanged.
+
+## The blits whose pixels are mostly nothing (round 52, 2026-10-24)
+
+`毁灭战士3_10598` blits more than it rasterises. A gprof build of the tree
+after round 51 (6,000 paced frames at 30 fps, `--fps 240`) puts `jr_emit()` at
+62.76% - `jr_fetch()`, `jr_vertex()`, `jr_lit()` and `jr_fog()` are inlined into
+it, `sw_tri()` into those - and `nj_region_draw()` next at 27.26%.
+
+A census of those blits (temporary instrumentation at the top of
+`nj_region_draw()`, 1,200 frames at 30 fps) says why:
+
+| Call | Count | Pixels |
+|---|---|---|
+| ARGB8888 -> ARGB8888, `NJ_ROP_PAINT` | 3,530 | 155.1M (1,857 full frames of 249x334, 1,673 sprites of 20x21) |
+| ARGB8888 -> RGB565, `NJ_ROP_SET` | 1,676 | 128.7M (every one a full frame) |
+| ARGB8888 -> RGB565, `NJ_ROP_PAINT` | 359 | 27.6M |
+
+The ARGB8888-to-ARGB8888 branch - the one round 51 did not touch - is the
+biggest pixel mover, and 85.2M of its 155.1M pixels have alpha 0, 42.4M have
+alpha 255 and only 15.5M are actually translucent. In groups of eight that is
+10.28M all-transparent groups, 4.74M all-opaque groups and 2.91M mixed ones:
+two thirds of the loop's work writes nothing or copies 32 bytes.
+
+### What changed
+
+The ARGB8888-to-ARGB8888 `NJ_ROP_PAINT` loop decides per row, once, which of
+two loops runs:
+
+- the first eight pixels are read into `probe[]` and their alpha bytes are
+  ORed and ANDed together. If every alpha byte is zero the row starts
+  transparent, if every one is 255 it starts opaque, and either way the group
+  loop is used;
+- the group loop reads eight pixels, ORs and ANDs their alpha bytes, and then
+  skips the group (all transparent), `memcpy`s it (all opaque) or runs the
+  original per-pixel code over it. A row that keeps producing mixed groups -
+  a soft gradient rather than a sprite - drops back to the plain loop after
+  four of them, so an image of soft edges pays the group machinery only for
+  its first four groups (and eight probe reads);
+- a row whose probe group is mixed uses the plain loop for the whole row.
+
+`nj_paint_argb_pixel()` (opaque replaces, translucent composites, transparent
+leaves the destination alone) is the single implementation both loops call, so
+the pixels cannot drift apart; the group path only decides *which* pixels to
+hand it.
+
+### How it was measured
+
+The round-51 bench (`.local-tools/debug-runs/blit-round51-20261024/`, outside
+Git) gained three ARGB8888-to-ARGB8888 cases - an opaque image, an image where
+every 64th pixel has alpha 128, and an image where every pixel does. Per
+240x320 frame, min of interleaved runs:
+
+| Case | Before | After | Delta |
+|---|---|---|---|
+| opaque ARGB image | 18.67 us | **15.90 us** | -15% |
+| every 64th pixel translucent | 28.07 us | **20.33 us** | -28% |
+| every pixel transparent | 20.01 us | **12.20 us** | -39% |
+| every pixel alpha 128 (worst case) | 157.0 us | **160.0 us** | +1.9% |
+| the two RGB565 cases | unchanged | unchanged | noise |
+
+The destination hashes are identical in every run (`9bee3eda`, `e1e89aeb`,
+`0df4c0da`, `06f55852`), as are the RGB565 ones from round 51.
+
+At title level the effect is small enough to argue about: over 6,000 paced
+frames of `毁灭战士3_10598`, two independent interleaved sessions reported
+paired medians of -1.3% and -1.5% (one session's minimum was +0.8%), and the
+2D title `合金弹头4` moved by +4.6%/-0.6% and +2.4%/-0.6% between sessions -
+i.e. inside this machine's ±2% drift. The census above is the honest summary:
+`nj_region_draw()` is 27% of the 3D title and roughly 45% of its blitted pixels
+go through this branch, and a 15-39% loop win on that share predicts 1-3% of
+the whole, which is the size of the medians that were measured.
+
+### Cost
+
+`.text` +1,600 B in `nj_gfx.c.o`, +1,792 B in the `nj2me` executable;
+`.data` and `.bss` unchanged. The row loop holds `probe[8]` and `grp[8]` (up to
+64 B of C stack); no field, static or buffer is added, so RAM is unchanged.
