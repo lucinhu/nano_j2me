@@ -2500,6 +2500,38 @@ the scripts are generic rather than title-specific; and no per-title reference
 comparison was done in this sweep.  It is a regression net for missing APIs and
 crashes, and on that measure this was the cleanest sweep so far.
 
+## The soft key a title was not ready for (round 15, 2026-10-23)
+
+The pointer-and-key sweep script (first key at frame 20) times out on two
+titles that play fine without it: `街头霸王2冠军典藏版_1812` and
+`街头霸王2天下斗士_3247`. The failure is deterministic: with the key half of
+the script the first one hangs 4/4 runs and with the tap half 0/4; a single
+`20:soft1` hangs 2/2 where `185:fire` does not, and the same press at frame 300
+is harmless.
+
+A core dump (`kill -ABRT`, then `coredumpctl dump`) shows one thread inside the
+interpreter called from `Canvas.paint`, and a temporary instruction trace names
+the loop: the title's own `c.bZ()V pc=73`, which is the bytecode `goto 73` -
+the handler it jumps to after catching an exception around its sound-data read.
+Our exception is `NullPointerException at c.bZ()V pc=44`, the `baload` of field
+`dB`; `dB` is assigned in `c.bB()` from `c.d(I)[B`, and the resources that
+method reads (`/_Jar001.jar` .. `/_Jar030.jar`) do load - logged at 10,240
+bytes each.
+
+The reference reacts to the same early soft key by changing screens (two
+different frames where a key-free control keeps one), so the difference is real
+rather than a script artefact, but the cause is not established: either our
+initialisation finishes later than the reference's and the press lands before
+`dB` exists, or the title's state machine diverges for another reason. Nothing
+in the runtime was changed for it, and the sweep script for these two titles
+starts after frame 300. Recorded as an open question, not a defect claim.
+
+The full corpus was re-run with the current build (395 titles, 600 frames,
+pointer-and-key script): 4 non-zero exits - this pair plus the two known ones
+(`1945空战英雄_6105` wants `--device nokia6230`, `鲁宾逊漂流记汉化BT版_4677` is
+not a ZIP) - 3 caught-only uncaught-class titles unchanged from round 12, no
+missing API, no crash outside the pair above.
+
 ## The store name that was a path (round 13, 2026-10-23)
 
 `阿尔卑斯牧场物语_7043` opens a record store called `/A/AConfig`.  JSR-118 asks
