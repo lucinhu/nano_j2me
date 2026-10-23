@@ -2583,6 +2583,12 @@ does. The next step is therefore to compare the resource this loading path reads
 (its length and first bytes) against the reference, not to change any stream
 semantics.
 
+Capturing the buffer it is given shows 42 constructions of a 47,215-byte array
+starting `SDD\0` (plus the usual MIDI and image resources). The JAR has no
+`SDD` entry, so the game assembles that buffer itself from a packed resource;
+either its own reader ignores end of input or the packed data it produced is
+shorter than the reference's, and comparing those bytes is the remaining step.
+
 A `-pg` profile of the first 400 frames (no keys) rules out a CPU-bound startup:
 the whole run samples 0.08 s of CPU, almost all of it `nj_region_draw`
 (559 calls) with `nj_gif_decode` called 189,215 times for the splash
