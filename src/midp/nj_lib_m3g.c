@@ -10178,20 +10178,62 @@ static void jr_triangle(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
 static void jr_strip(m3g_jr *r, const nj_s4 *idx, nj_s4 count, nj_s4 first)
 {
     nj_s4 i;
+    /*
+     * A strip hands two of its three vertices to the next triangle as well,
+     * and fetching a vertex is the most expensive work in this pass that is
+     * not rasterisation: jr_fetch() transforms it, lights it and fogs it.
+     * Keep the vertices of the two indices the next triangle starts with, so
+     * a strip fetches one vertex per triangle instead of three.  This is the
+     * classic post-transform vertex cache of a strip rasteriser, and it is
+     * exact: the kept values are the ones jr_fetch() would return again.
+     */
+    jr_vtx keep0, keep1;
+    nj_u4 keep0_idx = 0u, keep1_idx = 0u;
+    int keep0_ok = 0, keep1_ok = 0;
 
     for (i = 0; i + 3 <= count; i++) {
         nj_s4 v0 = idx ? idx[first + i] : (first + i);
         nj_s4 v1 = idx ? idx[first + i + 1] : (first + i + 1);
         nj_s4 v2 = idx ? idx[first + i + 2] : (first + i + 2);
+        nj_u4 a = (nj_u4)((i & 1) ? v1 : v0);
+        nj_u4 b = (nj_u4)((i & 1) ? v0 : v1);
+        nj_u4 c = (nj_u4)v2;
+        jr_vtx tv[3];
+        int k, ok = 1;
 
+        /* jr_triangle() draws nothing when two vertices coincide; testing the
+           indices first is the same test without the fetches. */
+        if (a == b || b == c || a == c) {
+            continue;
+        }
+        for (k = 0; k < 3 && ok; k++) {
+            nj_u4 vi = (nj_u4)(k == 0 ? v0 : (k == 1 ? v1 : v2));
+
+            if (keep0_ok && keep0_idx == vi) {
+                memcpy(&tv[k], &keep0, sizeof tv[k]);
+            } else if (keep1_ok && keep1_idx == vi) {
+                memcpy(&tv[k], &keep1, sizeof tv[k]);
+            } else if (!jr_fetch(r, vi, &tv[k])) {
+                ok = 0;
+            }
+        }
+        if (!ok) {
+            continue;
+        }
         /* A strip walks its vertices in order, so consecutive triangles come
            out with OPPOSITE winding unless the odd ones swap their first two
            vertices - which is exactly what a strip rasteriser does. */
         if (i & 1) {
-            jr_triangle(r, (nj_u4)v1, (nj_u4)v0, (nj_u4)v2);
+            jr_triangle_v(r, &tv[1], &tv[0], &tv[2]);
         } else {
-            jr_triangle(r, (nj_u4)v0, (nj_u4)v1, (nj_u4)v2);
+            jr_triangle_v(r, &tv[0], &tv[1], &tv[2]);
         }
+        memcpy(&keep0, &tv[1], sizeof keep0);
+        keep0_idx = (nj_u4)v1;
+        keep0_ok = 1;
+        memcpy(&keep1, &tv[2], sizeof keep1);
+        keep1_idx = (nj_u4)v2;
+        keep1_ok = 1;
     }
 }
 

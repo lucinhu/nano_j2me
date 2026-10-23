@@ -2277,3 +2277,112 @@ is still covered only by the bench's identical checksums above.
 The test is not vacuous: changing the specialised loop's blue channel by one
 (`tb ^ 1u`) fails four of its assertions, and restoring the source brings the
 suite back to `test_m3g` 592 checks, 0 failures (11 more than before).
+
+## A strip's vertices are transformed three times, not once (round 51, 2026-10-24)
+
+`jr_strip()` walks a triangle strip and hands each triangle to
+`jr_triangle()`, which fetches all three of its vertices: `jr_fetch()`
+transforms a vertex by the model-view-projection matrix, lights it and fogs it.
+Two of those three vertices were fetched for the previous triangle already.
+
+A profile of `毁灭战士3_10598` (6,000 frames at `--fps 240`, heap 32) with a
+`noinline` `sw_tri`/`jr_emit` build puts the cost where the strip cache would
+help:
+
+| Symbol | Share | Calls |
+|---|---|---|
+| `sw_tri` | 60.81% | 6,360,928 |
+| `nj_region_draw` | 22.80% | 21,735 |
+| `jr_fetch` | 7.84% | 19,082,784 |
+| `nj_run` | 2.38% | - |
+
+All 1,674 `jr_draw()` calls in that title are strips (16 strips of ~1,054
+indices each, 559 vertices), so every triangle paid three fetches where one
+would do.
+
+### What changed
+
+`jr_strip()` keeps the transformed vertices of the two indices the next
+triangle starts with and reuses them, which is the post-transform vertex cache
+of an ordinary strip rasteriser and costs no memory beyond two `jr_vtx`
+records on the stack:
+
+- the degenerate test (`a == b`, `b == c`, `a == c`) runs on the indices before
+  any fetch, so exactly the triangles `jr_triangle()` used to skip are skipped;
+- a fetch failure still skips just that triangle, as before;
+- the winding swap of odd triangles is preserved by swapping the first two
+  vertices of the call, not their contents;
+- the kept records are the values `jr_fetch()` would return again, so no pixel
+  can move.
+
+### How it was measured
+
+Two sessions of interleaved runs on `毁灭战士3_10598`, `--fps 240`,
+`--run-frames 6000`, `taskset -c 5`, user CPU from `RUSAGE_CHILDREN`:
+
+| Build | Session A min / med | Session B min / med |
+|---|---|---|
+| parent (1e49791) | 4.205 s / 4.982 s | 4.904 s / 5.377 s |
+| strip cache + blit groups | **3.925 s** / **4.736 s** | **4.526 s** / **4.883 s** |
+
+That is -6.7% min / -4.9% med in the first session and -7.7% min / -9.2% med in
+the second. The CPU frequency of the measurement machine drifts by up to 8%
+within a session, which is why the arms are interleaved and why two sessions
+are reported instead of one.
+
+Twelve frames dumped at `--fps 30` (`--dump-every 100`) are byte-identical
+between the two builds.
+
+The same binary also carries the blit change below; a blit-only arm measured
+4.178 s against the parent's 4.205 s, so the title-level gain is the strip
+cache's. The blit change's own evidence is its loop benchmark.
+
+### Cost
+
+`.text` +1,600 B in `nj_lib_m3g.c.o`; no field, no static, no buffer;
+`.data`/`.bss` unchanged. 240 B more C stack inside `jr_strip()` (the two kept
+vertices and the three temporary vertices of a triangle).
+
+## The blit that tested what it was about to overwrite (round 51, 2026-10-24)
+
+`nj_region_draw()`'s ARGB8888-to-RGB565 branch exists because 浴火银河2 paints
+a screenful of sprites every frame. Its per-pixel loop reads the source word,
+decides from the alpha byte whether the pixel is opaque, replaces it, blends it
+or skips it, and packs the result to RGB565.
+
+A replay of `毁灭战士3_10598` (1,200 frames) issues 5,560 `nj_region_draw()`
+calls: 3,526 ARGB8888-to-ARGB8888, 1,674 ARGB8888-to-RGB565 with
+`NJ_ROP_SET`, 360 ARGB8888-to-RGB565 with `NJ_ROP_PAINT`. For a whole frame of
+opaque pixels the alpha test never fires, and yet it is paid per pixel.
+
+### What changed
+
+The RGB565 row loop converts up to eight pixels at a time
+(`NJ_GFX_BLIT_GROUP`): it reads the group, checks the alpha bytes, and when
+every pixel is opaque - or the operation is `NJ_ROP_SET`, which copies whatever
+the source holds - it converts the group with no tests. A group that contains
+translucency falls back to the original per-pixel code, so a translucent or
+PAINT frame is emitted by exactly the code that emitted it before. The pack
+expression and the two-byte store are unchanged.
+
+### How it was measured
+
+The controlled bench (`.local-tools/debug-runs/blit-round51-20261024/`,
+outside Git) draws a 240x320 ARGB8888 image onto a 240x320 RGB565 surface
+through the public `nj_gfx_draw_image()` and checksums the destination:
+
+| Case | Before | After | Delta |
+|---|---|---|---|
+| opaque, per 240x320 frame | 40.5 us | **38.4 us** | -5.2% |
+| every 64th pixel alpha 128 | 46.7 us | **40.5 us** | -13.4% |
+
+The destination FNV hashes are identical in every run (`25fa0c9a` opaque,
+`c55a50fd` mixed). A 1,500-frame menu-phase replay of the same title (which
+paints 1,496 full screens and draws almost no 3D) measured min 0.2178 s to
+0.1930 s and med 0.3152 s to 0.2603 s, but that phase's whole CPU is a fifth of
+a second, so the percentage is noisier than the benchmark's.
+
+### Cost
+
+`.text` +1,112 B in `nj_gfx.c.o`; `grp[8]` is 32 B of C stack in the row loop;
+no field, no static, no buffer; `.data`/`.bss` unchanged.

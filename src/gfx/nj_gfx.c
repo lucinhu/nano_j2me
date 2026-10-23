@@ -1840,6 +1840,9 @@ static nj_u4 nj_blend_argb(nj_u4 dst, nj_u4 src)
     return (na << 24) | (nr << 16) | (ng << 8) | nb;
 }
 
+/* Pixels converted per validation pass by the opaque blit loop. */
+#define NJ_GFX_BLIT_GROUP 8
+
 static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                            int src_format, const nj_u1 *mask,
                            int mask_stride, int sx, int sy, int sw, int sh,
@@ -2011,22 +2014,57 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                     + (nj_s8)(sx + first) * src_bpp;
                 nj_u1 *dp = dst + (nj_s8)Y * g->surf->stride
                           + (nj_s8)cx0 * bpp;
+                int left = n;
 
-                for (i = 0; i < n; i++) {
-                    nj_u4 c = nj_word_get(sp, 0);
-                    int sa = (int)((c >> 24) & 0xFFu);
+                /*
+                 * A title that paints a whole frame from an ARGB8888 render
+                 * target hands this loop a screenful of opaque pixels every
+                 * frame, so the alpha test below never fires - and yet the
+                 * conversion still costs a load, a shift-and-test, six shifts
+                 * and a store per pixel.  Read a group of pixels up front, and
+                 * when every one of them is opaque convert the whole group
+                 * with no tests at all.  A group that holds translucency is
+                 * drawn by the original per-pixel code, so no pixel can move.
+                 */
+                while (left > 0) {
+                    nj_u4 grp[NJ_GFX_BLIT_GROUP];
+                    int m = left > NJ_GFX_BLIT_GROUP ? NJ_GFX_BLIT_GROUP : left;
+                    int all = 1;
+                    int t;
 
-                    if (rop == NJ_ROP_SET || sa >= 255) {
-                        nj_u2 v = (nj_u2)((((c >> 19) & 0x1Fu) << 11) |
-                                          (((c >> 10) & 0x3Fu) << 5) |
-                                          ((c >> 3) & 0x1Fu));
-
-                        memcpy(dp, &v, sizeof v);
-                    } else if (sa > 0) {
-                        nj_blend565(dp, c);
+                    for (t = 0; t < m; t++) {
+                        grp[t] = nj_word_get(sp + (nj_s8)t * src_bpp, 0);
+                        if (((grp[t] >> 24) & 0xFFu) != 255u) {
+                            all = 0;
+                        }
                     }
-                    sp += src_bpp;
-                    dp += bpp;
+                    if (all || rop == NJ_ROP_SET) {
+                        for (t = 0; t < m; t++) {
+                            nj_u2 v = (nj_u2)((((grp[t] >> 19) & 0x1Fu) << 11) |
+                                              (((grp[t] >> 10) & 0x3Fu) << 5) |
+                                              ((grp[t] >> 3) & 0x1Fu));
+
+                            memcpy(dp + (nj_s8)t * bpp, &v, sizeof v);
+                        }
+                    } else {
+                        for (t = 0; t < m; t++) {
+                            nj_u4 c = grp[t];
+                            int sa = (int)((c >> 24) & 0xFFu);
+
+                            if (sa >= 255) {
+                                nj_u2 v = (nj_u2)((((c >> 19) & 0x1Fu) << 11) |
+                                                  (((c >> 10) & 0x3Fu) << 5) |
+                                                  ((c >> 3) & 0x1Fu));
+
+                                memcpy(dp + (nj_s8)t * bpp, &v, sizeof v);
+                            } else if (sa > 0) {
+                                nj_blend565(dp + (nj_s8)t * bpp, c);
+                            }
+                        }
+                    }
+                    sp += (nj_s8)m * src_bpp;
+                    dp += (nj_s8)m * bpp;
+                    left -= m;
                 }
             }
             return;

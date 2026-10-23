@@ -753,3 +753,29 @@ and nothing else.
 CPU side: 33% less rasteriser time on the controlled benchmark and 11.5% less
 CPU in `毁灭战士3_10598` over 600 paced frames, with byte-identical pixels - see
 [PERFORMANCE.md](PERFORMANCE.md#the-textured-span-of-the-m3g-rasteriser-round-49-2026-10-24).
+
+## A strip vertex cache and honest blit groups (round 51, 2026-10-24)
+
+Two changes share a round: `jr_strip()` keeps the transformed vertices the next
+triangle reuses instead of fetching all three again, and `nj_region_draw()`
+converts ARGB8888-to-RGB565 pixels in groups of up to eight when a group is
+opaque. Both are pure code: no field, no scratch buffer, no static table, and
+`.data`/`.bss` are unchanged.
+
+| Build | Before | After |
+|---|---|---|
+| hosted `-O2`, `nj_gfx.c` `.text` | 33,056 B | **34,168 B** (+1,112 B) |
+| hosted `-O2`, `nj_lib_m3g.c` `.text` | 274,300 B | **275,900 B** (+1,600 B) |
+| hosted `-O2`, `nj2me` executable `.text` | 2,903,262 B | **2,905,966 B** (+2,704 B) |
+| `.data` / `.bss` (all builds) | 162,736 / 6,688 (binary) | **unchanged** |
+
+C stack grows by 32 B in `nj_region_draw()` (`nj_u4 grp[8]`, eight source
+pixels) and by 240 B in `jr_strip()` (two kept vertices plus one triangle's
+three vertices). A title that never draws M3G triangles pays the flash and
+nothing else; a title that never blits an ARGB image pays only the blit
+change's flash.
+
+CPU side: -5.2% on the opaque 240x320 ARGB-to-RGB565 blit loop and -6.7% to
+-9.2% of `毁灭战士3_10598`'s CPU over 6,000 paced frames, with byte-identical
+pixels - see
+[PERFORMANCE.md](PERFORMANCE.md#a-strips-vertices-are-transformed-three-times-not-once-round-51-2026-10-24).
