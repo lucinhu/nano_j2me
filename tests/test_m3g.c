@@ -1957,6 +1957,51 @@ int main(void)
          * (nj_field_read_int with a NULL receiver) dereferences obj + offset
          * and dies.
          */
+    printf("== a Light read out of a file keeps its cone ==\n");
+    {
+        /*
+         * 毁灭战士3_10598 ships its spot light in an M3G asset: mode SPOT,
+         * spotAngle 22.5 degrees, spotExponent 0.198, attenuation {1,0,0}.
+         * The loader copied only mode, colour and intensity, and an object
+         * built there never ran Light's constructor either, so the angle
+         * read back as 0 - a cone of no width - and the light rejected every
+         * vertex: the whole 3D menu layer was rendered black.  Link the
+         * record by hand and check what lands in the object.
+         */
+        nj_m3g_object objs[1];
+        nj_ref arr, l;
+        nj_value r;
+
+        memset(objs, 0, sizeof objs);
+        objs[0].type = 12u;                      /* the Light object type */
+        objs[0].fields.decoded = 1u;
+        objs[0].fields.b = 131u;                 /* Light.SPOT */
+        objs[0].fields.a = 0x00FFFFFFu;          /* white */
+        objs[0].fields.f[0] = 1.0f;              /* attenuation */
+        objs[0].fields.f[1] = 0.0f;
+        objs[0].fields.f[2] = 0.0f;
+        objs[0].fields.f[3] = 1.0f;              /* intensity */
+        objs[0].fields.f[4] = 22.5f;             /* spotAngle */
+        objs[0].fields.f[5] = 0.198f;            /* spotExponent */
+
+        l = make(vm, CLS("Light"));
+        arr = nj_object_array_new(vm, CLS("Light"), 2);
+        check(l != 0 && arr != 0, "a Light and the array the loader links");
+        if (l && arr) {
+            nj_array_set_ref(arr, 1, l);
+            nj_root(vm, arr);
+            nj_root(vm, l);
+            check(nj_m3g_link_misc(vm, objs, 1u, arr) == NJ_OK,
+                  "the Light record links");
+            call(vm, l, CLS("Light"), "getSpotAngle", "()F", NULL, &r);
+            check(r.f == 22.5f, "and its spot angle comes from the file");
+            call(vm, l, CLS("Light"), "getSpotExponent", "()F", NULL, &r);
+            check(r.f == 0.198f, "as does its spot exponent");
+            call(vm, l, CLS("Light"), "getMode", "()I", NULL, &r);
+            check(r.i == 131, "and its mode is still the file's");
+        }
+    }
+
         check(nj_field_lookup(vm, CLS("Light"), "SPOT", "I", 1) != NULL,
               "Light.SPOT is declared as a static field");
     }
