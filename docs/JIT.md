@@ -177,6 +177,14 @@ the site as refused, which prevents compile/fault churn. A loop block checks
 `budget - completed >= window size` at its entry label, so a back edge always
 returns through the budget exit after at most `budget` bytecodes.
 
+Both limits bound how much of a loop body can be compiled at once: a body with
+more than `NJ_JIT_MAX_BLOCK_INSNS` bytecodes or more than `NJ_JIT_MAX_FAULTS`
+guarded operations is split, and the part left outside still runs in the
+interpreter. The defaults (64 bytecodes, 12 faults) admit the common
+field/array-update loops in one block; lowering them saves metadata and code
+bytes at the cost of a higher fallback ratio, which the statistics expose as
+`fallback_ratio`.
+
 The C entry checks stack consumption/growth and scheduling budget before calling.
 Both backends match Java's `INT_MIN / -1` overflow behavior. RV32 encodes RNE
 explicitly; ARM64 uses the temporary FPCR state described above (the fault exit
@@ -204,11 +212,11 @@ Tracing bypasses native execution so per-bytecode trace output remains available
 | `NJ_JIT_CACHE_WAYS` | 2 | 1, 2 or 4 ways; entry count must be divisible by ways |
 | `NJ_JIT_METHOD_ENTRIES` | 32 | Mapped methods; least-recently-used map is recycled |
 | `NJ_JIT_METHOD_ARENA_BYTES` | 4096 | Fixed probe-map arena (one 16-bit cell per bytecode) |
-| `NJ_JIT_MAX_FAULTS` | 4 | Guarded instructions per block before it must end |
+| `NJ_JIT_MAX_FAULTS` | 12 | Guarded instructions per block before it must end |
 | `NJ_JIT_MAX_EXITS` | 4 | Window end, leaving branches and the loop budget exit |
 | `NJ_JIT_HOT_THRESHOLD` | 8 | Visits before decode-only eligibility analysis |
 | `NJ_JIT_MIN_BLOCK_INSNS` | 4 | Minimum bytecodes to compile; experiment with 1/4/8 |
-| `NJ_JIT_MAX_BLOCK_INSNS` | 32 | Maximum Java bytecodes in a block |
+| `NJ_JIT_MAX_BLOCK_INSNS` | 64 | Maximum Java bytecodes in a block |
 | `NJ_JIT_MAX_CODE_BYTES` | 2048 | Maximum bytes per block; also compiler stack scratch |
 
 Heat, refusal and compiled state live in one per-method map: a 16-bit cell per

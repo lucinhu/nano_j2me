@@ -574,9 +574,11 @@
 #  define NJ_JIT_METHOD_ARENA_BYTES 4096
 #endif
 /* A block may return to the interpreter at up to this many guarded
- * instructions (null receiver, bad array, zero divisor). */
+ * instructions (null receiver, bad array, zero divisor). Field- and
+ * array-heavy loops need enough slots that the whole loop body still fits in
+ * one block; each slot costs a four-byte fault record in every cache entry. */
 #ifndef NJ_JIT_MAX_FAULTS
-#  define NJ_JIT_MAX_FAULTS 4
+#  define NJ_JIT_MAX_FAULTS 12
 #endif
 /* A block leaves native code through a small set of exits: the end of the
  * straight-line window, taken forward branches that leave the window and the
@@ -612,7 +614,7 @@
 #  define NJ_JIT_HOT_THRESHOLD 8
 #endif
 #ifndef NJ_JIT_MAX_BLOCK_INSNS
-#  define NJ_JIT_MAX_BLOCK_INSNS 32
+#  define NJ_JIT_MAX_BLOCK_INSNS 64
 #endif
 #ifndef NJ_JIT_MAX_CODE_BYTES
 #  define NJ_JIT_MAX_CODE_BYTES 2048

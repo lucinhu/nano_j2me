@@ -145,66 +145,75 @@ These are emulator wall times, not CPU cycles or board measurements. RV32 and
 ARM64 Linux musl static binaries were built in Release mode with Zig/Clang
 22.1.8 for `riscv32-linux-musl` / `aarch64-linux-musl` and run under
 qemu-riscv32 and qemu-aarch64 7.2.0. Defaults held constant: 64 code entries in
-two ways, 32 method maps, a 4096-byte arena, at most 4 faults and 4 exits, heat
-threshold 8, minimum block 4, at most 32 bytecodes, default quantum, switch
+two ways, 32 method maps, a 4096-byte arena, at most 12 faults and 4 exits, heat
+threshold 8, minimum block 4, at most 64 bytecodes, default quantum, switch
 dispatch, **superinstructions off in both modes** (matching the board report),
 RV32 register cache on, statistics on, detailed statistics off. Each row is one
 fresh VM; values are medians of three runs.
+
+**Block-length and fault-slot defaults matter more than any single opcode.**
+The previous defaults (32 bytecodes, 4 fault slots) split the benchmark loops:
+the branch kernel's 38-bytecode loop body and the field/array kernel's body
+(two `getfield`s, one `putfield`, two `iaload`s, one `iastore`, nine guarded
+operations in all) could not fit in one block, so every iteration left native
+code and re-entered the probe. Raising the defaults to 64 bytecodes and 12
+fault slots makes both loop bodies compile as a single loop block: execute-mode
+`fallback_ratio` for those kernels drops from 0.1450 / 0.0743 to 0.0022 / 0.0034,
+and the RV32 execute/interpreter ratios fall from 0.308 / 0.271 to 0.038 / 0.034.
+The cost is metadata: every cache entry carries `NJ_JIT_MAX_FAULTS` four-byte
+fault records, so `metadata_bytes` grows from 9,432 to 11,480 on RV32 and from
+10,600 to 12,648 on LP64. Both macros remain configurable for RAM-constrained
+builds; lowering them is a fallback-ratio trade, not a correctness trade.
 
 Steady state, 20,000 iterations:
 
 | Kernel | RV32 interpreter / probe / execute ms | RV32 exec/interp | RV32 probe/interp | ARM64 interpreter / probe / execute ms | ARM64 exec/interp | ARM64 probe/interp |
 |---|---:|---:|---:|---:|---:|---:|
-| Locals | 34.95 / 36.08 / 2.62 | 0.075 | 1.032 | 27.43 / 28.49 / 2.52 | 0.092 | 1.039 |
-| Constants | 11.28 / 20.54 / 0.47 | 0.042 | 1.822 | 8.28 / 15.28 / 0.43 | 0.052 | 1.846 |
-| Fields | 23.22 / 37.62 / 1.06 | 0.045 | 1.620 | 16.54 / 29.02 / 1.07 | 0.065 | 1.755 |
-| Arrays | 23.27 / 41.72 / 1.51 | 0.065 | 1.793 | 15.87 / 31.29 / 2.02 | 0.127 | 1.972 |
-| Mixed | 50.42 / 80.56 / 13.68 | 0.271 | 1.598 | 34.26 / 61.64 / 13.56 | 0.396 | 1.799 |
-| Branches | 19.42 / 31.08 / 5.98 | 0.308 | 1.601 | 16.33 / 31.53 / 7.34 | 0.449 | 1.931 |
+| Locals | 35.79 / 18.37 / 1.53 | 0.043 | 0.513 | 28.28 / 14.33 / 1.39 | 0.049 | 0.507 |
+| Constants | 5.84 / 11.20 / 0.26 | 0.044 | 1.919 | 4.25 / 8.29 / 0.24 | 0.056 | 1.949 |
+| Fields | 12.23 / 21.05 / 0.59 | 0.048 | 1.721 | 9.41 / 19.05 / 0.65 | 0.069 | 2.025 |
+| Arrays | 12.22 / 21.57 / 0.80 | 0.065 | 1.766 | 11.36 / 19.49 / 1.06 | 0.093 | 1.716 |
+| Mixed | 26.54 / 44.72 / 0.90 | 0.034 | 1.685 | 19.13 / 33.77 / 1.14 | 0.060 | 1.765 |
+| Branches | 12.01 / 21.94 / 0.46 | 0.038 | 1.826 | 8.91 / 17.18 / 0.57 | 0.064 | 1.928 |
 
-Execute-mode `fallback_ratio` (Java bytecodes that still ran in the interpreter)
-and compiled footprint, RV32 / ARM64: locals 0.0014 / 0.0014, 1 block and 238 /
-364 code bytes; constants 0.0009 / 0.0009, 1 / 150 or 220; fields 0.0013 /
-0.0013, 1 / 300 or 412; arrays 0.0020 / 0.0020, 2 / 1044 or 1396; mixed 0.0743 /
-0.0743, 23 blocks / 6468 or 7920; branches 0.1450 / 0.1450, 3 blocks / 964 or
-1480. `metadata_bytes` is 9432 on RV32 and 10600 on LP64, and every code
-allocation is freed.
-
-Branches and loops now compile: the branches kernel falls back on 14.5% of
-bytecodes instead of 36.0% before loop compilation, and its RV32
-execute/interpreter ratio drops from the previous revision's 0.777 to 0.308.
-`probe_only` is now a modest overhead over the interpreter (1.03–1.79× on RV32,
-1.04–1.97× on ARM64) rather than the previous 1.5–2.0×, because a declined or
-not-yet-hot bytecode costs one cached method-pointer comparison and one 16-bit
-cell load. Do not subtract probe-only time from execute time for attribution:
+The first measured row in each process (locals) is distorted by page-in and host
+noise, which is why its probe/interpreter column shows less than one even though
+probe-only mode does strictly more work; treat the ratio columns as directional.
+Do not subtract probe-only time from execute time for attribution either:
 probe-only also visits bytecodes skipped by a native block.
 
+Execute-mode compiled footprint, RV32 / ARM64: locals 1 block and 238 / 364 code
+bytes; constants 1 and 150 / 220; fields 1 and 324 / 448; arrays 2 and 570 / 740;
+mixed 1 and 910 / 1200; branches 1 and 414 / 632. Every code allocation is freed,
+and `metadata_bytes` is 11,480 on RV32 and 12,648 on LP64 as noted above.
+
 Cold start, 500 iterations (interpreter / execute ms, execute/interpreter,
-compiled blocks / code bytes):
+compiled code bytes):
 
-| Kernel | RV32 int / exec | RV32 ratio | RV32 blocks / bytes | ARM64 int / exec | ARM64 ratio | ARM64 blocks / bytes |
+| Kernel | RV32 int / exec | RV32 ratio | RV32 bytes | ARM64 int / exec | ARM64 ratio | ARM64 bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| Locals | 1.500 / 3.064 | 2.043 | 1 / 238 | 0.860 / 2.782 | 3.235 | 1 / 364 |
-| Constants | 0.565 / 0.503 | 0.890 | 1 / 150 | 0.454 / 0.358 | 0.789 | 1 / 220 |
-| Fields | 0.331 / 0.320 | 0.967 | 1 / 300 | 0.234 / 0.387 | 1.654 | 1 / 412 |
-| Arrays | 0.357 / 0.477 | 1.336 | 2 / 1044 | 0.470 / 0.610 | 1.298 | 2 / 1396 |
-| Mixed | 0.665 / 0.520 | 0.782 | 5 / 1588 | 0.485 / 0.671 | 1.384 | 5 / 2044 |
-| Branches | 0.325 / 0.205 | 0.631 | 1 / 324 | 0.268 / 0.217 | 0.810 | 1 / 496 |
+| Locals | 1.05 / 2.86 | 2.715 | 238 | 0.83 / 2.83 | 3.410 | 364 |
+| Constants | 0.57 / 0.30 | 0.530 | 150 | 0.45 / 0.25 | 0.548 | 220 |
+| Fields | 0.61 / 0.62 | 1.005 | 324 | 0.44 / 0.73 | 1.652 | 448 |
+| Arrays | 0.68 / 0.74 | 1.081 | 570 | 0.48 / 0.99 | 2.056 | 740 |
+| Mixed | 1.32 / 0.65 | 0.491 | 910 | 0.95 / 0.71 | 0.746 | 1200 |
+| Branches | 0.64 / 0.22 | 0.349 | 414 | 0.50 / 0.28 | 0.557 | 632 |
 
-The first few hundred iterations pay for analysis and emission (locals and, on
-ARM64, fields and arrays are still slower there), while every kernel is faster
-once warm except the dispatch-bound mixed/branch kernels on ARM64. A JIT-enabled
-launch therefore only pays off if the hot loops run long enough — the board's
-startup scenario is exactly that case, which is why it must be re-measured
-rather than inferred.
+The first few hundred iterations pay for analysis and emission (locals — a
+one-block kernel whose whole hot path is compiled immediately — and, on ARM64,
+fields and arrays are still slower there), while the loop kernels are already
+ahead. A JIT-enabled launch therefore only pays off if the hot loops run long
+enough — the board's startup scenario is exactly that case, which is why it must
+be re-measured rather than inferred.
 
 For comparison with the previous revision, its QEMU table (500,000 iterations,
 medians of three runs, five kernels) gave RV32 execute/interpreter 0.252
 (locals), 0.682 (constants), 1.305 (fields), 1.262 (arrays), 0.777 (branches).
-The iteration count and aggregation differ, so treat the change as directional:
-fields, arrays and branches went from clearly slower than the interpreter to
-clearly faster, which is attributable to the new coverage and loop compilation;
-locals and constants improved as well.
+The iteration count, block-length defaults and aggregation differ, so treat the
+change as directional: fields, arrays and branches went from clearly slower than
+the interpreter to clearly faster, which is attributable to the new coverage,
+loop compilation, and the larger block window; locals and constants improved as
+well.
 
 ## Correctness coverage
 
@@ -214,7 +223,9 @@ executable-memory hooks in QEMU:
 - RV32: 14 build configurations, 38,362 native block invocations and 22,428,156
   assertions (22,078,150 on the host build).
 - ARM64: 12 configurations, 50,534 invocations and 24,965,155 assertions
-  (24,357,840 on the host build).
+  (24,357,840 on the host build). These totals are insensitive to the
+  block-length and fault-slot defaults: the encoder matrices generate their own
+  synthetic methods and the runtime tests adapt their fixtures to the macros.
 
 The same matrices were repeated under ASan/UBSan with identical assertion
 counts. Each configuration checks complete frame slots byte for byte against the
@@ -233,7 +244,7 @@ encoding-only 934,949 on ARM64), `test_jit_arm64` (2,315,309 assertions, 4,402
 compiled, 4,456 native on ARM64; encoding-only 1,524,664 on RV32),
 `test_jit_perf` (six kernels × three modes, checksums match the oracle),
 `test_vm` (`hello.jar`), `test_engine` (`bench.jar`, 54 checks), `test_lifecycle`,
-`test_blocked_init`, `test_thread_lifecycle` and `test_natives`. The runtime
+`test_blocked_init` (12 checks), `test_thread_lifecycle` and `test_natives`. The runtime
 tests force minimum block length 1 so guarded operations really execute natively,
 and they require at least one real zero-divisor fault, which exercises the exact
 deoptimisation path end to end. The runtime test also drives one deoptimisation
@@ -273,11 +284,12 @@ not a board speedup.
   `NJ_JIT_METHOD_ARENA_BYTES/2` bytecode cells is never JIT'd (2048 bytecodes at
   defaults). That is a deliberate cheap exit; raise the arena for larger hot
   methods.
-- **Memory.** Default metadata is 9432 bytes per VM on RV32 (10600 on LP64), up
-from about 5000. On
-  RAM-constrained parts reduce `NJ_JIT_CACHE_ENTRIES`,
-  `NJ_JIT_METHOD_ENTRIES` and `NJ_JIT_METHOD_ARENA_BYTES`; `metadata_bytes`
-  reports the resulting size.
+- **Memory.** Default metadata is 11,480 bytes per VM on RV32 and 12,648 on
+  LP64, up from about 5,000 in the first revision. Most of the growth is the
+  larger `faults[]` array per cache entry. On RAM-constrained parts reduce
+  `NJ_JIT_MAX_FAULTS`, `NJ_JIT_CACHE_ENTRIES`, `NJ_JIT_METHOD_ENTRIES` and
+  `NJ_JIT_METHOD_ARENA_BYTES`; `metadata_bytes` reports the resulting size, and
+  the block-length/fault defaults section above gives the fallback-ratio trade.
 - **Cold start.** Emission and analysis dominate the first few hundred
   iterations; short-lived launches may not amortise them.
 - **Loop budget.** A compiled loop counts every completed bytecode and checks
@@ -302,8 +314,8 @@ and steady state separately, together with `code_bytes`, `metadata_bytes`,
 
 The startup scenario is the one that must be re-measured: the previous revision
 reported 1,069,968 site-history evictions and 5,000 bytes of metadata there, and
-this revision replaces the site table with per-method maps (9432 bytes on RV32,
-10600 on LP64 at defaults) so those evictions should be gone and the per-bytecode
+this revision replaces the site table with per-method maps (11480 bytes on RV32,
+12648 on LP64 at defaults) so those evictions should be gone and the per-bytecode
 probe should be a pointer compare plus one cell load. If the board shows the
 stepping cost still dominating, tune `NJ_JIT_METHOD_ARENA_BYTES` and
 `NJ_JIT_METHOD_ENTRIES` against `method_map_evictions` rather than raising the
