@@ -2606,6 +2606,23 @@ pointer-and-key script): 4 non-zero exits - this pair plus the two known ones
 not a ZIP) - 3 caught-only uncaught-class titles unchanged from round 12, no
 missing API, no crash outside the pair above.
 
+## The string that was too long to write (round 38, 2026-10-23)
+
+`DataOutputStream.writeUTF` writes a two-byte length and then the modified
+UTF-8 payload, so the payload cannot exceed 65535 bytes. The JDK refuses a
+longer string with `UTFDataFormatException`; this runtime wrote the length
+modulo 65536 and then the whole payload, i.e. it produced a stream its own
+`readUTF` (and any other reader) walks straight off.
+
+Now the encoder checks the limit before writing anything and throws the checked
+exception. `java/io/UTFDataFormatException` did not exist in the runtime at
+all, so it is declared too (an `IOException` subclass, as in the platform) -
+a title's own `catch (UTFDataFormatException)` clause could not resolve before.
+
+`tests/test_lib.c` covers both sides of the boundary: a 65535-byte payload is
+written with its header (size 65537), and 65536 bytes is refused with the
+exception. test_lib 834 passed / 0 failed.
+
 ## The byte-array window that could read outside itself (round 31, 2026-10-23)
 
 `ByteArrayInputStream(byte[], int, int)` builds a *window* over an array. The

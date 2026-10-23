@@ -3739,6 +3739,54 @@ static void test_njlib_gaps(nj_vm *vm)
     clean(vm, "the audited class-library members");
 }
 
+/*
+ * writeUTF prefixes the modified UTF-8 payload with a two-byte length, so a
+ * payload longer than 65535 bytes cannot be represented; the JDK refuses it
+ * with UTFDataFormatException rather than writing a truncated length and the
+ * rest of the bytes.  A title saving a long string through this call would
+ * otherwise hand its own reader a corrupt stream.
+ */
+static void test_write_utf_length(nj_vm *vm)
+{
+    static char buf[65537];
+    nj_value a[2];
+    nj_ref baos, dos, s;
+    nj_s4 n;
+
+    baos = construct(vm, BAOS, "()V", NULL, "ByteArrayOutputStream()");
+    OK(baos != NULL);
+    a[0] = vref(baos);
+    dos = construct(vm, DOS, "(Ljava/io/OutputStream;)V", a, "DataOutputStream(baos)");
+    OK(dos != NULL);
+    clean(vm, "writeUTF length: streams");
+
+    memset(buf, 'a', 65535u);
+    buf[65535] = '\0';
+    s = nj_string_new(vm, buf);
+    OK(s != NULL);
+    a[0] = vref(s);
+    OK(nj_call(vm, dos, DOS, "writeUTF", "(Ljava/lang/String;)V", a, NULL) == NJ_OK);
+    clean(vm, "writeUTF at the 65535-byte limit");
+    n = nj_call_int(vm, baos, BAOS, "size", "()I", NULL);
+    OK_MSG(n == 65537, "a 65535-byte UTF payload is written with its header: %d", (int)n);
+
+    memset(buf, 'a', 65536u);
+    buf[65536] = '\0';
+    s = nj_string_new(vm, buf);
+    OK(s != NULL);
+    a[0] = vref(s);
+    OK(nj_call(vm, dos, DOS, "writeUTF", "(Ljava/lang/String;)V", a, NULL) != NJ_OK);
+    {
+        const char *d = nj_exception_describe(vm);
+
+        OK_MSG(d != NULL && strstr(d, "UTFDataFormatException") != NULL,
+               "an over-long UTF payload raises UTFDataFormatException: %s",
+               d ? d : "(no exception)");
+    }
+    nj_clear_exception(vm);
+    clean(vm, "writeUTF past the limit");
+}
+
 int main(void)
 {
     nj_port port;
@@ -3828,6 +3876,7 @@ int main(void)
     /* Last, because it allocates into the shared VM and a heap-pressure
      * test above expects the heap to be where it left it. */
     test_bais_range(vm);
+    test_write_utf_length(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

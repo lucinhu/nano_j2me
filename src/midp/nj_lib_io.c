@@ -765,6 +765,11 @@ NJFN(dos_writeUTF)
             tmp[n++] = (nj_u1)(0x80u | (c & 0x3Fu));
         }
     }
+    if (n > 0xFFFFu) {
+        nj_host_free(vm, tmp);
+        return nj_throw(vm, "java/io/UTFDataFormatException",
+                        "encoded string too long");
+    }
     {
         nj_u1 hdr[2];
         hdr[0] = (nj_u1)((n >> 8) & 0xFF);
@@ -2612,6 +2617,7 @@ const nj_builtin_class nj_lib_io_classes[] = {
     NJ_IO_EXC("java/io/EOFException", "java/io/IOException")
     NJ_IO_EXC("java/io/InterruptedIOException", "java/io/IOException")
     NJ_IO_EXC("java/io/UnsupportedEncodingException", "java/io/IOException")
+    NJ_IO_EXC("java/io/UTFDataFormatException", "java/io/IOException")
     NJ_IO_EXC("javax/microedition/io/ConnectionNotFoundException",
               "java/io/IOException")
     { "javax/microedition/io/Connector", "java/lang/Object", NJ_ACC_PUBLIC,
