@@ -9088,6 +9088,34 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
          | ((tb * (argb & 0xFFu)) / 255u);
 }
 
+/*
+ * Nearest sampling for the specialised textured loops below.
+ *
+ * sw_texel() handles every wrap and filter mode, which makes it a call with a
+ * branch tree on each pixel.  The loops that only ever see WRAP_REPEAT and
+ * NEAREST fetch the texel through this helper instead: the float expressions
+ * are the same ones, in the same order, so the sampled texel is identical and
+ * only the dispatch disappears.
+ */
+static inline const nj_u1 *sw_near_texel(const m3g_sw *sw, float s, float t,
+                                         float tsx, float tsy)
+{
+    float fs = s - (float)(nj_s4)s;
+    float ft = t - (float)(nj_s4)t;
+    int u, v;
+
+    if (fs < 0.0f) { fs += 1.0f; }
+    if (fs >= 1.0f) { fs = 0.999f; }
+    if (ft < 0.0f) { ft += 1.0f; }
+    if (ft >= 1.0f) { ft = 0.999f; }
+    u = (int)(fs * tsx + 0.5f);
+    v = (int)(ft * tsy + 0.5f);
+    if (u < 0) { u = 0; } else if (u >= sw->tex_w) { u = sw->tex_w - 1; }
+    if (v < 0) { v = 0; } else if (v >= sw->tex_h) { v = sw->tex_h - 1; }
+    return sw->tex + ((nj_size)v * (nj_size)sw->tex_w + (nj_size)u) *
+                     (nj_size)sw->tex_bpp;
+}
+
 static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     const float st[6], int has_tex, const nj_u4 rgb[3])
 {
@@ -9115,6 +9143,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
 #if NJ_M3G_FAST_PATHS
     int flat_opaque = !has_tex && !gouraud && !sw->sprite && sw->awrite &&
                       sw->athresh <= 255 && (sw->blend == 64 || sw->blend == 68);
+    int flat_tex = 0, flat_tex565 = 0, flat_texargb = 0;
 #endif
 
     if (!sw->surf || !sw->z || !sw->surf->pixels) {
@@ -9125,6 +9154,24 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
         format != NJ_PIXFMT_RGB888) {
         return 0u;
     }
+#if NJ_M3G_FAST_PATHS
+    /* The textured opaque case that the titles actually render: a flat-
+     * tinted, NEAREST-sampled WRAP_REPEAT texture drawn over the destination.
+     * The general loop calls sw_texel() (a call with a wrap/filter branch
+     * tree) to build an ARGB word and hands it to the pixel writer, which
+     * converts it straight back; these two loops fetch the texel inline and
+     * write the destination format directly.  Both are only selected when
+     * every mode they do not handle is out of the way, so each pixel gets the
+     * same texel, the same depth decision and the same bytes. */
+    flat_tex = has_tex && !gouraud && !sw->sprite &&
+               (sw->blend == 68 || sw->blend == 64) &&
+               sw->athresh <= 0 && sw->tex != NULL && sw->tex_bpp >= 3 &&
+               sw->tex_w > 0 && sw->tex_h > 0 && sw->texfunc == 227 &&
+               sw->filt_image != 209 && sw->filt_image != 129 &&
+               sw->wrap_s != 240 && sw->wrap_t != 240;
+    flat_tex565 = flat_tex && format == NJ_PIXFMT_RGB565;
+    flat_texargb = flat_tex && format == NJ_PIXFMT_ARGB8888;
+#endif
     if (area == 0.0f) {
         return 0u;
     }
@@ -9253,6 +9300,90 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                         m3g_pixel_write(drow, format, flat);
                         drawn = 1u;
                     }
+                }
+            } else
+#endif
+#if NJ_M3G_FAST_PATHS
+            if (flat_tex565) {
+                const float tsx = (float)(sw->tex_w - 1);
+                const float tsy = (float)(sw->tex_h - 1);
+                const nj_u4 fr = (flat >> 16) & 0xFFu;
+                const nj_u4 fg = (flat >> 8) & 0xFFu;
+                const nj_u4 fb = flat & 0xFFu;
+                const int blend_alpha = sw->blend == 64;
+                const int bpp4 = sw->tex_bpp == 4;
+                const int awrite = sw->awrite;
+
+                for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg,
+                         ph += dxh, pk += dxk) {
+                    nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
+                    const nj_u1 *tp;
+                    nj_u4 tr, tg, tb, c;
+
+                    if (key <= 0) { continue; }
+                    if (sw->dtest && key <= sw->z[o]) { continue; }
+                    tp = sw_near_texel(sw, ph / pg, pk / pg, tsx, tsy);
+                    tr = ((nj_u4)tp[0] * fr) / 255u;
+                    tg = ((nj_u4)tp[1] * fg) / 255u;
+                    tb = ((nj_u4)tp[2] * fb) / 255u;
+                    if (sw->dwrite) { sw->z[o] = key; }
+                    if (blend_alpha) {
+                        nj_u4 ta = bpp4 ? (nj_u4)tp[3] : 255u;
+
+                        if (ta < 255u) {   /* the rare translucent texel */
+                            c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
+                            m3g_pixel_write(drow, format,
+                                sw_blend(c, m3g_pixel_read(drow, format),
+                                         sw->blend, awrite));
+                            drawn = 1u;
+                            continue;
+                        }
+                    }
+                    c = ((tr >> 3) << 11) | ((tg >> 2) << 5) | (tb >> 3);
+                    {
+                        nj_u2 v2 = (nj_u2)c;
+                        memcpy(drow, &v2, sizeof(v2));
+                    }
+                    drawn = 1u;
+                }
+            } else if (flat_texargb) {
+                const float tsx = (float)(sw->tex_w - 1);
+                const float tsy = (float)(sw->tex_h - 1);
+                const nj_u4 fr = (flat >> 16) & 0xFFu;
+                const nj_u4 fg = (flat >> 8) & 0xFFu;
+                const nj_u4 fb = flat & 0xFFu;
+                const int blend_alpha = sw->blend == 64;
+                const int bpp4 = sw->tex_bpp == 4;
+                const int awrite = sw->awrite;
+
+                for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg,
+                         ph += dxh, pk += dxk) {
+                    nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
+                    const nj_u1 *tp;
+                    nj_u4 tr, tg, tb, ta, c;
+
+                    if (key <= 0) { continue; }
+                    if (sw->dtest && key <= sw->z[o]) { continue; }
+                    tp = sw_near_texel(sw, ph / pg, pk / pg, tsx, tsy);
+                    tr = ((nj_u4)tp[0] * fr) / 255u;
+                    tg = ((nj_u4)tp[1] * fg) / 255u;
+                    tb = ((nj_u4)tp[2] * fb) / 255u;
+                    ta = bpp4 ? (nj_u4)tp[3] : 255u;
+                    if (sw->dwrite) { sw->z[o] = key; }
+                    c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
+                    if (blend_alpha && ta < 255u) {   /* the rare translucent texel */
+                        m3g_pixel_write(drow, format,
+                            sw_blend(c, m3g_pixel_read(drow, format), sw->blend,
+                                     awrite));
+                        drawn = 1u;
+                        continue;
+                    }
+                    if (!awrite) {
+                        c = (c & 0x00FFFFFFu) |
+                            (m3g_pixel_read(drow, format) & 0xFF000000u);
+                    }
+                    memcpy(drow, &c, sizeof(c));
+                    drawn = 1u;
                 }
             } else
 #endif

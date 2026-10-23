@@ -2156,3 +2156,99 @@ the 27-value superinstruction digest still match.
 Reproduction: `.local-tools/debug-runs/raster-round48-20261023/`
 (`raster-bench.c`, `ab.sh`, the two arms' logs and the game replays). Those
 local artifacts are not checked into Git.
+
+## The textured span of the M3G rasteriser (round 49, 2026-10-24)
+
+JSR-184 draws through two different paths in this runtime. `Graphics3D.render()`
+with a vertex and index buffer hands each triangle to the Java-side
+`Graphics.fillTriangle`; a `World` render goes through the C software rasteriser,
+`sw_tri()`, which owns the depth buffer, the texture sampler and the blending.
+Only the second path can be optimised here.
+
+`sw_tri()` used to run every pixel through one general loop: solve `key`, test
+the z-buffer, then call `sw_texel()`, which walks the wrap-mode and filter
+branches to reach NEAREST sampling, returns an `0xAARRGGBB` word, and hands it
+to `m3g_pixel_write()`, which converts it back to the surface format. In RGB565
+with a flat colour and no blending, every one of those steps is predictable
+from the triangle's state, so the loop was paying for a branch tree, an ARGB
+round trip and a function call per pixel.
+
+### Where the pixels are
+
+An API scan over `tests/games/` finds 26 titles that reference
+`javax/microedition/m3g` (and 3 more that use Mascot Capsule instead). Replaying
+them showed that most draw their scenes late or fall back to 2D sprites; within
+the first 600 frames of a replay only `毁灭战士3_10598` really rasterises
+triangles: 486,472 of them, 23,189,487 textured samples, all of them
+flat-coloured, NEAREST-filtered, REPEAT-wrapped, MODULATE, RGB565 with
+ALPHA blending and a fully opaque texture. The other 25 titles report `tris=0`
+over the same replay window, so a title replay can prove the change is neutral
+for them but not that it is fast.
+
+### What changed
+
+`src/midp/nj_lib_m3g.c` gains `sw_near_texel()`, an inline that reproduces
+`sw_texel()`'s REPEAT + NEAREST arithmetic exactly (fractional fixups, the
+`0.999f` corner case, the round and the clamps) without the branch tree, and
+two specialised span loops in front of the general one. A span takes a loop when
+it is textured, flat-shaded, not a sprite, REPEAT on both axes, MODULATE,
+NEAREST, `athresh <= 0`, and either REPLACE or ALPHA blending; the loop is then
+picked by surface format (RGB565 or ARGB8888). Each pixel still solves the same
+`key`, still tests and writes the z-buffer at the same point, and still blends
+through `sw_blend()` when a texel's alpha is below 255 (with a fully opaque
+texel ALPHA blending replaces, which is the same bytes).
+RGB565 writes the three channels straight into the destination word.
+
+### How it was measured
+
+`.local-tools/debug-runs/m3g-raster-round49-20261023/m3g-bench.c` includes
+`nj_lib_m3g.c` to reach the file-static `sw_tri()`, then renders 200
+full-screen 24x16 textured quads (400 triangles, a 128x128 RGBA texture,
+240x320 RGB565, `taskset -c 5`) in eleven configurations. Each arm ran seven
+times, interleaved; a second copy of the parent binary ran as an A/A control.
+
+| Configuration | Parent (min) | This build (min) | Ratio | A/A noise |
+|---|---|---|---|---|
+| 565 NEAREST flat texture, REPLACE | 0.2767 s | 0.1863 s | **0.673** | 1.000 |
+| ARGB8888 NEAREST flat texture, REPLACE | 0.2613 s | 0.1978 s | **0.757** | 1.009 |
+| 565 NEAREST textured, ALPHA blend | 0.4787 s | 0.4335 s | **0.906** | 1.000 |
+| ARGB8888 NEAREST textured, ALPHA blend | 0.4334 s | 0.3900 s | **0.900** | 1.003 |
+| 565 NEAREST gouraud | 0.2902 s | 0.2917 s | 1.005 | 1.000 |
+| 565 LINEAR flat | 0.5317 s | 0.5276 s | 0.992 | 1.013 |
+| 565 NEAREST `athresh` | 0.2631 s | 0.2613 s | 0.993 | 1.011 |
+| 565 NEAREST CLAMP | 0.2382 s | 0.2406 s | 1.010 | 1.004 |
+| 888 NEAREST flat | 0.2667 s | 0.2643 s | 0.991 | 1.006 |
+| 565 untextured flat | 0.0465 s | 0.0467 s | 1.004 | 1.000 |
+
+The four configurations the fast path covers lose a third (REPLACE) or a tenth
+(ALPHA blending, which still runs `sw_blend()` per pixel) of their CPU; the
+seven it does not cover sit inside the A/A resolution. The eleven framebuffer
+checksums are byte-identical between the arms, so every covered pixel writes the
+same bytes and every uncovered pixel is untouched.
+
+The real title agrees. `毁灭战士3_10598`, 600 frames at 30 fps, `taskset -c 5`,
+six interleaved pairs, user CPU: parent 0.547 / 0.513 / 0.520 / 0.526 / 0.516 /
+0.532 s, this build 0.461 / 0.460 / 0.468 / 0.454 / 0.464 / 0.466 s - min
+0.513 -> 0.454 s and median 0.523 -> 0.463 s, **11.5% less CPU**. Six frames
+dumped either side (`--dump-every 100`) are byte-identical.
+
+### Cost
+
+The fast path is code, not state: no field, no scratch buffer and no static
+table was added, so the RAM rule holds and `.data`/`.bss` are untouched in both
+builds. It costs flash - see
+[FOOTPRINT.md](FOOTPRINT.md#the-textured-span-of-the-m3g-rasteriser-round-49-2026-10-24):
+4,328 bytes of `.text` in `nj_lib_m3g.c.o` in the hosted `-O2` build and 1,495
+bytes in the freestanding `-Os` one.
+
+Gates: `ctest` 103/103, `test_m3g` 581 checks and `test_m3g_references` 389
+checks under ASan+UBSan+LSan with no reports, `tools/check_no_statics.sh` clean,
+the 27-value superinstruction digest and `BENCH sum=-136042548 s=5` unchanged.
+
+Limits: this is rasteriser time, not a frame rate - the title is paced at 30 fps
+and spends its remaining CPU elsewhere. LINEAR filtering, mip-mapped sampling,
+gouraud shading, sprites, `athresh`, RGB888 surfaces and non-REPEAT wrapping
+still take the general loop. There is no unit test in the tree that asserts
+pixels from this path yet; the evidence above is the bench's identical
+checksums plus the title's identical frames, both reproductions kept under
+`.local-tools/debug-runs/m3g-raster-round49-20261023/` (not in Git).

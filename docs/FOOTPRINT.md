@@ -728,3 +728,28 @@ measured in
 [PERFORMANCE.md](PERFORMANCE.md#three-divides-per-shaded-pixel-round-48-2026-10-23):
 42% less CPU on the controlled raster benchmark, with byte-identical
 framebuffers.
+
+## The textured span of the M3G rasteriser (round 49, 2026-10-24)
+
+Opaque, flat-coloured, NEAREST-sampled textured triangles are now rasterised by
+two specialised span loops (RGB565 and ARGB8888) instead of the general
+per-pixel loop that walked the wrap/filter branches, built an ARGB word and
+converted it back. The change is pure code: no field, no scratch buffer, no
+static table was added, and `.data`/`.bss` are unchanged, so the RAM rule holds.
+
+| Build | Before | After |
+|---|---|---|
+| hosted `-O2`, `nj_lib_m3g.c` `.text` | 269,972 B | **274,300 B** (+4,328 B) |
+| hosted `-O2`, `nj2me` executable `.text` | 2,898,918 B | **2,903,262 B** (+4,344 B) |
+| freestanding `-Os`, `nj_lib_m3g.c` `.text` | 139,667 B | **141,162 B** (+1,495 B) |
+| `.data` / `.bss` (all builds) | 27,728 / 0 (object), 162,736 / 6,688 (binary) | **unchanged** |
+
+The two loops duplicate the span solve and the texel arithmetic (that
+duplication is what buys the branch and ARGB round-trip, and the 33% CPU the
+benchmark shows); `-Os` folds more of it together, at 1.5 kB instead of 4.3 kB.
+A title that never draws M3G triangles through a `World` render pays the flash
+and nothing else.
+
+CPU side: 33% less rasteriser time on the controlled benchmark and 11.5% less
+CPU in `毁灭战士3_10598` over 600 paced frames, with byte-identical pixels - see
+[PERFORMANCE.md](PERFORMANCE.md#the-textured-span-of-the-m3g-rasteriser-round-49-2026-10-24).
