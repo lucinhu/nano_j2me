@@ -2576,7 +2576,12 @@ A native-call sampler narrows it further: the process is a single thread in
 state `R`, and in 20 s it makes about 2.1 M calls of the `read()I` native
 (an `InputStream` read that returns instead of blocking), so the title spins on
 a stream that is already at end of input where the reference's stream would
-wait. Naming the stream's class at that call site is the next step.
+wait. The stream turns out to be `java/io/ByteArrayInputStream`, whose `read()` returning
+-1 at end of input is exactly right - so the title is looping on data it believes
+should still be coming, i.e. the buffer it reads ends earlier than the reference's
+does. The next step is therefore to compare the resource this loading path reads
+(its length and first bytes) against the reference, not to change any stream
+semantics.
 
 A `-pg` profile of the first 400 frames (no keys) rules out a CPU-bound startup:
 the whole run samples 0.08 s of CPU, almost all of it `nj_region_draw`
