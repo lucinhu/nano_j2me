@@ -1647,6 +1647,56 @@ static void test_port_backend(const nj_port *base, const char *dir)
 }
 
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Case 9: a store name that is not a file name still saves            */
+/* ------------------------------------------------------------------ */
+/* 阿尔卑斯牧场物语_7043 spells its store "/A/AConfig".  Taking that
+ * literally as a relative path made every save fail - "<rms>/A/AConfig.rms"
+ * has no parent directory - so the title threw on the store it never got.
+ * The name is flattened into one file name now, and a name that walks out of
+ * the directory ("../../escape") is flattened too, so a title cannot pick
+ * where the store lands. */
+static void test_store_name_is_a_file_name(const nj_port *base,
+                                           const char *dir,
+                                           int libc_backend)
+{
+    const char *name = "/A/AConfig";
+    const char *flat = "A_AConfig";
+    char path[1200];
+    char escape[1200];
+    nj_port port = make_port(base, dir, libc_backend);
+    nj_vm *vm;
+    nj_ref store;
+
+    store_path(path, sizeof(path), dir, flat);
+    (void)remove(path);
+    vm = vm_new(&port);
+    if (!vm) {
+        return;
+    }
+    store = open_store(vm, name, 1, "slash-name");
+    if (store) {
+        OK_MSG(add_bytes(vm, store, "cfg", 3u, "slash-name/add") == 1,
+               "the first record id is 1");
+        close_store(vm, store, "slash-name/close");
+        OK_MSG(file_exists(path), "the store lives in one file (%s)", path);
+        store = open_store(vm, name, 0, "slash-name/reopen");
+        if (store) {
+            expect_record(vm, store, 1, "cfg", 3u, "slash-name/reopen");
+            close_store(vm, store, "slash-name/reopen-close");
+        }
+    }
+    store = open_store(vm, "../../escape", 1, "traversal");
+    if (store) {
+        close_store(vm, store, "traversal/close");
+    }
+    snprintf(escape, sizeof(escape), "%s/../escape.rms", dir);
+    OK_MSG(!file_exists(escape),
+           "a traversal name stays inside the RMS directory");
+    clean(vm, "slash-name");
+    nj_vm_destroy(vm);
+}
+
 int main(void)
 {
     static const char *subdirs[] = {
@@ -1681,6 +1731,7 @@ int main(void)
         test_legacy_and_variants(&base_port, dir);
         test_old_decoder_reads_new_file(&base_port, dir);
         test_large_records(&base_port, dir);
+        test_store_name_is_a_file_name(&base_port, dir, (int)(i == 0u));
     }
     snprintf(dir, sizeof(dir), "%s/getlastmodified-fault", base_dir);
     mkdir_p(dir);

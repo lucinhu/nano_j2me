@@ -2499,3 +2499,44 @@ What this does not prove: 600 frames is a startup window, not a playthrough;
 the scripts are generic rather than title-specific; and no per-title reference
 comparison was done in this sweep.  It is a regression net for missing APIs and
 crashes, and on that measure this was the cleanest sweep so far.
+
+## The store name that was a path (round 13, 2026-10-23)
+
+`阿尔卑斯牧场物语_7043` opens a record store called `/A/AConfig`.  JSR-118 asks
+for a name that is usable as a file name, but this title spells it like a path,
+and the runtime took it literally: the file became
+`<rms_dir>//A/AConfig.rms`, whose parent directory does not exist, so every
+`openRecordStore(..., true)` and `addRecord` failed with
+
+    RecordStoreException: cannot open the record store file for writing
+
+and the title then threw `NullPointerException` at
+`AlpsFarmCanvas.CallCheck+22` on the handle it never got.  The `corpus_fatal`
+run listed it as a fatal title for exactly this reason.
+
+The name is now flattened into a single file name: a leading separator is
+dropped and any later `/` or `\` becomes `_`, so `/A/AConfig` is stored as
+`A_AConfig.rms`.  Two properties matter:
+
+* names that already worked are not rewritten - plain ASCII names and the
+  Chinese names several titles use keep the very file names they had, so an
+  existing save still opens; only names that could never be opened are
+  affected;
+* the RMS directory stays a boundary: a name like `../../escape` is flattened
+  to `.._.._escape`, so a title cannot choose where its store lands.
+
+Evidence: the same 150-frame run that used to create no files at all now writes
+`A_AConfig.rms`, `A_Slot_0.rms`, `A_Slot_1.rms`, `A_Slot_2.rms` and
+`s.dat.rms` with zero `RecordStoreException`s.  `tests/test_rms.c` gained
+"a store name that is not a file name still saves": against the previous
+`rs_path` it fails on `addRecord` (write failure), the reopened store
+(`RecordStoreNotFoundException`) and the missing file, and it passes now
+(593 checks, 0 failures).  The title still throws a few `NullPointerException`s
+around its own audio and `Graphics` setup, and the reference runtime prints the
+same two (`"this.sound" is null`, `"this.g" is null`), so those are the title's
+own behaviour rather than something this runtime owes it.
+
+Limitation: for such a store `listRecordStores()` now reports the flattened
+name (`A_AConfig`).  A title that saves under a path-like name *and* enumerates
+its stores would see the different spelling; nothing in the corpus does, and
+stores that were filename-safe keep their name exactly.

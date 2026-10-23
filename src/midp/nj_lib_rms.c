@@ -334,10 +334,27 @@ typedef struct rs_reader {
     nj_u4    read;
 } rs_reader;
 
+/*
+ * A store name becomes one file name, not a path.
+ *
+ * JSR-118 says a store name has to be usable as a file name, but plenty of
+ * shipping titles ignore that: 阿尔卑斯牧场物语 opens "/A/AConfig", and the
+ * old code turned that into "<rms>/A/AConfig.rms" - a path whose parent
+ * directory does not exist, so every save failed with
+ * RecordStoreException "cannot open the record store file for writing" and the
+ * title then threw NullPointerException on the store it never got.
+ *
+ * Flattening keeps such a title saving and keeps the RMS directory a security
+ * boundary: a name like "../../etc/passwd" becomes ".._.._etc_passwd".  Names
+ * that already work - plain ASCII, or the Chinese names several titles use -
+ * are not rewritten, so no reader of these files sees a different name than
+ * before.
+ */
 static void rs_path(nj_vm *vm, const char *name, char *out, nj_u4 cap)
 {
     const char *dir = (vm->port && vm->port->rms_dir) ? vm->port->rms_dir : ".";
     nj_u4 n = 0u;
+    int first = 1;
 
     while (*dir && n + 1u < cap) {
         out[n++] = *dir++;
@@ -346,7 +363,19 @@ static void rs_path(nj_vm *vm, const char *name, char *out, nj_u4 cap)
         out[n++] = '/';
     }
     while (*name && n + 1u < cap) {
-        out[n++] = *name++;
+        char c = *name++;
+        if (c == '/' || c == '\\') {
+            /* A leading separator is part of the game's spelling of the name
+             * and carries no meaning for us; a separator in the middle would
+             * turn the store into a subdirectory, so it becomes a plain
+             * character. */
+            if (first) {
+                continue;
+            }
+            c = '_';
+        }
+        first = 0;
+        out[n++] = c;
     }
     if (n + 4u < cap) {
         out[n++] = '.';
