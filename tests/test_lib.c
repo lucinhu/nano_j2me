@@ -171,6 +171,91 @@ static nj_ref bais_over(nj_vm *vm, const unsigned char *data, nj_u4 len)
     return construct(vm, BAIS, "([B)V", a, "ByteArrayInputStream(byte[])");
 }
 
+/* ByteArrayInputStream(byte[], int, int) is a window: reads stop at its end,
+ * reset() returns to the window start, and a window that does not fit is
+ * rejected the way the JDK rejects it.  The old code computed count as
+ * offset + length without checking anything and left mark at 0, so a bad
+ * window could read past the array and reset() could rewind outside it. */
+static void test_bais_range(nj_vm *vm)
+{
+    static const unsigned char data[8] = { 10, 11, 12, 13, 14, 15, 16, 17 };
+    nj_ref arr = nj_byte_array_new(vm, 8u);
+    nj_ref stream;
+    nj_value a[3];
+    nj_value ret;
+    unsigned i;
+
+    OK(arr != NULL);
+    if (!arr) { return; }
+    for (i = 0u; i < 8u; i++) {
+        nj_array_set_int(arr, i, (nj_s4)data[i]);
+    }
+
+    a[0] = vref(arr);
+    a[1] = vint(2);
+    a[2] = vint(3);
+    stream = construct(vm, BAIS, "([BII)V", a, "ByteArrayInputStream(byte[],int,int)");
+    OK(stream != NULL);
+    if (!stream) { return; }
+    {
+        nj_value mark_arg[1];
+
+        /* available() reports the room left inside the window. */
+        OK(nj_call(vm, stream, BAIS, "available", "()I", NULL, &ret) == NJ_OK && ret.i == 3);
+        OK(nj_call(vm, stream, BAIS, "read", "()I", NULL, &ret) == NJ_OK && ret.i == 12);
+        OK(nj_call(vm, stream, BAIS, "available", "()I", NULL, &ret) == NJ_OK && ret.i == 2);
+        mark_arg[0] = vint(0);
+        OK(nj_call(vm, stream, BAIS, "mark", "(I)V", mark_arg, NULL) == NJ_OK);
+        OK(nj_call(vm, stream, BAIS, "read", "()I", NULL, &ret) == NJ_OK && ret.i == 13);
+        OK(nj_call(vm, stream, BAIS, "read", "()I", NULL, &ret) == NJ_OK && ret.i == 14);
+        OK(nj_call(vm, stream, BAIS, "reset", "()V", NULL, NULL) == NJ_OK);
+        OK(nj_call(vm, stream, BAIS, "read", "()I", NULL, &ret) == NJ_OK && ret.i == 13);
+        OK(nj_call(vm, stream, BAIS, "read", "()I", NULL, &ret) == NJ_OK && ret.i == 14);
+        OK(nj_call(vm, stream, BAIS, "read", "()I", NULL, &ret) == NJ_OK && ret.i == -1);
+    }
+
+    /* reset() without a mark returns to the window's own start, not to the
+     * start of the underlying array: the mark position of a ranged stream is
+     * its offset. */
+    a[0] = vref(arr);
+    a[1] = vint(2);
+    a[2] = vint(3);
+    stream = construct(vm, BAIS, "([BII)V", a, "ByteArrayInputStream(byte[],int,int)");
+    OK(stream != NULL);
+    if (stream) {
+        OK(nj_call(vm, stream, BAIS, "read", "()I", NULL, &ret) == NJ_OK && ret.i == 12);
+        OK(nj_call(vm, stream, BAIS, "reset", "()V", NULL, NULL) == NJ_OK);
+        OK(nj_call(vm, stream, BAIS, "read", "()I", NULL, &ret) == NJ_OK && ret.i == 12);
+    }
+
+    /* The window must fit: the JDK throws IndexOutOfBoundsException. */
+    {
+        static const struct { nj_s4 off; nj_s4 len; } bad[] = {
+            { -1, 1 }, { 0, -1 }, { 8, 1 }, { 7, 2 }
+        };
+        unsigned k;
+
+        for (k = 0u; k < sizeof(bad) / sizeof(bad[0]); ++k) {
+            nj_ref o = nj_object_new(vm, BAIS);
+            nj_status st;
+
+            a[0] = vref(arr);
+            a[1] = vint(bad[k].off);
+            a[2] = vint(bad[k].len);
+            OK(o != NULL);
+            if (!o) { continue; }
+            st = nj_call_special(vm, o, BAIS, "<init>", "([BII)V", a, NULL);
+            OK_MSG(st != NJ_OK && nj_take_exception(vm) != 0,
+                   "window (%d,%d) must be rejected",
+                   (int)bad[k].off, (int)bad[k].len);
+            nj_clear_exception(vm);
+        }
+    }
+    /* The arrays above are garbage now; collect them so a later heap-pressure
+     * test in this file does not see them as live bytes. */
+    nj_gc_collect(vm);
+}
+
 /* A DataInputStream over an existing stream. */
 static nj_ref dis_over(nj_vm *vm, nj_ref in)
 {
@@ -3684,6 +3769,9 @@ int main(void)
     test_array_assignability(vm);
     test_njlib_gaps(vm);
     test_dump_frames_directory(vm);
+    /* Last, because it allocates into the shared VM and a heap-pressure
+     * test above expects the heap to be where it left it. */
+    test_bais_range(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);

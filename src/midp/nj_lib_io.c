@@ -291,13 +291,29 @@ NJFN(bais_init)
 NJFN(bais_init_range)
 {
     nj_status st = NJ_CALL(bais_init, vm, th, args, ret);
+    nj_ref buf = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 len = NJ_ARG_INT(args, 2);
+
     if (st != NJ_OK) {
         return st;
     }
+    /* ByteArrayInputStream(byte[], int, int) rejects a window that does not
+     * fit: the JDK throws IndexOutOfBoundsException for a negative offset or
+     * length, or for offset > buf.length - length.  Without that check the
+     * count can run past the end of the array, and read() would then return
+     * bytes that are not part of the stream at all instead of reporting end
+     * of input.  The window's mark starts at the window offset, not at 0, so
+     * a reset() cannot rewind outside the window either. */
+    if (!buf || off < 0 || len < 0 || off > (nj_s4)buf->length - len) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
     nj_field_write_int(vm, NJ_THIS(args), nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"),
-                       NJ_ARG_INT(args, 1));
+                       off);
     nj_field_write_int(vm, NJ_THIS(args), nj_hot_field(vm, NJ_HF_BAIS_COUNT, BAIS, "count", "I"),
-                       NJ_ARG_INT(args, 1) + NJ_ARG_INT(args, 2));
+                       off + len);
+    nj_field_write_int(vm, NJ_THIS(args), nj_hot_field(vm, NJ_HF_BAIS_MARK, BAIS, "mark", "I"),
+                       off);
     return NJ_OK;
 }
 
@@ -308,7 +324,7 @@ NJFN(bais_read)
     nj_s4 pos = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"));
     nj_s4 count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_COUNT, BAIS, "count", "I"));
 
-    if (!buf || pos >= count) {
+    if (!buf || pos >= count || pos >= (nj_s4)buf->length) {
         ret->i = -1;
         return NJ_OK;
     }
