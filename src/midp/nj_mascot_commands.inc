@@ -203,11 +203,11 @@ static nj_status m3_cmd_lines(nj_vm *vm, const nj_s4 *list, nj_s8 len,
                       ((nj_u4)list[color_offset +
                                    (color_type == M3_PDATA_COLOR_CMD ? 0 : i)] &
                        0xffffffu);
-        m3_sv v[2];
+        m3_sv v[2]={{0}};
         nj_s4 z;
 
-        m3_transform_vertex(sc->matrix, p, &v[0]);
-        m3_transform_vertex(sc->matrix, p + 3, &v[1]);
+        m3_transform_vertex(sc->matrix, p, &v[0].x);
+        m3_transform_vertex(sc->matrix, p + 3, &v[1].x);
         if (sc->perspective) {
             m3_vtx a, b;
 

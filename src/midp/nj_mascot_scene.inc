@@ -256,7 +256,14 @@ typedef struct m3_qprim {
     nj_u2 material, texture, environment;
     nj_u1 kind, pad;
 } m3_qprim;
-typedef struct m3_sv { nj_s4 x, y, z, u, v, light, eu, ev; } m3_sv;
+/* A transformed vertex: where it is, and how much light it takes.  The figure
+ * path caches one of these per model vertex and fills the texture coordinates
+ * per polygon from the pattern tuples, so that cache does not also carry two
+ * coordinates per vertex that are always overwritten.  m3_sv is the same six
+ * words followed by u/v, and the first six members are exactly an m3_vtx6, so
+ * a m3_sv array element can be handed to the transform helpers unchanged. */
+typedef nj_s4 m3_vtx6[6];   /* x, y, z, light, eu, ev */
+typedef struct m3_sv { nj_s4 x, y, z, light, eu, ev, u, v; } m3_sv;
 typedef struct m3_scene {
     nj_vm *vm;
     nj_ref self;
@@ -443,7 +450,7 @@ static nj_s4 m3_dot_raw(const nj_s4 a[3], const nj_s4 b[3])
     return (nj_s4)((nj_u4)a[0]*(nj_u4)b[0] + (nj_u4)a[1]*(nj_u4)b[1] + (nj_u4)a[2]*(nj_u4)b[2]);
 }
 static void m3_light_vertex(const m3_scene *sc, const m3_light_frame *lf,
-                             const nj_s4 normal[3], m3_sv *v)
+                             const nj_s4 normal[3], nj_s4 *v)
 {
     nj_s4 dot = (nj_s4)(0u - (nj_u4)m3_dot_raw(normal, lf->dir));
     nj_s4 intensity = sc->ambient;
@@ -452,23 +459,22 @@ static void m3_light_vertex(const m3_scene *sc, const m3_light_frame *lf,
         nj_s4 a = (nj_s4)m3_shr12(dot);
         intensity = (nj_s4)((nj_u4)intensity + (nj_u4)m3_shr12((nj_s4)((nj_u4)a * (nj_u4)sc->diffuse)));
     }
-    v->light = (nj_s2)(intensity > 4095 ? 4095 : intensity);
+    v[3] = (nj_s2)(intensity > 4095 ? 4095 : intensity);
     for (k = 0; k < 2; ++k) {
         nj_s4 d = (nj_s4)m3_shr12(m3_dot_raw(normal, k ? lf->v : lf->u));
         d = (d + 4096) / 2;
         if (d < 0) d = 0;
         if(d > 4095) d = 4095;
-        if (k) v->ev = d * 65 / 256; else v->eu = d * 65 / 256;
+        if (k) v[5] = d * 65 / 256; else v[4] = d * 65 / 256;
     }
 }
 
-static void m3_transform_vertex(const nj_s4 m[12], const nj_s4 xyz[3], m3_sv *v)
+static void m3_transform_vertex(const nj_s4 m[12], const nj_s4 xyz[3], nj_s4 *v)
 {
     m3_vtx out;
     m3_xform(m, xyz, &out);
-    memset(v, 0, sizeof(*v));
-    v->x = (nj_s4)out.x; v->y = (nj_s4)out.y; v->z = (nj_s4)out.z;
-    v->light = 4095;
+    v[0] = (nj_s4)out.x; v[1] = (nj_s4)out.y; v[2] = (nj_s4)out.z;
+    v[3] = 4095; v[4] = 0; v[5] = 0;
 }
 static void m3_project_vertex(const m3_scene *sc, const m3_sv *v, m3_qv *out)
 {
@@ -581,7 +587,7 @@ static nj_s4 m3_sort_depth(const m3_sv *v, int n, nj_u4 mat)
 }
 
 static int m3_model_polygons(m3_scene *sc, const nj_mascot_model *model,
-                             const m3_sv *vertices, nj_u4 offset, int stride,
+                             const m3_vtx6 *vertices, nj_u4 offset, int stride,
                              nj_u4 start, nj_u4 count, int n, int texture)
 {
     const nj_u1 *blob=(const nj_u1 *)model;
@@ -594,7 +600,10 @@ static int m3_model_polygons(m3_scene *sc, const nj_mascot_model *model,
         int base=texture?1:2, j;
         nj_s4 z;
         for(j=0;j<n;++j) {
-            v[j]=vertices[poly[base+j]];
+            const nj_s4 *cached=vertices[poly[base+j]];
+            v[j].x=cached[0]; v[j].y=cached[1]; v[j].z=cached[2];
+            v[j].light=cached[3]; v[j].eu=cached[4]; v[j].ev=cached[5];
+            v[j].u=0; v[j].v=0;
             if (texture) {
                 nj_u2 uv=poly[base+n+j];
                 v[j].u=uv&0xff00u; v[j].v=(uv&255u)<<8;
@@ -620,7 +629,7 @@ NJFN(mascot_scene_figure)
     const nj_mascot_bone *bones;
     const nj_mascot_pattern_range *patterns;
     nj_s4 *matrices, selected, pattern, action, frame;
-    m3_sv *verts;
+    m3_vtx6 *verts;
     m3_scene sc;
     size_t need;
     int b,p,t;
@@ -629,11 +638,11 @@ NJFN(mascot_scene_figure)
     if (!model) return nj_throw(vm,"java/lang/IllegalStateException","disposed Figure");
     if (!m3_scene_setup(&sc,vm,self,layout,effect,NJ_ARG_INT(args,1),NJ_ARG_INT(args,2)))
         return vm->exception?NJ_ERR:NJ_OK;
-    need=(size_t)model->num_vertices*sizeof(m3_sv)+(size_t)model->num_bones*12u*sizeof(nj_s4);
+    need=(size_t)model->num_vertices*sizeof(m3_vtx6)+(size_t)model->num_bones*12u*sizeof(nj_s4);
     if(need>0x7fffffffu) return nj_throw_oom(vm);
     scratch=m3_buffer(vm,self,"_scratch","[B","B",(nj_u4)need);
     if(!scratch && need) return NJ_ERR;
-    verts=(m3_sv *)nj_array_data(scratch);
+    verts=(m3_vtx6 *)nj_array_data(scratch);
     matrices=(nj_s4 *)(verts+model->num_vertices);
     blob=(const nj_u1 *)model;
     xyz=(const nj_s2 *)(blob+model->vertices_offset);
@@ -668,10 +677,10 @@ NJFN(mascot_scene_figure)
         if(sc.lit) m3_light_prepare(&sc,transform,&lf);
         for(i=first;i<first+count;++i) {
             nj_s4 v[3]={xyz[i*3],xyz[i*3+1],xyz[i*3+2]};
-            m3_transform_vertex(transform,v,&verts[i]);
+            m3_transform_vertex(transform,v,verts[i]);
             if(sc.lit) {
                 nj_s4 n[3]={normal[i*3],normal[i*3+1],normal[i*3+2]};
-                m3_light_vertex(&sc,&lf,n,&verts[i]);
+                m3_light_vertex(&sc,&lf,n,verts[i]);
             }
         }
     }
@@ -760,17 +769,19 @@ static nj_status m3_scene_primitives(nj_vm *vm, const nj_value *args)
     }
     vp=(const nj_s4 *)nj_array_data(vertices);
     for(i=0;i<count;++i) {
-        m3_sv v[4];
+        /* The transform fills geometry and light only; a primitive that is
+         * not textured keeps zero coordinates, as it always did. */
+        m3_sv v[4]={{0}};
         nj_u4 color=cp?0xff000000u|((nj_u4)cp[ct==M3_PDATA_COLOR_CMD?0:i]&0xffffffu):0xffffffffu;
         nj_s4 z;
         int j;
         for(j=0;j<n;++j) {
-            m3_transform_vertex(sc.matrix,vp+(i*n+j)*3,&v[j]);
+            m3_transform_vertex(sc.matrix,vp+(i*n+j)*3,&v[j].x);
             if(uv&&prim!=M3_PRIM_SPRITES) {
                 v[j].u=(nj_s4)((nj_u4)up[(i*n+j)*2]<<8)&0xffff;
                 v[j].v=(nj_s4)((nj_u4)up[(i*n+j)*2+1]<<8)&0xffff;
             }
-            if(np)m3_light_vertex(&sc,&lf,np+(nt==0x200?i:i*n+j)*3,&v[j]);
+            if(np)m3_light_vertex(&sc,&lf,np+(nt==0x200?i:i*n+j)*3,&v[j].x);
         }
         z=m3_sort_depth(v,n,0);
         if(prim==M3_PRIM_SPRITES) {

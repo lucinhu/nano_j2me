@@ -656,3 +656,54 @@ and its `memcpy` cuts the builder's own CPU time by 15% at 128x128 and 19% at
 
 Padding: `m3g_image_mips()` roots the image and its pixel array before
 allocating the cache, so a GC during the build cannot reclaim the source.
+
+## Eight bytes per figure vertex that were never used (round 47, 2026-10-23)
+
+A Micro3D (Mascot Capsule) figure is drawn from a per-vertex cache that the
+renderer allocates as a byte array: transform a vertex once, then reuse it for
+every polygon that touches it. The cache element was the same 32-byte
+transformed-vertex record the immediate-mode path uses - x, y, z, u, v, light,
+two environment coordinates - even though the figure path only fills the
+geometry and lighting fields and re-reads u/v per polygon from the pattern
+tuples. The two texture coordinates in the cache were written once (to zero)
+and then always overwritten before use.
+
+The cache element is now a 24-byte record that holds exactly the six fields the
+path needs, and the per-polygon record keeps the u/v it already had. Every
+field is still a full 32-bit integer, and the clipping and lighting arithmetic
+is unchanged, so the drawn pixels are the same: the figure fixtures in
+`tests/test_mascot_scene.c` (127 checks, including exact pixel comparisons
+against the reference behaviour) and the immediate-mode suites
+(`test_mascot` 233 checks, `test_mascot_commands` 36 checks) all pass, and
+their checks were not touched by this change.
+
+The saving is per live figure and is linear in the model's vertex count:
+
+| Figure cache | Before | After |
+|---|---|---|
+| bytes per vertex | 32 | **24** |
+| bytes per bone (matrix) | 48 | 48 |
+
+`Figure` keeps that byte array for as long as the figure exists, so the
+saving is resident memory, not a transient peak. Measured on the real
+`鬼泣3D中文版_3376` (Devil May Cry 3D) intro, whose three figures have
+1112/123, 272/37 and 497/2 vertices and bones:
+
+| Figure | Cache before | Cache after | Saved |
+|---|---|---|---|
+| 1 | 41,488 B | 32,592 B | 8,896 B |
+| 2 | 10,480 B | 8,304 B | 2,176 B |
+| 3 | 16,000 B | 12,024 B | 3,976 B |
+| total | 67,968 B | 52,920 B | **15,048 B** |
+
+The decoder caps a model at 21,845 vertices
+(`src/midp/nj_mascot_model.c:157`), so the largest single figure releases
+174,760 bytes. A title that never shows a `Figure` allocates nothing either
+way, and a title with several on-screen models multiplies the saving.
+
+Cost: the change is entirely inside the renderer's scratch layout. No object
+field, VM field or static buffer was added; `.data`/`.bss` are unchanged
+(163,696 / 6,688 bytes on x86_64) and the freestanding binary's text grows by
+576 bytes (2,895,718 -> 2,896,294) because the two immediate-mode call sites
+now keep their own small vertex record. No CPU claim is made for this change;
+the figure path's arithmetic is identical and its cache stride is smaller.
