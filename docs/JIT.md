@@ -301,9 +301,16 @@ For loop blocks one native call can complete more bytecodes than the block
 length; `bytecodes` counts the completion count the block reported, exactly as
 the interpreter charges it against the quantum.
 `queries` excludes opcodes rejected by the inline filter; `code_hits` includes
-cached entries subsequently rejected by a guard. `recompiled_blocks` is a lower
-bound because recycling a method map forgets that a site was compiled before;
-the code-cache entry itself is reused rather than emitted twice.
+cached entries subsequently rejected by a guard. `method_map_evictions` counts
+metadata releases due to either a full method table or a full cell arena.
+`recompiled_blocks` counts requests that reuse a surviving code-cache entry
+after probe-map recycling; it does not count newly emitted replacements after
+code eviction.
+
+The JIT's read-only resolved-field lookup follows the constant-pool cache's
+linear probe chain, including wraparound, and stops at the first unused bucket
+or after one full traversal. A displaced entry is still resolved. This lookup
+does not link a class, grow the table, call the port or change hit counters.
 Memory byte counts exclude allocator/page overhead. Portable cycle counters are
 not provided; use target-specific profiling for compile/execute cycle attribution.
 The fixed-workload harness, measurement results and board reproduction procedure

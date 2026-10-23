@@ -18,12 +18,12 @@ typedef struct nj_jit_stats {
     nj_size peak_code_bytes;
     nj_size metadata_bytes; /* fixed per-VM JIT allocation, excluding code */
     nj_u8 code_evictions;
-    /* Per-method probe maps are evicted least-recently-used when the arena is
-     * full. Only metadata goes away: compiled code stays in the code cache and
+    /* Per-method probe metadata is evicted least-recently-used when the arena
+     * or method table is full. Only metadata goes away: code stays cached and
      * a later recompile of the same (method, pc) reuses it. */
     nj_u8 method_map_evictions;
-    /* Lower bound: counts recompiles only while a probe map still remembers
-     * that the site had been compiled before. */
+    /* Reused code entries after probe-map recycling, not newly emitted
+     * replacements for evicted native code. */
     nj_u8 recompiled_blocks;
     nj_u8 unsupported_blocks;
     nj_u8 short_blocks;

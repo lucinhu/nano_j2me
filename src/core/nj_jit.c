@@ -224,6 +224,7 @@ static void jit_map_release(struct nj_jit *jit, nj_jit_method *slot)
     nj_u2 pcs = slot->pcs;
     unsigned i;
 
+    JIT_COUNT(jit, method_map_evictions, 1u);
     slot->method = NULL;
     slot->off = 0xffffu;
     slot->pcs = 0u;
@@ -312,7 +313,6 @@ static nj_u2 *jit_map_for(struct nj_jit *jit, const nj_method *m)
             jit->cur_map = NULL;
             return NULL;
         }
-        JIT_COUNT(jit, method_map_evictions, 1u);
         jit_map_release(jit, victim);
     }
     slot->off = jit->arena_used;

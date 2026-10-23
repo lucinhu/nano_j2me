@@ -11,6 +11,92 @@
     fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); exit(1); \
 } } while (0)
 
+#if NJ_ENABLE_JIT
+/* The resolver uses open addressing. A linked field need not be in its first
+ * hash bucket, and the read-only JIT lookup must follow the same probe chain. */
+static void cp_cache_collisions(void)
+{
+    enum { CAPACITY = 8 };
+    static const unsigned lengths[] = {1, 3, CAPACITY - 1};
+    nj_vm vm;
+    nj_class owner, other;
+    nj_field field;
+    nj_cpentry cache[CAPACITY], before[CAPACITY];
+    nj_value statics[2];
+    unsigned start, index, k, j;
+
+    memset(&vm, 0, sizeof(vm));
+    memset(&owner, 0, sizeof(owner));
+    memset(&other, 0, sizeof(other));
+    memset(&field, 0, sizeof(field));
+    memset(statics, 0, sizeof(statics));
+    vm.cp_cache = cache;
+    vm.cp_cache_size = CAPACITY;
+    vm.statics = statics;
+    vm.nstatics = 2;
+    owner.state = NJ_CLASS_READY;
+    owner.instance_size = (nj_u4)sizeof(nj_object) + 32u;
+    field.owner = &owner;
+    field.ptype = NJ_PT_INT;
+    field.width = 1;
+    field.offset = 0;
+
+    for (start = 0; start < CAPACITY; ++start) {
+        /* Cover every start bucket, including chains wrapping past the end. */
+        for (index = 1; index <= 0xffffu; ++index)
+            if ((nj_cp_key_hash(&owner, index) & (CAPACITY - 1)) == start)
+                break;
+        CHECK(index <= 0xffffu);
+        for (k = 0; k < sizeof(lengths) / sizeof(lengths[0]); ++k) {
+            unsigned target = (start + lengths[k]) & (CAPACITY - 1);
+            memset(cache, 0, sizeof(cache));
+            for (j = 0; j < lengths[k]; ++j) {
+                nj_cpentry *e = &cache[(start + j) & (CAPACITY - 1)];
+                e->used = 1;
+                e->cls = (j & 1) ? &owner : &other;
+                e->cp_index = (nj_u2)((j & 1) ? (index == 1 ? 2 : 1) : index);
+            }
+            cache[target].used = 1;
+            cache[target].cls = &owner;
+            cache[target].cp_index = (nj_u2)index;
+            cache[target].kind = NJ_LINK_FIELD_INST;
+            cache[target].target = &field;
+            field.flags = 0;
+            field.offset = (nj_u2)sizeof(nj_object);
+            vm.cp_cache_hits = 17;
+            vm.cp_cache_used = (nj_u2)(lengths[k] + 1);
+            memcpy(before, cache, sizeof(cache));
+            CHECK(nj_jit_cp_peek(&vm, &owner, index) == &cache[target]);
+            CHECK(nj_jit_instance_field(&vm, &owner, index) == &field);
+            CHECK(memcmp(before, cache, sizeof(cache)) == 0);
+            CHECK(vm.cp_cache_hits == 17 && vm.cp_cache_used == lengths[k] + 1);
+
+            cache[target].kind = NJ_LINK_FIELD_STATIC;
+            field.flags = NJ_ACC_STATIC;
+            field.offset = 0;
+            memcpy(before, cache, sizeof(cache));
+            CHECK(nj_jit_static_field(&vm, &owner, index) == &field);
+            CHECK(memcmp(before, cache, sizeof(cache)) == 0);
+            CHECK(vm.cp_cache_hits == 17);
+
+            /* An empty bucket terminates a legal chain; a full table miss is
+             * bounded and cannot loop forever. Neither query resolves a CP. */
+            cache[start].used = 0;
+            CHECK(nj_jit_cp_peek(&vm, &owner, index) == NULL);
+            for (j = 0; j < CAPACITY; ++j) {
+                cache[j].used = 1;
+                cache[j].cls = &other;
+                cache[j].cp_index = (nj_u2)index;
+            }
+            memcpy(before, cache, sizeof(cache));
+            CHECK(nj_jit_cp_peek(&vm, &owner, index) == NULL);
+            CHECK(memcmp(before, cache, sizeof(cache)) == 0);
+            CHECK(vm.cp_cache_hits == 17);
+        }
+    }
+}
+#endif
+
 #if NJ_ENABLE_JIT && NJ_JIT_HOST_SUPPORTED
 /* Test instrumentation only; production has no writable static state. */
 static void *(*real_alloc)(void *, nj_size);
@@ -523,6 +609,48 @@ static void method_maps(void)
     free(methods);
     free(code);
 }
+
+/* Exhaust method slots while leaving the cell arena mostly empty. This is a
+ * metadata eviction too; counting only arena pressure hides this workload. */
+static void method_table(void)
+{
+    static const nj_u1 code[] = {0x00};
+    nj_method *methods;
+    nj_port port;
+    nj_vm *vm;
+    nj_frame fr;
+    nj_value value;
+    nj_jit_ticket ticket;
+    nj_jit_stats stats;
+    unsigned i;
+    if (NJ_JIT_METHOD_ENTRIES + 1u > NJ_JIT_METHOD_ARENA_BYTES / 2u) {
+        puts("SKIP JIT method table: arena fills before the method table");
+        return;
+    }
+    methods = calloc(NJ_JIT_METHOD_ENTRIES + 1u, sizeof(*methods));
+    CHECK(methods);
+    memset(&fr, 0, sizeof(fr));
+    memset(&value, 0, sizeof(value));
+    fr.locals = fr.stack = &value;
+    fr.stack_limit = &value + 1;
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    vm = nj_vm_create(&port, 1024u * 1024u);
+    CHECK(vm && nj_jit_set_mode(vm, NJ_JIT_MODE_PROBE_ONLY) == NJ_OK);
+    for (i = 0; i <= NJ_JIT_METHOD_ENTRIES; ++i) {
+        methods[i].code = code;
+        methods[i].code_len = sizeof(code);
+        fr.m = &methods[i];
+        CHECK(!nj_jit_probe(vm, &fr, 0, &value, 128, &ticket));
+        CHECK(nj_jit_get_stats(vm, &stats));
+#if NJ_JIT_STATS
+        CHECK(stats.method_map_evictions == (i == NJ_JIT_METHOD_ENTRIES ? 1u : 0u));
+#endif
+        CHECK(stats.compiled_blocks == 0 && stats.code_bytes == 0);
+    }
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+    free(methods);
+}
 #endif
 
 int main(void)
@@ -531,6 +659,7 @@ int main(void)
     nj_port port;
     nj_vm *vm;
     nj_jit_stats stats;
+    cp_cache_collisions();
     CHECK(nj_port_headless(&port) == NJ_OK);
     port.code_alloc = NULL; /* incomplete port must stay interpreted */
     vm = nj_vm_create(&port, 1024u * 1024u);
@@ -552,6 +681,7 @@ int main(void)
         probe_contract();
         cache_collisions();
         method_maps();
+        method_table();
         puts("PASS JIT runtime: probe/execute modes, SAVE, quanta, guards, method map, callbacks, cache, ownership, failures");
     }
 #else

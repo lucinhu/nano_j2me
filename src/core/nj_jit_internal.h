@@ -215,15 +215,20 @@ static inline const nj_cpentry *nj_jit_cp_peek(const nj_vm *vm,
                                                nj_u4 index)
 {
     const nj_cpentry *e;
-    nj_u4 hash;
+    nj_u4 hash, probes, mask;
     if (!vm || !c || !vm->cp_cache || vm->cp_cache_size == 0u ||
         index == 0u || index > 0xffffu) {
         return NULL;
     }
-    hash = nj_cp_key_hash(c, index) & ((nj_u4)vm->cp_cache_size - 1u);
-    e = &vm->cp_cache[hash];
-    if (e->used && e->cls == c && e->cp_index == index) {
-        return e;
+    mask = (nj_u4)vm->cp_cache_size - 1u;
+    hash = nj_cp_key_hash(c, index) & mask;
+    /* Match cp_cache_slot's open addressing without resolving, growing the
+     * table or changing hit counters. A collision is not an unresolved field. */
+    for (probes = 0u; probes <= mask; ++probes) {
+        e = &vm->cp_cache[hash];
+        if (!e->used) return NULL;
+        if (e->cls == c && e->cp_index == index) return e;
+        hash = (hash + 1u) & mask;
     }
     return NULL;
 }
