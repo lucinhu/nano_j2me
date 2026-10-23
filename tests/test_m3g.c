@@ -772,6 +772,100 @@ static nj_u4 i2d_canvas_pixel(const i2d_canvas *c, int x, int y)
     return p[y * 240 + x] & 0xFFFFFFu;
 }
 
+/*
+ * A lit quad: positions and normals in the same 240x320 parallel-projection
+ * canvas, a white diffuse Material and one Light on the Graphics3D.  The
+ * quad faces the camera, so a light pointing along -z lights it.  Used to pin
+ * the spot-cone rule: a zero spot angle is a cone of no width and lights
+ * nothing, exactly as the reference implementation computes it.
+ */
+static int i2d_canvas_render_lit(nj_vm *vm, i2d_canvas *c, nj_ref light)
+{
+    nj_value a[6], r;
+    nj_ref nva, mat;
+    int ok = 1;
+
+    nva = nj_object_new(vm, CLS("VertexArray"));
+    mat = make(vm, CLS("Material"));
+    if (!nva || !mat) {
+        return 0;
+    }
+    a[0].i = 4; a[1].i = 3; a[2].i = 2;          /* W, 3 floats, BYTE */
+    ok = ok && nj_call_special(vm, nva, CLS("VertexArray"), "<init>",
+                               "(III)V", a, NULL) == NJ_OK;
+    {
+        nj_ref nb = nj_array_new(vm, "S", 12u);
+        nj_s2 mine[12];
+        int k;
+
+        for (k = 0; k < 4; k++) {                /* (0,0,1) at scale 1/64 */
+            mine[k * 3 + 0] = 0;
+            mine[k * 3 + 1] = 0;
+            mine[k * 3 + 2] = 64;
+        }
+        memcpy(nj_array_data(nb), mine, sizeof mine);
+        a[0].i = 0; a[1].i = 4; a[2].r = nb;
+        ok = ok && nj_call(vm, nva, CLS("VertexArray"), "set", "(II[S)V",
+                           a, NULL) == NJ_OK;
+    }
+    a[0].r = nva; a[1].f = 1.0f / 64.0f; a[2].r = 0;
+    ok = ok && nj_call(vm, c->vb, CLS("VertexBuffer"), "setNormals",
+                       "(L" CLS("VertexArray") ";)V", a, NULL) == NJ_OK;
+    a[0].i = 2048; a[1].i = (nj_s4)0xFFFFFFFFu;   /* Material.DIFFUSE, white */
+    ok = ok && nj_call(vm, mat, CLS("Material"), "setColor", "(II)V",
+                       a, NULL) == NJ_OK;
+    a[0].r = mat;
+    ok = ok && nj_call(vm, c->app, CLS("Appearance"), "setMaterial",
+                       "(L" CLS("Material") ";)V", a, NULL) == NJ_OK;
+    a[0].r = c->bg;
+    ok = ok && nj_call(vm, c->g3d, CLS("Graphics3D"), "clear",
+                       "(L" CLS("Background") ";)V", a, NULL) == NJ_OK;
+    ok = ok && nj_call(vm, c->g3d, CLS("Graphics3D"), "resetLights", "()V",
+                       NULL, NULL) == NJ_OK;
+    /*
+     * Put the light behind the quad (the camera sits at the origin looking
+     * down -z, the quad is at z=-4), so the quad lies along the light's own
+     * axis and a wide cone must cover its middle.
+     */
+    /*
+     * The camera sits at the origin looking down -z and the quad is at z=-4,
+     * so put the light 10 units in front of the camera (z=+10): the quad is
+     * then 12 units along the light's own -z axis, inside a 45 degree cone
+     * (half angle 22.5, the quad's corners subtend 9.5 degrees) and facing
+     * it, which is the configuration the specification describes.
+     */
+    a[0].f = 0.0f; a[1].f = 0.0f; a[2].f = 10.0f;
+    ok = ok && nj_call(vm, c->xf, CLS("Transform"), "setIdentity", "()V",
+                       NULL, NULL) == NJ_OK;
+    ok = ok && nj_call(vm, c->xf, CLS("Transform"), "postTranslate", "(FFF)V",
+                       a, NULL) == NJ_OK;
+    memset(&r, 0, sizeof r);
+    a[0].r = light; a[1].r = c->xf;
+    ok = ok && nj_call(vm, c->g3d, CLS("Graphics3D"), "addLight",
+                       "(L" CLS("Light") ";L" CLS("Transform") ";)I",
+                       a, &r) == NJ_OK && r.i == 0;
+    a[0].r = c->vb; a[1].r = c->ib; a[2].r = c->app; a[3].r = 0; a[4].i = 0;
+    ok = ok && nj_call(vm, c->g3d, CLS("Graphics3D"), "render",
+                       "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                       CLS("Appearance") ";L" CLS("Transform") ";I)V",
+                       a, NULL) == NJ_OK;
+    return ok;
+}
+
+static int i2d_canvas_lit_pixels(const i2d_canvas *c)
+{
+    int x, y, lit = 0;
+
+    for (y = 40; y < 280; y++) {
+        for (x = 20; x < 220; x++) {
+            if (i2d_canvas_pixel(c, x, y) != 0u) {
+                lit++;
+            }
+        }
+    }
+    return lit;
+}
+
 /* ------------------------------------------------------------------ */
 /* The checks                                                          */
 /* ------------------------------------------------------------------ */
@@ -1251,6 +1345,53 @@ static int i2d_canvas_render_tex(nj_vm *vm, i2d_canvas *c, nj_ref img,
                        CLS("Appearance") ";L" CLS("Transform") ";I)V",
                        a, NULL) == NJ_OK;
     return ok;
+}
+
+static void test_spot_light_cone(nj_vm *vm)
+{
+    i2d_canvas canvas;
+    nj_ref light;
+    int lit_cone, lit_zero, ok;
+
+    printf("== a spot light lights inside its cone and nothing at angle 0 ==\n");
+    light = make(vm, CLS("Light"));
+    ok = i2d_canvas_init(vm, &canvas);
+    check(light != 0 && ok, "a canvas and a Light for the cone check");
+    if (!light || !ok) {
+        return;
+    }
+    {
+        nj_value a[4];
+
+        a[0].i = 131;                            /* Light.SPOT */
+        call(vm, light, CLS("Light"), "setMode", "(I)V", a, NULL);
+        a[0].i = 0x00FFFFFF;
+        call(vm, light, CLS("Light"), "setColor", "(I)V", a, NULL);
+        a[0].f = 1.0f;
+        call(vm, light, CLS("Light"), "setIntensity", "(F)V", a, NULL);
+        a[0].f = 1.0f; a[1].f = 0.0f; a[2].f = 0.0f;
+        call(vm, light, CLS("Light"), "setAttenuation", "(FFF)V", a, NULL);
+        a[0].f = 45.0f;
+        call(vm, light, CLS("Light"), "setSpotAngle", "(F)V", a, NULL);
+    }
+    nj_clear_exception(vm);
+
+    (void)i2d_canvas_render_lit(vm, &canvas, light);
+    lit_cone = i2d_canvas_lit_pixels(&canvas);
+    check(lit_cone > 30000, "a 45 degree cone lights the quad");
+
+    {
+        nj_value a[1];
+
+        a[0].f = 0.0f;
+        call(vm, light, CLS("Light"), "setSpotAngle", "(F)V", a, NULL);
+        check(!nj_has_exception(vm), "angle 0 is an accepted argument");
+        nj_clear_exception(vm);
+    }
+    (void)i2d_canvas_render_lit(vm, &canvas, light);
+    lit_zero = i2d_canvas_lit_pixels(&canvas);
+    check(lit_zero == 0,
+          "and a cone of no width lights nothing, as the reference computes");
 }
 
 static void test_textured_span_variants(nj_vm *vm)
@@ -1957,6 +2098,116 @@ int main(void)
          * (nj_field_read_int with a NULL receiver) dereferences obj + offset
          * and dies.
          */
+    printf("== a Material's default colours are the specification's ==\n");
+    {
+        nj_ref m = make(vm, CLS("Material"));
+        nj_value a[1], r;
+
+        check(m != 0, "a Material constructs");
+        a[0].i = 1024;                           /* Material.AMBIENT */
+        call(vm, m, CLS("Material"), "getColor", "(I)I", a, &r);
+        /*
+         * JSR 184 section 11.3: ambient 0x00333333, diffuse 0xFFCCCCCC.
+         * The ambient field used to hold 0x3F800000, the bit pattern of the
+         * float 1.0, which tinted every default-material surface green.
+         */
+        check((nj_u4)r.i == 0x00333333u,
+              "default ambient is the grey 0x00333333");
+        a[0].i = 2048;                           /* Material.DIFFUSE */
+        call(vm, m, CLS("Material"), "getColor", "(I)I", a, &r);
+        check((nj_u4)r.i == 0xFFCCCCCCu,
+              "default diffuse is 0xFFCCCCCC");
+    }
+
+    printf("== Light arguments the specification rejects ==\n");
+    {
+        nj_ref l = make(vm, CLS("Light"));
+        nj_ref atten;
+        nj_value a[4], r;
+
+        check(l != 0, "a Light to argue with");
+        a[0].i = 131;
+        call(vm, l, CLS("Light"), "setMode", "(I)V", a, NULL);
+        nj_clear_exception(vm);
+
+        /* mode: outside AMBIENT..SPOT is IllegalArgument, value unchanged */
+        a[0].i = 127;
+        call(vm, l, CLS("Light"), "setMode", "(I)V", a, NULL);
+        check(nj_has_exception(vm), "setMode(127) throws");
+        nj_take_exception(vm);
+        a[0].i = 132;
+        call(vm, l, CLS("Light"), "setMode", "(I)V", a, NULL);
+        check(nj_has_exception(vm), "setMode(132) throws");
+        nj_take_exception(vm);
+        call(vm, l, CLS("Light"), "getMode", "()I", NULL, &r);
+        check(r.i == 131, "and the mode it already had survives");
+
+        /* spot angle: [0, 90]; the ends are accepted */
+        a[0].f = 60.0f;
+        call(vm, l, CLS("Light"), "setSpotAngle", "(F)V", a, NULL);
+        nj_clear_exception(vm);
+        a[0].f = -1.0f;
+        call(vm, l, CLS("Light"), "setSpotAngle", "(F)V", a, NULL);
+        check(nj_has_exception(vm), "setSpotAngle(-1) throws");
+        nj_take_exception(vm);
+        a[0].f = 90.5f;
+        call(vm, l, CLS("Light"), "setSpotAngle", "(F)V", a, NULL);
+        check(nj_has_exception(vm), "setSpotAngle(90.5) throws");
+        nj_take_exception(vm);
+        call(vm, l, CLS("Light"), "getSpotAngle", "()F", NULL, &r);
+        check(r.f == 60.0f, "and the 60 degrees it had survive");
+        a[0].f = 0.0f;
+        call(vm, l, CLS("Light"), "setSpotAngle", "(F)V", a, NULL);
+        check(!nj_has_exception(vm), "setSpotAngle(0) is accepted");
+        nj_clear_exception(vm);
+        a[0].f = 90.0f;
+        call(vm, l, CLS("Light"), "setSpotAngle", "(F)V", a, NULL);
+        check(!nj_has_exception(vm), "setSpotAngle(90) is accepted");
+        nj_clear_exception(vm);
+
+        /* spot exponent: [0, 128] */
+        a[0].f = 0.198f;
+        call(vm, l, CLS("Light"), "setSpotExponent", "(F)V", a, NULL);
+        nj_clear_exception(vm);
+        a[0].f = -0.5f;
+        call(vm, l, CLS("Light"), "setSpotExponent", "(F)V", a, NULL);
+        check(nj_has_exception(vm), "setSpotExponent(-0.5) throws");
+        nj_take_exception(vm);
+        a[0].f = 128.5f;
+        call(vm, l, CLS("Light"), "setSpotExponent", "(F)V", a, NULL);
+        check(nj_has_exception(vm), "setSpotExponent(128.5) throws");
+        nj_take_exception(vm);
+        call(vm, l, CLS("Light"), "getSpotExponent", "()F", NULL, &r);
+        check(r.f == 0.198f, "and the exponent it had survives");
+        a[0].f = 128.0f;
+        call(vm, l, CLS("Light"), "setSpotExponent", "(F)V", a, NULL);
+        check(!nj_has_exception(vm), "setSpotExponent(128) is accepted");
+        nj_clear_exception(vm);
+
+        /* attenuation: no negatives, not all zero */
+        atten = nj_array_new(vm, "F", 3);
+        ((float *)atten->u.bytes)[0] = 1.0f;
+        ((float *)atten->u.bytes)[1] = 0.0f;
+        ((float *)atten->u.bytes)[2] = 0.0f;
+        a[0].f = -1.0f; a[1].f = 0.0f; a[2].f = 0.0f;
+        call(vm, l, CLS("Light"), "setAttenuation", "(FFF)V", a, NULL);
+        check(nj_has_exception(vm), "setAttenuation(-1,0,0) throws");
+        nj_take_exception(vm);
+        a[0].f = 0.0f; a[1].f = 0.0f; a[2].f = 0.0f;
+        call(vm, l, CLS("Light"), "setAttenuation", "(FFF)V", a, NULL);
+        check(nj_has_exception(vm), "setAttenuation(0,0,0) throws");
+        nj_take_exception(vm);
+        a[0].f = 0.0f; a[1].f = 1.0f; a[2].f = 0.0f;
+        call(vm, l, CLS("Light"), "setAttenuation", "(FFF)V", a, NULL);
+        check(!nj_has_exception(vm), "setAttenuation(0,1,0) is accepted");
+        nj_clear_exception(vm);
+        a[0].r = atten;
+        call(vm, l, CLS("Light"), "getAttenuation", "([F)V", a, NULL);
+        check(((float *)atten->u.bytes)[0] == 0.0f &&
+              ((float *)atten->u.bytes)[1] == 1.0f,
+              "and the accepted coefficients are what is stored");
+    }
+
     printf("== a Light read out of a file keeps its cone ==\n");
     {
         /*
@@ -3981,6 +4232,7 @@ int main(void)
 
     test_image2d_set(vm);
     test_textured_span_variants(vm);
+    test_spot_light_cone(vm);
 
     /* Bone rosters are per receiver and grow on demand; the old fixed
        64-entry table threw on the 65th link. */

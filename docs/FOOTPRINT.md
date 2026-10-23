@@ -848,3 +848,18 @@ RAM: each Light that comes from a file now owns a `float[3]` attenuation array
 created; a Light built in Java allocates nothing new, and no field, static or
 buffer is added to the runtime. The two floats for the cone already lived in
 the class, they were simply never written.
+
+## Light arguments and Material defaults, checked (round 55, 2026-10-24)
+
+`Light`'s four setters now reject the arguments the specification names as
+invalid, and `Material.<init>` writes the specification's default colours; see
+[COMPATIBILITY.md](COMPATIBILITY.md#arguments-the-specification-rejects-and-a-materials-default-colour-round-55-2026-10-24).
+
+| Build | Before | After |
+|---|---|---|
+| hosted Release, `nj_lib_m3g.c` `.text` | 235,601 B | **234,849 B** (-752 B) |
+| `.data` / `.bss` (that object) | 0 / 0 | **unchanged** |
+
+RAM is unchanged: no field, static, heap or buffer is added, and the checks
+are straight-line compares on the arguments. The `float[3]` attenuation array
+a `Light` already owned is still the only allocation the class makes.

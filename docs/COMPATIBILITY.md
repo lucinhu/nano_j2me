@@ -2981,12 +2981,23 @@ into the object, applies the specification defaults for a degenerate record
 path also treats a non-positive angle as the 45-degree default rather than as
 a dead cone. The Java `Light` constructor is unchanged.
 
-Pixels: over 6,000 paced frames of `毁灭战士3_10598`, sampled frames up to
-frame 2,500 are identical between the parent build and this one (the title is
-still on its 2D intro), and every sample from frame 3,000 on differs — that is
-where the 3D menu layer appears. In the frame-4,000 sample 9,875 pixels change
-and their mean luminance goes from 0.6 (black) to 26.7 of 255: the geometry is
-now lit instead of being a silhouette.
+Pixels, with one caveat measured later: a paced replay of this title is not
+frame-deterministic in this environment — running the *same* binary twice at
+`--fps 240 --run-frames 6000` reproduces samples up to frame 2,500 but differs
+at 3,000 and beyond, because the title's animation follows the wall clock. So
+frame hashes cannot prove a build difference on their own for this title, and
+the sampled-frame comparison the first version of this paragraph quoted was
+weaker evidence than it looked.
+
+What the fix is pinned by instead is a deterministic, single-draw test in
+`tests/test_m3g.c` (`test_spot_light_cone`): a lit quad rendered through
+`Graphics3D.render` with a spot light at z = +10 lights ~76,000 pixels inside a
+45 degree cone, and the very same light with `setSpotAngle(0)` lights zero
+pixels — the cone-of-no-width rule that turned the title's layer black. The
+record-level half is pinned by the link test in the previous paragraph. The
+observed title replay does still show the layer appearing lit from frame 3,000
+on (mean luminance of the changed pixels 0.6 to 26.7 of 255), but that is
+supporting evidence, not proof.
 
 There is no reference-renderer oracle for this title: FreeJ2ME-Plus ships a
 JSR 184 implementation but throws
@@ -3012,3 +3023,52 @@ including its header) and two float fields already existed, so a scene with n
 loaded lights pays 40n bytes more than before; nothing is allocated by a Light
 built in Java. Code size shrank by 560 bytes of `.text` in `nj_lib_m3g.c.o`,
 because the draw path no longer carries the zero-cone case.
+
+## Arguments the specification rejects, and a Material's default colour
+(round 55, 2026-10-24)
+
+Two API defects in the JSR 184 classes, both checked against the reference
+implementation (`FreeJ2ME-Plus`, `javax/microedition/m3g/*.java`) and the
+specification text those classes carry.
+
+**`Light` setters took anything.** `setAttenuation`, `setMode`,
+`setSpotAngle` and `setSpotExponent` wrote their argument into the field
+without looking at it, where the specification and the reference implementation
+reject:
+
+* `setAttenuation(c, l, q)` — `IllegalArgumentException` when any coefficient
+  is negative or when all three are zero;
+* `setMode(mode)` — outside `AMBIENT` (128) .. `SPOT` (131);
+* `setSpotAngle(theta)` — outside `[0, 90]` degrees;
+* `setSpotExponent(exp)` — outside `[0, 128]`.
+
+Each setter now throws `java.lang.IllegalArgumentException` and leaves the
+object exactly as it was. The draw path was also brought back in line with the
+reference: it no longer treats a zero spot angle as the 45 degree default,
+because a zero angle is a cone of no width and the reference renders it that
+way. The 45 degree default survives where it belongs — a record the loader
+reads that carries no usable angle.
+
+**A fresh `Material` was green.** `Material.<init>` wrote
+`0x3F800000` into the ambient colour field: that is the bit pattern of the
+float `1.0f`, not a colour. JSR 184 section 11.3 says a new Material is
+`0x00333333` ambient and `0xFFCCCCCC` diffuse; the green ambient (R 0x3F,
+G 0x80, B 0x00) is what a title that only set DIFFUSE was actually shading
+with. Both defaults now match the specification.
+
+Evidence: `tests/test_m3g.c` gains `test_spot_light_cone` (a deterministic lit
+quad, described in the previous section) and a block that walks each rejected
+argument and then reads the value back to prove it survived, plus the two
+`Material` defaults. On the parent build 14 of the new assertions fail (11 of
+them the argument checks, 2 the Material defaults, 1 the zero-cone render); on
+this build `test_m3g` is 621 checks with no failures.
+
+Cost: nothing in RAM — no field, array or buffer is added, and the light
+objects keep the arrays they already had. Code size on `nj_lib_m3g.c.o` went
+from 235,601 to 234,849 bytes of `.text` (-752 B), because the argument checks
+are cheaper than the code they replaced. Six titles that use JSR 184 were
+replayed for 400 frames each on this build with no uncaught exception —
+`毁灭战士3_10598`, `3D激爆拳击_8805`, `3D拉力赛-进化汉化版_6366`,
+`3D摩托赛车_9287`, `生化危机3D(CAPCOM经典)_3671`, `3D城市桌球_8299` — and six
+more ran with only the exceptions those titles already threw (unrecognised
+custom image formats, missing record stores).

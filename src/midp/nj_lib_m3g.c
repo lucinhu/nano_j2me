@@ -6143,7 +6143,14 @@ NJFN(m3g_light_init)
 
 NJFN(m3g_light_setMode)
 {
-    nj_iput(vm, NJ_THIS(args), light_f(vm, "_nj_mode", "I"), NJ_ARG_INT(args, 0));
+    int mode = NJ_ARG_INT(args, 0);
+
+    /* Light.AMBIENT(128) .. Light.SPOT(131); anything else is invalid. */
+    if (mode < 128 || mode > 131) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException", "invalid light mode");
+        return NJ_OK;
+    }
+    nj_iput(vm, NJ_THIS(args), light_f(vm, "_nj_mode", "I"), mode);
     return NJ_OK;
 }
 
@@ -6180,8 +6187,15 @@ NJFN(m3g_light_getIntensity)
 
 NJFN(m3g_light_setSpotAngle)
 {
-    nj_iput(vm, NJ_THIS(args), light_f(vm, "_nj_spotAngle", "F"),
-            f2bits(NJ_ARG_FLOAT(args, 0)));
+    float ang = NJ_ARG_FLOAT(args, 0);
+
+    /* [0, 90] degrees; the reference implementation accepts both ends. */
+    if (ang < 0.0f || ang > 90.0f) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "spot angle outside [0, 90]");
+        return NJ_OK;
+    }
+    nj_iput(vm, NJ_THIS(args), light_f(vm, "_nj_spotAngle", "F"), f2bits(ang));
     return NJ_OK;
 }
 
@@ -6193,8 +6207,15 @@ NJFN(m3g_light_getSpotAngle)
 
 NJFN(m3g_light_setSpotExponent)
 {
-    nj_iput(vm, NJ_THIS(args), light_f(vm, "_nj_spotExp", "F"),
-            f2bits(NJ_ARG_FLOAT(args, 0)));
+    float exp = NJ_ARG_FLOAT(args, 0);
+
+    /* [0, 128]; anything outside is rejected and the value stays put. */
+    if (exp < 0.0f || exp > 128.0f) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "spot exponent outside [0, 128]");
+        return NJ_OK;
+    }
+    nj_iput(vm, NJ_THIS(args), light_f(vm, "_nj_spotExp", "F"), f2bits(exp));
     return NJ_OK;
 }
 
@@ -6208,13 +6229,27 @@ NJFN(m3g_light_setAttenuation)
 {
     nj_ref a = nj_rget(vm, NJ_THIS(args), light_f(vm, "_nj_atten", "[F"));
     float *d = a ? (float *)nj_array_data(a) : NULL;
+    float c = NJ_ARG_FLOAT(args, 0);
+    float l = NJ_ARG_FLOAT(args, 1);
+    float q = NJ_ARG_FLOAT(args, 2);
 
     if (!d || a->length < 3) {
         return nj_throw_oom(vm);
     }
-    d[0] = NJ_ARG_FLOAT(args, 0);
-    d[1] = NJ_ARG_FLOAT(args, 1);
-    d[2] = NJ_ARG_FLOAT(args, 2);
+    /*
+     * JSR 184, Light.setAttenuation: negative coefficients and an all-zero
+     * triple are rejected, and the object keeps what it had.  The reference
+     * implementation (FreeJ2ME-Plus, Light.java) throws the same way.
+     */
+    if (c < 0.0f || l < 0.0f || q < 0.0f ||
+        (c == 0.0f && l == 0.0f && q == 0.0f)) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "invalid attenuation coefficients");
+        return NJ_OK;
+    }
+    d[0] = c;
+    d[1] = l;
+    d[2] = q;
     return NJ_OK;
 }
 
@@ -7111,8 +7146,14 @@ NJFN(m3g_mat_init)
 {
     nj_ref self = NJ_THIS(args);
 
-    nj_iput(vm, self, m3g_fof(vm, NJ_C_MAT, "_nj_c_amb", "I"), (nj_s4)0x3F800000);
-    nj_iput(vm, self, m3g_fof(vm, NJ_C_MAT, "_nj_c_dif", "I"), (nj_s4)0xCCCCCCCC);
+    /*
+     * 11.3: a fresh Material is (0x00333333 ambient, 0xFFCCCCCC diffuse).
+     * The ambient field used to be written as 0x3F800000, the bit pattern of
+     * the float 1.0 - so a title that only set DIFFUSE got a green ambient
+     * wash (R 0x3F, G 0x80, B 0) instead of the specification's grey.
+     */
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_MAT, "_nj_c_amb", "I"), (nj_s4)0x00333333);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_MAT, "_nj_c_dif", "I"), (nj_s4)0xFFCCCCCC);
     nj_iput(vm, self, m3g_fof(vm, NJ_C_MAT, "_nj_c_emi", "I"), 0);
     nj_iput(vm, self, m3g_fof(vm, NJ_C_MAT, "_nj_c_spec", "I"), 0);
     nj_iput(vm, self, m3g_fof(vm, NJ_C_MAT, "_nj_shininess", "F"), 0);
@@ -10645,9 +10686,6 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                 r.latt[i][0] = 1.0f;      /* the JSR default attenuation */
             }
             if (fsa) { r.lspot_angle[i] = bits2f(nj_iget(vm, lt, fsa)); }
-            if (!(r.lspot_angle[i] > 0.0f)) {
-                r.lspot_angle[i] = 45.0f;   /* a zero cone lights nothing */
-            }
             if (fse) { r.lspot_exp[i] = bits2f(nj_iget(vm, lt, fse)); }
         }
     }
