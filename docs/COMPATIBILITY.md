@@ -2376,3 +2376,49 @@ frame to 0/0 and advancing frames (frame 600 is the title screen, frame 1,200
 the "20XX" story frame), and this title from 46 scheme errors and 16,128
 triangles to zero errors and 59,479 triangles in the same 1,200 frames.  Both
 arms keep `BENCH sum=-136042548` and the 27-value digest.
+
+## The interface a title implements itself (round 10, 2026-10-23)
+
+A 36-title sweep of corpus entries that earlier sweeps had never touched found
+one real defect and one open question.  The sweep is the same shape as before:
+1,200 frames each at 30 fps, 240x320, heap 16, the generic key script, fresh
+RMS per title, eight workers; 35 of 36 exit 0 with no uncaught exception and
+no missing member.  (The one exit-1 title, 鲁宾逊漂流记汉化BT版_4677, is the
+known broken suite: its JAR carries no `MIDlet-1`, which is why
+`tools/corpus_fatal.sh` has listed it for rounds.)
+
+**魂斗罗V铁血兵团_119** died with an uncaught
+
+    java.lang.NoSuchMethodError:
+      javax/wireless/messaging/MessageConnection.setMessageListener(
+        Ljavax/wireless/messaging/MessageListener;)V  @ aa.a+89
+
+The title does not open an SMS connection - it bundles its own `XConnection`
+class, constructs it, casts it to `MessageConnection` and registers itself as
+the listener (`aa.a(String)Z`: `new XConnection`, `checkcast MessageConnection`,
+`invokeinterface setMessageListener`).  That is a handset-without-radio shim,
+and it is legal: the interface resolves the method, the shim implements it.
+Our published `MessageConnection` declared only `newMessage(String)`, `send`,
+`receive`, `numberOfSegments` and `close`, so the resolve failed before the
+shim was ever consulted - the interface, not the receiver, is the declaration
+the bytecode names.
+
+`src/midp/nj_lib_wireless.c` now declares the rest of the JSR 120 surface:
+`setMessageListener(MessageListener)V`, `getMessageListener()MessageListener`
+and `newMessage(String,String)Message`.  They stay abstract: this runtime never
+hands out a connection, so nothing can call them, and a MIDlet's own shim is
+what actually runs.  `tests/test_wireless.c` asserts the three descriptors
+resolve (and that a wrong descriptor still does not), 23 checks.
+
+After the fix: 1,200 frames, exit 0, zero `NoSuchMethodError`, zero uncaught
+exceptions, and the frames change - frame 1,200 is the title's own 发送成功
+screen, which the uncaught error used to prevent.  Full ctest 101/101, bench
+and digest unchanged.
+
+**宠物王国4-白金_6531** raises an uncaught `OutOfMemoryError` from its own save
+routine (`k.a`, `RecordStore.addRecord([BII)I` with 200- and 400-byte records)
+while the VM's peak heap use is under 2 MB - at `--heap 16` and `--heap 32`,
+but not at `--heap 64`.  That pattern says one very large single allocation
+somewhere later, not fragmentation of the save path; it is recorded here as an
+open question rather than a classified defect, because the reference behaviour
+for that allocation has not been compared yet.

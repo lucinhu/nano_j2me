@@ -165,6 +165,37 @@ int main(void)
         (void)nj_take_exception(vm);
     }
 
+    /*
+     * The JSR 120 interface surface a real title resolves against.  A shim
+     * class of the title's own implements MessageConnection and registers
+     * itself through the interface, so every method the JSR declares has to
+     * exist here even though this runtime never hands out a connection:
+     * 魂斗罗V铁血兵团_119 died with NoSuchMethodError on setMessageListener.
+     */
+    {
+        /* nj_class_lookup has no public prototype; the test talks to the VM
+         * the same way the runtime does. */
+        extern nj_class *nj_class_lookup(nj_vm *vm, const char *name);
+        nj_class *mc = nj_class_lookup(vm, "javax/wireless/messaging/MessageConnection");
+
+        ok(mc != NULL, "MessageConnection class resolves");
+        ok(mc != NULL && nj_method_lookup(
+               mc, "setMessageListener",
+               "(Ljavax/wireless/messaging/MessageListener;)V") != NULL,
+           "MessageConnection declares setMessageListener(MessageListener)");
+        ok(mc != NULL && nj_method_lookup(
+               mc, "getMessageListener",
+               "()Ljavax/wireless/messaging/MessageListener;") != NULL,
+           "MessageConnection declares getMessageListener()");
+        ok(mc != NULL && nj_method_lookup(
+               mc, "newMessage", "(Ljava/lang/String;Ljava/lang/String;)"
+               "Ljavax/wireless/messaging/Message;") != NULL,
+           "MessageConnection declares newMessage(String, String)");
+        ok(mc != NULL && nj_method_lookup(
+               mc, "setMessageListener", "()V") == NULL,
+           "control: a wrong descriptor does not resolve");
+    }
+
     /* A UUID a MIDlet can actually build, and one it cannot. */
     {
         nj_ref u = nj_object_new(vm, "javax/bluetooth/UUID");

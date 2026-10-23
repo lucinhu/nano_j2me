@@ -75,10 +75,23 @@ static const nj_builtin_method binmsg_methods[] = {
 
 static const nj_builtin_method msgconn_methods[] = {
     I("newMessage",     "(Ljava/lang/String;)L" NJ_C_MSG ";"),
+    I("newMessage",     "(Ljava/lang/String;Ljava/lang/String;)L" NJ_C_MSG ";"),
     I("send",           "(L" NJ_C_MSG ";)V"),
     I("receive",        "()L" NJ_C_MSG ";"),
     I("numberOfSegments", "(L" NJ_C_MSG ";)I"),
-    I("close",          "()V")
+    I("close",          "()V"),
+    /*
+     * The listener pair.  A title whose own class implements MessageConnection
+     * (a local "send to a fake SMSC" shim, common in cracked/pirated builds)
+     * casts its shim to the interface and registers itself: 魂斗罗V铁血兵团_119
+     * died on exactly `aa.a(String)Z` calling setMessageListener, because the
+     * interface we publish did not declare it - the bytecode resolved against
+     * the interface, not the shim.  Declaring the JSR 120 surface costs
+     * nothing here: nothing in this runtime ever calls it, and a real
+     * connection is never handed out.
+     */
+    I("setMessageListener", "(L" NJ_C_MSGLIS ";)V"),
+    I("getMessageListener", "()L" NJ_C_MSGLIS ";")
 };
 
 /*
