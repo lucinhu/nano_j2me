@@ -2641,6 +2641,12 @@ test means to exercise, and `test_lib` is green again (805 passing
 assertions). The fixture also gets its own 2 MB VM now, so the fragmentation
 it leaves behind cannot distort the heap-pressure tests that follow.
 
+Both changes were re-run under the sanitizers, which the first pass had not
+covered: a Debug build with `-DNJ_SANITIZE=ON` (address, undefined and
+leak) runs `test_lib` at 805 passing assertions with zero sanitizer reports,
+so the new window validation and the reformatted fixture are clean under
+ASan, UBSan and LSan.
+
 ## Two regression certificates (round 31-32, 2026-10-23)
 
 After the `ByteArrayInputStream` window fix and the allocation-fixture change,
