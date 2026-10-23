@@ -85,6 +85,7 @@ typedef struct rv_writer {
     unsigned nfixups;
     rv_fixup fixups[RV_MAX_FIXUPS];
     int counter;      /* track completed bytecodes in a3 */
+    unsigned pending; /* linear bytecodes not yet added to a3 */
     int loop;         /* emit the budget check at the loop head */
 #if NJ_JIT_RV32_REG_CACHE
     rv_cached regs[2];
@@ -334,6 +335,16 @@ static void rv_addi(rv_writer *w, unsigned rd, unsigned rs1, int immediate)
     }
 #endif
     rv_i(w, 0x13u, 0u, rd, rs1, immediate);
+}
+
+/* Count a straight-line run once. Every control-flow edge and fault guard
+ * flushes first, so a3 still describes exactly the path actually executed. */
+static void rv_flush_count(rv_writer *w)
+{
+    if (w->counter && w->pending != 0u) {
+        rv_addi(w, RV_A3, RV_A3, (int)w->pending);
+        w->pending = 0u;
+    }
 }
 
 static void rv_li(rv_writer *w, unsigned rd, nj_s4 value)
@@ -1463,7 +1474,6 @@ static void rv_emit_branch(rv_writer *w, const rv_scan *s, unsigned insn)
     }
 
     if (b->branch == 2) { /* goto */
-        if (w->counter) rv_addi(w, RV_A3, RV_A3, 1);
         rv_emit_jump(w, kind, target);
         return;
     }
@@ -1480,37 +1490,22 @@ static void rv_emit_branch(rv_writer *w, const rv_scan *s, unsigned insn)
     switch (b->op) {
     case 0x99: f3 = 0u; rs1 = RV_T0; rs2 = RV_ZERO; break; /* ifeq  */
     case 0x9a: f3 = 1u; rs1 = RV_T0; rs2 = RV_ZERO; break; /* ifne  */
-    case 0x9b: /* iflt: slt t2, t0, zero; bne */
-        rv_r(w, 0x33u, 0u, 2u, RV_T2, RV_T0, RV_ZERO);
-        f3 = 1u; rs1 = RV_T2; rs2 = RV_ZERO; break;
+    case 0x9b: f3 = 4u; rs1 = RV_T0; rs2 = RV_ZERO; break; /* iflt */
     case 0x9c: f3 = 5u; rs1 = RV_T0; rs2 = RV_ZERO; break; /* ifge  */
-    case 0x9d: /* ifgt: slt t2, zero, t0; bne */
-        rv_r(w, 0x33u, 0u, 2u, RV_T2, RV_ZERO, RV_T0);
-        f3 = 1u; rs1 = RV_T2; rs2 = RV_ZERO; break;
-    case 0x9e: /* ifle: slt t2, zero, t0; beq */
-        rv_r(w, 0x33u, 0u, 2u, RV_T2, RV_ZERO, RV_T0);
-        f3 = 0u; rs1 = RV_T2; rs2 = RV_ZERO; break;
+    case 0x9d: f3 = 4u; rs1 = RV_ZERO; rs2 = RV_T0; break; /* ifgt */
+    case 0x9e: f3 = 5u; rs1 = RV_ZERO; rs2 = RV_T0; break; /* ifle */
     case 0x9f: f3 = 0u; rs1 = RV_T0; rs2 = RV_T1; break; /* if_icmpeq */
     case 0xa0: f3 = 1u; rs1 = RV_T0; rs2 = RV_T1; break; /* if_icmpne */
-    case 0xa1: /* if_icmplt: slt t2, t0, t1; bne */
-        rv_r(w, 0x33u, 0u, 2u, RV_T2, RV_T0, RV_T1);
-        f3 = 1u; rs1 = RV_T2; rs2 = RV_ZERO; break;
-    case 0xa2: /* if_icmpge */
-        rv_r(w, 0x33u, 0u, 2u, RV_T2, RV_T0, RV_T1);
-        f3 = 0u; rs1 = RV_T2; rs2 = RV_ZERO; break;
-    case 0xa3: /* if_icmpgt: slt t2, t1, t0; bne */
-        rv_r(w, 0x33u, 0u, 2u, RV_T2, RV_T1, RV_T0);
-        f3 = 1u; rs1 = RV_T2; rs2 = RV_ZERO; break;
-    case 0xa4: /* if_icmple */
-        rv_r(w, 0x33u, 0u, 2u, RV_T2, RV_T1, RV_T0);
-        f3 = 0u; rs1 = RV_T2; rs2 = RV_ZERO; break;
+    case 0xa1: f3 = 4u; rs1 = RV_T0; rs2 = RV_T1; break; /* if_icmplt */
+    case 0xa2: f3 = 5u; rs1 = RV_T0; rs2 = RV_T1; break; /* if_icmpge */
+    case 0xa3: f3 = 4u; rs1 = RV_T1; rs2 = RV_T0; break; /* if_icmpgt */
+    case 0xa4: f3 = 5u; rs1 = RV_T1; rs2 = RV_T0; break; /* if_icmple */
     case 0xa5: f3 = 0u; rs1 = RV_T0; rs2 = RV_T1; break; /* if_acmpeq */
     case 0xa6: f3 = 1u; rs1 = RV_T0; rs2 = RV_T1; break; /* if_acmpne */
     case 0xc6: f3 = 0u; rs1 = RV_T0; rs2 = RV_ZERO; break; /* ifnull    */
     case 0xc7: f3 = 1u; rs1 = RV_T0; rs2 = RV_ZERO; break; /* ifnonnull */
     default: w->failed = 1; return;
     }
-    if (w->counter) rv_addi(w, RV_A3, RV_A3, 1);
     rv_branch(w, f3, rs1, rs2, kind, target);
 }
 
@@ -1541,6 +1536,9 @@ static int rv_emit_block(nj_vm *vm, rv_writer *w, const rv_scan *s,
     w->loop = s->loop ? 1 : 0;
 
     for (i = 0u; i < s->n; ++i) {
+        /* The fall-through path counts its preceding run before the label;
+         * a taken edge has already counted its own run and skips this add. */
+        if (s->label[i]) rv_flush_count(w);
         if (i == 0u && s->loop != 0) {
             label_at[0] = w->used;
             /* remaining = budget - completed; enter another iteration only
@@ -1555,17 +1553,21 @@ static int rv_emit_block(nj_vm *vm, rv_writer *w, const rv_scan *s,
             rv_forget_values(w);
         }
         if (s->ins[i].branch != 0) {
+            if (w->counter) ++w->pending; /* the branch itself completes */
+            rv_flush_count(w);
             rv_emit_branch(w, s, i);
         } else {
             unsigned fault = s->fault_of[i] == RV_NO_FAULT ?
                              0u : (unsigned)s->fault_of[i];
+            if (s->ins[i].guarding) rv_flush_count(w);
             rv_emit(vm, w, &s->ins[i], s->delta[i], fault);
-            if (w->counter) rv_addi(w, RV_A3, RV_A3, 1);
+            if (w->counter) ++w->pending;
         }
         if (w->failed) return 0;
     }
 
     w->capacity = capacity;
+    rv_flush_count(w);
     /* Exit stubs: a0 = (completed << 4) | exit_index. */
     for (i = 0u; i < (unsigned)block->nexits; ++i) {
         exit_at[i] = w->used;

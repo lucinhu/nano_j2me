@@ -2897,6 +2897,27 @@ static void test_branches(void)
         }
     }
 
+    /* Signed direct branches must also order values across the sign bit;
+     * subtracting first or using an unsigned comparison would fail here. */
+    {
+        static const nj_u4 bits[] = {0u, 1u, 0x7fffffffu, 0x80000000u, 0xffffffffu};
+        unsigned a, b;
+        for (i = 0; i < 6; ++i) {
+            nj_u1 code[] = {0x1a, 0x1b, 0, 0x00, 0x05, 0x04, 0x3d, 0xac};
+            code[2] = (nj_u1)(0x9fu + i);
+            for (a = 0; a < sizeof(bits) / sizeof(bits[0]); ++a) {
+                for (b = 0; b < sizeof(bits) / sizeof(bits[0]); ++b) {
+                    init_frame(&initial);
+                    initial.locals[0].i = signed_bits(bits[a]);
+                    initial.locals[1].i = signed_bits(bits[b]);
+                    word = branch_run("signed branch boundaries", code,
+                                      sizeof(code), 3, &initial, 32, &block,
+                                      &expected, &count);
+                }
+            }
+        }
+    }
+
     /* if_acmpeq/ne over real reference values. */
     {
         nj_object oa, ob;
@@ -3058,6 +3079,37 @@ static void test_loops(void)
     nj_u4 word = 0;
     unsigned count = 0;
 
+    /* A fault after either path of a forward branch must include exactly
+     * that path's completed run, excluding the faulting array access. */
+    {
+        static const nj_u1 code[] = {
+            0x1a, 0x99, 0x00, 0x06, /* iload_0; ifeq 7 */
+            0x84, 0x02, 0x01,       /* iinc 2, 1 */
+            0x2d, 0x1b, 0x2e, 0x3d, 0xac
+        };
+        array_fixture ax;
+        unsigned path;
+        array_fixture_init(&ax, NJ_OBJ_ARRAY, NJ_ARRAY_T_INT);
+        for (path = 0; path < 2; ++path) {
+            init_frame(&initial);
+            initial.locals[0].i = (nj_s4)path;
+            initial.locals[1].i = ARRAY_LEN;
+            initial.locals[2].i = 17;
+            initial.locals[3].r = (nj_ref)&ax.arr;
+            jit_vm = &ax.vm;
+            word = loop_run("fault counter after forward branch", code,
+                            sizeof(code), 4, &initial, NULL, ax.ints, ARRAY_LEN,
+                            NULL, 0, SIZE_MAX, 32, &block, &expected, &count);
+            jit_vm = NULL;
+            CHECK(count == 4u + path);
+#if EXECUTE_RV32
+            CHECK(result_is_fault(word));
+            CHECK(result_completed(word) == count);
+            CHECK(block.faults[result_fault_index(word)].pc_off == 9u);
+#endif
+        }
+    }
+
     /* Do-while sum: sum(1..n), n = 2000, executed natively in one call. */
     {
         static const nj_u1 code[] = {
@@ -3129,6 +3181,20 @@ static void test_loops(void)
                 CHECK(result_completed(word) <= 8u);
                 CHECK(actual.locals[0].i == (nj_s4)(k + 1u));
                 CHECK(actual.locals[2].i == (nj_s4)((k + 1u) * (k + 2u) / 2u));
+            }
+            /* Include every remainder around several iteration boundaries,
+             * starting below the size needed for even one whole iteration. */
+            for (k = 0; k <= 40u; ++k) {
+                unsigned rounds = k / 8u;
+                actual = initial;
+                word = invoke(generated, block.size, &actual.stack[BASE],
+                              actual.locals, k);
+                CHECK(!result_is_fault(word));
+                CHECK(result_exit(word) == budget_exit);
+                CHECK(result_completed(word) == rounds * 8u);
+                CHECK(result_completed(word) <= k);
+                CHECK(actual.locals[0].i == (nj_s4)rounds);
+                CHECK(actual.locals[2].i == (nj_s4)(rounds * (rounds + 1u) / 2u));
             }
         }
 #else
