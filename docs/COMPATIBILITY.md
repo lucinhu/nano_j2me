@@ -2357,3 +2357,22 @@ the next file's identifier - plus the fallbacks: no usable declared length
 (the trailing bytes are still caught), a length longer than the buffer, and a
 nonsense length.  `test_m3g` is 576 checks.  Footprint: `nj_lib_m3g.c.o` text
 262,417 -> 262,489 bytes (+72), data/bss unchanged.
+
+The five remaining caught `NullPointerException`s are the title's own: the
+bytecode that throws is `e.a(int, String, int, String, String)`, which reads
+`MIDlet.getAppProperty("URL-" + key)` into a static `String[]` and later calls
+`toUpperCase()` on the element.  The manifest carries no `URL-*` properties
+(`MIDlet-1`, `MIDlet-Vendor`, the profile entries and nothing else), so the
+lookup returns null - exactly as it does in the reference runtime - and the
+title's defensive gap throws.  The reported pc (90) is the fall-through of
+`String.toUpperCase` after the `aaload`, which matches, so we are not treating
+it as a runtime defect.
+
+A clean-tree verification of this fix together with the progressive-JPEG pair
+(`0b2c125` vs `c03eca1`, both from `git archive`) reproduced the fail-before
+side: `test_jpeg` 864 checks/2 failures -> 873/0, `test_m3g` 569 -> 576
+checks, the JPEG title from 2 cannot-decode errors + 1 uncaught + one frozen
+frame to 0/0 and advancing frames (frame 600 is the title screen, frame 1,200
+the "20XX" story frame), and this title from 46 scheme errors and 16,128
+triangles to zero errors and 59,479 triangles in the same 1,200 frames.  Both
+arms keep `BENCH sum=-136042548` and the 27-value digest.
