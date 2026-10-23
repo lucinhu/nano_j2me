@@ -2674,6 +2674,16 @@ what the reference assembles. Rerunning the same 600-frame replay with
 `--heap 32` instead of 16 still times out, so it is not the heap size that
 stops the load either.
 
+Logging every `Class.getResourceAsStream()` during that replay shows all of
+them succeeding, including `bg_ryu.jar` (8,839 B), `bgm_ryu.mid` (11,764 B),
+`_Jar001.jar`/`_Jar002.jar` and the font files - so the resources are there and
+read. The one exception the title raises is its own `NullPointerException` in
+`bZ()` on the byte array `dB` not being set: that path is entered when the soft
+key lands on the menu at frame 400, while the same build finishes the 200-frame
+run whose soft key lands at frame 60. It is a state the title's menu path can
+reach without having run its loader, not a missing runtime API; the remaining
+question is which of the two reference-side flows sets `dB` first.
+
 ## The store name that was a path (round 13, 2026-10-23)
 
 `阿尔卑斯牧场物语_7043` opens a record store called `/A/AConfig`.  JSR-118 asks
