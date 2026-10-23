@@ -2630,6 +2630,17 @@ returns to the window's first byte, and four malformed windows
 four malformed windows are accepted, so the file fails before the fix and
 passes after it (798 -> 803 passing assertions).
 
+The window test also sat next to a *pre-existing* failure in
+`test_alloc_gives_up`: `tryFrag()` returned 1600000 where the test expects
+`-1`. That was not the allocator losing its give-up path - the fixture's
+premise had stopped holding. It allocated one 1.5 MB array in a 2 MB heap,
+dropped it, and expected the next 1.6 MB request to fail, which only holds
+while the freed block cannot merge with the heap tail. The fixture now keeps a
+live 100 KB array on each side of the big one, which is the fragmentation the
+test means to exercise, and `test_lib` is green again (805 passing
+assertions). The fixture also gets its own 2 MB VM now, so the fragmentation
+it leaves behind cannot distort the heap-pressure tests that follow.
+
 ## The store name that was a path (round 13, 2026-10-23)
 
 `阿尔卑斯牧场物语_7043` opens a record store called `/A/AConfig`.  JSR-118 asks
