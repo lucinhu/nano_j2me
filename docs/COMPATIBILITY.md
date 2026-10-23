@@ -2500,6 +2500,17 @@ the scripts are generic rather than title-specific; and no per-title reference
 comparison was done in this sweep.  It is a regression net for missing APIs and
 crashes, and on that measure this was the cleanest sweep so far.
 
+## The board whose button we still cannot hit (round 17, 2026-10-23)
+
+`仙魔飞行棋_417` draws its board and then waits: `paints=1200`, 823,583
+bytecodes and every 100-frame dump identical, while the reference advances to
+its scenario screen. Earlier tap sweeps reached the title's "是否开启音乐"
+dialog, so pointer events do arrive; this round fired three taps at the visible
+投掷 button (160,185) at frames 300/700/1100 and all twelve dumps stayed
+identical, so that coordinate is not the control's hit area. The remaining work
+is to find the hit box (or the timer/state condition) the board waits on; no
+runtime change was made and the item stays open.
+
 ## The soft key a title was not ready for (round 15, 2026-10-23)
 
 The pointer-and-key sweep script (first key at frame 20) times out on two
