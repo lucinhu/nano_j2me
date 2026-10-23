@@ -2520,7 +2520,9 @@ dump on the board, so that region is not the control that starts a turn. The
 remaining work is to walk the menu and find the button that does; the runtime
 is unchanged. Tapping (20,312) and then five rows down the middle of the screen
 (x=120, y=80..240) leaves the resulting panel unchanged, so that panel's rows
-are not at x=120 either - the next step is the same grid over it.
+are not at x=120 either. A 30-point grid over that panel (x=20..220 in steps of
+40, y=60..280 in steps of 55) also leaves it unchanged, so either the panel is
+not what starts a turn or its controls are smaller than this grid.
 
 ## The soft key a title was not ready for (round 15, 2026-10-23)
 
