@@ -2670,7 +2670,9 @@ out of `img_title.jar` (which begins `SFD\0`), and it then spins on a
 `ByteArrayInputStream` that has reached its end. So this is not a title that
 needs a later key - it is a load path that our runtime does not complete,
 and the remaining work is to compare the bytes the title assembles against
-what the reference assembles.
+what the reference assembles. Rerunning the same 600-frame replay with
+`--heap 32` instead of 16 still times out, so it is not the heap size that
+stops the load either.
 
 ## The store name that was a path (round 13, 2026-10-23)
 
