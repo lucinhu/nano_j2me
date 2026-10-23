@@ -1,7 +1,9 @@
 # Baseline JIT performance: measurements and reproduction
 
-This revision responds to a second board report, against `fe974fc` — the commit
-that carried the previous probe/dispatch optimisation set. The reporting device
+This work responds to a second board report, against `fe974fc` — the commit
+that carried the previous probe/dispatch optimisation set. It landed in two
+steps: the probe map and field/array coverage first, then branch and loop
+compilation with the budgeted block ABI described below. The reporting device
 is an anonymous 32-bit embedded board with a 240×320 display. The harness runs
 five fixed kernels for 50,000 iterations and averages two fresh-VM rounds with
 superinstructions and threaded dispatch disabled in both modes, and JIT
@@ -62,31 +64,43 @@ The report's P1 was coverage first. This revision compiles natively:
   correct sign/zero extension and the interpreter's wide-value padding rules;
 - `iaload`/`iastore` for integer arrays (validated null, kind, length and
   `aflags == NJ_ARRAY_T_INT`) and `arraylength`;
-- integer `idiv`/`irem` inline, with a zero divisor as one guarded instruction.
+- integer `idiv`/`irem` inline, with a zero divisor as one guarded instruction;
+- conditional branches (`if<cond>`, `if_icmp<cond>`, `if_acmpeq/ne`,
+  `ifnull`/`ifnonnull`) and `goto`. A forward target inside the window becomes an
+  internal label (paths may join only at equal operand depth, otherwise the block
+  is declined); a forward target beyond the window ends the block through an
+  exit that records the target PC and stack depth; a backward branch compiles
+  only when it targets the block entry with an empty stack, i.e. a loop. Loop
+  blocks keep a bytecode counter and check the remaining scheduling budget at
+  the entry label before every iteration, so a back edge always returns through
+  a budget exit and never starves other threads.
 
 This needs an exact way to hand a bytecode back to the interpreter, so the block
-ABI is now a **deoptimisation contract**: a block returns the number of completed
-Java bytecodes, or a fault word carrying the fault index. Each fault records the
-bytecode offset and the stack delta from the incoming `sp`, so the interpreter
-re-executes the faulting bytecode at the original PC with the original frame,
-raising the usual `NullPointerException`, `ArrayIndexOutOfBoundsException` or
-`ArithmeticException` (or field resolution/class initialisation) itself. Guards
-branch off before the faulting instruction writes any slot, so no partially
-visible state exists. A block admits at most `NJ_JIT_MAX_FAULTS` guarded
-instructions; a further fault point ends the block in front of it. A fault before
-any bytecode completes pins the site refused, so a failing site cannot thrash.
-Analyse and compile share one decode loop, so the accepted prefix and fault list
-are identical.
+ABI is now a **deoptimisation contract**: a block returns
+`(completed << 4) | exit_index` — the number of completed Java bytecodes and
+which exit to take (`exits[]` carries the target PC and stack delta; exit 0 is
+the straight-line window end, further exits are leaving branches and the loop
+budget exit) — or a fault word carrying the fault index and completion count.
+Each fault records the bytecode offset and the stack delta from the incoming
+`sp`, so the interpreter re-executes the faulting bytecode at the original PC
+with the original frame, raising the usual `NullPointerException`,
+`ArrayIndexOutOfBoundsException` or `ArithmeticException` (or field
+resolution/class initialisation) itself. Guards branch off before the faulting
+instruction writes any slot, so no partially visible state exists. A block
+admits at most `NJ_JIT_MAX_FAULTS` guarded instructions and `NJ_JIT_MAX_EXITS`
+exits; a further one ends the block in front of it. A fault before any bytecode
+completes pins the site refused, so a failing site cannot thrash. Analyse and
+compile share one decode loop, so the accepted prefix, fault list, labels and
+exits are identical.
 
 Retained from the previous revision: metadata-only probe, configurable minimum
 block length, numeric `ldc`/`ldc_w`, the two-way code cache, RV32's optional T0/T1
 write-through register cache, batched statistics and probe-only mode.
 
-Still interpreted: conditional branches and backedges, static fields, non-int
-array kinds, long arithmetic, conversions other than `i2b`/`i2c`/`i2s`, calls,
-allocation and monitors. Branch compilation is the natural next step, but it
-needs quantum-safe backedges and exact branch-fault PCs; it is not claimed here.
-The separate 3D-backend profiling the report lists as P2 was not done either.
+Still interpreted: static fields, non-int array kinds, long arithmetic,
+conversions other than `i2b`/`i2c`/`i2s`, calls, allocation and monitors. Those
+are the natural next coverage steps. The separate 3D-backend profiling the
+report lists as P2 was not done either.
 
 ## Fixed-workload harness
 
@@ -129,67 +143,78 @@ tools/check_jit_perf.sh --build-dir build-rv32-perf --no-build \
 
 These are emulator wall times, not CPU cycles or board measurements. RV32 and
 ARM64 Linux musl static binaries were built in Release mode with Zig/Clang
-22.1.8, built for `riscv32-linux-musl` / `aarch64-linux-musl`, and run under
+22.1.8 for `riscv32-linux-musl` / `aarch64-linux-musl` and run under
 qemu-riscv32 and qemu-aarch64 7.2.0. Defaults held constant: 64 code entries in
-two ways, 32 method maps, a 4096-byte arena, at most 4 faults, heat threshold 8,
-minimum block 4, at most 32 bytecodes, default quantum, switch dispatch,
-superinstructions off, RV32 register cache on, statistics on, detailed
-statistics off. Each row is one fresh VM; the numbers are single runs.
+two ways, 32 method maps, a 4096-byte arena, at most 4 faults and 4 exits, heat
+threshold 8, minimum block 4, at most 32 bytecodes, default quantum, switch
+dispatch, **superinstructions off in both modes** (matching the board report),
+RV32 register cache on, statistics on, detailed statistics off. Each row is one
+fresh VM; values are medians of three runs.
 
 Steady state, 20,000 iterations:
 
-| Kernel | RV32 interpreter / probe / execute ms | RV32 exec/interp | ARM64 interpreter / probe / execute ms | ARM64 exec/interp |
-|---|---:|---:|---:|---:|
-| Locals | 29.064 / 45.475 / 8.782 | 0.302 | 24.637 / 34.594 / 8.807 | 0.357 |
-| Constants | 10.680 / 17.074 / 6.995 | 0.655 | 7.711 / 17.097 / 6.918 | 0.897 |
-| Fields | 21.922 / 34.920 / 7.773 | 0.355 | 17.261 / 30.625 / 8.275 | 0.479 |
-| Arrays | 20.835 / 37.585 / 8.550 | 0.410 | 16.693 / 33.886 / 9.954 | 0.596 |
-| Mixed | 48.626 / 76.831 / 16.543 | 0.340 | 38.956 / 68.402 / 18.071 | 0.464 |
-| Branches | 20.574 / 34.792 / 14.857 | 0.722 | 16.127 / 32.279 / 14.731 | 0.913 |
+| Kernel | RV32 interpreter / probe / execute ms | RV32 exec/interp | RV32 probe/interp | ARM64 interpreter / probe / execute ms | ARM64 exec/interp | ARM64 probe/interp |
+|---|---:|---:|---:|---:|---:|---:|
+| Locals | 34.95 / 36.08 / 2.62 | 0.075 | 1.032 | 27.43 / 28.49 / 2.52 | 0.092 | 1.039 |
+| Constants | 11.28 / 20.54 / 0.47 | 0.042 | 1.822 | 8.28 / 15.28 / 0.43 | 0.052 | 1.846 |
+| Fields | 23.22 / 37.62 / 1.06 | 0.045 | 1.620 | 16.54 / 29.02 / 1.07 | 0.065 | 1.755 |
+| Arrays | 23.27 / 41.72 / 1.51 | 0.065 | 1.793 | 15.87 / 31.29 / 2.02 | 0.127 | 1.972 |
+| Mixed | 50.42 / 80.56 / 13.68 | 0.271 | 1.598 | 34.26 / 61.64 / 13.56 | 0.396 | 1.799 |
+| Branches | 19.42 / 31.08 / 5.98 | 0.308 | 1.601 | 16.33 / 31.53 / 7.34 | 0.449 | 1.931 |
 
-Fault follow-ups and fallback ratios are small for the compiled kernels: on RV32
-the execute-mode `fallback_ratio` was 0.211 (locals), 0.364 (constants), 0.211
-(fields), 0.175 (arrays), 0.147 (mixed) and 0.360 (branches); compiled blocks
-were 12/4/12/17/35/11 and requested code bytes 946/224/1554/3970/7572/564.
-`metadata_bytes` was 8408 on RV32 (9576 on LP64, where method pointers are 8
-bytes) and every code allocation was freed.
-Probe-only stays above the interpreter by design (1.56–1.80× on RV32,
-1.40–2.22× on ARM64): it is a diagnostic mode, not a performance mode.
+Execute-mode `fallback_ratio` (Java bytecodes that still ran in the interpreter)
+and compiled footprint, RV32 / ARM64: locals 0.0014 / 0.0014, 1 block and 238 /
+364 code bytes; constants 0.0009 / 0.0009, 1 / 150 or 220; fields 0.0013 /
+0.0013, 1 / 300 or 412; arrays 0.0020 / 0.0020, 2 / 1044 or 1396; mixed 0.0743 /
+0.0743, 23 blocks / 6468 or 7920; branches 0.1450 / 0.1450, 3 blocks / 964 or
+1480. `metadata_bytes` is 9432 on RV32 and 10600 on LP64, and every code
+allocation is freed.
 
-Cold start, RV32, 500 iterations:
+Branches and loops now compile: the branches kernel falls back on 14.5% of
+bytecodes instead of 36.0% before loop compilation, and its RV32
+execute/interpreter ratio drops from the previous revision's 0.777 to 0.308.
+`probe_only` is now a modest overhead over the interpreter (1.03–1.79× on RV32,
+1.04–1.97× on ARM64) rather than the previous 1.5–2.0×, because a declined or
+not-yet-hot bytecode costs one cached method-pointer comparison and one 16-bit
+cell load. Do not subtract probe-only time from execute time for attribution:
+probe-only also visits bytecodes skipped by a native block.
 
-| Kernel | Interpreter ms | Execute ms | Execute / interpreter | Compiled blocks / code bytes |
-|---|---:|---:|---:|---:|
-| Locals | 1.157 | 2.413 | 2.086 | 1 / 118 |
-| Constants | 0.555 | 0.505 | 0.909 | 1 / 66 |
-| Fields | 0.972 | 1.090 | 1.121 | 1 / 200 |
-| Arrays | 1.152 | 0.470 | 0.408 | 2 / 472 |
-| Mixed | 1.339 | 0.411 | 0.307 | 4 / 936 |
-| Branches | 0.427 | 0.280 | 0.656 | 4 / 224 |
+Cold start, 500 iterations (interpreter / execute ms, execute/interpreter,
+compiled blocks / code bytes):
 
-The first few hundred iterations pay for compilation and emission (locals and
-fields are still slower than the interpreter there), while every kernel is
-clearly faster once warm. A JIT-enabled launch therefore only pays off if the
-hot loops run long enough — the board's startup scenario is exactly that case,
-which is why it must be re-measured rather than inferred.
+| Kernel | RV32 int / exec | RV32 ratio | RV32 blocks / bytes | ARM64 int / exec | ARM64 ratio | ARM64 blocks / bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| Locals | 1.500 / 3.064 | 2.043 | 1 / 238 | 0.860 / 2.782 | 3.235 | 1 / 364 |
+| Constants | 0.565 / 0.503 | 0.890 | 1 / 150 | 0.454 / 0.358 | 0.789 | 1 / 220 |
+| Fields | 0.331 / 0.320 | 0.967 | 1 / 300 | 0.234 / 0.387 | 1.654 | 1 / 412 |
+| Arrays | 0.357 / 0.477 | 1.336 | 2 / 1044 | 0.470 / 0.610 | 1.298 | 2 / 1396 |
+| Mixed | 0.665 / 0.520 | 0.782 | 5 / 1588 | 0.485 / 0.671 | 1.384 | 5 / 2044 |
+| Branches | 0.325 / 0.205 | 0.631 | 1 / 324 | 0.268 / 0.217 | 0.810 | 1 / 496 |
+
+The first few hundred iterations pay for analysis and emission (locals and, on
+ARM64, fields and arrays are still slower there), while every kernel is faster
+once warm except the dispatch-bound mixed/branch kernels on ARM64. A JIT-enabled
+launch therefore only pays off if the hot loops run long enough — the board's
+startup scenario is exactly that case, which is why it must be re-measured
+rather than inferred.
 
 For comparison with the previous revision, its QEMU table (500,000 iterations,
 medians of three runs, five kernels) gave RV32 execute/interpreter 0.252
 (locals), 0.682 (constants), 1.305 (fields), 1.262 (arrays), 0.777 (branches).
-The iteration count and run aggregation differ, so treat the change as
-directional: fields and arrays went from clearly slower than the interpreter to
-clearly faster, which is attributable to the new coverage; locals, constants and
-branches did not regress materially.
+The iteration count and aggregation differ, so treat the change as directional:
+fields, arrays and branches went from clearly slower than the interpreter to
+clearly faster, which is attributable to the new coverage and loop compilation;
+locals and constants improved as well.
 
 ## Correctness coverage
 
 Standalone encoder matrices execute real generated code through the port's
 executable-memory hooks in QEMU:
 
-- RV32: 14 build configurations, 45,379 native block invocations and 22,476,585
-  assertions (22,245,302 on the host build).
-- ARM64: 12 configurations, 58,614 invocations and 25,074,430 assertions
-  (24,610,643 on the host build).
+- RV32: 14 build configurations, 38,362 native block invocations and 22,428,156
+  assertions (22,078,150 on the host build).
+- ARM64: 12 configurations, 50,534 invocations and 24,965,155 assertions
+  (24,357,840 on the host build).
 
 The same matrices were repeated under ASan/UBSan with identical assertion
 counts. Each configuration checks complete frame slots byte for byte against the
@@ -203,9 +228,9 @@ callee-saved registers, SP and FPCR.
 
 On RV32 and ARM64 QEMU, the full VM suite passes: `test_jit` (probe/execute
 modes, `SAVE()`, quanta, guards, cache, ownership, failure paths), `test_jit_rv32`
-(1,756,246 assertions, 2,940 compiled blocks, 3,542 native calls on RV32;
-encoding-only 950,186 on ARM64), `test_jit_arm64` (2,321,161 assertions, 4,361
-compiled, 5,211 native on ARM64; encoding-only 1,555,523 on RV32),
+(1,755,790 assertions, 2,981 compiled blocks, 2,987 native calls on RV32;
+encoding-only 934,949 on ARM64), `test_jit_arm64` (2,315,309 assertions, 4,402
+compiled, 4,456 native on ARM64; encoding-only 1,524,664 on RV32),
 `test_jit_perf` (six kernels × three modes, checksums match the oracle),
 `test_vm` (`hello.jar`), `test_engine` (`bench.jar`, 54 checks), `test_lifecycle`,
 `test_blocked_init`, `test_thread_lifecycle` and `test_natives`. The runtime
@@ -226,8 +251,8 @@ and two corpus wording scripts whose tooling is not built here. The same
 categories fail on the pre-change baseline; no JIT test fails.
 
 The structural sample is unchanged in spirit: an 18-bytecode LCG block on RV32 is
-152 bytes with 1 load and 18 stores with compression and register caching on,
-versus 220 bytes and 18 loads with the cache off; ARM64 emits 228 bytes, 18 loads
+154 bytes with 1 load and 18 stores with compression and register caching on,
+versus 222 bytes and 18 loads with the cache off; ARM64 emits 228 bytes, 18 loads
 and 18 stores (the previous 224 plus the BTI entry). This is a code-shape metric,
 not a board speedup.
 
@@ -248,13 +273,19 @@ not a board speedup.
   `NJ_JIT_METHOD_ARENA_BYTES/2` bytecode cells is never JIT'd (2048 bytecodes at
   defaults). That is a deliberate cheap exit; raise the arena for larger hot
   methods.
-- **Memory.** Default metadata is 8408 bytes per VM on RV32 (9576 on LP64), up
+- **Memory.** Default metadata is 9432 bytes per VM on RV32 (10600 on LP64), up
 from about 5000. On
   RAM-constrained parts reduce `NJ_JIT_CACHE_ENTRIES`,
   `NJ_JIT_METHOD_ENTRIES` and `NJ_JIT_METHOD_ARENA_BYTES`; `metadata_bytes`
   reports the resulting size.
 - **Cold start.** Emission and analysis dominate the first few hundred
   iterations; short-lived launches may not amortise them.
+- **Loop budget.** A compiled loop counts every completed bytecode and checks
+  `budget - completed` at its entry label, so a back edge always leaves through
+  a budget exit and a thread cannot starve. The check costs two instructions per
+  iteration; a loop whose trip count is smaller than the block is still compiled
+  when requested, which is why loop blocks are exempt from the minimum block
+  length.
 - **No board run.** This revision was measured only under QEMU. ARM64 emits BTI
   as an entry hint, but a kernel enforcing `PROT_BTI` has not been exercised.
 
@@ -262,18 +293,29 @@ from about 5000. On
 
 Re-run the same 50,000-iteration harness and the startup scenario with
 `--stats` on, keeping the reported clock/PSRAM placement, screen, volume, input,
-fresh RMS and fixed Java work. Fields and arrays now compile, so they should be
-the first place to look for improvement; branches are still interpreted and
-should stay close to their current numbers, while the 1,069,968 startup
-site-history evictions should disappear from the counters. Record cold and
-steady separately, together with `code_bytes`, `metadata_bytes`,
-`method_map_evictions`, `recompiled_blocks`, `faults` and `fallback_ratio`.
+fresh RMS and fixed Java work. Fields and arrays now compile, and conditional
+branches and empty-stack loops compile too, so fields, arrays, branches and the
+scanline/geometry loops that dominate a J2ME game should all move. Record cold
+and steady state separately, together with `code_bytes`, `metadata_bytes`,
+`method_map_evictions`, `recompiled_blocks`, `faults`, `fallback_ratio` and
+`peak_code_bytes`.
 
-Compare `NJ_JIT_METHOD_ENTRIES` 16/32, `NJ_JIT_METHOD_ARENA_BYTES` 2048/4096 and
-`NJ_JIT_MIN_BLOCK_INSNS` 2/4/8 independently, and only then decide whether to
-raise the minimum block length. Conditional branches and backedges are the next
-coverage step; they require exact branch-fault PCs and quantum-debited backedges,
-and 3D-backend profiling remains separate work.
+The startup scenario is the one that must be re-measured: the previous revision
+reported 1,069,968 site-history evictions and 5,000 bytes of metadata there, and
+this revision replaces the site table with per-method maps (9432 bytes on RV32,
+10600 on LP64 at defaults) so those evictions should be gone and the per-bytecode
+probe should be a pointer compare plus one cell load. If the board shows the
+stepping cost still dominating, tune `NJ_JIT_METHOD_ARENA_BYTES` and
+`NJ_JIT_METHOD_ENTRIES` against `method_map_evictions` rather than raising the
+minimum block length globally.
+
+Compare `NJ_JIT_METHOD_ENTRIES` 16/32, `NJ_JIT_METHOD_ARENA_BYTES` 2048/4096,
+`NJ_JIT_MIN_BLOCK_INSNS` 2/4/8 and `NJ_JIT_MAX_EXITS` 2/4 independently. Verify
+that a compiled loop still yields to other threads within the scheduling
+quantum and that a fault inside a loop rewinds to the exact PC and stack depth
+on real hardware, then decide whether branch/loop coverage should expand to
+`tableswitch`/`lookupswitch` and static fields. The 3D-backend profiling the
+report lists as P2 remains separate work, as does the x86_64 backend.
 
 Keep checksum and final-image CRC comparisons: emulator wall time is not a board
 measurement, display submission time must be recorded separately, scheduler FPS

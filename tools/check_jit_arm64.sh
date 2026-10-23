@@ -127,6 +127,10 @@ reject_config max-faults-zero "$REJECT_RANGE" \
     -DNJ_ENABLE_JIT=1 -DNJ_JIT_MAX_FAULTS=0
 reject_config max-faults-big "$REJECT_RANGE" \
     -DNJ_ENABLE_JIT=1 -DNJ_JIT_MAX_FAULTS=17
+reject_config max-exits-zero "$REJECT_RANGE" \
+    -DNJ_ENABLE_JIT=1 -DNJ_JIT_MAX_EXITS=0
+reject_config max-exits-big "$REJECT_RANGE" \
+    -DNJ_ENABLE_JIT=1 -DNJ_JIT_MAX_EXITS=9
 reject_config cache-entries-big "$REJECT_RANGE" \
     -DNJ_ENABLE_JIT=1 -DNJ_JIT_CACHE_ENTRIES=257
 reject_config cache-ways-bad "$REJECT_RANGE" \
@@ -180,7 +184,7 @@ for row in "${ROWS[@]}"; do
           -DNJ_ENABLE_FLOAT="$float"
           -DNJ_JIT_METHOD_ENTRIES="$mentries"
           -DNJ_JIT_METHOD_ARENA_BYTES="$arena"
-          -DNJ_JIT_MAX_FAULTS="$faults"
+          -DNJ_JIT_MAX_FAULTS="$faults" -DNJ_JIT_MAX_EXITS=4
           -DNJ_JIT_CACHE_ENTRIES="$centries" -DNJ_JIT_CACHE_WAYS="$ways"
           -DNJ_JIT_HOT_THRESHOLD="$hot")
     if [[ "$name" == stats-off ]]; then DEFS+=(-DNJ_JIT_STATS=0); fi

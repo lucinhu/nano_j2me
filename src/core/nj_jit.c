@@ -390,8 +390,10 @@ static nj_jit_entry *jit_compile(struct nj_jit *jit, nj_u2 *cell,
         return NULL;
     }
     /* Emission capacity may shorten the analyzed prefix. Refuse before any
-     * code allocation; the cell keeps the refusal. */
-    if (block.insns < NJ_JIT_MIN_BLOCK_INSNS) {
+     * code allocation; the cell keeps the refusal. A bounded loop amortizes
+     * the entry cost over many iterations, so it may be shorter than a plain
+     * straight-line block. */
+    if (block.insns < NJ_JIT_MIN_BLOCK_INSNS && !block.loop) {
         if (cell) *cell = JIT_CELL_REFUSED;
         jit->stats.short_blocks++;
         jit->stats.declined_blocks++;
@@ -513,7 +515,7 @@ int nj_jit_probe(nj_vm *vm, const nj_frame *fr, nj_u4 pc, nj_value *sp,
             jit->stats.declined_blocks++;
             return 0;
         }
-        if (block.insns < NJ_JIT_MIN_BLOCK_INSNS) {
+        if (block.insns < NJ_JIT_MIN_BLOCK_INSNS && !block.loop) {
             *cell = JIT_CELL_REFUSED;
             jit->stats.short_blocks++;
             jit->stats.declined_blocks++;
@@ -560,7 +562,7 @@ nj_u4 nj_jit_execute(nj_vm *vm, nj_frame *fr, nj_u4 *pc, nj_value **sp,
     }
     memcpy(&fn, &e->code, sizeof(fn));
     incoming = *sp;
-    r = fn(incoming, fr->locals);
+    r = fn(incoming, fr->locals, budget);
     JIT_COUNT(jit, executed_blocks, 1u);
 #if NJ_JIT_STATS && NJ_JIT_DETAILED_STATS
     {
@@ -570,8 +572,8 @@ nj_u4 nj_jit_execute(nj_vm *vm, nj_frame *fr, nj_u4 *pc, nj_value **sp,
     }
 #endif
     if ((r & NJ_JIT_FAULT_BIT) != 0u) {
-        nj_u4 index = r & NJ_JIT_FAULT_INDEX_MASK;
-        nj_u4 completed = (r >> 8) & NJ_JIT_FAULT_COMPLETED_MASK;
+        nj_u4 index = (r >> NJ_JIT_FAULT_INDEX_SHIFT) & NJ_JIT_FAULT_INDEX_MASK;
+        nj_u4 completed = r & NJ_JIT_FAULT_COMPLETED_MASK;
         JIT_COUNT(jit, faults, 1u);
         if (index < (nj_u4)e->block.nfaults) {
             *pc = e->pc + e->block.faults[index].pc_off;
@@ -583,16 +585,28 @@ nj_u4 nj_jit_execute(nj_vm *vm, nj_frame *fr, nj_u4 *pc, nj_value **sp,
             *sp = incoming;
             completed = 0u;
         }
+        if (completed > budget) completed = budget;
         JIT_COUNT(jit, bytecodes, completed);
         /* The same guard failed before the block completed a single bytecode:
          * pinning the site to the interpreter avoids compile/fault churn. */
         if (completed == 0u && ticket->cell) *ticket->cell = JIT_CELL_REFUSED;
         return completed;
     }
-    *pc = e->block.next_pc;
-    *sp = incoming + e->block.stack_delta;
-    JIT_COUNT(jit, bytecodes, e->block.insns);
-    return e->block.insns;
+    {
+        nj_u4 which = r & NJ_JIT_EXIT_INDEX_MASK;
+        nj_u4 completed = r >> NJ_JIT_EXIT_SHIFT;
+        if (which >= (nj_u4)e->block.nexits || completed == 0u ||
+            completed > budget) {
+            /* Malformed block: let the interpreter re-enter at the entry. */
+            *pc = e->pc;
+            *sp = incoming;
+            return 0u;
+        }
+        *pc = e->pc + e->block.exits[which].pc_off;
+        *sp = incoming + e->block.exits[which].sp_delta;
+        JIT_COUNT(jit, bytecodes, completed);
+        return completed;
+    }
 #else
     (void)vm; (void)fr; (void)pc; (void)sp; (void)budget; (void)ticket;
     return 0;

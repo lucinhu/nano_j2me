@@ -1,19 +1,28 @@
 /*
- * Bounded RV32 baseline blocks with guard faults.
+ * Bounded RV32 baseline blocks with guard faults, forward branches and
+ * bounded loops.
  *
  * A generated block has the ABI
- *     nj_u4 block(nj_value *incoming_sp, nj_value *locals)
- * and uses only a0/a1 (the argument registers; a1 is untouched, a0 carries
- * the exit word), t0/t1/t2 and ft0/ft1.
+ *     nj_u4 block(nj_value *incoming_sp, nj_value *locals, nj_u4 budget)
+ * and uses only a0/a1/a2/a3 (the argument registers; a1 is untouched, a0
+ * carries the result word, a2 the remaining budget and a3 the completed-
+ * bytecode counter), t0/t1/t2/t3/t4/t5 and ft0/ft1.
  * It never changes the native stack, a callee-saved register, or a Java frame.
  *
- * It returns the number of bytecodes it finished. A guard that can fail at run
- * time (null receiver, array type/length, zero divisor) branches to a per-fault
- * exit that returns
- *     NJ_JIT_FAULT_BIT | (completed << 8) | fault_index
+ * It returns
+ *     (completed << NJ_JIT_EXIT_SHIFT) | exit_index
+ * where exit_index selects block->exits[]: 0 is the end of the straight-line
+ * window, other exits are taken forward branches that leave the window and the
+ * quantum-budget check at the top of a loop. A guard that can fail at run time
+ * (null receiver, array type/length, zero divisor) branches to a per-fault exit
+ * that returns
+ *     NJ_JIT_FAULT_BIT | (fault_index << 24) | completed
  * before touching any memory, so the C caller can rewind pc/sp and let the
  * interpreter re-execute exactly that instruction and raise the Java exception
- * with the interpreter's own PC. See nj_jit_internal.h for the contract.
+ * with the interpreter's own PC. A loop keeps a bytecode counter and verifies
+ * `budget - completed >= window size` before every iteration, so native code
+ * always returns after at most `budget` bytecodes. See nj_jit_internal.h for
+ * the contract.
  *
  * This is a portable encoder, including on a non-RISC-V build host. All target
  * words are emitted explicitly little-endian; no host executable pointer or
@@ -25,7 +34,8 @@
 
 enum {
     RV_ZERO = 0, RV_RA = 1, RV_T0 = 5, RV_T1 = 6, RV_T2 = 7,
-    RV_SP_ARG = 10, RV_LOCALS_ARG = 11,
+    RV_SP_ARG = 10, RV_LOCALS_ARG = 11, RV_A2 = 12, RV_A3 = 13,
+    RV_T3 = 28, RV_T4 = 29, RV_T5 = 30,
     RV_FT0 = 0, RV_FT1 = 1,
     RV_SLOT_BYTES = 8,
     /* Header offsets of nj_object; field payloads follow the header. */
@@ -50,10 +60,20 @@ typedef struct rv_cached {
 
 #endif
 
+enum {
+    RV_FIX_FAULT = 0u,   /* target is a fault-exit index          */
+    RV_FIX_EXIT = 1u,    /* target is a block-exit index          */
+    RV_FIX_LABEL = 2u    /* target is an instruction (label) index */
+};
+#define RV_MAX_FIXUPS 192u
+#define RV_MAX_LABELS ((unsigned)NJ_JIT_MAX_BLOCK_INSNS + 1u)
+#define RV_NO_LABEL ((nj_size)(-1))
+
 typedef struct rv_fixup {
     nj_size at;       /* offset of the branch word inside the buffer */
     nj_u4 word;       /* branch with a zero displacement */
-    nj_u1 fault;      /* fault exit index */
+    nj_u1 kind;       /* RV_FIX_* */
+    nj_u2 target;     /* fault index, exit index or instruction index */
 } rv_fixup;
 
 typedef struct rv_writer {
@@ -61,8 +81,10 @@ typedef struct rv_writer {
     nj_size used;
     nj_size capacity;
     int failed;
-    nj_u1 nfixups;
-    rv_fixup fixups[NJ_JIT_MAX_FAULTS * 4];
+    unsigned nfixups;
+    rv_fixup fixups[RV_MAX_FIXUPS];
+    int counter;      /* track completed bytecodes in a3 */
+    int loop;         /* emit the budget check at the loop head */
 #if NJ_JIT_RV32_REG_CACHE
     rv_cached regs[2];
 #endif
@@ -77,6 +99,8 @@ typedef struct rv_bytecode {
     nj_u4 length;
     const nj_field *field;   /* getfield/putfield only */
     int guarding;            /* instruction can fault at run time */
+    int branch;              /* 0 none, 1 conditional, 2 unconditional */
+    nj_u4 target;            /* absolute branch target pc */
 } rv_bytecode;
 
 #if NJ_JIT_RV32_REG_CACHE
@@ -191,6 +215,13 @@ static void rv_record_store(rv_writer *w, unsigned opcode, unsigned funct3,
             c->memory = 1;
         }
     }
+}
+#endif
+
+#if !NJ_JIT_RV32_REG_CACHE
+static void rv_forget_memory(rv_writer *w)
+{
+    (void)w;
 }
 #endif
 
@@ -392,12 +423,12 @@ static void rv_copy_slot(rv_writer *w, unsigned dst, int dst_offset,
 /* ---- branches and fault exits ---------------------------------------- */
 
 static void rv_branch(rv_writer *w, unsigned funct3, unsigned rs1,
-                      unsigned rs2, unsigned fault)
+                      unsigned rs2, unsigned kind, unsigned target)
 {
     nj_u4 word = ((nj_u4)rs2 << 20) | ((nj_u4)rs1 << 15) |
                  ((nj_u4)funct3 << 12) | 0x63u;
     if (w->failed) return;
-    if (w->nfixups >= (nj_u1)(sizeof(w->fixups) / sizeof(w->fixups[0]))) {
+    if (w->nfixups >= RV_MAX_FIXUPS) {
         w->failed = 1;
         return;
     }
@@ -407,25 +438,35 @@ static void rv_branch(rv_writer *w, unsigned funct3, unsigned rs1,
     }
     w->fixups[w->nfixups].at = w->used;
     w->fixups[w->nfixups].word = word;
-    w->fixups[w->nfixups].fault = (nj_u1)fault;
+    w->fixups[w->nfixups].kind = (nj_u1)kind;
+    w->fixups[w->nfixups].target = (nj_u2)target;
     w->nfixups++;
     rv_u32(w, word);
 }
 
 static void rv_guard_zero(rv_writer *w, unsigned rs, unsigned fault)
 {
-    rv_branch(w, 0u, rs, RV_ZERO, fault);          /* beq rs, zero */
+    rv_branch(w, 0u, rs, RV_ZERO, RV_FIX_FAULT, fault);  /* beq rs, zero */
 }
 
 static void rv_guard_nonzero(rv_writer *w, unsigned rs, unsigned fault)
 {
-    rv_branch(w, 1u, rs, RV_ZERO, fault);          /* bne rs, zero */
+    rv_branch(w, 1u, rs, RV_ZERO, RV_FIX_FAULT, fault);  /* bne rs, zero */
 }
 
 static void rv_guard_geu(rv_writer *w, unsigned rs1, unsigned rs2,
                          unsigned fault)
 {
-    rv_branch(w, 7u, rs1, rs2, fault);             /* bgeu rs1, rs2 */
+    rv_branch(w, 7u, rs1, rs2, RV_FIX_FAULT, fault);     /* bgeu rs1, rs2 */
+}
+
+static void rv_ret(rv_writer *w)
+{
+#if NJ_JIT_RV32_C
+    rv_u16(w, 0x8082u); /* c.jr ra */
+#else
+    rv_i(w, 0x67u, 0u, RV_ZERO, RV_RA, 0); /* jalr zero, ra, 0 */
+#endif
 }
 
 static void rv_patch_branch(nj_u1 *buf, const rv_fixup *f, nj_size target)
@@ -444,8 +485,10 @@ static void rv_patch_branch(nj_u1 *buf, const rv_fixup *f, nj_size target)
 
 static nj_u4 rv_fault_word(unsigned index, nj_u4 completed)
 {
-    return NJ_JIT_FAULT_BIT | ((completed & 0xffu) << 8) |
-           (index & NJ_JIT_FAULT_INDEX_MASK);
+    return NJ_JIT_FAULT_BIT |
+           ((nj_u4)(index & NJ_JIT_FAULT_INDEX_MASK) <<
+            NJ_JIT_FAULT_INDEX_SHIFT) |
+           (completed & NJ_JIT_FAULT_COMPLETED_MASK);
 }
 
 /* ---- decoding -------------------------------------------------------- */
@@ -490,6 +533,8 @@ static int rv_decode(nj_vm *vm, const nj_method *m, nj_u4 pc, rv_bytecode *b)
     b->length = 1u;
     b->field = NULL;
     b->guarding = 0;
+    b->branch = 0;
+    b->target = pc;
 
     if (op == 0xc4u) { /* wide: no partial operand reads */
         if (left < 4u) return 0;
@@ -647,6 +692,56 @@ static int rv_decode(nj_vm *vm, const nj_method *m, nj_u4 pc, rv_bytecode *b)
         if (!vm) return 0;
         b->need = 1;
         b->guarding = 1;
+        return 1;
+    case 0x99: case 0x9a: case 0x9b: case 0x9c:
+    case 0x9d: case 0x9e: /* if<cond>: pop 1, signed compare against zero */
+        b->length = 3u;
+        if (left < 3u) return 0;
+        b->immediate = rv_s16(((unsigned)code[1] << 8) | code[2]);
+        if (pc + (nj_u4)b->immediate >= m->code_len) return 0;
+        b->need = 1;
+        b->change = -1;
+        b->branch = 1;
+        b->target = pc + (nj_u4)b->immediate;
+        return 1;
+    case 0x9f: case 0xa0: case 0xa1: case 0xa2:
+    case 0xa3: case 0xa4: /* if_icmp<cond>: pop 2 */
+        b->length = 3u;
+        if (left < 3u) return 0;
+        b->immediate = rv_s16(((unsigned)code[1] << 8) | code[2]);
+        if (pc + (nj_u4)b->immediate >= m->code_len) return 0;
+        b->need = 2;
+        b->change = -2;
+        b->branch = 1;
+        b->target = pc + (nj_u4)b->immediate;
+        return 1;
+    case 0xa5: case 0xa6: /* if_acmpeq/ne: RV32 references are 32 bits */
+        b->length = 3u;
+        if (left < 3u) return 0;
+        b->immediate = rv_s16(((unsigned)code[1] << 8) | code[2]);
+        if (pc + (nj_u4)b->immediate >= m->code_len) return 0;
+        b->need = 2;
+        b->change = -2;
+        b->branch = 1;
+        b->target = pc + (nj_u4)b->immediate;
+        return 1;
+    case 0xa7: /* goto */
+        b->length = 3u;
+        if (left < 3u) return 0;
+        b->immediate = rv_s16(((unsigned)code[1] << 8) | code[2]);
+        if (pc + (nj_u4)b->immediate >= m->code_len) return 0;
+        b->branch = 2;
+        b->target = pc + (nj_u4)b->immediate;
+        return 1;
+    case 0xc6: case 0xc7: /* ifnull / ifnonnull */
+        b->length = 3u;
+        if (left < 3u) return 0;
+        b->immediate = rv_s16(((unsigned)code[1] << 8) | code[2]);
+        if (pc + (nj_u4)b->immediate >= m->code_len) return 0;
+        b->need = 1;
+        b->change = -1;
+        b->branch = 1;
+        b->target = pc + (nj_u4)b->immediate;
         return 1;
 #if NJ_ENABLE_FLOAT && NJ_JIT_RV32_F
     case 0x62: case 0x66: case 0x6a: case 0x6e: /* float binary */
@@ -971,55 +1066,193 @@ static void rv_emit(rv_writer *w, const rv_bytecode *b, int delta,
 
 /* ---- block assembly -------------------------------------------------- */
 
-/* Decide whether one more instruction fits the block's fault budget. */
-static int rv_accept(const nj_jit_block *block, const rv_bytecode *b)
-{
-    if (b->guarding && block->nfaults >= NJ_JIT_MAX_FAULTS) return 0;
-    /* A throwing integer division may not follow mutations in a block: if it
-     * faults, the interpreter must observe the untouched incoming stack. */
-    if ((b->op == 0x6cu || b->op == 0x70u) && block->insns != 0u) return 0;
-    return 1;
-}
+/* A decoded window plus the branch bookkeeping the emitter needs. Scanning is
+ * shared by analyze (metadata only) and compile (metadata + code) so a compiled
+ * block and its analyzed twin never disagree. */
+typedef struct rv_scan {
+    rv_bytecode ins[NJ_JIT_MAX_BLOCK_INSNS];
+    nj_u4 pcs[NJ_JIT_MAX_BLOCK_INSNS];
+    int delta[NJ_JIT_MAX_BLOCK_INSNS];       /* operand depth before the insn */
+    nj_u1 label[NJ_JIT_MAX_BLOCK_INSNS];     /* branch target instructions    */
+    nj_u1 br_kind[NJ_JIT_MAX_BLOCK_INSNS];   /* RV_BR_*                       */
+    nj_u2 br_target[NJ_JIT_MAX_BLOCK_INSNS]; /* label index / exit index      */
+    nj_u1 fault_of[NJ_JIT_MAX_BLOCK_INSNS];  /* fault index, RV_NO_FAULT      */
+    nj_u1 fault_completed[NJ_JIT_MAX_FAULTS];
+    nj_u4 jump_insn[NJ_JIT_MAX_BLOCK_INSNS];
+    nj_u4 jump_target[NJ_JIT_MAX_BLOCK_INSNS];
+    int jump_delta[NJ_JIT_MAX_BLOCK_INSNS];
+    nj_u1 jump_back[NJ_JIT_MAX_BLOCK_INSNS];
+    unsigned n;
+    unsigned njumps;
+    nj_u4 start;
+    nj_u4 end;
+    int final_delta;
+    int min_stack;
+    int max_growth;
+    int loop;
+    unsigned budget_exit;
+    nj_jit_block block;
+} rv_scan;
 
-static int rv_terminates(const rv_bytecode *b)
+enum {
+    RV_BR_NONE = 0u,
+    RV_BR_INTERNAL = 1u,
+    RV_BR_EXIT = 2u,
+    RV_BR_BACK = 3u,
+    RV_NO_FAULT = 0xffu
+};
+
+static int rv_scan_build(nj_vm *vm, const nj_method *m, nj_u4 pc, rv_scan *s)
 {
-    return b->op == 0x6cu || b->op == 0x70u;
+    nj_u4 pos = pc;
+    int depth = 0;
+    int min_stack = 0;
+    int max_growth = 0;
+    unsigned n = 0u;
+    unsigned njumps = 0u;
+    unsigned nfaults = 0u;
+    unsigned i;
+    int loop = 0;
+
+    memset(s, 0, sizeof(*s));
+    s->start = pc;
+    while (pos < m->code_len && n < NJ_JIT_MAX_BLOCK_INSNS) {
+        rv_bytecode b;
+        int delta, required, growth;
+
+        if (!rv_decode(vm, m, pos, &b)) break;
+        if (b.guarding && nfaults >= NJ_JIT_MAX_FAULTS) break;
+        /* A throwing division may not follow mutations: the interpreter has to
+         * observe the incoming stack when it re-executes the instruction. */
+        if ((b.op == 0x6cu || b.op == 0x70u) && n != 0u) break;
+        /* A forward branch must land on the instruction it was recorded with
+         * the same operand depth, or the block is not a single-entry region. */
+        for (i = 0u; i < njumps; ++i) {
+            if (!s->jump_back[i] && s->jump_target[i] == pos &&
+                s->jump_delta[i] != depth) {
+                return 0;
+            }
+        }
+        delta = depth + b.change;
+        required = b.need - depth;
+        if (required < min_stack) required = min_stack;
+        growth = delta > max_growth ? delta : max_growth;
+        if (required + growth > (int)m->max_stack) break;
+
+        s->ins[n] = b;
+        s->pcs[n] = pos;
+        s->delta[n] = depth;
+        if (b.branch != 0) {
+            if (njumps >= NJ_JIT_MAX_BLOCK_INSNS) return 0;
+            if (b.target < pos) {
+                /* Only a loop back to the entry with an empty operand stack is
+                 * bounded by the block's own budget check. */
+                if (b.target != s->start || delta != 0) return 0;
+                s->jump_back[njumps] = 1u;
+                loop = 1;
+            } else if (b.target == pos) {
+                return 0; /* one-instruction infinite loop */
+            } else {
+                s->jump_back[njumps] = 0u;
+            }
+            s->jump_insn[njumps] = n;
+            s->jump_target[njumps] = b.target;
+            s->jump_delta[njumps] = delta;
+            njumps++;
+        }
+        if (b.guarding) {
+            s->fault_of[n] = (nj_u1)nfaults;
+            s->fault_completed[nfaults] = (nj_u1)n;
+            nfaults++;
+        } else {
+            s->fault_of[n] = RV_NO_FAULT;
+        }
+        n++;
+        pos = (nj_u4)(pos + b.length);
+        depth = delta;
+        min_stack = required;
+        max_growth = growth;
+        if (b.op == 0x6cu || b.op == 0x70u) break;
+    }
+    if (n == 0u) return 0;
+
+    s->n = n;
+    s->end = pos;
+    s->final_delta = depth;
+    s->min_stack = min_stack;
+    s->max_growth = max_growth;
+    s->njumps = njumps;
+    s->loop = loop;
+    s->budget_exit = 0xffffu;
+
+    /* exits[0] is the end of the straight-line window. */
+    s->block.exits[0].pc_off = (nj_u2)(s->end - s->start);
+    s->block.exits[0].sp_delta = (nj_s2)s->final_delta;
+    s->block.nexits = 1u;
+
+    for (i = 0u; i < njumps; ++i) {
+        unsigned insn = s->jump_insn[i];
+        if (s->jump_back[i]) {
+            s->br_kind[insn] = (nj_u1)RV_BR_BACK;
+            s->label[0] = 1u;
+            continue;
+        }
+        if (s->jump_target[i] >= s->end) {
+            int exit = nj_jit_record_exit(&s->block, s->start,
+                                          s->jump_target[i], s->jump_delta[i]);
+            if (exit < 0) return 0;
+            s->br_kind[insn] = (nj_u1)RV_BR_EXIT;
+            s->br_target[insn] = (nj_u2)exit;
+        } else {
+            unsigned k;
+            int found = 0;
+            for (k = 0u; k < n; ++k) {
+                if (s->pcs[k] == s->jump_target[i]) {
+                    s->label[k] = 1u;
+                    s->br_kind[insn] = (nj_u1)RV_BR_INTERNAL;
+                    s->br_target[insn] = (nj_u2)k;
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) return 0; /* target is not an instruction boundary */
+        }
+    }
+    if (loop) {
+        int exit = nj_jit_record_exit(&s->block, s->start, s->start, 0);
+        if (exit < 0) return 0;
+        s->budget_exit = (unsigned)exit;
+        s->label[0] = 1u;
+    }
+    for (i = 0u; i < n; ++i) {
+        if (s->fault_of[i] != RV_NO_FAULT &&
+            !nj_jit_record_fault(&s->block, s->start, s->pcs[i],
+                                 s->delta[i])) {
+            return 0;
+        }
+    }
+    s->block.next_pc = s->end;
+    s->block.insns = n;
+    s->block.stack_delta = s->final_delta;
+    s->block.min_stack = min_stack;
+    s->block.max_growth = max_growth;
+    s->block.nfaults = (nj_u1)nfaults;
+    s->block.loop = (nj_u1)(loop ? 1u : 0u);
+    s->block.size = 0u;
+    return 1;
 }
 
 static int rv_analyze_impl(nj_vm *vm, const nj_method *m, nj_u4 pc,
                            nj_jit_block *out)
 {
-    nj_jit_block block;
+    rv_scan scan;
     if (!out) return 0;
     memset(out, 0, sizeof(*out));
     if (!m || !m->code || pc >= m->code_len ||
         sizeof(nj_value) != RV_SLOT_BYTES || m->code_len - pc > 0xffffu)
         return 0;
-    memset(&block, 0, sizeof(block));
-    block.next_pc = pc;
-    while (block.next_pc < m->code_len &&
-           block.insns < NJ_JIT_MAX_BLOCK_INSNS) {
-        rv_bytecode b;
-        int delta, required, growth;
-        if (!rv_decode(vm, m, block.next_pc, &b)) break;
-        if (!rv_accept(&block, &b)) break;
-        delta = block.stack_delta + b.change;
-        required = b.need - block.stack_delta;
-        if (required < block.min_stack) required = block.min_stack;
-        growth = delta > block.max_growth ? delta : block.max_growth;
-        if (required + growth > (int)m->max_stack) break;
-        if (b.guarding &&
-            !nj_jit_record_fault(&block, pc, block.next_pc, block.stack_delta))
-            break;
-        block.next_pc += b.length;
-        block.insns++;
-        block.stack_delta = delta;
-        block.min_stack = required;
-        block.max_growth = growth;
-        if (rv_terminates(&b)) break;
-    }
-    if (block.insns == 0u) return 0;
-    *out = block;
+    if (!rv_scan_build(vm, m, pc, &scan)) return 0;
+    *out = scan.block;
     return 1;
 }
 
@@ -1028,111 +1261,212 @@ int nj_rv32_analyze(nj_vm *vm, const nj_method *m, nj_u4 pc, nj_jit_block *out)
     return rv_analyze_impl(vm, m, pc, out);
 }
 
+/* ---- emission -------------------------------------------------------- */
+
+static void rv_emit_jump(rv_writer *w, unsigned kind, unsigned target)
+{
+    /* beq zero, zero: an unconditional branch that reuses the B-type fixup. */
+    rv_branch(w, 0u, RV_ZERO, RV_ZERO, kind, target);
+}
+
+/* Take the branch at instruction `insn`, popping its operands. The completed-
+ * bytecode counter is advanced before either path leaves the instruction. */
+static void rv_emit_branch(rv_writer *w, const rv_scan *s, unsigned insn)
+{
+    const rv_bytecode *b = &s->ins[insn];
+    int top = s->delta[insn] * RV_SLOT_BYTES;
+    unsigned kind, target;
+    unsigned f3 = 0u, rs1 = RV_ZERO, rs2 = RV_ZERO;
+
+    if (s->br_kind[insn] == RV_BR_BACK) {
+        kind = RV_FIX_LABEL;
+        target = 0u;
+    } else if (s->br_kind[insn] == RV_BR_INTERNAL) {
+        kind = RV_FIX_LABEL;
+        target = s->br_target[insn];
+    } else {
+        kind = RV_FIX_EXIT;
+        target = s->br_target[insn];
+    }
+
+    if (b->branch == 2) { /* goto */
+        if (w->counter) rv_addi(w, RV_A3, RV_A3, 1);
+        rv_emit_jump(w, kind, target);
+        return;
+    }
+    /* Java stack order: value1 was pushed first (the lower slot), value2 is
+     * on top. The case table below compares value1 in RV_T0 against value2 in
+     * RV_T1, so load the deeper slot into RV_T0 first. */
+    if (b->need == 2) {
+        rv_load(w, RV_T0, RV_SP_ARG, top - 2 * RV_SLOT_BYTES);
+        rv_load(w, RV_T1, RV_SP_ARG, top - RV_SLOT_BYTES);
+    } else {
+        rv_load(w, RV_T0, RV_SP_ARG, top - RV_SLOT_BYTES);
+    }
+
+    switch (b->op) {
+    case 0x99: f3 = 0u; rs1 = RV_T0; rs2 = RV_ZERO; break; /* ifeq  */
+    case 0x9a: f3 = 1u; rs1 = RV_T0; rs2 = RV_ZERO; break; /* ifne  */
+    case 0x9b: /* iflt: slt t2, t0, zero; bne */
+        rv_r(w, 0x33u, 0u, 2u, RV_T2, RV_T0, RV_ZERO);
+        f3 = 1u; rs1 = RV_T2; rs2 = RV_ZERO; break;
+    case 0x9c: f3 = 5u; rs1 = RV_T0; rs2 = RV_ZERO; break; /* ifge  */
+    case 0x9d: /* ifgt: slt t2, zero, t0; bne */
+        rv_r(w, 0x33u, 0u, 2u, RV_T2, RV_ZERO, RV_T0);
+        f3 = 1u; rs1 = RV_T2; rs2 = RV_ZERO; break;
+    case 0x9e: /* ifle: slt t2, zero, t0; beq */
+        rv_r(w, 0x33u, 0u, 2u, RV_T2, RV_ZERO, RV_T0);
+        f3 = 0u; rs1 = RV_T2; rs2 = RV_ZERO; break;
+    case 0x9f: f3 = 0u; rs1 = RV_T0; rs2 = RV_T1; break; /* if_icmpeq */
+    case 0xa0: f3 = 1u; rs1 = RV_T0; rs2 = RV_T1; break; /* if_icmpne */
+    case 0xa1: /* if_icmplt: slt t2, t0, t1; bne */
+        rv_r(w, 0x33u, 0u, 2u, RV_T2, RV_T0, RV_T1);
+        f3 = 1u; rs1 = RV_T2; rs2 = RV_ZERO; break;
+    case 0xa2: /* if_icmpge */
+        rv_r(w, 0x33u, 0u, 2u, RV_T2, RV_T0, RV_T1);
+        f3 = 0u; rs1 = RV_T2; rs2 = RV_ZERO; break;
+    case 0xa3: /* if_icmpgt: slt t2, t1, t0; bne */
+        rv_r(w, 0x33u, 0u, 2u, RV_T2, RV_T1, RV_T0);
+        f3 = 1u; rs1 = RV_T2; rs2 = RV_ZERO; break;
+    case 0xa4: /* if_icmple */
+        rv_r(w, 0x33u, 0u, 2u, RV_T2, RV_T1, RV_T0);
+        f3 = 0u; rs1 = RV_T2; rs2 = RV_ZERO; break;
+    case 0xa5: f3 = 0u; rs1 = RV_T0; rs2 = RV_T1; break; /* if_acmpeq */
+    case 0xa6: f3 = 1u; rs1 = RV_T0; rs2 = RV_T1; break; /* if_acmpne */
+    case 0xc6: f3 = 0u; rs1 = RV_T0; rs2 = RV_ZERO; break; /* ifnull    */
+    case 0xc7: f3 = 1u; rs1 = RV_T0; rs2 = RV_ZERO; break; /* ifnonnull */
+    default: w->failed = 1; return;
+    }
+    if (w->counter) rv_addi(w, RV_A3, RV_A3, 1);
+    rv_branch(w, f3, rs1, rs2, kind, target);
+}
+
+static int rv_emit_block(rv_writer *w, const rv_scan *s, nj_size capacity)
+{
+    const nj_jit_block *block = &s->block;
+    nj_size label_at[NJ_JIT_MAX_BLOCK_INSNS];
+    nj_size exit_at[NJ_JIT_MAX_EXITS];
+    nj_size fault_at[NJ_JIT_MAX_FAULTS];
+    nj_size reserve;
+    unsigned i;
+
+    for (i = 0u; i < (unsigned)NJ_JIT_MAX_BLOCK_INSNS; ++i) {
+        label_at[i] = RV_NO_LABEL;
+    }
+    /* Stub bytes are budgeted up front so the instruction stream can never
+     * crowd out the exits it branches to. */
+    reserve = 16u * ((nj_size)block->nexits + (nj_size)block->nfaults) + 16u;
+    if (capacity <= reserve + 8u) return 0;
+    if (w->used > capacity - reserve) return 0;
+    w->capacity = capacity - reserve;
+
+    if (s->njumps != 0u) {
+        w->counter = 1;
+        rv_li(w, RV_A3, 0); /* completed = 0 */
+    }
+    w->loop = s->loop ? 1 : 0;
+
+    for (i = 0u; i < s->n; ++i) {
+        if (i == 0u && s->loop != 0) {
+            label_at[0] = w->used;
+            /* remaining = budget - completed; enter another iteration only
+             * when a whole window still fits. */
+            rv_r(w, 0x33u, 0x20u, 0u, RV_T3, RV_A2, RV_A3);
+            rv_li(w, RV_T4, (nj_s4)s->n);
+            rv_branch(w, 6u, RV_T3, RV_T4, RV_FIX_EXIT,
+                      s->budget_exit); /* bltu t3, t4 */
+            rv_forget_memory(w);
+        } else if (s->label[i]) {
+            label_at[i] = w->used;
+            rv_forget_memory(w);
+        }
+        if (s->ins[i].branch != 0) {
+            rv_emit_branch(w, s, i);
+        } else {
+            unsigned fault = s->fault_of[i] == RV_NO_FAULT ?
+                             0u : (unsigned)s->fault_of[i];
+            rv_emit(w, &s->ins[i], s->delta[i], fault);
+            if (w->counter) rv_addi(w, RV_A3, RV_A3, 1);
+        }
+        if (w->failed) return 0;
+    }
+
+    w->capacity = capacity;
+    /* Exit stubs: a0 = (completed << 4) | exit_index. */
+    for (i = 0u; i < (unsigned)block->nexits; ++i) {
+        exit_at[i] = w->used;
+        if (w->counter) {
+            rv_i(w, 0x13u, 1u, RV_SP_ARG, RV_A3, (int)NJ_JIT_EXIT_SHIFT);
+            if (i != 0u) {
+                rv_i(w, 0x13u, 6u, RV_SP_ARG, RV_SP_ARG, (int)i); /* ori */
+            }
+        } else {
+            rv_li(w, RV_SP_ARG,
+                  (nj_s4)(((nj_u4)block->insns << NJ_JIT_EXIT_SHIFT) |
+                          (nj_u4)i));
+        }
+        rv_ret(w);
+    }
+    /* Fault stubs: a0 = fault word carrying the live completed count. */
+    for (i = 0u; i < (unsigned)block->nfaults; ++i) {
+        fault_at[i] = w->used;
+        if (w->counter) {
+            rv_li(w, RV_T5,
+                  (nj_s4)(NJ_JIT_FAULT_BIT |
+                          ((nj_u4)i << NJ_JIT_FAULT_INDEX_SHIFT)));
+            rv_r(w, 0x33u, 0u, 6u, RV_SP_ARG, RV_T5, RV_A3);
+        } else {
+            rv_li(w, RV_SP_ARG,
+                  (nj_s4)rv_fault_word(i, (nj_u4)s->fault_completed[i]));
+        }
+        rv_ret(w);
+    }
+    if (w->failed) return 0;
+
+    for (i = 0u; i < w->nfixups; ++i) {
+        const rv_fixup *f = &w->fixups[i];
+        nj_size target;
+        if (f->kind == RV_FIX_FAULT) {
+            if (f->target >= block->nfaults) return 0;
+            target = fault_at[f->target];
+        } else if (f->kind == RV_FIX_EXIT) {
+            if (f->target >= block->nexits) return 0;
+            target = exit_at[f->target];
+        } else if (f->kind == RV_FIX_LABEL) {
+            if (f->target >= s->n || label_at[f->target] == RV_NO_LABEL) {
+                return 0;
+            }
+            target = label_at[f->target];
+        } else {
+            return 0;
+        }
+        rv_patch_branch(w->buf, f, target);
+    }
+    return 1;
+}
+
 int nj_rv32_compile(nj_vm *vm, const nj_method *m, nj_u4 pc, nj_u1 *buf,
                     nj_size capacity, nj_jit_block *out)
 {
+    rv_scan scan;
     rv_writer w;
-    nj_jit_block block;
-    nj_u1 completed[NJ_JIT_MAX_FAULTS];
-    nj_size stub_at[NJ_JIT_MAX_FAULTS];
-    nj_u1 i;
     if (!out) return 0;
     memset(out, 0, sizeof(*out));
     if (!m || !m->code || !buf || pc >= m->code_len ||
         sizeof(nj_value) != RV_SLOT_BYTES || m->code_len - pc > 0xffffu)
         return 0;
     if (capacity > NJ_JIT_MAX_CODE_BYTES) capacity = NJ_JIT_MAX_CODE_BYTES;
-    if (capacity < RV_EXIT_RESERVE + 4u) return 0;
-    memset(&block, 0, sizeof(block));
-    block.next_pc = pc;
+    if (!rv_scan_build(vm, m, pc, &scan)) return 0;
     memset(&w, 0, sizeof(w));
-    memset(completed, 0, sizeof(completed));
     w.buf = buf;
     w.used = 0u;
     w.capacity = capacity;
     w.failed = 0;
     w.nfixups = 0u;
-
-    while (block.next_pc < m->code_len &&
-           block.insns < NJ_JIT_MAX_BLOCK_INSNS) {
-        rv_bytecode b;
-        rv_writer checkpoint = w;
-        int delta, required, growth;
-        unsigned fault = block.nfaults;
-        if (!rv_decode(vm, m, block.next_pc, &b)) break;
-        if (!rv_accept(&block, &b)) break;
-        delta = block.stack_delta + b.change;
-        required = b.need - block.stack_delta;
-        if (required < block.min_stack) required = block.min_stack;
-        growth = delta > block.max_growth ? delta : block.max_growth;
-        if (required + growth > (int)m->max_stack) break;
-        {
-            /* Every guarded instruction owns one exit stub after the success
-             * exit. Keep those bytes out of this instruction's budget so a
-             * fault can never overflow the buffer during final emission. */
-            nj_size exits = RV_EXIT_RESERVE *
-                (nj_size)(block.nfaults + (b.guarding ? 1u : 0u) + 1u);
-            if (capacity < exits || w.used > capacity - exits) break;
-            w.capacity = capacity - exits;
-        }
-        rv_emit(&w, &b, block.stack_delta, fault);
-        if (w.failed) {
-            /* Discard only this instruction. The reserved return overwrites
-             * its first bytes; no partial instruction enters the live block.
-             * Restore register knowledge, output position and fixups. */
-            w = checkpoint;
-            break;
-        }
-        if (b.guarding) {
-            completed[fault] = (nj_u1)block.insns;
-            (void)nj_jit_record_fault(&block, pc, block.next_pc,
-                                      block.stack_delta);
-            block.nfaults = (nj_u1)(fault + 1u);
-        }
-        block.next_pc += b.length;
-        block.insns++;
-        block.stack_delta = delta;
-        block.min_stack = required;
-        block.max_growth = growth;
-        if (rv_terminates(&b)) break;
-    }
-    if (block.insns == 0u) return 0;
-
-    /* Success exit: a0 = number of finished bytecodes, then return to C. */
-    w.capacity = capacity;
-    rv_li(&w, RV_SP_ARG, (nj_s4)block.insns);
-#if NJ_JIT_RV32_C
-    rv_u16(&w, 0x8082u); /* c.jr ra */
-#else
-    rv_i(&w, 0x67u, 0u, RV_ZERO, RV_RA, 0); /* jalr zero, ra, 0 */
-#endif
-    if (w.failed) return 0;
-
-    /* One fault exit per guarded instruction. Each is a forward branch target
-     * reached before the instruction's first side effect. */
-    for (i = 0u; i < block.nfaults; i++) {
-        stub_at[i] = w.used;
-        rv_li(&w, RV_SP_ARG, (nj_s4)rv_fault_word(i, (nj_u4)completed[i]));
-#if NJ_JIT_RV32_C
-        rv_u16(&w, 0x8082u);
-#else
-        rv_i(&w, 0x67u, 0u, RV_ZERO, RV_RA, 0);
-#endif
-    }
-    if (w.failed) return 0;
-
-    for (i = 0u; i < w.nfixups; i++) {
-        unsigned f = w.fixups[i].fault;
-        if (f >= block.nfaults) {
-            w.failed = 1;
-            break;
-        }
-        rv_patch_branch(buf, &w.fixups[i], stub_at[f]);
-    }
-    if (w.failed) return 0;
-
-    block.size = w.used;
-    *out = block;
+    if (!rv_emit_block(&w, &scan, capacity)) return 0;
+    if (w.used > capacity || w.failed) return 0;
+    scan.block.size = w.used;
+    *out = scan.block;
     return 1;
 }
 #endif /* NJ_ENABLE_JIT */

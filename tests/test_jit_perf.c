@@ -328,13 +328,13 @@ int main(int argc, char **argv)
            "length_bins=1,2-3,4-7,8-15,16+\n", (uint32_t)iterations, NJ_JIT_STATS, NJ_JIT_DETAILED_STATS);
     printf("JIT_CONFIG rv32=%d arm64=%d rv32_reg_cache=%d hot_threshold=%u "
            "min_block=%u max_block=%u code_entries=%u code_ways=%u max_code_bytes=%u "
-           "method_entries=%u method_arena_bytes=%u max_faults=%u\n",
+           "method_entries=%u method_arena_bytes=%u max_faults=%u max_exits=%u\n",
            NJ_JIT_HOST_RV32, NJ_JIT_HOST_ARM64, NJ_JIT_RV32_REG_CACHE,
            (unsigned)NJ_JIT_HOT_THRESHOLD, (unsigned)NJ_JIT_MIN_BLOCK_INSNS,
            (unsigned)NJ_JIT_MAX_BLOCK_INSNS, (unsigned)NJ_JIT_CACHE_ENTRIES,
            (unsigned)NJ_JIT_CACHE_WAYS, (unsigned)NJ_JIT_MAX_CODE_BYTES,
            (unsigned)NJ_JIT_METHOD_ENTRIES, (unsigned)NJ_JIT_METHOD_ARENA_BYTES,
-           (unsigned)NJ_JIT_MAX_FAULTS);
+           (unsigned)NJ_JIT_MAX_FAULTS, (unsigned)NJ_JIT_MAX_EXITS);
     puts("TIMING first fixed-workload call after interpreted zero-iteration class warmup; "
          "includes JIT heat/compilation, excludes VM/JAR setup. QEMU time is not board performance; "
          "display/audio are outside this compute benchmark.");

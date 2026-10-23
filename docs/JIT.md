@@ -83,11 +83,22 @@ out-of-bounds index or a zero divisor makes the block return to the interpreter
 *before* the operation's first side effect; the interpreter then re-executes that
 exact bytecode, so the Java exception class, message and PC are unchanged.
 
+Integer conditional branches (`if<cond>`, `if_icmp<cond>`, `if_acmpeq/ne`,
+`ifnull`/`ifnonnull`) and `goto` compile natively. A forward target inside the
+same window becomes an internal label; two paths may join only at the same
+operand depth, otherwise the whole block is declined. A forward target beyond
+the window ends the block through a dedicated exit that records the target PC
+and stack depth. A backward branch is compiled only when it targets the block
+entry with an empty operand stack (a loop). Loop blocks keep a bytecode counter
+and check the remaining scheduling budget before every iteration, so native
+execution always returns to the interpreter after at most `budget` bytecodes and
+cannot starve other threads or defer the bridge's deadline check.
+
 String/Class and wide constants, static fields, wide arrays (`aaload`,
 `baload`, ...), long arithmetic, conversions/comparisons, complex stack
-permutations, branches, calls, allocation, monitors and exception handling stay
-in the interpreter. A block ends immediately before an unsupported operation;
-the next interpreter dispatch can enter another compiled block.
+permutations, calls, allocation, monitors and exception handling stay in the
+interpreter. A block ends immediately before an unsupported operation; the next
+interpreter dispatch can enter another compiled block.
 
 `NJ_JIT_RV32_REG_CACHE=1` (default) tracks T0/T1 values across bytecodes, reuses
 redundant loads and folds supported integer operations with known operands.
@@ -112,8 +123,12 @@ still use integer instructions. Java feature flags `NJ_ENABLE_FLOAT` and
 `NJ_ENABLE_LONG` apply as for RV32. The macros constrain emitted code; the C
 compiler's `-march`/`-mcpu` settings separately govern the rest of the program.
 
-The ARM64 backend covers the same basic bytecodes as RV32 and uses base AArch64
-integer multiply/divide/remainder. It supports all valid 16-bit local indices
+The ARM64 backend covers the same basic bytecodes as RV32 — including
+conditional branches, `goto`, internal labels and bounded loops — and uses base
+AArch64 integer multiply/divide/remainder. Branches follow the v3 block contract:
+`w2` carries the budget, `w3` counts completed bytecodes, a taken branch leaves
+through the recorded exit, and a loop re-checks `budget - completed` at its entry
+label. It supports all valid 16-bit local indices
 (up to 65534 for one slot or 65533 for a two-slot value, within `max_locals`).
 References, including null, use full 64-bit slot accesses. Integer and float
 stores preserve the upper half of a slot, matching the interpreter's 32-bit
@@ -139,11 +154,18 @@ cmake --build build-arm64 -j
 ### Shared runtime
 
 Each generated function is a bounded leaf with ABI
-`nj_u4 block(nj_value *incoming_sp, nj_value *locals)`. It only changes frame slots,
-uses caller-saved registers, and never calls, allocates, yields, or changes Java
-control flow. A successful return is the number of bytecodes the block finished.
+`nj_u4 block(nj_value *incoming_sp, nj_value *locals, nj_u4 budget)`. It only
+changes frame slots, uses caller-saved registers, and never calls, allocates,
+yields, or changes Java control flow. A successful return is
+`(completed << 4) | exit_index`, where `completed` counts the bytecodes finished
+on this run (never more than `budget`) and `exit_index` selects `exits[]` in the
+block metadata. Exit 0 is the end of the straight-line window; further exits are
+forward branches that leave the window and the loop budget exit, each carrying
+the target PC and operand stack depth. For a loop block `completed` can exceed
+`block.insns` because it counts whole iterations.
+
 If a runtime guard fails (null receiver, bad array, zero divisor), the block jumps
-to a fault exit that returns `0x80000000 | (completed << 8) | fault_index`, where
+to a fault exit that returns `0x80000000 | (fault_index << 24) | completed`, where
 `completed` counts the bytecodes finished before the faulting instruction and
 `fault_index` selects `faults[]` in the block metadata. The C entry restores PC to
 `entry_pc + faults[i].pc_off` and SP to `incoming_sp + faults[i].sp_delta`, then
@@ -151,7 +173,9 @@ returns `completed`; the interpreter executes that bytecode again, so the Java
 exception, its PC and any class initialization behave exactly as in a purely
 interpreted run. A block that would need more than `NJ_JIT_MAX_FAULTS` guarded
 instructions ends before the next one. A failure with `completed == 0` also pins
-the site as refused, which prevents compile/fault churn.
+the site as refused, which prevents compile/fault churn. A loop block checks
+`budget - completed >= window size` at its entry label, so a back edge always
+returns through the budget exit after at most `budget` bytecodes.
 
 The C entry checks stack consumption/growth and scheduling budget before calling.
 Both backends match Java's `INT_MIN / -1` overflow behavior. RV32 encodes RNE
@@ -181,6 +205,7 @@ Tracing bypasses native execution so per-bytecode trace output remains available
 | `NJ_JIT_METHOD_ENTRIES` | 32 | Mapped methods; least-recently-used map is recycled |
 | `NJ_JIT_METHOD_ARENA_BYTES` | 4096 | Fixed probe-map arena (one 16-bit cell per bytecode) |
 | `NJ_JIT_MAX_FAULTS` | 4 | Guarded instructions per block before it must end |
+| `NJ_JIT_MAX_EXITS` | 4 | Window end, leaving branches and the loop budget exit |
 | `NJ_JIT_HOT_THRESHOLD` | 8 | Visits before decode-only eligibility analysis |
 | `NJ_JIT_MIN_BLOCK_INSNS` | 4 | Minimum bytecodes to compile; experiment with 1/4/8 |
 | `NJ_JIT_MAX_BLOCK_INSNS` | 32 | Maximum Java bytecodes in a block |
@@ -232,6 +257,9 @@ counts. Stats reset on disable/re-enable.
 `NJ_JIT_DETAILED_STATS=1` (default `0`, requires `STATS=1`) adds candidate queries,
 code hits, cold/negative/probe-only/budget/stack skips and an
 execution-weighted length histogram (1, 2–3, 4–7, 8–15, ≥16 bytecodes).
+For loop blocks one native call can complete more bytecodes than the block
+length; `bytecodes` counts the completion count the block reported, exactly as
+the interpreter charges it against the quantum.
 `queries` excludes opcodes rejected by the inline filter; `code_hits` includes
 cached entries subsequently rejected by a guard. `recompiled_blocks` is a lower
 bound because recycling a method map forgets that a site was compiled before;
@@ -571,10 +599,12 @@ The heap is a non-moving mark-and-sweep arena (see
 There is no preemption and no OS thread inside the VM.  The scheduler runs one
 thread at a time (`src/core/nj_thread.c:450-612`) and switches only when the
 current one yields (`run()` returns `NJ_ERR_YIELD`/`NJ_ERR_TIMEOUT`) or blocks in
-a native.  A compiled loop that does not yield starves every other thread and
-defers the bridge's `halt_at_ms` deadline check
+a native.  A compiled loop now carries its own bytecode counter and returns to
+the interpreter through a budget exit when the quantum is nearly exhausted, so
+it cannot starve other threads or defer the bridge's `halt_at_ms` deadline check
 (`src/core/nj_vm.c:1345-1356`, which is only re-checked when `nj_exec()`
-returns).
+returns).  The interpreter charges the returned completion count against the
+quantum, exactly like interpreted bytecodes.
 
 ---
 

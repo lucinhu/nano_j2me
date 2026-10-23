@@ -79,7 +79,7 @@ static result run_loop(int enabled, int fail)
     nj_vm *vm;
     nj_thread *th;
     nj_method m;
-    nj_jit_stats stats;
+    nj_jit_stats stats, quantum_before;
     result r;
     void *saved_ud, *saved_user;
     int i;
@@ -122,9 +122,25 @@ static result run_loop(int enabled, int fail)
     active_vm = vm;
     active_method = &m;
     loop_insns = body + 1u;
+    memset(&quantum_before, 0, sizeof(quantum_before));
+    if (enabled == 1 && !fail && NJ_JIT_STATS)
+        CHECK(nj_jit_get_stats(vm, &quantum_before));
     for (i = 0; i < 4; ++i) {
         CHECK(nj_exec(vm, th, 0) == NJ_ERR_YIELD);
         CHECK(th->nframes == 1 && th->frames[0].sp == th->frames[0].stack);
+        if (enabled == 1 && !fail && NJ_JIT_STATS) {
+            /* Each quantum is one interpreter budget window: the native blocks
+             * completed inside it must account for a positive number of
+             * bytecodes without exceeding the window, and must not fault. */
+            nj_jit_stats quantum_after;
+            CHECK(nj_jit_get_stats(vm, &quantum_after));
+            CHECK(quantum_after.executed_blocks > quantum_before.executed_blocks);
+            CHECK(quantum_after.bytecodes > quantum_before.bytecodes);
+            CHECK(quantum_after.bytecodes - quantum_before.bytecodes <=
+                  (nj_u8)NJ_SCHED_QUANTUM);
+            CHECK(quantum_after.faults == quantum_before.faults);
+            quantum_before = quantum_after;
+        }
     }
     active_vm = NULL;
     r.a = th->frames[0].locals[0].i;
@@ -132,6 +148,11 @@ static result run_loop(int enabled, int fail)
     r.pc = th->frames[0].pc;
     r.insns = vm->insns;
     CHECK(r.insns == (nj_u8)NJ_SCHED_QUANTUM * 4u);
+    if (enabled == 1 && !fail && NJ_JIT_STATS) {
+        CHECK(quantum_before.executed_blocks > 0);
+        CHECK(quantum_before.bytecodes > 0);
+        CHECK(quantum_before.bytecodes <= (nj_u8)NJ_SCHED_QUANTUM * 4u);
+    }
     if (enabled) {
         CHECK(nj_jit_get_stats(vm, &stats));
         CHECK(stats.metadata_bytes >= NJ_JIT_METHOD_ARENA_BYTES &&

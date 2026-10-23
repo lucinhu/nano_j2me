@@ -1,23 +1,36 @@
 /*
- * Bounded little-endian AArch64 baseline blocks with guard faults.
+ * Bounded little-endian AArch64 baseline blocks with guard faults, forward
+ * branches and bounded loops.
  *
  * A generated block has the ABI
- *     nj_u4 block(nj_value *incoming_sp, nj_value *locals)
- * and uses only x0/x1 (the two arguments, unchanged while Java bytecodes
- * execute), x9..x13 and s0/s1 or d0/d1.  It never changes the native stack,
- * a callee-saved register, or a Java frame.
+ *     nj_u4 block(nj_value *incoming_sp, nj_value *locals, nj_u4 budget)
+ * and uses only x0/x1/x2 (the three arguments, unchanged while Java bytecodes
+ * execute), x3/x4/x5 (branch bookkeeping and the loop budget check), x9..x13
+ * and s0/s1 or d0/d1.  It never changes the native stack, a callee-saved
+ * register, or a Java frame.
  *
- * It returns the number of bytecodes it finished.  A guard that can fail at
- * run time (null receiver, array type/length/flags, zero divisor) branches to
- * a per-fault exit that returns
- *     NJ_JIT_FAULT_BIT | (completed << 8) | fault_index
+ * A block returns a success word
+ *     (completed << NJ_JIT_EXIT_SHIFT) | exit_index
+ * where completed is the number of finished bytecodes and exit_index selects
+ * block.exits[]: 0 is the end of the straight-line window, other entries are
+ * taken forward branches that leave the window and the loop budget exit.  A
+ * guard that can fail at run time (null receiver, array type/length/flags,
+ * zero divisor) branches to a per-fault exit that returns
+ *     NJ_JIT_FAULT_BIT | (fault_index << 24) | completed
  * before touching memory, so the C caller can rewind pc/sp and let the
  * interpreter re-execute exactly that instruction and raise the Java
  * exception with the interpreter's own PC.  See nj_jit_internal.h.
  *
- * x12 holds the caller's FPCR once a floating-point operation has been
- * emitted.  Both the success return and every later fault exit restore it;
- * x12 is therefore never used as a general temporary.
+ * A block containing any taken branch keeps the completed counter in w3 and
+ * derives both success and fault words from it.  A loop keeps the counter
+ * across its back edge and, at the entry label, verifies that `budget -
+ * completed` still covers a whole window before running another iteration, so
+ * native execution never finishes more than `budget` bytecodes.
+ *
+ * When a block performs floating point, the caller's FPCR is saved at entry
+ * and every return stub shares one restore epilogue.  That keeps the caller's
+ * rounding mode intact on every path, including exits taken before the first
+ * FP operation, while still restoring exactly once per return.
  *
  * This is a portable encoder: target words are emitted as explicit
  * little-endian bytes, never through host instruction pointers.  All
@@ -28,7 +41,8 @@
 #if NJ_ENABLE_JIT
 
 enum {
-    A64_SP_ARG = 0, A64_LOCALS_ARG = 1,
+    A64_SP_ARG = 0, A64_LOCALS_ARG = 1, A64_BUDGET_ARG = 2, A64_DONE = 3,
+    A64_T3 = 4, A64_T4 = 5,
     A64_T0 = 9, A64_T1 = 10, A64_T2 = 11,
     A64_FPCR = 12, A64_ADDR = 13, A64_ZERO = 31,
     A64_F0 = 0, A64_F1 = 1, A64_SLOT_BYTES = 8,
@@ -37,10 +51,21 @@ enum {
     A64_OBJ_KIND = 24, A64_OBJ_AFLAGS = 26
 };
 
+enum {
+    A64_FIX_FAULT = 0u,   /* target is a fault-exit index             */
+    A64_FIX_EXIT = 1u,    /* target is a block-exit index             */
+    A64_FIX_LABEL = 2u,   /* target is an instruction (label) index   */
+    A64_FIX_EPILOGUE = 3u /* target is the shared FPCR restore epilogue */
+};
+
+#define A64_MAX_FIXUPS 192u
+#define A64_NO_LABEL ((nj_size)(-1))
+
 typedef struct a64_fixup {
     nj_size at;      /* offset of the branch word inside the buffer */
-    nj_u4 word;      /* conditional branch with a zero displacement */
-    nj_u1 fault;     /* fault exit index */
+    nj_u4 word;      /* branch with a zero displacement */
+    nj_u1 kind;      /* A64_FIX_* */
+    nj_u2 target;    /* fault index, exit index or instruction index */
 } a64_fixup;
 
 typedef struct a64_writer {
@@ -48,9 +73,9 @@ typedef struct a64_writer {
     nj_size used;
     nj_size capacity;
     int failed;
-    int fpcr_saved;
-    nj_u1 nfixups;
-    a64_fixup fixups[NJ_JIT_MAX_FAULTS * 4];
+    int counter;      /* track completed bytecodes in w3 */
+    unsigned nfixups;
+    a64_fixup fixups[A64_MAX_FIXUPS];
 } a64_writer;
 
 typedef struct a64_bytecode {
@@ -62,6 +87,8 @@ typedef struct a64_bytecode {
     nj_u4 length;
     const nj_field *field;   /* getfield/putfield only */
     int guarding;            /* instruction can fault at run time */
+    int branch;              /* 0 none, 1 conditional, 2 unconditional */
+    nj_u4 target;            /* absolute branch target pc */
 } a64_bytecode;
 
 static void a64_u32(a64_writer *w, nj_u4 word)
@@ -189,30 +216,46 @@ static void a64_copy_slot(a64_writer *w, unsigned dst, int dst_offset,
     a64_store(w, A64_T0, dst, dst_offset, 1);
 }
 
-/* ---- guard branches and fault exits ---------------------------------- */
+/* ---- guard branches, block branches and fault exits ------------------- */
 
-static void a64_fixup_emit(a64_writer *w, nj_u4 word, unsigned fault)
+static void a64_fixup_emit(a64_writer *w, nj_u4 word, unsigned kind,
+                           unsigned target)
 {
     if (w->failed) return;
-    if (w->nfixups >= (nj_u1)(sizeof(w->fixups) / sizeof(w->fixups[0]))) {
+    if (w->nfixups >= A64_MAX_FIXUPS) {
         w->failed = 1;
         return;
     }
     w->fixups[w->nfixups].at = w->used;
     w->fixups[w->nfixups].word = word;
-    w->fixups[w->nfixups].fault = (nj_u1)fault;
+    w->fixups[w->nfixups].kind = (nj_u1)kind;
+    w->fixups[w->nfixups].target = (nj_u2)target;
     w->nfixups++;
     a64_u32(w, word);
 }
 
+/* Branch to a guard/fault exit.  The placeholder displacement is patched once
+ * all stubs have been emitted. */
 static void a64_bcond(a64_writer *w, unsigned cond, unsigned fault)
 {
-    a64_fixup_emit(w, 0x54000000u | (cond & 0xfu), fault);
+    a64_fixup_emit(w, 0x54000000u | (cond & 0xfu), A64_FIX_FAULT, fault);
 }
 
 static void a64_cbz(a64_writer *w, unsigned rt, int wide, unsigned fault)
 {
-    a64_fixup_emit(w, (wide ? 0xb4000000u : 0x34000000u) | (rt & 31u), fault);
+    a64_fixup_emit(w, (wide ? 0xb4000000u : 0x34000000u) | (rt & 31u),
+                   A64_FIX_FAULT, fault);
+}
+
+static void a64_branch_cond(a64_writer *w, unsigned cond, unsigned kind,
+                            unsigned target)
+{
+    a64_fixup_emit(w, 0x54000000u | (cond & 0xfu), kind, target);
+}
+
+static void a64_branch(a64_writer *w, unsigned kind, unsigned target)
+{
+    a64_fixup_emit(w, 0x14000000u, kind, target);
 }
 
 static void a64_cmp_imm(a64_writer *w, unsigned rn, unsigned imm)
@@ -225,6 +268,12 @@ static void a64_cmp_reg(a64_writer *w, unsigned rn, unsigned rm)
 {
     a64_u32(w, 0x6b000000u | ((nj_u4)rm << 16) |
                 ((nj_u4)rn << 5) | A64_ZERO); /* cmp wN,wM */
+}
+
+static void a64_cmp_reg64(a64_writer *w, unsigned rn, unsigned rm)
+{
+    a64_u32(w, 0xeb000000u | ((nj_u4)rm << 16) |
+                ((nj_u4)rn << 5) | A64_ZERO); /* cmp xN,xM */
 }
 
 static void a64_guard_null(a64_writer *w, unsigned rt, unsigned fault)
@@ -251,11 +300,17 @@ static void a64_guard_geu(a64_writer *w, unsigned rn, unsigned rm,
     a64_bcond(w, 2u, fault); /* b.hs: unsigned rn >= rm */
 }
 
+/* B.cond and CBZ carry a signed 19-bit word displacement; B carries 26 bits.
+ * Backward displacements (the loop back edge) fall out of the same unsigned
+ * subtraction because the low bits keep the two's-complement value. */
 static void a64_patch_branch(nj_u1 *buf, const a64_fixup *f, nj_size target)
 {
     nj_u4 word = f->word;
     nj_u4 imm = (nj_u4)((target - f->at) >> 2);
-    word |= (imm & 0x7ffffu) << 5;
+    if ((word & 0xff000000u) == 0x14000000u)
+        word |= imm & 0x3ffffffu;
+    else
+        word |= (imm & 0x7ffffu) << 5;
     buf[f->at] = (nj_u1)word;
     buf[f->at + 1u] = (nj_u1)(word >> 8);
     buf[f->at + 2u] = (nj_u1)(word >> 16);
@@ -265,28 +320,39 @@ static void a64_patch_branch(nj_u1 *buf, const a64_fixup *f, nj_size target)
 static nj_u4 a64_fault_word(unsigned index, nj_u4 completed)
 {
     return NJ_JIT_FAULT_BIT |
-           ((completed & NJ_JIT_FAULT_COMPLETED_MASK) << 8) |
-           (index & NJ_JIT_FAULT_INDEX_MASK);
+           ((nj_u4)(index & NJ_JIT_FAULT_INDEX_MASK) <<
+            NJ_JIT_FAULT_INDEX_SHIFT) |
+           (completed & NJ_JIT_FAULT_COMPLETED_MASK);
 }
 
-/* Worst-case tail still to be written after the instruction prefix: the
- * success return plus one movz+movk+ret exit per recorded fault (with room for
- * an FPCR restore).  Keeping this free before accepting an instruction means
- * no late rollback when the exits are emitted. */
-static nj_size a64_tail_bytes(int fpcr_saved, unsigned nfaults)
+/* One executed bytecode.  ADD (immediate) does not modify the condition
+ * flags, so it may sit between a CMP and its conditional branch. */
+static void a64_inc_done(a64_writer *w)
 {
-    return 8u + (fpcr_saved ? 4u : 0u) + (nj_size)nfaults * 16u;
+    a64_u32(w, 0x11000000u | (1u << 10) |
+                ((nj_u4)A64_DONE << 5) | A64_DONE);
 }
 
+/* Clear the caller's FPCR once per block; the rounding mode is restored by
+ * the shared epilogue just before every return. */
+static void a64_fp_save(a64_writer *w)
+{
 #if NJ_ENABLE_FLOAT && NJ_JIT_ARM64_FP
-static void a64_fp_begin(a64_writer *w)
-{
-    if (w->fpcr_saved || w->failed) return;
-    w->fpcr_saved = 1;
     a64_u32(w, 0xd53b4400u | A64_FPCR); /* mrs x12,fpcr */
     a64_u32(w, 0xd51b4400u | A64_ZERO); /* msr fpcr,xzr: RNE, no FTZ/traps */
-}
+#else
+    (void)w;
 #endif
+}
+
+static void a64_fp_restore(a64_writer *w)
+{
+#if NJ_ENABLE_FLOAT && NJ_JIT_ARM64_FP
+    a64_u32(w, 0xd51b4400u | A64_FPCR); /* msr fpcr,x12 */
+#else
+    (void)w;
+#endif
+}
 
 static int a64_s8(unsigned value)
 {
@@ -335,6 +401,8 @@ static int a64_decode(nj_vm *vm, const nj_method *m, nj_u4 pc,
     b->length = 1u;
     b->field = NULL;
     b->guarding = 0;
+    b->branch = 0;
+    b->target = pc;
 
     if (op == 0xc4u) {
         if (left < 4u) return 0;
@@ -462,6 +530,56 @@ static int a64_decode(nj_vm *vm, const nj_method *m, nj_u4 pc,
         if (left < b->length) return 0;
         b->immediate = wide ? a64_s16(((unsigned)code[4] << 8) | code[5]) :
                                a64_s8(code[2]);
+        return 1;
+    case 0x99: case 0x9a: case 0x9b: case 0x9c:
+    case 0x9d: case 0x9e: /* if<cond>: pop 1, signed compare against zero */
+        b->length = 3u;
+        if (left < 3u) return 0;
+        b->immediate = a64_s16(((unsigned)code[1] << 8) | code[2]);
+        if (pc + (nj_u4)b->immediate >= m->code_len) return 0;
+        b->need = 1;
+        b->change = -1;
+        b->branch = 1;
+        b->target = pc + (nj_u4)b->immediate;
+        return 1;
+    case 0x9f: case 0xa0: case 0xa1: case 0xa2:
+    case 0xa3: case 0xa4: /* if_icmp<cond>: pop 2, signed 32-bit compare */
+        b->length = 3u;
+        if (left < 3u) return 0;
+        b->immediate = a64_s16(((unsigned)code[1] << 8) | code[2]);
+        if (pc + (nj_u4)b->immediate >= m->code_len) return 0;
+        b->need = 2;
+        b->change = -2;
+        b->branch = 1;
+        b->target = pc + (nj_u4)b->immediate;
+        return 1;
+    case 0xa5: case 0xa6: /* if_acmpeq/ne: full 64-bit references */
+        b->length = 3u;
+        if (left < 3u) return 0;
+        b->immediate = a64_s16(((unsigned)code[1] << 8) | code[2]);
+        if (pc + (nj_u4)b->immediate >= m->code_len) return 0;
+        b->need = 2;
+        b->change = -2;
+        b->branch = 1;
+        b->target = pc + (nj_u4)b->immediate;
+        return 1;
+    case 0xa7: /* goto */
+        b->length = 3u;
+        if (left < 3u) return 0;
+        b->immediate = a64_s16(((unsigned)code[1] << 8) | code[2]);
+        if (pc + (nj_u4)b->immediate >= m->code_len) return 0;
+        b->branch = 2;
+        b->target = pc + (nj_u4)b->immediate;
+        return 1;
+    case 0xc6: case 0xc7: /* ifnull / ifnonnull */
+        b->length = 3u;
+        if (left < 3u) return 0;
+        b->immediate = a64_s16(((unsigned)code[1] << 8) | code[2]);
+        if (pc + (nj_u4)b->immediate >= m->code_len) return 0;
+        b->need = 1;
+        b->change = -1;
+        b->branch = 1;
+        b->target = pc + (nj_u4)b->immediate;
         return 1;
     case 0xb4: /* getfield */
     case 0xb5: { /* putfield */
@@ -750,7 +868,6 @@ static void a64_emit(a64_writer *w, const a64_bytecode *b, int delta,
         int is_double = (int)(op & 1u);
         int width = is_double ? 16 : 8;
         int dst = top - width * 2;
-        a64_fp_begin(w);
         a64_mem(w, A64_F0, A64_SP_ARG, dst, is_double, 1, 1);
         a64_mem(w, A64_F1, A64_SP_ARG, top - width, is_double, 1, 1);
         switch (op & ~1u) {
@@ -787,54 +904,221 @@ static void a64_emit(a64_writer *w, const a64_bytecode *b, int delta,
     a64_store(w, A64_T0, A64_SP_ARG, top - 16, 0);
 }
 
-/* Decide whether one more instruction is allowed by the fault budget. */
-static int a64_accept(const nj_jit_block *block, const a64_bytecode *b)
-{
-    if (b->guarding && block->nfaults >= NJ_JIT_MAX_FAULTS) return 0;
-    /* A throwing integer division may not follow mutations in a block: if it
-     * faults, the interpreter must observe the untouched incoming stack. */
-    if ((b->op == 0x6cu || b->op == 0x70u) && block->insns != 0u) return 0;
-    return 1;
-}
+/* ---- block scanning -------------------------------------------------- */
+
+typedef struct a64_scan {
+    a64_bytecode ins[NJ_JIT_MAX_BLOCK_INSNS];
+    nj_u4 pcs[NJ_JIT_MAX_BLOCK_INSNS];
+    int delta[NJ_JIT_MAX_BLOCK_INSNS];       /* operand depth before the insn */
+    nj_u1 label[NJ_JIT_MAX_BLOCK_INSNS];     /* branch target instructions    */
+    nj_u1 br_kind[NJ_JIT_MAX_BLOCK_INSNS];   /* A64_BR_*                      */
+    nj_u2 br_target[NJ_JIT_MAX_BLOCK_INSNS]; /* label index / exit index      */
+    nj_u1 fault_of[NJ_JIT_MAX_BLOCK_INSNS];  /* fault index, A64_NO_FAULT     */
+    nj_u1 fault_completed[NJ_JIT_MAX_FAULTS];
+    nj_u4 jump_insn[NJ_JIT_MAX_BLOCK_INSNS];
+    nj_u4 jump_target[NJ_JIT_MAX_BLOCK_INSNS];
+    int jump_delta[NJ_JIT_MAX_BLOCK_INSNS];
+    nj_u1 jump_back[NJ_JIT_MAX_BLOCK_INSNS];
+    unsigned n;
+    unsigned njumps;
+    nj_u4 start;
+    nj_u4 end;
+    int final_delta;
+    int min_stack;
+    int max_growth;
+    int loop;
+    int fp_used;
+    unsigned budget_exit;
+    nj_jit_block block;
+} a64_scan;
+
+enum {
+    A64_BR_NONE = 0u,
+    A64_BR_INTERNAL = 1u,
+    A64_BR_EXIT = 2u,
+    A64_BR_BACK = 3u,
+    A64_NO_FAULT = 0xffu
+};
 
 static int a64_terminates(const a64_bytecode *b)
 {
     return b->op == 0x6cu || b->op == 0x70u;
 }
 
+static int a64_is_fp(const a64_bytecode *b)
+{
+#if NJ_ENABLE_FLOAT && NJ_JIT_ARM64_FP
+    switch (b->op) {
+    case 0x62: case 0x66: case 0x6a: case 0x6e:
+#if NJ_ENABLE_LONG
+    case 0x63: case 0x67: case 0x6b: case 0x6f:
+#endif
+        return 1;
+    default:
+        return 0;
+    }
+#else
+    (void)b;
+    return 0;
+#endif
+}
+
+/* Decode, measure and classify a window.  Analyze and compile share this
+ * function, so their metadata can never disagree.  A branch target inside the
+ * window must be an instruction boundary joining with the recorded depth;
+ * anything else declines the whole block instead of emitting partial code. */
+static int a64_scan_build(nj_vm *vm, const nj_method *m, nj_u4 pc, a64_scan *s)
+{
+    nj_u4 pos = pc;
+    int depth = 0;
+    int min_stack = 0;
+    int max_growth = 0;
+    unsigned n = 0u;
+    unsigned njumps = 0u;
+    unsigned nfaults = 0u;
+    unsigned i;
+    int loop = 0;
+
+    memset(s, 0, sizeof(*s));
+    s->start = pc;
+    while (pos < m->code_len && n < NJ_JIT_MAX_BLOCK_INSNS) {
+        a64_bytecode b;
+        int delta, required, growth;
+
+        if (!a64_decode(vm, m, pos, &b)) break;
+        if (b.guarding && nfaults >= NJ_JIT_MAX_FAULTS) break;
+        /* A throwing division may not follow mutations: the interpreter has to
+         * observe the incoming stack when it re-executes the instruction. */
+        if ((b.op == 0x6cu || b.op == 0x70u) && n != 0u) break;
+        /* A forward branch must land on the instruction it was recorded with
+         * the same operand depth, or the block is not a single-entry region. */
+        for (i = 0u; i < njumps; ++i) {
+            if (!s->jump_back[i] && s->jump_target[i] == pos &&
+                s->jump_delta[i] != depth) {
+                return 0;
+            }
+        }
+        delta = depth + b.change;
+        required = b.need - depth;
+        if (required < min_stack) required = min_stack;
+        growth = delta > max_growth ? delta : max_growth;
+        if (required + growth > (int)m->max_stack) break;
+
+        s->ins[n] = b;
+        s->pcs[n] = pos;
+        s->delta[n] = depth;
+        if (b.branch != 0) {
+            if (njumps >= NJ_JIT_MAX_BLOCK_INSNS) return 0;
+            if (b.target < pos) {
+                /* Only a loop back to the entry with an empty operand stack is
+                 * bounded by the block's own budget check. */
+                if (b.target != s->start || delta != 0) return 0;
+                s->jump_back[njumps] = 1u;
+                loop = 1;
+            } else if (b.target == pos) {
+                return 0; /* one-instruction infinite loop */
+            } else {
+                s->jump_back[njumps] = 0u;
+            }
+            s->jump_insn[njumps] = n;
+            s->jump_target[njumps] = b.target;
+            s->jump_delta[njumps] = delta;
+            njumps++;
+        }
+        if (b.guarding) {
+            s->fault_of[n] = (nj_u1)nfaults;
+            s->fault_completed[nfaults] = (nj_u1)n;
+            nfaults++;
+        } else {
+            s->fault_of[n] = A64_NO_FAULT;
+        }
+        if (a64_is_fp(&b)) s->fp_used = 1;
+        n++;
+        pos = (nj_u4)(pos + b.length);
+        depth = delta;
+        min_stack = required;
+        max_growth = growth;
+        if (a64_terminates(&b)) break;
+    }
+    if (n == 0u) return 0;
+
+    s->n = n;
+    s->end = pos;
+    s->final_delta = depth;
+    s->min_stack = min_stack;
+    s->max_growth = max_growth;
+    s->njumps = njumps;
+    s->loop = loop;
+    s->budget_exit = 0xffffu;
+
+    /* exits[0] is the end of the straight-line window. */
+    s->block.exits[0].pc_off = (nj_u2)(s->end - s->start);
+    s->block.exits[0].sp_delta = (nj_s2)s->final_delta;
+    s->block.nexits = 1u;
+
+    for (i = 0u; i < njumps; ++i) {
+        unsigned insn = s->jump_insn[i];
+        if (s->jump_back[i]) {
+            s->br_kind[insn] = (nj_u1)A64_BR_BACK;
+            s->label[0] = 1u;
+            continue;
+        }
+        if (s->jump_target[i] >= s->end) {
+            int exit = nj_jit_record_exit(&s->block, s->start,
+                                          s->jump_target[i], s->jump_delta[i]);
+            if (exit < 0) return 0;
+            s->br_kind[insn] = (nj_u1)A64_BR_EXIT;
+            s->br_target[insn] = (nj_u2)exit;
+        } else {
+            unsigned k;
+            int found = 0;
+            for (k = 0u; k < n; ++k) {
+                if (s->pcs[k] == s->jump_target[i]) {
+                    s->label[k] = 1u;
+                    s->br_kind[insn] = (nj_u1)A64_BR_INTERNAL;
+                    s->br_target[insn] = (nj_u2)k;
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) return 0; /* target is not an instruction boundary */
+        }
+    }
+    if (loop) {
+        int exit = nj_jit_record_exit(&s->block, s->start, s->start, 0);
+        if (exit < 0) return 0;
+        s->budget_exit = (unsigned)exit;
+        s->label[0] = 1u;
+    }
+    for (i = 0u; i < n; ++i) {
+        if (s->fault_of[i] != A64_NO_FAULT &&
+            !nj_jit_record_fault(&s->block, s->start, s->pcs[i],
+                                 s->delta[i])) {
+            return 0;
+        }
+    }
+    s->block.next_pc = s->end;
+    s->block.insns = n;
+    s->block.stack_delta = s->final_delta;
+    s->block.min_stack = min_stack;
+    s->block.max_growth = max_growth;
+    s->block.nfaults = (nj_u1)nfaults;
+    s->block.loop = (nj_u1)(loop ? 1u : 0u);
+    s->block.size = 0u;
+    return 1;
+}
+
 static int a64_analyze_impl(nj_vm *vm, const nj_method *m, nj_u4 pc,
                             nj_jit_block *out)
 {
-    nj_jit_block block;
+    a64_scan scan;
     if (!out) return 0;
     memset(out, 0, sizeof(*out));
     if (!m || !m->code || pc >= m->code_len ||
-        sizeof(nj_value) != A64_SLOT_BYTES) return 0;
-    memset(&block, 0, sizeof(block));
-    block.next_pc = pc;
-    while (block.next_pc < m->code_len &&
-           block.insns < NJ_JIT_MAX_BLOCK_INSNS) {
-        a64_bytecode b;
-        int delta, required, growth;
-        if (!a64_decode(vm, m, block.next_pc, &b)) break;
-        if (!a64_accept(&block, &b)) break;
-        delta = block.stack_delta + b.change;
-        required = b.need - block.stack_delta;
-        if (required < block.min_stack) required = block.min_stack;
-        growth = delta > block.max_growth ? delta : block.max_growth;
-        if (required + growth > (int)m->max_stack) break;
-        if (b.guarding &&
-            !nj_jit_record_fault(&block, pc, block.next_pc,
-                                 block.stack_delta)) break;
-        block.next_pc += b.length;
-        block.insns++;
-        block.stack_delta = delta;
-        block.min_stack = required;
-        block.max_growth = growth;
-        if (a64_terminates(&b)) break;
-    }
-    if (block.insns == 0u) return 0;
-    *out = block;
+        sizeof(nj_value) != A64_SLOT_BYTES ||
+        m->code_len - pc > 0xffffu) return 0;
+    if (!a64_scan_build(vm, m, pc, &scan)) return 0;
+    *out = scan.block;
     return 1;
 }
 
@@ -843,110 +1127,223 @@ int nj_arm64_analyze(nj_vm *vm, const nj_method *m, nj_u4 pc, nj_jit_block *out)
     return a64_analyze_impl(vm, m, pc, out);
 }
 
+/* ---- emission -------------------------------------------------------- */
+
+/* Take the branch at instruction `insn`, popping its operands.  The completed-
+ * bytecode counter is advanced before either path leaves the instruction; ADD
+ * leaves the flags alone so it can sit between CMP and B.cond. */
+static void a64_emit_branch(a64_writer *w, const a64_scan *s, unsigned insn)
+{
+    const a64_bytecode *b = &s->ins[insn];
+    int top = s->delta[insn] * A64_SLOT_BYTES;
+    unsigned kind, target, cond = 0u;
+
+    if (s->br_kind[insn] == A64_BR_BACK) {
+        kind = A64_FIX_LABEL;
+        target = 0u;
+    } else if (s->br_kind[insn] == A64_BR_INTERNAL) {
+        kind = A64_FIX_LABEL;
+        target = s->br_target[insn];
+    } else {
+        kind = A64_FIX_EXIT;
+        target = s->br_target[insn];
+    }
+
+    if (b->branch == 2) { /* goto */
+        if (w->counter) a64_inc_done(w);
+        a64_branch(w, kind, target);
+        return;
+    }
+
+    switch (b->op) {
+    case 0x99: cond = 0u; break;  /* ifeq    */
+    case 0x9a: cond = 1u; break;  /* ifne    */
+    case 0x9b: cond = 11u; break; /* iflt    */
+    case 0x9c: cond = 10u; break; /* ifge    */
+    case 0x9d: cond = 12u; break; /* ifgt    */
+    case 0x9e: cond = 13u; break; /* ifle    */
+    case 0x9f: cond = 0u; break;  /* if_icmpeq */
+    case 0xa0: cond = 1u; break;  /* if_icmpne */
+    case 0xa1: cond = 11u; break; /* if_icmplt */
+    case 0xa2: cond = 10u; break; /* if_icmpge */
+    case 0xa3: cond = 12u; break; /* if_icmpgt */
+    case 0xa4: cond = 13u; break; /* if_icmple */
+    case 0xa5: cond = 0u; break;  /* if_acmpeq */
+    case 0xa6: cond = 1u; break;  /* if_acmpne */
+    case 0xc6: cond = 0u; break;  /* ifnull    */
+    case 0xc7: cond = 1u; break;  /* ifnonnull */
+    default: w->failed = 1; return;
+    }
+
+    if (b->op == 0xa5u || b->op == 0xa6u) {
+        /* References are full 64-bit values under LP64. */
+        a64_load(w, A64_T0, A64_SP_ARG, top - 16, 1);
+        a64_load(w, A64_T1, A64_SP_ARG, top - 8, 1);
+        a64_cmp_reg64(w, A64_T0, A64_T1);
+    } else if (b->op == 0xc6u || b->op == 0xc7u) {
+        a64_load(w, A64_T0, A64_SP_ARG, top - 8, 1);
+        a64_cmp_reg64(w, A64_T0, A64_ZERO);
+    } else if (b->need == 2) {
+        a64_load(w, A64_T0, A64_SP_ARG, top - 16, 0);
+        a64_load(w, A64_T1, A64_SP_ARG, top - 8, 0);
+        a64_cmp_reg(w, A64_T0, A64_T1);
+    } else {
+        a64_load(w, A64_T0, A64_SP_ARG, top - 8, 0);
+        a64_cmp_imm(w, A64_T0, 0u);
+    }
+    if (w->counter) a64_inc_done(w);
+    a64_branch_cond(w, cond, kind, target);
+}
+
+static int a64_emit_block(a64_writer *w, const a64_scan *s, nj_size capacity)
+{
+    const nj_jit_block *block = &s->block;
+    nj_size label_at[NJ_JIT_MAX_BLOCK_INSNS];
+    nj_size exit_at[NJ_JIT_MAX_EXITS];
+    nj_size fault_at[NJ_JIT_MAX_FAULTS];
+    nj_size epilogue_at = A64_NO_LABEL;
+    nj_size reserve;
+    unsigned i;
+    int counter = s->njumps != 0u;
+    int fp = s->fp_used;
+
+    for (i = 0u; i < (unsigned)NJ_JIT_MAX_BLOCK_INSNS; ++i)
+        label_at[i] = A64_NO_LABEL;
+
+    /* Stub bytes are budgeted up front so the instruction stream can never
+     * crowd out the exits it branches to.  The bound is exact: exit stubs are
+     * 8 bytes (plus 4 for the ADD on a counter-based non-zero exit), fault
+     * stubs are 12 or 16 bytes, and the shared FPCR epilogue is 8.  An exact
+     * bound lets a block compile at a capacity equal to its own size. */
+    reserve = 8u * (nj_size)block->nexits;
+    if (counter && block->nexits > 1u)
+        reserve += 4u * (nj_size)(block->nexits - 1u);
+    reserve += (counter ? 16u : 12u) * (nj_size)block->nfaults;
+    if (fp) reserve += 8u;
+    if (capacity < reserve + 4u) return 0;
+    w->capacity = capacity - reserve;
+    w->counter = counter;
+
+    /* Indirect calls may target a BTI-guarded executable page. This landing
+     * pad is a backwards-compatible HINT on cores without FEAT_BTI. */
+    a64_u32(w, 0xd503245fu); /* bti c */
+    if (fp) a64_fp_save(w);
+    if (counter) a64_li32(w, A64_DONE, 0u); /* completed = 0 */
+
+    for (i = 0u; i < s->n; ++i) {
+        if (i == 0u && s->loop != 0) {
+            label_at[0] = w->used;
+            /* remaining = budget - completed; enter another iteration only
+             * when a whole window still fits. */
+            a64_r3(w, 0x4b000000u, A64_T3, A64_BUDGET_ARG, A64_DONE);
+            a64_li32(w, A64_T4, (nj_u4)s->n);
+            a64_cmp_reg(w, A64_T3, A64_T4);
+            a64_branch_cond(w, 3u, A64_FIX_EXIT, s->budget_exit); /* b.lo */
+        } else if (s->label[i]) {
+            label_at[i] = w->used;
+        }
+        if (s->ins[i].branch != 0) {
+            a64_emit_branch(w, s, i);
+        } else {
+            unsigned fault = s->fault_of[i] == A64_NO_FAULT ?
+                             0u : (unsigned)s->fault_of[i];
+            a64_emit(w, &s->ins[i], s->delta[i], fault);
+            if (counter) a64_inc_done(w);
+        }
+        if (w->failed) return 0;
+    }
+
+    w->capacity = capacity;
+
+    /* Success/exit stubs: w0 = (completed << 4) | exit_index. */
+    for (i = 0u; i < (unsigned)block->nexits; ++i) {
+        exit_at[i] = w->used;
+        if (counter) {
+            /* lsl w0,w3,#4 */
+            a64_u32(w, 0x531c6c60u);
+            if (i != 0u) {
+                a64_u32(w, 0x11000000u | (i << 10)); /* add w0,w0,#i */
+            }
+        } else {
+            a64_li32(w, A64_SP_ARG,
+                     ((nj_u4)block->insns << NJ_JIT_EXIT_SHIFT) | (nj_u4)i);
+        }
+        if (fp)
+            a64_branch(w, A64_FIX_EPILOGUE, 0u);
+        else
+            a64_u32(w, 0xd65f03c0u); /* ret x30 */
+    }
+    /* Fault stubs: w0 = fault word carrying the live completed count. */
+    for (i = 0u; i < (unsigned)block->nfaults; ++i) {
+        fault_at[i] = w->used;
+        if (counter) {
+            a64_li32(w, A64_SP_ARG,
+                     NJ_JIT_FAULT_BIT |
+                     ((nj_u4)i << NJ_JIT_FAULT_INDEX_SHIFT));
+            a64_u32(w, 0x2a030000u); /* orr w0,w0,w3 */
+        } else {
+            a64_li32(w, A64_SP_ARG,
+                     a64_fault_word(i, (nj_u4)s->fault_completed[i]));
+        }
+        if (fp)
+            a64_branch(w, A64_FIX_EPILOGUE, 0u);
+        else
+            a64_u32(w, 0xd65f03c0u); /* ret x30 */
+    }
+    if (fp) {
+        epilogue_at = w->used;
+        a64_fp_restore(w);
+        a64_u32(w, 0xd65f03c0u); /* ret x30 */
+    }
+    if (w->failed) return 0;
+
+    for (i = 0u; i < w->nfixups; ++i) {
+        const a64_fixup *f = &w->fixups[i];
+        nj_size target;
+        if (f->kind == A64_FIX_FAULT) {
+            if (f->target >= block->nfaults) return 0;
+            target = fault_at[f->target];
+        } else if (f->kind == A64_FIX_EXIT) {
+            if (f->target >= block->nexits) return 0;
+            target = exit_at[f->target];
+        } else if (f->kind == A64_FIX_LABEL) {
+            if (f->target >= s->n || label_at[f->target] == A64_NO_LABEL)
+                return 0;
+            target = label_at[f->target];
+        } else if (f->kind == A64_FIX_EPILOGUE) {
+            if (epilogue_at == A64_NO_LABEL) return 0;
+            target = epilogue_at;
+        } else {
+            return 0;
+        }
+        a64_patch_branch(w->buf, f, target);
+    }
+    if (w->used > capacity) return 0;
+    return 1;
+}
+
 int nj_arm64_compile(nj_vm *vm, const nj_method *m, nj_u4 pc, nj_u1 *buf,
                      nj_size capacity, nj_jit_block *out)
 {
+    a64_scan scan;
     a64_writer w;
-    nj_jit_block block;
-    nj_u1 completed[NJ_JIT_MAX_FAULTS];
-    nj_u1 fault_fp[NJ_JIT_MAX_FAULTS];
-    nj_size stub_at[NJ_JIT_MAX_FAULTS];
-    nj_u1 i;
     if (!out) return 0;
     memset(out, 0, sizeof(*out));
     if (!m || !m->code || !buf || pc >= m->code_len ||
-        sizeof(nj_value) != A64_SLOT_BYTES) return 0;
+        sizeof(nj_value) != A64_SLOT_BYTES ||
+        m->code_len - pc > 0xffffu) return 0;
     if (capacity > NJ_JIT_MAX_CODE_BYTES) capacity = NJ_JIT_MAX_CODE_BYTES;
-    if (capacity < 4u) return 0; /* no room for the BTI landing pad */
-    memset(&block, 0, sizeof(block));
-    block.next_pc = pc;
+    if (!a64_scan_build(vm, m, pc, &scan)) return 0;
     memset(&w, 0, sizeof(w));
-    memset(completed, 0, sizeof(completed));
-    memset(fault_fp, 0, sizeof(fault_fp));
     w.buf = buf;
+    w.used = 0u;
     w.capacity = capacity;
-    /* Indirect calls may target a BTI-guarded executable page. This landing
-     * pad is a backwards-compatible HINT on cores without FEAT_BTI. */
-    a64_u32(&w, 0xd503245fu); /* bti c */
-    if (w.failed) return 0;
-
-    while (block.next_pc < m->code_len &&
-           block.insns < NJ_JIT_MAX_BLOCK_INSNS) {
-        a64_bytecode b;
-        a64_writer checkpoint = w;
-        unsigned fault = block.nfaults;
-        nj_u1 fp_at_entry = (nj_u1)w.fpcr_saved;
-        unsigned tail_faults;
-        int delta, required, growth;
-        if (!a64_decode(vm, m, block.next_pc, &b)) break;
-        if (!a64_accept(&block, &b)) break;
-        delta = block.stack_delta + b.change;
-        required = b.need - block.stack_delta;
-        if (required < block.min_stack) required = block.min_stack;
-        growth = delta > block.max_growth ? delta : block.max_growth;
-        if (required + growth > (int)m->max_stack) break;
-        a64_emit(&w, &b, block.stack_delta, fault);
-        if (w.failed) {
-            /* Discard only this instruction. The tail written below overwrites
-             * its first bytes; no partial instruction enters the live block. */
-            w = checkpoint;
-            break;
-        }
-        /* Keep room for the success return and every already-accepted fault
-         * exit, plus this instruction's exit when it is guarded. */
-        tail_faults = block.nfaults + (b.guarding ? 1u : 0u);
-        if (w.used > capacity ||
-            capacity - w.used < a64_tail_bytes(w.fpcr_saved, tail_faults)) {
-            w = checkpoint;
-            break;
-        }
-        if (b.guarding) {
-            if (!nj_jit_record_fault(&block, pc, block.next_pc,
-                                     block.stack_delta)) {
-                w = checkpoint;
-                break;
-            }
-            completed[fault] = (nj_u1)block.insns;
-            fault_fp[fault] = fp_at_entry;
-        }
-        block.next_pc += b.length;
-        block.insns++;
-        block.stack_delta = delta;
-        block.min_stack = required;
-        block.max_growth = growth;
-        if (a64_terminates(&b)) break;
-    }
-    if (block.insns == 0u) return 0;
-
-    /* Success exit: w0 = number of finished bytecodes. */
-    a64_li32(&w, A64_SP_ARG, block.insns);
-    if (w.fpcr_saved) a64_u32(&w, 0xd51b4400u | A64_FPCR); /* msr fpcr,x12 */
-    a64_u32(&w, 0xd65f03c0u); /* ret x30 */
-
-    /* One fault exit per guarded instruction. Each is reached by a forward
-     * branch taken before the instruction's first side effect. */
-    for (i = 0u; i < block.nfaults; i++) {
-        stub_at[i] = w.used;
-        a64_li32(&w, A64_SP_ARG,
-                 a64_fault_word(i, (nj_u4)completed[i]));
-        if (fault_fp[i])
-            a64_u32(&w, 0xd51b4400u | A64_FPCR); /* msr fpcr,x12 */
-        a64_u32(&w, 0xd65f03c0u); /* ret x30 */
-    }
-    if (w.failed) return 0;
-
-    for (i = 0u; i < w.nfixups; i++) {
-        unsigned f = w.fixups[i].fault;
-        if (f >= block.nfaults || stub_at[f] <= w.fixups[i].at) {
-            w.failed = 1;
-            break;
-        }
-        a64_patch_branch(buf, &w.fixups[i], stub_at[f]);
-    }
-    if (w.failed) return 0;
-
-    block.size = w.used;
-    *out = block;
+    w.failed = 0;
+    w.nfixups = 0u;
+    if (!a64_emit_block(&w, &scan, capacity)) return 0;
+    if (w.used > capacity || w.failed) return 0;
+    scan.block.size = w.used;
+    *out = scan.block;
     return 1;
 }
 #endif /* NJ_ENABLE_JIT */

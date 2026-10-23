@@ -97,7 +97,7 @@ static int compile_checked(const nj_method *m, nj_u4 pc, nj_u1 *buf,
         limited.code_len = out->next_pc;
         CHECK(analyze_method(&limited, pc, &prefix));
         CHECK(prefix.size == 0);
-        same_metadata(out, &prefix);
+        if (prefix.next_pc == out->next_pc) same_metadata(out, &prefix);
         if (out->next_pc == analysis.next_pc) same_metadata(out, &analysis);
     } else if (buf && out && capacity >= NJ_JIT_MAX_CODE_BYTES) {
         CHECK(!scanned); /* One supported instruction must fit the full buffer. */
@@ -146,19 +146,19 @@ static void inspect(const nj_u1 *code, size_t length)
             long target = -1;
             if ((insn & 0xff000010u) == 0x54000000u) { /* b.cond */
                 long off = (long)((insn >> 5) & 0x7ffffu);
-                off = (off << 45) >> 45;
+                if (off & 0x40000) off -= 0x80000; /* sign-extend, no UB shift */
                 target = (long)p + off * 4;
             } else if ((insn & 0x7e000000u) == 0x34000000u) { /* cbz/cbnz */
                 long off = (long)((insn >> 5) & 0x7ffffu);
-                off = (off << 45) >> 45;
+                if (off & 0x40000) off -= 0x80000;
                 target = (long)p + off * 4;
             } else if ((insn & 0x7e000000u) == 0x36000000u) { /* tbz/tbnz */
                 long off = (long)((insn >> 5) & 0x3fffu);
-                off = (off << 50) >> 50;
+                if (off & 0x2000) off -= 0x4000;
                 target = (long)p + off * 4;
             } else if ((insn & 0x7c000000u) == 0x14000000u) { /* b */
                 long off = (long)(insn & 0x3ffffffu);
-                off = (off << 38) >> 38;
+                if (off & 0x2000000) off -= 0x4000000;
                 target = (long)p + off * 4;
             }
             if (target >= 0) CHECK(target < (long)length && (target & 3) == 0);
@@ -177,14 +177,15 @@ static size_t exec_size;
 /* Check every AAPCS64 callee-saved GPR and low 64 bits of v8..v15 around each
  * generated call. Save the harness's own registers before installing sentinels.
  * This out-of-line assembly avoids the compiler assuming preservation itself. */
-extern int arm64_check_abi(nj_jit_fn fn, nj_value *, nj_value *, nj_u4 *);
+extern int arm64_check_abi(nj_jit_fn fn, nj_value *, nj_value *, nj_u4,
+                           nj_u4 *);
 __asm__(
 ".text\n"
 ".align 2\n"
 ".type arm64_check_abi, %function\n"
 "arm64_check_abi:\n"
-"sub sp, sp, #176\n"
-"str x3, [sp, #168]\n"
+"sub sp, sp, #192\n"
+"str x4, [sp, #184]\n"
 "stp x19, x20, [sp, #0]\n"
 "stp x21, x22, [sp, #16]\n"
 "stp x23, x24, [sp, #32]\n"
@@ -196,7 +197,7 @@ __asm__(
 "stp d12, d13, [sp, #128]\n"
 "stp d14, d15, [sp, #144]\n"
 "mov x9, sp\n"
-"str x9, [sp, #160]\n"
+"str x9, [sp, #168]\n"
 ".irp n,19,20,21,22,23,24,25,26,27,28,29\n"
 "mov x\\n, #\\n\n"
 ".endr\n"
@@ -207,9 +208,10 @@ __asm__(
 "mov x16, x0\n"
 "mov x0, x1\n"
 "mov x1, x2\n"
+"mov x2, x3\n"
 "blr x16\n"
-"ldr x3, [sp, #168]\n"
-"str w0, [x3]\n"
+"ldr x4, [sp, #184]\n"
+"str w0, [x4]\n"
 "mov w0, #0\n"
 ".irp n,19,20,21,22,23,24,25,26,27,28,29\n"
 "cmp x\\n, #\\n\n"
@@ -221,7 +223,7 @@ __asm__(
 "cmp x10, x9\n"
 "b.ne 1f\n"
 ".endr\n"
-"ldr x9, [sp, #160]\n"
+"ldr x9, [sp, #168]\n"
 "mov x10, sp\n"
 "cmp x9, x10\n"
 "b.ne 1f\n"
@@ -237,7 +239,7 @@ __asm__(
 "ldp x23, x24, [sp, #32]\n"
 "ldp x21, x22, [sp, #16]\n"
 "ldp x19, x20, [sp, #0]\n"
-"add sp, sp, #176\n"
+"add sp, sp, #192\n"
 "ret\n"
 ".size arm64_check_abi, .-arm64_check_abi\n");
 
@@ -251,7 +253,8 @@ static void write_fpcr(uint64_t value)
 {
     __asm__ volatile("msr fpcr, %0" : : "r"(value) : "memory");
 }
-static nj_u4 invoke(const nj_u1 *code, size_t length, nj_value *sp, nj_value *locals)
+static nj_u4 invoke(const nj_u1 *code, size_t length, nj_value *sp,
+                    nj_value *locals, nj_u4 budget)
 {
     nj_jit_fn fn;
     nj_u4 result;
@@ -271,10 +274,40 @@ static nj_u4 invoke(const nj_u1 *code, size_t length, nj_value *sp, nj_value *lo
     __builtin___clear_cache((char *)exec_page, (char *)exec_page + length);
     CHECK(sizeof(fn) == sizeof(exec_page));
     memcpy(&fn, &exec_page, sizeof(fn));
-    CHECK(arm64_check_abi(fn, sp, locals, &result));
+    CHECK(arm64_check_abi(fn, sp, locals, budget, &result));
     CHECK(read_fpcr() == old_fpcr);
     ++executed;
     return result;
+}
+
+static int result_is_fault(nj_u4 word)
+{
+    return (word & NJ_JIT_FAULT_BIT) != 0u;
+}
+
+static unsigned result_completed(nj_u4 word)
+{
+    return result_is_fault(word) ? (unsigned)(word & NJ_JIT_FAULT_COMPLETED_MASK)
+                                 : (unsigned)(word >> NJ_JIT_EXIT_SHIFT);
+}
+
+static unsigned result_exit(nj_u4 word)
+{
+    return (unsigned)(word & NJ_JIT_EXIT_INDEX_MASK);
+}
+
+static unsigned result_fault_index(nj_u4 word)
+{
+    return (unsigned)((word >> NJ_JIT_FAULT_INDEX_SHIFT) & NJ_JIT_FAULT_INDEX_MASK);
+}
+
+static void expect_success(nj_u4 word, const nj_jit_block *block, unsigned completed)
+{
+    CHECK(!result_is_fault(word));
+    CHECK(result_exit(word) == 0u);
+    CHECK(result_completed(word) == completed);
+    CHECK(block->exits[0].pc_off == block->next_pc);
+    CHECK(block->exits[0].sp_delta == block->stack_delta);
 }
 #endif
 
@@ -283,12 +316,15 @@ static int reference(const nj_u1 *code, size_t length, nj_value *stack,
                      nj_value *locals, int sp, const nj_class *owner, unsigned *count)
 {
     size_t pc = 0;
+    unsigned steps = 0;
     *count = 0;
     while (pc < length) {
         unsigned op = code[pc++], index = 0;
         int wide = op == 0xc4u;
         nj_u4 a, b, result;
         if (wide) op = code[pc++];
+        if (++steps > 1000000u) { CHECK(!"oracle step limit"); break; }
+        if (op == 0xacu) break; /* return: stop without counting */
         ++*count;
         if ((op >= 0x15u && op <= 0x19u) ||
             (op >= 0x36u && op <= 0x3au) || op == 0x84u) {
@@ -336,6 +372,47 @@ static int reference(const nj_u1 *code, size_t length, nj_value *stack,
                 increment = (int16_t)((unsigned)code[pc] * 256 + code[pc + 1]); pc += 2;
             } else increment = (int8_t)code[pc++];
             locals[index].bits += (nj_u4)increment;
+        } else if (op == 0xa7u) {
+            nj_s4 target = (nj_s4)(pc - 1) +
+                (int16_t)((unsigned)code[pc] << 8 | code[pc + 1]);
+            CHECK(target >= 0 && (size_t)target <= length);
+            pc = (size_t)target;
+        } else if (op >= 0x99u && op <= 0x9eu) {
+            int value = stack[--sp].i;
+            int taken = op == 0x99u ? value == 0 :
+                        op == 0x9au ? value != 0 :
+                        op == 0x9bu ? value < 0 :
+                        op == 0x9cu ? value >= 0 :
+                        op == 0x9du ? value > 0 : value <= 0;
+            nj_s4 target = (nj_s4)(pc - 1) +
+                (int16_t)((unsigned)code[pc] << 8 | code[pc + 1]);
+            CHECK(target >= 0 && (size_t)target <= length);
+            pc = taken ? (size_t)target : pc + 2;
+        } else if (op >= 0x9fu && op <= 0xa4u) {
+            int rhs = stack[--sp].i, lhs = stack[--sp].i;
+            int taken = op == 0x9fu ? lhs == rhs :
+                        op == 0xa0u ? lhs != rhs :
+                        op == 0xa1u ? lhs < rhs :
+                        op == 0xa2u ? lhs >= rhs :
+                        op == 0xa3u ? lhs > rhs : lhs <= rhs;
+            nj_s4 target = (nj_s4)(pc - 1) +
+                (int16_t)((unsigned)code[pc] << 8 | code[pc + 1]);
+            CHECK(target >= 0 && (size_t)target <= length);
+            pc = taken ? (size_t)target : pc + 2;
+        } else if (op == 0xa5u || op == 0xa6u) {
+            nj_ref rhs = stack[--sp].r, lhs = stack[--sp].r;
+            int taken = (lhs == rhs) == (op == 0xa5u);
+            nj_s4 target = (nj_s4)(pc - 1) +
+                (int16_t)((unsigned)code[pc] << 8 | code[pc + 1]);
+            CHECK(target >= 0 && (size_t)target <= length);
+            pc = taken ? (size_t)target : pc + 2;
+        } else if (op == 0xc6u || op == 0xc7u) {
+            nj_ref value = stack[--sp].r;
+            int taken = (value == NULL) == (op == 0xc6u);
+            nj_s4 target = (nj_s4)(pc - 1) +
+                (int16_t)((unsigned)code[pc] << 8 | code[pc + 1]);
+            CHECK(target >= 0 && (size_t)target <= length);
+            pc = taken ? (size_t)target : pc + 2;
         } else if (op == 0x57u) --sp;
         else if (op == 0x58u) sp -= 2;
         else if (op == 0x59u) { stack[sp] = stack[sp - 1]; ++sp; }
@@ -409,6 +486,24 @@ static void compare_frame(const test_frame *actual, const test_frame *expected)
     }
     CHECK(!"generated code differs from oracle");
 }
+
+static void compare_live_frames(const char *name, const test_frame *actual,
+                                const test_frame *expected, int live_slots)
+{
+    test_frame a, e;
+    if (live_slots < 0 || live_slots > STACK_SLOTS) {
+        CHECK(!"live stack depth out of range");
+        return;
+    }
+    (void)name;
+    a = *actual;
+    e = *expected;
+    memset(&a.stack[live_slots], 0, (size_t)(STACK_SLOTS - live_slots) *
+           sizeof(a.stack[0]));
+    memset(&e.stack[live_slots], 0, (size_t)(STACK_SLOTS - live_slots) *
+           sizeof(e.stack[0]));
+    compare_frame(&a, &e);
+}
 #endif
 static void program_owned(const char *name, const nj_u1 *code, size_t length,
                           unsigned local_count, int depth, const test_frame *initial,
@@ -433,8 +528,8 @@ static void program_owned(const char *name, const nj_u1 *code, size_t length,
     {
         test_frame actual = *initial;
         nj_u4 done = invoke(generated, block.size, &actual.stack[BASE + depth],
-                            actual.locals);
-        CHECK(done == block.insns);
+                            actual.locals, block.insns);
+        expect_success(done, &block, block.insns);
         compare_frame(&actual, &expected);
     }
 #endif
@@ -467,8 +562,8 @@ static void declined(const char *name, const nj_u1 *code, size_t length, unsigne
 static void expect_fault(nj_u4 word, unsigned index, unsigned completed)
 {
     CHECK((word & NJ_JIT_FAULT_BIT) != 0u);
-    CHECK((word & NJ_JIT_FAULT_INDEX_MASK) == index);
-    CHECK(((word >> 8) & NJ_JIT_FAULT_COMPLETED_MASK) == completed);
+    CHECK(((word >> NJ_JIT_FAULT_INDEX_SHIFT) & NJ_JIT_FAULT_INDEX_MASK) == index);
+    CHECK((word & NJ_JIT_FAULT_COMPLETED_MASK) == completed);
 }
 #endif
 
@@ -493,7 +588,7 @@ static nj_u4 run_expect(const char *name, const nj_u1 *code, size_t length,
     {
         test_frame actual = *initial;
         ret = invoke(generated, out->size, &actual.stack[BASE + depth],
-                     actual.locals);
+                     actual.locals, out->insns);
         compare_frame(&actual, expected);
     }
 #else
@@ -644,7 +739,7 @@ static void field_read_case(const char *name, unsigned ptype, unsigned width,
     CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
           block.faults[0].sp_delta == 0);
 #if EXECUTE_ARM64
-    CHECK(ret == 1);
+    expect_success(ret, &block, block.insns);
 #endif
     CHECK(memcmp(fx.object.bytes, before, sizeof(before)) == 0);
     (void)ret;
@@ -689,7 +784,7 @@ static void field_write_case(const char *name, unsigned ptype, unsigned width,
     CHECK(block.nfaults == 1 && block.faults[0].pc_off == 0 &&
           block.faults[0].sp_delta == 0);
 #if EXECUTE_ARM64
-    CHECK(ret == 1);
+    expect_success(ret, &block, block.insns);
     CHECK(memcmp(fx.object.bytes, expected_obj, sizeof(expected_obj)) == 0);
 #else
     (void)expected_obj;
@@ -808,7 +903,7 @@ static void array_load_case(const char *name, array_fixture *fx, nj_ref ref,
           block.faults[0].sp_delta == 0);
 #if EXECUTE_ARM64
     if (fault) expect_fault(ret, 0u, 0u);
-    else CHECK(ret == 1);
+    else expect_success(ret, &block, block.insns);
 #endif
     (void)ret;
 }
@@ -840,7 +935,7 @@ static void array_store_case(const char *name, array_fixture *fx, nj_ref ref,
           block.faults[0].sp_delta == 0);
 #if EXECUTE_ARM64
     if (fault) expect_fault(ret, 0u, 0u);
-    else CHECK(ret == 1);
+    else expect_success(ret, &block, block.insns);
 #endif
 #if EXECUTE_ARM64
     CHECK(memcmp(fx->ints, want, sizeof(want)) == 0);
@@ -877,7 +972,7 @@ static void array_length_case(const char *name, array_fixture *fx, nj_ref ref,
           block.faults[0].sp_delta == 0);
 #if EXECUTE_ARM64
     if (fault) expect_fault(ret, 0u, 0u);
-    else CHECK(ret == 1);
+    else expect_success(ret, &block, block.insns);
 #endif
     (void)ret;
 }
@@ -1263,7 +1358,7 @@ static void capacity_case(const nj_u1 *code, size_t length, int depth)
                 test_frame actual = initial;
                 uint64_t old_fpcr = read_fpcr();
                 write_fpcr(UINT64_C(0x03400000)); /* RUP, FZ, DN */
-                invoke(generated + 16, block.size, &actual.stack[BASE + depth], actual.locals);
+                invoke(generated + 16, block.size, &actual.stack[BASE + depth], actual.locals, block.insns);
                 write_fpcr(old_fpcr);
                 compare_frame(&actual, &expected);
             }
@@ -1404,7 +1499,7 @@ static void test_large_locals(void)
             expected[1].bits = expected[index].bits;
             stack_expected[1].r = locals[index].r;
             stack_expected[1].bits = expected[index].bits;
-            invoke(generated, block.size, stack + 1, locals);
+            invoke(generated, block.size, stack + 1, locals, block.insns);
             CHECK(memcmp(locals, expected, 65535 * sizeof(nj_value)) == 0);
             CHECK(memcmp(stack, stack_expected, sizeof(stack)) == 0);
             free(expected); free(locals);
@@ -1432,7 +1527,7 @@ static void test_large_locals(void)
             memcpy(expected, locals, 65535 * sizeof(nj_value)); expected[65534].bits = 0;
             memset(stack, 0x5a, sizeof(stack)); memcpy(stack_expected, stack, sizeof(stack));
             stack_expected[1] = locals[65533]; stack_expected[2].bits = 0;
-            invoke(generated, block.size, stack + 1, locals);
+            invoke(generated, block.size, stack + 1, locals, block.insns);
             CHECK(memcmp(locals, expected, 65535 * sizeof(nj_value)) == 0);
             CHECK(memcmp(stack, stack_expected, sizeof(stack)) == 0);
             free(expected); free(locals);
@@ -1464,7 +1559,7 @@ static void test_fpcr(void)
         CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
         write_fpcr(UINT64_C(0x03400000));
         CHECK(read_fpcr() == UINT64_C(0x03400000));
-        invoke(generated, block.size, &f.stack[BASE + (code == 0x76 ? 1 : 2)], f.locals);
+        invoke(generated, block.size, &f.stack[BASE + (code == 0x76 ? 1 : 2)], f.locals, block.insns);
         write_fpcr(old_fpcr);
         CHECK(f.stack[BASE].bits == cases[i].result);
     }
@@ -1487,7 +1582,7 @@ static void test_fpcr(void)
             test_name = "fixed double RNE non-FTZ and FPCR restoration";
             CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block));
             write_fpcr(UINT64_C(0x03400000));
-            invoke(generated, block.size, &f.stack[BASE + (code == 0x77 ? 2 : 4)], f.locals);
+            invoke(generated, block.size, &f.stack[BASE + (code == 0x77 ? 2 : 4)], f.locals, block.insns);
             write_fpcr(old_fpcr);
             memcpy(&got, &f.stack[BASE], 8); CHECK(got == dcases[i].result);
         }
@@ -1565,7 +1660,7 @@ static void capacity_owned(const nj_u1 *code, size_t length, int depth,
 #if EXECUTE_ARM64
             {
                 test_frame actual = *initial;
-                invoke(generated + 16, block.size, &actual.stack[BASE + depth], actual.locals);
+                invoke(generated + 16, block.size, &actual.stack[BASE + depth], actual.locals, block.insns);
                 CHECK(memcmp(&actual, &expected, sizeof(actual)) == 0);
             }
 #endif
@@ -1744,7 +1839,7 @@ static void test_write_through(void)
 #if EXECUTE_ARM64
         {
             test_frame actual = f;
-            invoke(generated, block.size, actual.stack + BASE, actual.stack + local_offsets[i]);
+            invoke(generated, block.size, actual.stack + BASE, actual.stack + local_offsets[i], block.insns);
             CHECK(memcmp(&actual, &expected, sizeof(actual)) == 0);
         }
 #endif
@@ -1808,6 +1903,684 @@ static void test_constant_chain(void)
            block.insns, (unsigned long)block.size, loads, stores);
 }
 
+/* ---- branches and loops ---------------------------------------------- */
+
+static size_t oracle_branch_target(const nj_u1 *code, size_t operand_pc,
+                                   size_t length)
+{
+    nj_s4 target = (nj_s4)(operand_pc - 1u) +
+        (nj_s4)(int16_t)((unsigned)code[operand_pc] << 8 | code[operand_pc + 1]);
+    CHECK(target >= 0 && (size_t)target <= length);
+    return (size_t)target;
+}
+
+/* Compile a non-loop branch block at pc 0, execute it natively once and
+ * compare the whole frame against reference(). Returns the raw ABI word and
+ * the oracle's completed-bytecode count. */
+static nj_u4 branch_run(const char *name, const nj_u1 *code, size_t length,
+                        unsigned local_count, const test_frame *initial,
+                        nj_u4 budget, nj_jit_block *out, test_frame *expected,
+                        unsigned *count)
+{
+    nj_u1 generated[NJ_JIT_MAX_CODE_BYTES];
+    nj_method m = method(code, length, local_count);
+    test_name = name;
+    CHECK(compile_checked(&m, 0, generated, sizeof(generated), out) == 1);
+    CHECK(out->next_pc <= length);
+    inspect(generated, out->size);
+    ++compiled;
+    *expected = *initial;
+    {
+        int end = reference(code, length, expected->stack, expected->locals,
+                            BASE, NULL, count);
+        (void)end;
+    }
+    (void)budget;
+#if EXECUTE_ARM64
+    {
+        test_frame actual = *initial;
+        nj_u4 word = invoke(generated, out->size, &actual.stack[BASE],
+                            actual.locals, budget);
+        CHECK(!result_is_fault(word));
+        CHECK(result_exit(word) < out->nexits);
+        CHECK(result_completed(word) <= budget);
+        CHECK(result_completed(word) == *count); /* window ends where the oracle stops */
+        compare_frame(&actual, expected);
+        return word;
+    }
+#else
+    return 0;
+#endif
+}
+
+/* Focused interpreter for loops over int locals, int arrays and one int
+ * instance field. It models exactly the bytecodes the loop tests emit and
+ * stops before stop_pc (used to model a guard fault). */
+typedef struct loop_env {
+    nj_s4 *ints;
+    unsigned ints_len;
+    nj_u1 *field_obj;
+    unsigned field_off;
+} loop_env;
+
+static int loop_oracle(const nj_u1 *code, size_t length, test_frame *frame,
+                       int sp, const loop_env *env, size_t stop_pc,
+                       unsigned *count)
+{
+    size_t pc = 0;
+    unsigned steps = 0;
+    *count = 0;
+    while (pc < length) {
+        unsigned op;
+        if (pc == stop_pc) break;
+        op = code[pc++];
+        if (++steps > 1000000u) { CHECK(!"loop oracle step limit"); break; }
+        if (op == 0xacu) break;
+        ++*count;
+        switch (op) {
+        case 0x03: case 0x04: case 0x05: case 0x06: case 0x07: case 0x08:
+            frame->stack[sp++].i = (int)op - 3;
+            break;
+        case 0x10:
+            frame->stack[sp++].i = (int8_t)code[pc++];
+            break;
+        case 0x1a: case 0x1b: case 0x1c: case 0x1d:
+            frame->stack[sp++].bits = frame->locals[op - 0x1au].bits;
+            break;
+        case 0x15: case 0x19: {
+            unsigned index = code[pc++];
+            if (op == 0x19u)
+                frame->stack[sp++].r = frame->locals[index].r;
+            else
+                frame->stack[sp++].bits = frame->locals[index].bits;
+            break;
+        }
+        case 0x2a: case 0x2b: case 0x2c: case 0x2d:
+            frame->stack[sp++].r = frame->locals[op - 0x2au].r;
+            break;
+        case 0x3b: case 0x3c: case 0x3d: case 0x3e:
+            frame->locals[op - 0x3bu].bits = frame->stack[--sp].bits;
+            break;
+        case 0x36: case 0x3a: {
+            unsigned index = code[pc++];
+            if (op == 0x3au)
+                frame->locals[index].r = frame->stack[--sp].r;
+            else
+                frame->locals[index].bits = frame->stack[--sp].bits;
+            break;
+        }
+        case 0x84: {
+            unsigned index = code[pc++];
+            int increment = (int8_t)code[pc++];
+            frame->locals[index].bits += (nj_u4)increment;
+            break;
+        }
+        case 0x60: case 0x64: {
+            nj_u4 a = frame->stack[sp - 2].bits, b = frame->stack[sp - 1].bits;
+            frame->stack[sp - 2].bits = op == 0x60u ? a + b : a - b;
+            --sp;
+            break;
+        }
+        case 0x2e: {
+            int index = frame->stack[sp - 1].i;
+            if (!env || !env->ints || index < 0 ||
+                (unsigned)index >= env->ints_len) {
+                --*count;
+                return (int)*count; /* the JIT guard faults here */
+            }
+            frame->stack[sp - 2].i = env->ints[index];
+            --sp;
+            break;
+        }
+        case 0x4f: {
+            int index = frame->stack[sp - 2].i;
+            if (!env || !env->ints || index < 0 ||
+                (unsigned)index >= env->ints_len) {
+                --*count;
+                return (int)*count; /* the JIT guard faults here */
+            }
+            env->ints[index] = frame->stack[sp - 1].i;
+            sp -= 3;
+            break;
+        }
+        case 0xb4: {
+            nj_u4 value = 0;
+            CHECK(code[pc] == 0u && code[pc + 1] == 1u);
+            CHECK(env && env->field_obj);
+            memcpy(&value, env->field_obj + env->field_off, 4);
+            frame->stack[sp - 1].bits = value;
+            pc += 2;
+            break;
+        }
+        case 0xb5: {
+            CHECK(code[pc] == 0u && code[pc + 1] == 1u);
+            CHECK(env && env->field_obj);
+            memcpy(env->field_obj + env->field_off, &frame->stack[sp - 2].bits, 4);
+            pc += 2;
+            sp -= 2;
+            break;
+        }
+        case 0xa7:
+            pc = oracle_branch_target(code, pc, length);
+            break;
+        case 0x99: case 0x9a: case 0x9b: case 0x9c: case 0x9d: case 0x9e: {
+            int v = frame->stack[--sp].i;
+            int taken = op == 0x99u ? v == 0 :
+                        op == 0x9au ? v != 0 :
+                        op == 0x9bu ? v < 0 :
+                        op == 0x9cu ? v >= 0 :
+                        op == 0x9du ? v > 0 : v <= 0;
+            pc = taken ? oracle_branch_target(code, pc, length) : pc + 2;
+            break;
+        }
+        case 0x9f: case 0xa0: case 0xa1: case 0xa2: case 0xa3: case 0xa4: {
+            int b = frame->stack[--sp].i;
+            int a = frame->stack[--sp].i;
+            int taken = op == 0x9fu ? a == b :
+                        op == 0xa0u ? a != b :
+                        op == 0xa1u ? a < b :
+                        op == 0xa2u ? a >= b :
+                        op == 0xa3u ? a > b : a <= b;
+            pc = taken ? oracle_branch_target(code, pc, length) : pc + 2;
+            break;
+        }
+        case 0xa5: case 0xa6: {
+            nj_ref b = frame->stack[--sp].r;
+            nj_ref a = frame->stack[--sp].r;
+            int taken = (a == b) == (op == 0xa5u);
+            pc = taken ? oracle_branch_target(code, pc, length) : pc + 2;
+            break;
+        }
+        case 0xc6: case 0xc7: {
+            nj_ref v = frame->stack[--sp].r;
+            int taken = (v == NULL) == (op == 0xc6u);
+            pc = taken ? oracle_branch_target(code, pc, length) : pc + 2;
+            break;
+        }
+        default:
+            CHECK(!"loop oracle missing opcode");
+            return sp;
+        }
+    }
+    return sp;
+}
+
+static nj_u4 loop_run(const char *name, const nj_u1 *code, size_t length,
+                      unsigned local_count, const test_frame *initial,
+                      nj_class *owner, nj_s4 *ints, unsigned ints_len,
+                      nj_u1 *field_obj, unsigned field_off, size_t stop_pc,
+                      nj_u4 budget, nj_jit_block *out, test_frame *expected,
+                      unsigned *count)
+{
+    nj_u1 generated[NJ_JIT_MAX_CODE_BYTES];
+    nj_method m = method(code, length, local_count);
+    loop_env env;
+    *out = (nj_jit_block){0};
+    m.owner = owner;
+    test_name = name;
+    CHECK(compile_checked(&m, 0, generated, sizeof(generated), out) == 1);
+    CHECK(out->next_pc <= length);
+    inspect(generated, out->size);
+    ++compiled;
+    env.ints = ints;
+    env.ints_len = ints_len;
+    env.field_obj = field_obj;
+    env.field_off = field_off;
+    /* The oracle may mutate the array or the field; run it on copies so the
+     * native call starts from the same clean fixture. */
+    {
+        nj_s4 *copy_ints = NULL;
+        nj_u1 field_copy[4];
+        if (ints != NULL && ints_len != 0u) {
+            copy_ints = (nj_s4 *)malloc((size_t)ints_len * sizeof(*copy_ints));
+            CHECK(copy_ints != NULL);
+            memcpy(copy_ints, ints, (size_t)ints_len * sizeof(*copy_ints));
+            env.ints = copy_ints;
+        }
+        if (field_obj != NULL) {
+            memcpy(field_copy, field_obj + field_off, sizeof(field_copy));
+            env.field_obj = field_copy;
+            env.field_off = 0u;
+        }
+        *expected = *initial;
+        (void)loop_oracle(code, length, expected, BASE, &env, stop_pc, count);
+        free(copy_ints);
+    }
+    (void)budget;
+#if EXECUTE_ARM64
+    {
+        test_frame actual = *initial;
+        nj_u4 word = invoke(generated, out->size, &actual.stack[BASE],
+                            actual.locals, budget);
+        {
+            int delta;
+            if (result_is_fault(word)) {
+                unsigned index = result_fault_index(word);
+                CHECK(index < out->nfaults);
+                delta = out->faults[index].sp_delta;
+            } else {
+                unsigned which = result_exit(word);
+                CHECK(which < out->nexits);
+                CHECK(result_completed(word) <= budget);
+                delta = out->exits[which].sp_delta;
+            }
+            if (result_is_fault(word) || result_exit(word) == 0)
+                CHECK(result_completed(word) == *count);
+            compare_live_frames(name, &actual, expected, BASE + delta);
+        }
+        return word;
+    }
+#else
+    return 0;
+#endif
+}
+
+static void test_branches(void)
+{
+    nj_jit_block block;
+    test_frame initial, expected;
+    nj_u4 word = 0;
+    unsigned count = 0, i;
+
+    /* if<cond>: a taken branch skips a two-bytecode then-block. */
+    {
+        static const unsigned ops[] = {0x99u, 0x9au, 0x9bu, 0x9cu, 0x9du, 0x9eu};
+        static const int values[6][2] = {
+            {0, 5}, {5, 0}, {-1, 1}, {1, -1}, {1, -1}, {-1, 1}
+        };
+        for (i = 0; i < 6; ++i) {
+            nj_u1 code[8];
+            int k;
+            code[0] = 0x1a; code[1] = (nj_u1)ops[i];
+            code[2] = 0x00; code[3] = 0x05;
+            code[4] = 0x04; code[5] = 0x3c; code[6] = 0x00; code[7] = 0xac;
+            for (k = 0; k < 2; ++k) {
+                init_frame(&initial);
+                initial.locals[0].i = values[i][k];
+                initial.locals[1].i = 0x1234;
+                word = branch_run("if<cond> family", code, sizeof(code), 2,
+                                  &initial, 32, &block, &expected, &count);
+                CHECK(block.nexits == 1u);
+                CHECK(count == (k == 0 ? 3u : 5u));
+#if EXECUTE_ARM64
+                CHECK(!result_is_fault(word));
+                CHECK(result_exit(word) == 0u);
+                CHECK(result_completed(word) == count);
+#endif
+            }
+        }
+    }
+
+    /* if_icmp<cond>: all six comparisons, both outcomes. */
+    {
+        static const unsigned ops[] = {0x9fu, 0xa0u, 0xa1u, 0xa2u, 0xa3u, 0xa4u};
+        static const int values[6][2][2] = {
+            {{1, 1}, {1, 2}}, {{1, 2}, {1, 1}}, {{-3, 2}, {2, -3}},
+            {{2, -3}, {-3, 2}}, {{2, -3}, {-3, 2}}, {{-3, 2}, {2, -3}}
+        };
+        for (i = 0; i < 6; ++i) {
+            nj_u1 code[8];
+            int k;
+            code[0] = 0x1a; code[1] = 0x1b; code[2] = (nj_u1)ops[i];
+            code[3] = 0x00; code[4] = 0x05;
+            code[5] = 0x04; code[6] = 0x3c; code[7] = 0xac;
+            for (k = 0; k < 2; ++k) {
+                init_frame(&initial);
+                initial.locals[0].i = values[i][k][0];
+                initial.locals[1].i = values[i][k][1];
+                initial.locals[2].i = 0x55aa;
+                word = branch_run("if_icmp<cond> family", code, sizeof(code),
+                                  3, &initial, 32, &block, &expected, &count);
+                CHECK(block.nexits == 1u);
+                CHECK(count == (k == 0 ? 3u : 5u));
+#if EXECUTE_ARM64
+                CHECK(!result_is_fault(word));
+                CHECK(result_exit(word) == 0u);
+                CHECK(result_completed(word) == count);
+#endif
+            }
+        }
+    }
+
+    /* if_acmpeq/ne over real reference values. */
+    {
+        nj_object oa, ob;
+        nj_ref pairs[5][2];
+        memset(&oa, 0, sizeof(oa));
+        memset(&ob, 0, sizeof(ob));
+        pairs[0][0] = (nj_ref)&oa; pairs[0][1] = (nj_ref)&oa; /* eq taken */
+        pairs[1][0] = (nj_ref)&oa; pairs[1][1] = (nj_ref)&ob; /* eq fall */
+        pairs[2][0] = (nj_ref)&oa; pairs[2][1] = (nj_ref)&ob; /* ne taken */
+        pairs[3][0] = (nj_ref)&oa; pairs[3][1] = (nj_ref)&oa; /* ne fall */
+        pairs[4][0] = NULL;        pairs[4][1] = NULL;        /* eq taken */
+        for (i = 0; i < 5; ++i) {
+            static const nj_u1 code_eq[] = {0x2a, 0x2b, 0xa5, 0x00, 0x05,
+                                            0x04, 0x3c, 0xac};
+            static const nj_u1 code_ne[] = {0x2a, 0x2b, 0xa6, 0x00, 0x05,
+                                            0x04, 0x3c, 0xac};
+            const nj_u1 *code = (i == 2u || i == 3u) ? code_ne : code_eq;
+            int taken = i != 1u && i != 3u;
+            init_frame(&initial);
+            initial.locals[0].r = pairs[i][0];
+            initial.locals[1].r = pairs[i][1];
+            initial.locals[2].i = 0x77;
+            word = branch_run("if_acmp eq/ne", code, 8, 3, &initial, 32,
+                              &block, &expected, &count);
+            CHECK(block.nexits == 1u);
+            CHECK(count == (taken ? 3u : 5u));
+#if EXECUTE_ARM64
+            CHECK(!result_is_fault(word));
+            CHECK(result_exit(word) == 0u);
+            CHECK(result_completed(word) == count);
+#endif
+        }
+    }
+
+    /* ifnull/ifnonnull. */
+    {
+        nj_object oa;
+        memset(&oa, 0, sizeof(oa));
+        for (i = 0; i < 4; ++i) {
+            nj_u1 code[7];
+            int taken = i == 0u || i == 2u;
+            init_frame(&initial);
+            code[0] = 0x2a;
+            code[1] = (i < 2u) ? 0xc6u : 0xc7u;
+            code[2] = 0x00; code[3] = 0x05;
+            code[4] = 0x04; code[5] = 0x3c; code[6] = 0xac;
+            initial.locals[0].r = (i == 0u || i == 3u)
+                                      ? NULL : (nj_ref)&oa;
+            initial.locals[1].i = 0x33;
+            word = branch_run("ifnull/ifnonnull", code, sizeof(code), 2,
+                              &initial, 32, &block, &expected, &count);
+            CHECK(block.nexits == 1u);
+            CHECK(count == (taken ? 2u : 4u));
+#if EXECUTE_ARM64
+            CHECK(!result_is_fault(word));
+            CHECK(result_exit(word) == 0u);
+            CHECK(result_completed(word) == count);
+#endif
+        }
+    }
+
+    /* A forward goto that lands on an instruction inside the window. */
+    {
+        static const nj_u1 code[] = {
+            0xa7, 0x00, 0x05,       /* goto 5 */
+            0x04, 0x3b,             /* iconst_1; istore_0 (skipped) */
+            0x05, 0x3b,             /* iconst_2; istore_0 */
+            0xac
+        };
+        init_frame(&initial);
+        initial.locals[0].i = 0x600d;
+        word = branch_run("forward goto inside window", code, sizeof(code), 1,
+                          &initial, 16, &block, &expected, &count);
+        CHECK(block.nexits == 1u);
+        CHECK(block.insns == 5u);
+        CHECK(count == 3u);
+        CHECK(expected.locals[0].i == 2);
+#if EXECUTE_ARM64
+        CHECK(!result_is_fault(word));
+        CHECK(result_exit(word) == 0u);
+        CHECK(result_completed(word) == 3u);
+#endif
+    }
+
+    /* A forward branch whose target equals the window end but whose stack
+     * depth differs from the fall-through end needs its own exit record. */
+#if NJ_JIT_MAX_EXITS >= 2
+    {
+        nj_u1 code[] = {
+            0x04, 0x04, 0x9f, 0x00, 0x05, /* iconst_1; iconst_1; if_icmpeq 7 */
+            0x06,                          /* iconst_3 */
+            0x00, 0xac                     /* nop; return */
+        };
+        init_frame(&initial);
+        initial.locals[0].i = 1;
+        initial.locals[1].i = 1;
+        word = branch_run("branch target at window end, distinct exit", code,
+                          sizeof(code), 2, &initial, 16, &block, &expected,
+                          &count);
+        CHECK(block.loop == 0);
+        CHECK(block.nexits == 2u);
+        CHECK(block.exits[0].pc_off == 7u && block.exits[0].sp_delta == 1);
+        CHECK(block.exits[1].pc_off == 7u && block.exits[1].sp_delta == 0);
+        CHECK(count == 3u);
+#if EXECUTE_ARM64
+        CHECK(!result_is_fault(word));
+        CHECK(result_exit(word) == 1u);
+        CHECK(result_completed(word) == 3u);
+#endif
+        init_frame(&initial);
+        initial.locals[0].i = 1;
+        initial.locals[1].i = 2;
+        code[1] = 0x05; /* iconst_2: 1 != 2, so fall through */
+        word = branch_run("branch not taken, fall-through exit", code,
+                          sizeof(code), 2, &initial, 16, &block, &expected,
+                          &count);
+        CHECK(block.nexits == 2u);
+        CHECK(count == 5u);
+        CHECK(expected.stack[BASE].i == 3);
+#if EXECUTE_ARM64
+        CHECK(!result_is_fault(word));
+        CHECK(result_exit(word) == 0u);
+        CHECK(result_completed(word) == 5u);
+#endif
+    }
+#endif
+    (void)word;
+}
+
+static void test_loops(void)
+{
+#if NJ_JIT_MAX_EXITS >= 2
+    nj_jit_block block;
+    test_frame initial, expected;
+    nj_u4 word = 0;
+    unsigned count = 0;
+
+    /* Do-while sum: sum(1..n), n = 2000, executed natively in one call. */
+    {
+        static const nj_u1 code[] = {
+            0x84, 0x00, 0x01,             /* iinc 0, 1 */
+            0x1c, 0x1a, 0x60, 0x3d,       /* iload_2; iload_0; iadd; istore_2 */
+            0x1a, 0x1b,                   /* iload_0; iload_1 */
+            0xa1, 0xff, 0xf7,             /* if_icmplt 0 (i < n) */
+            0xac
+        };
+        init_frame(&initial);
+        initial.locals[0].i = 0;
+        initial.locals[1].i = 2000;
+        initial.locals[2].i = 0;
+        word = loop_run("loop sum 1..n", code, sizeof(code), 3, &initial,
+                        NULL, NULL, 0, NULL, 0, SIZE_MAX, 100000, &block,
+                        &expected, &count);
+        CHECK(block.loop == 1);
+        CHECK(block.nexits >= 2u);
+        CHECK(block.insns == 8u);
+        CHECK(block.exits[0].pc_off == 12u && block.exits[0].sp_delta == 0);
+        CHECK(block.exits[block.nexits - 1u].pc_off == 0u &&
+              block.exits[block.nexits - 1u].sp_delta == 0);
+        CHECK(count == 16000u);
+        CHECK(expected.locals[0].i == 2000);
+        CHECK(expected.locals[1].i == 2000);
+        CHECK(expected.locals[2].i == 2001000);
+#if EXECUTE_ARM64
+        CHECK(!result_is_fault(word));
+        CHECK(result_exit(word) == 0u);
+        CHECK(result_completed(word) == 16000u);
+#endif
+    }
+
+    /* Small budget: one iteration per call, always leaving through the budget
+     * exit, with the frame advancing across calls. */
+    {
+        static const nj_u1 code[] = {
+            0x84, 0x00, 0x01,
+            0x1c, 0x1a, 0x60, 0x3d,
+            0x1a, 0x1b,
+            0xa1, 0xff, 0xf7,
+            0xac
+        };
+        nj_u1 generated[NJ_JIT_MAX_CODE_BYTES];
+        nj_method m = method(code, sizeof(code), 3);
+        unsigned budget_exit = 0u, k;
+        test_name = "loop budget exit";
+        CHECK(compile_checked(&m, 0, generated, sizeof(generated), &block) == 1);
+        CHECK(block.loop == 1);
+        inspect(generated, block.size);
+        ++compiled;
+        for (k = 1; k < block.nexits; ++k)
+            if (block.exits[k].pc_off == 0u && block.exits[k].sp_delta == 0)
+                budget_exit = k;
+        CHECK(budget_exit != 0u);
+        init_frame(&initial);
+        initial.locals[0].i = 0;
+        initial.locals[1].i = 2000;
+        initial.locals[2].i = 0;
+#if EXECUTE_ARM64
+        {
+            test_frame actual = initial;
+            for (k = 0; k < 5; ++k) {
+                word = invoke(generated, block.size, &actual.stack[BASE],
+                              actual.locals, 8);
+                CHECK(!result_is_fault(word));
+                CHECK(result_exit(word) == budget_exit);
+                CHECK(result_completed(word) == 8u);
+                CHECK(result_completed(word) <= 8u);
+                CHECK(actual.locals[0].i == (nj_s4)(k + 1u));
+                CHECK(actual.locals[2].i == (nj_s4)((k + 1u) * (k + 2u) / 2u));
+            }
+        }
+#else
+        (void)budget_exit;
+#endif
+    }
+
+    /* A guard inside the loop faults on the ninth iteration: the fault word
+     * carries the completed count, and the exit metadata rewinds pc/sp to the
+     * guarded instruction with the operand stack still holding its inputs. */
+    {
+        static const nj_u1 code[] = {
+            0x1c, 0x2d, 0x1a, 0x2e, 0x60, 0x3d, /* sum += arr[i] */
+            0x84, 0x00, 0x01,                   /* iinc 0, 1 */
+            0x1a, 0x1b,                         /* iload_0; iload_1 */
+            0xa1, 0xff, 0xf5,                   /* if_icmplt 0 */
+            0xac
+        };
+        array_fixture ax;
+        array_fixture_init(&ax, NJ_OBJ_ARRAY, NJ_ARRAY_T_INT);
+        init_frame(&initial);
+        initial.locals[0].i = 0;
+        initial.locals[1].i = 10;
+        initial.locals[2].i = 0;
+        initial.locals[3].r = (nj_ref)&ax.arr;
+        jit_vm = &ax.vm;
+        word = loop_run("guarded array load faults in loop", code,
+                        sizeof(code), 4, &initial, NULL, ax.ints, ARRAY_LEN,
+                        NULL, 0, SIZE_MAX, 100000, &block, &expected, &count);
+        jit_vm = NULL;
+        CHECK(block.loop == 1);
+        CHECK(block.nfaults == 1u);
+        CHECK(block.faults[0].pc_off == 3u && block.faults[0].sp_delta == 3);
+        CHECK(count == 83u);
+        CHECK(expected.locals[0].i == 8);
+        CHECK(expected.locals[2].i == (nj_s4)0x9d1d9e1cu);
+        CHECK(expected.stack[BASE].i == (nj_s4)0x9d1d9e1cu);
+        CHECK(expected.stack[BASE + 1].r == (nj_ref)&ax.arr);
+        CHECK(expected.stack[BASE + 2].i == 8);
+#if EXECUTE_ARM64
+        CHECK(result_is_fault(word));
+        CHECK(result_fault_index(word) == 0u);
+        CHECK(result_completed(word) == 83u);
+#endif
+    }
+
+    /* Arrays mutated in a loop: every iteration executes two guarded
+     * instructions; the whole frame and the array bytes must match the
+     * interpreter oracle. */
+#if NJ_JIT_MAX_FAULTS >= 2
+    {
+        static const nj_u1 code[] = {
+            0x2d, 0x1a, 0x2e, 0x1a, 0x60, 0x36, 0x04, /* t = arr[i] + i */
+            0x2d, 0x1a, 0x15, 0x04, 0x4f,             /* arr[i] = t */
+            0x84, 0x00, 0x01,
+            0x1a, 0x1b,
+            0xa1, 0xff, 0xef,
+            0xac
+        };
+        array_fixture ax;
+        unsigned j;
+        array_fixture_init(&ax, NJ_OBJ_ARRAY, NJ_ARRAY_T_INT);
+        init_frame(&initial);
+        initial.locals[0].i = 0;
+        initial.locals[1].i = ARRAY_LEN;
+        initial.locals[3].r = (nj_ref)&ax.arr;
+        jit_vm = &ax.vm;
+        word = loop_run("array mutation loop", code, sizeof(code), 5, &initial,
+                        NULL, ax.ints, ARRAY_LEN, NULL, 0, SIZE_MAX, 100000,
+                        &block, &expected, &count);
+        jit_vm = NULL;
+        CHECK(block.loop == 1 && block.nfaults == 2u);
+        CHECK(count == 112u);
+        CHECK(expected.locals[0].i == (nj_s4)ARRAY_LEN);
+#if EXECUTE_ARM64
+        CHECK(!result_is_fault(word));
+        CHECK(result_completed(word) == 112u);
+#endif
+#if EXECUTE_ARM64
+        for (j = 0; j < ARRAY_LEN; ++j)
+            CHECK(ax.ints[j] == (nj_s4)(0x10203040u + j * 0x01010101u +
+                                        (nj_s4)j));
+#else
+        (void)j;
+#endif
+    }
+
+    /* Field mutation loop: box.value += i, two guarded instructions. */
+    {
+        static const nj_u1 code[] = {
+            0x2c, 0x2c, 0xb4, 0x00, 0x01,       /* aload_2; aload_2; getfield 1 */
+            0x1a, 0x60,                         /* iload_0; iadd */
+            0xb5, 0x00, 0x01,                   /* putfield 1 */
+            0x84, 0x00, 0x01,
+            0x1a, 0x1b,
+            0xa1, 0xff, 0xf1,                   /* if_icmplt 0 */
+            0xac
+        };
+        field_fixture fx;
+        nj_u4 value = 5u;
+        unsigned offset = field_offset();
+        field_fixture_init(&fx, NJ_PT_INT, 1, offset);
+        memcpy(fx.object.bytes + offset, &value, 4);
+        init_frame(&initial);
+        initial.locals[0].i = 0;
+        initial.locals[1].i = ARRAY_LEN;
+        initial.locals[2].r = (nj_ref)(void *)fx.object.bytes;
+        jit_vm = &fx.vm;
+        word = loop_run("field mutation loop", code, sizeof(code), 3, &initial,
+                        &fx.owner, NULL, 0, fx.object.bytes, offset, SIZE_MAX,
+                        100000, &block, &expected, &count);
+        jit_vm = NULL;
+        CHECK(block.loop == 1 && block.nfaults == 2u);
+        CHECK(count == 80u);
+        CHECK(expected.locals[0].i == (nj_s4)ARRAY_LEN);
+#if EXECUTE_ARM64
+        CHECK(!result_is_fault(word));
+        CHECK(result_completed(word) == 80u);
+#endif
+#if EXECUTE_ARM64
+        memcpy(&value, fx.object.bytes + offset, 4);
+        CHECK(value == 5u + (nj_u4)(ARRAY_LEN * (ARRAY_LEN - 1u) / 2u));
+#else
+        (void)value;
+#endif
+    }
+#endif
+    (void)word;
+#endif
+}
+
 int main(int argc, char **argv)
 {
     int require_execution = argc == 2 && strcmp(argv[1], "--require-execution") == 0;
@@ -1823,6 +2596,7 @@ int main(int argc, char **argv)
 #endif
     test_integer(); test_float(); test_boundaries();
     test_faults(); test_fields_arrays();
+    test_branches(); test_loops();
     test_large_locals(); test_fpcr();
     test_numeric_constants(); test_analysis(); test_write_through(); test_constant_chain();
     test_name = "extension coverage";

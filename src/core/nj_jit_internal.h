@@ -5,16 +5,31 @@
 #include "nj_internal.h"
 
 #if NJ_ENABLE_JIT
-/* One bounded, straight-line block. Stack requirements are relative to its
- * incoming sp; native code only touches frame slots and caller-saved registers.
- * It never calls C, allocates, throws, branches to Java, or changes frames.
+/* One bounded block. Stack requirements are relative to its incoming sp;
+ * native code only touches frame slots and caller-saved registers. It never
+ * calls C, allocates, throws, or changes frames.
+ *
+ * A block is a straight-line window plus, optionally, taken branches and
+ * bounded back edges (loops). It always leaves through one of block->exits:
+ * exits[0] is the end of the window, other exits are taken forward branches
+ * that leave it and the quantum-budget check on a loop back edge. A successful
+ * run returns
+ *
+ *     (completed << NJ_JIT_EXIT_SHIFT) | exit_index
+ *
+ * where `completed` counts the bytecodes finished on this run and is never
+ * more than the budget argument (nor less than 1 when exit_index is softless),
+ * and `exit_index` selects the exit. Straight-line blocks always return
+ * exit 0 and completed == insns unless a capacity-limited prefix shortened
+ * them; a loop block completes whole iterations and can return from the
+ * budget exit with completed > insns.
  *
  * A block may name up to NJ_JIT_MAX_FAULTS instructions whose guards can fail
- * at run time (null receiver, null/bounds/kind on an array, zero divisor). Such
- * a guard must jump to the block's fault exit *before* the instruction's first
- * side effect, and the exit returns
+ * at run time (null receiver, null/bounds/kind on an array, zero divisor).
+ * Such a guard must jump to the block's fault exit *before* the instruction's
+ * first side effect, and the exit returns
  *
- *     NJ_JIT_FAULT_BIT | (completed << 8) | fault_index
+ *     NJ_JIT_FAULT_BIT | (fault_index << 24) | completed
  *
  * where `completed` counts the bytecodes finished before the fault. The C
  * caller then sets pc to entry_pc + faults[i].pc_off, resets the operand stack
@@ -23,33 +38,47 @@
  * interpreter, exactly as in a purely interpreted run. When the block cannot
  * stay inside NJ_JIT_MAX_FAULTS it ends before the next faulting instruction.
  *
- * A successful run returns the number of bytecodes it completed, which equals
- * insns unless a capacity-limited prefix shortened the block. */
+ * A block that enters a back edge keeps its own bytecode counter and checks
+ * `budget - completed >= insns` before every iteration, so native execution
+ * always returns to the interpreter after at most `budget` bytecodes. */
 typedef struct nj_jit_fault {
     nj_u2 pc_off;   /* faulting bytecode pc, relative to the block entry pc */
     nj_s2 sp_delta; /* operand stack at that pc, relative to incoming sp     */
 } nj_jit_fault;
 
+typedef struct nj_jit_exit {
+    nj_u2 pc_off;   /* bytecode pc to resume at, relative to the block entry */
+    nj_s2 sp_delta; /* operand stack there, relative to incoming sp          */
+} nj_jit_exit;
+
 typedef struct nj_jit_block {
-    nj_u4 next_pc;
-    nj_u4 insns;
-    int stack_delta;
+    nj_u4 next_pc;      /* pc after the straight-line window (exits[0])     */
+    nj_u4 insns;        /* bytecodes in the window; a lower bound per run   */
+    int stack_delta;    /* exits[0].sp_delta                               */
     int min_stack;
     int max_growth;
     nj_size size;
     nj_u1 nfaults;
+    nj_u1 nexits;
+    nj_u1 loop;         /* 1 when the block revisits a back edge           */
     nj_jit_fault faults[NJ_JIT_MAX_FAULTS];
+    nj_jit_exit exits[NJ_JIT_MAX_EXITS];
 } nj_jit_block;
 
-/* Native block entry. Arguments are the interpreter's operand stack pointer
- * and frame locals pointer; neither pointer is advanced and no frame slot
- * outside the block's own operand-stack range is touched. The result word is
- * returned in the integer result register (a0/w0). */
-typedef nj_u4 (*nj_jit_fn)(nj_value *incoming_sp, nj_value *locals);
+/* Native block entry. Arguments are the interpreter's operand stack pointer,
+ * the frame locals pointer and the remaining scheduling budget (in Java
+ * bytecodes); neither pointer is advanced and no frame slot outside the
+ * block's own operand-stack range is touched. The result word is returned in
+ * the integer result register (a0/w0). */
+typedef nj_u4 (*nj_jit_fn)(nj_value *incoming_sp, nj_value *locals,
+                           nj_u4 budget);
 
 #define NJ_JIT_FAULT_BIT 0x80000000u
-#define NJ_JIT_FAULT_INDEX_MASK 0xffu
-#define NJ_JIT_FAULT_COMPLETED_MASK 0xffu
+#define NJ_JIT_FAULT_INDEX_SHIFT 24u
+#define NJ_JIT_FAULT_INDEX_MASK 0x7fu
+#define NJ_JIT_FAULT_COMPLETED_MASK 0x00ffffffu
+#define NJ_JIT_EXIT_SHIFT 4u
+#define NJ_JIT_EXIT_INDEX_MASK 0x0fu
 
 /* Portable code generator: usable on any host for encoding tests. Returns 1
  * for a nonempty block, 0 when declined. No writes beyond capacity.
@@ -93,6 +122,37 @@ static inline int nj_jit_record_fault(nj_jit_block *block, nj_u4 start_pc,
     return 1;
 }
 
+/* Record one exit in a block under construction. `start_pc` is the block
+ * entry, `pc` the bytecode position to resume at and `sp_delta` the operand
+ * stack there, both relative to the entry. Identical exits are shared.
+ * exits[0] is reserved for the end of the straight-line window. Returns the
+ * exit index, or -1 when the block already holds NJ_JIT_MAX_EXITS exits. */
+static inline int nj_jit_record_exit(nj_jit_block *block, nj_u4 start_pc,
+                                     nj_u4 pc, int sp_delta)
+{
+    nj_u4 off, i;
+    if (!block || pc < start_pc) {
+        return -1;
+    }
+    off = pc - start_pc;
+    if (off > 0xffffu) {
+        return -1;
+    }
+    for (i = 0; i < block->nexits; ++i) {
+        if (block->exits[i].pc_off == (nj_u2)off &&
+            block->exits[i].sp_delta == (nj_s2)sp_delta) {
+            return (int)i;
+        }
+    }
+    if (block->nexits >= NJ_JIT_MAX_EXITS) {
+        return -1;
+    }
+    block->exits[block->nexits].pc_off = (nj_u2)off;
+    block->exits[block->nexits].sp_delta = (nj_s2)sp_delta;
+    block->nexits++;
+    return (int)block->nexits - 1;
+}
+
 /* Numeric constants are immutable raw class bytes. Object constants must go
  * through the interpreter's resolution/allocation path. Bounds are checked
  * without addition so malformed offsets cannot wrap. */
@@ -119,11 +179,12 @@ static inline int nj_jit_numeric_constant(const nj_method *m, unsigned index,
 static inline int nj_jit_opcode_candidate(nj_u1 op)
 {
     return op <= 0x13u || (op >= 0x15u && op <= 0x2du) ||
-           (op >= 0x36u && op <= 0x4eu) || (op >= 0x57u && op <= 0x84u) ||
+           (op >= 0x36u && op <= 0x4eu) || (op >= 0x57u && op <= 0xa7u) ||
            (op >= 0x91u && op <= 0x93u) || op == 0xc4u ||
            op == 0x2eu || op == 0x4fu ||           /* iaload / iastore */
            op == 0xb4u || op == 0xb5u ||           /* getfield / putfield */
-           op == 0xbeu;                            /* arraylength */
+           op == 0xbeu ||                          /* arraylength */
+           op == 0xc6u || op == 0xc7u;             /* ifnull / ifnonnull */
 }
 
 /* Read-only view of the per-VM constant-pool cache: this never resolves, never
