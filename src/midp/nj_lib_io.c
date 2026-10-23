@@ -81,17 +81,29 @@ NJFN(is_read_bytes_range)
     if (!buf) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
-    if (off < 0 || len < 0 || (nj_u4)(off + len) > buf->length) {
+    if (off < 0 || len < 0 || (nj_u4)off > buf->length ||
+        (nj_u4)len > buf->length - (nj_u4)off) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
     }
     if (len == 0) {
         ret->i = 0;
         return NJ_OK;
     }
-    /* Read as much as the subclass will give us without blocking for more. */
+    /* CLDC InputStream.read(byte[],int,int) propagates a first-byte failure,
+     * but treats an IOException after some bytes as end of input.  Other
+     * Throwable types must still propagate, including RuntimeException. */
     for (i = 0; i < len; i++) {
         nj_s4 c = nj_call_int(vm, self, NJ_C_ISTREAM, "read", "()I", NULL);
         if (vm->exception) {
+            nj_class *exc_cls;
+            for (exc_cls = vm->exception->cls; i > 0 && exc_cls;
+                 exc_cls = exc_cls->super) {
+                if (strcmp(exc_cls->name, "java/io/IOException") == 0) {
+                    nj_clear_exception(vm);
+                    ret->i = i;
+                    return NJ_OK;
+                }
+            }
             return NJ_ERR;
         }
         if (c < 0) {
@@ -298,13 +310,11 @@ NJFN(bais_init_range)
     if (st != NJ_OK) {
         return st;
     }
-    /* ByteArrayInputStream(byte[], int, int) rejects a window that does not
-     * fit: the JDK throws IndexOutOfBoundsException for a negative offset or
-     * length, or for offset > buf.length - length.  Without that check the
-     * count can run past the end of the array, and read() would then return
-     * bytes that are not part of the stream at all instead of reporting end
-     * of input.  The window's mark starts at the window offset, not at 0, so
-     * a reset() cannot rewind outside the window either. */
+    /* Preserve nano_j2me's existing bounded-window policy here.  This is
+     * stricter than Java SE (which truncates an overlong window); the CLDC
+     * 1.1 constructor/reset text also differs from SE.  This check is a local
+     * safety policy, not evidence of JDK behaviour.  Resolving that separate
+     * compatibility question must not obscure the read/skip contracts. */
     if (!buf || off < 0 || len < 0 || off > (nj_s4)buf->length - len) {
         return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
     }
@@ -333,6 +343,38 @@ NJFN(bais_read)
     return NJ_OK;
 }
 
+NJFN(bais_read_bytes_range)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref dst = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 len = NJ_ARG_INT(args, 2);
+    nj_ref buf;
+    nj_s4 pos, count;
+
+    if (!dst) return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    if (off < 0 || len < 0 || (nj_u4)off > dst->length ||
+        (nj_u4)len > dst->length - (nj_u4)off) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    buf = nj_field_read_ref(vm, self, nj_hot_field(vm, NJ_HF_BAIS_BUF, BAIS, "buf", "[B"));
+    pos = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"));
+    count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_COUNT, BAIS, "count", "I"));
+    if (pos < 0) return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    if (!buf || pos >= count || (nj_u4)pos >= buf->length) {
+        /* BAIS checks EOF before the zero-length case (unlike InputStream). */
+        ret->i = -1;
+        return NJ_OK;
+    }
+    if (count > (nj_s4)buf->length) count = (nj_s4)buf->length;
+    if (len > count - pos) len = count - pos;
+    /* The destination may be the stream's own backing array. */
+    if (len > 0) memmove(dst->u.bytes + off, buf->u.bytes + pos, (nj_size)len);
+    nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"), pos + len);
+    ret->i = len;
+    return NJ_OK;
+}
+
 NJFN(bais_available)
 {
     nj_ref self = NJ_THIS(args);
@@ -348,11 +390,10 @@ NJFN(bais_skip)
     nj_s4 pos = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"));
     nj_s4 count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_COUNT, BAIS, "count", "I"));
     nj_s4 avail = count - pos;
-    nj_s4 step = (want > avail) ? avail : (nj_s4)want;
-
-    if (step < 0) {
-        step = 0;
-    }
+    /* Reject a negative long before narrowing: e.g. -4294967295L would
+     * otherwise become +1 on a 32-bit conversion. */
+    nj_s4 step = (want <= 0 || avail <= 0) ? 0 :
+                 (want > avail ? avail : (nj_s4)want);
     nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"), pos + step);
     ret->j = step;
     return NJ_OK;
@@ -1448,6 +1489,7 @@ static const nj_builtin_method bais_methods[] = {
     M("<init>",         "([B)V", 0),
     M("<init>",         "([BII)V", 0),
     M("read",           "()I", 0),
+    M("read",           "([BII)I", 0),
     M("available",      "()I", 0),
     M("skip",           "(J)J", 0),
     M("mark",           "(I)V", 0),
@@ -2660,6 +2702,7 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/ByteArrayInputStream", "<init>",        "([B)V", bais_init },
     { "java/io/ByteArrayInputStream", "<init>",        "([BII)V", bais_init_range },
     { "java/io/ByteArrayInputStream", "read",          "()I", bais_read },
+    { "java/io/ByteArrayInputStream", "read",          "([BII)I", bais_read_bytes_range },
     { "java/io/ByteArrayInputStream", "available",     "()I", bais_available },
     { "java/io/ByteArrayInputStream", "skip",          "(J)J", bais_skip },
     { "java/io/ByteArrayInputStream", "mark",          "(I)V", bais_mark },

@@ -36,6 +36,10 @@ CLASSES = [
     ("ioapi_RangeOnlyReader_class", "ioapi/RangeOnlyReader.class"),
     ("ioapi_StreamEncoding_WriterOutput_class", "ioapi/StreamEncoding$WriterOutput.class"),
     ("ioapi_StreamEncoding_class", "ioapi/StreamEncoding.class"),
+    ("ioapi_StreamReads_ChildIOException_class", "ioapi/StreamReads$ChildIOException.class"),
+    ("ioapi_StreamReads_FaultInput_class", "ioapi/StreamReads$FaultInput.class"),
+    ("ioapi_StreamReads_RangeInput_class", "ioapi/StreamReads$RangeInput.class"),
+    ("ioapi_StreamReads_class", "ioapi/StreamReads.class"),
 ]
 
 

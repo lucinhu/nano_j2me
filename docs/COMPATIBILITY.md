@@ -2834,3 +2834,65 @@ Final verification: CTest 101/101; the 232-check I/O driver also passes under
 ASan/UBSan with leak checking and halt-on-UB; disabled driver 206/0;
 `BENCH sum=-136042548 s=5`, 70,514,376 bytecodes and 92,432 B heap are unchanged.
 These are compatibility and footprint results, not a new performance claim.
+
+## Stream reads checked against the official CLDC contracts (2026-10-23)
+
+After pulling and merging the latest upstream changes, this round used
+`3c3070767f235bc59a0331bb90d9374eb8923e8e` as its frozen parent. Three stream
+behaviours disagreed with both the documented contract and the desktop oracle:
+
+- The inherited `InputStream.read(byte[], off, len)` returned an exception
+  after a later `read()` failed, even when it had already copied bytes. The
+  [CLDC 1.1 InputStream contract](https://docs.oracle.com/javame/config/cldc/ref-impl/cldc1.1/jsr139/java/io/InputStream.html)
+  requires the first `IOException` to propagate, but a later one to end the
+  partial read and return its count. The fix catches only `IOException` and
+  its subclasses; unrelated exceptions still propagate. An immediate EOF
+  returns -1; a zero-length request returns 0 before calling `read()`.
+- `ByteArrayInputStream.read(byte[], off, len)` checked zero length before
+  EOF. The [CLDC 1.1 ByteArrayInputStream contract](https://docs.oracle.com/javame/config/cldc/ref-impl/cldc1.1/jsr139/java/io/ByteArrayInputStream.html)
+  checks EOF first: a valid zero-length read at EOF returns -1. Its bulk path
+  now copies the validated range with `memmove`, preserving overlapping
+  source/destination arrays and the current position without one native
+  `read()` call per byte. Bounds checks avoid signed `off + len` overflow.
+- `ByteArrayInputStream.skip(long)` narrowed to 32 bits before rejecting
+  negative values. For example, -4294967295 became +1 and advanced the
+  stream. The sign is now checked at full width, and negative requests leave
+  the position unchanged. The inherited `InputStream.skip(long)` already
+  handled this correctly and is included as a regression control.
+
+The new compiled `StreamReads` fixture exercises actual inheritance and
+virtual calls. Its 20 result rows match the desktop Java oracle, including
+first/later `IOException`, an `IOException` subclass, runtime exceptions,
+EOF, zero reads, negative 64-bit skip and overlapping array copies. The
+expanded I/O driver fails nine newly added checks against the frozen parent
+(246 passed, 9 failed), then passes all 255 with the fix. `test_lib` passes
+834 checks. Comments asserting that all overlong ranged constructors are
+rejected by the JDK were corrected: Java SE clamps its count, while the old
+CLDC documentation differs. Constructor/reset policy is outside this fix;
+no original game was shown to depend on an overlong window.
+
+Four unmodified original JARs were replayed in fresh, separate RMS directories
+on both parent and fixed binaries, at 240×320, 30 FPS and 900 frames:
+
+| Title | Parent / fixed result | Samples at 300 / 600 / 900 frames |
+|---|---|---|
+| 午夜台球圣诞中文版_8677 | Both exit 0; no uncaught exception | All three identical; still at the sound prompt |
+| 真幻想三国志完整版_12469 | Both exit 0; no uncaught exception | All three identical; scene/dialogue progresses |
+| 寂静岭2汉化版_10177 | Both exit 0; no uncaught exception | All three identical; reaches sound/vibration options |
+| 鬼泣3D中文版_3376 | Both exit 0; no uncaught exception | Two of three identical; animated timing differs; reaches settings |
+
+These bounded replays are regression evidence, not completed playthroughs or
+proof that a game's former stall was fixed. In particular, the byte-array
+container usage found in the original Street Fighter title does not establish
+that these contract defects caused its still-open loading loop.
+
+Final integration passes CTest 102/102. ASan/UBSan with leak checking passes
+`test_ioapi` (255), `test_lib` (834) and `test_lcdui` (3,108 assertions across
+three create/destroy rounds), with no sanitizer diagnostics. The simultaneous
+`drawRGB` optimization and its RAM/CPU measurements are recorded in
+[PERFORMANCE.md](PERFORMANCE.md#drawrgb-after-the-source-range-has-already-been-checked-2026-10-23).
+No VM fields or persistent I/O buffers were added. The interpreter fixture
+also preserves `BENCH sum=-136042548 s=5`, 70,514,376 bytecodes and a
+92,432-byte heap peak. Both binaries return CLI status 1 for that fixture
+because it intentionally installs no Displayable; this matches the parent
+and is not counted as a game regression.

@@ -171,11 +171,10 @@ static nj_ref bais_over(nj_vm *vm, const unsigned char *data, nj_u4 len)
     return construct(vm, BAIS, "([B)V", a, "ByteArrayInputStream(byte[])");
 }
 
-/* ByteArrayInputStream(byte[], int, int) is a window: reads stop at its end,
- * reset() returns to the window start, and a window that does not fit is
- * rejected the way the JDK rejects it.  The old code computed count as
- * offset + length without checking anything and left mark at 0, so a bad
- * window could read past the array and reset() could rewind outside it. */
+/* Regression coverage for nano_j2me's existing bounded-window policy:
+ * reads stop at the end, reset() starts at the offset, and invalid windows
+ * are rejected.  Do not treat this as a Java SE oracle: SE truncates overlong
+ * windows, while CLDC 1.1 describes count/reset differently. */
 static void test_bais_range(nj_vm *vm)
 {
     static const unsigned char data[8] = { 10, 11, 12, 13, 14, 15, 16, 17 };
@@ -228,7 +227,8 @@ static void test_bais_range(nj_vm *vm)
         OK(nj_call(vm, stream, BAIS, "read", "()I", NULL, &ret) == NJ_OK && ret.i == 12);
     }
 
-    /* The window must fit: the JDK throws IndexOutOfBoundsException. */
+    /* Local bounded-window safety policy; this is deliberately not a JDK
+     * conformance assertion (Java SE accepts and truncates overlong windows). */
     {
         static const struct { nj_s4 off; nj_s4 len; } bad[] = {
             { -1, 1 }, { 0, -1 }, { 8, 1 }, { 7, 2 }

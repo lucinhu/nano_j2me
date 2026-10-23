@@ -831,6 +831,7 @@ static void test_datainput_mark_reset(nj_vm *vm)
 #define IOAPI_LOCKR "ioapi/LockReader"
 #define IOAPI_RANGE "ioapi/RangeOnlyReader"
 #define IOAPI_ENCODING "ioapi/StreamEncoding"
+#define IOAPI_READS "ioapi/StreamReads"
 
 /* Permit the formal fixture to link against a saved pre-feature archive for
  * fail-before evidence. The public configuration supplies this in new builds. */
@@ -937,6 +938,33 @@ static const struct ioapi_case ioapi_encoding_cases[] = {
 #endif
 };
 
+/* StreamReads exercises the virtual defaults and the BAIS native range path
+ * with identical bytecode on the desktop JVM. Counts, untouched destination
+ * bytes, stream positions and both halves of skip(long) enter each digest.
+ * Valid constructor windows only: overlong-window policy is out of scope. */
+static const struct ioapi_case ioapi_read_cases[] = {
+    { "io.read.default_bulk", IOAPI_READS, "defaultBulkRead", -851404242 },
+    { "io.read.partial_io", IOAPI_READS, "partialIOException", 1775466483 },
+    { "io.read.partial_eof", IOAPI_READS, "partialEOFException", 1775466483 },
+    { "io.read.partial_child", IOAPI_READS, "partialChildIOException", 1775466483 },
+    { "io.read.partial_inherited", IOAPI_READS, "partialInheritedRead", 733622485 },
+    { "io.read.first_io", IOAPI_READS, "firstIOException", 195172891 },
+    { "io.read.runtime_exception", IOAPI_READS, "runtimeException", -537375425 },
+    { "io.read.non_io_error", IOAPI_READS, "nonIoError", 1130493215 },
+    { "io.read.default_bounds", IOAPI_READS, "defaultBounds", -314046769 },
+    { "io.read.inherited_dispatch", IOAPI_READS, "inheritedRangeDispatch", 1162832608 },
+    { "io.read.bais_bulk", IOAPI_READS, "baisBulkRead", -1757440635 },
+    { "io.read.bais_inherited", IOAPI_READS, "baisInheritedRead", 1164270612 },
+    { "io.read.bais_zero", IOAPI_READS, "baisZeroLength", -410743559 },
+    { "io.read.bais_bounds", IOAPI_READS, "baisBounds", 532018279 },
+    { "io.read.bais_alias_forward", IOAPI_READS, "baisAliasForward", -2011495317 },
+    { "io.read.bais_alias_backward", IOAPI_READS, "baisAliasBackward", -437555834 },
+    { "io.read.bais_negative_skip", IOAPI_READS, "baisNegativeSkip", -414609033 },
+    { "io.read.bais_wide_skip", IOAPI_READS, "baisWideSkip", 32468114 },
+    { "io.read.bais_mark_reset", IOAPI_READS, "baisMarkReset", 957534185 },
+    { "io.read.data_mark_reset", IOAPI_READS, "dataMarkReset", -1898872582 }
+};
+
 static void run_ioapi_cases(nj_vm *vm, const char *cls, const nj_u1 *bytes,
                             nj_u4 len, const struct ioapi_case *cases,
                             unsigned count)
@@ -994,6 +1022,19 @@ static void test_ioapi_java(nj_vm *vm)
                     ioapi_encoding_cases,
                     (unsigned)(sizeof(ioapi_encoding_cases)
                                / sizeof(ioapi_encoding_cases[0])));
+    OK(nj_class_load(vm, "ioapi/StreamReads$ChildIOException",
+                     ioapi_StreamReads_ChildIOException_class,
+                     (nj_u4)sizeof(ioapi_StreamReads_ChildIOException_class)) != NULL);
+    OK(nj_class_load(vm, "ioapi/StreamReads$FaultInput",
+                     ioapi_StreamReads_FaultInput_class,
+                     (nj_u4)sizeof(ioapi_StreamReads_FaultInput_class)) != NULL);
+    OK(nj_class_load(vm, "ioapi/StreamReads$RangeInput",
+                     ioapi_StreamReads_RangeInput_class,
+                     (nj_u4)sizeof(ioapi_StreamReads_RangeInput_class)) != NULL);
+    run_ioapi_cases(vm, IOAPI_READS, ioapi_StreamReads_class,
+                    (nj_u4)sizeof(ioapi_StreamReads_class), ioapi_read_cases,
+                    (unsigned)(sizeof(ioapi_read_cases)
+                               / sizeof(ioapi_read_cases[0])));
 }
 
 int main(void)

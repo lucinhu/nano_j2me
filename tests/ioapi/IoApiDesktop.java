@@ -76,6 +76,26 @@ public final class IoApiDesktop {
             p("io.enc.encoded_surrogates", StreamEncoding.encodedSurrogates());
             p("io.enc.above_limit", StreamEncoding.aboveUnicodeLimit());
             p("io.enc.modified_nul", StreamEncoding.modifiedNulRejected());
+            p("io.read.default_bulk", StreamReads.defaultBulkRead());
+            p("io.read.partial_io", StreamReads.partialIOException());
+            p("io.read.partial_eof", StreamReads.partialEOFException());
+            p("io.read.partial_child", StreamReads.partialChildIOException());
+            p("io.read.partial_inherited", StreamReads.partialInheritedRead());
+            p("io.read.first_io", StreamReads.firstIOException());
+            p("io.read.runtime_exception", StreamReads.runtimeException());
+            p("io.read.non_io_error", StreamReads.nonIoError());
+            p("io.read.default_bounds", StreamReads.defaultBounds());
+            p("io.read.inherited_dispatch", StreamReads.inheritedRangeDispatch());
+            p("io.read.bais_bulk", StreamReads.baisBulkRead());
+            p("io.read.bais_inherited", StreamReads.baisInheritedRead());
+            p("io.read.bais_zero", StreamReads.baisZeroLength());
+            p("io.read.bais_bounds", StreamReads.baisBounds());
+            p("io.read.bais_alias_forward", StreamReads.baisAliasForward());
+            p("io.read.bais_alias_backward", StreamReads.baisAliasBackward());
+            p("io.read.bais_negative_skip", StreamReads.baisNegativeSkip());
+            p("io.read.bais_wide_skip", StreamReads.baisWideSkip());
+            p("io.read.bais_mark_reset", StreamReads.baisMarkReset());
+            p("io.read.data_mark_reset", StreamReads.dataMarkReset());
         } catch (Throwable t) {
             System.out.println("io.FATAL " + t);
         }
