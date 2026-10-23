@@ -1350,7 +1350,11 @@ static int jp_prog_dc_block(jp_dec *d, jp_bits *b, jp_comp *c, nj_s2 *cf)
             return -1;
         }
         c->pred = jp_clamp(c->pred + jp_receive_extend(b, t), -32767, 32767);
-        v = (nj_s4)c->pred << d->al;
+        /* Multiply rather than shift: the predictor is signed and a left
+         * shift of a negative value is undefined behaviour in C, even
+         * though every compiler this runs on treats it as an arithmetic
+         * shift.  The values fit: |pred| <= 32767 and al <= 13. */
+        v = (nj_s4)c->pred * ((nj_s4)1 << d->al);
         cf[0] = (nj_s2)jp_clamp((int)v, -32767, 32767);
     } else {
         /*
@@ -1422,7 +1426,9 @@ static int jp_prog_ac_block(jp_dec *d, jp_bits *b, jp_comp *c, nj_s2 *cf)
                 return -1;
             }
             {
-                nj_s4 v = (nj_s4)jp_receive_extend(b, s) << d->al;
+                /* See jp_prog_dc_block: p1 is 1 << al, and the
+                 * multiplication keeps the sign handling defined. */
+                nj_s4 v = (nj_s4)jp_receive_extend(b, s) * p1;
 
                 cf[(int)s_zigzag[k]] = (nj_s2)jp_clamp((int)v, -32767, 32767);
             }
