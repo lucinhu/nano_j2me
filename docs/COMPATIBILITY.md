@@ -3072,3 +3072,36 @@ replayed for 400 frames each on this build with no uncaught exception —
 `3D摩托赛车_9287`, `生化危机3D(CAPCOM经典)_3671`, `3D城市桌球_8299` — and six
 more ran with only the exceptions those titles already threw (unrecognised
 custom image formats, missing record stores).
+
+## Methods the specification names that were missing (round 57, 2026-10-24)
+
+A sweep of the M3G surface against the class list the specification publishes
+found five public methods that the runtime did not define at all, so any title
+reaching for them got a `NoSuchMethodError`:
+
+| Class | Method | Rule the JSR states |
+|---|---|---|
+| `AnimationController` | `isActive(int worldTime)` | true inside `[start, end)`; an empty interval (`start == end`) is active at every world time |
+| `AnimationController` | `timeToActivation(int worldTime)` | milliseconds until the start, `0` while active, `Integer.MAX_VALUE` once the interval has passed |
+| `AnimationController` | `timeToDeactivation(int worldTime)` | milliseconds until the end, `0` once deactivated, `Integer.MAX_VALUE` for an interval that never ends |
+| `Transformable` | `getMatrix(float[] matrix)` | the local transform as sixteen floats, row major; an array shorter than sixteen is refused |
+| `Node` | `getRootNode()` | the top of the parent chain, which for a detached node is the node itself |
+| `MorphingMesh` | `updateProperty(int property, float[] value)` | for `AnimationTrack.MORPH_WEIGHTS` (266) copy the weights and zero the targets a short array does not mention |
+
+`setActiveInterval` keeps swapping its two arguments when they arrive the wrong
+way round, as the specification asks, which is why "empty" is the only way a
+controller's bounds can be equal - and therefore why `isActive` tests equality
+first.
+
+Evidence: `.local-tools/debug-runs/` is scratch, but the in-tree test carries
+the proof. `tests/test_m3g.c` gained twenty-four checks over these five
+methods; against the parent runtime they fail 22 times (the methods are absent,
+so the calls do not bind), while this tree passes all 645 checks. The rest of
+the suite is unchanged: `ctest` 103/103, `test_m3g_references` 389/0,
+`BENCH sum=-136042548 s=5`, digest 27/27, no writable statics.
+
+No corpus title in `tests/games` calls any of the five, so no title behaviour
+changed; this round closes a gap a spec-driven audit found rather than a bug a
+game reported. Costs: `nj_lib_m3g.c.o` `.text` 278,354 -> **280,432** B
+(+2,078 B) and its read-only method-name table `.data.rel.ro.local`
+27,728 -> **28,080** B (+352 B). `.data`/`.bss` stay 0, so RAM is unchanged.

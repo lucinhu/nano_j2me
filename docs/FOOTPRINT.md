@@ -879,3 +879,20 @@ pairs inside one 64-bit word; see
 RAM is unchanged: the pair lives in a register pair, no field, static, heap
 allocation or extra buffer is added, and hosts that are not little-endian keep
 the previous per-pixel loop (a compile-time check picks the loop).
+
+## The five M3G methods the audit found missing (round 57, 2026-10-24)
+
+`AnimationController.isActive/timeToActivation/timeToDeactivation`,
+`Transformable.getMatrix`, `Node.getRootNode` and `MorphingMesh.updateProperty`
+now exist; see
+[COMPATIBILITY.md](COMPATIBILITY.md#methods-the-specification-names-that-were-missing-round-57-2026-10-24).
+
+| Build | Before | After |
+|---|---|---|
+| hosted Release, `nj_lib_m3g.c` `.text` | 278,354 B | **280,432 B** (+2,078 B) |
+| its method-name table (`.data.rel.ro.local`) | 27,728 B | **28,080** B (+352 B) |
+| `.data` / `.bss` (that object) | 0 / 0 | **unchanged** |
+
+RAM is unchanged: no field, static, heap allocation or buffer is added. The
+only new storage is read-only (the method-name and signature strings the class
+loader publishes) and the C stack of the calls themselves.

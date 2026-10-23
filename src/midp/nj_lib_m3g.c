@@ -2133,6 +2133,26 @@ NJFN(m3g_xable_getTransform)
     return NJ_OK;
 }
 
+/*
+ * getMatrix(float[]) is the local transform as the sixteen floats the JSR
+ * names, row major, the same layout Transform.get uses.
+ */
+NJFN(m3g_xable_getMatrix)
+{
+    nj_ref out = NJ_ARG_REF(args, 0);
+    nj_ref m = nj_rget(vm, NJ_THIS(args),
+                       nj_field_lookup(vm, NJ_C_XABLE, "_nj_m", "[F", 0));
+
+    if (!out || out->length < 16) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "the array must hold at least sixteen elements");
+    }
+    if (m) {
+        memcpy(nj_array_data(out), nj_array_data(m), 16u * sizeof(float));
+    }
+    return NJ_OK;
+}
+
 NJFN(m3g_xable_setScale)
 {
     float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
@@ -2457,6 +2477,30 @@ NJFN(m3g_getTransformTo)
     mat_invert(wb);
     mat_mul(wb, wa, out);
     ret->i = 1;
+    return NJ_OK;
+}
+
+/*
+ * getRootNode walks the parent links setParent keeps, so a detached node is
+ * its own root and a node inside a World answers the World.
+ */
+NJFN(m3g_node_getRootNode)
+{
+    nj_field *pf = nj_field_lookup(vm, NJ_C_NODE, "_nj_parent",
+                                   "L" NJ_C_NODE ";", 0);
+    nj_ref node = NJ_THIS(args);
+    nj_ref parent;
+    int depth = 0;
+
+    if (pf) {
+        parent = nj_rget(vm, node, pf);
+        while (parent && depth < NJ_M3G_MAX_DEPTH) {
+            node = parent;
+            parent = nj_rget(vm, node, pf);
+            depth++;
+        }
+    }
+    ret->r = node;
     return NJ_OK;
 }
 
@@ -6642,6 +6686,7 @@ static const nj_builtin_method transform_methods[] = {
 static const nj_builtin_method xable_methods[] = {
     M("setTransform",     "(L" NJ_C_XFORM ";)V", NJ_ACC_PUBLIC),
     M("getTransform",     "(L" NJ_C_XFORM ";)V", NJ_ACC_PUBLIC),
+    M("getMatrix",        "([F)V",               NJ_ACC_PUBLIC),
     M("setScale",         "(FFF)V",              NJ_ACC_PUBLIC),
     M("getScale",         "([F)V",               NJ_ACC_PUBLIC),
     M("setOrientation",   "(FFFF)V",             NJ_ACC_PUBLIC),
@@ -6659,6 +6704,7 @@ static const nj_builtin_method node_methods[] = {
     M("isRenderingEnabled", "()Z",                     NJ_ACC_PUBLIC),
     M("setAlphaFactor",     "(F)V",                    NJ_ACC_PUBLIC),
     M("getParent",          "()L" NJ_C_NODE ";",       NJ_ACC_PUBLIC),
+    M("getRootNode",        "()L" NJ_C_NODE ";",       NJ_ACC_PUBLIC),
     M("getTransformTo",     "(L" NJ_C_NODE ";L" NJ_C_XFORM ";)Z", NJ_ACC_PUBLIC),
     M("setScope",           "(I)V",                    NJ_ACC_PUBLIC),
     M("getScope",           "()I",                     NJ_ACC_PUBLIC),
@@ -7537,7 +7583,10 @@ static const nj_builtin_method actl_methods[] = {
     M("getPosition",           "(I)F", NJ_ACC_PUBLIC),
     M("getRefWorldTime",       "()I",  NJ_ACC_PUBLIC),
     M("setWeight",             "(F)V", NJ_ACC_PUBLIC),
-    M("getWeight",             "()F",  NJ_ACC_PUBLIC)
+    M("getWeight",             "()F",  NJ_ACC_PUBLIC),
+    M("isActive",              "(I)Z", NJ_ACC_PUBLIC),
+    M("timeToActivation",      "(I)I", NJ_ACC_PUBLIC),
+    M("timeToDeactivation",    "(I)I", NJ_ACC_PUBLIC)
 };
 
 NJFN(m3g_actl_init)
@@ -7574,6 +7623,57 @@ NJFN(m3g_actl_setActiveInterval)
 NJFN(m3g_actl_getRefWorldTime)
 {
     ret->i = (nj_s4)nj_now_ms(vm);
+    return NJ_OK;
+}
+
+/*
+ * The active interval is [start, end).  An empty interval - start equal to end
+ * - leaves the controller active at every world time, which is how the JSR
+ * describes a controller that was never scheduled.  setActiveInterval above
+ * keeps start <= end, so "empty" is the only way the two can be equal.
+ */
+static void actl_interval(nj_vm *vm, nj_ref self, nj_s4 *first, nj_s4 *last)
+{
+    *first = nj_iget(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_ai0", "I"));
+    *last  = nj_iget(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_ai1", "I"));
+}
+
+NJFN(m3g_actl_isActive)
+{
+    nj_s4 first, last, t = NJ_ARG_INT(args, 0);
+
+    actl_interval(vm, NJ_THIS(args), &first, &last);
+    ret->i = (first == last || (t >= first && t < last)) ? 1 : 0;
+    return NJ_OK;
+}
+
+NJFN(m3g_actl_timeToActivation)
+{
+    nj_s4 first, last, t = NJ_ARG_INT(args, 0);
+
+    actl_interval(vm, NJ_THIS(args), &first, &last);
+    if (first == last || (t >= first && t < last)) {
+        ret->i = 0;              /* active now, nothing to wait for */
+    } else if (t < first) {
+        ret->i = first - t;
+    } else {
+        ret->i = 0x7FFFFFFF;     /* the interval has passed and never repeats */
+    }
+    return NJ_OK;
+}
+
+NJFN(m3g_actl_timeToDeactivation)
+{
+    nj_s4 first, last, t = NJ_ARG_INT(args, 0);
+
+    actl_interval(vm, NJ_THIS(args), &first, &last);
+    if (first == last) {
+        ret->i = 0x7FFFFFFF;     /* always active, so it never deactivates */
+    } else if (t < last) {
+        ret->i = last - t;       /* milliseconds left until the interval ends */
+    } else {
+        ret->i = 0;              /* already deactivated */
+    }
     return NJ_OK;
 }
 
@@ -7857,7 +7957,8 @@ static const nj_builtin_method morph_methods[] = {
     M("getMorphTarget",      "(I)L" NJ_C_VBUF ";", NJ_ACC_PUBLIC),
     M("getMorphTargetCount", "()I",                NJ_ACC_PUBLIC),
     M("setWeights",          "([F)V",              NJ_ACC_PUBLIC),
-    M("getWeights",          "([F)V",              NJ_ACC_PUBLIC)
+    M("getWeights",          "([F)V",              NJ_ACC_PUBLIC),
+    M("updateProperty",      "(I[F)V",             NJ_ACC_PUBLIC)
 };
 
 /* Store the morph targets and give every one of them a weight: the first is
@@ -7919,6 +8020,52 @@ NJFN(m3g_morph_init_arrays)
     morph_set_targets(vm, self, NJ_ARG_REF(args, 0), NJ_ARG_REF(args, 1),
                       ib, app);
     return mesh_set_arrays(vm, self, NJ_ARG_REF(args, 0), ibs, apps);
+}
+
+/*
+ * updateProperty is the entry an AnimationTrack uses to push a morph weight
+ * array; AnimationTrack.MORPH_WEIGHTS (266) is the only property a morphing
+ * mesh owns.  The weights array is as long as the target list, so a shorter
+ * value array leaves the remaining targets at zero, and a longer one is
+ * truncated.
+ */
+NJFN(m3g_morph_updateProperty)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 prop = NJ_ARG_INT(args, 0);
+    nj_ref value = NJ_ARG_REF(args, 1);
+    nj_ref w;
+    const float *src;
+    float *dst;
+    nj_u4 n, i, len;
+
+    if (prop != 266 || !value) {
+        return NJ_OK;            /* no other property is defined here */
+    }
+    w = nj_rget(vm, self, m3g_fof(vm, NJ_C_MORPH, "_nj_weights", "[F"));
+    if (!w) {
+        return NJ_OK;
+    }
+    n = (nj_u4)nj_array_length(w);
+    src = (const float *)nj_array_data(value);
+    dst = (float *)nj_array_data(w);
+    if (!dst) {
+        return NJ_OK;
+    }
+    len = (nj_u4)nj_array_length(value);
+    if (!src) {
+        len = 0u;                /* a null payload is treated as no values */
+    }
+    if (len > n) {
+        len = n;
+    }
+    for (i = 0u; i < len; i++) {
+        dst[i] = src[i];
+    }
+    for (i = len; i < n; i++) {
+        dst[i] = 0.0f;
+    }
+    return NJ_OK;
 }
 
 NJFN(m3g_morph_getTarget)
@@ -11679,6 +11826,7 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_XFORM, "transform",     "([F)V",               m3g_xf_transform },
     { NJ_C_XABLE, "setTransform",   "(L" NJ_C_XFORM ";)V", m3g_xable_setTransform },
     { NJ_C_XABLE, "getTransform",   "(L" NJ_C_XFORM ";)V", m3g_xable_getTransform },
+    { NJ_C_XABLE, "getMatrix",      "([F)V",               m3g_xable_getMatrix },
     { NJ_C_XABLE, "setScale",       "(FFF)V",              m3g_xable_setScale },
     { NJ_C_XABLE, "getScale",       "([F)V",               m3g_xable_getScale },
     { NJ_C_XABLE, "setOrientation", "(FFFF)V",             m3g_xable_setOrientation },
@@ -11701,6 +11849,7 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_NODE, "isRenderingEnabled", "()Z",               m3g_render_get },
     { NJ_C_NODE, "setAlphaFactor",     "(F)V",              m3g_alpha_set },
     { NJ_C_NODE, "getParent",          "()L" NJ_C_NODE ";", m3g_parent_get },
+    { NJ_C_NODE, "getRootNode",        "()L" NJ_C_NODE ";", m3g_node_getRootNode },
     { NJ_C_NODE, "getTransformTo",
       "(L" NJ_C_NODE ";L" NJ_C_XFORM ";)Z", m3g_getTransformTo },
     { NJ_C_GROUP, "addChild",      "(L" NJ_C_NODE ";)V",   m3g_addChild },
@@ -11857,6 +12006,9 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_ACTL, "getRefWorldTime", "()I", m3g_actl_getRefWorldTime },
     { NJ_C_ACTL, "setWeight", "(F)V", m3g_actl_setWeight },
     { NJ_C_ACTL, "getWeight", "()F", m3g_actl_getWeight },
+    { NJ_C_ACTL, "isActive", "(I)Z", m3g_actl_isActive },
+    { NJ_C_ACTL, "timeToActivation", "(I)I", m3g_actl_timeToActivation },
+    { NJ_C_ACTL, "timeToDeactivation", "(I)I", m3g_actl_timeToDeactivation },
     { NJ_C_ATRACK, "<init>", "(L" NJ_C_KFS ";I)V", m3g_atrack_init },
     { NJ_C_ATRACK, "setController", "(L" NJ_C_ACTL ";)V", m3g_atrack_setController },
     { NJ_C_ATRACK, "getController", "()L" NJ_C_ACTL ";", m3g_atrack_getController },
@@ -11880,6 +12032,7 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_MORPH, "getMorphTargetCount", "()I", m3g_morph_getTargetCount },
     { NJ_C_MORPH, "setWeights", "([F)V", m3g_morph_setWeights },
     { NJ_C_MORPH, "getWeights", "([F)V", m3g_morph_getWeights },
+    { NJ_C_MORPH, "updateProperty", "(I[F)V", m3g_morph_updateProperty },
     { NJ_C_SKIN, "<init>", "(L" NJ_C_VBUF ";L" NJ_C_IBUF ";L" NJ_C_APPEAR ";L" NJ_C_GROUP ";)V", m3g_skin_init },
     { NJ_C_SKIN, "<init>", "(L" NJ_C_VBUF ";[L" NJ_C_IBUF ";[L" NJ_C_APPEAR ";L" NJ_C_GROUP ";)V", m3g_skin_init_arrays },
     { NJ_C_SKIN, "getSkeleton", "()L" NJ_C_GROUP ";", m3g_skin_getSkeleton },

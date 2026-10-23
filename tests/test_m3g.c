@@ -1635,6 +1635,193 @@ static void test_skinned_mesh_bones(nj_vm *vm)
     nj_field_write_int(vm, mesh, fn, 200);
 }
 
+
+/*
+ * Five methods the specification names that used to be missing outright.
+ * Each one is checked against the rule the JSR states, not just "returns
+ * something": an empty active interval means always active, the interval is
+ * half-open, an empty matrix slot is refused, the root node is the top of the
+ * parent chain, and an updateProperty shorter than the target list zeroes the
+ * targets it does not mention.
+ */
+static nj_s4 call_int(nj_vm *vm, nj_ref o, const char *cls, const char *name,
+                      const char *desc, nj_s4 v)
+{
+    nj_value a[2], r;
+    nj_s4 out = -123456;
+
+    memset(a, 0, sizeof a);
+    a[0].i = v;
+    r.i = 0;
+    if (nj_call(vm, o, cls, name, desc, a, &r) == NJ_OK) {
+        out = r.i;
+    }
+    return out;
+}
+
+static void test_spec_methods(nj_vm *vm)
+{
+    nj_ref ctl = make(vm, CLS("AnimationController"));
+    nj_ref node, child, root;
+    int ok = ctl != 0;
+
+    check(ok, "AnimationController.<init> works");
+    if (!ok) {
+        return;
+    }
+
+    /* A controller that was never scheduled has an empty interval and is
+       active at every world time, so it never deactivates. */
+    check(call_int(vm, ctl, CLS("AnimationController"), "isActive", "(I)Z", 0) == 1,
+          "isActive is true with an empty active interval");
+    check(call_int(vm, ctl, CLS("AnimationController"), "isActive", "(I)Z", 99999) == 1,
+          "and stays true at any later world time");
+    check(call_int(vm, ctl, CLS("AnimationController"), "timeToActivation", "(I)I", 500) == 0,
+          "timeToActivation is zero for a controller that is always active");
+    check(call_int(vm, ctl, CLS("AnimationController"), "timeToDeactivation", "(I)I", 500) == 0x7FFFFFFF,
+          "timeToDeactivation is MAX_VALUE for a controller that never deactivates");
+
+    {
+        nj_value a[2];
+
+        a[0].i = 100; a[1].i = 200;
+        call(vm, ctl, CLS("AnimationController"), "setActiveInterval", "(II)V", a, NULL);
+    }
+    check(call_int(vm, ctl, CLS("AnimationController"), "isActive", "(I)Z", 99) == 0,
+          "the interval excludes times before it starts");
+    check(call_int(vm, ctl, CLS("AnimationController"), "isActive", "(I)Z", 100) == 1,
+          "the interval includes its start");
+    check(call_int(vm, ctl, CLS("AnimationController"), "isActive", "(I)Z", 199) == 1,
+          "the interval includes the time before its end");
+    check(call_int(vm, ctl, CLS("AnimationController"), "isActive", "(I)Z", 200) == 0,
+          "the interval excludes its end");
+    check(call_int(vm, ctl, CLS("AnimationController"), "timeToActivation", "(I)I", 0) == 100,
+          "timeToActivation counts down to the start");
+    check(call_int(vm, ctl, CLS("AnimationController"), "timeToActivation", "(I)I", 150) == 0,
+          "timeToActivation is zero inside the interval");
+    check(call_int(vm, ctl, CLS("AnimationController"), "timeToActivation", "(I)I", 200) == 0x7FFFFFFF,
+          "timeToActivation is MAX_VALUE once the interval has passed");
+    check(call_int(vm, ctl, CLS("AnimationController"), "timeToDeactivation", "(I)I", 0) == 200,
+          "timeToDeactivation counts down from the start of the interval");
+    check(call_int(vm, ctl, CLS("AnimationController"), "timeToDeactivation", "(I)I", 150) == 50,
+          "and from inside it");
+    check(call_int(vm, ctl, CLS("AnimationController"), "timeToDeactivation", "(I)I", 200) == 0,
+          "and is zero once deactivated");
+    {
+        /* The JSR swaps the two bounds when they arrive the wrong way round,
+           so the same interval works either way. */
+        nj_value a[2];
+
+        a[0].i = 200; a[1].i = 100;
+        call(vm, ctl, CLS("AnimationController"), "setActiveInterval", "(II)V", a, NULL);
+    }
+    check(call_int(vm, ctl, CLS("AnimationController"), "isActive", "(I)Z", 150) == 1,
+          "a reversed interval is swapped, not refused");
+
+    /* getMatrix(float[]) is the local transform, row major. */
+    node = make(vm, CLS("Transformable"));
+    if (node) {
+        nj_ref out = nj_array_new(vm, "F", 16);
+        nj_value a[3];
+
+        a[0].f = 1.0f; a[1].f = 2.0f; a[2].f = 3.0f;
+        call(vm, node, CLS("Transformable"), "setTranslation", "(FFF)V", a, NULL);
+        memset(a, 0, sizeof a);
+        a[0].r = out;
+        call(vm, node, CLS("Transformable"), "getMatrix", "([F)V", a, NULL);
+        check(!nj_has_exception(vm), "getMatrix accepts a sixteen float array");
+        nj_clear_exception(vm);
+        check(((float *)nj_array_data(out))[3] == 1.0f &&
+              ((float *)nj_array_data(out))[7] == 2.0f &&
+              ((float *)nj_array_data(out))[11] == 3.0f,
+              "getMatrix reports the translation column the transform holds");
+        {
+            nj_ref small = nj_array_new(vm, "F", 4);
+
+            memset(a, 0, sizeof a);
+            a[0].r = small;
+            call(vm, node, CLS("Transformable"), "getMatrix", "([F)V", a, NULL);
+            check(nj_has_exception(vm), "getMatrix refuses an array shorter than sixteen");
+            nj_clear_exception(vm);
+        }
+    }
+
+    /* getRootNode walks the parent chain addChild keeps. */
+    root = make(vm, CLS("Group"));
+    child = make(vm, CLS("Group"));
+    if (root && child) {
+        nj_value a[1], r;
+
+        a[0].r = child;
+        call(vm, root, CLS("Group"), "addChild", "(L" CLS("Node") ";)V", a, NULL);
+        a[0].r = 0;
+        r.r = 0;
+        call(vm, child, CLS("Node"), "getRootNode", "()L" CLS("Node") ";", a, &r);
+        check(r.r == root, "getRootNode returns the top of the parent chain");
+        a[0].r = 0;
+        r.r = 0;
+        call(vm, root, CLS("Node"), "getRootNode", "()L" CLS("Node") ";", a, &r);
+        check(r.r == root, "and a detached node is its own root");
+    }
+
+    /* updateProperty(MORPH_WEIGHTS, values) is how a track sets the weights. */
+    {
+        nj_ref vb = make(vm, CLS("VertexBuffer"));
+        nj_ref ib = make(vm, CLS("IndexBuffer"));
+        nj_ref app = make(vm, CLS("Appearance"));
+        nj_ref targets = nj_object_array_new(vm, CLS("VertexBuffer"), 2);
+        nj_ref morph;
+
+        if (vb && app && targets) {
+            nj_value a[4], r;
+
+            nj_array_set_ref(targets, 0, vb);
+            nj_array_set_ref(targets, 1, vb);
+
+            memset(a, 0, sizeof a);
+            a[0].r = vb; a[1].r = targets; a[2].r = ib; a[3].r = app;
+            morph = nj_object_new(vm, CLS("MorphingMesh"));
+            r.i = 0;
+            if (morph && nj_call_special(vm, morph, CLS("MorphingMesh"), "<init>",
+                                         "(L" CLS("VertexBuffer") ";[L"
+                                         CLS("VertexBuffer") ";L" CLS("IndexBuffer")
+                                         ";L" CLS("Appearance") ";)V", a, NULL) == NJ_OK) {
+                nj_ref value = nj_array_new(vm, "F", 3);
+                float *w;
+
+                check(!nj_has_exception(vm), "a morphing mesh with two targets is built");
+                nj_clear_exception(vm);
+                ((float *)nj_array_data(value))[0] = 0.25f;
+                ((float *)nj_array_data(value))[1] = 0.75f;
+                ((float *)nj_array_data(value))[2] = 9.0f;  /* beyond the targets */
+                memset(a, 0, sizeof a);
+                a[0].i = 266;                              /* MORPH_WEIGHTS */
+                a[1].r = value;
+                call(vm, morph, CLS("MorphingMesh"), "updateProperty", "(I[F)V", a, NULL);
+                w = (float *)nj_array_data(nj_rget(vm, morph,
+                                                   nj_field_lookup(vm, CLS("MorphingMesh"),
+                                                                   "_nj_weights", "[F", 0)));
+                check(w && w[0] == 0.25f && w[1] == 0.75f,
+                      "updateProperty copies the weights it is given");
+                {
+                    nj_ref shortv = nj_array_new(vm, "F", 1);
+
+                    ((float *)nj_array_data(shortv))[0] = 0.5f;
+                    memset(a, 0, sizeof a);
+                    a[0].i = 266;
+                    a[1].r = shortv;
+                    call(vm, morph, CLS("MorphingMesh"), "updateProperty", "(I[F)V", a, NULL);
+                    w = (float *)nj_array_data(nj_rget(vm, morph,
+                                                       nj_field_lookup(vm, CLS("MorphingMesh"),
+                                                                       "_nj_weights", "[F", 0)));
+                    check(w && w[0] == 0.5f && w[1] == 0.0f,
+                          "a short weight array zeroes the targets it omits");
+                }
+            }
+        }
+    }
+}
+
 int main(void)
 {
     nj_port port;
@@ -4233,6 +4420,7 @@ int main(void)
     test_image2d_set(vm);
     test_textured_span_variants(vm);
     test_spot_light_cone(vm);
+    test_spec_methods(vm);
 
     /* Bone rosters are per receiver and grow on demand; the old fixed
        64-entry table threw on the 65th link. */
