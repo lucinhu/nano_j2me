@@ -2623,6 +2623,10 @@ a title's own `catch (UTFDataFormatException)` clause could not resolve before.
 written with its header (size 65537), and 65536 bytes is refused with the
 exception. test_lib 834 passed / 0 failed, and the same assertions are clean
 under a Debug `-DNJ_SANITIZE=ON` build (834/0, no ASan/UBSan/LSan reports).
+Ten corpus titles that lean on IO - the football manager (RMS), 3D孤胆枪手,
+仙魔飞行棋, 三国杀, 午夜台球, 超级马里奥, 合金弹头4, 鬼泣3D, 浴火银河 and
+新西游记 - replay 300 frames each with the deep2 script on the fixed build:
+10/10 exit 0, no uncaught exception.
 
 ## The byte-array window that could read outside itself (round 31, 2026-10-23)
 
