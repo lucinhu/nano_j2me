@@ -5117,12 +5117,49 @@ nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
                         (nj_s4)f2bits(f->f[3]));
             }
             break;
-        case NJ_M3G_T_LIGHT:
-            nj_iput(vm, o, m3g_fof(vm, NJ_C_LIGHT, "_nj_mode", "I"), (nj_s4)f->b);
-            nj_iput(vm, o, m3g_fof(vm, NJ_C_LIGHT, "_nj_color", "I"), (nj_s4)f->a);
+        case NJ_M3G_T_LIGHT: {
+            /*
+             * 10.6: the record carries attenuation, spotAngle, spotExponent
+             * and intensity, and a Light built here never ran Light's
+             * constructor.  Dropping the angle left the object with a zero
+             * spot angle - a cone of no width - so the whole mesh went black
+             * under a spot light (the Doom 3 title is such a file).
+             */
+            float ang = f->f[4];
+            nj_u4 mark = nj_root_mark(vm);
+            nj_ref atten;
+
+            if (!(ang > 0.0f) || ang > 90.0f) {
+                ang = 45.0f;                     /* the JSR-184 default */
+            }
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_LIGHT, "_nj_mode", "I"),
+                    (nj_s4)f->b);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_LIGHT, "_nj_color", "I"),
+                    (nj_s4)f->a);
             nj_iput(vm, o, m3g_fof(vm, NJ_C_LIGHT, "_nj_intensity", "F"),
                     (nj_s4)f2bits(f->f[3]));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_LIGHT, "_nj_spotAngle", "F"),
+                    (nj_s4)f2bits(ang));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_LIGHT, "_nj_spotExp", "F"),
+                    (nj_s4)f2bits(f->f[5] > 0.0f ? f->f[5] : 0.0f));
+            atten = nj_array_new(vm, "F", 3);
+            if (atten) {
+                float *ap;
+
+                atten = nj_root(vm, atten);
+                ap = (float *)nj_array_data(atten);
+                ap[0] = f->f[0];
+                ap[1] = f->f[1];
+                ap[2] = f->f[2];
+                if (!(ap[0] > 0.0f) && ap[1] == 0.0f && ap[2] == 0.0f) {
+                    ap[0] = 1.0f;                /* the JSR-184 default */
+                }
+                nj_rput(vm, o, m3g_fof(vm, NJ_C_LIGHT, "_nj_atten", "[F"),
+                        atten);
+            }
+            nj_root_release(vm, mark);
             break;
+        }
         case NJ_M3G_T_BACKGROUND: {
             nj_ref img = m3g_resolve_ref(vm, arr, nobj, o, f->refs[0], mode);
 
@@ -10608,6 +10645,9 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                 r.latt[i][0] = 1.0f;      /* the JSR default attenuation */
             }
             if (fsa) { r.lspot_angle[i] = bits2f(nj_iget(vm, lt, fsa)); }
+            if (!(r.lspot_angle[i] > 0.0f)) {
+                r.lspot_angle[i] = 45.0f;   /* a zero cone lights nothing */
+            }
             if (fse) { r.lspot_exp[i] = bits2f(nj_iget(vm, lt, fse)); }
         }
     }

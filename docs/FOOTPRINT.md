@@ -829,3 +829,22 @@ per triangle in a controlled rasteriser bench (identical framebuffer hashes),
 and about 1-2% of `毁灭战士3_10598`'s CPU over 4,000 paced frames, with
 byte-identical frames - see
 [PERFORMANCE.md](PERFORMANCE.md#the-span-solve-that-ran-every-scanline-round-53-2026-10-24).
+
+## A loaded Light keeps its cone (round 54, 2026-10-24)
+
+The M3G loader now copies a Light's `spotAngle`, `spotExponent` and
+`attenuation` out of the file record into the Java object; before this, a
+deserialised spot light kept a zero spot angle and lit nothing, which rendered
+`毁灭战士3_10598`'s 3D layer black. See
+[COMPATIBILITY.md](COMPATIBILITY.md#the-spot-light-whose-cone-had-no-width-round-54-2026-10-24).
+
+| Build | Before | After |
+|---|---|---|
+| hosted Release, `nj_lib_m3g.c` `.text` | 234,641 B | **234,081 B** (-560 B) |
+| `.data` / `.bss` (that object) | 0 / 0 | **unchanged** |
+
+RAM: each Light that comes from a file now owns a `float[3]` attenuation array
+(about 40 B with its header), which is the object the Java constructor always
+created; a Light built in Java allocates nothing new, and no field, static or
+buffer is added to the runtime. The two floats for the cone already lived in
+the class, they were simply never written.

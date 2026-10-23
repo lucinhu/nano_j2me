@@ -2944,3 +2944,71 @@ both the parent and this build: `生化危机3D(CAPCOM经典)_3671`,
 sampled frame hash is identical between the two builds, every run exits 0 with
 no uncaught exception, and the interpreter fixture keeps
 `BENCH sum=-136042548 s=5`.
+
+## The spot light whose cone had no width (round 54, 2026-10-24)
+
+`毁灭战士3_10598` renders its 3D menu layer completely black on this runtime
+until this round. The layer is lit, not unlit: probe of the draw state shows
+`lit=1 dif=ffcccccc amb=ff333333 emi=ff000000` — a Material, normals, and one
+`Light.SPOT` node from the scene graph.
+
+The light's own record, read out of the M3G asset the title ships, is
+
+```
+mode=SPOT(131) color=ffffffff intensity=1.000
+spotAngle=22.500 spotExponent=0.198 attenuation=1.000,0.000,0.000
+```
+
+but by the time the rasteriser bound the light its spot angle read 0.0. In
+JSR 184 a spot light lights the half angle `spotAngle / 2` about its axis, so
+an angle of zero is a cone of no width: `cos(0) == 1`, the cone test
+`cos(angleToAxis) <= cos(spotAngle / 2)` rejected every vertex, and the whole
+mesh collapsed to the emissive colour — black.
+
+Two defects met:
+
+* the binary-object decoder parsed `spotAngle` and `spotExponent` into the
+  record (they sit at offsets `+20` and `+24` of the Light payload) but
+  `nj_m3g_link_misc()` copied only `mode`, `color` and `intensity` into the
+  Java object, and
+* objects built by the loader never run `Light.<init>()`, so the fields the
+  decoder did not copy held the allocation default 0 instead of the
+  specification's default spot angle of 45 degrees.
+
+The fix copies `spotAngle`, `spotExponent` and `attenuation` (as a `float[3]`)
+into the object, applies the specification defaults for a degenerate record
+(non-positive or above-90-degree angle, all-zero attenuation), and the draw
+path also treats a non-positive angle as the 45-degree default rather than as
+a dead cone. The Java `Light` constructor is unchanged.
+
+Pixels: over 6,000 paced frames of `毁灭战士3_10598`, sampled frames up to
+frame 2,500 are identical between the parent build and this one (the title is
+still on its 2D intro), and every sample from frame 3,000 on differs — that is
+where the 3D menu layer appears. In the frame-4,000 sample 9,875 pixels change
+and their mean luminance goes from 0.6 (black) to 26.7 of 255: the geometry is
+now lit instead of being a silhouette.
+
+There is no reference-renderer oracle for this title: FreeJ2ME-Plus ships a
+JSR 184 implementation but throws
+`NullPointerException: Cannot invoke "javax.microedition.m3g.World.find(int)"
+because "this.worldMars" is null` on this JAR and renders blank frames, so the
+authority used here is the M3G asset's own record plus the specification's
+defaults, and the evidence is the pixel change above rather than a reference
+image.
+
+`tests/test_m3g.c` gains a check that links a hand-built Light record the way
+the loader does (`nj_m3g_link_misc()` with `spotAngle 22.5`,
+`spotExponent 0.198`, mode SPOT) and asserts the angle, exponent and mode that
+land in the Java object: it reports two failures on the parent build and none
+here (597 checks). The rest of the suite is unchanged: `ctest` 103/103,
+`test_m3g_references` 389/0, `test_gfx` 324/0, ASan/UBSan/LSan clean,
+`BENCH sum=-136042548 s=5`, digest 27/27. Two other M3G titles were replayed on
+both builds for collateral damage — `3D激爆拳击_8805` (1,500 frames) and
+`生化危机3D(CAPCOM经典)_3671` (600 frames) — and every sampled frame hash is
+identical.
+
+Cost: one `float[3]` allocation per Light loaded from a file (about 40 bytes
+including its header) and two float fields already existed, so a scene with n
+loaded lights pays 40n bytes more than before; nothing is allocated by a Light
+built in Java. Code size shrank by 560 bytes of `.text` in `nj_lib_m3g.c.o`,
+because the draw path no longer carries the zero-cone case.
