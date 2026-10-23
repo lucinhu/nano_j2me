@@ -2524,6 +2524,14 @@ are not at x=120 either. A 30-point grid over that panel (x=20..220 in steps of
 40, y=60..280 in steps of 55) also leaves it unchanged, so either the panel is
 not what starts a turn or its controls are smaller than this grid.
 
+**Correction.** The board is not stuck: a plain key script of one soft key, one
+soft key, fire and digit 5 at frames 200/500/800/900 walks it through six
+distinct screens in 1,000 frames (hashes `7c27f4cc`, `9189d493`, `0e95a6e5`,
+`efdfed4f`, `9943debe`), so the title is key driven and the earlier "identical
+dumps" runs were sitting in a panel that waits for a different key. Nothing in
+the runtime needs changing for it; the sweep scripts simply do not cover this
+title's own menu path.
+
 ## The soft key a title was not ready for (round 15, 2026-10-23)
 
 The pointer-and-key sweep script (first key at frame 20) times out on two
