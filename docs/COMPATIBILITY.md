@@ -2641,6 +2641,31 @@ test means to exercise, and `test_lib` is green again (805 passing
 assertions). The fixture also gets its own 2 MB VM now, so the fragmentation
 it leaves behind cannot distort the heap-pressure tests that follow.
 
+## Two regression certificates (round 31-32, 2026-10-23)
+
+After the `ByteArrayInputStream` window fix and the allocation-fixture change,
+two bounded regression runs were repeated on the resulting build rather than
+trusting the earlier sweeps:
+
+- full `ctest`: 101/101 in 66.37 s, including `test_lib` at 805 passing
+  assertions (it had been 803/1 before the fixture was given the fragmentation
+  it means to test);
+- the forty-title `deep2` corpus set, 600 frames each with the pointer+key
+  script, fresh RMS per title: **40/40 exited 0**, no missing-API errors, no
+  uncaught exceptions, no hangs (logs under
+  `.local-tools/debug-runs/compat-round9-20261022/round32/sweep/`).
+
+One open item got sharper rather than closed. `街头霸王2冠军典藏版_1812`
+still times out when a soft key is pressed early (a 600-frame replay with
+`400:soft1` returns 124), and the reference runtime with the same early soft
+key finishes normally (its own script run returns 0). The two earlier
+findings stand: the game assembles a 47,215-byte buffer that starts `SDD\0`
+out of `img_title.jar` (which begins `SFD\0`), and it then spins on a
+`ByteArrayInputStream` that has reached its end. So this is not a title that
+needs a later key - it is a load path that our runtime does not complete,
+and the remaining work is to compare the bytes the title assembles against
+what the reference assembles.
+
 ## The store name that was a path (round 13, 2026-10-23)
 
 `阿尔卑斯牧场物语_7043` opens a record store called `/A/AConfig`.  JSR-118 asks
