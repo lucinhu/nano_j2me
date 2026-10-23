@@ -523,6 +523,28 @@ static void test_read_fully(nj_vm *vm)
     OK(nj_call(vm, dis, DIS, "readFully", "([BII)V", a, NULL) != NJ_OK);
     OK(nj_has_exception(vm));
     nj_clear_exception(vm);
+
+    /* Running out of stream is the checked EOFException, not a short read:
+     * the four bytes are gone, so asking for six must raise EOFException and
+     * leave the partial bytes in place. */
+    bais = bais_over(vm, data, 4u);
+    OK(bais != NULL);
+    dis = dis_over(vm, bais);
+    OK(dis != NULL);
+    dst = nj_byte_array_new(vm, 6u);
+    OK(dst != NULL);
+    a[0] = vref(dst);
+    OK(nj_call(vm, dis, DIS, "readFully", "([B)V", a, NULL) != NJ_OK);
+    {
+        const char *d = nj_exception_describe(vm);
+
+        OK_MSG(d != NULL && strstr(d, "EOFException") != NULL,
+               "readFully past the end raises EOFException: %s",
+               d ? d : "(no exception)");
+    }
+    nj_clear_exception(vm);
+    OK(nj_array_get_int(dst, 0u) == 11 && nj_array_get_int(dst, 3u) == 44);
+    clean(vm, "readFully past the end");
 }
 
 /* ------------------------------------------------------------------ */
