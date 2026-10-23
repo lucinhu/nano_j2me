@@ -2526,6 +2526,17 @@ initialisation finishes later than the reference's and the press lands before
 in the runtime was changed for it, and the sweep script for these two titles
 starts after frame 300. Recorded as an open question, not a defect claim.
 
+A `-pg` profile of the first 400 frames (no keys) rules out a CPU-bound startup:
+the whole run samples 0.08 s of CPU, almost all of it `nj_region_draw`
+(559 calls) with `nj_gif_decode` called 189,215 times for the splash
+animations, so the sequence is animation-timer driven and our paint cadence is
+what the title asked for (109 paints in 400 frames at 30 fps). The reference
+answers the same early soft key by opening its own 载入中 loading screen and
+finishing normally when the key arrives at 1.5 s or 3 s, so the difference is
+in the title's load/state machine rather than in startup speed; the title's
+canvas declares no Commands, so our soft key does reach `keyPressed(-6)` and
+not a command activation.
+
 The full corpus was re-run with the current build (395 titles, 600 frames,
 pointer-and-key script): 4 non-zero exits - this pair plus the two known ones
 (`1945空战英雄_6105` wants `--device nokia6230`, `鲁宾逊漂流记汉化BT版_4677` is
