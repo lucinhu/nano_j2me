@@ -804,3 +804,28 @@ translucency and -39% on an all-transparent one, +1.9% in the worst case
 change is worth 1-1.5% of `毁灭战士3_10598`'s CPU - inside the noise floor of
 the 2D titles that were tried as controls - see
 [PERFORMANCE.md](PERFORMANCE.md#the-blits-whose-pixels-are-mostly-nothing-round-52-2026-10-24).
+
+## One span solve, hoisted out of the row loop (round 53, 2026-10-24)
+
+`sw_tri()`'s scanline loop used to re-derive the triangle's winding sign, its
+three edge directions and their sign-scaled derivatives on every row, plus
+reload `sw->dtest`, `sw->dwrite`, `sw->z` and the depth scale for every pixel.
+All of that is triangle-constant, so it is now computed once before the loop
+and the row step is applied to pre-scaled accumulators. Nothing is stored
+outside C stack locals.
+
+| Build | Before | After |
+|---|---|---|
+| hosted Release, `nj_lib_m3g.c` `.text` | 275,900 B | **274,488 B** (-1,412 B) |
+| hosted Release, `nj2me` executable `.text` | 2,905,966 B | **2,905,166 B** (-800 B) |
+| `.data` / `.bss` (executable) | 163,696 / 6,688 | **unchanged** |
+
+RAM is unchanged; no field, static, heap or framebuffer is added, and the
+object actually gets smaller. The rasteriser therefore costs slightly less ROM
+than before.
+
+CPU side: -5.5% with 192-pixel triangles, -17.3% at 32 and -31.9% at 8 pixels
+per triangle in a controlled rasteriser bench (identical framebuffer hashes),
+and about 1-2% of `毁灭战士3_10598`'s CPU over 4,000 paced frames, with
+byte-identical frames - see
+[PERFORMANCE.md](PERFORMANCE.md#the-span-solve-that-ran-every-scanline-round-53-2026-10-24).

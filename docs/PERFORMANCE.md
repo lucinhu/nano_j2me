@@ -2463,3 +2463,81 @@ the whole, which is the size of the medians that were measured.
 `.text` +1,600 B in `nj_gfx.c.o`, +1,792 B in the `nj2me` executable;
 `.data` and `.bss` unchanged. The row loop holds `probe[8]` and `grp[8]` (up to
 64 B of C stack); no field, static or buffer is added, so RAM is unchanged.
+
+## The span solve that ran every scanline (round 53, 2026-10-24)
+
+`sw_tri()` fills a triangle by walking its bounding box row by row. For each
+scanline it solves the three edges for the x where they cross that row, keeps
+the widest inside interval, and then walks the pixels between them. The solve
+needs one division per edge, so it cannot be removed without changing the
+pixels, but it was doing a great deal of work *around* those divisions on every
+single row:
+
+```c
+for (i = 0; i < 3; i++) {
+    float w = sgn * (i == 0 ? e0 : (i == 1 ? e1 : e2));
+    float d = sgn * (i == 0 ? dxe0 : (i == 1 ? dxe1 : dxe2));
+    if (d > 0.0f) { ... } else if (d < 0.0f) { ... } else if (w < 0.0f) { ... }
+}
+```
+
+The sign `sgn` is a triangle constant, the derivatives `dxe*` are triangle
+constants, and only the edge values `e*` change from row to row. So the loop
+became three straight-line blocks that use pre-scaled accumulators:
+
+```c
+float sgn = (area > 0.0f) ? 1.0f : -1.0f;
+float sd0 = sgn * dxe0, ...;          /* pre-scaled derivatives */
+float w0 = sgn * e0, ...;             /* pre-scaled edge values */
+int dir0 = (sd0 > 0.0f) ? 1 : ((sd0 < 0.0f) ? -1 : 0);   /* per edge, once */
+...
+if (dir0 > 0) { x = fminx + (-w0) / sd0; if (x > lo) lo = x; }
+else if (dir0 < 0) { x = fminx + w0 / (-sd0); if (x < hi) hi = x; }
+else if (w0 < 0.0f) { empty = 1; }
+...
+w0 += sw0; w1 += sw1; w2 += sw2;      /* the row step, pre-scaled too */
+```
+
+The arithmetic is bit-identical: `sgn * x` is exact for `sgn = ±1`, and
+`(-a) + (-b)` rounds exactly like `-(a + b)`, so the pre-scaled accumulators
+reach exactly the same floats as `sgn * e` did. The dividing expression
+`fminx + (-w0) / sd0` has the same operands as before, only hoisted. The four
+per-pixel loops also use locals for `sw->dtest`, `sw->dwrite`, `sw->z` and the
+depth scale `ia * 65536.0f` instead of reloading them from `sw` on every pixel.
+
+### How it was measured
+
+Two harnesses, both outside Git. The round-49 bench
+(`.local-tools/debug-runs/m3g-raster-round49-20261023/`) renders the same
+76,800 pixels per iteration and its eleven configurations keep their previous
+framebuffer hashes - they are checked on every run, and all eleven were
+`SAME` after this change. The new triangle-size bench
+(`.local-tools/debug-runs/m3g-sweep-round54-20261024/m3g-trisize.c`) keeps the
+pixel count per iteration constant while varying the triangle size, which is
+what a setup change trades against:
+
+| Triangles | Pixels per triangle | Before | After | Delta |
+|---|---|---|---|---|
+| 24x16 quads | 192 | 0.488 ms | **0.461 ms** | -5.5% |
+| 8x8 quads | 32 | 0.591 ms | **0.489 ms** | -17.3% |
+| 4x4 quads | 8 | 1.175 ms | **0.800 ms** | -31.9% |
+
+(min of five interleaved rounds each, framebuffer hashes identical in all
+three; on the round-49 bench the texture-dominated cases move by -1.5% to
+-2.9% because their time is per-pixel, and the untextured flat case, which
+spends nearly everything in the setup, moves by -12.4%.)
+
+Real titles: `毁灭战士3_10598` over 4,000 paced frames, eight interleaved
+rounds against the round-52 binary gave paired deltas of +2.02, -0.72, -3.05,
++1.01, -2.99, -1.23, -4.71 and -3.23 percent - median -2.11%, mean -1.61%,
+six of eight rounds faster. The machine's load average was 3-5 during the run,
+so the honest reading is "about 1-2% of the title, direction consistent with
+the 48 pixels per triangle it averages". Its dumped frames are byte-identical
+to the previous binary, as are those of `合金弹头4(完美汉化版)_4053`.
+
+### Cost
+
+`nj_lib_m3g.c.o` `.text` 275,900 -> **274,488** B (-1,412 B, the hoisted code
+is smaller than the per-row loop it replaces); the `nj2me` executable `.text`
+2,905,966 -> **2,905,166** B (-800 B); `.data`/`.bss` unchanged. Only C stack
+locals are added, no field, static or buffer, so RAM is unchanged.

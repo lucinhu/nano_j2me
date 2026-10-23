@@ -9243,32 +9243,67 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
         dxb = dxe1 * b0f + dxe2 * b1f + dxe0 * b2f;
         dyb = dye1 * b0f + dye2 * b1f + dye0 * b2f;
     }
+    /*
+     * The span solve below bounds every scanline by the three edges: an edge
+     * crosses the scanline at minx - w/d and bounds it on the left when the
+     * edge runs one way and on the right when it runs the other.  The
+     * direction of an edge, and the sign that turns its interpolant into
+     * "inside", are constant over the triangle - so they are decided once
+     * here, and the scanline loop below is straight-line code with no branch
+     * on an edge direction and no internal loop.  The interpolants keep the
+     * same values they had: w is the signed accumulator that used to be
+     * computed as sgn * e, and multiplying by +/-1 is exact, so  w += dw
+     * reaches the same floats as (sgn * e) += (sgn * dye) did.
+     */
+    float sgn = (area > 0.0f) ? 1.0f : -1.0f;
+    float sd0 = sgn * dxe0, sd1 = sgn * dxe1, sd2 = sgn * dxe2;
+    float sw0 = sgn * dye0, sw1 = sgn * dye1, sw2 = sgn * dye2;
+    float w0 = sgn * e0, w1 = sgn * e1, w2 = sgn * e2;
+    int dir0 = (sd0 > 0.0f) ? 1 : ((sd0 < 0.0f) ? -1 : 0);
+    int dir1 = (sd1 > 0.0f) ? 1 : ((sd1 < 0.0f) ? -1 : 0);
+    int dir2 = (sd2 > 0.0f) ? 1 : ((sd2 < 0.0f) ? -1 : 0);
+    float fminx = (float)minx;
+    float fmaxx = (float)maxx;
+    float iz = ia * 65536.0f;      /* the depth scale, once */
+    int dtest = sw->dtest;
+    int dwrite = sw->dwrite;
+    nj_s4 *z = sw->z;
+
     for (py = miny; py <= maxy; py++) {
-        float r0 = e0, r1 = e1, r2 = e2, rg = g, rh = h, rk = k;
+        float rg = g, rh = h, rk = k;
         float rr = cr, rgc = cg, rbc = cb;
-        float sgn = (area > 0.0f) ? 1.0f : -1.0f;
-        float lo = (float)minx, hi = (float)maxx;
-        int xl, xr, i;
+        float lo = fminx, hi = fmaxx;
+        int xl, xr;
         nj_size o;
         nj_u1 *drow;
         int empty = 0;
 
-        /* The span this scanline's three edges allow, solved directly
-           instead of testing every pixel of the bounding box: each edge is
-           linear in x, so "on the inside" is one bound per edge. */
-        for (i = 0; i < 3; i++) {
-            float w = sgn * (i == 0 ? r0 : (i == 1 ? r1 : r2));
-            float d = sgn * (i == 0 ? dxe0 : (i == 1 ? dxe1 : dxe2));
-
-            if (d > 0.0f) {
-                float x = (float)minx + (-w) / d;
-                if (x > lo) { lo = x; }
-            } else if (d < 0.0f) {
-                float x = (float)minx + w / (-d);
-                if (x < hi) { hi = x; }
-            } else if (w < 0.0f) {
-                empty = 1;
-            }
+        if (dir0 > 0) {
+            float x = fminx + (-w0) / sd0;
+            if (x > lo) { lo = x; }
+        } else if (dir0 < 0) {
+            float x = fminx + w0 / (-sd0);
+            if (x < hi) { hi = x; }
+        } else if (w0 < 0.0f) {
+            empty = 1;
+        }
+        if (dir1 > 0) {
+            float x = fminx + (-w1) / sd1;
+            if (x > lo) { lo = x; }
+        } else if (dir1 < 0) {
+            float x = fminx + w1 / (-sd1);
+            if (x < hi) { hi = x; }
+        } else if (w1 < 0.0f) {
+            empty = 1;
+        }
+        if (dir2 > 0) {
+            float x = fminx + (-w2) / sd2;
+            if (x > lo) { lo = x; }
+        } else if (dir2 < 0) {
+            float x = fminx + w2 / (-sd2);
+            if (x < hi) { hi = x; }
+        } else if (w2 < 0.0f) {
+            empty = 1;
         }
         if (!empty) {
             xl = (int)ceilf(lo - 0.5f);
@@ -9293,10 +9328,10 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
              * reassociating the depth arithmetic can change a tie. */
             if (flat_opaque) {
                 for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg) {
-                    nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
+                    nj_s4 key = (nj_s4)(pg * iz);
 
-                    if (key > 0 && (!sw->dtest || key > sw->z[o])) {
-                        if (sw->dwrite) { sw->z[o] = key; }
+                    if (key > 0 && (!dtest || key > z[o])) {
+                        if (dwrite) { z[o] = key; }
                         m3g_pixel_write(drow, format, flat);
                         drawn = 1u;
                     }
@@ -9316,17 +9351,17 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
 
                 for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg,
                          ph += dxh, pk += dxk) {
-                    nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
+                    nj_s4 key = (nj_s4)(pg * iz);
                     const nj_u1 *tp;
                     nj_u4 tr, tg, tb, c;
 
                     if (key <= 0) { continue; }
-                    if (sw->dtest && key <= sw->z[o]) { continue; }
+                    if (dtest && key <= z[o]) { continue; }
                     tp = sw_near_texel(sw, ph / pg, pk / pg, tsx, tsy);
                     tr = ((nj_u4)tp[0] * fr) / 255u;
                     tg = ((nj_u4)tp[1] * fg) / 255u;
                     tb = ((nj_u4)tp[2] * fb) / 255u;
-                    if (sw->dwrite) { sw->z[o] = key; }
+                    if (dwrite) { z[o] = key; }
                     if (blend_alpha) {
                         nj_u4 ta = bpp4 ? (nj_u4)tp[3] : 255u;
 
@@ -9358,18 +9393,18 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
 
                 for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg,
                          ph += dxh, pk += dxk) {
-                    nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
+                    nj_s4 key = (nj_s4)(pg * iz);
                     const nj_u1 *tp;
                     nj_u4 tr, tg, tb, ta, c;
 
                     if (key <= 0) { continue; }
-                    if (sw->dtest && key <= sw->z[o]) { continue; }
+                    if (dtest && key <= z[o]) { continue; }
                     tp = sw_near_texel(sw, ph / pg, pk / pg, tsx, tsy);
                     tr = ((nj_u4)tp[0] * fr) / 255u;
                     tg = ((nj_u4)tp[1] * fg) / 255u;
                     tb = ((nj_u4)tp[2] * fb) / 255u;
                     ta = bpp4 ? (nj_u4)tp[3] : 255u;
-                    if (sw->dwrite) { sw->z[o] = key; }
+                    if (dwrite) { z[o] = key; }
                     c = (ta << 24) | (tr << 16) | (tg << 8) | tb;
                     if (blend_alpha && ta < 255u) {   /* the rare translucent texel */
                         m3g_pixel_write(drow, format,
@@ -9389,7 +9424,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
 #endif
             for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg, ph += dxh,
                      pk += dxk, rr += dxr, rgc += dxgc, rbc += dxb) {
-                nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
+                nj_s4 key = (nj_s4)(pg * iz);
                 nj_u4 c, ca;
 
                 if (sw->sprite) {
@@ -9412,7 +9447,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                 if (key <= 0) {
                     continue;
                 }
-                if (sw->dtest && key <= sw->z[o]) {
+                if (dtest && key <= z[o]) {
                     continue;
                 }
                 if (gouraud) {
@@ -9446,7 +9481,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                 if (sw->athresh > 0 && (nj_s4)ca < sw->athresh) {
                     continue;
                 }
-                if (sw->dwrite) { sw->z[o] = key; }
+                if (dwrite) { z[o] = key; }
                 if (sw->blend == 68) {              /* REPLACE */
                     m3g_pixel_write(drow, format, sw->awrite ? c :
                         ((c & 0x00FFFFFFu) | (m3g_pixel_read(drow, format) & 0xFF000000u)));
@@ -9461,7 +9496,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                 drawn = 1u;
             }
         }
-        e0 += dye0; e1 += dye1; e2 += dye2;
+        w0 += sw0; w1 += sw1; w2 += sw2;
         g += dyg; h += dyh; k += dyk;
         cr += dyr; cg += dygc; cb += dyb;
     }
