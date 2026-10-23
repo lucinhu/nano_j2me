@@ -8267,21 +8267,19 @@ NJFN(m3g_node_getAlignmentReference)
 }
 
 /* ---- Object3D ------------------------------------------------------ */
-/*
- * getReferences() answers the AnimationTracks that animate this object,
- * which is the Vector addAnimationTrack() filled.  Inside the Vector they
- * are Object3Ds as far as the array is concerned, which is what the JSR
- * declares the array to hold.
- */
+/* Enumerate direct Object3D references, including vector-backed members.
+ * Count before filling so short arrays fail without partial writes. Walking
+ * twice avoids a fixed-size temporary buffer and supports arbitrarily many
+ * children, animation tracks or mesh appearances without extra heap storage. */
 NJFN(m3g_o3d_getReferences)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref arr = NJ_ARG_REF(args, 0);
-    nj_ref got[64];
-    nj_s4 n = 0;
+    nj_s4 n = 0, pass;
     nj_s4 i;
-    nj_ref vec;
     nj_class *grp = nj_class_lookup(vm, NJ_C_GROUP);
+    nj_class *mesh = nj_class_lookup(vm, NJ_C_MESH);
+    int is_mesh = mesh && nj_class_is_subclass_of(self->cls, mesh);
     static const struct {
         const char *cls;
         const char *fld;
@@ -8292,7 +8290,6 @@ NJFN(m3g_o3d_getReferences)
         { NJ_C_SPRITE3D, "_nj_img",       "L" NJ_C_IMAGE2D ";" },
         { NJ_C_SPRITE3D, "_nj_app",       "L" NJ_C_APPEAR ";" },
         { NJ_C_MESH,     "_nj_vb",        "L" NJ_C_VBUF ";" },
-        { NJ_C_MESH,     "_nj_ib",        "L" NJ_C_IBUF ";" },
         { NJ_C_APPEAR,   "_nj_mat",       "L" NJ_C_MAT ";" },
         { NJ_C_APPEAR,   "_nj_pm",        "L" NJ_C_POLY ";" },
         { NJ_C_APPEAR,   "_nj_cm",        "L" NJ_C_COMP ";" },
@@ -8308,73 +8305,74 @@ NJFN(m3g_o3d_getReferences)
         { NJ_C_VBUF,     "_nj_tex0",      "L" NJ_C_VARR ";" }
     };
 
-    /*
-     * The eight members above the call are not objects: they are counted, so
-     * that a caller that asks with a null array still gets the right number,
-     * and only the first 64 are remembered for the copy below.
-     */
-#define M3G_REF_PUSH(r)                                                     \
+    /* JSR-184 explicitly retains duplicate references in distinct slots. */
+#define M3G_REF_PUSH(expr)                                                   \
     do {                                                                    \
-        if ((r) != 0) {                                                     \
-            if (n < (nj_s4)(sizeof(got) / sizeof(got[0]))) {                \
-                got[n] = (r);                                               \
-            }                                                               \
+        nj_ref ref_ = (expr);                                                \
+        if (ref_) {                                                         \
+            if (pass) nj_array_set_ref(arr, (nj_u4)n, ref_);                  \
             n++;                                                            \
         }                                                                   \
     } while (0)
 
-    i = n;
-    vec = nj_rget(vm, self, m3g_fof(vm, NJ_C_O3D, "_nj_tracks",
-                                    "L" NJ_C_VECTOR ";"));
-    for (i = 0; i < 2; i++) {
-        nj_ref v = i == 0 ? vec : NULL;
+    for (pass = 0; pass < (arr ? 2 : 1); pass++) {
+        n = 0;
+        for (i = 0; i < 3; i++) {
+            nj_ref v = NULL;
 
-        if (i == 1 && grp && nj_class_is_subclass_of(self->cls, grp)) {
-            v = nj_rget(vm, self, m3g_fof(vm, NJ_C_GROUP, "_nj_kids",
-                                          "L" NJ_C_VECTOR ";"));
-        }
-        if (v) {
-            nj_value sz;
-
-            if (nj_call(vm, v, NJ_C_VECTOR, "size", "()I", NULL, &sz) == NJ_OK) {
+            if (i == 0) {
+                v = nj_rget(vm, self, m3g_fof(vm, NJ_C_O3D, "_nj_tracks",
+                                              "L" NJ_C_VECTOR ";"));
+            } else if (i == 1 && grp && nj_class_is_subclass_of(self->cls, grp)) {
+                v = nj_rget(vm, self, m3g_fof(vm, NJ_C_GROUP, "_nj_kids",
+                                              "L" NJ_C_VECTOR ";"));
+            } else if (i == 2 && is_mesh) {
+                v = nj_rget(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_subs",
+                                              "L" NJ_C_VECTOR ";"));
+            }
+            if (v) {
+                nj_value sz;
                 nj_s4 k;
-
+                nj_status st = nj_call(vm, v, NJ_C_VECTOR, "size", "()I", NULL, &sz);
+                if (st != NJ_OK) return st;
                 for (k = 0; k < sz.i; k++) {
-                    nj_value a[1];
-                    nj_value e;
-
-                    a[0].i = k;
-                    if (nj_call(vm, v, NJ_C_VECTOR, "elementAt",
-                                "(I)Ljava/lang/Object;", a, &e) == NJ_OK) {
-                        M3G_REF_PUSH(e.r);
-                    }
+                    nj_value a, e;
+                    a.i = k;
+                    st = nj_call(vm, v, NJ_C_VECTOR, "elementAt",
+                                  "(I)Ljava/lang/Object;", &a, &e);
+                    if (st != NJ_OK) return st;
+                    M3G_REF_PUSH(e.r);
                 }
             }
         }
-    }
-    for (i = 0; i < (nj_s4)(sizeof(table) / sizeof(table[0])); i++) {
-        nj_class *c = nj_class_lookup(vm, table[i].cls);
-        nj_field *f;
-
-        if (!c || !nj_class_is_subclass_of(self->cls, c)) {
-            continue;
+        if (is_mesh) {
+            nj_ref ibs = nj_rget(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_ibs",
+                                                 "[L" NJ_C_IBUF ";"));
+            if (ibs) {
+                nj_u4 k;
+                for (k = 0; k < nj_array_length(ibs); k++) {
+                    M3G_REF_PUSH(nj_array_get_ref(ibs, k));
+                }
+            } else {
+                /* Single-submesh constructors store only this one slot. */
+                M3G_REF_PUSH(nj_rget(vm, self, m3g_fof(vm, NJ_C_MESH, "_nj_ib",
+                                                       "L" NJ_C_IBUF ";")));
+            }
         }
-        f = nj_field_lookup(vm, table[i].cls, table[i].fld, table[i].desc, 0);
-        if (f) {
-            M3G_REF_PUSH(nj_rget(vm, self, f));
-        }
-    }
-#undef M3G_REF_PUSH
+        for (i = 0; i < (nj_s4)(sizeof(table) / sizeof(table[0])); i++) {
+            nj_class *c = nj_class_lookup(vm, table[i].cls);
+            nj_field *f;
 
-    if (arr) {
-        if ((nj_s4)arr->length < n) {
+            if (!c || !nj_class_is_subclass_of(self->cls, c)) continue;
+            f = nj_field_lookup(vm, table[i].cls, table[i].fld, table[i].desc, 0);
+            if (f) M3G_REF_PUSH(nj_rget(vm, self, f));
+        }
+        if (!pass && arr && arr->length < (nj_u4)n) {
             NJ_THROW(vm, "java/lang/IllegalArgumentException",
                      "references array is too small");
         }
-        for (i = 0; i < n && i < (nj_s4)arr->length; i++) {
-            nj_array_set_ref(arr, (nj_u4)i, got[i]);
-        }
     }
+#undef M3G_REF_PUSH
     ret->i = n;
     return NJ_OK;
 }
@@ -8715,7 +8713,8 @@ typedef struct {
     int winding;               /* 168 CCW, 169 CW */
     int texfunc;               /* 224 ADD .. 228 REPLACE; 227 MODULATE */
     int filt_image;            /* 128 NEAREST (the default) / 129 LINEAR */
-    const nj_u1 *mips;         /* the level chain, RGBA, level 0 first */
+    const nj_u1 *tex_base;     /* original RGBA pixels, before per-triangle LOD */
+    const nj_u1 *mips;         /* packed RGBA levels 1..N; level 0 is tex_base */
     int mip_w, mip_h, mip_n;   /* its base size and how many levels it has */
     int blend;                 /* CompositingMode: 64 ALPHA .. 68 REPLACE */
     int athresh;               /* the alpha test, 0..255 */
@@ -8851,7 +8850,7 @@ static nj_ref m3g_image_mips(nj_vm *vm, nj_ref img)
     nj_ref px, mips = 0;
     const nj_u1 *src;
     nj_u1 *dst;
-    nj_s4 w, h, lw, lh, n, total, i;
+    nj_s4 w, h, lw, lh, n, total;
     nj_u4 mark;
 
     if (!img) {
@@ -8870,35 +8869,41 @@ static nj_ref m3g_image_mips(nj_vm *vm, nj_ref img)
     if (!px || w <= 0 || h <= 0) {
         return 0;
     }
-    src = (const nj_u1 *)nj_array_data(px);
-    if (!src || nj_array_length(px) < (nj_u4)(w * h * 4)) {
+    if (!nj_array_data(px) || nj_array_length(px) < (nj_u4)(w * h * 4)) {
         return 0;
     }
+    /* The image already owns level 0. Cache only the smaller levels, so a
+     * texture never pays for a second full-resolution RGBA buffer. */
     total = 0;
-    for (lw = w, lh = h; ; lw = lw > 1 ? lw / 2 : 1, lh = lh > 1 ? lh / 2 : 1) {
+    for (lw = w, lh = h; lw > 1 || lh > 1; ) {
+        lw = lw > 1 ? lw / 2 : 1;
+        lh = lh > 1 ? lh / 2 : 1;
         total += lw * lh * 4;
-        if (lw <= 1 && lh <= 1) {
-            break;
-        }
     }
-    mips = nj_array_new(vm, "B", (nj_u4)total);
-    if (!mips) {
-        return 0;
+    if (!total) {
+        return 0;                  /* a 1x1 image needs no mip allocation */
     }
     mark = nj_root_mark(vm);
-    mips = nj_root(vm, mips);
-    dst = (nj_u1 *)nj_array_data(mips);
-    if (!dst) {
+    nj_root(vm, img);
+    nj_root(vm, px);
+    mips = nj_array_new(vm, "B", (nj_u4)total);
+    if (!mips) {
         nj_root_release(vm, mark);
         return 0;
     }
-    memcpy(dst, src, (size_t)(w * h * 4));
+    mips = nj_root(vm, mips);
+    dst = (nj_u1 *)nj_array_data(mips);
+    src = (const nj_u1 *)nj_array_data(px);
+    if (!dst || !src) {
+        nj_root_release(vm, mark);
+        return 0;
+    }
     lw = w;
     lh = h;
     for (n = 0; (lw > 1 || lh > 1) && n < 16; n++) {
         nj_s4 nw = lw > 1 ? lw / 2 : 1, nh = lh > 1 ? lh / 2 : 1;
-        const nj_u1 *up = dst;
-        nj_u1 *to = dst + lw * lh * 4;
+        const nj_u1 *up = src;
+        nj_u1 *to = dst;
         nj_s4 x, y, c;
 
         for (y = 0; y < nh; y++) {
@@ -8916,33 +8921,33 @@ static nj_ref m3g_image_mips(nj_vm *vm, nj_ref img)
                 }
             }
         }
-        dst = to;
+        src = to;
+        dst = to + (nj_size)nw * nh * 4;
         lw = nw;
         lh = nh;
     }
-    /* One more pass to keep the loop's pointer arithmetic honest: the caller
-       only needs the array, and the levels are found by walking from its start. */
     nj_rput(vm, img, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_mips", "[B"), mips);
     nj_root_release(vm, mark);
-    (void)i;
     return mips;
 }
 
-/* The level `lv` inside the chain, with its own size. */
-static const nj_u1 *m3g_mip_level(const nj_u1 *mips, int w, int h, int lv,
-                                  int *lw, int *lh)
+/* Level 0 belongs to the image; the cache starts at level 1. */
+static const nj_u1 *m3g_mip_level(const nj_u1 *base, const nj_u1 *mips,
+                                int w, int h, int lv, int *lw, int *lh)
 {
     const nj_u1 *p = mips;
     int k;
 
     for (k = 0; k < lv; k++) {
-        p += (nj_size)w * (nj_size)h * 4;
+        if (k > 0) {
+            p += (nj_size)w * (nj_size)h * 4;
+        }
         w = w > 1 ? w / 2 : 1;
         h = h > 1 ? h / 2 : 1;
     }
     *lw = w;
     *lh = h;
-    return p;
+    return lv ? p : base;
 }
 
 #if !NJ_M3G_FAST_PATHS
@@ -9934,7 +9939,8 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
                 ratio *= 0.25f;    /* one level is half the size each way */
                 lv++;
             }
-            p = m3g_mip_level(r->sw.mips, r->sw.mip_w, r->sw.mip_h, lv, &lw, &lh);
+            p = m3g_mip_level(r->sw.tex_base, r->sw.mips,
+                              r->sw.mip_w, r->sw.mip_h, lv, &lw, &lh);
             if (p) {
                 r->sw.tex = p;
                 r->sw.tex_w = lw;
@@ -10494,12 +10500,11 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                         (fmt == 99 || fmt == 100)) {
                         r.sw.tex = (const nj_u1 *)nj_array_data(px);
                         r.sw.tex_bpp = (fmt == 100) ? 4 : 3;
-                        /* The level chain, when the image has one to build:
-                           level 0 of the chain is the RGBA copy of these very
-                           pixels, and the levels below it are the same picture
-                           at half the size each. */
+                        /* Smaller RGBA levels share the original pixels as
+                           their level 0. Keep that pointer across LOD changes. */
                         mipref = m3g_image_mips(vm, im2);
                         if (mipref) {
+                            r.sw.tex_base = r.sw.tex;
                             r.sw.mips = (const nj_u1 *)nj_array_data(mipref);
                             r.sw.mip_w = r.sw.tex_w;
                             r.sw.mip_h = r.sw.tex_h;

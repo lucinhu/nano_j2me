@@ -2046,3 +2046,39 @@ Reproduction artifacts are under
 `perf-scout/REPORT.md`, harness, assembly and stack reports; the Lead's
 `lead/abba-summary.json`, eight raw ABBA logs, game commands/hashes and
 sanitizer/full-suite logs. These local artifacts are not checked into Git.
+
+## The mip chain that copied level 0 twice (round 47, 2026-10-23)
+
+`m3g_image_mips()` builds the downsampled levels a textured triangle needs once
+it gets small on screen. It used to allocate the whole chain including a full
+RGBA copy of level 0, then `memcpy` the image's pixels into it - a duplicate of
+a buffer that already existed, and a copy that had to be made before the first
+small level could be produced.
+
+The chain now holds levels 1..N and the sampler takes level 0 from the image's
+own pixels, so both the duplicate buffer and the `memcpy` are gone. Measured
+with the two builders (parent and current) compiled side by side against the
+same deterministic `Image2D` fixtures, interleaved pairs, `taskset -c 5`,
+`-O2` Release flags:
+
+| Texture | Baseline (median) | Current (median) | Ratio | Pairs | Spread |
+|---|---|---|---|---|---|
+| 128x128, 21,552 builds/arm | 12,895.0 ns | 10,961.4 ns | **0.851** | 10 | 0.35% |
+| 256x256, 5,408 builds/arm | 54,331.6 ns | 44,045.1 ns | **0.811** | 10 | 0.32% |
+
+Both arms rebuild the same chain from a cold cache each iteration; the current
+arm does fewer bytes and one less pass. Every cached level was compared byte
+for byte against the parent chain for 1x1, 2x1, 3x5, 128x128 and 256x256, so
+the saving is not bought with different pixels. Level 0 after a smaller level
+was also checked to be the original pixels again.
+
+This is a per-texture-upload win, not a frame-rate number: a title uploads a
+palette when it changes character or stage, so the CPU saved is a shorter stall
+at that moment, plus the RAM described in
+[FOOTPRINT.md](FOOTPRINT.md#the-second-copy-of-every-3d-texture-round-47-2026-10-23).
+The 4-title replay in COMPATIBILITY.md shows identical frames before and after,
+so nothing here changes what is drawn.
+
+Reproduction: `.local-tools/debug-runs/compact3d-round47-20261023/mip-measure/`
+(snapshotted parent/current sources, `probe.c`, `run_measure.py`). Those local
+artifacts are not checked into Git.

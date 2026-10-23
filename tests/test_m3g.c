@@ -614,7 +614,7 @@ static int i2d_abi_ok(nj_vm *vm)
  * at z=-4, inside the 1..10 parallel near/far range.
  */
 typedef struct {
-    nj_ref g3d, camera, xf, vb, ib, app, poly, bg, target, pixels;
+    nj_ref g3d, camera, xf, vb, ib, app, poly, bg, target, pixels, tcva;
 } i2d_canvas;
 
 static int i2d_canvas_init(nj_vm *vm, i2d_canvas *c)
@@ -647,6 +647,7 @@ static int i2d_canvas_init(nj_vm *vm, i2d_canvas *c)
 
     posva = nj_object_new(vm, CLS("VertexArray"));
     tcva = nj_object_new(vm, CLS("VertexArray"));
+    c->tcva = tcva;
     c->vb = make(vm, CLS("VertexBuffer"));
     c->ib = nj_object_new(vm, CLS("TriangleStripArray"));
     c->app = make(vm, CLS("Appearance"));
@@ -1145,8 +1146,11 @@ static void test_image2d_set(nj_vm *vm)
             check(i2d_canvas_pixel(&canvas, 60, 160) == 0xFF0000u &&
                   i2d_canvas_pixel(&canvas, 180, 160) == 0x00FF00u,
                   "the two texels land on the two halves of the quad");
-            check(i2d_mips(vm, rgba2) != 0,
-                  "rendering an RGBA texture builds its mip chain");
+            check(i2d_mips(vm, rgba2) != 0 &&
+                  nj_array_length(i2d_mips(vm, rgba2)) == 4u,
+                  "a 2x1 RGBA texture caches only its 1x1 mip tail");
+            check(i2d_mips(vm, rgba1) == 0,
+                  "a 1x1 RGBA texture needs no mip cache");
 
             check(i2d_set_ok(vm, rgba2, 1, 0, 1, 1, update),
                   "a sub-rectangle update of a texture succeeds");
@@ -1160,6 +1164,27 @@ static void test_image2d_set(nj_vm *vm)
                   "the untouched texel still renders its old colour");
             check(i2d_mips(vm, rgba2) != 0,
                   "the next render rebuilds the mip chain");
+            {
+                static const nj_s2 mixed_uv[8] = {
+                    -32767, -32767, 32767, -32767, -32767, 32767, 0, 0
+                };
+                static const nj_u1 average[4] = {255, 128, 0, 255};
+                nj_ref uv = nj_array_new(vm, "S", 8u);
+                nj_value args[3];
+                memcpy(nj_array_data(uv), mixed_uv, sizeof(mixed_uv));
+                args[0].i = 0; args[1].i = 4; args[2].r = uv;
+                check(nj_call(vm, canvas.tcva, CLS("VertexArray"), "set",
+                              "(II[S)V", args, NULL) == NJ_OK &&
+                      i2d_canvas_draw(vm, &canvas, rgba2),
+                      "one strip renders a minified triangle before a base-level triangle");
+                check(i2d_canvas_pixel(&canvas, 60, 240) == 0xFF8000u,
+                      "the minified triangle samples the rounded mip average");
+                check(i2d_canvas_pixel(&canvas, 180, 80) == 0xFFFF00u,
+                      "the following triangle restores the original base pixels");
+                check(nj_array_length(i2d_mips(vm, rgba2)) == 4u &&
+                      memcmp(nj_array_data(i2d_mips(vm, rgba2)), average, 4u) == 0,
+                      "the rebuilt tail keeps the existing RGBA box-filter rounding");
+            }
 
             immutable_img = i2d_new_bytes(vm, 100, 1, 1, single, &ok);
             memcpy(nj_array_data(single), one_red, 4u);

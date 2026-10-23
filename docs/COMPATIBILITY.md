@@ -2896,3 +2896,51 @@ also preserves `BENCH sum=-136042548 s=5`, 70,514,376 bytecodes and a
 92,432-byte heap peak. Both binaries return CLI status 1 for that fixture
 because it intentionally installs no Displayable; this matches the parent
 and is not counted as a game regression.
+
+## The appearances a reference walk could not see (round 47, 2026-10-23)
+
+JSR-184's `Object3D.getReferences(Object3D[])` is how a title discovers the
+parts of a scene it was not handed directly. `生化危机3D(CAPCOM经典)_3671`
+uses it as a general scene-walking tool: `BioCtrl.setTexture()` calls
+`getReferences(null)` for the count, allocates exactly that many elements,
+calls the filling overload, and installs a replacement `Texture2D` on every
+element that is an `Appearance`. `setPlPlt()` and `setEnAllPlt()` drive that
+helper for the player's `SkinnedMesh` and for enemies 1-4, from palettes that
+really exist in the JAR (`/jil_all.png`, `/en_all.png`).
+
+Three things were wrong with the native implementation:
+
+* a `Mesh`'s submesh `Appearance` was never enumerated. The walk looked at
+  `_nj_vb` and at the compatibility scalar `_nj_ib` but not at `_nj_subs`, the
+  vector `setAppearance()`/`getAppearance()` actually use. A
+  `Mesh(vb, ib, appearance)` therefore reported two references and a title
+  walking from the mesh never reached the appearance it was supposed to
+  retexture;
+* multi-submesh `Mesh` stored its index buffers in the `_nj_ibs` array, which
+  was not enumerated either;
+* the walk snapshotted into a fixed `nj_ref got[64]`. Objects with more than 64
+  references silently lost the rest, and `tests/test_m3g_references.c` shows
+  ASan reporting a stack buffer overflow at that snapshot on the parent build.
+
+The fix keeps no new fields: `getReferences()` now counts and fills in two
+passes over the same traversal, so a short array throws
+`IllegalArgumentException` without a partial write, any number of references
+works, and a Mesh contributes its `_nj_ibs` slots (or its single `_nj_ib` when
+only the scalar is present, never both). Duplicate references in distinct slots
+are retained, as the specification's "direct references" wording requires;
+FreeJ2ME-Plus de-duplicates identities here, which is a known local difference
+rather than the normative behaviour.
+
+`tests/test_m3g_references.c` is a standalone executable with four cases: mesh
+appearances (including replacement and null slots), shared appearances counted
+per slot, `SkinnedMesh` inheritance, and a group holding 70 references to prove
+the old 64 limit is gone. All four fail on the parent build (8, 16, 5 and 13
+failed assertions respectively) and pass on this one, 389 assertions with no
+failures; the whole suite is clean under ASan/UBSan with leak checking.
+
+Four original 3D titles were replayed for 1,200 frames each with held input on
+both the parent and this build: `生化危机3D(CAPCOM经典)_3671`,
+`3D激爆拳击_8805`, `真幻想三国志完整版_12469` and `鬼泣3D中文版_3376`. Every
+sampled frame hash is identical between the two builds, every run exits 0 with
+no uncaught exception, and the interpreter fixture keeps
+`BENCH sum=-136042548 s=5`.

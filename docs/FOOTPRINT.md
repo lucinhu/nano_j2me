@@ -608,3 +608,51 @@ a bug in the runtime, not a gap for the port to fill.
 newlib - and so ESP-IDF - provides all of the above already. A bare-metal port
 with no FPU would use `NJ_ENABLE_FLOAT=0` instead of supplying a soft-float
 library.
+
+## The second copy of every 3D texture (round 47, 2026-10-23)
+
+A textured `Mesh` needs a mip chain: once a triangle is small on screen, the
+sampler reads the half-size, quarter-size and smaller levels instead of the
+full image. The cache that held that chain used to start with a full RGBA copy
+of level 0 - a second copy of the very pixels the `Image2D` already owned.
+For a 128x128 texture that is 65,536 bytes spent on a duplicate, and for a
+256x256 texture 262,144 bytes; a title that keeps several character palettes
+resident (the 3D CAPCOM titles do) multiplies it.
+
+The chain now caches levels 1..N only and takes level 0 from the image's own
+pixels, so the duplicate is gone. Measured on the x86_64 build with the same
+`Image2D` fixtures and the exact old/new builders side by side:
+
+| Texture | Byte-array payload saved | Heap saved, measured |
+|---|---|---|
+| 1x1 | 4 B (no cache at all now) | 64 B |
+| 2x1 | 8 B | 0 B (same allocator size class) |
+| 3x5 | 60 B | 64 B |
+| 128x128 | 65,536 B | **65,536 B** |
+| 256x256 | 262,144 B | **262,144 B** |
+
+Exact payload arithmetic for the large cases: the old chain was
+65,536+16,384+4,096+1,024+256+64+16+4 = 87,380 B at 128x128 and
+262,144+65,536+16,384+4,096+1,024+256+16+4 = 349,524 B at 256x256; the new
+chains hold only the level 1..N part, 21,844 B and 87,380 B.
+
+Every cached level is byte-for-byte identical to the old chain's corresponding
+level, including the odd 3x5 rounding case, and returning to level 0 after a
+smaller level reproduces the original pixels exactly. The 1x1 case now skips
+the allocation entirely.
+
+The saving is per textured image, not per VM: a title that never uses a mip
+chain pays nothing extra, and a title with many large palettes pays exactly
+one image copy less each. The sampler's `m3g_sw` scratch keeps one extra
+pointer to the original pixels (`+8 B` of stack on a 64-bit host, inside the
+per-triangle scratch struct that already exists); no VM field, object field or
+static buffer was added, and `.data`/`.bss` stay at zero.
+
+The same change makes the chain cheaper to build: dropping the level-0 copy
+and its `memcpy` cuts the builder's own CPU time by 15% at 128x128 and 19% at
+256x256 (10 interleaved pairs, `taskset` pinned, median current/baseline
+0.851 and 0.811, spread 0.4% and 0.3%). See
+[PERFORMANCE.md](PERFORMANCE.md).
+
+Padding: `m3g_image_mips()` roots the image and its pixel array before
+allocating the cache, so a GC during the build cannot reclaim the source.
