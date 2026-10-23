@@ -1245,7 +1245,17 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
     if (!vm || !cls || !name || !desc) {
         return NJ_ERR;
     }
-    if (!vm->running) {
+    /*
+     * A MIDlet may keep running Java code after it calls notifyDestroyed():
+     * a save-on-exit block, for instance, is ordinary bytecode the thread
+     * executes until it returns.  Such code frequently calls back into Java
+     * from a native (Integer.valueOf through RecordStore, for one), and the
+     * old `!vm->running` gate refused it with NJ_ERR_STATE.  Callers turned
+     * that into a Java exception - 宠物王国4 reported OutOfMemoryError and
+     * died - so only a destroyed VM refuses now; a stopping one lets the
+     * thread finish what it is doing.
+     */
+    if (!vm->running && vm->state != NJ_VM_STOPPING) {
         return NJ_ERR_STATE;
     }
     th = vm->cur;

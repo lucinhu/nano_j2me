@@ -2415,10 +2415,46 @@ exceptions, and the frames change - frame 1,200 is the title's own 发送成功
 screen, which the uncaught error used to prevent.  Full ctest 101/101, bench
 and digest unchanged.
 
-**宠物王国4-白金_6531** raises an uncaught `OutOfMemoryError` from its own save
+**宠物王国4-白金_6531** raised an uncaught `OutOfMemoryError` from its own save
 routine (`k.a`, `RecordStore.addRecord([BII)I` with 200- and 400-byte records)
-while the VM's peak heap use is under 2 MB - at `--heap 16` and `--heap 32`,
-but not at `--heap 64`.  That pattern says one very large single allocation
-somewhere later, not fragmentation of the save path; it is recorded here as an
-open question rather than a classified defect, because the reference behaviour
-for that allocation has not been compared yet.
+while the VM's peak heap use was under 2 MB.  That was not memory pressure at
+all: it was a state error reported as one.  See "The OutOfMemoryError that was
+a state error" below.
+
+## The OutOfMemoryError that was a state error (round 11, 2026-10-23)
+
+宠物王国4-白金_6531 saves on exit: it writes 200- and 400-byte records through
+`RecordStore.addRecord(...)` and then calls `notifyDestroyed()`.  Its thread
+died with `thrown: java/lang/OutOfMemoryError at
+javax/microedition/rms/RecordStore.addRecord([BII)I`, an uncaught
+`java.lang.OutOfMemoryError @ k.a+69`, at every heap size where the title got
+that far - while the VM's peak heap use was under 2 MB of 16 MB.
+
+`notifyDestroyed()` runs `nj_vm_stop()`, which sets `vm->state =
+NJ_VM_STOPPING` and `vm->running = 0`.  The save-on-exit code is ordinary
+bytecode that keeps running after the call, and the record store pushes its
+values through internal Java calls (`Integer.valueOf`): a native calling back
+into Java.  `vm_invoke()` refused *any* call while `!vm->running`, returning
+`NJ_ERR_STATE`, and the record store turned every failure into
+`OutOfMemoryError` - so a legitimate save looked like exhausted memory.
+
+`vm_invoke()` now refuses only a destroyed VM:
+
+```c
+    if (!vm->running && vm->state != NJ_VM_STOPPING) {
+        return NJ_ERR_STATE;
+    }
+```
+
+A stopping VM lets the thread finish the work it is in the middle of; a dead one
+still refuses.  `tests/test_lifecycle.c` pins both halves (2,301 checks): a
+`Integer.valueOf(int)` after `nj_vm_stop()` returns a value, and the same call
+with the state marked dead returns `NJ_ERR_STATE`.  Against the old gate the new
+test fails with two assertions ("a stopping VM still serves the call"), so it
+discriminates instead of merely passing.
+
+After the fix the title runs 1,200 frames, exit 0, zero `OutOfMemoryError` and
+zero uncaught exceptions, and writes both of its stores
+(`pk4_baijin.rms`, 22,872 bytes, and `baijinSMS.rms`, 28 bytes).  Full ctest
+101/101, bench (`BENCH sum=-136042548 s=5`) and the 27-value digest unchanged,
+no writable statics.

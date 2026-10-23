@@ -327,6 +327,62 @@ static void test_frame_compute_budget(void)
     nj_port_shutdown(&port);
 }
 
+
+/* ------------------------------------------------------------------ */
+/* 7. A stopping VM still serves the Java calls its natives make        */
+/* ------------------------------------------------------------------ */
+/*
+ * A MIDlet that saves on exit calls RecordStore.addRecord() and then
+ * notifyDestroyed().  The store pushes its values through the VM, and that
+ * nested Java call used to be refused because the VM had already been asked to
+ * stop: 宠物王国4-白金_6531 turned the refusal into an OutOfMemoryError and its
+ * thread died with the save half written.  Only a destroyed VM refuses now.
+ */
+static void test_stopping_vm_serves_calls(void)
+{
+    nj_port port;
+    nj_vm *vm;
+    nj_value arg;
+    nj_value ret;
+
+    printf("a stopping VM still serves native-initiated calls\n");
+    memset(&port, 0, sizeof(port));
+    CHECK(nj_port_headless_ex(&port, 128, 160, 0, NULL) == NJ_OK, "port");
+    vm = nj_vm_create(&port, 512u * 1024u);
+    CHECK(vm != NULL, "vm");
+    if (!vm) {
+        nj_port_shutdown(&port);
+        return;
+    }
+
+    arg.i = 42;
+    ret.r = 0;
+    CHECK_EQ(nj_call_static(vm, "java/lang/Integer", "valueOf",
+                            "(I)Ljava/lang/Integer;", &arg, &ret), NJ_OK,
+             "a running VM serves valueOf");
+    CHECK(ret.r != 0, "the boxed value came back");
+
+    nj_vm_stop(vm, 0);
+    CHECK_EQ(vm->state, NJ_VM_STOPPING, "stopping a MIDlet leaves the VM stopping");
+
+    arg.i = 7;
+    ret.r = 0;
+    CHECK_EQ(nj_call_static(vm, "java/lang/Integer", "valueOf",
+                            "(I)Ljava/lang/Integer;", &arg, &ret), NJ_OK,
+             "a stopping VM still serves the call");
+    CHECK(ret.r != 0, "the boxed value came back while stopping");
+
+    vm->state = NJ_VM_DEAD;
+    ret.r = 0;
+    CHECK_EQ(nj_call_static(vm, "java/lang/Integer", "valueOf",
+                            "(I)Ljava/lang/Integer;", &arg, &ret),
+             NJ_ERR_STATE, "a destroyed VM refuses the call");
+    vm->state = NJ_VM_STOPPING;
+
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+}
+
 int main(void)
 {
     printf("== nano_j2me lifecycle and memory contract ==\n");
@@ -337,6 +393,7 @@ int main(void)
     test_heap_stability();
     test_frame_thread_ownership();
     test_frame_compute_budget();
+    test_stopping_vm_serves_calls();
 
     printf("\nchecks: %d  failures: %d\n", checks, failures);
     if (failures == 0) {
