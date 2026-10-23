@@ -707,3 +707,24 @@ field, VM field or static buffer was added; `.data`/`.bss` are unchanged
 576 bytes (2,895,718 -> 2,896,294) because the two immediate-mode call sites
 now keep their own small vertex record. No CPU claim is made for this change;
 the figure path's arithmetic is identical and its cache stride is smaller.
+
+## Three divides per shaded pixel (round 48, 2026-10-23)
+
+The shaded-texture span divided each channel by 31 for every pixel it wrote.
+It now uses an exact multiply-shift and, for RGB565 targets without blending,
+shades directly into the surface format. No field, scratch buffer or static
+table was added, so the RAM rule is untouched and the freed divide sequences
+pay for the extra branch:
+
+| Build | Before | After |
+|---|---|---|
+| hosted `-O2`, `nj_mascot_raster.c` `.text` | 26,659 B | **26,211 B** (-448 B) |
+| freestanding `-Os`, same file `.text` | 9,394 B | 9,494 B (+100 B) |
+| `.data` / `.bss` (both builds) | 0 / 0 | **0 / 0** |
+
+So this is RAM-neutral by construction and costs 100 bytes of flash in the
+freestanding build while saving 448 bytes in the hosted one. The CPU side is
+measured in
+[PERFORMANCE.md](PERFORMANCE.md#three-divides-per-shaded-pixel-round-48-2026-10-23):
+42% less CPU on the controlled raster benchmark, with byte-identical
+framebuffers.

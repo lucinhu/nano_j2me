@@ -700,10 +700,38 @@ static inline nj_u4 mr_tex_shade(nj_u4 pal, nj_s4 level)
     if (level > 31) {
         level = 31;
     }
-    r = (((pal >> 16) & 0xFFu) * (nj_u4)level) / 31u;
-    g = (((pal >> 8) & 0xFFu) * (nj_u4)level) / 31u;
-    b = ((pal & 0xFFu) * (nj_u4)level) / 31u;
+    /* (c * level) / 31 with c <= 255 and level <= 31, i.e. a numerator below
+     * 8192: multiplying by 8457 and shifting 18 is that same division for the
+     * whole range (checked exhaustively), and it keeps three divides off the
+     * per-pixel path. */
+    nj_u4 scale = (nj_u4)level * 8457u;
+
+    r = ((((pal >> 16) & 0xFFu) * scale) >> 18);
+    g = ((((pal >> 8) & 0xFFu) * scale) >> 18);
+    b = (((pal & 0xFFu) * scale) >> 18);
     return 0xFF000000u | (r << 16) | (g << 8) | b;
+}
+
+/* The RGB565 form of mr_tex_shade(): the surface conversion keeps the top
+ * bits, so shading straight into 565 is the same colour: floor(x / 31) >> 3 is
+ * floor(x / 248) and floor(x / 31) >> 2 is floor(x / 124).  Both divisions are
+ * again the exact multiply-shift below, and the level scale is shared by the
+ * three channels. */
+static inline nj_u4 mr_tex_shade565(nj_u4 pal, nj_s4 level)
+{
+    nj_u4 scale, r, g, b;
+
+    if (level <= 0) {
+        return 0u;
+    }
+    if (level > 31) {
+        level = 31;
+    }
+    scale = (nj_u4)level * 8457u;
+    r = ((((pal >> 16) & 0xFFu) * scale) >> 21);
+    g = ((((pal >> 8) & 0xFFu) * scale) >> 20);
+    b = (((pal & 0xFFu) * scale) >> 21);
+    return (r << 11) | (g << 5) | b;
 }
 
 static inline nj_u4 mr_env_add(nj_u4 color, nj_u4 env)
@@ -760,6 +788,10 @@ static inline void NAME(nj_u1 *pp, nj_s4 px0, nj_s4 px1,                     \
         }                                                                    \
         pix = mr_pal_get(t_palette, ti & 0xFF);                              \
         level = (SMOOTH) ? (nj_s4)((ss >> MR_FP) & 0x1F) : flat_level;       \
+        if (!BLENDED && fmt == NJ_PIXFMT_RGB565) {                            \
+            mr_put_u16(pp, (nj_u2)mr_tex_shade565(pix, level));              \
+            continue;                                                        \
+        }                                                                    \
         pix = mr_tex_shade(pix, level);                                      \
         if (BLENDED) {                                                       \
             mr_raw_put(pp, mr_blend(pix, mr_raw_get(pp, fmt), blend), fmt);  \

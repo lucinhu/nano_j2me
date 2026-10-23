@@ -2082,3 +2082,77 @@ so nothing here changes what is drawn.
 Reproduction: `.local-tools/debug-runs/compact3d-round47-20261023/mip-measure/`
 (snapshotted parent/current sources, `probe.c`, `run_measure.py`). Those local
 artifacts are not checked into Git.
+
+## Three divides per shaded pixel (round 48, 2026-10-23)
+
+`Texture.generateShadedPalette()` in the reference builds 32 shaded copies of a
+texture's palette, one per shade level, as `channel * level / 31` truncating.
+The runtime keeps only the 256 unshaded entries in its texture blob and applies
+that same formula per sampled pixel instead - which put three integer divides
+on the hottest path the Micro3D renderer has, because a shaded textured span
+shades every pixel it writes.
+
+`mr_tex_shade()` now multiplies instead of dividing. For `c <= 255` and
+`level <= 31` the numerator stays below 8192, and multiplying by 8457 and
+shifting 18 is exactly `x / 31` over that whole range - verified exhaustively
+for every numerator, not sampled. The level's scaled reciprocal is computed
+once and shared by the three channels. RGB565 targets go one step further: the
+surface conversion keeps the top bits, so shading straight into 565 is the same
+colour (`floor(x / 31) >> 3` is `floor(x / 248)`, `floor(x / 31) >> 2` is
+`floor(x / 124)`, and both are again exact multiply-shifts). A 565 surface
+without blending therefore shades and converts in one pass instead of building
+an ARGB word and unpacking it again.
+
+### How it was measured
+
+No game in the corpus is CPU-bound in the renderer, so a controlled workload is
+needed. `.local-tools/debug-runs/raster-round48-20261023/raster-bench.c` drives
+`nj_mascot_raster_triangle()` directly on synthetic model and pattern blobs with
+eight passes: full-screen textured fills with smooth and flat shading, an
+environment-mapped fill, a toon fill, a flat-colour fill, and 40,000 random
+small textured triangles for the setup-heavy case. 400 full-screen triangles and
+40,000 small ones per run, 240x320 RGB565, `taskset -c 5`, seven interleaved
+pairs. An A/A run of the same binary moves 0.1%, which is the resolution the
+ratios below are read against.
+
+| Step | CPU (min of 7) | vs previous | vs parent |
+|---|---|---|---|
+| parent (`9887375`) | 1.2428 s | - | - |
+| `x / 31` -> exact multiply-shift | 0.8842 s | 0.718 | 0.712 |
+| + one scale per pixel for the three channels | 0.8718 s | 0.986 | 0.701 |
+| + direct RGB565 shading (no ARGB round trip) | 0.7220 s | 0.828 | **0.581** |
+
+Per pass, parent -> this build, from the same run:
+
+| Pass | Parent | This build | Ratio |
+|---|---|---|---|
+| fill-textured-shaded | 0.0503 s | 0.0226 s | 0.449 |
+| fill-textured-smooth | 0.0718 s | 0.0534 s | 0.744 |
+| fill-envmap | 0.1048 s | 0.0850 s | 0.811 |
+| fill-toon | 0.0581 s | 0.0410 s | 0.706 |
+| fill-colour | 0.0042 s | 0.0041 s | 0.976 |
+| setup-textured (40,000 small triangles) | 0.7866 s | 0.3678 s | 0.468 |
+| setup-colour | 0.0926 s | 0.0899 s | 0.971 |
+| fill-8888 | 0.0797 s | 0.0605 s | 0.759 |
+| framebuffer sums | `95cd0b35` / `1507cd61` | same | - |
+
+The framebuffer sums are identical, so every pass writes byte-identical pixels:
+`sum565` covers the RGB565 passes and `sum888` the ARGB8888 one. On top of that,
+`test_mascot_raster` (71 checks, exact pixel comparisons against the reference
+behaviour), `test_mascot` (233), `test_mascot_scene` (127) and
+`test_mascot_commands` (36) all pass, including under ASan/UBSan/LSan, and the
+whole CTest suite is green.
+
+This is rasteriser cost, not a frame-rate number. The only title in the corpus
+that calls the Micro3D API (`鬼泣3D中文版_3376`) renders through this path every
+frame; 900 frames on both builds exit 0 with the same screen progression, but
+its animation is keyed to the wall clock, so frame hashes are not an oracle for
+it - even two runs of one binary differ. The titles whose rendering is
+frame-count driven (`生化危机3D(CAPCOM经典)_3671`, `真幻想三国志完整版_12469`,
+`3D激爆拳击_8805`) replay byte-identically on both builds at 400 frames. The
+interpreter is untouched: `BENCH sum=-136042548 s=5`, 70,514,376 bytecodes, and
+the 27-value superinstruction digest still match.
+
+Reproduction: `.local-tools/debug-runs/raster-round48-20261023/`
+(`raster-bench.c`, `ab.sh`, the two arms' logs and the game replays). Those
+local artifacts are not checked into Git.
