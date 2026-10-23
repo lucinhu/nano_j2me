@@ -2746,3 +2746,38 @@ Limitation: for such a store `listRecordStores()` now reports the flattened
 name (`A_AConfig`).  A title that saves under a path-like name *and* enumerates
 its stores would see the different spelling; nothing in the corpus does, and
 stores that were filename-safe keep their name exactly.
+
+## Verification limits and open items (end of round 41, 2026-10-23)
+
+Every fix above was verified in this tree: targeted tests, the full `ctest`
+suite (101/101 through round 38), the 27-value JVM digest, and a replay of at
+least one original title where the defect was reachable. What is **not**
+covered, stated plainly:
+
+- **No independent verification.** The verifier and compatibility teammates
+  were expected to re-run these changes from clean worktrees; every delegation
+  in the last rounds ended with the subagent failing before it reported, so the
+  numbers here are the Lead's own runs. They are reproducible from the commands
+  recorded beside them, but they are not a second pair of eyes.
+- **No full-corpus, per-title reference comparison.** Corpus sweeps cover 240
+  to 1,200 frame windows (39x titles total across the sweeps in these rounds)
+  with a generic key script; they find missing members and crashes, not
+  mid-game regressions. Only a handful of titles were compared stage-by-stage
+  against FreeJ2ME-Plus.
+- **Street Fighter II (街头霸王2冠军典藏版_1812) still hangs** when a soft key
+  arrives before its loader has run: the title's own `paint()` state machine
+  reaches `bZ()` with the sound buffer `dB` still null and stays there. The
+  runtime has been ruled out as the cause (all 11 resource lookups succeed,
+  heap size makes no difference, the reference completes the same replay); the
+  remaining work is to find which reference path initialises `dB` first. The
+  title is playable with a later or no early key.
+- **Sound synthesis is approximate**, not a reference mixer: the audio path
+  exists and titles run, but waveform/MIDI output has never been compared
+  sample-by-sample against the reference or a device.
+- **SDL2, real hardware, and long soak runs are not tested** in these rounds;
+  the regression evidence is headless.
+- **Performance numbers are bounded native measurements** (raster tile, class
+  cache, hot fields, raster spans) on fixed workloads, plus one controlled
+  interpreter-level A/B per change. They are not end-to-end game FPS.
+- **Save-state format is native-endian and build-specific**; RMS files are
+  portable, but VM save states are not.
