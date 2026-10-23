@@ -3195,6 +3195,23 @@ static void test_loops(void)
                 CHECK(result_completed(word) <= k);
                 CHECK(actual.locals[0].i == (nj_s4)rounds);
                 CHECK(actual.locals[2].i == (nj_s4)(rounds * (rounds + 1u) / 2u));
+                if (rounds == 0u)
+                    CHECK(memcmp(&actual, &initial, sizeof(actual)) == 0);
+            }
+            /* The scheduling budget is unsigned. A hoisted admission limit
+             * must neither wrap for tiny budgets nor reject the high half. */
+            for (k = 0; k < 3u; ++k) {
+                static const nj_u4 budgets[] = {
+                    0x7fffffffu, 0x80000000u, 0xffffffffu
+                };
+                actual = initial;
+                word = invoke(generated, block.size, &actual.stack[BASE],
+                              actual.locals, budgets[k]);
+                CHECK(!result_is_fault(word));
+                CHECK(result_exit(word) == 0u);
+                CHECK(result_completed(word) == 16000u);
+                CHECK(actual.locals[0].i == 2000);
+                CHECK(actual.locals[2].i == 2001000);
             }
         }
 #else

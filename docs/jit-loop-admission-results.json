@@ -1,0 +1,1833 @@
+{
+  "baseline_commit": "4b08bbe",
+  "kernel_jar_sha256": "eb827f5c61d98617959705fdf0932f799230468b0cb756150477466894b3e0d9",
+  "images": {
+    "baseline-full": {
+      "sha256": "f9104479fe54d0e63269b0782fe4078c20d8621939189e2f5acc244d2b8a27e1",
+      "bytes": 5569312
+    },
+    "candidate-full": {
+      "sha256": "6adced2d721c677d6c37b4020ba1b5041a23d6937f502fd963fbe97bb8a0bb56",
+      "bytes": 5569312
+    },
+    "baseline-long": {
+      "sha256": "eb4a4aea2a21f3637c36dd098009c8dada3443aa7a7d30ebf65fd2eba03529d7",
+      "bytes": 5569312
+    },
+    "candidate-long": {
+      "sha256": "54fa39ff4182450bd4dd8901ae0bf6ef45fd9a823b6d77c19f1823ea7e8e03d7",
+      "bytes": 5569312
+    }
+  },
+  "target": {
+    "architecture": "RV32",
+    "resolution": [
+      240,
+      320
+    ],
+    "jit_stats": 1,
+    "jit_detailed_stats": 0,
+    "volume": 70,
+    "fps_overlay": false
+  },
+  "runs": [
+    {
+      "image": "baseline-full",
+      "kernels": [
+        {
+          "name": "locals",
+          "iterations": "50000",
+          "checksum": "2f66c58",
+          "elapsed_ms": "11"
+        },
+        {
+          "name": "constants",
+          "iterations": "50000",
+          "checksum": "839a908",
+          "elapsed_ms": "5"
+        },
+        {
+          "name": "fields",
+          "iterations": "50000",
+          "checksum": "4c1935ff",
+          "elapsed_ms": "10"
+        },
+        {
+          "name": "arrays",
+          "iterations": "50000",
+          "checksum": "452ca3",
+          "elapsed_ms": "19"
+        },
+        {
+          "name": "branches",
+          "iterations": "50000",
+          "checksum": "a632cf73",
+          "elapsed_ms": "10"
+        }
+      ],
+      "jit": "on",
+      "vm": {
+        "frames": "5",
+        "paints": "3",
+        "gfx": "6",
+        "tris": "0",
+        "m3g": "0",
+        "time": "0.231s",
+        "fps": "21.6",
+        "bytecodes": "4821095"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "5",
+        "executed": "246",
+        "bytecodes": "4811569",
+        "declined": "18",
+        "code_bytes": "1490"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "17",
+        "short": "1",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1490",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "285204",
+        "presents": "5",
+        "present_us": "21521",
+        "present_max_us": "9128",
+        "poll_us": "379",
+        "poll_calls": "5",
+        "sleep_us": "0",
+        "native_crc": "066e64a1",
+        "lcd_crc": "743ecd69",
+        "updated": "1",
+        "unchanged": "4",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "5",
+        "commits": "5",
+        "refused": "0",
+        "peak": "1616",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "5",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "pure-kernels"
+    },
+    {
+      "image": "baseline-full",
+      "kernels": [
+        {
+          "name": "locals",
+          "iterations": "50000",
+          "checksum": "2f66c58",
+          "elapsed_ms": "11"
+        },
+        {
+          "name": "constants",
+          "iterations": "50000",
+          "checksum": "839a908",
+          "elapsed_ms": "5"
+        },
+        {
+          "name": "fields",
+          "iterations": "50000",
+          "checksum": "4c1935ff",
+          "elapsed_ms": "11"
+        },
+        {
+          "name": "arrays",
+          "iterations": "50000",
+          "checksum": "452ca3",
+          "elapsed_ms": "18"
+        },
+        {
+          "name": "branches",
+          "iterations": "50000",
+          "checksum": "a632cf73",
+          "elapsed_ms": "10"
+        }
+      ],
+      "jit": "on",
+      "vm": {
+        "frames": "5",
+        "paints": "3",
+        "gfx": "6",
+        "tris": "0",
+        "m3g": "0",
+        "time": "0.232s",
+        "fps": "21.6",
+        "bytecodes": "4821095"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "5",
+        "executed": "246",
+        "bytecodes": "4811569",
+        "declined": "18",
+        "code_bytes": "1490"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "17",
+        "short": "1",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1490",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "286160",
+        "presents": "5",
+        "present_us": "21382",
+        "present_max_us": "9040",
+        "poll_us": "382",
+        "poll_calls": "5",
+        "sleep_us": "0",
+        "native_crc": "066e64a1",
+        "lcd_crc": "743ecd69",
+        "updated": "1",
+        "unchanged": "4",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "5",
+        "commits": "5",
+        "refused": "0",
+        "peak": "1616",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "5",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "pure-kernels"
+    },
+    {
+      "image": "baseline-full",
+      "kernels": [],
+      "jit": "on",
+      "cpu_check": {
+        "frames": "120",
+        "work": "4000",
+        "checksum": "-1082513742"
+      },
+      "vm": {
+        "frames": "120",
+        "paints": "120",
+        "gfx": "15960",
+        "tris": "0",
+        "m3g": "0",
+        "time": "3.091s",
+        "fps": "38.8",
+        "bytecodes": "11379435"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "8",
+        "executed": "24037",
+        "bytecodes": "11256798",
+        "declined": "45",
+        "code_bytes": "1100"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "29",
+        "short": "16",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1100",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "3147234",
+        "presents": "120",
+        "present_us": "746381",
+        "present_max_us": "8982",
+        "poll_us": "1086",
+        "poll_calls": "120",
+        "sleep_us": "0",
+        "native_crc": "df74d292",
+        "lcd_crc": "5d96fa52",
+        "updated": "120",
+        "unchanged": "0",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "8",
+        "commits": "8",
+        "refused": "0",
+        "peak": "1280",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "120",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "cpu-with-presentation"
+    },
+    {
+      "image": "baseline-full",
+      "kernels": [],
+      "jit": "on",
+      "cpu_check": {
+        "frames": "120",
+        "work": "4000",
+        "checksum": "-1082513742"
+      },
+      "vm": {
+        "frames": "120",
+        "paints": "120",
+        "gfx": "15960",
+        "tris": "0",
+        "m3g": "0",
+        "time": "3.096s",
+        "fps": "38.8",
+        "bytecodes": "11379435"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "8",
+        "executed": "24037",
+        "bytecodes": "11256798",
+        "declined": "45",
+        "code_bytes": "1100"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "29",
+        "short": "16",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1100",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "3152203",
+        "presents": "120",
+        "present_us": "746193",
+        "present_max_us": "8987",
+        "poll_us": "1074",
+        "poll_calls": "120",
+        "sleep_us": "0",
+        "native_crc": "df74d292",
+        "lcd_crc": "5d96fa52",
+        "updated": "120",
+        "unchanged": "0",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "8",
+        "commits": "8",
+        "refused": "0",
+        "peak": "1280",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "120",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "cpu-with-presentation"
+    },
+    {
+      "image": "baseline-full",
+      "kernels": [
+        {
+          "iterations": "50000",
+          "checksum": "553f49c9",
+          "elapsed_ms": "28"
+        }
+      ],
+      "jit": "on",
+      "vm": {
+        "frames": "5",
+        "paints": "3",
+        "gfx": "6",
+        "tris": "0",
+        "m3g": "0",
+        "time": "0.209s",
+        "fps": "23.9",
+        "bytecodes": "2051003"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "2",
+        "executed": "105",
+        "bytecodes": "2045338",
+        "declined": "8",
+        "code_bytes": "1108"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "8",
+        "short": "0",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1108",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "263361",
+        "presents": "5",
+        "present_us": "21791",
+        "present_max_us": "9091",
+        "poll_us": "390",
+        "poll_calls": "5",
+        "sleep_us": "0",
+        "native_crc": "066e64a1",
+        "lcd_crc": "743ecd69",
+        "updated": "1",
+        "unchanged": "4",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "2",
+        "commits": "2",
+        "refused": "0",
+        "peak": "1152",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "5",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "mixed-field-array"
+    },
+    {
+      "image": "baseline-full",
+      "kernels": [],
+      "jit": "on",
+      "vm": {
+        "frames": "300",
+        "paints": "167",
+        "gfx": "5957",
+        "tris": "0",
+        "m3g": "0",
+        "time": "7.354s",
+        "fps": "40.8",
+        "bytecodes": "1202663"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "86",
+        "executed": "22071",
+        "bytecodes": "271516",
+        "declined": "1865",
+        "code_bytes": "9196"
+      },
+      "jit_detail": {
+        "evictions": "41",
+        "method_map_evictions": "10746",
+        "recompiled": "1809",
+        "unsupported": "321",
+        "short": "942",
+        "faults": "0",
+        "memory_failures": "602",
+        "commit_failures": "0",
+        "peak_code": "9412",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "7425084",
+        "presents": "300",
+        "present_us": "987474",
+        "present_max_us": "8955",
+        "poll_us": "2320",
+        "poll_calls": "310",
+        "sleep_us": "0",
+        "native_crc": "aabe6737",
+        "lcd_crc": "a8e2d422",
+        "updated": "38",
+        "unchanged": "262",
+        "hot_peak": "151552",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "9",
+        "stack_psram": "4"
+      },
+      "jit_memory": {
+        "allocations": "86",
+        "commits": "86",
+        "refused": "602",
+        "peak": "10528",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "300",
+        "input": "10",
+        "delta": "0"
+      },
+      "workload": "bouncing-ball-startup",
+      "input_script": "30:fire,90:soft1,150:fire,210:soft1,240:right:down,280:right:up"
+    },
+    {
+      "image": "baseline-full",
+      "kernels": [
+        {
+          "name": "locals",
+          "iterations": "50000",
+          "checksum": "2f66c58",
+          "elapsed_ms": "140"
+        },
+        {
+          "name": "constants",
+          "iterations": "50000",
+          "checksum": "839a908",
+          "elapsed_ms": "108"
+        },
+        {
+          "name": "fields",
+          "iterations": "50000",
+          "checksum": "4c1935ff",
+          "elapsed_ms": "202"
+        },
+        {
+          "name": "arrays",
+          "iterations": "50000",
+          "checksum": "452ca3",
+          "elapsed_ms": "201"
+        },
+        {
+          "name": "branches",
+          "iterations": "50000",
+          "checksum": "a632cf73",
+          "elapsed_ms": "202"
+        }
+      ],
+      "jit": "off",
+      "vm": {
+        "frames": "5",
+        "paints": "3",
+        "gfx": "6",
+        "tris": "0",
+        "m3g": "0",
+        "time": "1.030s",
+        "fps": "4.9",
+        "bytecodes": "4821095"
+      },
+      "jit_stats": {
+        "active": "0",
+        "compiled": "0",
+        "executed": "0",
+        "bytecodes": "0",
+        "declined": "0",
+        "code_bytes": "0"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "0",
+        "short": "0",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "0",
+        "metadata": "0",
+        "stats": "0",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "1082485",
+        "presents": "5",
+        "present_us": "21343",
+        "present_max_us": "8970",
+        "poll_us": "384",
+        "poll_calls": "5",
+        "sleep_us": "0",
+        "native_crc": "066e64a1",
+        "lcd_crc": "743ecd69",
+        "updated": "1",
+        "unchanged": "4",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "0",
+        "commits": "0",
+        "refused": "0",
+        "peak": "0",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "5",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "pure-kernels"
+    },
+    {
+      "image": "candidate-full",
+      "kernels": [
+        {
+          "name": "locals",
+          "iterations": "50000",
+          "checksum": "2f66c58",
+          "elapsed_ms": "11"
+        },
+        {
+          "name": "constants",
+          "iterations": "50000",
+          "checksum": "839a908",
+          "elapsed_ms": "5"
+        },
+        {
+          "name": "fields",
+          "iterations": "50000",
+          "checksum": "4c1935ff",
+          "elapsed_ms": "10"
+        },
+        {
+          "name": "arrays",
+          "iterations": "50000",
+          "checksum": "452ca3",
+          "elapsed_ms": "19"
+        },
+        {
+          "name": "branches",
+          "iterations": "50000",
+          "checksum": "a632cf73",
+          "elapsed_ms": "10"
+        }
+      ],
+      "jit": "on",
+      "vm": {
+        "frames": "5",
+        "paints": "3",
+        "gfx": "6",
+        "tris": "0",
+        "m3g": "0",
+        "time": "0.230s",
+        "fps": "21.7",
+        "bytecodes": "4821095"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "5",
+        "executed": "246",
+        "bytecodes": "4811569",
+        "declined": "18",
+        "code_bytes": "1502"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "17",
+        "short": "1",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1502",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "284196",
+        "presents": "5",
+        "present_us": "21393",
+        "present_max_us": "9042",
+        "poll_us": "380",
+        "poll_calls": "5",
+        "sleep_us": "0",
+        "native_crc": "066e64a1",
+        "lcd_crc": "743ecd69",
+        "updated": "1",
+        "unchanged": "4",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "5",
+        "commits": "5",
+        "refused": "0",
+        "peak": "1632",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "5",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "pure-kernels"
+    },
+    {
+      "image": "candidate-full",
+      "kernels": [
+        {
+          "name": "locals",
+          "iterations": "50000",
+          "checksum": "2f66c58",
+          "elapsed_ms": "11"
+        },
+        {
+          "name": "constants",
+          "iterations": "50000",
+          "checksum": "839a908",
+          "elapsed_ms": "5"
+        },
+        {
+          "name": "fields",
+          "iterations": "50000",
+          "checksum": "4c1935ff",
+          "elapsed_ms": "10"
+        },
+        {
+          "name": "arrays",
+          "iterations": "50000",
+          "checksum": "452ca3",
+          "elapsed_ms": "18"
+        },
+        {
+          "name": "branches",
+          "iterations": "50000",
+          "checksum": "a632cf73",
+          "elapsed_ms": "10"
+        }
+      ],
+      "jit": "on",
+      "vm": {
+        "frames": "5",
+        "paints": "3",
+        "gfx": "6",
+        "tris": "0",
+        "m3g": "0",
+        "time": "0.230s",
+        "fps": "21.7",
+        "bytecodes": "4821095"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "5",
+        "executed": "246",
+        "bytecodes": "4811569",
+        "declined": "18",
+        "code_bytes": "1502"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "17",
+        "short": "1",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1502",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "284229",
+        "presents": "5",
+        "present_us": "21433",
+        "present_max_us": "9067",
+        "poll_us": "390",
+        "poll_calls": "5",
+        "sleep_us": "0",
+        "native_crc": "066e64a1",
+        "lcd_crc": "743ecd69",
+        "updated": "1",
+        "unchanged": "4",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "5",
+        "commits": "5",
+        "refused": "0",
+        "peak": "1632",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "5",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "pure-kernels"
+    },
+    {
+      "image": "candidate-full",
+      "kernels": [],
+      "jit": "on",
+      "cpu_check": {
+        "frames": "120",
+        "work": "4000",
+        "checksum": "-1082513742"
+      },
+      "vm": {
+        "frames": "120",
+        "paints": "120",
+        "gfx": "15960",
+        "tris": "0",
+        "m3g": "0",
+        "time": "3.098s",
+        "fps": "38.7",
+        "bytecodes": "11379435"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "8",
+        "executed": "24037",
+        "bytecodes": "11256798",
+        "declined": "45",
+        "code_bytes": "1102"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "29",
+        "short": "16",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1102",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "3154249",
+        "presents": "120",
+        "present_us": "746147",
+        "present_max_us": "8991",
+        "poll_us": "1083",
+        "poll_calls": "120",
+        "sleep_us": "0",
+        "native_crc": "df74d292",
+        "lcd_crc": "5d96fa52",
+        "updated": "120",
+        "unchanged": "0",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "8",
+        "commits": "8",
+        "refused": "0",
+        "peak": "1280",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "120",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "cpu-with-presentation"
+    },
+    {
+      "image": "candidate-full",
+      "kernels": [],
+      "jit": "on",
+      "cpu_check": {
+        "frames": "120",
+        "work": "4000",
+        "checksum": "-1082513742"
+      },
+      "vm": {
+        "frames": "120",
+        "paints": "120",
+        "gfx": "15960",
+        "tris": "0",
+        "m3g": "0",
+        "time": "3.101s",
+        "fps": "38.7",
+        "bytecodes": "11379435"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "8",
+        "executed": "24037",
+        "bytecodes": "11256798",
+        "declined": "45",
+        "code_bytes": "1102"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "29",
+        "short": "16",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1102",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "3157299",
+        "presents": "120",
+        "present_us": "746339",
+        "present_max_us": "8964",
+        "poll_us": "1083",
+        "poll_calls": "120",
+        "sleep_us": "0",
+        "native_crc": "df74d292",
+        "lcd_crc": "5d96fa52",
+        "updated": "120",
+        "unchanged": "0",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "8",
+        "commits": "8",
+        "refused": "0",
+        "peak": "1280",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "120",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "cpu-with-presentation"
+    },
+    {
+      "image": "candidate-full",
+      "kernels": [
+        {
+          "iterations": "50000",
+          "checksum": "553f49c9",
+          "elapsed_ms": "27"
+        }
+      ],
+      "jit": "on",
+      "vm": {
+        "frames": "5",
+        "paints": "3",
+        "gfx": "6",
+        "tris": "0",
+        "m3g": "0",
+        "time": "0.208s",
+        "fps": "24.0",
+        "bytecodes": "2051003"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "2",
+        "executed": "105",
+        "bytecodes": "2045338",
+        "declined": "8",
+        "code_bytes": "1114"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "8",
+        "short": "0",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1114",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "262062",
+        "presents": "5",
+        "present_us": "21432",
+        "present_max_us": "9075",
+        "poll_us": "386",
+        "poll_calls": "5",
+        "sleep_us": "0",
+        "native_crc": "066e64a1",
+        "lcd_crc": "743ecd69",
+        "updated": "1",
+        "unchanged": "4",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "2",
+        "commits": "2",
+        "refused": "0",
+        "peak": "1168",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "5",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "mixed-field-array"
+    },
+    {
+      "image": "candidate-full",
+      "kernels": [],
+      "jit": "on",
+      "vm": {
+        "frames": "300",
+        "paints": "167",
+        "gfx": "5957",
+        "tris": "0",
+        "m3g": "0",
+        "time": "7.449s",
+        "fps": "40.3",
+        "bytecodes": "1202663"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "87",
+        "executed": "23704",
+        "bytecodes": "309278",
+        "declined": "2027",
+        "code_bytes": "9094"
+      },
+      "jit_detail": {
+        "evictions": "42",
+        "method_map_evictions": "10746",
+        "recompiled": "1849",
+        "unsupported": "321",
+        "short": "941",
+        "faults": "0",
+        "memory_failures": "765",
+        "commit_failures": "0",
+        "peak_code": "9420",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "7520024",
+        "presents": "300",
+        "present_us": "991592",
+        "present_max_us": "8934",
+        "poll_us": "2677",
+        "poll_calls": "310",
+        "sleep_us": "0",
+        "native_crc": "9dbac5e5",
+        "lcd_crc": "f2d7fae2",
+        "updated": "41",
+        "unchanged": "259",
+        "hot_peak": "151552",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "9",
+        "stack_psram": "4"
+      },
+      "jit_memory": {
+        "allocations": "87",
+        "commits": "87",
+        "refused": "765",
+        "peak": "10528",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "300",
+        "input": "10",
+        "delta": "0"
+      },
+      "workload": "bouncing-ball-startup",
+      "input_script": "30:fire,90:soft1,150:fire,210:soft1,240:right:down,280:right:up"
+    },
+    {
+      "image": "candidate-long",
+      "kernels": [
+        {
+          "name": "locals",
+          "iterations": "2000000",
+          "checksum": "6f4a318",
+          "elapsed_ms": "278"
+        },
+        {
+          "name": "constants",
+          "iterations": "2000000",
+          "checksum": "2093acf8",
+          "elapsed_ms": "178"
+        },
+        {
+          "name": "fields",
+          "iterations": "2000000",
+          "checksum": "55df76c7",
+          "elapsed_ms": "366"
+        },
+        {
+          "name": "arrays",
+          "iterations": "2000000",
+          "checksum": "2134f943",
+          "elapsed_ms": "706"
+        },
+        {
+          "name": "branches",
+          "iterations": "2000000",
+          "checksum": "82f13a03",
+          "elapsed_ms": "382"
+        }
+      ],
+      "jit": "on",
+      "vm": {
+        "frames": "5",
+        "paints": "3",
+        "gfx": "6",
+        "tris": "0",
+        "m3g": "0",
+        "time": "2.085s",
+        "fps": "2.4",
+        "bytecodes": "192752345"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "5",
+        "executed": "9642",
+        "bytecodes": "192495039",
+        "declined": "100",
+        "code_bytes": "1502"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "99",
+        "short": "1",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1502",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "2140462",
+        "presents": "5",
+        "present_us": "21471",
+        "present_max_us": "9062",
+        "poll_us": "384",
+        "poll_calls": "5",
+        "sleep_us": "0",
+        "native_crc": "066e64a1",
+        "lcd_crc": "743ecd69",
+        "updated": "1",
+        "unchanged": "4",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "5",
+        "commits": "5",
+        "refused": "0",
+        "peak": "1632",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "5",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "pure-kernels"
+    },
+    {
+      "image": "candidate-long",
+      "kernels": [
+        {
+          "name": "locals",
+          "iterations": "2000000",
+          "checksum": "6f4a318",
+          "elapsed_ms": "278"
+        },
+        {
+          "name": "constants",
+          "iterations": "2000000",
+          "checksum": "2093acf8",
+          "elapsed_ms": "178"
+        },
+        {
+          "name": "fields",
+          "iterations": "2000000",
+          "checksum": "55df76c7",
+          "elapsed_ms": "366"
+        },
+        {
+          "name": "arrays",
+          "iterations": "2000000",
+          "checksum": "2134f943",
+          "elapsed_ms": "705"
+        },
+        {
+          "name": "branches",
+          "iterations": "2000000",
+          "checksum": "82f13a03",
+          "elapsed_ms": "382"
+        }
+      ],
+      "jit": "on",
+      "vm": {
+        "frames": "5",
+        "paints": "3",
+        "gfx": "6",
+        "tris": "0",
+        "m3g": "0",
+        "time": "2.086s",
+        "fps": "2.4",
+        "bytecodes": "192752345"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "5",
+        "executed": "9642",
+        "bytecodes": "192495039",
+        "declined": "100",
+        "code_bytes": "1502"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "99",
+        "short": "1",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1502",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "2140645",
+        "presents": "5",
+        "present_us": "21475",
+        "present_max_us": "9129",
+        "poll_us": "384",
+        "poll_calls": "5",
+        "sleep_us": "0",
+        "native_crc": "066e64a1",
+        "lcd_crc": "743ecd69",
+        "updated": "1",
+        "unchanged": "4",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "5",
+        "commits": "5",
+        "refused": "0",
+        "peak": "1632",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "5",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "pure-kernels"
+    },
+    {
+      "image": "candidate-long",
+      "kernels": [
+        {
+          "name": "locals",
+          "iterations": "2000000",
+          "checksum": "6f4a318",
+          "elapsed_ms": "278"
+        },
+        {
+          "name": "constants",
+          "iterations": "2000000",
+          "checksum": "2093acf8",
+          "elapsed_ms": "178"
+        },
+        {
+          "name": "fields",
+          "iterations": "2000000",
+          "checksum": "55df76c7",
+          "elapsed_ms": "366"
+        },
+        {
+          "name": "arrays",
+          "iterations": "2000000",
+          "checksum": "2134f943",
+          "elapsed_ms": "706"
+        },
+        {
+          "name": "branches",
+          "iterations": "2000000",
+          "checksum": "82f13a03",
+          "elapsed_ms": "382"
+        }
+      ],
+      "jit": "on",
+      "vm": {
+        "frames": "5",
+        "paints": "3",
+        "gfx": "6",
+        "tris": "0",
+        "m3g": "0",
+        "time": "2.086s",
+        "fps": "2.4",
+        "bytecodes": "192752345"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "5",
+        "executed": "9642",
+        "bytecodes": "192495039",
+        "declined": "100",
+        "code_bytes": "1502"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "99",
+        "short": "1",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1502",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "2140661",
+        "presents": "5",
+        "present_us": "21374",
+        "present_max_us": "9018",
+        "poll_us": "381",
+        "poll_calls": "5",
+        "sleep_us": "0",
+        "native_crc": "066e64a1",
+        "lcd_crc": "743ecd69",
+        "updated": "1",
+        "unchanged": "4",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "5",
+        "commits": "5",
+        "refused": "0",
+        "peak": "1632",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "5",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "pure-kernels"
+    },
+    {
+      "image": "baseline-long",
+      "kernels": [
+        {
+          "name": "locals",
+          "iterations": "2000000",
+          "checksum": "6f4a318",
+          "elapsed_ms": "290"
+        },
+        {
+          "name": "constants",
+          "iterations": "2000000",
+          "checksum": "2093acf8",
+          "elapsed_ms": "190"
+        },
+        {
+          "name": "fields",
+          "iterations": "2000000",
+          "checksum": "55df76c7",
+          "elapsed_ms": "379"
+        },
+        {
+          "name": "arrays",
+          "iterations": "2000000",
+          "checksum": "2134f943",
+          "elapsed_ms": "719"
+        },
+        {
+          "name": "branches",
+          "iterations": "2000000",
+          "checksum": "82f13a03",
+          "elapsed_ms": "395"
+        }
+      ],
+      "jit": "on",
+      "vm": {
+        "frames": "5",
+        "paints": "3",
+        "gfx": "6",
+        "tris": "0",
+        "m3g": "0",
+        "time": "2.149s",
+        "fps": "2.3",
+        "bytecodes": "192752345"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "5",
+        "executed": "9642",
+        "bytecodes": "192495039",
+        "declined": "100",
+        "code_bytes": "1490"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "99",
+        "short": "1",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1490",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "2203690",
+        "presents": "5",
+        "present_us": "21491",
+        "present_max_us": "9108",
+        "poll_us": "386",
+        "poll_calls": "5",
+        "sleep_us": "0",
+        "native_crc": "066e64a1",
+        "lcd_crc": "743ecd69",
+        "updated": "1",
+        "unchanged": "4",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "5",
+        "commits": "5",
+        "refused": "0",
+        "peak": "1616",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "5",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "pure-kernels"
+    },
+    {
+      "image": "baseline-long",
+      "kernels": [
+        {
+          "name": "locals",
+          "iterations": "2000000",
+          "checksum": "6f4a318",
+          "elapsed_ms": "290"
+        },
+        {
+          "name": "constants",
+          "iterations": "2000000",
+          "checksum": "2093acf8",
+          "elapsed_ms": "190"
+        },
+        {
+          "name": "fields",
+          "iterations": "2000000",
+          "checksum": "55df76c7",
+          "elapsed_ms": "379"
+        },
+        {
+          "name": "arrays",
+          "iterations": "2000000",
+          "checksum": "2134f943",
+          "elapsed_ms": "719"
+        },
+        {
+          "name": "branches",
+          "iterations": "2000000",
+          "checksum": "82f13a03",
+          "elapsed_ms": "394"
+        }
+      ],
+      "jit": "on",
+      "vm": {
+        "frames": "5",
+        "paints": "3",
+        "gfx": "6",
+        "tris": "0",
+        "m3g": "0",
+        "time": "2.149s",
+        "fps": "2.3",
+        "bytecodes": "192752345"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "5",
+        "executed": "9642",
+        "bytecodes": "192495039",
+        "declined": "100",
+        "code_bytes": "1490"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "99",
+        "short": "1",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1490",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "2203717",
+        "presents": "5",
+        "present_us": "21511",
+        "present_max_us": "9108",
+        "poll_us": "380",
+        "poll_calls": "5",
+        "sleep_us": "0",
+        "native_crc": "066e64a1",
+        "lcd_crc": "743ecd69",
+        "updated": "1",
+        "unchanged": "4",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "5",
+        "commits": "5",
+        "refused": "0",
+        "peak": "1616",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "5",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "pure-kernels"
+    },
+    {
+      "image": "baseline-long",
+      "kernels": [
+        {
+          "name": "locals",
+          "iterations": "2000000",
+          "checksum": "6f4a318",
+          "elapsed_ms": "290"
+        },
+        {
+          "name": "constants",
+          "iterations": "2000000",
+          "checksum": "2093acf8",
+          "elapsed_ms": "190"
+        },
+        {
+          "name": "fields",
+          "iterations": "2000000",
+          "checksum": "55df76c7",
+          "elapsed_ms": "379"
+        },
+        {
+          "name": "arrays",
+          "iterations": "2000000",
+          "checksum": "2134f943",
+          "elapsed_ms": "719"
+        },
+        {
+          "name": "branches",
+          "iterations": "2000000",
+          "checksum": "82f13a03",
+          "elapsed_ms": "394"
+        }
+      ],
+      "jit": "on",
+      "vm": {
+        "frames": "5",
+        "paints": "3",
+        "gfx": "6",
+        "tris": "0",
+        "m3g": "0",
+        "time": "2.150s",
+        "fps": "2.3",
+        "bytecodes": "192752345"
+      },
+      "jit_stats": {
+        "active": "1",
+        "compiled": "5",
+        "executed": "9642",
+        "bytecodes": "192495039",
+        "declined": "100",
+        "code_bytes": "1490"
+      },
+      "jit_detail": {
+        "evictions": "0",
+        "method_map_evictions": "0",
+        "recompiled": "0",
+        "unsupported": "99",
+        "short": "1",
+        "faults": "0",
+        "memory_failures": "0",
+        "commit_failures": "0",
+        "peak_code": "1490",
+        "metadata": "11480",
+        "stats": "1",
+        "detailed": "0"
+      },
+      "perf": {
+        "elapsed_us": "2204696",
+        "presents": "5",
+        "present_us": "21382",
+        "present_max_us": "9033",
+        "poll_us": "379",
+        "poll_calls": "5",
+        "sleep_us": "0",
+        "native_crc": "066e64a1",
+        "lcd_crc": "743ecd69",
+        "updated": "1",
+        "unchanged": "4",
+        "hot_peak": "131072",
+        "hot_live": "0",
+        "scale_mismatch": "0",
+        "stack_internal": "2",
+        "stack_psram": "1"
+      },
+      "jit_memory": {
+        "allocations": "5",
+        "commits": "5",
+        "refused": "0",
+        "peak": "1616",
+        "live": "0"
+      },
+      "end": {
+        "rc": "0",
+        "presents": "5",
+        "input": "0",
+        "delta": "0"
+      },
+      "workload": "pure-kernels"
+    }
+  ],
+  "extended_jar_sha256": "a77abe09ad78860784781cf559f89722e12824db64d7b915ffdd5b3c45d0902d",
+  "extended_kernels": {
+    "locals": {
+      "baseline_ms": [
+        290,
+        290,
+        290
+      ],
+      "candidate_ms": [
+        278,
+        278,
+        278
+      ],
+      "baseline_mean_ms": 290,
+      "candidate_mean_ms": 278,
+      "time_reduction_percent": 4.137931034482756,
+      "checksum": "6f4a318"
+    },
+    "constants": {
+      "baseline_ms": [
+        190,
+        190,
+        190
+      ],
+      "candidate_ms": [
+        178,
+        178,
+        178
+      ],
+      "baseline_mean_ms": 190,
+      "candidate_mean_ms": 178,
+      "time_reduction_percent": 6.315789473684208,
+      "checksum": "2093acf8"
+    },
+    "fields": {
+      "baseline_ms": [
+        379,
+        379,
+        379
+      ],
+      "candidate_ms": [
+        366,
+        366,
+        366
+      ],
+      "baseline_mean_ms": 379,
+      "candidate_mean_ms": 366,
+      "time_reduction_percent": 3.430079155672827,
+      "checksum": "55df76c7"
+    },
+    "arrays": {
+      "baseline_ms": [
+        719,
+        719,
+        719
+      ],
+      "candidate_ms": [
+        706,
+        705,
+        706
+      ],
+      "baseline_mean_ms": 719,
+      "candidate_mean_ms": 705.6666666666666,
+      "time_reduction_percent": 1.8544274455261966,
+      "checksum": "2134f943"
+    },
+    "branches": {
+      "baseline_ms": [
+        395,
+        394,
+        394
+      ],
+      "candidate_ms": [
+        382,
+        382,
+        382
+      ],
+      "baseline_mean_ms": 394.3333333333333,
+      "candidate_mean_ms": 382,
+      "time_reduction_percent": 3.1276415891800413,
+      "checksum": "82f13a03"
+    }
+  },
+  "validation": {
+    "rv32_configurations": 14,
+    "host_assertions": 22292876,
+    "rv32_assertions": 22675438,
+    "native_executions": 42170,
+    "portable_kernels": 8,
+    "portable_modes": 3,
+    "portable_result_rows": 24,
+    "release_regressions_passed": 7,
+    "sanitized_jit_regressions_passed": 3,
+    "private_drawing_integration_passed": true,
+    "image_hash_and_segment_headers_verified": true
+  },
+  "methodology": [
+    "Anonymous RV32 target, identical frontend/audio objects and compiler flags; candidate replaces only the RV32 emitter object.",
+    "Short runs: baseline then candidate, each with two fresh-VM kernel and CPU runs plus one mixed and startup sample.",
+    "Long runs: candidate then baseline, three fresh-VM runs each, with the iteration constant changed from 50000 to 2000000.",
+    "The extended JAR retains every kernel class byte-for-byte. A ZIP comment preserves its original length; executable sections and data layout are identical to each corresponding short-run image.",
+    "Both extended images were verified by checksum, full-image digest and segment-header readback.",
+    "Fresh temporary RMS for every run. Millisecond kernel timings exclude display installation; CPU elapsed time includes presentation and teardown.",
+    "Earlier no-Displayable fixture attempts are excluded."
+  ],
+  "limitations": [
+    "The 300-frame startup sample is not gameplay FPS; timing, rendering and audio-thread progress are not synchronized across runs.",
+    "No audio performance or listening improvement is claimed.",
+    "The earlier approximately 1682 ms branch-loop anomaly did not reproduce at the current baseline (10 ms for the identical short fixture); this is not attributed to the new admission patch.",
+    "The new patch does not establish an end-to-end CPU/presentation or gameplay FPS gain.",
+    "JIT remains opt-in because resource pressure and metadata churn remain important in complex games."
+  ]
+}

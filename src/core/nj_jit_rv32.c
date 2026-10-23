@@ -5,7 +5,7 @@
  * A generated block has the ABI
  *     nj_u4 block(nj_value *incoming_sp, nj_value *locals, nj_u4 budget)
  * and uses only a0/a1/a2/a3 (the argument registers; a1 is untouched, a0
- * carries the result word, a2 the remaining budget and a3 the completed-
+ * carries the result word, a2 the loop admission limit and a3 the completed-
  * bytecode counter), t0/t1/t2/t3/t4/t5 and ft0/ft1.
  * It never changes the native stack, a callee-saved register, or a Java frame.
  *
@@ -1534,6 +1534,15 @@ static int rv_emit_block(nj_vm *vm, rv_writer *w, const rv_scan *s,
         rv_li(w, RV_A3, 0); /* completed = 0 */
     }
     w->loop = s->loop ? 1 : 0;
+    if (s->loop) {
+        /* Hoist the invariant window size out of the back edge. Check before
+         * subtracting so even a direct call with budget < insns returns zero
+         * completed bytecodes without touching the frame. The body does not
+         * use a2, so each iteration needs only an unsigned comparison. */
+        rv_li(w, RV_T4, (nj_s4)s->n);
+        rv_branch(w, 6u, RV_A2, RV_T4, RV_FIX_EXIT, s->budget_exit);
+        rv_addi(w, RV_A2, RV_A2, -(int)s->n);
+    }
 
     for (i = 0u; i < s->n; ++i) {
         /* The fall-through path counts its preceding run before the label;
@@ -1541,12 +1550,8 @@ static int rv_emit_block(nj_vm *vm, rv_writer *w, const rv_scan *s,
         if (s->label[i]) rv_flush_count(w);
         if (i == 0u && s->loop != 0) {
             label_at[0] = w->used;
-            /* remaining = budget - completed; enter another iteration only
-             * when a whole window still fits. */
-            rv_r(w, 0x33u, 0x20u, 0u, RV_T3, RV_A2, RV_A3);
-            rv_li(w, RV_T4, (nj_s4)s->n);
-            rv_branch(w, 6u, RV_T3, RV_T4, RV_FIX_EXIT,
-                      s->budget_exit); /* bltu t3, t4 */
+            /* completed <= budget - window size admits one whole window. */
+            rv_branch(w, 6u, RV_A2, RV_A3, RV_FIX_EXIT, s->budget_exit);
             rv_forget_values(w);
         } else if (s->label[i]) {
             label_at[i] = w->used;
