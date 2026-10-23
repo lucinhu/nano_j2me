@@ -2324,3 +2324,36 @@ against the soft-key positions before calling a tap a regression.
 Raw logs, frames and the table are under
 `.local-tools/debug-runs/compat-round9-20261022/ptr-sweep/` (`summary.txt`,
 per-title `run.log`/`frames/`, plus the `keyonly-*` arms).
+
+## The eight models in one buffer (round 8, 2026-10-23)
+
+`3D激爆拳击_8805` stopped on its LOADING screen with forty-six caught
+`IOException`s saying *the section at 517 uses compression scheme 171; only 0
+(stored) and 1 (zlib) exist*.  The archive is not eight `.m3g` files: it holds
+one 27,346-byte buffer in which the game itself packed eight JSR 184 files and
+which it feeds to `Loader.load(byte[], offset)` one file at a time -
+`load(data, 0)`, `load(data, 517)`, and so on.  Our loader walked sections
+from the identifier until the end of the buffer and required that they tile it
+exactly, so at offset 517 it read the next file's `0xAB` identifier byte as a
+compression scheme and refused the model.  The file header says where the file
+ends: `totalFileSize`, a little-endian u32 at offset 29.  The reference loader
+bounds its section walk by that field for exactly this reason.
+
+`m3g_file_extent()` now returns the declared length (falling back to the whole
+buffer when the header carries no usable one), and both
+`nj_m3g_container_probe()` and `nj_m3g_scan_objects()` bound their walk by it,
+so the bytes after a file are treated as whatever container they came in.
+
+Verified on the title, 1,200 frames: zero scheme-171 errors (was 46),
+triangles 16,128 -> 58,337, `m3g=1050`; frame 900 is the TRIVIA / DID YOU KNOW
+screen and frame 1,200 is the in-game pause menu (RESUME / RESTART / OPTIONS /
+CONTROLS / MAIN MENU / QUIT), so the models load and the match screen is
+reachable.  Five caught `NullPointerException`s remain, all in the game's own
+`e.a`/`e.b` code; the trivia overlay's busy "LOADING" bar is the next layer and
+not part of this fix.
+
+`tests/test_m3g.c` gained a synthetic container case - one file followed by
+the next file's identifier - plus the fallbacks: no usable declared length
+(the trailing bytes are still caught), a length longer than the buffer, and a
+nonsense length.  `test_m3g` is 576 checks.  Footprint: `nj_lib_m3g.c.o` text
+262,417 -> 262,489 bytes (+72), data/bss unchanged.

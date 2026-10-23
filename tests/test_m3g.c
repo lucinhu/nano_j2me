@@ -26,6 +26,14 @@
 static int checks;
 static int failures;
 
+static void put_le32(nj_u1 *p, nj_u4 v)
+{
+    p[0] = (nj_u1)v;
+    p[1] = (nj_u1)(v >> 8);
+    p[2] = (nj_u1)(v >> 16);
+    p[3] = (nj_u1)(v >> 24);
+}
+
 static void check(int ok, const char *what)
 {
     checks++;
@@ -1586,6 +1594,69 @@ int main(void)
                   strstr(nj_ref_class_name(exc), "IOException") != NULL,
                   "and it throws java.io.IOException");
         }
+    }
+
+    printf("== an M3G file embedded in a container stops at its own length ==\n");
+    {
+        /*
+         * 3D激爆拳击_8805 stores eight M3G files back to back and calls
+         * Loader.load(data, 0), load(data, 517), ...  The file header's
+         * totalFileSize is the authoritative end of one file; walking the
+         * sections until the buffer runs out instead read the next file's
+         * 0xAB identifier byte as a compression scheme and rejected the
+         * model ("the section at 517 uses compression scheme 171").  The
+         * reference loader bounds the walk by totalFileSize for the same
+         * reason.
+         */
+        nj_u1 buf[96];
+        static const nj_u1 ident[12] = {
+            0xAB, 0x4A, 0x53, 0x52, 0x31, 0x38, 0x34,
+            0xBB, 0x0D, 0x0A, 0x1A, 0x0A
+        };
+        nj_m3g_object objs[4];
+        nj_u4 nobj = 0, nsec = 0;
+        char err[160];
+        nj_status st;
+
+        /* one file: 12 byte identifier, 30 byte header section, then one
+           18 byte section holding a single zero-payload Group object */
+        memset(buf, 0, sizeof(buf));
+        memcpy(buf, ident, 12);
+        put_le32(buf + 13, 30);          /* header section length */
+        put_le32(buf + 17, 17);          /* its uncompressed length */
+        put_le32(buf + 22, 12);          /* Object3D header length */
+        buf[26] = 1;                     /* version 1.0 */
+        put_le32(buf + 29, 60);          /* totalFileSize */
+        put_le32(buf + 33, 60);          /* approximate content size */
+        put_le32(buf + 43, 18);          /* object section length */
+        put_le32(buf + 47, 5);           /* its uncompressed length */
+        buf[51] = 9;                     /* Group */
+        memcpy(buf + 60, ident, 12);     /* the next file's identifier */
+
+        st = nj_m3g_container_probe(buf, 72, NULL, 0, err, sizeof err);
+        check(st == NJ_OK,
+              "a container with a second file after the first probes clean");
+        st = nj_m3g_scan_objects(0, buf, 72, objs, 4, &nobj, &nsec,
+                                 err, sizeof err);
+        check(st == NJ_OK && nsec == 2u && nobj == 1u,
+              "and its objects are read from the first file only");
+        st = nj_m3g_container_probe(buf, 60, NULL, 0, err, sizeof err);
+        check(st == NJ_OK, "the same file alone probes clean");
+        st = nj_m3g_scan_objects(0, buf, 60, objs, 4, &nobj, &nsec,
+                                 err, sizeof err);
+        check(st == NJ_OK && nobj == 1u,
+              "and scans the same way with nothing after it");
+
+        put_le32(buf + 29, 0);           /* no usable declared length */
+        st = nj_m3g_container_probe(buf, 72, NULL, 0, err, sizeof err);
+        check(st != NJ_OK && strstr(err, "compression scheme") != NULL,
+              "without a declared length the trailing bytes are still caught");
+        put_le32(buf + 29, 76);          /* declares more than the buffer */
+        st = nj_m3g_container_probe(buf, 72, NULL, 0, err, sizeof err);
+        check(st != NJ_OK, "a file that declares more than it has is refused");
+        put_le32(buf + 29, 12);          /* shorter than the header */
+        st = nj_m3g_container_probe(buf, 72, NULL, 0, err, sizeof err);
+        check(st != NJ_OK, "and a nonsensical declared length falls back too");
     }
 
     printf("== the camera says whether it has a projection ==\n");

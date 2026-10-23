@@ -81,6 +81,37 @@ static nj_u4 le32(const nj_u1 *p)
 }
 
 /*
+ * How long the M3G file that starts here actually is.
+ *
+ * The file header carries totalFileSize (a little-endian u32 at offset 29),
+ * and that is the authoritative length of the file, identifier included.  It
+ * has to be: games embed whole M3G files inside larger containers and hand
+ * Loader.load(byte[], offset) the container, with the next file's identifier
+ * right after the one being loaded (3D激爆拳击_8805 keeps eight models in one
+ * 27 KB buffer and calls load(data, 0), load(data, 517), ...).  Walking
+ * sections until the buffer runs out then reads the following file's 0xAB
+ * identifier byte as a compression scheme and rejects the model.  The
+ * reference loader bounds the walk by totalFileSize for exactly this reason.
+ *
+ * Falls back to the whole buffer when the header carries no usable size, so
+ * standalone files and malformed headers behave as they did before.
+ */
+static nj_u4 m3g_file_extent(const nj_u1 *p, nj_u4 n)
+{
+    nj_u4 hdr_len, declared;
+
+    if (n < 33u) {
+        return n;                    /* too short to carry the field */
+    }
+    hdr_len = le32(p + 13u);         /* the header section's own length */
+    declared = le32(p + 29u);        /* totalFileSize */
+    if (declared <= NJ_M3G_HEADER + hdr_len || declared > n) {
+        return n;
+    }
+    return declared;
+}
+
+/*
  * The colours of JSR 184: a ColorRGB is three bytes and a ColorRGBA four, in
  * the order Red, Green, Blue (and Alpha).  The corpus settles the order of the
  * fourth byte - every one of the 594 Materials it holds has 0xFF there, and 54
@@ -289,6 +320,7 @@ nj_status nj_m3g_container_probe(const nj_u1 *p, nj_u4 n,
         M3G_FAIL("this is not a JSR 184 file: it starts %02x %02x %02x %02x",
                  (unsigned)p[0], (unsigned)p[1], (unsigned)p[2], (unsigned)p[3]);
     }
+    n = m3g_file_extent(p, n);       /* trailing bytes may be the next file */
     off = NJ_M3G_HEADER;
     while (off < n) {
         nj_u4 clen, ulen;
@@ -1011,6 +1043,7 @@ nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
     st = nj_m3g_container_probe(p, n, NULL, 0, err, errcap);
     if (st != NJ_OK) { return st; }
 
+    n = m3g_file_extent(p, n);       /* the same bound the probe just applied */
     off = NJ_M3G_HEADER;
     while (off < n) {
         nj_u4 clen = le32(p + off + 1u);
