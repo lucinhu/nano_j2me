@@ -896,3 +896,20 @@ now exist; see
 RAM is unchanged: no field, static, heap allocation or buffer is added. The
 only new storage is read-only (the method-name and signature strings the class
 loader publishes) and the C stack of the calls themselves.
+
+## Opaque rows are copied, not tested (round 58, 2026-10-24)
+
+`nj_region_draw` now checks a whole row for opacity once
+(`nj_argb_row_opaque()`, sixteen pixels per block, early exit) and then copies
+it with `memcpy` when the destination is ARGB8888 or converts it with
+`nj_565_row_from_argb()` when it is RGB565; see
+[PERFORMANCE.md](PERFORMANCE.md#whole-opaque-rows-skip-the-alpha-bookkeeping-round-58-2026-10-24).
+
+| Build | Before | After |
+|---|---|---|
+| hosted Release, `nj_gfx.c` `.text` | 35,688 B | **37,400 B** (+1,712 B) |
+| `nj2me` executable `.text` | 2,912,934 B | **2,914,662** B (+1,728 B) |
+| executable `.data` / `.bss` | 163,088 / 6,688 B | **unchanged** / **unchanged** |
+
+RAM is unchanged: no field, static, heap allocation or buffer is added. The two
+helpers keep only what they read from the row on the C stack.

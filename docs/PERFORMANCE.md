@@ -2582,3 +2582,58 @@ rasteriser, and the conversion is a small part of the blits it does.
 code than it adds); the `nj2me` executable `.text` 2,910,230 -> **2,909,942** B
 (-288 B); `.data` 162,736 B and `.bss` 6,688 B unchanged.  RAM is unchanged: no
 field, static, heap allocation or buffer is added.
+
+## Whole opaque rows skip the alpha bookkeeping (round 58, 2026-10-24)
+
+The gprof profile of a card game (`三国杀单机战功修改版_4143`, 3,000 paced
+frames) put 93.75% of its CPU in `nj_region_draw`; a census of the calls in the
+same replay said the two shapes that matter are ARGB8888 -> RGB565 and
+ARGB8888 -> ARGB8888 blits under `NJ_ROP_PAINT` with an opaque source image -
+80.6M and 54.7M pixels respectively over 1,200 frames. Both went through the
+group machinery added in earlier rounds, which re-reads and re-tests eight
+pixels at a time even when a whole row is the same answer.
+
+`nj_region_draw` now asks the row, not the group. `nj_argb_row_opaque()` folds
+alpha bytes sixteen pixels at a time and returns on the first block that holds
+translucency, so an opaque row costs one pass with no per-pixel tests and a
+soft-edged row costs one block. An opaque row then takes one of two direct
+paths: `memcpy` of the row when the destination is ARGB8888 too, or
+`nj_565_row_from_argb()`, the same pair conversion the group loop uses, when
+the destination is RGB565. `NJ_ROP_SET` keeps the old path (it never looks at
+alpha), and every pixel the old code would have blended still goes through the
+old per-pixel code.
+
+Numbers from the scratch blit bench (`nj_gfx_draw_image` of a 240x320 ARGB8888
+image onto a 240x320 surface, six interleaved rounds, min/median of each arm,
+`taskset -c 5`):
+
+| Mode | Before | After | Delta |
+|---|---|---|---|
+| opaque paint onto rgb565 | 36.46 us | **22.06 us** | -39.5% |
+| opaque paint, second size | 36.35 us | **22.01 us** | -39.5% |
+| opaque paint onto ARGB8888 | 15.37 us | **6.50 us** | -57.7% |
+| all-transparent rows (ARGB8888) | 12.56 us | **11.89 us** | -5.3% |
+| every 64th pixel translucent (rgb565) | 40.31 us | **41.19 us** | +2.2% |
+| every 64th pixel translucent (ARGB8888) | 19.42 us | **19.89 us** | +2.4% |
+| every pixel translucent (ARGB8888) | 155.0 us | **156.6 us** | +1.0% |
+| `NJ_ROP_SET` onto rgb565 (untouched) | 35.93 us | **36.18 us** | +0.7% |
+
+The translucent modes pay for the extra probe pass and gain nothing, which is
+why the cost is reported here rather than hidden; they are the shapes a
+soft-edged overlay has, and the images real titles paint a frame from are
+opaque. All eight bench framebuffer hashes are identical to the parent binary.
+
+On the title itself the effect is well above the noise: `三国杀单机战功修改版_4143`,
+3,000 paced frames with a pinned CPU, six interleaved rounds of user CPU -
+parent min 0.2231 s / med 0.2413 s, this binary min **0.1753 s** / med
+**0.1777 s**, i.e. -21.4% (min) and -26.4% (median); the two arms' ranges do
+not overlap. Dumped frames at 100/300/500 are byte-identical to the parent's,
+and the one frame that differed (900) also differs between two runs of the
+parent binary, so it is the title's own timing, not the blit.
+
+### Cost
+
+`nj_gfx.c.o` `.text` 35,688 -> **37,400** B (+1,712 B); the `nj2me` executable
+`.text` 2,912,934 -> **2,914,662** B (+1,728 B); `.data` 163,088 B and `.bss`
+6,688 B unchanged. RAM is unchanged: no field, static, heap allocation or
+buffer is added; the only new storage is the C stack of the two helpers.

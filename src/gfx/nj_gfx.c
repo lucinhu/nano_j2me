@@ -1862,6 +1862,69 @@ static inline void nj_paint_argb_pixel(nj_u1 *dp, nj_u4 c)
 /* Pixels converted per pass by the opaque and ARGB paint blit loops. */
 #define NJ_GFX_BLIT_GROUP 8
 
+/*
+ * Two facts that let the blit stop re-reading alpha per pixel:
+ *
+ * nj_argb_row_opaque() folds a whole row into one opaque answer.  A painted
+ * image is usually copied whole, and the copy is a memcpy or a straight
+ * conversion, so finding that out once per row is cheaper than testing each
+ * pixel on the way past.
+ *
+ * nj_565_row_from_argb() converts an opaque row to rgb565 two pixels per
+ * 64-bit word; it is the same arithmetic the group loop uses, just without
+ * the group bookkeeping.
+ */
+static int nj_argb_row_opaque(const nj_u1 *p, int n)
+{
+    /*
+     * The scan runs in short blocks so that the two shapes the blit meets
+     * most often are both cheap: a painted frame is opaque end to end, and a
+     * sprite with a soft edge is caught by the first block that holds
+     * translucency - no need to walk a whole row of it just to say no.
+     */
+    while (n > 0) {
+        nj_u4 all = 0xFFFFFFFFu;
+        int m = n > 16 ? 16 : n;
+        int t;
+
+        for (t = 0; t < m; t++) {
+            all &= nj_word_get(p + (nj_s8)t * 4, 0);
+        }
+        if (((all >> 24) & 0xFFu) != 0xFFu) {
+            return 0;
+        }
+        p += (nj_s8)m * 4;
+        n -= m;
+    }
+    return 1;
+}
+
+static void nj_565_row_from_argb(nj_u1 *dp, const nj_u1 *sp, int n, int bpp)
+{
+    int t = 0;
+
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    for (; t + 1 < n; t += 2) {
+        nj_u8 pair = (nj_u8)nj_word_get(sp + (nj_s8)t * 4, 0) |
+                     ((nj_u8)nj_word_get(sp + (nj_s8)(t + 1) * 4, 0) << 32);
+        nj_u8 v = ((pair >> 8) & 0x0000F8000000F800ull)
+                | ((pair >> 5) & 0x000007E0000007E0ull)
+                | ((pair >> 3) & 0x0000001F0000001Full);
+        nj_u4 out = (nj_u4)(v & 0xFFFFu) | ((nj_u4)(v >> 32) << 16);
+
+        memcpy(dp + (nj_s8)t * bpp, &out, sizeof out);
+    }
+#endif
+    for (; t < n; t++) {
+        nj_u4 c = nj_word_get(sp + (nj_s8)t * 4, 0);
+        nj_u2 v = (nj_u2)((((c >> 19) & 0x1Fu) << 11) |
+                          (((c >> 10) & 0x3Fu) << 5) |
+                          ((c >> 3) & 0x1Fu));
+
+        memcpy(dp + (nj_s8)t * bpp, &v, sizeof v);
+    }
+}
+
 static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                            int src_format, const nj_u1 *mask,
                            int mask_stride, int sx, int sy, int sw, int sh,
@@ -2036,6 +2099,16 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                 int left = n;
 
                 /*
+                 * Opaque whole rows are the common case - a frame painted
+                 * from an ARGB8888 render target - and they only need the
+                 * conversion, not the per-group alpha bookkeeping.
+                 */
+                if (rop != NJ_ROP_SET && nj_argb_row_opaque(sp, n)) {
+                    nj_565_row_from_argb(dp, sp, n, bpp);
+                    continue;
+                }
+
+                /*
                  * A title that paints a whole frame from an ARGB8888 render
                  * target hands this loop a screenful of opaque pixels every
                  * frame, so the alpha test below never fires - and yet the
@@ -2164,6 +2237,15 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
             int probe_n = 0;
             int left = n;
             int use_groups = 0;
+
+            /*
+             * An opaque row of a painted image is a plain copy; the probe
+             * below would arrive at the same answer eight pixels at a time.
+             */
+            if (nj_argb_row_opaque(sp, n)) {
+                memcpy(dp, sp, (size_t)n * 4u);
+                continue;
+            }
 
             /*
              * Two thirds of the pixels of such a painted image are fully
