@@ -2458,3 +2458,44 @@ zero uncaught exceptions, and writes both of its stores
 (`pk4_baijin.rms`, 22,872 bytes, and `baijinSMS.rms`, 28 bytes).  Full ctest
 101/101, bench (`BENCH sum=-136042548 s=5`) and the 27-value digest unchanged,
 no writable statics.
+
+## A whole corpus with taps, not just keys (round 12, 2026-10-23)
+
+Every corpus sweep until now drove titles with key events only, which left one
+whole input class untested: the titles whose menus are only reachable by
+touching the screen.  The replay script format has carried pointer events since
+the runner grew them (`frame:pressed@x,y` / `frame:released@x,y`, see
+`--help`), but no sweep used it.  This one did, over all 395 corpus JARs.
+
+The script taps sixteen positions across the boot window (two per second, the
+same spots a player would try) and then alternates keys and pointer presses
+through the first twenty seconds; 600 frames per title, 60 KB heap floor,
+eight workers.  The shape of the result:
+
+* **395 of 395 ran, 394 exited 0.**  The one non-zero exit is
+  `鲁宾逊漂流记汉化BT版_4677`, the known bad suite (no `MIDlet-1`).
+* **No missing API at all**: zero `NoSuchMethodError`, `NoSuchFieldError`,
+  `NoClassDefFoundError` or `AbstractMethodError` across 395 titles.
+* **No crash, no hang, no timeout**, and only three uncaught exceptions - all
+  three of them the *early* tap at 0.7 s arriving before the title had built
+  its screen state:
+  * `三国赤壁小乔秘史_7976` throws `NullPointerException` at
+    `j.pointerPressed(II)V pc=13`, an `Image.getHeight()` on a static image
+    that is still null; with the first tap moved to 2 s the title runs with no
+    uncaught exception at all (its own code still catches 20 NPEs).
+  * `哆啦A梦－3D卡丁车增值版_1560` parses `getAppProperty("FeeMode")` - a JAD
+    property its JAR does not carry - and `Integer.parseInt(null)` throws; the
+    reference has the same property table and the same hole, and with the later
+    tap script the title runs 600 frames clean.
+  * `愤怒的小鸟-高清版_2353` runs out of heap, genuinely: its working set is
+    ~28 MB of images.  Measured peaks were 16,683,392 of 16,777,216 bytes at
+    `--heap 16` (OOM), still OOM at `--heap 24` on one large allocation, and
+    28,656,304 of 33,194,192 bytes and clean at `--heap 32`.
+* The tap script unlocks screens the key scripts left static: `三国杀2.2` now
+  paints all 600 frames and `仙魔飞行棋` draws its board, both of which used to
+  need a page transition the key script never produced.
+
+What this does not prove: 600 frames is a startup window, not a playthrough;
+the scripts are generic rather than title-specific; and no per-title reference
+comparison was done in this sweep.  It is a regression net for missing APIs and
+crashes, and on that measure this was the cleanest sweep so far.
