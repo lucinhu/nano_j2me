@@ -2621,7 +2621,8 @@ a title's own `catch (UTFDataFormatException)` clause could not resolve before.
 
 `tests/test_lib.c` covers both sides of the boundary: a 65535-byte payload is
 written with its header (size 65537), and 65536 bytes is refused with the
-exception. test_lib 834 passed / 0 failed.
+exception. test_lib 834 passed / 0 failed, and the same assertions are clean
+under a Debug `-DNJ_SANITIZE=ON` build (834/0, no ASan/UBSan/LSan reports).
 
 ## The byte-array window that could read outside itself (round 31, 2026-10-23)
 
