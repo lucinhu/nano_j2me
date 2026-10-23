@@ -717,6 +717,105 @@ static inline nj_u4 mr_env_add(nj_u4 color, nj_u4 env)
 /* Fill the rows of one clipped segment.  All coordinates are 12.12 fixed
  * point; the per-row edge starts advance by the edge derivatives and the
  * in-row interpolators by the scanline derivatives. */
+
+/* Attribute combinations that dominate real scenes, written as tight span
+ * loops.  Every flag is constant for a triangle, so the branch tree the
+ * generic loop evaluates per pixel only needs to be resolved once per row;
+ * the numeric steps are copied verbatim from the generic body so pixels stay
+ * byte-identical.  Everything the table does not name - toon, colour keys in
+ * some orders, environment maps, ADD/SUB - keeps using the generic loop. */
+enum {
+    MR_MODE_GENERIC = 0
+#if NJ_MASCOT_RASTER_SPANS
+    , MR_MODE_TEX_SMOOTH_PUT,
+    MR_MODE_TEX_SMOOTH_HALF,
+    MR_MODE_TEX_FLAT_PUT,
+    MR_MODE_TEX_FLAT_HALF,
+    MR_MODE_COLOR_SMOOTH_PUT,
+    MR_MODE_COLOR_SMOOTH_HALF,
+    MR_MODE_CONST_PUT,
+    MR_MODE_CONST_HALF
+#endif
+};
+
+#if NJ_MASCOT_RASTER_SPANS
+#define MR_DEFINE_TEX_SPAN(NAME, SMOOTH, BLENDED)                            \
+static inline void NAME(nj_u1 *pp, nj_s4 px0, nj_s4 px1,                     \
+                        nj_s4 uu, nj_s4 vv, nj_s4 ss,                        \
+                        nj_s4 du, nj_s4 dv, nj_s4 ds,                        \
+                        const nj_u1 *t_raster, const nj_u1 *t_palette,       \
+                        nj_s4 t_wbit, nj_s4 t_mask, nj_s4 key_idx,           \
+                        nj_s4 flat_level, nj_s4 blend, nj_s4 fmt, nj_s4 bpp)\
+{                                                                            \
+    nj_s4 px;                                                                \
+    for (px = px0; px < px1;                                                 \
+         px++, uu += du, vv += dv, ss += ds, pp += bpp) {                    \
+        nj_s4 ti = (nj_s4)t_raster[                                          \
+            (nj_s4)((((nj_u4)(vv >> MR_FP) << t_wbit)                        \
+                     | (nj_u4)(uu >> MR_FP)) & (nj_u4)t_mask)];              \
+        nj_u4 pix;                                                           \
+        nj_s4 level;                                                         \
+        if (ti == key_idx) {                                                 \
+            continue;                                                        \
+        }                                                                    \
+        pix = mr_pal_get(t_palette, ti & 0xFF);                              \
+        level = (SMOOTH) ? (nj_s4)((ss >> MR_FP) & 0x1F) : flat_level;       \
+        pix = mr_tex_shade(pix, level);                                      \
+        if (BLENDED) {                                                       \
+            mr_raw_put(pp, mr_blend(pix, mr_raw_get(pp, fmt), blend), fmt);  \
+        } else {                                                             \
+            mr_raw_put(pp, pix, fmt);                                        \
+        }                                                                    \
+    }                                                                        \
+}
+
+MR_DEFINE_TEX_SPAN(mr_span_tex_smooth_put, 1, 0)
+MR_DEFINE_TEX_SPAN(mr_span_tex_smooth_half, 1, 1)
+MR_DEFINE_TEX_SPAN(mr_span_tex_flat_put, 0, 0)
+MR_DEFINE_TEX_SPAN(mr_span_tex_flat_half, 0, 1)
+
+#define MR_DEFINE_COLOR_SPAN(NAME, BLENDED)                                  \
+static inline void NAME(nj_u1 *pp, nj_s4 px0, nj_s4 px1,                     \
+                        nj_s4 ss, nj_s4 ds, nj_u4 color_rb, nj_u4 color_g,   \
+                        nj_s4 blend, nj_s4 fmt, nj_s4 bpp)                   \
+{                                                                            \
+    nj_s4 px;                                                                \
+    for (px = px0; px < px1; px++, ss += ds, pp += bpp) {                    \
+        nj_s4 level = (nj_s4)(ss >> MR_FP);                                   \
+        nj_u4 rb = ((color_rb & 0x00FF00FFu) * (nj_u4)level)                 \
+                 & (0x00FF00FFu << 5);                                        \
+        nj_u4 g = ((color_g & 0x0000FF00u) * (nj_u4)level)                   \
+                & (0x0000FF00u << 5);                                         \
+        nj_u4 pix = 0xFF000000u | ((rb | g) >> 5);                           \
+        if (BLENDED) {                                                        \
+            mr_raw_put(pp, mr_blend(pix, mr_raw_get(pp, fmt), blend), fmt);   \
+        } else {                                                              \
+            mr_raw_put(pp, pix, fmt);                                         \
+        }                                                                     \
+    }                                                                         \
+}
+
+MR_DEFINE_COLOR_SPAN(mr_span_color_smooth_put, 0)
+MR_DEFINE_COLOR_SPAN(mr_span_color_smooth_half, 1)
+
+#define MR_DEFINE_CONST_SPAN(NAME, BLENDED)                                  \
+static inline void NAME(nj_u1 *pp, nj_s4 px0, nj_s4 px1,                     \
+                        nj_u4 pix, nj_s4 blend, nj_s4 fmt, nj_s4 bpp)        \
+{                                                                            \
+    nj_s4 px;                                                                \
+    for (px = px0; px < px1; px++, pp += bpp) {                              \
+        if (BLENDED) {                                                        \
+            mr_raw_put(pp, mr_blend(pix, mr_raw_get(pp, fmt), blend), fmt);   \
+        } else {                                                              \
+            mr_raw_put(pp, pix, fmt);                                         \
+        }                                                                     \
+    }                                                                         \
+}
+
+MR_DEFINE_CONST_SPAN(mr_span_const_put, 0)
+MR_DEFINE_CONST_SPAN(mr_span_const_half, 1)
+#endif
+
 static void mr_fill_segment(const mr_state *st,
                             nj_s4 clip_x1, nj_s4 clip_x2,
                             nj_s4 y_start, nj_s4 y_end,
@@ -761,6 +860,35 @@ static void mr_fill_segment(const mr_state *st,
     const nj_s4 bpp = mr_bpp_of(st->dst);
     const nj_s8 stride = st->dst->stride;
     nj_u1 *const base = (nj_u1 *)st->dst->pixels;
+
+    /* Resolve the per-attribute branch tree once; see the span helpers. */
+    int mode = MR_MODE_GENERIC;
+
+#if NJ_MASCOT_RASTER_SPANS
+    if (!toon_on && !env_smooth) {
+        if (has_tex && tex_shaded) {
+            if (smooth) {
+                mode = blend == NJ_MR_BLEND_REPLACE ? MR_MODE_TEX_SMOOTH_PUT
+                     : blend == NJ_MR_BLEND_HALF ? MR_MODE_TEX_SMOOTH_HALF
+                     : MR_MODE_GENERIC;
+            } else {
+                mode = blend == NJ_MR_BLEND_REPLACE ? MR_MODE_TEX_FLAT_PUT
+                     : blend == NJ_MR_BLEND_HALF ? MR_MODE_TEX_FLAT_HALF
+                     : MR_MODE_GENERIC;
+            }
+        } else if (!has_tex && smooth) {
+            mode = blend == NJ_MR_BLEND_REPLACE ? MR_MODE_COLOR_SMOOTH_PUT
+                 : blend == NJ_MR_BLEND_HALF ? MR_MODE_COLOR_SMOOTH_HALF
+                 : MR_MODE_GENERIC;
+        } else if (!has_tex && !smooth) {
+            mode = blend == NJ_MR_BLEND_REPLACE ? MR_MODE_CONST_PUT
+                 : blend == NJ_MR_BLEND_HALF ? MR_MODE_CONST_HALF
+                 : MR_MODE_GENERIC;
+        }
+    }
+#else
+    (void)mode;
+#endif
 
     /* "Corrected rounding to avoid texture seams": nudge the interpolators by
      * one subpixel in the direction they are moving.  Only the attributes the
@@ -827,74 +955,118 @@ static void mr_fill_segment(const mr_state *st,
         /* xl >= clip_x1 >= 0 here, so the row start is inside the surface when
          * the span is non-empty; empty spans keep a dummy pointer. */
         pp = xl < xr ? base + (nj_s8)y * stride + (nj_s8)xl * bpp : base;
-        for (px = xl; px < xr;
-             px++, uu += du, vv += dv, ss += ds, eeu += deu, eev += dev,
-             pp += bpp) {
-            nj_u4 pix;
+        if (xl < xr) {
+            switch (mode) {
+#if NJ_MASCOT_RASTER_SPANS
+            case MR_MODE_TEX_SMOOTH_PUT:
+                mr_span_tex_smooth_put(pp, xl, xr, uu, vv, ss, du, dv, ds,
+                                       t_raster, t_palette, t_wbit, t_mask,
+                                       key_idx, flat_level, blend, fmt, bpp);
+                break;
+            case MR_MODE_TEX_SMOOTH_HALF:
+                mr_span_tex_smooth_half(pp, xl, xr, uu, vv, ss, du, dv, ds,
+                                        t_raster, t_palette, t_wbit, t_mask,
+                                        key_idx, flat_level, blend, fmt, bpp);
+                break;
+            case MR_MODE_TEX_FLAT_PUT:
+                mr_span_tex_flat_put(pp, xl, xr, uu, vv, ss, du, dv, ds,
+                                     t_raster, t_palette, t_wbit, t_mask,
+                                     key_idx, flat_level, blend, fmt, bpp);
+                break;
+            case MR_MODE_TEX_FLAT_HALF:
+                mr_span_tex_flat_half(pp, xl, xr, uu, vv, ss, du, dv, ds,
+                                      t_raster, t_palette, t_wbit, t_mask,
+                                      key_idx, flat_level, blend, fmt, bpp);
+                break;
+            case MR_MODE_COLOR_SMOOTH_PUT:
+                mr_span_color_smooth_put(pp, xl, xr, ss, ds, color_rb, color_g,
+                                         blend, fmt, bpp);
+                break;
+            case MR_MODE_COLOR_SMOOTH_HALF:
+                mr_span_color_smooth_half(pp, xl, xr, ss, ds, color_rb, color_g,
+                                          blend, fmt, bpp);
+                break;
+            case MR_MODE_CONST_PUT:
+                mr_span_const_put(pp, xl, xr, mr_flat_color(color, flat_shade),
+                                  blend, fmt, bpp);
+                break;
+            case MR_MODE_CONST_HALF:
+                mr_span_const_half(pp, xl, xr, mr_flat_color(color, flat_shade),
+                                   blend, fmt, bpp);
+                break;
+#endif
+            default:
+            for (px = xl; px < xr;
+                 px++, uu += du, vv += dv, ss += ds, eeu += deu, eev += dev,
+                 pp += bpp) {
+                nj_u4 pix;
 
-            if (has_tex) {
-                nj_s4 ti = (nj_s4)t_raster[
-                    (nj_s4)((((nj_u4)(vv >> MR_FP) << t_wbit)
-                             | (nj_u4)(uu >> MR_FP)) & (nj_u4)t_mask)];
+                if (has_tex) {
+                    nj_s4 ti = (nj_s4)t_raster[
+                        (nj_s4)((((nj_u4)(vv >> MR_FP) << t_wbit)
+                                 | (nj_u4)(uu >> MR_FP)) & (nj_u4)t_mask)];
 
-                if (ti == key_idx) {
-                    continue;
-                }
-                pix = mr_pal_get(t_palette, ti & 0xFF);
-                if (tex_shaded) {
-                    nj_s4 level;
-
-                    if (smooth) {
-                        level = toon_on
-                            ? ((ss >> 9) <= toon_thr ? toon_lo : toon_hi) >> 3
-                            : (nj_s4)((ss >> MR_FP) & 0x1F);
-                    } else {
-                        level = flat_level;
+                    if (ti == key_idx) {
+                        continue;
                     }
-                    pix = mr_tex_shade(pix, level);
-                }
-            } else if (smooth) {
-                if (toon_on) {
-                    nj_s4 col = (ss >> 9) <= toon_thr ? toon_lo : toon_hi;
+                    pix = mr_pal_get(t_palette, ti & 0xFF);
+                    if (tex_shaded) {
+                        nj_s4 level;
 
-                    pix = mr_flat_color(color, (nj_s8)col * 512);
+                        if (smooth) {
+                            level = toon_on
+                                ? ((ss >> 9) <= toon_thr ? toon_lo : toon_hi) >> 3
+                                : (nj_s4)((ss >> MR_FP) & 0x1F);
+                        } else {
+                            level = flat_level;
+                        }
+                        pix = mr_tex_shade(pix, level);
+                    }
+                } else if (smooth) {
+                    if (toon_on) {
+                        nj_s4 col = (ss >> 9) <= toon_thr ? toon_lo : toon_hi;
+
+                        pix = mr_flat_color(color, (nj_s8)col * 512);
+                    } else {
+                        nj_s4 level = (nj_s4)(ss >> MR_FP);
+                        nj_u4 rb = ((color_rb & 0x00FF00FFu) * (nj_u4)level)
+                                 & (0x00FF00FFu << 5);
+                        nj_u4 g = ((color_g & 0x0000FF00u) * (nj_u4)level)
+                                & (0x0000FF00u << 5);
+
+                        pix = 0xFF000000u | ((rb | g) >> 5);
+                    }
                 } else {
-                    nj_s4 level = (nj_s4)(ss >> MR_FP);
-                    nj_u4 rb = ((color_rb & 0x00FF00FFu) * (nj_u4)level)
-                             & (0x00FF00FFu << 5);
-                    nj_u4 g = ((color_g & 0x0000FF00u) * (nj_u4)level)
-                            & (0x0000FF00u << 5);
+                    nj_s8 shade12 = flat_shade;
 
-                    pix = 0xFF000000u | ((rb | g) >> 5);
+                    if (toon_on) {
+                        nj_s4 col = (shade12 >> 9) <= toon_thr
+                            ? toon_lo : toon_hi;
+
+                        shade12 = (nj_s8)col * 512;
+                    }
+                    pix = mr_flat_color(color, shade12);
                 }
-            } else {
-                nj_s8 shade12 = flat_shade;
 
-                if (toon_on) {
-                    nj_s4 col = (shade12 >> 9) <= toon_thr
-                        ? toon_lo : toon_hi;
+                if (env_smooth) {
+                    nj_s4 ei = (nj_s4)
+                        ((((nj_u4)(eev >> MR_FP) << e_wbit)
+                          | (nj_u4)(eeu >> MR_FP))
+                         & (nj_u4)e_mask);
+                    nj_u4 ep = mr_u32(e_raster + (nj_s8)ei * 4);
 
-                    shade12 = (nj_s8)col * 512;
+                    if (ep != 0) {
+                        pix = mr_env_add(pix, ep);
+                    }
                 }
-                pix = mr_flat_color(color, shade12);
-            }
 
-            if (env_smooth) {
-                nj_s4 ei = (nj_s4)
-                    ((((nj_u4)(eev >> MR_FP) << e_wbit)
-                      | (nj_u4)(eeu >> MR_FP))
-                     & (nj_u4)e_mask);
-                nj_u4 ep = mr_u32(e_raster + (nj_s8)ei * 4);
-
-                if (ep != 0) {
-                    pix = mr_env_add(pix, ep);
+                if (blend == NJ_MR_BLEND_REPLACE) {
+                    mr_raw_put(pp, pix, fmt);
+                } else {
+                    mr_raw_put(pp, mr_blend(pix, mr_raw_get(pp, fmt), blend), fmt);
                 }
             }
-
-            if (blend == NJ_MR_BLEND_REPLACE) {
-                mr_raw_put(pp, pix, fmt);
-            } else {
-                mr_raw_put(pp, mr_blend(pix, mr_raw_get(pp, fmt), blend), fmt);
+                break;
             }
         }
         x += dx;

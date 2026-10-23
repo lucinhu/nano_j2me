@@ -578,6 +578,13 @@
 #ifndef NJ_JIT_MAX_FAULTS
 #  define NJ_JIT_MAX_FAULTS 4
 #endif
+/* A block leaves native code through a small set of exits: the end of the
+ * straight-line window, taken forward branches that leave the window and the
+ * quantum-budget check of a loop. Four exits cover the common loop shape; the
+ * block is refined (or split) when it needs more. */
+#ifndef NJ_JIT_MAX_EXITS
+#  define NJ_JIT_MAX_EXITS 4
+#endif
 #ifndef NJ_JIT_MIN_BLOCK_INSNS
 #  define NJ_JIT_MIN_BLOCK_INSNS 4
 #endif
@@ -617,6 +624,7 @@
     NJ_JIT_METHOD_ARENA_BYTES < 256 || NJ_JIT_METHOD_ARENA_BYTES > 65534 || \
     NJ_JIT_METHOD_ARENA_BYTES % 2 != 0 || \
     NJ_JIT_MAX_FAULTS < 1 || NJ_JIT_MAX_FAULTS > 16 || \
+    NJ_JIT_MAX_EXITS < 1 || NJ_JIT_MAX_EXITS > 8 || \
     NJ_JIT_HOT_THRESHOLD < 1 || NJ_JIT_HOT_THRESHOLD > 16383 || \
     NJ_JIT_MAX_BLOCK_INSNS < 1 || NJ_JIT_MAX_BLOCK_INSNS > 128 || \
     NJ_JIT_MIN_BLOCK_INSNS < 1 || NJ_JIT_MIN_BLOCK_INSNS > NJ_JIT_MAX_BLOCK_INSNS || \
@@ -641,6 +649,17 @@
 #  define NJ_JIT_HOST_ARM64 0
 #endif
 #define NJ_JIT_HOST_SUPPORTED (NJ_JIT_HOST_RV32 || NJ_JIT_HOST_ARM64)
+
+/* Mascot Capsule triangle rasteriser: write the attribute combinations that
+ * dominate real scenes (textured and untextured, flat and smooth shaded,
+ * replace and half blend) as separate span loops, so the per-pixel branch tree
+ * is resolved once per row.  Worth about 14-28% of the rasteriser's own time
+ * on the deterministic bench, at the cost of roughly 10 KB of code (no RAM,
+ * no new state).  0 keeps the single generic loop, which draws the same
+ * pixels. */
+#ifndef NJ_MASCOT_RASTER_SPANS
+#  define NJ_MASCOT_RASTER_SPANS 1
+#endif
 
 /* M3G common-case raster/clip paths. No persistent storage; native stack use
  * depends on the compiler (see docs/PERFORMANCE.md). Disable for the general

@@ -132,6 +132,7 @@ set(NJ_JIT_CACHE_WAYS 2 CACHE STRING "JIT code cache associativity: 1, 2, or 4")
 set(NJ_JIT_METHOD_ENTRIES 32 CACHE STRING "Per-VM JIT probe maps; LRU recycled")
 set(NJ_JIT_METHOD_ARENA_BYTES 4096 CACHE STRING "Fixed JIT probe-map arena in bytes")
 set(NJ_JIT_MAX_FAULTS 4 CACHE STRING "Guarded instructions recorded per native block")
+set(NJ_JIT_MAX_EXITS 4 CACHE STRING "Native block exits (window end, branches, loop budget)")
 set(NJ_JIT_MIN_BLOCK_INSNS 4 CACHE STRING "Minimum bytecodes worth compiling")
 set(NJ_JIT_STATS 1 CACHE STRING "Collect batched JIT execution counters")
 set(NJ_JIT_DETAILED_STATS 0 CACHE STRING "Collect probe reasons and execution-weighted block lengths")
@@ -140,6 +141,7 @@ set(NJ_JIT_HOT_THRESHOLD 8 CACHE STRING "Hits before compiling a bytecode block"
 set(NJ_JIT_MAX_BLOCK_INSNS 32 CACHE STRING "Maximum bytecodes per native block")
 set(NJ_JIT_MAX_CODE_BYTES 2048 CACHE STRING "Maximum native bytes per block")
 set(NJ_ENABLE_HOT_FIELDS 1 CACHE STRING "Memoise hot Midp field lookups (+192 B per VM for 24 slots)")
+set(NJ_MASCOT_RASTER_SPANS 1 CACHE STRING "Specialised Mascot rasteriser span loops (+10 KB code)")
 set(NJ_MASCOT_FAST_FIELDS 1 CACHE STRING "Use Micro3D receiver classes directly for field access (no cache)")
 set(NJ_MASCOT_MAX_QUEUED_TRIANGLES 16384 CACHE STRING "Maximum deferred Micro3D primitives per Graphics3D")
 
@@ -259,6 +261,7 @@ target_compile_definitions(nj2me PUBLIC
   NJ_JIT_METHOD_ENTRIES=${NJ_JIT_METHOD_ENTRIES}
   NJ_JIT_METHOD_ARENA_BYTES=${NJ_JIT_METHOD_ARENA_BYTES}
   NJ_JIT_MAX_FAULTS=${NJ_JIT_MAX_FAULTS}
+  NJ_JIT_MAX_EXITS=${NJ_JIT_MAX_EXITS}
   NJ_JIT_MIN_BLOCK_INSNS=${NJ_JIT_MIN_BLOCK_INSNS}
   NJ_JIT_STATS=${NJ_JIT_STATS}
   NJ_JIT_DETAILED_STATS=${NJ_JIT_DETAILED_STATS}
@@ -268,7 +271,8 @@ target_compile_definitions(nj2me PUBLIC
   NJ_JIT_MAX_CODE_BYTES=${NJ_JIT_MAX_CODE_BYTES}
   NJ_M3G_FAST_PATHS=${NJ_M3G_FAST_PATHS}
   NJ_ENABLE_HOT_FIELDS=${NJ_ENABLE_HOT_FIELDS}
-  NJ_MASCOT_FAST_FIELDS=${NJ_MASCOT_FAST_FIELDS}
+  NJ_MASCOT_RASTER_SPANS=${NJ_MASCOT_RASTER_SPANS}
+    NJ_MASCOT_FAST_FIELDS=${NJ_MASCOT_FAST_FIELDS}
   NJ_MASCOT_MAX_QUEUED_TRIANGLES=${NJ_MASCOT_MAX_QUEUED_TRIANGLES}
   NJ_ENABLE_FONT_CJK=${NJ_ENABLE_FONT_CJK}
   NJ_ENABLE_FONT_CJK_AA=${NJ_ENABLE_FONT_CJK_AA}

@@ -1942,3 +1942,49 @@ adds no RAM and `mr_fill_segment`'s frame is 176 B; the bone roster growth is a
 Java `Object[]` whose capacity is the array length (rigs of 64 or fewer links
 allocate exactly what they did before). No writable static data was added
 (the no-statics check still passes over 63 objects).
+
+## The rasteriser branch tree, resolved once per row (round 14, 2026-10-23)
+
+A Micro3D triangle has the same material flags for all of its pixels, yet the
+pixel loop was re-evaluating them for every pixel: textured or not, flat or
+Gouraud shaded, toon or not, environment map or not, and which blend mode.
+
+The rasteriser now writes the combinations that dominate real scenes as
+separate span loops - textured flat and smooth shading, each with replace and
+half blend, untextured smooth shading with both blends, and a constant-colour
+fill - and keeps the generic loop as the fallback for everything else (toon,
+environment maps, ADD/SUB, the other colour-key orders).  A macro generates
+each loop from one body so the arithmetic stays the one in the generic loop,
+and the mode is chosen once per row, which is cheap because spans are wide.
+
+Measurement: the deterministic raster bench (`tools/`-style harness in
+`.local-tools/debug-runs/perf-round9-20261022/raster-bench/`, 20,000 random
+triangles per configuration through `nj_mascot_raster_draw` on a 240x320
+ARGB8888 surface, 8 interleaved ABBA pairs pinned to one CPU):
+
+| configuration | base min | cand min | min | median | framebuffer |
+|---|---:|---:|---:|---:|---|
+| textured, smooth, replace | 116.571 ms | 98.813 ms | -15.23% | -15.04% | identical |
+| textured, smooth, half | 141.146 ms | 121.888 ms | -13.64% | -12.66% | identical |
+| flat colour, smooth, replace | 33.769 ms | 24.366 ms | -27.85% | -28.09% | identical |
+| textured, flat, replace | 113.039 ms | 96.924 ms | -14.26% | -14.03% | identical |
+| textured, smooth, environment | 154.965 ms | 160.576 ms | +3.62% | -1.73% | identical |
+| total | 559.490 ms | 502.567 ms | -10.17% | | |
+
+The environment row is the unchanged generic path and its spread is the
+measurement noise; it is not a regression.  Correctness: the span loops were
+checked against the previous implementation with five bench seeds (different
+random geometry, 5 configurations x 20,000 triangles each, 500,000 triangles in
+total) and every framebuffer hash matched, `tests/test_mascot_raster.c` stays
+byte-identical at 71 checks, and an ASan+UBSan build of that test reports
+nothing.  Full ctest 101/101, bench.jar and the 27-value digest unchanged.
+
+Cost: the rasteriser object grows from 17,379 to 27,823 bytes of text at the
+shipped `-O3` (+10.4 KB, no RAM, no new state), and `mr_fill_segment`'s frame
+grows by 120 bytes to 296 (still below the unchanged 960-byte triangle frame).
+`-DNJ_MASCOT_RASTER_SPANS=0` compiles the single generic loop instead (object
+17,627 bytes) and draws the same picture.
+
+This is a rasteriser measurement, not a game frame rate: a paced 鬼泣3D replay
+was run as a check and its bytecode/triangle counts vary by several percent
+between identical runs, so no game-level percentage is claimed.
