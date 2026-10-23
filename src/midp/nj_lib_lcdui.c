@@ -1807,7 +1807,20 @@ NJFN(g_drawRGB)
     if (!rgb) {
         return nj_throw_oom(vm);
     }
-    {
+    if (arr->kind == NJ_OBJ_ARRAY && arr->aflags == NJ_ARRAY_T_INT) {
+        nj_s4 row, col;
+        /* The row endpoints were checked above, including negative strides.
+         * Test the element type once instead of repeating array checks for
+         * every pixel; retain the same ARGB staging allocation and blending. */
+        for (row = 0; row < h; row++) {
+            for (col = 0; col < w; col++) {
+                nj_u4 p = ((const nj_u4 *)arr->u.bytes)[
+                    (nj_s8)offset + (nj_s8)row * scan + col];
+                rgb[(nj_size)row * (nj_size)w + (nj_size)col] =
+                    alpha ? p : (p | 0xFF000000u);
+            }
+        }
+    } else {
         nj_s4 row, col;
         for (row = 0; row < h; row++) {
             for (col = 0; col < w; col++) {

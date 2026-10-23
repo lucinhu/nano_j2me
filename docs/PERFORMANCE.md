@@ -1988,3 +1988,61 @@ grows by 120 bytes to 296 (still below the unchanged 960-byte triangle frame).
 This is a rasteriser measurement, not a game frame rate: a paced 鬼泣3D replay
 was run as a check and its bytecode/triangle counts vary by several percent
 between identical runs, so no game-level percentage is claimed.
+
+## drawRGB after the source range has already been checked (2026-10-23)
+
+`Graphics.drawRGB` already validates the source row endpoints with 64-bit
+arithmetic before staging pixels. Nevertheless, every staged pixel went
+through `nj_array_get_int`, repeating the array kind, bounds and element-type
+checks. The new path checks once that the source is an actual `int[]` and
+reads its payload directly. Other array kinds passed by native C callers
+retain the generic accessor. The row structure, alpha expression, exception
+order, staging allocation and drawing order are unchanged. Staging remains
+necessary when the source is the destination image's own pixel array.
+
+The frozen parent is `3c3070767f235bc59a0331bb90d9374eb8923e8e`.
+A native harness calls the registered Java drawing native, including staging
+and the complete draw operation. Each timed process performs 199,000 calls
+and consumes 740,800,000 source pixels across six cases: opaque large images,
+alpha-enabled opaque images, mixed alpha, negative scan with clipping and
+translation, small images, and source/destination overlap. Both arms use the
+same Release library with only the LCDUI object replaced. Measurement uses
+`CLOCK_PROCESS_CPUTIME_ID`, CPU 23, and two ABBA groups (four runs per arm).
+
+| Combined CPU time | Parent | Candidate | Reduction |
+|---|---:|---:|---:|
+| Minimum | 1.298835 s | 0.849530 s | 34.59% |
+| Median | 1.299760 s | 0.850132 s | 34.59% |
+
+The first parent sample was slower (1.583321 s); the minimum and median above
+avoid presenting that outlier as additional benefit. Every pixel hash,
+call count, heap-use value, host allocation counter and teardown count agrees
+across all eight runs. This is a measured native drawing improvement, not an
+emulator-wide speedup or a game FPS percentage. The real-game replays were
+capped at 30 FPS and their work varies with time, so they cannot support such
+a percentage. RV32 and ARM targets were not benchmarked in this round.
+
+Semantic comparison includes 97 image/screen cases with positive, negative,
+zero and overlapping scan lengths, clipping, translation, source/destination
+overlap, alpha boundary values and the non-int-array fallback, plus six
+invalid/empty argument cases. The aggregate image hash is
+`7556dac9ba7ed1a1` in both arms. Existing LCDUI and graphics suites pass
+3,108 and 324 assertions respectively. Four original-game parent/fixed
+900-frame replays finish without uncaught exceptions; their stage limits and
+sample comparisons are documented in
+[COMPATIBILITY.md](COMPATIBILITY.md#stream-reads-checked-against-the-official-cldc-contracts-2026-10-23).
+The full integrated tree passes CTest 102/102 and the LCDUI suite also passes
+ASan/UBSan with leak checking.
+
+RAM is unchanged on the measured x86_64 build: `g_drawRGB` stack usage is
+320→320 B, the LCDUI object data is 28,960→28,960 B, BSS is 0→0, and the
+existing temporary buffer has the same size, count and lifetime. Object text
+increases 120 B. A preliminary copy-loop variant used 16 B more stack and
+was rejected in favour of this candidate. No configuration switch is needed
+for the retained path's measured RAM footprint.
+
+Reproduction artifacts are under
+`.local-tools/debug-runs/official-round46-20261023/`: the scout's
+`perf-scout/REPORT.md`, harness, assembly and stack reports; the Lead's
+`lead/abba-summary.json`, eight raw ABBA logs, game commands/hashes and
+sanitizer/full-suite logs. These local artifacts are not checked into Git.
