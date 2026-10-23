@@ -1,0 +1,5175 @@
+{
+  "date": "2026-10-23",
+  "base_revision": "36fefd2",
+  "branch": "perf/jit-cache-admission",
+  "source_commit": "6e8aef8",
+  "target": "anonymous embedded target",
+  "resolution": [
+    240,
+    320
+  ],
+  "volume": 40,
+  "superinstructions": false,
+  "threaded_dispatch": false,
+  "jit_statistics": true,
+  "detailed_statistics": false,
+  "fresh_temporary_rms": true,
+  "adapter": "fixed baseline snapshot",
+  "kernel_jar_sha256": "eb827f5c61d98617959705fdf0932f799230468b0cb756150477466894b3e0d9",
+  "baseline": {
+    "all": {
+      "off": [
+        {
+          "case": "cpu-0",
+          "elapsed_seconds": 8.653793,
+          "checks": [
+            "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+          ],
+          "perf": {
+            "presents": "313",
+            "present_us": "2050855",
+            "updated": "240",
+            "unchanged": "73",
+            "native_crc": "9e3b7837",
+            "lcd_crc": "cbd4506b",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 11385053,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "cpu-1",
+          "elapsed_seconds": 8.658828,
+          "checks": [
+            "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+          ],
+          "perf": {
+            "presents": "313",
+            "present_us": "2050661",
+            "updated": "240",
+            "unchanged": "73",
+            "native_crc": "9e3b7837",
+            "lcd_crc": "cbd4506b",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 11385053,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "render-0",
+          "elapsed_seconds": 5.450091,
+          "checks": [
+            "RENDER_BENCH frames=240 final=240"
+          ],
+          "perf": {
+            "presents": "241",
+            "present_us": "1496995",
+            "updated": "241",
+            "unchanged": "0",
+            "native_crc": "c28d5ef8",
+            "lcd_crc": "df7449c1",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 704929,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "render-1",
+          "elapsed_seconds": 5.450101,
+          "checks": [
+            "RENDER_BENCH frames=240 final=240"
+          ],
+          "perf": {
+            "presents": "241",
+            "present_us": "1497008",
+            "updated": "241",
+            "unchanged": "0",
+            "native_crc": "c28d5ef8",
+            "lcd_crc": "df7449c1",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 704929,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "audio-0",
+          "elapsed_seconds": 10.747904,
+          "checks": [
+            "AUDIO_BENCH_BEGIN WAV duration=3000000",
+            "AUDIO_BENCH_END WAV time=3000000 state=300",
+            "AUDIO_BENCH_BEGIN MIDI duration=3139682",
+            "AUDIO_BENCH_END MIDI time=3139682 state=300"
+          ],
+          "perf": {
+            "presents": "632",
+            "present_us": "2146388",
+            "updated": "2",
+            "unchanged": "630",
+            "native_crc": "45756d2b",
+            "lcd_crc": "67f08603",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 22627,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 581,
+              "frames": 297472,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 193338,
+              "accepted": 135380,
+              "short": 1,
+              "io_us": 6066893,
+              "volume_calls": 1,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 2771
+            }
+          ]
+        },
+        {
+          "case": "nfs14",
+          "elapsed_seconds": 7.344386,
+          "checks": [],
+          "perf": {
+            "presents": "301",
+            "present_us": "946869",
+            "updated": "3",
+            "unchanged": "298",
+            "native_crc": "ed752148",
+            "lcd_crc": "0d4e14b8",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 317905,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "nfs16",
+          "elapsed_seconds": 11.598336,
+          "checks": [],
+          "perf": {
+            "presents": "301",
+            "present_us": "1082209",
+            "updated": "34",
+            "unchanged": "267",
+            "native_crc": "218ed823",
+            "lcd_crc": "736a4521",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 7856593,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        }
+      ],
+      "on": [
+        {
+          "case": "cpu-0",
+          "elapsed_seconds": 13.269225,
+          "checks": [
+            "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+          ],
+          "perf": {
+            "presents": "553",
+            "present_us": "2830520",
+            "updated": "242",
+            "unchanged": "311",
+            "native_crc": "9e3b7837",
+            "lcd_crc": "cbd4506b",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 11390671,
+          "jit": {
+            "active": 1,
+            "compiled": 10,
+            "executed": 24372,
+            "bytecodes": 241333,
+            "declined": 41,
+            "code_bytes": 1024
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 25,
+            "short": 16,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 1024,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 10,
+            "commits": 10,
+            "refused": 0,
+            "peak": 1264,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "cpu-1",
+          "elapsed_seconds": 13.282025,
+          "checks": [
+            "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+          ],
+          "perf": {
+            "presents": "553",
+            "present_us": "2838534",
+            "updated": "242",
+            "unchanged": "311",
+            "native_crc": "9e3b7837",
+            "lcd_crc": "cbd4506b",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 11390671,
+          "jit": {
+            "active": 1,
+            "compiled": 10,
+            "executed": 24372,
+            "bytecodes": 241333,
+            "declined": 41,
+            "code_bytes": 1024
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 25,
+            "short": 16,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 1024,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 10,
+            "commits": 10,
+            "refused": 0,
+            "peak": 1264,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "render-0",
+          "elapsed_seconds": 5.455632,
+          "checks": [
+            "RENDER_BENCH frames=240 final=240"
+          ],
+          "perf": {
+            "presents": "241",
+            "present_us": "1506691",
+            "updated": "241",
+            "unchanged": "0",
+            "native_crc": "c28d5ef8",
+            "lcd_crc": "df7449c1",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 704929,
+          "jit": {
+            "active": 1,
+            "compiled": 7,
+            "executed": 31646,
+            "bytecodes": 373369,
+            "declined": 17,
+            "code_bytes": 814
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 6,
+            "short": 11,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 814,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 7,
+            "commits": 7,
+            "refused": 0,
+            "peak": 992,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "render-1",
+          "elapsed_seconds": 5.454547,
+          "checks": [
+            "RENDER_BENCH frames=240 final=240"
+          ],
+          "perf": {
+            "presents": "241",
+            "present_us": "1506785",
+            "updated": "241",
+            "unchanged": "0",
+            "native_crc": "c28d5ef8",
+            "lcd_crc": "df7449c1",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 704929,
+          "jit": {
+            "active": 1,
+            "compiled": 7,
+            "executed": 31646,
+            "bytecodes": 373369,
+            "declined": 17,
+            "code_bytes": 814
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 6,
+            "short": 11,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 814,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 7,
+            "commits": 7,
+            "refused": 0,
+            "peak": 992,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "audio-0",
+          "elapsed_seconds": 10.512883,
+          "checks": [
+            "AUDIO_BENCH_BEGIN WAV duration=3000000",
+            "AUDIO_BENCH_END WAV time=3000000 state=300",
+            "AUDIO_BENCH_BEGIN MIDI duration=3139682",
+            "AUDIO_BENCH_END MIDI time=3139682 state=300"
+          ],
+          "perf": {
+            "presents": "611",
+            "present_us": "2151254",
+            "updated": "2",
+            "unchanged": "609",
+            "native_crc": "45756d2b",
+            "lcd_crc": "67f08603",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 21934,
+          "jit": {
+            "active": 1,
+            "compiled": 2,
+            "executed": 757,
+            "bytecodes": 3177,
+            "declined": 11,
+            "code_bytes": 116
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 2,
+            "short": 9,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 116,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 2,
+            "commits": 2,
+            "refused": 0,
+            "peak": 176,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 581,
+              "frames": 297472,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 193338,
+              "accepted": 135380,
+              "short": 1,
+              "io_us": 6068173,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 2771
+            }
+          ]
+        },
+        {
+          "case": "nfs14",
+          "elapsed_seconds": 7.472394,
+          "checks": [],
+          "perf": {
+            "presents": "301",
+            "present_us": "974706",
+            "updated": "3",
+            "unchanged": "298",
+            "native_crc": "ed752148",
+            "lcd_crc": "0d4e14b8",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 317905,
+          "jit": {
+            "active": 1,
+            "compiled": 425,
+            "executed": 28129,
+            "bytecodes": 191115,
+            "declined": 276,
+            "code_bytes": 8384
+          },
+          "jit_detail": {
+            "evictions": 361,
+            "method_map_evictions": 110,
+            "recompiled": 15,
+            "unsupported": 120,
+            "short": 156,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 8608,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 425,
+            "commits": 425,
+            "refused": 0,
+            "peak": 10080,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "nfs16",
+          "elapsed_seconds": 13.129399,
+          "checks": [],
+          "perf": {
+            "presents": "301",
+            "present_us": "1039509",
+            "updated": "29",
+            "unchanged": "272",
+            "native_crc": "218ed823",
+            "lcd_crc": "736a4521",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 7856086,
+          "jit": {
+            "active": 1,
+            "compiled": 2029,
+            "executed": 281765,
+            "bytecodes": 2494686,
+            "declined": 11283,
+            "code_bytes": 10262
+          },
+          "jit_detail": {
+            "evictions": 1965,
+            "method_map_evictions": 23778,
+            "recompiled": 8169,
+            "unsupported": 7298,
+            "short": 3985,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 11346,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 2029,
+            "commits": 2029,
+            "refused": 0,
+            "peak": 12880,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        }
+      ]
+    },
+    "kernels": {
+      "off": [
+        {
+          "case": "kernels-0",
+          "elapsed_seconds": 1.10041,
+          "checks": [
+            "KERNEL name=locals iterations=50000 checksum=2f66c58 elapsed_ms=144",
+            "KERNEL name=constants iterations=50000 checksum=839a908 elapsed_ms=112",
+            "KERNEL name=fields iterations=50000 checksum=4c1935ff elapsed_ms=210",
+            "KERNEL name=arrays iterations=50000 checksum=452ca3 elapsed_ms=206",
+            "KERNEL name=branches iterations=50000 checksum=a632cf73 elapsed_ms=205",
+            "KERNELS_DONE"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "21582",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 4821095,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "kernels-1",
+          "elapsed_seconds": 1.099351,
+          "checks": [
+            "KERNEL name=locals iterations=50000 checksum=2f66c58 elapsed_ms=144",
+            "KERNEL name=constants iterations=50000 checksum=839a908 elapsed_ms=112",
+            "KERNEL name=fields iterations=50000 checksum=4c1935ff elapsed_ms=210",
+            "KERNEL name=arrays iterations=50000 checksum=452ca3 elapsed_ms=205",
+            "KERNEL name=branches iterations=50000 checksum=a632cf73 elapsed_ms=205",
+            "KERNELS_DONE"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "21441",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 4821095,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        }
+      ],
+      "probe": [
+        {
+          "case": "kernels-0",
+          "elapsed_seconds": 1.664628,
+          "checks": [
+            "KERNEL name=locals iterations=50000 checksum=2f66c58 elapsed_ms=237",
+            "KERNEL name=constants iterations=50000 checksum=839a908 elapsed_ms=182",
+            "KERNEL name=fields iterations=50000 checksum=4c1935ff elapsed_ms=358",
+            "KERNEL name=arrays iterations=50000 checksum=452ca3 elapsed_ms=311",
+            "KERNEL name=branches iterations=50000 checksum=a632cf73 elapsed_ms=352",
+            "KERNELS_DONE"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "22210",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 4821095,
+          "jit": {
+            "active": 1,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 18,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 17,
+            "short": 1,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "kernels-1",
+          "elapsed_seconds": 1.664001,
+          "checks": [
+            "KERNEL name=locals iterations=50000 checksum=2f66c58 elapsed_ms=236",
+            "KERNEL name=constants iterations=50000 checksum=839a908 elapsed_ms=182",
+            "KERNEL name=fields iterations=50000 checksum=4c1935ff elapsed_ms=358",
+            "KERNEL name=arrays iterations=50000 checksum=452ca3 elapsed_ms=310",
+            "KERNEL name=branches iterations=50000 checksum=a632cf73 elapsed_ms=352",
+            "KERNELS_DONE"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "22042",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 4821095,
+          "jit": {
+            "active": 1,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 18,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 17,
+            "short": 1,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        }
+      ],
+      "on": [
+        {
+          "case": "kernels-0",
+          "elapsed_seconds": 1.957862,
+          "checks": [
+            "KERNEL name=locals iterations=50000 checksum=2f66c58 elapsed_ms=12",
+            "KERNEL name=constants iterations=50000 checksum=839a908 elapsed_ms=6",
+            "KERNEL name=fields iterations=50000 checksum=4c1935ff elapsed_ms=12",
+            "KERNEL name=arrays iterations=50000 checksum=452ca3 elapsed_ms=21",
+            "KERNEL name=branches iterations=50000 checksum=a632cf73 elapsed_ms=1681",
+            "KERNELS_DONE"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "21328",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 4821095,
+          "jit": {
+            "active": 1,
+            "compiled": 5,
+            "executed": 246,
+            "bytecodes": 4811569,
+            "declined": 18,
+            "code_bytes": 1708
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 17,
+            "short": 1,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 1708,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 5,
+            "commits": 5,
+            "refused": 0,
+            "peak": 1824,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "kernels-1",
+          "elapsed_seconds": 1.956811,
+          "checks": [
+            "KERNEL name=locals iterations=50000 checksum=2f66c58 elapsed_ms=12",
+            "KERNEL name=constants iterations=50000 checksum=839a908 elapsed_ms=6",
+            "KERNEL name=fields iterations=50000 checksum=4c1935ff elapsed_ms=12",
+            "KERNEL name=arrays iterations=50000 checksum=452ca3 elapsed_ms=21",
+            "KERNEL name=branches iterations=50000 checksum=a632cf73 elapsed_ms=1681",
+            "KERNELS_DONE"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "21412",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 4821095,
+          "jit": {
+            "active": 1,
+            "compiled": 5,
+            "executed": 246,
+            "bytecodes": 4811569,
+            "declined": 18,
+            "code_bytes": 1708
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 17,
+            "short": 1,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 1708,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 5,
+            "commits": 5,
+            "refused": 0,
+            "peak": 1824,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        }
+      ]
+    },
+    "mixed": {
+      "on": [
+        {
+          "case": "mixed-0",
+          "elapsed_seconds": 0.262018,
+          "checks": [
+            "MIXED iterations=50000 checksum=553f49c9 elapsed_ms=33"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "23314",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 2051003,
+          "jit": {
+            "active": 1,
+            "compiled": 2,
+            "executed": 105,
+            "bytecodes": 2045338,
+            "declined": 8,
+            "code_bytes": 1232
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 8,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 1232,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 2,
+            "commits": 2,
+            "refused": 0,
+            "peak": 1280,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "mixed-1",
+          "elapsed_seconds": 0.261764,
+          "checks": [
+            "MIXED iterations=50000 checksum=553f49c9 elapsed_ms=33"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "22730",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 2051003,
+          "jit": {
+            "active": 1,
+            "compiled": 2,
+            "executed": 105,
+            "bytecodes": 2045338,
+            "declined": 8,
+            "code_bytes": 1232
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 8,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 1232,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 2,
+            "commits": 2,
+            "refused": 0,
+            "peak": 1280,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "candidate": {
+    "all": {
+      "off": [
+        {
+          "case": "cpu-0",
+          "elapsed_seconds": 8.665678,
+          "checks": [
+            "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+          ],
+          "perf": {
+            "presents": "313",
+            "present_us": "2050025",
+            "updated": "240",
+            "unchanged": "73",
+            "native_crc": "9e3b7837",
+            "lcd_crc": "cbd4506b",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 11385053,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "cpu-1",
+          "elapsed_seconds": 8.684701,
+          "checks": [
+            "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+          ],
+          "perf": {
+            "presents": "313",
+            "present_us": "2061381",
+            "updated": "240",
+            "unchanged": "73",
+            "native_crc": "9e3b7837",
+            "lcd_crc": "cbd4506b",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 11385053,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "render-0",
+          "elapsed_seconds": 5.450026,
+          "checks": [
+            "RENDER_BENCH frames=240 final=240"
+          ],
+          "perf": {
+            "presents": "241",
+            "present_us": "1497302",
+            "updated": "241",
+            "unchanged": "0",
+            "native_crc": "c28d5ef8",
+            "lcd_crc": "df7449c1",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 704929,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "render-1",
+          "elapsed_seconds": 5.450033,
+          "checks": [
+            "RENDER_BENCH frames=240 final=240"
+          ],
+          "perf": {
+            "presents": "241",
+            "present_us": "1496855",
+            "updated": "241",
+            "unchanged": "0",
+            "native_crc": "c28d5ef8",
+            "lcd_crc": "df7449c1",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 704929,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "audio-0",
+          "elapsed_seconds": 10.767925,
+          "checks": [
+            "AUDIO_BENCH_BEGIN WAV duration=3000000",
+            "AUDIO_BENCH_END WAV time=3000000 state=300",
+            "AUDIO_BENCH_BEGIN MIDI duration=3139682",
+            "AUDIO_BENCH_END MIDI time=3139682 state=300"
+          ],
+          "perf": {
+            "presents": "637",
+            "present_us": "2120756",
+            "updated": "2",
+            "unchanged": "635",
+            "native_crc": "45756d2b",
+            "lcd_crc": "67f08603",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 22792,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 581,
+              "frames": 297472,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 193338,
+              "accepted": 135380,
+              "short": 1,
+              "io_us": 6062345,
+              "volume_calls": 1,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 2771
+            }
+          ]
+        },
+        {
+          "case": "nfs14",
+          "elapsed_seconds": 7.355446,
+          "checks": [],
+          "perf": {
+            "presents": "301",
+            "present_us": "946832",
+            "updated": "3",
+            "unchanged": "298",
+            "native_crc": "ed752148",
+            "lcd_crc": "0d4e14b8",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 317905,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "nfs16",
+          "elapsed_seconds": 11.602327,
+          "checks": [],
+          "perf": {
+            "presents": "301",
+            "present_us": "1082294",
+            "updated": "33",
+            "unchanged": "268",
+            "native_crc": "218ed823",
+            "lcd_crc": "736a4521",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 7856773,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        }
+      ],
+      "on": [
+        {
+          "case": "cpu-0",
+          "elapsed_seconds": 2.915034,
+          "checks": [
+            "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+          ],
+          "perf": {
+            "presents": "120",
+            "present_us": "748329",
+            "updated": "120",
+            "unchanged": "0",
+            "native_crc": "9e3b7837",
+            "lcd_crc": "cbd4506b",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 11379435,
+          "jit": {
+            "active": 1,
+            "compiled": 8,
+            "executed": 24037,
+            "bytecodes": 11256798,
+            "declined": 45,
+            "code_bytes": 1192
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 29,
+            "short": 16,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 1192,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 8,
+            "commits": 8,
+            "refused": 0,
+            "peak": 1376,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "cpu-1",
+          "elapsed_seconds": 2.915057,
+          "checks": [
+            "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+          ],
+          "perf": {
+            "presents": "120",
+            "present_us": "748364",
+            "updated": "120",
+            "unchanged": "0",
+            "native_crc": "9e3b7837",
+            "lcd_crc": "cbd4506b",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 11379435,
+          "jit": {
+            "active": 1,
+            "compiled": 8,
+            "executed": 24037,
+            "bytecodes": 11256798,
+            "declined": 45,
+            "code_bytes": 1192
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 29,
+            "short": 16,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 1192,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 8,
+            "commits": 8,
+            "refused": 0,
+            "peak": 1376,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "render-0",
+          "elapsed_seconds": 5.455551,
+          "checks": [
+            "RENDER_BENCH frames=240 final=240"
+          ],
+          "perf": {
+            "presents": "241",
+            "present_us": "1506955",
+            "updated": "241",
+            "unchanged": "0",
+            "native_crc": "c28d5ef8",
+            "lcd_crc": "df7449c1",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 704929,
+          "jit": {
+            "active": 1,
+            "compiled": 7,
+            "executed": 31646,
+            "bytecodes": 373369,
+            "declined": 17,
+            "code_bytes": 814
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 6,
+            "short": 11,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 814,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 7,
+            "commits": 7,
+            "refused": 0,
+            "peak": 992,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "render-1",
+          "elapsed_seconds": 5.456562,
+          "checks": [
+            "RENDER_BENCH frames=240 final=240"
+          ],
+          "perf": {
+            "presents": "241",
+            "present_us": "1507074",
+            "updated": "241",
+            "unchanged": "0",
+            "native_crc": "c28d5ef8",
+            "lcd_crc": "df7449c1",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 704929,
+          "jit": {
+            "active": 1,
+            "compiled": 7,
+            "executed": 31646,
+            "bytecodes": 373369,
+            "declined": 17,
+            "code_bytes": 814
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 6,
+            "short": 11,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 814,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 7,
+            "commits": 7,
+            "refused": 0,
+            "peak": 992,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "audio-0",
+          "elapsed_seconds": 10.88527,
+          "checks": [
+            "AUDIO_BENCH_BEGIN WAV duration=3000000",
+            "AUDIO_BENCH_END WAV time=3000000 state=300",
+            "AUDIO_BENCH_BEGIN MIDI duration=3139682",
+            "AUDIO_BENCH_END MIDI time=3139682 state=300"
+          ],
+          "perf": {
+            "presents": "637",
+            "present_us": "2195894",
+            "updated": "2",
+            "unchanged": "635",
+            "native_crc": "45756d2b",
+            "lcd_crc": "67f08603",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 22792,
+          "jit": {
+            "active": 1,
+            "compiled": 2,
+            "executed": 783,
+            "bytecodes": 3281,
+            "declined": 11,
+            "code_bytes": 116
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 2,
+            "short": 9,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 116,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 2,
+            "commits": 2,
+            "refused": 0,
+            "peak": 176,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 581,
+              "frames": 297472,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 193338,
+              "accepted": 135380,
+              "short": 1,
+              "io_us": 6063893,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 2771
+            }
+          ]
+        },
+        {
+          "case": "nfs14",
+          "elapsed_seconds": 7.458206,
+          "checks": [],
+          "perf": {
+            "presents": "301",
+            "present_us": "973509",
+            "updated": "3",
+            "unchanged": "298",
+            "native_crc": "ed752148",
+            "lcd_crc": "0d4e14b8",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 317905,
+          "jit": {
+            "active": 1,
+            "compiled": 403,
+            "executed": 26306,
+            "bytecodes": 221819,
+            "declined": 189,
+            "code_bytes": 9242
+          },
+          "jit_detail": {
+            "evictions": 339,
+            "method_map_evictions": 110,
+            "recompiled": 15,
+            "unsupported": 105,
+            "short": 84,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 9920,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 403,
+            "commits": 403,
+            "refused": 0,
+            "peak": 11360,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "nfs16",
+          "elapsed_seconds": 13.660143,
+          "checks": [],
+          "perf": {
+            "presents": "301",
+            "present_us": "1063297",
+            "updated": "31",
+            "unchanged": "270",
+            "native_crc": "218ed823",
+            "lcd_crc": "736a4521",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 7856222,
+          "jit": {
+            "active": 1,
+            "compiled": 668,
+            "executed": 257773,
+            "bytecodes": 2606608,
+            "declined": 6672,
+            "code_bytes": 13388
+          },
+          "jit_detail": {
+            "evictions": 604,
+            "method_map_evictions": 23784,
+            "recompiled": 7005,
+            "unsupported": 3337,
+            "short": 3335,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 14776,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 668,
+            "commits": 668,
+            "refused": 0,
+            "peak": 16288,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        }
+      ]
+    },
+    "kernels": {
+      "off": [
+        {
+          "case": "kernels-0",
+          "elapsed_seconds": 1.099412,
+          "checks": [
+            "KERNEL name=locals iterations=50000 checksum=2f66c58 elapsed_ms=144",
+            "KERNEL name=constants iterations=50000 checksum=839a908 elapsed_ms=112",
+            "KERNEL name=fields iterations=50000 checksum=4c1935ff elapsed_ms=209",
+            "KERNEL name=arrays iterations=50000 checksum=452ca3 elapsed_ms=205",
+            "KERNEL name=branches iterations=50000 checksum=a632cf73 elapsed_ms=206",
+            "KERNELS_DONE"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "21522",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 4821095,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "kernels-1",
+          "elapsed_seconds": 1.100356,
+          "checks": [
+            "KERNEL name=locals iterations=50000 checksum=2f66c58 elapsed_ms=145",
+            "KERNEL name=constants iterations=50000 checksum=839a908 elapsed_ms=112",
+            "KERNEL name=fields iterations=50000 checksum=4c1935ff elapsed_ms=210",
+            "KERNEL name=arrays iterations=50000 checksum=452ca3 elapsed_ms=206",
+            "KERNEL name=branches iterations=50000 checksum=a632cf73 elapsed_ms=206",
+            "KERNELS_DONE"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "21507",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 4821095,
+          "jit": {
+            "active": 0,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 0,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 0,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 0,
+            "stats": 0,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        }
+      ],
+      "probe": [
+        {
+          "case": "kernels-0",
+          "elapsed_seconds": 1.665826,
+          "checks": [
+            "KERNEL name=locals iterations=50000 checksum=2f66c58 elapsed_ms=236",
+            "KERNEL name=constants iterations=50000 checksum=839a908 elapsed_ms=181",
+            "KERNEL name=fields iterations=50000 checksum=4c1935ff elapsed_ms=359",
+            "KERNEL name=arrays iterations=50000 checksum=452ca3 elapsed_ms=311",
+            "KERNEL name=branches iterations=50000 checksum=a632cf73 elapsed_ms=354",
+            "KERNELS_DONE"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "21615",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 4821095,
+          "jit": {
+            "active": 1,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 18,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 17,
+            "short": 1,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "kernels-1",
+          "elapsed_seconds": 1.666115,
+          "checks": [
+            "KERNEL name=locals iterations=50000 checksum=2f66c58 elapsed_ms=236",
+            "KERNEL name=constants iterations=50000 checksum=839a908 elapsed_ms=182",
+            "KERNEL name=fields iterations=50000 checksum=4c1935ff elapsed_ms=359",
+            "KERNEL name=arrays iterations=50000 checksum=452ca3 elapsed_ms=312",
+            "KERNEL name=branches iterations=50000 checksum=a632cf73 elapsed_ms=354",
+            "KERNELS_DONE"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "21549",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 4821095,
+          "jit": {
+            "active": 1,
+            "compiled": 0,
+            "executed": 0,
+            "bytecodes": 0,
+            "declined": 18,
+            "code_bytes": 0
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 17,
+            "short": 1,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 0,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 0,
+            "commits": 0,
+            "refused": 0,
+            "peak": 0,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        }
+      ],
+      "on": [
+        {
+          "case": "kernels-0",
+          "elapsed_seconds": 1.958605,
+          "checks": [
+            "KERNEL name=locals iterations=50000 checksum=2f66c58 elapsed_ms=12",
+            "KERNEL name=constants iterations=50000 checksum=839a908 elapsed_ms=6",
+            "KERNEL name=fields iterations=50000 checksum=4c1935ff elapsed_ms=12",
+            "KERNEL name=arrays iterations=50000 checksum=452ca3 elapsed_ms=21",
+            "KERNEL name=branches iterations=50000 checksum=a632cf73 elapsed_ms=1682",
+            "KERNELS_DONE"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "21405",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 4821095,
+          "jit": {
+            "active": 1,
+            "compiled": 5,
+            "executed": 246,
+            "bytecodes": 4811569,
+            "declined": 18,
+            "code_bytes": 1708
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 17,
+            "short": 1,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 1708,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 5,
+            "commits": 5,
+            "refused": 0,
+            "peak": 1824,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "kernels-1",
+          "elapsed_seconds": 1.957797,
+          "checks": [
+            "KERNEL name=locals iterations=50000 checksum=2f66c58 elapsed_ms=12",
+            "KERNEL name=constants iterations=50000 checksum=839a908 elapsed_ms=6",
+            "KERNEL name=fields iterations=50000 checksum=4c1935ff elapsed_ms=12",
+            "KERNEL name=arrays iterations=50000 checksum=452ca3 elapsed_ms=21",
+            "KERNEL name=branches iterations=50000 checksum=a632cf73 elapsed_ms=1682",
+            "KERNELS_DONE"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "21465",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 4821095,
+          "jit": {
+            "active": 1,
+            "compiled": 5,
+            "executed": 246,
+            "bytecodes": 4811569,
+            "declined": 18,
+            "code_bytes": 1708
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 17,
+            "short": 1,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 1708,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 5,
+            "commits": 5,
+            "refused": 0,
+            "peak": 1824,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        }
+      ]
+    },
+    "mixed": {
+      "on": [
+        {
+          "case": "mixed-0",
+          "elapsed_seconds": 0.260536,
+          "checks": [
+            "MIXED iterations=50000 checksum=553f49c9 elapsed_ms=33"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "22562",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 2051003,
+          "jit": {
+            "active": 1,
+            "compiled": 2,
+            "executed": 105,
+            "bytecodes": 2045338,
+            "declined": 8,
+            "code_bytes": 1232
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 8,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 1232,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 2,
+            "commits": 2,
+            "refused": 0,
+            "peak": 1280,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        },
+        {
+          "case": "mixed-1",
+          "elapsed_seconds": 0.260416,
+          "checks": [
+            "MIXED iterations=50000 checksum=553f49c9 elapsed_ms=32"
+          ],
+          "perf": {
+            "presents": "5",
+            "present_us": "22205",
+            "updated": "1",
+            "unchanged": "4",
+            "native_crc": "066e64a1",
+            "lcd_crc": "743ecd69",
+            "hot_live": "0",
+            "scale_mismatch": "0"
+          },
+          "exit_code": 0,
+          "memory_delta": 0,
+          "java_bytecodes": 2051003,
+          "jit": {
+            "active": 1,
+            "compiled": 2,
+            "executed": 105,
+            "bytecodes": 2045338,
+            "declined": 8,
+            "code_bytes": 1232
+          },
+          "jit_detail": {
+            "evictions": 0,
+            "method_map_evictions": 0,
+            "recompiled": 0,
+            "unsupported": 8,
+            "short": 0,
+            "faults": 0,
+            "memory_failures": 0,
+            "commit_failures": 0,
+            "peak_code": 1232,
+            "metadata": 11480,
+            "stats": 1,
+            "detailed": 0
+          },
+          "jit_memory": {
+            "allocations": 2,
+            "commits": 2,
+            "refused": 0,
+            "peak": 1280,
+            "live": 0
+          },
+          "audio": [
+            {
+              "writes": 0,
+              "frames": 0,
+              "errors": 0,
+              "tones": 0,
+              "volume": 40
+            },
+            {
+              "offered": 0,
+              "accepted": 0,
+              "short": 0,
+              "io_us": 0,
+              "volume_calls": 0,
+              "queued": 0,
+              "underruns": 0,
+              "silence_frames": 0
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "scene_fps": {
+    "bounce": {
+      "baseline_on": {
+        "mean": 12.9525,
+        "median": 13.4,
+        "minimum": 5.7,
+        "maximum": 15.9,
+        "samples": [
+          {
+            "sample": 0,
+            "time_seconds": 1.0840012691915035e-05,
+            "fps": 11.6
+          },
+          {
+            "sample": 1,
+            "time_seconds": 0.7422333739814349,
+            "fps": 7.9
+          },
+          {
+            "sample": 2,
+            "time_seconds": 1.3746840379899368,
+            "fps": 11.7
+          },
+          {
+            "sample": 3,
+            "time_seconds": 2.029485945997294,
+            "fps": 9.8
+          },
+          {
+            "sample": 4,
+            "time_seconds": 2.7168427350115962,
+            "fps": 13.6
+          },
+          {
+            "sample": 5,
+            "time_seconds": 3.3421713139978237,
+            "fps": 11.6
+          },
+          {
+            "sample": 6,
+            "time_seconds": 3.990299571014475,
+            "fps": 15.9
+          },
+          {
+            "sample": 7,
+            "time_seconds": 4.630938321992289,
+            "fps": 15.6
+          },
+          {
+            "sample": 8,
+            "time_seconds": 5.329226768983062,
+            "fps": 11.7
+          },
+          {
+            "sample": 9,
+            "time_seconds": 5.975933363020886,
+            "fps": 15.9
+          },
+          {
+            "sample": 10,
+            "time_seconds": 6.631870277982671,
+            "fps": 15.8
+          },
+          {
+            "sample": 11,
+            "time_seconds": 7.268676950014196,
+            "fps": 9.8
+          },
+          {
+            "sample": 12,
+            "time_seconds": 7.952505033987109,
+            "fps": 11.9
+          },
+          {
+            "sample": 13,
+            "time_seconds": 8.584483926999383,
+            "fps": 13.4
+          },
+          {
+            "sample": 14,
+            "time_seconds": 9.257550587994047,
+            "fps": 5.7
+          },
+          {
+            "sample": 15,
+            "time_seconds": 9.896536241983995,
+            "fps": 13.9
+          },
+          {
+            "sample": 16,
+            "time_seconds": 10.569851359992754,
+            "fps": 11.8
+          },
+          {
+            "sample": 17,
+            "time_seconds": 11.203416384989396,
+            "fps": 11.6
+          },
+          {
+            "sample": 18,
+            "time_seconds": 11.882265831984114,
+            "fps": 15.7
+          },
+          {
+            "sample": 19,
+            "time_seconds": 12.524061542004347,
+            "fps": 11.4
+          },
+          {
+            "sample": 20,
+            "time_seconds": 13.185593814007007,
+            "fps": 13.8
+          },
+          {
+            "sample": 21,
+            "time_seconds": 13.82748849998461,
+            "fps": 15.5
+          },
+          {
+            "sample": 22,
+            "time_seconds": 14.493565177021082,
+            "fps": 11.9
+          },
+          {
+            "sample": 23,
+            "time_seconds": 15.113057071983349,
+            "fps": 9.8
+          },
+          {
+            "sample": 24,
+            "time_seconds": 15.762573699990753,
+            "fps": 15.6
+          },
+          {
+            "sample": 25,
+            "time_seconds": 16.39409652299946,
+            "fps": 15.9
+          },
+          {
+            "sample": 26,
+            "time_seconds": 17.057207433972508,
+            "fps": 11.9
+          },
+          {
+            "sample": 27,
+            "time_seconds": 17.69494116998976,
+            "fps": 15.6
+          },
+          {
+            "sample": 28,
+            "time_seconds": 18.379574748978484,
+            "fps": 13.8
+          },
+          {
+            "sample": 29,
+            "time_seconds": 19.010450572008267,
+            "fps": 13.4
+          },
+          {
+            "sample": 30,
+            "time_seconds": 19.67941444000462,
+            "fps": 13.7
+          },
+          {
+            "sample": 31,
+            "time_seconds": 20.35903807997238,
+            "fps": 15.8
+          },
+          {
+            "sample": 32,
+            "time_seconds": 21.021201271971222,
+            "fps": 11.9
+          },
+          {
+            "sample": 33,
+            "time_seconds": 21.63886949501466,
+            "fps": 13.8
+          },
+          {
+            "sample": 34,
+            "time_seconds": 22.29204650496831,
+            "fps": 11.5
+          },
+          {
+            "sample": 35,
+            "time_seconds": 22.92889738199301,
+            "fps": 11.6
+          },
+          {
+            "sample": 36,
+            "time_seconds": 23.5833997669979,
+            "fps": 15.5
+          },
+          {
+            "sample": 37,
+            "time_seconds": 24.221293493988924,
+            "fps": 9.9
+          },
+          {
+            "sample": 38,
+            "time_seconds": 24.867508694995195,
+            "fps": 15.4
+          },
+          {
+            "sample": 39,
+            "time_seconds": 25.60742727597244,
+            "fps": 15.5
+          }
+        ],
+        "sampling_seconds": 26.24534391897032,
+        "sample_interval_seconds": 0.55,
+        "warmup_seconds": 5,
+        "keys": "fire,5,fire,softl,fire,wait:30,5,fire,fire,fire",
+        "held_key": "",
+        "repeated_keys": "6,4",
+        "repeat_period_seconds": 0.5,
+        "repeated_pulses_including_warmup": 37,
+        "sample_audio_detail_delta": {
+          "offered": 31240,
+          "accepted": 31240,
+          "short": 0,
+          "io_us": 1514244,
+          "volume_calls": 0,
+          "queued": -6,
+          "underruns": 0,
+          "silence_frames": 1337
+        },
+        "sample_audio_output_delta": {
+          "writes": 144,
+          "frames": 73728,
+          "errors": 0,
+          "tones": 0,
+          "volume": 0
+        },
+        "exit_code": 0,
+        "memory_delta": 0,
+        "jit": {
+          "active": 1,
+          "compiled": 29151,
+          "executed": 1810941,
+          "bytecodes": 19593656,
+          "declined": 92507,
+          "code_bytes": 15016
+        },
+        "jit_detail": {
+          "evictions": 29087,
+          "method_map_evictions": 155424,
+          "recompiled": 27194,
+          "unsupported": 39958,
+          "short": 52549,
+          "faults": 0,
+          "memory_failures": 0,
+          "commit_failures": 0,
+          "peak_code": 20418,
+          "metadata": 11480,
+          "stats": 1,
+          "detailed": 0
+        },
+        "jit_memory": {
+          "allocations": 29151,
+          "commits": 29151,
+          "refused": 0,
+          "peak": 21968,
+          "live": 0
+        }
+      },
+      "candidate_off": {
+        "mean": 17.9525,
+        "median": 17.9,
+        "minimum": 11.7,
+        "maximum": 21.9,
+        "samples": [
+          {
+            "sample": 0,
+            "time_seconds": 1.4066987205296755e-05,
+            "fps": 21.9
+          },
+          {
+            "sample": 1,
+            "time_seconds": 0.5785735009703785,
+            "fps": 15.9
+          },
+          {
+            "sample": 2,
+            "time_seconds": 1.203085545974318,
+            "fps": 19.9
+          },
+          {
+            "sample": 3,
+            "time_seconds": 1.8559640439925715,
+            "fps": 15.7
+          },
+          {
+            "sample": 4,
+            "time_seconds": 2.484814647992607,
+            "fps": 17.7
+          },
+          {
+            "sample": 5,
+            "time_seconds": 3.1488613829715177,
+            "fps": 19.1
+          },
+          {
+            "sample": 6,
+            "time_seconds": 3.783362040994689,
+            "fps": 19.9
+          },
+          {
+            "sample": 7,
+            "time_seconds": 4.420450772973709,
+            "fps": 15.4
+          },
+          {
+            "sample": 8,
+            "time_seconds": 5.047609084984288,
+            "fps": 17.4
+          },
+          {
+            "sample": 9,
+            "time_seconds": 5.783946678973734,
+            "fps": 19.5
+          },
+          {
+            "sample": 10,
+            "time_seconds": 6.436901904991828,
+            "fps": 17.8
+          },
+          {
+            "sample": 11,
+            "time_seconds": 7.086164253007155,
+            "fps": 19.8
+          },
+          {
+            "sample": 12,
+            "time_seconds": 7.723113794985693,
+            "fps": 17.9
+          },
+          {
+            "sample": 13,
+            "time_seconds": 8.349414040974807,
+            "fps": 17.5
+          },
+          {
+            "sample": 14,
+            "time_seconds": 9.004079967970029,
+            "fps": 17.9
+          },
+          {
+            "sample": 15,
+            "time_seconds": 9.647361400013324,
+            "fps": 17.7
+          },
+          {
+            "sample": 16,
+            "time_seconds": 10.30675843701465,
+            "fps": 19.2
+          },
+          {
+            "sample": 17,
+            "time_seconds": 11.012574946973473,
+            "fps": 17.9
+          },
+          {
+            "sample": 18,
+            "time_seconds": 11.640489371027797,
+            "fps": 19.9
+          },
+          {
+            "sample": 19,
+            "time_seconds": 12.31093785498524,
+            "fps": 17.6
+          },
+          {
+            "sample": 20,
+            "time_seconds": 12.92802325397497,
+            "fps": 17.8
+          },
+          {
+            "sample": 21,
+            "time_seconds": 13.565735008975025,
+            "fps": 15.2
+          },
+          {
+            "sample": 22,
+            "time_seconds": 14.201912087970413,
+            "fps": 13.8
+          },
+          {
+            "sample": 23,
+            "time_seconds": 14.85193458700087,
+            "fps": 17.9
+          },
+          {
+            "sample": 24,
+            "time_seconds": 15.480932909995317,
+            "fps": 19.2
+          },
+          {
+            "sample": 25,
+            "time_seconds": 16.195338191988412,
+            "fps": 19.4
+          },
+          {
+            "sample": 26,
+            "time_seconds": 16.832917629973963,
+            "fps": 19.5
+          },
+          {
+            "sample": 27,
+            "time_seconds": 17.46835324302083,
+            "fps": 13.9
+          },
+          {
+            "sample": 28,
+            "time_seconds": 18.117033571004868,
+            "fps": 17.6
+          },
+          {
+            "sample": 29,
+            "time_seconds": 18.743622087989934,
+            "fps": 19.5
+          },
+          {
+            "sample": 30,
+            "time_seconds": 19.378840773017146,
+            "fps": 19.6
+          },
+          {
+            "sample": 31,
+            "time_seconds": 19.99944470700575,
+            "fps": 19.9
+          },
+          {
+            "sample": 32,
+            "time_seconds": 20.593912778014783,
+            "fps": 17.9
+          },
+          {
+            "sample": 33,
+            "time_seconds": 21.21850000997074,
+            "fps": 11.7
+          },
+          {
+            "sample": 34,
+            "time_seconds": 21.84920715301996,
+            "fps": 19.1
+          },
+          {
+            "sample": 35,
+            "time_seconds": 22.49788148299558,
+            "fps": 17.8
+          },
+          {
+            "sample": 36,
+            "time_seconds": 23.124833178997505,
+            "fps": 19.6
+          },
+          {
+            "sample": 37,
+            "time_seconds": 23.761189925018698,
+            "fps": 17.8
+          },
+          {
+            "sample": 38,
+            "time_seconds": 24.415832390019204,
+            "fps": 15.5
+          },
+          {
+            "sample": 39,
+            "time_seconds": 25.055055786971934,
+            "fps": 19.8
+          }
+        ],
+        "sampling_seconds": 25.804274338006508,
+        "sample_interval_seconds": 0.55,
+        "warmup_seconds": 5,
+        "keys": "fire,5,fire,softl,fire,wait:30,5,fire,fire,fire",
+        "held_key": "",
+        "repeated_keys": "6,4",
+        "repeat_period_seconds": 0.5,
+        "repeated_pulses_including_warmup": 38,
+        "sample_audio_detail_delta": {
+          "offered": 0,
+          "accepted": 0,
+          "short": 0,
+          "io_us": 0,
+          "volume_calls": 0,
+          "queued": 0,
+          "underruns": 0,
+          "silence_frames": 0
+        },
+        "sample_audio_output_delta": {
+          "writes": 0,
+          "frames": 0,
+          "errors": 0,
+          "tones": 0,
+          "volume": 0
+        },
+        "exit_code": 0,
+        "memory_delta": 0,
+        "jit": {
+          "active": 0,
+          "compiled": 0,
+          "executed": 0,
+          "bytecodes": 0,
+          "declined": 0,
+          "code_bytes": 0
+        },
+        "jit_detail": {
+          "evictions": 0,
+          "method_map_evictions": 0,
+          "recompiled": 0,
+          "unsupported": 0,
+          "short": 0,
+          "faults": 0,
+          "memory_failures": 0,
+          "commit_failures": 0,
+          "peak_code": 0,
+          "metadata": 0,
+          "stats": 0,
+          "detailed": 0
+        },
+        "jit_memory": {
+          "allocations": 0,
+          "commits": 0,
+          "refused": 0,
+          "peak": 0,
+          "live": 0
+        }
+      },
+      "candidate_on": {
+        "mean": 11.325,
+        "median": 11.7,
+        "minimum": 5.6,
+        "maximum": 13.4,
+        "samples": [
+          {
+            "sample": 0,
+            "time_seconds": 1.025001984089613e-05,
+            "fps": 9.7
+          },
+          {
+            "sample": 1,
+            "time_seconds": 0.5771791560109705,
+            "fps": 11.7
+          },
+          {
+            "sample": 2,
+            "time_seconds": 1.2090140230138786,
+            "fps": 5.6
+          },
+          {
+            "sample": 3,
+            "time_seconds": 1.894648527028039,
+            "fps": 9.8
+          },
+          {
+            "sample": 4,
+            "time_seconds": 2.5266900450224057,
+            "fps": 13.1
+          },
+          {
+            "sample": 5,
+            "time_seconds": 3.1952379920403473,
+            "fps": 11.8
+          },
+          {
+            "sample": 6,
+            "time_seconds": 3.8284403330180794,
+            "fps": 11.7
+          },
+          {
+            "sample": 7,
+            "time_seconds": 4.491789609019179,
+            "fps": 11.9
+          },
+          {
+            "sample": 8,
+            "time_seconds": 5.113322326040361,
+            "fps": 11.9
+          },
+          {
+            "sample": 9,
+            "time_seconds": 5.781855056004133,
+            "fps": 11.8
+          },
+          {
+            "sample": 10,
+            "time_seconds": 6.4326836640248075,
+            "fps": 11.9
+          },
+          {
+            "sample": 11,
+            "time_seconds": 7.101447711000219,
+            "fps": 11.8
+          },
+          {
+            "sample": 12,
+            "time_seconds": 7.740519731014501,
+            "fps": 11.9
+          },
+          {
+            "sample": 13,
+            "time_seconds": 8.379738839983474,
+            "fps": 11.9
+          },
+          {
+            "sample": 14,
+            "time_seconds": 9.01270865398692,
+            "fps": 11.7
+          },
+          {
+            "sample": 15,
+            "time_seconds": 9.668853337003384,
+            "fps": 11.9
+          },
+          {
+            "sample": 16,
+            "time_seconds": 10.30812010698719,
+            "fps": 11.6
+          },
+          {
+            "sample": 17,
+            "time_seconds": 10.98384696803987,
+            "fps": 9.7
+          },
+          {
+            "sample": 18,
+            "time_seconds": 11.612602701003198,
+            "fps": 9.5
+          },
+          {
+            "sample": 19,
+            "time_seconds": 12.282704426033888,
+            "fps": 11.5
+          },
+          {
+            "sample": 20,
+            "time_seconds": 12.919265141012147,
+            "fps": 11.9
+          },
+          {
+            "sample": 21,
+            "time_seconds": 13.601276253990363,
+            "fps": 11.6
+          },
+          {
+            "sample": 22,
+            "time_seconds": 14.25607935799053,
+            "fps": 9.8
+          },
+          {
+            "sample": 23,
+            "time_seconds": 14.926665179023985,
+            "fps": 9.6
+          },
+          {
+            "sample": 24,
+            "time_seconds": 15.579211294010747,
+            "fps": 11.7
+          },
+          {
+            "sample": 25,
+            "time_seconds": 16.257023393991403,
+            "fps": 9.6
+          },
+          {
+            "sample": 26,
+            "time_seconds": 16.91677307599457,
+            "fps": 11.8
+          },
+          {
+            "sample": 27,
+            "time_seconds": 17.59618178999517,
+            "fps": 13.2
+          },
+          {
+            "sample": 28,
+            "time_seconds": 18.250341272039805,
+            "fps": 11.8
+          },
+          {
+            "sample": 29,
+            "time_seconds": 18.918950796010904,
+            "fps": 11.9
+          },
+          {
+            "sample": 30,
+            "time_seconds": 19.569749566027895,
+            "fps": 13.4
+          },
+          {
+            "sample": 31,
+            "time_seconds": 20.220414664014243,
+            "fps": 11.9
+          },
+          {
+            "sample": 32,
+            "time_seconds": 20.80632103199605,
+            "fps": 11.7
+          },
+          {
+            "sample": 33,
+            "time_seconds": 21.46625744900666,
+            "fps": 11.6
+          },
+          {
+            "sample": 34,
+            "time_seconds": 22.098265125998296,
+            "fps": 11.7
+          },
+          {
+            "sample": 35,
+            "time_seconds": 22.792374829004984,
+            "fps": 9.6
+          },
+          {
+            "sample": 36,
+            "time_seconds": 23.42774215800455,
+            "fps": 11.8
+          },
+          {
+            "sample": 37,
+            "time_seconds": 24.08788970502792,
+            "fps": 11.7
+          },
+          {
+            "sample": 38,
+            "time_seconds": 24.740639460040256,
+            "fps": 11.3
+          },
+          {
+            "sample": 39,
+            "time_seconds": 25.37918368499959,
+            "fps": 13.0
+          }
+        ],
+        "sampling_seconds": 26.04954712401377,
+        "sample_interval_seconds": 0.55,
+        "warmup_seconds": 5,
+        "keys": "fire,5,fire,softl,fire,wait:30,5,fire,fire,fire",
+        "held_key": "",
+        "repeated_keys": "6,4",
+        "repeat_period_seconds": 0.5,
+        "repeated_pulses_including_warmup": 36,
+        "sample_audio_detail_delta": {
+          "offered": 37384,
+          "accepted": 37384,
+          "short": 0,
+          "io_us": 1770638,
+          "volume_calls": 0,
+          "queued": -5,
+          "underruns": 0,
+          "silence_frames": 1156
+        },
+        "sample_audio_output_delta": {
+          "writes": 169,
+          "frames": 86528,
+          "errors": 0,
+          "tones": 0,
+          "volume": 0
+        },
+        "exit_code": 0,
+        "memory_delta": 0,
+        "jit": {
+          "active": 1,
+          "compiled": 23014,
+          "executed": 1655672,
+          "bytecodes": 21202712,
+          "declined": 47588,
+          "code_bytes": 22902
+        },
+        "jit_detail": {
+          "evictions": 22950,
+          "method_map_evictions": 139081,
+          "recompiled": 26997,
+          "unsupported": 24950,
+          "short": 22638,
+          "faults": 0,
+          "memory_failures": 0,
+          "commit_failures": 0,
+          "peak_code": 26928,
+          "metadata": 11480,
+          "stats": 1,
+          "detailed": 0
+        },
+        "jit_memory": {
+          "allocations": 23014,
+          "commits": 23014,
+          "refused": 0,
+          "peak": 28416,
+          "live": 0
+        }
+      }
+    },
+    "moto": {
+      "baseline_on": {
+        "mean": 3.7399999999999998,
+        "median": 4.1,
+        "minimum": 0.0,
+        "maximum": 4.4,
+        "samples": [
+          {
+            "sample": 0,
+            "time_seconds": 1.8804974388331175e-05,
+            "fps": 4.1
+          },
+          {
+            "sample": 1,
+            "time_seconds": 1.0355090170050971,
+            "fps": 4.2
+          },
+          {
+            "sample": 2,
+            "time_seconds": 2.17243611701997,
+            "fps": 4.3
+          },
+          {
+            "sample": 3,
+            "time_seconds": 3.318528098985553,
+            "fps": 4.4
+          },
+          {
+            "sample": 4,
+            "time_seconds": 4.434389884001575,
+            "fps": 4.4
+          },
+          {
+            "sample": 5,
+            "time_seconds": 5.555795193999074,
+            "fps": 4.4
+          },
+          {
+            "sample": 6,
+            "time_seconds": 6.665794109983835,
+            "fps": 4.4
+          },
+          {
+            "sample": 7,
+            "time_seconds": 7.780925986007787,
+            "fps": 4.3
+          },
+          {
+            "sample": 8,
+            "time_seconds": 8.912255043978803,
+            "fps": 4.2
+          },
+          {
+            "sample": 9,
+            "time_seconds": 9.99751717800973,
+            "fps": 3.9
+          },
+          {
+            "sample": 10,
+            "time_seconds": 11.10029371199198,
+            "fps": 3.8
+          },
+          {
+            "sample": 11,
+            "time_seconds": 12.128829728986602,
+            "fps": 3.9
+          },
+          {
+            "sample": 12,
+            "time_seconds": 13.186157050018664,
+            "fps": 4.0
+          },
+          {
+            "sample": 13,
+            "time_seconds": 14.368523475015536,
+            "fps": 0.0
+          },
+          {
+            "sample": 14,
+            "time_seconds": 15.417230498977005,
+            "fps": 0.0
+          },
+          {
+            "sample": 15,
+            "time_seconds": 16.53719511901727,
+            "fps": 4.1
+          },
+          {
+            "sample": 16,
+            "time_seconds": 17.5428908939939,
+            "fps": 4.1
+          },
+          {
+            "sample": 17,
+            "time_seconds": 18.707469442975707,
+            "fps": 4.1
+          },
+          {
+            "sample": 18,
+            "time_seconds": 19.711912302009296,
+            "fps": 4.1
+          },
+          {
+            "sample": 19,
+            "time_seconds": 20.881563023023773,
+            "fps": 4.1
+          }
+        ],
+        "sampling_seconds": 22.081248597998638,
+        "sample_interval_seconds": 1,
+        "warmup_seconds": 5,
+        "keys": "fire,fire,fire,fire,softr,softr,fire,fire",
+        "held_key": "up",
+        "repeated_keys": "",
+        "repeat_period_seconds": 0.5,
+        "repeated_pulses_including_warmup": 0,
+        "sample_audio_detail_delta": {
+          "offered": 0,
+          "accepted": 0,
+          "short": 0,
+          "io_us": 0,
+          "volume_calls": 0,
+          "queued": 0,
+          "underruns": 0,
+          "silence_frames": 0
+        },
+        "sample_audio_output_delta": {
+          "writes": 0,
+          "frames": 0,
+          "errors": 0,
+          "tones": 0,
+          "volume": 0
+        },
+        "exit_code": 0,
+        "memory_delta": 0,
+        "jit": {
+          "active": 1,
+          "compiled": 108,
+          "executed": 8421,
+          "bytecodes": 43132,
+          "declined": 191,
+          "code_bytes": 4336
+        },
+        "jit_detail": {
+          "evictions": 51,
+          "method_map_evictions": 54,
+          "recompiled": 0,
+          "unsupported": 79,
+          "short": 112,
+          "faults": 0,
+          "memory_failures": 0,
+          "commit_failures": 0,
+          "peak_code": 4392,
+          "metadata": 11480,
+          "stats": 1,
+          "detailed": 0
+        },
+        "jit_memory": {
+          "allocations": 108,
+          "commits": 108,
+          "refused": 0,
+          "peak": 5760,
+          "live": 0
+        }
+      },
+      "candidate_on": {
+        "mean": 3.75,
+        "median": 4.1,
+        "minimum": 0.0,
+        "maximum": 4.5,
+        "samples": [
+          {
+            "sample": 0,
+            "time_seconds": 9.127019438892603e-06,
+            "fps": 4.1
+          },
+          {
+            "sample": 1,
+            "time_seconds": 1.0304345540353097,
+            "fps": 4.2
+          },
+          {
+            "sample": 2,
+            "time_seconds": 2.1721819750382565,
+            "fps": 4.3
+          },
+          {
+            "sample": 3,
+            "time_seconds": 3.3145314840367064,
+            "fps": 4.5
+          },
+          {
+            "sample": 4,
+            "time_seconds": 4.426816922030412,
+            "fps": 4.4
+          },
+          {
+            "sample": 5,
+            "time_seconds": 5.543770623044111,
+            "fps": 4.4
+          },
+          {
+            "sample": 6,
+            "time_seconds": 6.652769791020546,
+            "fps": 4.4
+          },
+          {
+            "sample": 7,
+            "time_seconds": 7.766745692992117,
+            "fps": 4.4
+          },
+          {
+            "sample": 8,
+            "time_seconds": 8.902166241023224,
+            "fps": 4.2
+          },
+          {
+            "sample": 9,
+            "time_seconds": 9.977542965032626,
+            "fps": 3.9
+          },
+          {
+            "sample": 10,
+            "time_seconds": 11.077162485045847,
+            "fps": 3.8
+          },
+          {
+            "sample": 11,
+            "time_seconds": 12.105435620993376,
+            "fps": 3.9
+          },
+          {
+            "sample": 12,
+            "time_seconds": 13.158205892017577,
+            "fps": 4.0
+          },
+          {
+            "sample": 13,
+            "time_seconds": 14.339748914993834,
+            "fps": 0.0
+          },
+          {
+            "sample": 14,
+            "time_seconds": 15.379368127032649,
+            "fps": 0.0
+          },
+          {
+            "sample": 15,
+            "time_seconds": 16.497453314019367,
+            "fps": 4.1
+          },
+          {
+            "sample": 16,
+            "time_seconds": 17.499866227037273,
+            "fps": 4.1
+          },
+          {
+            "sample": 17,
+            "time_seconds": 18.66239975602366,
+            "fps": 4.1
+          },
+          {
+            "sample": 18,
+            "time_seconds": 19.81885850103572,
+            "fps": 4.1
+          },
+          {
+            "sample": 19,
+            "time_seconds": 20.859813560033217,
+            "fps": 4.1
+          }
+        ],
+        "sampling_seconds": 22.02022314403439,
+        "sample_interval_seconds": 1,
+        "warmup_seconds": 5,
+        "keys": "fire,fire,fire,fire,softr,softr,fire,fire",
+        "held_key": "up",
+        "repeated_keys": "",
+        "repeat_period_seconds": 0.5,
+        "repeated_pulses_including_warmup": 0,
+        "sample_audio_detail_delta": {
+          "offered": 0,
+          "accepted": 0,
+          "short": 0,
+          "io_us": 0,
+          "volume_calls": 0,
+          "queued": 0,
+          "underruns": 0,
+          "silence_frames": 0
+        },
+        "sample_audio_output_delta": {
+          "writes": 0,
+          "frames": 0,
+          "errors": 0,
+          "tones": 0,
+          "volume": 0
+        },
+        "exit_code": 0,
+        "memory_delta": 0,
+        "jit": {
+          "active": 1,
+          "compiled": 120,
+          "executed": 8564,
+          "bytecodes": 48120,
+          "declined": 140,
+          "code_bytes": 5920
+        },
+        "jit_detail": {
+          "evictions": 60,
+          "method_map_evictions": 54,
+          "recompiled": 0,
+          "unsupported": 61,
+          "short": 79,
+          "faults": 0,
+          "memory_failures": 0,
+          "commit_failures": 0,
+          "peak_code": 5938,
+          "metadata": 11480,
+          "stats": 1,
+          "detailed": 0
+        },
+        "jit_memory": {
+          "allocations": 120,
+          "commits": 120,
+          "refused": 0,
+          "peak": 7392,
+          "live": 0
+        }
+      }
+    }
+  },
+  "game_state_alignment": "Navigation and input rules match, but position/camera progression is not synchronized. FPS samples do not establish a stable causal speedup or regression.",
+  "rejected_recency_trial": {
+    "retained": false,
+    "all_on": [
+      {
+        "case": "cpu-0",
+        "elapsed_seconds": 2.915025,
+        "checks": [
+          "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+        ],
+        "perf": {
+          "presents": "120",
+          "present_us": "748410",
+          "updated": "120",
+          "unchanged": "0",
+          "native_crc": "9e3b7837",
+          "lcd_crc": "cbd4506b",
+          "hot_live": "0",
+          "scale_mismatch": "0"
+        },
+        "exit_code": 0,
+        "memory_delta": 0,
+        "java_bytecodes": 11379435,
+        "jit": {
+          "active": 1,
+          "compiled": 8,
+          "executed": 24037,
+          "bytecodes": 11256798,
+          "declined": 45,
+          "code_bytes": 1192
+        },
+        "jit_detail": {
+          "evictions": 0,
+          "method_map_evictions": 0,
+          "recompiled": 0,
+          "unsupported": 29,
+          "short": 16,
+          "faults": 0,
+          "memory_failures": 0,
+          "commit_failures": 0,
+          "peak_code": 1192,
+          "metadata": 11480,
+          "stats": 1,
+          "detailed": 0
+        },
+        "jit_memory": {
+          "allocations": 8,
+          "commits": 8,
+          "refused": 0,
+          "peak": 1376,
+          "live": 0
+        },
+        "audio": [
+          {
+            "writes": 0,
+            "frames": 0,
+            "errors": 0,
+            "tones": 0,
+            "volume": 40
+          },
+          {
+            "offered": 0,
+            "accepted": 0,
+            "short": 0,
+            "io_us": 0,
+            "volume_calls": 0,
+            "queued": 0,
+            "underruns": 0,
+            "silence_frames": 0
+          }
+        ]
+      },
+      {
+        "case": "cpu-1",
+        "elapsed_seconds": 2.915067,
+        "checks": [
+          "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+        ],
+        "perf": {
+          "presents": "120",
+          "present_us": "748163",
+          "updated": "120",
+          "unchanged": "0",
+          "native_crc": "9e3b7837",
+          "lcd_crc": "cbd4506b",
+          "hot_live": "0",
+          "scale_mismatch": "0"
+        },
+        "exit_code": 0,
+        "memory_delta": 0,
+        "java_bytecodes": 11379435,
+        "jit": {
+          "active": 1,
+          "compiled": 8,
+          "executed": 24037,
+          "bytecodes": 11256798,
+          "declined": 45,
+          "code_bytes": 1192
+        },
+        "jit_detail": {
+          "evictions": 0,
+          "method_map_evictions": 0,
+          "recompiled": 0,
+          "unsupported": 29,
+          "short": 16,
+          "faults": 0,
+          "memory_failures": 0,
+          "commit_failures": 0,
+          "peak_code": 1192,
+          "metadata": 11480,
+          "stats": 1,
+          "detailed": 0
+        },
+        "jit_memory": {
+          "allocations": 8,
+          "commits": 8,
+          "refused": 0,
+          "peak": 1376,
+          "live": 0
+        },
+        "audio": [
+          {
+            "writes": 0,
+            "frames": 0,
+            "errors": 0,
+            "tones": 0,
+            "volume": 40
+          },
+          {
+            "offered": 0,
+            "accepted": 0,
+            "short": 0,
+            "io_us": 0,
+            "volume_calls": 0,
+            "queued": 0,
+            "underruns": 0,
+            "silence_frames": 0
+          }
+        ]
+      },
+      {
+        "case": "render-0",
+        "elapsed_seconds": 5.454512,
+        "checks": [
+          "RENDER_BENCH frames=240 final=240"
+        ],
+        "perf": {
+          "presents": "241",
+          "present_us": "1506767",
+          "updated": "241",
+          "unchanged": "0",
+          "native_crc": "c28d5ef8",
+          "lcd_crc": "df7449c1",
+          "hot_live": "0",
+          "scale_mismatch": "0"
+        },
+        "exit_code": 0,
+        "memory_delta": 0,
+        "java_bytecodes": 704929,
+        "jit": {
+          "active": 1,
+          "compiled": 7,
+          "executed": 31646,
+          "bytecodes": 373369,
+          "declined": 17,
+          "code_bytes": 814
+        },
+        "jit_detail": {
+          "evictions": 0,
+          "method_map_evictions": 0,
+          "recompiled": 0,
+          "unsupported": 6,
+          "short": 11,
+          "faults": 0,
+          "memory_failures": 0,
+          "commit_failures": 0,
+          "peak_code": 814,
+          "metadata": 11480,
+          "stats": 1,
+          "detailed": 0
+        },
+        "jit_memory": {
+          "allocations": 7,
+          "commits": 7,
+          "refused": 0,
+          "peak": 992,
+          "live": 0
+        },
+        "audio": [
+          {
+            "writes": 0,
+            "frames": 0,
+            "errors": 0,
+            "tones": 0,
+            "volume": 40
+          },
+          {
+            "offered": 0,
+            "accepted": 0,
+            "short": 0,
+            "io_us": 0,
+            "volume_calls": 0,
+            "queued": 0,
+            "underruns": 0,
+            "silence_frames": 0
+          }
+        ]
+      },
+      {
+        "case": "render-1",
+        "elapsed_seconds": 5.455508,
+        "checks": [
+          "RENDER_BENCH frames=240 final=240"
+        ],
+        "perf": {
+          "presents": "241",
+          "present_us": "1506716",
+          "updated": "241",
+          "unchanged": "0",
+          "native_crc": "c28d5ef8",
+          "lcd_crc": "df7449c1",
+          "hot_live": "0",
+          "scale_mismatch": "0"
+        },
+        "exit_code": 0,
+        "memory_delta": 0,
+        "java_bytecodes": 704929,
+        "jit": {
+          "active": 1,
+          "compiled": 7,
+          "executed": 31646,
+          "bytecodes": 373369,
+          "declined": 17,
+          "code_bytes": 814
+        },
+        "jit_detail": {
+          "evictions": 0,
+          "method_map_evictions": 0,
+          "recompiled": 0,
+          "unsupported": 6,
+          "short": 11,
+          "faults": 0,
+          "memory_failures": 0,
+          "commit_failures": 0,
+          "peak_code": 814,
+          "metadata": 11480,
+          "stats": 1,
+          "detailed": 0
+        },
+        "jit_memory": {
+          "allocations": 7,
+          "commits": 7,
+          "refused": 0,
+          "peak": 992,
+          "live": 0
+        },
+        "audio": [
+          {
+            "writes": 0,
+            "frames": 0,
+            "errors": 0,
+            "tones": 0,
+            "volume": 40
+          },
+          {
+            "offered": 0,
+            "accepted": 0,
+            "short": 0,
+            "io_us": 0,
+            "volume_calls": 0,
+            "queued": 0,
+            "underruns": 0,
+            "silence_frames": 0
+          }
+        ]
+      },
+      {
+        "case": "audio-0",
+        "elapsed_seconds": 10.728061,
+        "checks": [
+          "AUDIO_BENCH_BEGIN WAV duration=3000000",
+          "AUDIO_BENCH_END WAV time=3000000 state=300",
+          "AUDIO_BENCH_BEGIN MIDI duration=3139682",
+          "AUDIO_BENCH_END MIDI time=3139682 state=300"
+        ],
+        "perf": {
+          "presents": "626",
+          "present_us": "2175364",
+          "updated": "2",
+          "unchanged": "624",
+          "native_crc": "45756d2b",
+          "lcd_crc": "67f08603",
+          "hot_live": "0",
+          "scale_mismatch": "0"
+        },
+        "exit_code": 0,
+        "memory_delta": 0,
+        "java_bytecodes": 22429,
+        "jit": {
+          "active": 1,
+          "compiled": 2,
+          "executed": 772,
+          "bytecodes": 3237,
+          "declined": 11,
+          "code_bytes": 116
+        },
+        "jit_detail": {
+          "evictions": 0,
+          "method_map_evictions": 0,
+          "recompiled": 0,
+          "unsupported": 2,
+          "short": 9,
+          "faults": 0,
+          "memory_failures": 0,
+          "commit_failures": 0,
+          "peak_code": 116,
+          "metadata": 11480,
+          "stats": 1,
+          "detailed": 0
+        },
+        "jit_memory": {
+          "allocations": 2,
+          "commits": 2,
+          "refused": 0,
+          "peak": 176,
+          "live": 0
+        },
+        "audio": [
+          {
+            "writes": 581,
+            "frames": 297472,
+            "errors": 0,
+            "tones": 0,
+            "volume": 40
+          },
+          {
+            "offered": 193338,
+            "accepted": 135380,
+            "short": 1,
+            "io_us": 6064582,
+            "volume_calls": 1,
+            "queued": 0,
+            "underruns": 0,
+            "silence_frames": 2771
+          }
+        ]
+      },
+      {
+        "case": "nfs14",
+        "elapsed_seconds": 7.473359,
+        "checks": [],
+        "perf": {
+          "presents": "301",
+          "present_us": "970074",
+          "updated": "3",
+          "unchanged": "298",
+          "native_crc": "ed752148",
+          "lcd_crc": "0d4e14b8",
+          "hot_live": "0",
+          "scale_mismatch": "0"
+        },
+        "exit_code": 0,
+        "memory_delta": 0,
+        "java_bytecodes": 317905,
+        "jit": {
+          "active": 1,
+          "compiled": 380,
+          "executed": 26395,
+          "bytecodes": 222550,
+          "declined": 188,
+          "code_bytes": 9926
+        },
+        "jit_detail": {
+          "evictions": 316,
+          "method_map_evictions": 110,
+          "recompiled": 15,
+          "unsupported": 105,
+          "short": 83,
+          "faults": 0,
+          "memory_failures": 0,
+          "commit_failures": 0,
+          "peak_code": 10440,
+          "metadata": 11480,
+          "stats": 1,
+          "detailed": 0
+        },
+        "jit_memory": {
+          "allocations": 380,
+          "commits": 380,
+          "refused": 0,
+          "peak": 11888,
+          "live": 0
+        },
+        "audio": [
+          {
+            "writes": 0,
+            "frames": 0,
+            "errors": 0,
+            "tones": 0,
+            "volume": 40
+          },
+          {
+            "offered": 0,
+            "accepted": 0,
+            "short": 0,
+            "io_us": 0,
+            "volume_calls": 0,
+            "queued": 0,
+            "underruns": 0,
+            "silence_frames": 0
+          }
+        ]
+      },
+      {
+        "case": "nfs16",
+        "elapsed_seconds": 13.62607,
+        "checks": [],
+        "perf": {
+          "presents": "301",
+          "present_us": "1054182",
+          "updated": "31",
+          "unchanged": "270",
+          "native_crc": "218ed823",
+          "lcd_crc": "736a4521",
+          "hot_live": "0",
+          "scale_mismatch": "0"
+        },
+        "exit_code": 0,
+        "memory_delta": 0,
+        "java_bytecodes": 7856222,
+        "jit": {
+          "active": 1,
+          "compiled": 649,
+          "executed": 257832,
+          "bytecodes": 2607261,
+          "declined": 6670,
+          "code_bytes": 13174
+        },
+        "jit_detail": {
+          "evictions": 585,
+          "method_map_evictions": 23784,
+          "recompiled": 7008,
+          "unsupported": 3337,
+          "short": 3333,
+          "faults": 0,
+          "memory_failures": 0,
+          "commit_failures": 0,
+          "peak_code": 14594,
+          "metadata": 11480,
+          "stats": 1,
+          "detailed": 0
+        },
+        "jit_memory": {
+          "allocations": 649,
+          "commits": 649,
+          "refused": 0,
+          "peak": 16096,
+          "live": 0
+        },
+        "audio": [
+          {
+            "writes": 0,
+            "frames": 0,
+            "errors": 0,
+            "tones": 0,
+            "volume": 40
+          },
+          {
+            "offered": 0,
+            "accepted": 0,
+            "short": 0,
+            "io_us": 0,
+            "volume_calls": 0,
+            "queued": 0,
+            "underruns": 0,
+            "silence_frames": 0
+          }
+        ]
+      }
+    ],
+    "bounce_on": {
+      "mean": 11.17,
+      "median": 11.6,
+      "minimum": 7.7,
+      "maximum": 13.7,
+      "samples": [
+        {
+          "sample": 0,
+          "time_seconds": 5.270005203783512e-06,
+          "fps": 9.9
+        },
+        {
+          "sample": 1,
+          "time_seconds": 0.6895746020018123,
+          "fps": 11.6
+        },
+        {
+          "sample": 2,
+          "time_seconds": 1.2464165620040148,
+          "fps": 7.7
+        },
+        {
+          "sample": 3,
+          "time_seconds": 1.9080675120349042,
+          "fps": 9.4
+        },
+        {
+          "sample": 4,
+          "time_seconds": 2.567526955041103,
+          "fps": 11.5
+        },
+        {
+          "sample": 5,
+          "time_seconds": 3.208087573002558,
+          "fps": 11.6
+        },
+        {
+          "sample": 6,
+          "time_seconds": 3.846860235033091,
+          "fps": 13.2
+        },
+        {
+          "sample": 7,
+          "time_seconds": 4.517248379008379,
+          "fps": 11.8
+        },
+        {
+          "sample": 8,
+          "time_seconds": 5.134215138037689,
+          "fps": 11.8
+        },
+        {
+          "sample": 9,
+          "time_seconds": 5.811828411009628,
+          "fps": 13.5
+        },
+        {
+          "sample": 10,
+          "time_seconds": 6.4478366750408895,
+          "fps": 9.9
+        },
+        {
+          "sample": 11,
+          "time_seconds": 7.118091728014406,
+          "fps": 11.8
+        },
+        {
+          "sample": 12,
+          "time_seconds": 7.769083507009782,
+          "fps": 11.8
+        },
+        {
+          "sample": 13,
+          "time_seconds": 8.425333232036792,
+          "fps": 11.8
+        },
+        {
+          "sample": 14,
+          "time_seconds": 9.071118382038549,
+          "fps": 9.9
+        },
+        {
+          "sample": 15,
+          "time_seconds": 9.72786249103956,
+          "fps": 11.6
+        },
+        {
+          "sample": 16,
+          "time_seconds": 10.377571168006398,
+          "fps": 11.9
+        },
+        {
+          "sample": 17,
+          "time_seconds": 11.040783506992739,
+          "fps": 9.5
+        },
+        {
+          "sample": 18,
+          "time_seconds": 11.662127630028408,
+          "fps": 11.2
+        },
+        {
+          "sample": 19,
+          "time_seconds": 12.331880374986213,
+          "fps": 11.9
+        },
+        {
+          "sample": 20,
+          "time_seconds": 12.949536477040965,
+          "fps": 9.8
+        },
+        {
+          "sample": 21,
+          "time_seconds": 13.6018415960134,
+          "fps": 7.7
+        },
+        {
+          "sample": 22,
+          "time_seconds": 14.259146903990768,
+          "fps": 11.9
+        },
+        {
+          "sample": 23,
+          "time_seconds": 14.903110487037338,
+          "fps": 11.9
+        },
+        {
+          "sample": 24,
+          "time_seconds": 15.55257260001963,
+          "fps": 11.4
+        },
+        {
+          "sample": 25,
+          "time_seconds": 16.291119689994957,
+          "fps": 11.2
+        },
+        {
+          "sample": 26,
+          "time_seconds": 16.94586507603526,
+          "fps": 11.5
+        },
+        {
+          "sample": 27,
+          "time_seconds": 17.584185226005502,
+          "fps": 11.8
+        },
+        {
+          "sample": 28,
+          "time_seconds": 18.24850015703123,
+          "fps": 11.5
+        },
+        {
+          "sample": 29,
+          "time_seconds": 18.88735091802664,
+          "fps": 11.8
+        },
+        {
+          "sample": 30,
+          "time_seconds": 19.528845661028754,
+          "fps": 11.4
+        },
+        {
+          "sample": 31,
+          "time_seconds": 20.16513381601544,
+          "fps": 11.3
+        },
+        {
+          "sample": 32,
+          "time_seconds": 20.859743315028027,
+          "fps": 11.7
+        },
+        {
+          "sample": 33,
+          "time_seconds": 21.493566065037157,
+          "fps": 13.7
+        },
+        {
+          "sample": 34,
+          "time_seconds": 22.1713383810129,
+          "fps": 11.7
+        },
+        {
+          "sample": 35,
+          "time_seconds": 22.82118280598661,
+          "fps": 11.9
+        },
+        {
+          "sample": 36,
+          "time_seconds": 23.508857484033797,
+          "fps": 11.7
+        },
+        {
+          "sample": 37,
+          "time_seconds": 24.145228184992447,
+          "fps": 11.9
+        },
+        {
+          "sample": 38,
+          "time_seconds": 24.813903368019965,
+          "fps": 9.9
+        },
+        {
+          "sample": 39,
+          "time_seconds": 25.443484571995214,
+          "fps": 7.8
+        }
+      ],
+      "sampling_seconds": 26.093436571012717,
+      "sample_interval_seconds": 0.55,
+      "warmup_seconds": 5,
+      "keys": "fire,5,fire,softl,fire,wait:30,5,fire,fire,fire",
+      "held_key": "",
+      "repeated_keys": "6,4",
+      "repeat_period_seconds": 0.5,
+      "repeated_pulses_including_warmup": 37,
+      "sample_audio_detail_delta": {
+        "offered": 40712,
+        "accepted": 40712,
+        "short": 0,
+        "io_us": 1933961,
+        "volume_calls": 0,
+        "queued": -6,
+        "underruns": 0,
+        "silence_frames": 1351
+      },
+      "sample_audio_output_delta": {
+        "writes": 185,
+        "frames": 94720,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "exit_code": 0,
+      "memory_delta": 0,
+      "jit": {
+        "active": 1,
+        "compiled": 21328,
+        "executed": 1660479,
+        "bytecodes": 21225254,
+        "declined": 47385,
+        "code_bytes": 23134
+      },
+      "jit_detail": {
+        "evictions": 21264,
+        "method_map_evictions": 139294,
+        "recompiled": 27600,
+        "unsupported": 24826,
+        "short": 22559,
+        "faults": 0,
+        "memory_failures": 0,
+        "commit_failures": 0,
+        "peak_code": 25722,
+        "metadata": 11480,
+        "stats": 1,
+        "detailed": 0
+      },
+      "jit_memory": {
+        "allocations": 21328,
+        "commits": 21328,
+        "refused": 0,
+        "peak": 27200,
+        "live": 0
+      }
+    },
+    "moto_on": {
+      "mean": 3.69,
+      "median": 4.1,
+      "minimum": 0.0,
+      "maximum": 4.4,
+      "samples": [
+        {
+          "sample": 0,
+          "time_seconds": 4.258006811141968e-06,
+          "fps": 4.2
+        },
+        {
+          "sample": 1,
+          "time_seconds": 1.0307682279963046,
+          "fps": 4.2
+        },
+        {
+          "sample": 2,
+          "time_seconds": 2.17446835199371,
+          "fps": 4.3
+        },
+        {
+          "sample": 3,
+          "time_seconds": 3.325291181972716,
+          "fps": 4.4
+        },
+        {
+          "sample": 4,
+          "time_seconds": 4.440747849992476,
+          "fps": 4.4
+        },
+        {
+          "sample": 5,
+          "time_seconds": 5.580723725026473,
+          "fps": 4.4
+        },
+        {
+          "sample": 6,
+          "time_seconds": 6.669367166992743,
+          "fps": 4.4
+        },
+        {
+          "sample": 7,
+          "time_seconds": 7.784248128999025,
+          "fps": 4.4
+        },
+        {
+          "sample": 8,
+          "time_seconds": 8.907051376998425,
+          "fps": 4.3
+        },
+        {
+          "sample": 9,
+          "time_seconds": 10.01993480901001,
+          "fps": 4.0
+        },
+        {
+          "sample": 10,
+          "time_seconds": 11.069036999018863,
+          "fps": 3.8
+        },
+        {
+          "sample": 11,
+          "time_seconds": 12.092854098009411,
+          "fps": 3.9
+        },
+        {
+          "sample": 12,
+          "time_seconds": 13.103252055996563,
+          "fps": 4.0
+        },
+        {
+          "sample": 13,
+          "time_seconds": 14.14204070798587,
+          "fps": 0.0
+        },
+        {
+          "sample": 14,
+          "time_seconds": 15.22973090299638,
+          "fps": 0.0
+        },
+        {
+          "sample": 15,
+          "time_seconds": 16.268121784029063,
+          "fps": 2.7
+        },
+        {
+          "sample": 16,
+          "time_seconds": 17.271432023029774,
+          "fps": 4.1
+        },
+        {
+          "sample": 17,
+          "time_seconds": 18.431487795023713,
+          "fps": 4.1
+        },
+        {
+          "sample": 18,
+          "time_seconds": 19.631453636975493,
+          "fps": 4.1
+        },
+        {
+          "sample": 19,
+          "time_seconds": 20.678142883989494,
+          "fps": 4.1
+        }
+      ],
+      "sampling_seconds": 21.794756780029275,
+      "sample_interval_seconds": 1,
+      "warmup_seconds": 5,
+      "keys": "fire,fire,fire,fire,softr,softr,fire,fire",
+      "held_key": "up",
+      "repeated_keys": "",
+      "repeat_period_seconds": 0.5,
+      "repeated_pulses_including_warmup": 0,
+      "sample_audio_detail_delta": {
+        "offered": 0,
+        "accepted": 0,
+        "short": 0,
+        "io_us": 0,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "sample_audio_output_delta": {
+        "writes": 0,
+        "frames": 0,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "exit_code": 0,
+      "memory_delta": 0,
+      "jit": {
+        "active": 1,
+        "compiled": 120,
+        "executed": 8562,
+        "bytecodes": 48101,
+        "declined": 139,
+        "code_bytes": 5920
+      },
+      "jit_detail": {
+        "evictions": 60,
+        "method_map_evictions": 54,
+        "recompiled": 0,
+        "unsupported": 61,
+        "short": 78,
+        "faults": 0,
+        "memory_failures": 0,
+        "commit_failures": 0,
+        "peak_code": 5938,
+        "metadata": 11480,
+        "stats": 1,
+        "detailed": 0
+      },
+      "jit_memory": {
+        "allocations": 120,
+        "commits": 120,
+        "refused": 0,
+        "peak": 7392,
+        "live": 0
+      }
+    },
+    "reason": "Fewer code evictions did not establish a gameplay FPS benefit; restore the original replacement policy."
+  },
+  "discarded_scenes": [
+    "Initial baseline bouncing-ball execute run was still loading / at a dialogue; excluded from gameplay FPS."
+  ],
+  "validation": {
+    "host_jit_tests": 3,
+    "rv32_native_jit_tests": 3,
+    "arm64_native_jit_tests": 3,
+    "sanitized_jit_tests": 3,
+    "native_perf_kernels": 8,
+    "native_perf_modes": 3,
+    "regressions_failed_before_fix": [
+      "displaced resolved field",
+      "method table eviction count"
+    ],
+    "recompiled_blocks_meaning": "surviving code reuse after map recycling",
+    "map_eviction_counter_comparison": "Baseline omits table-pressure releases; before/after totals are not directly comparable.",
+    "final_source_test_rerun": {
+      "host": 3,
+      "rv32": 3,
+      "arm64": 3,
+      "address_undefined_sanitizers": 3
+    },
+    "final_firmware": {
+      "source_commit": "6e8aef8",
+      "firmware_sha256": "6658bee5413bf5f58dd00042d9167b7c1b5996c451d1ec2331b5ae0365e2135f",
+      "firmware_bytes": 4471216,
+      "experimental_replacement_policy_retained": false,
+      "same_image_as_measured_candidate": true,
+      "application_write_hash_verified": true,
+      "post_write_runtime_recheck": "Not run: target held exclusively by a separate test session. Existing candidate runtime measurements apply to the byte-identical image; current device settings are not asserted."
+    }
+  }
+}

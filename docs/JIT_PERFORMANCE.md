@@ -1,5 +1,9 @@
 # Baseline JIT performance: measurements and reproduction
 
+A later resolved-field cache fix and anonymous target follow-up are recorded in
+[JIT_CACHE_LOOKUP.md](JIT_CACHE_LOOKUP.md). The measurements below describe the
+upstream revisions before that fix.
+
 This work responds to a second board report, against `fe974fc` — the commit
 that carried the previous probe/dispatch optimisation set. It landed in several
 steps: the probe map and field/array coverage first, then branch and loop
