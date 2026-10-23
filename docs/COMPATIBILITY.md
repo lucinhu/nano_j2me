@@ -2558,6 +2558,13 @@ initialisation finishes later than the reference's and the press lands before
 in the runtime was changed for it, and the sweep script for these two titles
 starts after frame 300. Recorded as an open question, not a defect claim.
 
+A later run moves the first soft key to frame 400 (13 s): the process still
+hangs, with the loading screen unchanged at frames 200 and 400, so this is not
+"the key arrives too early" - our title never finishes the load the key starts,
+and the soft key then walks into the paint path that reads the unloaded data.
+That points at the load itself (its thread or its completion condition), not at
+input timing, for the next investigation.
+
 A `-pg` profile of the first 400 frames (no keys) rules out a CPU-bound startup:
 the whole run samples 0.08 s of CPU, almost all of it `nj_region_draw`
 (559 calls) with `nj_gif_decode` called 189,215 times for the splash
