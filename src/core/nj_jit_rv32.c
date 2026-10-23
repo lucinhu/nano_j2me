@@ -227,6 +227,16 @@ static void rv_forget_memory(rv_writer *w)
 }
 #endif
 
+/* A control-flow join can arrive with different constants as well as different
+ * slot contents. The linear emitter's preceding path proves neither there. */
+static void rv_forget_values(rv_writer *w)
+{
+    rv_forget_memory(w);
+#if NJ_JIT_RV32_REG_CACHE
+    w->regs[0].known = w->regs[1].known = 0;
+#endif
+}
+
 static int rv_imm12(int value)
 {
     return value >= -2048 && value <= 2047;
@@ -1539,10 +1549,10 @@ static int rv_emit_block(nj_vm *vm, rv_writer *w, const rv_scan *s,
             rv_li(w, RV_T4, (nj_s4)s->n);
             rv_branch(w, 6u, RV_T3, RV_T4, RV_FIX_EXIT,
                       s->budget_exit); /* bltu t3, t4 */
-            rv_forget_memory(w);
+            rv_forget_values(w);
         } else if (s->label[i]) {
             label_at[i] = w->used;
-            rv_forget_memory(w);
+            rv_forget_values(w);
         }
         if (s->ins[i].branch != 0) {
             rv_emit_branch(w, s, i);

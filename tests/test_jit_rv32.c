@@ -2958,6 +2958,30 @@ static void test_branches(void)
         }
     }
 
+    /* At a join, an immediate known on the fall-through path is not known
+     * on the taken path. Reusing that compile-time constant drops the load. */
+    {
+        static const nj_u1 code[] = {
+            0x1a, 0x99, 0x00, 0x05, /* iload_0; ifeq 6 */
+            0x04, 0x3c,             /* iconst_1; istore_1 */
+            0x04, 0x3d,             /* iconst_1; istore_2 */
+            0xac
+        };
+        for (i = 0; i < 2; ++i) {
+            init_frame(&initial);
+            initial.locals[0].i = (nj_s4)i;
+            word = branch_run("constant at control-flow join", code,
+                              sizeof(code), 3, &initial, 32, &block,
+                              &expected, &count);
+            CHECK(expected.locals[2].i == 1);
+#if EXECUTE_RV32
+            CHECK(!result_is_fault(word));
+            CHECK(result_exit(word) == 0u);
+            CHECK(result_completed(word) == count);
+#endif
+        }
+    }
+
     /* A forward goto that lands on an instruction inside the window. */
     {
         static const nj_u1 code[] = {
