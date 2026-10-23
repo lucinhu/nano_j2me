@@ -2947,6 +2947,94 @@ static nj_ref m3g_target_graphics(nj_vm *vm, nj_ref target, int *w, int *h)
     return g;
 }
 
+/* Native target access is format/stride aware. RGB565 has implicit opaque
+ * destination alpha; source alpha still participates in fragment blending. */
+static inline nj_u2 m3g_pack565(nj_u4 c)
+{
+    return (nj_u2)(((c >> 8) & 0xf800u) | ((c >> 5) & 0x07e0u) |
+                   ((c >> 3) & 0x001fu));
+}
+
+static inline nj_u4 m3g_pixel_read(const nj_u1 *p, int format)
+{
+    if (format == NJ_PIXFMT_RGB565) {
+        nj_u2 v;
+        nj_u4 r, g, b;
+        memcpy(&v, p, sizeof(v));
+        r = (v >> 11) & 31u; g = (v >> 5) & 63u; b = v & 31u;
+        return 0xff000000u | (((r << 3) | (r >> 2)) << 16) |
+               (((g << 2) | (g >> 4)) << 8) | (b << 3) | (b >> 2);
+    } else if (format == NJ_PIXFMT_RGB888) {
+        return 0xff000000u | ((nj_u4)p[0] << 16) | ((nj_u4)p[1] << 8) | p[2];
+    } else {
+        nj_u4 v;
+        memcpy(&v, p, sizeof(v));
+        return v;
+    }
+}
+
+static inline void m3g_pixel_write(nj_u1 *p, int format, nj_u4 c)
+{
+    if (format == NJ_PIXFMT_RGB565) {
+        nj_u2 v = m3g_pack565(c);
+        memcpy(p, &v, sizeof(v));
+    } else if (format == NJ_PIXFMT_RGB888) {
+        p[0] = (nj_u1)(c >> 16); p[1] = (nj_u1)(c >> 8); p[2] = (nj_u1)c;
+    } else {
+        memcpy(p, &c, sizeof(c));
+    }
+}
+
+static nj_surface *m3g_target_surface(nj_vm *vm, nj_ref target, nj_surface *scratch)
+{
+    const char *cn = nj_ref_class_name(target);
+    nj_ref image = NULL;
+    nj_surface *s;
+    int bpp;
+    if (!cn) return NULL;
+    if (strcmp(cn, "javax/microedition/lcdui/Image") == 0) image = target;
+    else if (strcmp(cn, "javax/microedition/lcdui/Graphics") == 0)
+        image = nj_rget(vm, target, m3g_fof(vm, cn, "gTarget",
+                                           "Ljavax/microedition/lcdui/Image;"));
+    else return NULL;
+    s = nj_midp_surface(vm, image, scratch);
+    if (!s || !s->pixels || s->width <= 0 || s->height <= 0) return NULL;
+    bpp = s->format == NJ_PIXFMT_RGB565 ? 2 :
+          s->format == NJ_PIXFMT_RGB888 ? 3 :
+          s->format == NJ_PIXFMT_ARGB8888 ? 4 : 0;
+    if (!bpp || (nj_s8)s->stride < (nj_s8)s->width * bpp) return NULL;
+    return s;
+}
+
+/* Bounds use wide intermediates: a translated clip or viewport may extend
+ * outside the surface, but projection continues to use the full viewport. */
+static int m3g_target_bounds(nj_vm *vm, nj_ref self, const nj_surface *s,
+                             int *x0, int *y0, int *x1, int *y1)
+{
+    nj_s8 tx = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_btx", "I"));
+    nj_s8 ty = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_bty", "I"));
+    nj_s8 left = tx + nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vx", "I"));
+    nj_s8 top = ty + nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vy", "I"));
+    nj_s8 right = left + nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vw", "I"));
+    nj_s8 bottom = top + nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vh", "I"));
+    nj_s8 cx = tx + nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_bcx", "I"));
+    nj_s8 cy = ty + nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_bcy", "I"));
+    nj_s8 cw = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_bcw", "I"));
+    nj_s8 ch = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_bch", "I"));
+    if (cw <= 0 || ch <= 0) return 0;
+    if (left < cx) left = cx;
+    if (top < cy) top = cy;
+    if (right > cx + cw) right = cx + cw;
+    if (bottom > cy + ch) bottom = cy + ch;
+    if (left < 0) left = 0;
+    if (top < 0) top = 0;
+    if (right > s->width) right = s->width;
+    if (bottom > s->height) bottom = s->height;
+    if (left >= right || top >= bottom) return 0;
+    *x0 = (int)left; *y0 = (int)top; *x1 = (int)right; *y1 = (int)bottom;
+    return 1;
+}
+
 NJFN(m3g_bindTarget)
 {
     nj_ref self = NJ_THIS(args);
@@ -2956,18 +3044,21 @@ NJFN(m3g_bindTarget)
     nj_rput(vm, self,
             nj_field_lookup(vm, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;", 0),
             target);
-    /*
-     * "the state of the Graphics3D instance is ... viewport : undefined
-     * (reset at bindTarget)" - the reset is to the whole target, so a title
-     * that never calls setViewport draws into all of it.  The fields stay 0
-     * for a target this runtime cannot draw into, and render() then does
-     * nothing.
-     */
-    if (m3g_target_graphics(vm, target, &w, &h) != 0 && w > 0 && h > 0) {
-        nj_iput(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vx", "I", 0), 0);
-        nj_iput(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vy", "I", 0), 0);
-        nj_iput(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vw", "I", 0), w);
-        nj_iput(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vh", "I", 0), h);
+    {
+        nj_ref g = m3g_target_graphics(vm, target, &w, &h);
+        static const char *from[] = { "gTx", "gTy", "gClipX", "gClipY", "gClipW", "gClipH" };
+        static const char *to[] = { "_nj_btx", "_nj_bty", "_nj_bcx", "_nj_bcy", "_nj_bcw", "_nj_bch" };
+        unsigned i;
+        for (i = 0; i < 6; ++i) {
+            nj_s4 v = g ? nj_iget(vm, g, m3g_fof(vm, "javax/microedition/lcdui/Graphics", from[i], "I")) : 0;
+            nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, to[i], "I"), v);
+        }
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vx", "I"),
+                 g ? nj_iget(vm, g, m3g_fof(vm, "javax/microedition/lcdui/Graphics", "gClipX", "I")) : 0);
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vy", "I"),
+                 g ? nj_iget(vm, g, m3g_fof(vm, "javax/microedition/lcdui/Graphics", "gClipY", "I")) : 0);
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vw", "I"), w);
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vh", "I"), h);
     }
     /* The depth buffer belongs to the target as much as the viewport does:
        binding a new one starts from a clean buffer.  The next render clears
@@ -3019,14 +3110,15 @@ NJFN(m3g_setCamera)
 
 /* The Background image covers the viewport through its crop rectangle.
    BORDER uses the clear colour outside the image; REPEAT wraps each axis. */
-static void m3g_background_image(nj_vm *vm, nj_ref bg, nj_ref target,
+static void m3g_background_image(nj_vm *vm, nj_ref self, nj_ref bg, nj_ref target,
                                   int vx, int vy, int vw, int vh)
 {
     nj_ref image = nj_rget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_img", "L" NJ_C_IMAGE2D ";"));
-    nj_ref pixels, dst_image = NULL;
+    nj_ref pixels;
     nj_surface scratch, *surface;
     const char *cls = nj_ref_class_name(target);
     int iw, ih, cw, ch, cx, cy, mx, my, fmt, bpp, x, y;
+    int x0, y0, x1, y1, dst_bpp;
     const nj_u1 *src;
 
     if (!image || !target || !cls) { return; }
@@ -3037,14 +3129,12 @@ static void m3g_background_image(nj_vm *vm, nj_ref bg, nj_ref target,
     bpp = fmt == 100 ? 4 : fmt == 99 ? 3 : 0;
     if (!pixels || !bpp || iw <= 0 || ih <= 0 ||
         (nj_size)iw * ih * bpp > nj_array_length(pixels)) { return; }
-    if (strcmp(cls, "javax/microedition/lcdui/Image") == 0) {
-        dst_image = target;
-    } else if (strcmp(cls, "javax/microedition/lcdui/Graphics") == 0) {
-        dst_image = nj_rget(vm, target, m3g_fof(vm, cls, "gTarget", "Ljavax/microedition/lcdui/Image;"));
-    } else { return; }
-    surface = nj_midp_surface(vm, dst_image, &scratch);
-    if (!surface || surface->format != NJ_PIXFMT_ARGB8888) { return; }
-    if (vw <= 0 || vh <= 0) { vx = vy = 0; vw = surface->width; vh = surface->height; }
+    surface = m3g_target_surface(vm, target, &scratch);
+    if (!surface || !m3g_target_bounds(vm, self, surface, &x0, &y0, &x1, &y1)) return;
+    vx += nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_btx", "I"));
+    vy += nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_bty", "I"));
+    dst_bpp = surface->format == NJ_PIXFMT_RGB565 ? 2 :
+              surface->format == NJ_PIXFMT_RGB888 ? 3 : 4;
     cx = nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cropX", "I"));
     cy = nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cropY", "I"));
     cw = nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cropW", "I"));
@@ -3053,67 +3143,68 @@ static void m3g_background_image(nj_vm *vm, nj_ref bg, nj_ref target,
     my = nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_immodeY", "I"));
     if (cw <= 0 || ch <= 0) { return; }
     src = (const nj_u1 *)nj_array_data(pixels);
-    for (y = 0; y < vh; y++) {
-        int sy = cy + (int)(((double)y + 0.5) * ch / vh);
-        nj_u4 *row;
-        if (vy + y < 0 || vy + y >= surface->height) { continue; }
+    for (y = y0; y < y1; y++) {
+        int sy = cy + (int)(((double)y - vy + 0.5) * ch / vh);
+        nj_u1 *row;
         if (my == 33) { sy = ((sy % ih) + ih) % ih; }
         if (sy < 0 || sy >= ih) { continue; }
-        row = (nj_u4 *)((nj_u1 *)surface->pixels + (nj_size)(vy + y) * surface->stride);
-        for (x = 0; x < vw; x++) {
-            int sx = cx + (int)(((double)x + 0.5) * cw / vw);
+        row = (nj_u1 *)surface->pixels + (nj_size)y * surface->stride;
+        for (x = x0; x < x1; x++) {
+            int sx = cx + (int)(((double)x - vx + 0.5) * cw / vw);
             const nj_u1 *p;
-            if (vx + x < 0 || vx + x >= surface->width) { continue; }
             if (mx == 33) { sx = ((sx % iw) + iw) % iw; }
             if (sx < 0 || sx >= iw) { continue; }
             p = src + ((nj_size)sy * iw + sx) * bpp;
-            row[vx + x] = 0xFF000000u | ((nj_u4)p[0] << 16) |
-                          ((nj_u4)p[1] << 8) | p[2];
+            m3g_pixel_write(row + (nj_size)x * dst_bpp, surface->format,
+                0xFF000000u | ((nj_u4)p[0] << 16) | ((nj_u4)p[1] << 8) | p[2]);
         }
     }
 }
 
 NJFN(m3g_clear)
 {
-    nj_ref bg = NJ_ARG_REF(args, 0);
-    nj_ref self = NJ_THIS(args);
-    nj_ref target;
-    nj_s4 argb;
-
-    if (!bg) {
+    nj_ref bg = NJ_ARG_REF(args, 0), self = NJ_THIS(args), target;
+    nj_surface scratch, *surface;
+    int x0, y0, x1, y1;
+    nj_s4 vx, vy, vw, vh;
+    if (!bg) return NJ_OK;
+    target = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_target", "Ljava/lang/Object;"));
+    surface = m3g_target_surface(vm, target, &scratch);
+    if (!surface || !m3g_target_bounds(vm, self, surface, &x0, &y0, &x1, &y1))
         return NJ_OK;
-    }
-    if (nj_iget(vm, bg, nj_field_lookup(vm, NJ_C_BG, "_nj_dclear", "Z", 0))) {
-        nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), -1);
-    }
-    if (!nj_iget(vm, bg, nj_field_lookup(vm, NJ_C_BG, "_nj_cclear", "Z", 0))) {
-        return NJ_OK;               /* the title asked for no colour clear */
-    }
-    argb = nj_iget(vm, bg, nj_field_lookup(vm, NJ_C_BG, "_nj_color", "I", 0));
-    target = nj_rget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_target",
-                                               "Ljava/lang/Object;", 0));
-    /*
-     * bindTarget(Object) is handed the target surface directly.  A title
-     * binds either a Graphics or an Image; both answer to setColor/fillRect,
-     * and filling the whole viewport is all a clear has to do.
-     */
-    if (target && nj_heap_owns(vm, target)) {
-        nj_value a[5], n;
-        nj_s4 vx = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vx", "I", 0));
-        nj_s4 vy = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vy", "I", 0));
-        nj_s4 vw = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vw", "I", 0));
-        nj_s4 vh = nj_iget(vm, self, nj_field_lookup(vm, NJ_C_G3D, "_nj_vh", "I", 0));
-
-        a[0].i = argb | (nj_s4)0xFF000000u;
-        if (nj_call(vm, target, "javax/microedition/lcdui/Graphics", "setColor",
-                    "(I)V", a, &n) != NJ_OK) {
-            return NJ_OK;           /* not a surface: nothing to clear */
+    if (nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_dclear", "Z"))) {
+        nj_ref a = nj_rget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zbuf", "[I"));
+        int zw = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zw", "I"));
+        int zh = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zh", "I"));
+        nj_s4 frame = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"));
+        if (a && zw == surface->width && zh == surface->height &&
+            (nj_size)zw * zh <= nj_array_length(a)) {
+            nj_s4 *z = (nj_s4 *)nj_array_data(a);
+            int y;
+            if (frame != (nj_s4)vm->frames) {
+                /* Preserve the existing once-per-frame initialisation. */
+                memset(z, 0, (size_t)zw * zh * sizeof(*z));
+            } else for (y = y0; y < y1; ++y) {
+                memset(z + (nj_size)y * zw + x0, 0, (size_t)(x1 - x0) * sizeof(*z));
+            }
+            nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), (nj_s4)vm->frames);
+        } else {
+            nj_iput(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_zframe", "I"), -1);
         }
-        a[0].i = vx; a[1].i = vy; a[2].i = vw; a[3].i = vh;
-        (void)nj_call(vm, target, "javax/microedition/lcdui/Graphics", "fillRect",
-                      "(IIII)V", a, &n);
-        m3g_background_image(vm, bg, target, vx, vy, vw, vh);
     }
+    if (!nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_cclear", "Z"))) return NJ_OK;
+    {
+        nj_gfx g;
+        nj_u4 colour = (nj_u4)nj_iget(vm, bg, m3g_fof(vm, NJ_C_BG, "_nj_color", "I"));
+        nj_gfx_init(&g, surface);
+        nj_gfx_set_color(&g, colour | 0xff000000u);
+        nj_gfx_fill_rect(&g, x0, y0, x1 - x0, y1 - y0);
+    }
+    vx = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vx", "I"));
+    vy = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vy", "I"));
+    vw = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vw", "I"));
+    vh = nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_vh", "I"));
+    m3g_background_image(vm, self, bg, target, vx, vy, vw, vh);
     return NJ_OK;
 }
 
@@ -6237,6 +6328,13 @@ static const nj_builtin_field g3d_fields[] = {
     { "_nj_vy", "I", NJ_ACC_PUBLIC },
     { "_nj_vw", "I", NJ_ACC_PUBLIC },
     { "_nj_vh", "I", NJ_ACC_PUBLIC },
+    /* Graphics translation and clip captured at bindTarget. */
+    { "_nj_btx", "I", NJ_ACC_PUBLIC },
+    { "_nj_bty", "I", NJ_ACC_PUBLIC },
+    { "_nj_bcx", "I", NJ_ACC_PUBLIC },
+    { "_nj_bcy", "I", NJ_ACC_PUBLIC },
+    { "_nj_bcw", "I", NJ_ACC_PUBLIC },
+    { "_nj_bch", "I", NJ_ACC_PUBLIC },
     { "_nj_instance", "L" NJ_C_G3D ";", NJ_ACC_PUBLIC | NJ_ACC_STATIC },
     { "_nj_hints", "I", NJ_ACC_PUBLIC },
     { "_nj_depth", "Z", NJ_ACC_PUBLIC },
@@ -6245,7 +6343,7 @@ static const nj_builtin_field g3d_fields[] = {
     { "_nj_lights", "[L" NJ_C_LIGHT ";", NJ_ACC_PUBLIC },
     { "_nj_lmats", "[F", NJ_ACC_PUBLIC },
     /* The software rasteriser's own state: 1/w per pixel (larger is
-       nearer), the viewport it belongs to, and the frame it was last
+       nearer), the target dimensions, and the frame it was last
        cleared in - a title that never calls clear() still renders. */
     { "_nj_zbuf", "[I", NJ_ACC_PUBLIC },
     { "_nj_zw", "I", NJ_ACC_PUBLIC },
@@ -8640,20 +8738,22 @@ static int sw_depth(nj_vm *vm, nj_ref self, m3g_sw *sw)
     nj_field *fw = nj_field_lookup(vm, NJ_C_G3D, "_nj_zw", "I", 0);
     nj_field *fh = nj_field_lookup(vm, NJ_C_G3D, "_nj_zh", "I", 0);
     nj_field *fr = nj_field_lookup(vm, NJ_C_G3D, "_nj_zframe", "I", 0);
-    nj_size n = (nj_size)sw->vw * (nj_size)sw->vh;
+    nj_u8 count = (nj_u8)(unsigned)sw->surf->width * (unsigned)sw->surf->height;
+    nj_size n;
     nj_ref a;
     nj_u4 mark;
     nj_s4 zw, zh, zf;
     nj_s4 *p;
 
-    if (!fz || !fw || !fh || !fr || n == 0u) {
+    if (!fz || !fw || !fh || !fr || count == 0u || count > 0x3fffffffu) {
         return 0;
     }
+    n = (nj_size)count;
     zw = nj_iget(vm, self, fw);
     zh = nj_iget(vm, self, fh);
     zf = nj_iget(vm, self, fr);
     a = nj_rget(vm, self, fz);
-    if (!a || zw != sw->vw || zh != sw->vh || a->length < (nj_u4)n) {
+    if (!a || zw != sw->surf->width || zh != sw->surf->height || a->length < (nj_u4)n) {
         nj_ref na = nj_array_new(vm, "I", n);
 
         if (!na) {
@@ -8662,8 +8762,8 @@ static int sw_depth(nj_vm *vm, nj_ref self, m3g_sw *sw)
         mark = nj_root_mark(vm);
         na = nj_root(vm, na);
         nj_rput(vm, self, fz, na);
-        nj_iput(vm, self, fw, sw->vw);
-        nj_iput(vm, self, fh, sw->vh);
+        nj_iput(vm, self, fw, sw->surf->width);
+        nj_iput(vm, self, fh, sw->surf->height);
         a = na;
         nj_root_release(vm, mark);
         zf = -1;                       /* a fresh array is already "far" */
@@ -8994,7 +9094,8 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     int back, minx, maxx, miny, maxy, px, py;
     float e0, e1, e2, g, h, k;
     float dxe0, dye0, dxe1, dye1, dxe2, dye2, dxg, dyg, dxh, dyh, dxk, dyk;
-    nj_u4 *dst;
+    nj_u1 *dst;
+    int format, bpp;
     nj_u4 drawn = 0u;
     /* Gouraud: the three vertex colours, interpolated like 1/w.  A flat
        triangle (the same colour three times, which is every unlit one) keeps
@@ -9014,7 +9115,9 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     if (!sw->surf || !sw->z || !sw->surf->pixels) {
         return 0u;
     }
-    if (sw->surf->format != NJ_PIXFMT_ARGB8888) {
+    format = sw->surf->format;
+    if (format != NJ_PIXFMT_ARGB8888 && format != NJ_PIXFMT_RGB565 &&
+        format != NJ_PIXFMT_RGB888) {
         return 0u;
     }
     if (area == 0.0f) {
@@ -9041,7 +9144,8 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     if (minx > maxx || miny > maxy) {
         return 0u;
     }
-    dst = (nj_u4 *)sw->surf->pixels;
+    dst = (nj_u1 *)sw->surf->pixels;
+    bpp = format == NJ_PIXFMT_RGB565 ? 2 : format == NJ_PIXFMT_RGB888 ? 3 : 4;
     /* The edge functions are evaluated once per scanline and then stepped
        by a constant, which is what makes this affordable: a triangle that
        covers a third of a 240x320 screen used to cost three multiplies per
@@ -9094,7 +9198,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
         float lo = (float)minx, hi = (float)maxx;
         int xl, xr, i;
         nj_size o;
-        nj_u4 *drow;
+        nj_u1 *drow;
         int empty = 0;
 
         /* The span this scanline's three edges allow, solved directly
@@ -9129,25 +9233,25 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
             rr += dxr * skip;
             rgc += dxgc * skip;
             rbc += dxb * skip;
-            o = (nj_size)(py - sw->vy) * (nj_size)sw->vw + (nj_size)(xl - sw->vx);
-            drow = dst + (nj_size)py * (nj_size)sw->surf->width + (nj_size)xl;
+            o = (nj_size)py * (nj_size)sw->surf->width + (nj_size)xl;
+            drow = dst + (nj_size)py * (nj_size)sw->surf->stride + (nj_size)xl * bpp;
 #if NJ_M3G_FAST_PATHS
             /* The opaque, flat case needs only one interpolant. Keep its
              * expression and stepping order identical to the general loop:
              * reassociating the depth arithmetic can change a tie. */
             if (flat_opaque) {
-                for (px = xl; px <= xr; px++, o++, drow++, pg += dxg) {
+                for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg) {
                     nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
 
                     if (key > 0 && (!sw->dtest || key > sw->z[o])) {
                         if (sw->dwrite) { sw->z[o] = key; }
-                        *drow = flat;
+                        m3g_pixel_write(drow, format, flat);
                         drawn = 1u;
                     }
                 }
             } else
 #endif
-            for (px = xl; px <= xr; px++, o++, drow++, pg += dxg, ph += dxh,
+            for (px = xl; px <= xr; px++, o++, drow += bpp, pg += dxg, ph += dxh,
                      pk += dxk, rr += dxr, rgc += dxgc, rbc += dxb) {
                 nj_s4 key = (nj_s4)(pg * (ia * 65536.0f));
                 nj_u4 c, ca;
@@ -9208,14 +9312,15 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                 }
                 if (sw->dwrite) { sw->z[o] = key; }
                 if (sw->blend == 68) {              /* REPLACE */
-                    *drow = sw->awrite ? c
-                                       : ((c & 0x00FFFFFFu) | (*drow & 0xFF000000u));
+                    m3g_pixel_write(drow, format, sw->awrite ? c :
+                        ((c & 0x00FFFFFFu) | (m3g_pixel_read(drow, format) & 0xFF000000u)));
                 } else if (ca < 255u || sw->blend == 65 || sw->blend == 66 ||
                            sw->blend == 67) {
-                    *drow = sw_blend(c, *drow, sw->blend, sw->awrite);
+                    m3g_pixel_write(drow, format,
+                        sw_blend(c, m3g_pixel_read(drow, format), sw->blend, sw->awrite));
                 } else {
-                    *drow = sw->awrite ? c
-                                       : ((c & 0x00FFFFFFu) | (*drow & 0xFF000000u));
+                    m3g_pixel_write(drow, format, sw->awrite ? c :
+                        ((c & 0x00FFFFFFu) | (m3g_pixel_read(drow, format) & 0xFF000000u)));
                 }
                 drawn = 1u;
             }
@@ -9407,7 +9512,7 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
         ne[2] = r->mv[8] * nx + r->mv[9] * ny + r->mv[10] * nz;
         len = ne[0] * ne[0] + ne[1] * ne[1] + ne[2] * ne[2];
         if (len > 1.0e-12f) {
-            len = 1.0f / (float)sqrt((double)len);
+            len = 1.0f / sqrtf(len);
             ne[0] *= len; ne[1] *= len; ne[2] *= len;
         } else {
             ne[0] = ne[1] = ne[2] = 0.0f;
@@ -9600,12 +9705,12 @@ static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
                    transform, so the direction towards it is +z. */
                 lx = dx; ly = dy; lz = dz;
             } else {                                      /* OMNI and SPOT */
-                float dl = (float)sqrt((double)(dx * dx + dy * dy + dz * dz));
+                float dl = sqrtf(dx * dx + dy * dy + dz * dz);
 
                 lx = le[0] - pe[0];
                 ly = le[1] - pe[1];
                 lz = le[2] - pe[2];
-                dist = (float)sqrt((double)(lx * lx + ly * ly + lz * lz));
+                dist = sqrtf(lx * lx + ly * ly + lz * lz);
                 if (dl > 0.0f) { dx /= dl; dy /= dl; dz /= dl; }
                 if (dist > 0.0f) {
                     float cosang;
@@ -9626,7 +9731,7 @@ static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
                 }
             }
             {
-                float ll = (float)sqrt((double)(lx * lx + ly * ly + lz * lz));
+                float ll = sqrtf(lx * lx + ly * ly + lz * lz);
 
                 if (ll <= 1.0e-9f) { continue; }
                 lx /= ll; ly /= ll; lz /= ll;
@@ -9647,13 +9752,13 @@ static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
             acc[2] += mdif[2] * lb * ndl * 255.0f;
             if (spec_scale > 0.0f) {
                 float vx = -pe[0], vy = -pe[1], vz = -pe[2];
-                float vl = (float)sqrt((double)(vx * vx + vy * vy + vz * vz));
+                float vl = sqrtf(vx * vx + vy * vy + vz * vz);
                 float hx, hy, hz, hl, ndh, sp;
 
                 if (vl > 1.0e-9f) {
                     vx /= vl; vy /= vl; vz /= vl;
                     hx = lx + vx; hy = ly + vy; hz = lz + vz;
-                    hl = (float)sqrt((double)(hx * hx + hy * hy + hz * hz));
+                    hl = sqrtf(hx * hx + hy * hy + hz * hz);
                     if (hl > 1.0e-9f) {
                         hx /= hl; hy /= hl; hz /= hl;
                         ndh = ne[0] * hx + ne[1] * hy + ne[2] * hz;
@@ -10042,43 +10147,20 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
        fallback for a target this cannot reach. */
     memset(&r.sw, 0, sizeof(r.sw));
     {
-        const char *tcn = nj_ref_class_name(target);
-        nj_ref img = 0;
-        nj_surface *s;
-
-        if (tcn && strcmp(tcn, "javax/microedition/lcdui/Image") == 0) {
-            img = target;
-        } else if (tcn && strcmp(tcn, "javax/microedition/lcdui/Graphics") == 0) {
-            nj_field *gf = nj_field_lookup(vm, "javax/microedition/lcdui/Graphics",
-                                           "gTarget",
-                                           "Ljavax/microedition/lcdui/Image;", 0);
-            if (gf) { img = nj_rget(vm, target, gf); }
-        }
-        /*
-         * The view must outlive this call: jr_draw runs after jr_setup has
-         * returned, and a scratch living on jr_setup's own frame turns into
-         * whatever the next call puts there.  It lives in the draw state.
-         */
-        s = nj_midp_surface(vm, img, &r.scratch);
-        /*
-         * The software rasteriser writes 32-bit pixels, so a 16-bit target
-         * cannot go through it - and a renderer that quietly dropped every
-         * triangle on such a target would look exactly like a scene that is
-         * off screen.  sw.surf stays NULL there, which sends the triangles to
-         * the Java emitter instead: no depth buffer and no texture, but the
-         * geometry appears, and that is the honest trade for a 565 screen.
-         */
-        if (s && s->format == NJ_PIXFMT_ARGB8888 &&
-            r.vx >= 0 && r.vy >= 0 && r.vx + r.vw <= s->width &&
-            r.vy + r.vh <= s->height) {
+        int x0, y0, x1, y1;
+        nj_surface *s = m3g_target_surface(vm, target, &r.scratch);
+        nj_s8 vx = (nj_s8)r.vx + nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_btx", "I"));
+        nj_s8 vy = (nj_s8)r.vy + nj_iget(vm, self, m3g_fof(vm, NJ_C_G3D, "_nj_bty", "I"));
+        if (vx < (-2147483647 - 1) || vx > 2147483647 ||
+            vy < (-2147483647 - 1) || vy > 2147483647) return 0;
+        r.vx = (int)vx; r.vy = (int)vy;
+        if (s) {
+            /* An empty visible rectangle is a no-op, never a Java fallback. */
+            if (!m3g_target_bounds(vm, self, s, &x0, &y0, &x1, &y1)) return 0;
             r.sw.surf = s;
-            r.sw.vx = r.vx;
-            r.sw.vy = r.vy;
-            r.sw.vw = r.vw;
-            r.sw.vh = r.vh;
-            if (!sw_depth(vm, self, &r.sw)) {
-                r.sw.surf = NULL;      /* no depth buffer, no depth test */
-            }
+            r.sw.vx = x0; r.sw.vy = y0;
+            r.sw.vw = x1 - x0; r.sw.vh = y1 - y0;
+            if (!sw_depth(vm, self, &r.sw)) return 0;
         }
     }
 
