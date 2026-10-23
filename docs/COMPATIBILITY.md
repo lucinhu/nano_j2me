@@ -2572,6 +2572,12 @@ further bytecode ran. So the hang is not a Java-level loop - it stops inside
 something that paint calls (a native or a wait) with the interpreter idle.
 That is where the load completion, not the key timing, sits.
 
+A native-call sampler narrows it further: the process is a single thread in
+state `R`, and in 20 s it makes about 2.1 M calls of the `read()I` native
+(an `InputStream` read that returns instead of blocking), so the title spins on
+a stream that is already at end of input where the reference's stream would
+wait. Naming the stream's class at that call site is the next step.
+
 A `-pg` profile of the first 400 frames (no keys) rules out a CPU-bound startup:
 the whole run samples 0.08 s of CPU, almost all of it `nj_region_draw`
 (559 calls) with `nj_gif_decode` called 189,215 times for the splash
