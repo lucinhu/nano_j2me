@@ -40,10 +40,17 @@ methods leave cheaply. This revision replaces the two-way 128-entry site table
 with one **per-method probe map**: a 16-bit state cell per bytecode offset in a
 fixed arena, plus a small method table.
 
-- `0x0000..0x3FFF` is heat, `0x4000` refused, `0x6000|insns` analysed and waiting
-  to compile, `0x8000|slot` compiled. The current method is cached, so the
-  steady-state probe is one pointer comparison and one 16-bit array load per
-  candidate bytecode: no hash, no way scan, no per-site record.
+- `0x0000..0x3FFF` is heat, `0x4000` refused, `0x6000|insns` ready for
+  compilation (the analysed length, or zero when execute mode deferred the check
+  to the compilation pass), `0x8000|slot` compiled. The current method is
+  cached, so the steady-state probe is one pointer comparison and one 16-bit
+  array load per candidate bytecode: no hash, no way scan, no per-site record.
+- At the hot threshold execute mode skips the separate decode-only analysis
+  whenever the remaining quantum is at least `NJ_JIT_MAX_BLOCK_INSNS`: the
+  compilation pass already rejects unsupported and short sites before `SAVE()`
+  or any executable-memory callback, so a compiling site pays for one decode,
+  not two. Probe-only mode still analyses, and an end-of-quantum budget still
+  takes the analysing path so it can report `budget_skips`.
 - Methods whose body cannot fit the arena are never mapped and never JIT'd;
   refused sites stay refused until their map is recycled; code eviction clears
   the cell so the site starts cold again. When the arena is full the least
@@ -51,11 +58,12 @@ fixed arena, plus a small method table.
   drops metadata only: compiled code stays in the code cache, and a later
   recompile of the same `(method, pc)` reuses the surviving entry instead of
   emitting a duplicate.
-- Default metadata is now about 8 KiB per VM (a 4 KiB arena, 32 method slots and
-  64 code entries) instead of about 5 KiB. The report's startup case recorded
-  `metadata=5000` and 1,069,968 site-history evictions; the new scheme bounds map
-  metadata and recycles whole methods, at the price of a larger fixed block.
-  Every limit is configurable; see the table in [JIT.md](JIT.md).
+- Default metadata is now 11,480 bytes per VM on RV32 and 12,648 on LP64 (a
+  4 KiB arena, 32 method slots, 64 code entries and 12 fault records per entry)
+  instead of about 5 KiB. The report's startup case recorded `metadata=5000` and
+  1,069,968 site-history evictions; the new scheme bounds map metadata and
+  recycles whole methods, at the price of a larger fixed block. Every limit is
+  configurable; see the table in [JIT.md](JIT.md).
 
 The report's P1 was coverage first. This revision compiles natively:
 
@@ -159,7 +167,9 @@ operations in all) could not fit in one block, so every iteration left native
 code and re-entered the probe. Raising the defaults to 64 bytecodes and 12
 fault slots makes both loop bodies compile as a single loop block: execute-mode
 `fallback_ratio` for those kernels drops from 0.1450 / 0.0743 to 0.0022 / 0.0034,
-and the RV32 execute/interpreter ratios fall from 0.308 / 0.271 to 0.038 / 0.034.
+and the RV32 execute/interpreter ratios fall from 0.308 / 0.271 to about
+0.040 / 0.034 (the before/after rows were measured in separate sessions, so
+compare the direction, not the last digit).
 The cost is metadata: every cache entry carries `NJ_JIT_MAX_FAULTS` four-byte
 fault records, so `metadata_bytes` grows from 9,432 to 11,480 on RV32 and from
 10,600 to 12,648 on LP64. Both macros remain configurable for RAM-constrained
@@ -169,18 +179,19 @@ Steady state, 20,000 iterations:
 
 | Kernel | RV32 interpreter / probe / execute ms | RV32 exec/interp | RV32 probe/interp | ARM64 interpreter / probe / execute ms | ARM64 exec/interp | ARM64 probe/interp |
 |---|---:|---:|---:|---:|---:|---:|
-| Locals | 35.79 / 18.37 / 1.53 | 0.043 | 0.513 | 28.28 / 14.33 / 1.39 | 0.049 | 0.507 |
-| Constants | 5.84 / 11.20 / 0.26 | 0.044 | 1.919 | 4.25 / 8.29 / 0.24 | 0.056 | 1.949 |
-| Fields | 12.23 / 21.05 / 0.59 | 0.048 | 1.721 | 9.41 / 19.05 / 0.65 | 0.069 | 2.025 |
-| Arrays | 12.22 / 21.57 / 0.80 | 0.065 | 1.766 | 11.36 / 19.49 / 1.06 | 0.093 | 1.716 |
-| Mixed | 26.54 / 44.72 / 0.90 | 0.034 | 1.685 | 19.13 / 33.77 / 1.14 | 0.060 | 1.765 |
-| Branches | 12.01 / 21.94 / 0.46 | 0.038 | 1.826 | 8.91 / 17.18 / 0.57 | 0.064 | 1.928 |
+| Locals | 14.63 / 33.05 / 2.71 | 0.185 | 2.259 | 11.36 / 30.12 / 2.61 | 0.230 | 2.653 |
+| Constants | 11.37 / 20.60 / 0.47 | 0.041 | 1.813 | 8.17 / 15.24 / 0.70 | 0.086 | 1.866 |
+| Fields | 23.48 / 38.35 / 1.10 | 0.047 | 1.634 | 16.58 / 28.80 / 1.10 | 0.066 | 1.738 |
+| Arrays | 23.53 / 41.58 / 1.39 | 0.059 | 1.767 | 16.13 / 31.31 / 1.79 | 0.111 | 1.941 |
+| Mixed | 49.98 / 81.75 / 1.69 | 0.034 | 1.636 | 34.83 / 62.07 / 2.06 | 0.059 | 1.782 |
+| Branches | 22.55 / 41.63 / 0.90 | 0.040 | 1.846 | 16.58 / 31.88 / 0.93 | 0.056 | 1.923 |
 
-The first measured row in each process (locals) is distorted by page-in and host
-noise, which is why its probe/interpreter column shows less than one even though
-probe-only mode does strictly more work; treat the ratio columns as directional.
-Do not subtract probe-only time from execute time for attribution either:
-probe-only also visits bytecodes skipped by a native block.
+Interpreted wall time varies with host load, so the absolute milliseconds and the
+ratio columns are directional: the ratios compare a probe or execute run against
+the interpreter run of the same process, but QEMU throttling still moves them by
+tens of percent between sessions. Do not subtract probe-only time from execute
+time for attribution either: probe-only also visits bytecodes skipped by a
+native block.
 
 Execute-mode compiled footprint, RV32 / ARM64: locals 1 block and 238 / 364 code
 bytes; constants 1 and 150 / 220; fields 1 and 324 / 448; arrays 2 and 570 / 740;
@@ -192,12 +203,12 @@ compiled code bytes):
 
 | Kernel | RV32 int / exec | RV32 ratio | RV32 bytes | ARM64 int / exec | ARM64 ratio | ARM64 bytes |
 |---|---:|---:|---:|---:|---:|---:|
-| Locals | 1.05 / 2.86 | 2.715 | 238 | 0.83 / 2.83 | 3.410 | 364 |
-| Constants | 0.57 / 0.30 | 0.530 | 150 | 0.45 / 0.25 | 0.548 | 220 |
-| Fields | 0.61 / 0.62 | 1.005 | 324 | 0.44 / 0.73 | 1.652 | 448 |
-| Arrays | 0.68 / 0.74 | 1.081 | 570 | 0.48 / 0.99 | 2.056 | 740 |
-| Mixed | 1.32 / 0.65 | 0.491 | 910 | 0.95 / 0.71 | 0.746 | 1200 |
-| Branches | 0.64 / 0.22 | 0.349 | 414 | 0.50 / 0.28 | 0.557 | 632 |
+| Locals | 0.44 / 1.26 | 2.874 | 238 | 0.36 / 1.21 | 3.322 | 364 |
+| Constants | 0.23 / 0.31 | 1.311 | 150 | 0.19 / 0.22 | 1.161 | 220 |
+| Fields | 0.60 / 0.84 | 1.400 | 324 | 0.45 / 0.64 | 1.431 | 448 |
+| Arrays | 0.76 / 0.85 | 1.120 | 570 | 0.49 / 1.05 | 2.160 | 740 |
+| Mixed | 1.45 / 0.61 | 0.424 | 910 | 0.94 / 0.70 | 0.743 | 1200 |
+| Branches | 0.63 / 0.23 | 0.356 | 414 | 0.51 / 0.28 | 0.545 | 632 |
 
 The first few hundred iterations pay for analysis and emission (locals — a
 one-block kernel whose whole hot path is compiled immediately — and, on ARM64,
@@ -239,9 +250,9 @@ callee-saved registers, SP and FPCR.
 
 On RV32 and ARM64 QEMU, the full VM suite passes: `test_jit` (probe/execute
 modes, `SAVE()`, quanta, guards, cache, ownership, failure paths), `test_jit_rv32`
-(1,755,790 assertions, 2,981 compiled blocks, 2,987 native calls on RV32;
-encoding-only 934,949 on ARM64), `test_jit_arm64` (2,315,309 assertions, 4,402
-compiled, 4,456 native on ARM64; encoding-only 1,524,664 on RV32),
+(1,755,804 assertions, 2,981 compiled blocks, 2,987 native calls on RV32;
+encoding-only 934,963 on ARM64), `test_jit_arm64` (2,315,323 assertions, 4,402
+compiled, 4,456 native on ARM64; encoding-only 1,525,377 on RV32),
 `test_jit_perf` (six kernels × three modes, checksums match the oracle),
 `test_vm` (`hello.jar`), `test_engine` (`bench.jar`, 54 checks), `test_lifecycle`,
 `test_blocked_init` (12 checks), `test_thread_lifecycle` and `test_natives`. The runtime

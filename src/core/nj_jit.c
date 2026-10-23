@@ -505,9 +505,17 @@ int nj_jit_probe(nj_vm *vm, const nj_frame *fr, nj_u4 pc, nj_value *sp,
         JIT_DETAIL(jit, cold_skips);
         return 0;
     }
-    {
-        /* Decode once at the hot threshold, without emission or callbacks.
-         * Short/unsupported sites never reach SAVE or executable allocation. */
+    /* Probe-only mode records the analysed length and never compiles, so it
+     * always needs the decode-only pass. Execute mode normally can skip it:
+     * the block length is bounded by NJ_JIT_MAX_BLOCK_INSNS, so whenever the
+     * remaining budget is at least that large the budget can never refuse the
+     * block. nj_jit_execute then compiles into a stack buffer, and jit_compile
+     * rejects unsupported and short sites before SAVE() or any
+     * executable-memory callback, keeping the refusal in this cell. Only the
+     * end-of-quantum case (a small remaining budget) still pays for the
+     * analysis pass, so it can report budget_skips instead of compiling code
+     * that the guard would immediately refuse to run. */
+    if (jit->mode == NJ_JIT_MODE_PROBE_ONLY || budget < NJ_JIT_MAX_BLOCK_INSNS) {
         nj_jit_block block;
         if (!NJ_JIT_ANALYZE(vm, m, pc, &block)) {
             *cell = JIT_CELL_REFUSED;
@@ -531,10 +539,11 @@ int nj_jit_probe(nj_vm *vm, const nj_frame *fr, nj_u4 pc, nj_value *sp,
             JIT_DETAIL(jit, budget_skips);
             return 0;
         }
-        /* Keep the analysis result: a site whose stack guard fails in execute
-         * must not re-analyze on every probe. */
         *cell = (nj_u2)(JIT_CELL_READY | (nj_u2)block.insns);
+        ticket->cell = cell;
+        return 1;
     }
+    *cell = JIT_CELL_READY;
     ticket->cell = cell;
     return 1;
 #else

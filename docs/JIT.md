@@ -192,10 +192,16 @@ restores it too). Negation preserves NaN payload bits on both targets.
 
 A conservative inline opcode filter skips known interpreter-only instructions.
 The remaining probe only touches bounded JIT metadata: it never allocates, frees,
-emits code, calls the port or enters Java. At the hot threshold, a decode-only
-scan rejects unsupported/short prefixes before `SAVE()`. The interpreter still
-saves exact PC/SP and instruction counts before compilation, executable-memory
-callbacks (including eviction/free), or native execution. A returned probe ticket
+emits code, calls the port or enters Java. At the hot threshold the site becomes
+ready: in execute mode the probe omits the separate decode-only scan whenever
+the remaining scheduling budget is at least `NJ_JIT_MAX_BLOCK_INSNS`, because
+compilation emits into a stack buffer and rejects unsupported/short prefixes
+before `SAVE()` or any executable-memory callback anyway. A smaller remaining
+budget (end of a quantum) still takes the decode-only path, so it can report
+`budget_skips` instead of compiling code the guard would refuse to run;
+`NJ_JIT_MODE_PROBE_ONLY` always analyses so it can report block lengths. The
+interpreter still saves exact PC/SP and instruction counts before compilation,
+executable-memory callbacks (including eviction/free), or native execution. A returned probe ticket
 must be consumed immediately; port callbacks must not re-enter the VM. Native
 bytecodes consume the scheduler quantum and are included in VM instruction
 statistics. While this JIT is installed, interpreter superinstruction fusions
@@ -220,8 +226,9 @@ Tracing bypasses native execution so per-bytecode trace output remains available
 | `NJ_JIT_MAX_CODE_BYTES` | 2048 | Maximum bytes per block; also compiler stack scratch |
 
 Heat, refusal and compiled state live in one per-method map: a 16-bit cell per
-bytecode offset (`0..0x3FFF` heat, `0x4000` refused, `0x6000|insns` analyzed and
-awaiting compilation, `0x8000|slot` compiled). The interpreter's current method is
+bytecode offset (`0..0x3FFF` heat, `0x4000` refused, `0x6000|insns` ready for
+compilation — the analysed length, or zero when execute mode deferred the check
+to the compilation pass — and `0x8000|slot` compiled). The interpreter's current method is
 cached, so the steady-state probe is a pointer compare plus one array load: no
 hashing and no scan per bytecode. Maps come from a fixed arena. When it is full,
 the least recently used *method* map is destroyed and the arena is compacted;
@@ -235,9 +242,9 @@ inline; a zero divisor is one more guarded instruction, so the interpreter
 raises the usual `ArithmeticException` at the original PC.
 A 64-entry cache requests at most 128 KiB of code at default limits; OS page
 rounding and port headers are additional (POSIX commonly consumes one page per
-small block). At default limits the JIT allocates about 8 KiB of host metadata
-per VM (code entries, method table and probe arena); `metadata_bytes` reports
-the exact size. Metadata belongs to the VM host allocator. Executable storage
+small block). At default limits the JIT allocates about 11 KiB of host metadata
+per VM on RV32 and 12 KiB on LP64 (code entries with fault records, method table
+and probe arena); `metadata_bytes` reports the exact size. Metadata belongs to the VM host allocator. Executable storage
 belongs to the port and is freed on eviction, `nj_jit_disable()`, or VM
 destruction, even when an external engine temporarily replaced the JIT. Cached
 bytecode/method metadata must remain immutable, as in the current class loader.
