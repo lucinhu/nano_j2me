@@ -2606,6 +2606,30 @@ pointer-and-key script): 4 non-zero exits - this pair plus the two known ones
 not a ZIP) - 3 caught-only uncaught-class titles unchanged from round 12, no
 missing API, no crash outside the pair above.
 
+## The byte-array window that could read outside itself (round 31, 2026-10-23)
+
+`ByteArrayInputStream(byte[], int, int)` builds a *window* over an array. The
+JDK rejects a window that does not fit - a negative offset or length, or
+`offset > buf.length - length` - with `IndexOutOfBoundsException`, and it
+starts the window's mark at the offset rather than at the start of the array.
+Our constructor did neither: it wrote `count = offset + length` after no
+validation at all and left `mark` at 0.
+
+Two consequences. `read()` could run past the end of the array and return
+whatever followed it as if it were stream data, instead of reporting the end
+of the window. And `reset()` on a stream that never called `mark()` jumped to
+array position 0, i.e. outside the window the caller asked for. Both are now
+Java's: the window is validated (`off < 0 || len < 0 || off > length - len`)
+and `mark` starts at the offset; `read()` also refuses to touch a position
+past the backing array as a defensive guard.
+
+`tests/test_lib.c` covers it: a window reads exactly its three bytes and then
+`-1`, `available()` counts down through the window, `reset()` without a mark
+returns to the window's first byte, and four malformed windows
+(`(-1,1)`, `(0,-1)`, `(8,1)`, `(7,2)`) are rejected. With the old code the
+four malformed windows are accepted, so the file fails before the fix and
+passes after it (798 -> 803 passing assertions).
+
 ## The store name that was a path (round 13, 2026-10-23)
 
 `阿尔卑斯牧场物语_7043` opens a record store called `/A/AConfig`.  JSR-118 asks
