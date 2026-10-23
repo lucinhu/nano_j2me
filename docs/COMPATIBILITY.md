@@ -2511,6 +2511,15 @@ identical, so that coordinate is not the control's hit area. The remaining work
 is to find the hit box (or the timer/state condition) the board waits on; no
 runtime change was made and the item stays open.
 
+A 30-point grid scan (one `pressed@` per 30 frames over the bottom bar and the
+throw-button area) shows the board *is* pointer reactive: the first tap that
+changes the picture is (20,312), which opens the title's own menu screen, and
+later taps cycle between that menu and another panel. Tapping only the
+throw-button area (140-190 x 175-195, 18 taps, 40 frames apart) leaves every
+dump on the board, so that region is not the control that starts a turn. The
+remaining work is to walk the menu and find the button that does; the runtime
+is unchanged.
+
 ## The soft key a title was not ready for (round 15, 2026-10-23)
 
 The pointer-and-key sweep script (first key at frame 20) times out on two
