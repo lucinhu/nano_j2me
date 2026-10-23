@@ -115,6 +115,12 @@
 #ifndef NJ_ENABLE_IO            /* javax.microedition.io + java.io */
 #  define NJ_ENABLE_IO 1
 #endif
+/* Named UTF-8/ASCII character streams.  One int of streaming state per
+ * InputStreamReader/OutputStreamWriter; no buffers or VM-global storage.
+ * Set to 0 for Latin-1 only, with no state field in either class. */
+#ifndef NJ_ENABLE_STREAM_UTF8
+#  define NJ_ENABLE_STREAM_UTF8 1
+#endif
 /* Optional streaming XML parser. Desktop CMake enables it; small standalone
  * ports opt in explicitly. Zero removes the SAX and parser classes. */
 #ifndef NJ_ENABLE_SAX

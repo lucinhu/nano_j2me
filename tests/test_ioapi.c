@@ -661,6 +661,21 @@ static void test_writer(nj_vm *vm)
     (void)stream_text_is(vm, baos, BAOS, "OutputStreamWriter wrote",
                          "ACDEhiYZ");
 
+    /* The small configuration preserves the old writer's low-byte mapping. */
+    {
+        nj_ref ch = nj_char_array_new(vm, 1);
+        ((nj_u2 *)nj_array_data(ch))[0] = 0x0142u;
+        a[0] = vint(0x0141);
+        OK(nj_call(vm, osw, OSW, "write", "(I)V", a, NULL) == NJ_OK);
+        a[0] = vref(ch); a[1] = vint(0); a[2] = vint(1);
+        OK(nj_call(vm, osw, OSW, "write", "([CII)V", a, NULL) == NJ_OK);
+#if NJ_ENABLE_STREAM_UTF8
+        (void)stream_text_is(vm, baos, BAOS, "unmappable Latin-1", "ACDEhiYZ??");
+#else
+        (void)stream_text_is(vm, baos, BAOS, "legacy low-byte writer", "ACDEhiYZAB");
+#endif
+    }
+
     /* The named-encoding constructor, and close() on top of it. */
     {
         nj_ref baos2 = nj_object_new(vm, BAOS);
@@ -815,6 +830,13 @@ static void test_datainput_mark_reset(nj_vm *vm)
 #define IOAPI_PROBE "ioapi/IoApiProbe"
 #define IOAPI_LOCKR "ioapi/LockReader"
 #define IOAPI_RANGE "ioapi/RangeOnlyReader"
+#define IOAPI_ENCODING "ioapi/StreamEncoding"
+
+/* Permit the formal fixture to link against a saved pre-feature archive for
+ * fail-before evidence. The public configuration supplies this in new builds. */
+#ifndef NJ_ENABLE_STREAM_UTF8
+#define NJ_ENABLE_STREAM_UTF8 1
+#endif
 
 struct ioapi_case {
     const char *tag;        /* label IoApiDesktop prints for this value */
@@ -862,6 +884,59 @@ static const struct ioapi_case ioapi_range_cases[] = {
     { "io.r_inherited_ready", IOAPI_RANGE, "inheritedReady",       200 }
 };
 
+/* Generated fixture returns complete sequence digests, not a round trip:
+ * matching encoder/decoder bugs cannot cancel each other. Desktop oracle:
+ * java -Dfile.encoding=ISO-8859-1 -cp /tmp/ioapi ioapi.IoApiDesktop */
+static const struct ioapi_case ioapi_encoding_cases[] = {
+    { "io.enc.default_read", IOAPI_ENCODING, "defaultLatin1Read", 490609510 },
+    { "io.enc.default_write", IOAPI_ENCODING, "defaultLatin1Write", 490609510 },
+    { "io.enc.latin1_alias_read", IOAPI_ENCODING, "latin1AliasesRead", 2062192150 },
+    { "io.enc.latin1_alias_write", IOAPI_ENCODING, "latin1AliasesWrite", 2062192150 },
+    { "io.enc.unknown_reader", IOAPI_ENCODING, "unknownReader", 3 },
+    { "io.enc.unknown_writer", IOAPI_ENCODING, "unknownWriter", 3 },
+    { "io.enc.null_reader", IOAPI_ENCODING, "nullReader", 1 },
+    { "io.enc.null_writer", IOAPI_ENCODING, "nullWriter", 1 },
+    { "io.enc.closed_reader", IOAPI_ENCODING, "closedReader", 15 },
+    { "io.enc.closed_writer", IOAPI_ENCODING, "closedWriter", 31 },
+#if NJ_ENABLE_STREAM_UTF8
+    { "io.enc.utf8_alias", IOAPI_ENCODING, "utf8Aliases", -369754991 },
+    { "io.enc.utf8_read", IOAPI_ENCODING, "utf8Read", 1319727115 },
+    { "io.enc.split_supplementary", IOAPI_ENCODING, "splitSupplementary", 1388573965 },
+    { "io.enc.ready_pending_low", IOAPI_ENCODING, "readyPendingLow", 125085354 },
+    { "io.enc.skip_pending_low", IOAPI_ENCODING, "skipPendingLow", 1664843219 },
+    { "io.enc.utf8_write", IOAPI_ENCODING, "utf8WriteOverloads", 1895888707 },
+    { "io.enc.writer_cross_calls", IOAPI_ENCODING, "writerCrossCalls", 577745536 },
+    { "io.enc.close_dangling_high", IOAPI_ENCODING, "closeDanglingHigh", 18446 },
+    { "io.enc.closed_empty_string", IOAPI_ENCODING, "closedEmptyStringWrite", 1 },
+    { "io.enc.failed_close_writer", IOAPI_ENCODING, "failedCloseWriter", 8191 },
+    /* Local callback contract: one pair plus one reentrant 'A', in any byte
+     * order. Desktop buffering gives 1, so this is not a HotSpot oracle row. */
+    { "io.enc.local_reentrant_pair", IOAPI_ENCODING, "writerReentrantPendingPair", 7 },
+    { "io.enc.write_bad_surrogates", IOAPI_ENCODING, "malformedSurrogatesWrite", 1188236842 },
+    { "io.enc.ascii_alias", IOAPI_ENCODING, "asciiAliases", -2141736295 },
+    { "io.enc.ascii_read", IOAPI_ENCODING, "asciiRead", 1312801457 },
+    { "io.enc.ascii_write", IOAPI_ENCODING, "asciiWrite", -1035939219 },
+    { "io.enc.invalid_lead", IOAPI_ENCODING, "invalidLead", 65515248 },
+    { "io.enc.overlong_two", IOAPI_ENCODING, "overlongTwo", 65515248 },
+    { "io.enc.overlong_three", IOAPI_ENCODING, "overlongThree", 2033002261 },
+    { "io.enc.overlong_four", IOAPI_ENCODING, "overlongFour", -1399409776 },
+    { "io.enc.truncated_two", IOAPI_ENCODING, "truncatedTwo", 66060 },
+    { "io.enc.truncated_three", IOAPI_ENCODING, "truncatedThree", 66060 },
+    { "io.enc.truncated_four", IOAPI_ENCODING, "truncatedFour", 66060 },
+    { "io.enc.bad_cont_two", IOAPI_ENCODING, "badContinuationTwo", 63485837 },
+    { "io.enc.bad_cont_three", IOAPI_ENCODING, "badContinuationThree", 63485837 },
+    { "io.enc.bad_cont_four", IOAPI_ENCODING, "badContinuationFour", 63485837 },
+    { "io.enc.encoded_surrogates", IOAPI_ENCODING, "encodedSurrogates", 65515248 },
+    { "io.enc.above_limit", IOAPI_ENCODING, "aboveUnicodeLimit", -1399409776 },
+    { "io.enc.modified_nul", IOAPI_ENCODING, "modifiedNulRejected", 2030970738 }
+#else
+    /* These rows express the disabled-feature contract, not desktop behavior:
+     * UTF-8 and ASCII raise UnsupportedEncodingException for both streams. */
+    { "io.enc.disabled_utf8", IOAPI_ENCODING, "disabledUtf8Rejected", 15 },
+    { "io.enc.disabled_ascii", IOAPI_ENCODING, "disabledAsciiRejected", 15 }
+#endif
+};
+
 static void run_ioapi_cases(nj_vm *vm, const char *cls, const nj_u1 *bytes,
                             nj_u4 len, const struct ioapi_case *cases,
                             unsigned count)
@@ -891,7 +966,7 @@ static void run_ioapi_cases(nj_vm *vm, const char *cls, const nj_u1 *bytes,
             nj_clear_exception(vm);
             continue;
         }
-        OK_MSG(ret.i == c->want, "%s = %d, want %d (desktop HotSpot)",
+        OK_MSG(ret.i == c->want, "%s = %d, want %d (Java fixture contract)",
                c->tag, (int)ret.i, (int)c->want);
     }
 }
@@ -911,6 +986,14 @@ static void test_ioapi_java(nj_vm *vm)
                     ioapi_range_cases,
                     (unsigned)(sizeof(ioapi_range_cases)
                                / sizeof(ioapi_range_cases[0])));
+    OK(nj_class_load(vm, "ioapi/StreamEncoding$WriterOutput",
+                     ioapi_StreamEncoding_WriterOutput_class,
+                     (nj_u4)sizeof(ioapi_StreamEncoding_WriterOutput_class)) != NULL);
+    run_ioapi_cases(vm, IOAPI_ENCODING, ioapi_StreamEncoding_class,
+                    (nj_u4)sizeof(ioapi_StreamEncoding_class),
+                    ioapi_encoding_cases,
+                    (unsigned)(sizeof(ioapi_encoding_cases)
+                               / sizeof(ioapi_encoding_cases[0])));
 }
 
 int main(void)

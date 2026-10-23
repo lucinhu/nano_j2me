@@ -2781,3 +2781,56 @@ covered, stated plainly:
   interpreter-level A/B per change. They are not end-to-end game FPS.
 - **Save-state format is native-endian and build-specific**; RMS files are
   portable, but VM save states are not.
+
+## Explicit UTF-8 streams must actually decode UTF-8 (rounds 44–45, 2026-10-23)
+
+`InputStreamReader(in, "UTF-8")` previously ignored its encoding argument and
+mapped every byte to a Latin-1 character. `OutputStreamWriter` did the reverse
+low-byte mapping. The default remains ISO-8859-1, but explicit UTF-8 and ASCII
+now have streaming codecs. Unknown names throw `UnsupportedEncodingException`;
+null names and operations on closed streams report the appropriate exceptions.
+The UTF-8 reader preserves a pending surrogate or lookahead byte across short
+reads, `ready()` and `skip()`. The writer preserves a high surrogate across
+write calls and flushes, replaces an unmatched one on close, and closes even
+when the wrapped stream's flush fails. A callback into the same writer cannot
+consume the same pending surrogate twice.
+
+The original `初恋物语_7612.jar` is a visible witness, rather than just a
+synthetic string test. Its `d.a(String)` constructs the UTF-8 reader and reads
+`/txt/help.txt` in 64-character chunks. Both parent and fixed executables were
+replayed with held keys in fresh, separate RMS directories at 240×320, 30 FPS,
+for 1,350 frames. Both reached the help page: the parent showed mojibake, while
+the fixed build showed readable Chinese beginning
+“这是一个养成类的角色扮演游戏”. FreeJ2ME-Plus, run with its Latin-1 default,
+showed the same Chinese text when brought to that page. This verifies the text
+reader and menu route; it does not certify a complete playthrough. A second
+candidate, `寂静岭2汉化版_10177.jar`, also ran without an uncaught exception in
+900-frame parent/fixed smoke runs, but those runs stayed at the sound/vibration
+options and are not evidence of a Chinese localization page.
+
+The compiled Java fixture exercises actual constructor and virtual-call
+bytecode, including fragmented UTF-8, malformed sequences, surrogate pairs,
+ASCII replacement, aliases, empty writes after close, flush failure and local
+writer reentry. The initial expanded fixture against the frozen parent library
+failed 31 checks; the final enabled driver passes 232, the disabled build 206.
+The desktop oracle fixes `-Dfile.encoding=ISO-8859-1`. The callback reentry row
+is explicitly a local streaming contract: desktop buffering has different
+callback timing, so that row is not advertised as desktop differential parity.
+An independent source review found three additional cases (small-build byte
+mapping, closed empty writes and failed-close state); their probes drove the
+final corrections. The Lead ran the final builds and real-game replays.
+
+`NJ_ENABLE_STREAM_UTF8=1` is the default CMake/config option. Setting it to `0`
+removes the extra stream state and codec paths, retains legacy Latin-1 low-byte
+writes, and rejects named UTF-8/ASCII constructors instead of silently decoding
+them incorrectly. On the measured 64-bit build `nj_vm_sizeof()` stays 6,912 B;
+each InputStreamReader/OutputStreamWriter gains one integer state field, but
+object alignment makes the measured allocation 64→80 B per live stream.
+There are no retained input buffers or whole-file allocations. Compared with
+the disabled Release object, enabled I/O adds 5,924 B text and 128 B constant
+metadata (reported in the relocatable object's data total), with zero BSS.
+
+Final verification: CTest 101/101; the 232-check I/O driver also passes under
+ASan/UBSan with leak checking and halt-on-UB; disabled driver 206/0;
+`BENCH sum=-136042548 s=5`, 70,514,376 bytecodes and 92,432 B heap are unchanged.
+These are compatibility and footprint results, not a new performance claim.

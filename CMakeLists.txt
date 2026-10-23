@@ -70,6 +70,7 @@ set(NJ_ENABLE_INFLATE 1 CACHE STRING "Built-in DEFLATE decompressor (0 = port ho
 set(NJ_ENABLE_WAV   1 CACHE STRING "Built-in PCM WAV reader (0 = platform codec)")
 set(NJ_ENABLE_RMS   1 CACHE STRING "RecordStore persistence")
 set(NJ_ENABLE_IO    1 CACHE STRING "java.io and javax.microedition.io")
+set(NJ_ENABLE_STREAM_UTF8 1 CACHE STRING "UTF-8/ASCII character streams (one state int per reader/writer)")
 set(NJ_ENABLE_SAX   1 CACHE STRING "Streaming non-validating SAX XML reader")
 set(NJ_ENABLE_AMR   1 CACHE STRING "Built-in AMR narrowband speech decoder")
 # The built-in MIDI renderer.  A port whose platform plays MIDI itself (Android
@@ -283,6 +284,7 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_JPEG=${NJ_ENABLE_JPEG}
   NJ_ENABLE_RMS=${NJ_ENABLE_RMS}
   NJ_ENABLE_IO=${NJ_ENABLE_IO}
+  NJ_ENABLE_STREAM_UTF8=${NJ_ENABLE_STREAM_UTF8}
   NJ_ENABLE_SAX=${NJ_ENABLE_SAX}
   NJ_ENABLE_AMR=${NJ_ENABLE_AMR}
   NJ_ENABLE_MIDI=${NJ_ENABLE_MIDI}
