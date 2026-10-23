@@ -50,9 +50,9 @@
  * generic Reader default (false); InputStreamReader keeps isr_ready and its
  * real available() probe.  wr_write_str_range is Writer.write(String,int,int),
  * which OutputStreamWriter inherits. */
-NJFN(isr_init); NJFN(isr_read); NJFN(isr_range); NJFN(isr_ready);
+NJFN(isr_init); NJFN(isr_range); NJFN(isr_ready);
 NJFN(isr_close);
-NJFN(osw_init); NJFN(osw_write); NJFN(osw_range); NJFN(osw_flush);
+NJFN(osw_init); NJFN(osw_range); NJFN(osw_flush);
 NJFN(rd_read); NJFN(rd_init_lock); NJFN(rd_ready);
 NJFN(rd_mark); NJFN(rd_mark_supported); NJFN(rd_reset); NJFN(wr_write_str_range);
 NJFN(wr_close);
@@ -291,13 +291,29 @@ NJFN(bais_init)
 NJFN(bais_init_range)
 {
     nj_status st = NJ_CALL(bais_init, vm, th, args, ret);
+    nj_ref buf = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 len = NJ_ARG_INT(args, 2);
+
     if (st != NJ_OK) {
         return st;
     }
+    /* ByteArrayInputStream(byte[], int, int) rejects a window that does not
+     * fit: the JDK throws IndexOutOfBoundsException for a negative offset or
+     * length, or for offset > buf.length - length.  Without that check the
+     * count can run past the end of the array, and read() would then return
+     * bytes that are not part of the stream at all instead of reporting end
+     * of input.  The window's mark starts at the window offset, not at 0, so
+     * a reset() cannot rewind outside the window either. */
+    if (!buf || off < 0 || len < 0 || off > (nj_s4)buf->length - len) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
     nj_field_write_int(vm, NJ_THIS(args), nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"),
-                       NJ_ARG_INT(args, 1));
+                       off);
     nj_field_write_int(vm, NJ_THIS(args), nj_hot_field(vm, NJ_HF_BAIS_COUNT, BAIS, "count", "I"),
-                       NJ_ARG_INT(args, 1) + NJ_ARG_INT(args, 2));
+                       off + len);
+    nj_field_write_int(vm, NJ_THIS(args), nj_hot_field(vm, NJ_HF_BAIS_MARK, BAIS, "mark", "I"),
+                       off);
     return NJ_OK;
 }
 
@@ -308,7 +324,7 @@ NJFN(bais_read)
     nj_s4 pos = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_POS, BAIS, "pos", "I"));
     nj_s4 count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAIS_COUNT, BAIS, "count", "I"));
 
-    if (!buf || pos >= count) {
+    if (!buf || pos >= count || pos >= (nj_s4)buf->length) {
         ret->i = -1;
         return NJ_OK;
     }
@@ -748,6 +764,11 @@ NJFN(dos_writeUTF)
             tmp[n++] = (nj_u1)(0x80u | ((c >> 6) & 0x3Fu));
             tmp[n++] = (nj_u1)(0x80u | (c & 0x3Fu));
         }
+    }
+    if (n > 0xFFFFu) {
+        nj_host_free(vm, tmp);
+        return nj_throw(vm, "java/io/UTFDataFormatException",
+                        "encoded string too long");
     }
     {
         nj_u1 hdr[2];
@@ -1664,10 +1685,9 @@ static const nj_builtin_method connection_methods[] = {
  * have to exist HERE, and tools/check_cldc_api.py cannot see the gap either,
  * because the JDK supplies the class happily at compile time.
  *
- * THE ENCODING IS ISO-8859-1, and that is not a shortcut: this runtime already
- * advertises microedition.encoding as ISO-8859-1 through System.getProperty, so
- * a MIDlet reading a character stream gets exactly the encoding the platform
- * told it to expect.  Decoding UTF-8 here would make that property a lie.
+ * Default constructors use the advertised microedition.encoding (ISO-8859-1).
+ * Explicit encoding constructors and streaming UTF-8/ASCII live in
+ * nj_io_charset.inc; an unknown name must fail instead of falling back.
  */
 static nj_ref strm_field(nj_vm *vm, nj_ref o, const char *cls, const char *name,
                          const char *desc)
@@ -1716,24 +1736,6 @@ NJFN(rd_init_lock)
     return NJ_OK;
 }
 
-NJFN(isr_read)
-{
-    nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_READER, "lock",
-                           "Ljava/lang/Object;");
-    nj_value r;
-    if (!in) {
-        return nj_throw(vm, "java/io/IOException", "stream is closed");
-    }
-    r.i = 0;
-    if (nj_call(vm, in, NJ_C_ISTREAM, "read", "()I", NULL, &r) != NJ_OK) {
-        return NJ_ERR;
-    }
-    /* One byte, widened.  For ISO-8859-1 that is the identity, which is the
-     * whole reason this encoding is the honest one to implement. */
-    ret->i = r.i;
-    return NJ_OK;
-}
-
 NJFN(isr_ready)
 {
     nj_ref in = strm_field(vm, NJ_THIS(args), NJ_C_READER, "lock",
@@ -1778,18 +1780,6 @@ NJFN(osw_init)
         nj_field_write_ref(vm, self, f, out);
     }
     return NJ_OK;
-}
-
-NJFN(osw_write)
-{
-    nj_ref out = strm_field(vm, NJ_THIS(args), NJ_C_WRITER, "wrOut",
-                            "Ljava/io/OutputStream;");
-    nj_value a[4];
-    if (!out) {
-        return nj_throw(vm, "java/io/IOException", "stream is closed");
-    }
-    a[0].i = NJ_ARG_INT(args, 0) & 0xFF;   /* ISO-8859-1: the low byte */
-    return nj_call(vm, out, NJ_C_OSTREAM, "write", "(I)V", a, NULL);
 }
 
 /*
@@ -1882,6 +1872,8 @@ NJFN(osw_flush)
     }
     return NJ_OK;
 }
+
+#include "nj_io_charset.inc"
 
 /*
  * The concrete half of java.io.Reader and java.io.Writer.
@@ -2112,13 +2104,12 @@ NJFN(wr_write_str_range)
     if (!s) {
         return nj_throw(vm, "java/lang/NullPointerException", "string is null");
     }
-    if (off < 0 || len < 0 || (nj_u4)(off + len) > nj_string_len(s)) {
+    if (off < 0 || len < 0 || (nj_u4)off > nj_string_len(s) ||
+        (nj_u4)len > nj_string_len(s) - (nj_u4)off) {
         return nj_throw(vm, "java/lang/IndexOutOfBoundsException",
                         "string index out of range");
     }
-    if (len == 0) {
-        return NJ_OK;   /* an empty slice must not need an array at all */
-    }
+    /* Empty slices also dispatch to the subclass, which checks for close(). */
     /* Copy the slice straight into the char[] the range form takes; going
      * through String.substring would allocate twice for the same characters. */
     c = nj_char_array_new(vm, (nj_u4)len);
@@ -2126,7 +2117,7 @@ NJFN(wr_write_str_range)
         return NJ_ERR;
     }
     p = (nj_u2 *)nj_array_data(c);
-    if (!p) {
+    if (!p && len > 0) {
         return NJ_ERR;
     }
     for (i = 0; i < len; i++) {
@@ -2564,11 +2555,11 @@ const nj_builtin_class nj_lib_io_classes[] = {
       writer_methods,
       (nj_u2)(sizeof(writer_methods) / sizeof(writer_methods[0])) },
     { NJ_C_ISR, NJ_C_READER, NJ_ACC_PUBLIC,
-      NULL, 0u,   /* the stream slot is Reader's own ("lock") */
+      CS_FIELDS, CS_NFIELDS, /* Reader.lock holds the stream. */
       isr_methods,
       (nj_u2)(sizeof(isr_methods) / sizeof(isr_methods[0])) },
     { NJ_C_OSW, NJ_C_WRITER, NJ_ACC_PUBLIC,
-      NULL, 0u,   /* the stream slot is Writer's own ("wrOut") */
+      CS_FIELDS, CS_NFIELDS, /* Writer.wrOut holds the stream. */
       osw_methods,
       (nj_u2)(sizeof(osw_methods) / sizeof(osw_methods[0])) },
     { "java/io/InputStream", "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
@@ -2596,6 +2587,7 @@ const nj_builtin_class nj_lib_io_classes[] = {
     NJ_IO_EXC("java/io/EOFException", "java/io/IOException")
     NJ_IO_EXC("java/io/InterruptedIOException", "java/io/IOException")
     NJ_IO_EXC("java/io/UnsupportedEncodingException", "java/io/IOException")
+    NJ_IO_EXC("java/io/UTFDataFormatException", "java/io/IOException")
     NJ_IO_EXC("javax/microedition/io/ConnectionNotFoundException",
               "java/io/IOException")
     { "javax/microedition/io/Connector", "java/lang/Object", NJ_ACC_PUBLIC,
@@ -2736,25 +2728,25 @@ const nj_native_entry nj_lib_io_table[] = {
     { "java/io/DataOutputStream", "size",         "()I", dos_size },
 
     { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";)V", isr_init },
-    { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V", isr_init },
-    { NJ_C_ISR, "read",  "()I", isr_read },
-    { NJ_C_ISR, "read",  "([CII)I", isr_range },
+    { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V", isr_init_encoding },
+    { NJ_C_ISR, "read",  "()I", isr_encoded_read },
+    { NJ_C_ISR, "read",  "([CII)I", isr_encoded_range },
     { NJ_C_ISR, "skip",  "(J)J", rd_skip },
-    { NJ_C_ISR, "ready", "()Z", isr_ready },
+    { NJ_C_ISR, "ready", "()Z", isr_encoded_ready },
     { NJ_C_ISR, "mark",  "(I)V", rd_mark },
     { NJ_C_ISR, "markSupported", "()Z", rd_mark_supported },
     { NJ_C_ISR, "reset", "()V", rd_reset },
-    { NJ_C_ISR, "close", "()V", isr_close },
+    { NJ_C_ISR, "close", "()V", isr_stream_close },
     { NJ_C_OSW, "<init>", "(L" NJ_C_OSTREAM ";)V", osw_init },
-    { NJ_C_OSW, "<init>", "(L" NJ_C_OSTREAM ";Ljava/lang/String;)V", osw_init },
-    { NJ_C_OSW, "write", "(I)V", osw_write },
-    { NJ_C_OSW, "write", "([CII)V", osw_range },
+    { NJ_C_OSW, "<init>", "(L" NJ_C_OSTREAM ";Ljava/lang/String;)V", osw_init_encoding },
+    { NJ_C_OSW, "write", "(I)V", osw_encoded_write },
+    { NJ_C_OSW, "write", "([CII)V", osw_encoded_range },
     { NJ_C_OSW, "write", "(Ljava/lang/String;II)V", wr_write_str_range },
-    { NJ_C_OSW, "flush", "()V", osw_flush },
-    { NJ_C_OSW, "close", "()V", wr_close },
+    { NJ_C_OSW, "flush", "()V", osw_stream_flush },
+    { NJ_C_OSW, "close", "()V", osw_stream_close },
     { "javax/microedition/io/Connector", "open", "(Ljava/lang/String;)Ljavax/microedition/io/Connection;", connector_open },
     { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";)V", isr_init },
-    { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V", isr_init },
+    { NJ_C_ISR, "<init>", "(L" NJ_C_ISTREAM ";Ljava/lang/String;)V", isr_init_encoding },
 
     { "javax/microedition/io/Connector", "open", "(Ljava/lang/String;I)Ljavax/microedition/io/Connection;", connector_open_stream },
     { "javax/microedition/io/Connector", "open", "(Ljava/lang/String;IZ)Ljavax/microedition/io/Connection;", connector_open_stream },

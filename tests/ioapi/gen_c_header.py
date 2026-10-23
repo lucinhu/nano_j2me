@@ -34,6 +34,8 @@ CLASSES = [
     ("ioapi_IoApiProbe_class", "ioapi/IoApiProbe.class"),
     ("ioapi_LockReader_class", "ioapi/LockReader.class"),
     ("ioapi_RangeOnlyReader_class", "ioapi/RangeOnlyReader.class"),
+    ("ioapi_StreamEncoding_WriterOutput_class", "ioapi/StreamEncoding$WriterOutput.class"),
+    ("ioapi_StreamEncoding_class", "ioapi/StreamEncoding.class"),
 ]
 
 

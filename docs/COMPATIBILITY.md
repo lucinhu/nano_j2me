@@ -2606,6 +2606,106 @@ pointer-and-key script): 4 non-zero exits - this pair plus the two known ones
 not a ZIP) - 3 caught-only uncaught-class titles unchanged from round 12, no
 missing API, no crash outside the pair above.
 
+## The string that was too long to write (round 38, 2026-10-23)
+
+`DataOutputStream.writeUTF` writes a two-byte length and then the modified
+UTF-8 payload, so the payload cannot exceed 65535 bytes. The JDK refuses a
+longer string with `UTFDataFormatException`; this runtime wrote the length
+modulo 65536 and then the whole payload, i.e. it produced a stream its own
+`readUTF` (and any other reader) walks straight off.
+
+Now the encoder checks the limit before writing anything and throws the checked
+exception. `java/io/UTFDataFormatException` did not exist in the runtime at
+all, so it is declared too (an `IOException` subclass, as in the platform) -
+a title's own `catch (UTFDataFormatException)` clause could not resolve before.
+
+`tests/test_lib.c` covers both sides of the boundary: a 65535-byte payload is
+written with its header (size 65537), and 65536 bytes is refused with the
+exception. test_lib 834 passed / 0 failed, and the same assertions are clean
+under a Debug `-DNJ_SANITIZE=ON` build (834/0, no ASan/UBSan/LSan reports).
+Ten corpus titles that lean on IO - the football manager (RMS), 3D孤胆枪手,
+仙魔飞行棋, 三国杀, 午夜台球, 超级马里奥, 合金弹头4, 鬼泣3D, 浴火银河 and
+新西游记 - replay 300 frames each with the deep2 script on the fixed build:
+10/10 exit 0, no uncaught exception.
+
+## The byte-array window that could read outside itself (round 31, 2026-10-23)
+
+`ByteArrayInputStream(byte[], int, int)` builds a *window* over an array. The
+JDK rejects a window that does not fit - a negative offset or length, or
+`offset > buf.length - length` - with `IndexOutOfBoundsException`, and it
+starts the window's mark at the offset rather than at the start of the array.
+Our constructor did neither: it wrote `count = offset + length` after no
+validation at all and left `mark` at 0.
+
+Two consequences. `read()` could run past the end of the array and return
+whatever followed it as if it were stream data, instead of reporting the end
+of the window. And `reset()` on a stream that never called `mark()` jumped to
+array position 0, i.e. outside the window the caller asked for. Both are now
+Java's: the window is validated (`off < 0 || len < 0 || off > length - len`)
+and `mark` starts at the offset; `read()` also refuses to touch a position
+past the backing array as a defensive guard.
+
+`tests/test_lib.c` covers it: a window reads exactly its three bytes and then
+`-1`, `available()` counts down through the window, `reset()` without a mark
+returns to the window's first byte, and four malformed windows
+(`(-1,1)`, `(0,-1)`, `(8,1)`, `(7,2)`) are rejected. With the old code the
+four malformed windows are accepted, so the file fails before the fix and
+passes after it (798 -> 803 passing assertions).
+
+The window test also sat next to a *pre-existing* failure in
+`test_alloc_gives_up`: `tryFrag()` returned 1600000 where the test expects
+`-1`. That was not the allocator losing its give-up path - the fixture's
+premise had stopped holding. It allocated one 1.5 MB array in a 2 MB heap,
+dropped it, and expected the next 1.6 MB request to fail, which only holds
+while the freed block cannot merge with the heap tail. The fixture now keeps a
+live 100 KB array on each side of the big one, which is the fragmentation the
+test means to exercise, and `test_lib` is green again (805 passing
+assertions). The fixture also gets its own 2 MB VM now, so the fragmentation
+it leaves behind cannot distort the heap-pressure tests that follow.
+
+Both changes were re-run under the sanitizers, which the first pass had not
+covered: a Debug build with `-DNJ_SANITIZE=ON` (address, undefined and
+leak) runs `test_lib` at 805 passing assertions with zero sanitizer reports,
+so the new window validation and the reformatted fixture are clean under
+ASan, UBSan and LSan.
+
+## Two regression certificates (round 31-32, 2026-10-23)
+
+After the `ByteArrayInputStream` window fix and the allocation-fixture change,
+two bounded regression runs were repeated on the resulting build rather than
+trusting the earlier sweeps:
+
+- full `ctest`: 101/101 in 66.37 s, including `test_lib` at 805 passing
+  assertions (it had been 803/1 before the fixture was given the fragmentation
+  it means to test);
+- the forty-title `deep2` corpus set, 600 frames each with the pointer+key
+  script, fresh RMS per title: **40/40 exited 0**, no missing-API errors, no
+  uncaught exceptions, no hangs (logs under
+  `.local-tools/debug-runs/compat-round9-20261022/round32/sweep/`).
+
+One open item got sharper rather than closed. `街头霸王2冠军典藏版_1812`
+still times out when a soft key is pressed early (a 600-frame replay with
+`400:soft1` returns 124), and the reference runtime with the same early soft
+key finishes normally (its own script run returns 0). The two earlier
+findings stand: the game assembles a 47,215-byte buffer that starts `SDD\0`
+out of `img_title.jar` (which begins `SFD\0`), and it then spins on a
+`ByteArrayInputStream` that has reached its end. So this is not a title that
+needs a later key - it is a load path that our runtime does not complete,
+and the remaining work is to compare the bytes the title assembles against
+what the reference assembles. Rerunning the same 600-frame replay with
+`--heap 32` instead of 16 still times out, so it is not the heap size that
+stops the load either.
+
+Logging every `Class.getResourceAsStream()` during that replay shows all of
+them succeeding, including `bg_ryu.jar` (8,839 B), `bgm_ryu.mid` (11,764 B),
+`_Jar001.jar`/`_Jar002.jar` and the font files - so the resources are there and
+read. The one exception the title raises is its own `NullPointerException` in
+`bZ()` on the byte array `dB` not being set: that path is entered when the soft
+key lands on the menu at frame 400, while the same build finishes the 200-frame
+run whose soft key lands at frame 60. It is a state the title's menu path can
+reach without having run its loader, not a missing runtime API; the remaining
+question is which of the two reference-side flows sets `dB` first.
+
 ## The store name that was a path (round 13, 2026-10-23)
 
 `阿尔卑斯牧场物语_7043` opens a record store called `/A/AConfig`.  JSR-118 asks
@@ -2646,3 +2746,91 @@ Limitation: for such a store `listRecordStores()` now reports the flattened
 name (`A_AConfig`).  A title that saves under a path-like name *and* enumerates
 its stores would see the different spelling; nothing in the corpus does, and
 stores that were filename-safe keep their name exactly.
+
+## Verification limits and open items (end of round 41, 2026-10-23)
+
+Every fix above was verified in this tree: targeted tests, the full `ctest`
+suite (101/101 through round 38), the 27-value JVM digest, and a replay of at
+least one original title where the defect was reachable. What is **not**
+covered, stated plainly:
+
+- **No independent verification.** The verifier and compatibility teammates
+  were expected to re-run these changes from clean worktrees; every delegation
+  in the last rounds ended with the subagent failing before it reported, so the
+  numbers here are the Lead's own runs. They are reproducible from the commands
+  recorded beside them, but they are not a second pair of eyes.
+- **No full-corpus, per-title reference comparison.** Corpus sweeps cover 240
+  to 1,200 frame windows (39x titles total across the sweeps in these rounds)
+  with a generic key script; they find missing members and crashes, not
+  mid-game regressions. Only a handful of titles were compared stage-by-stage
+  against FreeJ2ME-Plus.
+- **Street Fighter II (街头霸王2冠军典藏版_1812) still hangs** when a soft key
+  arrives before its loader has run: the title's own `paint()` state machine
+  reaches `bZ()` with the sound buffer `dB` still null and stays there. The
+  runtime has been ruled out as the cause (all 11 resource lookups succeed,
+  heap size makes no difference, the reference completes the same replay); the
+  remaining work is to find which reference path initialises `dB` first. The
+  title is playable with a later or no early key.
+- **Sound synthesis is approximate**, not a reference mixer: the audio path
+  exists and titles run, but waveform/MIDI output has never been compared
+  sample-by-sample against the reference or a device.
+- **SDL2, real hardware, and long soak runs are not tested** in these rounds;
+  the regression evidence is headless.
+- **Performance numbers are bounded native measurements** (raster tile, class
+  cache, hot fields, raster spans) on fixed workloads, plus one controlled
+  interpreter-level A/B per change. They are not end-to-end game FPS.
+- **Save-state format is native-endian and build-specific**; RMS files are
+  portable, but VM save states are not.
+
+## Explicit UTF-8 streams must actually decode UTF-8 (rounds 44–45, 2026-10-23)
+
+`InputStreamReader(in, "UTF-8")` previously ignored its encoding argument and
+mapped every byte to a Latin-1 character. `OutputStreamWriter` did the reverse
+low-byte mapping. The default remains ISO-8859-1, but explicit UTF-8 and ASCII
+now have streaming codecs. Unknown names throw `UnsupportedEncodingException`;
+null names and operations on closed streams report the appropriate exceptions.
+The UTF-8 reader preserves a pending surrogate or lookahead byte across short
+reads, `ready()` and `skip()`. The writer preserves a high surrogate across
+write calls and flushes, replaces an unmatched one on close, and closes even
+when the wrapped stream's flush fails. A callback into the same writer cannot
+consume the same pending surrogate twice.
+
+The original `初恋物语_7612.jar` is a visible witness, rather than just a
+synthetic string test. Its `d.a(String)` constructs the UTF-8 reader and reads
+`/txt/help.txt` in 64-character chunks. Both parent and fixed executables were
+replayed with held keys in fresh, separate RMS directories at 240×320, 30 FPS,
+for 1,350 frames. Both reached the help page: the parent showed mojibake, while
+the fixed build showed readable Chinese beginning
+“这是一个养成类的角色扮演游戏”. FreeJ2ME-Plus, run with its Latin-1 default,
+showed the same Chinese text when brought to that page. This verifies the text
+reader and menu route; it does not certify a complete playthrough. A second
+candidate, `寂静岭2汉化版_10177.jar`, also ran without an uncaught exception in
+900-frame parent/fixed smoke runs, but those runs stayed at the sound/vibration
+options and are not evidence of a Chinese localization page.
+
+The compiled Java fixture exercises actual constructor and virtual-call
+bytecode, including fragmented UTF-8, malformed sequences, surrogate pairs,
+ASCII replacement, aliases, empty writes after close, flush failure and local
+writer reentry. The initial expanded fixture against the frozen parent library
+failed 31 checks; the final enabled driver passes 232, the disabled build 206.
+The desktop oracle fixes `-Dfile.encoding=ISO-8859-1`. The callback reentry row
+is explicitly a local streaming contract: desktop buffering has different
+callback timing, so that row is not advertised as desktop differential parity.
+An independent source review found three additional cases (small-build byte
+mapping, closed empty writes and failed-close state); their probes drove the
+final corrections. The Lead ran the final builds and real-game replays.
+
+`NJ_ENABLE_STREAM_UTF8=1` is the default CMake/config option. Setting it to `0`
+removes the extra stream state and codec paths, retains legacy Latin-1 low-byte
+writes, and rejects named UTF-8/ASCII constructors instead of silently decoding
+them incorrectly. On the measured 64-bit build `nj_vm_sizeof()` stays 6,912 B;
+each InputStreamReader/OutputStreamWriter gains one integer state field, but
+object alignment makes the measured allocation 64→80 B per live stream.
+There are no retained input buffers or whole-file allocations. Compared with
+the disabled Release object, enabled I/O adds 5,924 B text and 128 B constant
+metadata (reported in the relocatable object's data total), with zero BSS.
+
+Final verification: CTest 101/101; the 232-check I/O driver also passes under
+ASan/UBSan with leak checking and halt-on-UB; disabled driver 206/0;
+`BENCH sum=-136042548 s=5`, 70,514,376 bytecodes and 92,432 B heap are unchanged.
+These are compatibility and footprint results, not a new performance claim.
