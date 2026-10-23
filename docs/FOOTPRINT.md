@@ -863,3 +863,19 @@ invalid, and `Material.<init>` writes the specification's default colours; see
 RAM is unchanged: no field, static, heap or buffer is added, and the checks
 are straight-line compares on the arguments. The `float[3]` attenuation array
 a `Light` already owned is still the only allocation the class makes.
+
+## The rgb565 conversion packs two pixels per word (round 56, 2026-10-24)
+
+The opaque ARGB8888 -> RGB565 copy in `nj_region_draw` now converts pixels in
+pairs inside one 64-bit word; see
+[PERFORMANCE.md](PERFORMANCE.md#two-pixels-per-word-in-the-rgb565-conversion-round-56-2026-10-24).
+
+| Build | Before | After |
+|---|---|---|
+| hosted Release, `nj_gfx.c` `.text` | 35,960 B | **35,688 B** (-272 B) |
+| `nj2me` executable `.text` | 2,910,230 B | **2,909,942** B (-288 B) |
+| `.data` / `.bss` (that object, and the executable) | 0 / 0, 162,736 / 6,688 | **unchanged** |
+
+RAM is unchanged: the pair lives in a register pair, no field, static, heap
+allocation or extra buffer is added, and hosts that are not little-endian keep
+the previous per-pixel loop (a compile-time check picks the loop).

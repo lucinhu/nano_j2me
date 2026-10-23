@@ -2541,3 +2541,44 @@ to the previous binary, as are those of `合金弹头4(完美汉化版)_4053`.
 is smaller than the per-row loop it replaces); the `nj2me` executable `.text`
 2,905,966 -> **2,905,166** B (-800 B); `.data`/`.bss` unchanged. Only C stack
 locals are added, no field, static or buffer, so RAM is unchanged.
+
+## Two pixels per word in the rgb565 conversion (round 56, 2026-10-24)
+
+`nj_region_draw` has copied an opaque ARGB8888 source onto an RGB565 surface in
+groups of eight since round 51: read eight pixels, prove all eight opaque, and
+convert them with no alpha test.  The conversion itself still ran one pixel at
+a time - three shifts and three masks per pixel to build `r5 | g6 << 5 | b5 <<
+11`.  Two of those pixels fit in one 64-bit word, so each channel extraction
+can serve both of them: three shifts, three masks and an `or` for the pair,
+then one shift and one `or` to fold the halves back into the four bytes that go
+to the destination.  The bytes written are the same ones: the pair is built
+`(nj_u8)lo | ((nj_u8)hi << 32)` and the folded word stores `lo | hi << 16`,
+which is exactly two little-endian rgb565 pixels.  A host whose byte order is
+not little-endian keeps the per-pixel loop that was there before.
+
+Numbers are from the scratch blit bench (`nj_gfx_draw_image` of a 240x320
+ARGB8888 image onto a 240x320 RGB565 surface, six interleaved rounds, min of
+each arm, `taskset -c 5`):
+
+| Mode | Before | After | Delta |
+|---|---|---|---|
+| opaque paint (`run`) | 37.98 us | **35.60 us** | -6.25% |
+| `drawImage` with `NJ_ROP_SET` | 37.81 us | **36.16 us** | -4.36% |
+| opaque paint, second size | 37.64 us | **35.95 us** | -4.47% |
+| textured/alpha ARGB modes (untouched) | - | - | within +-2% / noise |
+
+Every framebuffer hash is identical to the parent binary in all eight bench
+modes, so this is a faster way to compute the same bytes, not a different
+picture.  On the heaviest M3G title the effect is below what this machine can
+resolve: `毁灭战士3_10598`, 2,400 paced frames, six interleaved rounds of user
+CPU - parent min 2.355 s / med 2.417 s, this binary min 2.332 s / med 2.442 s
+(min -1.0%, median +1.0%, noise band about +-2%); its dumped frames are
+byte-identical to the parent's.  The title spends most of its CPU in the M3G
+rasteriser, and the conversion is a small part of the blits it does.
+
+### Cost
+
+`nj_gfx.c.o` `.text` 35,960 -> **35,688** B (-272 B: the pair loop replaces more
+code than it adds); the `nj2me` executable `.text` 2,910,230 -> **2,909,942** B
+(-288 B); `.data` 162,736 B and `.bss` 6,688 B unchanged.  RAM is unchanged: no
+field, static, heap allocation or buffer is added.

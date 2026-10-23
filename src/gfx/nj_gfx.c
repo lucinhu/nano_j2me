@@ -2058,12 +2058,37 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                         }
                     }
                     if (all || rop == NJ_ROP_SET) {
-                        for (t = 0; t < m; t++) {
-                            nj_u2 v = (nj_u2)((((grp[t] >> 19) & 0x1Fu) << 11) |
-                                              (((grp[t] >> 10) & 0x3Fu) << 5) |
-                                              ((grp[t] >> 3) & 0x1Fu));
+                        /*
+                         * Convert two pixels per 64-bit word.  Both pixels
+                         * sit in the two halves of one register, so each of
+                         * the three channel extractions is one shift and one
+                         * mask for the pair instead of one of each per pixel;
+                         * the halves fold back together with a shift and an
+                         * or.  The bytes written are the ones the per-pixel
+                         * loop writes: a row of rgb565 pairs is little-endian
+                         * on every port this runtime targets, and a host that
+                         * disagrees keeps the plain loop.
+                         */
+                        int done = 0;
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+                        for (; done + 1 < m; done += 2) {
+                            nj_u8 pair = (nj_u8)grp[done] |
+                                         ((nj_u8)grp[done + 1] << 32);
+                            nj_u8 v = ((pair >> 8) & 0x0000F8000000F800ull)
+                                    | ((pair >> 5) & 0x000007E0000007E0ull)
+                                    | ((pair >> 3) & 0x0000001F0000001Full);
+                            nj_u4 out = (nj_u4)(v & 0xFFFFu)
+                                      | ((nj_u4)(v >> 32) << 16);
 
-                            memcpy(dp + (nj_s8)t * bpp, &v, sizeof v);
+                            memcpy(dp + (nj_s8)done * bpp, &out, sizeof out);
+                        }
+#endif
+                        for (; done < m; done++) {
+                            nj_u2 v = (nj_u2)((((grp[done] >> 19) & 0x1Fu) << 11) |
+                                              (((grp[done] >> 10) & 0x3Fu) << 5) |
+                                              ((grp[done] >> 3) & 0x1Fu));
+
+                            memcpy(dp + (nj_s8)done * bpp, &v, sizeof v);
                         }
                     } else {
                         for (t = 0; t < m; t++) {
