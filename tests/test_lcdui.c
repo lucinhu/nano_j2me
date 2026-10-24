@@ -297,6 +297,25 @@ static void test_image(nj_vm *vm, const blob *png, const blob *png_alpha)
     OK(exc_is(vm, "java/lang/OutOfMemoryError"));
     nj_clear_exception(vm);
 
+    /*
+     * createRGBImage() shares the pixel-count guard: the width and height
+     * multiply there too, and 65536 x 65536 wraps to zero the same way.
+     */
+    {
+        nj_ref rgb = nj_int_array_new(vm, 4u);
+        nj_ref made;
+        OK(rgb != NULL);
+        a[0] = sref(rgb);
+        a[1] = iref(65536);
+        a[2] = iref(65536);
+        a[3] = iref(0);
+        made = call_static_ref(vm, NJ_C_IMAGE, "createRGBImage",
+                               "([IIIZ)L" NJ_C_IMAGE ";", a, NULL);
+        OK(made == NULL);
+        OK(exc_is(vm, "java/lang/OutOfMemoryError"));
+        nj_clear_exception(vm);
+    }
+
     /* ---- getGraphics + getRGB round-trip ---- */
     g = call_ref(vm, img, NJ_C_IMAGE, "getGraphics", "()L" NJ_C_GRAPHICS ";",
                  NULL, &ok);

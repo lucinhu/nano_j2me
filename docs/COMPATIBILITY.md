@@ -3414,3 +3414,26 @@ Evidence: `test_m3g` 654 checks / 0 failures, `test_m3g_references` unchanged,
 sum=-136042548 s=5`.  Like the previous round this is hardening: no title in
 the corpus ships such a texture, and the point is that a damaged asset cannot
 turn into an out-of-bounds read.
+
+## A sampled corpus run after the compatibility fixes (round 38, 2026-10-24)
+
+Rounds 33-37 changed thread reaping, made `Canvas.getKeyCode/getGameAction/
+getKeyName` static as MIDP 2.0 declares them, answered a placeholder key name
+instead of an exception, and added the two pixel-count guards.  To check that
+none of that disturbed gameplay, a sample of the corpus was replayed on this
+build: every fifth JAR of `tests/games` (79 titles), 400 frames each,
+`--port headless --size 240x320 --heap 16 --fps 0`, eight workers, a fresh
+record store per title.
+
+Result: 78 of 79 ran to completion with no uncaught exception; the single
+non-zero exit is 鲁宾逊漂流记汉化BT版_4677, which has no usable MIDlet suite
+(`bad JAR or no MIDlet-Name`) and has failed the same way in every earlier
+sweep.  No `NoSuchMethodError`, `ClassCastException` or `IncompatibleClass-
+ChangeError` appeared anywhere in the run.
+
+`tests/test_lcdui.c` also gained the `createRGBImage()` counterpart of the
+round-36 assertion: the same 65536 x 65536 request must now answer
+`OutOfMemoryError` there too, which it does.
+
+Gates: `ctest` 105/105 (46.55 s), `test_lcdui` PASS, digest 27/27,
+`check_no_statics.sh` OK, `BENCH sum=-136042548 s=5`.
