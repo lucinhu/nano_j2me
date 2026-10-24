@@ -1,0 +1,490 @@
+{
+  "base_commit": "a250a37",
+  "optimization_commit": "27bef20",
+  "merged_source_commit": "5c452cf",
+  "resolution": [
+    240,
+    320
+  ],
+  "heap_bytes": 10485760,
+  "changes": [
+    "Flat nearest texture loops now cover clamp/repeat, texture replace/decal and all compositing modes.",
+    "White modulation avoids redundant channel multiplication and division.",
+    "Port mapping places jr_emit in internal execution memory; interpreter and JIT mapping retained."
+  ],
+  "game_scene": {
+    "title": "NFS The Run",
+    "archive_sha256_prefix": "92c5f29e1d66",
+    "navigation": "fresh RMS, sound yes, default quick race and car, start SPRINT, brake held near 1% progress",
+    "warmup_seconds": 5,
+    "samples_per_run": 20,
+    "sample_interval_seconds": 1,
+    "screenshot_free_sampling": true,
+    "metric": "rolling changed-image FPS, not interpreter frames",
+    "runs": [
+      {
+        "run": "baseline-parked-1",
+        "mean": 4.62,
+        "minimum": 4.4,
+        "maximum": 4.7,
+        "fps": [
+          4.4,
+          4.5,
+          4.5,
+          4.6,
+          4.6,
+          4.6,
+          4.6,
+          4.7,
+          4.7,
+          4.6,
+          4.6,
+          4.6,
+          4.6,
+          4.6,
+          4.7,
+          4.7,
+          4.7,
+          4.7,
+          4.7,
+          4.7
+        ],
+        "sound_requested": true,
+        "jit": "off",
+        "ram_recovered": true
+      },
+      {
+        "run": "baseline-parked-2",
+        "mean": 4.615,
+        "minimum": 4.4,
+        "maximum": 4.7,
+        "fps": [
+          4.4,
+          4.5,
+          4.5,
+          4.6,
+          4.6,
+          4.6,
+          4.6,
+          4.7,
+          4.6,
+          4.6,
+          4.6,
+          4.6,
+          4.6,
+          4.6,
+          4.7,
+          4.7,
+          4.7,
+          4.7,
+          4.7,
+          4.7
+        ],
+        "sound_requested": true,
+        "jit": "off",
+        "ram_recovered": true
+      },
+      {
+        "run": "iram-parked-1",
+        "mean": 4.79,
+        "minimum": 4.6,
+        "maximum": 4.9,
+        "fps": [
+          4.7,
+          4.6,
+          4.7,
+          4.8,
+          4.8,
+          4.8,
+          4.8,
+          4.8,
+          4.8,
+          4.8,
+          4.8,
+          4.8,
+          4.8,
+          4.8,
+          4.8,
+          4.8,
+          4.8,
+          4.9,
+          4.9,
+          4.8
+        ],
+        "sound_requested": true,
+        "jit": "off",
+        "ram_recovered": true
+      },
+      {
+        "run": "spans-parked-1",
+        "mean": 5.265,
+        "minimum": 5.0,
+        "maximum": 5.4,
+        "fps": [
+          5.0,
+          5.1,
+          5.3,
+          5.2,
+          5.2,
+          5.3,
+          5.3,
+          5.3,
+          5.3,
+          5.3,
+          5.3,
+          5.3,
+          5.4,
+          5.4,
+          5.3,
+          5.3,
+          5.3,
+          5.2,
+          5.3,
+          5.2
+        ],
+        "sound_requested": true,
+        "jit": "off",
+        "ram_recovered": true
+      },
+      {
+        "run": "spans-parked-2",
+        "mean": 5.22,
+        "minimum": 4.5,
+        "maximum": 5.3,
+        "fps": [
+          5.1,
+          5.1,
+          5.2,
+          5.2,
+          5.3,
+          5.3,
+          5.3,
+          5.3,
+          5.2,
+          5.3,
+          5.3,
+          5.3,
+          5.3,
+          5.3,
+          5.3,
+          5.3,
+          5.3,
+          5.2,
+          5.3,
+          4.5
+        ],
+        "sound_requested": true,
+        "jit": "off",
+        "ram_recovered": true
+      }
+    ],
+    "baseline_mean": 4.6175,
+    "candidate_mean": 5.2425,
+    "gain_percent": 13.53546291283163
+  },
+  "fixed_work": {
+    "fixture": "tests/m3gtarget/M3GTargetBench.java",
+    "path": "direct",
+    "timed_frames": 60,
+    "warmup_frames": 1,
+    "submitted_triangles_per_frame": 160,
+    "same_internal_code_mapping_both_versions": true,
+    "runs": [
+      {
+        "image_sha256": "741c896fd20be74a11a3a922eea2a59a148597218b721d0f81bef13ac3dd8236",
+        "elapsed_ms": 3572,
+        "native_crc": "48f14000",
+        "display_crc": "4ffb9823",
+        "ram_recovered": true
+      },
+      {
+        "image_sha256": "741c896fd20be74a11a3a922eea2a59a148597218b721d0f81bef13ac3dd8236",
+        "elapsed_ms": 3570,
+        "native_crc": "48f14000",
+        "display_crc": "4ffb9823",
+        "ram_recovered": true
+      },
+      {
+        "image_sha256": "741c896fd20be74a11a3a922eea2a59a148597218b721d0f81bef13ac3dd8236",
+        "elapsed_ms": 3569,
+        "native_crc": "48f14000",
+        "display_crc": "4ffb9823",
+        "ram_recovered": true
+      },
+      {
+        "image_sha256": "2f5feb3a7f58f19dc148bddeaff03e4471d756c13ed0c0fd832a767d3e7f99ac",
+        "elapsed_ms": 2907,
+        "native_crc": "48f14000",
+        "display_crc": "4ffb9823",
+        "ram_recovered": true
+      },
+      {
+        "image_sha256": "2f5feb3a7f58f19dc148bddeaff03e4471d756c13ed0c0fd832a767d3e7f99ac",
+        "elapsed_ms": 2907,
+        "native_crc": "48f14000",
+        "display_crc": "4ffb9823",
+        "ram_recovered": true
+      },
+      {
+        "image_sha256": "2f5feb3a7f58f19dc148bddeaff03e4471d756c13ed0c0fd832a767d3e7f99ac",
+        "elapsed_ms": 2907,
+        "native_crc": "48f14000",
+        "display_crc": "4ffb9823",
+        "ram_recovered": true
+      }
+    ],
+    "throughput_gain_percent": 22.818484118793727
+  },
+  "differential_test": {
+    "configurations": [
+      "NJ_M3G_FAST_PATHS=0",
+      "NJ_M3G_FAST_PATHS=1"
+    ],
+    "sanitizers": [
+      "ASan",
+      "UBSan"
+    ],
+    "capture_bytes": 117504000,
+    "capture_sha256": "3f9d9caa17f7fed78dcc4368dcdf3e518856d683da9db59db1ab157181bb148f",
+    "identical": true,
+    "scope": "RGB565, RGB888 and ARGB8888 color and depth, mixed wrap modes, tint, opacity, alpha test/write, all compositing modes, viewport and padded stride"
+  },
+  "merged_host_tests_passed": [
+    "test_m3g",
+    "test_m3g_targets",
+    "test_m3g_file",
+    "test_clip",
+    "test_vm",
+    "test_thread_lifecycle",
+    "test_lcdui",
+    "test_lib",
+    "test_midi"
+  ],
+  "limitations": [
+    "Two paired game repetitions; no universal game speedup claim.",
+    "NFS Hot Pursuit with brake held stopped changing its picture and reported 0 changed-image FPS; excluded from performance comparison.",
+    "Full races and save round trips are not verified.",
+    "Hot Pursuit has a pre-existing destroyApp exception on manual stop.",
+    "Final JIT on/off timings have only one run each; they are a spot check, not a confidence interval.",
+    "Fixed host game probes were externally time-limited; final startup/playability validation uses the device.",
+    "Bounce Tales has six audio underrun events during the sampled interval; audio quality is not considered fully resolved."
+  ],
+  "upstream_merge": "baecaac",
+  "final_image_sha256": "31c2d285a932b0ecdddb50c5f19f532af5bb7219c12e407737c8cb7220b45105",
+  "final_integration": [
+    {
+      "run": "final-hp",
+      "title": "g77d10a56e51a.jar",
+      "jit": "off",
+      "mean_changed_image_fps": 0.0,
+      "minimum": 0.0,
+      "maximum": 0.0,
+      "fps": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "normal_exit": true,
+      "external_memory_delta_zero": true,
+      "sample_audio_detail_delta": {
+        "offered": 0,
+        "accepted": 0,
+        "short": 0,
+        "io_us": 0,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "sample_audio_output_delta": {
+        "writes": 0,
+        "frames": 0,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "timing_valid": false,
+      "reason": "Before image shows actual race; after image shows paused menu. Excluded from timing comparison."
+    },
+    {
+      "run": "final-run-off",
+      "title": "g92c5f29e1d66.jar",
+      "jit": "off",
+      "mean_changed_image_fps": 5.355,
+      "minimum": 4.9,
+      "maximum": 5.5,
+      "fps": [
+        5.1,
+        5.2,
+        5.4,
+        5.4,
+        5.4,
+        5.4,
+        5.4,
+        5.4,
+        5.4,
+        5.4,
+        5.4,
+        5.4,
+        5.4,
+        5.4,
+        5.4,
+        5.4,
+        5.5,
+        5.4,
+        5.4,
+        4.9
+      ],
+      "normal_exit": true,
+      "external_memory_delta_zero": true,
+      "sample_audio_detail_delta": {
+        "offered": 0,
+        "accepted": 0,
+        "short": 0,
+        "io_us": 0,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "sample_audio_output_delta": {
+        "writes": 0,
+        "frames": 0,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "timing_valid": true
+    },
+    {
+      "run": "final-run-on",
+      "title": "g92c5f29e1d66.jar",
+      "jit": "on",
+      "mean_changed_image_fps": 5.16,
+      "minimum": 4.6,
+      "maximum": 5.3,
+      "fps": [
+        4.9,
+        5.0,
+        5.2,
+        5.2,
+        5.2,
+        5.3,
+        5.3,
+        5.2,
+        5.2,
+        5.2,
+        5.3,
+        5.3,
+        5.3,
+        5.3,
+        5.3,
+        5.2,
+        5.2,
+        5.2,
+        4.8,
+        4.6
+      ],
+      "normal_exit": true,
+      "external_memory_delta_zero": true,
+      "sample_audio_detail_delta": {
+        "offered": 0,
+        "accepted": 0,
+        "short": 0,
+        "io_us": 0,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "sample_audio_output_delta": {
+        "writes": 0,
+        "frames": 0,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "timing_valid": true
+    },
+    {
+      "run": "final-bounce",
+      "title": "Bounce Tales",
+      "jit": "on",
+      "mean_changed_image_fps": 11.43,
+      "minimum": 7.7,
+      "maximum": 13.9,
+      "fps": [
+        7.8,
+        11.9,
+        11.5,
+        7.7,
+        11.6,
+        11.5,
+        11.8,
+        13.4,
+        13.2,
+        13.9
+      ],
+      "normal_exit": true,
+      "external_memory_delta_zero": true,
+      "timing_valid": true,
+      "comparison": false,
+      "sample_audio_detail_delta": {
+        "offered": 238986,
+        "accepted": 238986,
+        "short": 0,
+        "io_us": 10770122,
+        "volume_calls": 0,
+        "queued": 1,
+        "underruns": 6,
+        "silence_frames": 4540
+      },
+      "sample_audio_output_delta": {
+        "writes": 1023,
+        "frames": 523776,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      }
+    },
+    {
+      "run": "final-hp-moving",
+      "title": "NFS Hot Pursuit",
+      "jit": "off",
+      "mean_changed_image_fps": 3.93,
+      "minimum": 3.5,
+      "maximum": 4.4,
+      "fps": [
+        3.5,
+        3.7,
+        3.9,
+        3.9,
+        4.4,
+        3.9,
+        3.9,
+        3.9,
+        3.9,
+        4.3
+      ],
+      "normal_exit": true,
+      "external_memory_delta_zero": true,
+      "timing_valid": true,
+      "comparison": false,
+      "method": "Ten manual one-second FPS polls after dismissing the race dialog; no screenshot during warm-up or sampling. Post-sample image shows time 00:14 and speed 93 MPH."
+    }
+  ],
+  "regression_fix": {
+    "commit": "5c452cf",
+    "cause": "Dead timer thread reclaimed while an outer native call still owns its frames",
+    "test": "test_thread_lifecycle",
+    "before": "ASan heap-use-after-free at nj_frame_pop_fast",
+    "after": "Pass, including repeated slot reuse and protected C/main handles"
+  }
+}
