@@ -3210,3 +3210,25 @@ Gate battery on the final tree: `ctest` 103/103, `test_m3g` 654 checks,
 `bench.jar` still `BENCH sum=-136042548 s=5` with 70,514,376 bytecodes and
 92,432/92,432 bytes of heap; the superinstruction digest matches the desktop
 JVM on all 27 values; `tools/check_no_statics.sh` finds no writable statics.
+
+## A sample of the corpus, after the raster rounds (round 21, 2026-10-24)
+
+Every third title of the corpus (132 of 395, sorted by name so the sample
+spans genres) was replayed for 600 frames at `--fps 0 --heap 16` with a
+pointer-free key script and a fresh RMS directory per title, eight workers on
+cores 6-13, against the tree at `6ab0d3e`:
+
+- **132 of 132 exited 0**; no timeout, crash or out-of-memory.
+- No `NoSuchMethodError` and no `NoClassDefFoundError` anywhere.
+- Two titles log `ClassNotFoundException`, and both are the title probing for
+  platforms it was ported from: 雷电战机 logs five
+  (`java.applet.Applet`, `emulator.Emulator`, `XConnection`, `XMessage`) and
+  塔塔 two.  Those `Class.forName` probes are supposed to fail on a MIDP
+  device, so the log lines are the expected answer, not a gap.
+- Titles keep writing their record stores into the per-title directories, so
+  the save paths still work after the fourteen rendering and IO changes of
+  the last rounds.
+
+What this does not prove: pixel identity against a reference renderer (only
+tested on the titles that have reference screenshots), SDL2/real-hardware
+behaviour, or audio.  It is a regression net, not a compatibility certificate.
