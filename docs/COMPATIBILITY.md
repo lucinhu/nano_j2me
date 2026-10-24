@@ -3810,3 +3810,15 @@ is exercised elsewhere - `tests/test_lib.c` covers `[[I` covariance and the
 whole suite is green (109/109) - this is recorded as corpus behaviour, not a
 defect to fix.  The remaining large exceptions in the paced corpus are the
 same kind: title code indexing its own arrays after parsing data it dislikes.
+
+### Multidimensional arrays are now tested through bytecode (round 60, 2026-10-25)
+
+`tests/test_lib.c` proved that `int[][]` is assignable to `Object[]`, but not
+that `new int[3][7]` really produces seven-wide rows - and the paced corpus
+has a title reading `a[d][6]` from such a table.  `tests/arrays/ArrayDims.java`
+now runs the instructions themselves: it builds `int[3][7]`,
+`int[2][4][5]` and a ragged `int[3][]`, reads every length back, stores into
+the last element of rows and checks that one element past the end throws
+`ArrayIndexOutOfBoundsException`, returning 1 only if all of that holds.
+`tests/test_arrays.c` loads the checked-in class bytes and asserts the result;
+the fixture needs no Java toolchain at build time and no MIDP classes.

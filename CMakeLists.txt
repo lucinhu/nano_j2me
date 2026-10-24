@@ -1224,6 +1224,16 @@ nj_add_test(test_clip tests/test_clip.c)
     nj_add_test(test_save tests/test_save.c)
   endif()
 
+  # Multidimensional arrays through real bytecode: tests/arrays/ArrayDims.java
+  # builds int[3][7], int[2][4][5] and a ragged table, and the C side only reads
+  # the static method's result.  The class bytes are checked in, so no Java
+  # toolchain is needed here.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_arrays.c)
+    nj_add_test(test_arrays tests/test_arrays.c)
+    target_include_directories(test_arrays PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+  endif()
+
   foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib
                       test_ioapi test_resolution test_sax test_rms test_run_archive)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${extra_test}.c)
