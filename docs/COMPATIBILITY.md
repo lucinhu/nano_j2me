@@ -3186,3 +3186,27 @@ Size cost (matched Release configuration, `round 61`): `nj_lib_lcdui.c.o` text
 0. RAM moves by two object fields only: a `Player` gains one reference field
 (8 B) for its master clock, and a `StringItem` loses one (8 B) because the
 dispatcher never read it. No VM field was added in this round.
+
+## The state of the corpus at the end of these rounds (round 62, 2026-10-24)
+
+A full sweep of the 395 titles in `tests/games` with the same pointer+key
+script, 500 frames each at `--fps 0 --heap 16` (8 workers):
+
+- every title exits 0; no timeout, no crash;
+- 208 titles raise an exception their own code catches (the usual
+  `IllegalArgumentException`, `NumberFormatException`, `NullPointerException`,
+  `ArithmeticException` and `RecordStoreNotFoundException`), which is the
+  titles' own defensive code - the sweep found no missing API at all
+  (`NoSuchMethodError`, `NoClassDefFoundError`, `ClassNotFoundException`: zero);
+- two titles run out of memory at the 16 MB heap this sweep gives them
+  (宠物王国4-白金_6531 and one sibling, both need more), and both run at 32 MB.
+
+Saves round-trip: 宠物王国4-白金_6531 writes `pk4_baijin.rms` (22,872 B) and
+`baijinSMS.rms` (28 B); a second run against the same `--rms-dir` reopens them
+(`file_reads` rises, no `RecordStoreNotFoundException`) and paints normally.
+
+Gate battery on the final tree: `ctest` 103/103, `test_m3g` 654 checks,
+`test_lcdui` PASS, `test_lib` 844 checks, all clean under ASan/UBSan/LSan;
+`bench.jar` still `BENCH sum=-136042548 s=5` with 70,514,376 bytecodes and
+92,432/92,432 bytes of heap; the superinstruction digest matches the desktop
+JVM on all 27 values; `tools/check_no_statics.sh` finds no writable statics.
