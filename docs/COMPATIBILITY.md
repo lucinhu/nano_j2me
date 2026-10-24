@@ -3911,3 +3911,35 @@ change: reverting that change, rebuilding and re-running the same binary still
 fails; every other test passes (`ctest -E '^test_lib$'` -> 110/110).  The check
 fills the heap to under 700 KB free, then expects `createPlayer` to collect and
 succeed; that is a GC-sensitive assertion worth investigating on its own.
+
+### Every title, in one table (round 65, 2026-10-25)
+
+The prose above records the defects that were found and fixed.  The full list is
+now generated instead of described: `docs/COMPATIBILITY_MATRIX.md` holds one row
+per JAR in `tests/games` - 398 of them - with its size, MIDlet name, the 3D API
+it uses, class count, the heap that ran it, how many frames and bytecodes it
+produced, the exceptions it threw and a verdict.  `docs/COMPATIBILITY_MATRIX.md`
+is written by `tools/make_compat_matrix.py` from
+a single `rows.jsonl`, so re-running the corpus regenerates the table rather than
+inviting hand edits.
+
+The recipe is deliberately the same for every row: headless port, 240x320,
+`--fps 30`, `--run-frames 600`, heap 16 MB (retried at 32 MB only after an
+out-of-memory), one shared input script, and a fresh RMS directory per title.
+Verdicts: `运行正常` (exit 0, at least half the frames painted, nothing uncaught),
+`标题自身异常` (as above but the title left an exception uncaught - a title
+defect), `堆不足`, `非可用包`, `超时`, `失败`.
+
+Three titles came from archive.org this round and are listed with their source
+items in `docs/CORPUS.md`: Flippy跳跃大冒险, 3D武装直升机2 and
+太空冲击303.  Two of the three replay cleanly; 3D武装直升机2 stops after 60
+frames with 578 bytecodes, i.e. it leaves its start screen and halts, which is
+the row that needs looking at next.
+
+Useful material found on archive.org for later rounds: the two Nokia SDK
+collections (`nokia_sdks_n_dev_tools`, `..._n_dev_tools2`) whose
+`lib/classes.zip` is a vendor-authoritative API surface (already used for the
+Sound constants and the Nokia UI API diff - 5 classes, 27 methods, 0 missing),
+plus Nokia's own `tools/emulator.jar` inside the same installers.  The emulator
+packages there (Kemulator, J2ME Loader) are players, not references, so they are
+not used as oracles.
