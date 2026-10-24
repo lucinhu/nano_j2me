@@ -20,6 +20,7 @@ DOC = ROOT + "/docs/COMPATIBILITY_MATRIX.md"
 
 VERDICT = {"ok": "运行正常", "title-exception": "标题自身异常", "oom": "堆不足",
            "bad-jar": "非可用包", "timeout": "超时", "failure": "失败",
+           "no-frame": "未呈现画面",
            "retry-heap32": "16MB 不足",
            "title-exit": "标题自行退出"}
 
@@ -78,6 +79,8 @@ def main():
         "* one shared input script (fire, both soft keys, two screen taps, four arrows,",
         "  digits, `*`), a fresh RMS directory per title;",
         "* `运行正常` = exit 0, at least half the frames painted, nothing uncaught.",
+        "* `未呈现画面` = exit 0, ran to the end on its own, never painted a frame"
+        " (the run loop had nothing to show - a quiet title, not a crash).",
         "",
         "Corpus provenance and size are in `docs/CORPUS.md`; regenerate this table",
         "with `tools/make_compat_matrix.py <rows dir>` after a new sweep.",

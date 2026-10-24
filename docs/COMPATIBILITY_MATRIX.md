@@ -8,16 +8,17 @@ with the same recipe, so neighbouring rows are comparable:
 * one shared input script (fire, both soft keys, two screen taps, four arrows,
   digits, `*`), a fresh RMS directory per title;
 * `运行正常` = exit 0, at least half the frames painted, nothing uncaught.
+* `未呈现画面` = exit 0, ran to the end on its own, never painted a frame (the run loop had nothing to show - a quiet title, not a crash).
 
 Corpus provenance and size are in `docs/CORPUS.md`; regenerate this table
 with `tools/make_compat_matrix.py <rows dir>` after a new sweep.
 
-Built from `1234d75`, 2026-10-25.
+Built from `fecfcce`, 2026-10-25.
 
 | verdict | titles |
 | --- | --- |
 | 运行正常 | 395 |
-| 失败 | 2 |
+| 未呈现画面 | 2 |
 | 非可用包 | 1 |
 
 | 3D API used | titles |
@@ -99,7 +100,7 @@ Built from `1234d75`, 2026-10-25.
 | 中华麻将馆－极限胡牌版_244.jar | 310 | 中华麻将馆-极限胡牌版 | - | 18 | 16 | 600 | 308569765 | - | 运行正常 |  |
 | 中国象棋_10893.jar | 293 | 中国象棋三国经典版 | - | 9 | 16 | 600 | 73495 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | 中国象棋之水墨珍藏版_871.jar | 375 | 中国象棋之水墨珍藏版 | - | 12 | 16 | 600 | 534667883 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
-| 乱世Q三国_1649.jar | 977 | 乱世Q三国 | - | 232 | 16 | 0 | 128 | javax/microedition/rms/RecordSto | 失败 |  |
+| 乱世Q三国_1649.jar | 977 | 乱世Q三国 | - | 232 | 16 | 0 | 128 | javax/microedition/rms/RecordSto | 未呈现画面 | runs and exits on its own; never installs a  |
 | 乱舞三国之群英会_2972.jar | 817 | 乱舞三国之群英会 | - | 35 | 16 | 600 | 482917 | java/lang/NullPointerException | 运行正常 |  |
 | 五子棋_10940.jar | 42 | XOXO | - | 24 | 16 | 600 | 4341300 | - | 运行正常 |  |
 | 仙剑奇侠传(2008)_12406.jar | 695 | pal | nokia-ui | 3 | 16 | 600 | 209727 | - | 运行正常 |  |
@@ -244,7 +245,7 @@ Built from `1234d75`, 2026-10-25.
 | 星辰变S60V5完整版_3364.jar | 926 | 星辰变(盛大正版) | nokia-ui | 40 | 16 | 600 | 250348802 | java/io/IOException | 运行正常 |  |
 | 是男人就下100层_1882.jar | 636 | 是男人就下100层 | nokia-ui | 75 | 16 | 600 | 6964968 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | 暗黑启示录2－黑暗王朝_888.jar | 1268 | 暗黑启示录2黑暗王朝 | - | 214 | 16 | 600 | 127252238 | - | 运行正常 |  |
-| 有女倾城破解版_11525.jar | 258 | 有女倾城 | - | 9 | 16 | 0 | 53901 | - | 失败 |  |
+| 有女倾城破解版_11525.jar | 258 | 有女倾城 | - | 9 | 16 | 0 | 53901 | - | 未呈现画面 | runs and exits on its own; never installs a  |
 | 机甲风暴_7888.jar | 673 | 机甲风暴 | nokia-ui | 41 | 16 | 600 | 95517 | - | 运行正常 |  |
 | 杀戮机器-纳粹僵尸_3610.jar | 995 | 杀戮机器-纳粹僵尸 | m3g | 37 | 16 | 600 | 741606 | java/lang/NumberFormatException | 运行正常 |  |
 | 杀鬼子-敌后武工队_2185.jar | 515 | 杀鬼子-敌后武工队 | nokia-ui | 37 | 16 | 600 | 147638505 | java/io/IOException | 运行正常 |  |

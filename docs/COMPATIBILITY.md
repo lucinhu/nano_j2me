@@ -4012,3 +4012,18 @@ says).  Corpus matrix after the fix: **395 ok / 2 failures / 1 unusable package*
 The existing `test_lcdui` suite still passes (no test asserted the old refusal),
 and `ctest` is green apart from the pre-existing GC-sensitive `test_lib` case
 documented earlier.
+
+## A quiet title is not a failure (round 72, 2026-10-25)
+
+Two rows still read `失败` after the last sweep: `乱世Q三国_1649` and
+`有女倾城破解版_11525`.  Both exit 0, throw nothing uncaught, and present **no
+frame at all** - the runner reaches the end of `startApp()` (in `有女倾城`'s case
+after `Display.setCurrent()` succeeded on a valid `Canvas`) and the run loop has
+nothing to paint.
+
+The matrix had no way to say that, so it called them failures.  `未呈现画面`
+("ran and exited on its own; never presented a frame") is now its own verdict:
+`tools/sweep_compat.py` assigns it when the exit code is 0 and nothing was
+uncaught, and the table legend says what it means.  A crash, a missing API and a
+title that simply never shows anything are three different statements; the matrix
+now makes the third one explicitly.
