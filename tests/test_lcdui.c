@@ -2592,6 +2592,61 @@ static void test_screen(nj_vm *vm)
     }
 }
 
+/*
+ * A handful of methods are declared static by the specifications we implement,
+ * and game bytecode calls them with invokestatic.  Declaring one of them as an
+ * instance method turns every such call into an IncompatibleClassChangeError at
+ * run time, which is exactly what Bubblet/Game15 did before Canvas.getGameAction
+ * was made static.  This pins the declaration, not just the call.
+ */
+static int spec_method_is_static(nj_vm *vm, const char *clsname,
+                                 const char *name, const char *desc)
+{
+    nj_class *cls = nj_class_lookup(vm, clsname);
+    unsigned i;
+
+    if (!cls || !cls->methods) {
+        return 0;
+    }
+    for (i = 0; i < (unsigned)cls->method_count; ++i) {
+        const nj_method *m = &cls->methods[i];
+
+        if (m->name && m->desc && strcmp(m->name, name) == 0 &&
+            strcmp(m->desc, desc) == 0) {
+            return (m->flags & NJ_ACC_STATIC) != 0;
+        }
+    }
+    return 0;
+}
+
+static void test_spec_static_methods(nj_vm *vm)
+{
+    static const struct {
+        const char *cls, *name, *desc;
+    } spec[] = {
+        { "javax/microedition/lcdui/Canvas", "getGameAction", "(I)I" },
+        { "javax/microedition/lcdui/Canvas", "getKeyCode", "(I)I" },
+        { "javax/microedition/lcdui/Canvas", "getKeyName", "(I)Ljava/lang/String;" },
+        { "javax/microedition/lcdui/Display", "getDisplay",
+          "(Ljavax/microedition/midlet/MIDlet;)Ljavax/microedition/lcdui/Display;" },
+        { "javax/microedition/lcdui/Image", "createImage",
+          "(II)Ljavax/microedition/lcdui/Image;" },
+        { "javax/microedition/rms/RecordStore", "openRecordStore",
+          "(Ljava/lang/String;Z)Ljavax/microedition/rms/RecordStore;" },
+        { "javax/microedition/media/Manager", "createPlayer",
+          "(Ljava/lang/String;)Ljavax/microedition/media/Player;" },
+        { "java/lang/System", "currentTimeMillis", "()J" },
+        { "java/lang/Math", "sqrt", "(D)D" }
+    };
+    unsigned i;
+
+    for (i = 0; i < sizeof(spec) / sizeof(spec[0]); ++i) {
+        OK_MSG(spec_method_is_static(vm, spec[i].cls, spec[i].name,
+                                     spec[i].desc) == 1,
+               "%s.%s", spec[i].cls, spec[i].name);
+    }
+}
+
 static void test_canvas_key_methods(nj_vm *vm)
 {
     static const char *names[] = { "getGameAction", "getKeyCode", "getKeyName" };
@@ -3197,6 +3252,7 @@ static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
     test_widgets(vm);
     test_screen(vm);
     test_canvas_key_methods(vm);
+    test_spec_static_methods(vm);
     test_paint_graphics_reused(vm);
     test_callserially_once_per_frame(vm);
     /* Last: it swaps the port clock for a fake one, and the restore leaves the

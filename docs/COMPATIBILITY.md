@@ -4027,3 +4027,17 @@ The matrix had no way to say that, so it called them failures.  `未呈现画面
 uncaught, and the table legend says what it means.  A crash, a missing API and a
 title that simply never shows anything are three different statements; the matrix
 now makes the third one explicitly.
+
+## Static declarations, pinned (round 76, 2026-10-25)
+
+`tests/test_lcdui.c` now asserts the *declaration* of the methods whose
+specifications say `static`, not merely that they can be called: Canvas
+getGameAction/getKeyCode/getKeyName, Display.getDisplay, Image.createImage(int,
+int), RecordStore.openRecordStore, Manager.createPlayer, System.currentTimeMillis
+and Math.sqrt.  It reads `nj_class.methods[].flags` and requires NJ_ACC_STATIC,
+because a game compiles `invokestatic` against these and an instance declaration
+turns the call into IncompatibleClassChangeError at run time (which is what
+Bubblet and Game15 did before round 34).
+
+Fail-before evidence: declaring Canvas.getGameAction as an instance method again
+makes the suite report 34 failures; restoring it passes.
