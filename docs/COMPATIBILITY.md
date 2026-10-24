@@ -3838,3 +3838,38 @@ contradicts the Nokia UI API (SOUND_STOPPED 0, SOUND_PLAYING 1, SOUND_UNPLAYABLE
 checks.  This joins the two other known reference defects recorded here (its M3G
 `World.find` NPE on 毁灭战士3_10598, and the missing JSR-184 animation
 interpolation) - it is one opinion, not an oracle.
+
+## What we compare against, and what cannot be compared (round 63, 2026-10-25)
+
+The pixel-diff harness runs a title on this runtime and on
+`.local-tools/freej2me-plus`, then reports the mean absolute error over the
+dump.  That reference is the only J2ME implementation on this machine that runs
+headless on Linux *and* renders JSR-184, but it is one opinion, not an oracle:
+four of its own defects are recorded in this file (M3G `World.find` NPE on
+毁灭战士3_10598; missing JSR-184 animation interpolation; `Sound.SOUND_PLAYING
+= 0` where the Nokia API says 1; and the static-key handling it diverges on).
+Every difference therefore has to be adjudicated by the specification text, and
+the thresholds in `tools/compare_reference_frame.sh` are wide (12/255 for 2D,
+and a paced 3D frame measured 18.79/255) because the reference's own timing and
+animation phase move pixels.
+
+The alternatives were re-checked this round rather than assumed:
+
+* **microemulator 2.0.4** - fetched from Maven Central
+  (`.local-tools/microemulator/{microemu-cldc,microemu-midp,microemu-javase,microemu-javase-swing}-2.0.4.jar`,
+  all four present).  It is a real MIDP implementation and would be a useful
+  second source for API semantics, but it needs an AWT display to run a MIDlet:
+  this machine has `Xorg` and no `Xvfb`, so a MIDlet-level run is not possible
+  here.  Its class library can still host desktop-JVM API probes, which is the
+  intended next use.
+* **SquirrelJME** - not published on Maven Central (the
+  `net/multiphasicapps/squirreljme` path answers 404) and its releases live on
+  GitHub, which this machine cannot reach.
+* **KEmulator** - Windows only; **J2ME-Loader** - Android only.  Neither can be
+  a headless Linux oracle.
+
+So the evidence base stays what it is: the Java specification (Oracle's
+javadoc pages, e.g. the CLDC 1.1 `InputStream` and MIDP 2.0 `Canvas` pages used
+in rounds 44 and 60), bytecode fixtures that pin behaviour the C side cannot
+express, the real-game corpus sweeps, and the reference emulator as a
+tie-breaker with a recorded list of its known errors.
