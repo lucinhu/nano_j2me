@@ -980,3 +980,17 @@ started. No VM field was added in this round.
 
 Two more specialised span loops, selected per span; no new rasteriser state,
 no static buffers, no change to `mr_state`, so the RAM picture is unchanged.
+
+## The note list a MIDlet fills costs code, not memory (round 62, 2026-10-24)
+
+| build | `nj_midi.c.o` `.text` | executable `.text` | `.data` | `.bss` |
+| --- | --- | --- | --- | --- |
+| parent `4c90520` | 19,842 B | 2,924,677 B | 163,496 B | 6,688 B |
+| batched merge | 20,011 B | 2,924,829 B | 163,496 B | 6,688 B |
+
+Both builds use the same CMake configuration (Release, Ninja, no libretro or
+SDL2 or embedded ports).  RAM: the stream struct gains one `nj_u4`
+(`nlive`, 4 B) per open stream, and the merge uses up to 8 x `sizeof(mid_note)`
+= 480 B of C stack while it lifts a burst aside - no static buffer and no
+per-note field.  A title with one MIDI stream open pays 4 B more than before
+and nothing at all when no stream is open.

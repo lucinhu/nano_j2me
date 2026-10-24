@@ -2812,6 +2812,8 @@ the next round is that the remaining generic spans are not where the time is;
 
 ### A quadratic in the MIDI note inserter, found not fixed (round 19, 2026-10-24)
 
+*(Fixed in round 62 - see "The note list a MIDlet fills" below.)*
+
 `gprof` on `浴火银河_3621` attributes 4.5% of CPU to `mid_inject_note` from
 only 678 calls - about 100 us per call, which is far too much for what the
 function does.  Reading `src/midp/nj_midi.c` explains it: every MIDlet note
@@ -2843,3 +2845,37 @@ audio renderer, not a local edit, so it is recorded here as the next audio
 target rather than being attempted blind - there is no MIDI output
 benchmark yet, and the correctness bar for a renderer is a rendered-PCM
 comparison, not a unit test.
+
+### The note list a MIDlet fills (round 62, 2026-10-24)
+
+The quadratic recorded above is gone.  Live notes are no longer rotated into
+the file's array one at a time; `nj_midi_stream_event` appends them and the
+next pull merges the run once, before it walks the list, with the tick the
+sender saw (`mid_settle_notes` in `src/midp/nj_midi.c`).  A burst of 2-8 offers
+is lifted into a bounded stack copy and the file notes still ahead are slid
+once; a bigger burst is rotated in place (three reversals, no temporary), so
+a pull moves the remaining file notes once whatever the burst size.  Single
+events keep the original one-record `memmove`.
+
+Measured with a scratch harness
+(`.local-tools/debug-runs/midi-round62-20261024/bench.c`, built against
+`build/libnj2me.a` and against the parent tree, 256 frames per pull, a 6,000
+event file, CPU time of the whole render):
+
+| notes sent per pull | parent CPU | this build | delta | PCM checksum |
+|---|---|---|---|---|
+| 1 | 0.00201 s | 0.00181 s | -10% | both `d2f2c7c4` |
+| 2 | 0.00348 s | 0.00295 s | -15% | both `cc65b883` |
+| 16 | 0.00968 s | 0.00416 s | -57% | both `d7116b14` |
+| 32 | 0.00807 s | 0.00212 s | -74% | both `553fa016` |
+
+The checksums are FNV-1a over every rendered sample, so the audio is
+byte-identical for every case that fits in the note list.  Above
+`NJ_MIDI_MAX_EVENTS` the two builds differ by design: the old code rotated the
+last file note into the cursor's place even though the sent note had been
+dropped, which played a future note early; the new code drops the event, which
+is what the parser and the comment on `mid_inject_note` already promised.
+
+Residual: controller events (bend, pedal, program) still insert one by one.
+They are bounded by `NJ_MIDI_MAX_CTLS` (2,048) and arrive far less often than
+notes, so the same treatment is not measured as worth it yet.
