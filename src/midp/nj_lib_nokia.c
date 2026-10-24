@@ -113,6 +113,35 @@ nj_status nj_nokia_late_init(nj_vm *vm)
     nokia_const_int(vm, NJ_C_SOUND, "SOUND_PLAYING", 0);
     nokia_const_int(vm, NJ_C_SOUND, "SOUND_UNPLAYABLE", 2);
     nokia_const_int(vm, NJ_C_SOUND, "SOUND_UNINITIALIZED", 3);
+    /*
+     * The rest of Nokia's Sound constant block, values from the same
+     * javap -constants run over the 5100 SDK's lib/classes.zip.  A title that
+     * reads one of these and finds no field gets NoSuchFieldError before it
+     * ever asks to play anything.
+     */
+    nokia_const_int(vm, NJ_C_SOUND, "SUCCESSFUL_OPERATION", 15);
+    nokia_const_int(vm, NJ_C_SOUND, "FAIL_OPERATION", 16);
+    nokia_const_int(vm, NJ_C_SOUND, "DEFAULT_VOLUME", -1);
+    nokia_const_int(vm, NJ_C_SOUND, "TONE_VOLUME_NOT_GIVEN", 255);
+    nokia_const_int(vm, NJ_C_SOUND, "FREQUENCY_LOW", 0);
+    nokia_const_int(vm, NJ_C_SOUND, "FREQUENCY_HIGH", 7692);
+    nokia_const_int(vm, NJ_C_SOUND, "MAX_DURATION", 2000);
+    nokia_const_int(vm, NJ_C_SOUND, "RET_BAD_PHONE_STATE", 0);
+    nokia_const_int(vm, NJ_C_SOUND, "RET_BAD_STATE", 1);
+    nokia_const_int(vm, NJ_C_SOUND, "RET_BAD_SEQUENCE", 2);
+    nokia_const_int(vm, NJ_C_SOUND, "RET_PLAY_FAIL", 3);
+    nokia_const_int(vm, NJ_C_SOUND, "RET_OK", 4);
+    nokia_const_int(vm, NJ_C_SOUND, "RET_NOT_READY", 5);
+    nokia_const_int(vm, NJ_C_SOUND, "RET_OUT_OF_MEMORY", 6);
+    nokia_const_int(vm, NJ_C_SOUND, "RET_COULD_NOT_SEND", 7);
+    nokia_const_int(vm, NJ_C_SOUND, "TYPE_BUZZER", 8);
+    nokia_const_int(vm, NJ_C_SOUND, "TYPE_TONE", 9);
+    nokia_const_int(vm, NJ_C_SOUND, "TYPE_ALERT", 10);
+    nokia_const_int(vm, NJ_C_SOUND, "ALERT_ALARM", 0);
+    nokia_const_int(vm, NJ_C_SOUND, "ALERT_CONFIRMATION", 1);
+    nokia_const_int(vm, NJ_C_SOUND, "ALERT_ERROR", 2);
+    nokia_const_int(vm, NJ_C_SOUND, "ALERT_INFO", 3);
+    nokia_const_int(vm, NJ_C_SOUND, "ALERT_WARNING", 4);
 
     nokia_const_int(vm, NJ_C_DGRAPHICS, "FLIP_HORIZONTAL", 0x2000);
     nokia_const_int(vm, NJ_C_DGRAPHICS, "FLIP_VERTICAL", 0x4000);
@@ -131,6 +160,7 @@ nj_status nj_nokia_late_init(nj_vm *vm)
     nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_565_RGB", 10);
     nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_INT_888_RGB", 11);
     nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_INT_8888_ARGB", 12);
+    nokia_const_int(vm, NJ_C_DGRAPHICS, "TYPE_USHORT_1555_ARGB", 1555);
 
     {
         const char *fc = "com/nokia/mid/ui/FullCanvas";
@@ -368,7 +398,30 @@ static const nj_builtin_field sound_fields[] = {
     { "SOUND_STOPPED", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
     { "SOUND_PLAYING", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
     { "SOUND_UNPLAYABLE", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
-    { "SOUND_UNINITIALIZED", "I", NJ_ACC_STATIC | NJ_ACC_FINAL }
+    { "SOUND_UNINITIALIZED", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "SUCCESSFUL_OPERATION", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "FAIL_OPERATION", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "DEFAULT_VOLUME", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TONE_VOLUME_NOT_GIVEN", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "FREQUENCY_LOW", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "FREQUENCY_HIGH", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "MAX_DURATION", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "RET_BAD_PHONE_STATE", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "RET_BAD_STATE", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "RET_BAD_SEQUENCE", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "RET_PLAY_FAIL", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "RET_OK", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "RET_NOT_READY", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "RET_OUT_OF_MEMORY", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "RET_COULD_NOT_SEND", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_BUZZER", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_TONE", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_ALERT", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ALERT_ALARM", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ALERT_CONFIRMATION", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ALERT_ERROR", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ALERT_INFO", "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "ALERT_WARNING", "I", NJ_ACC_STATIC | NJ_ACC_FINAL }
 };
 
 static const nj_builtin_method sound_methods[] = {
@@ -572,7 +625,8 @@ static const nj_builtin_field dgraphics_fields[] = {
     { "TYPE_USHORT_555_RGB",        "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
     { "TYPE_USHORT_565_RGB",        "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
     { "TYPE_INT_888_RGB",           "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
-    { "TYPE_INT_8888_ARGB",         "I", NJ_ACC_STATIC | NJ_ACC_FINAL }
+    { "TYPE_INT_8888_ARGB",         "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "TYPE_USHORT_1555_ARGB",      "I", NJ_ACC_STATIC | NJ_ACC_FINAL }
 };
 
 static const nj_builtin_method dgraphics_methods[] = {
