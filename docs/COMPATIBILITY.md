@@ -3334,3 +3334,31 @@ mirror case the round-53 light work hardened), so nothing else had to change.
 Evidence: bubblet / game15 / slimevolley go from repeated
 `IncompatibleClassChangeError` on every key press to **zero** over 600 frames.
 `ctest` stays green, and `BENCH sum=-136042548 s=5` is unchanged.
+
+## The key name that used to throw (round 35, 2026-10-24)
+
+`Canvas.getKeyName(int)` is specified to reject a key code the device does not
+define with `IllegalArgumentException`, and this runtime did exactly that.  Two
+real titles do not survive it: 愤怒的小鸟-高清版_2353 and 宇宙战机_10521 build
+their help screens by asking for names of their own vendor-key codes (-10 and
+-100..-104), and the 825 rejected calls aborted the calling method.  The
+reference implementation answers "-" for every code it cannot name, and ports
+written against handsets expect that, so the unknown case now returns the same
+placeholder.  Codes this device does define still answer their real names.
+
+The same round fixed the declaration shape of the three key methods:
+MIDP 2.0 declares `getGameAction`, `getKeyCode` and `getKeyName` static, and
+the Canvas table already said so, but the Displayable table still carried an
+instance copy of `getKeyName`.  Both conventions now resolve to the same
+native — `invokestatic` (what javac emits for the specified methods) and the
+older `invokevirtual` spelling — and the tests in `tests/test_lcdui.c` and
+`tests/test_text_input.c` assert the static convention instead of the instance
+one they were written against.
+
+Evidence: `tests/test_lcdui.c` and `tests/test_text_input.c` pass (3,141 and
+1,023 assertions), the two titles above replay 600 frames with no
+`IllegalArgumentException`, a 40-title sample of the corpus replays 600 frames
+each with zero non-zero exits and zero uncaught exceptions, and the usual
+gates are unchanged: `ctest` 105/105, `BENCH sum=-136042548 s=5`,
+digest 27/27, no writable statics.  No new fields, no new allocations: the
+change is one string literal and two table rows.

@@ -702,7 +702,8 @@ static void check_key_name(nj_vm *vm, nj_ref canvas, int code, const char *name)
     const nj_u2 *chars;
     size_t i, len = strlen(name);
     arg.i = code;
-    CHECK(nj_call(vm, canvas, NJ_C_CANVAS, "getKeyName", "(I)Ljava/lang/String;", &arg, &ret) == NJ_OK);
+    CHECK(nj_call_static(vm, NJ_C_CANVAS, "getKeyName", "(I)Ljava/lang/String;",
+                         &arg, &ret) == NJ_OK);
     CHECK(ret.r != NULL && nj_string_len(ret.r) == len);
     if (vm->exception || !ret.r || nj_string_len(ret.r) != len) { return; }
     chars = nj_string_chars(ret.r);
@@ -761,10 +762,11 @@ static void motorola_softkey_test(void)
         check_key_name(vm, canvas, moto ? -22 : -7, "SOFTKEY2");
         if (!moto) {
             check_key_name(vm, canvas, -21, "SOFTKEY3");
+            /* A code no profile defines answers the placeholder string. */
             arg.i = -22;
-            CHECK(nj_call(vm, canvas, NJ_C_CANVAS, "getKeyName", "(I)Ljava/lang/String;", &arg, NULL) != NJ_OK);
-            CHECK(vm->exception != NULL);
-            vm->exception = NULL;
+            CHECK(nj_call_static(vm, NJ_C_CANVAS, "getKeyName",
+                                 "(I)Ljava/lang/String;", &arg, NULL) == NJ_OK);
+            CHECK(vm->exception == NULL);
         }
     }
     nj_vm_set_device(vm, nj_device_find("motorola-e398"));

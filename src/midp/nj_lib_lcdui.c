@@ -3613,8 +3613,17 @@ NJFN(d_getKeyName)
         break;
     }
     if (!name) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "unknown key code");
+        /*
+         * The specification says a key code the device does not define is
+         * rejected with IllegalArgumentException, but real handsets answer a
+         * placeholder instead and ports rely on that: 愤怒的小鸟-高清版_2353
+         * and 宇宙战机_10521 ask about their own vendor key codes (-10,
+         * -100..-104) when building their help screens, and 825 such calls
+         * used to abort the calling method.  The reference implementation
+         * returns "-" for the same question, so the placeholder is the
+         * compatible answer; a code we do not know is never a crash.
+         */
+        name = "-";
     }
     ret->r = nj_string_new(vm, name);
     return ret->r ? NJ_OK : nj_throw_oom(vm);
@@ -10531,6 +10540,11 @@ static const nj_builtin_method displayable_methods[] = {
     M("getCommandListener", "()L" NJ_C_COMMANDLISTENER ";", 0),
     M("isShown",          "()Z", 0),
     M("sizeChanged",      "(II)V", 0),
+    /*
+     * Canvas declares getKeyName() static (MIDP 2.0); this instance alias is
+     * kept so bytecode compiled against a profile that called it virtually
+     * still resolves.  Both conventions answer the same native.
+     */
     M("getKeyName",       "(I)Ljava/lang/String;", 0),
     M("getKeyChar",       "()I", 0),
     M("setFullScreenMode", "(Z)V", 0),
