@@ -1294,19 +1294,9 @@ static void test_image2d_set(nj_vm *vm)
     }
 }
 
-/*
- * The textured span has two implementations: the general loop that walks the
- * wrap and filter modes for every pixel, and the specialised WRAP_REPEAT +
- * MODULATE loops that sample inline.  Both must write the same bytes, so this
- * renders the same quad twice - once with WRAP_CLAMP, which the specialised
- * loops do not take, and once with WRAP_REPEAT, which they do - and compares
- * the whole target.  The texture coordinates cover exactly one repetition of a
- * 2x2 texture, so the two modes cannot differ for a correct sampler.
- *
- * The draw goes through Graphics3D.render(VertexBuffer, IndexBuffer,
- * Appearance, Transform, int), the same pipeline a World uses for its meshes,
- * so it covers the rasteriser and not the Java-side fallback.
- */
+/* Clamp and repeat must write the same bytes for coordinates within one
+ * texture repetition. Both modes can use the flat nearest spans; the wider
+ * mode/target tests also support captures against NJ_M3G_FAST_PATHS=0. */
 static int i2d_canvas_render_tex(nj_vm *vm, i2d_canvas *c, nj_ref img,
                                  nj_ref mat, int wrap)
 {
@@ -1410,7 +1400,7 @@ static void test_textured_span_variants(nj_vm *vm)
     nj_s4 *clamp_px = NULL;
     int ok = 1, canvas_ok, k, found, distinct = 0, all_known = 1;
 
-    printf("== textured spans: WRAP_REPEAT and MODULATE match the general "
+    printf("== textured spans: WRAP_REPEAT and MODULATE match the clamped "
            "loop ==\n");
     rgba = i2d_new3(vm, 100, 2, 2, &ok);        /* ARGB8888 */
     rgb  = i2d_new3(vm, 99, 2, 2, &ok);         /* RGB888 */
@@ -1454,7 +1444,7 @@ static void test_textured_span_variants(nj_vm *vm)
         return;
     }
     check(i2d_canvas_render_tex(vm, &canvas, rgba, mat, 240),
-          "a CLAMP texture renders through the general loop");
+          "a CLAMP texture renders through the flat nearest loop");
     memcpy(clamp_px, nj_array_data(canvas.pixels), 240u * 320u * sizeof(nj_s4));
     check(i2d_canvas_render_tex(vm, &canvas, rgba, mat, 241),
           "the same texture with REPEAT renders through the specialised loop");

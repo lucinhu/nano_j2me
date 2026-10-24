@@ -13,6 +13,8 @@
 #define G "javax/microedition/lcdui/Graphics"
 enum { W = 240, H = 320, GUARD = 16, PAD = 16 };
 static unsigned checks;
+/* Optional cross-build capture: color plus depth, excluding row padding. */
+static FILE *capture;
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
         ++checks;                                                                                  \
@@ -24,7 +26,7 @@ static unsigned checks;
 typedef struct target {
     nj_port port;
     nj_vm *vm;
-    nj_ref g, g3d, vb, ib, app, bg, cm, image, positions, lengths;
+    nj_ref g, g3d, vb, ib, app, bg, cm, image, positions, lengths, tex;
     nj_u1 *allocation;
     nj_surface surface;
     void *(*alloc)(void *, nj_size);
@@ -32,6 +34,7 @@ typedef struct target {
     unsigned outstanding;
 } target;
 static target *active[4];
+static nj_s4 *depth(target *t);
 static target *owner(void *ud)
 {
     unsigned i;
@@ -153,6 +156,17 @@ static void compare(target *t, target *ref)
             }
         }
     CHECK(bad == 0);
+    if (capture) {
+        target *both[2] = {t, ref};
+        int i;
+        for (i = 0; i < 2; i++) {
+            target *c = both[i];
+            for (y = 0; y < H; y++)
+                CHECK(fwrite((nj_u1 *)c->surface.pixels + y * c->surface.stride,
+                             c->surface.bpp, W, capture) == W);
+            CHECK(fwrite(depth(c), sizeof(nj_s4), W * H, capture) == W * H);
+        }
+    }
     guards(t);
     guards(ref);
 }
@@ -338,6 +352,7 @@ static void init(target *t, int format)
     CHECK(nj_call_special(t->vm, t->image, C("Image2D"), "<init>", "(III)V", a, NULL) == NJ_OK);
     tex = nj_object_new(t->vm, C("Texture2D"));
     CHECK(tex);
+    t->tex = tex;
     a[0].r = t->image;
     CHECK(nj_call_special(t->vm, tex, C("Texture2D"), "<init>", "(L" C("Image2D") ";)V", a, NULL) ==
           NJ_OK);
@@ -433,6 +448,46 @@ static void cases(int format)
         a.f = 0;
         call(&t, t.cm, C("CompositingMode"), "setAlphaThreshold", "(F)V", &a);
         call(&r, r.cm, C("CompositingMode"), "setAlphaThreshold", "(F)V", &a);
+    }
+    /* Flat nearest spans also handle tint, replace/decal, mixed wrap axes,
+     * alpha rejection, destination alpha and all compositing modes. Use one
+     * triangle over a quantized destination so RGB565 rounding is independent
+     * of overdraw. Captures can be compared with NJ_M3G_FAST_PATHS=0. */
+    for (mode = 0; mode < 20; mode++) {
+        target *both[2] = {&t, &r};
+        int i;
+        for (i = 0; i < 2; i++) {
+            target *c = both[i];
+            nj_value a[2];
+            fill(c, background);
+            geometry(c, -4, 3);
+            texture(c, mode >= 10 ? 0xffc15329u : 0x75c15329u,
+                       mode >= 10 ? 0xff348159u : 0xe7348159u);
+            integer(c, c->vb, C("VertexBuffer"), "setDefaultColor", "(I)V", 0xff7f9bcd);
+            integer(c, c->tex, C("Texture2D"), "setBlending", "(I)V", 225 + mode / 5);
+            integer(c, c->cm, C("CompositingMode"), "setBlending", "(I)V", 64 + mode % 5);
+            integer(c, c->cm, C("CompositingMode"), "setAlphaWriteEnable", "(Z)V", mode & 1);
+            a[0].i = 240 + (mode & 1); a[1].i = 240 + ((mode >> 1) & 1);
+            call(c, c->tex, C("Texture2D"), "setWrapping", "(II)V", a);
+            a[0].f = mode & 2 ? .5f : 0.f;
+            call(c, c->cm, C("CompositingMode"), "setAlphaThreshold", "(F)V", a);
+            clear(c);
+            render(c);
+        }
+        compare(&t, &r);
+        CHECK(memcmp(depth(&t), depth(&r), W * H * sizeof(nj_s4)) == 0);
+    }
+    {
+        target *both[2] = {&t, &r};
+        int i;
+        for (i = 0; i < 2; i++) {
+            target *c = both[i]; nj_value a;
+            a.f = 0;
+            call(c, c->cm, C("CompositingMode"), "setAlphaThreshold", "(F)V", &a);
+            integer(c, c->cm, C("CompositingMode"), "setAlphaWriteEnable", "(Z)V", 1);
+            integer(c, c->cm, C("CompositingMode"), "setBlending", "(I)V", 68);
+            integer(c, c->tex, C("Texture2D"), "setBlending", "(I)V", 228);
+        }
     }
     integer(&t, t.cm, C("CompositingMode"), "setDepthWriteEnable", "(Z)V", 0);
     integer(&r, r.cm, C("CompositingMode"), "setDepthWriteEnable", "(Z)V", 0);
@@ -558,11 +613,14 @@ static void cases(int format)
            "translated/empty clip, viewport and padded stride\n",
            format);
 }
-int main(void)
+int main(int argc, char **argv)
 {
+    CHECK(argc <= 2);
+    if (argc == 2) { capture = fopen(argv[1], "wb"); CHECK(capture); }
     cases(NJ_PIXFMT_RGB565);
     cases(NJ_PIXFMT_RGB888);
     cases(NJ_PIXFMT_ARGB8888);
+    if (capture) CHECK(fclose(capture) == 0);
     printf("PASS M3G native target checks=%u\n", checks);
     return 0;
 }
