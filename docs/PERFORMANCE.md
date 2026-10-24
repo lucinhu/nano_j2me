@@ -3004,3 +3004,34 @@ field scan is only a couple of pointer compares per lookup, so the probe
 table also adds pressure to the data cache.  It was reverted rather than
 kept: a cache that loses to the thing it caches is not a cache.  The
 measurement stands as the reason the name-based lookup stays.
+
+## Where the Mascot title's CPU is now (round 22, 2026-10-24)
+
+Re-profiled table after the flush, raw-span, short-row and texture-span
+changes, on the same workload as before (`浴火银河_3621`, 3,000 paced frames,
+`-O2 -g -pg`, taskset -c 5, total CPU 0.43 s):
+
+| share | function | calls |
+| --- | --- | --- |
+| 23.3% | `nj_region_draw` | 182,109 |
+| 16.3% | `nj_interp_run` | 6,501 |
+| 16.3% | `mid_rescale_chan` | 1,194 |
+| 14.0% | `mr_fill_segment` | 99,689 |
+| 9.3% | `nj_run` | 521,904 |
+| 4.7% | `method_lookup_named` | 9,388,744 |
+| 2.3% | `nj_field_read_int` | 9,563,249 |
+| 2.3% | `nj_field_lookup_in` | 7,879,785 |
+
+The rendering share has come down from 52% (blit 27.9 + spans 24.3) to 37%
+(23.3 + 14.0), which is what rounds 17-19 bought.  Two things stand out:
+
+- `nj_interp_run` at 16% is the game's own bytecode; there is no single
+  interpreter hot spot left in it without instruction-level work.
+- `mid_rescale_chan` is **audio**: 1,194 calls through the MIDI resampler cost
+  0.07 s, i.e. 59 us per call and 16% of this title's CPU.  That is a
+  different subsystem from everything optimised so far, it has an exact PCM
+  contract (`tests/test_midi.c` pins the samples), and the next round should
+  start there rather than in the blitter.
+
+The name-based field lookups remain around 7% (4.7 + 2.3); round 20 measured
+a cache for them and it lost to the linear scan, so they stay as they are.
