@@ -2825,6 +2825,17 @@ tick window.  With `NJ_MIDI_MAX_EVENTS` = 8192 notes a single injected event
 can move hundreds of kilobytes, making a burst of note events quadratic in
 the song length.
 
+The harness for that work already exists in the tree: `tests/test_midi.c`
+renders through `nj_midi_render(file, n, &frames, &nj_midi_mem)` and drives the
+live path that reaches this function with `nj_midi_stream_open(file, n, &mem)`
+followed by `nj_midi_stream_event(s, status, d1, d2)` (see the CC7, program
+change and two-stream cases around lines 1599-1641), and it already carries
+`pcm_at`, `pcm_diff` and `pcm_rms` helpers.  A benchmark is therefore a small
+loop around that same code: open a long song, advance a frame, inject N notes
+per frame, and report CPU against a checksum of the rendered PCM; comparing
+N=1 with N=64 exposes the quadratic directly, and comparing the checksum
+before and after the change is the equivalence proof.
+
 The fix is to stop growing the file's note array for live notes: keep the
 injected notes in their own small list and merge them at the render cursor,
 which is also O(1) per event instead of O(notes).  That is a change to the
