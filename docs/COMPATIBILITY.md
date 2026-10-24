@@ -3686,3 +3686,21 @@ scan a handful of frames on side, screenshot after each, keep the pair with the
 lowest MAE.  Until that scan exists, the pixel tests stay on the two 2D titles
 where both runtimes are on the same screen at frame 300 - claiming a 3D pixel
 comparison from these numbers would be claiming the wrong thing.
+
+### Matching screens instead of frame numbers (round 53, 2026-10-24)
+
+`tools/scan_reference_match.sh <nj2me> <jar> <run-freej2me-headless.sh>
+[last] [step] [w h] [keys]` takes the reference screenshot once, dumps our
+frames across the replay and prints the three closest ones by MAE.  That is
+the only honest way to compare two runtimes whose loading times differ.
+
+Running it on 3D摩托赛车_9287 explains the round-52 number: with the key
+script used there our run never leaves the splash screen - 900 frames, 15
+dumps, **all identical**, 35,871 bytecodes total, `tris=0 m3g=0` - while the
+reference shows a flat grey screen.  Two idle screens, not two renderings of
+the same scene: the title needs the input that actually starts a race before
+it can serve as a 3D pixel case.
+
+So the next step for 3D coverage is an input script per title (the sweep
+scripts in `.local-tools/debug-runs/compat-round9-*/` reached city and bike
+frames for this title earlier), then run this scan to pick the matching pair.
