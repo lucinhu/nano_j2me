@@ -43,6 +43,8 @@ class Handler(BaseHTTPRequestHandler):
     def reply(self, data, status=200):
         self.send_response(status)
         self.send_header("X-Reply", "loopback")
+        self.send_header("X-Int", "42")
+        self.send_header("X-Date", "Sun, 06 Nov 1994 08:49:37 GMT")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)

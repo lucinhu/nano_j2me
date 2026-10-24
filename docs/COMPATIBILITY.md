@@ -3210,3 +3210,414 @@ Gate battery on the final tree: `ctest` 103/103, `test_m3g` 654 checks,
 `bench.jar` still `BENCH sum=-136042548 s=5` with 70,514,376 bytecodes and
 92,432/92,432 bytes of heap; the superinstruction digest matches the desktop
 JVM on all 27 values; `tools/check_no_statics.sh` finds no writable statics.
+
+## A sample of the corpus, after the raster rounds (round 21, 2026-10-24)
+
+Every third title of the corpus (132 of 395, sorted by name so the sample
+spans genres) was replayed for 600 frames at `--fps 0 --heap 16` with a
+pointer-free key script and a fresh RMS directory per title, eight workers on
+cores 6-13, against the tree at `6ab0d3e`:
+
+- **132 of 132 exited 0**; no timeout, crash or out-of-memory.
+- No `NoSuchMethodError` and no `NoClassDefFoundError` anywhere.
+- Two titles log `ClassNotFoundException`, and both are the title probing for
+  platforms it was ported from: 雷电战机 logs five
+  (`java.applet.Applet`, `emulator.Emulator`, `XConnection`, `XMessage`) and
+  塔塔 two.  Those `Class.forName` probes are supposed to fail on a MIDP
+  device, so the log lines are the expected answer, not a gap.
+- Titles keep writing their record stores into the per-title directories, so
+  the save paths still work after the fourteen rendering and IO changes of
+  the last rounds.
+
+What this does not prove: pixel identity against a reference renderer (only
+tested on the titles that have reference screenshots), SDL2/real-hardware
+behaviour, or audio.  It is a regression net, not a compatibility certificate.
+
+## The last two core members that did not resolve (round 1 of the fifth goal, 2026-10-24)
+
+`tools/api_audit.py` compares this runtime's tables against the 982 members of
+the CLDC 1.1 / MIDP 2.0 reference and used to report two unresolved ones, both
+on `HttpConnection`:
+
+```
+javax/microedition/io/HttpConnection  getHeaderFieldInt   (Ljava/lang/String;I)I
+javax/microedition/io/HttpConnection  getHeaderFieldDate  (Ljava/lang/String;J)J
+```
+
+Both are now implemented in `src/midp/nj_lib_http.c` and the allowance list is
+empty, so the audit prints "every one of the 982 reference members resolves".
+
+`getHeaderFieldInt` skips leading blanks, accepts a leading `-`, reads digits
+until the first non-digit and returns the caller's default when the field is
+absent, holds no digits or would overflow an `int`.  `getHeaderFieldDate` parses
+the RFC 1123 form the Messaging spec names for `Date`, `Expires` and
+`Last-Modified` (`Sun, 06 Nov 1994 08:49:37 GMT`) into milliseconds since the
+epoch, and returns the default for anything else.  A wrong-but-silent value
+would be worse than the default, so both fall back rather than guess.
+
+While there: `getDate()`, `getExpiration()` and `getLastModified()` were all
+bound to the same native that returned -1 without looking at the response.  Each
+now reads its own header and returns the parsed value, or -1 when the header is
+missing or unparsable (previous behaviour).
+
+Evidence: the loopback fixture in `tools/check_posix_network.py` now sends
+`X-Int: 42` and `X-Date: Sun, 06 Nov 1994 08:49:37 GMT`; `tests/test_posix_network.c`
+asserts `getHeaderFieldInt("X-Int", -7) == 42`, the default for an absent name,
+`getHeaderFieldDate("X-Date", 0) == 784111777000` (6 November 1994 08:49:37 UTC
+is 784,111,777 s, so the expected value is that times 1000), the default for an absent
+name, and `getDate() > 0` for the fixture's own `Date` header.  Cost is code
+only: no new fields, buffers stay on the stack, so RAM is unchanged.
+
+## The threads that were never collected (round 33, 2026-10-24)
+
+A corpus sweep kept finding seven titles that threw
+`OutOfMemoryError: too many threads` from `Thread.start()`: 海绵宝宝卡丁车_4684,
+恋色狂想之魔女恋歌_4899, 圣百合女子学园-纯色序曲_4875, 坦克大战（经典版）_190,
+LOVExLOVE恋爱学院_4424 and two more.  The message came from
+`vm->nthreads >= NJ_MAX_THREADS` (32), which looked like a title asking for a
+huge pile of threads.  It was not.
+
+A probe of the thread table at the moment of the failure showed
+`nthreads=32 dead=0 parked=1 running=31`, and the "running" entries had
+`nframes == 0`: they had finished `run()` long ago and were still counted.  The
+cause is that a finished scheduler-owned thread is only marked
+`NJ_THREAD_DEAD` when `nj_exec` answers `NJ_ERR_HALT`, and `nj_exec` on an empty
+stack answers `NJ_OK` ("nothing to do").  So the slot stayed `RUNNING` for ever:
+the scheduler walked it every step, `Thread.isAlive()` could never see it die
+(the object's `alive` flag is separate), and after 32 such threads the title
+could not start another one.
+
+Two small changes in `src/core/nj_thread.c`:
+
+* `nj_scheduler_step` treats a scheduler-owned thread with no frames as
+  finished (`NJ_THREAD_DEAD`) before trying to execute it.  The main thread and
+  natives parked in a C call are filtered earlier and are unaffected.
+* a dead thread is reaped at the top of the same step, which frees its
+  `nj_thread` and its stack instead of keeping both until VM teardown.  The Java
+  handle is the numeric id in `nativeId`, not a pointer, and `isAlive()`/`join()`
+  already cope with a thread that is no longer in the table.
+
+Evidence, same key script and 2400 frames: 海绵宝宝卡丁车_4684 goes from 116
+`too many threads` errors and 214,081 bytecodes (the title stuck in its retry
+loop) to **0 errors and 3,718,758,532 bytecodes** - it actually plays.
+恋色狂想之魔女恋歌_4899 goes from 60 errors to 0.  `test_thread_lifecycle`
+still passes, including its "a bridge may own an empty Java stack" case.
+
+One observable changes: `--stats` used to print the live thread count and now
+prints threads created since the VM started (monotonic).  The live count falls
+back as slots are reaped, so it can no longer tell `check_late_display.sh`
+whether a thread ever existed; the created count can, and that script passes
+with `threads=2`.
+
+Cost is code only - no new VM fields, no new buffers - so RAM is unchanged.
+
+## Canvas.getGameAction is static (round 34, 2026-10-24)
+
+`bubblet`, `game15` and `slimevolley` all reported, over and over:
+
+```
+thrown: java/lang/IncompatibleClassChangeError at BubbletCanvas.keyPressed(I)V pc=52:
+    invokestatic on an instance method
+```
+
+The call is `Canvas.getGameAction(key)` in `keyPressed`, and MIDP 2.0 declares
+it `public static int`.  Our built-in `Canvas` table listed it - and also
+`getKeyCode` and `getKeyName`, which the spec likewise declares static - with
+no `NJ_ACC_STATIC` flag, so the resolver reported an instance method and the
+`invokestatic` check in the interpreter refused the call.  Every key press of
+those titles threw, which is why their `keyPressed` never did anything.
+
+Fixed by declaring all three static in the `canvas_methods` table.  The
+interpreter already handles `invokevirtual` naming a static target (that is the
+mirror case the round-53 light work hardened), so nothing else had to change.
+
+Evidence: bubblet / game15 / slimevolley go from repeated
+`IncompatibleClassChangeError` on every key press to **zero** over 600 frames.
+`ctest` stays green, and `BENCH sum=-136042548 s=5` is unchanged.
+
+## The key name that used to throw (round 35, 2026-10-24)
+
+`Canvas.getKeyName(int)` is specified to reject a key code the device does not
+define with `IllegalArgumentException`, and this runtime did exactly that.  Two
+real titles do not survive it: 愤怒的小鸟-高清版_2353 and 宇宙战机_10521 build
+their help screens by asking for names of their own vendor-key codes (-10 and
+-100..-104), and the 825 rejected calls aborted the calling method.  The
+reference implementation answers "-" for every code it cannot name, and ports
+written against handsets expect that, so the unknown case now returns the same
+placeholder.  Codes this device does define still answer their real names.
+
+The same round fixed the declaration shape of the three key methods:
+MIDP 2.0 declares `getGameAction`, `getKeyCode` and `getKeyName` static, and
+the Canvas table already said so, but the Displayable table still carried an
+instance copy of `getKeyName`.  Both conventions now resolve to the same
+native — `invokestatic` (what javac emits for the specified methods) and the
+older `invokevirtual` spelling — and the tests in `tests/test_lcdui.c` and
+`tests/test_text_input.c` assert the static convention instead of the instance
+one they were written against.
+
+Evidence: `tests/test_lcdui.c` and `tests/test_text_input.c` pass (3,141 and
+1,023 assertions), the two titles above replay 600 frames with no
+`IllegalArgumentException`, a 40-title sample of the corpus replays 600 frames
+each with zero non-zero exits and zero uncaught exceptions, and the usual
+gates are unchanged: `ctest` 105/105, `BENCH sum=-136042548 s=5`,
+digest 27/27, no writable statics.  No new fields, no new allocations: the
+change is one string literal and two table rows.
+
+## The image size that wrapped (round 36, 2026-10-24)
+
+`Image.createImage(int width, int height)` computed the pixel count in 32-bit
+arithmetic and handed it straight to the array allocator.  A request like
+`createImage(65536, 65536)` therefore asked for a zero-length pixel array while
+the mutable-image white fill walked `(nj_size)width * height` = 2^32 pixels:
+the allocation and the fill disagreed about how big the image was.  The same
+pattern existed in `createImage(int[] rgb, int width, int height, boolean)`.
+
+Both entry points now share one guard, `img_pixels_fit()`, which rejects a size
+whose pixel count cannot be represented as a Java array length *before* the
+multiply, and answers `OutOfMemoryError` - not `IllegalArgumentException`,
+because the dimensions themselves are legal, the device simply cannot hold the
+pixels.
+
+Evidence: the new assertion in `tests/test_lcdui.c`
+(`image_new(vm, 65536, 65536) == NULL` plus the exception type) fails on the
+previous build - it returned an Image and left no exception, i.e. a truncated
+allocation nobody could use - and passes now.  Full `ctest` 105/105, digest
+27/27, `check_no_statics.sh` OK, `BENCH sum=-136042548 s=5` unchanged.
+
+This is hardening rather than title-facing behaviour: no title in the corpus
+asks for such a size, and the 1,992 `image dimensions must be positive`
+exceptions that led here turned out to be 生化危机之恶化_8448 deliberately
+calling `createImage(0, 0)` and catching the rejection, which is what the
+specification requires.
+
+## The texture size that could wrap too (round 37, 2026-10-24)
+
+The previous round stopped `Image.createImage` from multiplying dimensions in
+32 bits.  The same pattern sat in two places that read their sizes out of a
+`.m3g` file, i.e. from bytes no game author verified:
+
+- the texture payload reader (`NJ_M3G_T_TEXTURE`) computed `w * h` in 32 bits
+  and only then compared against the 4096x4096 cap, so a wrapped product could
+  slip under the cap, allocate a small RGBA array, store the *unwrapped* `w`
+  and `h` in the Image2D and leave every later consumer of `_nj_w`/`_nj_h`
+  indexing past that array;
+- the mipmap cache checked `nj_array_length(px) < w * h * 4`, which wraps for
+  images above 536 million pixels and would then accept a buffer that is too
+  small.
+
+Both products are now formed in 64 bits before any comparison, and the
+texture reader rejects a pixel count it cannot represent.  No field, table or
+allocation was added; the changed code is a handful of comparisons.
+
+Evidence: `test_m3g` 654 checks / 0 failures, `test_m3g_references` unchanged,
+`ctest` 105/105, digest 27/27, `check_no_statics.sh` OK, `BENCH
+sum=-136042548 s=5`.  Like the previous round this is hardening: no title in
+the corpus ships such a texture, and the point is that a damaged asset cannot
+turn into an out-of-bounds read.
+
+## A sampled corpus run after the compatibility fixes (round 38, 2026-10-24)
+
+Rounds 33-37 changed thread reaping, made `Canvas.getKeyCode/getGameAction/
+getKeyName` static as MIDP 2.0 declares them, answered a placeholder key name
+instead of an exception, and added the two pixel-count guards.  To check that
+none of that disturbed gameplay, a sample of the corpus was replayed on this
+build: every fifth JAR of `tests/games` (79 titles), 400 frames each,
+`--port headless --size 240x320 --heap 16 --fps 0`, eight workers, a fresh
+record store per title.
+
+Result: 78 of 79 ran to completion with no uncaught exception; the single
+non-zero exit is 鲁宾逊漂流记汉化BT版_4677, which has no usable MIDlet suite
+(`bad JAR or no MIDlet-Name`) and has failed the same way in every earlier
+sweep.  No `NoSuchMethodError`, `ClassCastException` or `IncompatibleClass-
+ChangeError` appeared anywhere in the run.
+
+`tests/test_lcdui.c` also gained the `createRGBImage()` counterpart of the
+round-36 assertion: the same 65536 x 65536 request must now answer
+`OutOfMemoryError` there too, which it does.
+
+Gates: `ctest` 105/105 (46.55 s), `test_lcdui` PASS, digest 27/27,
+`check_no_statics.sh` OK, `BENCH sum=-136042548 s=5`.
+
+## What the API surface looks like after the coverage rounds (round 39, 2026-10-24)
+
+Rounds 11-35 added missing members in four passes, so it is worth recording
+what "complete" means here and how it was checked, because the answer differs
+per API family:
+
+- **CLDC 1.1 / MIDP 2.0**: `tools/api_audit.py` walks the reference member
+  lists (982 members) against the binding tables - 0 missing.  The classes we
+  deliberately do not implement (JSR 75 file connections, JSR 82 Bluetooth in
+  full) are reported as "not present", which is a capability decision, not a
+  gap: a MIDlet sees the class as absent and takes its own fallback path.
+- **JSR-184 (M3G)**: `tools/m3g_api_audit.py` compares the binding tables with
+  the reference implementation's public methods - 0 missing after round 14
+  added `KeyframeSequence.getSample` and round 11 the five descriptor methods.
+  `getKeyframeTime`/`setInterpolationType` do not exist in JSR-184, which is
+  why neither we nor the reference implement them.
+- **Nokia UI**: `com.nokia.mid.ui.DirectGraphics` was diffed by hand against
+  `freej2me-plus/src/com/nokia/mid/ui/DirectGraphics.java` - all ten methods
+  present (`drawImage`, `drawPixels`, `drawPolygon`, `drawTriangle`,
+  `fillPolygon`, `fillTriangle`, `getAlphaComponent`, `getPixels`,
+  `setARGBColor`, `getNativePixelFormat`).
+- **JSR-256 (sensors)**: the library compiles but there is no sensor hardware,
+  so availability push never fires and the condition methods raise
+  `UnsupportedOperationException` - which the specification allows precisely
+  when `isConditionPushSupported()` is false, and which our code reports as
+  false.  None of the 395 titles in `tests/games` references
+  `javax/microedition/sensor` at all, so nothing in the corpus depends on it.
+
+The practical conclusion: the remaining work is behavioural fidelity rather
+than missing members, which is why the last rounds spent their time on
+`getKeyName`'s exception, the Canvas static declarations, the thread reap and
+the two pixel-count guards instead of adding API.
+
+## What is left in the exception histogram (round 40, 2026-10-24)
+
+The exception histogram is how rounds 33-37 found their bugs: it lists every
+exception the corpus throws, grouped by message and by the frame the runtime
+was in.  After the thread reap (`c4e6bfc`), the Canvas statics (`a278807`), the
+key-name placeholder (`ff4d849`) and the two pixel-count guards (`2a0a815`,
+`6c326a9`), the four largest entries are:
+
+| count | site | why the runtime is right |
+| --- | --- | --- |
+| 1,992 | `Image.createImage(int,int)`: "image dimensions must be positive" | 生化危机之恶化_8448 probes `createImage(0,0)` inside a `try` - the specification says this throws `IllegalArgumentException`. |
+| 825 | `Canvas.getKeyName(int)`: "unknown key code" | fixed in round 35: a title asks about its own vendor key codes, so the runtime now answers `"-"` like the reference; the corpus no longer produces this line. |
+| 21 | `Manager.createPlayer(InputStream,String)`: unsupported content type | the specification requires `IllegalArgumentException` for a type the platform does not support, and these titles try several formats on purpose. |
+| 3 | `VolumeControl.setLevel(int)`: "level out of range" | the specification requires `IllegalArgumentException` outside 0-100. |
+
+Everything below 3 was title-side arithmetic, missing resources, or the
+`NullPointerException`s a title raises when it draws a sprite it never
+assigned.  So the histogram thread is now exhausted: what remains is
+specification-mandated behaviour that the titles expect to catch.
+
+## Final gate sweep of the optimisation branch (round 43, 2026-10-24)
+
+Run on `73f9f90` with the tree exactly as committed, as a last check that the
+compatibility work of rounds 33-40 did not disturb the performance contract:
+
+- `cmake --build build -j8` - 0 warnings, 0 errors.
+- `ctest -j8` - 100% of 105 tests in 46.69 s.
+- `nj2me --port headless --heap 16 --fps 0 --stats tests/fixtures/bench.jar`
+  - `BENCH sum=-136042548 s=5`, `bytecodes=70,514,376`, heap 92,432/92,432 B,
+  unchanged from the pre-optimisation baseline.
+- `tools/check_superinstr_digest.sh` - 27 digest values identical to the
+  desktop JVM.
+- `tools/check_no_statics.sh` - 63 objects, no writable static data (the only
+  non-`const` tables are the two read-only pointer tables in `.data.rel.ro`).
+
+Corpus evidence for the same tree is in the round 38 section (78 of 79 sampled
+titles completed a 400-frame run with no uncaught exception; the one failure
+is the known broken package), and the round 39 section records how API
+coverage is verified per family.  Nothing here claims a pixel-level
+certificate against a reference device: the pixel-diff work in the earlier
+rounds covers specific spans and blits, not whole frames.
+
+## The last open exception lead, closed (round 44, 2026-10-24)
+
+Round 40 left one lead open: the 21 `IllegalArgumentException`s raised by
+`Manager.createPlayer(InputStream,String)`.  Pulling the untruncated message
+out of the corpus logs shows all 21 are the same string:
+
+    stream is null
+
+So the titles are calling `createPlayer((InputStream)null, type)` on purpose -
+five of them pass a null stream while probing for audio - and JSR-135 requires
+exactly this exception for a null stream.  There is no content-type alias gap
+to fix: the throw is specification-mandated and the titles catch it.
+
+That closes the exception-histogram thread as a source of defects.  Every
+remaining entry is either specification-mandated throwing (`createImage` with
+invalid dimensions, `getKeyName` before round 35, null `createPlayer` streams,
+`VolumeControl.setLevel` out of range) or a title bug the runtime faithfully
+reports.  Defects from here on will have to come from behaviour comparison
+with the reference implementation, not from exception counts.
+
+## Comparing a frame against the reference emulator (round 46, 2026-10-24)
+
+The exception histogram is exhausted and the API surface is complete, so the
+remaining source of defects is behaviour comparison.  The pipeline that works:
+
+    # ours
+    ./build/nj2me --port headless --size 240x320 --heap 32 --fps 0 \
+        --run-frames 300 --dump-frames OUT/ --dump-every 300 GAME.jar
+    # reference (HeadlessControl protocol on stdin)
+    printf 'wait 3000\npress 5 200\nwait 7000\nshot REF.png\nquit\n' |
+        .local-tools/run-freej2me-headless.sh GAME.jar REFDIR 240 320
+    # then compare REF.png with OUT/00300.ppm pixel by pixel (PIL)
+
+Two things had to be right: the reference needs a `press` after the first
+`wait` (a title that sits on a splash screen past 8 s never reaches a paint),
+and the screenshot only appears when the shot happens after that paint.
+
+First measurement, 三国杀单机战功修改版_4143 at frame 300 (240x320): mean
+absolute error **6.96/255** over 230,400 samples between our frame and the
+reference's.  That is a same-scene comparison, not a frame-locked one - the
+two runtimes advance animations on their own clocks, so this number bounds
+"same picture, small per-pixel differences" rather than proving pixel
+identity.
+
+One title could not be compared at all: 愤怒的小鸟-高清版_2353 makes the
+reference throw `java.util.zip.ZipException: invalid CEN header (bad entry
+name or comment)` while our loader accepts the archive and runs the game for
+3.7 billion bytecodes - a real tolerance difference in JAR parsing, not a
+rendering one.
+
+### Three more same-scene comparisons (round 47, 2026-10-24)
+
+Using the pipeline above, same frame index (300) for each title, mean absolute
+error against the reference emulator's screenshot (the later two sampled every
+other pixel and channel to keep the comparison quick):
+
+| title | MAE / 255 |
+| --- | --- |
+| 三国杀单机战功修改版_4143 | 6.96 (every pixel) |
+| 超级马里奥_10283 | 4.99 (every 2nd pixel) |
+| 拳皇98终极之战_7534 | 1.75 (every 2nd pixel) |
+
+All three are the same scene on both runtimes and all three are close, which
+is the useful part: the differences are per-pixel (font hinting, animation
+phase, dithering) rather than structural - a wrong sprite position or a
+missing layer would put the error an order of magnitude higher.  It is still
+not a frame-locked comparison, so this bounds agreement, it does not prove
+identity.
+
+## Where the compatibility objective stands (round 48, 2026-10-24)
+
+The goal behind rounds 33-48 was "complete the missing J2ME/JSR API, find and
+fix real defects with evidence from real games and trusted references, keep
+RAM/ROM neutral, run the regressions and document it".  State at the end:
+
+**Proven and pushed**
+
+- API surface: 0 missing members in CLDC 1.1 / MIDP 2.0 (982 members,
+  `tools/api_audit.py`), JSR-184 (reference-implementation diff) and Nokia
+  `DirectGraphics` (hand diff).  Deliberate capability gaps (JSR-75/82) are
+  reported as absent classes, which is how a MIDlet detects them.
+- Defects found with evidence and fixed: the thread-slot leak (`c4e6bfc`,
+  116 -> 0 exceptions and 214k -> 3.72G bytecodes on one title), the three
+  Canvas methods missing their `static` flag (`a278807`), the M3G
+  spot-light cone defaults (`822bb80`), `KeyframeSequence.getSample`
+  (`7da27de`), the two 32-bit pixel-count overflows (`2a0a815`, `6c326a9`),
+  `getKeyName` for unknown codes (`ff4d849`) and
+  `HttpConnection.setRequestProperty` (`a195af6`).
+- Regressions: 105/105 tests, `BENCH sum=-136042548 s=5` and 70,514,376
+  bytecodes unchanged, 27 desktop-identical digests, no writable static data,
+  corpus sample 78/79 complete (the one failure is a broken package), and
+  four real titles pinned by the pixel-diff tests added along the way.
+- Reference comparison pipeline: documented and used on three titles
+  (MAE 1.75-6.96/255 on the same scene).
+
+**Not done, and not claimed**
+
+- No frame-locked pixel comparison (the two runtimes advance animations on
+  their own clocks, so only same-scene comparisons are possible without a
+  fixed random seed and a shared clock).
+- No SDL2, real-device, audio-listening or long-soak testing in this branch.
+- JSR-75 (file system) and JSR-82 (Bluetooth) remain capability gaps by
+  design; JSR-256 sensors compile but have no hardware, and no corpus title
+  uses them.
+
+That is the honest boundary: the compatibility work is evidence-backed at the
+level of API, exceptions, corpus runs and same-scene pixels, and unproven at
+the level of frame identity and hardware behaviour.

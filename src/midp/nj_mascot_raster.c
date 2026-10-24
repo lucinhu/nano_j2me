@@ -759,10 +759,17 @@ enum {
     MR_MODE_TEX_SMOOTH_HALF,
     MR_MODE_TEX_FLAT_PUT,
     MR_MODE_TEX_FLAT_HALF,
+    MR_MODE_TEX_ENV_SMOOTH_PUT,
+    MR_MODE_TEX_ENV_FLAT_PUT,
     MR_MODE_COLOR_SMOOTH_PUT,
     MR_MODE_COLOR_SMOOTH_HALF,
     MR_MODE_CONST_PUT,
-    MR_MODE_CONST_HALF
+    MR_MODE_CONST_HALF,
+    /* Unmodulated texels copied straight to an opaque destination: the
+     * texture is neither shaded nor environment-mapped, so the generic
+     * loop only does a palette lookup and a store per pixel, with all the
+     * flag tests on the way past.  Heaviest shape in the Mascot titles. */
+    MR_MODE_TEX_RAW_PUT
 #endif
 };
 
@@ -806,6 +813,51 @@ MR_DEFINE_TEX_SPAN(mr_span_tex_smooth_half, 1, 1)
 MR_DEFINE_TEX_SPAN(mr_span_tex_flat_put, 0, 0)
 MR_DEFINE_TEX_SPAN(mr_span_tex_flat_half, 0, 1)
 
+/* Environment-mapped textured spans.  The heaviest real 3D title in the
+ * corpus spends almost every pixel here: texture plus environment map, no
+ * toon, no colour key, REPLACE blending.  The per-pixel steps are copied
+ * verbatim from the generic loop so the pixels stay byte-identical. */
+#define MR_DEFINE_TEX_ENV_SPAN(NAME, SMOOTH)                                 \
+static inline void NAME(nj_u1 *pp, nj_s4 px0, nj_s4 px1,                     \
+                        nj_s4 uu, nj_s4 vv, nj_s4 ss,                        \
+                        nj_s4 du, nj_s4 dv, nj_s4 ds,                        \
+                        nj_s4 eeu, nj_s4 eev, nj_s4 deu, nj_s4 dev,          \
+                        const nj_u1 *t_raster, const nj_u1 *t_palette,       \
+                        nj_s4 t_wbit, nj_s4 t_mask, nj_s4 key_idx,           \
+                        nj_s4 flat_level, nj_s4 fmt, nj_s4 bpp,              \
+                        const nj_u1 *e_raster, nj_s4 e_wbit, nj_s4 e_mask)   \
+{                                                                            \
+    nj_s4 px;                                                                \
+    for (px = px0; px < px1;                                                 \
+         px++, uu += du, vv += dv, ss += ds, eeu += deu, eev += dev,         \
+         pp += bpp) {                                                        \
+        nj_s4 ti = (nj_s4)t_raster[                                          \
+            (nj_s4)((((nj_u4)(vv >> MR_FP) << t_wbit)                        \
+                     | (nj_u4)(uu >> MR_FP)) & (nj_u4)t_mask)];              \
+        nj_s4 ei;                                                            \
+        nj_s4 level;                                                         \
+        nj_u4 pix;                                                           \
+        nj_u4 ep;                                                            \
+        if (ti == key_idx) {                                                 \
+            continue;                                                        \
+        }                                                                    \
+        pix = mr_pal_get(t_palette, ti & 0xFF);                              \
+        level = (SMOOTH) ? (nj_s4)((ss >> MR_FP) & 0x1F) : flat_level;       \
+        pix = mr_tex_shade(pix, level);                                      \
+        ei = (nj_s4)((((nj_u4)(eev >> MR_FP) << e_wbit)                      \
+                      | (nj_u4)(eeu >> MR_FP)) & (nj_u4)e_mask);             \
+        ep = mr_u32(e_raster + (nj_s8)ei * 4);                               \
+        if (ep != 0) {                                                       \
+            pix = mr_env_add(pix, ep);                                       \
+        }                                                                    \
+        mr_raw_put(pp, pix, fmt);                                            \
+    }                                                                        \
+}
+
+MR_DEFINE_TEX_ENV_SPAN(mr_span_tex_env_smooth_put, 1)
+MR_DEFINE_TEX_ENV_SPAN(mr_span_tex_env_flat_put, 0)
+
+
 #define MR_DEFINE_COLOR_SPAN(NAME, BLENDED)                                  \
 static inline void NAME(nj_u1 *pp, nj_s4 px0, nj_s4 px1,                     \
                         nj_s4 ss, nj_s4 ds, nj_u4 color_rb, nj_u4 color_g,   \
@@ -847,6 +899,32 @@ static inline void NAME(nj_u1 *pp, nj_s4 px0, nj_s4 px1,                     \
 MR_DEFINE_CONST_SPAN(mr_span_const_put, 0)
 MR_DEFINE_CONST_SPAN(mr_span_const_half, 1)
 #endif
+
+#include <stdio.h>
+#include <stdlib.h>
+
+/*
+ * Copy a run of unmodulated texels into an ARGB8888 row under 1:1 mapping:
+ * exactly what the generic tail does when the span is textured, unshaded, not
+ * environment-mapped, not toon-shaded, blend is REPLACE and the destination is
+ * ARGB8888 - minus the per-pixel flag tests.
+ */
+static void mr_span_tex_raw4(nj_u1 *pp, nj_s4 n, nj_s4 uu, nj_s4 vv,
+                             nj_s4 du, nj_s4 dv, const nj_u1 *raster,
+                             const nj_u1 *pal, nj_s4 wbit, nj_s4 mask)
+{
+    while (n-- > 0) {
+        nj_s4 ti = (nj_s4)raster[
+            (nj_s4)((((nj_u4)(vv >> MR_FP) << wbit)
+                     | (nj_u4)(uu >> MR_FP)) & (nj_u4)mask)];
+        nj_u4 pix = mr_pal_get(pal, ti & 0xFF);
+
+        memcpy(pp, &pix, sizeof pix);
+        pp += 4;
+        uu += du;
+        vv += dv;
+    }
+}
 
 static void mr_fill_segment(const mr_state *st,
                             nj_s4 clip_x1, nj_s4 clip_x2,
@@ -897,7 +975,14 @@ static void mr_fill_segment(const mr_state *st,
     int mode = MR_MODE_GENERIC;
 
 #if NJ_MASCOT_RASTER_SPANS
-    if (!toon_on && !env_smooth) {
+    if (!toon_on && env_smooth && has_tex && tex_shaded &&
+        blend == NJ_MR_BLEND_REPLACE) {
+        mode = smooth ? MR_MODE_TEX_ENV_SMOOTH_PUT : MR_MODE_TEX_ENV_FLAT_PUT;
+    } else if (!toon_on && !env_smooth && has_tex && !tex_shaded && !smooth
+               && blend == NJ_MR_BLEND_REPLACE && key_idx == 256
+               && fmt == NJ_PIXFMT_ARGB8888) {
+        mode = MR_MODE_TEX_RAW_PUT;
+    } else if (!toon_on && !env_smooth) {
         if (has_tex && tex_shaded) {
             if (smooth) {
                 mode = blend == NJ_MR_BLEND_REPLACE ? MR_MODE_TEX_SMOOTH_PUT
@@ -1010,6 +1095,20 @@ static void mr_fill_segment(const mr_state *st,
                                       t_raster, t_palette, t_wbit, t_mask,
                                       key_idx, flat_level, blend, fmt, bpp);
                 break;
+            case MR_MODE_TEX_ENV_SMOOTH_PUT:
+                mr_span_tex_env_smooth_put(pp, xl, xr, uu, vv, ss, du, dv, ds,
+                                           eeu, eev, deu, dev,
+                                           t_raster, t_palette, t_wbit, t_mask,
+                                           key_idx, flat_level, fmt, bpp,
+                                           e_raster, e_wbit, e_mask);
+                break;
+            case MR_MODE_TEX_ENV_FLAT_PUT:
+                mr_span_tex_env_flat_put(pp, xl, xr, uu, vv, ss, du, dv, ds,
+                                         eeu, eev, deu, dev,
+                                         t_raster, t_palette, t_wbit, t_mask,
+                                         key_idx, flat_level, fmt, bpp,
+                                         e_raster, e_wbit, e_mask);
+                break;
             case MR_MODE_COLOR_SMOOTH_PUT:
                 mr_span_color_smooth_put(pp, xl, xr, ss, ds, color_rb, color_g,
                                          blend, fmt, bpp);
@@ -1025,6 +1124,10 @@ static void mr_fill_segment(const mr_state *st,
             case MR_MODE_CONST_HALF:
                 mr_span_const_half(pp, xl, xr, mr_flat_color(color, flat_shade),
                                    blend, fmt, bpp);
+                break;
+            case MR_MODE_TEX_RAW_PUT:
+                mr_span_tex_raw4(pp, xr - xl, uu, vv, du, dv,
+                                 t_raster, t_palette, t_wbit, t_mask);
                 break;
 #endif
             default:

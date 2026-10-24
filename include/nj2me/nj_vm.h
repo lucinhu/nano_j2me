@@ -338,7 +338,7 @@ typedef struct nj_vm_stats {
     nj_u4   live_objects;
     nj_u4   total_objects;
     nj_u2   classes;
-    nj_u2   threads;
+    nj_u2   threads;    /* created since start, monotonic */
     nj_u2   cp_cache_entries;
     nj_u8   find_hits;
     nj_u8   find_misses;

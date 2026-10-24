@@ -2101,9 +2101,12 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                 /*
                  * Opaque whole rows are the common case - a frame painted
                  * from an ARGB8888 render target - and they only need the
-                 * conversion, not the per-group alpha bookkeeping.
+                 * conversion, not the per-group alpha bookkeeping.  Under
+                 * NJ_ROP_SET the source alpha is irrelevant, so every row
+                 * takes it, which is what a title that blits its own ARGB
+                 * render target to an rgb565 screen does once per frame.
                  */
-                if (rop != NJ_ROP_SET && nj_argb_row_opaque(sp, n)) {
+                if (rop == NJ_ROP_SET || (n >= 32 && nj_argb_row_opaque(sp, n))) {
                     nj_565_row_from_argb(dp, sp, n, bpp);
                     continue;
                 }
@@ -2241,8 +2244,12 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
             /*
              * An opaque row of a painted image is a plain copy; the probe
              * below would arrive at the same answer eight pixels at a time.
+             * Short rows - HUD sprites, text strips - are cheaper to walk
+             * eight pixels at a time than to scan for an answer that is
+             * usually no, so the row test only pays for itself from 32
+             * pixels on.
              */
-            if (nj_argb_row_opaque(sp, n)) {
+            if (n >= 32 && nj_argb_row_opaque(sp, n)) {
                 memcpy(dp, sp, (size_t)n * 4u);
                 continue;
             }

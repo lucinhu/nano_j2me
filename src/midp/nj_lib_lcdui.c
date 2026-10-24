@@ -283,6 +283,20 @@ static int img_dims(nj_vm *vm, nj_ref img, int *w, int *h)
 }
 
 /* Allocate a transparent-black Image of w x h, or NULL with an exception. */
+/*
+ * True when w*h pixels fit in a Java int[] length, which is what the
+ * Image's pixel array has to be.  Without this check the pixel count is
+ * computed in 32-bit arithmetic and wraps: Image.createImage(65536, 65536)
+ * asked for a zero-length array and then the white-fill loop wrote 2^32
+ * pixels past it.  A count that cannot be represented is an allocation the
+ * device cannot satisfy, so it is an OutOfMemoryError, not an IAE.
+ */
+static int img_pixels_fit(int w, int h)
+{
+    return w > 0 && h > 0 &&
+           (nj_u8)(nj_u4)w * (nj_u8)(nj_u4)h <= 0x7FFFFFFFu;
+}
+
 static nj_ref img_alloc(nj_vm *vm, int w, int h, int mutable)
 {
     nj_ref img;
@@ -296,6 +310,10 @@ static nj_ref img_alloc(nj_vm *vm, int w, int h, int mutable)
     if (w <= 0 || h <= 0) {
         (void)nj_throw(vm, "java/lang/IllegalArgumentException",
                        "image dimensions must be positive");
+        return NULL;
+    }
+    if (!img_pixels_fit(w, h)) {
+        (void)nj_throw_oom(vm);
         return NULL;
     }
     fw = fld(vm, NJ_C_IMAGE, F_IMG_W, D_INT, 0);
@@ -2425,6 +2443,9 @@ NJFN(img_createRGBImage)
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "image dimensions must be positive");
     }
+    if (!img_pixels_fit((int)w, (int)h)) {
+        return nj_throw_oom(vm);
+    }
     n = w * h;
     if ((nj_u4)n > arr->length) {
         return nj_throw(vm, "java/lang/ArrayIndexOutOfBoundsException", NULL);
@@ -3613,8 +3634,17 @@ NJFN(d_getKeyName)
         break;
     }
     if (!name) {
-        return nj_throw(vm, "java/lang/IllegalArgumentException",
-                        "unknown key code");
+        /*
+         * The specification says a key code the device does not define is
+         * rejected with IllegalArgumentException, but real handsets answer a
+         * placeholder instead and ports rely on that: 愤怒的小鸟-高清版_2353
+         * and 宇宙战机_10521 ask about their own vendor key codes (-10,
+         * -100..-104) when building their help screens, and 825 such calls
+         * used to abort the calling method.  The reference implementation
+         * returns "-" for the same question, so the placeholder is the
+         * compatible answer; a code we do not know is never a crash.
+         */
+        name = "-";
     }
     ret->r = nj_string_new(vm, name);
     return ret->r ? NJ_OK : nj_throw_oom(vm);
@@ -10531,6 +10561,11 @@ static const nj_builtin_method displayable_methods[] = {
     M("getCommandListener", "()L" NJ_C_COMMANDLISTENER ";", 0),
     M("isShown",          "()Z", 0),
     M("sizeChanged",      "(II)V", 0),
+    /*
+     * Canvas declares getKeyName() static (MIDP 2.0); this instance alias is
+     * kept so bytecode compiled against a profile that called it virtually
+     * still resolves.  Both conventions answer the same native.
+     */
     M("getKeyName",       "(I)Ljava/lang/String;", 0),
     M("getKeyChar",       "()I", 0),
     M("setFullScreenMode", "(Z)V", 0),
@@ -10607,9 +10642,11 @@ static const nj_builtin_method canvas_methods[] = {
     M("hasRepeatEvents",   "()Z", 0),
     /* MIDP instance methods: consume the receiver and skip it when passing
      * arguments to their native implementations. */
-    M("getGameAction",     "(I)I", 0),
-    M("getKeyCode",        "(I)I", 0),
-    M("getKeyName",        "(I)Ljava/lang/String;", 0),
+    /* MIDP 2.0 declares these three static; a game that calls
+     * Canvas.getGameAction(key) with invokestatic must resolve here. */
+    M("getGameAction",     "(I)I", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("getKeyCode",        "(I)I", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("getKeyName",        "(I)Ljava/lang/String;", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("repaint",           "()V", 0),
     M("repaint",           "(IIII)V", 0),
     M("serviceRepaints",   "()V", 0),

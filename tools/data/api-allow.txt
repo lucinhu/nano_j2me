@@ -5,7 +5,4 @@
 #
 # class<space>name<space>arg-descriptor
 #
-# The HTTP connection's own lane (JSR 75): getHeaderFieldInt/Date are declared
 # by the split javax/microedition/io module, which a concurrent session owns.
-javax/microedition/io/HttpConnection getHeaderFieldInt (Ljava/lang/String;I)
-javax/microedition/io/HttpConnection getHeaderFieldDate (Ljava/lang/String;J)

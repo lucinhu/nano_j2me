@@ -2732,3 +2732,408 @@ remain the interpreter (a different workstream) and the 3D rasteriser, which
 is why the rounds before this one measured their wins on the rasteriser and
 blitter instead of on whole titles.
 
+
+## Environment-mapped spans get their own loops (round 16 of the fourth goal, 2026-10-24)
+
+A 4,000-frame sweep of every title that references a 3D API found that the
+heaviest real load is not an M3G title at all: `浴火银河_3621` drew 1,045,744
+triangles through the Mascot/Micro3D rasteriser, and `gprof` on it put
+`mr_fill_segment` at 31.2% of CPU, ahead of `nj_region_draw` (20.4%) and
+`nj_interp_run` (11.5%).
+
+A span census inside `mr_fill_segment` showed why: 879,554 spans took the
+generic per-pixel loop while only 91,774 (tex/flat) and 56,802 (tex/smooth)
+used a specialised one.  The generic spans were almost all identical in
+shape — `tex=1 env=1 toon=0 key=none blend=REPLACE` — i.e. environment-mapped
+textured spans, a combination the span table had no rows for.  Within that
+class, 73% interpolate the texture level (`MR_MODE_TEX_ENV_SMOOTH_PUT`) and
+27% shade flat (`MR_MODE_TEX_ENV_FLAT_PUT`).
+
+Both now have dedicated loops copied line for line from the generic body
+(`mr_span_tex_env_smooth_put`, `mr_span_tex_env_flat_put`), selected once per
+span when `env_smooth && has_tex && tex_shaded && !toon && blend==REPLACE`.
+`test_mascot_raster`'s 71 checks — including the `NJ_MR_ENVMAP` cases and the
+randomised differential against the generic path — pass unchanged, so the
+pixels are identical by construction and by test.
+
+A controlled benchmark now measures the change.  A scratch harness
+(`.local-tools/debug-runs/envspan-round61-20261024/bench.c`) links the runtime
+library and draws one full-screen environment-mapped, shaded, REPLACE-blended
+triangle 20,000 times into a 240x320 ARGB8888 surface, reporting process CPU
+and an FNV-1a checksum of the framebuffer.  Three interleaved runs per build,
+pinned to one core:
+
+| Build | CPU for 20,000 triangles | per triangle |
+| --- | --- | --- |
+| parent `a3e1499` | 2.0197 - 2.0279 s | 101.0 - 101.4 us |
+| with env spans | 1.7287 - 1.7427 s | 86.4 - 87.1 us |
+
+That is **-14.4% CPU** (min-to-min) on the dominant span shape, and the
+checksum is `60e55439` in every run of both builds, so the pixels are
+identical.
+
+What still cannot be shown: a title-level CPU win.  Six interleaved unpaced runs
+give parent min 0.723 s / median 0.781 s against new min 0.734 s / median
+0.824 s; four paced runs give min 0.387 → 0.334 s and median 0.440 → 0.427 s.
+The spread between runs of the same binary is ±15%, larger than any effect
+this change could have (the rasteriser is ~0.3 ms of a ~6 ms frame budget
+here).  The honest statement is therefore: the branch tree is gone for the
+dominant span class, the pixels are unchanged, and a controlled raster
+benchmark is needed before any speed figure is quoted.  That benchmark is the
+next step, not a claim in this section.
+
+The specialisation is pinned across builds: the whole `test_mascot_raster`
+suite (71 checks, including the `NJ_MR_ENVMAP` goldens and the randomised
+differential) and `test_mascot` (233 checks) pass unchanged in a build with
+`-DNJ_MASCOT_RASTER_SPANS=0`, where every span takes the generic loop.  Two
+independent builds of the same tree therefore agree on every pixel, which is
+the strongest statement this change can make without a dedicated raster
+benchmark - the same benchmark that is still missing for a speed figure.
+
+### What is left in the generic loop (round 18, 2026-10-24)
+
+After the environment-mapped rows were added, the remaining generic spans in
+`浴火银河_3621` are the ones with `NJ_MR_SHADED` clear: 67,025 of 260,425 spans
+in a 2,000-frame replay are plain textured spans that copy the palette entry
+straight to the surface.  Two more rows (`mr_span_texp_smooth_put`,
+`mr_span_texp_flat_put`) were written for that shape and the same controlled
+benchmark was pointed at it with `NJ_MR_SHADED` removed:
+
+| Build | CPU for 20,000 triangles | per triangle |
+| --- | --- | --- |
+| parent | 1.0208 - 1.0291 s | 51.0 - 51.5 us |
+| with unshaded rows | 1.0171 - 1.0287 s | 50.9 - 51.4 us |
+
+No measurable difference (checksums identical, `5661ea6d`): the generic loop
+for this shape is already a tight copy loop with its flag tests hoisted by the
+compiler, so the rows were **reverted rather than committed**.  The lesson for
+the next round is that the remaining generic spans are not where the time is;
+`nj_region_draw` (20.4% of this title) is the next candidate.
+
+### A quadratic in the MIDI note inserter, found not fixed (round 19, 2026-10-24)
+
+*(Fixed in round 62 - see "The note list a MIDlet fills" below.)*
+
+`gprof` on `浴火银河_3621` attributes 4.5% of CPU to `mid_inject_note` from
+only 678 calls - about 100 us per call, which is far too much for what the
+function does.  Reading `src/midp/nj_midi.c` explains it: every MIDlet note
+appends to the song's note list (`nj_midi_stream_event` -> `mid_add_note`)
+and then `mid_insert_note` rotations the tail with
+
+    memmove(&notes[at + 1], &notes[at], (last - at) * sizeof(mid_note));
+
+where `last` is the end of the *whole* note list, not the end of the current
+tick window.  With `NJ_MIDI_MAX_EVENTS` = 8192 notes a single injected event
+can move hundreds of kilobytes, making a burst of note events quadratic in
+the song length.
+
+The harness for that work already exists in the tree: `tests/test_midi.c`
+renders through `nj_midi_render(file, n, &frames, &nj_midi_mem)` and drives the
+live path that reaches this function with `nj_midi_stream_open(file, n, &mem)`
+followed by `nj_midi_stream_event(s, status, d1, d2)` (see the CC7, program
+change and two-stream cases around lines 1599-1641), and it already carries
+`pcm_at`, `pcm_diff` and `pcm_rms` helpers.  A benchmark is therefore a small
+loop around that same code: open a long song, advance a frame, inject N notes
+per frame, and report CPU against a checksum of the rendered PCM; comparing
+N=1 with N=64 exposes the quadratic directly, and comparing the checksum
+before and after the change is the equivalence proof.
+
+The fix is to stop growing the file's note array for live notes: keep the
+injected notes in their own small list and merge them at the render cursor,
+which is also O(1) per event instead of O(notes).  That is a change to the
+audio renderer, not a local edit, so it is recorded here as the next audio
+target rather than being attempted blind - there is no MIDI output
+benchmark yet, and the correctness bar for a renderer is a rendered-PCM
+comparison, not a unit test.
+
+### The note list a MIDlet fills (round 62, 2026-10-24)
+
+The quadratic recorded above is gone.  Live notes are no longer rotated into
+the file's array one at a time; `nj_midi_stream_event` appends them and the
+next pull merges the run once, before it walks the list, with the tick the
+sender saw (`mid_settle_notes` in `src/midp/nj_midi.c`).  A burst of 2-8 offers
+is lifted into a bounded stack copy and the file notes still ahead are slid
+once; a bigger burst is rotated in place (three reversals, no temporary), so
+a pull moves the remaining file notes once whatever the burst size.  Single
+events keep the original one-record `memmove`.
+
+Measured with a scratch harness
+(`.local-tools/debug-runs/midi-round62-20261024/bench.c`, built against
+`build/libnj2me.a` and against the parent tree, 256 frames per pull, a 6,000
+event file, CPU time of the whole render):
+
+| notes sent per pull | parent CPU | this build | delta | PCM checksum |
+|---|---|---|---|---|
+| 1 | 0.00201 s | 0.00181 s | -10% | both `d2f2c7c4` |
+| 2 | 0.00348 s | 0.00295 s | -15% | both `cc65b883` |
+| 16 | 0.00968 s | 0.00416 s | -57% | both `d7116b14` |
+| 32 | 0.00807 s | 0.00212 s | -74% | both `553fa016` |
+
+The checksums are FNV-1a over every rendered sample, so the audio is
+byte-identical for every case that fits in the note list.  Above
+`NJ_MIDI_MAX_EVENTS` the two builds differ by design: the old code rotated the
+last file note into the cursor's place even though the sent note had been
+dropped, which played a future note early; the new code drops the event, which
+is what the parser and the comment on `mid_inject_note` already promised.
+
+Residual: controller events (bend, pedal, program) still insert one by one.
+They are bounded by `NJ_MIDI_MAX_CTLS` (2,048) and arrive far less often than
+notes, so the same treatment is not measured as worth it yet.
+
+### The frame a Mascot title blits to the screen (round 63, 2026-10-24)
+
+Profiling the heaviest software-3D title in the corpus
+(`浴火银河_3621`, 4,000 paced frames, `gprof` tree at HEAD `4a802d3`) puts
+`nj_region_draw` at 27.9% of CPU over 301,318 calls, just ahead of the Mascot
+span filler at 24.3%.  A blit census around `nj_region_draw` explains both
+numbers: 296,021 of those calls are ARGB8888->ARGB8888 paints (a title
+compositing its own layers), and 3,979 are ARGB8888->rgb565 blits under
+`NJ_ROP_SET` whose painted area is exactly 76,800 pixels each - one full
+screen every frame.  That is the title handing its finished ARGB render
+target to the rgb565 display.
+
+`NJ_ROP_SET` replaces the destination and ignores the source alpha, so the
+whole-row converter added for opaque paints is valid for every row of such a
+blit; the code previously took the group loop because the destination had to
+be rgb565 and the row path was gated on the paint path.  The gate is now
+`rop == NJ_ROP_SET || nj_argb_row_opaque(sp, n)`.
+
+Controlled blit bench (`.local-tools/debug-runs/blit-round51-20261024/
+gfx-bench.c`, six interleaved runs, CPU min of each arm): the `set565` mode,
+one full-screen 240x320 ARGB8888->rgb565 `NJ_ROP_SET` draw per iteration,
+drops from 15.01 ms to 7.33 ms per 400 iterations (**-51.2%**), and all eight
+framebuffer checksums are unchanged (`25fa0c9a` for this mode).  The other
+modes move by -1.5% to +3.6%, inside the machine's noise.
+
+Real title, 3,000 paced frames, three interleaved rounds of user CPU:
+min 0.8820 s -> 0.8262 s, median 0.9001 s -> 0.8428 s (**-6.3% / -6.4%**).
+The saving is the alpha bookkeeping the flush no longer does - one screen of
+pixels per frame at the measured conversion rate.
+
+Cost: 128 bytes of object text, no data or bss, no RAM.
+
+### The texels a Mascot title copies unmodified (round 64, 2026-10-24)
+
+`gprof` on `浴火银河_3621` (4,000 paced frames) leaves the Mascot span filler
+at 24.3% of CPU.  Temporary counters around the span dispatch show what it is
+filling: of 3.75M spans, 3.58M (125.6M pixels) fall through to the generic
+per-pixel tail, and every one of them has the same shape - textured,
+unshaded (no `NJ_MR_SHADED`), flat, no environment map, no toon shading, no
+colour key, blend REPLACE, ARGB8888 destination: 3.44M spans, 119.4M pixels,
+35 pixels per span on average.
+
+The reason is in the mode selection: the textured modes were gated on
+`tex_shaded`, because that is the flag that says "modulate the texel by the
+light".  Unshaded spans are a copy - a palette lookup and a store per pixel -
+yet they ran the generic loop, which tests toon, environment, colour key and
+blend per pixel.
+
+`MR_MODE_TEX_RAW_PUT` adds the missing case: `mr_span_tex_raw4()` samples the
+same texel the generic tail samples (same raster index arithmetic) and writes
+the palette value straight to an ARGB8888 row.  Everything else - shade,
+environment map, toon, colour key, other blends, other formats - still takes
+the generic path, so the mode cannot change pixels outside its condition.
+
+Controlled bench (`.local-tools/debug-runs/texraw-round64-20261024/bench.c`,
+a 20x10 grid of 12-pixel triangles so the spans are as short as the title's,
+200 triangles per iteration, six interleaved runs): 5.681 ms -> 4.145 ms per
+200 iterations (**-27.0%**), and the framebuffer checksum is identical in both
+builds (`ed4fa735` at 50 iterations).
+
+Real title, 3,000 paced frames, three interleaved rounds of user CPU:
+min 0.7543 s -> 0.6927 s, median 0.7739 s -> 0.7020 s (**-8.2% / -9.3%**).
+
+Cost: 192 bytes of object text, no data or bss, no RAM.
+
+## Short rows stop scanning for an opacity they rarely have (round 19, 2026-10-24)
+
+`nj_region_draw` still takes about a quarter of the CPU of a Mascot 3D title
+after the full-screen flush and the raw texture span loops were fixed.  A
+census of drawn pixels (not calls) explains the remainder: on
+`浴火银河_3621`, 3,000 paced frames issue 179,005 ARGB8888 -> ARGB8888
+`NJ_ROP_PAINT` blits that only cover 65.45M pixels together - 366 pixels per
+call.  Those are the HUD sprites and text strips, and their rows are shorter
+than the sixteen-pixel blocks `nj_argb_row_opaque()` folds, so every row paid
+a scan that almost always answered "no" before the eight-pixel group loop
+started.
+
+The row test now only runs when a row has at least 32 pixels; short rows go
+straight to the group loop.
+
+| workload (taskset -c 5, 6 interleaved rounds) | parent | new | delta |
+| --- | --- | --- | --- |
+| 浴火银河_3621, 3,000 paced frames, min user CPU | 0.6842 s | 0.6750 s | -1.3% |
+| same, median | 0.7009 s | 0.6824 s | -2.6% |
+
+Every round was faster (five paired rounds, 0.676-0.683 vs 0.684-0.710).  The
+framebuffer is unchanged: the controlled blit bench reports the same hashes
+(`25fa0c9a`, `e1e89aeb`, ...), because a 240-pixel row is long enough to take
+the same path as before; `tests/test_gfx.c` (324 assertions) passes.
+
+ROM and RAM: `nj_gfx.c.o` `.text` is 34,618 bytes before and after - the
+compiler folded the new comparison into the loop that already bounds the scan -
+and `.data`/`.bss` are untouched, so this change costs no RAM and no ROM.
+
+A second idea was measured and discarded: rewriting `nj_blend_argb()` with
+packed red/blue lanes and an exact reciprocal for the `/255` step is bit-exact
+over every `(alpha, source, destination)` combination (the exhaustive harness
+is not committed; it checks all 16.7M triples), but it measured 2-3% *slower*
+on the `argb32mix` blit mode, so it was dropped rather than kept for elegance.
+
+## The field cache that was not worth its bytes (round 20, 2026-10-24)
+
+A gprof run of `浴火银河_3621` (4,000 paced frames) put 6.31% of the CPU in
+`method_lookup_named`, reached 16.1M times from the Micro3D natives
+(`m3_get` 5.74M, `m3_set` 2.92M).  Those natives resolve fields by name on
+every access because the Micro3D API ships in several spellings, so the
+obvious fix is a small direct-mapped cache of resolved `nj_field` handles
+keyed by (class, name pointer, descriptor pointer).
+
+It was implemented (8 ways, 268 bytes of VM state, switch
+`NJ_MASCOT_FIELD_CACHE`) and measured on the same title, 3,000 paced frames,
+five interleaved rounds against the parent binary:
+
+| round | parent | with cache |
+| --- | --- | --- |
+| min user CPU | 0.6661 s | 0.6790 s |
+| median | 0.6761 s | 0.6961 s |
+
+The cache is 1.9-3.0% *slower*.  On these small builtin classes a linear
+field scan is only a couple of pointer compares per lookup, so the probe
+(up to eight triples, each three compares) costs more than it saves, and the
+table also adds pressure to the data cache.  It was reverted rather than
+kept: a cache that loses to the thing it caches is not a cache.  The
+measurement stands as the reason the name-based lookup stays.
+
+## Where the Mascot title's CPU is now (round 22, 2026-10-24)
+
+Re-profiled table after the flush, raw-span, short-row and texture-span
+changes, on the same workload as before (`浴火银河_3621`, 3,000 paced frames,
+`-O2 -g -pg`, taskset -c 5, total CPU 0.43 s):
+
+| share | function | calls |
+| --- | --- | --- |
+| 23.3% | `nj_region_draw` | 182,109 |
+| 16.3% | `nj_interp_run` | 6,501 |
+| 16.3% | `mid_rescale_chan` | 1,194 |
+| 14.0% | `mr_fill_segment` | 99,689 |
+| 9.3% | `nj_run` | 521,904 |
+| 4.7% | `method_lookup_named` | 9,388,744 |
+| 2.3% | `nj_field_read_int` | 9,563,249 |
+| 2.3% | `nj_field_lookup_in` | 7,879,785 |
+
+The rendering share has come down from 52% (blit 27.9 + spans 24.3) to 37%
+(23.3 + 14.0), which is what rounds 17-19 bought.  Two things stand out:
+
+- `nj_interp_run` at 16% is the game's own bytecode; there is no single
+  interpreter hot spot left in it without instruction-level work.
+- About 16% sits in **audio** (`mid_*`), but the per-symbol attribution is
+  wrong and it is worth saying so: gprof credits `mid_rescale_chan` with
+  0.07 s over 1,194 calls, i.e. 59 us per call, while the function itself is a
+  loop of a dozen multiplies over `NJ_MIDI_VOICES` -- impossible.  The call
+  graph explains the confusion: the same node is credited with 2,766,692
+  calls to `mid_sample_at` and 775,600 to `mid_set_step`, so the symbol is
+  folded with the inlined mixing loop (`-O2` merges small static functions
+  that share code).  The honest reading is "the MIDI pull path costs about
+  10-16% of this title's CPU, at ~2.8M sampled voice-ticks per 3,000 frames",
+  and the next round must count and time that path directly (samples pulled,
+  loop iterations, per-voice work) instead of trusting the flat profile
+  there.  It stays the most promising target because it has an exact PCM
+  contract -- `tests/test_midi.c` pins the samples -- so a faster
+  implementation can be proved byte-identical.
+
+The name-based field lookups remain around 7% (4.7 + 2.3); round 20 measured
+a cache for them and it lost to the linear scan, so they stay as they are.
+
+## How much the MIDI renderer actually costs (round 24, 2026-10-24)
+
+The flat profile could not answer this (see the previous section), so it was
+measured differentially instead: build the same tree twice, once with
+`-DNJ_ENABLE_MIDI=0` and once with the renderer on, and interleave five
+rounds of the same workload (`浴火银河_3621`, 3,000 paced frames, taskset
+-c 5, 12.3M bytecodes per arm so the Java side is unchanged).
+
+| arm | min user CPU | median |
+| --- | --- | --- |
+| renderer on | 0.6451 s | 0.6508 s |
+| renderer off | 0.5193 s | 0.5306 s |
+
+The built-in renderer therefore costs **19.5% of this title's CPU** (18.5%
+measured at the median) - about 0.126 s over 3,000 frames, i.e. 42 us of
+rendering per 16.7 ms frame.  That makes it the single largest remaining
+subsystem in this title, ahead of the blitter (23%) and the raster spans
+(14%), and it is a subsystem with an exact contract: `tests/test_midi.c`
+pins the PCM samples, so any faster mixer can be proved sample-identical.
+
+Next step is inside, not around: count samples rendered per pull, the loop
+iterations per sample and the per-voice work, then optimise that inner loop
+(or reduce resampling work) with the PCM test as the acceptance gate.
+
+## A sample position per event, not per sample (round 25, 2026-10-24)
+
+The render loop asked `mid_sample_at()` twice per sample: once for the tick of
+the next channel event and once for the next note, to decide whether that
+event had landed yet.  On a long song that is millions of calls to a
+function that walks the tempo list and does a 64-bit multiply per tempo
+change, for a value that only changes when the event does.
+
+`nj_midi_stream` now memoises the head event's position: `ctl_tick`
+`ctl_sample` and `note_tick` `note_sample`, sixteen bytes per stream.  The
+translation is a pure function of the tick, so a zeroed stream already maps
+tick 0 to sample 0 correctly and nothing needs initialising; the cached pair
+is refreshed only when the head's tick changes.  The audio is bit-identical
+by construction, which `./build/test_midi` confirms (92 checks, including
+the pinned PCM), and `BENCH sum=-136042548 s=5` still holds.
+
+Interleaved A/B on the Mascot title (3,000 paced frames, five rounds,
+taskset -c 5): parent min 0.6436 s / median 0.6578 s, memo min 0.6377 s /
+median 0.6533 s, i.e. **-0.9% at the minimum and -0.7% at the median**, with
+four of the five rounds faster.  That is far less than the call count
+suggests: the tempo list of these files is short, so the removed calls were
+only a few tens of nanoseconds each, and the renderer's real cost is in the
+per-voice sample loop rather than in this bookkeeping.
+
+## The voice mask that was slower (round 26, 2026-10-24)
+
+The MIDI renderer walks `NJ_MIDI_VOICES` (32) voice slots on every sample and
+skips the idle ones.  With two or three notes sounding, most of those tests are
+pure overhead, so a mask of sounding voices (`vmask`, one bit per voice, walked
+with a lowest-bit-index helper) looked like an easy win.  It was not:
+
+| build | min user CPU | median |
+| --- | --- | --- |
+| parent (`bfd4441`) | 0.6368 s | 0.6499 s |
+| voice mask | 0.7309 s | 0.7316 s |
+
+Six interleaved runs of `浴火银河_3621` (3000 paced frames, fps 240, the same
+key script), taskset -c 5.  The mask version is **14.8% slower at the minimum**,
+and the audio was bit-identical throughout, so the change bought nothing and
+went back out.  The likely reason is that the four-line lowest-bit walk and the
+extra loop scope cost more than 32 cheap flag tests that the compiler already
+keeps in registers.
+
+The measurement also refines the round-25 result: the renderer's cost is in the
+per-voice sample arithmetic (envelopes, waveform, filter, pan), not in voice
+bookkeeping, so reducing the number of iterations is the wrong direction.
+
+## The 64-bit decay divide that was not worth keeping (round 27, 2026-10-24)
+
+The envelope recomputes a struck note's amplitude from the decay left, as
+`amp0 * decay_left / decay_span`.  That is a 64-bit divide per sample per
+sounding voice, so the obvious change is to do it in 32 bits whenever the
+product fits (amp0 is at most 32767 and spans are a few thousand samples, so it
+almost always does), keeping the 64-bit form as a fallback for a rescaled voice.
+The audio stayed bit-identical (`test_midi` 92 checks, fixed PCM) and no RAM was
+added, but the timing did not separate from noise:
+
+| build | min user CPU | median |
+| --- | --- | --- |
+| parent (`18c4a56`) | 0.6565 s | 0.6687 s |
+| 32-bit decay divide | 0.6543 s | 0.6635 s |
+
+Four interleaved runs of `浴火银河_3621` (3000 paced frames) on a machine whose
+load average was 3-5: -0.3% at the minimum, -0.8% at the median, both inside the
++-2% run-to-run spread.  Not kept.  The honest reading is that even a per-sample
+64-bit divide is a small share of this renderer, because only a few voices decay
+at once and the rest of the per-voice work dominates; the next MIDI attempt
+should measure first, as rounds 25-27 did.

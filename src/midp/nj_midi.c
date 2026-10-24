@@ -1006,6 +1006,26 @@ typedef struct nj_midi_stream {
     nj_u4 size;
     nj_u4 ev;
     nj_u4 cev;
+    /*
+     * Memoised sample positions.  The two `while` conditions in the render
+     * loop used to translate the head event's tick into a sample position
+     * for every sample, which called mid_sample_at() millions of times on a
+     * long song.  That translation is a pure function of the tick, so one
+     * entry per head is enough; a zeroed stream already maps tick 0 to
+     * sample 0, which is correct, so nothing needs initialising.
+     */
+    nj_u4 ctl_tick;
+    nj_u4 ctl_sample;
+    nj_u4 note_tick;
+    nj_u4 note_sample;
+    /*
+     * Notes a MIDlet sent while the song plays are appended to the end of the
+     * note array and only merged into tick order just before the next pull
+     * consumes them.  Inserting each one immediately moved every file note
+     * still ahead of the renderer, which made a burst of shortMidiEvent()
+     * calls cost time quadratic in the events left (see docs/PERFORMANCE.md).
+     */
+    nj_u4 nlive;
     nj_u4 bend_now[16];
     nj_u4 range_now[16];
     int   pedal_now[16];
@@ -1302,6 +1322,72 @@ static void mid_rescale_chan(nj_midi_stream *s, nj_u4 ch, nj_u4 oldv, nj_u4 newv
     }
 }
 
+/* Reverse a run of notes in place, for the rotation below. */
+static void mid_reverse_notes(mid_note *a, nj_u4 n)
+{
+    nj_u4 i = 0u;
+
+    while (i + 1u < n) {
+        mid_note t = a[i];
+        a[i] = a[n - 1u];
+        a[n - 1u] = t;
+        i++;
+        n--;
+    }
+}
+
+/*
+ * Merge the notes a MIDlet sent into tick order.  They sit at the end of the
+ * array in the order they were sent, all carrying the tick the renderer had
+ * reached when they arrived, so the run belongs right after every event at or
+ * before that tick.  One note is rotated in with a single memmove; a normal
+ * burst is lifted aside and the file notes are slid once; a very large burst
+ * is rotated in place.  Either way the file notes move once per pull instead
+ * of once per sent note.
+ */
+static void mid_settle_notes(nj_midi_stream *s)
+{
+    nj_u4 nnotes = s->song.nnotes;
+    nj_u4 nfile = nnotes - s->nlive;
+    nj_u4 at = s->ev;
+    nj_u4 k = s->nlive;
+
+    while (at < nfile && s->song.notes[at].tick <= s->tick_now) {
+        at++;
+    }
+    s->nlive = 0u;
+    if (at >= nfile) {
+        return;                     /* already behind every file note */
+    }
+    if (k == 1u) {
+        mid_note tmp = s->song.notes[nnotes - 1u];
+
+        memmove(&s->song.notes[at + 1u], &s->song.notes[at],
+                (nj_size)(nnotes - 1u - at) * sizeof(mid_note));
+        s->song.notes[at] = tmp;
+        return;
+    }
+    if (k <= 8u) {
+        /*
+         * A normal burst: lift the sent notes aside, slide the file notes
+         * that are still ahead of them once, and drop the run in.  The stack
+         * copy is bounded (8 x sizeof(mid_note)) and this moves every file
+         * note once per pull whatever the burst size.
+         */
+        mid_note tmp[8];
+
+        memcpy(tmp, &s->song.notes[nfile], (nj_size)k * sizeof(mid_note));
+        memmove(&s->song.notes[at + k], &s->song.notes[at],
+                (nj_size)(nfile - at) * sizeof(mid_note));
+        memcpy(&s->song.notes[at], tmp, (nj_size)k * sizeof(mid_note));
+        return;
+    }
+    /* A huge burst: rotate in place, which needs no temporary. */
+    mid_reverse_notes(&s->song.notes[at], nnotes - at);
+    mid_reverse_notes(&s->song.notes[at], k);
+    mid_reverse_notes(&s->song.notes[at + k], nnotes - at - k);
+}
+
 /*
  * Render up to `want` frames into `out` (interleaved when the song pans) and
  * return how many were written.  Zero means the song is over.
@@ -1333,11 +1419,28 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
         nj_s4 scaledR;
 
         /*
+         * Anything a MIDlet sent since the last pull has to be in tick order
+         * before the loops below walk the array - and with the tick the
+         * sender saw, before channel events move s->tick_now.
+         */
+        if (s->nlive != 0u) {
+            mid_settle_notes(s);
+        }
+
+        /*
          * Channel events first: a bend or a pedal that lands on the same
          * sample as a note-on has to be in force for that note.
          */
-        while (s->cev < s->song.nctls
-               && mid_sample_at(&s->song, s->song.ctls[s->cev].tick) <= i) {
+        while (s->cev < s->song.nctls) {
+            nj_u4 ct = s->song.ctls[s->cev].tick;
+
+            if (ct != s->ctl_tick) {
+                s->ctl_tick = ct;
+                s->ctl_sample = mid_sample_at(&s->song, ct);
+            }
+            if (s->ctl_sample > i) {
+                break;
+            }
             nj_u4 ch = s->song.ctls[s->cev].chan;
             nj_u4 kind = s->song.ctls[s->cev].kind;
 
@@ -1411,8 +1514,16 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
             s->cev++;
         }
 
-        while (s->ev < s->song.nnotes
-               && mid_sample_at(&s->song, s->song.notes[s->ev].tick) <= i) {
+        while (s->ev < s->song.nnotes) {
+            nj_u4 nt = s->song.notes[s->ev].tick;
+
+            if (nt != s->note_tick) {
+                s->note_tick = nt;
+                s->note_sample = mid_sample_at(&s->song, nt);
+            }
+            if (s->note_sample > i) {
+                break;
+            }
             s->tick_now = s->song.notes[s->ev].tick;
             if (s->song.notes[s->ev].on) {
                 /* A voice whose note has ended is free again.  The short guard
@@ -1926,28 +2037,12 @@ nj_u1 *nj_midi_render(const void *data, nj_u4 size, nj_u4 *frames_out,
 /*
  * The renderer walks the note and controller lists with a cursor, so an event
  * that has to be heard NOW cannot simply be appended: everything behind the
- * cursor has already been played.  mid_add_note()/mid_add_ctl() append, and
- * these two put the element they appended in front of the cursor instead.
- *
- * The lists are sorted by tick and every event still ahead has a tick at or
- * after the renderer's, so this is an insert at the first position that is
- * still in the future - which also keeps several events sent in one burst in
- * the order they were sent.
+ * cursor has already been played.  mid_add_ctl() appends, and this puts the
+ * element it appended in front of the cursor.  The list is sorted by tick, so
+ * that is the first position still in the future, which keeps a burst in the
+ * order it was sent.  Controller events are rare enough to insert one by one;
+ * notes are batched instead (see mid_settle_notes).
  */
-static void mid_insert_note(nj_midi_stream *s, nj_u4 at)
-{
-    mid_note tmp;
-    nj_u4 last = s->song.nnotes - 1u;
-
-    if (at >= last) {
-        return;                     /* already where it belongs */
-    }
-    tmp = s->song.notes[last];
-    memmove(&s->song.notes[at + 1u], &s->song.notes[at],
-            (nj_size)(last - at) * sizeof(mid_note));
-    s->song.notes[at] = tmp;
-}
-
 static void mid_insert_ctl(nj_midi_stream *s, nj_u4 at)
 {
     mid_ctl tmp;
@@ -1966,8 +2061,15 @@ static void mid_inject_ctl(nj_midi_stream *s, nj_u4 chan, nj_u4 kind, nj_u4 a)
 {
     nj_u4 at;
 
-    if (!mid_add_ctl(&s->song, &s->mem, s->tick_now, chan, kind, a)) {
-        return;
+    {
+        nj_u4 before = s->song.nctls;
+
+        if (!mid_add_ctl(&s->song, &s->mem, s->tick_now, chan, kind, a)) {
+            return;
+        }
+        if (s->song.nctls == before) {
+            return;             /* full: dropped */
+        }
     }
     at = s->cev;
     while (at < s->song.nctls - 1u && s->song.ctls[at].tick <= s->tick_now) {
@@ -1987,7 +2089,6 @@ static void mid_inject_note(nj_midi_stream *s, nj_u4 note, nj_u4 vel, int on,
 {
     mid_timbre t = mid_timbres[0];      /* every field set */
     nj_u4 gain = 0u;
-    nj_u4 at;
 
     if (on) {
         if (chan == MID_CHANNEL_DRUMS) {
@@ -1998,15 +2099,18 @@ static void mid_inject_note(nj_midi_stream *s, nj_u4 note, nj_u4 vel, int on,
         }
         gain = (s->vol_now[chan] & 0x7Fu) * (s->expr_now[chan] & 0x7Fu) / 127u;
     }
-    if (!mid_add_note(&s->song, &s->mem, s->tick_now, note, vel, on,
-                      on ? &t : NULL, gain, chan)) {
-        return;
+    {
+        nj_u4 before = s->song.nnotes;
+
+        if (!mid_add_note(&s->song, &s->mem, s->tick_now, note, vel, on,
+                          on ? &t : NULL, gain, chan)) {
+            return;
+        }
+        if (s->song.nnotes == before) {
+            return;             /* full: the note is dropped, not reordered */
+        }
     }
-    at = s->ev;
-    while (at < s->song.nnotes - 1u && s->song.notes[at].tick <= s->tick_now) {
-        at++;
-    }
-    mid_insert_note(s, at);
+    s->nlive++;                 /* merged in tick order before the next pull */
 }
 
 /*

@@ -409,7 +409,10 @@ void nj_vm_get_stats(nj_vm *vm, nj_vm_stats *out)
     out->live_objects = vm->live_objects;
     out->total_objects = vm->total_objects;
     out->classes = vm->nclasses;
-    out->threads = vm->nthreads;
+    /* Threads created since the VM started.  The live count falls back as
+     * finished threads are reaped, so it cannot tell a test whether a thread
+     * ever existed; the monotonic counter can. */
+    out->threads = vm->next_thread_id;
     out->cp_cache_entries = vm->cp_cache_used;
     out->cp_cache_hits = vm->cp_cache_hits;
     out->cp_cache_misses = vm->cp_cache_misses;

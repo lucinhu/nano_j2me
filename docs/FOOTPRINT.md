@@ -970,3 +970,75 @@ RAM: a `Player` gains one reference field (`pTimeBase`, 8 B) for its master
 clock, and a `StringItem` loses one (`siCmdListener`, 8 B) because the
 dispatcher never read it - so a title that owns both is exactly where it
 started. No VM field was added in this round.
+
+## Environment-mapped spans cost code, not memory (round 16 of the fourth goal, 2026-10-24)
+
+| Build | `nj_mascot_raster.c.o` `.text` | executable `.text` | `.data` | `.bss` |
+| --- | --- | --- | --- | --- |
+| parent `a3e1499` | 26,732 B | 1,225,962 B | 16 B | 6,688 B |
+| with env spans | 28,460 B | 1,227,690 B | 16 B | 6,688 B |
+
+Two more specialised span loops, selected per span; no new rasteriser state,
+no static buffers, no change to `mr_state`, so the RAM picture is unchanged.
+
+## The note list a MIDlet fills costs code, not memory (round 62, 2026-10-24)
+
+| build | `nj_midi.c.o` `.text` | executable `.text` | `.data` | `.bss` |
+| --- | --- | --- | --- | --- |
+| parent `4c90520` | 19,842 B | 2,924,677 B | 163,496 B | 6,688 B |
+| batched merge | 20,011 B | 2,924,829 B | 163,496 B | 6,688 B |
+
+Both builds use the same CMake configuration (Release, Ninja, no libretro or
+SDL2 or embedded ports).  RAM: the stream struct gains one `nj_u4`
+(`nlive`, 4 B) per open stream, and the merge uses up to 8 x `sizeof(mid_note)`
+= 480 B of C stack while it lifts a burst aside - no static buffer and no
+per-note field.  A title with one MIDI stream open pays 4 B more than before
+and nothing at all when no stream is open.
+
+## A screenful of rgb565 conversion costs one branch (round 63, 2026-10-24)
+
+Matched build flags (`-O3 -DNDEBUG -std=c99 -fPIC`, the CMake configuration
+this repository ships), compiled from the parent tree and the new tree:
+
+| object | `.text` | `.data` |
+| --- | --- | --- |
+| `nj_gfx.c.o` parent `4a802d3` | 32,106 B | 0 B |
+| `nj_gfx.c.o` with the row gate | 32,234 B | 0 B |
+
+128 bytes more text, no data, no bss, no new fields: the change widens one
+condition so that `NJ_ROP_SET` blits - which ignore source alpha - reuse the
+row converter that painted frames already used.
+
+## Copying unshaded texels costs one span mode (round 64, 2026-10-24)
+
+Matched build flags (`-O3 -DNDEBUG -std=c99 -fPIC`), from the parent tree and
+the new tree:
+
+| object | `.text` |
+| --- | --- |
+| `nj_mascot_raster.c.o` parent `e249998` | 28,003 B |
+| `nj_mascot_raster.c.o` with the raw span | 28,195 B |
+
+192 bytes more text, no data, no bss, no new rasteriser state: the mode is
+selected from flags the state already carries, and the helper keeps its
+counters in registers.
+
+## Short rows are walked, not scanned (round 19, 2026-10-24)
+
+| quantity | parent | new | delta |
+| --- | --- | --- | --- |
+| `nj_gfx.c.o` `.text` | 34,618 B | 34,618 B | 0 B |
+| executable `.text` | 1,228,394 B | 1,228,394 B | 0 B |
+| `.data` / `.bss` | unchanged | unchanged | 0 |
+| VM state | - | - | no new fields |
+
+The gate is one comparison (`n >= 32`) inside the row loop, and the compiler
+folded it into the loop bounds that `nj_argb_row_opaque()` already carries, so
+the change is free in ROM as well as RAM.
+
+## Two sample positions memoised per stream (round 25, 2026-10-24)
+
+`nj_midi_stream` gained four `nj_u4` fields (`ctl_tick`, `ctl_sample`,
+`note_tick`, `note_sample`): sixteen bytes per open stream, no static data,
+no change to any object size.  Code size is unchanged within a few tens of
+bytes; the removed work was two calls per rendered sample.
