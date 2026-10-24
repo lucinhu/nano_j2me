@@ -3362,3 +3362,30 @@ each with zero non-zero exits and zero uncaught exceptions, and the usual
 gates are unchanged: `ctest` 105/105, `BENCH sum=-136042548 s=5`,
 digest 27/27, no writable statics.  No new fields, no new allocations: the
 change is one string literal and two table rows.
+
+## The image size that wrapped (round 36, 2026-10-24)
+
+`Image.createImage(int width, int height)` computed the pixel count in 32-bit
+arithmetic and handed it straight to the array allocator.  A request like
+`createImage(65536, 65536)` therefore asked for a zero-length pixel array while
+the mutable-image white fill walked `(nj_size)width * height` = 2^32 pixels:
+the allocation and the fill disagreed about how big the image was.  The same
+pattern existed in `createImage(int[] rgb, int width, int height, boolean)`.
+
+Both entry points now share one guard, `img_pixels_fit()`, which rejects a size
+whose pixel count cannot be represented as a Java array length *before* the
+multiply, and answers `OutOfMemoryError` - not `IllegalArgumentException`,
+because the dimensions themselves are legal, the device simply cannot hold the
+pixels.
+
+Evidence: the new assertion in `tests/test_lcdui.c`
+(`image_new(vm, 65536, 65536) == NULL` plus the exception type) fails on the
+previous build - it returned an Image and left no exception, i.e. a truncated
+allocation nobody could use - and passes now.  Full `ctest` 105/105, digest
+27/27, `check_no_statics.sh` OK, `BENCH sum=-136042548 s=5` unchanged.
+
+This is hardening rather than title-facing behaviour: no title in the corpus
+asks for such a size, and the 1,992 `image dimensions must be positive`
+exceptions that led here turned out to be 生化危机之恶化_8448 deliberately
+calling `createImage(0, 0)` and catching the rejection, which is what the
+specification requires.

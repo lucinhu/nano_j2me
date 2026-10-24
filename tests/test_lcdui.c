@@ -288,6 +288,15 @@ static void test_image(nj_vm *vm, const blob *png, const blob *png_alpha)
         OK_MSG(first == 0xFFFFFFFFu, "expected 0xFFFFFFFF, got 0x%08X", first);
     }
 
+    /*
+     * A pixel count that does not fit in a Java array length is refused
+     * before the multiply wraps: 65536 x 65536 used to plan a zero-length
+     * pixel array and then fill 2^32 pixels past it.
+     */
+    OK(image_new(vm, 65536, 65536) == NULL);
+    OK(exc_is(vm, "java/lang/OutOfMemoryError"));
+    nj_clear_exception(vm);
+
     /* ---- getGraphics + getRGB round-trip ---- */
     g = call_ref(vm, img, NJ_C_IMAGE, "getGraphics", "()L" NJ_C_GRAPHICS ";",
                  NULL, &ok);

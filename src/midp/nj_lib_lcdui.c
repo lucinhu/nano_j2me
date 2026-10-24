@@ -283,6 +283,20 @@ static int img_dims(nj_vm *vm, nj_ref img, int *w, int *h)
 }
 
 /* Allocate a transparent-black Image of w x h, or NULL with an exception. */
+/*
+ * True when w*h pixels fit in a Java int[] length, which is what the
+ * Image's pixel array has to be.  Without this check the pixel count is
+ * computed in 32-bit arithmetic and wraps: Image.createImage(65536, 65536)
+ * asked for a zero-length array and then the white-fill loop wrote 2^32
+ * pixels past it.  A count that cannot be represented is an allocation the
+ * device cannot satisfy, so it is an OutOfMemoryError, not an IAE.
+ */
+static int img_pixels_fit(int w, int h)
+{
+    return w > 0 && h > 0 &&
+           (nj_u8)(nj_u4)w * (nj_u8)(nj_u4)h <= 0x7FFFFFFFu;
+}
+
 static nj_ref img_alloc(nj_vm *vm, int w, int h, int mutable)
 {
     nj_ref img;
@@ -296,6 +310,10 @@ static nj_ref img_alloc(nj_vm *vm, int w, int h, int mutable)
     if (w <= 0 || h <= 0) {
         (void)nj_throw(vm, "java/lang/IllegalArgumentException",
                        "image dimensions must be positive");
+        return NULL;
+    }
+    if (!img_pixels_fit(w, h)) {
+        (void)nj_throw_oom(vm);
         return NULL;
     }
     fw = fld(vm, NJ_C_IMAGE, F_IMG_W, D_INT, 0);
@@ -2424,6 +2442,9 @@ NJFN(img_createRGBImage)
     if (w <= 0 || h <= 0) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "image dimensions must be positive");
+    }
+    if (!img_pixels_fit((int)w, (int)h)) {
+        return nj_throw_oom(vm);
     }
     n = w * h;
     if ((nj_u4)n > arr->length) {
