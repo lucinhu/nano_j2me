@@ -797,6 +797,14 @@ endif()
                      300 240 320 12)
     set_tests_properties(check_reference_frame PROPERTIES TIMEOUT 200
                          SKIP_RETURN_CODE 77)
+    add_test(NAME check_reference_frame_mario
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/compare_reference_frame.sh
+                     $<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/games/超级马里奥_10283.jar
+                     ${CMAKE_CURRENT_SOURCE_DIR}/.local-tools/run-freej2me-headless.sh
+                     300 240 320 12)
+    set_tests_properties(check_reference_frame_mario PROPERTIES TIMEOUT 200
+                         SKIP_RETURN_CODE 77)
   endif()
 
   # The titles that found the round 33-37 compatibility fixes: a leaked

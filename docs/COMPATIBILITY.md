@@ -3663,3 +3663,11 @@ per-pixel differences of two independent runtimes stay inside the budget.
 The threshold is deliberately loose and the comment in the script says why:
 these are two different implementations advancing animations on their own
 clocks.  A tighter number would fail for reasons that are not defects.
+
+### A second scene in the same test (round 51, 2026-10-24)
+
+`check_reference_frame_mario` compares frame 300 of 超级马里奥_10283 as well:
+measured **MAE 4.86/255**, under the same 12/255 budget.  Two titles with
+different rendering shapes (a card table with many small sprites, and a
+scrolling platformer) make a missing layer or a shifted sprite visible in the
+test rather than in a player's report.
