@@ -2809,3 +2809,26 @@ for this shape is already a tight copy loop with its flag tests hoisted by the
 compiler, so the rows were **reverted rather than committed**.  The lesson for
 the next round is that the remaining generic spans are not where the time is;
 `nj_region_draw` (20.4% of this title) is the next candidate.
+
+### A quadratic in the MIDI note inserter, found not fixed (round 19, 2026-10-24)
+
+`gprof` on `浴火银河_3621` attributes 4.5% of CPU to `mid_inject_note` from
+only 678 calls - about 100 us per call, which is far too much for what the
+function does.  Reading `src/midp/nj_midi.c` explains it: every MIDlet note
+appends to the song's note list (`nj_midi_stream_event` -> `mid_add_note`)
+and then `mid_insert_note` rotations the tail with
+
+    memmove(&notes[at + 1], &notes[at], (last - at) * sizeof(mid_note));
+
+where `last` is the end of the *whole* note list, not the end of the current
+tick window.  With `NJ_MIDI_MAX_EVENTS` = 8192 notes a single injected event
+can move hundreds of kilobytes, making a burst of note events quadratic in
+the song length.
+
+The fix is to stop growing the file's note array for live notes: keep the
+injected notes in their own small list and merge them at the render cursor,
+which is also O(1) per event instead of O(notes).  That is a change to the
+audio renderer, not a local edit, so it is recorded here as the next audio
+target rather than being attempted blind - there is no MIDI output
+benchmark yet, and the correctness bar for a renderer is a rendered-PCM
+comparison, not a unit test.
