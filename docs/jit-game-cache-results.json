@@ -1,0 +1,1165 @@
+{
+  "baseline_revision": "0ea577a",
+  "date": "2026-10-24",
+  "target": "anonymous RV32 target",
+  "resolution": [
+    240,
+    320
+  ],
+  "metric": "changed game images divided by elapsed monotonic sampling time; overlay excluded",
+  "overlay_enabled": true,
+  "fresh_rms_each_run": true,
+  "no_screenshots_during_sampling": true,
+  "sequence": "baseline: 2 on + 1 off per game; candidate: same; baseline: 1 on per game; candidate: 1 on per game",
+  "jit_stats": 1,
+  "jit_detailed_stats": 0,
+  "code_budget_bytes": 32768,
+  "metadata_bytes": {
+    "baseline": 11480,
+    "candidate": 12568
+  },
+  "summary": [
+    {
+      "game": "ACH1945 Lite 1.0.0",
+      "baseline_on": {
+        "runs": 3,
+        "pooled_fps": 10.23602383357631,
+        "fps_range": [
+          9.95577377956156,
+          10.66544173455389
+        ],
+        "allocation_failures_per_second": 899.5116956240507,
+        "map_evictions_per_second": 1781.282996118245
+      },
+      "baseline_off": {
+        "runs": 1,
+        "pooled_fps": 13.423400338010477,
+        "fps_range": [
+          13.423400338010477,
+          13.423400338010477
+        ],
+        "allocation_failures_per_second": 0.0,
+        "map_evictions_per_second": 0.0
+      },
+      "candidate_on": {
+        "runs": 3,
+        "pooled_fps": 12.857774479422774,
+        "fps_range": [
+          12.794444228902549,
+          12.980356026309801
+        ],
+        "allocation_failures_per_second": 10.019244313917746,
+        "map_evictions_per_second": 96.55605584607102
+      },
+      "candidate_off": {
+        "runs": 1,
+        "pooled_fps": 13.870931710482994,
+        "fps_range": [
+          13.870931710482994,
+          13.870931710482994
+        ],
+        "allocation_failures_per_second": 0.0,
+        "map_evictions_per_second": 0.0
+      },
+      "jit_on_gain_percent": 25.612979106658294
+    },
+    {
+      "game": "Bounce Tales 2.0.3",
+      "baseline_on": {
+        "runs": 3,
+        "pooled_fps": 11.811724058498449,
+        "fps_range": [
+          11.595267168238545,
+          12.151158811913971
+        ],
+        "allocation_failures_per_second": 1840.941563974544,
+        "map_evictions_per_second": 1549.3130990736151
+      },
+      "baseline_off": {
+        "runs": 1,
+        "pooled_fps": 17.328325634896245,
+        "fps_range": [
+          17.328325634896245,
+          17.328325634896245
+        ],
+        "allocation_failures_per_second": 0.0,
+        "map_evictions_per_second": 0.0
+      },
+      "candidate_on": {
+        "runs": 3,
+        "pooled_fps": 16.31304311020127,
+        "fps_range": [
+          16.15183821275189,
+          16.42291524312827
+        ],
+        "allocation_failures_per_second": 46.64867029162384,
+        "map_evictions_per_second": 214.89895101018
+      },
+      "candidate_off": {
+        "runs": 1,
+        "pooled_fps": 17.464822803999805,
+        "fps_range": [
+          17.464822803999805,
+          17.464822803999805
+        ],
+        "allocation_failures_per_second": 0.0,
+        "map_evictions_per_second": 0.0
+      },
+      "jit_on_gain_percent": 38.10890797490445
+    }
+  ],
+  "runs": [
+    {
+      "variant": "baseline",
+      "game": "Bounce Tales 2.0.3",
+      "jit": "on",
+      "run": 1,
+      "image_sha256": "bf67ae9164d129e17f35c18be71acf315343b617c08509ba7063568a305cc408",
+      "jar_sha256": "e98333fee11bb49033bbdcf677191d1eb2f1146cd839d48854b6c0efbbf1e459",
+      "window": {
+        "us": 31995813,
+        "updated": 371,
+        "presents": 1595,
+        "compiled": 0,
+        "evictions": 0,
+        "maps": 49062,
+        "reuse": 983,
+        "failures": 56493,
+        "native": 288888
+      },
+      "fps": 11.595267168238545,
+      "input_pulses_with_warmup": 45,
+      "screenshots": [
+        {
+          "seconds": 3.2315813879977213,
+          "retried": false
+        },
+        {
+          "seconds": 3.357667265998316,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 703468,
+        "accepted": 703468,
+        "short": 0,
+        "io_us": 31583109,
+        "volume_calls": 0,
+        "queued": 1,
+        "underruns": 11,
+        "silence_frames": 5425
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "baseline",
+      "game": "Bounce Tales 2.0.3",
+      "jit": "on",
+      "run": 2,
+      "image_sha256": "bf67ae9164d129e17f35c18be71acf315343b617c08509ba7063568a305cc408",
+      "jar_sha256": "e98333fee11bb49033bbdcf677191d1eb2f1146cd839d48854b6c0efbbf1e459",
+      "window": {
+        "us": 32424891,
+        "updated": 394,
+        "presents": 1569,
+        "compiled": 0,
+        "evictions": 0,
+        "maps": 50364,
+        "reuse": 953,
+        "failures": 59538,
+        "native": 274509
+      },
+      "fps": 12.151158811913971,
+      "input_pulses_with_warmup": 46,
+      "screenshots": [
+        {
+          "seconds": 4.2192232820016216,
+          "retried": false
+        },
+        {
+          "seconds": 3.5576110530018923,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 712484,
+        "accepted": 712484,
+        "short": 0,
+        "io_us": 32002527,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 11,
+        "silence_frames": 5425
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "baseline",
+      "game": "Bounce Tales 2.0.3",
+      "jit": "on",
+      "run": 3,
+      "image_sha256": "bf67ae9164d129e17f35c18be71acf315343b617c08509ba7063568a305cc408",
+      "jar_sha256": "e98333fee11bb49033bbdcf677191d1eb2f1146cd839d48854b6c0efbbf1e459",
+      "window": {
+        "us": 32178234,
+        "updated": 376,
+        "presents": 1527,
+        "compiled": 0,
+        "evictions": 0,
+        "maps": 50236,
+        "reuse": 938,
+        "failures": 61802,
+        "native": 252135
+      },
+      "fps": 11.684917202106243,
+      "input_pulses_with_warmup": 45,
+      "screenshots": [
+        {
+          "seconds": 3.2294467460014857,
+          "retried": false
+        },
+        {
+          "seconds": 3.219754741003271,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 706952,
+        "accepted": 706952,
+        "short": 0,
+        "io_us": 31760805,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 11,
+        "silence_frames": 5425
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "baseline",
+      "game": "Bounce Tales 2.0.3",
+      "jit": "off",
+      "run": 1,
+      "image_sha256": "bf67ae9164d129e17f35c18be71acf315343b617c08509ba7063568a305cc408",
+      "jar_sha256": "e98333fee11bb49033bbdcf677191d1eb2f1146cd839d48854b6c0efbbf1e459",
+      "window": {
+        "us": 31970775,
+        "updated": 554,
+        "presents": 1887,
+        "compiled": 0,
+        "evictions": 0,
+        "maps": 0,
+        "reuse": 0,
+        "failures": 0,
+        "native": 0
+      },
+      "fps": 17.328325634896245,
+      "input_pulses_with_warmup": 45,
+      "screenshots": [
+        {
+          "seconds": 3.2663622429972747,
+          "retried": false
+        },
+        {
+          "seconds": 3.582027730997652,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 700830,
+        "accepted": 700830,
+        "short": 0,
+        "io_us": 31549866,
+        "volume_calls": 0,
+        "queued": 4,
+        "underruns": 17,
+        "silence_frames": 11500
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "baseline",
+      "game": "ACH1945 Lite 1.0.0",
+      "jit": "on",
+      "run": 1,
+      "image_sha256": "bf67ae9164d129e17f35c18be71acf315343b617c08509ba7063568a305cc408",
+      "jar_sha256": "8f36c7c050a3110e494a9343a90c3ac3b55203a9c0570d5dc4e38727ccdc76bc",
+      "window": {
+        "us": 21695953,
+        "updated": 216,
+        "presents": 746,
+        "compiled": 0,
+        "evictions": 0,
+        "maps": 38817,
+        "reuse": 216,
+        "failures": 18592,
+        "native": 1676
+      },
+      "fps": 9.95577377956156,
+      "input_pulses_with_warmup": 29,
+      "screenshots": [
+        {
+          "seconds": 3.5218190270024934,
+          "retried": false
+        },
+        {
+          "seconds": 3.6856811300021945,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 478972,
+        "accepted": 478972,
+        "short": 0,
+        "io_us": 21412116,
+        "volume_calls": 0,
+        "queued": 2,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "baseline",
+      "game": "ACH1945 Lite 1.0.0",
+      "jit": "on",
+      "run": 2,
+      "image_sha256": "bf67ae9164d129e17f35c18be71acf315343b617c08509ba7063568a305cc408",
+      "jar_sha256": "8f36c7c050a3110e494a9343a90c3ac3b55203a9c0570d5dc4e38727ccdc76bc",
+      "window": {
+        "us": 21713570,
+        "updated": 219,
+        "presents": 749,
+        "compiled": 0,
+        "evictions": 1,
+        "maps": 39466,
+        "reuse": 220,
+        "failures": 18809,
+        "native": 1655
+      },
+      "fps": 10.085858751002254,
+      "input_pulses_with_warmup": 29,
+      "screenshots": [
+        {
+          "seconds": 3.4258960459992522,
+          "retried": false
+        },
+        {
+          "seconds": 3.386737073000404,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 478900,
+        "accepted": 478900,
+        "short": 0,
+        "io_us": 21436830,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "baseline",
+      "game": "ACH1945 Lite 1.0.0",
+      "jit": "on",
+      "run": 3,
+      "image_sha256": "bf67ae9164d129e17f35c18be71acf315343b617c08509ba7063568a305cc408",
+      "jar_sha256": "8f36c7c050a3110e494a9343a90c3ac3b55203a9c0570d5dc4e38727ccdc76bc",
+      "window": {
+        "us": 21752498,
+        "updated": 232,
+        "presents": 743,
+        "compiled": 0,
+        "evictions": 1,
+        "maps": 37789,
+        "reuse": 232,
+        "failures": 21213,
+        "native": 1652
+      },
+      "fps": 10.66544173455389,
+      "input_pulses_with_warmup": 30,
+      "screenshots": [
+        {
+          "seconds": 3.3053991030028556,
+          "retried": false
+        },
+        {
+          "seconds": 3.266265726997517,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 479416,
+        "accepted": 479416,
+        "short": 0,
+        "io_us": 21466441,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "baseline",
+      "game": "ACH1945 Lite 1.0.0",
+      "jit": "off",
+      "run": 1,
+      "image_sha256": "bf67ae9164d129e17f35c18be71acf315343b617c08509ba7063568a305cc408",
+      "jar_sha256": "8f36c7c050a3110e494a9343a90c3ac3b55203a9c0570d5dc4e38727ccdc76bc",
+      "window": {
+        "us": 21604064,
+        "updated": 290,
+        "presents": 967,
+        "compiled": 0,
+        "evictions": 0,
+        "maps": 0,
+        "reuse": 0,
+        "failures": 0,
+        "native": 0
+      },
+      "fps": 13.423400338010477,
+      "input_pulses_with_warmup": 30,
+      "screenshots": [
+        {
+          "seconds": 3.4121430540035362,
+          "retried": false
+        },
+        {
+          "seconds": 3.5451518740010215,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 476361,
+        "accepted": 476361,
+        "short": 0,
+        "io_us": 21333242,
+        "volume_calls": 0,
+        "queued": -1,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "candidate",
+      "game": "Bounce Tales 2.0.3",
+      "jit": "on",
+      "run": 1,
+      "image_sha256": "8f3bf995e885e161d7c384e2ebf2011bee6e97110a632dc7578100df3a61ba17",
+      "jar_sha256": "e98333fee11bb49033bbdcf677191d1eb2f1146cd839d48854b6c0efbbf1e459",
+      "window": {
+        "us": 31959860,
+        "updated": 523,
+        "presents": 1796,
+        "compiled": 0,
+        "evictions": 1,
+        "maps": 7567,
+        "reuse": 1517,
+        "failures": 1501,
+        "native": 981090
+      },
+      "fps": 16.36427693988647,
+      "input_pulses_with_warmup": 45,
+      "screenshots": [
+        {
+          "seconds": 3.2297114449975197,
+          "retried": false
+        },
+        {
+          "seconds": 3.2276623409998138,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 702010,
+        "accepted": 702010,
+        "short": 0,
+        "io_us": 31543715,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 11,
+        "silence_frames": 4913
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "candidate",
+      "game": "Bounce Tales 2.0.3",
+      "jit": "on",
+      "run": 2,
+      "image_sha256": "8f3bf995e885e161d7c384e2ebf2011bee6e97110a632dc7578100df3a61ba17",
+      "jar_sha256": "e98333fee11bb49033bbdcf677191d1eb2f1146cd839d48854b6c0efbbf1e459",
+      "window": {
+        "us": 32194478,
+        "updated": 520,
+        "presents": 1789,
+        "compiled": 0,
+        "evictions": 1,
+        "maps": 7176,
+        "reuse": 1426,
+        "failures": 1494,
+        "native": 973042
+      },
+      "fps": 16.15183821275189,
+      "input_pulses_with_warmup": 45,
+      "screenshots": [
+        {
+          "seconds": 3.2333914839982754,
+          "retried": false
+        },
+        {
+          "seconds": 3.242054548994929,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 707030,
+        "accepted": 707030,
+        "short": 0,
+        "io_us": 31775773,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 11,
+        "silence_frames": 5937
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "candidate",
+      "game": "Bounce Tales 2.0.3",
+      "jit": "on",
+      "run": 3,
+      "image_sha256": "8f3bf995e885e161d7c384e2ebf2011bee6e97110a632dc7578100df3a61ba17",
+      "jar_sha256": "e98333fee11bb49033bbdcf677191d1eb2f1146cd839d48854b6c0efbbf1e459",
+      "window": {
+        "us": 32332871,
+        "updated": 531,
+        "presents": 1806,
+        "compiled": 0,
+        "evictions": 3,
+        "maps": 5992,
+        "reuse": 1202,
+        "failures": 1506,
+        "native": 937217
+      },
+      "fps": 16.42291524312827,
+      "input_pulses_with_warmup": 45,
+      "screenshots": [
+        {
+          "seconds": 3.2325720920052845,
+          "retried": false
+        },
+        {
+          "seconds": 3.2291697049950017,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 710358,
+        "accepted": 710358,
+        "short": 0,
+        "io_us": 31908839,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 11,
+        "silence_frames": 5425
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "candidate",
+      "game": "Bounce Tales 2.0.3",
+      "jit": "off",
+      "run": 1,
+      "image_sha256": "8f3bf995e885e161d7c384e2ebf2011bee6e97110a632dc7578100df3a61ba17",
+      "jar_sha256": "e98333fee11bb49033bbdcf677191d1eb2f1146cd839d48854b6c0efbbf1e459",
+      "window": {
+        "us": 31549132,
+        "updated": 551,
+        "presents": 1825,
+        "compiled": 0,
+        "evictions": 0,
+        "maps": 0,
+        "reuse": 0,
+        "failures": 0,
+        "native": 0
+      },
+      "fps": 17.464822803999805,
+      "input_pulses_with_warmup": 45,
+      "screenshots": [
+        {
+          "seconds": 3.2358992869994836,
+          "retried": false
+        },
+        {
+          "seconds": 3.2306732889992418,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 690612,
+        "accepted": 690612,
+        "short": 0,
+        "io_us": 31130347,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 17,
+        "silence_frames": 10988
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "candidate",
+      "game": "ACH1945 Lite 1.0.0",
+      "jit": "on",
+      "run": 1,
+      "image_sha256": "8f3bf995e885e161d7c384e2ebf2011bee6e97110a632dc7578100df3a61ba17",
+      "jar_sha256": "8f36c7c050a3110e494a9343a90c3ac3b55203a9c0570d5dc4e38727ccdc76bc",
+      "window": {
+        "us": 21725136,
+        "updated": 282,
+        "presents": 938,
+        "compiled": 0,
+        "evictions": 6,
+        "maps": 2241,
+        "reuse": 0,
+        "failures": 217,
+        "native": 0
+      },
+      "fps": 12.980356026309801,
+      "input_pulses_with_warmup": 30,
+      "screenshots": [
+        {
+          "seconds": 3.247960654000053,
+          "retried": false
+        },
+        {
+          "seconds": 3.2576428500033217,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 478608,
+        "accepted": 478608,
+        "short": 0,
+        "io_us": 21441784,
+        "volume_calls": 0,
+        "queued": -3,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "candidate",
+      "game": "ACH1945 Lite 1.0.0",
+      "jit": "on",
+      "run": 2,
+      "image_sha256": "8f3bf995e885e161d7c384e2ebf2011bee6e97110a632dc7578100df3a61ba17",
+      "jar_sha256": "8f36c7c050a3110e494a9343a90c3ac3b55203a9c0570d5dc4e38727ccdc76bc",
+      "window": {
+        "us": 21721259,
+        "updated": 278,
+        "presents": 934,
+        "compiled": 0,
+        "evictions": 7,
+        "maps": 2078,
+        "reuse": 0,
+        "failures": 217,
+        "native": 0
+      },
+      "fps": 12.798521485333792,
+      "input_pulses_with_warmup": 30,
+      "screenshots": [
+        {
+          "seconds": 3.2700997950014425,
+          "retried": false
+        },
+        {
+          "seconds": 3.2793608409992885,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 478096,
+        "accepted": 478096,
+        "short": 0,
+        "io_us": 21441721,
+        "volume_calls": 0,
+        "queued": -4,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "candidate",
+      "game": "ACH1945 Lite 1.0.0",
+      "jit": "on",
+      "run": 3,
+      "image_sha256": "8f3bf995e885e161d7c384e2ebf2011bee6e97110a632dc7578100df3a61ba17",
+      "jar_sha256": "8f36c7c050a3110e494a9343a90c3ac3b55203a9c0570d5dc4e38727ccdc76bc",
+      "window": {
+        "us": 21728181,
+        "updated": 278,
+        "presents": 930,
+        "compiled": 0,
+        "evictions": 6,
+        "maps": 1974,
+        "reuse": 0,
+        "failures": 219,
+        "native": 0
+      },
+      "fps": 12.794444228902549,
+      "input_pulses_with_warmup": 30,
+      "screenshots": [
+        {
+          "seconds": 3.268841015997168,
+          "retried": false
+        },
+        {
+          "seconds": 3.2776129269986995,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 478904,
+        "accepted": 478904,
+        "short": 0,
+        "io_us": 21441737,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    },
+    {
+      "variant": "candidate",
+      "game": "ACH1945 Lite 1.0.0",
+      "jit": "off",
+      "run": 1,
+      "image_sha256": "8f3bf995e885e161d7c384e2ebf2011bee6e97110a632dc7578100df3a61ba17",
+      "jar_sha256": "8f36c7c050a3110e494a9343a90c3ac3b55203a9c0570d5dc4e38727ccdc76bc",
+      "window": {
+        "us": 21916336,
+        "updated": 304,
+        "presents": 986,
+        "compiled": 0,
+        "evictions": 0,
+        "maps": 0,
+        "reuse": 0,
+        "failures": 0,
+        "native": 0
+      },
+      "fps": 13.870931710482994,
+      "input_pulses_with_warmup": 30,
+      "screenshots": [
+        {
+          "seconds": 3.781350281999039,
+          "retried": false
+        },
+        {
+          "seconds": 3.2857223699975293,
+          "retried": false
+        }
+      ],
+      "audio_sample": {
+        "offered": 483149,
+        "accepted": 483149,
+        "short": 0,
+        "io_us": 21624337,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "audio_output_errors": 0,
+      "clean_exit": true,
+      "psram_delta_bytes": 0,
+      "hot_live_bytes": 0,
+      "executable_live_bytes": 0,
+      "jit_faults": 0
+    }
+  ],
+  "merged_firmware_check": {
+    "code_revision": "8965245",
+    "includes_upstream_through": "11c2fc4",
+    "image_sha256": "6df0696ca02872c1240543a47721291bc8657531b21366a6a5a10a6ccd11ab6c",
+    "comparison_limit": "single functional/performance sample per game; includes newer upstream graphics changes and must not be attributed solely to the JIT patch",
+    "runs": [
+      {
+        "game": "Bounce Tales 2.0.3",
+        "jit": "on",
+        "runs": 1,
+        "window": {
+          "us": 31946269,
+          "updated": 554,
+          "presents": 1799,
+          "compiled": 0,
+          "evictions": 2,
+          "maps": 5689,
+          "reuse": 952,
+          "failures": 1504,
+          "native": 782725
+        },
+        "fps": 17.341618202739106,
+        "clean_exit": true,
+        "all_memory_reclaimed": true,
+        "jit_faults": 0
+      },
+      {
+        "game": "ACH1945 Lite 1.0.0",
+        "jit": "on",
+        "runs": 1,
+        "window": {
+          "us": 21148751,
+          "updated": 275,
+          "presents": 965,
+          "compiled": 0,
+          "evictions": 3,
+          "maps": 2217,
+          "reuse": 82,
+          "failures": 209,
+          "native": 14105
+        },
+        "fps": 13.003131958005463,
+        "clean_exit": true,
+        "all_memory_reclaimed": true,
+        "jit_faults": 0
+      }
+    ]
+  },
+  "fixed_work_checks": [
+    {
+      "variant": "finalbase",
+      "case": "cpu",
+      "jit": "off",
+      "elapsed_us": 9015776,
+      "presents": 313,
+      "native_crc": "df74d292",
+      "lcd_crc": "5d96fa52",
+      "native_blocks": 0,
+      "native_bytecodes": 0,
+      "checks": [
+        "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+      ],
+      "clean_exit": true,
+      "all_memory_reclaimed": true
+    },
+    {
+      "variant": "finalbase",
+      "case": "cpu",
+      "jit": "on",
+      "elapsed_us": 25879948,
+      "presents": 553,
+      "native_crc": "df74d292",
+      "lcd_crc": "5d96fa52",
+      "native_blocks": 24817,
+      "native_bytecodes": 11264550,
+      "checks": [
+        "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+      ],
+      "clean_exit": true,
+      "all_memory_reclaimed": true
+    },
+    {
+      "variant": "finalgate",
+      "case": "cpu",
+      "jit": "off",
+      "elapsed_us": 9175758,
+      "presents": 313,
+      "native_crc": "df74d292",
+      "lcd_crc": "5d96fa52",
+      "native_blocks": 0,
+      "native_bytecodes": 0,
+      "checks": [
+        "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+      ],
+      "clean_exit": true,
+      "all_memory_reclaimed": true
+    },
+    {
+      "variant": "finalgate",
+      "case": "cpu",
+      "jit": "on",
+      "elapsed_us": 25867037,
+      "presents": 553,
+      "native_crc": "df74d292",
+      "lcd_crc": "5d96fa52",
+      "native_blocks": 24817,
+      "native_bytecodes": 11264550,
+      "checks": [
+        "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+      ],
+      "clean_exit": true,
+      "all_memory_reclaimed": true
+    },
+    {
+      "variant": "finalgate",
+      "case": "render",
+      "jit": "on",
+      "elapsed_us": 6417366,
+      "presents": 241,
+      "native_crc": "1f6b7536",
+      "lcd_crc": "e6ac3af6",
+      "native_blocks": 31646,
+      "native_bytecodes": 373369,
+      "checks": [
+        "RENDER_BENCH frames=240 final=240"
+      ],
+      "clean_exit": true,
+      "all_memory_reclaimed": true
+    },
+    {
+      "variant": "finalgate",
+      "case": "audio",
+      "jit": "on",
+      "elapsed_us": 8656693,
+      "presents": 499,
+      "native_crc": "7951cf82",
+      "lcd_crc": "5790bb72",
+      "native_blocks": 645,
+      "native_bytecodes": 2729,
+      "checks": [
+        "AUDIO_BENCH_BEGIN WAV duration=3000000",
+        "AUDIO_BENCH_END WAV time=3000000 state=300",
+        "AUDIO_BENCH_BEGIN MIDI duration=-1",
+        "AUDIO_BENCH_END MIDI time=3000000 state=300"
+      ],
+      "clean_exit": true,
+      "all_memory_reclaimed": true
+    },
+    {
+      "variant": "mergedgate",
+      "case": "cpu",
+      "jit": "on",
+      "elapsed_us": 25649043,
+      "presents": 553,
+      "native_crc": "df74d292",
+      "lcd_crc": "5d96fa52",
+      "native_blocks": 24817,
+      "native_bytecodes": 11264550,
+      "checks": [
+        "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+      ],
+      "clean_exit": true,
+      "all_memory_reclaimed": true
+    },
+    {
+      "variant": "mergedgate",
+      "case": "render",
+      "jit": "on",
+      "elapsed_us": 6176411,
+      "presents": 241,
+      "native_crc": "1f6b7536",
+      "lcd_crc": "e6ac3af6",
+      "native_blocks": 31646,
+      "native_bytecodes": 373369,
+      "checks": [
+        "RENDER_BENCH frames=240 final=240"
+      ],
+      "clean_exit": true,
+      "all_memory_reclaimed": true
+    },
+    {
+      "variant": "mergedgate",
+      "case": "audio",
+      "jit": "on",
+      "elapsed_us": 10735981,
+      "presents": 655,
+      "native_crc": "7951cf82",
+      "lcd_crc": "5790bb72",
+      "native_blocks": 801,
+      "native_bytecodes": 3353,
+      "checks": [
+        "AUDIO_BENCH_BEGIN WAV duration=3000000",
+        "AUDIO_BENCH_END WAV time=3000000 state=300",
+        "AUDIO_BENCH_BEGIN MIDI duration=-1",
+        "AUDIO_BENCH_END MIDI time=3000000 state=300"
+      ],
+      "clean_exit": true,
+      "all_memory_reclaimed": true
+    },
+    {
+      "variant": "production",
+      "case": "cpu",
+      "jit": "on",
+      "elapsed_us": 25580135,
+      "presents": 553,
+      "native_crc": "df74d292",
+      "lcd_crc": "5d96fa52",
+      "native_blocks": 24817,
+      "native_bytecodes": 11264550,
+      "checks": [
+        "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+      ],
+      "clean_exit": true,
+      "all_memory_reclaimed": true
+    },
+    {
+      "variant": "production",
+      "case": "render",
+      "jit": "on",
+      "elapsed_us": 6176426,
+      "presents": 241,
+      "native_crc": "1f6b7536",
+      "lcd_crc": "e6ac3af6",
+      "native_blocks": 31646,
+      "native_bytecodes": 373369,
+      "checks": [
+        "RENDER_BENCH frames=240 final=240"
+      ],
+      "clean_exit": true,
+      "all_memory_reclaimed": true
+    },
+    {
+      "variant": "production",
+      "case": "audio",
+      "jit": "on",
+      "elapsed_us": 10741090,
+      "presents": 656,
+      "native_crc": "7951cf82",
+      "lcd_crc": "5790bb72",
+      "native_blocks": 802,
+      "native_bytecodes": 3357,
+      "checks": [
+        "AUDIO_BENCH_BEGIN WAV duration=3000000",
+        "AUDIO_BENCH_END WAV time=3000000 state=300",
+        "AUDIO_BENCH_BEGIN MIDI duration=-1",
+        "AUDIO_BENCH_END MIDI time=3000000 state=300"
+      ],
+      "clean_exit": true,
+      "all_memory_reclaimed": true
+    }
+  ],
+  "validation": {
+    "architectures": [
+      "RV32",
+      "ARM64"
+    ],
+    "kernels_per_architecture": 8,
+    "modes_per_kernel": 3,
+    "runtime_configurations": [
+      "default switch dispatch",
+      "threaded dispatch",
+      "superinstructions disabled",
+      "JIT disabled (also complete standalone build)",
+      "tiny cache",
+      "partial arena",
+      "large cache",
+      "statistics disabled",
+      "detailed statistics",
+      "minimum block 1",
+      "minimum block 16"
+    ],
+    "sanitizer_focused_tests": 6,
+    "broader_suite_passes_after_environment_path_correction": 68,
+    "broader_suite_total": 70,
+    "baseline_reproduced_failures": [
+      "test_string_intern: 11088-byte headless-port allocation leak",
+      "check_api_audit: 120-second timeout; baseline also exceeds 125 seconds"
+    ],
+    "enabled_jit_writable_static_state": false
+  },
+  "production_firmware": {
+    "code_revision": "8965245",
+    "image_sha256": "3a555c81253fb4fcc3190d6300ce946899954e38709733a17275b5ab7603fc14",
+    "build": "normal project build with the same private integration fixes",
+    "fixed_work_cases": [
+      "cpu",
+      "render",
+      "audio"
+    ],
+    "all_fixed_work_checks_pass": true,
+    "gameplay_smoke": {
+      "game": "Bounce Tales 2.0.3",
+      "jit": "on",
+      "clean_exit": true,
+      "all_memory_reclaimed": true,
+      "jit_faults": 0,
+      "screenshots_retried": false,
+      "note": "normal firmware lacks the diagnostic frame counter; this shorter functional run is not pooled into the FPS comparison"
+    }
+  }
+}
