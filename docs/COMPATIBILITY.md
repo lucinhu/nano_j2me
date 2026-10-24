@@ -3637,3 +3637,16 @@ three real titles for 400 frames each and fails if the defect comes back:
 
 Run time is about 25 s for the three titles, which is why it lives with the
 other shell-driven checks rather than in the fast unit-test group.
+
+### The comparison is a script now (round 49, 2026-10-24)
+
+`tools/compare_reference_frame.sh <nj2me> <jar> <run-freej2me-headless.sh>
+<frame> [w h]` runs both sides and prints one line:
+
+    MAE 6.96 / 255 over 230400 samples (240x320, frame from 00300.ppm)
+
+It encodes the two things that were easy to get wrong (a key press after the
+first wait, and a shot only after a paint) and skips with exit 77 when the
+reference or PIL is absent.  CTest registers it as `check_reference_frame`
+only when `.local-tools/run-freej2me-headless.sh` exists, so a checkout
+without the reference neither fails nor silently pretends to have compared.

@@ -785,6 +785,20 @@ endif()
     set_tests_properties(check_late_display PROPERTIES TIMEOUT 120)
   endif()
 
+  # Same-scene pixel comparison against the reference emulator.  Only
+  # registered when the reference is present (it is a local tool, not part of
+  # the tree), and it skips when python3 has no PIL.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/.local-tools/run-freej2me-headless.sh)
+    add_test(NAME check_reference_frame
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/compare_reference_frame.sh
+                     $<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/games/三国杀单机战功修改版_4143.jar
+                     ${CMAKE_CURRENT_SOURCE_DIR}/.local-tools/run-freej2me-headless.sh
+                     300 240 320)
+    set_tests_properties(check_reference_frame PROPERTIES TIMEOUT 200
+                         SKIP_RETURN_CODE 77)
+  endif()
+
   # The titles that found the round 33-37 compatibility fixes: a leaked
   # thread slot, Canvas methods declared instance instead of static, and the
   # M3G spot light that lost its cone angle.  Cheap replay, real games.
