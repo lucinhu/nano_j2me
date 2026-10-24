@@ -3964,3 +3964,11 @@ RecordStore there), and a MIDlet is allowed to refuse an unconditional-free
 destroy - so the exit status stays 1 and `docs/COMPATIBILITY_MATRIX.md` records
 the row as a failure with that note.  Handling the refusal (retry with
 `unconditional = true`, or accept the MIDlet staying alive) is the next change.
+
+Its `destroyApp` throws `MIDletStateChangeException` when it is not told the
+destroy is unconditional, which the specification allows.  Teardown now retries
+once with `unconditional = true` (after logging the refusal), so the MIDlet gets
+its save pass and the AMS still gets to go away.  The title then ends with exit
+status 1 by itself - the frame budget path reports 0, so the only other writer is
+`System.exit(1)`/`Runtime.exit(1)` in the title - and the matrix now says
+"标题自行退出" rather than calling that an emulator failure.

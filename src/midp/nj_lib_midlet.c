@@ -149,6 +149,28 @@ NJFN(midlet_checkPermission)
 /* ------------------------------------------------------------------ */
 /* The application loop                                               */
 /* ------------------------------------------------------------------ */
+/*
+ * strcmp without libc: the freestanding build (NJ_USE_LIBC=0) has its own
+ * declarations in nj_libc.h, and pulling in <string.h> there ends in a
+ * `_Generic` redefinition.  Only class names are compared, so a small walk is
+ * enough.
+ */
+static int mscexc_named(const nj_class *cls)
+{
+    const char *want = NJ_C_MSCEXC;
+    const char *have;
+
+    if (!cls || !cls->name) {
+        return 0;
+    }
+    have = cls->name;
+    while (*want && *want == *have) {
+        want++;
+        have++;
+    }
+    return *want == '\0' && *have == '\0';
+}
+
 nj_status nj_midp_destroy_app(nj_vm *vm, int unconditional)
 {
     nj_ref app;
@@ -176,6 +198,27 @@ nj_status nj_midp_destroy_app(nj_vm *vm, int unconditional)
         nj_ref e = nj_take_exception(vm);
         nj_logf(vm, 1, "destroyApp threw: %s",
                 e && e->cls ? e->cls->name : "?");
+
+        /*
+         * A MIDlet may refuse a destroy it was not told is unconditional, and
+         * the specification says exactly that: destroyApp(false) throwing
+         * MIDletStateChangeException means "not now, I have state to save".
+         * We call with false on purpose (several titles flush their
+         * RecordStore there and never do it otherwise), so when the MIDlet
+         * refuses we ask once more, unconditionally - the AMS is going away
+         * whether it agrees or not.
+         */
+        if (e && !unconditional && mscexc_named(e->cls)) {
+            nj_logf(vm, 1, "destroyApp refused; retrying unconditionally");
+            a1[0].i = 1;
+            (void)nj_call_special(vm, app, app->cls->name, "destroyApp",
+                                  "(Z)V", a1, NULL);
+            if (vm->exception) {
+                e = nj_take_exception(vm);
+                nj_logf(vm, 1, "destroyApp threw again: %s",
+                        e && e->cls ? e->cls->name : "?");
+            }
+        }
     }
     vm->app = NULL;
     return NJ_OK;

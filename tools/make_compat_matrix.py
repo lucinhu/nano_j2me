@@ -20,7 +20,8 @@ DOC = ROOT + "/docs/COMPATIBILITY_MATRIX.md"
 
 VERDICT = {"ok": "运行正常", "title-exception": "标题自身异常", "oom": "堆不足",
            "bad-jar": "非可用包", "timeout": "超时", "failure": "失败",
-           "retry-heap32": "16MB 不足"}
+           "retry-heap32": "16MB 不足",
+           "title-exit": "标题自行退出"}
 
 
 def load():
