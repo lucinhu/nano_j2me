@@ -3105,3 +3105,44 @@ changed; this round closes a gap a spec-driven audit found rather than a bug a
 game reported. Costs: `nj_lib_m3g.c.o` `.text` 278,354 -> **280,432** B
 (+2,078 B) and its read-only method-name table `.data.rel.ro.local`
 27,728 -> **28,080** B (+352 B). `.data`/`.bss` stay 0, so RAM is unchanged.
+
+## Sampling a keyframe curve, the way the reference does it (round 60, 2026-10-24)
+
+`javax.microedition.m3g.KeyframeSequence.getSample(float time, float[] sample)`
+was the last method of the M3G API we simply did not have: a MIDlet that asks a
+keyframe sequence for its value at a given time got a `NoSuchMethodError` in the
+mid of its animation code. The audit that found the other five (round 57) had
+used the wrong reading of the binding table; a structural second pass over all
+
+`*_methods[]` arrays against the reference sources left exactly one gap.
+
+The implementation follows the reference implementation's semantics, which is
+our only available oracle for this class:
+
+* A `sample` array that is null or shorter than the component count throws
+  `IllegalArgumentException` (the specification says so explicitly).
+* LOOP repeat mode wraps `time` into `[0, duration)`, including negative times.
+* Before the valid range the first keyframe is copied and the return value is
+  the rounded time until it becomes current; at or after the last keyframe the
+  last one is copied and the return value is `Integer.MAX_VALUE`.
+* STEP holds the previous keyframe. LINEAR interpolates. SLERP is spherical
+  interpolation along the short arc. SPLINE is a Hermite curve whose tangents
+  are computed Catmull-Rom style from the neighbouring keyframes, because the
+  file format stores none. SQUAD blends the two bracketing keyframes with the
+  slerp of the outer neighbours as control points; the reference's exact
+  tangent table is not available to us either.
+* The constructor now refuses SLERP and SQUAD sequences that do not have
+  exactly four components, as the reference does.
+
+`tests/test_m3g.c` builds a one-component LINEAR sequence with keyframes at
+0/100/200 ms and checks the sample values (0, 5, 15, 20), the infinite delay
+past the end, the finite delay before the start, LOOP wrapping (350 ms of a
+200 ms curve lands on the 150 ms value) and STEP holding the previous key.
+It also checks the short-array rejection and the SLERP component-count
+rejection. On the previous tree nine of those assertions fail and the method is
+not callable at all; here the suite is 654 checks with no failures.
+
+Size cost: `nj_lib_m3g.c.o` text grows by 5,696 B and the executable by
+6,359 B (`round 60`, matched Release configuration); `.bss` stays 0 and no VM
+or object field was added, so the RAM footprint is unchanged.
+

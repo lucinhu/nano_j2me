@@ -7384,6 +7384,7 @@ static const nj_builtin_method kfs_methods[] = {
     M("getInterpolationType", "()I",     NJ_ACC_PUBLIC),
     M("setKeyframe",          "(II[F)V", NJ_ACC_PUBLIC),
     M("getKeyframe",          "(I[F)I",  NJ_ACC_PUBLIC),
+    M("getSample",            "(F[F)I",  NJ_ACC_PUBLIC),
     M("setValidRange",        "(II)V",   NJ_ACC_PUBLIC),
     M("getValidRangeFirst",   "()I",     NJ_ACC_PUBLIC),
     M("getValidRangeLast",    "()I",     NJ_ACC_PUBLIC),
@@ -7401,13 +7402,18 @@ NJFN(m3g_kfs_init)
     nj_s4 interp = NJ_ARG_INT(args, 2);
     nj_ref times, keys;
 
+    if ((interp == 177 || interp == 179) && ncomp != 4) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "SLERP and SQUAD keyframes hold four components");
+        return NJ_ERR;
+    }
     if (ncomp < 1 || ncomp > 4 || nkeys < 1 ||
         (interp != 176 && interp != 177 && interp != 178 &&
          interp != 179 && interp != 180)) {
         NJ_THROW(vm, "java/lang/IllegalArgumentException",
                  "a sequence is 1..4 components, 1.. keyframes, and one of "
-                 "STEP (180), LINEAR (176), SPLINE (178), SQUAD (179), "
-                 "SLERP (177)");
+                 "LINEAR (176), SLERP (177), SPLINE (178), SQUAD (179), "
+                 "STEP (180)");
         return NJ_ERR;
     }
     times = nj_int_array_new(vm, (nj_u4)nkeys);
@@ -7550,6 +7556,191 @@ NJFN(m3g_kfs_setRepeatMode)
         return NJ_ERR;
     }
     nj_iput(vm, NJ_THIS(args), m3g_fof(vm, NJ_C_KFS, "_nj_repeat", "I"), mode);
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* KeyframeSequence.getSample()                                        */
+/* ------------------------------------------------------------------ */
+
+/* The sampler rounds a float time to whole milliseconds the way the J2ME
+ * runtimes do it, i.e. towards the future; the value is only a hint for the
+ * caller's next animation event. */
+static nj_s4 m3g_round_positive(float v)
+{
+    return (nj_s4)(v + 0.5f);
+}
+
+/* Spherical interpolation along the short arc between two unit quaternions.
+ * Used by SLERP keyframes and by the SQUAD control points. */
+static void m3g_slerp_quat(float *dst, float s, const float *q0, const float *q1)
+{
+    float cos_theta = q0[0] * q1[0] + q0[1] * q1[1] + q0[2] * q1[2] + q0[3] * q1[3];
+    float x1 = q1[0], y1 = q1[1], z1 = q1[2], w1 = q1[3];
+    float om = 1.0f - s;
+    float s0, s1;
+
+    if (cos_theta < 0.0f) {
+        cos_theta = -cos_theta;
+        x1 = -x1;
+        y1 = -y1;
+        z1 = -z1;
+        w1 = -w1;
+    }
+    if (cos_theta < 0.9995f) {
+        float theta = acosf(cos_theta);
+        float inv_sin = 1.0f / sinf(theta);
+        s0 = sinf(om * theta) * inv_sin;
+        s1 = sinf(s * theta) * inv_sin;
+    } else {
+        s0 = om;
+        s1 = s;
+    }
+    dst[0] = s0 * q0[0] + s1 * x1;
+    dst[1] = s0 * q0[1] + s1 * y1;
+    dst[2] = s0 * q0[2] + s1 * z1;
+    dst[3] = s0 * q0[3] + s1 * w1;
+}
+
+/* Store componentCount floats of keyframe `idx` into the caller's array. */
+static void m3g_kfs_copy_key(float *out, const float *keys, nj_s4 idx, nj_s4 ncomp)
+{
+    nj_s4 i;
+    for (i = 0; i < ncomp; i++) {
+        out[i] = keys[idx * ncomp + i];
+    }
+}
+
+NJFN(m3g_kfs_getSample)
+{
+    nj_ref self = NJ_THIS(args);
+    float time = NJ_ARG_FLOAT(args, 0);
+    nj_ref dst = NJ_ARG_REF(args, 1);
+    nj_s4 ncomp, nkeys, interp, dur, repeat, first, last, start, end, dt;
+    nj_ref times_r, keys_r;
+    const nj_s4 *times;
+    const float *keys;
+    float *out;
+
+    ncomp = nj_iget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_ncomp", "I"));
+    nkeys = nj_iget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_nkeys", "I"));
+    interp = nj_iget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_interp", "I"));
+    dur = nj_iget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_dur", "I"));
+    repeat = nj_iget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_repeat", "I"));
+    first = nj_iget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_vfirst", "I"));
+    last = nj_iget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_vlast", "I"));
+
+    if (!dst || ncomp < 1 || (nj_s4)nj_array_length(dst) < ncomp) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "the sample array is null or shorter than the component count");
+        return NJ_ERR;
+    }
+    out = (float *)nj_array_data(dst);
+    times_r = nj_rget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_times", "[I"));
+    keys_r = nj_rget(vm, self, m3g_fof(vm, NJ_C_KFS, "_nj_keys", "[F"));
+    if (!out || !times_r || !keys_r) {
+        return NJ_OK;
+    }
+    times = (const nj_s4 *)nj_array_data(times_r);
+    keys = (const float *)nj_array_data(keys_r);
+    if (!times || !keys || nkeys < 1) {
+        return NJ_OK;
+    }
+
+    /* LOOP mode wraps the time into [0, duration); CONSTANT leaves it. */
+    if (repeat == 193 && dur > 0) {
+        time = fmodf(time, (float)dur);
+        if (time < 0.0f) {
+            time += (float)dur;
+        }
+    }
+    if (first < 0) {
+        first = 0;
+    }
+    if (last >= nkeys) {
+        last = nkeys - 1;
+    }
+    if (first > last) {
+        first = 0;
+        last = nkeys - 1;
+    }
+
+    /* Outside the valid range the sampler holds the edge keyframes. */
+    if (time < (float)times[first]) {
+        m3g_kfs_copy_key(out, keys, first, ncomp);
+        ret->i = m3g_round_positive((float)times[first] - time);
+        return NJ_OK;
+    }
+    if (time >= (float)times[last]) {
+        m3g_kfs_copy_key(out, keys, last, ncomp);
+        ret->i = 0x7fffffff;
+        return NJ_OK;
+    }
+
+    /* Find the pair of keyframes that bracket the time. */
+    start = first;
+    while (start + 1 < last && (float)times[start + 1] <= time) {
+        start++;
+    }
+    end = start + 1;
+    dt = times[end] - times[start];
+    if (dt == 0 || time == (float)times[start] || interp == 180) {
+        m3g_kfs_copy_key(out, keys, start, ncomp);
+        ret->i = (interp == 180) ? m3g_round_positive((float)times[end] - time) : 1;
+        return NJ_OK;
+    }
+    {
+        float s = (time - (float)times[start]) / (float)dt;
+
+        if (interp == 176) {            /* LINEAR */
+            nj_s4 i;
+            for (i = 0; i < ncomp; i++) {
+                float a = keys[start * ncomp + i];
+                float b = keys[end * ncomp + i];
+                out[i] = a + (b - a) * s;
+            }
+        } else if (interp == 177) {     /* SLERP */
+            m3g_slerp_quat(out, s, keys + start * ncomp, keys + end * ncomp);
+        } else if (interp == 178) {     /* SPLINE */
+            /* The engine computes Catmull-Rom style tangents from the
+             * neighbouring keyframes, since the format stores none. */
+            float span = (float)(times[end] - times[start]);
+            nj_s4 prev = (start > first) ? start - 1 : start;
+            nj_s4 next = (end < last) ? end + 1 : end;
+            float t_prev = (float)(times[end] - times[prev]);
+            float t_next = (float)(times[next] - times[start]);
+            float s2 = s * s, s3 = s2 * s;
+            float h00 = 2.0f * s3 - 3.0f * s2 + 1.0f;
+            float h10 = s3 - 2.0f * s2 + s;
+            float h01 = -2.0f * s3 + 3.0f * s2;
+            float h11 = s3 - s2;
+            nj_s4 i;
+            for (i = 0; i < ncomp; i++) {
+                float p0 = keys[start * ncomp + i];
+                float p1 = keys[end * ncomp + i];
+                float pprev = keys[prev * ncomp + i];
+                float pnext = keys[next * ncomp + i];
+                float m0 = (t_prev > 0.0f) ? (p1 - pprev) * span / t_prev : 0.0f;
+                float m1 = (t_next > 0.0f) ? (pnext - p0) * span / t_next : 0.0f;
+                out[i] = h00 * p0 + h10 * m0 + h01 * p1 + h11 * m1;
+            }
+        } else {                        /* SQUAD */
+            /* Squad needs the same neighbour information as SPLINE; the
+             * control points are the slerp of the outer keyframes, which
+             * reduces to a smooth quaternion blend between the two keys. */
+            nj_s4 prev = (start > first) ? start - 1 : start;
+            nj_s4 next = (end < last) ? end + 1 : end;
+            float q0[4], q1[4], mid[4];
+            m3g_slerp_quat(q0, s, keys + start * ncomp, keys + end * ncomp);
+            m3g_slerp_quat(q1, s, keys + prev * ncomp, keys + next * ncomp);
+            m3g_slerp_quat(mid, 2.0f * s * (1.0f - s), q0, q1);
+            out[0] = mid[0];
+            out[1] = mid[1];
+            out[2] = mid[2];
+            out[3] = mid[3];
+        }
+    }
+    ret->i = 1;
     return NJ_OK;
 }
 
@@ -11988,6 +12179,7 @@ const nj_native_entry nj_lib_m3g_table[] = {
     { NJ_C_KFS, "getInterpolationType", "()I", m3g_kfs_getInterpolationType },
     { NJ_C_KFS, "setKeyframe", "(II[F)V", m3g_kfs_setKeyframe },
     { NJ_C_KFS, "getKeyframe", "(I[F)I", m3g_kfs_getKeyframe },
+    { NJ_C_KFS, "getSample", "(F[F)I", m3g_kfs_getSample },
     { NJ_C_KFS, "setValidRange", "(II)V", m3g_kfs_setValidRange },
     { NJ_C_KFS, "getValidRangeFirst", "()I", m3g_kfs_getValidRangeFirst },
     { NJ_C_KFS, "getValidRangeLast", "()I", m3g_kfs_getValidRangeLast },

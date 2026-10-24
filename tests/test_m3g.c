@@ -1637,6 +1637,155 @@ static void test_skinned_mesh_bones(nj_vm *vm)
 
 
 /*
+ * KeyframeSequence.getSample() is the only way a MIDlet can sample an
+ * animation curve by hand, and it used to be missing altogether.  The
+ * numbers below are the ones the specification's interpolation rules
+ * produce for a one-component, three-keyframe sequence at 0/100/200.
+ */
+static void kfs_sample(nj_vm *vm, nj_ref kfs, float t, float *out, int *ret,
+                       int *ok)
+{
+    nj_value a[2], r;
+    nj_ref dst = nj_array_new(vm, "F", 4);
+    nj_status st;
+
+    *ok = 0;
+    if (!dst) {
+        return;
+    }
+    a[0].f = t;
+    a[1].r = dst;
+    st = nj_call(vm, kfs, CLS("KeyframeSequence"), "getSample", "(F[F)I", a, &r);
+    if (st != NJ_OK) {
+        return;
+    }
+    if (out) {
+        out[0] = ((float *)nj_array_data(dst))[0];
+    }
+    *ret = r.i;
+    *ok = 1;
+}
+
+static void kfs_set_key(nj_vm *vm, nj_ref kfs, int idx, int time, float value)
+{
+    nj_value a[3];
+    nj_ref f = nj_array_new(vm, "F", 1);
+
+    if (!f) {
+        return;
+    }
+    ((float *)nj_array_data(f))[0] = value;
+    a[0].i = idx;
+    a[1].i = time;
+    a[2].r = f;
+    call(vm, kfs, CLS("KeyframeSequence"), "setKeyframe", "(II[F)V", a, NULL);
+}
+
+static nj_ref kfs_new(nj_vm *vm, int ncomp, int nkeys, int interp)
+{
+    nj_ref kfs = nj_object_new(vm, CLS("KeyframeSequence"));
+    nj_value a[3];
+
+    if (!kfs) {
+        return 0;
+    }
+    a[0].i = ncomp;
+    a[1].i = nkeys;
+    a[2].i = interp;
+    call(vm, kfs, CLS("KeyframeSequence"), "<init>", "(III)V", a, NULL);
+    return kfs;
+}
+
+static void test_keyframe_sampling(nj_vm *vm)
+{
+    nj_ref kfs;
+    float v = -1.0f;
+    int r = -1, ok = 0;
+    int i;
+
+    /* LINEAR (176): one component, keys 0/10/20 at 0/100/200 ms. */
+    kfs = kfs_new(vm, 1, 3, 176);
+    if (!kfs) {
+        check(0, "create a LINEAR KeyframeSequence");
+        return;
+    }
+    for (i = 0; i < 3; i++) {
+        kfs_set_key(vm, kfs, i, i * 100, 10.0f * (float)i);
+    }
+    kfs_sample(vm, kfs, 0.0f, &v, &r, &ok);
+    check(ok && v == 0.0f && r == 1, "a LINEAR sample at a keyframe copies it");
+    kfs_sample(vm, kfs, 50.0f, &v, &r, &ok);
+    check(ok && v == 5.0f && r == 1, "LINEAR halfway between 0 and 10 is 5");
+    kfs_sample(vm, kfs, 150.0f, &v, &r, &ok);
+    check(ok && v == 15.0f, "LINEAR halfway between 10 and 20 is 15");
+    kfs_sample(vm, kfs, 200.0f, &v, &r, &ok);
+    check(ok && v == 20.0f && r == 0x7fffffff,
+          "past the last keyframe the sample holds it and the delay is infinite");
+    kfs_sample(vm, kfs, -25.0f, &v, &r, &ok);
+    check(ok && v == 0.0f && r == 25,
+          "before the first keyframe the sample holds it and reports the delay");
+
+    /* LOOP (193) wraps the time into [0, duration); the same sequence with
+       duration 200 must give the 150 ms value at 350 ms. */
+    {
+        nj_value a[1];
+        a[0].i = 200;
+        call(vm, kfs, CLS("KeyframeSequence"), "setDuration", "(I)V", a, NULL);
+        a[0].i = 193;
+        call(vm, kfs, CLS("KeyframeSequence"), "setRepeatMode", "(I)V", a, NULL);
+    }
+    kfs_sample(vm, kfs, 350.0f, &v, &r, &ok);
+    check(ok && v == 15.0f, "LOOP wraps 350 ms of a 200 ms curve to 15");
+
+    /* STEP (180) holds the start keyframe until the next one arrives. */
+    kfs = kfs_new(vm, 1, 3, 180);
+    if (!kfs) {
+        check(0, "create a STEP KeyframeSequence");
+        return;
+    }
+    for (i = 0; i < 3; i++) {
+        kfs_set_key(vm, kfs, i, i * 100, 10.0f * (float)i);
+    }
+    kfs_sample(vm, kfs, 50.0f, &v, &r, &ok);
+    check(ok && v == 0.0f && r == 50,
+          "STEP holds the previous keyframe and reports the time to the next");
+
+    /* A sample array shorter than the component count is refused, as the
+       specification says. */
+    {
+        nj_value a[2], out;
+        nj_ref tiny = nj_array_new(vm, "F", 1);
+        nj_status st;
+        nj_ref q = kfs_new(vm, 2, 2, 176);
+        a[0].f = 10.0f;
+        a[1].r = tiny;
+        nj_clear_exception(vm);
+        st = nj_call(vm, q, CLS("KeyframeSequence"), "getSample", "(F[F)I", a, &out);
+        check(st != NJ_OK && nj_exception_describe(vm) != NULL &&
+              strstr(nj_exception_describe(vm), "IllegalArgumentException") != NULL,
+              "a sample array shorter than the component count is refused");
+        nj_clear_exception(vm);
+    }
+
+    /* SLERP (177) and SQUAD (179) are quaternion curves: the constructor
+       refuses component counts other than four. */
+    {
+        nj_ref bad = nj_object_new(vm, CLS("KeyframeSequence"));
+        nj_value a[3];
+        nj_status st;
+        a[0].i = 3;
+        a[1].i = 2;
+        a[2].i = 177;
+        nj_clear_exception(vm);
+        st = nj_call(vm, bad, CLS("KeyframeSequence"), "<init>", "(III)V", a, NULL);
+        check(st != NJ_OK && nj_exception_describe(vm) != NULL &&
+              strstr(nj_exception_describe(vm), "IllegalArgumentException") != NULL,
+              "SLERP with three components is refused");
+        nj_clear_exception(vm);
+    }
+}
+
+/*
  * Five methods the specification names that used to be missing outright.
  * Each one is checked against the rule the JSR states, not just "returns
  * something": an empty active interval means always active, the interval is
@@ -4421,6 +4570,7 @@ int main(void)
     test_textured_span_variants(vm);
     test_spot_light_cone(vm);
     test_spec_methods(vm);
+    test_keyframe_sampling(vm);
 
     /* Bone rosters are per receiver and grow on demand; the old fixed
        64-entry table threw on the 65th link. */

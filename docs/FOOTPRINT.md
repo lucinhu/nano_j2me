@@ -936,3 +936,19 @@ painted frame; the high-water mark of a Canvas title stops growing with the
 frame count. `Image.getGraphics()` deliberately still allocates (the reference
 implementation does too), so a title that calls it per frame keeps its own
 garbage for the collector.
+
+## Keyframe sampling costs text, not RAM (round 60, 2026-10-24)
+
+`KeyframeSequence.getSample()` adds interpolation code to `nj_lib_m3g.c`:
+
+| object | before | after | delta |
+|---|---|---|---|
+| `nj_lib_m3g.c.o` `.text` | 238,097 B | 243,793 B | +5,696 B |
+| `nj2me` `.text` | 2,914,838 B | 2,921,197 B | +6,359 B |
+| `.data` | 163,088 B | 163,176 B | +88 B (one method-table row) |
+| `.bss` | 6,688 B | 6,688 B | 0 |
+
+No VM field, object field or static buffer was added, so the RAM footprint of a
+running VM does not change. The code is `NJ_ENABLE_M3G`-gated like the rest of
+the library: a build without M3G does not carry it.
+
