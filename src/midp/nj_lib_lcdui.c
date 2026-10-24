@@ -7131,11 +7131,17 @@ NJFN(cg_init_arrays)
     if (cg_init_common(vm, self, args, NJ_ARG_INT(args, 1)) != NJ_OK) {
         return NJ_ERR;
     }
-    if (!strs || !imgs) {
+    /*
+     * The image array is optional: MIDP says the constructor throws
+     * NullPointerException when stringElements is null, and says nothing of the
+     * kind about imageElements ("may be null" - a list without pictures).  A
+     * title that passes null images used to die here before its first frame.
+     */
+    if (!strs) {
         return nj_throw(vm, "java/lang/NullPointerException",
-                        "strings and images must not be null");
+                        "strings must not be null");
     }
-    if (strs->length != imgs->length) {
+    if (imgs && strs->length != imgs->length) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "strings and images differ in length");
     }
@@ -7145,7 +7151,8 @@ NJFN(cg_init_arrays)
             return nj_throw(vm, "java/lang/NullPointerException",
                             "element is null");
         }
-        if (cg_append_common(vm, self, str, nj_array_get_ref(imgs, i)) != NJ_OK) {
+        if (cg_append_common(vm, self, str,
+                             imgs ? nj_array_get_ref(imgs, i) : NULL) != NJ_OK) {
             return NJ_ERR;
         }
     }
@@ -8339,11 +8346,12 @@ NJFN(list_init_arrays)
     if (list_init(vm, th, args, ret) != NJ_OK) {
         return NJ_ERR;
     }
-    if (!strs || !imgs) {
+    /* imageElements may be null; only stringElements is required. */
+    if (!strs) {
         return nj_throw(vm, "java/lang/NullPointerException",
-                        "strings and images must not be null");
+                        "strings must not be null");
     }
-    if (strs->length != imgs->length) {
+    if (imgs && strs->length != imgs->length) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "strings and images differ in length");
     }
@@ -8354,7 +8362,7 @@ NJFN(list_init_arrays)
             return nj_throw(vm, "java/lang/NullPointerException",
                             "list element is null");
         }
-        it = list_wrap(vm, s, nj_array_get_ref(imgs, i));
+        it = list_wrap(vm, s, imgs ? nj_array_get_ref(imgs, i) : NULL);
         if (!it) {
             return vm->exception ? NJ_ERR : nj_throw_oom(vm);
         }

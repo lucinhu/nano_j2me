@@ -12,12 +12,12 @@ with the same recipe, so neighbouring rows are comparable:
 Corpus provenance and size are in `docs/CORPUS.md`; regenerate this table
 with `tools/make_compat_matrix.py <rows dir>` after a new sweep.
 
-Built from `2986c68`, 2026-10-25.
+Built from `1234d75`, 2026-10-25.
 
 | verdict | titles |
 | --- | --- |
-| 运行正常 | 394 |
-| 失败 | 3 |
+| 运行正常 | 395 |
+| 失败 | 2 |
 | 非可用包 | 1 |
 
 | 3D API used | titles |
@@ -39,7 +39,7 @@ Built from `2986c68`, 2026-10-25.
 | 3D孤胆枪手2010_4634.jar | 985 | Alien Shooter 3D | nokia-ui | 19 | 16 | 600 | 179208943 | java/io/IOException,java/lang/Ar | 运行正常 |  |
 | 3D拉力赛-进化汉化版_6366.jar | 347 | 3DRallyEvolution | m3g | 12 | 16 | 600 | 439402 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | 3D摩托赛车_9287.jar | 335 | 3DMotoRacing by Racer_Team | m3g | 12 | 16 | 600 | 438985 | javax/microedition/rms/InvalidRe | 运行正常 |  |
-| 3D武装直升机2_archive.jar | 80 | Attack Chopper 2 | - | 16 | 16 | 60 | 540 | java/lang/NullPointerException | 失败 |  |
+| 3D武装直升机2_archive.jar | 80 | Attack Chopper 2 | - | 16 | 16 | 600 | 606 | java/lang/NullPointerException | 运行正常 | runs to the last frame; the screen itself st |
 | 3D滚球_11586.jar | 69 | 3D QBlast | nokia-ui | 19 | 16 | 600 | 139809 | - | 运行正常 |  |
 | 3D激爆拳击_8805.jar | 1024 | K.O. Legends | m3g,nokia-ui | 23 | 16 | 600 | 219563106 | java/lang/NullPointerException | 运行正常 |  |
 | 3D版田园物语_6744.jar | 969 | 3D版田园物语 | - | 65 | 16 | 600 | 15764 | - | 运行正常 |  |

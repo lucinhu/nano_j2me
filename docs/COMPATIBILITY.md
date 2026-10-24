@@ -3992,3 +3992,23 @@ question on each of the remaining rows:
 
 None of the five is an emulator defect; the matrix keeps them visible with a
 note column instead of hiding them.
+
+## A List without pictures is still a List (round 71, 2026-10-25)
+
+`3D武装直升机2` refused to start: 60 frames into the load-time menu it threw
+`java/lang/NullPointerException at javax/microedition/lcdui/List.<init>(...): strings and images must not be null`.
+The title was not doing anything wrong.  MIDP 2.0 says the four-argument
+`List` and `ChoiceGroup` constructors throw `NullPointerException` when
+**stringElements** is null; `imageElements` "may be null" and means a list
+without pictures.  Our natives required both arrays, so every title that passed
+null images died on a constructor the specification allows.
+
+Both constructors now require only the string array and accept a null image
+array (the elements are appended with no image).  `3D武装直升机2` reaches frame
+600 where it used to throw at 60, and the matrix row moved from `失败` to `运行正常`
+(600 frames, 606 bytecodes - it spends the run on a quiet screen, which the note
+says).  Corpus matrix after the fix: **395 ok / 2 failures / 1 unusable package**.
+
+The existing `test_lcdui` suite still passes (no test asserted the old refusal),
+and `ctest` is green apart from the pre-existing GC-sensitive `test_lib` case
+documented earlier.
