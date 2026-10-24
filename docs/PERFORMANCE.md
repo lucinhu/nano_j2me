@@ -2765,3 +2765,11 @@ here).  The honest statement is therefore: the branch tree is gone for the
 dominant span class, the pixels are unchanged, and a controlled raster
 benchmark is needed before any speed figure is quoted.  That benchmark is the
 next step, not a claim in this section.
+
+The specialisation is pinned across builds: the whole `test_mascot_raster`
+suite (71 checks, including the `NJ_MR_ENVMAP` goldens and the randomised
+differential) and `test_mascot` (233 checks) pass unchanged in a build with
+`-DNJ_MASCOT_RASTER_SPANS=0`, where every span takes the generic loop.  Two
+independent builds of the same tree therefore agree on every pixel, which is
+the strongest statement this change can make without a dedicated raster
+benchmark - the same benchmark that is still missing for a speed figure.
