@@ -1007,6 +1007,18 @@ typedef struct nj_midi_stream {
     nj_u4 ev;
     nj_u4 cev;
     /*
+     * Memoised sample positions.  The two `while` conditions in the render
+     * loop used to translate the head event's tick into a sample position
+     * for every sample, which called mid_sample_at() millions of times on a
+     * long song.  That translation is a pure function of the tick, so one
+     * entry per head is enough; a zeroed stream already maps tick 0 to
+     * sample 0, which is correct, so nothing needs initialising.
+     */
+    nj_u4 ctl_tick;
+    nj_u4 ctl_sample;
+    nj_u4 note_tick;
+    nj_u4 note_sample;
+    /*
      * Notes a MIDlet sent while the song plays are appended to the end of the
      * note array and only merged into tick order just before the next pull
      * consumes them.  Inserting each one immediately moved every file note
@@ -1419,8 +1431,16 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
          * Channel events first: a bend or a pedal that lands on the same
          * sample as a note-on has to be in force for that note.
          */
-        while (s->cev < s->song.nctls
-               && mid_sample_at(&s->song, s->song.ctls[s->cev].tick) <= i) {
+        while (s->cev < s->song.nctls) {
+            nj_u4 ct = s->song.ctls[s->cev].tick;
+
+            if (ct != s->ctl_tick) {
+                s->ctl_tick = ct;
+                s->ctl_sample = mid_sample_at(&s->song, ct);
+            }
+            if (s->ctl_sample > i) {
+                break;
+            }
             nj_u4 ch = s->song.ctls[s->cev].chan;
             nj_u4 kind = s->song.ctls[s->cev].kind;
 
@@ -1494,8 +1514,16 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
             s->cev++;
         }
 
-        while (s->ev < s->song.nnotes
-               && mid_sample_at(&s->song, s->song.notes[s->ev].tick) <= i) {
+        while (s->ev < s->song.nnotes) {
+            nj_u4 nt = s->song.notes[s->ev].tick;
+
+            if (nt != s->note_tick) {
+                s->note_tick = nt;
+                s->note_sample = mid_sample_at(&s->song, nt);
+            }
+            if (s->note_sample > i) {
+                break;
+            }
             s->tick_now = s->song.notes[s->ev].tick;
             if (s->song.notes[s->ev].on) {
                 /* A voice whose note has ended is free again.  The short guard

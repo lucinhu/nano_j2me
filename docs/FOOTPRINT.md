@@ -1035,3 +1035,10 @@ counters in registers.
 The gate is one comparison (`n >= 32`) inside the row loop, and the compiler
 folded it into the loop bounds that `nj_argb_row_opaque()` already carries, so
 the change is free in ROM as well as RAM.
+
+## Two sample positions memoised per stream (round 25, 2026-10-24)
+
+`nj_midi_stream` gained four `nj_u4` fields (`ctl_tick`, `ctl_sample`,
+`note_tick`, `note_sample`): sixteen bytes per open stream, no static data,
+no change to any object size.  Code size is unchanged within a few tens of
+bytes; the removed work was two calls per rendered sample.

@@ -3068,3 +3068,27 @@ pins the PCM samples, so any faster mixer can be proved sample-identical.
 Next step is inside, not around: count samples rendered per pull, the loop
 iterations per sample and the per-voice work, then optimise that inner loop
 (or reduce resampling work) with the PCM test as the acceptance gate.
+
+## A sample position per event, not per sample (round 25, 2026-10-24)
+
+The render loop asked `mid_sample_at()` twice per sample: once for the tick of
+the next channel event and once for the next note, to decide whether that
+event had landed yet.  On a long song that is millions of calls to a
+function that walks the tempo list and does a 64-bit multiply per tempo
+change, for a value that only changes when the event does.
+
+`nj_midi_stream` now memoises the head event's position: `ctl_tick`
+`ctl_sample` and `note_tick` `note_sample`, sixteen bytes per stream.  The
+translation is a pure function of the tick, so a zeroed stream already maps
+tick 0 to sample 0 correctly and nothing needs initialising; the cached pair
+is refreshed only when the head's tick changes.  The audio is bit-identical
+by construction, which `./build/test_midi` confirms (92 checks, including
+the pinned PCM), and `BENCH sum=-136042548 s=5` still holds.
+
+Interleaved A/B on the Mascot title (3,000 paced frames, five rounds,
+taskset -c 5): parent min 0.6436 s / median 0.6578 s, memo min 0.6377 s /
+median 0.6533 s, i.e. **-0.9% at the minimum and -0.7% at the median**, with
+four of the five rounds faster.  That is far less than the call count
+suggests: the tempo list of these files is short, so the removed calls were
+only a few tens of nanoseconds each, and the renderer's real cost is in the
+per-voice sample loop rather than in this bookkeeping.
