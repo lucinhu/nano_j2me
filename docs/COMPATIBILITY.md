@@ -3719,3 +3719,15 @@ and 24,112 bytecodes, `tris=0 m3g=0`.  The reference emulator also idles on the
 first of them, so this is not evidence against our renderer - these titles want
 input that actually starts a race (its own menu, not a generic tap), and until
 that script exists neither runtime can be compared on a 3D scene.
+
+### A third scene, with a tighter budget (round 55, 2026-10-24)
+
+拳皇98终极之战_7534 measures **MAE 1.82/255** on the same frame, so its test
+(`check_reference_frame_kof`) uses an 8/255 threshold instead of 12: a title
+that agrees this closely can afford a tighter guard, and a chip that moved
+would show up in it.
+
+The 3D titles were probed once more this round for the input that starts a
+race: fire, soft1, soft2, up, down, left, right, star and 1 all give the same
+16,334 bytecodes at 400 frames and `tris=0`, i.e. the title ignores every key
+at that screen.  Whatever it waits for is not a key code we can script yet.
