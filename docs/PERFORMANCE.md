@@ -2979,3 +2979,28 @@ packed red/blue lanes and an exact reciprocal for the `/255` step is bit-exact
 over every `(alpha, source, destination)` combination (the exhaustive harness
 is not committed; it checks all 16.7M triples), but it measured 2-3% *slower*
 on the `argb32mix` blit mode, so it was dropped rather than kept for elegance.
+
+## The field cache that was not worth its bytes (round 20, 2026-10-24)
+
+A gprof run of `浴火银河_3621` (4,000 paced frames) put 6.31% of the CPU in
+`method_lookup_named`, reached 16.1M times from the Micro3D natives
+(`m3_get` 5.74M, `m3_set` 2.92M).  Those natives resolve fields by name on
+every access because the Micro3D API ships in several spellings, so the
+obvious fix is a small direct-mapped cache of resolved `nj_field` handles
+keyed by (class, name pointer, descriptor pointer).
+
+It was implemented (8 ways, 268 bytes of VM state, switch
+`NJ_MASCOT_FIELD_CACHE`) and measured on the same title, 3,000 paced frames,
+five interleaved rounds against the parent binary:
+
+| round | parent | with cache |
+| --- | --- | --- |
+| min user CPU | 0.6661 s | 0.6790 s |
+| median | 0.6761 s | 0.6961 s |
+
+The cache is 1.9-3.0% *slower*.  On these small builtin classes a linear
+field scan is only a couple of pointer compares per lookup, so the probe
+(up to eight triples, each three compares) costs more than it saves, and the
+table also adds pressure to the data cache.  It was reverted rather than
+kept: a cache that loses to the thing it caches is not a cache.  The
+measurement stands as the reason the name-based lookup stays.
