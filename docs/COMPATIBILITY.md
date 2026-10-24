@@ -3532,3 +3532,33 @@ invalid dimensions, `getKeyName` before round 35, null `createPlayer` streams,
 `VolumeControl.setLevel` out of range) or a title bug the runtime faithfully
 reports.  Defects from here on will have to come from behaviour comparison
 with the reference implementation, not from exception counts.
+
+## Comparing a frame against the reference emulator (round 46, 2026-10-24)
+
+The exception histogram is exhausted and the API surface is complete, so the
+remaining source of defects is behaviour comparison.  The pipeline that works:
+
+    # ours
+    ./build/nj2me --port headless --size 240x320 --heap 32 --fps 0 \
+        --run-frames 300 --dump-frames OUT/ --dump-every 300 GAME.jar
+    # reference (HeadlessControl protocol on stdin)
+    printf 'wait 3000\npress 5 200\nwait 7000\nshot REF.png\nquit\n' |
+        .local-tools/run-freej2me-headless.sh GAME.jar REFDIR 240 320
+    # then compare REF.png with OUT/00300.ppm pixel by pixel (PIL)
+
+Two things had to be right: the reference needs a `press` after the first
+`wait` (a title that sits on a splash screen past 8 s never reaches a paint),
+and the screenshot only appears when the shot happens after that paint.
+
+First measurement, 三国杀单机战功修改版_4143 at frame 300 (240x320): mean
+absolute error **6.96/255** over 230,400 samples between our frame and the
+reference's.  That is a same-scene comparison, not a frame-locked one - the
+two runtimes advance animations on their own clocks, so this number bounds
+"same picture, small per-pixel differences" rather than proving pixel
+identity.
+
+One title could not be compared at all: 愤怒的小鸟-高清版_2353 makes the
+reference throw `java.util.zip.ZipException: invalid CEN header (bad entry
+name or comment)` while our loader accepts the archive and runs the game for
+3.7 billion bytecodes - a real tolerance difference in JAR parsing, not a
+rendering one.
