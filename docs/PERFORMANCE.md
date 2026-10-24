@@ -2704,3 +2704,31 @@ executable `.text` 2,914,662 -> **2,914,838** B (+176 B); `.data` 163,088 B and
 `.bss` 6,688 B unchanged. RAM: **+16 B per VM** for the two refs, and one
 160-byte object fewer per painted frame - a net saving from the first frame
 that paints twice.
+
+## What a frame costs across the corpus (round 14, 2026-10-24)
+
+Before choosing a performance target for the round, every `tests/games` title
+was replayed at `--fps 0` with `--stats` and its per-frame CPU and bytecode
+count recorded (script and logs under
+`.local-tools/debug-runs/budget-round14-20261024/`). The distribution is flat:
+the median title spends ~0.16 ms of CPU per frame, and the slowest ones do not
+share a hotspot with us.
+
+| title | ms/frame | bytecodes/frame | what the profile says |
+|---|---|---|---|
+| 魂斗罗_5652 | 64.4 | 18.0 M | interpreter + `System.currentTimeMillis` |
+| 僵尸危机2_4349 | 40.5 | 9.1 M | 333,584 clock reads per frame |
+| 拳王争霸_11585 | 27.0 | 4.1 M | interpreter |
+| 中国象棋之水墨珍藏版_871 | 22.6 | 0.8 M | 2D blitter |
+| 毁灭战士3_10598 | 3.4 | 0.3 M | M3G rasteriser (69%) + blitter (22%) |
+
+The extreme cases are busy-wait designs: `僵尸危机2` calls
+`System.currentTimeMillis()` about 20 million times in 60 frames, a quarter of
+all bytecodes it executes, and `魂斗罗` spins the same way. Those titles run at
+their intended frame rate; the CPU is spent waiting, not missing frames, so
+there is nothing for the emulator to optimise there — making the clock call
+cheaper would only make the wait loop run more iterations. The real levers
+remain the interpreter (a different workstream) and the 3D rasteriser, which
+is why the rounds before this one measured their wins on the rasteriser and
+blitter instead of on whole titles.
+
