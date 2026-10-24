@@ -1056,6 +1056,7 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
         stack_limit = fr->stack_limit;                                 \
         sp = fr->sp;                                                   \
         pc = fr->pc;                                                   \
+        NJ_JIT_REFRESH();                                              \
     } while (0)
 
 /*
@@ -1122,13 +1123,13 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
      */
 #if NJ_ENABLE_JIT && NJ_JIT_HOST_SUPPORTED
     /*
-     * JIT probing state: the opcode that led here decides whether the next
-     * fetch may be a native entry (see NJ_JIT_PROBE_GATE).  have_prev is one
-     * frame activation's worth of history and starts clear, so the first
-     * bytecode after entry, resume or snapshot restore is always probed.
+     * Cache the frame's conservative entry mask and the preceding opcode's
+     * boundary flag. Refresh on frame changes and activation/quantum resume.
+     * A stale mask can only defer native execution until the next refresh;
+     * nj_jit_probe still validates every admitted entry and its guards.
      */
-    nj_u1 jit_prev_op = 0u;
-    int jit_have_prev = 0;
+    nj_u4 jit_probe_mask = nj_jit_method_probe_mask(vm, m);
+    int jit_probe_next = jit_probe_mask != 0;
 #endif
 
     for (;;) {
@@ -1431,26 +1432,42 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                 SAVE();                                                \
                 _jit_n = nj_jit_execute(vm, fr, &pc, &sp, quantum,      \
                                          &_jit_ticket);                \
-                if (!_jit_n) break;                                    \
+                if (!_jit_n) {                                        \
+                    jit_probe_mask = nj_jit_method_probe_mask(vm, m);   \
+                    break;                                            \
+                }                                                      \
                 insns_ += _jit_n;                                      \
                 quantum -= _jit_n;                                     \
                 if (quantum == 0u) { SAVE(); return NJ_ERR_YIELD; }      \
             }                                                          \
         }                                                              \
     } while (0)
-/* Probing every bytecode would charge straight-line interpreted code for a JIT
- * call that can never place a block there.  The gate allows the method entry
- * (pc == 0), the first bytecode of a fresh activation, and the pc following an
- * opcode that can end a block.  A native block that finishes probes its own
- * exit pc inside NJ_TRY_JIT, so capacity splits and deopt resumes stay hot. */
-#define NJ_JIT_PROBE_GATE() do {                                       \
-        if (vm->jit && (pc == 0u || !jit_have_prev ||                  \
-                        nj_jit_probe_boundary(jit_prev_op))) {         \
-            NJ_TRY_JIT();                                              \
-        }                                                              \
+/* Probe frame entries and potential block boundaries. During allocation
+ * backoff the mask admits only PCs that may have surviving native code.
+ * Native exits probe inside NJ_TRY_JIT, including capacity-split continuations. */
+#define NJ_JIT_REFRESH() do {                                         \
+        jit_probe_mask = nj_jit_method_probe_mask(vm, m);               \
+        jit_probe_next = jit_probe_mask != 0;                          \
     } while (0)
-#define NJ_JIT_TRACK_OP(o) do { jit_prev_op = (o); jit_have_prev = 1; } while (0)
+#if NJ_ENABLE_SUPERINSTR
+/* Fused branches can jump to the method entry without dispatching the branch
+ * opcode. Preserve entry probing for that path too. */
+#define NJ_JIT_AT_BOUNDARY() (jit_probe_next || pc == 0u)
 #else
+#define NJ_JIT_AT_BOUNDARY() jit_probe_next
+#endif
+#define NJ_JIT_PROBE_GATE() do {                                      \
+        if (NJ_JIT_AT_BOUNDARY() &&                                   \
+            (jit_probe_mask & ((nj_u4)1u << (pc & 31u)))) {             \
+            NJ_TRY_JIT();                                             \
+        }                                                             \
+    } while (0)
+#define NJ_JIT_TRACK_OP(o) do {                                       \
+        jit_probe_next = jit_probe_mask != 0 &&                        \
+                         nj_jit_probe_boundary(o);                    \
+    } while (0)
+#else
+#define NJ_JIT_REFRESH() ((void)0)
 #define NJ_TRY_JIT() ((void)0)
 #define NJ_JIT_PROBE_GATE() ((void)0)
 #define NJ_JIT_TRACK_OP(o) ((void)(o))

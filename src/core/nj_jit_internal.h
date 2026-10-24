@@ -173,37 +173,37 @@ static inline int nj_jit_numeric_constant(const nj_method *m, unsigned index,
     return 1;
 }
 
-/* Conservative opcode filter shared by the native backends. False positives
- * are decoded once into the per-method probe map; known interpreter-only
- * opcodes avoid even the out-of-line probe. Never inspect operands here. */
+/* Conservative opcode filter: bit 0 admits a candidate; bit 1 marks an
+ * opcode that can end a block (including unresolved fields). A byte table
+ * keeps both interpreter checks small. Backends still validate operands and
+ * supported instructions. False positives are safe; false negatives lose JIT
+ * coverage. Keep the exhaustive filter regression in test_jit.c in sync. */
+static const nj_u1 nj_jit_op_flags[256] = {
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 00..0f */
+    1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 10..1f */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, /* 20..2f */
+    2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 30..3f */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 40..4f */
+    2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 50..5f */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 60..6f */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 70..7f */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 80..8f */
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 3, 3, 3, 3, 3, 3, 3, /* 90..9f */
+    3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, /* a0..af */
+    2, 2, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, /* b0..bf */
+    2, 2, 2, 2, 3, 2, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, /* c0..cf */
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, /* d0..df */
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, /* e0..ef */
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, /* f0..ff */
+};
 static inline int nj_jit_opcode_candidate(nj_u1 op)
 {
-    return op <= 0x13u || (op >= 0x15u && op <= 0x2du) ||
-           (op >= 0x36u && op <= 0x4eu) || (op >= 0x57u && op <= 0xa7u) ||
-           (op >= 0x91u && op <= 0x93u) || op == 0xc4u ||
-           op == 0x2eu || op == 0x4fu ||           /* iaload / iastore */
-           (op >= 0x32u && op <= 0x35u) ||         /* aaload .. saload */
-           (op >= 0x54u && op <= 0x56u) ||         /* bastore .. sastore */
-           op == 0xb2u || op == 0xb3u ||           /* getstatic / putstatic */
-           op == 0xb4u || op == 0xb5u ||           /* getfield / putfield */
-           op == 0xbeu ||                          /* arraylength */
-           op == 0xc6u || op == 0xc7u;             /* ifnull / ifnonnull */
+    return nj_jit_op_flags[op] & 1u;
 }
 
-/* True when bytecode `op` can end a native block, so that the following pc is a
- * plausible block entry: either the encoder never compiles it (calls, allocation,
- * long arithmetic, switches, returns, throws ...) or it changes pc non-linearly
- * (conditional branches, goto, ifnull/ifnonnull). Probing every straight-line
- * bytecode instead would charge the interpreter an out-of-line probe for code
- * that can never become an entry, which is most of what makes the probe path
- * visible in profiles; a compiled block also ends on these opcodes, and the
- * probe after a native block already covers capacity-split continuations. */
 static inline int nj_jit_probe_boundary(nj_u1 op)
 {
-    if (!nj_jit_opcode_candidate(op)) return 1;          /* block ends here */
-    /* branch, goto, wide and ifnull/ifnonnull are the candidates that may
-     * redirect pc or hide the next opcode */
-    return op >= 0x99u;
+    return nj_jit_op_flags[op] >> 1;
 }
 
 /* Read-only view of the per-VM constant-pool cache: this never resolves, never
@@ -319,6 +319,12 @@ typedef struct nj_jit_ticket {
     struct nj_jit_entry *entry;
     nj_u2 *cell;    /* this site's probe-map cell; valid until execute returns */
 } nj_jit_ticket;
+/* Frame-local conservative PC mask (bit pc % 32). Refresh on frame changes,
+ * quantum resume and failed execution. During allocation backoff it includes
+ * every surviving executable entry; otherwise it admits all sites. This is
+ * metadata-only, advances bounded backoff, and never calls the port. */
+nj_u4 nj_jit_method_probe_mask(nj_vm *vm, const nj_method *m);
+
 /* Probe mutates only bounded JIT metadata; it never touches frame slots, calls
  * the port, allocates, frees or enters Java. Consume the ticket immediately,
  * after SAVE, before another probe or any engine/lifetime change. */

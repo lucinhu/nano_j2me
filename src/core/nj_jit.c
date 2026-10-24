@@ -1,21 +1,25 @@
 /* Bounded per-VM JIT. Probing touches metadata only; compilation and executable
  * memory callbacks run only after the interpreter publishes its exact frame.
  *
- * Probe cost is the dominant installed-JIT cost on small MCUs, because a
- * passing probe runs for every bytecode position in interpreted code. The
+ * Probe cost matters on small runtimes with substantial interpreted code. The
  * heat/refusal/compiled state therefore lives in a per-method bytecode map:
  * one 16-bit cell per method offset, addressed by the frame's pc, so a probe is
- * a pointer compare (current method) plus one array load. There is no hash and
- * no scan on the hot path. Maps come from a fixed arena and are refilled by
+ * a pointer compare (current method) plus one array load for mapped hot sites.
+ * Maps come from a fixed arena and are refilled by
  * evicting the least recently used method; that only drops metadata, never
- * compiled code, and a later recompile of the same (method, pc) reuses the code
- * cache entry instead of emitting it again. */
+ * compiled code. A recycled map reconnects surviving entries without heating
+ * or compiling them again. After executable allocation fails, a bounded
+ * cooldown probes only surviving code, avoiding map and allocator churn. */
 #include "nj_jit_internal.h"
 #include "nj2me/nj_jit.h"
 
 #if NJ_ENABLE_JIT
 #define JIT_CODE_SETS (NJ_JIT_CACHE_ENTRIES / NJ_JIT_CACHE_WAYS)
 #define JIT_ARENA_CELLS (NJ_JIT_METHOD_ARENA_BYTES / 2u)
+/* Count probe/hint opportunities, not wall time. Frame refreshes also advance
+ * this counter, so filtering a whole method cannot prevent future retries. */
+#define JIT_ALLOCATION_BACKOFF 1024u
+#define JIT_METHOD_BUCKETS 256u
 
 /* Cell states, in one 16-bit word per bytecode offset:
  *   0x0000..0x3FFF  heat counter (0 = never probed)
@@ -54,6 +58,10 @@ struct nj_jit {
     nj_vm *vm;
     nj_jit_stats stats;
     nj_jit_mode mode;
+    nj_u4 allocation_backoff;
+    /* Conservative per-method PC filters used only under allocation pressure.
+     * Colliding methods/PCs admit extra probes; they must never hide live code. */
+    nj_u4 code_methods[JIT_METHOD_BUCKETS];
 #if NJ_JIT_STATS
     struct {
 #define JIT_U32(name) nj_u4 name;
@@ -66,6 +74,8 @@ struct nj_jit {
     nj_jit_method methods[NJ_JIT_METHOD_ENTRIES];
     nj_u2 cells[JIT_ARENA_CELLS];
     nj_u1 code_next[JIT_CODE_SETS];
+    /* Refusals must survive map recycling and tickets without a map cell. */
+    nj_u1 code_refused[NJ_JIT_CACHE_ENTRIES];
     /* Hot-path cache: consecutive probes almost always stay in one method, so
      * the map lookup collapses to a pointer compare. Invalidated whenever the
      * arena moves a method's cells. */
@@ -208,6 +218,29 @@ static nj_u4 jit_hash(const nj_method *m, nj_u4 pc)
     return (nj_u4)(((uintptr_t)m >> 3) ^ (pc * 2654435761u));
 }
 
+static unsigned jit_method_bucket(const nj_method *m)
+{
+    uintptr_t h = (uintptr_t)m >> 3;
+    h ^= h >> 8;
+    h ^= h >> 16;
+    return (unsigned)h & (JIT_METHOD_BUCKETS - 1u);
+}
+
+/* Rebuild the affected bucket before removal; clearing a bit directly could
+ * hide another entry with the same method hash or low PC bits. */
+static void jit_method_remove(struct nj_jit *jit, const nj_jit_entry *remove)
+{
+    unsigned bucket = jit_method_bucket(remove->method), i;
+    nj_u4 mask = 0;
+    for (i = 0; i < NJ_JIT_CACHE_ENTRIES; ++i) {
+        const nj_jit_entry *e = &jit->entries[i];
+        if (e != remove && e->code && !jit->code_refused[i] &&
+            jit_method_bucket(e->method) == bucket)
+            mask |= (nj_u4)1u << (e->pc & 31u);
+    }
+    jit->code_methods[bucket] = mask;
+}
+
 static void jit_map_use(struct nj_jit *jit, nj_jit_method *slot)
 {
     slot->usage = ++jit->usage_tick;
@@ -348,8 +381,8 @@ static int jit_guard(struct nj_jit *jit, const nj_jit_block *b,
 }
 
 /* Find an already compiled block for this site. A probe map can be evicted by
- * the arena LRU policy while its code survives; re-analyzing the site then
- * lands here and reuses the code instead of emitting a duplicate. */
+ * the arena LRU policy while its code survives; reconnect it directly instead
+ * of reheating, re-analyzing or emitting a duplicate. */
 static nj_jit_entry *jit_entry_find(struct nj_jit *jit, const nj_method *m,
                                     nj_u4 pc, nj_u4 *slot_out)
 {
@@ -407,6 +440,7 @@ static nj_jit_entry *jit_compile(struct nj_jit *jit, nj_u2 *cell,
     e = &jit->entries[set * NJ_JIT_CACHE_WAYS + way];
     slot = (nj_u4)(e - jit->entries);
     if (e->code) {
+        jit_method_remove(jit, e);
         jit_map_forget(jit, e->method, e->pc);
         port->code_free(port->ud, e->code, e->block.size);
         jit->stats.code_bytes -= e->block.size;
@@ -418,6 +452,7 @@ static nj_jit_entry *jit_compile(struct nj_jit *jit, nj_u2 *cell,
     if (!code || ((uintptr_t)code & 3u) != 0u) {
         if (code) port->code_free(port->ud, code, block.size);
         if (cell) *cell = JIT_CELL_REFUSED;
+        jit->allocation_backoff = JIT_ALLOCATION_BACKOFF;
         jit->stats.memory_failures++;
         jit->stats.declined_blocks++;
         return NULL;
@@ -430,6 +465,8 @@ static nj_jit_entry *jit_compile(struct nj_jit *jit, nj_u2 *cell,
         jit->stats.declined_blocks++;
         return NULL;
     }
+    jit->code_refused[slot] = 0;
+    jit->code_methods[jit_method_bucket(m)] |= (nj_u4)1u << (pc & 31u);
     e->method = m;
     e->pc = pc;
     e->block = block;
@@ -442,6 +479,23 @@ static nj_jit_entry *jit_compile(struct nj_jit *jit, nj_u2 *cell,
     return e;
 }
 #endif
+
+nj_u4 nj_jit_method_probe_mask(nj_vm *vm, const nj_method *m)
+{
+#if NJ_JIT_HOST_SUPPORTED
+    struct nj_jit *jit = vm ? vm->jit : NULL;
+    if (!jit || vm->engine != &jit->base || !m ||
+        m->code_len > JIT_ARENA_CELLS) return 0;
+    if (jit->mode == NJ_JIT_MODE_EXECUTE && jit->allocation_backoff) {
+        --jit->allocation_backoff;
+        return jit->code_methods[jit_method_bucket(m)];
+    }
+    return 0xffffffffu;
+#else
+    (void)vm; (void)m;
+    return 0;
+#endif
+}
 
 int nj_jit_probe(nj_vm *vm, const nj_frame *fr, nj_u4 pc, nj_value *sp,
                  nj_u4 budget, nj_jit_ticket *ticket)
@@ -460,13 +514,43 @@ int nj_jit_probe(nj_vm *vm, const nj_frame *fr, nj_u4 pc, nj_value *sp,
     ticket->entry = NULL;
     ticket->cell = NULL;
     m = fr->m;
+    if (jit->mode == NJ_JIT_MODE_EXECUTE && jit->allocation_backoff) {
+        nj_u4 slot;
+        nj_jit_entry *e;
+        --jit->allocation_backoff;
+        e = jit_entry_find(jit, m, pc, &slot);
+        if (!e) return 0;
+        if (jit->code_refused[slot]) {
+            JIT_DETAIL(jit, negative_hits);
+            return 0;
+        }
+        JIT_DETAIL(jit, code_hits);
+        if (!jit_guard(jit, &e->block, fr, sp, budget)) return 0;
+        ticket->entry = e;
+        return 1;
+    }
     map = jit_map_for(jit, m);
     if (!map) return 0;
     cell = &map[pc];
     v = *cell;
+    /* Map eviction need not discard the heat of already executable code. */
+    if (v == 0u) {
+        nj_u4 slot;
+        nj_jit_entry *e = jit_entry_find(jit, m, pc, &slot);
+        if (e) {
+            v = (nj_u2)(JIT_CELL_COMPILED | slot);
+            *cell = v;
+            jit->stats.recompiled_blocks++;
+        }
+    }
     if ((v & JIT_CELL_COMPILED) != 0u) {
         nj_jit_entry *e = &jit->entries[v & JIT_CELL_SLOT_MASK];
         if (e->code && e->method == m && e->pc == pc) {
+            if (jit->code_refused[v & JIT_CELL_SLOT_MASK]) {
+                *cell = JIT_CELL_REFUSED;
+                JIT_DETAIL(jit, negative_hits);
+                return 0;
+            }
             JIT_DETAIL(jit, code_hits);
             if (jit->mode == NJ_JIT_MODE_PROBE_ONLY) {
                 JIT_DETAIL(jit, probe_only_skips);
@@ -598,7 +682,11 @@ nj_u4 nj_jit_execute(nj_vm *vm, nj_frame *fr, nj_u4 *pc, nj_value **sp,
         JIT_COUNT(jit, bytecodes, completed);
         /* The same guard failed before the block completed a single bytecode:
          * pinning the site to the interpreter avoids compile/fault churn. */
-        if (completed == 0u && ticket->cell) *ticket->cell = JIT_CELL_REFUSED;
+        if (completed == 0u) {
+            jit->code_refused[e - jit->entries] = 1;
+            jit_method_remove(jit, e);
+            if (ticket->cell) *ticket->cell = JIT_CELL_REFUSED;
+        }
         return completed;
     }
     {
