@@ -764,7 +764,12 @@ enum {
     MR_MODE_COLOR_SMOOTH_PUT,
     MR_MODE_COLOR_SMOOTH_HALF,
     MR_MODE_CONST_PUT,
-    MR_MODE_CONST_HALF
+    MR_MODE_CONST_HALF,
+    /* Unmodulated texels copied straight to an opaque destination: the
+     * texture is neither shaded nor environment-mapped, so the generic
+     * loop only does a palette lookup and a store per pixel, with all the
+     * flag tests on the way past.  Heaviest shape in the Mascot titles. */
+    MR_MODE_TEX_RAW_PUT
 #endif
 };
 
@@ -895,6 +900,32 @@ MR_DEFINE_CONST_SPAN(mr_span_const_put, 0)
 MR_DEFINE_CONST_SPAN(mr_span_const_half, 1)
 #endif
 
+#include <stdio.h>
+#include <stdlib.h>
+
+/*
+ * Copy a run of unmodulated texels into an ARGB8888 row under 1:1 mapping:
+ * exactly what the generic tail does when the span is textured, unshaded, not
+ * environment-mapped, not toon-shaded, blend is REPLACE and the destination is
+ * ARGB8888 - minus the per-pixel flag tests.
+ */
+static void mr_span_tex_raw4(nj_u1 *pp, nj_s4 n, nj_s4 uu, nj_s4 vv,
+                             nj_s4 du, nj_s4 dv, const nj_u1 *raster,
+                             const nj_u1 *pal, nj_s4 wbit, nj_s4 mask)
+{
+    while (n-- > 0) {
+        nj_s4 ti = (nj_s4)raster[
+            (nj_s4)((((nj_u4)(vv >> MR_FP) << wbit)
+                     | (nj_u4)(uu >> MR_FP)) & (nj_u4)mask)];
+        nj_u4 pix = mr_pal_get(pal, ti & 0xFF);
+
+        memcpy(pp, &pix, sizeof pix);
+        pp += 4;
+        uu += du;
+        vv += dv;
+    }
+}
+
 static void mr_fill_segment(const mr_state *st,
                             nj_s4 clip_x1, nj_s4 clip_x2,
                             nj_s4 y_start, nj_s4 y_end,
@@ -947,6 +978,10 @@ static void mr_fill_segment(const mr_state *st,
     if (!toon_on && env_smooth && has_tex && tex_shaded &&
         blend == NJ_MR_BLEND_REPLACE) {
         mode = smooth ? MR_MODE_TEX_ENV_SMOOTH_PUT : MR_MODE_TEX_ENV_FLAT_PUT;
+    } else if (!toon_on && !env_smooth && has_tex && !tex_shaded && !smooth
+               && blend == NJ_MR_BLEND_REPLACE && key_idx == 256
+               && fmt == NJ_PIXFMT_ARGB8888) {
+        mode = MR_MODE_TEX_RAW_PUT;
     } else if (!toon_on && !env_smooth) {
         if (has_tex && tex_shaded) {
             if (smooth) {
@@ -1089,6 +1124,10 @@ static void mr_fill_segment(const mr_state *st,
             case MR_MODE_CONST_HALF:
                 mr_span_const_half(pp, xl, xr, mr_flat_color(color, flat_shade),
                                    blend, fmt, bpp);
+                break;
+            case MR_MODE_TEX_RAW_PUT:
+                mr_span_tex_raw4(pp, xr - xl, uu, vv, du, dv,
+                                 t_raster, t_palette, t_wbit, t_mask);
                 break;
 #endif
             default:

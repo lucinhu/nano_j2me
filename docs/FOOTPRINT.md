@@ -1008,3 +1008,17 @@ this repository ships), compiled from the parent tree and the new tree:
 128 bytes more text, no data, no bss, no new fields: the change widens one
 condition so that `NJ_ROP_SET` blits - which ignore source alpha - reuse the
 row converter that painted frames already used.
+
+## Copying unshaded texels costs one span mode (round 64, 2026-10-24)
+
+Matched build flags (`-O3 -DNDEBUG -std=c99 -fPIC`), from the parent tree and
+the new tree:
+
+| object | `.text` |
+| --- | --- |
+| `nj_mascot_raster.c.o` parent `e249998` | 28,003 B |
+| `nj_mascot_raster.c.o` with the raw span | 28,195 B |
+
+192 bytes more text, no data, no bss, no new rasteriser state: the mode is
+selected from flags the state already carries, and the helper keeps its
+counters in registers.

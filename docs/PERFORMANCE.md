@@ -2911,3 +2911,36 @@ The saving is the alpha bookkeeping the flush no longer does - one screen of
 pixels per frame at the measured conversion rate.
 
 Cost: 128 bytes of object text, no data or bss, no RAM.
+
+### The texels a Mascot title copies unmodified (round 64, 2026-10-24)
+
+`gprof` on `浴火银河_3621` (4,000 paced frames) leaves the Mascot span filler
+at 24.3% of CPU.  Temporary counters around the span dispatch show what it is
+filling: of 3.75M spans, 3.58M (125.6M pixels) fall through to the generic
+per-pixel tail, and every one of them has the same shape - textured,
+unshaded (no `NJ_MR_SHADED`), flat, no environment map, no toon shading, no
+colour key, blend REPLACE, ARGB8888 destination: 3.44M spans, 119.4M pixels,
+35 pixels per span on average.
+
+The reason is in the mode selection: the textured modes were gated on
+`tex_shaded`, because that is the flag that says "modulate the texel by the
+light".  Unshaded spans are a copy - a palette lookup and a store per pixel -
+yet they ran the generic loop, which tests toon, environment, colour key and
+blend per pixel.
+
+`MR_MODE_TEX_RAW_PUT` adds the missing case: `mr_span_tex_raw4()` samples the
+same texel the generic tail samples (same raster index arithmetic) and writes
+the palette value straight to an ARGB8888 row.  Everything else - shade,
+environment map, toon, colour key, other blends, other formats - still takes
+the generic path, so the mode cannot change pixels outside its condition.
+
+Controlled bench (`.local-tools/debug-runs/texraw-round64-20261024/bench.c`,
+a 20x10 grid of 12-pixel triangles so the spans are as short as the title's,
+200 triangles per iteration, six interleaved runs): 5.681 ms -> 4.145 ms per
+200 iterations (**-27.0%**), and the framebuffer checksum is identical in both
+builds (`ed4fa735` at 50 iterations).
+
+Real title, 3,000 paced frames, three interleaved rounds of user CPU:
+min 0.7543 s -> 0.6927 s, median 0.7739 s -> 0.7020 s (**-8.2% / -9.3%**).
+
+Cost: 192 bytes of object text, no data or bss, no RAM.
