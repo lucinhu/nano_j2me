@@ -21,6 +21,8 @@
  */
 #include "nj_midp.h"
 
+#include <math.h>
+
 #define NJFN(name) NJ_NATIVE_FN(name)
 
 #define NJ_C_VKEYBOARD "com/nokia/mid/ui/VirtualKeyboard"
@@ -291,6 +293,28 @@ NJFN(nokia_snd_concurrent)
 }
 
 /*
+ * convertFreqToNote(): the Nokia helper that maps a tone frequency onto a MIDI
+ * note number, n = round(12 * log2(f / 8.176)) clamped at zero.  8.176 Hz is
+ * MIDI note 0, so the constant 12 / ln 2 is 17.31234; frequencies at or below
+ * zero have no note and answer 0, matching the reference implementation's
+ * Math.max(..., 0).  Real titles use it to turn an entered frequency into the
+ * tone the player then plays.
+ */
+NJFN(nokia_snd_freq_to_note)
+{
+    nj_s4 freq = NJ_ARG_INT(args, 0);
+    double n;
+
+    ret->i = 0;
+    if (freq <= 0) {
+        return NJ_OK;
+    }
+    n = log((double)freq / 8.176) * 17.31234;
+    ret->i = (nj_s4)(n > 0.0 ? (nj_s4)(n + 0.5) : 0);
+    return NJ_OK;
+}
+
+/*
  * getSupportedFormats(): the Nokia format constants init() accepts.
  * FORMAT_TONE (1) and FORMAT_WAV (5) are both real here - the port has a tone
  * path and a PCM path - so both are advertised.
@@ -359,6 +383,7 @@ static const nj_builtin_method sound_methods[] = {
     M("getGain",      "()I",   0),
     M("getConcurrentSoundCount", "(I)I", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("getSupportedFormats", "()[I", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("convertFreqToNote", "(I)I", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     /* Only one game in the corpus calls this, and it implements the
      * listener itself: the interface has to exist or that class cannot
      * even be loaded. */
@@ -721,6 +746,7 @@ const nj_native_entry nj_lib_nokia_table[] = {
     { NJ_C_SOUND, "getGain",  "()I",  nokia_snd_getGain },
     { NJ_C_SOUND, "getConcurrentSoundCount", "(I)I", nokia_snd_concurrent },
     { NJ_C_SOUND, "getSupportedFormats",     "()[I", nokia_snd_formats },
+    { NJ_C_SOUND, "convertFreqToNote",       "(I)I", nokia_snd_freq_to_note },
     { NJ_C_SOUND, "release", "()V",   nokia_snd_stop },
     { NJ_C_FSDETAIL, "getUrl",  "()Ljava/lang/String;", nokia_fsd_getUrl },
     { NJ_C_FSDETAIL, "getName", "()Ljava/lang/String;", nokia_fsd_getName },

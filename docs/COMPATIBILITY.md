@@ -3822,3 +3822,19 @@ the last element of rows and checks that one element past the end throws
 `ArrayIndexOutOfBoundsException`, returning 1 only if all of that holds.
 `tests/test_arrays.c` loads the checked-in class bytes and asserts the result;
 the fixture needs no Java toolchain at build time and no MIDP classes.
+
+### Nokia's frequency helper, and the reference emulator's own bug (round 62, 2026-10-25)
+
+`com.nokia.mid.sound.Sound.convertFreqToNote(int)` was missing.  The reference
+implementation (`.local-tools/freej2me-plus/src/com/nokia/mid/sound/Sound.java`)
+computes `round(log(f / 8.176) * 12 / ln 2)` clamped at zero, i.e. MIDI note 0
+is 8.176 Hz; ours now does the same with `log()` from the C library, and
+`tests/test_nokia_sound.c` pins it: 440 Hz is note 69, 880 Hz is 81, 8.176 kHz
+is 120, and zero or negative frequencies clamp to 0.
+
+While reading that file: the reference declares **`SOUND_PLAYING = 0`**, which
+contradicts the Nokia UI API (SOUND_STOPPED 0, SOUND_PLAYING 1, SOUND_UNPLAYABLE
+2), so a frame comparison against it can disagree with a MIDlet's own state
+checks.  This joins the two other known reference defects recorded here (its M3G
+`World.find` NPE on 毁灭战士3_10598, and the missing JSR-184 animation
+interpolation) - it is one opinion, not an oracle.
