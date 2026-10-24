@@ -2732,3 +2732,36 @@ remain the interpreter (a different workstream) and the 3D rasteriser, which
 is why the rounds before this one measured their wins on the rasteriser and
 blitter instead of on whole titles.
 
+
+## Environment-mapped spans get their own loops (round 16 of the fourth goal, 2026-10-24)
+
+A 4,000-frame sweep of every title that references a 3D API found that the
+heaviest real load is not an M3G title at all: `浴火银河_3621` drew 1,045,744
+triangles through the Mascot/Micro3D rasteriser, and `gprof` on it put
+`mr_fill_segment` at 31.2% of CPU, ahead of `nj_region_draw` (20.4%) and
+`nj_interp_run` (11.5%).
+
+A span census inside `mr_fill_segment` showed why: 879,554 spans took the
+generic per-pixel loop while only 91,774 (tex/flat) and 56,802 (tex/smooth)
+used a specialised one.  The generic spans were almost all identical in
+shape — `tex=1 env=1 toon=0 key=none blend=REPLACE` — i.e. environment-mapped
+textured spans, a combination the span table had no rows for.  Within that
+class, 73% interpolate the texture level (`MR_MODE_TEX_ENV_SMOOTH_PUT`) and
+27% shade flat (`MR_MODE_TEX_ENV_FLAT_PUT`).
+
+Both now have dedicated loops copied line for line from the generic body
+(`mr_span_tex_env_smooth_put`, `mr_span_tex_env_flat_put`), selected once per
+span when `env_smooth && has_tex && tex_shaded && !toon && blend==REPLACE`.
+`test_mascot_raster`'s 71 checks — including the `NJ_MR_ENVMAP` cases and the
+randomised differential against the generic path — pass unchanged, so the
+pixels are identical by construction and by test.
+
+What could not be shown: a title-level CPU win.  Six interleaved unpaced runs
+give parent min 0.723 s / median 0.781 s against new min 0.734 s / median
+0.824 s; four paced runs give min 0.387 → 0.334 s and median 0.440 → 0.427 s.
+The spread between runs of the same binary is ±15%, larger than any effect
+this change could have (the rasteriser is ~0.3 ms of a ~6 ms frame budget
+here).  The honest statement is therefore: the branch tree is gone for the
+dominant span class, the pixels are unchanged, and a controlled raster
+benchmark is needed before any speed figure is quoted.  That benchmark is the
+next step, not a claim in this section.

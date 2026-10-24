@@ -970,3 +970,13 @@ RAM: a `Player` gains one reference field (`pTimeBase`, 8 B) for its master
 clock, and a `StringItem` loses one (`siCmdListener`, 8 B) because the
 dispatcher never read it - so a title that owns both is exactly where it
 started. No VM field was added in this round.
+
+## Environment-mapped spans cost code, not memory (round 16 of the fourth goal, 2026-10-24)
+
+| Build | `nj_mascot_raster.c.o` `.text` | executable `.text` | `.data` | `.bss` |
+| --- | --- | --- | --- | --- |
+| parent `a3e1499` | 26,732 B | 1,225,962 B | 16 B | 6,688 B |
+| with env spans | 28,460 B | 1,227,690 B | 16 B | 6,688 B |
+
+Two more specialised span loops, selected per span; no new rasteriser state,
+no static buffers, no change to `mr_state`, so the RAM picture is unchanged.
