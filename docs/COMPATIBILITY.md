@@ -3470,3 +3470,23 @@ The practical conclusion: the remaining work is behavioural fidelity rather
 than missing members, which is why the last rounds spent their time on
 `getKeyName`'s exception, the Canvas static declarations, the thread reap and
 the two pixel-count guards instead of adding API.
+
+## What is left in the exception histogram (round 40, 2026-10-24)
+
+The exception histogram is how rounds 33-37 found their bugs: it lists every
+exception the corpus throws, grouped by message and by the frame the runtime
+was in.  After the thread reap (`c4e6bfc`), the Canvas statics (`a278807`), the
+key-name placeholder (`ff4d849`) and the two pixel-count guards (`2a0a815`,
+`6c326a9`), the four largest entries are:
+
+| count | site | why the runtime is right |
+| --- | --- | --- |
+| 1,992 | `Image.createImage(int,int)`: "image dimensions must be positive" | 生化危机之恶化_8448 probes `createImage(0,0)` inside a `try` - the specification says this throws `IllegalArgumentException`. |
+| 825 | `Canvas.getKeyName(int)`: "unknown key code" | fixed in round 35: a title asks about its own vendor key codes, so the runtime now answers `"-"` like the reference; the corpus no longer produces this line. |
+| 21 | `Manager.createPlayer(InputStream,String)`: unsupported content type | the specification requires `IllegalArgumentException` for a type the platform does not support, and these titles try several formats on purpose. |
+| 3 | `VolumeControl.setLevel(int)`: "level out of range" | the specification requires `IllegalArgumentException` outside 0-100. |
+
+Everything below 3 was title-side arithmetic, missing resources, or the
+`NullPointerException`s a title raises when it draws a sprite it never
+assigned.  So the histogram thread is now exhausted: what remains is
+specification-mandated behaviour that the titles expect to catch.
