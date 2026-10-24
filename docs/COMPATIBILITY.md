@@ -3512,3 +3512,23 @@ is the known broken package), and the round 39 section records how API
 coverage is verified per family.  Nothing here claims a pixel-level
 certificate against a reference device: the pixel-diff work in the earlier
 rounds covers specific spans and blits, not whole frames.
+
+## The last open exception lead, closed (round 44, 2026-10-24)
+
+Round 40 left one lead open: the 21 `IllegalArgumentException`s raised by
+`Manager.createPlayer(InputStream,String)`.  Pulling the untruncated message
+out of the corpus logs shows all 21 are the same string:
+
+    stream is null
+
+So the titles are calling `createPlayer((InputStream)null, type)` on purpose -
+five of them pass a null stream while probing for audio - and JSR-135 requires
+exactly this exception for a null stream.  There is no content-type alias gap
+to fix: the throw is specification-mandated and the titles catch it.
+
+That closes the exception-histogram thread as a source of defects.  Every
+remaining entry is either specification-mandated throwing (`createImage` with
+invalid dimensions, `getKeyName` before round 35, null `createPlayer` streams,
+`VolumeControl.setLevel` out of range) or a title bug the runtime faithfully
+reports.  Defects from here on will have to come from behaviour comparison
+with the reference implementation, not from exception counts.
