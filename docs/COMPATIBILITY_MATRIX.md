@@ -13,7 +13,7 @@ with the same recipe, so neighbouring rows are comparable:
 Corpus provenance and size are in `docs/CORPUS.md`; regenerate this table
 with `tools/make_compat_matrix.py <rows dir>` after a new sweep.
 
-Built from `107fabd`, 2026-10-25.
+Built from `b498101`, 2026-10-25.
 
 | verdict | titles |
 | --- | --- |
@@ -100,7 +100,7 @@ Built from `107fabd`, 2026-10-25.
 | 中华麻将馆－极限胡牌版_244.jar | 310 | 中华麻将馆-极限胡牌版 | - | 18 | 16 | 600 | 308569765 | - | 运行正常 |  |
 | 中国象棋_10893.jar | 293 | 中国象棋三国经典版 | - | 9 | 16 | 600 | 73495 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | 中国象棋之水墨珍藏版_871.jar | 375 | 中国象棋之水墨珍藏版 | - | 12 | 16 | 600 | 534667883 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
-| 乱世Q三国_1649.jar | 977 | 乱世Q三国 | - | 232 | 16 | 0 | 128 | javax/microedition/rms/RecordSto | 未呈现画面 | runs and exits on its own; never installs a  |
+| 乱世Q三国_1649.jar | 977 | 乱世Q三国 | - | 232 | 16 | 0 | 128 | javax/microedition/rms/RecordSto | 未呈现画面 | installed no Displayable |
 | 乱舞三国之群英会_2972.jar | 817 | 乱舞三国之群英会 | - | 35 | 16 | 600 | 482917 | java/lang/NullPointerException | 运行正常 |  |
 | 五子棋_10940.jar | 42 | XOXO | - | 24 | 16 | 600 | 4341300 | - | 运行正常 |  |
 | 仙剑奇侠传(2008)_12406.jar | 695 | pal | nokia-ui | 3 | 16 | 600 | 209727 | - | 运行正常 |  |
@@ -246,7 +246,7 @@ Built from `107fabd`, 2026-10-25.
 | 星辰变S60V5完整版_3364.jar | 926 | 星辰变(盛大正版) | nokia-ui | 40 | 16 | 600 | 250348802 | java/io/IOException | 运行正常 |  |
 | 是男人就下100层_1882.jar | 636 | 是男人就下100层 | nokia-ui | 75 | 16 | 600 | 6964968 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | 暗黑启示录2－黑暗王朝_888.jar | 1268 | 暗黑启示录2黑暗王朝 | - | 214 | 16 | 600 | 127252238 | - | 运行正常 |  |
-| 有女倾城破解版_11525.jar | 258 | 有女倾城 | - | 9 | 16 | 0 | 53901 | - | 未呈现画面 | runs and exits on its own; never installs a  |
+| 有女倾城破解版_11525.jar | 258 | 有女倾城 | - | 9 | 16 | 0 | 53901 | - | 未呈现画面 | exited itself (notifyDestroyed) before prese |
 | 机甲风暴_7888.jar | 673 | 机甲风暴 | nokia-ui | 41 | 16 | 600 | 95517 | - | 运行正常 |  |
 | 杀戮机器-纳粹僵尸_3610.jar | 995 | 杀戮机器-纳粹僵尸 | m3g | 37 | 16 | 600 | 741606 | java/lang/NumberFormatException | 运行正常 |  |
 | 杀鬼子-敌后武工队_2185.jar | 515 | 杀鬼子-敌后武工队 | nokia-ui | 37 | 16 | 600 | 147638505 | java/io/IOException | 运行正常 |  |
@@ -420,7 +420,7 @@ Built from `107fabd`, 2026-10-25.
 | 魔塔_8052.jar | 86 | 魔塔 | nokia-ui | 21 | 16 | 600 | 69919 | - | 运行正常 |  |
 | 魔塔－英雄联盟_582.jar | 1451 | 魔塔-英雄联盟 | nokia-ui | 63 | 16 | 600 | 7265092 | - | 运行正常 |  |
 | 魔法少女_10523.jar | 204 | 魔法少女 | - | 5 | 16 | 600 | 37313 | - | 运行正常 |  |
-| 鲁宾逊漂流记汉化BT版_4677.jar | 279 | - | - | 0 | 16 | 0 | 0 | - | 非可用包 |  |
+| 鲁宾逊漂流记汉化BT版_4677.jar | 279 | - | - | 0 | 16 | 0 | 0 | - | 非可用包 | not a usable MIDlet suite (bad JAR or no MID |
 | 鲁宾逊漂流记汉化版_702.jar | 367 | 鲁宾逊漂流记-海难生存 | - | 34 | 16 | 600 | 4385881 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 麻将三国_5157.jar | 732 | MJSG | nokia-ui | 38 | 16 | 600 | 11032 | - | 运行正常 |  |
 | 麻将无双之乱世群英_10298.jar | 173 | 麻将无双之乱世群英 | nokia-ui | 2 | 16 | 600 | 609881916 | javax/microedition/rms/RecordSto | 运行正常 |  |

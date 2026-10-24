@@ -64,6 +64,12 @@ def one(path):
             row.update({"rc": 124, "heap": heap, "verdict": "timeout"})
             break
         stats = dict(re.findall(r"(\w+)=(\d+)", (re.search(r"stats:.*", err) or [""])[0])) if "stats:" in err else {}
+        if "the MIDlet called notifyDestroyed()" in err:
+            row["note"] = "exited itself (notifyDestroyed) before presenting a frame"
+        elif "the MIDlet installed no Displayable" in err:
+            row["note"] = "installed no Displayable"
+        elif "not a usable MIDlet suite" in err:
+            row["note"] = "not a usable MIDlet suite (bad JAR or no MIDlet-1)"
         thrown = re.findall(r"thrown:\s*([\w/$]+)", err)
         uncaught = len(re.findall(r"uncaught:\s*java/lang/(\w+)", err))
         row.update({"rc": rc, "heap": heap,
