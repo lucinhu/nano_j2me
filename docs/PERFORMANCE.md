@@ -3027,11 +3027,20 @@ The rendering share has come down from 52% (blit 27.9 + spans 24.3) to 37%
 
 - `nj_interp_run` at 16% is the game's own bytecode; there is no single
   interpreter hot spot left in it without instruction-level work.
-- `mid_rescale_chan` is **audio**: 1,194 calls through the MIDI resampler cost
-  0.07 s, i.e. 59 us per call and 16% of this title's CPU.  That is a
-  different subsystem from everything optimised so far, it has an exact PCM
-  contract (`tests/test_midi.c` pins the samples), and the next round should
-  start there rather than in the blitter.
+- About 16% sits in **audio** (`mid_*`), but the per-symbol attribution is
+  wrong and it is worth saying so: gprof credits `mid_rescale_chan` with
+  0.07 s over 1,194 calls, i.e. 59 us per call, while the function itself is a
+  loop of a dozen multiplies over `NJ_MIDI_VOICES` -- impossible.  The call
+  graph explains the confusion: the same node is credited with 2,766,692
+  calls to `mid_sample_at` and 775,600 to `mid_set_step`, so the symbol is
+  folded with the inlined mixing loop (`-O2` merges small static functions
+  that share code).  The honest reading is "the MIDI pull path costs about
+  10-16% of this title's CPU, at ~2.8M sampled voice-ticks per 3,000 frames",
+  and the next round must count and time that path directly (samples pulled,
+  loop iterations, per-voice work) instead of trusting the flat profile
+  there.  It stays the most promising target because it has an exact PCM
+  contract -- `tests/test_midi.c` pins the samples -- so a faster
+  implementation can be proved byte-identical.
 
 The name-based field lookups remain around 7% (4.7 + 2.3); round 20 measured
 a cache for them and it lost to the linear scan, so they stay as they are.
