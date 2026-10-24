@@ -3562,3 +3562,22 @@ reference throw `java.util.zip.ZipException: invalid CEN header (bad entry
 name or comment)` while our loader accepts the archive and runs the game for
 3.7 billion bytecodes - a real tolerance difference in JAR parsing, not a
 rendering one.
+
+### Three more same-scene comparisons (round 47, 2026-10-24)
+
+Using the pipeline above, same frame index (300) for each title, mean absolute
+error against the reference emulator's screenshot (the later two sampled every
+other pixel and channel to keep the comparison quick):
+
+| title | MAE / 255 |
+| --- | --- |
+| 三国杀单机战功修改版_4143 | 6.96 (every pixel) |
+| 超级马里奥_10283 | 4.99 (every 2nd pixel) |
+| 拳皇98终极之战_7534 | 1.75 (every 2nd pixel) |
+
+All three are the same scene on both runtimes and all three are close, which
+is the useful part: the differences are per-pixel (font hinting, animation
+phase, dithering) rather than structural - a wrong sprite position or a
+missing layer would put the error an order of magnitude higher.  It is still
+not a frame-locked comparison, so this bounds agreement, it does not prove
+identity.
