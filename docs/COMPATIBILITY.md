@@ -3581,3 +3581,43 @@ phase, dithering) rather than structural - a wrong sprite position or a
 missing layer would put the error an order of magnitude higher.  It is still
 not a frame-locked comparison, so this bounds agreement, it does not prove
 identity.
+
+## Where the compatibility objective stands (round 48, 2026-10-24)
+
+The goal behind rounds 33-48 was "complete the missing J2ME/JSR API, find and
+fix real defects with evidence from real games and trusted references, keep
+RAM/ROM neutral, run the regressions and document it".  State at the end:
+
+**Proven and pushed**
+
+- API surface: 0 missing members in CLDC 1.1 / MIDP 2.0 (982 members,
+  `tools/api_audit.py`), JSR-184 (reference-implementation diff) and Nokia
+  `DirectGraphics` (hand diff).  Deliberate capability gaps (JSR-75/82) are
+  reported as absent classes, which is how a MIDlet detects them.
+- Defects found with evidence and fixed: the thread-slot leak (`c4e6bfc`,
+  116 -> 0 exceptions and 214k -> 3.72G bytecodes on one title), the three
+  Canvas methods missing their `static` flag (`a278807`), the M3G
+  spot-light cone defaults (`822bb80`), `KeyframeSequence.getSample`
+  (`7da27de`), the two 32-bit pixel-count overflows (`2a0a815`, `6c326a9`),
+  `getKeyName` for unknown codes (`ff4d849`) and
+  `HttpConnection.setRequestProperty` (`a195af6`).
+- Regressions: 105/105 tests, `BENCH sum=-136042548 s=5` and 70,514,376
+  bytecodes unchanged, 27 desktop-identical digests, no writable static data,
+  corpus sample 78/79 complete (the one failure is a broken package), and
+  four real titles pinned by the pixel-diff tests added along the way.
+- Reference comparison pipeline: documented and used on three titles
+  (MAE 1.75-6.96/255 on the same scene).
+
+**Not done, and not claimed**
+
+- No frame-locked pixel comparison (the two runtimes advance animations on
+  their own clocks, so only same-scene comparisons are possible without a
+  fixed random seed and a shared clock).
+- No SDL2, real-device, audio-listening or long-soak testing in this branch.
+- JSR-75 (file system) and JSR-82 (Bluetooth) remain capability gaps by
+  design; JSR-256 sensors compile but have no hardware, and no corpus title
+  uses them.
+
+That is the honest boundary: the compatibility work is evidence-backed at the
+level of API, exceptions, corpus runs and same-scene pixels, and unproven at
+the level of frame identity and hardware behaviour.
