@@ -3045,51 +3045,6 @@ The rendering share has come down from 52% (blit 27.9 + spans 24.3) to 37%
 The name-based field lookups remain around 7% (4.7 + 2.3); round 20 measured
 a cache for them and it lost to the linear scan, so they stay as they are.
 
-## The 64-bit decay divide that was not worth keeping (round 27, 2026-10-24)
-
-The envelope recomputes a struck note's amplitude from the decay left, as
-`amp0 * decay_left / decay_span`.  That is a 64-bit divide per sample per
-sounding voice, so the obvious change is to do it in 32 bits whenever the
-product fits (amp0 is at most 32767 and spans are a few thousand samples, so it
-almost always does), keeping the 64-bit form as a fallback for a rescaled voice.
-The audio stayed bit-identical (`test_midi` 92 checks, fixed PCM) and no RAM was
-added, but the timing did not separate from noise:
-
-| build | min user CPU | median |
-| --- | --- | --- |
-| parent (`18c4a56`) | 0.6565 s | 0.6687 s |
-| 32-bit decay divide | 0.6543 s | 0.6635 s |
-
-Four interleaved runs of `浴火银河_3621` (3000 paced frames) on a machine whose
-load average was 3-5: -0.3% at the minimum, -0.8% at the median, both inside the
-+-2% run-to-run spread.  Not kept.  The honest reading is that even a per-sample
-64-bit divide is a small share of this renderer, because only a few voices decay
-at once and the rest of the per-voice work dominates; the next MIDI attempt
-should measure first, as rounds 25-27 did.
-
-## The voice mask that was slower (round 26, 2026-10-24)
-
-The MIDI renderer walks `NJ_MIDI_VOICES` (32) voice slots on every sample and
-skips the idle ones.  With two or three notes sounding, most of those tests are
-pure overhead, so a mask of sounding voices (`vmask`, one bit per voice, walked
-with a lowest-bit-index helper) looked like an easy win.  It was not:
-
-| build | min user CPU | median |
-| --- | --- | --- |
-| parent (`bfd4441`) | 0.6368 s | 0.6499 s |
-| voice mask | 0.7309 s | 0.7316 s |
-
-Six interleaved runs of `浴火银河_3621` (3000 paced frames, fps 240, the same
-key script), taskset -c 5.  The mask version is **14.8% slower at the minimum**,
-and the audio was bit-identical throughout, so the change bought nothing and
-went back out.  The likely reason is that the four-line lowest-bit walk and the
-extra loop scope cost more than 32 cheap flag tests that the compiler already
-keeps in registers.
-
-The measurement also refines the round-25 result: the renderer's cost is in the
-per-voice sample arithmetic (envelopes, waveform, filter, pan), not in voice
-bookkeeping, so reducing the number of iterations is the wrong direction.
-
 ## How much the MIDI renderer actually costs (round 24, 2026-10-24)
 
 The flat profile could not answer this (see the previous section), so it was
@@ -3137,3 +3092,48 @@ four of the five rounds faster.  That is far less than the call count
 suggests: the tempo list of these files is short, so the removed calls were
 only a few tens of nanoseconds each, and the renderer's real cost is in the
 per-voice sample loop rather than in this bookkeeping.
+
+## The voice mask that was slower (round 26, 2026-10-24)
+
+The MIDI renderer walks `NJ_MIDI_VOICES` (32) voice slots on every sample and
+skips the idle ones.  With two or three notes sounding, most of those tests are
+pure overhead, so a mask of sounding voices (`vmask`, one bit per voice, walked
+with a lowest-bit-index helper) looked like an easy win.  It was not:
+
+| build | min user CPU | median |
+| --- | --- | --- |
+| parent (`bfd4441`) | 0.6368 s | 0.6499 s |
+| voice mask | 0.7309 s | 0.7316 s |
+
+Six interleaved runs of `浴火银河_3621` (3000 paced frames, fps 240, the same
+key script), taskset -c 5.  The mask version is **14.8% slower at the minimum**,
+and the audio was bit-identical throughout, so the change bought nothing and
+went back out.  The likely reason is that the four-line lowest-bit walk and the
+extra loop scope cost more than 32 cheap flag tests that the compiler already
+keeps in registers.
+
+The measurement also refines the round-25 result: the renderer's cost is in the
+per-voice sample arithmetic (envelopes, waveform, filter, pan), not in voice
+bookkeeping, so reducing the number of iterations is the wrong direction.
+
+## The 64-bit decay divide that was not worth keeping (round 27, 2026-10-24)
+
+The envelope recomputes a struck note's amplitude from the decay left, as
+`amp0 * decay_left / decay_span`.  That is a 64-bit divide per sample per
+sounding voice, so the obvious change is to do it in 32 bits whenever the
+product fits (amp0 is at most 32767 and spans are a few thousand samples, so it
+almost always does), keeping the 64-bit form as a fallback for a rescaled voice.
+The audio stayed bit-identical (`test_midi` 92 checks, fixed PCM) and no RAM was
+added, but the timing did not separate from noise:
+
+| build | min user CPU | median |
+| --- | --- | --- |
+| parent (`18c4a56`) | 0.6565 s | 0.6687 s |
+| 32-bit decay divide | 0.6543 s | 0.6635 s |
+
+Four interleaved runs of `浴火银河_3621` (3000 paced frames) on a machine whose
+load average was 3-5: -0.3% at the minimum, -0.8% at the median, both inside the
++-2% run-to-run spread.  Not kept.  The honest reading is that even a per-sample
+64-bit divide is a small share of this renderer, because only a few voices decay
+at once and the rest of the per-voice work dominates; the next MIDI attempt
+should measure first, as rounds 25-27 did.
