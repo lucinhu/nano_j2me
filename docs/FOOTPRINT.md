@@ -952,3 +952,21 @@ No VM field, object field or static buffer was added, so the RAM footprint of a
 running VM does not change. The code is `NJ_ENABLE_M3G`-gated like the rest of
 the library: a build without M3G does not carry it.
 
+
+## A listener field that was never read, and a clock a player never had (round 61, 2026-10-24)
+
+`Item.getItemCommandListener()`, the `StringItem` listener fix and
+`Player`'s `TimeBase` accessors:
+
+| object | before | after | delta |
+|---|---|---|---|
+| `nj_lib_lcdui.c.o` `.text` | 199,452 B | 199,589 B | +137 B |
+| `nj_lib_media.c.o` `.text` | 40,415 B | 40,929 B | +514 B |
+| `nj2me` `.text` | 2,921,165 B | 2,922,509 B | +1,344 B |
+| `.data` | 163,176 B | 163,496 B | +320 B (method-table rows) |
+| `.bss` | 6,688 B | 6,688 B | 0 |
+
+RAM: a `Player` gains one reference field (`pTimeBase`, 8 B) for its master
+clock, and a `StringItem` loses one (`siCmdListener`, 8 B) because the
+dispatcher never read it - so a title that owns both is exactly where it
+started. No VM field was added in this round.

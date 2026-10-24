@@ -91,6 +91,7 @@ static void midi_free(void *ud, void *p)
 #define NJ_C_MEXC     "javax/microedition/media/MediaException"
 #define NJ_C_CONTROL  "javax/microedition/media/Control"
 #define NJ_C_CONTROLLABLE "javax/microedition/media/Controllable"
+#define NJ_C_TIMEBASE    "javax/microedition/media/TimeBase"
 #define NJ_C_TONE     "javax/microedition/media/control/ToneControl"
 #define NJ_C_VOLUME   "javax/microedition/media/control/VolumeControl"
 #define NJ_C_MIDICTL  "javax/microedition/media/control/MIDIControl"
@@ -125,6 +126,7 @@ static void midi_free(void *ud, void *p)
 #define F_P_PUSHED   "pPushed"     /* I frames handed to the device */
 #define F_P_OPEN     "pOpen"       /* Z device open for this player */
 #define F_P_LISTEN   "pListen"     /* Ljava/util/Vector; */
+#define F_P_MASTER   "pTimeBase"   /* Ljavax/microedition/media/TimeBase; master clock or null */
 
 /*
  * A MIDI Player a PORT is playing (nj_port.midi_open).  The handle the port
@@ -2366,6 +2368,27 @@ NJFN(player_getDuration)
     return NJ_OK;
 }
 
+NJFN(player_getTimeBase)
+{
+    ret->r = r_r(vm, NJ_THIS(args), F_P_MASTER, "L" NJ_C_TIMEBASE ";");
+    return NJ_OK;
+}
+
+NJFN(player_setTimeBase)
+{
+    nj_ref tb = NJ_ARG_REF(args, 0);
+
+    /* JSR 135: a player without a master clock is legal (getTimeBase()
+     * returns null), but it refuses a null master. */
+    if (!tb) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "a player's time base must not be null");
+        return NJ_ERR;
+    }
+    w_r(vm, NJ_THIS(args), F_P_MASTER, "L" NJ_C_TIMEBASE ";", tb);
+    return NJ_OK;
+}
+
 NJFN(player_getMediaTime)
 {
     nj_ref self = NJ_THIS(args);
@@ -3148,6 +3171,7 @@ static const nj_builtin_field player_fields[] = {
     FLD(F_P_MIDI,     "[B", 0),
     FLD(F_P_MIDIK,    "Z", 0),
     FLD(F_P_PLAT,     "Z", 0),
+    FLD(F_P_MASTER,   "L" NJ_C_TIMEBASE ";", 0),
     FLD(F_P_LOOPDONE, "I", 0),
     /* MIDP state constants. */
     FLD("CLOSED",     "I", NJ_ACC_STATIC | NJ_ACC_FINAL),
@@ -3188,7 +3212,16 @@ static const nj_builtin_method player_methods[] = {
     M("getControl",  "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
       0),
     M("getControls", "()[Ljavax/microedition/media/Control;", 0),
-    M("getContentType", "()Ljava/lang/String;", 0)
+    M("getContentType", "()Ljava/lang/String;", 0),
+    M("getTimeBase", "()L" NJ_C_TIMEBASE ";", 0),
+    M("setTimeBase", "(L" NJ_C_TIMEBASE ";)V", 0)
+};
+
+/* javax.microedition.media.TimeBase is an interface with one method, and a
+ * MIDlet that keeps a master clock implements it itself.  A Player only has
+ * to accept one and hand it back. */
+static const nj_builtin_method timebase_methods[] = {
+    M("getTime", "()J", NJ_ACC_ABSTRACT)
 };
 
 static const nj_builtin_field ctl_fields[] = {
@@ -3326,6 +3359,9 @@ const nj_builtin_class nj_lib_media_classes[] = {
      * that assigns the result to a Control local resolves the class. */
     { NJ_C_CONTROL, NULL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
       NULL, 0u, NULL, 0u },
+    { NJ_C_TIMEBASE, NULL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, timebase_methods,
+      (nj_u2)(sizeof(timebase_methods) / sizeof(timebase_methods[0])) },
     { NJ_C_CONTROLLABLE, "java/lang/Object",
       NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
       NULL, 0u, controllable_methods,
@@ -3388,6 +3424,8 @@ const nj_native_entry nj_lib_media_table[] = {
       "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
       player_getControl },
     { NJ_C_PLAYER, "getContentType", "()Ljava/lang/String;", player_getContentType },
+    { NJ_C_PLAYER, "getTimeBase", "()L" NJ_C_TIMEBASE ";", player_getTimeBase },
+    { NJ_C_PLAYER, "setTimeBase", "(L" NJ_C_TIMEBASE ";)V", player_setTimeBase },
     { NJ_C_PLAYER, "getControls",
       "()[Ljavax/microedition/media/Control;", player_getControls },
 

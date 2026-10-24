@@ -5992,6 +5992,12 @@ NJFN(item_setItemCommandListener)
     return NJ_OK;
 }
 
+NJFN(item_getItemCommandListener)
+{
+    ret->r = rget(vm, NJ_THIS(args), NJ_C_ITEM, "itCmdListener", D_ICL);
+    return NJ_OK;
+}
+
 NJFN(item_setDefaultCommand)
 {
     nj_ref self = NJ_THIS(args);
@@ -6191,7 +6197,10 @@ NJFN(si_removeCommand)
 
 NJFN(si_setItemCommandListener)
 {
-    rput(vm, NJ_THIS(args), NJ_C_STRINGITEM, "siCmdListener", D_ICL,
+    /* The dispatcher (item_command_dispatch) reads Item's itCmdListener for
+     * every Item, StringItem included.  Writing a StringItem-only copy here
+     * meant a listener set on a StringItem was never called. */
+    rput(vm, NJ_THIS(args), NJ_C_ITEM, "itCmdListener", D_ICL,
          NJ_ARG_REF(args, 0));
     return NJ_OK;
 }
@@ -10686,6 +10695,7 @@ static const nj_builtin_method item_methods[] = {
     M("addCommand",     "(L" NJ_C_COMMAND ";)V", 0),
     M("removeCommand",  "(L" NJ_C_COMMAND ";)V", 0),
     M("setItemCommandListener", "(L" NJ_C_ITEMCOMMANDLISTENER ";)V", 0),
+    M("getItemCommandListener", "()L" NJ_C_ITEMCOMMANDLISTENER ";", 0),
     M("setPreferredSize", "(II)V", 0),
     M("getMinimumWidth",  "()I", 0),
     M("getMinimumHeight", "()I", 0),
@@ -10705,7 +10715,6 @@ static const nj_builtin_field stringitem_fields[] = {
     FLD("siMode", D_INT, 0),
     FLD("siFont", D_FONT, 0),
     FLD("siCmd",  D_CMD, 0),
-    FLD("siCmdListener", D_ICL, 0),
     FLD("PLAIN",     D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("HYPERLINK", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
     FLD("BUTTON",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
@@ -10722,6 +10731,7 @@ static const nj_builtin_method stringitem_methods[] = {
     M("addCommand",    "(L" NJ_C_COMMAND ";)V", 0),
     M("removeCommand", "(L" NJ_C_COMMAND ";)V", 0),
     M("setItemCommandListener", "(L" NJ_C_ITEMCOMMANDLISTENER ";)V", 0),
+    M("getItemCommandListener", "()L" NJ_C_ITEMCOMMANDLISTENER ";", 0),
     M("njText",   "()Ljava/lang/String;", 0),
     M("njHeight", "(I)I", 0)
 };
@@ -11426,6 +11436,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_ITEM, "addCommand", "(L" NJ_C_COMMAND ";)V", item_addCommand },
     { NJ_C_ITEM, "removeCommand", "(L" NJ_C_COMMAND ";)V", item_removeCommand },
     { NJ_C_ITEM, "setItemCommandListener", "(L" NJ_C_ITEMCOMMANDLISTENER ";)V", item_setItemCommandListener },
+    { NJ_C_ITEM, "getItemCommandListener", "()L" NJ_C_ITEMCOMMANDLISTENER ";", item_getItemCommandListener },
     { NJ_C_ITEM, "setPreferredSize", "(II)V", item_setPreferredSize },
     { NJ_C_ITEM, "getMinimumWidth", "()I", item_getMinimumWidth },
     { NJ_C_ITEM, "getMinimumHeight", "()I", item_getMinimumHeight },
@@ -11448,6 +11459,7 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_STRINGITEM, "addCommand", "(L" NJ_C_COMMAND ";)V", si_addCommand },
     { NJ_C_STRINGITEM, "removeCommand", "(L" NJ_C_COMMAND ";)V", si_removeCommand },
     { NJ_C_STRINGITEM, "setItemCommandListener", "(L" NJ_C_ITEMCOMMANDLISTENER ";)V", si_setItemCommandListener },
+    { NJ_C_STRINGITEM, "getItemCommandListener", "()L" NJ_C_ITEMCOMMANDLISTENER ";", item_getItemCommandListener },
     { NJ_C_STRINGITEM, "njText", "()Ljava/lang/String;", si_njText },
     { NJ_C_STRINGITEM, "njHeight", "(I)I", si_njHeight },
 
