@@ -3437,3 +3437,36 @@ round-36 assertion: the same 65536 x 65536 request must now answer
 
 Gates: `ctest` 105/105 (46.55 s), `test_lcdui` PASS, digest 27/27,
 `check_no_statics.sh` OK, `BENCH sum=-136042548 s=5`.
+
+## What the API surface looks like after the coverage rounds (round 39, 2026-10-24)
+
+Rounds 11-35 added missing members in four passes, so it is worth recording
+what "complete" means here and how it was checked, because the answer differs
+per API family:
+
+- **CLDC 1.1 / MIDP 2.0**: `tools/api_audit.py` walks the reference member
+  lists (982 members) against the binding tables - 0 missing.  The classes we
+  deliberately do not implement (JSR 75 file connections, JSR 82 Bluetooth in
+  full) are reported as "not present", which is a capability decision, not a
+  gap: a MIDlet sees the class as absent and takes its own fallback path.
+- **JSR-184 (M3G)**: `tools/m3g_api_audit.py` compares the binding tables with
+  the reference implementation's public methods - 0 missing after round 14
+  added `KeyframeSequence.getSample` and round 11 the five descriptor methods.
+  `getKeyframeTime`/`setInterpolationType` do not exist in JSR-184, which is
+  why neither we nor the reference implement them.
+- **Nokia UI**: `com.nokia.mid.ui.DirectGraphics` was diffed by hand against
+  `freej2me-plus/src/com/nokia/mid/ui/DirectGraphics.java` - all ten methods
+  present (`drawImage`, `drawPixels`, `drawPolygon`, `drawTriangle`,
+  `fillPolygon`, `fillTriangle`, `getAlphaComponent`, `getPixels`,
+  `setARGBColor`, `getNativePixelFormat`).
+- **JSR-256 (sensors)**: the library compiles but there is no sensor hardware,
+  so availability push never fires and the condition methods raise
+  `UnsupportedOperationException` - which the specification allows precisely
+  when `isConditionPushSupported()` is false, and which our code reports as
+  false.  None of the 395 titles in `tests/games` references
+  `javax/microedition/sensor` at all, so nothing in the corpus depends on it.
+
+The practical conclusion: the remaining work is behavioural fidelity rather
+than missing members, which is why the last rounds spent their time on
+`getKeyName`'s exception, the Canvas static declarations, the thread reap and
+the two pixel-count guards instead of adding API.
