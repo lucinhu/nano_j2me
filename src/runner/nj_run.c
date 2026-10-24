@@ -142,6 +142,11 @@ static nj_status blob_read(jar_blob *b, const char *path)
         if (port->file_open(port->ud, path, "rb", &f) != NJ_OK) {
             return NJ_ERR;
         }
+        /* Most ports know the file length. Keeping a power-of-two buffer
+         * wastes nearly a megabyte for a JAR just over 1 MiB, and the growing
+         * copies can leave no contiguous room for the Java heap. Treat size
+         * as a hint: short reads and files growing after open still work. */
+        if (f.size) cap = f.size;
         buf = (nj_u1 *)blob_alloc(port, cap);
         if (!buf) {
             port->file_close(port->ud, &f);
@@ -151,6 +156,16 @@ static nj_status blob_read(jar_blob *b, const char *path)
             nj_s4 got;
             if (used == cap) {
                 nj_u1 *nb;
+                nj_u1 next;
+                /* Check EOF before allocating another buffer. This also
+                 * avoids doubling an exactly-sized or power-of-two file. */
+                got = port->file_read(port->ud, &f, &next, 1u);
+                if (got == 0) break;
+                if (got != 1 || cap > 0x7fffffffu) {
+                    blob_free(&(jar_blob){ buf, used, port });
+                    port->file_close(port->ud, &f);
+                    return got != 1 ? NJ_ERR : NJ_ERR_NOMEM;
+                }
                 cap *= 2u;
                 nb = (nj_u1 *)blob_alloc(port, cap);
                 if (!nb) {
@@ -161,10 +176,14 @@ static nj_status blob_read(jar_blob *b, const char *path)
                 memcpy(nb, buf, used);
                 blob_free(&(jar_blob){ buf, used, port });
                 buf = nb;
+                buf[used++] = next;
             }
-            got = port->file_read(port->ud, &f, buf + used,
-                                  (nj_u4)(cap - used));
-            if (got < 0) {
+            /* The read result is signed even though its count is unsigned. */
+            nj_u4 count = cap - used;
+            if (count > 0x7fffffffu) count = 0x7fffffffu;
+            if (!count) continue;
+            got = port->file_read(port->ud, &f, buf + used, count);
+            if (got < 0 || (nj_u4)got > count) {
                 blob_free(&(jar_blob){ buf, used, port });
                 port->file_close(port->ud, &f);
                 return NJ_ERR;
@@ -175,9 +194,13 @@ static nj_status blob_read(jar_blob *b, const char *path)
             used += (nj_u4)got;
         }
         port->file_close(port->ud, &f);
+        if (!used) {
+            blob_free(&(jar_blob){ buf, used, port });
+            return NJ_ERR;
+        }
         b->data = buf;
         b->size = used;
-        return used ? NJ_OK : NJ_ERR;
+        return NJ_OK;
     }
 
     {

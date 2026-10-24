@@ -5476,13 +5476,26 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
      */
     nj_m3g_object *objs;
     nj_u4 nobj = 0u, nsec = 0u, i;
-    nj_u4 cap = 4096u;
+    nj_u4 cap;
     char err[192];
     nj_ref arr;      /* the file's own table: index 0 unused, object i at i + 1 */
     nj_ref roots;    /* what the caller gets: the table's root objects only */
     nj_u1 *is_ref = NULL;
     nj_u4 mark;
 
+    /* Count before decoding. A fixed 4096-entry table consumed hundreds of
+     * kilobytes even for a single texture, and nested external loads kept
+     * several such tables alive. The count-only scan owns only section
+     * scratch; object payloads are copied once, in the second pass. */
+    if (nj_m3g_scan_objects(vm, data, len, NULL, 0u,
+                            &nobj, &nsec, err, sizeof(err)) != NJ_OK) {
+        return nj_throw(vm, "java/io/IOException", err);
+    }
+    if (nobj == 0u || nobj > 4096u) {
+        return nj_throw(vm, "java/io/IOException", nobj ?
+                        "too many M3G objects" : "the container holds no objects");
+    }
+    cap = nobj;
     objs = (nj_m3g_object *)nj_host_alloc(vm, (nj_size)(sizeof(nj_m3g_object) * cap));
     if (!objs) {
         return nj_throw(vm, "java/lang/OutOfMemoryError", "the object table");
