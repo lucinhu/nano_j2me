@@ -3766,3 +3766,26 @@ requires the exception in exactly that case.  `rs_open_common()` only returns
 NULL for `create_if_missing == 0`; asking to create (`true`) still creates.
 So this is corpus behaviour, not a defect - worth writing down because the
 count looks alarming until the flag is read.
+
+## The whole corpus, paced (round 58, 2026-10-24)
+
+Every title in `tests/games` (395 JARs) was replayed **paced** - 30 fps, 400
+frames, heap 16 MB, ten in parallel, a fresh `--rms-dir` per title - because an
+unpaced replay finishes its frames in milliseconds and never lets a title that
+waits on the clock get anywhere.
+
+- **395/395 ran; 393 exit 0.**  The two non-zero are the known ones:
+  1945空战英雄_6105 (needs a device profile to find its resources) and
+  鲁宾逊漂流记汉化BT版_4677 (the package itself is broken).
+- **Zero uncaught exceptions across all 395 logs.**
+- The largest *caught* exceptions are title-side: 1,986
+  `NullPointerException`s inside one title's `h.e(III)V`, 1,013 inside
+  `m.a(I)J`, 430 `NumberFormatException`s from `Integer.valueOf` while titles
+  parse their own data, 353 `ArrayIndexOutOfBoundsException` inside
+  `b.a()V`.  The runtime-side entries are the specification-mandated ones
+  already documented: 474 `RecordStoreNotFoundException` from
+  `openRecordStore(...,false)` probes and 266 `IllegalArgumentException` from
+  `Image.createImage(0,0)` probes.
+
+This supersedes the earlier unpaced corpus statements for compatibility
+purposes: pacing is the stricter run, and it still finds no runtime defect.
