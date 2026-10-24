@@ -438,14 +438,49 @@ static const nj_builtin_method midlet_methods[] = {
     M("checkPermission",   "(Ljava/lang/String;)Z", NJ_ACC_PUBLIC)
 };
 
+
+/*
+ * MIDletStateChangeException
+ *
+ * The checked exception MIDlet.startApp()/destroyApp() declare.  Almost every
+ * MIDlet drops it from its overrides, so this runtime went without the class -
+ * until a title whose destroyApp(Z)V keeps the declaration: resolving that
+ * signature needs the class, and a missing one is a NoClassDefFoundError that
+ * takes the whole suite down before its first frame.
+ */
+static const nj_builtin_method mscexc_methods[] = {
+    M("<init>", "()V",                   NJ_ACC_PUBLIC),
+    M("<init>", "(Ljava/lang/String;)V", NJ_ACC_PUBLIC)
+};
+
+NJFN(mscexc_init)
+{
+    (void)nj_call_special(vm, NJ_THIS(args), "java/lang/Exception", "<init>",
+                          "()V", NULL, NULL);
+    return NJ_OK;
+}
+
+NJFN(mscexc_init_str)
+{
+    nj_value a[1];
+
+    a[0].r = NJ_ARG_REF(args, 0);
+    (void)nj_call_special(vm, NJ_THIS(args), "java/lang/Exception", "<init>",
+                          "(Ljava/lang/String;)V", a, NULL);
+    return NJ_OK;
+}
+
 const nj_builtin_class nj_lib_midlet_classes[] = {
     { NJ_C_MIDLET, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
       midlet_fields,
       (nj_u2)(sizeof(midlet_fields) / sizeof(midlet_fields[0])),
       midlet_methods,
-      (nj_u2)(sizeof(midlet_methods) / sizeof(midlet_methods[0])) }
+      (nj_u2)(sizeof(midlet_methods) / sizeof(midlet_methods[0])) },
+    { NJ_C_MSCEXC, "java/lang/Exception", NJ_ACC_PUBLIC,
+      NULL, 0u, mscexc_methods,
+      (nj_u2)(sizeof(mscexc_methods) / sizeof(mscexc_methods[0])) }
 };
-const int nj_lib_midlet_class_count = 1;
+const int nj_lib_midlet_class_count = 2;
 
 const nj_native_entry nj_lib_midlet_table[] = {
     { NJ_C_MIDLET, "<init>",          "()V",   midlet_init },
@@ -457,7 +492,9 @@ const nj_native_entry nj_lib_midlet_table[] = {
     { NJ_C_MIDLET, "resumeRequest",   "()V",   midlet_resumeRequest },
     { NJ_C_MIDLET, "getAppProperty",  "(Ljava/lang/String;)Ljava/lang/String;", midlet_getAppProperty },
     { NJ_C_MIDLET, "platformRequest", "(Ljava/lang/String;)Z", midlet_platformRequest },
-    { NJ_C_MIDLET, "checkPermission", "(Ljava/lang/String;)Z", midlet_checkPermission }
+    { NJ_C_MIDLET, "checkPermission", "(Ljava/lang/String;)Z", midlet_checkPermission },
+    { NJ_C_MSCEXC, "<init>", "()V",                   mscexc_init },
+    { NJ_C_MSCEXC, "<init>", "(Ljava/lang/String;)V", mscexc_init_str }
 };
 const int nj_lib_midlet_count =
     (int)(sizeof(nj_lib_midlet_table) / sizeof(nj_lib_midlet_table[0]));

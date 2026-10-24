@@ -3943,3 +3943,24 @@ Sound constants and the Nokia UI API diff - 5 classes, 27 methods, 0 missing),
 plus Nokia's own `tools/emulator.jar` inside the same installers.  The emulator
 packages there (Kemulator, J2ME Loader) are players, not references, so they are
 not used as oracles.
+
+### The checked exception nobody declares (round 65, 2026-10-25)
+
+`javax.microedition.midlet.MIDletStateChangeException` was never registered: almost
+every MIDlet drops it from its `startApp()`/`destroyApp()` overrides, so nothing
+ever asked for the class.  A title whose `destroyApp(Z)V` *keeps* the declaration
+needs it just to resolve the signature, and the miss surfaced as
+
+    java/lang/NoClassDefFoundError at Startup.destroyApp(Z)V pc=15
+
+before the suite drew its first frame.  The class now exists as a
+`java/lang/Exception` subclass with the two constructors the specification
+declares, forwarding their message to `Exception.<init>`.
+
+That title now runs its 60 frames instead of dying at load, and the remaining
+difference is honest: its `destroyApp` throws `MIDletStateChangeException`.  We
+invoke teardown as `destroyApp(false)` on purpose (several titles flush their
+RecordStore there), and a MIDlet is allowed to refuse an unconditional-free
+destroy - so the exit status stays 1 and `docs/COMPATIBILITY_MATRIX.md` records
+the row as a failure with that note.  Handling the refusal (retry with
+`unconditional = true`, or accept the MIDlet staying alive) is the next change.

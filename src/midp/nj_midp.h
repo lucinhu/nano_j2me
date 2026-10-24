@@ -55,6 +55,7 @@
 #define NJ_C_ITEMCOMMANDLISTENER "javax/microedition/lcdui/ItemCommandListener"
 #define NJ_C_ITEMSTATELISTENER   "javax/microedition/lcdui/ItemStateListener"
 #define NJ_C_MIDLET         "javax/microedition/midlet/MIDlet"
+#define NJ_C_MSCEXC  "javax/microedition/midlet/MIDletStateChangeException"
 #define NJ_C_RECORDSTORE    "javax/microedition/rms/RecordStore"
 #define NJ_C_PLAYER         "javax/microedition/media/Player"
 #define NJ_C_MANAGER        "javax/microedition/media/Manager"

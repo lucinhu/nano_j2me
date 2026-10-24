@@ -12,7 +12,7 @@ with the same recipe, so neighbouring rows are comparable:
 Corpus provenance and size are in `docs/CORPUS.md`; regenerate this table
 with `tools/make_compat_matrix.py <rows dir>` after a new sweep.
 
-Built from `f40191a`, 2026-10-25.
+Built from `91be186`, 2026-10-25.
 
 | verdict | titles |
 | --- | --- |
