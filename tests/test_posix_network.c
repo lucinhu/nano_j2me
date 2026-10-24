@@ -65,6 +65,37 @@ static int java_http(nj_port *p, const char *base)
         }
         CHECK(nj_call(vm, conn, http_cls, "getResponseCode", "()I", NULL, &result) == NJ_OK);
         CHECK(result.i == codes[i]);
+        {
+            /* The two header getters the core audit reported missing, plus
+             * getDate() reading its header instead of returning -1. */
+            nj_value ha[2];
+
+            ha[0].r = nj_string_new(vm, "X-Int");
+            CHECK(ha[0].r); nj_root(vm, ha[0].r);
+            ha[1].i = -7;
+            CHECK(nj_call(vm, conn, http_cls, "getHeaderFieldInt",
+                "(Ljava/lang/String;I)I", ha, &result) == NJ_OK);
+            CHECK(result.i == 42);
+            ha[0].r = nj_string_new(vm, "No-Such-Header");
+            CHECK(ha[0].r); nj_root(vm, ha[0].r);
+            CHECK(nj_call(vm, conn, http_cls, "getHeaderFieldInt",
+                "(Ljava/lang/String;I)I", ha, &result) == NJ_OK);
+            CHECK(result.i == -7);
+            ha[0].r = nj_string_new(vm, "X-Date");
+            CHECK(ha[0].r); nj_root(vm, ha[0].r);
+            ha[1].j = 0;
+            CHECK(nj_call(vm, conn, http_cls, "getHeaderFieldDate",
+                "(Ljava/lang/String;J)J", ha, &result) == NJ_OK);
+            CHECK(result.j == 784111777000LL);
+            ha[0].r = nj_string_new(vm, "No-Such-Header");
+            CHECK(ha[0].r); nj_root(vm, ha[0].r);
+            ha[1].j = 123;
+            CHECK(nj_call(vm, conn, http_cls, "getHeaderFieldDate",
+                "(Ljava/lang/String;J)J", ha, &result) == NJ_OK);
+            CHECK(result.j == 123);
+            CHECK(nj_call(vm, conn, http_cls, "getDate", "()J", NULL, &result) == NJ_OK);
+            CHECK(result.j > 0);
+        }
         CHECK(nj_call(vm, conn, http_cls, "openInputStream", "()Ljava/io/InputStream;", NULL, &result) == NJ_OK);
         stream = result.r; CHECK(stream); nj_root(vm, stream);
         for (j = 0; replies[i][j]; ++j) {

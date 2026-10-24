@@ -837,6 +837,135 @@ NJFN(http_get_header_field)
 }
 
 /*
+ * HTTP dates.  The Messaging spec requires HttpConnection to accept the three
+ * HTTP/1.0 date formats, though every server in practice sends RFC 1123
+ * ("Sun, 06 Nov 1994 08:49:37 GMT"), which is what this parses; anything else
+ * yields the caller's default, as the spec asks.
+ */
+static int http_num(const char *p, int n, int *out)
+{
+    int v = 0, i;
+
+    for (i = 0; i < n; i++) {
+        if (p[i] < '0' || p[i] > '9') {
+            return 0;
+        }
+        v = v * 10 + (p[i] - '0');
+    }
+    *out = v;
+    return 1;
+}
+
+static int http_month(const char *p)
+{
+    static const char *const mon[12] = {
+        "jan", "feb", "mar", "apr", "may", "jun",
+        "jul", "aug", "sep", "oct", "nov", "dec"
+    };
+    int i;
+
+    for (i = 0; i < 12; i++) {
+        if ((p[0] | 0x20) == mon[i][0] && (p[1] | 0x20) == mon[i][1]
+            && (p[2] | 0x20) == mon[i][2]) {
+            return i + 1;
+        }
+    }
+    return 0;
+}
+
+/* Days since 1970-01-01 for a proleptic Gregorian date (Hinnant's algorithm). */
+static nj_s8 http_epoch(int y, int mo, int d, int hh, int mi, int ss)
+{
+    int yy = y - (mo <= 2 ? 1 : 0);
+    int era = (yy >= 0 ? yy : yy - 399) / 400;
+    nj_u4 yoe = (nj_u4)(yy - era * 400);
+    nj_u4 doy = (nj_u4)((153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1);
+    nj_u4 doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;
+    nj_s8 days = (nj_s8)era * 146097 + (nj_s8)doe - 719468;
+
+    /* Milliseconds since the epoch, which is what HttpConnection returns. */
+    return (days * 86400 + (nj_s8)hh * 3600 + (nj_s8)mi * 60 + (nj_s8)ss) * 1000l;
+}
+
+/* -1 when the text is not an RFC 1123 date. */
+static nj_s8 http_parse_date(const char *text)
+{
+    const char *p = strchr(text, ',');
+    int d = 0, y = 0, hh = 0, mi = 0, ss = 0, mo;
+
+    if (!p) {
+        return -1;
+    }
+    p++;
+    while (*p == ' ') {
+        p++;
+    }
+    if (!http_num(p, 2, &d)) {
+        return -1;
+    }
+    p += 2;
+    if (*p != ' ') {
+        return -1;
+    }
+    p++;
+    mo = http_month(p);
+    if (mo == 0) {
+        return -1;
+    }
+    p += 3;
+    if (*p != ' ') {
+        return -1;
+    }
+    p++;
+    if (!http_num(p, 4, &y)) {
+        return -1;
+    }
+    p += 4;
+    if (*p != ' ') {
+        return -1;
+    }
+    p++;
+    if (!http_num(p, 2, &hh) || p[2] != ':') {
+        return -1;
+    }
+    if (!http_num(p + 3, 2, &mi) || p[5] != ':') {
+        return -1;
+    }
+    if (!http_num(p + 6, 2, &ss)) {
+        return -1;
+    }
+    return http_epoch(y, mo, d, hh, mi, ss);
+}
+
+/* The value of one header parsed as a date, or dflt when absent/unparsable. */
+static nj_s8 http_header_date(nj_vm *vm, const char *block, const char *name,
+                              nj_s8 dflt)
+{
+    const char *v = http_header_find(block, name);
+    const char *eol;
+    char buf[64];
+    size_t len;
+    nj_s8 at;
+
+    (void)vm;
+    if (!v) {
+        return dflt;
+    }
+    eol = strchr(v, '\n');
+    len = eol ? (size_t)(eol - v) : strlen(v);
+    while (len > 0u && (v[len - 1u] == '\r' || v[len - 1u] == ' ')) {
+        len--;
+    }
+    if (len >= sizeof(buf)) {
+        len = sizeof(buf) - 1u;
+    }
+    memcpy(buf, v, len);
+    buf[len] = '\0';
+    at = http_parse_date(buf);
+    return (at < 0) ? dflt : at;
+}
+
+/*
  * getHeaderField(int) / getHeaderFieldKey(int) walk the response headers in
  * the order the port reported them, which is the order the server sent them.
  */
@@ -1013,13 +1142,108 @@ NJFN(http_get_encoding)
 }
 
 /* Dates: see the header comment - -1 rather than a wrong date. */
-NJFN(http_get_date)
+/*
+ * The pair of header getters the core CLDC/MIDP audit reported missing: both
+ * return the caller's default when the field is absent or does not parse, as
+ * the Messaging spec requires.
+ */
+NJFN(http_get_header_field_int)
 {
-    if (http_send(vm, NJ_THIS(args)) != NJ_OK) {
+    nj_ref self = NJ_THIS(args);
+    nj_ref namer = NJ_ARG_REF(args, 0);
+    char name[128];
+    char block[HTTP_HDR_MAX];
+    const char *v;
+    nj_s8 acc = 0;
+    int any = 0;
+    int neg = 0;
+
+    if (http_send(vm, self) != NJ_OK) {
         return NJ_ERR;
     }
-    ret->j = -1;
+    ret->i = NJ_ARG_INT(args, 1);
+    if (!namer) {
+        return NJ_OK;
+    }
+    (void)nj_string_to_utf8(namer, name, (int)sizeof(name));
+    (void)http_text(hget_ref(vm, self, F_RESPHDR, "Ljava/lang/String;"),
+                    block, (int)sizeof(block));
+    v = http_header_find(block, name);
+    if (!v) {
+        return NJ_OK;
+    }
+    while (*v == ' ' || *v == '\t') {
+        v++;
+    }
+    if (*v == '-') {
+        neg = 1;
+        v++;
+    }
+    while (*v >= '0' && *v <= '9') {
+        any = 1;
+        acc = acc * 10 + (*v - '0');
+        if (acc > 0x7FFFFFFF) {
+            return NJ_OK;
+        }
+        v++;
+    }
+    if (!any) {
+        return NJ_OK;
+    }
+    ret->i = (nj_s4)(neg ? -acc : acc);
     return NJ_OK;
+}
+
+NJFN(http_get_header_field_date)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref namer = NJ_ARG_REF(args, 0);
+    char name[128];
+    char block[HTTP_HDR_MAX];
+
+    if (http_send(vm, self) != NJ_OK) {
+        return NJ_ERR;
+    }
+    ret->j = args[1].j;
+    if (!namer) {
+        return NJ_OK;
+    }
+    (void)nj_string_to_utf8(namer, name, (int)sizeof(name));
+    (void)http_text(hget_ref(vm, self, F_RESPHDR, "Ljava/lang/String;"),
+                    block, (int)sizeof(block));
+    ret->j = http_header_date(vm, block, name, args[1].j);
+    return NJ_OK;
+}
+
+/* getDate()/getExpiration()/getLastModified() read their own headers now. */
+static nj_status http_named_date(nj_vm *vm, nj_value *args, nj_value *ret,
+                                 const char *name)
+{
+    char block[HTTP_HDR_MAX];
+    nj_ref self = NJ_THIS(args);
+
+    if (http_send(vm, self) != NJ_OK) {
+        return NJ_ERR;
+    }
+    (void)http_text(hget_ref(vm, self, F_RESPHDR, "Ljava/lang/String;"),
+                    block, (int)sizeof(block));
+    ret->j = http_header_date(vm, block, name, -1);
+    return NJ_OK;
+}
+
+NJFN(http_get_date)
+{
+    return http_named_date(vm, args, ret, "date");
+}
+
+NJFN(http_get_expiration)
+{
+    return http_named_date(vm, args, ret, "expires");
+}
+
+NJFN(http_get_last_modified)
+{
+    return http_named_date(vm, args, ret, "last-modified");
 }
 
 NJFN(http_open_input)
@@ -1277,6 +1501,8 @@ static const nj_builtin_method httpconn_methods[] = {
     M("getHeaderField",      "(Ljava/lang/String;)Ljava/lang/String;", NJ_ACC_ABSTRACT),
     M("getHeaderField",      "(I)Ljava/lang/String;", NJ_ACC_ABSTRACT),
     M("getHeaderFieldKey",   "(I)Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getHeaderFieldInt",   "(Ljava/lang/String;I)I", NJ_ACC_ABSTRACT),
+    M("getHeaderFieldDate",  "(Ljava/lang/String;J)J", NJ_ACC_ABSTRACT),
     M("getDate",             "()J", NJ_ACC_ABSTRACT),
     M("getExpiration",       "()J", NJ_ACC_ABSTRACT),
     M("getLastModified",     "()J", NJ_ACC_ABSTRACT)
@@ -1299,6 +1525,8 @@ static const nj_builtin_method httpimpl_methods[] = {
     M("getHeaderField",      "(Ljava/lang/String;)Ljava/lang/String;", 0),
     M("getHeaderField",      "(I)Ljava/lang/String;", 0),
     M("getHeaderFieldKey",   "(I)Ljava/lang/String;", 0),
+    M("getHeaderFieldInt",   "(Ljava/lang/String;I)I", 0),
+    M("getHeaderFieldDate",  "(Ljava/lang/String;J)J", 0),
     M("getLength",           "()J", 0),
     M("getType",             "()Ljava/lang/String;", 0),
     M("getEncoding",         "()Ljava/lang/String;", 0),
@@ -1369,12 +1597,14 @@ const nj_native_entry nj_lib_http_table[] = {
     { NJ_C_HTTPIMPL, "getHeaderField",      "(Ljava/lang/String;)Ljava/lang/String;", http_get_header_field },
     { NJ_C_HTTPIMPL, "getHeaderField",      "(I)Ljava/lang/String;", http_get_header_field_at },
     { NJ_C_HTTPIMPL, "getHeaderFieldKey",   "(I)Ljava/lang/String;", http_get_header_key_at },
+    { NJ_C_HTTPIMPL, "getHeaderFieldInt",   "(Ljava/lang/String;I)I", http_get_header_field_int },
+    { NJ_C_HTTPIMPL, "getHeaderFieldDate",  "(Ljava/lang/String;J)J", http_get_header_field_date },
     { NJ_C_HTTPIMPL, "getLength",           "()J",                  http_get_length },
     { NJ_C_HTTPIMPL, "getType",             "()Ljava/lang/String;", http_get_type },
     { NJ_C_HTTPIMPL, "getEncoding",         "()Ljava/lang/String;", http_get_encoding },
     { NJ_C_HTTPIMPL, "getDate",             "()J",                  http_get_date },
-    { NJ_C_HTTPIMPL, "getExpiration",       "()J",                  http_get_date },
-    { NJ_C_HTTPIMPL, "getLastModified",     "()J",                  http_get_date },
+    { NJ_C_HTTPIMPL, "getExpiration",       "()J",                  http_get_expiration },
+    { NJ_C_HTTPIMPL, "getLastModified",     "()J",                  http_get_last_modified },
     { NJ_C_HTTPIMPL, "openInputStream",     "()Ljava/io/InputStream;", http_open_input },
     { NJ_C_HTTPIMPL, "openDataInputStream", "()Ljava/io/DataInputStream;", http_open_data_input },
     { NJ_C_HTTPIMPL, "openOutputStream",    "()Ljava/io/OutputStream;", http_open_output },

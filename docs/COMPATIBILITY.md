@@ -3232,3 +3232,38 @@ cores 6-13, against the tree at `6ab0d3e`:
 What this does not prove: pixel identity against a reference renderer (only
 tested on the titles that have reference screenshots), SDL2/real-hardware
 behaviour, or audio.  It is a regression net, not a compatibility certificate.
+
+## The last two core members that did not resolve (round 1 of the fifth goal, 2026-10-24)
+
+`tools/api_audit.py` compares this runtime's tables against the 982 members of
+the CLDC 1.1 / MIDP 2.0 reference and used to report two unresolved ones, both
+on `HttpConnection`:
+
+```
+javax/microedition/io/HttpConnection  getHeaderFieldInt   (Ljava/lang/String;I)I
+javax/microedition/io/HttpConnection  getHeaderFieldDate  (Ljava/lang/String;J)J
+```
+
+Both are now implemented in `src/midp/nj_lib_http.c` and the allowance list is
+empty, so the audit prints "every one of the 982 reference members resolves".
+
+`getHeaderFieldInt` skips leading blanks, accepts a leading `-`, reads digits
+until the first non-digit and returns the caller's default when the field is
+absent, holds no digits or would overflow an `int`.  `getHeaderFieldDate` parses
+the RFC 1123 form the Messaging spec names for `Date`, `Expires` and
+`Last-Modified` (`Sun, 06 Nov 1994 08:49:37 GMT`) into milliseconds since the
+epoch, and returns the default for anything else.  A wrong-but-silent value
+would be worse than the default, so both fall back rather than guess.
+
+While there: `getDate()`, `getExpiration()` and `getLastModified()` were all
+bound to the same native that returned -1 without looking at the response.  Each
+now reads its own header and returns the parsed value, or -1 when the header is
+missing or unparsable (previous behaviour).
+
+Evidence: the loopback fixture in `tools/check_posix_network.py` now sends
+`X-Int: 42` and `X-Date: Sun, 06 Nov 1994 08:49:37 GMT`; `tests/test_posix_network.c`
+asserts `getHeaderFieldInt("X-Int", -7) == 42`, the default for an absent name,
+`getHeaderFieldDate("X-Date", 0) == 784111777000` (6 November 1994 08:49:37 UTC
+is 784,111,777 s, so the expected value is that times 1000), the default for an absent
+name, and `getDate() > 0` for the fixture's own `Date` header.  Cost is code
+only: no new fields, buffers stay on the stack, so RAM is unchanged.
