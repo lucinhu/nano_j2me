@@ -3704,3 +3704,18 @@ it can serve as a 3D pixel case.
 So the next step for 3D coverage is an input script per title (the sweep
 scripts in `.local-tools/debug-runs/compat-round9-*/` reached city and bike
 frames for this title earlier), then run this scan to pick the matching pair.
+
+### Saves survive a second run, and why 3D is still idle (round 54, 2026-10-24)
+
+`tools/check_compat_fixes.sh` grew a fourth case: 宠物王国4-白金_6531 is run
+twice against the same `--rms-dir`, the check requires at least one non-empty
+`.rms` file after the first pass and no `RecordStoreNotFoundException` in the
+second.  It passes with two store files, in about 10 s.
+
+The 3D pixel case is still blocked, and the reason is now measured rather than
+assumed.  With taps and fire presses over 1,200 frames, 3D摩托赛车_9287 and
+3D拉力赛-进化汉化版_6366 both stay on one screen: **one distinct dump**, 47,577
+and 24,112 bytecodes, `tris=0 m3g=0`.  The reference emulator also idles on the
+first of them, so this is not evidence against our renderer - these titles want
+input that actually starts a race (its own menu, not a generic tap), and until
+that script exists neither runtime can be compared on a 3D scene.

@@ -58,9 +58,45 @@ run_case() {
     echo "OK   $name (bytecodes=$bc)"
 }
 
+
+# A store written by one run has to be readable by the next one.  The title
+# below creates a character and saves it, so the second run must open the same
+# store instead of throwing RecordStoreNotFoundException.
+run_save_round_trip() {
+    prefix=$1
+    jar=
+    for f in "$games/$prefix"*.jar; do
+        [ -f "$f" ] && jar=$f && break
+    done
+    if [ -z "$jar" ]; then
+        echo "SKIP save_round_trip (no fixture $prefix*.jar)"
+        return 0
+    fi
+    dir=$tmp/saverms
+    rm -rf "$dir"; mkdir -p "$dir"
+    for pass in 1 2; do
+        log=$tmp/save$pass.log
+        "$bin" --port headless --size 240x320 --heap 32 --fps 0 \
+               --run-frames 300 --rms-dir "$dir" --stats "$jar" >"$log" 2>&1
+        rc=$?
+        if [ "$rc" -ne 0 ]; then
+            echo "FAIL save_round_trip pass $pass: exit $rc"; fail=1; return 0
+        fi
+        if grep -qF "RecordStoreNotFoundException" "$log"; then
+            echo "FAIL save_round_trip pass $pass: store not found"; fail=1; return 0
+        fi
+    done
+    saved=$(find "$dir" -name '*.rms' -size +0 2>/dev/null | wc -l)
+    if [ "$saved" -lt 1 ]; then
+        echo "FAIL save_round_trip: no non-empty .rms file was written"; fail=1; return 0
+    fi
+    echo "OK   save_round_trip ($saved store file(s), second run reopened them)"
+}
+
 run_case thread_reap        海绵宝宝卡丁车_4684  "too many threads"          1000000
 run_case canvas_statics     拳皇98终极之战_7534  "IncompatibleClassChangeError" 100000
 run_case m3g_spot_light     毁灭战士3_10598      "compression scheme"         30000
+run_save_round_trip         宠物王国4-白金_6531
 
 if [ "$fail" -ne 0 ]; then
     echo "FAIL: a compatibility fix regressed" >&2
