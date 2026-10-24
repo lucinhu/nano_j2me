@@ -13,7 +13,7 @@
 set -u
 
 bin=${1:-}; jar=${2:-}; ref=${3:-}; frame=${4:-300}; w=${5:-240}; h=${6:-320}
-thr=${7:-12}
+thr=${7:-12}; fps=${8:-0}
 if [ -z "$bin" ] || [ -z "$jar" ] || [ -z "$ref" ] || [ ! -x "$bin" ] || [ ! -f "$jar" ]; then
     echo "usage: $0 <nj2me> <jar> <run-freej2me-headless.sh> <frame> [w h]" >&2
     exit 2
@@ -29,11 +29,16 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/njrefcmp.XXXXXX") || exit 2
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/ours" "$tmp/refdir"
 
-"$bin" --port headless --size "${w}x${h}" --heap 32 --fps 0 \
+"$bin" --port headless --size "${w}x${h}" --heap 32 --fps "$fps" \
        --run-frames "$frame" --dump-frames "$tmp/ours/" --dump-every "$frame" \
        "$jar" >"$tmp/ours.log" 2>&1 || { echo "FAIL: our run exited $?"; exit 1; }
 
-printf 'wait 3000\npress 5 200\nwait 7000\nshot %s/ref.png\nquit\n' "$tmp" |
+if [ "$fps" -gt 0 ] 2>/dev/null; then
+    hold=$((3000 + frame * 1000 / fps))
+else
+    hold=7000
+fi
+printf 'wait 3000\npress 5 200\nwait %s\nshot %s/ref.png\nquit\n' "$hold" "$tmp" |
     "$ref" "$jar" "$tmp/refdir" "$w" "$h" >"$tmp/ref.log" 2>&1 ||
     { echo "FAIL: reference run exited $?"; exit 1; }
 

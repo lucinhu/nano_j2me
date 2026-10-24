@@ -3731,3 +3731,20 @@ The 3D titles were probed once more this round for the input that starts a
 race: fire, soft1, soft2, up, down, left, right, star and 1 all give the same
 16,334 bytecodes at 400 frames and `tris=0`, i.e. the title ignores every key
 at that screen.  Whatever it waits for is not a key code we can script yet.
+
+### Pacing, and the first paced 3D comparison (round 56, 2026-10-24)
+
+Unpaced replays (`--fps 0`) run 1,200 frames in 0.06 s of wall time, so a title
+that waits on the clock never leaves its splash - that, not a rendering
+problem, is why the 3D titles looked idle.  Paced, 3D摩托赛车_9287 executes
+438,581 bytecodes over 600 frames at 30 fps and animates (`gfx=17,522`), but
+still reports `tris=0 m3g=0`: it is a 2D game that only looks 3D, so it was
+never an M3G pixel case.
+
+`compare_reference_frame.sh` now takes an optional pacing argument (eighth),
+and the reference's wait scales with it.  First paced comparison,
+浴火银河2完整版_7689 at frame 600, 30 fps: **MAE 18.79/255** - the same scene,
+but a starfield's phase differs between two independently paced runtimes, so
+it is above the 12/255 budget that fits static 2D screens.  A 3D guard would
+have to compare a HUD-dominant frame, or use a threshold justified by the
+measured phase noise rather than by the 2D numbers.
