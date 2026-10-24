@@ -3671,3 +3671,18 @@ measured **MAE 4.86/255**, under the same 12/255 budget.  Two titles with
 different rendering shapes (a card table with many small sprites, and a
 scrolling platformer) make a missing layer or a shifted sprite visible in the
 test rather than in a player's report.
+
+### Why 3D titles are not in the pixel test yet (round 52, 2026-10-24)
+
+Trying the same pipeline on 3D摩托赛车_9287 gives MAE 73.05/255, which is not
+a rendering defect but two different screens: at frame 300 our run is showing
+the 3D city and bike (mean RGB 114/117/139, 39 distinct colours in a 4-pixel
+sample), while the reference's screenshot is a flat grey screen (mean 65/65/65,
+112 colours, 4% near-black).  The two runtimes reach different screens at the
+same frame index because loading and menu timing differ.
+
+So a 3D title needs its frame chosen by *screen match*, not by frame number:
+scan a handful of frames on side, screenshot after each, keep the pair with the
+lowest MAE.  Until that scan exists, the pixel tests stay on the two 2D titles
+where both runtimes are on the same screen at frame 300 - claiming a 3D pixel
+comparison from these numbers would be claiming the wrong thing.
