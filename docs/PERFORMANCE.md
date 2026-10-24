@@ -2756,7 +2756,23 @@ span when `env_smooth && has_tex && tex_shaded && !toon && blend==REPLACE`.
 randomised differential against the generic path — pass unchanged, so the
 pixels are identical by construction and by test.
 
-What could not be shown: a title-level CPU win.  Six interleaved unpaced runs
+A controlled benchmark now measures the change.  A scratch harness
+(`.local-tools/debug-runs/envspan-round61-20261024/bench.c`) links the runtime
+library and draws one full-screen environment-mapped, shaded, REPLACE-blended
+triangle 20,000 times into a 240x320 ARGB8888 surface, reporting process CPU
+and an FNV-1a checksum of the framebuffer.  Three interleaved runs per build,
+pinned to one core:
+
+| Build | CPU for 20,000 triangles | per triangle |
+| --- | --- | --- |
+| parent `a3e1499` | 2.0197 - 2.0279 s | 101.0 - 101.4 us |
+| with env spans | 1.7287 - 1.7427 s | 86.4 - 87.1 us |
+
+That is **-14.4% CPU** (min-to-min) on the dominant span shape, and the
+checksum is `60e55439` in every run of both builds, so the pixels are
+identical.
+
+What still cannot be shown: a title-level CPU win.  Six interleaved unpaced runs
 give parent min 0.723 s / median 0.781 s against new min 0.734 s / median
 0.824 s; four paced runs give min 0.387 → 0.334 s and median 0.440 → 0.427 s.
 The spread between runs of the same binary is ±15%, larger than any effect
