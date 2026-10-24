@@ -3748,3 +3748,21 @@ but a starfield's phase differs between two independently paced runtimes, so
 it is above the 12/255 budget that fits static 2D screens.  A 3D guard would
 have to compare a HUD-dominant frame, or use a threshold justified by the
 measured phase noise rather than by the 2D numbers.
+
+### A paced corpus sample, and the 225 store exceptions (round 57, 2026-10-24)
+
+Forty titles (every fifth of the first two hundred) were replayed **paced**
+(30 fps, 600 frames, 8 in parallel, fresh RMS directory each): 40/40 exit 0,
+**0 uncaught exceptions in any log**.  Pacing matters - an unpaced run finishes
+1,200 frames in 60 ms of wall time, so a title that waits on the clock never
+gets far enough to fail.
+
+The largest thrown exception in that sample is
+`RecordStoreNotFoundException` from `RecordStore.openRecordStore(String,
+boolean)`, 225 times.  Instrumenting the create flag shows why: every one of
+them passes `false` (names like `pooluh`, `cwzwSmsSave`, `SoundStatus`), i.e.
+the title is probing for a store it has not written yet, and the specification
+requires the exception in exactly that case.  `rs_open_common()` only returns
+NULL for `create_if_missing == 0`; asking to create (`true`) still creates.
+So this is corpus behaviour, not a defect - worth writing down because the
+count looks alarming until the flag is read.
