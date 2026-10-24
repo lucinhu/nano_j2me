@@ -490,6 +490,22 @@ struct nj_vm {
     nj_ref     display;         /* the singleton Display */
     nj_ref     current_displayable;
     nj_ref     thread_group;
+    /*
+     * The Graphics the frame painter hands to Canvas.paint(), reused for as
+     * long as the canvas buffer it targets stays the same object.
+     *
+     * MIDP implementations do not mint a Graphics per paint: the reference
+     * hands paint() the platform's front-buffer graphics, the same object
+     * every frame.  Ours allocated one per frame, which showed up as the
+     * single largest source of garbage in a real title - 160 bytes a frame,
+     * 3.2 MB after 20000 frames of 超级马里奥_10283, and the same linear
+     * growth in every Canvas title measured (see docs/FOOTPRINT.md).
+     * The object is rewritten to constructor defaults before each reuse, so
+     * a paint() that changes colour/clip/translate cannot leak that state
+     * into the next frame.
+     */
+    nj_ref     paint_graphics;
+    nj_ref     paint_graphics_buf;
 
     /*
      * Players currently feeding the audio device, as a java.util.Vector of

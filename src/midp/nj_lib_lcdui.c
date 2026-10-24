@@ -837,34 +837,43 @@ int nj_midp_gfx_load(nj_vm *vm, nj_ref g_obj, nj_gfx *g, nj_surface *scratch)
 
 
 /* ---- construction ---- */
+/*
+ * Point `g` at `target` and put every field back to the value the constructor
+ * leaves, which is what makes reusing one Graphics across paints safe: paint()
+ * is allowed to change the colour, clip, blend mode or translation and expect
+ * the next call to start from the defaults, exactly as a fresh object would.
+ */
+static nj_status gfx_reset(nj_vm *vm, nj_ref g, nj_ref target)
+{
+    int w = 0, h = 0;
+    nj_surface *s;
+
+    rput(vm, g, G_CLS, F_G_TGT, D_IMAGE, target);
+    s = nj_midp_surface(vm, target, &(nj_surface){0});
+    if (!s) {
+        return NJ_ERR;
+    }
+    w = s->width;
+    h = s->height;
+    fput(vm, g, G_CLS, F_G_TX, D_INT, 0);
+    fput(vm, g, G_CLS, F_G_TY, D_INT, 0);
+    fput(vm, g, G_CLS, F_G_CX, D_INT, 0);
+    fput(vm, g, G_CLS, F_G_CY, D_INT, 0);
+    fput(vm, g, G_CLS, F_G_CW, D_INT, w);
+    fput(vm, g, G_CLS, F_G_CH, D_INT, h);
+    fput(vm, g, G_CLS, F_G_COLOR, D_INT, (nj_s4)0xFF000000u);
+    fput(vm, g, G_CLS, F_G_BLEND, D_INT, NJ_BLEND_SRC_OVER);
+    fput(vm, g, G_CLS, F_G_STROKE, D_INT, NJ_STROKE_SOLID);
+    fput(vm, g, G_CLS, F_G_XOR, D_INT, 0);
+    fput(vm, g, G_CLS, F_G_XORC, D_INT, 0);
+    rput(vm, g, G_CLS, F_G_FONT, D_FONT, NULL);
+    return NJ_OK;
+}
+
 NJFN(g_init)
 {
     nj_ref self = NJ_THIS(args);
-    nj_ref target = NJ_ARG_REF(args, 0);
-
-    rput(vm, self, G_CLS, F_G_TGT, D_IMAGE, target);
-    {
-        int w = 0, h = 0;
-        nj_surface *s = nj_midp_surface(vm, target, &(nj_surface){0});
-        if (!s) {
-            return NJ_ERR;
-        }
-        w = s->width;
-        h = s->height;
-        fput(vm, self, G_CLS, F_G_TX, D_INT, 0);
-        fput(vm, self, G_CLS, F_G_TY, D_INT, 0);
-        fput(vm, self, G_CLS, F_G_CX, D_INT, 0);
-        fput(vm, self, G_CLS, F_G_CY, D_INT, 0);
-        fput(vm, self, G_CLS, F_G_CW, D_INT, w);
-        fput(vm, self, G_CLS, F_G_CH, D_INT, h);
-        fput(vm, self, G_CLS, F_G_COLOR, D_INT, (nj_s4)0xFF000000u);
-        fput(vm, self, G_CLS, F_G_BLEND, D_INT, NJ_BLEND_SRC_OVER);
-        fput(vm, self, G_CLS, F_G_STROKE, D_INT, NJ_STROKE_SOLID);
-        fput(vm, self, G_CLS, F_G_XOR, D_INT, 0);
-        fput(vm, self, G_CLS, F_G_XORC, D_INT, 0);
-        rput(vm, self, G_CLS, F_G_FONT, D_FONT, NULL);
-    }
-    return NJ_OK;
+    return gfx_reset(vm, self, NJ_ARG_REF(args, 0));
 }
 
 /*
@@ -874,7 +883,18 @@ NJFN(g_init)
  */
 NJFN(g_init_noarg)
 {
-    return g_init(vm, th, (nj_value[]){ { .r = NULL } }, ret);
+    /*
+     * Forward to the one-argument constructor with the receiver slot in place:
+     * NJFN implementations read `this` as args[-1], so calling g_init() with a
+     * one-element array made it read outside the object it was handed.  The
+     * compiler only said so once the two functions were inlined together.
+     */
+    nj_value a[2];
+    nj_value unused;
+    a[0].r = NJ_THIS(args);
+    a[1].r = NULL;
+    unused.bits = 0u;
+    return g_init(vm, th, &a[1], &unused);
 }
 
 /*
@@ -950,6 +970,41 @@ static nj_ref gfx_new(nj_vm *vm, nj_ref target)
     }
     gfx_seed_clip(vm, g, target);
     nj_root_release(vm, mark);
+    return g;
+}
+
+/*
+ * The Graphics for one frame of Canvas.paint(), reused while it still targets
+ * the same buffer.
+ *
+ * The frame painter used to call gfx_new() every frame, so every Canvas title
+ * allocated a 160-byte javax/microedition/lcdui/Graphics per frame and threw it
+ * away: a heap census on 超级马里奥_10283 showed exactly one live-but-unreachable
+ * Graphics per frame (2,000 blocks after 2,000 frames, 10,000 after 10,000), and
+ * the heap high-water mark grew by 160 bytes a frame on 毁灭战士3_10598,
+ * 鬼泣3D中文版_3376 and 三国杀单机战功修改版_4143 too.  The reference
+ * implementation hands paint() one platform graphics object instead, which is
+ * also what MIDP's "the Graphics object passed to paint()" wording assumes.
+ *
+ * The state is reset to constructor defaults on every reuse, so a paint() that
+ * moved the origin or changed the colour cannot affect the next frame.
+ */
+static nj_ref frame_graphics(nj_vm *vm, nj_ref buf)
+{
+    nj_ref g;
+
+    if (vm->paint_graphics && vm->paint_graphics_buf == buf) {
+        if (gfx_reset(vm, vm->paint_graphics, buf) != NJ_OK) {
+            return NULL;
+        }
+        return vm->paint_graphics;
+    }
+    g = gfx_new(vm, buf);
+    if (!g) {
+        return NULL;
+    }
+    vm->paint_graphics = g;
+    vm->paint_graphics_buf = buf;
     return g;
 }
 
@@ -5313,7 +5368,7 @@ nj_status nj_midp_paint(nj_vm *vm)
          * not implement it gets AbstractMethodError rather than a silent blank
          * frame.
          */
-        g = gfx_new(vm, buf);
+        g = frame_graphics(vm, buf);
         if (!g) {
             return NJ_ERR;   /* names the class; not a silent blank frame */
         }
@@ -5393,7 +5448,7 @@ nj_status nj_midp_paint(nj_vm *vm)
          */
         buf = canvas_ensure_buffer(vm, d, w, h);
         if (buf) {
-            nj_ref g = gfx_new(vm, buf);
+            nj_ref g = frame_graphics(vm, buf);
             if (g) {
                 (void)canvas_call_paint_rooted(vm, d, g, NULL);
                 nj_clear_exception(vm);

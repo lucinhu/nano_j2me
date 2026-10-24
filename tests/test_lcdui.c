@@ -2607,6 +2607,77 @@ static void test_canvas_key_methods(nj_vm *vm)
 }
 
 /* ------------------------------------------------------------------ */
+/* One Graphics per frame, and the same one every frame                */
+/* ------------------------------------------------------------------ */
+/*
+ * Canvas.paint() is handed a Graphics; MIDP implementations give it the
+ * platform's graphics rather than minting a new object per frame.  Ours used
+ * to allocate one per painted frame, which a heap census showed as one dead
+ * javax/microedition/lcdui/Graphics per frame in 超级马里奥_10283 and 160 bytes
+ * of heap growth per frame in three other titles.  This test pins both halves:
+ * the object is reused, and a second paint allocates nothing.
+ */
+static nj_ref pg_graphics;
+static int pg_paints;
+
+NJ_NATIVE_FN(pg_paint)
+{
+    (void)th;
+    (void)ret;
+    pg_paints++;
+    pg_graphics = NJ_ARG_REF(args, 0);
+    return NJ_OK;
+}
+
+static void test_paint_graphics_reused(nj_vm *vm)
+{
+    static const nj_builtin_method methods[] = {
+        { "paint", "(L" NJ_C_GRAPHICS ";)V", NJ_ACC_PUBLIC }
+    };
+    static const nj_builtin_class fixture = {
+        "test/PaintCounter", NJ_C_CANVAS, NJ_ACC_PUBLIC,
+        NULL, 0u, methods, 1u
+    };
+    nj_class *cls;
+    nj_ref canvas;
+    nj_ref first;
+    nj_size used;
+
+    (void)nj_midp_set_current(vm, NULL);
+    cls = nj_class_create_builtin(vm, &fixture);
+    OK(cls != NULL);
+    if (!cls) {
+        return;
+    }
+    cls->methods[0].native = pg_paint;
+    canvas = nj_object_new(vm, "test/PaintCounter");
+    OK(canvas != NULL);
+    if (!canvas) {
+        return;
+    }
+    pg_graphics = NULL;
+    pg_paints = 0;
+    OK(nj_midp_set_current(vm, canvas) == NJ_OK);
+
+    /* First paint builds the Graphics and gives it to paint(). */
+    OK_MSG(nj_midp_paint(vm) == NJ_OK, "the first frame paints");
+    OK_MSG(pg_paints == 1, "paint() ran %.1f times on the first frame", (double)pg_paints);
+    first = pg_graphics;
+    OK(first != NULL);
+
+    /* Second paint: same object, no new allocation. */
+    used = nj_heap_used_bytes(vm);
+    OK_MSG(nj_midp_paint(vm) == NJ_OK, "the second frame paints");
+    OK_MSG(pg_paints == 2, "paint() ran %.1f times over two frames", (double)pg_paints);
+    OK_MSG(pg_graphics == first,
+           "every frame hands paint() the same Graphics object");
+    OK_MSG(nj_heap_used_bytes(vm) == used,
+           "a repeated paint allocated %lu bytes, want 0",
+           (unsigned long)(nj_heap_used_bytes(vm) - used));
+    OK_MSG(!nj_has_exception(vm), "reusing the paint Graphics raises nothing");
+}
+
+/* ------------------------------------------------------------------ */
 /* callSerially: a self-requeuing runnable runs once per frame         */
 /* ------------------------------------------------------------------ */
 /*
@@ -3029,6 +3100,7 @@ static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
     test_widgets(vm);
     test_screen(vm);
     test_canvas_key_methods(vm);
+    test_paint_graphics_reused(vm);
     test_callserially_once_per_frame(vm);
     /* Last: it swaps the port clock for a fake one, and the restore leaves the
      * modular clock one wrap ahead - harmless for everything above, so keep

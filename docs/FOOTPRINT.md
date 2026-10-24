@@ -913,3 +913,26 @@ it with `memcpy` when the destination is ARGB8888 or converts it with
 
 RAM is unchanged: no field, static, heap allocation or buffer is added. The two
 helpers keep only what they read from the row on the C stack.
+
+## One Graphics per canvas, not one per frame (round 59, 2026-10-24)
+
+Every `Canvas`/`GameCanvas` frame used to allocate a fresh
+`javax/microedition/lcdui/Graphics` (160 B) and throw it away, which is why
+long replays grew their heap by 160 B a frame (3.2 MB after 20,000 frames of
+超级马里奥_10283). The VM now keeps one Graphics per canvas buffer
+(`vm->paint_graphics` / `vm->paint_graphics_buf`, both GC roots) and
+`gfx_reset()` rewrites every constructor-visible field before each reuse, so
+`paint()` still starts from the documented defaults. See
+[PERFORMANCE.md](PERFORMANCE.md#the-graphics-that-was-allocated-every-frame-round-59-2026-10-24).
+
+| Build | Before | After |
+|---|---|---|
+| hosted Release, `nj_lib_lcdui.c` `.text` | 159,104 B | **159,200 B** (+96 B) |
+| `nj2me` executable `.text` | 2,914,662 B | **2,914,838** B (+176 B) |
+| executable `.data` / `.bss` | 163,088 / 6,688 B | **unchanged** / **unchanged** |
+
+RAM: **+16 B per VM** for the two refs and one 160-byte heap object fewer per
+painted frame; the high-water mark of a Canvas title stops growing with the
+frame count. `Image.getGraphics()` deliberately still allocates (the reference
+implementation does too), so a title that calls it per frame keeps its own
+garbage for the collector.

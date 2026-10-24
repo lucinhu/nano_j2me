@@ -2637,3 +2637,70 @@ parent binary, so it is the title's own timing, not the blit.
 `.text` 2,912,934 -> **2,914,662** B (+1,728 B); `.data` 163,088 B and `.bss`
 6,688 B unchanged. RAM is unchanged: no field, static, heap allocation or
 buffer is added; the only new storage is the C stack of the two helpers.
+
+## The Graphics that was allocated every frame (round 59, 2026-10-24)
+
+Long replays of Canvas titles grew their heap without bound: 超级马里奥_10283
+used 475 KB after 1,000 frames, 1,115 KB after 5,000 and 3,515 KB after 20,000,
+exactly 160 bytes a frame; 毁灭战士3_10598, 鬼泣3D中文版_3376 and
+三国杀单机战功修改版_4143 showed the same slope. `peak` equalled `used` in
+every run, so no collection ever ran and the garbage just piled up.
+
+A temporary live-object census over the arena (walk `nj_heap.base` to
+`base + bump`, read `nj_object.cls->name` for every block whose header magic is
+`NJ_BLOCK_MAGIC`) named the culprit in one line: every painted frame left one
+live `javax/microedition/lcdui/Graphics` behind - 2,000 blocks after 2,000
+frames, 10,000 after 10,000, 160 bytes each. Both paint paths called
+`gfx_new(vm, buf)` once per frame.
+
+The fix reuses one Graphics per canvas buffer. `vm->paint_graphics` /
+`vm->paint_graphics_buf` (two refs, marked in `nj_gc_mark_roots`) hold the
+object; `gfx_reset()` rewrites every constructor-visible field before each
+reuse, so a `paint()` that changes the colour, clip, transform, font or blend
+mode cannot leak that state into the next frame. The reference implementation
+hands `paint()` the platform's front-buffer graphics in the same way, which is
+what MIDP's wording assumes.
+
+### Effect on the heap
+
+| Title | Frames | Used before | Used after |
+|---|---|---|---|
+| 超级马里奥_10283 | 2,000 | 635,264 B | **315,424 B** |
+| | 10,000 | 1,915,264 B | **315,424 B** |
+| 毁灭战士3_10598 | 1,000 | 10,065,088 B | **9,905,888 B** |
+| | 5,000 | 10,705,088 B | **9,905,888 B** |
+| 鬼泣3D中文版_3376 | 1,000 | 1,909,856 B | **1,750,176 B** |
+| | 5,000 | 2,549,856 B | **1,750,176 B** |
+
+The high-water mark is now flat in time instead of linear. 三国杀 still grows
+160 bytes a frame, but that is the title itself calling `Image.getGraphics()`
+every frame; the reference allocates there too (`PlatformImage.getGraphics()`
+returns `new Graphics(this)`), so it is left as the game's garbage and the
+collector reclaims it: the same title with `--heap 2` finishes 4,000 frames at
+`heap=1661824/1957408` with no out-of-memory.
+
+Also fixed in the same area: the no-argument Graphics constructor forwarded a
+one-element array to the one-argument one, so `NJ_THIS(args)` (`args[-1]`) read
+outside the object - harmless by luck, but `-Warray-bounds` pointed it out once
+the two functions inlined together.
+
+### Effect on the clock
+
+`三国杀单机战功修改版_4143`, 3,000 paced frames, eight interleaved rounds of
+user CPU on a pinned core: per-round deltas +0.7 %, -6.9 %, -3.3 %, -6.6 %,
++4.9 %, -12.1 %, 0.0 %, +2.7 % (median **-3.3 %**, mean -2.6 %); parent min
+0.1820 s / med 0.1846 s, this build min **0.1597 s** / med 0.1874 s.
+超级马里奥_10283, same shape, 22.868 s -> 22.711 s min (0.7 %, inside the
+noise): removing garbage helps when the title allocates enough to matter, and
+it costs nothing when it does not.
+
+Frames dumped from both binaries at 40/80/120/160/200/240 are byte-identical
+for 超级马里奥_10283 and 三国杀单机战功修改版_4143.
+
+### Cost
+
+`nj_lib_lcdui.c.o` `.text` 159,104 -> **159,200** B (+96 B); the `nj2me`
+executable `.text` 2,914,662 -> **2,914,838** B (+176 B); `.data` 163,088 B and
+`.bss` 6,688 B unchanged. RAM: **+16 B per VM** for the two refs, and one
+160-byte object fewer per painted frame - a net saving from the first frame
+that paints twice.

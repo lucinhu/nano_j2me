@@ -600,6 +600,8 @@ static void nj_gc_mark_roots(nj_vm *vm)
     nj_gc_mark_object(vm, vm->app);
     nj_gc_mark_object(vm, vm->display);
     nj_gc_mark_object(vm, vm->current_displayable);
+    nj_gc_mark_object(vm, vm->paint_graphics);
+    nj_gc_mark_object(vm, vm->paint_graphics_buf);
     nj_gc_mark_object(vm, vm->thread_group);
     /*
      * Every nj_ref the VM holds itself must be listed here, or the object is
