@@ -682,14 +682,17 @@ static nj_status capture_release(nj_vm *vm, nj_thread *th, nj_value *args, nj_va
 }
 static void key_frame(nj_vm *vm, nj_u1 type, int key)
 {
+    /* The VM keeps its port read-only; the test pushes events into it, which
+     * is what the port API is for, so drop the const here. */
+    nj_port *port = (nj_port *)vm->port;
     nj_event event;
     memset(&event, 0, sizeof(event));
     event.type = type; event.key = (nj_u1)key;
-    nj_port_push_event(vm->port, &event);
+    nj_port_push_event(port, &event);
     /* Stop after input dispatch so this frame need not implement paint. Keep
      * the VM running while Java callbacks and widget handlers execute. */
     event.type = NJ_EV_QUIT;
-    nj_port_push_event(vm->port, &event);
+    nj_port_push_event(port, &event);
     CHECK(nj_midp_frame(vm) == NJ_OK && !vm->exception);
     vm->running = 1u;
 }
