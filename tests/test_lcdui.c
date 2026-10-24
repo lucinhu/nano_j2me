@@ -2778,6 +2778,57 @@ static nj_status al_capture_command(nj_vm *vm, nj_thread *th, nj_value *args,
     return vm->exception ? NJ_ERR : NJ_OK;
 }
 
+
+/* The specification's Item.getItemCommandListener(), and the StringItem
+ * store: the dispatcher reads Item's itCmdListener for every Item, so a
+ * StringItem has to write that field too. */
+static void test_item_command_listener(nj_vm *vm)
+{
+    nj_ref si;
+    nj_ref listener;
+    nj_ref got;
+    nj_value a[1];
+    int ok;
+    nj_field *f;
+
+    si = construct(vm, NJ_C_STRINGITEM,
+                   "(Ljava/lang/String;Ljava/lang/String;I)V",
+                   (nj_value[]){ sref(str(vm, "lbl")), sref(str(vm, "txt")),
+                                 iref(1) });
+    OK(si != NULL);
+    if (!si) {
+        return;
+    }
+    got = call_ref(vm, si, NJ_C_ITEM, "getItemCommandListener",
+                   "()L" NJ_C_ITEMCOMMANDLISTENER ";", NULL, &ok);
+    OK(ok);
+    OK(got == NULL);
+    nj_clear_exception(vm);   /* a missing method must not poison later tests */
+
+    /* An ItemCommandListener is an interface, so the object here is only a
+     * ref of the right class: native storage never inspects it. */
+    listener = nj_object_new(vm, NJ_C_ITEMCOMMANDLISTENER);
+    OK(listener != NULL);
+    if (!listener) {
+        return;
+    }
+    a[0] = sref(listener);
+    OK(nj_call(vm, si, NJ_C_STRINGITEM, "setItemCommandListener",
+               "(L" NJ_C_ITEMCOMMANDLISTENER ";)V", a, NULL) == NJ_OK);
+    got = call_ref(vm, si, NJ_C_ITEM, "getItemCommandListener",
+                   "()L" NJ_C_ITEMCOMMANDLISTENER ";", NULL, &ok);
+    OK(ok);
+    OK_MSG(got == listener,
+           "getItemCommandListener returns what was set on a StringItem");
+    f = nj_field_lookup(vm, NJ_C_ITEM, "itCmdListener",
+                        "L" NJ_C_ITEMCOMMANDLISTENER ";", 0);
+    OK(f != NULL);
+    if (f) {
+        OK_MSG(nj_field_read_ref(vm, si, f) == listener,
+               "a StringItem stores its listener where the dispatcher reads");
+    }
+}
+
 static void test_alert_timeout(nj_vm *vm, nj_port *port)
 {
     static const nj_builtin_method methods[] = {
@@ -3105,6 +3156,7 @@ static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
     /* Last: it swaps the port clock for a fake one, and the restore leaves the
      * modular clock one wrap ahead - harmless for everything above, so keep
      * this the final test of the round. */
+    test_item_command_listener(vm);
     test_alert_timeout(vm, &port);
 
     /* createImage(String) needs a loaded application. */

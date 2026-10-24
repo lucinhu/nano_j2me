@@ -827,6 +827,81 @@ static void test_media(nj_vm *vm)
     clean(vm, "media controls");
 }
 
+
+/*
+ * 6b: media - the TimeBase of a Player.
+ *
+ * JSR 135 lets a player take a master clock, and every Player is a
+ * Controllable: getTimeBase() answers null until one is set, setTimeBase
+ * refuses a null clock with IllegalArgumentException, and a clock that was
+ * set comes back unchanged.
+ */
+#define TIMEBASE "javax/microedition/media/TimeBase"
+static void test_time_base(nj_vm *vm)
+{
+    nj_value a[1];
+    nj_value ret;
+    nj_ref player, tb;
+
+    /* Manager.createPlayer(tone://) gives a real Player to ask. */
+    a[0] = vref(nj_string_new(vm, "tone://"));
+    ret.bits = 0u;
+    if (nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                       "(Ljava/lang/String;)Ljavax/microedition/media/Player;",
+                       a, &ret) != NJ_OK) {
+        const char *d = nj_exception_describe(vm);
+        g_fail++;
+        fprintf(stderr, "FAIL Manager.createPlayer(tone://) threw: %s\n",
+                d ? d : "(no description)");
+        nj_clear_exception(vm);
+        return;
+    }
+    g_pass++;
+    player = ret.r;
+    OK(player != NULL);
+    if (!player) {
+        return;
+    }
+
+    ret.bits = 0u;
+    if (nj_call(vm, player, PLAYER, "getTimeBase",
+                "()L" TIMEBASE ";", NULL, &ret) != NJ_OK) {
+        g_fail++;
+    } else {
+        g_pass++;
+        OK_MSG(ret.r == NULL, "a fresh player has no master clock");
+    }
+    nj_clear_exception(vm);   /* a missing method must not poison later tests */
+
+    a[0] = vref(NULL);
+    OK_MSG(nj_call(vm, player, PLAYER, "setTimeBase",
+                   "(L" TIMEBASE ";)V", a, NULL) != NJ_OK,
+           "setTimeBase(null) is refused");
+    {
+        const char *d = nj_exception_describe(vm);
+        OK_MSG(d != NULL && strstr(d, "IllegalArgumentException") != NULL,
+               "and it is an IllegalArgumentException, got %s",
+               d ? d : "(none)");
+        nj_clear_exception(vm);
+    }
+
+    /* TimeBase is an interface, so the clock here is only a ref of the right
+     * class: the native stores it without inspecting it. */
+    tb = nj_object_new(vm, TIMEBASE);
+    OK(tb != NULL);
+    if (!tb) {
+        nj_clear_exception(vm);
+        return;
+    }
+    a[0] = vref(tb);
+    OK(nj_call(vm, player, PLAYER, "setTimeBase",
+               "(L" TIMEBASE ";)V", a, NULL) == NJ_OK);
+    ret.bits = 0u;
+    OK(nj_call(vm, player, PLAYER, "getTimeBase",
+               "()L" TIMEBASE ";", NULL, &ret) == NJ_OK);
+    OK_MSG(ret.r == tb, "the master clock comes back unchanged");
+}
+
 /* ------------------------------------------------------------------ */
 /* 7: String - the ranged, encoded and StringBuffer constructors        */
 /* ------------------------------------------------------------------ */
@@ -3827,6 +3902,7 @@ int main(void)
     test_skips(vm);
     test_write_chars(vm);
     test_media(vm);
+    test_time_base(vm);
     test_strings(vm);
     test_numbers(vm);
     test_integer_short_value(vm);

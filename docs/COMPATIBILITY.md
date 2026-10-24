@@ -3146,3 +3146,43 @@ Size cost: `nj_lib_m3g.c.o` text grows by 5,696 B and the executable by
 6,359 B (`round 60`, matched Release configuration); `.bss` stays 0 and no VM
 or object field was added, so the RAM footprint is unchanged.
 
+
+## The listener a StringItem kept to itself (round 61, 2026-10-24)
+
+Two gaps in the LCDUI item API and one in JSR 135, all found by reading the
+specification's method list against the binding tables.
+
+**`Item.getItemCommandListener()` did not exist.** Titles that ask which
+listener an item has got `NoSuchMethodError`. It now returns the listener the
+item was given, or null.
+
+**A `StringItem` stored its listener where nothing read it.** The dispatcher
+(`item_command_dispatch`) reads `Item.itCmdListener` for every item, but
+`StringItem.setItemCommandListener` wrote a `StringItem`-only field
+(`siCmdListener`). So a listener set on a `StringItem` was never called - the
+one item type with text-only interaction was the one whose commands did
+nothing. The setter now writes the field the dispatcher reads, and the dead
+`siCmdListener` field is gone (a `StringItem` instance is one reference
+smaller).
+
+**`Player.getTimeBase()`/`setTimeBase()` and the `TimeBase` interface were
+missing.** JSR 135 lets a player take a master clock; without the methods a
+title that synchronises players got `NoSuchMethodError`, and `TimeBase` itself
+was an unknown class. Both methods now exist, `getTimeBase()` answers null
+until a clock is set, and `setTimeBase(null)` throws
+`IllegalArgumentException` as the specification says.
+
+Evidence: `tests/test_lcdui.c` gains `test_item_command_listener` (the getter
+exists and round-trips, and a `StringItem` writes the field the dispatcher
+reads) and `tests/test_lib.c` gains `test_time_base` (null default, null
+rejection with the right exception class, round-trip of a set clock). On the
+parent tree those assertions fail - the getter call does not resolve at all,
+the dispatcher-relevant field stays null, and `getTimeBase`/`TimeBase` are
+unknown - while this tree is green (`test_lcdui` PASS, `test_lib` 844 checks,
+`test_m3g` 654, `ctest` 103/103, ASan/UBSan clean).
+
+Size cost (matched Release configuration, `round 61`): `nj_lib_lcdui.c.o` text
++137 B, `nj_lib_media.c.o` text +514 B, executable text +1,344 B; `.bss` stays
+0. RAM moves by two object fields only: a `Player` gains one reference field
+(8 B) for its master clock, and a `StringItem` loses one (8 B) because the
+dispatcher never read it. No VM field was added in this round.
