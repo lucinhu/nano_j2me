@@ -994,3 +994,17 @@ SDL2 or embedded ports).  RAM: the stream struct gains one `nj_u4`
 = 480 B of C stack while it lifts a burst aside - no static buffer and no
 per-note field.  A title with one MIDI stream open pays 4 B more than before
 and nothing at all when no stream is open.
+
+## A screenful of rgb565 conversion costs one branch (round 63, 2026-10-24)
+
+Matched build flags (`-O3 -DNDEBUG -std=c99 -fPIC`, the CMake configuration
+this repository ships), compiled from the parent tree and the new tree:
+
+| object | `.text` | `.data` |
+| --- | --- | --- |
+| `nj_gfx.c.o` parent `4a802d3` | 32,106 B | 0 B |
+| `nj_gfx.c.o` with the row gate | 32,234 B | 0 B |
+
+128 bytes more text, no data, no bss, no new fields: the change widens one
+condition so that `NJ_ROP_SET` blits - which ignore source alpha - reuse the
+row converter that painted frames already used.

@@ -2879,3 +2879,35 @@ is what the parser and the comment on `mid_inject_note` already promised.
 Residual: controller events (bend, pedal, program) still insert one by one.
 They are bounded by `NJ_MIDI_MAX_CTLS` (2,048) and arrive far less often than
 notes, so the same treatment is not measured as worth it yet.
+
+### The frame a Mascot title blits to the screen (round 63, 2026-10-24)
+
+Profiling the heaviest software-3D title in the corpus
+(`浴火银河_3621`, 4,000 paced frames, `gprof` tree at HEAD `4a802d3`) puts
+`nj_region_draw` at 27.9% of CPU over 301,318 calls, just ahead of the Mascot
+span filler at 24.3%.  A blit census around `nj_region_draw` explains both
+numbers: 296,021 of those calls are ARGB8888->ARGB8888 paints (a title
+compositing its own layers), and 3,979 are ARGB8888->rgb565 blits under
+`NJ_ROP_SET` whose painted area is exactly 76,800 pixels each - one full
+screen every frame.  That is the title handing its finished ARGB render
+target to the rgb565 display.
+
+`NJ_ROP_SET` replaces the destination and ignores the source alpha, so the
+whole-row converter added for opaque paints is valid for every row of such a
+blit; the code previously took the group loop because the destination had to
+be rgb565 and the row path was gated on the paint path.  The gate is now
+`rop == NJ_ROP_SET || nj_argb_row_opaque(sp, n)`.
+
+Controlled blit bench (`.local-tools/debug-runs/blit-round51-20261024/
+gfx-bench.c`, six interleaved runs, CPU min of each arm): the `set565` mode,
+one full-screen 240x320 ARGB8888->rgb565 `NJ_ROP_SET` draw per iteration,
+drops from 15.01 ms to 7.33 ms per 400 iterations (**-51.2%**), and all eight
+framebuffer checksums are unchanged (`25fa0c9a` for this mode).  The other
+modes move by -1.5% to +3.6%, inside the machine's noise.
+
+Real title, 3,000 paced frames, three interleaved rounds of user CPU:
+min 0.8820 s -> 0.8262 s, median 0.9001 s -> 0.8428 s (**-6.3% / -6.4%**).
+The saving is the alpha bookkeeping the flush no longer does - one screen of
+pixels per frame at the measured conversion rate.
+
+Cost: 128 bytes of object text, no data or bss, no RAM.

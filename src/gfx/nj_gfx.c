@@ -2101,9 +2101,12 @@ static void nj_region_draw(nj_gfx *g, const nj_u1 *src, nj_s8 src_stride_bytes,
                 /*
                  * Opaque whole rows are the common case - a frame painted
                  * from an ARGB8888 render target - and they only need the
-                 * conversion, not the per-group alpha bookkeeping.
+                 * conversion, not the per-group alpha bookkeeping.  Under
+                 * NJ_ROP_SET the source alpha is irrelevant, so every row
+                 * takes it, which is what a title that blits its own ARGB
+                 * render target to an rgb565 screen does once per frame.
                  */
-                if (rop != NJ_ROP_SET && nj_argb_row_opaque(sp, n)) {
+                if (rop == NJ_ROP_SET || nj_argb_row_opaque(sp, n)) {
                     nj_565_row_from_argb(dp, sp, n, bpp);
                     continue;
                 }
