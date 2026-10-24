@@ -3789,3 +3789,24 @@ waits on the clock get anywhere.
 
 This supersedes the earlier unpaced corpus statements for compatibility
 purposes: pacing is the stricter run, and it still finds no runtime defect.
+
+## The chess board's short row (round 59, 2026-10-25)
+
+The paced corpus run leaves one recurring title-side exception worth chasing:
+353 `ArrayIndexOutOfBoundsException`s at `b.a()V pc=55` in
+中国象棋之水墨珍藏版_871.  Decompiling `b.class` shows why it is the title's
+own bug rather than a runtime one:
+
+- the field involved is `a:[[I`, and the method builds rows with a fixed
+  width of seven - `... bipush 6; iaload; iastore; dup; bipush 6;
+  sipush 1000; iastore; aastore; putstatic #40` writes element 6 of a row
+  into the table;
+- the failing instruction at pc 55 is `iaload` with index 6 after
+  `a[d]` loads a row, i.e. the title reads `a[d][6]` from a table that is
+  only seven wide when its own data produced a shorter row.
+
+Because the runtime side of this shape (`multianewarray`, `[[I` assignability)
+is exercised elsewhere - `tests/test_lib.c` covers `[[I` covariance and the
+whole suite is green (109/109) - this is recorded as corpus behaviour, not a
+defect to fix.  The remaining large exceptions in the paced corpus are the
+same kind: title code indexing its own arrays after parsing data it dislikes.
