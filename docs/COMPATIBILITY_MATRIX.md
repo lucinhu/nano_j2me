@@ -1,6 +1,6 @@
 # Compatibility matrix
 
-One row per JAR in `tests/games` (398 titles), from one headless replay per title
+One row per JAR in `tests/games` (399 titles), from one headless replay per title
 with the same recipe, so neighbouring rows are comparable:
 
 * port `headless`, screen `240x320`, `--fps 30`, `--run-frames 600`;
@@ -13,18 +13,18 @@ with the same recipe, so neighbouring rows are comparable:
 Corpus provenance and size are in `docs/CORPUS.md`; regenerate this table
 with `tools/make_compat_matrix.py <rows dir>` after a new sweep.
 
-Built from `fecfcce`, 2026-10-25.
+Built from `107fabd`, 2026-10-25.
 
 | verdict | titles |
 | --- | --- |
-| 运行正常 | 395 |
+| 运行正常 | 396 |
 | 未呈现画面 | 2 |
 | 非可用包 | 1 |
 
 | 3D API used | titles |
 | --- | --- |
 | - | 257 |
-| nokia-ui | 112 |
+| nokia-ui | 113 |
 | m3g | 21 |
 | m3g,nokia-ui | 5 |
 | mascot | 3 |
@@ -166,6 +166,7 @@ Built from `fecfcce`, 2026-10-25.
 | 大富翁中国之旅_11873.jar | 97 | DFWZGZL | - | 10 | 16 | 600 | 33580 | java/lang/NullPointerException,j | 运行正常 |  |
 | 大魔界村_11996.jar | 1234 | Ghouls N Ghosts | nokia-ui | 103 | 16 | 600 | 2020218 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 大鱼吃小鱼－深海探险2_614.jar | 633 | 大鱼吃小鱼-深海探险2 | - | 63 | 16 | 600 | 130579 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| 太空侵略者3_archive.jar | 85 | Space Impact III | nokia-ui | 11 | 16 | 600 | 499835 | java/lang/NullPointerException,j | 运行正常 |  |
 | 太空冲击303_archive.jar | 85 | Space Impact III | nokia-ui | 11 | 16 | 600 | 500106 | - | 运行正常 |  |
 | 头文字D之疾风骤雨_2140.jar | 938 | 世嘉头文字D-疾风骤雨 | m3g | 26 | 16 | 600 | 81788 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | 奥特曼-宇宙英雄超银河传说_2233.jar | 1245 | 奥特曼-宇宙英雄超银河传说 | - | 139 | 16 | 600 | 38517 | javax/microedition/media/MediaEx | 运行正常 |  |
