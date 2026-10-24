@@ -3490,3 +3490,25 @@ Everything below 3 was title-side arithmetic, missing resources, or the
 `NullPointerException`s a title raises when it draws a sprite it never
 assigned.  So the histogram thread is now exhausted: what remains is
 specification-mandated behaviour that the titles expect to catch.
+
+## Final gate sweep of the optimisation branch (round 43, 2026-10-24)
+
+Run on `73f9f90` with the tree exactly as committed, as a last check that the
+compatibility work of rounds 33-40 did not disturb the performance contract:
+
+- `cmake --build build -j8` - 0 warnings, 0 errors.
+- `ctest -j8` - 100% of 105 tests in 46.69 s.
+- `nj2me --port headless --heap 16 --fps 0 --stats tests/fixtures/bench.jar`
+  - `BENCH sum=-136042548 s=5`, `bytecodes=70,514,376`, heap 92,432/92,432 B,
+  unchanged from the pre-optimisation baseline.
+- `tools/check_superinstr_digest.sh` - 27 digest values identical to the
+  desktop JVM.
+- `tools/check_no_statics.sh` - 63 objects, no writable static data (the only
+  non-`const` tables are the two read-only pointer tables in `.data.rel.ro`).
+
+Corpus evidence for the same tree is in the round 38 section (78 of 79 sampled
+titles completed a 400-frame run with no uncaught exception; the one failure
+is the known broken package), and the round 39 section records how API
+coverage is verified per family.  Nothing here claims a pixel-level
+certificate against a reference device: the pixel-diff work in the earlier
+rounds covers specific spans and blits, not whole frames.
