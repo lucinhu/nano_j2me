@@ -3310,3 +3310,27 @@ whether a thread ever existed; the created count can, and that script passes
 with `threads=2`.
 
 Cost is code only - no new VM fields, no new buffers - so RAM is unchanged.
+
+## Canvas.getGameAction is static (round 34, 2026-10-24)
+
+`bubblet`, `game15` and `slimevolley` all reported, over and over:
+
+```
+thrown: java/lang/IncompatibleClassChangeError at BubbletCanvas.keyPressed(I)V pc=52:
+    invokestatic on an instance method
+```
+
+The call is `Canvas.getGameAction(key)` in `keyPressed`, and MIDP 2.0 declares
+it `public static int`.  Our built-in `Canvas` table listed it - and also
+`getKeyCode` and `getKeyName`, which the spec likewise declares static - with
+no `NJ_ACC_STATIC` flag, so the resolver reported an instance method and the
+`invokestatic` check in the interpreter refused the call.  Every key press of
+those titles threw, which is why their `keyPressed` never did anything.
+
+Fixed by declaring all three static in the `canvas_methods` table.  The
+interpreter already handles `invokevirtual` naming a static target (that is the
+mirror case the round-53 light work hardened), so nothing else had to change.
+
+Evidence: bubblet / game15 / slimevolley go from repeated
+`IncompatibleClassChangeError` on every key press to **zero** over 600 frames.
+`ctest` stays green, and `BENCH sum=-136042548 s=5` is unchanged.

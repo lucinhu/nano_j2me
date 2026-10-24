@@ -10607,9 +10607,11 @@ static const nj_builtin_method canvas_methods[] = {
     M("hasRepeatEvents",   "()Z", 0),
     /* MIDP instance methods: consume the receiver and skip it when passing
      * arguments to their native implementations. */
-    M("getGameAction",     "(I)I", 0),
-    M("getKeyCode",        "(I)I", 0),
-    M("getKeyName",        "(I)Ljava/lang/String;", 0),
+    /* MIDP 2.0 declares these three static; a game that calls
+     * Canvas.getGameAction(key) with invokestatic must resolve here. */
+    M("getGameAction",     "(I)I", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("getKeyCode",        "(I)I", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
+    M("getKeyName",        "(I)Ljava/lang/String;", NJ_ACC_STATIC | NJ_ACC_PUBLIC),
     M("repaint",           "()V", 0),
     M("repaint",           "(IIII)V", 0),
     M("serviceRepaints",   "()V", 0),
