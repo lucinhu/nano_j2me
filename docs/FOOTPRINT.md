@@ -1022,3 +1022,16 @@ the new tree:
 192 bytes more text, no data, no bss, no new rasteriser state: the mode is
 selected from flags the state already carries, and the helper keeps its
 counters in registers.
+
+## Short rows are walked, not scanned (round 19, 2026-10-24)
+
+| quantity | parent | new | delta |
+| --- | --- | --- | --- |
+| `nj_gfx.c.o` `.text` | 34,618 B | 34,618 B | 0 B |
+| executable `.text` | 1,228,394 B | 1,228,394 B | 0 B |
+| `.data` / `.bss` | unchanged | unchanged | 0 |
+| VM state | - | - | no new fields |
+
+The gate is one comparison (`n >= 32`) inside the row loop, and the compiler
+folded it into the loop bounds that `nj_argb_row_opaque()` already carries, so
+the change is free in ROM as well as RAM.

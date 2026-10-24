@@ -2944,3 +2944,38 @@ Real title, 3,000 paced frames, three interleaved rounds of user CPU:
 min 0.7543 s -> 0.6927 s, median 0.7739 s -> 0.7020 s (**-8.2% / -9.3%**).
 
 Cost: 192 bytes of object text, no data or bss, no RAM.
+
+## Short rows stop scanning for an opacity they rarely have (round 19, 2026-10-24)
+
+`nj_region_draw` still takes about a quarter of the CPU of a Mascot 3D title
+after the full-screen flush and the raw texture span loops were fixed.  A
+census of drawn pixels (not calls) explains the remainder: on
+`浴火银河_3621`, 3,000 paced frames issue 179,005 ARGB8888 -> ARGB8888
+`NJ_ROP_PAINT` blits that only cover 65.45M pixels together - 366 pixels per
+call.  Those are the HUD sprites and text strips, and their rows are shorter
+than the sixteen-pixel blocks `nj_argb_row_opaque()` folds, so every row paid
+a scan that almost always answered "no" before the eight-pixel group loop
+started.
+
+The row test now only runs when a row has at least 32 pixels; short rows go
+straight to the group loop.
+
+| workload (taskset -c 5, 6 interleaved rounds) | parent | new | delta |
+| --- | --- | --- | --- |
+| 浴火银河_3621, 3,000 paced frames, min user CPU | 0.6842 s | 0.6750 s | -1.3% |
+| same, median | 0.7009 s | 0.6824 s | -2.6% |
+
+Every round was faster (five paired rounds, 0.676-0.683 vs 0.684-0.710).  The
+framebuffer is unchanged: the controlled blit bench reports the same hashes
+(`25fa0c9a`, `e1e89aeb`, ...), because a 240-pixel row is long enough to take
+the same path as before; `tests/test_gfx.c` (324 assertions) passes.
+
+ROM and RAM: `nj_gfx.c.o` `.text` is 34,618 bytes before and after - the
+compiler folded the new comparison into the loop that already bounds the scan -
+and `.data`/`.bss` are untouched, so this change costs no RAM and no ROM.
+
+A second idea was measured and discarded: rewriting `nj_blend_argb()` with
+packed red/blue lanes and an exact reciprocal for the `/255` step is bit-exact
+over every `(alpha, source, destination)` combination (the exhaustive harness
+is not committed; it checks all 16.7M triples), but it measured 2-3% *slower*
+on the `argb32mix` blit mode, so it was dropped rather than kept for elegance.
