@@ -2789,3 +2789,23 @@ differential) and `test_mascot` (233 checks) pass unchanged in a build with
 independent builds of the same tree therefore agree on every pixel, which is
 the strongest statement this change can make without a dedicated raster
 benchmark - the same benchmark that is still missing for a speed figure.
+
+### What is left in the generic loop (round 18, 2026-10-24)
+
+After the environment-mapped rows were added, the remaining generic spans in
+`浴火银河_3621` are the ones with `NJ_MR_SHADED` clear: 67,025 of 260,425 spans
+in a 2,000-frame replay are plain textured spans that copy the palette entry
+straight to the surface.  Two more rows (`mr_span_texp_smooth_put`,
+`mr_span_texp_flat_put`) were written for that shape and the same controlled
+benchmark was pointed at it with `NJ_MR_SHADED` removed:
+
+| Build | CPU for 20,000 triangles | per triangle |
+| --- | --- | --- |
+| parent | 1.0208 - 1.0291 s | 51.0 - 51.5 us |
+| with unshaded rows | 1.0171 - 1.0287 s | 50.9 - 51.4 us |
+
+No measurable difference (checksums identical, `5661ea6d`): the generic loop
+for this shape is already a tight copy loop with its flag tests hoisted by the
+compiler, so the rows were **reverted rather than committed**.  The lesson for
+the next round is that the remaining generic spans are not where the time is;
+`nj_region_draw` (20.4% of this title) is the next candidate.
