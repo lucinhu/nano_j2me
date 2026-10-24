@@ -18,7 +18,9 @@ hand-collected file.
 | 太空冲击303_archive.jar | `spaceimpact-303-en` | Space Impact 303 |
 
 `docs/COMPATIBILITY_MATRIX.md` lists every one of them with what happened when
-it was replayed.  Two tracked tools reproduce it:
+it was replayed: size, MIDlet name, vendor, version, MIDP profile, 3D API in
+use, class count, heap, frames, bytecodes, the exceptions it threw, the
+verdict and the reason behind a non-ok verdict.  Two tracked tools reproduce it:
 
 * `tools/sweep_compat.py [dir]` replays every JAR with one fixed recipe (headless,
   240x320, `--fps 30`, 600 frames, 16 MB heap retried at 32 MB, one shared input
