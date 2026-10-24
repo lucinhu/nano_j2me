@@ -24,6 +24,8 @@
  * again.  No C stack is ever suspended, so this works on any port.
  */
 #include "nj_internal.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 #if NJ_USE_LIBC
 #  include <string.h>
@@ -206,6 +208,27 @@ nj_thread *nj_thread_create(nj_vm *vm, nj_ref thread_obj, int is_main)
     t->wake_at_ms = 0;
     vm->threads[vm->nthreads++] = t;
     return t;
+}
+
+/*
+ * Release the slots of threads whose run() has already returned.  A finished
+ * thread used to keep its slot until the VM shut down, so a title that starts
+ * a fresh thread per level eventually hit NJ_MAX_THREADS and died with a
+ * spurious OutOfMemoryError ("too many threads").  The Java handle is the
+ * numeric id kept in the object's nativeId field, not a pointer, so a dead
+ * thread can be freed as soon as its state is NJ_THREAD_DEAD.
+ */
+static void nj_thread_reap(nj_vm *vm)
+{
+    nj_u2 i;
+
+    for (i = vm->nthreads; i > 0u; i--) {
+        nj_thread *t = vm->threads[i - 1u];
+
+        if (t && t->state == NJ_THREAD_DEAD && t != vm->cur) {
+            nj_thread_destroy(vm, t);
+        }
+    }
 }
 
 void nj_thread_destroy(nj_vm *vm, nj_thread *t)
@@ -460,6 +483,7 @@ static nj_status scheduler_step(nj_vm *vm)
     if (!vm || !vm->running) {
         return NJ_ERR_HALT;
     }
+    nj_thread_reap(vm);
     now = nj_now_ms(vm);
 
     for (i = 0u; i < vm->nthreads; i++) {
@@ -520,6 +544,19 @@ static nj_status scheduler_step(nj_vm *vm)
             continue;
         }
 
+        /*
+         * A thread that has no frames left has finished its run() method:
+         * `nj_exec` on an empty stack returns NJ_OK (it has nothing to do),
+         * so without this check the slot stayed NJ_THREAD_RUNNING for ever,
+         * the scheduler kept walking it, and the title eventually ran out of
+         * thread slots ("too many threads").  Only scheduler-owned threads
+         * reach here: the main thread and natives parked in a C call are
+         * filtered above.
+         */
+        if (t->nframes == 0u && !t->is_main) {
+            t->state = NJ_THREAD_DEAD;
+            continue;
+        }
         ran = 1;
         vm->cur = t;
         st = nj_exec(vm, t, 0);

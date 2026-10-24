@@ -3267,3 +3267,46 @@ asserts `getHeaderFieldInt("X-Int", -7) == 42`, the default for an absent name,
 is 784,111,777 s, so the expected value is that times 1000), the default for an absent
 name, and `getDate() > 0` for the fixture's own `Date` header.  Cost is code
 only: no new fields, buffers stay on the stack, so RAM is unchanged.
+
+## The threads that were never collected (round 33, 2026-10-24)
+
+A corpus sweep kept finding seven titles that threw
+`OutOfMemoryError: too many threads` from `Thread.start()`: 海绵宝宝卡丁车_4684,
+恋色狂想之魔女恋歌_4899, 圣百合女子学园-纯色序曲_4875, 坦克大战（经典版）_190,
+LOVExLOVE恋爱学院_4424 and two more.  The message came from
+`vm->nthreads >= NJ_MAX_THREADS` (32), which looked like a title asking for a
+huge pile of threads.  It was not.
+
+A probe of the thread table at the moment of the failure showed
+`nthreads=32 dead=0 parked=1 running=31`, and the "running" entries had
+`nframes == 0`: they had finished `run()` long ago and were still counted.  The
+cause is that a finished scheduler-owned thread is only marked
+`NJ_THREAD_DEAD` when `nj_exec` answers `NJ_ERR_HALT`, and `nj_exec` on an empty
+stack answers `NJ_OK` ("nothing to do").  So the slot stayed `RUNNING` for ever:
+the scheduler walked it every step, `Thread.isAlive()` could never see it die
+(the object's `alive` flag is separate), and after 32 such threads the title
+could not start another one.
+
+Two small changes in `src/core/nj_thread.c`:
+
+* `nj_scheduler_step` treats a scheduler-owned thread with no frames as
+  finished (`NJ_THREAD_DEAD`) before trying to execute it.  The main thread and
+  natives parked in a C call are filtered earlier and are unaffected.
+* a dead thread is reaped at the top of the same step, which frees its
+  `nj_thread` and its stack instead of keeping both until VM teardown.  The Java
+  handle is the numeric id in `nativeId`, not a pointer, and `isAlive()`/`join()`
+  already cope with a thread that is no longer in the table.
+
+Evidence, same key script and 2400 frames: 海绵宝宝卡丁车_4684 goes from 116
+`too many threads` errors and 214,081 bytecodes (the title stuck in its retry
+loop) to **0 errors and 3,718,758,532 bytecodes** - it actually plays.
+恋色狂想之魔女恋歌_4899 goes from 60 errors to 0.  `test_thread_lifecycle`
+still passes, including its "a bridge may own an empty Java stack" case.
+
+One observable changes: `--stats` used to print the live thread count and now
+prints threads created since the VM started (monotonic).  The live count falls
+back as slots are reaped, so it can no longer tell `check_late_display.sh`
+whether a thread ever existed; the created count can, and that script passes
+with `threads=2`.
+
+Cost is code only - no new VM fields, no new buffers - so RAM is unchanged.
