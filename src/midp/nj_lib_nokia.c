@@ -97,18 +97,22 @@ nj_status nj_nokia_late_init(nj_vm *vm)
     nokia_const_int(vm, NJ_C_FSELECT, "MEDIA_TYPE_ALL", 16);
 
     /*
-     * The stub jar inlines these, so the runtime has to hold the same numbers:
-     * a MIDlet comparing getState() against a stub's SOUND_PLAYING of 1 while
-     * the runtime answers 0 never notices it is being lied to.
+     * These numbers come from Nokia's own class library rather than from a
+     * stub: the Nokia 5100 SDK's lib/classes.zip answers
+     * `javap -constants com.nokia.mid.sound.Sound` with SOUND_PLAYING = 0,
+     * SOUND_STOPPED = 1 and SOUND_UNINITIALIZED = 3, so a MIDlet that compares
+     * getState() with the constant sees the same pair a handset produced.
+     * SOUND_UNPLAYABLE is not in that SDK; 2 is kept because a title compiled
+     * against a stub may reference it, and it collides with no Nokia value.
      */
     nokia_const_int(vm, NJ_C_SOUND, "FORMAT_TONE", 1);
     nokia_const_int(vm, NJ_C_SOUND, "FORMAT_WAV", 5);   /* the spec value; the
                                                          * formats array below
                                                          * has always answered 5 */
-    nokia_const_int(vm, NJ_C_SOUND, "SOUND_STOPPED", 0);
-    nokia_const_int(vm, NJ_C_SOUND, "SOUND_PLAYING", 1);
+    nokia_const_int(vm, NJ_C_SOUND, "SOUND_STOPPED", 1);
+    nokia_const_int(vm, NJ_C_SOUND, "SOUND_PLAYING", 0);
     nokia_const_int(vm, NJ_C_SOUND, "SOUND_UNPLAYABLE", 2);
-    nokia_const_int(vm, NJ_C_SOUND, "SOUND_UNINITIALIZED", -1);
+    nokia_const_int(vm, NJ_C_SOUND, "SOUND_UNINITIALIZED", 3);
 
     nokia_const_int(vm, NJ_C_DGRAPHICS, "FLIP_HORIZONTAL", 0x2000);
     nokia_const_int(vm, NJ_C_DGRAPHICS, "FLIP_VERTICAL", 0x4000);
@@ -174,7 +178,9 @@ NJFN(nokia_snd_init)
 {
     nj_field *f = snd_field(vm, "state");
     if (f) {
-        nj_field_write_int(vm, NJ_THIS(args), f, 0);
+        /* Nokia's own Sound answers SOUND_STOPPED (1) once init() has run,
+         * and its constructor runs init(). */
+        nj_field_write_int(vm, NJ_THIS(args), f, 1);
     }
     return NJ_OK;
 }
@@ -209,9 +215,9 @@ NJFN(nokia_snd_play)
 {
     nj_field *f = snd_field(vm, "state");
     if (f) {
-        nj_field_write_int(vm, NJ_THIS(args), f, 1);   /* SOUND_PLAYING */
+        nj_field_write_int(vm, NJ_THIS(args), f, 0);   /* SOUND_PLAYING */
     }
-    snd_notify(vm, NJ_THIS(args), 1);
+    snd_notify(vm, NJ_THIS(args), 0);
     return NJ_OK;
 }
 
@@ -229,9 +235,9 @@ NJFN(nokia_snd_stop)
 {
     nj_field *f = snd_field(vm, "state");
     if (f) {
-        nj_field_write_int(vm, NJ_THIS(args), f, 0);   /* SOUND_STOPPED */
+        nj_field_write_int(vm, NJ_THIS(args), f, 1);   /* SOUND_STOPPED */
     }
-    snd_notify(vm, NJ_THIS(args), 0);
+    snd_notify(vm, NJ_THIS(args), 1);
     return NJ_OK;
 }
 
@@ -262,13 +268,13 @@ NJFN(nokia_snd_resume)
     nj_field *f = snd_field(vm, "state");
     nj_s4 st = f ? nj_field_read_int(vm, NJ_THIS(args), f) : 0;
 
-    if (st == 1) {                  /* SOUND_PLAYING */
+    if (st == 0) {                  /* SOUND_PLAYING */
         return NJ_OK;
     }
     if (f) {
-        nj_field_write_int(vm, NJ_THIS(args), f, 1);   /* SOUND_PLAYING */
+        nj_field_write_int(vm, NJ_THIS(args), f, 0);   /* SOUND_PLAYING */
     }
-    snd_notify(vm, NJ_THIS(args), 1);
+    snd_notify(vm, NJ_THIS(args), 0);
     return NJ_OK;
 }
 

@@ -27,6 +27,13 @@ static int g_fail;
         }                                                                      \
     } while (0)
 
+static nj_s4 const_of(nj_vm *vm, const char *name)
+{
+    nj_field *f = nj_field_lookup(vm, "com/nokia/mid/sound/Sound", name, "I", 1);
+
+    return f ? nj_field_read_int(vm, NULL, f) : -9999;
+}
+
 static nj_s4 note_of(nj_vm *vm, nj_s4 freq)
 {
     nj_value arg;
@@ -63,6 +70,12 @@ int main(void)
 
     cls = nj_class_resolve(vm, "com/nokia/mid/sound/Sound");
     OK(cls != NULL, "the Sound class comes from the Nokia extension");
+
+    /* The state constants come from Nokia's own class library: a MIDlet that
+     * compares getState() with SOUND_PLAYING must see the pair a handset gave. */
+    OK(const_of(vm, "SOUND_PLAYING") == 0, "SOUND_PLAYING is 0");
+    OK(const_of(vm, "SOUND_STOPPED") == 1, "SOUND_STOPPED is 1");
+    OK(const_of(vm, "SOUND_UNINITIALIZED") == 3, "SOUND_UNINITIALIZED is 3");
 
     /* A4 is 440 Hz and MIDI 69; note 0 is 8.176 Hz, so 8.176 kHz is 120. */
     OK(note_of(vm, 440) == 69, "440 Hz is MIDI note 69");

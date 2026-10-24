@@ -868,9 +868,13 @@ CLASSES = {
         "methods": ["void soundStateChanged(com.nokia.mid.sound.Sound, int)"],
     },
     "com/nokia/mid/sound/Sound": {
+        # These four are javap -constants values from Nokia's own class library
+        # (5100 SDK lib/classes.zip), not guesses: SOUND_PLAYING 0, STOPPED 1,
+        # UNINITIALIZED 3.  A MIDlet compiled against these stubs inlines them,
+        # so they have to agree with the runtime's table.
         "constants": {"FORMAT_TONE": "1", "FORMAT_WAV": "5",
-                      "SOUND_PLAYING": "1", "SOUND_STOPPED": "0",
-                      "SOUND_UNINITIALIZED": "-1"},
+                      "SOUND_PLAYING": "0", "SOUND_STOPPED": "1",
+                      "SOUND_UNINITIALIZED": "3"},
         "methods": [
             "public Sound(int, long)",
             "public Sound(byte[], int)",

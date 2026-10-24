@@ -3832,12 +3832,12 @@ is 8.176 Hz; ours now does the same with `log()` from the C library, and
 `tests/test_nokia_sound.c` pins it: 440 Hz is note 69, 880 Hz is 81, 8.176 kHz
 is 120, and zero or negative frequencies clamp to 0.
 
-While reading that file: the reference declares **`SOUND_PLAYING = 0`**, which
-contradicts the Nokia UI API (SOUND_STOPPED 0, SOUND_PLAYING 1, SOUND_UNPLAYABLE
-2), so a frame comparison against it can disagree with a MIDlet's own state
-checks.  This joins the two other known reference defects recorded here (its M3G
+While reading that file: the reference declares **`SOUND_PLAYING = 0`**, and
+this runtime declared 1.  The reference turned out to be right (see the next
+section), which is exactly why a difference against it is a question and not a
+verdict.  The two other reference defects recorded here stand (its M3G
 `World.find` NPE on 毁灭战士3_10598, and the missing JSR-184 animation
-interpolation) - it is one opinion, not an oracle.
+interpolation).
 
 ## What we compare against, and what cannot be compared (round 63, 2026-10-25)
 
@@ -3873,3 +3873,41 @@ javadoc pages, e.g. the CLDC 1.1 `InputStream` and MIDP 2.0 `Canvas` pages used
 in rounds 44 and 60), bytecode fixtures that pin behaviour the C side cannot
 express, the real-game corpus sweeps, and the reference emulator as a
 tie-breaker with a recorded list of its known errors.
+
+### Nokia's own class library settles the Sound constants (round 64, 2026-10-25)
+
+The Nokia SDKs on `archive.org/details/nokia_sdks_n_dev_tools` and
+`..._n_dev_tools2` are usable as a vendor reference: the Nokia 5100 SDK's
+installer (`Nokia_5100_SDK_Final_1_0.zip` -> `install.exe` -> `7z e
+InstallerData/Resource1.zip`) carries `lib/classes.zip`, Nokia's own MIDP 1.0 +
+Nokia UI API classes.  `javap -p -constants -cp . com.nokia.mid.sound.Sound`
+answers:
+
+    public static final int SOUND_PLAYING = 0;
+    public static final int SOUND_STOPPED = 1;
+    public static final int SOUND_UNINITIALIZED = 3;
+    public static final int FORMAT_TONE = 1;
+    public static final int FORMAT_WAV = 5;
+
+This runtime had `SOUND_STOPPED = 0`, `SOUND_PLAYING = 1` and
+`SOUND_UNINITIALIZED = -1`, i.e. the two state constants were exactly reversed
+against the handset, and `init()` left a new Sound looking "playing" under those
+numbers.  Both sides now use Nokia's values (`SOUND_UNPLAYABLE = 2` is kept
+because a stub-built title may reference it and it collides with nothing in the
+SDK), `init()` answers `SOUND_STOPPED`, `play()`/`resume()` answer
+`SOUND_PLAYING`, and `tools/midp_stubs.py` - whose constants javac inlines into
+every MIDlet that reads them - carries the same numbers, so
+`tests/fixtures/constdemo.expected` and `check_nokiademo` agree.
+
+The same SDK layout also holds `tools/emulator.jar` (Nokia's emulator core) and
+the SDK PDFs, so a vendor-authoritative API surface is available offline for
+later rounds; the S40 3rd Edition FP1 SDK downloads as well and is cached under
+`/tmp` for the same purpose.
+
+A note on `test_lib` (2026-10-25): its `test_player_survives_collection`
+check ("createPlayer on a heap that has to collect mid-call", tests/test_lib.c:2495)
+fails deterministically on this machine.  It is NOT caused by the Sound constant
+change: reverting that change, rebuilding and re-running the same binary still
+fails; every other test passes (`ctest -E '^test_lib$'` -> 110/110).  The check
+fills the heap to under 700 KB free, then expects `createPlayer` to collect and
+succeed; that is a GC-sensitive assertion worth investigating on its own.

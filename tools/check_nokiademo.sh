@@ -32,8 +32,8 @@ printf '%s\n' "$OUT" | grep -q 'NOKIA argb=ff112233' \
     || fail "the int[] drawPixels overload did not keep an ARGB colour"
 printf '%s\n' "$OUT" | grep -q 'NOKIA png=2x2' \
     || fail "DirectUtils.createImage(byte[], int, int) did not decode the PNG in the jar"
-printf '%s\n' "$OUT" | grep -q 'NOKIA snd=1,50,1,2,1' \
-    || fail "Sound did not play (1), keep gain 50, resume, list two formats and one channel"
+printf '%s\n' "$OUT" | grep -q 'NOKIA snd=0,50,0,2,1' \
+    || fail "Sound did not report SOUND_PLAYING (0), keep gain 50, resume, list two formats and one channel"
 printf '%s\n' "$OUT" | grep -q 'NOKIA devctl=ok' \
     || fail "a DeviceControl call threw"
 
