@@ -3650,3 +3650,16 @@ first wait, and a shot only after a paint) and skips with exit 77 when the
 reference or PIL is absent.  CTest registers it as `check_reference_frame`
 only when `.local-tools/run-freej2me-headless.sh` exists, so a checkout
 without the reference neither fails nor silently pretends to have compared.
+
+### The comparison fails, not just reports (round 50, 2026-10-24)
+
+`tools/compare_reference_frame.sh` takes an optional seventh argument, the MAE
+threshold (default 12/255), and exits non-zero when the measured error is
+above it.  The CTest registration passes 12: the recorded value for
+三国杀单机战功修改版_4143 at frame 300 is 6.96, so a structural rendering
+regression (missing layer, moved sprite) fails the test while the known
+per-pixel differences of two independent runtimes stay inside the budget.
+
+The threshold is deliberately loose and the comment in the script says why:
+these are two different implementations advancing animations on their own
+clocks.  A tighter number would fail for reasons that are not defects.

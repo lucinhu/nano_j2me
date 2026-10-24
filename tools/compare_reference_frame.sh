@@ -8,10 +8,12 @@
 # splash screen never paints, and the screenshot then has nothing to capture.
 # Both runtimes advance animations on their own clocks, so the number this
 # prints bounds "same scene, small differences" - it is not a frame-locked
-# pixel certificate.  Exits 77 (skip) when PIL or the reference is missing.
+# pixel certificate.  Exits 77 (skip) when PIL or the reference is missing;
+# the optional seventh argument is the MAE threshold (default 12/255).
 set -u
 
 bin=${1:-}; jar=${2:-}; ref=${3:-}; frame=${4:-300}; w=${5:-240}; h=${6:-320}
+thr=${7:-12}
 if [ -z "$bin" ] || [ -z "$jar" ] || [ -z "$ref" ] || [ ! -x "$bin" ] || [ ! -f "$jar" ]; then
     echo "usage: $0 <nj2me> <jar> <run-freej2me-headless.sh> <frame> [w h]" >&2
     exit 2
@@ -35,9 +37,10 @@ printf 'wait 3000\npress 5 200\nwait 7000\nshot %s/ref.png\nquit\n' "$tmp" |
     "$ref" "$jar" "$tmp/refdir" "$w" "$h" >"$tmp/ref.log" 2>&1 ||
     { echo "FAIL: reference run exited $?"; exit 1; }
 
-python3 - "$tmp" <<'PY'
+python3 - "$tmp" "$thr" <<'PY'
 import glob, sys
 d = sys.argv[1]
+thr = float(sys.argv[2])
 ppms = sorted(glob.glob(d + '/ours/*.ppm'))
 pngs = sorted(glob.glob(d + '/**/*.png', recursive=True))
 if not ppms:
@@ -56,6 +59,10 @@ for y in range(h):
     for x in range(w):
         for c in range(3):
             tot += abs(pa[x, y][c] - pb[x, y][c]); n += 1
+mae = tot / n
 print('MAE %.2f / 255 over %d samples (%dx%d, frame from %s)'
-      % (tot / n, n, w, h, ppms[0].rsplit('/', 1)[-1]))
+      % (mae, n, w, h, ppms[0].rsplit('/', 1)[-1]))
+if mae > thr:
+    print('FAIL: MAE %.2f exceeds the %.2f threshold' % (mae, thr))
+    sys.exit(1)
 PY
