@@ -3972,3 +3972,23 @@ its save pass and the AMS still gets to go away.  The title then ends with exit
 status 1 by itself - the frame budget path reports 0, so the only other writer is
 `System.exit(1)`/`Runtime.exit(1)` in the title - and the matrix now says
 "标题自行退出" rather than calling that an emulator failure.
+
+### Reading the five failures (round 68, 2026-10-25)
+
+The matrix does not call every non-zero exit a defect, and this round closed the
+question on each of the remaining rows:
+
+* `1945空战英雄_6105` needs a device profile.  With `--device nokia6230` it
+  replays 300 frames / 3.9 M bytecodes normally; the title reads Nokia device
+  properties and refuses the generic handset.
+* `乱世Q三国_1649` opens a record store with `create = false` on a fresh install
+  and does not catch `RecordStoreNotFoundException` (it never gets past 128
+  bytecodes, before any store could exist).  That is the behaviour JSR-75 asks
+  for, so the row is the title's own assumption.
+* `有女倾城破解版_11525` and `蹦球传说_7801` end by themselves (0 and 94 frames,
+  no uncaught exception); the frame-budget path reports exit code 0, so the 1
+  they return comes from their own `System.exit`.
+* `鲁宾逊漂流记汉化BT版_4677` has no usable manifest - not a MIDlet suite.
+
+None of the five is an emulator defect; the matrix keeps them visible with a
+note column instead of hiding them.
