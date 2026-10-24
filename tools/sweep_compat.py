@@ -79,7 +79,13 @@ def one(path):
             row.update({"verdict": "bad-jar"})
             break
         if heap == 32 or "OutOfMemoryError" not in err:
-            row["verdict"] = ("oom" if "OutOfMemoryError" in err else "failure")
+            if rc == 0 and uncaught == 0 and "OutOfMemoryError" not in err:
+                # It ran and exited on its own, it just never painted: some
+                # MIDP 1.0 titles wait for input they never get from a script,
+                # or draw only after a state machine we never reach.
+                row["verdict"] = "no-frame"
+            else:
+                row["verdict"] = ("oom" if "OutOfMemoryError" in err else "failure")
             break
         row["verdict"] = "retry-heap32"
     if row.get("verdict") in ("failure", "timeout"):

@@ -26,3 +26,9 @@ it was replayed.  Two tracked tools reproduce it:
   cannot start on the generic handset is retried once with `--device nokia6230`,
   so a device-profile requirement is measured rather than reported as a failure.
 * `tools/make_compat_matrix.py [dir]` turns `rows.jsonl` into the table.
+
+A row is `ok` when the title ran its frames, `未呈现画面` when it exited cleanly
+without ever presenting a frame, `失败` when it crashed or was rejected, and
+`非可用包` when the JAR is not a usable MIDlet suite.  The three states are kept
+apart on purpose: a title that runs and paints nothing is not a crash, and
+lumping them together used to hide which rows were actually broken.
