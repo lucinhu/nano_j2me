@@ -18,5 +18,11 @@ hand-collected file.
 | 太空冲击303_archive.jar | `spaceimpact-303-en` | Space Impact 303 |
 
 `docs/COMPATIBILITY_MATRIX.md` lists every one of them with what happened when
-it was replayed; `tools/make_compat_matrix.py` rebuilds that table from the
-sweep rows.
+it was replayed.  Two tracked tools reproduce it:
+
+* `tools/sweep_compat.py [dir]` replays every JAR with one fixed recipe (headless,
+  240x320, `--fps 30`, 600 frames, 16 MB heap retried at 32 MB, one shared input
+  script, a fresh RMS directory per title) and writes `rows.jsonl`.  A title that
+  cannot start on the generic handset is retried once with `--device nokia6230`,
+  so a device-profile requirement is measured rather than reported as a failure.
+* `tools/make_compat_matrix.py [dir]` turns `rows.jsonl` into the table.
