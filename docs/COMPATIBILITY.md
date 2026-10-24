@@ -3389,3 +3389,28 @@ asks for such a size, and the 1,992 `image dimensions must be positive`
 exceptions that led here turned out to be 生化危机之恶化_8448 deliberately
 calling `createImage(0, 0)` and catching the rejection, which is what the
 specification requires.
+
+## The texture size that could wrap too (round 37, 2026-10-24)
+
+The previous round stopped `Image.createImage` from multiplying dimensions in
+32 bits.  The same pattern sat in two places that read their sizes out of a
+`.m3g` file, i.e. from bytes no game author verified:
+
+- the texture payload reader (`NJ_M3G_T_TEXTURE`) computed `w * h` in 32 bits
+  and only then compared against the 4096x4096 cap, so a wrapped product could
+  slip under the cap, allocate a small RGBA array, store the *unwrapped* `w`
+  and `h` in the Image2D and leave every later consumer of `_nj_w`/`_nj_h`
+  indexing past that array;
+- the mipmap cache checked `nj_array_length(px) < w * h * 4`, which wraps for
+  images above 536 million pixels and would then accept a buffer that is too
+  small.
+
+Both products are now formed in 64 bits before any comparison, and the
+texture reader rejects a pixel count it cannot represent.  No field, table or
+allocation was added; the changed code is a handful of comparisons.
+
+Evidence: `test_m3g` 654 checks / 0 failures, `test_m3g_references` unchanged,
+`ctest` 105/105, digest 27/27, `check_no_statics.sh` OK, `BENCH
+sum=-136042548 s=5`.  Like the previous round this is hardening: no title in
+the corpus ships such a texture, and the point is that a damaged asset cannot
+turn into an out-of-bounds read.

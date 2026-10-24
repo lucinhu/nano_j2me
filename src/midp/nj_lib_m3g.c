@@ -5021,13 +5021,19 @@ nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
              */
             nj_u4 w = f->b, h = f->c, pal = f->d;
             nj_u4 bpp = m3g_image_bpp(f->a);
-            nj_u4 n = w * h;
+            /*
+             * The payload is a file, so w and h come from bytes we did not
+             * write.  Compute the pixel count in 64 bits first: a wrapped
+             * 32-bit product would pass the 4096x4096 cap and plan an array
+             * smaller than the copy that follows.
+             */
+            nj_u8 wnh = (nj_u8)w * (nj_u8)h;
+            nj_u4 n = (wnh > 4096u * 4096u) ? 0u : (nj_u4)wnh;
             nj_u1 *dst;
             nj_ref px;
             nj_u4 k;
 
-            if (n == 0u || n > 4096u * 4096u || f->data == NULL ||
-                f->data_len < pal) {
+            if (n == 0u || f->data == NULL || f->data_len < pal) {
                 break;
             }
             px = nj_array_new(vm, "B", n * 4u);
@@ -9298,7 +9304,10 @@ static nj_ref m3g_image_mips(nj_vm *vm, nj_ref img)
     if (!px || w <= 0 || h <= 0) {
         return 0;
     }
-    if (!nj_array_data(px) || nj_array_length(px) < (nj_u4)(w * h * 4)) {
+    /* 64-bit again: w and h reach here from an Image2D the game built, and
+     * w * h * 4 wraps for anything above 536 million pixels. */
+    if (!nj_array_data(px) ||
+        (nj_u8)nj_array_length(px) < (nj_u8)(nj_u4)w * (nj_u8)(nj_u4)h * 4u) {
         return 0;
     }
     /* The image already owns level 0. Cache only the smaller levels, so a
