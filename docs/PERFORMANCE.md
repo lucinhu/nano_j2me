@@ -3044,3 +3044,27 @@ The rendering share has come down from 52% (blit 27.9 + spans 24.3) to 37%
 
 The name-based field lookups remain around 7% (4.7 + 2.3); round 20 measured
 a cache for them and it lost to the linear scan, so they stay as they are.
+
+## How much the MIDI renderer actually costs (round 24, 2026-10-24)
+
+The flat profile could not answer this (see the previous section), so it was
+measured differentially instead: build the same tree twice, once with
+`-DNJ_ENABLE_MIDI=0` and once with the renderer on, and interleave five
+rounds of the same workload (`浴火银河_3621`, 3,000 paced frames, taskset
+-c 5, 12.3M bytecodes per arm so the Java side is unchanged).
+
+| arm | min user CPU | median |
+| --- | --- | --- |
+| renderer on | 0.6451 s | 0.6508 s |
+| renderer off | 0.5193 s | 0.5306 s |
+
+The built-in renderer therefore costs **19.5% of this title's CPU** (18.5%
+measured at the median) - about 0.126 s over 3,000 frames, i.e. 42 us of
+rendering per 16.7 ms frame.  That makes it the single largest remaining
+subsystem in this title, ahead of the blitter (23%) and the raster spans
+(14%), and it is a subsystem with an exact contract: `tests/test_midi.c`
+pins the PCM samples, so any faster mixer can be proved sample-identical.
+
+Next step is inside, not around: count samples rendered per pull, the loop
+iterations per sample and the per-voice work, then optimise that inner loop
+(or reduce resampling work) with the PCM test as the acceptance gate.
