@@ -216,7 +216,9 @@ nj_thread *nj_thread_create(nj_vm *vm, nj_ref thread_obj, int is_main)
  * a fresh thread per level eventually hit NJ_MAX_THREADS and died with a
  * spurious OutOfMemoryError ("too many threads").  The Java handle is the
  * numeric id kept in the object's nativeId field, not a pointer, so a dead
- * thread can be freed as soon as its state is NJ_THREAD_DEAD.
+ * thread can be freed once its Java frames and nested C calls have unwound.
+ * A recursive scheduler pass can observe DEAD while an outer native still
+ * owns the thread; vm->cur alone does not identify every such C stack.
  */
 static void nj_thread_reap(nj_vm *vm)
 {
@@ -225,7 +227,8 @@ static void nj_thread_reap(nj_vm *vm)
     for (i = vm->nthreads; i > 0u; i--) {
         nj_thread *t = vm->threads[i - 1u];
 
-        if (t && t->state == NJ_THREAD_DEAD && t != vm->cur) {
+        if (t && t->state == NJ_THREAD_DEAD && t != vm->cur &&
+            !t->is_main && !t->in_c_call && t->nframes == 0u) {
             nj_thread_destroy(vm, t);
         }
     }

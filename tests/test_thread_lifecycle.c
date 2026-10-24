@@ -90,6 +90,79 @@ static int alive(nj_vm *vm, nj_ref o)
     CHECK(nj_call(vm, o, "java/lang/Thread", "isAlive", "()Z", NULL, &ret) == NJ_OK);
     return ret.i;
 }
+/* A timer callback can pump the scheduler while an outer native is still
+ * unwinding on a thread already marked dead. Exercise that actual native
+ * frame, rather than relying on the allocator to preserve freed memory. */
+static nj_status reap_during_native(nj_vm *vm, nj_thread *th,
+                                    nj_value *args, nj_value *ret)
+{
+    nj_u2 count = vm->nthreads;
+    (void)args;
+    (void)ret;
+    th->state = NJ_THREAD_DEAD;
+    vm->cur = nj_thread_main(vm);
+    CHECK(nj_scheduler_step(vm) == NJ_OK);
+    CHECK(vm->nthreads == count);
+    return NJ_OK;
+}
+
+static void test_reaping(nj_vm *vm)
+{
+    nj_thread *main_thread = nj_thread_main(vm);
+    nj_method method;
+    nj_value ret[2];
+    nj_u2 count;
+    int i;
+
+    CHECK(nj_scheduler_step(vm) == NJ_OK);
+    count = vm->nthreads;
+    memset(&method, 0, sizeof(method));
+    method.owner = nj_class_find(vm, "java/lang/Object");
+    method.name = "reapDuringNative";
+    method.desc = "()V";
+    method.flags = NJ_ACC_STATIC | NJ_ACC_NATIVE;
+    method.native = reap_during_native;
+    for (i = 0; i < 2 * NJ_MAX_THREADS; i++) {
+        nj_thread *t = nj_thread_create(vm, NULL, 0);
+        CHECK(t != NULL);
+        if (!t) break;
+        t->state = NJ_THREAD_RUNNING;
+        vm->cur = t;
+        CHECK(nj_invoke_native(vm, t, &method, t->stack_mem, 0, ret) == NJ_OK);
+        /* Returning from the C frame now makes reclamation safe. Repeating
+         * beyond the slot limit also verifies that reclamation still works. */
+        CHECK(nj_scheduler_step(vm) == NJ_OK);
+        CHECK(vm->nthreads == count);
+    }
+    {
+        nj_thread *t = nj_thread_create(vm, NULL, 0);
+        CHECK(t != NULL);
+        if (!t) return;
+        t->state = NJ_THREAD_DEAD;
+        t->in_c_call = 1;
+        CHECK(nj_scheduler_step(vm) == NJ_OK);
+        CHECK(vm->nthreads == count + 1);
+        t->in_c_call = 0;
+        CHECK(nj_scheduler_step(vm) == NJ_OK);
+        CHECK(vm->nthreads == count);
+    }
+    {
+        nj_thread *t = nj_thread_create(vm, NULL, 0);
+        CHECK(t != NULL);
+        if (!t) return;
+        /* The C runner retains the main-thread handle even after halt. */
+        main_thread->state = NJ_THREAD_DEAD;
+        vm->cur = t;
+        (void)nj_scheduler_step(vm);
+        CHECK(nj_thread_main(vm) == main_thread);
+        main_thread->state = NJ_THREAD_RUNNING;
+        t->state = NJ_THREAD_DEAD;
+        vm->cur = main_thread;
+        CHECK(nj_scheduler_step(vm) == NJ_OK);
+        CHECK(vm->nthreads == count);
+    }
+}
+
 int main(void)
 {
     nj_port port;
@@ -108,6 +181,7 @@ int main(void)
     CHECK(nj_class_load(vm, "ThreadWaitBridge", ThreadWaitBridge, sizeof(ThreadWaitBridge)) != NULL);
     vm->running = 1;
     main_thread = nj_thread_main(vm);
+    test_reaping(vm);
     worker = make(vm, "ThreadWorker");
     CHECK(!alive(vm, worker));
     CHECK(nj_call(vm, worker, "java/lang/Thread", "start", "()V", NULL, NULL) == NJ_OK);
