@@ -785,6 +785,18 @@ endif()
     set_tests_properties(check_late_display PROPERTIES TIMEOUT 120)
   endif()
 
+  # The titles that found the round 33-37 compatibility fixes: a leaked
+  # thread slot, Canvas methods declared instance instead of static, and the
+  # M3G spot light that lost its cone angle.  Cheap replay, real games.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_compat_fixes.sh)
+    add_test(NAME check_compat_fixes
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_compat_fixes.sh
+                     $<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/games)
+    set_tests_properties(check_compat_fixes PROPERTIES TIMEOUT 200
+                         SKIP_RETURN_CODE 77)
+  endif()
+
   # A title whose constructor outlasts the frame budget - both Need for Speed
   # titles sleep through a splash screen in <init>.  That is the run ending on
   # purpose and it has to say so: it used to report "cannot instantiate",

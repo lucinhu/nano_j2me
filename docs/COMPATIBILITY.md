@@ -3621,3 +3621,19 @@ RAM/ROM neutral, run the regressions and document it".  State at the end:
 That is the honest boundary: the compatibility work is evidence-backed at the
 level of API, exceptions, corpus runs and same-scene pixels, and unproven at
 the level of frame identity and hardware behaviour.
+
+## The fixes are replayed by a test (round 49, 2026-10-24)
+
+`tools/check_compat_fixes.sh` turns the evidence of rounds 33-37 into a
+repeatable check, registered in CTest as `check_compat_fixes`.  It replays
+three real titles for 400 frames each and fails if the defect comes back:
+
+- 海绵宝宝卡丁车_4684 must not log "too many threads" and must execute at
+  least one million bytecodes (it managed 214,081 before `c4e6bfc`).
+- 拳皇98终极之战_7534 must not log `IncompatibleClassChangeError` (the Canvas
+  methods missing their `static` flag, `a278807`).
+- 毁灭战士3_10598 must run its M3G path without a "compression scheme" error
+  (the loader work of `c03eca1`/`822bb80`).
+
+Run time is about 25 s for the three titles, which is why it lives with the
+other shell-driven checks rather than in the fast unit-test group.
