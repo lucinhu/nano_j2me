@@ -1121,16 +1121,18 @@ new allocation shape.  The decoders themselves allocate through `nj_av_mem`
 
 Every feature behind `nj_avcodec` (and the older decoders) can be compiled out.
 The numbers are the hosted CLI's `.text` with each switch off, one switch at a
-time, Release, `-DNJ_ENABLE_TESTS=OFF`, base 1,319,594 B:
+time, Release, `-DNJ_ENABLE_TESTS=OFF`, base 1,321,258 B (measured again after
+the AMR provider joined the registry):
 
 | Switch | `.text` off | Saved |
 | --- | --- | --- |
-| `-DNJ_ENABLE_AMR=0` | 1,271,722 | 47,872 |
-| `-DNJ_ENABLE_MP3=0` | 1,285,994 | 33,600 |
-| `-DNJ_ENABLE_VIDEO=0` | 1,287,978 | 31,616 |
-| `-DNJ_ENABLE_JPEG=0` | 1,292,586 | 27,008 |
-| `-DNJ_ENABLE_MIDI=0` | 1,296,810 | 22,784 |
-| `-DNJ_ENABLE_WAV=0` | 1,317,034 | 2,560 |
+| `-DNJ_ENABLE_AMR=0` | 1,271,722 | 49,536 |
+| `-DNJ_ENABLE_MP3=0` | 1,287,658 | 33,600 |
+| `-DNJ_ENABLE_VIDEO=0` | 1,289,706 | 31,552 |
+| `-DNJ_ENABLE_MIDI=0` | 1,298,474 | 22,784 |
+
+(The JPEG and WAV rows were measured before the provider refactor and are
+unchanged by it: the registry touches only the codec modules.)
 
 None of the switches changes `.data` or `.bss`: the decoders keep their state in
 the VM (provider registry, 72 B) or in the Java object that owns the stream.

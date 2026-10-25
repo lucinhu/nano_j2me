@@ -199,3 +199,18 @@ mono and two 20 ms frames, and hands out PCM that is **byte-identical** to
 Note: `Manager.createPlayer()` still decodes AMR through the media library's own
 path rather than through the provider.  The provider exists so ports can replace
 it and so the registry is uniform; switching the Player over is the next step.
+
+### Where each piece is wired (round 7)
+
+| Piece | Provider | `Manager.createPlayer` | Media pump | Evidence |
+| --- | --- | --- | --- | --- |
+| MP3 | `nj_av_audio_mp3` | `audio/mpeg`, streamed through a holder | pulls PCM per frame | `tests/test_lib.c` (real samples reach the port), `tests/test_avcodec.c` (a port's decoder wins) |
+| AMR-NB | `nj_av_audio_amr` | still the media library's direct whole-file path | one-shot PCM | provider registered and tested byte-identical against `nj_amr_decode()`; routing the Player through it is next |
+| H.263 | `nj_av_video_h263` | not yet: `video/3gpp` is still refused | - | decoder verified against ffmpeg in `tests/test_h263.c` |
+| MP4/3GP | `nj_mp4` demultiplexer | not yet | - | sample iterator API tested in `tests/test_h263.c` |
+
+Trim costs, one switch at a time against a matched base (hosted CLI `.text`,
+Release, tests off): AMR 49,536 B, MP3 33,600 B, VIDEO 31,552 B; see
+`docs/FOOTPRINT.md` for the full matrix.  Every switch keeps `.data`/`.bss`
+unchanged - the registry lives in the VM (72 B) and decoder state in the
+provider's allocation.
