@@ -720,3 +720,15 @@ with the exact lines they came from (`mpeg4videodec.c` in
 
 `tests/test_m4v.c` pins the parts that are done (79 checks); the frame driver and
 `tools/refdecode_frame.c` show how far the first frame gets.
+
+### The oracle says the first frame is black (round 199)
+
+`tools/refdecode_frame.c <file> <out.ppm>` decodes the first video frame with
+the system ffmpeg and writes it as a PPM.  For `1942.3gp` the result is
+176x144 and **every sample is zero** (max 0, mean 0.0), which makes the
+acceptance test for the MPEG-4 intra path concrete: a correct decoder must
+produce an all-zero frame for this sample, so the comparison needs no
+tolerance and no perceptual metrics.
+
+Compile it with libavformat/libavcodec/libavutil/libswscale; it is not part of
+the test suite because those libraries are not build dependencies.
