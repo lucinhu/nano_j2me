@@ -14,6 +14,10 @@
 #include "nj2me/nj_m4v_tables.h"
 #include "nj_idct.h"
 
+/* Defined with the block decoders further down; the escape reader needs them. */
+int nj_m4v_qmul(int qscale);
+int nj_m4v_qadd(int qscale);
+
 typedef struct m4v_bits {
     const nj_u1 *b;
     nj_u4        n;      /* bytes  */
@@ -274,6 +278,45 @@ int nj_m4v_find_vop(const nj_u1 *b, nj_u4 n, nj_u4 *pos)
 }
 
 
+
+static int m4v_rbit(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *v)
+{
+    if (*pos >= n * 8u) {
+        return 0;
+    }
+    *v = (int)((b[*pos >> 3] >> (7u - (*pos & 7u))) & 1u);
+    (*pos)++;
+    return 1;
+}
+
+static int m4v_rbits(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int count, nj_u4 *out)
+{
+    nj_u4 v = 0;
+    int   i, bit;
+
+    for (i = 0; i < count; i++) {
+        if (!m4v_rbit(b, n, pos, &bit)) {
+            return 0;
+        }
+        v = (v << 1) | (nj_u4)bit;
+    }
+    *out = v;
+    return 1;
+}
+
+static int m4v_rsbits(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int count, int *out)
+{
+    nj_u4 v;
+    nj_u4 half;
+
+    if (!m4v_rbits(b, n, pos, count, &v)) {
+        return 0;
+    }
+    half = 1u << (count - 1);
+    *out = (int)((v & half) ? (nj_s4)(v - half) - (nj_s4)half : (nj_s4)v);
+    return 1;
+}
+
 int nj_m4v_decode_ac(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *last)
 {
     nj_u4 i, v = 0;
@@ -437,7 +480,56 @@ int nj_m4v_coef_apply(nj_s4 *coef, int *k, int sym, int *last)
 }
 
 
-int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k)
+
+/* Third escape form (14496-2): after the escape word, bits "11" then
+ * last(1) run(6) marker level(12 signed) marker.  The level is scaled with
+ * qmul/qadd and clamped to [-2048, 2047], as the reference decoder does.
+ * Returns 0, or -3 when the form bits are not "11", or -1 on damage. */
+int nj_m4v_escape3(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int qscale,
+                       int *last, int *run, int *level)
+{
+    nj_u4 save = *pos;
+    int   l, r6, marker, lv;
+    nj_u4 tmp;
+    int   qm = nj_m4v_qmul(qscale), qa = nj_m4v_qadd(qscale);
+
+    if (!m4v_rbit(b, n, pos, &l) || !m4v_rbit(b, n, pos, &marker)) {
+        *pos = save;
+        return -1;
+    }
+    if (l != 1 || marker != 1) {
+        *pos = save;
+        return -3;
+    }
+    if (!m4v_rbit(b, n, pos, &l) ||
+        !m4v_rbits(b, n, pos, 6, &tmp)) {
+        *pos = save;
+        return -1;
+    }
+    r6 = (int)tmp;
+    if (!m4v_rbit(b, n, pos, &marker) || marker != 1 ||
+        !m4v_rsbits(b, n, pos, 12, &lv) ||
+        !m4v_rbit(b, n, pos, &marker) || marker != 1) {
+        *pos = save;
+        return -1;
+    }
+    if (qm <= 0) {
+        return -1;
+    }
+    lv = (lv > 0) ? (lv * qm + qa) : (lv * qm - qa);
+    if (lv < -2048) {
+        lv = -2048;
+    } else if (lv > 2047) {
+        lv = 2047;
+    }
+    if (last != NULL) *last = l;
+    if (run != NULL) *run = r6;
+    if (level != NULL) *level = lv;
+    return 0;
+}
+
+int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k,
+                    int qscale)
 {
     int last = 0;
 
@@ -445,8 +537,27 @@ int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k)
         int sym = nj_m4v_decode_ac(b, n, pos, &last);
         int rc;
 
+        if (sym == -2) {
+            int el = 0, er = 0, el3 = 0, rc3;
+
+            rc3 = nj_m4v_escape3(b, n, pos, qscale, &el, &er, &el3);
+            if (rc3 == -3) {
+                return -3;          /* first/second escape not implemented yet */
+            }
+            if (rc3 < 0) {
+                return -1;
+            }
+            k += er;
+            if (k >= 64) {
+                return -1;
+            }
+            nj_m4v_coef_store(coef, k, el3);
+            k++;
+            last = el;
+            continue;
+        }
         if (sym < 0) {
-            return (sym == -2) ? -3 : -1;   /* -2: escape, not yet decoded */
+            return -1;
         }
         rc = nj_m4v_coef_apply(coef, &k, sym, &last);
         if (rc == -2) {
@@ -491,7 +602,7 @@ int nj_m4v_decode_intra_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef,
     }
     dc = dc_pred + delta;
     coef[0] = (nj_s4)dc;
-    k = nj_m4v_ac_block(b, n, pos, coef, 1);
+    k = nj_m4v_ac_block(b, n, pos, coef, 1, qscale);
     if (k == -3) {
         return -3;
     }

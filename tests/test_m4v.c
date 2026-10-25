@@ -347,7 +347,7 @@ int main(void)
                 break;
             }
         }
-        lastpos = nj_m4v_ac_block(buf, (nj_u4)sizeof(buf), &pos, coef, 1);
+        lastpos = nj_m4v_ac_block(buf, (nj_u4)sizeof(buf), &pos, coef, 1, 4);
         ok(lastpos == 2, "a block loop stops after the last-flagged symbol");
     }
 
@@ -564,6 +564,18 @@ int main(void)
         bad += nj_m4v_qadd(1) != 1 || nj_m4v_qadd(2) != 1 || nj_m4v_qadd(4) != 3;
         bad += nj_m4v_qmul(0) != 0 || nj_m4v_qmul(32) != 0;
         ok(bad == 0, "the AC scale pair follows qmul = 2q and qadd = (q-1)|1");
+    }
+
+    {
+        const nj_u1 esc[4] = { 0x07u, 0x80u, 0x80u, 0x2Cu };
+        nj_u4 pos = 7u;
+        int last = -1, run = -1, level = 0, bad = 0;
+
+        bad += nj_m4v_escape3(esc, 4u, &pos, 2, &last, &run, &level) != 0;
+        bad += last != 0 || run != 0 || level != 21;
+        pos = 7u;
+        bad += nj_m4v_escape3(esc, 3u, &pos, 2, &last, &run, &level) != -1;
+        ok(bad == 0, "the third escape form scales its level with qmul and qadd");
     }
 
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);

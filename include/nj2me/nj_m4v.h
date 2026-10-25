@@ -76,7 +76,14 @@ int nj_m4v_coef_apply(nj_s4 *coef, int *k, int sym, int *last);
 
 /* Walks AC symbols until one carries last.  Returns the next free scan
  * position, -1 for a corrupt stream or -3 when the escape form is reached. */
-int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k);
+int nj_m4v_qmul(int qscale);
+/* Third escape form: reads "11" form bits plus last/run/markers/level. */
+int nj_m4v_escape3(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int qscale,
+                   int *last, int *run, int *level);
+int nj_m4v_qadd(int qscale);
+
+int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k,
+                    int qscale);
 
 /* Decodes one intra 8x8 block: DC size+delta on top of dc_pred, then AC.
  * Returns 0, -1 for a corrupt stream or -3 for an escape not decoded yet. */
