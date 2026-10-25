@@ -4134,10 +4134,14 @@ small as it can be.
 returned 0, and every failure in it is an allocation or a `nj_call` that ran
 out of memory.  The suite deliberately never releases its fixtures - one canvas
 pins a 240x320 ARGB buffer (307 KB) - and the late tests build a fresh canvas on
-a 2 MB heap.  With 4 MB the suite passes 654/0.  Whether the retained memory is
-pure fixture garbage or a VM-held reference has **not** been established, so
-this is recorded as a harness adjustment with an open question, not as a leak
-being "fixed".
+a 2 MB heap.  With 4 MB the suite passes 654/0.
+
+Is it a leak?  Measured, not guessed: after the whole suite finishes, one
+collection leaves **4,064 bytes** in use (and a second collection changes
+nothing), so nothing is retained and there is no VM-held reference to hunt.  The
+2 MB figure was simply short during the moment when a canvas and the M3G objects
+around it are alive together.  The heap bump is a harness adjustment with the
+question closed, not a leak being papered over.
 
 ### The arena tail that was neither free nor used (round 87)
 

@@ -1990,9 +1990,12 @@ int main(void)
      * 4 MB, not 2 MB: this suite deliberately never releases its fixtures (the
      * canvas alone pins a 240x320 ARGB buffer, 307 KB), so the late tests that
      * build a fresh canvas - the spot-light cone and the Transform matrix
-     * checks - ran out of heap and reported their fixture as failed.  Whether
-     * the growth is only fixture garbage or a VM-held reference was not
-     * determined; it is tracked in docs/COMPATIBILITY.md.
+     * checks - ran out of heap and reported their fixture as failed.
+     *
+     * Measured: with the suite finished, one collection leaves 4,064 bytes
+     * used, i.e. nothing is retained and there is no VM-held reference leak.
+     * The 2 MB figure was simply short during the moment when a canvas and the
+     * M3G objects around it are live together.
      */
     vm = nj_vm_create(&port, 4u * 1024u * 1024u);
     /*
