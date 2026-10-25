@@ -553,3 +553,18 @@ into a picture needs three more steps, in this order:
 
 Nothing here is wired yet: `createPlayer` still refuses `mp4v` by name, which is
 the honest answer until the planes exist.
+
+### Codec gate state (round 95)
+
+| Check | Result |
+| --- | --- |
+| `test_m4v` | 62 checks / 0 failures |
+| `test_m4v` under ASan+UBSan (Debug) | 62 / 0, no reports |
+| `test_h263` (vs ffmpeg pixels) | 86 / 0 |
+| `test_lib` (MP3/AMR player paths) | 881 passed / 0 failed |
+| `BENCH sum` | `-136042548 s=5` unchanged |
+| trim switches | AMR/MP3/VIDEO/MIDI all build when off (round 22) |
+
+The sanitizer run matters here: the M4V code walks bitstreams with explicit
+bounds checks, so ASan/UBSan over the whole test binary is the check that the
+"corrupt stream" paths really stay inside their buffers.
