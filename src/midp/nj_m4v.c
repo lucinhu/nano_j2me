@@ -201,6 +201,64 @@ int nj_m4v_parse_vol(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_m4v_vol *out)
             }
         }
     }
+    out->interlaced = 0;
+    out->obmc_disabled = 1;
+    out->sprite_usage = 0;
+    out->not_8_bit = 0;
+    out->quant_type = 0;
+    out->quarter_sample = 0;
+    out->complexity_disabled = 1;
+    out->resync_disabled = 1;
+    out->data_partitioned = 0;
+    out->reversible_vlc = 0;
+    out->intra_dc_thr = 0;
+    out->flags_known = 0;
+    if (shape != 1) {
+        int b8 = 0, spr = 0;
+
+        if (!m4v_bit(&s, &b8)) return 0;
+        out->interlaced = b8;
+        if (!m4v_bit(&s, &b8)) return 0;
+        out->obmc_disabled = b8;
+        if (verid == 1) {
+            if (!m4v_bit(&s, &spr)) return 0;
+            out->sprite_usage = spr;
+        } else {
+            if (!m4v_bits_get(&s, 2, &v)) return 0;
+            out->sprite_usage = (int)v;
+        }
+        if (!m4v_bit(&s, &b8)) return 0;
+        out->not_8_bit = b8;
+        if (b8 != 0) {
+            if (!m4v_bits_get(&s, 4, &v)) return 0;
+            if (!m4v_bits_get(&s, 4, &v)) return 0;
+        }
+        if (!m4v_bit(&s, &b8)) return 0;
+        out->quant_type = b8;
+        if (b8 != 0 && verid != 1) {
+            return out->width > 0u && out->height > 0u;
+        }
+        if (verid >= 2) {
+            if (!m4v_bit(&s, &b8)) return 0;
+            out->quarter_sample = b8;
+        }
+        if (!m4v_bit(&s, &b8)) return 0;
+        out->complexity_disabled = b8;
+        if (b8 == 0) {
+            return out->width > 0u && out->height > 0u;
+        }
+        if (!m4v_bit(&s, &b8)) return 0;
+        out->resync_disabled = b8;
+        if (!m4v_bit(&s, &b8)) return 0;
+        out->data_partitioned = b8;
+        if (verid >= 2) {
+            if (!m4v_bit(&s, &b8)) return 0;
+            out->reversible_vlc = b8;
+        }
+        if (!m4v_bits_get(&s, 3, &v)) return 0;
+        out->intra_dc_thr = (int)v;
+        out->flags_known = 1;
+    }
     return out->width > 0u && out->height > 0u;
 }
 

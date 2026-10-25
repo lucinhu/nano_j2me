@@ -27,6 +27,19 @@ typedef struct nj_m4v_vol {
     int   has_fixed_rate;
     int   shape;         /* 0 rectangular, 1 binary only, 2 grayscale */
     int   vo_type;
+    /* Flags past the geometry, which change the macroblock syntax. */
+    int   interlaced;
+    int   obmc_disabled;
+    int   sprite_usage;
+    int   not_8_bit;
+    int   quant_type;       /* vol_quant_type: H.263 style quantisation */
+    int   quarter_sample;
+    int   complexity_disabled;
+    int   resync_disabled;
+    int   data_partitioned;
+    int   reversible_vlc;
+    int   intra_dc_thr;     /* 3-bit index into ff_mpeg4_dc_threshold */
+    int   flags_known;
 } nj_m4v_vol;
 
 /* Returns 1 and fills the start code and the payload offset on success. */
