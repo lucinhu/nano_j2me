@@ -18,6 +18,19 @@ OUT = (os.sys.argv[1] if len(os.sys.argv) > 1
        else os.path.join(ROOT, ".local-tools", "debug-runs", "compat-matrix-20261025"))
 DOC = ROOT + "/docs/COMPATIBILITY_MATRIX.md"
 
+def read_meta(path):
+    """Return the provenance the sweep recorded, or None.
+
+    A table whose rows came from an older binary must not claim to have been
+    built from the commit that happens to be checked out when it is rendered.
+    """
+    try:
+        with open(os.path.join(path, "meta.json"), encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
 VERDICT = {"ok": "运行正常", "title-exception": "标题自身异常", "oom": "堆不足",
            "bad-jar": "非可用包", "timeout": "超时", "failure": "失败",
            "no-frame": "未呈现画面",
@@ -70,6 +83,12 @@ def main():
     apis = collections.Counter(",".join(row.get("apis", [])) or "-" for row in rows)
     head = subprocess.run(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"],
                           capture_output=True, text=True).stdout.strip()
+    meta = read_meta(OUT)
+    if meta and meta.get("commit"):
+        built = "Built from `%s`, %s (recorded by `tools/sweep_compat.py`)." % (
+            meta["commit"], meta.get("date", "unknown date"))
+    else:
+        built = "Built from `%s`, 2026-10-25." % head
     out = [
         "# Compatibility matrix", "",
         "One row per JAR in `tests/games` (%d titles), from one headless replay per title" % len(rows),
@@ -84,7 +103,7 @@ def main():
         "",
         "Corpus provenance and size are in `docs/CORPUS.md`; regenerate this table",
         "with `tools/make_compat_matrix.py <rows dir>` after a new sweep.",
-        "", "Built from `%s`, 2026-10-25." % head, "",
+        "", built, "",
         "| verdict | titles |", "| --- | --- |",
     ]
     out += ["| %s | %d |" % (VERDICT.get(k, k), n) for k, n in verdicts.most_common()]

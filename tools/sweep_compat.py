@@ -160,6 +160,15 @@ def main():
             done += 1
             if done % 25 == 0:
                 print("done", done, flush=True)
+    try:
+        head = subprocess.run(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True).stdout.strip()
+    except OSError:
+        head = ""
+    with open(os.path.join(OUT, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump({"commit": head or "unknown",
+                   "date": __import__("time").strftime("%Y-%m-%d")}, fh)
+        fh.write("\n")
     print("ALL DONE", len(jobs), flush=True)
 
 if __name__ == "__main__":

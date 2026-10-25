@@ -35,6 +35,22 @@ without ever presenting a frame, `失败` when it crashed or was rejected, and
 apart on purpose: a title that runs and paints nothing is not a crash, and
 lumping them together used to hide which rows were actually broken.
 
+## Where the table's provenance comes from (round 18)
+
+A rendered matrix must say which build produced the rows, not which commit
+happens to be checked out when it is rendered.  `tools/sweep_compat.py` now
+writes `meta.json` next to `rows.jsonl`:
+
+```json
+{"commit": "2606d63", "date": "2026-10-25"}
+```
+
+`tools/make_compat_matrix.py` reads that file first and prints
+"Built from `2606d63`, 2026-10-25 (recorded by `tools/sweep_compat.py`)"; only
+when there is no meta file does it fall back to the current `HEAD`.  Rows that
+are swept in later runs keep the meta of the run that wrote them, so a table
+grown over several sessions cannot silently claim a single build.
+
 ## The archive.org vault sweep (round 2)
 
 `tools/sweep_compat.py` also reads extra corpus directories from the
