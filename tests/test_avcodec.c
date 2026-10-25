@@ -231,6 +231,42 @@ static int capture_pcm(void *ud, const nj_s2 *pcm, int frames)
     return frames;
 }
 
+
+/* ------------------------------------------------------------------ */
+/* A port-provided video decoder.                                      */
+/* ------------------------------------------------------------------ */
+static int fakev_accepts(const nj_u1 *data, nj_u4 len) { (void)data; return len > 0u; }
+static nj_av_dec *fakev_open(const nj_u1 *data, nj_u4 len, const nj_av_mem *mem,
+                             nj_av_info *info, const char **err)
+{
+    (void)data; (void)len; (void)mem; (void)err;
+    info->format = NJ_AV_VIDEO_H263;
+    info->width = 16u;
+    info->height = 16u;
+    info->fps = 10u;
+    info->pixfmt = NJ_AV_PIX_RGB565;
+    return (nj_av_dec *)mem;      /* not dereferenced by the fake decoder */
+}
+static int fakev_decode(nj_av_dec *dec, nj_av_step *step)
+{
+    (void)dec;
+    if (step->out == NULL || step->out_cap < 2u) {
+        return NJ_AV_ERR_END;
+    }
+    step->out[0] = 0x12u;
+    step->out[1] = 0x34u;
+    step->out_used = 2u;
+    step->frames = 1u;
+    step->in_used = step->in_len;
+    return NJ_AV_OK;
+}
+static void fakev_close(nj_av_dec *dec) { (void)dec; }
+
+static const nj_av_video_ops fake_h263 = {
+    "fake-h263", NJ_AV_VIDEO_H263, fakev_accepts, fakev_open, fakev_decode,
+    fakev_close
+};
+
 static void *test_alloc(void *ud, nj_size n) { return nj_host_alloc((nj_vm *)ud, n); }
 static void test_free(void *ud, void *p) { nj_host_free((nj_vm *)ud, p); }
 static const nj_av_mem test_mem = { NULL, test_alloc, test_free };
@@ -304,6 +340,16 @@ int main(void)
         ok(nj_avcodec_find_audio(vm, junk, (nj_u4)sizeof(junk)) == NULL,
            "an unknown stream finds no audio provider");
     }
+
+    /* A port's video decoder replaces the built-in one the same way. */
+    ok(nj_avcodec_install_video(vm, &fake_h263) > 0,
+       "a port can install a video provider");
+    ok(nj_avcodec_find_video(vm, mp3, 2u) == &fake_h263,
+       "the installed video provider is chosen first");
+    ok(nj_avcodec_install_video(vm, NULL) == 0,
+       "removing every video provider empties the table");
+    ok(nj_avcodec_find_video(vm, mp3, 2u) == NULL,
+       "with the table empty no video provider is found");
 
     /* Install the port's decoder: it must win over the built-in one. */
     ok(nj_avcodec_install_audio(vm, &fake_mp3) > 0,
