@@ -39,7 +39,7 @@ counts), which is why the runtime still has no writable globals.
 
 | Provider | Format | State |
 | --- | --- | --- |
-| `nj_av_audio_mp3` | MPEG-1/2/2.5 Layer III | **experimental — PCM not yet reference-clean** |
+| `nj_av_audio_mp3` | MPEG-1/2/2.5 Layer III | done — within 1 LSB of ffmpeg |
 | `nj_av_video_h263` | H.263 baseline (raw or 3GP/MP4) | done |
 
 ### Video (round 21)
@@ -82,22 +82,35 @@ those frames through the same painting path the rest of LCDUI uses.
   refused, decoder pixel spots, provider `decode()` contract, truncated and
   mutated input, and leak checks.  It runs in `ctest`.
 
-## The MP3 decoder is not shipped yet
+## The MP3 decoder, and how it was verified
 
-`src/midp/nj_mp3.c` parses and streams MPEG-1/2/2.5 Layer III correctly: frame
-boundaries (including padding), bit reservoir, scalefactors, all 15 Huffman
-books, MS and intensity stereo, seek and ID3 handling are implemented and
-tested (`tests/test_mp3.c`, 64 checks), and it decodes at roughly 340x realtime
-with 18 KB of code and no writable globals.
+The first version of `src/midp/nj_mp3.c` parsed and streamed correctly - frame
+boundaries, bit reservoir, frame counts, END semantics - and yet every sample
+was wrong: it assigned Huffman codewords canonically by code length, while ISO
+Table B.7 lists them in codeword order.  Symbol lengths matched, so nothing
+about the frame stream looked wrong, but each coefficient pair decoded to the
+wrong symbol.  A self-consistent round-trip test cannot see that; only a
+reference decode can.
 
-Its **decoded PCM is wrong**: on a 2 s 441 Hz mono fixture the best
-correlation against a reference decode over all delays is 0.05, RMS is 0.71x
-and the apparent pitch wanders.  The defect is somewhere in the coefficient
-decode path (Huffman/region/bit-budget interaction), not in the transform
-stages - those were verified in isolation.
+The decoder now uses the 1378 table entries in ISO codeword order and a binary
+search over them, and fixes two short-block defects that the Huffman bug had
+hidden (requantisation indexed before reorder, and the short IMDCT both read
+contiguous coefficients instead of stride-3 and overwrote the overlapping
+windows instead of accumulating them).
 
-Because wrong audio is worse than an honest failure, the provider is **not
-registered** by default: `NJ_MP3_EXPERIMENTAL` (default 0) gates it, so
-`Manager.createPlayer()` keeps answering "this runtime has no MPEG audio
-decoder" for MP3.  Flip the macro to 1 only once the decoder decodes a
-reference PCM slice correctly and `tests/test_mp3.c` asserts it.
+`tests/test_mp3.c` embeds four LAME fixtures and the last audio frame of
+ffmpeg's decode of each, asserting the worst per-sample delta is at most 1:
+
+| Stream | Correlation before | Worst delta before | Correlation after | Worst delta after |
+| --- | --- | --- | --- | --- |
+| MPEG-1 mono | 0.012 | 17,180 | **1.000000** | **1** |
+| MPEG-1 stereo | 0.042 | 22,679 | **1.000000** | **1** |
+| MPEG-2.5 mono | -0.098 | 36,586 | **1.000000** | **1** |
+
+Mean absolute error after the fix is 0.003-0.005 LSB.  Decode cost is about
+340x realtime; `.text` is 18,363 B and there is no writable static data.
+
+Known gaps: the LAME Info frame is emitted as one silent frame and there is no
+gapless trimming (so raw totals differ from `ffmpeg -f s16le` by the encoder
+delay); CRC is skipped rather than verified; Layer I/II are not implemented;
+free-format bitrate is refused.

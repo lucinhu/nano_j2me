@@ -170,15 +170,15 @@
  * front of the software one (or remove it) without touching the runtime.
  */
 /*
- * NJ_MP3_EXPERIMENTAL registers the Layer III decoder with the runtime.  Its
- * parser and streaming are complete and tested, but its PCM does not yet match
- * a reference decoder (see docs/CODECS.md), so a default build must not hand
- * it to Manager.createPlayer(): wrong audio is worse than the honest
- * "no MPEG audio decoder" MediaException.  Flip this to 1 only once
- * tests/test_mp3.c asserts a reference PCM slice.
+ * NJ_MP3_EXPERIMENTAL registers the Layer III decoder with the runtime.  It is
+ * on by default: tests/test_mp3.c embeds four LAME fixtures (MPEG-1 and
+ * MPEG-2.5, mono and stereo) and asserts the decoded PCM stays within 1 LSB of
+ * ffmpeg's decode, which is what makes the provider fit to hand to
+ * Manager.createPlayer().  Turn it off to save ~18 KB of text on a build that
+ * never sees MP3.
  */
 #ifndef NJ_MP3_EXPERIMENTAL
-#define NJ_MP3_EXPERIMENTAL 0
+#define NJ_MP3_EXPERIMENTAL 1
 #endif
 
 #ifndef NJ_ENABLE_MP3
