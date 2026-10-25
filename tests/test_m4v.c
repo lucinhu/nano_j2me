@@ -677,6 +677,23 @@ int main(void)
     ok(nj_m4v_cbp_has_ac(0x3f, -1) == 0 && nj_m4v_cbp_has_ac(0x3f, 6) == 0,
        "blocks outside 0..5 have no AC bit");
 
+    {
+        nj_s2 plane[4 * 4];
+        int i;
+
+        for (i = 0; i < 16; i++) {
+            plane[i] = (nj_s2)(100 + i);
+        }
+        ok(nj_m4v_dc_neighbour(plane, 4, 2, 2, 1) == 100 + 1 * 4 + 2,
+           "the top neighbour reads the previous row");
+        ok(nj_m4v_dc_neighbour(plane, 4, 2, 2, 0) == 100 + 2 * 4 + 1,
+           "the left neighbour reads the previous column");
+        ok(nj_m4v_dc_neighbour(plane, 4, 0, 3, 0) == 1024,
+           "a left neighbour outside the picture reads 1024");
+        ok(nj_m4v_dc_neighbour(plane, 4, 3, 0, 2) == 1024,
+           "a top-left neighbour outside the picture reads 1024");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

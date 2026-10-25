@@ -190,6 +190,10 @@ int nj_m4v_mb_intra_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *cbp, int *d
  * chroma block.  Non-zero means the block carries AC coefficients. */
 int nj_m4v_cbp_has_ac(int cbp, int block);
 
+/* Read the left (which 0), top (1) or top-left (2) reconstructed DC of a block
+ * from a plane grid; a neighbour outside the picture reads as 1024. */
+int nj_m4v_dc_neighbour(const nj_s2 *grid, int stride, int gx, int gy, int which);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 

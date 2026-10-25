@@ -1238,6 +1238,28 @@ int nj_m4v_cbp_has_ac(int cbp, int block)
     return (cbp >> (5 - block)) & 1;
 }
 
+
+int nj_m4v_dc_neighbour(const nj_s2 *grid, int stride, int gx, int gy, int which)
+{
+    int x = gx, y = gy;
+
+    if (grid == NULL || stride <= 0) {
+        return 1024;
+    }
+    if (which == 0) {
+        x = gx - 1;                 /* left  */
+    } else if (which == 1) {
+        y = gy - 1;                 /* top   */
+    } else {
+        x = gx - 1;                 /* top-left */
+        y = gy - 1;
+    }
+    if (x < 0 || y < 0) {
+        return 1024;                /* outside the picture predicts mid-grey */
+    }
+    return (int)grid[(nj_size)y * (nj_size)stride + (nj_size)x];
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;
