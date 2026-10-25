@@ -2863,6 +2863,66 @@ static void test_midi_long_song_streams(nj_vm *vm)
     OK(nj_call(vm, ret.r, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
 }
 
+/*
+ * setLoopCount() has to mean something to a Player this runtime renders.  It
+ * did not: a streamed Player played its song once and fired endOfMedia no
+ * matter what the count said, so background music stopped after the first
+ * pass instead of repeating.  The song here is half a second long, so three
+ * passes are 33,075 frames at 22,050 Hz.
+ */
+static void test_midi_loop_count(nj_vm *vm)
+{
+    static const nj_u1 smf[42] = {
+        'M', 'T', 'h', 'd', 0u, 0u, 0u, 6u,
+        0u, 0u, 0u, 1u, 0x01u, 0xE0u,
+        'M', 'T', 'r', 'k', 0u, 0u, 0u, 20u,
+        0x00u, 0xFFu, 0x51u, 0x03u, 0x07u, 0xA1u, 0x20u,
+        0x00u, 0x90u, 0x45u, 0x64u,
+        0x83u, 0x60u, 0x80u, 0x45u, 0x40u,
+        0x00u, 0xFFu, 0x2Fu, 0x00u
+    };
+    nj_ref bar, in;
+    nj_value a[2];
+    nj_value ret;
+    long before;
+    long pushed;
+    int i;
+
+    bar = nj_byte_array_new(vm, (nj_u4)sizeof(smf));
+    OK(bar != NULL);
+    if (bar == NULL) {
+        return;
+    }
+    memcpy(bar->u.bytes, smf, sizeof(smf));
+    a[0].r = bar;
+    a[1].bits = 0u;
+    in = construct(vm, BAIS, "([B)V", a, "a stream over a half second MIDI file");
+    a[0].r = in;
+    a[1].r = NULL;
+    ret.bits = 0u;
+    if (nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                       "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                       "javax/microedition/media/Player;", a, &ret) != NJ_OK
+        || ret.r == NULL) {
+        nj_clear_exception(vm);
+        return;
+    }
+    a[0].i = 3;
+    OK(nj_call(vm, ret.r, PLAYER, "setLoopCount", "(I)V", a, NULL) == NJ_OK);
+    OK(nj_call(vm, ret.r, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+
+    before = nj_port_headless_pcm_frames(vm->port);
+    for (i = 0; i < 200; i++) {
+        nj_media_frame(vm);
+    }
+    pushed = nj_port_headless_pcm_frames(vm->port) - before;
+    OK_MSG(pushed > 2L * 11025L,
+           "looping three times plays more than two passes (%ld frames)", pushed);
+    OK_MSG(pushed < 5L * 11025L,
+           "and it stops after the third pass (%ld frames)", pushed);
+    OK(nj_call(vm, ret.r, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
+}
+
 static void test_midi_player_is_pcm(nj_vm *vm)
 {
     /* The same file tests/test_midi.c renders: 480 ticks per quarter, 500000
@@ -3962,6 +4022,7 @@ int main(void)
     test_sixteen_bit_wav_heap();
     test_midi_player_is_pcm(vm);
     test_midi_long_song_streams(vm);
+    test_midi_loop_count(vm);
     test_midi_too_big_for_heap();
     test_media_refusal_names_the_container(vm);
     test_image_survives_collection(vm);

@@ -104,6 +104,7 @@ static void midi_free(void *ud, void *p)
 #define F_P_DURATION "pDuration"   /* J microseconds */
 #define F_P_TIME     "pMediaTime"  /* J microseconds */
 #define F_P_LOOP     "pLoopCount"  /* I */
+#define F_P_SRC      "pSrc"        /* [B the song bytes a streamed Player was built from */
 #define F_P_VOLUME   "pVolume"     /* I 0..100 */
 #define F_P_MUTED    "pMuted"      /* Z */
 #define F_P_SEQ      "pSeq"        /* [B the tone sequence as given */
@@ -1009,6 +1010,52 @@ static void media_unregister(nj_vm *vm, nj_ref player)
  * iterating forwards would then skip the entry that shifted into its place.
  */
 
+/*
+ * Start a finished Player over, because setLoopCount() asked for more than one
+ * pass.  Returns 1 when the Player is playing again; the caller then leaves it
+ * on the registry instead of firing endOfMedia.
+ *
+ * A streamed MIDI Player keeps the song bytes in F_P_SRC: the renderer pulls
+ * from its own scratch, so the song never has to sit in the Java heap twice,
+ * but a second pass has to be opened from the original bytes.
+ */
+static int media_restart(nj_vm *vm, nj_ref p)
+{
+    w_i(vm, p, F_P_PUSHED, 0);
+    w_j(vm, p, F_P_TIME, 0);
+
+#if NJ_ENABLE_MIDI
+    if (r_z(vm, p, F_P_STREAM) == 0) {
+        nj_ref src = r_r(vm, p, F_P_SRC, "[B");
+        nj_ref data = r_r(vm, p, F_P_DATA, "[B");
+        const nj_u1 *b = src ? barray_bytes(src) : NULL;
+        nj_u4 len = src ? barray_len(src) : 0u;
+        nj_midi_mem mem;
+        struct nj_midi_stream *st;
+
+        if (b == NULL || len == 0u || data == NULL
+            || barray_len(data) < NJ_MEDIA_STREAM_BYTES) {
+            return 0;
+        }
+        mem.ud = vm;
+        mem.alloc = midi_alloc;
+        mem.free = midi_free;
+        st = nj_midi_stream_open(b, len, &mem);
+        if (st == NULL) {
+            nj_clear_exception(vm);
+            return 0;
+        }
+        memcpy((void *)(void *)barray_bytes(data), &st, sizeof(st));
+        w_z(vm, p, F_P_STREAM, 1);
+        return 1;
+    }
+#endif
+    if (r_i(vm, p, F_P_FRAMES) > 0) {
+        return 1;               /* a PCM Player simply reads its buffer again */
+    }
+    return 0;
+}
+
 void nj_media_frame(nj_vm *vm)
 {
     nj_ref v;
@@ -1065,7 +1112,18 @@ void nj_media_frame(nj_vm *vm)
             }
         }
         (void)pcm_push(vm, p, room);
-        if (r_i(vm, p, F_P_PUSHED) >= r_i(vm, p, F_P_FRAMES)) {
+        if (!r_z(vm, p, F_P_STREAM)
+            && r_i(vm, p, F_P_PUSHED) >= r_i(vm, p, F_P_FRAMES)) {
+            nj_s4 want = r_i(vm, p, F_P_LOOP);
+            nj_s4 done = r_i(vm, p, F_P_LOOPDONE) + 1;
+
+            if ((want < 0 || (want > 1 && done < want)) && media_restart(vm, p)) {
+                w_i(vm, p, F_P_LOOPDONE, done);
+                continue;
+            }
+        }
+        if (!r_z(vm, p, F_P_STREAM)
+            && r_i(vm, p, F_P_PUSHED) >= r_i(vm, p, F_P_FRAMES)) {
             /* Played to the end: STOP the Player and say so, which is what
              * MIDP's END_OF_MEDIA is for. */
             if (r_i(vm, p, F_P_KIND) == 1 && r_z(vm, p, F_P_OPEN)) {
@@ -1791,6 +1849,7 @@ NJFN(media_createPlayer_stream)
                 if (holder != NULL) {
                     struct nj_midi_stream *keep = st;
                     memcpy(holder->u.bytes, &keep, sizeof(keep));
+                    w_r(vm, p, F_P_SRC, "[B", data);
                     w_r(vm, p, F_P_DATA, "[B", holder);
                     w_z(vm, p, F_P_STREAM, 1);
                     w_z(vm, p, F_P_MIDIK, 1);
@@ -2909,6 +2968,7 @@ static struct nj_midi_stream *midi_take_over(nj_vm *vm, nj_ref player)
         struct nj_midi_stream *keep = st;
         memcpy(holder->u.bytes, &keep, sizeof(keep));
     }
+    w_r(vm, player, F_P_SRC, "[B", data);
     w_r(vm, player, F_P_DATA, "[B", holder);
     w_z(vm, player, F_P_STREAM, 1);
     w_i(vm, player, F_P_RATE, (nj_s4)NJ_MIDI_RATE);
@@ -3401,6 +3461,7 @@ static const nj_builtin_field player_fields[] = {
     FLD(F_P_DURATION, "J", 0),
     FLD(F_P_TIME,     "J", 0),
     FLD(F_P_LOOP,     "I", 0),
+    FLD(F_P_SRC,      "[B", 0),
     FLD(F_P_VOLUME,   "I", 0),
     FLD(F_P_MUTED,    "Z", 0),
     FLD(F_P_SEQ,      "[B", 0),
