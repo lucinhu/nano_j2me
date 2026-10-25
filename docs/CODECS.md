@@ -263,3 +263,11 @@ picture (byte checksum 6,343,036, not a zero buffer).
 Still open: `VideoControl.getSnapshot()`/`initDisplayMode`, and an in-tree test
 that pins the decoded frame against ffmpeg's pixels (the scratch probe above is
 not committed; `tests/test_h263.c` already has the reference frames to reuse).
+
+The wiring is now pinned in the tree: `tests/test_lib.c` drives the same
+`clip_3gp` fixture that `tests/test_h263.c` verifies against ffmpeg through
+`Manager.createPlayer(stream, "video/3gpp")`, starts it, pumps one media frame
+and asserts the Player reports the clip's size (128x96), counts four samples,
+advanced `pPushed` by one and filled a 24,576-byte RGB565 frame buffer with
+something other than zeros.  The clip itself moved to `tests/h263_clip.h` so the
+two tests cannot drift apart.

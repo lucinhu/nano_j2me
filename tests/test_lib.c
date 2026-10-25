@@ -43,8 +43,11 @@
  */
 #include "nj2me/nj.h"
 #include "nj2me/nj_avcodec.h"
+#include "nj2me/nj_avcodec.h"
 
 #include "nj_internal.h"
+#include "nj_midp.h"
+#include "h263_clip.h"
 #include "nj_midi.h" /* nj_class_load: the fixtures below are raw classes */
 #include "nj_midp.h"     /* nj_midp_image_pixels: assert on an Image's store */
 
@@ -2833,6 +2836,65 @@ static void test_amr_player_uses_the_installed_decoder(nj_vm *vm)
     nj_avcodec_install_audio(vm, nj_avcodec_sw_amr());
 }
 
+/* A 3GP Player must decode samples into its frame buffer, not merely exist. */
+static void test_video_player_pumps_a_frame(nj_vm *vm)
+{
+    nj_ref bar, in, player, vbuf;
+    nj_value a[2], ret;
+    nj_field *f;
+    nj_s4 w = 0, h = 0, frames = 0, pushed = 0;
+    nj_u4 sum = 0u, i;
+
+    bar = nj_byte_array_new(vm, (nj_u4)sizeof(clip_3gp));
+    OK_MSG(bar != NULL, "an array for the 3GP clip");
+    if (bar == NULL) {
+        return;
+    }
+    memcpy(bar->u.bytes, clip_3gp, sizeof(clip_3gp));
+    in = nj_object_new(vm, BAIS);
+    a[0].r = bar;
+    OK_MSG(in != NULL && nj_call_special(vm, in, BAIS, "<init>", "([B)V",
+                                         a, NULL) == NJ_OK,
+           "a stream over the 3GP clip");
+    a[0].r = in;
+    a[1].r = nj_string_new(vm, "video/3gpp");
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                          "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                          "javax/microedition/media/Player;", a, &ret) == NJ_OK,
+           "Manager.createPlayer(3GP)");
+    player = ret.r;
+    OK_MSG(player != NULL, "a Player for the 3GP clip");
+    if (player == NULL) {
+        return;
+    }
+    f = nj_field_lookup(vm, PLAYER, "pVw", "I", 0);
+    w = (f != NULL) ? nj_field_read_int(vm, player, f) : 0;
+    f = nj_field_lookup(vm, PLAYER, "pVh", "I", 0);
+    h = (f != NULL) ? nj_field_read_int(vm, player, f) : 0;
+    f = nj_field_lookup(vm, PLAYER, "pFrames", "I", 0);
+    frames = (f != NULL) ? nj_field_read_int(vm, player, f) : 0;
+    OK_MSG(w == 128 && h == 96, "the Player knows the clip size (%dx%d)", (int)w, (int)h);
+    OK_MSG(frames == 4, "the Player counts four samples (got %d)", (int)frames);
+    (void)nj_call(vm, player, PLAYER, "realize", "()V", NULL, NULL);
+    (void)nj_call(vm, player, PLAYER, "prefetch", "()V", NULL, NULL);
+    (void)nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL);
+    nj_media_frame(vm);
+    f = nj_field_lookup(vm, PLAYER, "pPushed", "I", 0);
+    pushed = (f != NULL) ? nj_field_read_int(vm, player, f) : 0;
+    OK_MSG(pushed == 1, "one media frame decoded one sample (got %d)", (int)pushed);
+    f = nj_field_lookup(vm, PLAYER, "pVbuf", "[B", 0);
+    vbuf = (f != NULL) ? nj_field_read_ref(vm, player, f) : NULL;
+    OK_MSG(vbuf != NULL && vbuf->length == (nj_u4)(w * h * 2),
+           "the frame buffer holds one RGB565 frame");
+    if (vbuf != NULL) {
+        for (i = 0; i < vbuf->length; i++) {
+            sum += vbuf->u.bytes[i];
+        }
+        OK_MSG(sum != 0u, "the decoded frame is not an empty buffer");
+    }
+}
+
 static void test_eight_bit_wav_is_widened(nj_vm *vm)
 {
     static const nj_u1 expect[8] = {
@@ -4334,6 +4396,7 @@ int main(void)
     test_long_to_string(vm);
     test_player_survives_collection(vm);
     test_eight_bit_wav_is_widened(vm);
+    test_video_player_pumps_a_frame(vm);
     test_amr_player_uses_the_installed_decoder(vm);
     test_mp3_player_streams_pcm(vm);
     test_large_wav();
