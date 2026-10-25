@@ -39,7 +39,7 @@ int main(int c,char**v){
   AVCodecContext*ctx=avcodec_alloc_context3(cd);
   avcodec_parameters_to_context(ctx,par);
   if(avcodec_open2(ctx,cd,NULL)<0){puts("dec open fail");return 1;}
-  ctx->debug = FF_DEBUG_DCT_COEFF | FF_DEBUG_PICT_INFO;
+  ctx->debug = FF_DEBUG_DCT_COEFF | FF_DEBUG_PICT_INFO | FF_DEBUG_MB_TYPE | FF_DEBUG_QP;
   AVPacket*p=av_packet_alloc(); AVFrame*fr=av_frame_alloc();
   int got=0; while(av_read_frame(fc,p)>=0){
     if(p->stream_index==vi && avcodec_send_packet(ctx,p)>=0 && avcodec_receive_frame(ctx,fr)>=0){got++; av_packet_unref(p); break;}
