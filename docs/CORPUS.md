@@ -147,3 +147,20 @@ reach a state that animates*, and only a per-title key or a reference-emulator
 comparison can turn it into evidence.  The tool exists to produce the candidate
 list; it does not classify.
 
+### One frozen frame, read to the prompt (round 15)
+
+`细胞分裂4混沌法则中文版_11671` was one of the "painted one frame" rows, so it
+was compared against the reference renderer before anything was changed:
+
+- Ours, 600 paced frames: `frames=600 paints=600 gfx=15,021 bytecodes=256,696,121
+  natives=102,358,098`; dumped frames 300/450/600 are byte-identical.
+- Reference renderer, same title, two screenshots three seconds apart: both are
+  the same "您想打开声音进行这个游戏吗? 是 / 否" prompt (different bytes because
+  the cursor blinks).
+
+So the frame is not stale: the title paints its sound prompt and then polls for
+an answer.  The 13 M bytecodes/s and 170k native calls per frame are the title's
+own busy-wait for the soft-key answer, and the shared sweep script never presses
+it.  Nothing to fix in the runtime; the row is `ok` and the frozen frame is the
+title waiting for input, exactly as the previous round's rule says.
+
