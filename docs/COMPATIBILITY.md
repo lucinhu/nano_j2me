@@ -4099,5 +4099,12 @@ the VM.  `test_lib` no longer crashes - it reports "830 passed, 4 failed" and
 exits 1, which is what a failing assertion should look like.
 
 (1) is still open: `Manager.createPlayer(InputStream)` must parse a WAV as it
-arrives instead of buffering the whole stream first.  That is also the version
-that spends less memory, so it is the right fix rather than a bigger test heap.
+arrives instead of buffering the whole stream first.  Round 80 measured why a
+smaller tweak cannot fix it: `read_stream()` asks `available()` and, for a
+ByteArrayInputStream, sizes the buffer exactly (400,044 bytes for the fixture,
+not 600 KB), but the raw buffer must stay alive while the 400 KB PCM array is
+allocated, so the call needs ~800 KB and the test leaves under 700 KB.  Releasing
+the raw buffer earlier is impossible because the samples are read out of it; only
+streaming (header -> PCM allocation -> chunked sample copy) removes the
+double residency.  That is the shape of the fix and why it is a real
+memory win on 512 KB handsets, not just a test repair.
