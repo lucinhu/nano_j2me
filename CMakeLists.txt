@@ -1262,6 +1262,7 @@ nj_add_test(test_clip tests/test_clip.c)
     nj_add_test(test_midi tests/test_midi.c)
     nj_add_test(test_media_backpressure tests/test_media_backpressure.c)
     nj_add_test(test_h263 tests/test_h263.c)
+    nj_add_test(test_mp3 tests/test_mp3.c)
   endif()
 
   # The rasterizer test is deliberately standalone: it compiles nj_gfx.c with
