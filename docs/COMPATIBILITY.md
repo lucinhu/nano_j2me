@@ -4041,3 +4041,30 @@ Bubblet and Game15 did before round 34).
 
 Fail-before evidence: declaring Canvas.getGameAction as an instance method again
 makes the suite report 34 failures; restoring it passes.
+
+## A known defect: allocations that must collect mid-call (round 77, 2026-10-25)
+
+`test_lib` has failed for several rounds and it is a real defect, not a flaky
+test.  It builds a heap that is nearly full on purpose, then asserts:
+
+    test_lib.c:2495  Manager.createPlayer(InputStream) on a heap that has to
+                     collect mid-call returns NJ_OK
+    test_lib.c:2499  that Player is non-null (a 400,000-frame 8-bit PCM WAV)
+    test_lib.c:25xx  Image.createImage on a full heap does not fail
+
+Reproduction, both builds of the same commit:
+
+    ctest --test-dir build --rerun-failed --output-on-failure
+        -> test_lib (SEGFAULT), the 2495 assertion reported first
+
+    cmake -S . -B /tmp/asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DNJ_SANITIZE=ON           -DNJ_BUILD_LIBRETRO=OFF -DNJ_BUILD_SDL2=OFF -DNJ_BUILD_EMBEDDED_PORTS=OFF
+    cmake --build /tmp/asan -j8 --target test_lib && /tmp/asan/test_lib
+        -> 829 passed, 3 failed, no sanitizer report
+
+So the same allocation sequence either takes a bad reference (SEGV in the
+release layout) or runs out of heap (asan layout).  The paths are known: the
+media stream buffer grows by doubling and needs ~1.5x the media length at its
+peak while the test leaves under 700 KB free, and `Image.createImage` allocates
+its pixel array on the same nearly-full heap.  Neither has been fixed; this note
+exists so the next round starts from the evidence instead of rediscovering that
+`test_lib` is red.
