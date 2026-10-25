@@ -640,6 +640,19 @@ int main(void)
            "the header yields cbp 60, no dquant, three bits");
     }
 
+    {
+        /* the first video sample of 1942.3gp, byte for byte */
+        static const nj_u1 s0[12] = { 0x00,0x00,0x01,0xb6,0x10,0x03,0x09,
+                                      0x8c,0x21,0xb6,0xfe,0x36 };
+        nj_u4 pos = 56u;                     /* the VOP header ends here */
+        int cbp = -1, dq = -1;
+
+        ok(nj_m4v_mb_intra_header(s0, 96u, &pos, &cbp, &dq) == 0,
+           "the first real macroblock header decodes");
+        ok(cbp == 16 && dq == 0, "it carries one luma AC block");
+        ok(pos == 62u, "and consumes six bits");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }
