@@ -1221,20 +1221,19 @@ int nj_m4v_mb_intra_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *cbp, int *d
         }
     }
     if (dq != NULL) *dq = (mcbpc & 4) != 0;
-    if ((mcbpc & 4) != 0) {
-        if (*pos + 2u > n) {
-            return -1;
-        }
-        *pos += 2u;
+    /* ac_pred comes between the MCBPC and the CBPY (7.4.3.5). */
+    if (*pos + 1u > n * 8u) {
+        return -1;
     }
+    *pos += 1u;
     if (nj_vlc_lookup(b, n, pos, nj_vlc_cbpy, 16, &cbpy) != 0) {
         return -1;
     }
-    if (dq) {
+    if ((mcbpc & 4) != 0) {
         if (*pos + 2u > n * 8u) {
             return -1;
         }
-        *pos += 2u;             /* dquant follows CBPY, not MCBPC */
+        *pos += 2u;             /* dquant follows CBPY */
     }
     if (cbp != NULL) *cbp = ((mcbpc & 3) | (cbpy << 2)) & 0x3f;
     return 0;
@@ -1302,8 +1301,7 @@ static int m4v_read_cbp(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int cbpc, int dq, i
     if (nj_vlc_lookup(b, n, pos, nj_vlc_cbpy, 16, &cbpy) != 0) {
         return -1;
     }
-    if (getenv("NJ_M4V_CBPY") != NULL) {
-    }
+    if (getenv("NJ_M4VRAW") != NULL) fprintf(stderr, "CBPY sym=%d pos=%u\n", cbpy, (unsigned)*pos);
     *cbp = ((cbpc & 3) | (cbpy << 2)) & 0x3f;
     (void)v;
     return 0;
@@ -1331,22 +1329,6 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
         nj_u4 pad = (nj_u4)atoi(getenv("NJ_M4V_PAD"));
         if (*pos + pad * 8u > n * 8u) return -1;
         *pos += pad * 8u;
-    }
-    if (dq != 0) {
-        nj_u4 at = *pos;
-        int   delta;
-
-        if (at + 2u > n * 8u) {
-            return -1;
-        }
-        delta = (int)((b[at >> 3] >> (6u - (at & 7u))) & 3u);
-        *qscale += (delta == 0) ? -1 : ((delta == 1) ? -2 : delta);
-        if (*qscale < 1) {
-            *qscale = 1;
-        } else if (*qscale > 31) {
-            *qscale = 31;
-        }
-        *pos += 2u;
     }
     {
         int acp = 0;
@@ -1400,6 +1382,22 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
             return -1;
         }
         (void)acp;
+    }
+    if (dq != 0) {
+        nj_u4 at = *pos;
+        int   delta;
+
+        if (at + 2u > n * 8u) {
+            return -1;
+        }
+        delta = (int)((b[at >> 3] >> (6u - (at & 7u))) & 3u);
+        *qscale += (delta == 0) ? -1 : ((delta == 1) ? -2 : delta);
+        if (*qscale < 1) {
+            *qscale = 1;
+        } else if (*qscale > 31) {
+            *qscale = 31;
+        }
+        *pos += 2u;
     }
     /* All six DC coefficients come first, then the AC coefficients of the
      * coded blocks - that is the macroblock layer's order (7.4.3.5). */
