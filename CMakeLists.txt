@@ -1124,7 +1124,11 @@ nj_add_test(test_clip tests/test_clip.c)
   # A quit request is an end, not a failed construction: closing the port's
   # window while a MIDlet is still in its constructor (Doom 3 runs the whole
   # game there) must report the stop, not a java/lang/InternalError.
-  nj_add_test(test_quit_stop tests/test_quit_stop.c ${NJ_FIXTURES})
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_quit_stop.c")
+    nj_add_test(test_quit_stop tests/test_quit_stop.c ${NJ_FIXTURES})
+  else()
+    message(WARNING "tests/test_quit_stop.c is absent; skipping test_quit_stop")
+  endif()
   nj_add_test(test_vm        tests/test_vm.c
               ${NJ_FIXTURES}/hello.jar HelloWorld "wideargs ok")
 
