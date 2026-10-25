@@ -559,6 +559,21 @@ int nj_m4v_dc_scale(int q, int luma)
     return (int)(luma ? nj_m4v_dc_scale_lum[q] : nj_m4v_dc_scale_chrom[q]);
 }
 
+
+int nj_m4v_plane_size(nj_u4 width, nj_u4 height, nj_u4 *cw, nj_u4 *ch)
+{
+    if (width == 0u || height == 0u) {
+        return -1;
+    }
+    if (cw != NULL) {
+        *cw = (width + 1u) / 2u;
+    }
+    if (ch != NULL) {
+        *ch = (height + 1u) / 2u;
+    }
+    return 0;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;

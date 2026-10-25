@@ -445,6 +445,17 @@ int main(void)
         ok(bad == 0, "the DC scaler follows the reference table for q 1..31");
     }
 
+    {
+        nj_u4 cw = 0, ch = 0;
+        int bad = 0;
+
+        bad += nj_m4v_plane_size(176, 144, &cw, &ch) != 0 || cw != 88 || ch != 72;
+        bad += nj_m4v_plane_size(320, 240, &cw, &ch) != 0 || cw != 160 || ch != 120;
+        bad += nj_m4v_plane_size(177, 145, &cw, &ch) != 0 || cw != 89 || ch != 73;
+        bad += nj_m4v_plane_size(0, 144, &cw, &ch) != -1;
+        ok(bad == 0, "4:2:0 chroma planes round up and reject empty pictures");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }
