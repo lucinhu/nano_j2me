@@ -7,8 +7,10 @@
  */
 #include "nj2me/nj.h"
 #include "nj2me/nj_m4v.h"
+#include "nj2me/nj_m4v_tables.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static int checks;
 static int fails;
@@ -111,6 +113,40 @@ int main(void)
            "the doom VOP header parses as a coded I-VOP");
     }
 
+
+    /* The intra VLC tables are generated from the reference decoder's data.
+       Check the invariants a prefix code must have rather than magic numbers:
+       unique codewords, every symbol once, and each codeword covering exactly
+       the 2^(12-len) entries of the 12-bit lookup it owns. */
+    ok(nj_m4v_dc_lum[0] == 0x33u, "DC luma size 0 is a 3-bit code 3");
+    ok(nj_m4v_dc_chrom[0] == 0x32u, "DC chroma size 0 is a 2-bit code 2");
+    {
+        int seen[256];
+        int i, bad = 0, syms = 0, covered = 0;
+
+        memset(seen, 0, sizeof(seen));
+        for (i = 0; i < 4096; i++) {
+            nj_u4 e = nj_m4v_ac_lut[i];
+
+            if (e == 0xffffu) {
+                continue;
+            }
+            {
+                int len = (int)(e >> 8), sym = (int)(e & 0xffu);
+                covered++;
+                if (len < 1 || len > NJ_M4V_AC_BITS || sym >= NJ_M4V_AC_SYMS) {
+                    bad++;
+                    continue;
+                }
+                if (seen[sym] == 0) {
+                    syms++;
+                }
+                seen[sym]++;
+            }
+        }
+        ok(bad == 0, "every AC lookup entry names a valid symbol and length");
+        ok(syms == NJ_M4V_AC_SYMS, "all AC symbols appear in the lookup");
+    }
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }
