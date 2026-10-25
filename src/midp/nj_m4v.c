@@ -11,6 +11,7 @@
  * self-consistent, so only a real decoder configuration can tell.
  */
 #include "nj2me/nj_m4v.h"
+#include "nj2me/nj_m4v_tables.h"
 
 typedef struct m4v_bits {
     const nj_u1 *b;
@@ -269,6 +270,138 @@ int nj_m4v_find_vop(const nj_u1 *b, nj_u4 n, nj_u4 *pos)
         from = at;
     }
     return 0;
+}
+
+
+int nj_m4v_decode_ac(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *last)
+{
+    nj_u4 i, v = 0;
+    int   k;
+
+    if (b == NULL || pos == NULL || *pos >= n * 8u) {
+        return -1;
+    }
+    for (k = 0; k < NJ_M4V_AC_BITS; k++) {
+        v = (v << 1) | (((*pos + (nj_u4)k) < n * 8u)
+                        ? (nj_u4)((b[(*pos + (nj_u4)k) >> 3] >>
+                                   (7u - ((*pos + (nj_u4)k) & 7u))) & 1u)
+                        : 0u);
+    }
+    i = nj_m4v_ac_lut[v];
+    if (i == 0xffffu) {
+        return -1;
+    }
+    *pos += i >> 8;
+    i &= 0xffu;
+    if (last != NULL) {
+        *last = ((int)i >= NJ_M4V_AC_LAST);
+    }
+    return (int)i;
+}
+
+
+int nj_m4v_decode_dc(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int luma)
+{
+    const nj_u2 *tab = luma ? nj_m4v_dc_lum : nj_m4v_dc_chrom;
+    int len, i;
+
+    for (len = 1; len <= 13; len++) {
+        nj_u4 v = 0;
+        int   k;
+
+        if (*pos + (nj_u4)len > n * 8u) {
+            return -1;
+        }
+        for (k = 0; k < len; k++) {
+            v = (v << 1) | (nj_u4)((b[(*pos + (nj_u4)k) >> 3] >>
+                                    (7u - ((*pos + (nj_u4)k) & 7u))) & 1u);
+        }
+        for (i = 0; i < 13; i++) {
+            if ((int)(tab[i] & 0x0fu) == len && (int)(tab[i] >> 4) == (int)v) {
+                *pos += (nj_u4)len;
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+
+
+int nj_m4v_dc_delta(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int size)
+{
+    nj_u4 v = 0;
+    int   k, half;
+
+    if (size <= 0) {
+        return 0;
+    }
+    if (size > 12 || *pos + (nj_u4)size > n * 8u) {
+        return -1;
+    }
+    for (k = 0; k < size; k++) {
+        v = (v << 1) | (nj_u4)((b[(*pos + (nj_u4)k) >> 3] >>
+                                (7u - ((*pos + (nj_u4)k) & 7u))) & 1u);
+    }
+    *pos += (nj_u4)size;
+    half = 1 << (size - 1);
+    if ((int)v & half) {
+        v -= (nj_u4)((1 << size) - 1);
+    }
+    return (int)v;
+}
+
+
+int nj_m4v_ac_sym(int sym, int *run, int *level, int *last)
+{
+    if (sym <= 0 || sym >= NJ_M4V_AC_SYMS) {
+        return 0;       /* symbol 0 is the escape; out of range is not a symbol */
+    }
+    if (run != NULL) {
+        *run = (int)nj_m4v_ac_run[sym];
+    }
+    if (level != NULL) {
+        *level = (int)nj_m4v_ac_level[sym];
+    }
+    if (last != NULL) {
+        *last = (sym >= NJ_M4V_AC_LAST);
+    }
+    return 1;
+}
+
+
+/*
+ * ISO/IEC 14496-2 7.4.3: the coefficient scan for a non-interlaced picture is
+ * the usual zigzag.  nj_m4v_scan_index(k) is the natural index of the k-th
+ * coefficient in that order, which is what the AC loop needs to place run/level
+ * pairs into an 8x8 block.
+ */
+static const nj_u1 nj_m4v_zigzag[64] = {
+     0,  1,  8, 16,  9,  2,  3, 10,
+    17, 24, 32, 25, 18, 11,  4,  5,
+    12, 19, 26, 33, 40, 48, 41, 34,
+    27, 20, 13,  6,  7, 14, 21, 28,
+    35, 42, 49, 56, 57, 50, 43, 36,
+    29, 22, 15, 23, 30, 37, 44, 51,
+    58, 59, 52, 45, 38, 31, 39, 46,
+    53, 60, 61, 54, 47, 55, 62, 63
+};
+
+int nj_m4v_scan_index(int k)
+{
+    if (k < 0 || k >= 64) {
+        return -1;
+    }
+    return (int)nj_m4v_zigzag[k];
+}
+
+
+void nj_m4v_coef_store(nj_s4 *coef, int k, int level)
+{
+    int at = nj_m4v_scan_index(k);
+
+    if (coef != NULL && at >= 0) {
+        coef[at] = (nj_s4)level;
+    }
 }
 
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)

@@ -7,8 +7,10 @@
  */
 #include "nj2me/nj.h"
 #include "nj2me/nj_m4v.h"
+#include "nj2me/nj_m4v_tables.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static int checks;
 static int fails;
@@ -109,6 +111,187 @@ int main(void)
         ok(nj_m4v_parse_vop(gop, (nj_u4)sizeof(gop), pos, 1000u, &vop) == 1 &&
            vop.type == 0 && vop.coded == 1,
            "the doom VOP header parses as a coded I-VOP");
+    }
+
+
+    /* The intra VLC tables are generated from the reference decoder's data.
+       Check the invariants a prefix code must have rather than magic numbers:
+       unique codewords, every symbol once, and each codeword covering exactly
+       the 2^(12-len) entries of the 12-bit lookup it owns. */
+    ok(nj_m4v_dc_lum[0] == 0x33u, "DC luma size 0 is a 3-bit code 3");
+    ok(nj_m4v_dc_chrom[0] == 0x32u, "DC chroma size 0 is a 2-bit code 2");
+    {
+        int seen[256];
+        int i, bad = 0, syms = 0, covered = 0;
+
+        memset(seen, 0, sizeof(seen));
+        for (i = 0; i < 4096; i++) {
+            nj_u4 e = nj_m4v_ac_lut[i];
+
+            if (e == 0xffffu) {
+                continue;
+            }
+            {
+                int len = (int)(e >> 8), sym = (int)(e & 0xffu);
+                covered++;
+                if (len < 1 || len > NJ_M4V_AC_BITS || sym >= NJ_M4V_AC_SYMS) {
+                    bad++;
+                    continue;
+                }
+                if (seen[sym] == 0) {
+                    syms++;
+                }
+                seen[sym]++;
+            }
+        }
+        ok(bad == 0, "every AC lookup entry names a valid symbol and length");
+        ok(syms == NJ_M4V_AC_SYMS, "all AC symbols appear in the lookup");
+    }
+    {
+        int i, bad = 0, found = 0;
+
+        for (i = 0; i < NJ_M4V_AC_SYMS; i++) {
+            int j, idx = -1;
+            nj_u4 pos = 0;
+            int   last = 0, sym;
+
+            for (j = 0; j < 4096; j++) {
+                nj_u4 e = nj_m4v_ac_lut[j];
+                if (e != 0xffffu && (int)(e & 0xffu) == i) {
+                    idx = j;
+                    break;
+                }
+            }
+            if (idx < 0) {
+                continue;
+            }
+            found++;
+            {
+                nj_u1 buf[4];
+                int   len = (int)(nj_m4v_ac_lut[idx] >> 8);
+
+                memset(buf, 0, sizeof(buf));
+                for (j = 0; j < len; j++) {
+                    if ((idx >> (NJ_M4V_AC_BITS - 1 - j)) & 1) {
+                        buf[j / 8] |= (nj_u1)(0x80u >> (j % 8));
+                    }
+                }
+                sym = nj_m4v_decode_ac(buf, (nj_u4)sizeof(buf), &pos, &last);
+                if (sym != i || (int)pos != len) {
+                    bad++;
+                }
+                if (sym >= 0 && last != (sym >= NJ_M4V_AC_LAST)) {
+                    bad++;
+                }
+            }
+        }
+        ok(found == NJ_M4V_AC_SYMS, "every AC symbol has a codeword to test");
+        ok(bad == 0, "every AC codeword round-trips through the decoder");
+    }
+
+    {
+        int i, bad = 0;
+
+        for (i = 0; i < 13; i++) {
+            int which;
+
+            for (which = 0; which < 2; which++) {
+                const nj_u2 *tab = which ? nj_m4v_dc_chrom : nj_m4v_dc_lum;
+                nj_u1 buf[4];
+                int   len = (int)(tab[i] & 0x0fu);
+                int   code = (int)(tab[i] >> 4);
+                int   j, size;
+                nj_u4 pos = 0;
+
+                memset(buf, 0, sizeof(buf));
+                for (j = 0; j < len; j++) {
+                    if ((code >> (len - 1 - j)) & 1) {
+                        buf[j / 8] |= (nj_u1)(0x80u >> (j % 8));
+                    }
+                }
+                size = nj_m4v_decode_dc(buf, (nj_u4)sizeof(buf), &pos, which == 0);
+                if (size != i || (int)pos != len) {
+                    bad++;
+                }
+            }
+        }
+        ok(bad == 0, "every DC size codeword decodes to its own size");
+    }
+
+    {
+        nj_u1 buf[2];
+        nj_u4 pos;
+        int   okd = 1;
+
+        /* size 0 reads nothing and means no change */
+        pos = 0;
+        okd &= nj_m4v_dc_delta(buf, 2, &pos, 0) == 0 && pos == 0;
+        /* size 2: 00 -> 0, 01 -> +1, 10 -> 2 - 3 = -1, 11 -> 3 - 3 = 0 */
+        memset(buf, 0, sizeof(buf));
+        buf[0] = 0x80u;                        /* 10xxxxxx */
+        pos = 0;
+        okd &= nj_m4v_dc_delta(buf, 2, &pos, 2) == -1 && pos == 2;
+        buf[0] = 0x40u;                        /* 01xxxxxx */
+        pos = 0;
+        okd &= nj_m4v_dc_delta(buf, 2, &pos, 2) == 1 && pos == 2;
+        buf[0] = 0xc0u;                        /* 11xxxxxx */
+        pos = 0;
+        okd &= nj_m4v_dc_delta(buf, 2, &pos, 2) == 0 && pos == 2;
+        ok(okd != 0, "DC deltas follow the specification's sign rule");
+    }
+
+    {
+        int run = -1, level = -9, last = -1, okr = 1;
+
+        okr &= nj_m4v_ac_sym(0, &run, &level, &last) == 0;
+        okr &= nj_m4v_ac_sym(NJ_M4V_AC_SYMS, &run, &level, &last) == 0;
+        okr &= nj_m4v_ac_sym(1, &run, &level, &last) == 1 &&
+               run == (int)nj_m4v_ac_run[1] && level == (int)nj_m4v_ac_level[1] &&
+               last == 0;
+        okr &= nj_m4v_ac_sym(NJ_M4V_AC_LAST, &run, &level, &last) == 1 && last == 1;
+        okr &= nj_m4v_ac_sym(NJ_M4V_AC_LAST - 1, &run, &level, &last) == 1 && last == 0;
+        ok(okr != 0, "AC symbols expand to run/level with the reference last flag");
+    }
+
+    {
+        int seen[64];
+        int i, bad = 0;
+
+        memset(seen, 0, sizeof(seen));
+        for (i = 0; i < 64; i++) {
+            int k = nj_m4v_scan_index(i);
+
+            if (k < 0 || k >= 64 || seen[k] != 0) {
+                bad++;
+            } else {
+                seen[k] = 1;
+            }
+        }
+        ok(bad == 0 && nj_m4v_scan_index(64) == -1,
+           "the coefficient scan is a permutation of the 64 positions");
+        ok(nj_m4v_scan_index(0) == 0 && nj_m4v_scan_index(1) == 1 &&
+           nj_m4v_scan_index(2) == 8 && nj_m4v_scan_index(63) == 63,
+           "the scan starts down the first column and ends at the last position");
+    }
+
+    {
+        nj_s4 coef[64];
+        int i, bad = 0;
+
+        for (i = 0; i < 64; i++) {
+            coef[i] = 0;
+        }
+        nj_m4v_coef_store(coef, 0, 7);       /* DC lands at natural 0 */
+        nj_m4v_coef_store(coef, 2, -3);      /* scan 2 is natural 8 */
+        nj_m4v_coef_store(coef, 63, 5);      /* last scan position, natural 63 */
+        nj_m4v_coef_store(coef, 64, 1);      /* out of range: ignored */
+        bad += coef[0] != 7 || coef[8] != -3 || coef[63] != 5;
+        for (i = 1; i < 64; i++) {
+            if (i != 8 && i != 63 && coef[i] != 0) {
+                bad++;
+            }
+        }
+        ok(bad == 0, "coefficients land at their natural positions");
     }
 
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
