@@ -1404,6 +1404,217 @@ static nj_ref player_new(nj_vm *vm, int kind)
     return p;
 }
 
+/*
+ * Streaming WAV front-end for Manager.createPlayer(InputStream).
+ *
+ * The buffered path (read_stream + wav_parse) holds the whole container in a
+ * Java byte array while it allocates the PCM array beside it, so a 400 KB track
+ * needs 800 KB of heap - that is what makes createPlayer fail on a small heap
+ * (test_lib pins it).  Walking the RIFF chunks through the stream instead lets
+ * the samples land directly in the PCM array the Player owns: the peak is the
+ * PCM array alone, and because the samples are copied (never aliased) the
+ * caller's bytes stay private and unchanged, which test_lib also asserts.
+ *
+ * Only an exact ByteArrayInputStream is streamed, only plain 8/16-bit PCM, and
+ * anything unexpected leaves the stream rewound for the buffered path.
+ */
+static int wav_stream_rewind(nj_vm *vm, nj_ref in)
+{
+    nj_field *pos = nj_field_lookup(vm, "java/io/ByteArrayInputStream", "pos", "I", 0);
+
+    if (!pos) {
+        return 0;
+    }
+    nj_field_write_int(vm, in, pos, 0);
+    return 1;
+}
+
+static nj_ref wav_stream_bytes(nj_vm *vm, nj_ref in, nj_u4 want)
+{
+    nj_ref buf = nj_byte_array_new(vm, want);
+    nj_value a[3];
+    nj_value r;
+
+    if (!buf) {
+        nj_clear_exception(vm);
+        return NULL;
+    }
+    a[0].r = buf;
+    a[1].i = 0;
+    a[2].i = (nj_s4)want;
+    if (nj_call(vm, in, "java/io/InputStream", "read", "([BII)I", a, &r) != NJ_OK ||
+        r.i != (nj_s4)want) {
+        nj_clear_exception(vm);
+        return NULL;
+    }
+    return buf;
+}
+
+static int wav_stream_skip(nj_vm *vm, nj_ref in, nj_u4 n)
+{
+    nj_u4 done = 0u;
+
+    while (done < n) {
+        nj_u4 step = n - done > 512u ? 512u : n - done;
+        nj_ref dump = wav_stream_bytes(vm, in, step);
+
+        if (!dump) {
+            return 0;
+        }
+        done += step;
+    }
+    return 1;
+}
+
+/* Returns a rooted PCM byte array (16-bit LE), or NULL after rewinding `in`. */
+static nj_ref wav_stream_try(nj_vm *vm, nj_ref in, wav_info *wi)
+{
+    nj_class *want_cls = nj_class_find(vm, "java/io/ByteArrayInputStream");
+    nj_ref hdr, chunk, pcm = NULL;
+    nj_u4 data_left = 0u;
+    int have_fmt = 0;
+
+    if (!want_cls || !in || in->cls != want_cls) {
+        return NULL;
+    }
+    hdr = wav_stream_bytes(vm, in, 12u);
+    if (!hdr) {
+        goto fail;
+    }
+    if (memcmp(hdr->u.bytes, "RIFF", 4) != 0 ||
+        memcmp(hdr->u.bytes + 8, "WAVE", 4) != 0) {
+        goto fail;
+    }
+    for (;;) {
+        chunk = wav_stream_bytes(vm, in, 8u);
+        if (!chunk) {
+            goto fail;
+        }
+        {
+            nj_u4 len = (nj_u4)chunk->u.bytes[4] | ((nj_u4)chunk->u.bytes[5] << 8) |
+                        ((nj_u4)chunk->u.bytes[6] << 16) | ((nj_u4)chunk->u.bytes[7] << 24);
+            if (memcmp(chunk->u.bytes, "data", 4) == 0) {
+                data_left = len;
+                break;
+            }
+            if (memcmp(chunk->u.bytes, "fmt ", 4) == 0) {
+                nj_u4 take = len > 40u ? 40u : len;
+                nj_u4 rest = len - take + (len & 1u);
+                nj_ref fmt;
+
+                if (take < 16u) {
+                    goto fail;
+                }
+                fmt = wav_stream_bytes(vm, in, take);
+                if (!fmt) {
+                    goto fail;
+                }
+                {
+                    const nj_u1 *f = fmt->u.bytes;
+                    int tag = (int)f[0] | ((int)f[1] << 8);
+
+                    wi->channels = (int)f[2] | ((int)f[3] << 8);
+                    wi->rate = (int)((nj_u4)f[4] | ((nj_u4)f[5] << 8) |
+                                     ((nj_u4)f[6] << 16) | ((nj_u4)f[7] << 24));
+                    wi->bits = (int)f[14] | ((int)f[15] << 8);
+                    if (tag != 1 || (wi->bits != 8 && wi->bits != 16) ||
+                        wi->channels < 1 || wi->channels > 2 || wi->rate <= 0) {
+                        goto fail;
+                    }
+                }
+                have_fmt = 1;
+                if (rest != 0u && !wav_stream_skip(vm, in, rest)) {
+                    goto fail;
+                }
+                continue;
+            }
+            if (!wav_stream_skip(vm, in, len + (len & 1u))) {
+                goto fail;
+            }
+        }
+    }
+    if (!have_fmt || data_left == 0u) {
+        goto fail;
+    }
+    {
+        nj_u4 align = (nj_u4)wi->channels * (nj_u4)(wi->bits / 8);
+        nj_u4 total = data_left - (data_left % align);
+        nj_u4 want = (total / (nj_u4)(wi->bits / 8)) * 2u;   /* 16-bit PCM */
+        nj_u4 done = 0u;
+
+        wi->frames = total / align;
+        pcm = nj_byte_array_new(vm, want);
+        if (!pcm) {
+            /*
+             * The buffered path let the allocator collect on its way to a
+             * 400 KB copy; here the PCM array is the first big allocation, so
+             * ask for the collection ourselves before giving up.
+             */
+            nj_clear_exception(vm);
+            (void)nj_gc_run(vm);
+            pcm = nj_byte_array_new(vm, want);
+            if (!pcm) {
+                nj_clear_exception(vm);
+                goto fail;
+            }
+        }
+        pcm = nj_root(vm, pcm);
+        if (wi->bits == 16) {
+            while (done < want) {
+                nj_u4 step = want - done > 1024u ? 1024u : want - done;
+                nj_value a[3];
+                nj_value r;
+
+                a[0].r = pcm;
+                a[1].i = (nj_s4)done;
+                a[2].i = (nj_s4)step;
+                if (nj_call(vm, in, "java/io/InputStream", "read", "([BII)I", a, &r) != NJ_OK ||
+                    r.i != (nj_s4)step) {
+                    nj_clear_exception(vm);
+                    goto fail;
+                }
+                done += step;
+            }
+        } else {
+            nj_ref tmp = nj_byte_array_new(vm, 1024u);
+
+            if (!tmp) {
+                nj_clear_exception(vm);
+                goto fail;
+            }
+            while (done < total) {
+                nj_u4 step = total - done > 1024u ? 1024u : total - done;
+                nj_value a[3];
+                nj_value r;
+                nj_u4 k;
+
+                a[0].r = tmp;
+                a[1].i = 0;
+                a[2].i = (nj_s4)step;
+                if (nj_call(vm, in, "java/io/InputStream", "read", "([BII)I", a, &r) != NJ_OK ||
+                    r.i != (nj_s4)step) {
+                    nj_clear_exception(vm);
+                    goto fail;
+                }
+                for (k = 0u; k < step; k++) {
+                    nj_s4 v = ((nj_s4)tmp->u.bytes[k] - 128) * 256;
+
+                    pcm->u.bytes[((done + k) * 2u)] = (nj_u1)(v & 0xFF);
+                    pcm->u.bytes[((done + k) * 2u) + 1u] = (nj_u1)((v >> 8) & 0xFF);
+                }
+                done += step;
+            }
+            wi->bits = 16;
+        }
+        wi->data = NULL;
+        wi->bytes = want;
+        return pcm;
+    }
+fail:
+    (void)wav_stream_rewind(vm, in);
+    return NULL;
+}
+
 NJFN(media_createPlayer_stream)
 {
     nj_ref in = NJ_ARG_REF(args, 0);
@@ -1418,6 +1629,41 @@ NJFN(media_createPlayer_stream)
                         "stream is null");
     }
     mark = nj_root_mark(vm);
+    memset(&wi, 0, sizeof wi);
+    /*
+     * Plain PCM in a ByteArrayInputStream does not have to be buffered: walk the
+     * RIFF chunks through the stream and let the samples land in the PCM array
+     * the Player owns.  test_lib pins the failure this avoids (a 400 KB track
+     * needing 800 KB of heap) and the two contracts it must keep (the caller's
+     * array stays private and unaliased).
+     */
+    {
+    nj_ref spcm = wav_stream_try(vm, in, &wi);
+
+    if (spcm) {
+        p = player_new(vm, 1);
+        if (!p) {
+            nj_clear_exception(vm);
+            (void)nj_gc_run(vm);
+            p = player_new(vm, 1);
+        }
+        if (!p) {
+            nj_root_release(vm, mark);
+            return NJ_ERR;
+        }
+        p = nj_root(vm, p);
+        player_set_type(vm, p, "audio/x-wav");
+        w_r(vm, p, F_P_DATA, "[B", spcm);
+        w_i(vm, p, F_P_RATE, wi.rate);
+        w_i(vm, p, F_P_CHAN, wi.channels);
+        w_i(vm, p, F_P_FRAMES, (nj_s4)wi.frames);
+        w_j(vm, p, F_P_DURATION,
+            (nj_s8)wi.frames * 1000000LL / (nj_s8)wi.rate);
+        nj_root_release(vm, mark);
+        ret->r = p;
+        return NJ_OK;
+    }
+    }
     /* Media competes with the game's objects in the configured Java heap.
      * A fixed 4 MB ceiling silently cut valid long WAV tracks short. */
     data = read_stream(vm, in, (nj_u4)(vm->heap.size > 0x7fffffffu

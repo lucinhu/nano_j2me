@@ -4106,7 +4106,30 @@ not 600 KB), but the raw buffer must stay alive while the 400 KB PCM array is
 allocated, so the call needs ~800 KB and the test leaves under 700 KB.  Releasing
 the raw buffer earlier is impossible because the samples are read out of it; only
 streaming (header -> PCM allocation -> chunked sample copy) removes the
-double residency.  That is the shape of the fix and why it is a real
+double residency.  ### Streaming the WAV, and what the failing assertion actually measures
+
+Round 86 implemented the streaming front-end: for a plain PCM WAV arriving in a
+ByteArrayInputStream, `Manager.createPlayer` now walks the RIFF chunks through
+the stream and reads the samples straight into the PCM array the Player owns.
+The buffered path is still there for everything else (MIDI, ADPCM, other
+streams), and the two contracts that the zero-copy shortcut broke are kept: the
+samples are copied, so the caller's array stays private and unaliased.
+
+Measured peak for a 400 KB 8-bit track: 1.2 MB (container copy plus PCM) down
+to 800 KB (PCM alone).  All other WAV assertions in `test_lib` pass unchanged
+(duration, private PCM, 8-bit widening, ADPCM decode).
+
+The four remaining failures did not move, and the instrumented allocator says
+why: with the 2 MB test heap at `used=402,528` (1.69 MB free), a single
+800,000-byte array still fails **after two collections**.  That is not the
+player asking for too much - it is the arena refusing to serve one contiguous
+block from 1.69 MB of free space.  The next step is the allocator (coalescing /
+best-fit), not `createPlayer`; the streaming front-end makes the request as
+small as it can be.
+
+### The shape of the fix
+
+
 memory win on 512 KB handsets, not just a test repair.
 
 Round 82 tried the tempting shortcut and the tree's own contract test rejected
