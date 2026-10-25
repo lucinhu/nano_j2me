@@ -388,3 +388,35 @@ Two real first samples pin it down:
 Next: the macroblock layer - reuse the H.263 inverse transform and half-pel
 motion compensation, add the B-16 VLC tables, then register the decoder as the
 `NJ_AV_VIDEO_MPEG4` provider.
+
+### Refusing a codec by name (round 23)
+
+`Manager.createPlayer()` used to hand any `video/*` MP4/3GP to the H.263
+provider, which accepts a container it can demultiplex and then decodes noise
+from an `mp4v` sample entry.  The track's fourcc is now checked first: `s263`,
+`H263` and `h263` go to the provider, and everything else is refused with a
+MediaException that names the reason - for the corpus's three movies, that is
+"MPEG-4 Part 2 video has no decoder in this runtime".  The existing H.263 clip
+still builds a Player (test_lib 881/0, test_h263 86/0).
+
+### Where the decoder goal stands (end of the 24-round run)
+
+| Requirement | State | Evidence |
+| --- | --- | --- |
+| MP3 decoder | done | mirrors ffmpeg's PCM to <= 1 LSB (81 checks) |
+| MP3 behind a provider, in `Manager.createPlayer` | done | streamed holder path; sentinel test proves the port's decoder wins |
+| AMR-NB behind a provider | done | byte-identical to the runtime's own decoder (127 checks), Player routed through it |
+| Provider replaced at run time | done | audio and video replacement/removal tests |
+| MP4/3GP demultiplexing | done | parses the corpus's real movies with the same geometry as ffprobe |
+| H.263 decoding | done | pixels match ffmpeg's decode (86 checks) |
+| H.263 movies inside a `Player` | done | creation, sample pump, in-tree test on a shared clip |
+| MPEG-4 Visual framing (VOL, VOP) | done | validated against both corpus decoder configurations and first samples |
+| **MPEG-4 Part 2 macroblocks** | **not done** | no VLC tables, no reconstruction; the Player refuses `mp4v` by name |
+| Trim macros | done | AMR 87 KB, MP3 62 KB, VIDEO 45 KB, MIDI 33 KB; each switch builds |
+| RAM/ROM documented | done | `docs/FOOTPRINT.md`, 72 B registry in the VM, no writable statics |
+
+The one open item is the `mp4v` macroblock layer: entropy decoding with the
+B-16 tables, inverse scan/prediction and reconstruction, reusing the H.263
+inverse transform and half-pel motion compensation.  `nj_m4v` already hands it
+the layer geometry and per-picture timing, and `tests/test_m4v.c` pins the
+framing so that work starts from a checked base rather than from a guess.

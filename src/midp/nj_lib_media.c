@@ -86,11 +86,12 @@ static void midi_free(void *ud, void *p)
 
 #endif /* NJ_ENABLE_MIDI */
 
-#if NJ_ENABLE_MP3
+#if NJ_ENABLE_MP3 || NJ_ENABLE_AMR || NJ_ENABLE_VIDEO
 /*
- * The MP3 path allocates through the VM too, but it must not lean on the MIDI
- * renderer's adapters: -DNJ_ENABLE_MIDI=0 compiles those out, and a build with
- * MP3 but no MIDI still needs a decoder (the trim matrix caught this).
+ * Every provider-backed path allocates through the VM, and none of them may
+ * lean on the MIDI renderer's adapters: -DNJ_ENABLE_MIDI=0 compiles those out.
+ * The trim matrix caught this once for MP3; the guard covers AMR and video too
+ * so each switch can be turned off on its own.
  */
 static void *av_alloc(void *ud, nj_size n)
 {
@@ -2187,6 +2188,21 @@ NJFN(media_createPlayer_stream)
 
             if (nj_mp4_open(&m, barray_bytes(data), barray_len(data)) == NJ_MP4_OK &&
                 m.width > 0u && m.height > 0u && m.sample_count > 0u) {
+                /*
+                 * Only H.263 sample entries have a decoder here.  Refusing the
+                 * others by name beats letting the H.263 provider take the
+                 * stream and produce noise: every movie in the corpus is
+                 * MPEG-4 Part 2 ('mp4v'), whose macroblock layer is not
+                 * implemented yet.
+                 */
+                if (m.codec != NJ_MP4_CODEC_S263 && m.codec != NJ_MP4_CODEC_H263 &&
+                    m.codec != NJ_MP4_CODEC_H263LC) {
+                    nj_throw(vm, NJ_C_MEXC,
+                             m.codec == NJ_MP4_CODEC_MP4V
+                                 ? "MPEG-4 Part 2 video has no decoder in this runtime"
+                                 : "this video codec has no decoder in this runtime");
+                    return NJ_ERR;
+                }
                 const nj_av_video_ops *vops = nj_avcodec_find_video(
                     vm, barray_bytes(data), barray_len(data));
 
