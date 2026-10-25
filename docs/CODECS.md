@@ -451,3 +451,32 @@ What the I-frame assembly still needs: the cross-block DC prediction rule and
 the AC escape form.  Until those land, `nj_m4v_decode_intra_block()` reports
 -3 for an escape rather than pretending the coefficient was zero, and nothing
 in the tree claims `mp4v` can be played.
+
+### Handoff: finishing MPEG-4 Part 2 (state after round 47)
+
+`src/midp/nj_m4v.c` already decodes one intra block end to end. What an I-frame
+still needs, in dependency order:
+
+1. **DC prediction semantics.** `nj_m4v_dc_predict()` does the arithmetic; the
+   missing part is choosing the neighbour block inside a macroblock (top-left
+   block looks at the left macroblock's top-right block, falling back to the
+   block above, and so on).  Take the rule from `mpeg4videodec.c`'s
+   `decode_intra_block` / `dc_pred` context in
+   `.local-tools/debug-runs/m4v-round25/`, not from memory.
+2. **AC escape form.** The reference path is around lines 1471 and 1594-1602 of
+   that file ("first escape" / "second escape"); it needs the per-quantiser
+   `max_level` / `max_run` tables, which are not in `nj_m4v_tables.h` yet.
+3. **Macroblock raster.** `nj_m4v_frame_macroblocks()` and
+   `nj_m4v_block_origin()` give the loop bounds and destinations;
+   `nj_m4v_decode_intra_pixels()` fills one block.
+4. **Provider.** Register an `nj_av_video_ops` with format
+   `NJ_AV_VIDEO_MPEG4` whose `open()` parses VOL/VOP (both done) and decode()
+   drives steps 1-3; `createPlayer()` already prefers a provider for video and
+   currently refuses `mp4v` by name, so that refusal becomes the fallback.
+5. **Acceptance.** The corpus's `1942.3gp` (176x144, 275 samples) and
+   `doom.3gp` (320x240, 189 samples) are mp4v; decode their first frame and
+   compare against ffmpeg's, the way `tests/test_h263.c` does for the H.263 clip.
+
+Nothing in the tree claims `mp4v` playback today: `createPlayer()` raises a
+MediaException naming the missing decoder, and the M4V decoder reports -3 for
+an escape it cannot yet read.
