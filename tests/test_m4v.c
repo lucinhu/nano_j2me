@@ -513,6 +513,23 @@ int main(void)
         ok(bad == 0, "each block knows its grid position for DC prediction");
     }
 
+    {
+        nj_s2 grid[9];
+        int i, bad = 0;
+
+        for (i = 0; i < 9; i++) grid[i] = 0;
+        /* first block: no neighbours, neutral 1024, delta 0 */
+        bad += nj_m4v_dc_block(grid, 3, 0, 0, 0, 8) != 128 || grid[0] != 1024;
+        /* right neighbour predicts from it */
+        bad += nj_m4v_dc_block(grid, 3, 1, 0, 0, 8) != 128 || grid[1] != 1024;
+        /* delta 3 on the next one */
+        bad += nj_m4v_dc_block(grid, 3, 2, 0, 3, 8) != 131 || grid[2] != 1048;
+        /* second row predicts from the row above */
+        bad += nj_m4v_dc_block(grid, 3, 0, 1, 0, 8) != 128 || grid[3] != 1024;
+        bad += nj_m4v_dc_block(NULL, 3, 0, 0, 0, 8) != -1;
+        ok(bad == 0, "the DC state machine predicts, adds and stores per block");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

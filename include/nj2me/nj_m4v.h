@@ -116,6 +116,12 @@ int nj_m4v_dc_predict_q(int a, int b, int c, int scale, int *dir);
  * writing the dequantised, clamped value the next block will predict from. */
 int nj_m4v_dc_level(int delta, int pred_dequant, int scale, int *stored);
 
+/* Decode one block's DC into a dequantised neighbour grid of `wrap` columns:
+ * predicts from the left/top/top-left entries (1024 outside the picture),
+ * adds `delta` and stores the clamped dequantised value for later blocks.
+ * Returns the quantised DC, or -1 on bad arguments. */
+int nj_m4v_dc_block(nj_s2 *grid, int wrap, int bx, int by, int delta, int scale);
+
 /* Grid position of one of the six blocks of a macroblock: luma blocks on the
  * 8x8 grid, Cb/Cr on their own quarter-resolution grid. */
 int nj_m4v_block_grid(int blk, int mbx, int mby, int *gx, int *gy);

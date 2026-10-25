@@ -671,6 +671,35 @@ int nj_m4v_block_grid(int blk, int mbx, int mby, int *gx, int *gy)
     return 0;
 }
 
+
+int nj_m4v_dc_block(nj_s2 *grid, int wrap, int bx, int by, int delta, int scale)
+{
+    int a = 1024, b = 1024, c = 1024, pred_q, ret, val, nb = 0;
+
+    if (grid == NULL || wrap <= 0 || bx < 0 || by < 0 || scale <= 0) {
+        return -1;
+    }
+    if (bx > 0) {
+        a = grid[by * wrap + bx - 1];
+    }
+    if (by > 0) {
+        b = grid[(by - 1) * wrap + bx];
+    }
+    if (bx > 0 && by > 0) {
+        c = grid[(by - 1) * wrap + bx - 1];
+    }
+    pred_q = nj_m4v_dc_predict_q(a, b, c, scale, &nb);
+    if (pred_q < 0) {
+        return -1;
+    }
+    ret = nj_m4v_dc_level(delta, pred_q * scale, scale, &val);
+    if (ret < 0) {
+        return -1;
+    }
+    grid[by * wrap + bx] = (nj_s2)val;
+    return ret;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;
