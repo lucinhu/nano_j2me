@@ -515,3 +515,16 @@ The consequence for our tables: the escape forms need the same code words decode
 symbols only, so the generator has to emit a second LUT with `(run, level)` packed
 in it before `nj_m4v_ac_escape()` can be written.  `nj_m4v_escape.h` (max_level /
 max_run) is already in place and pinned by a test.
+
+### The escape is a separate code word, not symbol 0 (found round 73)
+
+Reading ff_mpeg4_rl_intra carefully: `ff_mpeg4_intra_vlc` has **103** entries while
+the run/level arrays have **102**.  The last entry, `{0x3, 7}` (bits `0000011`),
+is the escape code; it is *not* one of the 102 symbols.  Symbol 0 is
+(run 0, level 1), per `ff_mpeg4_intra_level[0] == 1`.
+
+`nj_m4v_ac_sym()` currently treats symbol 0 as the escape, which means a real
+bitstream escape is decoded as "run 0, level 1" and a genuine 0/1 coefficient is
+mistaken for an escape.  The AC round-trip tests did not catch this because
+both sides used the same table.  Fix: build the LUT from all 103 code words,
+mark the escape with a sentinel (e.g. 0xFFFFFE), and return -2 only for it.
