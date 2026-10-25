@@ -191,6 +191,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_media.c
   src/midp/nj_midi.c
   src/midp/nj_mp3.c
+  src/midp/nj_mp4.c
   src/midp/nj_h263.c
   src/midp/nj_amr.c
   src/midp/nj_amr_mp4.c
@@ -295,6 +296,7 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_MIDI=${NJ_ENABLE_MIDI}
   NJ_ENABLE_MP3=${NJ_ENABLE_MP3}
   NJ_ENABLE_VIDEO=${NJ_ENABLE_VIDEO}
+  NJ_MP4_SEPARATE
   NJ_ENABLE_FLOAT=${NJ_ENABLE_FLOAT}
   NJ_ENABLE_LONG=${NJ_ENABLE_LONG}
   NJ_ENABLE_EXCEPTION_MESSAGES=${NJ_ENABLE_EXCEPTION_MESSAGES}
@@ -1259,6 +1261,7 @@ nj_add_test(test_clip tests/test_clip.c)
   if(NJ_ENABLE_MIDI AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_midi.c)
     nj_add_test(test_midi tests/test_midi.c)
     nj_add_test(test_media_backpressure tests/test_media_backpressure.c)
+    nj_add_test(test_h263 tests/test_h263.c)
   endif()
 
   # The rasterizer test is deliberately standalone: it compiles nj_gfx.c with
