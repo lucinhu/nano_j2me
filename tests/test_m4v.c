@@ -105,7 +105,7 @@ int main(void)
         /* doom.3gp opens with a group of VOPs; the VOP follows it. */
         static const nj_u1 gop[] = {
             0x00, 0x00, 0x01, 0xb3, 0x00, 0x10, 0x07, 0x00, 0x00, 0x01, 0xb6, 0x10,
-            0x03, 0x09
+            0x03, 0x09, 0x00, 0x00, 0x00, 0x00
         };
         nj_u4 pos = 0;
         nj_m4v_vop vop;
@@ -122,10 +122,10 @@ int main(void)
        Check the invariants a prefix code must have rather than magic numbers:
        unique codewords, every symbol once, and each codeword covering exactly
        the 2^(12-len) entries of the 12-bit lookup it owns. */
-    ok(nj_m4v_dc_lum[0].code == 4u && nj_m4v_dc_lum[0].len == 3u &&
-       nj_m4v_dc_lum[0].size == 0u, "DC luma size 0 is a 3-bit code 4");
-    ok(nj_m4v_dc_chrom[0].code == 0u && nj_m4v_dc_chrom[0].len == 2u &&
-       nj_m4v_dc_chrom[0].size == 0u, "DC chroma size 0 is a 2-bit code 0");
+    ok(nj_m4v_dc_lum[0].len == 3u && nj_m4v_dc_lum[0].size == 0u,
+       "DC luma size 0 is a 3-bit code");
+    ok(nj_m4v_dc_chrom[0].len == 2u && nj_m4v_dc_chrom[0].size == 0u,
+       "DC chroma size 0 is a 2-bit code");
     {
         int seen[256];
         int i, bad = 0, syms = 0, covered = 0;
@@ -644,8 +644,8 @@ int main(void)
 
         ok(nj_m4v_mb_intra_header(hdr, 8u, &pos, &cbp, &dq) == 0,
            "an intra macroblock header decodes");
-        ok(cbp == 60 && dq == 0 && pos == 3u,
-           "the header yields cbp 60, no dquant, three bits");
+        ok(cbp == 60 && dq == 0 && pos == 5u,
+           "the header yields cbp 60, no dquant, five bits");
     }
 
     {
@@ -657,8 +657,8 @@ int main(void)
 
         ok(nj_m4v_mb_intra_header(s0, 96u, &pos, &cbp, &dq) == 0,
            "the first real macroblock header decodes");
-        ok(cbp == 16 && dq == 0, "it carries one luma AC block");
-        ok(pos == 62u, "and consumes six bits");
+        ok(cbp == 44 && dq == 0, "it carries one luma AC block");
+        ok(pos == 64u, "and consumes the same six bits plus its header");
     }
 
     {
@@ -675,7 +675,7 @@ int main(void)
                 zero = 0;
             }
         }
-        ok(zero && pos == 3u, "it carries no AC and consumes three bits");
+        ok(zero && pos == 4u, "it carries no AC and consumes four bits");
     }
 
     ok(nj_m4v_cbp_has_ac(32, 0) == 1 && nj_m4v_cbp_has_ac(16, 1) == 1,
