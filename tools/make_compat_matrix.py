@@ -91,16 +91,17 @@ def main():
     out += ["", "| 3D API used | titles |", "| --- | --- |"]
     out += ["| %s | %d |" % (k or "-", n) for k, n in apis.most_common()]
     out += ["", "| title | size KB | MIDlet name | vendor | version | profile | 3D |"
-            " classes | heap MB | frames | bytecodes | exceptions | verdict | note |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+            " classes | heap MB | frames | bytecodes | uncaught | exceptions | verdict | note |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for row in sorted(rows, key=lambda item: item.get("file", "")):
-        out.append("| %s | %d | %s | %s | %s | %s | %s | %d | %d | %d | %d | %s | %s | %s |" % (
+        out.append("| %s | %d | %s | %s | %s | %s | %s | %d | %d | %d | %d | %d | %s | %s | %s |" % (
             row.get("file", "?"), max(1, row.get("size", 0) // 1024),
             (row.get("name") or "-")[:28], (row.get("vendor") or "-")[:20],
             (row.get("version") or "-")[:10], (row.get("profile") or "-")[:10],
             ",".join(row.get("apis", [])) or "-",
             row.get("classes", 0), row.get("heap", 0), row.get("frames", 0),
-            row.get("bytecodes", 0), (row.get("exceptions") or "-")[:32],
+            row.get("bytecodes", 0), row.get("uncaught", 0),
+            (row.get("exceptions") or "-")[:32],
             VERDICT.get(row.get("verdict", "?"), row.get("verdict", "?")),
             (row.get("note") or "")[:44]))
     open(DOC, "w", encoding="utf-8").write("\n".join(out) + "\n")

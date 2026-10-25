@@ -4127,6 +4127,18 @@ block from 1.69 MB of free space.  The next step is the allocator (coalescing /
 best-fit), not `createPlayer`; the streaming front-end makes the request as
 small as it can be.
 
+### The table now says "nothing uncaught" in a column (round 90)
+
+The matrix already carried the exception *classes* a title throws, but a caught
+exception is a title's own business while an **uncaught** one is a defect.  Those
+two facts were being read from the same cell, so the sweep data (which has
+tracked `uncaught` all along) now gets its own column, rendered by
+`tools/make_compat_matrix.py`.
+
+The current 399-row sweep reads **0 uncaught exceptions across the whole
+corpus** - which is also the claim the "no failures" verdict rests on, now
+visible per row instead of implied.
+
 ### A corpus re-run after the memory fixes (round 89)
 
 The basket of memory changes since the last sweep - WAV streaming, the arena
