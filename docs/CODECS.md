@@ -205,7 +205,7 @@ it and so the registry is uniform; switching the Player over is the next step.
 | Piece | Provider | `Manager.createPlayer` | Media pump | Evidence |
 | --- | --- | --- | --- | --- |
 | MP3 | `nj_av_audio_mp3` | `audio/mpeg`, streamed through a holder | pulls PCM per frame | `tests/test_lib.c` (real samples reach the port), `tests/test_avcodec.c` (a port's decoder wins) |
-| AMR-NB | `nj_av_audio_amr` | still the media library's direct whole-file path | one-shot PCM | provider registered and tested byte-identical against `nj_amr_decode()`; routing the Player through it is next |
+| AMR-NB | `nj_av_audio_amr` | `audio/amr` through the provider (an installed decoder wins); the `samr` track inside MP4 keeps the direct path | one-shot PCM | `tests/test_amr.c` (byte-identical to `nj_amr_decode()`), `tests/test_lib.c` (a port-installed decoder produces the Player's samples) |
 | H.263 | `nj_av_video_h263` | not yet: `video/3gpp` is still refused | - | decoder verified against ffmpeg in `tests/test_h263.c` |
 | MP4/3GP | `nj_mp4` demultiplexer | not yet | - | sample iterator API tested in `tests/test_h263.c` |
 

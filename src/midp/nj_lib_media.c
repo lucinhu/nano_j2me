@@ -2122,6 +2122,69 @@ NJFN(media_createPlayer_stream)
             const int in_mp4 = (strcmp(what, "MP4") == 0);
             const nj_u1 *src = barray_bytes(data);
             nj_u4 src_len = barray_len(data);
+            /*
+             * A bare AMR stream goes through nj_avcodec first, so a port with a
+             * hardware AMR decoder displaces the software one exactly as it
+             * does for MP3.  The wrapped 'samr' track keeps the direct call
+             * below: the provider sees an elementary stream, not a container,
+             * and unpacking the track is nj_mp4's job, not the codec's.
+             */
+            if (!in_mp4) {
+                const nj_av_audio_ops *aops =
+                    nj_avcodec_find_audio(vm, src, src_len);
+
+                if (aops != NULL) {
+                    nj_av_mem memd;
+                    nj_av_info info;
+                    const char *err = NULL;
+                    nj_av_dec *dec;
+
+                    memd.ud = vm;
+                    memd.alloc = av_alloc;
+                    memd.free = av_free;
+                    memset(&info, 0, sizeof(info));
+                    dec = aops->open(src, src_len, &memd, &info, &err);
+                    if (dec != NULL) {
+                        nj_u4 want = info.frames * info.channels * 2u;
+
+                        if (info.rate > 0u && info.channels > 0u && want > 0u) {
+                            nj_ref apcm = nj_byte_array_new(vm, want);
+
+                            if (apcm != NULL) {
+                                nj_av_step step;
+
+                                memset(&step, 0, sizeof(step));
+                                step.out = apcm->u.bytes;
+                                step.out_cap = want;
+                                if (aops->decode(dec, &step) == NJ_AV_OK &&
+                                    step.out_used == want) {
+                                    w_r(vm, p, F_P_DATA, "[B", apcm);
+                                    w_i(vm, p, F_P_RATE, (nj_s4)info.rate);
+                                    w_i(vm, p, F_P_CHAN, (nj_s4)info.channels);
+                                    w_i(vm, p, F_P_FRAMES, (nj_s4)info.frames);
+                                    w_j(vm, p, F_P_DURATION,
+                                        (nj_s8)info.frames * 1000000LL /
+                                        (nj_s8)info.rate);
+                                    aops->close(dec);
+                                    nj_logf(vm, 3, "media: %s decoded %u AMR "
+                                                   "frames into %u PCM bytes",
+                                            aops->name,
+                                            (unsigned)info.frames,
+                                            (unsigned)want);
+                                    nj_root_release(vm, mark);
+                                    ret->r = p;
+                                    return NJ_OK;
+                                }
+                            }
+                        }
+                        aops->close(dec);
+                    }
+                    if (nj_has_exception(vm)) {
+                        nj_clear_exception(vm);     /* the direct path follows */
+                    }
+                }
+            }
+
             nj_u4 aframes = in_mp4 ? nj_amr_mp4_frames(src, src_len)
                                    : nj_amr_frames(src, src_len);
             nj_ref pcm = NULL;

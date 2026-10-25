@@ -42,6 +42,7 @@
  * Exit code 0 on PASS, non-zero otherwise.
  */
 #include "nj2me/nj.h"
+#include "nj2me/nj_avcodec.h"
 
 #include "nj_internal.h"
 #include "nj_midi.h" /* nj_class_load: the fixtures below are raw classes */
@@ -2702,6 +2703,136 @@ static void test_mp3_player_streams_pcm(nj_vm *vm)
     (void)nj_call(vm, player, PLAYER, "stop", "()V", NULL, NULL);
 }
 
+
+/* A port with an AMR decoder must be able to displace the software one for
+ * createPlayer(), the same way it can for MP3.  The fake below emits a sentinel
+ * sample; the Player's PCM buffer must contain it, which proves the provider
+ * ran and not nj_amr_decode(). */
+static int fake_amr_accepts(const nj_u1 *data, nj_u4 len)
+{
+    (void)data;
+    return len > 0u;
+}
+
+static nj_av_dec *fake_amr_open(const nj_u1 *data, nj_u4 len,
+                                const nj_av_mem *mem, nj_av_info *info,
+                                const char **err)
+{
+    static int state;
+
+    (void)data;
+    (void)len;
+    (void)mem;
+    (void)err;
+    info->format = NJ_AV_AUDIO_AMR;
+    info->rate = 8000u;
+    info->channels = 1u;
+    info->frames = 4u;
+    return (nj_av_dec *)&state;
+}
+
+static int fake_amr_decode(nj_av_dec *dec, nj_av_step *step)
+{
+    nj_s2 *out = (nj_s2 *)(void *)step->out;
+    nj_u4 room = step->out_cap / 2u;
+    nj_u4 n = room > 4u ? 4u : room;
+    nj_u4 i;
+
+    (void)dec;
+    for (i = 0; i < n; i++) {
+        out[i] = (nj_s2)0x1234;
+    }
+    step->out_used = n * 2u;
+    step->frames = n;
+    step->in_used = step->in_len;
+    return NJ_AV_OK;
+}
+
+static int fake_amr_seek(nj_av_dec *dec, nj_s8 time_us)
+{
+    (void)dec;
+    (void)time_us;
+    return NJ_AV_OK;
+}
+
+static void fake_amr_close(nj_av_dec *dec)
+{
+    (void)dec;
+}
+
+static const nj_av_audio_ops fake_amr_ops = {
+    "fake-amr", NJ_AV_AUDIO_AMR, fake_amr_accepts, fake_amr_open,
+    fake_amr_decode, fake_amr_seek, fake_amr_close, 2u
+};
+
+static void test_amr_player_uses_the_installed_decoder(nj_vm *vm)
+{
+    static const nj_u1 amr[] = {
+        0x23u, 0x21u, 0x41u, 0x4du, 0x52u, 0x0au, 0x3cu, 0x00u,
+        0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u
+    };
+    nj_ref bar;
+    nj_ref in;
+    nj_ref player;
+    nj_value a[2];
+    nj_value ret;
+    nj_field *f;
+    nj_ref pcm;
+    int i;
+    int sentinel = 1;
+
+    OK_MSG(nj_avcodec_install_audio(vm, &fake_amr_ops) > 0,
+           "a port can install an AMR provider");
+    bar = nj_byte_array_new(vm, (nj_u4)sizeof(amr));
+    OK_MSG(bar != NULL, "an array for the AMR stream");
+    if (bar == NULL) {
+        return;
+    }
+    memcpy(bar->u.bytes, amr, sizeof(amr));
+    a[0].r = bar;
+    in = nj_object_new(vm, BAIS);
+    OK_MSG(in != NULL && nj_call_special(vm, in, BAIS, "<init>", "([B)V",
+                                         a, NULL) == NJ_OK,
+           "the AMR stream exists");
+    a[0].r = in;
+    a[1].r = nj_string_new(vm, "audio/amr");
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                          "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                          "javax/microedition/media/Player;", a, &ret) == NJ_OK,
+           "Manager.createPlayer(AMR)");
+    player = ret.r;
+    OK_MSG(player != NULL, "a Player for the AMR stream");
+    if (player == NULL) {
+        return;
+    }
+    f = nj_field_lookup(vm, PLAYER, "pData", "[B", 0);
+    pcm = (f != NULL) ? nj_field_read_ref(vm, player, f) : NULL;
+    OK_MSG(pcm != NULL, "the Player holds PCM");
+    if (pcm != NULL) {
+        OK_MSG(pcm->length == 8u,
+               "four sentinel frames are eight bytes (got %u)",
+               (unsigned)pcm->length);
+        for (i = 0; i + 1 < (int)pcm->length && i + 1 < 8; i += 2) {
+            if (pcm->u.bytes[i] != 0x34u || pcm->u.bytes[i + 1] != 0x12u) {
+                sentinel = 0;
+            }
+        }
+        OK_MSG(sentinel, "the installed decoder produced the samples");
+    }
+    f = nj_field_lookup(vm, PLAYER, "pFrames", "I", 0);
+    OK_MSG(f != NULL && nj_field_read_int(vm, player, f) == 4,
+           "the Player reports the provider's frame count");
+    /*
+     * Put the software providers back in the order nj_avcodec_reset() installs
+     * them: a later test creates an MP3 Player and must not be looking at a
+     * table this test emptied.
+     */
+    nj_avcodec_install_audio(vm, NULL);
+    nj_avcodec_install_audio(vm, nj_avcodec_sw_mp3());
+    nj_avcodec_install_audio(vm, nj_avcodec_sw_amr());
+}
+
 static void test_eight_bit_wav_is_widened(nj_vm *vm)
 {
     static const nj_u1 expect[8] = {
@@ -4203,6 +4334,7 @@ int main(void)
     test_long_to_string(vm);
     test_player_survives_collection(vm);
     test_eight_bit_wav_is_widened(vm);
+    test_amr_player_uses_the_installed_decoder(vm);
     test_mp3_player_streams_pcm(vm);
     test_large_wav();
     test_sixteen_bit_wav_heap();
