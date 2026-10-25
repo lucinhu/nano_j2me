@@ -624,6 +624,63 @@ NJFN(uuid_init_str)
     return NJ_OK;
 }
 
+/*
+ * UUID(String, boolean): the JSR-82 form with a short form flag, matching the
+ * reference implementation (UUID.java:39-68): the hex text is left-padded with
+ * zeroes to 8 digits when shortUUID is set (the rest stays the Bluetooth base
+ * UUID) and to 32 digits otherwise, and the length must be 1..32 (1..8 for the
+ * short form).
+ */
+NJFN(uuid_init_str_short)
+{
+    char txt[64];
+    nj_size n = 0;
+    nj_u8 hi = 0, lo = 0;
+    nj_ref self = NJ_THIS(args);
+    int short_form = NJ_ARG_INT(args, 1) ? 1 : 0;
+    nj_size i;
+
+    if (!btext(NJ_ARG_REF(args, 0), txt, sizeof txt))
+        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    while (txt[n]) n++;
+    if (n == 0 || n > 32u || (short_form && n > 8u))
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "Received an UUID with invalid length.");
+    for (i = 0; i < n; i++) {
+        int c = txt[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F')))
+            return nj_throw(vm, "java/lang/NumberFormatException",
+                            "Received an UUID that is not hexadecimal.");
+    }
+    if (short_form) {
+        nj_u4 v = 0;
+        for (i = 0; i < n; i++) {
+            int c = txt[i];
+            int d = (c >= '0' && c <= '9') ? c - '0'
+                  : (c >= 'a' && c <= 'f') ? c - 'a' + 10 : c - 'A' + 10;
+            v = (v << 4) | (nj_u4)d;
+        }
+        hi = ((nj_u8)v << 32) | (nj_u8)0x00001000u;
+        lo = (nj_u8)0x800000805F9B34FBull;
+    } else {
+        nj_u1 b[16];
+        nj_size pad = 32u - n;
+        memset(b, 0, sizeof b);
+        for (i = 0; i < n; i++) {
+            int c = txt[i];
+            int d = (c >= '0' && c <= '9') ? c - '0'
+                  : (c >= 'a' && c <= 'f') ? c - 'a' + 10 : c - 'A' + 10;
+            nj_size pos = pad + i;
+            b[pos / 2u] |= (nj_u1)((pos & 1u) ? d : (d << 4));
+        }
+        for (i = 0; i < 8u; i++) hi = (hi << 8) | b[i];
+        for (i = 8u; i < 16u; i++) lo = (lo << 8) | b[i];
+    }
+    uuid_set(vm, self, hi, lo);
+    return NJ_OK;
+}
+
 NJFN(uuid_init_long)
 {
     uuid_set(vm, NJ_THIS(args), 0, (nj_u8)NJ_ARG_LONG(args, 0));
@@ -1993,6 +2050,7 @@ static const nj_builtin_field uuid_fields[] = {
 };
 static const nj_builtin_method uuid_methods[] = {
     M("<init>",   "(Ljava/lang/String;)V", NJ_ACC_PUBLIC),
+    M("<init>",   "(Ljava/lang/String;Z)V", NJ_ACC_PUBLIC),
     M("<init>",   "(J)V",                  NJ_ACC_PUBLIC),
     M("equals",   "(Ljava/lang/Object;)Z", NJ_ACC_PUBLIC),
     M("hashCode", "()I",                   NJ_ACC_PUBLIC),
@@ -2273,6 +2331,7 @@ const int nj_lib_bt_class_count =
 
 const nj_native_entry nj_lib_bt_table[] = {
     { NJ_C_UUID,     "<init>",   "(Ljava/lang/String;)V", uuid_init_str },
+    { NJ_C_UUID,     "<init>",   "(Ljava/lang/String;Z)V", uuid_init_str_short },
     { NJ_C_UUID,     "<init>",   "(J)V",                  uuid_init_long },
     { NJ_C_UUID,     "equals",   "(Ljava/lang/Object;)Z", uuid_equals },
     { NJ_C_UUID,     "hashCode", "()I",                   uuid_hash },

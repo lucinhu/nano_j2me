@@ -34,3 +34,18 @@ without ever presenting a frame, `失败` when it crashed or was rejected, and
 `非可用包` when the JAR is not a usable MIDlet suite.  The three states are kept
 apart on purpose: a title that runs and paints nothing is not a crash, and
 lumping them together used to hide which rows were actually broken.
+
+## The archive.org vault sweep (round 2)
+
+`tools/sweep_compat.py` also reads extra corpus directories from the
+`NJ_SWEEP_DIRS` environment variable (colon separated), so a large collection can
+be measured without committing it:
+
+```sh
+NJ_SWEEP_DIRS=/path/to/vault/Roms tools/sweep_compat.py .local-tools/debug-runs/compat-matrix-20261025
+```
+
+Rows from those directories are labelled `vault/<name>.jar`.  The 455-title
+archive.org item `j2me-vault` ("J2ME FULL ROMS & Screenshots Archive") is one such
+collection and is deliberately kept out of this repository.
+

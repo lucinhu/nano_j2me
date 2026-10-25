@@ -211,6 +211,36 @@ int main(void)
         ok(u != NULL && pending_exc(vm) == NULL, "new UUID(\"1101\") works");
         (void)nj_take_exception(vm);
 
+        /* The JSR-82 short form: hex text, right-aligned in the base UUID. */
+        {
+            nj_ref u2 = nj_object_new(vm, "javax/bluetooth/UUID");
+            nj_value a2[2];
+            nj_value rv;
+            a2[0].r = nj_string_new(vm, "1101");
+            a2[1].i = 1;
+            rv.r = NULL;
+            if (u2) {
+                (void)nj_call_special(vm, u2, "javax/bluetooth/UUID", "<init>",
+                                      "(Ljava/lang/String;Z)V", a2, &rv);
+            }
+            ok(u2 != NULL && pending_exc(vm) == NULL,
+               "new UUID(\"1101\", true) works");
+            (void)nj_take_exception(vm);
+
+            u2 = nj_object_new(vm, "javax/bluetooth/UUID");
+            a2[0].r = nj_string_new(vm, "123456789");
+            rv.r = NULL;
+            if (u2) {
+                (void)nj_call_special(vm, u2, "javax/bluetooth/UUID", "<init>",
+                                      "(Ljava/lang/String;Z)V", a2, &rv);
+            }
+            ok(pending_exc(vm) != NULL &&
+                   strcmp(pending_exc(vm),
+                          "java/lang/IllegalArgumentException") == 0,
+               "new UUID(nine digits, true) throws IllegalArgumentException");
+            (void)nj_take_exception(vm);
+        }
+
         a[0].r = nj_string_new(vm, "zzzz");
         u = nj_object_new(vm, "javax/bluetooth/UUID");
         if (u) {

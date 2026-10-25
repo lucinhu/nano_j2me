@@ -43,8 +43,8 @@ def manifest(path):
     attrs["midlet-name"] = attrs.get("MIDlet-Name", "")
     return attrs, apis, len(names)
 
-def one(path):
-    base = os.path.basename(path)
+def one(job):
+    path, base = job
     row = {"file": base, "size": os.path.getsize(path)}
     attrs, apis, nclass = manifest(path)
     row.update({"name": attrs.get("midlet-name", ""), "version": attrs.get("MIDlet-Version", ""),
@@ -118,7 +118,17 @@ def one(path):
     return row
 
 def main():
-    jobs = sorted(p for p in (ROOT + "/tests/games/" + f for f in os.listdir(ROOT + "/tests/games")) if p.endswith(".jar"))
+    dirs = [(ROOT + "/tests/games", "")]
+    extra = os.environ.get("NJ_SWEEP_DIRS", "")
+    for d in [x for x in extra.split(":") if x]:
+        dirs.append((d, "vault/"))
+    jobs = []
+    for d, prefix in dirs:
+        if not os.path.isdir(d):
+            continue
+        jobs += [(os.path.join(d, f), prefix + f)
+                 for f in os.listdir(d) if f.endswith(".jar")]
+    jobs.sort(key=lambda item: item[1])
     seen = set()
     rows_path = os.path.join(OUT, "rows.jsonl")
     if os.path.exists(rows_path):
@@ -128,7 +138,7 @@ def main():
                     seen.add(json.loads(line)["file"])
                 except Exception:                 # noqa: BLE001 - skip a torn line
                     pass
-    jobs = [p for p in jobs if os.path.basename(p) not in seen]
+    jobs = [j for j in jobs if j[1] not in seen]
     os.makedirs(os.path.join(OUT, "rms"), exist_ok=True)
     with open(os.path.join(OUT, "keys.txt"), "w") as fh:
         fh.write(",".join(KEYS) + "\n")

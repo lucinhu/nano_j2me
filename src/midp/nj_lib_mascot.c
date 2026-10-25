@@ -644,6 +644,11 @@ static const nj_builtin_field fig_fields[] = {
 
 static const nj_builtin_method fl_methods[] = {
     M("<init>", "()V", 0),
+    M("<init>", "(L" NJ_C_XF ";IIII)V", 0),
+    M("getCenterX", "()I", 0),
+    M("getCenterY", "()I", 0),
+    M("getScaleX", "()I", 0),
+    M("getScaleY", "()I", 0),
     M("setAffineTrans", "(L" NJ_C_XF ";)V", 0),
     M("getAffineTrans", "()L" NJ_C_XF ";", 0),
     M("setPerspective", "(III)V", 0),
@@ -704,6 +709,7 @@ static const nj_builtin_method fx_methods[] = {
     M("setSphereMap", "(L" NJ_C_TEX ";)V", 0),
     M("setShading", "(I)V", 0),
     M("setSemiTransparentEnabled", "(Z)V", 0),
+    M("setTransparency", "(Z)V", 0),
     M("setShadingType", "(I)V", 0),
     M("setToonParams", "(III)V", 0),
     M("setThreshold", "(III)V", 0)
@@ -819,6 +825,30 @@ NJFN(mascot_fl_init)
     m3_set(vm, self, "_sy", M3_DEFAULT_SCALE);
     return NJ_OK;
 }
+
+/*
+ * FigureLayout(AffineTrans, sx, sy, cx, cy): the shape every real caller uses.
+ * The reference's four-argument constructor is exactly these four setters in a
+ * row (FigureLayout.java:26-31), with a null transform meaning identity.
+ */
+NJFN(mascot_fl_init5)
+{
+    nj_ref self = NJ_THIS(args);
+
+    m3_set(vm, self, "_p", (nj_s4)M3_PROJ_PARALLEL);
+    m3_set_ref(vm, self, "_xf", "L" NJ_C_XF ";", NJ_ARG_REF(args, 0));
+    m3_set(vm, self, "_sx", NJ_ARG_INT(args, 1));
+    m3_set(vm, self, "_sy", NJ_ARG_INT(args, 2));
+    m3_set(vm, self, "_cx", NJ_ARG_INT(args, 3));
+    m3_set(vm, self, "_cy", NJ_ARG_INT(args, 4));
+    return NJ_OK;
+}
+
+/* The reference's getters, so a title that reads back what it set compiles. */
+NJFN(mascot_fl_get_center_x) { ret->i = m3_get(vm, NJ_THIS(args), "_cx"); return NJ_OK; }
+NJFN(mascot_fl_get_center_y) { ret->i = m3_get(vm, NJ_THIS(args), "_cy"); return NJ_OK; }
+NJFN(mascot_fl_get_scale_x)  { ret->i = m3_get(vm, NJ_THIS(args), "_sx"); return NJ_OK; }
+NJFN(mascot_fl_get_scale_y)  { ret->i = m3_get(vm, NJ_THIS(args), "_sy"); return NJ_OK; }
 
 /*
  * setAffineTrans(m): store the caller's matrix.  A null argument resets the
@@ -1361,6 +1391,11 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_FIG, "setLayout", "(L" NJ_C_FL ";)V", mascot_fig_layout },
 
     { NJ_C_FL, "<init>", "()V", mascot_fl_init },
+    { NJ_C_FL, "<init>", "(L" NJ_C_XF ";IIII)V", mascot_fl_init5 },
+    { NJ_C_FL, "getCenterX", "()I", mascot_fl_get_center_x },
+    { NJ_C_FL, "getCenterY", "()I", mascot_fl_get_center_y },
+    { NJ_C_FL, "getScaleX", "()I", mascot_fl_get_scale_x },
+    { NJ_C_FL, "getScaleY", "()I", mascot_fl_get_scale_y },
     { NJ_C_FL, "setAffineTrans", "(L" NJ_C_XF ";)V", mascot_fl_xf },
     { NJ_C_FL, "getAffineTrans", "()L" NJ_C_XF ";", mascot_fl_get_xf },
     { NJ_C_FL, "setPerspective", "(III)V", mascot_fl_perspective },
@@ -1387,6 +1422,7 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_FX, "setSphereMap", "(L" NJ_C_TEX ";)V", mascot_fx_sphere },
     { NJ_C_FX, "setShading", "(I)V", mascot_scene_fx_shading },
     { NJ_C_FX, "setSemiTransparentEnabled", "(Z)V", mascot_fx_semi },
+    { NJ_C_FX, "setTransparency", "(Z)V", mascot_fx_semi },
 
     { NJ_C_AT, "<init>", "([BII)V", mascot_scene_at_slice },
     { NJ_C_AT, "<init>", "([B)V", mascot_scene_at_bytes },

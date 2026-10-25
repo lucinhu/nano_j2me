@@ -4127,6 +4127,30 @@ block from 1.69 MB of free space.  The next step is the allocator (coalescing /
 best-fit), not `createPlayer`; the streaming front-end makes the request as
 small as it can be.
 
+### Three missing members, found in a 455-title archive sweep (round 2)
+
+The archive.org item `j2me-vault` (J2ME FULL ROMS & Screenshots Archive) ships a
+455-JAR collection.  It is **not committed** to this repository (its own size and
+copyrights belong upstream); `tools/sweep_compat.py` now accepts extra corpus
+directories through `NJ_SWEEP_DIRS`, so the table can include those titles
+without adding 300 MB to the history.
+
+Sweeping it found 11 failures, and the messages named three genuinely missing
+members, each now implemented against the reference sources in
+`.local-tools/freej2me-plus/`:
+
+| member | evidence | reference |
+| --- | --- | --- |
+| `Effect3D.setTransparency(boolean)` | 5 Need for Speed 3D titles, `NoSuchMethodError` | Effect3D.java:80, same switch as `setSemiTransparentEnabled` |
+| `FigureLayout(AffineTrans,int,int,int,int)` | Resident Evil - The Missions | FigureLayout.java:26-31: scale + centre + affine |
+| `UUID(String,boolean)` | Pac-Man | UUID.java:39-68: hex text padded to 8 or 32 digits |
+
+Re-running those eleven rows: **7 moved to `ok`** (the five Need for Speed
+titles, Pac-Man, Resident Evil - The Missions), 4 remain (three `IOException` +
+`ArithmeticException` titles and one `ArrayIndexOutOfBoundsException`+`NoClassDefFoundError`
+title, to be read next).  Corpus state: **855 rows, 847 ok, 4 failures, 3 never
+painted, 1 unusable package**.
+
 ### The two rows that never paint, read to the bytecode (round 1)
 
 The matrix carries two `never painted` rows.  Both were decompiled with
