@@ -742,6 +742,37 @@ static void nj_gc_sweep(nj_vm *vm)
         }
         p += sz;
     }
+    /*
+     * The arena above `bump` has never been handed out, so it is free in every
+     * sense except bookkeeping: a request larger than the biggest reclaimed
+     * run used to fail even when that run ended exactly at `bump`.
+     *
+     * 复活/复活II hit this: a 400 KB WAV on a 2 MB heap left a 787 KB run and a
+     * 677 KB untouched tail, and an 800,048-byte PCM array was refused although
+     * 1.4 MB of the arena was idle - the title died with OutOfMemoryError.
+     *
+     * Fold the tail into the free list once, and let the free list serve every
+     * later allocation (bump becomes the arena end, so the bump branch is simply
+     * never taken again).  Peak keeps its meaning: it is the old bump.
+     */
+    if (vm->heap.bump < vm->heap.size) {
+        nj_size tail_size = vm->heap.size - vm->heap.bump;
+        nj_u1 *tail_at = vm->heap.base + vm->heap.bump;
+
+        if (vm->heap.bump > vm->heap.peak) {
+            vm->heap.peak = vm->heap.bump;
+        }
+        if (run && ((nj_u1 *)run + run->size) == tail_at) {
+            run->size += tail_size;
+        } else if (tail_size >= NJ_MIN_BLOCK) {
+            nj_block *tail = (nj_block *)tail_at;
+
+            tail->size = tail_size;
+            tail->magic = NJ_BLOCK_FREE;
+            run = tail;
+        }
+        vm->heap.bump = vm->heap.size;
+    }
     if (run) {
         nj_free_insert(vm, run);
     }

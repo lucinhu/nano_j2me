@@ -4127,6 +4127,25 @@ block from 1.69 MB of free space.  The next step is the allocator (coalescing /
 best-fit), not `createPlayer`; the streaming front-end makes the request as
 small as it can be.
 
+### The arena tail that was neither free nor used (round 87)
+
+Fixing the streaming front-end left the four OOM assertions failing, and the
+allocator explained why: on the 2 MB test heap the largest reclaimed run was
+787,264 bytes while the request was 800,048, with **677,360 bytes of the arena
+above `bump` that had never been handed out**.  The bump pointer only grows, so
+that idle tail could never satisfy anything.
+
+`nj_gc_sweep` now folds the never-allocated tail into the free list when it
+collects, and moves `bump` to the end of the arena so every later allocation is
+served by the free list.  Peak keeps its old meaning (the previous `bump`).
+
+Measured: `test_lib` goes from **830 passed / 4 failed** to **844 passed / 0
+failed** - the three `createPlayer` assertions about a heap that has to collect
+mid-call, and the `Image.createImage on a full heap` assertion, all pass.  No
+RAM is added (the same bytes are simply accounted as free), `BENCH sum` and the
+27 digest values are unchanged, and ctest is 110/111 (the one failure is the
+pre-existing `test_m3g` pair, unrelated).
+
 ### The shape of the fix
 
 
