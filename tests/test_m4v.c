@@ -294,6 +294,37 @@ int main(void)
         ok(bad == 0, "coefficients land at their natural positions");
     }
 
+    {
+        nj_s4 coef[64];
+        int i, k = 1, last = -1, rc, run = (int)nj_m4v_ac_run[1];
+
+        for (i = 0; i < 64; i++) {
+            coef[i] = 0;
+        }
+        rc = nj_m4v_coef_apply(coef, &k, 1, &last);
+        ok(rc == 0 && k == 1 + run + 1 && last == 0 &&
+           coef[nj_m4v_scan_index(1 + run)] == (nj_s4)nj_m4v_ac_level[1],
+           "an AC symbol advances the scan cursor and stores its level");
+        k = 1;
+        ok(nj_m4v_coef_apply(coef, &k, 0, &last) == -2 && k == 1,
+           "the escape symbol is reported, never stored");
+        {
+            int sym = -1, j;
+
+            for (j = 1; j < NJ_M4V_AC_SYMS; j++) {
+                if (nj_m4v_ac_run[j] > 0) {
+                    sym = j;
+                    break;
+                }
+            }
+            if (sym > 0) {
+                k = 63;
+                ok(nj_m4v_coef_apply(coef, &k, sym, &last) == -1,
+                   "a run that leaves the block is an error");
+            }
+        }
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

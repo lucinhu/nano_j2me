@@ -404,6 +404,29 @@ void nj_m4v_coef_store(nj_s4 *coef, int k, int level)
     }
 }
 
+
+int nj_m4v_coef_apply(nj_s4 *coef, int *k, int sym, int *last)
+{
+    int run, level, is_last;
+
+    if (k == NULL || *k >= 64) {
+        return -1;
+    }
+    if (!nj_m4v_ac_sym(sym, &run, &level, &is_last)) {
+        return -2;      /* escape symbol: the caller reads the extended form */
+    }
+    *k += run;
+    if (*k >= 64) {
+        return -1;      /* the run walks off the block */
+    }
+    nj_m4v_coef_store(coef, *k, level);
+    (*k)++;
+    if (last != NULL) {
+        *last = is_last;
+    }
+    return 0;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;
