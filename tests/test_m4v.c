@@ -370,7 +370,7 @@ int main(void)
                     if ((i >> (NJ_M4V_AC_BITS - 1 - j)) & 1) buf[(bitpos + j) / 8] |= (nj_u1)(0x80u >> ((bitpos + j) % 8));
                 break;
             }
-        rc = nj_m4v_decode_intra_block(buf, (nj_u4)sizeof(buf), &pos, coef, 1, 40);
+        rc = nj_m4v_decode_intra_block(buf, (nj_u4)sizeof(buf), &pos, coef, 1, 40, 4);
         ok(rc == 0 && coef[0] == 40, "an intra block with an empty AC keeps its predicted DC");
     }
 
@@ -406,7 +406,7 @@ int main(void)
                     if ((i >> (NJ_M4V_AC_BITS - 1 - j)) & 1) buf[(bitpos + j) / 8] |= (nj_u1)(0x80u >> ((bitpos + j) % 8));
                 break;
             }
-        rc = nj_m4v_decode_intra_pixels(buf, (nj_u4)sizeof(buf), &pos, pix, 1, 0);
+        rc = nj_m4v_decode_intra_pixels(buf, (nj_u4)sizeof(buf), &pos, pix, 1, 0, 4);
         ok(rc == 0 && pix[0] == 128 && pix[63] == 128,
            "a zero-DC block reconstructs to mid-grey");
     }
@@ -555,6 +555,15 @@ int main(void)
         bad += rc != 0 || pos != 2u;
         bad += !nj_m4v_ac_sym(0, &run, &level, &last) || run != 0 || level != 1 || last;
         ok(bad == 0, "the escape is its own code word and symbol 0 is run 0 level 1");
+    }
+
+    {
+        int bad = 0;
+
+        bad += nj_m4v_qmul(1) != 2 || nj_m4v_qmul(31) != 62;
+        bad += nj_m4v_qadd(1) != 1 || nj_m4v_qadd(2) != 1 || nj_m4v_qadd(4) != 3;
+        bad += nj_m4v_qmul(0) != 0 || nj_m4v_qmul(32) != 0;
+        ok(bad == 0, "the AC scale pair follows qmul = 2q and qadd = (q-1)|1");
     }
 
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);

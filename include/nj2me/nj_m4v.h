@@ -81,14 +81,14 @@ int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k);
 /* Decodes one intra 8x8 block: DC size+delta on top of dc_pred, then AC.
  * Returns 0, -1 for a corrupt stream or -3 for an escape not decoded yet. */
 int nj_m4v_decode_intra_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
-                              nj_s4 *coef, int luma, int dc_pred);
+                              nj_s4 *coef, int luma, int dc_pred, int qscale);
 
 /* The inverse transform shared with the H.263 decoder, for one 8x8 block. */
 void nj_m4v_idct(const nj_s4 *coef, int *out);
 
 /* Decodes one intra block to 8-bit pixels (IDCT plus the +128 level shift). */
 int nj_m4v_decode_intra_pixels(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
-                               nj_u1 *pix, int luma, int dc_pred);
+                               nj_u1 *pix, int luma, int dc_pred, int qscale);
 
 /* Macroblock raster size of a picture, rounded up to whole 16x16 units. */
 int nj_m4v_frame_macroblocks(nj_u4 width, nj_u4 height, nj_u4 *mbw, nj_u4 *mbh);

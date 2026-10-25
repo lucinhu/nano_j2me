@@ -460,12 +460,22 @@ int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k)
 }
 
 
+int nj_m4v_qmul(int qscale)
+{
+    return (qscale > 0 && qscale < 32) ? qscale * 2 : 0;
+}
+
+int nj_m4v_qadd(int qscale)
+{
+    return (qscale > 0 && qscale < 32) ? ((qscale - 1) | 1) : 0;
+}
+
 int nj_m4v_decode_intra_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef,
-                              int luma, int dc_pred)
+                              int luma, int dc_pred, int qscale)
 {
     int size, delta, dc, k, i;
 
-    if (coef == NULL) {
+    if (coef == NULL || nj_m4v_qmul(qscale) == 0) {
         return -1;
     }
     for (i = 0; i < 64; i++) {
@@ -495,7 +505,7 @@ void nj_m4v_idct(const nj_s4 *coef, int *out)
 
 
 int nj_m4v_decode_intra_pixels(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_u1 *pix,
-                               int luma, int dc_pred)
+                               int luma, int dc_pred, int qscale)
 {
     nj_s4 coef[64];
     int   out[64];
@@ -504,7 +514,7 @@ int nj_m4v_decode_intra_pixels(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_u1 *pix,
     if (pix == NULL) {
         return -1;
     }
-    rc = nj_m4v_decode_intra_block(b, n, pos, coef, luma, dc_pred);
+    rc = nj_m4v_decode_intra_block(b, n, pos, coef, luma, dc_pred, qscale);
     if (rc != 0) {
         return rc;
     }
