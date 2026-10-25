@@ -1116,3 +1116,27 @@ Player.  The per-stream holder is the 76 B `media_stream_state` plus one
 frame's scratch that the MIDI path already used, so an MP4/MP3 Player adds no
 new allocation shape.  The decoders themselves allocate through `nj_av_mem`
 (host allocation), never through writable statics.
+
+## What each decoder switch costs (round 3, 2026-10-25)
+
+Every feature behind `nj_avcodec` (and the older decoders) can be compiled out.
+The numbers are the hosted CLI's `.text` with each switch off, one switch at a
+time, Release, `-DNJ_ENABLE_TESTS=OFF`, base 1,319,594 B:
+
+| Switch | `.text` off | Saved |
+| --- | --- | --- |
+| `-DNJ_ENABLE_AMR=0` | 1,271,722 | 47,872 |
+| `-DNJ_ENABLE_MP3=0` | 1,285,994 | 33,600 |
+| `-DNJ_ENABLE_VIDEO=0` | 1,287,978 | 31,616 |
+| `-DNJ_ENABLE_JPEG=0` | 1,292,586 | 27,008 |
+| `-DNJ_ENABLE_MIDI=0` | 1,296,810 | 22,784 |
+| `-DNJ_ENABLE_WAV=0` | 1,317,034 | 2,560 |
+
+None of the switches changes `.data` or `.bss`: the decoders keep their state in
+the VM (provider registry, 72 B) or in the Java object that owns the stream.
+
+The matrix also earned its keep: `-DNJ_ENABLE_MIDI=0` did not compile. The MP3
+player branch borrowed the MIDI renderer's allocator adapters, which live behind
+`#if NJ_ENABLE_MIDI`. It now has its own `av_alloc`/`av_free` in
+`src/midp/nj_lib_media.c`, guarded by `NJ_ENABLE_MP3`, so MP3-without-MIDI is a
+build that exists again.

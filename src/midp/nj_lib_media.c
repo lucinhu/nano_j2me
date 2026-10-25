@@ -80,7 +80,25 @@ static void midi_free(void *ud, void *p)
 {
     nj_host_free((nj_vm *)ud, p);
 }
+
 #endif /* NJ_ENABLE_MIDI */
+
+#if NJ_ENABLE_MP3
+/*
+ * The MP3 path allocates through the VM too, but it must not lean on the MIDI
+ * renderer's adapters: -DNJ_ENABLE_MIDI=0 compiles those out, and a build with
+ * MP3 but no MIDI still needs a decoder (the trim matrix caught this).
+ */
+static void *av_alloc(void *ud, nj_size n)
+{
+    return nj_host_alloc((nj_vm *)ud, n);
+}
+
+static void av_free(void *ud, void *p)
+{
+    nj_host_free((nj_vm *)ud, p);
+}
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Names                                                               */
@@ -2029,8 +2047,8 @@ NJFN(media_createPlayer_stream)
                 nj_av_dec *dec;
 
                 memd.ud = vm;
-                memd.alloc = midi_alloc;
-                memd.free = midi_free;
+                memd.alloc = av_alloc;
+                memd.free = av_free;
                 memset(&info, 0, sizeof(info));
                 dec = ops->open(barray_bytes(data), barray_len(data), &memd,
                                 &info, &err);
