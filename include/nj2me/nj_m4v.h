@@ -59,6 +59,10 @@ int nj_m4v_decode_dc(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int luma);
  * Returns the delta, or -1 when the bits run out. */
 int nj_m4v_dc_delta(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int size);
 
+/* Expands an AC symbol into run/level and the last flag.  Returns 0 for the
+ * escape symbol (0) and for out-of-range input. */
+int nj_m4v_ac_sym(int sym, int *run, int *level, int *last);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 

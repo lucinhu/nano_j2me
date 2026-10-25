@@ -240,6 +240,19 @@ int main(void)
         ok(okd != 0, "DC deltas follow the specification's sign rule");
     }
 
+    {
+        int run = -1, level = -9, last = -1, okr = 1;
+
+        okr &= nj_m4v_ac_sym(0, &run, &level, &last) == 0;
+        okr &= nj_m4v_ac_sym(NJ_M4V_AC_SYMS, &run, &level, &last) == 0;
+        okr &= nj_m4v_ac_sym(1, &run, &level, &last) == 1 &&
+               run == (int)nj_m4v_ac_run[1] && level == (int)nj_m4v_ac_level[1] &&
+               last == 0;
+        okr &= nj_m4v_ac_sym(NJ_M4V_AC_LAST, &run, &level, &last) == 1 && last == 1;
+        okr &= nj_m4v_ac_sym(NJ_M4V_AC_LAST - 1, &run, &level, &last) == 1 && last == 0;
+        ok(okr != 0, "AC symbols expand to run/level with the reference last flag");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

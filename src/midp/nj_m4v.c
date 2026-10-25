@@ -350,6 +350,24 @@ int nj_m4v_dc_delta(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int size)
     return (int)v;
 }
 
+
+int nj_m4v_ac_sym(int sym, int *run, int *level, int *last)
+{
+    if (sym <= 0 || sym >= NJ_M4V_AC_SYMS) {
+        return 0;       /* symbol 0 is the escape; out of range is not a symbol */
+    }
+    if (run != NULL) {
+        *run = (int)nj_m4v_ac_run[sym];
+    }
+    if (level != NULL) {
+        *level = (int)nj_m4v_ac_level[sym];
+    }
+    if (last != NULL) {
+        *last = (sym >= NJ_M4V_AC_LAST);
+    }
+    return 1;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;
