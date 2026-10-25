@@ -11,6 +11,7 @@
  * self-consistent, so only a real decoder configuration can tell.
  */
 #include "nj2me/nj_m4v.h"
+#include "nj2me/nj_m4v_tables.h"
 
 typedef struct m4v_bits {
     const nj_u1 *b;
@@ -269,6 +270,33 @@ int nj_m4v_find_vop(const nj_u1 *b, nj_u4 n, nj_u4 *pos)
         from = at;
     }
     return 0;
+}
+
+
+int nj_m4v_decode_ac(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *last)
+{
+    nj_u4 i, v = 0;
+    int   k;
+
+    if (b == NULL || pos == NULL || *pos >= n * 8u) {
+        return -1;
+    }
+    for (k = 0; k < NJ_M4V_AC_BITS; k++) {
+        v = (v << 1) | (((*pos + (nj_u4)k) < n * 8u)
+                        ? (nj_u4)((b[(*pos + (nj_u4)k) >> 3] >>
+                                   (7u - ((*pos + (nj_u4)k) & 7u))) & 1u)
+                        : 0u);
+    }
+    i = nj_m4v_ac_lut[v];
+    if (i == 0xffffu) {
+        return -1;
+    }
+    *pos += i >> 8;
+    i &= 0xffu;
+    if (last != NULL) {
+        *last = ((int)i >= NJ_M4V_AC_LAST);
+    }
+    return (int)i;
 }
 
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)

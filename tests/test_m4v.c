@@ -147,6 +147,48 @@ int main(void)
         ok(bad == 0, "every AC lookup entry names a valid symbol and length");
         ok(syms == NJ_M4V_AC_SYMS, "all AC symbols appear in the lookup");
     }
+    {
+        int i, bad = 0, found = 0;
+
+        for (i = 0; i < NJ_M4V_AC_SYMS; i++) {
+            int j, idx = -1;
+            nj_u4 pos = 0;
+            int   last = 0, sym;
+
+            for (j = 0; j < 4096; j++) {
+                nj_u4 e = nj_m4v_ac_lut[j];
+                if (e != 0xffffu && (int)(e & 0xffu) == i) {
+                    idx = j;
+                    break;
+                }
+            }
+            if (idx < 0) {
+                continue;
+            }
+            found++;
+            {
+                nj_u1 buf[4];
+                int   len = (int)(nj_m4v_ac_lut[idx] >> 8);
+
+                memset(buf, 0, sizeof(buf));
+                for (j = 0; j < len; j++) {
+                    if ((idx >> (NJ_M4V_AC_BITS - 1 - j)) & 1) {
+                        buf[j / 8] |= (nj_u1)(0x80u >> (j % 8));
+                    }
+                }
+                sym = nj_m4v_decode_ac(buf, (nj_u4)sizeof(buf), &pos, &last);
+                if (sym != i || (int)pos != len) {
+                    bad++;
+                }
+                if (sym >= 0 && last != (sym >= NJ_M4V_AC_LAST)) {
+                    bad++;
+                }
+            }
+        }
+        ok(found == NJ_M4V_AC_SYMS, "every AC symbol has a codeword to test");
+        ok(bad == 0, "every AC codeword round-trips through the decoder");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

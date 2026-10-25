@@ -48,6 +48,10 @@ int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
 /* Finds the next VOP start code and stores its payload offset. */
 int nj_m4v_find_vop(const nj_u1 *b, nj_u4 n, nj_u4 *pos);
 
+/* Decodes one intra AC VLC symbol at bit position *pos, advancing it.  Returns
+ * the symbol (0 is the escape) or -1 when the bits match no codeword. */
+int nj_m4v_decode_ac(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *last);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 
