@@ -589,7 +589,10 @@ int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k,
 
             rc3 = nj_m4v_escape3(b, n, pos, qscale, &el, &er, &el3);
             if (rc3 == -3) {
-                return -3;          /* first/second escape not implemented yet */
+                rc3 = nj_m4v_escape1(b, n, pos, qscale, &el, &er, &el3);
+            }
+            if (rc3 == -3) {
+                return -3;          /* second escape form not implemented yet */
             }
             if (rc3 < 0) {
                 return -1;
