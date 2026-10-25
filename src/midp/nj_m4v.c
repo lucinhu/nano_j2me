@@ -12,6 +12,7 @@
  */
 #include "nj2me/nj_m4v.h"
 #include "nj2me/nj_m4v_tables.h"
+#include "nj2me/nj_m4v_escape.h"
 #include "nj_idct.h"
 
 /* Defined with the block decoders further down; the escape reader needs them. */
@@ -485,6 +486,52 @@ int nj_m4v_coef_apply(nj_s4 *coef, int *k, int sym, int *last)
  * last(1) run(6) marker level(12 signed) marker.  The level is scaled with
  * qmul/qadd and clamped to [-2048, 2047], as the reference decoder does.
  * Returns 0, or -3 when the form bits are not "11", or -1 on damage. */
+int nj_m4v_escape1(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int qscale,
+                   int *last, int *run, int *level);
+
+/* First escape form: after the escape word the next bit is 0, then the run
+ * and level come from the escape half of the same VLC table; the level is
+ * corrected by max_level[last][run] * qmul and finished with a sign bit. */
+int nj_m4v_escape1(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int qscale,
+                   int *last, int *run, int *level)
+{
+    nj_u4 save = *pos;
+    int   form = 0, sym, r, lv, sign = 0, lt = 0, qm = nj_m4v_qmul(qscale);
+
+    if (!m4v_rbit(b, n, pos, &form)) {
+        *pos = save;
+        return -1;
+    }
+    if (form != 0) {
+        *pos = save;
+        return -3;
+    }
+    sym = nj_m4v_decode_ac(b, n, pos, &lt);
+    if (sym < 0) {
+        *pos = save;
+        return -1;
+    }
+    if (qm <= 0) {
+        return -1;
+    }
+    r = (int)nj_m4v_ac_run[sym];
+    lv = (int)nj_m4v_ac_level[sym];
+    if (r >= 0 && r < NJ_M4V_MAX_RUN + 1) {
+        lv += (int)(lt ? nj_m4v_max_level_1[r] : nj_m4v_max_level_0[r]) * qm;
+    }
+    if (!m4v_rbit(b, n, pos, &sign)) {
+        *pos = save;
+        return -1;
+    }
+    if (sign) {
+        lv = -lv;
+    }
+    if (last != NULL) *last = lt;
+    if (run != NULL) *run = r;
+    if (level != NULL) *level = lv;
+    return 0;
+}
+
 int nj_m4v_escape3(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int qscale,
                        int *last, int *run, int *level)
 {

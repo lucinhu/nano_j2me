@@ -578,6 +578,16 @@ int main(void)
         ok(bad == 0, "the third escape form scales its level with qmul and qadd");
     }
 
+    {
+        const nj_u1 esc[2] = { 0x06u, 0x80u };
+        nj_u4 pos = 7u;
+        int last = -1, run = -1, level = 0, bad = 0;
+
+        bad += nj_m4v_escape1(esc, 2u, &pos, 2, &last, &run, &level) != 0;
+        bad += last != 0 || run != 0 || level != 1 + 27 * 4;
+        ok(bad == 0, "the first escape form adds max_level[last][run] * qmul");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }
