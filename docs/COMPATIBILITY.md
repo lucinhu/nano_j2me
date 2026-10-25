@@ -4108,3 +4108,16 @@ the raw buffer earlier is impossible because the samples are read out of it; onl
 streaming (header -> PCM allocation -> chunked sample copy) removes the
 double residency.  That is the shape of the fix and why it is a real
 memory win on 512 KB handsets, not just a test repair.
+
+Round 82 tried the tempting shortcut and the tree's own contract test rejected
+it.  Handing `Manager.createPlayer(InputStream)` the backing array of a
+ByteArrayInputStream instead of copying it would remove the double residency in
+one move, and it worked for the OOM case - but `test_lib` fails twice on it:
+`the caller's stream backing array is unchanged and unaliased` and `PCM is
+private and excludes RIFF header and trailing JUNK`.  Both are deliberate: a
+player must own its samples, so a game that reuses its byte array for the next
+sound cannot have its audio rewritten under it.  The shortcut was reverted.
+
+So the fix stays the streaming parser: read the header, allocate PCM, copy the
+samples in chunks, never hold the whole container.  That is the version the next
+attempt should build.
