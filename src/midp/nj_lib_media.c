@@ -2185,6 +2185,21 @@ NJFN(media_createPlayer_stream)
 
             if (nj_mp4_open(&m, barray_bytes(data), barray_len(data)) == NJ_MP4_OK &&
                 m.width > 0u && m.height > 0u && m.sample_count > 0u) {
+                /*
+                 * Only H.263 sample entries have a decoder here.  Refusing the
+                 * others by name beats letting the H.263 provider take the
+                 * stream and produce noise: every movie in the corpus is
+                 * MPEG-4 Part 2 ('mp4v'), whose macroblock layer is not
+                 * implemented yet.
+                 */
+                if (m.codec != NJ_MP4_CODEC_S263 && m.codec != NJ_MP4_CODEC_H263 &&
+                    m.codec != NJ_MP4_CODEC_H263LC) {
+                    nj_throw(vm, NJ_C_MEXC,
+                             m.codec == NJ_MP4_CODEC_MP4V
+                                 ? "MPEG-4 Part 2 video has no decoder in this runtime"
+                                 : "this video codec has no decoder in this runtime");
+                    return NJ_ERR;
+                }
                 const nj_av_video_ops *vops = nj_avcodec_find_video(
                     vm, barray_bytes(data), barray_len(data));
 

@@ -388,3 +388,13 @@ Two real first samples pin it down:
 Next: the macroblock layer - reuse the H.263 inverse transform and half-pel
 motion compensation, add the B-16 VLC tables, then register the decoder as the
 `NJ_AV_VIDEO_MPEG4` provider.
+
+### Refusing a codec by name (round 23)
+
+`Manager.createPlayer()` used to hand any `video/*` MP4/3GP to the H.263
+provider, which accepts a container it can demultiplex and then decodes noise
+from an `mp4v` sample entry.  The track's fourcc is now checked first: `s263`,
+`H263` and `h263` go to the provider, and everything else is refused with a
+MediaException that names the reason - for the corpus's three movies, that is
+"MPEG-4 Part 2 video has no decoder in this runtime".  The existing H.263 clip
+still builds a Player (test_lib 881/0, test_h263 86/0).
