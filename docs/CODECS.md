@@ -683,3 +683,19 @@ The 1942 config is byte-identical to the 32 bytes `tests/test_m4v.c` embeds, and
 the frames/geometry/fps all agree - the demuxer and the VOL parser are right, the
 remaining work is the frame driver's alignment bug and then pixel comparison
 against this oracle.
+
+#### Round 113: the DC tables match too, and libavcodec's DCT dump is off
+
+The intra DC VLC tables were diffed against `ff_mpeg4_DCtab_lum`/`_chrom` in
+`mpeg4data.h`: both match entry for entry (our packed `(code << 4) | len` form,
+0 mismatches), so the DC size codes are not a source of drift either.
+
+Trying to make ffmpeg print its decoded coefficients hit a wall: setting
+`AVCodecContext.debug = FF_DEBUG_DCT_COEFF` produces nothing because the distro
+build compiles `ff_tlog` out (it is behind `#ifdef TRACE`).  So the coefficient
+comparison has to come from our side: dump our per-block (run, level, bits)
+sequence and compare it against a **reference implementation of the block parser
+that is known correct** - either a small standalone table-driven parser written
+from the spec, or ffmpeg's `mpeg4videodec.c` compiled with `TRACE` defined by
+hand (it is ~5k lines plus dependencies, so the standalone parser is the cheaper
+option).

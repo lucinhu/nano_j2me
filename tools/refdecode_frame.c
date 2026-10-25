@@ -14,7 +14,7 @@
 #include <libavcodec/avcodec.h>
 int main(int c,char**v){
   AVFormatContext*fc=NULL;
-  av_log_set_level(AV_LOG_TRACE);
+  av_log_set_level(AV_LOG_DEBUG);
   if(avformat_open_input(&fc,v[1],NULL,NULL)<0){puts("open fail");return 1;}
   avformat_find_stream_info(fc,NULL);
   int vi=-1; for(unsigned i=0;i<fc->nb_streams;i++) if(fc->streams[i]->codecpar->codec_type==AVMEDIA_TYPE_VIDEO) vi=i;
@@ -37,6 +37,7 @@ int main(int c,char**v){
   AVCodecContext*ctx=avcodec_alloc_context3(cd);
   avcodec_parameters_to_context(ctx,par);
   if(avcodec_open2(ctx,cd,NULL)<0){puts("dec open fail");return 1;}
+  ctx->debug = FF_DEBUG_DCT_COEFF;
   AVPacket*p=av_packet_alloc(); AVFrame*fr=av_frame_alloc();
   int got=0; while(av_read_frame(fc,p)>=0){
     if(p->stream_index==vi && avcodec_send_packet(ctx,p)>=0 && avcodec_receive_frame(ctx,fr)>=0){got++; av_packet_unref(p); break;}
