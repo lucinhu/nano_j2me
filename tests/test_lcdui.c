@@ -2860,6 +2860,7 @@ static void test_callserially_once_per_frame(nj_vm *vm)
  * ends up in the Form's frame.
  */
 static int ci_paints;
+static int ci_paint_w, ci_paint_h;
 static int ci_size_calls;
 static int ci_size_w, ci_size_h;
 static int ci_key_pressed;
@@ -2898,6 +2899,8 @@ NJ_NATIVE_FN(ci_fx_paint)
     (void)th;
     (void)ret;
     ci_paints++;
+    ci_paint_w = NJ_ARG_INT(args, 1);
+    ci_paint_h = NJ_ARG_INT(args, 2);
     /* Painting through the real Graphics API must work in content space. */
     a[0] = iref(0);
     a[1] = iref(0);
@@ -3044,6 +3047,7 @@ static void test_customitem(nj_vm *vm)
     ci_paints = 0;
     OK_MSG(nj_midp_paint(vm) == NJ_OK, "the Form frame with a CustomItem failed");
     OK_MSG(ci_paints > 0, "a Form never called CustomItem.paint()");
+    OK(ci_paint_w == ci_size_w && ci_paint_h == ci_size_h);
     OK(!nj_has_exception(vm));
 
     /* Keys reach the focused item; UP/DOWN and the soft keys stay with the

@@ -6613,7 +6613,7 @@ NJFN(ci_njDraw)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref gfx = NJ_ARG_REF(args, 0);
-    nj_value a[2];
+    nj_value a[3];
     nj_gfx g;
     nj_surface sc;
     nj_s4 cw = fget(vm, self, NJ_C_CUSTOMITEM, "ciContentW", D_INT);
