@@ -169,6 +169,18 @@
  * nj_avcodec.h's provider registry so a port can install a hardware decoder in
  * front of the software one (or remove it) without touching the runtime.
  */
+/*
+ * NJ_MP3_EXPERIMENTAL registers the Layer III decoder with the runtime.  Its
+ * parser and streaming are complete and tested, but its PCM does not yet match
+ * a reference decoder (see docs/CODECS.md), so a default build must not hand
+ * it to Manager.createPlayer(): wrong audio is worse than the honest
+ * "no MPEG audio decoder" MediaException.  Flip this to 1 only once
+ * tests/test_mp3.c asserts a reference PCM slice.
+ */
+#ifndef NJ_MP3_EXPERIMENTAL
+#define NJ_MP3_EXPERIMENTAL 0
+#endif
+
 #ifndef NJ_ENABLE_MP3
 #  define NJ_ENABLE_MP3 1
 #endif

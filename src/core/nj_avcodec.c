@@ -111,10 +111,14 @@ const nj_av_video_ops *nj_avcodec_find_video(struct nj_vm *vm,
 
 const nj_av_audio_ops *nj_avcodec_sw_mp3(void)
 {
+#if !NJ_MP3_EXPERIMENTAL
+    return NULL;   /* parser done, PCM not yet reference-clean */
+#else
 #if NJ_ENABLE_MP3
     return &nj_av_audio_mp3;
 #else
     return NULL;
+#endif
 #endif
 }
 
