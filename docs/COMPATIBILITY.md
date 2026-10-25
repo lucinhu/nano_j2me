@@ -4177,6 +4177,42 @@ triangles** rendered, and the 961-row corpus has **no row that reports a
 `NoSuchMethodError` any more** (verdict counts unchanged: 957 ok / 2 no-frame /
 1 title-exit / 1 bad-jar).
 
+### The last two exception piles, read title by title (round 9)
+
+After the fix rounds, two piles were left in the histogram: 39 rows with an
+`ArrayIndexOutOfBoundsException` and 18 with a `ClassNotFoundException`.  Both
+were read one title at a time instead of being dismissed:
+
+**The 39 AIOOBE rows are the titles' own bytecode.**  Seven of them were run
+again and every throw lands inside title code, never in a runtime native:
+
+| title | throw site |
+| --- | --- |
+| 1942空战_10403 | `j.<init>(Ljava/io/DataInputStream;[[I)V pc=382` |
+| CS反恐特警-狙击精英_6539 | `e.m()V pc=59` |
+| 三国塔防－曹操传_1610 | `cl.a(I)Ljava/lang/Object; pc=6` |
+| 中国象棋之水墨珍藏版_871 | `b.a()V pc=55` (its own 6-column table, read at index 6) |
+| 僵尸危机2_4349 | `c.a([BI)V pc=31` |
+| 时光八音盒2忆之篇_3865 | `f.a(Ljava/lang/String;[L...Image;I)V pc=64` |
+| 3D孤胆枪手2010_4634 | none in 400 frames (the histogram entry came from a longer run) |
+
+**The 18 CNFE rows are capability probes with the correct answer.**  The names
+are all outside the J2ME profile, and `Class.forName()` is *supposed* to throw
+`ClassNotFoundException` for them: `java.applet.Applet` (8 rows),
+`emulator.Emulator` / `emulator.GLEmulator` (4), `XMessage` / `XConnection`,
+`com.siemens.mp.lcdui.Image`, `com.motorola.phonebook.PhoneBookRecord`,
+`com.samsung.util.Vibration` and `com.motorola.multimedia.Vibrator` (the last
+two in 愤怒的小鸟-高清版 and Need for Speed - Hot Pursuit).  The titles wrap the
+lookup in `try`/`catch` and take their fallback path, which is why every one of
+these rows still reaches its frame budget.
+
+Two of those classes are cheap enough to provide - `com.samsung.util.Vibration`
+(`isSupported/start/stop`) and `com.motorola.multimedia.Vibrator` - and both
+exist in the reference tree, but they only affect haptics: the titles already
+run their fallback path today, so adding them would not change a single pixel
+and is not a compatibility fix.  The decision was to leave them out and spend
+the round's budget on members that change behaviour instead.
+
 ### The members six titles were missing (round 7)
 
 The corpus histogram had eight rows with a `NoSuchMethodError`.  Running each
