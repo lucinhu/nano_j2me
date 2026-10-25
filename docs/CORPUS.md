@@ -127,3 +127,23 @@ Medal of Honor 2010 and Prince of Persia 1-2), so no stale-frame case showed up
 in this sample.  Treat it as a starting measurement, not a verdict: the tool
 exists so a future round can grow the sample, and a frozen row is only a lead
 until it is compared with the reference emulator.
+
+### Reading a frozen frame (round 14)
+
+`tools/check_corpus_motion.py <rows dir> --count N --frames F` dumps three frames
+per title and prints `unique_frames`.  Two samples so far: 7 of 12 and 3 of 6
+titles change their frames, the rest paint one frame for the whole run.
+
+That second group is not automatically a defect, and one was traced to the end:
+
+* `slimevolley.jar` - 600 frames, 600 paints, but only **15,038 bytecodes in
+  total** (25 per frame) and 4 gfx calls per paint.  The title paints its idle
+  screen and waits for a pointer it never gets from a key script; there is
+  nothing for the emulator to render differently.  Adding ten `fire` presses
+  changes nothing, which fits a game that only starts on a tap.
+
+So the reading rule is: a frozen row means *the shared input script did not
+reach a state that animates*, and only a per-title key or a reference-emulator
+comparison can turn it into evidence.  The tool exists to produce the candidate
+list; it does not classify.
+
