@@ -3079,6 +3079,8 @@ static int m3g_target_bounds(nj_vm *vm, nj_ref self, const nj_surface *s,
     return 1;
 }
 
+
+
 NJFN(m3g_bindTarget)
 {
     nj_ref self = NJ_THIS(args);
@@ -3724,6 +3726,9 @@ static void collect_lights_walk(nj_vm *vm, nj_ref o, nj_ref *out, float *mats,
                                 const float *parent, nj_u4 cap, nj_u4 *n,
                                 int depth);
 
+/* Mesh nodes a render draws from a stack array before growing to host memory:
+ * most scenes fit, and this keeps the common case allocation-free. */
+#define M3G_SCENE_MESHES_STACK 64u
 
 static nj_status m3g_render_scene(nj_vm *vm, nj_thread *th NJ_MAYBE_UNUSED,
                                   nj_value *args, nj_value *ret NJ_MAYBE_UNUSED,
@@ -3731,14 +3736,13 @@ static nj_status m3g_render_scene(nj_vm *vm, nj_thread *th NJ_MAYBE_UNUSED,
 {
     nj_ref self = NJ_THIS(args);
     nj_ref root = NJ_ARG_REF(args, 0);
-    nj_ref target, meshes[64];
+    nj_ref target;
     nj_ref slights[16];
     float slmats[16 * 16];
     const nj_ref *slightp = NULL;
     const float *smatp = NULL;
     nj_s4 snlight = 0;
     nj_u4 n;
-    float mats[64 * 16];
     nj_s4 vw, vh;
 
     vm->m3g_renders++;
@@ -3859,21 +3863,70 @@ static nj_status m3g_render_scene(nj_vm *vm, nj_thread *th NJ_MAYBE_UNUSED,
             nj_root_release(vm, mark);
         }
     }
-    if (node_render) {
+    {
+        /*
+         * A scene graph holds as many Mesh nodes as its author put in it.  A
+         * fixed array here used to stop the walk at 64 and the rest of the
+         * World was never drawn - not a rare corner: Doom 3's level World
+         * carries 173 Mesh nodes, so its in-game view lost every wall past the
+         * 64th, which reads as pitch black because the World's Background
+         * clears the frame to black.  Walk once into a small stack array, and
+         * when the scene does not fit, walk again into host memory sized from
+         * the count the walk returned.  The walk keeps counting past the
+         * capacity on purpose, so the second pass knows what to reserve.
+         */
+        nj_ref stack_meshes[M3G_SCENE_MESHES_STACK];
+        float stack_mats[M3G_SCENE_MESHES_STACK * 16];
+        nj_ref *meshv = stack_meshes;
+        float *matv = stack_mats;
+        nj_u4 cap = M3G_SCENE_MESHES_STACK;
+        void *heap = NULL;
         float identity[16];
-        float *given = mat_of(vm, NJ_ARG_REF(args, 1), NJ_C_XFORM, "_nj_m");
+        float *given = NULL;
 
         mat_identity(identity);
-        n = 0u;
-        /* render(Node, Transform) replaces the root's local transform;
-           descendants retain their transforms relative to that root. */
-        collect_walk(vm, root, meshes, mats, given ? given : identity,
-                     64u, &n, 0, 0);
-    } else {
-        n = nj_m3g_collect_meshes_m(vm, root, meshes, mats, 64u);
+        if (node_render) {
+            given = mat_of(vm, NJ_ARG_REF(args, 1), NJ_C_XFORM, "_nj_m");
+        }
+        for (;;) {
+            if (node_render) {
+                n = 0u;
+                /* render(Node, Transform) replaces the root's local
+                   transform; descendants retain their transforms relative to
+                   that root. */
+                collect_walk(vm, root, meshv, matv, given ? given : identity,
+                             cap, &n, 0, 0);
+            } else {
+                n = nj_m3g_collect_meshes_m(vm, root, meshv, matv, cap);
+            }
+            if (n <= cap || heap != NULL) {
+                break;
+            }
+            /* Refuse a size a hostile or corrupt graph could wrap. */
+            if ((nj_size)n > ((nj_size)-1u) /
+                             (16u * sizeof(float) + sizeof(nj_ref))) {
+                break;
+            }
+            heap = nj_host_alloc(vm, (nj_size)n *
+                                 (16u * sizeof(float) + sizeof(nj_ref)));
+            if (!heap) {
+                break;      /* out of memory: drawing the prefix beats nothing */
+            }
+            matv = (float *)heap;
+            meshv = (nj_ref *)(matv + (nj_size)n * 16u);
+            cap = n;
+        }
+        if (n > cap) {
+            n = cap;        /* the walk overflowed and memory ran out */
+        }
+        {
+            (void)m3g_world_draw(vm, self, root, meshv, matv, n,
+                                slightp, smatp, snlight);
+        }
+        if (heap != NULL) {
+            nj_host_free(vm, heap);
+        }
     }
-    (void)m3g_world_draw(vm, self, root, meshes, mats, n,
-                         slightp, smatp, snlight);
     return NJ_OK;
 }
 
@@ -11541,7 +11594,7 @@ static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
 {
     nj_u4 i, drawn = 0u;
 
-    for (i = 0u; i < n && i < 64u; i++) {
+    for (i = 0u; i < n; i++) {
         nj_ref vb, ib = 0, app = 0, subs;
         m3g_jr r;
 

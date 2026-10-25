@@ -193,6 +193,7 @@ set(NJ_SOURCES
   src/midp/nj_mp3.c
   src/midp/nj_mp4.c
   src/midp/nj_h263.c
+  src/midp/nj_m4v.c
   src/midp/nj_amr.c
   src/midp/nj_amr_mp4.c
   src/midp/nj_lib_content.c
@@ -1120,6 +1121,10 @@ add_test(NAME check_splash_budget
   nj_add_test(test_directgraphics tests/test_directgraphics.c)
 nj_add_test(test_clip tests/test_clip.c)
   nj_add_test(test_blocked_init tests/test_blocked_init.c ${NJ_FIXTURES})
+  # A quit request is an end, not a failed construction: closing the port's
+  # window while a MIDlet is still in its constructor (Doom 3 runs the whole
+  # game there) must report the stop, not a java/lang/InternalError.
+  nj_add_test(test_quit_stop tests/test_quit_stop.c ${NJ_FIXTURES})
   nj_add_test(test_vm        tests/test_vm.c
               ${NJ_FIXTURES}/hello.jar HelloWorld "wideargs ok")
 
@@ -1264,6 +1269,7 @@ nj_add_test(test_clip tests/test_clip.c)
     nj_add_test(test_h263 tests/test_h263.c)
     nj_add_test(test_mp3 tests/test_mp3.c)
     nj_add_test(test_avcodec tests/test_avcodec.c)
+    nj_add_test(test_m4v tests/test_m4v.c)
   endif()
 
   # The rasterizer test is deliberately standalone: it compiles nj_gfx.c with

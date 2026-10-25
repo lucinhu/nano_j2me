@@ -350,3 +350,22 @@ than committed: the field order and widths must be taken from an authoritative
 source (an MPEG-4 Visual decoder implementation, not memory), and the acceptance
 test must parse the real `esds` decoder configuration of the two corpus movies
 before any macroblock work starts.
+
+### The VOL header, parsed from the reference decoder (round 20)
+
+The first attempt read the layer id before anything else; the reference decoder
+(ffmpeg `libavcodec/mpeg4videodec.c`, `decode_vol_header`) shows that a VOL
+starts with a random-access flag and an 8-bit video object type, then an
+optional object-layer identifier, the aspect ratio and optional VOL control
+parameters, and only then the shape.  The parser now follows that order, and
+`tests/test_m4v.c` checks it against the `esds` decoder configuration attached
+to the corpus's two real movies - not against a header we wrote ourselves:
+
+| Config | Expected | Parsed |
+| --- | --- | --- |
+| `1942.3gp` (32 B) | 176x144, time_res 1000 | same |
+| `doom.3gp` (48 B) | 320x240 | same |
+
+The test also refuses a truncated config and random bytes.  Next: VOP headers
+and the B-16 macroblock layer, reusing the H.263 inverse transform and motion
+compensation that already pass their own reference tests.

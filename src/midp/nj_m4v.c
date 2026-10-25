@@ -1,0 +1,214 @@
+/*
+ * nano_j2me - src/midp/nj_m4v.c
+ *
+ * MPEG-4 Visual framing.  See include/nj2me/nj_m4v.h.
+ *
+ * The bit order below is the one the reference decoder uses: a random-access
+ * flag, the video object type, an optional object layer identifier, the aspect
+ * ratio, optional VOL control parameters, then the layer shape.  Only after
+ * that comes the marker/time-increment block and, for a rectangular layer, the
+ * 13-bit width and height.  Getting this order wrong is subtle: every field is
+ * self-consistent, so only a real decoder configuration can tell.
+ */
+#include "nj2me/nj_m4v.h"
+
+typedef struct m4v_bits {
+    const nj_u1 *b;
+    nj_u4        n;      /* bytes  */
+    nj_u4        pos;    /* bits   */
+} m4v_bits;
+
+static int m4v_bit(m4v_bits *s, int *v)
+{
+    nj_u4 byte;
+
+    if (s->pos >= s->n * 8u) {
+        return 0;
+    }
+    byte = s->b[s->pos >> 3];
+    *v = (int)((byte >> (7u - (s->pos & 7u))) & 1u);
+    s->pos++;
+    return 1;
+}
+
+static int m4v_bits_get(m4v_bits *s, int count, nj_u4 *out)
+{
+    nj_u4 v = 0;
+    int   i, bit;
+
+    if (count < 0 || count > 32) {
+        return 0;
+    }
+    for (i = 0; i < count; i++) {
+        if (!m4v_bit(s, &bit)) {
+            return 0;
+        }
+        v = (v << 1) | (nj_u4)bit;
+    }
+    *out = v;
+    return 1;
+}
+
+static int m4v_marker(m4v_bits *s)
+{
+    nj_u4 v;
+
+    return m4v_bits_get(s, 1, &v) && v == 1u;
+}
+
+static nj_u4 m4v_log2(nj_u4 v)
+{
+    nj_u4 r = 0;
+
+    while (v > 1u) {
+        v >>= 1;
+        r++;
+    }
+    return r;
+}
+
+int nj_m4v_start_code(const nj_u1 *b, nj_u4 n, nj_u4 from, nj_u4 *code, nj_u4 *pos)
+{
+    nj_u4 i;
+
+    for (i = from; i + 3u < n; i++) {
+        if (b[i] == 0x00u && b[i + 1u] == 0x00u && b[i + 2u] == 0x01u) {
+            *code = b[i + 3u];
+            *pos = i + 4u;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int nj_m4v_parse_vol(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_m4v_vol *out)
+{
+    m4v_bits s;
+    nj_u4 vo_type = 0, v = 0;
+    int   ra, is_ol, verid = 1, aspect, vol_control = 0, shape = 0, fixed = 0;
+
+    if (b == NULL || out == NULL) {
+        return 0;
+    }
+    s.b = b;
+    s.n = n;
+    s.pos = pos * 8u;
+
+    if (!m4v_bit(&s, &ra) || !m4v_bits_get(&s, 8, &vo_type)) {
+        return 0;
+    }
+    if (!m4v_bit(&s, &is_ol)) {
+        return 0;
+    }
+    if (is_ol != 0) {
+        if (!m4v_bits_get(&s, 4, &v)) {
+            return 0;
+        }
+        verid = (int)v;
+        if (!m4v_bits_get(&s, 3, &v)) {
+            return 0;
+        }
+    }
+    if (!m4v_bits_get(&s, 4, &v)) {
+        return 0;
+    }
+    aspect = (int)v;
+    if (aspect == 15 && (!m4v_bits_get(&s, 16, &v))) {
+        return 0;
+    }
+    if (!m4v_bit(&s, &vol_control)) {
+        return 0;
+    }
+    if (vol_control != 0) {
+        nj_u4 chroma, vbv;
+        int   low_delay, vbv_flag;
+        if (!m4v_bits_get(&s, 2, &chroma) || !m4v_bit(&s, &low_delay)) {
+            return 0;
+        }
+        if (!m4v_bit(&s, &vbv_flag)) {
+            return 0;
+        }
+        vbv = (nj_u4)vbv_flag;
+        if (vbv != 0u) {
+            int i;
+            for (i = 0; i < 3; i++) {
+                if (!m4v_bits_get(&s, 15, &v) || !m4v_marker(&s)) {
+                    return 0;
+                }
+            }
+            if (!m4v_bits_get(&s, 3, &v) || !m4v_bits_get(&s, 11, &v) ||
+                !m4v_marker(&s) || !m4v_bits_get(&s, 15, &v) || !m4v_marker(&s)) {
+                return 0;
+            }
+        }
+    }
+    if (!m4v_bits_get(&s, 2, &v)) {
+        return 0;
+    }
+    shape = (int)v;
+    if (shape == 2 && verid != 1) {
+        if (!m4v_bits_get(&s, 4, &v)) {
+            return 0;
+        }
+    }
+    if (!m4v_marker(&s)) {
+        return 0;
+    }
+    if (!m4v_bits_get(&s, 16, &v) || v == 0u) {
+        return 0;
+    }
+    out->time_res = v;
+    if (!m4v_marker(&s)) {
+        return 0;
+    }
+    if (!m4v_bit(&s, &fixed)) {
+        return 0;
+    }
+    out->has_fixed_rate = fixed;
+    out->fixed_inc = 0;
+    if (fixed != 0) {
+        nj_u4 inc_bits = m4v_log2(out->time_res - 1u) + 1u;
+        if (!m4v_bits_get(&s, (int)inc_bits, &v)) {
+            return 0;
+        }
+        out->fixed_inc = v;
+    }
+    out->width = 0;
+    out->height = 0;
+    out->shape = shape;
+    out->vo_type = vo_type;
+    if (shape != 1) {
+        if (shape == 0) {
+            if (!m4v_marker(&s) || !m4v_bits_get(&s, 13, &v)) {
+                return 0;
+            }
+            out->width = v;
+            if (!m4v_marker(&s) || !m4v_bits_get(&s, 13, &v)) {
+                return 0;
+            }
+            out->height = v;
+            if (!m4v_marker(&s)) {
+                return 0;
+            }
+        }
+    }
+    return out->width > 0u && out->height > 0u;
+}
+
+int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
+{
+    nj_u4 code = 0, pos = 0, from = 0;
+    int   seen_vos = 0;
+    nj_m4v_vol vol;
+
+    while (nj_m4v_start_code(b, n, from, &code, &pos)) {
+        if (code == NJ_M4V_VOS) {
+            seen_vos = 1;
+        } else if (code == NJ_M4V_VOL && nj_m4v_parse_vol(b, n, pos, &vol)) {
+            return 1;
+        }
+        from = pos;
+    }
+    (void)seen_vos;
+    return 0;
+}
