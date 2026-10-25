@@ -654,8 +654,8 @@ int main(void)
     }
 
     {
-        /* luminance DC size code 0 is "100"; a block without AC stops there */
-        static const nj_u1 b[1] = { 0x80u };
+        /* luminance DC size code 0 is "011"; a block without AC stops there */
+        static const nj_u1 b[1] = { 0x60u };
         nj_s4 coef[64];
         nj_u4 pos = 0;
         int i, zero = 1;
