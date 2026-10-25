@@ -26,8 +26,10 @@
  * Usage: test_amr
  */
 #include "nj_amr.h"
+#include "nj2me/nj_avcodec.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define SAMPLES_PER_FRAME   ((int)NJ_AMR_BLOCK)        /* 160, i.e. 20 ms */
@@ -167,6 +169,77 @@ static short sample_at(const nj_u1 *pcm, int i)
 {
     return (short)((unsigned)pcm[i * 2] | ((unsigned)pcm[i * 2 + 1] << 8));
 }
+
+
+#if NJ_ENABLE_AMR
+/* ---- the provider wrapper must hand out exactly the same PCM ---- */
+static void *amr_mem_alloc(void *ud, nj_size n) { (void)ud; return malloc(n); }
+static void amr_mem_free(void *ud, void *p) { (void)ud; free(p); }
+
+static void test_provider_matches_direct_decode(void)
+{
+    static nj_u1 file[4096];
+    static nj_u1 direct[8 * BYTES_PER_FRAME + 16];
+    static nj_u1 via[8 * BYTES_PER_FRAME + 16];
+    const nj_av_audio_ops *ops = nj_avcodec_sw_amr();
+    nj_av_mem mem;
+    nj_av_info info;
+    const char *err = NULL;
+    nj_av_dec *dec;
+    nj_u4 len, got, total = 0u;
+    int modes[2] = { 1, 4 };
+
+    ok(ops != NULL, "the AMR provider is registered");
+    if (ops == NULL) {
+        return;
+    }
+    len = build(file, modes, 2);
+    ok(ops->accepts(file, len) == 1, "the provider accepts #!AMR streams");
+    got = nj_amr_frames(file, len);
+    if (got != 2u) {
+        fprintf(stderr, "  nj_amr_frames gave %u\n", (unsigned)got);
+    }
+    ok(got == 2u, "two AMR frames on the wire");
+
+    mem.ud = NULL;
+    mem.alloc = amr_mem_alloc;
+    mem.free = amr_mem_free;
+    dec = ops->open(file, len, &mem, &info, &err);
+    ok(dec != NULL, "the provider opens the stream");
+    if (dec == NULL) {
+        return;
+    }
+    ok(info.format == NJ_AV_AUDIO_AMR && info.rate == 8000u &&
+       info.channels == 1u && info.frames == 2u * 160u,
+       "the provider reports 8 kHz mono, two 20 ms frames");
+
+    memset(via, 0, sizeof(via));
+    for (;;) {
+        nj_av_step step;
+        int rc;
+
+        memset(&step, 0, sizeof(step));
+        step.in = file;
+        step.in_len = len;
+        step.out = via + total;
+        step.out_cap = (nj_u4)(sizeof(via) - total);
+        rc = ops->decode(dec, &step);
+        if (rc == NJ_AV_ERR_END) {
+            break;
+        }
+        ok(rc == NJ_AV_OK, "the provider decodes a slice");
+        total += step.out_used;
+    }
+    (void)nj_amr_decode(file, len, direct);
+    if (total != 2u * 160u * 2u) {
+        fprintf(stderr, "  provider handed out %u bytes\n", (unsigned)total);
+    }
+    ok(total == 2u * 160u * 2u, "the provider hands out every byte");
+    ok(memcmp(via, direct, total) == 0,
+       "the provider's PCM is byte-identical to nj_amr_decode()");
+    ops->close(dec);
+}
+#endif /* NJ_ENABLE_AMR */
 
 int main(void)
 {
@@ -323,6 +396,9 @@ int main(void)
     ok(nj_amr_frames(file, len + 1u) == 2u,
        "a trailing reserved header is not counted");
 
+#if NJ_ENABLE_AMR
+    test_provider_matches_direct_decode();
+#endif
     printf("\n%d checks, %d failures\n", checks, fails);
     printf("%s\n", fails == 0 ? "PASS" : "FAIL");
     return fails == 0 ? 0 : 1;

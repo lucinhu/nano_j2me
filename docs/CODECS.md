@@ -180,3 +180,22 @@ emits a sentinel sample, checks the lookup prefers it over the software decoder,
 drives `Manager.createPlayer()` over a real MP3 stream, pumps the media frame
 hook and asserts the port receives the sentinel - i.e. the port's decoder, not
 ours, produced the sound.
+
+## AMR behind the seam
+
+AMR narrowband is now a provider too (`amr-nb`, registered by
+`nj_avcodec_reset()` next to MP3 and H.263).  `nj_amr.c` decodes a whole file in
+one call, so the provider keeps that shape: `open()` decodes once, `decode()`
+hands out the samples in slices, `seek()` rounds to the nearest 20 ms block.
+There is no RAM win in re-shaping the decoder to per-frame state - the samples
+exist in memory either way, and the Player decides where - but a port with a
+hardware AMR codec can now install its own provider and shadow this one, and
+`-DNJ_ENABLE_AMR=0` removes both.
+
+`tests/test_amr.c` pins it: the provider accepts `#!AMR` streams, reports 8 kHz
+mono and two 20 ms frames, and hands out PCM that is **byte-identical** to
+`nj_amr_decode()`'s output (127 checks in that test now, 8 of them new).
+
+Note: `Manager.createPlayer()` still decodes AMR through the media library's own
+path rather than through the provider.  The provider exists so ports can replace
+it and so the registry is uniform; switching the Player over is the next step.
