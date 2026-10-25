@@ -1986,7 +1986,15 @@ int main(void)
     size_t i;
 
     nj_port_headless_ex(&port, 240, 320, 0, NULL);
-    vm = nj_vm_create(&port, 2u * 1024u * 1024u);
+    /*
+     * 4 MB, not 2 MB: this suite deliberately never releases its fixtures (the
+     * canvas alone pins a 240x320 ARGB buffer, 307 KB), so the late tests that
+     * build a fresh canvas - the spot-light cone and the Transform matrix
+     * checks - ran out of heap and reported their fixture as failed.  Whether
+     * the growth is only fixture garbage or a VM-held reference was not
+     * determined; it is tracked in docs/COMPATIBILITY.md.
+     */
+    vm = nj_vm_create(&port, 4u * 1024u * 1024u);
     /*
      * Lay the builtin classes out and seed their constants before anything is
      * looked up.  Without this the static slots the constants live in do not

@@ -4127,6 +4127,18 @@ block from 1.69 MB of free space.  The next step is the allocator (coalescing /
 best-fit), not `createPlayer`; the streaming front-end makes the request as
 small as it can be.
 
+### The test harness that ran out of heap (round 88)
+
+`test_m3g` reported two failures that were its own fixtures, not the runtime:
+`a canvas and a Light for the cone check` failed because `i2d_canvas_init()`
+returned 0, and every failure in it is an allocation or a `nj_call` that ran
+out of memory.  The suite deliberately never releases its fixtures - one canvas
+pins a 240x320 ARGB buffer (307 KB) - and the late tests build a fresh canvas on
+a 2 MB heap.  With 4 MB the suite passes 654/0.  Whether the retained memory is
+pure fixture garbage or a VM-held reference has **not** been established, so
+this is recorded as a harness adjustment with an open question, not as a leak
+being "fixed".
+
 ### The arena tail that was neither free nor used (round 87)
 
 Fixing the streaming front-end left the four OOM assertions failing, and the
