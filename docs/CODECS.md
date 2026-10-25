@@ -271,3 +271,21 @@ and asserts the Player reports the clip's size (128x96), counts four samples,
 advanced `pPushed` by one and filled a 24,576-byte RGB565 frame buffer with
 something other than zeros.  The clip itself moved to `tests/h263_clip.h` so the
 two tests cannot drift apart.
+
+### What the corpus actually ships (round 16)
+
+`tools/check_corpus_video.py` walks every JAR in `tests/games` and the
+out-of-tree vaults and reports each video container with the codec named in its
+sample description.  Across all corpora there are three video assets:
+
+| Title | Asset | Codec |
+| --- | --- | --- |
+| 毁灭战士3_10598 | `vid/doom.3gp` | **MPEG-4 Part 2** (`mp4v`) |
+| 1942空战_10403 | `1942.3gp` | **MPEG-4 Part 2** (`mp4v`) |
+| Tom Clancy's H.A.W.X. | `movie.3gp` | **MPEG-4 Part 2** (`mp4v`) |
+
+So the H.263 path built so far is exercised only by our own ffmpeg fixture, and
+**the decoder real titles need is MPEG-4 Part 2 (Simple Profile)**.  That
+reorders the remaining work: M4V (VLC tables, IDCT, half-pel motion
+compensation, P-frames) is the milestone, and H.263 stays as the smaller
+sibling it already covers.
