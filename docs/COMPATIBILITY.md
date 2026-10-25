@@ -4395,6 +4395,29 @@ titles, Pac-Man, Resident Evil - The Missions), 4 remain (three `IOException` +
 title, to be read next).  Corpus state: **855 rows, 847 ok, 4 failures, 3 never
 painted, 1 unusable package**.
 
+### The state of the tree at the end of round 18
+
+This section records what is true of the tree as committed, so a later round can
+tell regressions from things that were never claimed.
+
+- Corpus: 969 titles measured (395 from `tests/games`, 566 more from three
+  archive.org collections that stay out of the repository). Verdicts on the
+  current 969-row table: 965 run, 2 paint no frame, 1 quits after painting,
+  1 is not a usable suite. No timeouts, no crashes, no `NoSuchMethodError`.
+- Missing members: the CLDC 1.1 and MIDP 2.0 reference audit (982 members),
+  the JSR-184 audit and the Nokia UI audit all report zero absent members;
+  the last two sweeps could not find a single title that calls a member this
+  runtime does not define.
+- Exceptions: what is left in the corpus logs is thrown by titles themselves
+  (record stores that do not exist, properties that are not set, class probes
+  for other vendors' APIs). The histogram no longer contains a signature that
+  points at this runtime.
+- Gates on `81c220c`: `ctest` 111/111 in 44.1 s, `BENCH sum=-136042548 s=5`,
+  digest 27/27, no writable statics in 63 objects.
+
+Anything beyond this - pixel equality against a trusted renderer, SDL2 and
+device builds, audio - remains unverified and is not implied by the table.
+
 ### The two rows that never paint, read to the bytecode (round 1)
 
 The matrix carries two `never painted` rows.  Both were decompiled with
