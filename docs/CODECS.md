@@ -568,3 +568,26 @@ the honest answer until the planes exist.
 The sanitizer run matters here: the M4V code walks bitstreams with explicit
 bounds checks, so ASan/UBSan over the whole test binary is the check that the
 "corrupt stream" paths really stay inside their buffers.
+
+### Goal status at the end of the 96-round budget (round 96)
+
+Delivered with tests:
+
+| Item | Evidence |
+| --- | --- |
+| MP3 provider and streaming Player | `test_mp3` (LAME fixtures vs ffmpeg, worst delta 1 LSB), `test_lib` real samples reach the port, `test_avcodec` a port's decoder wins |
+| AMR provider and Player path | `test_amr` provider output byte-identical to `nj_amr_decode()`, `test_lib` player-level replacement |
+| H.263 decoder | `test_h263` 86 checks against ffmpeg pixels |
+| MP4/3GP demultiplexer | track geometry/timebase matches ffprobe on the corpus's own movies |
+| Video Player and media pump | 3GP clip decodes through `Manager.createPlayer` in `test_lib` |
+| Runtime provider replacement | audio and video replacement/removal covered in `test_avcodec` |
+| Trim macros | AMR/MP3/VIDEO/MIDI each build with the feature off; costs in `docs/FOOTPRINT.md` |
+| RAM/ROM | every item above has its numbers in `docs/FOOTPRINT.md` |
+
+Not delivered: **MPEG-4 Part 2 frame decoding**. The entropy layer is complete and
+tested (`test_m4v`, 62 checks: AC symbols, three escape forms, DC size/delta and
+prediction arithmetic, DC scaler tables, scan order, block geometry, the 4:2:0
+matrix), but the frame driver - DC dequantisation into the coefficient domain,
+grid-backed prediction across the macroblock raster, provider registration and
+pixel acceptance on `1942.3gp` - is not written. `createPlayer` therefore still
+refuses `mp4v` by name, which is the truthful behaviour.
