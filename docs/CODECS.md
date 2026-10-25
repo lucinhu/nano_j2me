@@ -214,3 +214,22 @@ Release, tests off): AMR 49,536 B, MP3 33,600 B, VIDEO 31,552 B; see
 `docs/FOOTPRINT.md` for the full matrix.  Every switch keeps `.data`/`.bss`
 unchanged - the registry lives in the VM (72 B) and decoder state in the
 provider's allocation.
+
+### Remaining work: video inside a Player
+
+The pieces exist and are verified individually - `nj_mp4` walks samples
+(`tests/test_h263.c`), `nj_av_video_h263` decodes them against ffmpeg's pixels -
+but nothing assembles them into a `Player`.  The missing assembly, in order:
+
+1. `sniff_media()` already reports `MP4`; `createPlayer()` needs a branch next to
+   the MP3 one that opens `nj_mp4`, asks `nj_avcodec_find_video()` for a decoder
+   and stores `{nj_mp4, decoder}` plus an RGB565 frame buffer on the Player
+   (`pVid`/`pVbuf`, with `pVw`/`pVh`);
+2. `nj_media_frame()` needs a video branch: one sample per emulated frame into
+   the frame buffer, `pPushed`/`pTime` advanced from the sample's timestamp, and
+   `endOfMedia` when `nj_mp4_next()` runs out;
+3. `VideoControl.getSnapshot()` then turns the frame buffer into an `Image`
+   (and `initDisplayMode` may stay minimal - most titles only snapshot).
+
+Until step 1 lands, createPlayer() says so instead of claiming there is no MPEG
+audio decoder in a file that contains video and no audio at all.
