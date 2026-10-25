@@ -43,6 +43,8 @@ def main():
     ap.add_argument("--count", type=int, default=10)
     ap.add_argument("--frames", type=int, default=900)
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--keys", default=None,
+                    help="key script (default: <rows>/keys.txt)")
     args = ap.parse_args()
 
     rows = [json.loads(l) for l in open(os.path.join(args.rows, "rows.jsonl"))]
@@ -65,7 +67,7 @@ def main():
                  "--size", "240x320", "--heap", "16", "--fps", "30",
                  "--run-frames", str(args.frames), "--dump-frames", out,
                  "--dump-every", str(args.frames // 3),
-                 "--keys", "@" + os.path.join(args.rows, "keys.txt"),
+                 "--keys", "@" + (args.keys or os.path.join(args.rows, "keys.txt")),
                  "--stats", path],
                 capture_output=True, timeout=180)
             digests = set()

@@ -179,3 +179,14 @@ which is why a row can be `ok`, paint 900 identical frames and still be healthy.
 a candidate only after either a per-title script or a reference comparison; otherwise the finding is
 about our input recipe, not the runtime.
 
+### A generic soft-key clause does not unfreeze anything (round 17)
+
+`check_corpus_motion.py` now takes `--keys` so a run can be repeated with a different script.  The
+same 12 titles, same seed, with a clause that presses a soft key at frames 8/12/160/400/700, gave the
+identical split: **7 titles change frames, 5 paint one frame in 900**.
+
+So blanket scripting is not the answer to a frozen row.  Those five sit in menus whose buttons are
+reached by pointer taps on title-specific coordinates (or they wait on a timer longer than the run).
+Turning a frozen candidate into evidence needs either a per-title script or a reference comparison;
+this is now the documented rule, and the tool can take that script without being edited.
+
