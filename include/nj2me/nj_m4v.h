@@ -143,6 +143,11 @@ int nj_m4v_block_grid(int blk, int mbx, int mby, int *gx, int *gy);
  * the block whose grid corner is (bx, by). */
 void nj_m4v_dc_avail(int bx, int by, int *has_a, int *has_b, int *has_c);
 
+/* Intra DC coefficient in the transform domain: the DC scaler is the
+ * MPEG-4 quantiser step for the DC term, matching the H.263 path which
+ * multiplies intra DC by 8 before the same inverse transform. */
+int nj_m4v_dc_coef(int level, int scale);
+
 /* Converts a 4:2:0 picture with the BT.601 limited-range matrix into RGB565.
  * Strides are in bytes; out must hold w * h * 2. */
 void nj_m4v_yuv420_to_rgb565(const nj_u1 *yp, int ys, const nj_u1 *up, int us,

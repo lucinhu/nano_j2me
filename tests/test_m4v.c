@@ -613,6 +613,10 @@ int main(void)
         ok(o == 0xFFFFu, "Y=235 U=V=128 converts to white");
     }
 
+    ok(nj_m4v_dc_coef(2, nj_m4v_dc_scale(1, 1)) == 16 &&
+       nj_m4v_dc_coef(2, nj_m4v_dc_scale(5, 1)) == 2 * nj_m4v_dc_scale(5, 1),
+       "the DC coefficient is the level times the DC scaler");
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

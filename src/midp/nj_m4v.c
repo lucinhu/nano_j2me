@@ -861,6 +861,14 @@ int nj_m4v_dc_predict_q(int a, int b, int c, int scale, int *dir)
     return (pred + scale / 2) / scale;
 }
 
+int nj_m4v_dc_coef(int level, int scale)
+{
+    if (scale <= 0) {
+        return level;
+    }
+    return level * scale;
+}
+
 int nj_m4v_dc_level(int delta, int pred_dequant, int scale, int *stored)
 {
     int pred_q, ret, val;
