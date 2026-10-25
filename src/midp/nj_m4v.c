@@ -11,6 +11,7 @@
  * self-consistent, so only a real decoder configuration can tell.
  */
 #include "nj2me/nj_m4v.h"
+#include "nj_vlc_intra.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include "nj2me/nj_m4v_tables.h"
@@ -1188,6 +1189,33 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
             }
         }
     }
+    return 0;
+}
+
+
+int nj_m4v_mb_intra_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *cbp, int *dq)
+{
+    int mcbpc = 0, cbpy = 0;
+
+    for (;;) {
+        if (nj_vlc_lookup(b, n, pos, nj_vlc_intra_mcbpc, 9, &mcbpc) != 0) {
+            return -1;
+        }
+        if (mcbpc != 8) {
+            break;
+        }
+    }
+    if (dq != NULL) *dq = (mcbpc & 4) != 0;
+    if ((mcbpc & 4) != 0) {
+        if (*pos + 2u > n) {
+            return -1;
+        }
+        *pos += 2u;
+    }
+    if (nj_vlc_lookup(b, n, pos, nj_vlc_cbpy, 16, &cbpy) != 0) {
+        return -1;
+    }
+    if (cbp != NULL) *cbp = ((mcbpc & 3) | (cbpy << 2)) & 0x3f;
     return 0;
 }
 

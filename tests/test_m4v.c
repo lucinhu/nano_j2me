@@ -628,6 +628,18 @@ int main(void)
        nj_m4v_dc_coef(2, nj_m4v_dc_scale(5, 1)) == 2 * nj_m4v_dc_scale(5, 1),
        "the DC coefficient is the level times the DC scaler");
 
+    {
+        /* intra MCBPC symbol 0 is "1", CBPY symbol 15 is "11" */
+        static const nj_u1 hdr[1] = { 0xF0u };
+        nj_u4 pos = 0;
+        int cbp = -1, dq = -1;
+
+        ok(nj_m4v_mb_intra_header(hdr, 8u, &pos, &cbp, &dq) == 0,
+           "an intra macroblock header decodes");
+        ok(cbp == 60 && dq == 0 && pos == 3u,
+           "the header yields cbp 60, no dquant, three bits");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

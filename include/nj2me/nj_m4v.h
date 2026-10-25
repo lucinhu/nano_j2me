@@ -179,6 +179,9 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
 void nj_m4v_yuv420_to_rgb565(const nj_u1 *yp, int ys, const nj_u1 *up, int us,
                              const nj_u1 *vp, int vs, int w, int h, nj_u1 *out);
 
+/* Read an intra macroblock header (intra MCBPC, optional dquant, CBPY). */
+int nj_m4v_mb_intra_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *cbp, int *dq);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 
