@@ -1391,7 +1391,7 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
             return -1;
         }
         delta = (int)((b[at >> 3] >> (6u - (at & 7u))) & 3u);
-        *qscale += (delta == 0) ? -1 : ((delta == 1) ? -2 : delta);
+        *qscale += (delta == 0) ? -1 : (delta == 1) ? -2 : (delta == 2) ? 1 : 2;
         if (*qscale < 1) {
             *qscale = 1;
         } else if (*qscale > 31) {
