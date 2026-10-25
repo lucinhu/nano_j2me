@@ -51,6 +51,9 @@
  * must see the truth.
  */
 #include "nj_midp.h"
+#if NJ_ENABLE_VIDEO
+#include "nj_mp4.h"
+#endif
 #include "nj_midi.h"
 #if NJ_ENABLE_AMR
 #  include "nj_amr.h"
@@ -147,6 +150,17 @@ typedef struct media_stream_state {
     nj_u4 in_off;                       /* next unread byte of the source     */
 #endif
 } media_stream_state;
+
+#if NJ_ENABLE_VIDEO
+/* What a video Player keeps in its holder: the sample iterator and decoder. */
+typedef struct media_video_state {
+    nj_mp4 m;                           /* container position                 */
+    nj_av_dec *vdec;                    /* provider decoder                   */
+    const nj_av_video_ops *vops;        /* the provider it came from          */
+} media_video_state;
+#define NJ_MEDIA_VIDEO_BYTES ((nj_u4)sizeof(media_video_state))
+#endif
+
 #define NJ_MEDIA_STREAM_BYTES  ((nj_u4)sizeof(media_stream_state) + NJ_MEDIA_STREAM_FRAMES * 2u * 2u)
 #define F_P_RATE     "pRate"       /* I */
 #define F_P_CHAN     "pChans"      /* I */
@@ -154,6 +168,10 @@ typedef struct media_stream_state {
 #define F_P_PUSHED   "pPushed"     /* I frames handed to the device */
 #define F_P_SRC      "pSrc"        /* [B the file a streamed codec reads  */
 #define F_P_AVK      "pAvK"        /* Z a nj_avcodec renders this stream  */
+#define F_P_VHOLD    "pVid"        /* [B demuxer + video decoder for a movie */
+#define F_P_VBUF     "pVbuf"       /* [B RGB565 frame the decoder writes     */
+#define F_P_VW       "pVw"         /* I frame width                          */
+#define F_P_VH       "pVh"         /* I frame height                         */
 #define F_P_OPEN     "pOpen"       /* Z device open for this player */
 #define F_P_LISTEN   "pListen"     /* Ljava/util/Vector; */
 #define F_P_MASTER   "pTimeBase"   /* Ljavax/microedition/media/TimeBase; master clock or null */
@@ -2097,6 +2115,75 @@ NJFN(media_createPlayer_stream)
             }
         }
 #endif /* NJ_ENABLE_MP3 */
+#if NJ_ENABLE_VIDEO
+        /*
+         * A 3GP/MP4 movie: nj_mp4 finds the video track and hands the elementary
+         * stream to whatever video provider is installed, and the Player keeps
+         * both plus one RGB565 frame.  The pump below decodes into that frame
+         * one sample per emulated frame; nothing allocates while a title paints.
+         */
+        if (strcmp(what, "MP4") == 0) {
+            nj_mp4 m;
+
+            if (nj_mp4_open(&m, barray_bytes(data), barray_len(data)) == NJ_MP4_OK &&
+                m.width > 0u && m.height > 0u && m.sample_count > 0u) {
+                const nj_av_video_ops *vops = nj_avcodec_find_video(
+                    vm, barray_bytes(data), barray_len(data));
+
+                if (vops != NULL) {
+                    nj_av_mem memd;
+                    nj_av_info info;
+                    const char *err = NULL;
+                    nj_av_dec *dec;
+
+                    memd.ud = vm;
+                    memd.alloc = av_alloc;
+                    memd.free = av_free;
+                    memset(&info, 0, sizeof(info));
+                    dec = vops->open(barray_bytes(data), barray_len(data), &memd,
+                                     &info, &err);
+                    if (dec != NULL) {
+                        nj_u4 w = info.width > 0u ? info.width : m.width;
+                        nj_u4 h = info.height > 0u ? info.height : m.height;
+                        nj_ref holder = nj_byte_array_new(vm, NJ_MEDIA_VIDEO_BYTES);
+                        nj_ref vbuf = nj_byte_array_new(vm, w * h * 2u);
+
+                        if (holder != NULL && vbuf != NULL) {
+                            media_video_state st;
+
+                            memset(&st, 0, sizeof(st));
+                            st.m = m;
+                            st.vdec = dec;
+                            st.vops = vops;
+                            memcpy(holder->u.bytes, &st, sizeof(st));
+                            w_r(vm, p, F_P_DATA, "[B", holder);
+                            w_r(vm, p, F_P_SRC, "[B", data);
+                            w_r(vm, p, F_P_VBUF, "[B", vbuf);
+                            w_z(vm, p, F_P_STREAM, 1);
+                            w_i(vm, p, F_P_KIND, 2);
+                            w_i(vm, p, F_P_VW, (nj_s4)w);
+                            w_i(vm, p, F_P_VH, (nj_s4)h);
+                            w_i(vm, p, F_P_RATE, (nj_s4)m.fps);
+                            w_i(vm, p, F_P_FRAMES, (nj_s4)m.sample_count);
+                            w_j(vm, p, F_P_DURATION,
+                                (m.timescale > 0u && m.duration > 0u)
+                                    ? (nj_s8)m.duration * 1000000LL /
+                                          (nj_s8)m.timescale
+                                    : -1);
+                            player_set_type(vm, p, "video/3gpp");
+                            nj_logf(vm, 3, "media: %s movie %ux%u, %u samples",
+                                    vops->name, (unsigned)w, (unsigned)h,
+                                    (unsigned)m.sample_count);
+                            nj_root_release(vm, mark);
+                            ret->r = p;
+                            return NJ_OK;
+                        }
+                        vops->close(dec);
+                    }
+                }
+            }
+        }
+#endif /* NJ_ENABLE_VIDEO */
 #if NJ_ENABLE_AMR
         /*
          * AMR narrowband: the runtime's own decoder, and the last thing tried
@@ -3707,6 +3794,10 @@ static const nj_builtin_field player_fields[] = {
     FLD(F_P_PUSHED,   "I", 0),
     FLD(F_P_SRC,      "[B", 0),
     FLD(F_P_AVK,      "Z", 0),
+    FLD(F_P_VHOLD,    "[B", 0),
+    FLD(F_P_VBUF,     "[B", 0),
+    FLD(F_P_VW,       "I", 0),
+    FLD(F_P_VH,       "I", 0),
     FLD(F_P_OPEN,     "Z", 0),
     FLD(F_P_LISTEN,   "Ljava/util/Vector;", 0),
     FLD(F_P_MIDI,     "[B", 0),

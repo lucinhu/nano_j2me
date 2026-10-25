@@ -206,8 +206,8 @@ it and so the registry is uniform; switching the Player over is the next step.
 | --- | --- | --- | --- | --- |
 | MP3 | `nj_av_audio_mp3` | `audio/mpeg`, streamed through a holder | pulls PCM per frame | `tests/test_lib.c` (real samples reach the port), `tests/test_avcodec.c` (a port's decoder wins) |
 | AMR-NB | `nj_av_audio_amr` | `audio/amr` through the provider (an installed decoder wins); the `samr` track inside MP4 keeps the direct path | one-shot PCM | `tests/test_amr.c` (byte-identical to `nj_amr_decode()`), `tests/test_lib.c` (a port-installed decoder produces the Player's samples) |
-| H.263 | `nj_av_video_h263` | not yet: `video/3gpp` is still refused | - | decoder verified against ffmpeg in `tests/test_h263.c` |
-| MP4/3GP | `nj_mp4` demultiplexer | not yet | - | sample iterator API tested in `tests/test_h263.c` |
+| H.263 | `nj_av_video_h263` | `video/3gpp`: Player is built with the demuxer, decoder and one RGB565 frame | **next round**: decode a sample per emulated frame | decoder verified against ffmpeg in `tests/test_h263.c`; Player creation checked on a real 176x144 clip (kind=2, 10 samples) |
+| MP4/3GP | `nj_mp4` demultiplexer | `video/3gpp` opens the movie track | - | sample iterator API tested in `tests/test_h263.c` |
 
 Trim costs, one switch at a time against a matched base (hosted CLI `.text`,
 Release, tests off): AMR 49,536 B, MP3 33,600 B, VIDEO 31,552 B; see
@@ -233,3 +233,15 @@ but nothing assembles them into a `Player`.  The missing assembly, in order:
 
 Until step 1 lands, createPlayer() says so instead of claiming there is no MPEG
 audio decoder in a file that contains video and no audio at all.
+
+### Video: what exists after round 10
+
+`Manager.createPlayer()` now builds a video Player for a 3GP/MP4 movie: `nj_mp4`
+selects the video track, `nj_avcodec_find_video()` picks the provider (so a
+port's hardware H.263 decoder wins), and the Player carries the demuxer, the
+decoder, the geometry and one RGB565 frame buffer.  A real 176x144 clip builds a
+Player reporting `kind=2`, 176x144 and 10 samples; the frame buffer is allocated
+once, at creation, so the pump will not allocate while a title paints.
+
+Still to do, in this order: decode one sample per emulated frame in
+`nj_media_frame()`, then `VideoControl.getSnapshot()`/`initDisplayMode()`.
