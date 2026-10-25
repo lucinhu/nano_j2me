@@ -1086,3 +1086,13 @@ already wrote, and the three `AffineTrans` constructors call the `set()`
 helpers added in round 7, so this round adds no fields, no allocations and no
 writable statics; only code size grows.
 
+## Vendor vibration costs text, not state (round 10)
+
+`com.samsung.util.Vibration` and `com.motorola.multimedia.Vibrator` add no
+fields of their own and keep no state: a headless port cannot buzz, so the
+natives only validate their arguments.  The Motorola class carries eight
+`static final int` constants, which are initialised into the class object the
+same way the Nokia `Sound` constants are, and the classes themselves are
+`nj_builtin_class` entries in `.rodata`.  `.data`/`.bss` and the per-VM
+footprint are unchanged.
+

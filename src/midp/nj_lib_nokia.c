@@ -35,6 +35,14 @@
 #define NJ_C_FSELECT   "com/nokia/mid/ui/FileSelect"
 #define NJ_C_FSDETAIL  "com/nokia/mid/ui/FileSelectDetail"
 #define NJ_C_SOUND     "com/nokia/mid/sound/Sound"
+/*
+ * Vendor vibration APIs.  They live in this module because it is already the
+ * home of the handset-specific classes, and because a separate translation
+ * unit would have to be registered in three build systems for two tiny
+ * classes.  See the Samsung and Motorola sections below.
+ */
+#define NJ_C_SVIB      "com/samsung/util/Vibration"
+#define NJ_C_MVIB      "com/motorola/multimedia/Vibrator"
 #define NJ_C_SLISTEN   "com/nokia/mid/sound/SoundListener"
 
 /*
@@ -112,6 +120,16 @@ nj_status nj_nokia_late_init(nj_vm *vm)
     nokia_const_int(vm, NJ_C_SOUND, "SOUND_STOPPED", 1);
     nokia_const_int(vm, NJ_C_SOUND, "SOUND_PLAYING", 0);
     nokia_const_int(vm, NJ_C_SOUND, "SOUND_UNPLAYABLE", 2);
+
+    /* Motorola Vibrator tones, from its own class file. */
+    nokia_const_int(vm, NJ_C_MVIB, "VIBRATE_SILENT", 0);
+    nokia_const_int(vm, NJ_C_MVIB, "VIBRATE_2SHORT", 1);
+    nokia_const_int(vm, NJ_C_MVIB, "VIBRATE_LONG", 2);
+    nokia_const_int(vm, NJ_C_MVIB, "VIBRATE_PULSE", 3);
+    nokia_const_int(vm, NJ_C_MVIB, "VIBRATE_SHORT", 4);
+    nokia_const_int(vm, NJ_C_MVIB, "VIBRATE_SHORT_LONG", 5);
+    nokia_const_int(vm, NJ_C_MVIB, "MIN_PAUSE_TIME", 2000);
+    nokia_const_int(vm, NJ_C_MVIB, "MAX_VIBRATE_TIME", 0x7FFFFFFF);
     nokia_const_int(vm, NJ_C_SOUND, "SOUND_UNINITIALIZED", 3);
     /*
      * The rest of Nokia's Sound constant block, values from the same
@@ -720,6 +738,127 @@ NJFN(nokia_dc_stopVibra)
     return NJ_OK;
 }
 
+/* ------------------------------------------------------------------ */
+/* Vendor vibration APIs                                              */
+/*                                                                    */
+/* Samsung's Vibration and Motorola's Vibrator are handset extras that */
+/* titles probe with Class.forName() before using.  Neither can buzz a */
+/* headless port, so the implementations validate their arguments the  */
+/* way the reference does and otherwise do nothing: the title gets the  */
+/* methods it probed for, and no state is kept (so RAM does not grow).  */
+/* ------------------------------------------------------------------ */
+static nj_status svib_is_supported(nj_vm *vm, nj_thread *th,
+                                   nj_value *args, nj_value *ret)
+{
+    (void)vm; (void)th; (void)args;
+    ret->i = 1;
+    return NJ_OK;
+}
+
+static nj_status svib_start(nj_vm *vm, nj_thread *th, nj_value *args,
+                            nj_value *ret)
+{
+    nj_s4 duration = NJ_ARG_INT(args, 0);
+    nj_s4 strength = NJ_ARG_INT(args, 1);
+
+    (void)th; (void)ret;
+    /* Reference: duration may be zero, strength is a 1..5 scale. */
+    if (duration < 0 || strength < 1 || strength > 5) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "invalid vibration arguments");
+    }
+    return NJ_OK;
+}
+
+static nj_status svib_stop(nj_vm *vm, nj_thread *th, nj_value *args,
+                           nj_value *ret)
+{
+    (void)vm; (void)th; (void)args; (void)ret;
+    return NJ_OK;
+}
+
+static nj_status mvib_set_tone(nj_vm *vm, nj_thread *th, nj_value *args,
+                               nj_value *ret)
+{
+    nj_s4 tone = NJ_ARG_INT(args, 0);
+
+    (void)th; (void)ret;
+    if (tone < 0 || tone > 5) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "unknown vibration tone");
+    }
+    return NJ_OK;
+}
+
+static nj_status mvib_periodic_one(nj_vm *vm, nj_thread *th, nj_value *args,
+                                   nj_value *ret)
+{
+    (void)vm; (void)th; (void)ret;
+    if (NJ_ARG_INT(args, 0) < 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "negative vibration time");
+    }
+    return NJ_OK;
+}
+
+static nj_status mvib_periodic_two(nj_vm *vm, nj_thread *th, nj_value *args,
+                                   nj_value *ret)
+{
+    (void)th; (void)ret;
+    if (NJ_ARG_INT(args, 0) < 0 || NJ_ARG_INT(args, 1) < 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "negative vibration time");
+    }
+    return NJ_OK;
+}
+
+static nj_status mvib_setup(nj_vm *vm, nj_thread *th, nj_value *args,
+                            nj_value *ret)
+{
+    (void)th; (void)ret;
+    if (NJ_ARG_INT(args, 0) < 0 || NJ_ARG_INT(args, 1) < 0 ||
+        NJ_ARG_INT(args, 2) < 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "negative vibration time");
+    }
+    return NJ_OK;
+}
+
+static nj_status mvib_noop(nj_vm *vm, nj_thread *th, nj_value *args,
+                           nj_value *ret)
+{
+    (void)vm; (void)th; (void)args; (void)ret;
+    return NJ_OK;
+}
+
+static const nj_builtin_field mvib_fields[] = {
+    { "MAX_VIBRATE_TIME", "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "MIN_PAUSE_TIME",   "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "VIBRATE_2SHORT",   "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "VIBRATE_LONG",     "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "VIBRATE_PULSE",    "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "VIBRATE_SHORT",    "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "VIBRATE_SHORT_LONG","I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "VIBRATE_SILENT",   "I", NJ_ACC_PUBLIC | NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+
+static const nj_builtin_method svib_methods[] = {
+    M("isSupported", "()Z",   NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("start",       "(II)V", NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("stop",        "()V",   NJ_ACC_PUBLIC | NJ_ACC_STATIC)
+};
+
+static const nj_builtin_method mvib_methods[] = {
+    M("run",                    "()V",    NJ_ACC_PUBLIC),
+    M("setVibrateTone",         "(I)V",   NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("vibrateFor",             "(I)V",   NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("vibratePeriodically",    "(I)V",   NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("vibratePeriodically",    "(II)V",  NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("vibratorOff",            "()V",    NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("vibratorOn",             "()V",    NJ_ACC_PUBLIC | NJ_ACC_STATIC),
+    M("setupVibration",         "(III)V", NJ_ACC_PUBLIC | NJ_ACC_STATIC)
+};
+
 const nj_builtin_class nj_lib_nokia_classes[] = {
     { NJ_C_VKEYBOARD, "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, vkeyboard_methods,
@@ -728,6 +867,15 @@ const nj_builtin_class nj_lib_nokia_classes[] = {
       NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
       NULL, 0u, mplisten_methods,
       (nj_u2)(sizeof(mplisten_methods) / sizeof(mplisten_methods[0])) },
+    { NJ_C_SVIB, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_FINAL,
+      NULL, 0u, svib_methods,
+      (nj_u2)(sizeof(svib_methods) / sizeof(svib_methods[0])) },
+    { NJ_C_MVIB, "java/util/TimerTask",
+      NJ_ACC_PUBLIC,
+      mvib_fields,
+      (nj_u2)(sizeof(mvib_fields) / sizeof(mvib_fields[0])),
+      mvib_methods,
+      (nj_u2)(sizeof(mvib_methods) / sizeof(mvib_methods[0])) },
     { NJ_C_MPTOUCH, "java/lang/Object", NJ_ACC_PUBLIC,
       NULL, 0u, mptouch_methods,
       (nj_u2)(sizeof(mptouch_methods) / sizeof(mptouch_methods[0])) },
@@ -773,6 +921,17 @@ const int nj_lib_nokia_class_count =
     (int)(sizeof(nj_lib_nokia_classes) / sizeof(nj_lib_nokia_classes[0])) - 1;
 
 const nj_native_entry nj_lib_nokia_table[] = {
+    { NJ_C_SVIB, "isSupported", "()Z",   svib_is_supported },
+    { NJ_C_SVIB, "start",       "(II)V", svib_start },
+    { NJ_C_SVIB, "stop",        "()V",   svib_stop },
+    { NJ_C_MVIB, "run",                 "()V",    mvib_noop },
+    { NJ_C_MVIB, "setVibrateTone",      "(I)V",   mvib_set_tone },
+    { NJ_C_MVIB, "vibrateFor",          "(I)V",   mvib_periodic_one },
+    { NJ_C_MVIB, "vibratePeriodically", "(I)V",   mvib_periodic_one },
+    { NJ_C_MVIB, "vibratePeriodically", "(II)V",  mvib_periodic_two },
+    { NJ_C_MVIB, "vibratorOff",         "()V",    mvib_noop },
+    { NJ_C_MVIB, "vibratorOn",          "()V",    mvib_noop },
+    { NJ_C_MVIB, "setupVibration",      "(III)V", mvib_setup },
     { NJ_C_DEVCTL, "setLights",      "(II)V",  nokia_dc_ok },
     { NJ_C_DEVCTL, "setLights",      "(III)V", nokia_dc_ok },
     { NJ_C_DEVCTL, "flashLights",    "(I)V",   nokia_dc_ok },

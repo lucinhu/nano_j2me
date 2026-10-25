@@ -4177,6 +4177,32 @@ triangles** rendered, and the 961-row corpus has **no row that reports a
 `NoSuchMethodError` any more** (verdict counts unchanged: 957 ok / 2 no-frame /
 1 title-exit / 1 bad-jar).
 
+### The vendor vibration APIs titles probe for (round 10)
+
+Two of the classes in the capability-probe list are easy to provide and now
+exist: `com.samsung.util.Vibration` and `com.motorola.multimedia.Vibrator`.
+The sources of truth are the reference classes
+(`.local-tools/freej2me-plus/src/com/samsung/util/Vibration.java` and
+`.../com/motorola/multimedia/Vibrator.java`); the member sets match them:
+
+| class | members |
+| --- | --- |
+| `com.samsung.util.Vibration` | `isSupported()Z`, `start(II)V`, `stop()V` |
+| `com.motorola.multimedia.Vibrator` | `run()V`, `setVibrateTone(I)V`, `vibrateFor(I)V`, `vibratePeriodically(I)V`, `vibratePeriodically(II)V`, `vibratorOn()V`, `vibratorOff()V`, `setupVibration(III)V`, plus the seven `VIBRATE_*`/`MIN_PAUSE_TIME`/`MAX_VIBRATE_TIME` constants |
+
+No headless port has a motor, so nothing is stored and nothing buzzes: the
+implementations only validate arguments (Samsung: duration >= 0 and strength in
+1..5; Motorola: tone 0..5, time arguments >= 0) and return.  RAM therefore does
+not change; the classes exist so the capability probe succeeds instead of
+falling back.
+
+Evidence: 愤怒的小鸟-高清版_2353 and Need for Speed - Hot Pursuit Bonus Edition
+used to log `ClassNotFoundException: com.samsung.util.Vibration` /
+`com.motorola.multimedia.Vibrator` in their probe; those messages are gone and
+both titles still run their 300-frame budget (300/150 paints and 300/300
+paints).  `ctest` 111/111, `bench.jar` and the no-writable-statics check are
+unchanged.
+
 ### The last two exception piles, read title by title (round 9)
 
 After the fix rounds, two piles were left in the histogram: 39 rows with an
