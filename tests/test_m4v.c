@@ -372,6 +372,22 @@ int main(void)
         ok(rc == 0 && coef[0] == 40, "an intra block with an empty AC keeps its predicted DC");
     }
 
+    {
+        nj_s4 coef[64];
+        int out[64];
+        int i, bad = 0;
+
+        for (i = 0; i < 64; i++) coef[i] = 0;
+        coef[0] = 64;
+        nj_m4v_idct(coef, out);
+        for (i = 0; i < 64; i++) if (out[i] != 8) bad++;
+        ok(bad == 0, "a DC-only block of 64 transforms to flat 8s");
+        coef[0] = 0;
+        nj_m4v_idct(coef, out);
+        for (i = 0; i < 64; i++) if (out[i] != 0) bad++;
+        ok(bad == 0, "an empty block transforms to zeros");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

@@ -83,6 +83,9 @@ int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k);
 int nj_m4v_decode_intra_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                               nj_s4 *coef, int luma, int dc_pred);
 
+/* The inverse transform shared with the H.263 decoder, for one 8x8 block. */
+void nj_m4v_idct(const nj_s4 *coef, int *out);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 

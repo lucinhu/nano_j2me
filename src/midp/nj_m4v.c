@@ -12,6 +12,7 @@
  */
 #include "nj2me/nj_m4v.h"
 #include "nj2me/nj_m4v_tables.h"
+#include "nj_idct.h"
 
 typedef struct m4v_bits {
     const nj_u1 *b;
@@ -477,6 +478,11 @@ int nj_m4v_decode_intra_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef,
         return -3;
     }
     return k < 0 ? -1 : 0;
+}
+
+void nj_m4v_idct(const nj_s4 *coef, int *out)
+{
+    nj_idct8x8(coef, out);
 }
 
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)

@@ -36,6 +36,7 @@
 #include "nj2me/nj.h"
 #include "nj2me/nj_avcodec.h"
 #include "nj_mp4.h"
+#include "nj_idct.h"
 
 #include <string.h>
 
@@ -381,8 +382,7 @@ static const h263_vlc h263_tcoef_vlc[103] = {
 static const nj_u1 h263_zigzag[64] = {
 0,1,8,16,9,2,3,10,17,24,32,25,18,11,4,5,12,19,26,33,40,48,41,34,27,20,13,6,7,14,21,28,35,42,49,56,57,50,43,36,29,22,15,23,30,37,44,51,58,59,52,45,38,31,39,46,53,60,61,54,47,55,62,63 };
 
-static const nj_s2 h263_idct_basis[64] = {
-1448,1448,1448,1448,1448,1448,1448,1448,2009,1703,1138,400,-400,-1138,-1703,-2009,1892,784,-784,-1892,-1892,-784,784,1892,1703,-400,-2009,-1138,1138,2009,400,-1703,1448,-1448,-1448,1448,1448,-1448,-1448,1448,1138,-2009,400,1703,-1703,-400,2009,-1138,784,-1892,1892,-784,-784,1892,-1892,784,400,-1138,1703,-2009,2009,-1703,1138,-400 };
+
 
 static const nj_u2 h263_tcoef_rl[102] = {
 1,2,3,4,5,6,7,8,9,10,11,12,257,258,259,260,261,262,513,514,515,516,769,770,771,1025,1026,1027,1281,1282,1283,1537,1538,1539,1793,1794,2049,2050,2305,2306,2561,2562,2817,3073,3329,3585,3841,4097,4353,4609,4865,5121,5377,5633,5889,6145,6401,6657,1,2,3,257,258,513,769,1025,1281,1537,1793,2049,2305,2561,2817,3073,3329,3585,3841,4097,4353,4609,4865,5121,5377,5633,5889,6145,6401,6657,6913,7169,7425,7681,7937,8193,8449,8705,8961,9217,9473,9729,9985,10241 };
@@ -518,33 +518,6 @@ static void h263_dequant_block(nj_s4 *blk, int intra, int qscale)
     }
 }
 
-/* Separable integer IDCT, 12-bit basis (1/sqrt(2) folded into B[0][*]).
- * Two rounded passes; the error against an exact IDCT is at most about one
- * level.  The output is in pixel domain: no +128 offset (see idctdsp.c). */
-static void h263_idct(const nj_s4 *coef, int *out)
-{
-    nj_s4 tmp[64];
-    int u, v, x, y;
-
-    for (v = 0; v < 8; v++) {
-        for (x = 0; x < 8; x++) {
-            nj_s8 sum = 0;
-            for (u = 0; u < 8; u++) {
-                sum += (nj_s8)coef[v * 8 + u] * h263_idct_basis[u * 8 + x];
-            }
-            tmp[v * 8 + x] = (nj_s4)((sum + 2048) >> 12);
-        }
-    }
-    for (y = 0; y < 8; y++) {
-        for (x = 0; x < 8; x++) {
-            nj_s8 sum = 0;
-            for (v = 0; v < 8; v++) {
-                sum += (nj_s8)tmp[v * 8 + x] * h263_idct_basis[v * 8 + y];
-            }
-            out[y * 8 + x] = (int)((sum + 2048) >> 12);
-        }
-    }
-}
 
 static nj_u1 h263_clamp_u8(int v)
 {
@@ -910,7 +883,7 @@ for (i = 0; i < 6; i++) {
             return NJ_AV_ERR_CORRUPT;
         }
         h263_dequant_block(blk, intra, *qscale);
-        h263_idct(blk, pix);
+        nj_idct8x8(blk, pix);
 
         if (i < 4) {
             nj_u1 *dst = d->cur
