@@ -1074,7 +1074,7 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
 {
     nj_u4 mbw = 0, mbh = 0, cw = 0, ch = 0;
     nj_s2 *gl, *gc, *gcr;
-    int    glw, gcw, lscale, cscale, blk, i, x, y;
+    int    glw, gcw, lscale, cscale, i;
     nj_u4  mbx, mby;
 
     if (b == NULL || pos == NULL || vol == NULL || vop == NULL || grids == NULL ||
