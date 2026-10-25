@@ -274,6 +274,26 @@ int main(void)
            "the scan starts down the first column and ends at the last position");
     }
 
+    {
+        nj_s4 coef[64];
+        int i, bad = 0;
+
+        for (i = 0; i < 64; i++) {
+            coef[i] = 0;
+        }
+        nj_m4v_coef_store(coef, 0, 7);       /* DC lands at natural 0 */
+        nj_m4v_coef_store(coef, 2, -3);      /* scan 2 is natural 8 */
+        nj_m4v_coef_store(coef, 63, 5);      /* last scan position, natural 63 */
+        nj_m4v_coef_store(coef, 64, 1);      /* out of range: ignored */
+        bad += coef[0] != 7 || coef[8] != -3 || coef[63] != 5;
+        for (i = 1; i < 64; i++) {
+            if (i != 8 && i != 63 && coef[i] != 0) {
+                bad++;
+            }
+        }
+        ok(bad == 0, "coefficients land at their natural positions");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

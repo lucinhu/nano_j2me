@@ -394,6 +394,16 @@ int nj_m4v_scan_index(int k)
     return (int)nj_m4v_zigzag[k];
 }
 
+
+void nj_m4v_coef_store(nj_s4 *coef, int k, int level)
+{
+    int at = nj_m4v_scan_index(k);
+
+    if (coef != NULL && at >= 0) {
+        coef[at] = (nj_s4)level;
+    }
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;

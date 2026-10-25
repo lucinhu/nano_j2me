@@ -66,6 +66,9 @@ int nj_m4v_ac_sym(int sym, int *run, int *level, int *last);
 /* Natural index of the k-th coefficient in the intra scan (14496-2 7.4.3). */
 int nj_m4v_scan_index(int k);
 
+/* Stores one coefficient at scan position k; the DC term is position 0. */
+void nj_m4v_coef_store(nj_s4 *coef, int k, int level);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 
