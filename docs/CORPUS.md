@@ -164,3 +164,18 @@ own busy-wait for the soft-key answer, and the shared sweep script never presses
 it.  Nothing to fix in the runtime; the row is `ok` and the frozen frame is the
 title waiting for input, exactly as the previous round's rule says.
 
+### Frozen frames are mostly prompts (round 16)
+
+Third motion sample, plus a follow-up that answered the prompt:
+
+| title | shared script | script that answers the sound prompt |
+| --- | --- | --- |
+| 细胞分裂4混沌法则中文版_11671 | 600 frames, gfx 15,021, 256.7M bytecodes, one frame | 900 frames, **gfx 57,443**, 411k bytecodes |
+| slimevolley.jar | 600 frames, 15,038 bytecodes | exits after 40 frames: the soft key it gets is "quit" on that menu |
+
+So the title was not stuck: it was holding a modal "turn sound on?" prompt and burning its own poll
+loop until someone answered.  The shared corpus script never presses a soft key at the right moment,
+which is why a row can be `ok`, paint 900 identical frames and still be healthy.  A frozen row becomes
+a candidate only after either a per-title script or a reference comparison; otherwise the finding is
+about our input recipe, not the runtime.
+
