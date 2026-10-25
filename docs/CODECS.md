@@ -528,3 +528,28 @@ bitstream escape is decoded as "run 0, level 1" and a genuine 0/1 coefficient is
 mistaken for an escape.  The AC round-trip tests did not catch this because
 both sides used the same table.  Fix: build the LUT from all 103 code words,
 mark the escape with a sentinel (e.g. 0xFFFFFE), and return -2 only for it.
+
+### What an I-VOP still needs (round 94)
+
+The entropy layer is complete and tested (`test_m4v`, 62 checks): AC symbols,
+all three escape forms, DC size/delta/prediction arithmetic, the DC scaler
+tables, scan order, block geometry, the 4:2:0 colour matrix.  Turning those
+into a picture needs three more steps, in this order:
+
+1. **DC dequantisation into the coefficient domain.**  `nj_m4v_decode_intra_block()`
+   currently stores `dc_pred + delta` at `coef[0]`; MPEG-4 scales the intra DC
+   term by the DC scaler before the transform, so the frame driver must multiply
+   by `nj_m4v_dc_scale(qscale, luma)` (tables already in the tree) rather than
+   leaning on the AC path's `qmul/qadd`.
+2. **Grid-backed prediction across the macroblock raster.**  `nj_m4v_dc_block()`
+   already reads left/top/top-left from a picture-wide grid, applies
+   `nj_m4v_dc_predict_q()` and writes back `level * scale`; the driver has to
+   allocate three such grids (two luma 8x8 grids and one each for Cb/Cr) and walk
+   `nj_m4v_frame_macroblocks()` in raster order.
+3. **Wiring.**  after planes exist, `nj_m4v_yuv420_to_rgb565()` produces the
+   frame; registering it as `NJ_AV_VIDEO_MPEG4` reuses the demuxer/Player/pump
+   path that already works for the 3GP container (rounds 12-13), and the
+   acceptance is the first frame of `1942.3gp` against ffmpeg's own decode.
+
+Nothing here is wired yet: `createPlayer` still refuses `mp4v` by name, which is
+the honest answer until the planes exist.
