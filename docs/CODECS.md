@@ -437,3 +437,17 @@ one leans on it:
 
 `nj_m4v_decode_intra_block()` already returns distinct codes for "corrupt" (-1)
 and "escape not decoded yet" (-3), so the wiring cannot confuse the two.
+
+### M4V building blocks after round 43
+
+Everything below is in `src/midp/nj_m4v.c` and pinned by `tests/test_m4v.c`
+(48 checks): AC lookup table (generated), AC decode and run/level/last
+expansion, DC size code and signed delta, DC quantiser scale (reference
+tables), coefficient scan and placement, AC coefficient walk, single intra
+block and its pixel reconstruction, macroblock grid, block origins inside a
+macroblock, and 4:2:0 chroma plane sizes.
+
+What the I-frame assembly still needs: the cross-block DC prediction rule and
+the AC escape form.  Until those land, `nj_m4v_decode_intra_block()` reports
+-3 for an escape rather than pretending the coefficient was zero, and nothing
+in the tree claims `mp4v` can be played.
