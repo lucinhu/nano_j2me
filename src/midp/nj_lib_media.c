@@ -1174,19 +1174,76 @@ static int media_restart(nj_vm *vm, nj_ref p)
     return 1;
 }
 
+#if NJ_ENABLE_VIDEO
+/*
+ * One video frame: demultiplex the next sample and decode it into the Player's
+ * RGB565 buffer.  The audio path below pushes to a device; a movie has nowhere
+ * to push, so a frame is simply the next decoded picture plus its timestamp.
+ */
+static void media_video_step(nj_vm *vm, nj_ref p)
+{
+    nj_ref hold = r_r(vm, p, F_P_DATA, "[B");
+    nj_ref src = r_r(vm, p, F_P_SRC, "[B");
+    nj_ref vbuf = r_r(vm, p, F_P_VBUF, "[B");
+    media_video_state st;
+    nj_mp4_sample smp;
+    nj_av_step step;
+    int rc;
+
+    if (hold == NULL || src == NULL || vbuf == NULL ||
+        hold->length < (nj_u4)sizeof(st)) {
+        return;
+    }
+    memcpy(&st, hold->u.bytes, sizeof(st));
+    if (st.vops == NULL || st.vdec == NULL) {
+        return;
+    }
+    if (nj_mp4_next(&st.m, &smp) != 1) {
+        w_i(vm, p, F_P_STATE, 300);
+        fire(vm, p, "endOfMedia");
+        media_unregister(vm, p);
+        memcpy(hold->u.bytes, &st, sizeof(st));
+        return;
+    }
+    if ((nj_u4)smp.offset + smp.size > src->length) {
+        return;
+    }
+    memset(&step, 0, sizeof(step));
+    step.in = src->u.bytes + smp.offset;
+    step.in_len = smp.size;
+    step.out = vbuf->u.bytes;
+    step.out_cap = vbuf->length;
+    rc = st.vops->decode(st.vdec, &step);
+    memcpy(hold->u.bytes, &st, sizeof(st));
+    if (rc != NJ_AV_OK || step.out_used == 0u) {
+        return;
+    }
+    w_i(vm, p, F_P_PUSHED, r_i(vm, p, F_P_PUSHED) + 1);
+    w_j(vm, p, F_P_TIME,
+        st.m.timescale > 0u
+            ? (nj_s8)smp.dts * 1000000LL / (nj_s8)st.m.timescale : 0);
+}
+
+#endif /* NJ_ENABLE_VIDEO */
+
 void nj_media_frame(nj_vm *vm)
 {
     nj_ref v;
     nj_s4 n, i;
 
-    if (!vm || !vm->media_players || !vm->port
-        || (!vm->port->pcm_write && !vm->port->midi_finished)) {
+    if (!vm || !vm->media_players || !vm->port) {
         return;
     }
     v = vm->media_players;
     n = vec_size(vm, v);
     for (i = n - 1; i >= 0; i--) {
         nj_ref p = vec_at(vm, v, i);
+#if NJ_ENABLE_VIDEO
+        if (r_i(vm, p, F_P_KIND) == 2) {
+            media_video_step(vm, p);
+            continue;
+        }
+#endif
         int room = 1 << 20;      /* a port with no pcm_free takes everything */
 
         if (!p) {

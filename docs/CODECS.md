@@ -245,3 +245,21 @@ once, at creation, so the pump will not allocate while a title paints.
 
 Still to do, in this order: decode one sample per emulated frame in
 `nj_media_frame()`, then `VideoControl.getSnapshot()`/`initDisplayMode()`.
+
+## Movie frames reach the Player (round 12)
+
+`nj_media_frame()` now has a video branch: a Player with `pKind == 2` demultiplexes
+one sample per emulated frame, decodes it into its RGB565 buffer and advances
+`pPushed`/`pTime`; when `nj_mp4_next()` runs out it stops the Player and fires
+`endOfMedia`, the same ending the audio path has.  Video Players need no audio
+device, so the pump's entry guard no longer returns early when the port has no
+`pcm_write`.
+
+Evidence with a 176x144 H.263 3GP (10 samples, ffmpeg's `testsrc`): after
+`createPlayer("video/3gpp")`, realize/prefetch/start and 40 pump calls,
+`pPushed == 10` (every sample) and the 50,688-byte frame buffer holds a real
+picture (byte checksum 6,343,036, not a zero buffer).
+
+Still open: `VideoControl.getSnapshot()`/`initDisplayMode`, and an in-tree test
+that pins the decoded frame against ffmpeg's pixels (the scratch probe above is
+not committed; `tests/test_h263.c` already has the reference frames to reuse).
