@@ -2488,8 +2488,20 @@ static int mp3_seek(nj_av_dec *dec, nj_s8 time_us)
     while (d->pcm_base + (nj_s8)d->pcm_frames <= target) {
         nj_av_step st;
 
-        if (d->src_pos >= d->data_end) {
-            break;
+        /* The source may already be entirely in the FIFO. Decode buffered
+         * frames before asking for more input, just as mp3_decode() does. */
+        if (mp3_sync_fifo(d)) {
+            int r = mp3_frame(d);
+
+            if (r == 0) {
+                d->pcm_off = d->pcm_frames;
+                continue;
+            }
+            if (r == -1) {
+                d->fifo_pos += 1u;
+                continue;
+            }
+            if (r == -3) continue;
         }
         st.in = NULL;
         st.in_len = 0u;
@@ -2502,14 +2514,6 @@ static int mp3_seek(nj_av_dec *dec, nj_s8 time_us)
         if (mp3_fill(d, &st) == 0u) {
             break;
         }
-        if (mp3_sync_fifo(d)) {
-            int r = mp3_frame(d);
-
-            if (r == -1) {
-                d->fifo_pos += 1u;
-            }
-        }
-        d->pcm_off = d->pcm_frames;
     }
     {
         nj_s8 off = target - d->pcm_base;

@@ -932,6 +932,7 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
         }
         scratch = (nj_u1 *)(void *)(b + sizeof(state));
         if (state.pending == 0u) {
+            state.offset = 0u;
             want = NJ_MEDIA_STREAM_FRAMES;
             if (want > (nj_u4)max_frames) {
                 want = (nj_u4)max_frames;
@@ -943,11 +944,12 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
                 nj_av_step step;
                 int rc;
 
-                if (sb == NULL || state.in_off >= slen) {
+                if (sb == NULL || state.in_off > slen) {
                     break;
                 }
                 memset(&step, 0, sizeof(step));
-                step.in = sb + state.in_off;
+                /* Consumed input can still leave PCM in the decoder's FIFO. */
+                step.in = state.in_off < slen ? sb + state.in_off : NULL;
                 step.in_len = slen - state.in_off;
                 step.out = scratch;
                 step.out_cap = want * (nj_u4)chan * 2u;
@@ -1139,7 +1141,7 @@ static int media_restart(nj_vm *vm, nj_ref p)
 {
     if (r_i(vm, p, F_P_FRAMES) <= 0) return 0;
 #if NJ_ENABLE_MIDI
-    if (r_z(vm, p, F_P_STREAM)) {
+    if (r_z(vm, p, F_P_STREAM) && !r_z(vm, p, F_P_AVK)) {
         nj_ref data = r_r(vm, p, F_P_DATA, "[B");
         media_stream_state state;
         if (data == NULL || barray_len(data) < NJ_MEDIA_STREAM_BYTES) return 0;
@@ -1165,7 +1167,8 @@ static int media_restart(nj_vm *vm, nj_ref p)
             return 0;
         }
         state.pending = state.offset = 0u;
-        state.in_off = 0u;
+        /* seek() positions the retained source; do not feed its prefix again. */
+        state.in_off = barray_len(r_r(vm, p, F_P_SRC, "[B"));
         memcpy(data->u.bytes, &state, sizeof(state));
     }
 #endif
@@ -3118,7 +3121,29 @@ NJFN(player_setMediaTime)
         if (mh != NULL && vm->port && vm->port->midi_seek) {
             vm->port->midi_seek(vm->port->ud, mh, (nj_u4)(want / 1000));
         }
-    } else if (r_z(vm, self, F_P_STREAM)) {
+    }
+#if NJ_ENABLE_MP3
+    else if (r_z(vm, self, F_P_AVK)) {
+        nj_ref data = r_r(vm, self, F_P_DATA, "[B");
+        media_stream_state state;
+        nj_s4 rate = r_i(vm, self, F_P_RATE);
+
+        if (data == NULL || barray_len(data) < NJ_MEDIA_STREAM_BYTES) {
+            return nj_throw(vm, NJ_C_MEXC, "missing audio decoder");
+        }
+        memcpy(&state, barray_bytes(data), sizeof(state));
+        if (state.aops == NULL || state.adec == NULL || state.aops->seek == NULL ||
+            state.aops->seek(state.adec, want) != NJ_AV_OK) {
+            return nj_throw(vm, NJ_C_MEXC, "audio decoder cannot seek");
+        }
+        state.pending = state.offset = 0u;
+        state.in_off = barray_len(r_r(vm, self, F_P_SRC, "[B"));
+        memcpy(data->u.bytes, &state, sizeof(state));
+        w_i(vm, self, F_P_PUSHED,
+            (nj_s4)((nj_u8)want * (nj_u8)rate / 1000000u));
+    }
+#endif
+    else if (r_z(vm, self, F_P_STREAM)) {
         /*
          * A streamed Player renders as it goes, so the position it reports has
          * to move the renderer too: a game that stops the theme, seeks to the
