@@ -202,6 +202,12 @@ int nj_m4v_decode_intra_mb(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby
                            int scale, int *qscale, int *ac_bits);
 
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
+int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx,
+                               int mby, nj_s2 *dc_y, int stride_y, nj_s2 *dc_c,
+                               int stride_c, int scale, int *qscale, int *ac_bits,
+                               nj_u1 *yp, int ys, nj_u1 *up, int us,
+                               nj_u1 *vp, int vs);
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 
 #endif

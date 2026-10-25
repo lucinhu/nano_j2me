@@ -1280,11 +1280,14 @@ static int nj_m4v_mb_core(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *cbpc, int *d
     return 0;
 }
 
-int nj_m4v_decode_intra_mb(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby,
-                           nj_s2 *dc_y, int stride_y, nj_s2 *dc_c, int stride_c,
-                           int scale, int *qscale, int *ac_bits)
+int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby,
+                               nj_s2 *dc_y, int stride_y, nj_s2 *dc_c, int stride_c,
+                               int scale, int *qscale, int *ac_bits,
+                               nj_u1 *yp, int ys, nj_u1 *up, int us,
+                               nj_u1 *vp, int vs)
 {
     int cbp = 0, cbpc = 0, cbpy = 0, dq = 0, blk;
+    nj_s4 all_coef[6][64];
 
     if (nj_m4v_mb_core(b, n, pos, &cbpc, &dq) != 0) {
         return -1;
@@ -1333,6 +1336,7 @@ int nj_m4v_decode_intra_mb(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby
         if (grid != NULL && stride > 0) {
             grid[(nj_size)gy * (nj_size)stride + (nj_size)gx] = (nj_s2)level;
         }
+        all_coef[blk][0] = coef[0];
         (void)dir;
         (void)scale;
     }
@@ -1360,9 +1364,57 @@ int nj_m4v_decode_intra_mb(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby
         if (rc < 0) {
             return -1;
         }
+        memcpy(all_coef[blk], coef, sizeof coef);
+    }
+    if (yp != NULL) {
+        int cw = 0, ch = 0;
+        int  scale2 = 1;
+
+        (void)scale2;
+        if (nj_m4v_plane_size((nj_u4)mbx, (nj_u4)mby, (nj_u4 *)&cw, (nj_u4 *)&ch) != 0) {
+            cw = 0;
+        }
+        for (blk = 0; blk < 6; blk++) {
+            int out[64];
+            int r, cc2;
+            nj_u1 *dst;
+            int stride;
+            int ox = 0, oy = 0;
+
+            nj_m4v_idct(all_coef[blk], out);
+            if (nj_m4v_block_origin((nj_u4)mbx, (nj_u4)mby, blk,
+                                    (nj_u4 *)&ox, (nj_u4 *)&oy) != 0) {
+                return -1;
+            }
+            if (blk < 4) {
+                dst = yp; stride = ys;
+            } else if (blk == 4) {
+                dst = up; stride = us;
+                ox /= 2; oy /= 2;
+            } else {
+                dst = vp; stride = vs;
+                ox /= 2; oy /= 2;
+            }
+            for (r = 0; r < 8; r++) {
+                for (cc2 = 0; cc2 < 8; cc2++) {
+                    int v2 = out[r * 8 + cc2] + 128;
+                    if (v2 < 0) { v2 = 0; } else if (v2 > 255) { v2 = 255; }
+                    dst[(nj_size)(oy + r) * (nj_size)stride + (nj_size)(ox + cc2)] = (nj_u1)v2;
+                }
+            }
+        }
     }
     return 0;
 }
+int nj_m4v_decode_intra_mb(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby,
+                           nj_s2 *dc_y, int stride_y, nj_s2 *dc_c, int stride_c,
+                           int scale, int *qscale, int *ac_bits)
+{
+    return nj_m4v_decode_intra_mb_pix(b, n, pos, mbx, mby, dc_y, stride_y, dc_c,
+                                      stride_c, scale, qscale, ac_bits, NULL, 0,
+                                      NULL, 0, NULL, 0);
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;
