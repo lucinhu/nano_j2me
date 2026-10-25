@@ -107,3 +107,23 @@ explicit timeouts (120 s / 60 s), so a single slow item is skipped instead of
 holding the whole run; because duplicates are dropped by content hash, the next
 run resumes exactly where this one stopped.
 
+
+## Does an ok row actually move? (round 13)
+
+The sweep records that a title painted something, not that the frame ever
+changed: a title can paint the same pixels for 900 frames.  `tools/check_corpus_motion.py`
+dumps three frames per title (same recipe as the sweep, `--dump-every` a third
+of the budget) and counts how many of them differ byte for byte, so the two
+cases stay apart:
+
+* a static title/menu screen under the shared key script - expected, the script
+  is generic and most titles wait for a tap we do not send;
+* the runtime painting a stale frame - a real defect.
+
+Sample of 12 titles drawn deterministically from the 969 `ok` rows (seed 7,
+900 frames): **7 change frames, 5 paint one frame**.  The five are all
+title/menu screens (Elven Chronicles and 疯狂农场汉化版 show 3 distinct frames,
+Medal of Honor 2010 and Prince of Persia 1-2), so no stale-frame case showed up
+in this sample.  Treat it as a starting measurement, not a verdict: the tool
+exists so a future round can grow the sample, and a frozen row is only a lead
+until it is compared with the reference emulator.
