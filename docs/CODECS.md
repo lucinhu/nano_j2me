@@ -330,3 +330,23 @@ good news is that most of `src/midp/nj_h263.c` applies unchanged:
 `tests/h263_clip.h` cannot cover M4V; the fixtures would be the two real 3GP
 files above, compared frame by frame against `ffmpeg -f rawvideo -pix_fmt
 rgb565` decodes of the same samples - the same shape as the H.263 test.
+
+### A first slice that did not survive contact with real data (round 19)
+
+An initial `nj_m4v` VOL parser was written from the field order remembered from
+ISO/IEC 14496-2 6.2.3.1 (id 4, shape 2, marker 1, time_res 16, ...) and passed a
+hand-built synthetic header.  It then read nonsense from the decoder
+configuration of the two real movies:
+
+| File | VOL payload begins | Parser said |
+| --- | --- | --- |
+| `1942.3gp` | `20 00 84 ...` | 2824x2314, time_res 16928 |
+| `doom.3gp` | `20 00 c4 8d 88` | 8002x65, time_res 25158 |
+
+The synthetic test was self-consistent by construction, so it could not catch a
+wrong grammar - the real payload starts with `0x00`, i.e. the marker bit that
+the assumed layout puts in that position reads 0.  The slice was reverted rather
+than committed: the field order and widths must be taken from an authoritative
+source (an MPEG-4 Visual decoder implementation, not memory), and the acceptance
+test must parse the real `esds` decoder configuration of the two corpus movies
+before any macroblock work starts.
