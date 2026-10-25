@@ -657,3 +657,13 @@ Fixed, with the tests rewritten to the specification's values (`size 2`:
 `10 -> +2`, `11 -> +3`, `01 -> -2`, `00 -> -3`; `size 1`: `1 -> +1`, `0 -> -1`).
 This is a reconstruction bug only - the bit count is unchanged, so it is **not**
 the cause of the alignment failure at bit 588.  `test_m4v` 63 checks, 0 failures.
+
+### A reference decoder for the last mile (round 111)
+
+`tools/refdecode_frame.c` decodes the first video frame of a container with the
+system ffmpeg (libavformat 63.1.102 + libavcodec are installed here) and prints
+its geometry; run it with `pkg-config --cflags --libs libavformat libavcodec
+libavutil`.  It reports `codec=mpeg4 176x144` and one decoded frame for
+`1942.3gp`.  That makes the remaining MPEG-4 work checkable end to end: once the
+frame driver gets past the alignment failure, its luminance can be compared with
+this decoder's output instead of eyeballing dumps.
