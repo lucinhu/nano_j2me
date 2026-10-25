@@ -4127,6 +4127,26 @@ block from 1.69 MB of free space.  The next step is the allocator (coalescing /
 best-fit), not `createPlayer`; the streaming front-end makes the request as
 small as it can be.
 
+### An empty resource name is a null stream, not an exception (round 3)
+
+`Class.getResourceAsStream("")` asks for "the package itself", which is not an
+entry in a JAR.  The specified answer is a null stream; this runtime used to
+throw `IOException("bad resource name")` whenever the name did not convert to a
+non-empty UTF-8 path.  Three archive.org titles (`4x4 Extreme Rally 2006`,
+`4x4 Extreme Rally 3D`, `Orlen Team - Dakar 2007`) probe that during
+`startApp()` and turned the exception into `ArithmeticException: / by zero`, so
+they never installed a Displayable.
+
+The rule now distinguishes the two failures: `nj_string_to_utf8` < 0 still
+throws (an unusable name), 0 returns null.  After the fix all three titles run
+hundreds of paced frames with no uncaught exception (they still throw and catch
+their own `RecordStoreNotFoundException`/`NullPointerException` inside a
+try/catch that closes a null record store, which the reference does too).
+
+Corpus after this round: **855 rows, 850 ok, 3 never painted, 1 unusable
+package, 1 failure** — the last failure is `The House of the Dead - Nightmare`,
+which needs `javax.microedition.lcdui.CustomItem`.
+
 ### Three missing members, found in a 455-title archive sweep (round 2)
 
 The archive.org item `j2me-vault` (J2ME FULL ROMS & Screenshots Archive) ships a

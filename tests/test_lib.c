@@ -3559,6 +3559,28 @@ static void test_class_relative_resource(nj_vm *vm)
         clean(vm, "Z/A.loadAbs()");
     }
 
+    /*
+     * An empty resource name asks for "the package itself", which is not an
+     * entry in a JAR: the specified answer is a null stream, not an exception.
+     * 4x4 Extreme Rally 2006/3D and Orlen Team - Dakar 2007 probe exactly this
+     * during startApp() and turned the IOException into a divide by zero.
+     */
+    {
+        nj_ref cls = nj_class_object(vm, "Z/A");
+        nj_ref empty = nj_string_new(vm, "");
+        nj_value a[1];
+        nj_value r;
+
+        a[0].r = empty;
+        r.r = NULL;
+        OK_MSG(cls != NULL && empty != NULL, "the class object resolves");
+        OK_MSG(nj_call(vm, cls, "java/lang/Class", "getResourceAsStream",
+                       "(Ljava/lang/String;)Ljava/io/InputStream;", a, &r) == NJ_OK,
+               "getResourceAsStream(\"\") completes");
+        OK_MSG(r.r == NULL, "and answers null rather than an exception");
+        clean(vm, "the empty resource name");
+    }
+
     nj_app_close(vm, app);
     clean(vm, "the relative-resource fixture");
 }

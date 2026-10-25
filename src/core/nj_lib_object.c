@@ -280,8 +280,22 @@ NJFN(class_getResourceAsStream)
     if (!app) {
         return nj_throw(vm, "java/io/IOException", "no application is loaded");
     }
-    if (nj_string_to_utf8(cname, path, (int)sizeof(path)) <= 0) {
-        return nj_throw(vm, "java/io/IOException", "bad resource name");
+    {
+        int n = nj_string_to_utf8(cname, path, (int)sizeof(path));
+
+        if (n < 0) {
+            return nj_throw(vm, "java/io/IOException", "bad resource name");
+        }
+        /*
+         * An empty name asks for "the package itself", which is not an entry in
+         * a JAR: the specified result is null, not an exception.  4x4 Extreme
+         * Rally and Orlen Team - Dakar 2007 probe it during startApp() and turn
+         * the IOException into a divide by zero.
+         */
+        if (n == 0) {
+            ret->r = NULL;
+            return NJ_OK;
+        }
     }
     {
         const char *p = path;
