@@ -4127,6 +4127,23 @@ block from 1.69 MB of free space.  The next step is the allocator (coalescing /
 best-fit), not `createPlayer`; the streaming front-end makes the request as
 small as it can be.
 
+### The two rows that never paint, read to the bytecode (round 1)
+
+The matrix carries two `never painted` rows.  Both were decompiled with
+`javap -p -c` this round and both are the title's own doing:
+
+- `有女倾城破解版_11525.jar` - the MIDlet calls `Display.setCurrent(new b())`,
+  where `b` is a `Canvas implements Runnable`; its `run()` calls the MIDlet's
+  static `a()` at bytecode offset 278, which calls `notifyDestroyed()`.  The run
+  shows **0 thrown exceptions and no second thread**, so the title decides to
+  quit on its own before the first paint.  Nothing in the VM fails.
+- `乱世Q三国_1649.jar` - one `RecordStoreNotFoundException` is thrown and
+  caught, then the MIDlet never installs a `Displayable`, so the runner has
+  nothing to present.
+
+Neither row is a defect to fix in the runtime; both now say so in their matrix
+note instead of recording the symptom alone.
+
 ### The table now says "nothing uncaught" in a column (round 90)
 
 The matrix already carried the exception *classes* a title throws, but a caught

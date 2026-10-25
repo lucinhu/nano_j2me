@@ -13,7 +13,7 @@ with the same recipe, so neighbouring rows are comparable:
 Corpus provenance and size are in `docs/CORPUS.md`; regenerate this table
 with `tools/make_compat_matrix.py <rows dir>` after a new sweep.
 
-Built from `ff1d4a8`, 2026-10-25.
+Built from `1d47ccc`, 2026-10-25.
 
 | verdict | titles |
 | --- | --- |
@@ -100,7 +100,7 @@ Built from `ff1d4a8`, 2026-10-25.
 | 中华麻将馆－极限胡牌版_244.jar | 310 | 中华麻将馆-极限胡牌版 | CNDColor | 1.0 | MIDP-1.0 | - | 18 | 16 | 600 | 308569765 | 0 | - | 运行正常 |  |
 | 中国象棋_10893.jar | 293 | 中国象棋三国经典版 | 掌中地带 | 1.0 | MIDP-2.0 | - | 9 | 16 | 600 | 73495 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | 中国象棋之水墨珍藏版_871.jar | 375 | 中国象棋之水墨珍藏版 | zhangyoutianxia | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 534667883 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
-| 乱世Q三国_1649.jar | 977 | 乱世Q三国 | moveber | 1.0 | MIDP-1.0 | - | 232 | 16 | 0 | 128 | 0 | javax/microedition/rms/RecordSto | 未呈现画面 | installed no Displayable |
+| 乱世Q三国_1649.jar | 977 | 乱世Q三国 | moveber | 1.0 | MIDP-1.0 | - | 232 | 16 | 0 | 128 | 0 | javax/microedition/rms/RecordSto | 未呈现画面 | never installs a Displayable (one caught Rec |
 | 乱舞三国之群英会_2972.jar | 817 | 乱舞三国之群英会 | 掌趣科技 | 1.0 | MIDP-1.0 | - | 35 | 16 | 600 | 482917 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | 五子棋_10940.jar | 42 | XOXO | 3D Reality | 1.0 | MIDP-1.0 | - | 24 | 16 | 600 | 4341300 | 0 | - | 运行正常 |  |
 | 仙剑奇侠传(2008)_12406.jar | 695 | pal | softstarmobile | 1.0 | MIDP-1.0 | nokia-ui | 3 | 16 | 600 | 209727 | 0 | - | 运行正常 |  |
@@ -246,7 +246,7 @@ Built from `ff1d4a8`, 2026-10-25.
 | 星辰变S60V5完整版_3364.jar | 926 | 星辰变(盛大正版) | M2me | 1.0.0 | MIDP-1.0 | nokia-ui | 40 | 16 | 600 | 250348802 | 0 | java/io/IOException | 运行正常 |  |
 | 是男人就下100层_1882.jar | 636 | 是男人就下100层 | CNMOSUN | 2.01 | MIDP-1.0 | nokia-ui | 75 | 16 | 600 | 6964968 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
 | 暗黑启示录2－黑暗王朝_888.jar | 1268 | 暗黑启示录2黑暗王朝 | leichan | 1.0 | MIDP-1.0 | - | 214 | 16 | 600 | 127252238 | 0 | - | 运行正常 |  |
-| 有女倾城破解版_11525.jar | 258 | 有女倾城 | Unknown | 1.0 | MIDP-1.0 | - | 9 | 16 | 0 | 53901 | 0 | - | 未呈现画面 | exited itself (notifyDestroyed) before prese |
+| 有女倾城破解版_11525.jar | 258 | 有女倾城 | Unknown | 1.0 | MIDP-1.0 | - | 9 | 16 | 0 | 53901 | 0 | - | 未呈现画面 | its Canvas quits from run() before the first |
 | 机甲风暴_7888.jar | 673 | 机甲风暴 | lxs | 1.0 | MIDP-2.0 | nokia-ui | 41 | 16 | 600 | 95517 | 0 | - | 运行正常 |  |
 | 杀戮机器-纳粹僵尸_3610.jar | 995 | 杀戮机器-纳粹僵尸 | CWA | 1.0 | MIDP-2.0 | m3g | 37 | 16 | 600 | 741606 | 0 | java/lang/NumberFormatException | 运行正常 |  |
 | 杀鬼子-敌后武工队_2185.jar | 515 | 杀鬼子-敌后武工队 | linktone | 1.0.0 | MIDP-1.0 | nokia-ui | 37 | 16 | 600 | 147638505 | 0 | java/io/IOException | 运行正常 |  |
