@@ -1042,3 +1042,21 @@ the change is free in ROM as well as RAM.
 `note_tick`, `note_sample`): sixteen bytes per open stream, no static data,
 no change to any object size.  Code size is unchanged within a few tens of
 bytes; the removed work was two calls per rendered sample.
+
+## What a CustomItem costs (round 4, 2026-10-25)
+
+`javax.microedition.lcdui.CustomItem` needs somewhere to paint: the Form renderer
+hands items an `nj_gfx` over the screen buffer, which item code cannot reach
+portably, so each CustomItem owns one offscreen Image plus one cached Graphics
+in content coordinates.
+
+| item | cost |
+| --- | --- |
+| fields on the item | 4 integers (preferred width/height, content width/height) + interaction-mode cache packed in the last integer |
+| offscreen Image | content width x content height x 4 B, allocated on the first paint and reallocated only when the content size changes |
+| Graphics | one per item, reused |
+
+So a 60x25 item costs 6,000 B while it is on screen and nothing before its first
+paint; a Form with ten of them costs 60,000 B.  The C code adds about 5.6 KiB of
+`.text` and no writable statics.
+

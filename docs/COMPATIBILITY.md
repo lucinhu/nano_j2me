@@ -888,11 +888,42 @@ accelerometer arrived in this runtime: classes here, hardware there.
 `Display`, `Displayable`, `Canvas`, `Graphics` (the complete drawing API),
 `Image`, `Font`, `Command`, `Ticker`, `Alert`, `AlertType`, `Form`, `List`,
 `TextBox`, `Item`, `StringItem`, `ImageItem`, `Gauge`, `ChoiceGroup`,
-`TextField`, `DateField`, `Spacer`, and the three listener interfaces.
+`TextField`, `DateField`, `Spacer`, `CustomItem`, and the three listener
+interfaces.
 
 `Graphics` implements all three overloads of `drawString`, `drawRegion`,
 `drawRGB`, `copyArea`, alpha blending, XOR mode, dotted strokes, rounded
 rectangles and arcs with MIDP's counter-clockwise degree convention.
+
+#### CustomItem
+
+`CustomItem` gives a MIDlet a blank item it paints itself.  The base class
+supplies the MIDP defaults for `setPreferredSize`, `getContentWidth/Height`,
+`sizeChanged`, `repaint`, `getInteractionModes`, `getGameAction` and the
+key/pointer callbacks.  A subclass overrides `paint(Graphics, int, int)`,
+`getPrefContentWidth/Height` and `getMinContentWidth/Height` (and `traverse`
+for directional input).  The
+item owns one offscreen Image and one Graphics, sized to its content rectangle
+and reused across frames, so `paint()` runs in content coordinates with the
+clip set to the item and the result is blitted into the Form; the label is
+drawn above it with the same height accounting the other Items use.  A sizing
+override that throws does not take the whole Form down.
+
+What is deliberately left to the game: the content size, every pixel inside
+it, and traversal/scrolling.  This runtime does not implement the MIDP
+traversal protocol, so `traverse` returns `false` and vertical scrolling of an
+item taller than the Form is the game's business.
+
+Event delivery follows what the Form dispatcher can actually deliver.  A
+focused CustomItem receives `keyPressed`, `keyReleased` and `keyRepeated` for
+the keys the built-in Form does not consume (FIRE, digits and game keys);
+UP/DOWN still move the Form's focus and the soft keys still reach the screen
+Commands, so a CustomItem cannot lock the user out of a form.  Pointer events
+only reach `Canvas` in this runtime, so `getInteractionModes()` reports
+`KEY_PRESS | KEY_RELEASE | KEY_REPEAT` and not the pointer or traversal flags.
+This is what lets `The House of the Dead - Nightmare (1).jar` — the one
+corpus title that failed on `NoClassDefFoundError: CustomItem` — load and
+reach its startup countdown instead of dying at class-load time.
 
 ### javax.microedition.lcdui.game
 
@@ -4145,7 +4176,8 @@ try/catch that closes a null record store, which the reference does too).
 
 Corpus after this round: **855 rows, 850 ok, 3 never painted, 1 unusable
 package, 1 failure** — the last failure is `The House of the Dead - Nightmare`,
-which needs `javax.microedition.lcdui.CustomItem`.
+which needs `javax.microedition.lcdui.CustomItem` (implemented since; see
+"CustomItem" in the LCDUI section).
 
 ### Three missing members, found in a 455-title archive sweep (round 2)
 

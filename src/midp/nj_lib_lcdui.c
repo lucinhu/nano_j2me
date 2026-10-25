@@ -4208,8 +4208,12 @@ static void item_draw_default(nj_vm *vm, nj_gfx *g, nj_ref item, const ui_frame 
  * Render one Item and return the height it consumed.  A class may override
  * njDraw(Graphics, int, int, int, boolean) -> int; the default implementation
  * below handles every built-in widget through the abstract njText()/njHeight()
- * contract.
+ * contract, while a CustomItem paints itself (see customitem_render).
  */
+static int customitem_render(nj_vm *vm, nj_gfx *g, nj_ref item,
+                             const ui_frame *uf, int x, int y, int w,
+                             int selected);
+
 static int item_draw(nj_vm *vm, nj_gfx *g, nj_ref item, const ui_frame *uf,
                      int x, int y, int w, int selected)
 {
@@ -4217,6 +4221,9 @@ static int item_draw(nj_vm *vm, nj_gfx *g, nj_ref item, const ui_frame *uf,
 
     if (!item) {
         return 0;
+    }
+    if (isa(vm, item, NJ_C_CUSTOMITEM)) {
+        return customitem_render(vm, g, item, uf, x, y, w, selected);
     }
     h = item_measure(vm, item, uf, w);
     item_draw_default(vm, g, item, uf, x, y, w, selected);
@@ -4793,6 +4800,37 @@ static int form_item_activate(nj_vm *vm, nj_ref form)
     return 0;
 }
 
+/*
+ * The Item that currently owns the Form's focus.  CustomItem is the only Item
+ * with a keyboard contract, so key dispatch asks for this before the built-in
+ * navigation consumes the event.
+ */
+static nj_ref form_focused_item(nj_vm *vm, nj_ref form)
+{
+    nj_ref items = rget(vm, form, NJ_C_FORM, "fmItems", D_ITEMARR);
+    nj_s4 idx = fget(vm, form, NJ_C_FORM, "fmIndex", D_INT);
+
+    if (!items || idx < 0 || (nj_u4)idx >= items->length) {
+        return NULL;
+    }
+    return nj_array_get_ref(items, (nj_u4)idx);
+}
+
+/* Call keyPressed/keyReleased/keyRepeated on the focused CustomItem. */
+static int form_customitem_key(nj_vm *vm, nj_ref form, const char *method,
+                               int code)
+{
+    nj_ref it = form_focused_item(vm, form);
+    nj_value a[1];
+
+    if (!it || !isa(vm, it, NJ_C_CUSTOMITEM)) {
+        return 0;
+    }
+    a[0].i = code;
+    (void)nj_call(vm, it, NJ_C_CUSTOMITEM, method, "(I)V", a, NULL);
+    return 1;
+}
+
 static int screen_activate(nj_vm *vm, nj_ref d)
 {
     if (isa(vm, d, NJ_C_LIST)) {
@@ -4829,16 +4867,34 @@ static int text_editor_key(nj_vm *vm, nj_ref d, int action);
 
 static int displayable_key(nj_vm *vm, nj_ref d, int action, int down)
 {
-    if (!down) {
-        return 0;   /* the built-in widgets act on key-down */
-    }
     if (!d) {
         return 0;
+    }
+    /*
+     * A focused CustomItem owns the keyboard for the keys the built-in Form
+     * does not need itself: FIRE and the other non-navigation keys.  UP/DOWN
+     * still move the Form's focus and the soft keys still reach the screen
+     * Commands, so a game item can never lock the user out of a form.
+     */
+    if (!down) {
+        if (!ui_is_up(action) && !ui_is_down(action) &&
+            action != NJ_MIDP_KEY_SOFT1 && action != NJ_MIDP_KEY_SOFT2 &&
+            isa(vm, d, NJ_C_FORM) &&
+            form_customitem_key(vm, d, "keyReleased", action)) {
+            return 1;
+        }
+        return 0;   /* the built-in widgets act on key-down */
     }
     /* A focused TextBox/TextField owns the editing keys, as on the reference
      * runtime.  Keys the editor does not take (soft keys and the rest) still
      * reach the Commands below. */
     if (text_editor_key(vm, d, action)) {
+        return 1;
+    }
+    if (!ui_is_up(action) && !ui_is_down(action) &&
+        action != NJ_MIDP_KEY_SOFT1 && action != NJ_MIDP_KEY_SOFT2 &&
+        isa(vm, d, NJ_C_FORM) &&
+        form_customitem_key(vm, d, "keyPressed", action)) {
         return 1;
     }
     if (ui_is_up(action)) {
@@ -5213,6 +5269,19 @@ int nj_midp_key_repeat(nj_vm *vm, int key)
      * hasRepeatEvents() == false without changing its held/latch state. */
     if (isa(vm, d, NJ_C_CANVAS)) {
         return 1;
+    }
+    /*
+     * A focused CustomItem sees keyRepeated for the same keys that get
+     * keyPressed; UP/DOWN keep repeating the Form's navigation instead.
+     */
+    {
+        int code = nj_key_to_midp(key);
+        if (code != 0 && !ui_is_up(code) && !ui_is_down(code) &&
+            code != NJ_MIDP_KEY_SOFT1 && code != NJ_MIDP_KEY_SOFT2 &&
+            isa(vm, d, NJ_C_FORM) &&
+            form_customitem_key(vm, d, "keyRepeated", code)) {
+            return 1;
+        }
     }
     return nj_midp_key(vm, key, 1);
 }
@@ -6126,6 +6195,394 @@ NJFN(item_njSelected)
 {
     NJ_UNUSED(args);
     ret->r = NULL;
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* CustomItem                                                          */
+/* ------------------------------------------------------------------ */
+/*
+ * A CustomItem is an Item the game paints itself.  The C renderer cannot call
+ * an abstract paint() through njDraw without a Graphics, and the Form path
+ * does not expose its buffer to the item code, so each CustomItem owns a
+ * private offscreen Image of its content rectangle.  paint() gets a Graphics
+ * over that Image, in content coordinates, with a clip of exactly the content
+ * rectangle; the result is blitted into the Form at the item's position.  One
+ * Image and one Graphics live on the item, not one per frame.
+ *
+ * Everything the game can override is a normal virtual method: item_draw()
+ * reaches customitem_render(), which calls getPrefContentWidth/Height and
+ * paint() through nj_call(), so a Java subclass's overrides run.  The natives
+ * below are only the MIDP default implementations.
+ */
+#define CI_MAX_W 1024
+#define CI_MAX_H 2048
+
+/* Query the content size and tell the item once when it changes. */
+static void customitem_measure(nj_vm *vm, nj_ref self, int avail,
+                               int *cw, int *ch)
+{
+    nj_value a[2];
+    nj_s4 w, h, oldw, oldh;
+
+    /*
+     * MIDP gives the two calls different hints: getPrefContentHeight(width)
+     * sees the available width, and getPrefContentWidth(height) sees the
+     * height that was just chosen.
+     */
+    a[0].i = avail;
+    h = nj_call_int(vm, self, NJ_C_CUSTOMITEM, "getPrefContentHeight", "(I)I",
+                    a);
+    if (vm->exception) {
+        /* A broken sizing override must not leave the whole Form unpainted;
+         * item_measure() takes the same view of njHeight(). */
+        nj_clear_exception(vm);
+        h = 0;
+    }
+    a[0].i = h;
+    w = nj_call_int(vm, self, NJ_C_CUSTOMITEM, "getPrefContentWidth", "(I)I",
+                    a);
+    if (vm->exception) {
+        nj_clear_exception(vm);
+        w = 0;
+    }
+    if (w < 0) {
+        w = 0;
+    }
+    if (h < 0) {
+        h = 0;
+    }
+    if (avail > 0 && w > avail) {
+        w = avail;
+    }
+    if (w > CI_MAX_W) {
+        w = CI_MAX_W;
+    }
+    if (h > CI_MAX_H) {
+        h = CI_MAX_H;
+    }
+    oldw = fget(vm, self, NJ_C_CUSTOMITEM, "ciContentW", D_INT);
+    oldh = fget(vm, self, NJ_C_CUSTOMITEM, "ciContentH", D_INT);
+    if (w != oldw || h != oldh) {
+        fput(vm, self, NJ_C_CUSTOMITEM, "ciContentW", D_INT, w);
+        fput(vm, self, NJ_C_CUSTOMITEM, "ciContentH", D_INT, h);
+        a[0].i = w;
+        a[1].i = h;
+        (void)nj_call(vm, self, NJ_C_CUSTOMITEM, "sizeChanged", "(II)V", a,
+                      NULL);
+    }
+    *cw = (int)w;
+    *ch = (int)h;
+}
+
+/*
+ * Make the offscreen Image and its Graphics match cw x ch and put the
+ * Graphics back to the state a fresh one has: identity translate, the whole
+ * Image as clip, black opaque ink.  The clip is the item rectangle by
+ * construction, and because the Graphics is private to this item there is no
+ * outer clip to save or restore.
+ */
+static nj_ref customitem_prepare(nj_vm *vm, nj_ref self, int cw, int ch)
+{
+    nj_ref img;
+    nj_ref gfx;
+    int iw = 0, ih = 0;
+
+    if (cw <= 0 || ch <= 0) {
+        return NULL;
+    }
+    img = rget(vm, self, NJ_C_CUSTOMITEM, "ciImage", D_IMAGE);
+    if (img) {
+        (void)img_dims(vm, img, &iw, &ih);
+    }
+    if (!img || iw != cw || ih != ch) {
+        img = nj_midp_image_new(vm, cw, ch, 1);
+        if (!img) {
+            return NULL;
+        }
+        rput(vm, self, NJ_C_CUSTOMITEM, "ciImage", D_IMAGE, img);
+        gfx = NULL;
+    } else {
+        gfx = rget(vm, self, NJ_C_CUSTOMITEM, "ciGraphics", D_GFX);
+    }
+    if (!gfx) {
+        gfx = gfx_new(vm, img);
+        if (!gfx) {
+            return NULL;
+        }
+        rput(vm, self, NJ_C_CUSTOMITEM, "ciGraphics", D_GFX, gfx);
+    } else if (gfx_reset(vm, gfx, img) != NJ_OK) {
+        return NULL;
+    }
+    /* gfx_new() can collect: re-read the Image from the (rooted) item. */
+    return rget(vm, self, NJ_C_CUSTOMITEM, "ciImage", D_IMAGE);
+}
+
+/*
+ * Paint one CustomItem into the Form.  The label follows Item's convention
+ * (small type above the content); the content height comes from njHeight(),
+ * which is why form_line_height() and this renderer agree.
+ */
+static int customitem_render(nj_vm *vm, nj_gfx *g, nj_ref item,
+                             const ui_frame *uf, int x, int y, int w,
+                             int selected)
+{
+    nj_ref label = rget(vm, item, NJ_C_ITEM, "itLabel", D_STR);
+    nj_ref img;
+    nj_ref gfx;
+    nj_image view;
+    nj_value a[5];
+    int cw = 0, ch = 0, labelh = 0, h;
+
+    customitem_measure(vm, item, w, &cw, &ch);
+    if (label && nj_string_len(label) > 0u) {
+        nj_gfx_set_color(g, selected ? UI_SEL_FG : UI_DIM);
+        ui_text(vm, g, uf->small, label, x, y, w);
+        labelh = uf->small_h;
+    }
+    img = customitem_prepare(vm, item, cw, ch);
+    gfx = rget(vm, item, NJ_C_CUSTOMITEM, "ciGraphics", D_GFX);
+    if (img && gfx && !vm->exception) {
+        a[0].r = gfx;
+        a[1].i = x;
+        a[2].i = y + labelh;
+        a[3].i = w;
+        a[4].i = selected ? 1 : 0;
+        (void)nj_call(vm, item, NJ_C_CUSTOMITEM, "njDraw",
+                      "(L" NJ_C_GRAPHICS ";IIIZ)I", a, NULL);
+        if (!vm->exception && img_view(vm, img, &view)) {
+            nj_gfx_draw_image(g, &view, x, y + labelh, 0, 0, view.width,
+                              view.height);
+        }
+    }
+    h = labelh + ch;
+    return (h > 0) ? h : UI_ITEM_H;
+}
+
+/* CustomItem(String label) */
+NJFN(ci_init)
+{
+    nj_ref self = NJ_THIS(args);
+
+    item_init_on(vm, self);
+    rput(vm, self, NJ_C_ITEM, "itLabel", D_STR, NJ_ARG_REF(args, 0));
+    fput(vm, self, NJ_C_CUSTOMITEM, "ciPrefW", D_INT, -1);
+    fput(vm, self, NJ_C_CUSTOMITEM, "ciPrefH", D_INT, -1);
+    fput(vm, self, NJ_C_CUSTOMITEM, "ciContentW", D_INT, -1);
+    fput(vm, self, NJ_C_CUSTOMITEM, "ciContentH", D_INT, -1);
+    fput(vm, self, NJ_C_CUSTOMITEM, "ciMods", D_INT, -1);
+    rput(vm, self, NJ_C_CUSTOMITEM, "ciImage", D_IMAGE, NULL);
+    rput(vm, self, NJ_C_CUSTOMITEM, "ciGraphics", D_GFX, NULL);
+    return NJ_OK;
+}
+
+/* The default paint() does nothing; a Java subclass overrides it. */
+NJFN(ci_paint)
+{
+    NJ_UNUSED(args);
+    return NJ_OK;
+}
+
+/* setPreferredSize(int w, int h): -1 means "no preference". */
+NJFN(ci_setPreferredSize)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 w = NJ_ARG_INT(args, 0);
+    nj_s4 h = NJ_ARG_INT(args, 1);
+
+    if (w < -1 || h < -1) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "preferred size must be -1 or positive");
+    }
+    fput(vm, self, NJ_C_CUSTOMITEM, "ciPrefW", D_INT, w);
+    fput(vm, self, NJ_C_CUSTOMITEM, "ciPrefH", D_INT, h);
+    return NJ_OK;
+}
+
+/*
+ * MIDP's defaults: the preferred size is the minimum size unless
+ * setPreferredSize() supplied one.  getMinContentWidth/Height answer 0, which
+ * is the smallest legal content rectangle.
+ */
+NJFN(ci_getPrefContentWidth)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 w = fget(vm, self, NJ_C_CUSTOMITEM, "ciPrefW", D_INT);
+
+    if (w < 0) {
+        w = nj_call_int(vm, self, NJ_C_CUSTOMITEM, "getMinContentWidth", "()I",
+                        NULL);
+    }
+    ret->i = (w > 0) ? w : 0;
+    return NJ_OK;
+}
+
+NJFN(ci_getPrefContentHeight)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 h = fget(vm, self, NJ_C_CUSTOMITEM, "ciPrefH", D_INT);
+
+    if (h < 0) {
+        h = nj_call_int(vm, self, NJ_C_CUSTOMITEM, "getMinContentHeight", "()I",
+                        NULL);
+    }
+    ret->i = (h > 0) ? h : 0;
+    return NJ_OK;
+}
+
+NJFN(ci_getMinContentWidth)
+{
+    NJ_UNUSED(args);
+    ret->i = 0;
+    return NJ_OK;
+}
+
+NJFN(ci_getMinContentHeight)
+{
+    NJ_UNUSED(args);
+    ret->i = 0;
+    return NJ_OK;
+}
+
+NJFN(ci_getContentWidth)
+{
+    nj_s4 w = fget(vm, NJ_THIS(args), NJ_C_CUSTOMITEM, "ciContentW", D_INT);
+    ret->i = (w > 0) ? w : 0;
+    return NJ_OK;
+}
+
+NJFN(ci_getContentHeight)
+{
+    nj_s4 h = fget(vm, NJ_THIS(args), NJ_C_CUSTOMITEM, "ciContentH", D_INT);
+    ret->i = (h > 0) ? h : 0;
+    return NJ_OK;
+}
+
+/* The default notification is empty; the size is already recorded. */
+NJFN(ci_sizeChanged)
+{
+    NJ_UNUSED(args);
+    return NJ_OK;
+}
+
+NJFN(ci_repaint)
+{
+    nj_midp_repaint(vm);
+    return NJ_OK;
+}
+
+/*
+ * The modes the Form dispatcher actually delivers to a focused CustomItem:
+ * key press, release and repeat.  Pointer events go to a Canvas only, and
+ * traversal is not implemented, so neither is advertised.
+ */
+#define CI_MODES (4 | 8 | 16)   /* KEY_PRESS | KEY_RELEASE | KEY_REPEAT */
+
+NJFN(ci_getInteractionModes)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 m = fget(vm, self, NJ_C_CUSTOMITEM, "ciMods", D_INT);
+
+    if (m < 0) {
+        m = CI_MODES;
+        fput(vm, self, NJ_C_CUSTOMITEM, "ciMods", D_INT, m);
+    }
+    ret->i = m;
+    return NJ_OK;
+}
+
+NJFN(ci_traverse)
+{
+    NJ_UNUSED(args);
+    ret->i = 0;   /* boolean false: this runtime does not traverse items */
+    return NJ_OK;
+}
+
+/* The same keycode -> game-action table Canvas uses. */
+NJFN(ci_getGameAction)
+{
+    nj_s4 code = NJ_ARG_INT(args, 0);
+    ret->i = midp_game_action(code);
+    return NJ_OK;
+}
+
+NJFN(ci_traverseOut)
+{
+    NJ_UNUSED(args);
+    return NJ_OK;
+}
+
+NJFN(ci_isFocusable)
+{
+    NJ_UNUSED(args);
+    ret->i = 1;
+    return NJ_OK;
+}
+
+#define CI_KEY_STUB(fn)           \
+    NJFN(fn)                      \
+    {                             \
+        NJ_UNUSED(args);          \
+        return NJ_OK;             \
+    }
+
+CI_KEY_STUB(ci_keyPressed)
+CI_KEY_STUB(ci_keyReleased)
+CI_KEY_STUB(ci_keyRepeated)
+CI_KEY_STUB(ci_pointerPressed)
+CI_KEY_STUB(ci_pointerReleased)
+CI_KEY_STUB(ci_pointerDragged)
+
+#undef CI_KEY_STUB
+
+NJFN(ci_njText)
+{
+    ret->r = NULL;
+    return NJ_OK;
+}
+
+NJFN(ci_njHeight)
+{
+    int cw = 0, ch = 0;
+
+    customitem_measure(vm, NJ_THIS(args), NJ_ARG_INT(args, 0), &cw, &ch);
+    ret->i = ch;
+    return NJ_OK;
+}
+
+/*
+ * Called by customitem_render() with the item's private Graphics.  paint()
+ * runs in content coordinates; the caller blits the result into the Form.
+ */
+NJFN(ci_njDraw)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref gfx = NJ_ARG_REF(args, 0);
+    nj_value a[2];
+    nj_gfx g;
+    nj_surface sc;
+    nj_s4 cw = fget(vm, self, NJ_C_CUSTOMITEM, "ciContentW", D_INT);
+    nj_s4 ch = fget(vm, self, NJ_C_CUSTOMITEM, "ciContentH", D_INT);
+
+    if (!gfx || cw <= 0 || ch <= 0) {
+        ret->i = (ch > 0) ? ch : 0;
+        return NJ_OK;
+    }
+    /*
+     * The Graphics belongs to this item alone, so the item rectangle is the
+     * only clip there is to install and there is no outer clip to restore.
+     * paint() sees content coordinates starting at (0, 0).
+     */
+    if (gfx_load(vm, gfx, &g, &sc)) {
+        nj_gfx_set_clip(&g, 0, 0, (int)cw, (int)ch);
+        gfx_store(vm, gfx, &g);
+    }
+    a[0].r = gfx;
+    a[1].i = cw;
+    a[2].i = ch;
+    (void)nj_call(vm, self, NJ_C_CUSTOMITEM, "paint",
+                  "(L" NJ_C_GRAPHICS ";II)V", a, NULL);
+    ret->i = ch;
     return NJ_OK;
 }
 
@@ -10781,6 +11238,55 @@ static const nj_builtin_method stringitem_methods[] = {
     M("njHeight", "(I)I", 0)
 };
 
+static const nj_builtin_field customitem_fields[] = {
+    FLD("ciPrefW",    D_INT,   0),
+    FLD("ciPrefH",    D_INT,   0),
+    FLD("ciContentW", D_INT,   0),
+    FLD("ciContentH", D_INT,   0),
+    FLD("ciMods",     D_INT,   0),
+    FLD("ciImage",    D_IMAGE, 0),
+    FLD("ciGraphics", D_GFX,   0),
+    FLD("NONE",               D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TRAVERSE_HORIZONTAL", D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("TRAVERSE_VERTICAL",   D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_PRESS",          D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_RELEASE",        D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("KEY_REPEAT",         D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("POINTER_PRESS",      D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("POINTER_RELEASE",    D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("POINTER_DRAG",       D_INT, NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
+static const nj_builtin_method customitem_methods[] = {
+    M("<init>", "(Ljava/lang/String;)V", 0),
+    M("paint", "(L" NJ_C_GRAPHICS ";II)V", 0),
+    M("getPrefContentWidth",  "(I)I", 0),
+    M("getPrefContentHeight", "(I)I", 0),
+    M("getMinContentWidth",   "()I", 0),
+    M("getMinContentHeight",  "()I", 0),
+    M("getContentWidth",      "()I", 0),
+    M("getContentHeight",     "()I", 0),
+    M("sizeChanged", "(II)V", 0),
+    M("repaint",     "()V", 0),
+    M("setPreferredSize", "(II)V", 0),
+    M("getInteractionModes", "()I", 0),
+    M("traverse", "(III[I)Z", 0),
+    M("traverseOut", "()V", 0),
+    /* Item.getGameAction() is also exposed by CustomItem in MIDP 2.0. */
+    M("getGameAction", "(I)I", NJ_ACC_PUBLIC),
+    M("isFocusable", "()Z", 0),
+    M("keyPressed",  "(I)V", 0),
+    M("keyReleased", "(I)V", 0),
+    M("keyRepeated", "(I)V", 0),
+    M("pointerPressed",  "(II)V", 0),
+    M("pointerReleased", "(II)V", 0),
+    M("pointerDragged",  "(II)V", 0),
+    /* The Item rendering contract, implemented here for the default base. */
+    M("njText",   "()Ljava/lang/String;", 0),
+    M("njHeight", "(I)I", 0),
+    M("njDraw",   "(L" NJ_C_GRAPHICS ";IIIZ)I", 0)
+};
+
 static const nj_builtin_field imageitem_fields[] = {
     FLD("iiImage",  D_IMAGE, 0),
     FLD("iiAlt",    D_STR,   0),
@@ -11281,6 +11787,9 @@ const nj_builtin_class nj_lib_lcdui_classes[] = {
     { NJ_C_ITEM, "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
       item_fields, NJ_LCDUI_N(item_fields),
       item_methods, NJ_LCDUI_N(item_methods) },
+    { NJ_C_CUSTOMITEM, NJ_C_ITEM, NJ_ACC_PUBLIC,
+      customitem_fields, NJ_LCDUI_N(customitem_fields),
+      customitem_methods, NJ_LCDUI_N(customitem_methods) },
     { NJ_C_STRINGITEM, NJ_C_ITEM, NJ_ACC_PUBLIC,
       stringitem_fields, NJ_LCDUI_N(stringitem_fields),
       stringitem_methods, NJ_LCDUI_N(stringitem_methods) },
@@ -11493,6 +12002,31 @@ const nj_native_entry nj_lib_lcdui_table[] = {
     { NJ_C_ITEM, "njText", "()Ljava/lang/String;", item_njText },
     { NJ_C_ITEM, "njHeight", "(I)I", item_njHeight },
     { NJ_C_ITEM, "njSelected", "(I)Ljava/lang/String;", item_njSelected },
+    { NJ_C_CUSTOMITEM, "<init>", "(Ljava/lang/String;)V", ci_init },
+    { NJ_C_CUSTOMITEM, "paint", "(L" NJ_C_GRAPHICS ";II)V", ci_paint },
+    { NJ_C_CUSTOMITEM, "getPrefContentWidth",  "(I)I", ci_getPrefContentWidth },
+    { NJ_C_CUSTOMITEM, "getPrefContentHeight", "(I)I", ci_getPrefContentHeight },
+    { NJ_C_CUSTOMITEM, "getMinContentWidth",   "()I", ci_getMinContentWidth },
+    { NJ_C_CUSTOMITEM, "getMinContentHeight",  "()I", ci_getMinContentHeight },
+    { NJ_C_CUSTOMITEM, "getContentWidth",      "()I", ci_getContentWidth },
+    { NJ_C_CUSTOMITEM, "getContentHeight",     "()I", ci_getContentHeight },
+    { NJ_C_CUSTOMITEM, "sizeChanged", "(II)V", ci_sizeChanged },
+    { NJ_C_CUSTOMITEM, "repaint",     "()V", ci_repaint },
+    { NJ_C_CUSTOMITEM, "setPreferredSize", "(II)V", ci_setPreferredSize },
+    { NJ_C_CUSTOMITEM, "getInteractionModes", "()I", ci_getInteractionModes },
+    { NJ_C_CUSTOMITEM, "traverse", "(III[I)Z", ci_traverse },
+    { NJ_C_CUSTOMITEM, "traverseOut", "()V", ci_traverseOut },
+    { NJ_C_CUSTOMITEM, "getGameAction", "(I)I", ci_getGameAction },
+    { NJ_C_CUSTOMITEM, "isFocusable", "()Z", ci_isFocusable },
+    { NJ_C_CUSTOMITEM, "keyPressed",  "(I)V", ci_keyPressed },
+    { NJ_C_CUSTOMITEM, "keyReleased", "(I)V", ci_keyReleased },
+    { NJ_C_CUSTOMITEM, "keyRepeated", "(I)V", ci_keyRepeated },
+    { NJ_C_CUSTOMITEM, "pointerPressed",  "(II)V", ci_pointerPressed },
+    { NJ_C_CUSTOMITEM, "pointerReleased", "(II)V", ci_pointerReleased },
+    { NJ_C_CUSTOMITEM, "pointerDragged",  "(II)V", ci_pointerDragged },
+    { NJ_C_CUSTOMITEM, "njText",   "()Ljava/lang/String;", ci_njText },
+    { NJ_C_CUSTOMITEM, "njHeight", "(I)I", ci_njHeight },
+    { NJ_C_CUSTOMITEM, "njDraw", "(L" NJ_C_GRAPHICS ";IIIZ)I", ci_njDraw },
 
     { NJ_C_STRINGITEM, "<init>", "(Ljava/lang/String;Ljava/lang/String;)V", si_init },
     { NJ_C_STRINGITEM, "<init>", "(Ljava/lang/String;Ljava/lang/String;I)V", si_init_mode },
@@ -11894,6 +12428,17 @@ nj_status nj_lcdui_late_init(nj_vm *vm)
     lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_EXPAND",          4096);
     lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_VEXPAND",         8192);
     lcdui_const_int(vm, NJ_C_ITEM, "LAYOUT_2",               16384);
+
+    /* ---- CustomItem interaction modes ---- */
+    lcdui_const_int(vm, NJ_C_CUSTOMITEM, "NONE",                0);
+    lcdui_const_int(vm, NJ_C_CUSTOMITEM, "TRAVERSE_HORIZONTAL", 1);
+    lcdui_const_int(vm, NJ_C_CUSTOMITEM, "TRAVERSE_VERTICAL",   2);
+    lcdui_const_int(vm, NJ_C_CUSTOMITEM, "KEY_PRESS",           4);
+    lcdui_const_int(vm, NJ_C_CUSTOMITEM, "KEY_RELEASE",         8);
+    lcdui_const_int(vm, NJ_C_CUSTOMITEM, "KEY_REPEAT",          16);
+    lcdui_const_int(vm, NJ_C_CUSTOMITEM, "POINTER_PRESS",       32);
+    lcdui_const_int(vm, NJ_C_CUSTOMITEM, "POINTER_RELEASE",     64);
+    lcdui_const_int(vm, NJ_C_CUSTOMITEM, "POINTER_DRAG",        128);
 
     /* ---- StringItem / ImageItem ---- */
     lcdui_const_int(vm, NJ_C_STRINGITEM, "PLAIN",     0);

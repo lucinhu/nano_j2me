@@ -2850,6 +2850,226 @@ static void test_callserially_once_per_frame(nj_vm *vm)
 }
 
 /* ------------------------------------------------------------------ */
+/* CustomItem: a subclass paints itself and receives keys              */
+/* ------------------------------------------------------------------ */
+/*
+ * The fixture stands in for the game class: it overrides the sizing methods
+ * and paint(), which is the contract a real CustomItem subclass relies on.
+ * The assertions below pin both halves of the bridge: C calls the Java
+ * overrides (virtual dispatch, not the base natives), and the paint() result
+ * ends up in the Form's frame.
+ */
+static int ci_paints;
+static int ci_size_calls;
+static int ci_size_w, ci_size_h;
+static int ci_key_pressed;
+static int ci_key_released;
+static int ci_key_repeated;
+static int ci_last_key;
+
+NJ_NATIVE_FN(ci_fx_min_width)
+{
+    (void)th;
+    ret->i = 40;
+    return NJ_OK;
+}
+
+NJ_NATIVE_FN(ci_fx_min_height)
+{
+    (void)th;
+    ret->i = 20;
+    return NJ_OK;
+}
+
+NJ_NATIVE_FN(ci_fx_size_changed)
+{
+    (void)th;
+    (void)ret;
+    ci_size_calls++;
+    ci_size_w = NJ_ARG_INT(args, 0);
+    ci_size_h = NJ_ARG_INT(args, 1);
+    return NJ_OK;
+}
+
+NJ_NATIVE_FN(ci_fx_paint)
+{
+    nj_value a[4];
+
+    (void)th;
+    (void)ret;
+    ci_paints++;
+    /* Painting through the real Graphics API must work in content space. */
+    a[0] = iref(0);
+    a[1] = iref(0);
+    a[2] = iref(2);
+    a[3] = iref(2);
+    (void)nj_call(vm, NJ_ARG_REF(args, 0), NJ_C_GRAPHICS, "fillRect",
+                  "(IIII)V", a, NULL);
+    return NJ_OK;
+}
+
+NJ_NATIVE_FN(ci_fx_key_pressed)
+{
+    (void)th;
+    (void)ret;
+    ci_key_pressed++;
+    ci_last_key = NJ_ARG_INT(args, 0);
+    return NJ_OK;
+}
+
+NJ_NATIVE_FN(ci_fx_key_released)
+{
+    (void)th;
+    (void)ret;
+    ci_key_released++;
+    ci_last_key = NJ_ARG_INT(args, 0);
+    return NJ_OK;
+}
+
+NJ_NATIVE_FN(ci_fx_key_repeated)
+{
+    (void)th;
+    (void)ret;
+    ci_key_repeated++;
+    ci_last_key = NJ_ARG_INT(args, 0);
+    return NJ_OK;
+}
+
+static void test_customitem(nj_vm *vm)
+{
+    static const nj_builtin_method methods[] = {
+        { "getMinContentWidth",  "()I", NJ_ACC_PUBLIC },
+        { "getMinContentHeight", "()I", NJ_ACC_PUBLIC },
+        { "sizeChanged", "(II)V", NJ_ACC_PUBLIC },
+        { "paint",       "(L" NJ_C_GRAPHICS ";II)V", NJ_ACC_PUBLIC },
+        { "keyPressed",  "(I)V", NJ_ACC_PUBLIC },
+        { "keyReleased", "(I)V", NJ_ACC_PUBLIC },
+        { "keyRepeated", "(I)V", NJ_ACC_PUBLIC }
+    };
+    static const nj_builtin_class fixture = {
+        "test/TestCustomItem", NJ_C_CUSTOMITEM, NJ_ACC_PUBLIC,
+        NULL, 0u, methods, sizeof(methods) / sizeof(methods[0])
+    };
+    nj_class *cls;
+    nj_ref item;
+    nj_ref form;
+    nj_value a[2];
+    int ok = 0;
+
+    cls = nj_class_create_builtin(vm, &fixture);
+    OK_MSG(cls != NULL, "CustomItem fixture class: %s",
+           pending_exc(vm) ? pending_exc(vm) : "(no exception)");
+    if (!cls) {
+        return;
+    }
+    /* nj_class_create_builtin links lazily, so the natives can be attached
+     * now, exactly as test_paint_graphics_reused does. */
+    cls->methods[0].native = ci_fx_min_width;
+    cls->methods[1].native = ci_fx_min_height;
+    cls->methods[2].native = ci_fx_size_changed;
+    cls->methods[3].native = ci_fx_paint;
+    cls->methods[4].native = ci_fx_key_pressed;
+    cls->methods[5].native = ci_fx_key_released;
+    cls->methods[6].native = ci_fx_key_repeated;
+
+    item = nj_object_new(vm, "test/TestCustomItem");
+    OK(item != NULL);
+    if (!item) {
+        return;
+    }
+    a[0] = sref(str(vm, "custom"));
+    OK_MSG(nj_call_special(vm, item, NJ_C_CUSTOMITEM, "<init>",
+                           "(Ljava/lang/String;)V", a, NULL) == NJ_OK,
+           "CustomItem(String) failed: %s",
+           pending_exc(vm) ? pending_exc(vm) : "(no exception)");
+
+    /* The Item contract: nothing is visible until the Form lays the item out. */
+    OK(call_int(vm, item, NJ_C_CUSTOMITEM, "getContentWidth", "()I",
+                NULL, &ok) == 0 && ok);
+    OK(call_int(vm, item, NJ_C_CUSTOMITEM, "getContentHeight", "()I",
+                NULL, &ok) == 0 && ok);
+
+    /* With no explicit preference, the content size follows the overridden
+     * minimum-size methods rather than the base 0. */
+    ci_size_calls = 0;
+    OK(call_int(vm, item, NJ_C_CUSTOMITEM, "getPrefContentWidth", "(I)I",
+                (nj_value[]){ iref(100) }, &ok) == 40 && ok);
+    OK(call_int(vm, item, NJ_C_CUSTOMITEM, "getPrefContentHeight", "(I)I",
+                (nj_value[]){ iref(100) }, &ok) == 20 && ok);
+    OK(call_int(vm, item, NJ_C_ITEM, "njHeight", "(I)I",
+                (nj_value[]){ iref(100) }, &ok) == 20 && ok);
+    OK_MSG(ci_size_calls == 1 && ci_size_w == 40 && ci_size_h == 20,
+           "sizeChanged(%d, %d) called %d time(s), want (40, 20) once",
+           ci_size_w, ci_size_h, ci_size_calls);
+    OK(call_int(vm, item, NJ_C_CUSTOMITEM, "getContentWidth", "()I",
+                NULL, &ok) == 40 && ok);
+    OK(call_int(vm, item, NJ_C_CUSTOMITEM, "getContentHeight", "()I",
+                NULL, &ok) == 20 && ok);
+
+    /* setPreferredSize is reflected by the getters and by the next layout. */
+    a[0] = iref(60);
+    a[1] = iref(25);
+    OK(nj_call(vm, item, NJ_C_CUSTOMITEM, "setPreferredSize", "(II)V",
+               a, NULL) == NJ_OK);
+    OK(call_int(vm, item, NJ_C_CUSTOMITEM, "getPrefContentWidth", "(I)I",
+                (nj_value[]){ iref(100) }, &ok) == 60 && ok);
+    OK(call_int(vm, item, NJ_C_CUSTOMITEM, "getPrefContentHeight", "(I)I",
+                (nj_value[]){ iref(100) }, &ok) == 25 && ok);
+    OK(call_int(vm, item, NJ_C_ITEM, "njHeight", "(I)I",
+                (nj_value[]){ iref(100) }, &ok) == 25 && ok);
+    OK_MSG(ci_size_calls == 2 && ci_size_w == 60 && ci_size_h == 25,
+           "sizeChanged after setPreferredSize saw (%d, %d) x%d",
+           ci_size_w, ci_size_h, ci_size_calls);
+
+    /* The modes reported are exactly the ones the Form dispatcher delivers. */
+    {
+        int modes = call_int(vm, item, NJ_C_CUSTOMITEM, "getInteractionModes",
+                             "()I", NULL, &ok);
+        OK_MSG(ok && modes != 0, "getInteractionModes returned %d", modes);
+        OK_MSG(modes == (4 | 8 | 16),
+               "getInteractionModes reported unsupported modes: %d", modes);
+    }
+
+    /* A Form paints the item through its own offscreen buffer. */
+    form = construct(vm, NJ_C_FORM, "(Ljava/lang/String;)V",
+                     (nj_value[]){ sref(str(vm, "Custom")) });
+    OK(form != NULL);
+    if (!form) {
+        return;
+    }
+    a[0] = sref(item);
+    OK(call_int(vm, form, NJ_C_FORM, "append", "(L" NJ_C_ITEM ";)I",
+                a, &ok) == 0 && ok);
+    OK(nj_midp_set_current(vm, form) == NJ_OK);
+    ci_paints = 0;
+    OK_MSG(nj_midp_paint(vm) == NJ_OK, "the Form frame with a CustomItem failed");
+    OK_MSG(ci_paints > 0, "a Form never called CustomItem.paint()");
+    OK(!nj_has_exception(vm));
+
+    /* Keys reach the focused item; UP/DOWN and the soft keys stay with the
+     * Form, and FIRE is the item's. */
+    ci_key_pressed = ci_key_released = ci_key_repeated = 0;
+    ci_last_key = -1;
+    OK_MSG(nj_midp_key(vm, NJ_KEY_1, 1) == 1,
+           "a focused CustomItem did not consume a digit key");
+    OK_MSG(ci_key_pressed == 1 && ci_last_key == 49,
+           "keyPressed(%d) ran %d time(s)", ci_last_key, ci_key_pressed);
+    OK(nj_midp_key(vm, NJ_KEY_1, 0) == 1);
+    OK_MSG(ci_key_released == 1, "keyReleased ran %d time(s)", ci_key_released);
+    OK(nj_midp_key_repeat(vm, NJ_KEY_1) == 1);
+    OK_MSG(ci_key_repeated == 1, "keyRepeated ran %d time(s)", ci_key_repeated);
+    OK_MSG(nj_midp_key(vm, NJ_KEY_FIRE, 1) == 1,
+           "FIRE was not delivered to the focused CustomItem");
+    OK_MSG(ci_key_pressed == 2 && ci_last_key == NJ_MIDP_KEY_FIRE,
+           "FIRE reached the item as key code %d", ci_last_key);
+    (void)nj_midp_key(vm, NJ_KEY_UP, 1);
+    OK_MSG(ci_key_pressed == 2,
+           "UP was also delivered to the item (keyPressed x%d)",
+           ci_key_pressed);
+    OK(!nj_has_exception(vm));
+}
+
+/* ------------------------------------------------------------------ */
 /* Alert auto-dismiss timer                                            */
 /* ------------------------------------------------------------------ */
 /*
@@ -3255,6 +3475,7 @@ static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
     test_spec_static_methods(vm);
     test_paint_graphics_reused(vm);
     test_callserially_once_per_frame(vm);
+    test_customitem(vm);
     /* Last: it swaps the port clock for a fake one, and the restore leaves the
      * modular clock one wrap ahead - harmless for everything above, so keep
      * this the final test of the round. */

@@ -13,14 +13,13 @@ with the same recipe, so neighbouring rows are comparable:
 Corpus provenance and size are in `docs/CORPUS.md`; regenerate this table
 with `tools/make_compat_matrix.py <rows dir>` after a new sweep.
 
-Built from `c4e13c7`, 2026-10-25.
+Built from `d58f322`, 2026-10-25.
 
 | verdict | titles |
 | --- | --- |
-| 运行正常 | 850 |
+| 运行正常 | 851 |
 | 未呈现画面 | 3 |
 | 非可用包 | 1 |
-| 失败 | 1 |
 
 | 3D API used | titles |
 | --- | --- |
@@ -465,7 +464,7 @@ Built from `c4e13c7`, 2026-10-25.
 | vault/The Dark Knight Rises.jar | 1466 | The Dark Knight Rises | - | 1.2.5 | MIDP-2.0 | - | 15 | 16 | 600 | 65859847 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/The Fast And The Furious - Fugitive.jar | 710 | Fast and Furious Fugitive | - | 0.8.4 | MIDP-2.0 | - | 3 | 16 | 600 | 15989265 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/The Fast and The Furious - Pink Slip 3D.jar | 665 | Fast and Furious Streets | - | 0.5.5 | MIDP-2.0 | - | 30 | 16 | 600 | 3376204 | 0 | java/io/IOException,java/lang/Ar | 运行正常 |  |
-| vault/The House of the Dead - Nightmare (1).jar | 967 | THE HOUSE OF THE DEAD-NIGHTM | - | 1.0.0 | MIDP-1.0 | - | 152 | 16 | 0 | 32185 | 0 | java/lang/ArrayIndexOutOfBoundsE | 失败 |  |
+| vault/The House of the Dead - Nightmare (1).jar | 967 | THE HOUSE OF THE DEAD-NIGHTM | - | 1.0.0 | MIDP-1.0 | - | 152 | 16 | 600 | 192847 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
 | vault/The Legend of Spyro - A New Beginning.jar | 307 | Spyro Legend | - | 0.6.6 | MIDP-1.0 | - | 5 | 16 | 600 | 849162 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/The Legend of Spyro - Dawn of the Dragon.jar | 466 | Spyro Dawn of the Dragon | - | 0.4.4 | MIDP-2.0 | - | 7 | 16 | 600 | 1806158 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/The Legend of Spyro - The Eternal Night.jar | 187 | SEN | - | 0.6.0 | MIDP-2.0 | - | 5 | 16 | 600 | 7145579 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |

@@ -44,6 +44,7 @@
 #define NJ_C_LIST           "javax/microedition/lcdui/List"
 #define NJ_C_TEXTBOX        "javax/microedition/lcdui/TextBox"
 #define NJ_C_ITEM           "javax/microedition/lcdui/Item"
+#define NJ_C_CUSTOMITEM     "javax/microedition/lcdui/CustomItem"
 #define NJ_C_STRINGITEM     "javax/microedition/lcdui/StringItem"
 #define NJ_C_IMAGEITEM      "javax/microedition/lcdui/ImageItem"
 #define NJ_C_GAUGE          "javax/microedition/lcdui/Gauge"
