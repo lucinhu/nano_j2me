@@ -1142,3 +1142,22 @@ player branch borrowed the MIDI renderer's allocator adapters, which live behind
 `#if NJ_ENABLE_MIDI`. It now has its own `av_alloc`/`av_free` in
 `src/midp/nj_lib_media.c`, guarded by `NJ_ENABLE_MP3`, so MP3-without-MIDI is a
 build that exists again.
+
+### Every decoder switch, checked again (round 22)
+
+Turning a decoder off must leave a build that compiles; the trim matrix is only
+useful if that holds.  Re-measured against the current full binary
+(3,387,936 B, Release, Ninja, default ports off), one switch at a time:
+
+| Switch | Bytes saved |
+| --- | --- |
+| `-DNJ_ENABLE_AMR=0` | 87,096 |
+| `-DNJ_ENABLE_MP3=0` | 61,688 |
+| `-DNJ_ENABLE_VIDEO=0` | 44,888 |
+| `-DNJ_ENABLE_MIDI=0` | 32,632 |
+
+Two of them had stopped compiling after the provider work: the MP3 path's
+allocator adapters were guarded by `NJ_ENABLE_MP3` while the AMR and video
+provider paths call them too, and the H.263/M4V tests were registered without
+asking whether video was compiled in.  Both are fixed here, so all four switches
+build and the numbers above are measured rather than assumed.

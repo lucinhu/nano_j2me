@@ -86,11 +86,12 @@ static void midi_free(void *ud, void *p)
 
 #endif /* NJ_ENABLE_MIDI */
 
-#if NJ_ENABLE_MP3
+#if NJ_ENABLE_MP3 || NJ_ENABLE_AMR || NJ_ENABLE_VIDEO
 /*
- * The MP3 path allocates through the VM too, but it must not lean on the MIDI
- * renderer's adapters: -DNJ_ENABLE_MIDI=0 compiles those out, and a build with
- * MP3 but no MIDI still needs a decoder (the trim matrix caught this).
+ * Every provider-backed path allocates through the VM, and none of them may
+ * lean on the MIDI renderer's adapters: -DNJ_ENABLE_MIDI=0 compiles those out.
+ * The trim matrix caught this once for MP3; the guard covers AMR and video too
+ * so each switch can be turned off on its own.
  */
 static void *av_alloc(void *ud, nj_size n)
 {
