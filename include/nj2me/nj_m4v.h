@@ -93,6 +93,10 @@ int nj_m4v_decode_intra_pixels(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
 /* Macroblock raster size of a picture, rounded up to whole 16x16 units. */
 int nj_m4v_frame_macroblocks(nj_u4 width, nj_u4 height, nj_u4 *mbw, nj_u4 *mbh);
 
+/* Top-left pixel of macroblock block blk (0..3 luma in raster order, 4 Cb,
+ * 5 Cr) in a 4:2:0 picture. */
+int nj_m4v_block_origin(nj_u4 mbx, nj_u4 mby, int blk, nj_u4 *x, nj_u4 *y);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 

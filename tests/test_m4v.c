@@ -422,6 +422,19 @@ int main(void)
            "a zero width is refused");
     }
 
+    {
+        nj_u4 x = 0, y = 0;
+
+        ok(nj_m4v_block_origin(1u, 2u, 0, &x, &y) == 0 && x == 16u && y == 32u,
+           "luma block 0 sits at the macroblock origin");
+        ok(nj_m4v_block_origin(1u, 2u, 3, &x, &y) == 0 && x == 24u && y == 40u,
+           "luma block 3 is the bottom-right 8x8");
+        ok(nj_m4v_block_origin(1u, 2u, 4, &x, &y) == 0 && x == 8u && y == 16u,
+           "the chroma blocks sit on the half-resolution grid");
+        ok(nj_m4v_block_origin(0u, 0u, 6, &x, &y) == -1,
+           "there is no seventh block");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

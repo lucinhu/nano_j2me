@@ -524,6 +524,32 @@ int nj_m4v_frame_macroblocks(nj_u4 width, nj_u4 height, nj_u4 *mbw, nj_u4 *mbh)
     return 0;
 }
 
+
+int nj_m4v_block_origin(nj_u4 mbx, nj_u4 mby, int blk, nj_u4 *x, nj_u4 *y)
+{
+    if (blk < 0 || blk > 5) {
+        return -1;
+    }
+    if (blk < 4) {
+        /* Lua: four 8x8 blocks in raster order inside the 16x16 macroblock. */
+        if (x != NULL) {
+            *x = mbx * 16u + (nj_u4)(blk & 1) * 8u;
+        }
+        if (y != NULL) {
+            *y = mby * 16u + (nj_u4)(blk >> 1) * 8u;
+        }
+    } else {
+        /* 4:2:0: one 8x8 block per chroma plane per macroblock. */
+        if (x != NULL) {
+            *x = mbx * 8u;
+        }
+        if (y != NULL) {
+            *y = mby * 8u;
+        }
+    }
+    return 0;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;
