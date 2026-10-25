@@ -18,13 +18,25 @@
 #define NJ_M4V_AC_SYMS   102
 #define NJ_M4V_AC_LAST   67
 
-/* (dc size << 4) | code length, indexed by dc size delta. */
-static const nj_u2 nj_m4v_dc_lum[13] = {
-    0x0033, 0x0032, 0x0022, 0x0023, 0x0013, 0x0014, 0x0015, 0x0016, 0x0017, 0x0018, 0x0019, 0x001a, 0x001b,
+/* DC size codes as the reference tables list them: {code, length, size}. */
+typedef struct nj_m4v_dc_entry {
+    nj_u2 code;
+    nj_u1 len;
+    nj_u1 size;
+} nj_m4v_dc_entry;
+
+static const nj_m4v_dc_entry nj_m4v_dc_lum[13] = {
+    { 0x4, 3, 0 }, { 0x0, 2, 1 }, { 0x1, 2, 2 }, { 0x5, 3, 3 },
+    { 0x6, 3, 4 }, { 0xe, 4, 5 }, { 0x1e, 5, 6 }, { 0x3e, 6, 7 },
+    { 0x7e, 7, 8 }, { 0xfe, 8, 9 }, { 0x1fe, 9, 10 }, { 0x3fe, 10, 11 },
+    { 0x7fe, 11, 12 }
 };
 
-static const nj_u2 nj_m4v_dc_chrom[13] = {
-    0x0032, 0x0022, 0x0012, 0x0013, 0x0014, 0x0015, 0x0016, 0x0017, 0x0018, 0x0019, 0x001a, 0x001b, 0x001c,
+static const nj_m4v_dc_entry nj_m4v_dc_chrom[13] = {
+    { 0x0, 2, 0 }, { 0x1, 2, 1 }, { 0x2, 2, 2 }, { 0x6, 3, 3 },
+    { 0xe, 4, 4 }, { 0x1e, 5, 5 }, { 0x3e, 6, 6 }, { 0x7e, 7, 7 },
+    { 0xfe, 8, 8 }, { 0x1fe, 9, 9 }, { 0x3fe, 10, 10 }, { 0x7fe, 11, 11 },
+    { 0xffe, 12, 12 }
 };
 
 static const nj_u1 nj_m4v_ac_run[NJ_M4V_AC_SYMS] = {

@@ -121,8 +121,10 @@ int main(void)
        Check the invariants a prefix code must have rather than magic numbers:
        unique codewords, every symbol once, and each codeword covering exactly
        the 2^(12-len) entries of the 12-bit lookup it owns. */
-    ok(nj_m4v_dc_lum[0] == 0x33u, "DC luma size 0 is a 3-bit code 3");
-    ok(nj_m4v_dc_chrom[0] == 0x32u, "DC chroma size 0 is a 2-bit code 2");
+    ok(nj_m4v_dc_lum[0].code == 4u && nj_m4v_dc_lum[0].len == 3u &&
+       nj_m4v_dc_lum[0].size == 0u, "DC luma size 0 is a 3-bit code 4");
+    ok(nj_m4v_dc_chrom[0].code == 0u && nj_m4v_dc_chrom[0].len == 2u &&
+       nj_m4v_dc_chrom[0].size == 0u, "DC chroma size 0 is a 2-bit code 0");
     {
         int seen[256];
         int i, bad = 0, syms = 0, covered = 0;
@@ -199,10 +201,10 @@ int main(void)
             int which;
 
             for (which = 0; which < 2; which++) {
-                const nj_u2 *tab = which ? nj_m4v_dc_chrom : nj_m4v_dc_lum;
+                const nj_m4v_dc_entry *tab = which ? nj_m4v_dc_chrom : nj_m4v_dc_lum;
                 nj_u1 buf[4];
-                int   len = (int)(tab[i] & 0x0fu);
-                int   code = (int)(tab[i] >> 4);
+                int   len = (int)tab[i].len;
+                int   code = (int)tab[i].code;
                 int   j, size;
                 nj_u4 pos = 0;
 
@@ -374,8 +376,10 @@ int main(void)
         for (i = 1; i < NJ_M4V_AC_SYMS; i++)
             if (nj_m4v_ac_run[i] == 0 && i >= NJ_M4V_AC_LAST) { sym = i; break; }
         memset(buf, 0, sizeof(buf));
-        for (j = 0; j < 3; j++) if ((3 >> (2 - j)) & 1) buf[j / 8] |= (nj_u1)(0x80u >> (j % 8));
-        bitpos = 3;
+        for (j = 0; j < (int)nj_m4v_dc_lum[0].len; j++)
+            if ((nj_m4v_dc_lum[0].code >> (nj_m4v_dc_lum[0].len - 1 - (nj_u1)j)) & 1u)
+                buf[j / 8] |= (nj_u1)(0x80u >> (j % 8));
+        bitpos = (int)nj_m4v_dc_lum[0].len;
         for (i = 0; i < 4096; i++)
             if (nj_m4v_ac_lut[i] != 0xffffu && (int)(nj_m4v_ac_lut[i] & 0xffu) == sym) {
                 int len = (int)(nj_m4v_ac_lut[i] >> 8);
@@ -406,12 +410,15 @@ int main(void)
     {
         nj_u1 buf[8], pix[64];
         nj_u4 pos = 0;
-        int i, j, sym = -1, bitpos = 3, rc;
+        int i, j, sym = -1, bitpos = 0, rc;
 
         for (i = 1; i < NJ_M4V_AC_SYMS; i++)
             if (nj_m4v_ac_run[i] == 0 && i >= NJ_M4V_AC_LAST) { sym = i; break; }
         memset(buf, 0, sizeof(buf));
-        for (j = 0; j < 3; j++) if ((3 >> (2 - j)) & 1) buf[j / 8] |= (nj_u1)(0x80u >> (j % 8));
+        for (j = 0; j < (int)nj_m4v_dc_lum[0].len; j++)
+            if ((nj_m4v_dc_lum[0].code >> (nj_m4v_dc_lum[0].len - 1 - (nj_u1)j)) & 1u)
+                buf[j / 8] |= (nj_u1)(0x80u >> (j % 8));
+        bitpos = (int)nj_m4v_dc_lum[0].len;
         for (i = 0; i < 4096; i++)
             if (nj_m4v_ac_lut[i] != 0xffffu && (int)(nj_m4v_ac_lut[i] & 0xffu) == sym) {
                 int len = (int)(nj_m4v_ac_lut[i] >> 8);
@@ -655,7 +662,7 @@ int main(void)
 
     {
         /* luminance DC size code 0 is "011"; a block without AC stops there */
-        static const nj_u1 b[1] = { 0x60u };
+        static const nj_u1 b[1] = { 0x80u };
         nj_s4 coef[64];
         nj_u4 pos = 0;
         int i, zero = 1;
