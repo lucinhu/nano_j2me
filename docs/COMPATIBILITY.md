@@ -4093,5 +4093,11 @@ test:
    inside `vm_invoke` instead of failing cleanly.  Real titles hit this too when
    they ignore a failed `createPlayer` and keep going.
 
-Neither is fixed yet.  The next attempt should start with (1), because it also
-removes the reason the test builds a heap that nearly cannot fit the allocation.
+(2) is fixed (round 79): `vm_invoke()` now refuses a receiver that the heap does
+not own, so the same sequence throws NullPointerException instead of faulting in
+the VM.  `test_lib` no longer crashes - it reports "830 passed, 4 failed" and
+exits 1, which is what a failing assertion should look like.
+
+(1) is still open: `Manager.createPlayer(InputStream)` must parse a WAV as it
+arrives instead of buffering the whole stream first.  That is also the version
+that spends less memory, so it is the right fix rather than a bigger test heap.

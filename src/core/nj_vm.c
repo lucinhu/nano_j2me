@@ -1270,6 +1270,17 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
         vm->cur = th;
     }
 
+    /*
+     * A native that ignored a failed allocation can end up calling a method on
+     * a reference whose block the collector has already recycled.  Dereferencing
+     * that runs into the free list's next pointer and faults inside vm_invoke
+     * (test_lib: the harness keeps calling after createPlayer threw
+     * OutOfMemoryError).  Reject a pointer the heap does not own instead.
+     */
+    if (obj && !nj_heap_owns_object_fast(vm, obj)) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "a call was made on a reference the heap does not own");
+    }
     c = nj_class_lookup(vm, cls);
     if (!c) {
         return nj_throw(vm, "java/lang/NoClassDefFoundError", cls);
