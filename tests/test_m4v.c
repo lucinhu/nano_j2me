@@ -94,6 +94,8 @@ int main(void)
 
         ok(nj_m4v_parse_vop(vop_i, (nj_u4)sizeof(vop_i), 4u, 1000u, &vop) == 1,
            "the 1942 VOP header parses");
+        ok(vop.qscale >= 1 && vop.qscale <= 31 && vop.dc_vlc_thr <= 7,
+           "and it carries a usable quantiser and DC threshold");
         ok(vop.type == 0, "the first sample is an I-VOP");
         ok(vop.time_increment == 0u, "it sits at time increment 0");
         ok(vop.coded == 1, "the frame is coded, not skipped");

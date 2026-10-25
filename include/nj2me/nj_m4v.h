@@ -39,6 +39,8 @@ typedef struct nj_m4v_vop {
     int   type;           /* 0 I, 1 P (B is not in Simple Profile)          */
     nj_u4 time_increment; /* needs the VOL's time_res to mean anything      */
     int   coded;          /* vop_coded: 0 means the frame is skipped        */
+    int   qscale;         /* vop_quant, 1..31, valid when coded             */
+    int   dc_vlc_thr;     /* intra_dc_vlc_thr, 0..7                         */
 } nj_m4v_vop;
 
 /* Parses a VOP header whose payload starts at b[pos]. */

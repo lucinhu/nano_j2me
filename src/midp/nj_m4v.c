@@ -206,8 +206,8 @@ int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
                      nj_m4v_vop *out)
 {
     m4v_bits s;
-    nj_u4 v;
-    int   type, bit, coded = 1;
+    nj_u4 v, tv = 0;
+    int   type, bit, coded = 1, qscale = 0, thr = 0;
 
     if (b == NULL || out == NULL || time_res < 2u) {
         return 0;
@@ -248,7 +248,7 @@ int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
             return 0;
         }
     }
-    if (!m4v_bits_get(&s, (int)(m4v_log2(time_res - 1u) + 1u), &v)) {
+    if (!m4v_bits_get(&s, (int)(m4v_log2(time_res - 1u) + 1u), &tv)) {
         return 0;
     }
     if (!m4v_marker(&s)) {
@@ -258,9 +258,29 @@ int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
         return 0;
     }
     coded = bit;
+    if (coded) {
+        /* complexity_estimation_disable lives in the VOL, not here: the VOP
+         * goes straight to intra_dc_vlc_thr and then vop_quant. */
+        if (!m4v_bits_get(&s, 3, &v)) {
+            return 0;
+        }
+        thr = (int)v;
+        if (type == 1 && !m4v_bits_get(&s, 3, &v)) {
+            return 0;           /* vop_fcode_forward */
+        }
+        if (!m4v_bits_get(&s, 5, &v)) {
+            return 0;
+        }
+        qscale = (int)v;
+        if (qscale < 1) {
+            return 0;
+        }
+    }
     out->type = type;
-    out->time_increment = v;
+    out->time_increment = tv;
     out->coded = coded;
+    out->qscale = qscale;
+    out->dc_vlc_thr = thr;
     return 1;
 }
 
