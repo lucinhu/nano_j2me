@@ -103,6 +103,9 @@ int nj_m4v_dc_scale(int q, int luma);
 /* 4:2:0 chroma plane size: half in each direction, rounded up. */
 int nj_m4v_plane_size(nj_u4 width, nj_u4 height, nj_u4 *cw, nj_u4 *ch);
 
+/* Scales a neighbour block DC to this block quantiser (14496-2 7.4.3.4). */
+int nj_m4v_dc_predict(int prev_dc, int prev_scale, int cur_scale);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 

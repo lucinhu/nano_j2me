@@ -456,6 +456,18 @@ int main(void)
         ok(bad == 0, "4:2:0 chroma planes round up and reject empty pictures");
     }
 
+    {
+        int bad = 0;
+
+        bad += nj_m4v_dc_predict(6, 8, 8) != 6;
+        bad += nj_m4v_dc_predict(6, 8, 16) != 12;
+        bad += nj_m4v_dc_predict(-6, 8, 16) != -12;
+        bad += nj_m4v_dc_predict(5, 16, 8) != 3;      /* 2.5 rounds to 3 */
+        bad += nj_m4v_dc_predict(-5, 16, 8) != -3;
+        bad += nj_m4v_dc_predict(1, 0, 8) != -1;
+        ok(bad == 0, "neighbour DC scales by the quantiser ratio, rounding away from zero");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

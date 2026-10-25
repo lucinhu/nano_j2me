@@ -574,6 +574,20 @@ int nj_m4v_plane_size(nj_u4 width, nj_u4 height, nj_u4 *cw, nj_u4 *ch)
     return 0;
 }
 
+
+int nj_m4v_dc_predict(int prev_dc, int prev_scale, int cur_scale)
+{
+    nj_s8 v;
+
+    if (prev_scale <= 0 || cur_scale <= 0) {
+        return -1;
+    }
+    v = (nj_s8)prev_dc * (nj_s8)cur_scale;
+    v = (v >= 0) ? (v + prev_scale / 2) / prev_scale
+                 : -((-v + prev_scale / 2) / prev_scale);
+    return (int)v;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;
