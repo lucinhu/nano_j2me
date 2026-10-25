@@ -625,3 +625,23 @@ first one was the reason earlier probes "succeeded" doing nothing:
 3. `nj_m4v_decode_ivop()` then fails at bit **588** of the sample, i.e. inside
    the first macroblock row, not after eight blocks as the earlier (offset-
    confused) probe suggested.  That is the number to bisect from next.
+
+### What is now ruled out in the M4V alignment bug (round 106)
+
+Three suspects were checked against the reference's own tables and code:
+
+* the AC lookup table: expanded to all 4096 twelwe-bit windows and compared
+  entry by entry with `ff_mpeg4_intra_vlc[103][2]`, **0 mismatches** (and the
+  103rd entry is indeed `{3, 7}`, the seven-bit escape);
+* the `last` split: `ff_mpeg4_rl_intra` says `n = 102, last = 67`, exactly what
+  `NJ_M4V_AC_LAST` uses, and `ff_mpeg4_intra_level[]` contains no zero level, so
+  there is no separate EOB symbol to mis-handle;
+* the escape grammar: the reference reads, for the third form, two mode bits,
+  `last`, six-bit `run`, a marker, twelve signed `level` bits and another
+  marker - which is what `nj_m4v_escape3()` does; the second and first forms
+  match as well.
+
+So the remaining candidates are the DC delta's sign-bit order and the
+block-end convention (the reference tracks `i` with a 192 offset so a `last`
+symbol whose run lands at 63 ends the block, rather than treating the run as a
+plain offset).  Both are cheap to test with the trace harness described above.
