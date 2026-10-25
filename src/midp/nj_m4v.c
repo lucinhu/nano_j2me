@@ -299,6 +299,33 @@ int nj_m4v_decode_ac(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *last)
     return (int)i;
 }
 
+
+int nj_m4v_decode_dc(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int luma)
+{
+    const nj_u2 *tab = luma ? nj_m4v_dc_lum : nj_m4v_dc_chrom;
+    int len, i;
+
+    for (len = 1; len <= 13; len++) {
+        nj_u4 v = 0;
+        int   k;
+
+        if (*pos + (nj_u4)len > n * 8u) {
+            return -1;
+        }
+        for (k = 0; k < len; k++) {
+            v = (v << 1) | (nj_u4)((b[(*pos + (nj_u4)k) >> 3] >>
+                                    (7u - ((*pos + (nj_u4)k) & 7u))) & 1u);
+        }
+        for (i = 0; i < 13; i++) {
+            if ((int)(tab[i] & 0x0fu) == len && (int)(tab[i] >> 4) == (int)v) {
+                *pos += (nj_u4)len;
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;

@@ -189,6 +189,35 @@ int main(void)
         ok(bad == 0, "every AC codeword round-trips through the decoder");
     }
 
+    {
+        int i, bad = 0;
+
+        for (i = 0; i < 13; i++) {
+            int which;
+
+            for (which = 0; which < 2; which++) {
+                const nj_u2 *tab = which ? nj_m4v_dc_chrom : nj_m4v_dc_lum;
+                nj_u1 buf[4];
+                int   len = (int)(tab[i] & 0x0fu);
+                int   code = (int)(tab[i] >> 4);
+                int   j, size;
+                nj_u4 pos = 0;
+
+                memset(buf, 0, sizeof(buf));
+                for (j = 0; j < len; j++) {
+                    if ((code >> (len - 1 - j)) & 1) {
+                        buf[j / 8] |= (nj_u1)(0x80u >> (j % 8));
+                    }
+                }
+                size = nj_m4v_decode_dc(buf, (nj_u4)sizeof(buf), &pos, which == 0);
+                if (size != i || (int)pos != len) {
+                    bad++;
+                }
+            }
+        }
+        ok(bad == 0, "every DC size codeword decodes to its own size");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }
