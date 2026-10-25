@@ -420,3 +420,20 @@ B-16 tables, inverse scan/prediction and reconstruction, reusing the H.263
 inverse transform and half-pel motion compensation.  `nj_m4v` already hands it
 the layer geometry and per-picture timing, and `tests/test_m4v.c` pins the
 framing so that work starts from a checked base rather than from a guess.
+
+### The MPEG-4 macroblock layer, piece by piece (rounds 25-35)
+
+The decoder is being built bottom-up so each piece is tested before the next
+one leans on it:
+
+| Piece | State | Test |
+| --- | --- | --- |
+| intra AC tables | done, generated from the reference data | every one of 102 codewords round-trips |
+| intra DC size + signed delta | done | all 26 size codewords, both sign cases |
+| coefficient scan / store | done | table is a permutation, odd positions land at natural indices |
+| AC walk to the last-flagged symbol | done | synthetic stream stops at the right cursor |
+| single intra block (DC prediction + empty AC) | done | predicted DC survives, other 63 coefficients are zero |
+| escape form, DC prediction across blocks, P-VOP/B-16, IDCT | **not done** | - |
+
+`nj_m4v_decode_intra_block()` already returns distinct codes for "corrupt" (-1)
+and "escape not decoded yet" (-3), so the wiring cannot confuse the two.
