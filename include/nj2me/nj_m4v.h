@@ -106,6 +106,16 @@ int nj_m4v_plane_size(nj_u4 width, nj_u4 height, nj_u4 *cw, nj_u4 *ch);
 /* Scales a neighbour block DC to this block quantiser (14496-2 7.4.3.4). */
 int nj_m4v_dc_predict(int prev_dc, int prev_scale, int cur_scale);
 
+/* DC prediction (14496-2 7.4.3.4): the reference decoder picks the top-left
+ * neighbour when |a-b| < |b-c| and the left one otherwise, then divides the
+ * dequantised prediction by the quantiser scale with rounding.  Negative
+ * arguments mean "outside the picture" and become the 1024 neutral value. */
+int nj_m4v_dc_predict_q(int a, int b, int c, int scale, int *dir);
+
+/* Adds the transmitted level to the prediction and returns the quantised DC,
+ * writing the dequantised, clamped value the next block will predict from. */
+int nj_m4v_dc_level(int delta, int pred_dequant, int scale, int *stored);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 

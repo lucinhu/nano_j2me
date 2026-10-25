@@ -468,6 +468,24 @@ int main(void)
         ok(bad == 0, "neighbour DC scales by the quantiser ratio, rounding away from zero");
     }
 
+    {
+        int dir = -1, stored = -1, bad = 0;
+
+        /* left wins when |a-b| >= |b-c| */
+        bad += nj_m4v_dc_predict_q(800, 1024, 1024, 8, &dir) != 100 || dir != 0;
+        /* top-left wins when the left/top difference is smaller */
+        bad += nj_m4v_dc_predict_q(1024, 1024, 800, 8, &dir) != 100 || dir != 1;
+        /* a tie goes to the left neighbour, as the reference does */
+        bad += nj_m4v_dc_predict_q(1024, 800, 1024, 8, &dir) != 128 || dir != 0;
+        /* outside the picture is the neutral 1024 */
+        bad += nj_m4v_dc_predict_q(-1, -1, -1, 8, &dir) != 128;
+        bad += nj_m4v_dc_level(0, 1024, 8, &stored) != 128 || stored != 1024;
+        bad += nj_m4v_dc_level(3, 1024, 8, &stored) != 131 || stored != 1048;
+        bad += nj_m4v_dc_level(-200, 1024, 8, &stored) != -72 || stored != 0;
+        bad += nj_m4v_dc_level(200, 1024, 8, &stored) != 328 || stored != 2047;
+        ok(bad == 0, "DC prediction follows the reference neighbour rule and clamps");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

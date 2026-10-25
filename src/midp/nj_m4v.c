@@ -588,6 +588,59 @@ int nj_m4v_dc_predict(int prev_dc, int prev_scale, int cur_scale)
     return (int)v;
 }
 
+
+int nj_m4v_dc_predict_q(int a, int b, int c, int scale, int *dir)
+{
+    int pred;
+
+    if (scale <= 0) {
+        return -1;
+    }
+    /* B C
+     * A X   -- a: left, b: top, c: top-left, in the dequantised domain.
+     * Out-of-picture neighbours are 1024, as the reference decoder does. */
+    if (a < 0 || b < 0 || c < 0) {
+        if (a < 0) a = 1024;
+        if (b < 0) b = 1024;
+        if (c < 0) c = 1024;
+    }
+    do {
+        int ab = a - b, bc = b - c;
+
+        if (ab < 0) ab = -ab;
+        if (bc < 0) bc = -bc;
+        if (ab < bc) {
+            pred = c;
+            if (dir != NULL) *dir = 1;      /* from the top */
+            break;
+        }
+        pred = a;
+        if (dir != NULL) *dir = 0;          /* from the left */
+    } while (0);
+    return (pred + scale / 2) / scale;
+}
+
+int nj_m4v_dc_level(int delta, int pred_dequant, int scale, int *stored)
+{
+    int pred_q, ret, val;
+
+    if (scale <= 0) {
+        return -1;
+    }
+    pred_q = (pred_dequant + scale / 2) / scale;
+    ret = delta + pred_q;
+    val = ret * scale;
+    if (val < 0) {
+        val = 0;
+    } else if (val > 2047) {
+        val = 2047;
+    }
+    if (stored != NULL) {
+        *stored = val;
+    }
+    return ret;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;
