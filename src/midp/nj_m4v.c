@@ -427,6 +427,29 @@ int nj_m4v_coef_apply(nj_s4 *coef, int *k, int sym, int *last)
     return 0;
 }
 
+
+int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k)
+{
+    int last = 0;
+
+    while (!last) {
+        int sym = nj_m4v_decode_ac(b, n, pos, &last);
+        int rc;
+
+        if (sym < 0) {
+            return -1;
+        }
+        rc = nj_m4v_coef_apply(coef, &k, sym, &last);
+        if (rc == -2) {
+            return -3;      /* escape form is not decoded yet */
+        }
+        if (rc < 0) {
+            return -1;
+        }
+    }
+    return k;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;

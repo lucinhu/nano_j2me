@@ -74,6 +74,10 @@ void nj_m4v_coef_store(nj_s4 *coef, int k, int level);
  * escape symbol, which the caller must decode itself. */
 int nj_m4v_coef_apply(nj_s4 *coef, int *k, int sym, int *last);
 
+/* Walks AC symbols until one carries last.  Returns the next free scan
+ * position, -1 for a corrupt stream or -3 when the escape form is reached. */
+int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 

@@ -325,6 +325,30 @@ int main(void)
         }
     }
 
+    {
+        nj_s4 coef[64];
+        nj_u1 buf[8];
+        nj_u4 pos = 0;
+        int i, sym = -1, lastpos;
+
+        for (i = 0; i < 64; i++) coef[i] = 0;
+        for (i = 1; i < NJ_M4V_AC_SYMS; i++) {
+            if (nj_m4v_ac_run[i] == 0 && i >= NJ_M4V_AC_LAST) { sym = i; break; }
+        }
+        ok(sym > 0, "a last-flagged zero-run AC symbol exists");
+        memset(buf, 0, sizeof(buf));
+        for (i = 0; i < 4096; i++) {
+            if (nj_m4v_ac_lut[i] != 0xffffu && (int)(nj_m4v_ac_lut[i] & 0xffu) == sym) {
+                int len = (int)(nj_m4v_ac_lut[i] >> 8), j;
+                for (j = 0; j < len; j++)
+                    if ((i >> (NJ_M4V_AC_BITS - 1 - j)) & 1) buf[j / 8] |= (nj_u1)(0x80u >> (j % 8));
+                break;
+            }
+        }
+        lastpos = nj_m4v_ac_block(buf, (nj_u4)sizeof(buf), &pos, coef, 1);
+        ok(lastpos == 2, "a block loop stops after the last-flagged symbol");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }
