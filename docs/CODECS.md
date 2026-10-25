@@ -480,3 +480,12 @@ still needs, in dependency order:
 Nothing in the tree claims `mp4v` playback today: `createPlayer()` raises a
 MediaException naming the missing decoder, and the M4V decoder reports -3 for
 an escape it cannot yet read.
+
+### Gate status (round 54)
+
+The full suite is green on `74f2277` (118/118), `no_statics` included: the two
+decoder tables are `const` data in `.rodata`, the provider registry lives in
+`nj_vm` and decoder state lives in the provider's own allocation.  Earlier
+rounds reported `-E no_statics` because another workstream had uncommitted
+edits that put an `on.1` symbol in `.data`; that change is not part of this
+goal's commits and has since been resolved.
