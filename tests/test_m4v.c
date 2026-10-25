@@ -653,6 +653,23 @@ int main(void)
         ok(pos == 62u, "and consumes six bits");
     }
 
+    {
+        /* luminance DC size code 0 is "100"; a block without AC stops there */
+        static const nj_u1 b[1] = { 0x80u };
+        nj_s4 coef[64];
+        nj_u4 pos = 0;
+        int i, zero = 1;
+
+        ok(nj_m4v_decode_intra_block_ex(b, 8u, &pos, coef, 1, 0, 2, 0) == 0,
+           "a DC-only intra block decodes");
+        for (i = 1; i < 64; i++) {
+            if (coef[i] != 0) {
+                zero = 0;
+            }
+        }
+        ok(zero && pos == 3u, "it carries no AC and consumes three bits");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

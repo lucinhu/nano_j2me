@@ -766,8 +766,9 @@ int nj_m4v_qadd(int qscale)
     return (qscale > 0 && qscale < 32) ? ((qscale - 1) | 1) : 0;
 }
 
-int nj_m4v_decode_intra_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef,
-                              int luma, int dc_pred, int qscale)
+int nj_m4v_decode_intra_block_ex(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
+                                 nj_s4 *coef, int luma, int dc_pred, int qscale,
+                                 int coded)
 {
     int size, delta, dc, k, i;
 
@@ -787,11 +788,20 @@ int nj_m4v_decode_intra_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef,
     }
     dc = dc_pred + delta;
     coef[0] = (nj_s4)dc;
+    if (!coded) {
+        return 0;      /* intra blocks always carry DC; AC only when cbp says so */
+    }
     k = nj_m4v_ac_block(b, n, pos, coef, 1, qscale);
     if (k == -3) {
         return -3;
     }
     return k < 0 ? -1 : 0;
+}
+
+int nj_m4v_decode_intra_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef,
+                              int luma, int dc_pred, int qscale)
+{
+    return nj_m4v_decode_intra_block_ex(b, n, pos, coef, luma, dc_pred, qscale, 1);
 }
 
 void nj_m4v_idct(const nj_s4 *coef, int *out)
