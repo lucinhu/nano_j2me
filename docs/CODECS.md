@@ -143,3 +143,25 @@ Known gaps: the LAME Info frame is emitted as one silent frame and there is no
 gapless trimming (so raw totals differ from `ffmpeg -f s16le` by the encoder
 delay); CRC is skipped rather than verified; Layer I/II are not implemented;
 free-format bitrate is refused.
+
+## MP3 in the corpus (round 2)
+
+The decoder and the player path are one thing; whether titles actually get
+sound is another.  Two corpus titles that ship MP3 assets play them through
+`Manager.createPlayer()` with no changes on their side:
+
+| Title | Assets | `pcm_frames` after 400 paced frames |
+| --- | --- | --- |
+| 恋爱物语－我的机器女友_6219 | `sound/n_good.mp3`, `n_happy.mp3`, ... | 50,927 |
+| 星辰变S60V5完整版_3364 | `quantou.mp3` (title music) | 1,131,934 |
+
+Both run to their frame budget with no exception from the media API, which
+means the holder path (decoder + one frame of scratch in a 76 B array, file
+bytes in `pSrc`) is exercised end to end, not just by the unit test.  The
+`IOException` a few titles print for images such as `/logo.png` and
+`/fengmian.png` are their own probes for files that are not in their JARs
+(checked: neither entry exists in 星辰变's 96 entries), not a loader defect.
+
+What is still missing for audio: an AMR provider behind the same seam (today
+AMR goes through the port hook and the buffered whole-file path), and reference
+fixtures for MPEG-2 rates and linbits-heavy streams.
