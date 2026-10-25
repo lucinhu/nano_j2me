@@ -63,6 +63,9 @@ int nj_m4v_dc_delta(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int size);
  * escape symbol (0) and for out-of-range input. */
 int nj_m4v_ac_sym(int sym, int *run, int *level, int *last);
 
+/* Natural index of the k-th coefficient in the intra scan (14496-2 7.4.3). */
+int nj_m4v_scan_index(int k);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 

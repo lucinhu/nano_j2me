@@ -368,6 +368,32 @@ int nj_m4v_ac_sym(int sym, int *run, int *level, int *last)
     return 1;
 }
 
+
+/*
+ * ISO/IEC 14496-2 7.4.3: the coefficient scan for a non-interlaced picture is
+ * the usual zigzag.  nj_m4v_scan_index(k) is the natural index of the k-th
+ * coefficient in that order, which is what the AC loop needs to place run/level
+ * pairs into an 8x8 block.
+ */
+static const nj_u1 nj_m4v_zigzag[64] = {
+     0,  1,  8, 16,  9,  2,  3, 10,
+    17, 24, 32, 25, 18, 11,  4,  5,
+    12, 19, 26, 33, 40, 48, 41, 34,
+    27, 20, 13,  6,  7, 14, 21, 28,
+    35, 42, 49, 56, 57, 50, 43, 36,
+    29, 22, 15, 23, 30, 37, 44, 51,
+    58, 59, 52, 45, 38, 31, 39, 46,
+    53, 60, 61, 54, 47, 55, 62, 63
+};
+
+int nj_m4v_scan_index(int k)
+{
+    if (k < 0 || k >= 64) {
+        return -1;
+    }
+    return (int)nj_m4v_zigzag[k];
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;

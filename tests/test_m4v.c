@@ -253,6 +253,27 @@ int main(void)
         ok(okr != 0, "AC symbols expand to run/level with the reference last flag");
     }
 
+    {
+        int seen[64];
+        int i, bad = 0;
+
+        memset(seen, 0, sizeof(seen));
+        for (i = 0; i < 64; i++) {
+            int k = nj_m4v_scan_index(i);
+
+            if (k < 0 || k >= 64 || seen[k] != 0) {
+                bad++;
+            } else {
+                seen[k] = 1;
+            }
+        }
+        ok(bad == 0 && nj_m4v_scan_index(64) == -1,
+           "the coefficient scan is a permutation of the 64 positions");
+        ok(nj_m4v_scan_index(0) == 0 && nj_m4v_scan_index(1) == 1 &&
+           nj_m4v_scan_index(2) == 8 && nj_m4v_scan_index(63) == 63,
+           "the scan starts down the first column and ends at the last position");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }
