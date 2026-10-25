@@ -11,6 +11,8 @@
  * self-consistent, so only a real decoder configuration can tell.
  */
 #include "nj2me/nj_m4v.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include "nj2me/nj_m4v_tables.h"
 #include "nj2me/nj_m4v_escape.h"
 #include "nj_idct.h"
@@ -202,19 +204,19 @@ int nj_m4v_parse_vol(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_m4v_vol *out)
     return out->width > 0u && out->height > 0u;
 }
 
-int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
-                     nj_m4v_vop *out)
+int nj_m4v_parse_vop_bits(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 time_res,
+                          nj_m4v_vop *out)
 {
     m4v_bits s;
     nj_u4 v, tv = 0;
     int   type, bit, coded = 1, qscale = 0, thr = 0;
 
-    if (b == NULL || out == NULL || time_res < 2u) {
+    if (b == NULL || bitpos == NULL || out == NULL || time_res < 2u) {
         return 0;
     }
     s.b = b;
     s.n = n;
-    s.pos = pos * 8u;
+    s.pos = *bitpos;
     if (!m4v_bits_get(&s, 2, &v)) {
         return 0;
     }
@@ -281,8 +283,18 @@ int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
     out->coded = coded;
     out->qscale = qscale;
     out->dc_vlc_thr = thr;
+    *bitpos = s.pos;
     return 1;
 }
+
+int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
+                     nj_m4v_vop *out)
+{
+    nj_u4 bitpos = pos * 8u;
+
+    return nj_m4v_parse_vop_bits(b, n, &bitpos, time_res, out);
+}
+
 
 int nj_m4v_find_vop(const nj_u1 *b, nj_u4 n, nj_u4 *pos)
 {
@@ -979,6 +991,144 @@ void nj_m4v_yuv420_to_rgb565(const nj_u1 *yp, int ys, const nj_u1 *up, int us,
             orow[2 * x + 1] = (nj_u1)(px >> 8);
         }
     }
+}
+
+
+int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
+                       const nj_m4v_vol *vol, const nj_m4v_vop *vop,
+                       nj_s4 *grids, nj_u1 *yp, int ys,
+                       nj_u1 *up, int us, nj_u1 *vp, int vs)
+{
+    nj_u4 mbw = 0, mbh = 0, cw = 0, ch = 0;
+    nj_s4 *gl, *gc, *gcr;
+    int    glw, gcw, lscale, cscale, blk, i, x, y;
+    nj_u4  mbx, mby;
+
+    if (b == NULL || pos == NULL || vol == NULL || vop == NULL || grids == NULL ||
+        yp == NULL || up == NULL || vp == NULL || ys <= 0 || us <= 0 || vs <= 0) {
+        return -1;
+    }
+    if (!vop->coded) {
+        return 0;
+    }
+    if (vop->type != 0) {
+        return -1;                  /* P-VOPs are not implemented yet */
+    }
+    if (nj_m4v_frame_macroblocks(vol->width, vol->height, &mbw, &mbh) != 0 ||
+        nj_m4v_plane_size(vol->width, vol->height, &cw, &ch) != 0) {
+        return -1;
+    }
+    lscale = nj_m4v_dc_scale(vop->qscale, 1);
+    cscale = nj_m4v_dc_scale(vop->qscale, 0);
+    if (lscale <= 0 || cscale <= 0) {
+        return -1;
+    }
+    glw = (int)mbw * 2;
+    gcw = (int)mbw;
+    gl  = grids;
+    gc  = gl + (nj_size)glw * (nj_size)(mbh * 2u);
+    gcr = gc + (nj_size)gcw * (nj_size)mbh;
+    for (i = 0; i < glw * (int)(mbh * 2u); i++) {
+        gl[i] = 1024;
+    }
+    for (i = 0; i < gcw * (int)mbh; i++) {
+        gc[i] = 1024;
+        gcr[i] = 1024;
+    }
+
+    for (mby = 0; mby < mbh; mby++) {
+        for (mbx = 0; mbx < mbw; mbx++) {
+            for (blk = 0; blk < 6; blk++) {
+                int luma = blk < 4;
+                int scale = luma ? lscale : cscale;
+                nj_s4 *g = luma ? gl : (blk == 4 ? gc : gcr);
+                int gw = luma ? glw : gcw;
+                int gx = 0, gy = 0, a, bb, cc, dir = 0, size, delta, lvl, stored;
+                nj_s4 coef[64];
+                int out[64];
+                nj_u1 pix[64];
+
+                if (nj_m4v_block_grid(blk, (int)mbx, (int)mby, &gx, &gy) != 0) {
+                    return -1;
+                }
+                a  = (gx > 0) ? (int)g[(nj_size)gy * gw + gx - 1] : 1024;
+                bb = (gy > 0) ? (int)g[(nj_size)(gy - 1) * gw + gx] : 1024;
+                cc = (gx > 0 && gy > 0) ?
+                     (int)g[(nj_size)(gy - 1) * gw + gx - 1] : 1024;
+
+                size = nj_m4v_decode_dc(b, n, pos, luma);
+                if (size < 0) {
+                    if (getenv("NJ_M4VDBG")) fprintf(stderr, "m4v: dc mb(%u,%u) blk=%d bit=%u\n", mbx, mby, blk, *pos);
+                    return -1;
+                }
+                delta = nj_m4v_dc_delta(b, n, pos, size);
+                if (delta < 0) {
+                    return -1;
+                }
+                lvl = delta + nj_m4v_dc_predict_q(a, bb, cc, scale, &dir);
+                stored = lvl * scale;
+                if (stored < 0) {
+                    stored = 0;
+                } else if (stored > 2047) {
+                    stored = 2047;
+                }
+                g[(nj_size)gy * gw + gx] = stored;
+
+                for (i = 0; i < 64; i++) {
+                    coef[i] = 0;
+                }
+                coef[0] = (nj_s4)nj_m4v_dc_coef(lvl, scale);
+                {   nj_u4 before = *pos; int arc = nj_m4v_ac_block(b, n, pos, coef, 1, vop->qscale);
+                    if (getenv("NJ_M4VDBG")) fprintf(stderr, "m4v: mb(%u,%u) blk=%d dcsz=%d lvl=%d ac_rc=%d bits %u..%u\n", mbx, mby, blk, size, lvl, arc, before, *pos);
+                    if (arc < 0) {
+                        if (getenv("NJ_M4VDBG")) {
+                            nj_u4 q = *pos; int sh; unsigned v = 0;
+                            for (sh = 0; sh < 16 && q + (nj_u4)sh < n * 8u; sh++) {
+                                v = (v << 1) | ((b[(q + (nj_u4)sh) / 8u] >> (7u - ((q + (nj_u4)sh) % 8u))) & 1u);
+                            }
+                            fprintf(stderr, "m4v: fail prefix %04x at bit %u\n", v, *pos);
+                        }
+                        return -1;
+                    }
+                }
+                nj_idct8x8(coef, out);
+                for (i = 0; i < 64; i++) {
+                    int v = out[i] + 128;
+
+                    pix[i] = (nj_u1)(v < 0 ? 0 : (v > 255 ? 255 : v));
+                }
+                if (blk < 4) {
+                    int px = (int)mbx * 16 + (blk & 1) * 8;
+                    int py = (int)mby * 16 + (blk >> 1) * 8;
+
+                    for (y = 0; y < 8; y++) {
+                        for (x = 0; x < 8; x++) {
+                            int dx = px + x, dy = py + y;
+
+                            if (dx < (int)vol->width && dy < (int)vol->height) {
+                                yp[(nj_size)dy * ys + dx] = pix[y * 8 + x];
+                            }
+                        }
+                    }
+                } else {
+                    nj_u1 *p = (blk == 4) ? up : vp;
+                    int ps = (blk == 4) ? us : vs;
+                    int px = (int)mbx * 8, py = (int)mby * 8;
+
+                    for (y = 0; y < 8; y++) {
+                        for (x = 0; x < 8; x++) {
+                            int dx = px + x, dy = py + y;
+
+                            if (dx < (int)cw && dy < (int)ch) {
+                                p[(nj_size)dy * ps + dx] = pix[y * 8 + x];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 0;
 }
 
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)

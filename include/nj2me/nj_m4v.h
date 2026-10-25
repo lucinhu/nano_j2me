@@ -47,6 +47,12 @@ typedef struct nj_m4v_vop {
 int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
                      nj_m4v_vop *out);
 
+/* Same, but reads and then updates a bit offset: the macroblock layer starts
+ * exactly where the header ended, so the byte-granular wrapper above cannot be
+ * used for decoding. */
+int nj_m4v_parse_vop_bits(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos,
+                          nj_u4 time_res, nj_m4v_vop *out);
+
 /* Finds the next VOP start code and stores its payload offset. */
 int nj_m4v_find_vop(const nj_u1 *b, nj_u4 n, nj_u4 *pos);
 
@@ -147,6 +153,13 @@ void nj_m4v_dc_avail(int bx, int by, int *has_a, int *has_b, int *has_c);
  * MPEG-4 quantiser step for the DC term, matching the H.263 path which
  * multiplies intra DC by 8 before the same inverse transform. */
 int nj_m4v_dc_coef(int level, int scale);
+
+/* Decodes one I-VOP payload into 4:2:0 planes.  `grids' must hold
+ * 2*mbw*mbh + 2*mbw*mbh nj_s4 values (two luma 8x8 grids plus Cb and Cr). */
+int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
+                       const nj_m4v_vol *vol, const nj_m4v_vop *vop,
+                       nj_s4 *grids, nj_u1 *yp, int ys,
+                       nj_u1 *up, int us, nj_u1 *vp, int vs);
 
 /* Converts a 4:2:0 picture with the BT.601 limited-range matrix into RGB565.
  * Strides are in bytes; out must hold w * h * 2. */

@@ -591,3 +591,22 @@ matrix), but the frame driver - DC dequantisation into the coefficient domain,
 grid-backed prediction across the macroblock raster, provider registration and
 pixel acceptance on `1942.3gp` - is not written. `createPlayer` therefore still
 refuses `mp4v` by name, which is the truthful behaviour.
+
+### The frame driver, and where it diverges (work in progress)
+
+`nj_m4v_decode_ivop()` now walks the macroblock raster: three DC prediction
+grids, six blocks per macroblock, `nj_m4v_dc_scale()`/`nj_m4v_dc_coef()` into the
+transform domain, `nj_idct8x8()` and clipped writes to the Y/Cb/Cr planes.  It is
+**not wired into any player and not claimed to decode correctly**.
+
+Against the first sample of `1942.3gp` it decodes every block of macroblock (0,0)
+and two blocks of (1,0), then the bitstream no longer matches the intra VLC
+table (the 12-bit window at the failure point is `1110 0011 0110`, which is not a
+codeword).  That is a real bitstream-alignment bug, not a tolerance issue, so the
+driver must not be enabled until it is found.  Diagnostics are behind
+`NJ_M4VDBG` (per-block DC size, level, AC result and bit offsets).
+
+Two hypotheses were already eliminated with evidence: `ac_pred_flag` (skipping a
+bit per macroblock makes it fail earlier, so the stream does not carry it) and
+`intra_dc_vlc_thr` (`ff_mpeg4_dc_threshold[0] = 99` and `qscale = 9`, so the DC
+*is* coded with its own VLC, which is what the driver does).
