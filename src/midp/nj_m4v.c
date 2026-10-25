@@ -450,6 +450,35 @@ int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k)
     return k;
 }
 
+
+int nj_m4v_decode_intra_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef,
+                              int luma, int dc_pred)
+{
+    int size, delta, dc, k, i;
+
+    if (coef == NULL) {
+        return -1;
+    }
+    for (i = 0; i < 64; i++) {
+        coef[i] = 0;
+    }
+    size = nj_m4v_decode_dc(b, n, pos, luma);
+    if (size < 0) {
+        return -1;
+    }
+    delta = nj_m4v_dc_delta(b, n, pos, size);
+    if (delta < 0) {
+        return -1;
+    }
+    dc = dc_pred + delta;
+    coef[0] = (nj_s4)dc;
+    k = nj_m4v_ac_block(b, n, pos, coef, 1);
+    if (k == -3) {
+        return -3;
+    }
+    return k < 0 ? -1 : 0;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;

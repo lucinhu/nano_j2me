@@ -349,6 +349,29 @@ int main(void)
         ok(lastpos == 2, "a block loop stops after the last-flagged symbol");
     }
 
+    {
+        nj_u1 buf[8];
+        nj_s4 coef[64];
+        nj_u4 pos = 0;
+        int i, j, sym = -1, bitpos = 0, rc;
+
+        /* DC size 0 (3-bit code 3), then a run-0 last symbol: empty AC. */
+        for (i = 1; i < NJ_M4V_AC_SYMS; i++)
+            if (nj_m4v_ac_run[i] == 0 && i >= NJ_M4V_AC_LAST) { sym = i; break; }
+        memset(buf, 0, sizeof(buf));
+        for (j = 0; j < 3; j++) if ((3 >> (2 - j)) & 1) buf[j / 8] |= (nj_u1)(0x80u >> (j % 8));
+        bitpos = 3;
+        for (i = 0; i < 4096; i++)
+            if (nj_m4v_ac_lut[i] != 0xffffu && (int)(nj_m4v_ac_lut[i] & 0xffu) == sym) {
+                int len = (int)(nj_m4v_ac_lut[i] >> 8);
+                for (j = 0; j < len; j++)
+                    if ((i >> (NJ_M4V_AC_BITS - 1 - j)) & 1) buf[(bitpos + j) / 8] |= (nj_u1)(0x80u >> ((bitpos + j) % 8));
+                break;
+            }
+        rc = nj_m4v_decode_intra_block(buf, (nj_u4)sizeof(buf), &pos, coef, 1, 40);
+        ok(rc == 0 && coef[0] == 40, "an intra block with an empty AC keeps its predicted DC");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

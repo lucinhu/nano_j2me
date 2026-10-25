@@ -78,6 +78,11 @@ int nj_m4v_coef_apply(nj_s4 *coef, int *k, int sym, int *last);
  * position, -1 for a corrupt stream or -3 when the escape form is reached. */
 int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k);
 
+/* Decodes one intra 8x8 block: DC size+delta on top of dc_pred, then AC.
+ * Returns 0, -1 for a corrupt stream or -3 for an escape not decoded yet. */
+int nj_m4v_decode_intra_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
+                              nj_s4 *coef, int luma, int dc_pred);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 
