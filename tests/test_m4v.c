@@ -486,6 +486,20 @@ int main(void)
         ok(bad == 0, "DC prediction follows the reference neighbour rule and clamps");
     }
 
+    {
+        int a, b, c, bad = 0;
+
+        nj_m4v_dc_avail(0, 0, &a, &b, &c);
+        bad += a || b || c;
+        nj_m4v_dc_avail(3, 0, &a, &b, &c);
+        bad += !a || b || c;
+        nj_m4v_dc_avail(0, 5, &a, &b, &c);
+        bad += a || !b || c;
+        nj_m4v_dc_avail(2, 4, &a, &b, &c);
+        bad += !a || !b || !c;
+        ok(bad == 0, "DC neighbours follow the picture edges");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

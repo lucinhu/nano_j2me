@@ -641,6 +641,14 @@ int nj_m4v_dc_level(int delta, int pred_dequant, int scale, int *stored)
     return ret;
 }
 
+
+void nj_m4v_dc_avail(int bx, int by, int *has_a, int *has_b, int *has_c)
+{
+    if (has_a != NULL) *has_a = (bx > 0);
+    if (has_b != NULL) *has_b = (by > 0);
+    if (has_c != NULL) *has_c = (bx > 0 && by > 0);
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;

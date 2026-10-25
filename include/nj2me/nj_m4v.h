@@ -116,6 +116,10 @@ int nj_m4v_dc_predict_q(int a, int b, int c, int scale, int *dir);
  * writing the dequantised, clamped value the next block will predict from. */
 int nj_m4v_dc_level(int delta, int pred_dequant, int scale, int *stored);
 
+/* Which of the three predicted-from neighbours (left, top, top-left) exist for
+ * the block whose grid corner is (bx, by). */
+void nj_m4v_dc_avail(int bx, int by, int *has_a, int *has_b, int *has_c);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 
