@@ -12,6 +12,8 @@
  */
 #include "nj2me/nj_m4v.h"
 #include "nj_vlc_intra.h"
+
+#define NJ_M4V_DC_ERR (-0x7fffffff)
 #include <stdio.h>
 #include <stdlib.h>
 #include "nj2me/nj_m4v_tables.h"
@@ -479,7 +481,7 @@ int nj_m4v_dc_delta(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int size)
         return 0;
     }
     if (size > 12 || *pos + (nj_u4)size > n * 8u) {
-        return -1;
+        return NJ_M4V_DC_ERR;
     }
     for (k = 0; k < size; k++) {
         v = (v << 1) | (nj_u4)((b[(*pos + (nj_u4)k) >> 3] >>
@@ -783,7 +785,7 @@ int nj_m4v_decode_intra_block_ex(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
         return -1;
     }
     delta = nj_m4v_dc_delta(b, n, pos, size);
-    if (delta < 0) {
+    if (delta == NJ_M4V_DC_ERR) {
         return -1;
     }
     dc = dc_pred + delta;
@@ -1263,19 +1265,35 @@ int nj_m4v_dc_neighbour(const nj_s2 *grid, int stride, int gx, int gy, int which
 
 int nj_m4v_decode_intra_mb(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby,
                            nj_s2 *dc_y, int stride_y, nj_s2 *dc_c, int stride_c,
-                           int scale, int qscale, int *ac_bits)
+                           int scale, int *qscale, int *ac_bits)
 {
     int cbp = 0, dq = 0, blk;
 
     if (nj_m4v_mb_intra_header(b, n, pos, &cbp, &dq) != 0) {
         return -1;
     }
+    if (dq != 0) {
+        nj_u4 at = *pos;
+        int   delta;
+
+        if (at + 2u > n * 8u) {
+            return -1;
+        }
+        delta = (int)((b[at >> 3] >> (6u - (at & 7u))) & 3u);
+        *qscale += (delta == 0) ? -1 : ((delta == 1) ? -2 : delta);
+        if (*qscale < 1) {
+            *qscale = 1;
+        } else if (*qscale > 31) {
+            *qscale = 31;
+        }
+        *pos += 2u;
+    }
     for (blk = 0; blk < 6; blk++) {
         nj_s2 *grid = (blk < 4) ? dc_y : dc_c;
         int stride = (blk < 4) ? stride_y : stride_c;
         nj_s4 coef[64];
         int gx = 0, gy = 0, a, bq, c, dir = 0, pred, coded = 0, rc, level;
-        int dscale = nj_m4v_dc_scale(qscale, blk < 4);
+        int dscale = nj_m4v_dc_scale(*qscale, blk < 4);
 
         if (nj_m4v_block_grid(blk, mbx, mby, &gx, &gy) != 0) {
             return -1;
@@ -1289,7 +1307,7 @@ int nj_m4v_decode_intra_mb(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby
         c = nj_m4v_dc_neighbour(grid, stride, gx, gy, 2);
         pred = nj_m4v_dc_predict_q(a, bq, c, dscale, &dir);
         rc = nj_m4v_decode_intra_block_ex(b, n, pos, coef, blk < 4, pred,
-                                          qscale, coded);
+                                          *qscale, coded);
         if (rc != 0) {
             return rc;
         }
