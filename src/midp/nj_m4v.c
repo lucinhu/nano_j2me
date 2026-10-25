@@ -1229,6 +1229,15 @@ int nj_m4v_mb_intra_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *cbp, int *d
     return 0;
 }
 
+
+int nj_m4v_cbp_has_ac(int cbp, int block)
+{
+    if (block < 0 || block > 5) {
+        return 0;
+    }
+    return (cbp >> (5 - block)) & 1;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;

@@ -186,6 +186,10 @@ void nj_m4v_yuv420_to_rgb565(const nj_u1 *yp, int ys, const nj_u1 *up, int us,
 /* Read an intra macroblock header (intra MCBPC, optional dquant, CBPY). */
 int nj_m4v_mb_intra_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *cbp, int *dq);
 
+/* The cbp bit for block 0..5: bit 5 is the first luma block, bit 0 the last
+ * chroma block.  Non-zero means the block carries AC coefficients. */
+int nj_m4v_cbp_has_ac(int cbp, int block);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 

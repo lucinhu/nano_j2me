@@ -670,6 +670,13 @@ int main(void)
         ok(zero && pos == 3u, "it carries no AC and consumes three bits");
     }
 
+    ok(nj_m4v_cbp_has_ac(16, 0) == 1 && nj_m4v_cbp_has_ac(16, 1) == 0,
+       "cbp bit 5 belongs to the first luma block");
+    ok(nj_m4v_cbp_has_ac(1, 5) == 1 && nj_m4v_cbp_has_ac(1, 4) == 0,
+       "cbp bit 0 belongs to the last chroma block");
+    ok(nj_m4v_cbp_has_ac(0x3f, -1) == 0 && nj_m4v_cbp_has_ac(0x3f, 6) == 0,
+       "blocks outside 0..5 have no AC bit");
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }
