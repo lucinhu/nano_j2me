@@ -435,6 +435,16 @@ int main(void)
            "there is no seventh block");
     }
 
+    {
+        int bad = 0;
+
+        bad += nj_m4v_dc_scale(1, 1) != 8 || nj_m4v_dc_scale(4, 1) != 8;
+        bad += nj_m4v_dc_scale(5, 1) != 10 || nj_m4v_dc_scale(31, 1) != 46;
+        bad += nj_m4v_dc_scale(5, 0) != 9 || nj_m4v_dc_scale(31, 0) != 25;
+        bad += nj_m4v_dc_scale(0, 1) != -1 || nj_m4v_dc_scale(32, 0) != -1;
+        ok(bad == 0, "the DC scaler follows the reference table for q 1..31");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

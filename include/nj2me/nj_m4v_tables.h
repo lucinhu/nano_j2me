@@ -392,4 +392,15 @@ static const nj_u2 nj_m4v_ac_lut[4096] = {
     0x0402, 0x0402, 0x0402, 0x0402,
 };
 
+/* Intra DC quantiser scale, ISO/IEC 14496-2 Table 6-? as carried by the
+ * reference decoder (ffmpeg mpeg4data.h ff_mpeg4_y_dc_scale_table and
+ * ff_mpeg4_c_dc_scale_table), indexed by the VOP quantiser 0..31. */
+static const nj_u1 nj_m4v_dc_scale_lum[32] = {
+    0, 8, 8, 8, 8,10,12,14,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,34,36,38,40,42,44,46
+};
+
+static const nj_u1 nj_m4v_dc_scale_chrom[32] = {
+    0, 8, 8, 8, 8, 9, 9,10,10,11,11,12,12,13,13,14,14,15,15,16,16,17,17,18,18,19,20,21,22,23,24,25
+};
+
 #endif

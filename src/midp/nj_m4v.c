@@ -550,6 +550,15 @@ int nj_m4v_block_origin(nj_u4 mbx, nj_u4 mby, int blk, nj_u4 *x, nj_u4 *y)
     return 0;
 }
 
+
+int nj_m4v_dc_scale(int q, int luma)
+{
+    if (q < 1 || q > 31) {
+        return -1;
+    }
+    return (int)(luma ? nj_m4v_dc_scale_lum[q] : nj_m4v_dc_scale_chrom[q]);
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;
