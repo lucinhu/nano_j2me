@@ -71,3 +71,28 @@ verdict rows are committed.
 frame), `failure`, `timeout`, `oom`, `bad-jar`.  A row that paints and then
 quits by design is `title-exit`, not `no-frame`: the latter is what sends us
 looking for a runtime defect.
+
+## Growing the corpus from archive.org (round 11)
+
+`tools/fetch_corpus.py` rebuilds the out-of-tree corpus reproducibly: it walks
+the named archive.org items, unpacks every `.jar` inside their zips, drops
+files smaller than 20 kB and anything whose SHA-256 is already on disk
+(`tests/games`, `/tmp/vault/Roms`, `/tmp/vault2`), and writes the rest to the
+output directory:
+
+    python3 tools/fetch_corpus.py /tmp/vault3
+    NJ_SWEEP_DIRS=/tmp/vault/Roms:/tmp/vault2:/tmp/vault3 \
+        python3 tools/sweep_compat.py .local-tools/debug-runs/compat-matrix-20261025
+
+A run can be interrupted and resumed: duplicates are detected by content, so a
+second invocation only fetches what is still missing.  The first run of this
+round added seven Gameloft titles (Brother in Arms, Midnight Bowling, Mystery
+Mansion Pinball, Medieval Combat, New York Nights, and two more) - one zip in
+the collection failed with an SSL EOF and was skipped, which the script reports
+rather than aborting.  The sweep grew from 961 to **968 rows** with the new
+titles all `ok`, so the matrix now reads 964 ok / 2 never-painted / 1
+title-exit / 1 unusable package.
+
+The corpus stays out of the repository (size and provenance); only the tools
+that fetch and measure it are tracked.
+
