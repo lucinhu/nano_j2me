@@ -310,6 +310,125 @@ static nj_ref make_player(nj_vm *vm)
     return ret.r;
 }
 
+/* Compare the Player's complete output with direct decoding. A decoder may
+ * consume every compressed byte on its first call and still hold many frames. */
+static nj_s2 stream_pcm[65536];
+static nj_s2 reference_pcm[65536];
+static unsigned stream_samples, stream_channels;
+static int stream_bounded, stream_calls;
+
+static int stream_write(void *ud, const nj_s2 *pcm, int frames)
+{
+    static const int limits[] = { 0, 1, 17, 73, 257, 5, 0, 512 };
+    int n = frames;
+    (void)ud;
+    stream_calls++;
+    if (stream_bounded) {
+        if (stream_calls == 1) return 0;
+        if (stream_calls == 2) return -1;
+        if (stream_calls == 3) return frames + 1;
+        if (n > limits[stream_calls % 8]) n = limits[stream_calls % 8];
+    }
+    if (n < 0 || stream_samples + (unsigned)n * stream_channels > 65536u) {
+        ok(0, "PCM capture fits its buffer");
+        return 0;
+    }
+    memcpy(stream_pcm + stream_samples, pcm,
+           (size_t)n * stream_channels * sizeof(*pcm));
+    stream_samples += (unsigned)n * stream_channels;
+    return n;
+}
+
+static void *stream_alloc(void *ud, nj_size n) { (void)ud; return malloc(n); }
+static void stream_free(void *ud, void *p) { (void)ud; free(p); }
+
+static void test_streamed_pcm(int bounded, int loops, int seek_pending)
+{
+    const nj_av_audio_ops *ops = nj_avcodec_sw_mp3();
+    nj_av_mem mem = { NULL, stream_alloc, stream_free };
+    nj_av_info info;
+    nj_av_dec *dec;
+    const char *err = NULL;
+    nj_port port;
+    nj_vm *vm;
+    nj_ref player;
+    nj_value a[2], ret;
+    unsigned expected = 0, i;
+    int round, step_count;
+    nj_s8 seek_us = seek_pending == 2 ? 100000 : 0;
+
+    memset(&info, 0, sizeof(info));
+    dec = ops->open(mp3, (nj_u4)sizeof(mp3), &mem, &info, &err);
+    ok(dec != NULL, "reference decoder opens");
+    if (dec == NULL) return;
+    stream_channels = info.channels;
+    if (seek_us > 0) ok(ops->seek(dec, seek_us) == NJ_AV_OK, "reference seeks");
+    for (step_count = 0; step_count < 100; step_count++) {
+        nj_av_step step;
+        memset(&step, 0, sizeof(step));
+        step.out = (nj_u1 *)(void *)(reference_pcm + expected);
+        step.out_cap = (65536u - expected) * 2u;
+        (void)ops->decode(dec, &step);
+        expected += step.frames * info.channels;
+        if (step.frames == 0u) break;
+    }
+    ops->close(dec);
+    ok(expected == (info.frames - (unsigned)(seek_us * info.rate / 1000000)) * info.channels
+       && expected > 4096u,
+       "reference spans multiple scratch buffers");
+    ok(nj_port_headless(&port) == NJ_OK, "PCM test port opens");
+    port.pcm_write = stream_write;
+    vm = nj_vm_create(&port, 2u * 1024u * 1024u);
+    ok(vm != NULL, "PCM test VM exists");
+    if (vm == NULL) { nj_port_shutdown(&port); return; }
+    player = nj_root(vm, make_player(vm));
+    ok(player != NULL, "real MP3 Player exists");
+    if (player == NULL) goto cleanup;
+    a[0].i = loops;
+    ok(nj_call(vm, player, "javax/microedition/media/Player", "setLoopCount",
+               "(I)V", a, NULL) == NJ_OK, "set MP3 loop count");
+    /* A completed Player must remain seekable and replay the same PCM. */
+    for (round = 0; round < 2; round++) {
+        stream_samples = 0u;
+        stream_calls = 0;
+        stream_bounded = bounded;
+        if (round != 0) {
+            a[0].j = 0;
+            ok(nj_call(vm, player, "javax/microedition/media/Player", "setMediaTime",
+                       "(J)J", a, &ret) == NJ_OK && ret.j == 0,
+               "seek completed MP3 back to zero");
+        }
+        ok(nj_call(vm, player, "javax/microedition/media/Player", "start",
+                   "()V", NULL, NULL) == NJ_OK, "start streamed MP3");
+        if (seek_pending) {
+            a[0].j = seek_us;
+            ok(nj_call(vm, player, "javax/microedition/media/Player", "setMediaTime",
+                       "(J)J", a, &ret) == NJ_OK && ret.j == seek_us,
+               "seek MP3 while PCM is pending");
+        }
+        for (step_count = 0; step_count < 2000; step_count++) {
+            nj_media_frame(vm);
+            ret.i = 0;
+            (void)nj_call(vm, player, "javax/microedition/media/Player", "getState",
+                          "()I", NULL, &ret);
+            if (ret.i != 400) break;
+        }
+        ok(ret.i == 300 && step_count < 2000, "MP3 reaches end of media");
+        ok(stream_samples == expected * (unsigned)loops,
+           "all MP3 frames reach the port for every loop");
+        for (i = 0; i < stream_samples && expected > 0u; i++) {
+            if (stream_pcm[i] != reference_pcm[i % expected]) break;
+        }
+        ok(i == stream_samples && stream_samples > 0u,
+           "streamed MP3 PCM matches direct decoding byte for byte");
+    }
+    ok(nj_call(vm, player, "javax/microedition/media/Player", "close",
+               "()V", NULL, NULL) == NJ_OK, "close streamed MP3");
+cleanup:
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+}
+
 int main(void)
 {
     nj_port port;
@@ -389,7 +508,13 @@ int main(void)
         }
     }
 
-    printf("test_avcodec: %d checks, %d failure(s)\n", checks, fails);
     nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+    test_streamed_pcm(0, 1, 0);
+    test_streamed_pcm(1, 1, 0);
+    test_streamed_pcm(1, 2, 0);
+    test_streamed_pcm(1, 1, 1);
+    test_streamed_pcm(1, 1, 2);
+    printf("test_avcodec: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }
