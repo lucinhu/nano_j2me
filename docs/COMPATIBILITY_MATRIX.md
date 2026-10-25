@@ -1,6 +1,6 @@
 # Compatibility matrix
 
-One row per JAR in `tests/games` (968 titles), from one headless replay per title
+One row per JAR in `tests/games` (969 titles), from one headless replay per title
 with the same recipe, so neighbouring rows are comparable:
 
 * port `headless`, screen `240x320`, `--fps 30`, `--run-frames 600`;
@@ -13,18 +13,18 @@ with the same recipe, so neighbouring rows are comparable:
 Corpus provenance and size are in `docs/CORPUS.md`; regenerate this table
 with `tools/make_compat_matrix.py <rows dir>` after a new sweep.
 
-Built from `a460aa3`, 2026-10-25.
+Built from `2606d63`, 2026-10-25.
 
 | verdict | titles |
 | --- | --- |
-| 运行正常 | 964 |
+| 运行正常 | 965 |
 | 未呈现画面 | 2 |
 | 非可用包 | 1 |
 | 标题自行退出 | 1 |
 
 | 3D API used | titles |
 | --- | --- |
-| - | 825 |
+| - | 826 |
 | nokia-ui | 114 |
 | m3g | 21 |
 | m3g,nokia-ui | 5 |
@@ -372,6 +372,7 @@ Built from `a460aa3`, 2026-10-25.
 | vault/Galaga X.jar | 505 | Galaga X | - | 1.0.5 | MIDP-2.0 | - | 33 | 16 | 600 | 40249450 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/Galazer Deluxe.jar | 715 | Galazer Deluxe | - | 1.1.6 | MIDP-2.0 | - | 63 | 16 | 600 | 428041 | 0 | - | 运行正常 |  |
 | vault/Gameloft Brother In Arms Earned In Bloods 1.2.4.jar | 222 | Brothers In Arms | - | 1.2.5 | MIDP-2.0 | - | 7 | 16 | 600 | 169229382 | 0 | java/io/IOException | 运行正常 |  |
+| vault/Gameloft Christmas Block Breaker.jar | 148 | ChristmasBlockBreaker | - | 1.0.2 | MIDP-1.0 | - | 8 | 16 | 600 | 152225924 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Gameloft Midnight Bowling.jar | 217 | MidnightBowling [stuart2773] | - | 1.0.7 | MIDP-2.0 | - | 4 | 16 | 600 | 230660349 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Gameloft.Mystery.Mansion.Pinball.1.2.1-Retail.JAVA.teamSMPDA.jar | 222 | MysteryMansionPinball | - | 1.2.1 | MIDP-1.0 | - | 5 | 16 | 600 | 551715411 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
 | vault/Gangstar - Crime City.jar | 324 | Gangstar - Crime City | - | 1.0.3 | MIDP-2.0 | - | 5 | 16 | 600 | 471501210 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |

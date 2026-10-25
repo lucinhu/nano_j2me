@@ -51,7 +51,7 @@ def main(argv):
     for ident in items:
         try:
             meta = json.load(urllib.request.urlopen(
-                "https://archive.org/metadata/" + ident, timeout=120))
+                "https://archive.org/metadata/" + ident, timeout=120, timeout=60))
         except Exception as exc:                     # network: report and go on
             print("skip collection", ident, exc, flush=True)
             continue
@@ -62,7 +62,7 @@ def main(argv):
             url = "https://archive.org/download/%s/%s" % (
                 ident, urllib.parse.quote(name))
             try:
-                data = urllib.request.urlopen(url, timeout=300).read()
+                data = urllib.request.urlopen(url, timeout=120).read()
             except Exception as exc:                 # one bad zip is not fatal
                 print("skip", name, exc, flush=True)
                 continue

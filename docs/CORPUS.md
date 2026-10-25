@@ -96,3 +96,14 @@ title-exit / 1 unusable package.
 The corpus stays out of the repository (size and provenance); only the tools
 that fetch and measure it are tracked.
 
+### A second expansion run and what stalled it (round 12)
+
+Re-running `tools/fetch_corpus.py` added one more Gameloft title, bringing the
+swept corpus to **969 rows (965 ok / 2 never-painted / 1 title-exit / 1 unusable
+package)**.  The run also showed where the fetcher can stall: one archive.org
+zip answered the metadata request and then kept the payload request open, so the
+run sat on that item for minutes.  The download and metadata requests now carry
+explicit timeouts (120 s / 60 s), so a single slow item is skipped instead of
+holding the whole run; because duplicates are dropped by content hash, the next
+run resumes exactly where this one stopped.
+
