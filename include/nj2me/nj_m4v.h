@@ -86,6 +86,10 @@ int nj_m4v_decode_intra_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
 /* The inverse transform shared with the H.263 decoder, for one 8x8 block. */
 void nj_m4v_idct(const nj_s4 *coef, int *out);
 
+/* Decodes one intra block to 8-bit pixels (IDCT plus the +128 level shift). */
+int nj_m4v_decode_intra_pixels(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
+                               nj_u1 *pix, int luma, int dc_pred);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 

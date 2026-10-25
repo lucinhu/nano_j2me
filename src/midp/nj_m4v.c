@@ -485,6 +485,30 @@ void nj_m4v_idct(const nj_s4 *coef, int *out)
     nj_idct8x8(coef, out);
 }
 
+
+int nj_m4v_decode_intra_pixels(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_u1 *pix,
+                               int luma, int dc_pred)
+{
+    nj_s4 coef[64];
+    int   out[64];
+    int   rc, i;
+
+    if (pix == NULL) {
+        return -1;
+    }
+    rc = nj_m4v_decode_intra_block(b, n, pos, coef, luma, dc_pred);
+    if (rc != 0) {
+        return rc;
+    }
+    nj_m4v_idct(coef, out);
+    for (i = 0; i < 64; i++) {
+        int v = out[i] + 128;
+
+        pix[i] = (nj_u1)(v < 0 ? 0 : (v > 255 ? 255 : v));
+    }
+    return 0;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;
