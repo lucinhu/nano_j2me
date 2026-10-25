@@ -226,6 +226,7 @@ nj_vm *nj_vm_create(const nj_port *port, nj_size heap_bytes)
         return NULL;
     }
     nj_clock_init(vm);
+    nj_avcodec_reset(vm);
     vm->initialized = 1u;
 #if NJ_ENABLE_JIT
     /* A missing backend or executable allocator is an interpreter fallback. */

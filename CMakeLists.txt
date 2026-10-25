@@ -78,6 +78,8 @@ set(NJ_ENABLE_AMR   1 CACHE STRING "Built-in AMR narrowband speech decoder")
 # fallback for a device without that synthesizer, and MIDIControl's single note
 # events, which a platform player cannot be sent.
 set(NJ_ENABLE_MIDI  1 CACHE STRING "Built-in MIDI renderer (0 = platform only)")
+set(NJ_ENABLE_MP3  1 CACHE STRING "Built-in MP3 (MPEG Layer III) decoder")
+set(NJ_ENABLE_VIDEO 1 CACHE STRING "Built-in video (H.263/MPEG-4) decoder")
 # Floating point.  This switch was documented in nj_config.h from the start and
 # broken in TWO independent ways: nothing in src/ read it, and CMake never
 # passed it to the compiler at all - so -DNJ_ENABLE_FLOAT=0 built a runtime that
@@ -159,6 +161,7 @@ set(NJ_SOURCES
   src/core/nj_thread.c
   src/core/nj_interp.c
   src/core/nj_engine.c
+  src/core/nj_avcodec.c
   src/core/nj_jit.c
   src/core/nj_jit_rv32.c
   src/core/nj_jit_arm64.c
@@ -187,6 +190,8 @@ set(NJ_SOURCES
   src/midp/nj_lib_midlet.c
   src/midp/nj_lib_media.c
   src/midp/nj_midi.c
+  src/midp/nj_mp3.c
+  src/midp/nj_h263.c
   src/midp/nj_amr.c
   src/midp/nj_amr_mp4.c
   src/midp/nj_lib_content.c
@@ -288,6 +293,8 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_SAX=${NJ_ENABLE_SAX}
   NJ_ENABLE_AMR=${NJ_ENABLE_AMR}
   NJ_ENABLE_MIDI=${NJ_ENABLE_MIDI}
+  NJ_ENABLE_MP3=${NJ_ENABLE_MP3}
+  NJ_ENABLE_VIDEO=${NJ_ENABLE_VIDEO}
   NJ_ENABLE_FLOAT=${NJ_ENABLE_FLOAT}
   NJ_ENABLE_LONG=${NJ_ENABLE_LONG}
   NJ_ENABLE_EXCEPTION_MESSAGES=${NJ_ENABLE_EXCEPTION_MESSAGES}
