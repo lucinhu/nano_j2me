@@ -1552,15 +1552,15 @@ static const char *media_refusal(const char *what)
     }
     if (strcmp(what, "MP4") == 0) {
         /*
-         * Two different situations land on this line and they deserve
-         * different words: an AAC track (no decoder in this runtime yet), and a
-         * 3GP that holds only H.263 video.  The H.263 decoder exists and is
-         * verified against ffmpeg, but it is not wired into Player yet, so
-         * saying "video is not wired" is the truth - and a title that reads the
-         * message (some log it) learns something it can act on.
+         * Reaching this line means neither track could be built, and the
+         * message should say which tracks this runtime does play instead of
+         * implying video is missing as a whole: H.263 video and AMR audio are
+         * wired into Player and the pump, while AAC audio and MPEG-4 Part 2
+         * video have no decoder at all.
          */
-        return "no AMR audio track in this MP4/3GP; H.263 video playback is "
-               "not wired into Player yet" NJ_MEXC_DATA;
+        return "no playable track in this MP4/3GP: audio must be AMR and video "
+               "must be H.263 (AAC and MPEG-4 Part 2 have no decoder)"
+               NJ_MEXC_DATA;
     }
     if (strcmp(what, "an unrecognised container") == 0) {
         return "this is not a container this runtime knows" NJ_MEXC_DATA;
