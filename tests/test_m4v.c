@@ -715,6 +715,16 @@ int main(void)
         ok(sym == 0 && pos == 322, "and it is CBPY 0, consuming two bits");
     }
 
+    {
+        ok(nj_m4v_scan_index_mode(0, 1) == 0 && nj_m4v_scan_index_mode(9, 1) == 9,
+           "the horizontal scan keeps row-major order");
+        ok(nj_m4v_scan_index_mode(1, 2) == 8 && nj_m4v_scan_index_mode(8, 2) == 1,
+           "the vertical scan transposes row and column");
+        ok(nj_m4v_scan_index_mode(63, 0) == nj_m4v_scan_index(63) &&
+           nj_m4v_scan_index_mode(-1, 0) == -1 && nj_m4v_scan_index_mode(64, 1) == -1,
+           "the default scan is the zigzag, and out-of-range indices are refused");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

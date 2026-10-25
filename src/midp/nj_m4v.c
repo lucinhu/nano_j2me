@@ -602,6 +602,18 @@ static const nj_u1 nj_m4v_zigzag[64] = {
     53, 60, 61, 54, 47, 55, 62, 63
 };
 
+
+int nj_m4v_scan_index_mode(int k, int mode)
+{
+    if (k < 0 || k > 63) return -1;
+    if (mode == 1) {            /* horizontal: row major */
+        return k;
+    }
+    if (mode == 2) {            /* vertical: column major */
+        return (k & 7) * 8 + (k >> 3);
+    }
+    return nj_m4v_scan_index(k);
+}
 int nj_m4v_scan_index(int k)
 {
     if (k < 0 || k >= 64) {

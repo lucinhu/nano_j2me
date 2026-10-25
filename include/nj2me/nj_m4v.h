@@ -92,6 +92,10 @@ int nj_m4v_ac_sym(int sym, int *run, int *level, int *last);
 /* Natural index of the k-th coefficient in the intra scan (14496-2 7.4.3). */
 int nj_m4v_scan_index(int k);
 
+/* 0 = zigzag, 1 = horizontal (row major), 2 = vertical (column major), the
+ * scan orders an intra block uses when ac_pred is on (spec 7.4.3.4). */
+int nj_m4v_scan_index_mode(int k, int mode);
+
 /* Stores one coefficient at scan position k; the DC term is position 0. */
 void nj_m4v_coef_store(nj_s4 *coef, int k, int level);
 
