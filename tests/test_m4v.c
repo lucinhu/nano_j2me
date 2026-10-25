@@ -244,7 +244,7 @@ int main(void)
     {
         int run = -1, level = -9, last = -1, okr = 1;
 
-        okr &= nj_m4v_ac_sym(0, &run, &level, &last) == 0;
+        okr &= nj_m4v_ac_sym(0, &run, &level, &last) == 1 && run == 0 && level == 1;
         okr &= nj_m4v_ac_sym(NJ_M4V_AC_SYMS, &run, &level, &last) == 0;
         okr &= nj_m4v_ac_sym(1, &run, &level, &last) == 1 &&
                run == (int)nj_m4v_ac_run[1] && level == (int)nj_m4v_ac_level[1] &&
@@ -307,8 +307,9 @@ int main(void)
            coef[nj_m4v_scan_index(1 + run)] == (nj_s4)nj_m4v_ac_level[1],
            "an AC symbol advances the scan cursor and stores its level");
         k = 1;
-        ok(nj_m4v_coef_apply(coef, &k, 0, &last) == -2 && k == 1,
-           "the escape symbol is reported, never stored");
+        ok(nj_m4v_coef_apply(coef, &k, 0, &last) == 0 && k == 2 &&
+           coef[nj_m4v_scan_index(1)] == 1,
+           "symbol 0 stores run 0 level 1; the escape never reaches this path");
         {
             int sym = -1, j;
 
@@ -538,6 +539,22 @@ int main(void)
         bad += nj_m4v_max_level_0[0] != 27 || nj_m4v_max_level_1[0] != 8;
         bad += nj_m4v_max_run_0[1] != 14 || nj_m4v_max_run_1[1] != 20;
         ok(bad == 0, "the escape tables match the reference derivation");
+    }
+
+    {
+        /* bits 0000011 are the escape code word, not symbol 0. */
+        const nj_u1 esc[2] = { 0x06u, 0x00u };
+        const nj_u1 sym0[2] = { 0x80u, 0x00u };
+        nj_u4 pos = 0;
+        int last = -1, run = -1, level = -1, rc, bad = 0;
+
+        rc = nj_m4v_decode_ac(esc, 2u, &pos, &last);
+        bad += rc != -2 || pos != 7u;
+        pos = 0;
+        rc = nj_m4v_decode_ac(sym0, 2u, &pos, &last);
+        bad += rc != 0 || pos != 2u;
+        bad += !nj_m4v_ac_sym(0, &run, &level, &last) || run != 0 || level != 1 || last;
+        ok(bad == 0, "the escape is its own code word and symbol 0 is run 0 level 1");
     }
 
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);

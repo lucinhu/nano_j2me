@@ -290,6 +290,13 @@ int nj_m4v_decode_ac(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *last)
     }
     i = nj_m4v_ac_lut[v];
     if (i == 0xffffu) {
+        /* The escape is the 103rd code word of the intra table, not one of the
+         * 102 symbols: bits 0000011.  The LUT covers symbols only, so it is
+         * invalid there; report the escape to the caller instead of damage. */
+        if ((v >> (NJ_M4V_AC_BITS - 7)) == 3u) {
+            *pos += 7u;
+            return -2;
+        }
         return -1;
     }
     *pos += i >> 8;
@@ -354,8 +361,9 @@ int nj_m4v_dc_delta(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int size)
 
 int nj_m4v_ac_sym(int sym, int *run, int *level, int *last)
 {
-    if (sym <= 0 || sym >= NJ_M4V_AC_SYMS) {
-        return 0;       /* symbol 0 is the escape; out of range is not a symbol */
+    if (sym < 0 || sym >= NJ_M4V_AC_SYMS) {
+        return 0;       /* out of range is not a symbol; the escape is its own
+                         * code word and never reaches this function */
     }
     if (run != NULL) {
         *run = (int)nj_m4v_ac_run[sym];
@@ -438,7 +446,7 @@ int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k)
         int rc;
 
         if (sym < 0) {
-            return -1;
+            return (sym == -2) ? -3 : -1;   /* -2: escape, not yet decoded */
         }
         rc = nj_m4v_coef_apply(coef, &k, sym, &last);
         if (rc == -2) {
