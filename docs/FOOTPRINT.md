@@ -1079,3 +1079,10 @@ additions map onto fields that already existed (`_amb`, `_dif`, `_dir`,
 title never set one, which is exactly what the reference does.  Cost is code
 size only; `.data`/`.bss` and the per-VM footprint are unchanged.
 
+## Accessors that read fields that were already there (round 8)
+
+`Vector3D.getX()` and friends read the same `x`/`y`/`z` fields the constructors
+already wrote, and the three `AffineTrans` constructors call the `set()`
+helpers added in round 7, so this round adds no fields, no allocations and no
+writable statics; only code size grows.
+

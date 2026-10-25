@@ -13,7 +13,7 @@ with the same recipe, so neighbouring rows are comparable:
 Corpus provenance and size are in `docs/CORPUS.md`; regenerate this table
 with `tools/make_compat_matrix.py <rows dir>` after a new sweep.
 
-Built from `23fd8cf`, 2026-10-25.
+Built from `59befc9`, 2026-10-25.
 
 | verdict | titles |
 | --- | --- |
@@ -526,7 +526,7 @@ Built from `23fd8cf`, 2026-10-25.
 | vault/Rollercoaster Revolution - 99 Tracks.jar | 845 | Abahn Rev 99 | - | 1.0.10 | MIDP-2.0 | - | 39 | 16 | 600 | 3381751 | 0 | java/io/EOFException,javax/micro | 运行正常 |  |
 | vault/Rome - Throne of Destiny.jar | 232 | Rome Throne Of Destiny | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 1170921 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
 | vault/SEGA Rally 3D.jar | 958 | SEGA Rally 3D | - | 1.0.5 | MIDP-2.0 | - | 44 | 16 | 600 | 217522597 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
-| vault/SU-30.jar | 434 | Su-30 | - | 1.8.0 | MIDP-2.0 | - | 55 | 16 | 600 | 1632550 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
+| vault/SU-30.jar | 434 | Su-30 | - | 1.8.0 | MIDP-2.0 | - | 55 | 16 | 600 | 4917863 | 0 | java/io/EOFException,java/io/IOE | 运行正常 |  |
 | vault/ShadoWalker.jar | 518 | Shadowalker | - | 1.0.3 | MIDP-1.0 | - | 12 | 16 | 600 | 722344 | 0 | java/lang/NullPointerException | 运行正常 |  |
 | vault/Siberian Strike.jar | 206 | Siberian Strike | - | 1.0.0 | MIDP-2.0 | - | 6 | 16 | 600 | 1216158 | 0 | - | 运行正常 |  |
 | vault/Silent Hill Mobile 2.jar | 475 | Silent Hill Mobile 2 | - | 1.0.0 | MIDP-2.0 | - | 12 | 16 | 600 | 8286718 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |

@@ -4158,6 +4158,25 @@ block from 1.69 MB of free space.  The next step is the allocator (coalescing /
 best-fit), not `createPlayer`; the streaming front-end makes the request as
 small as it can be.
 
+### The last missing members: AffineTrans copies and Vector3D accessors (round 8)
+
+`vault/SU-30.jar` was the last row with a `NoSuchMethodError` in the corpus.
+Running it (the message names one member at a time as the title reaches it)
+uncovered three groups that the reference implements but this runtime did not:
+
+| member | why the title needed it |
+| --- | --- |
+| `AffineTrans.setRotation(Vector3D,int)` | builds an axis-angle rotation per frame |
+| `AffineTrans(AffineTrans)`, `AffineTrans(int[])`, `AffineTrans(int[][])` | the copy/array constructors are aliases of `set()` in the reference |
+| `Vector3D.getX/getY/getZ`, `setX/setY/setZ` | the reference exposes these next to the public fields |
+
+`setRotation` follows the reference arithmetic exactly (`sin`/`cos` in 12-bit
+fixed point, rounding once per dot product, translation column preserved).
+After the change SU-30 runs 400 paced frames with 182 paints and **6,212
+triangles** rendered, and the 961-row corpus has **no row that reports a
+`NoSuchMethodError` any more** (verdict counts unchanged: 957 ok / 2 no-frame /
+1 title-exit / 1 bad-jar).
+
 ### The members six titles were missing (round 7)
 
 The corpus histogram had eight rows with a `NoSuchMethodError`.  Running each

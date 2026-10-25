@@ -218,6 +218,44 @@ static const nj_builtin_field v3_fields[] = {
     { "z", "I", 0 }
 };
 
+/* getX/getY/getZ and setX/setY/setZ: the reference exposes both spellings
+ * next to the public fields. */
+NJFN(mascot_v3_get_x)
+{
+    ret->i = m3_get(vm, NJ_THIS(args), "x");
+    return NJ_OK;
+}
+
+NJFN(mascot_v3_get_y)
+{
+    ret->i = m3_get(vm, NJ_THIS(args), "y");
+    return NJ_OK;
+}
+
+NJFN(mascot_v3_get_z)
+{
+    ret->i = m3_get(vm, NJ_THIS(args), "z");
+    return NJ_OK;
+}
+
+NJFN(mascot_v3_set_x)
+{
+    m3_set(vm, NJ_THIS(args), "x", NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
+
+NJFN(mascot_v3_set_y)
+{
+    m3_set(vm, NJ_THIS(args), "y", NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
+
+NJFN(mascot_v3_set_z)
+{
+    m3_set(vm, NJ_THIS(args), "z", NJ_ARG_INT(args, 0));
+    return NJ_OK;
+}
+
 static const nj_builtin_method v3_methods[] = {
     M("set", "(L" NJ_C_V3 ";)V", 0),
     M("innerProduct", "(L" NJ_C_V3 ";L" NJ_C_V3 ";)I", NJ_ACC_STATIC),
@@ -229,7 +267,13 @@ static const nj_builtin_method v3_methods[] = {
     M("set", "(III)V", 0),
     M("unit", "()V", 0),
     M("innerProduct", "(L" NJ_C_V3 ";)I", NJ_ACC_PUBLIC),
-    M("outerProduct", "(L" NJ_C_V3 ";L" NJ_C_V3 ";)V", NJ_ACC_PUBLIC)
+    M("outerProduct", "(L" NJ_C_V3 ";L" NJ_C_V3 ";)V", NJ_ACC_PUBLIC),
+    M("getX", "()I", NJ_ACC_PUBLIC),
+    M("getY", "()I", NJ_ACC_PUBLIC),
+    M("getZ", "()I", NJ_ACC_PUBLIC),
+    M("setX", "(I)V", NJ_ACC_PUBLIC),
+    M("setY", "(I)V", NJ_ACC_PUBLIC),
+    M("setZ", "(I)V", NJ_ACC_PUBLIC)
 };
 
 static void v3_put3(nj_vm *vm, nj_ref o, nj_s4 x, nj_s4 y, nj_s4 z)
@@ -370,11 +414,15 @@ static const nj_builtin_method xf_methods[] = {
     M("set", "([I)V", 0),
     M("set", "([II)V", 0),
     M("set", "([[I)V", 0),
+    M("<init>", "(L" NJ_C_XF ";)V", 0),
+    M("<init>", "([I)V", 0),
+    M("<init>", "([[I)V", 0),
     M("mul", "(L" NJ_C_XF ";L" NJ_C_XF ";)V", 0),
     M("lookAt", "(L" NJ_C_V3 ";L" NJ_C_V3 ";L" NJ_C_V3 ";)V", 0),
     M("setRotationX", "(I)V", 0),
     M("setRotationY", "(I)V", 0),
     M("setRotationZ", "(I)V", 0),
+    M("setRotation", "(L" NJ_C_V3 ";I)V", 0),
     M("transform", "(L" NJ_C_V3 ";)L" NJ_C_V3 ";", 0),
     M("transPoint", "(L" NJ_C_V3 ";)L" NJ_C_V3 ";", 0),
     M("<init>", "()V", 0),
@@ -522,6 +570,47 @@ NJFN(mascot_xf_rot_z)
     m[11]=m3_get(vm,NJ_THIS(args),"m23");
     m[0] = c;  m[1] = -s;
     m[4] = s;  m[5] = c;
+    xf_write(vm, NJ_THIS(args), m);
+    return NJ_OK;
+}
+
+/* setRotation(Vector3D axis, int angle) builds an axis-angle rotation the way
+ * the reference does, keeping the translation column untouched. */
+NJFN(mascot_xf_set_rotation)
+{
+    nj_ref v = NJ_ARG_REF(args, 0);
+    nj_s4 r = NJ_ARG_INT(args, 1);
+    nj_s4 x, y, z, cos_a, sin_a, nc, xs, ys, zs, xync, yznc, zxnc;
+    nj_s4 m[M3_NXF];
+
+    if (!v) {
+        return nj_throw(vm, "java/lang/NullPointerException", "axis is null");
+    }
+    x = m3_get(vm, v, "x");
+    y = m3_get(vm, v, "y");
+    z = m3_get(vm, v, "z");
+    cos_a = m3_cos(r);
+    sin_a = m3_sin(r);
+    xs = (x * sin_a + 2048) >> 12;
+    ys = (y * sin_a + 2048) >> 12;
+    zs = (z * sin_a + 2048) >> 12;
+    nc = 4096 - cos_a;
+    xync = (((x * y + 2048) >> 12) * nc + 2048) >> 12;
+    yznc = (((y * z + 2048) >> 12) * nc + 2048) >> 12;
+    zxnc = (((x * z + 2048) >> 12) * nc + 2048) >> 12;
+    xf_identity(m);
+    m[3]  = m3_get(vm, NJ_THIS(args), "m03");
+    m[7]  = m3_get(vm, NJ_THIS(args), "m13");
+    m[11] = m3_get(vm, NJ_THIS(args), "m23");
+    m[0] = cos_a + (((x * x + 2048) >> 12) * nc + 2048) >> 12;
+    m[1] = xync - zs;
+    m[2] = zxnc + ys;
+    m[4] = zs + xync;
+    m[5] = cos_a + (((y * y + 2048) >> 12) * nc + 2048) >> 12;
+    m[6] = yznc - xs;
+    m[8] = zxnc - ys;
+    m[9] = xs + yznc;
+    m[10] = cos_a + (((z * z + 2048) >> 12) * nc + 2048) >> 12;
     xf_write(vm, NJ_THIS(args), m);
     return NJ_OK;
 }
@@ -1141,6 +1230,30 @@ NJFN(mascot_xf_set_2d)
     return NJ_OK;
 }
 
+/* The reference's copy constructor and array constructors are just set(). */
+NJFN(mascot_xf_init_copy)
+{
+    nj_ref a = NJ_ARG_REF(args, 0);
+    nj_s4 m[M3_NXF];
+
+    if (!a) {
+        return nj_throw(vm, "java/lang/NullPointerException", "null matrix");
+    }
+    xf_read(vm, a, m);
+    xf_write(vm, NJ_THIS(args), m);
+    return NJ_OK;
+}
+
+NJFN(mascot_xf_init_arr)
+{
+    return xf_set_flat(vm, NJ_THIS(args), NJ_ARG_REF(args, 0), 0);
+}
+
+NJFN(mascot_xf_init_2d)
+{
+    return mascot_xf_set_2d(vm, th, args, ret);
+}
+
 /* AffineTrans.get(int[] a[, int offset]): copy the twelve matrix entries. */
 NJFN(mascot_xf_get)
 {
@@ -1508,12 +1621,22 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_XF, "setRotationX", "(I)V", mascot_xf_rot_x },
     { NJ_C_XF, "setRotationY", "(I)V", mascot_xf_rot_y },
     { NJ_C_XF, "setRotationZ", "(I)V", mascot_xf_rot_z },
+    { NJ_C_XF, "setRotation", "(L" NJ_C_V3 ";I)V", mascot_xf_set_rotation },
     { NJ_C_XF, "transform", "(L" NJ_C_V3 ";)L" NJ_C_V3 ";", mascot_xf_transform_copy },
     { NJ_C_XF, "transPoint", "(L" NJ_C_V3 ";)L" NJ_C_V3 ";", mascot_xf_transform_copy },
     { NJ_C_V3, "innerProduct", "(L" NJ_C_V3 ";)I", mascot_v3_inner },
     { NJ_C_V3, "outerProduct", "(L" NJ_C_V3 ";L" NJ_C_V3 ";)V", mascot_v3_outer },
+    { NJ_C_V3, "getX", "()I", mascot_v3_get_x },
+    { NJ_C_V3, "getY", "()I", mascot_v3_get_y },
+    { NJ_C_V3, "getZ", "()I", mascot_v3_get_z },
+    { NJ_C_V3, "setX", "(I)V", mascot_v3_set_x },
+    { NJ_C_V3, "setY", "(I)V", mascot_v3_set_y },
+    { NJ_C_V3, "setZ", "(I)V", mascot_v3_set_z },
 
     { NJ_C_XF, "<init>", "()V", mascot_xf_init },
+    { NJ_C_XF, "<init>", "(L" NJ_C_XF ";)V", mascot_xf_init_copy },
+    { NJ_C_XF, "<init>", "([I)V", mascot_xf_init_arr },
+    { NJ_C_XF, "<init>", "([[I)V", mascot_xf_init_2d },
     { NJ_C_XF, "setIdentity", "()V", mascot_xf_init },
     { NJ_C_XF, "rotationX", "(I)V", mascot_xf_rot_x },
     { NJ_C_XF, "rotationY", "(I)V", mascot_xf_rot_y },
