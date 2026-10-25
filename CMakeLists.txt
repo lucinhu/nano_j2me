@@ -1250,6 +1250,7 @@ nj_add_test(test_clip tests/test_clip.c)
   # renderer to be part of the library it links against.
   if(NJ_ENABLE_MIDI AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_midi.c)
     nj_add_test(test_midi tests/test_midi.c)
+    nj_add_test(test_media_backpressure tests/test_media_backpressure.c)
   endif()
 
   # The rasterizer test is deliberately standalone: it compiles nj_gfx.c with

@@ -119,7 +119,12 @@ static void midi_free(void *ud, void *p)
  * PCM - the whole file would be a hundred and forty megabytes.
  */
 #define NJ_MEDIA_STREAM_FRAMES 4096u
-#define NJ_MEDIA_STREAM_BYTES  ((nj_u4)sizeof(void *) + NJ_MEDIA_STREAM_FRAMES * 2u * 2u)
+typedef struct media_stream_state {
+    struct nj_midi_stream *stream;  /* first, shared with release/control paths */
+    nj_u4 pending;                 /* rendered frames not accepted by the port */
+    nj_u4 offset;                  /* accepted prefix in the scratch buffer */
+} media_stream_state;
+#define NJ_MEDIA_STREAM_BYTES  ((nj_u4)sizeof(media_stream_state) + NJ_MEDIA_STREAM_FRAMES * 2u * 2u)
 #define F_P_RATE     "pRate"       /* I */
 #define F_P_CHAN     "pChans"      /* I */
 #define F_P_FRAMES   "pFrames"     /* I */
@@ -861,51 +866,48 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
      */
 #if NJ_ENABLE_MIDI
     if (r_z(vm, player, F_P_STREAM)) {
-        struct nj_midi_stream *st;
+        media_stream_state state;
         nj_u1 *scratch;
         nj_u4 want;
-        nj_u4 got;
 
-        if (total < NJ_MEDIA_STREAM_BYTES) {
+        if (total < NJ_MEDIA_STREAM_BYTES || max_frames <= 0) {
             return 0;
         }
-        memcpy(&st, b, sizeof(st));
-        if (st == NULL) {
+        memcpy(&state, b, sizeof(state));
+        if (state.stream == NULL) {
             return 0;
         }
-        scratch = (nj_u1 *)(void *)(b + sizeof(st));
-        want = NJ_MEDIA_STREAM_FRAMES;
-        if ((int)want > max_frames && max_frames > 0) {
-            want = (nj_u4)max_frames;
+        scratch = (nj_u1 *)(void *)(b + sizeof(state));
+        if (state.pending == 0u) {
+            want = NJ_MEDIA_STREAM_FRAMES;
+            if (want > (nj_u4)max_frames) want = (nj_u4)max_frames;
+            state.pending = nj_midi_stream_pull(state.stream, scratch, want);
+            state.offset = 0u;
+            memcpy((void *)b, &state, sizeof(state));
+            if (state.pending == 0u) {
+                /* Keep the renderer until close/deallocate so a later seek
+                 * can restart it. Never reinterpret its holder as PCM. */
+                w_i(vm, player, F_P_FRAMES, done);
+                return 0;
+            }
         }
-        got = nj_midi_stream_pull(st, scratch, want);
-        if (got == 0u) {
-            nj_midi_stream_close(st);
-            w_z(vm, player, F_P_STREAM, 0);
-            return 0;
-        }
-        /*
-         * pcm_write() takes FRAMES, not samples: it multiplies by the channel
-         * count itself.  Passing got * chan here made the port queue
-         * chan times the audio it was handed - four times as much for a
-         * stereo Player - and read past the scratch to fill the difference,
-         * which is heard as a stutter that alternates between fragments of
-         * the song.  The position advances by what the port ACCEPTED, as the
-         * whole-buffer path below already did.
-         */
+        want = state.pending;
+        if (want > (nj_u4)max_frames) want = (nj_u4)max_frames;
         took = vm->port->pcm_write(vm->port->ud,
-                                   (const nj_s2 *)(const void *)scratch,
-                                   (int)got);
-        if (took < 0) {
+            (const nj_s2 *)(const void *)(scratch + state.offset * (nj_u4)chan * 2u),
+            (int)want);
+        /* A short/zero write leaves a suffix to retry. In particular, start()
+         * can render before the port reports space; pcm_free is only a hint. */
+        if (took < 0 || (nj_u4)took > want) {
             return 0;
         }
-        w_i(vm, player, F_P_PUSHED, done + (nj_s4)took);
-        {
-            nj_s8 us = (nj_s8)(done + (nj_s4)got) * 1000000LL
-                       / (nj_s8)r_i(vm, player, F_P_RATE);
-            w_j(vm, player, F_P_TIME, us);
-        }
-        return (int)got;
+        state.pending -= (nj_u4)took;
+        state.offset += (nj_u4)took;
+        memcpy((void *)b, &state, sizeof(state));
+        w_i(vm, player, F_P_PUSHED, done + took);
+        w_j(vm, player, F_P_TIME,
+            (nj_s8)(done + took) * 1000000LL / (nj_s8)r_i(vm, player, F_P_RATE));
+        return took;
     }
 #endif /* NJ_ENABLE_MIDI */
     off = (nj_u4)done * (nj_u4)chan * (nj_u4)(bits / 8);
@@ -2707,6 +2709,10 @@ NJFN(player_setMediaTime)
                                        * (nj_u8)(rate > 0 ? rate : 1)
                                        / 1000000u);
                 nj_u4 got = nj_midi_stream_seek(st, target);
+                media_stream_state state;
+                memcpy(&state, barray_bytes(data), sizeof(state));
+                state.pending = state.offset = 0u;
+                memcpy(data->u.bytes, &state, sizeof(state));
                 w_i(vm, self, F_P_PUSHED, (nj_s4)got);
                 if (rate > 0) {
                     want = (nj_s8)got * 1000000LL / (nj_s8)rate;
