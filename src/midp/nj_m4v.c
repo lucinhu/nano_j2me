@@ -1291,7 +1291,6 @@ static int m4v_read_cbp(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int cbpc, int dq, i
         return -1;
     }
     if (getenv("NJ_M4V_CBPY") != NULL) {
-        cbpy = 15 - cbpy;
     }
     *cbp = ((cbpc & 3) | (cbpy << 2)) & 0x3f;
     (void)v;

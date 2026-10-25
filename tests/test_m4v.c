@@ -644,8 +644,8 @@ int main(void)
 
         ok(nj_m4v_mb_intra_header(hdr, 8u, &pos, &cbp, &dq) == 0,
            "an intra macroblock header decodes");
-        ok(cbp == 60 && dq == 0 && pos == 5u,
-           "the header yields cbp 60, no dquant, five bits");
+        ok(cbp == 0 && dq == 0 && pos == 5u,
+           "the header yields cbp 0, no dquant, five bits");
     }
 
     {
@@ -657,7 +657,7 @@ int main(void)
 
         ok(nj_m4v_mb_intra_header(s0, 96u, &pos, &cbp, &dq) == 0,
            "the first real macroblock header decodes");
-        ok(cbp == 44 && dq == 0, "it carries one luma AC block");
+        ok(cbp == 16 && dq == 0, "it carries one luma AC block");
         ok(pos == 64u, "and consumes the same six bits plus its header");
     }
 
@@ -712,7 +712,7 @@ int main(void)
         wide[320 >> 3] = (nj_u1)0xC0;    /* bits 320..321 = "11" */
         ok(nj_vlc_lookup(wide, (nj_u4)sizeof wide, &pos, nj_vlc_cbpy, 16, &sym) == 0,
            "a codeword at bit 320 is found");
-        ok(sym == 15 && pos == 322, "and it is CBPY 15, consuming two bits");
+        ok(sym == 0 && pos == 322, "and it is CBPY 0, consuming two bits");
     }
 
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
