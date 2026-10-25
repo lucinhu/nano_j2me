@@ -2530,6 +2530,57 @@ int main(void)
 
     }
 
+    /* ---- AffineTrans.get(int[]) and the parallel-light aliases ---- */
+    {
+        nj_ref xf = make(vm, XF);
+        nj_ref arr = nj_int_array_new(vm, 12u);
+        nj_value a[3], ret;
+
+        (void)call(vm, xf, XF, "<init>", "()V", NULL, &ret);
+        a[0].r = arr;
+        if (call(vm, xf, XF, "get", "([I)V", a, NULL)) {
+            check(nj_array_get_int(arr, 0) == 4096 &&
+                  nj_array_get_int(arr, 1) == 0 &&
+                  nj_array_get_int(arr, 5) == 4096 &&
+                  nj_array_get_int(arr, 10) == 4096 &&
+                  nj_array_get_int(arr, 11) == 0,
+                  "get(int[]) copies the identity matrix in 1.12 fixed point");
+        }
+        {
+            nj_ref big = nj_int_array_new(vm, 16u);
+
+            a[0].r = big;
+            a[1].i = 3;
+            if (call(vm, xf, XF, "get", "([II)V", a, NULL)) {
+                check(nj_array_get_int(big, 3) == 4096 &&
+                      nj_array_get_int(big, 8) == 4096 &&
+                      nj_array_get_int(big, 2) == 0,
+                      "get(int[],3) writes the matrix at the requested offset");
+            }
+        }
+
+        /* The parallel-light spellings the Nokia-era titles use. */
+        {
+            nj_ref lig = make(vm, LIG);
+            nj_ref dir = vec(vm, ONE, 0, 0);
+
+            (void)call(vm, lig, LIG, "<init>", "()V", NULL, &ret);
+            a[0].i = 1234;
+            (void)call(vm, lig, LIG, "setAmbientIntensity", "(I)V", a, NULL);
+            check(call(vm, lig, LIG, "getAmbientIntensity", "()I", NULL, &ret) &&
+                  ret.i == 1234, "setAmbientIntensity is the same field as setAmbIntensity");
+            a[0].i = 77;
+            (void)call(vm, lig, LIG, "setParallelLightIntensity", "(I)V", a, NULL);
+            check(call(vm, lig, LIG, "getParallelLightIntensity", "()I", NULL, &ret) &&
+                  ret.i == 77, "setParallelLightIntensity stores the directional intensity");
+            a[0].r = dir;
+            (void)call(vm, lig, LIG, "setParallelLightDirection", "(L" V3 ";)V", a, NULL);
+            check(call(vm, lig, LIG, "getParallelLightDirection",
+                       "()L" V3 ";", NULL, &ret) && ret.r == dir,
+                  "setParallelLightDirection keeps the vector it was given");
+        }
+    }
+
     r7_math(vm);
     r7_goflate(vm);
     r7_api(vm);

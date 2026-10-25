@@ -760,6 +760,20 @@ NJFN(int_toHexString)
     return ret->r ? NJ_OK : nj_throw_oom(vm);
 }
 
+NJFN(int_toBinaryString)
+{
+    nj_u4 v = (nj_u4)NJ_ARG_INT(args, 0);
+    ret->r = to_radix_string(vm, v, 0, 2u);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
+NJFN(int_toOctalString)
+{
+    nj_u4 v = (nj_u4)NJ_ARG_INT(args, 0);
+    ret->r = to_radix_string(vm, v, 0, 8u);
+    return ret->r ? NJ_OK : nj_throw_oom(vm);
+}
+
 NJFN(int_toString_radix)
 {
     nj_s4 v = NJ_ARG_INT(args, 0);
@@ -1400,6 +1414,8 @@ static const nj_builtin_method Integer_methods[] = {
     M("toString",      "(II)Ljava/lang/String;", NJ_ACC_STATIC),
     M("toString",      "()Ljava/lang/String;", 0),
     M("toHexString",   "(I)Ljava/lang/String;", NJ_ACC_STATIC),
+    M("toBinaryString", "(I)Ljava/lang/String;", NJ_ACC_STATIC),
+    M("toOctalString",  "(I)Ljava/lang/String;", NJ_ACC_STATIC),
     M("valueOf",       "(I)Ljava/lang/Integer;", NJ_ACC_STATIC),
     M("valueOf",       "(Ljava/lang/String;)Ljava/lang/Integer;", NJ_ACC_STATIC),
     M("valueOf",       "(Ljava/lang/String;I)Ljava/lang/Integer;", NJ_ACC_STATIC),
@@ -1521,6 +1537,8 @@ const nj_native_entry nj_lib_boxing_table[] = {
     { "java/lang/Integer",   "toString",     "(I)Ljava/lang/String;", int_toString },
     { "java/lang/Integer",   "toString",     "(II)Ljava/lang/String;", int_toString_radix },
     { "java/lang/Integer",   "toHexString",  "(I)Ljava/lang/String;", int_toHexString },
+    { "java/lang/Integer",   "toBinaryString", "(I)Ljava/lang/String;", int_toBinaryString },
+    { "java/lang/Integer",   "toOctalString",  "(I)Ljava/lang/String;", int_toOctalString },
     { "java/lang/Integer",   "toString",     "()Ljava/lang/String;", int_toString_obj },
     { "java/lang/Integer",   "valueOf",      "(I)Ljava/lang/Integer;", int_valueOf },
 

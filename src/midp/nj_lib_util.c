@@ -3354,6 +3354,54 @@ NJFN(timer_schedule)
     return timer_add(vm, NJ_THIS(args), task, nj_now_ms(vm) + delay, 0, 0);
 }
 
+/* The Date overloads: the instant is the Date's own time, so the delay is
+ * however far that is from now (a Date in the past schedules immediately). */
+static nj_status timer_schedule_at(nj_vm *vm, nj_ref date, nj_s8 *delay)
+{
+    nj_value r;
+    nj_s8 when;
+
+    if (!date) {
+        return nj_throw(vm, "java/lang/NullPointerException", "null date");
+    }
+    r.j = 0;
+    if (nj_call(vm, date, "java/util/Date", "getTime", "()J", NULL, &r) != NJ_OK) {
+        return NJ_ERR;
+    }
+    when = r.j;
+    *delay = when - nj_now_ms(vm);
+    if (*delay < 0) {
+        *delay = 0;
+    }
+    return NJ_OK;
+}
+
+NJFN(timer_schedule_date)
+{
+    nj_s8 delay = 0;
+
+    if (timer_schedule_at(vm, NJ_ARG_REF(args, 1), &delay) != NJ_OK) {
+        return NJ_ERR;
+    }
+    return timer_add(vm, NJ_THIS(args), NJ_ARG_REF(args, 0), nj_now_ms(vm) + delay, 0, 0);
+}
+
+NJFN(timer_schedule_date_period)
+{
+    nj_ref task = NJ_ARG_REF(args, 0);
+    nj_s8 period = NJ_ARG_LONG(args, 2);      /* (TimerTask, Date, long) */
+    nj_s8 delay = 0;
+
+    if (period <= 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "non-positive period");
+    }
+    if (timer_schedule_at(vm, NJ_ARG_REF(args, 1), &delay) != NJ_OK) {
+        return NJ_ERR;
+    }
+    return timer_add(vm, NJ_THIS(args), task, nj_now_ms(vm) + delay, period, 0);
+}
+
 NJFN(timer_schedule_period)
 {
     nj_ref task = NJ_ARG_REF(args, 0);
@@ -3684,6 +3732,8 @@ static const nj_builtin_method timer_methods[] = {
     M("<init>",              "(Z)V",                       0),
     M("schedule",            "(Ljava/util/TimerTask;J)V",  0),
     M("schedule",            "(Ljava/util/TimerTask;JJ)V", 0),
+    M("schedule",            "(Ljava/util/TimerTask;Ljava/util/Date;)V", 0),
+    M("schedule",            "(Ljava/util/TimerTask;Ljava/util/Date;J)V", 0),
     M("scheduleAtFixedRate", "(Ljava/util/TimerTask;JJ)V", 0),
     M("cancel",              "()V",                        0),
     M("purge",               "()I",                        0)
@@ -3911,6 +3961,8 @@ const nj_native_entry nj_lib_util_table[] = {
     { "java/util/Timer", "schedule",            "(Ljava/util/TimerTask;J)V",  timer_schedule },
     { "java/util/Timer", "schedule",            "(Ljava/util/TimerTask;JJ)V", timer_schedule_period },
     { "java/util/Timer", "scheduleAtFixedRate", "(Ljava/util/TimerTask;JJ)V", timer_schedule_rate },
+    { "java/util/Timer", "schedule", "(Ljava/util/TimerTask;Ljava/util/Date;)V", timer_schedule_date },
+    { "java/util/Timer", "schedule", "(Ljava/util/TimerTask;Ljava/util/Date;J)V", timer_schedule_date_period },
     { "java/util/Timer", "cancel",              "()V",                        timer_cancel },
     { "java/util/Timer", "purge",               "()I",                        timer_purge },
 

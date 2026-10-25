@@ -4158,6 +4158,39 @@ block from 1.69 MB of free space.  The next step is the allocator (coalescing /
 best-fit), not `createPlayer`; the streaming front-end makes the request as
 small as it can be.
 
+### The members six titles were missing (round 7)
+
+The corpus histogram had eight rows with a `NoSuchMethodError`.  Running each
+one and reading the method name out of the message (rather than guessing from
+the class) gave this list, all now implemented:
+
+| member | spelling used by the title | evidence |
+| --- | --- | --- |
+| `Integer.toBinaryString(int)` | `java/lang/Integer.toBinaryString(I)Ljava/lang/String;` | Off-Road Dirt Motocross, Wonder Blocks |
+| `Integer.toOctalString(int)` | `java/lang/Integer.toOctalString(I)Ljava/lang/String;` | added with the above |
+| `Timer.schedule(TimerTask,Date)` | `java/util/Timer.schedule(Ljava/util/TimerTask;Ljava/util/Date;)V` | Snake III |
+| `Timer.schedule(TimerTask,Date,long)` | `...(Ljava/util/TimerTask;Ljava/util/Date;J)V` | added with the above |
+| `Light.setAmbientIntensity(int)` | `.../Light.setAmbientIntensity(I)V` | Red Bull Motocross |
+| `Light.setParallelLightIntensity(int)` | `.../Light.setParallelLightIntensity(I)V` | Red Bull Motocross, next call after the one above |
+| `Light.setParallelLightDirection(Vector3D)` | `.../Light.setParallelLightDirection(L...Vector3D;)V` | Red Bull Motocross, next call after that |
+| `AffineTrans.get(int[])`, `get(int[],int)` | `.../AffineTrans.get([I)V` | Metal Gear Acid 2 3D |
+| `AffineTrans.set(int[])`, `set(int[],int)`, `set(int[][])` | `.../AffineTrans.set([[I)V` | Ridge Racer |
+
+The reference implementation this runtime is checked against
+(`.local-tools/freej2me-plus/.../AffineTrans.java`, `Light.java`) settled the
+details: `get` on a short array throws `IllegalArgumentException` (not
+`ArrayIndexOutOfBoundsException`), `set(int[][])` wants three rows of at least
+four ints, and the parallel-light spellings are aliases of the directional
+ones.
+
+After the change all six titles start; Ridge Racer renders 14,066 triangles in
+200 paced frames (paints 6), Metal Gear Acid 2 3D 300 frames/151 paints, and
+the three others run their full budget with no missing member.  The corpus was
+re-scanned (961 rows, unchanged verdict counts) and `test_mascot` grew to 238
+checks covering the new matrix and light spellings.  One row still reports a
+`NoSuchMethodError` (`vault/SU-30.jar`, alongside its EOF/IO exceptions) and is
+left open.
+
 ### Telling a title that quits from a title that never paints (round 6)
 
 The sweep used to collapse two different outcomes into `no-frame`: a title that

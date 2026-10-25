@@ -365,6 +365,11 @@ static const char *const xf_name[M3_NXF] = {
 
 static const nj_builtin_method xf_methods[] = {
     M("set", "(L" NJ_C_XF ";)V", 0),
+    M("get", "([I)V", 0),
+    M("get", "([II)V", 0),
+    M("set", "([I)V", 0),
+    M("set", "([II)V", 0),
+    M("set", "([[I)V", 0),
     M("mul", "(L" NJ_C_XF ";L" NJ_C_XF ";)V", 0),
     M("lookAt", "(L" NJ_C_V3 ";L" NJ_C_V3 ";L" NJ_C_V3 ";)V", 0),
     M("setRotationX", "(I)V", 0),
@@ -688,7 +693,16 @@ static const nj_builtin_method lig_methods[] = {
     M("<init>", "(L" NJ_C_V3 ";II)V", 0),
     M("setDirection", "(L" NJ_C_V3 ";)V", 0),
     M("setAmbIntensity", "(I)V", 0),
-    M("setDirIntensity", "(I)V", 0)
+    M("setAmbientIntensity", "(I)V", 0),
+    M("setDirIntensity", "(I)V", 0),
+    M("setParallelLightIntensity", "(I)V", 0),
+    M("setParallelLightDirection", "(L" NJ_C_V3 ";)V", 0),
+    M("getDirection", "()L" NJ_C_V3 ";", 0),
+    M("getParallelLightDirection", "()L" NJ_C_V3 ";", 0),
+    M("getAmbIntensity", "()I", 0),
+    M("getAmbientIntensity", "()I", 0),
+    M("getDirIntensity", "()I", 0),
+    M("getParallelLightIntensity", "()I", 0)
 };
 
 static const nj_builtin_field lig_fields[] = {
@@ -1039,6 +1053,134 @@ NJFN(mascot_lig_dif)
     return NJ_OK;
 }
 
+NJFN(mascot_lig_get_dir)
+{
+    nj_ref d = m3_ref(vm, NJ_THIS(args), "_dir", "L" NJ_C_V3 ";");
+
+    if (!d) {
+        d = nj_object_new(vm, NJ_C_V3);
+        if (!d) {
+            return NJ_ERR;
+        }
+        v3_put3(vm, d, 0, 0, 0);
+    }
+    ret->r = d;
+    return NJ_OK;
+}
+
+NJFN(mascot_lig_get_amb)
+{
+    ret->i = m3_get(vm, NJ_THIS(args), "_amb");
+    return NJ_OK;
+}
+
+NJFN(mascot_lig_get_dif)
+{
+    ret->i = m3_get(vm, NJ_THIS(args), "_dif");
+    return NJ_OK;
+}
+
+/* AffineTrans.set(int[] a[, int offset]) and set(int[][]) the way the
+ * reference implements them: a flat array is twelve ints in matrix order, a
+ * two-dimensional one is three rows of at least four. */
+static nj_status xf_set_flat(nj_vm *vm, nj_ref self, nj_ref a, nj_s4 off)
+{
+    nj_s4 m[M3_NXF];
+    int i;
+
+    if (!a) {
+        return nj_throw(vm, "java/lang/NullPointerException", "null matrix");
+    }
+    if (off < 0 || (nj_u4)(off + M3_NXF) > nj_array_length(a)) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "short matrix");
+    }
+    for (i = 0; i < M3_NXF; i++) {
+        m[i] = (nj_s4)nj_array_get_int(a, (nj_u4)(off + i));
+    }
+    xf_write(vm, self, m);
+    return NJ_OK;
+}
+
+NJFN(mascot_xf_set_arr)
+{
+    return xf_set_flat(vm, NJ_THIS(args), NJ_ARG_REF(args, 0), 0);
+}
+
+NJFN(mascot_xf_set_arr_at)
+{
+    return xf_set_flat(vm, NJ_THIS(args), NJ_ARG_REF(args, 0),
+                       NJ_ARG_INT(args, 1));
+}
+
+NJFN(mascot_xf_set_2d)
+{
+    nj_ref a = NJ_ARG_REF(args, 0);
+    nj_s4 m[M3_NXF];
+    int r, c;
+
+    if (!a) {
+        return nj_throw(vm, "java/lang/NullPointerException", "null matrix");
+    }
+    if (nj_array_length(a) < 3u) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "short matrix");
+    }
+    for (r = 0; r < 3; r++) {
+        nj_ref row = nj_array_get_ref(a, (nj_u4)r);
+
+        if (!row) {
+            return nj_throw(vm, "java/lang/NullPointerException", "null row");
+        }
+        if (nj_array_length(row) < 4u) {
+            return nj_throw(vm, "java/lang/IllegalArgumentException", "short row");
+        }
+        for (c = 0; c < 4; c++) {
+            m[r * 4 + c] = (nj_s4)nj_array_get_int(row, (nj_u4)c);
+        }
+    }
+    xf_write(vm, NJ_THIS(args), m);
+    return NJ_OK;
+}
+
+/* AffineTrans.get(int[] a[, int offset]): copy the twelve matrix entries. */
+NJFN(mascot_xf_get)
+{
+    nj_ref a = NJ_ARG_REF(args, 0);
+    nj_s4 m[M3_NXF];
+    int i;
+
+    if (!a) {
+        return nj_throw(vm, "java/lang/NullPointerException", "null matrix");
+    }
+    if (nj_array_length(a) < (nj_u4)M3_NXF) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "short matrix");
+    }
+    xf_read(vm, NJ_THIS(args), m);
+    for (i = 0; i < M3_NXF; i++) {
+        nj_array_set_int(a, (nj_u4)i, m[i]);
+    }
+    return NJ_OK;
+}
+
+NJFN(mascot_xf_get_at)
+{
+    nj_ref a = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1);
+    nj_s4 m[M3_NXF];
+    int i;
+
+    if (!a) {
+        return nj_throw(vm, "java/lang/NullPointerException", "null matrix");
+    }
+    if (off < 0 || (nj_u4)(off + M3_NXF) > nj_array_length(a)) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "short matrix");
+    }
+    xf_read(vm, NJ_THIS(args), m);
+    for (i = 0; i < M3_NXF; i++) {
+        nj_array_set_int(a, (nj_u4)(off + i), m[i]);
+    }
+    return NJ_OK;
+}
+
 /* Effect3D */
 NJFN(mascot_fx_init)
 {
@@ -1356,6 +1498,11 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_V3, "outerProduct", "(L" NJ_C_V3 ";L" NJ_C_V3 ";)L" NJ_C_V3 ";", mascot_v3_outer_static },
     { NJ_C_V3, "outerProduct", "(L" NJ_C_V3 ";)V", mascot_v3_outer_in },
     { NJ_C_XF, "set", "(L" NJ_C_XF ";)V", mascot_xf_set },
+    { NJ_C_XF, "get", "([I)V", mascot_xf_get },
+    { NJ_C_XF, "get", "([II)V", mascot_xf_get_at },
+    { NJ_C_XF, "set", "([I)V", mascot_xf_set_arr },
+    { NJ_C_XF, "set", "([II)V", mascot_xf_set_arr_at },
+    { NJ_C_XF, "set", "([[I)V", mascot_xf_set_2d },
     { NJ_C_XF, "mul", "(L" NJ_C_XF ";L" NJ_C_XF ";)V", mascot_xf_multiply },
     { NJ_C_XF, "lookAt", "(L" NJ_C_V3 ";L" NJ_C_V3 ";L" NJ_C_V3 ";)V", mascot_xf_set_view },
     { NJ_C_XF, "setRotationX", "(I)V", mascot_xf_rot_x },
@@ -1414,7 +1561,16 @@ const nj_native_entry nj_lib_mascot_table[] = {
     { NJ_C_LIG, "<init>", "(L" NJ_C_V3 ";II)V", mascot_lig_init },
     { NJ_C_LIG, "setDirection", "(L" NJ_C_V3 ";)V", mascot_lig_dir },
     { NJ_C_LIG, "setAmbIntensity", "(I)V", mascot_lig_amb },
+    { NJ_C_LIG, "setAmbientIntensity", "(I)V", mascot_lig_amb },
+    { NJ_C_LIG, "getAmbIntensity", "()I", mascot_lig_get_amb },
+    { NJ_C_LIG, "getAmbientIntensity", "()I", mascot_lig_get_amb },
+    { NJ_C_LIG, "getDirIntensity", "()I", mascot_lig_get_dif },
+    { NJ_C_LIG, "getParallelLightIntensity", "()I", mascot_lig_get_dif },
     { NJ_C_LIG, "setDirIntensity", "(I)V", mascot_lig_dif },
+    { NJ_C_LIG, "setParallelLightIntensity", "(I)V", mascot_lig_dif },
+    { NJ_C_LIG, "setParallelLightDirection", "(L" NJ_C_V3 ";)V", mascot_lig_dir },
+    { NJ_C_LIG, "getDirection", "()L" NJ_C_V3 ";", mascot_lig_get_dir },
+    { NJ_C_LIG, "getParallelLightDirection", "()L" NJ_C_V3 ";", mascot_lig_get_dir },
 
     { NJ_C_FX, "<init>", "()V", mascot_scene_fx_default },
     { NJ_C_FX, "setLight", "(L" NJ_C_LIG ";)V", mascot_fx_light },

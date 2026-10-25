@@ -1069,3 +1069,13 @@ path itself adds no allocation: `c_paint_now()` paints the pending frame with th
 state that is already there.  The runtime text grows by the helper plus the two
 wrapper calls; no `.data`/`.bss` growth, and no writable statics were added.
 
+## API aliases cost text, not RAM (round 7)
+
+The round added no fields and no static tables with mutable state: the new
+`Integer` string functions reuse `to_radix_string()`, the `Timer` Date
+overloads translate the instant and reuse `timer_add()`, and the Mascot
+additions map onto fields that already existed (`_amb`, `_dif`, `_dir`,
+`m00`..`m23`).  `Light.getDirection()` materialises a `Vector3D` only when the
+title never set one, which is exactly what the reference does.  Cost is code
+size only; `.data`/`.bss` and the per-VM footprint are unchanged.
+
