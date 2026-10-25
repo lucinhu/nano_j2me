@@ -610,3 +610,18 @@ Two hypotheses were already eliminated with evidence: `ac_pred_flag` (skipping a
 bit per macroblock makes it fail earlier, so the stream does not carry it) and
 `intra_dc_vlc_thr` (`ff_mpeg4_dc_threshold[0] = 99` and `qscale = 9`, so the DC
 *is* coded with its own VLC, which is what the driver does).
+
+### A working harness for the frame driver (round 103)
+
+Reaching `nj_m4v_decode_ivop()` with correct inputs takes three steps, and the
+first one was the reason earlier probes "succeeded" doing nothing:
+
+1. the VOL comes from the mp4v `esds` configuration, **not** from the sample
+   (`nj_m4v_parse_vol(cfg, len, 22, &vol)`; 0 = success, and the 1942 config
+   gives 176x144 at `time_res` 1000);
+2. the VOP header starts at **bit 32** of the sample (the sample opens with the
+   `00 00 01 b6` start code); `nj_m4v_parse_vop_bits()` returns 1 on success and
+   ends at bit 56, reporting `type=0 (I), coded=1, qscale=9`;
+3. `nj_m4v_decode_ivop()` then fails at bit **588** of the sample, i.e. inside
+   the first macroblock row, not after eight blocks as the earlier (offset-
+   confused) probe suggested.  That is the number to bisect from next.
