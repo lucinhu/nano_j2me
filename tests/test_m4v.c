@@ -500,6 +500,19 @@ int main(void)
         ok(bad == 0, "DC neighbours follow the picture edges");
     }
 
+    {
+        int gx = -1, gy = -1, bad = 0;
+
+        bad += nj_m4v_block_grid(0, 1, 2, &gx, &gy) != 0 || gx != 2 || gy != 4;
+        bad += nj_m4v_block_grid(1, 1, 2, &gx, &gy) != 0 || gx != 3 || gy != 4;
+        bad += nj_m4v_block_grid(2, 1, 2, &gx, &gy) != 0 || gx != 2 || gy != 5;
+        bad += nj_m4v_block_grid(3, 1, 2, &gx, &gy) != 0 || gx != 3 || gy != 5;
+        bad += nj_m4v_block_grid(4, 1, 2, &gx, &gy) != 0 || gx != 1 || gy != 2;
+        bad += nj_m4v_block_grid(5, 1, 2, &gx, &gy) != 0 || gx != 1 || gy != 2;
+        bad += nj_m4v_block_grid(6, 1, 2, &gx, &gy) != -1;
+        ok(bad == 0, "each block knows its grid position for DC prediction");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

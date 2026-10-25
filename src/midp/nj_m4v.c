@@ -649,6 +649,28 @@ void nj_m4v_dc_avail(int bx, int by, int *has_a, int *has_b, int *has_c)
     if (has_c != NULL) *has_c = (bx > 0 && by > 0);
 }
 
+
+int nj_m4v_block_grid(int blk, int mbx, int mby, int *gx, int *gy)
+{
+    int x, y;
+
+    if (blk < 0 || blk > 5 || mbx < 0 || mby < 0) {
+        return -1;
+    }
+    if (blk < 4) {
+        /* Luma blocks sit on the 8x8 grid inside the 16x16 macroblock. */
+        x = mbx * 2 + (blk & 1);
+        y = mby * 2 + (blk >> 1);
+    } else {
+        /* Cb/Cr have their own half-resolution grid: one block per macroblock. */
+        x = mbx;
+        y = mby;
+    }
+    if (gx != NULL) *gx = x;
+    if (gy != NULL) *gy = y;
+    return 0;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;

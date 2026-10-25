@@ -116,6 +116,10 @@ int nj_m4v_dc_predict_q(int a, int b, int c, int scale, int *dir);
  * writing the dequantised, clamped value the next block will predict from. */
 int nj_m4v_dc_level(int delta, int pred_dequant, int scale, int *stored);
 
+/* Grid position of one of the six blocks of a macroblock: luma blocks on the
+ * 8x8 grid, Cb/Cr on their own quarter-resolution grid. */
+int nj_m4v_block_grid(int blk, int mbx, int mby, int *gx, int *gy);
+
 /* Which of the three predicted-from neighbours (left, top, top-left) exist for
  * the block whose grid corner is (bx, by). */
 void nj_m4v_dc_avail(int bx, int by, int *has_a, int *has_b, int *has_c);
