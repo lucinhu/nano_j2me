@@ -536,7 +536,7 @@ int main(void)
 
         bad += NJ_M4V_MAX_RUN != 20 || NJ_M4V_MAX_LEVEL != 27;
         bad += nj_m4v_max_level_0[0] != 27 || nj_m4v_max_level_1[0] != 8;
-        bad += nj_m4v_max_run_0[1] != 14 || nj_m4v_max_run_1[1] != 2;
+        bad += nj_m4v_max_run_0[1] != 14 || nj_m4v_max_run_1[1] != 20;
         ok(bad == 0, "the escape tables match the reference derivation");
     }
 
