@@ -1215,6 +1215,7 @@ nj_add_test(test_clip tests/test_clip.c)
     nj_add_test(test_detect tests/test_detect.c)
     nj_add_test(test_speed tests/test_speed.c)
     nj_add_test(test_timer tests/test_timer.c)
+    nj_add_test(test_timer_fairness tests/test_timer_fairness.c)
     nj_add_test(test_thread_lifecycle tests/test_thread_lifecycle.c)
   endif()
 

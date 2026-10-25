@@ -3223,7 +3223,12 @@ NJFN(timer_pump)
                     (exc && exc->cls) ? exc->cls->name : "an exception");
             timer_stop(vm, timer);
         }
-        return NJ_OK;
+        /* A slow callback may already be past its next deadline. Yield after
+         * each completed task so its synchronous paint can be presented and
+         * input can be polled before the next callback. Sleep(0) ends this
+         * quantum without adding a delay; coalescing repaint() here would
+         * strand callbacks that wait for paint() to publish their result. */
+        return nj_thread_sleep(vm, th, 0);
     }
 }
 
