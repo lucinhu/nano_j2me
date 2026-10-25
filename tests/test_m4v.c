@@ -82,6 +82,35 @@ int main(void)
         ok(nj_m4v_accepts(junk, (nj_u4)sizeof(junk)) == 0, "noise is not M4V");
     }
 
+    {
+        /* First video sample of 1942.3gp: a VOP header at time 0. */
+        static const nj_u1 vop_i[] = {
+            0x00, 0x00, 0x01, 0xb6, 0x10, 0x03, 0x09, 0x8c, 0x21, 0xb6, 0xfe, 0x36
+        };
+        nj_m4v_vop vop;
+
+        ok(nj_m4v_parse_vop(vop_i, (nj_u4)sizeof(vop_i), 4u, 1000u, &vop) == 1,
+           "the 1942 VOP header parses");
+        ok(vop.type == 0, "the first sample is an I-VOP");
+        ok(vop.time_increment == 0u, "it sits at time increment 0");
+        ok(vop.coded == 1, "the frame is coded, not skipped");
+    }
+    {
+        /* doom.3gp opens with a group of VOPs; the VOP follows it. */
+        static const nj_u1 gop[] = {
+            0x00, 0x00, 0x01, 0xb3, 0x00, 0x10, 0x07, 0x00, 0x00, 0x01, 0xb6, 0x10,
+            0x03, 0x09
+        };
+        nj_u4 pos = 0;
+        nj_m4v_vop vop;
+
+        ok(nj_m4v_find_vop(gop, (nj_u4)sizeof(gop), &pos) == 1,
+           "the VOP after the GOP header is found");
+        ok(nj_m4v_parse_vop(gop, (nj_u4)sizeof(gop), pos, 1000u, &vop) == 1 &&
+           vop.type == 0 && vop.coded == 1,
+           "the doom VOP header parses as a coded I-VOP");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

@@ -195,6 +195,82 @@ int nj_m4v_parse_vol(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_m4v_vol *out)
     return out->width > 0u && out->height > 0u;
 }
 
+int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
+                     nj_m4v_vop *out)
+{
+    m4v_bits s;
+    nj_u4 v;
+    int   type, bit, coded = 1;
+
+    if (b == NULL || out == NULL || time_res < 2u) {
+        return 0;
+    }
+    s.b = b;
+    s.n = n;
+    s.pos = pos * 8u;
+    if (!m4v_bits_get(&s, 2, &v)) {
+        return 0;
+    }
+    type = (int)v;
+    if (type == 2) {
+        return 0;               /* B-VOPs are not part of Simple Profile */
+    }
+    /* modulo_time_base: unary ones terminated by a zero. */
+    if (!m4v_bit(&s, &bit)) {
+        return 0;
+    }
+    while (bit != 0) {
+        if (!m4v_bit(&s, &bit)) {
+            return 0;
+        }
+    }
+    if (!m4v_marker(&s)) {
+        return 0;
+    }
+    if (type == 1) {
+        /* P-VOP: time_incr unary ones terminated by a zero. */
+        if (!m4v_bit(&s, &bit)) {
+            return 0;
+        }
+        while (bit != 0) {
+            if (!m4v_bit(&s, &bit)) {
+                return 0;
+            }
+        }
+        if (!m4v_marker(&s)) {
+            return 0;
+        }
+    }
+    if (!m4v_bits_get(&s, (int)(m4v_log2(time_res - 1u) + 1u), &v)) {
+        return 0;
+    }
+    if (!m4v_marker(&s)) {
+        return 0;
+    }
+    if (!m4v_bit(&s, &bit)) {
+        return 0;
+    }
+    coded = bit;
+    out->type = type;
+    out->time_increment = v;
+    out->coded = coded;
+    return 1;
+}
+
+int nj_m4v_find_vop(const nj_u1 *b, nj_u4 n, nj_u4 *pos)
+{
+    nj_u4 code = 0, at = 0, from = 0;
+
+    while (nj_m4v_start_code(b, n, from, &code, &at)) {
+        if (code == NJ_M4V_VOP) {
+            *pos = at;
+            return 1;
+        }
+        from = at;
+    }
+    return 0;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;

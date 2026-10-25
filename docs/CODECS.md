@@ -369,3 +369,22 @@ to the corpus's two real movies - not against a header we wrote ourselves:
 The test also refuses a truncated config and random bytes.  Next: VOP headers
 and the B-16 macroblock layer, reusing the H.263 inverse transform and motion
 compensation that already pass their own reference tests.
+
+### VOP headers, checked against the corpus's own first frames (round 21)
+
+`nj_m4v_parse_vop()` reads what the reference decoder reads: the two-bit coding
+type, the unary modulo-time-base, a marker, the time increment (whose width
+comes from the VOL's resolution), a marker and `vop_coded`.  B-VOPs are refused
+by design - Simple Profile has none.
+
+Two real first samples pin it down:
+
+| Sample | Bytes | Parsed |
+| --- | --- | --- |
+| `1942.3gp` sample 0 | `00 00 01 b6 10 03 09 8c ...` | I-VOP, time increment 0, coded |
+| `doom.3gp` sample 0 | GOP, then `00 00 01 b6 10 03 09` | I-VOP after the GOP, coded |
+
+`nj_m4v_find_vop()` skips the group-of-VOPs header that one of them starts with.
+Next: the macroblock layer - reuse the H.263 inverse transform and half-pel
+motion compensation, add the B-16 VLC tables, then register the decoder as the
+`NJ_AV_VIDEO_MPEG4` provider.

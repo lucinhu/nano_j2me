@@ -16,6 +16,8 @@
 #define NJ_M4V_VO   0x00u
 #define NJ_M4V_VOL  0x20u
 #define NJ_M4V_VOP  0xB6u
+#define NJ_M4V_GOP  0xB3u
+#define NJ_M4V_VUD  0xB2u
 
 typedef struct nj_m4v_vol {
     nj_u4 width;
@@ -32,6 +34,19 @@ int nj_m4v_start_code(const nj_u1 *b, nj_u4 n, nj_u4 from, nj_u4 *code, nj_u4 *p
 
 /* Parses a VOL header whose payload starts at b[pos]. */
 int nj_m4v_parse_vol(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_m4v_vol *out);
+
+typedef struct nj_m4v_vop {
+    int   type;           /* 0 I, 1 P (B is not in Simple Profile)          */
+    nj_u4 time_increment; /* needs the VOL's time_res to mean anything      */
+    int   coded;          /* vop_coded: 0 means the frame is skipped        */
+} nj_m4v_vop;
+
+/* Parses a VOP header whose payload starts at b[pos]. */
+int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
+                     nj_m4v_vop *out);
+
+/* Finds the next VOP start code and stores its payload offset. */
+int nj_m4v_find_vop(const nj_u1 *b, nj_u4 n, nj_u4 *pos);
 
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
