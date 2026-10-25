@@ -1246,6 +1246,7 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
         pred = nj_m4v_dc_predict_q(a, bq, c, dscale, &dir);
         rc = nj_m4v_decode_intra_block_ex(b, n, pos, coef, blk < 4, pred,
                                           *qscale, 0);
+        if (getenv("NJ_M4VDBG")) fprintf(stderr, "DC blk=%d rc=%d pos=%u\n", blk, rc, (unsigned)*pos);
         if (rc != 0) {
             return rc;
         }
@@ -1262,13 +1263,37 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
         (void)dir;
         (void)scale;
     }
+    /* Reference order: MCBPC, [dquant], ac_pred, CBPY, then the six blocks.
+     * Simple Profile never applies AC prediction, but the bit is there. */
+    {
+        nj_u4 bp = *pos;
+        int acp = 0;
+
+        if (bp >= n * 8u) {
+            return -1;
+        }
+        acp = (int)((b[bp >> 3] >> (7u - (bp & 7u))) & 1u);
+        *pos = bp + 1u;
+        (void)acp;
+    }
+    if (getenv("NJ_M4VDBG")) fprintf(stderr, "cbpy call pos=%u\n", (unsigned)*pos);
     if (nj_vlc_lookup(b, n, pos, nj_vlc_cbpy, 16, &cbpy) != 0) {
+        if (getenv("NJ_M4VDBG")) {
+            int k;
+            fprintf(stderr, "CBPY fail at %u bits=", (unsigned)*pos);
+            for (k = 0; k < 9; k++) {
+                nj_u4 bp = *pos + (nj_u4)k;
+                fprintf(stderr, "%d", bp < n * 8u ? (int)((b[bp >> 3] >> (7u - (bp & 7u))) & 1u) : 9);
+            }
+            fprintf(stderr, "\n");
+        }
         return -1;
     }
-    cbp = ((cbpc & 3) | (cbpy << 2)) & 0x3f;
+    cbp = ((cbpc & 3) | ((15 - cbpy) << 2)) & 0x3f;   /* CBPY: 1 means "no AC" */
+    /* All six DC coefficients come first, then the AC coefficients of the
+     * coded blocks - that is the macroblock layer's order (7.4.3.5). */
     for (blk = 0; blk < 6; blk++) {
-        nj_s4 coef[64];
-        int i, coded = nj_m4v_cbp_has_ac(cbp, blk), rc;
+        int coded = nj_m4v_cbp_has_ac(cbp, blk), arc;
 
         if (ac_bits != NULL) {
             ac_bits[blk] = coded;
@@ -1276,17 +1301,14 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
         if (!coded) {
             continue;
         }
-        for (i = 0; i < 64; i++) {
-            coef[i] = 0;
-        }
-        rc = nj_m4v_ac_block(b, n, pos, coef, 1, *qscale);
-        if (rc == -3) {
+        arc = nj_m4v_ac_block(b, n, pos, all_coef[blk], 1, *qscale);
+        if (getenv("NJ_M4VDBG")) fprintf(stderr, "AC blk=%d rc=%d pos=%u\n", blk, arc, (unsigned)*pos);
+        if (arc == -3) {
             return -3;
         }
-        if (rc < 0) {
+        if (arc < 0) {
             return -1;
         }
-        memcpy(all_coef[blk], coef, sizeof coef);
     }
     if (yp != NULL) {
         int cw = 0, ch = 0;
