@@ -63,3 +63,11 @@ NJ_SWEEP_DIRS=/path/to/vault/Roms:/path/to/vault2 tools/sweep_compat.py .local-t
 As with the first collection, the JARs stay out of the repository; only the
 verdict rows are committed.
 
+
+### Verdicts
+
+`ok` (ran to the frame budget), `title-exit` (the title called
+`notifyDestroyed()` after painting), `no-frame` (the title never painted a
+frame), `failure`, `timeout`, `oom`, `bad-jar`.  A row that paints and then
+quits by design is `title-exit`, not `no-frame`: the latter is what sends us
+looking for a runtime defect.

@@ -4158,6 +4158,32 @@ block from 1.69 MB of free space.  The next step is the allocator (coalescing /
 best-fit), not `createPlayer`; the streaming front-end makes the request as
 small as it can be.
 
+### Telling a title that quits from a title that never paints (round 6)
+
+The sweep used to collapse two different outcomes into `no-frame`: a title that
+paints for a while and then calls `notifyDestroyed()` itself, and a title that
+never paints at all.  The first is the title working as designed; the second is
+the label that tells us to go looking for a defect.  `vault/March of Heroes.jar`
+was misfiled: it renders for 209 frames / 107 paints and then exits on its own
+(three `NullPointerException`s are thrown and caught inside the title - the
+first one is a `String.equals` on a null property in `j.t(I)V`, immediately
+after the `invokevirtual ... String.equals` at offset 225, so the title is
+probing for a value this build does not ship).
+
+`tools/sweep_compat.py` now reports:
+
+| outcome | verdict |
+| --- | --- |
+| exits after painting | `title-exit` ("标题自行退出"), note with frame/paint counts |
+| exits without painting | `no-frame` ("未呈现画面"), note says so explicitly |
+
+After the rescan the 961-row corpus reads 957 ok / 2 no-frame / 1 title-exit /
+1 bad-jar.  The two remaining `no-frame` rows are both titles that call
+`notifyDestroyed()` from their own `Canvas.run()` before the first paint
+(有女倾城破解版_11525 at bytecode offset 278) or never install a Displayable
+after a caught `RecordStoreNotFoundException` (乱世Q三国_1649); both are the
+title's own decision, not a runtime defect.
+
 ### The repaint that could not wait for the frame (round 5)
 
 Twelve titles from the Tomb Raider collection used to hang: `TombRaiderMIDlet`

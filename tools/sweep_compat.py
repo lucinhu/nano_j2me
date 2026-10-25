@@ -65,7 +65,9 @@ def one(job):
             break
         stats = dict(re.findall(r"(\w+)=(\d+)", (re.search(r"stats:.*", err) or [""])[0])) if "stats:" in err else {}
         if "the MIDlet called notifyDestroyed()" in err:
-            row["note"] = "exited itself (notifyDestroyed) before presenting a frame"
+            # The title asked to exit; whether it painted first is only known
+            # from the stats below, so do not claim anything yet.
+            row["note"] = "exited itself (notifyDestroyed)"
         elif "the MIDlet installed no Displayable" in err:
             row["note"] = "installed no Displayable"
         elif "not a usable MIDlet suite" in err:
@@ -86,10 +88,18 @@ def one(job):
             break
         if heap == 32 or "OutOfMemoryError" not in err:
             if rc == 0 and uncaught == 0 and "OutOfMemoryError" not in err:
-                # It ran and exited on its own, it just never painted: some
-                # MIDP 1.0 titles wait for input they never get from a script,
-                # or draw only after a state machine we never reach.
-                row["verdict"] = "no-frame"
+                # It ran and exited on its own.  A title that painted first is
+                # a title that worked for as long as it wanted to run (March of
+                # Heroes paints 105 frames and then quits); only one that never
+                # painted gets "no-frame".  Keeping them apart matters because
+                # "never painted" is the label that sends us looking for a bug.
+                if row["frames"] > 0 or row["paints"] > 0:
+                    row["verdict"] = "title-exit"
+                    row["note"] = ("exited itself (notifyDestroyed) after %d frames / %d paints"
+                                   % (row["frames"], row["paints"]))
+                else:
+                    row["verdict"] = "no-frame"
+                    row["note"] = ("exited itself (notifyDestroyed) without painting a frame")
             else:
                 row["verdict"] = ("oom" if "OutOfMemoryError" in err else "failure")
             break
