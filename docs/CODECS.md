@@ -489,3 +489,12 @@ decoder tables are `const` data in `.rodata`, the provider registry lives in
 rounds reported `-E no_statics` because another workstream had uncommitted
 edits that put an `on.1` symbol in `.data`; that change is not part of this
 goal's commits and has since been resolved.
+
+### Escape tables, derived the reference way (round 57)
+
+`tools/gen_m4v_escape.py` writes `include/nj2me/nj_m4v_escape.h`: for each half
+of the intra RL table (`i < last` and `i >= last`) it computes `max_level[run]`
+and `max_run[level]` with the rule copied from libavcodec/rl.c - the largest
+level seen at a run, and the largest run seen at a level.  The header is data
+only; it is not used yet.  Numbers from the reference tables: runs up to 20,
+levels up to 27, 21 and 28 entries per half.
