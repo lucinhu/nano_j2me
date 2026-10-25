@@ -498,3 +498,20 @@ and `max_run[level]` with the rule copied from libavcodec/rl.c - the largest
 level seen at a run, and the largest run seen at a level.  The header is data
 only; it is not used yet.  Numbers from the reference tables: runs up to 20,
 levels up to 27, 21 and 28 entries per half.
+
+### The escape grammar, as the reference implements it (round 60)
+
+Read from `mpeg4videodec.c:1465-1602` (the non-RVLC path that Simple Profile uses).
+Right after the escape symbol the next two bits choose the form:
+
+| Bits | Form | Layout |
+| --- | --- | --- |
+| `0x` | first escape | skip the 0, then run/level come from the **escape half** of the same VLC table, `level += max_level[last][run-1] * qmul`, then one sign bit |
+| `10` | second escape | skip 2, run/level from the same escape table, `run += max_run[last][level/qmul] + 1`, then one sign bit |
+| `11` | third escape | skip 2, `last`(1) `run`(6) marker, level as **signed 12 bits**, marker; `level = level*qmul ± qadd` with a [-2048, 2047] clamp |
+
+The consequence for our tables: the escape forms need the same code words decoded to
+`(run, level)` pairs, not to symbols.  `nj_m4v_tables.h` currently maps codes to
+symbols only, so the generator has to emit a second LUT with `(run, level)` packed
+in it before `nj_m4v_ac_escape()` can be written.  `nj_m4v_escape.h` (max_level /
+max_run) is already in place and pinned by a test.
