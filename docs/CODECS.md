@@ -289,3 +289,22 @@ So the H.263 path built so far is exercised only by our own ffmpeg fixture, and
 reorders the remaining work: M4V (VLC tables, IDCT, half-pel motion
 compensation, P-frames) is the milestone, and H.263 stays as the smaller
 sibling it already covers.
+
+### The demultiplexer on the corpus's own movies (round 17)
+
+`nj_mp4` had only ever been exercised by our own ffmpeg fixture, so it was run
+against the two real 3GP files the corpus ships (extracted from
+`tests/games/毁灭战士3_10598.jar:vid/doom.3gp` and
+`tests/games/1942空战_10403.jar:1942.3gp`) and the result compared with
+`ffprobe`:
+
+| File | `nj_mp4` | `ffprobe` |
+| --- | --- | --- |
+| 1942.3gp | 176x144, 275 samples, 25 fps, codec `mp4v` | `mpeg4 176x144 25/1 275` |
+| doom.3gp | 320x240, 189 samples, 15 fps, codec `mp4v` | `mpeg4 320x240 15/1 189` |
+
+Geometry, sample count and frame rate agree exactly, and the sample description
+is identified as `mp4v`.  Both files also carry an AMR-NB audio track, which is
+the path `test_amr` and the MP4 audio branch already cover - that is why the
+毁灭战士3 intro has sound today while its picture stays refused: the container
+and the audio track work, the MPEG-4 Part 2 video decoder does not exist yet.
