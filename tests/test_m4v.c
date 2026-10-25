@@ -588,6 +588,16 @@ int main(void)
         ok(bad == 0, "the first escape form adds max_level[last][run] * qmul");
     }
 
+    {
+        const nj_u1 esc[2] = { 0x07u, 0x40u };
+        nj_u4 pos = 7u;
+        int last = -1, run = -1, level = 0, bad = 0;
+
+        bad += nj_m4v_escape2(esc, 2u, &pos, 2, &last, &run, &level) != 0;
+        bad += last != 0 || run != 1 || level != 1;
+        ok(bad == 0, "the second escape form corrects the run with max_run");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

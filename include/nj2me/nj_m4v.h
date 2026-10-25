@@ -80,6 +80,8 @@ int nj_m4v_qmul(int qscale);
 /* Third escape form: reads "11" form bits plus last/run/markers/level. */
 int nj_m4v_escape1(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int qscale,
                    int *last, int *run, int *level);
+int nj_m4v_escape2(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int qscale,
+                   int *last, int *run, int *level);
 int nj_m4v_escape3(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int qscale,
                    int *last, int *run, int *level);
 int nj_m4v_qadd(int qscale);

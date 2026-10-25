@@ -488,6 +488,45 @@ int nj_m4v_coef_apply(nj_s4 *coef, int *k, int sym, int *last)
  * Returns 0, or -3 when the form bits are not "11", or -1 on damage. */
 int nj_m4v_escape1(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int qscale,
                    int *last, int *run, int *level);
+int nj_m4v_escape2(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int qscale,
+                   int *last, int *run, int *level)
+{
+    nj_u4 save = *pos;
+    int   f0 = 0, f1 = 0, sym, r, lv, sign = 0, lt = 0, qm = nj_m4v_qmul(qscale);
+    int   idx;
+
+    if (!m4v_rbit(b, n, pos, &f0) || !m4v_rbit(b, n, pos, &f1)) {
+        *pos = save;
+        return -1;
+    }
+    if (f0 != 1 || f1 != 0) {
+        *pos = save;
+        return -3;
+    }
+    sym = nj_m4v_decode_ac(b, n, pos, &lt);
+    if (sym < 0 || qm <= 0) {
+        *pos = save;
+        return -1;
+    }
+    r  = (int)nj_m4v_ac_run[sym];
+    lv = (int)nj_m4v_ac_level[sym];
+    idx = lv / qm;
+    if (idx >= 0 && idx < NJ_M4V_MAX_LEVEL + 1) {
+        r += (int)(lt ? nj_m4v_max_run_1[idx] : nj_m4v_max_run_0[idx]) + 1;
+    }
+    if (!m4v_rbit(b, n, pos, &sign)) {
+        *pos = save;
+        return -1;
+    }
+    if (sign) {
+        lv = -lv;
+    }
+    if (last != NULL) *last = lt;
+    if (run != NULL) *run = r;
+    if (level != NULL) *level = lv;
+    return 0;
+}
+
 
 /* First escape form: after the escape word the next bit is 0, then the run
  * and level come from the escape half of the same VLC table; the level is
@@ -592,7 +631,10 @@ int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k,
                 rc3 = nj_m4v_escape1(b, n, pos, qscale, &el, &er, &el3);
             }
             if (rc3 == -3) {
-                return -3;          /* second escape form not implemented yet */
+                rc3 = nj_m4v_escape2(b, n, pos, qscale, &el, &er, &el3);
+            }
+            if (rc3 < 0) {
+                return -1;
             }
             if (rc3 < 0) {
                 return -1;
