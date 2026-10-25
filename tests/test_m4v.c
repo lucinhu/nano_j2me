@@ -218,6 +218,28 @@ int main(void)
         ok(bad == 0, "every DC size codeword decodes to its own size");
     }
 
+    {
+        nj_u1 buf[2];
+        nj_u4 pos;
+        int   okd = 1;
+
+        /* size 0 reads nothing and means no change */
+        pos = 0;
+        okd &= nj_m4v_dc_delta(buf, 2, &pos, 0) == 0 && pos == 0;
+        /* size 2: 00 -> 0, 01 -> +1, 10 -> 2 - 3 = -1, 11 -> 3 - 3 = 0 */
+        memset(buf, 0, sizeof(buf));
+        buf[0] = 0x80u;                        /* 10xxxxxx */
+        pos = 0;
+        okd &= nj_m4v_dc_delta(buf, 2, &pos, 2) == -1 && pos == 2;
+        buf[0] = 0x40u;                        /* 01xxxxxx */
+        pos = 0;
+        okd &= nj_m4v_dc_delta(buf, 2, &pos, 2) == 1 && pos == 2;
+        buf[0] = 0xc0u;                        /* 11xxxxxx */
+        pos = 0;
+        okd &= nj_m4v_dc_delta(buf, 2, &pos, 2) == 0 && pos == 2;
+        ok(okd != 0, "DC deltas follow the specification's sign rule");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

@@ -326,6 +326,30 @@ int nj_m4v_decode_dc(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int luma)
     return -1;
 }
 
+
+int nj_m4v_dc_delta(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int size)
+{
+    nj_u4 v = 0;
+    int   k, half;
+
+    if (size <= 0) {
+        return 0;
+    }
+    if (size > 12 || *pos + (nj_u4)size > n * 8u) {
+        return -1;
+    }
+    for (k = 0; k < size; k++) {
+        v = (v << 1) | (nj_u4)((b[(*pos + (nj_u4)k) >> 3] >>
+                                (7u - ((*pos + (nj_u4)k) & 7u))) & 1u);
+    }
+    *pos += (nj_u4)size;
+    half = 1 << (size - 1);
+    if ((int)v & half) {
+        v -= (nj_u4)((1 << size) - 1);
+    }
+    return (int)v;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;

@@ -55,6 +55,10 @@ int nj_m4v_decode_ac(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *last);
 /* Decodes the intra DC size delta VLC (B-13).  Returns the size 0..12 or -1. */
 int nj_m4v_decode_dc(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int luma);
 
+/* Reads the signed DC delta that follows a size code (ISO 14496-2 7.3.3).
+ * Returns the delta, or -1 when the bits run out. */
+int nj_m4v_dc_delta(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int size);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 
