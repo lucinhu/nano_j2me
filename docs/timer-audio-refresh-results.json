@@ -1,0 +1,1808 @@
+{
+  "date": "2026-10-25",
+  "baseline_core": "d48046c",
+  "premerge_fixed_core": "4f621e8",
+  "merged_core": "afb9005",
+  "normal_saved_games_preserved": true,
+  "method": "Changed-image FPS; fresh temporary RMS per run; no screenshots during sampling. final-* means the pre-merge candidate; merged-* is the final upstream integration.",
+  "audio_configurations": {
+    "base": "80 ms watermark",
+    "candidate": "80 ms watermark and 2 ms consumer wait (discarded)",
+    "final": "160 ms watermark, original consumer wait, timer fairness fix",
+    "merged": "same as final, plus upstream 57bd259 and retained MIDI loop integration"
+  },
+  "cases": [
+    {
+      "case": "base-bounce-1",
+      "game": "蹦球传说_7801.jar",
+      "jit": "on",
+      "resolution": [
+        240,
+        320
+      ],
+      "warmup_seconds": 5.0,
+      "sample_interval_seconds": 1,
+      "sampling_seconds": 21.696486858010758,
+      "keys": "fire,5,fire,softl,fire,wait:30,5,fire,fire,fire",
+      "held_key": "",
+      "repeated_keys": "left,right",
+      "repeat_period_seconds": 0.5,
+      "navigation_key_hold_seconds": 0.4,
+      "skip_before_screenshot": false,
+      "samples": [
+        {
+          "sample": 0,
+          "time_seconds": 3.116900916211307e-05,
+          "fps": 11.8
+        },
+        {
+          "sample": 1,
+          "time_seconds": 1.1147770819952711,
+          "fps": 11.9
+        },
+        {
+          "sample": 2,
+          "time_seconds": 2.1813343109970447,
+          "fps": 11.8
+        },
+        {
+          "sample": 3,
+          "time_seconds": 3.2527917900006287,
+          "fps": 11.8
+        },
+        {
+          "sample": 4,
+          "time_seconds": 4.329083706019446,
+          "fps": 11.8
+        },
+        {
+          "sample": 5,
+          "time_seconds": 5.375416190014221,
+          "fps": 13.4
+        },
+        {
+          "sample": 6,
+          "time_seconds": 6.476886666001519,
+          "fps": 9.6
+        },
+        {
+          "sample": 7,
+          "time_seconds": 7.573276362993056,
+          "fps": 11.8
+        },
+        {
+          "sample": 8,
+          "time_seconds": 8.644088336994173,
+          "fps": 11.5
+        },
+        {
+          "sample": 9,
+          "time_seconds": 9.743867598008364,
+          "fps": 11.8
+        },
+        {
+          "sample": 10,
+          "time_seconds": 10.828743759018835,
+          "fps": 7.9
+        },
+        {
+          "sample": 11,
+          "time_seconds": 11.923925334995147,
+          "fps": 9.7
+        },
+        {
+          "sample": 12,
+          "time_seconds": 12.987900981999701,
+          "fps": 9.8
+        },
+        {
+          "sample": 13,
+          "time_seconds": 14.093508673016913,
+          "fps": 11.5
+        },
+        {
+          "sample": 14,
+          "time_seconds": 15.16392070701113,
+          "fps": 11.9
+        },
+        {
+          "sample": 15,
+          "time_seconds": 16.281181163998554,
+          "fps": 7.6
+        },
+        {
+          "sample": 16,
+          "time_seconds": 17.35248665101244,
+          "fps": 11.4
+        },
+        {
+          "sample": 17,
+          "time_seconds": 18.436912027013022,
+          "fps": 13.3
+        },
+        {
+          "sample": 18,
+          "time_seconds": 19.507638711016625,
+          "fps": 9.9
+        },
+        {
+          "sample": 19,
+          "time_seconds": 20.631411782000214,
+          "fps": 11.9
+        }
+      ],
+      "mean": 11.105,
+      "median": 11.8,
+      "minimum": 7.6,
+      "maximum": 13.4,
+      "sample_audio_detail_delta": {
+        "offered": 476746,
+        "accepted": 476746,
+        "short": 0,
+        "io_us": 21452651,
+        "volume_calls": 0,
+        "queued": -2,
+        "underruns": 8,
+        "silence_frames": 4600
+      },
+      "sample_audio_output_delta": {
+        "writes": 2039,
+        "frames": 1043968,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "repeated_pulses_including_warmup": 31,
+      "exit_ok": true,
+      "no_live_jit_code": true,
+      "no_live_hot_allocations": true,
+      "jit_counters": {
+        "active": 1,
+        "compiled": 4635,
+        "executed": 1423980,
+        "bytecodes": 19293999,
+        "declined": 23827,
+        "code_bytes": 15170
+      },
+      "pixel_crcs": {
+        "native_crc": "afc5fa5d",
+        "lcd_crc": "b9253ebf"
+      }
+    },
+    {
+      "case": "base-bounce-2",
+      "game": "蹦球传说_7801.jar",
+      "jit": "on",
+      "resolution": [
+        240,
+        320
+      ],
+      "warmup_seconds": 5.0,
+      "sample_interval_seconds": 1,
+      "sampling_seconds": 21.702422479982488,
+      "keys": "fire,5,fire,softl,fire,wait:30,5,fire,fire,fire",
+      "held_key": "",
+      "repeated_keys": "left,right",
+      "repeat_period_seconds": 0.5,
+      "navigation_key_hold_seconds": 0.4,
+      "skip_before_screenshot": false,
+      "samples": [
+        {
+          "sample": 0,
+          "time_seconds": 2.031799522228539e-05,
+          "fps": 11.9
+        },
+        {
+          "sample": 1,
+          "time_seconds": 1.0964859429805074,
+          "fps": 11.8
+        },
+        {
+          "sample": 2,
+          "time_seconds": 2.1504722019890323,
+          "fps": 9.5
+        },
+        {
+          "sample": 3,
+          "time_seconds": 3.2614689829933923,
+          "fps": 13.0
+        },
+        {
+          "sample": 4,
+          "time_seconds": 4.318076951982221,
+          "fps": 13.4
+        },
+        {
+          "sample": 5,
+          "time_seconds": 5.3915155259892344,
+          "fps": 9.4
+        },
+        {
+          "sample": 6,
+          "time_seconds": 6.484098032000475,
+          "fps": 11.4
+        },
+        {
+          "sample": 7,
+          "time_seconds": 7.563575840991689,
+          "fps": 9.9
+        },
+        {
+          "sample": 8,
+          "time_seconds": 8.664522810984636,
+          "fps": 11.4
+        },
+        {
+          "sample": 9,
+          "time_seconds": 9.752922282001236,
+          "fps": 9.9
+        },
+        {
+          "sample": 10,
+          "time_seconds": 10.827377801993862,
+          "fps": 11.7
+        },
+        {
+          "sample": 11,
+          "time_seconds": 11.935336705995724,
+          "fps": 11.5
+        },
+        {
+          "sample": 12,
+          "time_seconds": 12.974335008999333,
+          "fps": 11.3
+        },
+        {
+          "sample": 13,
+          "time_seconds": 14.058031792985275,
+          "fps": 9.8
+        },
+        {
+          "sample": 14,
+          "time_seconds": 15.174530566990143,
+          "fps": 11.8
+        },
+        {
+          "sample": 15,
+          "time_seconds": 16.25750747899292,
+          "fps": 11.6
+        },
+        {
+          "sample": 16,
+          "time_seconds": 17.352807554998435,
+          "fps": 13.1
+        },
+        {
+          "sample": 17,
+          "time_seconds": 18.462576745980186,
+          "fps": 11.8
+        },
+        {
+          "sample": 18,
+          "time_seconds": 19.538073739997344,
+          "fps": 11.7
+        },
+        {
+          "sample": 19,
+          "time_seconds": 20.627669754001545,
+          "fps": 11.9
+        }
+      ],
+      "mean": 11.39,
+      "median": 11.649999999999999,
+      "minimum": 9.4,
+      "maximum": 13.4,
+      "sample_audio_detail_delta": {
+        "offered": 477436,
+        "accepted": 477436,
+        "short": 0,
+        "io_us": 21497423,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 10,
+        "silence_frames": 6429
+      },
+      "sample_audio_output_delta": {
+        "writes": 2042,
+        "frames": 1045504,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "repeated_pulses_including_warmup": 32,
+      "exit_ok": true,
+      "no_live_jit_code": true,
+      "no_live_hot_allocations": true,
+      "jit_counters": {
+        "active": 1,
+        "compiled": 3050,
+        "executed": 1466909,
+        "bytecodes": 19421062,
+        "declined": 23449,
+        "code_bytes": 15076
+      },
+      "pixel_crcs": {
+        "native_crc": "9ac913e4",
+        "lcd_crc": "4cbe57c0"
+      }
+    },
+    {
+      "case": "candidate-bounce-1",
+      "game": "蹦球传说_7801.jar",
+      "jit": "on",
+      "resolution": [
+        240,
+        320
+      ],
+      "warmup_seconds": 5.0,
+      "sample_interval_seconds": 1,
+      "sampling_seconds": 22.042560937989037,
+      "keys": "fire,5,fire,softl,fire,wait:30,5,fire,fire,fire",
+      "held_key": "",
+      "repeated_keys": "left,right",
+      "repeat_period_seconds": 0.5,
+      "navigation_key_hold_seconds": 0.4,
+      "skip_before_screenshot": false,
+      "samples": [
+        {
+          "sample": 0,
+          "time_seconds": 1.7243000911548734e-05,
+          "fps": 11.7
+        },
+        {
+          "sample": 1,
+          "time_seconds": 1.1155033060058486,
+          "fps": 11.8
+        },
+        {
+          "sample": 2,
+          "time_seconds": 2.178377879987238,
+          "fps": 9.8
+        },
+        {
+          "sample": 3,
+          "time_seconds": 3.290880850981921,
+          "fps": 9.9
+        },
+        {
+          "sample": 4,
+          "time_seconds": 4.335314602998551,
+          "fps": 11.2
+        },
+        {
+          "sample": 5,
+          "time_seconds": 5.432833203987684,
+          "fps": 11.9
+        },
+        {
+          "sample": 6,
+          "time_seconds": 6.574947813991457,
+          "fps": 12.9
+        },
+        {
+          "sample": 7,
+          "time_seconds": 7.6831379320065025,
+          "fps": 11.9
+        },
+        {
+          "sample": 8,
+          "time_seconds": 8.7793960699928,
+          "fps": 11.6
+        },
+        {
+          "sample": 9,
+          "time_seconds": 9.780531753000105,
+          "fps": 9.8
+        },
+        {
+          "sample": 10,
+          "time_seconds": 10.893717066996032,
+          "fps": 7.8
+        },
+        {
+          "sample": 11,
+          "time_seconds": 12.029294846986886,
+          "fps": 9.8
+        },
+        {
+          "sample": 12,
+          "time_seconds": 13.125106555002276,
+          "fps": 9.9
+        },
+        {
+          "sample": 13,
+          "time_seconds": 14.250831076991744,
+          "fps": 9.8
+        },
+        {
+          "sample": 14,
+          "time_seconds": 15.435862254991662,
+          "fps": 11.3
+        },
+        {
+          "sample": 15,
+          "time_seconds": 16.486835394985974,
+          "fps": 11.6
+        },
+        {
+          "sample": 16,
+          "time_seconds": 17.61047984700417,
+          "fps": 9.9
+        },
+        {
+          "sample": 17,
+          "time_seconds": 18.684847220982192,
+          "fps": 11.9
+        },
+        {
+          "sample": 18,
+          "time_seconds": 19.781097853992833,
+          "fps": 9.5
+        },
+        {
+          "sample": 19,
+          "time_seconds": 20.89174069999717,
+          "fps": 11.9
+        }
+      ],
+      "mean": 10.795,
+      "median": 11.25,
+      "minimum": 7.8,
+      "maximum": 12.9,
+      "sample_audio_detail_delta": {
+        "offered": 484660,
+        "accepted": 484660,
+        "short": 0,
+        "io_us": 21780366,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 9,
+        "silence_frames": 6429
+      },
+      "sample_audio_output_delta": {
+        "writes": 2073,
+        "frames": 1061376,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "repeated_pulses_including_warmup": 32,
+      "exit_ok": true,
+      "no_live_jit_code": true,
+      "no_live_hot_allocations": true,
+      "jit_counters": {
+        "active": 1,
+        "compiled": 4661,
+        "executed": 1444371,
+        "bytecodes": 19603344,
+        "declined": 23507,
+        "code_bytes": 14520
+      },
+      "pixel_crcs": {
+        "native_crc": "4c1ddc0a",
+        "lcd_crc": "3cf86dc8"
+      }
+    },
+    {
+      "case": "candidate-bounce-2",
+      "game": "蹦球传说_7801.jar",
+      "jit": "on",
+      "resolution": [
+        240,
+        320
+      ],
+      "warmup_seconds": 5.0,
+      "sample_interval_seconds": 1,
+      "sampling_seconds": 21.697553061996587,
+      "keys": "fire,5,fire,softl,fire,wait:30,5,fire,fire,fire",
+      "held_key": "",
+      "repeated_keys": "left,right",
+      "repeat_period_seconds": 0.5,
+      "navigation_key_hold_seconds": 0.4,
+      "skip_before_screenshot": false,
+      "samples": [
+        {
+          "sample": 0,
+          "time_seconds": 2.442699042148888e-05,
+          "fps": 9.9
+        },
+        {
+          "sample": 1,
+          "time_seconds": 1.087593072996242,
+          "fps": 13.4
+        },
+        {
+          "sample": 2,
+          "time_seconds": 2.1826374369848054,
+          "fps": 9.9
+        },
+        {
+          "sample": 3,
+          "time_seconds": 3.295637009985512,
+          "fps": 11.9
+        },
+        {
+          "sample": 4,
+          "time_seconds": 4.338614875974599,
+          "fps": 13.5
+        },
+        {
+          "sample": 5,
+          "time_seconds": 5.378035631001694,
+          "fps": 13.5
+        },
+        {
+          "sample": 6,
+          "time_seconds": 6.452225468994584,
+          "fps": 11.8
+        },
+        {
+          "sample": 7,
+          "time_seconds": 7.563244388002204,
+          "fps": 11.5
+        },
+        {
+          "sample": 8,
+          "time_seconds": 8.617686651996337,
+          "fps": 11.4
+        },
+        {
+          "sample": 9,
+          "time_seconds": 9.691550246992847,
+          "fps": 11.7
+        },
+        {
+          "sample": 10,
+          "time_seconds": 10.832597856002394,
+          "fps": 11.3
+        },
+        {
+          "sample": 11,
+          "time_seconds": 11.905533537996234,
+          "fps": 7.9
+        },
+        {
+          "sample": 12,
+          "time_seconds": 12.9891994149948,
+          "fps": 11.8
+        },
+        {
+          "sample": 13,
+          "time_seconds": 14.052656346000731,
+          "fps": 9.8
+        },
+        {
+          "sample": 14,
+          "time_seconds": 15.176537186984206,
+          "fps": 9.6
+        },
+        {
+          "sample": 15,
+          "time_seconds": 16.26210343898856,
+          "fps": 11.9
+        },
+        {
+          "sample": 16,
+          "time_seconds": 17.34823337898706,
+          "fps": 7.8
+        },
+        {
+          "sample": 17,
+          "time_seconds": 18.4205695889832,
+          "fps": 11.4
+        },
+        {
+          "sample": 18,
+          "time_seconds": 19.522993181977654,
+          "fps": 13.4
+        },
+        {
+          "sample": 19,
+          "time_seconds": 20.595616535982117,
+          "fps": 11.8
+        }
+      ],
+      "mean": 11.26,
+      "median": 11.6,
+      "minimum": 7.8,
+      "maximum": 13.5,
+      "sample_audio_detail_delta": {
+        "offered": 476490,
+        "accepted": 476490,
+        "short": 0,
+        "io_us": 21415016,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 9,
+        "silence_frames": 6449
+      },
+      "sample_audio_output_delta": {
+        "writes": 2038,
+        "frames": 1043456,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "repeated_pulses_including_warmup": 32,
+      "exit_ok": true,
+      "no_live_jit_code": true,
+      "no_live_hot_allocations": true,
+      "jit_counters": {
+        "active": 1,
+        "compiled": 2546,
+        "executed": 1390132,
+        "bytecodes": 18717982,
+        "declined": 21751,
+        "code_bytes": 15306
+      },
+      "pixel_crcs": {
+        "native_crc": "3a5a8659",
+        "lcd_crc": "a629ee18"
+      }
+    },
+    {
+      "case": "final-bounce-1",
+      "game": "蹦球传说_7801.jar",
+      "jit": "on",
+      "resolution": [
+        240,
+        320
+      ],
+      "warmup_seconds": 5.0,
+      "sample_interval_seconds": 1,
+      "sampling_seconds": 21.686525342985988,
+      "keys": "fire,5,fire,softl,fire,wait:30,5,fire,fire,fire",
+      "held_key": "",
+      "repeated_keys": "left,right",
+      "repeat_period_seconds": 0.5,
+      "navigation_key_hold_seconds": 0.4,
+      "skip_before_screenshot": false,
+      "samples": [
+        {
+          "sample": 0,
+          "time_seconds": 2.4006003513932228e-05,
+          "fps": 11.7
+        },
+        {
+          "sample": 1,
+          "time_seconds": 1.0877052540017758,
+          "fps": 9.7
+        },
+        {
+          "sample": 2,
+          "time_seconds": 2.146051671996247,
+          "fps": 11.6
+        },
+        {
+          "sample": 3,
+          "time_seconds": 3.2054211649810895,
+          "fps": 11.6
+        },
+        {
+          "sample": 4,
+          "time_seconds": 4.26800590698258,
+          "fps": 11.5
+        },
+        {
+          "sample": 5,
+          "time_seconds": 5.379135964001762,
+          "fps": 9.6
+        },
+        {
+          "sample": 6,
+          "time_seconds": 6.4465193710057065,
+          "fps": 11.4
+        },
+        {
+          "sample": 7,
+          "time_seconds": 7.54224898800021,
+          "fps": 11.4
+        },
+        {
+          "sample": 8,
+          "time_seconds": 8.625401608995162,
+          "fps": 11.2
+        },
+        {
+          "sample": 9,
+          "time_seconds": 9.721557726006722,
+          "fps": 9.9
+        },
+        {
+          "sample": 10,
+          "time_seconds": 10.834515686990926,
+          "fps": 11.5
+        },
+        {
+          "sample": 11,
+          "time_seconds": 11.945822042995133,
+          "fps": 11.3
+        },
+        {
+          "sample": 12,
+          "time_seconds": 13.041203269996913,
+          "fps": 9.6
+        },
+        {
+          "sample": 13,
+          "time_seconds": 14.139534101996105,
+          "fps": 11.2
+        },
+        {
+          "sample": 14,
+          "time_seconds": 15.186198390001664,
+          "fps": 11.3
+        },
+        {
+          "sample": 15,
+          "time_seconds": 16.307501011993736,
+          "fps": 11.3
+        },
+        {
+          "sample": 16,
+          "time_seconds": 17.376585185003933,
+          "fps": 11.5
+        },
+        {
+          "sample": 17,
+          "time_seconds": 18.50049802698777,
+          "fps": 9.7
+        },
+        {
+          "sample": 18,
+          "time_seconds": 19.597015413979534,
+          "fps": 11.3
+        },
+        {
+          "sample": 19,
+          "time_seconds": 20.605418583989376,
+          "fps": 11.3
+        }
+      ],
+      "mean": 10.98,
+      "median": 11.3,
+      "minimum": 9.6,
+      "maximum": 11.7,
+      "sample_audio_detail_delta": {
+        "offered": 479818,
+        "accepted": 479818,
+        "short": 0,
+        "io_us": 21466452,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "sample_audio_output_delta": {
+        "writes": 2039,
+        "frames": 1043968,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "repeated_pulses_including_warmup": 32,
+      "exit_ok": true,
+      "no_live_jit_code": true,
+      "no_live_hot_allocations": true,
+      "jit_counters": {
+        "active": 1,
+        "compiled": 3656,
+        "executed": 1460173,
+        "bytecodes": 19675702,
+        "declined": 22873,
+        "code_bytes": 14864
+      },
+      "pixel_crcs": {
+        "native_crc": "4e7ff6cd",
+        "lcd_crc": "a72cbaea"
+      }
+    },
+    {
+      "case": "final-bounce-2",
+      "game": "蹦球传说_7801.jar",
+      "jit": "on",
+      "resolution": [
+        240,
+        320
+      ],
+      "warmup_seconds": 5.0,
+      "sample_interval_seconds": 1,
+      "sampling_seconds": 21.759406189987203,
+      "keys": "fire,5,fire,softl,fire,wait:30,5,fire,fire,fire",
+      "held_key": "",
+      "repeated_keys": "left,right",
+      "repeat_period_seconds": 0.5,
+      "navigation_key_hold_seconds": 0.4,
+      "skip_before_screenshot": false,
+      "samples": [
+        {
+          "sample": 0,
+          "time_seconds": 2.74019839707762e-05,
+          "fps": 7.6
+        },
+        {
+          "sample": 1,
+          "time_seconds": 1.150778809998883,
+          "fps": 9.6
+        },
+        {
+          "sample": 2,
+          "time_seconds": 2.211125957983313,
+          "fps": 9.9
+        },
+        {
+          "sample": 3,
+          "time_seconds": 3.2940693959826604,
+          "fps": 11.9
+        },
+        {
+          "sample": 4,
+          "time_seconds": 4.3442440849903505,
+          "fps": 9.6
+        },
+        {
+          "sample": 5,
+          "time_seconds": 5.409557373001007,
+          "fps": 9.6
+        },
+        {
+          "sample": 6,
+          "time_seconds": 6.450702887988882,
+          "fps": 11.8
+        },
+        {
+          "sample": 7,
+          "time_seconds": 7.536398647993337,
+          "fps": 5.8
+        },
+        {
+          "sample": 8,
+          "time_seconds": 8.61771876399871,
+          "fps": 11.6
+        },
+        {
+          "sample": 9,
+          "time_seconds": 9.684896733000642,
+          "fps": 11.6
+        },
+        {
+          "sample": 10,
+          "time_seconds": 10.862721863988554,
+          "fps": 7.7
+        },
+        {
+          "sample": 11,
+          "time_seconds": 11.912742699001683,
+          "fps": 11.4
+        },
+        {
+          "sample": 12,
+          "time_seconds": 12.99869298498379,
+          "fps": 11.9
+        },
+        {
+          "sample": 13,
+          "time_seconds": 14.076717900985386,
+          "fps": 9.8
+        },
+        {
+          "sample": 14,
+          "time_seconds": 15.225231074000476,
+          "fps": 13.6
+        },
+        {
+          "sample": 15,
+          "time_seconds": 16.283373143000063,
+          "fps": 11.6
+        },
+        {
+          "sample": 16,
+          "time_seconds": 17.4013926750049,
+          "fps": 11.5
+        },
+        {
+          "sample": 17,
+          "time_seconds": 18.447360602993285,
+          "fps": 11.7
+        },
+        {
+          "sample": 18,
+          "time_seconds": 19.54276623300393,
+          "fps": 9.7
+        },
+        {
+          "sample": 19,
+          "time_seconds": 20.641946882999036,
+          "fps": 11.8
+        }
+      ],
+      "mean": 10.485,
+      "median": 11.45,
+      "minimum": 5.8,
+      "maximum": 13.6,
+      "sample_audio_detail_delta": {
+        "offered": 481610,
+        "accepted": 481610,
+        "short": 0,
+        "io_us": 21540480,
+        "volume_calls": 0,
+        "queued": 1,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "sample_audio_output_delta": {
+        "writes": 2046,
+        "frames": 1047552,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "repeated_pulses_including_warmup": 32,
+      "exit_ok": true,
+      "no_live_jit_code": true,
+      "no_live_hot_allocations": true,
+      "jit_counters": {
+        "active": 1,
+        "compiled": 4588,
+        "executed": 1443597,
+        "bytecodes": 19418012,
+        "declined": 23252,
+        "code_bytes": 14830
+      },
+      "pixel_crcs": {
+        "native_crc": "0f52db05",
+        "lcd_crc": "7799c19a"
+      }
+    },
+    {
+      "case": "final-hp-off",
+      "game": "g77d10a56e51a.jar",
+      "jit": "off",
+      "resolution": [
+        240,
+        320
+      ],
+      "warmup_seconds": 5.0,
+      "sample_interval_seconds": 1,
+      "sampling_seconds": 11.166989877994638,
+      "keys": "softl,wait:20,softl,wait:4,softr,wait:3,softl,wait:4,softl,wait:5,softl,wait:25,fire",
+      "held_key": "",
+      "repeated_keys": "",
+      "repeat_period_seconds": 0.5,
+      "navigation_key_hold_seconds": 0.08,
+      "skip_before_screenshot": true,
+      "samples": [
+        {
+          "sample": 0,
+          "time_seconds": 1.6792007954791188e-05,
+          "fps": 7.2
+        },
+        {
+          "sample": 1,
+          "time_seconds": 1.1030877080047503,
+          "fps": 7.6
+        },
+        {
+          "sample": 2,
+          "time_seconds": 2.270703713002149,
+          "fps": 9.8
+        },
+        {
+          "sample": 3,
+          "time_seconds": 3.3065818850009236,
+          "fps": 7.5
+        },
+        {
+          "sample": 4,
+          "time_seconds": 4.487068006012123,
+          "fps": 7.3
+        },
+        {
+          "sample": 5,
+          "time_seconds": 5.512536633003037,
+          "fps": 8.8
+        },
+        {
+          "sample": 6,
+          "time_seconds": 6.686933643009979,
+          "fps": 9.0
+        },
+        {
+          "sample": 7,
+          "time_seconds": 7.840566414000932,
+          "fps": 7.7
+        },
+        {
+          "sample": 8,
+          "time_seconds": 8.999613830004819,
+          "fps": 7.6
+        },
+        {
+          "sample": 9,
+          "time_seconds": 10.020008905994473,
+          "fps": 7.7
+        }
+      ],
+      "mean": 8.02,
+      "median": 7.65,
+      "minimum": 7.2,
+      "maximum": 9.8,
+      "sample_audio_detail_delta": {
+        "offered": 0,
+        "accepted": 0,
+        "short": 0,
+        "io_us": 0,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "sample_audio_output_delta": {
+        "writes": 0,
+        "frames": 0,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "repeated_pulses_including_warmup": 0,
+      "exit_ok": true,
+      "no_live_jit_code": true,
+      "no_live_hot_allocations": true,
+      "jit_counters": {
+        "active": 0,
+        "compiled": 0,
+        "executed": 0,
+        "bytecodes": 0,
+        "declined": 0,
+        "code_bytes": 0
+      },
+      "pixel_crcs": {
+        "native_crc": "97347938",
+        "lcd_crc": "4572c18f"
+      },
+      "comparison": "spot check only; different modes/tracks prevent a speedup comparison"
+    },
+    {
+      "case": "final-run-off",
+      "game": "g92c5f29e1d66.jar",
+      "jit": "off",
+      "resolution": [
+        240,
+        320
+      ],
+      "warmup_seconds": 5.0,
+      "sample_interval_seconds": 1,
+      "sampling_seconds": 22.16038254200248,
+      "keys": "softl,wait:8,fire,wait:6,fire,wait:6,fire,wait:20,fire",
+      "held_key": "down",
+      "repeated_keys": "",
+      "repeat_period_seconds": 0.5,
+      "navigation_key_hold_seconds": 0.4,
+      "skip_before_screenshot": false,
+      "samples": [
+        {
+          "sample": 0,
+          "time_seconds": 2.07390112336725e-05,
+          "fps": 5.2
+        },
+        {
+          "sample": 1,
+          "time_seconds": 1.1876262350124307,
+          "fps": 5.2
+        },
+        {
+          "sample": 2,
+          "time_seconds": 2.333065712999087,
+          "fps": 5.4
+        },
+        {
+          "sample": 3,
+          "time_seconds": 3.4451624439971056,
+          "fps": 5.3
+        },
+        {
+          "sample": 4,
+          "time_seconds": 4.494236630998785,
+          "fps": 5.3
+        },
+        {
+          "sample": 5,
+          "time_seconds": 5.687588617001893,
+          "fps": 5.4
+        },
+        {
+          "sample": 6,
+          "time_seconds": 6.792753426998388,
+          "fps": 5.4
+        },
+        {
+          "sample": 7,
+          "time_seconds": 7.886100053990958,
+          "fps": 5.4
+        },
+        {
+          "sample": 8,
+          "time_seconds": 8.990201459004311,
+          "fps": 5.3
+        },
+        {
+          "sample": 9,
+          "time_seconds": 10.059405303007225,
+          "fps": 5.4
+        },
+        {
+          "sample": 10,
+          "time_seconds": 11.220084022992523,
+          "fps": 5.4
+        },
+        {
+          "sample": 11,
+          "time_seconds": 12.30716147099156,
+          "fps": 5.4
+        },
+        {
+          "sample": 12,
+          "time_seconds": 13.406656718987506,
+          "fps": 5.4
+        },
+        {
+          "sample": 13,
+          "time_seconds": 14.507408433011733,
+          "fps": 5.4
+        },
+        {
+          "sample": 14,
+          "time_seconds": 15.582769102009479,
+          "fps": 5.4
+        },
+        {
+          "sample": 15,
+          "time_seconds": 16.69288224898628,
+          "fps": 5.4
+        },
+        {
+          "sample": 16,
+          "time_seconds": 17.7940817780036,
+          "fps": 5.4
+        },
+        {
+          "sample": 17,
+          "time_seconds": 18.87867735599866,
+          "fps": 5.4
+        },
+        {
+          "sample": 18,
+          "time_seconds": 19.950212127005216,
+          "fps": 5.0
+        },
+        {
+          "sample": 19,
+          "time_seconds": 20.9621580959938,
+          "fps": 4.9
+        }
+      ],
+      "mean": 5.32,
+      "median": 5.4,
+      "minimum": 4.9,
+      "maximum": 5.4,
+      "sample_audio_detail_delta": {
+        "offered": 0,
+        "accepted": 0,
+        "short": 0,
+        "io_us": 0,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "sample_audio_output_delta": {
+        "writes": 0,
+        "frames": 0,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "repeated_pulses_including_warmup": 0,
+      "exit_ok": true,
+      "no_live_jit_code": true,
+      "no_live_hot_allocations": true,
+      "jit_counters": {
+        "active": 0,
+        "compiled": 0,
+        "executed": 0,
+        "bytecodes": 0,
+        "declined": 0,
+        "code_bytes": 0
+      },
+      "pixel_crcs": {
+        "native_crc": "0d10ff55",
+        "lcd_crc": "5c47b30a"
+      }
+    },
+    {
+      "case": "merged-bounce-on",
+      "game": "蹦球传说_7801.jar",
+      "jit": "on",
+      "resolution": [
+        240,
+        320
+      ],
+      "warmup_seconds": 5.0,
+      "sample_interval_seconds": 1,
+      "sampling_seconds": 21.664779179001926,
+      "keys": "fire,5,fire,softl,fire,wait:30,5,fire,fire,fire",
+      "held_key": "",
+      "repeated_keys": "left,right",
+      "repeat_period_seconds": 0.5,
+      "navigation_key_hold_seconds": 0.4,
+      "skip_before_screenshot": false,
+      "samples": [
+        {
+          "sample": 0,
+          "time_seconds": 1.6642006812617183e-05,
+          "fps": 11.9
+        },
+        {
+          "sample": 1,
+          "time_seconds": 1.0670464950089809,
+          "fps": 9.8
+        },
+        {
+          "sample": 2,
+          "time_seconds": 2.1524021660152357,
+          "fps": 9.9
+        },
+        {
+          "sample": 3,
+          "time_seconds": 3.2327295270224568,
+          "fps": 11.3
+        },
+        {
+          "sample": 4,
+          "time_seconds": 4.321335532004014,
+          "fps": 13.7
+        },
+        {
+          "sample": 5,
+          "time_seconds": 5.369417747016996,
+          "fps": 11.8
+        },
+        {
+          "sample": 6,
+          "time_seconds": 6.414730459015118,
+          "fps": 13.0
+        },
+        {
+          "sample": 7,
+          "time_seconds": 7.543814133998239,
+          "fps": 11.3
+        },
+        {
+          "sample": 8,
+          "time_seconds": 8.608135606016731,
+          "fps": 11.9
+        },
+        {
+          "sample": 9,
+          "time_seconds": 9.695708002022002,
+          "fps": 13.6
+        },
+        {
+          "sample": 10,
+          "time_seconds": 10.786800822999794,
+          "fps": 11.9
+        },
+        {
+          "sample": 11,
+          "time_seconds": 11.842320989002474,
+          "fps": 11.9
+        },
+        {
+          "sample": 12,
+          "time_seconds": 12.90269622800406,
+          "fps": 11.7
+        },
+        {
+          "sample": 13,
+          "time_seconds": 14.022222733998206,
+          "fps": 7.4
+        },
+        {
+          "sample": 14,
+          "time_seconds": 15.1667109230184,
+          "fps": 11.4
+        },
+        {
+          "sample": 15,
+          "time_seconds": 16.23574477501097,
+          "fps": 13.7
+        },
+        {
+          "sample": 16,
+          "time_seconds": 17.312867622007616,
+          "fps": 11.6
+        },
+        {
+          "sample": 17,
+          "time_seconds": 18.381285006005783,
+          "fps": 11.8
+        },
+        {
+          "sample": 18,
+          "time_seconds": 19.494203578011366,
+          "fps": 11.2
+        },
+        {
+          "sample": 19,
+          "time_seconds": 20.58009623902035,
+          "fps": 11.8
+        }
+      ],
+      "mean": 11.63,
+      "median": 11.8,
+      "minimum": 7.4,
+      "maximum": 13.7,
+      "sample_audio_detail_delta": {
+        "offered": 478794,
+        "accepted": 478794,
+        "short": 0,
+        "io_us": 21436876,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "sample_audio_output_delta": {
+        "writes": 2035,
+        "frames": 1041920,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "repeated_pulses_including_warmup": 32,
+      "exit_ok": true,
+      "no_live_jit_code": true,
+      "no_live_hot_allocations": true,
+      "jit_counters": {
+        "active": 1,
+        "compiled": 1870,
+        "executed": 1419897,
+        "bytecodes": 18220233,
+        "declined": 20484,
+        "code_bytes": 15240
+      },
+      "pixel_crcs": {
+        "native_crc": "c7fc2727",
+        "lcd_crc": "a2c05b79"
+      }
+    },
+    {
+      "case": "merged-hp-off",
+      "game": "g77d10a56e51a.jar",
+      "jit": "off",
+      "resolution": [
+        240,
+        320
+      ],
+      "warmup_seconds": 5.0,
+      "sample_interval_seconds": 1,
+      "sampling_seconds": 10.622679443011293,
+      "keys": "softl,wait:20,softl,wait:4,softr,wait:3,softl,wait:4,softl,wait:5,softl,wait:25,fire",
+      "held_key": "",
+      "repeated_keys": "",
+      "repeat_period_seconds": 0.5,
+      "navigation_key_hold_seconds": 0.08,
+      "skip_before_screenshot": true,
+      "samples": [
+        {
+          "sample": 0,
+          "time_seconds": 2.000801032409072e-05,
+          "fps": 7.6
+        },
+        {
+          "sample": 1,
+          "time_seconds": 1.1062513880024198,
+          "fps": 7.4
+        },
+        {
+          "sample": 2,
+          "time_seconds": 2.111230050009908,
+          "fps": 7.3
+        },
+        {
+          "sample": 3,
+          "time_seconds": 3.1205878340115305,
+          "fps": 7.3
+        },
+        {
+          "sample": 4,
+          "time_seconds": 4.192738573008683,
+          "fps": 7.2
+        },
+        {
+          "sample": 5,
+          "time_seconds": 5.298209180997219,
+          "fps": 7.2
+        },
+        {
+          "sample": 6,
+          "time_seconds": 6.314211213000817,
+          "fps": 6.8
+        },
+        {
+          "sample": 7,
+          "time_seconds": 7.330906498013064,
+          "fps": 6.8
+        },
+        {
+          "sample": 8,
+          "time_seconds": 8.459718680998776,
+          "fps": 6.5
+        },
+        {
+          "sample": 9,
+          "time_seconds": 9.509914857015247,
+          "fps": 6.6
+        }
+      ],
+      "mean": 7.07,
+      "median": 7.2,
+      "minimum": 6.5,
+      "maximum": 7.6,
+      "sample_audio_detail_delta": {
+        "offered": 238167,
+        "accepted": 238167,
+        "short": 0,
+        "io_us": 10681624,
+        "volume_calls": 0,
+        "queued": 1,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "sample_audio_output_delta": {
+        "writes": 1015,
+        "frames": 519680,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "repeated_pulses_including_warmup": 0,
+      "exit_ok": true,
+      "no_live_jit_code": true,
+      "no_live_hot_allocations": true,
+      "jit_counters": {
+        "active": 0,
+        "compiled": 0,
+        "executed": 0,
+        "bytecodes": 0,
+        "declined": 0,
+        "code_bytes": 0
+      },
+      "pixel_crcs": {
+        "native_crc": "5fadac1d",
+        "lcd_crc": "e748e861"
+      },
+      "comparison": "spot check only; different modes/tracks prevent a speedup comparison"
+    },
+    {
+      "case": "merged-run-on",
+      "game": "g92c5f29e1d66.jar",
+      "jit": "on",
+      "resolution": [
+        240,
+        320
+      ],
+      "warmup_seconds": 5.0,
+      "sample_interval_seconds": 1,
+      "sampling_seconds": 22.771568853000645,
+      "keys": "softl,wait:8,fire,wait:6,fire,wait:6,fire,wait:20,fire",
+      "held_key": "down",
+      "repeated_keys": "",
+      "repeat_period_seconds": 0.5,
+      "navigation_key_hold_seconds": 0.4,
+      "skip_before_screenshot": false,
+      "samples": [
+        {
+          "sample": 0,
+          "time_seconds": 1.798401353880763e-05,
+          "fps": 4.9
+        },
+        {
+          "sample": 1,
+          "time_seconds": 1.0054897580121178,
+          "fps": 4.7
+        },
+        {
+          "sample": 2,
+          "time_seconds": 2.0165201060008258,
+          "fps": 4.8
+        },
+        {
+          "sample": 3,
+          "time_seconds": 3.033528494008351,
+          "fps": 5.0
+        },
+        {
+          "sample": 4,
+          "time_seconds": 4.229782353009796,
+          "fps": 5.0
+        },
+        {
+          "sample": 5,
+          "time_seconds": 5.41950335301226,
+          "fps": 5.0
+        },
+        {
+          "sample": 6,
+          "time_seconds": 6.617541940009687,
+          "fps": 5.0
+        },
+        {
+          "sample": 7,
+          "time_seconds": 7.799363240017556,
+          "fps": 5.0
+        },
+        {
+          "sample": 8,
+          "time_seconds": 8.981972289999248,
+          "fps": 5.0
+        },
+        {
+          "sample": 9,
+          "time_seconds": 10.168050799024059,
+          "fps": 5.0
+        },
+        {
+          "sample": 10,
+          "time_seconds": 11.172473230020842,
+          "fps": 5.0
+        },
+        {
+          "sample": 11,
+          "time_seconds": 12.355735365010332,
+          "fps": 5.0
+        },
+        {
+          "sample": 12,
+          "time_seconds": 13.541463879024377,
+          "fps": 5.0
+        },
+        {
+          "sample": 13,
+          "time_seconds": 14.728748148016166,
+          "fps": 5.1
+        },
+        {
+          "sample": 14,
+          "time_seconds": 15.892395900998963,
+          "fps": 5.1
+        },
+        {
+          "sample": 15,
+          "time_seconds": 17.080536530003883,
+          "fps": 5.0
+        },
+        {
+          "sample": 16,
+          "time_seconds": 18.259896051022224,
+          "fps": 5.1
+        },
+        {
+          "sample": 17,
+          "time_seconds": 19.429093771002954,
+          "fps": 5.1
+        },
+        {
+          "sample": 18,
+          "time_seconds": 20.57484564400511,
+          "fps": 5.0
+        },
+        {
+          "sample": 19,
+          "time_seconds": 21.583182041009422,
+          "fps": 5.0
+        }
+      ],
+      "mean": 4.99,
+      "median": 5.0,
+      "minimum": 4.7,
+      "maximum": 5.1,
+      "sample_audio_detail_delta": {
+        "offered": 0,
+        "accepted": 0,
+        "short": 0,
+        "io_us": 0,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "sample_audio_output_delta": {
+        "writes": 0,
+        "frames": 0,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "repeated_pulses_including_warmup": 0,
+      "exit_ok": true,
+      "no_live_jit_code": true,
+      "no_live_hot_allocations": true,
+      "jit_counters": {
+        "active": 1,
+        "compiled": 7,
+        "executed": 241,
+        "bytecodes": 430490,
+        "declined": 5621,
+        "code_bytes": 742
+      },
+      "pixel_crcs": {
+        "native_crc": "447bc7d8",
+        "lcd_crc": "3dd7290d"
+      }
+    },
+    {
+      "case": "previous-hp-off",
+      "game": "g77d10a56e51a.jar",
+      "jit": "off",
+      "resolution": [
+        240,
+        320
+      ],
+      "warmup_seconds": 5.0,
+      "sample_interval_seconds": 1,
+      "sampling_seconds": 10.989420380996307,
+      "keys": "softl,wait:20,softl,wait:4,softr,wait:3,softl,wait:4,softl,wait:5,softl,wait:25,fire",
+      "held_key": "",
+      "repeated_keys": "",
+      "repeat_period_seconds": 0.5,
+      "navigation_key_hold_seconds": 0.08,
+      "skip_before_screenshot": true,
+      "samples": [
+        {
+          "sample": 0,
+          "time_seconds": 2.1821993868798018e-05,
+          "fps": 4.1
+        },
+        {
+          "sample": 1,
+          "time_seconds": 1.159054458985338,
+          "fps": 4.7
+        },
+        {
+          "sample": 2,
+          "time_seconds": 2.197050112008583,
+          "fps": 4.6
+        },
+        {
+          "sample": 3,
+          "time_seconds": 3.277001730981283,
+          "fps": 4.5
+        },
+        {
+          "sample": 4,
+          "time_seconds": 4.430620250990614,
+          "fps": 4.3
+        },
+        {
+          "sample": 5,
+          "time_seconds": 5.447745584999211,
+          "fps": 3.7
+        },
+        {
+          "sample": 6,
+          "time_seconds": 6.504112474998692,
+          "fps": 3.8
+        },
+        {
+          "sample": 7,
+          "time_seconds": 7.5410751559829805,
+          "fps": 3.6
+        },
+        {
+          "sample": 8,
+          "time_seconds": 8.764008689991897,
+          "fps": 3.9
+        },
+        {
+          "sample": 9,
+          "time_seconds": 9.962033939984394,
+          "fps": 4.4
+        }
+      ],
+      "mean": 4.16,
+      "median": 4.199999999999999,
+      "minimum": 3.6,
+      "maximum": 4.7,
+      "sample_audio_detail_delta": {
+        "offered": 0,
+        "accepted": 0,
+        "short": 0,
+        "io_us": 0,
+        "volume_calls": 0,
+        "queued": 0,
+        "underruns": 0,
+        "silence_frames": 0
+      },
+      "sample_audio_output_delta": {
+        "writes": 0,
+        "frames": 0,
+        "errors": 0,
+        "tones": 0,
+        "volume": 0
+      },
+      "repeated_pulses_including_warmup": 0,
+      "exit_ok": true,
+      "no_live_jit_code": true,
+      "no_live_hot_allocations": true,
+      "jit_counters": {
+        "active": 0,
+        "compiled": 0,
+        "executed": 0,
+        "bytecodes": 0,
+        "declined": 0,
+        "code_bytes": 0
+      },
+      "pixel_crcs": {
+        "native_crc": "ad49a344",
+        "lcd_crc": "f6c13896"
+      },
+      "comparison": "spot check only; different modes/tracks prevent a speedup comparison"
+    }
+  ],
+  "fixed_work_benchmarks": [
+    {
+      "index": 9,
+      "jit": 0,
+      "elapsed_us": 9533025,
+      "return_code": 0,
+      "external_memory_delta": 0,
+      "checks": [
+        "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+      ]
+    },
+    {
+      "index": 9,
+      "jit": 1,
+      "elapsed_us": 26367310,
+      "return_code": 0,
+      "external_memory_delta": 0,
+      "checks": [
+        "PERF_BENCH frames=120 work=4000 checksum=-1082513742"
+      ]
+    },
+    {
+      "index": 13,
+      "jit": 1,
+      "elapsed_us": 7388362,
+      "return_code": 0,
+      "external_memory_delta": 0,
+      "checks": [
+        "RENDER_BENCH frames=240 final=240"
+      ]
+    },
+    {
+      "index": 11,
+      "jit": 1,
+      "elapsed_us": 8940052,
+      "return_code": 0,
+      "external_memory_delta": 0,
+      "checks": [
+        "AUDIO_BENCH_BEGIN WAV duration=3000000",
+        "AUDIO_BENCH_END WAV time=3000000 state=300",
+        "AUDIO_BENCH_BEGIN MIDI duration=-1",
+        "AUDIO_BENCH_END MIDI time=3000000 state=300"
+      ]
+    },
+    {
+      "index": 22,
+      "jit": 1,
+      "elapsed_us": 396366,
+      "return_code": 0,
+      "external_memory_delta": 0,
+      "checks": [
+        "SHORT_PCM_OK state=300 events=1"
+      ]
+    }
+  ]
+}
