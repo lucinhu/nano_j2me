@@ -308,3 +308,25 @@ is identified as `mp4v`.  Both files also carry an AMR-NB audio track, which is
 the path `test_amr` and the MP4 audio branch already cover - that is why the
 毁灭战士3 intro has sound today while its picture stays refused: the container
 and the audio track work, the MPEG-4 Part 2 video decoder does not exist yet.
+
+### Handoff: what an MPEG-4 Part 2 decoder would reuse (round 18)
+
+The corpus's three movies are `mp4v`, so this is the one decoder left.  The
+good news is that most of `src/midp/nj_h263.c` applies unchanged:
+
+- **Reusable as-is**: the 8x8 integer IDCT, the 4:2:0 -> RGB565 conversion, the
+  half-pel bilinear motion-compensation kernel, the macroblock/block loop, and
+  the whole `nj_avcodec` provider + Player + pump path already built around it.
+- **Different in M4V**: start-code framing (VOS `0x000001B0`, VOL `0x00000120`,
+  VOP `0x000001B6`) instead of H.263's picture header, different VLC tables
+  (Table B-16 coefficients, B-17 motion vectors), per-macroblock `cbpc`-driven
+  chroma step instead of H.263's fixed plane layout, and the VOL header carries
+  the geometry (`width x height`) that `nj_mp4` currently takes from the sample
+  description.
+- **Not needed for Simple Profile level 0-2**: B-VOPs, quarter-pel, reversible
+  VLC, AC/DC prediction and shape coding - so the scope is smaller than "MPEG-4
+  video" sounds.
+
+`tests/h263_clip.h` cannot cover M4V; the fixtures would be the two real 3GP
+files above, compared frame by frame against `ffmpeg -f rawvideo -pix_fmt
+rgb565` decodes of the same samples - the same shape as the H.263 test.
