@@ -4068,3 +4068,30 @@ peak while the test leaves under 700 KB free, and `Image.createImage` allocates
 its pixel array on the same nearly-full heap.  Neither has been fixed; this note
 exists so the next round starts from the evidence instead of rediscovering that
 `test_lib` is red.
+
+Backtrace of the release-build crash (gdb, batch):
+
+    Program received signal SIGSEGV
+    #0 vm_invoke ()
+    #1 nj_call ()
+    #2 test_player_survives_collection ()
+    #3 main ()
+
+That is the test's *next* call after the failed assertion: createPlayer has
+already thrown OutOfMemoryError, the exception is still pending, and the harness
+keeps calling into the VM.  So there are two separate defects behind one red
+test:
+
+1. `Manager.createPlayer(InputStream)` buffers the whole stream before it can
+   size the PCM array (`read_stream`, growing by doubling: a 400 KB WAV needs
+   ~600 KB at peak), then allocates 400 KB of PCM for a 400,000-frame 8-bit
+   track.  A heap with 700 KB free therefore cannot serve it even though the
+   PCM array alone would fit.  The fix is to parse a WAV as it arrives instead
+   of copying the file first - which also removes a peak-memory spike on the
+   devices this runtime targets.
+2. Calling into the VM with an exception pending from a failed native crashes
+   inside `vm_invoke` instead of failing cleanly.  Real titles hit this too when
+   they ignore a failed `createPlayer` and keep going.
+
+Neither is fixed yet.  The next attempt should start with (1), because it also
+removes the reason the test builds a heap that nearly cannot fit the allocation.
