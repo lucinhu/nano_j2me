@@ -57,6 +57,11 @@ typedef struct nj_m4v_vop {
 } nj_m4v_vop;
 
 /* Parses a VOP header whose payload starts at b[pos]. */
+/* Consume a video-packet resync marker and header at *pos: 0 = none (pos
+ * unchanged), 1 = consumed (mbnum set), -1 broken, -2 header extension used. */
+int nj_m4v_resync(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mb_total, int mb_width,
+                  int *qscale, int *mbnum);
+
 int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
                      nj_m4v_vop *out);
 

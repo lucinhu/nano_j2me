@@ -16,7 +16,7 @@
 
 #define NJ_M4V_AC_BITS   12
 #define NJ_M4V_AC_SYMS   102
-#define NJ_M4V_AC_LAST   67
+#define NJ_M4V_AC_LAST   51u    /* ff_rl_intra: n=51, so symbols >= 51 carry last=1 */
 
 /* DC size codes as the reference tables list them: {code, length, size}. */
 typedef struct nj_m4v_dc_entry {
@@ -26,17 +26,35 @@ typedef struct nj_m4v_dc_entry {
 } nj_m4v_dc_entry;
 
 static const nj_m4v_dc_entry nj_m4v_dc_lum[13] = {
-    { 0x4, 3, 0 }, { 0x0, 2, 1 }, { 0x1, 2, 2 }, { 0x5, 3, 3 },
-    { 0x6, 3, 4 }, { 0xe, 4, 5 }, { 0x1e, 5, 6 }, { 0x3e, 6, 7 },
-    { 0x7e, 7, 8 }, { 0xfe, 8, 9 }, { 0x1fe, 9, 10 }, { 0x3fe, 10, 11 },
-    { 0x7fe, 11, 12 }
+    { 0x3, 3, 0 },
+    { 0x3, 2, 1 },
+    { 0x2, 2, 2 },
+    { 0x2, 3, 3 },
+    { 0x1, 3, 4 },
+    { 0x1, 4, 5 },
+    { 0x1, 5, 6 },
+    { 0x1, 6, 7 },
+    { 0x1, 7, 8 },
+    { 0x1, 8, 9 },
+    { 0x1, 9, 10 },
+    { 0x1, 10, 11 },
+    { 0x1, 11, 12 },
 };
 
 static const nj_m4v_dc_entry nj_m4v_dc_chrom[13] = {
-    { 0x0, 2, 0 }, { 0x1, 2, 1 }, { 0x2, 2, 2 }, { 0x6, 3, 3 },
-    { 0xe, 4, 4 }, { 0x1e, 5, 5 }, { 0x3e, 6, 6 }, { 0x7e, 7, 7 },
-    { 0xfe, 8, 8 }, { 0x1fe, 9, 9 }, { 0x3fe, 10, 10 }, { 0x7fe, 11, 11 },
-    { 0xffe, 12, 12 }
+    { 0x3, 2, 0 },
+    { 0x2, 2, 1 },
+    { 0x1, 2, 2 },
+    { 0x1, 3, 3 },
+    { 0x1, 4, 4 },
+    { 0x1, 5, 5 },
+    { 0x1, 6, 6 },
+    { 0x1, 7, 7 },
+    { 0x1, 8, 8 },
+    { 0x1, 9, 9 },
+    { 0x1, 10, 10 },
+    { 0x1, 11, 11 },
+    { 0x1, 12, 12 },
 };
 
 static const nj_u1 nj_m4v_ac_run[NJ_M4V_AC_SYMS] = {

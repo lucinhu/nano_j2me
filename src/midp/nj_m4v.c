@@ -322,8 +322,18 @@ int nj_m4v_parse_vop_bits(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 time_res
     }
     coded = bit;
     if (coded) {
-        /* complexity_estimation_disable lives in the VOL, not here: the VOP
-         * goes straight to intra_dc_vlc_thr and then vop_quant. */
+        /* change_CR_disable(1), constant_alpha flag (and value when set), then
+         * the 3-bit intra_dc_vlc_thr - see decode_vop_header() in the
+         * reference decoder. */
+        if (!m4v_bit(&s, &bit)) {
+            return 0;
+        }
+        if (!m4v_bit(&s, &bit)) {
+            return 0;
+        }
+        if (bit != 0 && !m4v_bits_get(&s, 8, &v)) {
+            return 0;
+        }
         if (!m4v_bits_get(&s, 3, &v)) {
             return 0;
         }
@@ -345,6 +355,58 @@ int nj_m4v_parse_vop_bits(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 time_res
     out->qscale = qscale;
     out->dc_vlc_thr = thr;
     *bitpos = s.pos;
+    return 1;
+}
+
+
+int nj_m4v_resync(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mb_total, int mb_width,
+                  int *qscale, int *mbnum)
+{
+    nj_u4 at = *pos;
+    int zeros = 0, mb_bits = 1, v, q;
+
+    while (zeros < 32 && at < n * 8u &&
+           ((b[at >> 3] >> (7u - (at & 7u))) & 1u) == 0u) {
+        at++;
+        zeros++;
+    }
+    if (zeros < 16 || at >= n * 8u) {
+        return 0;                       /* not a resync marker */
+    }
+    at++;                               /* the terminating one bit */
+
+    while ((1 << mb_bits) < mb_total) {
+        mb_bits++;
+    }
+    if (at + (nj_u4)mb_bits + 5u + 1u > n * 8u) {
+        return -1;
+    }
+    v = 0;
+    {
+        int i;
+        for (i = 0; i < mb_bits; i++, at++) {
+            v = (v << 1) | (int)((b[at >> 3] >> (7u - (at & 7u))) & 1u);
+        }
+    }
+    if (v <= 0 || v >= mb_total) {
+        return -1;
+    }
+    q = 0;
+    {
+        int i;
+        for (i = 0; i < 5; i++, at++) {         /* quant_precision */
+            q = (q << 1) | (int)((b[at >> 3] >> (7u - (at & 7u))) & 1u);
+        }
+    }
+    if (((b[at >> 3] >> (7u - (at & 7u))) & 1u) != 0u) {
+        return -2;                      /* header extension: not implemented */
+    }
+    at++;
+    if (q > 0) {
+        *qscale = q;
+    }
+    *pos = at;
+    *mbnum = v;
     return 1;
 }
 
@@ -488,6 +550,12 @@ int nj_m4v_dc_delta(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int size)
                                 (7u - ((*pos + (nj_u4)k) & 7u))) & 1u);
     }
     *pos += (nj_u4)size;
+    if (size > 8) {
+        if (*pos >= n * 8u) {
+            return NJ_M4V_DC_ERR;
+        }
+        *pos += 1u;             /* marker bit that follows a long DC code */
+    }
     half = 1 << (size - 1);
     /* Symbol-first: a set leading bit means positive, a clear one means the
      * value is the remaining bits minus (2^size - 1) - MPEG-4's get_xbits(). */
@@ -715,8 +783,11 @@ int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k,
     int last = 0;
 
     while (!last) {
+        nj_u4 ac0 = *pos;
         int sym = nj_m4v_decode_ac(b, n, pos, &last);
         int rc;
+
+        if (getenv("NJ_M4VAC")) fprintf(stderr, "AC q=%d at=%u sym=%d last=%d -> %u\n", qscale, (unsigned)ac0, sym, last, (unsigned)*pos);
 
         if (sym == -2) {
             int el = 0, er = 0, el3 = 0, rc3;
@@ -1147,6 +1218,12 @@ int nj_m4v_mb_intra_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *cbp, int *d
     if (nj_vlc_lookup(b, n, pos, nj_vlc_cbpy, 16, &cbpy) != 0) {
         return -1;
     }
+    if (dq) {
+        if (*pos + 2u > n * 8u) {
+            return -1;
+        }
+        *pos += 2u;             /* dquant follows CBPY, not MCBPC */
+    }
     if (cbp != NULL) *cbp = ((mcbpc & 3) | (cbpy << 2)) & 0x3f;
     return 0;
 }
@@ -1200,6 +1277,27 @@ static int nj_m4v_mb_core(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *cbpc, int *d
     return 0;
 }
 
+static int m4v_read_cbp(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int cbpc, int dq, int *cbp,
+                        int *acp)
+{
+    nj_u4 bp = *pos;
+    int v = 0, cbpy = 0;
+
+    if (bp < n * 8u) {
+        *acp = (int)((b[bp >> 3] >> (7u - (bp & 7u))) & 1u);
+        *pos = bp + 1u;
+    }
+    if (nj_vlc_lookup(b, n, pos, nj_vlc_cbpy, 16, &cbpy) != 0) {
+        return -1;
+    }
+    if (getenv("NJ_M4V_CBPY") != NULL) {
+        cbpy = 15 - cbpy;
+    }
+    *cbp = ((cbpc & 3) | (cbpy << 2)) & 0x3f;
+    (void)v;
+    return 0;
+}
+
 int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby,
                                nj_s2 *dc_y, int stride_y, nj_s2 *dc_c, int stride_c,
                                nj_s2 *dc_c2, int stride_c2,
@@ -1212,6 +1310,16 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
 
     if (nj_m4v_mb_core(b, n, pos, &cbpc, &dq) != 0) {
         return -1;
+    }
+    if (getenv("NJ_M4V_PADB") != NULL) {
+        nj_u4 pb = (nj_u4)atoi(getenv("NJ_M4V_PADB"));
+        if (*pos + pb > n * 8u) return -1;
+        *pos += pb;
+    }
+    if (getenv("NJ_M4V_PAD") != NULL) {
+        nj_u4 pad = (nj_u4)atoi(getenv("NJ_M4V_PAD"));
+        if (*pos + pad * 8u > n * 8u) return -1;
+        *pos += pad * 8u;
     }
     if (dq != 0) {
         nj_u4 at = *pos;
@@ -1229,6 +1337,17 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
         }
         *pos += 2u;
     }
+    {
+        int acp = 0;
+
+        if (getenv("NJ_M4V_ORD") == NULL) {
+            if (m4v_read_cbp(b, n, pos, cbpc, dq, &cbp, &acp) != 0) {
+                return -1;
+            }
+            (void)acp;
+        }
+    }
+    if (getenv("NJ_M4VMB")) fprintf(stderr, "MB pos=%u cbpc=%d cbp=0x%02x\n", (unsigned)*pos, cbpc, (unsigned)cbp);
     for (blk = 0; blk < 6; blk++) {
         nj_s2 *grid = (blk < 4) ? dc_y : (blk == 4 ? dc_c : (dc_c2 != NULL ? dc_c2 : dc_c));
         int stride = (blk < 4) ? stride_y : (blk == 4 ? stride_c
@@ -1246,6 +1365,7 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
         pred = nj_m4v_dc_predict_q(a, bq, c, dscale, &dir);
         rc = nj_m4v_decode_intra_block_ex(b, n, pos, coef, blk < 4, pred,
                                           *qscale, 0);
+        if (getenv("NJ_M4VDC")) fprintf(stderr, "DC mb(%d,%d) blk=%d rc=%d pos=%u pred=%d\n", mbx, mby, blk, rc, (unsigned)*pos, pred);
         if (getenv("NJ_M4VDBG")) fprintf(stderr, "DC blk=%d rc=%d pos=%u\n", blk, rc, (unsigned)*pos);
         if (rc != 0) {
             return rc;
@@ -1263,37 +1383,21 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
         (void)dir;
         (void)scale;
     }
-    /* Reference order: MCBPC, [dquant], ac_pred, CBPY, then the six blocks.
-     * Simple Profile never applies AC prediction, but the bit is there. */
-    {
-        nj_u4 bp = *pos;
+    if (getenv("NJ_M4V_ORD") != NULL) {
         int acp = 0;
-
-        if (bp >= n * 8u) {
+        if (m4v_read_cbp(b, n, pos, cbpc, dq, &cbp, &acp) != 0) {
             return -1;
         }
-        acp = (int)((b[bp >> 3] >> (7u - (bp & 7u))) & 1u);
-        *pos = bp + 1u;
         (void)acp;
     }
-    if (getenv("NJ_M4VDBG")) fprintf(stderr, "cbpy call pos=%u\n", (unsigned)*pos);
-    if (nj_vlc_lookup(b, n, pos, nj_vlc_cbpy, 16, &cbpy) != 0) {
-        if (getenv("NJ_M4VDBG")) {
-            int k;
-            fprintf(stderr, "CBPY fail at %u bits=", (unsigned)*pos);
-            for (k = 0; k < 9; k++) {
-                nj_u4 bp = *pos + (nj_u4)k;
-                fprintf(stderr, "%d", bp < n * 8u ? (int)((b[bp >> 3] >> (7u - (bp & 7u))) & 1u) : 9);
-            }
-            fprintf(stderr, "\n");
-        }
-        return -1;
-    }
-    cbp = ((cbpc & 3) | ((15 - cbpy) << 2)) & 0x3f;   /* CBPY: 1 means "no AC" */
     /* All six DC coefficients come first, then the AC coefficients of the
      * coded blocks - that is the macroblock layer's order (7.4.3.5). */
     for (blk = 0; blk < 6; blk++) {
         int coded = nj_m4v_cbp_has_ac(cbp, blk), arc;
+
+        if (getenv("NJ_M4V_ACINV") != NULL) {
+            coded = !coded;
+        }
 
         if (ac_bits != NULL) {
             ac_bits[blk] = coded;
@@ -1301,7 +1405,11 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
         if (!coded) {
             continue;
         }
-        arc = nj_m4v_ac_block(b, n, pos, all_coef[blk], 1, *qscale);
+        {
+            nj_u4 ac_start = *pos;
+            arc = nj_m4v_ac_block(b, n, pos, all_coef[blk], 1, *qscale);
+            if (getenv("NJ_M4VAC")) fprintf(stderr, "BLK mb(%d,%d) blk=%d rc=%d %u..%u\n", mbx, mby, blk, arc, (unsigned)ac_start, (unsigned)*pos);
+        }
         if (getenv("NJ_M4VDBG")) fprintf(stderr, "AC blk=%d rc=%d pos=%u\n", blk, arc, (unsigned)*pos);
         if (arc == -3) {
             return -3;
