@@ -4127,6 +4127,18 @@ block from 1.69 MB of free space.  The next step is the allocator (coalescing /
 best-fit), not `createPlayer`; the streaming front-end makes the request as
 small as it can be.
 
+### A corpus re-run after the memory fixes (round 89)
+
+The basket of memory changes since the last sweep - WAV streaming, the arena
+tail folded into the free list, and the `test_m3g` heap - deserved a regression
+run of its own.  All 399 rows were re-swept with the same recipe
+(`tools/sweep_compat.py`, 600 paced frames, device-profile retry) on `4c24c0e`:
+
+**396 ok, 2 never painted, 1 unusable package, 0 failures** - the same
+distribution as the previous table, with no row moving backwards and no new
+exception class appearing.  `docs/COMPATIBILITY_MATRIX.md` is regenerated from
+that sweep (its header now names the commit it was built from).
+
 ### The test harness that ran out of heap (round 88)
 
 `test_m3g` reported two failures that were its own fixtures, not the runtime:
