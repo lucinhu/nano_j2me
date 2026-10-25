@@ -186,6 +186,13 @@ typedef struct nj_av_video_ops {
  *
  * Returns the number of providers of that kind now installed.
  */
+/*
+ * Install an audio provider.  Later installs are tried first, so a port's
+ * hardware decoder wins over the built-in software one.  Returns the number of
+ * installed providers after the call (0 when `vm` is NULL); passing NULL
+ * removes all of them, which is what a port does when it tears down the codec
+ * server it installed.
+ */
 int nj_avcodec_install_audio(struct nj_vm *vm, const nj_av_audio_ops *ops);
 int nj_avcodec_install_video(struct nj_vm *vm, const nj_av_video_ops *ops);
 

@@ -165,3 +165,18 @@ bytes in `pSrc`) is exercised end to end, not just by the unit test.  The
 What is still missing for audio: an AMR provider behind the same seam (today
 AMR goes through the port hook and the buffered whole-file path), and reference
 fixtures for MPEG-2 rates and linbits-heavy streams.
+
+## Replacing a decoder at run time
+
+`nj_avcodec_install_audio()` / `nj_avcodec_install_video()` prepend a provider to
+the VM's table, so a port with a hardware codec overrides the built-in software
+one; passing `NULL` removes every provider of that kind (a port tears its codec
+server down that way).  The tables live in `nj_vm` (72 B in total), so nothing is
+static and two VMs in one process can disagree about which decoder to use.
+
+The seam is only worth having if the replacement is exercised, so
+`tests/test_avcodec.c` does exactly that: it installs a fake MP3 provider that
+emits a sentinel sample, checks the lookup prefers it over the software decoder,
+drives `Manager.createPlayer()` over a real MP3 stream, pumps the media frame
+hook and asserts the port receives the sentinel - i.e. the port's decoder, not
+ours, produced the sound.
