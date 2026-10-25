@@ -4158,6 +4158,58 @@ block from 1.69 MB of free space.  The next step is the allocator (coalescing /
 best-fit), not `createPlayer`; the streaming front-end makes the request as
 small as it can be.
 
+### The repaint that could not wait for the frame (round 5)
+
+Twelve titles from the Tomb Raider collection used to hang: `TombRaiderMIDlet`
+renders a loading screen from a `TimerTask`, and that task paints with
+
+```java
+a_.repaint();
+do { } while (ar[0] != null);      // paint() clears ar[0]
+```
+
+`repaint()` is asynchronous in MIDP, so the runtime deferred the frame to the
+next loop turn - but the spin runs *inside* the callback and never gives the
+loop that turn.  Handsets these titles shipped on deliver the paint before the
+callback returns.
+
+The runtime now does the same: `nj_midp_key()`, `nj_midp_pointer()` and a
+`TimerTask.run()` mark the VM as being inside a UI callback, and `repaint()`
+paints immediately when that mark is set (guarded by the existing `in_paint`
+flag so a `paint()` that repaints cannot recurse).  Deferring is still the
+default everywhere else, so titles that rely on the frame-driven paint are
+unaffected.
+
+| title | before | after |
+| --- | --- | --- |
+| Tomb Raider - The Osiris Codex v1.1.3 (176x208) | hang, 0 frames | 600 frames, 187 paints |
+| Tomb Raider - Quest for Cinnabar v1.1.0 (176x208) | hang | 300 frames, 118 paints |
+| Tomb Raider - Elixir of Life v1.0.3 (176x208) | hang | 300 frames, 118 paints |
+
+Regression spot checks after the change: 仙魔飞行棋_417 300 frames/300 paints,
+扫雷行动_10904 300 frames/295 paints, 三国杀单机战功修改版_4143 300 frames/179
+paints, `bench.jar` still `BENCH sum=-136042548`, `ctest` unchanged.
+
+### The third row that never paints, read to the bytecode (round 3)
+
+`vault/March of Heroes.jar` was the last row with no verdict beyond "never
+painted".  It paints ~100 frames, then calls `notifyDestroyed()` itself.  The
+exceptions before that are its own: `d.b()` asks
+`MIDlet.getAppProperty("URL-OPERATOR")` and calls `.trim()` on the result
+without a null check (bytecode pc 891-897), so a device whose manifest does not
+carry an operator URL throws `NullPointerException` there; three more NPEs in
+`j.t`/`j.J`/`j.M` come from the same missing carrier configuration.  The title
+catches them and then ends the MIDlet.  A device that answers those manifest
+properties would behave differently; the emulator cannot invent them.
+
+So all three "never painted" rows are title decisions, not emulator defects:
+
+| row | why no frame reached the screen |
+| --- | --- |
+| 乱世Q三国_1649 | catches `RecordStoreNotFoundException`, never installs a Displayable |
+| 有女倾城破解版_11525 | `Canvas.run()` calls `notifyDestroyed()` before its first paint |
+| vault/March of Heroes | needs `URL-PT`/`URL-OPERATOR` manifest properties, then ends itself |
+
 ### An empty resource name is a null stream, not an exception (round 3)
 
 `Class.getResourceAsStream("")` asks for "the package itself", which is not an

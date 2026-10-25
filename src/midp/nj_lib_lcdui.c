@@ -3876,6 +3876,26 @@ NJFN(c_getKeyName)
     return d_getKeyName(vm, th, args, ret);
 }
 
+/*
+ * A Canvas that publishes paint state in a field, calls repaint() and then
+ * spins until paint() clears the field cannot make progress here: the spin
+ * runs inside the input callback and, with the frame deferred to the next loop
+ * turn, the frame hook never regains control.  TombRaiderMIDlet.u(I)V does
+ * exactly this:  a_.repaint();  do { } while (ar[0] != null);   with paint()
+ * clearing ar[0].  Handsets that ship that title deliver the paint before the
+ * callback returns, so do the same: when a repaint is requested from inside a
+ * UI callback, paint before returning to the title.  in_paint keeps a paint()
+ * that repaints from recursing.
+ */
+static void c_paint_now(nj_vm *vm)
+{
+    if (vm->in_callback == 0u || vm->in_paint != 0u || !vm->repaint_pending) {
+        return;
+    }
+    vm->in_paint = 1u;
+    (void)nj_midp_paint(vm);
+    vm->in_paint = 0u;
+}
 NJFN(c_repaint)
 {
     nj_ref self = NJ_THIS(args);
@@ -3908,6 +3928,7 @@ NJFN(c_repaint)
         return NJ_OK;
     }
     nj_midp_repaint(vm);
+    c_paint_now(vm);
     return NJ_OK;
 }
 
@@ -3946,6 +3967,7 @@ NJFN(c_repaint_all)
         return NJ_OK;
     }
     nj_midp_repaint(vm);
+    c_paint_now(vm);
     return NJ_OK;
 }
 
@@ -5158,12 +5180,43 @@ NJFN(d_getKeyChar)
     return NJ_OK;
 }
 
+static int nj_midp_key_char_inner(nj_vm *vm, int key, int down, nj_u4 ch);
+static int nj_midp_pointer_inner(nj_vm *vm, int x, int y, int kind);
+
+int nj_midp_key_char(nj_vm *vm, int key, int down, nj_u4 ch)
+{
+    int r;
+
+    if (vm) {
+        vm->in_callback++;
+    }
+    r = nj_midp_key_char_inner(vm, key, down, ch);
+    if (vm) {
+        vm->in_callback--;
+    }
+    return r;
+}
+
+int nj_midp_pointer(nj_vm *vm, int x, int y, int kind)
+{
+    int r;
+
+    if (vm) {
+        vm->in_callback++;
+    }
+    r = nj_midp_pointer_inner(vm, x, y, kind);
+    if (vm) {
+        vm->in_callback--;
+    }
+    return r;
+}
+
 int nj_midp_key(nj_vm *vm, int key, int down)
 {
     return nj_midp_key_char(vm, key, down, 0u);
 }
 
-int nj_midp_key_char(nj_vm *vm, int key, int down, nj_u4 ch)
+static int nj_midp_key_char_inner(nj_vm *vm, int key, int down, nj_u4 ch)
 {
     nj_ref d;
     int code;
@@ -5286,7 +5339,7 @@ int nj_midp_key_repeat(nj_vm *vm, int key)
     return nj_midp_key(vm, key, 1);
 }
 
-int nj_midp_pointer(nj_vm *vm, int x, int y, int kind)
+static int nj_midp_pointer_inner(nj_vm *vm, int x, int y, int kind)
 {
     nj_ref d;
     int cx = x, cy = y;
@@ -5690,6 +5743,7 @@ nj_status nj_midp_set_current(nj_vm *vm, nj_ref d)
      * rather than inside setCurrent().
      */
     nj_midp_repaint(vm);
+    c_paint_now(vm);
     return NJ_OK;
 }
 
@@ -6468,6 +6522,7 @@ NJFN(ci_sizeChanged)
 NJFN(ci_repaint)
 {
     nj_midp_repaint(vm);
+    c_paint_now(vm);
     return NJ_OK;
 }
 

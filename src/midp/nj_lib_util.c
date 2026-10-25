@@ -3190,6 +3190,7 @@ NJFN(timer_pump)
     }
     {
         nj_ref task = nj_array_get_ref(data, (nj_u4)best);
+        nj_status st;
         nj_s8 period = tt_fperiod(vm) ? nj_field_read_long(vm, task, tt_fperiod(vm)) : 0;
         nj_s4 fixed = fget(vm, task, tt_ffixed(vm), 0);
         nj_s8 now = nj_now_ms(vm);
@@ -3206,7 +3207,16 @@ NJFN(timer_pump)
         }
         nj_field_write_long(vm, task, tt_fexec(vm), fixed ? best_time : now);
         ret->i = 1;
-        if (nj_call(vm, task, TT_CLS, "run", "()V", NULL, NULL) != NJ_OK) {
+        /*
+         * A TimerTask is a UI callback as far as painting is concerned: titles
+         * call repaint() here and then spin until paint() clears a field
+         * (TombRaiderMIDlet.u(I)V), so the repaint has to be delivered before
+         * the task can finish.  See c_paint_now().
+         */
+        vm->in_callback++;
+        st = nj_call(vm, task, TT_CLS, "run", "()V", NULL, NULL);
+        vm->in_callback--;
+        if (st != NJ_OK) {
             /* An escaping exception kills the timer thread, like Java. */
             nj_ref exc = nj_take_exception(vm);
             nj_logf(vm, 1, "TimerTask.run() threw %s: timer cancelled",

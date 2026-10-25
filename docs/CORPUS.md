@@ -49,3 +49,17 @@ Rows from those directories are labelled `vault/<name>.jar`.  The 455-title
 archive.org item `j2me-vault` ("J2ME FULL ROMS & Screenshots Archive") is one such
 collection and is deliberately kept out of this repository.
 
+## The Tomb Raider collection (round 4)
+
+A second archive.org item, `tomb_raider_j2me_collection` (66 MB, one file per
+JAR, no aggregate ZIP), contributes titles from the Tomb Raider series.  The
+sweep script hashes every candidate against the corpora it already knows, so the
+106 JARs this project had not seen are added while 86 duplicates are skipped:
+
+```sh
+NJ_SWEEP_DIRS=/path/to/vault/Roms:/path/to/vault2 tools/sweep_compat.py .local-tools/debug-runs/compat-matrix-20261025
+```
+
+As with the first collection, the JARs stay out of the repository; only the
+verdict rows are committed.
+

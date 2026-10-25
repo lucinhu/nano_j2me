@@ -1060,3 +1060,12 @@ So a 60x25 item costs 6,000 B while it is on screen and nothing before its first
 paint; a Form with ten of them costs 60,000 B.  The C code adds about 5.6 KiB of
 `.text` and no writable statics.
 
+## A byte of callback state, paid for by padding (round 5)
+
+`nj_vm` gained one `nj_u1 in_callback` beside `in_paint`; both are followed by a
+four-byte field, so the two bytes share one padding slot and `sizeof(nj_vm)` does
+not change (the `test_lib` assertion on the VM size still passes).  The repaint
+path itself adds no allocation: `c_paint_now()` paints the pending frame with the
+state that is already there.  The runtime text grows by the helper plus the two
+wrapper calls; no `.data`/`.bss` growth, and no writable statics were added.
+

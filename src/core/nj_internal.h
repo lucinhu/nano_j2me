@@ -641,6 +641,12 @@ struct nj_vm {
      * paint may itself ask for a repaint; without this the second one would
      * re-enter the paint path. */
     nj_u1         in_paint;
+    /* Set while a Java callback (key, pointer, command) is being delivered.
+     * A title may call repaint() and then spin until paint() clears a field -
+     * TombRaiderMIDlet.u(I)V does exactly that - which can never finish when
+     * the frame is deferred to the next loop turn.  repaint() therefore
+     * delivers the frame itself when this is non-zero; see c_paint_now(). */
+    nj_u1         in_callback;
     nj_u4         frames_presented;
     nj_u2         screen_w;
     nj_u2         screen_h;

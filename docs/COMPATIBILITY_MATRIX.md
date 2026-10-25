@@ -1,6 +1,6 @@
 # Compatibility matrix
 
-One row per JAR in `tests/games` (855 titles), from one headless replay per title
+One row per JAR in `tests/games` (961 titles), from one headless replay per title
 with the same recipe, so neighbouring rows are comparable:
 
 * port `headless`, screen `240x320`, `--fps 30`, `--run-frames 600`;
@@ -13,18 +13,18 @@ with the same recipe, so neighbouring rows are comparable:
 Corpus provenance and size are in `docs/CORPUS.md`; regenerate this table
 with `tools/make_compat_matrix.py <rows dir>` after a new sweep.
 
-Built from `d58f322`, 2026-10-25.
+Built from `edee486`, 2026-10-25.
 
 | verdict | titles |
 | --- | --- |
-| 运行正常 | 851 |
+| 运行正常 | 957 |
 | 未呈现画面 | 3 |
 | 非可用包 | 1 |
 
 | 3D API used | titles |
 | --- | --- |
-| - | 713 |
-| nokia-ui | 113 |
+| - | 818 |
+| nokia-ui | 114 |
 | m3g | 21 |
 | m3g,nokia-ui | 5 |
 | mascot | 3 |
@@ -73,9 +73,115 @@ Built from `d58f322`, 2026-10-25.
 | jump.jar | 15 | J2ME Games Examples | frog-parrot.net | 2.0 | MIDP-2.0 | - | 7 | 16 | 600 | 143 | 0 | - | 运行正常 |  |
 | maze.jar | 7 | J2ME Games Examples | frog-parrot.net | 1.0 | MIDP-1.0 | - | 4 | 16 | 600 | 332510 | 0 | - | 运行正常 |  |
 | slimevolley.jar | 8 | SlimeVolleyBallMidlet | see the source proje | 1.0.0 | - | - | 7 | 16 | 600 | 15038 | 0 | - | 运行正常 |  |
+| vault/000-Tomb Raider The Osiris Codex v1.0.9 (176x208) [English].jar | 134 | TombRaider1 | - | 1.0.9 | MIDP-1.0 | - | 5 | 16 | 600 | 1006636 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/001-Tomb Raider The Osiris Codex v1.1.3 (128x128) [German].jar | 63 | Tomb Raider The Osiris Codex | - | 1.1.3 | MIDP-1.0 | - | 6 | 16 | 600 | 3539767 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/002-Tomb Raider The Osiris Codex v1.1.3 (176x208) [German].jar | 135 | TombRaider1 | - | 1.1.3 | MIDP-1.0 | - | 5 | 16 | 600 | 466028 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/003-Tomb Raider The Osiris Codex v1.1.4 (176x208) [Italian].jar | 135 | TombRaider1 | - | 1.1.4 | MIDP-1.0 | - | 5 | 16 | 601 | 514540 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/004-Tomb Raider The Osiris Codex v1.1.8 (176x208) [Spanish].jar | 93 | TombRaider1 | - | 1.1.8 | MIDP-1.0 | - | 5 | 16 | 600 | 834858 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/005-Tomb Raider The Osiris Codex v1.2.5 (128x128) [Chinese A].jar | 58 | 地狱书上 | - | 1.2.5 | MIDP-1.0 | - | 6 | 16 | 600 | 2172757 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/006-Tomb Raider The Osiris Codex v1.2.5 (128x128) [Chinese B].jar | 58 | 地狱书下 | - | 1.2.5 | MIDP-1.0 | - | 6 | 16 | 600 | 2112289 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
 | vault/007 - Quantum of Solace.jar | 584 | Quantum Of Solace | - | 1.0.6 | MIDP-1.0 | - | 7 | 16 | 600 | 62759612 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/007-Tomb Raider The Osiris Codex v1.5.6 (240x320) [English].jar | 118 | TombRaider1 | - | 1.5.6 | MIDP-1.0 | - | 6 | 16 | 601 | 208905 | 0 | - | 运行正常 |  |
+| vault/008-Tomb Raider Quest for Cinnabar v1.1.0 (176x208) [German].jar | 140 | TombRaider2 | - | 1.1.0 | MIDP-1.0 | - | 5 | 16 | 600 | 467069 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/009-Tomb Raider Quest for Cinnabar v1.1.1 (176x208) [English].jar | 137 | TombRaider2 | - | 1.1.1 | MIDP-1.0 | - | 5 | 16 | 600 | 446106 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/010-Tomb Raider Quest for Cinnabar v1.1.2 (176x208) [English].jar | 138 | TombRaider2 | - | 1.1.2 | MIDP-1.0 | - | 5 | 16 | 600 | 438786 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/011-Tomb Raider Quest for Cinnabar v1.1.3 (128x128) [Spanish].jar | 63 | TombRaider2 | - | 1.1.3 | MIDP-1.0 | - | 6 | 16 | 600 | 2609371 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/012-Tomb Raider Quest for Cinnabar v1.1.5 (128x128) [English].jar | 62 | TombRaider2 | - | 1.1.5 | MIDP-1.0 | - | 6 | 16 | 600 | 2598745 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/013-Tomb Raider Quest for Cinnabar v1.1.5 (128x128) [German].jar | 63 | Tomb Raider Quest For Cinnab | - | 1.1.5 | MIDP-1.0 | - | 6 | 16 | 600 | 2582486 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/014-Tomb Raider Quest for Cinnabar v1.1.5 (176x208) [Spanish].jar | 97 | TombRaider2 | - | 1.1.5 | MIDP-1.0 | - | 5 | 16 | 600 | 857231 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/015-Tomb Raider Elixir Of Life v1.0.3 (176x208) [English].jar | 131 | TombRaider3 | - | 1.0.3 | MIDP-1.0 | - | 5 | 16 | 601 | 450470 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/016-Tomb Raider Elixir Of Life v1.0.4 (128x128) [English].jar | 63 | TombRaider3 | - | 1.0.4 | MIDP-1.0 | - | 6 | 16 | 600 | 2670375 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/017-Tomb Raider Elixir Of Life v1.0.6 (176x208) [German].jar | 91 | TombRaider3 | - | 1.0.6 | MIDP-1.0 | - | 5 | 16 | 600 | 816040 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/018-Tomb Raider Elixir Of Life v1.0.8 (128x128) [German].jar | 63 | Tomb Raider Elixir Of Life | - | 1.0.8 | MIDP-1.0 | - | 6 | 16 | 600 | 2602095 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/019-Tomb Raider Elixir Of Life v1.1.4 (128x128) [Spanish].jar | 63 | TombRaider3 | - | 1.1.4 | MIDP-1.0 | - | 6 | 16 | 600 | 2620121 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/020-Tomb Raider Elixir Of Life v1.1.5 (176x208) [Italian].jar | 91 | TombRaider3 | - | 1.1.5 | MIDP-1.0 | - | 5 | 16 | 600 | 877802 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/021-Tomb Raider Elixir Of Life v1.1.5 (176x208) [Spanish].jar | 91 | TombRaider3 | - | 1.1.5 | MIDP-1.0 | - | 5 | 16 | 600 | 821299 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/022-Tomb Raider Elixir Of Life v1.1.9 (176x208) [Chinese].jar | 90 | TombRaider3 | - | 1.1.9 | MIDP-1.0 | - | 5 | 16 | 600 | 325827 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/023-Tomb Raider Elixir Of Life v1.2.1 (128x128) [Chinese A].jar | 62 | 掌星-古墓丽影3A | - | 1.2.1 | MIDP-1.0 | - | 8 | 16 | 600 | 2506441 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/024-Tomb Raider Elixir Of Life v1.2.1 (128x128) [Chinese B].jar | 62 | 掌星-古墓丽影3B | - | 1.2.1 | MIDP-1.0 | - | 8 | 16 | 600 | 2411053 | 0 | javax/microedition/rms/InvalidRe | 运行正常 |  |
+| vault/025-Tomb Raider Slot v01.01.03 (CLDC-1.0, MIDP-2.0) (128x128).jar | 107 | SL Tomb Raider | - | 01.01.03 | MIDP-2.0 | - | 52 | 16 | 600 | 856659 | 0 | java/io/IOException | 运行正常 |  |
+| vault/026-Tomb Raider Slot v01.01.03 (CLDC-1.0, MIDP-2.0) (176x208).jar | 155 | SL Tomb Raider | - | 01.01.03 | MIDP-2.0 | - | 52 | 16 | 600 | 861247 | 0 | java/io/IOException | 运行正常 |  |
+| vault/027-Tomb Raider Slot v01.01.03 (CLDC-1.0, MIDP-2.0) (176x220).jar | 158 | SL Tomb Raider | - | 01.01.03 | MIDP-2.0 | - | 52 | 16 | 600 | 861289 | 0 | java/io/IOException | 运行正常 |  |
+| vault/028-Tomb Raider Slot v01.01.03 (CLDC-1.0, MIDP-2.0) (240x240).jar | 181 | SL Tomb Raider | - | 01.01.03 | MIDP-2.0 | - | 52 | 16 | 600 | 863959 | 0 | java/io/IOException | 运行正常 |  |
+| vault/029-Tomb Raider Slot v01.01.03 (CLDC-1.0, MIDP-2.0) (320x240).jar | 167 | SL Tomb Raider | - | 01.01.03 | MIDP-2.0 | - | 52 | 16 | 600 | 884453 | 0 | java/io/IOException | 运行正常 |  |
+| vault/030-Tomb Raider Slot v01.01.03 (CLDC-1.0, MIDP-2.0) (360x640).jar | 241 | SL Tomb Raider | - | 01.01.03 | MIDP-2.0 | - | 52 | 16 | 600 | 730779 | 0 | java/io/IOException | 运行正常 |  |
+| vault/031-Tomb Raider Slot v01.01.03 (Sony Ericsson) (240x320).jar | 188 | SL Tomb Raider | - | 01.01.03 | MIDP-2.0 | - | 52 | 16 | 600 | 864992 | 0 | java/io/IOException | 运行正常 |  |
+| vault/032-Tomb Raider Slot v30.01 (CLDC-1.0, MIDP-2.0) (128x128).jar | 138 | Tomb Raider Slot | - | 30.01 | MIDP-2.0 | - | 46 | 16 | 600 | 66041 | 0 | - | 运行正常 |  |
+| vault/033-Tomb Raider Slot v30.01 (CLDC-1.0, MIDP-2.0) (176x220).jar | 219 | Tomb Raider Slot | - | 30.01 | MIDP-2.0 | - | 44 | 16 | 600 | 66058 | 0 | - | 运行正常 |  |
+| vault/034-Tomb Raider Slot v30.01 (CLDC-1.0, MIDP-2.0) (Nokia 128x160).jar | 144 | Tomb Raider Slot | - | 30.01 | MIDP-2.0 | - | 46 | 16 | 600 | 66257 | 0 | - | 运行正常 |  |
+| vault/035-Tomb Raider Slot v30.01 (CLDC-1.0, MIDP-2.0) (Nokia 176x208).jar | 178 | Tomb Raider Slot | - | 30.01 | MIDP-2.0 | - | 46 | 16 | 600 | 66058 | 0 | - | 运行正常 |  |
+| vault/036-Tomb Raider Slot v30.01 (CLDC-1.0, MIDP-2.0) (Samsung 240x320).jar | 225 | Tomb Raider Slot | - | 30.01 | MIDP-2.0 | - | 46 | 16 | 600 | 66128 | 0 | - | 运行正常 |  |
+| vault/037-Tomb Raider Slot v30.02 (CLDC-1.0, MIDP-2.0) (Nokia s40v3a) (240x320).jar | 249 | Tomb Raider Slot | - | 30.02 | MIDP-2.0 | - | 45 | 16 | 600 | 64467 | 0 | - | 运行正常 |  |
+| vault/038-Tomb Raider Slot v30.02 (CLDC-1.0, MIDP-2.0) (s40v2) (128x128).jar | 138 | Tomb Raider Slot | - | 30.02 | MIDP-2.0 | - | 45 | 16 | 600 | 63791 | 0 | - | 运行正常 |  |
+| vault/039-Tomb Raider Slot v30.02 (CLDC-1.0, MIDP-2.0) (s40v2a) (128x160).jar | 144 | Tomb Raider Slot | - | 30.02 | MIDP-2.0 | - | 45 | 16 | 600 | 63592 | 0 | - | 运行正常 |  |
+| vault/040-Tomb Raider Slot v30.02 (CLDC-1.0, MIDP-2.0) (s40v3) (208x208).jar | 192 | Tomb Raider Slot | - | 30.02 | MIDP-2.0 | - | 45 | 16 | 600 | 64236 | 0 | - | 运行正常 |  |
+| vault/041-Tomb Raider Slot v30.02 (CLDC-1.1, MIDP-2.0) (s40v3a) (240x320).jar | 249 | Tomb Raider Slot | - | 30.02 | MIDP-2.0 | - | 45 | 16 | 600 | 64155 | 0 | - | 运行正常 |  |
+| vault/042-Lara Crofts Poker Party (CLDC-1.0, MIDP-1.0) v1.0.1 (132x176).jar | 102 | Lara Crofts Poker Party | - | 1.0.1 | MIDP-1.0 | - | 15 | 16 | 600 | 593503 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/043-Tomb Raider Puzzle Paradox v0.4.1 (176x220).jar | 213 | Tomb Raider Puzzle Paradox | - | 0.4.1 | MIDP-2.0 | - | 2 | 16 | 600 | 7070677 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| vault/044-Tomb Raider Puzzle Paradox v0.4.1 (CLDC-1.1, MIDP-2.0) (Sony Ericsson) 176x220).jar | 213 | Tomb Raider Puzzle Paradox | - | 0.4.1 | MIDP-2.0 | - | 2 | 16 | 600 | 7070364 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| vault/045-Tomb Raider Puzzle Paradox v0.4.6 (CLDC-1.1, MIDP-2.0) (s40v3a) (240x320).jar | 315 | Tomb Raider Puzzle Paradox | - | 0.4.6 | MIDP-2.0 | - | 2 | 16 | 600 | 7711645 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| vault/046-Tomb Raider Puzzle Paradox v0.4.8 (CLDC-1.0, MIDP-2.0) (Nokia s60v2) (176x208).jar | 208 | Tomb Raider Puzzle Paradox | - | 0.4.8 | MIDP-2.0 | - | 2 | 16 | 600 | 6448812 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| vault/047-Tomb Raider Puzzle Paradox v0.6.7 (CLDC-1.0, MIDP-2.0) (Motorola) (176x220).jar | 139 | Tomb Raider Puzzle Paradox | - | 0.6.7 | MIDP-2.0 | - | 2 | 16 | 600 | 6714728 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| vault/048-Tomb Raider Puzzle Paradox v0.6.8 (CLDC-1.1, MIDP-2.0) (Nokia N73) (240x320).jar | 303 | Tomb Raider Puzzle Paradox | - | 0.6.8 | MIDP-2.0 | - | 2 | 16 | 600 | 8157532 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| vault/049-Tomb Raider Puzzle Paradox v0.7.0 (132x176).jar | 152 | Tomb Raider Puzzle Paradox | - | 0.7.0 | MIDP-2.0 | - | 2 | 16 | 600 | 5956948 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| vault/050-Tomb Raider Puzzle Paradox v0.7.3 (CLDC-1.1, MIDP-2.0) (Nokia s60v3) (352x416).jar | 330 | Tomb Raider Puzzle Paradox | - | 0.7.3 | MIDP-2.0 | - | 2 | 16 | 600 | 5229605 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/051-Tomb Raider Puzzle Paradox v0.7.6 (CLDC-1.0, MIDP-1.0) (N-Gage) (176x208).jar | 204 | Tomb Raider Puzzle Paradox | - | 0.7.6 | MIDP-1.0 | - | 2 | 16 | 600 | 6067763 | 0 | java/io/IOException,javax/microe | 运行正常 |  |
+| vault/052-Tomb Raider Legend Tokyo v1.12.7 (CLDC-1.1, MIDP-2.0) (for JSR184 - 240x320 screens) [English].jar | 516 | Tomb Raider Legend | - | 1.12.7 | MIDP-2.0 | - | 21 | 16 | 600 | 1291012 | 0 | - | 运行正常 |  |
+| vault/053-Tomb Raider Legend Tokyo v1.15.41 (CLDC-1.1, MIDP-2.0) (Nokia 6280-6131) (240x320) [English].jar | 515 | Tomb Raider Legend | - | 1.15.41 | MIDP-2.0 | - | 21 | 16 | 600 | 1252003 | 0 | - | 运行正常 |  |
+| vault/054-Tomb Raider Legend Tokyo v1.16 (176x220) [English].jar | 401 | Tomb Raider Legend | - | 1.16 | MIDP-2.0 | - | 22 | 16 | 600 | 1310186 | 0 | - | 运行正常 |  |
+| vault/055-Tomb Raider Legend Tokyo v1.17 (CLDC-1.1, MIDP-2.0) (Nokia N73) (240x320) [Italian].jar | 468 | Tomb Raider Legend | - | 1.17 | MIDP-2.0 | - | 22 | 16 | 600 | 1647294 | 0 | - | 运行正常 |  |
+| vault/056-Tomb Raider Legend Tokyo v1.17.6 (CLDC-1.1, MIDP-2.0) (NOGUNSOUND - Nokia 6280) [Spanish].jar | 517 | Tomb Raider Legend | - | 1.17.6 | MIDP-2.0 | - | 21 | 16 | 600 | 1452921 | 0 | - | 运行正常 |  |
+| vault/057-Tomb Raider Legend Tokyo v1.17.9 (CLDC-1.1, MIDP-2.0) (Nokia 6233) [Spanish].jar | 517 | Tomb Raider Legend | - | 1.17.9 | MIDP-2.0 | - | 21 | 16 | 600 | 1874801 | 0 | - | 运行正常 |  |
+| vault/058-Tomb Raider Anniversary v0.2.1 (128x128).jar | 63 | TombRaiderAnniversary | - | 0.2.1 | MIDP-1.0 | - | 4 | 16 | 600 | 18306349 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/059-Tomb Raider Anniversary v0.2.1 (CLDC-1.0, MIDP-2.0) (Motorola) (176x220).jar | 129 | TombRaiderAnniversary | - | 0.2.1 | MIDP-2.0 | - | 4 | 16 | 600 | 12001959 | 0 | javax/microedition/rms/RecordSto | 运行正常 |  |
+| vault/060-Tomb Raider Anniversary v0.2.1 (CLDC-1.1, MIDP-2.0) (Nokia 6680) (176x208).jar | 177 | TombRaiderAnniversary | - | 0.2.1 | MIDP-2.0 | - | 4 | 16 | 600 | 60460 | 0 | java/lang/IllegalStateException, | 运行正常 |  |
+| vault/061-Tomb Raider Anniversary v0.2.1 (CLDC-1.1, MIDP-2.0) (Nokia E61) (320x240).jar | 296 | TombRaiderAnniversary | - | 0.2.1 | MIDP-2.0 | - | 4 | 16 | 600 | 1318529 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/062-Tomb Raider Anniversary v0.2.1 (CLDC-1.1, MIDP-2.0) (Nokia N80) (352x416).jar | 324 | TombRaiderAnniversary | - | 0.2.1 | MIDP-2.0 | - | 4 | 16 | 600 | 1195913 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/063-Tomb Raider Anniversary v0.2.1 (CLDC-1.1, MIDP-2.0) (SE) (128x160).jar | 134 | TombRaiderAnniversary | - | 0.2.1 | MIDP-2.0 | - | 4 | 16 | 600 | 60251 | 0 | java/lang/IllegalStateException, | 运行正常 |  |
+| vault/064-Tomb Raider Anniversary v0.2.2 (CLDC-1.1, MIDP-2.0) (SE) (128x128).jar | 138 | TombRaiderAnniversary | - | 0.2.2 | MIDP-2.0 | - | 4 | 16 | 600 | 60477 | 0 | java/lang/IllegalStateException, | 运行正常 |  |
+| vault/065-Tomb Raider Anniversary v0.2.2 (CLDC-1.1, MIDP-2.0) (SE) (176x220).jar | 169 | TombRaiderAnniversary | - | 0.2.2 | MIDP-2.0 | - | 4 | 16 | 600 | 1083285 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/066-Tomb Raider Anniversary v0.2.2 (CLDC-1.1, MIDP-2.0) (SE) (240x320).jar | 275 | TombRaiderAnniversary | - | 0.2.2 | MIDP-2.0 | - | 4 | 16 | 600 | 128611 | 0 | java/lang/IllegalStateException, | 运行正常 |  |
+| vault/067-Tomb Raider Anniversary v0.2.3 (CLDC-1.0, MIDP-1.0) (Nokia s60v1 3650) (176x208).jar | 177 | TombRaiderAnniversary | - | 0.2.3 | MIDP-1.0 | - | 4 | 16 | 600 | 1196791 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/068-Tomb Raider Anniversary v0.2.3 (CLDC-1.0, MIDP-1.0) (Nokia) (176x208).jar | 201 | Tomb Raider Anniversary | - | 0.2.3 | MIDP-1.0 | - | 4 | 16 | 600 | 1293160 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/069-Tomb Raider Anniversary v0.2.3 (CLDC-1.0, MIDP-2.0) (Nokia 6600) (176x208).jar | 187 | TombRaiderAnniversary | - | 0.2.3 | MIDP-2.0 | - | 4 | 16 | 600 | 1175322 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/070-Tomb Raider Anniversary v0.2.4 (CLDC-1.1, MIDP-2.0) (Motorola) (240x320).jar | 185 | TombRaiderAnniversary | - | 0.2.4 | MIDP-2.0 | - | 4 | 16 | 600 | 1036340 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/071-Tomb Raider Anniversary v0.2.4 (CLDC-1.1, MIDP-2.0) (Nokia 6280-6131) (240x320).jar | 272 | TombRaiderAnniversary | - | 0.2.4 | MIDP-2.0 | - | 4 | 16 | 600 | 1389941 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/072-Tomb Raider Anniversary v0.2.5 (CLDC-1.0, MIDP-2.0) (Motorola) (128x128).jar | 134 | TombRaiderAnniversary | - | 0.2.5 | MIDP-2.0 | - | 4 | 16 | 600 | 1006838 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/073-Tomb Raider Anniversary v0.2.5 (CLDC-1.0, MIDP-2.0) (Motorola) (128x160).jar | 130 | TombRaiderAnniversary | - | 0.2.5 | MIDP-2.0 | - | 4 | 16 | 600 | 12867824 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/074-Tomb Raider Anniversary v0.2.5 (CLDC-1.1, MIDP-2.0) (N73) (240x320).jar | 272 | TombRaiderAnniversary | - | 0.2.5 | MIDP-2.0 | - | 4 | 16 | 600 | 1377163 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/075-Tomb Raider Anniversary v0.2.6 (CLDC-1.1, MIDP-2.0) (Nokia s40v3) (208x208).jar | 168 | TombRaiderAnniversary | - | 0.2.6 | MIDP-2.0 | - | 4 | 16 | 600 | 1263802 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/076-Tomb Raider Anniversary v0.2.6 (s40v3) (208x208).jar | 168 | TombRaiderAnniversary | - | 0.2.6 | MIDP-2.0 | - | 4 | 16 | 600 | 1263260 | 0 | java/lang/ArrayIndexOutOfBoundsE | 运行正常 |  |
+| vault/077-Tomb Raider Anniversary v0.3.1 (CLDC-1.1, MIDP-2.0) (Nokia N91) (176x208).jar | 169 | TombRaiderAnniversary | - | 0.3.1 | MIDP-2.0 | - | 4 | 16 | 600 | 60310 | 0 | java/lang/IllegalStateException, | 运行正常 |  |
+| vault/078-Tomb Raider Anniversary v0.3.2 (CLDC-1.0, MIDP-2.0) (s40v2) (128x128).jar | 87 | TombRaiderAnniversary | - | 0.3.2 | MIDP-2.0 | - | 4 | 16 | 600 | 1747704 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/079-Tomb Raider Anniversary v1.0.0 (CLDC-1.0, MIDP-2.0) (s40v2a) (128x160).jar | 111 | TombRaiderAnniversary | - | 1.0.0 | MIDP-2.0 | - | 4 | 16 | 600 | 362696452 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/080-Tomb Raider Anniversary v1.0.0 (CLDC-1.1, MIDP-2.0) (Nokia 6280) (240x320).jar | 271 | TombRaiderAnniversary | - | 1.0.0 | MIDP-2.0 | - | 4 | 16 | 600 | 139278 | 0 | java/lang/IllegalStateException, | 运行正常 |  |
+| vault/081-Tomb Raider Underworld 2D v1.3.8 (CLDC-1.0, MIDP-1.0) (s40v2) (128x128).jar | 126 | TR Underworld | - | 1.3.8 | MIDP-1.0 | - | 3 | 16 | 600 | 216992 | 0 | java/io/IOException,java/lang/Ar | 运行正常 |  |
+| vault/082-Tomb Raider Underworld 2D v1.3.8 (CLDC-1.0, MIDP-1.0) (s60v2-N6600) (176x208).jar | 511 | TR Underworld | - | 1.3.8 | MIDP-1.0 | - | 6 | 16 | 600 | 370247 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/083-Tomb Raider Underworld 2D v1.4.0 (CLDC-1.0, MIDP-1.0) (Nokia 3250) (176x208).jar | 511 | TR Underworld | - | 1.4.0 | MIDP-1.0 | - | 6 | 16 | 600 | 371747 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/084-Tomb Raider Underworld 2D v1.4.0 (CLDC-1.0, MIDP-1.0) (Samsung SGH-E250i) (128x160).jar | 263 | TR Underworld | - | 1.4.0 | MIDP-1.0 | - | 4 | 16 | 600 | 348301 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/085-Tomb Raider Underworld 2D v1.4.0 (CLDC-1.0, MIDP-1.0) (Samsung SGH-F480) (240x320).jar | 571 | TR Underworld | - | 1.4.0 | MIDP-1.0 | - | 6 | 16 | 600 | 380040 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/086-Tomb Raider Underworld 2D v1.4.0 (CLDC-1.0, MIDP-1.0) (Sony Ericsson W810) (176x220).jar | 524 | TR Underworld | - | 1.4.0 | MIDP-1.0 | - | 6 | 16 | 600 | 378339 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/087-Tomb Raider Underworld 2D v1.4.0 (CLDC-1.0, MIDP-1.0) (s60v2-N6680) (176x208).jar | 488 | TR Underworld | - | 1.4.0 | MIDP-1.0 | - | 6 | 16 | 600 | 364910 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/088-Tomb Raider Underworld 2D v1.4.1 (Benqsie EL71) (240x320).jar | 544 | TR Underworld | - | 1.4.1 | MIDP-1.0 | nokia-ui | 15 | 16 | 600 | 371374 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/089-Tomb Raider Underworld 2D v1.4.1 (CLDC-1.0, MIDP-1.0) (Nokia N95) (240x320).jar | 539 | TR Underworld | - | 1.4.1 | MIDP-1.0 | - | 7 | 16 | 600 | 370674 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/09 Formula Extreme.jar | 275 | Formula Extreme 09 (Bluetoot | - | 1.0.1 | MIDP-2.0 | - | 6 | 16 | 600 | 1237121 | 0 | java/io/IOException,java/lang/Nu | 运行正常 |  |
+| vault/090-Tomb Raider Underworld 2D v1.4.1 (CLDC-1.0, MIDP-1.0) (s40v3a) (240x320).jar | 539 | TR Underworld | - | 1.4.1 | MIDP-1.0 | - | 7 | 16 | 600 | 369946 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/091-Tomb Raider Underworld 2D v1.4.1 (CLDC-1.0, MIDP-1.0) (s40v5) (240x320).jar | 539 | TR Underworld | - | 1.4.1 | MIDP-1.0 | - | 7 | 16 | 600 | 370842 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/092-Tomb Raider Underworld 2D v1.4.2 (CLDC-1.0, MIDP-1.0) (s40v3) (208x208).jar | 293 | TR Underworld | - | 1.4.2 | MIDP-1.0 | - | 7 | 16 | 600 | 353766 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/093-Tomb Raider Underworld 2D v1.4.5 (CLDC-1.0, MIDP-1.0) (s40v2a-N5200) (128x160).jar | 238 | TR Underworld | - | 1.4.5 | MIDP-1.0 | - | 3 | 16 | 600 | 342660 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/094-Tomb Raider Underworld 2D v1.4.5 (CLDC-1.0, MIDP-1.0) (s40v2a-N6101) (128x160).jar | 124 | TR Underworld | - | 1.4.5 | MIDP-1.0 | - | 3 | 16 | 600 | 230495 | 0 | java/io/IOException,java/lang/Ar | 运行正常 |  |
+| vault/095-Tomb Raider Underworld 2D v1.4.5 (CLDC-1.0, MIDP-1.0) (s40v2a-N6151) (128x160).jar | 238 | TR Underworld | - | 1.4.5 | MIDP-1.0 | - | 3 | 16 | 600 | 340980 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/096-Tomb Raider Underworld 2D v1.4.6 (CLDC-1.0, MIDP-1.0) (Sony Ericsson K510) (128x160).jar | 264 | TR Underworld | - | 1.4.6 | MIDP-1.0 | - | 4 | 16 | 600 | 343403 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/097-Tomb Raider Underworld 3D v1.7.0 (CLDC-1.0, MIDP-1.0) (Nokia N92) (240x320).jar | 1131 | TR Underworld | - | 1.7.0 | MIDP-1.0 | - | 7 | 16 | 600 | 13289772 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/098-Tomb Raider Underworld 3D v1.7.1 (CLDC-1.0, MIDP-1.0) (Nokia N73) (240x320).jar | 1081 | TR Underworld | - | 1.7.1 | MIDP-1.0 | - | 7 | 16 | 600 | 12859520 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/099-Tomb Raider Underworld 3D v1.7.1 (CLDC-1.0, MIDP-1.0) (Nokia N80) (352x416).jar | 1139 | TR Underworld | - | 1.7.1 | MIDP-1.0 | - | 7 | 16 | 600 | 13258027 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/1 On 1 Basket.jar | 173 | 1 On 1 Basket | - | 1.0.16 | MIDP-1.0 | - | 3 | 16 | 600 | 134324042 | 0 | - | 运行正常 |  |
+| vault/100-Tomb Raider Underworld 3D v1.7.1 (CLDC-1.0, MIDP-1.0) (Nokia N96) (240x320).jar | 1081 | TR Underworld | - | 1.7.1 | MIDP-1.0 | - | 7 | 16 | 600 | 12858162 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/101-Tomb Raider Underworld 3D v1.7.1 (CLDC-1.0, MIDP-1.0) (s60v2-N70) (176x208).jar | 1007 | TR Underworld | - | 1.7.1 | MIDP-1.0 | - | 7 | 16 | 600 | 13217797 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/102-Tomb Raider Underworld 3D v1.7.2 (176x208).jar | 1069 | TR Underworld | - | 1.7.2 | MIDP-1.0 | - | 8 | 16 | 600 | 12786370 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/103-Tomb Raider Underworld 3D v1.7.2 (320x240).jar | 1073 | TR Underworld | - | 1.7.2 | MIDP-1.0 | - | 7 | 16 | 600 | 13499048 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/104-Tomb Raider Underworld 3D v1.7.3 (CLDC-1.0, MIDP-1.0) (Sony Ericsson K810) (240x320).jar | 1145 | TR Underworld | - | 1.7.3 | MIDP-1.0 | - | 7 | 16 | 600 | 12994739 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
+| vault/105-Tomb Raider Underworld 3D v1.8.8 (CLDC-1.0, MIDP-1.0) (Nokia 5800) (360x640).jar | 1304 | TR Underworld | - | 1.8.8 | MIDP-1.0 | - | 7 | 16 | 600 | 13853244 | 0 | java/lang/NullPointerException,j | 运行正常 |  |
 | vault/1100 A.D. - Battle of Legends.jar | 390 | 1100 AD. Battle of Legends | - | 1.0.0 | MIDP-2.0 | - | 43 | 16 | 600 | 937055 | 0 | - | 运行正常 |  |
 | vault/1916 Dogfight.jar | 376 | 1916 Dogfight | - | 1.0.0 | MIDP-2.0 | - | 39 | 16 | 600 | 47128616 | 0 | java/io/EOFException,java/lang/N | 运行正常 |  |
 | vault/1942.jar | 400 | 1942 | - | 1.0.0 | MIDP-2.0 | - | 18 | 16 | 600 | 13764818 | 0 | - | 运行正常 |  |
