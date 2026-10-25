@@ -1011,6 +1011,28 @@ static void media_unregister(nj_vm *vm, nj_ref player)
  * iterating forwards would then skip the entry that shifted into its place.
  */
 
+/* Rewind the retained renderer without allocating another stream or keeping
+ * a duplicate copy of the original MIDI bytes in the Java heap. */
+static int media_restart(nj_vm *vm, nj_ref p)
+{
+    if (r_i(vm, p, F_P_FRAMES) <= 0) return 0;
+#if NJ_ENABLE_MIDI
+    if (r_z(vm, p, F_P_STREAM)) {
+        nj_ref data = r_r(vm, p, F_P_DATA, "[B");
+        media_stream_state state;
+        if (data == NULL || barray_len(data) < NJ_MEDIA_STREAM_BYTES) return 0;
+        memcpy(&state, barray_bytes(data), sizeof(state));
+        if (state.stream == NULL) return 0;
+        (void)nj_midi_stream_seek(state.stream, 0);
+        state.pending = state.offset = 0u;
+        memcpy(data->u.bytes, &state, sizeof(state));
+    }
+#endif
+    w_i(vm, p, F_P_PUSHED, 0);
+    w_j(vm, p, F_P_TIME, 0);
+    return 1;
+}
+
 void nj_media_frame(nj_vm *vm)
 {
     nj_ref v;
@@ -1067,6 +1089,15 @@ void nj_media_frame(nj_vm *vm)
             }
         }
         (void)pcm_push(vm, p, room);
+        if (r_i(vm, p, F_P_PUSHED) >= r_i(vm, p, F_P_FRAMES)) {
+            nj_s4 want = r_i(vm, p, F_P_LOOP);
+            nj_s4 done = r_i(vm, p, F_P_LOOPDONE) + 1;
+
+            if ((want < 0 || (want > 1 && done < want)) && media_restart(vm, p)) {
+                w_i(vm, p, F_P_LOOPDONE, done);
+                continue;
+            }
+        }
         if (r_i(vm, p, F_P_PUSHED) >= r_i(vm, p, F_P_FRAMES)) {
             /* Played to the end: STOP the Player and say so, which is what
              * MIDP's END_OF_MEDIA is for. */
@@ -2320,6 +2351,7 @@ NJFN(player_start)
             (void)media_register(vm, self);
         }
     } else if (vm->port && vm->port->pcm_open) {
+        w_i(vm, self, F_P_LOOPDONE, 0);
         if (!r_z(vm, self, F_P_OPEN)) {
             if (vm->port->pcm_open(vm->port->ud, (int)r_i(vm, self, F_P_RATE),
                                    (int)r_i(vm, self, F_P_CHAN)) == 0) {

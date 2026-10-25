@@ -1096,3 +1096,14 @@ same way the Nokia `Sound` constants are, and the classes themselves are
 `nj_builtin_class` entries in `.rodata`.  `.data`/`.bss` and the per-VM
 footprint are unchanged.
 
+## A Player keeps its song bytes, and that costs one reference (round 20)
+
+`Player.pSrc` is a `[B` reference to the bytes the Player was built from.  It
+exists so a finished song can be opened again for `setLoopCount()`, which
+streamed MIDI players previously could not do because the renderer took the
+song out of the Java heap.  Cost: **8 bytes per Player instance** (one more
+reference field), no new buffers, no new static data; the bytes themselves were
+already on the heap when the song was loaded.
+
+`sizeof(nj_vm)` is unchanged and `tools/check_no_statics.sh` still reports no
+writable statics.

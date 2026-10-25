@@ -17,6 +17,7 @@
 #include "nj2me/nj_zip.h"
 #include "nj2me/nj_gfx.h"
 #include "nj2me/nj_codec.h"
+#include "nj2me/nj_avcodec.h"
 #include "nj2me/nj_device.h"
 
 #if NJ_ENABLE_ENGINE
@@ -614,6 +615,15 @@ struct nj_vm {
      * leaves the screen blank.  A title that never paints synchronously keeps
      * the runner's per-frame paint, which is the only thing that animates it
      * (炸弹人_10311 never calls repaint() in its loop). */
+    /*
+     * Audio/video decoder providers (nj2me/nj_avcodec.h).  nj_vm_create()
+     * installs the compiled-in software decoders and a port may install its
+     * own afterwards; later installs are tried first, so hardware wins.
+     */
+    const nj_av_audio_ops *av_audio[4];
+    const nj_av_video_ops *av_video[4];
+    nj_u4         av_audio_n;
+    nj_u4         av_video_n;
     nj_u1         painted_in_frame;
     /*
      * Set when a paint ran because the APPLICATION asked for it (a

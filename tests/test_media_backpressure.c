@@ -12,7 +12,7 @@
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "%d: %s\n", __LINE__, #c); failures++; } } while (0)
 static int failures;
 static struct {
-    nj_s2 samples[40000];
+    nj_s2 samples[120000];
     int frames, channels, calls, closes, bounded;
 } sink;
 
@@ -37,8 +37,8 @@ static int pcm_write(void *ud, const nj_s2 *samples, int frames)
         if (sink.calls == 3) return frames + 1; /* invalid port result */
         if (n > limits[sink.calls % 8]) n = limits[sink.calls % 8];
     }
-    CHECK(n >= 0 && (sink.frames + n) * sink.channels <= 40000);
-    if (n < 0 || (sink.frames + n) * sink.channels > 40000) return 0;
+    CHECK(n >= 0 && (sink.frames + n) * sink.channels <= 120000);
+    if (n < 0 || (sink.frames + n) * sink.channels > 120000) return 0;
     memcpy(sink.samples + sink.frames * sink.channels, samples,
            (size_t)n * sink.channels * sizeof(*samples));
     sink.frames += n;
@@ -49,26 +49,37 @@ static void *allocate(void *ud, nj_size n) { (void)ud; return malloc(n); }
 static void release(void *ud, void *p) { (void)ud; free(p); }
 
 static void check_playback(nj_vm *vm, nj_ref player, const nj_u1 *expected,
-                           nj_u4 frames, nj_u4 channels, nj_u4 start)
+                           nj_u4 frames, nj_u4 channels, nj_u4 start, int loops)
 {
     nj_value ret;
     int i;
     for (i = 0; i < 3000; i++) {
         nj_media_frame(vm);
         CHECK(nj_call(vm, player, PLAYER, "getMediaTime", "()J", NULL, &ret) == NJ_OK);
-        CHECK(ret.j == (nj_s8)(start + sink.frames) * 1000000 / NJ_MIDI_RATE);
+        {
+            nj_u4 position = start + (nj_u4)sink.frames;
+            if (loops > 1) position = position < frames * (nj_u4)loops ? position % frames : frames;
+            CHECK(ret.j == (nj_s8)position * 1000000 / NJ_MIDI_RATE);
+        }
         CHECK(nj_call(vm, player, PLAYER, "getState", "()I", NULL, &ret) == NJ_OK);
         if (ret.i != 400) break;
     }
     CHECK(ret.i == 300 && i < 3000);
-    CHECK(sink.channels == (int)channels && sink.frames == (int)(frames - start));
-    if (sink.frames == (int)(frames - start)) {
-        CHECK(memcmp(sink.samples, expected + start * channels * 2u,
-                     (frames - start) * channels * 2u) == 0);
+    CHECK(sink.channels == (int)channels && sink.frames == (int)(frames * loops - start));
+    if (sink.frames == (int)(frames * loops - start)) {
+        nj_u4 j;
+        for (j = 0; j < (nj_u4)sink.frames; j++) {
+            if (memcmp(sink.samples + j * channels,
+                       expected + ((start + j) % frames) * channels * 2u,
+                       channels * 2u) != 0) {
+                CHECK(0 && "PCM differs from the full renderer");
+                break;
+            }
+        }
     }
 }
 
-static void run_case(int stereo, int bounded, int seek_pending, int pause_pending)
+static void run_case(int stereo, int bounded, int seek_pending, int pause_pending, int loops)
 {
     static const nj_u1 mono[] = {
         'M','T','h','d',0,0,0,6,0,0,0,1,1,224,
@@ -94,7 +105,7 @@ static void run_case(int stereo, int bounded, int seek_pending, int pause_pendin
         size += 4;
     }
     expected = nj_midi_render_ex(smf, size, &frames, &channels, &mem);
-    CHECK(expected != NULL && frames > 4096 && frames * channels <= 40000);
+    CHECK(expected != NULL && frames > 4096 && frames * channels <= 120000);
     if (!expected) return;
     memset(&sink, 0, sizeof(sink));
     sink.bounded = bounded;
@@ -119,6 +130,8 @@ static void run_case(int stereo, int bounded, int seek_pending, int pause_pendin
     player = nj_root(vm, ret.r);
     CHECK(player != NULL);
     if (!player) goto cleanup;
+    a[0].i = loops;
+    CHECK(nj_call(vm, player, PLAYER, "setLoopCount", "(I)V", a, NULL) == NJ_OK);
     CHECK(nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
     if (seek_pending) {
         /* start() rendered a block but the first write accepted nothing. */
@@ -131,7 +144,7 @@ static void run_case(int stereo, int bounded, int seek_pending, int pause_pendin
         CHECK(nj_call(vm, player, PLAYER, "stop", "()V", NULL, NULL) == NJ_OK);
         CHECK(nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
     }
-    check_playback(vm, player, expected, frames, channels, start);
+    check_playback(vm, player, expected, frames, channels, start, loops);
     CHECK(sink.closes == (pause_pending ? 2 : 1));
     /* The same Player remains seekable after reaching the end. */
     memset(&sink, 0, sizeof(sink));
@@ -140,7 +153,7 @@ static void run_case(int stereo, int bounded, int seek_pending, int pause_pendin
     CHECK(nj_call(vm, player, PLAYER, "setMediaTime", "(J)J", a, &ret) == NJ_OK);
     CHECK(ret.j == 0);
     CHECK(nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
-    check_playback(vm, player, expected, frames, channels, 0);
+    check_playback(vm, player, expected, frames, channels, 0, loops);
     CHECK(sink.closes == 1);
     CHECK(nj_call(vm, player, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
     CHECK(!nj_has_exception(vm));
@@ -154,10 +167,12 @@ int main(void)
 {
     int stereo;
     for (stereo = 0; stereo <= 1; stereo++) {
-        run_case(stereo, 0, 0, 0);
-        run_case(stereo, 1, 0, 0);
-        run_case(stereo, 1, 1, 0);
-        run_case(stereo, 1, 0, 1);
+        run_case(stereo, 0, 0, 0, 1);
+        run_case(stereo, 1, 0, 0, 1);
+        run_case(stereo, 1, 1, 0, 1);
+        run_case(stereo, 1, 0, 1, 1);
+        run_case(stereo, 0, 0, 0, 3);
+        run_case(stereo, 1, 0, 0, 3);
     }
     printf("media backpressure: %d failures\n", failures);
     return failures ? 1 : 0;

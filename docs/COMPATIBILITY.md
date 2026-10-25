@@ -4395,7 +4395,34 @@ titles, Pac-Man, Resident Evil - The Missions), 4 remain (three `IOException` +
 title, to be read next).  Corpus state: **855 rows, 847 ok, 4 failures, 3 never
 painted, 1 unusable package**.
 
-### The state of the tree at the end of round 18
+### The music that stopped after one pass (round 20, 2026-10-25)
+
+Background music is usually created with `Player.setLoopCount(-1)`; a jingle
+uses 2 or 3.  Neither meant anything to a Player the runtime renders itself:
+`nj_media_frame()` restarted only *platform* players (the port's synthesizer),
+and the runtime-rendered path fired `endOfMedia` and unregistered the Player as
+soon as `pushed >= frames`, so the tune played once and stopped.
+
+Measured before the fix: `浴火银河_3621` rendered 1,387,903 frames of audio and
+then reported exactly the same count for 20 s, 60 s and 160 s of playback -
+the song is one 31.5 s track, so it was not "loop forever", it was "play once".
+
+The fix keeps the song bytes in a new `Player.pSrc` reference (streamed MIDI
+players had been dropping them once the renderer owned the song) and adds
+`media_restart()`, which re-opens the renderer at the start of the song (or
+rewinds a PCM buffer) while counting passes in `pLoopDone`.  `-1` now repeats
+forever, `n > 1` repeats `n` times, and `1` still means "play once".
+
+`tests/test_lib.c` grew `test_midi_loop_count`: a half-second MIDI file with
+`setLoopCount(3)` must push more than two passes and fewer than five.  Against
+the parent runtime the same test pushes 10,009 frames (one pass) and fails; with
+the fix it passes (855 checks, 0 failures in `test_lib`).
+
+Known limits, for the reader's benefit: MP3/long formats still answer
+`MediaException` (`Manager.createPlayer` has no MPEG decoder), and ten of the
+969 measured titles catch one of those before falling back to silence.
+
+## The state of the tree at the end of round 18
 
 This section records what is true of the tree as committed, so a later round can
 tell regressions from things that were never claimed.

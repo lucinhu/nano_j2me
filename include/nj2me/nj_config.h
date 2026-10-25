@@ -160,6 +160,48 @@
  * does accept events implements nj_port.midi_short_event/midi_long_event and
  * can drop the renderer as well.
  */
+/*
+ * MP3 and video decoders.
+ *
+ * Both are software decoders compiled in by default because a MIDP title that
+ * carries MP3 music or a 3GP clip is common; both can be trimmed out with -D
+ * when a product size matters more than that, and both are reached through
+ * nj_avcodec.h's provider registry so a port can install a hardware decoder in
+ * front of the software one (or remove it) without touching the runtime.
+ */
+#ifndef NJ_ENABLE_MP3
+#  define NJ_ENABLE_MP3 1
+#endif
+#ifndef NJ_ENABLE_VIDEO
+#  define NJ_ENABLE_VIDEO 1
+#endif
+
+/*
+ * Finer trims, all on by default.  Each one is a real decision on a small
+ * part, so each is its own macro rather than a single "minimal" switch:
+ *
+ *   NJ_MP3_LAYER3_ONLY        drop Layer I and II (nobody shipped them)
+ *   NJ_MP3_ENABLE_ID3         skip/parse ID3v2 tags before/between frames
+ *   NJ_MP3_ENABLE_SEEK        keep the table needed for Player.setMediaTime
+ *   NJ_MP3_ENABLE_INTENSITY   intensity stereo, which only MPEG-1 needs
+ *   NJ_VIDEO_H263_ONLY        H.263 baseline only, no MPEG-4 Part 2
+ */
+#ifndef NJ_MP3_LAYER3_ONLY
+#  define NJ_MP3_LAYER3_ONLY 1
+#endif
+#ifndef NJ_MP3_ENABLE_ID3
+#  define NJ_MP3_ENABLE_ID3 1
+#endif
+#ifndef NJ_MP3_ENABLE_SEEK
+#  define NJ_MP3_ENABLE_SEEK 1
+#endif
+#ifndef NJ_MP3_ENABLE_INTENSITY
+#  define NJ_MP3_ENABLE_INTENSITY 1
+#endif
+#ifndef NJ_VIDEO_H263_ONLY
+#  define NJ_VIDEO_H263_ONLY 1
+#endif
+
 #ifndef NJ_ENABLE_MIDI
 #  define NJ_ENABLE_MIDI 1
 #endif
