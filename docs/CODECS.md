@@ -699,3 +699,24 @@ that is known correct** - either a small standalone table-driven parser written
 from the spec, or ffmpeg's `mpeg4videodec.c` compiled with `TRACE` defined by
 hand (it is ~5k lines plus dependencies, so the standalone parser is the cheaper
 option).
+
+### Where MPEG-4 Part 2 stands (round 195)
+
+Decoded and tested: VOS/VOL/VOP headers (both real films' configurations), the
+macroblock header (MCBPC symbol, ac_pred, CBPY, dquant), the DC code (size VLC,
+long-code marker, prediction round trip), the AC VLC with all three escape
+forms, zigzag placement and the shared integer IDCT.
+
+Not decoded yet: the first I frame stops after a few macroblocks.  Three facts
+from the reference are recorded here because they are the remaining suspects,
+with the exact lines they came from (`mpeg4videodec.c` in
+`.local-tools/debug-runs/m4v-round25/`):
+
+| Reference lines | Fact | We do |
+| --- | --- | --- |
+| 2049-2055 | `ac_pred` is read before `cbpy`, `cbp = (cbpc & 3) \| (cbpy << 2)` | aligned in 2aad164 |
+| 1426-1432 | when `ac_pred` is set the scan order is swapped to the horizontal or vertical permutated table, chosen by `dc_pred_dir` | still one zigzag table |
+| 1424-1436 | inside the intra branch `qmul = 1, qadd = 0` - the scaling happens elsewhere | we scale every level by `qmul/qadd` |
+
+`tests/test_m4v.c` pins the parts that are done (79 checks); the frame driver and
+`tools/refdecode_frame.c` show how far the first frame gets.
