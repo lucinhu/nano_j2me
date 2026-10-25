@@ -1073,7 +1073,7 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                        nj_u1 *up, int us, nj_u1 *vp, int vs)
 {
     nj_u4 mbw = 0, mbh = 0, cw = 0, ch = 0;
-    nj_s4 *gl, *gc, *gcr;
+    nj_s2 *gl, *gc, *gcr;
     int    glw, gcw, lscale, cscale, blk, i, x, y;
     nj_u4  mbx, mby;
 
@@ -1098,7 +1098,7 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
     }
     glw = (int)mbw * 2;
     gcw = (int)mbw;
-    gl  = grids;
+    gl  = (nj_s2 *)(void *)grids;
     gc  = gl + (nj_size)glw * (nj_size)(mbh * 2u);
     gcr = gc + (nj_size)gcw * (nj_size)mbh;
     for (i = 0; i < glw * (int)(mbh * 2u); i++) {
@@ -1111,99 +1111,19 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
 
     for (mby = 0; mby < mbh; mby++) {
         for (mbx = 0; mbx < mbw; mbx++) {
-            for (blk = 0; blk < 6; blk++) {
-                int luma = blk < 4;
-                int scale = luma ? lscale : cscale;
-                nj_s4 *g = luma ? gl : (blk == 4 ? gc : gcr);
-                int gw = luma ? glw : gcw;
-                int gx = 0, gy = 0, a, bb, cc, dir = 0, size, delta, lvl, stored;
-                nj_s4 coef[64];
-                int out[64];
-                nj_u1 pix[64];
-
-                if (nj_m4v_block_grid(blk, (int)mbx, (int)mby, &gx, &gy) != 0) {
-                    return -1;
-                }
-                a  = (gx > 0) ? (int)g[(nj_size)gy * gw + gx - 1] : 1024;
-                bb = (gy > 0) ? (int)g[(nj_size)(gy - 1) * gw + gx] : 1024;
-                cc = (gx > 0 && gy > 0) ?
-                     (int)g[(nj_size)(gy - 1) * gw + gx - 1] : 1024;
-
-                size = nj_m4v_decode_dc(b, n, pos, luma);
-                if (size < 0) {
-                    if (getenv("NJ_M4VDBG")) fprintf(stderr, "m4v: dc mb(%u,%u) blk=%d bit=%u\n", mbx, mby, blk, *pos);
-                    return -1;
-                }
-                delta = nj_m4v_dc_delta(b, n, pos, size);
-                if (delta < 0) {
-                    return -1;
-                }
-                lvl = delta + nj_m4v_dc_predict_q(a, bb, cc, scale, &dir);
-                stored = lvl * scale;
-                if (stored < 0) {
-                    stored = 0;
-                } else if (stored > 2047) {
-                    stored = 2047;
-                }
-                g[(nj_size)gy * gw + gx] = stored;
-
-                for (i = 0; i < 64; i++) {
-                    coef[i] = 0;
-                }
-                coef[0] = (nj_s4)nj_m4v_dc_coef(lvl, scale);
-                {   nj_u4 before = *pos; int arc = nj_m4v_ac_block(b, n, pos, coef, 1, vop->qscale);
-                    if (getenv("NJ_M4VDBG")) fprintf(stderr, "m4v: mb(%u,%u) blk=%d dcsz=%d lvl=%d ac_rc=%d bits %u..%u\n", mbx, mby, blk, size, lvl, arc, before, *pos);
-                    if (arc < 0) {
-                        if (getenv("NJ_M4VDBG")) {
-                            nj_u4 q = *pos; int sh; unsigned v = 0;
-                            for (sh = 0; sh < 16 && q + (nj_u4)sh < n * 8u; sh++) {
-                                v = (v << 1) | ((b[(q + (nj_u4)sh) / 8u] >> (7u - ((q + (nj_u4)sh) % 8u))) & 1u);
-                            }
-                            fprintf(stderr, "m4v: fail prefix %04x at bit %u\n", v, *pos);
-                        }
-                        return -1;
-                    }
-                }
-                nj_idct8x8(coef, out);
-                for (i = 0; i < 64; i++) {
-                    int v = out[i] + 128;
-
-                    pix[i] = (nj_u1)(v < 0 ? 0 : (v > 255 ? 255 : v));
-                }
-                if (blk < 4) {
-                    int px = (int)mbx * 16 + (blk & 1) * 8;
-                    int py = (int)mby * 16 + (blk >> 1) * 8;
-
-                    for (y = 0; y < 8; y++) {
-                        for (x = 0; x < 8; x++) {
-                            int dx = px + x, dy = py + y;
-
-                            if (dx < (int)vol->width && dy < (int)vol->height) {
-                                yp[(nj_size)dy * ys + dx] = pix[y * 8 + x];
-                            }
-                        }
-                    }
-                } else {
-                    nj_u1 *p = (blk == 4) ? up : vp;
-                    int ps = (blk == 4) ? us : vs;
-                    int px = (int)mbx * 8, py = (int)mby * 8;
-
-                    for (y = 0; y < 8; y++) {
-                        for (x = 0; x < 8; x++) {
-                            int dx = px + x, dy = py + y;
-
-                            if (dx < (int)cw && dy < (int)ch) {
-                                p[(nj_size)dy * ps + dx] = pix[y * 8 + x];
-                            }
-                        }
-                    }
-                }
+            int   qsc = (int)vop->qscale;
+            nj_s4 ac[6];
+            int   rc = nj_m4v_decode_intra_mb_pix(b, n, pos, (int)mbx, (int)mby,
+                                                  gl, glw, gc, gcw, gcr, gcw,
+                                                  lscale, &qsc, ac,
+                                                  yp, ys, up, us, vp, vs);
+            if (rc != 0) {
+                return rc;
             }
         }
     }
     return 0;
 }
-
 
 int nj_m4v_mb_intra_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *cbp, int *dq)
 {
@@ -1282,6 +1202,7 @@ static int nj_m4v_mb_core(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *cbpc, int *d
 
 int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby,
                                nj_s2 *dc_y, int stride_y, nj_s2 *dc_c, int stride_c,
+                               nj_s2 *dc_c2, int stride_c2,
                                int scale, int *qscale, int *ac_bits,
                                nj_u1 *yp, int ys, nj_u1 *up, int us,
                                nj_u1 *vp, int vs)
@@ -1309,8 +1230,9 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
         *pos += 2u;
     }
     for (blk = 0; blk < 6; blk++) {
-        nj_s2 *grid = (blk < 4) ? dc_y : dc_c;
-        int stride = (blk < 4) ? stride_y : stride_c;
+        nj_s2 *grid = (blk < 4) ? dc_y : (blk == 4 ? dc_c : (dc_c2 != NULL ? dc_c2 : dc_c));
+        int stride = (blk < 4) ? stride_y : (blk == 4 ? stride_c
+                      : (dc_c2 != NULL ? stride_c2 : stride_c));
         nj_s4 coef[64];
         int gx = 0, gy = 0, a, bq, c, dir = 0, pred, rc, level;
         int dscale = nj_m4v_dc_scale(*qscale, blk < 4);
@@ -1411,8 +1333,8 @@ int nj_m4v_decode_intra_mb(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby
                            int scale, int *qscale, int *ac_bits)
 {
     return nj_m4v_decode_intra_mb_pix(b, n, pos, mbx, mby, dc_y, stride_y, dc_c,
-                                      stride_c, scale, qscale, ac_bits, NULL, 0,
-                                      NULL, 0, NULL, 0);
+                                      stride_c, NULL, 0, scale, qscale, ac_bits,
+                                      NULL, 0, NULL, 0, NULL, 0);
 }
 
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
