@@ -1107,3 +1107,12 @@ already on the heap when the song was loaded.
 
 `sizeof(nj_vm)` is unchanged and `tools/check_no_statics.sh` still reports no
 writable statics.
+
+### A streamed codec Player costs two fields (codec round 1)
+
+`Player` gained `pSrc` (the file a streamed codec reads) and `pAvK` (whether a
+`nj_avcodec` provider renders it): a reference and a byte, 16 B with padding per
+Player.  The per-stream holder is the 76 B `media_stream_state` plus one
+frame's scratch that the MIDI path already used, so an MP4/MP3 Player adds no
+new allocation shape.  The decoders themselves allocate through `nj_av_mem`
+(host allocation), never through writable statics.

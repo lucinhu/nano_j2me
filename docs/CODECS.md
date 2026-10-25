@@ -82,6 +82,35 @@ those frames through the same painting path the rest of LCDUI uses.
   refused, decoder pixel spots, provider `decode()` contract, truncated and
   mutated input, and leak checks.  It runs in `ctest`.
 
+## MP3 inside a Player
+
+`Manager.createPlayer()` now hands an MP3 stream to the runtime's decoder
+instead of refusing it.  The shape is the same one MIDI uses, and for the same
+reason: a three minute track at 44.1 kHz stereo is twenty-one megabytes of PCM,
+so the samples cannot live in the Java heap.  The Player keeps
+
+- `pSrc` - the file's own bytes, which the decoder reads from;
+- `pAvK` - the flag that says a `nj_avcodec` audio provider renders this
+  stream;
+- `pData` - a small holder byte array (state + one frame's scratch, 76 B), the
+  same arrangement the MIDI path uses;
+
+and `nj_media_frame()` pulls one frame of PCM per emulated frame by calling the
+provider's `decode()` and handing the samples to the port.  `setLoopCount()`
+works through the provider's `seek()`, and closing the Player calls the
+provider's `close()`, so a decoder that allocated through `nj_av_mem` gives it
+all back.
+
+`tests/test_lib.c` pins the wiring with a 1.4 KB MP3 fixture: it asserts that
+`createPlayer(stream, "audio/mpeg")` succeeds, that `pAvK` is set, that the
+decoder reported a frame count, and that pumping the media loop moves PCM into
+the port (`pPushed > 0`).  Against the previous tree the same test fails at
+`createPlayer` and at both holder assertions.
+
+RAM: two Player fields (a reference and a byte, 16 B with padding) and the
+holder array per streamed Player.  No writable static data; ROM grows by the
+decoder plus the branch (~18 KB of decoder text).
+
 ## The MP3 decoder, and how it was verified
 
 The first version of `src/midp/nj_mp3.c` parsed and streamed correctly - frame

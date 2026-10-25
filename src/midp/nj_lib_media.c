@@ -123,12 +123,19 @@ typedef struct media_stream_state {
     struct nj_midi_stream *stream;  /* first, shared with release/control paths */
     nj_u4 pending;                 /* rendered frames not accepted by the port */
     nj_u4 offset;                  /* accepted prefix in the scratch buffer */
+#if NJ_ENABLE_MP3
+    const struct nj_av_audio_ops *aops; /* codec that renders this stream     */
+    void *adec;                         /* its decoder, from aops->open()     */
+    nj_u4 in_off;                       /* next unread byte of the source     */
+#endif
 } media_stream_state;
 #define NJ_MEDIA_STREAM_BYTES  ((nj_u4)sizeof(media_stream_state) + NJ_MEDIA_STREAM_FRAMES * 2u * 2u)
 #define F_P_RATE     "pRate"       /* I */
 #define F_P_CHAN     "pChans"      /* I */
 #define F_P_FRAMES   "pFrames"     /* I */
 #define F_P_PUSHED   "pPushed"     /* I frames handed to the device */
+#define F_P_SRC      "pSrc"        /* [B the file a streamed codec reads  */
+#define F_P_AVK      "pAvK"        /* Z a nj_avcodec renders this stream  */
 #define F_P_OPEN     "pOpen"       /* Z device open for this player */
 #define F_P_LISTEN   "pListen"     /* Ljava/util/Vector; */
 #define F_P_MASTER   "pTimeBase"   /* Ljavax/microedition/media/TimeBase; master clock or null */
@@ -790,6 +797,16 @@ static void media_stream_release(nj_vm *vm, nj_ref player)
 #else
     (void)b;    /* no renderer: F_P_STREAM is never set, so this is dead */
 #endif
+#if NJ_ENABLE_MP3
+    {
+        media_stream_state st;
+
+        memcpy(&st, b, sizeof(st));
+        if (st.adec != NULL && st.aops != NULL) {
+            st.aops->close(st.adec);
+        }
+    }
+#endif
 }
 
 /* The port's MIDI handle a platform MIDI Player holds, or NULL. */
@@ -864,6 +881,75 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
      * branch is unreachable: F_P_STREAM is only ever set by createPlayer()
      * below, and that path is compiled out with the same macro.
      */
+#if NJ_ENABLE_MP3
+    if (r_z(vm, player, F_P_AVK)) {
+        media_stream_state state;
+        nj_u1 *scratch;
+        nj_u4 want;
+
+        if (total < NJ_MEDIA_STREAM_BYTES || max_frames <= 0) {
+            return 0;
+        }
+        memcpy(&state, b, sizeof(state));
+        if (state.adec == NULL || state.aops == NULL) {
+            return 0;
+        }
+        scratch = (nj_u1 *)(void *)(b + sizeof(state));
+        if (state.pending == 0u) {
+            want = NJ_MEDIA_STREAM_FRAMES;
+            if (want > (nj_u4)max_frames) {
+                want = (nj_u4)max_frames;
+            }
+            while (state.pending == 0u) {
+                nj_ref src = r_r(vm, player, F_P_SRC, "[B");
+                const nj_u1 *sb = barray_bytes(src);
+                nj_u4 slen = barray_len(src);
+                nj_av_step step;
+                int rc;
+
+                if (sb == NULL || state.in_off >= slen) {
+                    break;
+                }
+                memset(&step, 0, sizeof(step));
+                step.in = sb + state.in_off;
+                step.in_len = slen - state.in_off;
+                step.out = scratch;
+                step.out_cap = want * (nj_u4)chan * 2u;
+                rc = state.aops->decode(state.adec, &step);
+                state.in_off += step.in_used;
+                if (step.frames > 0u) {
+                    state.pending = step.frames;
+                    break;
+                }
+                if (rc != NJ_AV_OK || step.in_used == 0u) {
+                    break;
+                }
+            }
+            memcpy((void *)b, &state, sizeof(state));
+            if (state.pending == 0u) {
+                w_i(vm, player, F_P_FRAMES, done);
+                return 0;
+            }
+        }
+        want = state.pending;
+        if (want > (nj_u4)max_frames) {
+            want = (nj_u4)max_frames;
+        }
+        took = vm->port->pcm_write(vm->port->ud,
+            (const nj_s2 *)(const void *)(scratch + state.offset * (nj_u4)chan * 2u),
+            (int)want);
+        if (took < 0 || (nj_u4)took > want) {
+            return 0;
+        }
+        state.pending -= (nj_u4)took;
+        state.offset += (nj_u4)took;
+        memcpy((void *)b, &state, sizeof(state));
+        w_i(vm, player, F_P_PUSHED, done + took);
+        w_j(vm, player, F_P_TIME,
+            (nj_s8)(done + took) * 1000000LL / (nj_s8)r_i(vm, player, F_P_RATE));
+        return took;
+    }
+#endif /* NJ_ENABLE_MP3 */
 #if NJ_ENABLE_MIDI
     if (r_z(vm, player, F_P_STREAM)) {
         media_stream_state state;
@@ -1025,6 +1111,25 @@ static int media_restart(nj_vm *vm, nj_ref p)
         if (state.stream == NULL) return 0;
         (void)nj_midi_stream_seek(state.stream, 0);
         state.pending = state.offset = 0u;
+        memcpy(data->u.bytes, &state, sizeof(state));
+    }
+#endif
+#if NJ_ENABLE_MP3
+    if (r_z(vm, p, F_P_AVK)) {
+        nj_ref data = r_r(vm, p, F_P_DATA, "[B");
+        media_stream_state state;
+
+        if (data == NULL || barray_len(data) < NJ_MEDIA_STREAM_BYTES) {
+            return 0;
+        }
+        memcpy(&state, barray_bytes(data), sizeof(state));
+        if (state.aops == NULL || state.adec == NULL ||
+            state.aops->seek == NULL ||
+            state.aops->seek(state.adec, 0) != NJ_AV_OK) {
+            return 0;
+        }
+        state.pending = state.offset = 0u;
+        state.in_off = 0u;
         memcpy(data->u.bytes, &state, sizeof(state));
     }
 #endif
@@ -1905,6 +2010,66 @@ NJFN(media_createPlayer_stream)
                 }
             }
         }
+#if NJ_ENABLE_MP3
+        /*
+         * MP3 through the nj_avcodec seam: the same shape as MIDI below (a
+         * holder holds the decoder and a scratch buffer, and the pump pulls
+         * one frame's worth of PCM at a time), because PCM cannot live in the
+         * Java heap: three minutes of 44.1 kHz stereo is 21 MB.  The file's
+         * own bytes stay in F_P_SRC for the decoder to read.
+         */
+        if (strcmp(what, "MP3") == 0) {
+            const nj_av_audio_ops *ops = nj_avcodec_find_audio(
+                vm, barray_bytes(data), barray_len(data));
+
+            if (ops != NULL) {
+                nj_av_mem memd;
+                nj_av_info info;
+                const char *err = NULL;
+                nj_av_dec *dec;
+
+                memd.ud = vm;
+                memd.alloc = midi_alloc;
+                memd.free = midi_free;
+                memset(&info, 0, sizeof(info));
+                dec = ops->open(barray_bytes(data), barray_len(data), &memd,
+                                &info, &err);
+                if (dec != NULL && info.rate > 0u && info.channels > 0u) {
+                    nj_ref holder = nj_byte_array_new(vm, NJ_MEDIA_STREAM_BYTES);
+
+                    if (holder != NULL) {
+                        media_stream_state st;
+
+                        memset(&st, 0, sizeof(st));
+                        st.aops = ops;
+                        st.adec = dec;
+                        st.in_off = 0u;
+                        memcpy(holder->u.bytes, &st, sizeof(st));
+                        w_r(vm, p, F_P_DATA, "[B", holder);
+                        w_r(vm, p, F_P_SRC, "[B", data);
+                        w_z(vm, p, F_P_STREAM, 1);
+                        w_z(vm, p, F_P_AVK, 1);
+                        w_i(vm, p, F_P_KIND, 1);
+                        w_i(vm, p, F_P_RATE, (nj_s4)info.rate);
+                        w_i(vm, p, F_P_CHAN, (nj_s4)info.channels);
+                        w_i(vm, p, F_P_FRAMES, (nj_s4)info.frames);
+                        w_j(vm, p, F_P_DURATION,
+                            info.frames > 0u
+                                ? (nj_s8)info.frames * 1000000LL / (nj_s8)info.rate
+                                : (info.duration_ms > 0u
+                                       ? (nj_s8)info.duration_ms * 1000LL : -1));
+                        player_set_type(vm, p, "audio/mpeg");
+                        nj_logf(vm, 3, "media: %s decoded %s, %u frames",
+                                ops->name, what, (unsigned)info.frames);
+                        nj_root_release(vm, mark);
+                        ret->r = p;
+                        return NJ_OK;
+                    }
+                    ops->close(dec);
+                }
+            }
+        }
+#endif /* NJ_ENABLE_MP3 */
 #if NJ_ENABLE_AMR
         /*
          * AMR narrowband: the runtime's own decoder, and the last thing tried
@@ -3450,6 +3615,8 @@ static const nj_builtin_field player_fields[] = {
     FLD(F_P_CHAN,     "I", 0),
     FLD(F_P_FRAMES,   "I", 0),
     FLD(F_P_PUSHED,   "I", 0),
+    FLD(F_P_SRC,      "[B", 0),
+    FLD(F_P_AVK,      "Z", 0),
     FLD(F_P_OPEN,     "Z", 0),
     FLD(F_P_LISTEN,   "Ljava/util/Vector;", 0),
     FLD(F_P_MIDI,     "[B", 0),
