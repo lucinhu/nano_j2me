@@ -7,6 +7,7 @@
  */
 #include "nj2me/nj.h"
 #include "nj2me/nj_m4v.h"
+#include "nj2me/nj_m4v_escape.h"
 #include "nj2me/nj_m4v_tables.h"
 
 #include <stdio.h>
@@ -528,6 +529,15 @@ int main(void)
         bad += nj_m4v_dc_block(grid, 3, 0, 1, 0, 8) != 128 || grid[3] != 1024;
         bad += nj_m4v_dc_block(NULL, 3, 0, 0, 0, 8) != -1;
         ok(bad == 0, "the DC state machine predicts, adds and stores per block");
+    }
+
+    {
+        int bad = 0;
+
+        bad += NJ_M4V_MAX_RUN != 20 || NJ_M4V_MAX_LEVEL != 27;
+        bad += nj_m4v_max_level_0[0] != 27 || nj_m4v_max_level_1[0] != 8;
+        bad += nj_m4v_max_run_0[1] != 14 || nj_m4v_max_run_1[1] != 2;
+        ok(bad == 0, "the escape tables match the reference derivation");
     }
 
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
