@@ -509,6 +509,21 @@ int nj_m4v_decode_intra_pixels(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_u1 *pix,
     return 0;
 }
 
+
+int nj_m4v_frame_macroblocks(nj_u4 width, nj_u4 height, nj_u4 *mbw, nj_u4 *mbh)
+{
+    if (width == 0u || height == 0u) {
+        return -1;
+    }
+    if (mbw != NULL) {
+        *mbw = (width + 15u) / 16u;
+    }
+    if (mbh != NULL) {
+        *mbh = (height + 15u) / 16u;
+    }
+    return 0;
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;

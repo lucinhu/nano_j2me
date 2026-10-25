@@ -90,6 +90,9 @@ void nj_m4v_idct(const nj_s4 *coef, int *out);
 int nj_m4v_decode_intra_pixels(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                                nj_u1 *pix, int luma, int dc_pred);
 
+/* Macroblock raster size of a picture, rounded up to whole 16x16 units. */
+int nj_m4v_frame_macroblocks(nj_u4 width, nj_u4 height, nj_u4 *mbw, nj_u4 *mbh);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 

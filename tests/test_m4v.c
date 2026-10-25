@@ -409,6 +409,19 @@ int main(void)
            "a zero-DC block reconstructs to mid-grey");
     }
 
+    {
+        nj_u4 mbw = 0, mbh = 0;
+
+        ok(nj_m4v_frame_macroblocks(176u, 144u, &mbw, &mbh) == 0 &&
+           mbw == 11u && mbh == 9u, "a 176x144 picture is 11x9 macroblocks");
+        ok(nj_m4v_frame_macroblocks(320u, 240u, &mbw, &mbh) == 0 &&
+           mbw == 20u && mbh == 15u, "a 320x240 picture is 20x15 macroblocks");
+        ok(nj_m4v_frame_macroblocks(17u, 1u, &mbw, &mbh) == 0 &&
+           mbw == 2u && mbh == 1u, "a partial macroblock rounds up");
+        ok(nj_m4v_frame_macroblocks(0u, 144u, &mbw, &mbh) == -1,
+           "a zero width is refused");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }
