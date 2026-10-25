@@ -34,12 +34,13 @@ static int nj_vlc_lookup(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
     int len;
 
     for (len = 1; len <= 9; len++) {
+        nj_u4 bitpos = *pos + (nj_u4)len - 1u;
         int i;
 
-        if (*pos + (nj_u4)len > n) {
+        if (bitpos >= n) {
             return -1;
         }
-        code = (code << 1) | (nj_u4)((b[*pos + (nj_u4)len - 1u] >> 7) & 1u);
+        code = (code << 1) | (nj_u4)((b[bitpos >> 3] >> (7u - (bitpos & 7u))) & 1u);
         for (i = 0; i < count; i++) {
             if (tab[i].len == len && tab[i].code == code) {
                 *sym = tab[i].sym;
