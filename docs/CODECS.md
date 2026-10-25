@@ -667,3 +667,19 @@ libavutil`.  It reports `codec=mpeg4 176x144` and one decoded frame for
 `1942.3gp`.  That makes the remaining MPEG-4 work checkable end to end: once the
 frame driver gets past the alignment failure, its luminance can be compared with
 this decoder's output instead of eyeballing dumps.
+
+#### What the three real movies actually are (round 112)
+
+`tools/refdecode_frame.c` also prints the decoder's `extradata`, its frame count
+and its frame rate, so the runtime's demultiplexer and VOL parser can be checked
+against ffmpeg on the corpus's own files:
+
+| File | ffmpeg says | runtime already parsed |
+| --- | --- | --- |
+| `1942.3gp` (1942空战) | mpeg4 176x144, 32-byte config, 275 frames, 25 fps | 176x144, 275 samples, 25 fps |
+| `doom.3gp` (毁灭战士3) | mpeg4 320x240, 48-byte config, 189 frames, 15 fps | 320x240, 189 samples, 15 fps |
+
+The 1942 config is byte-identical to the 32 bytes `tests/test_m4v.c` embeds, and
+the frames/geometry/fps all agree - the demuxer and the VOL parser are right, the
+remaining work is the frame driver's alignment bug and then pixel comparison
+against this oracle.

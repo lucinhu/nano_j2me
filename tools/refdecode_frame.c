@@ -21,6 +21,18 @@ int main(int c,char**v){
   if(vi<0){puts("no video");return 1;}
   AVCodecParameters*par=fc->streams[vi]->codecpar;
   printf("codec=%s %dx%d\n",avcodec_get_name(par->codec_id),par->width,par->height);
+  if (par->extradata != NULL && par->extradata_size > 0) {
+      int i;
+
+      printf("extradata %d:", (int)par->extradata_size);
+      for (i = 0; i < par->extradata_size && i < 40; i++) {
+          printf(" %02x", par->extradata[i]);
+      }
+      printf("\n");
+  }
+  printf("frames=%u fps=%d/%d\n",
+         (unsigned)fc->streams[vi]->nb_frames,
+         fc->streams[vi]->avg_frame_rate.num, fc->streams[vi]->avg_frame_rate.den);
   const AVCodec*cd=avcodec_find_decoder(par->codec_id);
   AVCodecContext*ctx=avcodec_alloc_context3(cd);
   avcodec_parameters_to_context(ctx,par);
