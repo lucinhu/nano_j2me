@@ -645,3 +645,15 @@ So the remaining candidates are the DC delta's sign-bit order and the
 block-end convention (the reference tracks `i` with a 192 offset so a `last`
 symbol whose run lands at 63 ends the block, rather than treating the run as a
 plain offset).  Both are cheap to test with the trace harness described above.
+
+### The DC delta sign rule was inverted (round 109)
+
+`nj_m4v_dc_delta()` read `size` bits and then subtracted `2^size - 1` when the
+leading bit was **set**, which makes the value negative for a set sign bit.  MPEG-4
+is symbol-first (ffmpeg's `get_xbits`): a set leading bit is positive, a clear one
+means `value - (2^size - 1)`.  With the old code `size == 1` always produced zero.
+
+Fixed, with the tests rewritten to the specification's values (`size 2`:
+`10 -> +2`, `11 -> +3`, `01 -> -2`, `00 -> -3`; `size 1`: `1 -> +1`, `0 -> -1`).
+This is a reconstruction bug only - the bit count is unchanged, so it is **not**
+the cause of the alignment failure at bit 588.  `test_m4v` 63 checks, 0 failures.

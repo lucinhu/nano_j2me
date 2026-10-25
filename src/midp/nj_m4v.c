@@ -428,7 +428,9 @@ int nj_m4v_dc_delta(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int size)
     }
     *pos += (nj_u4)size;
     half = 1 << (size - 1);
-    if ((int)v & half) {
+    /* Symbol-first: a set leading bit means positive, a clear one means the
+     * value is the remaining bits minus (2^size - 1) - MPEG-4's get_xbits(). */
+    if (!((int)v & half)) {
         v -= (nj_u4)((1 << size) - 1);
     }
     return (int)v;

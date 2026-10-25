@@ -229,17 +229,28 @@ int main(void)
         /* size 0 reads nothing and means no change */
         pos = 0;
         okd &= nj_m4v_dc_delta(buf, 2, &pos, 0) == 0 && pos == 0;
-        /* size 2: 00 -> 0, 01 -> +1, 10 -> 2 - 3 = -1, 11 -> 3 - 3 = 0 */
+        /* Symbol first: a set leading bit means positive.  size 2 reads
+         * 10 -> +2, 11 -> +3, 01 -> 1 - 3 = -2, 00 -> 0 - 3 = -3. */
         memset(buf, 0, sizeof(buf));
         buf[0] = 0x80u;                        /* 10xxxxxx */
         pos = 0;
-        okd &= nj_m4v_dc_delta(buf, 2, &pos, 2) == -1 && pos == 2;
+        okd &= nj_m4v_dc_delta(buf, 2, &pos, 2) == 2 && pos == 2;
         buf[0] = 0x40u;                        /* 01xxxxxx */
         pos = 0;
-        okd &= nj_m4v_dc_delta(buf, 2, &pos, 2) == 1 && pos == 2;
+        okd &= nj_m4v_dc_delta(buf, 2, &pos, 2) == -2 && pos == 2;
         buf[0] = 0xc0u;                        /* 11xxxxxx */
         pos = 0;
-        okd &= nj_m4v_dc_delta(buf, 2, &pos, 2) == 0 && pos == 2;
+        okd &= nj_m4v_dc_delta(buf, 2, &pos, 2) == 3 && pos == 2;
+        buf[0] = 0x00u;                        /* 00xxxxxx */
+        pos = 0;
+        okd &= nj_m4v_dc_delta(buf, 2, &pos, 2) == -3 && pos == 2;
+        /* size 1: 1 -> +1, 0 -> -1 */
+        buf[0] = 0x80u;
+        pos = 0;
+        okd &= nj_m4v_dc_delta(buf, 2, &pos, 1) == 1 && pos == 1;
+        buf[0] = 0x00u;
+        pos = 0;
+        okd &= nj_m4v_dc_delta(buf, 2, &pos, 1) == -1 && pos == 1;
         ok(okd != 0, "DC deltas follow the specification's sign rule");
     }
 
