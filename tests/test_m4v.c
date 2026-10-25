@@ -7,6 +7,7 @@
  */
 #include "nj2me/nj.h"
 #include "nj2me/nj_m4v.h"
+#include "nj_vlc_intra.h"
 #include "nj2me/nj_m4v_escape.h"
 #include "nj2me/nj_m4v_tables.h"
 
@@ -699,6 +700,19 @@ int main(void)
            "a left neighbour outside the picture reads 1024");
         ok(nj_m4v_dc_neighbour(plane, 4, 3, 0, 2) == 1024,
            "a top-left neighbour outside the picture reads 1024");
+    }
+
+    {
+        /* A codeword far from the first byte: the bound must be in bits. */
+        static nj_u1 wide[64];
+        nj_u4 pos = 320;
+        int sym = 0, i;
+
+        for (i = 0; i < 64; i++) wide[i] = 0x00;
+        wide[320 >> 3] = (nj_u1)0xC0;    /* bits 320..321 = "11" */
+        ok(nj_vlc_lookup(wide, (nj_u4)sizeof wide, &pos, nj_vlc_cbpy, 16, &sym) == 0,
+           "a codeword at bit 320 is found");
+        ok(sym == 15 && pos == 322, "and it is CBPY 15, consuming two bits");
     }
 
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);

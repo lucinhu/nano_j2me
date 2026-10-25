@@ -37,7 +37,7 @@ static int nj_vlc_lookup(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
         nj_u4 bitpos = *pos + (nj_u4)len - 1u;
         int i;
 
-        if (bitpos >= n) {
+        if (bitpos >= (nj_u4)n * 8u) {   /* n is a byte count */
             return -1;
         }
         code = (code << 1) | (nj_u4)((b[bitpos >> 3] >> (7u - (bitpos & 7u))) & 1u);
