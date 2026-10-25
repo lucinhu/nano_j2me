@@ -143,6 +143,11 @@ int nj_m4v_block_grid(int blk, int mbx, int mby, int *gx, int *gy);
  * the block whose grid corner is (bx, by). */
 void nj_m4v_dc_avail(int bx, int by, int *has_a, int *has_b, int *has_c);
 
+/* Converts a 4:2:0 picture with the BT.601 limited-range matrix into RGB565.
+ * Strides are in bytes; out must hold w * h * 2. */
+void nj_m4v_yuv420_to_rgb565(const nj_u1 *yp, int ys, const nj_u1 *up, int us,
+                             const nj_u1 *vp, int vs, int w, int h, nj_u1 *out);
+
 /* True when the buffer holds a VOS header and a parseable rectangular VOL. */
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n);
 

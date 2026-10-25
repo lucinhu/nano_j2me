@@ -600,6 +600,19 @@ int main(void)
         ok(bad == 0, "the second escape form corrects the run with max_run");
     }
 
+    {
+        static nj_u1 yp[4] = { 16u, 235u, 128u, 128u };
+        static nj_u1 cp[1] = { 128u };
+        nj_u1 out[8];
+        nj_u4 o;
+
+        nj_m4v_yuv420_to_rgb565(yp, 2, cp, 1, cp, 1, 2, 2, out);
+        o = (nj_u4)out[0] | ((nj_u4)out[1] << 8);
+        ok(o == 0x0000u, "Y=16 U=V=128 converts to black");
+        o = (nj_u4)out[2] | ((nj_u4)out[3] << 8);
+        ok(o == 0xFFFFu, "Y=235 U=V=128 converts to white");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

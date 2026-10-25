@@ -941,6 +941,38 @@ int nj_m4v_dc_block(nj_s2 *grid, int wrap, int bx, int by, int delta, int scale)
     return ret;
 }
 
+static int m4v_clip8(int v)
+{
+    return v < 0 ? 0 : (v > 255 ? 255 : v);
+}
+
+void nj_m4v_yuv420_to_rgb565(const nj_u1 *yp, int ys, const nj_u1 *up, int us,
+                             const nj_u1 *vp, int vs, int w, int h, nj_u1 *out)
+{
+    int x, y;
+
+    for (y = 0; y < h; y++) {
+        const nj_u1 *yr = yp + (nj_size)y * (nj_size)ys;
+        const nj_u1 *ur = up + (nj_size)(y >> 1) * (nj_size)us;
+        const nj_u1 *vr = vp + (nj_size)(y >> 1) * (nj_size)vs;
+        nj_u1 *orow = out + (nj_size)y * (nj_size)w * 2u;
+
+        for (x = 0; x < w; x++) {
+            int c = (int)yr[x] - 16;
+            int d = (int)ur[x >> 1] - 128;
+            int e = (int)vr[x >> 1] - 128;
+            int r = m4v_clip8((298 * c + 409 * e + 128) >> 8);
+            int g = m4v_clip8((298 * c - 100 * d - 208 * e + 128) >> 8);
+            int b = m4v_clip8((298 * c + 516 * d + 128) >> 8);
+            nj_u2 px = (nj_u2)(((nj_u2)(r >> 3) << 11) |
+                               ((nj_u2)(g >> 2) << 5) | (nj_u2)(b >> 3));
+
+            orow[2 * x] = (nj_u1)(px & 0xFFu);
+            orow[2 * x + 1] = (nj_u1)(px >> 8);
+        }
+    }
+}
+
 int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
 {
     nj_u4 code = 0, pos = 0, from = 0;
