@@ -67,6 +67,10 @@ int main(void)
     ok(vol.width == 176u && vol.height == 144u, "1942 is 176x144");
     ok(vol.time_res == 1000u, "1942 counts 1000 increments per second");
     ok(vol.shape == 0, "1942 is a rectangular layer");
+    ok(vol.complexity_disabled == 1,
+       "the 1942 VOL disables complexity estimation");
+    ok(vol.cplx_i == 0 && vol.cplx_p == 0 && vol.cplx_b == 0,
+       "so no I/P/B-VOP complexity bits are promised");
 
     ok(parse_cfg(cfg_doom, (nj_u4)sizeof(cfg_doom), &vol) == 1,
        "the doom decoder config parses");
@@ -93,8 +97,19 @@ int main(void)
         };
         nj_m4v_vop vop;
 
-        ok(nj_m4v_parse_vop(vop_i, (nj_u4)sizeof(vop_i), 4u, 1000u, &vop) == 1,
-           "the 1942 VOP header parses");
+        {
+            nj_u4 end = 32u;
+
+            ok(nj_m4v_parse_vop(vop_i, (nj_u4)sizeof(vop_i), 4u, 1000u, &vop) == 1,
+               "the 1942 VOP header parses");
+            ok(nj_m4v_parse_vop_bits(vop_i, (nj_u4)sizeof(vop_i), &end, 1000u, &vop) == 1,
+               "the same header parses bit by bit");
+            ok(end == 56u,
+               "a rectangular I-VOP header ends at bit 56: change_CR_disable and "
+               "constant_alpha belong to non-rectangular shapes only");
+            ok(vop.qscale == 9u, "the first 1942 VOP carries quantiser 9");
+            ok(vop.dc_vlc_thr == 0u, "and an intra_dc_vlc_thr of 0");
+        }
         ok(vop.qscale >= 1 && vop.qscale <= 31 && vop.dc_vlc_thr <= 7,
            "and it carries a usable quantiser and DC threshold");
         ok(vop.type == 0, "the first sample is an I-VOP");

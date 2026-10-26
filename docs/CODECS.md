@@ -763,3 +763,37 @@ Both configurations have complexity estimation disabled, which matters for the
 still-open alignment bug: the VOP header then carries **no** complexity bits, so
 the eight bits that the header is short by come from somewhere else and the
 "complexity estimation" hypothesis for it is now ruled out with evidence.
+
+### The VOP header carries no change_CR/alpha bits when the shape is rectangular (round 122)
+
+`decode_vop_header()` reads `change_CR_disable` and the `constant_alpha` flag
+inside `if (ctx->shape != RECT_SHAPE)`.  Our parser read them for every VOP, two
+bits that a 3GP movie never carries, so everything after them was shifted:
+`intra_dc_vlc_thr` and `qscale` both came out wrong (qscale 6 instead of the 9
+the reference decoder reports, and the first macroblock then started two bits
+late).
+
+With the condition added, the first sample of `1942.3gp` now lines up:
+
+| Field | Before | Now | Reference |
+| --- | --- | --- | --- |
+| VOP header end | bit 58 | **bit 56** | `nj_m4v_parse_vop_bits()` |
+| qscale | 6 | **9** | `ffmpeg -debug qp` prints 9 |
+| `intra_dc_vlc_thr` | shifted | **0** | 3-bit field right after `vop_coded` |
+
+The macroblock data that follows confirms the alignment on the first block
+instead of just not crashing: at bit 56 the stream reads MCBPC `1` (symbol 0),
+`ac_pred` 0 and CBPY `0011` (symbol 0), i.e. `cbp = 0` - exactly what an
+all-black first frame must carry, and matches the oracle's all-zero frame.
+
+Where the frame decoder now stands: `nj_m4v_decode_ivop()` runs from the
+corrected header and fails at bit **576** (was 588) after four macroblocks, so
+the remaining bug is inside the macroblock/block decode, not the header.  The
+next instrument to add is the DC prediction amount for the first block: 11 bits
+are consumed where a differential against the 1024 predictor needs 21, which
+points at the prediction value being lost between the driver's grid and
+`nj_m4v_decode_intra_block()`.
+
+Also pinned in `tests/test_m4v.c` (88 checks): the rectangular header ends at
+bit 56 with qscale 9 / thr 0, and the 1942 VOL reports complexity estimation
+disabled with zero complexity bits promised for I/P/B VOPs.

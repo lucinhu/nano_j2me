@@ -39,6 +39,9 @@ typedef struct nj_m4v_vol {
     int   data_partitioned;
     int   reversible_vlc;
     int   intra_dc_thr;     /* 3-bit index into ff_mpeg4_dc_threshold */
+    int   cplx_i;           /* complexity-estimation bits per I-VOP */
+    int   cplx_p;           /* ... per P-VOP */
+    int   cplx_b;           /* ... per B-VOP */
     int   flags_known;
 } nj_m4v_vol;
 
@@ -68,6 +71,8 @@ int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
 /* Same, but reads and then updates a bit offset: the macroblock layer starts
  * exactly where the header ended, so the byte-granular wrapper above cannot be
  * used for decoding. */
+int nj_m4v_parse_vop_bits_vol(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 time_res,
+                              int cplx_i, nj_m4v_vop *out);
 int nj_m4v_parse_vop_bits(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos,
                           nj_u4 time_res, nj_m4v_vop *out);
 

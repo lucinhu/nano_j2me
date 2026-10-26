@@ -215,6 +215,9 @@ int nj_m4v_parse_vol(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_m4v_vol *out)
     out->data_partitioned = 0;
     out->reversible_vlc = 0;
     out->intra_dc_thr = 0;
+    out->cplx_i = 0;
+    out->cplx_p = 0;
+    out->cplx_b = 0;
     out->flags_known = 0;
     if (shape != 1) {
         int b8 = 0, spr = 0;
@@ -248,7 +251,62 @@ int nj_m4v_parse_vol(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_m4v_vol *out)
         if (!m4v_bit(&s, &b8)) return 0;
         out->complexity_disabled = b8;
         if (b8 == 0) {
-            return out->width > 0u && out->height > 0u;
+            /* Complexity-estimation syntax: the VOP header skips the bits these
+             * flags promise - see decode_vop_header()'s "..._trash_i" skip. */
+            int method = 0, f = 0, z;
+
+            if (!m4v_bits_get(&s, 2, &v)) return 0;
+            method = (int)v;
+            if (method < 2) {
+                if (!m4v_bit(&s, &f)) return 0;
+                if (!f) {
+                    for (z = 0; z < 6; z++) {
+                        if (!m4v_bit(&s, &b8)) return 0;
+                        out->cplx_i += 8 * b8;
+                    }
+                }
+                if (!m4v_bit(&s, &f)) return 0;
+                if (!f) {
+                    if (!m4v_bit(&s, &b8)) return 0;
+                    out->cplx_i += 8 * b8;
+                    if (!m4v_bit(&s, &b8)) return 0;
+                    out->cplx_p += 8 * b8;
+                    if (!m4v_bit(&s, &b8)) return 0;
+                    out->cplx_p += 8 * b8;
+                    if (!m4v_bit(&s, &b8)) return 0;
+                    out->cplx_i += 8 * b8;
+                }
+                if (!m4v_marker(&s)) return 0;
+                if (!m4v_bit(&s, &f)) return 0;
+                if (!f) {
+                    for (z = 0; z < 3; z++) {
+                        if (!m4v_bit(&s, &b8)) return 0;
+                        out->cplx_i += 8 * b8;
+                    }
+                    if (!m4v_bit(&s, &b8)) return 0;
+                    out->cplx_i += 4 * b8;
+                }
+                if (!m4v_bit(&s, &f)) return 0;
+                if (!f) {
+                    if (!m4v_bit(&s, &b8)) return 0;
+                    out->cplx_p += 8 * b8;
+                    if (!m4v_bit(&s, &b8)) return 0;
+                    out->cplx_p += 8 * b8;
+                    if (!m4v_bit(&s, &b8)) return 0;
+                    out->cplx_b += 8 * b8;
+                    for (z = 0; z < 3; z++) {
+                        if (!m4v_bit(&s, &b8)) return 0;
+                        out->cplx_p += 8 * b8;
+                    }
+                }
+                if (!m4v_marker(&s)) return 0;
+                if (method == 1) {
+                    if (!m4v_bit(&s, &b8)) return 0;
+                    out->cplx_i += 8 * b8;
+                    if (!m4v_bit(&s, &b8)) return 0;
+                    out->cplx_p += 8 * b8;
+                }
+            }
         }
         if (!m4v_bit(&s, &b8)) return 0;
         out->resync_disabled = b8;
@@ -265,8 +323,8 @@ int nj_m4v_parse_vol(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_m4v_vol *out)
     return out->width > 0u && out->height > 0u;
 }
 
-int nj_m4v_parse_vop_bits(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 time_res,
-                          nj_m4v_vop *out)
+static int parse_vop_bits_trash(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 time_res,
+                                int cplx_i, int shape, nj_m4v_vop *out)
 {
     m4v_bits s;
     nj_u4 v, tv = 0;
@@ -321,18 +379,28 @@ int nj_m4v_parse_vop_bits(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 time_res
         return 0;
     }
     coded = bit;
+    if (coded && cplx_i > 0) {
+        if (s.pos + (nj_u4)cplx_i > n * 8u) {
+            return 0;
+        }
+        s.pos += (nj_u4)cplx_i;   /* complexity-estimation body of an I-VOP */
+    }
     if (coded) {
-        /* change_CR_disable(1), constant_alpha flag (and value when set), then
-         * the 3-bit intra_dc_vlc_thr - see decode_vop_header() in the
-         * reference decoder. */
-        if (!m4v_bit(&s, &bit)) {
-            return 0;
-        }
-        if (!m4v_bit(&s, &bit)) {
-            return 0;
-        }
-        if (bit != 0 && !m4v_bits_get(&s, 8, &v)) {
-            return 0;
+        /* change_CR_disable and constant_alpha exist only for non-rectangular
+         * shapes - decode_vop_header() reads them inside "if (shape !=
+         * RECT_SHAPE)".  A rectangular VOP goes straight to the 3-bit
+         * intra_dc_vlc_thr, which is why reading them for every stream shifted
+         * every following field (qscale came out 6 instead of 9). */
+        if (shape != 0) {
+            if (!m4v_bit(&s, &bit)) {
+                return 0;
+            }
+            if (!m4v_bit(&s, &bit)) {
+                return 0;
+            }
+            if (bit != 0 && !m4v_bits_get(&s, 8, &v)) {
+                return 0;
+            }
         }
         if (!m4v_bits_get(&s, 3, &v)) {
             return 0;
@@ -356,6 +424,18 @@ int nj_m4v_parse_vop_bits(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 time_res
     out->dc_vlc_thr = thr;
     *bitpos = s.pos;
     return 1;
+}
+
+int nj_m4v_parse_vop_bits(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 time_res,
+                          nj_m4v_vop *out)
+{
+    return parse_vop_bits_trash(b, n, bitpos, time_res, 0, 0, out);
+}
+
+int nj_m4v_parse_vop_bits_vol(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 time_res,
+                              int cplx_i, nj_m4v_vop *out)
+{
+    return parse_vop_bits_trash(b, n, bitpos, time_res, cplx_i, 0, out);
 }
 
 
@@ -414,8 +494,19 @@ int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
                      nj_m4v_vop *out)
 {
     nj_u4 bitpos = pos * 8u;
+    int r = nj_m4v_parse_vop_bits(b, n, &bitpos, time_res, out);
 
-    return nj_m4v_parse_vop_bits(b, n, &bitpos, time_res, out);
+    if (getenv("NJ_M4VHDR") != NULL) {
+        nj_u4 at = bitpos, z;
+        unsigned w = 0;
+        for (z = 0; z < 32u; z++) {
+            nj_u4 q = at + z;
+            unsigned bit = (q < n * 8u) ? (unsigned)((b[q >> 3] >> (7u - (q & 7u))) & 1u) : 0u;
+            w = (w << 1) | bit;
+        }
+        fprintf(stderr, "VOPHDR end=%u win=%08x\n", (unsigned)at, w);
+    }
+    return r;
 }
 
 
@@ -1297,6 +1388,16 @@ static int m4v_read_cbp(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int cbpc, int dq, i
     if (bp < n * 8u) {
         *acp = (int)((b[bp >> 3] >> (7u - (bp & 7u))) & 1u);
         *pos = bp + 1u;
+    }
+    if (getenv("NJ_M4VCBPY")) {
+        nj_u4 at = *pos; int z; unsigned win = 0;
+        for (z = 0; z < 12; z++) {
+            nj_u4 q = at + (nj_u4)z;
+            unsigned bit = 0;
+            if (q < n * 8u) bit = (b[q >> 3] >> (7u - (q & 7u))) & 1u;
+            win = (win << 1) | bit;
+        }
+        fprintf(stderr, "CBPY win=%03x pos=%u\n", win, (unsigned)at);
     }
     if (nj_vlc_lookup(b, n, pos, nj_vlc_cbpy, 16, &cbpy) != 0) {
         return -1;
