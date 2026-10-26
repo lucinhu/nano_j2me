@@ -1289,7 +1289,6 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
         for (mbx = 0; mbx < mbw; mbx++) {
             nj_s4 ac[6];
             int   rc;
-            if (getenv("NJ_M4VLOOP")) fprintf(stderr, "LOOP mbx=%u mby=%u mbw=%u mbh=%u\n", (unsigned)mbx, (unsigned)mby, (unsigned)mbw, (unsigned)mbh);
             rc = nj_m4v_decode_intra_mb_pix(b, n, pos, (int)mbx, (int)mby,
                                                   gl, glw, gc, gcw, gcr, gcw,
                                                   lscale, &qsc, ac,
