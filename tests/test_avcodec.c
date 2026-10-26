@@ -16,6 +16,7 @@
 #include "nj2me/nj_avcodec.h"
 #include "nj_internal.h"
 #include "nj_midp.h"
+#include "m4v_clip.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -276,38 +277,48 @@ static const nj_av_audio_ops fake_mp3 = {
     fake_seek, fake_close, 2u
 };
 
-static nj_ref make_player(nj_vm *vm)
+/* Build a Player for `data' with the given content type.  On failure the
+ * caller may inspect the pending exception (this helper does not clear it). */
+static nj_ref make_player_bytes(nj_vm *vm, const nj_u1 *data, nj_u4 len,
+                                const char *type)
 {
-    nj_ref bar, in, player;
+    nj_ref bar, in;
     nj_value a[2], ret;
 
-    bar = nj_byte_array_new(vm, (nj_u4)sizeof(mp3));
+    bar = nj_byte_array_new(vm, len);
     if (bar == NULL) {
-        nj_clear_exception(vm);
         return NULL;
     }
-    memcpy(bar->u.bytes, mp3, sizeof(mp3));
+    memcpy(bar->u.bytes, data, len);
     in = nj_object_new(vm, "java/io/ByteArrayInputStream");
     if (in == NULL) {
-        nj_clear_exception(vm);
         return NULL;
     }
     a[0].r = bar;
     if (nj_call_special(vm, in, "java/io/ByteArrayInputStream", "<init>",
                         "([B)V", a, NULL) != NJ_OK) {
-        nj_clear_exception(vm);
         return NULL;
     }
     a[0].r = in;
-    a[1].r = nj_string_new(vm, "audio/mpeg");
+    a[1].r = nj_string_new(vm, type);
     ret.bits = 0u;
     if (nj_call_static(vm, MEDIA_MGR, "createPlayer",
                        "(Ljava/io/InputStream;Ljava/lang/String;)L"
                        "javax/microedition/media/Player;", a, &ret) != NJ_OK) {
-        nj_clear_exception(vm);
         return NULL;
     }
     return ret.r;
+}
+
+static nj_ref make_player(nj_vm *vm)
+{
+    nj_ref player = make_player_bytes(vm, mp3, (nj_u4)sizeof(mp3),
+                                      "audio/mpeg");
+
+    if (player == NULL) {
+        nj_clear_exception(vm);
+    }
+    return player;
 }
 
 /* Compare the Player's complete output with direct decoding. A decoder may
@@ -425,6 +436,7 @@ static void test_streamed_pcm(int bounded, int loops, int seek_pending)
     ok(nj_call(vm, player, "javax/microedition/media/Player", "close",
                "()V", NULL, NULL) == NJ_OK, "close streamed MP3");
 cleanup:
+
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
 }
@@ -505,6 +517,56 @@ int main(void)
             ok(captured == 0x1234,
                "the port's samples reach the device");
             (void)args;
+        }
+    }
+
+
+    /* MPEG-4 Part 2 goes through the provider seam now.  The table was
+     * emptied above while testing a port's override, so reinstating the
+     * compiled-in defaults first keeps this a test of the real registry. */
+    {
+        nj_ref player;
+        nj_field *f;
+        nj_s4 pushed = -1;
+
+        nj_avcodec_reset(vm);
+        ok(nj_avcodec_sw_m4v() != NULL,
+           "the software MPEG-4 Part 2 provider exists");
+        ok(nj_avcodec_find_video(vm, m4v_clip_3gp,
+                                 (nj_u4)sizeof(m4v_clip_3gp))
+               == nj_avcodec_sw_m4v(),
+           "an mp4v container finds the MPEG-4 Part 2 provider");
+        player = make_player_bytes(vm, m4v_clip_3gp,
+                                   (nj_u4)sizeof(m4v_clip_3gp), "video/3gpp");
+        ok(player != NULL && !nj_has_exception(vm),
+           "createPlayer() builds an MPEG-4 Part 2 Player");
+        if (player != NULL) {
+            (void)nj_call(vm, player, "javax/microedition/media/Player",
+                          "realize", "()V", NULL, NULL);
+            (void)nj_call(vm, player, "javax/microedition/media/Player",
+                          "prefetch", "()V", NULL, NULL);
+            (void)nj_call(vm, player, "javax/microedition/media/Player",
+                          "start", "()V", NULL, NULL);
+            nj_media_frame(vm);
+            f = nj_field_lookup(vm, "javax/microedition/media/Player",
+                                "pPushed", "I", 0);
+            pushed = f != NULL ? nj_field_read_int(vm, player, f) : -1;
+            ok(pushed == 1,
+               "the MPEG-4 Part 2 Player pumps one sample per frame");
+        }
+        /* The same container with an avc1 sample entry is a codec no
+         * provider claims: createPlayer() must still raise MediaException
+         * rather than hand back a Player that cannot decode. */
+        {
+            nj_ref bad = make_player_bytes(vm, m4v_clip_avc1,
+                                           (nj_u4)sizeof(m4v_clip_avc1),
+                                           "video/3gpp");
+            const char *descr = nj_exception_describe(vm);
+
+            ok(bad == NULL && nj_has_exception(vm) != 0 && descr != NULL &&
+               strstr(descr, "MediaException") != NULL,
+               "an unknown video codec still answers MediaException");
+            nj_clear_exception(vm);
         }
     }
 

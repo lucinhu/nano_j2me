@@ -48,6 +48,7 @@
 #include "nj_internal.h"
 #include "nj_midp.h"
 #include "h263_clip.h"
+#include "m4v_clip.h"
 #include "nj_midi.h" /* nj_class_load: the fixtures below are raw classes */
 #include "nj_midp.h"     /* nj_midp_image_pixels: assert on an Image's store */
 
@@ -2895,6 +2896,86 @@ static void test_video_player_pumps_a_frame(nj_vm *vm)
     }
 }
 
+/* The same Player path, for MPEG-4 Part 2: createPlayer must build a video
+ * Player from an mp4v 3GP through the provider seam, and the pump must hand
+ * the pinned reference RGB565 frames to the screen buffer.  The decoded
+ * hashes come from FFmpeg's own output (tests/m4v_clip.h), so this checks
+ * pixels, not just plumbing. */
+static nj_u4 test_lib_fnv(const nj_u1 *p, nj_u4 n)
+{
+    nj_u4 h = 2166136261u;
+
+    while (n-- > 0u) {
+        h ^= *p++;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static void test_video_player_mp4v(nj_vm *vm)
+{
+    nj_ref bar, in, player, vbuf;
+    nj_value a[2], ret;
+    nj_field *f;
+    nj_s4 w = 0, h = 0, frames = 0;
+    int frame;
+    int bad = 0;
+
+    bar = nj_byte_array_new(vm, (nj_u4)sizeof(m4v_clip_3gp));
+    OK_MSG(bar != NULL, "an array for the MPEG-4 Part 2 clip");
+    if (bar == NULL) {
+        return;
+    }
+    memcpy(bar->u.bytes, m4v_clip_3gp, sizeof(m4v_clip_3gp));
+    in = nj_object_new(vm, BAIS);
+    a[0].r = bar;
+    OK_MSG(in != NULL && nj_call_special(vm, in, BAIS, "<init>", "([B)V",
+                                         a, NULL) == NJ_OK,
+           "a stream over the MPEG-4 Part 2 clip");
+    a[0].r = in;
+    a[1].r = nj_string_new(vm, "video/3gpp");
+    ret.bits = 0u;
+    OK_MSG(nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                          "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                          "javax/microedition/media/Player;", a, &ret) == NJ_OK,
+           "Manager.createPlayer(mp4v 3GP)");
+    player = ret.r;
+    OK_MSG(player != NULL, "a Player for the MPEG-4 Part 2 clip");
+    if (player == NULL) {
+        return;
+    }
+    f = nj_field_lookup(vm, PLAYER, "pVw", "I", 0);
+    w = (f != NULL) ? nj_field_read_int(vm, player, f) : 0;
+    f = nj_field_lookup(vm, PLAYER, "pVh", "I", 0);
+    h = (f != NULL) ? nj_field_read_int(vm, player, f) : 0;
+    f = nj_field_lookup(vm, PLAYER, "pFrames", "I", 0);
+    frames = (f != NULL) ? nj_field_read_int(vm, player, f) : 0;
+    OK_MSG(w == M4V_CLIP_WIDTH && h == M4V_CLIP_HEIGHT,
+           "the Player knows the mp4v clip size (%dx%d)", (int)w, (int)h);
+    OK_MSG(frames == M4V_CLIP_FRAMES,
+           "the Player counts the mp4v samples (got %d)", (int)frames);
+    (void)nj_call(vm, player, PLAYER, "realize", "()V", NULL, NULL);
+    (void)nj_call(vm, player, PLAYER, "prefetch", "()V", NULL, NULL);
+    (void)nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL);
+    f = nj_field_lookup(vm, PLAYER, "pVbuf", "[B", 0);
+    vbuf = (f != NULL) ? nj_field_read_ref(vm, player, f) : NULL;
+    OK_MSG(vbuf != NULL && vbuf->length ==
+           (nj_u4)(M4V_CLIP_WIDTH * M4V_CLIP_HEIGHT * 2),
+           "the frame buffer holds one RGB565 frame");
+    for (frame = 0; frame < M4V_CLIP_FRAMES; frame++) {
+        nj_media_frame(vm);
+        if (vbuf != NULL &&
+            test_lib_fnv(vbuf->u.bytes, vbuf->length) !=
+                m4v_clip_rgb_hash[frame]) {
+            bad++;
+        }
+    }
+    OK_MSG(bad == 0, "every pumped mp4v frame matches the reference pixels");
+    f = nj_field_lookup(vm, PLAYER, "pPushed", "I", 0);
+    OK_MSG(f != NULL && nj_field_read_int(vm, player, f) == M4V_CLIP_FRAMES,
+           "the pump decoded every sample");
+}
+
 static void test_eight_bit_wav_is_widened(nj_vm *vm)
 {
     static const nj_u1 expect[8] = {
@@ -4397,6 +4478,7 @@ int main(void)
     test_player_survives_collection(vm);
     test_eight_bit_wav_is_widened(vm);
     test_video_player_pumps_a_frame(vm);
+    test_video_player_mp4v(vm);
     test_amr_player_uses_the_installed_decoder(vm);
     test_mp3_player_streams_pcm(vm);
     test_large_wav();

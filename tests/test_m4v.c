@@ -7,11 +7,14 @@
  */
 #include "nj2me/nj.h"
 #include "nj2me/nj_m4v.h"
+#include "nj2me/nj_avcodec.h"
+#include "m4v_clip.h"
 #include "nj_vlc_intra.h"
 #include "nj2me/nj_m4v_escape.h"
 #include "nj2me/nj_m4v_tables.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int checks;
@@ -333,6 +336,49 @@ static int parse_cfg(const nj_u1 *b, nj_u4 n, nj_m4v_vol *vol)
         from = pos;
     }
     return 0;
+}
+
+
+/* Small accounting allocator for the provider test: open/close must balance.
+ * The payload is 16-byte aligned like the VM's own host allocations (the
+ * provider state and nj_mp4 hold 8-byte fields), so UBSan checks it honestly. */
+typedef struct m4v_test_hdr {
+    nj_u4 n;
+} m4v_test_hdr;
+
+#define M4V_TEST_ALIGN 16u
+
+static unsigned long m4v_test_live;
+
+static void *m4v_test_alloc(void *ud, nj_u4 n)
+{
+    m4v_test_hdr *h;
+    size_t         pad = (sizeof(m4v_test_hdr) + M4V_TEST_ALIGN - 1u) &
+                         ~(size_t)(M4V_TEST_ALIGN - 1u);
+
+    (void)ud;
+    h = (m4v_test_hdr *)malloc(pad + (size_t)n);
+    if (h == NULL) {
+        return NULL;
+    }
+    h->n = n;
+    m4v_test_live += n;
+    return (void *)((nj_u1 *)h + pad);
+}
+
+static void m4v_test_free(void *ud, void *p)
+{
+    m4v_test_hdr *h;
+    size_t         pad = (sizeof(m4v_test_hdr) + M4V_TEST_ALIGN - 1u) &
+                         ~(size_t)(M4V_TEST_ALIGN - 1u);
+
+    (void)ud;
+    if (p == NULL) {
+        return;
+    }
+    h = (m4v_test_hdr *)((nj_u1 *)p - pad);
+    m4v_test_live -= h->n;
+    free(h);
 }
 
 int main(void)
@@ -1417,6 +1463,78 @@ int main(void)
         ok(bad_hash == 0,
            "its second and fourth frames reproduce the reference planes exactly");
         ok(bad_row == 0, "reference pixels at named coordinates match too");
+    }
+
+
+    {
+        /* The nj_avcodec provider: open the real mp4v fixture, decode every
+         * frame and compare the RGB565 output with the pinned reference
+         * hashes.  This is the seam createPlayer() and the Player pump use. */
+        static unsigned long live;
+        nj_av_mem mem;
+        nj_av_info info;
+        const char *err = NULL;
+        const nj_av_video_ops *ops = nj_avcodec_sw_m4v();
+        nj_av_dec *dec;
+        static nj_u1 out[M4V_CLIP_WIDTH * M4V_CLIP_HEIGHT * 2];
+        static const nj_u1 junk[10] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+        int f, bad = 0, end = 0;
+
+        mem.ud = NULL;
+        mem.alloc = m4v_test_alloc;
+        mem.free = m4v_test_free;
+        live = 0;
+
+        ok(ops != NULL, "the software MPEG-4 Part 2 provider exists");
+        if (ops == NULL) {
+            goto provider_done;
+        }
+        ok(ops->accepts(m4v_clip_3gp, (nj_u4)sizeof(m4v_clip_3gp)) == 1 &&
+           ops->accepts(junk, (nj_u4)sizeof(junk)) == 0 &&
+           ops->accepts(m4v_clip_avc1, (nj_u4)sizeof(m4v_clip_avc1)) == 0,
+           "the provider accepts mp4v containers and claims nothing else");
+        memset(&info, 0, sizeof(info));
+        dec = ops->open(m4v_clip_3gp, (nj_u4)sizeof(m4v_clip_3gp), &mem, &info,
+                        &err);
+        ok(dec != NULL && info.format == NJ_AV_VIDEO_MPEG4 &&
+           info.width == M4V_CLIP_WIDTH && info.height == M4V_CLIP_HEIGHT &&
+           info.frames == M4V_CLIP_FRAMES && info.pixfmt == NJ_AV_PIX_RGB565 &&
+           info.fps == 10u,
+           "the provider opens the fixture and reports its geometry");
+        if (dec == NULL) {
+            goto provider_done;
+        }
+        for (f = 0; f < M4V_CLIP_FRAMES; f++) {
+            nj_av_step step;
+
+            memset(&step, 0, sizeof(step));
+            step.out = out;
+            step.out_cap = (nj_u4)sizeof(out);
+            if (ops->decode(dec, &step) != NJ_AV_OK || step.frames != 1u ||
+                step.out_used != (nj_u4)sizeof(out) ||
+                fnv1a(out, (nj_u4)sizeof(out)) != m4v_clip_rgb_hash[f]) {
+                bad++;
+            }
+        }
+        {
+            nj_av_step step;
+
+            memset(&step, 0, sizeof(step));
+            step.out = out;
+            step.out_cap = (nj_u4)sizeof(out);
+            end = ops->decode(dec, &step) == NJ_AV_ERR_END;
+        }
+        ops->close(dec);
+        ok(bad == 0, "the provider decodes every frame to the reference pixels");
+        ok(end != 0, "the provider reports the end of the sample table");
+provider_done:
+        ok(live == 0, "the provider releases everything it allocated");
+        err = NULL;
+        dec = (ops != NULL)
+            ? ops->open(m4v_clip_avc1, (nj_u4)sizeof(m4v_clip_avc1), &mem,
+                        &info, &err)
+            : NULL;
+        ok(dec == NULL && err != NULL, "an avc1 container is refused by name");
     }
 
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);

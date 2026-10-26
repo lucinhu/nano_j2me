@@ -213,6 +213,7 @@ const nj_av_video_ops *nj_avcodec_find_video(struct nj_vm *vm,
 const nj_av_audio_ops *nj_avcodec_sw_mp3(void);
 const nj_av_audio_ops *nj_avcodec_sw_amr(void);
 const nj_av_video_ops *nj_avcodec_sw_h263(void);
+const nj_av_video_ops *nj_avcodec_sw_m4v(void);
 
 /* Drop every provider and reinstall the compiled-in software defaults. */
 void nj_avcodec_reset(struct nj_vm *vm);

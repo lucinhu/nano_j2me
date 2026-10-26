@@ -726,12 +726,19 @@ int nj_mp4_open(nj_mp4 *m, const void *data, nj_u4 size)
         if (type == NJ_BOX_FTYP) {
             have_ftyp = 1;
         } else if (type == NJ_BOX_MDAT) {
-            if (m->mdat_count >= NJ_MP4_MDAT_MAX || total <= hdr) {
+            /* A zero-payload 'mdat' is a legal placeholder: some muxers write
+             * one before the box that carries the samples (Tom Clancy's
+             * H.A.W.X. ships such a movie.3gp).  Skipping it is not the same
+             * as accepting a file with no samples at all: mdat_count must
+             * still be nonzero once the walk is over. */
+            if (m->mdat_count >= NJ_MP4_MDAT_MAX) {
                 return NJ_MP4_ERR_FEATURE;
             }
-            m->mdat_at[m->mdat_count] = off + hdr;
-            m->mdat_end[m->mdat_count] = off + total;
-            m->mdat_count++;
+            if (total > hdr) {
+                m->mdat_at[m->mdat_count] = off + hdr;
+                m->mdat_end[m->mdat_count] = off + total;
+                m->mdat_count++;
+            }
         } else if (type == NJ_BOX_MOOV) {
             if (moov_off != 0u) {
                 return NJ_MP4_ERR_FORMAT;

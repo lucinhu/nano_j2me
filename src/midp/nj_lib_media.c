@@ -1558,12 +1558,13 @@ static const char *media_refusal(const char *what)
         /*
          * Reaching this line means neither track could be built, and the
          * message should say which tracks this runtime does play instead of
-         * implying video is missing as a whole: H.263 video and AMR audio are
-         * wired into Player and the pump, while AAC audio and MPEG-4 Part 2
-         * video have no decoder at all.
+         * implying video is missing as a whole: H.263 and MPEG-4 Part 2 video
+         * and AMR audio are wired into Player and the pump, while AAC audio
+         * has no decoder at all and the other video codecs are not claimed by
+         * any installed provider.
          */
         return "no playable track in this MP4/3GP: audio must be AMR and video "
-               "must be H.263 (AAC and MPEG-4 Part 2 have no decoder)"
+               "must be H.263 or MPEG-4 Part 2 (AAC has no decoder)"
                NJ_MEXC_DATA;
     }
     if (strcmp(what, "an unrecognised container") == 0) {
@@ -2189,20 +2190,11 @@ NJFN(media_createPlayer_stream)
             if (nj_mp4_open(&m, barray_bytes(data), barray_len(data)) == NJ_MP4_OK &&
                 m.width > 0u && m.height > 0u && m.sample_count > 0u) {
                 /*
-                 * Only H.263 sample entries have a decoder here.  Refusing the
-                 * others by name beats letting the H.263 provider take the
-                 * stream and produce noise: every movie in the corpus is
-                 * MPEG-4 Part 2 ('mp4v'), whose macroblock layer is not
-                 * implemented yet.
+                 * The providers decide by looking at the container: H.263
+                 * claims s263/H263 sample entries, MPEG-4 Part 2 claims mp4v
+                 * after parsing its VOL.  A codec neither provider accepts
+                 * falls through to the refusal at the end of createPlayer().
                  */
-                if (m.codec != NJ_MP4_CODEC_S263 && m.codec != NJ_MP4_CODEC_H263 &&
-                    m.codec != NJ_MP4_CODEC_H263LC) {
-                    nj_throw(vm, NJ_C_MEXC,
-                             m.codec == NJ_MP4_CODEC_MP4V
-                                 ? "MPEG-4 Part 2 video has no decoder in this runtime"
-                                 : "this video codec has no decoder in this runtime");
-                    return NJ_ERR;
-                }
                 const nj_av_video_ops *vops = nj_avcodec_find_video(
                     vm, barray_bytes(data), barray_len(data));
 

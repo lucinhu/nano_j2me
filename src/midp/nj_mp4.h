@@ -134,7 +134,9 @@ typedef struct nj_mp4 {
  * an MPEG-4 Part 2 one, even when both are present: the H.263 decoder is the
  * one this runtime ships.  A file with no video track, a video track whose
  * descriptor is not one of the fourccs above, or inconsistent sample tables is
- * refused.  On failure the iterator contents are unspecified.
+ * refused.  Zero-payload 'mdat' placeholder boxes are skipped; a file whose
+ * 'mdat' boxes are all empty has nowhere for a sample to live and is refused.
+ * On failure the iterator contents are unspecified.
  */
 int nj_mp4_open(nj_mp4 *mp4, const void *data, nj_u4 size);
 

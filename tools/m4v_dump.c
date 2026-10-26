@@ -54,6 +54,7 @@ int main(int argc, char **argv)
     nj_mp4_sample  s;
     nj_m4v_vol     vol;
     nj_u4          mbw = 0, mbh = 0, cw = 0, ch = 0, pos = 0, i;
+    nj_u4          ys = 0, cs = 0, crows = 0;   /* coded plane geometry */
     nj_s4         *grids;
     nj_u1         *yp, *up, *vp, *py, *pu, *pv;
     int            want = argc > 3 ? atoi(argv[3]) : 5;
@@ -119,6 +120,12 @@ int main(int argc, char **argv)
         free(b);
         return 5;
     }
+    /* The coded picture is a whole number of macroblocks; the VOL may crop it
+     * (240x180, the HAWX movie).  Decode into coded-size planes and dump the
+     * visible rectangle, exactly like the reference decoder's output. */
+    ys = mbw * 16u;
+    cs = mbw * 8u;
+    crows = mbh * 8u;
     printf("codec=mp4v %ux%u samples=%u frames=%u fps=%u time_res=%u\n",
            (unsigned)vol.width, (unsigned)vol.height, (unsigned)m.sample_count,
            (unsigned)m.sample_count, (unsigned)m.fps, (unsigned)vol.time_res);
@@ -126,12 +133,12 @@ int main(int argc, char **argv)
         (size_t)((nj_size)mbw * 2u * (nj_size)(mbh * 2u) +
                  (nj_size)mbw * (nj_size)mbh * 2u),
         sizeof(nj_s4));
-    yp = (nj_u1 *)malloc((size_t)vol.width * vol.height);
-    up = (nj_u1 *)malloc((size_t)cw * ch);
-    vp = (nj_u1 *)malloc((size_t)cw * ch);
-    py = (nj_u1 *)malloc((size_t)vol.width * vol.height);
-    pu = (nj_u1 *)malloc((size_t)cw * ch);
-    pv = (nj_u1 *)malloc((size_t)cw * ch);
+    yp = (nj_u1 *)malloc((size_t)ys * mbh * 16u);
+    up = (nj_u1 *)malloc((size_t)cs * crows);
+    vp = (nj_u1 *)malloc((size_t)cs * crows);
+    py = (nj_u1 *)malloc((size_t)ys * mbh * 16u);
+    pu = (nj_u1 *)malloc((size_t)cs * crows);
+    pv = (nj_u1 *)malloc((size_t)cs * crows);
     if (grids == NULL || yp == NULL || up == NULL || vp == NULL ||
         py == NULL || pu == NULL || pv == NULL) {
         rc = 6;
@@ -156,13 +163,13 @@ int main(int argc, char **argv)
         }
         if (vop.type == 0) {
             rc = nj_m4v_decode_ivop(b + s.offset, s.size, &bitpos, &vol, &vop,
-                                    grids, yp, (int)vol.width, up, (int)cw,
-                                    vp, (int)cw);
+                                    grids, yp, (int)ys, up, (int)cs,
+                                    vp, (int)cs);
         } else if (vop.type == 1) {
             rc = nj_m4v_decode_pvop(b + s.offset, s.size, &bitpos, &vol, &vop,
-                                    grids, yp, (int)vol.width, up, (int)cw,
-                                    vp, (int)cw, py, (int)vol.width, pu, (int)cw,
-                                    pv, (int)cw);
+                                    grids, yp, (int)ys, up, (int)cs,
+                                    vp, (int)cs, py, (int)ys, pu, (int)cs,
+                                    pv, (int)cs);
         } else {
             fprintf(stderr, "frame %d: VOP type %d is not Simple Profile\n",
                     frame, vop.type);
@@ -174,12 +181,12 @@ int main(int argc, char **argv)
         if (rc != 0) {
             break;
         }
-        dump_plane(argv[2], frame, "y", yp, vol.width, vol.height, vol.width);
-        dump_plane(argv[2], frame, "u", up, cw, ch, cw);
-        dump_plane(argv[2], frame, "v", vp, cw, ch, cw);
-        memcpy(py, yp, (size_t)vol.width * vol.height);
-        memcpy(pu, up, (size_t)cw * ch);
-        memcpy(pv, vp, (size_t)cw * ch);
+        dump_plane(argv[2], frame, "y", yp, vol.width, vol.height, ys);
+        dump_plane(argv[2], frame, "u", up, cw, ch, cs);
+        dump_plane(argv[2], frame, "v", vp, cw, ch, cs);
+        memcpy(py, yp, (size_t)ys * mbh * 16u);
+        memcpy(pu, up, (size_t)cs * crows);
+        memcpy(pv, vp, (size_t)cs * crows);
         frame++;
     }
 done:

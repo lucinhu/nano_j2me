@@ -21,6 +21,7 @@
 /* Defined by the providers, so a trimmed build still links. */
 extern const nj_av_audio_ops nj_av_audio_mp3;
 extern const nj_av_video_ops nj_av_video_h263;
+extern const nj_av_video_ops nj_av_video_mpeg4;
 #if NJ_ENABLE_AMR
 /* nj_amr.c decodes a whole AMR file into PCM the caller owns. */
 extern nj_u4 nj_amr_frames(const void *data, nj_u4 size);
@@ -154,6 +155,15 @@ const nj_av_video_ops *nj_avcodec_sw_h263(void)
 #endif
 }
 
+const nj_av_video_ops *nj_avcodec_sw_m4v(void)
+{
+#if NJ_ENABLE_VIDEO
+    return &nj_av_video_mpeg4;
+#else
+    return NULL;
+#endif
+}
+
 void nj_avcodec_reset(struct nj_vm *vm)
 {
     const nj_av_audio_ops *a;
@@ -169,6 +179,13 @@ void nj_avcodec_reset(struct nj_vm *vm)
         (void)nj_avcodec_install_audio(vm, a);
     }
     v = nj_avcodec_sw_h263();
+    if (v != NULL) {
+        (void)nj_avcodec_install_video(vm, v);
+    }
+    /* Installed after H.263, so the registry offers MPEG-4 Part 2 first: its
+     * accepts() identifies mp4v precisely, and an s263 file falls through to
+     * the H.263 provider without changing that path at all. */
+    v = nj_avcodec_sw_m4v();
     if (v != NULL) {
         (void)nj_avcodec_install_video(vm, v);
     }

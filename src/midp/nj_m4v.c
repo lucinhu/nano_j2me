@@ -11,6 +11,8 @@
  * self-consistent, so only a real decoder configuration can tell.
  */
 #include "nj2me/nj_m4v.h"
+#include "nj2me/nj_avcodec.h"
+#include "nj_mp4.h"
 #include "nj_vlc_intra.h"
 #include "nj_vlc_inter.h"
 
@@ -2824,3 +2826,371 @@ int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
     (void)seen_vos;
     return 0;
 }
+
+
+/* ------------------------------------------------------------------ */
+/* The nj_avcodec video provider                                       */
+/* ------------------------------------------------------------------ */
+/*
+ * The runtime's video seam is provider-shaped (include/nj2me/nj_avcodec.h):
+ * accepts() answers "this is mine", open() parses the container and the
+ * decoder configuration, decode() consumes one container sample and writes one
+ * RGB565 frame.  The MPEG-4 Part 2 provider is registered next to H.263 by
+ * nj_avcodec_reset(), and because later installs are tried first it is offered
+ * every ISO base media file before the H.263 provider: its accepts() therefore
+ * has to identify mp4v precisely instead of claiming every ftyp container.
+ *
+ * The coded picture is always a whole number of 16x16 macroblocks, while the
+ * VOL's width and height may not be (Tom Clancy's H.A.W.X. is 240x180).  The
+ * reference decoder reconstructs the padding rows and crops them away when it
+ * outputs the frame, so the provider keeps the planes at their coded size and
+ * converts only the visible rectangle to RGB565.
+ */
+#if NJ_ENABLE_VIDEO
+
+#define M4V_ERR_OUTPUT (-100)   /* provider-specific: frame buffer too small */
+
+typedef struct m4v_provider {
+    const nj_av_mem *mem;
+    const nj_u1     *data;      /* the caller's whole container, kept alive */
+    nj_u4            len;
+    nj_mp4           mp4;
+    nj_m4v_vol       vol;
+
+    nj_u4 width;                /* visible size, from the VOL                */
+    nj_u4 height;
+    nj_u4 y_stride;             /* coded width: mbw * 16                     */
+    nj_u4 c_stride;             /* coded chroma width: mbw * 8               */
+    nj_u4 c_rows;               /* coded chroma height: mbh * 8              */
+    nj_u4 y_bytes;              /* coded luma plane bytes                    */
+    nj_u4 c_bytes;              /* coded chroma plane bytes                  */
+
+    nj_s4 *grids;               /* DC predictor state, carried across frames */
+    nj_u1 *front_y, *front_u, *front_v;   /* last decoded picture           */
+    nj_u1 *work_y, *work_u, *work_v;      /* the one being decoded          */
+    int    have_front;
+} m4v_provider;
+
+/* Finds the VOL inside the decoder configuration bytes and parses it. */
+static int m4v_find_vol(const nj_u1 *b, nj_u4 n, nj_m4v_vol *vol)
+{
+    nj_u4 code = 0, pos = 0, from = 0;
+
+    if (b == NULL || n == 0u || vol == NULL) {
+        return 0;
+    }
+    while (nj_m4v_start_code(b, n, from, &code, &pos)) {
+        if (code == NJ_M4V_VOL) {
+            return nj_m4v_parse_vol(b, n, pos, vol);
+        }
+        from = pos;
+    }
+    return 0;
+}
+
+/* The feature set this decoder implements: rectangular, progressive, H.263
+ * quantisation, no data partitioning, no reversible VLC, no quarter sample,
+ * no sprites.  Everything the corpus and the Simple Profile need. */
+static int m4v_vol_supported(const nj_m4v_vol *vol)
+{
+    return vol->shape == 0 && vol->interlaced == 0 &&
+           vol->data_partitioned == 0 && vol->reversible_vlc == 0 &&
+           vol->quarter_sample == 0 && vol->sprite_usage == 0 &&
+           vol->width >= 16u && vol->height >= 16u &&
+           vol->width <= 4096u && vol->height <= 4096u;
+}
+
+static int m4v_p_accepts(const nj_u1 *data, nj_u4 len)
+{
+    nj_mp4     m;
+    nj_m4v_vol vol;
+
+    if (data == NULL || len < 8u) {
+        return 0;
+    }
+    /* Cheap reject first: the ISO base media signature is at offset 4. */
+    if (data[4] != 'f' || data[5] != 't' || data[6] != 'y' || data[7] != 'p') {
+        return 0;
+    }
+    if (nj_mp4_open(&m, data, len) != NJ_MP4_OK) {
+        return 0;
+    }
+    if (m.codec != NJ_MP4_CODEC_MP4V || m.cfg_size == 0u) {
+        return 0;
+    }
+    if (!m4v_find_vol(data + m.cfg_at, m.cfg_size, &vol)) {
+        return 0;
+    }
+    return m4v_vol_supported(&vol);
+}
+
+static void m4v_p_free(m4v_provider *d)
+{
+    const nj_av_mem *mem;
+    nj_av_free_fn    fr;
+
+    if (d == NULL) {
+        return;
+    }
+    mem = d->mem;
+    if (mem == NULL || mem->free == NULL) {
+        return;
+    }
+    fr = mem->free;
+    fr(mem->ud, d->grids);
+    fr(mem->ud, d->front_y);
+    fr(mem->ud, d->front_u);
+    fr(mem->ud, d->front_v);
+    fr(mem->ud, d->work_y);
+    fr(mem->ud, d->work_u);
+    fr(mem->ud, d->work_v);
+    fr(mem->ud, d);
+}
+
+static nj_av_dec *m4v_p_open(const nj_u1 *data, nj_u4 len,
+                             const nj_av_mem *mem, nj_av_info *info,
+                             const char **err)
+{
+    m4v_provider *d;
+    nj_mp4_sample s;
+    nj_u4 glw, gcw, grid_count;
+    int rc;
+
+    if (err != NULL) {
+        *err = NULL;
+    }
+    if (data == NULL || len < 8u || mem == NULL ||
+        mem->alloc == NULL || mem->free == NULL) {
+        return NULL;
+    }
+    d = (m4v_provider *)mem->alloc(mem->ud, (nj_u4)sizeof(*d));
+    if (d == NULL) {
+        if (err != NULL) {
+            *err = "MPEG-4: out of memory";
+        }
+        return NULL;
+    }
+    memset(d, 0, sizeof(*d));
+    d->mem = mem;
+    d->data = data;
+    d->len = len;
+
+    rc = nj_mp4_open(&d->mp4, data, len);
+    if (rc != NJ_MP4_OK) {
+        if (err != NULL) {
+            if (rc == NJ_MP4_ERR_NO_VIDEO) {
+                *err = "MPEG-4: the file has no video track";
+            } else if (rc == NJ_MP4_ERR_FEATURE) {
+                *err = "MPEG-4: unsupported movie layout";
+            } else {
+                *err = "MPEG-4: corrupt ISO base media file";
+            }
+        }
+        m4v_p_free(d);
+        return NULL;
+    }
+    if (d->mp4.codec != NJ_MP4_CODEC_MP4V) {
+        if (err != NULL) {
+            *err = "MPEG-4: the video track is not MPEG-4 Part 2";
+        }
+        m4v_p_free(d);
+        return NULL;
+    }
+    if (d->mp4.cfg_size == 0u) {
+        if (err != NULL) {
+            *err = "MPEG-4: the video track carries no decoder configuration";
+        }
+        m4v_p_free(d);
+        return NULL;
+    }
+    if (!m4v_find_vol(data + d->mp4.cfg_at, d->mp4.cfg_size, &d->vol)) {
+        if (err != NULL) {
+            *err = "MPEG-4: the decoder configuration has no usable VOL";
+        }
+        m4v_p_free(d);
+        return NULL;
+    }
+    if (!m4v_vol_supported(&d->vol)) {
+        if (err != NULL) {
+            *err = "MPEG-4: only Simple Profile rectangular progressive video "
+                   "is decoded";
+        }
+        m4v_p_free(d);
+        return NULL;
+    }
+    {
+        nj_u4 mbw = 0, mbh = 0;
+
+        if (nj_m4v_frame_macroblocks(d->vol.width, d->vol.height, &mbw, &mbh) != 0) {
+            if (err != NULL) {
+                *err = "MPEG-4: unsupported picture size";
+            }
+            m4v_p_free(d);
+            return NULL;
+        }
+        d->width = d->vol.width;
+        d->height = d->vol.height;
+        d->y_stride = mbw * 16u;
+        d->c_stride = mbw * 8u;
+        d->c_rows = mbh * 8u;
+        d->y_bytes = d->y_stride * mbh * 16u;
+        d->c_bytes = d->c_stride * d->c_rows;
+        glw = mbw * 2u;
+        gcw = mbw;
+        grid_count = glw * (mbh * 2u) + gcw * (mbh * 2u);
+        d->grids = (nj_s4 *)mem->alloc(mem->ud,
+                                      grid_count * (nj_u4)sizeof(nj_s2));
+    }
+    d->front_y = (nj_u1 *)mem->alloc(mem->ud, d->y_bytes);
+    d->front_u = (nj_u1 *)mem->alloc(mem->ud, d->c_bytes);
+    d->front_v = (nj_u1 *)mem->alloc(mem->ud, d->c_bytes);
+    d->work_y = (nj_u1 *)mem->alloc(mem->ud, d->y_bytes);
+    d->work_u = (nj_u1 *)mem->alloc(mem->ud, d->c_bytes);
+    d->work_v = (nj_u1 *)mem->alloc(mem->ud, d->c_bytes);
+    if (d->grids == NULL || d->front_y == NULL || d->front_u == NULL ||
+        d->front_v == NULL || d->work_y == NULL || d->work_u == NULL ||
+        d->work_v == NULL) {
+        if (err != NULL) {
+            *err = "MPEG-4: out of memory";
+        }
+        m4v_p_free(d);
+        return NULL;
+    }
+    memset(d->grids, 0, (size_t)grid_count * sizeof(nj_s2));
+    /* The iteration starts at the first sample both here and in decode(). */
+    rc = nj_mp4_next(&d->mp4, &s);
+    if (rc != 1 || s.size < 4u) {
+        if (err != NULL) {
+            *err = "MPEG-4: the video track has no usable samples";
+        }
+        m4v_p_free(d);
+        return NULL;
+    }
+    nj_mp4_rewind(&d->mp4);
+    d->have_front = 0;
+    if (info != NULL) {
+        nj_u8 ms;
+
+        memset(info, 0, sizeof(*info));
+        info->format = NJ_AV_VIDEO_MPEG4;
+        info->width = d->width;
+        info->height = d->height;
+        info->fps = d->mp4.fps != 0u ? d->mp4.fps : 25u;
+        info->frames = d->mp4.sample_count;
+        info->pixfmt = NJ_AV_PIX_RGB565;
+        if (d->mp4.timescale != 0u && d->mp4.duration != 0u) {
+            ms = ((nj_u8)d->mp4.duration * 1000u + d->mp4.timescale / 2u) /
+                 d->mp4.timescale;
+            info->duration_ms = ms > 0xFFFFFFFFu ? 0xFFFFFFFFu : (nj_u4)ms;
+        }
+    }
+    return (nj_av_dec *)d;
+}
+
+static int m4v_p_decode(nj_av_dec *dec, nj_av_step *step)
+{
+    m4v_provider *d = (m4v_provider *)dec;
+    nj_mp4_sample s;
+    nj_m4v_vop    vop;
+    nj_u4         vpos, bitpos;
+    int           rc;
+
+    if (d == NULL || step == NULL) {
+        return NJ_AV_ERR_CORRUPT;
+    }
+    if (step->out == NULL ||
+        (nj_u8)step->out_cap < (nj_u8)d->width * d->height * 2u) {
+        return M4V_ERR_OUTPUT;
+    }
+    step->out_used = 0u;
+    step->frames = 0u;
+    step->in_used = 0u;
+    step->time_us = -1;
+
+    rc = nj_mp4_next(&d->mp4, &s);
+    if (rc == 0) {
+        return NJ_AV_ERR_END;
+    }
+    if (rc < 0) {
+        return NJ_AV_ERR_CORRUPT;
+    }
+    if (s.offset >= d->len || s.size > d->len - s.offset) {
+        return NJ_AV_ERR_CORRUPT;
+    }
+    if (nj_m4v_find_vop(d->data + s.offset, s.size, &vpos) <= 0) {
+        return NJ_AV_ERR_CORRUPT;
+    }
+    bitpos = vpos * 8u;
+    if (!nj_m4v_parse_vop_bits_vol(d->data + s.offset, s.size, &bitpos,
+                                   &d->vol, &vop)) {
+        return NJ_AV_ERR_CORRUPT;
+    }
+    if (vop.type != 0 && vop.type != 1) {
+        return NJ_AV_ERR_CORRUPT;   /* B-VOPs are not Simple Profile */
+    }
+    if (!vop.coded) {
+        /* vop_coded 0 repeats the previous picture, as the reference does. */
+        if (!d->have_front) {
+            return NJ_AV_ERR_CORRUPT;
+        }
+        memcpy(d->work_y, d->front_y, (size_t)d->y_bytes);
+        memcpy(d->work_u, d->front_u, (size_t)d->c_bytes);
+        memcpy(d->work_v, d->front_v, (size_t)d->c_bytes);
+    } else if (vop.type == 0) {
+        rc = nj_m4v_decode_ivop(d->data + s.offset, s.size, &bitpos, &d->vol,
+                                &vop, d->grids,
+                                d->work_y, (int)d->y_stride,
+                                d->work_u, (int)d->c_stride,
+                                d->work_v, (int)d->c_stride);
+        if (rc != 0) {
+            return NJ_AV_ERR_CORRUPT;
+        }
+    } else {
+        rc = nj_m4v_decode_pvop(d->data + s.offset, s.size, &bitpos, &d->vol,
+                                &vop, d->grids,
+                                d->work_y, (int)d->y_stride,
+                                d->work_u, (int)d->c_stride,
+                                d->work_v, (int)d->c_stride,
+                                d->front_y, (int)d->y_stride,
+                                d->front_u, (int)d->c_stride,
+                                d->front_v, (int)d->c_stride);
+        if (rc != 0) {
+            return rc == -3 ? NJ_AV_ERR_UNSUPPORTED : NJ_AV_ERR_CORRUPT;
+        }
+    }
+    nj_m4v_yuv420_to_rgb565(d->work_y, (int)d->y_stride,
+                            d->work_u, (int)d->c_stride,
+                            d->work_v, (int)d->c_stride,
+                            (int)d->width, (int)d->height, step->out);
+    step->out_used = d->width * d->height * 2u;
+    step->frames = 1u;
+    if (d->mp4.timescale != 0u) {
+        step->time_us = (nj_s8)(((nj_u8)s.dts * 1000000u +
+                                 d->mp4.timescale / 2u) / d->mp4.timescale);
+    }
+    {
+        nj_u1 *t;
+
+        t = d->front_y; d->front_y = d->work_y; d->work_y = t;
+        t = d->front_u; d->front_u = d->work_u; d->work_u = t;
+        t = d->front_v; d->front_v = d->work_v; d->work_v = t;
+    }
+    d->have_front = 1;
+    return NJ_AV_OK;
+}
+
+static void m4v_p_close(nj_av_dec *dec)
+{
+    m4v_p_free((m4v_provider *)dec);
+}
+
+const nj_av_video_ops nj_av_video_mpeg4 = {
+    "mpeg4-part2",
+    NJ_AV_VIDEO_MPEG4,
+    m4v_p_accepts,
+    m4v_p_open,
+    m4v_p_decode,
+    m4v_p_close
+};
+
+#endif /* NJ_ENABLE_VIDEO */
