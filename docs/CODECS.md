@@ -949,11 +949,12 @@ normal test run; the provider and Player paths are pinned in `test_m4v`,
   `resync_marker_disable = 1`, one slice per VOP.  A movie encoded with
   FFmpeg's default auto-threading can carry sliced headers between macroblock
   rows; those are refused rather than mis-decoded.
-- **AC prediction.**  `ac_pred` is read and the block data after it decodes
-  correctly (the scan position is the only difference), but the prediction from
-  the neighbouring block is not applied.  None of the corpus movies uses it in
-  the frames checked; FFmpeg's macroblock-type dump shows no `ac_pred`
-  macroblocks.
+- **AC prediction.**  `ac_pred` is read and skipped, and the entropy decode
+  after it is unaffected (so bit positions stay aligned), but both the permuted
+  coefficient scan and the prediction from the neighbouring block are not
+  applied, so such a picture would not be reconstructed correctly.  None of the
+  corpus movies uses it in the frames checked; FFmpeg's macroblock-type dump
+  shows no `ac_pred` macroblocks.
 - **VideoControl display.**  `getControl("VideoControl")` still returns null, so
   the titles skip their videos; the Player decodes and holds the frames, and
   `getSnapshot()`/`initDisplayMode()` are the remaining step to paint them.
