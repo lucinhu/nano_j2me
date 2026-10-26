@@ -41,6 +41,7 @@ counts), which is why the runtime still has no writable globals.
 | --- | --- | --- |
 | `nj_av_audio_mp3` | MPEG-1/2/2.5 Layer III | done — within 1 LSB of ffmpeg |
 | `nj_av_video_h263` | H.263 baseline (raw or 3GP/MP4) | done |
+| `nj_av_video_mpeg4` | MPEG-4 Part 2 Simple Profile (3GP/MP4) | done — pixel-exact vs ffmpeg |
 
 ### Video (round 21)
 
@@ -57,9 +58,11 @@ samples:
   dequantisation, integer 12-bit two-pass IDCT, 4:2:0 to RGB565 through integer
   BT.601, one-vector half-pel motion compensation, skipped and intra
   macroblocks in P frames.
-- **Refused cleanly**: MPEG-4 Part 2, H.263+ annexes (plus/PLUSPTYPE), PB
+- **Refused cleanly** by this provider: H.263+ annexes (plus/PLUSPTYPE), PB
   frames, long vectors, advanced prediction/OBMC, 4MV, custom picture sizes,
-  standard MBA-bearing GOB headers.
+  standard MBA-bearing GOB headers.  MPEG-4 Part 2 is not refused any more: it
+  has its own provider (`nj_av_video_mpeg4`), selected by its `mp4v` sample
+  entry and VOL.
 
 Pixel output was checked against FFmpeg's RGB565 decode on six frames at 13
 positions: worst per-channel delta **1** (the test allows 4).  Cost per frame
@@ -69,18 +72,31 @@ on this host at `-O3`, measured with `CLOCK_PROCESS_CPUTIME_ID`: 124 µs for a
 
 ## What the runtime does with it
 
-`Manager.createPlayer()` will sniff a clip with `nj_avcodec_find_video()`,
-open it through the provider's allocator hooks, keep the caller's buffer alive,
-and ask for one RGB565 frame per emulated frame; the player closes the decoder
-when it is deallocated.  Video descendants of JSR-135 (`VideoControl`) present
-those frames through the same painting path the rest of LCDUI uses.
+`Manager.createPlayer()` sniffs a clip with `nj_avcodec_find_video()`, opens it
+through the provider's allocator hooks, keeps the caller's buffer alive, and
+asks for one RGB565 frame per emulated frame; the player closes the decoder
+when it is deallocated.  H.263 and MPEG-4 Part 2 both arrive through this one
+seam.
+
+`VideoControl` is still only a class that exists for checkcasts
+(`getControl("VideoControl")` returns null), so titles that try to display
+video skip it instead of painting it; the decoded frames themselves do land in
+the Player's RGB565 buffer, which `tools/m4v_player_probe.sh` reads back for
+the evidence below.  `getSnapshot()`/`initDisplayMode()` are the remaining
+step for on-screen video.
 
 ## Tests
 
-- `tests/test_h263.c` — 86 checks over embedded fixtures: demuxer sample
-  offsets/timestamps for 3GP, `stco`/`co64`, an `mp4v` track that must be
-  refused, decoder pixel spots, provider `decode()` contract, truncated and
-  mutated input, and leak checks.  It runs in `ctest`.
+- `tests/test_h263.c` — 97 checks over embedded fixtures: demuxer sample
+  offsets/timestamps for 3GP, `stco`/`co64`, an `mp4v` track the H.263 provider
+  must refuse, decoder pixel spots, provider `decode()` contract, truncated and
+  mutated input, empty-`mdat` placeholders, and leak checks.  It runs in
+  `ctest`.
+- `tests/test_m4v.c` — 112 checks over MPEG-4 Part 2: the VOL/VOP bit syntax,
+  DC/AC VLCs and escapes, the proportional IDCT, the motion-vector VLC and
+  median predictor, the half-pel MC kernel (rounded, truncating and chroma
+  variants), the Simple IDCT put/add values, and an end-to-end I/P/I/P chain
+  whose reference planes are pinned in the test.  It runs in `ctest`.
 
 ## MP3 inside a Player
 
@@ -859,3 +875,85 @@ for the encoded macroblocks (71, 95, 199, 285, 353, ... in the second frame of
 `1942.3gp`), and stops cleanly on the first eight-by-eight motion vector
 macroblock, which is not implemented yet.  The frame is therefore still not
 complete; the next step is inter4v prediction and motion compensation.
+
+## The three corpus movies decode pixel-exactly (round 232)
+
+MPEG-4 Part 2 now decodes P-VOPs: 16x16 and 4MV motion vectors, half-pel motion
+compensation, both rounding types and the inter residual.  `nj_av_video_mpeg4`
+is registered next to the H.263 provider, so `createPlayer()` builds a video
+Player for the corpus's `mp4v` movies instead of refusing them by name.  The
+P-VOP work is in commit `a7c597b`, the comparison harness and pinned reference
+planes in `c4bfa91`, the provider and registry in `cbf5fbc`.
+
+Five defects had to be fixed against the reference decoder before the frames
+matched; they are worth naming because each one only shows up on real data:
+
+1. the first AC escape form is selected by a `0` bit, not by `form == 1`
+   (the old mapping sent first escapes into the third-escape branch);
+2. the third escape's 12-bit level carries its own sign and must not read a
+   further sign bit;
+3. intra AC levels need `dct_unquantize_h263_intra`'s `qmul = 2q`,
+   `qadd = (q - 1) | 1` before the transform;
+4. `vop_rounding_type` selects FFmpeg's no-rounding motion compensation
+   (`rnd:0` in its debug output means no_rounding = 1); ignoring it drifts a
+   one-level error across frames;
+5. the MPEG-4 path needs FFmpeg's Simple IDCT, not the shared integer IDCT,
+   or a few percent of samples differ by one level.
+
+The transform, the motion-vector predictor, the MC kernel and the predicted-DC
+rules are transcribed from
+`.local-tools/debug-runs/m4v-round25/mpeg4videodec.c` +
+`simple_idct_template.c`, not from memory.
+
+### Oracle and results
+
+Reference decode, per movie (FFmpeg n9.0.2, libavcodec 63.1.102):
+
+    cc -O2 -o /tmp/refdecode_m4v tools/refdecode_m4v.c \
+       $(pkg-config --cflags --libs libavformat libavcodec libavutil)
+    /tmp/refdecode_m4v movie.3gp movie.ref 16 > movie.ref.manifest
+    /tmp/m4v_dump movie.3gp movie.run 16
+    python3 tools/compare_m4v.py movie.ref movie.run --frames 16 \
+            --manifest movie.ref.manifest
+
+All 16 frames of each movie, every plane:
+
+| Movie | Size | Y max / equal | U max / equal | V max / equal |
+| --- | --- | --- | --- | --- |
+| `1942.3gp` | 176x144 | 0 / 100.00% | 0 / 100.00% | 0 / 100.00% |
+| `vid/doom.3gp` | 320x240 | 0 / 100.00% | 0 / 100.00% | 0 / 100.00% |
+| `movie.3gp` (HAWX) | 240x180 | 0 / 100.00% | 0 / 100.00% | 0 / 100.00% |
+
+The decoded frames are also byte-identical after the runtime's own
+YUV-to-RGB565 conversion, both through the provider handle
+(`tools/m4v_dump.c --provider`) and through the Java-level Player
+(`Manager.createPlayer()` + `nj_media_frame()`, driven by
+`tools/m4v_player_probe.sh`): all 48 frames of each path match the reference
+RGB565 hashes exactly.  The HAWX movie is 240x180, i.e. 192 coded rows; the
+provider decodes the coded picture and crops on conversion, like the reference.
+
+Evidence: `.local-tools/debug-runs/m4v-movies-20261027/` (YUV dumps, comparison
+CSV, RGB565 PPM/PNG frames, Player probe logs, CLI runs of the three titles) and
+the Lead's independent reproduction in
+`.local-tools/debug-runs/m4v-pvop-2026-10-27/lead-repro/`.  The narrative,
+including the exact commands, is in
+`docs/notes/2026-10-27-m4v-pvop-inter4v.md`.  `tests/test_m4v.c` pins the
+reference planes of the I/P/I/P chain of `1942.3gp` so a regression fails the
+normal test run; the provider and Player paths are pinned in `test_m4v`,
+`test_avcodec` and `test_lib` with a 64x48 four-frame mp4v fixture
+(`tests/m4v_clip.h`).
+
+### What is still not implemented
+
+- **Video packet (resync) headers.**  The three corpus movies have
+  `resync_marker_disable = 1`, one slice per VOP.  A movie encoded with
+  FFmpeg's default auto-threading can carry sliced headers between macroblock
+  rows; those are refused rather than mis-decoded.
+- **AC prediction.**  `ac_pred` is read and the block data after it decodes
+  correctly (the scan position is the only difference), but the prediction from
+  the neighbouring block is not applied.  None of the corpus movies uses it in
+  the frames checked; FFmpeg's macroblock-type dump shows no `ac_pred`
+  macroblocks.
+- **VideoControl display.**  `getControl("VideoControl")` still returns null, so
+  the titles skip their videos; the Player decodes and holds the frames, and
+  `getSnapshot()`/`initDisplayMode()` are the remaining step to paint them.

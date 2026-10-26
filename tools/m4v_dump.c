@@ -18,6 +18,18 @@
  * <prefix>-NNN.v (width x height, then the two half-size planes) and prints
  * "frame N type=T q=Q r=R bits=USED/TOTAL".  Pair it with
  * tools/refdecode_m4v.c + tools/compare_m4v.py for the pixel comparison.
+ *
+ * Two more modes exist for the Player-path evidence:
+ *
+ *   /tmp/m4v_dump --provider clip.3gp outprefix 8
+ *       open the movie through nj_av_video_mpeg4 (the same provider a Player
+ *       uses), decode N frames to RGB565 and write <prefix>-NNN.ppm; prints
+ *       "rgb565 frame N fnv 0x..." for each frame.
+ *   /tmp/m4v_dump --convert-yuv W H refprefix outprefix N
+ *       convert tools/refdecode_m4v.c's YUV planes for N frames to RGB565 the
+ *       same way (nj_m4v_yuv420_to_rgb565), write PPMs and print the same
+ *       hash lines.  Equal hash lists mean the runtime and the reference
+ *       decoder produce the same RGB565 frames.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +38,45 @@
 #include "nj2me/nj.h"
 #include "nj2me/nj_m4v.h"
 #include "nj_mp4.h"
+#include "nj2me/nj_avcodec.h"
+
+extern const nj_av_video_ops nj_av_video_mpeg4;
+
+static unsigned long fnv1a(const unsigned char *p, unsigned long n)
+{
+    unsigned long h = 2166136261ul;
+
+    while (n-- > 0u) {
+        h ^= *p++;
+        h *= 16777619ul;
+        h &= 0xFFFFFFFFul;
+    }
+    return h;
+}
+
+/* RGB565 -> RGB24 PPM row expansion (5/6/5 with bit replication). */
+static void rgb565_to_ppm(const char *path, const nj_u1 *rgb, nj_u4 w, nj_u4 h)
+{
+    FILE *o = fopen(path, "wb");
+    nj_u4 x, y;
+
+    if (o == NULL) {
+        return;
+    }
+    fprintf(o, "P6\n%u %u\n255\n", (unsigned)w, (unsigned)h);
+    for (y = 0; y < h; y++) {
+        for (x = 0; x < w; x++) {
+            nj_u2 px = (nj_u2)(rgb[(y * w + x) * 2u] |
+                               ((nj_u4)rgb[(y * w + x) * 2u + 1u] << 8));
+            unsigned r = (px >> 11) & 31u, g = (px >> 5) & 63u, b = px & 31u;
+
+            fputc((int)((r << 3) | (r >> 2)), o);
+            fputc((int)((g << 2) | (g >> 4)), o);
+            fputc((int)((b << 3) | (b >> 2)), o);
+        }
+    }
+    fclose(o);
+}
 
 static void dump_plane(const char *prefix, int frame, const char *ext,
                        const nj_u1 *p, nj_u4 w, nj_u4 h, nj_u4 stride)
@@ -45,6 +96,172 @@ static void dump_plane(const char *prefix, int frame, const char *ext,
     fclose(o);
 }
 
+
+/* ------------------------------------------------------------------ */
+/* Modes used for the Player-path evidence                             */
+/* ------------------------------------------------------------------ */
+
+/* Read a whole file into a malloc'ed buffer (the container stays alive for the
+ * provider's lifetime, as the Player keeps its source array alive). */
+static unsigned char *read_all(const char *path, long *size)
+{
+    FILE *f = fopen(path, "rb");
+    long  sz;
+    unsigned char *p;
+
+    if (f == NULL) {
+        return NULL;
+    }
+    fseek(f, 0, SEEK_END);
+    sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    p = (unsigned char *)malloc((size_t)sz);
+    if (p == NULL || fread(p, 1, (size_t)sz, f) != (size_t)sz) {
+        free(p);
+        p = NULL;
+    }
+    fclose(f);
+    *size = sz;
+    return p;
+}
+
+static void *prov_alloc(void *ud, nj_u4 n)
+{
+    unsigned char *p;
+
+    (void)ud;
+    p = (unsigned char *)malloc((size_t)n + 16u);
+    if (p == NULL) {
+        return NULL;
+    }
+    return p;
+}
+
+static void prov_free(void *ud, void *p)
+{
+    (void)ud;
+    free(p);
+}
+
+static int provider_mode(const char *clip, const char *prefix, int want)
+{
+    long            sz = 0;
+    unsigned char  *data = read_all(clip, &sz);
+    nj_av_mem       mem;
+    nj_av_info      info;
+    const char     *err = NULL;
+    nj_av_dec      *dec;
+    nj_u1          *rgb;
+    int             f;
+
+    if (data == NULL) {
+        fprintf(stderr, "cannot read %s\n", clip);
+        return 1;
+    }
+    mem.ud = NULL;
+    mem.alloc = prov_alloc;
+    mem.free = prov_free;
+    if (!nj_av_video_mpeg4.accepts(data, (nj_u4)sz)) {
+        fprintf(stderr, "%s is not an mp4v movie the provider accepts\n", clip);
+        free(data);
+        return 1;
+    }
+    memset(&info, 0, sizeof(info));
+    dec = nj_av_video_mpeg4.open(data, (nj_u4)sz, &mem, &info, &err);
+    if (dec == NULL) {
+        fprintf(stderr, "provider open failed: %s\n", err ? err : "?");
+        free(data);
+        return 1;
+    }
+    printf("provider=%s %ux%u frames=%u fps=%u pixfmt=%u\n",
+           nj_av_video_mpeg4.name, (unsigned)info.width, (unsigned)info.height,
+           (unsigned)info.frames, (unsigned)info.fps, (unsigned)info.pixfmt);
+    rgb = (nj_u1 *)malloc((size_t)info.width * info.height * 2u);
+    for (f = 0; rgb != NULL && f < want; f++) {
+        nj_av_step step;
+        char       path[1024];
+        int        rc;
+
+        memset(&step, 0, sizeof(step));
+        step.out = rgb;
+        step.out_cap = info.width * info.height * 2u;
+        rc = nj_av_video_mpeg4.decode(dec, &step);
+        if (rc == NJ_AV_ERR_END) {
+            printf("end of track after %d frames\n", f);
+            break;
+        }
+        if (rc != NJ_AV_OK || step.frames != 1u) {
+            fprintf(stderr, "frame %d: decode error %d\n", f, rc);
+            break;
+        }
+        snprintf(path, sizeof(path), "%s-%03d.ppm", prefix, f);
+        rgb565_to_ppm(path, rgb, info.width, info.height);
+        printf("rgb565 frame %d fnv 0x%08lx\n", f,
+               fnv1a(rgb, (unsigned long)step.out_used));
+    }
+    free(rgb);
+    nj_av_video_mpeg4.close(dec);
+    free(data);
+    return 0;
+}
+
+static int convert_yuv_mode(int argc, char **argv)
+{
+    int    w, h, cw, ch, n, f;
+    nj_u1 *y, *u, *v, *rgb;
+
+    if (argc < 7) {
+        fprintf(stderr, "usage: %s --convert-yuv W H REFPREFIX OUTPREFIX N\n",
+                argv[0]);
+        return 2;
+    }
+    w = atoi(argv[2]);
+    h = atoi(argv[3]);
+    n = atoi(argv[6]);
+    cw = (w + 1) / 2;
+    ch = (h + 1) / 2;
+    y = (nj_u1 *)malloc((size_t)w * h);
+    u = (nj_u1 *)malloc((size_t)cw * ch);
+    v = (nj_u1 *)malloc((size_t)cw * ch);
+    rgb = (nj_u1 *)malloc((size_t)w * h * 2u);
+    if (y == NULL || u == NULL || v == NULL || rgb == NULL) {
+        return 1;
+    }
+    for (f = 0; f < n; f++) {
+        char  path[1024];
+        FILE *in;
+        char  out[1024];
+        int   ok = 1;
+
+        snprintf(path, sizeof(path), "%s-%03d.y", argv[4], f);
+        in = fopen(path, "rb");
+        ok = ok && in != NULL && fread(y, 1, (size_t)w * h, in) == (size_t)w * h;
+        if (in != NULL) fclose(in);
+        snprintf(path, sizeof(path), "%s-%03d.u", argv[4], f);
+        in = fopen(path, "rb");
+        ok = ok && in != NULL && fread(u, 1, (size_t)cw * ch, in) == (size_t)cw * ch;
+        if (in != NULL) fclose(in);
+        snprintf(path, sizeof(path), "%s-%03d.v", argv[4], f);
+        in = fopen(path, "rb");
+        ok = ok && in != NULL && fread(v, 1, (size_t)cw * ch, in) == (size_t)cw * ch;
+        if (in != NULL) fclose(in);
+        if (!ok) {
+            fprintf(stderr, "cannot read reference planes for frame %d\n", f);
+            return 1;
+        }
+        nj_m4v_yuv420_to_rgb565(y, w, u, cw, v, cw, w, h, rgb);
+        snprintf(out, sizeof(out), "%s-%03d.ppm", argv[5], f);
+        rgb565_to_ppm(out, rgb, (nj_u4)w, (nj_u4)h);
+        printf("rgb565 frame %d fnv 0x%08lx\n", f,
+               fnv1a(rgb, (unsigned long)w * (unsigned long)h * 2ul));
+    }
+    free(y);
+    free(u);
+    free(v);
+    free(rgb);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     FILE          *f;
@@ -61,8 +278,22 @@ int main(int argc, char **argv)
     int            frame = 0;
     int            rc = 0;
 
+    if (argc >= 2 && strcmp(argv[1], "--convert-yuv") == 0) {
+        return convert_yuv_mode(argc, argv);
+    }
+    if (argc >= 2 && strcmp(argv[1], "--provider") == 0) {
+        if (argc < 4) {
+            fprintf(stderr, "usage: %s --provider clip.3gp outprefix [frames]\n",
+                    argv[0]);
+            return 2;
+        }
+        return provider_mode(argv[2], argv[3], argc > 4 ? atoi(argv[4]) : 5);
+    }
     if (argc < 3) {
-        fprintf(stderr, "usage: %s clip.3gp outprefix [frames]\n", argv[0]);
+        fprintf(stderr, "usage: %s clip.3gp outprefix [frames]\n"
+                        "       %s --provider clip.3gp outprefix [frames]\n"
+                        "       %s --convert-yuv W H refprefix outprefix N\n",
+                argv[0], argv[0], argv[0]);
         return 2;
     }
     f = fopen(argv[1], "rb");
