@@ -42,6 +42,7 @@ typedef struct nj_m4v_vol {
     int   cplx_i;           /* complexity-estimation bits per I-VOP */
     int   cplx_p;           /* ... per P-VOP */
     int   cplx_b;           /* ... per B-VOP */
+    int   quant_precision;  /* bits in vop_quant, from the VOL header */
     int   flags_known;
 } nj_m4v_vol;
 
@@ -57,6 +58,7 @@ typedef struct nj_m4v_vop {
     int   coded;          /* vop_coded: 0 means the frame is skipped        */
     int   qscale;         /* vop_quant, 1..31, valid when coded             */
     int   dc_vlc_thr;     /* intra_dc_vlc_thr, 0..7                         */
+    int   f_code;         /* vop_fcode_forward, 1..7, P-VOPs only           */
 } nj_m4v_vop;
 
 /* Parses a VOP header whose payload starts at b[pos]. */
@@ -71,8 +73,8 @@ int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
 /* Same, but reads and then updates a bit offset: the macroblock layer starts
  * exactly where the header ended, so the byte-granular wrapper above cannot be
  * used for decoding. */
-int nj_m4v_parse_vop_bits_vol(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 time_res,
-                              int cplx_i, nj_m4v_vop *out);
+int nj_m4v_parse_vop_bits_vol(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos,
+                              const nj_m4v_vol *vol, nj_m4v_vop *out);
 int nj_m4v_parse_vop_bits(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos,
                           nj_u4 time_res, nj_m4v_vop *out);
 
@@ -191,6 +193,18 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                        const nj_m4v_vol *vol, const nj_m4v_vop *vop,
                        nj_s4 *grids, nj_u1 *yp, int ys,
                        nj_u1 *up, int us, nj_u1 *vp, int vs);
+
+/* Decodes a P-VOP whose macroblocks are all intra coded (the common case for
+ * the opening frames this decoder is exercised with).  Skipped macroblocks
+ * are copied from the previous reconstruction; inter coded ones are reported
+ * as unsupported (-2).  The DC predictor grids must carry over from the
+ * previous frame, exactly as the specification requires. */
+int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
+                       const nj_m4v_vol *vol, const nj_m4v_vop *vop,
+                       nj_s4 *grids, nj_u1 *yp, int ys, nj_u1 *up, int us,
+                       nj_u1 *vp, int vs,
+                       const nj_u1 *py, int pys, const nj_u1 *pu, int pus,
+                       const nj_u1 *pv, int pvs);
 
 /* The DC prediction grid and the dequantised intra DC coefficient are stored
  * around this bias: MPEG-4 predicts from mid-grey, and the reference IDCT

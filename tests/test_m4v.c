@@ -396,7 +396,10 @@ int main(void)
             }
         }
         lastpos = nj_m4v_ac_block(buf, (nj_u4)sizeof(buf), &pos, coef, 1, 4);
-        ok(lastpos == 2, "a block loop stops after the last-flagged symbol");
+        /* The last flag adds 192 to the index, which wraps past coefficient 62
+         * and ends the block; a run-0 last symbol lands on coefficient 1. */
+        ok(lastpos == 0 && coef[nj_m4v_scan_index(1)] > 0,
+           "a block loop stops after the last-flagged symbol");
     }
 
     {

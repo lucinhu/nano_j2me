@@ -825,3 +825,37 @@ reconstructs black.
 Also pinned in `tests/test_m4v.c` (88 checks): the rectangular header ends at
 bit 56 with qscale 9 / thr 0, and the 1942 VOL reports complexity estimation
 disabled with zero complexity bits promised for I/P/B VOPs.
+
+## The AC coefficient loop, ported from the reference (round 227)
+
+The I-VOP's first frame is all black, so its AC coefficients happen to be zero
+and an incorrect AC loop still produced the right picture.  P-VOP intra
+macroblocks do carry AC data, and the old loop diverged from the reference
+stream after the first coefficient.  `src/midp/nj_m4v.c` now carries the
+coefficient loop transcribed from the reference decoder's
+`mpeg4_decode_block()` (non-RVLC, non partitioned):
+
+- the 12-bit lookup `nj_m4v_ac_lut[]` yields `len << 8 | symbol`; the run goes
+  through the `+1` skip of the DC slot, and a "last" symbol adds 192 so that
+  the index wraps past 62 and ends the block exactly where the reference does;
+- the sign is a separate bit read after the symbol (or after the escape's
+  level), as `(level ^ sign) - sign`;
+- the escape code word `0000011` is followed by `0` (first form), `10` (second
+  form) or `11` (third form); the first form adds
+  `max_level[last][run] * qmul` to the level, the second adds
+  `max_run[last][level]` to the run, and the third carries explicit
+  last/run/level fields with marker bits;
+- the same loop serves the inter residual, with `qmul = qscale << 1` and
+  `qadd = (qscale - 1) | 1`.  Its run-level and lookup tables come from
+  `src/midp/nj_vlc_inter.h`, generated from the reference's
+  `ff_h263_rl_inter`, so no writable global state is needed.
+
+`tools/gen_m4v_escape.py` still emits the intra escape maxima
+(`include/nj2me/nj_m4v_escape.h`), and the parity tests in `tests/test_m4v.c`
+compare the loop against the same synthetic bit streams as before.
+
+With this in place the P-VOP macroblock layer walks the reference positions
+for the encoded macroblocks (71, 95, 199, 285, 353, ... in the second frame of
+`1942.3gp`), and stops cleanly on the first eight-by-eight motion vector
+macroblock, which is not implemented yet.  The frame is therefore still not
+complete; the next step is inter4v prediction and motion compensation.
