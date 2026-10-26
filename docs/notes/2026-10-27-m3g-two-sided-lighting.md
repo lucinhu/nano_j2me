@@ -116,6 +116,43 @@ the absence rule together.
   the table above; 0 payloads outside the shape.
 * Full `ctest` on this tree: **118/118 passed**.
 
-**Real-game frames.**  The six titles are next: the same key script and frame
-dump on a HEAD build and on this build, per title.  That evidence lands in a
-follow-up commit and is added here when it does.
+**Real-game frames: a structural null result, not a pending item.**  The six
+titles were driven on a BEFORE build (`333a347`) and this one, with identical
+key scripts, frame dumps, a fresh RMS directory each run and `--stats`; every
+reachable title was run twice on the BEFORE binary so that run-to-run noise
+(random tip lines, wall-clock digits) has a measured baseline.  Full commands,
+stats lines and side-by-side frames:
+`.local-tools/debug-runs/twosided-games-20261027/report.md`.
+
+| title | 3D reached | before/after signal vs noise, 3D region | verdict |
+| --- | --- | --- | --- |
+| 蓝牙真3D格斗_3424 | yes, tris=327,560 | noise 10,751 px (random tip text); signal 15,366 px, all in that tip box; **0 px** in y55..244 over 38 fight frames | reached, no visible change |
+| 3D拉力赛-进化_6366 | yes, tris=54,789 | noise 3,041 px; signal 1,689 px (both wall-clock digits); **0 px** in y70..244 over 81 race frames | reached, no visible change |
+| 3D科林麦克雷_6600 | yes, tris≈128k-136k | before-vs-before 3,050,954 px (scene recomposes) vs signal 3,039,574 px | not attributable (nondeterministic) |
+| 杀戮机器_3610 | no, tris=0 up to 5,000 frames | - | not reached (menus, then black; its TimerTask loops Loader.load on PNGs) |
+| CS反恐精英_6858 | no, gfx=0 | - | not reached (Registration / Email-SN TextBox gate) |
+| 生化危机3D_3671 | no, tris=0 | - | not reached (offline data-folder download gate: `DATA_URL`, `EMU_MODE_STATE=false`, RMS/BioData NPEs) |
+
+The null result is explained by the content, and it was checked against the
+files rather than assumed.  `jr_lit()`'s only normal-dependent terms are the
+DIRECTIONAL, OMNI and SPOT lights; an AMBIENT light does not use the normal, so
+for an ambient-only scene `rgb2` is bit-identical to `rgb` and two-sided
+lighting cannot change a pixel.  An independent decode of every Light in the
+six JARs (mode byte at the file's `node_data + 15`) gives:
+
+* **蓝牙真3D格斗, 3D科林麦克雷, 杀戮机器**: no Light objects and no light in
+  their classes at all - the unlit path, where `jr_fetch` never computes the
+  second colour;
+* **3D拉力赛-进化**: 10 Light objects, all AMBIENT (the runtime adds a white
+  ambient 1.9 light); **CS反恐精英**: 1 runtime AMBIENT plus 2 OMNI lights in
+  `res/map/construction/construction.m3g`, but the title never reaches the map;
+* **生化危机3D**: 15 AMBIENT + **17 DIRECTIONAL** lights - the only title where
+  the fix could be visible in-game, and the only one blocked purely by an
+  offline download gate.
+
+So the in-game evidence does not exist for this feature on reachable content:
+the six titles set the flag, but five cannot exercise it (no normal-dependent
+light) and the sixth cannot boot offline.  The fix stays because the flag is
+real and the JSR semantics are now correct; the unit/render test remains the
+verification, and the corpus measurement above says exactly which geometry
+would show the difference if 生化危机3D's download gate were ever satisfied.

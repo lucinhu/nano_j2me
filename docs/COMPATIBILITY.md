@@ -1501,6 +1501,42 @@ texture scale restores asphalt detail and yellow road markings instead of
 longitudinal grey bands. A fresh 2,450-frame race confirms the fix at 101 km/h.
 Depth clearing is independent of the colour-clear flag.
 
+### Semantics verified since the rasteriser round (2026-10-26/27)
+
+Four JSR 184 behaviours that used to exist only as members are now pinned by
+renderer/scene tests and by the corpus, and one comes with an honest null
+result in-game:
+
+- `PolygonMode.TWO_SIDED_LIGHTING`: 43 PolygonModes in six titles set it; the
+  loader carries the three flags (two-sided, local camera, perspective
+  correction) and the rasteriser lights a back face with the reversed normal.
+  In-game it cannot change a pixel in the scenes reachable headlessly: five of
+  the six titles have no DIRECTIONAL/OMNI/SPOT light (unlit or ambient-only,
+  where the reversed normal cancels exactly) and `生化危机3D`, the only one with
+  directional lights, is blocked by its offline download gate.  The flag and
+  the semantics stay correct; `docs/notes/2026-10-27-m3g-two-sided-lighting.md`.
+- `AnimationTrack.COLOR` (258): the corpus's single COLOR track (蓝牙真3D格斗's
+  `sadan.m3g` Background, grey 0x9E9E9E -> white over the first 55 ms) now
+  animates the colour `clear()` paints; Background, Fog and Light are the
+  targets the JSR allows, and the byte that comes with it is kept
+  (`docs/notes/2026-10-27-m3g-animation-colour.md`).
+- `SkinnedMesh.duplicate()`: a duplicate gets its own skeleton and bone records
+  remapped by tree position (the reference's `matchingNode` rule), so the copy
+  poses independently; posing also no longer allocates host memory per frame -
+  one cached seven-float-per-vertex array lives on each mesh (59 skinned
+  meshes / 22,461 vertices measured across the corpus)
+  (`docs/notes/2026-10-27-m3g-duplicate-bones.md`,
+  `docs/notes/2026-10-27-m3g-pose-cache.md`).
+- `Texture2D` general 4x4 transform: five Counter-Strike map textures carry one
+  (15x, 2x, 18x, diag(1,4) with translations); a rendered test now scales and
+  translates a four-colour strip across the quad and reads the nearest texels
+  back, and a mutation that drops the matrix application fails exactly those
+  checks (`docs/notes/2026-10-27-m3g-texture-transform.md`).
+
+All of it is behind `NJ_ENABLE_M3G` and covered by `test_m3g` and
+`test_m3g_file`; the full suite is 118/118.
+
+
 The two conventions are the part worth remembering, because getting them
 crossed is silent:
 
