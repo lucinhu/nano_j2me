@@ -16,7 +16,7 @@
 
 #define NJ_M4V_AC_BITS   12
 #define NJ_M4V_AC_SYMS   102
-#define NJ_M4V_AC_LAST   51u    /* ff_rl_intra: n=51, so symbols >= 51 carry last=1 */
+#define NJ_M4V_AC_LAST   67u    /* ff_mpeg4_rl_intra: n=102, last=67 */
 
 /* DC size codes as the reference tables list them: {code, length, size}. */
 typedef struct nj_m4v_dc_entry {

@@ -1470,6 +1470,9 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
         *pos += 2u;
     }
     }
+    /* Per block: its DC, then its AC.  That is the order the bit stream
+     * uses (7.4.3.5), and a block's DC predictor may depend on blocks of
+     * the same macroblock, so the two cannot be split into two passes. */
     if (getenv("NJ_M4VMB")) fprintf(stderr, "MB pos=%u cbpc=%d cbp=0x%02x\n", (unsigned)*pos, cbpc, (unsigned)cbp);
     for (blk = 0; blk < 6; blk++) {
         nj_s2 *grid = (blk < 4) ? dc_y : (blk == 4 ? dc_c : (dc_c2 != NULL ? dc_c2 : dc_c));
@@ -1526,17 +1529,6 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
                                    NJ_M4V_DC_GREY);
         (void)dir;
         (void)scale;
-    }
-    if (getenv("NJ_M4V_ORD") != NULL) {
-        int acp = 0;
-        if (m4v_read_cbp(b, n, pos, cbpc, dq, &cbp, &acp) != 0) {
-            return -1;
-        }
-        (void)acp;
-    }
-    /* All six DC coefficients come first, then the AC coefficients of the
-     * coded blocks - that is the macroblock layer's order (7.4.3.5). */
-    for (blk = 0; blk < 6; blk++) {
         int coded = nj_m4v_cbp_has_ac(cbp, blk), arc;
 
         if (getenv("NJ_M4V_ACINV") != NULL) {
