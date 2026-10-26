@@ -127,12 +127,11 @@ int main(int argc, char **argv)
         f = objs[i].fields;
         if (!objs[i].decoded) {
             /*
-             * Counted, not fatal.  The decoder refuses an object whose fields
-             * are not values the format defines, and 773 of the 975 real files
-             * hold at least one such object - so the offsets below are settled
-             * for a minority of the corpus and the number is the honest
-             * measure of how far the work has got.  A file that fails its
-             * container is still fatal; this is not.
+             * Counted, not fatal.  Earlier rounds refused objects in 773 of
+             * the 975 real files while the object framing was still being
+             * settled; the current corpus run refuses none, so a refusal now
+             * is a regression and the numbers below are the honest gate.  A
+             * file that fails its container is still fatal; this is not.
              */
             obj_bad++;
             if (objs[i].type < 256u) { refused_by_type[objs[i].type]++; }
@@ -147,16 +146,16 @@ int main(int argc, char **argv)
         if (!f.decoded) { continue; }
         if (objs[i].type == 8u) {          /* PolygonMode */
             /*
-             * Reported, not gated - and this is the interesting number.
+             * A gate now, and the number that settles the layout.
              *
-             * The offsets 12, 13 and 14 are right for most of the corpus:
-             * every PolygonMode in the 1513 objects of the first files read
-             * either zero (unset) or a value from the three enumerations
-             * JSR 184 defines.  But 403 files disagree, with bytes like 45 and
-             * 86 in those positions, so the layout is right for some files and
-             * not others and the difference is not understood yet.  A gate
-             * that fails on 403 real files would be turned off within a week;
-             * a number that says how many agree will not.
+             * An earlier round reported 403 files disagreeing, with bytes
+             * like 45 and 86 at offsets 12..14; that was the object framing,
+             * not this type, and the later framing fixes ended it.  The
+             * corpus now agrees on all 1513 PolygonMode objects: each one is
+             * eighteen bytes, the three enumerations at 12..14 are inside
+             * their sets, and bytes 15..17 are the three booleans (only 0/1;
+             * two-sided is set on 43 of them - see
+             * docs/notes/2026-10-27-m3g-two-sided-lighting.md).
              */
             if ((f.a == 0u || (f.a >= 160u && f.a <= 162u)) &&
                 (f.b == 0u || (f.b >= 164u && f.b <= 165u)) &&
@@ -167,11 +166,11 @@ int main(int argc, char **argv)
             }
         } else if (objs[i].type == 10u) {  /* Image2D */
             /*
-             * Reported, not gated.  The corpus agrees on 1053 of 1054
-             * Image2Ds (format 97, 99 or 100; width and height 2..256), and
-             * the odd one out is a file whose Image2D holds no image at all.
-             * One exception is not a layout, so this stays a report until
-             * every file agrees - the PolygonMode check below is the gate.
+             * Reported, not gated.  The corpus agrees on all 1054 Image2Ds
+             * now (format 97, 99 or 100; width and height 2..256); the one
+             * empty image an earlier round saw is gone, like the PolygonMode
+             * disagreement above.  Kept as a report because an Image2D whose
+             * format is 0 legitimately holds no image.
              */
             if (f.a == 0u) { img_empty++; }        /* holds no image */
             else { img_formats++; }

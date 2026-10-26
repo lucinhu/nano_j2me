@@ -2899,6 +2899,144 @@ static int skin_render_prepare(nj_vm *vm, nj_ref g3d, nj_ref *target,
     return *targetg != 0 && *pixels != 0;
 }
 
+/*
+ * A PolygonMode's three booleans are file data, not just an API setting: the
+ * loader has to carry them to the Java object, because the six titles that
+ * ask for two-sided lighting ask for it in the file (43 PolygonModes: the two
+ * rally titles, Colin McRae, Counter-Strike, the zombie shooter and the
+ * Bluetooth 3D fighter).  This fixture runs the whole path - container,
+ * object walk, decode, link - rather than the decoder alone, and the shorter
+ * payload proves that a file without the flags keeps the class defaults
+ * instead of reading the absent bytes as "false".
+ *
+ * Layout copied from build_anim_file(): a thirty-byte file header section,
+ * then one stored object section holding an unreferenced root.
+ */
+static nj_u4 build_pm_file(nj_u1 *b, nj_u4 cap, int with_flags,
+                           int two, int local, int persp)
+{
+    static const nj_u1 ident[12] = {
+        0xAB, 0x4A, 0x53, 0x52, 0x31, 0x38, 0x34,
+        0xBB, 0x0D, 0x0A, 0x1A, 0x0A
+    };
+    nj_u4 hdr_sec = 30u, plen = with_flags ? 18u : 15u;
+    nj_u4 body = 5u + plen, sec, total;
+    nj_u1 *p;
+
+    sec = 9u + body + 4u;
+    total = 12u + hdr_sec + sec;
+    if (cap < total) {
+        return 0u;
+    }
+    memset(b, 0, total);
+    memcpy(b, ident, 12u);
+    b[12] = 0u;                        /* stored, not compressed */
+    put_le32(b + 13, hdr_sec);
+    put_le32(b + 17, 17u);
+    put_le32(b + 22, 12u);
+    b[26] = 1u;                        /* file version 1.0 */
+    put_le32(b + 29, total);
+    put_le32(b + 33, total);
+    b[42] = 0u;
+    put_le32(b + 43, sec);
+    put_le32(b + 47, body);
+    p = b + 51;
+    p[0] = 8u;                         /* PolygonMode */
+    put_le32(p + 1, plen);
+    p += 5;
+    p[12] = 162u; p[13] = 165u; p[14] = 168u;   /* NONE, SMOOTH, CCW */
+    if (with_flags) {
+        p[15] = (nj_u1)(two ? 1 : 0);
+        p[16] = (nj_u1)(local ? 1 : 0);
+        p[17] = (nj_u1)(persp ? 1 : 0);
+    }
+    return total;
+}
+
+static void test_polygon_mode_file(nj_vm *vm)
+{
+    struct pm_case {
+        int with_flags, two, local, persp;
+        int want_two, want_local, want_persp;
+    };
+    /* The first file exercises all three flags; the second omits them. */
+    static const struct pm_case cases[2] = {
+        { 1, 1, 1, 0, 1, 1, 0 },
+        { 0, 0, 0, 0, 0, 0, 1 }
+    };
+    int c;
+
+    printf("== a file's PolygonMode carries its lighting flags ==\n");
+    for (c = 0; c < 2; c++) {
+        nj_u1 buf[128];
+        nj_u4 n = build_pm_file(buf, (nj_u4)sizeof buf, cases[c].with_flags,
+                                cases[c].two, cases[c].local, cases[c].persp);
+        nj_ref bytes, arr = 0, pm = 0;
+        nj_value a[2], r;
+        nj_status st;
+        nj_u4 i, len;
+
+        check(n > 0u, "the crafted PolygonMode file has a length");
+        if (n == 0u) {
+            continue;
+        }
+        bytes = nj_array_new(vm, "B", n);
+        check(bytes != 0, "a byte array to hand Loader.load");
+        if (!bytes) {
+            continue;
+        }
+        memcpy(nj_array_data(bytes), buf, n);
+
+        a[0].r = bytes; a[1].i = 0;
+        memset(&r, 0, sizeof r);
+        nj_clear_exception(vm);
+        st = nj_call(vm, 0, CLS("Loader"), "load",
+                     "([BI)[L" CLS("Object3D") ";", a, &r);
+        check(st == NJ_OK && r.r != 0,
+              "Loader.load returns the PolygonMode file's roots");
+        if (st != NJ_OK || !r.r) {
+            nj_clear_exception(vm);
+            continue;
+        }
+        arr = r.r;
+        len = nj_array_length(arr);
+        for (i = 0u; i < len; i++) {
+            nj_ref o = nj_array_get_ref(arr, i);
+            const char *cn = o ? nj_ref_class_name(o) : NULL;
+
+            if (cn && strstr(cn, "PolygonMode")) {
+                pm = o;
+            }
+        }
+        check(pm != 0, "the PolygonMode is one of the roots");
+        if (!pm) {
+            continue;
+        }
+
+        r.i = -1;
+        call(vm, pm, CLS("PolygonMode"), "isTwoSidedLightingEnabled", "()Z",
+             NULL, &r);
+        check(r.i == cases[c].want_two,
+              cases[c].with_flags
+                  ? "the file's two-sided flag reaches the object"
+                  : "without the flag two-sided lighting stays off");
+        r.i = -1;
+        call(vm, pm, CLS("PolygonMode"), "isLocalCameraLightingEnabled", "()Z",
+             NULL, &r);
+        check(r.i == cases[c].want_local,
+              cases[c].with_flags
+                  ? "the file's local-camera-lighting flag reaches the object"
+                  : "without the flag local camera lighting stays off");
+        r.i = -1;
+        call(vm, pm, CLS("PolygonMode"), "isPerspectiveCorrectionEnabled", "()Z",
+             NULL, &r);
+        check(r.i == cases[c].want_persp,
+              cases[c].with_flags
+                  ? "the file's perspective-correction flag reaches the object"
+                  : "without the flag perspective correction keeps its default");
+    }
+}
+
 static void test_skinned_mesh(nj_vm *vm)
 {
     printf("== a file's SkinnedMesh decodes, poses and falls back ==\n");
@@ -3230,6 +3368,173 @@ static void test_triangle_strip_encoding0(nj_vm *vm)
               "the strips render from their own implicit indices");
     }
     nj_gc_collect(vm);
+}
+
+/* ------------------------------------------------------------------ */
+/* Two-sided lighting                                                  */
+/*
+ * JSR 184 (PolygonMode.TWO_SIDED_LIGHTING): a back-facing polygon is lit with
+ * its vertices' normals negated, so the visible back side is shaded like a
+ * front side would be.  This fixture authors one triangle in the back-facing
+ * winding and gives it (0,0,1) normals; the only light shines towards -z (its
+ * transform is rotated 180 degrees about y), so the front-side colour is black
+ * - the material has no ambient or emissive term - while the back-side colour,
+ * computed from the negated normal, is white.  With the flag off the triangle
+ * draws black; with it on the same pixels turn white.
+ */
+static void test_two_sided_lighting(nj_vm *vm)
+{
+    i2d_canvas c;
+    nj_value a[6], r;
+    nj_ref pos, posva, nva, vb, ib, app, poly, mat, light, lxf, lens;
+    int ok = 1, off_lit = -1, on_lit = -1;
+
+    printf("== two-sided lighting lights the back of a polygon ==\n");
+    ok = i2d_canvas_init(vm, &c);
+    pos = nj_array_new(vm, "S", 9u);
+    lens = nj_array_new(vm, "I", 1u);
+    posva = nj_object_new(vm, CLS("VertexArray"));
+    nva = nj_object_new(vm, CLS("VertexArray"));
+    vb = make(vm, CLS("VertexBuffer"));
+    ib = nj_object_new(vm, CLS("TriangleStripArray"));
+    app = make(vm, CLS("Appearance"));
+    poly = make(vm, CLS("PolygonMode"));
+    mat = make(vm, CLS("Material"));
+    light = make(vm, CLS("Light"));
+    lxf = make(vm, CLS("Transform"));
+    ok = ok && pos != 0 && lens != 0 && posva != 0 && nva != 0 && vb != 0 &&
+         ib != 0 && app != 0 && poly != 0 && mat != 0 && light != 0 &&
+         lxf != 0;
+    if (!ok) {
+        check(0, "the two-sided scene allocates");
+        return;
+    }
+
+    /*
+     * A triangle whose projection winds the other way round: the JSR front
+     * face is counter-clockwise, so on screen this one is the back side.
+     * Model units are clip units here - 60 pixels each - so it covers the
+     * lower-left half of the target.
+     */
+    {
+        nj_s2 mine[9] = { -4, -4, -4,   -4, 4, -4,   4, -4, -4 };
+
+        memcpy(nj_array_data(pos), mine, sizeof mine);
+        ((nj_s4 *)nj_array_data(lens))[0] = 3;
+        a[0].i = 3; a[1].i = 3; a[2].i = 2;      /* 3 vertices, 3 by 2 bytes */
+        ok = ok && nj_call_special(vm, posva, CLS("VertexArray"), "<init>",
+                                   "(III)V", a, NULL) == NJ_OK;
+        a[0].i = 0; a[1].i = 3; a[2].r = pos;
+        ok = ok && nj_call(vm, posva, CLS("VertexArray"), "set", "(II[S)V",
+                           a, NULL) == NJ_OK;
+        a[0].r = posva; a[1].f = 0.5f; a[2].r = 0;
+        ok = ok && nj_call(vm, vb, CLS("VertexBuffer"), "setPositions",
+                           "(L" CLS("VertexArray") ";F[F)V", a, NULL) == NJ_OK;
+    }
+    /* Every normal points at the camera; the light will be on the far side. */
+    {
+        nj_s2 mine[9] = { 0, 0, 64,   0, 0, 64,   0, 0, 64 };
+
+        memcpy(nj_array_data(pos), mine, sizeof mine);
+        a[0].i = 3; a[1].i = 3; a[2].i = 2;
+        ok = ok && nj_call_special(vm, nva, CLS("VertexArray"), "<init>",
+                                   "(III)V", a, NULL) == NJ_OK;
+        a[0].i = 0; a[1].i = 3; a[2].r = pos;
+        ok = ok && nj_call(vm, nva, CLS("VertexArray"), "set", "(II[S)V",
+                           a, NULL) == NJ_OK;
+        a[0].r = nva; a[1].f = 1.0f / 64.0f; a[2].r = 0;
+        ok = ok && nj_call(vm, vb, CLS("VertexBuffer"), "setNormals",
+                           "(L" CLS("VertexArray") ";)V", a, NULL) == NJ_OK;
+    }
+    a[0].i = 0; a[1].r = lens;                   /* first index, strip lengths */
+    ok = ok && nj_call_special(vm, ib, CLS("TriangleStripArray"), "<init>",
+                               "(I[I)V", a, NULL) == NJ_OK;
+
+    /* CULL_NONE (162) / SHADE_SMOOTH / winding CCW, two-sided off to start. */
+    a[0].i = 162;
+    ok = ok && nj_call(vm, poly, CLS("PolygonMode"), "setCulling", "(I)V",
+                       a, NULL) == NJ_OK;
+    a[0].i = 165;
+    ok = ok && nj_call(vm, poly, CLS("PolygonMode"), "setShading", "(I)V",
+                       a, NULL) == NJ_OK;
+    a[0].i = 168;
+    ok = ok && nj_call(vm, poly, CLS("PolygonMode"), "setWinding", "(I)V",
+                       a, NULL) == NJ_OK;
+    a[0].i = 0;
+    ok = ok && nj_call(vm, poly, CLS("PolygonMode"),
+                       "setTwoSidedLightingEnable", "(Z)V", a, NULL) == NJ_OK;
+
+    /* No ambient and no emissive term: front-side lighting on this face is 0. */
+    a[0].i = 1024; a[1].i = 0;
+    ok = ok && nj_call(vm, mat, CLS("Material"), "setColor", "(II)V",
+                       a, NULL) == NJ_OK;
+    a[0].i = 2048; a[1].i = (nj_s4)0xFFFFFFFFu;
+    ok = ok && nj_call(vm, mat, CLS("Material"), "setColor", "(II)V",
+                       a, NULL) == NJ_OK;
+    a[0].i = 4096; a[1].i = 0;
+    ok = ok && nj_call(vm, mat, CLS("Material"), "setColor", "(II)V",
+                       a, NULL) == NJ_OK;
+    a[0].i = 8192; a[1].i = 0;
+    ok = ok && nj_call(vm, mat, CLS("Material"), "setColor", "(II)V",
+                       a, NULL) == NJ_OK;
+    a[0].r = mat;
+    ok = ok && nj_call(vm, app, CLS("Appearance"), "setMaterial",
+                       "(L" CLS("Material") ";)V", a, NULL) == NJ_OK;
+    a[0].r = poly;
+    ok = ok && nj_call(vm, app, CLS("Appearance"), "setPolygonMode",
+                       "(L" CLS("PolygonMode") ";)V", a, NULL) == NJ_OK;
+
+    /* One directional light, rotated 180 degrees about y: it shines at +z. */
+    a[0].i = 129;
+    ok = ok && nj_call(vm, light, CLS("Light"), "setMode", "(I)V", a, NULL) == NJ_OK;
+    a[0].i = (nj_s4)0xFFFFFFFFu;
+    ok = ok && nj_call(vm, light, CLS("Light"), "setColor", "(I)V", a, NULL) == NJ_OK;
+    a[0].f = 1.0f;
+    ok = ok && nj_call(vm, light, CLS("Light"), "setIntensity", "(F)V",
+                       a, NULL) == NJ_OK;
+    ok = ok && nj_call(vm, lxf, CLS("Transform"), "setIdentity", "()V",
+                       NULL, NULL) == NJ_OK;
+    a[0].f = 180.0f; a[1].f = 0.0f; a[2].f = 1.0f; a[3].f = 0.0f;
+    ok = ok && nj_call(vm, lxf, CLS("Transform"), "postRotate", "(FFFF)V",
+                       a, NULL) == NJ_OK;
+    ok = ok && nj_call(vm, c.g3d, CLS("Graphics3D"), "resetLights", "()V",
+                       NULL, NULL) == NJ_OK;
+    memset(&r, 0, sizeof r);
+    a[0].r = light; a[1].r = lxf;
+    ok = ok && nj_call(vm, c.g3d, CLS("Graphics3D"), "addLight",
+                       "(L" CLS("Light") ";L" CLS("Transform") ";)I",
+                       a, &r) == NJ_OK && r.i == 0;
+
+    a[0].r = c.bg;
+    ok = ok && nj_call(vm, c.g3d, CLS("Graphics3D"), "clear",
+                       "(L" CLS("Background") ";)V", a, NULL) == NJ_OK;
+    a[0].r = vb; a[1].r = ib; a[2].r = app; a[3].r = 0; a[4].i = 0;
+    ok = ok && nj_call(vm, c.g3d, CLS("Graphics3D"), "render",
+                       "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                       CLS("Appearance") ";L" CLS("Transform") ";I)V",
+                       a, NULL) == NJ_OK;
+    off_lit = ok ? i2d_canvas_lit_pixels(&c) : -1;
+
+    a[0].i = 1;                                  /* two-sided on */
+    ok = ok && nj_call(vm, poly, CLS("PolygonMode"),
+                       "setTwoSidedLightingEnable", "(Z)V", a, NULL) == NJ_OK;
+    a[0].r = c.bg;
+    ok = ok && nj_call(vm, c.g3d, CLS("Graphics3D"), "clear",
+                       "(L" CLS("Background") ";)V", a, NULL) == NJ_OK;
+    a[0].r = vb; a[1].r = ib; a[2].r = app; a[3].r = 0; a[4].i = 0;
+    ok = ok && nj_call(vm, c.g3d, CLS("Graphics3D"), "render",
+                       "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                       CLS("Appearance") ";L" CLS("Transform") ";I)V",
+                       a, NULL) == NJ_OK;
+    on_lit = ok ? i2d_canvas_lit_pixels(&c) : -1;
+
+    check(ok, "the two-sided scene builds and renders");
+    check(off_lit >= 0 && off_lit < 600,
+          "a back face stays black while two-sided lighting is off");
+    check(on_lit > 15000,
+          "two-sided lighting shades the back face white");
+    check(on_lit > off_lit + 15000,
+          "enabling two-sided lighting is what changed the pixels");
 }
 
 int main(void)
@@ -5928,6 +6233,7 @@ int main(void)
        suspension rig, carries its curves as KeyframeSequence + track. */
     test_animation(vm);
     test_animation_file(vm);
+    test_polygon_mode_file(vm);
     test_skinned_mesh(vm);
     test_triangle_strip_encoding0(vm);
 
@@ -5938,6 +6244,7 @@ int main(void)
     /* A World larger than one render's stack array keeps all of its Mesh
        nodes; Doom 3's level (173 meshes) lost everything past the 64th. */
     test_world_mesh_count(vm);
+    test_two_sided_lighting(vm);
 
     /* The file format calls type 18 Sprite; the titles call the class
        Sprite3D.  Both have to be loadable.  These run before the VM is

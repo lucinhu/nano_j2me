@@ -1,0 +1,24 @@
+{
+ "what": "JSR 184 PolygonMode payloads in the collected corpus",
+ "how": "python3 tools/check_m3g_polygon_modes.py --json docs/m3g-twosided-results.json tests/games; cross-checked by tools/check_m3g_reals.sh (975 files probed, 0 rejected, 1513/1513 PolygonMode objects in range)",
+ "m3g_files": 975,
+ "objects": 35884,
+ "polygon_modes": 1513,
+ "payload_lengths": {
+  "18": 1513
+ },
+ "flag_triples_(two-sided,local-camera,perspective)": {
+  "(0, 0, 1)": 1409,
+  "(0, 0, 0)": 61,
+  "(1, 0, 1)": 43
+ },
+ "two_sided_per_title": {
+  "生化危机3D(CAPCOM经典)_3671.jar": 15,
+  "3D科林麦克雷拉力赛之尘埃_6600.jar": 13,
+  "杀戮机器-纳粹僵尸_3610.jar": 9,
+  "CS反恐精英(蓝牙对战)_6858.jar": 3,
+  "3D拉力赛-进化汉化版_6366.jar": 2,
+  "蓝牙真3D格斗_3424.jar": 1
+ },
+ "outside_the_shape": 0
+}

@@ -611,6 +611,23 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
             M3G_FAIL("a PolygonMode is %lu byte(s)", (unsigned long)len);
         }
         out->a = data[12]; out->b = data[13]; out->c = data[14];
+        /*
+         * JSR 184 1.1 file format, PolygonMode: the three enumerations are
+         * followed by three booleans - two-sided lighting, local camera
+         * lighting and perspective correction.  Measured, not assumed: all
+         * 1513 PolygonMode objects in the 975 corpus .m3g files carry an
+         * eighteen-byte payload, and bytes 15..17 are only ever 0 or 1
+         * (two-sided is set on 43 of them, local camera never, perspective
+         * correction cleared on 61).  A payload that stops after the
+         * enumerations - our own hand-built fixtures - keeps the class
+         * defaults; d says the booleans were there.
+         */
+        if (len >= NJ_M3G_OBJECT_HEADER + 6u) {
+            out->f[0] = (float)data[15];
+            out->f[1] = (float)data[16];
+            out->f[2] = (float)data[17];
+            out->d = 1u;
+        }
         /* zero means "not set in the file"; anything else is one of the three
            enumerations the format defines, and a file that says otherwise is
            one we would be guessing at */
@@ -5858,6 +5875,30 @@ nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
                 nj_iput(vm, o, m3g_fof(vm, NJ_C_POLY, "_nj_winding", "I"),
                         (nj_s4)f->c);
             }
+            /*
+             * The three booleans that follow the enumerations.  A file object
+             * never runs the class constructor, so "keep the defaults" means
+             * writing the specification's values, not leaving the fields at
+             * the zero an object allocation starts from - perspective
+             * correction defaults to true.
+             *
+             * Two-sided lighting is the one the corpus exercises: 43
+             * PolygonModes across six titles ask for it (the two rally
+             * titles, Colin McRae, Counter-Strike, the zombie shooter and the
+             * Bluetooth 3D fighter).  The renderer consumes the flag; local
+             * camera lighting has no implementation and the rasteriser is
+             * always perspective correct, so those two are state only.
+             */
+            if (f->d != 0u) {
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_POLY, "_nj_twosided", "Z"),
+                        (f->f[0] != 0.0f) ? 1 : 0);
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_POLY, "_nj_localcam", "Z"),
+                        (f->f[1] != 0.0f) ? 1 : 0);
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_POLY, "_nj_persp", "Z"),
+                        (f->f[2] != 0.0f) ? 1 : 0);
+            } else {
+                nj_iput(vm, o, m3g_fof(vm, NJ_C_POLY, "_nj_persp", "Z"), 1);
+            }
             break;
         case NJ_M3G_T_COMPOSITING_MODE:
             nj_iput(vm, o, m3g_fof(vm, NJ_C_COMP, "_nj_blend", "I"),
@@ -10798,7 +10839,8 @@ static inline const nj_u1 *sw_near_texel(const m3g_sw *sw, float s, float t,
 }
 
 static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
-                    const float st[6], int has_tex, const nj_u4 rgb[3])
+                    const float st[6], int has_tex, const nj_u4 rgb[3],
+                    const nj_u4 rgb2[3], int twosided)
 {
     float x0 = xy[0], y0 = xy[1], x1 = xy[2], y1 = xy[3], x2 = xy[4], y2 = xy[5];
     float area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
@@ -10813,18 +10855,18 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     nj_u4 drawn = 0u;
     /* Gouraud: the three vertex colours, interpolated like 1/w.  A flat
        triangle (the same colour three times, which is every unlit one) keeps
-       the single-colour loop. */
-    int gouraud = (rgb[0] != rgb[1] || rgb[1] != rgb[2]);
-    nj_u4 flat = 0xFF000000u | (rgb[0] & 0x00FFFFFFu);
+       the single-colour loop.  Both are filled in below, after the facing is
+       known, so a two-sided polygon can start from its back-face colours. */
+    int gouraud;
+    nj_u4 flat;
     float cr = 0.0f, cg = 0.0f, cb = 0.0f;
     float dxr = 0.0f, dyr = 0.0f, dxgc = 0.0f, dygc = 0.0f, dxb = 0.0f, dyb = 0.0f;
     float r0f = 0.0f, g0f = 0.0f, b0f = 0.0f;
     float r1f = 0.0f, g1f = 0.0f, b1f = 0.0f;
     float r2f = 0.0f, g2f = 0.0f, b2f = 0.0f;
 #if NJ_M3G_FAST_PATHS
-    int flat_opaque = !has_tex && !gouraud && !sw->sprite && sw->awrite &&
-                      sw->athresh <= 255 && (sw->blend == 64 || sw->blend == 68);
-    int flat_tex = 0, flat_tex565 = 0, flat_texargb = 0;
+    int flat_opaque;
+    int flat_tex, flat_tex565, flat_texargb;
 #endif
 
     if (!sw->surf || !sw->z || !sw->surf->pixels) {
@@ -10835,18 +10877,6 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
         format != NJ_PIXFMT_RGB888) {
         return 0u;
     }
-#if NJ_M3G_FAST_PATHS
-    /* Hoist flat/nearest texture dispatch out of the pixel loop. Clamp,
-     * replace/decal and non-default compositing are common in real scenes;
-     * none needs the general Gouraud/sprite/filter branch tree. Alpha testing
-     * still precedes depth writes and all blend modes use sw_blend unchanged. */
-    flat_tex = has_tex && !gouraud && !sw->sprite &&
-               sw->tex != NULL && sw->tex_bpp >= 3 &&
-               sw->tex_w > 0 && sw->tex_h > 0 &&
-               sw->filt_image != 209 && sw->filt_image != 129;
-    flat_tex565 = flat_tex && format == NJ_PIXFMT_RGB565;
-    flat_texargb = flat_tex && format == NJ_PIXFMT_ARGB8888;
-#endif
     if (area == 0.0f) {
         return 0u;
     }
@@ -10859,6 +10889,29 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     if ((cull == M3G_SW_BACK && back) || (cull == M3G_SW_FRONT && !back)) {
         return 0u;
     }
+    /* Two-sided lighting: the back side of a lit polygon uses the colour set
+       jr_fetch() computed with the negated normals.  Selecting here, before
+       any shading flag or colour is read, keeps the per-pixel loops unchanged
+       and costs nothing for the (overwhelmingly common) one-sided case. */
+    if (twosided && back && rgb2 != NULL) {
+        rgb = rgb2;
+    }
+    gouraud = (rgb[0] != rgb[1] || rgb[1] != rgb[2]);
+    flat = 0xFF000000u | (rgb[0] & 0x00FFFFFFu);
+#if NJ_M3G_FAST_PATHS
+    /* Hoist flat/nearest texture dispatch out of the pixel loop. Clamp,
+     * replace/decal and non-default compositing are common in real scenes;
+     * none needs the general Gouraud/sprite/filter branch tree. Alpha testing
+     * still precedes depth writes and all blend modes use sw_blend unchanged. */
+    flat_opaque = !has_tex && !gouraud && !sw->sprite && sw->awrite &&
+                  sw->athresh <= 255 && (sw->blend == 64 || sw->blend == 68);
+    flat_tex = has_tex && !gouraud && !sw->sprite &&
+               sw->tex != NULL && sw->tex_bpp >= 3 &&
+               sw->tex_w > 0 && sw->tex_h > 0 &&
+               sw->filt_image != 209 && sw->filt_image != 129;
+    flat_tex565 = flat_tex && format == NJ_PIXFMT_RGB565;
+    flat_texargb = flat_tex && format == NJ_PIXFMT_ARGB8888;
+#endif
     ia = 1.0f / area;
     minx = (int)floorf(x0 < x1 ? (x0 < x2 ? x0 : x2) : (x1 < x2 ? x1 : x2));
     maxx = (int)ceilf(x0 > x1 ? (x0 > x2 ? x0 : x2) : (x1 > x2 ? x1 : x2));
@@ -11277,6 +11330,7 @@ typedef struct {
     float lspot_angle[NJ_M3G_LIGHTS];
     float lspot_exp[NJ_M3G_LIGHTS];
     int lit;
+    int twosided;                 /* PolygonMode asked for two-sided lighting */
     nj_u4 emi, amb, spc;          /* the material's other colours */
     float shin;
     int vcolor;
@@ -11482,10 +11536,12 @@ static nj_u4 jr_colour(m3g_jr *r, nj_u4 a, nj_u4 b, nj_u4 c)
  * attenuation and, for a spot, by its cone.  The viewer sits at the origin of
  * eye space, which is why the caller passes eye-space positions.
  *
- * What is not attempted: two-sided lighting (a back face is lit by the
- * material as it is), local vs infinite viewer (the specular term uses the
+ * What is not attempted: local vs infinite viewer (the specular term uses the
  * vertex-to-eye direction), and the per-light "vertex colour tracking"
- * nuances beyond multiplying ambient and diffuse by the vertex colour.
+ * nuances beyond multiplying ambient and diffuse by the vertex colour.  Two-
+ * sided lighting is not in this function: jr_fetch() calls it a second time
+ * with the negated normal and keeps that colour for back faces, so the
+ * equation itself stays one-sided.
  */
 static void jr_lit(m3g_jr *r, const float pe[3], const float ne[3],
                    nj_u4 vcol, float out[3])
@@ -11716,7 +11772,8 @@ typedef struct {
     float st[2];
     float pe[3];                   /* camera space: z is negative in front */
     float ne[3];
-    nj_u4 rgb;
+    nj_u4 rgb;                     /* front-face lit colour */
+    nj_u4 rgb2;                    /* back-face lit colour (two-sided only) */
 } jr_vtx;
 
 static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
@@ -11730,6 +11787,7 @@ static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
     o->pe[0] = o->pe[1] = o->pe[2] = 0.0f;
     o->ne[0] = o->ne[1] = o->ne[2] = 0.0f;
     o->rgb = 0u;
+    o->rgb2 = 0u;
     if (!jr_vertex(r, v, o->xy, &o->inv, o->st, o->pe, o->ne)) {
         return 0;
     }
@@ -11746,6 +11804,24 @@ static int jr_fetch(m3g_jr *r, nj_u4 v, jr_vtx *o)
         }
         jr_lit(r, o->pe, o->ne, vc, col);
         jr_fog(r, o->pe, col);
+        /*
+         * Two-sided lighting: a back-facing polygon is lit by the same lights
+         * with its normal reversed (JSR 184, PolygonMode.TWO_SIDED_LIGHTING).
+         * Which side a triangle shows is only known after projection, so both
+         * colours are computed here and sw_tri() selects between them.
+         */
+        if (r->twosided) {
+            float col2[3], back[3];
+
+            back[0] = -o->ne[0];
+            back[1] = -o->ne[1];
+            back[2] = -o->ne[2];
+            jr_lit(r, o->pe, back, vc, col2);
+            jr_fog(r, o->pe, col2);
+            o->rgb2 = ((nj_u4)(col2[0] + 0.5f) << 16) |
+                      ((nj_u4)(col2[1] + 0.5f) << 8) |
+                      (nj_u4)(col2[2] + 0.5f);
+        }
     } else {
         argb = jr_colour(r, v, v, v);
         col[0] = (float)((argb >> 16) & 0xFFu);
@@ -11787,6 +11863,19 @@ static void jr_blend(m3g_jr *r, const jr_vtx *a, const jr_vtx *b, float t,
     o->rgb = ((nj_u4)(c0[0] + (c1[0] - c0[0]) * t + 0.5f) << 16) |
              ((nj_u4)(c0[1] + (c1[1] - c0[1]) * t + 0.5f) << 8) |
              (nj_u4)(c0[2] + (c1[2] - c0[2]) * t + 0.5f);
+    if (r->twosided) {
+        c0[0] = (float)((a->rgb2 >> 16) & 0xFFu);
+        c0[1] = (float)((a->rgb2 >> 8) & 0xFFu);
+        c0[2] = (float)(a->rgb2 & 0xFFu);
+        c1[0] = (float)((b->rgb2 >> 16) & 0xFFu);
+        c1[1] = (float)((b->rgb2 >> 8) & 0xFFu);
+        c1[2] = (float)(b->rgb2 & 0xFFu);
+        o->rgb2 = ((nj_u4)(c0[0] + (c1[0] - c0[0]) * t + 0.5f) << 16) |
+                  ((nj_u4)(c0[1] + (c1[1] - c0[1]) * t + 0.5f) << 8) |
+                  (nj_u4)(c0[2] + (c1[2] - c0[2]) * t + 0.5f);
+    } else {
+        o->rgb2 = 0u;
+    }
     jr_project(r->proj, o->pe, r->vw, r->vh, o->xy, &o->inv);
 }
 
@@ -11794,7 +11883,7 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
                     const jr_vtx *v2)
 {
     float xy[6], st[6], inv[3];
-    nj_u4 rgb[3];
+    nj_u4 rgb[3], rgb2[3];
 
     xy[0] = v0->xy[0]; xy[1] = v0->xy[1];
     xy[2] = v1->xy[0]; xy[3] = v1->xy[1];
@@ -11804,6 +11893,7 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
     st[4] = v2->st[0]; st[5] = v2->st[1];
     inv[0] = v0->inv; inv[1] = v1->inv; inv[2] = v2->inv;
     rgb[0] = v0->rgb; rgb[1] = v1->rgb; rgb[2] = v2->rgb;
+    rgb2[0] = v0->rgb2; rgb2[1] = v1->rgb2; rgb2[2] = v2->rgb2;
     if (r->sw.surf) {
         /* How many texels does one pixel cover?  The triangle's screen area
            and its area in texture space answer that, and the answer picks the
@@ -11841,8 +11931,9 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
             }
         }
         /* The rasteriser writes the pixels: depth, texture, culling. */
-        if (sw_tri(&r->sw, xy, inv, st, r->sw.tex != NULL && (r->tpos != NULL || r->sw.sprite),
-                   rgb) != 0u) {
+        if (sw_tri(&r->sw, xy, inv, st,
+                   r->sw.tex != NULL && (r->tpos != NULL || r->sw.sprite),
+                   rgb, rgb2, r->twosided) != 0u) {
             r->drawn++;
         }
         return;
@@ -12367,6 +12458,7 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
        (the JSR defaults are CULL_BACK and CCW). */
     r.sw.cull = 0;
     r.sw.winding = 0;
+    r.twosided = 0;
     /* The JSR defaults when the appearance carries no CompositingMode:
        ALPHA blending with no alpha test, and the alpha channel written. */
     r.sw.texfunc = 227;
@@ -12384,6 +12476,8 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                           m3g_fof(vm, NJ_C_POLY, "_nj_culling", "I"));
             r.sw.winding = (int)nj_iget(vm, pm,
                              m3g_fof(vm, NJ_C_POLY, "_nj_winding", "I"));
+            r.twosided = nj_field_read_int(vm, pm,
+                             m3g_fof(vm, NJ_C_POLY, "_nj_twosided", "Z")) ? 1 : 0;
         }
         {
             nj_ref cm = nj_rget(vm, app, m3g_fof(vm, NJ_C_APPEAR, "_nj_cm",

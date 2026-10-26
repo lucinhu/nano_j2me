@@ -764,14 +764,32 @@ int main(void)
          * written against 36859 objects from 975 real files, and these three
          * are the shapes it was measured from.
          */
-        nj_u1 pm[12u + 3u];
+        nj_u1 pm[12u + 6u];
         nj_m3g_fields f;
         char err[128];
 
         memset(pm, 0, sizeof(pm));
         pm[12] = 162u; pm[13] = 165u; pm[14] = 168u;   /* NONE, SMOOTH, CCW */
-        ok(nj_m3g_decode_object(pm, sizeof(pm), 8u, &f, err, sizeof(err)) == NJ_OK, "a PolygonMode decodes");
+        ok(nj_m3g_decode_object(pm, 12u + 3u, 8u, &f, err, sizeof(err)) == NJ_OK, "a PolygonMode decodes");
         ok(f.a == 162u && f.b == 165u && f.c == 168u, "its culling, shading and winding come out");
+        ok(f.d == 0u, "a payload that ends after the enums says the flags were absent");
+
+        /*
+         * The shape every real file has: eighteen bytes, the three
+         * enumerations then two-sided lighting, local camera lighting and
+         * perspective correction.  Measured over the corpus: all 1513
+         * PolygonMode objects do this, bytes 15..17 are only 0 or 1, and
+         * two-sided is set on 43 of them.
+         */
+        memset(pm, 0, sizeof(pm));
+        pm[12] = 162u; pm[13] = 165u; pm[14] = 168u;
+        pm[15] = 1u; pm[16] = 1u; pm[17] = 0u;
+        ok(nj_m3g_decode_object(pm, sizeof(pm), 8u, &f, err, sizeof(err)) == NJ_OK,
+           "an eighteen-byte PolygonMode (the real files' shape) decodes");
+        ok(f.a == 162u && f.b == 165u && f.c == 168u,
+           "and the enumerations in front of the flags still come out");
+        ok(f.d == 1u && f.f[0] == 1.0f && f.f[1] == 1.0f && f.f[2] == 0.0f,
+           "its two-sided, local-camera and perspective flags come out");
 
         pm[13] = 200u;                                  /* not a shading mode */
         ok(nj_m3g_decode_object(pm, sizeof(pm), 8u, &f, err, sizeof(err)) != NJ_OK, "a shading mode that does not exist is refused");
