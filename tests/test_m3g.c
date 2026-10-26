@@ -2552,6 +2552,138 @@ static void test_animation(nj_vm *vm)
     }
 }
 
+static void test_animation_colour(nj_vm *vm)
+{
+    printf("== animate() applies a COLOR track to a background ==\n");
+    {
+        nj_ref bg = make(vm, CLS("Background"));
+        nj_ref kfs = kfs_new(vm, 3, 2, 176);
+        nj_ref ctl = make(vm, CLS("AnimationController"));
+        nj_ref track;
+        nj_value a[1], r;
+        nj_u4 c;
+
+        check(bg && kfs && ctl, "a Background and a three-component colour curve");
+        if (bg && kfs && ctl) {
+            kfs_set_key3(vm, kfs, 0, 0, 0.0f, 0.0f, 0.0f);
+            kfs_set_key3(vm, kfs, 1, 1000, 1.0f, 0.5f, 0.25f);
+            track = atrack_new(vm, kfs, 258);          /* AnimationTrack.COLOR */
+            check(track != 0, "an AnimationTrack for COLOR");
+            if (track) {
+                /* An alpha the colour animation must not clobber. */
+                a[0].i = (nj_s4)0xFF204080u;
+                call(vm, bg, CLS("Background"), "setColor", "(I)V", a, NULL);
+                node_add_track(vm, bg, track, ctl);
+
+                a[0].i = 0;
+                call(vm, bg, CLS("Background"), "animate", "(I)I", a, &r);
+                r.i = -1;
+                call(vm, bg, CLS("Background"), "getColor", "()I", NULL, &r);
+                check(((nj_u4)r.i & 0x00FFFFFFu) == 0u,
+                      "at t=0 a COLOR track writes the first keyframe's black");
+                check(((nj_u4)r.i & 0xFF000000u) == 0xFF000000u,
+                      "and the colour's alpha byte is preserved");
+
+                a[0].i = 500;
+                call(vm, bg, CLS("Background"), "animate", "(I)I", a, NULL);
+                r.i = -1;
+                call(vm, bg, CLS("Background"), "getColor", "()I", NULL, &r);
+                c = (nj_u4)r.i & 0x00FFFFFFu;
+                check(((c >> 16) & 0xFFu) == 128u && ((c >> 8) & 0xFFu) == 64u &&
+                      (c & 0xFFu) == 32u,
+                      "halfway is the linear blend, scaled to 8 bits (128,64,32)");
+
+                a[0].i = 1000;
+                call(vm, bg, CLS("Background"), "animate", "(I)I", a, NULL);
+                r.i = -1;
+                call(vm, bg, CLS("Background"), "getColor", "()I", NULL, &r);
+                check(((nj_u4)r.i & 0x00FFFFFFu) == 0xFF8040u,
+                      "the last keyframe is (255,128,64)");
+            }
+        }
+    }
+    printf("== a COLOR track also reaches Light and Fog ==\n");
+    {
+        nj_ref light = make(vm, CLS("Light"));
+        nj_ref kfs = kfs_new(vm, 3, 2, 176);
+        nj_ref ctl = make(vm, CLS("AnimationController"));
+        nj_ref track;
+        nj_value a[1], r;
+
+        if (light && kfs && ctl) {
+            kfs_set_key3(vm, kfs, 0, 0, 0.0f, 1.0f, 0.0f);
+            kfs_set_key3(vm, kfs, 1, 1000, 0.0f, 1.0f, 0.0f);
+            track = atrack_new(vm, kfs, 258);
+            if (track) {
+                a[0].i = (nj_s4)0xFF102030u;
+                call(vm, light, CLS("Light"), "setColor", "(I)V", a, NULL);
+                node_add_track(vm, light, track, ctl);
+                a[0].i = 1000;
+                call(vm, light, CLS("Light"), "animate", "(I)I", a, NULL);
+                r.i = -1;
+                call(vm, light, CLS("Light"), "getColor", "()I", NULL, &r);
+                check(((nj_u4)r.i & 0x00FFFFFFu) == 0x00FF00u,
+                      "a Light's colour comes from its COLOR track");
+            }
+        }
+
+        kfs = kfs_new(vm, 3, 2, 176);
+        light = make(vm, CLS("Fog"));
+        if (light && kfs && ctl) {
+            kfs_set_key3(vm, kfs, 0, 0, 0.0f, 0.0f, 1.0f);
+            kfs_set_key3(vm, kfs, 1, 1000, 0.0f, 0.0f, 1.0f);
+            track = atrack_new(vm, kfs, 258);
+            if (track) {
+                a[0].i = (nj_s4)0xFF102030u;
+                call(vm, light, CLS("Fog"), "setColor", "(I)V", a, NULL);
+                node_add_track(vm, light, track, ctl);
+                a[0].i = 1000;
+                call(vm, light, CLS("Fog"), "animate", "(I)I", a, NULL);
+                r.i = -1;
+                call(vm, light, CLS("Fog"), "getColor", "()I", NULL, &r);
+                check(((nj_u4)r.i & 0x00FFFFFFu) == 0x0000FFu,
+                      "a Fog's colour comes from its COLOR track");
+            }
+        }
+    }
+    printf("== the animated background colour is what clear() paints ==\n");
+    {
+        i2d_canvas c;
+        nj_ref kfs = kfs_new(vm, 3, 2, 176);
+        nj_ref ctl = make(vm, CLS("AnimationController"));
+        nj_ref track;
+        nj_value a[1];
+        int ok;
+
+        ok = i2d_canvas_init(vm, &c);
+        check(ok, "the 3D canvas for the colour clear");
+        if (ok && kfs && ctl) {
+            kfs_set_key3(vm, kfs, 0, 0, 0.0f, 0.0f, 0.0f);
+            kfs_set_key3(vm, kfs, 1, 1000, 1.0f, 0.0f, 0.0f);
+            track = atrack_new(vm, kfs, 258);
+            if (track) {
+                node_add_track(vm, c.bg, track, ctl);
+                a[0].i = 1000;
+                call(vm, c.bg, CLS("Background"), "animate", "(I)I", a, NULL);
+            }
+            a[0].r = c.bg;
+            call(vm, c.g3d, CLS("Graphics3D"), "clear",
+                 "(L" CLS("Background") ";)V", a, NULL);
+            check(i2d_canvas_pixel(&c, 20, 20) == 0xFF0000u &&
+                  i2d_canvas_pixel(&c, 220, 300) == 0xFF0000u,
+                  "an animated red Background clears the target red");
+
+            a[0].i = 0;
+            call(vm, c.bg, CLS("Background"), "animate", "(I)I", a, NULL);
+            a[0].r = c.bg;
+            call(vm, c.g3d, CLS("Graphics3D"), "clear",
+                 "(L" CLS("Background") ";)V", a, NULL);
+            check(i2d_canvas_pixel(&c, 20, 20) == 0u,
+                  "and moving the animation back to t=0 clears it black again");
+        }
+    }
+}
+
 static void test_animation_file(nj_vm *vm)
 {
     printf("== a file's animation objects load and animate ==\n");
@@ -6232,6 +6364,7 @@ int main(void)
     /* The file format's animation objects: animrig_car.m3g, the NFS
        suspension rig, carries its curves as KeyframeSequence + track. */
     test_animation(vm);
+    test_animation_colour(vm);
     test_animation_file(vm);
     test_polygon_mode_file(vm);
     test_skinned_mesh(vm);

@@ -2422,9 +2422,11 @@ static int m3g_is_a(nj_vm *vm, nj_ref o, const char *cls);
  * The rig animrig_car.m3g carries in NFS: Hot Pursuit is eleven triples of
  * (sequence, controller, track); its 27-node car models animate the
  * suspension and wheel-spin nodes, whose sequences hold translation,
- * orientation and scale keys.  Those three properties plus ALPHA and
- * VISIBILITY are what this implements - an unanimated property keeps the
- * value the game set, which is better than a guess.
+ * orientation and scale keys.  Those three properties plus ALPHA, VISIBILITY
+ * and COLOR are what this implements - an unanimated property keeps the value
+ * the game set, which is better than a guess.  COLOR is a three-component
+ * red/green/blue in 0..1 (JSR 184 AnimationTrack.COLOR) and the corpus uses
+ * exactly one of them: a Background in 蓝牙真3D格斗's sadan.m3g.
  */
 static nj_s4 m3g_anim_sample(nj_vm *vm, nj_ref seq, float t, nj_ref scratch)
 {
@@ -2604,6 +2606,36 @@ static int m3g_anim_apply(nj_vm *vm, nj_ref self, nj_s4 prop, const float *v)
                 on ? 0 : 1);
         return 1;
     }
+    if (prop == 258) {                                    /* COLOR */
+        /*
+         * AnimationTrack.COLOR: three components in 0..1, scaled to the eight
+         * bits a colour is packed in.  Only Background, Fog and Light define
+         * a colour a track may animate; the alpha byte is not part of this
+         * property (a Background animates it with ALPHA) and is preserved.
+         * The renderer reads the same fields the setColor() natives write:
+         * Background's clear colour, Light's colour in jr_lit() and Fog's
+         * (fog is decoded but no corpus object uses it).
+         */
+        const char *cls = m3g_is_a(vm, self, NJ_C_BG) ? NJ_C_BG
+                        : m3g_is_a(vm, self, NJ_C_LIGHT) ? NJ_C_LIGHT
+                        : m3g_is_a(vm, self, NJ_C_FOG) ? NJ_C_FOG : NULL;
+        nj_u4 rgb;
+
+        if (!cls) {
+            return 0;
+        }
+        rgb = ((nj_u4)(v[0] < 0.0f ? 0 : (v[0] > 1.0f ? 255 : (nj_s4)(v[0] * 255.0f + 0.5f))) << 16) |
+              ((nj_u4)(v[1] < 0.0f ? 0 : (v[1] > 1.0f ? 255 : (nj_s4)(v[1] * 255.0f + 0.5f))) << 8) |
+               (nj_u4)(v[2] < 0.0f ? 0 : (v[2] > 1.0f ? 255 : (nj_s4)(v[2] * 255.0f + 0.5f)));
+        {
+            nj_s4 cur = nj_iget(vm, self,
+                                m3g_fof(vm, cls, "_nj_color", "I"));
+
+            nj_iput(vm, self, m3g_fof(vm, cls, "_nj_color", "I"),
+                    (nj_s4)(((nj_u4)cur & 0xFF000000u) | rgb));
+        }
+        return 1;
+    }
     return 0;
 }
 
@@ -2689,7 +2721,7 @@ static nj_s4 m3g_animate_object(nj_vm *vm, nj_ref self, nj_s4 time,
                     break;
                 }
                 if (prop != 275 && prop != 268 && prop != 270 &&
-                    prop != 256 && prop != 276) {
+                    prop != 256 && prop != 276 && prop != 258) {
                     continue;         /* a property this engine leaves alone */
                 }
                 if (!m3g_anim_track(vm, tj, time, vals, &w, &validity, scratch)) {
@@ -2704,7 +2736,7 @@ static nj_s4 m3g_animate_object(nj_vm *vm, nj_ref self, nj_s4 time,
                 }
             }
             if (wsum > 0.0f && (prop == 275 || prop == 268 || prop == 270 ||
-                                prop == 256 || prop == 276)) {
+                                prop == 256 || prop == 276 || prop == 258)) {
                 float inv = 1.0f / wsum;
                 nj_u4 c;
 
@@ -2712,7 +2744,13 @@ static nj_s4 m3g_animate_object(nj_vm *vm, nj_ref self, nj_s4 time,
                     sum[c] *= inv;
                 }
                 if (m3g_anim_apply(vm, self, prop, sum)) {
-                    composed = 1;
+                    /* Only the component transform needs recomposing; ALPHA,
+                       VISIBILITY and COLOR write plain fields, and their
+                       targets (a Background, a Light, a Fog) are not even
+                       Transformables. */
+                    if (prop == 275 || prop == 268 || prop == 270) {
+                        composed = 1;
+                    }
                 }
             }
             i = (j > i) ? j : i + 1;
