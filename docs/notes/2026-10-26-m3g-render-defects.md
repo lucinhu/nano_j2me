@@ -184,3 +184,29 @@ indices`, 1 failure; `red-green/tsa0-fixed.log` → 0 failures.
   transform is not) deserve a title run when the CS maps are reachable.
 - No hardware/F2P frame comparison was done for these scenes; the evidence is
   within-emulator A/B plus the file-format reading validated against the corpus.
+
+## Follow-up status (2026-10-27)
+
+Every item in the limitations list above has been picked up:
+
+* Animation **COLOR** is implemented for its JSR 184 targets (Background,
+  Fog, Light) - commit `b721ea4`, `docs/notes/2026-10-27-m3g-animation-colour.md`;
+* `Object3D.duplicate()` on a `SkinnedMesh` now duplicates the skeleton and
+  remaps the bone records instead of sharing the source rig - commit
+  `a8b4031`, `docs/notes/2026-10-27-m3g-duplicate-bones.md`;
+* `m3g_skin_pose()` no longer allocates its posed arrays per frame: one
+  cached seven-floats-per-vertex array lives on the mesh - commit `d492dae`,
+  `docs/notes/2026-10-27-m3g-pose-cache.md`;
+* the Texture2D general transform is proved end to end (real corpus matrices
+  measured, a rendered scale/translate test, a mutation that fails it) -
+  commit `c62e9d4`, `docs/notes/2026-10-27-m3g-texture-transform.md`;
+* two-sided lighting was implemented afterwards from the same corpus scan
+  (43 PolygonModes, six titles) - commit `656f7b6`.  Its in-game before/after
+  is a documented null result: five of the six titles have no
+  normal-dependent light and the sixth cannot boot offline
+  (`docs/notes/2026-10-27-m3g-two-sided-lighting.md`).
+
+The CS map run remains the open user-facing one: `CS反恐精英(蓝牙对战)_6858`
+does not get past its Registration/Email-SN screen headlessly, so the three
+map files' texture matrices are verified from their bytes and through the
+renderer but not in a gameplay frame.

@@ -310,3 +310,22 @@ texture general transforms (scale+translate, not identity, and the sampler
 already has a matrix path), and the concrete decode+loader sketch
 render-diagnosis can apply. Line numbers there are from the working tree at
 audit time; function names are the stable anchors.
+
+## Status after the 2026-10-27 rounds
+
+The four gaps this audit ranked are all closed, with tests and notes:
+
+| row | gap | closed by | note |
+| --- | --- | --- | --- |
+| 14 | SkinnedMesh decodes/links/poses | `c34d101` | `2026-10-26-m3g-render-defects.md` |
+| 15 | animated ALPHA / VISIBILITY / COLOR | `c34d101` (ALPHA, VISIBILITY), `b721ea4` (COLOR) | `2026-10-27-m3g-animation-colour.md` |
+| 16 | TSA encoding 0 | `c34d101` | `2026-10-26-m3g-render-defects.md` |
+| 17 | Texture2D general transform | `c34d101` (decode), `c62e9d4` (pixel proof + corpus measurement) | `2026-10-27-m3g-texture-transform.md` |
+
+Two follow-ups the skinned-mesh work left are also closed: `duplicate()` now
+copies the skeleton/bones (`a8b4031`, `2026-10-27-m3g-duplicate-bones.md`) and
+posing no longer allocates host memory per frame (`d492dae`,
+`2026-10-27-m3g-pose-cache.md`).  Two-sided lighting, which the audit did not
+rank (it was found later, in 43 PolygonModes across six titles), is
+`656f7b6`; its in-game evidence is a structural null - see
+`2026-10-27-m3g-two-sided-lighting.md`.
