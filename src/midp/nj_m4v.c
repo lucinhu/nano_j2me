@@ -1287,7 +1287,7 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
     int qsc = (int)vop->qscale;   /* dquant adjusts this for the whole rest of the frame */
     for (mby = 0; mby < mbh; mby++) {
         for (mbx = 0; mbx < mbw; mbx++) {
-            nj_s4 ac[6];
+            int ac[6];
             int   rc;
             rc = nj_m4v_decode_intra_mb_pix(b, n, pos, (int)mbx, (int)mby,
                                                   gl, glw, gc, gcw, gcr, gcw,
