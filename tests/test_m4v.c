@@ -9,6 +9,8 @@
 #include "nj2me/nj_m4v.h"
 #include "nj2me/nj_avcodec.h"
 #include "m4v_clip.h"
+#include "m4v_slice_clip.h"
+#include "nj_mp4.h"
 #include "nj_vlc_intra.h"
 #include "nj2me/nj_m4v_escape.h"
 #include "nj2me/nj_m4v_tables.h"
@@ -39,6 +41,19 @@ static nj_u4 fnv1a(const nj_u1 *p, nj_u4 n)
         h *= 16777619u;
     }
     return h;
+}
+
+/* Bit writer for the synthetic video packet headers below. */
+static void put_bits(nj_u1 *buf, int *bitpos, nj_u4 v, int count)
+{
+    int i;
+
+    for (i = count - 1; i >= 0; i--) {
+        if ((v >> i) & 1u) {
+            buf[*bitpos >> 3] |= (nj_u1)(0x80u >> (*bitpos & 7));
+        }
+        (*bitpos)++;
+    }
 }
 
 /* esds DecoderSpecificInfo of vault/1942: 176x144, 25 fps, time_res 1000. */
@@ -1535,6 +1550,149 @@ provider_done:
                         &info, &err)
             : NULL;
         ok(dec == NULL && err != NULL, "an avc1 container is refused by name");
+    }
+
+
+    {
+        /* Video packet (resync) headers parsed from synthetic bytes, at the
+         * exact bit layout FFmpeg's sliced encoder writes: stuffing byte,
+         * zero prefix (16 bits for I, f_code+15 for P), a one bit, the
+         * absolute macroblock number, the quantiser and a zero extension
+         * flag.  96x64 is 6x4 macroblocks, so the number is four bits wide. */
+        nj_m4v_vol vol;
+        nj_u1 hdr[8];
+        int bitpos, q = 0, mbnum = 0;
+        nj_u4 pos;
+        int bad = 0;
+
+        memset(&vol, 0, sizeof(vol));
+        vol.width = 96;
+        vol.height = 64;
+        vol.quant_precision = 5;
+        vol.resync_disabled = 0;
+
+        memset(hdr, 0, sizeof(hdr));
+        bitpos = 0;
+        put_bits(hdr, &bitpos, 0x7Fu, 8);   /* stuffing: one zero then ones */
+        put_bits(hdr, &bitpos, 0u, 16);     /* I-VOP prefix: 16 zero bits */
+        put_bits(hdr, &bitpos, 1u, 1);      /* marker terminator */
+        put_bits(hdr, &bitpos, 6u, 5);      /* mb_num 6 (24 MBs: five bits) */
+        put_bits(hdr, &bitpos, 4u, 5);      /* quantiser 4 */
+        put_bits(hdr, &bitpos, 0u, 1);      /* no header extension */
+        pos = 0;
+        q = 0;
+        mbnum = 0;
+        bad += nj_m4v_resync(hdr, (nj_u4)sizeof(hdr), &pos, &vol, 0, 0, &q,
+                             &mbnum) != 1;
+        bad += mbnum != 6 || q != 4 || pos != 36u;
+        /* the wrong picture type means the wrong prefix length */
+        pos = 0;
+        q = 0;
+        bad += nj_m4v_resync(hdr, (nj_u4)sizeof(hdr), &pos, &vol, 1, 2, &q,
+                             &mbnum) >= 0;
+        /* a macroblock number of zero is refused */
+        memset(hdr, 0, sizeof(hdr));
+        bitpos = 0;
+        put_bits(hdr, &bitpos, 0x7Fu, 8);
+        put_bits(hdr, &bitpos, 0u, 16);
+        put_bits(hdr, &bitpos, 1u, 1);
+        put_bits(hdr, &bitpos, 0u, 5);
+        put_bits(hdr, &bitpos, 4u, 5);
+        put_bits(hdr, &bitpos, 0u, 1);
+        pos = 0;
+        bad += nj_m4v_resync(hdr, (nj_u4)sizeof(hdr), &pos, &vol, 0, 0, &q,
+                             &mbnum) != -1;
+        /* a P-VOP packet with f_code 2 has a 17-bit prefix */
+        memset(hdr, 0, sizeof(hdr));
+        bitpos = 0;
+        put_bits(hdr, &bitpos, 0x7Fu, 8);
+        put_bits(hdr, &bitpos, 0u, 17);
+        put_bits(hdr, &bitpos, 1u, 1);
+        put_bits(hdr, &bitpos, 12u, 5);
+        put_bits(hdr, &bitpos, 7u, 5);
+        put_bits(hdr, &bitpos, 0u, 1);
+        pos = 0;
+        q = 0;
+        mbnum = 0;
+        bad += nj_m4v_resync(hdr, (nj_u4)sizeof(hdr), &pos, &vol, 1, 2, &q,
+                             &mbnum) != 1;
+        bad += mbnum != 12 || q != 7 || pos != 37u;
+        ok(bad == 0, "video packet headers decode with the reference bit layout");
+    }
+    {
+        /* A real movie encoded with video packets: two packet headers per
+         * VOP, rows split 1/2/1, and the decoded planes must stay identical
+         * to FFmpeg's.  The sample table and the VOL come from the fixture's
+         * own container, so this covers the resync path through a Player's
+         * exact input shape as well. */
+        nj_mp4 m;
+        nj_mp4_sample smp;
+        nj_m4v_vol vol;
+        nj_s4 grids[400];
+        static nj_u1 cy[M4V_SLICE_WIDTH * M4V_SLICE_HEIGHT];
+        static nj_u1 cu[(M4V_SLICE_WIDTH / 2) * (M4V_SLICE_HEIGHT / 2)];
+        static nj_u1 cv[(M4V_SLICE_WIDTH / 2) * (M4V_SLICE_HEIGHT / 2)];
+        static nj_u1 py[M4V_SLICE_WIDTH * M4V_SLICE_HEIGHT];
+        static nj_u1 pu[(M4V_SLICE_WIDTH / 2) * (M4V_SLICE_HEIGHT / 2)];
+        static nj_u1 pv[(M4V_SLICE_WIDTH / 2) * (M4V_SLICE_HEIGHT / 2)];
+        int frame = 0, bad = 0, bad_bits = 0, size_ok = 0;
+
+        memset(grids, 0, sizeof(grids));
+        ok(nj_mp4_open(&m, m4v_slice_3gp, (nj_u4)sizeof(m4v_slice_3gp)) ==
+           NJ_MP4_OK && m.cfg_size != 0u && m.sample_count == M4V_SLICE_FRAMES,
+           "the sliced fixture opens as an mp4v container");
+        size_ok = (m.width == M4V_SLICE_WIDTH && m.height == M4V_SLICE_HEIGHT);
+        if (parse_cfg(m4v_slice_3gp + m.cfg_at, m.cfg_size, &vol) != 1) {
+            bad++;
+        }
+        bad += size_ok == 0;
+        ok(vol.resync_disabled == 0 && vol.shape == 0,
+           "its VOL enables resync markers in a rectangular layer");
+        while (frame < M4V_SLICE_FRAMES && nj_mp4_next(&m, &smp) == 1) {
+            nj_m4v_vop vop;
+            nj_u4 vpos, bitpos;
+            int rc;
+
+            if (nj_m4v_find_vop(m4v_slice_3gp + smp.offset, smp.size, &vpos) <= 0) {
+                bad++;
+                break;
+            }
+            bitpos = vpos * 8u;
+            if (nj_m4v_parse_vop_bits_vol(m4v_slice_3gp + smp.offset, smp.size,
+                                          &bitpos, &vol, &vop) != 1) {
+                bad++;
+                break;
+            }
+            if (vop.type == 0) {
+                rc = nj_m4v_decode_ivop(m4v_slice_3gp + smp.offset, smp.size,
+                                        &bitpos, &vol, &vop, grids,
+                                        cy, M4V_SLICE_WIDTH, cu,
+                                        M4V_SLICE_WIDTH / 2, cv,
+                                        M4V_SLICE_WIDTH / 2);
+            } else {
+                rc = nj_m4v_decode_pvop(m4v_slice_3gp + smp.offset, smp.size,
+                                        &bitpos, &vol, &vop, grids,
+                                        cy, M4V_SLICE_WIDTH, cu,
+                                        M4V_SLICE_WIDTH / 2, cv,
+                                        M4V_SLICE_WIDTH / 2,
+                                        py, M4V_SLICE_WIDTH, pu,
+                                        M4V_SLICE_WIDTH / 2, pv,
+                                        M4V_SLICE_WIDTH / 2);
+            }
+            bad += rc != 0;
+            bad_bits += bitpos + 16u < smp.size * 8u;
+            if (frame < M4V_SLICE_FRAMES) {
+                bad += fnv1a(cy, (nj_u4)sizeof(cy)) != m4v_slice_hash[frame][0];
+                bad += fnv1a(cu, (nj_u4)sizeof(cu)) != m4v_slice_hash[frame][1];
+                bad += fnv1a(cv, (nj_u4)sizeof(cv)) != m4v_slice_hash[frame][2];
+            }
+            memcpy(py, cy, sizeof(py));
+            memcpy(pu, cu, sizeof(pu));
+            memcpy(pv, cv, sizeof(pv));
+            frame++;
+        }
+        ok(frame == M4V_SLICE_FRAMES && bad == 0 && bad_bits == 0,
+           "every frame of the sliced movie decodes to the reference planes");
     }
 
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);

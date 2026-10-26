@@ -64,10 +64,17 @@ typedef struct nj_m4v_vop {
 } nj_m4v_vop;
 
 /* Parses a VOP header whose payload starts at b[pos]. */
-/* Consume a video-packet resync marker and header at *pos: 0 = none (pos
- * unchanged), 1 = consumed (mbnum set), -1 broken, -2 header extension used. */
-int nj_m4v_resync(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mb_total, int mb_width,
-                  int *qscale, int *mbnum);
+/* Parses a video packet header after the current macroblock (ISO/IEC
+ * 14496-2 6.2.5.2): skips the stuffing byte, checks the zero prefix for
+ * `pict_type' (0 I-VOP, 1 P-VOP; prefix length 16 or f_code+15) and reads the
+ * absolute macroblock number, the quantiser and the header-extension flag.
+ * *pos must point at the bit after the last macroblock's data; on success it
+ * is advanced to the first macroblock of the packet.  *qscale is updated only
+ * when the header carries a nonzero quantiser.  Returns 1 with *mbnum set
+ * (0 < *mbnum < mbw*mbh), -2 when the unsupported header extension is present
+ * and -1 on damage. */
+int nj_m4v_resync(const nj_u1 *b, nj_u4 n, nj_u4 *pos, const nj_m4v_vol *vol,
+                  int pict_type, int f_code, int *qscale, int *mbnum);
 
 int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
                      nj_m4v_vop *out);

@@ -478,36 +478,176 @@ int nj_m4v_parse_vop_bits_vol(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos,
 }
 
 
-int nj_m4v_resync(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mb_total, int mb_width,
-                  int *qscale, int *mbnum)
+/* ------------------------------------------------------------------ */
+/* Video packet (resync) headers, ISO/IEC 14496-2 6.2.5.2              */
+/* ------------------------------------------------------------------ */
+/*
+ * A VOP encoded with resynchronisation is split into video packets.  Every
+ * packet after the first starts with: a stuffing byte (a zero bit then ones to
+ * the next byte boundary), a zero prefix 16 bits long for an I-VOP or
+ * f_code+15 bits long for a P-VOP, a one bit, the absolute macroblock number,
+ * the quantiser (quant_precision bits) and a header-extension flag.  The
+ * reference decoder detects the marker while still decoding the macroblock
+ * (mpeg4_is_resync), returns SLICE_END for the current macroblock and then
+ * parses the header from the byte-aligned position (ff_h263_resync ->
+ * ff_mpeg4_decode_video_packet_header).  This is that logic; the quantiser and
+ * the predictor rules at the packet boundary are the caller's job.
+ */
+static int m4v_packet_prefix_len(int pict_type, int f_code)
 {
-    nj_u4 at = *pos;
-    int zeros = 0, mb_bits = 1, v, q;
-
-    (void)mb_width;
-
-    while (zeros < 32 && at < n * 8u &&
-           ((b[at >> 3] >> (7u - (at & 7u))) & 1u) == 0u) {
-        at++;
-        zeros++;
+    if (pict_type == 0) {
+        return 16;                              /* I-VOP */
     }
-    if (zeros < 16 || at >= n * 8u) {
-        return 0;                       /* not a resync marker */
-    }
-    at++;                               /* the terminating one bit */
+    return 15 + (f_code < 1 ? 1 : f_code);      /* P-VOP */
+}
 
-    while ((1 << mb_bits) < mb_total) {
-        mb_bits++;
+/* Bit width of an absolute macroblock number (av_log2(mb_total - 1) + 1). */
+static int m4v_mb_num_bits(int mb_total)
+{
+    int bits = 0;
+    int v = mb_total - 1;
+
+    while (v > 0) {
+        bits++;
+        v >>= 1;
     }
-    if (at + (nj_u4)mb_bits + 5u + 1u > n * 8u) {
+    return bits > 0 ? bits : 1;
+}
+
+static int m4v_peek_bit(const nj_u1 *b, nj_u4 n, nj_u4 pos)
+{
+    if (pos >= n * 8u) {
+        return 0;
+    }
+    return (int)((b[pos >> 3] >> (7u - (pos & 7u))) & 1u);
+}
+
+static nj_u4 m4v_peek16(const nj_u1 *b, nj_u4 n, nj_u4 pos)
+{
+    nj_u4 v = 0;
+    int   i;
+
+    for (i = 0; i < 16; i++) {
+        v = (v << 1) | (nj_u4)m4v_peek_bit(b, n, pos + (nj_u4)i);
+    }
+    return v;
+}
+
+/* mpeg4_is_resync(): detects the packet marker at exactly `pos' (the bit after
+ * the last macroblock's data) and validates the announced macroblock number.
+ * Returns that number (1..mb_total, mb_total meaning "end of the VOP") or 0
+ * when the bits there are not a well-formed marker.  Does not advance `pos'. */
+static int m4v_is_resync(const nj_u1 *b, nj_u4 n, nj_u4 pos, int mb_total,
+                         int pict_type, int f_code)
+{
+    static const nj_u2 prefix_tab[8] = {
+        0x7F00, 0x7E00, 0x7C00, 0x7800, 0x7000, 0x6000, 0x4000, 0x0000
+    };
+    nj_u4 at = pos;
+    int   bits_count = (int)pos;
+    int   ptype = pict_type + 1;    /* reference picture-type enum: I=1, P=2 */
+    nj_u4 v = m4v_peek16(b, n, at);
+    int   len, mb_num, mb_bits;
+
+    while (v <= 0xFFu) {
+        if (ptype >= 8 || (v >> (8 - ptype)) != 1u) {
+            break;
+        }
+        at += 8u + (nj_u4)ptype;
+        bits_count += 8 + ptype;
+        v = m4v_peek16(b, n, at);
+    }
+    if ((nj_u4)bits_count + 8u >= n * 8u) {
+        /* End of the VOP: reference sees the padding pattern 0x7F. */
+        v >>= 8;
+        v |= (nj_u4)(0x7F >> (7 - (bits_count & 7)));
+        return v == 0x7Fu ? mb_total : 0;
+    }
+    if (v != (nj_u4)prefix_tab[bits_count & 7]) {
+        return 0;
+    }
+    /* Peek the header: skip the terminator bit, align to a byte, read the
+     * unary prefix length and the macroblock number. */
+    at += 1u;
+    at = (at + 7u) & ~7u;
+    for (len = 0; len < 32; len++) {
+        if (m4v_peek_bit(b, n, at + (nj_u4)len) != 0) {
+            break;
+        }
+    }
+    mb_bits = m4v_mb_num_bits(mb_total);
+    mb_num = 0;
+    {
+        int i;
+        /* get_bits1() consumed the terminating one bit, so the number starts
+         * one bit after the last counted zero. */
+        nj_u4 p = at + (nj_u4)len + 1u;
+
+        for (i = 0; i < mb_bits; i++) {
+            mb_num = (mb_num << 1) | m4v_peek_bit(b, n, p + (nj_u4)i);
+        }
+        if (len < 32 && (mb_num <= 0 || mb_num > mb_total ||
+                         p + (nj_u4)(mb_bits + 6) > n * 8u)) {
+            mb_num = -1;
+        }
+    }
+    if (len >= m4v_packet_prefix_len(pict_type, f_code)) {
+        return mb_num;
+    }
+    return 0;
+}
+
+/* ff_h263_resync() + ff_mpeg4_decode_video_packet_header() for a rectangular
+ * stream: skip the stuffing, parse the packet header and advance *pos to the
+ * first macroblock of the packet.  Returns 1 with *mbnum set, -2 when the
+ * optional header extension is present (not supported), -1 on damage. */
+int nj_m4v_resync(const nj_u1 *b, nj_u4 n, nj_u4 *pos, const nj_m4v_vol *vol,
+                  int pict_type, int f_code, int *qscale, int *mbnum)
+{
+    nj_u4 at;
+    nj_u4 mbw = 0, mbh = 0;
+    int   mb_total, len, mb_bits, v, q, ext = 0;
+
+    if (b == NULL || pos == NULL || vol == NULL || qscale == NULL ||
+        mbnum == NULL) {
+        return -1;
+    }
+    if (nj_m4v_frame_macroblocks(vol->width, vol->height, &mbw, &mbh) != 0) {
+        return -1;
+    }
+    mb_total = (int)(mbw * mbh);
+    /* ff_h263_resync: skip one bit and byte-align. */
+    at = (*pos + 1u + 7u) & ~7u;
+    /* Primary path: the encoder flushed the slice, so the prefix starts at the
+     * aligned position.  The reference falls back to scanning from its last
+     * resync point; a stream that needs that is refused rather than guessed. */
+    if (m4v_peek16(b, n, at) != 0u) {
+        return -1;
+    }
+    for (len = 0; len < 32; len++) {
+        if (at + (nj_u4)len >= n * 8u) {
+            return -1;
+        }
+        if (m4v_peek_bit(b, n, at + (nj_u4)len) != 0) {
+            break;
+        }
+    }
+    if (len != m4v_packet_prefix_len(pict_type, f_code)) {
+        return -1;
+    }
+    at += (nj_u4)len + 1u;              /* prefix zeros and the one bit */
+    mb_bits = m4v_mb_num_bits(mb_total);
+    if (at + (nj_u4)(mb_bits + vol->quant_precision + 1) > n * 8u) {
         return -1;
     }
     v = 0;
     {
         int i;
-        for (i = 0; i < mb_bits; i++, at++) {
-            v = (v << 1) | (int)((b[at >> 3] >> (7u - (at & 7u))) & 1u);
+
+        for (i = 0; i < mb_bits; i++) {
+            v = (v << 1) | m4v_peek_bit(b, n, at + (nj_u4)i);
         }
+        at += (nj_u4)mb_bits;
     }
     if (v <= 0 || v >= mb_total) {
         return -1;
@@ -515,16 +655,20 @@ int nj_m4v_resync(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mb_total, int mb_widt
     q = 0;
     {
         int i;
-        for (i = 0; i < 5; i++, at++) {         /* quant_precision */
-            q = (q << 1) | (int)((b[at >> 3] >> (7u - (at & 7u))) & 1u);
+
+        for (i = 0; i < vol->quant_precision; i++) {
+            q = (q << 1) | m4v_peek_bit(b, n, at + (nj_u4)i);
         }
+        at += (nj_u4)vol->quant_precision;
     }
-    if (((b[at >> 3] >> (7u - (at & 7u))) & 1u) != 0u) {
-        return -2;                      /* header extension: not implemented */
-    }
-    at++;
     if (q > 0) {
         *qscale = q;
+    }
+    ext = m4v_peek_bit(b, n, at);
+    at += 1u;
+    if (ext != 0) {
+        *pos = at;
+        return -2;                      /* header extension: not supported */
     }
     *pos = at;
     *mbnum = v;
@@ -1642,8 +1786,17 @@ static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
                              nj_s2 *dc_y, int stride_y, nj_s2 *dc_c, int stride_c,
                              nj_s2 *dc_c2, int stride_c2,
                              int scale, int *qscale, int *ac_bits,
-                             nj_u1 *yp, int ys, nj_u1 *up, int us,
-                             nj_u1 *vp, int vs, int cbp, int cbpc, int dq);
+                             nj_u1 *yp, int ys, nj_u1 *up, int us, nj_u1 *vp, int vs,
+                             int cbp, int cbpc, int dq, int first_slice_line,
+                             int resync_x, int resync_y);
+
+static int m4v_intra_mb_pix_slice(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx,
+                                  int mby, nj_s2 *dc_y, int stride_y, nj_s2 *dc_c,
+                                  int stride_c, nj_s2 *dc_c2, int stride_c2,
+                                  int scale, int *qscale, int *ac_bits,
+                                  nj_u1 *yp, int ys, nj_u1 *up, int us,
+                                  nj_u1 *vp, int vs, int first_slice_line,
+                                  int resync_x, int resync_y);
 
 int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                        const nj_m4v_vol *vol, const nj_m4v_vop *vop,
@@ -1653,7 +1806,6 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
     nj_u4 mbw = 0, mbh = 0, cw = 0, ch = 0;
     nj_s2 *gl, *gc, *gcr;
     int    glw, gcw, lscale, cscale, i;
-    nj_u4  mbx, mby;
 
     if (b == NULL || pos == NULL || vol == NULL || vop == NULL || grids == NULL ||
         yp == NULL || up == NULL || vp == NULL || ys <= 0 || us <= 0 || vs <= 0) {
@@ -1688,20 +1840,48 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
     }
 
     {
-    int qsc = (int)vop->qscale;   /* dquant adjusts this for the whole rest of the frame */
-    for (mby = 0; mby < mbh; mby++) {
-        for (mbx = 0; mbx < mbw; mbx++) {
+        int qsc = (int)vop->qscale;   /* dquant adjusts this for the rest of the frame */
+        int mb_total = (int)(mbw * mbh);
+        int cur = 0;
+        int resync_x = 0, resync_y = 0;
+
+        while (cur < mb_total) {
+            int mbx = cur % (int)mbw;
+            int mby = cur / (int)mbw;
+            int first_slice_line = (mby == resync_y);
             int ac[6];
-            int   rc;
-            rc = nj_m4v_decode_intra_mb_pix(b, n, pos, (int)mbx, (int)mby,
-                                                  gl, glw, gc, gcw, gcr, gcw,
-                                                  lscale, &qsc, ac,
-                                                  yp, ys, up, us, vp, vs);
+            int rc;
+
+            rc = m4v_intra_mb_pix_slice(b, n, pos, mbx, mby,
+                                        gl, glw, gc, gcw, gcr, gcw,
+                                        lscale, &qsc, ac,
+                                        yp, ys, up, us, vp, vs,
+                                        first_slice_line, resync_x, resync_y);
             if (rc != 0) {
                 return rc;
             }
+            cur++;
+            if (cur < mb_total && vol->resync_disabled == 0) {
+                int next = m4v_is_resync(b, n, *pos, mb_total, 0, vop->f_code);
+
+                if (next != 0) {
+                    int mbnum = 0;
+                    int hrc;
+
+                    if (next == mb_total) {
+                        return -1;      /* VOP would end before its last MB */
+                    }
+                    hrc = nj_m4v_resync(b, n, pos, vol, 0, vop->f_code, &qsc,
+                                        &mbnum);
+                    if (hrc != 1 || mbnum != next || mbnum < cur) {
+                        return -1;      /* marker, header and position disagree */
+                    }
+                    cur = mbnum;
+                    resync_x = cur % (int)mbw;
+                    resync_y = cur / (int)mbw;
+                }
+            }
         }
-    }
     }
     return 0;
 }
@@ -2166,8 +2346,8 @@ static int m4v_pvop_mb_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                               const nj_m4v_vol *vol, const nj_m4v_vop *vop,
                               nj_u4 mbx, nj_u4 mby, nj_s2 *mvx, nj_s2 *mvy,
                               int wrap, int pad, int first_slice_line,
-                              int *qscale, int *cbp, int *dq, int *cbpc_out,
-                              m4v_pmv *pmv)
+                              int resync_x, int *qscale, int *cbp, int *dq,
+                              int *cbpc_out, m4v_pmv *pmv)
 {
     static const int quant_tab[4] = { -1, -2, 1, 2 };
     int cbpc = 0, cbpy = 0, skip = 0;
@@ -2241,7 +2421,7 @@ static int m4v_pvop_mb_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                          (nj_size)(mbx * 2 + (i & 1));
 
             nj_m4v_pred_motion(mvx, mvy, wrap, pad, (int)mbx, (int)mby, i,
-                               first_slice_line, 0, &px, &py);
+                               first_slice_line, resync_x, &px, &py);
             mx = nj_m4v_decode_mv(b, n, pos, px, vop->f_code);
             if (mx == 0xffff) {
                 return -1;
@@ -2262,7 +2442,7 @@ static int m4v_pvop_mb_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
 
         pmv->four_mv = 0;
         nj_m4v_pred_motion(mvx, mvy, wrap, pad, (int)mbx, (int)mby, 0,
-                           first_slice_line, 0, &px, &py);
+                           first_slice_line, resync_x, &px, &py);
         mx = nj_m4v_decode_mv(b, n, pos, px, vop->f_code);
         if (mx == 0xffff) {
             return -1;
@@ -2383,7 +2563,6 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
     nj_s2 *gl, *gc, *gcr;
     int    glw, gcw, lscale, cscale, qsc;
     int    rc = 0;
-    nj_u4  mbx, mby;
 
     if (b == NULL || pos == NULL || vol == NULL || vop == NULL || grids == NULL ||
         yp == NULL || up == NULL || vp == NULL || ys <= 0 || us <= 0 || vs <= 0) {
@@ -2427,48 +2606,50 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
             free(mvx);
             return -1;
         }
-        for (mby = 0; mby < mbh; mby++) {
-            for (mbx = 0; mbx < mbw; mbx++) {
+        {
+            int mb_total = (int)(mbw * mbh);
+            int cur = 0;
+            int resync_x = 0, resync_y = 0;
+
+            while (cur < mb_total) {
+                int mbx = cur % (int)mbw;
+                int mby = cur / (int)mbw;
+                int first_slice_line = (mby == resync_y);
                 nj_s4 ac[6];
                 int cbp = 0, dq = 0, cbpc = 0;
                 m4v_pmv pmv;
-                int first_line = (mby == 0u);
 
                 memset(&pmv, 0, sizeof(pmv));
-                rc = m4v_pvop_mb_header(b, n, pos, vol, vop, mbx, mby, mvx, mvy,
-                                        wrap, pad, first_line, &qsc, &cbp, &dq,
-                                        &cbpc, &pmv);
+                rc = m4v_pvop_mb_header(b, n, pos, vol, vop, (nj_u4)mbx,
+                                        (nj_u4)mby, mvx, mvy, wrap, pad,
+                                        first_slice_line, resync_x, &qsc, &cbp,
+                                        &dq, &cbpc, &pmv);
                 if (rc == 1) {
-                    rc = m4v_copy_skipped_mb((int)mbx, (int)mby, yp, ys, up, us,
+                    rc = m4v_copy_skipped_mb(mbx, mby, yp, ys, up, us,
                                              vp, vs, py, pys, pu, pus, pv, pvs);
                     if (rc != 0) {
                         break;
                     }
-                    m4v_zero_mv(mvx, mvy, wrap, pad, (int)mbx, (int)mby);
-                    m4v_clean_dc(gl, glw, gc, gcr, gcw, (int)mbx, (int)mby);
-                    continue;
-                }
-                if (rc == 0) {
-                    rc = m4v_intra_mb_body(b, n, pos, (int)mbx, (int)mby,
+                    m4v_zero_mv(mvx, mvy, wrap, pad, mbx, mby);
+                    m4v_clean_dc(gl, glw, gc, gcr, gcw, mbx, mby);
+                } else if (rc == 0) {
+                    rc = m4v_intra_mb_body(b, n, pos, mbx, mby,
                                            gl, glw, gc, gcw, gcr, gcw,
-                                           lscale, &qsc, ac, yp, ys, up, us, vp, vs,
-                                           cbp, cbpc, dq);
+                                           lscale, &qsc, ac, yp, ys, up, us,
+                                           vp, vs, cbp, cbpc, dq,
+                                           first_slice_line, resync_x,
+                                           resync_y);
                     if (rc != 0) {
                         break;
                     }
-                    m4v_zero_mv(mvx, mvy, wrap, pad, (int)mbx, (int)mby);
-                    continue;
-                }
-                if (rc != 2) {
-                    break;
-                }
-                {
+                    m4v_zero_mv(mvx, mvy, wrap, pad, mbx, mby);
+                } else if (rc == 2) {
                     int fw = (int)mbw * 16;
                     int fh = (int)mbh * 16;
                     int cw2 = (int)mbw * 8;
                     int ch2 = (int)mbh * 8;
 
-                    rc = m4v_inter_mb_body(b, n, pos, (int)mbx, (int)mby,
+                    rc = m4v_inter_mb_body(b, n, pos, mbx, mby,
                                            py, pys, pu, pus, pv, pvs,
                                            yp, ys, up, us, vp, vs,
                                            fw, fh, cw2, ch2, cbp, qsc,
@@ -2476,12 +2657,34 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                     if (rc != 0) {
                         break;
                     }
-                    m4v_clean_dc(gl, glw, gc, gcr, gcw, (int)mbx, (int)mby);
-                    continue;
+                    m4v_clean_dc(gl, glw, gc, gcr, gcw, mbx, mby);
+                } else {
+                    break;
                 }
-            }
-            if (mby < mbh && rc != 0) {
-                break;
+                cur++;
+                if (cur < mb_total && vol->resync_disabled == 0) {
+                    int next = m4v_is_resync(b, n, *pos, mb_total, 1,
+                                             vop->f_code);
+
+                    if (next != 0) {
+                        int mbnum = 0;
+                        int hrc;
+
+                        if (next == mb_total) {
+                            rc = -1;    /* VOP would end before its last MB */
+                            break;
+                        }
+                        hrc = nj_m4v_resync(b, n, pos, vol, 1, vop->f_code,
+                                            &qsc, &mbnum);
+                        if (hrc != 1 || mbnum != next || mbnum < cur) {
+                            rc = -1;    /* marker, header and position disagree */
+                            break;
+                        }
+                        cur = mbnum;
+                        resync_x = cur % (int)mbw;
+                        resync_y = cur / (int)mbw;
+                    }
+                }
             }
         }
         free(mvx);
@@ -2596,7 +2799,8 @@ static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
                              nj_s2 *dc_c2, int stride_c2,
                              int scale, int *qscale, int *ac_bits,
                              nj_u1 *yp, int ys, nj_u1 *up, int us,
-                             nj_u1 *vp, int vs, int cbp, int cbpc, int dq)
+                             nj_u1 *vp, int vs, int cbp, int cbpc, int dq,
+                             int first_slice_line, int resync_x, int resync_y)
 {
     int blk;
     nj_s4 all_coef[6][64];
@@ -2646,25 +2850,24 @@ static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
         a = nj_m4v_dc_neighbour(grid, stride, gx, gy, 0);
         bq = nj_m4v_dc_neighbour(grid, stride, gx, gy, 2);
         c = nj_m4v_dc_neighbour(grid, stride, gx, gy, 1);
-        /* Outside-slice handling, as the reference decoder does it: on the
-         * first line of a slice the top neighbours are not predictors, and
-         * at the left edge of the slice so is the left one.  Chroma blocks
-         * (n=4 and n=5) follow the same rules.  The second rule neutralises
-         * the top-left predictor on the second macroblock row, where the
-         * reference forces it to mid-grey (mpeg4_pred_dc). */
-        if (mby == 0) {
-            if (blk != 3) {
-                if (blk != 2) {
-                    bq = 1024;
-                    c = 1024;
-                }
-                if (blk != 1 && mbx == 0) {
-                    bq = 1024;
-                    a = 1024;
-                }
+        /* Outside-slice handling, as the reference decoder does it
+         * (mpeg4_pred_dc): on the first line of a slice the top neighbours
+         * are not predictors, and at the left edge of the slice so is the
+         * left one.  Chroma blocks (n=4 and n=5) follow the same rules.  The
+         * second rule neutralises the top-left predictor on the second
+         * macroblock row of a slice. */
+        if (first_slice_line != 0 && blk != 3) {
+            if (blk != 2) {
+                bq = 1024;
+                c = 1024;
+            }
+            if (blk != 1 && mbx == resync_x) {
+                bq = 1024;
+                a = 1024;
             }
         }
-        if (mby == 1 && mbx == 0 && (blk == 0 || blk == 4 || blk == 5)) {
+        if (mbx == resync_x && mby == resync_y + 1 &&
+            (blk == 0 || blk == 4 || blk == 5)) {
             bq = 1024;
         }
         pred = nj_m4v_dc_predict_q(a, bq, c, dscale, &dir);
@@ -2776,6 +2979,31 @@ static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
     return 0;
 }
 
+/* One intra macroblock of a slice: same syntax as nj_m4v_decode_intra_mb_pix,
+ * plus the slice's first-line/left edges so the DC predictor applies the
+ * reference's outside-slice rules. */
+static int m4v_intra_mb_pix_slice(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx,
+                                  int mby, nj_s2 *dc_y, int stride_y, nj_s2 *dc_c,
+                                  int stride_c, nj_s2 *dc_c2, int stride_c2,
+                                  int scale, int *qscale, int *ac_bits,
+                                  nj_u1 *yp, int ys, nj_u1 *up, int us,
+                                  nj_u1 *vp, int vs, int first_slice_line,
+                                  int resync_x, int resync_y)
+{
+    int cbp = 0, cbpc = 0, dq = 0, acp = 0;
+
+    if (nj_m4v_mb_core(b, n, pos, &cbpc, &dq) != 0) {
+        return -1;
+    }
+    if (m4v_read_cbp(b, n, pos, cbpc, dq, &cbp, &acp) != 0) {
+        return -1;
+    }
+    return m4v_intra_mb_body(b, n, pos, mbx, mby, dc_y, stride_y, dc_c, stride_c,
+                             dc_c2, stride_c2, scale, qscale, ac_bits,
+                             yp, ys, up, us, vp, vs, cbp, cbpc, dq,
+                             first_slice_line, resync_x, resync_y);
+}
+
 int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby,
                                nj_s2 *dc_y, int stride_y, nj_s2 *dc_c, int stride_c,
                                nj_s2 *dc_c2, int stride_c2,
@@ -2798,7 +3026,8 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
     }
     return m4v_intra_mb_body(b, n, pos, mbx, mby, dc_y, stride_y, dc_c, stride_c,
                              dc_c2, stride_c2, scale, qscale, ac_bits,
-                             yp, ys, up, us, vp, vs, cbp, cbpc, dq);
+                             yp, ys, up, us, vp, vs, cbp, cbpc, dq,
+                             (mby == 0), 0, 0);
 }
 int nj_m4v_decode_intra_mb(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby,
                            nj_s2 *dc_y, int stride_y, nj_s2 *dc_c, int stride_c,
