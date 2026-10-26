@@ -213,7 +213,9 @@ static nj_u4 m3g_node_data(const nj_u1 *data, nj_u4 len)
  * those lists. Header objects and external references have their own layout.
  */
 #define NJ_M3G_OBJECT_HEADER     12u
+#define NJ_M3G_T_ANIMATION_CONTROLLER 1u
 #define NJ_M3G_T_ANIMATION_TRACK  2u
+#define NJ_M3G_T_KEYFRAME_SEQUENCE 19u
 #define NJ_M3G_T_GROUP        9u
 #define NJ_M3G_T_POLYGON_MODE     8u
 #define NJ_M3G_T_IMAGE2D         10u
@@ -258,18 +260,23 @@ static nj_ref m3g_image_mips(nj_vm *vm, nj_ref img);
 #endif
 
 #if NJ_ENABLE_M3G
+static void mat_identity(float *m);
+static void mat_rotate(float *m, float deg, float ax, float ay, float az);
+
 /*
  * A Node's transform, as the file stores it: translation (3 floats), scale
- * (3 floats) and orientation (angle in radians followed by the axis), which
- * compose as T * R * S.  The runtime keeps a Java matrix, so the result is
- * row-major with the translation in the last column - the layout
- * setTranslation() writes and jr_setup() multiplies.
+ * (3 floats) and orientation (angle in degrees followed by the axis).  The
+ * three pieces are handed back separately instead of multiplied together: the
+ * JSR composes a Transformable as T * R * S * M, and the runtime keeps those
+ * same pieces (see xable_recompose()), so a file's transform lands in the
+ * translation, rotation and scale slots and leaves the title-set matrix M at
+ * the identity.  Each output is row-major with the translation in the last
+ * column - the layout jr_setup() multiplies.
  */
-static void m3g_node_matrix(const nj_u1 *d, float *m)
+static void m3g_node_components(const nj_u1 *d, float *t, float *r, float *s)
 {
     float tx, ty, tz, sx, sy, sz, ang, ax, ay, az;
-    float len, sn, cs, om, r[9];
-    int k;
+    float len, sn, cs, om;
 
     tx = bits2f((nj_s4)le32(d));      ty = bits2f((nj_s4)le32(d + 4u));
     tz = bits2f((nj_s4)le32(d + 8u)); sx = bits2f((nj_s4)le32(d + 12u));
@@ -287,17 +294,19 @@ static void m3g_node_matrix(const nj_u1 *d, float *m)
      */
     ang *= 3.14159265358979f / 180.0f;
     sn = sinf(ang); cs = cosf(ang); om = 1.0f - cs;
+
+    mat_identity(t);
+    t[3] = tx; t[7] = ty; t[11] = tz;
+
+    mat_identity(s);
+    s[0] = sx; s[5] = sy; s[10] = sz;
+
+    mat_identity(r);
     r[0] = om * ax * ax + cs;      r[1] = om * ax * ay - sn * az;
-    r[2] = om * ax * az + sn * ay; r[3] = om * ax * ay + sn * az;
-    r[4] = om * ay * ay + cs;      r[5] = om * ay * az - sn * ax;
-    r[6] = om * ax * az - sn * ay; r[7] = om * ay * az + sn * ax;
-    r[8] = om * az * az + cs;
-    for (k = 0; k < 4; k++) { m[k] = 0.0f; m[4 + k] = 0.0f; m[8 + k] = 0.0f; }
-    m[0] = r[0] * sx; m[1] = r[1] * sy; m[2] = r[2] * sz;
-    m[4] = r[3] * sx; m[5] = r[4] * sy; m[6] = r[5] * sz;
-    m[8] = r[6] * sx; m[9] = r[7] * sy; m[10] = r[8] * sz;
-    m[3] = tx; m[7] = ty; m[11] = tz;
-    m[12] = m[13] = m[14] = 0.0f; m[15] = 1.0f;
+    r[2] = om * ax * az + sn * ay; r[4] = om * ax * ay + sn * az;
+    r[5] = om * ay * ay + cs;      r[6] = om * ay * az - sn * ax;
+    r[8] = om * ax * az - sn * ay; r[9] = om * ay * az + sn * ax;
+    r[10] = om * az * az + cs;
 }
 #endif
 
@@ -511,11 +520,90 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
     }
 
     switch (type) {
+    case NJ_M3G_T_ANIMATION_CONTROLLER: {
+        /*
+         * f32 speed, f32 weight, s32 activationTime, s32 deactivationTime,
+         * f32 referenceSequenceTime, s32 referenceWorldTime.
+         *
+         * The numbers a file writes here are the defaults the JSR names:
+         * speed 1, weight 1, an empty interval (always active), reference
+         * times zero - which is what the keyframe times are measured in.
+         */
+        if (len < NJ_M3G_OBJECT_HEADER + 24u) {
+            M3G_FAIL("truncated AnimationController");
+        }
+        out->f[0] = bits2f((nj_s4)le32(data + 12u));   /* speed */
+        out->f[1] = bits2f((nj_s4)le32(data + 16u));   /* weight */
+        out->a = le32(data + 20u);                     /* activationTime */
+        out->b = le32(data + 24u);                     /* deactivationTime */
+        out->f[2] = bits2f((nj_s4)le32(data + 28u));   /* referenceSequenceTime */
+        out->c = le32(data + 32u);                     /* referenceWorldTime */
+        break;
+    }
+    case NJ_M3G_T_KEYFRAME_SEQUENCE: {
+        /*
+         * The sequence header, and then the keyframes in whichever of the
+         * three encodings the file chose.  The keys are left in the file's
+         * bytes here; the loader expands them while it allocates the Java
+         * arrays, because one expansion is enough and the scan has no host
+         * allocation hooks for a second copy.
+         *
+         * u8 interpolation | u8 repeatMode | u8 encoding |
+         * s32 duration | s32 validRangeFirst | s32 validRangeLast |
+         * s32 components | s32 keyframeCount, then the keyframes.
+         */
+        nj_u4 interp, repeat, enc, ncomp, nkeys;
+        nj_u8 need;
+
+        if (len < NJ_M3G_OBJECT_HEADER + 23u) {
+            M3G_FAIL("truncated KeyframeSequence");
+        }
+        interp = data[12];
+        repeat = data[13];
+        enc = data[14];
+        ncomp = le32(data + 27u);
+        nkeys = le32(data + 31u);
+        if (interp < 176u || interp > 180u) {
+            M3G_FAIL("a KeyframeSequence holds interpolation %lu",
+                     (unsigned long)interp);
+        }
+        if ((interp == 177u || interp == 179u) && ncomp != 4u) {
+            M3G_FAIL("interpolation %lu needs four components",
+                     (unsigned long)interp);
+        }
+        if (ncomp < 1u || ncomp > 64u || nkeys < 1u || nkeys > 65536u) {
+            M3G_FAIL("a KeyframeSequence holds %lu keyframe(s) of %lu component(s)",
+                     (unsigned long)nkeys, (unsigned long)ncomp);
+        }
+        if (enc > 2u) {
+            M3G_FAIL("a KeyframeSequence is encoded in %lu", (unsigned long)enc);
+        }
+        need = (nj_u8)nkeys * (4u + (nj_u8)ncomp * (enc == 0u ? 4u : enc == 1u ? 1u : 2u));
+        if (enc != 0u) {
+            need += (nj_u8)ncomp * 8u;      /* the bias and scale vectors */
+        }
+        if (need == 0u ||
+            need > (nj_u8)(len - (NJ_M3G_OBJECT_HEADER + 23u))) {
+            M3G_FAIL("a KeyframeSequence keyframe list runs past its data");
+        }
+        /* repeatMode is CONSTANT (192) or LOOP (193); anything else keeps the
+           default, because the sampler has no other meaning for it. */
+        out->a = interp | (repeat << 8) | (enc << 16);
+        out->b = nkeys;
+        out->c = ncomp;
+        out->d = le32(data + 15u);          /* duration */
+        out->refs[0] = le32(data + 19u);    /* validRangeFirst */
+        out->refs[1] = le32(data + 23u);    /* validRangeLast */
+        out->data = data + NJ_M3G_OBJECT_HEADER + 23u;
+        out->data_len = (nj_u4)need;
+        break;
+    }
     case NJ_M3G_T_ANIMATION_TRACK: /* sequence, controller, property */
         if (len < 24u) { M3G_FAIL("truncated AnimationTrack"); }
         out->refs[0] = le32(data + 12u);
         out->refs[1] = le32(data + 16u);
         out->nrefs = 2u;
+        out->a = le32(data + 20u);          /* target property, 256..276 */
         break;
     case NJ_M3G_T_POLYGON_MODE:      /* three enumeration bytes */
         if (len < NJ_M3G_OBJECT_HEADER + 3u) {
@@ -1544,6 +1632,80 @@ static void mat_invert(float *m)
     memcpy(m, tmp, sizeof(tmp));
 }
 
+/*
+ * A Transformable keeps its transform as four separate pieces, which is the
+ * model the JSR describes: a translation T, a rotation R, a scale S and the
+ * matrix M that setTransform() drops in.  They compose as T * R * S * M, so a
+ * translation added after a rotation still moves the object along its
+ * parent's axes instead of its own.
+ *
+ * Keeping only the product - which is what this used to do - cannot express
+ * that.  毁灭战士3_10598 puts each door leaf back at eye height every frame
+ * with setTranslation(x, 0, 4.8) followed by translate(0, 2.7, 0); through the
+ * product the 2.7 was turned by the leaf's own -90 degree rotation, which put
+ * the leaf on the floor beside its frame instead of in it.  The arrays below
+ * are allocated lazily, identity by default, exactly as _nj_m was.
+ */
+static float *xable_part(nj_vm *vm, nj_ref obj, const char *name)
+{
+    return mat_of(vm, obj, NJ_C_XABLE, name);
+}
+
+/* Rebuild the composite matrix the renderer reads: T * R * S * M. */
+static void xable_recompose(nj_vm *vm, nj_ref self)
+{
+    float *t = xable_part(vm, self, "_nj_t");
+    float *r = xable_part(vm, self, "_nj_r");
+    float *s = xable_part(vm, self, "_nj_s");
+    float *x = xable_part(vm, self, "_nj_x");
+    float *c = xable_part(vm, self, "_nj_m");
+    float tmp[NJ_MF];
+
+    if (!t || !r || !s || !x || !c) {
+        return;
+    }
+    mat_mul(r, s, tmp);      /* R * S */
+    mat_mul(tmp, x, tmp);    /* R * S * M */
+    mat_mul(t, tmp, c);      /* T * R * S * M */
+}
+
+static void mat_set_translation(float *m, float x, float y, float z)
+{
+    mat_identity(m);
+    m[3] = x; m[7] = y; m[11] = z;
+}
+
+static void mat_set_scale(float *m, float x, float y, float z)
+{
+    mat_identity(m);
+    m[0] = x; m[5] = y; m[10] = z;
+}
+
+/*
+ * Give a node the placement its file carried: the loader decodes the record's
+ * translation, rotation and scale into the three components, leaves the matrix
+ * slot at the identity, and composes.  This is what Loader.applyToTransformable
+ * does for a component transform in the reference implementation.
+ */
+static void xable_set_file_xform(nj_vm *vm, nj_ref obj, const nj_u1 *data)
+{
+    float t[NJ_MF], r[NJ_MF], s[NJ_MF];
+    float *pt = xable_part(vm, obj, "_nj_t");
+    float *pr = xable_part(vm, obj, "_nj_r");
+    float *ps = xable_part(vm, obj, "_nj_s");
+    float *px = xable_part(vm, obj, "_nj_x");
+
+    if (!pt || !pr || !ps || !px) {
+        return;
+    }
+    m3g_node_components(data, t, r, s);
+    memcpy(pt, t, sizeof(t));
+    memcpy(pr, r, sizeof(r));
+    memcpy(ps, s, sizeof(s));
+    mat_identity(px);
+    xable_recompose(vm, obj);
+}
+
 /* ------------------------------------------------------------------ */
 /* Transform                                                           */
 /* ------------------------------------------------------------------ */
@@ -1974,48 +2136,36 @@ NJFN(m3g_track_get)
 
 /* ---- orientation --------------------------------------------------- */
 /*
- * setOrientation(angle, ax, ay, az) sets the rotation part and keeps the
- * other two, which is the specification's behaviour and the reason the scale
- * is read back out first.  The scale is then restored around the new basis.
+ * setOrientation(angle, ax, ay, az) replaces the rotation.  The JSR keeps the
+ * rotation in a component of its own, so the translation and the scale are
+ * untouched - no basis has to be rebuilt or read back out.
  */
 NJFN(m3g_xable_setOrientation)
 {
-    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
-    float sx, sy, sz;
+    nj_ref self = NJ_THIS(args);
+    float *r = xable_part(vm, self, "_nj_r");
 
-    if (!m) {
+    if (!r) {
         return NJ_OK;
     }
-    sx = sqrtf(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]);
-    sy = sqrtf(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]);
-    sz = sqrtf(m[2] * m[2] + m[6] * m[6] + m[10] * m[10]);
-    {
-        float r[NJ_MF], keep[NJ_MF];
-        memcpy(r, m, sizeof(r));
-        r[0] = r[5] = r[10] = 1.0f;
-        r[1] = r[2] = r[4] = r[6] = r[8] = r[9] = 0.0f;
-        mat_rotate(r, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
-                   NJ_ARG_FLOAT(args, 2), NJ_ARG_FLOAT(args, 3));
-        memcpy(keep, m, sizeof(keep));
-        m[0] = r[0] * sx; m[1] = r[1] * sy; m[2] = r[2] * sz;
-        m[4] = r[4] * sx; m[5] = r[5] * sy; m[6] = r[6] * sz;
-        m[8] = r[8] * sx; m[9] = r[9] * sy; m[10] = r[10] * sz;
-        m[3] = keep[3]; m[7] = keep[7]; m[11] = keep[11];
-    }
+    mat_identity(r);
+    mat_rotate(r, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
+               NJ_ARG_FLOAT(args, 2), NJ_ARG_FLOAT(args, 3));
+    xable_recompose(vm, self);
     return NJ_OK;
 }
 
 NJFN(m3g_xable_getOrientation)
 {
     nj_ref out = NJ_ARG_REF(args, 0);
-    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
+    float *r = xable_part(vm, NJ_THIS(args), "_nj_r");
     float qw, qx, qy, qz, tr;
 
     if (!out || out->length < 4) {
         NJ_THROW(vm, "java/lang/IllegalArgumentException",
                  "getOrientation fills a float[4]");
     }
-    if (!m) {
+    if (!r) {
         ((float *)out->u.bytes)[0] = 0.0f;
         ((float *)out->u.bytes)[1] = 0.0f;
         ((float *)out->u.bytes)[2] = 0.0f;
@@ -2023,18 +2173,9 @@ NJFN(m3g_xable_getOrientation)
         return NJ_OK;
     }
     {
-        float sx = sqrtf(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]);
-        float sy = sqrtf(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]);
-        float sz = sqrtf(m[2] * m[2] + m[6] * m[6] + m[10] * m[10]);
-        float b00 = sx > 0.0f ? m[0] / sx : 0.0f;
-        float b01 = sy > 0.0f ? m[1] / sy : 0.0f;
-        float b02 = sz > 0.0f ? m[2] / sz : 0.0f;
-        float b10 = sx > 0.0f ? m[4] / sx : 0.0f;
-        float b11 = sy > 0.0f ? m[5] / sy : 0.0f;
-        float b12 = sz > 0.0f ? m[6] / sz : 0.0f;
-        float b20 = sx > 0.0f ? m[8] / sx : 0.0f;
-        float b21 = sy > 0.0f ? m[9] / sy : 0.0f;
-        float b22 = sz > 0.0f ? m[10] / sz : 0.0f;
+        float b00 = r[0], b01 = r[1], b02 = r[2];
+        float b10 = r[4], b11 = r[5], b12 = r[6];
+        float b20 = r[8], b21 = r[9], b22 = r[10];
 
         tr = b00 + b11 + b22;
         if (tr > 0.0f) {
@@ -2083,43 +2224,359 @@ NJFN(m3g_xable_getOrientation)
     return NJ_OK;
 }
 
+/* ---- animation ----------------------------------------------------- */
+static int m3g_is_a(nj_vm *vm, nj_ref o, const char *cls);
+
+/*
+ * animate(time) is the one JSR-184 call that turns a file's animation data
+ * into a pose.  The interpolation itself already lives in
+ * KeyframeSequence.getSample(), which interpolates between keyframes, honours
+ * the valid range and wraps a looping sequence, so the engine here only does
+ * what the JSR layers above the sequence: map world time through the
+ * AnimationController, weight the tracks that share a property, and write the
+ * blend into the same T/R/S component transforms the setTranslation() family
+ * uses.
+ *
+ * The rig animrig_car.m3g carries in NFS: Hot Pursuit is eleven triples of
+ * (sequence, controller, track); its 27-node car models animate the
+ * suspension and wheel-spin nodes, whose sequences hold translation,
+ * orientation and scale keys.  Those three properties are what this
+ * implements - an unanimated property keeps the value the game set, which is
+ * better than a guess.
+ */
+static nj_s4 m3g_anim_sample(nj_vm *vm, nj_ref seq, float t, nj_ref scratch)
+{
+    nj_value a[2], r;
+
+    a[0].f = t;
+    a[1].r = scratch;
+    if (nj_call(vm, seq, NJ_C_KFS, "getSample", "(F[F)I", a, &r) != NJ_OK) {
+        /* One malformed sequence must not cost the game the frame, and must
+           not leave the exception pending for whatever runs next. */
+        (void)nj_take_exception(vm);
+        return 0x7FFFFFFF;
+    }
+    return r.i;
+}
+
+/*
+ * World time to sequence time through one controller.  The JSR keeps the
+ * mapping as a reference point (the sequence position at a reference world
+ * time) plus a speed, so that setSpeed() can be called mid-animation without
+ * moving the current pose; AnimationController's natives store exactly those
+ * numbers.  Returns 0 when the controller is outside its active interval -
+ * *validity then says how long until it opens (or never).
+ */
+static int m3g_anim_ctl_time(nj_vm *vm, nj_ref ctl, nj_s4 time,
+                             float *seq_time, float *weight,
+                             nj_s4 *validity)
+{
+    nj_s4 first = nj_iget(vm, ctl, m3g_fof(vm, NJ_C_ACTL, "_nj_ai0", "I"));
+    nj_s4 last  = nj_iget(vm, ctl, m3g_fof(vm, NJ_C_ACTL, "_nj_ai1", "I"));
+    float speed = bits2f(nj_iget(vm, ctl, m3g_fof(vm, NJ_C_ACTL, "_nj_speed", "F")));
+    float pos   = bits2f(nj_iget(vm, ctl, m3g_fof(vm, NJ_C_ACTL, "_nj_pos", "F")));
+    float refw  = (float)nj_iget(vm, ctl, m3g_fof(vm, NJ_C_ACTL, "_nj_refw", "I"));
+
+    *weight = bits2f(nj_iget(vm, ctl, m3g_fof(vm, NJ_C_ACTL, "_nj_weight", "F")));
+    if (!(first == last || (time >= first && time < last))) {
+        *validity = (time < first) ? (first - time) : 0x7FFFFFFF;
+        return 0;
+    }
+    *seq_time = pos + speed * ((float)time - refw);
+    *validity = (first == last) ? 0x7FFFFFFF : (last - time);
+    return 1;
+}
+
+/*
+ * One track's contribution: the sampled values and their weight, plus the
+ * shortest "next event" hint this track is willing to promise.  A controller
+ * that is inactive contributes nothing - its sequence must not be sampled,
+ * because the JSR says it is not running at this time.
+ */
+static int m3g_anim_track(nj_vm *vm, nj_ref track, nj_s4 time,
+                          float *vals, float *w, nj_s4 *validity,
+                          nj_ref scratch)
+{
+    nj_ref seq = nj_rget(vm, track, m3g_fof(vm, NJ_C_ATRACK,
+                                            "_nj_kfs", "L" NJ_C_KFS ";"));
+    nj_ref ctl = nj_rget(vm, track, m3g_fof(vm, NJ_C_ATRACK,
+                                            "_nj_ctl", "L" NJ_C_ACTL ";"));
+    float *sd = (float *)nj_array_data(scratch);
+    nj_s4 ncomp, sample_validity, ctl_validity = 0x7FFFFFFF;
+    float seq_t = (float)time;
+
+    if (!seq || !sd) {
+        return 0;
+    }
+    ncomp = nj_iget(vm, seq, m3g_fof(vm, NJ_C_KFS, "_nj_ncomp", "I"));
+    if (ncomp < 1 || ncomp > 4) {
+        return 0;
+    }
+    sd[0] = 0.0f; sd[1] = 0.0f; sd[2] = 0.0f; sd[3] = 0.0f;
+    *w = 1.0f;
+    if (ctl) {
+        float speed;
+
+        if (!m3g_anim_ctl_time(vm, ctl, time, &seq_t, w, &ctl_validity)) {
+            if (ctl_validity < *validity) {
+                *validity = ctl_validity;
+            }
+            return 0;
+        }
+        if (!(*w > 0.0f)) {
+            return 0;               /* a zero weight contributes nothing */
+        }
+        speed = bits2f(nj_iget(vm, ctl, m3g_fof(vm, NJ_C_ACTL, "_nj_speed", "F")));
+        sample_validity = m3g_anim_sample(vm, seq, seq_t, scratch);
+        if (speed != 0.0f && sample_validity < 0x7FFFFFFF) {
+            /* The sequence runs on sequence time; the caller's clock runs at
+               `speed` times the sequence's. */
+            float as = fabsf(speed);
+            nj_s4 world = (nj_s4)((float)sample_validity / as + 0.5f);
+
+            if (world < 1) {
+                world = 1;
+            }
+            if (world < ctl_validity) {
+                ctl_validity = world;
+            }
+        }
+    } else {
+        sample_validity = m3g_anim_sample(vm, seq, seq_t, scratch);
+    }
+    if (ctl_validity < *validity) {
+        *validity = ctl_validity;
+    }
+    if (sample_validity > 0 && sample_validity < *validity) {
+        *validity = sample_validity;
+    }
+    vals[0] = sd[0]; vals[1] = sd[1]; vals[2] = sd[2]; vals[3] = sd[3];
+    return 1;
+}
+
+/* Apply one blended value to the node's component transform. */
+static int m3g_anim_apply(nj_vm *vm, nj_ref self, nj_s4 prop, const float *v)
+{
+    if (prop == 275) {                                    /* TRANSLATION */
+        float *t = xable_part(vm, self, "_nj_t");
+
+        if (!t) {
+            return 0;
+        }
+        mat_set_translation(t, v[0], v[1], v[2]);
+        return 1;
+    }
+    if (prop == 268) {                                    /* ORIENTATION */
+        float *r = xable_part(vm, self, "_nj_r");
+        float x = v[0], y = v[1], z = v[2], w = v[3];
+        float n;
+
+        if (!r) {
+            return 0;
+        }
+        n = sqrtf(x * x + y * y + z * z + w * w);
+        if (!(n > 0.0f)) {
+            return 0;             /* a zero quaternion rotates nothing */
+        }
+        x /= n; y /= n; z /= n; w /= n;
+        /* The same row-major convention postRotateQuat() writes. */
+        mat_identity(r);
+        r[0] = 1.0f - 2.0f * (y * y + z * z);
+        r[1] = 2.0f * (x * y - z * w);
+        r[2] = 2.0f * (x * z + y * w);
+        r[4] = 2.0f * (x * y + z * w);
+        r[5] = 1.0f - 2.0f * (x * x + z * z);
+        r[6] = 2.0f * (y * z - x * w);
+        r[8] = 2.0f * (x * z - y * w);
+        r[9] = 2.0f * (y * z + x * w);
+        r[10] = 1.0f - 2.0f * (x * x + y * y);
+        return 1;
+    }
+    if (prop == 270) {                                    /* SCALE */
+        float *sc = xable_part(vm, self, "_nj_s");
+
+        if (!sc) {
+            return 0;
+        }
+        mat_set_scale(sc, v[0], v[1], v[2]);
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * Animate one object and, because the JSR animates a node's children too,
+ * everything below it.  Children are animated first so that a group's own
+ * track wins over its children's, which is the order the specification
+ * describes and the reason a car's suspension group can override the wheel
+ * motion it contains.
+ */
+static nj_s4 m3g_animate_object(nj_vm *vm, nj_ref self, nj_s4 time,
+                                nj_ref scratch)
+{
+    nj_s4 validity = 0x7FFFFFFF;
+    nj_ref tracks;
+    int composed = 0;
+
+    if (m3g_is_a(vm, self, NJ_C_GROUP)) {
+        nj_ref kids = nj_rget(vm, self, m3g_fof(vm, NJ_C_GROUP,
+                                                "_nj_kids", "L" NJ_C_VECTOR ";"));
+        nj_value n;
+
+        if (kids) {
+            if (nj_call(vm, kids, NJ_C_VECTOR, "size", "()I", NULL, &n) != NJ_OK) {
+                (void)nj_take_exception(vm);
+                n.i = 0;
+            }
+            for (; n.i > 0; n.i--) {
+                nj_value a[5], e;
+
+                a[0].i = n.i - 1;
+                if (nj_call(vm, kids, NJ_C_VECTOR, "elementAt",
+                            "(I)Ljava/lang/Object;", a, &e) == NJ_OK && e.r) {
+                    nj_s4 v = m3g_animate_object(vm, e.r, time, scratch);
+                    if (v < validity) {
+                        validity = v;
+                    }
+                }
+            }
+        }
+    }
+
+    tracks = nj_rget(vm, self, m3g_fof(vm, NJ_C_O3D, "_nj_tracks",
+                                       "L" NJ_C_VECTOR ";"));
+    if (tracks) {
+        nj_value n;
+        nj_s4 i = 0;
+
+        if (nj_call(vm, tracks, NJ_C_VECTOR, "size", "()I", NULL, &n) != NJ_OK) {
+            (void)nj_take_exception(vm);
+            n.i = 0;
+        }
+        while (i < n.i) {
+            nj_value a[5], e;
+            nj_ref track;
+            nj_s4 prop, j;
+            float sum[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+            float wsum = 0.0f;
+
+            a[0].i = i;
+            if (nj_call(vm, tracks, NJ_C_VECTOR, "elementAt",
+                        "(I)Ljava/lang/Object;", a, &e) != NJ_OK || !e.r) {
+                (void)nj_take_exception(vm);
+                i++;
+                continue;
+            }
+            track = e.r;
+            prop = nj_iget(vm, track, m3g_fof(vm, NJ_C_ATRACK, "_nj_prop", "I"));
+            for (j = i; j < n.i; j++) {
+                nj_value aj[5], ej;
+                nj_ref tj;
+                float vals[4], w = 0.0f;
+
+                aj[0].i = j;
+                if (nj_call(vm, tracks, NJ_C_VECTOR, "elementAt",
+                            "(I)Ljava/lang/Object;", aj, &ej) != NJ_OK || !ej.r) {
+                    (void)nj_take_exception(vm);
+                    break;
+                }
+                tj = ej.r;
+                if (j > i &&
+                    nj_iget(vm, tj, m3g_fof(vm, NJ_C_ATRACK, "_nj_prop", "I")) != prop) {
+                    break;
+                }
+                if (prop != 275 && prop != 268 && prop != 270) {
+                    continue;         /* a property this engine leaves alone */
+                }
+                if (!m3g_anim_track(vm, tj, time, vals, &w, &validity, scratch)) {
+                    continue;
+                }
+                if (w > 0.0f) {
+                    nj_u4 c;
+                    for (c = 0u; c < 4u; c++) {
+                        sum[c] += vals[c] * w;
+                    }
+                    wsum += w;
+                }
+            }
+            if (wsum > 0.0f && (prop == 275 || prop == 268 || prop == 270)) {
+                float inv = 1.0f / wsum;
+                nj_u4 c;
+
+                for (c = 0u; c < 4u; c++) {
+                    sum[c] *= inv;
+                }
+                if (m3g_anim_apply(vm, self, prop, sum)) {
+                    composed = 1;
+                }
+            }
+            i = (j > i) ? j : i + 1;
+        }
+    }
+    if (composed) {
+        xable_recompose(vm, self);
+    }
+    return validity;
+}
+
 NJFN(m3g_animate)
 {
-    /*
-     * Animation tracks are stored (addAnimationTrack/getAnimationTrack), but
-     * nothing interpolates them yet: a title that asks for an animation gets
-     * "no change" rather than a wrong pose.  Returns the JSR's "invalid
-     * time" for the same reason.
-     */
-    (void)args;
-    ret->i = 0;
+    nj_s4 time = NJ_ARG_INT(args, 0);
+    nj_u4 mark = nj_root_mark(vm);
+    nj_ref scratch = nj_array_new(vm, "F", 4);
+
+    /* The JSR defines a negative time as "no animation", not as a pose. */
+    if (time < 0) {
+        nj_root_release(vm, mark);
+        ret->i = 0;
+        return NJ_OK;
+    }
+    if (scratch) {
+        scratch = nj_root(vm, scratch);
+    }
+    if (!scratch) {
+        nj_root_release(vm, mark);
+        ret->i = 0;
+        return nj_throw_oom(vm);
+    }
+    ret->i = m3g_animate_object(vm, NJ_THIS(args), time, scratch);
+    nj_root_release(vm, mark);
     return NJ_OK;
 }
 
 /* ---- Transformable ------------------------------------------------- */
+/*
+ * setTransform() replaces the matrix slot M and leaves T, R and S alone: the
+ * composite is T * R * S * M, so the matrix multiplies the component
+ * transform from the right.  That matters to a title that sets a placement
+ * once (a scale, say) and then drives the node's position with setTransform()
+ * every frame - overwriting the composite would throw the scale away - and it
+ * is also what makes setTransform(null) put back the placement the title
+ * built with the component calls: The Run resets its track nodes this way
+ * before every World render, and ignoring the null left a previous frame's
+ * placement in place, so the race world stayed far outside the camera and the
+ * screen showed only the background clear.
+ */
 NJFN(m3g_xable_setTransform)
 {
-    float *d = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
+    nj_ref self = NJ_THIS(args);
     nj_ref xf = NJ_ARG_REF(args, 0);
-    float *s = mat_of(vm, xf, NJ_C_XFORM, "_nj_m");
+    float *x = xable_part(vm, self, "_nj_x");
 
-    if (!d) {
+    if (!x) {
         return NJ_OK;
     }
     if (!xf) {
-        /*
-         * setTransform(null) resets the node to the identity, which is what
-         * the JSR says and what a renderer uses to undo a temporary
-         * placement: The Run resets its track nodes this way before every
-         * World render.  Ignoring the null left the previous placement in
-         * place, so the race world stayed where a previous frame had moved
-         * it - far outside the camera - and the screen showed only the
-         * background clear.
-         */
-        mat_identity(d);
-    } else if (s) {
-        memcpy(d, s, sizeof(float) * NJ_MF);
+        mat_identity(x);
+    } else {
+        float *s = mat_of(vm, xf, NJ_C_XFORM, "_nj_m");
+        if (s) {
+            memcpy(x, s, sizeof(float) * NJ_MF);
+        } else {
+            mat_identity(x);
+        }
     }
+    xable_recompose(vm, self);
     return NJ_OK;
 }
 
@@ -2135,127 +2592,138 @@ NJFN(m3g_xable_getTransform)
 
 /*
  * getMatrix(float[]) is the local transform as the sixteen floats the JSR
- * names, row major, the same layout Transform.get uses.
+ * names, row major, the same layout Transform.get uses.  The composite is
+ * reported (T * R * S * M) rather than M alone: for a node placed with the
+ * component calls the two are the same matrix, and the composite is what a
+ * caller restoring a saved placement wants to read back.
  */
 NJFN(m3g_xable_getMatrix)
 {
     nj_ref out = NJ_ARG_REF(args, 0);
-    nj_ref m = nj_rget(vm, NJ_THIS(args),
-                       nj_field_lookup(vm, NJ_C_XABLE, "_nj_m", "[F", 0));
+    float *m = xable_part(vm, NJ_THIS(args), "_nj_m");
 
     if (!out || out->length < 16) {
         return nj_throw(vm, "java/lang/IllegalArgumentException",
                         "the array must hold at least sixteen elements");
     }
     if (m) {
-        memcpy(nj_array_data(out), nj_array_data(m), 16u * sizeof(float));
+        memcpy(nj_array_data(out), m, 16u * sizeof(float));
     }
     return NJ_OK;
 }
 
+/*
+ * setScale replaces the scale component; translation and rotation are
+ * untouched, which is the JSR's reading of S in T * R * S * M.  A zero scale
+ * collapses that axis, as it should.
+ */
 NJFN(m3g_xable_setScale)
 {
-    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
-    if (!m) {
+    nj_ref self = NJ_THIS(args);
+    float *s = xable_part(vm, self, "_nj_s");
+
+    if (!s) {
         return NJ_OK;
     }
-    /*
-     * setScale replaces the scale, keeping translation and rotation.  The
-     * basis vectors are the first three columns; normalise each to the
-     * requested length.  A zero scale collapses the axis, as it should.
-     */
-    {
-        float sx = NJ_ARG_FLOAT(args, 0);
-        float sy = NJ_ARG_FLOAT(args, 1);
-        float sz = NJ_ARG_FLOAT(args, 2);
-        float cx = sqrtf(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]);
-        float cy = sqrtf(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]);
-        float cz = sqrtf(m[2] * m[2] + m[6] * m[6] + m[10] * m[10]);
-        int i;
-
-        for (i = 0; i < 3; i++) {
-            m[i * 4 + 0] = (cx > 0.0f) ? m[i * 4 + 0] / cx * sx : 0.0f;
-            m[i * 4 + 1] = (cy > 0.0f) ? m[i * 4 + 1] / cy * sy : 0.0f;
-            m[i * 4 + 2] = (cz > 0.0f) ? m[i * 4 + 2] / cz * sz : 0.0f;
-        }
-    }
+    mat_set_scale(s, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
+                  NJ_ARG_FLOAT(args, 2));
+    xable_recompose(vm, self);
     return NJ_OK;
 }
 
 NJFN(m3g_xable_getScale)
 {
-    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
+    float *s = xable_part(vm, NJ_THIS(args), "_nj_s");
     nj_ref out = NJ_ARG_REF(args, 0);
 
     if (!out || out->length < 3) {
         NJ_THROW(vm, "java/lang/IllegalArgumentException", "getScale fills a float[3]");
     }
-    ((float *)out->u.bytes)[0] = m ? sqrtf(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]) : 0.0f;
-    ((float *)out->u.bytes)[1] = m ? sqrtf(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]) : 0.0f;
-    ((float *)out->u.bytes)[2] = m ? sqrtf(m[2] * m[2] + m[6] * m[6] + m[10] * m[10]) : 0.0f;
+    ((float *)out->u.bytes)[0] = s ? s[0] : 1.0f;
+    ((float *)out->u.bytes)[1] = s ? s[5] : 1.0f;
+    ((float *)out->u.bytes)[2] = s ? s[10] : 1.0f;
     return NJ_OK;
 }
 
 NJFN(m3g_xable_setTranslation)
 {
-    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
-    if (m) {
-        m[3] = NJ_ARG_FLOAT(args, 0);
-        m[7] = NJ_ARG_FLOAT(args, 1);
-        m[11] = NJ_ARG_FLOAT(args, 2);
+    nj_ref self = NJ_THIS(args);
+    float *t = xable_part(vm, self, "_nj_t");
+
+    if (t) {
+        mat_set_translation(t, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
+                            NJ_ARG_FLOAT(args, 2));
+        xable_recompose(vm, self);
     }
     return NJ_OK;
 }
 
 NJFN(m3g_xable_getTranslation)
 {
-    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
+    float *t = xable_part(vm, NJ_THIS(args), "_nj_t");
     nj_ref out = NJ_ARG_REF(args, 0);
 
     if (!out || out->length < 3) {
         NJ_THROW(vm, "java/lang/IllegalArgumentException",
                  "getTranslation fills a float[3]");
     }
-    ((float *)out->u.bytes)[0] = m ? m[3] : 0.0f;
-    ((float *)out->u.bytes)[1] = m ? m[7] : 0.0f;
-    ((float *)out->u.bytes)[2] = m ? m[11] : 0.0f;
+    ((float *)out->u.bytes)[0] = t ? t[3] : 0.0f;
+    ((float *)out->u.bytes)[1] = t ? t[7] : 0.0f;
+    ((float *)out->u.bytes)[2] = t ? t[11] : 0.0f;
     return NJ_OK;
 }
 
 /*
- * The three moves that follow placement.
- *
- * translate, scale and postRotate are Transform's moves applied to the
- * object's own matrix, and they are how a title positions a node after
- * creating it - 毁灭战士3_10598 rotates each part about its own origin and then
- * moves it along its own axes, and it has no other way to say that.
+ * The moves that follow placement: translate, scale, postRotate and
+ * preRotate.  Each edits the component the JSR names - T for a translation, S
+ * for a scale, R for the rotations - and then recomposes T * R * S * M.
+ * Multiplying the composite directly, as an earlier version did, turns a
+ * world-space translation into one along the node's own axes once the node is
+ * rotated: 毁灭战士3_10598 places each door leaf with setTranslation(x, 0, 4.8)
+ * followed by translate(0, 2.7, 0), and the 2.7 was turned by the leaf's own
+ * -90 degree rotation, leaving the leaf on the floor beside its frame.
  */
 NJFN(m3g_xable_translate)
 {
-    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
-    if (m) {
-        mat_translate(m, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
-                      NJ_ARG_FLOAT(args, 2));
+    nj_ref self = NJ_THIS(args);
+    float *t = xable_part(vm, self, "_nj_t");
+
+    if (t) {
+        t[3] += NJ_ARG_FLOAT(args, 0);
+        t[7] += NJ_ARG_FLOAT(args, 1);
+        t[11] += NJ_ARG_FLOAT(args, 2);
+        xable_recompose(vm, self);
     }
     return NJ_OK;
 }
 
 NJFN(m3g_xable_scale)
 {
-    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
-    if (m) {
-        mat_scale(m, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
-                  NJ_ARG_FLOAT(args, 2));
+    nj_ref self = NJ_THIS(args);
+    float *s = xable_part(vm, self, "_nj_s");
+
+    if (s) {
+        s[0] *= NJ_ARG_FLOAT(args, 0);
+        s[5] *= NJ_ARG_FLOAT(args, 1);
+        s[10] *= NJ_ARG_FLOAT(args, 2);
+        xable_recompose(vm, self);
     }
     return NJ_OK;
 }
 
 NJFN(m3g_xable_postRotate)
 {
-    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
-    if (m) {
-        mat_rotate(m, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
+    nj_ref self = NJ_THIS(args);
+    float *r = xable_part(vm, self, "_nj_r");
+    float r2[NJ_MF], cur[NJ_MF];
+
+    if (r) {
+        mat_identity(r2);
+        mat_rotate(r2, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
                    NJ_ARG_FLOAT(args, 2), NJ_ARG_FLOAT(args, 3));
+        memcpy(cur, r, sizeof(cur));
+        mat_mul(cur, r2, r);     /* R * R2 */
+        xable_recompose(vm, self);
     }
     return NJ_OK;
 }
@@ -5321,8 +5789,157 @@ nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
             }
             break;
         }
+        case NJ_M3G_T_KEYFRAME_SEQUENCE: {
+            /*
+             * Expand the file's key tables into the two Java arrays the
+             * sampler reads.  The bytes are still exactly where the decoder
+             * left them; encodings 1 and 2 store quantized offsets around a
+             * per-component bias and scale, which is cheap to undo here and
+             * keeps the sampler's fast path.
+             */
+            nj_u4 ncomp = f->c, nkeys = f->b;
+            nj_u4 interp = f->a & 0xFFu;
+            nj_u4 repeat = (f->a >> 8) & 0xFFu;
+            nj_u4 enc = (f->a >> 16) & 0xFFu;
+            const nj_u1 *p = f->data;
+            nj_u4 mark = nj_root_mark(vm);
+            nj_ref times, keys;
+            nj_s4 *tp;
+            float *kp;
+            nj_u4 k, j;
+
+            if (!p || ncomp == 0u || ncomp > 64u || nkeys == 0u) {
+                nj_root_release(vm, mark);
+                break;
+            }
+            times = nj_array_new(vm, "I", nkeys);
+            if (!times) {
+                nj_root_release(vm, mark);
+                break;
+            }
+            times = nj_root(vm, times);
+            keys = nj_array_new(vm, "F", nkeys * ncomp);
+            if (!keys) {
+                nj_root_release(vm, mark);
+                break;
+            }
+            keys = nj_root(vm, keys);
+            tp = (nj_s4 *)nj_array_data(times);
+            kp = (float *)nj_array_data(keys);
+            if (!tp || !kp) {
+                nj_root_release(vm, mark);
+                break;
+            }
+            if (enc == 0u) {
+                for (k = 0u; k < nkeys; k++) {
+                    tp[k] = (nj_s4)le32(p);
+                    p += 4u;
+                    for (j = 0u; j < ncomp; j++) {
+                        kp[k * ncomp + j] = bits2f((nj_s4)le32(p));
+                        p += 4u;
+                    }
+                }
+            } else {
+                float bias[4], scale[4];
+                float div = (enc == 1u) ? 255.0f : 65535.0f;
+
+                for (j = 0u; j < ncomp && j < 4u; j++) {
+                    bias[j] = bits2f((nj_s4)le32(p));
+                    p += 4u;
+                }
+                for (j = 0u; j < ncomp && j < 4u; j++) {
+                    scale[j] = bits2f((nj_s4)le32(p));
+                    p += 4u;
+                }
+                for (k = 0u; k < nkeys; k++) {
+                    tp[k] = (nj_s4)le32(p);
+                    p += 4u;
+                    for (j = 0u; j < ncomp; j++) {
+                        float v;
+
+                        if (enc == 1u) {
+                            v = (float)(nj_s1)p[0];
+                            p += 1u;
+                        } else {
+                            v = (float)(nj_s2)((nj_u4)p[0] | ((nj_u4)p[1] << 8));
+                            p += 2u;
+                        }
+                        kp[k * ncomp + j] = (j < 4u)
+                            ? bias[j] + scale[j] * v / div : 0.0f;
+                    }
+                }
+            }
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_KFS, "_nj_ncomp", "I"), (nj_s4)ncomp);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_KFS, "_nj_nkeys", "I"), (nj_s4)nkeys);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_KFS, "_nj_interp", "I"), (nj_s4)interp);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_KFS, "_nj_dur", "I"), (nj_s4)f->d);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_KFS, "_nj_repeat", "I"),
+                    (repeat == 193u) ? 193 : 192);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_KFS, "_nj_vfirst", "I"),
+                    (nj_s4)f->refs[0]);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_KFS, "_nj_vlast", "I"),
+                    (nj_s4)f->refs[1]);
+            nj_rput(vm, o, m3g_fof(vm, NJ_C_KFS, "_nj_times", "[I"), times);
+            nj_rput(vm, o, m3g_fof(vm, NJ_C_KFS, "_nj_keys", "[F"), keys);
+            nj_root_release(vm, mark);
+            break;
+        }
+        case NJ_M3G_T_ANIMATION_TRACK: {
+            nj_ref seq = m3g_resolve_ref(vm, arr, nobj, o, f->refs[0], mode);
+            nj_ref ctl = m3g_resolve_ref(vm, arr, nobj, o, f->refs[1], mode);
+
+            if (seq && m3g_is_a(vm, seq, NJ_C_KFS)) {
+                nj_rput(vm, o, m3g_fof(vm, NJ_C_ATRACK, "_nj_kfs",
+                                       "L" NJ_C_KFS ";"), seq);
+            }
+            if (ctl && m3g_is_a(vm, ctl, NJ_C_ACTL)) {
+                nj_rput(vm, o, m3g_fof(vm, NJ_C_ATRACK, "_nj_ctl",
+                                       "L" NJ_C_ACTL ";"), ctl);
+            }
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_ATRACK, "_nj_prop", "I"),
+                    (nj_s4)f->a);
+            break;
+        }
+        case NJ_M3G_T_ANIMATION_CONTROLLER:
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_ACTL, "_nj_speed", "F"),
+                    (nj_s4)f2bits(f->f[0]));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_ACTL, "_nj_weight", "F"),
+                    (nj_s4)f2bits(f->f[1]));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_ACTL, "_nj_ai0", "I"), (nj_s4)f->a);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_ACTL, "_nj_ai1", "I"), (nj_s4)f->b);
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_ACTL, "_nj_pos", "F"),
+                    (nj_s4)f2bits(f->f[2]));
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_ACTL, "_nj_refw", "I"), (nj_s4)f->c);
+            break;
         default:
             break;
+        }
+        /*
+         * The Object3D header names the animation tracks this object owns.
+         * Appending them to the object's track vector is what makes animate()
+         * see them, and it is the same vector addAnimationTrack() fills when a
+         * title copies tracks between nodes.
+         */
+        if (f->nanimation_refs > 0u) {
+            nj_u4 k;
+
+            for (k = 0u; k < f->nanimation_refs; k++) {
+                nj_ref tr = m3g_resolve_ref(vm, arr, nobj, o,
+                                            f->animation_refs[k], mode);
+                nj_ref vec;
+
+                if (!tr || !m3g_is_a(vm, tr, NJ_C_ATRACK)) {
+                    continue;
+                }
+                vec = track_vec(vm, o, 1);
+                if (vec) {
+                    nj_value ta[5], tn;
+
+                    ta[0].r = tr;
+                    (void)nj_call(vm, vec, NJ_C_VECTOR, "addElement",
+                                  "(Ljava/lang/Object;)V", ta, &tn);
+                }
+            }
         }
     }
     return NJ_OK;
@@ -5615,28 +6232,15 @@ static nj_status m3g_build_objects(nj_vm *vm, const nj_u1 *data, nj_u4 len,
                  * World drawn with no model matrices looks like - the camera
                  * and the track end up in the same place.
                  *
-                 * The matrix array is allocated here because no Java
-                 * constructor runs for an object that came out of a file: the
-                 * field is declared on Transformable and its <init> is what
-                 * allocates it for a title-built node, so without this the
-                 * transform of every loaded Mesh, Group, Camera and Light was
-                 * read and then dropped.
+                 * The record carries the component transform (translation,
+                 * scale, angle and axis), so it is split into the T/R/S
+                 * components that compose as T * R * S * M; the transform
+                 * arrays are allocated here because no Java constructor runs
+                 * for an object that came out of a file, and the field is
+                 * declared on Transformable whose <init> allocates it for a
+                 * title-built node.
                  */
-                nj_field *mf = nj_field_lookup(vm, NJ_C_XABLE, "_nj_m", "[F", 0);
-                nj_ref m = mf ? nj_rget(vm, o, mf) : 0;
-
-                if (!m) {
-                    m = mat_new(vm);
-                    if (m && mf) {
-                        nj_rput(vm, o, mf, m);
-                    }
-                }
-                if (m && nj_array_length(m) >= 16) {
-                    float xf[16];
-
-                    m3g_node_matrix(objs[i].fields.data, xf);
-                    memcpy(nj_array_data(m), xf, sizeof(xf));
-                }
+                xable_set_file_xform(vm, o, objs[i].fields.data);
             }
             if (objs[i].type == NJ_M3G_T_WORLD) {
                 nj_rput(vm, o, nj_field_lookup(vm, NJ_C_WORLD, "_nj_all",
@@ -6439,7 +7043,16 @@ static const nj_builtin_field o3d_fields[] = {
     { "_nj_user", "Ljava/lang/Object;", NJ_ACC_PUBLIC },
 };
 static const nj_builtin_field xable_fields[] = {
-    { "_nj_m", "[F", NJ_ACC_PUBLIC }
+    /*
+     * The composite the renderer reads, and the four pieces the JSR keeps
+     * apart (see xable_recompose()): translation, rotation, scale and the
+     * matrix setTransform() stores.  All five are lazily allocated.
+     */
+    { "_nj_m", "[F", NJ_ACC_PUBLIC },
+    { "_nj_t", "[F", NJ_ACC_PUBLIC },
+    { "_nj_r", "[F", NJ_ACC_PUBLIC },
+    { "_nj_s", "[F", NJ_ACC_PUBLIC },
+    { "_nj_x", "[F", NJ_ACC_PUBLIC }
 };
 static const nj_builtin_field xform_fields[] = {
     { "_nj_m", "[F", NJ_ACC_PUBLIC }
@@ -7832,6 +8445,7 @@ static const nj_builtin_field actl_fields[] = {
     { "_nj_ai1",    "I", 0 },
     { "_nj_speed",  "F", 0 },
     { "_nj_pos",    "F", 0 },
+    { "_nj_refw",   "I", 0 },
     { "_nj_weight", "F", 0 }
 };
 
@@ -7860,6 +8474,7 @@ NJFN(m3g_actl_init)
     nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_ai1", "I"), 0);
     nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_speed", "F"), f2bits(1.0f));
     nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_pos", "F"), f2bits(0.0f));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_refw", "I"), 0);
     nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_weight", "F"), f2bits(1.0f));
     return NJ_OK;
 }
@@ -7883,9 +8498,57 @@ NJFN(m3g_actl_setActiveInterval)
     return NJ_OK;
 }
 
+/*
+ * The world time the position and speed are relative to.  A file-built
+ * controller starts at zero, so the sequence time of a world time t is
+ * simply t * speed until a title re-bases it; AnimationController.setSpeed()
+ * and setPosition() re-base it without moving the current pose, which is why
+ * the reference point is a number here and not "now".
+ */
 NJFN(m3g_actl_getRefWorldTime)
 {
-    ret->i = (nj_s4)nj_now_ms(vm);
+    ret->i = nj_iget(vm, NJ_THIS(args), m3g_fof(vm, NJ_C_ACTL, "_nj_refw", "I"));
+    return NJ_OK;
+}
+
+NJFN(m3g_actl_setSpeed)
+{
+    nj_ref self = NJ_THIS(args);
+    float speed = NJ_ARG_FLOAT(args, 0);
+    nj_s4 wt = NJ_ARG_INT(args, 1);
+    nj_s4 refw = nj_iget(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_refw", "I"));
+    float pos = bits2f(nj_iget(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_pos", "F")));
+    float old = bits2f(nj_iget(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_speed", "F")));
+
+    /* Re-base first: the pose at `wt` must not move when the speed does. */
+    pos += old * (float)(wt - refw);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_pos", "F"), (nj_s4)f2bits(pos));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_refw", "I"), wt);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_speed", "F"),
+            (nj_s4)f2bits(speed));
+    return NJ_OK;
+}
+
+NJFN(m3g_actl_setPosition)
+{
+    nj_ref self = NJ_THIS(args);
+    float seq = NJ_ARG_FLOAT(args, 0);
+    nj_s4 wt = NJ_ARG_INT(args, 1);
+
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_pos", "F"), (nj_s4)f2bits(seq));
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_refw", "I"), wt);
+    return NJ_OK;
+}
+
+NJFN(m3g_actl_getPosition)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_s4 wt = NJ_ARG_INT(args, 0);
+    nj_s4 refw = nj_iget(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_refw", "I"));
+    float pos = bits2f(nj_iget(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_pos", "F")));
+    float speed = bits2f(nj_iget(vm, self, m3g_fof(vm, NJ_C_ACTL, "_nj_speed", "F")));
+
+    ret->f = pos + speed * (float)(wt - refw);
     return NJ_OK;
 }
 
@@ -7942,10 +8605,7 @@ NJFN(m3g_actl_timeToDeactivation)
 
 M3G_I_GET(m3g_actl_getActiveIntervalStart, NJ_C_ACTL, "_nj_ai0")
 M3G_I_GET(m3g_actl_getActiveIntervalEnd,   NJ_C_ACTL, "_nj_ai1")
-M3G_F_SET(m3g_actl_setSpeed,    NJ_C_ACTL, "_nj_speed")
 M3G_F_GET(m3g_actl_getSpeed,    NJ_C_ACTL, "_nj_speed")
-M3G_F_SET(m3g_actl_setPosition, NJ_C_ACTL, "_nj_pos")
-M3G_F_GET(m3g_actl_getPosition, NJ_C_ACTL, "_nj_pos")
 M3G_F_SET(m3g_actl_setWeight,   NJ_C_ACTL, "_nj_weight")
 M3G_F_GET(m3g_actl_getWeight,   NJ_C_ACTL, "_nj_weight")
 
@@ -8936,18 +9596,20 @@ M3G_I_GET(m3g_tex_getBlendColor, NJ_C_TEX2D, "_nj_blendcolor")
 /* ---- Transformable.preRotate --------------------------------------- */
 NJFN(m3g_xable_preRotate)
 {
-    float *m = mat_of(vm, NJ_THIS(args), NJ_C_XABLE, "_nj_m");
-    float r[NJ_MF];
+    nj_ref self = NJ_THIS(args);
+    float *r = xable_part(vm, self, "_nj_r");
+    float r2[NJ_MF];
     float cur[NJ_MF];
 
-    if (!m) {
+    if (!r) {
         return NJ_OK;
     }
-    mat_identity(r);
-    mat_rotate(r, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
+    mat_identity(r2);
+    mat_rotate(r2, NJ_ARG_FLOAT(args, 0), NJ_ARG_FLOAT(args, 1),
                NJ_ARG_FLOAT(args, 2), NJ_ARG_FLOAT(args, 3));
-    memcpy(cur, m, sizeof cur);
-    mat_mul(r, cur, m);
+    memcpy(cur, r, sizeof cur);
+    mat_mul(r2, cur, r);         /* R2 * R */
+    xable_recompose(vm, self);
     return NJ_OK;
 }
 

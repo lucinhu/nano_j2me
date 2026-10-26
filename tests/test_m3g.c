@@ -1961,6 +1961,647 @@ static void test_spec_methods(nj_vm *vm)
     }
 }
 
+/*
+ * A World with more Mesh nodes than one render used to draw.
+ *
+ * m3g_render_scene() walked the scene into a fixed 64-entry stack array and
+ * m3g_world_draw() stopped at 64 as well, so a World with more Mesh nodes
+ * silently lost every mesh past the 64th.  The World's Background clears the
+ * frame black, so the missing meshes showed up as black holes in a scene that
+ * otherwise rendered - Doom 3's level World carries 173 Mesh nodes.
+ *
+ * The fixture is one narrow white quad per Mesh node, each node translated to
+ * its own column of the viewport, so every column has exactly one owner in
+ * the scene graph.  A count of lit columns equal to the node count says the
+ * whole graph was drawn; 64 lit columns is the old truncation.  The nodes
+ * share one vertex buffer, one index buffer and one appearance; only the node
+ * transform differs, which is exactly how a level splits its rooms into
+ * separate Mesh nodes.
+ */
+static int world_many_meshes_scene(nj_vm *vm, int meshes, nj_ref *out_world,
+                                   int *centres)
+{
+    nj_value a[6];
+    nj_ref world = make(vm, CLS("World"));
+    nj_ref vb = make(vm, CLS("VertexBuffer"));
+    nj_ref ib = nj_object_new(vm, CLS("TriangleStripArray"));
+    nj_ref app = make(vm, CLS("Appearance"));
+    nj_ref poly = make(vm, CLS("PolygonMode"));
+    nj_ref pos, posva, lens;
+    int ok = 1;
+    int i;
+
+    if (!world || !vb || !ib || !app || !poly) {
+        return 0;
+    }
+    memset(out_world, 0, sizeof(*out_world));
+    pos = nj_array_new(vm, "S", 12u);
+    lens = nj_array_new(vm, "I", 1u);
+    posva = nj_object_new(vm, CLS("VertexArray"));
+    if (!pos || !lens || !posva) {
+        return 0;
+    }
+    {
+        nj_s2 *pp = (nj_s2 *)nj_array_data(pos);
+
+        /* One quad in camera space: 100 units wide and 100 units tall at
+           z = -200, which a 60 degree perspective fills the viewport with. */
+        pp[0] = -50;  pp[1] = -50;  pp[2] = -200;
+        pp[3] =  50;  pp[4] = -50;  pp[5] = -200;
+        pp[6] = -50;  pp[7] =  50;  pp[8] = -200;
+        pp[9] =  50;  pp[10] = 50;  pp[11] = -200;
+    }
+    ((nj_s4 *)nj_array_data(lens))[0] = 4;
+
+    /* VertexArray(numVertices, numComponents, componentSize). */
+    a[0].i = 4; a[1].i = 3; a[2].i = 2;
+    ok = ok && nj_call_special(vm, posva, CLS("VertexArray"), "<init>",
+                               "(III)V", a, NULL) == NJ_OK;
+    a[0].i = 0; a[1].i = 4; a[2].r = pos;
+    ok = ok && nj_call(vm, posva, CLS("VertexArray"), "set", "(II[S)V",
+                       a, NULL) == NJ_OK;
+    a[0].r = posva; a[1].f = 1.0f; a[2].r = 0;
+    ok = ok && nj_call(vm, vb, CLS("VertexBuffer"), "setPositions",
+                       "(L" CLS("VertexArray") ";F[F)V", a, NULL) == NJ_OK;
+    a[0].i = 0xFFFFFFFFu;   /* white: no Material and no normals, so unlit */
+    ok = ok && nj_call(vm, vb, CLS("VertexBuffer"), "setDefaultColor",
+                       "(I)V", a, NULL) == NJ_OK;
+    a[0].i = 0; a[1].r = lens;
+    ok = ok && nj_call_special(vm, ib, CLS("TriangleStripArray"), "<init>",
+                               "(I[I)V", a, NULL) == NJ_OK;
+    a[0].i = 162;   /* CULL_NONE: the quad's winding does not matter here */
+    ok = ok && nj_call(vm, poly, CLS("PolygonMode"), "setCulling",
+                       "(I)V", a, NULL) == NJ_OK;
+    a[0].r = poly;
+    ok = ok && nj_call(vm, app, CLS("Appearance"), "setPolygonMode",
+                       "(L" CLS("PolygonMode") ";)V", a, NULL) == NJ_OK;
+
+    for (i = 0; i < meshes; i++) {
+        nj_ref mesh = nj_object_new(vm, CLS("Mesh"));
+        int centre = 2 + (i * 233) / (meshes - 1);
+        nj_value ma[3];
+
+        ok = ok && mesh != 0;
+        if (!mesh) {
+            break;
+        }
+        ma[0].r = vb; ma[1].r = ib; ma[2].r = app;
+        ok = ok && nj_call_special(vm, mesh, CLS("Mesh"), "<init>",
+                                   "(L" CLS("VertexBuffer") ";L"
+                                   CLS("IndexBuffer") ";L" CLS("Appearance")
+                                   ";)V", ma, NULL) == NJ_OK;
+        /* Three pixels wide: the 60 degree camera at z = -200 puts one
+           camera-space unit on 1.3857 pixels (vertical 160/115.47 and, with
+           aspect 0.75, horizontal the same), so 1.0825 units either side of
+           the column centre is 1.5 pixels.  Narrow enough that a column is
+           lit only by its own node even when the walk stops at 64. */
+        ma[0].f = 0.021651f; ma[1].f = 1.0f; ma[2].f = 1.0f;
+        ok = ok && nj_call(vm, mesh, CLS("Node"), "setScale", "(FFF)V",
+                           ma, NULL) == NJ_OK;
+        ma[0].f = ((float)centre - 120.0f) / 1.385651f;
+        ma[1].f = 0.0f; ma[2].f = 0.0f;
+        ok = ok && nj_call(vm, mesh, CLS("Node"), "setTranslation", "(FFF)V",
+                           ma, NULL) == NJ_OK;
+        ma[0].r = mesh;
+        ok = ok && nj_call(vm, world, CLS("Group"), "addChild",
+                           "(L" CLS("Node") ";)V", ma, NULL) == NJ_OK;
+        centres[i] = centre;
+    }
+    if (!ok) {
+        return 0;
+    }
+    *out_world = world;
+    return 1;
+}
+
+static void test_world_mesh_count(nj_vm *vm)
+{
+    enum { NODES = 70 };
+    int centres[NODES];
+    nj_ref world = 0;
+    nj_ref target, targetg, pixels, cam, cam_xf, bg;
+    nj_ref g3d = make(vm, CLS("Graphics3D"));
+    nj_value a[5], r;
+    const nj_u4 *px;
+    int i, lit = 0, ok;
+
+    ok = g3d != 0 && world_many_meshes_scene(vm, NODES, &world, centres);
+    check(ok, "a World with 70 Mesh nodes is built");
+    if (!ok) {
+        return;
+    }
+    memset(&r, 0, sizeof(r));
+    a[0].i = 240; a[1].i = 320;
+    ok = nj_call_static(vm, "javax/microedition/lcdui/Image", "createImage",
+                        "(II)Ljavax/microedition/lcdui/Image;", a, &r) == NJ_OK
+         && r.r != 0;
+    check(ok, "the 70-mesh target image constructs");
+    if (!ok) {
+        return;
+    }
+    target = r.r;
+    r.r = 0;
+    call(vm, target, "javax/microedition/lcdui/Image", "getGraphics",
+         "()Ljavax/microedition/lcdui/Graphics;", NULL, &r);
+    targetg = r.r;
+    pixels = nj_rget(vm, target,
+                     nj_field_lookup(vm, "javax/microedition/lcdui/Image",
+                                     "imgPixels", "[I", 0));
+    check(targetg != 0 && pixels != 0, "the 70-mesh target has pixels");
+    if (!targetg || !pixels) {
+        return;
+    }
+    bg = make(vm, CLS("Background"));
+    cam = make(vm, CLS("Camera"));
+    cam_xf = make(vm, CLS("Transform"));
+    check(bg && cam && cam_xf, "a camera and a black Background");
+    if (!bg || !cam || !cam_xf) {
+        return;
+    }
+    a[0].i = (nj_s4)0xFF000000u;   /* opaque black */
+    call(vm, bg, CLS("Background"), "setColor", "(I)V", a, NULL);
+    a[0].f = 60.0f; a[1].f = 0.75f; a[2].f = 1.0f; a[3].f = 1000.0f;
+    call(vm, cam, CLS("Camera"), "setPerspective", "(FFFF)V", a, NULL);
+    call(vm, cam_xf, CLS("Transform"), "setIdentity", "()V", NULL, NULL);
+
+    a[0].r = targetg;
+    call(vm, g3d, CLS("Graphics3D"), "bindTarget", "(Ljava/lang/Object;)V",
+         a, NULL);
+    a[0].i = 0; a[1].i = 0; a[2].i = 240; a[3].i = 320;
+    call(vm, g3d, CLS("Graphics3D"), "setViewport", "(IIII)V", a, NULL);
+    a[0].r = cam; a[1].r = cam_xf;
+    call(vm, g3d, CLS("Graphics3D"), "setCamera",
+         "(L" CLS("Camera") ";L" CLS("Transform") ";)V", a, NULL);
+    a[0].r = bg;
+    call(vm, g3d, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V",
+         a, NULL);
+    {
+        int q, nb = 0;
+        const nj_u4 *qq = (const nj_u4 *)nj_array_data(pixels);
+
+        for (q = 0; q < 240 * 320; q++) {
+            if ((qq[q] & 0xFFFFFFu) == 0u) {
+                nb++;
+            }
+        }
+        /*
+         * Image.createImage() starts white, so "not black at the column
+         * centre" would pass vacuously on a render that draws nothing at all.
+         * The clear has to reach every pixel first.
+         */
+        check(nb == 240 * 320,
+              "clear(Background) fills the whole 240x320 target black");
+    }
+    a[0].r = world;
+    call(vm, g3d, CLS("Graphics3D"), "render", "(L" CLS("World") ";)V",
+         a, NULL);
+    call(vm, g3d, CLS("Graphics3D"), "releaseTarget", "()V", NULL, NULL);
+
+    px = (const nj_u4 *)nj_array_data(pixels);
+    for (i = 0; i < NODES; i++) {
+        if ((px[160 * 240 + centres[i]] & 0xFFFFFFu) != 0u) {
+            lit++;
+        }
+    }
+    check(lit == NODES,
+          "render(World) draws every Mesh node, not the first 64");
+    if (lit != NODES) {
+        printf("  (lit %d of %d columns: the truncating render draws 64)\n",
+               lit, NODES);
+    }
+}
+
+/*
+ * ------------------------------------------------------------------
+ * Animated nodes
+ * ------------------------------------------------------------------
+ * animate(time) used to be a no-op: the loader did not decode a file's
+ * KeyframeSequence/AnimationTrack/AnimationController objects either, so a
+ * title that shipped an animated rig got its static bind pose forever.  NFS:
+ * Hot Pursuit's car models are the visible case - animrig_car.m3g holds eleven
+ * (sequence, controller, track) triples, and without them the wheels stay
+ * where the bind pose put them, under the road.
+ *
+ * These assertions exercise both halves: the loader decodes a file and links
+ * each object's tracks (built below as the same bytes NFS's rig has), and
+ * animate() samples them through the controller and writes the blended value
+ * into the node's component transform.
+ */
+static void put_f32(nj_u1 *p, float f)
+{
+    nj_u4 bits;
+
+    memcpy(&bits, &f, 4u);
+    put_le32(p, bits);
+}
+
+static void kfs_set_key3(nj_vm *vm, nj_ref kfs, int idx, int time,
+                         float x, float y, float z)
+{
+    nj_value a[3];
+    nj_ref f = nj_array_new(vm, "F", 3);
+    float *p;
+
+    if (!f) {
+        return;
+    }
+    p = (float *)nj_array_data(f);
+    p[0] = x; p[1] = y; p[2] = z;
+    a[0].i = idx; a[1].i = time; a[2].r = f;
+    call(vm, kfs, CLS("KeyframeSequence"), "setKeyframe", "(II[F)V", a, NULL);
+}
+
+static void kfs_set_key4(nj_vm *vm, nj_ref kfs, int idx, int time,
+                         float x, float y, float z, float w)
+{
+    nj_value a[3];
+    nj_ref f = nj_array_new(vm, "F", 4);
+    float *p;
+
+    if (!f) {
+        return;
+    }
+    p = (float *)nj_array_data(f);
+    p[0] = x; p[1] = y; p[2] = z; p[3] = w;
+    a[0].i = idx; a[1].i = time; a[2].r = f;
+    call(vm, kfs, CLS("KeyframeSequence"), "setKeyframe", "(II[F)V", a, NULL);
+}
+
+static nj_ref atrack_new(nj_vm *vm, nj_ref kfs, int prop)
+{
+    nj_ref t = nj_object_new(vm, CLS("AnimationTrack"));
+    nj_value a[2];
+
+    if (!t) {
+        return 0;
+    }
+    a[0].r = kfs;
+    a[1].i = prop;
+    if (nj_call_special(vm, t, CLS("AnimationTrack"), "<init>",
+                        "(L" CLS("KeyframeSequence") ";I)V", a, NULL) != NJ_OK) {
+        return 0;
+    }
+    return t;
+}
+
+/* Attach `track` to `node`: the whole JSR-184 animation API a MIDlet uses. */
+static void node_add_track(nj_vm *vm, nj_ref node, nj_ref track, nj_ref ctl)
+{
+    nj_value a[2];
+
+    if (ctl) {
+        a[0].r = ctl;
+        call(vm, track, CLS("AnimationTrack"), "setController",
+             "(L" CLS("AnimationController") ";)V", a, NULL);
+    }
+    a[0].r = track;
+    call(vm, node, CLS("Object3D"), "addAnimationTrack",
+         "(L" CLS("AnimationTrack") ";)V", a, NULL);
+}
+
+static float node_matrix(nj_vm *vm, nj_ref node, int elem)
+{
+    nj_ref xf = make(vm, CLS("Transform"));
+    nj_value a[1];
+    float v = -12345.0f;
+
+    if (!xf) {
+        return v;
+    }
+    a[0].r = xf;
+    call(vm, node, CLS("Node"), "getTransform",
+         "(L" CLS("Transform") ";)V", a, NULL);
+    v = xf_elem(vm, xf, elem);
+    return v;
+}
+
+/*
+ * A JSR-184 file carrying exactly the animation objects animrig_car.m3g has,
+ * one of each: a two-keyframe translation curve, its controller, the track
+ * that binds them, and a Group whose Object3D header names that track.  Ref
+ * values are "object number + 2", the numbering the loader's ref-mode
+ * detection resolves, and the lengths are the ones the scanner requires to
+ * consume each payload exactly.
+ */
+static nj_u4 build_anim_file(nj_u1 *b, nj_u4 cap)
+{
+    static const nj_u1 ident[12] = {
+        0xAB, 0x4A, 0x53, 0x52, 0x31, 0x38, 0x34,
+        0xBB, 0x0D, 0x0A, 0x1A, 0x0A
+    };
+    nj_u4 hdr_sec = 30u, body, sec, total, len[4], k;
+    nj_u1 *p;
+
+    /* payload lengths: curve 35+2*(4+12), controller 12+24, track 12+12,
+       group 16+14 */
+    len[0] = 67u; len[1] = 36u; len[2] = 24u; len[3] = 30u;
+    body = 0u;
+    for (k = 0u; k < 4u; k++) {
+        body += 5u + len[k];
+    }
+    sec = 9u + body + 4u;
+    total = 12u + hdr_sec + sec;
+    if (cap < total) {
+        return 0u;
+    }
+    memset(b, 0, cap);
+    memcpy(b, ident, 12u);
+    /* the file header section */
+    b[12] = 0u;                        /* stored, not compressed */
+    put_le32(b + 13, hdr_sec);
+    put_le32(b + 17, 17u);             /* its body's length */
+    put_le32(b + 22, 12u);             /* Object3D header length */
+    b[26] = 1u;                        /* file version 1.0 */
+    put_le32(b + 29, total);           /* totalFileSize */
+    put_le32(b + 33, total);           /* approximate content size */
+    /* the object section */
+    b[42] = 0u;
+    put_le32(b + 43, sec);
+    put_le32(b + 47, body);
+    p = b + 51;
+
+    /* object 0: the curve, 0 -> (0,0,0) at 0 ms, (10,0,0) at 1000 ms */
+    p[0] = 19u;
+    put_le32(p + 1, len[0]);
+    p += 5;
+    p[12] = 176u;                      /* LINEAR */
+    p[13] = 192u;                      /* CONSTANT */
+    p[14] = 0u;                        /* uncompressed keys */
+    put_le32(p + 15, 1000u);           /* duration */
+    put_le32(p + 19, 0u);              /* valid range first */
+    put_le32(p + 23, 1u);              /* valid range last */
+    put_le32(p + 27, 3u);              /* components */
+    put_le32(p + 31, 2u);              /* keyframes */
+    put_le32(p + 35, 0u);              /* key 0: t=0 */
+    put_f32(p + 39, 0.0f); put_f32(p + 43, 0.0f); put_f32(p + 47, 0.0f);
+    put_le32(p + 51, 1000u);           /* key 1: t=1000 */
+    put_f32(p + 55, 10.0f); put_f32(p + 59, 0.0f); put_f32(p + 63, 0.0f);
+    p += len[0];
+
+    /* object 1: the controller, at the specification's defaults */
+    p[0] = 1u;
+    put_le32(p + 1, len[1]);
+    p += 5;
+    put_f32(p + 12, 1.0f);             /* speed */
+    put_f32(p + 16, 1.0f);             /* weight */
+    put_le32(p + 20, 0u);              /* active interval start */
+    put_le32(p + 24, 0u);              /* active interval end */
+    put_f32(p + 28, 0.0f);             /* reference sequence time */
+    put_le32(p + 32, 0u);              /* reference world time */
+    p += len[1];
+
+    /* object 2: the track, property TRANSLATION */
+    p[0] = 2u;
+    put_le32(p + 1, len[2]);
+    p += 5;
+    put_le32(p + 12, 2u);              /* sequence ref = object 0 + 2 */
+    put_le32(p + 16, 3u);              /* controller ref = object 1 + 2 */
+    put_le32(p + 20, 275u);            /* TRANSLATION */
+    p += len[2];
+
+    /* object 3: the animated Group */
+    p[0] = 9u;
+    put_le32(p + 1, len[3]);
+    p += 5;
+    put_le32(p + 4, 1u);               /* one animation track */
+    put_le32(p + 8, 4u);               /* track ref = object 2 + 2 */
+    put_le32(p + 12, 0u);              /* no user parameters */
+    p[16] = 0u;                        /* no component transform */
+    p[17] = 0u;                        /* no general transform */
+    p[18] = 1u;                        /* rendering enabled */
+    p[19] = 1u;                        /* picking enabled */
+    p[20] = 0xFFu;                     /* alpha */
+    put_le32(p + 21, 0u);              /* picking scope */
+    p[25] = 0u;                        /* no alignment */
+    put_le32(p + 26, 0u);              /* no children */
+    return total;
+}
+
+static void test_animation(nj_vm *vm)
+{
+    printf("== animate() writes a track's keyframes into the node ==\n");
+    {
+        nj_ref node = make(vm, CLS("Group"));
+        nj_ref kfs = kfs_new(vm, 3, 2, 176);
+        nj_ref track = 0, ctl = 0;
+        nj_value a[2], r;
+        float m;
+
+        check(node && kfs, "a Group node and a translation curve");
+        if (node && kfs) {
+            kfs_set_key3(vm, kfs, 0, 0, 0.0f, 0.0f, 0.0f);
+            kfs_set_key3(vm, kfs, 1, 1000, 10.0f, 0.0f, 0.0f);
+            track = atrack_new(vm, kfs, 275);
+            ctl = make(vm, CLS("AnimationController"));
+            check(track && ctl, "an AnimationTrack for TRANSLATION and a controller");
+            if (track && ctl) {
+                node_add_track(vm, node, track, ctl);
+                check(!nj_has_exception(vm),
+                      "addAnimationTrack returns without an exception");
+                nj_clear_exception(vm);
+
+                a[0].i = 250;
+                r.i = -1;
+                call(vm, node, CLS("Object3D"), "animate", "(I)I", a, &r);
+                /* getSample() reports 1 while it is interpolating between
+                   keyframes (the reference implementation does the same), so
+                   animate() can only promise the sampling layer's hint. */
+                check(r.i == 1,
+                      "animate(250) reports the sampling layer's next-event hint");
+                m = node_matrix(vm, node, 3);
+                check(fabsf(m - 2.5f) < 1e-4f,
+                      "and the node's translation is the curve's halfway value");
+
+                a[0].i = 1500;
+                call(vm, node, CLS("Object3D"), "animate", "(I)I", a, &r);
+                check(r.i == 0x7fffffff,
+                      "past the last keyframe there is no next keyframe");
+                m = node_matrix(vm, node, 3);
+                check(fabsf(m - 10.0f) < 1e-4f,
+                      "and the curve's last value holds");
+
+                a[0].i = -1;
+                call(vm, node, CLS("Object3D"), "animate", "(I)I", a, &r);
+                check(r.i == 0, "a negative time is the JSR's invalid time (0)");
+            }
+        }
+    }
+
+    printf("== an AnimationController maps world time to sequence time ==\n");
+    {
+        nj_ref ctl = make(vm, CLS("AnimationController"));
+        nj_value a[2], r;
+
+        check(ctl != 0, "a fresh AnimationController");
+        if (ctl) {
+            a[0].f = 100.0f; a[1].i = 0;
+            call(vm, ctl, CLS("AnimationController"), "setPosition", "(FI)V",
+                 a, NULL);
+            a[0].i = 250;
+            r.f = -1.0f;
+            call(vm, ctl, CLS("AnimationController"), "getPosition", "(I)F",
+                 a, &r);
+            check(fabsf(r.f - 350.0f) < 1e-4f,
+                  "at speed 1 a position of 100 ms is 350 ms at world time 250");
+
+            a[0].f = 2.0f; a[1].i = 250;
+            call(vm, ctl, CLS("AnimationController"), "setSpeed", "(FI)V",
+                 a, NULL);
+            a[0].i = 250;
+            r.f = -1.0f;
+            call(vm, ctl, CLS("AnimationController"), "getPosition", "(I)F",
+                 a, &r);
+            check(fabsf(r.f - 350.0f) < 1e-4f,
+                  "setSpeed does not move the current pose");
+            a[0].i = 500;
+            r.f = -1.0f;
+            call(vm, ctl, CLS("AnimationController"), "getPosition", "(I)F",
+                 a, &r);
+            check(fabsf(r.f - 850.0f) < 1e-4f,
+                  "and afterwards the pose advances at the new speed");
+            call(vm, ctl, CLS("AnimationController"), "getRefWorldTime", "()I",
+                 NULL, &r);
+            check(r.i == 250, "getRefWorldTime reports the reference world time");
+        }
+    }
+
+    printf("== animate() applies scale and orientation too ==\n");
+    {
+        nj_ref node = make(vm, CLS("Group"));
+        nj_ref kfs = kfs_new(vm, 3, 1, 176);
+        nj_ref track, ctl = make(vm, CLS("AnimationController"));
+        nj_value a[1];
+        float e0, e5, e10;
+
+        if (node && kfs && ctl) {
+            kfs_set_key3(vm, kfs, 0, 0, 2.0f, 3.0f, 4.0f);
+            track = atrack_new(vm, kfs, 270);
+            if (track) {
+                node_add_track(vm, node, track, ctl);
+                a[0].i = 0;
+                call(vm, node, CLS("Object3D"), "animate", "(I)I", a, NULL);
+                e0 = node_matrix(vm, node, 0);
+                e5 = node_matrix(vm, node, 5);
+                e10 = node_matrix(vm, node, 10);
+                check(fabsf(e0 - 2.0f) < 1e-4f && fabsf(e5 - 3.0f) < 1e-4f &&
+                      fabsf(e10 - 4.0f) < 1e-4f,
+                      "a SCALE track writes the node's three axes");
+            }
+        }
+
+        node = make(vm, CLS("Group"));
+        kfs = kfs_new(vm, 4, 2, 176);
+        if (node && kfs && ctl) {
+            /* 60 degrees about +Y, as a unit quaternion at the last key. */
+            kfs_set_key4(vm, kfs, 0, 0, 0.0f, 0.0f, 0.0f, 1.0f);
+            kfs_set_key4(vm, kfs, 1, 1000, 0.0f, 0.5f, 0.0f, 0.8660254f);
+            track = atrack_new(vm, kfs, 268);
+            if (track) {
+                node_add_track(vm, node, track, ctl);
+                a[0].i = 1000;
+                call(vm, node, CLS("Object3D"), "animate", "(I)I", a, NULL);
+                e0 = node_matrix(vm, node, 0);
+                e10 = node_matrix(vm, node, 2);
+                check(fabsf(e0 - 0.5f) < 1e-4f && fabsf(e10 - 0.8660254f) < 1e-4f,
+                      "an ORIENTATION track rotates the node's basis");
+            }
+        }
+    }
+}
+
+static void test_animation_file(nj_vm *vm)
+{
+    printf("== a file's animation objects load and animate ==\n");
+    {
+        nj_u1 buf[320];
+        nj_u4 n = build_anim_file(buf, (nj_u4)sizeof buf);
+        nj_ref bytes, arr = 0, grp = 0, track = 0, kfs = 0, ctl = 0;
+        nj_value a[4], r;
+        nj_status st;
+        nj_u4 i, len;
+
+        check(n > 0u && n <= (nj_u4)sizeof buf, "the crafted file has a length");
+        if (n == 0u) {
+            return;
+        }
+        bytes = nj_array_new(vm, "B", n);
+        check(bytes != 0, "a byte array to hand Loader.load");
+        if (!bytes) {
+            return;
+        }
+        memcpy(nj_array_data(bytes), buf, n);
+
+        a[0].r = bytes;
+        a[1].i = 0;
+        nj_clear_exception(vm);
+        st = nj_call(vm, 0, CLS("Loader"), "load",
+                     "([BI)[L" CLS("Object3D") ";", a, &r);
+        check(st == NJ_OK && r.r != 0,
+              "Loader.load returns the file's root objects");
+        if (st != NJ_OK || !r.r) {
+            nj_clear_exception(vm);
+            return;
+        }
+        arr = r.r;
+        len = nj_array_length(arr);
+        for (i = 0u; i < len; i++) {
+            nj_ref o = nj_array_get_ref(arr, i);
+            const char *cn = o ? nj_ref_class_name(o) : NULL;
+
+            if (cn && strstr(cn, "Group")) {
+                grp = o;
+            }
+        }
+        check(grp != 0, "the animated Group is one of the roots");
+        if (!grp) {
+            return;
+        }
+        a[0].i = 0;
+        r.i = -1;
+        call(vm, grp, CLS("Group"), "getAnimationTrackCount", "()I", NULL, &r);
+        check(r.i == 1, "the Object3D header's track is attached to the node");
+        track = nj_call_ref(vm, grp, CLS("Group"), "getAnimationTrack",
+                            "(I)L" CLS("AnimationTrack") ";", a);
+        check(track != 0, "getAnimationTrack(0) returns it");
+        if (!track) {
+            return;
+        }
+        call(vm, track, CLS("AnimationTrack"), "getTargetProperty", "()I",
+             NULL, &r);
+        check(r.i == 275, "the track carries the file's TRANSLATION property");
+        kfs = nj_call_ref(vm, track, CLS("AnimationTrack"),
+                          "getKeyframeSequence",
+                          "()L" CLS("KeyframeSequence") ";", NULL);
+        check(kfs != 0, "the track's sequence is resolved");
+        if (kfs) {
+            call(vm, kfs, CLS("KeyframeSequence"), "getKeyframeCount", "()I",
+                 NULL, &r);
+            check(r.i == 2, "the sequence's two keyframes are decoded");
+            call(vm, kfs, CLS("KeyframeSequence"), "getDuration", "()I", NULL, &r);
+            check(r.i == 1000, "and its duration");
+        }
+        ctl = nj_call_ref(vm, track, CLS("AnimationTrack"), "getController",
+                          "()L" CLS("AnimationController") ";", NULL);
+        check(ctl != 0, "the track's controller is resolved");
+        if (ctl) {
+            r.f = -1.0f;
+            call(vm, ctl, CLS("AnimationController"), "getSpeed", "()F", NULL, &r);
+            check(r.f == 1.0f, "and the controller's speed");
+        }
+        a[0].i = 250;
+        r.i = -1;
+        call(vm, grp, CLS("Object3D"), "animate", "(I)I", a, &r);
+        check(r.i == 1,
+              "animate(250) on the loaded node reports a pending event");
+        check(fabsf(node_matrix(vm, grp, 3) - 2.5f) < 1e-4f,
+              "and the loaded curve moves the node to half its 10-unit sweep");
+        a[0].i = 1500;
+        call(vm, grp, CLS("Object3D"), "animate", "(I)I", a, &r);
+        check(fabsf(node_matrix(vm, grp, 3) - 10.0f) < 1e-4f,
+              "past the last keyframe the loaded curve holds its last value");
+    }
+}
+
 int main(void)
 {
     nj_port port;
@@ -2803,6 +3444,86 @@ int main(void)
             call(vm, xf, CLS("Transform"), "get", "([F)V", a, NULL);
             check(fabsf(((float *)m->u.bytes)[3] - 5.0f) < 1e-4f,
                   "Group.translate reaches getCompositeTransform");
+
+            /*
+             * A translation added after a rotation has to stay in the parent's
+             * frame, because that is the transform model the JSR describes:
+             * T * R * S * M, with translate() editing T.  Applying it to the
+             * composite instead rotates the offset through the node's own
+             * orientation - 毁灭战士3_10598 gives its door leaves a rotation in
+             * the .m3g and then calls translate(0, 2.7, 0) to raise them to
+             * door height, so the leaf ended up on the floor beside its frame.
+             * Read the composite back after the same sequence: the offset has
+             * to be y = 2, not z = -2.
+             */
+            {
+                nj_ref g2 = make(vm, CLS("Group"));
+
+                if (g2) {
+                    a[0].f = 90.0f; a[1].f = 1.0f; a[2].f = 0.0f; a[3].f = 0.0f;
+                    call(vm, g2, CLS("Group"), "setOrientation", "(FFFF)V", a, NULL);
+                    a[0].f = 0.0f; a[1].f = 2.0f; a[2].f = 0.0f;
+                    call(vm, g2, CLS("Group"), "translate", "(FFF)V", a, NULL);
+                    a[0].r = xf;
+                    call(vm, g2, CLS("Group"), "getCompositeTransform",
+                         "(L" CLS("Transform") ";)V", a, NULL);
+                    a[0].r = m;
+                    call(vm, xf, CLS("Transform"), "get", "([F)V", a, NULL);
+                    check(fabsf(((float *)m->u.bytes)[7] - 2.0f) < 1e-4f
+                              && fabsf(((float *)m->u.bytes)[11]) < 1e-4f,
+                          "translate after setOrientation moves in world axes");
+
+                    a[0].f = 7.0f; a[1].f = 0.0f; a[2].f = 4.0f;
+                    call(vm, g2, CLS("Group"), "setTranslation", "(FFF)V", a, NULL);
+                    a[0].f = 0.0f; a[1].f = 2.0f; a[2].f = 0.0f;
+                    call(vm, g2, CLS("Group"), "translate", "(FFF)V", a, NULL);
+                    a[0].r = xf;
+                    call(vm, g2, CLS("Group"), "getCompositeTransform",
+                         "(L" CLS("Transform") ";)V", a, NULL);
+                    a[0].r = m;
+                    call(vm, xf, CLS("Transform"), "get", "([F)V", a, NULL);
+                    check(fabsf(((float *)m->u.bytes)[3] - 7.0f) < 1e-4f
+                              && fabsf(((float *)m->u.bytes)[7] - 2.0f) < 1e-4f
+                              && fabsf(((float *)m->u.bytes)[11] - 4.0f) < 1e-4f,
+                          "translate adds to setTranslation in world axes");
+
+                    /*
+                     * setTransform() replaces only the matrix slot, so a scale
+                     * set with the component call survives it.  NFS HP sets
+                     * setScale(0.0035) and then setTransform() every tick on
+                     * the same node.
+                     */
+                    a[0].f = 0.0f; a[1].f = 0.0f; a[2].f = 1.0f; a[3].f = 0.0f;
+                    call(vm, g2, CLS("Group"), "setOrientation", "(FFFF)V", a, NULL);
+                    a[0].f = 0.5f; a[1].f = 0.5f; a[2].f = 0.5f;
+                    call(vm, g2, CLS("Group"), "setScale", "(FFF)V", a, NULL);
+                    a[0].f = 0.0f; a[1].f = 0.0f; a[2].f = 0.0f;
+                    call(vm, g2, CLS("Group"), "setTranslation", "(FFF)V", a, NULL);
+                    {
+                        nj_ref mt = nj_array_new(vm, "F", 16);
+
+                        if (mt) {
+                            float *v = (float *)mt->u.bytes;
+
+                            memset(v, 0, 16 * sizeof(float));
+                            v[0] = v[5] = v[10] = v[15] = 1.0f;
+                            a[0].r = mt;
+                            call(vm, xf, CLS("Transform"), "set", "([F)V", a, NULL);
+                            a[0].r = xf;
+                            call(vm, g2, CLS("Group"), "setTransform",
+                                 "(L" CLS("Transform") ";)V", a, NULL);
+                            a[0].r = xf;
+                            call(vm, g2, CLS("Group"), "getCompositeTransform",
+                                 "(L" CLS("Transform") ";)V", a, NULL);
+                            a[0].r = m;
+                            call(vm, xf, CLS("Transform"), "get", "([F)V", a, NULL);
+                            check(fabsf(((float *)m->u.bytes)[0] - 0.5f) < 1e-4f
+                                      && fabsf(((float *)m->u.bytes)[5] - 0.5f) < 1e-4f,
+                                  "setTransform keeps the component scale");
+                        }
+                    }
+                }
+            }
 
             a[0].f = 2.0f; a[1].f = 2.0f; a[2].f = 2.0f;
             call(vm, grp, CLS("Group"), "scale", "(FFF)V", a, NULL);
@@ -4573,9 +5294,18 @@ int main(void)
     test_spec_methods(vm);
     test_keyframe_sampling(vm);
 
+    /* The file format's animation objects: animrig_car.m3g, the NFS
+       suspension rig, carries its curves as KeyframeSequence + track. */
+    test_animation(vm);
+    test_animation_file(vm);
+
     /* Bone rosters are per receiver and grow on demand; the old fixed
        64-entry table threw on the 65th link. */
     test_skinned_mesh_bones(vm);
+
+    /* A World larger than one render's stack array keeps all of its Mesh
+       nodes; Doom 3's level (173 meshes) lost everything past the 64th. */
+    test_world_mesh_count(vm);
 
     /* The file format calls type 18 Sprite; the titles call the class
        Sprite3D.  Both have to be loadable.  These run before the VM is
