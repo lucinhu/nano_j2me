@@ -35,6 +35,7 @@ run() {
     fi
     keys="$(grep '^KEY ' "$log" || true)"
     line="$(grep -m1 '^DEV ' "$log" || true)"
+    mline="$(grep -m1 '^DEVM ' "$log" || true)"
     rm -f "$log"
     case "$line" in
         "DEV FAILED"*) echo "FAIL: the fixture itself threw: $line"; fail=1 ;;
@@ -85,6 +86,26 @@ expect profiles MIDP-2.0 "microedition.profiles is not the runtime's own answer"
 expect unknown true  "a key nobody answers was answered anyway"
 expect longkey true  "a 200-character key matched a shorter one"
 expect emptykey true "the empty key was answered"
+# JSR 135 defines eight MMAPI system properties.  A title is allowed to read
+# them without a null check (1942空战 calls .equals on supports.mixing, and
+# the NPE landed in its own catch), so every one has to be answered - with
+# "false" for the four capability flags and a defined (possibly empty) string
+# for the four lists.
+# The eight MMAPI properties are on the DEVM line: the DEV line is already
+# long enough that the runner's log buffer cut its tail.
+line="$mline"
+case "$line" in
+    "DEVM"*) ;;
+    *) echo "FAIL: the fixture printed no DEVM line (args: $*)"; fail=1 ;;
+esac
+expect mixing false    "supports.mixing must be defined; this runtime mixes no audio"
+expect audiocap false  "supports.audio.capture must be defined (no capture here)"
+expect videocap false  "supports.video.capture must be defined (no capture here)"
+expect recording false "supports.recording must be defined (no recording here)"
+expect audioenc false  "audio.encodings must be a defined string"
+expect videoenc false  "video.encodings must be a defined string"
+expect snapenc false   "video.snapshot.encodings must be a defined string"
+expect streamable false "streamable.contents must be a defined string"
 
 echo "== --device nokia6230"
 run --device nokia6230

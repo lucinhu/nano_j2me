@@ -150,6 +150,24 @@ static const nj_device_prop runtime_props[] = {
     { "file.separator",             "/" },
     { "java.version",               "1.4.2" },
     { "os.name",                    "nano_j2me" },
+    /*
+     * JSR 135 (MMAPI) defines eight system properties, and a title may read
+     * any of them without a null check.  1942空战 does exactly that: its
+     * sound manager calls System.getProperty("supports.mixing").equals(
+     * "true"), the NullPointerException lands in its own catch, and it then
+     * reports the media as unavailable.  The four capability flags are an
+     * honest "false" (this runtime has no camera or microphone and mixes no
+     * audio), the encoding lists name what a Player here really accepts, and
+     * the two that would promise capture are present but empty.
+     */
+    { "supports.mixing",            "false" },
+    { "supports.audio.capture",     "false" },
+    { "supports.video.capture",     "false" },
+    { "supports.recording",         "false" },
+    { "audio.encodings",            "audio/x-wav audio/amr audio/mp3 audio/midi" },
+    { "video.encodings",            "video/3gpp" },
+    { "video.snapshot.encodings",   "" },
+    { "streamable.contents",        "" },
 };
 
 /*

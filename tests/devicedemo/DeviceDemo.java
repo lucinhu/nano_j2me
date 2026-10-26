@@ -53,6 +53,7 @@ public class DeviceDemo extends MIDlet {
 
     public void startApp() {
         String line;
+        String mediaLine = "DEVM FAILED";
         try {
             line = "DEV"
                     + " platform=" + val("microedition.platform")
@@ -69,10 +70,25 @@ public class DeviceDemo extends MIDlet {
                     + " unknown=" + isNull("com.example.no.such.key")
                     + " longkey=" + isNull(longKey())
                     + " emptykey=" + isNull("");
+            /* JSR 135's eight MMAPI properties go on a second line: the DEV
+               line is already long enough that the runner's log line buffer
+               cut its tail, and a title is allowed to read any of these
+               without a null check (1942空战 calls .equals on
+               supports.mixing, and the NPE landed in its own catch). */
+            mediaLine = "DEVM"
+                    + " mixing=" + val("supports.mixing")
+                    + " audiocap=" + val("supports.audio.capture")
+                    + " videocap=" + val("supports.video.capture")
+                    + " recording=" + val("supports.recording")
+                    + " audioenc=" + isNull("audio.encodings")
+                    + " videoenc=" + isNull("video.encodings")
+                    + " snapenc=" + isNull("video.snapshot.encodings")
+                    + " streamable=" + isNull("streamable.contents");
         } catch (Throwable t) {
             line = "DEV FAILED " + t;
         }
         System.out.println(line);
+        System.out.println(mediaLine);
         Display.getDisplay(this).setCurrent(new V());
     }
 
