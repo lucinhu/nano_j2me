@@ -329,7 +329,22 @@ nj_status nj_midp_frame(nj_vm *vm)
             case NJ_EV_TEXT_REPLACE:
                 ev.text[NJ_TEXT_INPUT_BYTES - 1] = '\0';
                 (void)nj_midp_text_event(vm, &ev); break;
-            case NJ_EV_QUIT:         vm->running = 0u; break;
+            /*
+             * Say who asked for the stop.
+             *
+             * A quit request is an end, not a failure.  Without the reason,
+             * a run that ended while its MIDlet was still being constructed -
+             * Doom 3 runs the whole game inside its constructor, so closing
+             * the window happens there - reached the runner's "cannot
+             * instantiate" branch and was reported as a java/lang/InternalError
+             * raised by a MIDlet that was never even created.
+             * nj_vm_stop_reason() also clears vm->running and moves the VM to
+             * NJ_VM_STOPPING, which is what keeps teardown's destroyApp() call
+             * legal.
+             */
+            case NJ_EV_QUIT:
+                nj_vm_stop_reason(vm, 0, "the user asked the app to quit");
+                break;
             default: break;
             }
             nj_midp_text_input_sync(vm);
