@@ -1886,7 +1886,9 @@ static void jit_code_free(void *ud, void *p, nj_size n)
 
 static void test_runtime_fault_abi(void)
 {
-    static const nj_u1 two[] = {0xb4,0,1, 0x2a, 0xb4,0,1, 0x00, 0xac};
+    /* Keep the fault prefix unchanged, but pad the unreachable successful
+     * suffix so configured minimum block lengths still exercise deopt. */
+    nj_u1 two[8 + NJ_JIT_MIN_BLOCK_INSNS] = {0xb4,0,1, 0x2a, 0xb4,0,1};
     field_fixture fx;
     nj_port port;
     nj_method m;
@@ -1898,6 +1900,7 @@ static void test_runtime_fault_abi(void)
     unsigned i;
 
     test_name = "runtime fault updates pc, sp and frame";
+    two[sizeof(two) - 1u] = 0xac;
     field_fixture_init(&fx, NJ_PT_INT, 1u, field_offset());
     memcpy(fx.object + field_offset(), "\x11\x22\x33\x44", 4u);
     memset(&port, 0, sizeof(port));

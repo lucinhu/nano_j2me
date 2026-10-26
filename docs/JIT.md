@@ -239,10 +239,10 @@ Tracing bypasses native execution so per-bytecode trace output remains available
 
 | Limit macro | Default | Meaning |
 |---|---:|---|
-| `NJ_JIT_CACHE_ENTRIES` | 64 | Total executable-code entries per VM |
+| `NJ_JIT_CACHE_ENTRIES` | 64 | Total executable-code entries per VM, up to 1024 |
 | `NJ_JIT_CACHE_WAYS` | 2 | 1, 2 or 4 ways; entry count must be divisible by ways |
-| `NJ_JIT_METHOD_ENTRIES` | 32 | Mapped methods; least-recently-used map is recycled |
-| `NJ_JIT_METHOD_ARENA_BYTES` | 4096 | Fixed probe-map arena (one 16-bit cell per bytecode) |
+| `NJ_JIT_METHOD_ENTRIES` | 32 | Mapped methods, up to 1024; least-recently-used map is recycled |
+| `NJ_JIT_METHOD_ARENA_BYTES` | 4096 | Fixed probe-map arena, even byte size from 256 to 1048576 (one 16-bit cell per bytecode) |
 | `NJ_JIT_MAX_FAULTS` | 12 | Guarded instructions per block before it must end |
 | `NJ_JIT_MAX_EXITS` | 4 | Window end, leaving branches and the loop budget exit |
 | `NJ_JIT_HOT_THRESHOLD` | 8 | Visits before decode-only eligibility analysis |
@@ -255,7 +255,13 @@ bytecode offset (`0..0x3FFF` heat, `0x4000` refused, `0x6000|insns` ready for
 compilation — the analysed length, or zero when execute mode deferred the check
 to the compilation pass — and `0x8000|slot` compiled). The interpreter's current method is
 cached, so the steady-state probe is a pointer compare plus one array load: no
-hashing and no scan per bytecode. Maps come from a fixed arena. When it is full,
+hashing and no scan per bytecode. Method changes use a bounded hash index;
+collisions retain the full method identity and recycled slots are unlinked.
+Compiled cells retain ten slot bits, while arena offsets use 32 bits so larger
+configurations cannot wrap at 65536 cells. Defaults remain unchanged; larger
+caches consume more host memory and require sufficient executable storage from
+the port. Measure code/map evictions and real application time before increasing
+these budgets. Maps come from a fixed arena. When it is full,
 the least recently used *method* map is destroyed and the arena is compacted;
 that drops metadata only, never compiled code. A later recompile of the same
 (method, pc) finds the surviving code-cache entry and reuses it instead of

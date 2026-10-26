@@ -789,8 +789,10 @@ static void cache_collisions(void)
     /* The probe map holds one cell per bytecode offset from a fixed arena, so
      * keep this synthetic method small enough to be mapped (and therefore
      * JIT-eligible); the code cache is still exercised through hash collisions. */
-    enum { CODE_LEN = NJ_JIT_METHOD_ARENA_BYTES / 2u < 512u ?
-                      NJ_JIT_METHOD_ARENA_BYTES / 2u : 512u };
+    enum { WANT_LEN = NJ_JIT_CACHE_ENTRIES * 2u + NJ_JIT_MIN_BLOCK_INSNS + 1u,
+           CAPACITY = WANT_LEN > 512u ? WANT_LEN : 512u,
+           CODE_LEN = NJ_JIT_METHOD_ARENA_BYTES / 2u < CAPACITY ?
+                      NJ_JIT_METHOD_ARENA_BYTES / 2u : CAPACITY };
     nj_size size = CODE_LEN;
     nj_u1 *code = malloc(size);
     nj_method m;
@@ -985,6 +987,111 @@ static void method_table(void)
     nj_port_shutdown(&port);
     free(methods);
 }
+
+/* Mix mapped and oversized methods while repeatedly recycling slots. Compare
+ * the observable eviction policy with an independent MRU list, including
+ * revisits after recycling; stale lookup links must not create ghost hits. */
+static void method_table_churn(void)
+{
+    enum { COUNT = NJ_JIT_METHOD_ENTRIES + 257 };
+    static const nj_u1 code[] = {0x00};
+    nj_method *methods;
+    unsigned *recent;
+    unsigned used = 0, step, evictions = 0;
+    nj_u4 random = 0x2371b9a5u;
+    nj_port port;
+    nj_vm *vm;
+    nj_frame fr;
+    nj_value value;
+    nj_jit_ticket ticket;
+    nj_jit_stats stats;
+    if (NJ_JIT_METHOD_ENTRIES > NJ_JIT_METHOD_ARENA_BYTES / 2u) return;
+    methods = calloc(COUNT, sizeof(*methods));
+    recent = calloc(NJ_JIT_METHOD_ENTRIES, sizeof(*recent));
+    CHECK(methods && recent);
+    for (step = 0; step < COUNT; ++step) {
+        methods[step].code = code;
+        methods[step].code_len = step % 7u ? 1u : NJ_JIT_METHOD_ARENA_BYTES / 2u + 1u;
+    }
+    memset(&fr, 0, sizeof(fr)); memset(&value, 0, sizeof(value));
+    fr.locals = fr.stack = &value; fr.stack_limit = &value + 1;
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    vm = nj_vm_create(&port, 1024u * 1024u);
+    CHECK(vm && nj_jit_set_mode(vm, NJ_JIT_MODE_PROBE_ONLY) == NJ_OK);
+    for (step = 0; step < 5000; ++step) {
+        unsigned id, at;
+        random = random * 1664525u + 1013904223u;
+        /* Frequent revisits exercise every live chain, not just insertion. */
+        id = used && step % 3u ? recent[(random >> 16) % used] : (random >> 16) % COUNT;
+        for (at = 0; at < used && recent[at] != id; ++at) {}
+        if (at == used) {
+            if (used == NJ_JIT_METHOD_ENTRIES) { ++evictions; at = used - 1u; }
+            else ++used;
+        }
+        memmove(recent + 1, recent, at * sizeof(*recent));
+        recent[0] = id;
+        fr.m = &methods[id];
+        CHECK(!nj_jit_probe(vm, &fr, 0, &value, 128, &ticket));
+        CHECK(nj_jit_get_stats(vm, &stats));
+#if NJ_JIT_STATS
+        CHECK(stats.method_map_evictions == evictions);
+#endif
+        CHECK(stats.compiled_blocks == 0 && stats.code_bytes == 0);
+    }
+    nj_vm_destroy(vm); nj_port_shutdown(&port);
+    free(recent); free(methods);
+}
+
+/* Wide caches must retain the full slot number in each probe cell. Exercise
+ * many entry PCs, then immediately revisit each published cell: truncating a
+ * slot to eight bits causes a spurious reconnect even though nothing evicted
+ * the entry. Verify generated execution as well as the cache counters. */
+static void wide_code_slots(void)
+{
+    enum { COUNT = 256, STRIDE = (NJ_JIT_MIN_BLOCK_INSNS + 5) | 1 };
+    nj_u1 *code;
+    nj_method m;
+    nj_port port;
+    nj_vm *vm;
+    nj_frame fr;
+    nj_value stack[1], locals[1], *sp;
+    nj_jit_stats before, after;
+    unsigned i, hit;
+    nj_u4 pc;
+    if (NJ_JIT_CACHE_ENTRIES <= 256 || COUNT * STRIDE > NJ_JIT_METHOD_ARENA_BYTES / 2u ||
+        STRIDE > NJ_JIT_MAX_BLOCK_INSNS) return;
+    code = calloc(COUNT, STRIDE);
+    CHECK(code);
+    for (i = 0; i < COUNT; ++i) {
+        code[i * STRIDE] = 0x10; /* bipush */
+        code[i * STRIDE + 1] = (nj_u1)(i % 127u + 1u);
+        code[i * STRIDE + 2] = 0x3b; /* istore_0 */
+        code[(i + 1u) * STRIDE - 1u] = 0xb1; /* return */
+    }
+    memset(&m, 0, sizeof(m)); memset(&fr, 0, sizeof(fr));
+    memset(stack, 0, sizeof(stack)); memset(locals, 0, sizeof(locals));
+    m.code = code; m.code_len = COUNT * STRIDE; m.max_stack = m.max_locals = 1;
+    fr.m = &m; fr.locals = locals; fr.stack = stack; fr.stack_limit = stack + 1;
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    vm = nj_vm_create(&port, 1024u * 1024u);
+    CHECK(vm && nj_jit_enable(vm) == NJ_OK);
+    for (i = 0; i < COUNT; ++i) {
+        for (hit = 0; hit < NJ_JIT_HOT_THRESHOLD; ++hit) {
+            pc = fr.pc = i * STRIDE; sp = fr.sp = stack;
+            (void)nj_jit_try_block(vm, &fr, &pc, &sp, 128);
+        }
+        CHECK(nj_jit_get_stats(vm, &before));
+        locals[0].i = 0;
+        pc = fr.pc = i * STRIDE; sp = fr.sp = stack;
+        CHECK(nj_jit_try_block(vm, &fr, &pc, &sp, 128) > 0);
+        CHECK(locals[0].i == (nj_s4)(i % 127u + 1u));
+        CHECK(nj_jit_get_stats(vm, &after));
+        CHECK(after.compiled_blocks == before.compiled_blocks);
+        CHECK(after.recompiled_blocks == before.recompiled_blocks);
+        CHECK(after.code_evictions == before.code_evictions);
+    }
+    nj_vm_destroy(vm); nj_port_shutdown(&port); free(code);
+}
 #endif
 
 int main(void)
@@ -1021,6 +1128,8 @@ int main(void)
         cache_collisions();
         method_maps();
         method_table();
+        method_table_churn();
+        wide_code_slots();
         puts("PASS JIT runtime: probe/execute modes, SAVE, quanta, guards, method map, callbacks, cache, ownership, failures");
     }
 #else

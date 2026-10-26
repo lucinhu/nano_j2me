@@ -121,11 +121,13 @@ REJECT_RANGE='JIT cache/compilation limits are out of range'
 reject_config method-entries-zero "$REJECT_RANGE" \
     -DNJ_ENABLE_JIT=1 -DNJ_JIT_METHOD_ENTRIES=0
 reject_config method-entries-big "$REJECT_RANGE" \
-    -DNJ_ENABLE_JIT=1 -DNJ_JIT_METHOD_ENTRIES=257
+    -DNJ_ENABLE_JIT=1 -DNJ_JIT_METHOD_ENTRIES=1025
 reject_config arena-odd "$REJECT_RANGE" \
     -DNJ_ENABLE_JIT=1 -DNJ_JIT_METHOD_ARENA_BYTES=4095
 reject_config arena-small "$REJECT_RANGE" \
     -DNJ_ENABLE_JIT=1 -DNJ_JIT_METHOD_ARENA_BYTES=254
+reject_config arena-big "$REJECT_RANGE" \
+    -DNJ_ENABLE_JIT=1 -DNJ_JIT_METHOD_ARENA_BYTES=1048578
 reject_config max-faults-zero "$REJECT_RANGE" \
     -DNJ_ENABLE_JIT=1 -DNJ_JIT_MAX_FAULTS=0
 reject_config max-faults-big "$REJECT_RANGE" \
@@ -135,7 +137,7 @@ reject_config max-exits-zero "$REJECT_RANGE" \
 reject_config max-exits-big "$REJECT_RANGE" \
     -DNJ_ENABLE_JIT=1 -DNJ_JIT_MAX_EXITS=9
 reject_config cache-entries-big "$REJECT_RANGE" \
-    -DNJ_ENABLE_JIT=1 -DNJ_JIT_CACHE_ENTRIES=257
+    -DNJ_ENABLE_JIT=1 -DNJ_JIT_CACHE_ENTRIES=1025 -DNJ_JIT_CACHE_WAYS=1
 reject_config cache-ways-bad "$REJECT_RANGE" \
     -DNJ_ENABLE_JIT=1 -DNJ_JIT_CACHE_WAYS=3
 reject_config hot-zero "$REJECT_RANGE" \
@@ -174,6 +176,7 @@ ROWS=(
     'no-cache 1 1 1 1 1 1 0 32 4096 4 64 2 8'
     'small-map 1 1 1 1 1 1 1 1 256 16 1 1 1'
     'big-map 1 1 1 1 1 1 1 256 65534 16 256 4 16383'
+    'wide-cache 1 1 1 1 1 1 1 1024 262144 12 1024 4 8'
     'max-faults-16 1 1 1 1 1 1 1 32 4096 16 64 2 8'
     'stats-off 1 1 1 1 1 1 1 32 4096 4 64 2 8'
 )
