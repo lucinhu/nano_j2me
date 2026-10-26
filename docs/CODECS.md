@@ -786,13 +786,41 @@ instead of just not crashing: at bit 56 the stream reads MCBPC `1` (symbol 0),
 `ac_pred` 0 and CBPY `0011` (symbol 0), i.e. `cbp = 0` - exactly what an
 all-black first frame must carry, and matches the oracle's all-zero frame.
 
-Where the frame decoder now stands: `nj_m4v_decode_ivop()` runs from the
-corrected header and fails at bit **576** (was 588) after four macroblocks, so
-the remaining bug is inside the macroblock/block decode, not the header.  The
-next instrument to add is the DC prediction amount for the first block: 11 bits
-are consumed where a differential against the 1024 predictor needs 21, which
-points at the prediction value being lost between the driver's grid and
-`nj_m4v_decode_intra_block()`.
+## The first I-VOP decodes to the reference pixels (round 224)
+
+Three defects sat between "the header lines up" and "the picture is right"; all
+three were found by diffing against the FFmpeg decoder run on the same file
+(`tools/refdecode_frame.c` plus a per-macroblock dump of `block[0]`, then a
+whole-frame YUV comparison).
+
+1. **The MCBPC and CBPY tables were in the wrong order.**  The intra tables were
+   written with the symbols complemented, so every macroblock read a plausible
+   but incorrect CBP.  Both now carry the symbols from H.263 Annex A
+   (`/tmp/h263data.c` in the reference tree) and match
+   `tests/test_m4v.c`'s derived expectations.
+2. **`dquant` has to persist for the rest of the frame.**  The quantiser was
+   re-read from the VOP header for every macroblock, so the frame's first
+   `dquant` was forgotten on the next one.  It now walks the macroblock loop.
+3. **The intra DC coefficient was never dequantised.**  `nj_m4v_decode_intra_block()`
+   stores the *level*, and the reference's `dct_unquantize_h263_intra()` then
+   multiplies it by the DC scaler before the IDCT (`block[0] *= y_dc_scale`).
+   We passed the raw level to `nj_m4v_idct()`, which produced mid-grey for every
+   block.  The reconstruction now uses `nj_m4v_dc_coef()` and subtracts
+   `NJ_M4V_DC_GREY` (1024), which is the bias the reference IDCT carries: it
+   writes the coefficient straight out, so 1024 means sample 128.
+
+With those in place `nj_m4v_decode_ivop()` consumes the whole sample - 2284 of
+2288 bits, the rest being the trailing zero padding - and the first frames of
+`1942.3gp` (176x144) and `doom.3gp` (320x240) match the reference decoder
+**pixel for pixel on the luma plane** (100% of samples equal, maximum absolute
+difference 0).  Chroma differs by at most 1 on 3% of samples, the expected
+residue of two different integer IDCT roundings.
+
+Still missing for playback: P-VOPs, so only the first frame of a clip decodes,
+and the data-partitioned and advanced-intra variants some corpus titles use.
+`tests/test_m4v.c` (90 checks) pins the DC dequantisation: level 8 at a DC
+scaler of 16 reconstructs the limited-range black sample, and level 0 always
+reconstructs black.
 
 Also pinned in `tests/test_m4v.c` (88 checks): the rectangular header ends at
 bit 56 with qscale 9 / thr 0, and the 1942 VOL reports complexity estimation

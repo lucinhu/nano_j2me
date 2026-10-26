@@ -652,6 +652,27 @@ int main(void)
        "the DC coefficient is the level times the DC scaler");
 
     {
+        /* Black in MPEG-4 is level 8 at 16x: the reference IDCT writes the
+         * dequantised coefficient straight out, so the reconstructed sample is
+         * 128/8 = 16.  The block we hand to nj_m4v_idct() is biased by 1024
+         * because that IDCT returns a residual that is then offset by 128. */
+        nj_s4 coef[64];
+        int out[64], i, base;
+
+        for (i = 0; i < 64; i++) coef[i] = 0;
+        base = nj_m4v_dc_coef(8, nj_m4v_dc_scale(8, 1)) - NJ_M4V_DC_GREY;
+        coef[0] = (nj_s4)base;
+        nj_m4v_idct(coef, out);
+        ok(base == -896 && out[0] + 128 == 16,
+           "level 8 at DC scale 16 reconstructs to the limited-range black sample");
+
+        base = nj_m4v_dc_coef(0, nj_m4v_dc_scale(9, 1)) - NJ_M4V_DC_GREY;
+        coef[0] = (nj_s4)base;
+        nj_m4v_idct(coef, out);
+        ok(out[0] == -128, "level 0 at any scale reconstructs to a black sample");
+    }
+
+    {
         /* intra MCBPC symbol 0 is "1", CBPY symbol 15 is "11" */
         static const nj_u1 hdr[1] = { 0xF0u };
         nj_u4 pos = 0;

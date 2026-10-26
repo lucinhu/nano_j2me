@@ -192,6 +192,12 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                        nj_s4 *grids, nj_u1 *yp, int ys,
                        nj_u1 *up, int us, nj_u1 *vp, int vs);
 
+/* The DC prediction grid and the dequantised intra DC coefficient are stored
+ * around this bias: MPEG-4 predicts from mid-grey, and the reference IDCT
+ * writes the coefficient directly, so the reconstruction subtracts the bias
+ * and lets the IDCT add the 128 back. */
+#define NJ_M4V_DC_GREY 1024
+
 /* Converts a 4:2:0 picture with the BT.601 limited-range matrix into RGB565.
  * Strides are in bytes; out must hold w * h * 2. */
 void nj_m4v_yuv420_to_rgb565(const nj_u1 *yp, int ys, const nj_u1 *up, int us,

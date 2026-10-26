@@ -1283,11 +1283,14 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
         gcr[i] = 1024;
     }
 
+    {
+    int qsc = (int)vop->qscale;   /* dquant adjusts this for the whole rest of the frame */
     for (mby = 0; mby < mbh; mby++) {
         for (mbx = 0; mbx < mbw; mbx++) {
-            int   qsc = (int)vop->qscale;
             nj_s4 ac[6];
-            int   rc = nj_m4v_decode_intra_mb_pix(b, n, pos, (int)mbx, (int)mby,
+            int   rc;
+            if (getenv("NJ_M4VLOOP")) fprintf(stderr, "LOOP mbx=%u mby=%u mbw=%u mbh=%u\n", (unsigned)mbx, (unsigned)mby, (unsigned)mbw, (unsigned)mbh);
+            rc = nj_m4v_decode_intra_mb_pix(b, n, pos, (int)mbx, (int)mby,
                                                   gl, glw, gc, gcw, gcr, gcw,
                                                   lscale, &qsc, ac,
                                                   yp, ys, up, us, vp, vs);
@@ -1295,6 +1298,7 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                 return rc;
             }
         }
+    }
     }
     return 0;
 }
@@ -1417,6 +1421,14 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
 {
     int cbp = 0, cbpc = 0, cbpy = 0, dq = 0, blk;
     nj_s4 all_coef[6][64];
+    {
+        int zi, zj;
+        for (zi = 0; zi < 6; zi++) {
+            for (zj = 0; zj < 64; zj++) {
+                all_coef[zi][zj] = 0;
+            }
+        }
+    }
 
     if (nj_m4v_mb_core(b, n, pos, &cbpc, &dq) != 0) {
         return -1;
@@ -1440,50 +1452,8 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
             }
             (void)acp;
         }
-    }
-    if (getenv("NJ_M4VMB")) fprintf(stderr, "MB pos=%u cbpc=%d cbp=0x%02x\n", (unsigned)*pos, cbpc, (unsigned)cbp);
-    for (blk = 0; blk < 6; blk++) {
-        nj_s2 *grid = (blk < 4) ? dc_y : (blk == 4 ? dc_c : (dc_c2 != NULL ? dc_c2 : dc_c));
-        int stride = (blk < 4) ? stride_y : (blk == 4 ? stride_c
-                      : (dc_c2 != NULL ? stride_c2 : stride_c));
-        nj_s4 coef[64];
-        int gx = 0, gy = 0, a, bq, c, dir = 0, pred, rc, level;
-        int dscale = nj_m4v_dc_scale(*qscale, blk < 4);
-
-        if (nj_m4v_block_grid(blk, mbx, mby, &gx, &gy) != 0) {
-            return -1;
-        }
-        a = nj_m4v_dc_neighbour(grid, stride, gx, gy, 0);
-        bq = nj_m4v_dc_neighbour(grid, stride, gx, gy, 1);
-        c = nj_m4v_dc_neighbour(grid, stride, gx, gy, 2);
-        pred = nj_m4v_dc_predict_q(a, bq, c, dscale, &dir);
-        rc = nj_m4v_decode_intra_block_ex(b, n, pos, coef, blk < 4, pred,
-                                          *qscale, 0);
-        if (getenv("NJ_M4VDC")) fprintf(stderr, "DC mb(%d,%d) blk=%d rc=%d pos=%u pred=%d\n", mbx, mby, blk, rc, (unsigned)*pos, pred);
-        if (getenv("NJ_M4VDBG")) fprintf(stderr, "DC blk=%d rc=%d pos=%u\n", blk, rc, (unsigned)*pos);
-        if (rc != 0) {
-            return rc;
-        }
-        level = (nj_s4)coef[0] * (nj_s4)dscale;
-        if (level < 0) {
-            level = 0;
-        } else if (level > 2047) {
-            level = 2047;
-        }
-        if (grid != NULL && stride > 0) {
-            grid[(nj_size)gy * (nj_size)stride + (nj_size)gx] = (nj_s2)level;
-        }
-        all_coef[blk][0] = coef[0];
-        (void)dir;
-        (void)scale;
-    }
-    if (getenv("NJ_M4V_ORD") != NULL) {
-        int acp = 0;
-        if (m4v_read_cbp(b, n, pos, cbpc, dq, &cbp, &acp) != 0) {
-            return -1;
-        }
-        (void)acp;
-    }
+    /* dquant follows cbpy, still inside the macroblock header, before the
+     * DC coefficients of the six blocks (7.4.3.5). */
     if (dq != 0) {
         nj_u4 at = *pos;
         int   delta;
@@ -1499,6 +1469,71 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
             *qscale = 31;
         }
         *pos += 2u;
+    }
+    }
+    if (getenv("NJ_M4VMB")) fprintf(stderr, "MB pos=%u cbpc=%d cbp=0x%02x\n", (unsigned)*pos, cbpc, (unsigned)cbp);
+    for (blk = 0; blk < 6; blk++) {
+        nj_s2 *grid = (blk < 4) ? dc_y : (blk == 4 ? dc_c : (dc_c2 != NULL ? dc_c2 : dc_c));
+        int stride = (blk < 4) ? stride_y : (blk == 4 ? stride_c
+                      : (dc_c2 != NULL ? stride_c2 : stride_c));
+        nj_s4 coef[64];
+        int gx = 0, gy = 0, a, bq, c, dir = 0, pred, rc, level;
+        int dscale = nj_m4v_dc_scale(*qscale, blk < 4);
+
+        if (nj_m4v_block_grid(blk, mbx, mby, &gx, &gy) != 0) {
+            return -1;
+        }
+        a = nj_m4v_dc_neighbour(grid, stride, gx, gy, 0);
+        bq = nj_m4v_dc_neighbour(grid, stride, gx, gy, 2);
+        c = nj_m4v_dc_neighbour(grid, stride, gx, gy, 1);
+        /* Outside-slice handling, as the reference decoder does it: on the
+         * first line of a slice the top neighbours are not predictors, and
+         * at the left edge of the slice so is the left one.  Chroma blocks
+         * (n=4 and n=5) follow the same rules. */
+        if (mby == 0) {
+            if (blk != 3) {
+                if (blk != 2) {
+                    bq = 1024;
+                    c = 1024;
+                }
+                if (blk != 1 && mbx == 0) {
+                    bq = 1024;
+                    a = 1024;
+                }
+            }
+        }
+        pred = nj_m4v_dc_predict_q(a, bq, c, dscale, &dir);
+        rc = nj_m4v_decode_intra_block_ex(b, n, pos, coef, blk < 4, pred,
+                                          *qscale, 0);
+        if (getenv("NJ_M4VDC")) fprintf(stderr, "DC mb(%d,%d) blk=%d rc=%d pos=%u pred=%d a=%d b=%d c=%d s=%d\n", mbx, mby, blk, rc, (unsigned)*pos, pred, a, bq, c, dscale);
+        if (getenv("NJ_M4VDBG")) fprintf(stderr, "DC blk=%d rc=%d pos=%u\n", blk, rc, (unsigned)*pos);
+        if (rc != 0) {
+            return rc;
+        }
+        level = (nj_s4)coef[0] * (nj_s4)dscale;
+        if (level < 0) {
+            level = 0;
+        } else if (level > 2047) {
+            level = 2047;
+        }
+        if (grid != NULL && stride > 0) {
+            grid[(nj_size)gy * (nj_size)stride + (nj_size)gx] = (nj_s2)level;
+        }
+        /* Reconstruction uses ffmpeg's convention: the IDCT input is the
+         * coefficient scaled by the DC quantiser, and the IDCT already puts
+         * mid-grey (1024) at 128.  Our nj_m4v_idct() returns a residual that
+         * still needs +128, so subtract the 1024 bias here. */
+        all_coef[blk][0] = (nj_s4)(nj_m4v_dc_coef((int)coef[0], (int)dscale) -
+                                   NJ_M4V_DC_GREY);
+        (void)dir;
+        (void)scale;
+    }
+    if (getenv("NJ_M4V_ORD") != NULL) {
+        int acp = 0;
+        if (m4v_read_cbp(b, n, pos, cbpc, dq, &cbp, &acp) != 0) {
+            return -1;
+        }
+        (void)acp;
     }
     /* All six DC coefficients come first, then the AC coefficients of the
      * coded blocks - that is the macroblock layer's order (7.4.3.5). */
@@ -1528,6 +1563,14 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
             return -1;
         }
     }
+    if (getenv("NJ_M4VCOEF") != NULL) {
+        int zz, qq;
+        for (zz = 0; zz < 6; zz++) {
+            fprintf(stderr, "COEF mb(%d,%d) b%d:", mbx, mby, zz);
+            for (qq = 0; qq < 8; qq++) fprintf(stderr, " %d", (int)all_coef[zz][qq]);
+            fprintf(stderr, "\n");
+        }
+    }
     if (yp != NULL) {
         int cw = 0, ch = 0;
         int  scale2 = 1;
@@ -1552,16 +1595,27 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
                 dst = yp; stride = ys;
             } else if (blk == 4) {
                 dst = up; stride = us;
-                ox /= 2; oy /= 2;
+                /* One 8x8 chroma block covers the macroblock's 16x16 luma
+                 * area, so its origin is (mbx, mby) in chroma samples - not
+                 * half of the luma block origin. */
+                ox = mbx * 8; oy = mby * 8;
             } else {
                 dst = vp; stride = vs;
-                ox /= 2; oy /= 2;
+                ox = mbx * 8; oy = mby * 8;
             }
             for (r = 0; r < 8; r++) {
                 for (cc2 = 0; cc2 < 8; cc2++) {
                     int v2 = out[r * 8 + cc2] + 128;
                     if (v2 < 0) { v2 = 0; } else if (v2 > 255) { v2 = 255; }
-                    dst[(nj_size)(oy + r) * (nj_size)stride + (nj_size)(ox + cc2)] = (nj_u1)v2;
+                    {
+                        nj_size wi = (nj_size)(oy + r) * (nj_size)stride + (nj_size)(ox + cc2);
+                        if (getenv("NJ_M4VW") && wi >= 6300u) {
+                            fprintf(stderr, "WRITE blk=%d mb(%d,%d) ox=%d oy=%d r=%d c=%d stride=%d idx=%u dst=%s\n",
+                                    blk, mbx, mby, ox, oy, r, cc2, stride, (unsigned)wi,
+                                    dst == yp ? "yp" : (dst == up ? "up" : "vp"));
+                        }
+                        dst[wi] = (nj_u1)v2;
+                    }
                 }
             }
         }
