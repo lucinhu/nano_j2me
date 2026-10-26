@@ -376,7 +376,9 @@ public class M3GDemo extends MIDlet {
                 SkinnedMesh sm = new SkinnedMesh(vb, ib, new Appearance(), skeleton);
                 check("a SkinnedMesh is a Mesh", sm instanceof Mesh);
                 check("the skeleton comes back", sm.getSkeleton() == skeleton);
-                sm.addTransform(skeleton, 0, 0, 0);
+                // JSR-184 requires a positive weight and a non-empty vertex
+                // range; the skeleton itself is a legal bone.
+                sm.addTransform(skeleton, 1, 0, 3);
                 ok("the bone transform answers "
                    + sm.getBoneVertices(skeleton, new int[1], new float[3]));
             }

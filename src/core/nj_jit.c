@@ -25,13 +25,13 @@
  *   0x0000..0x3FFF  heat counter (0 = never probed)
  *   0x4000          refused: unsupported, short, or a failed compile
  *   0x6000|insns    analyzed; awaiting compile (or a probe-only measurement)
- *   0x8000|slot     compiled; low byte is the code-cache entry index        */
+ *   0x8000|slot     compiled; low ten bits are the code-cache entry index   */
 #define JIT_CELL_REFUSED 0x4000u
 #define JIT_CELL_READY 0x6000u
 #define JIT_CELL_STATE_MASK 0xe000u
 #define JIT_CELL_INSNS_MASK 0x1fffu
 #define JIT_CELL_COMPILED 0x8000u
-#define JIT_CELL_SLOT_MASK 0xffu
+#define JIT_CELL_SLOT_MASK 0x3ffu
 #define JIT_CELL_HEAT_MASK 0x3fffu
 
 #define JIT_COUNTERS(X) \
@@ -48,9 +48,10 @@ typedef struct nj_jit_entry {
 
 typedef struct nj_jit_method {
     const nj_method *method;
-    nj_u2 off;   /* first cell in the arena, or 0xFFFF when unmapped */
+    nj_u4 off;   /* first cell in the arena, or 0xFFFFFFFF when unmapped */
     nj_u2 pcs;   /* method->code_len when mapped */
     nj_u4 usage; /* LRU stamp */
+    nj_u2 next;  /* method hash chain; slot index + 1, zero is the end */
 } nj_jit_method;
 
 struct nj_jit {
@@ -72,6 +73,7 @@ struct nj_jit {
 #endif
     nj_jit_entry entries[NJ_JIT_CACHE_ENTRIES];
     nj_jit_method methods[NJ_JIT_METHOD_ENTRIES];
+    nj_u2 method_heads[JIT_METHOD_BUCKETS];
     nj_u2 cells[JIT_ARENA_CELLS];
     nj_u1 code_next[JIT_CODE_SETS];
     /* Refusals must survive map recycling and tickets without a map cell. */
@@ -81,7 +83,7 @@ struct nj_jit {
      * arena moves a method's cells. */
     const nj_method *cur_method;
     nj_u2 *cur_map;
-    nj_u2 arena_used;
+    nj_u4 arena_used;
     nj_u4 usage_tick;
 };
 
@@ -245,7 +247,7 @@ static void jit_map_use(struct nj_jit *jit, nj_jit_method *slot)
 {
     slot->usage = ++jit->usage_tick;
     jit->cur_method = slot->method;
-    jit->cur_map = (slot->off == 0xffffu) ? NULL
+    jit->cur_map = (slot->off == 0xffffffffu) ? NULL
                                           : &jit->cells[slot->off];
 }
 
@@ -253,39 +255,52 @@ static void jit_map_use(struct nj_jit *jit, nj_jit_method *slot)
  * code already compiled for this method stays in the code cache. */
 static void jit_map_release(struct nj_jit *jit, nj_jit_method *slot)
 {
-    nj_u2 off = slot->off;
+    nj_u4 off = slot->off;
     nj_u2 pcs = slot->pcs;
     unsigned i;
+    unsigned bucket = jit_method_bucket(slot->method);
+    nj_u2 *link = &jit->method_heads[bucket];
+
+    /* Unlink before recycling the slot. Hash collisions retain all remaining
+     * methods, including records without an arena allocation. */
+    while (*link) {
+        nj_jit_method *entry = &jit->methods[*link - 1u];
+        if (entry == slot) { *link = entry->next; break; }
+        link = &entry->next;
+    }
+    slot->next = 0;
 
     JIT_COUNT(jit, method_map_evictions, 1u);
     slot->method = NULL;
-    slot->off = 0xffffu;
+    slot->off = 0xffffffffu;
     slot->pcs = 0u;
     slot->usage = 0u;
-    if (off == 0xffffu || pcs == 0u) {
+    if (off == 0xffffffffu || pcs == 0u) {
         jit->cur_method = NULL;
         return;
     }
     for (i = 0; i < NJ_JIT_METHOD_ENTRIES; ++i) {
         nj_jit_method *o = &jit->methods[i];
-        if (o->method && o->off != 0xffffu && o->off > off) {
-            o->off = (nj_u2)(o->off - pcs);
+        if (o->method && o->off != 0xffffffffu && o->off > off) {
+            o->off -= pcs;
         }
     }
     if ((nj_u4)off + pcs < jit->arena_used) {
         memmove(&jit->cells[off], &jit->cells[off + pcs],
                 (nj_size)(jit->arena_used - off - pcs) * sizeof(nj_u2));
     }
-    jit->arena_used = (nj_u2)(jit->arena_used - pcs);
+    jit->arena_used -= pcs;
     jit->cur_method = NULL; /* every remaining offset may have moved */
     jit->cur_map = NULL;
 }
 
 static nj_jit_method *jit_map_slot_find(struct nj_jit *jit, const nj_method *m)
 {
-    unsigned i;
-    for (i = 0; i < NJ_JIT_METHOD_ENTRIES; ++i) {
-        if (jit->methods[i].method == m) return &jit->methods[i];
+    nj_u2 index = jit->method_heads[jit_method_bucket(m)];
+    while (index) {
+        nj_jit_method *slot = &jit->methods[index - 1u];
+        if (slot->method == m) return slot;
+        index = slot->next;
     }
     return NULL;
 }
@@ -327,11 +342,16 @@ static nj_u2 *jit_map_for(struct nj_jit *jit, const nj_method *m)
         jit_map_release(jit, slot);
     }
     slot->method = m;
+    {
+        unsigned bucket = jit_method_bucket(m);
+        slot->next = jit->method_heads[bucket];
+        jit->method_heads[bucket] = (nj_u2)(slot - jit->methods + 1u);
+    }
     slot->usage = ++jit->usage_tick;
     slot->pcs = (nj_u2)((m->code_len > 0xffffu) ? 0u : m->code_len);
     if (slot->pcs == 0u || (nj_u4)slot->pcs > (nj_u4)JIT_ARENA_CELLS) {
         /* Too large to map: this method stays interpreted permanently. */
-        slot->off = 0xffffu;
+        slot->off = 0xffffffffu;
         slot->pcs = 0u;
         jit->cur_method = m;
         jit->cur_map = NULL;
@@ -340,7 +360,7 @@ static nj_u2 *jit_map_for(struct nj_jit *jit, const nj_method *m)
     while ((nj_u4)jit->arena_used + slot->pcs > (nj_u4)JIT_ARENA_CELLS) {
         nj_jit_method *victim = jit_map_slot_victim(jit, m);
         if (!victim) {
-            slot->off = 0xffffu;
+            slot->off = 0xffffffffu;
             slot->pcs = 0u;
             jit->cur_method = m;
             jit->cur_map = NULL;
@@ -349,7 +369,7 @@ static nj_u2 *jit_map_for(struct nj_jit *jit, const nj_method *m)
         jit_map_release(jit, victim);
     }
     slot->off = jit->arena_used;
-    jit->arena_used = (nj_u2)(jit->arena_used + slot->pcs);
+    jit->arena_used += slot->pcs;
     memset(&jit->cells[slot->off], 0, (nj_size)slot->pcs * sizeof(nj_u2));
     jit_map_use(jit, slot);
     return jit->cur_map;
@@ -360,7 +380,7 @@ static nj_u2 *jit_map_for(struct nj_jit *jit, const nj_method *m)
 static void jit_map_forget(struct nj_jit *jit, const nj_method *m, nj_u4 pc)
 {
     nj_jit_method *slot = jit_map_slot_find(jit, m);
-    if (!slot || slot->off == 0xffffu || pc >= (nj_u4)slot->pcs) return;
+    if (!slot || slot->off == 0xffffffffu || pc >= (nj_u4)slot->pcs) return;
     jit->cells[slot->off + pc] = 0u;
 }
 

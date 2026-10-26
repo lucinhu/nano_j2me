@@ -1555,9 +1555,9 @@ static void test_skinned_mesh_bones(nj_vm *vm)
     node = make(vm, CLS("Group"));
     check(node != 0, "the first bone node constructs");
     a[0].r = node;
-    a[1].i = 0;
-    a[2].i = 1;
-    a[3].i = 0;
+    a[1].i = 255;   /* weight */
+    a[2].i = 0;     /* firstVertex */
+    a[3].i = 1;     /* vertexCount */
     st = nj_call(vm, mesh, skin, "addTransform",
                  "(L" CLS("Node") ";III)V", a, NULL);
     check(st == NJ_OK, "addTransform records the first bone");
@@ -2507,6 +2507,49 @@ static void test_animation(nj_vm *vm)
             }
         }
     }
+
+    printf("== animate() applies alpha and visibility too ==\n");
+    {
+        nj_ref node = make(vm, CLS("Group"));
+        nj_ref kfs = kfs_new(vm, 1, 2, 176);
+        nj_ref track, ctl = make(vm, CLS("AnimationController"));
+        nj_value a[1], r;
+
+        check(node && kfs && ctl, "a Group for the alpha and visibility curves");
+        if (node && kfs && ctl) {
+            kfs_set_key(vm, kfs, 0, 0, 0.5f);
+            kfs_set_key(vm, kfs, 1, 1000, 0.5f);
+            track = atrack_new(vm, kfs, 256);
+            if (track) {
+                node_add_track(vm, node, track, ctl);
+                a[0].i = 0;
+                call(vm, node, CLS("Object3D"), "animate", "(I)I", a, NULL);
+                r.f = -1.0f;
+                call(vm, node, CLS("Node"), "getAlphaFactor", "()F", NULL, &r);
+                check(fabsf(r.f - 0.5f) < 1e-4f,
+                      "an ALPHA track writes the node's alpha factor");
+            }
+
+            kfs = kfs_new(vm, 1, 2, 176);
+            check(kfs != 0, "a curve for the VISIBILITY property");
+            if (kfs) {
+                kfs_set_key(vm, kfs, 0, 0, 0.0f);
+                kfs_set_key(vm, kfs, 1, 1000, 0.0f);
+                track = atrack_new(vm, kfs, 276);
+                if (track) {
+                    node_add_track(vm, node, track, ctl);
+                    a[0].i = 0;
+                    call(vm, node, CLS("Object3D"), "animate", "(I)I", a,
+                         NULL);
+                    r.i = 1;
+                    call(vm, node, CLS("Node"), "isRenderingEnabled", "()Z",
+                         NULL, &r);
+                    check(r.i == 0,
+                          "a VISIBILITY track hides the node from the walk");
+                }
+            }
+        }
+    }
 }
 
 static void test_animation_file(nj_vm *vm)
@@ -2600,6 +2643,593 @@ static void test_animation_file(nj_vm *vm)
         check(fabsf(node_matrix(vm, grp, 3) - 10.0f) < 1e-4f,
               "past the last keyframe the loaded curve holds its last value");
     }
+}
+
+
+/* ---------------------------- SkinnedMesh ------------------------------ */
+
+static void put_le16(nj_u1 *p, int v)
+{
+    p[0] = (nj_u1)(v & 0xFF);
+    p[1] = (nj_u1)((v >> 8) & 0xFF);
+}
+
+/*
+ * A minimal JSR-184 file holding one SkinnedMesh: a quad at z = -200 whose
+ * four vertices are all driven by one bone, plus the skeleton Group that owns
+ * that bone.  References use object number + 2, the numbering the loader's
+ * ref-mode detection settles on for a file whose Groups carry no children
+ * list it can check against.
+ *
+ * with_skin == 0 emits the same SkinnedMesh without the skeleton tail.  The
+ * format allows that, and it must still draw its bind pose rather than turn
+ * into an invisible surface.
+ */
+static nj_u4 build_skin_file(nj_u1 *b, nj_u4 cap, int with_skin)
+{
+    static const nj_u1 ident[12] = {
+        0xAB, 0x4A, 0x53, 0x52, 0x31, 0x38, 0x34,
+        0xBB, 0x0D, 0x0A, 0x1A, 0x0A
+    };
+    nj_u4 lens[8];
+    nj_u4 nobj = 0u, body, hdrsec, sec, total, i;
+    nj_u1 *p;
+
+    lens[nobj++] = 41u;   /* VertexArray: four xyz shorts            */
+    lens[nobj++] = 48u;   /* VertexBuffer: no texture units          */
+    lens[nobj++] = 41u;   /* TriangleStripArray: four u32 indices    */
+    lens[nobj++] = 33u;   /* Appearance: no textures                 */
+    lens[nobj++] = 15u;   /* PolygonMode: CULL_NONE                  */
+    if (with_skin) {
+        lens[nobj++] = 30u;  /* Group: the skeleton, one child       */
+        lens[nobj++] = 26u;  /* Group: the bone                      */
+    }
+    lens[nobj++] = with_skin ? 62u : 38u;   /* SkinnedMesh            */
+    body = 0u;
+    for (i = 0u; i < nobj; i++) {
+        body += 5u + lens[i];
+    }
+    hdrsec = 30u;
+    sec = 9u + body + 4u;
+    total = 12u + hdrsec + sec;
+    if (cap < total) {
+        return 0u;
+    }
+    memset(b, 0, cap);
+    memcpy(b, ident, 12u);
+    b[12] = 0u;
+    put_le32(b + 13, hdrsec);
+    put_le32(b + 17, 17u);
+    put_le32(b + 22, 12u);
+    b[26] = 1u;
+    put_le32(b + 29, total);
+    put_le32(b + 33, total);
+    b[42] = 0u;
+    put_le32(b + 43, sec);
+    put_le32(b + 47, body);
+    p = b + 51;
+
+    /* object 0: positions, -50..50 in x/y at z = -200 */
+    p[0] = 20u; put_le32(p + 1, lens[0]); p += 5;
+    p[12] = 2u; p[13] = 3u; p[14] = 0u; put_le16(p + 15, 4);
+    put_le16(p + 17, -50); put_le16(p + 19, -50); put_le16(p + 21, -200);
+    put_le16(p + 23, 50);  put_le16(p + 25, -50); put_le16(p + 27, -200);
+    put_le16(p + 29, -50); put_le16(p + 31, 50);  put_le16(p + 33, -200);
+    put_le16(p + 35, 50);  put_le16(p + 37, 50);  put_le16(p + 39, -200);
+    p += lens[0];
+
+    /* object 1: the vertex buffer */
+    p[0] = 21u; put_le32(p + 1, lens[1]); p += 5;
+    put_le32(p + 12, 0xFFFFFFFFu);      /* opaque white default color */
+    put_le32(p + 16, 2u);               /* positions = object 0 + 2   */
+    put_f32(p + 20, 0.0f); put_f32(p + 24, 0.0f); put_f32(p + 28, 0.0f);
+    put_f32(p + 32, 1.0f);              /* position scale             */
+    p += lens[1];
+
+    /* object 2: the triangle strip */
+    p[0] = 11u; put_le32(p + 1, lens[2]); p += 5;
+    p[12] = 128u;                       /* u32 indices                */
+    put_le32(p + 13, 4u);
+    put_le32(p + 17, 0u); put_le32(p + 21, 1u);
+    put_le32(p + 25, 2u); put_le32(p + 29, 3u);
+    put_le32(p + 33, 1u);               /* one strip                  */
+    put_le32(p + 37, 4u);               /* four indices               */
+    p += lens[2];
+
+    /* object 3: the appearance, pointing at the polygon mode */
+    p[0] = 3u; put_le32(p + 1, lens[3]); p += 5;
+    put_le32(p + 21, 6u);               /* PolygonMode = object 4 + 2 */
+    p += lens[3];
+
+    /* object 4: no culling, so the winding cannot hide the quad */
+    p[0] = 8u; put_le32(p + 1, lens[4]); p += 5;
+    p[12] = 162u; p[13] = 165u; p[14] = 168u;
+    p += lens[4];
+
+    if (with_skin) {
+        /* object 5: the skeleton Group, holding the bone as its child */
+        p[0] = 9u; put_le32(p + 1, lens[5]); p += 5;
+        p[14] = 1u; p[15] = 1u; p[16] = 0xFFu;
+        put_le32(p + 17, 0xFFFFFFFFu);
+        put_le32(p + 22, 1u);           /* one child                  */
+        put_le32(p + 26, 8u);           /* bone = object 6 + 2        */
+        p += lens[5];
+
+        /* object 6: the bone */
+        p[0] = 9u; put_le32(p + 1, lens[6]); p += 5;
+        p[14] = 1u; p[15] = 1u; p[16] = 0xFFu;
+        put_le32(p + 17, 0xFFFFFFFFu);
+        p += lens[6];
+    }
+
+    /* the SkinnedMesh itself */
+    p[0] = 16u; put_le32(p + 1, lens[nobj - 1u]); p += 5;
+    p[14] = 1u; p[15] = 1u; p[16] = 0xFFu;
+    put_le32(p + 17, 0xFFFFFFFFu);      /* alpha + scope = the marker */
+    put_le32(p + 22, 3u);               /* VertexBuffer = object 1 + 2 */
+    put_le32(p + 26, 1u);               /* one submesh                */
+    put_le32(p + 30, 4u);               /* index buffer = object 2 + 2 */
+    put_le32(p + 34, 5u);               /* Appearance = object 3 + 2   */
+    if (with_skin) {
+        put_le32(p + 38, 7u);           /* skeleton = object 5 + 2    */
+        put_le32(p + 42, 1u);           /* one bone record            */
+        put_le32(p + 46, 8u);           /* bone = object 6 + 2        */
+        put_le32(p + 50, 0u);           /* firstVertex                */
+        put_le32(p + 54, 4u);           /* vertexCount                */
+        put_le32(p + 58, 255u);         /* weight                     */
+    }
+    return total;
+}
+
+/* Load a crafted file and pick its SkinnedMesh out of the root array. */
+static nj_ref skin_load(nj_vm *vm, int with_skin)
+{
+    nj_u1 buf[448];
+    nj_u4 n = build_skin_file(buf, (nj_u4)sizeof buf, with_skin);
+    nj_ref bytes, arr = 0, skin = 0;
+    nj_value a[4], r;
+    nj_u4 i;
+
+    check(n > 0u, "the crafted SkinnedMesh file has a length");
+    if (n == 0u) {
+        return 0;
+    }
+    bytes = nj_array_new(vm, "B", n);
+    check(bytes != 0, "a byte array to hand Loader.load");
+    if (!bytes) {
+        return 0;
+    }
+    memcpy(nj_array_data(bytes), buf, n);
+    a[0].r = bytes;
+    a[1].i = 0;
+    nj_clear_exception(vm);
+    if (nj_call(vm, 0, CLS("Loader"), "load",
+                "([BI)[L" CLS("Object3D") ";", a, &r) != NJ_OK ||
+        r.r == 0) {
+        check(0, "Loader.load returns the SkinnedMesh file's roots");
+        return 0;
+    }
+    arr = r.r;
+    for (i = 0u; i < nj_array_length(arr); i++) {
+        nj_ref o = nj_array_get_ref(arr, i + 1u);
+        const char *cn = nj_ref_class_name(o);
+
+        if (cn && strstr(cn, "SkinnedMesh")) {
+            skin = o;
+            break;
+        }
+    }
+    check(skin != 0, "the file's SkinnedMesh is one of its roots");
+    return skin;
+}
+
+/*
+ * Render `node` into `targetg` from an identity camera and return the number
+ * of pixels that are not the black clear colour, plus their mean column.
+ */
+static int skin_render(nj_vm *vm, nj_ref g3d, nj_ref node, nj_ref bg,
+                       nj_ref cam, nj_ref cam_xf, nj_ref targetg,
+                       nj_ref pixels, float *mean_x)
+{
+    nj_value a[4];
+    const nj_u4 *px;
+    int i, lit = 0, black = 0;
+    double sum = 0.0;
+
+    a[0].r = targetg;
+    call(vm, g3d, CLS("Graphics3D"), "bindTarget", "(Ljava/lang/Object;)V",
+         a, NULL);
+    a[0].i = 0; a[1].i = 0; a[2].i = 240; a[3].i = 320;
+    call(vm, g3d, CLS("Graphics3D"), "setViewport", "(IIII)V", a, NULL);
+    a[0].r = cam; a[1].r = cam_xf;
+    call(vm, g3d, CLS("Graphics3D"), "setCamera",
+         "(L" CLS("Camera") ";L" CLS("Transform") ";)V", a, NULL);
+    a[0].r = bg;
+    call(vm, g3d, CLS("Graphics3D"), "clear", "(L" CLS("Background") ";)V",
+         a, NULL);
+    px = (const nj_u4 *)nj_array_data(pixels);
+    if (!px || !targetg) {
+        return 0;
+    }
+    for (i = 0; i < 240 * 320; i++) {
+        if ((px[i] & 0xFFFFFFu) == 0u) {
+            black++;
+        }
+    }
+    /* Image.createImage() starts white: without a clear that reaches every
+       pixel, "some pixels are not black" would pass on a render that drew
+       nothing at all. */
+    check(black == 240 * 320, "clear(Background) blackens the whole target");
+    a[0].r = node; a[1].r = cam_xf;
+    call(vm, g3d, CLS("Graphics3D"), "render",
+         "(L" CLS("Node") ";L" CLS("Transform") ";)V", a, NULL);
+    call(vm, g3d, CLS("Graphics3D"), "releaseTarget", "()V", NULL, NULL);
+    for (i = 0; i < 240 * 320; i++) {
+        if ((px[i] & 0xFFFFFFu) != 0u) {
+            lit++;
+            sum += (double)(i % 240);
+        }
+    }
+    if (mean_x) {
+        *mean_x = lit > 0 ? (float)(sum / (double)lit) : 0.0f;
+    }
+    return lit;
+}
+
+static int skin_render_prepare(nj_vm *vm, nj_ref g3d, nj_ref *target,
+                               nj_ref *targetg, nj_ref *pixels)
+{
+    nj_value a[2], r;
+
+    *target = 0; *targetg = 0; *pixels = 0;
+    a[0].i = 240; a[1].i = 320;
+    if (nj_call_static(vm, "javax/microedition/lcdui/Image", "createImage",
+                       "(II)Ljavax/microedition/lcdui/Image;", a, &r) != NJ_OK
+        || r.r == 0) {
+        return 0;
+    }
+    *target = r.r;
+    r.r = 0;
+    call(vm, *target, "javax/microedition/lcdui/Image", "getGraphics",
+         "()Ljavax/microedition/lcdui/Graphics;", NULL, &r);
+    *targetg = r.r;
+    *pixels = nj_rget(vm, *target,
+                      nj_field_lookup(vm, "javax/microedition/lcdui/Image",
+                                      "imgPixels", "[I", 0));
+    return *targetg != 0 && *pixels != 0;
+}
+
+static void test_skinned_mesh(nj_vm *vm)
+{
+    printf("== a file's SkinnedMesh decodes, poses and falls back ==\n");
+    {
+        nj_ref g3d = make(vm, CLS("Graphics3D"));
+        nj_ref skin = skin_load(vm, 1);
+        nj_ref vb, skel, bone = 0;
+        nj_ref world, cam, cam_xf, bg, target, targetg, pixels;
+        nj_value a[4], r;
+        float mean_a = 0.0f, mean_b = 0.0f;
+        int lit_a, lit_b;
+
+        check(g3d != 0 && skin != 0, "the SkinnedMesh fixture loads");
+        if (!g3d || !skin) {
+            return;
+        }
+        vb = nj_call_ref(vm, skin, CLS("SkinnedMesh"), "getVertexBuffer",
+                         "()L" CLS("VertexBuffer") ";", NULL);
+        check(vb != 0, "its VertexBuffer is linked (the old loader left it null)");
+        skel = nj_call_ref(vm, skin, CLS("SkinnedMesh"), "getSkeleton",
+                           "()L" CLS("Group") ";", NULL);
+        check(skel != 0, "its skeleton Group is linked");
+        if (skel) {
+            r.i = -1;
+            call(vm, skel, CLS("Group"), "getChildCount", "()I", NULL, &r);
+            check(r.i == 1, "the skeleton owns the file's bone");
+            if (r.i == 1) {
+                a[0].i = 0;
+                bone = nj_call_ref(vm, skel, CLS("Group"), "getChild",
+                                   "(I)L" CLS("Node") ";", a);
+                check(bone != 0, "getChild(0) returns the bone");
+            }
+        }
+        if (bone) {
+            nj_ref idx = nj_array_new(vm, "I", 8);
+            nj_ref wts = nj_array_new(vm, "F", 8);
+            const nj_s4 *iv;
+            const float *fv;
+            int k, ok = 1;
+
+            a[0].r = bone; a[1].r = idx; a[2].r = wts;
+            r.i = -1;
+            call(vm, skin, CLS("SkinnedMesh"), "getBoneVertices",
+                 "(L" CLS("Node") ";[I[F)I", a, &r);
+            check(r.i == 4, "the bone owns the quad's four vertices");
+            iv = (const nj_s4 *)nj_array_data(idx);
+            fv = (const float *)nj_array_data(wts);
+            for (k = 0; k < 4 && iv && fv && r.i == 4; k++) {
+                if (iv[k] != k || fabsf(fv[k] - 1.0f) > 1e-4f) {
+                    ok = 0;
+                }
+            }
+            check(ok, "and their normalised weights are 1");
+        }
+
+        world = make(vm, CLS("World"));
+        cam = make(vm, CLS("Camera"));
+        cam_xf = make(vm, CLS("Transform"));
+        bg = make(vm, CLS("Background"));
+        check(world && cam && cam_xf && bg, "world, camera and black Background");
+        if (!world || !cam || !cam_xf || !bg ||
+            !skin_render_prepare(vm, g3d, &target, &targetg, &pixels)) {
+            return;
+        }
+        a[0].r = skin;
+        call(vm, world, CLS("Group"), "addChild", "(L" CLS("Node") ";)V",
+             a, NULL);
+        a[0].i = (nj_s4)0xFF000000u;
+        call(vm, bg, CLS("Background"), "setColor", "(I)V", a, NULL);
+        a[0].f = 60.0f; a[1].f = 0.75f; a[2].f = 1.0f; a[3].f = 1000.0f;
+        call(vm, cam, CLS("Camera"), "setPerspective", "(FFFF)V", a, NULL);
+        call(vm, cam_xf, CLS("Transform"), "setIdentity", "()V", NULL, NULL);
+
+        lit_a = skin_render(vm, g3d, world, bg, cam, cam_xf, targetg, pixels,
+                            &mean_a);
+        check(lit_a > 1000,
+              "the skinned quad renders (the old loader drew nothing)");
+        if (bone && lit_a > 1000) {
+            a[0].f = 30.0f; a[1].f = 0.0f; a[2].f = 0.0f;
+            call(vm, bone, CLS("Node"), "setTranslation", "(FFF)V", a, NULL);
+            lit_b = skin_render(vm, g3d, world, bg, cam, cam_xf, targetg,
+                                pixels, &mean_b);
+            check(lit_b > 1000 && mean_b > mean_a + 20.0f,
+                  "moving the bone moves the skinned vertices on screen");
+        }
+    }
+    {
+        nj_ref g3d = make(vm, CLS("Graphics3D"));
+        nj_ref skin = skin_load(vm, 0);
+        nj_ref vb, skel;
+        nj_ref world, cam, cam_xf, bg, target, targetg, pixels;
+        nj_value a[4];
+        int lit;
+
+        check(g3d != 0 && skin != 0,
+              "a SkinnedMesh with no skeleton tail still loads");
+        if (!g3d || !skin) {
+            return;
+        }
+        vb = nj_call_ref(vm, skin, CLS("SkinnedMesh"), "getVertexBuffer",
+                         "()L" CLS("VertexBuffer") ";", NULL);
+        check(vb != 0, "it keeps its VertexBuffer (bind-pose fallback)");
+        skel = nj_call_ref(vm, skin, CLS("SkinnedMesh"), "getSkeleton",
+                           "()L" CLS("Group") ";", NULL);
+        check(skel == 0, "and has no skeleton to pose against");
+        world = make(vm, CLS("World"));
+        cam = make(vm, CLS("Camera"));
+        cam_xf = make(vm, CLS("Transform"));
+        bg = make(vm, CLS("Background"));
+        if (!world || !cam || !cam_xf || !bg ||
+            !skin_render_prepare(vm, g3d, &target, &targetg, &pixels)) {
+            return;
+        }
+        a[0].r = skin;
+        call(vm, world, CLS("Group"), "addChild", "(L" CLS("Node") ";)V",
+             a, NULL);
+        a[0].i = (nj_s4)0xFF000000u;
+        call(vm, bg, CLS("Background"), "setColor", "(I)V", a, NULL);
+        a[0].f = 60.0f; a[1].f = 0.75f; a[2].f = 1.0f; a[3].f = 1000.0f;
+        call(vm, cam, CLS("Camera"), "setPerspective", "(FFFF)V", a, NULL);
+        call(vm, cam_xf, CLS("Transform"), "setIdentity", "()V", NULL, NULL);
+        lit = skin_render(vm, g3d, world, bg, cam, cam_xf, targetg, pixels,
+                          NULL);
+        check(lit > 1000, "and it renders its bind pose instead of nothing");
+    }
+    /*
+     * The render tests that follow keep their images and targets in plain C
+     * locals, which the collector cannot see.  A collection triggered from
+     * inside one of them would reclaim those and make its bindTarget fail, so
+     * collect the garbage this test made here instead.
+     */
+    nj_gc_collect(vm);
+}
+
+
+/* ------------------------------- */
+/* A Mesh whose strip array uses the file format's implicit-index encoding. */
+
+static nj_u4 build_tsa0_file(nj_u1 *b, nj_u4 cap)
+{
+    static const nj_u1 ident[12] = { 0xAB, 0x4A, 0x53, 0x52, 0x31, 0x38, 0x34,
+                                     0xBB, 0x0D, 0x0A, 0x1A, 0x0A };
+    static const nj_u4 lens[6] = { 53u, 48u, 29u, 33u, 18u, 38u };
+    nj_u4 body = 0u, total, k;
+    nj_u1 *p;
+
+    for (k = 0u; k < 6u; k++) {
+        body += 5u + lens[k];
+    }
+    total = 12u + 30u + 9u + body + 4u;
+    if (cap < total) {
+        return 0u;
+    }
+    memset(b, 0, cap);
+    memcpy(b, ident, 12u);
+    b[12] = 0u;                             /* header section, stored */
+    put_le32(b + 13, 30u);
+    put_le32(b + 17, 17u);
+    put_le32(b + 22, 12u);                  /* Object3D header length */
+    b[26] = 1u;                             /* file version 1.0 */
+    put_le32(b + 29, total);
+    put_le32(b + 33, total);
+    b[42] = 0u;                             /* object section */
+    put_le32(b + 43, 9u + body + 4u);
+    put_le32(b + 47, body);
+    p = b + 51u;
+
+    /* object 0: four positions */
+    p[0] = 20u;
+    put_le32(p + 1, lens[0]);
+    p += 5;
+    p[12] = 2u;                             /* componentSize */
+    p[13] = 3u;                             /* components */
+    p[14] = 0u;                             /* uncompressed shorts */
+    put_le16(p + 15, 6);                    /* vertexCount */
+    /* The first strip is the lower-left half of a quad; the second is a
+       degenerate heap in the lower-right corner.  Read as one six-vertex
+       strip (what the renderer falls back to when the array is refused), the
+       join adds the upper-right triangle as well, so the lit area doubles and
+       the test can tell the two readings apart. */
+    put_le16(p + 17, -50); put_le16(p + 19, -50); put_le16(p + 21, -200);
+    put_le16(p + 23, 50);  put_le16(p + 25, -50); put_le16(p + 27, -200);
+    put_le16(p + 29, -50); put_le16(p + 31, 50);  put_le16(p + 33, -200);
+    put_le16(p + 35, 50);  put_le16(p + 37, 50);  put_le16(p + 39, -200);
+    put_le16(p + 41, 50);  put_le16(p + 43, 50);  put_le16(p + 45, -200);
+    put_le16(p + 47, 50);  put_le16(p + 49, 50);  put_le16(p + 51, -200);
+    p += lens[0];
+
+    /* object 1: the vertex buffer, positions only */
+    p[0] = 21u;
+    put_le32(p + 1, lens[1]);
+    p += 5;
+    put_le32(p + 12, 0xFFFFFFFFu);          /* default colour, opaque white */
+    put_le32(p + 16, 2u);                   /* positions -> object 0 */
+    put_f32(p + 32, 1.0f);                  /* position scale */
+    p += lens[1];
+
+    /* object 2: the strips, encoding zero (no index table at all) */
+    p[0] = 11u;
+    put_le32(p + 1, lens[2]);
+    p += 5;
+    p[12] = 0u;                             /* encoding zero */
+    put_le32(p + 13, 0u);                   /* first vertex */
+    put_le32(p + 17, 2u);                   /* strip count */
+    put_le32(p + 21, 3u);                   /* first strip length */
+    put_le32(p + 25, 3u);                   /* second strip length */
+    p += lens[2];
+
+    /* object 3: an appearance with only a polygon mode */
+    p[0] = 3u;
+    put_le32(p + 1, lens[3]);
+    p += 5;
+    put_le32(p + 21, 6u);                   /* polygon mode -> object 4 */
+    p += lens[3];
+
+    /* object 4: cull nothing, so winding cannot hide the quad */
+    p[0] = 8u;
+    put_le32(p + 1, lens[4]);
+    p += 5;
+    p[12] = 162u;
+    p[13] = 165u;
+    p[14] = 168u;
+    p += lens[4];
+
+    /* object 5: the Mesh that binds them */
+    p[0] = 14u;
+    put_le32(p + 1, lens[5]);
+    p += 5;
+    p[14] = 1u;                             /* rendering enabled */
+    p[15] = 1u;                             /* picking enabled */
+    p[16] = 0xFFu;                          /* alpha */
+    put_le32(p + 17, 0xFFFFFFFFu);          /* scope */
+    put_le32(p + 22, 3u);                   /* vertex buffer -> object 1 */
+    put_le32(p + 26, 1u);                   /* one submesh */
+    put_le32(p + 30, 4u);                   /* its index buffer -> object 2 */
+    put_le32(p + 34, 5u);                   /* its appearance -> object 3 */
+
+    return total;
+}
+
+static nj_ref tsa0_load(nj_vm *vm)
+{
+    nj_u1 buf[512];
+    nj_u4 n = build_tsa0_file(buf, (nj_u4)sizeof buf);
+    nj_ref bytes, arr = 0, mesh = 0;
+    nj_value a[2], r;
+    nj_u4 i;
+
+    check(n > 0u, "the crafted encoding-zero Mesh file has a length");
+    if (n == 0u) {
+        return 0;
+    }
+    bytes = nj_array_new(vm, "B", n);
+    if (!bytes) {
+        check(0, "a byte array to hand Loader.load");
+        return 0;
+    }
+    memcpy(nj_array_data(bytes), buf, n);
+    a[0].r = bytes;
+    a[1].i = 0;
+    nj_clear_exception(vm);
+    if (nj_call(vm, 0, CLS("Loader"), "load",
+                "([BI)[L" CLS("Object3D") ";", a, &r) != NJ_OK ||
+        r.r == 0) {
+        check(0, "Loader.load returns the encoding-zero file's roots");
+        return 0;
+    }
+    arr = r.r;
+    for (i = 0u; i < nj_array_length(arr); i++) {
+        nj_ref o = nj_array_get_ref(arr, i);
+        const char *cn = nj_ref_class_name(o);
+
+        if (cn && strcmp(cn, CLS("Mesh")) == 0) {
+            mesh = o;
+            break;
+        }
+    }
+    check(mesh != 0, "the file's Mesh is one of its roots");
+    return mesh;
+}
+
+static void test_triangle_strip_encoding0(nj_vm *vm)
+{
+    printf("== a strip array with encoding zero provides its indices ==\n");
+    {
+        nj_ref g3d = make(vm, CLS("Graphics3D"));
+        nj_ref mesh = tsa0_load(vm);
+        nj_ref cam, cam_xf, bg, target, targetg, pixels;
+        nj_ref ib;
+        nj_value a[4], r;
+        int lit;
+
+        check(g3d != 0 && mesh != 0, "the encoding-zero fixture loads");
+        if (!g3d || !mesh) {
+            return;
+        }
+        r.i = -1;
+        call(vm, mesh, CLS("Mesh"), "getSubmeshCount", "()I", NULL, &r);
+        check(r.i == 1, "the Mesh links its one submesh");
+        ib = nj_call_ref(vm, mesh, CLS("Mesh"), "getIndexBuffer",
+                         "(I)L" CLS("IndexBuffer") ";", NULL);
+        if (!ib) {
+            a[0].i = 0;
+            ib = nj_call_ref(vm, mesh, CLS("Mesh"), "getIndexBuffer",
+                             "(I)L" CLS("IndexBuffer") ";", a);
+        }
+        check(ib != 0, "its index buffer is linked (the old loader refused it)");
+
+        cam = make(vm, CLS("Camera"));
+        cam_xf = make(vm, CLS("Transform"));
+        bg = make(vm, CLS("Background"));
+        check(cam && cam_xf && bg, "camera, transform and black Background");
+        if (!cam || !cam_xf || !bg ||
+            !skin_render_prepare(vm, g3d, &target, &targetg, &pixels)) {
+            return;
+        }
+        a[0].i = (nj_s4)0xFF000000u;
+        call(vm, bg, CLS("Background"), "setColor", "(I)V", a, NULL);
+        a[0].f = 60.0f; a[1].f = 0.75f; a[2].f = 1.0f; a[3].f = 1000.0f;
+        call(vm, cam, CLS("Camera"), "setPerspective", "(FFFF)V", a, NULL);
+        call(vm, cam_xf, CLS("Transform"), "setIdentity", "()V", NULL, NULL);
+
+        lit = skin_render(vm, g3d, mesh, bg, cam, cam_xf, targetg, pixels,
+                          NULL);
+        /* Two three-vertex strips: half a quad plus a degenerate one, about
+           9.6k pixels.  Read as a single six-vertex strip instead, the joins
+           fill the other half of the quad as well, about 19k pixels. */
+        check(lit > 7000 && lit < 14000,
+              "the strips render from their own implicit indices");
+    }
+    nj_gc_collect(vm);
 }
 
 int main(void)
@@ -5298,6 +5928,8 @@ int main(void)
        suspension rig, carries its curves as KeyframeSequence + track. */
     test_animation(vm);
     test_animation_file(vm);
+    test_skinned_mesh(vm);
+    test_triangle_strip_encoding0(vm);
 
     /* Bone rosters are per receiver and grow on demand; the old fixed
        64-entry table threw on the 65th link. */
