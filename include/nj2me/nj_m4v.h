@@ -59,6 +59,8 @@ typedef struct nj_m4v_vop {
     int   qscale;         /* vop_quant, 1..31, valid when coded             */
     int   dc_vlc_thr;     /* intra_dc_vlc_thr, 0..7                         */
     int   f_code;         /* vop_fcode_forward, 1..7, P-VOPs only           */
+    int   no_rounding;    /* vop_rounding_type: P-VOP MC interpolates by
+                           * truncation instead of rounding up (1)          */
 } nj_m4v_vop;
 
 /* Parses a VOP header whose payload starts at b[pos]. */
@@ -135,8 +137,14 @@ int nj_m4v_decode_intra_block_ex(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coe
 int nj_m4v_decode_intra_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                               nj_s4 *coef, int luma, int dc_pred, int qscale);
 
-/* The inverse transform shared with the H.263 decoder, for one 8x8 block. */
+/* FFmpeg's Simple IDCT, the transform the reference decoder uses for MPEG-4
+ * Part 2, transcribed so the output is bit-exact instead of accurate to one
+ * level.  nj_m4v_idct() returns the pixel-domain residual (the inter path adds
+ * it to its prediction); nj_m4v_idct_put() takes the intra block whose DC
+ * carries the mid-grey bias and writes clipped pixels, exactly like
+ * ff_simple_idct_put_int16_8bit. */
 void nj_m4v_idct(const nj_s4 *coef, int *out);
+void nj_m4v_idct_put(const nj_s4 *coef, int *out);
 
 /* Decodes one intra block to 8-bit pixels (IDCT plus the +128 level shift). */
 int nj_m4v_decode_intra_pixels(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
@@ -194,11 +202,41 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                        nj_s4 *grids, nj_u1 *yp, int ys,
                        nj_u1 *up, int us, nj_u1 *vp, int vs);
 
-/* Decodes a P-VOP whose macroblocks are all intra coded (the common case for
- * the opening frames this decoder is exercised with).  Skipped macroblocks
- * are copied from the previous reconstruction; inter coded ones are reported
- * as unsupported (-2).  The DC predictor grids must carry over from the
- * previous frame, exactly as the specification requires. */
+/* One motion-vector component: the ff_mvtab VLC, a sign bit and f_code-1
+ * range bits, added to `pred' and wrapped into the 5+f_code-bit signed range
+ * (ituh263dec.c ff_h263_decode_motion).  Returns 0xffff on a broken stream. */
+int nj_m4v_decode_mv(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int pred, int f_code);
+
+/* The H.263/MPEG-4 median predictor of one 8x8 block's motion vector
+ * (h263.c ff_h263_pred_motion).  mvx/mvy hold one (x,y) pair per 8x8 block
+ * with `pad' pairs of border before block (0,0) and `wrap' pairs per block
+ * row; block 0..3 are the luma blocks in raster order.  `first_slice_line'
+ * forces the reference's first-row behaviour and `resync_x' is the slice's
+ * first macroblock column (0 for the single-slice VOPs this decoder takes). */
+void nj_m4v_pred_motion(const nj_s2 *mvx, const nj_s2 *mvy, int wrap, int pad,
+                        int mbx, int mby, int block, int first_slice_line,
+                        int resync_x, int *px, int *py);
+
+/* Half-pel motion compensation of one 8x8 block with edge emulation, written
+ * to out[64] in raster order.  `shift' is 0 for luma (integer part mv>>1,
+ * half-pel flag mv&1) and 1 for 4:2:0 chroma (integer part mv>>2, flag
+ * (mv&3)!=0), the reference's H.263 chroma mapping (mpeg_motion_internal).
+ * `no_rounding' is the P-VOP's vop_rounding_type: when set, the half-pel
+ * averages truncate instead of rounding up, which is a different picture on
+ * every pixel whose sum is odd (mpegvideo_dec.c picks put_no_rnd_pixels_tab
+ * for that case). */
+void nj_m4v_mc_block8(int sx, int sy, int mx, int my, const nj_u1 *pl,
+                      int stride, int fw, int fh, int shift, int no_rounding,
+                      nj_u1 *out);
+
+/* ff_h263_round_chroma: the single chroma vector made from the sum of the
+ * four 8x8 luma vectors of a 4MV macroblock. */
+int nj_m4v_chroma_round(int x);
+
+/* Decodes one P-VOP: skipped macroblocks are copied from the previous
+ * reconstruction, intra ones are decoded in full and inter ones (16x16 and
+ * 4MV) are motion compensated with their residual.  The DC predictor grids and
+ * the previous picture must come from the preceding decoded frame. */
 int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                        const nj_m4v_vol *vol, const nj_m4v_vop *vop,
                        nj_s4 *grids, nj_u1 *yp, int ys, nj_u1 *up, int us,

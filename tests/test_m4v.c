@@ -781,6 +781,286 @@ int main(void)
            "the default scan is the zigzag, and out-of-range indices are refused");
     }
 
+
+    /* ---------------- P-VOP building blocks (rounds M1/M2) ------------- */
+    {
+        /* Every motion-vector VLC symbol round-trips: code word, then a zero
+         * sign bit, then the f_code range bits, all decoded against the
+         * ff_mvtab table the reference uses. */
+        int bad = 0, i;
+
+        for (i = 0; i < 33; i++) {
+            nj_u1 buf[4];
+            nj_u4 pos = 0;
+            int   sym = -1, j, len = nj_vlc_mvtab[i].len;
+            int   code = (int)nj_vlc_mvtab[i].code;
+
+            memset(buf, 0, sizeof(buf));
+            for (j = 0; j < len; j++) {
+                if ((code >> (len - 1 - j)) & 1) {
+                    buf[j / 8] |= (nj_u1)(0x80u >> (j % 8));
+                }
+            }
+            if (i == 0) {
+                /* symbol 0 is the one-bit "predicted" code word */
+                bad += nj_m4v_decode_mv(buf, 4u, &pos, 77, 1) != 77 || pos != 1u;
+                continue;
+            }
+            /* f_code 1: the symbol alone, sign bit 0, predicted value 0.
+             * Symbol 32 sits on the sign bit of the 6-bit wrap range, so it
+             * decodes to -32 -- exactly what ff_h263_decode_motion does. */
+            if (nj_m4v_decode_mv(buf, 4u, &pos, 0, 1) != (i == 32 ? -32 : i) ||
+                pos != (nj_u4)len + 1u) {
+                bad++;
+            }
+            /* the same code with the sign bit set decodes to -sym */
+            buf[len / 8] |= (nj_u1)(0x80u >> (len % 8));
+            pos = 0;
+            if (nj_m4v_decode_mv(buf, 4u, &pos, 0, 1) != ((i == 32) ? -32 : -i)) {
+                bad++;
+            }
+            (void)sym;
+        }
+        ok(bad == 0, "every motion-vector code round-trips through nj_m4v_decode_mv");
+    }
+    {
+        /* f_code range bits: symbol 1 with f_code 2 and extra bit 1 is +2;
+         * symbol 2 with extra 0 is +3; and the predictor is wrapped into the
+         * 5+f_code-bit signed range (ituh263dec.c ff_h263_decode_motion). */
+        nj_u1 buf[4];
+        nj_u4 pos;
+        int bad = 0;
+
+        /* symbol 1 ("01"), sign 0, extra bit 1 -> 2 at f_code 2 */
+        memset(buf, 0, sizeof(buf));
+        buf[0] = 0x50u;                 /* 0101 0000 */
+        pos = 0;
+        bad += nj_m4v_decode_mv(buf, 4u, &pos, 0, 2) != 2 || pos != 4u;
+
+        /* symbol 2 ("001"), sign 0, extra bit 0 -> 3 at f_code 2 */
+        buf[0] = 0x20u;                 /* 0010 0000 */
+        pos = 0;
+        bad += nj_m4v_decode_mv(buf, 4u, &pos, 0, 2) != 3 || pos != 5u;
+
+        /* symbol 5 ("0000101"), sign 0: 5 + 30 wraps to -29 at f_code 1 */
+        buf[0] = 0x0Au;                 /* 0000 1010 */
+        pos = 0;
+        bad += nj_m4v_decode_mv(buf, 4u, &pos, 30, 1) != -29;
+        /* f_code 3 adds two range bits: symbol 5 becomes ((5-1)<<2)+1 = 17,
+         * and 17 + 30 = 47 with no wrap in the 8-bit range */
+        pos = 0;
+        bad += nj_m4v_decode_mv(buf, 4u, &pos, 30, 3) != 47;
+        ok(bad == 0, "f_code range bits and the modulo wrap follow the reference");
+    }
+    {
+        /* Motion-vector prediction.  A 2x2 macroblock grid: wrap 5, pad 7, so
+         * block (0,0) starts at index 7 and every 8x8 slot carries its own
+         * index as MV (border entries are zero).  The reference medians are
+         * mid(left, top, top-right) with the first-row special cases. */
+        nj_s2 mvx[32], mvy[32];
+        int i, bad = 0, px = 0, py = 0;
+        int wrap = 5, pad = 7;
+
+        for (i = 0; i < 32; i++) {
+            mvx[i] = 0;
+            mvy[i] = 0;
+        }
+        /* valid slots: row0: 7,8 (mb0), 9,10 (mb1); row1: 12,13, 14,15;
+         * row2: 17,18, 19,20; row3: 22,23, 24,25 */
+        for (i = 0; i < 4; i++) {
+            mvx[7 + i] = (nj_s2)(7 + i);
+            mvx[12 + i] = (nj_s2)(12 + i);
+            mvx[17 + i] = (nj_s2)(17 + i);
+            mvx[22 + i] = (nj_s2)(22 + i);
+            mvy[7 + i] = (nj_s2)(-(7 + i));
+            mvy[12 + i] = (nj_s2)(-(12 + i));
+            mvy[17 + i] = (nj_s2)(-(17 + i));
+            mvy[22 + i] = (nj_s2)(-(22 + i));
+        }
+        /* MB(1,1) is not on the first slice line: block 0 medians
+         * (A=18, B=14, C=0) = 14; block 1 (A=19, B=15, C=0) = 15;
+         * block 2 (A=23, B=19, C=20) = 20; block 3 (A=24, B=20, C=19) = 20. */
+        nj_m4v_pred_motion(mvx, mvy, wrap, pad, 1, 1, 0, 0, 0, &px, &py);
+        bad += px != 14 || py != -14;
+        nj_m4v_pred_motion(mvx, mvy, wrap, pad, 1, 1, 1, 0, 0, &px, &py);
+        bad += px != 15 || py != -15;
+        nj_m4v_pred_motion(mvx, mvy, wrap, pad, 1, 1, 2, 0, 0, &px, &py);
+        bad += px != 20 || py != -20;
+        nj_m4v_pred_motion(mvx, mvy, wrap, pad, 1, 1, 3, 0, 0, &px, &py);
+        bad += px != 20 || py != -20;
+        /* MB(0,0) on the first slice line predicts 0 for block 0. */
+        nj_m4v_pred_motion(mvx, mvy, wrap, pad, 0, 0, 0, 1, 0, &px, &py);
+        bad += px != 0 || py != 0;
+        /* Block 2 on that line still uses the real neighbours:
+         * (A=13, B=9, C=10) = 10. */
+        nj_m4v_pred_motion(mvx, mvy, wrap, pad, 1, 0, 2, 1, 0, &px, &py);
+        bad += px != 10 || py != -10;
+        ok(bad == 0, "the 8x8 motion-vector predictor follows ff_h263_pred_motion");
+    }
+    {
+        /* Half-pel motion compensation: a 16x16 ramp.  Integer vectors move
+         * whole samples, half-pel vectors average, and the no-rounding variant
+         * of vop_rounding_type truncates.  Edge reads replicate the edge. */
+        nj_u1 src[16 * 16], out[64];
+        int i, j, bad = 0;
+
+        for (j = 0; j < 16; j++) {
+            for (i = 0; i < 16; i++) {
+                src[j * 16 + i] = (nj_u1)(j * 16 + i);
+            }
+        }
+        /* mv (0,0): straight copy of the top-left 8x8 */
+        nj_m4v_mc_block8(0, 0, 0, 0, src, 16, 16, 16, 0, 0, out);
+        for (j = 0; j < 8; j++) {
+            for (i = 0; i < 8; i++) {
+                if (out[j * 8 + i] != src[j * 16 + i]) {
+                    bad++;
+                }
+            }
+        }
+        /* mv (2,0) is one integer luma sample to the right */
+        nj_m4v_mc_block8(0, 0, 2, 0, src, 16, 16, 16, 0, 0, out);
+        for (j = 0; j < 8; j++) {
+            for (i = 0; i < 8; i++) {
+                if (out[j * 8 + i] != src[j * 16 + i + 1]) {
+                    bad++;
+                }
+            }
+        }
+        /* mv (1,0): horizontal half-pel, rounded up */
+        nj_m4v_mc_block8(0, 0, 1, 0, src, 16, 16, 16, 0, 0, out);
+        for (j = 0; j < 2; j++) {
+            for (i = 0; i < 8; i++) {
+                int want = (src[j * 16 + i] + src[j * 16 + i + 1] + 1) >> 1;
+
+                if (out[j * 8 + i] != want) {
+                    bad++;
+                }
+            }
+        }
+        /* mv (0,1) with no_rounding is a half-pel vertical read that
+         * truncates: (a+c)>>1 -- the reference's no-rounding op. */
+        nj_m4v_mc_block8(2, 2, 0, 1, src, 16, 16, 16, 0, 1, out);
+        for (j = 0; j < 2; j++) {
+            for (i = 0; i < 2; i++) {
+                int a = src[(2 + j) * 16 + 2 + i];
+                int c = src[(3 + j) * 16 + 2 + i];
+                int want = (a + c) >> 1;
+
+                if (out[j * 8 + i] != want) {
+                    bad++;
+                }
+            }
+        }
+        /* mv (3,3): both halves rounded, (a+b+c+d+2)>>2 */
+        nj_m4v_mc_block8(4, 4, 3, 3, src, 16, 16, 16, 0, 0, out);
+        {
+            int a = src[5 * 16 + 5], b = src[5 * 16 + 6];
+            int c = src[6 * 16 + 5], d = src[6 * 16 + 6];
+            int want = (a + b + c + d + 2) >> 2;
+
+            bad += out[0] != want;
+        }
+        /* chroma shift=1: mv 2 means integer 0 and a half-pel flag */
+        nj_m4v_mc_block8(0, 0, 2, 2, src, 16, 16, 16, 1, 0, out);
+        {
+            int a = src[0], b = src[1], c = src[16], d = src[17];
+            int want = (a + b + c + d + 2) >> 2;
+
+            bad += out[0] != want;
+        }
+        /* reading left of the frame replicates the first column */
+        nj_m4v_mc_block8(-4, 0, 0, 0, src, 16, 16, 16, 0, 0, out);
+        bad += out[0] != src[0] || out[8] != src[16];
+        ok(bad == 0, "half-pel motion compensation matches the reference kernel");
+    }
+    {
+        /* ff_h263_round_chroma: one half-pel chroma vector from the sum of
+         * four luma vectors, with the reference's rounding table. */
+        int bad = 0;
+
+        bad += nj_m4v_chroma_round(0) != 0;
+        bad += nj_m4v_chroma_round(3) != 1;
+        bad += nj_m4v_chroma_round(4) != 1;
+        bad += nj_m4v_chroma_round(8) != 1;
+        bad += nj_m4v_chroma_round(11) != 1;
+        bad += nj_m4v_chroma_round(14) != 2;
+        bad += nj_m4v_chroma_round(-1) != 0;
+        bad += nj_m4v_chroma_round(-8) != -1;
+        ok(bad == 0, "the 4MV chroma vector uses ff_h263_round_chroma");
+    }
+    {
+        /* The exact Simple IDCT: values pinned from FFmpeg's own
+         * ff_simple_idct_put_int16_8bit / ff_simple_idct_add_int16_8bit, so a
+         * change in rounding fails here instead of only in whole-frame diffs. */
+        nj_s4 coef[64];
+        int   out[64];
+        int   i, bad = 0;
+
+        for (i = 0; i < 64; i++) {
+            coef[i] = 0;
+        }
+        /* put: mid-grey plus a few AC terms (ffmpeg: put block A) */
+        coef[0] = 1024;
+        coef[8] = 100;
+        coef[16] = -50;
+        coef[1] = 30;
+        nj_m4v_idct_put(coef, out);
+        {
+            static const int want_first[8] = { 142, 142, 140, 138, 136, 134, 133, 132 };
+            static const int want_last[8]  = { 108, 107, 105, 104, 101, 100, 98, 97 };
+
+            for (i = 0; i < 8; i++) {
+                if (out[i] != want_first[i]) bad++;
+                if (out[56 + i] != want_last[i]) bad++;
+            }
+        }
+        /* put: DC 128 is the limited-range black sample 16 (mid-grey bias) */
+        for (i = 0; i < 64; i++) {
+            coef[i] = 0;
+        }
+        coef[0] = 128;
+        nj_m4v_idct_put(coef, out);
+        for (i = 0; i < 64; i++) {
+            if (out[i] != 16) bad++;
+        }
+        /* add: the inter residual of the same block is flat per row */
+        for (i = 0; i < 64; i++) {
+            coef[i] = 0;
+        }
+        coef[0] = 23;
+        coef[8] = -39;
+        coef[16] = 23;
+        coef[32] = -23;
+        coef[40] = 23;
+        nj_m4v_idct(coef, out);
+        {
+            static const int row0[8] = { -1, -1, -1, -1, -1, -1, -1, -1 };
+            static const int row4[8] = { -6, -6, -6, -6, -6, -6, -6, -6 };
+            static const int row6[8] = { 17, 17, 17, 17, 17, 17, 17, 17 };
+
+            for (i = 0; i < 8; i++) {
+                if (out[i] != row0[i]) bad++;
+                if (out[32 + i] != row4[i]) bad++;
+                if (out[48 + i] != row6[i]) bad++;
+            }
+        }
+        ok(bad == 0, "the Simple IDCT matches ffmpeg's put/add rounding exactly");
+    }
+    {
+        /* The first P-VOP of 1942.3gp carries vop_rounding_type 1 (the
+         * reference prints it as "rnd:0" because it logs 1-no_rounding). */
+        static const nj_u1 vop_p[] = {
+            0x00, 0x00, 0x01, 0xb6, 0x50, 0xa3, 0x82, 0x1f, 0xfe, 0xb7
+        };
+        nj_m4v_vop vop;
+        nj_u4 end = 32u;
+
+        ok(nj_m4v_parse_vop_bits(vop_p, (nj_u4)sizeof(vop_p), &end, 1000u, &vop) == 1 &&
+           vop.no_rounding == 1 && end == 60u,
+           "the P-VOP rounding type reaches the macroblock layer's MC choice");
+    }
+
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

@@ -19,7 +19,6 @@
 #include <stdlib.h>
 #include "nj2me/nj_m4v_tables.h"
 #include "nj2me/nj_m4v_escape.h"
-#include "nj_idct.h"
 
 /* Defined with the block decoders further down; the escape reader needs them. */
 int nj_m4v_qmul(int qscale);
@@ -346,12 +345,12 @@ static int parse_vop_bits_trash(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 ti
     s.b = b;
     s.n = n;
     s.pos = *bitpos;
+    out->no_rounding = 0;
     if (!m4v_bits_get(&s, 2, &v)) {
         return 0;
     }
     type = (int)v;
-    if (getenv("NJ_M4VTR")) fprintf(stderr, "TR %s pos=%u\n", "type", (unsigned)s.pos);
-    if (type == 2) {
+        if (type == 2) {
         return 0;               /* B-VOPs are not part of Simple Profile */
     }
     /* modulo_time_base: unary ones terminated by a zero. */
@@ -367,8 +366,7 @@ static int parse_vop_bits_trash(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 ti
         return 0;
     }
     if (!m4v_bits_get(&s, (int)(m4v_log2(time_res - 1u) + 1u), &tv)) {
-    if (getenv("NJ_M4VTR")) fprintf(stderr, "TR %s pos=%u\n", "marker1", (unsigned)s.pos);
-        return 0;
+            return 0;
     }
     if (!m4v_marker(&s)) {
         return 0;
@@ -377,17 +375,16 @@ static int parse_vop_bits_trash(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 ti
         return 0;
     }
     coded = bit;
-    if (getenv("NJ_M4VTR")) fprintf(stderr, "TR %s pos=%u\n", "coded", (unsigned)s.pos);
-    /* The order below is the one decode_vop_header() uses, and every field
+        /* The order below is the one decode_vop_header() uses, and every field
      * has to be read even when its value is unused: they all sit between
      * vop_coded and the macroblock layer. */
     if (coded && shape != 1 && type == 1) {
         if (!m4v_bit(&s, &bit)) {
             return 0;           /* rounding_type: P-VOPs only */
         }
+        out->no_rounding = bit;
     }
-    if (getenv("NJ_M4VTR")) fprintf(stderr, "TR %s pos=%u\n", "round", (unsigned)s.pos);
-    if (coded && shape != 0) {
+        if (coded && shape != 0) {
         if (type != 0) {
             if (!m4v_bits_get(&s, 13, &v) || !m4v_marker(&s) ||
                 !m4v_bits_get(&s, 13, &v) || !m4v_marker(&s) ||
@@ -406,8 +403,7 @@ static int parse_vop_bits_trash(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 ti
             return 0;           /* constant_alpha_value */
         }
     }
-    if (getenv("NJ_M4VTR")) fprintf(stderr, "TR %s pos=%u\n", "shape", (unsigned)s.pos);
-    if (coded && shape != 1) {
+        if (coded && shape != 1) {
         if (cplx_i > 0) {
             if (s.pos + (nj_u4)cplx_i > n * 8u) {
                 return 0;
@@ -426,8 +422,7 @@ static int parse_vop_bits_trash(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 ti
             return 0;           /* intra_dc_vlc_thr */
         }
         thr = (int)v;
-    if (getenv("NJ_M4VTR")) fprintf(stderr, "TR %s pos=%u\n", "thr", (unsigned)s.pos);
-        if (interlaced != 0) {
+            if (interlaced != 0) {
             if (!m4v_bit(&s, &bit) || !m4v_bit(&s, &bit)) {
                 return 0;       /* top_field_first, alternate_scan */
             }
@@ -438,8 +433,7 @@ static int parse_vop_bits_trash(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 ti
             return 0;           /* vop_quant */
         }
         qscale = (int)v;
-    if (getenv("NJ_M4VTR")) fprintf(stderr, "TR %s pos=%u\n", "quant", (unsigned)s.pos);
-        if (type == 1) {
+            if (type == 1) {
             if (!m4v_bits_get(&s, 3, &v)) {
                 return 0;       /* vop_fcode_forward */
             }
@@ -487,6 +481,8 @@ int nj_m4v_resync(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mb_total, int mb_widt
 {
     nj_u4 at = *pos;
     int zeros = 0, mb_bits = 1, v, q;
+
+    (void)mb_width;
 
     while (zeros < 32 && at < n * 8u &&
            ((b[at >> 3] >> (7u - (at & 7u))) & 1u) == 0u) {
@@ -539,17 +535,7 @@ int nj_m4v_parse_vop(const nj_u1 *b, nj_u4 n, nj_u4 pos, nj_u4 time_res,
     nj_u4 bitpos = pos * 8u;
     int r = nj_m4v_parse_vop_bits(b, n, &bitpos, time_res, out);
 
-    if (getenv("NJ_M4VHDR") != NULL) {
-        nj_u4 at = bitpos, z;
-        unsigned w = 0;
-        for (z = 0; z < 32u; z++) {
-            nj_u4 q = at + z;
-            unsigned bit = (q < n * 8u) ? (unsigned)((b[q >> 3] >> (7u - (q & 7u))) & 1u) : 0u;
-            w = (w << 1) | bit;
-        }
-        fprintf(stderr, "VOPHDR end=%u win=%08x\n", (unsigned)at, w);
-    }
-    return r;
+        return r;
 }
 
 
@@ -635,7 +621,7 @@ int nj_m4v_decode_ac(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int *last)
     *pos += i >> 8;
     i &= 0xffu;
     if (last != NULL) {
-        *last = ((int)i >= NJ_M4V_AC_LAST);
+        *last = ((int)i >= (int)NJ_M4V_AC_LAST);
     }
     return (int)i;
 }
@@ -713,7 +699,7 @@ int nj_m4v_ac_sym(int sym, int *run, int *level, int *last)
         *level = (int)nj_m4v_ac_level[sym];
     }
     if (last != NULL) {
-        *last = (sym >= NJ_M4V_AC_LAST);
+        *last = (sym >= (int)NJ_M4V_AC_LAST);
     }
     return 1;
 }
@@ -998,10 +984,7 @@ int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k,
     i = 0;
     for (attempt = 0; attempt < 64; attempt++) {
         nj_u4 w = m4v_peek12(b, n, *pos);
-        if (getenv("NJ_M4VACDBG") != NULL) {
-            fprintf(stderr, "ACDBG pos=%u i=%d w=%03x\n", (unsigned)*pos, i, (unsigned)w);
-        }
-        int run, level = 0, last = 0, lt;
+        int run, level = 0, last = 0;
         nj_u4 u = 0;
 
         if ((w >> 5) == 3u) {
@@ -1014,26 +997,35 @@ int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k,
                 !m4v_rbits(b, n, pos, 1, &f1)) {
                 return -1;
             }
-            form = (int)f1;
-            if (form != 0) {
+            if (f1 == 0u) {
+                form = 1;               /* first escape: a single 0 bit */
+            } else {
                 if (!m4v_rbits(b, n, pos, 1, &f2)) {
                     return -1;
                 }
-                form = f2 ? 3 : 2;
+                form = f2 ? 3 : 2;      /* 10 second, 11 third */
             }
             if (form == 1) {            /* first escape */
                 int run2 = 0, level2 = 0, last2 = 0, ri;
 
-                if (!m4v_vlc_peek(b, n, pos, &level2, &run2, &last2)) {
-                    return -1;
+                                if (!m4v_vlc_peek(b, n, pos, &level2, &run2, &last2)) {
+                                        return -1;
                 }
-                i += run2 + 1 + (last2 ? 192 : 0);
+                                i += run2 + 1 + (last2 ? 192 : 0);
                 ri = (run2)& 63;
                 if (ri > 20) {
                     ri = 20;
                 }
                 level = level2 + (int)(last2 ? nj_m4v_max_level_1[ri]
                                             : nj_m4v_max_level_0[ri]);
+                {
+                    nj_u4 sign = 0;
+
+                    if (!m4v_rbits(b, n, pos, 1, &sign)) {
+                        return -1;
+                    }
+                    level = ((nj_s4)level ^ -(nj_s4)sign) + (nj_s4)sign;
+                }
             } else if (form == 2) {     /* second escape */
                 int run2 = 0, level2 = 0, last2 = 0, li;
 
@@ -1047,11 +1039,19 @@ int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k,
                 }
                 i += run2 + 1 + (last2 ? 192 : 0) +
                      (int)(last2 ? nj_m4v_max_run_1[li] : nj_m4v_max_run_0[li]) + 1;
+                {
+                    nj_u4 sign = 0;
+
+                    if (!m4v_rbits(b, n, pos, 1, &sign)) {
+                        return -1;
+                    }
+                    level = ((nj_s4)level ^ -(nj_s4)sign) + (nj_s4)sign;
+                }
             } else {                    /* third escape */
                 nj_u4 lastbit = 0, lb = 0, marker = 0;
                 int lv = 0;
 
-                if (!m4v_rbits(b, n, pos, 1, &lastbit) ||
+                                if (!m4v_rbits(b, n, pos, 1, &lastbit) ||
                     !m4v_rbits(b, n, pos, 6, &lb) ||
                     !m4v_rbits(b, n, pos, 1, &marker) || marker != 1u ||
                     !m4v_rsbits(b, n, pos, 12, &lv) ||
@@ -1069,13 +1069,9 @@ int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k,
                 if (last) {
                     i += 192;
                 }
-            }
-            {
-                nj_u4 sign = 0;
-                if (!m4v_rbits(b, n, pos, 1, &sign)) {
-                    return -1;
-                }
-                level = ((nj_s4)level ^ -(nj_s4)sign) + (nj_s4)sign;
+                /* The third escape carries its own sign inside the 12-bit
+                 * level field; the reference does not read another sign bit
+                 * for it (mpeg4_decode_block). */
             }
         } else {
             nj_u2 ent = nj_m4v_ac_lut[w];
@@ -1158,9 +1154,230 @@ int nj_m4v_decode_intra_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef,
     return nj_m4v_decode_intra_block_ex(b, n, pos, coef, luma, dc_pred, qscale, 1);
 }
 
+/* ------------------------------------------------------------------ */
+/* The inverse transform: FFmpeg's Simple IDCT, transcribed            */
+/* ------------------------------------------------------------------ */
+/*
+ * The shared integer IDCT in src/midp/nj_idct.h is a basis-matrix transform
+ * accurate to about one level; the reference decoder for MPEG-4 Part 2 uses
+ * the Simple IDCT (simple_idct_template.c), and a different rounding leaves a
+ * one-level difference on a few percent of samples.  For pixel-exact output
+ * the arithmetic is reproduced here: 16-bit row pass with a DC shortcut, then
+ * an unsigned column butterfly with the reference's own rounding constants
+ * (W1..W7, ROW_SHIFT 11, COL_SHIFT 20, DC_SHIFT 3, and the
+ * (1 << 19) / W4 = 32 offset in the column pass).  `put' writes pixels (the
+ * intra path, whose DC carries the mid-grey bias in the coefficient domain),
+ * `add' produces the residual the inter path adds to its prediction.
+ */
+#define NJ_M4V_IDCT_W1 22725
+#define NJ_M4V_IDCT_W2 21407
+#define NJ_M4V_IDCT_W3 19266
+#define NJ_M4V_IDCT_W4 16383
+#define NJ_M4V_IDCT_W5 12873
+#define NJ_M4V_IDCT_W6  8867
+#define NJ_M4V_IDCT_W7  4520
+#define NJ_M4V_IDCT_ROW_SHIFT 11
+#define NJ_M4V_IDCT_COL_SHIFT 20
+#define NJ_M4V_IDCT_DC_SHIFT  3
+#define NJ_M4V_IDCT_COL_BIAS  ((1 << (NJ_M4V_IDCT_COL_SHIFT - 1)) / NJ_M4V_IDCT_W4)
+
+/* One row: the reference's idctRowCondDC with extra_shift 0. */
+static void m4v_idct_row(nj_s2 *row)
+{
+    unsigned a0, a1, a2, a3, b0, b1, b2, b3;
+    int      i;
+
+    if (row[1] == 0 && row[2] == 0 && row[3] == 0 && row[4] == 0 &&
+        row[5] == 0 && row[6] == 0 && row[7] == 0) {
+        nj_s2 temp = (nj_s2)((int)row[0] * (1 << NJ_M4V_IDCT_DC_SHIFT));
+
+        for (i = 0; i < 8; i++) {
+            row[i] = temp;
+        }
+        return;
+    }
+    a0 = (unsigned)NJ_M4V_IDCT_W4 * (unsigned)row[0] +
+         (1u << (NJ_M4V_IDCT_ROW_SHIFT - 1));
+    a1 = a0;
+    a2 = a0;
+    a3 = a0;
+
+    a0 += (unsigned)NJ_M4V_IDCT_W2 * (unsigned)row[2];
+    a1 += (unsigned)NJ_M4V_IDCT_W6 * (unsigned)row[2];
+    a2 -= (unsigned)NJ_M4V_IDCT_W6 * (unsigned)row[2];
+    a3 -= (unsigned)NJ_M4V_IDCT_W2 * (unsigned)row[2];
+
+    b0 = (unsigned)NJ_M4V_IDCT_W1 * (unsigned)row[1];
+    b0 += (unsigned)NJ_M4V_IDCT_W3 * (unsigned)row[3];
+    b1 = (unsigned)NJ_M4V_IDCT_W3 * (unsigned)row[1];
+    b1 -= (unsigned)NJ_M4V_IDCT_W7 * (unsigned)row[3];
+    b2 = (unsigned)NJ_M4V_IDCT_W5 * (unsigned)row[1];
+    b2 -= (unsigned)NJ_M4V_IDCT_W1 * (unsigned)row[3];
+    b3 = (unsigned)NJ_M4V_IDCT_W7 * (unsigned)row[1];
+    b3 -= (unsigned)NJ_M4V_IDCT_W5 * (unsigned)row[3];
+
+    if (row[4] != 0 || row[5] != 0 || row[6] != 0 || row[7] != 0) {
+        a0 += (unsigned)NJ_M4V_IDCT_W4 * (unsigned)row[4];
+        a0 += (unsigned)NJ_M4V_IDCT_W6 * (unsigned)row[6];
+        a1 -= (unsigned)NJ_M4V_IDCT_W4 * (unsigned)row[4];
+        a1 -= (unsigned)NJ_M4V_IDCT_W2 * (unsigned)row[6];
+        a2 -= (unsigned)NJ_M4V_IDCT_W4 * (unsigned)row[4];
+        a2 += (unsigned)NJ_M4V_IDCT_W2 * (unsigned)row[6];
+        a3 += (unsigned)NJ_M4V_IDCT_W4 * (unsigned)row[4];
+        a3 -= (unsigned)NJ_M4V_IDCT_W6 * (unsigned)row[6];
+
+        b0 += (unsigned)NJ_M4V_IDCT_W5 * (unsigned)row[5];
+        b0 += (unsigned)NJ_M4V_IDCT_W7 * (unsigned)row[7];
+        b1 -= (unsigned)NJ_M4V_IDCT_W1 * (unsigned)row[5];
+        b1 -= (unsigned)NJ_M4V_IDCT_W5 * (unsigned)row[7];
+        b2 += (unsigned)NJ_M4V_IDCT_W7 * (unsigned)row[5];
+        b2 += (unsigned)NJ_M4V_IDCT_W3 * (unsigned)row[7];
+        b3 += (unsigned)NJ_M4V_IDCT_W3 * (unsigned)row[5];
+        b3 -= (unsigned)NJ_M4V_IDCT_W1 * (unsigned)row[7];
+    }
+    row[0] = (nj_s2)((int)(a0 + b0) >> NJ_M4V_IDCT_ROW_SHIFT);
+    row[7] = (nj_s2)((int)(a0 - b0) >> NJ_M4V_IDCT_ROW_SHIFT);
+    row[1] = (nj_s2)((int)(a1 + b1) >> NJ_M4V_IDCT_ROW_SHIFT);
+    row[6] = (nj_s2)((int)(a1 - b1) >> NJ_M4V_IDCT_ROW_SHIFT);
+    row[2] = (nj_s2)((int)(a2 + b2) >> NJ_M4V_IDCT_ROW_SHIFT);
+    row[5] = (nj_s2)((int)(a2 - b2) >> NJ_M4V_IDCT_ROW_SHIFT);
+    row[3] = (nj_s2)((int)(a3 + b3) >> NJ_M4V_IDCT_ROW_SHIFT);
+    row[4] = (nj_s2)((int)(a3 - b3) >> NJ_M4V_IDCT_ROW_SHIFT);
+}
+
+/*
+ * The column butterfly (IDCT_COLS followed by the output store).  `mode' is 0
+ * for the residual (idctSparseCol / idctSparseColAdd) and 1 for put, which is
+ * the same arithmetic; the caller decides whether to clip and offset.
+ */
+#define NJ_M4V_IDCT_COLS \
+    do { \
+        a0 = (unsigned)NJ_M4V_IDCT_W4 * \
+             (unsigned)(col[0] + NJ_M4V_IDCT_COL_BIAS); \
+        a1 = a0; \
+        a2 = a0; \
+        a3 = a0; \
+        a0 += (unsigned)NJ_M4V_IDCT_W2 * (unsigned)col[16]; \
+        a1 += (unsigned)NJ_M4V_IDCT_W6 * (unsigned)col[16]; \
+        a2 -= (unsigned)NJ_M4V_IDCT_W6 * (unsigned)col[16]; \
+        a3 -= (unsigned)NJ_M4V_IDCT_W2 * (unsigned)col[16]; \
+        b0 = (unsigned)NJ_M4V_IDCT_W1 * (unsigned)col[8]; \
+        b1 = (unsigned)NJ_M4V_IDCT_W3 * (unsigned)col[8]; \
+        b2 = (unsigned)NJ_M4V_IDCT_W5 * (unsigned)col[8]; \
+        b3 = (unsigned)NJ_M4V_IDCT_W7 * (unsigned)col[8]; \
+        b0 += (unsigned)NJ_M4V_IDCT_W3 * (unsigned)col[24]; \
+        b1 -= (unsigned)NJ_M4V_IDCT_W7 * (unsigned)col[24]; \
+        b2 -= (unsigned)NJ_M4V_IDCT_W1 * (unsigned)col[24]; \
+        b3 -= (unsigned)NJ_M4V_IDCT_W5 * (unsigned)col[24]; \
+        if (col[32] != 0) { \
+            a0 += (unsigned)NJ_M4V_IDCT_W4 * (unsigned)col[32]; \
+            a1 -= (unsigned)NJ_M4V_IDCT_W4 * (unsigned)col[32]; \
+            a2 -= (unsigned)NJ_M4V_IDCT_W4 * (unsigned)col[32]; \
+            a3 += (unsigned)NJ_M4V_IDCT_W4 * (unsigned)col[32]; \
+        } \
+        if (col[40] != 0) { \
+            b0 += (unsigned)NJ_M4V_IDCT_W5 * (unsigned)col[40]; \
+            b1 -= (unsigned)NJ_M4V_IDCT_W1 * (unsigned)col[40]; \
+            b2 += (unsigned)NJ_M4V_IDCT_W7 * (unsigned)col[40]; \
+            b3 += (unsigned)NJ_M4V_IDCT_W3 * (unsigned)col[40]; \
+        } \
+        if (col[48] != 0) { \
+            a0 += (unsigned)NJ_M4V_IDCT_W6 * (unsigned)col[48]; \
+            a1 -= (unsigned)NJ_M4V_IDCT_W2 * (unsigned)col[48]; \
+            a2 += (unsigned)NJ_M4V_IDCT_W2 * (unsigned)col[48]; \
+            a3 -= (unsigned)NJ_M4V_IDCT_W6 * (unsigned)col[48]; \
+        } \
+        if (col[56] != 0) { \
+            b0 += (unsigned)NJ_M4V_IDCT_W7 * (unsigned)col[56]; \
+            b1 -= (unsigned)NJ_M4V_IDCT_W5 * (unsigned)col[56]; \
+            b2 += (unsigned)NJ_M4V_IDCT_W3 * (unsigned)col[56]; \
+            b3 -= (unsigned)NJ_M4V_IDCT_W1 * (unsigned)col[56]; \
+        } \
+    } while (0)
+
+static void m4v_idct_rows(nj_s2 *bb)
+{
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        m4v_idct_row(bb + i * 8);
+    }
+}
+
+/*
+ * Residual in the pixel domain (FFmpeg ff_simple_idct / the add path's
+ * residual): the column outputs of the Simple IDCT, without the clipping and
+ * without the 128 offset.
+ */
 void nj_m4v_idct(const nj_s4 *coef, int *out)
 {
-    nj_idct8x8(coef, out);
+    nj_s2 bb[64];
+    int   i;
+
+    if (coef == NULL || out == NULL) {
+        return;
+    }
+    for (i = 0; i < 64; i++) {
+        bb[i] = (nj_s2)coef[i];
+    }
+    m4v_idct_rows(bb);
+    for (i = 0; i < 8; i++) {
+        unsigned a0, a1, a2, a3, b0, b1, b2, b3;
+        nj_s2 *col = bb + i;
+
+        NJ_M4V_IDCT_COLS;
+        out[i]      = (int)(a0 + b0) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[8 + i]  = (int)(a1 + b1) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[16 + i] = (int)(a2 + b2) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[24 + i] = (int)(a3 + b3) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[32 + i] = (int)(a3 - b3) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[40 + i] = (int)(a2 - b2) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[48 + i] = (int)(a1 - b1) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[56 + i] = (int)(a0 - b0) >> NJ_M4V_IDCT_COL_SHIFT;
+    }
+}
+
+/*
+ * The put variant (FFmpeg ff_simple_idct_put_int16_8bit): the coefficient
+ * block of an intra macroblock already carries the 1024 mid-grey bias in its
+ * DC term (that is what the reference's dct_unquantize_h263_intra produces),
+ * so the column output *is* the pixel, clipped to 0..255.
+ */
+void nj_m4v_idct_put(const nj_s4 *coef, int *out)
+{
+    nj_s2 bb[64];
+    int   i;
+
+    if (coef == NULL || out == NULL) {
+        return;
+    }
+    for (i = 0; i < 64; i++) {
+        bb[i] = (nj_s2)coef[i];
+    }
+    m4v_idct_rows(bb);
+    for (i = 0; i < 8; i++) {
+        unsigned a0, a1, a2, a3, b0, b1, b2, b3;
+        const nj_s2 *col = bb + i;
+        int v;
+
+        NJ_M4V_IDCT_COLS;
+        v = (int)(a0 + b0) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[i] = v < 0 ? 0 : (v > 255 ? 255 : v);
+        v = (int)(a1 + b1) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[8 + i] = v < 0 ? 0 : (v > 255 ? 255 : v);
+        v = (int)(a2 + b2) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[16 + i] = v < 0 ? 0 : (v > 255 ? 255 : v);
+        v = (int)(a3 + b3) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[24 + i] = v < 0 ? 0 : (v > 255 ? 255 : v);
+        v = (int)(a3 - b3) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[32 + i] = v < 0 ? 0 : (v > 255 ? 255 : v);
+        v = (int)(a2 - b2) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[40 + i] = v < 0 ? 0 : (v > 255 ? 255 : v);
+        v = (int)(a1 - b1) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[48 + i] = v < 0 ? 0 : (v > 255 ? 255 : v);
+        v = (int)(a0 - b0) >> NJ_M4V_IDCT_COL_SHIFT;
+        out[56 + i] = v < 0 ? 0 : (v > 255 ? 255 : v);
+    }
 }
 
 
@@ -1487,13 +1704,16 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
     return 0;
 }
 
-/* Reads the parts of a P-VOP macroblock header that precede the block data.
- * Returns 0 for an intra macroblock, 1 for a skipped one and -2 when the
- * macroblock is inter coded (motion compensation is not implemented yet). */
+/* ------------------------------------------------------------------ */
+/* P-VOPs: motion vectors, motion compensation, inter reconstruction   */
+/* ------------------------------------------------------------------ */
+
+/* Median of three values, the H.263 predictor's inner operation. */
 static int m4v_mid_pred(int a, int b, int c)
 {
     int lo = a < b ? a : b;
     int hi = a > b ? a : b;
+
     if (c < lo) {
         lo = c;
     } else if (c > hi) {
@@ -1502,13 +1722,18 @@ static int m4v_mid_pred(int a, int b, int c)
     return a + b + c - lo - hi;
 }
 
-/* Decodes one motion vector component: H.263/MPEG-4 share the table and the
- * arithmetic (ituh263dec.c ff_h263_decode_motion).  Returns 0xffff on a
- * broken stream, which callers treat as an error. */
-static int m4v_mv_component(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int pred, int f_code)
+/* Decodes one motion vector component: the H.263/MPEG-4 VLC (ff_mvtab)
+ * followed by a sign bit and f_code-1 range bits, added to the predictor and
+ * wrapped into the 5+f_code-bit signed range (ituh263dec.c
+ * ff_h263_decode_motion).  Returns 0xffff on a broken stream, which callers
+ * treat as an error. */
+int nj_m4v_decode_mv(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int pred, int f_code)
 {
     int sym = 0, sign, shift, val;
 
+    if (f_code < 1 || f_code > 7 || pos == NULL) {
+        return 0xffff;
+    }
     if (nj_vlc_lookup_n(b, n, pos, nj_vlc_mvtab, 33, 12, &sym) != 0) {
         return 0xffff;
     }
@@ -1559,25 +1784,127 @@ static int m4v_mv_component(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int pred, int f
     return val;
 }
 
-/* Median predictor of the 16x16 motion vector (h263.c ff_h263_pred_motion,
- * block 0).  mvx/mvy hold one entry per 8x8 block with a one-entry border. */
-static void m4v_mv_pred(const nj_s2 *mvx, const nj_s2 *mvy, nj_u4 mbx, nj_u4 mby,
-                        int wrap, int pad, int *px, int *py)
+/* The median predictor of one 8x8 block's motion vector (h263.c
+ * ff_h263_pred_motion, rectangular picture, one slice).  mvx/mvy hold one pair
+ * per 8x8 luma block with `pad' pairs of border in front of block (0,0), at
+ * `wrap' = 2 * macroblocks per row + 1 pairs per block row.  The reference
+ * always predicts from the left (A), top (B) and top-right (C) blocks with the
+ * offsets below; on the first macroblock row of a slice the top neighbours are
+ * outside the picture and only the left one is used.  `resync_x' is the
+ * column the current slice starts at (0 when the VOP has one slice). */
+void nj_m4v_pred_motion(const nj_s2 *mvx, const nj_s2 *mvy, int wrap, int pad,
+                        int mbx, int mby, int block, int first_slice_line,
+                        int resync_x, int *px, int *py)
 {
-    nj_size at = (nj_size)pad + (nj_size)mby * 2 * (nj_size)wrap + (nj_size)mbx * 2;
+    static const int off[4] = { 2, 1, 1, -1 };
+    nj_size at = (nj_size)pad + ((nj_size)mby * 2 + (nj_size)(block >> 1)) *
+                 (nj_size)wrap + (nj_size)(mbx * 2 + (block & 1));
+    nj_size cidx = at + (nj_size)off[block] - (nj_size)wrap;
 
-    if (mby == 0u) {
-        if (mbx == 0u) {
-            *px = 0;
-            *py = 0;
-        } else {
-            *px = mvx[at - 1];
-            *py = mvy[at - 1];
-        }
+    if (px == NULL || py == NULL || mvx == NULL || mvy == NULL || wrap <= 0 ||
+        block < 0 || block > 3) {
         return;
     }
-    *px = m4v_mid_pred(mvx[at - 1], mvx[at - wrap], mvx[at + 2 - wrap]);
-    *py = m4v_mid_pred(mvy[at - 1], mvy[at - wrap], mvy[at + 2 - wrap]);
+    if (first_slice_line != 0 && block < 3) {
+        if (block == 0) {
+            if (mbx == resync_x) {
+                *px = 0;
+                *py = 0;
+            } else if (mbx + 1 == resync_x) {
+                /* The slice starts in the middle of this row: the top-right
+                 * neighbour is the only one the reference still reads. */
+                *px = (mbx == 0) ? mvx[cidx] : m4v_mid_pred(mvx[at - 1], 0, mvx[cidx]);
+                *py = (mbx == 0) ? mvy[cidx] : m4v_mid_pred(mvy[at - 1], 0, mvy[cidx]);
+            } else {
+                *px = mvx[at - 1];
+                *py = mvy[at - 1];
+            }
+            return;
+        }
+        if (block == 1) {
+            if (mbx + 1 == resync_x) {
+                *px = m4v_mid_pred(mvx[at - 1], 0, mvx[cidx]);
+                *py = m4v_mid_pred(mvy[at - 1], 0, mvy[cidx]);
+            } else {
+                *px = mvx[at - 1];
+                *py = mvy[at - 1];
+            }
+            return;
+        }
+        /* block 2 keeps the normal formula; only a slice's first column
+         * forces the left neighbour to zero (the border entry already is). */
+        *px = m4v_mid_pred(mbx == resync_x ? 0 : mvx[at - 1],
+                           mvx[at - wrap], mvx[cidx]);
+        *py = m4v_mid_pred(mbx == resync_x ? 0 : mvy[at - 1],
+                           mvy[at - wrap], mvy[cidx]);
+        return;
+    }
+    *px = m4v_mid_pred(mvx[at - 1], mvx[at - wrap], mvx[cidx]);
+    *py = m4v_mid_pred(mvy[at - 1], mvy[at - wrap], mvy[cidx]);
+}
+
+/* Half-pel motion compensation of one 8x8 block with edge emulation: samples
+ * outside the frame repeat the nearest edge sample.
+ *
+ * `shift' maps a luma motion vector to the plane, exactly as the reference
+ * does for 4:2:0 (mpeg_motion_internal, FMT_H263 branch): luma uses mv>>1 with
+ * mv&1 as the half-pel flag, chroma uses mv>>2 with (mv&3)!=0.  The chroma
+ * mapping is not a second shift of a rounded vector; it is the reference's
+ * H.263 workaround for the 4:2:0 chroma vector. */
+void nj_m4v_mc_block8(int sx, int sy, int mx, int my, const nj_u1 *pl,
+                      int stride, int fw, int fh, int shift, int no_rounding,
+                      nj_u1 *out)
+{
+    int x0 = sx + (mx >> (1 + shift));
+    int y0 = sy + (my >> (1 + shift));
+    int fx = shift ? ((mx & 3) != 0) : (mx & 1);
+    int fy = shift ? ((my & 3) != 0) : (my & 1);
+    int y;
+
+    if (pl == NULL || out == NULL || stride <= 0 || fw <= 0 || fh <= 0) {
+        return;
+    }
+    for (y = 0; y < 8; y++) {
+        int yy = y0 + y;
+        int yy2 = y0 + y + fy;
+        int x;
+
+        if (yy < 0) yy = 0; else if (yy >= fh) yy = fh - 1;
+        if (yy2 < 0) yy2 = 0; else if (yy2 >= fh) yy2 = fh - 1;
+        for (x = 0; x < 8; x++) {
+            int xx = x0 + x;
+            int xx2 = x0 + x + fx;
+            const nj_u1 *r0 = pl + (nj_size)yy * (nj_size)stride;
+            const nj_u1 *r1 = pl + (nj_size)yy2 * (nj_size)stride;
+            int a, v;
+
+            if (xx < 0) xx = 0; else if (xx >= fw) xx = fw - 1;
+            if (xx2 < 0) xx2 = 0; else if (xx2 >= fw) xx2 = fw - 1;
+            a = r0[xx];
+            if (fx != 0 && fy != 0) {
+                v = (a + r0[xx2] + r1[xx] + r1[xx2] + (no_rounding ? 1 : 2)) >> 2;
+            } else if (fx != 0) {
+                v = (a + r0[xx2] + (no_rounding ? 0 : 1)) >> 1;
+            } else if (fy != 0) {
+                v = (a + r1[xx] + (no_rounding ? 0 : 1)) >> 1;
+            } else {
+                v = a;
+            }
+            out[y * 8 + x] = (nj_u1)v;
+        }
+    }
+}
+
+/* ff_h263_round_chroma: one chroma vector from the sum of four luma 8x8
+ * vectors.  The table is the reference's h263_chroma_roundtab; transcribing it
+ * matters, x/8 with a plain rounding rule does not give the same pixels. */
+int nj_m4v_chroma_round(int x)
+{
+    static const nj_u1 roundtab[16] = {
+        0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1
+    };
+
+    return (int)roundtab[x & 0xf] + (x >> 3);
 }
 
 /* ---------- inter AC: ff_h263_rl_inter (n=102, last from index 58) ---------- */
@@ -1678,7 +2005,8 @@ static int m4v_inter_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int qscale,
                 last = lt2;
             } else {
                 /* third escape: explicit last/run/level, already dequantised */
-                int r6 = 0, lvl = 0, marker = 0;
+                int lvl = 0, marker = 0;
+                nj_u4 r6 = 0;
 
                 if (!m4v_rbit(b, n, pos, &last) ||
                     !m4v_rbits(b, n, pos, 6, &r6) ||
@@ -1699,19 +2027,6 @@ static int m4v_inter_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int qscale,
                 }
             }
         } else if (sym < 0) {
-            if (getenv("NJ_M4VIAC")) {
-                int k;
-                unsigned w = 0;
-
-                for (k = 0; k < 16; k++) {
-                    w = (w << 1) | ((*pos + (nj_u4)k < n * 8u)
-                                    ? (unsigned)((b[(*pos + (nj_u4)k) >> 3] >>
-                                                  (7u - ((*pos + (nj_u4)k) & 7u))) & 1u)
-                                    : 0u);
-                }
-                fprintf(stderr, "IACFAIL %ux%u b%d at=%u win=%04x\n",
-                        (unsigned)mbx, (unsigned)mby, blk, (unsigned)*pos, w);
-            }
             return -1;
         } else {
             run = nj_vlc_inter_run[sym] + 1;
@@ -1743,131 +2058,121 @@ static int m4v_inter_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int qscale,
     return 0;
 }
 
-/* Half-pel motion compensation of one 8x8 block with edge emulation: samples
- * outside the frame repeat the edge pixel. */
-static void m4v_mc_block(int sx, int sy, int mx, int my, const nj_u1 *pl,
-                         int stride, int fw, int fh, nj_u1 *out)
-{
-    int x0 = sx + (mx >> 1);
-    int y0 = sy + (my >> 1);
-    int fx = mx & 1;
-    int fy = my & 1;
-    int y;
-
-    for (y = 0; y < 8; y++) {
-        int yy = y0 + y;
-        int yy2 = y0 + y + fy;
-        int x;
-
-        if (yy < 0) yy = 0; else if (yy >= fh) yy = fh - 1;
-        if (yy2 < 0) yy2 = 0; else if (yy2 >= fh) yy2 = fh - 1;
-        for (x = 0; x < 8; x++) {
-            int xx = x0 + x;
-            int xx2 = x0 + x + fx;
-            const nj_u1 *r0 = pl + (nj_size)yy * (nj_size)stride;
-            const nj_u1 *r1 = pl + (nj_size)yy2 * (nj_size)stride;
-            int a, v;
-
-            if (xx < 0) xx = 0; else if (xx >= fw) xx = fw - 1;
-            if (xx2 < 0) xx2 = 0; else if (xx2 >= fw) xx2 = fw - 1;
-            a = r0[xx];
-            if (fx != 0 && fy != 0) {
-                v = (a + r0[xx2] + r1[xx] + r1[xx2] + 2) >> 2;
-            } else if (fx != 0) {
-                v = (a + r0[xx2] + 1) >> 1;
-            } else if (fy != 0) {
-                v = (a + r1[xx] + 1) >> 1;
-            } else {
-                v = a;
-            }
-            out[y * 8 + x] = (nj_u1)v;
-        }
-    }
-}
-
-/* One inter macroblock: motion compensated prediction plus the coded
- * residual.  Luma blocks use the 16x16 vector, chroma uses half of it. */
+/* One inter macroblock: the six residual blocks come first in the bit stream,
+ * then motion compensation fills the prediction and reconstruction adds the
+ * inverse transform of each residual block.  `mv' holds the 8x8 luma vectors
+ * (for a 16x16 block all four are the same); `four_mv' selects the reference's
+ * chroma derivation for the 8x8 case (one vector from the sum). */
 static int m4v_inter_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby,
                              const nj_u1 *py, int pys, const nj_u1 *pu, int pus,
                              const nj_u1 *pv, int pvs,
                              nj_u1 *yp, int ys, nj_u1 *up, int us,
                              nj_u1 *vp, int vs,
                              int fw, int fh, int cw, int ch,
-                             int cbp, int qscale, int mx, int my)
+                             int cbp, int qscale, int mv[4][2], int four_mv,
+                             int no_rounding)
 {
-    int blk;
+    nj_s4 coef[6][64];
+    int blk, k;
 
     for (blk = 0; blk < 6; blk++) {
-        nj_u1 pred[64];
-        nj_s4 coef[64];
-        int   coded = (cbp >> (5 - blk)) & 1;
-        int   k;
-
         for (k = 0; k < 64; k++) {
-            coef[k] = 0;
+            coef[blk][k] = 0;
         }
-        if (blk < 4) {
-            int bx = (blk & 1) * 8;
-            int by = (blk >> 1) * 8;
-
-            m4v_mc_block(mbx * 16 + bx, mby * 16 + by, mx, my, py, pys, fw, fh, pred);
-            if (coded != 0) {
-                int rc = m4v_inter_ac_block(b, n, pos, qscale, coef,
-                                            (nj_u4)mbx, (nj_u4)mby, blk);
-
-                if (rc != 0) {
-                    return rc;
-                }
+        if ((cbp >> (5 - blk)) & 1) {
+            int rc = m4v_inter_ac_block(b, n, pos, qscale, coef[blk],
+                                        (nj_u4)mbx, (nj_u4)mby, blk);
+                        
+            if (rc != 0) {
+                return rc;
             }
-            for (k = 0; k < 64; k++) {
-                int v = (int)pred[k] + (int)coef[k];
+        }
+    }
+    for (blk = 0; blk < 4; blk++) {
+        nj_u1 pred[64];
+        int   res[64];
+        int   bx = (blk & 1) * 8;
+        int   by = (blk >> 1) * 8;
 
-                if (v < 0) v = 0; else if (v > 255) v = 255;
-                yp[(nj_size)(mby * 16 + by + k / 8) * (nj_size)ys +
-                   (nj_size)(mbx * 16 + bx + k % 8)] = (nj_u1)v;
+        nj_m4v_mc_block8(mbx * 16 + bx, mby * 16 + by, mv[blk][0], mv[blk][1],
+                         py, pys, fw, fh, 0, no_rounding, pred);
+        nj_m4v_idct(coef[blk], res);
+                for (k = 0; k < 64; k++) {
+            int v = (int)pred[k] + res[k];
+
+            if (v < 0) v = 0; else if (v > 255) v = 255;
+                        yp[(nj_size)(mby * 16 + by + k / 8) * (nj_size)ys +
+               (nj_size)(mbx * 16 + bx + k % 8)] = (nj_u1)v;
+        }
+    }
+    {
+        nj_u1 pred[64];
+        int   res[64];
+        int   cmx, cmy, cshift;
+
+        if (four_mv != 0) {
+            int sx = 0, sy = 0;
+
+            for (blk = 0; blk < 4; blk++) {
+                sx += mv[blk][0];
+                sy += mv[blk][1];
             }
+            cmx = nj_m4v_chroma_round(sx);
+            cmy = nj_m4v_chroma_round(sy);
+            cshift = 0;
         } else {
-            int is_v = (blk == 5);
-            const nj_u1 *pp = is_v ? pv : pu;
-            int         ps = is_v ? pvs : pus;
-            nj_u1      *op = is_v ? vp : up;
-            int         os = is_v ? vs : us;
-            int         cmx = mx >> 1;
-            int         cmy = my >> 1;
+            cmx = mv[0][0];
+            cmy = mv[0][1];
+            cshift = 1;
+        }
+        nj_m4v_mc_block8(mbx * 8, mby * 8, cmx, cmy, pu, pus, cw, ch, cshift,
+                         no_rounding, pred);
+        nj_m4v_idct(coef[4], res);
+        for (k = 0; k < 64; k++) {
+            int v = (int)pred[k] + res[k];
 
-            m4v_mc_block(mbx * 8, mby * 8, cmx, cmy, pp, ps, cw, ch, pred);
-            if (coded != 0) {
-                int rc = m4v_inter_ac_block(b, n, pos, qscale, coef,
-                                            (nj_u4)mbx, (nj_u4)mby, blk);
+            if (v < 0) v = 0; else if (v > 255) v = 255;
+            up[(nj_size)(mby * 8 + k / 8) * (nj_size)us +
+               (nj_size)(mbx * 8 + k % 8)] = (nj_u1)v;
+        }
+        nj_m4v_mc_block8(mbx * 8, mby * 8, cmx, cmy, pv, pvs, cw, ch, cshift,
+                         no_rounding, pred);
+        nj_m4v_idct(coef[5], res);
+        for (k = 0; k < 64; k++) {
+            int v = (int)pred[k] + res[k];
 
-                if (rc != 0) {
-                    return rc;
-                }
-            }
-            for (k = 0; k < 64; k++) {
-                int v = (int)pred[k] + (int)coef[k];
-
-                if (v < 0) v = 0; else if (v > 255) v = 255;
-                op[(nj_size)(mby * 8 + k / 8) * (nj_size)os +
-                   (nj_size)(mbx * 8 + k % 8)] = (nj_u1)v;
-            }
+            if (v < 0) v = 0; else if (v > 255) v = 255;
+            vp[(nj_size)(mby * 8 + k / 8) * (nj_size)vs +
+               (nj_size)(mbx * 8 + k % 8)] = (nj_u1)v;
         }
     }
     return 0;
 }
 
+/* The predicted motion vectors of one P macroblock, filled by the header
+ * parser: four_mv tells the reconstructor which chroma derivation to use. */
+typedef struct m4v_pmv {
+    int mv[4][2];
+    int four_mv;
+} m4v_pmv;
+
 /* Macroblock header of a P picture (mpeg4_decode_mb P branch): not_coded,
- * MCBPC, cbpy, dquant, interlaced_dct and the motion vector. */
+ * MCBPC, cbpy, dquant, interlaced_dct and the motion vectors.  Returns 0 for
+ * an intra macroblock (whose body reads dquant and the blocks), 1 for a
+ * skipped one, 2 for an inter one and -1 on damage. */
 static int m4v_pvop_mb_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                               const nj_m4v_vol *vol, const nj_m4v_vop *vop,
                               nj_u4 mbx, nj_u4 mby, nj_s2 *mvx, nj_s2 *mvy,
-                              int wrap, int pad, int *qscale,
-                              int *cbp, int *dq, int *cbpc_out,
-                              int *mx_out, int *my_out)
+                              int wrap, int pad, int first_slice_line,
+                              int *qscale, int *cbp, int *dq, int *cbpc_out,
+                              m4v_pmv *pmv)
 {
     static const int quant_tab[4] = { -1, -2, 1, 2 };
     int cbpc = 0, cbpy = 0, skip = 0;
 
+    if (pos == NULL || qscale == NULL || cbp == NULL || dq == NULL || pmv == NULL) {
+        return -1;
+    }
     if (*pos + 1u > n * 8u) {
         return -1;
     }
@@ -1896,23 +2201,18 @@ static int m4v_pvop_mb_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
         *cbp = ((cbpc & 3) | (cbpy << 2)) & 0x3f;
         return 0;                   /* the body reads dquant, then the blocks */
     }
-    if ((cbpc & 16) != 0) {
-        return -2;                  /* four motion vectors: not implemented */
-    }
     if (nj_vlc_lookup(b, n, pos, nj_vlc_cbpy, 16, &cbpy) != 0) {
         return -1;
     }
     cbpy ^= 0x0f;
     *cbp = ((cbpc & 3) | (cbpy << 2)) & 0x3f;
     if (*dq) {
-        int d = 0;
+        nj_u4 d = 0;
 
-        if (*pos + 2u > n * 8u) {
+        if (!m4v_rbits(b, n, pos, 2, &d)) {
             return -1;
         }
-        d = (int)((b[*pos >> 3] >> (6u - (*pos & 7u))) & 3u);
-        *pos += 2u;
-        *qscale += quant_tab[d];
+        *qscale += quant_tab[d & 3u];
         if (*qscale < 1) {
             *qscale = 1;
         } else if (*qscale > 31) {
@@ -1925,29 +2225,110 @@ static int m4v_pvop_mb_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
         }
         *pos += 1u;                 /* interlaced_dct */
     }
-    {
-        int px = 0, py = 0, mx, my;
+    if ((cbpc & 16) != 0) {
+        /* Four 8x8 motion vectors (mpeg4_decode_mb, MV_TYPE_8X8).  Each one is
+         * predicted from the already decoded block grid and stored back before
+         * the next block is predicted. */
+        int i;
 
-        m4v_mv_pred(mvx, mvy, mbx, mby, wrap, pad, &px, &py);
-        mx = m4v_mv_component(b, n, pos, px, vop->f_code);
+        pmv->four_mv = 1;
+        for (i = 0; i < 4; i++) {
+            int px = 0, py = 0, mx, my;
+            nj_size at = (nj_size)pad +
+                         ((nj_size)mby * 2 + (nj_size)(i >> 1)) * (nj_size)wrap +
+                         (nj_size)(mbx * 2 + (i & 1));
+
+            nj_m4v_pred_motion(mvx, mvy, wrap, pad, (int)mbx, (int)mby, i,
+                               first_slice_line, 0, &px, &py);
+            mx = nj_m4v_decode_mv(b, n, pos, px, vop->f_code);
+            if (mx == 0xffff) {
+                return -1;
+            }
+            my = nj_m4v_decode_mv(b, n, pos, py, vop->f_code);
+            if (my == 0xffff) {
+                return -1;
+            }
+            mvx[at] = (nj_s2)mx;
+            mvy[at] = (nj_s2)my;
+            pmv->mv[i][0] = mx;
+            pmv->mv[i][1] = my;
+        }
+    } else {
+        int px = 0, py = 0, mx, my;
+        nj_size at = (nj_size)pad + (nj_size)mby * 2 * (nj_size)wrap +
+                     (nj_size)mbx * 2;
+
+        pmv->four_mv = 0;
+        nj_m4v_pred_motion(mvx, mvy, wrap, pad, (int)mbx, (int)mby, 0,
+                           first_slice_line, 0, &px, &py);
+        mx = nj_m4v_decode_mv(b, n, pos, px, vop->f_code);
         if (mx == 0xffff) {
             return -1;
         }
-        my = m4v_mv_component(b, n, pos, py, vop->f_code);
+        my = nj_m4v_decode_mv(b, n, pos, py, vop->f_code);
         if (my == 0xffff) {
             return -1;
         }
-        {
-            nj_size at = (nj_size)pad + (nj_size)mby * 2 * (nj_size)wrap +
-                         (nj_size)mbx * 2;
-
-            mvx[at] = (nj_s2)mx;
-            mvy[at] = (nj_s2)my;
-        }
-        if (mx_out != NULL) *mx_out = mx;
-        if (my_out != NULL) *my_out = my;
+        /* The reference stores a 16x16 vector in all four 8x8 slots
+         * (ff_h263_update_motion_val), and later predictors read them. */
+        mvx[at] = (nj_s2)mx;
+        mvy[at] = (nj_s2)my;
+        mvx[at + 1] = (nj_s2)mx;
+        mvy[at + 1] = (nj_s2)my;
+        mvx[at + wrap] = (nj_s2)mx;
+        mvy[at + wrap] = (nj_s2)my;
+        mvx[at + 1 + wrap] = (nj_s2)mx;
+        mvy[at + 1 + wrap] = (nj_s2)my;
+        pmv->mv[0][0] = mx;
+        pmv->mv[0][1] = my;
+        pmv->mv[1][0] = mx;
+        pmv->mv[1][1] = my;
+        pmv->mv[2][0] = mx;
+        pmv->mv[2][1] = my;
+        pmv->mv[3][0] = mx;
+        pmv->mv[3][1] = my;
     }
     return 2;                       /* inter macroblock */
+}
+
+/* Clears the four 8x8 motion-vector slots of one macroblock: an intra or
+ * skipped macroblock predicts with a zero vector (ff_h263_update_motion_val)
+ * and later predictors must see that. */
+static void m4v_zero_mv(nj_s2 *mvx, nj_s2 *mvy, int wrap, int pad,
+                        int mbx, int mby)
+{
+    nj_size at = (nj_size)pad + (nj_size)mby * 2 * (nj_size)wrap +
+                 (nj_size)mbx * 2;
+
+    mvx[at] = 0;
+    mvy[at] = 0;
+    mvx[at + 1] = 0;
+    mvy[at + 1] = 0;
+    mvx[at + wrap] = 0;
+    mvy[at + wrap] = 0;
+    mvx[at + 1 + wrap] = 0;
+    mvy[at + 1 + wrap] = 0;
+}
+
+/* Resets the six DC predictors of one macroblock to mid-grey, which is what
+ * the reference does after decoding a non-intra macroblock
+ * (ff_clean_intra_table_entries): an intra macroblock later in the picture
+ * predicts from a neutral neighbour, never from an inter block's stale DC. */
+static void m4v_clean_dc(nj_s2 *gl, int glw, nj_s2 *gc, nj_s2 *gcr, int gcw,
+                         int mbx, int mby)
+{
+    int i, j;
+
+    for (i = 0; i < 2; i++) {
+        for (j = 0; j < 2; j++) {
+            gl[(nj_size)(mby * 2 + i) * (nj_size)glw +
+               (nj_size)(mbx * 2 + j)] = 1024;
+        }
+    }
+    gc[(nj_size)mby * (nj_size)gcw + (nj_size)mbx] = 1024;
+    if (gcr != NULL) {
+        gcr[(nj_size)mby * (nj_size)gcw + (nj_size)mbx] = 1024;
+    }
 }
 
 static int m4v_copy_skipped_mb(int mbx, int mby,
@@ -1998,7 +2379,7 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
 {
     nj_u4 mbw = 0, mbh = 0, cw = 0, ch = 0;
     nj_s2 *gl, *gc, *gcr;
-    int    glw, gcw, lscale, cscale, i, qsc;
+    int    glw, gcw, lscale, cscale, qsc;
     int    rc = 0;
     nj_u4  mbx, mby;
 
@@ -2032,7 +2413,6 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
     /* The DC predictors are NOT reset here: an intra macroblock in a P-VOP
      * predicts from the frame that is already reconstructed, so the caller
      * hands us the grids that nj_m4v_decode_ivop left behind. */
-    (void)i;
     qsc = (int)vop->qscale;
     {
         int wrap = (int)mbw * 2 + 1;
@@ -2048,25 +2428,22 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
         for (mby = 0; mby < mbh; mby++) {
             for (mbx = 0; mbx < mbw; mbx++) {
                 nj_s4 ac[6];
-                int cbp = 0, dq = 0, cbpc = 0, mx = 0, my = 0;
+                int cbp = 0, dq = 0, cbpc = 0;
+                m4v_pmv pmv;
+                int first_line = (mby == 0u);
 
-                {
-                    nj_u4 mbin = *pos;
-
+                memset(&pmv, 0, sizeof(pmv));
                 rc = m4v_pvop_mb_header(b, n, pos, vol, vop, mbx, mby, mvx, mvy,
-                                        wrap, pad, &qsc, &cbp, &dq, &cbpc, &mx, &my);
-                if (getenv("NJ_M4VPOS")) {
-                    fprintf(stderr, "MB %ux%u in=%u rc=%d hdr_end=%u cbp=0x%02x mv=%d,%d\n",
-                            (unsigned)mbx, (unsigned)mby, (unsigned)mbin, rc,
-                            (unsigned)*pos, (unsigned)cbp, mx, my);
-                }
-                }
+                                        wrap, pad, first_line, &qsc, &cbp, &dq,
+                                        &cbpc, &pmv);
                 if (rc == 1) {
                     rc = m4v_copy_skipped_mb((int)mbx, (int)mby, yp, ys, up, us,
                                              vp, vs, py, pys, pu, pus, pv, pvs);
                     if (rc != 0) {
                         break;
                     }
+                    m4v_zero_mv(mvx, mvy, wrap, pad, (int)mbx, (int)mby);
+                    m4v_clean_dc(gl, glw, gc, gcr, gcw, (int)mbx, (int)mby);
                     continue;
                 }
                 if (rc == 0) {
@@ -2077,13 +2454,12 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                     if (rc != 0) {
                         break;
                     }
+                    m4v_zero_mv(mvx, mvy, wrap, pad, (int)mbx, (int)mby);
                     continue;
                 }
                 if (rc != 2) {
                     break;
                 }
-                /* Inter macroblock: motion compensated prediction plus the
-                 * coded residual. */
                 {
                     int fw = (int)mbw * 16;
                     int fh = (int)mbh * 16;
@@ -2093,10 +2469,12 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                     rc = m4v_inter_mb_body(b, n, pos, (int)mbx, (int)mby,
                                            py, pys, pu, pus, pv, pvs,
                                            yp, ys, up, us, vp, vs,
-                                           fw, fh, cw2, ch2, cbp, qsc, mx, my);
+                                           fw, fh, cw2, ch2, cbp, qsc,
+                                           pmv.mv, pmv.four_mv, vop->no_rounding);
                     if (rc != 0) {
                         break;
                     }
+                    m4v_clean_dc(gl, glw, gc, gcr, gcw, (int)mbx, (int)mby);
                     continue;
                 }
             }
@@ -2196,28 +2574,18 @@ static int m4v_read_cbp(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int cbpc, int dq, i
                         int *acp)
 {
     nj_u4 bp = *pos;
-    int v = 0, cbpy = 0;
+    int cbpy = 0;
+
+    (void)dq;
 
     if (bp < n * 8u) {
         *acp = (int)((b[bp >> 3] >> (7u - (bp & 7u))) & 1u);
         *pos = bp + 1u;
     }
-    if (getenv("NJ_M4VCBPY")) {
-        nj_u4 at = *pos; int z; unsigned win = 0;
-        for (z = 0; z < 12; z++) {
-            nj_u4 q = at + (nj_u4)z;
-            unsigned bit = 0;
-            if (q < n * 8u) bit = (b[q >> 3] >> (7u - (q & 7u))) & 1u;
-            win = (win << 1) | bit;
-        }
-        fprintf(stderr, "CBPY win=%03x pos=%u\n", win, (unsigned)at);
-    }
-    if (nj_vlc_lookup(b, n, pos, nj_vlc_cbpy, 16, &cbpy) != 0) {
+        if (nj_vlc_lookup(b, n, pos, nj_vlc_cbpy, 16, &cbpy) != 0) {
         return -1;
     }
-    if (getenv("NJ_M4VRAW") != NULL) fprintf(stderr, "CBPY sym=%d pos=%u\n", cbpy, (unsigned)*pos);
-    *cbp = ((cbpc & 3) | (cbpy << 2)) & 0x3f;
-    (void)v;
+        *cbp = ((cbpc & 3) | (cbpy << 2)) & 0x3f;
     return 0;
 }
 
@@ -2230,6 +2598,8 @@ static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
 {
     int blk;
     nj_s4 all_coef[6][64];
+
+    (void)cbpc;
     {
         int zi, zj;
         for (zi = 0; zi < 6; zi++) {
@@ -2247,7 +2617,8 @@ static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
         if (at + 2u > n * 8u) {
             return -1;
         }
-        delta = (int)((b[at >> 3] >> (6u - (at & 7u))) & 3u);
+        delta = (int)(((b[at >> 3] >> (7u - (at & 7u))) & 1u) << 1);
+        delta |= (int)(b[(at + 1u) >> 3] >> (7u - ((at + 1u) & 7u))) & 1;
         *qscale += (delta == 0) ? -1 : (delta == 1) ? -2 : (delta == 2) ? 1 : 2;
         if (*qscale < 1) {
             *qscale = 1;
@@ -2259,11 +2630,9 @@ static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
     /* Per block: its DC, then its AC.  That is the order the bit stream
      * uses (7.4.3.5), and a block's DC predictor may depend on blocks of
      * the same macroblock, so the two cannot be split into two passes. */
-    if (getenv("NJ_M4VMB")) fprintf(stderr, "MB pos=%u cbpc=%d cbp=0x%02x\n", (unsigned)*pos, cbpc, (unsigned)cbp);
-    for (blk = 0; blk < 6; blk++) {
+        for (blk = 0; blk < 6; blk++) {
         nj_s2 *grid = (blk < 4) ? dc_y : (blk == 4 ? dc_c : (dc_c2 != NULL ? dc_c2 : dc_c));
-        if (getenv("NJ_M4VBLK")) fprintf(stderr, "BLK %d at=%u\n", blk, (unsigned)*pos);
-        int stride = (blk < 4) ? stride_y : (blk == 4 ? stride_c
+                int stride = (blk < 4) ? stride_y : (blk == 4 ? stride_c
                       : (dc_c2 != NULL ? stride_c2 : stride_c));
         nj_s4 coef[64];
         int gx = 0, gy = 0, a, bq, c, dir = 0, pred, rc, level;
@@ -2278,7 +2647,9 @@ static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
         /* Outside-slice handling, as the reference decoder does it: on the
          * first line of a slice the top neighbours are not predictors, and
          * at the left edge of the slice so is the left one.  Chroma blocks
-         * (n=4 and n=5) follow the same rules. */
+         * (n=4 and n=5) follow the same rules.  The second rule neutralises
+         * the top-left predictor on the second macroblock row, where the
+         * reference forces it to mid-grey (mpeg4_pred_dc). */
         if (mby == 0) {
             if (blk != 3) {
                 if (blk != 2) {
@@ -2291,12 +2662,13 @@ static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
                 }
             }
         }
+        if (mby == 1 && mbx == 0 && (blk == 0 || blk == 4 || blk == 5)) {
+            bq = 1024;
+        }
         pred = nj_m4v_dc_predict_q(a, bq, c, dscale, &dir);
         rc = nj_m4v_decode_intra_block_ex(b, n, pos, coef, blk < 4, pred,
                                           *qscale, 0);
-        if (getenv("NJ_M4VDC")) fprintf(stderr, "DC mb(%d,%d) blk=%d rc=%d pos=%u pred=%d a=%d b=%d c=%d s=%d\n", mbx, mby, blk, rc, (unsigned)*pos, pred, a, bq, c, dscale);
-        if (getenv("NJ_M4VDBG")) fprintf(stderr, "DC blk=%d rc=%d pos=%u\n", blk, rc, (unsigned)*pos);
-        if (rc != 0) {
+                        if (rc != 0) {
             return rc;
         }
         level = (nj_s4)coef[0] * (nj_s4)dscale;
@@ -2308,48 +2680,55 @@ static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
         if (grid != NULL && stride > 0) {
             grid[(nj_size)gy * (nj_size)stride + (nj_size)gx] = (nj_s2)level;
         }
-        /* Reconstruction uses ffmpeg's convention: the IDCT input is the
-         * coefficient scaled by the DC quantiser, and the IDCT already puts
-         * mid-grey (1024) at 128.  Our nj_m4v_idct() returns a residual that
-         * still needs +128, so subtract the 1024 bias here. */
-        all_coef[blk][0] = (nj_s4)(nj_m4v_dc_coef((int)coef[0], (int)dscale) -
-                                   NJ_M4V_DC_GREY);
+        /* The intra IDCT input is the reference's own block: the DC term is
+         * the dequantised level (the 1024 mid-grey bias lives inside it) and
+         * nj_m4v_idct_put() then writes pixels directly. */
+        all_coef[blk][0] = (nj_s4)nj_m4v_dc_coef((int)coef[0], (int)dscale);
         (void)dir;
         (void)scale;
         int coded = nj_m4v_cbp_has_ac(cbp, blk), arc;
 
-        if (getenv("NJ_M4V_ACINV") != NULL) {
-            coded = !coded;
-        }
-
+        
         if (ac_bits != NULL) {
             ac_bits[blk] = coded;
         }
         if (!coded) {
-            continue;
+                        continue;
         }
         {
-            nj_u4 ac_start = *pos;
             arc = nj_m4v_ac_block(b, n, pos, all_coef[blk], 1, *qscale);
-            if (getenv("NJ_M4VAC")) fprintf(stderr, "BLK mb(%d,%d) blk=%d rc=%d %u..%u\n", mbx, mby, blk, arc, (unsigned)ac_start, (unsigned)*pos);
-        }
-        if (getenv("NJ_M4VDBG")) fprintf(stderr, "AC blk=%d rc=%d pos=%u\n", blk, arc, (unsigned)*pos);
-        if (arc == -3) {
+                                }
+                if (arc == -3) {
             return -3;
         }
         if (arc < 0) {
             return -1;
         }
     }
-    if (getenv("NJ_M4VCOEF") != NULL) {
-        int zz, qq;
-        for (zz = 0; zz < 6; zz++) {
-            fprintf(stderr, "COEF mb(%d,%d) b%d:", mbx, mby, zz);
-            for (qq = 0; qq < 8; qq++) fprintf(stderr, " %d", (int)all_coef[zz][qq]);
-            fprintf(stderr, "\n");
+    /* Intra AC levels reach the reconstruction raw, exactly as the reference
+     * stores them in mpeg4_decode_block (qmul = 1, qadd = 0 there); its
+     * dct_unquantize_h263_intra() scales them when the block is put, with
+     * qmul = qscale << 1 and qadd = (qscale - 1) | 1.  Only the inter
+     * residual arrives already dequantised, because that path reads the
+     * per-quantiser RL table. */
+    {
+        int qm = (*qscale) << 1;
+        int qa = ((*qscale) - 1) | 1;
+
+        int kk;
+
+        for (blk = 0; blk < 6; blk++) {
+            for (kk = 1; kk < 64; kk++) {
+                nj_s4 lv = all_coef[blk][kk];
+
+                if (lv != 0) {
+                    all_coef[blk][kk] = (lv > 0) ? (nj_s4)(lv * qm + qa)
+                                                 : (nj_s4)(lv * qm - qa);
+                }
+            }
         }
     }
-    if (yp != NULL) {
+        if (yp != NULL) {
         int cw = 0, ch = 0;
         int  scale2 = 1;
 
@@ -2364,7 +2743,7 @@ static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
             int stride;
             int ox = 0, oy = 0;
 
-            nj_m4v_idct(all_coef[blk], out);
+            nj_m4v_idct_put(all_coef[blk], out);
             if (nj_m4v_block_origin((nj_u4)mbx, (nj_u4)mby, blk,
                                     (nj_u4 *)&ox, (nj_u4 *)&oy) != 0) {
                 return -1;
@@ -2383,16 +2762,10 @@ static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
             }
             for (r = 0; r < 8; r++) {
                 for (cc2 = 0; cc2 < 8; cc2++) {
-                    int v2 = out[r * 8 + cc2] + 128;
-                    if (v2 < 0) { v2 = 0; } else if (v2 > 255) { v2 = 255; }
+                    int v2 = out[r * 8 + cc2];
                     {
                         nj_size wi = (nj_size)(oy + r) * (nj_size)stride + (nj_size)(ox + cc2);
-                        if (getenv("NJ_M4VW") && wi >= 6300u) {
-                            fprintf(stderr, "WRITE blk=%d mb(%d,%d) ox=%d oy=%d r=%d c=%d stride=%d idx=%u dst=%s\n",
-                                    blk, mbx, mby, ox, oy, r, cc2, stride, (unsigned)wi,
-                                    dst == yp ? "yp" : (dst == up ? "up" : "vp"));
-                        }
-                        dst[wi] = (nj_u1)v2;
+                                                dst[wi] = (nj_u1)v2;
                     }
                 }
             }
