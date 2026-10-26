@@ -231,6 +231,16 @@ nj_surface *nj_midp_screen(nj_vm *vm);
  */
 void nj_midp_present(nj_vm *vm);
 
+/*
+ * Direct-video overlay.  nj_midp_present() calls this after the Canvas
+ * content has been mirrored and before the port is asked to present: a
+ * started video Player whose VideoControl asked for USE_DIRECT_VIDEO draws its
+ * current RGB565 frame over the display at the requested location and size.
+ * The media module owns the players; the display module owns the frame
+ * boundary, and this is the one call between them.
+ */
+void nj_media_video_overlay(nj_vm *vm);
+
 /* Request a repaint of the current Displayable on the next frame. */
 void nj_midp_repaint(nj_vm *vm);
 

@@ -657,6 +657,14 @@ void nj_midp_present(nj_vm *vm)
             }
         }
     }
+    /*
+     * Direct video (MMAPI VideoControl, USE_DIRECT_VIDEO): the movie is not
+     * part of the Canvas' own paint(); it is drawn over the display after the
+     * Canvas content and before the port presents, which is where a handset's
+     * video overlay also sits.  A no-op unless a started video Player asked
+     * for it and this displayable is the Canvas it registered.
+     */
+    nj_media_video_overlay(vm);
     if (vm->port && vm->port->display_present && vm->screen.pixels) {
         vm->port->display_present(vm->port->ud, 0, 0, vm->screen.width,
                                   vm->screen.height);

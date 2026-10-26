@@ -2976,6 +2976,173 @@ static void test_video_player_mp4v(nj_vm *vm)
            "the pump decoded every sample");
 }
 
+/*
+ * MMAPI VideoControl against a real mp4v Player.  The control used to be an
+ * interface stub whose getControl() always answered null, so a title that
+ * wanted to show a movie caught the NullPointerException and skipped it
+ * (Doom 3, 1942空战).  This pins the API the titles use - getControl,
+ * initDisplayMode(USE_DIRECT_VIDEO, canvas), the display setters and getters,
+ * getSnapshot - and that a stopped Player no longer advances its movie.
+ */
+static void test_video_control_mp4v(nj_vm *vm)
+{
+    nj_ref bar, in, player, vc = 0, canvas;
+    nj_value a[3], ret;
+    nj_field *f;
+    nj_s4 w, h, frames, pushed_before;
+    int st;
+
+    bar = nj_byte_array_new(vm, (nj_u4)sizeof(m4v_clip_3gp));
+    OK_MSG(bar != NULL, "an array for the VideoControl clip");
+    if (bar == NULL) {
+        return;
+    }
+    memcpy(bar->u.bytes, m4v_clip_3gp, sizeof(m4v_clip_3gp));
+    in = nj_object_new(vm, BAIS);
+    a[0].r = bar;
+    OK_MSG(in != NULL && nj_call_special(vm, in, BAIS, "<init>", "([B)V",
+                                         a, NULL) == NJ_OK,
+           "a stream over the VideoControl clip");
+    a[0].r = in;
+    a[1].r = nj_string_new(vm, "video/3gpp");
+    ret.bits = 0u;
+    st = nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                        "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                        "javax/microedition/media/Player;", a, &ret);
+    player = (st == NJ_OK) ? ret.r : 0;
+    OK_MSG(player != NULL, "a Player for the VideoControl clip");
+    if (player == NULL) {
+        return;
+    }
+    (void)nj_call(vm, player, PLAYER, "realize", "()V", NULL, NULL);
+    (void)nj_call(vm, player, PLAYER, "prefetch", "()V", NULL, NULL);
+
+    a[0].r = nj_string_new(vm, "VideoControl");
+    ret.bits = 0u;
+    st = nj_call(vm, player, PLAYER, "getControl",
+                 "(Ljava/lang/String;)Ljavax/microedition/media/Control;", a,
+                 &ret);
+    vc = (st == NJ_OK) ? ret.r : 0;
+    OK_MSG(vc != 0, "a video Player has a VideoControl");
+    if (vc == 0) {
+        return;
+    }
+    OK_MSG(nj_ref_class_name(vc) != NULL &&
+           strstr(nj_ref_class_name(vc), "VideoControl") != NULL,
+           "and it says it is a VideoControl");
+
+    canvas = nj_object_new(vm, "javax/microedition/lcdui/Canvas");
+    OK_MSG(canvas != NULL, "a Canvas to display the video on");
+    a[0].i = 1;                     /* VideoControl.USE_DIRECT_VIDEO */
+    a[1].r = canvas;
+    ret.r = (nj_ref)1;              /* must be nulled by the call */
+    st = nj_call(vm, vc, "javax/microedition/media/control/VideoControl",
+                 "initDisplayMode", "(ILjava/lang/Object;)Ljava/lang/Object;",
+                 a, &ret);
+    OK_MSG(st == NJ_OK && ret.r == 0,
+           "initDisplayMode(USE_DIRECT_VIDEO, Canvas) returns null as specified");
+
+    a[0].i = 12; a[1].i = 8;
+    OK_MSG(nj_call(vm, vc, "javax/microedition/media/control/VideoControl",
+                   "setDisplayLocation", "(II)V", a, NULL) == NJ_OK,
+           "setDisplayLocation is accepted");
+    a[0].i = 64; a[1].i = 48;
+    OK_MSG(nj_call(vm, vc, "javax/microedition/media/control/VideoControl",
+                   "setDisplaySize", "(II)V", a, NULL) == NJ_OK,
+           "setDisplaySize is accepted");
+    a[0].i = 1;
+    OK_MSG(nj_call(vm, vc, "javax/microedition/media/control/VideoControl",
+                   "setVisible", "(Z)V", a, NULL) == NJ_OK,
+           "setVisible(true) is accepted");
+    ret.i = -1;
+    (void)nj_call(vm, vc, "javax/microedition/media/control/VideoControl",
+                  "getDisplayWidth", "()I", NULL, &ret);
+    OK_MSG(ret.i == 64, "getDisplayWidth is the requested width");
+    ret.i = -1;
+    (void)nj_call(vm, vc, "javax/microedition/media/control/VideoControl",
+                  "getDisplayHeight", "()I", NULL, &ret);
+    OK_MSG(ret.i == 48, "getDisplayHeight is the requested height");
+    ret.i = -1;
+    (void)nj_call(vm, vc, "javax/microedition/media/control/VideoControl",
+                  "getSourceWidth", "()I", NULL, &ret);
+    OK_MSG(ret.i == M4V_CLIP_WIDTH, "getSourceWidth is the clip's width");
+    ret.i = -1;
+    (void)nj_call(vm, vc, "javax/microedition/media/control/VideoControl",
+                  "getSourceHeight", "()I", NULL, &ret);
+    OK_MSG(ret.i == M4V_CLIP_HEIGHT, "getSourceHeight is the clip's height");
+
+    /* The display state lives on the Player and the overlay reads it there. */
+    f = nj_field_lookup(vm, PLAYER, "pVMode", "I", 0);
+    OK_MSG(f != NULL && nj_field_read_int(vm, player, f) == 1,
+           "the Player records USE_DIRECT_VIDEO");
+    f = nj_field_lookup(vm, PLAYER, "pVvis", "Z", 0);
+    OK_MSG(f != NULL && nj_field_read_int(vm, player, f) != 0,
+           "the Player records that the video is visible");
+
+    /* An encoding this runtime does not produce is refused, not faked. */
+    a[0].r = nj_string_new(vm, "PNG");
+    ret.bits = 0u;
+    st = nj_call(vm, vc, "javax/microedition/media/control/VideoControl",
+                 "getSnapshot",
+                 "(Ljava/lang/String;)Ljava/lang/Object;", a, &ret);
+    OK_MSG(st != NJ_OK && nj_take_exception(vm) != 0,
+           "getSnapshot refuses an encoding it does not produce");
+
+    (void)nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL);
+    nj_media_frame(vm);
+    a[0].r = nj_string_new(vm, "RGB888");
+    ret.bits = 0u;
+    st = nj_call(vm, vc, "javax/microedition/media/control/VideoControl",
+                 "getSnapshot",
+                 "(Ljava/lang/String;)Ljava/lang/Object;", a, &ret);
+    OK_MSG(st == NJ_OK && ret.r != 0 &&
+           ret.r->length ==
+               (nj_u4)(M4V_CLIP_WIDTH * M4V_CLIP_HEIGHT * 3),
+           "getSnapshot(RGB888) returns one RGB888 frame");
+    if (st == NJ_OK && ret.r != 0) {
+        const nj_u1 *px = ret.r->u.bytes;
+        nj_u4 i, nonzero = 0u;
+
+        for (i = 0u; i < ret.r->length; i++) {
+            if (px[i] != 0u) { nonzero++; }
+        }
+        OK_MSG(nonzero != 0u, "the snapshot is not a black frame");
+    }
+
+    /* getControls() lists VolumeControl and VideoControl for a movie. */
+    ret.bits = 0u;
+    st = nj_call(vm, player, PLAYER, "getControls",
+                 "()[Ljavax/microedition/media/Control;", NULL, &ret);
+    OK_MSG(st == NJ_OK && ret.r != 0 && nj_array_length(ret.r) == 2u,
+           "a video Player reports two controls");
+    if (st == NJ_OK && ret.r != 0) {
+        nj_u4 i, have_video = 0u;
+
+        for (i = 0u; i < nj_array_length(ret.r); i++) {
+            nj_ref c = nj_array_get_ref(ret.r, i);
+            const char *cn = c ? nj_ref_class_name(c) : NULL;
+
+            if (cn && strstr(cn, "VideoControl")) { have_video++; }
+        }
+        OK_MSG(have_video == 1u, "one of them is the VideoControl");
+    }
+
+    /* A stopped Player must not keep consuming samples. */
+    (void)nj_call(vm, player, PLAYER, "stop", "()V", NULL, NULL);
+    f = nj_field_lookup(vm, PLAYER, "pPushed", "I", 0);
+    pushed_before = (f != NULL) ? nj_field_read_int(vm, player, f) : -1;
+    nj_media_frame(vm);
+    nj_media_frame(vm);
+    OK_MSG(f != NULL && pushed_before >= 0 &&
+           nj_field_read_int(vm, player, f) == pushed_before,
+           "a stopped video Player does not advance its frames");
+
+    (void)nj_call(vm, player, PLAYER, "close", "()V", NULL, NULL);
+    (void)w;
+    (void)h;
+    (void)frames;
+}
+
 static void test_eight_bit_wav_is_widened(nj_vm *vm)
 {
     static const nj_u1 expect[8] = {
@@ -4479,6 +4646,7 @@ int main(void)
     test_eight_bit_wav_is_widened(vm);
     test_video_player_pumps_a_frame(vm);
     test_video_player_mp4v(vm);
+    test_video_control_mp4v(vm);
     test_amr_player_uses_the_installed_decoder(vm);
     test_mp3_player_streams_pcm(vm);
     test_large_wav();

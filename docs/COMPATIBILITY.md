@@ -21,7 +21,7 @@ the pass repeated unless the code path it exercised changed.
 | JSR 82 (Bluetooth) | implemented, on ten port hooks (`nj_port.bt_*`): `LocalDevice`, `DiscoveryAgent.startInquiry`/`searchServices`, `UUID`, `DeviceClass`, `DataElement`, `ServiceRecord`, `RemoteDevice`, and RFCOMM `btspp://` / L2CAP `btl2cap://` connections both ways — a client through `bt_connect`, a server through `bt_listen/accept/read/write`. Any of the hooks may be NULL, and then that URL is refused by name. With no hooks at all (or a radio the port cannot reach) every operation raises `BluetoothStateException`, because a MIDlet that is told "no radio" keeps working and one that is told "no such class" does not. `DataElement` covers the int/boolean/String/UUID/sequence types; `L2CAPConnection` is a byte stream with the default 672-byte MTU |
 | JSR 256 (Sensor) | implemented: `findSensors`, `getSensorConnection`, channels, measurement ranges and data listeners, with the sensors themselves supplied by the port (`nj_port.sensor_list/open/read/close`). A port that has none reports none. Conditions are not evaluated — `addCondition` raises `UnsupportedOperationException` — and availability push answers `false` |
 | JSR 120/205 (messaging) | classes present; connections refuse the same way |
-| JSR 135 (Mobile Media) | tone and sampled PCM playback, WAV from a stream or a JAR resource, MIDI rendered by the runtime itself (or by the platform's synthesizer through the port's MIDI hooks), and AMR narrowband decoded by the runtime itself; no video. MP3, AAC and anything else the platform can decode arrive through `nj_port.audio_decode`, which is what the Android port does with MediaCodec |
+| JSR 135 (Mobile Media) | tone and sampled PCM playback, WAV from a stream or a JAR resource, MIDI rendered by the runtime itself (or by the platform's synthesizer through the port's MIDI hooks), AMR narrowband decoded by the runtime itself, and video: H.263 and MPEG-4 Part 2 movies inside MP4/3GP build a Player, and `VideoControl` in `USE_DIRECT_VIDEO` mode draws the decoded frames over the MIDlet's Canvas (1942空战 and Doom 3 play their intros). MP3, AAC and anything else the platform can decode arrive through `nj_port.audio_decode`, which is what the Android port does with MediaCodec |
 | JSR 184 (Mobile 3D Graphics) | the classes, the scene graph, the transform maths, a `.m3g` container parser, the member surface real titles use, and a software rasteriser with a depth buffer, perspective-correct texturing (nearest, bilinear, and a level chain built from the image for minified surfaces), back-face culling and per-vertex lighting — all behind `NJ_ENABLE_M3G`. `浴火银河2完整版_7689` renders its 3D scenes through it (thousands of triangles, `tris=` in `--stats`), and `3D拉力赛-进化汉化版_6366` now draws its race with blue sky and mountains, textured road and markings, rear car livery and the HUD: 120,397 triangles in 2,700 paced frames, including acceleration and steering (`docs/images/rally3d-race.png`); the rest of the collected titles keep their 3D behind menus, so each of them is judged by its 2D interface (see below) |
 | Mascot Capsule Micro3D v3 | behind `NJ_ENABLE_MASCOT`: MBAC model loading, MTRA skeletal animation, indexed BMP textures, fixed-point transforms, lighting, depth-sorted deferred rendering and primitive drawing. Devil May Cry reaches interactive combat; see the replay evidence and command-list limitations below |
 
@@ -1091,6 +1091,39 @@ opened":
         build/nj2me --port sdl2 tests/fixtures/audiodemo.jar
     INFO: audio: dummy opened, 22050 Hz, 1 channel(s)
     INFO: AUDIO wav=200000 state=400
+
+### Video players and `VideoControl`
+
+A `video/3gpp` MP4/3GP whose video track is H.263 or MPEG-4 Part 2 now builds a
+video `Player` through the `nj_avcodec` provider seam (the MPEG-4 Part 2
+decoder is pixel-identical to FFmpeg on the corpus's three movies; see
+`docs/CODECS.md`).  The media pump decodes one sample per emulated frame while
+the Player is `STARTED`, into the Player's RGB565 frame buffer.
+
+`VideoControl` is a real control now, not the interface stub it used to be:
+`getControl("VideoControl")` answers it on a video Player, and the API the two
+corpus titles use works - `initDisplayMode(USE_DIRECT_VIDEO, canvas)` (which
+returns null as the specification says), `setDisplayLocation`,
+`setDisplaySize`, `setDisplayFullScreen`, `setVisible`, the `getDisplay*` and
+`getSource*` queries, and `getSnapshot("RGB888")` (the one encoding
+`video.snapshot.encodings` advertises).  `getControls()` lists it next to the
+`VolumeControl`.
+
+The display state lives on the Player (`pV*` fields) and the direct-video
+overlay runs at the frame boundary in `nj_midp_present()`: after the Canvas
+content is mirrored and before the port is asked to present, a started and
+visible video Player whose control registered this Canvas has its RGB565 frame
+drawn at the requested rectangle (nearest-neighbour if the size differs from
+the source).  That is where a handset's video overlay also sits, and it is what
+makes 1942空战's and Doom 3's intros appear - evidence in
+`.local-tools/debug-runs/m4v-videocontrol-20261027/` and
+`docs/notes/2026-10-27-midp-videocontrol.md`.
+
+What it does not do: `USE_GUI_PRIMITIVE` is refused with
+`IllegalArgumentException` (it would need a host GUI toolkit), a movie's own
+audio track is not played by the video Player (separate audio Players are
+unaffected), and the display is the plain rectangle the MIDlet asked for - no
+rotation and no aspect-preserving letterbox.
 
 ## The device a title believes it is on
 

@@ -174,6 +174,20 @@ typedef struct media_video_state {
 #define F_P_VW       "pVw"         /* I frame width                          */
 #define F_P_VH       "pVh"         /* I frame height                         */
 #define F_P_OPEN     "pOpen"       /* Z device open for this player */
+/*
+ * Direct-video display state, written by VideoControl and read by the
+ * frame-boundary overlay.  It lives on the Player because there is exactly one
+ * display per Player and the overlay has to read it without allocating a
+ * control object; the control itself is a thin handle like VolumeControl.
+ */
+#define F_P_VDMODE   "pVMode"      /* I 1 = USE_DIRECT_VIDEO, 0 = not given */
+#define F_P_VCANVAS  "pVCanvas"    /* Ljavax/microedition/lcdui/Canvas; target */
+#define F_P_VDX      "pVx"         /* I display location */
+#define F_P_VDY      "pVy"         /* I */
+#define F_P_VDW      "pVdw"        /* I display size; 0 = source size */
+#define F_P_VDH      "pVdh"        /* I */
+#define F_P_VFULL    "pVfull"      /* Z draw full screen */
+#define F_P_VVIS     "pVvis"       /* Z the control asked for the video to show */
 #define F_P_LISTEN   "pListen"     /* Ljava/util/Vector; */
 #define F_P_MASTER   "pTimeBase"   /* Ljavax/microedition/media/TimeBase; master clock or null */
 
@@ -318,6 +332,14 @@ void nj_media_restore_object(nj_vm *vm, nj_ref player)
                 w_j(vm, player, F_P_DURATION, 0);
             }
             w_r(vm, player, F_P_MIDI, "[B", NULL);
+            /* A restored Player must not keep a Canvas reference from the
+               saved arena: the display state is rebuilt by the title, and the
+               overlay compares against the live current displayable. */
+            w_r(vm, player, F_P_VCANVAS,
+                "Ljavax/microedition/lcdui/Canvas;", NULL);
+            w_i(vm, player, F_P_VDMODE, 0);
+            w_z(vm, player, F_P_VVIS, 0);
+            w_z(vm, player, F_P_VFULL, 0);
             w_z(vm, player, F_P_STREAM, 0);
             w_z(vm, player, F_P_PLAT, 0);
             w_z(vm, player, F_P_OPEN, 0);
@@ -1202,6 +1224,17 @@ static void media_video_step(nj_vm *vm, nj_ref p)
     if (st.vops == NULL || st.vdec == NULL) {
         return;
     }
+    /*
+     * A movie advances only while the Player is STARTED.  Before this check
+     * the pump decoded one sample per emulated frame from the moment
+     * createPlayer() returned, so a title that realized and set up its display
+     * started its movie from wherever the title's own timeline happened to be
+     * - and a paused/stopped Player kept consuming samples.  stop() puts the
+     * state back to PREFETCHED, so a stopped Player simply waits here.
+     */
+    if (r_i(vm, p, F_P_STATE) != 400) {
+        return;
+    }
     if (nj_mp4_next(&st.m, &smp) != 1) {
         w_i(vm, p, F_P_STATE, 300);
         fire(vm, p, "endOfMedia");
@@ -1228,6 +1261,141 @@ static void media_video_step(nj_vm *vm, nj_ref p)
             ? (nj_s8)smp.dts * 1000000LL / (nj_s8)st.m.timescale : 0);
 }
 
+/*
+ * Direct-video overlay.  USE_DIRECT_VIDEO means the MIDlet hands the video a
+ * Canvas and the implementation paints the movie itself; the Canvas' own
+ * paint() knows nothing about it.  This runs at the frame boundary after the
+ * Canvas content has been mirrored, and draws the Player's current RGB565
+ * frame over the display at the location and size the control asked for.
+ */
+static void video_blit_rgb565(nj_vm *vm, nj_ref p, nj_surface *scr)
+{
+    nj_ref vb = r_r(vm, p, F_P_VBUF, "[B");
+    nj_s4 vw = r_i(vm, p, F_P_VW);
+    nj_s4 vh = r_i(vm, p, F_P_VH);
+    const nj_u1 *src;
+    nj_gfx g;
+    int dx, dy, dw, dh, x, y;
+
+    if (!vb || vw <= 0 || vh <= 0 || !scr || !scr->pixels) {
+        return;
+    }
+    if (vb->length < (nj_u4)vw * (nj_u4)vh * 2u) {
+        return;
+    }
+    if (r_z(vm, p, F_P_VFULL)) {
+        dx = 0;
+        dy = 0;
+        dw = scr->width;
+        dh = scr->height;
+    } else {
+        dx = (int)r_i(vm, p, F_P_VDX);
+        dy = (int)r_i(vm, p, F_P_VDY);
+        dw = (int)r_i(vm, p, F_P_VDW);
+        dh = (int)r_i(vm, p, F_P_VDH);
+        if (dw <= 0) { dw = vw; }
+        if (dh <= 0) { dh = vh; }
+    }
+    if (dw <= 0 || dh <= 0) {
+        return;
+    }
+    src = vb->u.bytes;
+    nj_gfx_init(&g, scr);
+    if (dw == vw && dh == vh) {
+        /* Same size is the common case: one image blit, whole rows. */
+        nj_image img;
+
+        img.width = vw;
+        img.height = vh;
+        img.format = NJ_PIXFMT_RGB565;
+        img.pixels = (nj_u4 *)(void *)src;
+        img.has_alpha = 0;
+        nj_gfx_draw_image(&g, &img, dx, dy, 0, 0, vw, vh);
+        return;
+    }
+    /* A display size other than the source size is scaled nearest-neighbour,
+       which is what a fixed-function video path of this class does.  The
+       destination rectangle is clipped to the display. */
+    for (y = 0; y < dh; y++) {
+        int py = dy + y;
+        int sy;
+        const nj_u1 *row;
+
+        if (py < 0 || py >= scr->height) {
+            continue;
+        }
+        sy = (int)((nj_s4)y * vh / dh);
+        if (sy >= vh) { sy = vh - 1; }
+        row = src + (nj_size)sy * (nj_size)vw * 2u;
+        for (x = 0; x < dw; x++) {
+            int px = dx + x;
+            int sx;
+            nj_u4 c, r, gg, b;
+
+            if (px < 0 || px >= scr->width) {
+                continue;
+            }
+            sx = (int)((nj_s4)x * vw / dw);
+            if (sx >= vw) { sx = vw - 1; }
+            c = (nj_u4)row[sx * 2] | ((nj_u4)row[sx * 2 + 1] << 8);
+            r = (c >> 11) & 0x1Fu;
+            gg = (c >> 5) & 0x3Fu;
+            b = c & 0x1Fu;
+            r = (r << 3) | (r >> 2);
+            gg = (gg << 2) | (gg >> 4);
+            b = (b << 3) | (b >> 2);
+            nj_gfx_set_color(&g, 0xFF000000u | (r << 16) | (gg << 8) | b);
+            nj_gfx_pixel(&g, px, py);
+        }
+    }
+}
+
+void nj_media_video_overlay(nj_vm *vm)
+{
+    nj_ref cur, players;
+    nj_s4 n, i;
+    nj_surface *scr;
+
+    if (!vm || !vm->media_players || !vm->screen.pixels) {
+        return;
+    }
+    cur = nj_midp_current(vm);
+    if (!cur) {
+        return;
+    }
+    scr = nj_midp_screen(vm);
+    if (!scr || !scr->pixels) {
+        return;
+    }
+    players = vm->media_players;
+    n = vec_size(vm, players);
+    for (i = 0; i < n; i++) {
+        nj_ref p = vec_at(vm, players, i);
+        nj_ref target;
+
+        if (!p || r_i(vm, p, F_P_KIND) != 2) {
+            continue;
+        }
+        if (r_i(vm, p, F_P_STATE) != 400 || !r_z(vm, p, F_P_VVIS)) {
+            continue;
+        }
+        if (r_i(vm, p, F_P_VDMODE) != 1) {
+            continue;
+        }
+        target = r_r(vm, p, F_P_VCANVAS,
+                     "Ljavax/microedition/lcdui/Canvas;");
+        if (target != cur) {
+            continue;
+        }
+        video_blit_rgb565(vm, p, scr);
+    }
+}
+
+#else /* !NJ_ENABLE_VIDEO */
+void nj_media_video_overlay(nj_vm *vm)
+{
+    (void)vm;
+}
 #endif /* NJ_ENABLE_VIDEO */
 
 void nj_media_frame(nj_vm *vm)
@@ -2594,27 +2762,42 @@ NJFN(media_createPlayer_url)
 
 NJFN(media_supported_types)
 {
-    /* One element: "audio/x-wav", which is what this implementation decodes.
+    /*
+     * Everything this runtime's Players really decode.  It used to answer the
+     * single string "audio/x-wav", which was already stale when MIDI, AMR,
+     * MP3 and AMR-inside-MP4 worked, and a title scans this list to decide
+     * what it may ask for: Doom 3 looks for a "video" type here before it
+     * offers its intro at all.  The protocol argument is not used because the
+     * same set is reachable through every protocol this runtime has.
      *
-     * Both objects are rooted while the other is built: a collection between
-     * nj_array_new() and the store would otherwise recycle whichever of the
-     * two is still only a C local, and the caller would hold a reference to a
-     * freed block (the same failure the note in media_createPlayer_stream()
-     * describes, one allocation later). */
+     * Every string is rooted while the array is built: a collection between
+     * nj_array_new() and the last store would otherwise recycle the strings
+     * that are still only C locals, and the caller would hold refs to freed
+     * blocks (the same failure media_createPlayer_stream() documents).
+     */
+    static const char *types[] = {
+        "audio/x-wav", "audio/midi", "audio/amr", "audio/amr-wb",
+        "audio/mpeg", "video/3gpp"
+    };
     nj_u4 mark = nj_root_mark(vm);
-    nj_ref s = nj_string_new(vm, "audio/x-wav");
-    nj_ref a;
-    if (!s) {
-        nj_root_release(vm, mark);
-        return NJ_ERR;
-    }
-    s = nj_root(vm, s);
-    a = nj_array_new(vm, "java/lang/String", 1u);
+    nj_ref a = nj_array_new(vm, "java/lang/String",
+                            (nj_u4)(sizeof(types) / sizeof(types[0])));
+    nj_u4 i;
+
     if (!a) {
         nj_root_release(vm, mark);
         return NJ_ERR;
     }
-    a->u.refs[0] = s;
+    nj_root(vm, a);
+    for (i = 0u; i < (nj_u4)(sizeof(types) / sizeof(types[0])); i++) {
+        nj_ref s = nj_string_new(vm, types[i]);
+
+        if (!s) {
+            nj_root_release(vm, mark);
+            return NJ_ERR;
+        }
+        a->u.refs[i] = s;
+    }
     nj_root_release(vm, mark);
     ret->r = a;
     return NJ_OK;
@@ -2760,6 +2943,15 @@ NJFN(player_start)
             w_z(vm, self, F_P_OPEN, 1);
             (void)media_register(vm, self);
         }
+    } else if (r_i(vm, self, F_P_KIND) == 2) {
+        /*
+         * A movie: there is no audio device to open here - the track's sound
+         * is a separate Player - and the media frame pump decodes one sample
+         * per emulated frame while the state is STARTED.  It has to be on the
+         * registry for that pump to run, which is all start() does for video.
+         */
+        w_i(vm, self, F_P_LOOPDONE, 0);
+        (void)media_register(vm, self);
     } else if (vm->port && vm->port->pcm_open) {
         w_i(vm, self, F_P_LOOPDONE, 0);
         if (!r_z(vm, self, F_P_OPEN)) {
@@ -2949,6 +3141,18 @@ NJFN(player_getControl)
         }
     } else if (n == 13 && c[0] == 'V' && c[1] == 'o' && c[2] == 'l') {
         cls = NJ_C_VOLUME;
+    } else if (n == 12 && c[0] == 'V' && c[1] == 'i' && c[2] == 'd'
+               && c[3] == 'e' && c[4] == 'o') {
+        /*
+         * VideoControl only on a Player that really has a video track: a game
+         * that gets one for an audio Player would call initDisplayMode() on a
+         * movie that does not exist.  Doom 3 and 1942空战 both checkcast the
+         * result without a null test, which is legal - but with a real control
+         * they play their intro instead of skipping it.
+         */
+        if (r_i(vm, self, F_P_KIND) == 2) {
+            cls = NJ_C_VIDEOC;
+        }
     } else if (n == 11 && c[0] == 'M' && c[1] == 'I' && c[2] == 'D'
                && c[3] == 'I') {
         /*
@@ -2993,6 +3197,9 @@ NJFN(player_getControls)
      */
     n = (r_i(vm, self, F_P_KIND) == 0) ? 2u
       : (r_z(vm, self, F_P_MIDIK) ? 2u : 1u);
+    if (r_i(vm, self, F_P_KIND) == 2) {
+        n++;                /* VolumeControl and VideoControl */
+    }
     arr = nj_array_new(vm, "javax/microedition/media/Control", n);
     if (!arr) {
         return NJ_ERR;
@@ -3012,6 +3219,15 @@ NJFN(player_getControls)
                 "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
                 a1, &r) == NJ_OK && r.r != NULL) {
         arr->u.refs[at++] = r.r;
+    }
+    if (r_i(vm, self, F_P_KIND) == 2) {
+        a1[0].r = nj_string_new(vm, "VideoControl");
+        r.r = NULL;
+        if (nj_call(vm, self, NJ_C_PLAYER, "getControl",
+                    "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
+                    a1, &r) == NJ_OK && r.r != NULL) {
+            arr->u.refs[at++] = r.r;
+        }
     }
     if (r_z(vm, self, F_P_MIDIK)) {
         a1[0].r = nj_string_new(vm, "MIDIControl");
@@ -3845,7 +4061,11 @@ nj_status nj_media_late_init(nj_vm *vm)
         static const struct { const char *cls; const char *n; nj_s4 v; } k[] = {
             { NJ_C_MANAGER, "TONE_STOP", 1 },
             { NJ_C_MANAGER, "TONE_BLOCKING", 2 },
-            { NJ_C_MANAGER, "TONE_CONSTANT_DURATION", 4 }
+            { NJ_C_MANAGER, "TONE_CONSTANT_DURATION", 4 },
+            /* VideoControl's display modes: a MIDlet compares the mode it
+               passed to initDisplayMode() against these. */
+            { NJ_C_VIDEOC, "USE_DIRECT_VIDEO", 1 },
+            { NJ_C_VIDEOC, "USE_GUI_PRIMITIVE", 0 }
         };
         unsigned i;
         for (i = 0u; i < sizeof(k) / sizeof(k[0]); i++) {
@@ -3855,6 +4075,250 @@ nj_status nj_media_late_init(nj_vm *vm)
             }
         }
     }
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
+/* Natives: VideoControl                                               */
+/* ------------------------------------------------------------------ */
+/*
+ * The display state lives on the Player (pV* fields): there is exactly one
+ * display per video Player, and the frame-boundary overlay reads it directly.
+ * The control object is a thin owner handle, the same shape VolumeControl has.
+ */
+NJFN(videoctl_initDisplayMode)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref player = ctl_owner(vm, self);
+    nj_s4 mode = NJ_ARG_INT(args, 0);
+    nj_ref target = NJ_ARG_REF(args, 1);
+
+    if (!player) {
+        return nj_throw(vm, "java/lang/IllegalStateException",
+                        "the control has no Player");
+    }
+    if (mode != 1) {
+        /* 0 is USE_GUI_PRIMITIVE, which would need a host GUI toolkit to hand
+           back a video component; this runtime renders into the MIDlet's own
+           Canvas only, so say so instead of returning a component that can
+           never show a frame. */
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "only USE_DIRECT_VIDEO is supported");
+    }
+    if (!target) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "USE_DIRECT_VIDEO needs a Canvas");
+    }
+    if (r_i(vm, player, F_P_STATE) < 200) {
+        return nj_throw(vm, "java/lang/IllegalStateException",
+                        "realize() the Player before initDisplayMode()");
+    }
+    w_r(vm, player, F_P_VCANVAS, "Ljavax/microedition/lcdui/Canvas;", target);
+    w_i(vm, player, F_P_VDMODE, 1);
+    w_z(vm, player, F_P_VVIS, 0);
+    w_z(vm, player, F_P_VFULL, 0);
+    w_i(vm, player, F_P_VDX, 0);
+    w_i(vm, player, F_P_VDY, 0);
+    w_i(vm, player, F_P_VDW, 0);
+    w_i(vm, player, F_P_VDH, 0);
+    ret->r = NULL;              /* USE_DIRECT_VIDEO returns null by the spec */
+    return NJ_OK;
+}
+
+/* Common checks for the display setters: the mode must be direct video. */
+static nj_ref videoctl_display_player(nj_vm *vm, nj_ref ctl)
+{
+    nj_ref player = ctl_owner(vm, ctl);
+
+    if (!player) {
+        return NULL;
+    }
+    if (r_i(vm, player, F_P_VDMODE) != 1) {
+        return NULL;
+    }
+    return player;
+}
+
+NJFN(videoctl_setDisplayLocation)
+{
+    nj_ref player = videoctl_display_player(vm, NJ_THIS(args));
+
+    if (!player) {
+        return nj_throw(vm, "java/lang/IllegalStateException",
+                        "initDisplayMode() has not been called");
+    }
+    w_i(vm, player, F_P_VDX, NJ_ARG_INT(args, 0));
+    w_i(vm, player, F_P_VDY, NJ_ARG_INT(args, 1));
+    return NJ_OK;
+}
+
+NJFN(videoctl_setDisplaySize)
+{
+    nj_ref player = videoctl_display_player(vm, NJ_THIS(args));
+    nj_s4 w = NJ_ARG_INT(args, 0);
+    nj_s4 h = NJ_ARG_INT(args, 1);
+
+    if (!player) {
+        return nj_throw(vm, "java/lang/IllegalStateException",
+                        "initDisplayMode() has not been called");
+    }
+    if (w <= 0 || h <= 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "display size must be positive");
+    }
+    w_i(vm, player, F_P_VDW, w);
+    w_i(vm, player, F_P_VDH, h);
+    w_z(vm, player, F_P_VFULL, 0);
+    return NJ_OK;
+}
+
+NJFN(videoctl_setDisplayFullScreen)
+{
+    nj_ref player = videoctl_display_player(vm, NJ_THIS(args));
+
+    if (!player) {
+        return nj_throw(vm, "java/lang/IllegalStateException",
+                        "initDisplayMode() has not been called");
+    }
+    w_z(vm, player, F_P_VFULL, NJ_ARG_INT(args, 0) ? 1 : 0);
+    return NJ_OK;
+}
+
+NJFN(videoctl_setVisible)
+{
+    nj_ref player = videoctl_display_player(vm, NJ_THIS(args));
+
+    if (!player) {
+        return nj_throw(vm, "java/lang/IllegalStateException",
+                        "initDisplayMode() has not been called");
+    }
+    w_z(vm, player, F_P_VVIS, NJ_ARG_INT(args, 0) ? 1 : 0);
+    return NJ_OK;
+}
+
+/* The effective display size: what the overlay will cover, 0 when not set. */
+static nj_s4 videoctl_display_w(nj_vm *vm, nj_ref player)
+{
+    if (r_z(vm, player, F_P_VFULL)) {
+        nj_surface *scr = nj_midp_screen(vm);
+        return scr ? (nj_s4)scr->width : 0;
+    }
+    {
+        nj_s4 w = r_i(vm, player, F_P_VDW);
+        return w > 0 ? w : r_i(vm, player, F_P_VW);
+    }
+}
+
+static nj_s4 videoctl_display_h(nj_vm *vm, nj_ref player)
+{
+    if (r_z(vm, player, F_P_VFULL)) {
+        nj_surface *scr = nj_midp_screen(vm);
+        return scr ? (nj_s4)scr->height : 0;
+    }
+    {
+        nj_s4 h = r_i(vm, player, F_P_VDH);
+        return h > 0 ? h : r_i(vm, player, F_P_VH);
+    }
+}
+
+NJFN(videoctl_getDisplayWidth)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref player = videoctl_display_player(vm, self);
+    ret->i = player ? videoctl_display_w(vm, player) : 0;
+    return NJ_OK;
+}
+
+NJFN(videoctl_getDisplayHeight)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref player = videoctl_display_player(vm, self);
+    ret->i = player ? videoctl_display_h(vm, player) : 0;
+    return NJ_OK;
+}
+
+NJFN(videoctl_getSourceWidth)
+{
+    nj_ref player = ctl_owner(vm, NJ_THIS(args));
+    ret->i = player ? r_i(vm, player, F_P_VW) : 0;
+    return NJ_OK;
+}
+
+NJFN(videoctl_getSourceHeight)
+{
+    nj_ref player = ctl_owner(vm, NJ_THIS(args));
+    ret->i = player ? r_i(vm, player, F_P_VH) : 0;
+    return NJ_OK;
+}
+
+/*
+ * getSnapshot("RGB888") hands back the Player's current frame as a raw byte
+ * array.  The encoding string is compared the way getControl() compares names;
+ * anything but RGB888 is refused rather than returning bytes in the wrong
+ * layout.  video.snapshot.encodings advertises exactly this one.
+ */
+NJFN(videoctl_getSnapshot)
+{
+    nj_ref self = NJ_THIS(args);
+    nj_ref player = ctl_owner(vm, self);
+    nj_ref enc = NJ_ARG_REF(args, 0);
+    nj_ref vb, out;
+    const nj_u2 *c;
+    int n;
+    nj_s4 vw, vh, x, y;
+    nj_u1 *dst;
+    const nj_u1 *src;
+
+    if (!player) {
+        return nj_throw(vm, "java/lang/IllegalStateException",
+                        "the control has no Player");
+    }
+    if (r_i(vm, player, F_P_STATE) < 300) {
+        return nj_throw(vm, "java/lang/IllegalStateException",
+                        "prefetch() the Player before getSnapshot()");
+    }
+    if (!enc) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "encoding is null");
+    }
+    c = nj_string_chars(enc);
+    n = (int)nj_string_len(enc);
+    if (!(n == 6 && c[0] == 'R' && c[1] == 'G' && c[2] == 'B'
+          && c[3] == '8' && c[4] == '8' && c[5] == '8')) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "only RGB888 snapshots are supported");
+    }
+    vb = r_r(vm, player, F_P_VBUF, "[B");
+    vw = r_i(vm, player, F_P_VW);
+    vh = r_i(vm, player, F_P_VH);
+    if (!vb || vw <= 0 || vh <= 0 ||
+        vb->length < (nj_u4)vw * (nj_u4)vh * 2u) {
+        return nj_throw(vm, "java/lang/IllegalStateException",
+                        "no frame has been decoded yet");
+    }
+    out = nj_byte_array_new(vm, (nj_u4)vw * (nj_u4)vh * 3u);
+    if (!out) {
+        return NJ_ERR;
+    }
+    src = vb->u.bytes;
+    dst = out->u.bytes;
+    for (y = 0; y < vh; y++) {
+        for (x = 0; x < vw; x++) {
+            nj_u4 p = (nj_u4)src[(nj_size)(y * vw + x) * 2] |
+                      ((nj_u4)src[(nj_size)(y * vw + x) * 2 + 1] << 8);
+            nj_u4 r = (p >> 11) & 0x1Fu;
+            nj_u4 g = (p >> 5) & 0x3Fu;
+            nj_u4 b = p & 0x1Fu;
+
+            r = (r << 3) | (r >> 2);
+            g = (g << 2) | (g >> 4);
+            b = (b << 3) | (b >> 2);
+            *dst++ = (nj_u1)r;
+            *dst++ = (nj_u1)g;
+            *dst++ = (nj_u1)b;
+        }
+    }
+    ret->r = out;
     return NJ_OK;
 }
 
@@ -3888,6 +4352,14 @@ static const nj_builtin_field player_fields[] = {
     FLD(F_P_VBUF,     "[B", 0),
     FLD(F_P_VW,       "I", 0),
     FLD(F_P_VH,       "I", 0),
+    FLD(F_P_VDMODE,   "I", 0),
+    FLD(F_P_VCANVAS,  "Ljavax/microedition/lcdui/Canvas;", 0),
+    FLD(F_P_VDX,      "I", 0),
+    FLD(F_P_VDY,      "I", 0),
+    FLD(F_P_VDW,      "I", 0),
+    FLD(F_P_VDH,      "I", 0),
+    FLD(F_P_VFULL,    "Z", 0),
+    FLD(F_P_VVIS,     "Z", 0),
     FLD(F_P_OPEN,     "Z", 0),
     FLD(F_P_LISTEN,   "Ljava/util/Vector;", 0),
     FLD(F_P_MIDI,     "[B", 0),
@@ -4036,19 +4508,25 @@ static const nj_builtin_method midictl_methods[] = {
  * an uncaught NoClassDefFoundError the moment its 3gp audio track started
  * decoding.  getControl() keeps returning null, the game's `catch (Exception)`
  * takes the NPE that follows, and the intro is skipped instead of the game. */
+static const nj_builtin_field videoctl_fields[] = {
+    FLD(F_C_OWNER, "L" NJ_C_PLAYER ";", 0),
+    /* JSR 135's two display modes.  Only USE_DIRECT_VIDEO is usable here, but
+       the constants are part of the API surface a MIDlet may reference. */
+    FLD("USE_GUI_PRIMITIVE", "I", NJ_ACC_STATIC | NJ_ACC_FINAL),
+    FLD("USE_DIRECT_VIDEO",  "I", NJ_ACC_STATIC | NJ_ACC_FINAL)
+};
+
 static const nj_builtin_method videocontrol_methods[] = {
-    M("initDisplayMode",     "(ILjava/lang/Object;)Ljava/lang/Object;",
-      NJ_ACC_ABSTRACT),
-    M("setDisplaySize",      "(II)V", NJ_ACC_ABSTRACT),
-    M("setDisplayFullScreen", "(Z)V", NJ_ACC_ABSTRACT),
-    M("setDisplayLocation",  "(II)V", NJ_ACC_ABSTRACT),
-    M("setVisible",          "(Z)V", NJ_ACC_ABSTRACT),
-    M("getDisplayWidth",     "()I", NJ_ACC_ABSTRACT),
-    M("getDisplayHeight",    "()I", NJ_ACC_ABSTRACT),
-    M("getSourceWidth",      "()I", NJ_ACC_ABSTRACT),
-    M("getSourceHeight",     "()I", NJ_ACC_ABSTRACT),
-    M("getSnapshot",         "(Ljava/lang/String;)Ljava/lang/Object;",
-      NJ_ACC_ABSTRACT)
+    M("initDisplayMode",     "(ILjava/lang/Object;)Ljava/lang/Object;", 0),
+    M("setDisplaySize",      "(II)V", 0),
+    M("setDisplayFullScreen", "(Z)V", 0),
+    M("setDisplayLocation",  "(II)V", 0),
+    M("setVisible",          "(Z)V", 0),
+    M("getDisplayWidth",     "()I", 0),
+    M("getDisplayHeight",    "()I", 0),
+    M("getSourceWidth",      "()I", 0),
+    M("getSourceHeight",     "()I", 0),
+    M("getSnapshot",         "(Ljava/lang/String;)Ljava/lang/Object;", 0)
 };
 
 #define NJ_MEDIA_EXC(name, super)                                             \
@@ -4100,12 +4578,14 @@ const nj_builtin_class nj_lib_media_classes[] = {
       midictl_fields,
       (nj_u2)(sizeof(midictl_fields) / sizeof(midictl_fields[0])), midictl_methods,
       (nj_u2)(sizeof(midictl_methods) / sizeof(midictl_methods[0])) },
-    /* An interface, so it carries no fields and no native bindings; its
-     * super slot names Control so a VideoControl is-a Control for the VM's
-     * subclass walk, exactly as Player's super slot names Controllable. */
-    { NJ_C_VIDEOC, NJ_C_CONTROL,
-      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
-      NULL, 0u, videocontrol_methods,
+    /* A real control now, not the interface stub it used to be: a video
+     * Player's getControl("VideoControl") returns one of these, exactly as
+     * getControl("VolumeControl") does.  Its super slot names Control so a
+     * VideoControl is-a Control for the VM's subclass walk. */
+    { NJ_C_VIDEOC, NJ_C_CONTROL, NJ_ACC_PUBLIC,
+      videoctl_fields,
+      (nj_u2)(sizeof(videoctl_fields) / sizeof(videoctl_fields[0])),
+      videocontrol_methods,
       (nj_u2)(sizeof(videocontrol_methods) / sizeof(videocontrol_methods[0])) },
     NJ_MEDIA_EXC(NJ_C_MEXC, "java/lang/Exception")
     /* A sentinel keeps the array non-empty for tooling that assumes arrays
@@ -4159,6 +4639,19 @@ const nj_native_entry nj_lib_media_table[] = {
     { NJ_C_VOLUME, "getLevel", "()I", vol_getLevel },
     { NJ_C_VOLUME, "setMute",  "(Z)V", vol_setMute },
     { NJ_C_VOLUME, "isMuted",  "()Z", vol_isMuted },
+    { NJ_C_VIDEOC, "initDisplayMode",
+      "(ILjava/lang/Object;)Ljava/lang/Object;", videoctl_initDisplayMode },
+    { NJ_C_VIDEOC, "setDisplaySize",       "(II)V", videoctl_setDisplaySize },
+    { NJ_C_VIDEOC, "setDisplayFullScreen", "(Z)V",  videoctl_setDisplayFullScreen },
+    { NJ_C_VIDEOC, "setDisplayLocation",   "(II)V", videoctl_setDisplayLocation },
+    { NJ_C_VIDEOC, "setVisible",           "(Z)V",  videoctl_setVisible },
+    { NJ_C_VIDEOC, "getDisplayWidth",      "()I",   videoctl_getDisplayWidth },
+    { NJ_C_VIDEOC, "getDisplayHeight",     "()I",   videoctl_getDisplayHeight },
+    { NJ_C_VIDEOC, "getSourceWidth",       "()I",   videoctl_getSourceWidth },
+    { NJ_C_VIDEOC, "getSourceHeight",      "()I",   videoctl_getSourceHeight },
+    { NJ_C_VIDEOC, "getSnapshot",
+      "(Ljava/lang/String;)Ljava/lang/Object;", videoctl_getSnapshot },
+
     { NJ_C_MIDICTL, "setChannelVolume",     "(II)V", midi_setChannelVolume },
     { NJ_C_MIDICTL, "getChannelVolume",     "(I)I",  midi_getChannelVolume },
     { NJ_C_MIDICTL, "setProgram",           "(III)V", midi_setProgram },

@@ -166,7 +166,7 @@ static const nj_device_prop runtime_props[] = {
     { "supports.recording",         "false" },
     { "audio.encodings",            "audio/x-wav audio/amr audio/mp3 audio/midi" },
     { "video.encodings",            "video/3gpp" },
-    { "video.snapshot.encodings",   "" },
+    { "video.snapshot.encodings",   "RGB888" },
     { "streamable.contents",        "" },
 };
 
