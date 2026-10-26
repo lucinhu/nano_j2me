@@ -355,20 +355,10 @@ static int parse_vop_bits_trash(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 ti
     if (!m4v_marker(&s)) {
         return 0;
     }
-    if (type == 1) {
-        /* P-VOP: time_incr unary ones terminated by a zero. */
-        if (!m4v_bit(&s, &bit)) {
-            return 0;
-        }
-        while (bit != 0) {
-            if (!m4v_bit(&s, &bit)) {
-                return 0;
-            }
-        }
-        if (!m4v_marker(&s)) {
-            return 0;
-        }
-    }
+    /* No extra field here for a P-VOP: 7.5 VOP syntax is the unary
+     * modulo_time_base, a marker, the time increment and a marker for every
+     * picture type.  We used to read a second unary run plus marker for
+     * P-VOPs, which ate the vop_time_increment and failed the marker check. */
     if (!m4v_bits_get(&s, (int)(m4v_log2(time_res - 1u) + 1u), &tv)) {
         return 0;
     }
@@ -384,6 +374,13 @@ static int parse_vop_bits_trash(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 ti
             return 0;
         }
         s.pos += (nj_u4)cplx_i;   /* complexity-estimation body of an I-VOP */
+    }
+    if (coded && type == 1) {
+        /* P-VOPs carry one rounding-type bit right after vop_coded, before
+         * the shape fields (7.5: rounding_type). */
+        if (!m4v_bit(&s, &bit)) {
+            return 0;
+        }
     }
     if (coded) {
         /* change_CR_disable and constant_alpha exist only for non-rectangular
@@ -406,13 +403,13 @@ static int parse_vop_bits_trash(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 ti
             return 0;
         }
         thr = (int)v;
-        if (type == 1 && !m4v_bits_get(&s, 3, &v)) {
-            return 0;           /* vop_fcode_forward */
-        }
         if (!m4v_bits_get(&s, 5, &v)) {
             return 0;
         }
         qscale = (int)v;
+        if (type == 1 && !m4v_bits_get(&s, 3, &v)) {
+            return 0;           /* vop_fcode_forward follows the quantiser */
+        }
         if (qscale < 1) {
             return 0;
         }
