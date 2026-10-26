@@ -3303,6 +3303,95 @@ static void test_skinned_mesh(nj_vm *vm)
                       "and reuses the same pose array instead of a new one");
             }
         }
+        /*
+         * duplicate() is not the generic shallow copy for this class: JSR 184
+         * gives the copy its own skeleton and remaps every bone record onto
+         * it, while the vertex buffer and index buffers stay shared.  Before
+         * this fix the copy pointed at the source skeleton, so posing either
+         * one moved the other - the user-visible form of "does not copy the
+         * bones".
+         */
+        {
+            nj_ref copy, skel2 = 0, bone2 = 0;
+            nj_ref idx = nj_array_new(vm, "I", 8);
+            nj_ref wts = nj_array_new(vm, "F", 8);
+
+            r.r = 0;
+            call(vm, skin, CLS("Object3D"), "duplicate",
+                 "()L" CLS("Object3D") ";", NULL, &r);
+            copy = r.r;
+            check(copy != 0 && copy != skin,
+                  "duplicate() creates a distinct SkinnedMesh");
+            if (copy) {
+                nj_ref vb2 = nj_call_ref(vm, copy, CLS("SkinnedMesh"),
+                                         "getVertexBuffer",
+                                         "()L" CLS("VertexBuffer") ";", NULL);
+
+                check(vb2 == vb, "the duplicate shares the vertex buffer");
+                skel2 = nj_call_ref(vm, copy, CLS("SkinnedMesh"),
+                                    "getSkeleton", "()L" CLS("Group") ";",
+                                    NULL);
+                check(skel2 != 0 && skel2 != skel,
+                      "its skeleton is a copy, not the source's");
+                if (skel2) {
+                    r.i = -1;
+                    call(vm, skel2, CLS("Group"), "getChildCount", "()I", NULL,
+                         &r);
+                    if (r.i == 1) {
+                        a[0].i = 0;
+                        bone2 = nj_call_ref(vm, skel2, CLS("Group"), "getChild",
+                                            "(I)L" CLS("Node") ";", a);
+                    }
+                    check(bone2 != 0 && bone2 != bone,
+                          "and the copied skeleton owns a copied bone");
+                }
+                if (bone2 && idx && wts) {
+                    a[0].r = bone2; a[1].r = idx; a[2].r = wts;
+                    r.i = -1;
+                    call(vm, copy, CLS("SkinnedMesh"), "getBoneVertices",
+                         "(L" CLS("Node") ";[I[F)I", a, &r);
+                    check(r.i == 4,
+                          "the bone record is remapped onto the copied bone");
+                }
+                /*
+                 * Independence, at the pixel level: moving the SOURCE bone
+                 * must not change the duplicate's frame, and moving the
+                 * COPY's own bone must.
+                 */
+                if (bone2) {
+                    nj_ref world2 = make(vm, CLS("World"));
+                    nj_ref target2, targetg2, pixels2;
+                    float mean_c = 0.0f, mean_d = 0.0f, mean_e = 0.0f;
+                    int lit_c, lit_d, lit_e;
+
+                    if (world2 && skin_render_prepare(vm, g3d, &target2,
+                                                      &targetg2, &pixels2)) {
+                        a[0].r = copy;
+                        call(vm, world2, CLS("Group"), "addChild",
+                             "(L" CLS("Node") ";)V", a, NULL);
+                        lit_c = skin_render(vm, g3d, world2, bg, cam, cam_xf,
+                                            targetg2, pixels2, &mean_c);
+                        a[0].f = -30.0f; a[1].f = 0.0f; a[2].f = 0.0f;
+                        call(vm, bone, CLS("Node"), "setTranslation", "(FFF)V",
+                             a, NULL);
+                        lit_d = skin_render(vm, g3d, world2, bg, cam, cam_xf,
+                                            targetg2, pixels2, &mean_d);
+                        check(lit_c > 1000 && lit_d == lit_c &&
+                              fabsf(mean_d - mean_c) < 1e-3f,
+                              "moving the source bone leaves the duplicate's pose alone");
+                        /* The duplicate was made while the source bone sat at
+                           30, so move the copy's bone further: 60. */
+                        a[0].f = 60.0f; a[1].f = 0.0f; a[2].f = 0.0f;
+                        call(vm, bone2, CLS("Node"), "setTranslation", "(FFF)V",
+                             a, NULL);
+                        lit_e = skin_render(vm, g3d, world2, bg, cam, cam_xf,
+                                            targetg2, pixels2, &mean_e);
+                        check(lit_e > 1000 && mean_e > mean_c + 20.0f,
+                              "moving the duplicate's own bone moves its pose");
+                    }
+                }
+            }
+        }
     }
     {
         nj_ref g3d = make(vm, CLS("Graphics3D"));

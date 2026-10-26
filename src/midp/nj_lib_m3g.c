@@ -2167,6 +2167,87 @@ NJFN(m3g_find)
     return NJ_OK;
 }
 
+/*
+ * The node in `dst_root` that sits at the same place in the tree as
+ * `src_node` sits in `src_root`.  This is the rule JSR 184 gives for
+ * SkinnedMesh.duplicate(): the copy gets its own skeleton, and every bone
+ * record is remapped by walking the same child indices down the copied tree.
+ * Returns 0 when the bone is not in the source skeleton (nothing to map to) or
+ * when either tree does not have the expected Group at that position.
+ */
+static nj_ref m3g_matching_node(nj_vm *vm, nj_ref src_root, nj_ref src_node,
+                                nj_ref dst_root)
+{
+    nj_s4 idx[64];
+    int depth = 0;
+    nj_ref n = src_node;
+    nj_field *parent_field;
+    nj_field *skel_field;
+
+    if (src_node == src_root) {
+        return dst_root;
+    }
+    parent_field = nj_field_lookup(vm, NJ_C_NODE, "_nj_parent",
+                                   "L" NJ_C_NODE ";", 0);
+    skel_field = nj_field_lookup(vm, NJ_C_GROUP, "_nj_kids",
+                                 "L" NJ_C_VECTOR ";", 0);
+    if (!parent_field || !skel_field) {
+        return 0;
+    }
+    while (n && n != src_root && depth < 64) {
+        nj_ref parent = nj_rget(vm, n, parent_field);
+        nj_ref kids;
+        nj_value cnt;
+        nj_s4 found = -1, i;
+
+        if (!parent) {
+            return 0;
+        }
+        kids = nj_rget(vm, parent, skel_field);
+        if (!kids) {
+            return 0;
+        }
+        if (nj_call(vm, kids, NJ_C_VECTOR, "size", "()I", NULL, &cnt) != NJ_OK ||
+            cnt.i > 65536) {
+            (void)nj_take_exception(vm);
+            return 0;
+        }
+        for (i = 0; i < cnt.i; i++) {
+            nj_value a[1], item;
+
+            a[0].i = i;
+            if (nj_call(vm, kids, NJ_C_VECTOR, "elementAt",
+                        "(I)Ljava/lang/Object;", a, &item) == NJ_OK &&
+                item.r == n) {
+                found = i;
+                break;
+            }
+        }
+        if (found < 0) {
+            return 0;
+        }
+        idx[depth++] = found;
+        n = parent;
+    }
+    if (n != src_root) {
+        return 0;
+    }
+    n = dst_root;
+    while (depth > 0) {
+        nj_value a[1], e;
+
+        --depth;
+        a[0].i = idx[depth];
+        if (nj_call(vm, n, NJ_C_GROUP, "getChild", "(I)L" NJ_C_NODE ";",
+                    a, &e) != NJ_OK || !e.r) {
+            (void)nj_take_exception(vm);
+            return 0;
+        }
+        n = e.r;
+    }
+    return n;
+}
+
 /* Duplicate instance state, retaining referenced M3G resources while giving
  * internal arrays and slot vectors their own storage.  Node copies are detached
  * from the source parent; a Group's descendants are duplicated below. */
@@ -2217,6 +2298,68 @@ static nj_ref m3g_copy_object(nj_vm *vm, nj_ref self, unsigned depth)
                     }
                     a[0].r = item.r;
                     if (nj_call(vm, dst, NJ_C_VECTOR, "addElement", "(Ljava/lang/Object;)V", a, NULL) != NJ_OK) { return 0; }
+                }
+            }
+        }
+    }
+    /*
+     * SkinnedMesh is the one class where "references are shared" is not the
+     * whole rule: JSR 184 makes duplicate() give the copy its own skeleton and
+     * remap every bone record onto that copied rig, so posing the duplicate
+     * does not move the original's bones (and vice versa).  Everything else
+     * (vertex buffer, index buffers, appearances) stays shared, as the generic
+     * copy above left it.  The at-rest transforms captured by addTransform()
+     * stay as they are: they are mesh-to-bone transforms and the copied
+     * skeleton has the same geometry.
+     */
+    if (strcmp(self->cls->name, NJ_C_SKIN) == 0) {
+        nj_field *skf = nj_field_lookup(vm, NJ_C_SKIN, "_nj_skeleton",
+                                        "L" NJ_C_GROUP ";", 0);
+        nj_ref src_skel = skf ? nj_rget(vm, self, skf) : 0;
+
+        /* The copy must pose itself, never inherit the source's cached pose. */
+        {
+            nj_field *pf = nj_field_lookup(vm, NJ_C_SKIN, "_nj_pose", "[F", 0);
+            nj_field *nf = nj_field_lookup(vm, NJ_C_SKIN, "_nj_pose_nv", "I", 0);
+
+            if (pf) { nj_rput(vm, copy, pf, 0); }
+            if (nf) { nj_iput(vm, copy, nf, 0); }
+        }
+        if (src_skel && skf) {
+            nj_ref copy_skel = m3g_copy_object(vm, src_skel, depth + 1u);
+            nj_field *bf, *cf;
+            nj_ref sb, cb;
+
+            if (!copy_skel) {
+                return 0;
+            }
+            nj_rput(vm, copy, skf, copy_skel);
+            nj_rput(vm, copy_skel,
+                    nj_field_lookup(vm, NJ_C_NODE, "_nj_parent",
+                                    "L" NJ_C_NODE ";", 0), copy);
+            bf = nj_field_lookup(vm, NJ_C_SKIN, "_nj_bones",
+                                 "[L" NJ_C_NODE ";", 0);
+            cf = nj_field_lookup(vm, NJ_C_SKIN, "_nj_skin_count", "[I", 0);
+            sb = bf ? nj_rget(vm, self, bf) : 0;
+            cb = bf ? nj_rget(vm, copy, bf) : 0;
+            if (sb && cb && nj_array_length(sb) == nj_array_length(cb)) {
+                nj_u4 i, nb = nj_array_length(sb);
+
+                for (i = 0u; i < nb; i++) {
+                    nj_ref bone = nj_array_get_ref(sb, i);
+                    nj_ref mapped = bone
+                        ? m3g_matching_node(vm, src_skel, bone, copy_skel) : 0;
+
+                    nj_array_set_ref(cb, i, mapped);
+                    if (!mapped && cf) {
+                        /* A bone outside the skeleton cannot be mapped; drop
+                           its vertex range so it contributes nothing. */
+                        nj_ref cc = nj_rget(vm, copy, cf);
+
+                        if (cc && i < nj_array_length(cc)) {
+                            ((nj_s4 *)nj_array_data(cc))[i] = 0;
+                        }
+                    }
                 }
             }
         }
