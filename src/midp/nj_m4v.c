@@ -355,20 +355,10 @@ static int parse_vop_bits_trash(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 ti
     if (!m4v_marker(&s)) {
         return 0;
     }
-    if (type == 1) {
-        /* P-VOP: time_incr unary ones terminated by a zero. */
-        if (!m4v_bit(&s, &bit)) {
-            return 0;
-        }
-        while (bit != 0) {
-            if (!m4v_bit(&s, &bit)) {
-                return 0;
-            }
-        }
-        if (!m4v_marker(&s)) {
-            return 0;
-        }
-    }
+    /* No extra field here for a P-VOP: 7.5 VOP syntax is the unary
+     * modulo_time_base, a marker, the time increment and a marker for every
+     * picture type.  We used to read a second unary run plus marker for
+     * P-VOPs, which ate the vop_time_increment and failed the marker check. */
     if (!m4v_bits_get(&s, (int)(m4v_log2(time_res - 1u) + 1u), &tv)) {
         return 0;
     }
@@ -384,6 +374,13 @@ static int parse_vop_bits_trash(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 ti
             return 0;
         }
         s.pos += (nj_u4)cplx_i;   /* complexity-estimation body of an I-VOP */
+    }
+    if (coded && type == 1) {
+        /* P-VOPs carry one rounding-type bit right after vop_coded, before
+         * the shape fields (7.5: rounding_type). */
+        if (!m4v_bit(&s, &bit)) {
+            return 0;
+        }
     }
     if (coded) {
         /* change_CR_disable and constant_alpha exist only for non-rectangular
@@ -406,13 +403,13 @@ static int parse_vop_bits_trash(const nj_u1 *b, nj_u4 n, nj_u4 *bitpos, nj_u4 ti
             return 0;
         }
         thr = (int)v;
-        if (type == 1 && !m4v_bits_get(&s, 3, &v)) {
-            return 0;           /* vop_fcode_forward */
-        }
         if (!m4v_bits_get(&s, 5, &v)) {
             return 0;
         }
         qscale = (int)v;
+        if (type == 1 && !m4v_bits_get(&s, 3, &v)) {
+            return 0;           /* vop_fcode_forward follows the quantiser */
+        }
         if (qscale < 1) {
             return 0;
         }
@@ -1470,6 +1467,9 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
         *pos += 2u;
     }
     }
+    /* Per block: its DC, then its AC.  That is the order the bit stream
+     * uses (7.4.3.5), and a block's DC predictor may depend on blocks of
+     * the same macroblock, so the two cannot be split into two passes. */
     if (getenv("NJ_M4VMB")) fprintf(stderr, "MB pos=%u cbpc=%d cbp=0x%02x\n", (unsigned)*pos, cbpc, (unsigned)cbp);
     for (blk = 0; blk < 6; blk++) {
         nj_s2 *grid = (blk < 4) ? dc_y : (blk == 4 ? dc_c : (dc_c2 != NULL ? dc_c2 : dc_c));
@@ -1526,17 +1526,6 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
                                    NJ_M4V_DC_GREY);
         (void)dir;
         (void)scale;
-    }
-    if (getenv("NJ_M4V_ORD") != NULL) {
-        int acp = 0;
-        if (m4v_read_cbp(b, n, pos, cbpc, dq, &cbp, &acp) != 0) {
-            return -1;
-        }
-        (void)acp;
-    }
-    /* All six DC coefficients come first, then the AC coefficients of the
-     * coded blocks - that is the macroblock layer's order (7.4.3.5). */
-    for (blk = 0; blk < 6; blk++) {
         int coded = nj_m4v_cbp_has_ac(cbp, blk), arc;
 
         if (getenv("NJ_M4V_ACINV") != NULL) {

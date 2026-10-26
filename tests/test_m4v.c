@@ -117,6 +117,23 @@ int main(void)
         ok(vop.coded == 1, "the frame is coded, not skipped");
     }
     {
+        /* First P-VOP of 1942.3gp: vop_coded is followed by the one rounding
+         * bit a P-VOP carries, and vop_fcode_forward comes after the
+         * quantiser, not before it. */
+        static const nj_u1 vop_p[] = {
+            0x00, 0x00, 0x01, 0xb6, 0x50, 0xa3, 0x82, 0x1f, 0xfe, 0xb7
+        };
+        nj_m4v_vop vop;
+        nj_u4 end = 32u;
+
+        ok(nj_m4v_parse_vop_bits(vop_p, (nj_u4)sizeof(vop_p), &end, 1000u, &vop) == 1,
+           "the P-VOP header of the 1942 clip parses");
+        ok(vop.type == 1, "and it really is a P-VOP");
+        ok(end == 60u, "its header ends at bit 60 once rounding and fcode are read in the right place");
+        ok(vop.qscale == 4u, "with quantiser 4, not the 16 a misread header produced");
+        ok(vop.dc_vlc_thr == 0u, "and an intra_dc_vlc_thr of 0");
+    }
+    {
         /* doom.3gp opens with a group of VOPs; the VOP follows it. */
         static const nj_u1 gop[] = {
             0x00, 0x00, 0x01, 0xb3, 0x00, 0x10, 0x07, 0x00, 0x00, 0x01, 0xb6, 0x10,
