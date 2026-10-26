@@ -1,0 +1,159 @@
+{
+ "what": "Texture2D general (4x4) transforms in the collected corpus",
+ "how": "python3 tools/check_m3g_texture_transforms.py --json docs/m3g-texture-transform-results.json tests/games",
+ "m3g_files": 975,
+ "texture_objects": 1585,
+ "general_transform_objects": 5,
+ "objects": [
+  {
+   "jar": "CS反恐精英(蓝牙对战)_6858.jar",
+   "entry": "res/map/construction/construction.m3g",
+   "matrix": [
+    [
+     15.0,
+     0.0,
+     0.0,
+     -7.0
+    ],
+    [
+     0.0,
+     15.0,
+     0.0,
+     -7.0
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  {
+   "jar": "CS反恐精英(蓝牙对战)_6858.jar",
+   "entry": "res/map/depository/depository.m3g",
+   "matrix": [
+    [
+     2.0,
+     0.0,
+     0.0,
+     -0.5
+    ],
+    [
+     0.0,
+     2.0,
+     0.0,
+     -0.5
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  {
+   "jar": "CS反恐精英(蓝牙对战)_6858.jar",
+   "entry": "res/map/military/military.m3g",
+   "matrix": [
+    [
+     18.0,
+     0.0,
+     0.0,
+     -8.5
+    ],
+    [
+     0.0,
+     18.0,
+     0.0,
+     -8.5
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  {
+   "jar": "CS反恐精英(蓝牙对战)_6858.jar",
+   "entry": "res/map/military/military.m3g",
+   "matrix": [
+    [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    [
+     0.0,
+     4.0,
+     0.0,
+     -1.5
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  },
+  {
+   "jar": "CS反恐精英(蓝牙对战)_6858.jar",
+   "entry": "res/map/military/military.m3g",
+   "matrix": [
+    [
+     2.0,
+     0.0,
+     0.0,
+     -0.5
+    ],
+    [
+     0.0,
+     2.0,
+     0.0,
+     -0.5
+    ],
+    [
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ]
+  }
+ ]
+}

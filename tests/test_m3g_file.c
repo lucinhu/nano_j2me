@@ -278,6 +278,51 @@ static void texture_fields(void)
                "an untransformed Texture2D claims no component-transform bytes");
         }
     }
+    /*
+     * The general (4x4) transform: no component transform, the general flag,
+     * a row-major 4x4, then the sampler.  Five Counter-Strike map textures are
+     * the only objects in the corpus that take this path, and all five are
+     * eighteen-plus-seventy-two bytes of this exact shape; the matrix below is
+     * the 15x/-7 translation one from construction.m3g.
+     */
+    {
+        nj_u4 size = object(0, 17u, 90u, 0u);
+        int payload = 5, base = payload + 14;      /* matrix follows two flags */
+        int sampler = payload + 78;
+        nj_m3g_fields f;
+
+        buf[payload + 12] = 0u;                    /* no component transform */
+        buf[payload + 13] = 1u;                    /* general transform follows */
+        put32le(0x41700000u, base);                /*  15 */
+        put32le(0xc0e00000u, base + 12);           /* -7 in the translation */
+        put32le(0x41700000u, base + 20);           /*  15 */
+        put32le(0xc0e00000u, base + 28);           /*  -7 */
+        put32le(0x3f800000u, base + 40);           /*   1 */
+        put32le(0x3f800000u, base + 60);           /*   1 */
+        put32le(0x0a0b0c0du, sampler);             /* image index */
+        buf[sampler + 4] = 0x11u; buf[sampler + 5] = 0x22u;
+        buf[sampler + 6] = 0x33u;
+        buf[sampler + 7] = 224u;                   /* FUNC_MODULATE */
+        buf[sampler + 8] = 240u;                   /* WRAP_CLAMP */
+        buf[sampler + 9] = 241u;                   /* WRAP_REPEAT */
+        buf[sampler + 10] = 208u;                  /* FILTER_BASE_LEVEL */
+        buf[sampler + 11] = 210u;                  /* FILTER_LINEAR */
+
+        ok(nj_m3g_decode_object(buf + payload, size - 5u, 17u, &f, err,
+                                sizeof(err)) == NJ_OK && f.decoded == 1u,
+           "a 90-byte general-transform Texture2D decodes");
+        ok(f.data == buf + base && f.data_len == 64u,
+           "and exposes exactly its sixty-four matrix bytes");
+        if (f.data && f.data_len == 64u) {
+            ok(le32_at(f.data) == 0x41700000u &&
+               le32_at(f.data + 12) == 0xc0e00000u &&
+               le32_at(f.data + 20) == 0x41700000u &&
+               le32_at(f.data + 28) == 0xc0e00000u,
+               "the 15x scale and -7 translation of the CS construction map survive");
+        }
+        ok(f.refs[0] == 0x0a0b0c0du && f.a == 0xff112233u && f.c == 210u,
+           "the sampler after the matrix decodes too");
+    }
 }
 
 /* The scanner frees its inflated scratch buffer before returning.  Assert

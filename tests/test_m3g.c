@@ -1529,6 +1529,121 @@ static void test_textured_span_variants(nj_vm *vm)
 }
 
 /*
+ * A Texture2D is a Transformable: its matrix maps the vertex texture
+ * coordinates before the sampler reads them.  Five Counter-Strike map textures
+ * author a general 4x4 (15x, 2x, 18x, diag(1,4) and 2x with -0.5 translation,
+ * measured from the corpus), so this is not a speculative path - but until now
+ * nothing checked that the matrix changes a rendered pixel, only that the
+ * renderer reads the field.
+ *
+ * The target is the standard textured quad, a 4x1 texture with four distinct
+ * colours, and WRAP_CLAMP + NEAREST sampling.  Across the 240-pixel canvas the
+ * raw s coordinate runs 0..1, so columns are [0,60) red, [60,120) green,
+ * [120,180) blue and [180,240) yellow.  A scale of 0.5 makes s run 0..0.5 (so
+ * the whole quad shows the left half of the texture), and a translate of +0.5
+ * makes it run 0.5..1.5 (clamped, so the right half and the last column show).
+ * The colours are chosen to survive RGB565 losslessly.
+ */
+static void test_texture_transform_matrix(nj_vm *vm)
+{
+    i2d_canvas c;
+    nj_ref img = 0, tex = 0, xf = 0, src;
+    nj_value a[6];
+    int hit_a = 0, hit_b = 0;
+
+    printf("== a Texture2D's transform matrix moves the sampled texels ==\n");
+    check(i2d_canvas_init(vm, &c), "the textured quad for the texture matrix");
+    img = i2d_new3(vm, 100, 4, 1, &hit_a);
+    src = nj_byte_array_new(vm, 16u);
+    if (img && src) {
+        static const nj_u1 four[16] = {
+            255,   0,   0, 255,     /* red    */
+              0, 255,   0, 255,     /* green  */
+              0,   0, 255, 255,     /* blue   */
+            255, 255,   0, 255      /* yellow */
+        };
+
+        memcpy(nj_array_data(src), four, sizeof four);
+        hit_a = hit_a && i2d_set_ok(vm, img, 0, 0, 4, 1, src);
+    }
+    tex = nj_object_new(vm, CLS("Texture2D"));
+    xf = make(vm, CLS("Transform"));
+    check(img && tex && xf && hit_a, "a 4x1 colour strip and its Texture2D");
+    if (!(img && tex && xf && hit_a)) {
+        return;
+    }
+    a[0].r = img;
+    hit_a = nj_call_special(vm, tex, CLS("Texture2D"), "<init>",
+                            "(L" CLS("Image2D") ";)V", a, NULL) == NJ_OK;
+    a[0].i = 228;                                     /* REPLACE */
+    hit_a = hit_a && nj_call(vm, tex, CLS("Texture2D"), "setBlending",
+                             "(I)V", a, NULL) == NJ_OK;
+    a[0].i = 240; a[1].i = 240;                       /* WRAP_CLAMP */
+    hit_a = hit_a && nj_call(vm, tex, CLS("Texture2D"), "setWrapping",
+                             "(II)V", a, NULL) == NJ_OK;
+    a[0].i = 208; a[1].i = 208;               /* BASE_LEVEL, NEAREST */
+    hit_a = hit_a && nj_call(vm, tex, CLS("Texture2D"), "setFiltering",
+                             "(II)V", a, NULL) == NJ_OK;
+    check(hit_a, "the texture takes its sampling settings");
+    call(vm, xf, CLS("Transform"), "setIdentity", "()V", NULL, NULL);
+
+#define TEX_APPLY()                                                        \
+    do {                                                                   \
+        a[0].r = xf;                                                       \
+        call(vm, tex, CLS("Transformable"), "setTransform",                \
+             "(L" CLS("Transform") ";)V", a, NULL);                        \
+        a[0].r = c.bg;                                                     \
+        call(vm, c.g3d, CLS("Graphics3D"), "clear",                        \
+             "(L" CLS("Background") ";)V", a, NULL);                       \
+        a[0].i = 0; a[1].r = tex;                                          \
+        call(vm, c.app, CLS("Appearance"), "setTexture", "(IL" CLS("Texture2D") \
+             ";)V", a, NULL);                                              \
+        a[0].r = c.vb; a[1].r = c.ib; a[2].r = c.app; a[3].r = 0; a[4].i = 0; \
+        call(vm, c.g3d, CLS("Graphics3D"), "render",                       \
+             "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"         \
+             CLS("Appearance") ";L" CLS("Transform") ";I)V", a, NULL);     \
+    } while (0)
+
+    TEX_APPLY();
+    check(i2d_canvas_pixel(&c, 90, 160) == 0x00FF00u &&
+          i2d_canvas_pixel(&c, 210, 160) == 0xFFFF00u,
+          "with an identity matrix the quad samples all four texels in order");
+
+    /* s' = 0.5 * s: the whole quad now samples the left half of the strip. */
+    call(vm, xf, CLS("Transform"), "setIdentity", "()V", NULL, NULL);
+    a[0].f = 0.5f; a[1].f = 1.0f; a[2].f = 1.0f;
+    call(vm, xf, CLS("Transform"), "postScale", "(FFF)V", a, NULL);
+    TEX_APPLY();
+    check(i2d_canvas_pixel(&c, 30, 160) == 0xFF0000u &&
+          i2d_canvas_pixel(&c, 150, 160) == 0x00FF00u &&
+          i2d_canvas_pixel(&c, 210, 160) == 0x00FF00u,
+          "a half scale makes the whole quad sample the left half of the texture");
+
+    /* s' = s + 0.5: clamped, so the right half samples the last column. */
+    call(vm, xf, CLS("Transform"), "setIdentity", "()V", NULL, NULL);
+    a[0].f = 0.5f; a[1].f = 0.0f; a[2].f = 0.0f;
+    call(vm, xf, CLS("Transform"), "postTranslate", "(FFF)V", a, NULL);
+    TEX_APPLY();
+    check(i2d_canvas_pixel(&c, 30, 160) == 0x0000FFu &&
+          i2d_canvas_pixel(&c, 90, 160) == 0xFFFF00u &&
+          i2d_canvas_pixel(&c, 210, 160) == 0xFFFF00u,
+          "a translate moves the sampled window; clamp repeats the last texel");
+
+    /* Back to identity: the matrix is what changed the pixels, not the binding. */
+    call(vm, xf, CLS("Transform"), "setIdentity", "()V", NULL, NULL);
+    TEX_APPLY();
+    check(i2d_canvas_pixel(&c, 90, 160) == 0x00FF00u &&
+          i2d_canvas_pixel(&c, 210, 160) == 0xFFFF00u,
+          "resetting the matrix restores the original sampling");
+#undef TEX_APPLY
+    /* This test's canvas and image are garbage now, and they are big.  The
+       following skinning test keeps its render targets in plain C locals the
+       collector cannot see, so it must not be the allocation that triggers a
+       collection; free this test's bytes here. */
+    nj_gc_collect(vm);
+}
+
+/*
  * SkinnedMesh.addTransform used to fill a fixed 64-slot Object[] and throw
  * IndexOutOfBoundsException on the 65th entry.  A real title
  * (3D激爆拳击_8805) builds rigs of several hundred links at load time; the
@@ -6500,6 +6615,7 @@ int main(void)
 
     test_image2d_set(vm);
     test_textured_span_variants(vm);
+    test_texture_transform_matrix(vm);
     test_spot_light_cone(vm);
     test_spec_methods(vm);
     test_keyframe_sampling(vm);
