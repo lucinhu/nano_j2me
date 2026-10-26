@@ -100,6 +100,12 @@ typedef struct nj_mp4 {
     nj_u4        stss_at;        /* 0 when not present (every sample sync)  */
     nj_u4        stss_count;
 
+    /* 'esds' DecoderSpecificInfo (the MPEG-4 video VOL / H.263 picture config
+     * bytes): absolute offset in the caller's buffer and its length.  Zero
+     * length means the file carried no decoder config. */
+    nj_u4        cfg_at;
+    nj_u4        cfg_size;
+
     /* 'mdat' payload ranges, [at, end). */
     nj_u4        mdat_at[NJ_MP4_MDAT_MAX];
     nj_u4        mdat_end[NJ_MP4_MDAT_MAX];
@@ -131,6 +137,16 @@ typedef struct nj_mp4 {
  * refused.  On failure the iterator contents are unspecified.
  */
 int nj_mp4_open(nj_mp4 *mp4, const void *data, nj_u4 size);
+
+/*
+ * Find the DecoderSpecificInfo payload (tag 0x04) inside an 'esds' box body:
+ * `at' is the first byte of the box body (after the 8-byte box header) and
+ * `end' the byte after it.  Returns 1 and fills *cfg_at / *cfg_size with the
+ * payload location, or 0 when the box holds no decoder config.  Exposed so the
+ * decoder-specific descriptors can be unit tested without a whole movie.
+ */
+int nj_mp4_esds_find(const nj_u1 *b, nj_u4 at, nj_u4 end,
+                     nj_u4 *cfg_at, nj_u4 *cfg_size);
 
 /* Reset the walk to the first sample. */
 void nj_mp4_rewind(nj_mp4 *mp4);

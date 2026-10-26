@@ -732,3 +732,34 @@ tolerance and no perceptual metrics.
 
 Compile it with libavformat/libavcodec/libavutil/libswscale; it is not part of
 the test suite because those libraries are not build dependencies.
+
+### The decoder configuration now comes out of the container (round 121)
+
+The VOL that the MPEG-4 video decoder needs is not part of the sample: it lives
+in the `esds` box of the sample description, inside a nest of MPEG-4 systems
+descriptors (`ES_Descriptor` → `DecoderConfigDescriptor` →
+`DecoderSpecificInfo`).  `nj_mp4_open()` now walks that nest and reports the
+config as `cfg_at` / `cfg_size` (absolute offset in the caller's buffer, no
+allocation, no copy), so a provider can do
+
+    nj_mp4_parse_vol(file + mp4.cfg_at, mp4.cfg_size, ...) -> VOL
+
+instead of hunting for a start code in the first sample.  Descriptor lengths use
+the expandable seven-bit encoding and every one of them is bounds checked
+against the enclosing box, so a truncated `esds` ends the walk instead of
+reading outside the file.
+
+The walk itself is `nj_mp4_esds_find()`, exposed in `nj_mp4.h` and unit tested
+in `tests/test_h263.c` on a hand-built descriptor nest (found, exact length,
+exact payload, truncated nest refused, nest without a config reported as none).
+Against the two corpus movies it reports the real configurations:
+
+| Clip | Sample entry | Config | VOL |
+| --- | --- | --- | --- |
+| `1942.3gp` (vault) | `mp4v` | 47 bytes at 1641 | 176x144, time_res 1000, 25 fps |
+| `doom.3gp` (vid) | `mp4v` | 63 bytes at 221276 | 320x240, time_res 15, 15 fps |
+
+Both configurations have complexity estimation disabled, which matters for the
+still-open alignment bug: the VOP header then carries **no** complexity bits, so
+the eight bits that the header is short by come from somewhere else and the
+"complexity estimation" hypothesis for it is now ruled out with evidence.

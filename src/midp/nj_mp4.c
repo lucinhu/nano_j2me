@@ -136,11 +136,100 @@ typedef struct nj_mp4_cand {
     int   stco64;
     nj_u4 stts_at, stts_count;
     nj_u4 stss_at, stss_count;
+    nj_u4 cfg_at, cfg_size;   /* esds DecoderSpecificInfo payload           */
 } nj_mp4_cand;
+
+/* Expandable (7-bit, MSB-continuation) descriptor length, as used by the
+ * MPEG-4 systems descriptors inside esds.  Returns the byte count consumed, or
+ * 0 when the encoding runs past `end'. */
+static int nj_mp4_descr_len(const nj_u1 *b, nj_u4 end, nj_u4 *at, nj_u4 *out)
+{
+    nj_u4 v = 0;
+    int   n = 0;
+
+    while (*at < end && n < 4) {
+        nj_u1 c = b[(*at)++];
+        v = (v << 7) | (nj_u4)(c & 0x7fu);
+        n++;
+        if ((c & 0x80u) == 0u) {
+            *out = v;
+            return n;
+        }
+    }
+    return 0;
+}
 
 static void nj_mp4_cand_zero(nj_mp4_cand *c)
 {
     memset(c, 0, sizeof(*c));
+}
+
+/* esds: walk the MPEG-4 systems descriptor hierarchy inside an 'esds' box
+ * body and report the DecoderSpecificInfo (tag 0x04) payload: the MPEG-4 video
+ * VOL or H.263 picture-config bytes, which the decoder needs before its first
+ * frame.  Returns 1 when a config was found.  Every length is bounds checked
+ * against `end', so a truncated descriptor ends the walk instead of escaping
+ * the box. */
+int nj_mp4_esds_find(const nj_u1 *b, nj_u4 at, nj_u4 end,
+                     nj_u4 *cfg_at, nj_u4 *cfg_size)
+{
+    nj_u4 p = at + 4u;          /* skip version/flags */
+
+    if (b == NULL || cfg_at == NULL || cfg_size == NULL || p > end) {
+        return 0;
+    }
+    while (p < end) {
+        nj_u4 tag = b[p++];
+        nj_u4 len = 0;
+        nj_u4 dlen;
+        int   used;
+
+        used = nj_mp4_descr_len(b, end, &p, &len);
+        if (used == 0 || p + len > end) {
+            return 0;
+        }
+        dlen = p + len;
+        if (tag == 0x04u) {
+            *cfg_at = p;
+            *cfg_size = len;
+            return 1;
+        }
+        if (tag == 0x03u) {
+            /* ES_Descriptor: ES_ID(2) + flags(1) [+ dependsOn(2)] [+ url(1+len)]
+             * [+ OCR(2)], then nested descriptors. */
+            nj_u4 sub = p + 3u;
+
+            if (p + 3u > dlen) {
+                return 0;
+            }
+            if ((b[p + 2u] & 0x80u) != 0u) sub += 2u;
+            if ((b[p + 2u] & 0x40u) != 0u) {
+                nj_u4 ulen = 0;
+                sub += 1;
+                if (nj_mp4_descr_len(b, dlen, &sub, &ulen) == 0) {
+                    return 0;
+                }
+                sub += ulen;
+            }
+            if ((b[p + 2u] & 0x20u) != 0u) sub += 2u;
+            if (sub > dlen) {
+                return 0;
+            }
+            p = sub;
+            continue;
+        }
+        if (tag == 0x05u) {
+            /* DecoderConfigDescriptor: objectType(1) streamType(1) buffer(3)
+             * maxBitrate(4) avgBitrate(4). */
+            p += 13u;
+            if (p > dlen) {
+                return 0;
+            }
+            continue;
+        }
+        p = dlen;
+    }
+    return 0;
 }
 
 /* stsd: exactly one visual sample entry.  Its width/height are preferred over
@@ -171,6 +260,31 @@ static int nj_mp4_parse_stsd(nj_mp4_cand *c, const nj_u1 *b, nj_u4 size,
     c->stsd_count = count;
     c->vw = nj_mp4_rd16(b + ebody + 24u);
     c->vh = nj_mp4_rd16(b + ebody + 26u);
+    /* Child boxes of a visual sample entry start after the 78-byte fixed part
+     * (8 header + 70 visual fields); 'esds' carries the decoder config. */
+    {
+        nj_u4 coff = ebody + 78u;
+        nj_u4 cend = eoff + etotal;
+
+        if (cend > size) {
+            return 0;
+        }
+        while (coff + 8u <= cend) {
+            nj_u4 ct, chdr, ctotal, cbody, cblen;
+
+            if (!nj_mp4_box(b, size, coff, cend, &ct, &chdr, &ctotal)) {
+                break;
+            }
+            cbody = coff + chdr;
+            cblen = ctotal - chdr;
+            if (ct == 0x65736473u /* 'esds' */) {
+                (void)nj_mp4_esds_find(b, cbody, cbody + cblen,
+                                       &c->cfg_at, &c->cfg_size);
+                break;
+            }
+            coff += ctotal;
+        }
+    }
     return 1;
 }
 
@@ -481,6 +595,8 @@ static int nj_mp4_select(nj_mp4 *m, const nj_mp4_cand *c)
     m->stts_at = c->stts_at;
     m->stts_count = c->stts_count;
     m->stss_at = c->stss_at;
+    m->cfg_at = c->cfg_at;
+    m->cfg_size = c->cfg_size;
     m->stss_count = c->stss_count;
 
     /* stts runs must cover every sample exactly. */

@@ -865,6 +865,73 @@ static void test_refusals(void)
        "NULL allocator refused");
 }
 
+
+/* The 'esds' decoder config: the MPEG-4 video VOL / H.263 picture header that
+ * the decoder needs before its first frame lives inside a nest of MPEG-4
+ * systems descriptors.  A movie without it decodes nothing, so the walk is
+ * unit tested on a hand-built descriptor nest: objectType 0x20 (MPEG-4
+ * visual), one DecoderSpecificInfo carrying the 1942 VOL. */
+static void test_esds_config(void)
+{
+    static const nj_u1 dsi[] = {
+        0x00, 0x00, 0x01, 0xb0, 0x01, 0x00, 0x00, 0x01, 0x20, 0x00, 0x84, 0x40
+    };
+    nj_u1 box[64];
+    nj_u4 at = 0, cfg_at = 0, cfg_size = 0, i;
+    nj_u4 dsi_at;
+
+    /* version/flags */
+    box[at++] = 0;
+    box[at++] = 0;
+    box[at++] = 0;
+    box[at++] = 0;
+    /* ES_Descriptor tag 0x03: length covers ES_ID(2) + flags(1) + the
+     * DecoderConfigDescriptor, which itself covers 13 fixed bytes + the
+     * DecoderSpecificInfo descriptor. */
+    box[at++] = 0x03;
+    box[at++] = (nj_u1)(3u + 2u + 13u + 2u + sizeof(dsi));
+    box[at++] = 0x00;
+    box[at++] = 0x01;
+    box[at++] = 0x00;
+    /* DecoderConfigDescriptor tag 0x05 */
+    box[at++] = 0x05;
+    box[at++] = (nj_u1)(13u + 2u + sizeof(dsi));
+    at += 13u;
+    /* DecoderSpecificInfo tag 0x04, length, payload */
+    box[at++] = 0x04;
+    box[at++] = (nj_u1)sizeof(dsi);
+    dsi_at = at;
+    for (i = 0; i < (nj_u4)sizeof(dsi); i++) {
+        box[at++] = dsi[i];
+    }
+
+    ok(nj_mp4_esds_find(box, 0u, at, &cfg_at, &cfg_size) == 1,
+       "esds: the decoder config is found");
+    ok(cfg_size == (nj_u4)sizeof(dsi), "esds: its length is the payload length");
+    ok(cfg_at == dsi_at, "esds: and it points at the payload");
+    {
+        nj_u4 z;
+        int   same = 1;
+
+        for (z = 0; z < (nj_u4)sizeof(dsi); z++) {
+            if (box[cfg_at + z] != dsi[z]) {
+                same = 0;
+            }
+        }
+        ok(same, "esds: the payload bytes are the decoder config");
+    }
+
+    /* A truncated nest must be refused, not followed past the box. */
+    ok(nj_mp4_esds_find(box, 0u, 6u, &cfg_at, &cfg_size) == 0,
+       "esds: a truncated descriptor nest is refused");
+
+    /* A nest with no DecoderSpecificInfo is not an error, just no config. */
+    box[6] = 0x03;
+    box[7] = 4u;
+    ok(nj_mp4_esds_find(box, 0u, 12u, &cfg_at, &cfg_size) == 0,
+       "esds: a nest without a config reports none");
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void)
@@ -875,6 +942,7 @@ int main(void)
     test_provider_raw();
     test_provider_mp4();
     test_refusals();
+    test_esds_config();
     printf("%d checks, %d failure%s\n", checks, fails, fails == 1 ? "" : "s");
     return fails == 0 ? 0 : 1;
 }
