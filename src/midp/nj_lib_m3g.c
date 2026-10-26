@@ -9389,7 +9389,16 @@ static const nj_builtin_field skin_fields[] = {
     { "_nj_skin_count",  "[I",             0 },
     { "_nj_skin_w",      "[I",             0 },
     { "_nj_skin_bind",   "[F",             0 },
-    { "_nj_skin_n",      "I",              0 }
+    { "_nj_skin_n",      "I",              0 },
+    /*
+     * The pose the rasteriser reads, cached so that posing is not an
+     * allocation per frame: seven floats per vertex - position xyz, normal
+     * xyz, then the accumulated bone weight.  _nj_pose_nv is how many
+     * vertices the array was sized for, so a replacement VertexBuffer with
+     * more vertices grows it once instead of every frame.
+     */
+    { "_nj_pose",        "[F",             0 },
+    { "_nj_pose_nv",     "I",              0 }
 };
 
 static const nj_builtin_method skin_methods[] = {
@@ -13050,23 +13059,45 @@ static int m3g_skin_pose(nj_vm *vm, nj_ref mesh, float **pos_out,
             }
         }
     }
-    pp = (float *)nj_host_alloc(vm,
-                                (nj_size)nverts * 3u * sizeof(float));
-    if (!pp) {
-        return 0;
+    /*
+     * The pose buffers are cached on the mesh, not allocated per frame.
+     *
+     * A SkinnedMesh is posed on every rendered frame, and a title can have
+     * dozens of them with thousands of vertices each (杀戮机器 has 38), so
+     * allocating position, normal and weight arrays per frame churned
+     * megabytes per second through the host allocator.  One float array of
+     * seven values per vertex holds all three (xyz, xyz, weight); the mesh
+     * keeps it in _nj_pose and grows it only if a later frame has more
+     * vertices.  It lives as long as the mesh, so a scene's skinned memory is
+     * bounded by its skeletons' vertex counts.
+     */
+    {
+        nj_ref pose = nj_rget(vm, mesh, m3g_fof(vm, NJ_C_SKIN,
+                                                 "_nj_pose", "[F"));
+        nj_s4 have = nj_iget(vm, mesh, m3g_fof(vm, NJ_C_SKIN,
+                                               "_nj_pose_nv", "I"));
+        nj_s4 need = nverts * 7;
+
+        if (need < 0) {
+            return 0;               /* a count a hostile file could wrap */
+        }
+        if (!pose || have < nverts || (nj_s4)nj_array_length(pose) < need) {
+            pose = nj_array_new(vm, "F", (nj_u4)need);
+            if (!pose) {
+                return 0;
+            }
+            nj_rput(vm, mesh, m3g_fof(vm, NJ_C_SKIN, "_nj_pose", "[F"), pose);
+            nj_iput(vm, mesh, m3g_fof(vm, NJ_C_SKIN, "_nj_pose_nv", "I"),
+                    nverts);
+        }
+        pp = (float *)nj_array_data(pose);
+        if (!pp) {
+            return 0;
+        }
+        pn = nsrc ? pp + (nj_size)nverts * 3u : NULL;
+        wsum = pp + (nj_size)nverts * 6u;
     }
-    if (nsrc) {
-        pn = (float *)nj_host_alloc(vm,
-                                    (nj_size)nverts * 3u * sizeof(float));
-    }
-    wsum = (float *)nj_host_alloc(vm, (nj_size)nverts * sizeof(float));
-    if (!wsum || (nsrc && !pn)) {
-        nj_host_free(vm, pp);
-        nj_host_free(vm, pn);
-        nj_host_free(vm, wsum);
-        return 0;
-    }
-    memset(pp, 0, (nj_size)nverts * 3u * sizeof(float));
+    memset(pp, 0, (nj_size)nverts * 7u * sizeof(float));
     if (pn) { memset(pn, 0, (nj_size)nverts * 3u * sizeof(float)); }
     memset(wsum, 0, (nj_size)nverts * sizeof(float));
     {
@@ -13172,7 +13203,11 @@ static int m3g_skin_pose(nj_vm *vm, nj_ref mesh, float **pos_out,
             }
         }
     }
-    nj_host_free(vm, wsum);
+    /*
+     * No host frees here: the buffers now live on the SkinnedMesh object as
+     * long as it exists (see the cache above), so the caller must not free
+     * them either.
+     */
     *pos_out = pp;
     *nrm_out = pn;
     *n_out = nverts;
@@ -13244,8 +13279,8 @@ static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
                     drawn += jr_draw(&r);
                 }
             }
-            nj_host_free(vm, posed);
-            nj_host_free(vm, posed_nrm);
+            /* The pose lives on the SkinnedMesh object now (cached there by
+               m3g_skin_pose), so there is nothing to free here. */
         }
     }
     return drawn;

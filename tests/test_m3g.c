@@ -27,6 +27,27 @@
 static int checks;
 static int failures;
 
+/*
+ * Host allocations, counted through the port hook that nj_host_alloc() calls.
+ * The renderer's "nothing allocates while a title paints" claim is measured,
+ * not asserted by inspection: the skinned-mesh test renders the same mesh
+ * again and requires the count not to move.
+ */
+static unsigned host_alloc_calls;
+
+static void *counting_alloc(void *ud, nj_size n)
+{
+    (void)ud;
+    host_alloc_calls++;
+    return malloc(n);
+}
+
+static void counting_free(void *ud, void *p)
+{
+    (void)ud;
+    free(p);
+}
+
 static void put_le32(nj_u1 *p, nj_u4 v)
 {
     p[0] = (nj_u1)v;
@@ -3254,6 +3275,34 @@ static void test_skinned_mesh(nj_vm *vm)
             check(lit_b > 1000 && mean_b > mean_a + 20.0f,
                   "moving the bone moves the skinned vertices on screen");
         }
+        /*
+         * Posing used to allocate the position, normal and weight arrays with
+         * nj_host_alloc() on every frame and free them after the draw - two or
+         * three host allocations per skinned mesh per frame.  The arrays now
+         * live on the SkinnedMesh as _nj_pose (seven floats per vertex), and
+         * the host allocation counter must not move on a repeated render.
+         */
+        {
+            nj_field *pf = nj_field_lookup(vm, CLS("SkinnedMesh"),
+                                           "_nj_pose", "[F", 0);
+            nj_ref pose1 = pf ? nj_rget(vm, skin, pf) : 0;
+            unsigned before;
+            int rerendered;
+
+            check(pf != 0 && pose1 != 0,
+                  "the pose buffers are cached on the SkinnedMesh");
+            before = host_alloc_calls;
+            rerendered = skin_render(vm, g3d, world, bg, cam, cam_xf, targetg,
+                                     pixels, NULL);
+            check(rerendered > 1000,
+                  "and a render through the cached pose still draws it");
+            check(host_alloc_calls == before,
+                  "a repeated skinned render allocates no host memory");
+            if (pf) {
+                check(nj_rget(vm, skin, pf) == pose1,
+                      "and reuses the same pose array instead of a new one");
+            }
+        }
     }
     {
         nj_ref g3d = make(vm, CLS("Graphics3D"));
@@ -3694,6 +3743,10 @@ int main(void)
     size_t i;
 
     nj_port_headless_ex(&port, 240, 320, 0, NULL);
+    /* Both hooks, so every nj_host_alloc() is counted and every block is
+       released with the matching allocator. */
+    port.alloc = counting_alloc;
+    port.free = counting_free;
     /*
      * 4 MB, not 2 MB: this suite deliberately never releases its fixtures (the
      * canvas alone pins a 240x320 ARGB buffer, 307 KB), so the late tests that
@@ -3706,6 +3759,7 @@ int main(void)
      * M3G objects around it are live together.
      */
     vm = nj_vm_create(&port, 4u * 1024u * 1024u);
+    host_alloc_calls = 0u;      /* count from here, not the VM's own setup */
     /*
      * Lay the builtin classes out and seed their constants before anything is
      * looked up.  Without this the static slots the constants live in do not
