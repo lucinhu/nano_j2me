@@ -220,6 +220,7 @@ static nj_u4 m3g_node_data(const nj_u1 *data, nj_u4 len)
 #define NJ_M3G_T_POLYGON_MODE     8u
 #define NJ_M3G_T_IMAGE2D         10u
 #define NJ_M3G_T_MESH            14u
+#define NJ_M3G_T_SKINNED_MESH    16u
 #define NJ_M3G_T_VERTEX_ARRAY    20u
 #define NJ_M3G_T_VERTEX_BUFFER   21u
 #define NJ_M3G_T_TRIANGLE_STRIP_ARRAY 11u
@@ -833,6 +834,12 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
                 out->refs[NJ_M3G_MAX_REFS - 3u] = le32(data + 24u);
                 out->refs[NJ_M3G_MAX_REFS - 2u] = le32(data + 28u);
                 out->refs[NJ_M3G_MAX_REFS - 1u] = le32(data + 32u);  /* scale */
+                /* The colour a surface falls back to when it carries neither
+                   per-vertex colours nor a Material.  The API's
+                   setDefaultColor() writes this field, but a file's value was
+                   dropped here, so an untextured, uncoloured, material-less
+                   surface drew black instead of the colour it authored. */
+                out->d = le32(data + 12u);
                 out->decoded = 1u;
             }
         }
@@ -853,7 +860,41 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
             nj_u4 enc = data[12];
             nj_u4 isz = (enc == 128u) ? 4u : (enc == 130u) ? 2u
                      : (enc == 129u) ? 1u : 0u;
-            if (isz != 0u && len >= 21u) {
+            if (enc == 0u && len >= 21u) {
+                /*
+                 * Encoding zero has no index table: the strip draws vertices
+                 * base, base+1, ... in order.  The u32 after the encoding byte
+                 * is that first vertex, then the strip count and lengths.
+                 * Three of the corpus titles' 50 arrays (the ski-jump title's
+                 * whole visible geometry) are written this way, and without
+                 * this branch every one of them was refused, so the title had
+                 * a HUD over an empty sky.
+                 */
+                nj_u4 first = le32(data + 13u);
+                nj_u4 nstrip = le32(data + 17u);
+                nj_u4 total = 0u, k;
+                int fits = (nstrip >= 1u && 21u + 4u * nstrip == len);
+
+                for (k = 0u; fits && k < nstrip; k++) {
+                    nj_u4 run = le32(data + 21u + 4u * k);
+
+                    if (run == 0u || total > 0x7FFFFFFFu - run) {
+                        fits = 0;
+                    } else {
+                        total += run;
+                    }
+                }
+                if (fits) {
+                    out->a = 0u;              /* implicit indices */
+                    out->b = total;           /* their count */
+                    out->c = nstrip;
+                    out->d = first;
+                    out->data = data + 17u;   /* where encoding 0 keeps them */
+                    out->data_len = len - 17u;
+                    out->ref_off = 17u;       /* +17+4 = first strip length */
+                    out->decoded = 1u;
+                }
+            } else if (isz != 0u && len >= 21u) {
                 nj_u4 n = le32(data + 13u);
                 nj_u4 at = 17u + isz * n;
                 if (at + 4u <= len) {
@@ -878,6 +919,72 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
             }
         }
         break; }
+    case NJ_M3G_T_SKINNED_MESH:
+        /*
+         * A SkinnedMesh is a Mesh payload with one tail after the submesh
+         * pairs: the skeleton Group, the number of bone transform records and
+         * then one record per bone - the node that drives it, the first
+         * vertex it moves, how many it moves and the integer weight it moves
+         * them with.
+         *
+         * The records stay in the file bytes here: the decode step runs before
+         * the scanner may allocate, and the ranges only matter once the scene
+         * graph exists.  The scalar slots carry the links: a is the vertex
+         * buffer, b the submesh count, c the skeleton reference and d the
+         * number of records.  A payload with a Mesh-length body and no valid
+         * tail is still accepted as a plain Mesh - a model must never become
+         * invisible because its rig is malformed, so it draws in bind pose.
+         */
+        if (len >= 0x20u) {
+            nj_u4 base = 0x10u;
+            nj_u4 vb, nsub;
+
+            if ((data[12] & 0x01u) != 0u) {
+                base += 40u;
+            }
+            if (base + 14u <= len && le32(data + base) == 0xFFFFFFFFu &&
+                len >= base + 14u) {
+                vb = le32(data + base + 6u);
+                nsub = le32(data + base + 10u);
+                if (vb != 0u && nsub >= 1u &&
+                    nsub <= (nj_u4)(NJ_M3G_MAX_REFS / 2u)) {
+                    nj_u4 at = base + 14u + 8u * nsub;
+                    nj_u4 k;
+                    int usable = 1;
+
+                    for (k = 0u; k < nsub && usable; k++) {
+                        nj_u4 ib = le32(data + base + 14u + 8u * k);
+                        nj_u4 app = le32(data + base + 18u + 8u * k);
+
+                        if (ib == 0u || app == 0u) {
+                            usable = 0;
+                        } else {
+                            out->refs[2u * k] = ib;
+                            out->refs[2u * k + 1u] = app;
+                        }
+                    }
+                    if (usable) {
+                        out->a = vb;
+                        out->b = nsub;
+                        out->nrefs = 2u * nsub;
+                        if (len == at) {
+                            out->decoded = 1u;   /* bind pose only */
+                        } else if (at + 8u <= len) {
+                            nj_u4 skel = le32(data + at);
+                            nj_u4 ntr = le32(data + at + 4u);
+
+                            if (skel != 0u && ntr >= 1u && ntr <= 64u &&
+                                len == at + 8u + 16u * ntr) {
+                                out->c = skel;
+                                out->d = ntr;
+                                out->decoded = 1u;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        break;
     case NJ_M3G_T_VERTEX_ARRAY:      /* componentSize, componentCount, componentType */
         if (len < NJ_M3G_OBJECT_HEADER + 3u) {
             M3G_FAIL("a VertexArray is %lu byte(s)", (unsigned long)len);
@@ -1033,12 +1140,25 @@ nj_status nj_m3g_decode_object(const nj_u1 *data, nj_u4 len, nj_u1 type,
         out->f[1] = (data[29] != 0u) ? 1.0f : 0.0f;   /* vertexColorTracking */
         break;
     case NJ_M3G_T_TEXTURE2D: {
-        nj_u4 base = m3g_xform_data(data, len) + 2u;
+        nj_u4 xf = m3g_xform_data(data, len);    /* 12, or 52 with a component */
+        nj_u4 gflag = (len > xf + 1u) ? data[xf + 1u] : 0u;
+        nj_u4 base = xf + 2u;
 
         /* Component-transform flag + optional 40 bytes + general-transform
            flag precede the image reference.  Both flags occupy a byte even
-           when false; the sampler payload itself is twelve bytes. */
-        if (len != base + 12u) {
+           when false; the sampler payload itself is twelve bytes.  A
+           general transform inserts a row-major 4x4 matrix (64 bytes) before
+           the sampler; five map textures in the CS titles author one, and
+           refusing the object left their ground and walls untextured. */
+        if (gflag) {
+            if (len != base + 64u + 12u) {
+                out->decoded = 0u;
+                return NJ_OK;
+            }
+            out->data = data + base;             /* the matrix, for the linker */
+            out->data_len = 64u;
+            base += 64u;
+        } else if (len != base + 12u) {
             out->decoded = 0u;
             return NJ_OK;
         }
@@ -1228,6 +1348,51 @@ nj_status nj_m3g_scan_objects(nj_vm *vm, const nj_u1 *p, nj_u4 n,
                         if (!f->owned_data) { M3G_SCAN_FAIL("out of host memory for object data"); }
                         memcpy(f->owned_data, f->data, f->data_len);
                         f->data = f->owned_data;
+                    }
+                    /*
+                     * A SkinnedMesh's bone records are copied out of the
+                     * section for the same reason a VertexArray's components
+                     * are: the bytes are released before the scene graph is
+                     * linked, and the link step needs the ranges and weights.
+                     * They ride the overflow list, which a mesh never uses for
+                     * child references, so the two cannot collide.
+                     */
+                    if (type == NJ_M3G_T_SKINNED_MESH && f->decoded &&
+                        f->b > 0u && f->d > 0u && f->nrefs_total == 0u) {
+                        const nj_u1 *sd = body + at + 5u;
+                        nj_u4 sh = m3g_object_header_size(sd, olen);
+                        nj_u4 base = 0x10u;
+
+                        if (sh == 0u || sh > olen) {
+                            M3G_SCAN_FAIL("truncated SkinnedMesh header");
+                        }
+                        sd += sh - NJ_M3G_OBJECT_HEADER;
+                        if ((sd[12] & 0x01u) != 0u) {
+                            base += 40u;
+                        }
+                        {
+                            nj_u4 sat = base + 14u + 8u * f->b;
+                            nj_u4 ntr = le32(sd + sat + 4u);
+                            nj_u4 k;
+                            nj_u4 *rec;
+
+                            if (ntr != f->d) {
+                                M3G_SCAN_FAIL("SkinnedMesh record count changed");
+                            }
+                            rec = (nj_u4 *)nj_host_alloc(
+                                vm, (nj_size)ntr * 4u * sizeof(nj_u4));
+                            if (!rec) {
+                                M3G_SCAN_FAIL("out of host memory for a skin");
+                            }
+                            for (k = 0u; k < ntr; k++) {
+                                const nj_u1 *r2 = sd + sat + 8u + 16u * k;
+                                rec[4u * k]      = le32(r2);
+                                rec[4u * k + 1u] = le32(r2 + 4u);
+                                rec[4u * k + 2u] = le32(r2 + 8u);
+                                rec[4u * k + 3u] = le32(r2 + 12u);
+                            }
+                            f->extra = rec;
+                        }
                     }
                     if (f->nrefs_total > (nj_u4)NJ_M3G_MAX_REFS) {
                         nj_u4 want = f->nrefs_total - (nj_u4)NJ_M3G_MAX_REFS;
@@ -2240,9 +2405,9 @@ static int m3g_is_a(nj_vm *vm, nj_ref o, const char *cls);
  * The rig animrig_car.m3g carries in NFS: Hot Pursuit is eleven triples of
  * (sequence, controller, track); its 27-node car models animate the
  * suspension and wheel-spin nodes, whose sequences hold translation,
- * orientation and scale keys.  Those three properties are what this
- * implements - an unanimated property keeps the value the game set, which is
- * better than a guess.
+ * orientation and scale keys.  Those three properties plus ALPHA and
+ * VISIBILITY are what this implements - an unanimated property keeps the
+ * value the game set, which is better than a guess.
  */
 static nj_s4 m3g_anim_sample(nj_vm *vm, nj_ref seq, float t, nj_ref scratch)
 {
@@ -2401,6 +2566,27 @@ static int m3g_anim_apply(nj_vm *vm, nj_ref self, nj_s4 prop, const float *v)
         mat_set_scale(sc, v[0], v[1], v[2]);
         return 1;
     }
+    if (prop == 256) {                                    /* ALPHA */
+        /* Node alpha is a plain scalar field; the sprite path reads it one
+           ancestor at a time (a mesh's alpha only shows through blending). */
+        nj_field *af = m3g_fof(vm, NJ_C_NODE, "_nj_alpha", "F");
+
+        if (!af) {
+            return 0;
+        }
+        nj_iput(vm, self, af,
+                f2bits(v[0] < 0.0f ? 0.0f : (v[0] > 1.0f ? 1.0f : v[0])));
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_NODE, "_nj_alphaSet", "Z"), 1);
+        return 1;
+    }
+    if (prop == 276) {                                    /* VISIBILITY */
+        int on = v[0] >= 0.5f ? 1 : 0;
+
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_NODE, "_nj_render", "Z"), on);
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_NODE, "_nj_hidden", "Z"),
+                on ? 0 : 1);
+        return 1;
+    }
     return 0;
 }
 
@@ -2485,7 +2671,8 @@ static nj_s4 m3g_animate_object(nj_vm *vm, nj_ref self, nj_s4 time,
                     nj_iget(vm, tj, m3g_fof(vm, NJ_C_ATRACK, "_nj_prop", "I")) != prop) {
                     break;
                 }
-                if (prop != 275 && prop != 268 && prop != 270) {
+                if (prop != 275 && prop != 268 && prop != 270 &&
+                    prop != 256 && prop != 276) {
                     continue;         /* a property this engine leaves alone */
                 }
                 if (!m3g_anim_track(vm, tj, time, vals, &w, &validity, scratch)) {
@@ -2499,7 +2686,8 @@ static nj_s4 m3g_animate_object(nj_vm *vm, nj_ref self, nj_s4 time,
                     wsum += w;
                 }
             }
-            if (wsum > 0.0f && (prop == 275 || prop == 268 || prop == 270)) {
+            if (wsum > 0.0f && (prop == 275 || prop == 268 || prop == 270 ||
+                                prop == 256 || prop == 276)) {
                 float inv = 1.0f / wsum;
                 nj_u4 c;
 
@@ -5420,7 +5608,9 @@ nj_status nj_m3g_link_meshes(nj_vm *vm, const nj_m3g_object *objs,
         nj_ref mesh, subs, ibs;
         nj_u4 k, nsub;
 
-        if (objs[i].type != NJ_M3G_T_MESH || objs[i].fields.decoded == 0u) {
+        if ((objs[i].type != NJ_M3G_T_MESH &&
+             objs[i].type != NJ_M3G_T_SKINNED_MESH) ||
+            objs[i].fields.decoded == 0u) {
             continue;
         }
         nsub = objs[i].fields.b;
@@ -5463,6 +5653,52 @@ nj_status nj_m3g_link_meshes(nj_vm *vm, const nj_m3g_object *objs,
                                   "L" NJ_C_VECTOR ";"), subs);
         nj_iput(vm, mesh, m3g_fof(vm, NJ_C_MESH, "_nj_nsub", "I"),
                 (nj_s4)nsub);
+        if (objs[i].type == NJ_M3G_T_SKINNED_MESH) {
+            const nj_m3g_fields *f = &objs[i].fields;
+            nj_ref skel = f->c ? m3g_resolve_ref(vm, arr, nobj, mesh,
+                                                 f->c, mode) : 0;
+
+            /*
+             * The skeleton belongs to the mesh, not to whatever group the
+             * file's child lists happen to have put it in: JSR 184 makes the
+             * mesh its parent, which is also what makes the bone chains share
+             * the mesh's root and lets the renderer compute bone -> mesh
+             * transforms.  A skeleton that already has a parent is left
+             * where the file put it.
+             */
+            if (skel && m3g_is_a(vm, skel, NJ_C_GROUP)) {
+                nj_field *pf = nj_field_lookup(vm, NJ_C_NODE, "_nj_parent",
+                                               "L" NJ_C_NODE ";", 0);
+
+                nj_rput(vm, mesh, m3g_fof(vm, NJ_C_SKIN, "_nj_skeleton",
+                                          "L" NJ_C_GROUP ";"), skel);
+                if (pf && !nj_rget(vm, skel, pf)) {
+                    nj_rput(vm, skel, pf, mesh);
+                }
+            }
+            if (f->extra) {
+                nj_u4 b, ntr = f->d;
+
+                for (b = 0u; b < ntr; b++) {
+                    const nj_u4 *rec = f->extra + (nj_size)b * 4u;
+                    nj_ref bone = m3g_resolve_ref(vm, arr, nobj, mesh,
+                                                  rec[0], mode);
+                    nj_value av[4];
+
+                    if (!bone || !m3g_is_a(vm, bone, NJ_C_NODE)) {
+                        continue;   /* a dangling bone keeps the bind pose */
+                    }
+                    av[0].r = bone;
+                    av[1].i = (nj_s4)rec[3];   /* weight */
+                    av[2].i = (nj_s4)rec[1];   /* firstVertex */
+                    av[3].i = (nj_s4)rec[2];   /* vertexCount */
+                    if (nj_call(vm, mesh, NJ_C_SKIN, "addTransform",
+                                "(L" NJ_C_NODE ";III)V", av, NULL) != NJ_OK) {
+                        (void)nj_take_exception(vm);
+                    }
+                }
+            }
+        }
     }
     return NJ_OK;
 }
@@ -5773,6 +6009,22 @@ nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
                     (nj_s4)f->c);
             nj_iput(vm, o, m3g_fof(vm, NJ_C_TEX2D, "_nj_blendcolor", "I"),
                     (nj_s4)f->a);
+            /* The file's general transform is a row-major 4x4.  Storing it in
+               the Transformable's general slot and recomposing is exactly what
+               setTransform() does, and the sampler already multiplies by
+               _nj_m, so no renderer change is needed. */
+            if (f->data && f->data_len == 64u) {
+                float *general = xable_part(vm, o, "_nj_x");
+
+                if (general) {
+                    nj_u4 g;
+
+                    for (g = 0u; g < 16u; g++) {
+                        general[g] = bits2f((nj_s4)le32(f->data + 4u * g));
+                    }
+                    xable_recompose(vm, o);
+                }
+            }
             break;
         }
         case NJ_M3G_T_SPRITE: {
@@ -5988,6 +6240,8 @@ static nj_status m3g_link_geometry(nj_vm *vm, const nj_m3g_object *objs,
                                            "L" NJ_C_VARR ";"), t);
                 }
             }
+            nj_iput(vm, o, m3g_fof(vm, NJ_C_VBUF, "_nj_defColor", "I"),
+                    (nj_s4)ob->fields.d);
             /* The API's setPositions(positions, scale, bias[]) keeps the
                scalar in _nj_bias and the three floats in _nj_scale; the file
                calls the same two things positionScale and positionBias. */
@@ -6019,18 +6273,27 @@ static nj_status m3g_link_geometry(nj_vm *vm, const nj_m3g_object *objs,
                         nj_root(vm, bias3));
             }
         } else if (ob->type == NJ_M3G_T_TRIANGLE_STRIP_ARRAY && ob->fields.data) {
-            nj_u4 isz = (ob->fields.a == 128u) ? 4u : (ob->fields.a == 130u) ? 2u : 1u;
+            nj_u4 isz = (ob->fields.a == 128u) ? 4u : (ob->fields.a == 130u) ? 2u
+                      : (ob->fields.a == 129u) ? 1u : 0u;
             nj_u4 n = ob->fields.b, k;
             nj_ref ia = nj_array_new(vm, "I", n);
             nj_s4 *ip = ia ? (nj_s4 *)nj_array_data(ia) : NULL;
 
             if (ip) {
                 for (k = 0u; k < n; k++) {
-                    const nj_u1 *q = ob->fields.data + k * isz;
-                    ip[k] = (isz == 4u) ? (nj_s4)le32(q)
-                          : (isz == 2u)
-                          ? (nj_s4)((nj_u2)q[0] | ((nj_u2)q[1] << 8))
-                          : (nj_s4)(nj_u1)q[0];
+                    if (isz == 0u) {
+                        /* Encoding zero: the indices are base, base+1, ... */
+                        ip[k] = (nj_s4)(ob->fields.d + k);
+                        continue;
+                    }
+                    {
+                        const nj_u1 *q = ob->fields.data + k * isz;
+
+                        ip[k] = (isz == 4u) ? (nj_s4)le32(q)
+                              : (isz == 2u)
+                              ? (nj_s4)((nj_u2)q[0] | ((nj_u2)q[1] << 8))
+                              : (nj_s4)(nj_u1)q[0];
+                    }
                 }
                 nj_rput(vm, o, m3g_fof(vm, NJ_C_IBUF, "_nj_ib_data", "[I"),
                         nj_root(vm, ia));
@@ -9034,7 +9297,20 @@ M3G_I_GET(m3g_morph_getTargetCount, NJ_C_MORPH, "_nj_nmorph")
 static const nj_builtin_field skin_fields[] = {
     { "_nj_skeleton", "L" NJ_C_GROUP ";",  0 },
     { "_nj_bones",    "[L" NJ_C_NODE ";",  0 },
-    { "_nj_nbones",   "I",                 0 }
+    { "_nj_nbones",   "I",                 0 },
+    /*
+     * The per-bone vertex ranges, weights and at-rest transforms, in the same
+     * order as _nj_bones.  They are arrays rather than one record per bone so
+     * that the roster's growth step stays the only place that has to resize
+     * anything.  _nj_skin_bind holds sixteen floats per bone: the transform
+     * from the mesh to the bone captured by addTransform(), which the
+     * renderer needs to turn a live bone matrix into a skinning matrix.
+     */
+    { "_nj_skin_first",  "[I",             0 },
+    { "_nj_skin_count",  "[I",             0 },
+    { "_nj_skin_w",      "[I",             0 },
+    { "_nj_skin_bind",   "[F",             0 },
+    { "_nj_skin_n",      "I",              0 }
 };
 
 static const nj_builtin_method skin_methods[] = {
@@ -9089,6 +9365,126 @@ NJFN(m3g_skin_init_arrays)
  */
 #define NJ_M3G_BONES_INIT 64
 
+/*
+ * The transform that takes a point from `from`'s space into `to`'s: both node
+ * chains up to their common root, one root-relative matrix inverted, then
+ * combined.  This is getTransformTo()'s arithmetic, repeated here because the
+ * skin needs it from C: at addTransform() time to capture the at-rest
+ * transform (mesh -> bone), and every frame to build the skinning matrices
+ * (bone -> mesh).  Returns 0 when the two nodes do not share a root, which
+ * leaves the caller with the bind pose.
+ */
+static int m3g_path_xform(nj_vm *vm, nj_ref from, nj_ref to, float *out)
+{
+    nj_field *pf = nj_field_lookup(vm, NJ_C_NODE, "_nj_parent",
+                                   "L" NJ_C_NODE ";", 0);
+    float wa[NJ_MF], wb[NJ_MF];
+    nj_ref a = from, b = to, ra = 0, rb = 0;
+    int depth;
+
+    if (!from || !to || !out) {
+        return 0;
+    }
+    mat_identity(wa);
+    for (depth = 0; a && depth < 64; depth++) {
+        float *m = mat_of(vm, a, NJ_C_XABLE, "_nj_m");
+
+        if (m) {
+            float next[NJ_MF];
+
+            mat_mul(m, wa, next);
+            memcpy(wa, next, sizeof(wa));
+        }
+        ra = a;
+        a = nj_rget(vm, a, pf);
+    }
+    mat_identity(wb);
+    for (depth = 0; b && depth < 64; depth++) {
+        float *m = mat_of(vm, b, NJ_C_XABLE, "_nj_m");
+
+        if (m) {
+            float next[NJ_MF];
+
+            mat_mul(m, wb, next);
+            memcpy(wb, next, sizeof(wb));
+        }
+        rb = b;
+        b = nj_rget(vm, b, pf);
+    }
+    if (!ra || ra != rb) {
+        return 0;
+    }
+    mat_invert(wb);
+    mat_mul(wb, wa, out);
+    return 1;
+}
+
+/* Index of `node` in the mesh's bone roster, or -1 when it is not a bone. */
+static nj_s4 m3g_skin_bone_index(nj_vm *vm, nj_ref self, nj_ref node)
+{
+    nj_ref bones = nj_rget(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_bones",
+                                             "[L" NJ_C_NODE ";"));
+    nj_s4 n = nj_iget(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_nbones", "I"));
+    nj_s4 b;
+
+    if (!node || !bones) {
+        return -1;
+    }
+    for (b = 0; b < n && (nj_u4)b < nj_array_length(bones); b++) {
+        if (nj_array_get_ref(bones, (nj_u4)b) == node) {
+            return b;
+        }
+    }
+    return -1;
+}
+
+static int m3g_skin_has_bone(nj_vm *vm, nj_ref self, nj_ref node)
+{
+    return m3g_skin_bone_index(vm, self, node) >= 0;
+}
+
+/*
+ * One of a SkinnedMesh's parallel per-bone arrays, grown to `want` entries.
+ * The array lives in a Java field, so storing it is what keeps it alive; the
+ * copy is there because growing must preserve the bones already recorded.
+ */
+static nj_ref m3g_skin_arr(nj_vm *vm, nj_ref self, const char *name,
+                           const char *desc, nj_u4 want)
+{
+    nj_ref old = nj_rget(vm, self, m3g_fof(vm, NJ_C_SKIN, name, desc));
+    nj_u4 have = old ? (nj_u4)nj_array_length(old) : 0u;
+
+    if (have >= want) {
+        return old;
+    }
+    {
+        nj_ref arr = nj_array_new(vm, desc + 1, want);
+
+        if (!arr) {
+            return 0;
+        }
+        if (old) {
+            if (desc[1] == 'I') {
+                const nj_s4 *src = (const nj_s4 *)nj_array_data(old);
+                nj_s4 *dst = (nj_s4 *)nj_array_data(arr);
+
+                if (src && dst) {
+                    memcpy(dst, src, sizeof(nj_s4) * (nj_size)have);
+                }
+            } else {
+                const float *src = (const float *)nj_array_data(old);
+                float *dst = (float *)nj_array_data(arr);
+
+                if (src && dst) {
+                    memcpy(dst, src, sizeof(float) * (nj_size)have);
+                }
+            }
+        }
+        nj_rput(vm, self, m3g_fof(vm, NJ_C_SKIN, name, desc), arr);
+        return arr;
+    }
+}
+
 NJFN(m3g_skin_addTransform)
 {
     nj_ref self = NJ_THIS(args);
@@ -9105,6 +9501,18 @@ NJFN(m3g_skin_addTransform)
     if (n < 0) {
         NJ_THROW(vm, "java/lang/IndexOutOfBoundsException",
                  "negative bone count");
+        return NJ_ERR;
+    }
+    /* Validate the skinning record before it mutates anything: a rejected
+       call must leave the roster and the per-bone arrays untouched. */
+    if (NJ_ARG_INT(args, 1) <= 0 || NJ_ARG_INT(args, 3) <= 0) {
+        NJ_THROW(vm, "java/lang/IllegalArgumentException",
+                 "addTransform needs a positive weight and vertex count");
+        return NJ_ERR;
+    }
+    if (NJ_ARG_INT(args, 2) < 0) {
+        NJ_THROW(vm, "java/lang/IndexOutOfBoundsException",
+                 "negative first vertex");
         return NJ_ERR;
     }
     if (!bones) {
@@ -9141,24 +9549,71 @@ NJFN(m3g_skin_addTransform)
         bones = grown;
     }
     nj_array_set_ref(bones, (nj_u4)n, node);
+    cap = (nj_u4)nj_array_length(bones);
+    {
+        nj_ref firsts = m3g_skin_arr(vm, self, "_nj_skin_first", "[I", cap);
+        nj_ref counts = m3g_skin_arr(vm, self, "_nj_skin_count", "[I", cap);
+        nj_ref ws     = m3g_skin_arr(vm, self, "_nj_skin_w",     "[I", cap);
+        nj_ref binds  = m3g_skin_arr(vm, self, "_nj_skin_bind",  "[F",
+                                     cap * 16u);
+        float bind[NJ_MF];
+        nj_s4 *dst;
+
+        if (!firsts || !counts || !ws || !binds) {
+            return nj_throw_oom(vm);
+        }
+        if (!m3g_path_xform(vm, self, node, bind)) {
+            mat_identity(bind);   /* no common root: at rest in the mesh */
+        }
+        dst = (nj_s4 *)nj_array_data(firsts);
+        if (dst) { dst[n] = NJ_ARG_INT(args, 2); }
+        dst = (nj_s4 *)nj_array_data(counts);
+        if (dst) { dst[n] = NJ_ARG_INT(args, 3); }
+        dst = (nj_s4 *)nj_array_data(ws);
+        if (dst) { dst[n] = NJ_ARG_INT(args, 1); }
+        {
+            float *bf = (float *)nj_array_data(binds);
+
+            if (bf) {
+                memcpy(bf + (nj_size)n * 16u, bind, sizeof(bind));
+            }
+        }
+        nj_iput(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_skin_n", "I"), n + 1);
+    }
     nj_iput(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_nbones", "I"), n + 1);
     return NJ_OK;
 }
 
 NJFN(m3g_skin_getBoneTransform)
 {
+    nj_ref self = NJ_THIS(args);
     nj_ref node = NJ_ARG_REF(args, 0);
     nj_ref dst = NJ_ARG_REF(args, 1);
+    float *m = mat_of(vm, dst, NJ_C_XFORM, "_nj_m");
 
-    if (dst) {
-        float *m = mat_of(vm, dst, NJ_C_XFORM, "_nj_m");
+    if (!m) {
+        return NJ_OK;
+    }
+    if (!m3g_skin_has_bone(vm, self, node)) {
+        /* A node the mesh does not use has no defined transform; identity is
+           what the reference implementation answers, and is harmless. */
+        mat_identity(m);
+        return NJ_OK;
+    }
+    {
+        /* The at-rest transform, mesh -> bone, captured by addTransform().
+           That is what JSR 184 calls the bone transform, and what a title
+           hands to a picking or tooling path. */
+        nj_ref binds = nj_rget(vm, self, m3g_fof(vm, NJ_C_SKIN,
+                                                 "_nj_skin_bind", "[F"));
+        nj_s4 b = m3g_skin_bone_index(vm, self, node);
+        const float *bf = binds ? (const float *)nj_array_data(binds) : NULL;
 
-        if (m && node) {
-            float *src = mat_of(vm, node, NJ_C_NODE, "_nj_m");
-
-            if (src) {
-                memcpy(m, src, sizeof(float) * NJ_MF);
-            }
+        if (bf && b >= 0 && (nj_size)(b + 1) * 16u <=
+            (nj_size)nj_array_length(binds)) {
+            memcpy(m, bf + (nj_size)b * 16u, sizeof(float) * NJ_MF);
+        } else {
+            mat_identity(m);
         }
     }
     return NJ_OK;
@@ -9166,9 +9621,79 @@ NJFN(m3g_skin_getBoneTransform)
 
 NJFN(m3g_skin_getBoneVertices)
 {
-    /* Nothing is skinned: zero vertices, and the index array is left alone
-       rather than filled with values that would be wrong. */
+    nj_ref self = NJ_THIS(args);
+    nj_ref node = NJ_ARG_REF(args, 0);
+    nj_ref idx = NJ_ARG_REF(args, 1);
+    nj_ref wts = NJ_ARG_REF(args, 2);
+    nj_ref bones = nj_rget(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_bones",
+                                             "[L" NJ_C_NODE ";"));
+    nj_ref firsts = nj_rget(vm, self, m3g_fof(vm, NJ_C_SKIN,
+                                              "_nj_skin_first", "[I"));
+    nj_ref counts = nj_rget(vm, self, m3g_fof(vm, NJ_C_SKIN,
+                                              "_nj_skin_count", "[I"));
+    nj_ref ws = nj_rget(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_skin_w", "[I"));
+    nj_s4 n = nj_iget(vm, self, m3g_fof(vm, NJ_C_SKIN, "_nj_skin_n", "I"));
+    const nj_s4 *fi, *co, *wt;
+    nj_s4 b, out = 0;
+
     ret->i = 0;
+    if (!node || !bones || !firsts || !counts || !ws || n <= 0) {
+        return NJ_OK;
+    }
+    fi = (const nj_s4 *)nj_array_data(firsts);
+    co = (const nj_s4 *)nj_array_data(counts);
+    wt = (const nj_s4 *)nj_array_data(ws);
+    if (!fi || !co || !wt) {
+        return NJ_OK;
+    }
+    for (b = 0; b < n; b++) {
+        if (nj_array_get_ref(bones, (nj_u4)b) != node) {
+            continue;
+        }
+        {
+            nj_s4 first = fi[b], count = co[b], w = wt[b], i2;
+            float total = 0.0f;
+
+            if (count <= 0) {
+                continue;
+            }
+            /* The JSR normalizes: weights are relative to every bone that
+               owns the same vertex, so the sum over one vertex is one. */
+            for (i2 = 0; i2 < n; i2++) {
+                if (i2 == b) {
+                    continue;
+                }
+                if (fi[i2] < first + count && first < fi[i2] + co[i2] &&
+                    wt[i2] > 0) {
+                    total += (float)wt[i2];
+                }
+            }
+            total += (float)w;
+            if (total <= 0.0f) {
+                continue;
+            }
+            if (idx && (nj_s4)nj_array_length(idx) >= out + count) {
+                nj_s4 *dst = (nj_s4 *)nj_array_data(idx);
+
+                if (dst) {
+                    for (i2 = 0; i2 < count; i2++) {
+                        dst[out + i2] = first + i2;
+                    }
+                }
+            }
+            if (wts && (nj_s4)nj_array_length(wts) >= out + count) {
+                float *dst = (float *)nj_array_data(wts);
+
+                if (dst) {
+                    for (i2 = 0; i2 < count; i2++) {
+                        dst[out + i2] = (float)w / total;
+                    }
+                }
+            }
+            out += count;
+        }
+    }
+    ret->i = out;
     return NJ_OK;
 }
 
@@ -10755,6 +11280,16 @@ typedef struct {
     nj_u4 emi, amb, spc;          /* the material's other colours */
     float shin;
     int vcolor;
+    /*
+     * A SkinnedMesh's posed vertices, three floats per vertex in the mesh's
+     * own space.  NULL for every other mesh, and for a skinned one whose rig
+     * cannot be evaluated - the bind pose then draws through the ordinary
+     * quantised path, which is the fallback that keeps a malformed skin from
+     * turning a visible model into nothing.
+     */
+    const float *posed_pos;
+    const float *posed_nrm;
+    nj_s4 posed_n;
 } m3g_jr;
 
 /*
@@ -10803,14 +11338,25 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
         xy[0] = xy[1] = 0.0f;
         return 0;
     }
-    s = r->pos + ((nj_size)r->pfirst + (nj_size)v) * (nj_size)r->pcomp;
-    for (k = 0u; k < 4u && k < (nj_u4)r->pcomp; k++) {
-        float raw = (float)s[k];
+    if (r->posed_pos && r->posed_n > 0 &&
+        (nj_s4)((nj_u4)r->pfirst + v) < r->posed_n) {
+        const float *pp = r->posed_pos +
+            ((nj_size)r->pfirst + (nj_size)v) * 3u;
 
-        /* A 4-byte component is 16.16 fixed point; the short store keeps the
-           integer half, and that is what a render can honestly use. */
-        if (r->ptype == 2) { raw = (float)(raw / 65536.0f); }
-        p[k] = raw * r->pfac + r->pbias[k];
+        p[0] = pp[0];
+        p[1] = pp[1];
+        p[2] = pp[2];
+        p[3] = 1.0f;                 /* a skinned position is not quantised */
+    } else {
+        s = r->pos + ((nj_size)r->pfirst + (nj_size)v) * (nj_size)r->pcomp;
+        for (k = 0u; k < 4u && k < (nj_u4)r->pcomp; k++) {
+            float raw = (float)s[k];
+
+            /* A 4-byte component is 16.16 fixed point; the short store keeps
+               the integer half, and that is what a render can honestly use. */
+            if (r->ptype == 2) { raw = (float)(raw / 65536.0f); }
+            p[k] = raw * r->pfac + r->pbias[k];
+        }
     }
     /* The clip-space w: the depth buffer keeps its reciprocal, because 1/w
        is what interpolates linearly across a projected triangle. */
@@ -10828,15 +11374,31 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
     pe[0] = r->mv[0] * p[0] + r->mv[1] * p[1] + r->mv[2]  * p[2] + r->mv[3];
     pe[1] = r->mv[4] * p[0] + r->mv[5] * p[1] + r->mv[6]  * p[2] + r->mv[7];
     pe[2] = r->mv[8] * p[0] + r->mv[9] * p[1] + r->mv[10] * p[2] + r->mv[11];
-    if (r->lit && r->nrm && v < (nj_u4)r->ncount && r->ncomp >= 3) {
+    {
+    int have_normal = 0;
+    float nx = 0.0f, ny = 0.0f, nz = 0.0f;
+
+    if (r->posed_nrm && r->posed_n > 0 &&
+        (nj_s4)((nj_u4)r->pfirst + v) < r->posed_n) {
+        const float *pn = r->posed_nrm +
+            ((nj_size)r->pfirst + (nj_size)v) * 3u;
+
+        nx = pn[0]; ny = pn[1]; nz = pn[2];
+        have_normal = 1;
+    } else if (r->lit && r->nrm && v < (nj_u4)r->ncount &&
+               r->ncomp >= 3) {
         const nj_s2 *q = r->nrm +
             ((nj_size)r->nfirst + (nj_size)v) * (nj_size)r->ncomp;
-        float nx = (float)q[0], ny = (float)q[1], nz = (float)q[2];
-        float len;
 
+        nx = (float)q[0]; ny = (float)q[1]; nz = (float)q[2];
         if (r->ntype == 2) {
             nx /= 65536.0f; ny /= 65536.0f; nz /= 65536.0f;
         }
+        have_normal = 1;
+    }
+    if (have_normal) {
+        float len;
+
         /* Rotating a normal means the upper 3x3 of the model-view matrix.
            A title that only translates, rotates or scales uniformly gets the
            right answer; a non-uniform scale would need the inverse
@@ -10851,6 +11413,7 @@ static int jr_vertex(m3g_jr *r, nj_u4 v, float xy[2], float *inv, float st[2],
         } else {
             ne[0] = ne[1] = ne[2] = 0.0f;
         }
+    }
     }
     /*
      * A buffer with no texture coordinates samples the first texel, and the
@@ -12249,6 +12812,241 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
     return r.drawn;
 }
 
+/*
+ * Pose one SkinnedMesh: blend every bone over the vertices it owns and store
+ * the result as three floats per vertex in the mesh's own space (positions,
+ * and normals when the buffer carries them).
+ *
+ * The maths is JSR 184's, and the order of the product is what matters: for
+ * each bone
+ *     S = current(bone -> mesh) * atRest(mesh -> bone)
+ * maps a bind-pose vertex into the current pose.  Every vertex a bone owns is
+ * accumulated as w * S * v and the accumulation is divided by the weight sum;
+ * a vertex no bone claims keeps its bind-pose position.  Weights are integers
+ * and need not sum to anything, so normalising by the sum is what makes a
+ * weight of 255 and one of 1000 behave the same.
+ *
+ * Returns 0 when the rig cannot be evaluated (no buffers, a bone outside the
+ * mesh's graph).  The caller then draws the bind pose through the ordinary
+ * quantised path: an unresolvable rig costs a pose, never a visible model.
+ */
+static int m3g_skin_pose(nj_vm *vm, nj_ref mesh, float **pos_out,
+                         float **nrm_out, nj_s4 *n_out)
+{
+    nj_ref vb, va, nva, bones, firsts, counts, ws, binds;
+    const nj_s2 *src = NULL, *nsrc = NULL;
+    nj_s4 n, i, nverts, pcomp, ptype, pfirst, pcount;
+    nj_s4 ncomp = 0, nfirst = 0, ncount = 0, ntype = 0;
+    float pfac = 1.0f, pbias[3];
+    float *pp = NULL, *pn = NULL, *wsum = NULL;
+    nj_u4 b;
+
+    *pos_out = NULL;
+    *nrm_out = NULL;
+    *n_out = 0;
+    n = nj_iget(vm, mesh, m3g_fof(vm, NJ_C_SKIN, "_nj_skin_n", "I"));
+    if (n <= 0) {
+        return 0;
+    }
+    bones  = nj_rget(vm, mesh, m3g_fof(vm, NJ_C_SKIN, "_nj_bones",
+                                       "[L" NJ_C_NODE ";"));
+    firsts = nj_rget(vm, mesh, m3g_fof(vm, NJ_C_SKIN, "_nj_skin_first", "[I"));
+    counts = nj_rget(vm, mesh, m3g_fof(vm, NJ_C_SKIN, "_nj_skin_count", "[I"));
+    ws     = nj_rget(vm, mesh, m3g_fof(vm, NJ_C_SKIN, "_nj_skin_w", "[I"));
+    binds  = nj_rget(vm, mesh, m3g_fof(vm, NJ_C_SKIN, "_nj_skin_bind", "[F"));
+    if (!bones || !firsts || !counts || !ws || !binds ||
+        (nj_s4)nj_array_length(firsts) < n ||
+        (nj_s4)nj_array_length(counts) < n ||
+        (nj_s4)nj_array_length(ws) < n ||
+        (nj_s4)nj_array_length(binds) < n * 16) {
+        return 0;
+    }
+    vb = nj_rget(vm, mesh, nj_field_lookup(vm, NJ_C_MESH, "_nj_vb",
+                                           "L" NJ_C_VBUF ";", 0));
+    if (!vb) {
+        return 0;
+    }
+    va = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_positions",
+                                 "L" NJ_C_VARR ";"));
+    if (!va) {
+        return 0;
+    }
+    {
+        nj_ref arr = nj_rget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+
+        if (!arr) {
+            return 0;
+        }
+        src = (const nj_s2 *)nj_array_data(arr);
+    }
+    pcomp  = nj_iget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
+    pfirst = nj_iget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
+    ptype  = nj_iget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
+    pcount = nj_iget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_count", "I"));
+    nverts = nj_iget(vm, va, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+    if (!src || pcomp < 2 || nverts <= 0 || pfirst != 0) {
+        return 0;          /* a shifted array would misindex the bone ranges */
+    }
+    if (pcount <= 0 || pcount > nverts) {
+        pcount = nverts;
+    }
+    pfac = bits2f(nj_iget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_bias", "F")));
+    if (!(pfac > 0.0f) && !(pfac < 0.0f)) {
+        pfac = 1.0f;
+    }
+    pbias[0] = pbias[1] = pbias[2] = 0.0f;
+    {
+        nj_ref sb = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_scale", "[F"));
+
+        if (sb && nj_array_length(sb) >= 3) {
+            memcpy(pbias, nj_array_data(sb), sizeof(float) * 3u);
+        }
+    }
+    nva = nj_rget(vm, vb, m3g_fof(vm, NJ_C_VBUF, "_nj_normals",
+                                  "L" NJ_C_VARR ";"));
+    if (nva) {
+        nj_ref arr = nj_rget(vm, nva, m3g_fof(vm, NJ_C_VARR, "_nj_data", "[S"));
+
+        if (arr) {
+            nsrc   = (const nj_s2 *)nj_array_data(arr);
+            ncomp  = nj_iget(vm, nva, m3g_fof(vm, NJ_C_VARR, "_nj_numComp", "I"));
+            nfirst = nj_iget(vm, nva, m3g_fof(vm, NJ_C_VARR, "_nj_first", "I"));
+            ncount = nj_iget(vm, nva, m3g_fof(vm, NJ_C_VARR, "_nj_numVerts", "I"));
+            ntype  = nj_iget(vm, nva, m3g_fof(vm, NJ_C_VARR, "_nj_ctype", "I"));
+            if (ncomp < 3 || nfirst != 0) {
+                nsrc = NULL;
+            }
+        }
+    }
+    pp = (float *)nj_host_alloc(vm,
+                                (nj_size)nverts * 3u * sizeof(float));
+    if (!pp) {
+        return 0;
+    }
+    if (nsrc) {
+        pn = (float *)nj_host_alloc(vm,
+                                    (nj_size)nverts * 3u * sizeof(float));
+    }
+    wsum = (float *)nj_host_alloc(vm, (nj_size)nverts * sizeof(float));
+    if (!wsum || (nsrc && !pn)) {
+        nj_host_free(vm, pp);
+        nj_host_free(vm, pn);
+        nj_host_free(vm, wsum);
+        return 0;
+    }
+    memset(pp, 0, (nj_size)nverts * 3u * sizeof(float));
+    if (pn) { memset(pn, 0, (nj_size)nverts * 3u * sizeof(float)); }
+    memset(wsum, 0, (nj_size)nverts * sizeof(float));
+    {
+        const nj_s4 *fi = (const nj_s4 *)nj_array_data(firsts);
+        const nj_s4 *co = (const nj_s4 *)nj_array_data(counts);
+        const nj_s4 *wt = (const nj_s4 *)nj_array_data(ws);
+        const float *bf = (const float *)nj_array_data(binds);
+
+        for (b = 0u; b < (nj_u4)n && fi && co && wt && bf; b++) {
+            nj_ref bone = nj_array_get_ref(bones, b);
+            float cur[NJ_MF], bindm[NJ_MF], sm[NJ_MF];
+            nj_s4 first, count, w, v;
+
+            if (!bone) {
+                continue;
+            }
+            first = fi[b];
+            count = co[b];
+            w = wt[b];
+            if (w <= 0 || count <= 0 || first < 0) {
+                continue;
+            }
+            if (!m3g_path_xform(vm, bone, mesh, cur)) {
+                continue;
+            }
+            memcpy(bindm, bf + (nj_size)b * 16u, sizeof(bindm));
+            mat_mul(cur, bindm, sm);
+            for (v = first; v < first + count && v < nverts; v++) {
+                const nj_s2 *sp = src + (nj_size)v * (nj_size)pcomp;
+                float fw = (float)w;
+                float x = (float)sp[0], y = (float)sp[1];
+                float z = (pcomp > 2) ? (float)sp[2] : 0.0f;
+                float *ap = pp + (nj_size)v * 3u;
+
+                if (ptype == 2) {
+                    x /= 65536.0f; y /= 65536.0f; z /= 65536.0f;
+                }
+                x = x * pfac + pbias[0];
+                y = y * pfac + pbias[1];
+                z = z * pfac + pbias[2];
+                ap[0] += (sm[0] * x + sm[1] * y + sm[2]  * z + sm[3])  * fw;
+                ap[1] += (sm[4] * x + sm[5] * y + sm[6]  * z + sm[7])  * fw;
+                ap[2] += (sm[8] * x + sm[9] * y + sm[10] * z + sm[11]) * fw;
+                wsum[v] += fw;
+                if (pn && v < ncount) {
+                    const nj_s2 *np = nsrc + (nj_size)v * (nj_size)ncomp;
+                    float nx = (float)np[0], ny = (float)np[1];
+                    float nz = (float)np[2];
+                    float *bp = pn + (nj_size)v * 3u;
+
+                    if (ntype == 2) {
+                        nx /= 65536.0f; ny /= 65536.0f; nz /= 65536.0f;
+                    }
+                    /* Normals take rotation and scale only, not translation. */
+                    bp[0] += (sm[0] * nx + sm[1] * ny + sm[2]  * nz) * fw;
+                    bp[1] += (sm[4] * nx + sm[5] * ny + sm[6]  * nz) * fw;
+                    bp[2] += (sm[8] * nx + sm[9] * ny + sm[10] * nz) * fw;
+                }
+            }
+        }
+    }
+    for (i = 0; i < nverts; i++) {
+        float w = wsum[i];
+        float *ap = pp + (nj_size)i * 3u;
+
+        if (w > 0.0001f) {
+            float inv = 1.0f / w;
+
+            ap[0] *= inv;
+            ap[1] *= inv;
+            ap[2] *= inv;
+            if (pn) {
+                float *bp = pn + (nj_size)i * 3u;
+                float len = bp[0] * bp[0] + bp[1] * bp[1] + bp[2] * bp[2];
+
+                if (len > 1.0e-12f) {
+                    len = 1.0f / sqrtf(len);
+                    bp[0] *= len; bp[1] *= len; bp[2] *= len;
+                }
+            }
+        } else {
+            /* No bone claims this vertex: it keeps the bind pose. */
+            const nj_s2 *sp = src + (nj_size)i * (nj_size)pcomp;
+            float x = (float)sp[0], y = (float)sp[1];
+            float z = (pcomp > 2) ? (float)sp[2] : 0.0f;
+
+            if (ptype == 2) {
+                x /= 65536.0f; y /= 65536.0f; z /= 65536.0f;
+            }
+            ap[0] = x * pfac + pbias[0];
+            ap[1] = y * pfac + pbias[1];
+            ap[2] = z * pfac + pbias[2];
+            if (pn && i < ncount) {
+                const nj_s2 *np = nsrc + (nj_size)i * (nj_size)ncomp;
+                float *bp = pn + (nj_size)i * 3u;
+
+                bp[0] = (float)np[0];
+                bp[1] = (float)np[1];
+                bp[2] = (float)np[2];
+                if (ntype == 2) {
+                    bp[0] /= 65536.0f; bp[1] /= 65536.0f; bp[2] /= 65536.0f;
+                }
+            }
+        }
+    }
+    nj_host_free(vm, wsum);
+    *pos_out = pp;
+    *nrm_out = pn;
+    *n_out = nverts;
+    return 1;
+}
+
 static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
                             nj_ref *meshes, float *mats, nj_u4 n,
                             const nj_ref *slights, const float *slmats,
@@ -12278,6 +13076,19 @@ static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
             nj_ref ibs = nj_rget(vm, meshes[i], m3g_fof(vm, NJ_C_MESH,
                                      "_nj_ibs", "[L" NJ_C_IBUF ";"));
             nj_s4 k, count = get_submesh_count(vm, meshes[i]);
+            float *posed = NULL, *posed_nrm = NULL;
+            nj_s4 posed_n = 0;
+
+            /*
+             * A SkinnedMesh is posed once per frame, before its submeshes, so
+             * every submesh draws the same deformed vertices.  If the rig
+             * cannot be evaluated the arrays stay NULL and the bind pose in
+             * the vertex buffer draws exactly as any other mesh would.
+             */
+            if (cn && strcmp(cn, NJ_C_SKIN) == 0) {
+                (void)m3g_skin_pose(vm, meshes[i], &posed, &posed_nrm,
+                                    &posed_n);
+            }
             for (k = 0; k < count; k++) {
                 nj_value a0, rr;
                 app = 0;
@@ -12292,9 +13103,17 @@ static nj_u4 m3g_world_draw(nj_vm *vm, nj_ref self, nj_ref root,
                 }
                 if (!app || !ib) continue;
                 if (jr_setup(vm, self, vb, ib, app, root, slights, slmats,
-                             snlights, mats + (nj_size)i * 16u, &r))
+                             snlights, mats + (nj_size)i * 16u, &r)) {
+                    if (posed) {
+                        r.posed_pos = posed;
+                        r.posed_nrm = posed_nrm;
+                        r.posed_n = posed_n;
+                    }
                     drawn += jr_draw(&r);
+                }
             }
+            nj_host_free(vm, posed);
+            nj_host_free(vm, posed_nrm);
         }
     }
     return drawn;
