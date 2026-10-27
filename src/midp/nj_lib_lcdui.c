@@ -1857,6 +1857,8 @@ NJFN(g_drawRGB)
     nj_gfx g;
     nj_surface sc;
     nj_status st;
+    nj_s4 rows;
+    const nj_u4 *direct;
 
     if (!arr) {
         return nj_throw(vm, "java/lang/NullPointerException", "rgb is null");
@@ -1883,33 +1885,19 @@ NJFN(g_drawRGB)
 
     /* Retain ARGB: dropping alpha here turns transparent sprite backgrounds
      * (for example Asphalt 6's 0x00FF00FF colour key) into solid magenta. */
+    direct = arr->kind == NJ_OBJ_ARRAY && arr->aflags == NJ_ARRAY_T_INT ?
+        (const nj_u4 *)arr->u.bytes : NULL;
     n = (nj_size)w * (nj_size)h * sizeof(nj_u4);
     rgb = (nj_u4 *)nj_host_alloc(vm, n);
+    rows = h;
+    if (!rgb && h > 1) {
+        /* Audio samples can fragment a small device's host heap. A single
+         * scanline preserves drawRGB semantics without a full-image copy. */
+        rows = 1;
+        rgb = (nj_u4 *)nj_host_alloc(vm, (nj_size)w * sizeof(nj_u4));
+    }
     if (!rgb) {
         return nj_throw_oom(vm);
-    }
-    if (arr->kind == NJ_OBJ_ARRAY && arr->aflags == NJ_ARRAY_T_INT) {
-        nj_s4 row, col;
-        /* The row endpoints were checked above, including negative strides.
-         * Test the element type once instead of repeating array checks for
-         * every pixel; retain the same ARGB staging allocation and blending. */
-        for (row = 0; row < h; row++) {
-            for (col = 0; col < w; col++) {
-                nj_u4 p = ((const nj_u4 *)arr->u.bytes)[
-                    (nj_s8)offset + (nj_s8)row * scan + col];
-                rgb[(nj_size)row * (nj_size)w + (nj_size)col] =
-                    alpha ? p : (p | 0xFF000000u);
-            }
-        }
-    } else {
-        nj_s4 row, col;
-        for (row = 0; row < h; row++) {
-            for (col = 0; col < w; col++) {
-                nj_u4 p = (nj_u4)nj_array_get_int(arr, (nj_u4)(offset + row * scan + col));
-                rgb[(nj_size)row * (nj_size)w + (nj_size)col] =
-                    alpha ? p : (p | 0xFF000000u);
-            }
-        }
     }
     if (!gfx_load(vm, self, &g, &sc)) {
         nj_host_free(vm, rgb);
@@ -1917,13 +1905,28 @@ NJFN(g_drawRGB)
     }
     st = NJ_OK;
     view.width = (int)w;
-    view.height = (int)h;
+    view.height = (int)rows;
     view.format = NJ_PIXFMT_ARGB8888;
     view.pixels = rgb;
     view.has_alpha = alpha != 0;
-    nj_gfx_draw_region(&g, &view, 0, 0, (int)w, (int)h,
-                       NJ_TRANS_NONE, 0, 0, NULL,
-                       (int)x, (int)y, NJ_ROP_PAINT);
+    {
+        nj_s4 base, row, col;
+        for (base = 0; base < h; base += rows) {
+            for (row = 0; row < rows; row++) {
+                for (col = 0; col < w; col++) {
+                    nj_u4 at = (nj_u4)((nj_s8)offset + ((nj_s8)base + row) * scan + col);
+                    nj_u4 p = direct ? direct[at] : (nj_u4)nj_array_get_int(arr, at);
+                    rgb[(nj_size)row * (nj_size)w + (nj_size)col] =
+                        alpha ? p : (p | 0xFF000000u);
+                }
+            }
+            nj_s8 dest_y = (nj_s8)y + base;
+            if (dest_y <= 0x7fffffffL)
+                nj_gfx_draw_region(&g, &view, 0, 0, (int)w, (int)rows,
+                                   NJ_TRANS_NONE, 0, 0, NULL,
+                                   (int)x, (int)dest_y, NJ_ROP_PAINT);
+        }
+    }
     gfx_store(vm, self, &g);
     nj_host_free(vm, rgb);
     return st;
@@ -10391,36 +10394,34 @@ NJFN(dg_getNativePixelFormat)
     return NJ_OK;
 }
 
-/*
- * drawImage(Image, x, y, anchor, manipulation).  The manipulation argument is
- * accepted and ignored: this port draws through the same code as the MIDP
- * method, which has no rotation.  Saying so here is better than pretending,
- * and a game that asks for ROTATE_90 gets an unrotated image rather than an
- * exception it cannot catch.
- */
+/* Nokia rotates counterclockwise, then flips the resulting image along
+ * its destination axes. MIDP's eight transforms cover all combinations. */
 NJFN(dg_drawImage)
 {
-    /*
-     * drawImage(Image, x, y, anchor, manipulation) - the Nokia form, which
-     * adds a manipulation argument to the standard method.
-     *
-     * This forwarded through nj_call with a FOUR-slot argument array.  The
-     * callee takes five (receiver, image, x, y, anchor), so it read one slot
-     * past the end: a corpus title that called it ended up dispatching on a
-     * receiver that was really the caller's own stack word, and the emulator
-     * segfaulted three frames later inside nj_method_lookup.  Call the
-     * implementation with the array it actually wants, and with the receiver
-     * and the parameters in the slots it expects.
-     */
-    nj_value a[5];
+    static const nj_u1 transforms[4][4] = {
+        {NJ_TRANS_NONE, NJ_TRANS_MIRROR, NJ_TRANS_MIRROR_ROT180, NJ_TRANS_ROT180},
+        {NJ_TRANS_ROT270, NJ_TRANS_MIRROR_ROT90, NJ_TRANS_MIRROR_ROT270, NJ_TRANS_ROT90},
+        {NJ_TRANS_ROT180, NJ_TRANS_MIRROR_ROT180, NJ_TRANS_MIRROR, NJ_TRANS_NONE},
+        {NJ_TRANS_ROT90, NJ_TRANS_MIRROR_ROT270, NJ_TRANS_MIRROR_ROT90, NJ_TRANS_ROT270}
+    };
+    nj_s4 manipulation = NJ_ARG_INT(args, 4);
+    nj_s4 rotation = manipulation & ~0x6000;
+    nj_ref img = NJ_ARG_REF(args, 0);
+    int w, h;
+    nj_value a[10];
 
-    a[0] = args[0];     /* the Graphics */
-    a[1] = args[1];     /* the Image */
-    a[2] = args[2];     /* x */
-    a[3] = args[3];     /* y */
-    a[4] = args[4];     /* anchor; args[5], the manipulation, is ignored */
-    return nj_call(vm, NJ_THIS(args), NJ_C_GRAPHICS, "drawImage",
-                   "(L" NJ_C_IMAGE ";III)V", a, NULL);
+    if (!img) return nj_throw(vm, "java/lang/NullPointerException", "image is null");
+    if (rotation < 0 || rotation > 270 || rotation % 90 != 0)
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "invalid image manipulation");
+    if (!img_dims(vm, img, &w, &h))
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "image has no dimensions");
+    a[0].r = NJ_THIS(args);
+    a[1].r = img;
+    a[2].i = a[3].i = 0;
+    a[4].i = w; a[5].i = h;
+    a[6].i = transforms[rotation / 90][(manipulation >> 13) & 3];
+    a[7] = args[1]; a[8] = args[2]; a[9] = args[3];
+    return g_drawRegion(vm, th, a + 1, ret);
 }
 
 NJFN(dg_fillTriangle)

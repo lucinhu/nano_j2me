@@ -1915,11 +1915,12 @@ void nj_media_frame(nj_vm *vm)
          */
         if (r_z(vm, p, F_P_PLAT)) {
             void *mh = midi_handle(vm, p);
-            if (mh != NULL && vm->port->midi_finished
-                && vm->port->midi_finished(vm->port->ud, mh)) {
+            int finished = mh != NULL && vm->port->midi_finished ?
+                vm->port->midi_finished(vm->port->ud, mh) : 0;
+            if (finished) {
                 nj_s4 loop = r_i(vm, p, F_P_LOOP);
                 nj_s4 done = r_i(vm, p, F_P_LOOPDONE) + 1;
-                if (loop > 1 && done < loop) {
+                if (finished > 0 && loop > 1 && done < loop) {
                     w_i(vm, p, F_P_LOOPDONE, done);
                     if (vm->port->midi_seek) {
                         vm->port->midi_seek(vm->port->ud, mh, 0);
@@ -1931,7 +1932,7 @@ void nj_media_frame(nj_vm *vm)
                     w_z(vm, p, F_P_OPEN, 0);
                     if (r_i(vm, p, F_P_STATE) == 400) {
                         w_i(vm, p, F_P_STATE, 300);
-                        fire(vm, p, "endOfMedia");
+                        fire(vm, p, finished < 0 ? "stopped" : "endOfMedia");
                     }
                     media_unregister(vm, p);
                 }
@@ -3383,6 +3384,10 @@ NJFN(player_prefetch)
 {
     nj_ref self = NJ_THIS(args);
 
+    /* prefetch() is idempotent, including while playback is already active. */
+    if (r_i(vm, self, F_P_STATE) >= 300) {
+        return NJ_OK;
+    }
     if (r_i(vm, self, F_P_STATE) < 200) {
         nj_status st = NJ_CALL(player_realize, vm, th, args, ret);
         if (st != NJ_OK) {
@@ -3444,6 +3449,8 @@ NJFN(player_start)
             w_i(vm, self, F_P_LOOPDONE, 0);
             w_z(vm, self, F_P_OPEN, 1);
             (void)media_register(vm, self);
+        } else {
+            return nj_throw(vm, NJ_C_MEXC, "MIDI output unavailable");
         }
     } else if (r_i(vm, self, F_P_KIND) == 2) {
         /*
@@ -3475,6 +3482,14 @@ NJFN(player_start)
 #endif
         (void)media_register(vm, self);
     } else if (vm->port && vm->port->pcm_open) {
+        /* MIDP restarts a completed Player at the beginning. A paused one
+         * keeps its position; explicit seeks below also update pPushed. */
+        if (r_i(vm, self, F_P_FRAMES) > 0 &&
+            r_i(vm, self, F_P_PUSHED) >= r_i(vm, self, F_P_FRAMES)) {
+            if (!media_restart(vm, self)) {
+                return nj_throw(vm, NJ_C_MEXC, "audio decoder cannot restart");
+            }
+        }
         w_i(vm, self, F_P_LOOPDONE, 0);
         if (!r_z(vm, self, F_P_OPEN)) {
             if (vm->port->pcm_open(vm->port->ud, (int)r_i(vm, self, F_P_RATE),
@@ -3483,9 +3498,10 @@ NJFN(player_start)
             }
         }
         (void)pcm_push(vm, self, 1 << 20);
-        /* On the registry only while there is more to play: a port that takes
-         * the whole file at once is done here and never appears in a frame. */
-        if (r_i(vm, self, F_P_PUSHED) < r_i(vm, self, F_P_FRAMES)) {
+        /* Even a device that accepts the whole clip immediately needs the
+         * frame pump to finish the Player, close PCM and fire endOfMedia.
+         * Otherwise short clips remain STARTED forever. */
+        if (r_z(vm, self, F_P_OPEN)) {
             (void)media_register(vm, self);
         }
     }
@@ -3942,6 +3958,17 @@ NJFN(player_setMediaTime)
             }
         }
 #endif /* NJ_ENABLE_MIDI */
+    }
+    else if (r_i(vm, self, F_P_KIND) == 1) {
+        nj_s4 rate = r_i(vm, self, F_P_RATE);
+        nj_s4 frames = r_i(vm, self, F_P_FRAMES);
+        if (rate > 0 && frames >= 0) {
+            nj_s8 end = (nj_s8)frames * 1000000 / rate;
+            nj_s8 frame = want >= end ? frames :
+                          want / 1000000 * rate + (want % 1000000) * rate / 1000000;
+            w_i(vm, self, F_P_PUSHED, (nj_s4)frame);
+            want = frame * 1000000 / rate;
+        }
     }
     w_j(vm, self, F_P_TIME, want);
     ret->j = want;

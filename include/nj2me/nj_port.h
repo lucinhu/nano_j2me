@@ -435,6 +435,8 @@ typedef struct nj_port {
     void  (*midi_seek)(void *ud, void *handle, nj_u4 ms);
     nj_u4 (*midi_time)(void *ud, void *handle);
     void  (*midi_volume)(void *ud, void *handle, int volume);  /* 0..100 */
+    /* 0: active, 1: natural end, -1: displaced by another player. A displaced
+     * player becomes PREFETCHED with a stopped event, without auto-looping. */
     int   (*midi_finished)(void *ud, void *handle);
 
     /*

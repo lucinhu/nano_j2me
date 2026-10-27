@@ -63,6 +63,18 @@ static nj_ref static_ref(nj_vm *vm, const char *cls, const char *name,
 static int g_pass;
 static int g_fail;
 static const char *g_fixtures = "tests/fixtures";
+static void *(*base_alloc)(void *, nj_size);
+static int fragment_heap, refused_blocks;
+static void *fragmented_alloc(void *ud, nj_size bytes)
+{
+    /* A four-by-four ARGB copy plus host header cannot fit this hole;
+     * a one-row copy can. Other VM size classes remain available. */
+    if (fragment_heap && bytes >= 80u && bytes <= 128u) {
+        refused_blocks++;
+        return NULL;
+    }
+    return base_alloc ? base_alloc(ud, bytes) : malloc(bytes);
+}
 
 #define OK(cond)                                                              \
     do {                                                                      \
@@ -1245,6 +1257,29 @@ static void test_graphics(nj_vm *vm)
         OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", ra,
                    NULL) != NJ_OK);
         OK(exc_is(vm, "java/lang/ArrayIndexOutOfBoundsException"));
+    }
+
+    /* ---- drawRGB on a fragmented host heap ---- */
+    {
+        nj_ref target = image_new(vm, 8, 8);
+        nj_ref graphics = call_ref(vm, target, NJ_C_IMAGE, "getGraphics",
+                                   "()L" NJ_C_GRAPHICS ";", NULL, &ok);
+        nj_ref rgb = nj_int_array_new(vm, 16);
+        nj_value ra[8];
+        int row, col;
+        for (row = 0; row < 16; ++row)
+            nj_array_set_int(rgb, row, (nj_s4)(0xff102030u + row));
+        ra[0] = sref(rgb); ra[1] = iref(12); ra[2] = iref(-4);
+        ra[3] = iref(1); ra[4] = iref(2);
+        ra[5] = iref(4); ra[6] = iref(4); ra[7] = iref(1);
+        refused_blocks = 0; fragment_heap = 1;
+        OK(nj_call(vm, graphics, NJ_C_GRAPHICS, "drawRGB", "([IIIIIIIZ)V", ra, NULL) == NJ_OK);
+        fragment_heap = 0;
+        OK_MSG(refused_blocks > 0, "drawRGB test must refuse the full-image allocation");
+        for (row = 0; row < 4; ++row)
+            for (col = 0; col < 4; ++col)
+                OK_MSG(img_pixel(vm, target, 1 + col, 2 + row) == 0xff102030u + (3 - row) * 4 + col,
+                       "drawRGB scanline fallback preserves negative stride and destination rows");
     }
 
     /* ---- XOR mode ---- */
@@ -3453,6 +3488,8 @@ static int round_full(const blob *jar, const blob *png, const blob *png_alpha,
     if (nj_port_headless(&port) != NJ_OK) {
         return 1;
     }
+    base_alloc = port.alloc;
+    port.alloc = fragmented_alloc;
     vm = nj_vm_create(&port, 4u * 1024u * 1024u);
     if (!vm) {
         nj_port_shutdown(&port);
