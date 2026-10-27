@@ -1957,6 +1957,28 @@ nj_u4 nj_midi_stream_seek(nj_midi_stream *s, nj_u4 frame)
     return done;
 }
 
+/*
+ * Rewind to the first frame.  Same rebuild as a seek to zero, but the result
+ * is the operation's success rather than a frame position: a looping Player
+ * that cannot restart has to be told apart from one that restarted instantly.
+ */
+int nj_midi_stream_restart(nj_midi_stream *s)
+{
+    nj_midi_stream *fresh;
+
+    if (s == NULL) {
+        return 0;
+    }
+    fresh = nj_midi_stream_open(s->data, s->size, &s->mem);
+    if (fresh == NULL) {
+        return 0;
+    }
+    mid_stream_clear(s);
+    *s = *fresh;
+    s->mem.free(s->mem.ud, fresh);
+    return 1;
+}
+
 nj_midi_stream *nj_midi_stream_open(const void *data, nj_u4 size, const nj_midi_mem *mem)
 {
     nj_midi_stream *s;

@@ -4704,3 +4704,40 @@ ctest is 122/122; the corpus sweep is back to 397 passed / 2 failed of 399
 titles, the two failures being the title-side rows documented in
 `docs/VERIFICATION.md`.  Mechanism note:
 `docs/notes/2026-10-27-paint-pump.md`.
+
+## Round 93 - the loop that could not find its song (2026-10-27)
+
+A user reported that background music still stops for good after a while, with
+a concrete example: in 极品飞车：热血追踪 (`极品飞车14之热力追踪中文版_4160.jar`)
+there is no sound after being caught by the police.  The race music is a
+looping streamed `audio/midi` Player (`two_fingers.mid`, 13,814 bytes,
+22,050 Hz stereo, 1,363,678 frames ≈ 61.9 s, `setLoopCount(-1)`), so "after
+being caught" really means "after the race track has looped several times".
+
+The streamed MIDI renderer keeps only a raw pointer to the Java byte array
+`createPlayer()` read the song into; the Player's `pData` holds the renderer
+handle, and nothing rooted the source array once `createPlayer()` returned.
+After a garbage collection the loop restart re-opened the song from freed
+memory, `nj_midi_stream_open()` failed, `seek()` reported `0`
+(indistinguishable from "rewound to frame 0"), and `media_restart()` reported
+the loop as successful.  The next pump then pulled zero frames from a renderer
+parked at the end, `pcm_push()` wrote that zero as the Player's frame total,
+and from then on every restart was refused, the PCM device was closed and
+`endOfMedia` fired - silence for the rest of the run.  The platform-synth
+takeover path had the same shape (the bytes sat in `pData` only until the
+takeover replaced `pData` with the renderer).
+
+Fix (`this commit`): keep the song bytes rooted in `pSrc` in both paths; add
+`nj_midi_stream_restart()`, which reports whether the re-open succeeded, and
+make `media_restart()` use it; and only correct `pFrames` when a reset pass
+actually rendered something.  Tests: whole-song replay after a restart is
+byte-identical, a corrupted song reports a failed restart instead of
+pretending to rewind (`tests/test_midi.c`), and a looping MIDI Player survives
+`nj_gc_run()` and six loops with `pSrc` still rooted
+(`tests/test_media_replay.c`).  Full ctest 122/122.
+
+A/B on the title, 8,000 frames at 176x208: pre-fix `78c4de1` shows the failed
+restart after seven loops and then goes silent (`pcm_frames=11,890,477`); the
+fixed build keeps the loop running through 43 collections
+(`pcm_frames=30,385,250`, race still drawing, exit 0).  Mechanism note:
+`docs/notes/2026-10-27-midi-loop-restart.md`.

@@ -1063,8 +1063,18 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
             memcpy((void *)b, &state, sizeof(state));
             if (state.pending == 0u) {
                 /* Keep the renderer until close/deallocate so a later seek
-                 * can restart it. Never reinterpret its holder as PCM. */
-                w_i(vm, player, F_P_FRAMES, done);
+                 * can restart it. Never reinterpret its holder as PCM.
+                 * Only trust the count when this pass rendered something: a
+                 * rewind that could not rebuild the song leaves the renderer
+                 * at its end, and overwriting pFrames with zero there used to
+                 * turn one failed restart into a Player that could never play
+                 * again. */
+                if (done > 0) {
+                    w_i(vm, player, F_P_FRAMES, done);
+                } else {
+                    nj_logf(vm, 2, "media: the MIDI renderer ended without "
+                                   "producing a frame");
+                }
                 return 0;
             }
         }
@@ -1188,8 +1198,9 @@ static void media_unregister(nj_vm *vm, nj_ref player)
  * iterating forwards would then skip the entry that shifted into its place.
  */
 
-/* Rewind the retained renderer without allocating another stream or keeping
- * a duplicate copy of the original MIDI bytes in the Java heap. */
+/* Rewind the retained renderer: the Player owns the reference to the song
+ * bytes (F_P_SRC), the stream holds only a pointer, and a restart re-opens the
+ * song instead of allocating another copy in the Java heap. */
 static int media_restart(nj_vm *vm, nj_ref p)
 {
     if (r_i(vm, p, F_P_FRAMES) <= 0) return 0;
@@ -1200,7 +1211,7 @@ static int media_restart(nj_vm *vm, nj_ref p)
         if (data == NULL || barray_len(data) < NJ_MEDIA_STREAM_BYTES) return 0;
         memcpy(&state, barray_bytes(data), sizeof(state));
         if (state.stream == NULL) return 0;
-        (void)nj_midi_stream_seek(state.stream, 0);
+        if (!nj_midi_stream_restart(state.stream)) return 0;
         state.pending = state.offset = 0u;
         memcpy(data->u.bytes, &state, sizeof(state));
     }
@@ -2692,6 +2703,16 @@ NJFN(media_createPlayer_stream)
                     struct nj_midi_stream *keep = st;
                     memcpy(holder->u.bytes, &keep, sizeof(keep));
                     w_r(vm, p, F_P_DATA, "[B", holder);
+                    /*
+                     * The renderer re-opens the song from these bytes every
+                     * time the loop restarts, and it holds only a raw pointer:
+                     * the Player is what keeps the array in the heap.  Without
+                     * this the collector may free it between two loops and the
+                     * restart then parses whatever took its place - the music
+                     * stops after a few passes instead of looping forever
+                     * (极品飞车14之热力追踪 loses its race track music this way).
+                     */
+                    w_r(vm, p, F_P_SRC, "[B", data);
                     w_z(vm, p, F_P_STREAM, 1);
                     w_z(vm, p, F_P_MIDIK, 1);
                     w_i(vm, p, F_P_RATE, (nj_s4)NJ_MIDI_RATE);
@@ -4164,6 +4185,10 @@ static struct nj_midi_stream *midi_take_over(nj_vm *vm, nj_ref player)
         struct nj_midi_stream *keep = st;
         memcpy(holder->u.bytes, &keep, sizeof(keep));
     }
+    /* pData becomes the renderer handle below; the song bytes the renderer
+     * re-reads on every loop restart have to stay reachable somewhere, so the
+     * Player keeps them where the other streamed codecs keep theirs. */
+    w_r(vm, player, F_P_SRC, "[B", data);
     w_r(vm, player, F_P_DATA, "[B", holder);
     w_z(vm, player, F_P_STREAM, 1);
     w_i(vm, player, F_P_RATE, (nj_s4)NJ_MIDI_RATE);

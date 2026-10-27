@@ -1426,6 +1426,59 @@ int main(void)
         }
     }
 
+    /*
+     * Restarting a stream must replay the song from its first sample, and a
+     * song whose bytes are gone has to say so: a Player's loop cannot pretend
+     * it restarted (极品飞车14之热力追踪中文版_4160 used to fall silent when a
+     * collected byte array made this fail).
+     */
+    {
+        nj_u1 file[512];
+        nj_u4 n = build_voiced(file, NULL, 0u, 0u, 69u);
+        nj_u4 frames = 0u, chans = 0u;
+        nj_u1 *whole = nj_midi_render_ex(file, n, &frames, &chans, &MEM);
+        struct nj_midi_stream *s = nj_midi_stream_open(file, n, &MEM);
+
+        check(whole != NULL && s != NULL && frames > 0u,
+              "a song opens for a restart test");
+        if (whole != NULL && s != NULL && frames > 0u) {
+            static nj_u1 got[65536];
+            nj_u4 half = frames / 2u;
+            nj_u4 total = 0u;
+
+            check(nj_midi_stream_pull(s, got, half) >= half / 2u,
+                  "the first pass renders before the restart");
+            check(nj_midi_stream_restart(s) == 1,
+                  "a stream restarts from the beginning");
+            while (total < frames) {
+                nj_u4 want = frames - total;
+                nj_u4 gotn;
+                if (want > 4096u / chans / 2u) {
+                    want = 4096u / chans / 2u;
+                }
+                gotn = nj_midi_stream_pull(s, got + (nj_size)total * chans * 2u,
+                                           want);
+                if (gotn == 0u) {
+                    break;
+                }
+                total += gotn;
+            }
+            check(total == frames,
+                  "the restarted stream renders the whole song again");
+            check(total == frames &&
+                  memcmp(got, whole + 0u, (nj_size)frames * chans * 2u) == 0,
+                  "and restarted output matches the first pass");
+
+            file[0] = (nj_u1)'?';  /* not an MThd: the bytes cannot reopen */
+            check(nj_midi_stream_restart(s) == 0,
+                  "a restart that cannot reparse its bytes reports failure");
+        }
+        t_free(NULL, whole);
+        if (s != NULL) {
+            nj_midi_stream_close(s);
+        }
+    }
+
     {
         static const nj_u1 long_body[] = {
             0x00, 0xFF, 0x51, 0x03, 0x07, 0xA1, 0x20,   /* tempo: 500000 us */

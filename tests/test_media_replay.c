@@ -1,7 +1,9 @@
 /* Reusing a sampled Player must produce the same PCM, including after EOF. */
 #include "nj2me/nj.h"
+#include "nj2me/nj_config.h"
 #include "nj_internal.h"
 #include "nj_midp.h"
+#include "nj_midi.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -124,6 +126,7 @@ done:
 }
 /* A platform with one MIDI voice reports a displaced player separately
  * from normal EOF, so finite loops cannot steal the output back. */
+static long midi_stream_frames;
 typedef struct { int state, starts; } midi_slot;
 static midi_slot midi_slots[2];
 static int midi_count, midi_active, midi_fail;
@@ -194,9 +197,99 @@ static void test_midi_preemption(int loops)
     for (i = 0; i < 2; ++i) CHECK(nj_call(vm, players[i], PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
     nj_vm_destroy(vm); nj_port_shutdown(&port);
 }
+/*
+ * A looping MIDI Player renders through a stream that holds only a raw pointer
+ * to the song bytes: the Player has to keep the byte array in the heap (pSrc),
+ * because the loop restart re-opens the song from it.  When it did not, the
+ * collector eventually reused the freed array and the restart parsed garbage -
+ * 极品飞车14之热力追踪中文版_4160 lost its race music a few loops after the
+ * start, which a player hears as the music stopping for good.
+ */
+static int midi_stream_open_pcm(void *ud, int rate, int ch)
+{ (void)ud; (void)ch; return rate == (int)NJ_MIDI_RATE ? 0 : -1; }
+static int midi_stream_room(void *ud) { (void)ud; return 4096; }
+static int midi_stream_write_pcm(void *ud, const nj_s2 *data, int frames)
+{ (void)ud; (void)data; midi_stream_frames += frames; return frames; }
+static void midi_stream_close_pcm(void *ud) { (void)ud; }
+#if NJ_ENABLE_MIDI
+static void test_midi_stream_loop(void)
+{
+    static const nj_u1 song[] = {
+        'M','T','h','d',0,0,0,6,0,0,0,1,0,96,
+        'M','T','r','k',0,0,0,12,0,0x90,60,64,96,0x80,60,0,0,0xff,0x2f,0
+    };
+    nj_port port; nj_vm *vm; nj_ref bytes, stream, player; nj_value a[2], ret;
+    nj_field *fsrc; nj_u4 mark; nj_s4 frames; long target; int i;
+
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    port.pcm_open = midi_stream_open_pcm;
+    port.pcm_write = midi_stream_write_pcm;
+    port.pcm_free = midi_stream_room;
+    port.pcm_close = midi_stream_close_pcm;
+    vm = nj_vm_create(&port, 1024 * 1024);
+    CHECK(vm != NULL);
+    if (!vm) { nj_port_shutdown(&port); return; }
+    mark = nj_root_mark(vm);
+    bytes = nj_root(vm, nj_byte_array_new(vm, sizeof(song)));
+    CHECK(bytes != NULL);
+    if (!bytes) goto done;
+    memcpy(nj_array_data(bytes), song, sizeof(song));
+    stream = nj_root(vm, nj_object_new(vm, "java/io/ByteArrayInputStream"));
+    a[0].r = bytes;
+    CHECK(nj_call_special(vm, stream, "java/io/ByteArrayInputStream",
+                          "<init>", "([B)V", a, NULL) == NJ_OK);
+    a[0].r = stream; a[1].r = NULL;
+    CHECK(nj_call_static(vm, "javax/microedition/media/Manager",
+        "createPlayer",
+        "(Ljava/io/InputStream;Ljava/lang/String;)Ljavax/microedition/media/Player;",
+        a, &ret) == NJ_OK);
+    player = nj_root(vm, ret.r);
+    CHECK(player != NULL);
+    if (!player) goto done;
+    /* The renderer holds a pointer, not a GC reference: the Player must. */
+    fsrc = nj_field_lookup(vm, PLAYER, "pSrc", "[B", 0);
+    CHECK(fsrc != NULL && nj_field_read_ref(vm, player, fsrc) != NULL);
+    {
+        nj_field *ff = nj_field_lookup(vm, PLAYER, "pFrames", "I", 0);
+        CHECK(ff != NULL && nj_field_read_int(vm, player, ff) > 0);
+        frames = ff != NULL ? nj_field_read_int(vm, player, ff) : 0;
+    }
+    a[0].i = -1;    /* loop forever */
+    CHECK(nj_call(vm, player, PLAYER, "setLoopCount", "(I)V", a, NULL) == NJ_OK);
+    CHECK(nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    midi_stream_frames = 0;
+    target = (long)frames * 3;
+    for (i = 0; i < 512 && (long)midi_stream_frames < target; i++) {
+        nj_media_frame(vm);
+    }
+    CHECK((long)midi_stream_frames >= target);
+    CHECK(nj_call(vm, player, PLAYER, "getState", "()I", NULL, &ret) == NJ_OK);
+    CHECK(ret.i == 400);
+    /* Drop every local reference and collect: only pSrc can keep the song. */
+    nj_root_release(vm, mark);
+    player = nj_root(vm, player);
+    CHECK(nj_gc_run(vm) == NJ_OK);
+    fsrc = nj_field_lookup(vm, PLAYER, "pSrc", "[B", 0);
+    CHECK(fsrc != NULL && nj_field_read_ref(vm, player, fsrc) != NULL);
+    target = (long)frames * 6;
+    for (i = 0; i < 1024 && (long)midi_stream_frames < target; i++) {
+        nj_media_frame(vm);
+    }
+    CHECK((long)midi_stream_frames >= target);
+    CHECK(nj_call(vm, player, PLAYER, "getState", "()I", NULL, &ret) == NJ_OK);
+    CHECK(ret.i == 400);
+    CHECK(nj_call(vm, player, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
+done:
+    nj_vm_destroy(vm); nj_port_shutdown(&port);
+}
+#endif /* NJ_ENABLE_MIDI */
+
 int main(void)
 {
     run_case(1, 0); run_case(2, 0); run_case(1, 3); run_case(2, 3);
+#if NJ_ENABLE_MIDI
+    test_midi_stream_loop();
+#endif
     test_midi_preemption(1); test_midi_preemption(3); test_midi_preemption(-1);
     printf("media replay: %d failures\n", failures);
     return failures ? 1 : 0;

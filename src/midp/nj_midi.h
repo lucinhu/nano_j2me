@@ -82,6 +82,14 @@ nj_u4 nj_midi_stream_pull(struct nj_midi_stream *s, nj_u1 *out, nj_u4 want);
  * the song when the target is past it.
  */
 nj_u4 nj_midi_stream_seek(struct nj_midi_stream *s, nj_u4 frame);
+/*
+ * Rewind to the first frame, rebuilding the renderer so no voice from the last
+ * pass survives into the new one.  Unlike nj_midi_stream_seek(s, 0) the answer
+ * is a success flag: a streaming Player keeps the song bytes alive (pSrc) and
+ * a restart can only fail when they are no longer a song, which the caller
+ * must report instead of pretending the loop happened.
+ */
+int nj_midi_stream_restart(struct nj_midi_stream *s);
 void nj_midi_stream_close(struct nj_midi_stream *s);
 
 /*
