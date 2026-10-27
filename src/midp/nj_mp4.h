@@ -53,6 +53,11 @@ extern "C" {
 #define NJ_MP4_ERR_NO_VIDEO  (-2)   /* no usable video track                 */
 #define NJ_MP4_ERR_CODEC     (-3)   /* a video track, but not H.263          */
 #define NJ_MP4_ERR_FEATURE   (-4)   /* valid container we do not decode      */
+/* Audio-track results.  They are separate from the video codes above so a
+ * caller that wants both tracks can tell "this file has no sound" from "this
+ * file has a sound track this runtime cannot decode". */
+#define NJ_MP4_ERR_NO_AUDIO    (-5) /* no sound track at all                 */
+#define NJ_MP4_ERR_AUDIO_CODEC (-6) /* a sound track, but not AMR-NB (samr)  */
 
 /* Sample entry fourccs this iterator recognises.  s263 is what the 3GP spec
  * names H.263; H263/h263 appear in QuickTime-derived files. */
@@ -60,6 +65,14 @@ extern "C" {
 #define NJ_MP4_CODEC_H263   0x48323633u   /* 'H263' */
 #define NJ_MP4_CODEC_H263LC 0x68323633u   /* 'h263' */
 #define NJ_MP4_CODEC_MP4V   0x6d703476u   /* 'mp4v' */
+/* Audio sample entry this iterator recognises: AMR narrowband inside 3GP.  Each
+ * sample is exactly one AMR frame (its first byte is the AMR ToC), which is the
+ * granularity the runtime's AMR decoder takes. */
+#define NJ_MP4_CODEC_SAMR   0x73616d72u   /* 'samr' */
+
+/* Track kinds for nj_mp4_open_track(). */
+#define NJ_MP4_TRACK_VIDEO  0
+#define NJ_MP4_TRACK_AUDIO  1
 
 /* One sample.  `offset' is absolute in the caller's buffer, `dts' is in the
  * track's media timescale (see mp4->timescale), `key' is 1 for a sync sample. */
@@ -78,9 +91,11 @@ typedef struct nj_mp4 {
     /* Selected track. */
     nj_u4        timescale;      /* mdhd timescale, nonzero                  */
     nj_u4        duration;       /* track duration in timescale units       */
-    nj_u4        width;
-    nj_u4        height;
-    nj_u4        fps;            /* rounded average, 0 when unknown         */
+    nj_u4        width;          /* video only; 0 on an audio track         */
+    nj_u4        height;         /* video only                              */
+    nj_u4        fps;            /* video only; rounded average, 0 unknown  */
+    nj_u4        channels;       /* audio only: 1 for AMR-NB                */
+    nj_u4        sample_rate;    /* audio only: 8000 for AMR-NB             */
     nj_u4        codec;          /* NJ_MP4_CODEC_* fourcc                   */
     nj_u4        sample_count;
 
@@ -129,7 +144,33 @@ typedef struct nj_mp4 {
 } nj_mp4;
 
 /*
- * Parse the container and select the video track.  Returns NJ_MP4_OK, or one
+ * Parse the container and select a track of `kind' - NJ_MP4_TRACK_VIDEO or
+ * NJ_MP4_TRACK_AUDIO.  The selected track's tables are cross-checked and
+ * `nj_mp4_next()' then hands out its samples; audio samples are one AMR frame
+ * each.  Returns NJ_MP4_OK or one of the NJ_MP4_ERR_* values: a video request
+ * can answer NO_VIDEO/CODEC/FEATURE, an audio request NO_AUDIO, AUDIO_CODEC or
+ * FEATURE, and damaged containers/tables answer FORMAT for both.  A request
+ * with an unknown kind answers FORMAT.
+ */
+int nj_mp4_open_track(nj_mp4 *mp4, const void *data, nj_u4 size, int kind);
+
+/*
+ * Parse the container and select its AMR-NB ('samr') sound track.  On success
+ * mp4->codec is NJ_MP4_CODEC_SAMR, mp4->timescale is the audio media timescale
+ * (8000 in the corpus movies), mp4->channels is 1, mp4->sample_rate is 8000,
+ * and mp4->width/height/fps are zero.  Each nj_mp4_next() sample is one AMR
+ * frame, ready for the runtime's AMR decoder (which consumes #!AMR-style
+ * frames).  Returns NJ_MP4_ERR_NO_AUDIO when the file has no sound track,
+ * NJ_MP4_ERR_AUDIO_CODEC when it has one that is not AMR-NB,
+ * NJ_MP4_ERR_FORMAT when its tables disagree, and NJ_MP4_ERR_FEATURE for a
+ * container shape this parser refuses.
+ */
+int nj_mp4_open_audio(nj_mp4 *mp4, const void *data, nj_u4 size);
+
+/*
+ * Parse the container and select the video track.  This is
+ * nj_mp4_open_track(mp4, data, size, NJ_MP4_TRACK_VIDEO) and keeps the
+ * behaviour and error codes it has always had.  Returns NJ_MP4_OK, or one
  * of the NJ_MP4_ERR_* values.  If an H.263 track exists it is preferred over
  * an MPEG-4 Part 2 one, even when both are present: the H.263 decoder is the
  * one this runtime ships.  A file with no video track, a video track whose

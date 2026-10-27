@@ -10,6 +10,7 @@
 #include "nj2me/nj_avcodec.h"
 #include "m4v_clip.h"
 #include "m4v_slice_clip.h"
+#include "m4v_audio_clip.h"
 #include "nj_mp4.h"
 #include "nj_vlc_intra.h"
 #include "nj2me/nj_m4v_escape.h"
@@ -1820,6 +1821,101 @@ provider_done:
         }
         ok(frame == M4V_ACPRED_FRAMES && bad == 0 && bad_bits == 0,
            "the AC-prediction movie decodes to the reference planes exactly");
+    }
+
+
+    {
+        /* The container's audio half: nj_mp4_open_audio() selects the 'samr'
+         * track of a dual-track file and the shared sample iterator hands out
+         * one AMR sample at a time, while selecting the video track from the
+         * very same buffer keeps working untouched. */
+        static nj_mp4 av;
+        static nj_mp4_sample smp;
+        static const nj_u4 sizes[M4V_AV_AUDIO_FRAMES] = { 13, 12, 15, 14, 16 };
+        static nj_u1 patched[sizeof(m4v_av_3gp)];
+        int rc, n, bad = 0, again = 0;
+
+        rc = nj_mp4_open_audio(&av, m4v_av_3gp, (nj_u4)sizeof(m4v_av_3gp));
+        ok(rc == NJ_MP4_OK && av.codec == NJ_MP4_CODEC_SAMR &&
+           av.timescale == 8000u && av.duration == 800u &&
+           av.sample_count == M4V_AV_AUDIO_FRAMES && av.channels == 1u &&
+           av.sample_rate == 8000u && av.width == 0u && av.height == 0u &&
+           av.fps == 0u,
+           "the dual-track fixture opens its AMR-NB sound track");
+        {
+            nj_u4 off = 0, prefix = 0;
+
+            for (n = 0; n < M4V_AV_AUDIO_FRAMES; n++) {
+                rc = nj_mp4_next(&av, &smp);
+                if (rc != 1) {
+                    bad++;
+                    break;
+                }
+                if (n == 0) {
+                    off = smp.offset;
+                }
+                bad += smp.size != sizes[n];
+                bad += smp.dts != (nj_u4)(160 * n);
+                bad += smp.duration != 160u;
+                bad += smp.key != 1u;
+                bad += smp.offset != off + prefix;
+                prefix += sizes[n];
+            }
+            bad += nj_mp4_next(&av, &smp) != 0;
+        }
+        ok(bad == 0,
+           "its five AMR samples carry the expected size, offset and dts");
+        /* rewind walks the same samples again */
+        nj_mp4_rewind(&av);
+        again = (nj_mp4_next(&av, &smp) == 1 && smp.size == sizes[0] &&
+                 smp.dts == 0u);
+        ok(again != 0, "rewinding the audio track starts over");
+        /* the video track of the same buffer is still selectable and intact */
+        rc = nj_mp4_open(&av, m4v_av_3gp, (nj_u4)sizeof(m4v_av_3gp));
+        ok(rc == NJ_MP4_OK && av.codec == NJ_MP4_CODEC_MP4V &&
+           av.width == M4V_AV_VIDEO_WIDTH && av.height == M4V_AV_VIDEO_HEIGHT &&
+           av.sample_count == M4V_AV_VIDEO_FRAMES && av.fps == 2u &&
+           nj_mp4_next(&av, &smp) == 1 && smp.size == 4u &&
+           nj_mp4_next(&av, &smp) == 1 && smp.size == 4u &&
+           nj_mp4_next(&av, &smp) == 0,
+           "the video track of the dual-track file is unchanged");
+        /* nj_mp4_open_track() is the same selection expressed explicitly */
+        ok(nj_mp4_open_track(&av, m4v_av_3gp, (nj_u4)sizeof(m4v_av_3gp),
+                             NJ_MP4_TRACK_AUDIO) == NJ_MP4_OK &&
+           nj_mp4_open_track(&av, m4v_av_3gp, (nj_u4)sizeof(m4v_av_3gp),
+                             7) == NJ_MP4_ERR_FORMAT &&
+           nj_mp4_open_track(NULL, m4v_av_3gp, 16u, NJ_MP4_TRACK_AUDIO) ==
+               NJ_MP4_ERR_FORMAT,
+           "open_track selects by kind and refuses unknown kinds/arguments");
+        /* no sound track: NO_AUDIO, while the video track still opens */
+        ok(nj_mp4_open_audio(&av, m4v_av_video_only_3gp,
+                             (nj_u4)sizeof(m4v_av_video_only_3gp)) ==
+               NJ_MP4_ERR_NO_AUDIO &&
+           nj_mp4_open(&av, m4v_av_video_only_3gp,
+                       (nj_u4)sizeof(m4v_av_video_only_3gp)) == NJ_MP4_OK,
+           "a video-only movie answers NO_AUDIO and still plays its video");
+        /* a sound track that is not AMR-NB: AUDIO_CODEC */
+        memcpy(patched, m4v_av_3gp, sizeof(patched));
+        patched[M4V_AV_SAMR_AT + 0] = 'm';
+        patched[M4V_AV_SAMR_AT + 1] = 'p';
+        patched[M4V_AV_SAMR_AT + 2] = '4';
+        patched[M4V_AV_SAMR_AT + 3] = 'a';
+        ok(nj_mp4_open_audio(&av, patched, (nj_u4)sizeof(patched)) ==
+               NJ_MP4_ERR_AUDIO_CODEC &&
+           nj_mp4_open(&av, patched, (nj_u4)sizeof(patched)) == NJ_MP4_OK,
+           "a non-AMR sound track answers AUDIO_CODEC, not NO_AUDIO");
+        /* inconsistent tables: stsz says four samples, stts still says five */
+        memcpy(patched, m4v_av_3gp, sizeof(patched));
+        patched[M4V_AV_STSZ_COUNT_AT + 0] = 0u;
+        patched[M4V_AV_STSZ_COUNT_AT + 1] = 0u;
+        patched[M4V_AV_STSZ_COUNT_AT + 2] = 0u;
+        patched[M4V_AV_STSZ_COUNT_AT + 3] = 4u;
+        ok(nj_mp4_open_audio(&av, patched, (nj_u4)sizeof(patched)) ==
+               NJ_MP4_ERR_FORMAT &&
+           nj_mp4_open_audio(&av, m4v_av_3gp,
+                             (nj_u4)sizeof(m4v_av_3gp) - 16u) ==
+               NJ_MP4_ERR_FORMAT,
+           "inconsistent or truncated audio tables answer FORMAT");
     }
 
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);
