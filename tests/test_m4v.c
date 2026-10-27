@@ -1114,13 +1114,68 @@ int main(void)
     }
 
     {
-        ok(nj_m4v_scan_index_mode(0, 1) == 0 && nj_m4v_scan_index_mode(9, 1) == 9,
-           "the horizontal scan keeps row-major order");
-        ok(nj_m4v_scan_index_mode(1, 2) == 8 && nj_m4v_scan_index_mode(8, 2) == 1,
-           "the vertical scan transposes row and column");
+        /* The two AC-prediction scans are the reference's alternate tables
+         * (ff_alternate_horizontal_scan / ff_alternate_vertical_scan), not
+         * plain row/column orders: pin a few positions from each and require
+         * both to be permutations. */
+        static const int h_first[8] = { 0, 1, 2, 3, 8, 9, 16, 17 };
+        static const int v_first[8] = { 0, 8, 16, 24, 1, 9, 2, 10 };
+        int i, bad = 0;
+
+        for (i = 0; i < 8; i++) {
+            bad += nj_m4v_scan_index_mode(i, 1) != h_first[i];
+            bad += nj_m4v_scan_index_mode(i, 2) != v_first[i];
+        }
+        bad += nj_m4v_scan_index_mode(9, 1) != 11;
+        bad += nj_m4v_scan_index_mode(15, 1) != 14;
+        bad += nj_m4v_scan_index_mode(16, 1) != 13;
+        bad += nj_m4v_scan_index_mode(8, 2) != 17;
+        bad += nj_m4v_scan_index_mode(15, 2) != 49;
+        bad += nj_m4v_scan_index_mode(63, 1) != 63;
+        bad += nj_m4v_scan_index_mode(63, 2) != 63;
+        for (i = 0; i < 64; i++) {
+            int seen_h[64], seen_v[64], k;
+
+            for (k = 0; k < 64; k++) {
+                seen_h[k] = 0;
+                seen_v[k] = 0;
+            }
+            for (k = 0; k < 64; k++) {
+                int a = nj_m4v_scan_index_mode(k, 1);
+                int b = nj_m4v_scan_index_mode(k, 2);
+
+                if (a < 0 || a > 63 || b < 0 || b > 63) {
+                    bad++;
+                } else {
+                    if (seen_h[a] != 0) bad++;
+                    if (seen_v[b] != 0) bad++;
+                    seen_h[a] = 1;
+                    seen_v[b] = 1;
+                }
+            }
+            break;
+        }
+        ok(bad == 0,
+           "the AC-prediction scans are the reference alternate horizontal/vertical tables");
         ok(nj_m4v_scan_index_mode(63, 0) == nj_m4v_scan_index(63) &&
            nj_m4v_scan_index_mode(-1, 0) == -1 && nj_m4v_scan_index_mode(64, 1) == -1,
            "the default scan is the zigzag, and out-of-range indices are refused");
+    }
+    {
+        /* ROUNDED_DIV() rounds half away from zero, like the reference's
+         * macro; AC prediction uses it when the neighbour macroblock had a
+         * different quantiser. */
+        int bad = 0;
+
+        bad += nj_m4v_rounded_div(5, 2) != 3;      /* 2.5 -> 3  */
+        bad += nj_m4v_rounded_div(-5, 2) != -3;    /* -2.5 -> -3 */
+        bad += nj_m4v_rounded_div(7, 4) != 2;      /* 1.75 -> 2 */
+        bad += nj_m4v_rounded_div(-7, 4) != -2;
+        bad += nj_m4v_rounded_div(2, 3) != 1;      /* 0.67 -> 1 */
+        bad += nj_m4v_rounded_div(1, 2) != 1;      /* 0.5 -> 1  */
+        bad += nj_m4v_rounded_div(-1, 2) != -1;
+        bad += nj_m4v_rounded_div(0, 7) != 0;
+        ok(bad == 0, "AC prediction rescales by the reference's ROUNDED_DIV");
     }
 
 
@@ -1693,6 +1748,78 @@ provider_done:
         }
         ok(frame == M4V_SLICE_FRAMES && bad == 0 && bad_bits == 0,
            "every frame of the sliced movie decodes to the reference planes");
+    }
+
+
+    {
+        /* AC prediction end to end: a 96x64 movie with `-flags +aic` whose
+         * I-VOP has 13 ac_pred macroblocks.  The reference planes are pinned
+         * in tests/m4v_clip.h (they come from FFmpeg's C Simple IDCT, which is
+         * the bit-exact reference; the x86 SIMD build differs by one level on
+         * one sample of this clip). */
+        nj_mp4 m;
+        nj_mp4_sample smp;
+        nj_m4v_vol vol;
+        nj_s4 grids[400];
+        static nj_u1 cy[M4V_ACPRED_WIDTH * M4V_ACPRED_HEIGHT];
+        static nj_u1 cu[(M4V_ACPRED_WIDTH / 2) * (M4V_ACPRED_HEIGHT / 2)];
+        static nj_u1 cv[(M4V_ACPRED_WIDTH / 2) * (M4V_ACPRED_HEIGHT / 2)];
+        static nj_u1 py[M4V_ACPRED_WIDTH * M4V_ACPRED_HEIGHT];
+        static nj_u1 pu[(M4V_ACPRED_WIDTH / 2) * (M4V_ACPRED_HEIGHT / 2)];
+        static nj_u1 pv[(M4V_ACPRED_WIDTH / 2) * (M4V_ACPRED_HEIGHT / 2)];
+        int frame = 0, bad = 0, bad_bits = 0;
+
+        memset(grids, 0, sizeof(grids));
+        ok(nj_mp4_open(&m, m4v_acpred_3gp, (nj_u4)sizeof(m4v_acpred_3gp)) ==
+           NJ_MP4_OK && m.cfg_size != 0u &&
+           m.sample_count == M4V_ACPRED_FRAMES,
+           "the AC-prediction fixture opens as an mp4v container");
+        if (parse_cfg(m4v_acpred_3gp + m.cfg_at, m.cfg_size, &vol) != 1) {
+            bad++;
+        }
+        while (frame < M4V_ACPRED_FRAMES && nj_mp4_next(&m, &smp) == 1) {
+            nj_m4v_vop vop;
+            nj_u4 vpos, bitpos;
+            int rc;
+
+            if (nj_m4v_find_vop(m4v_acpred_3gp + smp.offset, smp.size, &vpos) <= 0) {
+                bad++;
+                break;
+            }
+            bitpos = vpos * 8u;
+            if (nj_m4v_parse_vop_bits_vol(m4v_acpred_3gp + smp.offset, smp.size,
+                                          &bitpos, &vol, &vop) != 1) {
+                bad++;
+                break;
+            }
+            if (vop.type == 0) {
+                rc = nj_m4v_decode_ivop(m4v_acpred_3gp + smp.offset, smp.size,
+                                        &bitpos, &vol, &vop, grids,
+                                        cy, M4V_ACPRED_WIDTH, cu,
+                                        M4V_ACPRED_WIDTH / 2, cv,
+                                        M4V_ACPRED_WIDTH / 2);
+            } else {
+                rc = nj_m4v_decode_pvop(m4v_acpred_3gp + smp.offset, smp.size,
+                                        &bitpos, &vol, &vop, grids,
+                                        cy, M4V_ACPRED_WIDTH, cu,
+                                        M4V_ACPRED_WIDTH / 2, cv,
+                                        M4V_ACPRED_WIDTH / 2,
+                                        py, M4V_ACPRED_WIDTH, pu,
+                                        M4V_ACPRED_WIDTH / 2, pv,
+                                        M4V_ACPRED_WIDTH / 2);
+            }
+            bad += rc != 0;
+            bad_bits += bitpos + 16u < smp.size * 8u;
+            bad += fnv1a(cy, (nj_u4)sizeof(cy)) != m4v_acpred_hash[frame][0];
+            bad += fnv1a(cu, (nj_u4)sizeof(cu)) != m4v_acpred_hash[frame][1];
+            bad += fnv1a(cv, (nj_u4)sizeof(cv)) != m4v_acpred_hash[frame][2];
+            memcpy(py, cy, sizeof(py));
+            memcpy(pu, cu, sizeof(pu));
+            memcpy(pv, cv, sizeof(pv));
+            frame++;
+        }
+        ok(frame == M4V_ACPRED_FRAMES && bad == 0 && bad_bits == 0,
+           "the AC-prediction movie decodes to the reference planes exactly");
     }
 
     printf("test_m4v: %d checks, %d failure(s)\n", checks, fails);

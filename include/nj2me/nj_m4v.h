@@ -108,9 +108,22 @@ int nj_m4v_ac_sym(int sym, int *run, int *level, int *last);
 /* Natural index of the k-th coefficient in the intra scan (14496-2 7.4.3). */
 int nj_m4v_scan_index(int k);
 
-/* 0 = zigzag, 1 = horizontal (row major), 2 = vertical (column major), the
- * scan orders an intra block uses when ac_pred is on (spec 7.4.3.4). */
+/* Coefficient scan orders: 0 = the plain zigzag, 1 = the alternate horizontal
+ * scan, 2 = the alternate vertical scan.  Modes 1 and 2 are the reference's
+ * ff_alternate_horizontal_scan / ff_alternate_vertical_scan, the orders an
+ * intra block uses when AC prediction is on (ISO/IEC 14496-2 7.4.3.4); they are
+ * not plain row- and column-major orders. */
 int nj_m4v_scan_index_mode(int k, int mode);
+
+/* Decodes one intra AC block using the given scan mode (see above).  The public
+ * nj_m4v_ac_block() is this with mode 0. */
+int nj_m4v_ac_block_scan(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef,
+                         int k, int qscale, int scan_mode);
+
+/* ROUNDED_DIV() as the reference defines it (round half away from zero); used
+ * to rescale an AC prediction when the neighbour macroblock had a different
+ * quantiser. */
+int nj_m4v_rounded_div(int a, int b);
 
 /* Stores one coefficient at scan position k; the DC term is position 0. */
 void nj_m4v_coef_store(nj_s4 *coef, int k, int level);

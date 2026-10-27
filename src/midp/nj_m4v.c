@@ -869,14 +869,42 @@ static const nj_u1 nj_m4v_zigzag[64] = {
 };
 
 
+/* The two alternate scans an intra block uses when AC prediction is on
+ * (ISO/IEC 14496-2 7.4.3.4, ff_mpeg4's permutated_intra_h/v_scantable built
+ * from ff_alternate_horizontal_scan / ff_alternate_vertical_scan).  They are
+ * not plain row- and column-major orders. */
+static const nj_u1 nj_m4v_scan_h[64] = {
+     0,  1,  2,  3,  8,  9, 16, 17,
+    10, 11,  4,  5,  6,  7, 15, 14,
+    13, 12, 19, 18, 24, 25, 32, 33,
+    26, 27, 20, 21, 22, 23, 28, 29,
+    30, 31, 34, 35, 40, 41, 48, 49,
+    42, 43, 36, 37, 38, 39, 44, 45,
+    46, 47, 50, 51, 56, 57, 58, 59,
+    52, 53, 54, 55, 60, 61, 62, 63
+};
+
+static const nj_u1 nj_m4v_scan_v[64] = {
+     0,  8, 16, 24,  1,  9,  2, 10,
+    17, 25, 32, 40, 48, 56, 57, 49,
+    41, 33, 26, 18,  3, 11,  4, 12,
+    19, 27, 34, 42, 50, 58, 35, 43,
+    51, 59, 20, 28,  5, 13,  6, 14,
+    21, 29, 36, 44, 52, 60, 37, 45,
+    53, 61, 22, 30,  7, 15, 23, 31,
+    38, 46, 54, 62, 39, 47, 55, 63
+};
+
 int nj_m4v_scan_index_mode(int k, int mode)
 {
-    if (k < 0 || k > 63) return -1;
-    if (mode == 1) {            /* horizontal: row major */
-        return k;
+    if (k < 0 || k > 63) {
+        return -1;
     }
-    if (mode == 2) {            /* vertical: column major */
-        return (k & 7) * 8 + (k >> 3);
+    if (mode == 1) {            /* alternate horizontal */
+        return (int)nj_m4v_scan_h[k];
+    }
+    if (mode == 2) {            /* alternate vertical */
+        return (int)nj_m4v_scan_v[k];
     }
     return nj_m4v_scan_index(k);
 }
@@ -1118,8 +1146,8 @@ static nj_u4 m4v_peek12(const nj_u1 *b, nj_u4 n, nj_u4 pos)
  * bit, and a "last" symbol adds 192 to the coefficient index so that the wrap
  * at i > 62 terminates the block.
  */
-int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k,
-                    int qscale)
+int nj_m4v_ac_block_scan(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef,
+                         int k, int qscale, int scan_mode)
 {
     int i, attempt;
 
@@ -1251,15 +1279,23 @@ int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k,
             if (i < 0 || i > 63) {
                 return -1;
             }
-            coef[nj_m4v_scan_index(i)] = (nj_s4)level;
+            coef[nj_m4v_scan_index_mode(i, scan_mode)] = (nj_s4)level;
             return 0;
         }
         if (i < 0 || i > 63) {
             return -1;
         }
-        coef[nj_m4v_scan_index(i)] = (nj_s4)level;
+        coef[nj_m4v_scan_index_mode(i, scan_mode)] = (nj_s4)level;
     }
     return -1;
+}
+
+/* The public entry point keeps the plain zigzag: AC prediction is the only
+ * user of the alternate scans. */
+int nj_m4v_ac_block(const nj_u1 *b, nj_u4 n, nj_u4 *pos, nj_s4 *coef, int k,
+                    int qscale)
+{
+    return nj_m4v_ac_block_scan(b, n, pos, coef, k, qscale, 0);
 }
 
 int nj_m4v_decode_intra_block_ex(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
@@ -1782,13 +1818,28 @@ void nj_m4v_yuv420_to_rgb565(const nj_u1 *yp, int ys, const nj_u1 *up, int us,
 }
 
 
+/* AC-prediction state is defined with its helpers further down; the frame
+ * drivers and the intra macroblock body only need the type here. */
+typedef struct m4v_ac_state {
+    int    mbw, mbh;
+    nj_s2 *luma;        /* (2*mbw) * (2*mbh) blocks, 16 entries each  */
+    nj_s2 *cb;          /* mbw * mbh blocks, 16 entries each          */
+    nj_s2 *cr;
+    nj_s1 *q;           /* per-macroblock quantiser                   */
+} m4v_ac_state;
+
+static m4v_ac_state *m4v_ac_new(int mbw, int mbh);
+static void m4v_ac_free(m4v_ac_state *ac);
+static void m4v_ac_clean_slice(m4v_ac_state *ac, int rx, int ry);
+
 static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby,
                              nj_s2 *dc_y, int stride_y, nj_s2 *dc_c, int stride_c,
                              nj_s2 *dc_c2, int stride_c2,
                              int scale, int *qscale, int *ac_bits,
                              nj_u1 *yp, int ys, nj_u1 *up, int us, nj_u1 *vp, int vs,
                              int cbp, int cbpc, int dq, int first_slice_line,
-                             int resync_x, int resync_y);
+                             int resync_x, int resync_y, m4v_ac_state *ac,
+                             int ac_pred);
 
 static int m4v_intra_mb_pix_slice(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx,
                                   int mby, nj_s2 *dc_y, int stride_y, nj_s2 *dc_c,
@@ -1796,7 +1847,7 @@ static int m4v_intra_mb_pix_slice(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx,
                                   int scale, int *qscale, int *ac_bits,
                                   nj_u1 *yp, int ys, nj_u1 *up, int us,
                                   nj_u1 *vp, int vs, int first_slice_line,
-                                  int resync_x, int resync_y);
+                                  int resync_x, int resync_y, m4v_ac_state *ac);
 
 int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                        const nj_m4v_vol *vol, const nj_m4v_vop *vop,
@@ -1805,7 +1856,8 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
 {
     nj_u4 mbw = 0, mbh = 0, cw = 0, ch = 0;
     nj_s2 *gl, *gc, *gcr;
-    int    glw, gcw, lscale, cscale, i;
+    int    glw, gcw, lscale, cscale, i, rc = 0;
+    m4v_ac_state *ac;
 
     if (b == NULL || pos == NULL || vol == NULL || vop == NULL || grids == NULL ||
         yp == NULL || up == NULL || vp == NULL || ys <= 0 || us <= 0 || vs <= 0) {
@@ -1815,7 +1867,7 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
         return 0;
     }
     if (vop->type != 0) {
-        return -1;                  /* P-VOPs are not implemented yet */
+        return -1;                  /* not an I-VOP */
     }
     if (nj_m4v_frame_macroblocks(vol->width, vol->height, &mbw, &mbh) != 0 ||
         nj_m4v_plane_size(vol->width, vol->height, &cw, &ch) != 0) {
@@ -1838,7 +1890,10 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
         gc[i] = 1024;
         gcr[i] = 1024;
     }
-
+    ac = m4v_ac_new((int)mbw, (int)mbh);
+    if (ac == NULL) {
+        return -1;
+    }
     {
         int qsc = (int)vop->qscale;   /* dquant adjusts this for the rest of the frame */
         int mb_total = (int)(mbw * mbh);
@@ -1849,17 +1904,18 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
             int mbx = cur % (int)mbw;
             int mby = cur / (int)mbw;
             int first_slice_line = (mby == resync_y);
-            int ac[6];
-            int rc;
+            int acb[6];
 
             rc = m4v_intra_mb_pix_slice(b, n, pos, mbx, mby,
                                         gl, glw, gc, gcw, gcr, gcw,
-                                        lscale, &qsc, ac,
+                                        lscale, &qsc, acb,
                                         yp, ys, up, us, vp, vs,
-                                        first_slice_line, resync_x, resync_y);
+                                        first_slice_line, resync_x, resync_y,
+                                        ac);
             if (rc != 0) {
-                return rc;
+                break;
             }
+            ac->q[cur] = (nj_s1)qsc;
             cur++;
             if (cur < mb_total && vol->resync_disabled == 0) {
                 int next = m4v_is_resync(b, n, *pos, mb_total, 0, vop->f_code);
@@ -1869,21 +1925,25 @@ int nj_m4v_decode_ivop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                     int hrc;
 
                     if (next == mb_total) {
-                        return -1;      /* VOP would end before its last MB */
+                        rc = -1;    /* VOP would end before its last MB */
+                        break;
                     }
                     hrc = nj_m4v_resync(b, n, pos, vol, 0, vop->f_code, &qsc,
                                         &mbnum);
                     if (hrc != 1 || mbnum != next || mbnum < cur) {
-                        return -1;      /* marker, header and position disagree */
+                        rc = -1;    /* marker, header and position disagree */
+                        break;
                     }
                     cur = mbnum;
                     resync_x = cur % (int)mbw;
                     resync_y = cur / (int)mbw;
+                    m4v_ac_clean_slice(ac, resync_x, resync_y);
                 }
             }
         }
     }
-    return 0;
+    m4v_ac_free(ac);
+    return rc;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2336,6 +2396,7 @@ static int m4v_inter_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
 typedef struct m4v_pmv {
     int mv[4][2];
     int four_mv;
+    int ac_pred;        /* intra macroblock: AC prediction flag from the header */
 } m4v_pmv;
 
 /* Macroblock header of a P picture (mpeg4_decode_mb P branch): not_coded,
@@ -2376,6 +2437,7 @@ static int m4v_pvop_mb_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
         if (*pos + 1u > n * 8u) {
             return -1;
         }
+        pmv->ac_pred = m4v_peek_bit(b, n, *pos);
         *pos += 1u;                 /* ac_pred */
         if (nj_vlc_lookup(b, n, pos, nj_vlc_cbpy, 16, &cbpy) != 0) {
             return -1;
@@ -2473,6 +2535,203 @@ static int m4v_pvop_mb_header(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
     return 2;                       /* inter macroblock */
 }
 
+/* ------------------------------------------------------------------ */
+/* AC prediction state (ISO/IEC 14496-2 7.4.3.4)                       */
+/* ------------------------------------------------------------------ */
+/*
+ * An intra block decodes its AC coefficients as a difference from the
+ * reconstructed ALREADY-DECODED neighbouring block: the left column when the
+ * DC predictor chose the block to the left, the top row when it chose the one
+ * above.  The reference keeps, per 8x8 block slot, the block's first column
+ * and first row in the *quantised* domain (`ff_mpeg4_pred_ac` stores them in
+ * ac_val before dct_unquantize_h263_intra scales them), rescales the
+ * prediction when the neighbour macroblock used a different quantiser, and
+ * zeroes the slots that a non-intra macroblock would otherwise leave behind
+ * (`ff_clean_intra_table_entries` / `ff_mpeg4_clean_buffers`).
+ *
+ * The state is per frame: every predictor is a neighbouring block decoded
+ * earlier in the same picture, and the frame drivers allocate it, so nothing
+ * is global.  `q` keeps the quantiser each decoded macroblock used, for the
+ * rescale rule.
+ */
+static void m4v_ac_free(m4v_ac_state *ac)
+{
+    if (ac == NULL) {
+        return;
+    }
+    free(ac->luma);
+    free(ac->cb);
+    free(ac->cr);
+    free(ac->q);
+    free(ac);
+}
+
+static m4v_ac_state *m4v_ac_new(int mbw, int mbh)
+{
+    m4v_ac_state *ac;
+    size_t        nl, nc;
+
+    if (mbw <= 0 || mbh <= 0) {
+        return NULL;
+    }
+    ac = (m4v_ac_state *)calloc(1, sizeof(*ac));
+    if (ac == NULL) {
+        return NULL;
+    }
+    ac->mbw = mbw;
+    ac->mbh = mbh;
+    nl = (size_t)(mbw * 2) * (size_t)(mbh * 2);
+    nc = (size_t)mbw * (size_t)mbh;
+    ac->luma = (nj_s2 *)calloc(nl * 16u, sizeof(nj_s2));
+    ac->cb = (nj_s2 *)calloc(nc * 16u, sizeof(nj_s2));
+    ac->cr = (nj_s2 *)calloc(nc * 16u, sizeof(nj_s2));
+    ac->q = (nj_s1 *)calloc(nc, sizeof(nj_s1));
+    if (ac->luma == NULL || ac->cb == NULL || ac->cr == NULL || ac->q == NULL) {
+        m4v_ac_free(ac);
+        return NULL;
+    }
+    return ac;
+}
+
+/* The 16-entry slot of one 8x8 block: [1..7] is the block's first column
+ * (rows 1..7 of column 0), [8..15] is its first row (columns 1..7 of row 0). */
+static nj_s2 *m4v_ac_slot(m4v_ac_state *ac, int mbx, int mby, int blk)
+{
+    if (blk < 4) {
+        size_t row = (size_t)(mby * 2 + (blk >> 1));
+        size_t col = (size_t)(mbx * 2 + (blk & 1));
+
+        return ac->luma + (row * (size_t)(ac->mbw * 2) + col) * 16u;
+    }
+    {
+        size_t at = (size_t)mby * (size_t)ac->mbw + (size_t)mbx;
+
+        return (blk == 4 ? ac->cb : ac->cr) + at * 16u;
+    }
+}
+
+/* ROUNDED_DIV() of the reference: divide rounding half away from zero. */
+int nj_m4v_rounded_div(int a, int b)
+{
+    return (a >= 0) ? (a + (b >> 1)) / b : -((-a + (b >> 1)) / b);
+}
+
+/* Adds the neighbour's left column (dir 0) or top row (dir 1) to the raw
+ * coefficients, exactly like ff_mpeg4_pred_ac(). */
+static void m4v_ac_predict(m4v_ac_state *ac, nj_s4 *coef, int mbx, int mby,
+                           int blk, int qscale, int dir)
+{
+    nj_s2 *slot = m4v_ac_slot(ac, mbx, mby, blk);
+    int    i;
+
+    if (dir == 0) {
+        int same_mb = (blk == 1 || blk == 3);
+
+        if (!same_mb && mbx == 0) {
+            return;                 /* the left neighbours are outside the picture */
+        }
+        if (same_mb || qscale == (int)ac->q[mby * ac->mbw + (mbx - 1)]) {
+            for (i = 1; i < 8; i++) {
+                coef[i << 3] += (nj_s4)slot[-16 + i];
+            }
+        } else {
+            int prev = (int)ac->q[mby * ac->mbw + (mbx - 1)];
+
+            for (i = 1; i < 8; i++) {
+                coef[i << 3] += (nj_s4)nj_m4v_rounded_div(slot[-16 + i] * prev,
+                                                          qscale);
+            }
+        }
+    } else {
+        int same_mb = (blk == 2 || blk == 3);
+        nj_s2 *above;
+
+        if (!same_mb && mby == 0) {
+            return;
+        }
+        above = slot - 16 * (blk < 4 ? ac->mbw * 2 : ac->mbw);
+        if (same_mb || qscale == (int)ac->q[(mby - 1) * ac->mbw + mbx]) {
+            for (i = 1; i < 8; i++) {
+                coef[i] += (nj_s4)above[8 + i];
+            }
+        } else {
+            int prev = (int)ac->q[(mby - 1) * ac->mbw + mbx];
+
+            for (i = 1; i < 8; i++) {
+                coef[i] += (nj_s4)nj_m4v_rounded_div(above[8 + i] * prev, qscale);
+            }
+        }
+    }
+}
+
+/* Copies the reconstructed raw coefficients into the slot for the next block's
+ * prediction (the store half of ff_mpeg4_pred_ac). */
+static void m4v_ac_store(m4v_ac_state *ac, const nj_s4 *coef, int mbx, int mby,
+                         int blk)
+{
+    nj_s2 *slot = m4v_ac_slot(ac, mbx, mby, blk);
+    int    i;
+
+    for (i = 1; i < 8; i++) {
+        slot[i] = (nj_s2)coef[i << 3];
+        slot[8 + i] = (nj_s2)coef[i];
+    }
+}
+
+/* A non-intra macroblock leaves no usable AC neighbour behind: the reference
+ * clears every slot of the six blocks except the upper-left luma one, which is
+ * only ever read from inside the same macroblock. */
+static void m4v_ac_clean_mb(m4v_ac_state *ac, int mbx, int mby)
+{
+    int blk, i;
+
+    for (blk = 1; blk < 6; blk++) {
+        nj_s2 *slot = m4v_ac_slot(ac, mbx, mby, blk);
+
+        for (i = 0; i < 16; i++) {
+            slot[i] = 0;
+        }
+    }
+}
+
+/* At a slice boundary the blocks outside the slice must not be predicted
+ * from: the reference's ff_mpeg4_clean_buffers() zeroes a band at the slice
+ * start.  Clearing whole rows here covers the same slots (the cells that the
+ * current slice has not decoded yet are zero either way). */
+static void m4v_ac_clean_slice(m4v_ac_state *ac, int rx, int ry)
+{
+    int r, c, i;
+
+    (void)rx;
+    for (r = ry * 2 - 1; r <= ry * 2 + 1; r++) {
+        if (r < 0 || r >= ac->mbh * 2) {
+            continue;
+        }
+        for (c = 0; c < ac->mbw * 2; c++) {
+            nj_s2 *slot = ac->luma + ((size_t)r * (size_t)(ac->mbw * 2) +
+                                      (size_t)c) * 16u;
+
+            for (i = 0; i < 16; i++) {
+                slot[i] = 0;
+            }
+        }
+    }
+    for (r = ry - 1; r <= ry; r++) {
+        if (r < 0 || r >= ac->mbh) {
+            continue;
+        }
+        for (c = 0; c < ac->mbw; c++) {
+            nj_s2 *cb = ac->cb + ((size_t)r * (size_t)ac->mbw + (size_t)c) * 16u;
+            nj_s2 *cr = ac->cr + ((size_t)r * (size_t)ac->mbw + (size_t)c) * 16u;
+
+            for (i = 0; i < 16; i++) {
+                cb[i] = 0;
+                cr[i] = 0;
+            }
+        }
+    }
+}
+
 /* Clears the four 8x8 motion-vector slots of one macroblock: an intra or
  * skipped macroblock predicts with a zero vector (ff_h263_update_motion_val)
  * and later predictors must see that. */
@@ -2563,6 +2822,7 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
     nj_s2 *gl, *gc, *gcr;
     int    glw, gcw, lscale, cscale, qsc;
     int    rc = 0;
+    m4v_ac_state *ac;
 
     if (b == NULL || pos == NULL || vol == NULL || vop == NULL || grids == NULL ||
         yp == NULL || up == NULL || vp == NULL || ys <= 0 || us <= 0 || vs <= 0) {
@@ -2595,6 +2855,10 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
      * predicts from the frame that is already reconstructed, so the caller
      * hands us the grids that nj_m4v_decode_ivop left behind. */
     qsc = (int)vop->qscale;
+    ac = m4v_ac_new((int)mbw, (int)mbh);
+    if (ac == NULL) {
+        return -1;
+    }
     {
         int wrap = (int)mbw * 2 + 1;
         int pad  = wrap + 2;
@@ -2604,6 +2868,7 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
 
         if (mvx == NULL || mvy == NULL) {
             free(mvx);
+            m4v_ac_free(ac);
             return -1;
         }
         {
@@ -2615,8 +2880,9 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                 int mbx = cur % (int)mbw;
                 int mby = cur / (int)mbw;
                 int first_slice_line = (mby == resync_y);
-                nj_s4 ac[6];
+                nj_s4 acb[6];
                 int cbp = 0, dq = 0, cbpc = 0;
+                int is_intra = 0;
                 m4v_pmv pmv;
 
                 memset(&pmv, 0, sizeof(pmv));
@@ -2633,12 +2899,13 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                     m4v_zero_mv(mvx, mvy, wrap, pad, mbx, mby);
                     m4v_clean_dc(gl, glw, gc, gcr, gcw, mbx, mby);
                 } else if (rc == 0) {
+                    is_intra = 1;
                     rc = m4v_intra_mb_body(b, n, pos, mbx, mby,
                                            gl, glw, gc, gcw, gcr, gcw,
-                                           lscale, &qsc, ac, yp, ys, up, us,
+                                           lscale, &qsc, acb, yp, ys, up, us,
                                            vp, vs, cbp, cbpc, dq,
                                            first_slice_line, resync_x,
-                                           resync_y);
+                                           resync_y, ac, pmv.ac_pred);
                     if (rc != 0) {
                         break;
                     }
@@ -2661,6 +2928,10 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                 } else {
                     break;
                 }
+                if (!is_intra) {
+                    m4v_ac_clean_mb(ac, mbx, mby);
+                }
+                ac->q[cur] = (nj_s1)qsc;
                 cur++;
                 if (cur < mb_total && vol->resync_disabled == 0) {
                     int next = m4v_is_resync(b, n, *pos, mb_total, 1,
@@ -2683,11 +2954,13 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                         cur = mbnum;
                         resync_x = cur % (int)mbw;
                         resync_y = cur / (int)mbw;
+                        m4v_ac_clean_slice(ac, resync_x, resync_y);
                     }
                 }
             }
         }
         free(mvx);
+        m4v_ac_free(ac);
         if (rc != 0) {
             return rc;
         }
@@ -2800,7 +3073,8 @@ static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
                              int scale, int *qscale, int *ac_bits,
                              nj_u1 *yp, int ys, nj_u1 *up, int us,
                              nj_u1 *vp, int vs, int cbp, int cbpc, int dq,
-                             int first_slice_line, int resync_x, int resync_y)
+                             int first_slice_line, int resync_x, int resync_y,
+                             m4v_ac_state *ac, int ac_pred)
 {
     int blk;
     nj_s4 all_coef[6][64];
@@ -2889,25 +3163,36 @@ static int m4v_intra_mb_body(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int m
          * the dequantised level (the 1024 mid-grey bias lives inside it) and
          * nj_m4v_idct_put() then writes pixels directly. */
         all_coef[blk][0] = (nj_s4)nj_m4v_dc_coef((int)coef[0], (int)dscale);
-        (void)dir;
         (void)scale;
-        int coded = nj_m4v_cbp_has_ac(cbp, blk), arc;
-
-        
-        if (ac_bits != NULL) {
-            ac_bits[blk] = coded;
-        }
-        if (!coded) {
-                        continue;
-        }
         {
-            arc = nj_m4v_ac_block(b, n, pos, all_coef[blk], 1, *qscale);
-                                }
+            int coded = nj_m4v_cbp_has_ac(cbp, blk), arc = 0;
+            int scan = 0;
+
+            if (ac_bits != NULL) {
+                ac_bits[blk] = coded;
+            }
+            /* With AC prediction the coefficient scan is the reference's
+             * alternate table for the prediction direction (7.4.3.4). */
+            if (ac != NULL && ac_pred != 0) {
+                scan = (dir == 0) ? 2 : 1;
+            }
+            if (coded) {
+                arc = nj_m4v_ac_block_scan(b, n, pos, all_coef[blk], 1,
+                                           *qscale, scan);
                 if (arc == -3) {
-            return -3;
-        }
-        if (arc < 0) {
-            return -1;
+                    return -3;
+                }
+                if (arc < 0) {
+                    return -1;
+                }
+            }
+            if (ac != NULL) {
+                if (ac_pred != 0) {
+                    m4v_ac_predict(ac, all_coef[blk], mbx, mby, blk, *qscale,
+                                   dir);
+                }
+                m4v_ac_store(ac, all_coef[blk], mbx, mby, blk);
+            }
         }
     }
     /* Intra AC levels reach the reconstruction raw, exactly as the reference
@@ -2988,7 +3273,7 @@ static int m4v_intra_mb_pix_slice(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx,
                                   int scale, int *qscale, int *ac_bits,
                                   nj_u1 *yp, int ys, nj_u1 *up, int us,
                                   nj_u1 *vp, int vs, int first_slice_line,
-                                  int resync_x, int resync_y)
+                                  int resync_x, int resync_y, m4v_ac_state *ac)
 {
     int cbp = 0, cbpc = 0, dq = 0, acp = 0;
 
@@ -3001,7 +3286,7 @@ static int m4v_intra_mb_pix_slice(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx,
     return m4v_intra_mb_body(b, n, pos, mbx, mby, dc_y, stride_y, dc_c, stride_c,
                              dc_c2, stride_c2, scale, qscale, ac_bits,
                              yp, ys, up, us, vp, vs, cbp, cbpc, dq,
-                             first_slice_line, resync_x, resync_y);
+                             first_slice_line, resync_x, resync_y, ac, acp);
 }
 
 int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby,
@@ -3027,7 +3312,7 @@ int nj_m4v_decode_intra_mb_pix(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int
     return m4v_intra_mb_body(b, n, pos, mbx, mby, dc_y, stride_y, dc_c, stride_c,
                              dc_c2, stride_c2, scale, qscale, ac_bits,
                              yp, ys, up, us, vp, vs, cbp, cbpc, dq,
-                             (mby == 0), 0, 0);
+                             (mby == 0), 0, 0, NULL, 0);
 }
 int nj_m4v_decode_intra_mb(const nj_u1 *b, nj_u4 n, nj_u4 *pos, int mbx, int mby,
                            nj_s2 *dc_y, int stride_y, nj_s2 *dc_c, int stride_c,
