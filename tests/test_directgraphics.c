@@ -474,6 +474,80 @@ static void test_drawing(nj_vm *vm)
 }
 
 /* ------------------------------------------------------------------ */
+static void test_image_manipulation(nj_vm *vm)
+{
+    const nj_u4 colors[6] = {
+        0xFFF80000u, 0xFF00FC00u, 0xFF0000F8u,
+        0xFFF8FC00u, 0xFF00FCF8u, 0xFFF800F8u
+    };
+    nj_ref pixels = nj_int_array_new(vm, 6);
+    nj_value a[10];
+    int i, rotation, flips, clipped;
+    for (i = 0; i < 6; ++i) nj_array_set_int(pixels, i, (nj_s4)colors[i]);
+    a[0] = sref(pixels); a[1] = iref(3); a[2] = iref(2); a[3] = iref(0);
+    nj_ref src = call_static_ref(vm, NJ_C_IMAGE, "createRGBImage",
+                                 "([IIIZ)L" NJ_C_IMAGE ";", a, NULL);
+    OK(src != NULL);
+    for (rotation = 0; rotation < 4; ++rotation) {
+        for (flips = 0; flips < 4; ++flips) {
+            for (clipped = 0; clipped < 2; ++clipped) {
+                nj_ref dst = image_new(vm, 10, 10);
+                nj_ref g = image_graphics(vm, dst);
+                nj_u4 expected[100];
+                int w = rotation % 2 ? 2 : 3, h = rotation % 2 ? 3 : 2;
+                int x, y;
+                nj_u4 background = img_pixel(vm, dst, 0, 0);
+                for (i = 0; i < 100; ++i) expected[i] = background;
+                /* Translate, anchor the transformed image at bottom-right,
+                 * and clip off its first column, as sprite-atlas users do. */
+                a[0] = iref(1); a[1] = iref(2);
+                OK(nj_call(vm, g, NJ_C_GRAPHICS, "translate", "(II)V", a, NULL) == NJ_OK);
+                if (clipped) {
+                    a[0] = iref(7 - w); a[1] = iref(5 - h);
+                    a[2] = iref(w - 1); a[3] = iref(h);
+                    OK(nj_call(vm, g, NJ_C_GRAPHICS, "setClip", "(IIII)V", a, NULL) == NJ_OK);
+                }
+                a[0] = sref(src); a[1] = iref(6); a[2] = iref(5);
+                a[3] = iref(8 | 32); /* RIGHT | BOTTOM */
+                a[4] = iref(rotation * 90 | ((flips & 1) ? 0x2000 : 0) |
+                            ((flips & 2) ? 0x4000 : 0));
+                OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawImage",
+                           "(L" NJ_C_IMAGE ";IIII)V", a, NULL) == NJ_OK);
+                for (y = 0; y < 2; ++y) for (x = 0; x < 3; ++x) {
+                    int dx = x, dy = y, rw = 3, rh = 2, r;
+                    for (r = 0; r < rotation; ++r) {
+                        int nx = dy, ny = rw - 1 - dx, tmp = rw;
+                        dx = nx; dy = ny; rw = rh; rh = tmp;
+                    }
+                    if (flips & 1) dx = w - 1 - dx;
+                    if (flips & 2) dy = h - 1 - dy;
+                    if (!clipped || dx > 0)
+                        expected[(7 - h + dy) * 10 + 7 - w + dx] = colors[y * 3 + x];
+                }
+                for (y = 0; y < 10; ++y) for (x = 0; x < 10; ++x)
+                    OK_MSG(img_pixel(vm, dst, x, y) == expected[y * 10 + x],
+                           "rotation=%d flips=%d clip=%d pixel=%d,%d",
+                           rotation * 90, flips, clipped, x, y);
+            }
+        }
+    }
+    {
+        const int invalid[] = {-1, 45, 360, 0x1000, 0x8000};
+        nj_ref dst = image_new(vm, 10, 10), g = image_graphics(vm, dst);
+        a[0] = sref(src); a[1] = iref(0); a[2] = iref(0); a[3] = iref(0);
+        for (i = 0; i < (int)(sizeof(invalid) / sizeof(invalid[0])); ++i) {
+            a[4] = iref(invalid[i]);
+            OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawImage", "(L" NJ_C_IMAGE ";IIII)V", a, NULL) != NJ_OK);
+            OK(exc_is(vm, "java/lang/IllegalArgumentException"));
+            vm->exception = NULL;
+        }
+        a[0] = sref(NULL); a[4] = iref(0);
+        OK(nj_call(vm, g, NJ_C_GRAPHICS, "drawImage", "(L" NJ_C_IMAGE ";IIII)V", a, NULL) != NJ_OK);
+        OK(exc_is(vm, "java/lang/NullPointerException"));
+        vm->exception = NULL;
+    }
+}
+
 int main(void)
 {
     nj_port port;
@@ -494,6 +568,7 @@ int main(void)
     test_create_image(vm);
     test_get_direct_graphics(vm);
     test_drawing(vm);
+    test_image_manipulation(vm);
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
