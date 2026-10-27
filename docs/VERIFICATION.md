@@ -33,11 +33,14 @@ repeated unless the code changed the path the verification used.
 
 The gate over all collected titles, most recent full sweep:
 
-* build `/tmp/nj-r5` — Release, `-DNJ_BUILD_TESTS=OFF -DNJ_BUILD_LIBRETRO=OFF`,
-  working tree at commit `239ccec`; run through `NJ_BIN=/tmp/nj-r5/nj2me
-  NJ_CORPUS_WORK=/tmp/nj-r5-corpus tools/run_game_corpus.sh` with the same
-  passes as before (uncapped, paced, wall-clock, device re-run, heap re-runs).
-* Result: **393 passed, 2 failed** of 395 titles. Both failures are the
+* build `build/` — Release, canonical configure (`NJ_BUILD_TESTS`,
+  `NJ_BUILD_CLI`, `NJ_BUILD_EMBEDDED_PORTS`, `NJ_BUILD_LIBRETRO`,
+  `NJ_BUILD_POSIX_NETWORK` on), working tree at commit `2f86a4b`
+  (`fix(midp): run the pumped frame, skip only the paint`); run through
+  `tools/run_game_corpus.sh` with the same passes as before (uncapped, paced,
+  wall-clock, device re-run, heap re-runs), in four parallel shards of the
+  same title list.
+* Result: **397 passed, 2 failed** of 399 titles. Both failures are the
   title's, not the runtime's:
 
 | title | verdict | why |
@@ -45,16 +48,25 @@ The gate over all collected titles, most recent full sweep:
 | `鲁宾逊漂流记汉化BT版_4677` | GAME ASSET | the JAR is truncated — 286,534 bytes with no end-of-central-directory record; `unzip -l` fails and python's `zipfile` refuses it too. Nothing to load. |
 | `乱世Q三国_1649` | GAME-SIDE | the title's own licence check expires: its boot prints `授权过期` ("licence expired") and calls `notifyDestroyed()`. The reference emulator prints the same and exits the same way (`.local-tools/debug-runs/corpus-tail-20261027/ref-c1/ref.log`, re-checked 2026-10-27; the older `corpus-r3` log is no longer in the checkout). The sweep supplied a fresh RMS directory, so this is the first-install path. |
 
-History: the sweep before this one (`/tmp/nj-r3`) counted **392 passed,
-3 failed**, and its third row was `实况足球经理2009_10609`, written up as a
-flaky game-side title whose loader thread raced its own `paint()`.  That was
-wrong: its loader died at a `DataInputStream.reset()` the runtime had bound to
-an empty slot, so it read its packed container 44 bytes off.  The fix
-(`239ccec`, `docs/notes/2026-10-21-datainput-rewind.md`) makes the boot
-deterministic and the title passes.  The 393/2 sweep older than that one is
-also history — it predates `乱世Q三国_1649`'s licence row being reproduced on a
-fresh RMS.  All older sweeps are in `docs/COMPATIBILITY.md`; treat this
-snapshot as the measured one.
+History: the sweep before this one (`8a54e23`, with round 91 merged) counted
+**396 passed, 3 failed**, and its third row was `纽约人生_1339`, written up as
+a loader thread that blocks inside `paint()`.  That was wrong: it was round
+91's own regression.  Refusing the pumped frame still counted as a frame in
+`run_frame_hook()`, so the run spent its budget on refused pumps and ended
+after one presented picture (`frames=1 paints=1` in 12 ms) although the title
+was loading normally.  The nested frame now runs and only the paint is skipped
+(`2f86a4b`), the title passes, and `tools/check_paint_pump.sh` (ctest
+`check_paint_pump`) pins the budget.  The 393/2 sweep older than that one is
+also history: that snapshot's build was `239ccec`, and the sweep before it
+(`/tmp/nj-r3`) counted **392 passed, 3 failed** with a third row,
+`实况足球经理2009_10609`, written up as a flaky game-side title whose loader
+thread raced its own `paint()`.  That was also wrong: its loader died at a
+`DataInputStream.reset()` the runtime had bound to an empty slot, so it read
+its packed container 44 bytes off.  The fix (`239ccec`,
+`docs/notes/2026-10-21-datainput-rewind.md`) makes the boot deterministic and
+the title passes; the 393/2 sweep predates `乱世Q三国_1649`'s licence row being
+reproduced on a fresh RMS.  All older sweeps are in `docs/COMPATIBILITY.md`;
+treat this snapshot as the measured one.
 
 ## Real-game verifications
 
@@ -83,7 +95,8 @@ snapshot as the measured one.
 | `Displayable.getKeyChar()` and Canvas text input | the runtime had **no** `getKeyChar()` at all, so a title that asked for the character of the key that was pressed got `NoSuchMethodError` on the first key press and lost the input. It now answers the MIDP keypad table (`KEY_NUM5` -> `'5'`, `KEY_STAR` -> `'*'`, `KEY_FIRE` -> none) and a port can hand over the character the user really typed (`nj_event.key_char`). The desktop port delivers typed characters to a Canvas that draws its own editor: ASCII through the key path, and a host-IME commit through the text path (`NJ_SDL2_TEXT=always`) - `a` -> `code=97 char=97`, fcitx5 pinyin `nihao` + space -> `code=20320 char=20320` (U+4F60) and `code=22909 char=22909` (U+597D). The IME's preedit does not leak, so an editor does not receive `nihao` and then `你好`. The check is `check_keychar` (the 92nd test) plus a new case in `test_text_input`; the cost is **+136 bytes** | `docs/notes/2026-10-22-keychar-and-canvas-text.md`; `tests/keychardemo/KeyCharDemo.java`, `tools/check_keychar.sh` | this commit |
 | Controlled network on Android | against a local proxy, a 503 makes the game show 请检查设备网络连接是否已经开启！ after 5 `GameComm` POSTs, while a 200 with an empty body produces only 2 POSTs and no error page - the failure path is distinguishable. Proves the request left the device and the response was consumed, **not** that any game server is alive | `docs/notes/2026-10-22-android-desktop-ime-regression.md` | this commit |
 | Mascot Capsule V3 rasteriser (`鬼泣3D中文版_3376.jar`, `浴火银河_10189.jar` / `_3621.jar`) | at `9d32766` two checked-in titles drive the software rasteriser with JSR 184 off (`tris > 0`, `m3g = 0`): 鬼泣3D reaches mission select, briefing and mission-1 combat - movement holds and sword swings change the picture, enemies render, the health HUD drains, the fail screen 任务失败 / 继续? appears at frame 3800 and retry respawns into gameplay at 3900 (1,800 frames 377,387 triangles; 4,500 frames 1,233,810; a stand-still run that dies at the first enemy 2,649,104); 浴火银河 reaches its space flight at ~2300 (ship, stations, planet, asteroids, shield/ammo HUD, waypoint distances, blaster fire, left/right banking holds; 4,500 frames 811,839 triangles). No uncaught throw in any run - only the titles' own caught EOFException / RecordStoreNotFoundException. Exact triangle totals vary between replays because the guest clock is wall time. 生化危机3D is not a rasteriser title (M3G renderer; stalls at its own data-folder gate) | `docs/notes/2026-10-27-mascot-evidence-refresh.md`; `.local-tools/debug-runs/micro3d-head-20261027/` | this commit |
-| Street Fighter II (`街头霸王2冠军典藏版_1812.jar`) | the early-soft-key hang was a **runtime** defect, not the title's load path: answering the sound prompt starts a loader whose state machine lives in `paint()`; the blocking-native frame pump ran a nested `nj_midp_frame()` on top of the still-running paint, the nested frame's tail cleared `painted_in_frame`, and the next pump pass re-entered `paint()`.  The loader advanced twice and skipped the step that fills the sample table (`dB`); the next frame read the NULL array and the title's own empty catch loop hung the run.  `nj_midp_paint()` now marks `paint_active` for the whole call (blocking included) and `nj_midp_frame()` refuses a frame offered by the pump while a paint is executing; parks outside a paint (TimerDemo) still get pumped frames.  The replay `--run-frames 600 --keys 400:soft1` returns 0, logs no NPE, and reaches the main title screen (126 colours, identical at frames 650/700), matching FreeJ2ME-Plus's same-key replay; `tools/check_sf2_loader.sh` (ctest `check_sf2_loader`) pins it - budget 600 on purpose, 550 passes even without the fix | `docs/notes/2026-10-27-street-fighter-loader-hang.md`; `docs/COMPATIBILITY.md` round-91 section | `783bdc2` |
+| Street Fighter II (`街头霸王2冠军典藏版_1812.jar`) | the early-soft-key hang was a **runtime** defect, not the title's load path: answering the sound prompt starts a loader whose state machine lives in `paint()`; the blocking-native frame pump ran a nested `nj_midp_frame()` on top of the still-running paint, the nested frame's tail cleared `painted_in_frame`, and the next pump pass re-entered `paint()`.  The loader advanced twice and skipped the step that fills the sample table (`dB`); the next frame read the NULL array and the title's own empty catch loop hung the run.  `nj_midp_paint()` marks `paint_active` for the whole call (blocking included) and the frame pump no longer re-enters it; round 92 narrowed that from refusing the whole pumped frame to skipping only the paint, so a title that blocks inside `paint()` keeps its frames and its budget (`2f86a4b`).  Parks outside a paint (TimerDemo) still get pumped frames.  The replay `--run-frames 600 --keys 400:soft1` returns 0, logs no NPE, and reaches the main title screen (126 colours, identical at frames 650/700), matching FreeJ2ME-Plus's same-key replay; `tools/check_sf2_loader.sh` (ctest `check_sf2_loader`) pins it - budget 600 on purpose, 550 passes even without the fix | `docs/notes/2026-10-27-street-fighter-loader-hang.md`; `docs/COMPATIBILITY.md` round-91 section | `783bdc2` |
+| `纽约人生_1339` (frame pump under a blocked `paint()`) | round 91's paint-atomic fix refused the whole frame the blocking-native pump offered, and `run_frame_hook()` counts every pumped frame towards the run budget whether the frame ran or not - so a title whose loader blocks inside `paint()` spent the budget on refused pumps and was recorded as "nothing was ever presented", although it had passed before round 91 (`frames=219 paints=70` in 9.7 s at 320x240, against `frames=1 paints=1` in 12 ms with the defect).  The nested frame now runs (input drain, scheduler slice, present) and only the paint is skipped while `paint_active` is set: the title presents 200 frames at its loader pace.  `tools/check_paint_pump.sh` (ctest `check_paint_pump`) fails on the pre-fix source with `frames=1` and passes here; full ctest 122/122; the corpus sweep is back to its pre-round-91 pass set | `docs/notes/2026-10-27-paint-pump.md`; `tools/check_paint_pump.sh`; `docs/COMPATIBILITY.md` round-92 section | `2f86a4b` |
 Titles and platforms verified in the same repository before this ledger existed
 are summarised in `docs/COMPATIBILITY.md` and the dated notes; recent ones are
 commits `7146c42` (Townsmen 6 variants), `1870218` (Android HTTP against a
@@ -96,7 +109,7 @@ lives in the commit message and body, not in this table.
 
 | area | verdict | evidence |
 | --- | --- | --- |
-| Unit/assertion tests | **92/92** under ctest on the current build (the new `check_keychar` is the 92nd) | `ctest` log |
+| Unit/assertion tests | **122/122** under ctest on the current build (the new `check_keychar` was the 92nd test, `check_paint_pump` the 122nd) | `ctest` log |
 | Computed-goto interpreter | **fixed**: every dispatch-table entry reached `L_haveop` after a single fetch; converted and switch interpreters produce identical bytecode counts and byte-identical frames on `1945空战英雄_6105` | `tools/check_threaded_dispatch.sh`; `docs/notes/OPEN-issue-threaded-dispatch.md`; commit `3f0dd46` |
 | Key-script holds | `--keys` supports `frame:key:down` / `:up`; a held key stays down across frames, an explicit up edge releases once; mutation of the release pass fails two assertions | `tests/test_poke.c` (24 checks); `docs/notes/2026-10-21-key-script-holds.md`; commit `7b7a117` |
 | `DataInputStream` mark/reset | `mark`, `reset` and `markSupported` forward to the wrapped stream (FilterInputStream semantics); base `InputStream.reset` raises `IOException`, `mark` stays a no-op; binding `reset` back to the empty slot fails the tests | `tests/test_ioapi.c` (166 checks); `docs/notes/2026-10-21-datainput-rewind.md`; commit `239ccec` |

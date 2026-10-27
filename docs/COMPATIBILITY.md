@@ -4659,10 +4659,12 @@ Mechanism, confirmed against the reference runtime:
 
 Fix (`783bdc2`): a paint is atomic.  `nj_midp_paint()` marks
 `vm->paint_active` for the whole call, blocking included (saved/restored so a
-synchronous `serviceRepaints()` still nests), and `nj_midp_frame()` refuses a
-frame the pump offers while it is set, leaving the pump's scheduler running for
-the other Java threads.  Parks outside a paint are untouched: `check_timer_wait`
-(TimerDemo's parked task driving five canvas paints) still passes.
+synchronous `serviceRepaints()` still nests), and the frame pump no longer
+re-enters the paint.  Round 92 narrowed that from refusing the whole pumped
+frame to skipping only the paint - refusing the frame cost a loader that
+blocks in `paint()` its entire budget (see the round-92 section below).  Parks
+outside a paint are untouched: `check_timer_wait` (TimerDemo's parked task
+driving five canvas paints) still passes.
 
 Evidence: the 600-frame replay with `400:soft1` returns 0, logs no
 `NullPointerException` and reaches the main title screen (126 colours, identical
@@ -4670,3 +4672,35 @@ at frames 650/700), matching FreeJ2ME-Plus's same-key replay.  The budget is
 pinned at 600 on purpose - 550 passes even with the defect present.
 `tools/check_sf2_loader.sh` is ctest `check_sf2_loader`; `ctest` is 121/121 at
 the merge of `783bdc2` with the remote media/`lcdui` fixes.
+
+## The recycled frame budget (round 92, 2026-10-27)
+
+Round 91's diagnosis was right and its remedy was too broad.  The full corpus
+sweep at `8a54e23` (round 91 merged) came back with a row that `9d32766` did
+not have: 纽约人生_1339 presented nothing at 320x240.
+
+That title keeps its loader in `paint()` too, but its loader *blocks* for a
+long time (one sleep per packed asset).  Refusing the pumped frame still
+counted it: `run_frame_hook()` calls `nj_midp_frame()` and increments
+`ctx->drawn` unconditionally, then stops the run when the drawn count reaches
+the budget.  A run with a blocked paint therefore spent its whole budget on
+refused pumps and ended after one presented picture - `frames=1 paints=1` in
+12 ms, against `frames=219 paints=70` in 9.7 s before round 91 - and the dumps
+had nothing to judge.  The sweep correctly recorded that nothing was ever
+presented; the mistake was treating the budget stop as a verdict.
+
+Fix (`2f86a4b`): the nested frame is a real frame - it drains input, gives the
+scheduler its slice and presents.  Only the paint is skipped while
+`vm->paint_active` is set, so the blocked paint still cannot be re-entered
+(the round-91 reason for the guard).  The title then presents at its loader's
+pace and the run ends on its budget.
+
+Regression: `tools/check_paint_pump.sh` (ctest `check_paint_pump`, TIMEOUT 120,
+SKIP_RETURN_CODE 77) runs the title for 200 frames at 320x240 and requires at
+least 180 presented frames; it fails with `frames=1` on the pre-fix source and
+passes here (200 frames, 6 paints, 7.5 s).  `check_sf2_loader` still passes
+(600 frames, `400:soft1`, no NPE) and `check_timer_wait` is unchanged.  Full
+ctest is 122/122; the corpus sweep is back to 397 passed / 2 failed of 399
+titles, the two failures being the title-side rows documented in
+`docs/VERIFICATION.md`.  Mechanism note:
+`docs/notes/2026-10-27-paint-pump.md`.
