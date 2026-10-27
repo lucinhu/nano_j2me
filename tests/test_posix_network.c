@@ -68,7 +68,7 @@ static int java_http(nj_port *p, const char *base)
         {
             /* The two header getters the core audit reported missing, plus
              * getDate() reading its header instead of returning -1. */
-            nj_value ha[2];
+            nj_value ha[3] = {{0}};
 
             ha[0].r = nj_string_new(vm, "X-Int");
             CHECK(ha[0].r); nj_root(vm, ha[0].r);

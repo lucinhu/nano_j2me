@@ -86,6 +86,7 @@ int main(void)
 
     free(refs);
     nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
     puts("test_string_intern: intern growth, identity and GC survival OK");
     return 0;
 }
