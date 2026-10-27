@@ -13,11 +13,14 @@
 # NullPointerException, and the title's own catch handler is an empty infinite
 # loop - the run hangs until an external timeout (rc 124).
 #
-# The fix makes a paint atomic: nj_midp_paint() sets vm->paint_active for the
-# whole call (blocking included) and nj_midp_frame() refuses a pumped frame
-# while that is set.  Frames pumped while no paint is executing are untouched,
-# so a MIDlet that runs its own loop in startApp() or a parked TimerTask still
-# gets presented (see tools/check_timer_wait.sh).
+# The fix makes a paint atomic against itself: nj_midp_paint() sets
+# vm->paint_active for the whole call (blocking included) and nj_midp_frame()
+# skips only the paint while that is set.  The pumped frame itself still runs
+# (input, scheduler, present), which keeps the screen alive and keeps a title
+# that parks its loader in paint() moving - 纽约人生_1339 needs that and is
+# covered by tools/check_paint_pump.sh.  Frames pumped while no paint is
+# executing are untouched, so a MIDlet that runs its own loop in startApp() or
+# a parked TimerTask still gets presented (see tools/check_timer_wait.sh).
 #
 # The budget below is 600 on purpose: 550 frames passes even with the defect
 # present, 600 hangs (the loader reaches its first sample read around frame

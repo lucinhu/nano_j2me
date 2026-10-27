@@ -308,23 +308,30 @@ nj_status nj_midp_frame(nj_vm *vm)
         return NJ_ERR;
     }
     /*
-     * A paint is atomic: no frame may be pumped while one is being delivered.
+     * A paint is atomic, but only against itself: a frame pumped while one is
+     * being delivered must not deliver another paint().
      *
      * vm_invoke() pumps frames while a Java thread is parked in a blocking
      * native (nj_vm.c, the frame hook) so a MIDlet that builds its UI inside
      * startApp() - or runs its own loop there - still presents.  If the parked
      * thread is inside paint() instead (a title that loads assets from paint()
-     * and sleeps between reads), that pump used to run a whole nested frame on
-     * top of the still-executing paint; the nested frame cleared
+     * and sleeps between asset reads), that pump used to run a whole nested
+     * frame on top of the still-executing paint; the nested frame cleared
      * vm->painted_in_frame, so the next pump pass re-entered paint() itself.
      * 街头霸王2冠军典藏版_1812 keeps its loader state machine in paint() and
-     * hung because of exactly that.  Refuse the frame here; the pump keeps its
-     * scheduler running, so the other Java threads still make progress, and
-     * the blocked paint resumes normally.
+     * hung because of exactly that.
+     *
+     * The nested frame itself is fine and is still run: its input drain, its
+     * scheduler slice and its present are what keep the screen and the other
+     * Java threads alive while the paint blocks.  Only the paint is skipped
+     * (see the paint gate below).  Refusing the whole frame here instead fixed
+     * the hang but broke 纽约人生_1339: that title parks its loader inside
+     * paint() across a blocking read, so every pumped frame was refused, yet
+     * run_frame_hook() still counted each refusal as a frame - the run spent
+     * its entire budget on refused pumps, presented one picture, and the
+     * corpus recorded "nothing was ever presented" for a title that was still
+     * loading normally.
      */
-    if (vm->paint_active) {
-        return NJ_OK;
-    }
     if (!nj_midp_screen(vm)) {
         return NJ_ERR;
     }
@@ -431,7 +438,8 @@ nj_status nj_midp_frame(nj_vm *vm)
      * the only thing that draws it at all (炸弹人_10311 never calls repaint()
      * from its loop).
      */
-    if (!vm->painted_in_frame &&
+    if (!vm->paint_active &&
+        !vm->painted_in_frame &&
         (!vm->app_painted || vm->app_paint_idle > vm->app_paint_period)) {
         (void)nj_midp_paint(vm);
     }

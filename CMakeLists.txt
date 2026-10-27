@@ -852,6 +852,21 @@ endif()
                          SKIP_RETURN_CODE 77)
   endif()
 
+  # 纽约人生_1339: a title that blocks inside paint() while its loader reads.
+  # The pump's nested frame may run (input, scheduler, present), but it must
+  # not paint again - and it must not be refused whole either, because
+  # run_frame_hook() counts pumped frames, so refusals spent the run budget
+  # and the title presented one picture.  See
+  # docs/notes/2026-10-27-paint-pump.md and tools/check_sf2_loader.sh.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_paint_pump.sh)
+    add_test(NAME check_paint_pump
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_paint_pump.sh
+                     $<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/games)
+    set_tests_properties(check_paint_pump PROPERTIES TIMEOUT 120
+                         SKIP_RETURN_CODE 77)
+  endif()
+
   # A title whose constructor outlasts the frame budget - both Need for Speed
   # titles sleep through a splash screen in <init>.  That is the run ending on
   # purpose and it has to say so: it used to report "cannot instantiate",
