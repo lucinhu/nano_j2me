@@ -4782,3 +4782,40 @@ two arbitration log lines and 745,472 bytes, with both Players `state=400`
 throughout.  The 极品飞车 title cannot reach the arrest headlessly (the race
 starts, the gameplay does not), so the fixture is the reproduction.  Mechanism
 note: `docs/notes/2026-10-28-audio-device-ownership.md`.
+
+## Round 95 - the synth that was never re-acquired (2026-10-28)
+
+Round 94 fixed the single PCM device; the same user came back with a smaller
+and more precise description: pausing the game and resuming brings the
+picture back, but not the music.  A diagnostic APK (v0.3.4) on the phone
+showed the missing step.
+
+极品飞车：热血追踪's audio manager treats a pause as `stop()` followed by
+`deallocate()`, which is legal MIDP - `deallocate()` is documented to release
+scarce resources - and on resume realizes the same `Player` object again.
+`media_midi_release()` releases the port's MIDI handle on `deallocate()` and
+clears `F_P_PLAT`, but `player_realize()` only flipped the state: the resume
+log read `setLoopCount state=200 (plat=0)`, and `start()` then fell through to
+the sampled path with the MIDI file's bytes still in `F_P_DATA` - a MIDI file
+played as if it were PCM, which is silence.  The platform synthesizer was
+never asked for the song again.
+
+Fix: `player_realize()` re-acquires the port's MIDI handle for a Player the
+platform itself took at creation (`F_P_MIDIK` set, `F_P_STREAM` clear,
+`F_P_PLAT` clear), restoring `F_P_PLAT`, the handle and the platform
+duration.  A rendered MIDI Player (`F_P_STREAM` set) keeps its own stream and
+is untouched; if the synth refuses the song again the Player stays silent
+instead of playing its bytes as PCM.
+
+Test: `test_midi_reacquire_after_deallocate()` in `tests/test_media_replay.c`
+- the mock port takes a one-note song, the test stops and deallocates the
+Player, realizes and starts it again, and asserts the port was asked twice,
+the second handle was started, the duration survived and no PCM device was
+claimed.  Before the fix the test fails; full ctest 122/122 after.
+
+The headless port renders MIDI itself (`midi_open` is absent), so this is one
+of the few paths that only a platform-synthesizer port can show: the
+reproduction is the phone, with the APK installed and the user pausing and
+resuming.  Evidence: `.local-tools/debug-runs/android-midi-reacquire-20261028/`
+(diagnostic log and the 0.3.6 APK hash).  Mechanism note:
+`docs/notes/2026-10-28-platform-midi-reacquire.md`.

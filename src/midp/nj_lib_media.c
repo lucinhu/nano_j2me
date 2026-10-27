@@ -3535,6 +3535,51 @@ NJFN(player_realize)
             }
         }
     }
+    /*
+     * A platform MIDI Player that was deallocated gets its song back here.
+     * deallocate() releases the port's handle because MIDP says it must free
+     * scarce resources, but the song bytes stay in F_P_DATA, and a title that
+     * keeps its Player object across a pause expects realize() to re-acquire
+     * the synthesizer.  Without this the Player falls through to the sampled
+     * path on start() and plays its MIDI bytes as if they were PCM: the
+     * picture comes back but the music never does.
+     *
+     * Only a Player that the platform itself took at creation qualifies:
+     * a rendered MIDI Player (F_P_STREAM) keeps its own stream state instead
+     * and never reaches here without F_P_STREAM set.
+     */
+    if (!r_z(vm, self, F_P_PLAT) && r_z(vm, self, F_P_MIDIK) &&
+        !r_z(vm, self, F_P_STREAM) && vm->port && vm->port->midi_open) {
+        nj_ref song = r_r(vm, self, F_P_DATA, "[B");
+        if (song != NULL && barray_len(song) > 0u) {
+            nj_u4 dur = 0;
+            void *mh = vm->port->midi_open(vm->port->ud,
+                                           barray_bytes(song),
+                                           barray_len(song), &dur);
+            if (mh != NULL && midi_handle_set(vm, self, mh)) {
+                w_z(vm, self, F_P_PLAT, 1);
+                w_z(vm, self, F_P_OPEN, 0);
+                w_i(vm, self, F_P_KIND, 1);
+                if (dur > 0u) {
+                    w_j(vm, self, F_P_DURATION, (nj_s8)dur * 1000LL);
+                }
+            } else if (mh != NULL) {
+                if (vm->port->midi_close) {
+                    vm->port->midi_close(vm->port->ud, mh);
+                }
+                /*
+                 * midi_handle_set() only fails when the heap could not take
+                 * the handle.  createPlayer() stays silent in that case
+                 * instead of surfacing the error; do the same here, so a
+                 * title resuming its music is not interrupted by an
+                 * OutOfMemoryError from realize().
+                 */
+                if (nj_has_exception(vm)) {
+                    nj_clear_exception(vm);
+                }
+            }
+        }
+    }
     w_i(vm, self, F_P_STATE, 200);
     return NJ_OK;
 }

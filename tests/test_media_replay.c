@@ -197,6 +197,53 @@ static void test_midi_preemption(int loops)
     for (i = 0; i < 2; ++i) CHECK(nj_call(vm, players[i], PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
     nj_vm_destroy(vm); nj_port_shutdown(&port);
 }
+/* deallocate() is documented to free the platform's handle.  A title that
+ * pauses its music with stop()+deallocate() - Need for Speed does exactly
+ * that - realizes the same Player object again on resume, and a Player that
+ * silently fell into the sampled path would play its MIDI bytes as PCM:
+ * static, then nothing.  realize() has to give the song back to the synth. */
+static void test_midi_reacquire_after_deallocate(void)
+{
+    static const nj_u1 song[] = {
+        'M','T','h','d',0,0,0,6,0,0,0,1,0,96,
+        'M','T','r','k',0,0,0,12,0,0x90,60,64,96,0x80,60,0,0,0xff,0x2f,0
+    };
+    nj_port port; nj_vm *vm; nj_ref data, stream, player; nj_value a[2], ret;
+    memset(midi_slots, 0, sizeof(midi_slots));
+    midi_active = -1; midi_count = midi_fail = 0;
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    port.midi_open = mock_midi_open; port.midi_start = mock_midi_start;
+    port.midi_finished = mock_midi_finished; port.midi_close = mock_midi_close;
+    vm = nj_vm_create(&port, 1024 * 1024);
+    CHECK(vm != NULL); if (!vm) { nj_port_shutdown(&port); return; }
+    data = nj_root(vm, nj_byte_array_new(vm, sizeof(song)));
+    stream = nj_root(vm, nj_object_new(vm, "java/io/ByteArrayInputStream"));
+    CHECK(data != NULL && stream != NULL);
+    memcpy(nj_array_data(data), song, sizeof(song));
+    a[0].r = data;
+    CHECK(nj_call_special(vm, stream, "java/io/ByteArrayInputStream", "<init>", "([B)V", a, NULL) == NJ_OK);
+    a[0].r = stream; a[1].r = NULL;
+    CHECK(nj_call_static(vm, "javax/microedition/media/Manager", "createPlayer",
+        "(Ljava/io/InputStream;Ljava/lang/String;)Ljavax/microedition/media/Player;", a, &ret) == NJ_OK);
+    player = nj_root(vm, ret.r);
+    CHECK(midi_count == 1);          /* the synth took the song at creation */
+    a[0].i = -1;
+    CHECK(nj_call(vm, player, PLAYER, "setLoopCount", "(I)V", a, NULL) == NJ_OK);
+    CHECK(nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    CHECK(midi_slots[0].starts == 1);
+    CHECK(nj_call(vm, player, PLAYER, "stop", "()V", NULL, NULL) == NJ_OK);
+    CHECK(nj_call(vm, player, PLAYER, "deallocate", "()V", NULL, NULL) == NJ_OK);
+    CHECK(nj_call(vm, player, PLAYER, "getState", "()I", NULL, &ret) == NJ_OK && ret.i == 100);
+    CHECK(nj_call(vm, player, PLAYER, "realize", "()V", NULL, NULL) == NJ_OK);
+    CHECK(nj_call(vm, player, PLAYER, "getState", "()I", NULL, &ret) == NJ_OK && ret.i == 200);
+    CHECK(midi_count == 2);          /* the synth gave it back on realize */
+    CHECK(nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    CHECK(midi_slots[1].starts == 1);
+    CHECK(nj_call(vm, player, PLAYER, "getDuration", "()J", NULL, &ret) == NJ_OK);
+    CHECK(ret.j == 1000 * 1000);     /* the platform duration survived */
+    CHECK(nj_call(vm, player, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
+    nj_vm_destroy(vm); nj_port_shutdown(&port);
+}
 /*
  * A looping MIDI Player renders through a stream that holds only a raw pointer
  * to the song bytes: the Player has to keep the byte array in the heap (pSrc),
@@ -456,6 +503,7 @@ int main(void)
     test_midi_stream_loop();
 #endif
     test_midi_preemption(1); test_midi_preemption(3); test_midi_preemption(-1);
+    test_midi_reacquire_after_deallocate();
     test_device_handover();
     printf("media replay: %d failures\n", failures);
     return failures ? 1 : 0;
