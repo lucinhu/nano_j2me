@@ -43,7 +43,7 @@ The gate over all collected titles, most recent full sweep:
 | title | verdict | why |
 | --- | --- | --- |
 | `鲁宾逊漂流记汉化BT版_4677` | GAME ASSET | the JAR is truncated — 286,534 bytes with no end-of-central-directory record; `unzip -l` fails and python's `zipfile` refuses it too. Nothing to load. |
-| `乱世Q三国_1649` | GAME-SIDE | the title's own licence check expires: its boot prints `授权过期` ("licence expired") and calls `notifyDestroyed()`. The reference emulator prints the same and exits the same way (`.local-tools/debug-runs/corpus-r3/q3/ref/ref.log`). The sweep supplied a fresh RMS directory, so this is the first-install path. |
+| `乱世Q三国_1649` | GAME-SIDE | the title's own licence check expires: its boot prints `授权过期` ("licence expired") and calls `notifyDestroyed()`. The reference emulator prints the same and exits the same way (`.local-tools/debug-runs/corpus-tail-20261027/ref-c1/ref.log`, re-checked 2026-10-27; the older `corpus-r3` log is no longer in the checkout). The sweep supplied a fresh RMS directory, so this is the first-install path. |
 
 History: the sweep before this one (`/tmp/nj-r3`) counted **392 passed,
 3 failed**, and its third row was `实况足球经理2009_10609`, written up as a
