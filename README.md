@@ -4,7 +4,7 @@
 
 [![latest release](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![licence](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-92%20passing-brightgreen)](docs/VERIFICATION.md)
+[![tests](https://img.shields.io/badge/tests-122%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99, no dependencies](https://img.shields.io/badge/C99-no%20dependencies-informational)](#design-commitments)
 
@@ -43,34 +43,42 @@ an ESP32-S3, or whatever you are holding.
                     └──────────────────────────────────────────┘
 ```
 
-## What's new in 0.2.0
+## What's new in 0.3.0
 
-**0.2.0 puts the runtime everywhere.**  It was a desktop runtime; now it is a
-RetroArch core, an Android app and an ESP32-S3 firmware as well, and the games
-that already ran run faster.
+**0.3.0 makes the runtime show what the games were hiding.** J2ME titles carry
+MPEG-4 and H.263 movies - intros, cutscenes, attract loops - and 0.2.0 had no
+video decoder at all. This release ships one, from the container to the pixels,
+and wires it through MIDP: intro movies and their own AMR-NB sound tracks now
+play inside 1942, Doom 3 and H.A.W.X. Micro3D titles that used to stop at the
+first command list render, and JSR-184's last audit gaps are closed.
 
-* **RetroArch / libretro core.** One native shared object with video, audio,
-  joypad/keyboard/touch input and core options; six prebuilt targets (Linux
-  x86_64/aarch64/armv7, Android arm64-v8a/armeabi-v7a/x86_64), verified against
-  RetroArch 1.22.2. See [In RetroArch](#in-retroarch).
-* **ESP32-S3.** A real ESP-IDF component builds from this tree and runs the
-  full class library and a MIDlet under Espressif's `esp-emu`; the UI demo
-  decodes the 240x320 frame path to PNG, injects keys over UART and reads the
-  JAR from a mounted card.
-* **JSR-184 (M3G).** Full `javax.microedition.m3g` API, a `.m3g` parser and a
-  software rasterizer with a depth buffer, perspective-correct textures, a mip
-  chain, back-face culling and per-vertex lighting.
-* **A faster interpreter.** More fused superinstructions whose digests are
-  compared against a desktop JVM, `--stats` gains `cpcache=<hits>/<misses>`, and
-  the render-heavy titles that used to crawl now do not.
-* **Android catches up.** `getKeyChar` returns the character a Chinese IME
-  committed, platform-backed HTTP/Socket hooks, a self-drawn Material 3 shell,
-  CJK rasterised by the system font (the bitmap face is compiled out: -1.3 MB),
-  audio through AAudio/OpenSL ES with system MIDI and MediaCodec decoders.
-* **Compatibility grew from 374/21 to 393/2** real games running, and none of
-  the 395 stopped on a missing class, method, field or native.
+* **Video.** A from-scratch MPEG-4 Part 2 (Simple Profile) decoder and an H.263
+  baseline decoder behind the same provider seam: P-VOP inter prediction, 4MV,
+  half-pel motion compensation, video packet headers and AC prediction, plus an
+  allocation-free ISO-BMFF demultiplexer. Output is pixel-exact against FFmpeg
+  (three real movies, every plane, max-abs-diff 0). `VideoControl` draws the
+  frame over the Canvas, playback follows the movie's own real-time clock, and
+  the movie's AMR-NB track is decoded and played with the Player's volume/mute.
+* **Mascot Capsule Micro3D.** Command lists, figures, MTRA/MBAC and animated
+  models are in; 鬼泣3D's mission-1 combat and 浴火银河's flight scene render on
+  the real titles instead of stopping at `tris=0`.
+* **JSR-184 completed.** Two-sided lighting, Animation COLOR tracks, a
+  zero-allocation skinning pose cache, `duplicate()` with a copied skeleton, and
+  a pixel-level proof of the Texture2D general transform; the corpus audit of
+  975 `.m3g` files and 1,513 PolygonModes closed with no open gaps.
+* **Robustness.** Malformed class files can no longer hang or crash the VM
+  (exception-table, receiver and class-cycle families; found by the fuzzer,
+  fixed, and pinned by tests). Two real-title hangs are fixed: Street Fighter II
+  no longer deadlocks when a soft key arrives during loading, and 纽约人生_1339
+  no longer paints a single frame and then starves the frame pump.
+* **Optional JIT.** Baseline RV32 and ARM64 JITs (opt-in, `NJ_ENABLE_JIT=1`)
+  share a bounded per-VM hot-block cache; x86_64 stays on the interpreter. See
+  [docs/JIT.md](docs/JIT.md).
+* **Numbers.** 122 tests in `ctest` (92 in 0.2.0), the sanitized suite is
+  122/122 green, and **397 of 399** collected real games run - the two failures
+  are the titles' own (a truncated JAR and a licence check).
 
-Full changelog: [v0.2.0 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.2.0).
+Full changelog: [v0.3.0 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.3.0).
 
 ## Screenshots
 
@@ -103,6 +111,23 @@ profile, the frame path streamed over UART and decoded to this PNG.
 
 <p>
 <img src="docs/images/esp-emu-1942-menu.png" width="180" height="240" alt="1942 Air Combat running on the emulated ESP32-S3">
+</p>
+
+**Video, new in 0.3.0.** 1942's MPEG-4 intro, decoded frame by frame and drawn
+as a direct-video overlay over the Canvas; the movie's own AMR-NB track plays
+with it.
+
+<p>
+<img src="docs/images/readme-movie-1942.png" width="240" height="320" alt="1942 Air Combat's MPEG-4 intro movie playing in the emulator">
+</p>
+
+**Micro3D on real titles, new in 0.3.0.** 鬼泣3D's mission-1 combat and
+浴火银河's flight scene, rendered through the Mascot Capsule Micro3D command
+list and figures.
+
+<p>
+<img src="docs/images/dmc-micro3d-combat.png" width="240" height="320" alt="Devil May Cry 3D mission combat rendered by Micro3D">
+<img src="docs/images/gof-micro3d-flight.png" width="240" height="320" alt="Galaxy on Fire flight scene rendered by Micro3D">
 </p>
 
 ## Design commitments
@@ -148,19 +173,26 @@ usually skip, and they are exactly the parts old games use.
 | `javax.bluetooth` | **discovery done** — `LocalDevice`, `DiscoveryAgent`, `UUID`, `DeviceClass`, `DataElement`, `ServiceRecord` and `RemoteDevice` over nine optional `bt_*` hooks; RFCOMM/L2CAP servers are the port's, and a port with no radio gets `BluetoothStateException` |
 | `javax.microedition.sensor` (JSR 256) | **done** — `findSensors`, connections, channels, ranges and data listeners, with the sensors themselves supplied by the port; conditions are refused rather than faked |
 | Software rasterizer | **done** |
-| Decoders: PNG, JPEG, GIF, DEFLATE, WAV, AMR, MIDI, bitmap fonts | **done**, each behind its own switch (`NJ_ENABLE_*`) and all behind a pluggable registry, so a port can cut one or replace it with the platform's |
+| `javax.microedition.m3g` (JSR 184) | **done** — scene graph, `.m3g` parser, keyframe tracks (TRS/color), skinned meshes, camera/light/fog, and a software rasterizer with depth, perspective-correct textures, mipmaps, two-sided lighting and texture transforms; the corpus audit closed every gap |
+| `javax.microedition.media` (JSR 135) | **done** — tones, MIDI, WAV, AMR-NB, MP3, and H.263 / MPEG-4 Part 2 video Players with `VideoControl`; playback is paced by the movie's real-time clock and a movie's own AMR-NB track plays with it |
+| Mascot Capsule Micro3D v3 | **done** — figures, affine/parallel/perspective projections, command lists (per-command and per-face colors), MTRA/MBAC; real titles render |
+| Execution engines | interpreter, plus opt-in baseline RV32 and ARM64 JITs (`NJ_ENABLE_JIT=1`) sharing a bounded per-VM hot-block cache; see [docs/JIT.md](docs/JIT.md) |
+| Decoders: PNG, JPEG, GIF, DEFLATE, WAV, AMR, MP3, MIDI, H.263, MPEG-4 Part 2, bitmap fonts | **done**, each behind its own switch (`NJ_ENABLE_*`) and all behind a pluggable registry, so a port can cut one or replace it with the platform's |
 | Ports: headless (reference) | **done** |
 | Ports: SDL2 | **done** |
 | Ports: libretro / RetroArch | **done** — one native shared object that RetroArch loads as a core: RGB565 video, resampled audio, joypad/keyboard/touch input, core options for the handset profile, rotation, heap and button bindings, and per-game RecordStore/FileConnection saves. No JVM, no subprocess. See [docs/LIBRETRO.md](docs/LIBRETRO.md) |
-| Ports: Android (NDK + JNI) | **done** — one APK for Android 5.0 (API 21) and up, 4 ABIs, a launcher that shows each game's own name and icon and opens `.jar` files from a file manager, three configurable floating keypad layouts, sound through AAudio or OpenSL ES with MIDI handed to the phone's own synth, multi-touch, and auto-detected screen size; 2.28 MiB for all four ABIs, runs on an API 21 emulator and an API 36 emulator |
+| Ports: Android (NDK + JNI) | **done** — one APK for Android 5.0 (API 21) and up, 4 ABIs, a launcher that shows each game's own name and icon and opens `.jar` files from a file manager, three configurable floating keypad layouts, sound through AAudio or OpenSL ES with MIDI handed to the phone's own synth, multi-touch, and auto-detected screen size; 2.79 MiB for all four ABIs (858 KiB for arm64 alone), runs on an API 21 emulator and an API 36 emulator |
 | Ports: ESP32-S3 (ESP-IDF, Xtensa) | **done** — real IDF build; boots the ROM, the full class library and a MIDlet on a 16 MB flash / 8 MB PSRAM board under Espressif's `esp-emu` (`tools/run_esp_emulator.sh`: `BENCH sum=-136042548`, 105,717,067 bytecodes — the desktop total), and runs the internal-RAM profile under QEMU. `tools/run_esp_emulator_ui.sh` also demonstrates the display, input and storage paths in the same emulator (240x320 frames decoded to PNG, keys injected over UART, JAR read from a mounted card). See [docs/PERFORMANCE.md](docs/PERFORMANCE.md#esp32-s3-measured-on-the-real-architecture) and [docs/FOOTPRINT.md](docs/FOOTPRINT.md#what-esp-emu-does-and-does-not-model-the-ui-demo) |
 | Ports: ESP32-C3 (ESP-IDF, RISC-V) | builds, links and boots; needs PSRAM for the VM |
-| Test suite | **92 tests** (`ctest`) |
-| Sanitized suite | **92/92 passing** under ASan + UBSan + LSan (`tools/run_sanitized_tests.sh`) |
+| Test suite | **122 tests** (`ctest`) |
+| Sanitized suite | **122/122 passing** under ASan + UBSan + LSan (`tools/run_sanitized_tests.sh`) |
 
 Verified end to end: **Tumbleweed** (`net.frog_parrot.jump.Jump`, Apress 2004)
 plays on the headless port at 176x208 — scrolling ground, an animated sprite, a
 live score and countdown. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+The collected corpus - 399 real games - stands at **397 running / 2 title-side
+failures** (a truncated JAR and a licence check); see
+[docs/CORPUS.md](docs/CORPUS.md).
 
 ## Building
 
@@ -205,7 +237,7 @@ installable cores for Android (arm64-v8a, armeabi-v7a, x86_64) and ARM Linux
 ## In RetroArch
 
 Every release ships the six cores as
-`nano_j2me-0.2.0-libretro-cores.tar.gz`, so trying it does not need a
+`nano_j2me-0.3.0-libretro-cores.tar.gz`, so trying it does not need a
 cross-compiler.  For the core on this machine:
 
 ```sh

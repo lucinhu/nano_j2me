@@ -4,7 +4,7 @@
 
 [![最新发布](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![许可](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![测试](https://img.shields.io/badge/tests-92%20passing-brightgreen)](docs/VERIFICATION.md)
+[![测试](https://img.shields.io/badge/tests-122%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitizer](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99，零依赖](https://img.shields.io/badge/C99-no%20dependencies-informational)](#设计上的硬约束)
 
@@ -41,18 +41,18 @@
                     └──────────────────────────────────────────┘
 ```
 
-## 0.2.0 的新内容
+## 0.3.0 的新内容
 
-**0.2.0 把运行时带到了各处。** 以前它是一个桌面运行时；现在它同时是一个 RetroArch core、一个 Android 应用和一份 ESP32-S3 固件，而且原本就能跑的游戏跑得更快了。
+**0.3.0 让游戏把藏着的画面放出来。** 很多 J2ME 游戏自带 MPEG-4 / H.263 片头动画——开场、过场、演示循环——而 0.2.0 还没有任何视频解码器。这一版从容器一直做到像素，把视频接进了 MIDP：1942 空战、毁灭战士3、H.A.W.X. 的片头影片连同它们自带的 AMR-NB 音轨现在都能在游戏里播放；以前停在第一条命令表上的 Micro3D 标题开始真正出画；JSR-184 的审计缺口也补完了。
 
-* **RetroArch / libretro core。** 一个原生共享库，自带画面、声音、手柄/键盘/触摸输入和 core options；六个预编译目标（Linux x86_64/aarch64/armv7、Android arm64-v8a/armeabi-v7a/x86_64），在 RetroArch 1.22.2 上验证通过。见 [在 RetroArch 里运行](#在-retroarch-里运行)。
-* **ESP32-S3。** 本仓库直接产出一个真实的 ESP-IDF 组件，在 Espressif 的 `esp-emu` 里跑起完整类库和一个 MIDlet；UI demo 把 240x320 的画面经 UART 解码成 PNG、把按键注入进去、从挂载的存储卡读 JAR。
-* **JSR-184（M3G）。** 完整的 `javax.microedition.m3g` API、`.m3g` 解析器，以及一个软件光栅化器：深度缓冲、透视校正纹理、mipmap 链、背面剔除、逐顶点光照。
-* **更快的解释器。** 更多融合的超指令（其摘要与桌面 JVM 逐条比对）、`--stats` 新增 `cpcache=<hits>/<misses>` 计数，原本渲染吃力的游戏不再吃力。
-* **Android 补齐。** `getKeyChar` 会返回中文输入法上屏的字符，platform 层的 HTTP/Socket 钩子，自绘的 Material 3 外壳，中文交给系统字体光栅化（点阵中文字体编译掉：省 1.3 MB），音频走 AAudio/OpenSL ES，MIDI 与 MediaCodec 解码交给系统。
-* **兼容性从 374/21 提升到 393/2**（真实游戏），并且 395 个里没有一个因缺类、缺方法、缺字段或缺 native 而停下。
+* **视频。** 从零写的 MPEG-4 Part 2（Simple Profile）解码器和 H.263 baseline 解码器走同一个 provider 接口：P 帧帧间预测、4MV、半像素运动补偿、视频包（resync）头、AC prediction，加上一个零分配的 ISO-BMFF 解复用器。输出与 FFmpeg 逐像素一致（三部真实影片、所有平面、最大绝对差 0）。`VideoControl` 把画面直绘在 Canvas 上，播放按影片自己的真实时钟节流，影片自带的 AMR-NB 音轨按 Player 的音量和静音解码播放。
+* **Mascot Capsule Micro3D。** 命令表、Figure、MTRA/MBAC 和动画模型都实现了；鬼泣3D 的任务一战斗和浴火银河的飞行场景在真实标题里出画，而不是停在 `tris=0`。
+* **JSR-184 补齐。** 两面光照、Animation COLOR 轨道、每帧零分配的蒙皮姿态缓存、`duplicate()` 连骨骼一起复制、Texture2D 一般矩阵的画面级证明；975 个 `.m3g`、1,513 个 PolygonMode 的语料审计已无未决缺口。
+* **稳健性。** 畸形 class 文件不再能挂死或弄崩虚拟机（异常表、未验证接收者、循环继承几族；fuzzer 找到、修掉、并用测试钉住）。两个真实标题的挂死/黑屏也修了：街头霸王2 冠军典藏版在加载期间收到软键不再挂死；纽约人生_1339 不再画完一帧就把帧泵饿死。
+* **可选 JIT。** RV32 与 ARM64 基线 JIT（默认关闭，`NJ_ENABLE_JIT=1` 开启），共享一个按 VM 有界的热块缓存；x86_64 仍用解释器。见 [docs/JIT.md](docs/JIT.md)。
+* **数字。** `ctest` 122 项测试（0.2.0 是 92 项），Sanitizer 套件 122/122 全绿；真实游戏语料 399 个里 **397 个正常跑**，2 个失败都是标题自身原因（JAR 被截断、授权过期）。
 
-完整更新日志：[v0.2.0 发布说明](https://github.com/lucinhu/nano_j2me/releases/tag/v0.2.0)。
+完整更新日志：[v0.3.0 发布说明](https://github.com/lucinhu/nano_j2me/releases/tag/v0.3.0)。
 
 ## 截图
 
@@ -81,6 +81,19 @@
 
 <p>
 <img src="docs/images/esp-emu-1942-menu.png" width="180" height="240" alt="1942 空战运行在模拟的 ESP32-S3 上">
+</p>
+
+**视频，0.3.0 新增。** 1942 空战的 MPEG-4 片头：一帧一帧解码，以 direct-video 叠加画在 Canvas 上；影片自带的 AMR-NB 音轨同步播放。
+
+<p>
+<img src="docs/images/readme-movie-1942.png" width="240" height="320" alt="1942 空战的 MPEG-4 片头在模拟器里播放">
+</p>
+
+**真实标题上的 Micro3D，0.3.0 新增。** 鬼泣3D 的任务一战斗与浴火银河的飞行场景，由 Mascot Capsule Micro3D 的命令表与 Figure 绘制。
+
+<p>
+<img src="docs/images/dmc-micro3d-combat.png" width="240" height="320" alt="鬼泣3D 任务战斗画面，由 Micro3D 绘制">
+<img src="docs/images/gof-micro3d-flight.png" width="240" height="320" alt="浴火银河飞行场景，由 Micro3D 绘制">
 </p>
 
 ## 设计上的硬约束
@@ -113,17 +126,21 @@
 | `javax.bluetooth`（JSR 82）| **发现部分完成** —— `LocalDevice`、`DiscoveryAgent`、`UUID`、`DeviceClass`、`DataElement`、`ServiceRecord`、`RemoteDevice`，走九个可选的 `bt_*` 钩子；RFCOMM/L2CAP 服务端由移植提供，没有无线电的移植得到的是 `BluetoothStateException` |
 | `javax.microedition.sensor`（JSR 256）| **完成** —— `findSensors`、连接、通道、量程和数据监听器都在，传感器本身由移植提供；Condition 是明确拒绝而不是假装支持 |
 | 软件光栅化器 | **完成** |
-| 解码器：PNG、JPEG、GIF、DEFLATE、WAV、AMR、MIDI、点阵字体 | **完成**，每个都有自己的开关（`NJ_ENABLE_*`），并且都走可插拔注册表，所以移植可以裁掉一个、也可以换成平台自己的实现 |
+| `javax.microedition.m3g`（JSR 184）| **完成** —— 场景图、`.m3g` 解析器、关键帧轨道（位移/旋转/缩放/颜色）、蒙皮网格、相机/光照/雾，以及带深度缓冲、透视校正纹理、mipmap、两面光照和纹理变换的软件光栅化器；语料审计的缺口已全部关闭 |
+| `javax.microedition.media`（JSR 135）| **完成** —— 音调、MIDI、WAV、AMR-NB、MP3，以及 H.263 / MPEG-4 Part 2 视频 Player 与 `VideoControl`；播放按影片真实时钟节流，影片自带的 AMR-NB 音轨同步播放 |
+| Mascot Capsule Micro3D v3 | **完成** —— Figure、仿射/平行/透视投影、命令表（逐命令/逐面颜色）、MTRA/MBAC；真实标题可出画 |
+| 执行引擎 | 解释器，加上可选的 RV32 / ARM64 基线 JIT（`NJ_ENABLE_JIT=1`），共享按 VM 有界的热块缓存；见 [docs/JIT.md](docs/JIT.md) |
+| 解码器：PNG、JPEG、GIF、DEFLATE、WAV、AMR、MP3、MIDI、H.263、MPEG-4 Part 2、点阵字体 | **完成**，每个都有自己的开关（`NJ_ENABLE_*`），并且都走可插拔注册表，所以移植可以裁掉一个、也可以换成平台自己的实现 |
 | 移植：headless（参考实现） | **完成** |
 | 移植：SDL2 | **完成** |
 | 移植：libretro / RetroArch | **完成** —— 一个 RetroArch 当作 core 加载的原生共享库：RGB565 画面、重采样音频、手柄/键盘/触摸输入、用于机型档案/旋转/堆大小/按键绑定的 core options，以及按游戏分开的 RecordStore/FileConnection 存档。没有 JVM，没有子进程。见 [docs/LIBRETRO.md](docs/LIBRETRO.md) |
-| 移植：Android（NDK + JNI） | **完成** —— 一个 APK 支持 Android 5.0（API 21）及以上、四种 ABI；启动器会显示每个游戏自己的名字和图标，也能从文件管理器直接打开 `.jar`；三套可配置的悬浮按键布局；AAudio 或 OpenSL ES 出声，MIDI 交给手机自带的合成器；多点触控；自动识别游戏分辨率。四种 ABI 合计 2.28 MiB，在 API 21 模拟器和 API 36 模拟器上都跑过 |
+| 移植：Android（NDK + JNI） | **完成** —— 一个 APK 支持 Android 5.0（API 21）及以上、四种 ABI；启动器会显示每个游戏自己的名字和图标，也能从文件管理器直接打开 `.jar`；三套可配置的悬浮按键布局；AAudio 或 OpenSL ES 出声，MIDI 交给手机自带的合成器；多点触控；自动识别游戏分辨率。四种 ABI 合计 2.79 MiB（仅 arm64 的包 858 KiB），在 API 21 模拟器和 API 36 模拟器上都跑过 |
 | 移植：ESP32-S3（ESP-IDF，Xtensa） | **完成** —— 真实的 IDF 构建；在 16 MB flash / 8 MB PSRAM 的板级配置下，通过 Espressif 的 `esp-emu` 跑起 ROM、完整类库和一个 MIDlet（`tools/run_esp_emulator.sh`：`BENCH sum=-136042548`，105,717,067 条字节码——桌面版的总数），内置 RAM 配置在 QEMU 下也能跑。`tools/run_esp_emulator_ui.sh` 还在同一个模拟器里演示了显示、输入和存储路径（240x320 帧解码成 PNG，按键经 UART 注入，JAR 从挂载的存储卡读取）。见 [docs/PERFORMANCE.md](docs/PERFORMANCE.md#esp32-s3-measured-on-the-real-architecture) 和 [docs/FOOTPRINT.md](docs/FOOTPRINT.md#what-esp-emu-does-and-does-not-model-the-ui-demo) |
 | 移植：ESP32-C3（ESP-IDF，RISC-V） | 能编译、链接、启动；跑虚拟机需要 PSRAM |
-| 测试套件 | **92 项测试**（`ctest`） |
-| Sanitizer 套件 | **92/92 通过**（ASan + UBSan + LSan，`tools/run_sanitized_tests.sh`） |
+| 测试套件 | **122 项测试**（`ctest`） |
+| Sanitizer 套件 | **122/122 通过**（ASan + UBSan + LSan，`tools/run_sanitized_tests.sh`） |
 
-端到端验证过的：**Tumbleweed**（`net.frog_parrot.jump.Jump`，Apress 2004）在 headless 移植上以 176x208 跑起来——滚动的地面、会动的精灵、实时分数和倒计时。详见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。
+端到端验证过的：**Tumbleweed**（`net.frog_parrot.jump.Jump`，Apress 2004）在 headless 移植上以 176x208 跑起来——滚动的地面、会动的精灵、实时分数和倒计时。详见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。收集到的真实游戏语料共 399 个，其中 **397 个正常跑**，2 个失败都是标题自身原因（JAR 被截断、授权过期）；见 [docs/CORPUS.md](docs/CORPUS.md)。
 
 ## 构建
 
@@ -154,7 +171,7 @@ libretro core 默认会构建成 `build/libretro/nano_j2me_libretro.so`（`-DNJ_
 
 ## 在 RetroArch 里运行
 
-每次发布都会带上六个 core，打包为 `nano_j2me-0.2.0-libretro-cores.tar.gz`，所以想试不需要交叉编译器。要构建本机的 core：
+每次发布都会带上六个 core，打包为 `nano_j2me-0.3.0-libretro-cores.tar.gz`，所以想试不需要交叉编译器。要构建本机的 core：
 
 ```sh
 cmake -S . -B build -G Ninja
