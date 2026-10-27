@@ -3230,8 +3230,10 @@ NJFN(player_start)
          * the registry for that pump to run, which is all start() does.
          */
         w_i(vm, self, F_P_LOOPDONE, 0);
+#if NJ_ENABLE_VIDEO
         video_set_start(vm, self);
         video_audio_start(vm, self);
+#endif
         (void)media_register(vm, self);
     } else if (vm->port && vm->port->pcm_open) {
         w_i(vm, self, F_P_LOOPDONE, 0);
@@ -3271,7 +3273,9 @@ NJFN(player_stop)
                 vm->port->tone_stop(vm->port->ud);
             }
         } else if (r_i(vm, self, F_P_KIND) == 2) {
+#if NJ_ENABLE_VIDEO
             video_audio_stop(vm, self);
+#endif
         } else if (r_z(vm, self, F_P_OPEN) && vm->port
                    && vm->port->pcm_close) {
             vm->port->pcm_close(vm->port->ud);
