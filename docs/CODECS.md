@@ -78,12 +78,21 @@ asks for one RGB565 frame per emulated frame; the player closes the decoder
 when it is deallocated.  H.263 and MPEG-4 Part 2 both arrive through this one
 seam.
 
-`VideoControl` is still only a class that exists for checkcasts
-(`getControl("VideoControl")` returns null), so titles that try to display
-video skip it instead of painting it; the decoded frames themselves do land in
-the Player's RGB565 buffer, which `tools/m4v_player_probe.sh` reads back for
-the evidence below.  `getSnapshot()`/`initDisplayMode()` are the remaining
-step for on-screen video.
+`VideoControl` is implemented (commit `fa2e504`): `getControl("VideoControl")`
+answers a concrete control for a video Player, `initDisplayMode(USE_DIRECT_VIDEO,
+canvas)` registers a display, the display setters/getters round-trip, and
+`nj_midp_present()` draws the Player's RGB565 frame at the frame boundary as a
+direct-video overlay (image blit at native size, nearest-neighbour scaling
+otherwise).  `getSnapshot("RGB888")` turns the current frame into a byte array,
+and the pump only advances while the Player is STARTED.  1942空战 and Doom 3
+now play their intro movies; evidence in
+`.local-tools/debug-runs/m4v-videocontrol-20261027/`.
+
+Two honest limitations remain.  The pump decodes **one sample per emulated
+frame**, not by the movie's own DTS/fps, so a 15 fps clip plays about twice as
+fast at 30 fps emulation (Doom 3's intro finishes in about 6.3 s while the game
+sleeps 12 s).  And a video Player does not play the movie's own audio track (the
+corpus movies carry AMR), so those intros are silent.
 
 ## Tests
 
@@ -92,11 +101,13 @@ step for on-screen video.
   must refuse, decoder pixel spots, provider `decode()` contract, truncated and
   mutated input, empty-`mdat` placeholders, and leak checks.  It runs in
   `ctest`.
-- `tests/test_m4v.c` — 112 checks over MPEG-4 Part 2: the VOL/VOP bit syntax,
+- `tests/test_m4v.c` — 118 checks over MPEG-4 Part 2: the VOL/VOP bit syntax,
   DC/AC VLCs and escapes, the proportional IDCT, the motion-vector VLC and
   median predictor, the half-pel MC kernel (rounded, truncating and chroma
-  variants), the Simple IDCT put/add values, and an end-to-end I/P/I/P chain
-  whose reference planes are pinned in the test.  It runs in `ctest`.
+  variants), the Simple IDCT put/add values, video packet headers and a sliced
+  movie, AC prediction (alternate scans, ROUNDED_DIV and a real `-flags +aic`
+  movie), and end-to-end I/P/I/P chains whose reference planes are pinned in
+  the test.  It runs in `ctest`.
 
 ## MP3 inside a Player
 
@@ -276,9 +287,10 @@ Evidence with a 176x144 H.263 3GP (10 samples, ffmpeg's `testsrc`): after
 `pPushed == 10` (every sample) and the 50,688-byte frame buffer holds a real
 picture (byte checksum 6,343,036, not a zero buffer).
 
-Still open: `VideoControl.getSnapshot()`/`initDisplayMode`, and an in-tree test
-that pins the decoded frame against ffmpeg's pixels (the scratch probe above is
-not committed; `tests/test_h263.c` already has the reference frames to reuse).
+Those two gaps were closed later: `VideoControl.getSnapshot()`/
+`initDisplayMode()` by commit `fa2e504`, and the pinned-frame test by
+`tests/test_m4v.c` (the corpus movies' reference planes) plus the provider and
+Player fixtures in `tests/m4v_clip.h`.
 
 The wiring is now pinned in the tree: `tests/test_lib.c` drives the same
 `clip_3gp` fixture that `tests/test_h263.c` verifies against ffmpeg through
@@ -945,16 +957,99 @@ normal test run; the provider and Player paths are pinned in `test_m4v`,
 
 ### What is still not implemented
 
-- **Video packet (resync) headers.**  The three corpus movies have
-  `resync_marker_disable = 1`, one slice per VOP.  A movie encoded with
-  FFmpeg's default auto-threading can carry sliced headers between macroblock
-  rows; those are refused rather than mis-decoded.
-- **AC prediction.**  `ac_pred` is read and skipped, and the entropy decode
-  after it is unaffected (so bit positions stay aligned), but both the permuted
-  coefficient scan and the prediction from the neighbouring block are not
-  applied, so such a picture would not be reconstructed correctly.  None of the
-  corpus movies uses it in the frames checked; FFmpeg's macroblock-type dump
-  shows no `ac_pred` macroblocks.
-- **VideoControl display.**  `getControl("VideoControl")` still returns null, so
-  the titles skip their videos; the Player decodes and holds the frames, and
-  `getSnapshot()`/`initDisplayMode()` are the remaining step to paint them.
+The two decoder boundaries this section listed (video packet headers and AC
+prediction) are closed in round 233 - see "The last two decoder boundaries"
+below for the fixtures, results and the one reference-decoder caveat.  What
+remains:
+
+- **Playback pacing.**  The video pump decodes one sample per emulated frame
+  instead of following the movie's own DTS/fps, so a 15 fps clip plays about
+  twice as fast at 30 fps emulation.  Pacing by timestamps is the next
+  refinement; it needs the pump to be time-driven without slowing the emulator
+  down.
+- **Movie audio.**  A video Player does not open the movie's own audio track
+  (the corpus movies carry AMR), so the intros are silent.  The audio side of
+  the Player exists (AMR decodes to PCM); it is the video Player's demuxer
+  choice - one track - that has to learn to pair both.
+- **Other MPEG-4 Part 2 profiles.**  Data partitioning, reversible VLC,
+  interlaced pictures, quarter sample, sprites, B-VOPs and the advanced
+  Simple-Studio profile are still refused by the provider on purpose.  None of
+  the corpus movies uses them, and each needs a separate reference-derived
+  implementation.
+- **Video packet header extensions.**  The optional header-extension fields of
+  a video packet (redundant VOP header) are detected and refused as
+  unsupported, not ignored.
+
+## The last two decoder boundaries: video packets and AC prediction (round 233)
+
+The two gaps left open by the P-VOP work are closed, each against an
+FFmpeg-generated fixture and a pinned pixel result.  Commit `e0c069f` is the
+video-packet layer, `0201ac6` is AC prediction.
+
+### Video packet (resync) headers
+
+The corpus movies are all single-slice, but a movie encoded with FFmpeg's
+default auto threading carries a video packet header between macroblock rows.
+The decoder now transcribes the reference's three pieces rather than guessing:
+
+- `m4v_is_resync()` is `mpeg4_is_resync()`: it recognises the marker at the bit
+  right after a macroblock, validates the announced macroblock number, and does
+  not move the bit position;
+- `nj_m4v_resync()` is `ff_h263_resync()` + `ff_mpeg4_decode_video_packet_header()`
+  for rectangular pictures: skip the stuffing bit, byte-align, check the zero
+  prefix (16 bits for an I-VOP, `f_code + 15` for a P-VOP), read the absolute
+  macroblock number, then the quantiser and the header-extension flag (an
+  extension is refused as unsupported, not ignored);
+- both frame drivers walk macroblocks by absolute index, so a packet may start
+  in the middle of a row, and they carry the slice's first-line flag and start
+  column into the DC predictor (`mpeg4_pred_dc`'s outside-slice rules) and the
+  motion-vector predictor (`ff_h263_pred_motion`'s `first_slice_line` cases).
+  The predictor grids are not reset at a packet boundary - like the reference,
+  the decoded neighbours stay readable and the slice rules neutralise only the
+  out-of-slice ones.
+
+Fixture: `tests/m4v_slice_clip.h`, a real 96x64 six-frame I,P,P,P,P,P movie
+encoded with `-threads 3`, which makes FFmpeg emit two packet headers per VOP
+(packets starting at macroblock 0, 6 and 18 of 24).  Six frames, every plane,
+max-abs-diff 0 against FFmpeg.  Synthetic tests pin the exact header bit layout
+for I and P (`f_code = 2`) VOPs and the refusals.
+
+### AC prediction
+
+Intra blocks with `ac_pred = 1` code their AC coefficients as a difference from
+the neighbouring block, in a permuted scan.  The implementation is again the
+reference's (`ff_mpeg4_pred_ac` and friends):
+
+- the scan orders are `ff_alternate_horizontal_scan` / `ff_alternate_vertical_scan`
+  through `nj_m4v_scan_index_mode()` (the old row/column-major tables there were
+  wrong and had no user; `nj_m4v_ac_block_scan()` takes the mode);
+- the left column (dir 0) or top row (dir 1) of the raw, still quantised
+  coefficients is added, rescaled by ROUNDED_DIV when the neighbour macroblock
+  used a different quantiser, and only the blocks that need it skip the
+  rescale (the reference's same-macroblock cases);
+- after each intra block its first column and row are stored for the next
+  block; non-intra macroblocks clear the five slots a later intra block could
+  read (`ff_clean_intra_table_entries`), and a video packet start clears the
+  band outside its slice (`ff_mpeg4_clean_buffers`);
+- the prediction direction for a block is the direction its DC predictor chose,
+  and prediction applies to blocks whose CBP bit is zero too, exactly where the
+  reference's `not_coded` label calls `ff_mpeg4_pred_ac`.
+
+Fixture: `m4v_acpred_3gp` in `tests/m4v_clip.h`, a real 96x64 four-frame
+I,P,P,P movie with 13 of 24 I-VOP macroblocks carrying `ac_pred`, plane hashes
+pinned.  All four frames, every plane, max-abs-diff 0.
+
+**A reference-decoder caveat, recorded because it changes what "matches ffmpeg"
+means for a fixture.**  The pinned AC-prediction hashes come from FFmpeg 9.0.2
+built with `--disable-x86asm` (the C Simple IDCT).  The system ffmpeg's x86
+SIMD Simple IDCT is not bit-exact with the C reference on every input: on this
+fixture it differs by one level on one chroma sample of frame 3, while this
+decoder matches the C reference exactly on all four frames and planes.  The
+three corpus movies match both builds, so the earlier pixel-identical claim is
+unaffected.  When regenerating fixture hashes, build the C-only decoder:
+`configure --disable-x86asm ... && make`, then decode with the debug harness
+(`-DDEBUG` makes the reference print its per-macroblock bit positions).
+
+Tests and evidence: `test_m4v` is 118 checks; the fixtures and comparison output
+are under `.local-tools/debug-runs/m4v-boundaries-20261027/`; the narrative is
+`docs/notes/2026-10-27-m4v-decode-boundaries.md`.
