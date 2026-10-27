@@ -76,9 +76,12 @@ on this host at `-O3`, measured with `CLOCK_PROCESS_CPUTIME_ID`: 124 µs for a
 through the provider's allocator hooks, keeps the caller's buffer alive, and
 asks for one RGB565 frame; with a frame-capped port the request is paced by the
 movie's own real-time clock, and an uncapped port (the comparison tools) keeps
-the deterministic one-sample-per-call contract.  The player closes the decoder
-when it is deallocated.  H.263 and MPEG-4 Part 2 both arrive through this one
-seam.
+the deterministic one-sample-per-call contract.  The player closes the decoder when the Player
+is deallocated and rebuilds it if the same Player is realized and started
+again; `setMediaTime()` seeks by re-opening the decoder and decoding the
+samples before the target, because a P-VOP references the previous picture and
+the corpus files carry no I-VOP index.  H.263 and MPEG-4 Part 2 both arrive
+through this one seam.
 
 `VideoControl` is implemented (commit `fa2e504`): `getControl("VideoControl")`
 answers a concrete control for a video Player, `initDisplayMode(USE_DIRECT_VIDEO,
@@ -108,13 +111,18 @@ accepted-frame counter gains exactly the movie's PCM (1942 +87,200, Doom 3
   must refuse, decoder pixel spots, provider `decode()` contract, truncated and
   mutated input, empty-`mdat` placeholders, and leak checks.  It runs in
   `ctest`.
-- `tests/test_m4v.c` — 118 checks over MPEG-4 Part 2: the VOL/VOP bit syntax,
+- `tests/test_m4v.c` — 126 checks over MPEG-4 Part 2: the VOL/VOP bit syntax,
   DC/AC VLCs and escapes, the proportional IDCT, the motion-vector VLC and
   median predictor, the half-pel MC kernel (rounded, truncating and chroma
   variants), the Simple IDCT put/add values, video packet headers and a sliced
   movie, AC prediction (alternate scans, ROUNDED_DIV and a real `-flags +aic`
-  movie), and end-to-end I/P/I/P chains whose reference planes are pinned in
-  the test.  It runs in `ctest`.
+  movie), the AMR-NB track selection of the container, and end-to-end I/P/I/P
+  chains whose reference planes are pinned in the test.  It runs in `ctest`.
+- `tests/test_lib.c` — 954 checks over the MIDP class library; the movie Player
+  ones cover H.263/MPEG-4 playback through `Manager.createPlayer()`, playback
+  pacing, `VideoControl`, the movie's AMR-NB track, and (round 235)
+  `setMediaTime()` on a movie plus decoder release/rebuild across
+  create/start/stop/deallocate/close.  It runs in `ctest`.
 
 ## MP3 inside a Player
 
@@ -1113,3 +1121,56 @@ video track of the same buffer, and the NO_AUDIO/AUDIO_CODEC/FORMAT cases;
 `test_m4v` is 126 checks.  Evidence and the full table:
 `.local-tools/debug-runs/m4v-audio-20261027/`, narrative in
 `docs/notes/2026-10-27-m4v-container-audio-track.md`.
+
+## Media robustness: a sanitizer and stress pass over the movie Player (round 235)
+
+The MP4V Player surface - the decoder holder, `setMediaTime()`, the lifecycle,
+`VideoControl` and the movie's AMR-NB track - was run under
+AddressSanitizer/UBSan/LeakSanitizer and under lifecycle churn.  Three real
+defects came out of it, two reachable from a MIDlet:
+
+- **`Player.setMediaTime()` on a movie crashed the runtime.**  A movie Player
+  sets `pStream` (its `pData` is a decoder holder, not PCM), and the setter's
+  branch order sent that flag down the streamed-MIDI path, which cast the
+  holder to a `struct nj_midi_stream *` and dereferenced it
+  (`nj_midi_stream_open`, `src/midp/nj_midi.c:1970`, from
+  `player_setMediaTime`, `src/midp/nj_lib_media.c`).  A video-kind branch now
+  runs first and seeks through `video_seek()`, which rebuilds the decoder and
+  decodes the samples before the target: P-VOPs reference the previous picture
+  and the corpus 3GPs carry no I-VOP index, so samples cannot be skipped.
+- **The decoder was never closed on deallocate/close.**  The holder byte array
+  is the only pointer to the provider state, and the stream-release helper
+  skipped it by length, so every create/close of a movie Player leaked a
+  decoder and its frame buffers until `nj_vm_destroy()`.  `deallocate()` and
+  `close()` now call `video_decoder_release()`; `start()`, which MIDP allows
+  after a deallocate, calls `video_decoder_reopen()` and rebuilds the decoder
+  from the kept source.
+- **Providers borrowed an `nj_av_mem` that lived on `createPlayer`'s stack.**
+  Both the H.263 and MPEG-4 providers keep the allocator hooks they are opened
+  with and call them in `close()`; closing later than the `createPlayer` frame
+  was a stack-use-after-return (ASan, `m4v_p_free`).  Each video decoder now
+  gets one host-allocated `nj_av_mem` owned by the Player holder
+  (`media_video_state.mem`), freed after the provider's `close()`; a failed
+  reopen gives its fresh block back.  The provider contract stays
+  "borrowed from the caller", and H.263 is fixed by the same change.
+
+Also hardened: `video_decoder_release()` ignores non-video Player kinds (it
+runs from `player_deallocate()` for all of them, and the first version
+dereferenced a MIDI Player's holder); `start()` reports a `MediaException`
+instead of starting a Player whose decoder cannot be rebuilt; and a seek made
+before `start()` aligns the sound track's PCM cursor with the new picture
+position instead of replaying from sample 0.
+
+Verification: normal ctest 116/116; sanitized ctest 115/116, the single failure
+being the pre-existing `test_string_intern` LeakSanitizer report outside this
+round's scope; `test_lib` under ASan+UBSan+LSan 954 checks, 0 failures, with
+two new permanent regressions (`test_video_seek_mp4v()`,
+`test_video_decoder_release()`).  `tools/media_stress.c` (Player class of calls
+driven the way a MIDlet reaches it, host block count back to baseline) and
+`tools/snapshot_probe.c` (save a VM playing a movie, load it into a fresh VM,
+drive the restored Player) ran clean on all three corpus clips -
+control 22/0, seek 32/0, life 61/0, snapshot 23/0 checks each - and the three
+titles ran 300 headless frames each under the sanitizers with no report and
+their intro movies rendering.  Evidence and per-file logs:
+`.local-tools/debug-runs/m4v-media-robustness-20261027/`; narrative in
+`docs/notes/2026-10-27-media-robustness.md`.
