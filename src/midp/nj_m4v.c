@@ -2880,7 +2880,7 @@ int nj_m4v_decode_pvop(const nj_u1 *b, nj_u4 n, nj_u4 *pos,
                 int mbx = cur % (int)mbw;
                 int mby = cur / (int)mbw;
                 int first_slice_line = (mby == resync_y);
-                nj_s4 acb[6];
+                int acb[6];
                 int cbp = 0, dq = 0, cbpc = 0;
                 int is_intra = 0;
                 m4v_pmv pmv;
