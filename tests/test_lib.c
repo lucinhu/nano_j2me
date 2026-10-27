@@ -3059,6 +3059,224 @@ static void test_video_playback_pacing(nj_vm *vm)
 }
 
 /*
+ * Player.setMediaTime() on a movie.  It used to fall through to the MIDI
+ * stream branch - a movie Player also sets pStream - which memcpy'd the
+ * Player's decoder holder as a struct nj_midi_stream and segfaulted on the
+ * first unmapped read (AddressSanitizer: SEGV in nj_midi_stream_open from
+ * player_setMediaTime).  A movie has to seek by rebuilding the decoder and
+ * walking the samples before the target, because MPEG-4 P-VOPs reference the
+ * previous picture and the corpus 3GPs carry no I-VOP index.
+ */
+static void test_video_seek_mp4v(nj_vm *vm)
+{
+    nj_ref bar, in, player;
+    nj_value a[2], ret;
+    nj_field *fpushed, *ftime, *fdur;
+    nj_s8 dur, want, got;
+    int st;
+
+    bar = nj_byte_array_new(vm, (nj_u4)sizeof(m4v_clip_3gp));
+    OK_MSG(bar != NULL, "an array for the seek clip");
+    if (bar == NULL) {
+        return;
+    }
+    memcpy(bar->u.bytes, m4v_clip_3gp, sizeof(m4v_clip_3gp));
+    in = nj_object_new(vm, BAIS);
+    memset(a, 0, sizeof(a));
+    a[0].r = bar;
+    OK_MSG(in != NULL && nj_call_special(vm, in, BAIS, "<init>", "([B)V",
+                                         a, NULL) == NJ_OK,
+           "a stream over the seek clip");
+    a[0].r = in;
+    a[1].r = nj_string_new(vm, "video/3gpp");
+    ret.bits = 0u;
+    st = nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                        "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                        "javax/microedition/media/Player;", a, &ret);
+    player = (st == NJ_OK) ? ret.r : 0;
+    OK_MSG(player != NULL, "a Player for the seek clip");
+    if (player == NULL) {
+        return;
+    }
+    (void)nj_call(vm, player, PLAYER, "realize", "()V", NULL, NULL);
+    (void)nj_call(vm, player, PLAYER, "prefetch", "()V", NULL, NULL);
+
+    fpushed = nj_field_lookup(vm, PLAYER, "pPushed", "I", 0);
+    ftime = nj_field_lookup(vm, PLAYER, "pMediaTime", "J", 0);
+    fdur = nj_field_lookup(vm, PLAYER, "pDuration", "J", 0);
+    OK_MSG(fpushed != NULL && ftime != NULL && fdur != NULL,
+           "the seek test can read the Player clock fields");
+    if (fpushed == NULL || ftime == NULL || fdur == NULL) {
+        (void)nj_call(vm, player, PLAYER, "close", "()V", NULL, NULL);
+        return;
+    }
+    dur = nj_field_read_long(vm, player, fdur);
+    OK_MSG(dur > 0, "the clip knows its duration (%lld us)", (long long)dur);
+
+    want = dur / 2;
+    memset(a, 0, sizeof(a));        /* a long argument takes two slots */
+    a[0].j = want;
+    ret.bits = 0u;
+    st = nj_call(vm, player, PLAYER, "setMediaTime", "(J)J", a, &ret);
+    OK_MSG(st == NJ_OK && !nj_has_exception(vm),
+           "setMediaTime on a movie Player returns instead of crashing");
+    got = (st == NJ_OK) ? ret.j : -1;
+    OK_MSG(got == want, "setMediaTime(%lld) lands on a sample boundary (%lld)",
+           (long long)want, (long long)got);
+    OK_MSG(nj_field_read_long(vm, player, ftime) == got,
+           "getMediaTime() reports the position setMediaTime() reached");
+
+    memset(a, 0, sizeof(a));
+    a[0].j = 0;
+    ret.bits = 0u;
+    st = nj_call(vm, player, PLAYER, "setMediaTime", "(J)J", a, &ret);
+    OK_MSG(st == NJ_OK && ret.j == 0, "setMediaTime(0) rewinds to the start");
+    OK_MSG(nj_field_read_int(vm, player, fpushed) == 0,
+           "a rewind clears the pump counter");
+
+    /* Play from the start: the pump decodes sample 0 into the frame buffer. */
+    (void)nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL);
+    nj_media_frame(vm);
+    OK_MSG(nj_field_read_int(vm, player, fpushed) == 1,
+           "the first pumped frame after a rewind is the clip's first sample");
+
+    /* A seek while STARTED repositions the movie and keeps it running. */
+    memset(a, 0, sizeof(a));
+    a[0].j = dur;
+    ret.bits = 0u;
+    st = nj_call(vm, player, PLAYER, "setMediaTime", "(J)J", a, &ret);
+    OK_MSG(st == NJ_OK && ret.j <= dur,
+           "a seek to the end while STARTED clamps to the duration");
+    {
+        nj_field *fstate = nj_field_lookup(vm, PLAYER, "pState", "I", 0);
+
+        OK_MSG(fstate != NULL && nj_field_read_int(vm, player, fstate) == 400,
+               "a seek does not take a STARTED movie out of STARTED");
+    }
+
+    /*
+     * deallocate() releases the decoder (the holder is the only pointer), so
+     * start() has to realize and rebuild it from pSrc.  It used to reuse the
+     * cleared holder and throw "movie decoder is not available".
+     */
+    (void)nj_call(vm, player, PLAYER, "stop", "()V", NULL, NULL);
+    (void)nj_call(vm, player, PLAYER, "deallocate", "()V", NULL, NULL);
+    (void)nj_call(vm, player, PLAYER, "realize", "()V", NULL, NULL);
+    (void)nj_call(vm, player, PLAYER, "prefetch", "()V", NULL, NULL);
+    st = nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL);
+    OK_MSG(st == NJ_OK && !nj_has_exception(vm),
+           "a deallocated movie Player can be realized and started again");
+    nj_media_frame(vm);
+    OK_MSG(nj_field_read_int(vm, player, fpushed) >= 1,
+           "the rebuilt decoder produces a frame");
+    (void)nj_call(vm, player, PLAYER, "stop", "()V", NULL, NULL);
+    (void)nj_call(vm, player, PLAYER, "close", "()V", NULL, NULL);
+}
+
+/*
+ * Decoder ownership across create/close and deallocate/start.  Before these
+ * fixes a movie Player never closed its provider decoder: the holder array was
+ * the only pointer to it, so every createPlayer() leaked the decoder and its
+ * frame buffers until the VM was destroyed (a menu that opened a movie Player
+ * per visit grew the host heap by one decoder each time).  host_live is the
+ * live-block counter - host_bytes is monotonic in this runtime - so it is the
+ * number that has to come back to the baseline.
+ */
+static void test_video_decoder_release(nj_vm *vm)
+{
+    nj_vm_stats st;
+    nj_u4 baseline;
+    int round;
+
+    /* One warm-up round: the first Player loads media classes, and those host
+     * blocks are not a leak. */
+    {
+        nj_ref bar, in, player;
+        nj_value a[2], ret;
+        int st_rc;
+
+        bar = nj_byte_array_new(vm, (nj_u4)sizeof(m4v_clip_3gp));
+        OK_MSG(bar != NULL, "an array for the release clip");
+        if (bar == NULL) {
+            return;
+        }
+        memcpy(bar->u.bytes, m4v_clip_3gp, sizeof(m4v_clip_3gp));
+        in = nj_object_new(vm, BAIS);
+        memset(a, 0, sizeof(a));
+        a[0].r = bar;
+        (void)nj_call_special(vm, in, BAIS, "<init>", "([B)V", a, NULL);
+        a[0].r = in;
+        a[1].r = nj_string_new(vm, "video/3gpp");
+        ret.bits = 0u;
+        st_rc = nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                               "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                               "javax/microedition/media/Player;", a, &ret);
+        player = (st_rc == NJ_OK) ? ret.r : 0;
+        if (player != NULL) {
+            (void)nj_call(vm, player, PLAYER, "realize", "()V", NULL, NULL);
+            (void)nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL);
+            nj_media_frame(vm);
+            (void)nj_call(vm, player, PLAYER, "close", "()V", NULL, NULL);
+        }
+    }
+    nj_vm_get_stats(vm, &st);
+    baseline = st.host_live;
+
+    for (round = 0; round < 3; round++) {
+        nj_ref bar, in, player;
+        nj_value a[2], ret;
+        int st_rc;
+
+        bar = nj_byte_array_new(vm, (nj_u4)sizeof(m4v_clip_3gp));
+        OK_MSG(bar != NULL, "a clip array");
+        if (bar == NULL) {
+            return;
+        }
+        memcpy(bar->u.bytes, m4v_clip_3gp, sizeof(m4v_clip_3gp));
+        in = nj_object_new(vm, BAIS);
+        memset(a, 0, sizeof(a));
+        a[0].r = bar;
+        (void)nj_call_special(vm, in, BAIS, "<init>", "([B)V", a, NULL);
+        a[0].r = in;
+        a[1].r = nj_string_new(vm, "video/3gpp");
+        ret.bits = 0u;
+        st_rc = nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                               "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                               "javax/microedition/media/Player;", a, &ret);
+        player = (st_rc == NJ_OK) ? ret.r : 0;
+        OK_MSG(player != NULL, "a movie Player round %d", round + 1);
+        if (player == NULL) {
+            return;
+        }
+        (void)nj_call(vm, player, PLAYER, "realize", "()V", NULL, NULL);
+        (void)nj_call(vm, player, PLAYER, "prefetch", "()V", NULL, NULL);
+        (void)nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL);
+        nj_media_frame(vm);
+        (void)nj_call(vm, player, PLAYER, "stop", "()V", NULL, NULL);
+        /*
+         * deallocate() must return the decoder's host blocks before the Player
+         * is started again; the start then rebuilds a decoder that close()
+         * releases.  Both halves are checked so neither can silently leak.
+         */
+        (void)nj_call(vm, player, PLAYER, "deallocate", "()V", NULL, NULL);
+        nj_vm_get_stats(vm, &st);
+        OK_MSG(st.host_live == baseline,
+               "deallocate released the decoder (round %d: %u vs %u blocks)",
+               round + 1, (unsigned)st.host_live, (unsigned)baseline);
+        st_rc = nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL);
+        OK_MSG(st_rc == NJ_OK && !nj_has_exception(vm),
+               "the decoder is rebuilt on the next start (round %d)",
+               round + 1);
+        nj_media_frame(vm);
+        (void)nj_call(vm, player, PLAYER, "close", "()V", NULL, NULL);
+        nj_vm_get_stats(vm, &st);
+        OK_MSG(st.host_live == baseline,
+               "close released the rebuilt decoder (round %d: %u vs %u blocks)",
+               round + 1, (unsigned)st.host_live, (unsigned)baseline);
+    }
+}
+
+/*
  * MMAPI VideoControl against a real mp4v Player.  The control used to be an
  * interface stub whose getControl() always answered null, so a title that
  * wanted to show a movie caught the NullPointerException and skipped it
@@ -4763,6 +4981,8 @@ int main(void)
     test_video_player_mp4v(vm);
     test_video_control_mp4v(vm);
     test_video_playback_pacing(vm);
+    test_video_seek_mp4v(vm);
+    test_video_decoder_release(vm);
     test_movie_amr_track(vm);
     test_amr_player_uses_the_installed_decoder(vm);
     test_mp3_player_streams_pcm(vm);

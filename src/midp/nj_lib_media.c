@@ -102,6 +102,26 @@ static void av_free(void *ud, void *p)
 {
     nj_host_free((nj_vm *)ud, p);
 }
+
+/*
+ * Providers borrow the nj_av_mem they are opened with: the H.263 and MPEG-4
+ * decoders keep the pointer and release their frame buffers through it in
+ * close().  A createPlayer() stack frame is therefore the wrong home for the
+ * hooks - the pump or close() runs later, after that frame is gone, and the
+ * borrowed pointer is a use-after-return.  Each video decoder gets one
+ * host-allocated copy, owned by the Player's holder until close().
+ */
+static nj_av_mem *av_mem_new(nj_vm *vm)
+{
+    nj_av_mem *mem = (nj_av_mem *)nj_host_alloc(vm, (nj_size)sizeof(*mem));
+
+    if (mem != NULL) {
+        mem->ud = vm;
+        mem->alloc = av_alloc;
+        mem->free = av_free;
+    }
+    return mem;
+}
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -158,6 +178,8 @@ typedef struct media_video_state {
     nj_mp4 m;                           /* video-track container position     */
     nj_av_dec *vdec;                    /* provider decoder                   */
     const nj_av_video_ops *vops;        /* the provider it came from          */
+    nj_av_mem *mem;                     /* hooks the provider borrows, owned  */
+                                        /* by this holder until close()       */
 #if NJ_ENABLE_AMR
     nj_mp4 am;                          /* the movie's AMR-NB sound track     */
     int    has_audio;                   /* am holds a usable samr track       */
@@ -1460,6 +1482,207 @@ static void video_set_start(nj_vm *vm, nj_ref p)
 }
 
 /*
+ * Re-open the provider decoder a movie Player owns.
+ *
+ * deallocate() releases the decoder (the holder byte array is its only
+ * pointer), and a Player may be realized and started again afterwards, so the
+ * next start() rebuilds it from the same source.  A Player whose decoder is
+ * still there reports success and does nothing.
+ */
+static int video_decoder_reopen(nj_vm *vm, nj_ref p)
+{
+    nj_ref hold = r_r(vm, p, F_P_DATA, "[B");
+    nj_ref src = r_r(vm, p, F_P_SRC, "[B");
+    media_video_state st;
+    nj_av_mem *mem;
+    nj_av_info info;
+    const char *err = NULL;
+    nj_av_dec *dec;
+    int fresh;
+
+    if (hold == NULL || src == NULL || hold->length < (nj_u4)sizeof(st)) {
+        return 0;
+    }
+    memcpy(&st, hold->u.bytes, sizeof(st));
+    if (st.vdec != NULL) {
+        return 1;
+    }
+    if (st.vops == NULL) {
+        return 0;
+    }
+    mem = st.mem;
+    fresh = (mem == NULL);
+    if (fresh) {
+        mem = av_mem_new(vm);
+        if (mem == NULL) {
+            return 0;
+        }
+        st.mem = mem;
+    }
+    memset(&info, 0, sizeof(info));
+    dec = st.vops->open(src->u.bytes, src->length, mem, &info, &err);
+    if (dec == NULL) {
+        if (fresh) {
+            nj_host_free(vm, st.mem);   /* nothing borrowed it: give it back */
+            st.mem = NULL;
+            memcpy(hold->u.bytes, &st, sizeof(st));
+        }
+        return 0;
+    }
+    st.vdec = dec;
+    nj_mp4_rewind(&st.m);
+    memcpy(hold->u.bytes, &st, sizeof(st));
+    w_i(vm, p, F_P_PUSHED, 0);
+    w_j(vm, p, F_P_TIME, 0);
+    w_i(vm, p, F_P_APUSH, 0);
+    w_z(vm, p, F_P_STREAM, 1);
+    return 1;
+}
+
+/*
+ * Move a movie Player to `want' microseconds, for Player.setMediaTime().
+ *
+ * The container walks samples in order and MPEG-4 Part 2 P-VOPs reference the
+ * previous picture, so the only correct seek is: rebuild the decoder, then
+ * decode every sample before the target so the reference frames are the ones
+ * the target was encoded against.  Skipping samples is not possible without an
+ * index of I-VOPs, which 3GP files in the corpus do not carry.
+ *
+ * `want' arrives clamped to the Player's duration.  Returns the media time
+ * actually reached: the target sample's start when the walk gets there, the
+ * last sample start when the track stops early, and the unchanged position
+ * when the decoder cannot be rebuilt.
+ */
+static nj_s8 video_seek(nj_vm *vm, nj_ref p, nj_s8 want)
+{
+    nj_ref hold = r_r(vm, p, F_P_DATA, "[B");
+    nj_ref src = r_r(vm, p, F_P_SRC, "[B");
+    nj_ref vbuf = r_r(vm, p, F_P_VBUF, "[B");
+    media_video_state st;
+    nj_mp4_sample smp;
+    nj_av_step step;
+    nj_av_mem *mem;
+    nj_av_info info;
+    const char *err = NULL;
+    nj_av_dec *dec;
+    nj_s8 actual = r_j(vm, p, F_P_TIME);
+    nj_s4 decoded = 0;
+    int rc = 0;
+
+    if (hold == NULL || src == NULL || vbuf == NULL ||
+        hold->length < (nj_u4)sizeof(st)) {
+        return actual;
+    }
+    memcpy(&st, hold->u.bytes, sizeof(st));
+    if (st.vops == NULL) {
+        return actual;
+    }
+    mem = st.mem;
+    if (mem == NULL) {
+        mem = av_mem_new(vm);
+        if (mem == NULL) {
+            return actual;
+        }
+        st.mem = mem;
+    }
+    memset(&info, 0, sizeof(info));
+    /* Open the replacement before closing the old decoder: a source that
+     * cannot be re-opened leaves the Player decoding on instead of dead. */
+    dec = st.vops->open(src->u.bytes, src->length, mem, &info, &err);
+    if (dec == NULL) {
+        return actual;
+    }
+    if (st.vdec != NULL) {
+        st.vops->close(st.vdec);
+    }
+    st.vdec = dec;
+    nj_mp4_rewind(&st.m);
+    while ((rc = nj_mp4_next(&st.m, &smp)) == 1) {
+        nj_s8 t = st.m.timescale > 0u
+            ? (nj_s8)smp.dts * 1000000LL / (nj_s8)st.m.timescale : 0;
+
+        if (t >= want) {
+            actual = t;         /* the pump shows this sample next */
+            break;
+        }
+        if ((nj_u4)smp.offset + smp.size > src->length) {
+            break;
+        }
+        memset(&step, 0, sizeof(step));
+        step.in = src->u.bytes + smp.offset;
+        step.in_len = smp.size;
+        step.out = vbuf->u.bytes;
+        step.out_cap = vbuf->length;
+        if (st.vops->decode(st.vdec, &step) != NJ_AV_OK) {
+            /* The reference chain stops here; leave the iterator at the next
+             * sample so the pump carries on instead of replaying this one. */
+            actual = t;
+            decoded++;
+            break;
+        }
+        decoded++;
+        actual = t;
+    }
+    if (rc != 1 && decoded > 0) {
+        /* Walked off the end of the track: the next pump reports endOfMedia,
+         * so the position is the end of the movie. */
+        actual = want;
+    }
+    memcpy(hold->u.bytes, &st, sizeof(st));
+    w_i(vm, p, F_P_PUSHED, decoded);
+    w_j(vm, p, F_P_TIME, actual);
+#if NJ_ENABLE_AMR
+    /* The movie's PCM is handed to the device against this same clock. */
+    w_i(vm, p, F_P_APUSH,
+        (nj_s4)((nj_u8)actual * (nj_u8)NJ_AMR_RATE / 1000000u));
+#endif
+    video_set_start(vm, p);
+    return actual;
+}
+
+/*
+ * Release the decoder a movie Player owns.  close() and deallocate() call
+ * this: the holder byte array is the only pointer to the provider state, so
+ * dropping it without close() leaks the decoder and its frame buffers until
+ * the whole VM is destroyed.  A title that opens and closes a movie Player per
+ * menu visit would grow the host heap by one decoder every time.  Safe on a
+ * Player that never had one, and on a second call.
+ */
+static void video_decoder_release(nj_vm *vm, nj_ref p)
+{
+    nj_ref hold;
+    media_video_state st;
+
+    /* Only a movie Player's holder is a media_video_state; every other kind
+     * keeps something else in pData (PCM bytes, a MIDI stream, a tone list). */
+    if (r_i(vm, p, F_P_KIND) != 2) {
+        return;
+    }
+    hold = r_r(vm, p, F_P_DATA, "[B");
+    if (hold == NULL || hold->length < (nj_u4)sizeof(st)) {
+        return;
+    }
+    memcpy(&st, hold->u.bytes, sizeof(st));
+    if (st.vdec != NULL && st.vops != NULL && st.vops->close != NULL) {
+        st.vops->close(st.vdec);
+    }
+    if (st.mem != NULL) {
+        nj_host_free(vm, st.mem);
+    }
+    /*
+     * Keep pData/pVbuf and the container position: deallocate() puts the
+     * Player back into the UNREALIZED state, and start() may realize it again.
+     * The decoder is the expensive part, and it is rebuilt from pSrc on the
+     * next start; dropping the holder would throw that chance away.
+     */
+    st.vdec = NULL;
+    st.mem = NULL;
+    memcpy(hold->u.bytes, &st, sizeof(st));
+    w_i(vm, p, F_P_PUSHED, 0);
+    w_j(vm, p, F_P_TIME, 0);
+}
+
+/*
  * One video frame: demultiplex the next sample and decode it into the Player's
  * RGB565 buffer.  The audio path below pushes to a device; a movie has nowhere
  * to push, so a frame is simply the next decoded picture plus its timestamp.
@@ -2630,17 +2853,16 @@ NJFN(media_createPlayer_stream)
                     vm, barray_bytes(data), barray_len(data));
 
                 if (vops != NULL) {
-                    nj_av_mem memd;
+                    nj_av_mem *mem = av_mem_new(vm);
                     nj_av_info info;
                     const char *err = NULL;
-                    nj_av_dec *dec;
+                    nj_av_dec *dec = NULL;
 
-                    memd.ud = vm;
-                    memd.alloc = av_alloc;
-                    memd.free = av_free;
                     memset(&info, 0, sizeof(info));
-                    dec = vops->open(barray_bytes(data), barray_len(data), &memd,
-                                     &info, &err);
+                    if (mem != NULL) {
+                        dec = vops->open(barray_bytes(data), barray_len(data),
+                                         mem, &info, &err);
+                    }
                     if (dec != NULL) {
                         nj_u4 w = info.width > 0u ? info.width : m.width;
                         nj_u4 h = info.height > 0u ? info.height : m.height;
@@ -2651,10 +2873,10 @@ NJFN(media_createPlayer_stream)
                             media_video_state st;
 
                             memset(&st, 0, sizeof(st));
-                            memset(&st, 0, sizeof(st));
                             st.m = m;
                             st.vdec = dec;
                             st.vops = vops;
+                            st.mem = mem;
 #if NJ_ENABLE_AMR
                             /*
                              * The movie's own sound track, if it has a usable
@@ -2694,6 +2916,7 @@ NJFN(media_createPlayer_stream)
                             return NJ_OK;
                         }
                         vops->close(dec);
+                        nj_host_free(vm, mem);
                     }
                 }
             }
@@ -3231,8 +3454,24 @@ NJFN(player_start)
          */
         w_i(vm, self, F_P_LOOPDONE, 0);
 #if NJ_ENABLE_VIDEO
+        if (!video_decoder_reopen(vm, self)) {
+            /* The decoder could not be rebuilt (deallocate() released it and
+             * the provider refused a fresh open): report it instead of
+             * starting a Player that can never show a frame. */
+            return nj_throw(vm, NJ_C_MEXC, "movie decoder is not available");
+        }
         video_set_start(vm, self);
         video_audio_start(vm, self);
+#if NJ_ENABLE_AMR
+        /* A seek made before start() moved the picture; the sound track has
+         * to resume from the same place instead of replaying from sample 0. */
+        if (r_i(vm, self, F_P_APUSH) == 0 && r_i(vm, self, F_P_PUSHED) > 0 &&
+            r_i(vm, self, F_P_RATE) > 0) {
+            w_i(vm, self, F_P_APUSH,
+                (nj_s4)((nj_s8)r_i(vm, self, F_P_PUSHED) * NJ_AMR_RATE /
+                        r_i(vm, self, F_P_RATE)));
+        }
+#endif
 #endif
         (void)media_register(vm, self);
     } else if (vm->port && vm->port->pcm_open) {
@@ -3298,6 +3537,9 @@ NJFN(player_deallocate)
     }
     media_stream_release(vm, self);
     media_midi_release(vm, self);
+#if NJ_ENABLE_VIDEO
+    video_decoder_release(vm, self);
+#endif
     w_i(vm, self, F_P_STATE, 100);
     w_i(vm, self, F_P_PUSHED, 0);
     w_j(vm, self, F_P_TIME, 0);
@@ -3633,6 +3875,19 @@ NJFN(player_setMediaTime)
             vm->port->midi_seek(vm->port->ud, mh, (nj_u4)(want / 1000));
         }
     }
+#if NJ_ENABLE_VIDEO
+    else if (r_i(vm, self, F_P_KIND) == 2) {
+        /*
+         * A movie decodes its way to the new position, because a P-VOP
+         * references the previous picture and the samples have no index to
+         * jump by.  This has to come before the streamed-MIDI branch below:
+         * a movie Player also sets F_P_STREAM, to say "pData is not PCM", and
+         * treating its holder as a MIDI stream dereferenced that state and
+         * crashed.
+         */
+        want = video_seek(vm, self, want);
+    }
+#endif
 #if NJ_ENABLE_MP3
     else if (r_z(vm, self, F_P_AVK)) {
         nj_ref data = r_r(vm, self, F_P_DATA, "[B");
