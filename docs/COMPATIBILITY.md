@@ -406,7 +406,8 @@ tool prints the note that made a title pass.
 
 `Runtime.totalMemory()` is a real question with a real answer, and one title
 uses the answer to decide whether to run at all: 有女倾城破解版_11525 calls
-`notifyDestroyed()` out of its own `startApp()` when the total is above 6 MB
+`notifyDestroyed()` from its startup path (class `d.<init>`, reached through
+`b.<init>` inside `Display.setCurrent()`) when the total is above 6 MB
 (the bytecode is `Runtime.getRuntime().totalMemory()` `>> 20`, compared with
 `6L`). At `--heap 16` the sweep sees a MIDlet that presented nothing and exited
 in 7 ms; at `--heap 4` it runs and draws 627 Graphics calls a second. A Java
@@ -414,7 +415,10 @@ heap of 1-4 MB is what the phones being imitated actually had, so the smaller
 heap is the faithful run, and the sweep now asks once more with
 `NJ_HEAP_RETRY` (default 4 MB, `0` switches it off) when a title paints
 nothing. The row says which run the verdict came from: "the picture appeared
-only with a 4 MB heap".
+only with a 4 MB heap".  The generated matrix
+(`docs/COMPATIBILITY_MATRIX.md`, built from the 2026-10-25 sweep) predates that
+retry, so its 有女倾城 row still reads `未呈现画面`; that is the old recipe's
+verdict, not a current one.  The row is left as generated.
 
 The same question has an opposite answer. 愤怒的小鸟-高清版_2353
 ships a 13,059,116-byte music WAV; its WAV sample data totals about 16.6 MB.
