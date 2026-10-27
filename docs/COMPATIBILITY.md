@@ -1898,7 +1898,11 @@ This establishes a working initial gameplay loop, not completion of the game.
 The pause-menu flow on the final candidate, opening the arena door, bosses,
 mission completion and save/continue have not been verified. The reproducible
 commands, held-input scripts, logs and death/retry evidence are recorded locally
-in `.local-tools/debug-runs/micro3d-round7-20261022/games/DMC-CANDIDATE2.md`.
+in `.local-tools/debug-runs/micro3d-head-20261027/report.md` (re-measured at
+commit `9d32766` with a clean-worktree build and spot-checked at `6be1d0a`; see
+`docs/notes/2026-10-27-mascot-evidence-refresh.md`). Triangle counts vary by
+10-15% between replays because guest time is wall clock, so quote scenes rather
+than exact counts.
 
 ### Galaxy on Fire: space-flight scene verified
 
@@ -1925,8 +1929,8 @@ have not been established by this replay. This is the original Galaxy on Fire
 Micro3D title, separate from the M3G-based Galaxy on Fire 2 discussed above.
 
 Reproduction, input scripts and comparison images are under
-`.local-tools/debug-runs/micro3d-round7-20261022/games/GOF-CANDIDATE3.md`;
-the bounded visual review is in `gof-audit/REPORT.md` under the same round directory.
+`.local-tools/debug-runs/micro3d-head-20261027/report.md`; the bounded visual
+review remains under `gof-audit/REPORT.md` in the round-7 directory.
 
 ### Round-8 sweep: three stalled titles cleared, one more title played
 
