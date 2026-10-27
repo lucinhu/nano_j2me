@@ -188,6 +188,7 @@ typedef struct media_video_state {
 #define F_P_VDH      "pVdh"        /* I */
 #define F_P_VFULL    "pVfull"      /* Z draw full screen */
 #define F_P_VVIS     "pVvis"       /* Z the control asked for the video to show */
+#define F_P_VSTART   "pVstart"     /* J wall-clock ms that sample 0 is due    */
 #define F_P_LISTEN   "pListen"     /* Ljava/util/Vector; */
 #define F_P_MASTER   "pTimeBase"   /* Ljavax/microedition/media/TimeBase; master clock or null */
 
@@ -1202,6 +1203,55 @@ static int media_restart(nj_vm *vm, nj_ref p)
 
 #if NJ_ENABLE_VIDEO
 /*
+ * Is the next sample of this movie due yet?
+ *
+ * A movie's clock is real time: sample n belongs at start + n/fps seconds,
+ * where `start` is the wall clock read at start() (adjusted on a restart so a
+ * stopped Player resumes instead of skipping).  The pump is called once per
+ * emulated frame, so on a pale that keeps up with its cap this is also the
+ * movie's own rate, and on a frame that is slow the picture follows the clock
+ * instead of running slow - which is what a handset's media clock does, and
+ * what a title that sleeps for the clip's length expects.
+ *
+ * A port with no frame cap (the test VMs, bench runs) has no playback clock to
+ * follow: there pacing is off and one pump call decodes one sample, which is
+ * the deterministic contract the unit tests and the frame-comparison tools
+ * rely on.
+ */
+static int video_sample_due(nj_vm *vm, nj_ref p)
+{
+    nj_s4 cap = (vm->port && vm->port->fps_cap > 0) ? vm->port->fps_cap : 0;
+    nj_s4 fps = r_i(vm, p, F_P_RATE);
+    nj_s8 start;
+    nj_s4 pushed;
+
+    if (cap <= 0 || fps <= 0) {
+        return 1;
+    }
+    start = r_j(vm, p, F_P_VSTART);
+    pushed = r_i(vm, p, F_P_PUSHED);
+    return nj_now_ms(vm) >= start + ((nj_s8)pushed * 1000) / (nj_s8)fps;
+}
+
+/*
+ * Record the wall-clock time at which this Player's next sample is due.
+ * Called from start(); the `pushed` subtraction makes stop()+start() resume
+ * where it left off rather than treating the paused time as if it played.
+ */
+static void video_set_start(nj_vm *vm, nj_ref p)
+{
+    nj_s4 cap = (vm->port && vm->port->fps_cap > 0) ? vm->port->fps_cap : 0;
+    nj_s4 fps = r_i(vm, p, F_P_RATE);
+    nj_s4 pushed = r_i(vm, p, F_P_PUSHED);
+    nj_s8 start = nj_now_ms(vm);
+
+    if (cap > 0 && fps > 0) {
+        start -= ((nj_s8)pushed * 1000) / (nj_s8)fps;
+    }
+    w_j(vm, p, F_P_VSTART, start);
+}
+
+/*
  * One video frame: demultiplex the next sample and decode it into the Player's
  * RGB565 buffer.  The audio path below pushes to a device; a movie has nowhere
  * to push, so a frame is simply the next decoded picture plus its timestamp.
@@ -1234,6 +1284,9 @@ static void media_video_step(nj_vm *vm, nj_ref p)
      */
     if (r_i(vm, p, F_P_STATE) != 400) {
         return;
+    }
+    if (!video_sample_due(vm, p)) {
+        return;                 /* the movie's own clock has not reached it */
     }
     if (nj_mp4_next(&st.m, &smp) != 1) {
         w_i(vm, p, F_P_STATE, 300);
@@ -2946,11 +2999,12 @@ NJFN(player_start)
     } else if (r_i(vm, self, F_P_KIND) == 2) {
         /*
          * A movie: there is no audio device to open here - the track's sound
-         * is a separate Player - and the media frame pump decodes one sample
-         * per emulated frame while the state is STARTED.  It has to be on the
-         * registry for that pump to run, which is all start() does for video.
+         * is a separate Player - and the media frame pump decodes it against
+         * its own sample clock while the state is STARTED.  It has to be on
+         * the registry for that pump to run, which is all start() does.
          */
         w_i(vm, self, F_P_LOOPDONE, 0);
+        video_set_start(vm, self);
         (void)media_register(vm, self);
     } else if (vm->port && vm->port->pcm_open) {
         w_i(vm, self, F_P_LOOPDONE, 0);
@@ -4360,6 +4414,7 @@ static const nj_builtin_field player_fields[] = {
     FLD(F_P_VDH,      "I", 0),
     FLD(F_P_VFULL,    "Z", 0),
     FLD(F_P_VVIS,     "Z", 0),
+    FLD(F_P_VSTART,   "J", 0),
     FLD(F_P_OPEN,     "Z", 0),
     FLD(F_P_LISTEN,   "Ljava/util/Vector;", 0),
     FLD(F_P_MIDI,     "[B", 0),

@@ -74,7 +74,9 @@ on this host at `-O3`, measured with `CLOCK_PROCESS_CPUTIME_ID`: 124 µs for a
 
 `Manager.createPlayer()` sniffs a clip with `nj_avcodec_find_video()`, opens it
 through the provider's allocator hooks, keeps the caller's buffer alive, and
-asks for one RGB565 frame per emulated frame; the player closes the decoder
+asks for one RGB565 frame; with a frame-capped port the request is paced by the
+movie's own real-time clock, and an uncapped port (the comparison tools) keeps
+the deterministic one-sample-per-call contract.  The player closes the decoder
 when it is deallocated.  H.263 and MPEG-4 Part 2 both arrive through this one
 seam.
 
@@ -88,10 +90,12 @@ and the pump only advances while the Player is STARTED.  1942空战 and Doom 3
 now play their intro movies; evidence in
 `.local-tools/debug-runs/m4v-videocontrol-20261027/`.
 
-Two honest limitations remain.  The pump decodes **one sample per emulated
-frame**, not by the movie's own DTS/fps, so a 15 fps clip plays about twice as
-fast at 30 fps emulation (Doom 3's intro finishes in about 6.3 s while the game
-sleeps 12 s).  And a video Player does not play the movie's own audio track yet
+Playback now follows the movie's real-time clock on a capped port: sample n is
+shown at `start + n/fps` seconds, so a 15 fps clip takes its own 12.6 s at
+30 fps or 60 fps emulation alike (the pump used to show one sample per emulated
+frame, i.e. twice as fast at 30 fps).  An uncapped port keeps the deterministic
+one-sample-per-call behaviour the frame-comparison tools use.  One honest
+limitation remains: a video Player does not play the movie's own audio track yet
 (the corpus movies carry AMR), so those intros are silent; the container can
 select and iterate that track since round 234 (below), and pairing it into the
 Player's PCM path is the media-layer work in progress.
@@ -964,11 +968,12 @@ prediction) are closed in round 233 - see "The last two decoder boundaries"
 below for the fixtures, results and the one reference-decoder caveat.  What
 remains:
 
-- **Playback pacing.**  The video pump decodes one sample per emulated frame
-  instead of following the movie's own DTS/fps, so a 15 fps clip plays about
-  twice as fast at 30 fps emulation.  Pacing by timestamps is the next
-  refinement; it needs the pump to be time-driven without slowing the emulator
-  down.
+- **Playback pacing (done).**  The pump used to decode one sample per emulated
+  frame, so a 15 fps clip played about twice as fast at 30 fps emulation.  It
+  now follows the movie's real-time clock whenever the port has a frame cap:
+  sample n is shown at `start + n/fps` seconds, restart-safe on stop()/start(),
+  and an uncapped port keeps the deterministic one-sample-per-call behaviour
+  the comparison tools rely on.
 - **Movie audio, media layer.**  The container half is in place: `nj_mp4` can
   select and iterate the AMR-NB sound track of a 3GP
   (`nj_mp4_open_audio()`, round 234 - see the section below), alongside the

@@ -108,20 +108,31 @@ sheets: `1942/before-after-sheet.png`, `doom/before-after-sheet.png`.
 
 ## Playback pace, and the third title
 
-The media pump decodes **one sample per emulated frame**, which is the shape
-the H.263/video Player path already had: it is deterministic and keeps the
-evidence reproducible, but it is not paced by the movie's own DTS.  At 30 fps
-emulation a 25 fps clip (1942) plays about 1.2x fast and a 15 fps clip
-(Doom 3) about 2x fast - Doom's 12.6 s intro finishes in ~6.3 s while the game
-is still in its own 12 s sleep.  Pacing by sample timestamps (a wall-clock or
-frame-clock comparison in `media_video_step()`) is the next refinement; it must
-keep `test_lib`'s "one pump call decodes one sample" contract or update it
-deliberately.
+The media pump originally decoded **one sample per emulated frame**, which was
+deterministic but wrong in time: a 15 fps clip played about twice as fast on a
+30 fps emulation and a 25 fps one about 1.2x fast.  The pump now follows the
+movie's own real-time clock when the port has a frame cap: sample n is shown at
+`start + n/fps` seconds, with `start` recorded at `start()` and adjusted on a
+`stop()`/`start()` pair so a restart resumes instead of guessing.  An uncapped
+port (the test VMs and the frame-comparison tools) keeps the old deterministic
+one-sample-per-call behaviour, which is what the pixel comparisons rely on; the
+pacing is gated on `fps_cap > 0`, not on a compile switch.
 
-The third corpus movie, H.A.W.X.'s `movie.3gp`, is verified pixel-exactly
-through the provider and the Java Player (`docs/CODECS.md`), but the title
-itself does not reach its movie in a headless run: 1,800 frames of
-`/tmp/vault/Roms/Tom Clancy's H.A.W.X..jar` show its own menu/download gate and
-never call the video Player (2M bytecodes per frame, no movie frame with more
-than ~20 colours).  In-game evidence for that one is blocked by the title, not
-by the media layer.
+Measured on the real titles:
+
+* 1942空战's 11 s intro (275 samples at 25 fps) now occupies ~10.1 s of wall
+  time where it used to occupy ~8.3 s;
+* HAWX's 17.1 s clip (257 samples at 15 fps) now runs ~17 s of wall time where
+  the unpaced build finished it in ~8.6 s;
+* Doom 3 still shows its intro for as long as its own load leaves it on screen
+  and then hides it after the 12 s sleep; the movie now tracks real time, so
+  the part the game leaves visible is at the right speed.
+
+The third corpus movie, H.A.W.X.'s `movie.3gp`, does reach the screen in-game
+after all: the "menu/download gate" was the title's startup "DO YOU WANT
+SOUND?" question waiting for a soft key.  With `--keys '460:soft2'` the intro
+plays from frame 461, and every in-game frame `460+k` matches FFmpeg's sample k
+(257/257, RGB MAE 5.87 from RGB565 quantisation) - evidence in
+`.local-tools/debug-runs/videocontrol-hawx-20261027/`.  The gate call chain
+(`GloftHAWX.startApp` -> `g.i()` state 1 -> state 2 -> `g.a(ZZ)` Player setup)
+is in that report.

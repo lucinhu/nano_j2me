@@ -2977,6 +2977,87 @@ static void test_video_player_mp4v(nj_vm *vm)
 }
 
 /*
+ * Playback clock: a video Player on a capped port advances its movie on the
+ * movie's real-time clock, not one sample per pump call (the clip fixture is
+ * 10 fps, so a sample is due every 100 ms; the test moves the recorded due
+ * time directly instead of sleeping).  An uncapped port keeps the old
+ * one-sample-per-call behaviour (the other video tests depend on it), and
+ * stop()+start() must resume without treating the paused time as played.
+ */
+static void test_video_playback_pacing(nj_vm *vm)
+{
+    nj_ref bar, in, player;
+    nj_value a[2], ret;
+    nj_field *fp, *fv;
+    int saved_cap, st, pushed;
+
+    bar = nj_byte_array_new(vm, (nj_u4)sizeof(m4v_clip_3gp));
+    OK_MSG(bar != NULL, "an array for the pacing clip");
+    if (bar == NULL) {
+        return;
+    }
+    memcpy(bar->u.bytes, m4v_clip_3gp, sizeof(m4v_clip_3gp));
+    in = nj_object_new(vm, BAIS);
+    a[0].r = bar;
+    OK_MSG(in != NULL && nj_call_special(vm, in, BAIS, "<init>", "([B)V",
+                                         a, NULL) == NJ_OK,
+           "a stream over the pacing clip");
+    a[0].r = in;
+    a[1].r = nj_string_new(vm, "video/3gpp");
+    ret.bits = 0u;
+    st = nj_call_static(vm, MEDIA_MGR, "createPlayer",
+                        "(Ljava/io/InputStream;Ljava/lang/String;)L"
+                        "javax/microedition/media/Player;", a, &ret);
+    player = (st == NJ_OK) ? ret.r : 0;
+    OK_MSG(player != NULL, "a Player for the pacing clip");
+    if (player == NULL) {
+        return;
+    }
+    (void)nj_call(vm, player, PLAYER, "realize", "()V", NULL, NULL);
+    (void)nj_call(vm, player, PLAYER, "prefetch", "()V", NULL, NULL);
+
+    fp = nj_field_lookup(vm, PLAYER, "pPushed", "I", 0);
+    fv = nj_field_lookup(vm, PLAYER, "pVstart", "J", 0);
+    OK_MSG(fp != NULL && fv != NULL,
+           "the pacing test can read the Player clock and counter");
+    if (fp == NULL || fv == NULL) {
+        (void)nj_call(vm, player, PLAYER, "close", "()V", NULL, NULL);
+        return;
+    }
+
+    saved_cap = (vm->port != NULL) ? vm->port->fps_cap : 0;
+    if (vm->port != NULL) {
+        ((nj_port *)(void *)vm->port)->fps_cap = 30;
+    }
+    (void)nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL);
+    nj_media_frame(vm);
+    pushed = nj_field_read_int(vm, player, fp);
+    OK_MSG(pushed == 1, "with a capped port the first sample is due at once");
+
+    nj_field_write_long(vm, player, fv, nj_now_ms(vm) + 5000);
+    nj_media_frame(vm);
+    OK_MSG(nj_field_read_int(vm, player, fp) == pushed,
+           "a sample that is not due yet is not decoded");
+    nj_field_write_long(vm, player, fv, nj_now_ms(vm) - 5000);
+    nj_media_frame(vm);
+    OK_MSG(nj_field_read_int(vm, player, fp) == pushed + 1,
+           "a due sample is decoded on the next pump");
+
+    /* stop() + start() must resume, not skip the paused time. */
+    (void)nj_call(vm, player, PLAYER, "stop", "()V", NULL, NULL);
+    pushed = nj_field_read_int(vm, player, fp);
+    (void)nj_call(vm, player, PLAYER, "start", "()V", NULL, NULL);
+    nj_media_frame(vm);
+    OK_MSG(nj_field_read_int(vm, player, fp) == pushed + 1,
+           "a restarted movie shows its next sample immediately, not after a skip");
+
+    if (vm->port != NULL) {
+        ((nj_port *)(void *)vm->port)->fps_cap = saved_cap;
+    }
+    (void)nj_call(vm, player, PLAYER, "close", "()V", NULL, NULL);
+}
+
+/*
  * MMAPI VideoControl against a real mp4v Player.  The control used to be an
  * interface stub whose getControl() always answered null, so a title that
  * wanted to show a movie caught the NullPointerException and skipped it
@@ -4647,6 +4728,7 @@ int main(void)
     test_video_player_pumps_a_frame(vm);
     test_video_player_mp4v(vm);
     test_video_control_mp4v(vm);
+    test_video_playback_pacing(vm);
     test_amr_player_uses_the_installed_decoder(vm);
     test_mp3_player_streams_pcm(vm);
     test_large_wav();
