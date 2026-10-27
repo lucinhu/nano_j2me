@@ -155,6 +155,14 @@ struct nj_class {
     nj_class   *component_cls; /* array component type (arrays only) */
 
     nj_u1       state;
+    /*
+     * Set while class_link_inner() is running on this class.  A malformed
+     * class file can name itself (or a loop of classes) as its superclass or
+     * interface; resolving it re-enters the linker before the class leaves
+     * LOADED, and without this marker that recursion is unbounded - it used
+     * to end in SIGSEGV, not an exception.  Cleared on every return.
+     */
+    nj_u1       linking;
     nj_u1       is_array;
     nj_u1       array_elem;  /* NJ_ARRAY_T_* for arrays, 0 otherwise */
     nj_u1       prim;        /* primitive kind for primitive mirrors  */
@@ -471,6 +479,7 @@ struct nj_vm {
      */
     const char *link_cls;          /* the class that failed to link */
     const char *link_missing;      /* what it could not resolve, or NULL */
+    nj_u1       link_cycle;        /* the failure was a class-hierarchy cycle */
 
     /*
      * Interned strings.  The table is a host allocation owned by the VM: it

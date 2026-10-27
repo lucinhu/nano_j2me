@@ -94,6 +94,23 @@ static int interp_unwind(nj_vm *vm, nj_thread *th, nj_u4 throw_pc,
                     }
                 }
                 if (match) {
+                    /*
+                     * Defense in depth: the loader now rejects an entry whose
+                     * range or handler_pc does not fit the Code array (see
+                     * nj_class.c), but this loop is the only place that turns
+                     * an entry into a resume pc, and a mis-validated handler
+                     * here is a LIVELOCK, not a bad value: resuming at a pc
+                     * the fetch refuses throws VerifyError, whose throw_pc can
+                     * match this same entry again.  Skipping the entry keeps
+                     * the invariant this loop relies on - every iteration
+                     * either resumes at a real instruction or drops a frame -
+                     * so a damaged table can only cost a catch, never a spin.
+                     */
+                    if (h->start_pc >= h->end_pc ||
+                        (nj_u4)h->end_pc > mm->code_len ||
+                        (nj_u4)h->handler_pc >= mm->code_len) {
+                        continue;
+                    }
                     f->pc = h->handler_pc;
                     f->stack[0].r = exc;
                     f->sp = f->stack + 1;
@@ -834,6 +851,20 @@ static int nj_interp_const_arith(nj_value *sp, nj_u1 op, nj_s4 v)
             njgf_o_ = (--sp)->r;                                          \
             if (!njgf_o_) {                                               \
                 THROW("java/lang/NullPointerException", NULL);            \
+            }                                                             \
+            /*                                                            \
+             * The slot that held the receiver is an untyped 8-byte word:  \
+             * a malformed Code attribute can leave an int or a float bit  \
+             * pattern there and the fetch below has no verifier to stop  \
+             * it.  `!obj` is not enough - the fuzzer put 0x56e4 there and  \
+             * nj_field_addr_fast() added the field offset to it: a wild   \
+             * read, rc 139, no exception, no clue in the log.  The same  \
+             * test the invoke path already does turns it into a named     \
+             * exception at the instruction that caused it.                \
+             */                                                            \
+            if (!nj_heap_owns_object_fast(vm, njgf_o_)) {                 \
+                THROW("java/lang/VerifyError",                            \
+                      "getfield receiver is not an object reference");    \
             }                                                             \
         }                                                                 \
         njgf_e_ = nj_cp_hit(vm, m->owner, njgf_idx_);                     \
@@ -2267,6 +2298,9 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                 if (op == 0xb5) {
                     o = (--sp)->r;
                     if (!o) THROW("java/lang/NullPointerException", NULL);
+                    if (!nj_heap_owns_object_fast(vm, o))
+                        THROW("java/lang/VerifyError",
+                              "putfield receiver is not an object reference");
                 }
                 nj_field_write_long_fast(vm, o, f, v);
                 break; }
@@ -2280,6 +2314,9 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                 if (op == 0xb5) {
                     o = (--sp)->r;
                     if (!o) THROW("java/lang/NullPointerException", NULL);
+                    if (!nj_heap_owns_object_fast(vm, o))
+                        THROW("java/lang/VerifyError",
+                              "putfield receiver is not an object reference");
                 }
                 nj_field_write_bits64_fast(vm, o, f, (nj_u8)v);
                 break; }
@@ -2289,6 +2326,9 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                 if (op == 0xb5) {
                     o = (--sp)->r;
                     if (!o) THROW("java/lang/NullPointerException", NULL);
+                    if (!nj_heap_owns_object_fast(vm, o))
+                        THROW("java/lang/VerifyError",
+                              "putfield receiver is not an object reference");
                 }
                 nj_field_write_bits32_fast(vm, o, f, (nj_u4)v);
                 break; }
@@ -2298,6 +2338,9 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                 if (op == 0xb5) {
                     o = (--sp)->r;
                     if (!o) THROW("java/lang/NullPointerException", NULL);
+                    if (!nj_heap_owns_object_fast(vm, o))
+                        THROW("java/lang/VerifyError",
+                              "putfield receiver is not an object reference");
                 }
                 nj_field_write_ref_fast(vm, o, f, v);
                 break; }
@@ -2307,6 +2350,9 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                 if (op == 0xb5) {
                     o = (--sp)->r;
                     if (!o) THROW("java/lang/NullPointerException", NULL);
+                    if (!nj_heap_owns_object_fast(vm, o))
+                        THROW("java/lang/VerifyError",
+                              "putfield receiver is not an object reference");
                 }
                 nj_field_write_int_fast(vm, o, f, v);
                 break; }
@@ -2386,6 +2432,35 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
                  */
                 THROW("java/lang/IncompatibleClassChangeError",
                       "invokestatic on an instance method");
+            }
+
+            if (op == 0xb7 && e->kind != NJ_LINK_METHOD_STATIC) {
+                /*
+                 * invokespecial takes `this` from the operand stack like any
+                 * instance call, but the virtual path below is the only one
+                 * that used to check it.  A malformed Code byte made `new`
+                 * into `ior`, so the receiver slot held an int; KeysDemo's
+                 * constructor then called a MIDP native with
+                 * this=0x7fff00000004 and the emulator died inside
+                 * nj_field_write_ref() with no exception set.  Same rule as
+                 * the virtual path: a slot that is not a live object is a
+                 * VerifyError at the instruction, not a wild `this` in a
+                 * native.
+                 */
+                nj_u2 aslots = target->arg_slots;
+                nj_ref recv;
+
+                if (sp - stack < (nj_s4)(aslots + 1u)) {
+                    THROW("java/lang/VerifyError", "operand stack underflow");
+                }
+                recv = (sp - aslots - 1u)->r;
+                if (!recv) {
+                    THROW("java/lang/NullPointerException", NULL);
+                }
+                if (!nj_heap_owns_object_fast(vm, recv)) {
+                    THROW("java/lang/VerifyError",
+                          "receiver is not an object reference");
+                }
             }
 
             if ((op == 0xb6 || op == 0xb9) && e->kind != NJ_LINK_METHOD_STATIC) {

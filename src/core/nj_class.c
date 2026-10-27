@@ -553,10 +553,44 @@ static nj_status parse_methods(nj_vm *vm, nj_class *c, nj_rd *r)
                         return NJ_ERR_NOMEM;
                     }
                     for (ea = 0u; ea < ex_count; ea++) {
-                        hs[ea].start_pc = rd_u2(r);
-                        hs[ea].end_pc = rd_u2(r);
-                        hs[ea].handler_pc = rd_u2(r);
-                        hs[ea].catch_cp = rd_u2(r);
+                        nj_u2 start_pc = rd_u2(r);
+                        nj_u2 end_pc = rd_u2(r);
+                        nj_u2 handler_pc = rd_u2(r);
+                        nj_u2 catch_cp = rd_u2(r);
+
+                        if (r->err) {
+                            return NJ_ERR_FORMAT;
+                        }
+                        /*
+                         * An exception-table entry describes a range of this
+                         * method's Code array and a handler that must start
+                         * INSIDE that array.  The interpreter resumes at
+                         * handler_pc without re-reading the table, so an entry
+                         * whose handler_pc is >= code_len parks the frame at a
+                         * pc the fetch refuses: the fetch throws VerifyError,
+                         * the unwind matches the SAME entry again, and the
+                         * frame is resumed at the same invalid pc - forever.
+                         * No stack grows, no bytecode retires, so the quantum
+                         * check never runs and the thread never yields.  That
+                         * was a real hang: one structural mutation put a
+                         * handler at pc == code_len and the process had to be
+                         * killed.
+                         *
+                         * Rejecting the entry here turns the same input into a
+                         * load error, attributable to this class.  The JVM
+                         * specification makes all four bounds part of the
+                         * format, so a valid class never hits this.
+                         */
+                        if (start_pc >= end_pc || (nj_u4)end_pc > code_len ||
+                            (nj_u4)handler_pc >= code_len ||
+                            (catch_cp != 0u &&
+                             !nj_cp_class_name(c, catch_cp))) {
+                            return NJ_ERR_FORMAT;
+                        }
+                        hs[ea].start_pc = start_pc;
+                        hs[ea].end_pc = end_pc;
+                        hs[ea].handler_pc = handler_pc;
+                        hs[ea].catch_cp = catch_cp;
                     }
                     m->handlers = hs;
                     m->handler_count = ex_count;
@@ -918,9 +952,46 @@ static nj_u4 field_bytes(const nj_field *f)
     }
 }
 
-/* The real linker.  Call it through nj_class_link() below, which turns a
- * failure into a describable exception - see the comment there. */
+static nj_status class_link_step(nj_vm *vm, nj_class *c);
+
+/*
+ * Re-entrancy guard around the linker.
+ *
+ * Resolving a superclass or interface re-enters class_link() while the class
+ * being linked is still LOADED, so a class that names itself - or a loop of
+ * classes that name each other - used to recurse until the C stack died:
+ * a malformed class file killed the process with SIGSEGV instead of being
+ * rejected.  There is no verifier ahead of this point, so the linker has to
+ * notice the cycle itself.
+ *
+ * `c->linking` is set for exactly the duration of the recursive walk, and an
+ * attempt to enter a class that is already being linked is by definition a
+ * cycle.  The failure is marked in vm->link_cycle so nj_class_link() can raise
+ * an exception that says so; the transient mark is cleared on every return,
+ * success or failure, so a failed link can be retried and reported cleanly.
+ */
 static nj_status class_link_inner(nj_vm *vm, nj_class *c)
+{
+    nj_status st;
+
+    if (!vm || !c) {
+        return NJ_ERR;
+    }
+    if (c->linking) {
+        nj_logf(vm, 3, "link %s: circular class hierarchy", c->name);
+        vm->link_cycle = 1u;
+        vm->link_cls = c->name;
+        return NJ_ERR_FORMAT;
+    }
+    c->linking = 1u;
+    st = class_link_step(vm, c);
+    c->linking = 0u;
+    return st;
+}
+
+/* The real linker.  Call it through class_link_inner() above and
+ * nj_class_link() below, which turn a failure into a describable exception. */
+static nj_status class_link_step(nj_vm *vm, nj_class *c)
 {
     nj_u2 i;
     nj_u2 base;
@@ -932,6 +1003,7 @@ static nj_status class_link_inner(nj_vm *vm, nj_class *c)
      * against the class that failed this time. */
     vm->link_cls = NULL;
     vm->link_missing = NULL;
+    vm->link_cycle = 0u;
     if (c->state >= NJ_CLASS_LINKED) {
         return NJ_OK;
     }
@@ -994,7 +1066,12 @@ static nj_status class_link_inner(nj_vm *vm, nj_class *c)
             vm->link_missing = in;
             return NJ_ERR;
         }
-        (void)nj_class_link(vm, c->interfaces[i]);
+        /* Not '(void)': an interface hierarchy this runtime cannot link -
+         * a circular one, for instance - must fail the class that implements
+         * it, or later assignability walks follow the cycle. */
+        if (nj_class_link(vm, c->interfaces[i]) != NJ_OK) {
+            return NJ_ERR;
+        }
     }
 
     /* ---- instance layout ---- */
@@ -1070,19 +1147,29 @@ nj_status nj_class_link(nj_vm *vm, nj_class *c)
 {
     nj_status st = class_link_inner(vm, c);
 
-    if (st != NJ_OK && vm != NULL && !vm->exception && vm->link_cls != NULL) {
+    if (st != NJ_OK && vm != NULL && !vm->exception) {
         char buf[320];
         nj_u4 n = 0u;
 
-        append_str(buf, &n, sizeof(buf), vm->link_cls);
-        if (vm->link_missing != NULL) {
-            append_str(buf, &n, sizeof(buf), ": missing ");
-            append_str(buf, &n, sizeof(buf), vm->link_missing);
+        if (vm->link_cycle) {
+            append_str(buf, &n, sizeof(buf), vm->link_cls ? vm->link_cls : "?");
             append_str(buf, &n, sizeof(buf),
-                       " (this runtime does not provide it)");
+                       ": circular superclass or interface chain");
+            buf[n] = '\0';
+            (void)nj_throw(vm, "java/lang/VerifyError", buf);
+            return st;
         }
-        buf[n] = '\0';
-        (void)nj_throw(vm, "java/lang/NoClassDefFoundError", buf);
+        if (vm->link_cls != NULL) {
+            append_str(buf, &n, sizeof(buf), vm->link_cls);
+            if (vm->link_missing != NULL) {
+                append_str(buf, &n, sizeof(buf), ": missing ");
+                append_str(buf, &n, sizeof(buf), vm->link_missing);
+                append_str(buf, &n, sizeof(buf),
+                           " (this runtime does not provide it)");
+            }
+            buf[n] = '\0';
+            (void)nj_throw(vm, "java/lang/NoClassDefFoundError", buf);
+        }
     }
     return st;
 }
