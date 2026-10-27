@@ -105,3 +105,23 @@ sheets: `1942/before-after-sheet.png`, `doom/before-after-sheet.png`.
 * The display rectangle is taken literally: no rotation, no aspect-preserving
   letterbox, no alpha blending (video is opaque).
 * Scaling is nearest-neighbour (whole-image blit when the sizes match).
+
+## Playback pace, and the third title
+
+The media pump decodes **one sample per emulated frame**, which is the shape
+the H.263/video Player path already had: it is deterministic and keeps the
+evidence reproducible, but it is not paced by the movie's own DTS.  At 30 fps
+emulation a 25 fps clip (1942) plays about 1.2x fast and a 15 fps clip
+(Doom 3) about 2x fast - Doom's 12.6 s intro finishes in ~6.3 s while the game
+is still in its own 12 s sleep.  Pacing by sample timestamps (a wall-clock or
+frame-clock comparison in `media_video_step()`) is the next refinement; it must
+keep `test_lib`'s "one pump call decodes one sample" contract or update it
+deliberately.
+
+The third corpus movie, H.A.W.X.'s `movie.3gp`, is verified pixel-exactly
+through the provider and the Java Player (`docs/CODECS.md`), but the title
+itself does not reach its movie in a headless run: 1,800 frames of
+`/tmp/vault/Roms/Tom Clancy's H.A.W.X..jar` show its own menu/download gate and
+never call the video Player (2M bytecodes per frame, no movie frame with more
+than ~20 colours).  In-game evidence for that one is blocked by the title, not
+by the media layer.
