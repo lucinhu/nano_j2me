@@ -1186,6 +1186,137 @@ static void media_unregister(nj_vm *vm, nj_ref player)
 }
 
 /*
+ * ---- one PCM device, one Player that owns it ----
+ *
+ * nj_port.pcm_open() configures ONE device: it takes a sample rate and a
+ * channel count, and nj_port.pcm_close() is not "close my stream", it is
+ * "close the device".  A title that plays a voice line over its music - the
+ * ordinary case in the corpus, and the reason 极品飞车14之热力追踪中文版_4160 went
+ * silent after a busted animation - calls two Players at once, and drawn
+ * literally the second Player's open() reconfigures the hardware under the
+ * first, while its close() leaves the first writing into a closed device.
+ * That is not a mixing bug the port could fix: on a 2004 phone there was one
+ * DAC and the audio system, not the MIDlet, decided who had it.
+ *
+ * So the runtime arbitrates, the way the device class does:
+ *
+ *   - the Player that starts last owns the device; the others are paused on
+ *     the DEVICE side only.  Their media clock holds, their position holds and
+ *     their Player state stays STARTED, because a title that never listens for
+ *     a "stopped" event (most of them) must not be left silent forever;
+ *   - when the owner ends, stops or closes, the oldest paused Player is handed
+ *     the device back at ITS rate and channel count, from its own position;
+ *   - an open. that fails (no device, no support) leaves the owner NULL and the
+ *     paused Players waiting, instead of pretending to play.
+ *
+ * Mixing is still not attempted here: a port that can mix (SDL2's queue, the
+ * Android ring) is welcome to, but the runtime keeps its side of the deal so
+ * that a port which genuinely has one stream does not lose music.
+ *
+ * A platform MIDI synth Player is not part of this: it owns its own handle and
+ * its own clock (see F_P_PLAT), and the pump only asks it whether it finished.
+ */
+static int media_dev_wants(nj_vm *vm, nj_ref p)
+{
+    if (p == NULL || r_i(vm, p, F_P_STATE) != 400) {
+        return 0;
+    }
+    if (r_z(vm, p, F_P_PLAT)) {
+        return 0;
+    }
+    if (r_i(vm, p, F_P_KIND) == 2) {
+        return r_i(vm, p, F_P_APCMN) > 0;   /* a movie with a sound track */
+    }
+    return r_i(vm, p, F_P_KIND) == 1;       /* sampled audio */
+}
+
+static int media_dev_format(nj_vm *vm, nj_ref p, int *rate, int *chans)
+{
+    if (r_i(vm, p, F_P_KIND) == 2) {
+        *rate = (int)NJ_AMR_RATE;
+        *chans = 1;
+    } else {
+        *rate = (int)r_i(vm, p, F_P_RATE);
+        *chans = (int)r_i(vm, p, F_P_CHAN);
+    }
+    return *rate > 0 && *chans > 0;
+}
+
+/* Close the device, whoever holds it.  The Player keeps its position. */
+static void media_dev_close(nj_vm *vm)
+{
+    nj_ref owner = vm->pcm_owner;
+
+    if (owner == NULL) {
+        return;
+    }
+    if (vm->port && vm->port->pcm_close) {
+        vm->port->pcm_close(vm->port->ud);
+    }
+    w_z(vm, owner, F_P_OPEN, 0);
+    vm->pcm_owner = NULL;
+}
+
+/* Hand the device to `p`, closing the previous owner.  1 when it is open. */
+static int media_dev_claim(nj_vm *vm, nj_ref p)
+{
+    int rate, chans;
+    int had_owner;
+
+    if (!vm->port || !vm->port->pcm_open) {
+        return 0;
+    }
+    if (vm->pcm_owner == p) {
+        return r_z(vm, p, F_P_OPEN);
+    }
+    had_owner = vm->pcm_owner != NULL;
+    media_dev_close(vm);
+    if (!media_dev_format(vm, p, &rate, &chans)) {
+        return 0;
+    }
+    if (vm->port->pcm_open(vm->port->ud, rate, chans) != 0) {
+        return 0;
+    }
+    vm->pcm_owner = p;
+    w_z(vm, p, F_P_OPEN, 1);
+    if (had_owner) {
+        /* A title with two sampled Players at once is the case this exists
+         * for; the line is what a log-less phone report is missing. */
+        nj_logf(vm, 2, "media: the PCM device moved to another Player, "
+                       "%d Hz, %d channel(s)", rate, chans);
+    }
+    return 1;
+}
+
+/* Release the device and give the oldest paused Player its turn. */
+static void media_dev_release(nj_vm *vm, nj_ref p)
+{
+    nj_ref v;
+    nj_s4 n, i;
+
+    if (vm->pcm_owner != p) {
+        return;                 /* not ours: nothing to hand back */
+    }
+    media_dev_close(vm);
+    v = vm->media_players;
+    if (v == NULL) {
+        return;
+    }
+    n = vec_size(vm, v);
+    for (i = 0; i < n; i++) {
+        nj_ref q = vec_at(vm, v, i);
+        if (q == NULL || q == p) {
+            continue;
+        }
+        if (media_dev_wants(vm, q) && media_dev_claim(vm, q)) {
+            nj_logf(vm, 2, "media: the PCM device went back to a paused "
+                           "Player");
+            break;
+        }
+    }
+}
+
+/*
  * Called once per emulated frame by nj_midp_frame().
  *
  * Pushing a whole WAV from inside start() works on a desktop and overruns the
@@ -1335,7 +1466,7 @@ static int video_audio_decode(nj_vm *vm, nj_ref p, const media_video_state *st,
     return 1;
 }
 
-/* start(): decode the sound track once and open the PCM device if we can. */
+/* start(): decode the sound track once and ask for the PCM device if we can. */
 static void video_audio_start(nj_vm *vm, nj_ref p)
 {
     nj_ref hold = r_r(vm, p, F_P_DATA, "[B");
@@ -1348,23 +1479,17 @@ static void video_audio_start(nj_vm *vm, nj_ref p)
             (void)video_audio_decode(vm, p, &st, src);
         }
     }
-    if (r_i(vm, p, F_P_APCMN) > 0 && vm->port && vm->port->pcm_open &&
-        !r_z(vm, p, F_P_OPEN)) {
-        if (vm->port->pcm_open(vm->port->ud, (int)NJ_AMR_RATE, 1) == 0) {
-            w_z(vm, p, F_P_OPEN, 1);
-        }
+    /* A movie with a sound track takes the device from the music, the way the
+     * device class would have made it; the picture never waits for it. */
+    if (r_i(vm, p, F_P_APCMN) > 0 && !r_z(vm, p, F_P_OPEN)) {
+        (void)media_dev_claim(vm, p);
     }
 }
 
-/* stop()/end of media: close the device, keep the decoded PCM for a resume. */
+/* stop()/end of media: give the device back, keep the decoded PCM for a resume. */
 static void video_audio_stop(nj_vm *vm, nj_ref p)
 {
-    if (r_z(vm, p, F_P_OPEN)) {
-        if (vm->port && vm->port->pcm_close) {
-            vm->port->pcm_close(vm->port->ud);
-        }
-        w_z(vm, p, F_P_OPEN, 0);
-    }
+    media_dev_release(vm, p);
 }
 
 /* Hand the port every PCM frame whose movie time has arrived. */
@@ -1950,6 +2075,22 @@ void nj_media_frame(nj_vm *vm)
             }
             continue;
         }
+        /*
+         * The one PCM device belongs to exactly one of these Players (see the
+         * device ownership block above).  A paused Player keeps its position
+         * and its STARTED state and writes nothing; if the device came free
+         * without a successor it is claimed here, so a start() whose open()
+         * failed can still find the device on a later frame.
+         */
+        if (vm->pcm_owner != p) {
+            if (vm->pcm_owner == NULL && !r_z(vm, p, F_P_OPEN) &&
+                media_dev_wants(vm, p)) {
+                (void)media_dev_claim(vm, p);
+            }
+            if (vm->pcm_owner != p) {
+                continue;
+            }
+        }
         if (vm->port->pcm_free) {
             room = vm->port->pcm_free(vm->port->ud);
             if (room <= 0) {
@@ -1967,13 +2108,10 @@ void nj_media_frame(nj_vm *vm)
             }
         }
         if (r_i(vm, p, F_P_PUSHED) >= r_i(vm, p, F_P_FRAMES)) {
-            /* Played to the end: STOP the Player and say so, which is what
-             * MIDP's END_OF_MEDIA is for. */
-            if (r_i(vm, p, F_P_KIND) == 1 && r_z(vm, p, F_P_OPEN)) {
-                if (vm->port->pcm_close) {
-                    vm->port->pcm_close(vm->port->ud);
-                }
-                w_z(vm, p, F_P_OPEN, 0);
+            /* Played to the end: give the device back, STOP the Player and say
+             * so, which is what MIDP's END_OF_MEDIA is for. */
+            if (r_i(vm, p, F_P_KIND) == 1) {
+                media_dev_release(vm, p);
             }
             if (r_i(vm, p, F_P_STATE) == 400) {
                 w_i(vm, p, F_P_STATE, 300);
@@ -3512,19 +3650,20 @@ NJFN(player_start)
             }
         }
         w_i(vm, self, F_P_LOOPDONE, 0);
+        /* Ask for the device; whatever was playing sampled audio before is
+         * paused, not closed, and gets it back when this Player ends. */
         if (!r_z(vm, self, F_P_OPEN)) {
-            if (vm->port->pcm_open(vm->port->ud, (int)r_i(vm, self, F_P_RATE),
-                                   (int)r_i(vm, self, F_P_CHAN)) == 0) {
-                w_z(vm, self, F_P_OPEN, 1);
-            }
+            (void)media_dev_claim(vm, self);
         }
-        (void)pcm_push(vm, self, 1 << 20);
+        if (vm->pcm_owner == self) {
+            (void)pcm_push(vm, self, 1 << 20);
+        }
         /* Even a device that accepts the whole clip immediately needs the
          * frame pump to finish the Player, close PCM and fire endOfMedia.
-         * Otherwise short clips remain STARTED forever. */
-        if (r_z(vm, self, F_P_OPEN)) {
-            (void)media_register(vm, self);
-        }
+         * Otherwise short clips remain STARTED forever; a Player that could
+         * not get the device yet is registered too, so the pump can hand it
+         * the device the moment whoever has it ends. */
+        (void)media_register(vm, self);
     }
     w_i(vm, self, F_P_STATE, 400);
     fire(vm, self, "started");
@@ -3552,10 +3691,8 @@ NJFN(player_stop)
 #if NJ_ENABLE_VIDEO
             video_audio_stop(vm, self);
 #endif
-        } else if (r_z(vm, self, F_P_OPEN) && vm->port
-                   && vm->port->pcm_close) {
-            vm->port->pcm_close(vm->port->ud);
-            w_z(vm, self, F_P_OPEN, 0);
+        } else if (r_z(vm, self, F_P_OPEN) || vm->pcm_owner == self) {
+            media_dev_release(vm, self);
         }
         media_unregister(vm, self);
         w_i(vm, self, F_P_STATE, 300);

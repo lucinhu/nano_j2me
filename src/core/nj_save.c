@@ -1340,6 +1340,7 @@ static void reset_refs(nj_vm *vm)
     vm->current_displayable = NULL;
     vm->thread_group = NULL;
     vm->media_players = NULL;
+    vm->pcm_owner = NULL;
     vm->sensor_conns = NULL;
     vm->bt_jobs = NULL;
     for (i = 0u; i < vm->ninterned; i += 1u) {
@@ -2074,6 +2075,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     }
     /* Playback resources are deliberately not part of a snapshot. */
     vm->media_players = NULL;
+    vm->pcm_owner = NULL;
 
     /*
      * Last of all, mark the classes whose <clinit> had already run in the

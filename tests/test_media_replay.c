@@ -284,6 +284,171 @@ done:
 }
 #endif /* NJ_ENABLE_MIDI */
 
+/*
+ * One PCM device, two sampled Players.
+ *
+ * nj_port has a single device: pcm_open() configures it and pcm_close()
+ * releases it for the whole machine.  A title that plays a voice line over its
+ * music therefore used to lose the music for good - the voice re-opened the
+ * device at 8 kHz and its close() left the music Player writing into a closed
+ * device.  The runtime now pauses the older Player on the device side and hands
+ * the device back when the newer one ends, which is the behaviour these
+ * assertions pin: the music Player keeps its STARTED state and its position,
+ * stops writing while it does not own the device, and resumes at its own rate
+ * and from where it stopped.
+ */
+static int dev_opens, dev_closes, dev_rate, dev_chans;
+static long dev_frames_a, dev_frames_b;
+
+static int handover_open(void *ud, int rate, int ch)
+{
+    (void)ud;
+    dev_opens++;
+    dev_rate = rate;
+    dev_chans = ch;
+    return 0;
+}
+static int handover_room(void *ud) { (void)ud; return 100; }
+static int handover_write(void *ud, const nj_s2 *data, int frames)
+{
+    (void)ud;
+    if (frames > 100) {
+        frames = 100;               /* a small device, so playback spans frames */
+    }
+    if (frames <= 0) {
+        return 0;
+    }
+    if (data[0] > 0) {
+        dev_frames_a += frames;     /* the first WAV uses +1200 */
+    } else {
+        dev_frames_b += frames;     /* the second uses -1200 */
+    }
+    return frames;
+}
+static void handover_close(void *ud) { (void)ud; dev_closes++; }
+
+static void put_u32(nj_u1 *p, nj_u4 v)
+{
+    p[0] = (nj_u1)v; p[1] = (nj_u1)(v >> 8);
+    p[2] = (nj_u1)(v >> 16); p[3] = (nj_u1)(v >> 24);
+}
+
+/* A mono 16-bit WAV of `frames` constant samples, as a Player. */
+static nj_ref make_wav_player(nj_vm *vm, int frames, int rate, nj_s2 sample)
+{
+    nj_u4 size = (nj_u4)frames * 2u;
+    nj_ref bytes = nj_byte_array_new(vm, 44u + size);
+    nj_ref stream, player = NULL;
+    nj_value a[2], ret;
+    nj_u1 *w;
+    int i;
+
+    if (!bytes) {
+        return NULL;
+    }
+    w = nj_array_data(bytes);
+    memset(w, 0, 44u);
+    memcpy(w, "RIFF", 4);
+    put_u32(w + 4, 36u + size);
+    memcpy(w + 8, "WAVEfmt ", 8);
+    put_u32(w + 16, 16u);
+    w[20] = 1; w[21] = 0;           /* PCM */
+    w[22] = 1; w[23] = 0;           /* mono */
+    put_u32(w + 24, (nj_u4)rate);
+    put_u32(w + 28, (nj_u4)rate * 2u);
+    w[32] = 2; w[33] = 0;           /* block align */
+    w[34] = 16; w[35] = 0;          /* bits per sample */
+    memcpy(w + 36, "data", 4);
+    put_u32(w + 40, size);
+    for (i = 0; i < frames; i++) {
+        w[44 + i * 2] = (nj_u1)sample;
+        w[45 + i * 2] = (nj_u1)((unsigned)sample >> 8);
+    }
+    stream = nj_object_new(vm, "java/io/ByteArrayInputStream");
+    if (!stream) {
+        return NULL;
+    }
+    a[0].r = bytes;
+    if (nj_call_special(vm, stream, "java/io/ByteArrayInputStream",
+                        "<init>", "([B)V", a, NULL) != NJ_OK) {
+        return NULL;
+    }
+    a[0].r = stream; a[1].r = NULL;
+    if (nj_call_static(vm, "javax/microedition/media/Manager",
+            "createPlayer",
+            "(Ljava/io/InputStream;Ljava/lang/String;)"
+            "Ljavax/microedition/media/Player;", a, &ret) != NJ_OK) {
+        return NULL;
+    }
+    player = nj_root(vm, ret.r);
+    return player;
+}
+
+static void test_device_handover(void)
+{
+    nj_port port;
+    nj_vm *vm;
+    nj_ref pa, pb;
+    nj_value ret;
+    long a_start, b_start;
+    int i;
+
+    dev_opens = dev_closes = 0;
+    dev_rate = dev_chans = 0;
+    dev_frames_a = dev_frames_b = 0;
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    port.pcm_open = handover_open;
+    port.pcm_write = handover_write;
+    port.pcm_free = handover_room;
+    port.pcm_close = handover_close;
+    vm = nj_vm_create(&port, 2 * 1024 * 1024);
+    CHECK(vm != NULL);
+    if (!vm) { nj_port_shutdown(&port); return; }
+    pa = make_wav_player(vm, 400, 8000, (nj_s2)1200);
+    pb = make_wav_player(vm, 2000, 16000, (nj_s2)-1200);
+    CHECK(pa != NULL && pb != NULL);
+    if (!pa || !pb) goto done;
+
+    /* The music starts and owns the device. */
+    CHECK(nj_call(vm, pa, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    CHECK(dev_opens == 1 && dev_closes == 0 && dev_rate == 8000);
+    CHECK(dev_frames_a > 0 && dev_frames_b == 0);
+
+    /* The voice starts: it takes the device, and the music is paused, not
+     * stopped - a title that never listens for "stopped" must not be left
+     * silent. */
+    a_start = dev_frames_a;
+    CHECK(nj_call(vm, pb, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    CHECK(dev_opens == 2 && dev_closes == 1 && dev_rate == 16000);
+    CHECK(nj_call(vm, pa, PLAYER, "getState", "()I", NULL, &ret) == NJ_OK &&
+          ret.i == 400);
+    for (i = 0; i < 3; i++) {
+        nj_media_frame(vm);
+    }
+    CHECK(dev_frames_a == a_start);     /* the paused Player writes nothing */
+    CHECK(dev_frames_b > 0);
+
+    /* The voice ends: the device goes back to the music at its own rate, from
+     * its own position. */
+    b_start = dev_frames_b;
+    CHECK(nj_call(vm, pb, PLAYER, "stop", "()V", NULL, NULL) == NJ_OK);
+    CHECK(dev_closes == 2 && dev_opens == 3 && dev_rate == 8000);
+    for (i = 0; i < 2; i++) {
+        nj_media_frame(vm);
+    }
+    CHECK(dev_frames_a > a_start);      /* the music plays again */
+    CHECK(dev_frames_b == b_start);     /* the stopped Player is quiet */
+    CHECK(nj_call(vm, pa, PLAYER, "getState", "()I", NULL, &ret) == NJ_OK &&
+          ret.i == 400);
+
+    CHECK(nj_call(vm, pa, PLAYER, "stop", "()V", NULL, NULL) == NJ_OK);
+    CHECK(dev_closes == 3);
+    CHECK(nj_call(vm, pa, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
+    CHECK(nj_call(vm, pb, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
+done:
+    nj_vm_destroy(vm); nj_port_shutdown(&port);
+}
+
 int main(void)
 {
     run_case(1, 0); run_case(2, 0); run_case(1, 3); run_case(2, 3);
@@ -291,6 +456,7 @@ int main(void)
     test_midi_stream_loop();
 #endif
     test_midi_preemption(1); test_midi_preemption(3); test_midi_preemption(-1);
+    test_device_handover();
     printf("media replay: %d failures\n", failures);
     return failures ? 1 : 0;
 }

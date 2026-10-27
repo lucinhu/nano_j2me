@@ -1733,17 +1733,33 @@ static int sdl_audio_ensure(sdl_state *s, int rate, int chans)
 static int sdl_tone_play(void *ud, const nj_audio_tone *tones, int count)
 {
     sdl_state *s = SS(ud);
-    int rate = 22050;
-    int i;
-    nj_u4 total = 0u;
+    int rate, chans, i;
+    nj_u4 total = 0u;                  /* frames, not samples */
     nj_s2 *buf;
     nj_u4 at = 0u;
 
     if (!s || !tones || count <= 0) {
         return -1;
     }
-    if (!sdl_audio_ensure(s, rate, 1)) {
-        return -1;                     /* no device: not an error for the game */
+    /*
+     * A tone is a sound effect, not a stream.  When sampled audio already has
+     * the device, the beep belongs in the SAME stream, rendered at the
+     * device's own format: re-opening the device here is what used to cut the
+     * music off, because sdl_audio_ensure() closes and re-opens it whenever the
+     * format differs, and the closed device is the one the music Player was
+     * writing into.  A quiet game still gets a device of its own.
+     */
+    if (s->audio && s->audio_rate > 0 && s->audio_chans > 0) {
+        rate = s->audio_rate;
+        chans = s->audio_chans;
+    } else {
+        rate = 22050;
+        chans = 1;
+        if (!sdl_audio_ensure(s, rate, chans)) {
+            return -1;                 /* no device: not an error for the game */
+        }
+        rate = s->audio_rate > 0 ? s->audio_rate : rate;
+        chans = s->audio_chans > 0 ? s->audio_chans : chans;
     }
     for (i = 0; i < count; i++) {
         total += (nj_u4)tones[i].duration_ms * (nj_u4)rate / 1000u;
@@ -1751,16 +1767,18 @@ static int sdl_tone_play(void *ud, const nj_audio_tone *tones, int count)
     if (total == 0u) {
         return 0;
     }
-    buf = (nj_s2 *)SDL_malloc((size_t)total * sizeof(nj_s2));
+    buf = (nj_s2 *)SDL_malloc((size_t)total * (size_t)chans * sizeof(nj_s2));
     if (!buf) {
         return -1;
     }
     for (i = 0; i < count; i++) {
         nj_u4 n = (nj_u4)tones[i].duration_ms * (nj_u4)rate / 1000u;
-        nj_u4 k;
+        nj_u4 k, c;
         if (tones[i].freq_hz == 0u) {
             for (k = 0; k < n; k++) {
-                buf[at++] = 0;         /* a rest is silence, not a low note */
+                for (c = 0; c < (nj_u4)chans; c++) {
+                    buf[at++] = 0;     /* a rest is silence, not a low note */
+                }
             }
             continue;
         }
@@ -1771,13 +1789,18 @@ static int sdl_tone_play(void *ud, const nj_audio_tone *tones, int count)
              * integer phase accumulator costs nothing to reason about.
              */
             nj_u4 half = (nj_u4)rate / ((nj_u4)tones[i].freq_hz * 2u);
+            nj_s2 v;
             if (half == 0u) {
                 half = 1u;
             }
-            buf[at++] = (((k / half) & 1u) != 0u) ? SDL_TONE_AMP : -SDL_TONE_AMP;
+            v = (((k / half) & 1u) != 0u) ? SDL_TONE_AMP : -SDL_TONE_AMP;
+            for (c = 0; c < (nj_u4)chans; c++) {
+                buf[at++] = v;
+            }
         }
     }
-    SDL_QueueAudio(s->audio, buf, total * (nj_u4)sizeof(nj_s2));
+    SDL_QueueAudio(s->audio, buf,
+                   total * (nj_u4)chans * (nj_u4)sizeof(nj_s2));
     SDL_free(buf);
     return 0;
 }
@@ -1786,6 +1809,12 @@ static void sdl_tone_stop(void *ud)
 {
     sdl_state *s = SS(ud);
     if (s && s->audio) {
+        /*
+         * SDL has no "drop the tones, keep the stream": the queue is one byte
+         * stream.  Clearing it costs at most a fraction of a second of a
+         * concurrent stream, and the runtime tops that stream up again next
+         * frame, so a stop() is a hiccup rather than a kill.
+         */
         SDL_ClearQueuedAudio(s->audio);
     }
 }

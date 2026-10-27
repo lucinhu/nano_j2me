@@ -4741,3 +4741,44 @@ restart after seven loops and then goes silent (`pcm_frames=11,890,477`); the
 fixed build keeps the loop running through 43 collections
 (`pcm_frames=30,385,250`, race still drawing, exit 0).  Mechanism note:
 `docs/notes/2026-10-27-midi-loop-restart.md`.
+
+## Round 94 - the music that never came back (2026-10-28)
+
+Round 93 fixed the looping song that lost its bytes; the user who reported it
+said the symptom was still there in 极品飞车：热血追踪 after being caught by
+the police.  That turned out to be a second, independent cause: the runtime was
+driving one audio device from many Players.
+
+`nj_port` exposes a single PCM device (`pcm_open` configures it, `pcm_write`
+pushes, `pcm_close` closes it; the SDL2 port re-opens it when a caller asks for
+a different rate or channel count).  Every sampled `Player` used to call those
+hooks itself.  With two Players the second `pcm_open()` reconfigured the device
+under the first and its later `pcm_close()` closed it; the first Player kept
+pumping into a closed device, `pcm_write()` returned -1 and the value was
+ignored - music gone for good while the game kept drawing.  The SDL2 tone path
+added the same failure from the other side by re-opening the device at
+22,050 Hz mono for every sound effect.
+
+Fix (`this commit`): `vm->pcm_owner` plus `media_dev_claim()` /
+`media_dev_release()` in `nj_lib_media.c`.  A sampled Player is pumped only
+while it owns the device; a Player that wants it stays in `STARTED` with its
+position frozen rather than reporting `endOfMedia`; when the owner stops, the
+device goes to the first Player in `media_players` that still wants it and that
+Player resumes where it paused.  `player_start()` claims and always registers
+so a waiting Player can be handed the device by the frame loop; `player_stop()`
+releases; `VideoControl`'s direct video audio uses the same claim/release; the
+snapshot loader clears `pcm_owner`.  The SDL2 `sdl_tone_play()` now renders into
+the open device's current rate and channel count instead of re-opening it.
+
+Test: `test_device_handover()` in `tests/test_media_replay.c` - A (8 kHz) owns
+the device, B (16 kHz) claims and freezes A, stopping B hands it back and A
+advances again.  Full ctest 122/122.
+
+Port-level A/B with the synthetic overlap fixture
+(`.local-tools/debug-runs/audio-device-ownership-20261028/`, MIDlet in the same
+directory): before the fix the SDL2 disk driver captured 12,288 bytes - just
+the sound effect - and the log has two device opens; after the fix three opens,
+two arbitration log lines and 745,472 bytes, with both Players `state=400`
+throughout.  The 极品飞车 title cannot reach the arrest headlessly (the race
+starts, the gameplay does not), so the fixture is the reproduction.  Mechanism
+note: `docs/notes/2026-10-28-audio-device-ownership.md`.

@@ -532,6 +532,19 @@ struct nj_vm {
     nj_ref     media_players;
 
     /*
+     * The Player that currently owns the one PCM device, or NULL.
+     *
+     * nj_port.pcm_open() configures a single device, not one per Player, so two
+     * sampled Players cannot both have it: the second open reconfigures the
+     * hardware under the first, and the second close leaves the first writing
+     * into nothing - which a player hears as "the music stopped for good".  The
+     * runtime arbitrates instead (see the device ownership block in
+     * src/midp/nj_lib_media.c) and this field says who won.  Cleared on a
+     * snapshot load, because no port device survives the trip to disk.
+     */
+    nj_ref     pcm_owner;
+
+    /*
      * The sensor connections that have a DataListener installed.  Same reason
      * as media_players above: the listener's dataReceived() has to be called
      * from the frame pump, and nothing else holds those objects.  NULL until a

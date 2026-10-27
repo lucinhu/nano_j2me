@@ -783,9 +783,16 @@ that answers `NJ_ERR_UNSUPPORTED` leaves the runtime to its own decoders and
 then to its own refusal, which names the format.
 
 **What a platform provider should NOT do** is hold a decoder open across calls
-or render audio itself: `pcm_write()` already mixes tone and sampled audio at
-whatever rate it is given (8 kHz AMR and 44.1 kHz MP3 both go through the same
-resampler), so a decoder's only job is to hand back PCM.
+or render audio itself: `pcm_write()` is the runtime's only door to the audio
+device, so a decoder's job is just to hand back PCM.  Note that `pcm_*` is one
+device, not a stream - the runtime arbitrates which `Player` owns it and pauses
+the others (see `docs/notes/2026-10-28-audio-device-ownership.md`).
+`tone_play()` may be called while a PCM device is open; it must render into the
+device's current rate and channel count instead of re-opening it (the SDL2 and
+Android ports both do, so one device serves tones and sampled audio).  A port
+that wants true mixing can mix below `pcm_open`, but it must never close or
+reconfigure the device behind the runtime's back: that is how a finished sound
+effect used to take the background music with it.
 
 ## Networking: the HTTP hook
 `javax.microedition.io.HttpConnection` needs a socket stack, which portable C
