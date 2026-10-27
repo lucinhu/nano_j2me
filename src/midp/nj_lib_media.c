@@ -151,6 +151,7 @@ static nj_av_mem *av_mem_new(nj_vm *vm)
 #define F_P_SEQ      "pSeq"        /* [B the tone sequence as given */
 #define F_P_TONES    "pTones"      /* [I freq,ms pairs */
 #define F_P_NTONES   "pNTones"     /* I */
+#define F_P_DEVROOM  "pDevRoom"    /* I free frames when the device was opened */
 #define F_P_DATA     "pData"       /* [B PCM little-endian s16 */
 #define F_P_STREAM   "pStream"     /* Z: pData is a stream handle, not PCM */
 
@@ -1279,6 +1280,16 @@ static int media_dev_claim(nj_vm *vm, nj_ref p)
     }
     vm->pcm_owner = p;
     w_z(vm, p, F_P_OPEN, 1);
+    /*
+     * How much the queue can hold, measured while it is empty.  The end of a
+     * one-shot sound uses it to tell "all handed over" from "all heard".
+     */
+    if (vm->port->pcm_free) {
+        int cap = vm->port->pcm_free(vm->port->ud);
+        w_i(vm, p, F_P_DEVROOM, cap > 0 ? cap : 0);
+    } else {
+        w_i(vm, p, F_P_DEVROOM, 0);
+    }
     if (had_owner) {
         /* A title with two sampled Players at once is the case this exists
          * for; the line is what a log-less phone report is missing. */
@@ -2108,6 +2119,19 @@ void nj_media_frame(nj_vm *vm)
             }
         }
         if (r_i(vm, p, F_P_PUSHED) >= r_i(vm, p, F_P_FRAMES)) {
+            /*
+             * All the samples have been handed over, but the port may still
+             * hold the tail in its queue: closing now throws it away, which is
+             * how a one second wave came out as a third of a second.  Wait for
+             * the queue to empty first, then give the device back and fire
+             * END_OF_MEDIA at the time the sound really ended.
+             */
+            if (vm->pcm_owner == p && vm->port->pcm_free
+                && r_i(vm, p, F_P_DEVROOM) > 0
+                && vm->port->pcm_free(vm->port->ud)
+                       < r_i(vm, p, F_P_DEVROOM)) {
+                continue;
+            }
             /* Played to the end: give the device back, STOP the Player and say
              * so, which is what MIDP's END_OF_MEDIA is for. */
             if (r_i(vm, p, F_P_KIND) == 1) {
@@ -3624,14 +3648,25 @@ NJFN(player_start)
         int n = (int)r_i(vm, self, F_P_NTONES);
         if (tones && n > 0 && vm->port && vm->port->tone_play) {
             /*
-             * The array is already in the port's layout - interleaved
-             * freq/duration - so this is a cast, not a copy, and it is
-             * documented here because it looks like a shortcut and is not.
+             * The field holds int pairs (frequency, duration) so that a
+             * ToneControl sequence survives the arena; the port asks for
+             * nj_audio_tone, which is two 16-bit fields.  Casting the int
+             * array looked plausible and was wrong: on a little-endian host
+             * the port read 440 Hz and a duration of 0, and the tone player
+             * went silent.  Copy the pairs, and cap what one call can carry.
              */
-            (void)vm->port->tone_play(vm->port->ud,
-                                      (const nj_audio_tone *)(const void *)
-                                          tones->u.bytes,
-                                      n);
+            nj_audio_tone seq[64];
+            const nj_s4 *pairs = (const nj_s4 *)(const void *)tones->u.bytes;
+            int i;
+
+            if (n > (int)(sizeof(seq) / sizeof(seq[0]))) {
+                n = (int)(sizeof(seq) / sizeof(seq[0]));
+            }
+            for (i = 0; i < n; i++) {
+                seq[i].freq_hz = (nj_u2)pairs[i * 2];
+                seq[i].duration_ms = (nj_u2)pairs[i * 2 + 1];
+            }
+            (void)vm->port->tone_play(vm->port->ud, seq, n);
         }
     } else if (r_z(vm, self, F_P_PLAT)) {
         void *mh = midi_handle(vm, self);
@@ -5116,6 +5151,7 @@ static const nj_builtin_field player_fields[] = {
     FLD(F_P_SEQ,      "[B", 0),
     FLD(F_P_TONES,    "[I", 0),
     FLD(F_P_NTONES,   "I", 0),
+    FLD(F_P_DEVROOM,  "I", 0),
     FLD(F_P_DATA,     "[B", 0),
     FLD(F_P_STREAM,   "Z", 0),
     FLD(F_P_RATE,     "I", 0),

@@ -496,6 +496,81 @@ done:
     nj_vm_destroy(vm); nj_port_shutdown(&port);
 }
 
+/*
+ * The device is a queue: "all samples handed over" is not "all samples
+ * heard".  Closing at the first moment throws the tail away, which is how a
+ * one second wave played for a third of a second on Android.  This test drives
+ * a mock queue and asserts the Player stays open until the queue runs dry.
+ */
+static int drain_cap, drain_pushed, drain_consumed, drain_opens, drain_closes;
+static int drain_open(void *ud, int rate, int ch)
+{
+    (void)ud; (void)rate; (void)ch; drain_opens++; return 0;
+}
+static int drain_room(void *ud)
+{
+    (void)ud;
+    return drain_cap - (drain_pushed - drain_consumed);
+}
+static int drain_write(void *ud, const nj_s2 *data, int frames)
+{
+    int room = drain_room(ud);
+    (void)data;
+    if (frames > room) frames = room;
+    if (frames < 0) frames = 0;
+    drain_pushed += frames;
+    return frames;
+}
+static void drain_close(void *ud) { (void)ud; drain_closes++; }
+
+static void test_eof_drain(void)
+{
+    nj_port port;
+    nj_vm *vm;
+    nj_ref p;
+    nj_value a[1], ret;
+    int i;
+
+    drain_cap = 8; drain_pushed = drain_consumed = 0;
+    drain_opens = drain_closes = 0;
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    port.pcm_open = drain_open;
+    port.pcm_write = drain_write;
+    port.pcm_free = drain_room;
+    port.pcm_close = drain_close;
+    vm = nj_vm_create(&port, 2 * 1024 * 1024);
+    CHECK(vm != NULL);
+    if (!vm) { nj_port_shutdown(&port); return; }
+    p = make_wav_player(vm, 40, 8000, (nj_s2)1500);
+    CHECK(p != NULL);
+    if (!p) goto done;
+    a[0].i = 1;
+    CHECK(nj_call(vm, p, PLAYER, "setLoopCount", "(I)V", a, NULL) == NJ_OK);
+    CHECK(nj_call(vm, p, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    CHECK(drain_opens == 1 && drain_pushed == 8);
+
+    /* Sixteen pumps hand over the rest; two frames leave the queue per pump. */
+    for (i = 0; i < 16; i++) {
+        drain_consumed += 2;
+        nj_media_frame(vm);
+    }
+    CHECK(drain_pushed == 40);
+    CHECK(drain_pushed > drain_consumed);   /* the tail is still queued */
+    CHECK(drain_closes == 0);               /* so the device is still ours */
+    CHECK(nj_call(vm, p, PLAYER, "getState", "()I", NULL, &ret) == NJ_OK &&
+          ret.i == 400);
+
+    /* Once the device has played the last frame the Player may finish. */
+    drain_consumed = 40;
+    nj_media_frame(vm);
+    CHECK(drain_closes == 1);
+    CHECK(nj_call(vm, p, PLAYER, "getState", "()I", NULL, &ret) == NJ_OK &&
+          ret.i == 300);
+    CHECK(nj_call(vm, p, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
+done:
+    nj_vm_destroy(vm); nj_port_shutdown(&port);
+}
+
 int main(void)
 {
     run_case(1, 0); run_case(2, 0); run_case(1, 3); run_case(2, 3);
@@ -505,6 +580,7 @@ int main(void)
     test_midi_preemption(1); test_midi_preemption(3); test_midi_preemption(-1);
     test_midi_reacquire_after_deallocate();
     test_device_handover();
+    test_eof_drain();
     printf("media replay: %d failures\n", failures);
     return failures ? 1 : 0;
 }

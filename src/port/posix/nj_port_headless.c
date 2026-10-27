@@ -636,6 +636,27 @@ int nj_port_headless_tone_first(const nj_port *p)
     return (p && p->ud) ? HS(p->ud)->tone_last_first : -1;
 }
 
+int nj_port_headless_tone_last(const nj_port *p, nj_audio_tone *out, int cap)
+{
+    nj_headless_state *s;
+    int i, n;
+
+    if (!p || !p->ud || cap <= 0) {
+        return -1;
+    }
+    s = HS(p->ud);
+    n = s->last_tones_n;
+    if (n > cap) {
+        n = cap;
+    }
+    if (out) {
+        for (i = 0; i < n; i++) {
+            out[i] = s->last_tones[i];
+        }
+    }
+    return s->last_tones_n;
+}
+
 long nj_port_headless_pcm_frames(const nj_port *p)
 {
     return (p && p->ud) ? HS(p->ud)->pcm_frames : -1;

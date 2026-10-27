@@ -93,6 +93,7 @@ int  nj_port_headless_tone_calls(const nj_port *port);  /* tone_play calls */
 int  nj_port_headless_tone_count(const nj_port *port);  /* tones offered, total */
 int  nj_port_headless_tone_stops(const nj_port *port);
 int  nj_port_headless_tone_first(const nj_port *port);  /* first freq, last seq */
+int  nj_port_headless_tone_last(const nj_port *port, nj_audio_tone *out, int cap);
 long nj_port_headless_pcm_frames(const nj_port *port);  /* frames accepted */
 int  nj_port_headless_pcm_opens(const nj_port *port);
 int  nj_port_headless_pcm_format(const nj_port *port, int *rate, int *channels);

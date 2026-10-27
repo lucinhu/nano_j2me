@@ -269,6 +269,26 @@ int main(int argc, char **argv)
         ok(tone_calls == 4, "the port was asked to play 4 tone sequences");
         ok(nj_port_headless_tone_stops(&port) >= 1,
            "the port was told to stop at least once");
+        {
+            /*
+             * The durations were dropped on the way to the port for a while:
+             * the runtime handed it its int pairs (frequency, duration) as if
+             * they were an array of nj_audio_tone (two 16-bit fields), so a
+             * little-endian port read 440 Hz with a duration of 0 and the
+             * tone player was silent.  The fixture's three notes are A4, C5
+             * and a rest, each 100 ms except the rest's 50 ms.
+             */
+            nj_audio_tone seq[8];
+            int n = nj_port_headless_tone_last(&port, seq, 8);
+
+            ok(n == 3, "the last tone sequence has three notes");
+            ok(n >= 1 && seq[0].freq_hz == 440 && seq[0].duration_ms == 100,
+               "the A4 note keeps its 100 ms duration");
+            ok(n >= 2 && seq[1].freq_hz == 523 && seq[1].duration_ms == 100,
+               "the C5 note keeps its 100 ms duration");
+            ok(n >= 3 && seq[2].freq_hz == 0 && seq[2].duration_ms == 50,
+               "the rest keeps its 50 ms duration");
+        }
         /*
          * Three Players reach the device: the WAV, the AMR the runtime decodes
          * itself, and the IMA ADPCM WAV decoded here. Each opens it once, at

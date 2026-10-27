@@ -4819,3 +4819,45 @@ reproduction is the phone, with the APK installed and the user pausing and
 resuming.  Evidence: `.local-tools/debug-runs/android-midi-reacquire-20261028/`
 (diagnostic log and the 0.3.6 APK hash).  Mechanism note:
 `docs/notes/2026-10-28-platform-midi-reacquire.md`.
+
+## Round 96 - the tone that had no length, and the tail the close threw away (2026-10-28)
+
+Round 95 closed the phone's pause/resume report.  Testing audio on the
+emulator afterwards - the user asked for the audio paths to be exercised
+directly - turned up two defects in the runtime's own bottom layer.
+
+The first was silent ToneControl playback on every port with a tone
+synthesizer: `player_start()` cast a Java `int[]` of `{frequency, duration}`
+pairs to `nj_audio_tone` (two 16-bit fields), so the duration was always the
+high half of a frequency word, i.e. zero.  The port log read
+`tone_play count=2 f0=440 d0=0` and the synth played nothing.  The SDL2/desktop
+tone path reads the array field by field, which is why the bug only appeared
+on the platform-synth ports.  Fixed by copying the pairs into an
+`nj_audio_tone` array before the call; `tests/test_audio.c` now asserts the
+received sequence (440 Hz/100 ms, 523 Hz/100 ms, rest 50 ms) through a new
+headless `tone_last` getter.
+
+The second was the tail of one-shot sampled sounds: at EOF the runtime closed
+the PCM device immediately, so whatever the port's queue still held (about
+0.72 s for a one-second wave on the Android ring) was discarded - a one
+second wave played for 0.30 s.  Fixed by recording the queue capacity when a
+Player takes the device (`F_P_DEVROOM`, via `pcm_free()`) and waiting for the
+queue to drain before releasing the device and firing `END_OF_MEDIA`.  A mock
+queue test (`test_eof_drain()` in `tests/test_media_replay.c`) fails two
+checks without the fix and passes with it; ports without `pcm_free()` keep
+the old behaviour.
+
+Verification was an emulator audio rig: QEMU's `wav` backend writes the
+guest's output to a host file (the `pa` backend cannot initialise in this
+environment), and a scripted MIDLet (`/tmp/audio-probes3`) plays nine
+scenarios with distinct frequency signatures that the capture confirms.  API
+26 shows tone, one-shot playback, loops, stop/resume, MIDI play/loop, a 4 s
+pause with the position frozen and resumed, and re-acquisition after
+`deallocate()` all correct.  API 21 shows the same PCM behaviour; its
+`MediaPlayer.pause()` does not stop a platform MIDI player (position keeps
+advancing) - an AOSP 5.0 / Sonivox emulator-image quirk on a path where the
+runtime only calls `pause()`, recorded in the note rather than worked around.
+
+Full ctest 122/122.  Evidence:
+`.local-tools/debug-runs/android-audio-probe-20261028/`; mechanism note:
+`docs/notes/2026-10-28-tone-and-drain.md`.
