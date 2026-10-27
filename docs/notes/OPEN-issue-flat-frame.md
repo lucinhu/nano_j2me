@@ -510,3 +510,35 @@ two lessons: a field that goes missing is invisible in the game's own code, and
 "the game is stuck in its own flow" was the wrong conclusion here twice - both
 titles had a runtime bug that their state machines then reported as a null
 somewhere else.
+
+### Resolved, and the answer is "it lays itself out for 240x320" (2026-10-27)
+
+The 宠物王国2紫_5550 question at the end of the second update - is 176x208
+black because the title lays itself out for the screen it was built for, or
+because the runtime mis-lays-out at that size? - is answered: the title lays
+itself out for a 240x320 surface with hardcoded coordinates.
+
+The screen that goes missing is the music prompt, the first interactive
+screen.  It is drawn at a fixed `y = 238`, the first row of a 240x320
+surface's bottom strip, and the title never asks the canvas for its size:
+`b.class`'s prompt state (`e == 17`) calls `h.a(aI[15], 10, 238)` and
+`h.a(String,int,int)` draws the prompt bar with the width literal `240`
+(`do(2, y, 240, 63, ...)`); the centred element in the same state uses the
+literals `240` and `320` directly.  So the prompt band is always at
+y=238..319: at 240x260 only its top rows are visible (17 colours), at 320x240
+only rows 238-239 (3 colours), and at 176x208 or 128x160 it is entirely
+below the visible area and the keyless run is black.
+
+The title is not stuck, though.  Any soft key dismisses the prompt, and the
+game then paints across the actual canvas: with
+`--keys "150:soft1,250:soft1,350:soft1,500:soft1,700:soft1"` the 176x208 run
+reaches a full-screen scene (114 colours in the last frame) with the same
+`paints`/`gfx`/bytecode counts as 240x320.  "The screen is black" and "the
+game is fine" were both true; what was missing was a key, not a fix.
+
+No runtime change follows from this.  The corpus policy already retries
+another size when a size yields a flat frame, so 240x320 is the size this
+title is reported at, which is where it shows its prompt and accepts a key.
+Evidence: `.local-tools/debug-runs/pet2-flat-frame-20261027/` (screenshots at
+240x320, 240x260, 320x240, 176x208 before/after the key, and the bytecode
+excerpts above).
