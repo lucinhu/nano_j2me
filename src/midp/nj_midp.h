@@ -241,6 +241,18 @@ void nj_midp_present(nj_vm *vm);
  */
 void nj_media_video_overlay(nj_vm *vm);
 
+/*
+ * Decode a movie's AMR-NB sound track (a 'samr' track in an MP4/3GP container,
+ * where one container sample may hold one AMR frame or a bundle of them) into
+ * the caller's PCM buffer: 8 kHz mono signed 16-bit little-endian, NJ_AMR_BLOCK
+ * samples per 20 ms frame.  Returns the number of AMR frames decoded, or 0 when
+ * the file has no usable AMR track, the track is corrupt, or the decoded PCM
+ * would not fit pcm_cap.  A video Player uses this to make its movie audible;
+ * tests can call it directly on a fixture.
+ */
+nj_u4 nj_media_movie_amr_decode(nj_vm *vm, const nj_u1 *data, nj_u4 size,
+                                nj_u1 *pcm, nj_u4 pcm_cap);
+
 /* Request a repaint of the current Displayable on the next frame. */
 void nj_midp_repaint(nj_vm *vm);
 

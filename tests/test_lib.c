@@ -49,6 +49,7 @@
 #include "nj_midp.h"
 #include "h263_clip.h"
 #include "m4v_clip.h"
+#include "m4v_audio_clip.h"
 #include "nj_midi.h" /* nj_class_load: the fixtures below are raw classes */
 #include "nj_midp.h"     /* nj_midp_image_pixels: assert on an Image's store */
 
@@ -3224,6 +3225,39 @@ static void test_video_control_mp4v(nj_vm *vm)
     (void)frames;
 }
 
+/*
+ * The video Player's movie-audio path in one function: a 3GP whose AMR-NB
+ * track has bundled frames (one container sample may carry several 20 ms
+ * frames) is turned into an "#!AMR" stream and decoded.  The synthetic
+ * dual-track fixture is enough for the container walk and the frame walk; the
+ * three real corpus movies are the same shape (109/624/172 samples holding
+ * 545/624/860 frames - the longer ones bundle five frames per sample).
+ */
+static void test_movie_amr_track(nj_vm *vm)
+{
+    nj_u1 pcm[(nj_u4)M4V_AV_AUDIO_FRAMES * 320u];
+    nj_u4 frames, i, nonzero = 0u;
+
+    memset(pcm, 0, sizeof(pcm));
+    frames = nj_media_movie_amr_decode(vm, m4v_av_3gp,
+                                       (nj_u4)sizeof(m4v_av_3gp), pcm,
+                                       (nj_u4)sizeof(pcm));
+    OK_MSG(frames != 0u,
+           "the double-track fixture's AMR track decodes (got %u frames)",
+           (unsigned)frames);
+    if (frames != 0u) {
+        for (i = 0u; i < frames * 320u; i++) {
+            if (pcm[i] != 0u) { nonzero++; }
+        }
+        OK_MSG(nonzero != 0u, "the decoded movie audio is not all silence");
+    }
+    /* A video-only buffer must give zero frames, not garbage. */
+    OK_MSG(nj_media_movie_amr_decode(vm, m4v_clip_3gp,
+                                     (nj_u4)sizeof(m4v_clip_3gp), pcm,
+                                     (nj_u4)sizeof(pcm)) == 0u,
+           "a movie without an AMR track reports no audio");
+}
+
 static void test_eight_bit_wav_is_widened(nj_vm *vm)
 {
     static const nj_u1 expect[8] = {
@@ -4729,6 +4763,7 @@ int main(void)
     test_video_player_mp4v(vm);
     test_video_control_mp4v(vm);
     test_video_playback_pacing(vm);
+    test_movie_amr_track(vm);
     test_amr_player_uses_the_installed_decoder(vm);
     test_mp3_player_streams_pcm(vm);
     test_large_wav();

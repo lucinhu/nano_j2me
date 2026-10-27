@@ -153,11 +153,15 @@ typedef struct media_stream_state {
 } media_stream_state;
 
 #if NJ_ENABLE_VIDEO
-/* What a video Player keeps in its holder: the sample iterator and decoder. */
+/* What a video Player keeps in its holder: the sample iterators and decoders. */
 typedef struct media_video_state {
-    nj_mp4 m;                           /* container position                 */
+    nj_mp4 m;                           /* video-track container position     */
     nj_av_dec *vdec;                    /* provider decoder                   */
     const nj_av_video_ops *vops;        /* the provider it came from          */
+#if NJ_ENABLE_AMR
+    nj_mp4 am;                          /* the movie's AMR-NB sound track     */
+    int    has_audio;                   /* am holds a usable samr track       */
+#endif
 } media_video_state;
 #define NJ_MEDIA_VIDEO_BYTES ((nj_u4)sizeof(media_video_state))
 #endif
@@ -189,6 +193,9 @@ typedef struct media_video_state {
 #define F_P_VFULL    "pVfull"      /* Z draw full screen */
 #define F_P_VVIS     "pVvis"       /* Z the control asked for the video to show */
 #define F_P_VSTART   "pVstart"     /* J wall-clock ms that sample 0 is due    */
+#define F_P_APCM    "pApcm"        /* [B the movie's AMR track decoded to PCM */
+#define F_P_APCMN   "pApcmn"       /* I PCM frames in pApcm                   */
+#define F_P_APUSH   "pApush"       /* I PCM frames already handed to the port */
 #define F_P_LISTEN   "pListen"     /* Ljava/util/Vector; */
 #define F_P_MASTER   "pTimeBase"   /* Ljavax/microedition/media/TimeBase; master clock or null */
 
@@ -1202,6 +1209,207 @@ static int media_restart(nj_vm *vm, nj_ref p)
 }
 
 #if NJ_ENABLE_VIDEO
+#if NJ_ENABLE_AMR
+/*
+ * The movie's own sound track.
+ *
+ * A video Player used to decode only the video track, so the corpus intros
+ * were silent.  The container iterator can select the AMR-NB sound track now
+ * (`nj_mp4_open_audio()`), and the whole track is decoded once, at start(),
+ * into a PCM byte array on the Player: a sample of a 3GP may hold one AMR
+ * frame or several (doom.3gp 1x20 ms, 1942/movie 5x20 ms per sample), so the
+ * samples are concatenated behind an "#!AMR" header and decoded by the same
+ * whole-file decoder the bare .amr players use - the frame walk then lives in
+ * one place instead of being repeated in three.
+ *
+ * The PCM is then handed to the port progressively from video_audio_pump(),
+ * on the same wall clock the picture follows.
+ */
+nj_u4 nj_media_movie_amr_decode(nj_vm *vm, const nj_u1 *data, nj_u4 size,
+                                 nj_u1 *pcm, nj_u4 pcm_cap)
+{
+    nj_mp4 it;
+    nj_mp4_sample s;
+    nj_u4 total = 0u, frames, off, got;
+    nj_u1 *host;
+
+    if (!vm || !data || !pcm ||
+        nj_mp4_open_audio(&it, data, size) != NJ_MP4_OK ||
+        it.codec != NJ_MP4_CODEC_SAMR || it.sample_count == 0u) {
+        return 0u;
+    }
+    nj_mp4_rewind(&it);
+    while (nj_mp4_next(&it, &s) == 1) {
+        if ((nj_u4)s.offset + s.size > size) {
+            return 0u;
+        }
+        total += s.size;
+    }
+    /* A movie's audio track is a few tens of kilobytes; anything past a
+     * megabyte is a table that lies, and it must not become an allocation. */
+    if (total == 0u || total > (1u << 20)) {
+        return 0u;
+    }
+    host = (nj_u1 *)nj_host_alloc(vm, 6u + (nj_size)total);
+    if (!host) {
+        return 0u;
+    }
+    memcpy(host, "#!AMR\n", 6u);
+    off = 6u;
+    nj_mp4_rewind(&it);
+    while (nj_mp4_next(&it, &s) == 1) {
+        memcpy(host + off, data + s.offset, s.size);
+        off += s.size;
+    }
+    frames = nj_amr_frames(host, off);
+    if (frames == 0u ||
+        frames * (nj_u4)(NJ_AMR_BLOCK * 2) > pcm_cap) {
+        nj_host_free(vm, host);
+        return 0u;              /* not decodable AMR after all: stay silent */
+    }
+    got = nj_amr_decode(host, off, pcm);
+    nj_host_free(vm, host);
+    return got == frames ? frames : 0u;
+}
+
+static int video_audio_decode(nj_vm *vm, nj_ref p, const media_video_state *st,
+                              nj_ref src)
+{
+    nj_u4 frames, cap;
+    nj_ref pcm;
+
+    (void)st;
+    /* Upper bound for the PCM array: 2000 AMR frames = 40 s of 8 kHz mono
+     * s16, more than twice the longest corpus movie (17.2 s).  The helper
+     * refuses a track that would need more, so a lying table cannot turn
+     * this into an enormous allocation, and a Player that does not start
+     * never allocates it at all. */
+    cap = 2000u * (nj_u4)NJ_AMR_BLOCK * 2u;
+    pcm = nj_byte_array_new(vm, cap);
+    if (!pcm) {
+        return 0;
+    }
+    frames = nj_media_movie_amr_decode(vm, src->u.bytes, src->length,
+                                       pcm->u.bytes, cap);
+    if (frames == 0u) {
+        return 0;               /* not decodable AMR after all: stay silent */
+    }
+    w_r(vm, p, F_P_APCM, "[B", pcm);
+    /* pApcmn counts PCM frames (samples), not AMR frames: the pump compares
+     * it against elapsed milliseconds * 8 kHz. */
+    w_i(vm, p, F_P_APCMN, (nj_s4)(frames * (nj_u4)NJ_AMR_BLOCK));
+    w_i(vm, p, F_P_APUSH, 0);
+    return 1;
+}
+
+/* start(): decode the sound track once and open the PCM device if we can. */
+static void video_audio_start(nj_vm *vm, nj_ref p)
+{
+    nj_ref hold = r_r(vm, p, F_P_DATA, "[B");
+    nj_ref src = r_r(vm, p, F_P_SRC, "[B");
+    media_video_state st;
+
+    if (hold && src && hold->length >= (nj_u4)sizeof(st)) {
+        memcpy(&st, hold->u.bytes, sizeof(st));
+        if (st.has_audio && r_r(vm, p, F_P_APCM, "[B") == NULL) {
+            (void)video_audio_decode(vm, p, &st, src);
+        }
+    }
+    if (r_i(vm, p, F_P_APCMN) > 0 && vm->port && vm->port->pcm_open &&
+        !r_z(vm, p, F_P_OPEN)) {
+        if (vm->port->pcm_open(vm->port->ud, (int)NJ_AMR_RATE, 1) == 0) {
+            w_z(vm, p, F_P_OPEN, 1);
+        }
+    }
+}
+
+/* stop()/end of media: close the device, keep the decoded PCM for a resume. */
+static void video_audio_stop(nj_vm *vm, nj_ref p)
+{
+    if (r_z(vm, p, F_P_OPEN)) {
+        if (vm->port && vm->port->pcm_close) {
+            vm->port->pcm_close(vm->port->ud);
+        }
+        w_z(vm, p, F_P_OPEN, 0);
+    }
+}
+
+/* Hand the port every PCM frame whose movie time has arrived. */
+static void video_audio_pump(nj_vm *vm, nj_ref p)
+{
+    nj_ref pcm;
+    nj_s4 total, pushed, vol;
+    nj_s8 start, target;
+    nj_s2 scratch[1024];
+    const nj_s2 *src;
+
+    if (!r_z(vm, p, F_P_OPEN) || !vm->port || !vm->port->pcm_write) {
+        return;
+    }
+    pcm = r_r(vm, p, F_P_APCM, "[B");
+    total = r_i(vm, p, F_P_APCMN);
+    pushed = r_i(vm, p, F_P_APUSH);
+    if (!pcm || total <= 0 || pushed >= total) {
+        return;
+    }
+    start = r_j(vm, p, F_P_VSTART);
+    if (nj_now_ms(vm) < start) {
+        return;
+    }
+    target = (nj_now_ms(vm) - start) * (nj_s8)NJ_AMR_RATE / 1000;
+    if (target > (nj_s8)total) {
+        target = total;
+    }
+    if (target <= (nj_s8)pushed) {
+        return;
+    }
+    vol = r_i(vm, p, F_P_VOLUME);
+    if (vol < 0) { vol = 0; }
+    if (vol > 100) { vol = 100; }
+    if (r_z(vm, p, F_P_MUTED)) { vol = 0; }
+    src = (const nj_s2 *)(const void *)pcm->u.bytes;
+    while ((nj_s8)pushed < target) {
+        int freev = vm->port->pcm_free
+                        ? vm->port->pcm_free(vm->port->ud) : (1 << 20);
+        int chunk, i, wrote;
+
+        if (freev <= 0) {
+            break;              /* the device is still playing what it has */
+        }
+        chunk = (int)((nj_s8)target - (nj_s8)pushed);
+        if (chunk > freev) { chunk = freev; }
+        if (chunk > (int)(sizeof(scratch) / sizeof(scratch[0]))) {
+            chunk = (int)(sizeof(scratch) / sizeof(scratch[0]));
+        }
+        for (i = 0; i < chunk; i++) {
+            scratch[i] = (nj_s2)((int)src[pushed + i] * (int)vol / 100);
+        }
+        wrote = vm->port->pcm_write(vm->port->ud, scratch, chunk);
+        if (wrote <= 0) {
+            break;
+        }
+        pushed += wrote;
+    }
+    w_i(vm, p, F_P_APUSH, pushed);
+}
+#else /* !NJ_ENABLE_AMR */
+static void video_audio_start(nj_vm *vm, nj_ref p)
+{
+    (void)vm;
+    (void)p;
+}
+static void video_audio_stop(nj_vm *vm, nj_ref p)
+{
+    (void)vm;
+    (void)p;
+}
+static void video_audio_pump(nj_vm *vm, nj_ref p)
+{
+    (void)vm;
+    (void)p;
+}
+#endif /* NJ_ENABLE_AMR */
+
 /*
  * Is the next sample of this movie due yet?
  *
@@ -1285,10 +1493,12 @@ static void media_video_step(nj_vm *vm, nj_ref p)
     if (r_i(vm, p, F_P_STATE) != 400) {
         return;
     }
+    video_audio_pump(vm, p);    /* the sound clock and the picture clock agree */
     if (!video_sample_due(vm, p)) {
         return;                 /* the movie's own clock has not reached it */
     }
     if (nj_mp4_next(&st.m, &smp) != 1) {
+        video_audio_stop(vm, p);
         w_i(vm, p, F_P_STATE, 300);
         fire(vm, p, "endOfMedia");
         media_unregister(vm, p);
@@ -2441,9 +2651,25 @@ NJFN(media_createPlayer_stream)
                             media_video_state st;
 
                             memset(&st, 0, sizeof(st));
+                            memset(&st, 0, sizeof(st));
                             st.m = m;
                             st.vdec = dec;
                             st.vops = vops;
+#if NJ_ENABLE_AMR
+                            /*
+                             * The movie's own sound track, if it has a usable
+                             * AMR-NB one.  Not decoding it yet: a title that
+                             * never starts the Player should not pay for the
+                             * PCM (up to ~300 KB for the corpus clips).
+                             */
+                            if (nj_mp4_open_audio(&st.am, barray_bytes(data),
+                                                  barray_len(data)) ==
+                                    NJ_MP4_OK &&
+                                st.am.codec == NJ_MP4_CODEC_SAMR &&
+                                st.am.sample_count > 0u) {
+                                st.has_audio = 1;
+                            }
+#endif
                             memcpy(holder->u.bytes, &st, sizeof(st));
                             w_r(vm, p, F_P_DATA, "[B", holder);
                             w_r(vm, p, F_P_SRC, "[B", data);
@@ -3005,6 +3231,7 @@ NJFN(player_start)
          */
         w_i(vm, self, F_P_LOOPDONE, 0);
         video_set_start(vm, self);
+        video_audio_start(vm, self);
         (void)media_register(vm, self);
     } else if (vm->port && vm->port->pcm_open) {
         w_i(vm, self, F_P_LOOPDONE, 0);
@@ -3043,6 +3270,8 @@ NJFN(player_stop)
             if (vm->port && vm->port->tone_stop) {
                 vm->port->tone_stop(vm->port->ud);
             }
+        } else if (r_i(vm, self, F_P_KIND) == 2) {
+            video_audio_stop(vm, self);
         } else if (r_z(vm, self, F_P_OPEN) && vm->port
                    && vm->port->pcm_close) {
             vm->port->pcm_close(vm->port->ud);
@@ -4415,6 +4644,9 @@ static const nj_builtin_field player_fields[] = {
     FLD(F_P_VFULL,    "Z", 0),
     FLD(F_P_VVIS,     "Z", 0),
     FLD(F_P_VSTART,   "J", 0),
+    FLD(F_P_APCM,     "[B", 0),
+    FLD(F_P_APCMN,    "I", 0),
+    FLD(F_P_APUSH,    "I", 0),
     FLD(F_P_OPEN,     "Z", 0),
     FLD(F_P_LISTEN,   "Ljava/util/Vector;", 0),
     FLD(F_P_MIDI,     "[B", 0),

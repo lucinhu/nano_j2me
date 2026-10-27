@@ -94,11 +94,12 @@ Playback now follows the movie's real-time clock on a capped port: sample n is
 shown at `start + n/fps` seconds, so a 15 fps clip takes its own 12.6 s at
 30 fps or 60 fps emulation alike (the pump used to show one sample per emulated
 frame, i.e. twice as fast at 30 fps).  An uncapped port keeps the deterministic
-one-sample-per-call behaviour the frame-comparison tools use.  One honest
-limitation remains: a video Player does not play the movie's own audio track yet
-(the corpus movies carry AMR), so those intros are silent; the container can
-select and iterate that track since round 234 (below), and pairing it into the
-Player's PCM path is the media-layer work in progress.
+one-sample-per-call behaviour the frame-comparison tools use.  The movie's own sound track is played too (see the AMR section below): at
+start() the Player decodes the whole track to PCM, and the pump hands it to the
+port on the same real-time clock the picture follows, with the Player's volume
+and mute applied.  The three corpus intros are no longer silent - the port's
+accepted-frame counter gains exactly the movie's PCM (1942 +87,200, Doom 3
++99,840, H.A.W.X. +137,160 of 137,600).
 
 ## Tests
 
@@ -974,12 +975,16 @@ remains:
   sample n is shown at `start + n/fps` seconds, restart-safe on stop()/start(),
   and an uncapped port keeps the deterministic one-sample-per-call behaviour
   the comparison tools rely on.
-- **Movie audio, media layer.**  The container half is in place: `nj_mp4` can
-  select and iterate the AMR-NB sound track of a 3GP
-  (`nj_mp4_open_audio()`, round 234 - see the section below), alongside the
-  video track it already selected.  A video Player still opens only the video
-  track, so the intros are silent; pairing both tracks in the media layer and
-  feeding the AMR frames to the PCM path is the remaining work.
+- **Movie audio (done).**  A video Player now decodes the movie's own AMR-NB
+  sound track as well: the container side (`nj_mp4_open_audio()`, round 234)
+  hands over the samples, `nj_media_movie_amr_decode()` concatenates their
+  frames behind an `#!AMR` header and decodes the whole track once at start(),
+  and the pump hands the PCM to the port on the same wall clock the picture
+  follows (volume and mute included; the port is opened at start and closed at
+  stop/end).  Measured by the port's accepted-frame counter, the three titles'
+  intros now add exactly the movie's PCM: 1942空战 +87,200 frames (= 545 AMR
+  frames), Doom 3 +99,840 (= 624), H.A.W.X. +137,160 of 137,600 (the run ends
+  a few frames before the clip).
 - **Other MPEG-4 Part 2 profiles.**  Data partitioning, reversible VLC,
   interlaced pictures, quarter sample, sprites, B-VOPs and the advanced
   Simple-Studio profile are still refused by the provider on purpose.  None of

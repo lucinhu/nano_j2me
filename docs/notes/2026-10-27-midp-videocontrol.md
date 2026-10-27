@@ -128,6 +128,15 @@ Measured on the real titles:
   and then hides it after the 12 s sleep; the movie now tracks real time, so
   the part the game leaves visible is at the right speed.
 
+The movies are no longer silent either: a video Player now decodes its own AMR-NB
+sound track (the container API selects and iterates it, `nj_media_movie_amr_decode()`
+turns the - possibly bundled - samples into PCM once at start(), and the pump
+feeds the port on the same clock as the picture, honouring volume/mute).  The
+port's accepted-frame counter shows exactly the movie's PCM after the change:
+1942空战 +87,200 PCM frames (545 AMR frames), Doom 3 +99,840 (624), H.A.W.X.
++137,160 of 137,600 (the replay ends a few frames before the clip).  Evidence:
+`.local-tools/debug-runs/m4v-videocontrol-20261027/movie-audio/`.
+
 The third corpus movie, H.A.W.X.'s `movie.3gp`, does reach the screen in-game
 after all: the "menu/download gate" was the title's startup "DO YOU WANT
 SOUND?" question waiting for a soft key.  With `--keys '460:soft2'` the intro
