@@ -2816,6 +2816,17 @@ run whose soft key lands at frame 60. It is a state the title's menu path can
 reach without having run its loader, not a missing runtime API; the remaining
 question is which of the two reference-side flows sets `dB` first.
 
+**Closed 2026-10-27 (round 91).**  The loader was not the problem and the
+`SDD\0`/`SFD\0` line of investigation was a red herring: the runtime advanced
+the loader state machine **twice per frame**.  The blocking-native frame pump
+ran a nested frame on top of the still-running `paint()`, the nested frame's
+tail cleared `painted_in_frame`, and the next pump pass re-entered `paint()` -
+so the state machine skipped the `d==1` step that loads the sample table and a
+later `paint()` read the NULL `dB`.  The title's own empty catch loop turned
+that NPE into the hang.  A paint is atomic now (`783bdc2`); see
+`docs/notes/2026-10-27-street-fighter-loader-hang.md` and the round-91 section
+at the end of this file.
+
 ## The store name that was a path (round 13, 2026-10-23)
 
 `阿尔卑斯牧场物语_7043` opens a record store called `/A/AConfig`.  JSR-118 asks
@@ -2874,13 +2885,16 @@ covered, stated plainly:
   with a generic key script; they find missing members and crashes, not
   mid-game regressions. Only a handful of titles were compared stage-by-stage
   against FreeJ2ME-Plus.
-- **Street Fighter II (街头霸王2冠军典藏版_1812) still hangs** when a soft key
+- **Street Fighter II (街头霸王2冠军典藏版_1812) hung** when a soft key
   arrives before its loader has run: the title's own `paint()` state machine
-  reaches `bZ()` with the sound buffer `dB` still null and stays there. The
-  runtime has been ruled out as the cause (all 11 resource lookups succeed,
-  heap size makes no difference, the reference completes the same replay); the
-  remaining work is to find which reference path initialises `dB` first. The
-  title is playable with a later or no early key.
+  reached `bZ()` with the sound buffer `dB` still null and stayed there.
+  **Closed 2026-10-27** (`783bdc2`) - and the "runtime ruled out" reading above
+  was wrong: the frame pump ran a nested frame on top of the still-running
+  `paint()` and then re-entered it, advancing the state machine twice and
+  skipping the step that fills `dB`.  A paint is atomic now, parks outside a
+  paint still get pumped frames (`check_timer_wait` keeps pinning that), and the
+  replay reaches the main title screen.  See
+  `docs/notes/2026-10-27-street-fighter-loader-hang.md`.
 - **Sound synthesis is approximate**, not a reference mixer: the audio path
   exists and titles run, but waveform/MIDI output has never been compared
   sample-by-sample against the reference or a device.
@@ -4617,3 +4631,42 @@ sound cannot have its audio rewritten under it.  The shortcut was reverted.
 So the fix stays the streaming parser: read the header, allocate PCM, copy the
 samples in chunks, never hold the whole container.  That is the version the next
 attempt should build.
+
+## The paint that ran twice (round 91, 2026-10-27)
+
+The Street Fighter II open item from round 15 is closed, and the previous
+conclusion was inverted: 街头霸王2冠军典藏版_1812's loader is correct, the
+runtime was advancing it twice.
+
+Mechanism, confirmed against the reference runtime:
+
+- Answering the opening "sound on/off" prompt starts a loader whose state
+  machine lives inside `GameCanvas.paint()`, and whose `d==0` step blocks in
+  `Thread.sleep()` between asset reads.
+- While that thread is parked in the blocking native, `vm_invoke()` pumps a
+  whole frame (the frame hook exists so a MIDlet that runs its own loop in
+  `startApp()` still presents).  The nested frame skipped painting because a
+  paint was already in flight, but its tail cleared `vm->painted_in_frame`;
+  the next pump iteration then saw "not painted yet" and re-entered `paint()`.
+- The loader contract is one state advance per paint.  The re-entry advanced
+  it `d: 0 -> 1 -> 2`, skipping the `d==1` branch that is the only writer of
+  `dA`/`dB` (`bB` pc 1220-1239); at `d==6` `bA() -> bZ()` read the NULL `dB`,
+  `paint()` threw `NullPointerException` at `c.bZ pc44`, and the title's own
+  catch handler (`pc72 pop; goto 73`) is a silent `goto` self-loop - hence a
+  hang rather than a crash report, at frame ~560-570.
+- The `SDD\0` vs `SFD\0` buffer difference the earlier rounds chased is the
+  title's own packed-asset container format, not a divergence.
+
+Fix (`783bdc2`): a paint is atomic.  `nj_midp_paint()` marks
+`vm->paint_active` for the whole call, blocking included (saved/restored so a
+synchronous `serviceRepaints()` still nests), and `nj_midp_frame()` refuses a
+frame the pump offers while it is set, leaving the pump's scheduler running for
+the other Java threads.  Parks outside a paint are untouched: `check_timer_wait`
+(TimerDemo's parked task driving five canvas paints) still passes.
+
+Evidence: the 600-frame replay with `400:soft1` returns 0, logs no
+`NullPointerException` and reaches the main title screen (126 colours, identical
+at frames 650/700), matching FreeJ2ME-Plus's same-key replay.  The budget is
+pinned at 600 on purpose - 550 passes even with the defect present.
+`tools/check_sf2_loader.sh` is ctest `check_sf2_loader`; `ctest` is 121/121 at
+the merge of `783bdc2` with the remote media/`lcdui` fixes.
