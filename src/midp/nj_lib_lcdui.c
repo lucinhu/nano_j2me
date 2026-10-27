@@ -5472,7 +5472,35 @@ static int nj_midp_pointer_inner(nj_vm *vm, int x, int y, int kind)
 /* ================================================================== */
 /* nj_midp_paint - one frame                                           */
 /* ================================================================== */
+static nj_status nj_midp_paint_body(nj_vm *vm);
+
+/*
+ * A paint is atomic, and it may block: a title that loads assets from paint()
+ * sleeps between the reads.  While that sleep runs, vm_invoke()'s pump offers
+ * a frame (nj_midp_frame() refuses it while vm->paint_active is set), and a
+ * title whose paint state machine is advanced twice hangs itself - see the
+ * comment at the field in nj_internal.h and
+ * docs/notes/2026-10-27-street-fighter-loader-hang.md.
+ *
+ * The flag is saved and restored rather than cleared so a synchronous paint
+ * requested from a UI callback (serviceRepaints) nests correctly.
+ */
 nj_status nj_midp_paint(nj_vm *vm)
+{
+    nj_status st;
+    nj_u1 prev;
+
+    if (!vm) {
+        return NJ_ERR;
+    }
+    prev = vm->paint_active;
+    vm->paint_active = 1u;
+    st = nj_midp_paint_body(vm);
+    vm->paint_active = prev;
+    return st;
+}
+
+static nj_status nj_midp_paint_body(nj_vm *vm)
 {
     if (!vm) {
         return NJ_ERR;

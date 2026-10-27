@@ -307,6 +307,24 @@ nj_status nj_midp_frame(nj_vm *vm)
     if (!vm) {
         return NJ_ERR;
     }
+    /*
+     * A paint is atomic: no frame may be pumped while one is being delivered.
+     *
+     * vm_invoke() pumps frames while a Java thread is parked in a blocking
+     * native (nj_vm.c, the frame hook) so a MIDlet that builds its UI inside
+     * startApp() - or runs its own loop there - still presents.  If the parked
+     * thread is inside paint() instead (a title that loads assets from paint()
+     * and sleeps between reads), that pump used to run a whole nested frame on
+     * top of the still-executing paint; the nested frame cleared
+     * vm->painted_in_frame, so the next pump pass re-entered paint() itself.
+     * 街头霸王2冠军典藏版_1812 keeps its loader state machine in paint() and
+     * hung because of exactly that.  Refuse the frame here; the pump keeps its
+     * scheduler running, so the other Java threads still make progress, and
+     * the blocked paint resumes normally.
+     */
+    if (vm->paint_active) {
+        return NJ_OK;
+    }
     if (!nj_midp_screen(vm)) {
         return NJ_ERR;
     }

@@ -660,6 +660,18 @@ struct nj_vm {
      * paint may itself ask for a repaint; without this the second one would
      * re-enter the paint path. */
     nj_u1         in_paint;
+    /* Set while a paint is being delivered, for the whole call - including a
+     * paint that blocks (a title that loads assets from paint() and sleeps
+     * between reads).  A frame must not be pumped while this is set: the
+     * blocking-native pump (vm_invoke, see the frame hook) used to run a whole
+     * nested frame on top of the still-running paint, and a second pump pass
+     * then re-entered paint() itself.  街头霸王2冠军典藏版_1812 found this:
+     * its paint() drives a load state machine, the re-entered paint advanced
+     * the machine twice and skipped the step that loads the sample table, so
+     * the next frame read a NULL buffer and the title spun in its own empty
+     * catch block.  A handset never re-enters paint(): the AMS paints on its
+     * own thread and a paint is atomic. */
+    nj_u1         paint_active;
     /* Set while a Java callback (key, pointer, command) is being delivered.
      * A title may call repaint() and then spin until paint() clears a field -
      * TombRaiderMIDlet.u(I)V does exactly that - which can never finish when

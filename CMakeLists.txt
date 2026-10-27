@@ -837,6 +837,21 @@ endif()
                          SKIP_RETURN_CODE 77)
   endif()
 
+  # 街头霸王2冠军典藏版_1812: answering the sound prompt starts a loader whose
+  # state machine lives in paint() and sleeps between asset reads.  The frame
+  # pump used to run a second frame on top of that paint, the title's loader
+  # advanced twice, skipped the step that fills its sample table and threw
+  # NullPointerException, which the title swallows in an empty catch loop.
+  # See docs/notes/2026-10-27-street-fighter-loader-hang.md.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_sf2_loader.sh)
+    add_test(NAME check_sf2_loader
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_sf2_loader.sh
+                     $<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/games)
+    set_tests_properties(check_sf2_loader PROPERTIES TIMEOUT 200
+                         SKIP_RETURN_CODE 77)
+  endif()
+
   # A title whose constructor outlasts the frame budget - both Need for Speed
   # titles sleep through a splash screen in <init>.  That is the run ending on
   # purpose and it has to say so: it used to report "cannot instantiate",
