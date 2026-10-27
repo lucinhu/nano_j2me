@@ -1132,6 +1132,15 @@ nj_add_test(test_clip tests/test_clip.c)
   nj_add_test(test_vm        tests/test_vm.c
               ${NJ_FIXTURES}/hello.jar HelloWorld "wideargs ok")
 
+  # A malformed class file must come back as a Java exception - never as a
+  # crash and never as a hang.  The fixture is checked in (tests/fixtures/ is
+  # generated, so it is force-added) and tools/make_fuzz_fixture.sh rebuilds
+  # it byte-for-byte; see tests/test_class_hardening.c for the mechanisms.
+  if(EXISTS ${NJ_FIXTURES}/hardening_malformed.jar)
+    nj_add_test(test_class_hardening tests/test_class_hardening.c
+                ${NJ_FIXTURES}/hardening_malformed.jar)
+  endif()
+
   # The JIT engine seam: the null engine must be observationally identical to
   # the interpreter, and an installed engine must actually be entered.  The test
   # self-skips when NJ_ENABLE_ENGINE=0, so both configurations stay green.
