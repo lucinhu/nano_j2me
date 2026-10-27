@@ -91,8 +91,10 @@ now play their intro movies; evidence in
 Two honest limitations remain.  The pump decodes **one sample per emulated
 frame**, not by the movie's own DTS/fps, so a 15 fps clip plays about twice as
 fast at 30 fps emulation (Doom 3's intro finishes in about 6.3 s while the game
-sleeps 12 s).  And a video Player does not play the movie's own audio track (the
-corpus movies carry AMR), so those intros are silent.
+sleeps 12 s).  And a video Player does not play the movie's own audio track yet
+(the corpus movies carry AMR), so those intros are silent; the container can
+select and iterate that track since round 234 (below), and pairing it into the
+Player's PCM path is the media-layer work in progress.
 
 ## Tests
 
@@ -234,7 +236,7 @@ it and so the registry is uniform; switching the Player over is the next step.
 | MP3 | `nj_av_audio_mp3` | `audio/mpeg`, streamed through a holder | pulls PCM per frame | `tests/test_lib.c` (real samples reach the port), `tests/test_avcodec.c` (a port's decoder wins) |
 | AMR-NB | `nj_av_audio_amr` | `audio/amr` through the provider (an installed decoder wins); the `samr` track inside MP4 keeps the direct path | one-shot PCM | `tests/test_amr.c` (byte-identical to `nj_amr_decode()`), `tests/test_lib.c` (a port-installed decoder produces the Player's samples) |
 | H.263 | `nj_av_video_h263` | `video/3gpp`: Player is built with the demuxer, decoder and one RGB565 frame | **next round**: decode a sample per emulated frame | decoder verified against ffmpeg in `tests/test_h263.c`; Player creation checked on a real 176x144 clip (kind=2, 10 samples) |
-| MP4/3GP | `nj_mp4` demultiplexer | `video/3gpp` opens the movie track | - | sample iterator API tested in `tests/test_h263.c` |
+| MP4/3GP | `nj_mp4` demultiplexer | `video/3gpp` opens the movie track; the sound track is reachable through `nj_mp4_open_audio()` | - | video sample iterator tested in `tests/test_h263.c`; audio track selection/iteration in `tests/test_m4v.c` |
 
 Trim costs, one switch at a time against a matched base (hosted CLI `.text`,
 Release, tests off): AMR 49,536 B, MP3 33,600 B, VIDEO 31,552 B; see
@@ -967,10 +969,12 @@ remains:
   twice as fast at 30 fps emulation.  Pacing by timestamps is the next
   refinement; it needs the pump to be time-driven without slowing the emulator
   down.
-- **Movie audio.**  A video Player does not open the movie's own audio track
-  (the corpus movies carry AMR), so the intros are silent.  The audio side of
-  the Player exists (AMR decodes to PCM); it is the video Player's demuxer
-  choice - one track - that has to learn to pair both.
+- **Movie audio, media layer.**  The container half is in place: `nj_mp4` can
+  select and iterate the AMR-NB sound track of a 3GP
+  (`nj_mp4_open_audio()`, round 234 - see the section below), alongside the
+  video track it already selected.  A video Player still opens only the video
+  track, so the intros are silent; pairing both tracks in the media layer and
+  feeding the AMR frames to the PCM path is the remaining work.
 - **Other MPEG-4 Part 2 profiles.**  Data partitioning, reversible VLC,
   interlaced pictures, quarter sample, sprites, B-VOPs and the advanced
   Simple-Studio profile are still refused by the provider on purpose.  None of
@@ -1053,3 +1057,49 @@ unaffected.  When regenerating fixture hashes, build the C-only decoder:
 Tests and evidence: `test_m4v` is 118 checks; the fixtures and comparison output
 are under `.local-tools/debug-runs/m4v-boundaries-20261027/`; the narrative is
 `docs/notes/2026-10-27-m4v-decode-boundaries.md`.
+
+## The container reaches the movie's own audio track (round 234)
+
+The three corpus movies carry an AMR-NB (`samr`) sound track next to the video
+track; the Player only ever saw the video one.  `nj_mp4` now selects either
+kind:
+
+    #define NJ_MP4_TRACK_VIDEO 0
+    #define NJ_MP4_TRACK_AUDIO 1
+    int nj_mp4_open_audio(nj_mp4 *, const void *, nj_u4);
+    int nj_mp4_open_track(nj_mp4 *, const void *, nj_u4, int kind);
+
+`nj_mp4_open()` stays the video-only entry point, with the same behaviour and
+error codes.  The audio entry fills the same iterator (`timescale`, `duration`,
+`sample_count`, and `nj_mp4_next()` yields offset/size/dts/duration/key from the
+shared stsz/stsc/stco/stts machinery) plus `channels`/`sample_rate`; it
+distinguishes `NJ_MP4_ERR_NO_AUDIO` (-5, no sound track), `NJ_MP4_ERR_AUDIO_CODEC`
+(-6, a sound track that is not AMR-NB) and `NJ_MP4_ERR_FORMAT` (damaged or
+inconsistent tables).  The parser is still allocation-free, bounds checked and
+global-free; the only structural change is that the sample-entry fixed part is
+laid out after the trak's `hdlr` is known (78-byte visual vs 28-byte audio
+entry), because `hdlr` may follow `minf`.
+
+The three movies, verified with `tools/mp4_audio_stats.c` against ffprobe:
+
+| Movie | codec | timescale | duration | samples | first sample | total |
+| --- | --- | --- | --- | --- | --- | --- |
+| `1942.3gp` | `samr` | 8000 | 87200 (10.880 s) | 109 | off 3703, size 160 | 17440 B |
+| `vid/doom.3gp` | `samr` | 8000 | 99840 (12.480 s) | 624 | off 28, size 32 | 19968 B |
+| `movie.3gp` | `samr` | 8000 | 137600 (17.200 s) | 172 | off 40, size 135 | 23220 B |
+
+Two of the files declare `ChannelCount = 2` even though AMR-NB is mono (ffprobe
+normalises to 1); the iterator reports the container's value and AMR callers
+must treat the stream as mono.  The sample granularity is not uniform either:
+`doom.3gp` stores one 20 ms AMR frame per sample, while `1942.3gp` and
+`movie.3gp` store 100 ms per sample (five AMR frames each, stts delta 800), so
+the audio path has to split a sample into frames by the AMR ToC.  The first
+sample of each file parses exactly into {160 = 5 x 32}, {32 = 1 x 32} and
+{135 = 5 x 27} byte frames.
+
+Tests: a real 1025-byte dual-track fixture (`tests/m4v_audio_clip.h`, generated
+by `tools/gen_m4v_audio_clip.py`) drives selection, iteration, rewind, the
+video track of the same buffer, and the NO_AUDIO/AUDIO_CODEC/FORMAT cases;
+`test_m4v` is 126 checks.  Evidence and the full table:
+`.local-tools/debug-runs/m4v-audio-20261027/`, narrative in
+`docs/notes/2026-10-27-m4v-container-audio-track.md`.
