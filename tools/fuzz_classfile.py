@@ -19,21 +19,26 @@ A third, quieter one: a fixed 6 s budget per case.  Run under `ctest -j` it
 failed twice in a row while passing alone in 10 s, because a busy machine
 makes any absolute timeout a coin flip.  There is now a control run first and
 the budget is derived from it.
+
+A fourth: the 'methodcount' and 'fieldcount' kinds used to write at fixed
+offsets 6 and 4 - which are the class-file version numbers, not the counts.
+They reported coverage the tool did not have.  The counts and the structural
+kinds below now come from an actual walk of the constant pool and the method
+attributes, so 'methodcount', 'fieldcount', 'exc_handler' and 'super_self'
+mutate what they claim to mutate.
+
+WHAT THE MUTATIONS EXERCISE (all fixed on 2026-10-27; see
+docs/notes/2026-10-27-malformed-class-hangs.md and
+tests/test_class_hardening.c): an exception table entry whose handler resumes
+past the end of the code array used to livelock the unwind loop; getfield /
+putfield / invokespecial receivers were dereferenced without checking they are
+object references; and a class naming itself as its superclass or
+super-interface recursed the linker until the C stack died.  All of these now
+raise a Java exception.  The tool is a ctest gate: `crashed` or `HUNG` is a
+failure.
 """
 import os, random, struct, subprocess, sys, tempfile, time, zipfile
 
-#
-#     tools/fuzz_classfile.py [binary] [cases]
-#
-# WHAT IT FOUND, and why it is not a CI gate yet.  Half of all mutations HANG
-# the runtime rather than erroring - 18 of 36 - and a malformed JAR that spins
-# forever is a denial of service.  One mechanism is fixed (an unbounded operand
-# stack let a frame walk into its neighbour's slots and dereference class bytes
-# as a pointer, obj=0x4e4a484800010000, i.e. the ASCII "NJHH"); others remain
-# and are recorded in docs/COMPATIBILITY.md.
-#
-# Until they are fixed this stays a tool rather than a test: a gate that hangs
-# is worse than no gate.
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 def pick_source():
@@ -67,6 +72,97 @@ cls_name = line.split(',')[-1].strip().replace('.', '/') + '.class'
 base = d[cls_name]
 print('mutating', cls_name, len(base), 'bytes,', N, 'cases')
 
+#
+# Class-file layout walker.  The structural mutation kinds need real offsets,
+# not guesses: the constant pool has variable-length entries, so every count,
+# the class header and the Code attributes have to be found by walking the file
+# the same way the loader does.
+#
+def class_layout(m):
+    try:
+        if m[:4] != b'\xca\xfe\xba\xbe':
+            return None
+        cp_count = struct.unpack_from('>H', m, 8)[0]
+        if cp_count == 0:
+            return None
+        off = 10
+        i = 1
+        utf8 = {}
+        while i < cp_count:
+            tag = m[off]
+            off += 1
+            if tag == 1:
+                ln = struct.unpack_from('>H', m, off)[0]
+                off += 2
+                utf8[i] = m[off:off + ln]
+                off += ln
+            elif tag in (3, 4):
+                off += 4
+            elif tag in (5, 6):      # long/double take two constant slots
+                off += 8
+                i += 1
+            elif tag in (7, 8, 16, 19, 20):
+                off += 2
+            elif tag in (9, 10, 11, 12, 17, 18):
+                off += 4
+            elif tag == 15:
+                off += 3
+            else:
+                return None
+            i += 1
+        cp_end = off
+        this_off = cp_end + 2
+        super_off = cp_end + 4
+        ifc_count_off = cp_end + 6
+        ifc_count = struct.unpack_from('>H', m, ifc_count_off)[0]
+        p = ifc_count_off + 2 + 2 * ifc_count
+
+        def skip_attrs(pos, count):
+            for _ in range(count):
+                ln = struct.unpack_from('>I', m, pos + 2)[0]
+                pos += 6 + ln
+            return pos
+
+        field_count_off = p
+        field_count = struct.unpack_from('>H', m, p)[0]
+        p += 2
+        for _ in range(field_count):
+            acount = struct.unpack_from('>H', m, p + 6)[0]
+            p = skip_attrs(p + 8, acount)
+
+        method_count_off = p
+        method_count = struct.unpack_from('>H', m, p)[0]
+        p += 2
+        exceptions = []          # (code_len, [(start_off, handler_off)])
+        for _ in range(method_count):
+            acount = struct.unpack_from('>H', m, p + 6)[0]
+            p += 8
+            for _ in range(acount):
+                aname_i = struct.unpack_from('>H', m, p)[0]
+                alen = struct.unpack_from('>I', m, p + 2)[0]
+                body = p + 6
+                if utf8.get(aname_i) == b'Code' and body + 12 <= len(m):
+                    code_len = struct.unpack_from('>I', m, body + 4)[0]
+                    ex_count = struct.unpack_from('>H', m, body + 8 + code_len)[0]
+                    ex_base = body + 10 + code_len
+                    ent = []
+                    for k in range(ex_count):
+                        s = ex_base + 8 * k
+                        ent.append((s, s + 4))       # start_pc, handler_pc
+                    exceptions.append((code_len, ent))
+                p = body + alen
+        return {
+            'this_idx': struct.unpack_from('>H', m, this_off)[0],
+            'super_off': super_off,
+            'field_count_off': field_count_off,
+            'method_count_off': method_count_off,
+            'exceptions': exceptions,
+        }
+    except (struct.error, IndexError):
+        return None
+
+LAYOUT = class_layout(base)
+
 def build(over):
     p = tempfile.mktemp(suffix='.jar')
     with zipfile.ZipFile(p, 'w', zipfile.ZIP_DEFLATED) as z:
@@ -74,8 +170,14 @@ def build(over):
             z.writestr(n, over.get(n, data))
     return p
 
+# Keep the per-kind first pass (i < len(KINDS) gives every kind one case) but
+# only offer the structural kinds when the fixture could actually be walked.
 KINDS = ['truncate','byte','cpcount','methodcount','cp_tag','attrlen','u2',
          'fieldcount','tail']
+if LAYOUT is not None:
+    KINDS.insert(3, 'super_self')
+    if any(ent for (_cl, ent) in LAYOUT['exceptions']):
+        KINDS.insert(4, 'exc_handler')
 
 def mutate(kind):
     m = bytearray(base)
@@ -86,9 +188,31 @@ def mutate(kind):
     elif kind == 'cpcount':
         struct.pack_into('>H', m, 8, random.choice([0,1,2,0xFFFF,0xFFFE]))
     elif kind == 'methodcount':
-        struct.pack_into('>H', m, 6, random.choice([0,0xFFFF,0x7FFF]))
+        struct.pack_into('>H', m, LAYOUT['method_count_off'],
+                         random.choice([0,1,2,0xFFFF,0x7FFF]))
     elif kind == 'fieldcount':
-        struct.pack_into('>H', m, 4, random.choice([0,0xFFFF]))
+        struct.pack_into('>H', m, LAYOUT['field_count_off'],
+                         random.choice([0,1,0xFFFF,0x7FFF]))
+    elif kind == 'super_self':
+        # A class that names itself as its superclass: the linker used to
+        # recurse into itself until the C stack ran out (SIGSEGV).
+        struct.pack_into('>H', m, LAYOUT['super_off'], LAYOUT['this_idx'])
+    elif kind == 'exc_handler':
+        code_len, ent = random.choice([e for e in LAYOUT['exceptions'] if e[1]])
+        start_off, handler_off = random.choice(ent)
+        what = random.randrange(4)
+        if what == 0:
+            # Resume one past the last bytecode: the unwind livelock.
+            struct.pack_into('>H', m, handler_off, code_len)
+        elif what == 1:
+            # Empty handler range: can never be entered, never empty in a
+            # valid class.
+            struct.pack_into('>H', m, start_off, code_len)
+            struct.pack_into('>H', m, start_off + 2, code_len)
+        else:
+            # Handler somewhere outside the method entirely.
+            struct.pack_into('>H', m, handler_off,
+                             random.choice([0xFFFF, code_len + 1, code_len + 7]))
     elif kind == 'cp_tag':
         struct.pack_into('>B', m, 10, random.choice([0,2,17,18,19,20,99,255]))
     elif kind == 'attrlen':
