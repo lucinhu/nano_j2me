@@ -571,6 +571,221 @@ done:
     nj_vm_destroy(vm); nj_port_shutdown(&port);
 }
 
+/*
+ * VolumeControl and the audible position.
+ *
+ * The port receives samples for one Player, so the level has to be applied
+ * before the write: a volume that only reaches a platform synthesiser leaves
+ * every sampled sound at full scale.  And F_P_PUSHED is the write frontier,
+ * not the speaker - a device queue can hold most of a second, so getMediaTime()
+ * used to run that far ahead and a stop()/start() resumed past the tail the
+ * user never heard.
+ */
+static int vol_cap, vol_pushed, vol_consumed, vol_opens, vol_closes;
+static nj_s2 vol_output[1024];
+static int vol_written;
+
+static int vol_open(void *ud, int rate, int ch)
+{
+    (void)ud; (void)rate; (void)ch;
+    vol_opens++;
+    vol_pushed = vol_consumed = 0;
+    return 0;
+}
+static int vol_room(void *ud)
+{
+    (void)ud;
+    return vol_cap - (vol_pushed - vol_consumed);
+}
+static int vol_queued(void *ud)
+{
+    (void)ud;
+    return vol_pushed - vol_consumed;
+}
+static int vol_write(void *ud, const nj_s2 *data, int frames)
+{
+    int room = vol_room(ud), i;
+    (void)ud;
+    if (frames > room) frames = room;
+    if (frames <= 0) return 0;
+    for (i = 0; i < frames && vol_written < 1024; i++) {
+        vol_output[vol_written++] = data[i];
+    }
+    vol_pushed += frames;
+    return frames;
+}
+static void vol_close(void *ud) { (void)ud; vol_closes++; }
+
+static int player_state(nj_vm *vm, nj_ref p)
+{
+    nj_value ret;
+    CHECK(nj_call(vm, p, PLAYER, "getState", "()I", NULL, &ret) == NJ_OK);
+    return ret.i;
+}
+static long player_time(nj_vm *vm, nj_ref p)
+{
+    nj_value ret;
+    CHECK(nj_call(vm, p, PLAYER, "getMediaTime", "()J", NULL, &ret) == NJ_OK);
+    return (long)ret.j;
+}
+static void play_to_end(nj_vm *vm, nj_ref p)
+{
+    int i;
+    for (i = 0; i < 64 && player_state(vm, p) == 400; i++) {
+        if (vol_consumed < vol_pushed) {
+            vol_consumed += 16;
+            if (vol_consumed > vol_pushed) vol_consumed = vol_pushed;
+        }
+        nj_media_frame(vm);
+    }
+    CHECK(player_state(vm, p) == 300);
+}
+
+/* A mono 16-bit ramp WAV: sample i is 1000 + i * 7. */
+static nj_ref make_ramp_player(nj_vm *vm, int frames, int rate)
+{
+    nj_u4 size = (nj_u4)frames * 2u;
+    nj_ref bytes = nj_byte_array_new(vm, 44u + size);
+    nj_ref stream, player = NULL;
+    nj_value a[2], ret;
+    nj_u1 *w;
+    int i;
+
+    if (!bytes) return NULL;
+    w = nj_array_data(bytes);
+    memset(w, 0, 44u);
+    memcpy(w, "RIFF", 4);
+    put_u32(w + 4, 36u + size);
+    memcpy(w + 8, "WAVEfmt ", 8);
+    put_u32(w + 16, 16u);
+    w[20] = 1; w[21] = 0;
+    w[22] = 1; w[23] = 0;
+    put_u32(w + 24, (nj_u4)rate);
+    put_u32(w + 28, (nj_u4)rate * 2u);
+    w[32] = 2; w[33] = 0;
+    w[34] = 16; w[35] = 0;
+    memcpy(w + 36, "data", 4);
+    put_u32(w + 40, size);
+    for (i = 0; i < frames; i++) {
+        int v = 1000 + i * 7;
+        w[44 + i * 2] = (nj_u1)v;
+        w[45 + i * 2] = (nj_u1)((unsigned)v >> 8);
+    }
+    stream = nj_object_new(vm, "java/io/ByteArrayInputStream");
+    if (!stream) return NULL;
+    a[0].r = bytes;
+    if (nj_call_special(vm, stream, "java/io/ByteArrayInputStream",
+                        "<init>", "([B)V", a, NULL) != NJ_OK) {
+        return NULL;
+    }
+    a[0].r = stream; a[1].r = NULL;
+    if (nj_call_static(vm, "javax/microedition/media/Manager", "createPlayer",
+            "(Ljava/io/InputStream;Ljava/lang/String;)"
+            "Ljavax/microedition/media/Player;", a, &ret) != NJ_OK) {
+        return NULL;
+    }
+    player = nj_root(vm, ret.r);
+    return player;
+}
+
+static nj_ref get_volume_control(nj_vm *vm, nj_ref p)
+{
+    nj_value a[1], ret;
+    a[0].r = nj_string_new(vm, "VolumeControl");
+    if (nj_call(vm, p, PLAYER, "getControl",
+            "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
+            a, &ret) != NJ_OK || ret.r == NULL) {
+        return NULL;
+    }
+    return ret.r;
+}
+
+static void test_volume_and_position(void)
+{
+    nj_port port;
+    nj_vm *vm;
+    nj_ref p, ctl;
+    nj_value a[1];
+    int i, base;
+
+    vol_cap = 64;
+    vol_pushed = vol_consumed = 0;
+    vol_opens = vol_closes = 0;
+    vol_written = 0;
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    port.pcm_open = vol_open;
+    port.pcm_write = vol_write;
+    port.pcm_free = vol_room;
+    port.pcm_queued = vol_queued;
+    port.pcm_close = vol_close;
+    vm = nj_vm_create(&port, 2 * 1024 * 1024);
+    CHECK(vm != NULL);
+    if (!vm) { nj_port_shutdown(&port); return; }
+
+    /* a) level 50: the port sees scaled samples, not full-scale ones. */
+    p = make_wav_player(vm, 64, 8000, (nj_s2)10000);
+    CHECK(p != NULL);
+    if (!p) goto done;
+    CHECK(nj_call(vm, p, PLAYER, "realize", "()V", NULL, NULL) == NJ_OK);
+    ctl = get_volume_control(vm, p);
+    CHECK(ctl != NULL);
+    a[0].i = 50;
+    CHECK(nj_call(vm, ctl, "javax/microedition/media/control/VolumeControl",
+                  "setLevel", "(I)I", a, NULL) == NJ_OK);
+    CHECK(nj_call(vm, p, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    CHECK(vol_written == 64);
+    for (i = 0; i < 64; i++) CHECK(vol_output[i] == 5000);
+    CHECK(player_time(vm, p) == 0);         /* all 64 frames still queued */
+    play_to_end(vm, p);
+
+    /* b) mute: the port sees silence. */
+    vol_pushed = vol_consumed = 0;
+    vol_written = 0;
+    CHECK(nj_call(vm, p, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
+    p = make_wav_player(vm, 32, 8000, (nj_s2)10000);
+    CHECK(p != NULL);
+    if (!p) goto done;
+    CHECK(nj_call(vm, p, PLAYER, "realize", "()V", NULL, NULL) == NJ_OK);
+    ctl = get_volume_control(vm, p);
+    CHECK(ctl != NULL);
+    a[0].i = 1;
+    CHECK(nj_call(vm, ctl, "javax/microedition/media/control/VolumeControl",
+                  "setMute", "(Z)V", a, NULL) == NJ_OK);
+    CHECK(nj_call(vm, p, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    CHECK(vol_written == 32);
+    for (i = 0; i < 32; i++) CHECK(vol_output[i] == 0);
+    play_to_end(vm, p);
+    CHECK(nj_call(vm, p, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
+
+    /* c) the media time is the audible position, and a stop/start resumes
+     * from it rather than from the write frontier. */
+    vol_pushed = vol_consumed = 0;
+    vol_written = 0;
+    p = make_ramp_player(vm, 256, 8000);
+    CHECK(p != NULL);
+    if (!p) goto done;
+    CHECK(nj_call(vm, p, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    CHECK(player_time(vm, p) == 0);          /* 64 frames handed over, none heard */
+    vol_consumed = 64;                      /* the queue just drained */
+    nj_media_frame(vm);                     /* tops the device up again */
+    CHECK(vol_pushed == 128);
+    CHECK(player_time(vm, p) == 8000);      /* 64 frames really played */
+    base = vol_written;
+    CHECK(nj_call(vm, p, PLAYER, "stop", "()V", NULL, NULL) == NJ_OK);
+    CHECK(player_state(vm, p) == 300);
+    CHECK(player_time(vm, p) == 8000);      /* kept: the unplayed tail is gone */
+    CHECK(nj_call(vm, p, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    CHECK(vol_written > base);
+    /* The resume wrote the queue from frame 64 on, not from frame 0. */
+    CHECK(vol_output[base] == (nj_s2)(1000 + 64 * 7));
+    nj_media_frame(vm);
+    CHECK(nj_call(vm, p, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
+    CHECK(vol_opens >= 2);
+done:
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+}
+
 int main(void)
 {
     run_case(1, 0); run_case(2, 0); run_case(1, 3); run_case(2, 3);
@@ -581,6 +796,7 @@ int main(void)
     test_midi_reacquire_after_deallocate();
     test_device_handover();
     test_eof_drain();
+    test_volume_and_position();
     printf("media replay: %d failures\n", failures);
     return failures ? 1 : 0;
 }

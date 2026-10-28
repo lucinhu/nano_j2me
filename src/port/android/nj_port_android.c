@@ -2731,6 +2731,25 @@ static int android_pcm_free(void *ud)
     return space;
 }
 
+/* Source frames written into the ring that the renderer has not consumed.
+ * One ring slot is one source frame: android_audio_render() advances the read
+ * index with pcm_step = src_rate / out_rate, so a 22 kHz mono stream consumes
+ * one slot per output frame pair at 44.1 kHz. */
+static int android_pcm_queued(void *ud)
+{
+    android_state *s = AS(ud);
+    android_audio *a = s->audio;
+    int used;
+
+    if (!a) {
+        return 0;
+    }
+    pthread_mutex_lock(&a->lock);
+    used = (a->wr + ANDROID_AUDIO_RING - a->rd) % ANDROID_AUDIO_RING;
+    pthread_mutex_unlock(&a->lock);
+    return used;
+}
+
 static void android_pcm_close(void *ud)
 {
     android_state *s = AS(ud);
@@ -4367,6 +4386,7 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     out->pcm_write = android_pcm_write;
     out->pcm_close = android_pcm_close;
     out->pcm_free = android_pcm_free;
+    out->pcm_queued = android_pcm_queued;
     /*
      * MIDI goes to the platform's synthesizer.  All eight are set, and the
      * port still works when the Java class is missing: midi_open answers NULL

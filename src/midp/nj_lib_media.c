@@ -945,6 +945,109 @@ static void media_midi_release(nj_vm *vm, nj_ref player)
     w_z(vm, player, F_P_OPEN, 0);
 }
 
+/*
+ * The port receives samples for one Player, so a Player's VolumeControl level
+ * has to be applied here: the PCM device is shared and knows nothing about
+ * which Player a buffer came from.  Muting is level 0.  A buffer larger than
+ * the staging buffer is written in pieces; a short write leaves the rest in
+ * the source for the next frame, exactly like pcm_write() itself.
+ */
+#define MEDIA_PCM_STAGE 1024
+
+static int media_pcm_write(nj_vm *vm, nj_ref p, const nj_s2 *src, int frames)
+{
+    nj_s2 stage[MEDIA_PCM_STAGE * 2];
+    nj_s4 vol = r_i(vm, p, F_P_VOLUME);
+    nj_s4 ch = r_i(vm, p, F_P_CHAN);
+    int done = 0;
+
+    if (ch <= 0) {
+        ch = 1;
+    }
+    if (ch > 2) {
+        ch = 2;
+    }
+    if (r_z(vm, p, F_P_MUTED)) {
+        vol = 0;
+    }
+    if (vol >= 100) {
+        return vm->port->pcm_write(vm->port->ud, src, frames);
+    }
+    if (vol < 0) {
+        vol = 0;
+    }
+    while (done < frames) {
+        int n = frames - done;
+        int i, took;
+
+        if (n > MEDIA_PCM_STAGE) {
+            n = MEDIA_PCM_STAGE;
+        }
+        for (i = 0; i < n * (int)ch; i++) {
+            stage[i] = (nj_s2)(((int)src[(size_t)done * (size_t)ch
+                                         + (size_t)i] * (int)vol) / 100);
+        }
+        took = vm->port->pcm_write(vm->port->ud, stage, n);
+        if (took <= 0) {
+            break;
+        }
+        done += took;
+        if (took < n) {
+            break;              /* device full: the rest stays in the source */
+        }
+    }
+    return done;
+}
+
+/*
+ * Where playback actually is.  F_P_PUSHED is the write frontier - everything
+ * up to it has been handed to the port - but a device queue can hold nearly a
+ * second.  A port that reports its unplayed frames lets the media time (and a
+ * later start() after stop()) land on the audible position instead, which is
+ * what a title pausing its music expects.
+ */
+static nj_s4 media_played(nj_vm *vm, nj_ref p)
+{
+    nj_s4 pushed = r_i(vm, p, F_P_PUSHED);
+
+    if (vm->port && vm->port->pcm_queued && pushed > 0) {
+        nj_s4 queued = vm->port->pcm_queued(vm->port->ud);
+        if (queued > 0) {
+            pushed = (queued >= pushed) ? 0 : pushed - queued;
+        }
+    }
+    return pushed;
+}
+
+static void media_note_pushed(nj_vm *vm, nj_ref p, nj_s4 pushed)
+{
+    nj_s4 rate = r_i(vm, p, F_P_RATE);
+
+    w_i(vm, p, F_P_PUSHED, pushed);
+    if (rate > 0) {
+        w_j(vm, p, F_P_TIME,
+            (nj_s8)media_played(vm, p) * 1000000LL / (nj_s8)rate);
+    }
+}
+
+/* stop()/deallocate() throw the device queue away, so the position has to
+ * move back to the last frame anyone actually heard. */
+static void media_sync_played(nj_vm *vm, nj_ref p)
+{
+    nj_s4 rate, played;
+
+    if (!vm->port || !vm->port->pcm_queued) {
+        return;
+    }
+    rate = r_i(vm, p, F_P_RATE);
+    played = media_played(vm, p);
+    w_i(vm, p, F_P_PUSHED, played);
+    if (rate > 0) {
+        w_j(vm, p, F_P_TIME,
+            (nj_s8)played * 1000000LL / (nj_s8)rate);
+    }
+}
+
 static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
 {
     nj_ref data = r_r(vm, player, F_P_DATA, "[B");
@@ -1027,7 +1130,7 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
         if (want > (nj_u4)max_frames) {
             want = (nj_u4)max_frames;
         }
-        took = vm->port->pcm_write(vm->port->ud,
+        took = media_pcm_write(vm, player,
             (const nj_s2 *)(const void *)(scratch + state.offset * (nj_u4)chan * 2u),
             (int)want);
         if (took < 0 || (nj_u4)took > want) {
@@ -1036,9 +1139,7 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
         state.pending -= (nj_u4)took;
         state.offset += (nj_u4)took;
         memcpy((void *)b, &state, sizeof(state));
-        w_i(vm, player, F_P_PUSHED, done + took);
-        w_j(vm, player, F_P_TIME,
-            (nj_s8)(done + took) * 1000000LL / (nj_s8)r_i(vm, player, F_P_RATE));
+        media_note_pushed(vm, player, done + took);
         return took;
     }
 #endif /* NJ_ENABLE_MP3 */
@@ -1081,7 +1182,7 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
         }
         want = state.pending;
         if (want > (nj_u4)max_frames) want = (nj_u4)max_frames;
-        took = vm->port->pcm_write(vm->port->ud,
+        took = media_pcm_write(vm, player,
             (const nj_s2 *)(const void *)(scratch + state.offset * (nj_u4)chan * 2u),
             (int)want);
         /* A short/zero write leaves a suffix to retry. In particular, start()
@@ -1092,9 +1193,7 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
         state.pending -= (nj_u4)took;
         state.offset += (nj_u4)took;
         memcpy((void *)b, &state, sizeof(state));
-        w_i(vm, player, F_P_PUSHED, done + took);
-        w_j(vm, player, F_P_TIME,
-            (nj_s8)(done + took) * 1000000LL / (nj_s8)r_i(vm, player, F_P_RATE));
+        media_note_pushed(vm, player, done + took);
         return took;
     }
 #endif /* NJ_ENABLE_MIDI */
@@ -1116,20 +1215,16 @@ static int pcm_push(nj_vm *vm, nj_ref player, int max_frames)
      * aliasing violation in practice because the buffer came from the Java heap
      * and is only ever read here, but it is stated rather than assumed.
      */
-    took = vm->port->pcm_write(vm->port->ud, (const nj_s2 *)(const void *)(b + off),
-                               frames);
+    took = media_pcm_write(vm, player,
+                           (const nj_s2 *)(const void *)(b + off), frames);
     if (took < 0) {
         return 0;
     }
-    w_i(vm, player, F_P_PUSHED, done + took);
-    /* Media time advances with what has actually been played. */
-    {
-        nj_s8 us = (nj_s8)(done + took) * 1000000LL / (nj_s8)r_i(vm, player, F_P_RATE);
-        w_j(vm, player, F_P_TIME, us);
-        w_j(vm, player, F_P_DURATION,
-            (nj_s8)((nj_u4)r_i(vm, player, F_P_FRAMES)) * 1000000LL
-                / (nj_s8)r_i(vm, player, F_P_RATE));
-    }
+    media_note_pushed(vm, player, done + took);
+    /* The duration is frames over rate: the sample rate never changes. */
+    w_j(vm, player, F_P_DURATION,
+        (nj_s8)((nj_u4)r_i(vm, player, F_P_FRAMES)) * 1000000LL
+            / (nj_s8)r_i(vm, player, F_P_RATE));
     return took;
 }
 
@@ -1250,6 +1345,9 @@ static void media_dev_close(nj_vm *vm)
 
     if (owner == NULL) {
         return;
+    }
+    if (r_i(vm, owner, F_P_KIND) == 1) {
+        media_sync_played(vm, owner);   /* the unplayed tail is about to go */
     }
     if (vm->port && vm->port->pcm_close) {
         vm->port->pcm_close(vm->port->ud);
@@ -2135,6 +2233,12 @@ void nj_media_frame(nj_vm *vm)
             /* Played to the end: give the device back, STOP the Player and say
              * so, which is what MIDP's END_OF_MEDIA is for. */
             if (r_i(vm, p, F_P_KIND) == 1) {
+                nj_s4 frames = r_i(vm, p, F_P_FRAMES);
+                nj_s4 rate = r_i(vm, p, F_P_RATE);
+                if (vm->port->pcm_queued && rate > 0) {
+                    w_j(vm, p, F_P_TIME,
+                        (nj_s8)frames * 1000000LL / (nj_s8)rate);
+                }
                 media_dev_release(vm, p);
             }
             if (r_i(vm, p, F_P_STATE) == 400) {
@@ -3772,6 +3876,9 @@ NJFN(player_stop)
             video_audio_stop(vm, self);
 #endif
         } else if (r_z(vm, self, F_P_OPEN) || vm->pcm_owner == self) {
+            /* media_dev_close() moves the position back to what was heard
+             * before it throws the device queue away; doing it here too would
+             * subtract the queue twice. */
             media_dev_release(vm, self);
         }
         media_unregister(vm, self);

@@ -4861,3 +4861,36 @@ runtime only calls `pause()`, recorded in the note rather than worked around.
 Full ctest 122/122.  Evidence:
 `.local-tools/debug-runs/android-audio-probe-20261028/`; mechanism note:
 `docs/notes/2026-10-28-tone-and-drain.md`.
+
+## Round 97 - the volume that did nothing, and the time that ran ahead (2026-10-28)
+
+Round 96 made tone and one-shot playback audible.  Driving the same probe rig
+one level deeper - volume and media time - found two more defects in the
+runtime's sampled path.
+
+`VolumeControl.setLevel()` and `setMute()` only stored the value and forwarded
+it to the platform MIDI synthesiser.  The comment said the rendered paths
+scaled their own samples, but only the movie-audio pump did: a wave player
+muted for 400 ms kept playing at full scale in the host capture.  Fixed with a
+staging helper, `media_pcm_write()`, that scales every sampled and streamed
+write by `volume/100` (zero when muted); a regression test asserts that the
+port sees halved samples at level 50 and zeros while muted.
+
+`getMediaTime()` reported the write frontier rather than the audible
+position - `pcm_push()` advanced the media time by the frames handed to the
+port, and the Android ring holds about 0.74 s at 22050 Hz, so a 2 s wave read
+1,439,002 us after 700 ms of playback.  The user-visible consequence was
+worse than a bad number: `stop()` closes the device and discards the queued
+tail, and `start()` resumed from the frontier, skipping the part not yet
+heard.  Fixed with an optional port callback, `pcm_queued()`: the runtime
+reports `pushed - queued` as the media time, and rewinds `F_P_PUSHED` to the
+audible position before a stop/hand-over closes the device.  Android
+implements it from its ring indices, SDL2 from `SDL_GetQueuedAudioSize()`;
+ports that leave it `NULL` keep the old frontier behaviour.
+
+On the API 26 emulator the same probe now reads 696,009 us after 700 ms of a
+2 s wave (was 1,439,002), freezes at 720,000 us across `stop()`, and the
+resumed run plays the remaining tail instead of skipping it; the muted window
+is silent in the host capture.  Full ctest 122/122.  Evidence:
+`.local-tools/debug-runs/android-audio-probe-20261028/`; mechanism note:
+`docs/notes/2026-10-28-volume-and-media-time.md`.

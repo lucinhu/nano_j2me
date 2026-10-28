@@ -1840,6 +1840,21 @@ static int sdl_pcm_write(void *ud, const nj_s2 *samples, int frames)
     return frames;
 }
 
+/* Frames the SDL device still holds in its queue: bytes queued divided by the
+ * frame size.  The device is opened at the stream's own rate and channel
+ * count, so the answer is already in source frames. */
+static int sdl_pcm_queued(void *ud)
+{
+    sdl_state *s = SS(ud);
+    nj_u4 bytes;
+
+    if (!s || !s->audio || s->audio_chans <= 0) {
+        return 0;
+    }
+    bytes = SDL_GetQueuedAudioSize(s->audio);
+    return (int)(bytes / ((nj_u4)s->audio_chans * (nj_u4)sizeof(nj_s2)));
+}
+
 static void sdl_pcm_close(void *ud)
 {
     sdl_state *s = SS(ud);
@@ -2155,6 +2170,7 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
     out->pcm_write = sdl_pcm_write;
     out->pcm_close = sdl_pcm_close;
     out->pcm_free = sdl_pcm_free;
+    out->pcm_queued = sdl_pcm_queued;
     out->log = sdl_log;
     out->display_init = sdl_display_init;
     out->display_present = sdl_display_present;

@@ -725,6 +725,7 @@ CLASSES = {
             "void addPlayerListener(javax.microedition.media.PlayerListener)",
             "void removePlayerListener(javax.microedition.media.PlayerListener)",
             "int getState()", "long getDuration()", "long getMediaTime()",
+            "long setMediaTime(long)",
             "javax.microedition.media.Control getControl(String)",
             "javax.microedition.media.Control[] getControls()",
         ],

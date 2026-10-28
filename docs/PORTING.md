@@ -246,8 +246,8 @@ only way to exercise that path on a phone that has AAudio.
 
 The port fills in `display_init`/`display_present`, `input_poll`, `input_push`,
 `now`, `dir_open`/`dir_next`/`dir_close`, `tone_play`/`tone_stop`,
-`pcm_open`/`pcm_write`/`pcm_close`/`pcm_free`, `device_property`, `vibrate` and
-`idle`. Four of those are worth copying:
+`pcm_open`/`pcm_write`/`pcm_close`/`pcm_free`/`pcm_queued`,
+`device_property`, `vibrate` and `idle`. Four of those are worth copying:
 
 - **Directories, but not files.** `dir_open`/`dir_next`/`dir_close` are real
   (`dirent` + `stat`), because the runtime has no fallback for them and
@@ -789,7 +789,12 @@ device, not a stream - the runtime arbitrates which `Player` owns it and pauses
 the others (see `docs/notes/2026-10-28-audio-device-ownership.md`).
 `tone_play()` may be called while a PCM device is open; it must render into the
 device's current rate and channel count instead of re-opening it (the SDL2 and
-Android ports both do, so one device serves tones and sampled audio).  A port
+Android ports both do, so one device serves tones and sampled audio).
+`pcm_queued()` is optional: it reports how many source frames are inside the
+device but not yet audible.  The runtime uses it to report
+`Player.getMediaTime()` at the audible position and to keep a `stop()`/`start()`
+pair from skipping the queued tail; a port that leaves it `NULL` keeps the
+older write-frontier behaviour.  A port
 that wants true mixing can mix below `pcm_open`, but it must never close or
 reconfigure the device behind the runtime's back: that is how a finished sound
 effect used to take the background music with it.

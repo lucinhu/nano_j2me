@@ -399,6 +399,11 @@ typedef struct nj_port {
     /* Frames the device can accept right now; 0 or NULL means "as many as you
      * like".  Used to avoid holding a whole WAV in memory on a small part. */
     int   (*pcm_free)(void *ud);
+    /* Frames written to the device that have not been heard yet.  A port that
+     * can report this gives getMediaTime() the audible position instead of the
+     * write frontier, which is up to a device buffer ahead.  NULL keeps the old
+     * behaviour, which is all a port without a real queue can honestly say. */
+    int   (*pcm_queued)(void *ud);
 
     /* ---- MIDI ---- */
     /*
