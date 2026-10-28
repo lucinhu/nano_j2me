@@ -473,6 +473,8 @@ and not of a `.so`; the Android library carries all of them.
 | `NJ_ENABLE_INFLATE` | `nj_inflate.o` | 7,176 | 2,968 | DEFLATE: every zip entry, and PNG's IDAT |
 | `NJ_ENABLE_WAV` | (inside `nj_lib_media.o`) | — | — | the RIFF reader |
 | `NJ_ENABLE_AMR` | `nj_amr.o` | 8,204 + 26,983 rodata | 0 | AMR-NB, all eight modes |
+| `NJ_ENABLE_H263` | `nj_h263.o` | 6,351 + 1,312 rodata | 0 | H.263 baseline |
+| `NJ_ENABLE_M4V` | `nj_m4v.o` | 25,346 + 18,796 rodata | 0 | MPEG-4 Part 2 (`mp4v`) |
 | `NJ_ENABLE_MIDI` | `nj_midi.o` | 10,531 | ~0 | the synthesiser and `MIDIControl` |
 
 The built-in decoders and a platform's are not exclusive: cut the built-in one
@@ -491,6 +493,17 @@ runtime cost. The code itself is small enough not to be worth a macro — host
 | Translation unit | `.text` | `.rodata` |
 | --- | --- | --- |
 | `nj_lib_sensor.o` | 9,492 | 5,493 |
+
+H.263 and MPEG-4 Part 2 both answer to `NJ_ENABLE_VIDEO`, and each also has its
+own switch (`NJ_ENABLE_H263`, `NJ_ENABLE_M4V`) for a port that carries one of
+them; `NJ_VIDEO_H263_ONLY=1` is the older spelling of "H.263 on, MPEG-4 off" and
+still works.  The two decoders are not free - 8 KB and 44 KB of object file
+respectively - and a release `nj2me` binary measured 3,571,544 bytes with both,
+3,546,152 with H.263 cut, 3,465,096 with MPEG-4 cut and 3,414,432 with
+`NJ_ENABLE_VIDEO=0`, so a port that only needs one codec does not have to pay
+for the other (`tools/check_codec_trim.sh` enforces that the switches really
+empty the objects, because before the split `-DNJ_ENABLE_M4V=0` only removed the
+provider table and kept every table it needs).
 
 For comparison, the MIDI renderer is 10,531 bytes of text and AMR is 8,204 plus
 26,983 of tables, and both of those do have switches. What a sensor costs at

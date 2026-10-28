@@ -46,7 +46,7 @@
  * NJ_MP4_SEPARATE in the build; the standalone nj_mp4.c stays the real file. */
 
 
-#if NJ_ENABLE_VIDEO
+#if NJ_ENABLE_H263
 
 /* H.263 formats 1..5, in pixels.  Index 0 is the forbidden value. */
 static const nj_u2 h263_format_width[6] = { 0, 128, 176, 352, 704, 1408 };
@@ -1322,4 +1322,4 @@ const nj_av_video_ops nj_av_video_h263 = {
     h263_close
 };
 
-#endif /* NJ_ENABLE_VIDEO */
+#endif /* NJ_ENABLE_H263 */

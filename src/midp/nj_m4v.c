@@ -22,6 +22,8 @@
 #include "nj2me/nj_m4v_tables.h"
 #include "nj2me/nj_m4v_escape.h"
 
+#if NJ_ENABLE_M4V
+
 /* Defined with the block decoders further down; the escape reader needs them. */
 int nj_m4v_qmul(int qscale);
 int nj_m4v_qadd(int qscale);
@@ -3360,7 +3362,6 @@ int nj_m4v_accepts(const nj_u1 *b, nj_u4 n)
  * outputs the frame, so the provider keeps the planes at their coded size and
  * converts only the visible rectangle to RGB565.
  */
-#if NJ_ENABLE_VIDEO
 
 #define M4V_ERR_OUTPUT (-100)   /* provider-specific: frame buffer too small */
 
@@ -3707,4 +3708,4 @@ const nj_av_video_ops nj_av_video_mpeg4 = {
     m4v_p_close
 };
 
-#endif /* NJ_ENABLE_VIDEO */
+#endif /* NJ_ENABLE_M4V */

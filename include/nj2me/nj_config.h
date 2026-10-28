@@ -196,7 +196,9 @@
  *   NJ_MP3_ENABLE_ID3         skip/parse ID3v2 tags before/between frames
  *   NJ_MP3_ENABLE_SEEK        keep the table needed for Player.setMediaTime
  *   NJ_MP3_ENABLE_INTENSITY   intensity stereo, which only MPEG-1 needs
- *   NJ_VIDEO_H263_ONLY        H.263 baseline only, no MPEG-4 Part 2
+ *   NJ_ENABLE_H263            H.263 baseline decoder (follows NJ_ENABLE_VIDEO)
+ *   NJ_ENABLE_M4V             MPEG-4 Part 2 decoder (follows NJ_ENABLE_VIDEO)
+ *   NJ_VIDEO_H263_ONLY        legacy alias: H.263 on, MPEG-4 Part 2 off
  */
 #ifndef NJ_MP3_LAYER3_ONLY
 #  define NJ_MP3_LAYER3_ONLY 1
@@ -210,8 +212,21 @@
 #ifndef NJ_MP3_ENABLE_INTENSITY
 #  define NJ_MP3_ENABLE_INTENSITY 1
 #endif
+/* H.263 and MPEG-4 Part 2 share the one video switch above by default, but a
+ * port that carries only one of them can cut the other.  NJ_VIDEO_H263_ONLY is
+ * the historical name for "H.263 on, MPEG-4 off" and still works. */
+#ifndef NJ_ENABLE_H263
+#  define NJ_ENABLE_H263 NJ_ENABLE_VIDEO
+#endif
 #ifndef NJ_VIDEO_H263_ONLY
-#  define NJ_VIDEO_H263_ONLY 1
+#  define NJ_VIDEO_H263_ONLY 0
+#endif
+#ifndef NJ_ENABLE_M4V
+#  if NJ_VIDEO_H263_ONLY
+#    define NJ_ENABLE_M4V 0
+#  else
+#    define NJ_ENABLE_M4V NJ_ENABLE_VIDEO
+#  endif
 #endif
 
 #ifndef NJ_ENABLE_MIDI

@@ -20,8 +20,12 @@
 
 /* Defined by the providers, so a trimmed build still links. */
 extern const nj_av_audio_ops nj_av_audio_mp3;
+#if NJ_ENABLE_H263
 extern const nj_av_video_ops nj_av_video_h263;
+#endif
+#if NJ_ENABLE_M4V
 extern const nj_av_video_ops nj_av_video_mpeg4;
+#endif
 #if NJ_ENABLE_AMR
 /* nj_amr.c decodes a whole AMR file into PCM the caller owns. */
 extern nj_u4 nj_amr_frames(const void *data, nj_u4 size);
@@ -148,7 +152,7 @@ const nj_av_audio_ops *nj_avcodec_sw_amr(void)
 
 const nj_av_video_ops *nj_avcodec_sw_h263(void)
 {
-#if NJ_ENABLE_VIDEO
+#if NJ_ENABLE_H263
     return &nj_av_video_h263;
 #else
     return NULL;
@@ -157,7 +161,7 @@ const nj_av_video_ops *nj_avcodec_sw_h263(void)
 
 const nj_av_video_ops *nj_avcodec_sw_m4v(void)
 {
-#if NJ_ENABLE_VIDEO
+#if NJ_ENABLE_M4V
     return &nj_av_video_mpeg4;
 #else
     return NULL;

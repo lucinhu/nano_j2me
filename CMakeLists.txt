@@ -80,6 +80,10 @@ set(NJ_ENABLE_AMR   1 CACHE STRING "Built-in AMR narrowband speech decoder")
 set(NJ_ENABLE_MIDI  1 CACHE STRING "Built-in MIDI renderer (0 = platform only)")
 set(NJ_ENABLE_MP3  1 CACHE STRING "Built-in MP3 (MPEG Layer III) decoder")
 set(NJ_ENABLE_VIDEO 1 CACHE STRING "Built-in video (H.263/MPEG-4) decoder")
+# The two video codecs can also be cut one at a time; both follow NJ_ENABLE_VIDEO
+# unless named here, so -DNJ_ENABLE_VIDEO=0 still means "no video at all".
+set(NJ_ENABLE_H263 ${NJ_ENABLE_VIDEO} CACHE STRING "Built-in H.263 decoder")
+set(NJ_ENABLE_M4V ${NJ_ENABLE_VIDEO} CACHE STRING "Built-in MPEG-4 Part 2 decoder")
 # Floating point.  This switch was documented in nj_config.h from the start and
 # broken in TWO independent ways: nothing in src/ read it, and CMake never
 # passed it to the compiler at all - so -DNJ_ENABLE_FLOAT=0 built a runtime that
@@ -297,6 +301,8 @@ target_compile_definitions(nj2me PUBLIC
   NJ_ENABLE_MIDI=${NJ_ENABLE_MIDI}
   NJ_ENABLE_MP3=${NJ_ENABLE_MP3}
   NJ_ENABLE_VIDEO=${NJ_ENABLE_VIDEO}
+  NJ_ENABLE_H263=${NJ_ENABLE_H263}
+  NJ_ENABLE_M4V=${NJ_ENABLE_M4V}
   NJ_MP4_SEPARATE
   NJ_ENABLE_FLOAT=${NJ_ENABLE_FLOAT}
   NJ_ENABLE_LONG=${NJ_ENABLE_LONG}
@@ -1026,6 +1032,13 @@ endif()
     add_test(NAME check_threaded_dispatch
              COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_threaded_dispatch.sh
                      ${NJ_FIXTURES}/keysdemo.jar)
+    # Cutting one video codec must actually cut it: NJ_ENABLE_H263=0 and
+    # NJ_ENABLE_M4V=0 used to leave ~23 KB of decoded tables in the object file
+    # because only the provider table was guarded.  The check compiles each
+    # unit with the switch on and off and reads the object size.
+    add_test(NAME check_codec_trim
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_codec_trim.sh
+                     ${CMAKE_C_COMPILER})
     set_tests_properties(check_threaded_dispatch PROPERTIES TIMEOUT 300)
     # The benchmark cannot see a wrong superinstruction: its branches are on
     # constants, so a fused branch that tested an uninitialized operand still
@@ -1310,14 +1323,14 @@ nj_add_test(test_clip tests/test_clip.c)
     nj_add_test(test_midi tests/test_midi.c)
     nj_add_test(test_media_backpressure tests/test_media_backpressure.c)
     nj_add_test(test_media_replay tests/test_media_replay.c)
-    if(NJ_ENABLE_VIDEO)
+    if(NJ_ENABLE_H263)
         nj_add_test(test_h263 tests/test_h263.c)
     endif()
     if(NJ_ENABLE_MP3)
         nj_add_test(test_mp3 tests/test_mp3.c)
     endif()
     nj_add_test(test_avcodec tests/test_avcodec.c)
-    if(NJ_ENABLE_VIDEO)
+    if(NJ_ENABLE_M4V)
         nj_add_test(test_m4v tests/test_m4v.c)
     endif()
   endif()

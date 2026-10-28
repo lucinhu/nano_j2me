@@ -1197,3 +1197,30 @@ Player owns the device, and end-of-media waits for the queue to drain before
 firing.  Tests: `tests/test_media_replay.c` (new, sample-exact replay across
 loops and EOF), the loop/seek cases in `tests/test_lib.c`, and the drain case
 in `tests/test_media_backpressure.c`.  Full ctest 122/122.
+
+## One video codec at a time (round 236)
+
+`NJ_ENABLE_VIDEO` was the only switch in front of the two video decoders, so a
+port that ships only one of them still linked the other.  Each decoder now has
+its own switch:
+
+| Macro | Cuts | Object cost when on |
+| --- | --- | --- |
+| `NJ_ENABLE_H263=0` | `nj_h263.c` | 6,351 text + 1,312 rodata |
+| `NJ_ENABLE_M4V=0` | `nj_m4v.c` | 25,346 text + 18,796 rodata |
+
+Both follow `NJ_ENABLE_VIDEO`, so `-DNJ_ENABLE_VIDEO=0` still means "no video
+at all", and `NJ_VIDEO_H263_ONLY=1` — documented in `nj_config.h` for years but
+never wired up — now really means "H.263 on, MPEG-4 off".  Cutting a decoder
+leaves the container path intact: `nj_mp4` still parses the track, the provider
+registry simply finds no provider for that fourcc, and `createPlayer()` refuses
+the type by name instead of decoding it.
+
+`-DNJ_ENABLE_M4V=0` used to be a lie: only the provider table sat behind the
+guard, so the object kept all of `nj_m4v`'s tables (22,974 bytes of `.text`).
+The translation unit is guarded end to end now, and
+`tools/check_codec_trim.sh` (run by ctest) compiles each unit with the switch on
+and off, requires `.text` to be empty and the provider symbol gone when off, and
+checks the legacy alias.  A release `nj2me` measured 3,571,544 bytes with both
+codecs, 3,546,152 without H.263 and 3,465,096 without MPEG-4 (3,414,432 with
+`NJ_ENABLE_VIDEO=0`).
