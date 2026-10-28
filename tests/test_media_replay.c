@@ -786,6 +786,136 @@ done:
     nj_port_shutdown(&port);
 }
 
+/* The device advances between frame pumps.  Query its clock even while the
+ * final samples drain, and discard old queued audio when a live Player seeks. */
+static void test_live_clock_and_seek(void)
+{
+    nj_port port;
+    nj_vm *vm;
+    nj_ref p, other;
+    nj_value a[1], ret;
+    int base, opens;
+
+    vol_cap = 64;
+    vol_pushed = vol_consumed = vol_written = 0;
+    vol_opens = vol_closes = 0;
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    port.pcm_open = vol_open;
+    port.pcm_write = vol_write;
+    port.pcm_free = vol_room;
+    port.pcm_queued = vol_queued;
+    port.pcm_close = vol_close;
+    vm = nj_vm_create(&port, 2 * 1024 * 1024);
+    CHECK(vm != NULL);
+    if (!vm) { nj_port_shutdown(&port); return; }
+    p = make_ramp_player(vm, 256, 8000);
+    other = make_ramp_player(vm, 64, 16000);
+    CHECK(p != NULL && other != NULL);
+    if (!p || !other) goto done;
+
+    CHECK(nj_call(vm, p, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    vol_consumed = 16;
+    CHECK(player_time(vm, p) == 2000);       /* no pump since start() */
+    base = vol_written;
+    a[0].j = 16000;                         /* jump to sample 128 */
+    CHECK(nj_call(vm, p, PLAYER, "setMediaTime", "(J)J", a, &ret) == NJ_OK);
+    CHECK(ret.j == 16000 && player_time(vm, p) == 16000);
+    CHECK(player_state(vm, p) == 400);
+    CHECK(vol_opens == 2 && vol_closes == 1);
+    nj_media_frame(vm);
+    CHECK(vol_written > base);
+    CHECK(vol_output[base] == (nj_s2)(1000 + 128 * 7));
+    CHECK(player_time(vm, p) == 16000);      /* new samples still queued */
+    vol_consumed = 32;
+    CHECK(player_time(vm, p) == 20000);
+
+    /* A backward seek must not play the rest of the old queue first. */
+    base = vol_written;
+    a[0].j = 0;
+    CHECK(nj_call(vm, p, PLAYER, "setMediaTime", "(J)J", a, &ret) == NJ_OK);
+    nj_media_frame(vm);
+    CHECK(ret.j == 0 && player_time(vm, p) == 0);
+    CHECK(vol_written > base && vol_output[base] == 1000);
+
+    /* The new owner's queue must never change the displaced Player's clock.
+     * Seeking that displaced Player must leave the owner's device alone. */
+    vol_consumed = 16;
+    CHECK(nj_call(vm, other, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    CHECK(player_time(vm, p) == 2000);
+    opens = vol_opens;
+    a[0].j = 16000;
+    CHECK(nj_call(vm, p, PLAYER, "setMediaTime", "(J)J", a, &ret) == NJ_OK);
+    CHECK(vol_opens == opens && vm->pcm_owner == other);
+    vol_consumed = 32;
+    CHECK(player_time(vm, p) == 16000);
+    CHECK(player_time(vm, other) == 2000);   /* all frames already submitted */
+    nj_media_frame(vm);
+    CHECK(player_time(vm, other) == 2000);   /* EOF draining, no new write */
+    CHECK(player_state(vm, other) == 400);
+    CHECK(nj_call(vm, other, PLAYER, "stop", "()V", NULL, NULL) == NJ_OK);
+    CHECK(player_time(vm, other) == 2000);
+    base = vol_written;
+    nj_media_frame(vm);
+    CHECK(vol_written > base);
+    CHECK(vol_output[base] == (nj_s2)(1000 + 128 * 7));
+    CHECK(nj_call(vm, p, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
+    CHECK(nj_call(vm, other, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
+done:
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+}
+
+/* A device may hold several complete loops.  Recover the audible loop on
+ * pause, and wait for the queue even when the port has no pcm_free callback. */
+static void test_queued_short_loops(int with_free)
+{
+    nj_port port;
+    nj_vm *vm;
+    nj_ref p;
+    nj_value a[1];
+    int i, base;
+
+    vol_cap = 64;
+    vol_pushed = vol_consumed = vol_written = 0;
+    vol_opens = vol_closes = 0;
+    CHECK(nj_port_headless(&port) == NJ_OK);
+    port.pcm_open = vol_open;
+    port.pcm_write = vol_write;
+    port.pcm_free = with_free ? vol_room : NULL;
+    port.pcm_queued = vol_queued;
+    port.pcm_close = vol_close;
+    vm = nj_vm_create(&port, 2 * 1024 * 1024);
+    CHECK(vm != NULL);
+    if (!vm) { nj_port_shutdown(&port); return; }
+    p = make_ramp_player(vm, 8, 8000);
+    CHECK(p != NULL);
+    if (!p) goto done;
+    a[0].i = 5;
+    CHECK(nj_call(vm, p, PLAYER, "setLoopCount", "(I)V", a, NULL) == NJ_OK);
+    CHECK(nj_call(vm, p, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    for (i = 0; i < 16; i++) nj_media_frame(vm);
+    CHECK(vol_pushed == 40 && vol_queued(NULL) == 40);
+    CHECK(player_state(vm, p) == 400 && player_time(vm, p) == 0);
+    vol_consumed = 5;
+    CHECK(player_time(vm, p) == 625);
+    CHECK(nj_call(vm, p, PLAYER, "stop", "()V", NULL, NULL) == NJ_OK);
+    CHECK(player_time(vm, p) == 625);
+    base = vol_written;
+    CHECK(nj_call(vm, p, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
+    for (i = 0; i < 16; i++) nj_media_frame(vm);
+    CHECK(vol_pushed == 35 && vol_written - base == 35);
+    for (i = 0; i < vol_written - base; i++)
+        CHECK(vol_output[base + i] == (nj_s2)(1000 + ((5 + i) % 8) * 7));
+    CHECK(player_state(vm, p) == 400 && player_time(vm, p) == 625);
+    vol_consumed = 35;
+    nj_media_frame(vm);
+    CHECK(player_state(vm, p) == 300 && player_time(vm, p) == 1000);
+    CHECK(nj_call(vm, p, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
+done:
+    nj_vm_destroy(vm);
+    nj_port_shutdown(&port);
+}
+
 int main(void)
 {
     run_case(1, 0); run_case(2, 0); run_case(1, 3); run_case(2, 3);
@@ -797,6 +927,7 @@ int main(void)
     test_device_handover();
     test_eof_drain();
     test_volume_and_position();
+    test_live_clock_and_seek();
     printf("media replay: %d failures\n", failures);
     return failures ? 1 : 0;
 }

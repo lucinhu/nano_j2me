@@ -327,6 +327,16 @@ static nj_s2 stream_pcm[65536];
 static nj_s2 reference_pcm[65536];
 static unsigned stream_samples, stream_channels;
 static int stream_bounded, stream_calls;
+static int stream_capacity, stream_queued;
+
+static int stream_room(void *ud) { (void)ud; return stream_capacity - stream_queued; }
+static int stream_queue(void *ud) { (void)ud; return stream_queued; }
+static void stream_close(void *ud)
+{
+    (void)ud;
+    stream_samples -= (unsigned)stream_queued * stream_channels;
+    stream_queued = 0;
+}
 
 static int stream_write(void *ud, const nj_s2 *pcm, int frames)
 {
@@ -340,6 +350,8 @@ static int stream_write(void *ud, const nj_s2 *pcm, int frames)
         if (stream_calls == 3) return frames + 1;
         if (n > limits[stream_calls % 8]) n = limits[stream_calls % 8];
     }
+    if (stream_capacity && n > stream_capacity - stream_queued)
+        n = stream_capacity - stream_queued;
     if (n < 0 || stream_samples + (unsigned)n * stream_channels > 65536u) {
         ok(0, "PCM capture fits its buffer");
         return 0;
@@ -347,13 +359,14 @@ static int stream_write(void *ud, const nj_s2 *pcm, int frames)
     memcpy(stream_pcm + stream_samples, pcm,
            (size_t)n * stream_channels * sizeof(*pcm));
     stream_samples += (unsigned)n * stream_channels;
+    if (stream_capacity) stream_queued += n;
     return n;
 }
 
 static void *stream_alloc(void *ud, nj_size n) { (void)ud; return malloc(n); }
 static void stream_free(void *ud, void *p) { (void)ud; free(p); }
 
-static void test_streamed_pcm(int bounded, int loops, int seek_pending)
+static void test_streamed_pcm(int bounded, int loops, int seek_pending, int queued_mode)
 {
     const nj_av_audio_ops *ops = nj_avcodec_sw_mp3();
     nj_av_mem mem = { NULL, stream_alloc, stream_free };
@@ -367,6 +380,9 @@ static void test_streamed_pcm(int bounded, int loops, int seek_pending)
     unsigned expected = 0, i;
     int round, step_count;
     nj_s8 seek_us = seek_pending == 2 ? 100000 : 0;
+
+    stream_capacity = queued_mode == 1 ? 256 : queued_mode ? 6000 : 0;
+    stream_queued = 0;
 
     memset(&info, 0, sizeof(info));
     dec = ops->open(mp3, (nj_u4)sizeof(mp3), &mem, &info, &err);
@@ -389,6 +405,11 @@ static void test_streamed_pcm(int bounded, int loops, int seek_pending)
        "reference spans multiple scratch buffers");
     ok(nj_port_headless(&port) == NJ_OK, "PCM test port opens");
     port.pcm_write = stream_write;
+    if (queued_mode) {
+        port.pcm_free = stream_room;
+        port.pcm_queued = stream_queue;
+        port.pcm_close = stream_close;
+    }
     vm = nj_vm_create(&port, 2u * 1024u * 1024u);
     ok(vm != NULL, "PCM test VM exists");
     if (vm == NULL) { nj_port_shutdown(&port); return; }
@@ -417,7 +438,33 @@ static void test_streamed_pcm(int bounded, int loops, int seek_pending)
                        "(J)J", a, &ret) == NJ_OK && ret.j == seek_us,
                "seek MP3 while PCM is pending");
         }
+        if (queued_mode && !seek_pending) {
+            for (step_count = 0; step_count < 32 && stream_queued < stream_capacity;
+                 step_count++) nj_media_frame(vm);
+            ok(stream_queued == stream_capacity, "device queue fills");
+            stream_queued -= 123;
+            nj_media_frame(vm);
+            ok(nj_call(vm, player, "javax/microedition/media/Player", "getMediaTime",
+                       "()J", NULL, &ret) == NJ_OK && ret.j == 123000000LL / info.rate,
+               "MP3 clock follows consumed samples");
+            if (queued_mode == 3) {
+                nj_ref other = nj_root(vm, make_player(vm));
+                ok(other != NULL, "preempting MP3 Player exists");
+                if (other) {
+                    ok(nj_call(vm, other, "javax/microedition/media/Player", "start",
+                               "()V", NULL, NULL) == NJ_OK, "preempt MP3");
+                    ok(nj_call(vm, other, "javax/microedition/media/Player", "close",
+                               "()V", NULL, NULL) == NJ_OK, "return device to MP3");
+                }
+            } else {
+                ok(nj_call(vm, player, "javax/microedition/media/Player", "stop",
+                           "()V", NULL, NULL) == NJ_OK, "pause queued MP3");
+                ok(nj_call(vm, player, "javax/microedition/media/Player", "start",
+                           "()V", NULL, NULL) == NJ_OK, "resume queued MP3");
+            }
+        }
         for (step_count = 0; step_count < 2000; step_count++) {
+            stream_queued -= stream_queued < 137 ? stream_queued : 137;
             nj_media_frame(vm);
             ret.i = 0;
             (void)nj_call(vm, player, "javax/microedition/media/Player", "getState",
@@ -572,11 +619,15 @@ int main(void)
 
     nj_vm_destroy(vm);
     nj_port_shutdown(&port);
-    test_streamed_pcm(0, 1, 0);
-    test_streamed_pcm(1, 1, 0);
-    test_streamed_pcm(1, 2, 0);
-    test_streamed_pcm(1, 1, 1);
-    test_streamed_pcm(1, 1, 2);
+    test_streamed_pcm(0, 1, 0, 0);
+    test_streamed_pcm(1, 1, 0, 0);
+    test_streamed_pcm(1, 2, 0, 0);
+    test_streamed_pcm(1, 1, 1, 0);
+    test_streamed_pcm(1, 1, 2, 0);
+    test_streamed_pcm(0, 1, 0, 1);    /* reuse scratch after pause */
+    test_streamed_pcm(0, 1, 0, 2);    /* seek decoder past discarded scratch */
+    test_streamed_pcm(0, 1, 0, 3);    /* another Player takes and returns PCM */
+    test_streamed_pcm(0, 1, 2, 2);    /* seek while old audio is queued */
     printf("test_avcodec: %d checks, %d failure(s)\n", checks, fails);
     return fails == 0 ? 0 : 1;
 }

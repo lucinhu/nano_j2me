@@ -1174,3 +1174,26 @@ titles ran 300 headless frames each under the sanitizers with no report and
 their intro movies rendering.  Evidence and per-file logs:
 `.local-tools/debug-runs/m4v-media-robustness-20261027/`; narrative in
 `docs/notes/2026-10-27-media-robustness.md`.
+
+## The audible position, across loops and seeks (round 236)
+
+A sampled Player keeps two positions: the frames pushed into the device and
+the frames anyone has actually heard.  Three accounting gaps showed up once a
+looping effect went through `stop()` / `start()` and `setMediaTime()`:
+
+- `media_played()` subtracted the device queue from whichever Player asked,
+  even when another Player owned the device; it now only consults the queue
+  when the asking Player is the owner;
+- subtracting a queue that still held the previous loop's tail (or several
+  whole loops of a short effect) made the played count negative and clamped it
+  to zero, losing heard frames; it now walks back across loop boundaries using
+  `F_P_LOOPDONE` and the loop length;
+- a successful `setMediaTime()` kept the device queue, so the discarded suffix
+  played over the new position; the queue is now discarded without syncing it
+  back, and the device re-opened at the new position.
+
+`getMediaTime()` refreshes its cached time from the played count while the
+Player owns the device, and end-of-media waits for the queue to drain before
+firing.  Tests: `tests/test_media_replay.c` (new, sample-exact replay across
+loops and EOF), the loop/seek cases in `tests/test_lib.c`, and the drain case
+in `tests/test_media_backpressure.c`.  Full ctest 122/122.

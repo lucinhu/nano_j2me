@@ -1006,17 +1006,30 @@ static int media_pcm_write(nj_vm *vm, nj_ref p, const nj_s2 *src, int frames)
  * later start() after stop()) land on the audible position instead, which is
  * what a title pausing its music expects.
  */
-static nj_s4 media_played(nj_vm *vm, nj_ref p)
+static nj_s4 media_played(nj_vm *vm, nj_ref p, nj_s4 *loops)
 {
-    nj_s4 pushed = r_i(vm, p, F_P_PUSHED);
+    nj_s8 played = r_i(vm, p, F_P_PUSHED);
+    nj_s4 done = r_i(vm, p, F_P_LOOPDONE);
 
-    if (vm->port && vm->port->pcm_queued && pushed > 0) {
+    if (vm->pcm_owner == p && vm->port && vm->port->pcm_queued) {
         nj_s4 queued = vm->port->pcm_queued(vm->port->ud);
         if (queued > 0) {
-            pushed = (queued >= pushed) ? 0 : pushed - queued;
+            nj_s4 frames = r_i(vm, p, F_P_FRAMES);
+            played -= queued;
+            /* The queue can still contain the previous loop's tail, or even
+             * several whole loops of a short effect.  Walk back across those
+             * boundaries instead of reporting zero and losing that tail. */
+            if (played < 0 && frames > 0 && done > 0) {
+                nj_s8 back = (-played + frames - 1) / frames;
+                if (back > done) back = done;
+                played += back * frames;
+                done -= (nj_s4)back;
+            }
+            if (played < 0) played = 0;
         }
     }
-    return pushed;
+    if (loops) *loops = done;
+    return (nj_s4)played;
 }
 
 static void media_note_pushed(nj_vm *vm, nj_ref p, nj_s4 pushed)
@@ -1026,22 +1039,78 @@ static void media_note_pushed(nj_vm *vm, nj_ref p, nj_s4 pushed)
     w_i(vm, p, F_P_PUSHED, pushed);
     if (rate > 0) {
         w_j(vm, p, F_P_TIME,
-            (nj_s8)media_played(vm, p) * 1000000LL / (nj_s8)rate);
+            (nj_s8)media_played(vm, p, NULL) * 1000000LL / (nj_s8)rate);
     }
 }
 
-/* stop()/deallocate() throw the device queue away, so the position has to
- * move back to the last frame anyone actually heard. */
+/* Move a retained decoder to an exact PCM frame and forget any old scratch.
+ * Round UP when translating frames to microseconds: the codec rounds back
+ * down, and rounding twice otherwise loses a sample at rates such as 44100. */
+static int media_stream_seek(nj_vm *vm, nj_ref p, nj_s4 frame)
+{
+    nj_ref data = r_r(vm, p, F_P_DATA, "[B");
+    media_stream_state state;
+
+    if (!data || barray_len(data) < NJ_MEDIA_STREAM_BYTES) return 0;
+    memcpy(&state, barray_bytes(data), sizeof(state));
+#if NJ_ENABLE_MP3
+    if (r_z(vm, p, F_P_AVK)) {
+        nj_s4 rate = r_i(vm, p, F_P_RATE);
+        if (rate <= 0 || !state.aops || !state.adec || !state.aops->seek ||
+            state.aops->seek(state.adec,
+                ((nj_s8)frame * 1000000LL + rate - 1) / rate) != NJ_AV_OK) {
+            return 0;
+        }
+        state.in_off = barray_len(r_r(vm, p, F_P_SRC, "[B"));
+    } else
+#endif
+    {
+#if NJ_ENABLE_MIDI
+        if (!state.stream || nj_midi_stream_seek(state.stream, (nj_u4)frame)
+                             != (nj_u4)frame) return 0;
+#else
+        (void)frame;
+        return 0;
+#endif
+    }
+    state.pending = state.offset = 0u;
+    memcpy(data->u.bytes, &state, sizeof(state));
+    return 1;
+}
+
+/* stop()/preemption throw the device queue away.  Rewind both the position
+ * and the renderer, keeping already rendered samples when the scratch still
+ * holds the discarded suffix. */
 static void media_sync_played(nj_vm *vm, nj_ref p)
 {
-    nj_s4 rate, played;
+    nj_s4 rate, played, loops;
+    nj_s8 dropped;
 
     if (!vm->port || !vm->port->pcm_queued) {
         return;
     }
     rate = r_i(vm, p, F_P_RATE);
-    played = media_played(vm, p);
+    played = media_played(vm, p, &loops);
+    dropped = (nj_s8)(r_i(vm, p, F_P_LOOPDONE) - loops)
+                         * r_i(vm, p, F_P_FRAMES)
+              + r_i(vm, p, F_P_PUSHED) - played;
+    if (dropped > 0 && r_z(vm, p, F_P_STREAM)) {
+        nj_ref data = r_r(vm, p, F_P_DATA, "[B");
+        media_stream_state state;
+        if (data && barray_len(data) >= NJ_MEDIA_STREAM_BYTES) {
+            memcpy(&state, barray_bytes(data), sizeof(state));
+            if (loops == r_i(vm, p, F_P_LOOPDONE) &&
+                dropped <= (nj_s8)state.offset) {
+                state.offset -= (nj_u4)dropped;
+                state.pending += (nj_u4)dropped;
+                memcpy(data->u.bytes, &state, sizeof(state));
+            } else if (!media_stream_seek(vm, p, played)) {
+                nj_logf(vm, 2, "media: audio decoder could not restore its position");
+            }
+        }
+    }
     w_i(vm, p, F_P_PUSHED, played);
+    w_i(vm, p, F_P_LOOPDONE, loops);
     if (rate > 0) {
         w_j(vm, p, F_P_TIME,
             (nj_s8)played * 1000000LL / (nj_s8)rate);
@@ -1338,15 +1407,15 @@ static int media_dev_format(nj_vm *vm, nj_ref p, int *rate, int *chans)
     return *rate > 0 && *chans > 0;
 }
 
-/* Close the device, whoever holds it.  The Player keeps its position. */
-static void media_dev_close(nj_vm *vm)
+/* Preserve the audible position unless a successful seek already replaced it. */
+static void media_dev_close(nj_vm *vm, int keep_position)
 {
     nj_ref owner = vm->pcm_owner;
 
     if (owner == NULL) {
         return;
     }
-    if (r_i(vm, owner, F_P_KIND) == 1) {
+    if (keep_position && r_i(vm, owner, F_P_KIND) == 1) {
         media_sync_played(vm, owner);   /* the unplayed tail is about to go */
     }
     if (vm->port && vm->port->pcm_close) {
@@ -1369,7 +1438,7 @@ static int media_dev_claim(nj_vm *vm, nj_ref p)
         return r_z(vm, p, F_P_OPEN);
     }
     had_owner = vm->pcm_owner != NULL;
-    media_dev_close(vm);
+    media_dev_close(vm, 1);
     if (!media_dev_format(vm, p, &rate, &chans)) {
         return 0;
     }
@@ -1406,7 +1475,7 @@ static void media_dev_release(nj_vm *vm, nj_ref p)
     if (vm->pcm_owner != p) {
         return;                 /* not ours: nothing to hand back */
     }
-    media_dev_close(vm);
+    media_dev_close(vm, 1);
     v = vm->media_players;
     if (v == NULL) {
         return;
@@ -2224,10 +2293,10 @@ void nj_media_frame(nj_vm *vm)
              * the queue to empty first, then give the device back and fire
              * END_OF_MEDIA at the time the sound really ended.
              */
-            if (vm->pcm_owner == p && vm->port->pcm_free
-                && r_i(vm, p, F_P_DEVROOM) > 0
-                && vm->port->pcm_free(vm->port->ud)
-                       < r_i(vm, p, F_P_DEVROOM)) {
+            if (vm->port->pcm_queued) {
+                if (vm->port->pcm_queued(vm->port->ud) > 0) continue;
+            } else if (vm->port->pcm_free && r_i(vm, p, F_P_DEVROOM) > 0 &&
+                       vm->port->pcm_free(vm->port->ud) < r_i(vm, p, F_P_DEVROOM)) {
                 continue;
             }
             /* Played to the end: give the device back, STOP the Player and say
@@ -2241,6 +2310,7 @@ void nj_media_frame(nj_vm *vm)
                 }
                 media_dev_release(vm, p);
             }
+            w_i(vm, p, F_P_LOOPDONE, 0);
             if (r_i(vm, p, F_P_STATE) == 400) {
                 w_i(vm, p, F_P_STATE, 300);
                 fire(vm, p, "endOfMedia");
@@ -3832,8 +3902,8 @@ NJFN(player_start)
             if (!media_restart(vm, self)) {
                 return nj_throw(vm, NJ_C_MEXC, "audio decoder cannot restart");
             }
+            w_i(vm, self, F_P_LOOPDONE, 0);
         }
-        w_i(vm, self, F_P_LOOPDONE, 0);
         /* Ask for the device; whatever was playing sampled audio before is
          * paused, not closed, and gets it back when this Player ends. */
         if (!r_z(vm, self, F_P_OPEN)) {
@@ -4202,6 +4272,13 @@ NJFN(player_getMediaTime)
                 (nj_s8)vm->port->midi_time(vm->port->ud, mh) * 1000LL);
         }
     }
+    if (vm->pcm_owner == self && r_i(vm, self, F_P_KIND) == 1) {
+        nj_s4 rate = r_i(vm, self, F_P_RATE);
+        if (rate > 0) {
+            w_j(vm, self, F_P_TIME,
+                (nj_s8)media_played(vm, self, NULL) * 1000000LL / rate);
+        }
+    }
     ret->j = r_j(vm, self, F_P_TIME);
     return NJ_OK;
 }
@@ -4316,6 +4393,13 @@ NJFN(player_setMediaTime)
         }
     }
     w_j(vm, self, F_P_TIME, want);
+    if (vm->pcm_owner == self && r_i(vm, self, F_P_KIND) == 1) {
+        /* The successful seek replaced both the decoder position and its
+         * scratch.  Discard the old device queue without syncing it back over
+         * the new position; an idle or displaced Player owns no queue. */
+        media_dev_close(vm, 0);
+        (void)media_dev_claim(vm, self);
+    }
     ret->j = want;
     return NJ_OK;
 }
