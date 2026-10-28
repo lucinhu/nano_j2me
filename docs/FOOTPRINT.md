@@ -472,7 +472,8 @@ and not of a `.so`; the Android library carries all of them.
 | `NJ_ENABLE_GIF` | `nj_gif.o` | 2,940 | ~0 | GIF (first frame) |
 | `NJ_ENABLE_INFLATE` | `nj_inflate.o` | 7,176 | 2,968 | DEFLATE: every zip entry, and PNG's IDAT |
 | `NJ_ENABLE_WAV` | (inside `nj_lib_media.o`) | — | — | the RIFF reader |
-| `NJ_ENABLE_AMR` | `nj_amr.o` | 8,204 + 26,983 rodata | 0 | AMR-NB, all eight modes |
+| `NJ_ENABLE_AMR` | `nj_amr.o` | 8,856 + 26,836 rodata | 0 | AMR-NB, all eight modes |
+| `NJ_ENABLE_MP3` | `nj_mp3.o` | 11,553 + 18,202 rodata | 0 | MPEG Layer III |
 | `NJ_ENABLE_H263` | `nj_h263.o` | 6,351 + 1,312 rodata | 0 | H.263 baseline |
 | `NJ_ENABLE_M4V` | `nj_m4v.o` | 25,346 + 18,796 rodata | 0 | MPEG-4 Part 2 (`mp4v`) |
 | `NJ_ENABLE_MIDI` | `nj_midi.o` | 10,531 | ~0 | the synthesiser and `MIDIControl` |
@@ -493,6 +494,19 @@ runtime cost. The code itself is small enough not to be worth a macro — host
 | Translation unit | `.text` | `.rodata` |
 | --- | --- | --- |
 | `nj_lib_sensor.o` | 9,492 | 5,493 |
+
+MP3 has sub-switches of its own, and each one removes real code (host
+`gcc -Os`, text bytes saved by turning it off): `NJ_MP3_ENABLE_ID3` 243,
+`NJ_MP3_ENABLE_SEEK` 803, `NJ_MP3_ENABLE_INTENSITY` 928.  Only Layer III is
+implemented, so there is no layer switch to turn.
+
+On that same release binary, switching a whole audio decoder off saves
+50,496 bytes for `NJ_ENABLE_MP3=0` (3,521,048) and 84,160 for
+`NJ_ENABLE_AMR=0` (3,487,384).  The AMR-less build did not compile at all
+until it was measured: `nj_lib_media.c` needs `NJ_AMR_RATE` for a movie
+Player's output format even when the decoder is gone, and the header that
+defines it was included behind `NJ_ENABLE_AMR`.  Both the compile and the
+size are now checked by `tools/check_codec_trim.sh`.
 
 H.263 and MPEG-4 Part 2 both answer to `NJ_ENABLE_VIDEO`, and each also has its
 own switch (`NJ_ENABLE_H263`, `NJ_ENABLE_M4V`) for a port that carries one of

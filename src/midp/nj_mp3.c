@@ -14,9 +14,9 @@
  *   antialias -> IMDCT 18/6 + window + overlap-add ->
  *   polyphase synthesis (ISO 512-tap Table B.3 window).
  *
+ * Only Layer III is implemented; a Layer I or II frame is rejected by name.
+ *
  * Trim macros (include/nj2me/nj_config.h):
- *   NJ_MP3_LAYER3_ONLY       Layer III is the only layer implemented; other
- *                            layers are rejected either way.
  *   NJ_MP3_ENABLE_ID3        skip ID3v2 tags and an ID3v1 trailer; when off the
  *                            decoder simply resyncs from byte 0.
  *   NJ_MP3_ENABLE_SEEK       off => ops.seek is NULL and no seek index is built.
@@ -27,9 +27,8 @@
 
 #include <string.h>
 
-#ifndef NJ_MP3_LAYER3_ONLY
-#define NJ_MP3_LAYER3_ONLY 1
-#endif
+#if NJ_ENABLE_MP3
+
 #ifndef NJ_MP3_ENABLE_ID3
 #define NJ_MP3_ENABLE_ID3 1
 #endif
@@ -2562,3 +2561,5 @@ const nj_av_audio_ops nj_av_audio_mp3 = {
     mp3_close,
     4u                          /* 16-bit stereo PCM frame */
 };
+
+#endif /* NJ_ENABLE_MP3 */

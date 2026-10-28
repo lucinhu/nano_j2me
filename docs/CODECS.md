@@ -12,13 +12,15 @@ flash matters more than the format:
 
 | Macro | Default | Effect when 0 |
 | --- | --- | --- |
+| `NJ_ENABLE_AMR` | 1 | no AMR-NB decoder; `createPlayer` answers `MediaException` |
 | `NJ_ENABLE_MP3` | 1 | no MP3 decoder is linked; `createPlayer` answers `MediaException` |
-| `NJ_ENABLE_VIDEO` | 1 | no video decoder is linked |
-| `NJ_MP3_LAYER3_ONLY` | 1 | Layer I/II are refused (nobody shipped them) |
+| `NJ_ENABLE_VIDEO` | 1 | neither video decoder is linked |
+| `NJ_ENABLE_H263` | = `NJ_ENABLE_VIDEO` | the H.263 decoder is not linked |
+| `NJ_ENABLE_M4V` | = `NJ_ENABLE_VIDEO` | the MPEG-4 Part 2 decoder is not linked |
 | `NJ_MP3_ENABLE_ID3` | 1 | tags are skipped by resync instead of parsed |
 | `NJ_MP3_ENABLE_SEEK` | 1 | `Player.setMediaTime` cannot seek inside a song |
 | `NJ_MP3_ENABLE_INTENSITY` | 1 | MPEG-1 intensity stereo is treated as plain stereo |
-| `NJ_VIDEO_H263_ONLY` | 1 | MPEG-4 Part 2 visual is refused |
+| `NJ_VIDEO_H263_ONLY` | 0 | legacy alias: 1 means H.263 on, MPEG-4 off |
 
 **Adapting** is runtime.  Decoders are function tables installed in the VM:
 
@@ -1221,6 +1223,9 @@ guard, so the object kept all of `nj_m4v`'s tables (22,974 bytes of `.text`).
 The translation unit is guarded end to end now, and
 `tools/check_codec_trim.sh` (run by ctest) compiles each unit with the switch on
 and off, requires `.text` to be empty and the provider symbol gone when off, and
-checks the legacy alias.  A release `nj2me` measured 3,571,544 bytes with both
+checks the legacy alias; it covers MP3 and AMR the same way (an MP3 that is
+switched off used to keep its whole object), and it requires each MP3 sub-switch
+(`ID3`, `SEEK`, `INTENSITY`) to shrink the object, so a switch that stops
+trimming fails the build instead of quietly costing flash.  A release `nj2me` measured 3,571,544 bytes with both
 codecs, 3,546,152 without H.263 and 3,465,096 without MPEG-4 (3,414,432 with
 `NJ_ENABLE_VIDEO=0`).

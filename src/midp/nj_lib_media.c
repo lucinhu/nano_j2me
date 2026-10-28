@@ -55,9 +55,10 @@
 #include "nj_mp4.h"
 #endif
 #include "nj_midi.h"
-#if NJ_ENABLE_AMR
-#  include "nj_amr.h"
-#endif
+/* The constants (NJ_AMR_RATE and the frame geometry) are part of the Player's
+ * contract even in a build without the decoder, so the header is included
+ * unconditionally; every call into the decoder stays behind NJ_ENABLE_AMR. */
+#include "nj_amr.h"
 
 #if NJ_USE_LIBC
 #  include <string.h>

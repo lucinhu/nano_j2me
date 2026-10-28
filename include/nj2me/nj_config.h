@@ -192,7 +192,6 @@
  * Finer trims, all on by default.  Each one is a real decision on a small
  * part, so each is its own macro rather than a single "minimal" switch:
  *
- *   NJ_MP3_LAYER3_ONLY        drop Layer I and II (nobody shipped them)
  *   NJ_MP3_ENABLE_ID3         skip/parse ID3v2 tags before/between frames
  *   NJ_MP3_ENABLE_SEEK        keep the table needed for Player.setMediaTime
  *   NJ_MP3_ENABLE_INTENSITY   intensity stereo, which only MPEG-1 needs
@@ -200,9 +199,6 @@
  *   NJ_ENABLE_M4V             MPEG-4 Part 2 decoder (follows NJ_ENABLE_VIDEO)
  *   NJ_VIDEO_H263_ONLY        legacy alias: H.263 on, MPEG-4 Part 2 off
  */
-#ifndef NJ_MP3_LAYER3_ONLY
-#  define NJ_MP3_LAYER3_ONLY 1
-#endif
 #ifndef NJ_MP3_ENABLE_ID3
 #  define NJ_MP3_ENABLE_ID3 1
 #endif
