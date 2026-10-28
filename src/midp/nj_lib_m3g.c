@@ -11181,7 +11181,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
     int dir1 = (sd1 > 0.0f) ? 1 : ((sd1 < 0.0f) ? -1 : 0);
     int dir2 = (sd2 > 0.0f) ? 1 : ((sd2 < 0.0f) ? -1 : 0);
     float fminx = (float)minx;
-    float fmaxx = (float)maxx;
+    float fmaxx = (float)maxx + 1.0f; /* Exclusive upper pixel-index bound. */
     float iz = ia * 65536.0f;      /* the depth scale, once */
     int dtest = sw->dtest;
     int dwrite = sw->dwrite;
@@ -11202,7 +11202,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
         } else if (dir0 < 0) {
             float x = fminx + w0 / (-sd0);
             if (x < hi) { hi = x; }
-        } else if (w0 < 0.0f) {
+        } else if (w0 < 0.0f || (w0 == 0.0f && sw0 < 0.0f)) {
             empty = 1;
         }
         if (dir1 > 0) {
@@ -11211,7 +11211,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
         } else if (dir1 < 0) {
             float x = fminx + w1 / (-sd1);
             if (x < hi) { hi = x; }
-        } else if (w1 < 0.0f) {
+        } else if (w1 < 0.0f || (w1 == 0.0f && sw1 < 0.0f)) {
             empty = 1;
         }
         if (dir2 > 0) {
@@ -11220,12 +11220,20 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
         } else if (dir2 < 0) {
             float x = fminx + w2 / (-sd2);
             if (x < hi) { hi = x; }
-        } else if (w2 < 0.0f) {
+        } else if (w2 < 0.0f || (w2 == 0.0f && sw2 < 0.0f)) {
             empty = 1;
         }
         if (!empty) {
-            xl = (int)ceilf(lo - 0.5f);
-            xr = (int)floorf(hi - 0.5f);
+            /* The edge accumulators were seeded at (minx + 0.5, miny + 0.5),
+             * so minx - w / sd already gives a crossing in pixel-index
+             * coordinates. Subtracting another half pixel here covers centres
+             * outside the triangle and extrapolates attributes across its edge
+             * (negative texture u can repeat into the opposite texture border).
+             * Left edges are inclusive and right edges exclusive. Together with
+             * the horizontal-edge test above this is the top-left ownership rule,
+             * so shared edges blend once even with depth writes disabled. */
+            xl = (int)ceilf(lo);
+            xr = (int)ceilf(hi) - 1;
             if (xl < minx) { xl = minx; }
             if (xr > maxx) { xr = maxx; }
             if (xl > xr) { empty = 1; }

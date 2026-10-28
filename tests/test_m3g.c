@@ -707,7 +707,7 @@ static int i2d_canvas_init(nj_vm *vm, i2d_canvas *c)
     ok = ok && nj_call_special(vm, c->ib, CLS("TriangleStripArray"), "<init>",
                                "(I[I)V", a, NULL) == NJ_OK;
 
-    a[0].i = 160;   /* CULL_NONE: both windings render. */
+    a[0].i = 160;   /* CULL_BACK: the quad is front-facing. */
     ok = ok && nj_call(vm, c->poly, CLS("PolygonMode"), "setCulling",
                        "(I)V", a, NULL) == NJ_OK;
     a[0].r = c->poly;
@@ -1403,6 +1403,208 @@ static void test_spot_light_cone(nj_vm *vm)
     lit_zero = i2d_canvas_lit_pixels(&canvas);
     check(lit_zero == 0,
           "and a cone of no width lights nothing, as the reference computes");
+}
+
+/* A pixel belongs to a triangle when its centre is inside all three edges.
+ * The quarter-pixel vertices exercise both ends of a span; reversing them
+ * must give the same coverage. A repeated yellow/black texture makes an
+ * extrapolated negative u visible as black, like the NFS road seam. */
+static void test_triangle_pixel_centres(nj_vm *vm)
+{
+    static const nj_s2 pos[9] = {
+        -93, 95, -256, 81, 77, -256, -77, -83, -256
+    };
+    static const nj_s2 uv[6] = { 0, 0, 16, 0, 0, 0 };
+    static const nj_u1 colours[9] = { 255, 0, 0, 0, 255, 0, 0, 0, 255 };
+    static const nj_u1 texels[8] = { 255, 255, 0, 255, 0, 0, 0, 255 };
+    /* Parallel height 4, viewport 64, position scale 1/64. */
+    static const double vx[3] = { 8.75, 52.25, 12.75 };
+    static const double vy[3] = { 8.25, 12.75, 52.75 };
+    i2d_canvas c;
+    nj_value a[6];
+    nj_ref pva, tva, cva, p, t, col, lens, img, bytes, tex;
+    int ok, canvas_ok, winding, variant;
+
+    printf("== triangle spans cover pixel centres without extrapolating ==\n");
+    canvas_ok = i2d_canvas_init(vm, &c);
+    pva = nj_object_new(vm, CLS("VertexArray"));
+    tva = nj_object_new(vm, CLS("VertexArray"));
+    cva = nj_object_new(vm, CLS("VertexArray"));
+    p = nj_array_new(vm, "S", 9u);
+    t = nj_array_new(vm, "S", 6u);
+    col = nj_byte_array_new(vm, 9u);
+    lens = nj_array_new(vm, "I", 1u);
+    img = i2d_new3(vm, 100, 2, 1, &ok);
+    bytes = nj_byte_array_new(vm, sizeof(texels));
+    tex = nj_object_new(vm, CLS("Texture2D"));
+    check(canvas_ok && ok && pva && tva && cva && p && t && col && lens &&
+          img && bytes && tex, "the subpixel triangle and repeated texture exist");
+    if (!canvas_ok || !ok || !pva || !tva || !cva || !p || !t || !col || !lens ||
+        !img || !bytes || !tex) { return; }
+
+    a[0].i = 3; a[1].i = 3; a[2].i = 2;
+    nj_call_special(vm, pva, CLS("VertexArray"), "<init>", "(III)V", a, NULL);
+    a[1].i = 2;
+    nj_call_special(vm, tva, CLS("VertexArray"), "<init>", "(III)V", a, NULL);
+    a[1].i = 3; a[2].i = 1;
+    nj_call_special(vm, cva, CLS("VertexArray"), "<init>", "(III)V", a, NULL);
+    memcpy(nj_array_data(col), colours, sizeof(colours));
+    a[0].i = 0; a[1].i = 3; a[2].r = col;
+    call(vm, cva, CLS("VertexArray"), "set", "(II[B)V", a, NULL);
+    ((nj_s4 *)nj_array_data(lens))[0] = 3;
+    a[0].i = 0; a[1].r = lens;
+    nj_call_special(vm, c.ib, CLS("TriangleStripArray"), "<init>",
+                    "(I[I)V", a, NULL);
+    a[0].i = 162; /* CULL_NONE: exercise both windings. */
+    call(vm, c.poly, CLS("PolygonMode"), "setCulling", "(I)V", a, NULL);
+    a[0].i = 0; a[1].i = 0; a[2].i = 64; a[3].i = 64;
+    call(vm, c.g3d, CLS("Graphics3D"), "setViewport", "(IIII)V", a, NULL);
+    a[0].i = 0x0000FF;
+    call(vm, c.bg, CLS("Background"), "setColor", "(I)V", a, NULL);
+    memcpy(nj_array_data(bytes), texels, sizeof(texels));
+    check(i2d_set_ok(vm, img, 0, 0, 2, 1, bytes), "the seam texture is set");
+    a[0].r = img;
+    nj_call_special(vm, tex, CLS("Texture2D"), "<init>",
+                    "(L" CLS("Image2D") ";)V", a, NULL);
+    a[0].i = 228; /* REPLACE also isolates coverage in the Gouraud loop. */
+    call(vm, tex, CLS("Texture2D"), "setBlending", "(I)V", a, NULL);
+    a[0].i = 241; a[1].i = 241;
+    call(vm, tex, CLS("Texture2D"), "setWrapping", "(II)V", a, NULL);
+    a[0].i = 208; a[1].i = 208;
+    call(vm, tex, CLS("Texture2D"), "setFiltering", "(II)V", a, NULL);
+
+    for (winding = 0; winding < 2; winding++) {
+        int i;
+        for (i = 0; i < 3; i++) {
+            int src = winding ? 2 - i : i;
+            memcpy((nj_s2 *)nj_array_data(p) + i * 3, pos + src * 3,
+                   3u * sizeof(nj_s2));
+            memcpy((nj_s2 *)nj_array_data(t) + i * 2, uv + src * 2,
+                   2u * sizeof(nj_s2));
+        }
+        a[0].i = 0; a[1].i = 3; a[2].r = p;
+        call(vm, pva, CLS("VertexArray"), "set", "(II[S)V", a, NULL);
+        a[2].r = t;
+        call(vm, tva, CLS("VertexArray"), "set", "(II[S)V", a, NULL);
+        a[0].r = pva; a[1].f = 1.0f / 64.0f; a[2].r = 0;
+        call(vm, c.vb, CLS("VertexBuffer"), "setPositions",
+             "(L" CLS("VertexArray") ";F[F)V", a, NULL);
+        a[0].i = 0; a[1].r = tva; a[2].f = 1.0f / 64.0f; a[3].r = 0;
+        call(vm, c.vb, CLS("VertexBuffer"), "setTexCoords",
+             "(IL" CLS("VertexArray") ";F[F)V", a, NULL);
+
+        for (variant = 0; variant < 3; variant++) {
+            int x, y, inside_ok = 1, outside_ok = 1, inside_count = 0;
+            a[0].r = variant == 2 ? cva : 0;
+            call(vm, c.vb, CLS("VertexBuffer"), "setColors",
+                 "(L" CLS("VertexArray") ";)V", a, NULL);
+            a[0].i = 0; a[1].r = variant ? tex : 0;
+            call(vm, c.app, CLS("Appearance"), "setTexture",
+                 "(IL" CLS("Texture2D") ";)V", a, NULL);
+            a[0].r = c.bg;
+            call(vm, c.g3d, CLS("Graphics3D"), "clear",
+                 "(L" CLS("Background") ";)V", a, NULL);
+            a[0].r = c.vb; a[1].r = c.ib; a[2].r = c.app;
+            a[3].r = 0; a[4].i = 0;
+            call(vm, c.g3d, CLS("Graphics3D"), "render",
+                 "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                 CLS("Appearance") ";L" CLS("Transform") ";I)V", a, NULL);
+            for (y = 0; y < 64; y++) {
+                for (x = 0; x < 64; x++) {
+                    int edge, inside = 1, boundary = 0;
+                    nj_u4 pixel = i2d_canvas_pixel(&c, x, y);
+                    for (edge = 0; edge < 3; edge++) {
+                        int next = (edge + 1) % 3;
+                        double e = (vx[next] - vx[edge]) * (y + 0.5 - vy[edge]) -
+                                   (vy[next] - vy[edge]) * (x + 0.5 - vx[edge]);
+                        if (e < 0.0) { inside = 0; }
+                        if (fabs(e) < 0.001) { boundary = 1; }
+                    }
+                    if (boundary) { continue; } /* No shared-edge tie rule here. */
+                    if (inside) {
+                        inside_count++;
+                        if (pixel != (variant ? 0xFFFF00u : 0xFFFFFFu)) {
+                            inside_ok = 0;
+                        }
+                    } else if (pixel != 0x0000FFu) {
+                        outside_ok = 0;
+                    }
+                }
+            }
+            if (!inside_ok || !outside_ok || inside_count <= 900) {
+                fprintf(stderr, "coverage winding=%d variant=%d interior=%d "
+                        "inside_ok=%d outside_ok=%d\n", winding, variant,
+                        inside_count, inside_ok, outside_ok);
+            }
+            check(!nj_has_exception(vm), "the triangle renders without exception");
+            check(inside_count > 900 && inside_ok,
+                  "flat, textured and Gouraud spans fill every interior centre");
+            check(outside_ok,
+                  "neither winding writes outside the triangle or wraps negative u");
+        }
+    }
+    /* Edge ownership matters when depth writes are off: two alpha fragments
+     * on a shared edge must blend just once. Half-pixel rectangle boundaries
+     * also exercise horizontal, vertical and diagonal centre-aligned edges. */
+    {
+        static const nj_u1 alpha_texels[8] = { 255, 0, 0, 128, 255, 0, 0, 128 };
+        static const int corners[2][3] = { { 0, 1, 2 }, { 0, 2, 3 } };
+        static const nj_s2 rawx[4] = { -94, 98, 98, -94 };
+        nj_ref cm = make(vm, CLS("CompositingMode"));
+        int panels;
+
+        check(cm != 0, "a compositing mode for shared-edge alpha coverage");
+        if (!cm) { return; }
+        a[0].i = 64; /* ALPHA */
+        call(vm, cm, CLS("CompositingMode"), "setBlending", "(I)V", a, NULL);
+        a[0].i = 0;
+        call(vm, cm, CLS("CompositingMode"), "setDepthWriteEnable", "(Z)V", a, NULL);
+        a[0].r = cm;
+        call(vm, c.app, CLS("Appearance"), "setCompositingMode",
+             "(L" CLS("CompositingMode") ";)V", a, NULL);
+        a[0].r = 0;
+        call(vm, c.vb, CLS("VertexBuffer"), "setColors",
+             "(L" CLS("VertexArray") ";)V", a, NULL);
+        a[0].i = 0;
+        call(vm, c.bg, CLS("Background"), "setColor", "(I)V", a, NULL);
+        memcpy(nj_array_data(bytes), alpha_texels, sizeof(alpha_texels));
+        check(i2d_set_ok(vm, img, 0, 0, 2, 1, bytes), "a half-alpha red texture");
+        for (winding = 0; winding < 2; winding++) {
+            for (panels = 1; panels <= 2; panels++) {
+                int tri, x, y, same = 1;
+                a[0].r = c.bg;
+                call(vm, c.g3d, CLS("Graphics3D"), "clear",
+                     "(L" CLS("Background") ";)V", a, NULL);
+                for (tri = 0; tri < panels * 2; tri++) {
+                    nj_s2 *pp = (nj_s2 *)nj_array_data(p);
+                    int i, height = 192 / panels;
+                    for (i = 0; i < 3; i++) {
+                        int corner = corners[tri % 2][winding ? 2 - i : i];
+                        pp[i * 3] = rawx[corner];
+                        pp[i * 3 + 1] = (nj_s2)(94 - (tri / 2) * height -
+                                                (corner >= 2 ? height : 0));
+                        pp[i * 3 + 2] = -256;
+                    }
+                    a[0].i = 0; a[1].i = 3; a[2].r = p;
+                    call(vm, pva, CLS("VertexArray"), "set", "(II[S)V", a, NULL);
+                    a[0].r = c.vb; a[1].r = c.ib; a[2].r = c.app;
+                    a[3].r = 0; a[4].i = 0;
+                    call(vm, c.g3d, CLS("Graphics3D"), "render",
+                         "(L" CLS("VertexBuffer") ";L" CLS("IndexBuffer") ";L"
+                         CLS("Appearance") ";L" CLS("Transform") ";I)V", a, NULL);
+                }
+                for (y = 0; y < 64; y++) {
+                    for (x = 0; x < 64; x++) {
+                        nj_u4 want = x >= 8 && x < 56 && y >= 8 && y < 56 ?
+                                     0x800000u : 0u;
+                        if (i2d_canvas_pixel(&c, x, y) != want) { same = 0; }
+                    }
+                }
+                check(!nj_has_exception(vm) && same,
+                      "shared diagonal/horizontal edges blend once in either winding");
+            }
+        }
+    }
 }
 
 static void test_textured_span_variants(nj_vm *vm)
@@ -6614,6 +6816,7 @@ int main(void)
     }
 
     test_image2d_set(vm);
+    test_triangle_pixel_centres(vm);
     test_textured_span_variants(vm);
     test_texture_transform_matrix(vm);
     test_spot_light_cone(vm);
