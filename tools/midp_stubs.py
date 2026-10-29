@@ -794,6 +794,21 @@ CLASSES = {
         "methods": ["javax.microedition.pim.PIMList getPIMList()",
                     "int countValues(int)", "java.lang.String getString(int, int)"],
     },
+    # Samsung's short-message helper, used by three corpus titles for a
+    # billing/share message.  This runtime has no SMS transport, so send()
+    # throws the IOException the SDK declares and isSupported() is false.
+    "com/samsung/util/SM": {
+        "methods": ["public void setData(java.lang.String)",
+                    "public java.lang.String getData()",
+                    "public void setDestAddress(java.lang.String)",
+                    "public java.lang.String getDestAddress()"],
+    },
+    "com/samsung/util/SMS": {
+        "methods": [
+            "public static boolean isSupported()",
+            "public static void send(com.samsung.util.SM) throws java.io.IOException",
+        ],
+    },
     "javax/microedition/media/Player": {
         "interface": True,
         "constants": {"CLOSED": "0", "UNREALIZED": "100", "REALIZED": "200",

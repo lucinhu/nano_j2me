@@ -652,6 +652,14 @@ extern const int nj_lib_http_class_count;
 extern const nj_native_entry nj_lib_http_table[];
 extern const int nj_lib_http_count;
 
+/* Built by nj_lib_samsung.c: com.samsung.util.SM/SMS, the vendor short-message
+ * helper three corpus titles use.  There is no SMS transport here, so send()
+ * raises the IOException the SDK declares and isSupported() is false. */
+extern const nj_builtin_class nj_lib_samsung_classes[];
+extern const int nj_lib_samsung_class_count;
+extern const nj_native_entry nj_lib_samsung_table[];
+extern const int nj_lib_samsung_count;
+
 /* Built by nj_lib_pim.c (JSR 75's javax.microedition.pim).  The runtime has no
  * contact store: openPIMList(CONTACT_LIST, ...) returns an empty list, a list
  * type it does not have raises PIMException, and every field is unsupported. */

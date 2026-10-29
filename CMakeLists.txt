@@ -186,6 +186,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_io.c
   src/midp/nj_lib_http.c
   src/midp/nj_lib_pim.c
+  src/midp/nj_lib_samsung.c
   src/midp/nj_lib_socket.c
   src/midp/nj_lib_datagram.c
   src/midp/nj_lib_sensor.c
@@ -942,6 +943,15 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_pim.sh)
     set_tests_properties(check_pim PROPERTIES TIMEOUT 180
+                         SKIP_RETURN_CODE 77)
+    # Samsung's SM/SMS through the interpreter: the value object keeps what a
+    # title sets, isSupported() is false and send() raises the IOException the
+    # SDK declares.  Three corpus titles call exactly this subset.
+    add_test(NAME check_samsung_sms
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_samsung_sms.sh)
+    set_tests_properties(check_samsung_sms PROPERTIES TIMEOUT 180
                          SKIP_RETURN_CODE 77)
     # A MIDlet constructor is entered from C, and it may park on another thread:
     # 毁灭战士3_10598 starts a loader and waits for it while it builds the level,
