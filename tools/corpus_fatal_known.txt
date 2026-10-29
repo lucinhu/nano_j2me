@@ -1,0 +1,11 @@
+# Titles tools/corpus_fatal.sh is expected to report, with the reason.  A line
+# is "<jar name without .jar><TAB><why>".  Comment lines and blanks ignored.
+#
+# Every entry here has been checked by hand and is NOT a runtime defect.  An
+# entry that starts failing for a NEW reason is still reported, so this list
+# cannot hide a regression: the gate compares only "this title failed before
+# and still does", and any title not on the list is fatal.
+阿尔卑斯牧场物语_7043	its splash canvas is built by a constructor that never creates its Sound object; showNotify calls CallCheck on it and the title's own NPE escapes (the title still draws and animates, 101 colours over 200 frames)
+斩妖伏魔录_6231	the JAR ships s60/01.png but the title loads /s60/02.png; the failed init leaves a field null and its showNotify NPE escapes (the title still draws)
+1945空战英雄_6105	its own platform gate: it refuses to run unless microedition.platform starts with "Nokia" (runs with --device nokia6230)
+鲁宾逊漂流记汉化BT版_4677	the JAR is not a zip at all (truncated download, "End-of-central-directory signature not found") - data, not runtime

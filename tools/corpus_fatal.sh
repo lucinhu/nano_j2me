@@ -40,9 +40,15 @@ one()
     name="$(basename "$jar" .jar)"
     log="$WORK/log/$name.log"
     # A save directory that exists: a missing one makes every record store
-    # call throw, which turns working titles into silent black frames.
+    # call throw, which turns working titles into silent black frames.  Each
+    # title gets its OWN directory: one shared directory let titles with the
+    # same store name (most call it "config") read each other's records, so a
+    # title could fail on another game's data - 3D台球之王_5014 exited 1 in the
+    # shared-directory sweep and runs clean when isolated.  That was the
+    # harness lying, not the runtime.
+    mkdir -p "$WORK/rms/$name"
     timeout 30 "$BIN" --port headless --heap 16 --run-frames 150 \
-        --size 176x208 --fps 30 --rms-dir "$WORK/rms" "$jar" \
+        --size 176x208 --fps 30 --rms-dir "$WORK/rms/$name" "$jar" \
         > "$log" 2>&1
     rc=$?
     escaped="$(grep -c "exception escaped into the frame loop" "$log")"
@@ -55,14 +61,33 @@ find "$GAMES" -maxdepth 1 -name '*.jar' -print0 \
     | xargs -0 -P "$JOBS" -I{} bash -c 'one "$@"' _ {} \
     | sort > "$WORK/results.tsv"
 
+# A title can be known-failing for a reason that is not this runtime's: a
+# truncated download, a platform gate that needs --device, or its own NPE
+# inside a callback.  Those live in tools/corpus_fatal_known.txt with a reason
+# each, so the gate stays usable; a title NOT on that list is always fatal,
+# and the list is a baseline, not a place to hide a new failure.
+KNOWN="${NJ_CORPUS_KNOWN_FATAL:-$(dirname "$0")/corpus_fatal_known.txt}"
+known_match()
+{
+    [ -f "$KNOWN" ] || return 1
+    awk -F '\t' -v n="$1" '!/^#/ && NF >= 1 && $1 == n { found = 1 } END { exit !found }' "$KNOWN"
+}
+
 total="$(wc -l < "$WORK/results.tsv")"
 fatal=0
+known=0
 while IFS="$(printf '\t')" read -r rc escaped name; do
     if [ "$rc" != "0" ] || [ "$escaped" != "0" ]; then
-        fatal=$((fatal + 1))
-        printf 'FATAL %-14s rc=%-3s escaped=%s\n' "$name" "$rc" "$escaped"
+        if known_match "$name"; then
+            known=$((known + 1))
+            printf 'known %-14s rc=%-3s escaped=%s\n' "$name" "$rc" "$escaped"
+        else
+            fatal=$((fatal + 1))
+            printf 'FATAL %-14s rc=%-3s escaped=%s\n' "$name" "$rc" "$escaped"
+        fi
     fi
 done < "$WORK/results.tsv"
 
-printf 'fatal %d / %d  (heap 16, 150 frames, fps 30)\n' "$fatal" "$total"
+printf 'fatal %d / %d, known %d  (heap 16, 150 frames, fps 30)\n' \
+    "$fatal" "$total" "$known"
 [ "$fatal" = "0" ]
