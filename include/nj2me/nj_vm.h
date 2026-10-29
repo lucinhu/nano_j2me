@@ -660,6 +660,14 @@ extern const int nj_lib_socket_class_count;
 extern const nj_native_entry nj_lib_socket_table[];
 extern const int nj_lib_socket_count;
 
+/* Built by nj_lib_datagram.c (javax.microedition.io.DatagramConnection).  The
+ * two interfaces, their value object and the connection that opens the UDP
+ * socket through the C library. */
+extern const nj_builtin_class nj_lib_datagram_classes[];
+extern const int nj_lib_datagram_class_count;
+extern const nj_native_entry nj_lib_datagram_table[];
+extern const int nj_lib_datagram_count;
+
 /* Built by nj_lib_sensor.c (JSR 256, javax.microedition.sensor).  The five
  * implementation classes are the objects the interfaces describe; the sensors
  * themselves come from the port's optional sensor_* hooks. */

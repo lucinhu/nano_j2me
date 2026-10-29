@@ -1413,6 +1413,15 @@ NJFN(connector_open)
         return ret->r ? NJ_OK : NJ_ERR;
     }
     /*
+     * datagram:// is a UDP socket: "datagram://:19132" binds a wildcard port
+     * for a server, "datagram://host:port" also names the default peer.  It is
+     * how Minecraft PE's LAN mode talks RakNet.
+     */
+    if (strncmp(u, "datagram://", 11u) == 0) {
+        ret->r = nj_datagram_new(vm, u);
+        return ret->r ? NJ_OK : NJ_ERR;
+    }
+    /*
      * Bluetooth.  A SERVER URL names localhost, and that is the notifier the
      * javax.bluetooth module hands back: acceptAndOpen() waits for a peer and
      * returns the connection.  A CLIENT URL ("btspp://001122334455:3") is a

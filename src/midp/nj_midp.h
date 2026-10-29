@@ -443,6 +443,13 @@ nj_status nj_http_late_init(nj_vm *vm);
  */
 nj_ref nj_socket_new(nj_vm *vm, const char *url);
 
+/*
+ * UDP (javax.microedition.io.DatagramConnection).  nj_datagram_new() is what
+ * Connector.open("datagram://...") calls; it binds a socket (host and port may
+ * be empty) and returns a connection object, or NULL with an exception set.
+ */
+nj_ref nj_datagram_new(nj_vm *vm, const char *url);
+
 /* SocketConnection.DELAY/LINGER/KEEPALIVE/RCVBUF/SNDBUF - the option numbers
  * are also the indices setSocketOption() checks, so one list seeds both. */
 nj_status nj_socket_late_init(nj_vm *vm);

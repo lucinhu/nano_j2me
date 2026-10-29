@@ -186,6 +186,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_io.c
   src/midp/nj_lib_http.c
   src/midp/nj_lib_socket.c
+  src/midp/nj_lib_datagram.c
   src/midp/nj_lib_sensor.c
   src/midp/nj_lib_bt.c
   src/midp/nj_lib_lcdui.c
@@ -1307,7 +1308,7 @@ nj_add_test(test_clip tests/test_clip.c)
 
   foreach(extra_test test_font_png test_jpeg test_lcdui test_game test_lib
                       test_ioapi test_resolution test_sax test_rms test_run_archive
-                      test_nokia_sound test_nokia_touch)
+                      test_nokia_sound test_nokia_touch test_datagram)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${extra_test}.c)
       nj_add_test(${extra_test} tests/${extra_test}.c)
     endif()

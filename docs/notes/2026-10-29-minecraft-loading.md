@@ -126,13 +126,36 @@ pointer replay (`--keys '150:pressed@120,125 154:released@120,125'`) opens
 test. `tests/test_nokia_touch.c` pins the class surface, the constants and the
 coordinates `getState()`/`getX()`/`getY()` report.
 
+## LAN multiplayer
+
+`javax.microedition.io.DatagramConnection` / `Datagram` are implemented in
+[nj_lib_datagram.c](src/midp/nj_lib_datagram.c) over the C socket API, and
+`Connector.open("datagram://...")` binds them. Sockets are opened with
+`SO_REUSEADDR` and `SO_BROADCAST`, because RakNet announces a LAN game by
+broadcasting a ping and answers the peer's probe on the same socket.
+
+`receive()` may not block the cooperative scheduler inside C: with no datagram
+waiting it records a zero-length datagram and parks the calling thread through
+`nj_thread_sleep()` for a few milliseconds, so the frame pump and every other
+MIDlet thread run in between. The MIDlet's receive loop then asks again.
+Minecraft's RakNet loop treats a zero-length read as nothing to do, which is
+what makes that behaviour safe here.
+
+Evidence:
+
+- `tests/test_datagram.c` opens two loopback sockets in one VM and checks
+  `newDatagram`/`send`/`receive` (including a reply to the recorded peer),
+  address formatting, the datagram mutators, closed-connection errors, and the
+  cooperative park seen through `nj_invoke_native`. It needs no external
+  network.
+- Two nano_j2me instances on one machine: the host logs
+  `MCJ: NET host port 19132 guid ...` instead of `NET host failed`, and the
+  client's Join Game screen lists it as `SteveHero 192.168.1.4`. Evidence:
+  `.local-tools/debug-runs/minecraft-lan-pair-r01/` and
+  `.local-tools/debug-runs/minecraft-lan-join-r01/`.
+
 Known gaps after this work:
 
-- LAN play still needs `javax.microedition.io.DatagramConnection` and
-  `datagram://`, so "Join Game" reports a caught `ConnectionNotFoundException`
-  and single-player continues. The runtime's threads are cooperative, so a
-  native blocking receive would also stop the frame pump until it returned;
-  that needs I/O-aware scheduling rather than a small stub.
 - `Graphics3D.getProperties()` reports `supportAntialiasing = false`, which this
   title uses as its "3D hardware present" probe, so it draws its HUD through
   `Graphics` instead of the m3g path. The reported capability is accurate: the
