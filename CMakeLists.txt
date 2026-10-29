@@ -185,6 +185,7 @@ set(NJ_SOURCES
   src/midp/nj_lib_util.c
   src/midp/nj_lib_io.c
   src/midp/nj_lib_http.c
+  src/midp/nj_lib_pim.c
   src/midp/nj_lib_socket.c
   src/midp/nj_lib_datagram.c
   src/midp/nj_lib_sensor.c
@@ -931,6 +932,16 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_tempo_control.sh)
     set_tests_properties(check_tempo_control PROPERTIES TIMEOUT 180
+                         SKIP_RETURN_CODE 77)
+    # JSR 75's PIM half through the interpreter: the contact list opens empty,
+    # no field is supported, items() is a real empty Enumeration, a list type
+    # with no store raises PIMException and an unknown mode IllegalArgumentException.
+    # 3D孤胆枪手2010_4634 walks the contact list and used to die on the class.
+    add_test(NAME check_pim
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_pim.sh)
+    set_tests_properties(check_pim PROPERTIES TIMEOUT 180
                          SKIP_RETURN_CODE 77)
     # A MIDlet constructor is entered from C, and it may park on another thread:
     # 毁灭战士3_10598 starts a loader and waits for it while it builds the level,

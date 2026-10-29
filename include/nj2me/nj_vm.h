@@ -652,6 +652,14 @@ extern const int nj_lib_http_class_count;
 extern const nj_native_entry nj_lib_http_table[];
 extern const int nj_lib_http_count;
 
+/* Built by nj_lib_pim.c (JSR 75's javax.microedition.pim).  The runtime has no
+ * contact store: openPIMList(CONTACT_LIST, ...) returns an empty list, a list
+ * type it does not have raises PIMException, and every field is unsupported. */
+extern const nj_builtin_class nj_lib_pim_classes[];
+extern const int nj_lib_pim_class_count;
+extern const nj_native_entry nj_lib_pim_table[];
+extern const int nj_lib_pim_count;
+
 /* Built by nj_lib_socket.c (javax.microedition.io.SocketConnection).  Four
  * classes: the interface, the implementation, and the two streams a MIDlet
  * reads and writes. */

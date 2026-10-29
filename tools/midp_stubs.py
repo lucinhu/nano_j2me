@@ -747,6 +747,53 @@ CLASSES = {
             "java.lang.String getVersion()",
         ],
     },
+    # JSR 75's PIM half.  The runtime keeps the contact list empty (there is no
+    # contact store to configure), so the API shape is what a fixture compiles
+    # against; openPIMList on a type without a store raises PIMException.
+    "javax/microedition/pim/PIMException": {"extends": "java.lang.Exception"},
+    "javax/microedition/pim/UnsupportedFieldException": {
+        "extends": "java.lang.RuntimeException",
+    },
+    "javax/microedition/pim/PIM": {
+        "constants": {"CONTACT_LIST": "1", "EVENT_LIST": "2", "TODO_LIST": "3",
+                      "READ_ONLY": "1", "WRITE_ONLY": "2", "READ_WRITE": "3"},
+        "methods": [
+            "public static javax.microedition.pim.PIM getInstance()",
+            "public javax.microedition.pim.PIMList openPIMList(int, int) throws javax.microedition.pim.PIMException",
+            "public java.lang.String[] listPIMLists(int)",
+        ],
+    },
+    "javax/microedition/pim/PIMList": {
+        "interface": True,
+        "methods": [
+            "void close() throws javax.microedition.pim.PIMException",
+            "java.lang.String getName()",
+            "java.util.Enumeration items() throws javax.microedition.pim.PIMException",
+            "boolean isSupportedField(int)",
+            "java.lang.String getFieldLabel(int)",
+        ],
+    },
+    "javax/microedition/pim/ContactList": {
+        "interface": True,
+        "extends": "javax.microedition.pim.PIMList",
+        "methods": [
+            "void close() throws javax.microedition.pim.PIMException",
+            "java.lang.String getName()",
+            "java.util.Enumeration items() throws javax.microedition.pim.PIMException",
+            "boolean isSupportedField(int)",
+            "java.lang.String getFieldLabel(int)",
+        ],
+    },
+    "javax/microedition/pim/PIMItem": {
+        "interface": True,
+        "methods": ["javax.microedition.pim.PIMList getPIMList()"],
+    },
+    "javax/microedition/pim/Contact": {
+        "interface": True,
+        "extends": "javax.microedition.pim.PIMItem",
+        "methods": ["javax.microedition.pim.PIMList getPIMList()",
+                    "int countValues(int)", "java.lang.String getString(int, int)"],
+    },
     "javax/microedition/media/Player": {
         "interface": True,
         "constants": {"CLOSED": "0", "UNREALIZED": "100", "REALIZED": "200",

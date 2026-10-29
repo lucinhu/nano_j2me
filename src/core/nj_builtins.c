@@ -28,6 +28,7 @@ const nj_builtin_source nj_builtin_sources[] = {
     { nj_lib_nokia_classes,  &nj_lib_nokia_class_count  },
     { nj_lib_fc_classes,     &nj_lib_fc_class_count     },
     { nj_lib_http_classes,   &nj_lib_http_class_count   },
+    { nj_lib_pim_classes,    &nj_lib_pim_class_count    },
     { nj_lib_socket_classes, &nj_lib_socket_class_count }
     , { nj_lib_datagram_classes, &nj_lib_datagram_class_count }
     , { nj_lib_sensor_classes, &nj_lib_sensor_class_count }
