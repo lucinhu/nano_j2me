@@ -288,6 +288,9 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
              * the decision is made here so a changed phone (or Android's own
              * memory pressure) is reflected on the next launch. */
             heapMB = JarStore.autoHeapMB(this);
+            Log.i(TAG, "heap: automatic, " + heapMB + " MB for this phone");
+        } else {
+            Log.i(TAG, "heap: " + heapMB + " MB (chosen)");
         }
         viewMode = it.getIntExtra("view", VIEW_INT);
         viewZoom = it.getFloatExtra("zoom", 1.0f);
