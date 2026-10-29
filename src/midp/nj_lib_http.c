@@ -75,6 +75,23 @@ static void http_copy_str(char *dst, int cap, const char *src)
  */
 #define NJ_C_HTTPIMPL    "javax/microedition/io/HttpImpl"
 
+/*
+ * The HTTPS object is a SECOND implementation class, not the same one with an
+ * extra interface.  This runtime cannot give a built-in class an interface
+ * list, and a super chain can spell only one is-a, so sharing one class would
+ * make `c instanceof HttpsConnection` true for an http:// connection -
+ * 急速公路狂飙－新年版_84 performs exactly that test on every request and
+ * would take its secure-path branch on a plain socket.  Two classes with one
+ * chain each keep the answer honest: HttpImpl is an HttpConnection, HttpsImpl
+ * is an HttpsConnection and, through HttpsConnection's super, an
+ * HttpConnection as well.
+ */
+#define NJ_C_HTTPSIMPL   "javax/microedition/io/HttpsImpl"
+#define NJ_C_HTTPS       "javax/microedition/io/HttpsConnection"
+#define NJ_C_SECINFO     "javax/microedition/io/SecurityInfo"
+#define NJ_C_SECURECONN  "javax/microedition/io/SecureConnection"
+#define NJ_C_CERT        "javax/microedition/pki/Certificate"
+
 #define NJ_C_BAOS        "java/io/ByteArrayOutputStream"
 #define NJ_C_BAIS        "java/io/ByteArrayInputStream"
 #define NJ_C_DIS         "java/io/DataInputStream"
@@ -101,21 +118,33 @@ static void http_copy_str(char *dst, int cap, const char *src)
 /* Field access                                                        */
 /* ------------------------------------------------------------------ */
 
-static nj_field *hfld(nj_vm *vm, const char *name, const char *desc)
+/*
+ * The state fields are declared on BOTH implementation classes (each needs its
+ * own copy, because a field index is relative to its declaring class's layout),
+ * so the lookup has to follow the object's actual class.  The two names differ,
+ * so one comparison decides it - a failed lookup followed by a second one would
+ * put that cost on every http:// field access instead.
+ */
+static nj_field *hfld(nj_vm *vm, nj_ref o, const char *name, const char *desc)
 {
+    const char *cn = o ? nj_ref_class_name(o) : NULL;
+
+    if (cn != NULL && strcmp(cn, NJ_C_HTTPSIMPL) == 0) {
+        return nj_field_lookup(vm, NJ_C_HTTPSIMPL, name, desc, 0);
+    }
     return nj_field_lookup(vm, NJ_C_HTTPIMPL, name, desc, 0);
 }
 
 static nj_ref hget_ref(nj_vm *vm, nj_ref o, const char *name, const char *desc)
 {
-    nj_field *f = hfld(vm, name, desc);
+    nj_field *f = hfld(vm, o, name, desc);
     return f ? nj_field_read_ref(vm, o, f) : NULL;
 }
 
 static void hset_ref(nj_vm *vm, nj_ref o, const char *name, const char *desc,
                      nj_ref v)
 {
-    nj_field *f = hfld(vm, name, desc);
+    nj_field *f = hfld(vm, o, name, desc);
     if (f) {
         nj_field_write_ref(vm, o, f, v);
     }
@@ -123,14 +152,14 @@ static void hset_ref(nj_vm *vm, nj_ref o, const char *name, const char *desc,
 
 static nj_s4 hget_int(nj_vm *vm, nj_ref o, const char *name, const char *desc)
 {
-    nj_field *f = hfld(vm, name, desc);
+    nj_field *f = hfld(vm, o, name, desc);
     return f ? nj_field_read_int(vm, o, f) : 0;
 }
 
 static void hset_int(nj_vm *vm, nj_ref o, const char *name, const char *desc,
                      nj_s4 v)
 {
-    nj_field *f = hfld(vm, name, desc);
+    nj_field *f = hfld(vm, o, name, desc);
     if (f) {
         nj_field_write_int(vm, o, f, v);
     }
@@ -505,7 +534,8 @@ nj_ref nj_http_new(nj_vm *vm, const char *url)
                        url ? url : "(null)");
         return NULL;
     }
-    o = nj_object_new(vm, NJ_C_HTTPIMPL);
+    o = nj_object_new(vm, strcmp(scheme, "https") == 0 ? NJ_C_HTTPSIMPL
+                                                       : NJ_C_HTTPIMPL);
     if (!o) {
         return NULL;
     }
@@ -1366,6 +1396,23 @@ NJFN(http_open_data_output)
     return NJ_OK;
 }
 
+/*
+ * HttpsConnection.getSecurityInfo().  JSR 75 says an IOException means "the
+ * connection is closed or the security information is not available", and it
+ * is not available here: the port's http_request hook performs a whole
+ * request host-side and never hands back the TLS session.  An object full of
+ * invented protocol names and a null certificate would be worse than an
+ * honest exception - and a MIDlet that only casts to HttpsConnection never
+ * reaches this call.
+ */
+NJFN(https_get_security_info)
+{
+    (void)args;
+    (void)ret;
+    return nj_throw(vm, "java/io/IOException",
+                    "TLS session information is not available from this port");
+}
+
 NJFN(http_close)
 {
     nj_ref self = NJ_THIS(args);
@@ -1508,6 +1555,47 @@ static const nj_builtin_method httpconn_methods[] = {
     M("getLastModified",     "()J", NJ_ACC_ABSTRACT)
 };
 
+/*
+ * HttpsConnection carries the same union plus its one extra member.  The rows
+ * are written out again rather than shared through a macro because the API
+ * audit (tools/api_audit.py) reads these tables as text: a macro hid the whole
+ * HttpConnection surface from it and 21 members looked missing.
+ */
+static const nj_builtin_method httpsconn_methods[] = {
+    M("close",               "()V", NJ_ACC_ABSTRACT),
+    M("openInputStream",     "()Ljava/io/InputStream;", NJ_ACC_ABSTRACT),
+    M("openDataInputStream", "()Ljava/io/DataInputStream;", NJ_ACC_ABSTRACT),
+    M("openOutputStream",    "()Ljava/io/OutputStream;", NJ_ACC_ABSTRACT),
+    M("openDataOutputStream", "()Ljava/io/DataOutputStream;", NJ_ACC_ABSTRACT),
+    M("getType",             "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getEncoding",         "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getLength",           "()J", NJ_ACC_ABSTRACT),
+    M("getURL",              "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getProtocol",         "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getHost",             "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getPort",             "()I", NJ_ACC_ABSTRACT),
+    M("getFile",             "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getQuery",            "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getRef",              "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("setRequestMethod",    "(Ljava/lang/String;)V", NJ_ACC_ABSTRACT),
+    M("getRequestMethod",    "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("setRequestProperty",  "(Ljava/lang/String;Ljava/lang/String;)V", NJ_ACC_ABSTRACT),
+    M("getRequestProperty",  "(Ljava/lang/String;)Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getResponseCode",     "()I", NJ_ACC_ABSTRACT),
+    M("getResponseMessage",  "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getHeaderField",      "(Ljava/lang/String;)Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getHeaderField",      "(I)Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getHeaderFieldKey",   "(I)Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getHeaderFieldInt",   "(Ljava/lang/String;I)I", NJ_ACC_ABSTRACT),
+    M("getHeaderFieldDate",  "(Ljava/lang/String;J)J", NJ_ACC_ABSTRACT),
+    M("getDate",             "()J", NJ_ACC_ABSTRACT),
+    M("getExpiration",       "()J", NJ_ACC_ABSTRACT),
+    M("getLastModified",     "()J", NJ_ACC_ABSTRACT),
+    M("getSecurityInfo", "()Ljavax/microedition/io/SecurityInfo;", NJ_ACC_ABSTRACT),
+};
+
+
+
 static const nj_builtin_method httpimpl_methods[] = {
     M("getURL",              "()Ljava/lang/String;", 0),
     M("getProtocol",         "()Ljava/lang/String;", 0),
@@ -1540,6 +1628,85 @@ static const nj_builtin_method httpimpl_methods[] = {
     M("close",               "()V", 0)
 };
 
+/* The https object answers the same calls; only the class differs. */
+static const nj_builtin_method httpsimpl_methods[] = {
+    M("getURL",              "()Ljava/lang/String;", 0),
+    M("getProtocol",         "()Ljava/lang/String;", 0),
+    M("getHost",             "()Ljava/lang/String;", 0),
+    M("getPort",             "()I", 0),
+    M("getFile",             "()Ljava/lang/String;", 0),
+    M("getQuery",            "()Ljava/lang/String;", 0),
+    M("getRef",              "()Ljava/lang/String;", 0),
+    M("setRequestMethod",    "(Ljava/lang/String;)V", 0),
+    M("getRequestMethod",    "()Ljava/lang/String;", 0),
+    M("setRequestProperty",  "(Ljava/lang/String;Ljava/lang/String;)V", 0),
+    M("getRequestProperty",  "(Ljava/lang/String;)Ljava/lang/String;", 0),
+    M("getResponseCode",     "()I", 0),
+    M("getResponseMessage",  "()Ljava/lang/String;", 0),
+    M("getHeaderField",      "(Ljava/lang/String;)Ljava/lang/String;", 0),
+    M("getHeaderField",      "(I)Ljava/lang/String;", 0),
+    M("getHeaderFieldKey",   "(I)Ljava/lang/String;", 0),
+    M("getHeaderFieldInt",   "(Ljava/lang/String;I)I", 0),
+    M("getHeaderFieldDate",  "(Ljava/lang/String;J)J", 0),
+    M("getLength",           "()J", 0),
+    M("getType",             "()Ljava/lang/String;", 0),
+    M("getEncoding",         "()Ljava/lang/String;", 0),
+    M("getDate",             "()J", 0),
+    M("getExpiration",       "()J", 0),
+    M("getLastModified",     "()J", 0),
+    M("openInputStream",     "()Ljava/io/InputStream;", 0),
+    M("openDataInputStream", "()Ljava/io/DataInputStream;", 0),
+    M("openOutputStream",    "()Ljava/io/OutputStream;", 0),
+    M("openDataOutputStream", "()Ljava/io/DataOutputStream;", 0),
+    M("close",               "()V", 0),
+    M("getSecurityInfo", "()Ljavax/microedition/io/SecurityInfo;", 0)
+};
+
+
+/* JSR 75's session information.  The port's http hook does not expose TLS
+ * details, so getSecurityInfo() throws; these declarations are what lets a
+ * MIDlet that names the type load and link. */
+static const nj_builtin_method secinfo_methods[] = {
+    M("getProtocolName",      "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getProtocolVersion",   "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getCipherSuite",       "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getServerCertificate", "()Ljavax/microedition/pki/Certificate;", NJ_ACC_ABSTRACT)
+};
+
+/* javax.microedition.pki.Certificate, the interface SecurityInfo returns. */
+static const nj_builtin_method cert_methods[] = {
+    M("getSubject",      "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getIssuer",       "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getSerialNumber", "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getSigAlgName",   "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getVersion",      "()Ljava/lang/String;", NJ_ACC_ABSTRACT)
+};
+
+/*
+ * SecureConnection is JSR 75's ssl:// type.  This runtime has no TLS, so
+ * Connector.open("ssl://...") refuses by name; the interface exists so a title
+ * that names it (book7's checkers sample does) loads instead of dying with
+ * NoClassDefFoundError.  Its table carries the SocketConnection union plus
+ * getSecurityInfo, for the same "resolve in the interface's own table" reason.
+ */
+static const nj_builtin_method secureconn_methods[] = {
+    M("close",                "()V", NJ_ACC_ABSTRACT),
+    M("openInputStream",      "()Ljava/io/InputStream;", NJ_ACC_ABSTRACT),
+    M("openDataInputStream",  "()Ljava/io/DataInputStream;", NJ_ACC_ABSTRACT),
+    M("openOutputStream",     "()Ljava/io/OutputStream;", NJ_ACC_ABSTRACT),
+    M("openDataOutputStream", "()Ljava/io/DataOutputStream;", NJ_ACC_ABSTRACT),
+    M("getAddress",           "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getPort",              "()I", NJ_ACC_ABSTRACT),
+    M("getLocalAddress",      "()Ljava/lang/String;", NJ_ACC_ABSTRACT),
+    M("getLocalPort",         "()I", NJ_ACC_ABSTRACT),
+    M("setSocketOption",      "(BI)V", NJ_ACC_ABSTRACT),
+    M("setSocketOption",      "(II)V", NJ_ACC_ABSTRACT),
+    M("getSocketOption",      "(B)I", NJ_ACC_ABSTRACT),
+    M("getSocketOption",      "(I)I", NJ_ACC_ABSTRACT),
+    M("getSecurityInfo",      "()Ljavax/microedition/io/SecurityInfo;", NJ_ACC_ABSTRACT)
+};
+
+
 const nj_builtin_class nj_lib_http_classes[] = {
     /* Connection is the root of the whole javax.microedition.io hierarchy;
      * StreamConnection and ContentConnection sit between it and
@@ -1571,15 +1738,43 @@ const nj_builtin_class nj_lib_http_classes[] = {
       (nj_u2)(sizeof(httpconn_fields) / sizeof(httpconn_fields[0])),
       httpconn_methods,
       (nj_u2)(sizeof(httpconn_methods) / sizeof(httpconn_methods[0])) },
+    { NJ_C_HTTPS, NJ_C_HTTPCONN,
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, httpsconn_methods,
+      (nj_u2)(sizeof(httpsconn_methods) / sizeof(httpsconn_methods[0])) },
     { NJ_C_HTTPIMPL, NJ_C_HTTPCONN, NJ_ACC_PUBLIC | NJ_ACC_FINAL,
       httpimpl_fields,
       (nj_u2)(sizeof(httpimpl_fields) / sizeof(httpimpl_fields[0])),
       httpimpl_methods,
-      (nj_u2)(sizeof(httpimpl_methods) / sizeof(httpimpl_methods[0])) }
+      (nj_u2)(sizeof(httpimpl_methods) / sizeof(httpimpl_methods[0])) },
+    { NJ_C_HTTPSIMPL, NJ_C_HTTPS, NJ_ACC_PUBLIC | NJ_ACC_FINAL,
+      httpimpl_fields,
+      (nj_u2)(sizeof(httpimpl_fields) / sizeof(httpimpl_fields[0])),
+      httpsimpl_methods,
+      (nj_u2)(sizeof(httpsimpl_methods) / sizeof(httpsimpl_methods[0])) },
+    { NJ_C_SECINFO, "java/lang/Object",
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, secinfo_methods,
+      (nj_u2)(sizeof(secinfo_methods) / sizeof(secinfo_methods[0])) },
+    { NJ_C_CERT, "java/lang/Object",
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, cert_methods,
+      (nj_u2)(sizeof(cert_methods) / sizeof(cert_methods[0])) },
+    { NJ_C_SECURECONN, "javax/microedition/io/SocketConnection",
+      NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, secureconn_methods,
+      (nj_u2)(sizeof(secureconn_methods) / sizeof(secureconn_methods[0])) }
 };
 const int nj_lib_http_class_count =
     (int)(sizeof(nj_lib_http_classes) / sizeof(nj_lib_http_classes[0]));
 
+/*
+ * Both implementation classes get the whole set: HttpImpl answers an http://
+ * connection, HttpsImpl an https:// one, and the C routines read the object's
+ * own fields either way.  Written out per class because the native-table
+ * gates (tools/check_arg_slots.py, check_wide_args.py) parse these rows as
+ * text.  getSecurityInfo is the one https-only entry.
+ */
 const nj_native_entry nj_lib_http_table[] = {
     { NJ_C_HTTPIMPL, "getURL",              "()Ljava/lang/String;", http_get_url },
     { NJ_C_HTTPIMPL, "getProtocol",         "()Ljava/lang/String;", http_get_protocol },
@@ -1609,7 +1804,37 @@ const nj_native_entry nj_lib_http_table[] = {
     { NJ_C_HTTPIMPL, "openDataInputStream", "()Ljava/io/DataInputStream;", http_open_data_input },
     { NJ_C_HTTPIMPL, "openOutputStream",    "()Ljava/io/OutputStream;", http_open_output },
     { NJ_C_HTTPIMPL, "openDataOutputStream", "()Ljava/io/DataOutputStream;", http_open_data_output },
-    { NJ_C_HTTPIMPL, "close",               "()V",                  http_close }
+    { NJ_C_HTTPIMPL, "close",               "()V",                  http_close },
+    { NJ_C_HTTPSIMPL, "getURL",              "()Ljava/lang/String;", http_get_url },
+    { NJ_C_HTTPSIMPL, "getProtocol",         "()Ljava/lang/String;", http_get_protocol },
+    { NJ_C_HTTPSIMPL, "getHost",             "()Ljava/lang/String;", http_get_host },
+    { NJ_C_HTTPSIMPL, "getPort",             "()I",                  http_get_port },
+    { NJ_C_HTTPSIMPL, "getFile",             "()Ljava/lang/String;", http_get_file },
+    { NJ_C_HTTPSIMPL, "getQuery",            "()Ljava/lang/String;", http_get_query },
+    { NJ_C_HTTPSIMPL, "getRef",              "()Ljava/lang/String;", http_get_ref },
+    { NJ_C_HTTPSIMPL, "setRequestMethod",    "(Ljava/lang/String;)V", http_set_method },
+    { NJ_C_HTTPSIMPL, "getRequestMethod",    "()Ljava/lang/String;", http_get_method },
+    { NJ_C_HTTPSIMPL, "setRequestProperty",  "(Ljava/lang/String;Ljava/lang/String;)V", http_set_property },
+    { NJ_C_HTTPSIMPL, "getRequestProperty",  "(Ljava/lang/String;)Ljava/lang/String;", http_get_property },
+    { NJ_C_HTTPSIMPL, "getResponseCode",     "()I",                  http_get_response_code },
+    { NJ_C_HTTPSIMPL, "getResponseMessage",  "()Ljava/lang/String;", http_get_response_message },
+    { NJ_C_HTTPSIMPL, "getHeaderField",      "(Ljava/lang/String;)Ljava/lang/String;", http_get_header_field },
+    { NJ_C_HTTPSIMPL, "getHeaderField",      "(I)Ljava/lang/String;", http_get_header_field_at },
+    { NJ_C_HTTPSIMPL, "getHeaderFieldKey",   "(I)Ljava/lang/String;", http_get_header_key_at },
+    { NJ_C_HTTPSIMPL, "getHeaderFieldInt",   "(Ljava/lang/String;I)I", http_get_header_field_int },
+    { NJ_C_HTTPSIMPL, "getHeaderFieldDate",  "(Ljava/lang/String;J)J", http_get_header_field_date },
+    { NJ_C_HTTPSIMPL, "getLength",           "()J",                  http_get_length },
+    { NJ_C_HTTPSIMPL, "getType",             "()Ljava/lang/String;", http_get_type },
+    { NJ_C_HTTPSIMPL, "getEncoding",         "()Ljava/lang/String;", http_get_encoding },
+    { NJ_C_HTTPSIMPL, "getDate",             "()J",                  http_get_date },
+    { NJ_C_HTTPSIMPL, "getExpiration",       "()J",                  http_get_expiration },
+    { NJ_C_HTTPSIMPL, "getLastModified",     "()J",                  http_get_last_modified },
+    { NJ_C_HTTPSIMPL, "openInputStream",     "()Ljava/io/InputStream;", http_open_input },
+    { NJ_C_HTTPSIMPL, "openDataInputStream", "()Ljava/io/DataInputStream;", http_open_data_input },
+    { NJ_C_HTTPSIMPL, "openOutputStream",    "()Ljava/io/OutputStream;", http_open_output },
+    { NJ_C_HTTPSIMPL, "openDataOutputStream", "()Ljava/io/DataOutputStream;", http_open_data_output },
+    { NJ_C_HTTPSIMPL, "close",               "()V",                  http_close },
+    { NJ_C_HTTPSIMPL, "getSecurityInfo", "()Ljavax/microedition/io/SecurityInfo;", https_get_security_info }
 };
 const int nj_lib_http_count =
     (int)(sizeof(nj_lib_http_table) / sizeof(nj_lib_http_table[0]));

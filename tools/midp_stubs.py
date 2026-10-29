@@ -716,6 +716,37 @@ CLASSES = {
             "java.io.DataOutputStream openDataOutputStream()",
         ],
     },
+    # JSR 75 connection security.  https:// runs over the same port HTTP hook
+    # as http://; these declarations are what lets a title name the types (and
+    # ask `instanceof HttpsConnection`) without a linkage error.  The stub has
+    # no throws clause on purpose - a fixture only needs the type to compile.
+    "javax/microedition/io/HttpsConnection": {
+        "interface": True, "extends": "javax.microedition.io.HttpConnection",
+        "methods": ["javax.microedition.io.SecurityInfo getSecurityInfo() throws java.io.IOException"],
+    },
+    "javax/microedition/io/SecureConnection": {
+        "interface": True, "extends": "javax.microedition.io.SocketConnection",
+        "methods": ["javax.microedition.io.SecurityInfo getSecurityInfo() throws java.io.IOException"],
+    },
+    "javax/microedition/io/SecurityInfo": {
+        "interface": True,
+        "methods": [
+            "java.lang.String getProtocolName()",
+            "java.lang.String getProtocolVersion()",
+            "java.lang.String getCipherSuite()",
+            "javax.microedition.pki.Certificate getServerCertificate()",
+        ],
+    },
+    "javax/microedition/pki/Certificate": {
+        "interface": True,
+        "methods": [
+            "java.lang.String getSubject()",
+            "java.lang.String getIssuer()",
+            "java.lang.String getSerialNumber()",
+            "java.lang.String getSigAlgName()",
+            "java.lang.String getVersion()",
+        ],
+    },
     "javax/microedition/media/Player": {
         "interface": True,
         "constants": {"CLOSED": "0", "UNREALIZED": "100", "REALIZED": "200",

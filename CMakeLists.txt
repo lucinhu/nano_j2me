@@ -757,6 +757,9 @@ else()
   message(WARNING "no zlib: nj_m3g_probe cannot inflate compressed .m3g sections")
 endif()
   nj_add_test(test_wireless tests/test_wireless.c)
+  # JSR 75 security types: HttpsConnection / SecurityInfo / SecureConnection /
+  # pki.Certificate, and the http-vs-https instanceof answer.
+  nj_add_test(test_https tests/test_https.c)
   nj_add_test(test_socket_api tests/test_socket_api.c)
 
   # JSR 256 end to end: SensorManager -> SensorInfo -> SensorConnection ->
@@ -904,6 +907,20 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_device_props.sh
                      ${NJ_FIXTURES}/devicedemo.jar)
+    # JSR 75's connection security types, checked through the interpreter:
+    # `http://` must NOT be an HttpsConnection, `https://` must be (and an
+    # HttpConnection through its super), and getSecurityInfo() answers
+    # IOException because the port's HTTP hook does not expose a TLS session.
+    # 急速公路狂飙－新年版_84 evaluates `c instanceof HttpsConnection` on every
+    # request; without the class the interpreter raised NoClassDefFoundError
+    # inside a working connection.  The script builds its own fixture, so it
+    # needs only a JDK.
+    add_test(NAME check_https_types
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_https_types.sh)
+    set_tests_properties(check_https_types PROPERTIES TIMEOUT 180
+                         SKIP_RETURN_CODE 77)
     # A MIDlet constructor is entered from C, and it may park on another thread:
     # 毁灭战士3_10598 starts a loader and waits for it while it builds the level,
     # and the C caller has to keep the VM running so the loader finishes rather

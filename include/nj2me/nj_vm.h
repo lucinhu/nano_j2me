@@ -450,9 +450,9 @@ void nj_vm_dump_stats(nj_vm *vm);
 /* A human-readable description of the pending exception, or NULL. */
 const char *nj_exception_describe(nj_vm *vm);
 
-/* The dotted class name of an object ("java.lang.String"), or NULL.
- * The returned string belongs to the VM's class table and stays valid until
- * the VM is destroyed. */
+/* The class name of an object in the form the runtime stores internally
+ * ("java/lang/String"), or NULL.  The returned string belongs to the VM's
+ * class table and stays valid until the VM is destroyed. */
 const char *nj_ref_class_name(nj_ref o);
 
 /* The value passed to System.exit()/MIDlet.notifyDestroyed(), or 0. */
