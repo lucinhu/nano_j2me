@@ -145,6 +145,16 @@ static nj_av_mem *av_mem_new(nj_vm *vm)
 #define NJ_C_VOLUME   "javax/microedition/media/control/VolumeControl"
 #define NJ_C_MIDICTL  "javax/microedition/media/control/MIDIControl"
 #define NJ_C_VIDEOC   "javax/microedition/media/control/VideoControl"
+#define NJ_C_RATE     "javax/microedition/media/control/RateControl"
+#define NJ_C_TEMPO    "javax/microedition/media/control/TempoControl"
+/*
+ * The object getControl() hands back.  A concrete class is needed because a
+ * built-in interface cannot be instantiated, and it is spelled with TempoControl
+ * as its super so one object answers both "TempoControl" and "RateControl":
+ * TempoControl extends RateControl in JSR 135, and a tempo-capable player
+ * supports rate as well.
+ */
+#define NJ_C_TEMPOIMPL "javax/microedition/media/control/TempoImpl"
 
 /* Player fields.  Everything the C side needs, on the object. */
 #define F_P_STATE    "pState"      /* I */
@@ -4178,6 +4188,25 @@ NJFN(player_getControl)
         if (r_i(vm, self, F_P_KIND) == 2) {
             cls = NJ_C_VIDEOC;
         }
+    } else if (n == 12 && c[0] == 'T' && c[1] == 'e' && c[2] == 'm'
+               && c[3] == 'p' && c[4] == 'o') {
+        /*
+         * TempoControl only exists for a MIDI song: a WAV has no tempo to
+         * change.  A platform-synth Player answers it too, because the first
+         * call takes the song over into this library's renderer at the
+         * position the synth had reached - the only way to honour a tempo the
+         * platform synth cannot be told (MIDIControl does the same for
+         * events).  RateControl is TempoControl's parent, and a tempo-capable
+         * player supports rate as well, so both return this object.
+         */
+        if (r_z(vm, self, F_P_MIDIK)) {
+            cls = NJ_C_TEMPOIMPL;
+        }
+    } else if (n == 11 && c[0] == 'R' && c[1] == 'a' && c[2] == 't'
+               && c[3] == 'e') {
+        if (r_z(vm, self, F_P_MIDIK)) {
+            cls = NJ_C_TEMPOIMPL;
+        }
     } else if (n == 11 && c[0] == 'M' && c[1] == 'I' && c[2] == 'D'
                && c[3] == 'I') {
         /*
@@ -4221,7 +4250,7 @@ NJFN(player_getControls)
      * the array, which a game walking getControls() would dereference.
      */
     n = (r_i(vm, self, F_P_KIND) == 0) ? 2u
-      : (r_z(vm, self, F_P_MIDIK) ? 2u : 1u);
+      : (r_z(vm, self, F_P_MIDIK) ? 3u : 1u);
     if (r_i(vm, self, F_P_KIND) == 2) {
         n++;                /* VolumeControl and VideoControl */
     }
@@ -4247,6 +4276,15 @@ NJFN(player_getControls)
     }
     if (r_i(vm, self, F_P_KIND) == 2) {
         a1[0].r = nj_string_new(vm, "VideoControl");
+        r.r = NULL;
+        if (nj_call(vm, self, NJ_C_PLAYER, "getControl",
+                    "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
+                    a1, &r) == NJ_OK && r.r != NULL) {
+            arr->u.refs[at++] = r.r;
+        }
+    }
+    if (r_z(vm, self, F_P_MIDIK)) {
+        a1[0].r = nj_string_new(vm, "TempoControl");
         r.r = NULL;
         if (nj_call(vm, self, NJ_C_PLAYER, "getControl",
                     "(Ljava/lang/String;)Ljavax/microedition/media/Control;",
@@ -4680,6 +4718,123 @@ static struct nj_midi_stream *midi_take_over(nj_vm *vm, nj_ref player)
     return st;
 }
 #endif /* NJ_ENABLE_MIDI */
+
+/* ------------------------------------------------------------------ */
+/* Natives: TempoControl / RateControl                                 */
+/* ------------------------------------------------------------------ */
+/*
+ * Both act on the renderer's tick->sample map (see nj_midi.c), so the call has
+ * to reach the stream rather than the Player object.  A platform-synth Player
+ * is taken over on first use: its synth cannot be told a tempo, and the
+ * alternative is a control that answers but changes nothing.
+ */
+#if NJ_ENABLE_MIDI
+static struct nj_midi_stream *tempo_stream(nj_vm *vm, nj_ref player)
+{
+    struct nj_midi_stream *st = midi_stream_of(vm, player);
+
+    if (st != NULL) {
+        return st;
+    }
+    if (r_z(vm, player, F_P_PLAT)) {
+        return midi_take_over(vm, player);
+    }
+    return NULL;
+}
+#endif
+
+#if NJ_ENABLE_MIDI
+/* Keep the Player's length in step with the renderer: a slower tempo really is
+ * a longer song, and getDuration()/EOF use these fields. */
+static void tempo_note_length(nj_vm *vm, nj_ref player, struct nj_midi_stream *st)
+{
+    nj_s4 frames = (nj_s4)nj_midi_stream_frames(st);
+
+    w_i(vm, player, F_P_FRAMES, frames);
+    w_j(vm, player, F_P_DURATION,
+        (nj_s8)frames * 1000000LL / (nj_s8)NJ_MIDI_RATE);
+}
+#endif
+
+NJFN(tempoctl_getTempo)
+{
+#if NJ_ENABLE_MIDI
+    nj_ref p = ctl_owner(vm, NJ_THIS(args));
+    struct nj_midi_stream *st = tempo_stream(vm, p);
+
+    ret->i = st ? (nj_s4)nj_midi_stream_tempo(st) : 0;
+#else
+    (void)args;
+    ret->i = 0;
+#endif
+    return NJ_OK;
+}
+
+NJFN(tempoctl_setTempo)
+{
+#if NJ_ENABLE_MIDI
+    nj_ref p = ctl_owner(vm, NJ_THIS(args));
+    nj_s4 milli = NJ_ARG_INT(args, 0);
+    struct nj_midi_stream *st;
+
+    if (milli <= 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "tempo must be positive");
+    }
+    st = tempo_stream(vm, p);
+    if (st == NULL) {
+        return nj_throw(vm, NJ_C_MEXC, "this Player has no song to re-time");
+    }
+    ret->i = (nj_s4)nj_midi_stream_set_tempo(st, (nj_u4)milli);
+    tempo_note_length(vm, p, st);
+#else
+    (void)args;
+    (void)ret;
+    return nj_throw(vm, NJ_C_MEXC,
+                    "this build has no MIDI renderer to re-time");
+#endif
+    return NJ_OK;
+}
+
+NJFN(tempoctl_getRate)
+{
+#if NJ_ENABLE_MIDI
+    nj_ref p = ctl_owner(vm, NJ_THIS(args));
+    struct nj_midi_stream *st = tempo_stream(vm, p);
+
+    ret->i = st ? (nj_s4)nj_midi_stream_rate(st) : 0;
+#else
+    (void)args;
+    ret->i = 0;
+#endif
+    return NJ_OK;
+}
+
+NJFN(tempoctl_setRate)
+{
+#if NJ_ENABLE_MIDI
+    nj_ref p = ctl_owner(vm, NJ_THIS(args));
+    nj_s4 rate = NJ_ARG_INT(args, 0);
+    struct nj_midi_stream *st;
+
+    if (rate <= 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "rate must be positive");
+    }
+    st = tempo_stream(vm, p);
+    if (st == NULL) {
+        return nj_throw(vm, NJ_C_MEXC, "this Player has no song to re-time");
+    }
+    ret->i = (nj_s4)nj_midi_stream_set_rate(st, (nj_u4)rate);
+    tempo_note_length(vm, p, st);
+#else
+    (void)args;
+    (void)ret;
+    return nj_throw(vm, NJ_C_MEXC,
+                    "this build has no MIDI renderer to re-time");
+#endif
+    return NJ_OK;
+}
 
 /*
  * Hand one channel message to whatever is playing this Player's song.  Returns
@@ -5601,6 +5756,28 @@ static const nj_builtin_method videocontrol_methods[] = {
     M("getSnapshot",         "(Ljava/lang/String;)Ljava/lang/Object;", 0)
 };
 
+/* JSR 135's tempo and rate controls.  RateControl is the parent interface;
+ * a reference typed either way has to resolve in that interface's own table,
+ * so each one carries the methods it exposes. */
+static const nj_builtin_method rate_methods[] = {
+    M("setRate", "(I)I", NJ_ACC_ABSTRACT),
+    M("getRate", "()I", NJ_ACC_ABSTRACT)
+};
+
+static const nj_builtin_method tempo_methods[] = {
+    M("setRate",  "(I)I", NJ_ACC_ABSTRACT),
+    M("getRate",  "()I", NJ_ACC_ABSTRACT),
+    M("setTempo", "(I)I", NJ_ACC_ABSTRACT),
+    M("getTempo", "()I", NJ_ACC_ABSTRACT)
+};
+
+static const nj_builtin_method tempoimpl_methods[] = {
+    M("setRate",  "(I)I", 0),
+    M("getRate",  "()I", 0),
+    M("setTempo", "(I)I", 0),
+    M("getTempo", "()I", 0)
+};
+
 #define NJ_MEDIA_EXC(name, super)                                             \
     { name, super, NJ_ACC_PUBLIC, NULL, 0u, NULL, 0u },
 
@@ -5659,6 +5836,16 @@ const nj_builtin_class nj_lib_media_classes[] = {
       (nj_u2)(sizeof(videoctl_fields) / sizeof(videoctl_fields[0])),
       videocontrol_methods,
       (nj_u2)(sizeof(videocontrol_methods) / sizeof(videocontrol_methods[0])) },
+    { NJ_C_RATE, NJ_C_CONTROL, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, rate_methods,
+      (nj_u2)(sizeof(rate_methods) / sizeof(rate_methods[0])) },
+    { NJ_C_TEMPO, NJ_C_RATE, NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
+      NULL, 0u, tempo_methods,
+      (nj_u2)(sizeof(tempo_methods) / sizeof(tempo_methods[0])) },
+    { NJ_C_TEMPOIMPL, NJ_C_TEMPO, NJ_ACC_PUBLIC,
+      ctl_fields,
+      (nj_u2)(sizeof(ctl_fields) / sizeof(ctl_fields[0])), tempoimpl_methods,
+      (nj_u2)(sizeof(tempoimpl_methods) / sizeof(tempoimpl_methods[0])) },
     NJ_MEDIA_EXC(NJ_C_MEXC, "java/lang/Exception")
     /* A sentinel keeps the array non-empty for tooling that assumes arrays
      * rather than counting on the length macro. */
@@ -5707,6 +5894,10 @@ const nj_native_entry nj_lib_media_table[] = {
     { NJ_C_TONE, "getToneSequence", "()[B", tone_getSequence },
     { NJ_C_TONE, "setSequence",     "([B)V", tone_setSequence },
 
+    { NJ_C_TEMPOIMPL, "getTempo", "()I", tempoctl_getTempo },
+    { NJ_C_TEMPOIMPL, "setTempo", "(I)I", tempoctl_setTempo },
+    { NJ_C_TEMPOIMPL, "getRate",  "()I", tempoctl_getRate },
+    { NJ_C_TEMPOIMPL, "setRate",  "(I)I", tempoctl_setRate },
     { NJ_C_VOLUME, "setLevel", "(I)I", vol_setLevel },
     { NJ_C_VOLUME, "getLevel", "()I", vol_getLevel },
     { NJ_C_VOLUME, "setMute",  "(Z)V", vol_setMute },

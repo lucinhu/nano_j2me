@@ -1048,6 +1048,18 @@ typedef struct nj_midi_stream {
      * (MIDIControl.shortMidiEvent) has no such tick, so it is built from
      * these, which the controller events above keep up to date.
      */
+    /*
+     * Playback tempo/rate.  The tick->sample map is multiplied by
+     * rate_num/rate_den (1/1 is the file's own tempo), base_milli is what
+     * that tempo means in JSR 135's unit (milli-beats per minute), and the
+     * song's end is kept so a tempo change can re-derive frames and the
+     * current position without re-reading anything.
+     */
+    nj_u4 rate_num;
+    nj_u4 rate_den;
+    nj_u4 base_milli;
+    nj_u4 tick_end;
+    nj_u4 tail_frames;
     nj_u4 tick_now;
     nj_u4 vol_now[16];
     nj_u4 expr_now[16];
@@ -1061,6 +1073,43 @@ typedef struct nj_midi_stream {
      */
     nj_midi_mem mem;
 } nj_midi_stream;
+
+/* Tick -> output sample, with the tempo/rate factor applied.  The tails are
+ * in seconds of audio and are not scaled; everything the song itself plays is. */
+static nj_u4 mid_sample_rate(const nj_midi_stream *s, nj_u4 tick)
+{
+    nj_u4 base;
+    nj_u8 num;
+    nj_u8 den;
+
+    base = mid_sample_at(&s->song, tick);
+    num = s->rate_num ? (nj_u8)s->rate_num : 1u;
+    den = s->rate_den ? (nj_u8)s->rate_den : 1u;
+    if (num == den) {
+        return base;
+    }
+    return (nj_u4)((nj_u8)base * num / den);
+}
+
+/* The largest tick whose scaled sample is not past `frame`: the inverse of
+ * mid_sample_rate(), used to keep the position when the tempo changes. */
+static nj_u4 mid_tick_at(const nj_midi_stream *s, nj_u4 frame)
+{
+    nj_u4 lo = 0u;
+    nj_u4 hi = s->tick_end;
+
+    while (lo < hi) {
+        nj_u4 mid = lo + (hi - lo + 1u) / 2u;
+
+        if (mid_sample_rate(s, mid) <= frame) {
+            lo = mid;
+        } else {
+            hi = mid - 1u;
+        }
+    }
+    return lo;
+}
+
 
 /*
  * Release what a stream owns, but NOT the struct itself: a seek keeps the
@@ -1115,6 +1164,9 @@ static int mid_stream_init(nj_midi_stream *s, const void *data, nj_u4 size,
     }
 
     memset(&s->song, 0, sizeof(s->song));
+    s->rate_num = 1u;
+    s->rate_den = 1u;
+    s->base_milli = 120000u;            /* JSR 135's unit for 120 bpm */
     for (i = 0u; i < 16u; i++) {
         s->song.volume[i] = 100u;
         s->song.expr[i] = 127u;
@@ -1224,7 +1276,22 @@ static int mid_stream_init(nj_midi_stream *s, const void *data, nj_u4 size,
         if (rel > tail) {
             tail = rel;         /* a pad's 300 ms release must not be cut off */
         }
-        s->frames = mid_sample_at(&s->song, last) + tail;
+        s->tick_end = last;
+        s->tail_frames = tail;
+        s->frames = mid_sample_rate(s, last) + s->tail_frames;
+    }
+    /* What the file's own tempo means in milli-beats per minute: the first
+     * Set Tempo event, or General MIDI's 120 bpm when it sets none. */
+    if (s->song.division != 0u && s->song.ntempos > 0u &&
+        s->song.tempos[0].us_per_qn > 0u) {
+        nj_u8 us = (nj_u8)s->song.tempos[0].us_per_qn;
+        s->base_milli = (nj_u4)((nj_u8)60000000u * 1000u / us);
+        if (s->base_milli > 3000000u) {
+            s->base_milli = 3000000u;   /* a 1 ms quarter note is not a tempo */
+        }
+        if (s->base_milli == 0u) {
+            s->base_milli = 120000u;
+        }
     }
     for (i = 0u; i < 16u; i++) {
         if (s->song.reverb[i] != 0u) {
@@ -1232,6 +1299,7 @@ static int mid_stream_init(nj_midi_stream *s, const void *data, nj_u4 size,
         }
     }
     if (s->rev_any != 0u) {
+        s->tail_frames += NJ_MIDI_REV_TAIL;
         s->frames += NJ_MIDI_REV_TAIL;     /* the room needs time to empty */
     }
     if (s->rev_any != 0u) {
@@ -1246,6 +1314,7 @@ static int mid_stream_init(nj_midi_stream *s, const void *data, nj_u4 size,
         }
     }
     if (s->chor_any != 0u) {
+        s->tail_frames += NJ_MIDI_CHORUS_TAIL;
         s->frames += NJ_MIDI_CHORUS_TAIL;  /* the delayed copy needs somewhere to go */
         s->chor = (nj_s4 *)mem->alloc(mem->ud, (nj_size)NJ_MIDI_CHORUS_LEN * sizeof(nj_s4));
         if (s->chor != NULL) {
@@ -1295,6 +1364,103 @@ nj_u4 nj_midi_stream_channels(const nj_midi_stream *s)
 nj_u4 nj_midi_stream_frames(const nj_midi_stream *s)
 {
     return (s == NULL) ? 0u : s->frames;
+}
+
+/*
+ * Tempo and rate, JSR 135's units: milli-beats per minute and milli-rate
+ * (1000 = normal).  A MIDI file's own Set Tempo events decide the song's
+ * nominal pace; these scale that pace without re-reading the file, so the
+ * renderer's sample positions are multiplied by the factor.
+ *
+ * Changing either while the song plays keeps the position: the tick the next
+ * pull would have started at is found from the OLD mapping and re-mapped with
+ * the new one, so a title that slows the music down does not jump.
+ */
+#define NJ_MIDI_TEMPO_MIN     1000u      /* 1 bpm, the slowest anything asks for */
+#define NJ_MIDI_TEMPO_MAX  3000000u
+#define NJ_MIDI_RATE_MIN      100u       /* 0.1x: MIDI's own RateControl range */
+#define NJ_MIDI_RATE_MAX     8000u
+
+/* Install a new factor, re-map the position, and refresh what the pull loop
+ * has memoised.  Returns 0 when the stream cannot be re-mapped. */
+static int mid_apply_rate(nj_midi_stream *s, nj_u4 num, nj_u4 den)
+{
+    nj_u4 tick;
+
+    if (s == NULL || num == 0u || den == 0u) {
+        return 0;
+    }
+    tick = mid_tick_at(s, s->i);
+    s->rate_num = num;
+    s->rate_den = den;
+    s->i = mid_sample_rate(s, tick);
+    s->frames = mid_sample_rate(s, s->tick_end) + s->tail_frames;
+    /* The memo pairs are (tick, sample) and the sample half is now wrong. */
+    s->ctl_sample = mid_sample_rate(s, s->ctl_tick);
+    s->note_sample = mid_sample_rate(s, s->note_tick);
+    return 1;
+}
+
+nj_u4 nj_midi_stream_position(const nj_midi_stream *s)
+{
+    return (s == NULL) ? 0u : s->i;
+}
+
+nj_u4 nj_midi_stream_tempo(nj_midi_stream *s)
+{
+    if (s == NULL || s->rate_num == 0u) {
+        return 0u;
+    }
+    return (nj_u4)(((nj_u8)s->base_milli * s->rate_den) / s->rate_num);
+}
+
+nj_u4 nj_midi_stream_base_tempo(nj_midi_stream *s)
+{
+    return (s == NULL) ? 0u : s->base_milli;
+}
+
+nj_u4 nj_midi_stream_set_tempo(nj_midi_stream *s, nj_u4 milli)
+{
+    if (s == NULL || milli == 0u) {
+        return 0u;
+    }
+    if (milli < NJ_MIDI_TEMPO_MIN) {
+        milli = NJ_MIDI_TEMPO_MIN;
+    }
+    if (milli > NJ_MIDI_TEMPO_MAX) {
+        milli = NJ_MIDI_TEMPO_MAX;
+    }
+    if (!mid_apply_rate(s, s->base_milli, milli)) {
+        return 0u;
+    }
+    return nj_midi_stream_tempo(s);
+}
+
+nj_u4 nj_midi_stream_rate(nj_midi_stream *s)
+{
+    /* The factor is a DURATION multiplier (rate_num/rate_den), so the rate is
+     * its reciprocal: half speed is rate 500, twice speed rate 2000. */
+    if (s == NULL || s->rate_num == 0u) {
+        return 0u;
+    }
+    return (nj_u4)((1000u * (nj_u8)s->rate_den) / s->rate_num);
+}
+
+nj_u4 nj_midi_stream_set_rate(nj_midi_stream *s, nj_u4 millirate)
+{
+    if (s == NULL || millirate == 0u) {
+        return 0u;
+    }
+    if (millirate < NJ_MIDI_RATE_MIN) {
+        millirate = NJ_MIDI_RATE_MIN;
+    }
+    if (millirate > NJ_MIDI_RATE_MAX) {
+        millirate = NJ_MIDI_RATE_MAX;
+    }
+    if (!mid_apply_rate(s, 1000u, millirate)) {
+        return 0u;
+    }
+    return nj_midi_stream_rate(s);
 }
 
 /*
@@ -1436,7 +1602,7 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
 
             if (ct != s->ctl_tick) {
                 s->ctl_tick = ct;
-                s->ctl_sample = mid_sample_at(&s->song, ct);
+                s->ctl_sample = mid_sample_rate(s, ct);
             }
             if (s->ctl_sample > i) {
                 break;
@@ -1519,7 +1685,7 @@ nj_u4 nj_midi_stream_pull(nj_midi_stream *s, nj_u1 *out, nj_u4 want)
 
             if (nt != s->note_tick) {
                 s->note_tick = nt;
-                s->note_sample = mid_sample_at(&s->song, nt);
+                s->note_sample = mid_sample_rate(s, nt);
             }
             if (s->note_sample > i) {
                 break;
@@ -1933,6 +2099,11 @@ nj_u4 nj_midi_stream_seek(nj_midi_stream *s, nj_u4 frame)
     if (fresh == NULL) {
         return 0u;
     }
+    /* The fresh stream's own frames are the file's unscaled length; render it
+     * at the factor this stream is playing at, or a seek would jump tempo. */
+    fresh->rate_num = s->rate_num;
+    fresh->rate_den = s->rate_den;
+    fresh->frames = mid_sample_rate(fresh, fresh->tick_end) + fresh->tail_frames;
     tmp = (nj_u1 *)s->mem.alloc(s->mem.ud, chunk * 4u);
     if (tmp == NULL) {
         nj_midi_stream_close(fresh);      /* frees the shell as well */
@@ -1973,6 +2144,9 @@ int nj_midi_stream_restart(nj_midi_stream *s)
     if (fresh == NULL) {
         return 0;
     }
+    fresh->rate_num = s->rate_num;
+    fresh->rate_den = s->rate_den;
+    fresh->frames = mid_sample_rate(fresh, fresh->tick_end) + fresh->tail_frames;
     mid_stream_clear(s);
     *s = *fresh;
     s->mem.free(s->mem.ud, fresh);

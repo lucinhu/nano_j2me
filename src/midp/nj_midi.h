@@ -76,6 +76,20 @@ struct nj_midi_stream *nj_midi_stream_open(const void *data, nj_u4 size,
                                            const nj_midi_mem *mem);
 nj_u4 nj_midi_stream_channels(const struct nj_midi_stream *s);
 nj_u4 nj_midi_stream_frames(const struct nj_midi_stream *s);
+/*
+ * Playback tempo and rate, in JSR 135's units: milli-beats per minute
+ * (120000 = 120 bpm) and milli-rate (1000 = normal).  A song's own Set Tempo
+ * events define its nominal pace; these scale that pace in the renderer, so
+ * no file is re-read and a change while playing keeps the position (the
+ * tick->sample map is re-mapped at the tick the renderer had reached).
+ * set_* return the value actually in force, or 0 when the stream is unusable.
+ */
+nj_u4 nj_midi_stream_position(const struct nj_midi_stream *s);
+nj_u4 nj_midi_stream_tempo(struct nj_midi_stream *s);
+nj_u4 nj_midi_stream_base_tempo(struct nj_midi_stream *s);
+nj_u4 nj_midi_stream_set_tempo(struct nj_midi_stream *s, nj_u4 milli);
+nj_u4 nj_midi_stream_rate(struct nj_midi_stream *s);
+nj_u4 nj_midi_stream_set_rate(struct nj_midi_stream *s, nj_u4 millirate);
 nj_u4 nj_midi_stream_pull(struct nj_midi_stream *s, nj_u1 *out, nj_u4 want);
 /*
  * Jump to a frame.  Returns the frame actually reached, which is the end of

@@ -921,6 +921,17 @@ endif()
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_https_types.sh)
     set_tests_properties(check_https_types PROPERTIES TIMEOUT 180
                          SKIP_RETURN_CODE 77)
+    # JSR 135 TempoControl / RateControl on a MIDI Player, through the
+    # interpreter: the control exists, setTempo/setRate report what they set,
+    # getControls() has no NULL, and the Player's duration follows the tempo.
+    # 速度与激情6_9 gets this control, null-checks it and catches exceptions,
+    # so an absent control only meant its music ran at the file's own tempo.
+    add_test(NAME check_tempo_control
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_tempo_control.sh)
+    set_tests_properties(check_tempo_control PROPERTIES TIMEOUT 180
+                         SKIP_RETURN_CODE 77)
     # A MIDlet constructor is entered from C, and it may park on another thread:
     # 毁灭战士3_10598 starts a loader and waits for it while it builds the level,
     # and the C caller has to keep the VM running so the loader finishes rather
@@ -1254,8 +1265,12 @@ nj_add_test(test_clip tests/test_clip.c)
   # run time - it is a NoSuchMethodError the title hits later.
   add_test(NAME check_api_audit
            COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/api_audit.py)
+  # The audit is a text pass over every source unit and takes ~50 s on an idle
+  # machine; under a loaded one it crossed the old 120 s ceiling and failed a
+  # whole suite run as a timeout.  300 s leaves room to spare without hiding a
+  # hang.
   set_tests_properties(check_api_audit PROPERTIES
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 120)
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 300)
 
   # ... and the surface has to behave, not merely exist.  M3GDemo calls every
   # API area and prints one summary line; check_m3gdemo.sh asserts it.

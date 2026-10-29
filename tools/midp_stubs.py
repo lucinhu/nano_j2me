@@ -784,6 +784,15 @@ CLASSES = {
         "methods": ["javax.microedition.media.Control getControl(String)",
                     "javax.microedition.media.Control[] getControls()"],
     },
+    "javax/microedition/media/control/RateControl": {
+        "interface": True,
+        "methods": ["int setRate(int)", "int getRate()"],
+    },
+    "javax/microedition/media/control/TempoControl": {
+        "interface": True,
+        "extends": "javax.microedition.media.control.RateControl",
+        "methods": ["int setTempo(int)", "int getTempo()"],
+    },
     "javax/microedition/media/control/ToneControl": {
         "interface": True,
         "methods": ["void setToneSequence(byte[])",

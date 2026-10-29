@@ -4,7 +4,7 @@
 
 [![latest release](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![licence](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-127%20passing-brightgreen)](docs/VERIFICATION.md)
+[![tests](https://img.shields.io/badge/tests-128%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitized](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99, no dependencies](https://img.shields.io/badge/C99-no%20dependencies-informational)](#design-commitments)
 
@@ -74,8 +74,8 @@ first command list render, and JSR-184's last audit gaps are closed.
 * **Optional JIT.** Baseline RV32 and ARM64 JITs (opt-in, `NJ_ENABLE_JIT=1`)
   share a bounded per-VM hot-block cache; x86_64 stays on the interpreter. See
   [docs/JIT.md](docs/JIT.md).
-* **Numbers.** 127 tests in `ctest` (92 in 0.2.0), the sanitized suite is
-  127/127 green, and **397 of 399** collected real games run - the two failures
+* **Numbers.** 128 tests in `ctest` (92 in 0.2.0), the sanitized suite is
+  128/128 green, and **397 of 399** collected real games run - the two failures
   are the titles' own (a truncated JAR and a licence check).
 
 Full changelog: [v0.3.0 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.3.0).
@@ -184,8 +184,8 @@ usually skip, and they are exactly the parts old games use.
 | Ports: Android (NDK + JNI) | **done** — one APK for Android 5.0 (API 21) and up, 4 ABIs, a launcher that shows each game's own name and icon and opens `.jar` files from a file manager, three configurable floating keypad layouts, sound through AAudio or OpenSL ES with MIDI handed to the phone's own synth, multi-touch, and auto-detected screen size; 2.79 MiB for all four ABIs (858 KiB for arm64 alone), runs on an API 21 emulator and an API 36 emulator |
 | Ports: ESP32-S3 (ESP-IDF, Xtensa) | **done** — real IDF build; boots the ROM, the full class library and a MIDlet on a 16 MB flash / 8 MB PSRAM board under Espressif's `esp-emu` (`tools/run_esp_emulator.sh`: `BENCH sum=-136042548`, 105,717,067 bytecodes — the desktop total), and runs the internal-RAM profile under QEMU. `tools/run_esp_emulator_ui.sh` also demonstrates the display, input and storage paths in the same emulator (240x320 frames decoded to PNG, keys injected over UART, JAR read from a mounted card). See [docs/PERFORMANCE.md](docs/PERFORMANCE.md#esp32-s3-measured-on-the-real-architecture) and [docs/FOOTPRINT.md](docs/FOOTPRINT.md#what-esp-emu-does-and-does-not-model-the-ui-demo) |
 | Ports: ESP32-C3 (ESP-IDF, RISC-V) | builds, links and boots; needs PSRAM for the VM |
-| Test suite | **127 tests** (`ctest`) |
-| Sanitized suite | **127/127 passing** under ASan + UBSan + LSan (`tools/run_sanitized_tests.sh`) |
+| Test suite | **128 tests** (`ctest`) |
+| Sanitized suite | **128/128 passing** under ASan + UBSan + LSan (`tools/run_sanitized_tests.sh`) |
 
 Verified end to end: **Tumbleweed** (`net.frog_parrot.jump.Jump`, Apress 2004)
 plays on the headless port at 176x208 — scrolling ground, an animated sprite, a

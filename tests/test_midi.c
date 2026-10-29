@@ -1642,6 +1642,74 @@ int main(void)
     }
 
     /*
+     * TempoControl / RateControl move the renderer's tick->sample map, so the
+     * song's length, the reported tempo and the position have to follow.  The
+     * position half matters most: a control that re-timed the song by
+     * restarting it would be heard as the music jumping to the beginning.
+     */
+    {
+        nj_u1 file[512];
+        nj_u4 n = build_voiced(file, NULL, 0u, 0u, 69u);
+        struct nj_midi_stream *s = nj_midi_stream_open(file, n, &MEM);
+        nj_u1 buf[4096];
+        nj_u4 frames1, frames2, frames3, pos0, pos1;
+
+        check(s != NULL, "a stream opens for the tempo test");
+        if (s != NULL) {
+            frames1 = nj_midi_stream_frames(s);
+            check(nj_midi_stream_tempo(s) == 120000u,
+                  "a file with a 120 bpm tempo event reports 120000");
+            check(nj_midi_stream_rate(s) == 1000u,
+                  "a stream starts at rate 1000");
+
+            /* Half the tempo is twice the song, and the position is kept. */
+            pos0 = nj_midi_stream_position(s);
+            check(nj_midi_stream_set_tempo(s, 60000u) == 60000u,
+                  "setTempo(60000) reports 60000");
+            frames2 = nj_midi_stream_frames(s);
+            /* The release/reverb tails are in seconds of audio and do not
+             * scale, so the total is a little under twice - not exactly. */
+            check(frames2 > frames1 * 17u / 10u && frames2 < frames1 * 21u / 10u,
+                  "half the tempo makes the song about twice as long");
+            check(nj_midi_stream_rate(s) == 500u,
+                  "half the tempo is rate 500 (half speed)");
+            pos1 = nj_midi_stream_position(s);
+            check(pos1 <= 2u * pos0 && 2u * pos0 <= pos1 + 2u,
+                  "changing tempo keeps the position (same musical point)");
+            check(nj_midi_stream_pull(s, buf, 512u) == 512u,
+                  "a re-timed stream keeps playing");
+
+            /* Restoring it gives the original length back. */
+            check(nj_midi_stream_set_tempo(s, 120000u) == 120000u,
+                  "setTempo(120000) reports 120000");
+            frames3 = nj_midi_stream_frames(s);
+            check(frames3 == frames1,
+                  "restoring the tempo restores the length");
+
+            /* setRate is the same factor expressed as a rate. */
+            check(nj_midi_stream_set_rate(s, 2000u) == 2000u,
+                  "setRate(2000) reports 2000");
+            check(nj_midi_stream_frames(s) < frames1 * 7u / 10u,
+                  "twice the rate makes the song about half as long");
+            check(nj_midi_stream_set_rate(s, 1000u) == 1000u,
+                  "setRate(1000) reports 1000");
+            check(nj_midi_stream_frames(s) == frames1,
+                  "restoring the rate restores the length");
+
+            /* A loop restart keeps the tempo: the re-opened renderer must be
+             * told the factor or the second pass runs at the file's pace. */
+            check(nj_midi_stream_set_tempo(s, 60000u) == 60000u,
+                  "a stream can be re-timed before a restart");
+            check(nj_midi_stream_restart(s) != 0,
+                  "a re-timed stream restarts");
+            check(nj_midi_stream_tempo(s) == 60000u
+                      && nj_midi_stream_frames(s) == frames2,
+                  "a restart keeps the tempo and the length");
+            nj_midi_stream_close(s);
+        }
+    }
+
+    /*
      * MIDIControl.  A title reaches the song through the Player, so an event
      * sent that way has to reach the renderer and change what is heard - the
      * calls are useless if they only move a number in a Java object.
