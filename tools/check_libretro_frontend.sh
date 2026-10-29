@@ -34,6 +34,8 @@
 #                  both ways of honouring the rotation option are valid.
 #   8. cadence     real-time 60 Hz retro_run pacing (--pace-us 16667), the
 #                  cadence RetroArch uses; steps 1-6 run the tight loop
+#   9. heap        automatic is the registered default and the size it resolves
+#                  to is logged at load
 #
 # Exit codes: 0 all checks passed, 1 at least one check failed, 2 setup error
 # (missing core/fixture, compile failure, nothing to run).
