@@ -111,7 +111,12 @@ static void av_free(void *ud, void *p)
  * hooks - the pump or close() runs later, after that frame is gone, and the
  * borrowed pointer is a use-after-return.  Each video decoder gets one
  * host-allocated copy, owned by the Player's holder until close().
+ *
+ * Only the video Player creates one, so this lives behind NJ_ENABLE_VIDEO: a
+ * build without video would otherwise carry it as an unused static function,
+ * which -DNJ_WERROR=ON reports and which no port can call.
  */
+#if NJ_ENABLE_VIDEO
 static nj_av_mem *av_mem_new(nj_vm *vm)
 {
     nj_av_mem *mem = (nj_av_mem *)nj_host_alloc(vm, (nj_size)sizeof(*mem));
@@ -123,6 +128,7 @@ static nj_av_mem *av_mem_new(nj_vm *vm)
     }
     return mem;
 }
+#endif
 #endif
 
 /* ------------------------------------------------------------------ */
@@ -1609,6 +1615,64 @@ nj_u4 nj_media_movie_amr_decode(nj_vm *vm, const nj_u1 *data, nj_u4 size,
         frames * (nj_u4)(NJ_AMR_BLOCK * 2) > pcm_cap) {
         nj_host_free(vm, host);
         return 0u;              /* not decodable AMR after all: stay silent */
+    }
+    /*
+     * A port that installed its own AMR decoder (hardware, or the platform's
+     * media framework) gets the movie's sound track too: the track is an
+     * elementary "#!AMR" stream by now, which is what the provider contract
+     * takes.  The built-in provider is skipped on purpose - it decodes the
+     * whole track into its own buffer first, and going through it would hold
+     * the PCM twice - so the direct call below stays the default path.
+     *
+     * A provider that claims the stream and then produces nothing usable (an
+     * open that fails, a decoder that answers "more input needed" for the
+     * whole track) must not turn the movie silent: the built-in decoder is
+     * tried next.  That costs a second decode only where the alternative is
+     * no sound at all, and it keeps a port's AMR support additive rather
+     * than a capability the movie path can lose.
+     */
+    {
+        const nj_av_audio_ops *aops = nj_avcodec_find_audio(vm, host, off);
+
+        if (aops != NULL && aops != nj_avcodec_sw_amr()) {
+            nj_av_mem memd;
+            nj_av_info info;
+            const char *err = NULL;
+            nj_av_dec *dec;
+
+            memd.ud = vm;
+            memd.alloc = av_alloc;
+            memd.free = av_free;
+            memset(&info, 0, sizeof(info));
+            dec = aops->open(host, off, &memd, &info, &err);
+            if (dec != NULL) {
+                nj_av_step step;
+                int rc;
+
+                memset(&step, 0, sizeof(step));
+                step.out = pcm;
+                step.out_cap = pcm_cap;
+                rc = aops->decode(dec, &step);
+                aops->close(dec);
+                if (rc == NJ_AV_OK && step.frames >= (nj_u4)NJ_AMR_BLOCK) {
+                    /* step.frames counts PCM frames; the caller wants AMR
+                     * frames (20 ms each), the unit nj_amr_frames() reports.
+                     * A hardware decoder is not required to agree with the
+                     * table walk on the exact count, so derive it - but never
+                     * report more frames than the output buffer can carry. */
+                    nj_u4 amr = step.frames / (nj_u4)NJ_AMR_BLOCK;
+                    nj_u4 room = pcm_cap / ((nj_u4)NJ_AMR_BLOCK * 2u);
+
+                    if (amr > room) {
+                        amr = room;
+                    }
+                    if (amr > 0u) {
+                        nj_host_free(vm, host);
+                        return amr;
+                    }
+                }
+            }
+        }
     }
     got = nj_amr_decode(host, off, pcm);
     nj_host_free(vm, host);

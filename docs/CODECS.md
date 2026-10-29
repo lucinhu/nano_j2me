@@ -995,6 +995,21 @@ remains:
   intros now add exactly the movie's PCM: 1942空战 +87,200 frames (= 545 AMR
   frames), Doom 3 +99,840 (= 624), H.A.W.X. +137,160 of 137,600 (the run ends
   a few frames before the clip).
+- **Port AMR decoders serve the movie track too (round 237).**  The sound
+  track of a 3GP/MP4 movie reaches the decoder as an elementary `#!AMR`
+  stream, which is exactly the provider contract, so the lookup is consulted
+  for the movie path as well: a phone with AMR in firmware (or a port with
+  libavcodec) plays the intros with its own decoder instead of `nj_amr.c`.
+  The built-in software provider is skipped there on purpose - it decodes the
+  whole track into its own buffer first, so routing the movie through it
+  would hold the PCM twice - and `tests/test_avcodec.c` installs a fake AMR
+  provider to prove the movie's PCM comes from the port's decoder (and that
+  `nj_avcodec_reset()` puts the software one back).  A port decoder that
+  claims the stream and then produces nothing usable (an open that fails, or
+  the whole track answered with "more input needed") must not make the intro
+  silent: `nj_amr.c` decodes it instead, the frame count is clamped to what
+  the PCM buffer can carry, and the test drives that fallback and compares
+  its output with the built-in decoder's byte for byte.
 - **Other MPEG-4 Part 2 profiles.**  Data partitioning, reversible VLC,
   interlaced pictures, quarter sample, sprites, B-VOPs and the advanced
   Simple-Studio profile are still refused by the provider on purpose.  None of

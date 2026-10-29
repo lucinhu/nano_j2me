@@ -40,3 +40,14 @@ gains the looped-effect and seek cases behind `test_player_*`, and
 Full ctest 122/122, `tools/check_no_statics.sh` clean.  The change is behind no
 compile-time switch: it is Player state accounting, not decoder code, so it
 costs no RAM beyond the two existing fields it reads.
+
+Two follow-ups in the next round:
+
+* `tests/test_media_replay.c` also pins the "port reports a queue but no free
+  space" branch - `pcm_free` NULL, `pcm_queued` answering - with
+  `test_eof_drain_queued_only()`.  With the older pcm_free-only condition
+  restored it reports 2 failures; the drain really does consult the queue.
+* A second test that was committed in this round was never called from `main`
+  and never exercised: its expectations assumed the mock device could hold more
+  than its capacity.  It has been replaced by the test above rather than left
+  as dead code.

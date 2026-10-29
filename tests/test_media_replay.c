@@ -793,8 +793,11 @@ static void test_live_clock_and_seek(void)
     nj_port port;
     nj_vm *vm;
     nj_ref p, other;
-    nj_value a[1], ret;
+    /* setMediaTime(J) takes two operand slots; args is the raw slot array. */
+    nj_value a[2], ret;
     int base, opens;
+
+    a[1].bits = 0u;
 
     vol_cap = 64;
     vol_pushed = vol_consumed = vol_written = 0;
@@ -865,15 +868,16 @@ done:
     nj_port_shutdown(&port);
 }
 
-/* A device may hold several complete loops.  Recover the audible loop on
- * pause, and wait for the queue even when the port has no pcm_free callback. */
-static void test_queued_short_loops(int with_free)
+/* A port may report its queue without reporting free space: the end-of-media
+ * drain must consult pcm_queued in that case, or a one-shot sound is closed
+ * while its tail is still queued (the bug that made a one second wave come out
+ * as a third of a second on Android).  pcm_free is deliberately NULL here. */
+static void test_eof_drain_queued_only(void)
 {
     nj_port port;
     nj_vm *vm;
     nj_ref p;
-    nj_value a[1];
-    int i, base;
+    nj_value a[1], ret;
 
     vol_cap = 64;
     vol_pushed = vol_consumed = vol_written = 0;
@@ -881,35 +885,25 @@ static void test_queued_short_loops(int with_free)
     CHECK(nj_port_headless(&port) == NJ_OK);
     port.pcm_open = vol_open;
     port.pcm_write = vol_write;
-    port.pcm_free = with_free ? vol_room : NULL;
     port.pcm_queued = vol_queued;
     port.pcm_close = vol_close;
     vm = nj_vm_create(&port, 2 * 1024 * 1024);
     CHECK(vm != NULL);
     if (!vm) { nj_port_shutdown(&port); return; }
-    p = make_ramp_player(vm, 8, 8000);
+    p = make_ramp_player(vm, 40, 8000);
     CHECK(p != NULL);
     if (!p) goto done;
-    a[0].i = 5;
+    a[0].i = 1;
     CHECK(nj_call(vm, p, PLAYER, "setLoopCount", "(I)V", a, NULL) == NJ_OK);
     CHECK(nj_call(vm, p, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
-    for (i = 0; i < 16; i++) nj_media_frame(vm);
-    CHECK(vol_pushed == 40 && vol_queued(NULL) == 40);
-    CHECK(player_state(vm, p) == 400 && player_time(vm, p) == 0);
-    vol_consumed = 5;
-    CHECK(player_time(vm, p) == 625);
-    CHECK(nj_call(vm, p, PLAYER, "stop", "()V", NULL, NULL) == NJ_OK);
-    CHECK(player_time(vm, p) == 625);
-    base = vol_written;
-    CHECK(nj_call(vm, p, PLAYER, "start", "()V", NULL, NULL) == NJ_OK);
-    for (i = 0; i < 16; i++) nj_media_frame(vm);
-    CHECK(vol_pushed == 35 && vol_written - base == 35);
-    for (i = 0; i < vol_written - base; i++)
-        CHECK(vol_output[base + i] == (nj_s2)(1000 + ((5 + i) % 8) * 7));
-    CHECK(player_state(vm, p) == 400 && player_time(vm, p) == 625);
-    vol_consumed = 35;
+    CHECK(vol_pushed == 40);
+    CHECK(player_state(vm, p) == 400);          /* the tail is still queued */
     nj_media_frame(vm);
-    CHECK(player_state(vm, p) == 300 && player_time(vm, p) == 1000);
+    CHECK(player_state(vm, p) == 400);
+    vol_consumed = 40;
+    nj_media_frame(vm);
+    CHECK(player_state(vm, p) == 300);          /* drained: end of media */
+    CHECK(player_time(vm, p) == 5000);          /* 40 frames at 8 kHz */
     CHECK(nj_call(vm, p, PLAYER, "close", "()V", NULL, NULL) == NJ_OK);
 done:
     nj_vm_destroy(vm);
@@ -928,6 +922,7 @@ int main(void)
     test_eof_drain();
     test_volume_and_position();
     test_live_clock_and_seek();
+    test_eof_drain_queued_only();
     printf("media replay: %d failures\n", failures);
     return failures ? 1 : 0;
 }

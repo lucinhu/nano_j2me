@@ -17,6 +17,7 @@
 #include "nj_internal.h"
 #include "nj_midp.h"
 #include "m4v_clip.h"
+#include "m4v_audio_clip.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -272,6 +273,82 @@ static void *test_alloc(void *ud, nj_size n) { return nj_host_alloc((nj_vm *)ud,
 static void test_free(void *ud, void *p) { nj_host_free((nj_vm *)ud, p); }
 static const nj_av_mem test_mem = { NULL, test_alloc, test_free };
 
+/* ------------------------------------------------------------------ */
+/* A port-provided AMR decoder, recognised by its sentinel samples.    */
+/* ------------------------------------------------------------------ */
+#define FAKE_AMR_SENTINEL ((nj_s2)0x2b2b)
+#define FAKE_AMR_FRAMES   5u
+
+static int fake_amr_accepts(const nj_u1 *data, nj_u4 len)
+{
+    return data != NULL && len >= 6u && memcmp(data, "#!AMR\n", 6u) == 0;
+}
+
+static nj_av_dec *fake_amr_open(const nj_u1 *data, nj_u4 len,
+                                const nj_av_mem *mem, nj_av_info *info,
+                                const char **err)
+{
+    fake_dec *d;
+
+    if (!fake_amr_accepts(data, len)) {
+        if (err) *err = "not AMR";
+        return NULL;
+    }
+    d = (fake_dec *)mem->alloc(mem->ud, (nj_size)sizeof(*d));
+    if (d == NULL) {
+        return NULL;
+    }
+    d->left = 1;
+    info->format = NJ_AV_AUDIO_AMR;
+    info->rate = 8000u;
+    info->channels = 1u;
+    info->frames = FAKE_AMR_FRAMES * 160u;
+    return (nj_av_dec *)d;
+}
+
+static int fake_amr_decode(nj_av_dec *dec, nj_av_step *step)
+{
+    fake_dec *d = (fake_dec *)dec;
+    nj_u4 frames = FAKE_AMR_FRAMES * 160u;
+    nj_u4 bytes = frames * 2u;
+    nj_s2 *out = (nj_s2 *)(void *)step->out;
+    nj_u4 i;
+
+    if (d->left <= 0) {
+        return NJ_AV_ERR_END;
+    }
+    if (out == NULL || step->out_cap < bytes) {
+        return NJ_AV_ERR_AGAIN;
+    }
+    for (i = 0u; i < frames; i++) {
+        out[i] = FAKE_AMR_SENTINEL;
+    }
+    step->out_used = bytes;
+    step->frames = frames;
+    step->in_used = step->in_len;
+    d->left--;
+    return NJ_AV_OK;
+}
+
+/* A provider that claims the stream, opens, and then never produces PCM - a
+ * hardware decoder that wants more input than one elementary track holds. */
+static int fake_amr_deaf_decode(nj_av_dec *dec, nj_av_step *step)
+{
+    fake_dec *d = (fake_dec *)dec;
+    (void)step;
+    return d->left > 0 ? NJ_AV_ERR_AGAIN : NJ_AV_ERR_END;
+}
+
+static const nj_av_audio_ops fake_amr = {
+    "fake-amr", NJ_AV_AUDIO_AMR, fake_amr_accepts, fake_amr_open,
+    fake_amr_decode, fake_seek, fake_close, 2u
+};
+
+static const nj_av_audio_ops fake_amr_deaf = {
+    "fake-amr-deaf", NJ_AV_AUDIO_AMR, fake_amr_accepts, fake_amr_open,
+    fake_amr_deaf_decode, fake_seek, fake_close, 2u
+};
+
 static const nj_av_audio_ops fake_mp3 = {
     "fake-mp3", NJ_AV_AUDIO_MP3, fake_accepts, fake_open, fake_decode,
     fake_seek, fake_close, 2u
@@ -488,6 +565,69 @@ cleanup:
     nj_port_shutdown(&port);
 }
 
+/*
+ * A movie Player's sound track is decoded through the provider registry too,
+ * so a port whose AMR runs in firmware serves the intros as well as the bare
+ * .amr assets.  The software provider is deliberately bypassed there (it would
+ * hold the whole track twice), which makes this the one path where "installed
+ * provider wins" has to be tested separately.
+ */
+static void test_port_amr_serves_movie_track(nj_vm *vm)
+{
+    nj_u1 pcm[(nj_u4)M4V_AV_AUDIO_FRAMES * 320u];
+    nj_u1 baseline[(nj_u4)M4V_AV_AUDIO_FRAMES * 320u];
+    nj_u4 frames, base_frames;
+
+    /* What the built-in decoder makes of the fixture, with the stock
+     * registry: the fallback below must reproduce exactly this. */
+    memset(baseline, 0, sizeof(baseline));
+    base_frames = nj_media_movie_amr_decode(vm, m4v_av_3gp,
+                                            (nj_u4)sizeof(m4v_av_3gp), baseline,
+                                            (nj_u4)sizeof(baseline));
+    ok(base_frames != 0u, "the built-in decoder handles the fixture");
+
+    ok(nj_avcodec_install_audio(vm, &fake_amr) > 0,
+       "a port can install an AMR provider");
+    {
+        static const nj_u1 amr_magic[6] = { '#', '!', 'A', 'M', 'R', '\n' };
+        ok(nj_avcodec_find_audio(vm, amr_magic, 6u) == &fake_amr,
+           "the installed AMR provider is chosen for an #!AMR stream");
+    }
+
+    memset(pcm, 0, sizeof(pcm));
+    frames = nj_media_movie_amr_decode(vm, m4v_av_3gp,
+                                       (nj_u4)sizeof(m4v_av_3gp), pcm,
+                                       (nj_u4)sizeof(pcm));
+    ok(frames != 0u, "the movie's AMR track decodes through the provider");
+    ok(frames > 0u, "the provider's frame count reaches the Player");
+    if (frames != 0u) {
+        ok((nj_s2)(int16_t)(pcm[0] | (nj_s2)(pcm[1] << 8)) == FAKE_AMR_SENTINEL,
+           "the PCM comes from the installed provider");
+    }
+
+    /* A provider that claims the stream and then delivers nothing usable must
+     * not make the movie silent: the built-in decoder takes over and produces
+     * exactly what it produces with no port provider installed. */
+    ok(nj_avcodec_install_audio(vm, &fake_amr_deaf) > 0,
+       "a provider that yields no PCM can be installed");
+    memset(pcm, 0, sizeof(pcm));
+    frames = nj_media_movie_amr_decode(vm, m4v_av_3gp,
+                                       (nj_u4)sizeof(m4v_av_3gp), pcm,
+                                       (nj_u4)sizeof(pcm));
+    ok(frames != 0u && frames == base_frames,
+       "a provider that yields nothing falls back to the built-in decoder");
+    ok(frames != 0u &&
+       memcmp(pcm, baseline, (size_t)frames * 320u) == 0,
+       "the fallback PCM matches the built-in decoder byte for byte");
+
+    nj_avcodec_reset(vm);
+    {
+        static const nj_u1 amr_magic[6] = { '#', '!', 'A', 'M', 'R', '\n' };
+        ok(nj_avcodec_find_audio(vm, amr_magic, 6u) == nj_avcodec_sw_amr(),
+           "resetting the registry restores the software AMR provider");
+    }
+}
+
 int main(void)
 {
     nj_port port;
@@ -518,6 +658,9 @@ int main(void)
         ok(nj_avcodec_find_audio(vm, junk, (nj_u4)sizeof(junk)) == NULL,
            "an unknown stream finds no audio provider");
     }
+
+    /* A port's AMR decoder must serve a movie's sound track as well. */
+    test_port_amr_serves_movie_track(vm);
 
     /* A port's video decoder replaces the built-in one the same way. */
     ok(nj_avcodec_install_video(vm, &fake_h263) > 0,
