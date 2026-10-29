@@ -240,6 +240,55 @@ else
    skip "rotation=90: missing $FIXTURES/loopdemo.jar"
 fi
 
+# Heap is a core *option* too.  Automatic is the default and has to resolve to
+# a concrete number at load: probe what the core registered, then run once and
+# check that the resolved size reached the log.  Both halves matter - an option
+# that says "auto" but never resolves is a VM created with a 0-byte arena, and
+# a resolved log with no option is not something RetroArch can select.
+if [ -f "$FIXTURES/loopdemo.jar" ]; then
+   HEAP_LOG=$WORK/heap-probe.log
+   if $TIMEOUT "$HARNESS" --core "$CORE" --jar "$FIXTURES/loopdemo.jar" \
+         --frames 0 --save-dir "$WORK/save-heap-probe" >"$HEAP_LOG" 2>&1; then
+      HEAP_LINE=$(grep -iE '^\[coreopt\] key=[^ ]*heap' "$HEAP_LOG" |
+                  head -n 1)
+      if [ -z "$HEAP_LINE" ]; then
+         fail "heap automatic: core registers no heap core option"
+      else
+         HEAP_DEF=$(printf '%s\n' "$HEAP_LINE" |
+                    sed -e 's/.* default=\([^ ]*\).*/\1/')
+         HEAP_VALS=$(printf '%s\n' "$HEAP_LINE" | sed -e 's/.* values=//')
+         case "$HEAP_DEF" in
+            auto) pass "heap option defaults to auto" ;;
+            *)    fail "heap option defaults to [$HEAP_DEF], want auto" ;;
+         esac
+         case ",$HEAP_VALS," in
+            *,auto,*) pass "heap option offers auto (values $HEAP_VALS)" ;;
+            *)        fail "heap option values [$HEAP_VALS] do not include auto" ;;
+         esac
+      fi
+      RESOLVE_LOG=$WORK/heap-resolve.log
+      if $TIMEOUT "$HARNESS" --core "$CORE" --jar "$FIXTURES/loopdemo.jar" \
+            --frames 2 --save-dir "$WORK/save-heap-auto" \
+            >"$RESOLVE_LOG" 2>&1; then
+         if grep -qE '\[core\]\[info\] heap: automatic, [0-9]+ MB for this host' \
+               "$RESOLVE_LOG"; then
+            pass "automatic heap resolves at load and is logged"
+         else
+            fail "automatic heap: no resolved-size log line"
+            grep -i heap "$RESOLVE_LOG" | sed 's/^/     /' | head -n 5
+         fi
+      else
+         fail "automatic heap: 2-frame load failed"
+         tail -n 10 "$RESOLVE_LOG" | sed 's/^/     /'
+      fi
+   else
+      fail "heap probe: zero-frame load failed"
+      tail -n 20 "$HEAP_LOG" | sed 's/^/     /'
+   fi
+else
+   skip "heap automatic: missing $FIXTURES/loopdemo.jar"
+fi
+
 say ""
 say "== result: $PASSED passed, $FAILED failed, $SKIPPED skipped =="
 

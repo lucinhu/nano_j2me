@@ -151,7 +151,7 @@ next load (RetroArch's *Quick Menu → Core Options*).
 | --- | --- | --- | --- |
 | `nano_j2me_device` | generic, nokia6230, sonyericsson-k750, motorola-e398, samsung-sgh-e700, siemens-s65 | generic | the handset profile a MIDlet believes it runs on (system properties, screen size hints, soft-key codes) |
 | `nano_j2me_rotation` | 0, 90, 180, 270 | 0 | rotates the finished frame **inside the core**. The MIDlet canvas and its coordinate system stay 240x320; for 90/270 the reported geometry becomes 320x240, so a frontend that honours the reported geometry shows the game in landscape without a second rotation |
-| `nano_j2me_heap` | 16, 32, 64, 128 (MB) | 64 | Java heap; the VM's own arena |
+| `nano_j2me_heap` | auto, 16, 32, 64, 128 (MB) | auto | Java heap; the VM's own arena. `auto` is a sixteenth of the host's RAM, clamped to 32–128 MB in 8 MB steps (unknown RAM gets the 32 MB floor) |
 | `nano_j2me_sound` | enabled, disabled | enabled | disables both the PCM ring and tone synthesis |
 | `nano_j2me_pointer` | enabled, disabled | enabled | delivers touch/mouse as pointer events |
 | `nano_j2me_btn_a` … `nano_j2me_btn_start` | any `nj_key` name, or `NONE` | FIRE, SOFT_RIGHT, SOFT_LEFT, CLEAR, GAME_A, GAME_B, 0, 5 | button binding (A, B, X, Y, L, R, Select, Start) |

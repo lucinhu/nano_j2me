@@ -53,6 +53,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if !defined(_WIN32)
+#  include <unistd.h>
+#endif
+
 #include "libretro.h"
 #include "nj2me/nj.h"
 
@@ -445,12 +449,59 @@ static const lr_opt_value lr_rotation_values[] = {
 };
 
 static const lr_opt_value lr_heap_values[] = {
-    { "16",  "16 MB"  },
-    { "32",  "32 MB"  },
-    { "64",  "64 MB"  },
-    { "128", "128 MB" },
+    { "auto", "Auto (by RAM)" },
+    { "16",   "16 MB"  },
+    { "32",   "32 MB"  },
+    { "64",   "64 MB"  },
+    { "128",  "128 MB" },
     { NULL, NULL }
 };
+
+/* ------------------------------------------------------------------ */
+/* Automatic heap                                                      */
+/* ------------------------------------------------------------------ */
+/*
+ * The heap is one arena the runtime allocates and clears when the MIDlet
+ * starts, so "automatic" means a fraction of the host's RAM rather than one of
+ * the fixed sizes: one sixteenth, floored at 32 MB (below that a 3D title dies
+ * in its own loader) and capped at 128 MB (above that a single MIDlet only
+ * holds memory the rest of the machine could use), on the same 8 MB grid the
+ * fixed values use.  The JSR 184 and video titles in the corpus are the reason
+ * the floor is not lower.  Hosts that cannot report RAM get the floor.
+ */
+static long lr_host_ram_mb(void)
+{
+#if defined(_WIN32)
+    MEMORYSTATUSEX st;
+    memset(&st, 0, sizeof(st));
+    st.dwLength = sizeof(st);
+    if (GlobalMemoryStatusEx(&st) && st.ullTotalPhys > 0u) {
+        return (long)(st.ullTotalPhys / (1024ull * 1024ull));
+    }
+    return 0;
+#else
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long page  = sysconf(_SC_PAGESIZE);
+    if (pages > 0 && page > 0) {
+        return (long)(((unsigned long long)pages *
+                       (unsigned long long)page) / (1024ull * 1024ull));
+    }
+    return 0;
+#endif
+}
+
+static int lr_auto_heap_mb(void)
+{
+    long total = lr_host_ram_mb();
+    long heap = total > 0 ? total / 16 : 0;
+    if (heap < 32) {
+        heap = 32;
+    }
+    if (heap > 128) {
+        heap = 128;
+    }
+    return (int)(heap & ~7L);
+}
 
 static const lr_opt_value lr_switch_values[] = {
     { "enabled",  "Enabled"  },
@@ -555,8 +606,9 @@ static const lr_option_meta lr_options[] = {
       "Rotates the picture only; the MIDlet keeps painting a 240x320 canvas.",
       "system", "0", lr_rotation_values },
     { "nano_j2me_heap", "Java heap",
-      "Size of the Java heap a MIDlet gets. Needs a content reload.",
-      "system", "64", lr_heap_values },
+      "Size of the Java heap a MIDlet gets. Auto is a sixteenth of the host's "
+      "RAM, 32-128 MB. Needs a content reload.",
+      "system", "auto", lr_heap_values },
     { "nano_j2me_sound", "Audio output",
       "Sample and tone audio from the MIDlet.", "audio", "enabled",
       lr_switch_values },
@@ -722,10 +774,16 @@ static void lr_read_config(nj_lr *s)
         s->rotation = 0;
     }
 
-    v = lr_option(s, "nano_j2me_heap", "64");
-    s->heap_mb = atoi(v);
-    if (s->heap_mb < 8)   s->heap_mb = 8;
-    if (s->heap_mb > 512) s->heap_mb = 512;
+    v = lr_option(s, "nano_j2me_heap", "auto");
+    if (!v || !v[0] || strcmp(v, "auto") == 0) {
+        s->heap_mb = lr_auto_heap_mb();
+        lr_log(s, RETRO_LOG_INFO, "heap: automatic, %d MB for this host",
+               s->heap_mb);
+    } else {
+        s->heap_mb = atoi(v);
+        if (s->heap_mb < 8)   s->heap_mb = 8;
+        if (s->heap_mb > 512) s->heap_mb = 512;
+    }
 
     s->sound = strcmp(lr_option(s, "nano_j2me_sound", "enabled"), "disabled") != 0;
     s->pointer = strcmp(lr_option(s, "nano_j2me_pointer", "enabled"),
