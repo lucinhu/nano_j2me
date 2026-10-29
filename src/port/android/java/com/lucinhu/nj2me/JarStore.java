@@ -1,5 +1,6 @@
 package com.lucinhu.nj2me;
 
+import android.app.ActivityManager;
 import android.content.Context;
 import android.net.Uri;
 
@@ -33,7 +34,37 @@ final class JarStore {
     static final String DIR = "jars";
     static final int DEF_W = 240;
     static final int DEF_H = 320;
-    static final int DEF_HEAP_MB = 8;
+    /**
+     * Heap for a game that has not chosen one: automatic.  See {@link HeapPlan}
+     * for how the phone's RAM turns into a number, and {@link #autoHeapMB}.
+     */
+    static final int DEF_HEAP_MB = HeapPlan.AUTO;
+
+    /** {@link HeapPlan#autoHeapMBFor} with the phone's total RAM filled in. */
+    static int autoHeapMB(Context ctx) {
+        long total = 0L;
+        try {
+            ActivityManager am = (ActivityManager)
+                    ctx.getSystemService(Context.ACTIVITY_SERVICE);
+            if (am != null) {
+                ActivityManager.MemoryInfo mi = new ActivityManager.MemoryInfo();
+                am.getMemoryInfo(mi);
+                total = mi.totalMem;
+            }
+        } catch (RuntimeException | LinkageError ignored) {
+            /* An old or unusual device: the floor is still a usable answer. */
+            total = 0L;
+        }
+        return HeapPlan.autoHeapMBFor(total);
+    }
+
+    /** "自动（约 96 MB）" or "16 MB" — what the settings rows show. */
+    static String heapText(Context ctx, int heapMB) {
+        if (heapMB > 0) {
+            return heapMB + " MB";
+        }
+        return "自动（约 " + autoHeapMB(ctx) + " MB）";
+    }
 
     /** Screen sizes worth offering before asking for a custom one. */
     static final int[][] PRESETS = {
@@ -109,7 +140,7 @@ final class JarStore {
         }
 
         String screenText() {
-            return w + "x" + h + " · " + heapMB + "MB";
+            return w + "x" + h + " · " + (heapMB > 0 ? heapMB + "MB" : "自动");
         }
 
         /** What the port measured the MIDlet to paint, or null if never run. */
@@ -217,6 +248,8 @@ final class JarStore {
         String savedTitle = null;
         boolean savedFlag = false;
         boolean haveFlag = false;
+        int savedHeap = DEF_HEAP_MB;
+        boolean heapChosen = false;
         if (cfg.isFile()) {
             try {
                 List<String> lines = readLines(cfg);
@@ -238,7 +271,13 @@ final class JarStore {
                     } else if (k.equals("h")) {
                         e.h = parseInt(v, DEF_H);
                     } else if (k.equals("heap")) {
-                        e.heapMB = parseInt(v, DEF_HEAP_MB);
+                        if (v.equalsIgnoreCase("auto")) {
+                            savedHeap = 0;
+                        } else {
+                            savedHeap = parseInt(v, DEF_HEAP_MB);
+                        }
+                    } else if (k.equals("heapset")) {
+                        heapChosen = parseFlag(v, 0) != 0;
                     } else if (k.equals("speed")) {
                         e.speed = parseInt(v, 100);
                     } else if (k.equals("net")) {
@@ -270,6 +309,13 @@ final class JarStore {
                 /* keep the defaults; a broken sidecar must not hide the game */
             }
         }
+        /*
+         * A sidecar from before automatic heaps has heap=8 and no marker:
+         * that was the old default, not a decision, so it moves to automatic
+         * with everything else.  Any other number is a size the player picked
+         * and is left alone; "heapset=1" makes a deliberate 8 MB explicit.
+         */
+        e.heapMB = HeapPlan.fromSidecar(savedHeap, heapChosen);
         e.title = JarName.chooseTitle(base, own, savedTitle, haveFlag, savedFlag);
         e.titleSet = JarName.renamed(base, savedTitle, haveFlag, savedFlag);
         return e;
@@ -284,7 +330,9 @@ final class JarStore {
              * stale one. */
             String text = (e.titleSet ? "title=" + e.title + "\ntitleset=1\n" : "")
                         + "w=" + e.w + "\nh=" + e.h
-                        + "\nheap=" + e.heapMB + "\nview=" + e.viewMode
+                        + "\nheap=" + e.heapMB
+                        + (e.heapMB > 0 ? "\nheapset=1" : "")
+                        + "\nview=" + e.viewMode
                         + "\nspeed=" + e.speed
                         + "\nnet=" + e.net + "\nsensor=" + e.sensor
                         + "\nzoom=" + e.zoom + "\npanx=" + e.panX

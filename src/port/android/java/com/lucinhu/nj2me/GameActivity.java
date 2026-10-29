@@ -283,6 +283,12 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         screenW = it.getIntExtra("w", JarStore.DEF_W);
         screenH = it.getIntExtra("h", JarStore.DEF_H);
         heapMB = it.getIntExtra("heap", JarStore.DEF_HEAP_MB);
+        if (heapMB <= 0) {
+            /* Automatic: the launcher stores 0 for "let the port decide", and
+             * the decision is made here so a changed phone (or Android's own
+             * memory pressure) is reflected on the next launch. */
+            heapMB = JarStore.autoHeapMB(this);
+        }
         viewMode = it.getIntExtra("view", VIEW_INT);
         viewZoom = it.getFloatExtra("zoom", 1.0f);
         viewPanX = it.getFloatExtra("panx", 0f);

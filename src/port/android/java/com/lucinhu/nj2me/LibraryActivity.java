@@ -592,7 +592,8 @@ public class LibraryActivity extends Activity {
                 screenDialog(e);
             }
         }));
-        box.addView(rowAction(Md3.IC_MEMORY, "Java 堆", e.heapMB + " MB", new Runnable() {
+        box.addView(rowAction(Md3.IC_MEMORY, "Java 堆",
+                JarStore.heapText(this, e.heapMB), new Runnable() {
             @Override
             public void run() {
                 heapDialog(e);
@@ -804,21 +805,30 @@ public class LibraryActivity extends Activity {
 
 
     private void heapDialog(final JarStore.Entry e) {
-        final int[] sizes = { 4, 8, 16, 24, 32, 64 };
+        /*
+         * Automatic first and by default: the port reads the phone's RAM and
+         * picks a heap from it, so a game picked up on a 1 GB handset and on a
+         * 12 GB one both start with something sensible.  The fixed sizes stay
+         * for the game that reports OutOfMemory anyway.
+         */
+        final int[] sizes = { 0, 4, 8, 16, 24, 32, 64, 128 };
         String[] labels = new String[sizes.length];
         String[] hints = new String[sizes.length];
+        int autoMB = JarStore.autoHeapMB(this);
         int checked = -1;
         for (int i = 0; i < sizes.length; i++) {
-            labels[i] = sizes[i] + " MB";
-            hints[i] = (i == 0) ? "只够最小的游戏"
-                    : (i == sizes.length - 1 ? "除非游戏特别大，否则用不上" : null);
+            labels[i] = (i == 0) ? "自动（约 " + autoMB + " MB）"
+                                 : sizes[i] + " MB";
+            hints[i] = (i == 0) ? "按手机内存自动选择（推荐）"
+                    : (i == 1 ? "只够最小的游戏"
+                       : (i == sizes.length - 1 ? "给特别大的 3D 游戏" : null));
             if (e.heapMB == sizes[i]) {
                 checked = i;
             }
         }
         Md3.chooser(this, Md3.IC_MEMORY, "Java 堆大小",
-                "MIDlet 能用多少内存（现在是 " + e.heapMB + "MB）。"
-                        + "游戏报 OutOfMemory 就调大一点。",
+                "MIDlet 能用多少内存（现在是 " + JarStore.heapText(this, e.heapMB)
+                        + "）。游戏报 OutOfMemory 就调大一点。",
                 labels, hints, checked, new Md3.Choice() {
                     @Override
                     public void picked(int which, AlertDialog d) {
