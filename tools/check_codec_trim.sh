@@ -32,10 +32,28 @@ text_of() {   # $1 = object
 
 fail=0
 
+# The base -D set is dropped for any macro the caller names itself: passing
+# -DNJ_ENABLE_MP3=1 and -DNJ_ENABLE_MP3=0 to one command is a redefinition,
+# which -Werror (correctly) refuses - and with it silently accepted, the "off"
+# variant was never really compiled.
 compile() {   # $1 out, $2 src, rest: extra flags
+    local out src kept d macro skip a
     out=$1; src=$2; shift 2
+    kept=""
+    for d in $defs; do
+        macro=${d#-D}
+        macro=${macro%%=*}
+        skip=0
+        for a in "$@"; do
+            case "$a" in -D"$macro"=*) skip=1 ;; esac
+        done
+        if [ "$skip" -eq 0 ]; then
+            kept="$kept $d"
+        fi
+    done
     # shellcheck disable=SC2086
-    $CC -Os -std=c99 -c "$src" -o "$out" $defs $incs "$@" 2>"$out.log"
+    $CC -Os -std=c99 -Wall -Wextra -Werror -Wno-unused-parameter \
+        -c "$src" -o "$out" $kept $incs "$@" 2>"$out.log"
 }
 
 has_symbol() { # $1 object, $2 symbol
@@ -93,7 +111,8 @@ check_shrink() { # $1 macro, $2 source
 # A unit that must at least keep compiling with a feature off.
 check_compiles() { # $1 source, rest: extra flags
     src=$1; shift
-    out="$work/$(basename "$src" .c).compile.o"
+    tag=$(printf '%s' "$*" | tr -c 'A-Za-z0-9' '_')
+    out="$work/$(basename "$src" .c).compile${tag}.o"
     if compile "$out" "$src" "$@"; then
         echo "ok: $src compiles with $*"
     else
@@ -114,6 +133,19 @@ check_compiles src/midp/nj_lib_media.c -DNJ_ENABLE_MP3=0
 check_compiles src/midp/nj_lib_media.c -DNJ_ENABLE_VIDEO=0
 check_compiles src/midp/nj_lib_media.c \
                -DNJ_ENABLE_AMR=0 -DNJ_ENABLE_MP3=0 -DNJ_ENABLE_VIDEO=0
+
+# A decoder that is compiled out leaves its headers unused too: the IDCT and
+# the intra VLC tables are static data, so a -Wall -Wextra -Werror build names
+# them as dead code unless the include sits inside the feature guard.
+check_compiles src/midp/nj_h263.c -DNJ_ENABLE_H263=0
+check_compiles src/midp/nj_m4v.c  -DNJ_ENABLE_M4V=0
+
+# Mascot Capsule's own units, in their normal and compiled-out shapes.  The
+# default shape is the one that caught an operator-precedence defect in
+# AffineTrans.setRotation (the shift divided the cosine as well as the
+# product), so the check is both a build gate and a regression for it.
+check_compiles src/midp/nj_lib_mascot.c
+check_compiles src/midp/nj_lib_mascot.c -DNJ_ENABLE_MASCOT=0
 
 check_shrink NJ_MP3_ENABLE_ID3       src/midp/nj_mp3.c
 check_shrink NJ_MP3_ENABLE_SEEK      src/midp/nj_mp3.c

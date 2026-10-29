@@ -602,15 +602,23 @@ NJFN(mascot_xf_set_rotation)
     m[3]  = m3_get(vm, NJ_THIS(args), "m03");
     m[7]  = m3_get(vm, NJ_THIS(args), "m13");
     m[11] = m3_get(vm, NJ_THIS(args), "m23");
-    m[0] = cos_a + (((x * x + 2048) >> 12) * nc + 2048) >> 12;
+    /*
+     * The diagonal terms are cos + axis^2 * (1 - cos).  The >> 12 belongs to
+     * the PRODUCT only: written without the outer parentheses the shift also
+     * divides the cosine, and a 60 degree rotation about x came out as
+     * m00 = 2049 (0.5) and m11 = 1 instead of 4096 and 2048 - a rotation
+     * matrix that shrinks the model by half.  GCC's -Wparentheses names this
+     * pattern; a normal build only warns, so the regression test pins it.
+     */
+    m[0] = cos_a + ((((x * x + 2048) >> 12) * nc + 2048) >> 12);
     m[1] = xync - zs;
     m[2] = zxnc + ys;
     m[4] = zs + xync;
-    m[5] = cos_a + (((y * y + 2048) >> 12) * nc + 2048) >> 12;
+    m[5] = cos_a + ((((y * y + 2048) >> 12) * nc + 2048) >> 12);
     m[6] = yznc - xs;
     m[8] = zxnc - ys;
     m[9] = xs + yznc;
-    m[10] = cos_a + (((z * z + 2048) >> 12) * nc + 2048) >> 12;
+    m[10] = cos_a + ((((z * z + 2048) >> 12) * nc + 2048) >> 12);
     xf_write(vm, NJ_THIS(args), m);
     return NJ_OK;
 }

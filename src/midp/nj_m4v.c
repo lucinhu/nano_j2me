@@ -13,8 +13,6 @@
 #include "nj2me/nj_m4v.h"
 #include "nj2me/nj_avcodec.h"
 #include "nj_mp4.h"
-#include "nj_vlc_intra.h"
-#include "nj_vlc_inter.h"
 
 #define NJ_M4V_DC_ERR (-0x7fffffff)
 #include <stdio.h>
@@ -23,6 +21,11 @@
 #include "nj2me/nj_m4v_escape.h"
 
 #if NJ_ENABLE_M4V
+
+/* Inside the guard: with the decoder compiled out these tables would be
+ * unused static data, which a -Werror build reports as dead code. */
+#include "nj_vlc_intra.h"
+#include "nj_vlc_inter.h"
 
 /* Defined with the block decoders further down; the escape reader needs them. */
 int nj_m4v_qmul(int qscale);

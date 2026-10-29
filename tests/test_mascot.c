@@ -1331,6 +1331,40 @@ static void r7_math(nj_vm *vm)
           r7_getf(vm, m, "m21") == ONE,
           "rotationX still writes the quarter-turn 3x3 part");
 
+    /*
+     * setRotation(axis, angle) is the general form of the single-axis
+     * rotations: with a unit x axis it must produce exactly what rotationX
+     * does.  The diagonal terms used to be written as
+     * `cos + (...) >> 12`, whose shift also divided the cosine, so a 60
+     * degree rotation shrank the model by half (m00 2049 instead of 4096,
+     * m11 1 instead of 2048).  The translation column is preserved.
+     */
+    (void)call(vm, m, XF, "<init>", "()V", NULL, &ret);
+    r7_setf(vm, m, "m03", 111);
+    r7_setf(vm, m, "m13", 222);
+    r7_setf(vm, m, "m23", 333);
+    av[0].i = ONE / 6;
+    (void)call(vm, m, XF, "rotationX", "(I)V", av, NULL);
+    {
+        nj_s4 rx11 = r7_getf(vm, m, "m11"), rx12 = r7_getf(vm, m, "m12");
+        nj_s4 rx21 = r7_getf(vm, m, "m21"), rx22 = r7_getf(vm, m, "m22");
+
+        p = vec(vm, ONE, 0, 0);
+        av[0].r = p; av[1].i = ONE / 6;
+        (void)call(vm, m, XF, "setRotation", "(L" V3 ";I)V", av, NULL);
+        check(r7_getf(vm, m, "m00") == ONE,
+              "setRotation(x) restores cos + axis^2*(1-cos) on the diagonal");
+        check(r7_getf(vm, m, "m11") == rx11 && r7_getf(vm, m, "m12") == rx12 &&
+              r7_getf(vm, m, "m21") == rx21 && r7_getf(vm, m, "m22") == rx22,
+              "setRotation(x, 60deg) equals rotationX(60deg)");
+        check(r7_getf(vm, m, "m01") == 0 && r7_getf(vm, m, "m02") == 0 &&
+              r7_getf(vm, m, "m10") == 0 && r7_getf(vm, m, "m20") == 0,
+              "setRotation about x leaves the off-diagonal cross terms at zero");
+        check(r7_getf(vm, m, "m03") == 111 && r7_getf(vm, m, "m13") == 222 &&
+              r7_getf(vm, m, "m23") == 333,
+              "setRotation preserves the translation column");
+    }
+
     /* Reference transform() returns a fresh Vector3D; the legacy void form stays. */
     (void)call(vm, m, XF, "<init>", "()V", NULL, &ret);
     r7_setf(vm, m, "m03", 7);

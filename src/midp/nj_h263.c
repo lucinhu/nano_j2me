@@ -36,7 +36,6 @@
 #include "nj2me/nj.h"
 #include "nj2me/nj_avcodec.h"
 #include "nj_mp4.h"
-#include "nj_idct.h"
 
 #include <string.h>
 
@@ -47,6 +46,10 @@
 
 
 #if NJ_ENABLE_H263
+
+/* Inside the guard: a build without H.263 must not carry the IDCT as unused
+ * static code, which -Werror reports. */
+#include "nj_idct.h"
 
 /* H.263 formats 1..5, in pixels.  Index 0 is the forbidden value. */
 static const nj_u2 h263_format_width[6] = { 0, 128, 176, 352, 704, 1408 };

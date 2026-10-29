@@ -128,3 +128,14 @@ cmake --build build-lean --target nj2me-cli -j
 off drops the built-in CJK faces; text then falls back to the MIDP cell font
 and any CJK in a title renders as the placeholder box, which is the honest
 answer for a build that left the tables out.
+
+## Update (2026-10-29): the matrix is enforced again
+
+The "zero warnings under `-DNJ_WERROR=ON`" property above had gone stale.
+The default configuration stopped compiling under `-Werror` (an
+operator-precedence warning in `AffineTrans.setRotation` that turned out to be
+a real rotation bug), and `NJ_ENABLE_VIDEO=0` / `H263=0` / `M4V=0` carried
+unused static code.  Those are fixed, the eight configurations in the table
+above build clean again, and `tools/check_codec_trim.sh` now compiles each
+affected unit with `-Wall -Wextra -Werror` so the property cannot decay
+silently.  Details: `docs/notes/2026-10-29-werror-trim.md`.
