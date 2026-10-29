@@ -98,3 +98,31 @@ these do not by themselves establish failure of single-player startup.
   saves three modified chunks in place, and returns to the title screen. The
   replay exits without game errors, OOM or uncaught exceptions; its save takes
   267 ms in this run. Evidence: `.local-tools/debug-runs/minecraft-sdl2-verified-r01/`.
+- The Options screen renders its sliders and checkboxes and reacts to keyboard
+  focus: "Server visible by default" toggles, and the username editor accepts
+  typed text through the CLDC TextBox plus its OK command. The changed name
+  (`SteveHero`) was reloaded from the options file by a later run. Inventory
+  and creative block selection render, and a pause-menu quit saves before
+  returning to the title.
+- `--save-state`/`--load-state` round-trip a live world: a 68 MB snapshot taken
+  after frame 2000 resumes the loading thread, renders the restored terrain and
+  responds to movement. The stock game then saves changed chunks through the
+  same offset path. Evidence: `.local-tools/debug-runs/minecraft-snapshot-r01/`.
+
+Known gaps after this work:
+
+- LAN play still needs `javax.microedition.io.DatagramConnection` and
+  `datagram://`, so "Join Game" reports a caught `ConnectionNotFoundException`
+  and single-player continues. The runtime's threads are cooperative, so a
+  native blocking receive would also stop the frame pump until it returned;
+  that needs I/O-aware scheduling rather than a small stub.
+- `Graphics3D.getProperties()` reports `supportAntialiasing = false`, which this
+  title uses as its "3D hardware present" probe, so it draws its HUD through
+  `Graphics` instead of the m3g path. The reported capability is accurate: the
+  software rasteriser does not antialias edges.
+- The Nokia multipoint-touch API is absent, so the game's own multitouch
+  listener cannot register; it falls back to Canvas pointer events and
+  keyboard. Pointer taps on the Options rows activate neither path, whereas
+  keyboard focus does.
+- Initial terrain generation (~100 s) and world load (~70 s) are interpreter
+  bound; they are slow, not stalled.
