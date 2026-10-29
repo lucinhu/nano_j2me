@@ -296,6 +296,15 @@ int nj_midp_text_event(nj_vm *vm, const nj_event *event);
 
 int nj_midp_pointer(nj_vm *vm, int x, int y, int kind);
 
+/*
+ * Nokia MultipointTouch delivery.  The MIDP pointer path calls this for every
+ * press, drag and release that reaches a visible Canvas, so a MIDlet that
+ * registered a MultipointTouchListener sees the pointer the port reported.
+ * `kind` is one of NJ_POINTER_*; the listener reads the coordinates back
+ * through MultipointTouch.getX()/getY()/getState().
+ */
+void nj_nokia_mpt_pointer(nj_vm *vm, int x, int y, int kind);
+
 /* Paint the current Displayable into the screen surface. */
 nj_status nj_midp_paint(nj_vm *vm);
 

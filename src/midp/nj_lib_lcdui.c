@@ -5396,6 +5396,9 @@ static int nj_midp_pointer_inner(nj_vm *vm, int x, int y, int kind)
             nj_clear_exception(vm);
             return 1;
         }
+        /* A title built for a touchscreen drives its own UI from the Nokia
+         * listener; it de-registers the Canvas callbacks when it registers. */
+        nj_nokia_mpt_pointer(vm, cx, cy, kind);
         (void)canvas_call(vm, d, method, 2, a);
         if (vm->exception) {
             return 1;   /* the MIDlet's exception is the caller's to handle */

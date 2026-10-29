@@ -46,18 +46,232 @@
 #define NJ_C_SLISTEN   "com/nokia/mid/sound/SoundListener"
 
 /*
- * MultipointTouch.  Registering a listener succeeds and the listener is never
- * called, because this runtime has no multitouch panel to report from.
+ * MultipointTouch.
  *
- * That is a real difference from VirtualKeyboard next door, which is a no-op
- * because the request is ALREADY SATISFIED (there is no on-screen keypad to
- * hide).  Here the request cannot be satisfied at all - a game that wants
- * two-finger input will not get it - so the honest thing is that the call
- * succeeds and nothing arrives, which is exactly what happens on a
- * single-touch handset.  A device with no multitouch is a device J2ME games
- * already handle.
+ * Two generations of this API exist.  The Series 40 form is a static
+ * setMultipointTouchListener(); the Asha form - which Minecraft PE 0.6.1
+ * uses - asks for a singleton with getInstance(), registers with an instance
+ * method, and reads each pointer with static getState()/getX()/getY().
+ *
+ * Both are answered from one per-VM instance, and that lets the runtime feed
+ * the pointer events the port already reports (desktop mouse, touchscreen,
+ * the --keys pointer entries) into the listener.  A title built for a
+ * touchscreen then drives its own touch UI instead of having to be played
+ * through the keypad.  A port that reports one pointer reports id 0, which is
+ * what a single-touch handset does too.
  */
-NJFN(nokia_mpt_set)     { return NJ_OK; }
+#define MPT_MAX_POINTERS 4
+#define MPT_PRESSED      0
+#define MPT_DRAGGED      1
+#define MPT_RELEASED     2
+
+static nj_field *mpt_f(nj_vm *vm, const char *name, const char *desc,
+                       int is_static)
+{
+    return nj_field_lookup(vm, NJ_C_MPTOUCH, name, desc, is_static);
+}
+
+static nj_ref mpt_instance(nj_vm *vm)
+{
+    return nj_field_read_ref(vm, NULL,
+                             mpt_f(vm, "_nj_instance", "L" NJ_C_MPTOUCH ";", 1));
+}
+
+static nj_ref mpt_array(nj_vm *vm, nj_ref inst, const char *name)
+{
+    return nj_field_read_ref(vm, inst, mpt_f(vm, name, "[I", 0));
+}
+
+/* Every pointer starts released; x/y start at the origin. */
+static void mpt_seed(nj_vm *vm, nj_ref inst)
+{
+    static const char *names[3] = { "_nj_state", "_nj_x", "_nj_y" };
+    nj_s4 initial[3];
+    int k;
+
+    initial[0] = MPT_RELEASED;
+    initial[1] = 0;
+    initial[2] = 0;
+    for (k = 0; k < 3; k++) {
+        nj_ref a = mpt_array(vm, inst, names[k]);
+        nj_s4 *p = a ? (nj_s4 *)nj_array_data(a) : NULL;
+        int i;
+        for (i = 0; p && i < MPT_MAX_POINTERS; i++) {
+            p[i] = initial[k];
+        }
+    }
+}
+
+NJFN(nokia_mpt_init)     { return NJ_OK; }
+
+static nj_ref mpt_make(nj_vm *vm, nj_thread *th, nj_value *args, nj_value *ret)
+{
+    nj_ref inst = mpt_instance(vm), st, xs, ys;
+    nj_u4 mark;
+
+    if (inst) {
+        return inst;
+    }
+    mark = nj_root_mark(vm);
+    inst = nj_root(vm, nj_object_new(vm, NJ_C_MPTOUCH));
+    if (!inst) {
+        nj_root_release(vm, mark);
+        (void)nj_throw_oom(vm);
+        return NULL;
+    }
+    st = nj_root(vm, nj_array_new(vm, "I", MPT_MAX_POINTERS));
+    xs = nj_root(vm, nj_array_new(vm, "I", MPT_MAX_POINTERS));
+    ys = nj_root(vm, nj_array_new(vm, "I", MPT_MAX_POINTERS));
+    if (!st || !xs || !ys) {
+        nj_root_release(vm, mark);
+        (void)nj_throw_oom(vm);
+        return NULL;
+    }
+    nj_field_write_ref(vm, inst, mpt_f(vm, "_nj_state", "[I", 0), st);
+    nj_field_write_ref(vm, inst, mpt_f(vm, "_nj_x", "[I", 0), xs);
+    nj_field_write_ref(vm, inst, mpt_f(vm, "_nj_y", "[I", 0), ys);
+    mpt_seed(vm, inst);
+    nj_field_write_ref(vm, NULL,
+                       mpt_f(vm, "_nj_instance", "L" NJ_C_MPTOUCH ";", 1), inst);
+    (void)th;
+    (void)args;
+    (void)ret;
+    nj_root_release(vm, mark);
+    return mpt_instance(vm);
+}
+
+NJFN(nokia_mpt_instance)
+{
+    nj_ref inst = mpt_make(vm, th, args, ret);
+    if (!inst) {
+        return NJ_ERR;
+    }
+    ret->r = inst;
+    return NJ_OK;
+}
+
+NJFN(nokia_mpt_add)
+{
+    nj_ref self = NJ_THIS(args), listener = NJ_ARG_REF(args, 0);
+
+    if (!self) {                    /* the legacy static form */
+        self = mpt_make(vm, th, args, ret);
+    }
+    if (!self) {
+        return NJ_ERR;
+    }
+    nj_field_write_ref(vm, self,
+                       mpt_f(vm, "_nj_listener", "L" NJ_C_MPLISTEN ";", 0),
+                       listener);
+    mpt_seed(vm, self);
+    return NJ_OK;
+}
+
+NJFN(nokia_mpt_remove)
+{
+    nj_ref self = NJ_THIS(args), listener = NJ_ARG_REF(args, 0);
+    nj_ref current;
+
+    if (!self) {
+        self = mpt_make(vm, th, args, ret);
+    }
+    if (!self) {
+        return NJ_ERR;
+    }
+    current = nj_field_read_ref(
+        vm, self, mpt_f(vm, "_nj_listener", "L" NJ_C_MPLISTEN ";", 0));
+    if (!listener || current == listener) {
+        nj_field_write_ref(vm, self,
+                           mpt_f(vm, "_nj_listener", "L" NJ_C_MPLISTEN ";", 0),
+                           NULL);
+    }
+    return NJ_OK;
+}
+
+static nj_s4 mpt_get(nj_vm *vm, nj_s4 id, const char *name)
+{
+    nj_ref inst = mpt_instance(vm), a;
+    const nj_s4 *p;
+
+    if (!inst) {
+        return 0;
+    }
+    a = mpt_array(vm, inst, name);
+    if (!a || id < 0 || (nj_u4)id >= a->length) {
+        return 0;
+    }
+    p = (const nj_s4 *)nj_array_data(a);
+    return p ? p[id] : 0;
+}
+
+NJFN(nokia_mpt_get_state)
+{
+    ret->i = mpt_get(vm, NJ_ARG_INT(args, 0), "_nj_state");
+    return NJ_OK;
+}
+
+NJFN(nokia_mpt_get_x)
+{
+    ret->i = mpt_get(vm, NJ_ARG_INT(args, 0), "_nj_x");
+    return NJ_OK;
+}
+
+NJFN(nokia_mpt_get_y)
+{
+    ret->i = mpt_get(vm, NJ_ARG_INT(args, 0), "_nj_y");
+    return NJ_OK;
+}
+
+/*
+ * One pointer event, already in canvas coordinates.  Called from the MIDP
+ * pointer dispatch, so the listener sees the same presses and drags a
+ * touchscreen handset would have reported.  The record is updated even before
+ * a listener registers, because getState()/getX()/getY() are readable then.
+ */
+void nj_nokia_mpt_pointer(nj_vm *vm, int x, int y, int kind)
+{
+    nj_ref inst, listener, a;
+    nj_s4 *p;
+    nj_s4 state;
+    nj_u4 mark;
+    nj_value arg[1];
+
+    if (!vm) {
+        return;
+    }
+    inst = mpt_instance(vm);
+    if (!inst) {
+        return;
+    }
+    state = (kind == NJ_POINTER_DOWN) ? MPT_PRESSED
+          : (kind == NJ_POINTER_MOVE) ? MPT_DRAGGED : MPT_RELEASED;
+    a = mpt_array(vm, inst, "_nj_state");
+    p = a ? (nj_s4 *)nj_array_data(a) : NULL;
+    if (p && a->length > 0u) { p[0] = state; }
+    a = mpt_array(vm, inst, "_nj_x");
+    p = a ? (nj_s4 *)nj_array_data(a) : NULL;
+    if (p && a->length > 0u) { p[0] = (nj_s4)x; }
+    a = mpt_array(vm, inst, "_nj_y");
+    p = a ? (nj_s4 *)nj_array_data(a) : NULL;
+    if (p && a->length > 0u) { p[0] = (nj_s4)y; }
+
+    listener = nj_field_read_ref(
+        vm, inst, mpt_f(vm, "_nj_listener", "L" NJ_C_MPLISTEN ";", 0));
+    if (!listener) {
+        return;
+    }
+    mark = nj_root_mark(vm);
+    nj_root(vm, inst);
+    nj_root(vm, listener);
+    a = nj_root(vm, nj_array_new(vm, "I", 1u));
+    if (a) {
+        ((nj_s4 *)nj_array_data(a))[0] = 0;   /* the reported pointer id */
+        arg[0].r = a;
+        (void)nj_call(vm, listener, nj_ref_class_name(listener),
+                      "pointersChanged", "([I)V", arg, NULL);
+    }
+    nj_root_release(vm, mark);
+}
 
 /*
  * FileSelect.  A UI SERVICE, not an API this runtime can satisfy: on a phone it
@@ -103,6 +317,10 @@ nj_status nj_nokia_late_init(nj_vm *vm)
     nokia_const_int(vm, NJ_C_FSELECT, "MEDIA_TYPE_AUDIO", 4);
     nokia_const_int(vm, NJ_C_FSELECT, "MEDIA_TYPE_APPLICATION", 8);
     nokia_const_int(vm, NJ_C_FSELECT, "MEDIA_TYPE_ALL", 16);
+    /* MultipointTouch pointer states, read by the MIDlet from the class. */
+    nokia_const_int(vm, NJ_C_MPTOUCH, "POINTER_PRESSED",  MPT_PRESSED);
+    nokia_const_int(vm, NJ_C_MPTOUCH, "POINTER_DRAGGED",  MPT_DRAGGED);
+    nokia_const_int(vm, NJ_C_MPTOUCH, "POINTER_RELEASED", MPT_RELEASED);
 
     /*
      * These numbers come from Nokia's own class library rather than from a
@@ -400,7 +618,29 @@ static const nj_builtin_method slisten_methods[] = {
     M("soundStateChanged", "(L" NJ_C_SOUND ";I)V", NJ_ACC_ABSTRACT)
 };
 
+static const nj_builtin_field mptouch_fields[] = {
+    { "_nj_listener", "L" NJ_C_MPLISTEN ";", 0 },
+    { "_nj_state",    "[I", 0 },
+    { "_nj_x",        "[I", 0 },
+    { "_nj_y",        "[I", 0 },
+    { "_nj_instance", "L" NJ_C_MPTOUCH ";", NJ_ACC_STATIC },
+    { "POINTER_PRESSED",  "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "POINTER_DRAGGED",  "I", NJ_ACC_STATIC | NJ_ACC_FINAL },
+    { "POINTER_RELEASED", "I", NJ_ACC_STATIC | NJ_ACC_FINAL }
+};
+
 static const nj_builtin_method mptouch_methods[] = {
+    M("<init>", "()V", 0),
+    /* The Asha generation: a singleton and per-pointer static readers. */
+    M("getInstance", "()L" NJ_C_MPTOUCH ";", NJ_ACC_STATIC),
+    M("addMultipointTouchListener",
+      "(L" NJ_C_MPLISTEN ";)V", 0),
+    M("removeMultipointTouchListener",
+      "(L" NJ_C_MPLISTEN ";)V", 0),
+    M("getState", "(I)I", NJ_ACC_STATIC),
+    M("getX",     "(I)I", NJ_ACC_STATIC),
+    M("getY",     "(I)I", NJ_ACC_STATIC),
+    /* The Series 40 generation, kept because titles still call it. */
     M("setMultipointTouchListener",
       "(L" NJ_C_MPLISTEN ";)V", NJ_ACC_STATIC),
     M("setMultipointTouchListener",
@@ -877,7 +1117,9 @@ const nj_builtin_class nj_lib_nokia_classes[] = {
       mvib_methods,
       (nj_u2)(sizeof(mvib_methods) / sizeof(mvib_methods[0])) },
     { NJ_C_MPTOUCH, "java/lang/Object", NJ_ACC_PUBLIC,
-      NULL, 0u, mptouch_methods,
+      mptouch_fields,
+      (nj_u2)(sizeof(mptouch_fields) / sizeof(mptouch_fields[0])),
+      mptouch_methods,
       (nj_u2)(sizeof(mptouch_methods) / sizeof(mptouch_methods[0])) },
     { NJ_C_SLISTEN, NULL,
       NJ_ACC_PUBLIC | NJ_ACC_INTERFACE | NJ_ACC_ABSTRACT,
@@ -944,10 +1186,19 @@ const nj_native_entry nj_lib_nokia_table[] = {
     { NJ_C_VKEYBOARD, "showOpenKeypadCommand", "(Z)V", nokia_vk_show },
     { NJ_C_VKEYBOARD, "setVisibility",         "(Z)V", nokia_vk_hide },
     { NJ_C_VKEYBOARD, "getVisibility",         "()Z",  nokia_vk_visible },
+    { NJ_C_MPTOUCH, "<init>", "()V", nokia_mpt_init },
+    { NJ_C_MPTOUCH, "getInstance", "()L" NJ_C_MPTOUCH ";", nokia_mpt_instance },
+    { NJ_C_MPTOUCH, "addMultipointTouchListener",
+      "(L" NJ_C_MPLISTEN ";)V", nokia_mpt_add },
+    { NJ_C_MPTOUCH, "removeMultipointTouchListener",
+      "(L" NJ_C_MPLISTEN ";)V", nokia_mpt_remove },
+    { NJ_C_MPTOUCH, "getState", "(I)I", nokia_mpt_get_state },
+    { NJ_C_MPTOUCH, "getX",     "(I)I", nokia_mpt_get_x },
+    { NJ_C_MPTOUCH, "getY",     "(I)I", nokia_mpt_get_y },
     { NJ_C_MPTOUCH, "setMultipointTouchListener",
-      "(L" NJ_C_MPLISTEN ";)V", nokia_mpt_set },
+      "(L" NJ_C_MPLISTEN ";)V", nokia_mpt_add },
     { NJ_C_MPTOUCH, "setMultipointTouchListener",
-      "(L" NJ_C_MPLISTEN ";I)V", nokia_mpt_set },
+      "(L" NJ_C_MPLISTEN ";I)V", nokia_mpt_add },
     { NJ_C_FSELECT, "launch", "(IIZ)[L" NJ_C_FSDETAIL ";",
       nokia_fselect_launch },
     { NJ_C_FSDETAIL, "<init>",  "()V", nokia_fsd_init },

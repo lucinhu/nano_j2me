@@ -109,6 +109,23 @@ these do not by themselves establish failure of single-player startup.
   responds to movement. The stock game then saves changed chunks through the
   same offset path. Evidence: `.local-tools/debug-runs/minecraft-snapshot-r01/`.
 
+## Touch input
+
+Minecraft PE is built for a touchscreen: the Nokia MultipointTouch listener
+drives its menus, block taps and the look-around drag. The runtime only had the
+older Series 40 shape of that class (`setMultipointTouchListener`), so
+`getInstance()` raised `NoSuchMethodError`, the game caught it, and every tap
+had to go through the keypad.
+
+`MultipointTouch` now answers both generations: `getInstance()` returns one
+per-VM singleton, `addMultipointTouchListener`/`remove...` register on it,
+`getState`/`getX`/`getY` read pointer 0, and the pointer states plus
+`pointersChanged()` are delivered from the runtime's pointer dispatch. Scripted
+pointer replay (`--keys '150:pressed@120,125 154:released@120,125'`) opens
+"Select world" from the title, so the click reaches the game's own button hit
+test. `tests/test_nokia_touch.c` pins the class surface, the constants and the
+coordinates `getState()`/`getX()`/`getY()` report.
+
 Known gaps after this work:
 
 - LAN play still needs `javax.microedition.io.DatagramConnection` and
