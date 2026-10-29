@@ -57,10 +57,19 @@ added to that list for large 3D games.
   `tools/check_android_java.sh` — 16 checks, and the whole harness is green.
 * Every Android Java file was recompiled against the SDK's `android.jar`
   (`javac -source 8 -target 8 -bootclasspath …/android.jar`) after the change.
-  A full APK rebuild was not possible at the time of writing because the
-  working tree also carried unrelated, in-flight C changes that do not compile
-  (the failure is in `nj_midi.c`/`nj_lib_media.c`, outside the Android port).
-  Nothing in the Android port itself failed to compile.
+* Both APKs were rebuilt and signed against the project's debug key - arm64
+  (891 036 bytes) and x86_64 (891 033 bytes) - from a clean `git worktree` at
+  the commit, because the working tree also carried unrelated, in-flight C
+  changes that do not compile. The x86_64 one was installed on the API 26
+  x86_64 emulator (1.46 GB RAM reported):
+  * the game settings sheet shows "Java 堆 · 自动（约 88 MB）";
+  * the chooser lists "自动（约 88 MB）" first and selected, followed by the
+    fixed sizes (4/8/16/24/32/64/128 MB);
+  * launching the game logs `heap: automatic, 88 MB for this phone`;
+  * picking 16 MB writes `heap=16` + `heapset=1` to
+    `files/jars/<game>.jar.cfg`, and choosing 自动 again writes `heap=0` with
+    no marker.
+  Screenshots: `.local-tools/android-autoheap-r01/`.
 
 ## Limits
 
