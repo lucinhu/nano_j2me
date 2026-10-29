@@ -249,6 +249,12 @@ lives in the commit message and body, not in this table.
     carries the character), which is what such an editor needs, but whether UC
     renders it has not been run yet. The crash that used to happen while
     typing is fixed.
-  * 远古帝国2 — a cold start with repeated `fire` reaches the mission dialogue
-    and the village, but the **picture freezes after frame 44**; unit movement
-    and combat on this build are unverified.
+  * 远古帝国2 — **re-checked 2026-10-29, the "freezes after frame 44" reading no
+    longer reproduces** on the current build.  A cold start with repeated `fire`
+    reaches the mission dialogue and the village, and a 1700-frame replay with
+    held direction keys keeps changing the picture (held `up`/`down`/`right`
+    each move it, 146 distinct colours around the village, no uncaught
+    exception); `--dump-organised` frame sampling shows 0 changed pixels only
+    after the last input at frame 1600, i.e. while waiting for a key.  Unit
+    movement and combat themselves remain unverified.  Evidence:
+    `.local-tools/debug-runs/ancient-freeze-20261029/`.
