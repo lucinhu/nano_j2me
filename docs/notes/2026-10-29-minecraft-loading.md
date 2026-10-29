@@ -148,11 +148,18 @@ Evidence:
   address formatting, the datagram mutators, closed-connection errors, and the
   cooperative park seen through `nj_invoke_native`. It needs no external
   network.
-- Two nano_j2me instances on one machine: the host logs
-  `MCJ: NET host port 19132 guid ...` instead of `NET host failed`, and the
-  client's Join Game screen lists it as `SteveHero 192.168.1.4`. Evidence:
-  `.local-tools/debug-runs/minecraft-lan-pair-r01/` and
-  `.local-tools/debug-runs/minecraft-lan-join-r01/`.
+- Two nano_j2me instances on one machine complete the whole LAN path: the
+  host logs `MCJ: NET host port 19132 guid ...` instead of `NET host failed`,
+  the client's Join Game screen lists it as `SteveHero 192.168.1.4`, and
+  selecting that row makes the host log `NET new client` / `NET login Steve`.
+  The client then reports `NET joined, entities 5` and renders the shared
+  world with its touch controls
+  (`.local-tools/debug-runs/minecraft-lan-world-r01/`). The client-side world
+  preparation after the transfer is interpreter bound and took about 40 s of
+  game time; the session was stopped once the join was confirmed and was not
+  played to any objective.
+- Discovery-only evidence: `.local-tools/debug-runs/minecraft-lan-pair-r01/`
+  and `.local-tools/debug-runs/minecraft-lan-join-r02/`.
 
 Known gaps after this work:
 
