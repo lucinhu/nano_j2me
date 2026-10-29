@@ -270,7 +270,7 @@ if [ -f "$FIXTURES/loopdemo.jar" ]; then
       if $TIMEOUT "$HARNESS" --core "$CORE" --jar "$FIXTURES/loopdemo.jar" \
             --frames 2 --save-dir "$WORK/save-heap-auto" \
             >"$RESOLVE_LOG" 2>&1; then
-         if grep -qE '\[core\]\[info\] heap: automatic, [0-9]+ MB for this host' \
+         if grep -qE '\[core\]\[info\].*heap: automatic, [0-9]+ MB for this host' \
                "$RESOLVE_LOG"; then
             pass "automatic heap resolves at load and is logged"
          else
