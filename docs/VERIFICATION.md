@@ -41,7 +41,13 @@ The gate over all collected titles, most recent full sweep:
   wall-clock, device re-run, heap re-runs), in four parallel shards of the
   same title list.
 * Result: **397 passed, 2 failed** of 399 titles. Both failures are the
-  title's, not the runtime's:
+  title's, not the runtime's.  Re-run 2026-10-30 on the current tree
+  (400 titles, sequential, `tools/run_game_corpus.sh --dir tests/games
+  --bin build/nj2me`): **398 passed, 2 failed of 400**, the same two titles
+  below - the corpus gained a title, not a failure.  Both re-checked
+  individually the same day (`not a usable MIDlet suite` and `授权过期`),
+  evidence `.local-tools/debug-runs/corpus-sweep-20261029/failures/`; the
+  full run takes ~25 minutes uncapped.
 
 | title | verdict | why |
 | --- | --- | --- |

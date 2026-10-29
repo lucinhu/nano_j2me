@@ -299,6 +299,23 @@ static void frame_pace(nj_vm *vm, nj_s8 frame_start)
  * embedder that already owns an event loop (Android, a game engine) drive the
  * MIDlet itself instead of handing control to nj_midp_run().
  */
+/* Sink for the escaped-exception diagnostic: nj_vm_describe_threads() writes
+ * "where: thread ..." headers and "where:   Method pc=N" frame lines; a stack
+ * trace wants the frames alone, indented like Throwable.printStackTrace(). */
+static void escape_trace(void *ud, const char *line)
+{
+    nj_vm *vm = (nj_vm *)ud;
+    const char *p = line;
+
+    if (strncmp(p, "where: ", 7) == 0) {
+        p += 7;
+    }
+    if (strncmp(p, "thread ", 7) == 0) {
+        return;                 /* one per thread; the frames are the point */
+    }
+    nj_logf(vm, 1, "    at %s", p);
+}
+
 nj_status nj_midp_frame(nj_vm *vm)
 {
     nj_event ev;
@@ -390,6 +407,17 @@ nj_status nj_midp_frame(nj_vm *vm)
     if (nj_has_exception(vm)) {
         nj_logf(vm, 1, "exception escaped into the frame loop: %s",
                 nj_exception_describe(vm));
+        /*
+         * Where it came from: the frames that are still on the threads, in the
+         * shape of a Java stack trace.  Best effort - the frames the exception
+         * unwound through are gone - but it is what a triage otherwise has to
+         * recover by disassembling the class named above by hand, which is how
+         * the two "escaped" entries in tools/corpus_fatal_known.txt were found.
+         * The usual log throttle bounds a title that throws every frame.
+         */
+        nj_logf(vm, 1, "    frames at the frame boundary (the throwing "
+                       "thread may already have unwound):");
+        nj_vm_describe_threads(vm, escape_trace, vm);
         nj_clear_exception(vm);
     }
 

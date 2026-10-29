@@ -67,3 +67,20 @@ Result on the current build:
 
 The wall clock is ~4.5 minutes on 8 cores, which is cheap enough to run after
 any change to the event, paint or storage paths.
+
+## Follow-up: the escaped exception now says where it was
+
+Triage of the two "escaped" titles above started by disassembling the class
+named in the one-line report by hand.  The frame loop now prints the threads'
+remaining frames under that line, in the shape of a Java stack trace, with a
+header that says what it is:
+
+    exception escaped into the frame loop: java.lang.NullPointerException @ c.showNotify+6
+        frames at the frame boundary (the throwing thread may already have unwound):
+        at   c.run()V pc=58
+
+It is best effort: the frames the exception unwound through are gone by the
+time the frame loop sees it, so what is printed is what the other threads were
+doing at that boundary.  That is still what turns "NPE at c.showNotify+6, no
+context" into "NPE while thread 2 sits in c.run()" without a debugger, and the
+usual log throttle bounds a title that throws every frame.
