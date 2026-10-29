@@ -254,18 +254,67 @@ static int dg_resolve(const char *host, const char *port, int passive,
     return -1;
 }
 
+/*
+ * Numeric host and port for a sockaddr, written here rather than through
+ * getnameinfo().  lwIP has no NI_* flags and, on ESP-IDF, no getnameinfo()
+ * implementation to link against at all - and the runtime has no need for one:
+ * the address a datagram came from is already an address, so the numeric form
+ * is the answer, and formatting it from the bytes avoids a resolver round trip
+ * (and a DNS dependency) on every packet.
+ */
+static int dg_format_addr(const struct sockaddr_storage *ss,
+                          char *host, nj_size hostcap,
+                          char *serv, nj_size servcap)
+{
+    if (ss == NULL || host == NULL || serv == NULL) {
+        return -1;
+    }
+    if (ss->ss_family == AF_INET) {
+        const struct sockaddr_in *a = (const struct sockaddr_in *)(const void *)ss;
+        const nj_u1 *b = (const nj_u1 *)(const void *)&a->sin_addr.s_addr;
+
+        snprintf(host, (size_t)hostcap, "%u.%u.%u.%u",
+                 (unsigned)b[0], (unsigned)b[1], (unsigned)b[2], (unsigned)b[3]);
+        snprintf(serv, (size_t)servcap, "%u", (unsigned)ntohs(a->sin_port));
+        return 0;
+    }
+#ifdef AF_INET6
+    if (ss->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *a = (const struct sockaddr_in6 *)(const void *)ss;
+        const nj_u1 *b = (const nj_u1 *)(const void *)&a->sin6_addr;
+        char *at = host;
+        int i;
+
+        if (hostcap < 46u) {     /* "ffff:ffff:...:ffff\0" is 40 bytes */
+            return -1;
+        }
+        for (i = 0; i < 8; i++) {
+            int n = snprintf(at, (size_t)(hostcap - (nj_size)(at - host)),
+                             i ? ":%02x%02x" : "%02x%02x", b[i * 2], b[i * 2 + 1]);
+            if (n <= 0) {
+                return -1;
+            }
+            at += n;
+        }
+        snprintf(serv, (size_t)servcap, "%u", (unsigned)ntohs(a->sin6_port));
+        return 0;
+    }
+#endif
+    return -1;
+}
+
 /* "datagram://<numeric host>:<port>" for the address a packet came from. */
 static nj_ref dg_address_string(nj_vm *vm, const struct sockaddr_storage *ss,
                                 socklen_t slen)
 {
-    char host[NI_MAXHOST];
-    char serv[NI_MAXSERV];
-    char url[NI_MAXHOST + NI_MAXSERV + 16];
+    char host[64];
+    char serv[16];
+    char url[64 + 16 + 16];
     int n;
 
-    if (getnameinfo((const struct sockaddr *)ss, slen,
-                    host, sizeof(host), serv, sizeof(serv),
-                    NI_NUMERICHOST | NI_NUMERICSERV) != 0) {
+    (void)slen;
+    if (dg_format_addr(ss, host, (nj_size)sizeof(host),
+                       serv, (nj_size)sizeof(serv)) != 0) {
         return NULL;
     }
     if (strchr(host, ':')) {

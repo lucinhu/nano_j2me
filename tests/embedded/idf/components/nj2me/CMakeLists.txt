@@ -23,6 +23,7 @@ idf_component_register(
         "${NJ_ROOT}/src/core/nj_thread.c"
         "${NJ_ROOT}/src/core/nj_interp.c"
         "${NJ_ROOT}/src/core/nj_engine.c"
+        "${NJ_ROOT}/src/core/nj_avcodec.c"
         "${NJ_ROOT}/src/core/nj_jit.c"
         "${NJ_ROOT}/src/core/nj_jit_rv32.c"
         "${NJ_ROOT}/src/core/nj_jit_arm64.c"
@@ -42,12 +43,19 @@ idf_component_register(
         "${NJ_ROOT}/src/midp/nj_lib_rms.c"
         "${NJ_ROOT}/src/midp/nj_lib_midlet.c"
         "${NJ_ROOT}/src/midp/nj_lib_media.c"
+        "${NJ_ROOT}/src/midp/nj_mp3.c"
+        "${NJ_ROOT}/src/midp/nj_h263.c"
+        "${NJ_ROOT}/src/midp/nj_m4v.c"
+        "${NJ_ROOT}/src/midp/nj_mp4.c"
         "${NJ_ROOT}/src/midp/nj_amr.c"
         "${NJ_ROOT}/src/midp/nj_amr_mp4.c"
         "${NJ_ROOT}/src/midp/nj_midi.c"
         "${NJ_ROOT}/src/midp/nj_lib_sax.c"
         "${NJ_ROOT}/src/midp/nj_lib_http.c"
+        "${NJ_ROOT}/src/midp/nj_lib_pim.c"
+        "${NJ_ROOT}/src/midp/nj_lib_samsung.c"
         "${NJ_ROOT}/src/midp/nj_lib_socket.c"
+        "${NJ_ROOT}/src/midp/nj_lib_datagram.c"
         "${NJ_ROOT}/src/midp/nj_lib_sensor.c"
         "${NJ_ROOT}/src/midp/nj_lib_bt.c"
         "${NJ_ROOT}/src/midp/nj_lib_wireless.c"
@@ -92,4 +100,13 @@ target_compile_definitions(${COMPONENT_LIB} PUBLIC
     NJ_MAX_STACK_SLOTS=1024
     NJ_MAX_FRAMES=96
     NJ_MAX_INTERNED=128
+    # The MP4/3GP demuxer is its own translation unit here as it is on the
+    # desktop; without this nj_h263.c compiles a bridge copy of it and the
+    # linker sees the same symbols twice.
+    NJ_MP4_SEPARATE
+    # A handheld image draws with the built-in bitmap faces; the TrueType
+    # rasteriser is a desktop nicety (--font) and its sources are not in this
+    # component's list.  Stating it here means a future reference to it is a
+    # compile-time absence rather than an undefined symbol.
+    NJ_ENABLE_TTF=0
 )

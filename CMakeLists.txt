@@ -1286,6 +1286,12 @@ nj_add_test(test_clip tests/test_clip.c)
   # run time - it is a NoSuchMethodError the title hits later.
   add_test(NAME check_api_audit
            COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/api_audit.py)
+  # Every shared runtime source in the desktop build must also be in the
+  # hand-written ESP-IDF source list.  That list went stale when the avcodec
+  # split, the datagram connection and the PIM/Samsung modules landed: the
+  # ESP32-S3 image stopped linking and nobody noticed until it was rebuilt.
+  add_test(NAME check_port_sources
+           COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_port_sources.py)
   # The audit is a text pass over every source unit and takes ~50 s on an idle
   # machine; under a loaded one it crossed the old 120 s ceiling and failed a
   # whole suite run as a timeout.  300 s leaves room to spare without hiding a

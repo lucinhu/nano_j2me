@@ -4,7 +4,7 @@
 
 [![最新发布](https://img.shields.io/github/v/release/lucinhu/nano_j2me?sort=semver&label=release&color=blue)](https://github.com/lucinhu/nano_j2me/releases/latest)
 [![许可](https://img.shields.io/github/license/lucinhu/nano_j2me)](LICENSE)
-[![测试](https://img.shields.io/badge/tests-130%20passing-brightgreen)](docs/VERIFICATION.md)
+[![测试](https://img.shields.io/badge/tests-131%20passing-brightgreen)](docs/VERIFICATION.md)
 [![sanitizer](https://img.shields.io/badge/sanitized-ASan%20%2B%20UBSan%20%2B%20LSan-brightgreen)](tools/run_sanitized_tests.sh)
 [![C99，零依赖](https://img.shields.io/badge/C99-no%20dependencies-informational)](#设计上的硬约束)
 
@@ -50,7 +50,7 @@
 * **JSR-184 补齐。** 两面光照、Animation COLOR 轨道、每帧零分配的蒙皮姿态缓存、`duplicate()` 连骨骼一起复制、Texture2D 一般矩阵的画面级证明；975 个 `.m3g`、1,513 个 PolygonMode 的语料审计已无未决缺口。
 * **稳健性。** 畸形 class 文件不再能挂死或弄崩虚拟机（异常表、未验证接收者、循环继承几族；fuzzer 找到、修掉、并用测试钉住）。两个真实标题的挂死/黑屏也修了：街头霸王2 冠军典藏版在加载期间收到软键不再挂死；纽约人生_1339 不再画完一帧就把帧泵饿死。
 * **可选 JIT。** RV32 与 ARM64 基线 JIT（默认关闭，`NJ_ENABLE_JIT=1` 开启），共享一个按 VM 有界的热块缓存；x86_64 仍用解释器。见 [docs/JIT.md](docs/JIT.md)。
-* **数字。** `ctest` 130 项测试（0.2.0 是 92 项），Sanitizer 套件 130/130 全绿；真实游戏语料 399 个里 **397 个正常跑**，2 个失败都是标题自身原因（JAR 被截断、授权过期）。
+* **数字。** `ctest` 131 项测试（0.2.0 是 92 项），Sanitizer 套件 131/131 全绿；真实游戏语料 399 个里 **397 个正常跑**，2 个失败都是标题自身原因（JAR 被截断、授权过期）。
 
 完整更新日志：[v0.3.0 发布说明](https://github.com/lucinhu/nano_j2me/releases/tag/v0.3.0)。
 
@@ -137,8 +137,8 @@
 | 移植：Android（NDK + JNI） | **完成** —— 一个 APK 支持 Android 5.0（API 21）及以上、四种 ABI；启动器会显示每个游戏自己的名字和图标，也能从文件管理器直接打开 `.jar`；三套可配置的悬浮按键布局；AAudio 或 OpenSL ES 出声，MIDI 交给手机自带的合成器；多点触控；自动识别游戏分辨率。四种 ABI 合计 2.79 MiB（仅 arm64 的包 858 KiB），在 API 21 模拟器和 API 36 模拟器上都跑过 |
 | 移植：ESP32-S3（ESP-IDF，Xtensa） | **完成** —— 真实的 IDF 构建；在 16 MB flash / 8 MB PSRAM 的板级配置下，通过 Espressif 的 `esp-emu` 跑起 ROM、完整类库和一个 MIDlet（`tools/run_esp_emulator.sh`：`BENCH sum=-136042548`，105,717,067 条字节码——桌面版的总数），内置 RAM 配置在 QEMU 下也能跑。`tools/run_esp_emulator_ui.sh` 还在同一个模拟器里演示了显示、输入和存储路径（240x320 帧解码成 PNG，按键经 UART 注入，JAR 从挂载的存储卡读取）。见 [docs/PERFORMANCE.md](docs/PERFORMANCE.md#esp32-s3-measured-on-the-real-architecture) 和 [docs/FOOTPRINT.md](docs/FOOTPRINT.md#what-esp-emu-does-and-does-not-model-the-ui-demo) |
 | 移植：ESP32-C3（ESP-IDF，RISC-V） | 能编译、链接、启动；跑虚拟机需要 PSRAM |
-| 测试套件 | **130 项测试**（`ctest`） |
-| Sanitizer 套件 | **130/130 通过**（ASan + UBSan + LSan，`tools/run_sanitized_tests.sh`） |
+| 测试套件 | **131 项测试**（`ctest`） |
+| Sanitizer 套件 | **131/131 通过**（ASan + UBSan + LSan，`tools/run_sanitized_tests.sh`） |
 
 端到端验证过的：**Tumbleweed**（`net.frog_parrot.jump.Jump`，Apress 2004）在 headless 移植上以 176x208 跑起来——滚动的地面、会动的精灵、实时分数和倒计时。详见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。收集到的真实游戏语料共 399 个，其中 **397 个正常跑**，2 个失败都是标题自身原因（JAR 被截断、授权过期）；见 [docs/CORPUS.md](docs/CORPUS.md)。
 
