@@ -278,6 +278,127 @@ static int start_fixture(nj_vm *vm, const nj_u1 *jar, nj_u4 jar_len,
     return nj_midp_current(vm) != NULL;
 }
 
+static nj_method *find_declared_method(nj_class *c, const char *name,
+                                       const char *desc)
+{
+    nj_u2 i;
+    for (i = 0u; c && i < c->method_count; i++) {
+        nj_method *m = &c->methods[i];
+        if (strcmp(m->name, name) == 0 && strcmp(m->desc, desc) == 0) {
+            return m;
+        }
+    }
+    return NULL;
+}
+
+/* Class indices in a snapshot belong to its own registration order.  Loading
+ * a fixture class early in the target models the shift caused by new builtins.
+ * Keep mirror and method cases separate so either missing fix is observable. */
+static void test_reordered_classes(const nj_port *port, const nj_u1 *jar,
+                                   nj_u4 jar_len)
+{
+    int methods;
+    for (methods = 0; methods < 2; methods++) {
+        nj_vm *source = nj_vm_create(port, HEAP_BYTES), *target = NULL;
+        nj_app *source_app = NULL, *target_app = NULL;
+        nj_class *child, *restored_child;
+        nj_method *seed = NULL;
+        nj_thread *thread;
+        nj_ref mirrors[2];
+        nj_u4 mirror_offsets[2];
+        nj_u2 saved_index, thread_index = 0u;
+        FILE *state = tmpfile();
+        int loaded, i;
+
+        CHECK(source && state, "reordered-class snapshot setup");
+        if (!source || !state) { goto done; }
+        CHECK(start_fixture(source, jar, jar_len, &source_app),
+              "reordered-class fixture starts");
+        child = nj_class_find(source, "FieldChild");
+        CHECK(child != NULL, "source fixture class exists");
+        if (!child) { goto done; }
+        for (saved_index = 0u; saved_index < source->nclasses; saved_index++) {
+            if (source->classes[saved_index] == child) { break; }
+        }
+        if (methods) {
+            seed = find_declared_method(child, "seed", "()V");
+            thread_index = source->nthreads;
+            thread = nj_thread_create(source, NULL, 0);
+            CHECK(seed && thread, "saved Java method and thread exist");
+            if (!seed || !thread) { goto done; }
+            CHECK(nj_frame_push(source, thread, seed, thread->top, 0u) == NJ_OK,
+                  "park a real Java method frame before execution");
+            if (thread->nframes != 1) { goto done; }
+            (void)nj_throw(source, "java/lang/IllegalStateException", "saved method");
+            source->exception_method = seed;
+        } else {
+            mirrors[0] = nj_class_object(source, "FieldChild");
+            mirrors[1] = nj_class_object(source, "FieldDemo");
+            CHECK(mirrors[0] && mirrors[1], "source Class mirrors exist");
+            if (!mirrors[0] || !mirrors[1]) { goto done; }
+            for (i = 0; i < 2; i++) {
+                mirror_offsets[i] = (nj_u4)((nj_u1 *)(void *)mirrors[i]
+                                            - source->heap.base);
+            }
+        }
+        CHECK(nj_vm_save(source, state) == NJ_OK,
+              "save snapshot before changing class registration order");
+        target = nj_vm_create(port, HEAP_BYTES);
+        CHECK(target != NULL, "reordered-class restore VM exists");
+        if (!target) { goto done; }
+        target_app = nj_app_open(target, jar, jar_len);
+        CHECK(target_app != NULL, "reordered-class target attaches fixture");
+        if (!target_app) { goto done; }
+        restored_child = nj_class_resolve(target, "FieldChild");
+        CHECK(restored_child != NULL, "target loads fixture class early");
+        if (!restored_child) { goto done; }
+        rewind(state);
+        loaded = nj_vm_load(target, state);
+        CHECK(loaded == NJ_OK, "snapshot loads despite changed class order");
+        if (loaded != NJ_OK) { goto done; }
+        CHECK(saved_index < target->nclasses &&
+              target->classes[saved_index] != restored_child,
+              "saved class index differs from target registration index");
+        if (methods) {
+            nj_method *restored_seed = find_declared_method(restored_child, "seed", "()V");
+            thread = target->threads[thread_index];
+            CHECK(thread && thread->nframes == 1 &&
+                  thread->frames[0].m == restored_seed && restored_seed != seed,
+                  "restored frame resolves the saved class and method");
+            CHECK(target->exception && target->exception_method == restored_seed,
+                  "exception method uses the saved class mapping too");
+            nj_clear_exception(target);
+            if (thread && thread->nframes == 1 && thread->frames[0].m == restored_seed) {
+                target->cur = thread;
+                thread->state = NJ_THREAD_RUNNING;
+                CHECK(nj_exec(target, thread, 0) == NJ_OK && thread->nframes == 0,
+                      "restored Java frame executes to completion");
+                CHECK(vector_size(target, field_child_b(target)) == 1 &&
+                      str_eq(vector_at(target, field_child_b(target), 0u), "first"),
+                      "resumed method updates the intended static field");
+            }
+        } else {
+            nj_class *classes[2];
+            classes[0] = restored_child;
+            classes[1] = nj_class_find(target, "FieldDemo");
+            for (i = 0; i < 2; i++) {
+                nj_ref mirror = (nj_ref)(void *)(target->heap.base + mirror_offsets[i]);
+                CHECK(classes[i] && classes[i]->class_obj == mirror &&
+                      mirror->kind == NJ_OBJ_CLASS && mirror->u.mirror == classes[i],
+                      "restored Class mirror and its owner agree by identity");
+                CHECK(classes[i] && nj_class_object(target, classes[i]->name) == mirror,
+                      "Class lookup reuses the restored canonical mirror");
+            }
+        }
+    done:
+        if (target_app) { nj_app_close(target, target_app); }
+        nj_vm_destroy(target);
+        if (source_app) { nj_app_close(source, source_app); }
+        nj_vm_destroy(source);
+        if (state) { fclose(state); }
+    }
+}
+
 /* A desktop caller can select a heap larger than the embedded default.
  * Its snapshot must round-trip, without expanding a smaller caller's budget. */
 static void test_large_heap(const nj_port *port, const nj_u1 *jar, nj_u4 jar_len)
@@ -1070,6 +1191,7 @@ after_vm_b:
               "a truncated blob is refused");
     }
 
+    test_reordered_classes(&port, jar, jar_len);
     test_large_heap(&port, jar, jar_len);
     test_restored_media(&port, jar, jar_len);
     test_restored_softkeys(&port, jar, jar_len);

@@ -5641,8 +5641,8 @@ int main(void)
         check(nj_iget(vm, vb, nj_field_lookup(vm, CLS("VertexBuffer"),
                   "_nj_bias", "F", 0)) == 0x3f800000 &&
               nj_rget(vm, vb, nj_field_lookup(vm, CLS("VertexBuffer"),
-                  "_nj_scale", "[F", 0)) == pb,
-              "texture coordinates preserve position scale and bias");
+                  "_nj_scale", "[F", 0)) == NULL,
+              "texture coordinates preserve default scale and zero bias with null positions");
         check(nj_iget(vm, vb, nj_field_lookup(vm, CLS("VertexBuffer"),
                   "_nj_texScale", "F", 0)) == 0x3b800000 &&
               nj_rget(vm, vb, nj_field_lookup(vm, CLS("VertexBuffer"),
@@ -6181,6 +6181,8 @@ int main(void)
                 check(nj_call(vm, vb, CLS("VertexBuffer"), "setPositions",
                       "(L" CLS("VertexArray") ";F[F)V", a, NULL) == NJ_OK,
                       "position bias accepts three components");
+                /* Minecraft reuses this array for subsequent terrain parts. */
+                b[0] = b[1] = b[2] = 0.0f;
                 a[0].r = clear_bg;
                 call(vm, g3d, CLS("Graphics3D"), "clear",
                      "(L" CLS("Background") ";)V", a, NULL);

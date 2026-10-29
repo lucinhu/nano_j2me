@@ -24,17 +24,19 @@
  * Reading is complete: exists, isDirectory, getName/Path/URL, fileSize,
  * lastModified, canRead, list() in both forms, openInputStream, setFileConnection.
  *
- * create, mkdir, delete and openOutputStream are implemented too - a game that
- * saves a high score to a file should be able to.
+ * create, mkdir, delete, truncate and openOutputStream are implemented too -
+ * a game that saves a high score to a file should be able to.
  *
- * Everything else refuses BY NAME.  setReadable/setWritable/setHidden and
- * truncate are not implemented and say so, because a silent no-op would tell a
- * game its file permission changed when nothing happened.
+ * Everything else refuses BY NAME.  setReadable/setWritable/setHidden are not
+ * implemented and say so, because a silent no-op would tell a game its file
+ * permission changed when nothing happened.
  *
- * openInputStream reads the whole file into a byte array.  That is exactly what
- * a ROM loader wants and it is wasteful for a large file, which is stated here
- * rather than discovered on a part with 512 KB of RAM.
+ * openInputStream retains a sandbox-resolved path and position, reopening the
+ * file for each read so large world files do not consume the Java heap.
  */
+#ifndef _POSIX_C_SOURCE
+#  define _POSIX_C_SOURCE 200809L
+#endif
 #include "nj_midp.h"
 
 #if NJ_USE_LIBC
@@ -43,6 +45,8 @@
 #  include <stdlib.h>
 #  include <sys/stat.h>
 #  include <dirent.h>
+#  include <fcntl.h>
+#  include <unistd.h>
 #endif
 
 #define NJFN(name) NJ_NATIVE_FN(name)
@@ -54,12 +58,13 @@
 #define NJ_C_FCLEX   "javax/microedition/io/file/ConnectionClosedException"
 #define NJ_C_ILLMODE "javax/microedition/io/file/IllegalModeException"
 
-/* The URL every MIDlet sees as the root of its world. */
-#define NJ_FC_ROOT_URL "file:///root/"
+/* JSR 75 enumerates root names; callers prepend file:/// to open them. */
+#define NJ_FC_ROOT_NAME "root/"
 
 #define F_URL    "fcUrl"
 #define F_HOST   "fcHost"    /* resolved path on the host               */
 #define F_CLOSED "fcClosed"
+#define F_MODE   "fcMode"     /* Connector.READ=1, WRITE=2, READ_WRITE=3 */
 #define F_ISDIR  "fcIsDir"
 
 #define NJ_FC_PATHMAX 1024
@@ -410,8 +415,10 @@ NJFN(fc_openInputStream)
     char path[NJ_FC_PATHMAX];
     nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
     char host[NJ_FC_PATHMAX];
-    nj_ref ba, in;
+    nj_ref ps, in;
     nj_value a[2];
+    nj_u4 mark;
+    int is_dir = 0;
 
     if (fget_int(vm, NJ_THIS(args), F_CLOSED, "Z")) {
         return fc_throw_closed(vm);
@@ -420,45 +427,30 @@ NJFN(fc_openInputStream)
         fc_resolve(vm, path, host, sizeof(host)) != 0) {
         return nj_throw(vm, "java/io/IOException", "path is not accessible");
     }
-    ba = NULL;
-#if NJ_USE_LIBC
-    {
-        FILE *fp = fopen(host, "rb");
-        long n;
-        if (!fp) {
-            return nj_throw(vm, "java/io/IOException", "cannot open for reading");
-        }
-        if (fseek(fp, 0L, SEEK_END) != 0 || (n = ftell(fp)) < 0L) {
-            fclose(fp);
-            return nj_throw(vm, "java/io/IOException", "cannot size the file");
-        }
-        rewind(fp);
-        ba = nj_byte_array_new(vm, (nj_u4)n);
-        if (!ba) {
-            fclose(fp);
-            return NJ_ERR;
-        }
-        if (n > 0L && fread(ba->u.bytes, 1u, (size_t)n, fp) != (size_t)n) {
-            fclose(fp);
-            return nj_throw(vm, "java/io/IOException", "short read");
-        }
-        fclose(fp);
+    if (fc_stat(host, &is_dir, NULL, NULL) && is_dir) {
+        return nj_throw(vm, "java/io/IOException", "cannot read a directory");
     }
-#endif
-    if (!ba) {
-        return nj_throw(vm, "java/io/IOException",
-                        "FileConnection needs a hosted C library");
+    /* FileConnection owns sandbox resolution; the stream only retains this
+     * validated host path and its current position, never the whole file. */
+    mark = nj_root_mark(vm);
+    ps = nj_root(vm, nj_string_new(vm, host));
+    if (!ps) {
+        nj_root_release(vm, mark);
+        return nj_throw_oom(vm);
     }
-    in = nj_object_new(vm, "java/io/ByteArrayInputStream");
+    in = nj_root(vm, nj_object_new(vm, "java/io/FileInputStream"));
     if (!in) {
+        nj_root_release(vm, mark);
         return NJ_ERR;
     }
-    a[0].r = ba;
-    if (nj_call_special(vm, in, "java/io/ByteArrayInputStream", "<init>",
-                        "([B)V", a, NULL) != NJ_OK) {
+    a[0].r = ps;
+    if (nj_call_special(vm, in, "java/io/FileInputStream", "<init>",
+                        "(Ljava/lang/String;)V", a, NULL) != NJ_OK) {
+        nj_root_release(vm, mark);
         return NJ_ERR;
     }
     ret->r = in;
+    nj_root_release(vm, mark);
     return NJ_OK;
 }
 
@@ -475,28 +467,65 @@ NJFN(fc_openOutputStream)
     nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
     nj_ref ps, os;
     nj_value a[2];
+    nj_u4 mark;
 
     if (fget_int(vm, NJ_THIS(args), F_CLOSED, "Z")) {
         return fc_throw_closed(vm);
+    }
+    if (!(fget_int(vm, NJ_THIS(args), F_MODE, "I") & 2)) {
+        return nj_throw(vm, NJ_C_ILLMODE, "connection is read-only");
     }
     if (nj_string_to_utf8(url, path, (int)sizeof(path)) <= 0 ||
         fc_resolve(vm, path, host, sizeof(host)) != 0) {
         return nj_throw(vm, "java/io/IOException", "path is not accessible");
     }
-    ps = nj_string_new(vm, host);
+    mark = nj_root_mark(vm);
+    ps = nj_root(vm, nj_string_new(vm, host));
     if (!ps) {
+        nj_root_release(vm, mark);
         return nj_throw_oom(vm);
     }
-    os = nj_object_new(vm, "java/io/FileOutputStream");
+    os = nj_root(vm, nj_object_new(vm, "java/io/FileOutputStream"));
     if (!os) {
+        nj_root_release(vm, mark);
         return NJ_ERR;
     }
     a[0].r = ps;
     if (nj_call_special(vm, os, "java/io/FileOutputStream", "<init>",
                         "(Ljava/lang/String;)V", a, NULL) != NJ_OK) {
+        nj_root_release(vm, mark);
         return NJ_ERR;
     }
     ret->r = os;
+    nj_root_release(vm, mark);
+    return NJ_OK;
+}
+
+/* Offset writes replace bytes in place. An offset past EOF is clamped to EOF,
+ * rather than extending the file or appending every write as an append stream. */
+NJFN(fc_openOutputStream_offset)
+{
+    nj_s8 offset = NJ_ARG_LONG(args, 0);
+    nj_ref url = fget_ref(vm, NJ_THIS(args), F_URL, "Ljava/lang/String;");
+    char path[NJ_FC_PATHMAX], host[NJ_FC_PATHMAX];
+    nj_u4 size;
+    int is_dir = 0;
+    nj_field *position;
+
+    if (offset < 0) return nj_throw(vm, "java/lang/IllegalArgumentException", "negative offset");
+    if (fget_int(vm, NJ_THIS(args), F_CLOSED, "Z")) return fc_throw_closed(vm);
+    if (nj_string_to_utf8(url, path, (int)sizeof(path)) <= 0 ||
+        fc_resolve(vm, path, host, sizeof(host)) != 0 ||
+        !fc_stat(host, &is_dir, &size, NULL) || is_dir) {
+        return nj_throw(vm, "java/io/IOException", "cannot open the file");
+    }
+    if (offset > size) offset = size;
+    if (offset > 0x7fffffff) {
+        return nj_throw(vm, "java/io/IOException", "file offset exceeds stream capacity");
+    }
+    if (fc_openOutputStream(vm, th, args, ret) != NJ_OK) return NJ_ERR;
+    position = nj_field_lookup(vm, "java/io/ByteArrayOutputStream", "count", "I", 0);
+    nj_field_write_int(vm, ret->r, position, (nj_s4)offset);
     return NJ_OK;
 }
 
@@ -531,22 +560,80 @@ NJFN(fc_openDataInputStream)
 {
     nj_ref inner, in;
     nj_value a[2];
+    nj_u4 mark;
 
     if (fc_openInputStream(vm, th, args, ret) != NJ_OK) {
         return NJ_ERR;
     }
-    inner = ret->r;
-    in = nj_object_new(vm, "java/io/DataInputStream");
+    mark = nj_root_mark(vm);
+    inner = nj_root(vm, ret->r);
+    in = nj_root(vm, nj_object_new(vm, "java/io/DataInputStream"));
     if (!in) {
+        nj_root_release(vm, mark);
         return NJ_ERR;
     }
     a[0].r = inner;
     if (nj_call_special(vm, in, "java/io/DataInputStream", "<init>",
                         "(Ljava/io/InputStream;)V", a, NULL) != NJ_OK) {
+        nj_root_release(vm, mark);
         return NJ_ERR;
     }
     ret->r = in;
+    nj_root_release(vm, mark);
     return NJ_OK;
+}
+
+NJFN(fc_truncate)
+{
+    nj_s8 length = NJ_ARG_LONG(args, 0);
+    char path[NJ_FC_PATHMAX];
+    char host[NJ_FC_PATHMAX];
+    nj_ref self = NJ_THIS(args);
+    nj_ref url = fget_ref(vm, self, F_URL, "Ljava/lang/String;");
+
+    if (length < 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "negative file length");
+    }
+    if (fget_int(vm, self, F_CLOSED, "Z")) {
+        return fc_throw_closed(vm);
+    }
+    if (!(fget_int(vm, self, F_MODE, "I") & 2)) {
+        return nj_throw(vm, NJ_C_ILLMODE, "connection is read-only");
+    }
+    if (nj_string_to_utf8(url, path, (int)sizeof(path)) <= 0 ||
+        fc_resolve(vm, path, host, sizeof(host)) != 0) {
+        return nj_throw(vm, "java/io/IOException", "path is not accessible");
+    }
+#if NJ_USE_LIBC
+    {
+        struct stat st;
+        int fd = open(host, O_WRONLY);
+        int failed;
+        if (fd < 0) {
+            return nj_throw(vm, "java/io/IOException", "cannot open for truncation");
+        }
+        /* Open without O_CREAT or O_TRUNC: a missing file must stay missing,
+         * and JSR 75 never extends a file, even for a Java long > 32 bits.
+         * Stat and truncate the same descriptor so the size is not narrowed
+         * through fc_stat's 32-bit result or looked up on a different file. */
+        failed = fstat(fd, &st) != 0;
+        if (!failed) {
+            failed = S_ISDIR(st.st_mode) ||
+                (length < (nj_s8)st.st_size &&
+                 ftruncate(fd, (off_t)length) != 0);
+        }
+        if (close(fd) != 0) {
+            failed = 1;
+        }
+        if (failed) {
+            return nj_throw(vm, "java/io/IOException", "cannot truncate the file");
+        }
+        return NJ_OK;
+    }
+#else
+    return nj_throw(vm, "java/io/IOException", "needs a hosted C library");
+#endif
 }
 
 /* Operations that are deliberately not implemented, each saying so. */
@@ -752,6 +839,64 @@ NJFN(fc_mkdir)
 #endif
 }
 
+NJFN(fc_rename)
+{
+    nj_ref self = NJ_THIS(args), name = NJ_ARG_REF(args, 0), updated;
+    nj_ref url = fget_ref(vm, self, F_URL, "Ljava/lang/String;");
+    char old_url[NJ_FC_PATHMAX], new_url[NJ_FC_PATHMAX], leaf[NJ_FC_PATHMAX];
+    char old_host[NJ_FC_PATHMAX], new_host[NJ_FC_PATHMAX];
+    nj_size end, prefix, n, i;
+    int is_dir = 0;
+
+    if (!name) return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    if (fget_int(vm, self, F_CLOSED, "Z")) return fc_throw_closed(vm);
+    if (!(fget_int(vm, self, F_MODE, "I") & 2)) {
+        return nj_throw(vm, NJ_C_ILLMODE, "connection is read-only");
+    }
+    if (nj_string_to_utf8(name, leaf, (int)sizeof(leaf)) <= 0 ||
+        strcmp(leaf, ".") == 0 || strcmp(leaf, "..") == 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "invalid file name");
+    }
+    n = strlen(leaf);
+    for (i = 0u; i < n; ++i) {
+        if (leaf[i] == '/' || leaf[i] == '\\' || leaf[i] == ':') {
+            return nj_throw(vm, "java/lang/IllegalArgumentException", "name contains a path");
+        }
+    }
+    if (nj_string_to_utf8(url, old_url, (int)sizeof(old_url)) <= 0 ||
+        fc_resolve(vm, old_url, old_host, sizeof(old_host)) != 0 ||
+        !fc_stat(old_host, &is_dir, NULL, NULL)) {
+        return nj_throw(vm, "java/io/IOException", "cannot rename the file");
+    }
+    end = strlen(old_url);
+    while (end > 0u && old_url[end - 1u] == '/') --end;
+    if (end <= 12u) return nj_throw(vm, "java/io/IOException", "cannot rename a root");
+    prefix = end;
+    while (prefix > 0u && old_url[prefix - 1u] != '/') --prefix;
+    if (prefix + n + (is_dir ? 1u : 0u) >= sizeof(new_url)) {
+        return nj_throw(vm, "java/io/IOException", "file name is too long");
+    }
+    memcpy(new_url, old_url, prefix);
+    memcpy(new_url + prefix, leaf, n);
+    if (is_dir) new_url[prefix + n++] = '/';
+    new_url[prefix + n] = '\0';
+    if (fc_resolve(vm, new_url, new_host, sizeof(new_host)) != 0 ||
+        fc_stat(new_host, NULL, NULL, NULL)) {
+        return nj_throw(vm, "java/io/IOException", "rename target is not available");
+    }
+    updated = nj_string_new(vm, new_url);
+    if (!updated) return nj_throw_oom(vm);
+#if NJ_USE_LIBC
+    if (rename(old_host, new_host) != 0) {
+        return nj_throw(vm, "java/io/IOException", "cannot rename the file");
+    }
+    fset_ref(vm, self, F_URL, "Ljava/lang/String;", updated);
+    return NJ_OK;
+#else
+    return nj_throw(vm, "java/io/IOException", "needs a hosted C library");
+#endif
+}
+
 NJFN(fc_delete)
 {
     char path[NJ_FC_PATHMAX];
@@ -798,13 +943,9 @@ NJFN(fsr_listRoots)
     if (!vec) {
         return NJ_ERR;
     }
-    if (!fc_root(vm)) {
-        /* No filesystem: report no roots rather than a root that cannot be
-         * opened. */
-        ret->r = NULL;
-        return NJ_OK;
-    }
-    s = nj_string_new(vm, NJ_FC_ROOT_URL);
+    /* Without a filesystem, return an empty enumeration. Callers may always
+     * iterate the result, even when there are no roots to open. */
+    s = fc_root(vm) ? nj_string_new(vm, NJ_FC_ROOT_NAME) : NULL;
     if (s) {
         a1[0].r = s;
         (void)nj_call(vm, vec, "java/util/Vector", "addElement",
@@ -848,6 +989,7 @@ nj_ref nj_fc_new(nj_vm *vm, const char *url)
     }
     fset_ref(vm, o, F_URL, "Ljava/lang/String;", nj_string_new(vm, url));
     fset_int(vm, o, F_CLOSED, "Z", 0);
+    fset_int(vm, o, F_MODE, "I", 3);
     (void)fc_stat(host, &is_dir, NULL, NULL);
     fset_int(vm, o, F_ISDIR, "Z", is_dir);
     return o;
@@ -863,6 +1005,7 @@ static const nj_builtin_field fc_fields[] = {
     FLD(F_URL,    "Ljava/lang/String;", 0),
     FLD(F_HOST,   "Ljava/lang/String;", 0),
     FLD(F_CLOSED, "Z", 0),
+    FLD(F_MODE,   "I", 0),
     FLD(F_ISDIR,  "Z", 0)
 };
 
@@ -892,7 +1035,9 @@ static const nj_builtin_method fc_methods[] = {
     M("setReadable",        "(Z)V", 0),
     M("setWritable",        "(Z)V", 0),
     M("setHidden",          "(Z)V", 0),
-    M("truncate",           "(I)V", 0)
+    M("truncate",           "(J)V", 0),
+    M("rename",             "(Ljava/lang/String;)V", 0),
+    M("openOutputStream",   "(J)Ljava/io/OutputStream;", 0)
 };
 
 static const nj_builtin_method fsr_methods[] = {
@@ -954,7 +1099,9 @@ const nj_native_entry nj_lib_fc_table[] = {
     { NJ_C_FC, "setReadable", "(Z)V", fc_not_impl },
     { NJ_C_FC, "setWritable", "(Z)V", fc_not_impl },
     { NJ_C_FC, "setHidden",   "(Z)V", fc_not_impl },
-    { NJ_C_FC, "truncate",    "(I)V", fc_not_impl },
+    { NJ_C_FC, "truncate",    "(J)V", fc_truncate },
+    { NJ_C_FC, "rename", "(Ljava/lang/String;)V", fc_rename },
+    { NJ_C_FC, "openOutputStream", "(J)Ljava/io/OutputStream;", fc_openOutputStream_offset },
     { NJ_C_FSR, "addFileSystemListener",
       "(L" NJ_C_FSL ";)Z", fsr_add },
     { NJ_C_FSR, "removeFileSystemListener",

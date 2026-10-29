@@ -771,6 +771,33 @@ NJFN(throwable_printStackTrace_stream)
 }
 
 /* ------------------------------------------------------------------ */
+/* java.lang.ref.Reference / WeakReference (CLDC 1.1)                   */
+/* ------------------------------------------------------------------ */
+static nj_field *weak_referent(nj_vm *vm)
+{
+    return nj_field_lookup(vm, "java/lang/ref/Reference", "referent",
+                           "Ljava/lang/Object;", 0);
+}
+
+NJFN(weak_init)
+{
+    nj_field_write_ref(vm, NJ_THIS(args), weak_referent(vm), NJ_ARG_REF(args, 0));
+    return NJ_OK;
+}
+
+NJFN(weak_get)
+{
+    ret->r = nj_field_read_ref(vm, NJ_THIS(args), weak_referent(vm));
+    return NJ_OK;
+}
+
+NJFN(weak_clear)
+{
+    nj_field_write_ref(vm, NJ_THIS(args), weak_referent(vm), NULL);
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
 /* Tables                                                              */
 /* ------------------------------------------------------------------ */
 #define M(name, desc, flags) { name, desc, flags }
@@ -800,6 +827,21 @@ static const nj_builtin_method class_methods[] = {
     M("forName",        "(Ljava/lang/String;)Ljava/lang/Class;", NJ_ACC_STATIC),
     M("newInstance",    "()Ljava/lang/Object;",                 0),
     M("toString",       "()Ljava/lang/String;",                 0)
+};
+
+static const nj_builtin_field reference_fields[] = {
+    { "referent", "Ljava/lang/Object;", NJ_ACC_PRIVATE }
+};
+
+static const nj_builtin_method reference_methods[] = {
+    M("get", "()Ljava/lang/Object;", 0),
+    M("clear", "()V", 0)
+};
+
+static const nj_builtin_method weak_methods[] = {
+    M("<init>", "(Ljava/lang/Object;)V", 0),
+    M("get", "()Ljava/lang/Object;", 0),
+    M("clear", "()V", 0)
 };
 
 static const nj_builtin_field throwable_fields[] = {
@@ -880,12 +922,23 @@ const nj_builtin_class nj_lib_object_classes[] = {
       throwable_fields, (nj_u2)(sizeof(throwable_fields) / sizeof(throwable_fields[0])),
       throwable_methods,
       (nj_u2)(sizeof(throwable_methods) / sizeof(throwable_methods[0])) },
+    { "java/lang/ref/Reference", "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
+      reference_fields, (nj_u2)(sizeof(reference_fields) / sizeof(reference_fields[0])),
+      reference_methods, (nj_u2)(sizeof(reference_methods) / sizeof(reference_methods[0])) },
+    { "java/lang/ref/WeakReference", "java/lang/ref/Reference", NJ_ACC_PUBLIC,
+      NULL, 0u,
+      weak_methods, (nj_u2)(sizeof(weak_methods) / sizeof(weak_methods[0])) },
     NJ_EXC_LIST(NJ_X_DECL)
 };
 const int nj_lib_object_class_count =
     (int)(sizeof(nj_lib_object_classes) / sizeof(nj_lib_object_classes[0]));
 
 const nj_native_entry nj_lib_object_table[] = {
+    { "java/lang/ref/Reference", "get", "()Ljava/lang/Object;", weak_get },
+    { "java/lang/ref/Reference", "clear", "()V", weak_clear },
+    { "java/lang/ref/WeakReference", "<init>", "(Ljava/lang/Object;)V", weak_init },
+    { "java/lang/ref/WeakReference", "get", "()Ljava/lang/Object;", weak_get },
+    { "java/lang/ref/WeakReference", "clear", "()V", weak_clear },
     { "java/lang/Object",    "<init>",            "()V",                   obj_init },
     { "java/lang/Object",    "hashCode",          "()I",                   obj_hashCode },
     { "java/lang/Object",    "equals",            "(Ljava/lang/Object;)Z", obj_equals },

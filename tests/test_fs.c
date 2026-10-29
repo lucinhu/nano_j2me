@@ -140,6 +140,20 @@ static void mkfile(const char *path, const char *text)
     if (f) { fputs(text, f); fclose(f); }
 }
 
+static int file_equals(const char *path, const char *text)
+{
+    char bytes[32];
+    FILE *f = fopen(path, "rb");
+    size_t n;
+    int matches;
+    if (!f) { return 0; }
+    n = fread(bytes, 1, sizeof(bytes), f);
+    matches = !ferror(f) && feof(f) && n == strlen(text) &&
+              memcmp(bytes, text, n) == 0;
+    fclose(f);
+    return matches;
+}
+
 int main(int argc, char **argv)
 {
     nj_port port;
@@ -166,12 +180,24 @@ int main(int argc, char **argv)
     { char p[256]; snprintf(p, sizeof(p), "%s/sub/inner.txt", root); mkfile(p, "inner\n"); }
 
     for (round = 1; round <= 2; round++) {
+        { char p[256]; snprintf(p, sizeof(p), "%s/sub/truncate.txt", root);
+          mkfile(p, "0123456789"); }
         memset(&cap, 0, sizeof(cap));
         if (nj_port_headless_ex(&port, 176, 208, 0, NULL) != NJ_OK) { return 2; }
         port.log = cap_log;
         port.user = &cap;
         port.fps_cap = 0;
         port.fs_dir = root;
+        if (round == 2) {
+            /* Exercise the hosted fallback as well as headless file hooks. */
+            port.file_open = NULL;
+            port.file_read = NULL;
+            port.file_write = NULL;
+            port.file_seek = NULL;
+            port.file_close = NULL;
+            port.file_remove = NULL;
+            port.file_exists = NULL;
+        }
 
         memset(&opts, 0, sizeof(opts));
         opts.jar_path = jar;
@@ -219,6 +245,91 @@ int main(int argc, char **argv)
         ok(field(&cap, "rw", v, sizeof(v)) &&
            strcmp(v, "skip=2 n=4 text=CDEF") == 0,
            "Reader.skip(long) and Reader.read(char[]) skip and read the stream");
+
+        /* ---- truncate(long): bytes, size, no extension and refusals ---- */
+        ok(field(&cap, "truncate_prefix", v, sizeof(v)) &&
+           strcmp(v, "size=4 text=0123") == 0,
+           "truncate preserves the requested prefix and discards the tail");
+        ok(field(&cap, "truncate_noextend", v, sizeof(v)) &&
+           strcmp(v, "size=4 text=0123") == 0,
+           "equal, larger, >32-bit and Long.MAX_VALUE sizes never extend");
+        ok(field(&cap, "truncate_negative", v, sizeof(v)) &&
+           strcmp(v, "java.lang.IllegalArgumentException") == 0,
+           "negative truncate length raises IllegalArgumentException");
+        ok(field(&cap, "truncate_minlong", v, sizeof(v)) &&
+           strcmp(v, "java.lang.IllegalArgumentException") == 0,
+           "Long.MIN_VALUE is rejected without narrowing");
+        ok(field(&cap, "truncate_negative_data", v, sizeof(v)) &&
+           strcmp(v, "0123") == 0,
+           "invalid lengths preserve the existing data");
+        ok(field(&cap, "truncate_readonly", v, sizeof(v)) &&
+           strcmp(v, "javax.microedition.io.file.IllegalModeException") == 0,
+           "Connector.READ refuses truncation with IllegalModeException");
+        ok(field(&cap, "truncate_readonly_timeout", v, sizeof(v)) &&
+           strcmp(v, "javax.microedition.io.file.IllegalModeException") == 0,
+           "the timeout overload preserves Connector.READ mode");
+        ok(field(&cap, "truncate_closed", v, sizeof(v)) &&
+           strcmp(v, "javax.microedition.io.file.ConnectionClosedException") == 0,
+           "a closed connection refuses truncation by name");
+        ok(field(&cap, "truncate_refused_data", v, sizeof(v)) &&
+           strcmp(v, "0123") == 0,
+           "read-only and closed attempts preserve the data");
+        ok(field(&cap, "truncate_directory", v, sizeof(v)) &&
+           strcmp(v, "java.io.IOException") == 0,
+           "truncating a directory raises IOException");
+        ok(field(&cap, "truncate_missing", v, sizeof(v)) &&
+           strcmp(v, "java.io.IOException") == 0,
+           "truncating a missing file raises IOException");
+        ok(field(&cap, "truncate_missing_large", v, sizeof(v)) &&
+           strcmp(v, "java.io.IOException") == 0,
+           "a large no-op length does not bypass the existence check");
+        ok(field(&cap, "truncate_missing_exists", v, sizeof(v)) &&
+           strcmp(v, "false") == 0,
+           "truncate never creates a missing file");
+        ok(field(&cap, "truncate_zero", v, sizeof(v)) &&
+           strcmp(v, "size=0 text=[]") == 0,
+           "truncate(0L) empties the file");
+        ok(field(&cap, "truncate_saved", v, sizeof(v)) &&
+           strcmp(v, "size=3 text=new") == 0,
+           "Minecraft's truncate then save sequence persists the new bytes");
+        ok(field(&cap, "truncate_writeonly", v, sizeof(v)) &&
+           strcmp(v, "size=2 text=ne") == 0,
+           "Connector.WRITE permits truncation and reopen sees the prefix");
+        {
+            char p[256];
+            snprintf(p, sizeof(p), "%s/sub/truncate.txt", root);
+            ok(file_equals(p, "ne"), "host bytes agree with Java after truncation");
+            snprintf(p, sizeof(p), "%s/sub/missing.txt", root);
+            ok(access(p, F_OK) != 0, "missing truncate target was not created on host");
+        }
+
+        /* ---- Minecraft's rename and random-access chunk save sequence ---- */
+        ok(field(&cap, "offset_replace", v, sizeof(v)) && strcmp(v, "abXYef") == 0,
+           "an offset stream replaces bytes and preserves the tail");
+        ok(field(&cap, "offset_eof", v, sizeof(v)) &&
+           strcmp(v, "size=7 text=abXYef!") == 0,
+           "a long offset past EOF is clamped without creating a hole");
+        ok(field(&cap, "offset_negative", v, sizeof(v)) &&
+           strcmp(v, "java.lang.IllegalArgumentException") == 0,
+           "a negative output offset is refused");
+        ok(field(&cap, "rename_path", v, sizeof(v)) &&
+           strcmp(v, "java.lang.IllegalArgumentException") == 0,
+           "rename accepts a local name rather than a path");
+        ok(field(&cap, "rename_saved", v, sizeof(v)) &&
+           strcmp(v, "file:///root/sub/rename-saved.txt text=abXYef!") == 0,
+           "rename updates the connection URL and preserves its bytes");
+        ok(field(&cap, "rename_old_exists", v, sizeof(v)) && strcmp(v, "false") == 0,
+           "the old name disappears after rename");
+        ok(field(&cap, "rename_reopen", v, sizeof(v)) && strcmp(v, "abXYef!") == 0,
+           "a new connection reads the renamed file");
+        ok(field(&cap, "rename_readonly", v, sizeof(v)) &&
+           strcmp(v, "javax.microedition.io.file.IllegalModeException") == 0,
+           "a read-only connection cannot rename a file");
+        {
+            char p[256];
+            snprintf(p, sizeof(p), "%s/sub/rename-saved.txt", root);
+            ok(file_equals(p, "abXYef!"), "renamed host bytes agree with Java");
+        }
 
         /* ---- the sandbox ---- */
         {

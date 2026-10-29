@@ -8004,14 +8004,33 @@ NJFN(m3g_vbuf_getDefaultColor)
 
 NJFN(m3g_vbuf_setPositions)
 {
-    nj_ref self = NJ_THIS(args);
+    nj_ref self = NJ_THIS(args), positions = NJ_ARG_REF(args, 0);
+    nj_ref bias = NJ_ARG_REF(args, 2), copy = NULL;
+    nj_u4 mark;
 
+    if (positions && bias && bias->length < 3u) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "position bias needs three floats");
+    }
+    /* The JSR copies the bias values. Minecraft builds terrain parts using
+     * one scratch array; retaining it moves every older part on each update. */
+    mark = nj_root_mark(vm);
+    nj_root(vm, self);
+    nj_root(vm, positions);
+    nj_root(vm, bias);
+    if (positions && bias) {
+        copy = nj_array_new(vm, "F", 3u);
+        if (!copy) {
+            nj_root_release(vm, mark);
+            return nj_throw_oom(vm);
+        }
+        memcpy(nj_array_data(copy), nj_array_data(bias), 3u * sizeof(float));
+    }
     nj_rput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_positions",
-                                      "L" NJ_C_VARR ";", 0), NJ_ARG_REF(args, 0));
+                                      "L" NJ_C_VARR ";", 0), positions);
     nj_iput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_bias", "F", 0),
-            f2bits(NJ_ARG_FLOAT(args, 1)));
-    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_scale", "[F", 0),
-            NJ_ARG_REF(args, 2));
+            f2bits(positions ? NJ_ARG_FLOAT(args, 1) : 1.0f));
+    nj_rput(vm, self, nj_field_lookup(vm, NJ_C_VBUF, "_nj_scale", "[F", 0), copy);
+    nj_root_release(vm, mark);
     return NJ_OK;
 }
 

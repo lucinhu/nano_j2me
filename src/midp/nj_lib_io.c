@@ -1443,14 +1443,28 @@ NJFN(connector_open)
 
 NJFN(connector_open_stream)
 {
-    /* Same refusal; the (String,int), (String,int,boolean) and
-     * openInputStream forms all land here so the message is identical
-     * whichever overload was called.  The mode and the timeout flag say
-     * whether the caller wants to read or write and whether it will accept a
-     * blocking connect; a file:// connection in this port is opened the same
-     * way either way, and reporting a mode it cannot honour as "not
-     * implemented" would be worse than opening the file. */
-    return NJ_CALL(connector_open, vm, th, args, ret);
+    nj_s4 mode = NJ_ARG_INT(args, 1);
+    nj_status status = NJ_CALL(connector_open, vm, th, args, ret);
+    nj_field *field;
+
+    if (status != NJ_OK || !ret->r) {
+        return status;
+    }
+    /* FileConnection needs the requested mode for write operations such as
+     * truncate(). Other connection types keep their existing behaviour. */
+    if (strcmp(nj_ref_class_name(ret->r),
+               "javax/microedition/io/file/FileConnection") == 0) {
+        if (mode < 1 || mode > 3) {
+            return nj_throw(vm, "java/lang/IllegalArgumentException",
+                            "invalid file connection mode");
+        }
+        field = nj_field_lookup(vm, "javax/microedition/io/file/FileConnection",
+                                "fcMode", "I", 0);
+        if (field) {
+            nj_field_write_int(vm, ret->r, field, mode);
+        }
+    }
+    return NJ_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1499,20 +1513,199 @@ static const nj_builtin_method bais_methods[] = {
 };
 
 /* ------------------------------------------------------------------ */
+/* java.io.FileInputStream                                             */
+/* ------------------------------------------------------------------ */
+/* Internal FileConnection stream. Only the sandbox-resolved path and byte
+ * position survive a call, so large files cost no Java buffer and snapshots
+ * never retain a host handle. read(byte[]) inherits InputStream's virtual
+ * dispatch to our range method. */
+#define FIS "java/io/FileInputStream"
+#define FIS_PATHMAX 1024
+
+static const nj_builtin_field fis_fields[] = {
+    FLD("path", "Ljava/lang/String;", 0), FLD("position", "J", 0)
+};
+static const nj_builtin_method fis_methods[] = {
+    M("<init>", "(Ljava/lang/String;)V", NJ_ACC_PUBLIC),
+    M("read", "()I", NJ_ACC_PUBLIC),
+    M("read", "([BII)I", NJ_ACC_PUBLIC),
+    M("skip", "(J)J", NJ_ACC_PUBLIC),
+    M("available", "()I", NJ_ACC_PUBLIC),
+    M("close", "()V", NJ_ACC_PUBLIC)
+};
+
+/* A zero-length request probes readability/size without allocating or reading
+ * the file. Return a byte count (zero at EOF), or -1 on a host error. Ports
+ * own their paths: failure through installed hooks must not retry via libc. */
+static nj_s4 fis_read_host(nj_vm *vm, const char *path, nj_s8 pos,
+                           void *data, nj_u4 n, nj_s8 *size)
+{
+    if (vm->port && vm->port->file_open) {
+        nj_file f;
+        nj_s4 got = 0;
+        if (!vm->port->file_read || !vm->port->file_close ||
+            vm->port->file_open(vm->port->ud, path, "rb", &f) != NJ_OK) {
+            return -1;
+        }
+        if (size) *size = (nj_s8)f.size;
+        if (n && pos < (nj_s8)f.size) {
+            if (pos < 0 || (pos != 0 && (!vm->port->file_seek ||
+                vm->port->file_seek(vm->port->ud, &f, (nj_u4)pos) != NJ_OK))) {
+                got = -1;
+            } else {
+                if ((nj_s8)n > (nj_s8)f.size - pos) n = (nj_u4)((nj_s8)f.size - pos);
+                got = vm->port->file_read(vm->port->ud, &f, data, n);
+                if (got < 0 || (nj_u4)got > n) got = -1;
+            }
+        }
+        vm->port->file_close(vm->port->ud, &f);
+        return got;
+    }
+#if NJ_USE_LIBC
+    {
+        FILE *fp = fopen(path, "rb");
+        long end;
+        nj_s4 got = 0;
+        if (!fp) return -1;
+        if (fseek(fp, 0L, SEEK_END) != 0 || (end = ftell(fp)) < 0L) {
+            fclose(fp);
+            return -1;
+        }
+        if (size) *size = (nj_s8)end;
+        if (n && pos < (nj_s8)end) {
+            if (pos < 0 || (nj_s8)(long)pos != pos ||
+                fseek(fp, (long)pos, SEEK_SET) != 0) {
+                got = -1;
+            } else {
+                if ((nj_s8)n > (nj_s8)end - pos) n = (nj_u4)((nj_s8)end - pos);
+                got = (nj_s4)fread(data, 1u, (size_t)n, fp);
+                if (ferror(fp)) got = -1;
+            }
+        }
+        if (fclose(fp) != 0) got = -1;
+        return got;
+    }
+#else
+    NJ_UNUSED(path); NJ_UNUSED(pos); NJ_UNUSED(data); NJ_UNUSED(n); NJ_UNUSED(size);
+    return -1;
+#endif
+}
+
+static nj_status fis_path(nj_vm *vm, nj_ref self, char *host)
+{
+    nj_ref path = nj_field_read_ref(vm, self,
+                                   fld(vm, FIS, "path", "Ljava/lang/String;"));
+    if (!path) return nj_throw(vm, "java/io/IOException", "stream is closed");
+    if (nj_string_to_utf8(path, host, FIS_PATHMAX) <= 0) {
+        return nj_throw(vm, "java/io/IOException", "invalid file path");
+    }
+    return NJ_OK;
+}
+
+NJFN(fis_init)
+{
+    nj_ref path = NJ_ARG_REF(args, 0);
+    char host[FIS_PATHMAX];
+    if (!path) return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    if (nj_string_to_utf8(path, host, (int)sizeof(host)) <= 0 ||
+        fis_read_host(vm, host, 0, NULL, 0u, NULL) < 0) {
+        return nj_throw(vm, "java/io/IOException", "cannot open for reading");
+    }
+    nj_field_write_ref(vm, NJ_THIS(args), fld(vm, FIS, "path", "Ljava/lang/String;"), path);
+    nj_field_write_long(vm, NJ_THIS(args), fld(vm, FIS, "position", "J"), 0);
+    return NJ_OK;
+}
+
+static nj_status fis_read_data(nj_vm *vm, nj_ref self, void *data, nj_u4 n,
+                               nj_value *ret)
+{
+    char host[FIS_PATHMAX];
+    nj_field *position = fld(vm, FIS, "position", "J");
+    nj_s8 pos = nj_field_read_long(vm, self, position);
+    nj_s4 got;
+    if (fis_path(vm, self, host) != NJ_OK) return NJ_ERR;
+    if (!n) { ret->i = 0; return NJ_OK; }
+    got = fis_read_host(vm, host, pos, data, n, NULL);
+    if (got < 0) return nj_throw(vm, "java/io/IOException", "cannot read the file");
+    nj_field_write_long(vm, self, position, pos + got);
+    ret->i = got ? got : -1;
+    return NJ_OK;
+}
+
+NJFN(fis_read)
+{
+    nj_u1 byte;
+    nj_status status = fis_read_data(vm, NJ_THIS(args), &byte, 1u, ret);
+    if (status == NJ_OK && ret->i > 0) ret->i = (nj_s4)byte;
+    return status;
+}
+
+NJFN(fis_read_range)
+{
+    nj_ref buf = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1), len = NJ_ARG_INT(args, 2);
+    if (!buf) return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    if (off < 0 || len < 0 || (nj_u4)off > buf->length ||
+        (nj_u4)len > buf->length - (nj_u4)off) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    return fis_read_data(vm, NJ_THIS(args), buf->u.bytes + off, (nj_u4)len, ret);
+}
+
+NJFN(fis_skip)
+{
+    char host[FIS_PATHMAX];
+    nj_ref self = NJ_THIS(args);
+    nj_field *position = fld(vm, FIS, "position", "J");
+    nj_s8 pos = nj_field_read_long(vm, self, position);
+    nj_s8 want = NJ_ARG_LONG(args, 0), size, left;
+    if (fis_path(vm, self, host) != NJ_OK) return NJ_ERR;
+    ret->j = 0;
+    if (want <= 0) return NJ_OK;
+    if (fis_read_host(vm, host, 0, NULL, 0u, &size) < 0) {
+        return nj_throw(vm, "java/io/IOException", "cannot size the file");
+    }
+    left = size > pos ? size - pos : 0;
+    ret->j = want < left ? want : left;
+    nj_field_write_long(vm, self, position, pos + ret->j);
+    return NJ_OK;
+}
+
+NJFN(fis_available)
+{
+    char host[FIS_PATHMAX];
+    nj_ref self = NJ_THIS(args);
+    nj_s8 pos = nj_field_read_long(vm, self, fld(vm, FIS, "position", "J"));
+    nj_s8 size, left;
+    if (fis_path(vm, self, host) != NJ_OK) return NJ_ERR;
+    if (fis_read_host(vm, host, 0, NULL, 0u, &size) < 0) {
+        return nj_throw(vm, "java/io/IOException", "cannot size the file");
+    }
+    left = size > pos ? size - pos : 0;
+    ret->i = left > 0x7fffffff ? 0x7fffffff : (nj_s4)left;
+    return NJ_OK;
+}
+
+NJFN(fis_close)
+{
+    nj_field_write_ref(vm, NJ_THIS(args), fld(vm, FIS, "path", "Ljava/lang/String;"), NULL);
+    return NJ_OK;
+}
+
+/* ------------------------------------------------------------------ */
 /* java.io.FileOutputStream                                            */
 /* ------------------------------------------------------------------ */
 /*
  * Not a CLDC class, and not pretending to be one: FileConnection
  * .openOutputStream() has to hand back an OutputStream that is backed by a
- * file, and this is the smallest honest way to do it.  It is a
- * ByteArrayOutputStream that also remembers where to write, so the inherited
- * write(int) / write(byte[],int,int) need no code at all, and close() pours
- * the buffer into the file.
+ * file. Keep the path and current position in Java fields, reopening the host
+ * file for each write so snapshots never contain a FILE * or a port handle.
+ * Buffering an entire file in a ByteArrayOutputStream made Minecraft's 21 MB
+ * chunks.dat exhaust even a 64 MB heap while growing its backing array.
  *
- * Buffering instead of writing through is what keeps the C side stateless: a
- * FILE * cannot live in a Java field and the runtime may not keep one in a
- * global.  The path arrives already resolved against the sandbox root, because
- * FileConnection is the module that owns that decision.
+ * The existing ByteArrayOutputStream layout is retained; count records the
+ * file position and buf stays empty. The path arrives already resolved against
+ * the sandbox root, because FileConnection owns that decision.
  */
 #define FOS "java/io/FileOutputStream"
 #define FOS_PATHMAX 1024
@@ -1523,43 +1716,52 @@ static const nj_builtin_field fos_fields[] = {
 static const nj_builtin_method fos_methods[] = {
     M("<init>", "(Ljava/lang/String;)V", NJ_ACC_PUBLIC),
     M("flush",  "()V", NJ_ACC_PUBLIC),
-    M("close",  "()V", NJ_ACC_PUBLIC)
+    M("close",  "()V", NJ_ACC_PUBLIC),
+    M("write", "(I)V", NJ_ACC_PUBLIC),
+    M("write", "([BII)V", NJ_ACC_PUBLIC)
 };
 
 /*
- * Replace `path` with `data`.  A port that can open files is asked first,
+ * Write at the stream's current position without retaining the file. A port
+ * that can open files is asked first,
  * because that is the only route that exists when the runtime is built without
  * a C library; libc is the fallback, not the other way round.
  */
 static int fos_write_host(nj_vm *vm, const char *path, const void *data,
-                          nj_u4 n)
+                          nj_u4 n, nj_u4 pos)
 {
     if (vm->port && vm->port->file_open) {
         nj_file f;
         int ok;
-        if (vm->port->file_open(vm->port->ud, path, "wb", &f) != NJ_OK) {
+        /* FileConnection.create() owns creation. Falling back to "wb" after
+         * a read-permission failure would destroy an existing file. */
+        if (vm->port->file_open(vm->port->ud, path, "r+b", &f) != NJ_OK) {
             return 0;
         }
-        ok = (n == 0u) ||
-             (vm->port->file_write(vm->port->ud, &f, data, n) == (nj_s4)n);
+        ok = pos == 0u || (vm->port->file_seek &&
+             vm->port->file_seek(vm->port->ud, &f, pos) == NJ_OK);
+        if (ok && n != 0u) {
+            ok = vm->port->file_write &&
+                 vm->port->file_write(vm->port->ud, &f, data, n) == (nj_s4)n;
+        }
         vm->port->file_close(vm->port->ud, &f);
         return ok;
     }
 #if NJ_USE_LIBC
     {
-        FILE *fp = fopen(path, "wb");
+        FILE *fp = fopen(path, "r+b");
         int ok;
-        if (!fp) {
-            return 0;
-        }
-        ok = (n == 0u) || (fwrite(data, 1u, (size_t)n, fp) == (size_t)n);
-        fclose(fp);
+        if (!fp) return 0;
+        ok = pos == 0u || fseek(fp, (long)pos, SEEK_SET) == 0;
+        if (ok && n != 0u) ok = fwrite(data, 1u, (size_t)n, fp) == (size_t)n;
+        if (fclose(fp) != 0) ok = 0;
         return ok;
     }
 #else
     (void)path;
     (void)data;
     (void)n;
+    (void)pos;
     return 0;
 #endif
 }
@@ -1568,56 +1770,63 @@ NJFN(fos_init)
 {
     nj_ref self = NJ_THIS(args);
     nj_ref path = NJ_ARG_REF(args, 0);
-    nj_ref buf;
+    char host[FOS_PATHMAX];
 
-    if (!path) {
-        return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    if (!path) return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    if (nj_string_to_utf8(path, host, (int)sizeof(host)) <= 0 ||
+        !fos_write_host(vm, host, NULL, 0u, 0u)) {
+        return nj_throw(vm, "java/io/IOException", "cannot open the file");
     }
-    /*
-     * ByteArrayOutputStream's half, set up here rather than by calling its
-     * <init>, which takes the buffer capacity this constructor spends on the
-     * path instead.
-     */
-    buf = nj_byte_array_new(vm, 32u);
-    if (!buf) {
-        return nj_throw_oom(vm);
-    }
-    nj_field_write_ref(vm, self, nj_hot_field(vm, NJ_HF_BAOS_BUF, BAOS, "buf", "[B"), buf);
     nj_field_write_int(vm, self, nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I"), 0);
-    nj_field_write_ref(vm, self, fld(vm, FOS, "path", "Ljava/lang/String;"),
-                       path);
+    nj_field_write_ref(vm, self, fld(vm, FOS, "path", "Ljava/lang/String;"), path);
     return NJ_OK;
+}
+
+static nj_status fos_write_data(nj_vm *vm, nj_ref self, const void *data, nj_u4 n)
+{
+    nj_ref path = nj_field_read_ref(vm, self,
+                                   fld(vm, FOS, "path", "Ljava/lang/String;"));
+    nj_field *fc = nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I");
+    nj_s4 pos = nj_field_read_int(vm, self, fc);
+    char host[FOS_PATHMAX];
+    if (!path) return nj_throw(vm, "java/io/IOException", "stream is closed");
+    if (pos < 0 || n > 0x7fffffffu - (nj_u4)pos ||
+        nj_string_to_utf8(path, host, (int)sizeof(host)) <= 0 ||
+        !fos_write_host(vm, host, data, n, (nj_u4)pos)) {
+        return nj_throw(vm, "java/io/IOException", "cannot write the file");
+    }
+    nj_field_write_int(vm, self, fc, pos + (nj_s4)n);
+    return NJ_OK;
+}
+
+NJFN(fos_write)
+{
+    nj_u1 b = (nj_u1)NJ_ARG_INT(args, 0);
+    return fos_write_data(vm, NJ_THIS(args), &b, 1u);
+}
+
+NJFN(fos_write_range)
+{
+    nj_ref buf = NJ_ARG_REF(args, 0);
+    nj_s4 off = NJ_ARG_INT(args, 1), len = NJ_ARG_INT(args, 2);
+    if (!buf) return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    if (off < 0 || len < 0 || (nj_u4)off > buf->length ||
+        (nj_u4)len > buf->length - (nj_u4)off) {
+        return nj_throw(vm, "java/lang/IndexOutOfBoundsException", NULL);
+    }
+    return fos_write_data(vm, NJ_THIS(args), buf->u.bytes + off, (nj_u4)len);
 }
 
 NJFN(fos_flush)
 {
-    nj_ref self = NJ_THIS(args);
-    nj_ref path;
-    nj_ref buf;
-    nj_s4 count;
-    char host[FOS_PATHMAX];
-
-    path = nj_field_read_ref(vm, self,
-                             fld(vm, FOS, "path", "Ljava/lang/String;"));
-    buf = nj_field_read_ref(vm, self, nj_hot_field(vm, NJ_HF_BAOS_BUF, BAOS, "buf", "[B"));
-    count = nj_field_read_int(vm, self, nj_hot_field(vm, NJ_HF_BAOS_COUNT, BAOS, "count", "I"));
-
-    if (!path || nj_string_to_utf8(path, host, (int)sizeof(host)) <= 0) {
-        return nj_throw(vm, "java/io/IOException", "no path to write to");
-    }
-    if (count < 0) {
-        count = 0;
-    }
-    if (!fos_write_host(vm, host, buf ? (const void *)buf->u.bytes : NULL,
-                        (nj_u4)count)) {
-        return nj_throw(vm, "java/io/IOException", "cannot write the file");
-    }
+    /* Each write closes its host handle and flushes the host buffer. */
     return NJ_OK;
 }
 
 NJFN(fos_close)
 {
-    return fos_flush(vm, th, args, ret);
+    nj_field_write_ref(vm, NJ_THIS(args), fld(vm, FOS, "path", "Ljava/lang/String;"), NULL);
+    return NJ_OK;
 }
 
 static const nj_builtin_field baos_fields[] = {
@@ -2610,6 +2819,9 @@ const nj_builtin_class nj_lib_io_classes[] = {
     { "java/io/OutputStream", "java/lang/Object", NJ_ACC_PUBLIC | NJ_ACC_ABSTRACT,
       NULL, 0u, outputstream_methods,
       (nj_u2)(sizeof(outputstream_methods) / sizeof(outputstream_methods[0])) },
+    { FIS, NJ_C_ISTREAM, NJ_ACC_PUBLIC,
+      fis_fields, (nj_u2)(sizeof(fis_fields) / sizeof(fis_fields[0])),
+      fis_methods, (nj_u2)(sizeof(fis_methods) / sizeof(fis_methods[0])) },
     { "java/io/ByteArrayInputStream", "java/io/InputStream", NJ_ACC_PUBLIC,
       bais_fields, (nj_u2)(sizeof(bais_fields) / sizeof(bais_fields[0])),
       bais_methods, (nj_u2)(sizeof(bais_methods) / sizeof(bais_methods[0])) },
@@ -2725,9 +2937,17 @@ const nj_native_entry nj_lib_io_table[] = {
      * reported IllegalArgumentException "no image data" once per frame.
      */
     { "java/io/ByteArrayOutputStream", "close",       "()V", is_close },
+    { FIS, "<init>", "(Ljava/lang/String;)V", fis_init },
+    { FIS, "read", "()I", fis_read },
+    { FIS, "read", "([BII)I", fis_read_range },
+    { FIS, "skip", "(J)J", fis_skip },
+    { FIS, "available", "()I", fis_available },
+    { FIS, "close", "()V", fis_close },
     { FOS, "<init>", "(Ljava/lang/String;)V", fos_init },
     { FOS, "flush",  "()V", fos_flush },
     { FOS, "close",  "()V", fos_close },
+    { FOS, "write", "(I)V", fos_write },
+    { FOS, "write", "([BII)V", fos_write_range },
 
     { "java/io/DataInputStream", "<init>",           "(Ljava/io/InputStream;)V", dis_init },
     { "java/io/DataInputStream", "read",             "()I", dis_read },

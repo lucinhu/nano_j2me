@@ -1222,7 +1222,9 @@ int nj_vm_save_file(nj_vm *vm, const char *path)
 /* ------------------------------------------------------------------ */
 /* Load                                                                */
 /* ------------------------------------------------------------------ */
-static int method_at(nj_vm *vm, nj_u4 cls_idx, nj_u4 meth_idx, nj_method **out)
+/* Saved class indices address the name-resolved map, not registration order. */
+static int method_at(nj_class *const *map, nj_u4 nclasses, nj_u4 cls_idx,
+                     nj_u4 meth_idx, nj_method **out)
 {
     nj_class *c;
 
@@ -1230,10 +1232,10 @@ static int method_at(nj_vm *vm, nj_u4 cls_idx, nj_u4 meth_idx, nj_method **out)
     if (cls_idx == NJ_SAVE_NO_CLASS) {
         return 1;                     /* a frame with no method at all */
     }
-    if (cls_idx >= vm->nclasses) {
+    if (cls_idx >= nclasses) {
         return 0;
     }
-    c = vm->classes[cls_idx];
+    c = map[cls_idx];
     if (!c || meth_idx >= c->method_count) {
         return 0;
     }
@@ -1354,7 +1356,8 @@ static void reset_refs(nj_vm *vm)
     }
 }
 
-static int apply_recordsA(nj_vm *vm, nj_sreader *r)
+static int apply_recordsA(nj_vm *vm, nj_sreader *r,
+                           nj_class *const *map, nj_u4 nclasses)
 {
     for (;;) {
         nj_u1 rec[16];
@@ -1395,10 +1398,10 @@ static int apply_recordsA(nj_vm *vm, nj_sreader *r)
             }
             break;
         case NJ_SR_CLASS_OBJ:
-            if (a >= vm->nclasses || !vm->classes[a]) {
+            if (a >= nclasses || !map[a]) {
                 return 0;
             }
-            vm->classes[a]->class_obj = ref_at(vm, v);
+            map[a]->class_obj = ref_at(vm, v);
             break;
         case NJ_SR_OBJ:
             if (a + (nj_u4)sizeof(nj_ref) > vm->heap.bump) {
@@ -1407,7 +1410,8 @@ static int apply_recordsA(nj_vm *vm, nj_sreader *r)
             *(nj_ref *)(void *)(vm->heap.base + a) = ref_at(vm, v);
             break;
         case NJ_SR_METHOD:
-            if (v >= vm->nclasses || !method_at(vm, v, b, &vm->exception_method)) {
+            if (v >= nclasses ||
+                !method_at(map, nclasses, v, b, &vm->exception_method)) {
                 return 0;
             }
             break;
@@ -1905,7 +1909,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
     }
 
     /* Records A. */
-    if (!apply_recordsA(vm, &rd)) {
+    if (!apply_recordsA(vm, &rd, map, nclasses)) {
         NJ_LOAD_FAIL(NJ_ERR_FORMAT);
     }
 
@@ -2000,7 +2004,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
                 NJ_LOAD_FAIL(NJ_ERR_FORMAT);
             }
             fr = &th->frames[f];
-            if (!method_at(vm, ci, mi, &fr->m)) {
+            if (!method_at(map, nclasses, ci, mi, &fr->m)) {
                 NJ_LOAD_FAIL(NJ_ERR_FORMAT);
             }
             if (fr->m && pc > fr->m->code_len) {

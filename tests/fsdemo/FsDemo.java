@@ -32,6 +32,110 @@ public class FsDemo extends MIDlet {
         }
     }
 
+    private String readFile(FileConnection fc) throws java.io.IOException {
+        java.io.InputStream in = fc.openInputStream();
+        StringBuffer text = new StringBuffer();
+        int ch;
+        while ((ch = in.read()) != -1) { text.append((char) ch); }
+        in.close();
+        return text.toString();
+    }
+
+    private void tryTruncate(String key, FileConnection fc, long length) {
+        try {
+            fc.truncate(length);
+            say(key, "accepted");
+        } catch (Exception e) {
+            say(key, e.getClass().getName());
+        }
+    }
+
+    private void testTruncate() throws java.io.IOException {
+        String url = "file:///root/sub/truncate.txt";
+        FileConnection f = (FileConnection) Connector.open(url);
+        f.truncate(4L);
+        say("truncate_prefix", "size=" + f.fileSize() + " text=" + readFile(f));
+        f.truncate(4L);                         // equal size: no change
+        f.truncate(100L);                       // never extend
+        f.truncate(0x100000000L);               // must not narrow long to int
+        f.truncate(Long.MAX_VALUE);
+        say("truncate_noextend", "size=" + f.fileSize() + " text=" + readFile(f));
+        tryTruncate("truncate_negative", f, -1L);
+        tryTruncate("truncate_minlong", f, Long.MIN_VALUE);
+        say("truncate_negative_data", readFile(f));
+
+        FileConnection ro = (FileConnection) Connector.open(url, Connector.READ);
+        tryTruncate("truncate_readonly", ro, 0L);
+        ro.close();
+        FileConnection timed = (FileConnection) Connector.open(url, Connector.READ, true);
+        tryTruncate("truncate_readonly_timeout", timed, 0L);
+        timed.close();
+        tryTruncate("truncate_closed", ro, 0L);
+        say("truncate_refused_data", readFile(f));
+
+        FileConnection dir = (FileConnection) Connector.open("file:///root/sub/");
+        tryTruncate("truncate_directory", dir, 0L);
+        dir.close();
+        FileConnection missing = (FileConnection) Connector.open("file:///root/sub/missing.txt");
+        tryTruncate("truncate_missing", missing, 0L);
+        tryTruncate("truncate_missing_large", missing, Long.MAX_VALUE);
+        say("truncate_missing_exists", "" + missing.exists());
+        missing.close();
+
+        f.truncate(0L);                         // Minecraft's save sequence
+        say("truncate_zero", "size=" + f.fileSize() + " text=[" + readFile(f) + "]");
+        java.io.OutputStream out = f.openOutputStream();
+        out.write(new byte[] { 'n', 'e', 'w' });
+        out.close();
+        f.close();
+        FileConnection saved = (FileConnection) Connector.open(url, Connector.READ);
+        say("truncate_saved", "size=" + saved.fileSize() + " text=" + readFile(saved));
+        saved.close();
+        FileConnection write = (FileConnection) Connector.open(url, Connector.WRITE);
+        write.truncate(2L);
+        write.close();
+        FileConnection reopened = (FileConnection) Connector.open(url, Connector.READ);
+        say("truncate_writeonly", "size=" + reopened.fileSize() + " text=" + readFile(reopened));
+        reopened.close();
+    }
+
+    private void testRenameOffset() throws java.io.IOException {
+        String old = "file:///root/sub/rename-source.txt";
+        String renamed = "file:///root/sub/rename-saved.txt";
+        FileConnection target = (FileConnection) Connector.open(renamed);
+        if (target.exists()) { target.delete(); }
+        target.close();
+        FileConnection f = (FileConnection) Connector.open(old);
+        if (!f.exists()) { f.create(); }
+        f.truncate(0L);
+        java.io.OutputStream out = f.openOutputStream();
+        out.write(new byte[] { 'a', 'b', 'c', 'd', 'e', 'f' });
+        out.close();
+        out = f.openOutputStream(2L);
+        out.write(new byte[] { 'X', 'Y' });
+        out.close();
+        say("offset_replace", readFile(f));
+        out = f.openOutputStream(Long.MAX_VALUE);
+        out.write('!');
+        out.close();
+        say("offset_eof", "size=" + f.fileSize() + " text=" + readFile(f));
+        try { f.openOutputStream(-1L); say("offset_negative", "accepted"); }
+        catch (Exception e) { say("offset_negative", e.getClass().getName()); }
+        try { f.rename("../escaped"); say("rename_path", "accepted"); }
+        catch (Exception e) { say("rename_path", e.getClass().getName()); }
+        f.rename("rename-saved.txt");
+        say("rename_saved", f.getURL() + " text=" + readFile(f));
+        f.close();
+        FileConnection oldName = (FileConnection) Connector.open(old);
+        say("rename_old_exists", "" + oldName.exists());
+        oldName.close();
+        target = (FileConnection) Connector.open(renamed, Connector.READ);
+        say("rename_reopen", readFile(target));
+        try { target.rename("readonly.txt"); say("rename_readonly", "accepted"); }
+        catch (Exception e) { say("rename_readonly", e.getClass().getName()); }
+        target.close();
+    }
+
     public void startApp() {
         try {
             tryOpen("file:///root/a.txt");
@@ -119,6 +223,9 @@ public class FsDemo extends MIDlet {
             in.close();
             f.close();
             say("content", sb.toString().trim());
+
+            testTruncate();
+            testRenameOffset();
 
             /* A closed connection refuses further work. */
             FileConnection c = (FileConnection) Connector.open("file:///root/a.txt");

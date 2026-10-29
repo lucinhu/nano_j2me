@@ -642,6 +642,7 @@ CLASSES = {
         "methods": [
             "public static javax.microedition.io.Connection open(String)",
             "public static javax.microedition.io.Connection open(String, int)",
+            "public static javax.microedition.io.Connection open(String, int, boolean)",
             "public static java.io.DataInputStream openDataInputStream(String)",
             "public static java.io.DataOutputStream openDataOutputStream(String)",
             "public static java.io.InputStream openInputStream(String)",
@@ -1014,11 +1015,13 @@ CLASSES = {
             "public java.io.DataOutputStream openDataOutputStream() throws java.io.IOException",
             "public java.io.InputStream openInputStream() throws java.io.IOException",
             "public java.io.OutputStream openOutputStream() throws java.io.IOException",
+            "public java.io.OutputStream openOutputStream(long) throws java.io.IOException",
+            "public void rename(String) throws java.io.IOException",
             "public void setFileConnection(String) throws java.io.IOException",
             "public void setHidden(boolean) throws java.io.IOException",
             "public void setReadable(boolean) throws java.io.IOException",
             "public void setWritable(boolean) throws java.io.IOException",
-            "public void truncate(int) throws java.io.IOException",
+            "public void truncate(long) throws java.io.IOException",
         ],
     },
     "javax/microedition/media/PlayerListener": {

@@ -452,10 +452,14 @@ static void nj_gc_mark_children(nj_vm *vm, nj_object *o)
         nj_u1 *base = (nj_u1 *)o;
         while (c) {
             nj_u2 f;
+            int weak = strcmp(c->name, "java/lang/ref/Reference") == 0;
             for (f = 0; f < c->field_count; f++) {
                 nj_field *fd = &c->fields[f];
                 if ((fd->flags & NJ_ACC_STATIC) == 0u && fd->ptype == NJ_PT_OBJECT) {
                     nj_ref r;
+                    /* Only the base class's referent is weak. A subclass may
+                     * declare strong fields, including one with this name. */
+                    if (weak && strcmp(fd->name, "referent") == 0) continue;
                     memcpy(&r, base + fd->offset, sizeof(nj_ref));
                     nj_gc_mark_object(vm, r);
                 }
@@ -697,6 +701,40 @@ static void nj_gc_mark_roots(nj_vm *vm)
     }
 }
 
+/* Clear unreachable weak referents after the entire strong graph is marked,
+ * before sweep resets marks or reuses any dead blocks. No host-side list is
+ * needed; the arena also includes WeakReference subclasses. */
+static void nj_gc_clear_weak(nj_vm *vm)
+{
+    nj_class *weak = nj_class_lookup(vm, "java/lang/ref/WeakReference");
+    nj_field *field;
+    nj_u1 *p = vm->heap.base;
+    nj_u1 *end = p + vm->heap.bump;
+
+    if (!weak) return;
+    field = nj_field_lookup(vm, weak->name, "referent", "Ljava/lang/Object;", 0);
+    if (!field) return;
+    while (p < end) {
+        nj_block *b = (nj_block *)p;
+        nj_size sz = b->size;
+        if (sz < NJ_MIN_BLOCK || sz > (nj_size)(end - p)) break;
+        if (b->magic == NJ_BLOCK_MAGIC) {
+            nj_object *o = (nj_object *)NJ_BLOCK_PAYLOAD(b);
+            if (o->mark && o->kind == NJ_OBJ_PLAIN) {
+                nj_class *c = o->cls;
+                while (c && c != weak) c = c->super;
+                if (c) {
+                    nj_ref r = nj_field_read_ref(vm, o, field);
+                    if (r && (!nj_heap_owns_object(vm, r) || !r->mark)) {
+                        nj_field_write_ref(vm, o, field, NULL);
+                    }
+                }
+            }
+        }
+        p += sz;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* GC: sweep (with coalescing)                                         */
 /* ------------------------------------------------------------------ */
@@ -786,6 +824,7 @@ nj_status nj_gc_run(nj_vm *vm)
     }
     vm->gc_requested = 0u;
     nj_gc_mark_roots(vm);
+    nj_gc_clear_weak(vm);
     nj_gc_sweep(vm);
     vm->heap.gc_count++;
     vm->heap.allocs_since_gc = 0u;

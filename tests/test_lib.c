@@ -4237,6 +4237,169 @@ static void test_gc_ignores_freed_slot(nj_vm *vm)
     clean(vm, "stale pointer in a scanned slot");
 }
 
+/* Minecraft prepends file:/// to each JSR 75 root name. No mounted filesystem
+ * must still yield an iterable empty result, not a null Enumeration. */
+static void test_file_roots(nj_port *port)
+{
+    const char *registry = "javax/microedition/io/file/FileSystemRegistry";
+    const char *enumeration = "java/util/Enumeration";
+    nj_port local = *port;
+    nj_vm *vm;
+    nj_value result, a[1];
+    nj_ref roots, name;
+    char root[32], url[64];
+
+    local.fs_dir = NULL;
+    vm = nj_vm_create(&local, 128u * 1024u);
+    OK(vm != NULL);
+    if (!vm) return;
+    result.r = NULL;
+    OK(nj_call(vm, NULL, registry, "listRoots", "()Ljava/util/Enumeration;",
+               NULL, &result) == NJ_OK);
+    roots = nj_root(vm, result.r);
+    OK_MSG(roots != NULL, "no filesystem returns an empty Enumeration");
+    if (roots) {
+        OK(nj_call_int(vm, roots, enumeration, "hasMoreElements", "()Z", NULL) == 0);
+    }
+    clean(vm, "no filesystem roots");
+    nj_vm_destroy(vm);
+
+    local.fs_dir = ".";
+    vm = nj_vm_create(&local, 128u * 1024u);
+    OK(vm != NULL);
+    if (!vm) return;
+    result.r = NULL;
+    OK(nj_call(vm, NULL, registry, "listRoots", "()Ljava/util/Enumeration;",
+               NULL, &result) == NJ_OK);
+    roots = nj_root(vm, result.r);
+    OK(roots != NULL);
+    if (!roots) goto done;
+    OK(nj_call_int(vm, roots, enumeration, "hasMoreElements", "()Z", NULL) == 1);
+    OK(nj_call(vm, roots, enumeration, "nextElement", "()Ljava/lang/Object;",
+               NULL, &result) == NJ_OK);
+    name = nj_root(vm, result.r);
+    OK(name != NULL);
+    if (!name) goto done;
+    nj_string_to_utf8(name, root, (int)sizeof(root));
+    OK_MSG(strcmp(root, "root/") == 0, "root is a name, not a URL: %s", root);
+    snprintf(url, sizeof(url), "file:///%s", root);
+    a[0] = vref(nj_string_new(vm, url));
+    result.r = NULL;
+    OK(nj_call(vm, NULL, "javax/microedition/io/Connector", "open",
+               "(Ljava/lang/String;)Ljavax/microedition/io/Connection;", a, &result) == NJ_OK);
+    OK_MSG(result.r != NULL, "file:/// plus the enumerated name can be opened");
+    if (result.r) {
+        OK(nj_call_int(vm, result.r, "javax/microedition/io/file/FileConnection",
+                       "exists", "()Z", NULL) == 1);
+    }
+    OK(nj_call_int(vm, roots, enumeration, "hasMoreElements", "()Z", NULL) == 0);
+done:
+    clean(vm, "mounted filesystem roots");
+    nj_vm_destroy(vm);
+}
+
+/* Minecraft's texture cache uses CLDC WeakReference. Its referent must stay
+ * available while strongly reachable, then be cleared before sweep can reuse
+ * the block. C locals are deliberately not roots in this collector. */
+static void test_weak_references(nj_port *port)
+{
+    const char *weak = "java/lang/ref/WeakReference";
+    static const nj_builtin_field fields[] = {
+        { "referent", "Ljava/lang/Object;", NJ_ACC_PUBLIC }
+    };
+    static const nj_builtin_class holder_def = {
+        "WeakHolder", "java/lang/ref/WeakReference", NJ_ACC_PUBLIC,
+        fields, 1u, NULL, 0u
+    };
+    nj_vm *vm = nj_vm_create(port, 128u * 1024u);
+    nj_ref target, first, second, holder, strong;
+    nj_value a[1], result;
+    nj_u4 roots;
+    nj_class *sub;
+    nj_field *field;
+
+    OK(vm != NULL);
+    if (!vm) return;
+    OK_MSG(nj_class_lookup(vm, weak) != NULL, "CLDC WeakReference exists");
+    if (!nj_class_lookup(vm, weak)) {
+        nj_clear_exception(vm);
+        nj_vm_destroy(vm);
+        return;
+    }
+    OK_MSG(nj_class_lookup(vm, "java/lang/ref/Reference") != NULL,
+           "CLDC Reference base class exists");
+    OK(nj_class_is_assignable(nj_class_lookup(vm, weak),
+                             nj_class_lookup(vm, "java/lang/ref/Reference")));
+    roots = nj_root_mark(vm);
+    target = nj_root(vm, nj_object_new(vm, "java/lang/Object"));
+    a[0] = vref(target);
+    first = nj_root(vm, construct(vm, weak, "(Ljava/lang/Object;)V", a, "weak(target)"));
+    second = nj_root(vm, construct(vm, weak, "(Ljava/lang/Object;)V", a, "another weak(target)"));
+    OK(first != NULL && second != NULL && target != NULL);
+    if (!first || !second || !target) goto done;
+    OK(nj_call(vm, first, weak, "get", "()Ljava/lang/Object;", NULL, &result) == NJ_OK);
+    OK(result.r == target);
+    OK(nj_gc_run(vm) == NJ_OK);
+    OK(nj_call(vm, first, weak, "get", "()Ljava/lang/Object;", NULL, &result) == NJ_OK);
+    OK(result.r == target && nj_heap_owns_object(vm, target));
+    OK(nj_call(vm, second, "java/lang/ref/Reference", "get",
+               "()Ljava/lang/Object;", NULL, &result) == NJ_OK);
+    OK(result.r == target);
+    OK(nj_call(vm, second, "java/lang/ref/Reference", "clear", "()V", NULL, NULL) == NJ_OK);
+    OK(nj_call(vm, second, weak, "get", "()Ljava/lang/Object;", NULL, &result) == NJ_OK);
+    OK(result.r == NULL);
+
+    /* Retain both wrappers but drop the only strong root to the referent. */
+    nj_root_release(vm, roots);
+    nj_root(vm, first);
+    nj_root(vm, second);
+    OK(nj_gc_run(vm) == NJ_OK);
+    OK(nj_call(vm, first, weak, "get", "()Ljava/lang/Object;", NULL, &result) == NJ_OK);
+    OK(result.r == NULL);
+    OK(!nj_heap_owns_object(vm, target));
+    OK(nj_call(vm, first, weak, "clear", "()V", NULL, NULL) == NJ_OK);
+    OK(nj_gc_run(vm) == NJ_OK);
+
+    /* A subclass's own field of the same name is still a strong reference. */
+    sub = nj_class_create_builtin(vm, &holder_def);
+    OK(sub != NULL && nj_class_link(vm, sub) == NJ_OK);
+    if (!sub) goto done;
+    target = nj_root(vm, nj_byte_array_new(vm, 32u));
+    strong = nj_root(vm, nj_object_new(vm, "java/lang/Object"));
+    a[0] = vref(target);
+    holder = nj_root(vm, construct(vm, "WeakHolder", "(Ljava/lang/Object;)V", a, "weak subclass"));
+    field = nj_field_lookup(vm, "WeakHolder", "referent", "Ljava/lang/Object;", 0);
+    OK(holder != NULL && field != NULL);
+    if (!holder || !field) goto done;
+    nj_field_write_ref(vm, holder, field, strong);
+    nj_root_release(vm, roots);
+    nj_root(vm, holder);
+    OK(nj_gc_run(vm) == NJ_OK);
+    OK(nj_call(vm, holder, weak, "get", "()Ljava/lang/Object;", NULL, &result) == NJ_OK);
+    OK(result.r == NULL);
+    OK(!nj_heap_owns_object(vm, target));
+    OK(nj_field_read_ref(vm, holder, field) == strong);
+    OK(nj_heap_owns_object(vm, strong));
+
+    /* Clear weak chains in one pass, including a target earlier in the arena. */
+    a[0] = vref(NULL);
+    first = nj_root(vm, construct(vm, weak, "(Ljava/lang/Object;)V", a, "weak(null)"));
+    a[0] = vref(first);
+    second = nj_root(vm, construct(vm, weak, "(Ljava/lang/Object;)V", a, "weak(weak(null))"));
+    nj_root_release(vm, roots);
+    nj_root(vm, second);
+    OK(nj_gc_run(vm) == NJ_OK);
+    if (second) {
+        OK(nj_call(vm, second, weak, "get", "()Ljava/lang/Object;", NULL, &result) == NJ_OK);
+        OK(result.r == NULL);
+    }
+    OK(!nj_heap_owns_object(vm, first));
+    clean(vm, "weak reference lifecycle");
+done:
+    nj_root_release(vm, roots);
+    nj_vm_destroy(vm);
+}
+
 /* UC Browser's bundled page parser calls Integer.shortValue().  Narrowing
  * keeps the low 16 bits and sign-extends them, including out-of-range ints. */
 static void test_integer_short_value(nj_vm *vm)
@@ -4903,6 +5066,384 @@ static void test_write_utf_length(nj_vm *vm)
     clean(vm, "writeUTF past the limit");
 }
 
+/* Minecraft saves a 21 MB world. Its OutputStream must not retain the file in
+ * the Java heap; exercise writes larger than this VM through both host paths. */
+static void test_file_output_stream(nj_port *port, int libc_fallback)
+{
+    const char *fos = "java/io/FileOutputStream";
+    nj_port local = *port;
+    nj_vm *vm;
+    nj_ref stream, bytes, path_string;
+    nj_value a[3];
+    char path[1024];
+    unsigned char check[4096];
+    FILE *fp;
+    unsigned i;
+    int complete = 1;
+
+    if (libc_fallback) local.file_open = NULL;
+    snprintf(path, sizeof(path), "%s/file-output-%d.bin", port->rms_dir, libc_fallback);
+    fp = fopen(path, "wb");
+    OK(fp != NULL);
+    if (!fp) return;
+    fclose(fp);
+    vm = nj_vm_create(&local, 128u * 1024u);
+    OK(vm != NULL);
+    if (!vm) { remove(path); return; }
+    path_string = nj_root(vm, nj_string_new(vm, path));
+    a[0] = vref(path_string);
+    stream = nj_root(vm, construct(vm, fos, "(Ljava/lang/String;)V", a, "file output"));
+    bytes = nj_root(vm, nj_byte_array_new(vm, sizeof(check)));
+    OK(stream != NULL && bytes != NULL);
+    if (!stream || !bytes) goto done;
+    for (i = 0; i < sizeof(check); ++i) {
+        check[i] = (unsigned char)(i * 17u + 3u);
+        bytes->u.bytes[i] = check[i];
+    }
+    a[0] = vint(0x15a);
+    OK(nj_call(vm, stream, fos, "write", "(I)V", a, NULL) == NJ_OK);
+    a[0] = vref(bytes); a[1] = vint(13); a[2] = vint(23);
+    OK(nj_call(vm, stream, fos, "write", "([BII)V", a, NULL) == NJ_OK);
+    for (i = 0; i < 256u; ++i) {
+        if (nj_call(vm, stream, fos, "write", "([B)V", a, NULL) != NJ_OK) {
+            complete = 0;
+            break;
+        }
+    }
+    OK_MSG(complete, "a 128 KB heap writes over 1 MB without buffering the file");
+    OK(nj_call(vm, stream, fos, "flush", "()V", NULL, NULL) == NJ_OK);
+    fp = fopen(path, "rb");
+    OK(fp != NULL);
+    if (fp) {
+        unsigned char actual[4096];
+        int matches = fgetc(fp) == 0x5a;
+        matches = fread(actual, 1, 23, fp) == 23 && matches;
+        matches = memcmp(actual, check + 13, 23) == 0 && matches;
+        for (i = 0; i < 256u; ++i) {
+            if (fread(actual, 1, sizeof(actual), fp) != sizeof(actual) ||
+                memcmp(actual, check, sizeof(actual)) != 0) matches = 0;
+        }
+        OK_MSG(matches && fgetc(fp) == EOF, "flush exposes all bytes at the right offsets");
+        fclose(fp);
+    }
+    OK(nj_call(vm, stream, fos, "close", "()V", NULL, NULL) == NJ_OK);
+    OK(nj_call(vm, stream, fos, "close", "()V", NULL, NULL) == NJ_OK);
+    a[0] = vint(1);
+    OK(nj_call(vm, stream, fos, "write", "(I)V", a, NULL) != NJ_OK);
+    {
+        const char *error = nj_exception_describe(vm);
+        OK(error != NULL && strstr(error, "IOException") != NULL);
+    }
+    nj_clear_exception(vm);
+
+    /* FileConnection owns truncation. A stream starting at zero preserves the
+     * unwritten tail of an existing file, including on a zero-byte flush. */
+    a[0] = vref(path_string);
+    stream = nj_root(vm, construct(vm, fos, "(Ljava/lang/String;)V", a, "file overwrite"));
+    OK(stream != NULL);
+    if (!stream) goto done;
+    OK(nj_call(vm, stream, fos, "flush", "()V", NULL, NULL) == NJ_OK);
+    a[0] = vint(0xa5);
+    OK(nj_call(vm, stream, fos, "write", "(I)V", a, NULL) == NJ_OK);
+    OK(nj_call(vm, stream, fos, "close", "()V", NULL, NULL) == NJ_OK);
+    fp = fopen(path, "rb");
+    OK(fp != NULL);
+    if (fp) {
+        OK(fgetc(fp) == 0xa5 && fgetc(fp) == check[13]);
+        OK(fseek(fp, 0, SEEK_END) == 0 && ftell(fp) == 1048600L);
+        fclose(fp);
+    }
+    /* r+b may fail when a file is writable but unreadable. Opening must never
+     * retry with the truncating wb mode, even when no bytes will be written. */
+    if (chmod(path, 0200) == 0) {
+        nj_ref attempt = nj_root(vm, nj_object_new(vm, fos));
+        nj_status status;
+        a[0] = vref(path_string);
+        status = nj_call_special(vm, attempt, fos, "<init>", "(Ljava/lang/String;)V", a, NULL);
+        if (status == NJ_OK) {
+            /* Privileged test runners can still read this file. */
+            OK(nj_call(vm, attempt, fos, "close", "()V", NULL, NULL) == NJ_OK);
+        } else {
+            const char *error = nj_exception_describe(vm);
+            OK(error && strstr(error, "IOException"));
+            nj_clear_exception(vm);
+        }
+        OK(chmod(path, 0600) == 0);
+        fp = fopen(path, "rb");
+        OK(fp != NULL);
+        if (fp) {
+            OK_MSG(fgetc(fp) == 0xa5 && fseek(fp, 0, SEEK_END) == 0 &&
+                   ftell(fp) == 1048600L, "a failed open preserves existing data");
+            fclose(fp);
+        }
+    }
+done:
+    clean(vm, "file output stream");
+    nj_vm_destroy(vm);
+    remove(path);
+}
+
+/* World chunk reads must stay bounded even when several files are open. The
+ * fixture is deliberately larger than the VM and uses offset-dependent bytes
+ * so a missing seek cannot accidentally pass at a 256-byte boundary. */
+static unsigned char file_input_byte(nj_u4 offset, unsigned seed)
+{
+    return (unsigned char)(offset * 17u + (offset >> 8) * 13u + seed * 41u);
+}
+
+static void file_input_error(nj_vm *vm, nj_ref stream, const char *method,
+                             const char *desc, nj_value *args, const char *type)
+{
+    nj_value result;
+    const char *error;
+    OK(nj_call(vm, stream, ISTREAM, method, desc, args, &result) != NJ_OK);
+    error = nj_exception_describe(vm);
+    OK_MSG(error && strstr(error, type), "%s raises %s: %s", method, type,
+           error ? error : "(no exception)");
+    nj_clear_exception(vm);
+}
+
+static nj_s4 file_input_read_failure(void *ud, nj_file *file, void *buf, nj_u4 n)
+{
+    (void)ud; (void)file; (void)buf; (void)n;
+    return -1;
+}
+
+static int file_input_seek_failure(void *ud, nj_file *file, nj_u4 pos)
+{
+    (void)ud; (void)file; (void)pos;
+    return -1;
+}
+
+static void test_file_input_stream(nj_port *port, int libc_fallback)
+{
+    const char *fc = "javax/microedition/io/file/FileConnection";
+    const nj_u4 sizes[3] = { 1048613u, 1056769u, 2097163u };
+    nj_port local = *port;
+    nj_vm *vm = NULL;
+    nj_ref streams[3] = { NULL, NULL, NULL }, connections[3], bytes;
+    nj_value a[3], result;
+    char paths[3][1024], url[96];
+    unsigned char block[4096];
+    unsigned i, j;
+    int created = 0, opens, closes, reads;
+    long read_bytes;
+
+    local.fs_dir = port->rms_dir;
+    if (libc_fallback) {
+        local.file_open = NULL; local.file_read = NULL;
+        local.file_seek = NULL; local.file_close = NULL;
+    }
+    opens = nj_port_headless_file_opens(port);
+    closes = nj_port_headless_file_closes(port);
+    reads = nj_port_headless_file_reads(port);
+    read_bytes = nj_port_headless_bytes_read(port);
+    for (i = 0; i < 3u; ++i) {
+        nj_u4 offset;
+        FILE *fp;
+        int written = 1;
+        snprintf(paths[i], sizeof(paths[i]), "%s/file-input-%d-%u.bin",
+                 port->rms_dir, libc_fallback, i);
+        fp = fopen(paths[i], "wb");
+        OK(fp != NULL);
+        if (!fp) goto done;
+        created++;
+        for (offset = 0; offset < sizes[i]; offset += (nj_u4)sizeof(block)) {
+            nj_u4 n = sizes[i] - offset;
+            if (n > sizeof(block)) n = sizeof(block);
+            for (j = 0; j < n; ++j) block[j] = file_input_byte(offset + j, i);
+            if (fwrite(block, 1u, n, fp) != n) { written = 0; break; }
+        }
+        if (fclose(fp) != 0) written = 0;
+        OK(written);
+        if (!written) goto done;
+    }
+    vm = nj_vm_create(&local, 128u * 1024u);
+    OK(vm != NULL);
+    if (!vm) goto done;
+    for (i = 0; i < 3u; ++i) {
+        snprintf(url, sizeof(url), "file:///root/file-input-%d-%u.bin", libc_fallback, i);
+        a[0] = vref(nj_root(vm, nj_string_new(vm, url)));
+        result.r = NULL;
+        OK(nj_call(vm, NULL, "javax/microedition/io/Connector", "open",
+                   "(Ljava/lang/String;)Ljavax/microedition/io/Connection;", a, &result) == NJ_OK);
+        connections[i] = nj_root(vm, result.r);
+        OK(connections[i] != NULL);
+        if (!connections[i]) goto done;
+        result.r = NULL;
+        OK(nj_call(vm, connections[i], fc, "openInputStream", "()Ljava/io/InputStream;",
+                   NULL, &result) == NJ_OK);
+        streams[i] = nj_root(vm, result.r);
+        OK_MSG(streams[i] != NULL, "128 KB heap opens large input %u (backend %d)", i, libc_fallback);
+        if (!streams[i]) goto done;
+        OK(strcmp(nj_ref_class_name(streams[i]), "java/io/FileInputStream") == 0);
+    }
+    OK_MSG(nj_port_headless_bytes_read(port) == read_bytes,
+           "opening three large streams does not read their contents");
+    bytes = nj_root(vm, nj_byte_array_new(vm, sizeof(block)));
+    OK(bytes != NULL);
+    if (!bytes) goto done;
+    /* A collection with all three streams live must retain each path and its
+     * independent position, including after FileConnection itself is closed. */
+    nj_gc_collect(vm);
+    for (i = 0; i < 3u; ++i) {
+        nj_u4 pos = 0;
+        int matches = 1;
+        OK(nj_call(vm, connections[i], fc, "close", "()V", NULL, NULL) == NJ_OK);
+        OK(nj_call(vm, streams[i], ISTREAM, "available", "()I", NULL, &result) == NJ_OK &&
+           result.i == (nj_s4)sizes[i]);
+        OK(nj_call(vm, streams[i], ISTREAM, "read", "()I", NULL, &result) == NJ_OK &&
+           result.i == file_input_byte(pos++, i));
+        a[0] = vlong(-2147483648LL - 1);
+        OK(nj_call(vm, streams[i], ISTREAM, "skip", "(J)J", a, &result) == NJ_OK && result.j == 0);
+        a[0] = vlong(0);
+        OK(nj_call(vm, streams[i], ISTREAM, "skip", "(J)J", a, &result) == NJ_OK && result.j == 0);
+        a[0] = vlong(4090 - pos);
+        OK(nj_call(vm, streams[i], ISTREAM, "skip", "(J)J", a, &result) == NJ_OK && result.j == 4090 - pos);
+        pos = 4090;
+        memset(bytes->u.bytes, 0xa7, bytes->length);
+        a[0] = vref(bytes); a[1] = vint(7); a[2] = vint(31);
+        OK(nj_call(vm, streams[i], ISTREAM, "read", "([BII)I", a, &result) == NJ_OK && result.i == 31);
+        for (j = 0; j < 31u; ++j) {
+            if (bytes->u.bytes[7u + j] != file_input_byte(pos + j, i)) matches = 0;
+        }
+        OK(matches && bytes->u.bytes[6] == 0xa7 && bytes->u.bytes[38] == 0xa7);
+        pos += 31;
+        OK(nj_call(vm, streams[i], ISTREAM, "read", "([B)I", a, &result) == NJ_OK && result.i == 4096);
+        for (j = 0; j < 4096u; ++j) {
+            if (bytes->u.bytes[j] != file_input_byte(pos + j, i)) matches = 0;
+        }
+        OK_MSG(matches, "read(byte[]) dispatches to the file range method");
+        pos += 4096;
+        a[0] = vlong(1048576u - 9u - pos);
+        OK(nj_call(vm, streams[i], ISTREAM, "skip", "(J)J", a, &result) == NJ_OK &&
+           result.j == 1048576u - 9u - pos);
+        pos = 1048576u - 9u;
+        a[0] = vref(bytes); a[1] = vint(3); a[2] = vint(41);
+        OK(nj_call(vm, streams[i], ISTREAM, "read", "([BII)I", a, &result) == NJ_OK && result.i == 41);
+        for (j = 0; j < 41u; ++j) {
+            if (bytes->u.bytes[3u + j] != file_input_byte(pos + j, i)) matches = 0;
+        }
+        OK_MSG(matches, "stream %u reads across 4 KB and 1 MB boundaries", i);
+        pos += 41;
+        if (!libc_fallback) {
+            nj_s4 (*saved_read)(void *, nj_file *, void *, nj_u4) = local.file_read;
+            int (*saved_seek)(void *, nj_file *, nj_u4) = local.file_seek;
+            /* Installed port errors propagate instead of retrying the same
+             * readable path via libc, and must leave the position unchanged. */
+            local.file_read = file_input_read_failure;
+            file_input_error(vm, streams[i], "read", "()I", NULL, "IOException");
+            local.file_read = saved_read;
+            local.file_seek = file_input_seek_failure;
+            file_input_error(vm, streams[i], "read", "()I", NULL, "IOException");
+            local.file_seek = saved_seek;
+        }
+        OK(nj_call(vm, streams[i], ISTREAM, "available", "()I", NULL, &result) == NJ_OK &&
+           result.i == (nj_s4)(sizes[i] - pos));
+        a[0] = vlong(0x100000000LL + 7);
+        OK_MSG(nj_call(vm, streams[i], ISTREAM, "skip", "(J)J", a, &result) == NJ_OK &&
+               result.j == sizes[i] - pos, "long skip clamps at EOF without 32-bit truncation");
+        OK(nj_call(vm, streams[i], ISTREAM, "available", "()I", NULL, &result) == NJ_OK && result.i == 0);
+        OK(nj_call(vm, streams[i], ISTREAM, "read", "()I", NULL, &result) == NJ_OK && result.i == -1);
+        a[0] = vref(bytes); a[1] = vint(0); a[2] = vint(1);
+        OK(nj_call(vm, streams[i], ISTREAM, "read", "([BII)I", a, &result) == NJ_OK && result.i == -1);
+        a[1] = vint((nj_s4)bytes->length); a[2] = vint(0);
+        OK(nj_call(vm, streams[i], ISTREAM, "read", "([BII)I", a, &result) == NJ_OK && result.i == 0);
+        a[0] = vlong(0x7fffffffffffffffLL);
+        OK(nj_call(vm, streams[i], ISTREAM, "skip", "(J)J", a, &result) == NJ_OK && result.j == 0);
+        a[0] = vref(NULL); a[1] = vint(0); a[2] = vint(0);
+        file_input_error(vm, streams[i], "read", "([BII)I", a, "NullPointerException");
+        a[0] = vref(bytes); a[1] = vint(-1); a[2] = vint(0);
+        file_input_error(vm, streams[i], "read", "([BII)I", a, "IndexOutOfBoundsException");
+        a[1] = vint(0); a[2] = vint(-1);
+        file_input_error(vm, streams[i], "read", "([BII)I", a, "IndexOutOfBoundsException");
+        a[1] = vint(0x7fffffff); a[2] = vint(0x7fffffff);
+        file_input_error(vm, streams[i], "read", "([BII)I", a, "IndexOutOfBoundsException");
+        OK(nj_call(vm, streams[i], ISTREAM, "close", "()V", NULL, NULL) == NJ_OK);
+        OK(nj_call(vm, streams[i], ISTREAM, "close", "()V", NULL, NULL) == NJ_OK);
+        file_input_error(vm, streams[i], "read", "()I", NULL, "IOException");
+        a[0] = vref(bytes); a[1] = vint(0); a[2] = vint(0);
+        file_input_error(vm, streams[i], "read", "([BII)I", a, "IOException");
+        a[0] = vlong(-1);
+        file_input_error(vm, streams[i], "skip", "(J)J", a, "IOException");
+        file_input_error(vm, streams[i], "available", "()I", NULL, "IOException");
+    }
+    /* Reopen through the data wrapper and check a short read across EOF. */
+    for (i = 0; i < 3u; ++i) {
+        nj_u4 mark = nj_root_mark(vm);
+        nj_ref connection, in;
+        int matches = 1;
+        snprintf(url, sizeof(url), "file:///root/file-input-%d-%u.bin", libc_fallback, i);
+        a[0] = vref(nj_root(vm, nj_string_new(vm, url)));
+        result.r = NULL;
+        OK(nj_call(vm, NULL, "javax/microedition/io/Connector", "open",
+                   "(Ljava/lang/String;)Ljavax/microedition/io/Connection;", a, &result) == NJ_OK);
+        connection = nj_root(vm, result.r);
+        if (!connection) { nj_root_release(vm, mark); goto done; }
+        result.r = NULL;
+        OK(nj_call(vm, connection, fc, "openDataInputStream", "()Ljava/io/DataInputStream;",
+                   NULL, &result) == NJ_OK);
+        in = nj_root(vm, result.r);
+        OK(in != NULL);
+        if (!in) { nj_root_release(vm, mark); goto done; }
+        a[0] = vlong(sizes[i] - 5u);
+        OK(nj_call(vm, in, ISTREAM, "skip", "(J)J", a, &result) == NJ_OK && result.j == sizes[i] - 5u);
+        memset(bytes->u.bytes, 0xa7, bytes->length);
+        a[0] = vref(bytes); a[1] = vint(2); a[2] = vint(23);
+        OK(nj_call(vm, in, ISTREAM, "read", "([BII)I", a, &result) == NJ_OK && result.i == 5);
+        for (j = 0; j < 5u; ++j) {
+            if (bytes->u.bytes[2u + j] != file_input_byte(sizes[i] - 5u + j, i)) matches = 0;
+        }
+        OK(matches && bytes->u.bytes[1] == 0xa7 && bytes->u.bytes[7] == 0xa7);
+        OK(nj_call(vm, in, ISTREAM, "read", "([B)I", a, &result) == NJ_OK && result.i == -1);
+        OK(nj_call(vm, in, ISTREAM, "close", "()V", NULL, NULL) == NJ_OK);
+        nj_root_release(vm, mark);
+    }
+    {
+        const char *fis = "java/io/FileInputStream";
+        nj_ref empty, missing;
+        const char *error;
+        FILE *fp = fopen(paths[0], "wb");
+        OK(fp != NULL);
+        if (!fp) goto done;
+        OK(fclose(fp) == 0);
+        a[0] = vref(nj_root(vm, nj_string_new(vm, paths[0])));
+        empty = nj_root(vm, construct(vm, fis, "(Ljava/lang/String;)V", a, "empty file input"));
+        OK(empty != NULL);
+        if (!empty) goto done;
+        OK(nj_call(vm, empty, ISTREAM, "available", "()I", NULL, &result) == NJ_OK && result.i == 0);
+        OK(nj_call(vm, empty, ISTREAM, "read", "()I", NULL, &result) == NJ_OK && result.i == -1);
+        a[0] = vref(bytes); a[1] = vint(0); a[2] = vint(0);
+        OK(nj_call(vm, empty, ISTREAM, "read", "([BII)I", a, &result) == NJ_OK && result.i == 0);
+        OK(nj_call(vm, empty, ISTREAM, "close", "()V", NULL, NULL) == NJ_OK);
+        OK(remove(paths[0]) == 0);
+        missing = nj_root(vm, nj_object_new(vm, fis));
+        OK(missing != NULL);
+        if (!missing) goto done;
+        a[0] = vref(nj_root(vm, nj_string_new(vm, paths[0])));
+        OK(nj_call_special(vm, missing, fis, "<init>", "(Ljava/lang/String;)V", a, NULL) != NJ_OK);
+        error = nj_exception_describe(vm);
+        OK(error && strstr(error, "IOException"));
+        nj_clear_exception(vm);
+    }
+    if (libc_fallback) {
+        OK(nj_port_headless_file_opens(port) == opens);
+        OK(nj_port_headless_file_reads(port) == reads);
+    } else {
+        OK(nj_port_headless_file_opens(port) > opens);
+        OK(nj_port_headless_file_reads(port) > reads);
+    }
+    OK_MSG(nj_port_headless_file_opens(port) - opens ==
+           nj_port_headless_file_closes(port) - closes,
+           "every host file handle is closed before an operation returns");
+done:
+    if (vm) {
+        clean(vm, "file input stream");
+        nj_vm_destroy(vm);
+    }
+    for (i = 0; i < (unsigned)created; ++i) remove(paths[i]);
+}
+
 int main(void)
 {
     nj_port port;
@@ -4936,6 +5477,12 @@ int main(void)
         return 2;
     }
 
+    test_weak_references(&port);
+    test_file_roots(&port);
+    test_file_output_stream(&port, 0);
+    test_file_output_stream(&port, 1);
+    test_file_input_stream(&port, 0);
+    test_file_input_stream(&port, 1);
     test_null_data_input(vm);
     test_round_trip(vm);
     test_read_utf_static(vm);

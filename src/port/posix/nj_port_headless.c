@@ -29,6 +29,7 @@
 #include "nj2me/nj_types.h"
 #include "nj2me/nj.h"
 #include "nj_posix_clock.h"
+#include "nj_posix_dir.h"
 #if NJ_HAVE_POSIX_NETWORK
 #include "nj_posix_network.h"
 #endif
@@ -304,109 +305,6 @@ static const char *hl_device_property(void *ud, const char *key)
     return NULL;                    /* honestly unknown */
 }
 
-
-/* ------------------------------------------------------------------ */
-/* Directory iteration                                                 */
-/* ------------------------------------------------------------------ */
-/*
- * POSIX opendir/readdir, with the handle wrapped so the runtime never sees a
- * DIR*.  "." and ".." are skipped: a MIDlet listing a directory wants its
- * contents, and every implementation of JSR 75 that returned them would put
- * two entries in a file picker that cannot be opened.
- */
-/*
- * POSIX opendir/readdir, with the handle wrapped so the runtime never sees a
- * DIR* and the directory's own path travels with the iteration - stat() needs
- * the full path to answer isDirectory(), and a dirent does not carry one.
- *
- * "." and ".." are skipped: a MIDlet listing a directory wants its CONTENTS,
- * and returning them would put two entries in a file picker that cannot be
- * opened.
- */
-typedef struct hl_dir {
-    DIR  *d;
-    char  path[1024];
-} hl_dir;
-
-static int hl_dir_open(void *ud, const char *path, void **out_handle)
-{
-    hl_dir *h;
-    nj_size n = 0;
-    (void)ud;
-
-    if (!path || !out_handle) {
-        return -1;
-    }
-    h = (hl_dir *)malloc(sizeof(*h));
-    if (!h) {
-        return -1;
-    }
-    h->d = opendir(path);
-    if (!h->d) {
-        free(h);
-        return -1;
-    }
-    while (path[n] && n + 1u < sizeof(h->path)) {
-        h->path[n] = path[n];
-        n++;
-    }
-    h->path[n] = '\0';
-    *out_handle = h;
-    return 0;
-}
-
-static int hl_dir_next(void *ud, void *handle, char *name, nj_size cap,
-                       int *is_dir)
-{
-    hl_dir *h = (hl_dir *)handle;
-    struct dirent *e;
-    (void)ud;
-
-    if (!h || !name || cap == 0u) {
-        return -1;
-    }
-    while ((e = readdir(h->d)) != NULL) {
-        nj_size n = 0;
-        char full[2048];
-        struct stat st;
-
-        if (e->d_name[0] == '.' &&
-            (e->d_name[1] == '\0' ||
-             (e->d_name[1] == '.' && e->d_name[2] == '\0'))) {
-            continue;
-        }
-        while (e->d_name[n] && n + 1u < cap) {
-            name[n] = e->d_name[n];
-            n++;
-        }
-        name[n] = '\0';
-        if (is_dir) {
-            /*
-             * stat() rather than the dirent's d_type, which is not populated on
-             * every filesystem.  A wrong isDirectory() makes a file picker
-             * offer files as folders, and the failure only shows when the user
-             * taps one.
-             */
-            *is_dir = 0;
-            if (snprintf(full, sizeof(full), "%s/%s", h->path, name) > 0 &&
-                stat(full, &st) == 0) {
-                *is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
-            }
-        }
-        return 1;
-    }
-    return 0;
-}
-
-static void hl_dir_close(void *ud, void *handle)
-{
-    hl_dir *h = (hl_dir *)handle;
-    (void)ud;
-    if (h) {
-        closedir(h->d);
-        free(h);
-    }
-}
 
 /* ------------------------------------------------------------------ */
 /* Files                                                               */
@@ -1267,13 +1165,13 @@ nj_status nj_port_headless_ex(nj_port *out, int width, int height,
     out->code_alloc = hl_code_alloc;
     out->code_commit = hl_code_commit;
     out->code_free = hl_code_free;
-    out->dir_open = hl_dir_open;
+    out->dir_open = nj_posix_dir_open;
 #if defined(NJ_USE_LIBC) && NJ_USE_LIBC && defined(NJ_HAVE_ZLIB_H)
     out->inflate = hl_inflate;
     out->inflate_raw = hl_inflate_raw;
 #endif
-    out->dir_next = hl_dir_next;
-    out->dir_close = hl_dir_close;
+    out->dir_next = nj_posix_dir_next;
+    out->dir_close = nj_posix_dir_close;
     out->file_open = hl_file_open;
     out->file_read = hl_file_read;
     out->file_write = hl_file_write;

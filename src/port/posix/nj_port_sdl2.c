@@ -32,6 +32,7 @@
 #endif
 #include "nj2me/nj_port.h"
 #include "nj_posix_clock.h"
+#include "nj_posix_dir.h"
 #include "nj2me/nj_vm.h"       /* speed + save-state, applied on the frame */
 
 #include "nj_sdl2_font.h"
@@ -2164,6 +2165,9 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
     out->sleep_ms = sdl_sleep_ms;
     out->idle = sdl_idle;
     out->device_property = sdl_device_property;
+    out->dir_open = nj_posix_dir_open;
+    out->dir_next = nj_posix_dir_next;
+    out->dir_close = nj_posix_dir_close;
     out->tone_play = sdl_tone_play;
     out->tone_stop = sdl_tone_stop;
     out->pcm_open = sdl_pcm_open;
