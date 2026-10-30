@@ -20,7 +20,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#  include "nj_posix_win32.h"
+#else
 #  include <sys/stat.h>
 #  include <sys/types.h>
 #  include <errno.h>
@@ -69,11 +71,27 @@ static int cfg_join(char *out, int cap, const char *a, const char *b)
     int n;
 
     if (!out || cap <= 0 || !a || !b) return 0;
+#if defined(_WIN32)
+    n = snprintf(out, (size_t)cap, "%s\\%s", a, b);
+#else
     n = snprintf(out, (size_t)cap, "%s/%s", a, b);
+#endif
     return n > 0 && n < cap;
 }
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+/* The same two operations through the wide API: the default settings path
+ * lives under %APPDATA%, which is not always an ANSI path. */
+static int cfg_mkdir_p(const char *path)
+{
+    return nj_win32_mkdir_p(path);
+}
+
+static int cfg_is_dir(const char *path)
+{
+    return nj_win32_is_dir(path);
+}
+#else
 /* mkdir -p for the directories we own.  Existing components are fine. */
 static int cfg_mkdir_p(const char *path)
 {
@@ -100,18 +118,6 @@ static int cfg_is_dir(const char *path)
 
     return path && path[0] != '\0' && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
-#else
-static int cfg_mkdir_p(const char *path)
-{
-    (void)path;
-    return 1; /* the file write reports its own failure */
-}
-
-static int cfg_is_dir(const char *path)
-{
-    (void)path;
-    return 0;
-}
 #endif
 
 /* ---------------------------------------------------------------- */
@@ -126,6 +132,20 @@ int nj_client_settings_path(char *out, int cap)
     char dir[NJ_CLIENT_PATH_MAX];
 
     if (!out || cap <= 0) return 0;
+#if defined(_WIN32)
+    /* The Windows convention, and the only location that is stable when the
+     * process is started from a shortcut with a different HOME: roaming
+     * application data, not $HOME/.config.  Keep the old fallback below when
+     * APPDATA is somehow absent. */
+    {
+        char appdata[NJ_CLIENT_PATH_MAX];
+        if (nj_win32_getenv_utf8("APPDATA", appdata, (int)sizeof(appdata)) &&
+            appdata[0] != '\0') {
+            if (!cfg_join(base, (int)sizeof(base), appdata, NJ_APP_DIR)) return 0;
+            return cfg_join(out, cap, base, NJ_CONFIG_NAME);
+        }
+    }
+#endif
     if (xdg) {
         if (!cfg_copy(base, (int)sizeof(base), xdg)) return 0;
     } else if (cfg_home(home, (int)sizeof(home))) {
@@ -146,14 +166,30 @@ int nj_client_default_games_dir(char *out, int cap)
     char games[NJ_CLIENT_PATH_MAX];
 
     if (!out || cap <= 0) return 0;
-    if (xdg) {
-        if (!cfg_copy(base, (int)sizeof(base), xdg)) return 0;
-    } else if (cfg_home(home, (int)sizeof(home))) {
-        if (!cfg_join(base, (int)sizeof(base), home, ".local/share")) return 0;
-    } else {
-        return 0;
+#if defined(_WIN32)
+    /* Windows convention: %APPDATA%\nano_j2me\games, the same root the
+     * settings file uses.  The old HOME rule stays reachable when the
+     * environment is missing. */
+    {
+        char appdata[NJ_CLIENT_PATH_MAX];
+        if (nj_win32_getenv_utf8("APPDATA", appdata, (int)sizeof(appdata)) &&
+            appdata[0] != '\0') {
+            if (!cfg_join(dir, (int)sizeof(dir), appdata, NJ_APP_DIR)) return 0;
+        } else
+#endif
+    {
+        if (xdg) {
+            if (!cfg_copy(base, (int)sizeof(base), xdg)) return 0;
+        } else if (cfg_home(home, (int)sizeof(home))) {
+            if (!cfg_join(base, (int)sizeof(base), home, ".local/share")) return 0;
+        } else {
+            return 0;
+        }
+        if (!cfg_join(dir, (int)sizeof(dir), base, NJ_APP_DIR)) return 0;
     }
-    if (!cfg_join(dir, (int)sizeof(dir), base, NJ_APP_DIR)) return 0;
+#if defined(_WIN32)
+    }
+#endif
     if (!cfg_join(games, (int)sizeof(games), dir, "games")) return 0;
     if (!cfg_mkdir_p(games) && !cfg_is_dir(games)) return 0;
     return cfg_copy(out, cap, games);
@@ -293,7 +329,11 @@ int nj_client_settings_load(nj_client_settings *s, const char *path)
         if (!nj_client_settings_path(file, (int)sizeof(file))) return 0;
         path = file;
     }
+#if defined(_WIN32)
+    f = nj_win32_fopen(path, "rb");
+#else
     f = fopen(path, "rb");
+#endif
     if (!f) return 0;
     loaded = 1;
     while (fgets(line, (int)sizeof(line), f)) {
@@ -382,12 +422,20 @@ int nj_client_settings_save(const nj_client_settings *s, const char *path)
     if (!cfg_copy(tmp, (int)sizeof(tmp), path)) return 0;
     if (!cfg_copy(dir, (int)sizeof(dir), path)) return 0;
     n = (int)strlen(dir);
+#if defined(_WIN32)
+    while (n > 0 && dir[n - 1] != '/' && dir[n - 1] != '\\') n--;
+#else
     while (n > 0 && dir[n - 1] != '/') n--;
+#endif
     if (n > 0) dir[n - 1] = '\0';
     if (dir[0] != '\0') (void)cfg_mkdir_p(dir);
     n = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
     if (n <= 0 || n >= (int)sizeof(tmp)) return 0;
+#if defined(_WIN32)
+    f = nj_win32_fopen(tmp, "wb");
+#else
     f = fopen(tmp, "wb");
+#endif
     if (!f) return 0;
     fprintf(f, "# nano_j2me desktop client settings\n");
     fprintf(f, "games_dir = %s\n", s->games_dir);
@@ -415,12 +463,25 @@ int nj_client_settings_save(const nj_client_settings *s, const char *path)
         }
     }
     if (fclose(f) != 0) {
-        remove(tmp);
+#if defined(_WIN32)
+        (void)nj_win32_remove(tmp);
+#else
+        (void)remove(tmp);
+#endif
         return 0;
     }
+#if defined(_WIN32)
+    /* A second save must replace the file written by the first one; CRT
+     * rename() refuses to overwrite, so this goes through MoveFileExW. */
+    if (nj_win32_replace(tmp, path) != 0) {
+        (void)nj_win32_remove(tmp);
+        return 0;
+    }
+#else
     if (rename(tmp, path) != 0) {
-        remove(tmp);
+        (void)remove(tmp);
         return 0;
     }
+#endif
     return 1;
 }

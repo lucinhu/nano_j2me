@@ -29,12 +29,20 @@
 #  define NJ_LIB_MMAP 0
 #endif
 
-/* Directory enumeration, same libc guard as src/midp/nj_lib_rms.c. */
-#if NJ_USE_LIBC && !defined(_WIN32)
-#  include <dirent.h>
-#  include <sys/stat.h>
-#  include <unistd.h>
-#  define NJ_LIB_DIRENT 1
+/* Directory enumeration, same libc guard as src/midp/nj_lib_rms.c.  Windows
+ * counts as a libc-hosting desktop here too, but enumerates with
+ * FindFirstFileW: mingw's dirent.h is ANSI-only and a jar named 1942空战_10403
+ * would show up as question marks. */
+#if NJ_USE_LIBC
+#  if defined(_WIN32)
+#    include "nj_posix_win32.h"
+#    define NJ_LIB_DIRENT 1
+#  else
+#    include <dirent.h>
+#    include <sys/stat.h>
+#    include <unistd.h>
+#    define NJ_LIB_DIRENT 1
+#  endif
 #else
 #  define NJ_LIB_DIRENT 0
 #endif
@@ -227,7 +235,36 @@ static int nj_lib_abs_path(const char *in, char *out, size_t cap)
         memcpy(out, in, n + 1u);
         return 1;
     }
-#if NJ_LIB_DIRENT
+#if defined(_WIN32)
+    /* A Windows path is also absolute with a drive ("C:/x") or a backslash.
+     * Everything else is relative and gets the current directory, which the
+     * wide API can return through an ANSI-hostile working directory too. */
+    if (in[0] == '\\' ||
+        (((in[0] >= 'A' && in[0] <= 'Z') || (in[0] >= 'a' && in[0] <= 'z')) &&
+         in[1] == ':')) {
+        n = strlen(in);
+        if (n >= cap) {
+            return 0;
+        }
+        memcpy(out, in, n + 1u);
+        return 1;
+    }
+    {
+        char cwd[NJ_LIB_PATH_MAX];
+
+        if (!nj_win32_getcwd(cwd, (int)sizeof cwd)) {
+            return 0;
+        }
+        n = strlen(cwd);
+        if (n + 1u + strlen(in) + 1u > cap) {
+            return 0;
+        }
+        memcpy(out, cwd, n);
+        out[n++] = '/';
+        memcpy(out + n, in, strlen(in) + 1u);
+        return 1;
+    }
+#elif NJ_LIB_DIRENT
     {
         char cwd[NJ_LIB_PATH_MAX];
 
@@ -278,68 +315,15 @@ typedef struct nj_lib_jar {
 #define NJ_LIB_JAR_NO_FILE (-1)
 
 #if defined(_WIN32)
-extern FILE *_wfopen(const wchar_t *name, const wchar_t *mode);
-
 /*
- * fopen() in the C runtime cannot open a UTF-8 path on Windows, so decode
- * the path to UTF-16 and use the wide API.  No windows.h here on purpose:
- * the library target stays free of platform SDK headers.
+ * The wide API: fopen() goes through the ANSI code page and cannot open a jar
+ * whose name is Chinese.  The UTF-8 -> UTF-16 conversion lives in
+ * nj_posix_win32.h (included from the top under _WIN32), shared with the
+ * ports, so this is a one-line call.
  */
 static FILE *nj_lib_fopen_read(const char *path)
 {
-    wchar_t wide[NJ_LIB_PATH_MAX + 1u];
-    size_t in = 0;
-    size_t out = 0;
-
-    if (path == NULL) {
-        return NULL;
-    }
-    while (path[in] != '\0') {
-        unsigned char c = (unsigned char)path[in];
-        unsigned long cp;
-        int extra;
-
-        if (c < 0x80u) {
-            cp = (unsigned long)c;
-            extra = 0;
-        } else if ((c & 0xE0u) == 0xC0u) {
-            cp = (unsigned long)(c & 0x1Fu);
-            extra = 1;
-        } else if ((c & 0xF0u) == 0xE0u) {
-            cp = (unsigned long)(c & 0x0Fu);
-            extra = 2;
-        } else if ((c & 0xF8u) == 0xF0u) {
-            cp = (unsigned long)(c & 0x07u);
-            extra = 3;
-        } else {
-            return NULL;
-        }
-        in++;
-        while (extra > 0) {
-            unsigned char cc = (unsigned char)path[in];
-            if ((cc & 0xC0u) != 0x80u) {
-                return NULL;
-            }
-            cp = (cp << 6) | (unsigned long)(cc & 0x3Fu);
-            in++;
-            extra--;
-        }
-        if (cp >= 0x10000ul) {
-            if (out + 2u > (size_t)NJ_LIB_PATH_MAX) {
-                return NULL;
-            }
-            cp -= 0x10000ul;
-            wide[out++] = (wchar_t)(0xD800ul + (cp >> 10));
-            wide[out++] = (wchar_t)(0xDC00ul + (cp & 0x3FFul));
-        } else {
-            if (out >= (size_t)NJ_LIB_PATH_MAX) {
-                return NULL;
-            }
-            wide[out++] = (wchar_t)cp;
-        }
-    }
-    wide[out] = 0;
-    return _wfopen(wide, L"rb");
+    return (path != NULL) ? nj_win32_fopen(path, "rb") : NULL;
 }
 #else
 static FILE *nj_lib_fopen_read(const char *path)
@@ -882,7 +866,77 @@ static int nj_lib_collect_jars(const char *dir, char ***names_out, int *count_ou
 {
     *names_out = NULL;
     *count_out = 0;
-#if NJ_LIB_DIRENT
+#if NJ_LIB_DIRENT && defined(_WIN32)
+    {
+        char **names = NULL;
+        int count = 0;
+        int cap = 0;
+        int failed = 0;
+        nj_win32_dir d;
+
+        if (!nj_win32_dir_open(&d, dir)) {
+            return 0;
+        }
+        for (;;) {
+            char name[1024];
+            char path[NJ_LIB_PATH_MAX + NJ_LIB_FILE_MAX + 2];
+            int is_dir = 0;
+            unsigned long long size = 0;
+            char *copy;
+            size_t len;
+            int rc = nj_win32_dir_next(&d, name, (int)sizeof name, &is_dir,
+                                       &size);
+
+            if (rc < 0) {
+                failed = 1;
+                break;
+            }
+            if (rc == 0) {
+                break;
+            }
+            if (is_dir || !nj_lib_is_jar_name(name)) {
+                continue;
+            }
+            len = strlen(name);
+            if (len >= (size_t)NJ_LIB_FILE_MAX) {
+                continue;                   /* cannot be stored in the entry */
+            }
+            if (!nj_lib_join(path, sizeof path, dir, name) ||
+                !nj_win32_stat(path, NULL)) {
+                continue;                   /* gone between listing and open */
+            }
+            if (count == cap) {
+                int ncap = (cap > 0) ? cap * 2 : NJ_LIB_INIT_CAP;
+                char **grown = (char **)realloc(names, (size_t)ncap * sizeof *grown);
+                if (grown == NULL) {
+                    failed = 1;
+                    break;
+                }
+                names = grown;
+                cap = ncap;
+            }
+            copy = (char *)malloc(len + 1u);
+            if (copy == NULL) {
+                failed = 1;
+                break;
+            }
+            memcpy(copy, name, len + 1u);
+            names[count++] = copy;
+        }
+        nj_win32_dir_close(&d);
+        if (failed) {
+            int i;
+            for (i = 0; i < count; i++) {
+                free(names[i]);
+            }
+            free(names);
+            return 0;
+        }
+        *names_out = names;
+        *count_out = count;
+        return 1;
+    }
+#elif NJ_LIB_DIRENT
     {
         char **names = NULL;
         int count = 0;
@@ -1234,7 +1288,68 @@ int nj_lib_list_dir(const char *dir, nj_lib_dir_entry **out, int *count)
     if (!nj_lib_abs_path(dir, abs, sizeof abs)) {
         return 0;
     }
-#if NJ_LIB_DIRENT
+#if NJ_LIB_DIRENT && defined(_WIN32)
+    {
+        nj_lib_dir_entry *list = NULL;
+        int n = 0;
+        int cap = 0;
+        nj_win32_dir d;
+
+        if (!nj_win32_dir_open(&d, abs)) {
+            return 0;
+        }
+        for (;;) {
+            char name[1024];
+            int is_dir = 0;
+            unsigned long long size = 0;
+            nj_lib_dir_entry row;
+            size_t len;
+            int rc = nj_win32_dir_next(&d, name, (int)sizeof name, &is_dir,
+                                       &size);
+
+            if (rc < 0) {
+                free(list);
+                nj_win32_dir_close(&d);
+                return 0;
+            }
+            if (rc == 0) {
+                break;
+            }
+            len = strlen(name);
+            if (len >= (size_t)NJ_LIB_FILE_MAX) {
+                continue;
+            }
+            memset(&row, 0, sizeof row);
+            nj_lib_copy_utf8(row.name, sizeof row.name, name);
+            if (is_dir) {
+                row.is_dir = 1;
+            } else if (nj_lib_is_jar_name(name)) {
+                row.is_dir = 0;
+                row.size = nj_lib_size_u4((nj_u8)size);
+            } else {
+                continue;
+            }
+            if (!nj_lib_list_push(&list, &n, &cap, &row)) {
+                free(list);
+                nj_win32_dir_close(&d);
+                return 0;
+            }
+        }
+        nj_win32_dir_close(&d);
+        if (n > 1) {
+            qsort(list, (size_t)n, sizeof *list, nj_lib_dir_cmp);
+        }
+        if (out != NULL) {
+            *out = list;
+        } else {
+            free(list);
+        }
+        if (count != NULL) {
+            *count = n;
+        }
+        return n;
+    }
+#elif NJ_LIB_DIRENT
     {
         nj_lib_dir_entry *list = NULL;
         int n = 0;

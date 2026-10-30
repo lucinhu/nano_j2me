@@ -34,9 +34,13 @@
 #include "nj_posix_network.h"
 #endif
 
+#if defined(_WIN32)
+#include "nj_posix_win32.h"     /* _wfopen/FindFirstFileW, VirtualAlloc is below */
+#else
 #include <sys/mman.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#endif
 
 #include <stdlib.h>
 #include <string.h>
@@ -180,12 +184,17 @@ static void hl_sleep_ms(void *ud, nj_u4 ms)
      * every counter said the game was running.
      */
 #if defined(NJ_USE_LIBC) && NJ_USE_LIBC
+#  if defined(_WIN32)
+    /* nanosleep is POSIX; Sleep() is the Win32 spelling of the same wait. */
+    nj_win32_sleep_ms((unsigned long)ms);
+#  else
     if (ms > 0u) {
         struct timespec ts;
         ts.tv_sec = (time_t)(ms / 1000u);
         ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
         nanosleep(&ts, NULL);
     }
+#  endif
 #else
     (void)ms;
 #endif
@@ -234,11 +243,21 @@ static void *hl_code_alloc(void *ud, nj_size n)
         return NULL;
     }
     total = n + sizeof(hl_code_block);
+#if defined(_WIN32)
+    /* VirtualAlloc is the Windows equivalent of an anonymous mapping. The
+     * pages start read/write, exactly like mmap with PROT_READ|PROT_WRITE. */
+    p = VirtualAlloc(NULL, (SIZE_T)total, MEM_COMMIT | MEM_RESERVE,
+                     PAGE_READWRITE);
+    if (p == NULL) {
+        return NULL;
+    }
+#else
     p = mmap(NULL, (size_t)total, PROT_READ | PROT_WRITE,
              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) {
         return NULL;
     }
+#endif
     ((hl_code_block *)p)->len = total;
     return (unsigned char *)p + sizeof(hl_code_block);
 }
@@ -258,22 +277,41 @@ static int hl_code_commit(void *ud, void *p, nj_size n)
         return -1;              /* the caller is describing someone else's block */
     }
     __builtin___clear_cache((char *)p, (char *)p + n);
+#if defined(_WIN32)
+    {
+        DWORD old_protect = 0;
+        /* W^X: written while writable, executed only after the flip. */
+        if (!VirtualProtect(base, (SIZE_T)total, PAGE_EXECUTE_READ,
+                            &old_protect)) {
+            return -1;
+        }
+    }
+#else
     if (mprotect(base, (size_t)total, PROT_READ | PROT_EXEC) != 0) {
         return -1;
     }
+#endif
     return 0;
 }
 
 static void hl_code_free(void *ud, void *p, nj_size n)
 {
-    nj_size total;
     (void)ud;
     (void)n;
     if (!p) {
         return;
     }
-    total = ((hl_code_block *)((unsigned char *)p - sizeof(hl_code_block)))->len;
-    (void)munmap((unsigned char *)p - sizeof(hl_code_block), (size_t)total);
+#if defined(_WIN32)
+    /* MEM_RELEASE frees the whole reservation; the size must be zero. */
+    (void)VirtualFree((unsigned char *)p - sizeof(hl_code_block), 0u,
+                      MEM_RELEASE);
+#else
+    {
+        nj_size total =
+            ((hl_code_block *)((unsigned char *)p - sizeof(hl_code_block)))->len;
+        (void)munmap((unsigned char *)p - sizeof(hl_code_block), (size_t)total);
+    }
+#endif
 }
 
 /*
@@ -358,19 +396,32 @@ static int hl_file_open(void *ud, const char *name, const char *mode,
     if (!name || !out) {
         return -1;
     }
+#if defined(_WIN32)
+    fp = nj_win32_fopen(name, mode ? mode : "rb");
+#else
     fp = fopen(name, mode ? mode : "rb");
+#endif
     if (!fp) {
         return -1;
     }
     out->handle = (void *)fp;
     out->pos = 0u;
     out->size = 0u;
+#if defined(_WIN32)
+    {
+        nj_win32_file_info info;
+        if (nj_win32_stat(name, &info) && info.size > 0u) {
+            out->size = (nj_u4)(info.size > 0xFFFFFFFFu ? 0xFFFFFFFFu : info.size);
+        }
+    }
+#else
     {
         struct stat st;
         if (stat(name, &st) == 0 && st.st_size > 0) {
             out->size = (nj_u4)st.st_size;
         }
     }
+#endif
     s->file_opens++;
     hl_note_path(s, name, mode);
     return 0;
@@ -440,17 +491,27 @@ static int hl_file_remove(void *ud, const char *name)
     if (!name) {
         return -1;
     }
+#if defined(_WIN32)
+    return nj_win32_remove(name);
+#else
     return remove(name) == 0 ? 0 : -1;
+#endif
 }
 
 static int hl_file_exists(void *ud, const char *name)
 {
-    struct stat st;
     (void)ud;
     if (!name) {
         return 0;
     }
-    return stat(name, &st) == 0 ? 1 : 0;
+#if defined(_WIN32)
+    return nj_win32_stat(name, NULL) ? 1 : 0;
+#else
+    {
+        struct stat st;
+        return stat(name, &st) == 0 ? 1 : 0;
+    }
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -664,7 +725,11 @@ static int hl_display_init(void *ud, int *w, int *h, int *stride, void **pixels)
 
 static void ppm_dump(nj_headless_state *s, const char *path)
 {
+#if defined(_WIN32)
+    FILE *f = nj_win32_fopen(path, "wb");
+#else
     FILE *f = fopen(path, "wb");
+#endif
     int x, y;
 
     if (!f) {
@@ -709,11 +774,17 @@ static void hl_display_present(void *ud, int x, int y, int w, int h)
          * rather than inside it, and the run still exited 0, so the dump
          * looked like it had silently written nothing.
          */
-        struct stat st;
         const char *p = s->dump_prefix;
         size_t n = strlen(p);
+#if defined(_WIN32)
+        int prefix_is_dir = (n > 0u && p[n - 1u] != '/' && nj_win32_is_dir(p));
+#else
+        struct stat st;
+        int prefix_is_dir = (n > 0u && p[n - 1u] != '/' &&
+                             stat(p, &st) == 0 && S_ISDIR(st.st_mode));
+#endif
 
-        if (n > 0u && p[n - 1u] != '/' && stat(p, &st) == 0 && S_ISDIR(st.st_mode)) {
+        if (prefix_is_dir) {
             snprintf(path, sizeof(path), "%s/%05d.ppm", p, s->frame);
         } else {
             snprintf(path, sizeof(path), "%s%05d.ppm", p, s->frame);

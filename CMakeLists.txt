@@ -243,7 +243,10 @@ add_library(nj2me::nj2me ALIAS nj2me)
 
 target_include_directories(nj2me
   PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/include
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+          # nj_posix_win32.h: the mingw-w64 shims shared by the POSIX-shaped
+          # port sources and the hosted client library.
+          ${CMAKE_CURRENT_SOURCE_DIR}/src/port/posix)
 
 # The headless port inflates .m3g sections through the nj_port.inflate hook,
 # so the library needs zlib when it is there.  A build without zlib still
@@ -390,9 +393,27 @@ if(NJ_BUILD_POSIX_NETWORK AND UNIX AND NOT ANDROID)
 endif()
 
 if(NJ_BUILD_SDL2)
+  # Save values the caller may have set on the command line.  A cross build has
+  # no pkg-config file for the *target* SDL2 (and the host's libsdl2-dev, when
+  # installed, is the wrong architecture), so accept the include/lib paths
+  # explicitly:
+  #
+  #   -DSDL2_INCLUDE_DIRS=<sdl2>/x86_64-w64-mingw32/include
+  #   -DSDL2_LIBRARIES=<sdl2>/x86_64-w64-mingw32/lib/libSDL2.dll.a
+  #
+  # The pkg-config path stays first: a native Linux build finds SDL2 exactly
+  # as before and the fallback never overrides it.
+  set(NJ_SDL2_CACHE_INCLUDE_DIRS "${SDL2_INCLUDE_DIRS}")
+  set(NJ_SDL2_CACHE_LIBRARIES "${SDL2_LIBRARIES}")
   find_package(PkgConfig QUIET)
   if(PkgConfig_FOUND)
     pkg_check_modules(SDL2 QUIET sdl2)
+  endif()
+  if(NOT SDL2_FOUND AND NJ_SDL2_CACHE_INCLUDE_DIRS AND NJ_SDL2_CACHE_LIBRARIES)
+    set(SDL2_FOUND TRUE)
+    set(SDL2_INCLUDE_DIRS "${NJ_SDL2_CACHE_INCLUDE_DIRS}")
+    set(SDL2_LIBRARIES "${NJ_SDL2_CACHE_LIBRARIES}")
+    set(SDL2_VERSION "cross cache")
   endif()
   if(SDL2_FOUND)
     target_sources(nj2me PRIVATE
@@ -418,6 +439,11 @@ endif()
 if(NJ_BUILD_CLI)
   add_executable(nj2me-cli apps/nj2me_main.c)
   target_link_libraries(nj2me-cli PRIVATE nj2me)
+  # CommandLineToArgvW: a Windows argv built from the wide command line, so a
+  # UTF-8 path argument survives the ANSI code page (see apps/nj2me_main.c).
+  if(WIN32)
+    target_link_libraries(nj2me-cli PRIVATE shell32)
+  endif()
   set_target_properties(nj2me-cli PROPERTIES OUTPUT_NAME nj2me)
   install(TARGETS nj2me-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
   # A desktop entry, so the client can be started from a menu: bare `nj2me`

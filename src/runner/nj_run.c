@@ -33,7 +33,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include <sys/stat.h>
+#if defined(_WIN32)
+#  include "nj_posix_win32.h"
+#else
+#  include <sys/stat.h>
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Port observation, without depending on a particular port             */
@@ -126,6 +130,20 @@ static void *blob_alloc(const nj_port *port, nj_size n)
     return malloc((size_t)n);
 }
 
+/*
+ * The direct-run fallback.  Windows paths are UTF-8 like the rest of the
+ * runtime, but fopen() goes through the ANSI code page and cannot open
+ * 1942空战_10403.jar, so the wide API does the same job there.
+ */
+static FILE *run_fopen_read(const char *path)
+{
+#if defined(_WIN32)
+    return nj_win32_fopen(path, "rb");
+#else
+    return fopen(path, "rb");
+#endif
+}
+
 /* Read a whole file through the port's hooks when it has them. */
 static nj_status blob_read(jar_blob *b, const char *path)
 {
@@ -204,7 +222,7 @@ static nj_status blob_read(jar_blob *b, const char *path)
     }
 
     {
-        FILE *fp = fopen(path, "rb");
+        FILE *fp = run_fopen_read(path);
         long n;
         nj_u1 *buf;
 
@@ -404,7 +422,7 @@ static char *key_script_load(const char *spec, nj_size *out_len)
         return (char *)(uintptr_t)spec;      /* borrowed: not ours to free */
     }
     path = spec + 1;
-    f = fopen(path, "rb");
+    f = run_fopen_read(path);
     if (!f) {
         return NULL;
     }
@@ -685,6 +703,9 @@ static void where_sink(void *ud, const char *line)
  */
 static void mkdir_p(const char *path)
 {
+#if defined(_WIN32)
+    (void)nj_win32_mkdir_p(path);
+#else
     char tmp[512];
     size_t i;
     size_t len = strlen(path);
@@ -701,6 +722,7 @@ static void mkdir_p(const char *path)
         }
     }
     (void)mkdir(tmp, 0777);
+#endif
 }
 
 /*
@@ -802,6 +824,11 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
     if (!port.rms_dir && opts->jar_path && opts->jar_path[0]) {
         const char *xdg = getenv("XDG_DATA_HOME");
         const char *home = getenv("HOME");
+#if defined(_WIN32)
+        char appdata[512];
+        int have_appdata = nj_win32_getenv_utf8("APPDATA", appdata,
+                                                (int)sizeof(appdata));
+#endif
         char name[96];
         int n = 0;
         const char *q = opts->jar_path + strlen(opts->jar_path);
@@ -812,6 +839,12 @@ int nj_run(const nj_port *port_in, const nj_run_opts *opts)
         if (n == 0) { memcpy(name, "game", 5); n = 4; }
         name[n] = '\0';
 
+#if defined(_WIN32)
+        if (have_appdata && appdata[0]) {
+            snprintf(rms_path, sizeof(rms_path), "%s\\nano_j2me\\%s",
+                     appdata, name);
+        } else
+#endif
         if (xdg && xdg[0]) {
             snprintf(rms_path, sizeof(rms_path), "%s/nano_j2me/%s", xdg, name);
         } else if (home && home[0]) {

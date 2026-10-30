@@ -64,7 +64,12 @@
 /* ------------------------------------------------------------------ */
 /* Native stubs when there is no C library                             */
 /* ------------------------------------------------------------------ */
-#if !NJ_USE_LIBC
+/*
+ * Windows builds the stub half too: the port has no POSIX socket layer and
+ * there is no winsock backend yet, so datagram:// must refuse the URL instead
+ * of failing to compile (and instead of pretending to work).
+ */
+#if !NJ_USE_LIBC || defined(_WIN32)
 
 static nj_status dg_no_libc(nj_vm *vm)
 {
@@ -804,7 +809,7 @@ const int nj_lib_datagram_class_count =
     (int)(sizeof(nj_lib_datagram_classes) / sizeof(nj_lib_datagram_classes[0]));
 
 const nj_native_entry nj_lib_datagram_table[] = {
-#if NJ_USE_LIBC
+#if NJ_USE_LIBC && !defined(_WIN32)
     { NJ_C_DGCONNIMPL, "newDatagram", "([BI)L" NJ_C_DGRAM ";", dg_newDatagram_data_len },
     { NJ_C_DGCONNIMPL, "newDatagram", "([BILjava/lang/String;)L" NJ_C_DGRAM ";", dg_newDatagram_data_len_addr },
     { NJ_C_DGCONNIMPL, "newDatagram", "(I)L" NJ_C_DGRAM ";", dg_newDatagram_len },

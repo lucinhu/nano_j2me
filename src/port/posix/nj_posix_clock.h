@@ -4,6 +4,33 @@
 
 #include <time.h>
 
+/*
+ * localtime_r/gmtime_r are POSIX; the Windows CRT spells them localtime_s and
+ * gmtime_s with the destination first.  Keep the rest of the function free of
+ * #ifdefs by naming the two calls.
+ */
+#if defined(_WIN32)
+static int nj_posix_localtime(const time_t *t, struct tm *out)
+{
+    return localtime_s(out, t) == 0;
+}
+
+static int nj_posix_gmtime(const time_t *t, struct tm *out)
+{
+    return gmtime_s(out, t) == 0;
+}
+#else
+static int nj_posix_localtime(const time_t *t, struct tm *out)
+{
+    return localtime_r(t, out) != NULL;
+}
+
+static int nj_posix_gmtime(const time_t *t, struct tm *out)
+{
+    return gmtime_r(t, out) != NULL;
+}
+#endif
+
 static int nj_posix_now(void *ud, nj_datetime *out)
 {
     struct timespec ts;
@@ -11,7 +38,8 @@ static int nj_posix_now(void *ud, nj_datetime *out)
     int days;
     (void)ud;
     if (!out || clock_gettime(CLOCK_REALTIME, &ts) != 0 ||
-        !localtime_r(&ts.tv_sec, &local) || !gmtime_r(&ts.tv_sec, &utc)) {
+        !nj_posix_localtime(&ts.tv_sec, &local) ||
+        !nj_posix_gmtime(&ts.tv_sec, &utc)) {
         return 0;
     }
     /* The two calendar dates differ by at most one day, including across a

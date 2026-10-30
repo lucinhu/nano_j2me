@@ -43,10 +43,15 @@
 #  include <string.h>
 #  include <stdio.h>
 #  include <stdlib.h>
-#  include <sys/stat.h>
-#  include <dirent.h>
-#  include <fcntl.h>
-#  include <unistd.h>
+#  if defined(_WIN32)
+#    include "nj_posix_win32.h"
+#    include <io.h>              /* _chsize_s, _fileno */
+#  else
+#    include <sys/stat.h>
+#    include <dirent.h>
+#    include <fcntl.h>
+#    include <unistd.h>
+#  endif
 #endif
 
 #define NJFN(name) NJ_NATIVE_FN(name)
@@ -197,7 +202,16 @@ static int fc_resolve(nj_vm *vm, const char *url, char *out, nj_size cap)
 
 static int fc_stat(const char *path, int *is_dir, nj_u4 *size, nj_s8 *mtime)
 {
-#if NJ_USE_LIBC
+#if NJ_USE_LIBC && defined(_WIN32)
+    nj_win32_file_info info;
+    if (!nj_win32_stat(path, &info)) {
+        return 0;
+    }
+    if (is_dir)  { *is_dir = info.is_dir; }
+    if (size)    { *size = (nj_u4)info.size; }
+    if (mtime)   { *mtime = (nj_s8)info.mtime_ms; }
+    return 1;
+#elif NJ_USE_LIBC
     struct stat st;
     if (stat(path, &st) != 0) {
         return 0;
@@ -605,7 +619,25 @@ NJFN(fc_truncate)
         fc_resolve(vm, path, host, sizeof(host)) != 0) {
         return nj_throw(vm, "java/io/IOException", "path is not accessible");
     }
-#if NJ_USE_LIBC
+#if NJ_USE_LIBC && defined(_WIN32)
+    {
+        /* Same rule as the POSIX path: no create, no extend, directories
+         * cannot be truncated.  "r+b" fails on both a missing file and a
+         * directory; _chsize_s is the CRT spelling of ftruncate. */
+        FILE *fp = nj_win32_fopen(host, "r+b");
+        if (!fp) {
+            return nj_throw(vm, "java/io/IOException", "cannot open for truncation");
+        }
+        if (_chsize_s(_fileno(fp), (long long)length) != 0) {
+            fclose(fp);
+            return nj_throw(vm, "java/io/IOException", "cannot truncate the file");
+        }
+        if (fclose(fp) != 0) {
+            return nj_throw(vm, "java/io/IOException", "cannot truncate the file");
+        }
+        return NJ_OK;
+    }
+#elif NJ_USE_LIBC
     {
         struct stat st;
         int fd = open(host, O_WRONLY);
@@ -805,7 +837,16 @@ NJFN(fc_create)
     if (fc_stat(host, NULL, NULL, NULL)) {
         return nj_throw(vm, "java/io/IOException", "already exists");
     }
-#if NJ_USE_LIBC
+#if NJ_USE_LIBC && defined(_WIN32)
+    {
+        FILE *fp = nj_win32_fopen(host, "wb");
+        if (!fp) {
+            return nj_throw(vm, "java/io/IOException", "cannot create");
+        }
+        fclose(fp);
+        return NJ_OK;
+    }
+#elif NJ_USE_LIBC
     {
         FILE *fp = fopen(host, "wb");
         if (!fp) {
@@ -829,7 +870,12 @@ NJFN(fc_mkdir)
         fc_resolve(vm, path, host, sizeof(host)) != 0) {
         return nj_throw(vm, "java/io/IOException", "path is not accessible");
     }
-#if NJ_USE_LIBC
+#if NJ_USE_LIBC && defined(_WIN32)
+    if (nj_win32_mkdir(host) != 0) {
+        return nj_throw(vm, "java/io/IOException", "cannot create directory");
+    }
+    return NJ_OK;
+#elif NJ_USE_LIBC
     if (mkdir(host, 0777) != 0) {
         return nj_throw(vm, "java/io/IOException", "cannot create directory");
     }
@@ -886,7 +932,13 @@ NJFN(fc_rename)
     }
     updated = nj_string_new(vm, new_url);
     if (!updated) return nj_throw_oom(vm);
-#if NJ_USE_LIBC
+#if NJ_USE_LIBC && defined(_WIN32)
+    if (nj_win32_rename(old_host, new_host) != 0) {
+        return nj_throw(vm, "java/io/IOException", "cannot rename the file");
+    }
+    fset_ref(vm, self, F_URL, "Ljava/lang/String;", updated);
+    return NJ_OK;
+#elif NJ_USE_LIBC
     if (rename(old_host, new_host) != 0) {
         return nj_throw(vm, "java/io/IOException", "cannot rename the file");
     }
@@ -907,7 +959,12 @@ NJFN(fc_delete)
         fc_resolve(vm, path, host, sizeof(host)) != 0) {
         return nj_throw(vm, "java/io/IOException", "path is not accessible");
     }
-#if NJ_USE_LIBC
+#if NJ_USE_LIBC && defined(_WIN32)
+    if (nj_win32_remove(host) != 0) {
+        return nj_throw(vm, "java/io/IOException", "cannot delete");
+    }
+    return NJ_OK;
+#elif NJ_USE_LIBC
     if (remove(host) != 0) {
         return nj_throw(vm, "java/io/IOException", "cannot delete");
     }

@@ -10,6 +10,17 @@
 #include <string.h>
 #include <stdlib.h>
 
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#  include <shellapi.h>     /* CommandLineToArgvW */
+#endif
+
 #define NJ_CLI_HEAP_MB ((NJ_MAX_HEAP / (1024u * 1024u)) < 64u \
                         ? 64u : (NJ_MAX_HEAP / (1024u * 1024u)))
 
@@ -382,6 +393,65 @@ static int run_client_mode(const cli *c, const nj_run_opts *opts)
 }
 #endif
 
+#if defined(_WIN32)
+/*
+ * The C runtime converts a Windows command line to narrow argv through the
+ * ANSI code page.  A jar called 1942空战_10403.jar therefore arrives as GBK
+ * (CP936) bytes on a Chinese system, or as "?" characters on an English one -
+ * not the UTF-8 the runtime reads paths in, and sometimes destroyed before
+ * main() even sees it.  Rebuild argv from the wide command line instead; the
+ * allocation lives for the rest of the process.
+ */
+static char **win32_utf8_argv(int *out_argc)
+{
+    wchar_t **wargv;
+    char **argv;
+    int argc = 0;
+    int i;
+
+    if (!out_argc) {
+        return NULL;
+    }
+    *out_argc = 0;
+    wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!wargv || argc <= 0) {
+        if (wargv) {
+            LocalFree(wargv);
+        }
+        return NULL;
+    }
+    argv = (char **)calloc((size_t)argc + 1u, sizeof(*argv));
+    if (!argv) {
+        LocalFree(wargv);
+        return NULL;
+    }
+    for (i = 0; i < argc; i++) {
+        int need = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, NULL, 0,
+                                       NULL, NULL);
+        if (need <= 0) {
+            break;
+        }
+        argv[i] = (char *)malloc((size_t)need);
+        if (!argv[i] ||
+            !WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, argv[i], need,
+                                 NULL, NULL)) {
+            break;
+        }
+    }
+    LocalFree(wargv);
+    if (i != argc) {
+        while (i > 0) {
+            free(argv[--i]);
+        }
+        free(argv);
+        return NULL;
+    }
+    argv[argc] = NULL;
+    *out_argc = argc;
+    return argv;
+}
+#endif
+
 int main(int argc, char **argv)
 {
     cli c;
@@ -395,6 +465,17 @@ int main(int argc, char **argv)
     static char prop_key[NJ_CLI_MAX_PROPS][NJ_CLI_PROP_LEN];
     static char prop_val[NJ_CLI_MAX_PROPS][NJ_CLI_PROP_LEN];
     int nprops = 0;
+
+#if defined(_WIN32)
+    {
+        int wide_argc = 0;
+        char **wide_argv = win32_utf8_argv(&wide_argc);
+        if (wide_argv) {
+            argc = wide_argc;
+            argv = wide_argv;
+        }
+    }
+#endif
 
     memset(&c, 0, sizeof(c));
     c.dump_every = 1;
