@@ -41,7 +41,26 @@
                     └──────────────────────────────────────────┘
 ```
 
-## 0.5.2 的新内容
+## 0.5.3 的新内容
+
+**按名字的字段查找有了缓存，3D 渲染器不再每帧重复解析同样的字段。**
+Minecraft PE 的场景遍历对每个节点、每次绘制都要同一批 M3G 字段：一局 1200 帧
+的存档世界跑下来，每帧有 22,400 次 `nj_class_lookup()` 和 14,000 次
+`nj_field_lookup()`，每次都要先探类表、再走继承来的字段链。现在两个查找都在
+VM 里带一份缓存（按调用方传入的指针定位槽位），但命中之前会重新比对类名、
+字段名和描述符文本——所以同一个缓冲区换名字复用时不会拿到上一个名字的答案；
+`desc == NULL` 的按名匹配照旧绕开缓存。同一个存档世界、1200 帧 240x320 的
+headless 运行，用户 CPU 从 2.705/2.713/2.725 秒降到 2.433/2.447/2.474 秒，
+**-9.2% 到 -10.1%**；同一状态的截帧除了云（标题按墙钟时间做动画）之外逐像素
+相同。`--stats` 会报 `findcache=命中/未命中`，`tests/test_lookup_cache.c`
+（15 项检查）守住了正确性这边：复用缓冲区、静态请求对实例字段、按名匹配
+（`desc == NULL`）都有检查。两份表在 64 位构建的默认值下每个 VM 多 9,232 字节
+（本仓库 Release 构建 JIT 关闭时 `nj_vm_sizeof()` 从 7,040 涨到 16,272；32 位
+构建约 4,624 字节），内存紧张的目标可以用 `-DNJ_FIELD_CACHE_SLOTS` /
+`-DNJ_CLASS_CACHE_SLOTS` 把 RAM 换回去。完整 ctest 139/139，语料门禁
+`fatal 0 / 400, known 4`。详见 `docs/notes/2026-10-31-lookup-memo.md`。
+
+## 0.5.2 的新内容（上一版）
 
 **SDL2 构建现在也是一个桌面客户端。** 不带 `.jar` 运行 `build/nj2me` 会打开
 游戏列表窗口：游戏目录里每个可运行的包都有一行，显示 MIDlet 自己声明的图标
@@ -260,6 +279,11 @@ UTF-16 路径处理让宽字符目录扫描和中文游戏名与 Linux 上完全
 端到端验证过的：**Tumbleweed**（`net.frog_parrot.jump.Jump`，Apress 2004）在 headless 移植上以 176x208 跑起来——滚动的地面、会动的精灵、实时分数和倒计时。详见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。收集到的真实游戏语料共 400 个，其中 **398 个正常跑**，2 个失败都是标题自身原因（JAR 被截断、授权过期）；见 [docs/CORPUS.md](docs/CORPUS.md)。
 
 ## 构建
+
+Arch Linux 上已经打进 AUR：[`nano-j2me`](https://aur.archlinux.org/packages/nano-j2me)
+跟最新发布，[`nano-j2me-git`](https://aur.archlinux.org/packages/nano-j2me-git)
+跟 master。两个包都装桌面客户端、静态库和头文件、libretro core 以及桌面入口——
+`yay -S nano-j2me`，或者把 `yay` 换成 `paru`。其他平台：
 
 ```sh
 cmake -S . -B build -G Ninja

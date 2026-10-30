@@ -43,7 +43,29 @@ Android, an ESP32-S3, or whatever you are holding.
                     └──────────────────────────────────────────┘
 ```
 
-## What's new in 0.5.2
+## What's new in 0.5.3
+
+**Name lookups are memoised, so the 3D renderer stops re-resolving the same
+fields.** Minecraft PE's scene walk asks for the same M3G fields once per node
+per draw: a 1200-frame saved-world run made 22,400 `nj_class_lookup()` and
+14,000 `nj_field_lookup()` calls *per frame*, and each one probed the class
+table and the inherited field chain before answering. Both lookups now keep a
+memo in the VM, keyed by the pointer arguments; a hit is only used after the
+class, field and descriptor text are compared again, so a caller that reuses one
+buffer for different names falls through to a real lookup.  On the same saved
+world, 1200 headless 240x320 frames cost 2.433/2.447/2.474 s of user CPU against
+2.705/2.713/2.725 s before - **-9.2% to -10.1%** - and frame dumps are identical
+everywhere except the sky/cloud band the title animates from the wall clock.
+`--stats` reports `findcache=hits/misses`, and `tests/test_lookup_cache.c`
+(15 checks) pins the correctness side, including a reused buffer, a static
+request against an instance field, and a name-only (`desc == NULL`) lookup.
+The tables cost 9,232 B per VM at the defaults (`nj_vm_sizeof()` 7,040 ->
+16,272 B in this tree's Release build with JIT off; 4,624 B on a 32-bit build),
+and `-DNJ_FIELD_CACHE_SLOTS` / `-DNJ_CLASS_CACHE_SLOTS` trade the RAM back for
+targets where it matters.  Full ctest 139/139, corpus gate
+`fatal 0 / 400, known 4`.  See `docs/notes/2026-10-31-lookup-memo.md`.
+
+## What was new in 0.5.2
 
 **The SDL2 build is now a desktop client.** Run `build/nj2me` with no `.jar`
 and a library window opens: every runnable suite in your games directory gets a
@@ -357,6 +379,12 @@ failures** (a truncated JAR and a licence check); see
 [docs/CORPUS.md](docs/CORPUS.md).
 
 ## Building
+
+On Arch Linux there are AUR packages: [`nano-j2me`](https://aur.archlinux.org/packages/nano-j2me)
+builds the latest release, [`nano-j2me-git`](https://aur.archlinux.org/packages/nano-j2me-git)
+builds master.  Both install the desktop client, the static library and
+headers, the libretro core and a desktop entry - `yay -S nano-j2me`, or the same
+with `paru`.  Elsewhere:
 
 ```sh
 cmake -S . -B build -G Ninja
