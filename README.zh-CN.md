@@ -10,7 +10,7 @@
 
 用纯 **C99** 写的 J2ME（CLDC 1.1 / MIDP 2.0）运行时，为嵌入式而生。
 
-它能在任何有帧缓冲、有几百 KB 内存的东西上跑 MIDlet 套件——那些给功能机写的 `.jar` 游戏：Linux、Android、ESP32-S3，或者你手上正拿着的任何板子。
+它能在任何有帧缓冲、有几百 KB 内存的东西上跑 MIDlet 套件——那些给功能机写的 `.jar` 游戏：Linux、Windows、Android、ESP32-S3，或者你手上正拿着的任何板子。
 
 ```
                     ┌──────────────────────────────────────────┐
@@ -75,6 +75,18 @@
 三角形，在深处必须是纯雾色；按顶点算雾会把材质颜色混进去，正是 Minecraft
 天空原来的问题。m3gdemo 现在有 148 个检查。
 
+**而且这是第一个带 Windows 构建的版本。** 桌面客户端不再只停留在编译它的
+平台上：`nj2me.exe` 用 mingw-w64 交叉编译，和它链接的 `SDL2.dll`、双语
+`README.txt` 和示例一起打成 zip 发布。Windows 的路径是 UTF-16，所以游戏列表
+照样能列出、显示并运行中文名的 jar（语料上 `--print-library` 在 wine 下输出
+"400 games, 399 runnable"），拖放和 `F10`/`F11` 行为一致，设置放在
+`%APPDATA%\nano_j2me\client.conf`。可移植性改动都关在 `#if defined(_WIN32)`
+里：宽字符文件 API、`FindFirstFileW` 列目录、JIT 代码页改用
+`VirtualAlloc`/`VirtualProtect`、命令行参数经 `CommandLineToArgvW` 转成 UTF-8，
+POSIX 构建逐字节不变。初版限制见
+`docs/notes/2026-10-31-windows-build.md`：没有 libcurl 网络端口、没有 libretro
+core、仅 x86_64、可执行文件未签名。
+
 
 **0.5.1 修的是雾。** Minecraft PE 的天空以前是整片雾色：光栅器按顶点算雾
 因子，而游戏天空平面的每一个顶点都在 `fog_far` 之外，于是整片天空都取了雾
@@ -85,12 +97,6 @@
 PE 现在画出来的就是参考帧的样子。（准星是故意没有的：游戏检测到 Nokia 多
 点触控时会把准星藏起来、换成触控布局——这是游戏自己的触屏行为，不是渲染
 缺陷。）
-
-**另外默认帧率上限从 30 提到 60**（SDL2 与安卓端口）：手机端的计数器早就
-显示，放开上限时模拟器能把一个已存世界画到 59.4 fps，也就是说 30 上限白白
-藏掉了一半的动态。`--fps` 仍可覆盖，安卓的「帧率上限」设置仍有 30 / 60 /
-不限制三档。ESP32 端口保持 30，那里省下来的确实是实打实的。
-
 
 ## 0.5.1 的新内容（上一版）
 
@@ -246,15 +252,16 @@ Java 监视器：有竞争的 `monitorenter` 会停到持有者离开为止，`O
 | 执行引擎 | 解释器，加上可选的 RV32 / ARM64 基线 JIT（`NJ_ENABLE_JIT=1`），共享按 VM 有界的热块缓存；见 [docs/JIT.md](docs/JIT.md) |
 | 解码器：PNG、JPEG、GIF、DEFLATE、WAV、AMR、MP3、MIDI、H.263、MPEG-4 Part 2、点阵字体 | **完成**，每个都有自己的开关（`NJ_ENABLE_*`），并且都走可插拔注册表，所以移植可以裁掉一个、也可以换成平台自己的实现 |
 | 移植：headless（参考实现） | **完成** |
-| 移植：SDL2 | **完成** |
+| 移植：SDL2 | **完成** —— 桌面客户端：带拖放的游戏库、可重映射按键和十二行设置页（见[桌面客户端](#桌面客户端)） |
+| 移植：Windows x86_64（mingw-w64）| **完成** —— 同一个 `nj2me.exe` 交叉编译而来：命令行运行器加游戏库窗口，UTF-8 路径走宽字符 Win32 API，设置和存档在 `%APPDATA%\nano_j2me`；暂不支持 libretro core 与 libcurl 网络，仅 x86_64。见 [docs/notes/2026-10-31-windows-build.md](docs/notes/2026-10-31-windows-build.md) |
 | 移植：libretro / RetroArch | **完成** —— 一个 RetroArch 当作 core 加载的原生共享库：RGB565 画面、重采样音频、手柄/键盘/触摸输入、用于机型档案/旋转/堆大小/按键绑定的 core options，以及按游戏分开的 RecordStore/FileConnection 存档。没有 JVM，没有子进程。见 [docs/LIBRETRO.md](docs/LIBRETRO.md) |
 | 移植：Android（NDK + JNI） | **完成** —— 一个 APK 支持 Android 5.0（API 21）及以上、四种 ABI；启动器会显示每个游戏自己的名字和图标，也能从文件管理器直接打开 `.jar`；三套可配置的悬浮按键布局；AAudio 或 OpenSL ES 出声，MIDI 交给手机自带的合成器；多点触控；自动识别游戏分辨率。四种 ABI 合计 2.79 MiB（仅 arm64 的包 858 KiB），在 API 21 模拟器和 API 36 模拟器上都跑过 |
 | 移植：ESP32-S3（ESP-IDF，Xtensa） | **完成** —— 真实的 IDF 构建；在 16 MB flash / 8 MB PSRAM 的板级配置下，通过 Espressif 的 `esp-emu` 跑起 ROM、完整类库和一个 MIDlet（`tools/run_esp_emulator.sh`：`BENCH sum=-136042548`，105,717,067 条字节码——桌面版的总数），内置 RAM 配置在 QEMU 下也能跑。`tools/run_esp_emulator_ui.sh` 还在同一个模拟器里演示了显示、输入和存储路径（240x320 帧解码成 PNG，按键经 UART 注入，JAR 从挂载的存储卡读取）。见 [docs/PERFORMANCE.md](docs/PERFORMANCE.md#esp32-s3-measured-on-the-real-architecture) 和 [docs/FOOTPRINT.md](docs/FOOTPRINT.md#what-esp-emu-does-and-does-not-model-the-ui-demo) |
 | 移植：ESP32-C3（ESP-IDF，RISC-V） | 能编译、链接、启动；跑虚拟机需要 PSRAM |
-| 测试套件 | **131 项测试**（`ctest`） |
-| Sanitizer 套件 | **131/131 通过**（ASan + UBSan + LSan，`tools/run_sanitized_tests.sh`） |
+| 测试套件 | **138 项测试**（`ctest`） |
+| Sanitizer 套件 | **138/138 通过**（ASan + UBSan + LSan，`tools/run_sanitized_tests.sh`） |
 
-端到端验证过的：**Tumbleweed**（`net.frog_parrot.jump.Jump`，Apress 2004）在 headless 移植上以 176x208 跑起来——滚动的地面、会动的精灵、实时分数和倒计时。详见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。收集到的真实游戏语料共 399 个，其中 **397 个正常跑**，2 个失败都是标题自身原因（JAR 被截断、授权过期）；见 [docs/CORPUS.md](docs/CORPUS.md)。
+端到端验证过的：**Tumbleweed**（`net.frog_parrot.jump.Jump`，Apress 2004）在 headless 移植上以 176x208 跑起来——滚动的地面、会动的精灵、实时分数和倒计时。详见 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。收集到的真实游戏语料共 400 个，其中 **398 个正常跑**，2 个失败都是标题自身原因（JAR 被截断、授权过期）；见 [docs/CORPUS.md](docs/CORPUS.md)。
 
 ## 构建
 
@@ -280,6 +287,24 @@ ctest --test-dir build --output-on-failure
 配置时加 `-DNJ_GENERATE_FIXTURES=ON` 可以恢复旧行为。
 
 headless 移植始终可用，测试套件用的就是它。装了 `libsdl2-dev`（或等价物）时，SDL2 移植会自动构建。
+
+**在 Linux 上构建 Windows 包**需要 mingw-w64 和 SDL2 的 mingw 开发包；第一次
+运行 `tools/build_windows.sh` 会把该包下载到被 git 忽略的 `.local-tools/`，
+再用 `tools/toolchain-mingw-w64.cmake` 交叉编译，产出
+`build/nj2me-0.5.2-windows-x86_64.zip`（exe、配套 `SDL2.dll`、示例和
+README）。同一个 toolchain 文件也可以手动使用：
+
+```sh
+cmake -S . -B build-windows -DCMAKE_TOOLCHAIN_FILE=tools/toolchain-mingw-w64.cmake \
+      -DSDL2_INCLUDE_DIRS="$PWD/.local-tools/sdl2-mingw/SDL2-2.32.10/x86_64-w64-mingw32/include" \
+      -DSDL2_LIBRARIES="$PWD/.local-tools/sdl2-mingw/SDL2-2.32.10/x86_64-w64-mingw32/lib/libSDL2.dll.a" \
+      -DNJ_BUILD_TESTS=OFF -DNJ_BUILD_LIBRETRO=OFF
+cmake --build build-windows --target nj2me-cli
+```
+
+`wine` 被设成交叉运行器，所以 `ctest` 可以直接跑交叉编译出来的 Windows
+二进制。可移植性说明和限制见
+[docs/notes/2026-10-31-windows-build.md](docs/notes/2026-10-31-windows-build.md)。
 
 libretro core 默认会构建成 `build/libretro/nano_j2me_libretro.so`（`-DNJ_BUILD_LIBRETRO=OFF` 可以关掉）。把它和它的 `.info` 文件一起复制进 RetroArch 的 `cores/` 目录，然后加载 `.jar`；操作、core options、存档位置和限制见 [docs/LIBRETRO.md](docs/LIBRETRO.md)。core 是分架构的，所以 `tools/build_libretro_cores.sh` 也能交叉构建 Android（arm64-v8a、armeabi-v7a、x86_64）和 ARM Linux（ARM64/ARMv7）上可直接安装的 core——用 `--list` 看目标列表。
 

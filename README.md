@@ -11,8 +11,8 @@
 A J2ME (CLDC 1.1 / MIDP 2.0) runtime written in plain C99, built to be embedded.
 
 It runs MIDlet suites — the `.jar` games written for feature phones — on
-anything with a framebuffer and a few hundred kilobytes of RAM: Linux, Android,
-an ESP32-S3, or whatever you are holding.
+anything with a framebuffer and a few hundred kilobytes of RAM: Linux, Windows,
+Android, an ESP32-S3, or whatever you are holding.
 
 ```
                     ┌──────────────────────────────────────────┐
@@ -85,6 +85,20 @@ and the ESP32 keeps 30, where the saving is real.
 deep inside - a per-vertex evaluator leaves the material colour mixed in there,
 which is exactly the Minecraft sky artefact. m3gdemo is 148 checks now.
 
+**And this is the first release with a Windows build.** The desktop client no
+longer stops at the platform it was compiled on: `nj2me.exe` is cross-compiled
+with mingw-w64 and ships in one zip next to the `SDL2.dll` it was linked
+against, a bilingual `README.txt` and the samples. Windows paths are UTF-16, so
+the library window lists, names and runs Chinese-named jars exactly as on Linux
+(`--print-library` on the corpus prints "400 games, 399 runnable" under wine),
+drag-and-drop and `F10`/`F11` behave the same, and settings live in
+`%APPDATA%\nano_j2me\client.conf`. The portability work stays inside
+`#if defined(_WIN32)`: wide file APIs, `FindFirstFileW` listings,
+`VirtualAlloc`/`VirtualProtect` for JIT code pages and `CommandLineToArgvW` for
+UTF-8 arguments, with the POSIX builds byte-identical. First-cut limits are in
+`docs/notes/2026-10-31-windows-build.md`: no libcurl network port, no libretro
+core, x86_64 only, and the binaries are unsigned.
+
 
 **0.5.1 is the fog fix.** Minecraft PE's sky was a single flat sheet of fog
 colour: the rasteriser evaluated the fog factor per vertex, and every vertex of
@@ -101,12 +115,6 @@ little brighter, which the note writes down rather than hiding. (The crosshair
 is absent on purpose: the game hides it when it
 detects Nokia multipoint touch, which this runtime provides - that is the
 game's touch layout, not a rendering bug.)
-
-**And the default frame cap is now 60**, not 30, on the SDL2 and Android ports:
-the phone counter had shown the emulator drawing a saved world at 59.4 fps with
-the cap lifted, so 30 was hiding half the motion at no real saving. `--fps`
-still overrides it, and the Android 帧率上限 setting still offers 30 / 60 /
-uncapped. The ESP32 port keeps 30, where the saving is real.
 
 
 ## What was new in 0.5.1
@@ -342,18 +350,19 @@ usually skip, and they are exactly the parts old games use.
 | Execution engines | interpreter, plus opt-in baseline RV32 and ARM64 JITs (`NJ_ENABLE_JIT=1`) sharing a bounded per-VM hot-block cache; see [docs/JIT.md](docs/JIT.md) |
 | Decoders: PNG, JPEG, GIF, DEFLATE, WAV, AMR, MP3, MIDI, H.263, MPEG-4 Part 2, bitmap fonts | **done**, each behind its own switch (`NJ_ENABLE_*`) and all behind a pluggable registry, so a port can cut one or replace it with the platform's |
 | Ports: headless (reference) | **done** |
-| Ports: SDL2 | **done** |
+| Ports: SDL2 | **done** — the desktop client: a games library with drag-and-drop, rebindable keys and a twelve-row settings page (see [the desktop client](#the-desktop-client)) |
+| Ports: Windows x86_64 (mingw-w64) | **done** — the same `nj2me.exe` built cross-platform: console runner plus the library window, UTF-8 paths through wide Win32 APIs, `%APPDATA%\nano_j2me` settings and saves; no libretro core or libcurl networking yet, x86_64 only. See [docs/notes/2026-10-31-windows-build.md](docs/notes/2026-10-31-windows-build.md) |
 | Ports: libretro / RetroArch | **done** — one native shared object that RetroArch loads as a core: RGB565 video, resampled audio, joypad/keyboard/touch input, core options for the handset profile, rotation, heap and button bindings, and per-game RecordStore/FileConnection saves. No JVM, no subprocess. See [docs/LIBRETRO.md](docs/LIBRETRO.md) |
 | Ports: Android (NDK + JNI) | **done** — one APK for Android 5.0 (API 21) and up, 4 ABIs, a launcher that shows each game's own name and icon and opens `.jar` files from a file manager, three configurable floating keypad layouts, sound through AAudio or OpenSL ES with MIDI handed to the phone's own synth, multi-touch, and auto-detected screen size; 2.79 MiB for all four ABIs (858 KiB for arm64 alone), runs on an API 21 emulator and an API 36 emulator |
 | Ports: ESP32-S3 (ESP-IDF, Xtensa) | **done** — real IDF build; boots the ROM, the full class library and a MIDlet on a 16 MB flash / 8 MB PSRAM board under Espressif's `esp-emu` (`tools/run_esp_emulator.sh`: `BENCH sum=-136042548`, 105,717,067 bytecodes — the desktop total), and runs the internal-RAM profile under QEMU. `tools/run_esp_emulator_ui.sh` also demonstrates the display, input and storage paths in the same emulator (240x320 frames decoded to PNG, keys injected over UART, JAR read from a mounted card). See [docs/PERFORMANCE.md](docs/PERFORMANCE.md#esp32-s3-measured-on-the-real-architecture) and [docs/FOOTPRINT.md](docs/FOOTPRINT.md#what-esp-emu-does-and-does-not-model-the-ui-demo) |
 | Ports: ESP32-C3 (ESP-IDF, RISC-V) | builds, links and boots; needs PSRAM for the VM |
-| Test suite | **131 tests** (`ctest`) |
-| Sanitized suite | **131/131 passing** under ASan + UBSan + LSan (`tools/run_sanitized_tests.sh`) |
+| Test suite | **138 tests** (`ctest`) |
+| Sanitized suite | **138/138 passing** under ASan + UBSan + LSan (`tools/run_sanitized_tests.sh`) |
 
 Verified end to end: **Tumbleweed** (`net.frog_parrot.jump.Jump`, Apress 2004)
 plays on the headless port at 176x208 — scrolling ground, an animated sprite, a
 live score and countdown. See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
-The collected corpus - 399 real games - stands at **397 running / 2 title-side
+The collected corpus - 400 real games - stands at **398 running / 2 title-side
 failures** (a truncated JAR and a licence check); see
 [docs/CORPUS.md](docs/CORPUS.md).
 
@@ -388,6 +397,25 @@ Set `-DNJ_GENERATE_FIXTURES=ON` at configure time to get the old behaviour back.
 
 The headless port is always available and is what the test suite uses. The SDL2
 port is built automatically when `libsdl2-dev` (or the equivalent) is installed.
+
+**Building the Windows zip from Linux** needs mingw-w64 and an SDL2 mingw
+package; `tools/build_windows.sh` downloads that package into the git-ignored
+`.local-tools/` the first time, cross-compiles with
+`tools/toolchain-mingw-w64.cmake` and writes
+`build/nj2me-0.5.2-windows-x86_64.zip` (the exe, the matching `SDL2.dll`, the
+samples and the README). The same toolchain file works by hand:
+
+```sh
+cmake -S . -B build-windows -DCMAKE_TOOLCHAIN_FILE=tools/toolchain-mingw-w64.cmake \
+      -DSDL2_INCLUDE_DIRS="$PWD/.local-tools/sdl2-mingw/SDL2-2.32.10/x86_64-w64-mingw32/include" \
+      -DSDL2_LIBRARIES="$PWD/.local-tools/sdl2-mingw/SDL2-2.32.10/x86_64-w64-mingw32/lib/libSDL2.dll.a" \
+      -DNJ_BUILD_TESTS=OFF -DNJ_BUILD_LIBRETRO=OFF
+cmake --build build-windows --target nj2me-cli
+```
+
+`wine` is set as the cross-running emulator, so `ctest` can run the Windows
+binaries where they were built; the portability notes and limits are in
+[docs/notes/2026-10-31-windows-build.md](docs/notes/2026-10-31-windows-build.md).
 
 The libretro core is built by default as `build/libretro/nano_j2me_libretro.so`
 (`-DNJ_BUILD_LIBRETRO=OFF` disables it). Copy it and its `.info` file into
