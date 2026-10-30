@@ -43,7 +43,24 @@ an ESP32-S3, or whatever you are holding.
                     └──────────────────────────────────────────┘
 ```
 
-## What's new in 0.4.0
+## What's new in 0.4.1
+
+**0.4.1 makes the frame cap a setting, and the port's own counter is what said
+it should be.** Android had capped a phone at 30 fps since the port existed.
+`adb shell setprop debug.nj2me.stats 1` now has the port log the frames it
+actually posts - a MIDlet cannot report this, because a 30 Hz title sleeps its
+way to 30 frames a second whether the phone can draw them or not - and the API
+26 x86_64 emulator drawing a saved Minecraft PE world answered `59.4 fps` with
+the cap lifted. So the cap is the player's now: a 帧率上限 row in the library's
+display settings and in the game panel - 30 (the default), 60, or 不限制 -
+applied to the running game on its next frame. The runtime grew
+`nj_vm_set_frame_cap()` for it, because `nj_run()` copies the caller's `nj_port`
+into its frame loop and a UI-thread write to the port would never be read.
+`debug.nj2me.fps <n>` stays as the launch-time override for a measurement.
+
+Full changelog: [v0.4.1 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.4.1).
+
+## What was new in 0.4.0
 
 **0.4.0 is the release that runs Minecraft PE, and the one that stops three
 kinds of "the picture is wrong" from hiding in the rasteriser.** Since 0.3.0 the
@@ -86,7 +103,7 @@ what one demanding title exposed - and the gates that keep it exposed.
   **397 of 399** collected real games run - the two failures are the titles'
   own (a truncated JAR and a licence check).
 
-Full changelog: [v0.4.0 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.4.0).
+Full 0.4.0 changelog: [v0.4.0 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.4.0).
 
 ## Screenshots
 
