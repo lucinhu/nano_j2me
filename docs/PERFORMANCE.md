@@ -3163,3 +3163,46 @@ and cannot separate the builds: the same world load spread 40% across seven
 interleaved runs per build, through SwiftShader on a shared host.  The knob
 stays for size-limited targets and for the ARM A/B this host cannot run;
 `docs/notes/2026-10-30-android-optimisation-level.md` has the full method.
+
+## The class and field lookup memos (2026-10-31)
+
+The round-2 profile put `class_resolve_from_source` at 8.7% and
+`field_lookup_walk` at 5.7% of a Minecraft PE frame, and counting the calls
+explained both: the 3D scene walk resolves the same fields once per node per
+draw through `m3g_fof()` -> `nj_field_lookup()` -> `nj_class_lookup()`, so a
+1200-frame saved-world run made 22,400 class lookups and 14,000 field lookups
+*per frame*, almost all on the fast "class already linked" path but still
+paying the hash-table probe and the inherited-field walk.
+
+Both lookups now keep a memo in the VM: pointer-hashed slots for the names
+(`fld_memo[1024]`, `cls_memo[128]`), with every hit re-validated by `strcmp` on
+the class/field/descriptor text, because the pointer is only a hint - a caller
+that reuses one buffer for different names must not get the previous answer
+(that is the `tests/test_consts.c` bug, one release after it was found).
+`nj_field_lookup(..., desc = NULL)` keeps its name-only meaning by bypassing
+the memo, snapshot restores clear both tables, and `nj_vm_create()` zeroes
+them.  `--stats` reports `findcache=hits/misses`.
+
+Measured on the same saved world, 1200 headless 240x320 frames pinned with
+`taskset -c 5`, user CPU from bash `time`, alternating runs against the
+previous commit's binary:
+
+| run | before | after | delta |
+| --- | --- | --- | --- |
+| 1 | 2.705 s | 2.433 s | -10.1% |
+| 2 | 2.713 s | 2.447 s | -9.8% |
+| 3 | 2.725 s | 2.474 s | -9.2% |
+
+Frame dumps of the same state differ only in the sky/cloud band where the title
+animates clouds from the wall clock (the unmodified binary differs from itself
+by the same amount); the near terrain, ground and hotbar are byte-identical.
+The memo's cost is RAM: 9,232 B per VM on a 64-bit build at the defaults
+(`nj_vm_sizeof()` 7,040 -> 16,272 in this tree's Release build, JIT off) and
+4,624 B on a 32-bit one.  Both sizes are CMake options
+(`NJ_FIELD_CACHE_SLOTS`, `NJ_CLASS_CACHE_SLOTS`); a 512/64 build costs 4,624 B
+on x86-64 and measured 1-2% slower on the same benchmark.  A 4096-slot field
+table cut misses from 1.63 M to 239 K with no measurable CPU change, which is
+why the default stays at 1024: the misses are not the cost, the walk they
+replace is.  Regression: `tests/test_lookup_cache.c` (15 checks); full ctest
+139/139, corpus gate `fatal 0 / 400, known 4`.  See
+`docs/notes/2026-10-31-lookup-memo.md`.

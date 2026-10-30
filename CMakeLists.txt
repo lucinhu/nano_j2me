@@ -17,7 +17,7 @@
 #  built and is what the tests use).
 # =====================================================================
 cmake_minimum_required(VERSION 3.16)
-project(nano_j2me VERSION 0.5.2 LANGUAGES C)
+project(nano_j2me VERSION 0.5.3 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -151,6 +151,13 @@ set(NJ_ENABLE_HOT_FIELDS 1 CACHE STRING "Memoise hot Midp field lookups (+192 B 
 set(NJ_MASCOT_RASTER_SPANS 1 CACHE STRING "Specialised Mascot rasteriser span loops (+10 KB code)")
 set(NJ_MASCOT_FAST_FIELDS 1 CACHE STRING "Use Micro3D receiver classes directly for field access (no cache)")
 set(NJ_MASCOT_MAX_QUEUED_TRIANGLES 16384 CACHE STRING "Maximum deferred Micro3D primitives per Graphics3D")
+# The class/field lookup memo.  Entries are one pointer each, so the two
+# tables cost (NJ_FIELD_CACHE_SLOTS + NJ_CLASS_CACHE_SLOTS) * sizeof(void *)
+# per VM - 9,232 B at the defaults on a 64-bit build, which is real RAM on an
+# ESP32.  Both must be powers of two.  See docs/notes/2026-10-31-lookup-memo.md
+# for the hit rates behind the defaults.
+set(NJ_FIELD_CACHE_SLOTS 1024 CACHE STRING "Entries in the nj_field_lookup() memo (power of two)")
+set(NJ_CLASS_CACHE_SLOTS 128 CACHE STRING "Entries in the nj_class_lookup() memo (power of two)")
 
 # ---------------------------------------------------------------------
 # The runtime
@@ -297,6 +304,8 @@ target_compile_definitions(nj2me PUBLIC
   NJ_JIT_MAX_CODE_BYTES=${NJ_JIT_MAX_CODE_BYTES}
   NJ_M3G_FAST_PATHS=${NJ_M3G_FAST_PATHS}
   NJ_ENABLE_HOT_FIELDS=${NJ_ENABLE_HOT_FIELDS}
+  NJ_FIELD_CACHE_SLOTS=${NJ_FIELD_CACHE_SLOTS}
+  NJ_CLASS_CACHE_SLOTS=${NJ_CLASS_CACHE_SLOTS}
   NJ_MASCOT_RASTER_SPANS=${NJ_MASCOT_RASTER_SPANS}
     NJ_MASCOT_FAST_FIELDS=${NJ_MASCOT_FAST_FIELDS}
   NJ_MASCOT_MAX_QUEUED_TRIANGLES=${NJ_MASCOT_MAX_QUEUED_TRIANGLES}
@@ -1379,6 +1388,13 @@ nj_add_test(test_clip tests/test_clip.c)
   if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_consts.c)
     nj_add_test(test_consts tests/test_consts.c
                 ${NJ_FIXTURES}/constdemo.expected)
+  endif()
+
+  # The class/field memo is an optimisation with a correctness shadow: a hit
+  # is only taken when the names still match.  test_lookup_cache pins that,
+  # the per-VM reset and the counters a benchmark reads.
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_lookup_cache.c)
+    nj_add_test(test_lookup_cache tests/test_lookup_cache.c)
   endif()
 
   # Only when the two downloaded titles are actually there: NJ_FIXTURES_FETCH_GAMES

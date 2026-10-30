@@ -418,6 +418,10 @@ void nj_vm_get_stats(nj_vm *vm, nj_vm_stats *out)
     out->cp_cache_entries = vm->cp_cache_used;
     out->cp_cache_hits = vm->cp_cache_hits;
     out->cp_cache_misses = vm->cp_cache_misses;
+    /* Nj_class_lookup()/nj_field_lookup() memo tables: hits and misses since
+     * the VM started (or since the last snapshot restore cleared them). */
+    out->find_hits = vm->find_hits;
+    out->find_misses = vm->find_misses;
     out->natives = vm->nnatives;
     out->native_misses = vm->native_misses;
     out->codecs = vm->ncodecs;
@@ -476,13 +480,49 @@ void nj_vm_dump_stats(nj_vm *vm)
 /* ------------------------------------------------------------------ */
 /* Classes                                                             */
 /* ------------------------------------------------------------------ */
+/* A pointer folded into a slot: the low bits of a heap address say nothing
+ * about the string, so mix every bit of the pointer first.  nj_size is 32 bits
+ * here, which is narrower than a host pointer, so go through uintptr_t and
+ * fold the halves before narrowing. */
+static nj_u4 ptr_hash(const void *p)
+{
+    nj_u8 w = (nj_u8)(uintptr_t)p;
+    nj_u4 v;
+
+    w ^= w >> 33;
+    w *= 0xff51afd7ed558ccdull;
+    w ^= w >> 33;
+    v = (nj_u4)w;
+    v ^= v >> 17;
+    v *= 0x9E3779B1u;
+    v ^= v >> 13;
+    return v;
+}
+
+static nj_u4 ptr_slot(const void *p, nj_u4 slots)
+{
+    return ptr_hash(p) & (slots - 1u);
+}
+
 nj_class *nj_class_lookup(nj_vm *vm, const char *name)
 {
     nj_class *c;
+    nj_u4 slot;
 
     if (!vm || !name) {
         return NULL;
     }
+    /* The same name POINTER arrives over and over - literals in this library,
+     * class-file names, the NJ_C_* macros - so remember the answer.  The hit
+     * is only taken when the class really carries that name, so a caller that
+     * reuses a stack buffer falls through to a fresh lookup. */
+    slot = ptr_slot(name, (nj_u4)NJ_CLASS_CACHE_SLOTS);
+    c = vm->cls_memo[slot];
+    if (c != NULL && strcmp(c->name, name) == 0) {
+        vm->find_hits++;
+        return c;
+    }
+    vm->find_misses++;
     c = nj_class_resolve(vm, name);
     if (!c) {
         return NULL;
@@ -493,6 +533,7 @@ nj_class *nj_class_lookup(nj_vm *vm, const char *name)
     if (c->state < NJ_CLASS_READY && nj_class_link(vm, c) != NJ_OK) {
         return NULL;
     }
+    vm->cls_memo[slot] = c;
     return c;
 }
 
@@ -519,15 +560,44 @@ nj_field *nj_field_lookup(nj_vm *vm, const char *cls, const char *name,
                           const char *desc, int is_static)
 {
     nj_class *c;
+    nj_field *f;
+    nj_u4 slot;
+    nj_u4 key;
 
     if (!vm || !cls || !name) {
         return NULL;
     }
+    if (!desc) {
+        /* Name-only match: keep it out of the memo rather than inventing an
+         * empty descriptor, which would match nothing at all. */
+        c = nj_class_lookup(vm, cls);
+        return c ? nj_field_lookup_in(c, name, NULL, is_static) : NULL;
+    }
+    /* The renderer's inner loop asks for the same fields once per node per
+     * draw.  The pointer triple picks the slot; the names decide whether the
+     * answer belongs to this call, so a reused stack buffer cannot answer for
+     * a different field. */
+    key = ptr_hash(cls) * 31u + ptr_hash(name);
+    key ^= ptr_hash(desc) * 17u;
+    key ^= (nj_u4)is_static * 40503u;
+    slot = key & (nj_u4)(NJ_FIELD_CACHE_SLOTS - 1u);
+    f = vm->fld_memo[slot];
+    if (f != NULL && f->owner != NULL && strcmp(f->owner->name, cls) == 0 &&
+        strcmp(f->name, name) == 0 && strcmp(f->desc, desc) == 0 &&
+        (((f->flags & NJ_ACC_STATIC) != 0u) == (is_static != 0))) {
+        vm->find_hits++;
+        return f;
+    }
+    vm->find_misses++;
     c = nj_class_lookup(vm, cls);
     if (!c) {
         return NULL;
     }
-    return nj_field_lookup_in(c, name, desc, is_static);
+    f = nj_field_lookup_in(c, name, desc, is_static);
+    if (f) {
+        vm->fld_memo[slot] = f;
+    }
+    return f;
 }
 
 /* ------------------------------------------------------------------ */

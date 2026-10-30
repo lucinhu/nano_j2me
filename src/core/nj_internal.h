@@ -356,6 +356,29 @@ typedef struct nj_codec_reg {
  * which could only ever answer for one name. */
 #define NJ_CLASS_FIND_SLOTS 4
 
+/*
+ * Slots in the memo tables nj_field_lookup() and nj_class_lookup() keep.
+ *
+ * Those two are how every native names a class or a field, and hot ones call
+ * them millions of times: the M3G renderer walks its scene graph by name on
+ * every frame (77 distinct fields, 7,400 calls per frame in Minecraft PE) and
+ * each lookup used to cost a class-table hash, a walk of the inheritance chain
+ * and a strcmp per step.  A hit here is one hash, a pointer compare and the
+ * validations described at the lookup, so a cached answer can only be slow,
+ * never wrong.
+ *
+ * Entries live in the VM instance, not in .bss, because the runtime's own
+ * static footprint is zero (docs/FOOTPRINT.md).  A build that would rather
+ * spend the bytes elsewhere lowers the counts; the tables simply collide
+ * sooner.
+ */
+#ifndef NJ_FIELD_CACHE_SLOTS
+#  define NJ_FIELD_CACHE_SLOTS 1024
+#endif
+#ifndef NJ_CLASS_CACHE_SLOTS
+#  define NJ_CLASS_CACHE_SLOTS 128
+#endif
+
 /* Reasons a constant-pool entry failed to resolve. */
 #define NJ_RESOLVE_OK     0u
 #define NJ_RESOLVE_CLASS  1u
@@ -419,6 +442,22 @@ struct nj_vm {
      * came through nj_field_lookup. */
     const char *find_key[NJ_CLASS_FIND_SLOTS];
     nj_class   *find_cls[NJ_CLASS_FIND_SLOTS];
+
+    /*
+     * nj_field_lookup()'s memo table: the (class, name, descriptor, static)
+     * POINTERS hash to a slot and the answer sits in it.  A hit is used only
+     * when the field still carries the same three names, so a caller that
+     * reuses a stack buffer gets a fresh lookup instead of a wrong field - the
+     * pointer hash decides WHICH slot to try, the names decide whether the
+     * answer is the right one.  nj_save.c clears the table when a snapshot is
+     * restored, because the class structures a restore installs are new.
+     */
+    nj_field   *fld_memo[NJ_FIELD_CACHE_SLOTS];
+    nj_u8       find_hits;
+    nj_u8       find_misses;
+
+    /* nj_class_lookup()'s memo table: same idea, one name and one class. */
+    nj_class   *cls_memo[NJ_CLASS_CACHE_SLOTS];
 
     /*
      * A class the engine itself creates on demand - the MIDlet timer's pump

@@ -1335,12 +1335,10 @@ static void clear_host_caches(nj_vm *vm)
     vm->find_hits = 0u;
     vm->find_misses = 0u;
     for (i = 0u; i < (nj_u4)NJ_FIELD_CACHE_SLOTS; i++) {
-        vm->fld_key_cls[i] = NULL;
-        vm->fld_key_name[i] = NULL;
-        vm->fld_key_desc[i] = NULL;
-        vm->fld_val[i] = NULL;
-        vm->fld_key_static[i] = 0u;
-        vm->fld_key_used[i] = 0u;
+        vm->fld_memo[i] = NULL;
+    }
+    for (i = 0u; i < (nj_u4)NJ_CLASS_CACHE_SLOTS; i++) {
+        vm->cls_memo[i] = NULL;
     }
 #else
     (void)i;
