@@ -67,10 +67,10 @@ final class Settings {
     /**
      * Frames per second the port aims for, or -1 for "the port's own default".
      *
-     * -1 is the status quo: the native port caps a phone at 30, and a title
-     * that wants 60 on a phone that can draw it is the case this setting
-     * exists for.  Applies to the next game - the port is told at launch and
-     * again whenever the game panel changes it.
+     * -1 is the port's own default, which is uncapped: the display paces the
+     * frames, so this is the smoothest setting and the one a player expects.
+     * 60 and 30 exist for battery life.  Applies to the next game - the port
+     * is told at launch and again whenever the game panel changes it.
      */
     static int frameCap(Context ctx) {
         return prefs(ctx).getInt(FRAME_CAP, -1);
@@ -83,17 +83,17 @@ final class Settings {
     /** The cap as a row title reads it. */
     static String frameCapText(int cap) {
         if (cap < 0) {
-            return "30 帧（默认）";
+            return "不限制（默认）";
         }
         return cap == 0 ? "不限制" : cap + " 帧";
     }
 
-    /** The next value in the cycle: default -> 60 -> uncapped -> default. */
+    /** The next value in the cycle: default -> 60 -> 30 -> default. */
     static int nextFrameCap(int cap) {
         if (cap < 0) {
             return 60;
         }
-        return cap == 0 ? -1 : 0;
+        return cap == 60 ? 30 : -1;
     }
 
     /**

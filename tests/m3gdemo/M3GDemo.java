@@ -1011,6 +1011,45 @@ public class M3GDemo extends MIDlet {
             }
         });
 
+        run("fog is sampled at each pixel's own depth", new Runnable() {
+            public void run() {
+                /* One triangle that spans the whole fog range: its apex is at
+                 * z=-12 (well past far=6) and its far edge at z=-4 (the near
+                 * end).  The pixel picked below sits deep in the triangle
+                 * where the interpolated depth is about 7, so the honest
+                 * answer is the fog colour and nothing else.  A per-vertex
+                 * implementation, which is what the Minecraft sky was being
+                 * given, would interpolate the two colours it computed at the
+                 * corners and leave red from the near edge mixed in here. */
+                Image img = Image.createImage(32, 32);
+                Graphics g = img.getGraphics();
+                g.setColor(0x000000);
+                g.fillRect(0, 0, 32, 32);
+
+                Graphics3D g3d = Graphics3D.getInstance();
+                Appearance app = flat(0x00FF0000);
+                Fog fog = new Fog();
+                fog.setMode(Fog.LINEAR);
+                fog.setColor(0x0000FF00);
+                fog.setLinear(4.0f, 6.0f);
+                app.setFog(fog);
+                g3d.bindTarget(g);
+                g3d.setViewport(0, 0, 32, 32);
+                g3d.setCamera(new Camera(), new Transform());
+                g3d.render(tri(-2, -2, -4, 2, -2, -4, 0, 2, -12), null, app,
+                           new Transform(), -1);
+                g3d.releaseTarget();
+
+                int[] deep = new int[1];
+                img.getRGB(deep, 0, 1, 16, 15, 1, 1);
+                int dr = (deep[0] >> 16) & 0xFF;
+                int dg = (deep[0] >> 8) & 0xFF;
+                int db = deep[0] & 0xFF;
+                check("a deep pixel of a spanning triangle is all fog",
+                      (deep[0] >>> 24) == 0xFF && dr <= 3 && dg >= 250 && db <= 3);
+            }
+        });
+
         /* A benchmark mode, not a check: with -Dnj2me.bench=<n> the same
          * triangle is rendered n times into a target and the elapsed time
          * is printed, so the two render paths can be compared on one

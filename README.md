@@ -43,7 +43,25 @@ an ESP32-S3, or whatever you are holding.
                     └──────────────────────────────────────────┘
 ```
 
-## What's new in 0.5.1
+## What's new in 0.5.2
+
+**The frame rate is uncapped by default** on the desktop SDL2 port and on
+Android. Presenting as soon as the title has a frame is the lowest-latency
+setup, and the display paces what you actually see: the SDL2 renderer asks for
+vsync, and a SurfaceView only swaps at the panel's rate. Measured on this
+machine: a saved Minecraft PE world that ran 600 frames in 10.45 s (57.4 fps)
+under the 60 cap now runs them in 4.90 s (122.5 fps) on a 240 Hz laptop, and
+the same world draws 314 fps headless. The Android 帧率上限 setting is now
+不限制（默认）/ 60 / 30, still applied to the running VM without a restart;
+`--fps <n>` caps the command-line runner, and `debug.nj2me.fps` still overrides
+the launch cap. libretro keeps its 60 (the frontend owns the present cadence)
+and the ESP32 keeps 30, where the saving is real.
+
+**And the fog fix has a regression test**: a triangle whose apex is past
+`fog_far` and whose near edge sits at `fog_near` has to come out all fog colour
+deep inside - a per-vertex evaluator leaves the material colour mixed in there,
+which is exactly the Minecraft sky artefact. m3gdemo is 148 checks now.
+
 
 **0.5.1 is the fog fix.** Minecraft PE's sky was a single flat sheet of fog
 colour: the rasteriser evaluated the fog factor per vertex, and every vertex of
@@ -67,7 +85,31 @@ the cap lifted, so 30 was hiding half the motion at no real saving. `--fps`
 still overrides it, and the Android 帧率上限 setting still offers 30 / 60 /
 uncapped. The ESP32 port keeps 30, where the saving is real.
 
-Full changelog: [v0.5.1 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.1).
+
+## What was new in 0.5.1
+
+**0.5.1 was the fog fix.** Minecraft PE's sky was a single flat sheet of fog
+colour: the rasteriser evaluated the fog factor per vertex, and every vertex of
+the game's sky plane sits past `fog_far`, so the whole sky took the fog colour
+while the reference draws a gradient from `(58,116,202)` at the top to
+`(105,183,228)` at the horizon. Fog is now a per-fragment quantity, computed
+from the interpolated `1/w` in every raster loop, the way GL ES defines it; a
+frame compared against FreeJ2ME-Plus over the same saved world went from a mean
+absolute difference of 41.4 to 13.8, with the sky matching within a few units
+per channel. The cost is 3-5% of the rasteriser. Between the fixed sky and the
+previous rounds' cloud and water fixes, Minecraft PE renders the sky, the
+clouds and the water the way the reference does - the clouds still read a
+little brighter, which the note writes down rather than hiding. (The crosshair
+is absent on purpose: the game hides it when it detects Nokia multipoint touch,
+which this runtime provides - that is the game's touch layout, not a rendering
+bug.)
+
+**And 0.5.1 raised the default frame cap from 30 to 60** on the SDL2 and
+Android ports: the phone counter had shown the emulator drawing a saved world
+at 59.4 fps with the cap lifted, so 30 was hiding half the motion at no real
+saving.
+
+Full changelog: [v0.5.2 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.2).
 
 ## What's new in 0.5.0
 

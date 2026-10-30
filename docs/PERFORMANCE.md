@@ -61,8 +61,10 @@ the emulator's own ceiling, not the display's):
 The goal was >200 fps at 240x320. It is 14-23x that, so the headroom is not in
 question on the desktop.
 
-The SDL2 port adds the real presentation cost and a 60 fps cap by default;
-`--fps 0` removes the cap there too.
+The SDL2 port adds the real presentation cost.  It is uncapped by default now
+and lets the display pace it: a saved Minecraft PE world that ran 600 frames in
+10.45 s (57.4 fps) under the old 60 cap runs them in 4.90 s (122.5 fps) on the
+240 Hz laptop this was measured on.  `--fps <n>` caps it where that matters.
 
 ## Heap
 

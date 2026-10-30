@@ -237,6 +237,38 @@ static const nj_builtin_method contact_methods[] = {
     M("getString",    "(II)Ljava/lang/String;", NJ_ACC_ABSTRACT)
 };
 
+/*
+ * The static final constants, written once the classes exist.
+ *
+ * A builtin class has no ConstantValue attribute, so PIM.CONTACT_LIST and
+ * friends would read 0 unless something writes them - and a MIDlet has
+ * javac's inlined copy of the value it read from the stubs.  The stubs say 1,
+ * 2, 3 and the runtime has to agree, exactly as List.IMPLICIT did (see the
+ * comment on gen_const_fixture.py).  Found by a from-scratch build: the tree
+ * that had been built incrementally kept an old constdemo.expected.
+ */
+static void pim_const_int(nj_vm *vm, const char *name, nj_s4 value)
+{
+    nj_field *f = nj_field_lookup(vm, NJ_C_PIM, name, "I", 1);
+    if (f) {
+        nj_field_write_int(vm, NULL, f, value);
+    }
+}
+
+nj_status nj_pim_late_init(nj_vm *vm)
+{
+    if (!vm) {
+        return NJ_ERR;
+    }
+    pim_const_int(vm, "CONTACT_LIST", PIM_CONTACT_LIST);
+    pim_const_int(vm, "EVENT_LIST",   PIM_EVENT_LIST);
+    pim_const_int(vm, "TODO_LIST",    PIM_TODO_LIST);
+    pim_const_int(vm, "READ_ONLY",    PIM_READ_ONLY);
+    pim_const_int(vm, "WRITE_ONLY",   PIM_WRITE_ONLY);
+    pim_const_int(vm, "READ_WRITE",   PIM_READ_WRITE);
+    return NJ_OK;
+}
+
 const nj_builtin_class nj_lib_pim_classes[] = {
     /* A PIMException: PIMException and UnsupportedFieldException carry no
      * methods of their own; a MIDlet catches them, and the constructors come

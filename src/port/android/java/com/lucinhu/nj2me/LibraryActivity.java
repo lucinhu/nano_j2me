@@ -1050,7 +1050,7 @@ public class LibraryActivity extends Activity {
                 }), Md3.gap(this, 12));
         final int frameCap = Settings.frameCap(this);
         box.addView(rowAction(Md3.IC_PLAY, "帧率上限：" + Settings.frameCapText(frameCap),
-                frameCap < 0 ? "按端口默认（30 帧）；手机撑得住就调高"
+                frameCap < 0 ? "默认不限制，画面最流畅；想省电就往下调"
                         : frameCap == 0 ? "不设上限：最流畅，也最费电"
                                 : "每秒最多 " + frameCap + " 帧", new Runnable() {
                     @Override

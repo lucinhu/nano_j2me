@@ -413,6 +413,10 @@ nj_status nj_media_late_init(nj_vm *vm);
 /* javax.microedition.rms: the comparator's ordering constants. */
 nj_status nj_rms_late_init(nj_vm *vm);
 
+/* javax.microedition.pim: the list types and access modes the class
+ * declarations carry as static final ints, for the same reason. */
+nj_status nj_pim_late_init(nj_vm *vm);
+
 /*
  * Seed the class constants that a MIDlet has inlined at its call sites -
  * Light.AMBIENT and friends.  A no-op in a build without the m3g module.

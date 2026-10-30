@@ -259,11 +259,13 @@ frame-rate measurement available on a device this project cannot test on.
 
 That counter is what showed the port's own default was too low: the cap had
 always been 30, but the API 26 x86_64 emulator draws a saved world at
-`stats: 59.4 fps, 298 frames in 5014 ms` when the cap is lifted.  So the cap is
-a player setting now, a 帧率上限 row in the library's display settings and in
-the game panel: 30, 60 (the default, matching what the display can usually
-produce), or 不限制.  That default is 60 on the desktop SDL2 port as well,
-where a 30 Hz cap had hidden exactly the same half of the world's motion.  The
+`stats: 59.4 fps, 298 frames in 5014 ms` when the cap is lifted.  The default is
+now **uncapped** - a SurfaceView only shows a finished frame when the display
+takes one, so presenting immediately is the lowest-latency setup and the panel
+sets the cadence - and the cap is a player setting: a 帧率上限 row in the
+library's display settings and in the game panel offers 不限制（默认）, 60 and
+30, the last two for battery life.  The desktop SDL2 port defaults to uncapped
+for the same reason (its renderer asks for vsync); `--fps` caps it there.  The
 game-panel row applies to
 the running VM on its next frame; the library row is what the next title
 launches with.  It cannot be a port field write - `nj_run()` copies the

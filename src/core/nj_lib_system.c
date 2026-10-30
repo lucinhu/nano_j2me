@@ -535,6 +535,7 @@ nj_status nj_sensor_late_init(nj_vm *vm);
 nj_status nj_util_late_init(nj_vm *vm);
 nj_status nj_bt_late_init(nj_vm *vm);
 nj_status nj_socket_late_init(nj_vm *vm);
+nj_status nj_pim_late_init(nj_vm *vm);
 
 nj_status nj_lib_late_init(nj_vm *vm)
 {
@@ -581,6 +582,9 @@ nj_status nj_lib_late_init(nj_vm *vm)
         return NJ_ERR;
     }
     if (nj_socket_late_init(vm) != NJ_OK) {
+        return NJ_ERR;
+    }
+    if (nj_pim_late_init(vm) != NJ_OK) {
         return NJ_ERR;
     }
     if (nj_m3g_late_init(vm) != NJ_OK) {

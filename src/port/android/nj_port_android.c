@@ -610,10 +610,11 @@ static int android_fps_cap(void)
     prop[0] = '\0';
     (void)__system_property_get("debug.nj2me.fps", prop);
     if (prop[0] == '\0') {
-        /* 60 is the default a player asked for: the port measures ~59 fps in
-         * Minecraft PE's world on a device that can present that fast, and the
-         * player setting still offers 30 (battery) and uncapped. */
-        return 60;
+        /* Uncapped by default: a SurfaceView only shows a finished frame when
+         * the display takes it (at the panel's rate), so presenting as soon as
+         * the title has one is smooth and keeps input latency low.  The
+         * player setting still offers 60 and 30 for battery life. */
+        return 0;
     }
     n = atoi(prop);
     if (n < 0) {
@@ -1410,9 +1411,13 @@ static int android_input_poll(void *ud, nj_event *ev)
     if (s->vm && s->frame_cap_req != s->frame_cap_applied) {
         nj_vm_set_frame_cap(s->vm, s->frame_cap_req);
         s->frame_cap_applied = s->frame_cap_req;
-        __android_log_print(ANDROID_LOG_INFO, "nj2me",
-                            "fps: cap %d%s", s->frame_cap_req,
-                            s->frame_cap_req == 0 ? " = uncapped" : "");
+        /* -1 is "the port's own default" and says nothing worth a line; a
+         * player-chosen cap does, and so does uncapped. */
+        if (s->frame_cap_req >= 0) {
+            __android_log_print(ANDROID_LOG_INFO, "nj2me",
+                                "fps: cap %d%s", s->frame_cap_req,
+                                s->frame_cap_req == 0 ? " = uncapped" : "");
+        }
     }
     /*
      * A snapshot the player asked for.  Taken here and not in the JNI call
@@ -4565,11 +4570,16 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     out->log = android_log;
     out->shutdown = android_shutdown;
     out->fps_cap = android_fps_cap();
-    /* Logged only when the property is in play: a default run says nothing. */
-    if (out->fps_cap != 30) {
+    {
+        char prop[PROP_VALUE_MAX];
+        prop[0] = '\0';
+        (void)__system_property_get("debug.nj2me.fps", prop);
+        /* Logged only when the property is in play: a default run says nothing. */
+        if (prop[0] != '\0') {
         __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
-                            "fps: cap %d%s (debug.nj2me.fps)",
-                            out->fps_cap, out->fps_cap == 0 ? " = uncapped" : "");
+                                "fps: cap %d%s (debug.nj2me.fps)",
+                                out->fps_cap, out->fps_cap == 0 ? " = uncapped" : "");
+        }
     }
     return NJ_OK;
 }

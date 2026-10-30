@@ -2187,14 +2187,15 @@ nj_status nj_port_sdl2(nj_port *out, const char *title)
     out->install_codecs = sdl_install_codecs;
     out->shutdown = sdl_shutdown;
     /*
-     * 60, not 30.  A window on a desktop is redrawn by the compositor at the
-     * panel's rate anyway, and Minecraft PE's world - the title this port is
-     * measured against - sits at ~59 fps when the cap is lifted, so a 30 fps
-     * cap was making the port feel half as smooth as the machine it runs on.
-     * The frame pacer waits in the scheduler rather than by sleeping the whole
-     * VM (see nj_lib_midlet.c), so the title's own threads keep their time
-     * either way; --fps still picks any other cap, and 0 means uncapped.
+     * Uncapped by default: the renderer asks for PRESENTVSYNC and a desktop
+     * compositor only shows a finished frame at the panel's rate, so the
+     * console still presents at the refresh rate - it just stops the emulator
+     * from being the thing that wastes the time in between.  That is the
+     * lowest-latency setup on the hardware most players run this on.  Pass
+     * --fps to cap it (30 is the battery-minded choice on a laptop); the
+     * frame pacer waits in the scheduler rather than by sleeping the whole VM
+     * (see nj_lib_midlet.c), so a capped title keeps its own threads' time.
      */
-    out->fps_cap = 60;
+    out->fps_cap = 0;
     return NJ_OK;
 }

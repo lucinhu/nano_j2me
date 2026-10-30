@@ -1153,7 +1153,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         final int frameCap = Settings.frameCap(this);
         LinearLayout fpsRow = Md3.row(this, Md3.IC_PLAY,
                 "帧率上限：" + Settings.frameCapText(frameCap),
-                frameCap < 0 ? "按端口默认（30 帧）；这款手机和这个游戏撑得住就调高"
+                frameCap < 0 ? "默认不限制，画面最流畅；想省电就往下调"
                         : frameCap == 0 ? "不设上限：最流畅，也最费电"
                                 : "每秒最多 " + frameCap + " 帧；调高更流畅，也更快用完电",
                 false, null);
