@@ -10675,6 +10675,11 @@ typedef struct {
     int fog_mode;              /* 81 LINEAR, 192/193 EXPONENTIAL */
     nj_u4 fog_colour;
     float fog_near, fog_far, fog_density;
+    float fog_inv_span;     /* 1/(far-near): the linear ramp in one multiply */
+    float fog_inv_near;     /* 1/near and 1/far, because the interpolated value
+                               is 1/depth: the ramp's saturated halves are
+                               comparisons, no reciprocal needed. */
+    float fog_inv_far;
 } m3g_sw;
 
 #define M3G_SW_BACK  160
@@ -11089,12 +11094,24 @@ static inline const nj_u1 *sw_near_texel(const m3g_sw *sw, float s, float t)
  */
 static nj_u4 sw_fog(m3g_sw *sw, float invw, nj_u4 c)
 {
-    float d, f, fr, fg, fb;
+    float d, f, fr, fg, fb, nf;
     nj_u4 fc;
     union { float f; nj_u4 u; } v;
 
     if (!sw->fog || !(invw > 0.0f)) {
         return c;
+    }
+    if (sw->fog_mode == 81 && sw->fog_inv_near > 0.0f) {
+        /* invw is 1/depth and the ramp ends are 1/near and 1/far, so the two
+           saturated halves - nearer than near leaves the colour alone, farther
+           than far is the fog colour - are decided without the reciprocal.
+           Sky and most terrain fragments are in one of them. */
+        if (invw >= sw->fog_inv_near) {
+            return c;
+        }
+        if (invw <= sw->fog_inv_far) {
+            return (c & 0xFF000000u) | sw->fog_colour;
+        }
     }
     /* The depth is the reciprocal of the interpolated 1/w, once per pixel.
        A division is the honest way to get it and also the expensive one, so
@@ -11107,21 +11124,18 @@ static nj_u4 sw_fog(m3g_sw *sw, float invw, nj_u4 c)
     d = v.f * (2.0f - invw * v.f);
     d = d * (2.0f - invw * d);
     if (sw->fog_mode == 81) {                /* LINEAR */
-        float span = sw->fog_far - sw->fog_near;
-
-        f = (span > 0.0f) ? ((sw->fog_far - d) / span) : 1.0f;
+        f = (sw->fog_inv_span > 0.0f)
+            ? ((sw->fog_far - d) * sw->fog_inv_span) : 1.0f;
     } else {                                 /* EXPONENTIAL */
         f = expf(-sw->fog_density * d);
     }
     if (f < 0.0f) { f = 0.0f; }
     if (f > 1.0f) { f = 1.0f; }
     fc = sw->fog_colour;
-    fr = (float)((c >> 16) & 0xFFu);
-    fg = (float)((c >> 8) & 0xFFu);
-    fb = (float)(c & 0xFFu);
-    fr = fr * f + (float)((fc >> 16) & 0xFFu) * (1.0f - f);
-    fg = fg * f + (float)((fc >> 8) & 0xFFu) * (1.0f - f);
-    fb = fb * f + (float)(fc & 0xFFu) * (1.0f - f);
+    nf = 1.0f - f;
+    fr = (float)((c >> 16) & 0xFFu) * f + (float)((fc >> 16) & 0xFFu) * nf;
+    fg = (float)((c >> 8) & 0xFFu) * f + (float)((fc >> 8) & 0xFFu) * nf;
+    fb = (float)(c & 0xFFu) * f + (float)(fc & 0xFFu) * nf;
     return (c & 0xFF000000u) |
            ((nj_u4)(fr + 0.5f) << 16) | ((nj_u4)(fg + 0.5f) << 8) |
            (nj_u4)(fb + 0.5f);
@@ -12748,6 +12762,10 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
     r.sw.fog_near = r.fog_near;
     r.sw.fog_far = r.fog_far;
     r.sw.fog_density = r.fog_density;
+    r.sw.fog_inv_span = (r.fog_far > r.fog_near)
+        ? 1.0f / (r.fog_far - r.fog_near) : 0.0f;
+    r.sw.fog_inv_near = (r.fog_near > 0.0f) ? 1.0f / r.fog_near : 0.0f;
+    r.sw.fog_inv_far = (r.fog_far > 0.0f) ? 1.0f / r.fog_far : 0.0f;
 
     /* Texture unit 0 and the polygon mode: a textured title says so in the
        Appearance, and the PolygonMode is where culling and winding live
