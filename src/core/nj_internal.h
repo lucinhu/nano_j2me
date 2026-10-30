@@ -606,6 +606,13 @@ struct nj_vm {
     const nj_port *port;
 
     /*
+     * Live frame cap: -1 means "whatever the port's fps_cap says".  nj_run
+     * copies the caller's nj_port, so this is how a port that lets the player
+     * change the cap mid-game reaches the frame loop (nj_vm_set_frame_cap).
+     */
+    int         frame_cap;
+
+    /*
      * The system properties the DEVICE answers, on top of the runtime's own.
      * Borrowed, not owned: a caller hands over a table of pointers into its own
      * storage (argv, a device profile, a static array) and keeps it alive for

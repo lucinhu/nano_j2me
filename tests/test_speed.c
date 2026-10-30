@@ -271,6 +271,30 @@ int main(void)
         }
     }
 
+    /*
+     * The frame cap: the port's own field is the default, an override wins
+     * while it is set, -1 hands the decision back, and the clamp holds.  The
+     * Android port's display setting goes through this because nj_run copies
+     * the caller's nj_port into its frame loop - writing the caller's copy
+     * would change nothing the VM reads.
+     */
+    port.fps_cap = 30;
+    eq("frame cap defaults to the port's", nj_vm_frame_cap(vm), 30);
+    nj_vm_set_frame_cap(vm, 60);
+    eq("an override replaces the port's cap", nj_vm_frame_cap(vm), 60);
+    eq("the port's own field is untouched", port.fps_cap, 30);
+    nj_vm_set_frame_cap(vm, 0);
+    eq("0 means uncapped", nj_vm_frame_cap(vm), 0);
+    nj_vm_set_frame_cap(vm, -1);
+    eq("-1 returns to the port", nj_vm_frame_cap(vm), 30);
+    nj_vm_set_frame_cap(vm, 5000);
+    eq("the cap clamps at 1000", nj_vm_frame_cap(vm), 1000);
+    nj_vm_set_frame_cap(vm, -7);
+    eq("a request below -1 is -1", nj_vm_frame_cap(vm), 30);
+    port.fps_cap = 0;
+    eq("an uncapped port stays uncapped", nj_vm_frame_cap(vm), 0);
+    nj_vm_set_frame_cap(NULL, 60);       /* tolerated, like set_speed(NULL) */
+
     nj_vm_destroy(vm);
     test_epoch_clock(&port);
     nj_port_shutdown(&port);

@@ -220,6 +220,7 @@ nj_vm *nj_vm_create(const nj_port *port, nj_size heap_bytes)
     memset(vm, 0, sizeof(*vm));
     /* Real time until the player says otherwise. */
     vm->speed_percent = 100;
+    vm->frame_cap = -1;
 
     if (vm_setup(vm, port, heap_bytes) != NJ_OK) {
         nj_vm_destroy(vm);

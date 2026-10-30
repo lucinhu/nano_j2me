@@ -968,10 +968,11 @@ public class LibraryActivity extends Activity {
         showBox(box, "关闭");
     }
 
-    /** One line that says what the two switches and the font are set to. */
+    /** One line that says what the two switches, the cap and the font are set to. */
     private String displaySummary() {
         String aa = (Settings.fontAntiAlias(this) ? "字体平滑" : "字体不平滑")
-                + "，" + (Settings.pictureAntiAlias(this) ? "画面平滑" : "画面不平滑");
+                + "，" + (Settings.pictureAntiAlias(this) ? "画面平滑" : "画面不平滑")
+                + "，" + Settings.frameCapText(Settings.frameCap(this));
         String f = Settings.fontFile(this);
         return f == null ? aa + "，系统字体" : aa + "，字体：" + new File(f).getName();
     }
@@ -1044,6 +1045,20 @@ public class LibraryActivity extends Activity {
                         Settings.setPictureAntiAlias(LibraryActivity.this, !picAa);
                         d.dismiss();
                         toast(!picAa ? "画面反锯齿已打开" : "画面反锯齿已关闭");
+                        displayDialog();
+                    }
+                }), Md3.gap(this, 12));
+        final int frameCap = Settings.frameCap(this);
+        box.addView(rowAction(Md3.IC_PLAY, "帧率上限：" + Settings.frameCapText(frameCap),
+                frameCap < 0 ? "按端口默认（30 帧）；手机撑得住就调高"
+                        : frameCap == 0 ? "不设上限：最流畅，也最费电"
+                                : "每秒最多 " + frameCap + " 帧", new Runnable() {
+                    @Override
+                    public void run() {
+                        int next = Settings.nextFrameCap(frameCap);
+                        Settings.setFrameCap(LibraryActivity.this, next);
+                        d.dismiss();
+                        toast("帧率上限：" + Settings.frameCapText(next));
                         displayDialog();
                     }
                 }), Md3.gap(this, 12));

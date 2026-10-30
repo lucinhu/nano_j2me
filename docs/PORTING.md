@@ -249,6 +249,29 @@ marks them "introduced in Android 26" and will not compile for a lower target.
 `adb shell setprop debug.nj2me.audio opensl` pins the old backend, which is the
 only way to exercise that path on a phone that has AAudio.
 
+The same convention gives the frame loop a voice: `adb shell setprop
+debug.nj2me.stats 1` before launching a title makes the port log
+`stats: 59.8 fps, 299 frames in 5004 ms` every five seconds, read from the
+counter it posts to the Surface.  A MIDlet cannot report this - a 30 Hz title
+sleeps its way to 30 frames a second whether the phone can draw them or not -
+so a player sending `logcat -s nj2me` with the line in it is the one honest
+frame-rate measurement available on a device this project cannot test on.
+
+That counter is what showed the port's own default was too low: the cap had
+always been 30, but the API 26 x86_64 emulator draws a saved world at
+`stats: 59.4 fps, 298 frames in 5014 ms` when the cap is lifted.  So the cap is
+a player setting now, a 帧率上限 row in the library's display settings and in
+the game panel: 30 (the default), 60, or 不限制.  The game-panel row applies to
+the running VM on its next frame; the library row is what the next title
+launches with.  It cannot be a port field write - `nj_run()` copies the
+caller's `nj_port` into its frame loop, so the copy the VM reads is not the one
+the UI thread owns (`src/runner/nj_run.c` says so at the top of `nj_run`) - and
+that is why the runtime grew `nj_vm_set_frame_cap()` (`include/nj2me/nj_vm.h`),
+which the Android port hands to the VM from `android_input_poll` on the run
+thread, the same handshake `nativeSetSpeed` already used.
+`adb shell setprop debug.nj2me.fps <n>` still sets the launch cap for a
+measurement (0 is uncapped); the player setting is applied on top of it.
+
 The port fills in `display_init`/`display_present`, `input_poll`, `input_push`,
 `now`, `dir_open`/`dir_next`/`dir_close`, `tone_play`/`tone_stop`,
 `pcm_open`/`pcm_write`/`pcm_close`/`pcm_free`/`pcm_queued`,

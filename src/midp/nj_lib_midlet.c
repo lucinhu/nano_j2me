@@ -291,7 +291,7 @@ static void frame_pace_wait(nj_vm *vm, nj_s8 wait)
 
 static void frame_pace(nj_vm *vm, nj_s8 frame_start)
 {
-    int cap = vm->port ? vm->port->fps_cap : 0;
+    int cap = nj_vm_frame_cap(vm);
     nj_s8 budget_ms;
     nj_s8 elapsed;
 

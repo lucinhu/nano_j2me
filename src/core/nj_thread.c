@@ -159,6 +159,31 @@ int nj_vm_speed(const nj_vm *vm)
     return vm ? vm->speed_percent : 100;
 }
 
+void nj_vm_set_frame_cap(nj_vm *vm, int cap)
+{
+    if (!vm) {
+        return;
+    }
+    if (cap < -1) {
+        cap = -1;
+    }
+    if (cap > 1000) {
+        cap = 1000;
+    }
+    vm->frame_cap = cap;
+}
+
+int nj_vm_frame_cap(const nj_vm *vm)
+{
+    if (!vm) {
+        return 0;
+    }
+    if (vm->frame_cap >= 0) {
+        return vm->frame_cap;
+    }
+    return vm->port ? vm->port->fps_cap : 0;
+}
+
 static void port_idle(nj_vm *vm)
 {
     if (vm && vm->port && vm->port->idle) {

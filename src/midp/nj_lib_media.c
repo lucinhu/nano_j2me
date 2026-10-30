@@ -1839,7 +1839,7 @@ static void video_audio_pump(nj_vm *vm, nj_ref p)
  */
 static int video_sample_due(nj_vm *vm, nj_ref p)
 {
-    nj_s4 cap = (vm->port && vm->port->fps_cap > 0) ? vm->port->fps_cap : 0;
+    nj_s4 cap = nj_vm_frame_cap(vm);
     nj_s4 fps = r_i(vm, p, F_P_RATE);
     nj_s8 start;
     nj_s4 pushed;
@@ -1859,7 +1859,7 @@ static int video_sample_due(nj_vm *vm, nj_ref p)
  */
 static void video_set_start(nj_vm *vm, nj_ref p)
 {
-    nj_s4 cap = (vm->port && vm->port->fps_cap > 0) ? vm->port->fps_cap : 0;
+    nj_s4 cap = nj_vm_frame_cap(vm);
     nj_s4 fps = r_i(vm, p, F_P_RATE);
     nj_s4 pushed = r_i(vm, p, F_P_PUSHED);
     nj_s8 start = nj_now_ms(vm);

@@ -388,6 +388,21 @@ void nj_vm_set_speed(nj_vm *vm, int percent);
 int nj_vm_speed(const nj_vm *vm);
 
 /*
+ * Cap the frame loop at `cap` frames per second: 0 is uncapped, and -1 hands
+ * the decision back to the port's `fps_cap`.  The next frame applies it.
+ *
+ * A port that can change this while a game runs cannot write through
+ * `port->fps_cap`: nj_run copies the caller's nj_port into its own frame loop,
+ * so the copy the VM reads is not the one the UI thread owns.  This is the
+ * channel that survives that copy.  Clamped to 0..1000.
+ */
+void nj_vm_set_frame_cap(nj_vm *vm, int cap);
+
+/* The cap the frame loop is using now: the override if there is one, else the
+ * port's fps_cap. */
+int nj_vm_frame_cap(const nj_vm *vm);
+
+/*
  * Save and restore the state of a running VM ("save state").
  *
  * nj_vm_save() photographs the whole Java world: the object arena, the static

@@ -188,6 +188,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
      */
     private static native void nativeSetFilter(long handle, int linear);
 
+    /**
+     * Frames per second to aim for: 30 or 60, 0 for uncapped, -1 for the
+     * port's own default.  Like the speed word, it is applied by the run
+     * thread at the top of its next frame.
+     */
+    private static native void nativeSetFrameCap(long handle, int cap);
+
     /** Drop the glyphs the port has cached (new typeface or anti-aliasing). */
     private static native void nativeGlyphReset(long handle);
 
@@ -605,6 +612,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
             if (handle != 0) {
                 nativeSetSpeed(handle, speed);
                 nativeSetFilter(handle, pictureAA);
+                nativeSetFrameCap(handle, Settings.frameCap(this));
                 /* A new MIDlet: its own vocabulary is what the subset row will
                  * keep, so the previous game's stops being recorded here. */
                 GlyphSource.beginRun();
@@ -1058,6 +1066,7 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         synchronized (lock) {
             if (handle != 0) {
                 nativeSetFilter(handle, pictureAA);
+                nativeSetFrameCap(handle, Settings.frameCap(this));
                 nativeGlyphReset(handle);
             }
         }
@@ -1141,6 +1150,13 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 picAA ? "画面现在会做平滑；关掉是原来的方块像素"
                       : "画面缩放时是方块锯齿；铺满和自定义时打开更平滑",
                 picAA, null);
+        final int frameCap = Settings.frameCap(this);
+        LinearLayout fpsRow = Md3.row(this, Md3.IC_PLAY,
+                "帧率上限：" + Settings.frameCapText(frameCap),
+                frameCap < 0 ? "按端口默认（30 帧）；这款手机和这个游戏撑得住就调高"
+                        : frameCap == 0 ? "不设上限：最流畅，也最费电"
+                                : "每秒最多 " + frameCap + " 帧；调高更流畅，也更快用完电",
+                false, null);
         LinearLayout save = Md3.row(this, Md3.IC_MEMORY, "保存状态",
                 "把这一局的进度存下来，回到游戏卡片里选「恢复进度」", false, null);
         LinearLayout quit = Md3.dangerRow(this, Md3.IC_POWER, "退出游戏", null);
@@ -1158,6 +1174,8 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
         box.addView(subsetRow);
         box.addView(Md3.divider(this));
         box.addView(picAaRow);
+        box.addView(Md3.divider(this));
+        box.addView(fpsRow);
         box.addView(Md3.divider(this));
         box.addView(menuRow);
         box.addView(Md3.divider(this));
@@ -1254,6 +1272,23 @@ public class GameActivity extends Activity implements SurfaceHolder.Callback, Pa
                 Log.i(TAG, "picture: anti-alias " + (picAA ? "off" : "on"));
                 dlg.dismiss();
                 toast(!picAA ? "画面反锯齿已打开" : "画面反锯齿已关闭");
+            }
+        });
+        fpsRow.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                int next = Settings.nextFrameCap(frameCap);
+                Settings.setFrameCap(GameActivity.this, next);
+                /* The next frame applies it; the run thread waits for the
+                 * request in android_input_poll, never here. */
+                synchronized (lock) {
+                    if (handle != 0) {
+                        nativeSetFrameCap(handle, next);
+                    }
+                }
+                Log.i(TAG, "fps: cap " + next);
+                dlg.dismiss();
+                toast("帧率上限：" + Settings.frameCapText(next));
             }
         });
         menuRow.setOnClickListener(new View.OnClickListener() {

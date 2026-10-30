@@ -23,6 +23,7 @@ final class Settings {
     private static final String FONT_AA = "fontAntiAlias";
     private static final String PICTURE_AA = "pictureAntiAlias";
     private static final String FONT_FILE = "fontFile";
+    private static final String FRAME_CAP = "frameCap";
 
     private Settings() {
     }
@@ -61,6 +62,38 @@ final class Settings {
 
     static void setPictureAntiAlias(Context ctx, boolean on) {
         prefs(ctx).edit().putBoolean(PICTURE_AA, on).apply();
+    }
+
+    /**
+     * Frames per second the port aims for, or -1 for "the port's own default".
+     *
+     * -1 is the status quo: the native port caps a phone at 30, and a title
+     * that wants 60 on a phone that can draw it is the case this setting
+     * exists for.  Applies to the next game - the port is told at launch and
+     * again whenever the game panel changes it.
+     */
+    static int frameCap(Context ctx) {
+        return prefs(ctx).getInt(FRAME_CAP, -1);
+    }
+
+    static void setFrameCap(Context ctx, int cap) {
+        prefs(ctx).edit().putInt(FRAME_CAP, cap).apply();
+    }
+
+    /** The cap as a row title reads it. */
+    static String frameCapText(int cap) {
+        if (cap < 0) {
+            return "30 帧（默认）";
+        }
+        return cap == 0 ? "不限制" : cap + " 帧";
+    }
+
+    /** The next value in the cycle: default -> 60 -> uncapped -> default. */
+    static int nextFrameCap(int cap) {
+        if (cap < 0) {
+            return 60;
+        }
+        return cap == 0 ? -1 : 0;
     }
 
     /**

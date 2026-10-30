@@ -306,6 +306,23 @@ typedef struct android_state {
     int   logged_format;   /* window buffer format already reported to logcat */
 
     /*
+     * Frame-rate telemetry for the phone the game is actually on.
+     *
+     * `adb shell setprop debug.nj2me.stats 1` makes the port log one line every
+     * five seconds with the frames it posted.  That is the only way to answer
+     * "is this phone dropping frames" from a logcat: a MIDlet's own clock is
+     * virtual (a 30 Hz title sleeps its way to 30 frames per second whether the
+     * device can draw them or not), and a screenshot has no timing.  The
+     * property is read once, on the first frame, because a property read per
+     * frame would cost more than the line saves.
+     *
+     * stats is 0 until the property has been read, then 1 on / 2 off.
+     */
+    int   stats;
+    nj_u4 stats_t0;       /* when the window being counted started */
+    int   stats_frames;   /* frames posted in that window */
+
+    /*
      * Which part of the logical screen the MIDlet actually paints.
      *
      * No manifest in the corpus says what screen a game was written for - 6 of
@@ -344,6 +361,15 @@ typedef struct android_state {
     int   speed_percent;
     int   speed_applied;
     int   det_raw_same;
+
+    /*
+     * Frame cap the player picked: 30 or 60, 0 for uncapped, -1 for "the
+     * port's own default" (which `debug.nj2me.fps` can also have set).  Same
+     * handshake as the speed: the UI thread only writes the request, and the
+     * run thread hands it to the VM at the top of a frame.
+     */
+    int   frame_cap_req;
+    int   frame_cap_applied;
 
     /*
      * State snapshots.  The same rule as the speed: the UI thread leaves a
@@ -559,6 +585,38 @@ static void android_sleep_ms(void *ud, nj_u4 ms)
     ts.tv_sec = (time_t)(ms / 1000u);
     ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
     nanosleep(&ts, NULL);
+}
+
+/*
+ * The frame cap, and the property that overrides it.
+ *
+ * 30 has been this port's cap since it existed: a phone drawing a 240x320
+ * software frame should not burn battery on frames a title did not ask for, and
+ * most J2ME titles sleep to their own rate anyway.  A 60/90/120 Hz panel and a
+ * title that would use the frames is the case it gets wrong, so the cap is the
+ * player's setting now (Settings.frameCap -> nativeSetFrameCap ->
+ * nj_vm_set_frame_cap); `setprop debug.nj2me.fps N` (0 = uncapped) is the
+ * launch-time override a measurement or a bug report uses, and the player
+ * setting is applied on top of it.  See docs/PORTING.md.
+ */
+static int android_fps_cap(void)
+{
+    char prop[PROP_VALUE_MAX];
+    int n;
+
+    prop[0] = '\0';
+    (void)__system_property_get("debug.nj2me.fps", prop);
+    if (prop[0] == '\0') {
+        return 30;
+    }
+    n = atoi(prop);
+    if (n < 0) {
+        n = 0;
+    }
+    if (n > 240) {
+        n = 240;
+    }
+    return n;
 }
 
 static void android_log(void *ud, int level, const char *msg)
@@ -1285,6 +1343,38 @@ static void android_display_present(void *ud, int x, int y, int w, int h)
     ANativeWindow_unlockAndPost(win);
     ANativeWindow_release(win);
     s->frames_presented++;
+
+    if (s->stats == 0) {
+        char prop[PROP_VALUE_MAX];
+        prop[0] = '\0';
+        (void)__system_property_get("debug.nj2me.stats", prop);
+        s->stats = (prop[0] != '\0' && prop[0] != '0') ? 1 : 2;
+        if (s->stats == 1) {
+            s->stats_t0 = android_millis(s);
+            __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                                "stats: on, one line every 5 s "
+                                "(setprop debug.nj2me.stats 0 to stop)");
+        }
+    }
+    if (s->stats == 1) {
+        nj_u4 now = android_millis(s);
+        nj_u4 ms = now - s->stats_t0;
+        s->stats_frames++;
+        if (ms >= 5000u) {
+            /* Tenths as an integer: __android_log_print passes the format to
+             * vsnprintf, but keeping the frame loop free of floating point is
+             * not worth arguing about on a phone. */
+            unsigned long long tenths = ((unsigned long long)s->stats_frames
+                                         * 10000ull + ms / 2u) / ms;
+            __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                                "stats: %u.%u fps, %d frames in %u ms",
+                                (unsigned)(tenths / 10ull),
+                                (unsigned)(tenths % 10ull),
+                                s->stats_frames, (unsigned)ms);
+            s->stats_t0 = now;
+            s->stats_frames = 0;
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1306,6 +1396,17 @@ static int android_input_poll(void *ud, nj_event *ev)
          */
         __android_log_print(ANDROID_LOG_INFO, "nj2me",
                             "speed: MIDlet time runs at %d%%", s->speed_percent);
+    }
+    /*
+     * The frame cap, same handshake and same reason: nj_vm_set_frame_cap is
+     * the only way to reach the copy of the port the frame loop owns.
+     */
+    if (s->vm && s->frame_cap_req != s->frame_cap_applied) {
+        nj_vm_set_frame_cap(s->vm, s->frame_cap_req);
+        s->frame_cap_applied = s->frame_cap_req;
+        __android_log_print(ANDROID_LOG_INFO, "nj2me",
+                            "fps: cap %d%s", s->frame_cap_req,
+                            s->frame_cap_req == 0 ? " = uncapped" : "");
     }
     /*
      * A snapshot the player asked for.  Taken here and not in the JNI call
@@ -4351,6 +4452,8 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
         return NJ_ERR_NOMEM;
     }
     pthread_mutex_init(&s->lock, NULL);
+    s->frame_cap_req = -1;      /* follow fps_cap until a player says otherwise */
+    s->frame_cap_applied = -2;  /* not applied yet; see android_input_poll */
 
     /* The logical screen.  display_init() keeps this and scales it into the
      * Surface, so a title that refuses anything above 250 in either axis gets a
@@ -4455,7 +4558,13 @@ nj_status nj_port_android_ex(nj_port *out, int screen_w, int screen_h)
     out->bt_close = android_bt_close;
     out->log = android_log;
     out->shutdown = android_shutdown;
-    out->fps_cap = 30;
+    out->fps_cap = android_fps_cap();
+    /* Logged only when the property is in play: a default run says nothing. */
+    if (out->fps_cap != 30) {
+        __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
+                            "fps: cap %d%s (debug.nj2me.fps)",
+                            out->fps_cap, out->fps_cap == 0 ? " = uncapped" : "");
+    }
     return NJ_OK;
 }
 
@@ -5353,6 +5462,26 @@ Java_com_lucinhu_nj2me_GameActivity_nativeSetSpeed(JNIEnv *env, jobject thiz,
         android_state *s = AS(a->port.ud);
         if (s) {
             s->speed_percent = (int)percent;
+        }
+    }
+}
+
+/*
+ * The frame cap the player picked: 30 or 60, 0 for uncapped, -1 for the port's
+ * own default (and whatever `debug.nj2me.fps` set).  Only remembered here;
+ * android_input_poll hands it to the VM at the top of a frame, for the same
+ * reason the speed is applied there.
+ */
+JNIEXPORT void JNICALL
+Java_com_lucinhu_nj2me_GameActivity_nativeSetFrameCap(JNIEnv *env, jobject thiz,
+                                                      jlong handle, jint cap)
+{
+    android_app *a = (android_app *)(intptr_t)handle;
+    (void)env; (void)thiz;
+    if (a) {
+        android_state *s = AS(a->port.ud);
+        if (s) {
+            s->frame_cap_req = cap < -1 ? -1 : (cap > 240 ? 240 : (int)cap);
         }
     }
 }
