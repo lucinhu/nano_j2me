@@ -692,6 +692,13 @@ struct nj_vm {
      * delivers the frame itself when this is non-zero; see c_paint_now(). */
     nj_u1         in_callback;
     nj_u4         frames_presented;
+    /* Deadline of the next display frame, in microseconds on the MIDlet's
+     * clock.  The pacer aims at this absolute instant instead of granting
+     * itself one budget per frame, so a frame whose work overran the boundary
+     * does not push every later frame late, and the sub-millisecond part of a
+     * budget (60 fps is 16666 us, not 16 ms) is carried; see frame_pace() in
+     * nj_lib_midlet.c.  Zero means the schedule has not been started yet. */
+    nj_s8         frame_due_us;
     nj_u2         screen_w;
     nj_u2         screen_h;
 
@@ -1268,6 +1275,7 @@ void       nj_frame_pop(nj_vm *vm, nj_thread *th);
 nj_status  nj_scheduler_run(nj_vm *vm);
 nj_status  nj_scheduler_step(nj_vm *vm);
 nj_status  nj_scheduler_frame(nj_vm *vm, nj_u4 budget_ms);
+int         nj_scheduler_has_threads(nj_vm *vm);
 nj_status  nj_scheduler_run_until_idle(nj_vm *vm, nj_u4 budget_ms);
 /* Seed the virtual epoch once after setup; restores supply their own anchor. */
 void       nj_clock_init(nj_vm *vm);

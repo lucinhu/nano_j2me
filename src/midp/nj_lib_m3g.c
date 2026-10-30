@@ -446,6 +446,40 @@ static void m3g_image_texel(nj_u4 fmt, const nj_u1 *s, nj_u1 *out)
         break;
     }
 }
+
+/*
+ * Expand `n` palette indices into the RGBA bytes the sampler reads.
+ *
+ * The file loader and the five-argument Java constructor both have to do this,
+ * and both have to answer the same two questions the format leaves open.  An
+ * index past the end of the table samples the table's last colour instead of
+ * reading past it: a short palette is legal (the length only has to be a whole
+ * number of colours) and a title can easily address more entries than it
+ * supplied.  An RGBA palette whose alpha bytes are all zero is a reserved-byte
+ * artifact, not transparency - taken literally it makes the whole texture
+ * invisible, which no exporter meant.  freej2me-plus applies the same rule.
+ */
+static void m3g_expand_palette(const nj_u1 *ix, nj_u4 n, const nj_u1 *pal,
+                               nj_u4 bpp, nj_u4 entries, nj_u4 fmt, nj_u1 *out)
+{
+    nj_u4 k, e;
+    int opaque = (fmt == 100u);
+
+    if (opaque) {
+        for (k = 3u; k < entries * bpp; k += 4u) {
+            if (pal[k] != 0u) {
+                opaque = 0;
+                break;
+            }
+        }
+    }
+    for (k = 0u; k < n; k++) {
+        e = ix[k];
+        if (e >= entries) { e = entries - 1u; }
+        m3g_image_texel(fmt, pal + (nj_size)e * bpp, out + (nj_size)k * 4u);
+        if (opaque) { out[k * 4u + 3u] = 0xFFu; }
+    }
+}
 #endif
 
 /* Object3D: userID, AnimationTrack indices, then length-prefixed user
@@ -5998,22 +6032,8 @@ nj_status nj_m3g_link_misc(nj_vm *vm, const nj_m3g_object *objs, nj_u4 nobj,
             nj_root(vm, px);
             dst = (nj_u1 *)nj_array_data(px);
             if (pal > 0u) {
-                nj_u4 entries = pal / bpp;
-                const nj_u1 *pt = f->data;
-                const nj_u1 *ix = f->data + pal + 4u;
-
-                for (k = 0u; k < n; k++) {
-                    nj_u4 e = ix[k];
-
-                    if (e < entries) {
-                        m3g_image_texel(f->a, pt + (nj_size)e * bpp, dst + k * 4u);
-                    } else {
-                        dst[k * 4u] = 0u;
-                        dst[k * 4u + 1u] = 0u;
-                        dst[k * 4u + 2u] = 0u;
-                        dst[k * 4u + 3u] = 0xFFu;
-                    }
-                }
+                m3g_expand_palette(f->data + pal + 4u, n, f->data, bpp,
+                                   pal / bpp, f->a, dst);
             } else {
                 for (k = 0u; k < n; k++) {
                     m3g_image_texel(f->a, f->data + (nj_size)k * bpp, dst + k * 4u);
@@ -10637,7 +10657,8 @@ typedef struct {
     int cull;                  /* 160 CULL_BACK, 161 CULL_FRONT, 162 none */
     int winding;               /* 168 CCW, 169 CW */
     int texfunc;               /* 224 ADD .. 228 REPLACE; 227 MODULATE */
-    int filt_image;            /* 128 NEAREST (the default) / 129 LINEAR */
+    int filt_image;            /* 209 LINEAR / 210 NEAREST (208/129 legacy) */
+    int filt_level;            /* 208 BASE_LEVEL / 209 LINEAR / 210 NEAREST: mip choice */
     const nj_u1 *tex_base;     /* original RGBA pixels, before per-triangle LOD */
     const nj_u1 *mips;         /* packed RGBA levels 1..N; level 0 is tex_base */
     int mip_w, mip_h, mip_n;   /* its base size and how many levels it has */
@@ -10924,8 +10945,9 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
          * which is why a magnified texture stops showing the blocky steps the
          * nearest filter leaves, and why a minified one stops sparkling.
          */
-        float x = fs * (float)(sw->tex_w - 1);
-        float y = ft * (float)(sw->tex_h - 1);
+        /* Same convention: texel centres sit at (i + 0.5) / W. */
+        float x = fs * (float)sw->tex_w - 0.5f;
+        float y = ft * (float)sw->tex_h - 0.5f;
         int u0 = (int)x, v0 = (int)y, u1, v1, fu, fv;
         nj_u4 w00, w10, w01, w11;
 #if NJ_M3G_FAST_PATHS
@@ -10988,8 +11010,11 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
             if (v < sw->sprite_t) { v = sw->sprite_t; }
             if (v >= sw->sprite_b) { v = sw->sprite_b - 1; }
         } else {
-            u = (int)(fs * (float)(sw->tex_w - 1) + 0.5f);
-            v = (int)(ft * (float)(sw->tex_h - 1) + 0.5f);
+            /* Texel i covers [i/W, (i+1)/W): fs * W is the index, without
+             * the half-texel shift the (W - 1) form added, which put a sample
+             * exactly on a tile boundary into the next tile of an atlas. */
+            u = (int)(fs * (float)sw->tex_w);
+            v = (int)(ft * (float)sw->tex_h);
         }
         if (u < 0) { u = 0; }
         if (u >= sw->tex_w) { u = sw->tex_w - 1; }
@@ -11019,8 +11044,7 @@ static nj_u4 sw_texel(const m3g_sw *sw, float s, float t, nj_u4 argb)
 /* Nearest sampling shared by the flat textured spans. Keep the wrap and
  * rounding expressions identical to sw_texel(), including repeat's treatment
  * of negative coordinates and clamp's inclusive upper edge. */
-static inline const nj_u1 *sw_near_texel(const m3g_sw *sw, float s, float t,
-                                         float tsx, float tsy)
+static inline const nj_u1 *sw_near_texel(const m3g_sw *sw, float s, float t)
 {
     float fs, ft;
     int u, v;
@@ -11039,8 +11063,8 @@ static inline const nj_u1 *sw_near_texel(const m3g_sw *sw, float s, float t,
         if (ft < 0.0f) { ft += 1.0f; }
         if (ft >= 1.0f) { ft = 0.999f; }
     }
-    u = (int)(fs * tsx + 0.5f);
-    v = (int)(ft * tsy + 0.5f);
+    u = (int)(fs * (float)sw->tex_w);
+    v = (int)(ft * (float)sw->tex_h);
     if (u < 0) { u = 0; } else if (u >= sw->tex_w) { u = sw->tex_w - 1; }
     if (v < 0) { v = 0; } else if (v >= sw->tex_h) { v = sw->tex_h - 1; }
     return sw->tex + ((nj_size)v * (nj_size)sw->tex_w + (nj_size)u) *
@@ -11285,8 +11309,6 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
 #endif
 #if NJ_M3G_FAST_PATHS
             if (flat_tex565) {
-                const float tsx = (float)(sw->tex_w - 1);
-                const float tsy = (float)(sw->tex_h - 1);
                 const nj_u4 fr = (flat >> 16) & 0xFFu;
                 const nj_u4 fg = (flat >> 8) & 0xFFu;
                 const nj_u4 fb = flat & 0xFFu;
@@ -11305,7 +11327,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
 
                     if (key <= 0) { continue; }
                     if (dtest && key <= z[o]) { continue; }
-                    tp = sw_near_texel(sw, ph / pg, pk / pg, tsx, tsy);
+                    tp = sw_near_texel(sw, ph / pg, pk / pg);
                     ta = bpp4 ? (nj_u4)tp[3] : 255u;
                     if (sw->athresh > 0 && (nj_s4)ta < sw->athresh) { continue; }
                     tr = tp[0]; tg = tp[1]; tb = tp[2];
@@ -11333,8 +11355,6 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
                     drawn = 1u;
                 }
             } else if (flat_texargb) {
-                const float tsx = (float)(sw->tex_w - 1);
-                const float tsy = (float)(sw->tex_h - 1);
                 const nj_u4 fr = (flat >> 16) & 0xFFu;
                 const nj_u4 fg = (flat >> 8) & 0xFFu;
                 const nj_u4 fb = flat & 0xFFu;
@@ -11353,7 +11373,7 @@ static nj_u4 sw_tri(m3g_sw *sw, const float xy[6], const float inv[3],
 
                     if (key <= 0) { continue; }
                     if (dtest && key <= z[o]) { continue; }
-                    tp = sw_near_texel(sw, ph / pg, pk / pg, tsx, tsy);
+                    tp = sw_near_texel(sw, ph / pg, pk / pg);
                     ta = bpp4 ? (nj_u4)tp[3] : 255u;
                     if (sw->athresh > 0 && (nj_s4)ta < sw->athresh) { continue; }
                     tr = tp[0]; tg = tp[1]; tb = tp[2];
@@ -12119,7 +12139,16 @@ static void jr_emit(m3g_jr *r, const jr_vtx *v0, const jr_vtx *v1,
            fragment: a triangle small enough to alias is a triangle whose
            pixels all want the same level, and this rasteriser has no room for
            a derivative per pixel. */
-        if (r->sw.mips && r->tpos != NULL && r->sw.mip_n > 1) {
+        /* levelFilter decides whether a mip level may be chosen at all:
+           208 (FILTER_BASE_LEVEL, the class default, and also the zero an
+           unfiltered field still holds) always samples level 0, while 209 and
+           210 ask for the nearest or interpolated level.  imageFilter is
+           independent of it and only says how the texels inside the chosen
+           level are filtered.  Games that ask for BASE_LEVEL mean it: the
+           per-tile atlas UVs would otherwise pick a level whose box filter
+           mixes neighbouring atlas tiles together. */
+        if (r->sw.mips && r->tpos != NULL && r->sw.mip_n > 1 &&
+            (r->sw.filt_level == 209 || r->sw.filt_level == 210)) {
             float sa = (xy[2] - xy[0]) * (xy[5] - xy[1]) -
                        (xy[4] - xy[0]) * (xy[3] - xy[1]);
             float ta = (st[2] - st[0]) * (st[5] - st[1]) -
@@ -12731,6 +12760,8 @@ static int jr_setup(nj_vm *vm, nj_ref self, nj_ref vb, nj_ref ib, nj_ref app,
                                 m3g_fof(vm, NJ_C_TEX2D, "_nj_blend", "I"));
                 r.sw.filt_image = (int)nj_iget(vm, tex,
                                   m3g_fof(vm, NJ_C_TEX2D, "_nj_filtImage", "I"));
+                r.sw.filt_level = (int)nj_iget(vm, tex,
+                                  m3g_fof(vm, NJ_C_TEX2D, "_nj_filtLevel", "I"));
                 if (im2) {
                     nj_ref px = nj_rget(vm, im2, m3g_fof(vm, NJ_C_IMAGE2D,
                                                          "_nj_pixels", "[B"));
@@ -13087,7 +13118,8 @@ static nj_u4 jr_sprite(nj_vm *vm, nj_ref self, nj_ref sprite, nj_ref world,
     r.sw.tex_w = iw; r.sw.tex_h = ih; r.sw.tex_bpp = fmt == 100 ? 4 : 3;
     r.sw.sprite_l = (int)left; r.sw.sprite_t = (int)top;
     r.sw.sprite_r = (int)right; r.sw.sprite_b = (int)bottom;
-    r.sw.wrap_s = r.sw.wrap_t = 240; r.sw.filt_image = 128;
+    r.sw.wrap_s = r.sw.wrap_t = 240; r.sw.filt_image = 210;
+    r.sw.filt_level = 208;
     r.sw.texfunc = 228; r.sw.cull = 162; r.sw.sprite_fog = 1.0f;
     r.sw.sprite_fog_colour = r.fog_colour;
     if (r.fog) {
@@ -13699,9 +13731,96 @@ NJFN(m3g_img2d_init_pixels)
     return NJ_OK;
 }
 /*
+ * Expand a paletted Image2D into the RGBA bytes the sampler reads.
+ *
+ * JSR 184's five-argument shape is one palette index per pixel plus the
+ * colour table those indices select from.  This runtime kept both arrays and
+ * never read the table, so the rasteriser sampled the indices as if they were
+ * R,G,B,A bytes.  Minecraft PE's cloud layer is built that way
+ * (new Pix(clouds.png).image2D()) and its clouds therefore came out as a
+ * field of near-black flecks instead of white blocks, while the terrain atlas
+ * - which takes the (format, Object) path - was unaffected.
+ *
+ * The container loader has always expanded a paletted image (see
+ * m3g_image_texel), so do the same thing here.  RGBA is the one layout every
+ * reader understands: the texture sampler, mip generation, Background and
+ * Sprite3D all accept format 99 or 100 and nothing else, and an index array
+ * is not a format any of them can sample.  Paletted images are immutable, so
+ * expanding once here costs nothing later.
+ */
+static nj_status m3g_img2d_from_palette(nj_vm *vm, nj_ref self, nj_ref idx,
+                                       nj_ref pal)
+{
+    nj_s4 fmt = (nj_s4)((nj_u4)nj_iget(vm, self, m3g_fof(vm, NJ_C_IMAGE2D,
+                                                        "_nj_fmt", "I")) &
+                        M3G_IMAGE_FORMAT_MASK);
+    nj_s4 w = nj_iget(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_w", "I"));
+    nj_s4 h = nj_iget(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"));
+    nj_u4 bpp = m3g_image_bpp((nj_u4)fmt);
+    nj_u4 pal_len, entries, n;
+    const nj_u1 *ip;
+    const nj_u1 *pp;
+    nj_u1 *op;
+    nj_u4 mark;
+    nj_ref out;
+
+    if (w <= 0 || h <= 0) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException", "image size");
+    }
+    /* Both dimensions arrive from Java and are multiplied, so bound the
+     * product in 64 bits before it can wrap into a small allocation. */
+    if ((nj_u8)(nj_u4)w * (nj_u8)(nj_u4)h > (nj_u8)4096u * 4096u) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "image too large");
+    }
+    n = (nj_u4)w * (nj_u4)h;
+    if (!idx) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "Image pixel array cannot be null.");
+    }
+    if (!pal) {
+        return nj_throw(vm, "java/lang/NullPointerException",
+                        "Image Palette array cannot be null.");
+    }
+    if (nj_array_length(idx) < n) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "image byte array too small");
+    }
+    pal_len = nj_array_length(pal);
+    if (pal_len < bpp || (pal_len % bpp) != 0u) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "illegal palette length");
+    }
+    entries = pal_len / bpp;
+    ip = (const nj_u1 *)nj_array_data(idx);
+    pp = (const nj_u1 *)nj_array_data(pal);
+    if (!ip || !pp) {
+        return nj_throw(vm, "java/lang/IllegalArgumentException",
+                        "image storage");
+    }
+    mark = nj_root_mark(vm);
+    out = nj_root(vm, nj_array_new(vm, "B", n * 4u));
+    if (!out) {
+        nj_root_release(vm, mark);
+        return nj_throw_oom(vm);
+    }
+    op = (nj_u1 *)nj_array_data(out);
+    if (!op) {
+        nj_root_release(vm, mark);
+        return nj_throw_oom(vm);
+    }
+    m3g_expand_palette(ip, n, pp, bpp, entries, (nj_u4)fmt, op);
+    nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_fmt", "I"), 100);
+    nj_rput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"), out);
+    nj_root_release(vm, mark);
+    return NJ_OK;
+}
+
+/*
  * Image2D(int format, int width, int height, byte[] image, byte[] palette).
- * The palette form is a real JSR 184 shape - the file format carries one -
- * and this runtime keeps it beside the pixels rather than in a second class.
+ * The palette form is a real JSR 184 shape - the file format carries one, and
+ * titles use it from Java too - and both arrays are kept, but the pixels are
+ * stored expanded because that is what the sampler can read.
  */
 NJFN(m3g_img2d_init_paletted)
 {
@@ -13716,12 +13835,11 @@ NJFN(m3g_img2d_init_paletted)
             NJ_ARG_INT(args, 1));
     nj_iput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_h", "I"),
             NJ_ARG_INT(args, 2));
-    nj_rput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_pixels", "[B"),
-            NJ_ARG_REF(args, 3));
-    m3g_image_dirty(vm, self);
     nj_rput(vm, self, m3g_fof(vm, NJ_C_IMAGE2D, "_nj_palette", "[B"),
             NJ_ARG_REF(args, 4));
-    return NJ_OK;
+    m3g_image_dirty(vm, self);
+    return m3g_img2d_from_palette(vm, self, NJ_ARG_REF(args, 3),
+                                  NJ_ARG_REF(args, 4));
 }
 /* Mutability is a constructor property, not whether an upload has occurred. */
 NJFN(m3g_img2d_isMutable)

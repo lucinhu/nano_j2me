@@ -1032,10 +1032,12 @@ public class M3GDemo extends MIDlet {
             public void run() {
                 /* A 128x128 one-texel checkerboard drawn over a triangle that
                  * covers a few hundred pixels: every pixel stands for many
-                 * texels, which is the case a single level cannot answer.  With
-                 * the chain the pixels come out the average of what they cover
-                 * - grey - and without it they come out the black and the white
-                 * the checkerboard is made of. */
+                 * texels, which is the case a single level cannot answer.  The
+                 * level filter has to ask for a level at all - FILTER_BASE_LEVEL
+                 * is the crafting default and means "level zero, always" - so
+                 * the texture asks for the nearest level and the chain answers
+                 * with the average of what the pixel covers: grey, not the
+                 * black and white the checkerboard is made of. */
                 int n = 128;
                 byte[] px = new byte[n * n * 4];
                 int x, y;
@@ -1058,6 +1060,8 @@ public class M3GDemo extends MIDlet {
                 mat.setColor(Material.DIFFUSE, 0x00FFFFFF);
                 app.setMaterial(mat);
                 Texture2D tex = new Texture2D(image);
+                tex.setFiltering(Texture2D.FILTER_NEAREST,
+                                 Texture2D.FILTER_NEAREST);
                 tex.setBlending(Texture2D.FUNC_REPLACE);
                 app.setTexture(0, tex);
 

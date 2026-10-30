@@ -18,7 +18,12 @@ Killed by evidence, not fixed (no defect, no code change):
 - `CompositingMode` depth offset: **0** objects corpus-wide carry a non-zero
   `depthFactor`/`depthUnits`, so implementing it cannot change a single frame.
 - mipmapping / filtering: every `Texture2D` asks for `FILTER_BASE_LEVEL` +
-  `FILTER_NEAREST`; no mipmaps are ever requested.
+  `FILTER_NEAREST`; no mipmaps are ever requested.  *(Corrected 2026-10-30: that
+  reading was only half right.  The corpus indeed never asks for mips, but the
+  renderer chose a mip level from the area ratio anyway and never read the level
+  filter, so a `FILTER_BASE_LEVEL` texture was minified through mip averages that
+  mixed neighbouring tiles of an atlas.  `setFiltering()` is honoured now - see
+  `docs/notes/2026-10-30-m3g-sampler-conventions.md`.)*
 - second texture unit: 30 `VertexBuffer`s declare two texcoord arrays, but every
   `Appearance` in the corpus has **zero or one** texture, so unit 1 is never
   sampled.

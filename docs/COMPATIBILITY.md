@@ -1502,8 +1502,13 @@ the three things a flat `fillTriangle` cannot express possible:
   puts a triangle half way into a 4..6 fog and reads the pixel back.
 
 What is still honest about it: mip levels are generated from the image and
-selected for minified triangles, and `FILTER_LINEAR` is a true 2x2 bilinear
-(8-bit integer weights that sum to 65536), so those two are no longer gaps;
+selected for minified triangles **only when the texture asks for them** -
+`Texture2D.setFiltering()`'s level filter is read (`FILTER_BASE_LEVEL`, the
+constructor default and what every corpus title uses, always samples level 0;
+`FILTER_LINEAR`/`FILTER_NEAREST` take the area-ratio level), and texel addresses
+follow the API convention that texel i covers `[i/W,(i+1)/W)`; `FILTER_LINEAR`
+is a true 2x2 bilinear (8-bit integer weights that sum to 65536), so those
+three are no longer gaps;
 what is still missing is `FUNC_ADD`/`FUNC_BLEND` (they need a second texture
 unit), per-fragment lighting (lighting is per vertex, below), and the stencil
 or `PolygonMode` depth offset.

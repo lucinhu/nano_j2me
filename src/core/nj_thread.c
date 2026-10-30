@@ -683,6 +683,35 @@ nj_status nj_scheduler_frame(nj_vm *vm, nj_u4 budget_ms)
     return st;
 }
 
+/*
+ * 1 when the VM has any scheduler-owned thread at all, sleeping or not.
+ *
+ * The frame pacer asks this before handing the inter-frame gap to the MIDlet's
+ * own threads.  It must still call into the scheduler then: a sleeping thread
+ * only wakes because the scheduler advances its deadline, and "no thread is
+ * runnable right now" is exactly the state of a loader between its chunks.
+ * Without it the only options are a host sleep - which stops every Java thread
+ * and made a loader take (frame time / slice) times longer than it does on a
+ * phone - or a call that cannot say "nothing to run", which on a port whose
+ * idle() is a no-op (the headless one) spins a core flat out.
+ */
+int nj_scheduler_has_threads(nj_vm *vm)
+{
+    nj_u2 i;
+
+    if (vm == NULL) {
+        return 0;
+    }
+    for (i = 0u; i < vm->nthreads; i++) {
+        nj_thread *t = vm->threads[i];
+
+        if (t != NULL && !t->is_main) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Run the scheduler until every thread is dead or `budget_ms` elapses. */
 nj_status nj_scheduler_run_until_idle(nj_vm *vm, nj_u4 budget_ms)
 {

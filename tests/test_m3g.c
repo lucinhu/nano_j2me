@@ -750,7 +750,8 @@ static int i2d_canvas_init(nj_vm *vm, i2d_canvas *c)
     return ok && c->pixels != 0;
 }
 
-static int i2d_canvas_draw(nj_vm *vm, i2d_canvas *c, nj_ref img)
+static int i2d_canvas_draw_filtered(nj_vm *vm, i2d_canvas *c, nj_ref img,
+                                    int level_filter, int image_filter)
 {
     nj_value a[5];
     nj_ref tex;
@@ -772,7 +773,7 @@ static int i2d_canvas_draw(nj_vm *vm, i2d_canvas *c, nj_ref img)
     a[0].i = 240; a[1].i = 240;   /* WRAP_CLAMP */
     ok = ok && nj_call(vm, tex, CLS("Texture2D"), "setWrapping",
                        "(II)V", a, NULL) == NJ_OK;
-    a[0].i = 208; a[1].i = 208;   /* FILTER_BASE_LEVEL, NEAREST */
+    a[0].i = level_filter; a[1].i = image_filter;
     ok = ok && nj_call(vm, tex, CLS("Texture2D"), "setFiltering",
                        "(II)V", a, NULL) == NJ_OK;
     a[0].i = 0; a[1].r = tex;
@@ -784,6 +785,12 @@ static int i2d_canvas_draw(nj_vm *vm, i2d_canvas *c, nj_ref img)
                        CLS("Appearance") ";L" CLS("Transform") ";I)V",
                        a, NULL) == NJ_OK;
     return ok;
+}
+
+/* The default request: FILTER_BASE_LEVEL with FILTER_NEAREST. */
+static int i2d_canvas_draw(nj_vm *vm, i2d_canvas *c, nj_ref img)
+{
+    return i2d_canvas_draw_filtered(vm, c, img, 208, 210);
 }
 
 static nj_u4 i2d_canvas_pixel(const i2d_canvas *c, int x, int y)
@@ -984,6 +991,121 @@ static void test_image2d_set(nj_vm *vm)
         check(i2d_set_saw(vm, i_bytes, 0, 0, 1, 1, 0,
                           "NullPointerException"),
               "a null pixel buffer is a NullPointerException, checked before mutability");
+    }
+
+    printf("== Image2D palette form: indices are expanded through the table ==\n");
+    {
+        /*
+         * JSR 184's paletted constructor takes one table index per pixel and
+         * the colour table those indices select from.  The runtime used to
+         * keep the indices as the pixels, so the sampler read them as R,G,B,A
+         * bytes - Minecraft PE builds its cloud layer this way
+         * (new Pix(clouds.png).image2D()) and its clouds came out as a field
+         * of near-black flecks.  The table below holds red, half-transparent
+         * green, blue and transparent white, and the indices walk it in
+         * order, so the expected bytes are the table itself.
+         */
+        nj_ref idx = nj_byte_array_new(vm, 4u);
+        nj_ref pal = nj_byte_array_new(vm, 16u);
+        nj_ref img;
+        static const nj_u1 want[16] = {
+            255, 0, 0, 255,
+            0, 255, 0, 128,
+            0, 0, 255, 255,
+            255, 255, 255, 0
+        };
+
+        if (idx && pal) {
+            nj_u1 *ip = (nj_u1 *)nj_array_data(idx);
+            nj_u1 *pp = (nj_u1 *)nj_array_data(pal);
+
+            ip[0] = 0; ip[1] = 1; ip[2] = 2; ip[3] = 3;
+            pp[0] = 255; pp[1] = 0; pp[2] = 0; pp[3] = 255;
+            pp[4] = 0; pp[5] = 255; pp[6] = 0; pp[7] = 128;
+            pp[8] = 0; pp[9] = 0; pp[10] = 255; pp[11] = 255;
+            pp[12] = 255; pp[13] = 255; pp[14] = 255; pp[15] = 0;
+        }
+        img = i2d_new_paletted(vm, 100, 2, 2, idx, pal, &ok);
+        check(ok && img != 0, "a 2x2 RGBA palette image constructs");
+        check(i2d_int(vm, img, "getFormat") == 100,
+              "a palette image reports a format the sampler can read");
+        check(nj_array_length(i2d_pixels(vm, img)) == 16u,
+              "a 2x2 RGBA palette image expands to 16 pixel bytes");
+        check(i2d_matches(i2d_pixels(vm, img), want, 16),
+              "each pixel is the table entry its index selects");
+        check(i2d_mutable(vm, img) == 0,
+              "a palette image stays immutable after expansion");
+    }
+    {
+        /* LUMINANCE_ALPHA widens to grey plus alpha; the sampler has no
+         * single-channel texture path, so widening here is what makes such
+         * an image visible at all. */
+        nj_ref idx = nj_byte_array_new(vm, 2u);
+        nj_ref pal = nj_byte_array_new(vm, 4u);
+        nj_ref img;
+        static const nj_u1 want[8] = { 128, 128, 128, 255, 64, 64, 64, 0 };
+
+        if (idx && pal) {
+            nj_u1 *ip = (nj_u1 *)nj_array_data(idx);
+            nj_u1 *pp = (nj_u1 *)nj_array_data(pal);
+
+            ip[0] = 0; ip[1] = 1;
+            pp[0] = 128; pp[1] = 255;
+            pp[2] = 64; pp[3] = 0;
+        }
+        img = i2d_new_paletted(vm, 98, 2, 1, idx, pal, &ok);
+        check(ok && img != 0,
+              "a LUMINANCE_ALPHA palette image constructs");
+        check(nj_array_length(i2d_pixels(vm, img)) == 8u &&
+              i2d_matches(i2d_pixels(vm, img), want, 8),
+              "luminance_alpha entries expand to grey with their alpha");
+    }
+    {
+        /* Two rules the format leaves open, both of which a title can trip.
+         * An index past the end of a short table takes the table's last entry
+         * instead of reading past the array; an RGBA table whose alpha bytes
+         * are all zero is a reserved-byte artifact, and reading it literally
+         * makes the whole texture invisible, so the texels come out opaque. */
+        nj_ref idx = nj_byte_array_new(vm, 3u);
+        nj_ref pal = nj_byte_array_new(vm, 12u);
+        nj_ref img;
+        static const nj_u1 want[12] = {
+            255, 0, 0, 255,       /* index 0, table entry 0 */
+            0, 0, 255, 255,       /* index 7 clamps to the last entry */
+            0, 0, 255, 255        /* index 3, the last entry again */
+        };
+
+        if (idx && pal) {
+            nj_u1 *ip = (nj_u1 *)nj_array_data(idx);
+            nj_u1 *pp = (nj_u1 *)nj_array_data(pal);
+
+            ip[0] = 0; ip[1] = 7; ip[2] = 3;
+            pp[0] = 255; pp[1] = 0; pp[2] = 0; pp[3] = 0;
+            pp[4] = 0; pp[5] = 255; pp[6] = 0; pp[7] = 0;
+            pp[8] = 0; pp[9] = 0; pp[10] = 255; pp[11] = 0;
+        }
+        img = i2d_new_paletted(vm, 100, 3, 1, idx, pal, &ok);
+        check(ok && img != 0, "a 3x1 RGBA palette image constructs");
+        check(i2d_matches(i2d_pixels(vm, img), want, 12),
+              "an index past the table clamps, and an all-zero alpha table "
+              "comes out opaque");
+    }
+    {
+        nj_ref idx = nj_byte_array_new(vm, 1u);
+        nj_ref shortpal = nj_byte_array_new(vm, 3u);
+
+        check(i2d_new_paletted_saw(vm, 100, 1, 1, idx, 0,
+                                   "NullPointerException"),
+              "a null palette is a NullPointerException");
+        check(i2d_new_paletted_saw(vm, 100, 1, 1, 0, shortpal,
+                                   "NullPointerException"),
+              "a null index array is a NullPointerException");
+        check(i2d_new_paletted_saw(vm, 100, 1, 1, idx, shortpal,
+                                   "IllegalArgumentException"),
+              "a palette that is not a whole table of RGBA entries is rejected");
+        check(i2d_new_paletted_saw(vm, 100, 2, 2, idx, shortpal,
+                                   "IllegalArgumentException"),
+              "an index array shorter than the image is rejected");
     }
 
     if (abi) {
@@ -1289,9 +1411,15 @@ static void test_image2d_set(nj_vm *vm)
                 nj_value args[3];
                 memcpy(nj_array_data(uv), mixed_uv, sizeof(mixed_uv));
                 args[0].i = 0; args[1].i = 4; args[2].r = uv;
+                /* FILTER_NEAREST as the level filter asks for the nearest
+                   mip level; FILTER_NEAREST as the image filter keeps the
+                   texel inside it nearest.  The first triangle spans the
+                   texture hundreds of times, so the LOD picks the 1x1 tail;
+                   the second one has a degenerate UV triangle and stays at
+                   level 0, which is what the two pixel checks separate. */
                 check(nj_call(vm, canvas.tcva, CLS("VertexArray"), "set",
                               "(II[S)V", args, NULL) == NJ_OK &&
-                      i2d_canvas_draw(vm, &canvas, rgba2),
+                      i2d_canvas_draw_filtered(vm, &canvas, rgba2, 210, 210),
                       "one strip renders a minified triangle before a base-level triangle");
                 check(i2d_canvas_pixel(&canvas, 60, 240) == 0xFF8000u,
                       "the minified triangle samples the rounded mip average");
@@ -6275,12 +6403,17 @@ int main(void)
                 }
                 /* LINEAR samples are explicit colours, not a second copy of
                    the sampler. The 2x2 corners are red, green / blue, white.
-                   At (1/2,1/2), each RGB channel averages to 127.5 (127 after
-                   truncation). At (1/4,3/4), the corner shares are 3,1,9,3
-                   sixteenths: RGB=(95,63,191). RGBA corner alphas 0,64,128,240
-                   average to 108 and 121 at those two points respectively.
-                   Constant UVs keep these checks independent of interpolation
-                   across the triangle; REPLACE exposes the sampled alpha. */
+                   Texel centres sit at (i + 0.5) / W, as on OpenGL ES and as
+                   the reference FreeJ2ME-Plus bilinear filter computes them
+                   ("shift s and t by 0.5 on the texel centre"), so a UV that
+                   lands on a quarter-unit grid alternates between a texel
+                   centre and a half-texel blend. At (1/2,1/2) all four corners
+                   weigh equally: RGB=(127,127,127) after truncation, and the
+                   RGBA alphas 0,64,128,240 average to 108. The entries below
+                   also separate CLAMP (240) from REPEAT (241) on each axis,
+                   and pin integer repeats: -1 wraps to 0. Constant UVs keep
+                   these checks independent of interpolation across the
+                   triangle; REPLACE exposes the sampled alpha. */
                 {
                     const nj_u1 rgba_colors[16] = {255,0,0,0, 0,255,0,64,
                                                   0,0,255,128, 255,255,255,240};
@@ -6292,19 +6425,19 @@ int main(void)
                         const char *name;
                     } samples[] = {
                         { 2, 2,240,240,0xFF7F7F7Fu,0x6C7F7F7Fu,"centre average"},
-                        { 1, 3,240,240,0xFF5F3FBFu,0x795F3FBFu,"unequal corner shares"},
-                        {-1, 3,240,240,0xFF3F00BFu,0x603F00BFu,"clamped left edge"},
-                        { 5, 1,240,240,0xFF3FFF3Fu,0x6C3FFF3Fu,"clamped right edge"},
-                        { 1,-2,240,240,0xFFBF3F00u,0x10BF3F00u,"clamped top edge"},
-                        { 3, 5,240,240,0xFFBFBFFFu,0xD4BFBFFFu,"clamped bottom edge"},
                         {-1,-1,240,240,0xFFFF0000u,0x00FF0000u,"clamped red corner"},
                         { 5, 5,240,240,0xFFFFFFFFu,0xF0FFFFFFu,"clamped white corner"},
-                        {-3, 3,241,240,0xFF5F3FBFu,0x795F3FBFu,"negative repeat S"},
-                        { 1,-1,240,241,0xFF5F3FBFu,0x795F3FBFu,"negative repeat T"},
-                        {-7,-5,241,241,0xFF5F3FBFu,0x795F3FBFu,"negative repeat both axes"},
                         {-4,-4,241,241,0xFFFF0000u,0x00FF0000u,"negative whole repeat"},
-                        {-1,-1,240,241,0xFF3F00BFu,0x603F00BFu,"clamp S and repeat T"},
-                        {-1, 5,241,240,0xFFBFBFFFu,0xD4BFBFFFu,"repeat S and clamp T"}
+                        {-2, 2,240,240,0xFF7F007Fu,0x407F007Fu,"clamped left edge"},
+                        { 6, 2,240,240,0xFF7FFF7Fu,0x987FFF7Fu,"clamped right edge"},
+                        { 2,-2,240,240,0xFF7F7F00u,0x207F7F00u,"clamped top edge"},
+                        { 2, 6,240,240,0xFF7F7FFFu,0xB87F7FFFu,"clamped bottom edge"},
+                        {-2, 2,241,240,0xFF7F7F7Fu,0x6C7F7F7Fu,"negative repeat S"},
+                        { 2,-2,240,241,0xFF7F7F7Fu,0x6C7F7F7Fu,"negative repeat T"},
+                        {-2,-2,241,241,0xFF7F7F7Fu,0x6C7F7F7Fu,"negative repeat both axes"},
+                        {-2,-2,240,241,0xFF7F007Fu,0x407F007Fu,"clamp S and repeat T"},
+                        {-2, 6,241,240,0xFF7F7FFFu,0xB87F7FFFu,"repeat S and clamp T"},
+                        { 0, 0,241,241,0xFFFF0000u,0x00FF0000u,"zero UV under repeat"}
                     };
                     nj_ref rgba = nj_array_new(vm, "B", sizeof(rgba_colors));
                     nj_ref rgba_image = nj_object_new(vm, CLS("Image2D"));
