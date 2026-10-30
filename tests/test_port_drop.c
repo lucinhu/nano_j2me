@@ -81,15 +81,16 @@ static int jar_exists(void)
 
 /* Hand the event loop a drop exactly as SDL would deliver one: the path is
  * SDL-owned memory and the port frees it with SDL_free, so the test must not
- * free it and must not stack-allocate it. */
-static void push_drop(const char *path)
+ * free it and must not stack-allocate it.  Returns the allocation so the
+ * sdl2-compat case below can release what that shim duplicates. */
+static char *push_drop(const char *path)
 {
     SDL_Event ev;
     char *file = SDL_strdup(path);
 
     CHECK(file != NULL, "the dropped path can be handed to the event loop");
     if (!file) {
-        return;
+        return NULL;
     }
     memset(&ev, 0, sizeof(ev));
     ev.type = SDL_DROPFILE;
@@ -97,6 +98,22 @@ static void push_drop(const char *path)
     /* See sdl2_drop_data_offset_check: only sdl2-compat reads this. */
     memcpy(&ev.edit.text[20], &file, sizeof(file));
     CHECK(SDL_PushEvent(&ev) == 1, "SDL_PushEvent delivers a file drop");
+    return file;
+}
+
+/*
+ * Real SDL2 hands the event loop the pointer it was given, and the port frees
+ * that pointer - the test must not.  sdl2-compat instead copies the drop inside
+ * SDL_PushEvent, so the port frees the shim's copy and the allocation above is
+ * still ours after the event has been consumed: free it, or a sanitizer run
+ * reports it (correctly) as a leak.  Called after display_present() has drained
+ * the queue, before the port is shut down.
+ */
+static void drop_release(char *file)
+{
+    if (file && SDL_GetHint("SDL2_COMPAT") != NULL) {
+        SDL_free(file);
+    }
 }
 
 static void push_keydown(SDL_Keycode sym, SDL_Scancode scan)
@@ -174,9 +191,13 @@ static void test_refused_drop(nj_port *port, int w, int h)
         fputs("this is not a MIDlet\n", f);
         fclose(f);
     }
-    push_drop(txt);
-    SDL_PumpEvents();
-    port->display_present(port->ud, 0, 0, w, h);
+    {
+        char *dropped = push_drop(txt);
+
+        SDL_PumpEvents();
+        port->display_present(port->ud, 0, 0, w, h);
+        drop_release(dropped);
+    }
     CHECK(nj_port_sdl2_take_dropped(port, out, (nj_u4)sizeof(out)) == 0,
           "a .txt drop is ignored instead of queued");
     CHECK(drain_quit(port) == 0,
@@ -193,9 +214,13 @@ static void test_accepted_drop(nj_port *port, int w, int h)
     char out[NJ_LIB_PATH_MAX];
     char tiny[4];
 
-    push_drop(k_jar);
-    SDL_PumpEvents();
-    port->display_present(port->ud, 0, 0, w, h);
+    {
+        char *dropped = push_drop(k_jar);
+
+        SDL_PumpEvents();
+        port->display_present(port->ud, 0, 0, w, h);
+        drop_release(dropped);
+    }
     CHECK(nj_port_sdl2_take_dropped(port, tiny, (nj_u4)sizeof(tiny)) == 0,
           "a buffer too small refuses the path instead of truncating it");
     CHECK(nj_port_sdl2_take_dropped(port, out, (nj_u4)sizeof(out)) == 1,
