@@ -290,6 +290,9 @@ NJFN(thread_join)
              * this condition every tick. */
             th->wait_monitor = o;
             th->wait_deadline = 0;
+            th->wait_kind = NJ_WAIT_NONE;   /* join wakeup owns no monitor */
+            th->wait_ready = 0u;
+            th->wait_depth = 0u;
             th->state = NJ_THREAD_WAITING;
             return NJ_ERR_TIMEOUT;
         }

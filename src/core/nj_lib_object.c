@@ -180,6 +180,14 @@ NJFN(obj_notify)
     if (!o) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
     }
+    /*
+     * notify() has always required that the caller owns the monitor; without
+     * that check a thread could wake a waiter it has no relationship with,
+     * which is not a state Java programs can rely on.
+     */
+    if (!nj_vm_monitor_owned(vm, th, o)) {
+        return nj_throw(vm, "java/lang/IllegalMonitorStateException", NULL);
+    }
     (void)nj_vm_monitor_notify(vm, o, 0);
     return NJ_OK;
 }
@@ -189,6 +197,9 @@ NJFN(obj_notifyAll)
     nj_ref o = NJ_THIS(args);
     if (!o) {
         return nj_throw(vm, "java/lang/NullPointerException", NULL);
+    }
+    if (!nj_vm_monitor_owned(vm, th, o)) {
+        return nj_throw(vm, "java/lang/IllegalMonitorStateException", NULL);
     }
     (void)nj_vm_monitor_notify(vm, o, 1);
     return NJ_OK;

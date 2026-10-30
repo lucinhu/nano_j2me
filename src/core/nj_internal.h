@@ -180,6 +180,23 @@ struct nj_class {
 #define NJ_THREAD_BLOCKED  4
 #define NJ_THREAD_DEAD     5
 
+/*
+ * Why a parked thread is parked.  The scheduler cannot treat every WAITING
+ * thread alike any more: Object.wait() released a monitor that the thread has
+ * to own again before it runs, while a thread blocked entering a monitor must
+ * re-execute the instruction that blocked it (its saved pc points at it).
+ */
+#define NJ_WAIT_NONE       0u  /* TimerThread/join-style park: wake = run   */
+#define NJ_WAIT_OBJECT     1u  /* Object.wait(): reacquire first, then run  */
+#define NJ_WAIT_ENTER      2u  /* blocked entering a monitor: retry         */
+
+/*
+ * Distinct monitors a thread may hold at once.  Recursion does NOT consume a
+ * slot (synchronized recursive methods are ordinary code), which is what keeps
+ * this small: game code holds one or two locks at a time, not eight.
+ */
+#define NJ_MAX_MONITORS    8
+
 typedef struct nj_frame {
     nj_method *m;
     nj_u4      pc;
@@ -220,6 +237,21 @@ struct nj_thread {
     nj_ref     wait_monitor;/* monitor being waited on */
     nj_s8      wait_deadline;
     nj_u4      wakeup_seq;  /* notify() wakeup counter for wait() */
+
+    /*
+     * Held monitors, innermost last, with their recursion counts.  There is no
+     * lock word in the object header: ownership is found by scanning this
+     * thread table, which is small and lets the GC see the references through
+     * the same roots it already walks.  See the monitor section of
+     * nj_thread.c for why the runtime needs this at all.
+     */
+    nj_ref     monitors[NJ_MAX_MONITORS];
+    nj_u2      mon_depth[NJ_MAX_MONITORS];
+    nj_u2      nmonitors;
+
+    nj_u1      wait_kind;   /* one of NJ_WAIT_*                          */
+    nj_u1      wait_ready;  /* notified/timed out; waiting to reacquire  */
+    nj_u2      wait_depth;  /* recursion count released by Object.wait() */
 
     nj_u1      state;
     nj_u1      daemon;
@@ -1305,8 +1337,27 @@ void       nj_vm_stop_reason(nj_vm *vm, nj_s4 exit_code, const char *why);
 nj_status  nj_vm_monitor_wait(nj_vm *vm, nj_thread *t, nj_ref obj, nj_s8 timeout_ms);
 int        nj_vm_monitor_notify(nj_vm *vm, nj_ref obj, int all);
 nj_status  nj_thread_sleep(nj_vm *vm, nj_thread *t, nj_s8 ms);
-void       nj_vm_monitor_enter(nj_vm *vm, nj_ref obj);
-void       nj_vm_monitor_exit(nj_vm *vm, nj_ref obj);
+/*
+ * Monitor operations.  Enter/exit take the thread explicitly: the interpreter
+ * releases a synchronized method's monitor from inside a returning frame, and
+ * the unwind path does the same for frames it drops, neither of which is "the
+ * VM's current thread" by construction.
+ *
+ * nj_vm_monitor_enter() -> 0 acquired, 1 blocked (thread state is BLOCKED and
+ * the caller must re-execute its instruction), 2 no room in the thread's
+ * monitor list (the caller should throw IllegalStateException).
+ * nj_vm_monitor_exit()  -> 0 released, -1 the thread does not own it (or it is
+ * not the innermost monitor, which only unbalanced bytecode can ask for).
+ */
+int        nj_vm_monitor_enter(nj_vm *vm, nj_thread *t, nj_ref obj);
+int        nj_vm_monitor_exit(nj_vm *vm, nj_thread *t, nj_ref obj);
+int        nj_vm_monitor_owned(const nj_vm *vm, const nj_thread *t,
+                               nj_ref obj);
+/* A waiter asked for its monitor back (timeout expired or notifier ran).
+ * 1 when it owns the monitor again and is runnable, 0 when somebody else
+ * holds it - the caller then keeps the thread parked, because wait() returns
+ * WITH the monitor held. */
+int        nj_vm_monitor_reacquire(nj_vm *vm, nj_thread *t);
 
 /* ------------------------------------------------------------------ */
 /* Native function signature helpers                                   */

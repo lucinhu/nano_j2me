@@ -17,7 +17,7 @@
 #  built and is what the tests use).
 # =====================================================================
 cmake_minimum_required(VERSION 3.16)
-project(nano_j2me VERSION 0.4.1 LANGUAGES C)
+project(nano_j2me VERSION 0.5.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -546,6 +546,7 @@ if(NJ_BUILD_TESTS)
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_encdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_devicedemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_waitdemo_jar.sh
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_lockdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_timerdemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_fielddemo_jar.sh
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/make_cvdemo_jar.sh
@@ -963,6 +964,16 @@ endif()
                      NJ_BIN=$<TARGET_FILE:nj2me-cli>
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_wait_pump.sh
                      ${NJ_FIXTURES}/waitdemo.jar)
+    # synchronized must mean mutual exclusion: a cooperative quantum boundary
+    # inside a critical section used to let a second thread in (LockDemo
+    # printed overlap=true).  check_lockdemo.sh asserts it never does.
+    add_test(NAME check_lockdemo
+             COMMAND ${CMAKE_COMMAND} -E env
+                     NJ_BIN=$<TARGET_FILE:nj2me-cli>
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_lockdemo.sh
+                     ${NJ_FIXTURES}/lockdemo.jar)
+    set_tests_properties(check_lockdemo PROPERTIES TIMEOUT 180
+                         SKIP_RETURN_CODE 77)
     # A java.util.Timer task runs on a thread that reaches it through a native,
     # so a task that parks leaves a native frame at the top of that thread's
     # stack.  Running it from the scheduler fed that frame to the interpreter

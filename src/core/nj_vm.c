@@ -1420,7 +1420,8 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
          */
         if ((st == NJ_ERR_YIELD || st == NJ_ERR_TIMEOUT) &&
             (th->state == NJ_THREAD_SLEEPING ||
-             th->state == NJ_THREAD_WAITING)) {
+             th->state == NJ_THREAD_WAITING ||
+             th->state == NJ_THREAD_BLOCKED)) {
             nj_s8 start = nj_now_ms(vm);
 
             /*
@@ -1465,10 +1466,26 @@ nj_status vm_invoke(nj_vm *vm, nj_ref obj, const char *cls,
                     break;              /* another thread woke it */
                 }
                 if (until != 0 && now >= until) {
-                    th->state = NJ_THREAD_RUNNING;
-                    th->wait_monitor = NULL;
-                    th->wait_deadline = 0;
-                    break;
+                    if (th->wait_kind == NJ_WAIT_OBJECT) {
+                        /*
+                         * wait(timeout) returns holding the monitor again.
+                         * Mark the wait expired and let the monitor go through
+                         * mon_try_reacquire(): if another thread holds it this
+                         * thread stays parked and the loop below gives that
+                         * thread the CPU - resuming unlocked would put two
+                         * threads in the same critical section.
+                         */
+                        th->wait_deadline = 0;
+                        if (nj_vm_monitor_reacquire(vm, th)) {
+                            break;
+                        }
+                    } else {
+                        th->state = NJ_THREAD_RUNNING;
+                        th->wait_monitor = NULL;
+                        th->wait_kind = NJ_WAIT_NONE;
+                        th->wait_deadline = 0;
+                        break;
+                    }
                 }
                 if (vm->halt_at_ms != 0 && now >= vm->halt_at_ms) {
                     st = NJ_ERR_HALT;

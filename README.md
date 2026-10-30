@@ -43,7 +43,28 @@ an ESP32-S3, or whatever you are holding.
                     └──────────────────────────────────────────┘
 ```
 
-## What's new in 0.4.1
+## What's new in 0.5.0
+
+**0.5.0 gives `synchronized` real semantics.** The runtime used to have none:
+`monitorenter` recorded which frame held a monitor, `monitorexit` forgot it,
+and nothing ever blocked - on the theory that a cooperatively scheduled thread
+is never preempted inside a critical section. The quantum says otherwise, and
+a two-thread fixture printed `overlap=true` against the old runtime. The
+runtime now implements Java monitors: a contended `monitorenter` parks until
+the owner leaves, `Object.wait()` releases the monitor for the duration of the
+wait and reacquires it before `wait()` returns, `notify()`/`notifyAll()` check
+ownership and throw `IllegalMonitorStateException` when it is missing, and a
+synchronized method holds its monitor from before its first bytecode to the
+return, throw or unwind that ends its frame. There is no lock word in the
+object header - ownership is a scan of the (small) thread table - so object
+layout, heap footprint and the GC's view of an object do not change.
+`tests/lockdemo` holds the line: it reports `overlap=false` and the whole
+corpus still runs. The snapshot format went to v3 to carry monitor ownership
+and `Object.wait` state; a v2 snapshot is refused, not misread.
+
+Full changelog: [v0.5.0 release notes](https://github.com/lucinhu/nano_j2me/releases/tag/v0.5.0).
+
+## What was new in 0.4.1
 
 **0.4.1 makes the frame cap a setting, and the port's own counter is what said
 it should be.** Android had capped a phone at 30 fps since the port existed.

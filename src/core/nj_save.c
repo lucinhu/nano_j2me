@@ -87,7 +87,7 @@ static int restore_native_object(nj_vm *vm, nj_ref object, nj_u4 offset, void *u
  * slots - so it is refused instead of restored into a program running on
  * zeros.
  */
-#define NJ_SAVE_VERSION   2u
+#define NJ_SAVE_VERSION   3u
 #define NJ_SAVE_ENDIAN    0x01020304u
 #define NJ_SAVE_HDR_SIZE  176u
 /* Explicit heaps may exceed the library default. Loading may use that
@@ -871,7 +871,35 @@ static int save_threads(nj_vm *vm, nj_swriter *w)
              * caught.
              */
             !sw_u32(w, (nj_u4)(th->top - th->stack_mem)) ||
-            !sw_u32(w, (nj_u4)th->nframes)) {
+            !sw_u32(w, (nj_u4)th->nframes) ||
+            /*
+             * v3: held monitors and the wait state.  A thread parked in
+             * wait() has released its monitors, so the saved list is exactly
+             * what it owns; restoring it without the list would lose mutual
+             * exclusion and let a restored thread run a critical section
+             * unowned.  Offsets are arena-relative, like the frame monitors.
+             */
+            !sw_u32(w, (nj_u4)th->nmonitors)) {
+            return 0;
+        }
+        {
+            unsigned mi;
+            for (mi = 0u; mi < (unsigned)th->nmonitors; mi++) {
+                if (th->monitors[mi] &&
+                    !is_live_obj(vm, th->monitors[mi])) {
+                    return 0;
+                }
+                if (!sw_u32(w, th->monitors[mi]
+                               ? ref_off(vm, th->monitors[mi])
+                               : NJ_SAVE_NONE) ||
+                    !sw_u32(w, (nj_u4)th->mon_depth[mi])) {
+                    return 0;
+                }
+            }
+        }
+        if (!sw_u32(w, ((nj_u4)th->wait_kind) |
+                       ((nj_u4)th->wait_ready << 8) |
+                       ((nj_u4)th->wait_depth << 16))) {
             return 0;
         }
         if (used != 0u &&
@@ -1923,7 +1951,7 @@ int nj_vm_load(nj_vm *vm, FILE *f)
         nj_thread *th;
         nj_u4 scalars, prio, exit_value, stop_depth, in_c_call, id;
         nj_u4 wake_lo, wake_hi, dl_lo, dl_hi;
-        nj_u4 used, nframes, top_slot, f;
+        nj_u4 used, nframes, top_slot, f, nmonitors, wait_pack;
         nj_u8 ret;
 
         if (!sr_u32(&rd, &scalars) || !sr_u32(&rd, &prio) ||
@@ -1933,11 +1961,13 @@ int nj_vm_load(nj_vm *vm, FILE *f)
             !sr_u32(&rd, &wake_lo) || !sr_u32(&rd, &wake_hi) ||
             !sr_u32(&rd, &dl_lo) || !sr_u32(&rd, &dl_hi) ||
             !sr_u32(&rd, &i) || !sr_u32(&rd, &used) ||
-            !sr_u32(&rd, &top_slot) || !sr_u32(&rd, &nframes)) {
+            !sr_u32(&rd, &top_slot) || !sr_u32(&rd, &nframes) ||
+            !sr_u32(&rd, &nmonitors)) {
             NJ_LOAD_FAIL(NJ_ERR_FORMAT);
         }
         if (in_c_call != 0u || used > (nj_u4)NJ_MAX_STACK_SLOTS ||
-            top_slot > used || nframes > (nj_u4)NJ_MAX_FRAMES) {
+            top_slot > used || nframes > (nj_u4)NJ_MAX_FRAMES ||
+            nmonitors > (nj_u4)NJ_MAX_MONITORS) {
             NJ_LOAD_FAIL(NJ_ERR_FORMAT);
         }
         th = nj_thread_create(vm, NULL, (int)((scalars >> 24) & 0xFFu));
@@ -1962,6 +1992,26 @@ int nj_vm_load(nj_vm *vm, FILE *f)
         if (id > max_id) {
             max_id = id;
         }
+        for (f = 0u; f < nmonitors; f++) {
+            nj_u4 mo, depth;
+
+            if (!sr_u32(&rd, &mo) || !sr_u32(&rd, &depth) ||
+                mo == NJ_SAVE_NONE || mo >= vm->heap.bump ||
+                depth == 0u || depth > 0xFFFFu) {
+                NJ_LOAD_FAIL(NJ_ERR_FORMAT);
+            }
+            th->monitors[f] = ref_at(vm, mo);
+            th->mon_depth[f] = (nj_u2)depth;
+        }
+        th->nmonitors = (nj_u2)nmonitors;
+        if (!sr_u32(&rd, &wait_pack) ||
+            (wait_pack >> 16) > 0xFFFFu || (wait_pack & 0xFFu) > 2u ||
+            ((wait_pack >> 8) & 0xFFu) > 1u) {
+            NJ_LOAD_FAIL(NJ_ERR_FORMAT);
+        }
+        th->wait_kind = (nj_u1)(wait_pack & 0xFFu);
+        th->wait_ready = (nj_u1)((wait_pack >> 8) & 0xFFu);
+        th->wait_depth = (nj_u2)(wait_pack >> 16);
         if (used != 0u &&
             !sr_raw(&rd, th->stack_mem, used * (nj_u4)sizeof(nj_value))) {
             NJ_LOAD_FAIL(NJ_ERR_FORMAT);

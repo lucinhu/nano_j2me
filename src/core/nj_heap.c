@@ -655,6 +655,18 @@ static void nj_gc_mark_roots(nj_vm *vm)
         nj_gc_mark_object(vm, th->name);
         nj_gc_mark_object(vm, th->pending_exc);
         nj_gc_mark_object(vm, th->wait_monitor);
+        /*
+         * Held monitors are roots too: a thread parked inside a synchronized
+         * block keeps the lock object alive even while it is not running, and
+         * losing it would let the heap hand that memory to the next
+         * allocation while a blocked thread still waits for it.
+         */
+        {
+            unsigned mi;
+            for (mi = 0u; mi < (unsigned)th->nmonitors; mi++) {
+                nj_gc_mark_object(vm, th->monitors[mi]);
+            }
+        }
         for (f = 0; f < th->nframes; f++) {
             nj_frame *fr = &th->frames[f];
             nj_value *p;

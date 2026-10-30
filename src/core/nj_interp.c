@@ -129,7 +129,13 @@ static int interp_unwind(nj_vm *vm, nj_thread *th, nj_u4 throw_pc,
                 }
             }
         }
-        /* No handler in this frame: drop it and look in the caller. */
+        /* No handler in this frame: drop it and look in the caller.  A
+         * synchronized method's monitor goes with the frame - without this a
+         * thrown exception would keep the lock for ever. */
+        if (f->monitor) {
+            (void)nj_vm_monitor_exit(vm, th, f->monitor);
+            f->monitor = NULL;
+        }
         th->nframes--;
         th->top = f->locals;
         throw_pc = (th->nframes > stop_depth &&
@@ -204,6 +210,30 @@ nj_status nj_invoke_native(nj_vm *vm, nj_thread *th, nj_method *target,
 /* Invocation                                                          */
 /* ------------------------------------------------------------------ */
 /*
+ * The monitor a synchronized method acquires before its first bytecode runs:
+ * the receiver for an instance method, and the java.lang.Class mirror for a
+ * static one.  The class is already initialized when this is called, so the
+ * mirror is only ever a lazy allocation here, not a class-initialization
+ * cycle.  NULL means an exception is pending.
+ */
+static nj_ref interp_sync_monitor(nj_vm *vm, nj_method *target,
+                                  nj_value *argbase)
+{
+    if (target->flags & NJ_ACC_STATIC) {
+        nj_ref mirror = nj_class_object(vm, target->owner->name);
+        if (!mirror) {
+            (void)nj_throw_oom(vm);
+        }
+        return mirror;
+    }
+    if (!argbase || !argbase->r) {
+        (void)nj_throw(vm, "java/lang/NullPointerException", target->name);
+        return NULL;
+    }
+    return argbase->r;
+}
+
+/*
  * Push a frame for `target` whose arguments start at sp-total, then either run
  * it (native) or leave it as the current frame (Java).
  *
@@ -221,10 +251,45 @@ static nj_status interp_invoke(nj_vm *vm, nj_thread *th, nj_method *target,
     argbase = *sp_io - total;
 
     if (target->code != NULL) {
+        nj_ref mon = NULL;
+
+        /*
+         * A synchronized method owns its monitor before its first bytecode
+         * runs; the frame remembers which monitor that is, so DO_RETURN and
+         * the unwind path can release it however the frame ends.
+         */
+        if (target->flags & NJ_ACC_SYNCHRONIZED) {
+            mon = interp_sync_monitor(vm, target, argbase);
+            if (!mon) {
+                return NJ_ERR;   /* exception already raised */
+            }
+        }
         /* Java callee: push its frame and let the interpreter run it. */
         st = nj_frame_push(vm, th, target, argbase, total);
         if (st != NJ_OK) {
             return st;   /* exception already raised */
+        }
+        if (mon) {
+            int rc = nj_vm_monitor_enter(vm, th, mon);
+
+            if (rc == 1) {
+                /*
+                 * Contended.  The callee frame has not run a byte yet: take it
+                 * back and let the caller rewind the pc to the invoke
+                 * instruction, so the call is retried once the owner leaves
+                 * the monitor.  The arguments are still on the caller's
+                 * operand stack.
+                 */
+                nj_frame_pop_fast(th);
+                return NJ_ERR_TIMEOUT;
+            }
+            if (rc == 2) {
+                nj_frame_pop_fast(th);
+                (void)nj_throw(vm, "java/lang/IllegalStateException",
+                               "too many monitors");
+                return NJ_ERR;
+            }
+            th->frames[th->nframes - 1].monitor = mon;
         }
         *pushed_java = 1;
         return NJ_OK;
@@ -2189,6 +2254,10 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
 #define DO_RETURN(rv, wide) do {                                       \
             nj_value rv_ = (rv);                                           \
             nj_value *rsp_ = fr->locals;                                   \
+            if (fr->monitor) {                                             \
+                (void)nj_vm_monitor_exit(vm, th, fr->monitor);             \
+                fr->monitor = NULL;                                        \
+            }                                                              \
             INSN_FLUSH();                                                  \
             th->top = rsp_;                                                \
             th->nframes--;                                                 \
@@ -2240,6 +2309,10 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
              */
             {
                 nj_value *rsp_ = fr->locals;
+                if (fr->monitor) {
+                    (void)nj_vm_monitor_exit(vm, th, fr->monitor);
+                    fr->monitor = NULL;
+                }
                 INSN_FLUSH();
                 th->top = rsp_;
                 th->nframes--;
@@ -2643,6 +2716,16 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
             SAVE();
             st = interp_invoke(vm, th, target, total, &sp, &pushed);
             if (st == NJ_ERR_TIMEOUT) {
+                /*
+                 * A blocking native resumes after the call.  A monitor wait -
+                 * a synchronized method, or a monitorenter inside the callee -
+                 * never entered the callee's body, so the pc goes back to the
+                 * invoke and the whole call is retried when the monitor frees
+                 * up.  The arguments are untouched on the operand stack.
+                 */
+                if (th->state == NJ_THREAD_BLOCKED) {
+                    pc = op_pc;
+                }
                 SAVE();
                 return NJ_ERR_YIELD;
             }
@@ -2757,13 +2840,29 @@ nj_status nj_interp_run(nj_vm *vm, nj_thread *th, int stop_depth)
             DISPATCH(); }
         L_0xc2: case 0xc2: {                                       /* monitorenter */
             nj_ref o = (--sp)->r;
+            int rc;
             if (!o) THROW("java/lang/NullPointerException", NULL);
-            nj_vm_monitor_enter(vm, o);
+            rc = nj_vm_monitor_enter(vm, th, o);
+            if (rc == 1) {
+                /* Contended: keep the reference, rewind, and retry when the
+                 * scheduler makes this thread runnable again. */
+                sp->r = o;
+                sp++;
+                pc = op_pc;
+                SAVE();
+                return NJ_ERR_YIELD;
+            }
+            if (rc == 2) {
+                THROW("java/lang/IllegalStateException", "too many monitors");
+            }
             DISPATCH(); }
         L_0xc3: case 0xc3: {                                       /* monitorexit */
             nj_ref o = (--sp)->r;
             if (!o) THROW("java/lang/NullPointerException", NULL);
-            nj_vm_monitor_exit(vm, o);
+            if (nj_vm_monitor_exit(vm, th, o) != 0) {
+                THROW("java/lang/IllegalMonitorStateException",
+                      "monitorexit without the monitor");
+            }
             DISPATCH(); }
         L_0xc4: case 0xc4: {                                       /* wide */
             nj_u1 sub = U1();

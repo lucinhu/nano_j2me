@@ -231,6 +231,17 @@ nj_thread *nj_thread_create(nj_vm *vm, nj_ref thread_obj, int is_main)
     t->priority = 5;
     t->id = ++vm->next_thread_id;
     t->wake_at_ms = 0;
+    t->nmonitors = 0u;
+    t->wait_kind = NJ_WAIT_NONE;
+    t->wait_ready = 0u;
+    t->wait_depth = 0u;
+    {
+        unsigned mi;
+        for (mi = 0u; mi < (unsigned)NJ_MAX_MONITORS; mi++) {
+            t->monitors[mi] = NULL;
+            t->mon_depth[mi] = 0u;
+        }
+    }
     vm->threads[vm->nthreads++] = t;
     return t;
 }
@@ -428,41 +439,262 @@ nj_status nj_thread_sleep(nj_vm *vm, nj_thread *t, nj_s8 ms)
 /* Monitors                                                            */
 /* ------------------------------------------------------------------ */
 /*
- * With cooperative scheduling a thread is never preempted inside a critical
- * section, so monitorenter/monitorexit only need to record the owning thread
- * and let wait()/notify() find the wait set.  There is no lock word: the wait
- * set is discovered by scanning the (small) thread table.
+ * The runtime used to treat synchronized as bookkeeping: monitorenter recorded
+ * the monitor on the frame and nothing ever blocked, on the theory that a
+ * cooperatively scheduled thread is never preempted inside a critical section.
+ * That theory was wrong - the quantum runs out in the middle of one - and the
+ * result was a visible data race (tests/lockdemo reports overlap=true against
+ * the unlocked runtime).  A correct Java monitor needs three things:
+ *
+ *   - mutual exclusion: a thread entering a monitor another thread holds parks
+ *     until that other thread leaves it;
+ *   - Object.wait() releases the monitor for the duration of the wait, and the
+ *     thread owns it again when wait() returns - which is why a "woken" thread
+ *     is not runnable until it has reacquired;
+ *   - notify()/notifyAll() require that the caller owns the monitor.
+ *
+ * There is no lock word in the object header: ownership is a scan of the
+ * thread table, which is tiny (NJ_MAX_THREADS), and the GC already walks every
+ * thread's roots.  A blocked thread's saved pc points AT the instruction that
+ * blocked, so resuming it re-executes that instruction; no operand stack has
+ * to be rebuilt.
  */
-void nj_vm_monitor_enter(nj_vm *vm, nj_ref obj)
+static int mon_index(const nj_thread *t, nj_ref obj)
 {
+    unsigned i;
+    if (!t) {
+        return -1;
+    }
+    for (i = 0u; i < (unsigned)t->nmonitors; i++) {
+        if (t->monitors[i] == obj) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+/* 1 when a thread other than `t` owns `obj`. */
+static int mon_owned_elsewhere(const nj_vm *vm, const nj_thread *t, nj_ref obj)
+{
+    nj_u2 i;
     if (!vm) {
+        return 0;
+    }
+    for (i = 0u; i < vm->nthreads; i++) {
+        const nj_thread *o = vm->threads[i];
+        if (!o || o == t || o->state == NJ_THREAD_DEAD) {
+            continue;
+        }
+        if (mon_index(o, obj) >= 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Push obj with recursion count `depth`: 0 ok, 2 no room for a new monitor. */
+static int mon_push(nj_thread *t, nj_ref obj, nj_u2 depth)
+{
+    if (t->nmonitors >= (nj_u2)NJ_MAX_MONITORS) {
+        return 2;
+    }
+    t->monitors[t->nmonitors] = obj;
+    t->mon_depth[t->nmonitors] = depth;
+    t->nmonitors++;
+    return 0;
+}
+
+/* Remove entry `i`, shifting the inner held monitors down over it. */
+static void mon_remove(nj_thread *t, int i)
+{
+    unsigned k;
+    if (!t || i < 0 || (unsigned)i >= (unsigned)t->nmonitors) {
         return;
     }
-    if (vm->cur && vm->cur->nframes > 0) {
-        nj_frame *f = &vm->cur->frames[vm->cur->nframes - 1];
-        if (!f->monitor) {
-            f->monitor = obj;
+    for (k = (unsigned)i; k + 1u < (unsigned)t->nmonitors; k++) {
+        t->monitors[k] = t->monitors[k + 1u];
+        t->mon_depth[k] = t->mon_depth[k + 1u];
+    }
+    t->nmonitors--;
+    t->monitors[t->nmonitors] = NULL;
+    t->mon_depth[t->nmonitors] = 0u;
+}
+
+/*
+ * Hand `obj` back to a thread that is ready to own it again (a notified or
+ * timed-out Object.wait()).  Returns 1 when the thread became runnable.  The
+ * recursion count released by wait() is restored, so a synchronized block that
+ * recursed keeps its depth.
+ */
+static int mon_try_reacquire(nj_vm *vm, nj_thread *t)
+{
+    nj_ref obj = t->wait_monitor;
+    nj_u2 depth;
+
+    if (!t || !obj || t->wait_kind != NJ_WAIT_OBJECT) {
+        return 0;
+    }
+    if (mon_owned_elsewhere(vm, t, obj)) {
+        return 0;
+    }
+    depth = (nj_u2)(t->wait_depth ? t->wait_depth : 1u);
+    if (mon_push(t, obj, depth) != 0) {
+        return 0;   /* cannot happen: wait() removed this very entry */
+    }
+    t->wait_monitor = NULL;
+    t->wait_deadline = 0;
+    t->wait_kind = NJ_WAIT_NONE;
+    t->wait_ready = 0u;
+    t->wait_depth = 0u;
+    t->state = NJ_THREAD_RUNNING;
+    return 1;
+}
+
+/*
+ * `obj` just became free: give it to a ready waiter first (it has to own the
+ * monitor before wait() can return), else make one blocked entrant runnable.
+ * The entrant re-executes monitorenter and either gets it or blocks again.
+ */
+static void mon_wake_waiters(nj_vm *vm, nj_ref obj)
+{
+    nj_u2 i;
+
+    for (i = 0u; i < vm->nthreads; i++) {
+        nj_thread *t = vm->threads[i];
+        if (!t || t == vm->cur || t->state != NJ_THREAD_WAITING) {
+            continue;
+        }
+        if (t->wait_kind == NJ_WAIT_OBJECT && t->wait_monitor == obj &&
+            t->wait_ready && mon_try_reacquire(vm, t)) {
+            return;
+        }
+    }
+    for (i = 0u; i < vm->nthreads; i++) {
+        nj_thread *t = vm->threads[i];
+        if (!t || t == vm->cur || t->state != NJ_THREAD_BLOCKED) {
+            continue;
+        }
+        if (t->wait_kind == NJ_WAIT_ENTER && t->wait_monitor == obj) {
+            t->state = NJ_THREAD_RUNNING;
+            t->wait_monitor = NULL;
+            t->wait_kind = NJ_WAIT_NONE;
+            t->wait_deadline = 0;
+            return;
         }
     }
 }
 
-void nj_vm_monitor_exit(nj_vm *vm, nj_ref obj)
+int nj_vm_monitor_enter(nj_vm *vm, nj_thread *t, nj_ref obj)
 {
-    if (vm && vm->cur && vm->cur->nframes > 0) {
-        nj_frame *f = &vm->cur->frames[vm->cur->nframes - 1];
-        if (f->monitor == obj) {
-            f->monitor = NULL;
+    int i;
+
+    if (!t || !obj) {
+        return 0;
+    }
+    i = mon_index(t, obj);
+    if (i >= 0) {
+        if (t->mon_depth[i] == 0xFFFFu) {
+            return 2;
+        }
+        t->mon_depth[i]++;
+        return 0;
+    }
+    if (mon_owned_elsewhere(vm, t, obj)) {
+        t->wait_monitor = obj;
+        t->wait_kind = NJ_WAIT_ENTER;
+        t->wait_ready = 0u;
+        t->wait_depth = 0u;
+        t->wait_deadline = 0;
+        t->state = NJ_THREAD_BLOCKED;
+        return 1;
+    }
+    return mon_push(t, obj, 1u);
+}
+
+int nj_vm_monitor_exit(nj_vm *vm, nj_thread *t, nj_ref obj)
+{
+    int i;
+
+    if (!t || !obj) {
+        return -1;
+    }
+    i = mon_index(t, obj);
+    if (i < 0) {
+        return -1;
+    }
+    /*
+     * Java requires monitors to be released innermost-first.  Code that
+     * violates it cannot be made consistent (the outer exit would have to
+     * leave a monitor it no longer owns), and javac never emits it except
+     * through a finally path, so say no to the jumbled case.
+     */
+    if ((int)t->nmonitors - 1 != i) {
+        return -1;
+    }
+    t->mon_depth[i]--;
+    if (t->mon_depth[i] == 0u) {
+        t->nmonitors = (nj_u2)i;
+        t->monitors[i] = NULL;
+        t->mon_depth[i] = 0u;
+        if (vm) {
+            mon_wake_waiters(vm, obj);
         }
     }
+    return 0;
+}
+
+int nj_vm_monitor_owned(const nj_vm *vm, const nj_thread *t, nj_ref obj)
+{
+    (void)vm;
+    return mon_index(t, obj) >= 0;
+}
+
+/*
+ * A waiter whose timeout expired (or whose notifier has already run) asks for
+ * its monitor back.  Returns 1 when the thread owns it again and is runnable;
+ * 0 when somebody else still holds it, in which case the caller must stay
+ * parked - Java says wait() returns WITH the monitor held, never without it.
+ */
+int nj_vm_monitor_reacquire(nj_vm *vm, nj_thread *t)
+{
+    if (!t || t->wait_kind != NJ_WAIT_OBJECT) {
+        return 0;
+    }
+    t->wait_ready = 1u;
+    return mon_try_reacquire(vm, t);
 }
 
 /* Block the current thread on `obj` until notified or the timeout expires. */
 nj_status nj_vm_monitor_wait(nj_vm *vm, nj_thread *t, nj_ref obj, nj_s8 timeout_ms)
 {
+    int i;
+
     if (!vm || !t) {
         return NJ_ERR;
     }
+    i = mon_index(t, obj);
+    if (i < 0) {
+        (void)nj_throw(vm, "java/lang/IllegalMonitorStateException", NULL);
+        return NJ_ERR;
+    }
+    /*
+     * wait() releases the monitor for its whole duration, recursion included.
+     * The entry can sit in the middle of the list when an inner monitor is
+     * still held; removing it from the middle (rather than refusing) is what
+     * makes that legal-but-odd shape representable.  Reacquiring appends it
+     * back before the thread runs again.
+     */
+    t->wait_depth = t->mon_depth[i];
+    mon_remove(t, i);
+    /*
+     * The monitor is free while this thread waits, so a thread that blocked
+     * entering it must be told now - otherwise both threads park for ever and
+     * the scheduler reports a deadlock (tests/lockdemo's first shape).
+     */
+    mon_wake_waiters(vm, obj);
     t->wait_monitor = obj;
+    t->wait_kind = NJ_WAIT_OBJECT;
+    t->wait_ready = 0u;
     t->wait_deadline = (timeout_ms == 0) ? 0 : (nj_now_ms(vm) + timeout_ms);
     t->state = NJ_THREAD_WAITING;
     return NJ_ERR_TIMEOUT;
@@ -482,14 +714,30 @@ int nj_vm_monitor_notify(nj_vm *vm, nj_ref obj, int all)
         if (!t || t == vm->cur) {
             continue;
         }
-        if (t->state == NJ_THREAD_WAITING && t->wait_monitor == obj) {
+        if (t->state != NJ_THREAD_WAITING || t->wait_monitor != obj) {
+            continue;
+        }
+        if (t->wait_kind == NJ_WAIT_OBJECT) {
+            if (t->wait_ready) {
+                continue;
+            }
+            t->wait_ready = 1u;
+            /*
+             * The notifier normally still owns obj, so this fails here and
+             * succeeds in nj_vm_monitor_exit() when it lets go.  Trying anyway
+             * keeps notify() that meets no owner from parking the waiter for
+             * ever - Thread.join() wakeups take exactly this path.
+             */
+            (void)mon_try_reacquire(vm, t);
+        } else {
             t->state = NJ_THREAD_RUNNING;
             t->wait_monitor = NULL;
+            t->wait_kind = NJ_WAIT_NONE;
             t->wait_deadline = 0;
-            woken++;
-            if (!all) {
-                break;
-            }
+        }
+        woken++;
+        if (!all) {
+            break;
         }
     }
     return woken;
@@ -504,6 +752,12 @@ static nj_status scheduler_step(nj_vm *vm)
     int alive = 0;
     int waiting = 0;
     int ran = 0;
+    /*
+     * A thread woken while parked inside a nested C call is runnable but must
+     * not be entered from here: its C stack belongs to the pump that will
+     * resume it.  Such a thread is progress, not a deadlock.
+     */
+    int parked_ready = 0;
     nj_s8 now;
     nj_s8 earliest = 0;
     int have_earliest = 0;
@@ -535,10 +789,36 @@ static nj_status scheduler_step(nj_vm *vm)
                 continue;
             }
         }
+        if (t->state == NJ_THREAD_BLOCKED) {
+            /*
+             * Parked wanting a monitor another thread holds.  Its pc points at
+             * the instruction that blocked, so becoming runnable again is all
+             * it needs; there is no deadline to time it out with.
+             */
+            waiting++;
+            continue;
+        }
         if (t->state == NJ_THREAD_WAITING) {
-            if (t->wait_deadline != 0 && now >= t->wait_deadline) {
+            if (t->wait_kind == NJ_WAIT_OBJECT) {
+                /*
+                 * A notified or timed-out Object.wait() does not run the Java
+                 * code after wait() yet: it reacquires the monitor first.
+                 * Until then it stays parked (and counted as waiting, so the
+                 * deadlock check below still sees it).
+                 */
+                if (!t->wait_ready && t->wait_deadline != 0 &&
+                    now >= t->wait_deadline) {
+                    t->wait_ready = 1u;
+                    t->wait_deadline = 0;
+                }
+                if (!(t->wait_ready && mon_try_reacquire(vm, t))) {
+                    waiting++;
+                    continue;
+                }
+            } else if (t->wait_deadline != 0 && now >= t->wait_deadline) {
                 t->state = NJ_THREAD_RUNNING;
                 t->wait_monitor = NULL;
+                t->wait_kind = NJ_WAIT_NONE;
                 t->wait_deadline = 0;
             } else {
                 nj_s8 w = t->wait_deadline;
@@ -569,6 +849,9 @@ static nj_status scheduler_step(nj_vm *vm)
          * deadlock - 极品飞车16：亡命狂飙_1519 died that way).
          */
         if (t->in_c_call) {
+            if (t->state == NJ_THREAD_RUNNING) {
+                parked_ready = 1;
+            }
             continue;
         }
 
@@ -630,14 +913,22 @@ static nj_status scheduler_step(nj_vm *vm)
         return NJ_ERR_HALT;
     }
     if (!ran) {
-        if (have_earliest) {
+        if (parked_ready) {
+            /*
+             * The only thread that could move is parked inside its own C
+             * call; the pump resumes it as soon as this pass returns.  Idle
+             * instead of sleeping for a deadline (there may be none) and
+             * instead of declaring a deadlock.
+             */
+            port_idle(vm);
+        } else if (have_earliest) {
             nj_s8 delta = earliest - now;
             if (delta > 0) {
                 port_sleep(vm, (nj_u4)(delta > 50 ? 50 : delta));
             }
         } else if (waiting > 0) {
-            /* Every remaining thread is parked on Object.wait() with no
-             * notifier left: this is a genuine deadlock. */
+            /* Every remaining thread is parked on Object.wait() or blocked on
+             * a monitor nobody will release: this is a genuine deadlock. */
             nj_logf(vm, 1, "all threads are waiting; assuming the app is done");
             return NJ_ERR_HALT;
         } else {

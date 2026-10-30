@@ -1185,12 +1185,12 @@ the runtime answered that key before consulting the port.
 | Area | Difference |
 |---|---|
 | Threads | cooperative, switched at an instruction-count boundary. A tight loop with no allocation or I/O still yields (the quantum is enforced), but a thread that never blocks cannot be preempted *mid-instruction* — irrelevant for correctness, occasionally visible in interleaving |
-| `synchronized` | compiles and runs, but does not lock: a cooperatively scheduled thread is never preempted inside a critical section |
-| `Object.wait`/`notify` | implemented; a `wait` with no notifier left is detected and the game is reported as finished rather than hanging |
+| `synchronized` | real monitors: entry excludes other threads (a contending thread parks until the owner leaves), recursion is counted, a `synchronized` method owns its monitor before its first bytecode and releases it however the frame ends. A thread that is switched out inside a critical section still holds the lock - the quantum boundary is not special |
+| `Object.wait`/`notify` | implemented with monitor semantics: `wait()` releases the monitor for its duration and owns it again before returning, `notify()`/`notifyAll()` require ownership (else `IllegalMonitorStateException`); a wait with no notifier left is detected and the game is reported as finished rather than hanging |
 | `System.exit` | stops the VM cleanly and the code reaches the host |
 | `Class.forName` | works for classes the archive actually contains plus the built-in library |
 | Reflection | absent, as in CLDC |
-| Networking | `file://` and `http://`/`https://` through the port; sockets, datagrams and OBEX are absent |
+| Networking | `file://` and `http://`/`https://` through the port; `socket://` (TCP client half only: connect, read, write, close) and `datagram://` (UDP; a receive that would block returns a zero-length datagram and parks the thread briefly) over the port's hooks; `ServerSocketConnection` and OBEX answer with `ConnectionNotFoundException` |
 | `TimeZone` | UTC only |
 | Locale | `en-US` fixed; `toLowerCase`/`toUpperCase` are ASCII-only |
 | Fonts | three built-in bitmap sizes from Liberation Mono; CJK needs a glyph provider installed through the font fallback hook |
